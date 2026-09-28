@@ -191,6 +191,11 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 > - 🔴 **잠금·lease 주인은 PID 만으로 판정하지 않는다.** 기록한 시작 시각·명령줄이 지금 그 PID 와 **둘 다** 같을
 >   때만 살아 있는 주인이다. PID 없음·재사용(명령줄 또는 시작 시각 불일치)은 죽은 옛 주인 — `.reclaim` 안에서
 >   token 재확인 뒤에만 거둔다. 정체를 못 읽으면 UNKNOWN 으로 멈춘다. ps 는 `LC_ALL=C · TZ=UTC · -ww` 로 읽는다.
+> - 🔴 **producer run.json 에는 판(`producer-run/2`)이 있다.** 같은 날 지금 판 COMPLETED 는 다시 계산하지 않는다.
+>   예외는 **인식 가능한 구버전 빈 계획**(판 표식 없음 · COMPLETED · selected 0 · `reusable` 없음 · 선정 패키지 없음)
+>   하나뿐이다 — 지우지 않고 고유 이름으로 보존한 뒤 잠금 안에서 새로 계산한다. 그날 이미 한 후속 작업은 회차를
+>   막지 않고 slug 별로 다룬다(전송불명·깨진 증거는 그 slug 만 HOLD · draft/hero 는 재사용). 모르는 판은 fail-closed
+>   — producer 는 exit 3 이고, 회수·등록도 큐 전체로 되돌아가지 않는다(2026-09-28 배포 당일 공급 0 사고).
 > - 🔴 **재생성 패킷은 `regen-packet/3` · `slug.<attemptId>.json`** — attemptId 는 필수 UUID 이고 파일
 >   이름과 본문이 같아야 한다. 시도마다 자기 파일만 쓰고, 자기 파일만 읽히고, 자기 파일만 지운다.
 > - 🔴 **CLI 시험의 브라우저·spawn 주입은 `SORAN_MAGAZINE_TEST_MODE=1` 에서만** 열린다

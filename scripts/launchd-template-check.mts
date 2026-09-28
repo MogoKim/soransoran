@@ -37,6 +37,10 @@ import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import {
   AUDIT_RUNNER_LABEL, AUDIT_RUNNER_SCRIPT, auditRunnerSlots, renderAuditRunnerPlist, verifyAuditSlots,
 } from './lib/auto-ready-audit-template'
+import {
+  COMMENT_RUNNER_ARGS, COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SCRIPT, COMMENT_RUNNER_SLOTS, FIRST_COMMENT_MAX_MINUTES,
+  renderCommentRunnerPlist,
+} from './lib/persona-comment-runner-template'
 
 const DIR = 'docs/operations/launchd'
 
@@ -490,6 +494,29 @@ for (const cafe of ['remonterrace', 'wgang'] as const) {
   check('🔴 [auto-ready-audit] 로그가 Documents 밖이다', !/<string>[^<]*\/Documents\/[^<]*\.log<\/string>/.test(xml))
   check('🔴 [auto-ready-audit] RunAtLoad 가 false 다', /<key>RunAtLoad<\/key><false\/>/.test(xml))
   check('🔴 [auto-ready-audit] 남은 placeholder 가 없다', leftoverPlaceholders(xml).length === 0)
+}
+
+// ── ④-d 🔴 무인 Persona 댓글 루프 — 코드가 렌더한다(파일 템플릿 아님 · 설치하지 않는다) (2026-09-28) ──
+{
+  const xml = renderCommentRunnerPlist({
+    runtimeRoot: '/Users/x/Documents/soransoran-runtime', npxPath: '/nvm/bin/npx',
+    logDir: '/Users/x/Library/Logs/soransoran', nodeBinDir: '/nvm/bin',
+  })
+  const got = calendarSlots(xml)
+  check('🔴 [comment-loop] 렌더한 예약 시각이 슬롯 정본과 통째로 같다',
+    got.length > 0 && got.length === COMMENT_RUNNER_SLOTS.length
+    && got.every((x, i) => x.hour === COMMENT_RUNNER_SLOTS[i]!.hour && x.minute === COMMENT_RUNNER_SLOTS[i]!.minute))
+  const mins = got.map((x) => x.hour * 60 + x.minute)
+  check(`🔴 [comment-loop] 회차 간격이 첫 댓글 시한(${FIRST_COMMENT_MAX_MINUTES}분) 안이다`,
+    mins.length > 1 && mins.slice(1).every((m, i) => m - mins[i]! <= FIRST_COMMENT_MAX_MINUTES))
+  check('🔴 [comment-loop] Label 이 정본이다', valueOf(xml, 'Label') === COMMENT_RUNNER_LABEL)
+  const args = programArguments(xml)
+  check('🔴 [comment-loop] 무인 루프를 --live 로 부른다',
+    args.some((a2) => a2.endsWith(`/${COMMENT_RUNNER_SCRIPT}`)) && COMMENT_RUNNER_ARGS.every((a2) => args.includes(a2)) && args.includes('--live'))
+  check('🔴 [comment-loop] PATH 앞에 node 디렉터리', pathValue(xml) === '/nvm/bin:/usr/bin:/bin:/usr/sbin:/sbin')
+  check('🔴 [comment-loop] 로그가 Documents 밖이다', !/<string>[^<]*\/Documents\/[^<]*\.log<\/string>/.test(xml))
+  check('🔴 [comment-loop] RunAtLoad 가 false 다', /<key>RunAtLoad<\/key><false\/>/.test(xml))
+  check('🔴 [comment-loop] 남은 placeholder 가 없다', leftoverPlaceholders(xml).length === 0)
 }
 
 // ── ⑤ 문서가 절차를 담고 있다 ──

@@ -4155,7 +4155,8 @@ console.log('\n㊱ 동시 재생성 — 판정·예약·횟수가 한 임계구�
      * 🔴 **같은 slug 재생성은 lease 하나** (2026-09-28 · Codex P0) — 진 쪽 자식은 probe **전에** 멈춘다.
      *    그래서 자식 barrier 에는 이긴 쪽 하나만 온다. 이긴 쪽이 예약을 쥘 때까지 기다린 뒤에 본다.
      */
-    await S.untilTrue(() => Boolean(S.row().delivery?.reservationId))
+    // 🔴 예약은 send 클릭 **직전**에 적힌다 — 예약과 클릭이 모두 끝날 때까지 기다린 뒤에 본다 (타이밍 경합 제거)
+    await S.untilTrue(() => Boolean(S.row().delivery?.reservationId) && S.sends().length >= 1)
     check('🔴 ㊱ 진 쪽 — REGEN_IN_PROGRESS · probe 0 · send 0 (자식 barrier 도착 1)',
       lr.code === 'REGEN_IN_PROGRESS' && S.events('probe').length === 1 && S.childArrivals() === 1 && S.sends().length === 1,
       `${lr.code} · probe ${S.events('probe').length} · barrier ${S.childArrivals()} · send ${S.sends().length}`)
@@ -4556,6 +4557,286 @@ setTimeout(() => {}, 60000)
         r4b.ok === false && fs.readFileSync(LEASE, 'utf8') === body4, `${r4b.code ?? 'ok'}`)
     } finally { mag.kill('SIGKILL'); fs.rmSync(LEASE, { force: true }) }
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊵ 같은 날 옛 빈 계획 — 인식 가능한 것만 보존 후 재계산 · slug 별 멱등성 · 모르는 판 fail-closed')
+{
+  /**
+   * 🔴 **2026-09-28 운영 사고.** 배포 전 옛 코드가 00:10 에 `COMPLETED · selected 0 · reusable 없음`
+   *    run.json 을 만들었고, 배포 뒤 새 코드가 그것을 무조건 완료로 보고 종료했다 — 대상 0.
+   *    그날 01:00 옛 auto-register 는 큐에서 6건을 처리했다(텍스트 전송 1 · 이미지 2 · 등록·PR 0).
+   *    여기서는 **그 실측 상태를 그대로** 만든 뒤 실제 `planRun` → 실제 `fetchBatch` 를 돌린다.
+   */
+  const { spawn } = await import('node:child_process')
+  const PLAN40 = await import('./magazine-producer-plan.mjs')
+  const RF40 = await import('./lib/magazine-run-file.mjs')
+  const QN40 = await import('./lib/magazine-quarantine.mjs')
+  const WEBUI40 = await import('./magazine-webui-runner.mjs')
+  const READY40 = await import('./magazine-auto-register-ready.mjs')
+  const TODAY = '2026-09-28'
+  const NOW = new Date('2026-09-28T09:00:00+09:00').getTime()
+  const DONE6 = ['irp-tax-benefit', 'certificate-in-50s', 'how-much-talk-with-husband', 'retirement-prep-status', 'moment-body-changed', 'menopause-supplements-talk']
+  const EXTRA = ['uncertain-a', 'broken-a', 'broken-b', 'registered-a']
+  const HERO = new Set(['irp-tax-benefit', 'certificate-in-50s']) // 01:00 에 이미지 2건이 생성됐다
+
+  /** 오늘 실측과 같은 무대 — 무대마다 새 폴더 */
+  const stage = (name, { legacy = true, legacyOverride = {}, current = null, packages = false } = {}) => {
+    const T = fs.mkdtempSync(path.join(os.tmpdir(), `m3a-legacy-${name}-`))
+    const D = path.join(T, 'drafts')
+    const RUNS = path.join(D, '_runs')
+    const RD = path.join(RUNS, TODAY)
+    fs.mkdirSync(RD, { recursive: true })
+    const L = path.join(T, 'ledger.json')
+    const brief = (sl) => {
+      fs.mkdirSync(path.join(D, sl), { recursive: true })
+      fs.writeFileSync(path.join(D, sl, 'brief.md'), `# ${sl}\n\n본문 지시\n`)
+      fs.writeFileSync(path.join(D, sl, 'review.ts'), '#\n')
+    }
+    for (const sl of [...DONE6, ...EXTRA]) brief(sl)
+    // 01:00 에 원고가 저장된 글 (irp 는 그날 텍스트 전송 1건으로 받았다)
+    for (const sl of ['irp-tax-benefit', 'certificate-in-50s', 'how-much-talk-with-husband', 'retirement-prep-status', 'moment-body-changed']) {
+      fs.writeFileSync(path.join(D, sl, 'draft.md'), `---\ntitle: ${sl}\n---\n\n본문\n`)
+    }
+    fs.writeFileSync(path.join(D, 'broken-a', 'draft.md'), '')   // 깨진 증거
+    const fpOf = (sl) => QN40.deliveryFingerprintOf(WEBUI40.plannedMessageFor(sl, D))
+    QN40.saveQuarantine({
+      // 전송 전 실패(upload_timeout · sent 0) — 다시 처리 가능
+      'menopause-supplements-talk': { attempts: 0, delivery: { sent: false, messageFingerprint: fpOf('menopause-supplements-talk'), kind: 'INFRA', reason: 'upload_timeout', stage: 'attach', at: 1, runId: null, date: TODAY, reservationId: null } },
+      // 같은 지문 전송불명 — 재전송 금지
+      'uncertain-a': { attempts: 0, delivery: { sent: null, messageFingerprint: fpOf('uncertain-a'), kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', at: 1, runId: null, date: TODAY, reservationId: 'r' } },
+      // 깨진 전송 기록 — 지문 없는 전송불명
+      'broken-b': { attempts: 0, delivery: { sent: null, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', at: 1 } },
+    }, L)
+    const legacyRun = {
+      date: TODAY, startedAt: '2026-09-27T15:10:08.202Z', finishedAt: '2026-09-27T15:10:08.218Z', status: 'COMPLETED',
+      dryRun: false, inventoryDays: 0, produceCount: 5, reviewCount: 1,
+      counts: { total: 0, live: 0, scheduled: 0, blocked: 0, draft: 0 },
+      selected: [], skipped: DONE6.map((sl, i) => ({ day: i + 1, slug: sl, reason: `drafts/magazine/${sl} 가 이미 있다` })),
+      abortReason: null, ...legacyOverride,
+    }
+    if (current) fs.writeFileSync(path.join(RD, 'run.json'), JSON.stringify(current, null, 2) + '\n')
+    else if (legacy) fs.writeFileSync(path.join(RD, 'run.json'), JSON.stringify(legacyRun, null, 2) + '\n')
+    fs.writeFileSync(path.join(RD, 'report.md'), '# 옛 리포트\n')
+    // 01:00 후속 처리 흔적 — 회차 전체를 막는 근거가 아니다
+    fs.writeFileSync(path.join(RD, 'auto-register.json'), JSON.stringify({ processed: 6, done: [], pr: { made: false } }))
+    fs.writeFileSync(path.join(RD, 'auto-merge.json'), JSON.stringify({ merged: false, pr: null }))
+    if (packages) { fs.mkdirSync(path.join(RD, 'selected', 'pkg-a'), { recursive: true }); fs.writeFileSync(path.join(RD, 'selected', 'pkg-a', 'brief.todo.md'), 'x') }
+    const queue = [...DONE6, ...EXTRA].map((slug, i) => ({ ...FIXTURE_QUEUE[0], day: 100 + i, slug, title: slug }))
+    const deps = {
+      today: TODAY, now: NOW, runsDir: RUNS, draftsDir: D, quarantinePath: L,
+      loadQueueFn: () => queue,
+      loadArticlesFn: () => [{ slug: 'registered-a', status: 'SCHEDULED' }],
+      inventoryFn: () => ({ inventoryDays: 0, counts: { total: 0, live: 0, scheduled: 0, blocked: 0, draft: 0 } }),
+      heroExists: (sl) => HERO.has(sl),
+      log: () => {},
+    }
+    const bytes = () => fs.readFileSync(path.join(RD, 'run.json'), 'utf8')
+    const preserved = () => fs.readdirSync(RD).filter((f) => /\.(legacy-empty|broken)-/.test(f))
+    return { T, D, RD, L, deps, queue, bytes, preserved }
+  }
+
+  // ── A. 오늘 운영 사고와 같은 상태 ──
+  const A = stage('a')
+  const beforeA = A.bytes()
+  const rA = PLAN40.planRun(A.deps)
+  const newRun = JSON.parse(A.bytes())
+  const pA = A.preserved()
+  check('🔴 ㊵ A 옛 빈 계획 → 보존 후 새 판으로 재계산',
+    rA.outcome === 'RECOMPUTED_LEGACY' && newRun.schemaVersion === RF40.RUN_SCHEMA_VERSION && newRun.status === 'COMPLETED',
+    `${rA.outcome} · ${newRun.schemaVersion}`)
+  const keptRun = pA.find((f) => f.startsWith('run.'))
+  check('🔴 ㊵ A 옛 run.json·report.md 를 지우지 않고 고유 이름으로 보존 (내용 동일)',
+    pA.length === 2 && keptRun && fs.readFileSync(path.join(A.RD, keptRun), 'utf8') === beforeA
+      && fs.readFileSync(path.join(A.RD, pA.find((f) => f.startsWith('report.'))), 'utf8') === '# 옛 리포트\n',
+    pA.join(', '))
+  const reuse = new Map((newRun.reusable ?? []).map((r) => [r.slug, r]))
+  const held = new Map((newRun.held ?? []).map((h) => [h.slug, h]))
+  check('🔴 ㊵ A reusable 후보 > 0 — 처리된 6건 전부 (등록된 slug 제외)',
+    DONE6.every((sl) => reuse.has(sl)) && !reuse.has('registered-a') && reuse.size === 6,
+    [...reuse.keys()].join(','))
+  check('🔴 ㊵ A 이미 있는 draft·hero 재사용 표시 (irp·certificate: draft+hero)',
+    reuse.get('irp-tax-benefit')?.reuse?.draft && reuse.get('irp-tax-benefit')?.reuse?.hero
+      && reuse.get('certificate-in-50s')?.reuse?.hero && reuse.get('how-much-talk-with-husband')?.stage === 'NEEDS_CONVERT',
+    JSON.stringify(reuse.get('irp-tax-benefit')?.reuse))
+  check('🔴 ㊵ A 판정 불가·전송불명 slug 만 HOLD (uncertain-a · broken-a · broken-b)',
+    held.get('uncertain-a')?.code === 'DELIVERY_UNCERTAIN_HOLD' && held.get('broken-a')?.code === 'EVIDENCE_BROKEN'
+      && held.get('broken-b')?.code === 'EVIDENCE_BROKEN' && held.size === 3,
+    JSON.stringify([...held.values()].map((h) => `${h.slug}:${h.code}`)))
+  check('  ㊵ A lock·임시 파일 잔여 0', !fs.existsSync(path.join(A.RD, '.lock')) && !fs.readdirSync(A.RD).some((f) => f.includes('.tmp-')),
+    fs.readdirSync(A.RD).join(','))
+
+  // A → 실제 fetchBatch: 안전하게 처리 가능한 slug 만 보낸다 (menopause 1건) · 기존 전송·원고 재전송 0
+  const sendsA = []
+  const fakeBrowser = {
+    ensureTab: async () => ({ ok: true }),
+    connect: async () => ({
+      contexts: () => [{ pages: () => [], newPage: async () => {
+        let typed = ''
+        return {
+          async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+          async waitForFunction() { throw new Error('Timeout') }, async evaluate() { return '' },
+          locator(sel) {
+            const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+            const l = { async click() { if (isSend) sendsA.push(typed.match(/^# ([a-z0-9-]+)$/m)?.[1] ?? '?') }, async innerText() { return typed } }
+            return { first: () => l, ...l }
+          },
+          keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+        }
+      } }],
+      async close() {},
+    }),
+  }
+  const fb = await WEBUI40.fetchBatch({ date: TODAY, dryRun: false, limit: 0, draftsDir: A.D, quarantinePath: A.L,
+    resultPath: path.join(A.T, 'fetch.json'), probeFn: async () => ({ status: 'ok' }), browserDeps: fakeBrowser })
+  check('🔴 ㊵ A 회수 — 안전하게 처리 가능한 slug 만 전송 (menopause 1건) · draft 있는 글·HOLD 글 재전송 0',
+    JSON.stringify(sendsA) === JSON.stringify(['menopause-supplements-talk']),
+    `${JSON.stringify(sendsA)} · planned ${JSON.stringify((fb.planned ?? []).map((p) => `${p.slug}:${p.action}`))}`)
+  const regPool = READY40.scan({ runDate: TODAY, store: {}, draftsDir: A.D })
+  check('  ㊵ A 등록 경로도 새 run 을 읽는다 — draft 있는 재사용 후보가 다음 단계로 간다 (source run)',
+    regPool.source === `run:${TODAY}` && regPool.pool >= 5, `${regPool.source} · pool ${regPool.pool}`)
+  const rA2 = PLAN40.planRun(A.deps)
+  check('🔴 ㊵ A 같은 날 다시 돌면 새 판 COMPLETED — 재계산 0', rA2.outcome === 'ALREADY_COMPLETED' && A.preserved().length === 2, rA2.outcome)
+
+  // ── B. 옛 판이지만 선정 1건 이상 ──
+  const B = stage('b', { legacyOverride: { selected: [{ day: 1, slug: 'irp-tax-benefit' }] } })
+  const bb = B.bytes()
+  const rB = PLAN40.planRun(B.deps)
+  check('🔴 ㊵ B 옛 판 · 선정 1건 이상 → 재계산 0 · 파일 불변', rB.outcome === 'LEGACY_COMPLETED' && B.bytes() === bb && B.preserved().length === 0, rB.outcome)
+
+  // ── C. 옛 빈 계획이지만 선정 패키지(후속 증거)가 있다 ──
+  const C = stage('c', { packages: true })
+  const cb = C.bytes()
+  const rC = PLAN40.planRun(C.deps)
+  check('🔴 ㊵ C 옛 빈 계획 + 선정 패키지 증거 → 재계산 0 · 파일 불변', rC.outcome === 'LEGACY_COMPLETED' && C.bytes() === cb, rC.outcome)
+  // C-2. v1(reusable 있음 · 판 표식 없음) COMPLETED — 재계산 0
+  const C2 = stage('c2', { legacyOverride: { reusable: [] } })
+  const c2b = C2.bytes()
+  const rC2 = PLAN40.planRun(C2.deps)
+  check('  ㊵ C2 옛 판 v1(reusable 있음) COMPLETED → 재계산 0', rC2.outcome === 'LEGACY_COMPLETED' && C2.bytes() === c2b, rC2.outcome)
+
+  // ── D. 지금 판 COMPLETED ──
+  const D0 = stage('d', { current: { schemaVersion: RF40.RUN_SCHEMA_VERSION, date: TODAY, status: 'COMPLETED', selected: [], reusable: [], held: [] } })
+  const db = D0.bytes()
+  const rD = PLAN40.planRun(D0.deps)
+  check('🔴 ㊵ D 지금 판 COMPLETED → 재계산 0 · 파일 불변', rD.outcome === 'ALREADY_COMPLETED' && D0.bytes() === db, rD.outcome)
+
+  // ── E. 모르는 미래 판 — fail-closed · 전송 0 ──
+  const E = stage('e', { current: { schemaVersion: 'producer-run/9', date: TODAY, status: 'COMPLETED', selected: [{ slug: 'menopause-supplements-talk' }], reusable: [{ slug: 'menopause-supplements-talk' }] } })
+  const eb = E.bytes()
+  const rE = PLAN40.planRun(E.deps)
+  check('🔴 ㊵ E 모르는 판 → code 3 (fail-closed) · 파일 불변', rE.code === 3 && rE.outcome === 'UNKNOWN_SCHEMA' && E.bytes() === eb, `${rE.code} ${rE.outcome}`)
+  const sendsE = sendsA.length
+  const fe = await WEBUI40.fetchBatch({ date: TODAY, dryRun: false, limit: 0, draftsDir: E.D, quarantinePath: E.L,
+    resultPath: path.join(E.T, 'fetch.json'), probeFn: async () => ({ status: 'ok' }), browserDeps: fakeBrowser })
+  const eScan = READY40.scan({ runDate: TODAY, store: {}, draftsDir: E.D })
+  check('🔴 ㊵ E 소비자도 fail-closed — 회수 대상 0 · 전송 0 · 등록 후보가 큐 전체로 되돌아가지 않는다',
+    (fe.planned ?? []).length === 0 && sendsA.length === sendsE && eScan.pool === 0,
+    `planned ${(fe.planned ?? []).length} · send +${sendsA.length - sendsE} · pool ${eScan.pool} (${eScan.source})`)
+  const { spawnSync } = await import('node:child_process')
+  const cliE = spawnSync(process.execPath, ['scripts/magazine-producer-plan.mjs', '--now', '2026-09-28T09:00:00+09:00'],
+    { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: E.T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: E.D, TZ: 'Asia/Seoul' } })
+  check('🔴 ㊵ E 실제 CLI 도 exit 3 · RUN_SCHEMA_UNKNOWN · 파일 불변',
+    cliE.status === 3 && /RUN_SCHEMA_UNKNOWN/.test(`${cliE.stdout}${cliE.stderr}`) && E.bytes() === eb,
+    `exit ${cliE.status} · ${String(cliE.stdout).trim().slice(0, 80)}`)
+
+  // ── F. 동시 producer 2개 — 재계산 정확히 1회 · 기록 손실 0 ──
+  const F = stage('f')
+  const fBefore = F.bytes()
+  const FIXJ = path.join(F.T, 'fixture.json')
+  fs.writeFileSync(FIXJ, JSON.stringify({ ...F.deps, loadQueueFn: undefined, loadArticlesFn: undefined, inventoryFn: undefined,
+    heroExists: undefined, log: undefined, queue: F.queue, hero: [...HERO] }))
+  const planUrl = JSON.stringify(new URL(`file://${path.resolve('scripts/magazine-producer-plan.mjs')}`).href)
+  const DRVF = writeFixture(path.join(F.T, 'driver.mjs'), `import fs from 'node:fs'
+const P = await import(${planUrl})
+const fx = JSON.parse(fs.readFileSync(${JSON.stringify(FIXJ)}, 'utf8'))
+const hero = new Set(fx.hero)
+const r = P.planRun({ ...fx, loadQueueFn: () => fx.queue, loadArticlesFn: () => [{ slug: 'registered-a' }],
+  inventoryFn: () => ({ inventoryDays: 0, counts: { total: 0, live: 0, scheduled: 0, blocked: 0, draft: 0 } }),
+  heroExists: (s) => hero.has(s), log: () => {} })
+fs.writeFileSync(process.argv[2], JSON.stringify({ outcome: r.outcome, code: r.code }))
+`)
+  const BARF = path.join(F.T, 'barrier')
+  fs.mkdirSync(BARF)
+  /** 두 producer 가 **잠금을 잡기 직전**에 만나게 한다 — 판정을 모두 끝낸 상태로 잠금을 다툰다 */
+  const PREF = writeFixture(path.join(F.T, 'pre.mjs'), `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const real = fs.openSync
+let first = true
+fs.openSync = (p, flags, ...rest) => {
+  if (first && flags === 'wx' && String(p).endsWith('/.lock') && String(p).includes(${JSON.stringify(F.RD)})) {
+    first = false
+    fs.writeFileSync(${JSON.stringify(BARF)} + '/' + process.pid, '')
+    const until = Date.now() + 3000
+    while (fs.readdirSync(${JSON.stringify(BARF)}).length < 2 && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+  }
+  return real(p, flags, ...rest)
+}
+syncBuiltinESMExports()
+`)
+  const outs = [path.join(F.T, 'o1.json'), path.join(F.T, 'o2.json')]
+  await Promise.all(outs.map((o) => new Promise((ok) => {
+    const c = spawn(process.execPath, ['--import', PREF, DRVF, o], { stdio: 'ignore', env: { ...process.env } })
+    c.once('exit', ok)
+  })))
+  const res = outs.map((o) => (fs.existsSync(o) ? JSON.parse(fs.readFileSync(o, 'utf8')).outcome : 'NO_RESULT')).sort()
+  const pF = F.preserved()
+  const finalF = JSON.parse(F.bytes())
+  check('  ㊵ F 두 producer 가 모두 잠금 직전까지 왔다 (barrier 2 · 전제)', fs.readdirSync(BARF).length === 2, `${fs.readdirSync(BARF).length}`)
+  check('🔴 ㊵ F 동시 producer 2개 — 재계산 정확히 1회 · 다른 쪽은 실행 중/완료로 종료',
+    res.filter((x) => x === 'RECOMPUTED_LEGACY').length === 1 && res.every((x) => ['RECOMPUTED_LEGACY', 'RUNNING', 'ALREADY_COMPLETED'].includes(x)),
+    JSON.stringify(res))
+  check('🔴 ㊵ F 기록 손실 0 — 옛 기록 보존 1쌍(원본과 동일) · 최종 run 새 판 · lock·임시 파일 0',
+    pF.length === 2 && fs.readFileSync(path.join(F.RD, pF.find((f) => f.startsWith('run.'))), 'utf8') === fBefore
+      && finalF.schemaVersion === RF40.RUN_SCHEMA_VERSION && !fs.existsSync(path.join(F.RD, '.lock'))
+      && !fs.readdirSync(F.RD).some((f) => f.includes('.tmp-')),
+    `${pF.join(', ')} · ${finalF.schemaVersion}`)
+
+  /**
+   * ── F2. 잠금 **안** 재판정 ──
+   *    진 쪽이 잠금 밖에서 옛 빈 계획을 본 뒤 잠금을 기다리다가, 이긴 쪽이 **끝나고 잠금을 푼 뒤에**
+   *    잠금을 잡는 순서. 잠금 안에서 다시 보지 않으면 새 run 을 옛 빈 계획으로 착각해 두 번째 재계산을 한다.
+   */
+  const F2 = stage('f2')
+  const f2Before = F2.bytes()
+  const FIXJ2 = path.join(F2.T, 'fixture.json')
+  fs.writeFileSync(FIXJ2, JSON.stringify({ ...F2.deps, loadQueueFn: undefined, loadArticlesFn: undefined, inventoryFn: undefined,
+    heroExists: undefined, log: undefined, queue: F2.queue, hero: [...HERO] }))
+  const DRVF2 = writeFixture(path.join(F2.T, 'driver.mjs'), fs.readFileSync(DRVF, 'utf8').replace(JSON.stringify(FIXJ), JSON.stringify(FIXJ2)))
+  const ARRIVED = path.join(F2.T, 'b-arrived')
+  const HOLDB = writeFixture(path.join(F2.T, 'hold-b.mjs'), `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const real = fs.openSync
+let first = true
+fs.openSync = (p, flags, ...rest) => {
+  if (first && flags === 'wx' && String(p) === ${JSON.stringify(path.join(F2.RD, '.lock'))}) {
+    first = false
+    fs.writeFileSync(${JSON.stringify(ARRIVED)}, '')
+    // 이긴 쪽이 새 판을 쓰고 잠금을 풀 때까지 붙잡는다
+    const until = Date.now() + 20000
+    const done = () => { try { return !fs.existsSync(${JSON.stringify(path.join(F2.RD, '.lock'))}) && JSON.parse(fs.readFileSync(${JSON.stringify(path.join(F2.RD, 'run.json'))}, 'utf8')).schemaVersion } catch { return false } }
+    while (!done() && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+  }
+  return real(p, flags, ...rest)
+}
+syncBuiltinESMExports()
+`)
+  const outB = path.join(F2.T, 'b.json')
+  const outA = path.join(F2.T, 'a.json')
+  const bDone = new Promise((ok) => spawn(process.execPath, ['--import', HOLDB, DRVF2, outB], { stdio: 'ignore', env: { ...process.env } }).once('exit', ok))
+  const untilB = Date.now() + 15000
+  while (!fs.existsSync(ARRIVED) && Date.now() < untilB) await new Promise((ok) => setTimeout(ok, 10))
+  await new Promise((ok) => spawn(process.execPath, [DRVF2, outA], { stdio: 'ignore', env: { ...process.env } }).once('exit', ok))
+  await bDone
+  const oA = fs.existsSync(outA) ? JSON.parse(fs.readFileSync(outA, 'utf8')).outcome : 'NO_RESULT'
+  const oB = fs.existsSync(outB) ? JSON.parse(fs.readFileSync(outB, 'utf8')).outcome : 'NO_RESULT'
+  const pF2 = F2.preserved()
+  check('  ㊵ F2 진 쪽이 잠금 밖에서 옛 파일을 본 뒤 잠금 앞에서 기다렸다 (전제)', fs.existsSync(ARRIVED), '도착 안 함')
+  check('🔴 ㊵ F2 잠금 안에서 다시 본다 — 이긴 쪽 뒤에 잡은 쪽은 ALREADY_COMPLETED · 재계산 1회 · 보존 1쌍(원본)',
+    oA === 'RECOMPUTED_LEGACY' && oB === 'ALREADY_COMPLETED' && pF2.length === 2
+      && fs.readFileSync(path.join(F2.RD, pF2.find((f) => f.startsWith('run.'))), 'utf8') === f2Before,
+    `A ${oA} · B ${oB} · 보존 ${pF2.length}`)
+
+  for (const s of [A, B, C, C2, D0, E, F, F2]) fs.rmSync(s.T, { recursive: true, force: true })
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)

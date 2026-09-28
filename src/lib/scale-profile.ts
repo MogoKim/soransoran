@@ -112,13 +112,13 @@ export const SAFEST_STAGE: ReleaseStage = 'd1'
  *    🔴 이것은 **관측이지 계약이 아니다.** 창 안이고 댓글 간격을 지키고 슬롯 수가 맞는
  *    유효한 시간 조정이라면, 포함 관계가 깨져도 막지 않는다 — yml 만 함께 갱신하면 된다.
  *
- * 🔴 **첫 댓글 대기 실측**(`planRunnerSchedule(500)` 의 20개 슬롯과 대조):
- *    최대 **43분** · 60분 초과 **0건** · 22시 넘어가는 글 **0건**. fixture 가 이것을 본다.
+ * 🔴 **첫 댓글 대기 실측**(`planCommentLoopSchedule(500)` 의 43개 슬롯과 대조):
+ *    최대 **20분 이하** · 60분 초과 **0건** · 22시 넘어가는 글 **0건**. fixture 가 이것을 본다.
  *    🔴 **예약표상 값이다** — 댓글 runner 가 등록·loaded 되고 그 stage 가 가동된다는 전제다.
  *    현재 댓글 runner 는 **미등록**이므로 운영 SLA 달성 실적이 아니다.
  */
 export const PROFILES: Readonly<Record<ReleaseStage, ScaleProfile>> = {
-  // 🔴 지금 운영 중 — 오전 한 편. 댓글 회차 09:35 가 5분 뒤에 받는다
+  // 🔴 지금 운영 중 — 오전 한 편. 댓글 회차 09:46 가 16분 뒤에 받는다
   d1: { dailyTarget: 1, postsPerWeek: 1, minDaysBetween: 5, slots: [{ hour: 9, minute: 30, count: 1 }] },
   d3: {
     dailyTarget: 3, postsPerWeek: 3, minDaysBetween: 2,

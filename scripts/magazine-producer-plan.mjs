@@ -39,6 +39,13 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadArticles, loadQueue, DRAFTS_DIR } from './lib/magazine-load.mjs'
+import {
+  RUN_SCHEMA_VERSION, classifyExistingRun, writeFileAtomic, preserveRunFiles, acquireRunLock,
+} from './lib/magazine-run-file.mjs'
+import { materialState } from './lib/magazine-run-targets.mjs'
+import { readQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
+import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
+import { heroFilePath } from './lib/magazine-hero.mjs'
 import { calculateInventory } from './magazine-inventory.mjs'
 import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
@@ -463,6 +470,192 @@ brief.md / review.ts 정본을 만들지 않는다 — _runs 에 작업 패키�
 등록 판정은 magazine-register.mjs 가 한다 — 여기서 풀지 않는다.`)
 }
 
+/**
+ * 🔴 **재사용 후보의 slug 별 멱등성 판정** (2026-09-28 · legacy 빈 계획 재계산).
+ *
+ *    같은 날 이미 후속 작업(전송·이미지·처리)이 있었어도 회차 전체를 막지 않는다.
+ *    대신 slug 마다 "지금 다시 다뤄도 같은 글을 두 번 보내지 않는가" 를 본다:
+ *      ① articles.ts 에 있거나 큐에서 빠진 slug        → selectItems 가 이미 제외한다
+ *      ② 같은 메시지 지문의 전송불명(sent=true/null)    → HOLD (DELIVERY_UNCERTAIN_HOLD · 재전송 0)
+ *      ③ draft.md 가 있다                              → 재사용 (회수 대상이 아니다 — 전송 0)
+ *      ④ 유효한 hero 가 있다                           → hero runner 가 검증 후 재사용한다 (이미지 0)
+ *      ⑤ 전송 전에 실패했고 draft 가 없다              → 다시 처리 가능 (NEEDS_DRAFT)
+ *      ⑥ 증거가 깨졌거나 판정할 수 없다                → **그 slug 만** HOLD · 다른 slug 는 계속
+ *    판정은 전송 경계와 **같은 함수**(`deliveryGate`)로 한다 — 조건을 다시 쓰지 않는다.
+ *
+ * @returns {{ok:true, stage:string, draft:boolean, hero:boolean}|{ok:false, code:string, why:string}}
+ */
+export function reuseVerdict(slug, { draftsDir, ledger, gate, heroExists }) {
+  const dir = join(draftsDir, slug)
+  const m = materialState(dir)
+  if (m.draftMd) {
+    let text = null
+    try { text = readFileSync(join(dir, 'draft.md'), 'utf8') } catch (e) {
+      return { ok: false, code: 'EVIDENCE_BROKEN', why: `draft.md 를 읽지 못했다: ${e.message}` }
+    }
+    if (!text.trim()) return { ok: false, code: 'EVIDENCE_BROKEN', why: 'draft.md 가 비어 있다 — 재사용도 재전송도 판단할 수 없다' }
+  }
+  if (!ledger.ok) return { ok: false, code: 'LEDGER_UNREADABLE', why: ledger.why }
+  const d = ledger.store?.[slug]?.delivery
+  if (d !== undefined) {
+    const fpOk = d && typeof d.messageFingerprint === 'string' && d.messageFingerprint.startsWith('sha256:')
+    const sentOk = d && (d.sent === true || d.sent === false || d.sent === null)
+    if (!d || typeof d !== 'object' || !sentOk || (d.kind === 'DELIVERY_UNCERTAIN' && !fpOk)) {
+      return { ok: false, code: 'EVIDENCE_BROKEN', why: `전송 기록이 깨졌다: ${JSON.stringify(d).slice(0, 120)}` }
+    }
+  }
+  if (m.stage === 'NEEDS_DRAFT') {
+    const g = gate({ slug, draftsDir })
+    if (!g.ok) return { ok: false, code: g.code ?? 'LEDGER_UNREADABLE', why: g.why }
+    if (g.hold) return { ok: false, code: 'DELIVERY_UNCERTAIN_HOLD', why: g.hold.why }
+  }
+  return { ok: true, stage: m.stage, draft: m.draftMd, hero: Boolean(heroExists(slug)) }
+}
+
+/**
+ * 🔴 **회차 계산 — 판정·보존·새 run 생성을 한 잠금 안에서** (production 진입점 `main` 이 부른다).
+ *    시험은 이 함수를 그대로 부른다(여러 프로세스에서 동시에 부르는 반례 포함).
+ *
+ * @returns {{code:number, outcome:string, run?:object, preserved?:string[], why?:string}}
+ *   code 0 정상(새 계산 · 이미 완료 · 실행 중) · 3 모르는 판(fail-closed — producer 흐름이 회수를 건너뛴다)
+ */
+export function planRun({
+  today, now, dryRun = false, runsDir = RUNS_DIR, draftsDir = DRAFTS_DIR,
+  loadArticlesFn = loadArticles, loadQueueFn = loadQueue, inventoryFn = calculateInventory,
+  quarantinePath = QUARANTINE_PATH, gateFn = deliveryGate,
+  heroExists = (slug) => existsSync(heroFilePath(slug)),
+  log = (m) => console.log(m),
+}) {
+  const runDir = join(runsDir, today)
+  const lockFile = join(runDir, '.lock')
+
+  // 🔴 잠금 밖의 빠른 길 — 지금 판 COMPLETED 는 잠금 없이도 확정이다 (죽은 lock 이 COMPLETED 를 덮지 않게)
+  if (!dryRun) {
+    const pre = classifyExistingRun({ runDir, today })
+    if (pre.kind === 'CURRENT_COMPLETED') { log(`  ${pre.why} — 종료`); return { code: 0, outcome: 'ALREADY_COMPLETED' } }
+    if (pre.kind === 'LEGACY_COMPLETED') { log(`  ${pre.why} — 종료`); return { code: 0, outcome: 'LEGACY_COMPLETED' } }
+    if (pre.kind === 'UNKNOWN_SCHEMA') {
+      log(`  🔴 RUN_SCHEMA_UNKNOWN — ${pre.why}. 다시 계산하지도, 이어 쓰지도 않는다 (fail-closed · 전송 0)`)
+      return { code: 3, outcome: 'UNKNOWN_SCHEMA', why: pre.why }
+    }
+  }
+
+  let lock = null
+  if (!dryRun) {
+    mkdirSync(runDir, { recursive: true })
+    lock = acquireRunLock(lockFile, { pidAlive })
+    if (!lock.ok) {
+      if (lock.alive) { log(`  실행 중(pid ${lock.holder?.pid ?? '?'}) — 종료`); return { code: 0, outcome: 'RUNNING' } }
+      // 죽은 lock = 이전 실행이 도중에 끊겼다. 기록만 남기고 재시도하지 않는다. (옛 동작 · 원자적 쓰기)
+      preserveRunFiles(runDir, 'before-abort')
+      writeFileAtomic(join(runDir, 'run.json'), JSON.stringify({
+        schemaVersion: RUN_SCHEMA_VERSION, date: today, status: 'ABORTED',
+        abortReason: '이전 실행이 비정상 종료됐다(lock 잔존). 재시도하지 않는다.', previousLock: lock.holder,
+      }, null, 2) + '\n')
+      rmSync(lockFile, { force: true })
+      log('  이전 실행이 비정상 종료됨 — ABORTED 기록 후 종료 (재시도하지 않는다)')
+      return { code: 0, outcome: 'ABORTED' }
+    }
+  }
+
+  try {
+    // 🔴 잠금 안에서 **다시** 판정한다 — 잠금 밖에서 본 뒤 다른 producer 가 끝냈을 수 있다
+    let supersedes = null
+    if (!dryRun) {
+      const cur = classifyExistingRun({ runDir, today })
+      if (cur.kind === 'CURRENT_COMPLETED' || cur.kind === 'LEGACY_COMPLETED') {
+        log(`  ${cur.why} — 종료`)
+        return { code: 0, outcome: cur.kind === 'CURRENT_COMPLETED' ? 'ALREADY_COMPLETED' : 'LEGACY_COMPLETED' }
+      }
+      if (cur.kind === 'UNKNOWN_SCHEMA') {
+        log(`  🔴 RUN_SCHEMA_UNKNOWN — ${cur.why}. 다시 계산하지도, 이어 쓰지도 않는다 (fail-closed · 전송 0)`)
+        return { code: 3, outcome: 'UNKNOWN_SCHEMA', why: cur.why }
+      }
+      if (cur.kind === 'LEGACY_EMPTY' || cur.kind === 'BROKEN') {
+        // 🔴 지우지 않는다 — 고유 이름으로 보존한 뒤 새 run 을 원자적으로 쓴다
+        const kept = preserveRunFiles(runDir, cur.kind === 'LEGACY_EMPTY' ? 'legacy-empty' : 'broken')
+        supersedes = { kind: cur.kind, why: cur.why, preservedAs: kept }
+        log(`  🔴 ${cur.kind} — ${cur.why}. 보존: ${kept.join(', ')} — 새 판으로 다시 계산한다`)
+      }
+    }
+
+    const articles = loadArticlesFn()
+    const queue = loadQueueFn()
+    const inventory = inventoryFn(now)
+    const produceCount = produceCountFor(inventory.inventoryDays)
+    const reviewCount = reviewCountFor(produceCount)
+
+    const draftExists = (slug) => existsSync(join(draftsDir, slug))
+    const { selected, review, skipped, reusable: reusableRaw } = selectItems({
+      queue, articles, today, produceCount, reviewCount, draftExists,
+    })
+
+    // 🔴 slug 별 멱등성 — 판정 불가·전송불명은 그 slug 만 HOLD 로 뺀다
+    const ledger = readQuarantine(quarantinePath)
+    const gate = ({ slug, draftsDir: dd }) => gateFn({ slug, draftsDir: dd, quarantinePath })
+    const reusable = []
+    const held = []
+    for (const item of reusableRaw) {
+      const v = reuseVerdict(item.slug, { draftsDir, ledger, gate, heroExists })
+      if (v.ok) reusable.push({ ...item, stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })
+      else held.push({ day: item.day, slug: item.slug, code: v.code, why: v.why })
+    }
+
+    const all = [...selected, ...review]
+    const run = {
+      schemaVersion: RUN_SCHEMA_VERSION,
+      date: today,
+      startedAt: new Date(now).toISOString(),
+      finishedAt: null,
+      status: 'PARTIAL',
+      dryRun,
+      inventoryDays: inventory.inventoryDays,
+      produceCount,
+      reviewCount,
+      counts: inventory.counts,
+      selected: all.map((i) => ({
+        day: i.day, slug: i.slug, title: i.title,
+        contentType: i.contentType, riskLevel: i.riskLevel,
+        publishWindow: i.publishWindow ?? null,
+        // 🔴 호환 필드 — 자동 진행을 가르지 않는다
+        needsFullReview: false,
+        packageWritten: false,
+      })),
+      skipped,
+      /**
+       * 🔴 **재사용 후보.** 새로 만들 필요는 없지만 내보낼 재료가 있는 주제다.
+       *    auto-register 가 이것을 보고 "할 일이 없다" 와 "이미 있다" 를 구분한다.
+       */
+      reusable,
+      /** 🔴 slug 별 HOLD — 전송불명·깨진 증거. 소비자는 이 목록을 대상으로 읽지 않는다 */
+      held,
+      supersedes,
+      abortReason: null,
+    }
+
+    if (!dryRun) {
+      for (const item of all) {
+        const dir = join(runDir, 'selected', item.slug)
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'brief.todo.md'), briefTodo(item))
+        writeFileSync(join(dir, 'review.todo.md'), reviewTodo(item))
+        const row = run.selected.find((s) => s.slug === item.slug)
+        if (row) row.packageWritten = true
+      }
+      run.status = 'COMPLETED'
+      run.finishedAt = new Date().toISOString()
+      writeFileAtomic(join(runDir, 'run.json'), JSON.stringify(run, null, 2) + '\n')
+      writeFileAtomic(join(runDir, 'report.md'), report(run))
+    } else {
+      run.status = 'COMPLETED'
+      run.finishedAt = new Date().toISOString()
+    }
+    return { code: 0, outcome: supersedes ? 'RECOMPUTED_LEGACY' : 'COMPUTED', run, preserved: supersedes?.preservedAs ?? [] }
+  } finally {
+    lock?.release?.()
+  }
+}
+
 function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--help')) return help()
@@ -473,120 +666,13 @@ function main() {
   const now = argv.includes('--now') && nowArg ? new Date(nowArg).getTime() : Date.now()
   const today = kstDate(now)
 
-  const runDir = join(RUNS_DIR, today)
-  const runJson = join(runDir, 'run.json')
-  const lockFile = join(runDir, '.lock')
-
-  // 이미 오늘 끝냈으면 다시 돌지 않는다.
-  // dry-run 은 아무것도 쓰지 않으므로 중복 위험이 없다 — 진단용으로 항상 돈다.
-  if (!dryRun && existsSync(runJson)) {
-    try {
-      const prev = JSON.parse(readFileSync(runJson, 'utf8'))
-      if (prev.status === 'COMPLETED') {
-        console.log(`  오늘(${today}) run 은 이미 COMPLETED — 종료`)
-        return
-      }
-    } catch {
-      // 깨진 run.json 은 무시하고 이어간다 (아래에서 덮어쓴다)
-    }
+  const r = planRun({ today, now, dryRun })
+  if (r.run) {
+    if (asJson) console.log(JSON.stringify(r.run, null, 2))
+    else console.log(report(r.run))
   }
-
-  // lock
-  if (existsSync(lockFile) && !dryRun) {
-    let lock = null
-    try { lock = JSON.parse(readFileSync(lockFile, 'utf8')) } catch { lock = null }
-    if (lock && pidAlive(lock.pid)) {
-      console.log(`  실행 중(pid ${lock.pid}) — 종료`)
-      return
-    }
-    // 죽은 lock = 이전 실행이 도중에 끊겼다. 기록만 남기고 재시도하지 않는다.
-    if (!dryRun) {
-      mkdirSync(runDir, { recursive: true })
-      writeFileSync(
-        runJson,
-        JSON.stringify(
-          { date: today, status: 'ABORTED', abortReason: '이전 실행이 비정상 종료됐다(lock 잔존). 재시도하지 않는다.', previousLock: lock },
-          null, 2,
-        ) + '\n',
-      )
-      rmSync(lockFile, { force: true })
-    }
-    console.log('  이전 실행이 비정상 종료됨 — ABORTED 기록 후 종료 (재시도하지 않는다)')
-    return
-  }
-
-  const articles = loadArticles()
-  const queue = loadQueue()
-  const inventory = calculateInventory(now)
-  const produceCount = produceCountFor(inventory.inventoryDays)
-
-  const reviewCount = reviewCountFor(produceCount)
-
-  const draftExists = (slug) => existsSync(join(DRAFTS_DIR, slug))
-  const { selected, review, skipped, reusable } = selectItems({
-    queue, articles, today, produceCount, reviewCount, draftExists,
-  })
-
-  // 패키지 생성·run.json 은 두 레인을 한 목록으로 다룬다.
-  // 하류(notify · webui-runner · batch-qa)가 run.selected 와 _runs/{date}/selected/
-  // 하나만 보기 때문이다. 등급은 needsFullReview 로 구분한다 —
-  // 디렉터리를 나누면 HIGH 초안이 기존 도구에 아예 안 보여 병목이 그대로 남는다.
-  const all = [...selected, ...review]
-
-  const run = {
-    date: today,
-    startedAt: new Date(now).toISOString(),
-    finishedAt: null,
-    status: 'PARTIAL',
-    dryRun,
-    inventoryDays: inventory.inventoryDays,
-    produceCount,
-    reviewCount,
-    counts: inventory.counts,
-    selected: all.map((i) => ({
-      day: i.day, slug: i.slug, title: i.title,
-      contentType: i.contentType, riskLevel: i.riskLevel,
-      publishWindow: i.publishWindow ?? null,
-      /**
-       * true 면 지금은 창업자가 본문 전문을 읽기 전까지 등록되지 않는다.
-       * 임시 수동 게이트다 — 최종 목표는 고강도 자동 검수 PASS 시 자동 등록(§13.7).
-       */
-      // 🔴 호환 필드 — 자동 진행을 가르지 않는다
-      needsFullReview: false,
-      packageWritten: false,
-    })),
-    skipped,
-    /**
-     * 🔴 **재사용 후보.** 새로 만들 필요는 없지만 내보낼 재료가 있는 주제다.
-     *    auto-register 가 이것을 보고 "할 일이 없다" 와 "이미 있다" 를 구분한다.
-     */
-    reusable,
-    abortReason: null,
-  }
-
-  if (!dryRun) {
-    mkdirSync(runDir, { recursive: true })
-    writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: run.startedAt }) + '\n')
-    for (const item of all) {
-      const dir = join(runDir, 'selected', item.slug)
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(join(dir, 'brief.todo.md'), briefTodo(item))
-      writeFileSync(join(dir, 'review.todo.md'), reviewTodo(item))
-      const row = run.selected.find((s) => s.slug === item.slug)
-      if (row) row.packageWritten = true
-    }
-    run.status = 'COMPLETED'
-    run.finishedAt = new Date().toISOString()
-    writeFileSync(runJson, JSON.stringify(run, null, 2) + '\n')
-    writeFileSync(join(runDir, 'report.md'), report(run))
-    rmSync(lockFile, { force: true })
-  } else {
-    run.status = 'COMPLETED'
-    run.finishedAt = new Date().toISOString()
-  }
-
-  if (asJson) console.log(JSON.stringify(run, null, 2))
-  else console.log(report(run))
+  // 🔴 모르는 판은 non-zero — producer 흐름이 brief·원고 회수를 건너뛴다 (전송 0)
+  if (r.code) process.exitCode = r.code
 }
 
 function report(run) {
@@ -604,6 +690,18 @@ function report(run) {
     L.push('재고가 목표(14일) 이상이다. 오늘은 만들지 않는다.')
     L.push('')
   }
+  if (run.supersedes) {
+    L.push(`> 🔴 ${run.supersedes.kind} — ${run.supersedes.why}`)
+    L.push(`> 보존: ${(run.supersedes.preservedAs ?? []).join(', ') || '(없음)'} · 새 판 ${run.schemaVersion ?? '-'} 으로 다시 계산했다`)
+    L.push('')
+  }
+  L.push(`## 재사용 후보 ${(run.reusable ?? []).length}건 · slug HOLD ${(run.held ?? []).length}건`)
+  L.push('')
+  for (const r of run.reusable ?? []) {
+    L.push(`- \`${r.slug}\` — ${r.stage ?? '-'}${r.reuse?.draft ? ' · draft 재사용(전송 0)' : ''}${r.reuse?.hero ? ' · hero 재사용(이미지 0)' : ''}`)
+  }
+  for (const h of run.held ?? []) L.push(`- ⏸ \`${h.slug}\` — ${h.code}: ${h.why}`)
+  L.push('')
   L.push('## 선정')
   L.push('')
   if (!run.selected.length) {

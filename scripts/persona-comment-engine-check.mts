@@ -51,7 +51,7 @@ import { FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template
 import {
   readCommentStage, stagePowers, COMMENT_STAGES, COMMENT_STAGE_ENV,
 } from '../src/lib/persona-comment-stage'
-import { planRunnerSchedule } from './lib/persona-comment-runner-template'
+import { planRunnerSchedule, planCommentLoopSchedule, FIRST_COMMENT_ATTEMPTS, COMMENT_RUNNER_MAX_GAP_MINUTES } from './lib/persona-comment-runner-template'
 
 const mkdirDeep = (dir: string): void => { mkdirSync(dir, { recursive: true }) }
 
@@ -2930,11 +2930,19 @@ console.log('㉘ runner schedule 템플릿 — 만들되 올리지 않는다')
 {
   const plist = renderCommentRunnerPlist({
     runtimeRoot: '/Users/x/Documents/soransoran-runtime',
-    npxPath: '/usr/local/bin/npx', logDir: '/Users/x/Library/Logs/soransoran',
+    npxPath: '/usr/local/bin/npx', logDir: '/Users/x/Library/Logs/soransoran', nodeBinDir: '/usr/local/bin',
   })
+  /**
+   * 🔴 **예약 대상은 무인 루프다** (2026-09-28 · Track B). 옛 runner 는 사람 승인분만 내는 수동 CLI 로 남는다.
+   *    label 은 그대로다 — 관제(`persona:comment-health` · D100 준비도)가 이 label 을 본다.
+   */
   check('🔴 runner 가 runtime worktree 를 가리킨다',
     plist.includes('<key>WorkingDirectory</key><string>/Users/x/Documents/soransoran-runtime</string>')
-    && plist.includes('/Users/x/Documents/soransoran-runtime/scripts/persona-comment-runner.mts'))
+    && plist.includes('/Users/x/Documents/soransoran-runtime/scripts/persona-comment-loop.mts'))
+  check('🔴 예약 실행은 --live 로 부른다(단계가 bootstrap-auto 가 아니면 그래도 write 0)',
+    plist.includes('<string>--live</string>'))
+  check('🔴 launchd 에 PATH 를 준다 — nvm node 가 없으면 npx 가 뜨기도 전에 죽는다',
+    plist.includes('<key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>'))
   check('🔴 개발 작업트리를 가리키지 않는다', !plist.includes('soransoran-m0'))
   /** 🔴 RunAtLoad 가 true 면 등록하는 순간 돈다 */
   check('🔴 RunAtLoad 가 false 다 — 올리는 순간 돌지 않는다', plist.includes('<key>RunAtLoad</key><false/>'))
@@ -2945,7 +2953,7 @@ console.log('㉘ runner schedule 템플릿 — 만들되 올리지 않는다')
    *    schedule 만으로 이미 25/day 가 천장이었고, 500/day 목표와 정면으로 어긋났다.
    */
   check('🔴 슬롯이 하루 상한에서 역산한 값이다',
-    COMMENT_RUNNER_SLOTS.length === planRunnerSchedule(BOOTSTRAP_DAILY_MAX).runs)
+    COMMENT_RUNNER_SLOTS.length === planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX).runs)
   check('🔴 plist 가 그 슬롯을 전부 적는다',
     COMMENT_RUNNER_SLOTS.every((sl) =>
       plist.includes(`<key>Hour</key><integer>${sl.hour}</integer>`
@@ -3148,7 +3156,7 @@ console.log('㉝ runner 와 모델 정본')
   /** 🔴 템플릿이 없는 파일을 가리키면 등록하는 순간 조용히 실패한다 */
   check('🔴 runner 대상 스크립트가 실제로 있다', existsSync(COMMENT_RUNNER_SCRIPT))
   check('🔴 템플릿이 그 파일을 가리킨다',
-    renderCommentRunnerPlist({ runtimeRoot: '/rt', npxPath: '/npx', logDir: '/log' })
+    renderCommentRunnerPlist({ runtimeRoot: '/rt', npxPath: '/npx', logDir: '/log', nodeBinDir: '/' })
       .includes(`/rt/${COMMENT_RUNNER_SCRIPT}`))
 
   /**
@@ -4957,13 +4965,19 @@ console.log('㊺ bootstrap 단계 — 아무도 없을 때 먼저 말을 건다'
       plan.runs === runs && plan.capacity >= target && plan.slots.length === runs)
   }
   {
-    const plan = planRunnerSchedule(BOOTSTRAP_DAILY_MAX)
+    const plan = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX)
     check('🟢 500/day schedule 의 회차 간격이 60분 계약 안이다',
       plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
     check('🔴 야간 공백은 사실대로 낸다 — 0 이라고 말하지 않는다',
       plan.nightGapMinutes > 0)
     check('🔴 회차가 1회면 간격은 0 이 아니라 null 이다',
       planRunnerSchedule(1).maxGapMinutes === null)
+    check(`🔴 한 글이 시한 안에 ${FIRST_COMMENT_ATTEMPTS}번 시도를 받는다 — 간격 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,
+      plan.maxGapMinutes !== null && plan.maxGapMinutes <= COMMENT_RUNNER_MAX_GAP_MINUTES
+      && COMMENT_RUNNER_MAX_GAP_MINUTES * FIRST_COMMENT_ATTEMPTS <= FIRST_COMMENT_MAX_MINUTES)
+    check('🔴 재시도 바닥은 용량 역산을 줄이지 않는다',
+      plan.runs >= planRunnerSchedule(BOOTSTRAP_DAILY_MAX).runs
+      && planCommentLoopSchedule(0).runs === 0)
     check('🔴 template 슬롯은 하루 상한에서 역산한 값이다 — 손으로 적지 않는다',
       COMMENT_RUNNER_SLOTS.length === plan.runs
       && COMMENT_RUNNER_SLOTS.every((sl, i) =>

@@ -14,6 +14,9 @@ import type { GateLine } from './persona-comment-gate-report'
 import { readConfirmedSelection, verifyProvenance } from './persona-comment-provenance'
 import { requireCapContext, kstDayStart, weekWindowStart } from './persona-cap'
 import type { CandidateStatus } from './persona-candidate-rules'
+import {
+  judgeAutoLane, AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY,
+} from './persona-comment-auto-lane'
 
 /**
  * 후보 발행 트랜잭션 — 🔴 실제 write 가 일어나는 유일한 함수
@@ -121,6 +124,19 @@ export async function publishCandidateTx(
      *    CLI·runner 는 넘기지 않으므로 bootstrap 후보를 발행할 수 없다.
      */
     actor?: PublishActor
+    /**
+     * 🔴 **무인 레인(bootstrap-auto) 발행** (2026-09-28 · Track B).
+     *
+     *    사람 승인 단계가 없는 레인이다. 그래서 이 트랜잭션이 **PENDING 을 직접 PUBLISHED 로**
+     *    옮긴다 — 승인과 발행 사이의 틈을 만들지 않는다(틈이 있으면 APPROVED 로 남은 행을
+     *    나중에 누가 60분 뒤에 발행할 수 있다).
+     *
+     *    🔴 기존 재검사(9관문 · 실회원 댓글 3건 · 같은 Persona · kill switch · 일일 상한 ·
+     *       provenance · 생활사 · cap)는 **하나도 빠지지 않고** 그대로 돈다. 그 위에
+     *       `judgeAutoLane`(60분 · 글당 1건 · 자기 글 · 단계·주체·상태)이 더해진다.
+     *    🔴 `manual-admin` 과 함께 쓸 수 없다 — 사람 발행은 이 레인이 아니다.
+     */
+    autoLane?: boolean
   },
 ): Promise<PublishTxResult> {
   const id = (args.id ?? '').trim()
@@ -174,7 +190,11 @@ export async function publishCandidateTx(
         ? await tx.post.findUnique({
             where: { id: row.targetPostId },
             // 🔴 생활사 판정은 본문을 읽어야 한다
-            select: { id: true, status: true, boardType: true, title: true, content: true },
+            select: {
+              id: true, status: true, boardType: true, title: true, content: true,
+              // 🔴 무인 레인의 60분 창 · 자기 글 판정 재료 (`publishAt ?? createdAt` 이 공개 시각이다)
+              publishAt: true, createdAt: true, personaId: true,
+            },
           })
         : null
 
@@ -301,6 +321,37 @@ export async function publishCandidateTx(
         readPostRequirements(post.title, post.content),
         post.title, post.content,
       )
+      /**
+       * 🔴 **무인 레인 규칙을 이 트랜잭션 안에서 본다** (2026-09-28).
+       *    밖에서 본 "댓글 0건" 은 그 순간의 사진이다 — 다른 회차가 같은 글에 먼저 달았을 수 있다.
+       *    Serializable 이므로 두 회차가 같은 0 을 읽고 둘 다 쓰면 뒤의 것이 직렬화 실패로 진다.
+       */
+      const autoLane = args.autoLane === true
+      if (autoLane) {
+        const lane = judgeAutoLane({
+          stage: stage.stage,
+          actor: args.actor ?? 'automation',
+          queueStatus: row.status,
+          nowMs: now.getTime(),
+          postPublishedAtMs: post === null ? null : (post.publishAt ?? post.createdAt).getTime(),
+          personaCommentsOnPost: row.targetPostId === null ? null : personaCommentsOnPost,
+          postAuthorPersonaId: post === null ? undefined : post.personaId,
+          candidatePersonaId: row.persona.id,
+          memberCommentsOnPost: row.targetPostId === null ? null : memberCommentsOnPost,
+        })
+        if (!lane.ok) {
+          return {
+            kind: 'blocked',
+            blocks: lane.blockers.map((message): PublishBlock => ({ code: 'AUTO_LANE', message })),
+          }
+        }
+      }
+      /**
+       * 🔴 **무인 레인에서는 이 트랜잭션이 곧 기계 승인이다.** 위 판정을 통과한 PENDING 만
+       *    APPROVED 로 **보고** 아래 재검사를 그대로 태운다 — 재검사를 건너뛰지 않는다.
+       *    DB 의 상태는 아래 조건부 UPDATE 가 PENDING → PUBLISHED 로 한 번에 옮긴다.
+       */
+      const effectiveStatus = autoLane ? 'APPROVED' : row.status
       const storedGates = readStoredGates(row.gateResults)
       /**
        * 🔴 **생성 근거를 트랜잭션 안에서 다시 본다.**
@@ -330,7 +381,7 @@ export async function publishCandidateTx(
         gateStatus: row.gateStatus,
         // 🔴 호출자 주장이 없으므로 저장된 Gate 모양으로만 판정한다
         isBootstrap: false,
-        queueStatus: row.status as QueueStatus,
+        queueStatus: effectiveStatus as QueueStatus,
         publishedCommentId: row.publishedCommentId,
         // 🔴 주체. 생략되면 automation 으로 본다
         actor: args.actor ?? 'automation',
@@ -352,7 +403,7 @@ export async function publishCandidateTx(
 
       const plan = planPublish({
         candidate: {
-          status: row.status as CandidateStatus,
+          status: effectiveStatus as CandidateStatus,
           targetPostId: row.targetPostId,
           publishedCommentId: row.publishedCommentId,
           candidateText: row.candidateText,
@@ -400,12 +451,19 @@ export async function publishCandidateTx(
        * 🔴 조건부 UPDATE 의 목적은 그대로다 — 읽은 뒤 쓰는 사이에 누가 먼저 발행했으면 0 건이 된다.
        */
       const updated = await tx.personaApprovalQueue.updateMany({
-        where: {
-          id: row.id,
-          status: { in: ['APPROVED', 'EDITED'] },
-          publishedCommentId: null,
+        // 🔴 무인 레인은 PENDING 에서 바로 간다 — 사람 승인 행(APPROVED·EDITED)을 이 경로로 잡지 않는다
+        where: autoLane
+          ? { id: row.id, status: 'PENDING', publishedCommentId: null }
+          : {
+            id: row.id,
+            status: { in: ['APPROVED', 'EDITED'] },
+            publishedCommentId: null,
+          },
+        data: {
+          status: 'PUBLISHED', publishedCommentId: comment.id,
+          // 🔴 누가 결정했는가 — 기계 결정은 decidedBy 로만 구분된다
+          ...(autoLane ? { decidedBy: AUTO_LANE_DECIDED_BY, decidedAt: now } : {}),
         },
-        data: { status: 'PUBLISHED', publishedCommentId: comment.id },
       })
       if (updated.count === 0) throw new Error(QUEUE_RACE)
 
@@ -421,7 +479,7 @@ export async function publishCandidateTx(
             ? {}
             : { gateHits: row.gateResults as Prisma.InputJsonValue }),
           aiToneTags: row.aiToneTags,
-          decidedBy: 'operator',
+          decidedBy: autoLane ? AUTO_LANE_ACTIVITY_DECIDED_BY : 'operator',
           publishedAt: now,
         },
       })

@@ -19,6 +19,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { RUN_SCHEMA_VERSION } from './magazine-run-file.mjs'
 
 /**
  * 🔴 **회차 식별** — 날짜만으로는 "같은 회차" 를 가릴 수 없다.
@@ -77,6 +78,15 @@ export function readRunTargets({ draftsDir, date, exists = existsSync, read = re
   let run
   try { run = JSON.parse(read(file, 'utf8')) }
   catch (e) { return { ok: false, why: `run.json 파싱 실패: ${e.message}`, targets: [] } }
+  /**
+   * 🔴 **모르는 판은 읽지 않는다** (2026-09-28). 판 표식이 있는데 지금 판이 아니면
+   *    그 목록이 무슨 뜻인지 모른다 — 대상 0건으로 **fail-closed**. 소비자는 이 코드를 보면
+   *    큐 전체로 되돌아가는 폴백도 하지 않는다 (그러면 모르는 계획 대신 큐 전체를 보낸다).
+   */
+  if (run && Object.prototype.hasOwnProperty.call(run, 'schemaVersion') && run.schemaVersion !== RUN_SCHEMA_VERSION) {
+    return { ok: false, code: 'RUN_SCHEMA_UNKNOWN', failClosed: true, targets: [],
+      why: `모르는 run 판이다 (${JSON.stringify(run.schemaVersion)} ≠ ${RUN_SCHEMA_VERSION}) — 대상 0 (fail-closed)` }
+  }
 
   const slugOf = (x) => (typeof x === 'string' ? x : x?.slug)
   const seen = new Set()
