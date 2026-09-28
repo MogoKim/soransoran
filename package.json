@@ -196,7 +196,11 @@
     "auto-ready:evidence-ui-check": "tsx scripts/auto-ready-evidence-ui-check.mts",
     "check:quality-contract": "tsx scripts/quality-contract-check.mts",
     "auto-ready:quality-check": "tsx scripts/auto-ready-quality-check.mts",
-    "auto-ready:quality-db-check": "tsx scripts/auto-ready-quality-db-check.mts"
+    "auto-ready:quality-db-check": "tsx scripts/auto-ready-quality-db-check.mts",
+    "auto-ready:audit": "tsx scripts/auto-ready-audit.mts",
+    "auto-ready:audit-check": "tsx scripts/auto-ready-audit-check.mts",
+    "auto-ready:audit-db-check": "tsx scripts/auto-ready-audit-db-check.mts",
+    "auto-ready:defect-http-check": "tsx scripts/auto-ready-defect-http-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

@@ -220,6 +220,45 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
  */
 const BODY_LOG = process.env.FAKE_PROVIDER_BODY_LOG ?? ''
 
+/**
+ * 🔴 **자동 READY 사후 의미 감사 요청** (2026-09-27). 지시문의 표식(`SORAN_AUTO_READY_SEMANTIC_AUDIT`)으로 가른다 —
+ *    검사가 지어낸 표시가 아니라 실제로 나간 요청의 내용이다.
+ *
+ * 🔴 **가짜 모델은 실제 모델보다 강하지 않다** — 요청 본문에 **실제로 실린 것만** 보고 판정한다.
+ *    · 생활사 모순 — 게시글에 `남편` 이 있는데 요청의 `글쓴이카드.maritalStatus` 가 기혼·별거가 아니다
+ *      (카드가 요청에 안 실리면 모순을 볼 수 없다 — 실제 모델도 그렇다)
+ *    · 근거 없는 사실 — 게시글의 금액(`N억` · `N만 원`)이 요청의 `원문근거` 에 없다
+ *      (원문 근거가 요청에 안 실리면 게시글의 금액을 원문과 대조할 수 없어 전부 근거 없음이 된다)
+ *
+ *    FAKE_SEMANTIC_MODE — judge(기본) · garbage(JSON 아님) · contradict(발견이 있는데 defect=no) · http-500
+ *    FAKE_SEMANTIC_FAIL_MARK — 게시글에 이 문자열이 실린 요청만 HTTP 500
+ */
+const SEMANTIC_MARK = 'SORAN_AUTO_READY_SEMANTIC_AUDIT'
+const SEMANTIC_MODE = process.env.FAKE_SEMANTIC_MODE ?? 'judge'
+const semanticVerdictOf = (body) => {
+  let payload = {}
+  try {
+    const req = JSON.parse(String(body ?? '{}'))
+    payload = JSON.parse(String(req?.messages?.[0]?.content ?? req?.contents?.[0]?.parts?.[0]?.text ?? '{}'))
+  } catch { payload = {} }
+  const post = `${payload?.게시글?.제목 ?? ''}\n${payload?.게시글?.본문 ?? ''}`
+  const source = `${payload?.원문근거?.제목 ?? ''}\n${payload?.원문근거?.본문 ?? ''}`
+  const card = payload?.글쓴이카드 ?? null
+  const lifeContradictions = []
+  if (post.includes('남편') && card !== null && typeof card.maritalStatus === 'string'
+    && !['기혼', '별거'].includes(card.maritalStatus)) {
+    lifeContradictions.push({ claim: '남편 이야기', card: `혼인 ${card.maritalStatus}` })
+  }
+  const unsupportedFacts = []
+  for (const m of post.matchAll(/\d+\s*(억|만\s*원)/g)) {
+    if (!source.replace(/\s/g, '').includes(m[0].replace(/\s/g, ''))) unsupportedFacts.push({ claim: m[0], why: '원문근거에 없는 금액' })
+  }
+  const any = lifeContradictions.length > 0 || unsupportedFacts.length > 0
+  const out = { unsupportedFacts, lifeContradictions, sourceDistortions: [], defect: any ? 'yes' : 'no' }
+  if (SEMANTIC_MODE === 'contradict') out.defect = 'no'
+  return out
+}
+
 globalThis.fetch = async (url, init) => {
   await armSettleFail()
   const u = String(url)
@@ -227,10 +266,16 @@ globalThis.fetch = async (url, init) => {
   const isCount = u.includes('/count_tokens') || u.includes(':countTokens')
   const isGemini = u.includes('generativelanguage.googleapis.com')
   const isJudge = String(init?.body ?? '').includes(JUDGE_MARK)
+  const isSemantic = String(init?.body ?? '').includes(SEMANTIC_MARK)
   // 🔴 계획 요청이면 **제안받은 후보 중에서** 고른 응답을 만든다
   const planText = JSON.stringify(payloadFor(init?.body))
-  const text = isJudge ? JUDGE_TEXT : planText.slice(1)
-  const geminiText = isJudge ? JUDGE_GEMINI_TEXT : planText
+  const semanticText = isSemantic
+    ? (SEMANTIC_MODE === 'garbage' ? '이건 JSON 이 아니다' : JSON.stringify(semanticVerdictOf(init?.body)))
+    : ''
+  // 🔴 Anthropic 은 prefill `{` 뒤를 이어 쓴다 — 여는 중괄호를 뺀다(모양이 JSON 이 아니면 그대로)
+  const text = isSemantic ? (semanticText.startsWith('{') ? semanticText.slice(1) : semanticText)
+    : isJudge ? JUDGE_TEXT : planText.slice(1)
+  const geminiText = isSemantic ? semanticText : isJudge ? JUDGE_GEMINI_TEXT : planText
   if (LOG !== '') appendFileSync(LOG, `${isCount ? 'count' : 'paid'}\t${u}\n`)
   if (BODY_LOG !== '' && !isCount) {
     // 🔴 한 줄 JSON 으로 남긴다 — 검사가 줄 단위로 읽는다. url 을 함께 적어
@@ -244,6 +289,10 @@ globalThis.fetch = async (url, init) => {
     return isGemini ? json({ totalTokens: COUNT_TOKENS }) : json({ input_tokens: COUNT_TOKENS })
   }
 
+  if (isSemantic && SEMANTIC_MODE === 'http-500') return json({ error: 'fixture' }, 500)
+  // 🔴 한 글만 실패시킨다 — 게시글에 이 표식이 **실제로 실려 나간** 요청만 500 이다(한 행 실패 · 나머지 계속)
+  const FAIL_MARK = process.env.FAKE_SEMANTIC_FAIL_MARK ?? ''
+  if (isSemantic && FAIL_MARK !== '' && String(init?.body ?? '').includes(FAIL_MARK)) return json({ error: 'fixture' }, 500)
   if (MODE === 'timeout') {
     // 🔴 실제로 기다리지 않는다 — provider 가 abort 를 보는 것과 같은 예외를 던진다
     const e = new Error('fixture timeout')

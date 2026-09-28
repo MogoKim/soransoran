@@ -1,0 +1,2790 @@
+{
+ "kind": "supply-clock-inversion-fixture",
+ "note": "운영 microseed-data 에서 읽기 전용으로 뽑았다 (2026-09-28). 원문·제목·본문·화자 없음 — 원천 id · 시각 · 판정/생성 결과 · 회차 구간만. expected 는 파일 회차(정답표)로 만들었고, 검사는 파일 이름 없이 기록 칸과 회차 기록만으로 같은 답을 내야 한다.",
+ "extractedAt": "2026-09-28T01:26:01.912Z",
+ "sources": [
+  {
+   "sourceArticleId": "35023663",
+   "invertedRun": [
+    "20260924-051500"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-24T05:15:00.850Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-16T12:15:08.456Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-16T13:15:06.446Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-16T23:15:01.949Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-17T03:15:05.373Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-24T05:15:02.339Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260924-051500"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35027823",
+   "invertedRun": [
+    "20260924-081504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-24T08:15:04.591Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-16T12:15:08.456Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-16T13:15:06.446Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-16T23:15:01.949Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-17T03:15:05.373Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-24T08:15:13.074Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260924-081504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35030980",
+   "invertedRun": [
+    "20260927-121504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T12:15:04.958Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T12:15:09.945Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-121504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35032034",
+   "invertedRun": [
+    "20260925-031504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-25T03:15:04.061Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_HOLD",
+     "semanticStatus": "httpError"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-25T03:15:05.635Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260925-031504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35033779",
+   "invertedRun": [
+    "20260926-231504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T23:15:04.909Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_HOLD",
+     "semanticStatus": "httpError"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T23:15:10.060Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260926-231504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35034334",
+   "invertedRun": [
+    "20260924-231506"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-24T23:15:06.349Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_HOLD",
+     "semanticStatus": "httpError"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-24T23:15:07.962Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260924-231506"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35040109",
+   "invertedRun": [
+    "20260927-051506"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T05:15:06.040Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T05:15:16.258Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-051506"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35040856",
+   "invertedRun": [
+    "20260927-051506"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T05:15:06.040Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": "deterministicFailed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T05:15:16.258Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260927-051506"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35049844",
+   "invertedRun": [
+    "20260925-231505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-25T23:15:05.008Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-25T23:15:06.519Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260925-231505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35050684",
+   "invertedRun": [
+    "20260926-031504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T03:15:04.958Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T03:15:06.761Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260926-031504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35050949",
+   "invertedRun": [
+    "20260926-121505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T12:15:05.074Z",
+     "machineOutcome": "hold",
+     "retryable": true,
+     "cause": "parseFailed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T12:15:10.353Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "retryable",
+    "stage": "draft",
+    "runId": "20260926-121505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35051271",
+   "invertedRun": [
+    "20260926-081505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T08:15:05.331Z",
+     "machineOutcome": "hold",
+     "retryable": true,
+     "cause": "speakerSlotNarrowed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T08:15:07.354Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "retryable",
+    "stage": "draft",
+    "runId": "20260926-081505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35051859",
+   "invertedRun": [
+    "20260926-124210"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T12:42:10.622Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T12:42:15.373Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260926-124210"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35051870",
+   "invertedRun": [
+    "20260926-131504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T13:15:04.051Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T13:15:08.844Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260926-131504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35051925",
+   "invertedRun": [
+    "20260926-124210"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T12:42:10.622Z",
+     "machineOutcome": "hold",
+     "retryable": true,
+     "cause": "speakerSlotNarrowed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T12:42:15.373Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "retryable",
+    "stage": "draft",
+    "runId": "20260926-124210"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35052548",
+   "invertedRun": [
+    "20260926-231504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T23:15:04.909Z",
+     "machineOutcome": "hold",
+     "retryable": true,
+     "cause": "truncated"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T23:15:10.060Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "retryable",
+    "stage": "draft",
+    "runId": "20260926-231504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35053129",
+   "invertedRun": [
+    "20260927-051506"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T05:15:06.040Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": "deterministicFailed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T05:15:16.258Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260927-051506"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "35054697",
+   "invertedRun": [
+    "20260927-231505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T23:15:05.830Z",
+     "machineOutcome": "hold",
+     "retryable": true,
+     "cause": "parseFailed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T23:15:10.587Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "retryable",
+    "stage": "draft",
+    "runId": "20260927-231505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "451538",
+   "invertedRun": [
+    "20260927-051506"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T05:15:06.040Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_HOLD",
+     "semanticStatus": "httpError"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T05:15:16.258Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-051506"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "451777",
+   "invertedRun": [
+    "20260927-231505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T23:15:05.830Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_HOLD",
+     "semanticStatus": "httpError"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T23:15:10.587Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-231505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "451781",
+   "invertedRun": [
+    "20260927-031505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T03:15:05.904Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_HOLD",
+     "semanticStatus": "httpError"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T03:15:12.167Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-031505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "451841",
+   "invertedRun": [
+    "20260927-131504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T13:15:04.745Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-20T11:36:07.796Z",
+     "decision": "AUTO_HOLD",
+     "semanticStatus": "httpError"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T13:15:09.665Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260927-131504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "452841",
+   "invertedRun": [
+    "20260926-131504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T13:15:04.051Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": "deterministicFailed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T13:15:08.844Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260926-131504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "452893",
+   "invertedRun": [
+    "20260926-124210"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-26T12:42:10.622Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-26T12:42:15.373Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260926-124210"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "452894",
+   "invertedRun": [
+    "20260924-121505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-24T12:15:05.504Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-24T12:15:07.068Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260924-121505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "452935",
+   "invertedRun": [
+    "20260924-121505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-24T12:15:05.504Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-24T12:15:07.068Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260924-121505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "453467",
+   "invertedRun": [
+    "20260927-081505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T08:15:05.219Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T08:15:10.169Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-081505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "453503",
+   "invertedRun": [
+    "20260927-081505"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T08:15:05.219Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T08:15:10.169Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-081505"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "453518",
+   "invertedRun": [
+    "20260927-131504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T13:15:04.745Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T13:15:09.665Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-131504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "453519",
+   "invertedRun": [
+    "20260927-121504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T12:15:04.958Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T12:15:09.945Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-121504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "453526",
+   "invertedRun": [
+    "20260927-121504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T12:15:04.958Z",
+     "machineOutcome": "adopt",
+     "retryable": false,
+     "cause": null
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T12:15:09.945Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "candidate",
+    "stage": "draft",
+    "runId": "20260927-121504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "453532",
+   "invertedRun": [
+    "20260927-121504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T12:15:04.958Z",
+     "machineOutcome": "hold",
+     "retryable": true,
+     "cause": "speakerSlotNarrowed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T12:15:09.945Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "retryable",
+    "stage": "draft",
+    "runId": "20260927-121504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  },
+  {
+   "sourceArticleId": "453534",
+   "invertedRun": [
+    "20260927-121504"
+   ],
+   "records": [
+    {
+     "stage": "draft",
+     "generatedAt": "2026-09-27T12:15:04.958Z",
+     "machineOutcome": "hold",
+     "retryable": false,
+     "cause": "deterministicFailed"
+    },
+    {
+     "stage": "judge",
+     "decidedAt": "2026-09-27T12:15:09.945Z",
+     "decision": "AUTO_SEED",
+     "semanticStatus": "ok"
+    }
+   ],
+   "expected": {
+    "state": "terminal",
+    "stage": "draft",
+    "runId": "20260927-121504"
+   },
+   "wallClock": {
+    "state": "seeded",
+    "stage": "judge"
+   }
+  }
+ ],
+ "runs": [
+  {
+   "runId": "20260911-120756",
+   "startedAt": "2026-09-11T12:07:56.917Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T12:07:58.337Z",
+     "endedAt": "2026-09-11T12:07:58.561Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T12:07:58.561Z",
+     "endedAt": "2026-09-11T12:07:58.799Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260911-121504",
+   "startedAt": "2026-09-11T12:15:04.150Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T12:15:04.841Z",
+     "endedAt": "2026-09-11T12:15:05.109Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T12:15:05.109Z",
+     "endedAt": "2026-09-11T12:15:05.410Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260911-132557",
+   "startedAt": "2026-09-11T13:25:57.437Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T13:25:58.677Z",
+     "endedAt": "2026-09-11T13:28:28.871Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T13:28:28.871Z",
+     "endedAt": "2026-09-11T13:31:10.334Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260911-231506",
+   "startedAt": "2026-09-11T23:15:06.134Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T23:15:07.078Z",
+     "endedAt": "2026-09-11T23:15:23.334Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-11T23:15:23.334Z",
+     "endedAt": "2026-09-11T23:15:48.088Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260912-031505",
+   "startedAt": "2026-09-12T03:15:05.135Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T03:15:06.537Z",
+     "endedAt": "2026-09-12T03:15:55.050Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T03:15:55.050Z",
+     "endedAt": "2026-09-12T03:17:37.296Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260912-051505",
+   "startedAt": "2026-09-12T05:15:05.136Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T05:15:06.274Z",
+     "endedAt": "2026-09-12T05:15:31.024Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T05:15:31.025Z",
+     "endedAt": "2026-09-12T05:16:08.069Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260912-081504",
+   "startedAt": "2026-09-12T08:15:04.914Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T08:15:06.049Z",
+     "endedAt": "2026-09-12T08:15:23.777Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T08:15:23.777Z",
+     "endedAt": "2026-09-12T08:15:52.647Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260912-121505",
+   "startedAt": "2026-09-12T12:15:05.914Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T12:15:07.013Z",
+     "endedAt": "2026-09-12T12:15:24.594Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T12:15:24.594Z",
+     "endedAt": "2026-09-12T12:15:47.898Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260912-131500",
+   "startedAt": "2026-09-12T13:15:00.932Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T13:15:01.896Z",
+     "endedAt": "2026-09-12T13:15:20.168Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T13:15:20.168Z",
+     "endedAt": "2026-09-12T13:15:30.746Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260912-231504",
+   "startedAt": "2026-09-12T23:15:04.645Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T23:15:05.610Z",
+     "endedAt": "2026-09-12T23:15:20.781Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-12T23:15:20.781Z",
+     "endedAt": "2026-09-12T23:15:27.743Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260913-031504",
+   "startedAt": "2026-09-13T03:15:04.825Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T03:15:05.977Z",
+     "endedAt": "2026-09-13T03:15:42.081Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T03:15:42.081Z",
+     "endedAt": "2026-09-13T03:16:42.807Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260913-051504",
+   "startedAt": "2026-09-13T05:15:04.595Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T05:15:05.421Z",
+     "endedAt": "2026-09-13T05:15:21.549Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T05:15:21.549Z",
+     "endedAt": "2026-09-13T05:15:39.774Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260913-081505",
+   "startedAt": "2026-09-13T08:15:05.149Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T08:15:06.241Z",
+     "endedAt": "2026-09-13T08:15:41.611Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T08:15:41.611Z",
+     "endedAt": "2026-09-13T08:16:20.368Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260913-121504",
+   "startedAt": "2026-09-13T12:15:04.781Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T12:15:05.842Z",
+     "endedAt": "2026-09-13T12:15:19.613Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T12:15:19.613Z",
+     "endedAt": "2026-09-13T12:15:56.888Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260913-131505",
+   "startedAt": "2026-09-13T13:15:05.665Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T13:15:06.583Z",
+     "endedAt": "2026-09-13T13:15:27.805Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T13:15:27.805Z",
+     "endedAt": "2026-09-13T13:15:29.493Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260913-231504",
+   "startedAt": "2026-09-13T23:15:04.653Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T23:15:05.633Z",
+     "endedAt": "2026-09-13T23:15:26.645Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-13T23:15:26.645Z",
+     "endedAt": "2026-09-13T23:16:12.388Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260914-031503",
+   "startedAt": "2026-09-14T03:15:03.680Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T03:15:05.211Z",
+     "endedAt": "2026-09-14T03:15:35.031Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T03:15:35.031Z",
+     "endedAt": "2026-09-14T03:34:02.930Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260914-051505",
+   "startedAt": "2026-09-14T05:15:05.774Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T05:15:06.835Z",
+     "endedAt": "2026-09-14T05:15:20.214Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T05:15:20.214Z",
+     "endedAt": "2026-09-14T05:24:21.401Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260914-081505",
+   "startedAt": "2026-09-14T08:15:05.654Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T08:15:06.946Z",
+     "endedAt": "2026-09-14T08:15:35.126Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T08:15:35.126Z",
+     "endedAt": "2026-09-14T08:34:49.831Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260914-121502",
+   "startedAt": "2026-09-14T12:15:02.609Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T12:15:04.016Z",
+     "endedAt": "2026-09-14T12:15:29.345Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T12:15:29.345Z",
+     "endedAt": "2026-09-14T12:40:39.151Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260914-131505",
+   "startedAt": "2026-09-14T13:15:05.769Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T13:15:06.848Z",
+     "endedAt": "2026-09-14T13:15:22.086Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T13:15:22.086Z",
+     "endedAt": "2026-09-14T13:38:18.166Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260914-231504",
+   "startedAt": "2026-09-14T23:15:04.822Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T23:15:05.850Z",
+     "endedAt": "2026-09-14T23:15:17.293Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-14T23:15:17.294Z",
+     "endedAt": "2026-09-14T23:27:02.655Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260915-031505",
+   "startedAt": "2026-09-15T03:15:05.770Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-15T03:15:07.600Z",
+     "endedAt": "2026-09-15T03:16:05.613Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-15T03:16:05.613Z",
+     "endedAt": "2026-09-15T03:35:06.873Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260915-051505",
+   "startedAt": "2026-09-15T05:15:05.636Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-15T05:15:07.475Z",
+     "endedAt": "2026-09-15T05:15:18.965Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-15T05:15:18.966Z",
+     "endedAt": "2026-09-15T05:16:52.153Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260915-082621",
+   "startedAt": "2026-09-15T08:26:21.729Z",
+   "stages": [],
+   "manifest": null
+  },
+  {
+   "runId": "20260915-122403",
+   "startedAt": "2026-09-15T12:24:03.668Z",
+   "stages": [],
+   "manifest": null
+  },
+  {
+   "runId": "20260915-132740",
+   "startedAt": "2026-09-15T13:27:40.656Z",
+   "stages": [],
+   "manifest": null
+  },
+  {
+   "runId": "20260915-231502",
+   "startedAt": "2026-09-15T23:15:02.220Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-15T23:15:04.070Z",
+     "endedAt": "2026-09-15T23:15:57.776Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-15T23:15:57.776Z",
+     "endedAt": "2026-09-15T23:46:38.966Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260916-031921",
+   "startedAt": "2026-09-16T03:19:21.410Z",
+   "stages": [],
+   "manifest": null
+  },
+  {
+   "runId": "20260916-051504",
+   "startedAt": "2026-09-16T05:15:04.882Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T05:15:06.035Z",
+     "endedAt": "2026-09-16T05:16:08.156Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T05:16:08.156Z",
+     "endedAt": "2026-09-16T05:52:24.412Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260916-081504",
+   "startedAt": "2026-09-16T08:15:04.063Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T08:15:04.836Z",
+     "endedAt": "2026-09-16T08:15:05.060Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T08:15:05.060Z",
+     "endedAt": "2026-09-16T08:17:07.709Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260916-121505",
+   "startedAt": "2026-09-16T12:15:05.908Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T12:15:07.890Z",
+     "endedAt": "2026-09-16T12:27:45.801Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T12:27:45.801Z",
+     "endedAt": "2026-09-16T13:12:21.498Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260916-131505",
+   "startedAt": "2026-09-16T13:15:05.024Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T13:15:06.050Z",
+     "endedAt": "2026-09-16T13:15:22.137Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T13:15:22.137Z",
+     "endedAt": "2026-09-16T13:54:12.061Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260916-231500",
+   "startedAt": "2026-09-16T23:15:00.846Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T23:15:01.745Z",
+     "endedAt": "2026-09-16T23:15:11.501Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-16T23:15:11.501Z",
+     "endedAt": "2026-09-16T23:32:44.680Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260917-031503",
+   "startedAt": "2026-09-17T03:15:03.840Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-17T03:15:05.148Z",
+     "endedAt": "2026-09-17T03:15:49.881Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-17T03:15:49.881Z",
+     "endedAt": "2026-09-17T04:00:54.626Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260920-113606",
+   "startedAt": "2026-09-20T11:36:06.355Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-20T11:36:07.568Z",
+     "endedAt": "2026-09-20T11:41:27.499Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-20T11:41:27.717Z",
+     "endedAt": "2026-09-20T11:41:42.606Z"
+    }
+   ],
+   "manifest": null
+  },
+  {
+   "runId": "20260921-003912",
+   "startedAt": "2026-09-21T00:39:12.421Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T00:39:13.897Z",
+     "endedAt": "2026-09-21T00:39:19.753Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T00:39:19.834Z",
+     "endedAt": "2026-09-21T00:39:46.125Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260921-003912",
+    "takenAt": "2026-09-21T00:39:13.895Z"
+   }
+  },
+  {
+   "runId": "20260921-074947",
+   "startedAt": "2026-09-21T07:49:47.898Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T07:49:49.267Z",
+     "endedAt": "2026-09-21T07:49:56.585Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T07:49:56.687Z",
+     "endedAt": "2026-09-21T07:50:22.172Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260921-074947",
+    "takenAt": "2026-09-21T07:49:49.265Z"
+   }
+  },
+  {
+   "runId": "20260921-164711",
+   "startedAt": "2026-09-21T16:47:11.593Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T16:47:13.206Z",
+     "endedAt": "2026-09-21T16:47:21.440Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T16:47:21.536Z",
+     "endedAt": "2026-09-21T16:47:42.344Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260921-164711",
+    "takenAt": "2026-09-21T16:47:13.204Z"
+   }
+  },
+  {
+   "runId": "20260921-164756",
+   "startedAt": "2026-09-21T16:47:56.083Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T16:47:57.047Z",
+     "endedAt": "2026-09-21T16:48:07.914Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-21T16:48:08.021Z",
+     "endedAt": "2026-09-21T16:48:22.187Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260921-164756",
+    "takenAt": "2026-09-21T16:47:57.045Z"
+   }
+  },
+  {
+   "runId": "20260922-021654",
+   "startedAt": "2026-09-22T02:16:54.358Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T02:16:56.607Z",
+     "endedAt": "2026-09-22T02:17:04.691Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T02:17:04.804Z",
+     "endedAt": "2026-09-22T02:17:15.903Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260922-021654",
+    "takenAt": "2026-09-22T02:16:56.604Z"
+   }
+  },
+  {
+   "runId": "20260922-051503",
+   "startedAt": "2026-09-22T05:15:03.819Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T05:15:05.784Z",
+     "endedAt": "2026-09-22T05:15:12.582Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T05:15:12.927Z",
+     "endedAt": "2026-09-22T05:15:32.076Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260922-051503",
+    "takenAt": "2026-09-22T05:15:05.781Z"
+   }
+  },
+  {
+   "runId": "20260922-081505",
+   "startedAt": "2026-09-22T08:15:05.028Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T08:15:06.801Z",
+     "endedAt": "2026-09-22T08:15:13.118Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T08:15:13.245Z",
+     "endedAt": "2026-09-22T08:15:35.441Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260922-081505",
+    "takenAt": "2026-09-22T08:15:06.798Z"
+   }
+  },
+  {
+   "runId": "20260922-121502",
+   "startedAt": "2026-09-22T12:15:02.619Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T12:15:03.904Z",
+     "endedAt": "2026-09-22T12:15:11.748Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T12:15:11.856Z",
+     "endedAt": "2026-09-22T12:15:23.870Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260922-121502",
+    "takenAt": "2026-09-22T12:15:03.901Z"
+   }
+  },
+  {
+   "runId": "20260922-131506",
+   "startedAt": "2026-09-22T13:15:06.002Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T13:15:07.296Z",
+     "endedAt": "2026-09-22T13:15:14.093Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T13:15:14.196Z",
+     "endedAt": "2026-09-22T13:15:43.284Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260922-131506",
+    "takenAt": "2026-09-22T13:15:07.294Z"
+   }
+  },
+  {
+   "runId": "20260922-231503",
+   "startedAt": "2026-09-22T23:15:03.973Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T23:15:05.452Z",
+     "endedAt": "2026-09-22T23:15:12.266Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-22T23:15:12.375Z",
+     "endedAt": "2026-09-22T23:15:24.889Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260922-231503",
+    "takenAt": "2026-09-22T23:15:05.449Z"
+   }
+  },
+  {
+   "runId": "20260923-031505",
+   "startedAt": "2026-09-23T03:15:05.806Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T03:15:07.439Z",
+     "endedAt": "2026-09-23T03:15:16.203Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T03:15:16.319Z",
+     "endedAt": "2026-09-23T03:15:17.024Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260923-031505",
+    "takenAt": "2026-09-23T03:15:07.436Z"
+   }
+  },
+  {
+   "runId": "20260923-051505",
+   "startedAt": "2026-09-23T05:15:05.714Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T05:15:07.087Z",
+     "endedAt": "2026-09-23T05:15:16.418Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T05:15:16.531Z",
+     "endedAt": "2026-09-23T05:15:17.279Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260923-051505",
+    "takenAt": "2026-09-23T05:15:07.085Z"
+   }
+  },
+  {
+   "runId": "20260923-081503",
+   "startedAt": "2026-09-23T08:15:03.686Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T08:15:05.224Z",
+     "endedAt": "2026-09-23T08:15:13.861Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T08:15:13.969Z",
+     "endedAt": "2026-09-23T08:15:14.750Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260923-081503",
+    "takenAt": "2026-09-23T08:15:05.221Z"
+   }
+  },
+  {
+   "runId": "20260923-121505",
+   "startedAt": "2026-09-23T12:15:05.075Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T12:15:06.205Z",
+     "endedAt": "2026-09-23T12:15:15.613Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T12:15:15.718Z",
+     "endedAt": "2026-09-23T12:15:30.053Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260923-121505",
+    "takenAt": "2026-09-23T12:15:06.202Z"
+   }
+  },
+  {
+   "runId": "20260923-131504",
+   "startedAt": "2026-09-23T13:15:04.808Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T13:15:06.564Z",
+     "endedAt": "2026-09-23T13:15:19.677Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T13:15:19.778Z",
+     "endedAt": "2026-09-23T13:15:20.894Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260923-131504",
+    "takenAt": "2026-09-23T13:15:06.562Z"
+   }
+  },
+  {
+   "runId": "20260923-231504",
+   "startedAt": "2026-09-23T23:15:04.931Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T23:15:06.339Z",
+     "endedAt": "2026-09-23T23:15:14.896Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-23T23:15:15.010Z",
+     "endedAt": "2026-09-23T23:15:15.750Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260923-231504",
+    "takenAt": "2026-09-23T23:15:04.929Z"
+   }
+  },
+  {
+   "runId": "20260924-031501",
+   "startedAt": "2026-09-24T03:15:01.674Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T03:15:03.032Z",
+     "endedAt": "2026-09-24T03:15:11.573Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T03:15:11.683Z",
+     "endedAt": "2026-09-24T03:15:12.397Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260924-031501",
+    "takenAt": "2026-09-24T03:15:01.673Z"
+   }
+  },
+  {
+   "runId": "20260924-051500",
+   "startedAt": "2026-09-24T05:15:00.851Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T05:15:02.109Z",
+     "endedAt": "2026-09-24T05:15:08.711Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T05:15:08.844Z",
+     "endedAt": "2026-09-24T05:15:19.544Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260924-051500",
+    "takenAt": "2026-09-24T05:15:00.850Z"
+   }
+  },
+  {
+   "runId": "20260924-081504",
+   "startedAt": "2026-09-24T08:15:04.592Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T08:15:12.829Z",
+     "endedAt": "2026-09-24T08:15:20.901Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T08:15:21.498Z",
+     "endedAt": "2026-09-24T08:15:35.365Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260924-081504",
+    "takenAt": "2026-09-24T08:15:04.591Z"
+   }
+  },
+  {
+   "runId": "20260924-121505",
+   "startedAt": "2026-09-24T12:15:05.505Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T12:15:06.786Z",
+     "endedAt": "2026-09-24T12:15:15.378Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T12:15:15.473Z",
+     "endedAt": "2026-09-24T12:15:38.105Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260924-121505",
+    "takenAt": "2026-09-24T12:15:05.504Z"
+   }
+  },
+  {
+   "runId": "20260924-131505",
+   "startedAt": "2026-09-24T13:15:05.463Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T13:15:06.913Z",
+     "endedAt": "2026-09-24T13:15:15.702Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T13:15:15.803Z",
+     "endedAt": "2026-09-24T13:15:16.541Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260924-131505",
+    "takenAt": "2026-09-24T13:15:05.461Z"
+   }
+  },
+  {
+   "runId": "20260924-231506",
+   "startedAt": "2026-09-24T23:15:06.350Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T23:15:07.725Z",
+     "endedAt": "2026-09-24T23:15:17.368Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-24T23:15:17.466Z",
+     "endedAt": "2026-09-24T23:15:30.437Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260924-231506",
+    "takenAt": "2026-09-24T23:15:06.349Z"
+   }
+  },
+  {
+   "runId": "20260925-031504",
+   "startedAt": "2026-09-25T03:15:04.062Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T03:15:05.409Z",
+     "endedAt": "2026-09-25T03:15:13.127Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T03:15:13.250Z",
+     "endedAt": "2026-09-25T03:15:22.718Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260925-031504",
+    "takenAt": "2026-09-25T03:15:04.061Z"
+   }
+  },
+  {
+   "runId": "20260925-051904",
+   "startedAt": "2026-09-25T05:19:04.230Z",
+   "stages": [],
+   "manifest": null
+  },
+  {
+   "runId": "20260925-082622",
+   "startedAt": "2026-09-25T08:26:22.285Z",
+   "stages": [],
+   "manifest": null
+  },
+  {
+   "runId": "20260925-121503",
+   "startedAt": "2026-09-25T12:15:03.161Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T12:15:04.861Z",
+     "endedAt": "2026-09-25T12:15:13.771Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T12:15:13.877Z",
+     "endedAt": "2026-09-25T12:15:14.779Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260925-121503",
+    "takenAt": "2026-09-25T12:15:03.159Z"
+   }
+  },
+  {
+   "runId": "20260925-131501",
+   "startedAt": "2026-09-25T13:15:01.880Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T13:15:03.232Z",
+     "endedAt": "2026-09-25T13:15:12.179Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T13:15:12.297Z",
+     "endedAt": "2026-09-25T13:15:13.002Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260925-131501",
+    "takenAt": "2026-09-25T13:15:01.879Z"
+   }
+  },
+  {
+   "runId": "20260925-231505",
+   "startedAt": "2026-09-25T23:15:05.008Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T23:15:06.286Z",
+     "endedAt": "2026-09-25T23:15:16.060Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-25T23:15:16.154Z",
+     "endedAt": "2026-09-25T23:15:28.978Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260925-231505",
+    "takenAt": "2026-09-25T23:15:05.008Z"
+   }
+  },
+  {
+   "runId": "20260926-031504",
+   "startedAt": "2026-09-26T03:15:04.959Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T03:15:06.507Z",
+     "endedAt": "2026-09-26T03:15:15.561Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T03:15:15.660Z",
+     "endedAt": "2026-09-26T03:15:30.885Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260926-031504",
+    "takenAt": "2026-09-26T03:15:04.958Z"
+   }
+  },
+  {
+   "runId": "20260926-051505",
+   "startedAt": "2026-09-26T05:15:05.560Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T05:15:07.896Z",
+     "endedAt": "2026-09-26T05:15:21.519Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "failed",
+     "startedAt": "2026-09-26T05:15:21.620Z",
+     "endedAt": "2026-09-26T05:15:22.271Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260926-051505",
+    "takenAt": "2026-09-26T05:15:05.560Z"
+   }
+  },
+  {
+   "runId": "20260926-081505",
+   "startedAt": "2026-09-26T08:15:05.332Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T08:15:07.090Z",
+     "endedAt": "2026-09-26T08:15:15.118Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T08:15:15.215Z",
+     "endedAt": "2026-09-26T08:15:21.004Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260926-081505",
+    "takenAt": "2026-09-26T08:15:05.331Z"
+   }
+  },
+  {
+   "runId": "20260926-121505",
+   "startedAt": "2026-09-26T12:15:05.074Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T12:15:10.123Z",
+     "endedAt": "2026-09-26T12:15:18.879Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T12:15:18.993Z",
+     "endedAt": "2026-09-26T12:15:26.799Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260926-121505",
+    "takenAt": "2026-09-26T12:15:05.074Z"
+   }
+  },
+  {
+   "runId": "20260926-124210",
+   "startedAt": "2026-09-26T12:42:10.622Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T12:42:15.143Z",
+     "endedAt": "2026-09-26T12:42:24.992Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T12:42:25.094Z",
+     "endedAt": "2026-09-26T12:42:56.596Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260926-124210",
+    "takenAt": "2026-09-26T12:42:10.622Z"
+   }
+  },
+  {
+   "runId": "20260926-131504",
+   "startedAt": "2026-09-26T13:15:04.051Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T13:15:08.617Z",
+     "endedAt": "2026-09-26T13:15:17.178Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T13:15:17.290Z",
+     "endedAt": "2026-09-26T13:15:41.478Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260926-131504",
+    "takenAt": "2026-09-26T13:15:04.051Z"
+   }
+  },
+  {
+   "runId": "20260926-231504",
+   "startedAt": "2026-09-26T23:15:04.909Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T23:15:09.822Z",
+     "endedAt": "2026-09-26T23:15:17.676Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-26T23:15:17.788Z",
+     "endedAt": "2026-09-26T23:15:35.965Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260926-231504",
+    "takenAt": "2026-09-26T23:15:04.909Z"
+   }
+  },
+  {
+   "runId": "20260927-031505",
+   "startedAt": "2026-09-27T03:15:05.904Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T03:15:11.916Z",
+     "endedAt": "2026-09-27T03:15:21.448Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T03:15:21.613Z",
+     "endedAt": "2026-09-27T03:15:38.152Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260927-031505",
+    "takenAt": "2026-09-27T03:15:05.904Z"
+   }
+  },
+  {
+   "runId": "20260927-051506",
+   "startedAt": "2026-09-27T05:15:06.040Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T05:15:15.992Z",
+     "endedAt": "2026-09-27T05:15:28.556Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T05:15:28.681Z",
+     "endedAt": "2026-09-27T05:16:37.853Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260927-051506",
+    "takenAt": "2026-09-27T05:15:06.040Z"
+   }
+  },
+  {
+   "runId": "20260927-081505",
+   "startedAt": "2026-09-27T08:15:05.219Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T08:15:09.928Z",
+     "endedAt": "2026-09-27T08:15:18.928Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T08:15:19.031Z",
+     "endedAt": "2026-09-27T08:15:45.019Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260927-081505",
+    "takenAt": "2026-09-27T08:15:05.219Z"
+   }
+  },
+  {
+   "runId": "20260927-121504",
+   "startedAt": "2026-09-27T12:15:04.958Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T12:15:09.702Z",
+     "endedAt": "2026-09-27T12:15:16.761Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T12:15:16.869Z",
+     "endedAt": "2026-09-27T12:16:03.881Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260927-121504",
+    "takenAt": "2026-09-27T12:15:04.958Z"
+   }
+  },
+  {
+   "runId": "20260927-131504",
+   "startedAt": "2026-09-27T13:15:04.745Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T13:15:09.389Z",
+     "endedAt": "2026-09-27T13:15:18.168Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T13:15:18.267Z",
+     "endedAt": "2026-09-27T13:15:43.176Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260927-131504",
+    "takenAt": "2026-09-27T13:15:04.745Z"
+   }
+  },
+  {
+   "runId": "20260927-231505",
+   "startedAt": "2026-09-27T23:15:05.830Z",
+   "stages": [
+    {
+     "stage": "judge",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T23:15:10.334Z",
+     "endedAt": "2026-09-27T23:15:19.523Z"
+    },
+    {
+     "stage": "draft",
+     "source": null,
+     "status": "ok",
+     "startedAt": "2026-09-27T23:15:19.625Z",
+     "endedAt": "2026-09-27T23:15:39.061Z"
+    }
+   ],
+   "manifest": {
+    "kind": "supply-workset",
+    "runId": "20260927-231505",
+    "takenAt": "2026-09-27T23:15:05.830Z"
+   }
+  }
+ ]
+}

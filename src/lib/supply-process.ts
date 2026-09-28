@@ -28,6 +28,21 @@ import { STOCK_BANDS } from './supply-stock-plan'
 // 🔴 **사본 완료 판정은 어댑터와 같은 함수를 쓴다.** 여기서 정규식을 다시 쓰면
 //    한쪽만 고쳐진다 — 실제로 그랬다 (2026-09-11 Codex 리뷰).
 import { completedAdaptKeys } from './micro-seed-82cook-thin-adapt'
+import type { FillRecord } from './supply-fill-retry'
+import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+
+/**
+ * 🔴 **한 회차 적재 천장** (2026-09-28) — 묶음 크기 천장과 같다(10).
+ *    `--up-to` 는 버퍼 여유 · 묶음 크기 · 이 천장 중 **가장 작은 값**이다. 이월 파일을 얹어도 늘지 않는다.
+ */
+export const FILL_ROUND_CAP = SUPPLY_WORKSET_PER_RUN
+
+/** 🔴 적재 상한 계산은 이 함수 하나다 — 계획 두 곳이 같은 식을 쓴다 */
+export function fillUpToOf(bufferUpTo: number, limit: number): number {
+  const b = Number.isInteger(bufferUpTo) && bufferUpTo > 0 ? bufferUpTo : 0
+  const l = Number.isInteger(limit) && limit > 0 ? limit : 0
+  return Math.min(b, l, FILL_ROUND_CAP)
+}
 
 /** 🔴 처리기 kill switch. plist 를 지우지 않고도 멈출 수 있어야 한다 */
 export const PROCESS_KILL_SWITCH_ENV = 'SORAN_SUPPLY_PROCESS_ENABLED'
@@ -345,8 +360,13 @@ export type WorksetGate = {
   manifestPath: string
   /** 그 회차 판정 파일 — `draft` 가 **이것만** 읽는다 */
   shadowPath: string
-  /** 그 회차 후보 파일 — `fill` 이 **이것만** 읽는다 */
+  /** 그 회차 후보 파일 — `fill` 이 **이것만** 읽는다 (아래 이월 파일을 빼면) */
   candidatesPath: string
+  /**
+   * 🔴 **앞 회차가 적재를 끝내지 못한 후보 파일** (2026-09-27). `selectCarryOver` 가 고른 것만 온다 —
+   *    기한 · 개수 상한 · 품질 계약을 거쳤다. 🔴 적재 상한(`--up-to`)은 이것 때문에 늘지 않는다.
+   */
+  carryOverPaths?: readonly string[]
   limit: number
   /** 단계별 요청 상한 — 🔴 `judgeStageBudget` 이 낸 값을 그대로 받는다 */
   perStage: Readonly<Record<'judge' | 'draft', number>>
@@ -431,13 +451,38 @@ export function planBoundedCommonPhase(
     ], null, { [LEDGER_CAP_ENV]: String(workset.perStage.draft) }))
   }
   if (policy.fill && policy.upTo > 0 && (pending.candidates.length > 0 || pending.detail.length > 0)) {
-    // 🔴 **그 회차 후보 파일만** · 정확히 묶음 크기까지. 과거 후보 파일은 대상이 아니다
-    out.push(mk('fill', [
-      '--apply', `--input=${workset.candidatesPath}`,
-      `--up-to=${Math.min(policy.upTo, workset.limit)}`,
-    ], null))
+    /**
+     * 🔴 **그 회차 후보 파일** · 정확히 묶음 크기까지. 과거 후보 파일은 대상이 아니다 —
+     *    예외는 **적재를 끝내지 못했다고 기록된** 앞 회차 파일(`carryOverPaths`) 하나뿐이다.
+     * 🔴 상한은 이월이 있어도 그대로다 — 이월이 이번 회차 몫을 늘리지 않는다.
+     */
+    const inputs = [workset.candidatesPath, ...(workset.carryOverPaths ?? [])]
+    const upTo = fillUpToOf(policy.upTo, workset.limit)
+    if (upTo > 0) {
+      out.push(mk('fill', [
+        '--apply', `--input=${inputs.join(',')}`,
+        `--up-to=${upTo}`,
+      ], null))
+    }
   }
   return out
+}
+
+/**
+ * 🔴 **새 묶음이 없는 회차의 이월 적재** (2026-09-27).
+ *
+ *    고를 원천이 0건인 회차에도 앞 회차의 끝내지 못한 후보는 남아 있다. 모델 단계 없이
+ *    `fill` 하나만 세운다. 🔴 버퍼 정책이 적재를 허락할 때만(`policy.fill`) · 상한은 묶음 크기와 같다.
+ */
+export function planCarryOverFill(
+  policy: BufferPolicy, carryOverPaths: readonly string[], limit: number,
+): StagePlan[] {
+  const upTo = fillUpToOf(policy.upTo, limit)
+  if (!policy.fill || upTo <= 0 || carryOverPaths.length === 0) return []
+  return [mk('fill', [
+    '--apply', `--input=${carryOverPaths.join(',')}`,
+    `--up-to=${upTo}`,
+  ], null)]
 }
 
 // ─────────────────────────────────────────────────────────
@@ -713,7 +758,15 @@ export type ProcessRun = {
   buffer: { usable: number | null; upTo: number; reason: string }
   sources: SourceOutcome[]
   stages: StageOutcome[]
+  /**
+   * 🔴 **적재 기록** (2026-09-27). 이월 판정(`completedCandidateFiles`)이 이 칸을 읽는다 —
+   *    어느 파일을 먹였고, 몇 번 시도했고, 파일별로 무엇이 들어갔는지.
+   *    이 칸이 없는 옛 기록은 "자기 파일만 먹었다" 로 읽는다.
+   */
+  fill?: FillRecord
 }
+export type { FillRecord }
+
 
 /** 🔴 하나라도 실패하면 실패다. 격리는 "다른 것을 계속 돌린다" 이지 "없던 일로 한다" 가 아니다 */
 export function runStatusOf(outcomes: readonly StageOutcome[]): RunStatus {

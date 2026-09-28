@@ -57,6 +57,11 @@ export const LEDGER_STAGES = [
    *    글 공급과 **같은 장부**를 쓴다. 두 번째 장부를 만들지 않는다.
    */
   'commentGen',
+  /**
+   * 🔴 **자동 READY 사후 의미 감사** (2026-09-27). 유료 스위치(`SORAN_AUTO_READY_SEMANTIC_PAID`)가
+   *    켜졌을 때만 이 단계로 요청이 나간다. 두 번째 장부를 만들지 않는다 — 같은 장부 · 같은 예산 차단이다.
+   */
+  'semanticAudit',
   /** 🔴 사전 계산은 **무료**지만 따로 센다 — 유료 요청 수와 섞지 않는다 */
   'countTokens',
 ] as const

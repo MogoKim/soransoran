@@ -34,6 +34,9 @@ import {
   detailPerDayOf, configuredDetailCeilingPerDay, evidenceAdjustedDetailPerDay,
 } from '../src/lib/collect-schedule'
 import { planCafeRun } from './lib/navercafe-run-plan.mjs'
+import {
+  AUDIT_RUNNER_LABEL, AUDIT_RUNNER_SCRIPT, auditRunnerSlots, renderAuditRunnerPlist, verifyAuditSlots,
+} from './lib/auto-ready-audit-template'
 
 const DIR = 'docs/operations/launchd'
 
@@ -467,6 +470,26 @@ check('🔴 remonterrace 와 wgang 의 실행 시각이 겹치지 않는다', ((
 for (const cafe of ['remonterrace', 'wgang'] as const) {
   check(`🔴 [${cafe}] 옛 1회판 템플릿이 없다`,
     !existsSync(join(DIR, `com.soransoran.navercafe-collect-${cafe}.plist.template`)))
+}
+
+// ── ④-c 🔴 자동 READY 독립 감사 러너 — 코드가 렌더한다(파일 템플릿 아님 · 설치하지 않는다) ──
+{
+  const xml = renderAuditRunnerPlist({
+    runtimeRoot: '/Users/x/Documents/soransoran-runtime', npxPath: '/nvm/bin/npx',
+    logDir: '/Users/x/Library/Logs/soransoran', nodeBinDir: '/nvm/bin',
+  })
+  const want = auditRunnerSlots()
+  const got = calendarSlots(xml)
+  check('🔴 [auto-ready-audit] 예약 시각이 있다 — 비면 감사가 영원히 돌지 않는다', got.length > 0 && verifyAuditSlots(got).length === 0)
+  check('🔴 [auto-ready-audit] 렌더한 예약 시각이 슬롯 정본과 통째로 같다',
+    got.length === want.length && got.every((x, i) => x.hour === want[i]!.hour && x.minute === want[i]!.minute))
+  check('🔴 [auto-ready-audit] Label 이 정본이다', valueOf(xml, 'Label') === AUDIT_RUNNER_LABEL)
+  const args = programArguments(xml)
+  check('🔴 [auto-ready-audit] 감사 러너를 --apply 로 부른다', args.some((a2) => a2.endsWith(`/${AUDIT_RUNNER_SCRIPT}`)) && args.includes('--apply'))
+  check('🔴 [auto-ready-audit] PATH 앞에 node 디렉터리', pathValue(xml) === '/nvm/bin:/usr/bin:/bin:/usr/sbin:/sbin')
+  check('🔴 [auto-ready-audit] 로그가 Documents 밖이다', !/<string>[^<]*\/Documents\/[^<]*\.log<\/string>/.test(xml))
+  check('🔴 [auto-ready-audit] RunAtLoad 가 false 다', /<key>RunAtLoad<\/key><false\/>/.test(xml))
+  check('🔴 [auto-ready-audit] 남은 placeholder 가 없다', leftoverPlaceholders(xml).length === 0)
 }
 
 // ── ⑤ 문서가 절차를 담고 있다 ──

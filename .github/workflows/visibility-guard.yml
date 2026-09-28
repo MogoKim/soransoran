@@ -860,6 +860,9 @@ jobs:
           #    legacy 제외 · 판 섞기 불가 · 선행 미검토 닫힘 · 창 안팎 결함 · env/호출자 digest 무시. 새 step 이 아니다
           npm run check:quality-contract
           npm run auto-ready:quality-check
+          # 🔴 독립 감사 루프(2026-09-27) — 의미 감사 fail-closed · 묶음(글·도장·원문 근거·카드) · 판 분리 ·
+          #    유료 기본 OFF · 감사 러너 launchd 템플릿(렌더만) · 배선. 새 step 이 아니다(무조건 step 상한 불변)
+          npm run auto-ready:audit-check
 
       # 🔴 자동 READY v2 실행 사슬 — 격리 Postgres 17 에서만. 운영 DB 0.
       #    후보 → 도장 → selector → 발행 트랜잭션 재검증 → Post → 감사 저장 → 결함 시 자동 중지,
@@ -908,6 +911,10 @@ jobs:
           # 🔴 초안 게이트 → 적재 실제 경로 — 운영 반례 4편은 큐 행이 되지 않고 대조 2편만 APPROVED 로 적재된다
           #    runContentCore → pickV2 → 후보 봉투 → 실제 supply-autofill --apply (임시 cwd · 가짜 provider)
           npm run check:draft-life-gates-db
+          # 🔴 독립 감사 루프 실행 반례 — 실제 감사 러너 프로세스(임시 HOME · 가짜 네트워크 · 공급 장부) ·
+          #    결함 yes → 다음 도장·발행 닫힘 · 판정 대기 시한 · 동시 러너 결과 1 · 모델 오류는 no 가 아니다.
+          #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
+          npm run auto-ready:audit-db-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.

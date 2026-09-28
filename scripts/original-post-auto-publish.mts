@@ -56,7 +56,9 @@ import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
-import { authoritativeGate, stampRound, selectAudits } from '../src/lib/auto-ready-repo'
+import { authoritativeGate, selectAudits } from '../src/lib/auto-ready-repo'
+// 🔴 판정 대기 시한(2026-09-27) — 정본 열림 판정 + 시한 초과 감사. 도장 회차도 시한을 먼저 본다
+import { auditAwareGate, stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
 import { HEARTBEAT_FLAG, stageInputsOf, describeStageInputs } from './lib/original-post-runner-template'
 import { claimHeartbeatTick, heartbeatInWindow, heartbeatTickKey, HEARTBEAT_TICK_DIR } from './lib/publish-heartbeat-tick.mjs'
 
@@ -157,13 +159,13 @@ const AUTO_READY_ON = autoReadyEnabled(process.env)
  * 🔴 **이 값은 화면·selector 용이다. 쓰기의 근거가 아니다.** 도장과 발행 트랜잭션은
  *    각자 자기 트랜잭션 안에서 스위치·DB 증거·확정 결함을 다시 판정한다.
  */
-const autoOpen = await authoritativeGate(prisma, process.env)
+const autoOpen = await auditAwareGate(prisma, process.env, RUN_AT)
 if (AUTO_READY_ON) {
   console.log(`\n⓪ 자동 READY ${autoOpen.open ? '🟢 열림' : '🔴 닫힘'}${autoOpen.reasons.length > 0 ? ` — ${autoOpen.reasons.join(' · ')}` : ''}`)
 }
 if (APPLY && autoOpen.open) {
   // 🔴 기계 도장 행만 — 한 행씩 조건부로 찍는다. 사람 결정 행은 건드리지 않는다
-  const tally = await stampRound(prisma, { env: process.env, now: RUN_AT })
+  const tally = await stampRoundAuditAware(prisma, { env: process.env, now: RUN_AT })
   console.log(`   도장 ${[...tally].map(([k, v]) => `${k} ${v}`).join(' · ') || '대상 없음'}`)
 }
 const stock = await loadPublishableStock(prisma, RUN_AT, { autoReadyOpen: autoOpen.open })
