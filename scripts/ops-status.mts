@@ -30,7 +30,7 @@ import { CONTROLLER_ENV } from '../src/lib/stage-decision-store'
 import { readStageDecision } from '../src/lib/stage-decision-repo'
 import { KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
 import { observeJob, printJob, readProcessRuns, type JobObservation } from './lib/runner-health.mjs'
-import { LOG_DIR, fillDbConnection, readCostSignals, readEnvKeys, tailFile } from './lib/ops-signals.mjs'
+import { COMMENT_LEDGER_ENV_KEYS, LOG_DIR, fillDbConnection, readCostSignals, readEnvKeys, tailFile } from './lib/ops-signals.mjs'
 
 const JSON_OUT = process.argv.slice(2).includes('--json')
 const NOW = new Date()
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
   const env = readEnvKeys([
     'SORAN_LLM_DAILY_BUDGET_USD', 'SORAN_LLM_RUN_REQUEST_CAP', 'SORAN_LLM_RESERVE_HEADROOM',
     'SORAN_AUDIT_LLM_DAILY_BUDGET_USD', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM',
-    'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', CONTROLLER_ENV,
+    'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', CONTROLLER_ENV, ...COMMENT_LEDGER_ENV_KEYS,
   ])
   const cost = readCostSignals(NOW, env.values)
   const { runs } = readProcessRuns()
@@ -166,9 +166,11 @@ async function main(): Promise<void> {
 
     const laneCost: CostVerdict = lane === 'publish'
       ? judgeCost({ uses: false, tally: null, ledgerError: null, settleHold: null, capUsd: null })
-      : lane === 'audit' ? cost.auditLedger : cost.supplyLedger
-    if (lane === 'supply' || lane === 'comment') {
-      notes.push(`🔴 공급·댓글은 장부와 하루 상한을 **공유**한다 — 그중 댓글 $${cost.commentSpentUsd?.toFixed(4) ?? '?'}`)
+      : lane === 'audit' ? cost.auditLedger
+        : lane === 'comment' ? cost.commentLedger : cost.supplyLedger
+    if (lane === 'comment') notes.push('🔴 무인 댓글 루프 전용 장부 — 공급 장부와 상한을 나누지 않는다')
+    if ((lane === 'supply' || lane === 'comment') && (cost.commentSpentUsd ?? 0) > 0) {
+      notes.push(`🔴 공급 장부에도 옛 댓글 경로 지출이 있다 — $${cost.commentSpentUsd!.toFixed(4)}`)
     }
     const partial: Omit<LaneStatus, 'health'> = {
       lane, label, job: jobWord(o), lastExitCode: o.run.lastExitCode, runs: o.run.runs,
