@@ -338,6 +338,7 @@ async function main(): Promise<void> {
         sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title), sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
         autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
         ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
+        lifeReview: r.pick.lifeReview ?? null,
       })
     }
     check('대조 fixture 가 채택된다', items.length >= 1, `${items.length}`)

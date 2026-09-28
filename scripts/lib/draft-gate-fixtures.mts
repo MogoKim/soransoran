@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolCard } from '../../src/lib/persona-pool-card'
 import type { ChildAgeBand } from '../../src/lib/original-post-persona-match'
-import type { DraftGateCode } from '../../src/lib/content-core/draft-life-gates'
+import type { DraftGateCode, DraftGateContext, DraftGateSource } from '../../src/lib/content-core/draft-life-gates'
 import { pickV2, type DraftCandidate, type Pick } from '../../src/lib/micro-seed-auto-draft'
 import { measureOriginality, copiesSourceTitle } from '../../src/lib/draft-originality'
 import { SPEAKER_PLAN_VERSION } from '../../src/lib/content-core/speaker'
@@ -39,6 +39,11 @@ export type GateFixture = {
   card: PoolCard
   /** 🔴 막혀야 하는 구조화 사유. 빈 배열이면 대조군 — 채택까지 가야 한다 */
   expect: DraftGateCode[]
+  /**
+   * 🔴 **원천 사실** (2026-09-28 quality-v3) — 시각 · 사이트 · 사진 수. 없으면 `sourceMetaOf` 기본값
+   *    (회차와 같은 날 올라온 커뮤니티 글 · 사진 수 미상)이다. 러너가 meta 에서 만드는 칸과 같다.
+   */
+  sourceMeta?: Partial<Omit<DraftGateSource, 'title' | 'body'>>
 }
 
 const card = (o: Omit<PoolCard, 'forbiddenReactionRoles' | 'variationCount' | 'voiceLength'>
@@ -54,6 +59,7 @@ export const P12 = card({
   menopauseStatus: '후', parentCare: '상시', personality: ['차분함', '잘 들음'],
   noGoTopics: ['병명', '약'], noGoExpressions: [],
   voiceTokens: ['중간 길이', '"~더라고요"', '존댓말', '이모티콘 없음'], voiceLength: '중간 길이',
+  household: { childrenLiving: '분가', careSide: '친정', careCohabit: false },
 })
 export const P02 = card({
   code: 'P02', title: '아이 하나, 남편과 소원', ageBand: '40대 후반', birthDate: '1979-06-20',
@@ -62,6 +68,7 @@ export const P02 = card({
   menopauseStatus: '전', parentCare: '없음', personality: ['조심스러움', '관찰형'],
   noGoTopics: ['남편 흉보기에 동조', '이혼 권유'], noGoExpressions: [],
   voiceTokens: ['중간 길이', '말끝 흐림("~같아요" "~더라고요")', '존댓말 강함'], voiceLength: '중간 길이',
+  household: { childrenLiving: '동거', careSide: null, careCohabit: null },
 })
 export const P01 = card({
   code: 'P01', title: '아이 키우며 파트타임', ageBand: '40대 후반', birthDate: '1977-11-04',
@@ -70,6 +77,7 @@ export const P01 = card({
   menopauseStatus: '전', parentCare: '간헐', personality: ['부지런함', '현실적'],
   noGoTopics: ['남의 형편 비교'], noGoExpressions: [],
   voiceTokens: ['짧은 문장', '"~해요" 기본', '이모티콘 거의 없음'], voiceLength: '짧은 문장',
+  household: { childrenLiving: '동거', careSide: null, careCohabit: null },
 })
 export const P14 = card({
   code: 'P14', title: '자녀 결혼시키고 한숨 돌린', ageBand: '50대 후반', birthDate: '1967-11-14',
@@ -78,6 +86,7 @@ export const P14 = card({
   menopauseStatus: '후', parentCare: '없음', personality: ['여유로움', '유머'],
   noGoTopics: ['형편 언급', '자랑'], noGoExpressions: [],
   voiceTokens: ['중간 길이', '"ㅎㅎ"', '이모티콘 가끔', '존댓말 부드러움'], voiceLength: '중간 길이',
+  household: { childrenLiving: '분가', careSide: null, careCohabit: null },
 })
 export const P13 = card({
   code: 'P13', title: '성인 자녀 둘, 남편과 부딪히며', ageBand: '50대 후반', birthDate: '1969-07-02',
@@ -86,6 +95,7 @@ export const P13 = card({
   menopauseStatus: '후', parentCare: '없음', personality: ['할 말 하는 편', '정 많음'],
   noGoTopics: ['남편 험담 동조', '이혼 권유'], noGoExpressions: [],
   voiceTokens: ['길게(아주 길지는 않은 편)', '느낌표', '"진짜" 자주'], voiceLength: '길게',
+  household: { childrenLiving: '일부', careSide: null, careCohabit: null },
 })
 export const P19 = card({
   code: 'P19', title: '셋 키워 다 보내고', ageBand: '60대 초반', birthDate: '1965-11-18',
@@ -94,6 +104,7 @@ export const P19 = card({
   menopauseStatus: '후', parentCare: '간헐', personality: ['무던함', '성실'],
   noGoTopics: ['병명', '약 언급'], noGoExpressions: ['"우리 때는"'],
   voiceTokens: ['짧음', '툭툭', '"~네요"', '이모티콘 없음'], voiceLength: '짧음',
+  household: { childrenLiving: '분가', careSide: null, careCohabit: null },
 })
 
 const planOf = (o: Record<string, unknown>): Record<string, unknown> => ({
@@ -357,6 +368,20 @@ export const CLEAN_REVIEW = {
 }
 
 export const FIXTURE_NOW = new Date('2026-09-26T03:00:00.000Z')
+
+/**
+ * 🔴 **초안 게이트의 원천·시각 입력** — 러너(`gateSourceMetaOf`)와 같은 칸이다. 새 생성과 캐시 채택이
+ *    **이 함수 하나**로 같은 값을 받는다. 기본값은 "회차와 같은 날 커뮤니티에 올라온 글 · 사진 수 미상" —
+ *    운영 원천의 흔한 모양이다(사진 수는 대부분 세지 않았다).
+ */
+export const sourceMetaOf = (fx: GateFixture): Omit<DraftGateSource, 'title' | 'body'> => ({
+  site: 'navercafe:fixture', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null,
+  ...fx.sourceMeta,
+})
+export const gateContextOf = (fx: GateFixture): DraftGateContext => ({
+  at: FIXTURE_NOW,
+  source: { title: fx.source.title, body: fx.source.body, ...sourceMetaOf(fx) },
+})
 const SAMPLES = ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요', '저희도 그랬어요']
 
 /** 🔴 요청 수를 센다 — 게이트가 유료 검수 **앞**에서 막는지 값으로 본다 */
@@ -391,6 +416,8 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
   let art = await runContentCore({
     artifactId: randomUUID().replace(/-/g, ''),
     sourceArticleId: fx.source.id, title: fx.source.title, maskedBody: fx.source.body,
+    // 🔴 (quality-v3) 러너와 같다 — 원천 사실은 채택 자리와 같은 함수에서 온다
+    sourceMeta: sourceMetaOf(fx),
     personas: [persona], personaPoolSize: 1, voiceSourceDigest: 'asset000000000',
     ask: cannedAsk(fx, asks), now: FIXTURE_NOW, callCap: 6,
     contract: {
@@ -428,7 +455,7 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
         return v.ok ? v.at.exactAge : null
       })(),
     },
-    draftGate: { plan: art.plan ?? null, card: fx.card },
+    draftGate: { plan: art.plan ?? null, card: fx.card, context: gateContextOf(fx) },
   }, nowIso)
   return { art, pick, cand, asks }
 }

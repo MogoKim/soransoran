@@ -737,7 +737,7 @@ console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로
     housing: '전세', menopauseStatus: '전', parentCare: '간병 간헐',
     personality: ['부지런함'], noGoTopics: ['남의 형편 비교'], noGoExpressions: ['"그래도"'],
     forbiddenReactionRoles: [], voiceTokens: ['짧은 문장'], voiceLength: '짧음',
-    variationCount: 6, ...o,
+    variationCount: 6, household: { childrenLiving: '동거', careSide: null, careCohabit: null }, ...o,
   })
   const ref = { samples: ['가나다'], bundleDigest: 'b1' }
   const poolOf = (...cards: PoolCard[]): string =>

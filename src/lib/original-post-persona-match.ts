@@ -469,9 +469,11 @@ const withCarry = <T extends 'explicit' | 'elided' | null>(owner: T, carry: Carr
 /** 한 문장 → (절, 세상 이야기 틀인가, 이어 받은 주어) — `readPostRequirements` 와 같은 경계다 */
 function* clausesOf(
   title: string, body: string, isFrame?: FrameWordJudge,
-): Generator<{ clause: string; general: boolean; carry: Carry }> {
+): Generator<{ clause: string; general: boolean; carry: Carry; sentence: number }> {
+  let sentenceNo = -1
   for (const sentence of `${title}\n${body}`.split(SENTENCE_SPLIT_RE)) {
     if (sentence.trim() === '') continue
+    sentenceNo += 1
     const general = GENERAL_FRAME_RE.test(sentence) || ASKING_RE.test(sentence.trim())
     // 🔴 문장이 바뀌면 들고 온 주어를 놓는다 — 문장을 넘어 이어 받지 않는다
     let carry: Carry = null
@@ -483,7 +485,7 @@ function* clausesOf(
        *    (`ownerOfPrefix`)이 가린다. `부모님이 은퇴하셨는데` 의 부모님을 "남" 으로 지우지 않는다.
        *    주어 없는 절만 앞 절 주어를 이어 받는다.
        */
-      yield { clause, general, carry: own === null ? carry : null }
+      yield { clause, general, carry: own === null ? carry : null, sentence: sentenceNo }
       carry = own ?? carry
     }
   }
@@ -528,6 +530,39 @@ export function readSelfClaims(
      */
     const kid = withCarry(claimOwnerInClause(clause, CHILDREN_RE, general, isFrame), carry)
     if (kid !== null) out.push({ axis: 'children', clause: clause.trim(), owner: kid })
+  }
+  return out
+}
+
+/**
+ * 🔴 **절 틀을 그대로 내보낸다** (2026-09-28 quality-v2 · 초안 생활 일관성 게이트).
+ *    초안 게이트가 사건(이혼 · 연락 끊김 · 진료)을 **누가 겪었는지** 가르려면 같은 문장·절 경계와
+ *    같은 세상 이야기 틀이 필요하다. 🔴 새 경계를 만들지 않는다 — `clausesOf` 를 그대로 돈다.
+ *    `carry` 는 앞 절 주어의 임자(주어 없는 절만) · `sentence` 는 문장 순번이다.
+ */
+export type ClauseFrame = { clause: string; general: boolean; carry: 'self' | 'other' | null; sentence: number }
+export function readClauseFrames(
+  title: string, body: string, opts: { isFrameWord?: FrameWordJudge } = {},
+): ClauseFrame[] {
+  return [...clausesOf(title, body, opts.isFrameWord)].map((f) => ({ ...f, clause: f.clause.trim() }))
+}
+
+/**
+ * 🔴 **글쓴이 자기 자녀가 나오는 절** (2026-09-28) — `readSelfChildBands` 와 **같은 임자 규칙**(넓은 판정)이다.
+ *    나이대 낱말 없이 자녀의 **삶의 단계 행동**(결혼식 · 입대 · 봉투를 건넴)을 카드와 견줄 때 쓴다.
+ *    `childSubject` 는 자녀 낱말이 **주어·화제 자리**(`딸은` · `아들이`)에 섰는가다 — 누가 누구에게 했는지를 가른다.
+ */
+export type SelfChildClause = { clause: string; owner: 'explicit' | 'elided'; childSubject: boolean }
+const CHILD_SUBJECT_RE = new RegExp(`(?:${CHILDREN_RE.source})(?:이가|이|가|은|는|께서)(?:도|만)?(?![가-힣])`)
+export function readSelfChildClauses(
+  title: string, body: string, opts: { isFrameWord?: FrameWordJudge } = {},
+): SelfChildClause[] {
+  const out: SelfChildClause[] = []
+  for (const { clause, general, carry } of clausesOf(title, body, opts.isFrameWord)) {
+    if (!has(clause, CHILDREN_RE)) continue
+    const owner = withCarry(ownerInClause(clause, CHILDREN_RE, general, opts.isFrameWord), carry)
+    if (owner === null) continue
+    out.push({ clause: clause.trim(), owner, childSubject: CHILD_SUBJECT_RE.test(clause) })
   }
   return out
 }
