@@ -321,6 +321,9 @@ console.log('\n⑥ 복구 판정')
     && judgeRecovery({ ...base, lastExitCode: 1, state: 'unloaded' }).action === 'skip'
     && judgeRecovery({ ...base, lastExitCode: 1, running: true }).action === 'skip'
     && judgeRecovery({ ...base, lastRunAt: null }).action === 'skip')
+  check('🔴 unknown 은 "load 안 됨" 과 다른 이유로 남긴다 — 못 본 것을 내려간 것으로 적지 않는다',
+    /모른다/.test(judgeRecovery({ ...base, lastExitCode: 1, state: 'unknown' }).reason)
+    && /load 되어 있지 않다/.test(judgeRecovery({ ...base, lastExitCode: 1, state: 'unloaded' }).reason))
   check('🔴 복구 대상이 아니면(수집) 실패여도 깨우지 않는다', judgeRecovery({ ...base, recoverable: false, lastExitCode: 1 }).action === 'skip')
 }
 
