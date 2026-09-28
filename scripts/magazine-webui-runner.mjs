@@ -12,7 +12,13 @@
  *    **동작을 바꾸면 이 머리말부터 고친다.**
  *
  * 🔴 여기서 하는 것
- *    접근 판정(probe) · brief 첨부 · 전송 · 응답 대기 · 관문 통과 시 draft.md 저장.
+ *    전송 판정(장부 지문 HOLD) · 접근 판정(probe) · brief 본문 삽입 · 전송 · 응답 대기 ·
+ *    관문 통과 시 draft.md 저장.
+ *
+ * 🔴 전송 판정은 `fetchSlug` 안의 `deliveryGate` 하나다 — 일괄 회수·단건·재생성이 모두 지난다.
+ *    HOLD 면 probe 도 Chrome 기동도 send 도 하지 않는다 (2026-09-28).
+ * 🔴 CLI 시험의 브라우저·spawn 주입은 `SORAN_MAGAZINE_TEST_MODE=1` 에서만 받는다
+ *    (`lib/magazine-test-harness.mjs`). 운영에서 주입값이 보이면 exit 2.
  *
  * 🔴 여기서 하지 않는 것
  *    md-to-draft · batch-qa · hero · register · PR · Slack 발송.
@@ -51,9 +57,10 @@ import { ensureAutomationProfile, MARKER_FILE } from './lib/chatgpt-automation-p
 import { readRunTargets, materialState, fetchTargets } from './lib/magazine-run-targets.mjs'
 import {
   readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
-  recordDelivery, clearDelivery, QUARANTINE_PATH,
+  recordDelivery, clearDelivery, QUARANTINE_PATH, DELIVERY_HOLD_REASON,
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
+import { loadTestHarness } from './lib/magazine-test-harness.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 
@@ -104,7 +111,7 @@ function nextActionFor(t) {
   if (t.articleDraft) return '완료 — 이미 변환됨'
   if (t.draftMd) return 'md-to-draft 대기'
   if (!t.brief || !t.review) return 'brief/review 미작성 — 세션이 채워야 한다'
-  return 'ChatGPT 원고 필요 (다음 단계에서 구현)'
+  return 'ChatGPT 원고 필요 — --fetch <slug> 또는 --fetch-run 이 회수한다'
 }
 
 // ── CLI ────────────────────────────────────────────────────
@@ -152,8 +159,18 @@ function help() {
  * 🔴 --no-sandbox 도 --enable-automation 도 넘기지 않는다.
  * 🔴 프로필을 복사하지 않는다. 창업자의 평소 Chrome 프로필은 건드리지 않는다.
  */
-async function login() {
-  if (!browserAvailable()) {
+export async function login({
+  /**
+   * 🔴 주입점은 CLI 에서 `SORAN_MAGAZINE_TEST_MODE=1` 일 때만 채워진다.
+   *    운영에서는 비어 있어 아래 기본값(실제 Chrome 경로·실제 CDP·실제 spawn)이 돈다.
+   */
+  browserAvailable: browserAvailableFn = browserAvailable,
+  cdpAvailable: cdpAvailableFn = cdpAvailable,
+  verifyProfileFn = verifyAutomationProfile,
+  profileInUse: profileInUseFn = profileInUse,
+  spawn: spawnFn = spawn,
+} = {}) {
+  if (!browserAvailableFn()) {
     console.error(`  ⛔ ${MESSAGE[STATUS.BROWSER_MISSING]}`)
     process.exit(1)
   }
@@ -174,13 +191,13 @@ async function login() {
   console.log(`  자동화 전용 프로필 준비 — ${PROFILE_DIR}`)
   console.log(`    용도 표식 ${MARKER_FILE} (0600) · 폴더 0700 · 포트 ${CDP_PORT}`)
 
-  if (await cdpAvailable()) {
+  if (await cdpAvailableFn()) {
     /**
      * 🔴 **이미 떠 있으면 주인을 확인한 뒤에만 쓴다.** 포트가 열려 있다는 것은
      *    누군가 쓰고 있다는 뜻일 뿐, 그게 우리 창이라는 뜻이 아니다.
      *    로그인 중에는 `auth.openai.com` 까지만 봐준다.
      */
-    const id = await verifyAutomationProfile({ mode: 'login', requireRunning: true })
+    const id = await verifyProfileFn({ mode: 'login', requireRunning: true })
     if (!id.ok) {
       console.error('')
       console.error(`  ⛔ ${id.code} — ${id.why}`)
@@ -195,7 +212,7 @@ async function login() {
     console.log('')
     return
   }
-  if (profileInUse()) {
+  if (profileInUseFn()) {
     console.error('')
     console.error('  ⛔ 전용 Chrome 이 CDP 포트 없이 떠 있습니다.')
     console.error('     그 창을 닫고 다시 --login 을 실행해야 probe 가 붙을 수 있습니다.')
@@ -215,8 +232,8 @@ async function login() {
   console.log('  4. node scripts/magazine-webui-runner.mjs --dry-run --probe')
   console.log('')
 
-  const child = spawn(CHROME_APP, chromeArgs(), { detached: true, stdio: 'ignore' })
-  child.unref()
+  const child = spawnFn(CHROME_APP, chromeArgs(), { detached: true, stdio: 'ignore' })
+  child?.unref?.()
 
   console.log('  창을 띄웠습니다. 이 명령은 여기서 끝납니다.')
   console.log('')
@@ -345,6 +362,51 @@ export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
   return buildManuscriptMessage({ promptText: manuscriptPromptText(packet), briefText: readFileSync(briefPath, 'utf8') })
 }
 
+/**
+ * 🔴 **보내도 되는가 — 판정은 여기 하나다** (2026-09-28 · 재생성 HOLD).
+ *
+ *    앞판은 이 판정이 `fetchBatch` 안에만 있었다. `--fetch --force --regen-packet`
+ *    (`fetchOne`) 은 장부를 보지 않고 곧장 보냈다 — 같은 재생성 요청이 응답 대기에서
+ *    끊긴 뒤 다시 실행되면 **같은 글자를 두 번째로 보냈다.**
+ *
+ *    그래서 판정을 호출부가 아니라 **모든 전송이 지나는 `fetchSlug`** 로 옮기고,
+ *    `fetchBatch` 의 계획표도 이 함수를 그대로 부른다. 조건을 다시 쓰지 않는다.
+ *
+ *    ① 보낼 메시지는 `plannedMessageFor` 하나가 만든다 — 일반·재생성 같은 생성기
+ *    ② 지문은 `deliveryFingerprintOf` 하나가 만든다
+ *    ③ HOLD 조건은 `deliveryHoldsFetch` 하나가 정한다 (slug + 지문 + DELIVERY_UNCERTAIN)
+ *    날짜·runId·다른 후보·재시작은 판정에 들어가지 않는다. brief 나 재생성 지시가
+ *    바뀌어 **보낼 글자가 달라질 때만** 다시 열린다.
+ *
+ * 🔴 장부를 못 읽으면 **보내지 않는다** — 모름은 "보낸 적 없음" 이 아니다.
+ *
+ * @returns {{ok:true, message:string|null, messageFingerprint:string|null, hold:object|null}
+ *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
+ */
+export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH }) {
+  const message = plannedMessageFor(slug, draftsDir, packet)
+  const messageFingerprint = deliveryFingerprintOf(message)
+  // 🔴 `false` 는 "장부를 쓰지 않는 호출" 이다 — 막을 근거도 없다
+  if (quarantinePath === false) return { ok: true, message, messageFingerprint, hold: null }
+  const ledger = readQuarantine(quarantinePath)
+  if (!ledger.ok) {
+    return { ok: false, code: 'QUARANTINE_UNREADABLE', why: ledger.why, message, messageFingerprint }
+  }
+  return { ok: true, message, messageFingerprint, hold: deliveryHoldsFetch(ledger.store[slug], messageFingerprint) }
+}
+
+/** HOLD 로 멈춘 한 건의 결과 — 🔴 이전 전송 사실을 그대로 싣는다. 새로 지어내지 않는다 */
+function heldResult(slug, gate, stage) {
+  return {
+    slug, status: 'held', reason: DELIVERY_HOLD_REASON, stage,
+    // 🔴 이번 실행은 한 글자도 보내지 않았다 — 앞선 전송의 모름은 `prior` 에 있다
+    sent: false,
+    messageFingerprint: gate.messageFingerprint,
+    errorDetail: gate.hold.why,
+    prior: gate.hold.delivery,
+  }
+}
+
 async function fetchSlug(slug, { quiet = false, force = false, regenPacket = null,
   quarantinePath = QUARANTINE_PATH, runIdHint = null, dateHint = null,
   /**
@@ -359,7 +421,13 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
    *    `fetchSlug` 는 모듈 상수를 쓰고 있었다 — 운영에서는 같은 값이라 드러나지 않지만,
    *    시험에서는 "계획은 했는데 brief 가 없다" 가 되고, 폴더가 갈라지는 날 조용히 틀린다.
    */
-  draftsDir = DRAFTS_DIR } = {}) {
+  draftsDir = DRAFTS_DIR,
+  /**
+   * 🔴 **브라우저 접근은 판정을 통과한 뒤에만.** `fetchOne` 은 여기로 probe 를 넘긴다.
+   *    앞판은 probe 를 먼저 하고 나서 보낼지 말지를 봤다 — HOLD 인 글에도 Chrome 을
+   *    깨우고 붙었다. 없으면(일괄 회수) 호출부가 이미 한 번 확인했다는 뜻이다.
+   */
+  accessFn = null } = {}) {
   const dir = join(draftsDir, slug)
   const briefPath = join(dir, 'brief.md')
   const outPath = join(dir, 'draft.md')
@@ -394,24 +462,63 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
 
   const prompt = manuscriptPromptText(packet)
 
+  /**
+   * 🔴 **보내도 되는가 — 브라우저를 건드리기 전에 본다.** 판정은 `deliveryGate` 하나다.
+   *    HOLD 면 접근 확인도, Chrome 기동도, send 클릭도 0이다.
+   */
+  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath })
+  if (!gate.ok) {
+    return { slug, status: 'failed', reason: gate.code, stage: 'ledger', sent: false,
+      messageFingerprint: gate.messageFingerprint, errorDetail: `${gate.why} (한 글자도 보내지 않았다)` }
+  }
+  if (gate.hold) {
+    if (!quiet) console.log(`     ⏸ HOLD — ${gate.hold.why}`)
+    return heldResult(slug, gate, 'gate')
+  }
+
+  if (accessFn) {
+    const p = await accessFn()
+    if (p?.status !== STATUS.OK) {
+      return { slug, status: 'failed', reason: p?.status ?? STATUS.UNKNOWN, stage: 'connect', sent: false,
+        messageFingerprint: gate.messageFingerprint,
+        errorName: p?.errorName ?? null, errorDetail: p?.errorDetail ?? null }
+    }
+  }
+
   // 🔴 관문을 쓰기 직전에 건넨다. 막히면 파일이 생기지 않는다.
   /**
    * 🔴 **누르기 전에 적는다** (P0-2). `fetchManuscript` 가 send 직전에 이 함수를 부른다.
    *    여기서 적지 못하면 그쪽이 **한 글자도 보내지 않고** 끝낸다.
    *    적는 값은 `DELIVERY_UNCERTAIN` 이다 — 누른 뒤 무슨 일이 생길지 모르기 때문이다.
    *    받아낸 뒤에야 지운다.
+   *
+   * 🔴 **적는 그 자리에서 한 번 더 판정한다.** 위 판정과 이 순간 사이에 다른 프로세스가
+   *    같은 글자를 보냈을 수 있다. 같은 읽기-수정-쓰기 안에서 `deliveryHoldsFetch` 를
+   *    다시 부르고, 걸리면 장부를 바꾸지 않고 **누르지 않는다.**
    */
+  let lateHold = null
   const recordBeforeSend = async ({ messageFingerprint }) => {
+    // 🔴 보내려는 글자가 판정한 글자와 다르면 판정이 무효다 — 누르지 않는다
+    if (messageFingerprint !== gate.messageFingerprint) {
+      return { ok: false, why: '보낼 글자가 판정한 글자와 다르다' }
+    }
     if (quarantinePath === false) return { ok: true }
     try {
-      updateQuarantine((cur) => ({
-        ...cur,
-        [slug]: recordDelivery(cur[slug], {
-          sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',
-          reason: 'sending', stage: 'send', now: Date.now(),
-          runId: runIdHint, date: dateHint,
-        }),
-      }), quarantinePath)
+      const u = updateQuarantine((cur) => {
+        lateHold = deliveryHoldsFetch(cur[slug], messageFingerprint)
+        if (lateHold) return cur
+        return {
+          ...cur,
+          [slug]: recordDelivery(cur[slug], {
+            sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',
+            reason: 'sending', stage: 'send', now: Date.now(),
+            runId: runIdHint, date: dateHint,
+          }),
+        }
+      }, quarantinePath)
+      // 🔴 장부를 못 읽었으면 `ok:false` 로 돌아온다 — 예외만 보면 이 경우를 "적었다" 로 읽는다
+      if (!u?.ok) return { ok: false, why: `장부 선기록 실패: ${u?.why ?? '알 수 없음'}` }
+      if (lateHold) return { ok: false, why: lateHold.why }
       return { ok: true }
     } catch (e) {
       return { ok: false, why: `장부 선기록 실패: ${e.message}` }
@@ -422,11 +529,14 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     briefPath,
     outPath,
     promptText: prompt,
+    // 🔴 판정한 바로 그 글자를 보낸다
+    message: gate.message,
     requiredMarkers: markers,
     validate: validateManuscript,
     onBeforeSend: recordBeforeSend,
     ...browserDeps,
   })
+  if (lateHold) return heldResult(slug, { ...gate, hold: lateHold }, 'send')
 
   /**
    * 🔴 **선기록을 함부로 지우지 않는다.**
@@ -481,8 +591,8 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
   }
 }
 /** 저장된 원고를 기계 검사만 한다. 내용을 출력하지 않는다 */
-function describeDraft(slug) {
-  const t = readFileSync(join(DRAFTS_DIR, slug, 'draft.md'), 'utf8')
+function describeDraft(slug, draftsDir = DRAFTS_DIR) {
+  const t = readFileSync(join(draftsDir, slug, 'draft.md'), 'utf8')
   return {
     length: t.length,
     frontmatter: t.trimStart().startsWith('---'),
@@ -497,9 +607,16 @@ function describeDraft(slug) {
   }
 }
 
-/** 단건 CLI — 사람이 부르는 경로 */
-async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null,
-  quarantinePath = QUARANTINE_PATH } = {}) {
+/**
+ * 단건 CLI — 사람이 부르는 경로이자 **재생성(`--regen-packet`)이 지나는 경로.**
+ *
+ * 🔴 주입점(`probeFn`·`browserDeps`·`quarantinePath`)은 CLI 에서
+ *    `SORAN_MAGAZINE_TEST_MODE=1` 일 때만 채워진다 (`magazine-test-harness.mjs`).
+ *    운영에서는 비어 있어 실제 probe·CDP·장부가 돈다.
+ */
+export async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null,
+  quarantinePath = QUARANTINE_PATH, draftsDir = DRAFTS_DIR,
+  probeFn = probe, browserDeps = {}, exit = (code) => process.exit(code) } = {}) {
   console.log('')
   console.log(`  원고 요청 — ${slug}`)
 
@@ -511,12 +628,14 @@ async function fetchOne(slug, { force = false, regenPacket = null, resultPath = 
   const finishOne = (r, exitCode) => {
     if (resultPath) {
       try {
-        writeFetchResults(resultPath, { mode: 'fetch-one', results: [{ ...r, slug }], sentTotal: r.sent ? 1 : 0 })
+        // 🔴 HOLD 는 이번 실행이 보낸 것이 아니다 — `sent:false` 그대로, 앞선 전송은 `prior` 에 있다
+        writeFetchResults(resultPath, { mode: 'fetch-one', results: [{ ...r, slug }], sentTotal: r.sent === true ? 1 : 0 })
       } catch (e) {
         console.error(`     🔴 회수 결과를 적지 못했다 — ${e.message}`)
       }
     }
-    process.exit(exitCode)
+    exit(exitCode)
+    return { result: { ...r, slug }, exitCode }
   }
 
   /**
@@ -531,31 +650,48 @@ async function fetchOne(slug, { force = false, regenPacket = null, resultPath = 
       console.error(`  ⛔ ${pr.code} — ${pr.why}`)
       console.error('     한 글자도 보내지 않았다. (전송 0건)')
       console.error('')
-      finishOne({ status: 'failed', reason: pr.code, stage: 'packet', sent: false, errorDetail: pr.why }, 1)
+      return finishOne({ status: 'failed', reason: pr.code, stage: 'packet', sent: false, errorDetail: pr.why }, 1)
     }
     console.log(`  0) 재생성 패킷 확인 — 실패 ${pr.packet.failures.length}건`)
   }
 
-  console.log('  1) 접근 확인')
-  const p = await probe({ autoStart: true })
-  console.log(`     status ${p.status}`)
-  if (p.status !== STATUS.OK) {
-    console.error('')
-    console.error(`  ⛔ ${MESSAGE[p.status] ?? MESSAGE[STATUS.UNKNOWN]}`)
-    // 상태 코드만 찍으면 무엇이 거부됐는지 로그에 남지 않는다
-    if (p.errorDetail) console.error(`     ${p.errorDetail}`)
-    console.error('     한 글자도 보내지 않았다.')
-    console.error('')
-    finishOne({ status: 'failed', reason: p.status, stage: 'connect', sent: false,
-      errorName: p.errorName ?? null, errorDetail: p.errorDetail ?? null }, 1)
+  /**
+   * 🔴 **접근 확인은 전송 판정 뒤다.** 앞판은 여기서 probe 를 먼저 했다 —
+   *    이미 보낸 글(HOLD)에도 Chrome 을 깨우고 붙었다. 이제 `fetchSlug` 가
+   *    판정을 통과시킨 뒤에만 이 함수를 부른다.
+   */
+  const accessFn = async () => {
+    console.log('  1) 접근 확인')
+    const p = await probeFn({ autoStart: true })
+    console.log(`     status ${p.status}`)
+    if (p.status !== STATUS.OK) {
+      console.error('')
+      console.error(`  ⛔ ${MESSAGE[p.status] ?? MESSAGE[STATUS.UNKNOWN]}`)
+      // 상태 코드만 찍으면 무엇이 거부됐는지 로그에 남지 않는다
+      if (p.errorDetail) console.error(`     ${p.errorDetail}`)
+      console.error('     한 글자도 보내지 않았다.')
+      console.error('')
+    }
+    return p
   }
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
-  const r = await fetchSlug(slug, { force, regenPacket, quarantinePath, dateHint: todayKst() })
+  const r = await fetchSlug(slug, { force, regenPacket, quarantinePath, dateHint: todayKst(),
+    draftsDir, browserDeps, accessFn })
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
-    finishOne(r, r.reason === 'brief_missing' ? 1 : 0)
+    return finishOne(r, r.reason === 'brief_missing' ? 1 : 0)
+  }
+  if (r.status === 'held') {
+    /**
+     * 🔴 **HOLD 는 성공이 아니다 — 종료 코드 1.** 0 으로 끝내면 재생성 경로가
+     *    "원고를 받았다" 로 읽을 수 있다. 구조화 결과가 `held` 와 사유를 말한다.
+     */
+    console.error(`     ⏸ HOLD — ${r.errorDetail}`)
+    console.error(`     지문 ${r.messageFingerprint} · 브라우저 접근 0 · 전송 0건`)
+    console.error('')
+    return finishOne(r, 1)
   }
   if (r.status === 'failed') {
     console.error(`     ⛔ ${describeFetchFailure(r)}`)
@@ -565,10 +701,10 @@ async function fetchOne(slug, { force = false, regenPacket = null, resultPath = 
       for (const x of r.invalid) console.error(`       · ${x.code}: ${x.why}`)
     }
     console.error('')
-    finishOne(r, 1)
+    return finishOne(r, 1)
   }
 
-  const d = describeDraft(slug)
+  const d = describeDraft(slug, draftsDir)
   console.log(`     ✅ 저장 · 전송 1건 · 본문 ${d.length}자`)
   console.log('')
   console.log(`     drafts/magazine/${slug}/draft.md`)
@@ -579,7 +715,7 @@ async function fetchOne(slug, { force = false, regenPacket = null, resultPath = 
   console.log('  🔴 md-to-draft · batch-qa · register 는 실행하지 않았다.')
   console.log('')
   // 🔴 성공도 적는다. 성공을 안 적으면 부모는 "결과가 없다" 를 실패로 읽는다.
-  finishOne(r, 0)
+  return finishOne(r, 0)
 }
 
 /**
@@ -662,14 +798,15 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     console.log('')
     return finishBatch({ planned: [], results: [], sentTotal: 0, fatal: 'QUARANTINE_UNREADABLE' })
   }
-  /** slug → 지금 보내게 될 메시지의 지문 */
-  const wantFp = new Map()
+  /**
+   * 🔴 **계획표도 `deliveryGate` 를 부른다 — 조건을 여기서 다시 쓰지 않는다.**
+   *    실제 전송 경계(`fetchSlug`)가 같은 함수로 한 번 더 막으므로,
+   *    이 계획표는 "몇 건이 HOLD 인가" 를 보여 주고 불필요한 probe 를 피하는 용도다.
+   */
   const hold = new Map()
   for (const slug of fetchSet) {
-    const fp = deliveryFingerprintOf(plannedMessageFor(slug, draftsDir))
-    wantFp.set(slug, fp)
-    const h = deliveryHoldsFetch(ledger.store[slug], fp)
-    if (h) hold.set(slug, h)
+    const g = deliveryGate({ slug, draftsDir, quarantinePath })
+    if (g.ok && g.hold) hold.set(slug, g.hold)
   }
   if (hold.size) console.log(`  🔴 전송불명 ${hold.size}건은 다시 보내지 않는다 (장부 지문 일치)`)
 
@@ -745,8 +882,11 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     results.push(r)
 
     if (r.status === 'ok') {
-      const d = describeDraft(p.slug)
+      const d = describeDraft(p.slug, draftsDir)
       console.log(`     ✅ ${d.length}자 · h2 ${d.h2} · CTA ${d.cta}`)
+    } else if (r.status === 'held') {
+      // 🔴 계획 뒤에 다른 프로세스가 같은 글자를 보냈다 — 전송 경계가 막았다
+      console.log(`     ⏸ HOLD — ${r.errorDetail}`)
     } else if (r.status === 'failed') {
       // 🔴 stage·원문을 여기서도 싣는다 — 일괄 회수 로그가 운영에서 제일 많이 읽힌다
       console.log(`     ⛔ ${describeFetchFailure(r)}${r.invalid?.length ? ` — ${describeReasons(r.invalid)}` : ''}`)
@@ -820,7 +960,20 @@ function status() {
 async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--help') || argv.length === 0) return help()
-  if (argv.includes('--login')) return await login()
+  /**
+   * 🔴 **시험 주입은 브라우저·장부를 건드리기 전에 판정한다** (P0-2).
+   *    운영 모드에서 fixture 가 보이면 여기서 끝난다 — 기본값으로 조용히 가지 않는다.
+   */
+  const harness = await loadTestHarness()
+  if (!harness.ok) {
+    console.error('')
+    console.error(`  ⛔ ${harness.code} — ${harness.why}`)
+    console.error('     브라우저를 열거나 파일을 쓰지 않았다. (전송 0건)')
+    console.error('')
+    process.exit(2)
+  }
+  const T = harness.deps
+  if (argv.includes('--login')) return await login(T)
   if (argv.includes('--status')) return status()
   if (argv.includes('--fetch')) {
     const slug = argv[argv.indexOf('--fetch') + 1]
@@ -856,7 +1009,12 @@ async function main() {
       console.error('')
       process.exit(1)
     }
-    return await fetchOne(slug, { force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path })
+    return await fetchOne(slug, {
+      force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path,
+      ...(T.probe ? { probeFn: T.probe } : {}),
+      ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab } } : {}),
+      ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),
+    })
   }
   if (argv.includes('--fetch-run')) {
     const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : todayKst()
@@ -876,6 +1034,9 @@ async function main() {
     const r = await fetchBatch({
       date, dryRun: argv.includes('--dry-run'), limit: limitArg,
       resultPath: rj.path ?? fetchResultPath(date),
+      ...(T.probe ? { probeFn: T.probe } : {}),
+      ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab } } : {}),
+      ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),
     })
     // 전역 실패만 종료 코드 1 — 개별 실패는 나머지가 성공했을 수 있다
     process.exit(r.fatal ? 1 : 0)
@@ -899,7 +1060,7 @@ async function main() {
 
   let access = { status: null, severity: null, message: null }
   if (wantProbe) {
-    const r = await probe({ autoStart })
+    const r = await (T.probe ?? probe)({ autoStart })
     access = {
       status: r.status,
       // SEVERITY[ok] 는 null 이다 — ?? 로 fallback 하면 정상인데 ERROR 가 된다.
@@ -970,7 +1131,8 @@ async function main() {
       console.log('  ChatGPT 접근: 확인하지 않았다 (--probe 를 붙이면 확인한다)')
     }
     console.log('')
-    console.log('  🔴 원고 생성·첨부·전송·다운로드는 아직 구현되지 않았다.')
+    // 🔴 앞판은 여기서 "아직 구현되지 않았다" 고 말했다 — 회수가 구현된 뒤에도 남아 감사를 오도했다
+    console.log('  🔴 dry-run — 원고를 요청하지 않았다 (전송 0건). 회수는 --fetch / --fetch-run 이 한다.')
     console.log('')
   }
 

@@ -18,7 +18,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, saveQuarantine,
-  recordRegenCall, regenBudget,
+  recordRegenCall, regenBudget, DELIVERY_HOLD_REASON,
 } from './magazine-quarantine.mjs'
 import { classifyFailure, consumesAttempt, sentOf } from './magazine-failure-kind.mjs'
 
@@ -148,6 +148,34 @@ export function attemptRegeneration({
   try { r = runner({ slug, packet, packetPath }) }
   catch (e) { r = { ok: false, why: `재생성 경로 예외: ${e.message}` } }
   finally { removePacket(packetPath) }
+
+  /**
+   * 🔴 **전송 경계가 HOLD 로 멈췄다** (2026-09-28 · 재생성 중복 전송).
+   *    같은 slug · 같은 최종 메시지 지문이 이미 DELIVERY_UNCERTAIN 이라 **한 글자도 안 보냈다.**
+   *    판정은 전송 경계(`deliveryGate`)가 했다 — 여기서 조건을 다시 쓰지 않고 사유만 읽는다.
+   *
+   *    그래서 **아무것도 바꾸지 않는다.** 먼저 올려 둔 재생성 횟수만 제자리로 돌리고,
+   *    앞 회차가 남긴 `sent`·`kind`·전송 기록은 그대로 둔다 — 안 보낸 실행이
+   *    "보냈다(true)" 를 "안 보냈다(false)" 로 덮어쓰면 다음 판단이 흐려진다.
+   */
+  if (r?.reason === DELIVERY_HOLD_REASON) {
+    const back = readQuarantine(quarantinePath)
+    if (back.ok) {
+      const cur = back.store[slug] ?? {}
+      saveQuarantine({
+        ...back.store,
+        [slug]: { ...cur, regenCalls: budget.used, lastRegenAt: entry?.lastRegenAt, lastPacketHash: entry?.lastPacketHash },
+      }, quarantinePath)
+    }
+    return {
+      ok: false, code: 'REGEN_DELIVERY_HOLD', kind: 'DELIVERY_UNCERTAIN', held: true,
+      // 🔴 `sent` 는 이번 실행(0건) · `priorSent` 는 앞선 전송의 사실(대개 모름=null)
+      sent: false, priorSent: r.prior ? (r.prior.sent ?? null) : null,
+      messageFingerprint: r.messageFingerprint ?? null,
+      why: `이미 보낸 재생성 요청이다 — 다시 보내지 않는다 (전송 0건): ${r?.why ?? ''}`,
+      regenCalls: budget.used,
+    }
+  }
 
   if (!r?.ok) {
     /**

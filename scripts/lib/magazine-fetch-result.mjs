@@ -55,6 +55,19 @@ export function normalizeFetchResult(r = {}) {
     sent: normalizeSent(r.sent),
     errorName: r.errorName ?? null,
     errorDetail: r.errorDetail ?? null,
+    /**
+     * 🔴 **보낸(보내려던) 글자의 지문과 앞선 전송 기록** (2026-09-28 · 재생성 HOLD).
+     *    여기서 버리면 부모는 "왜 멈췄나 · 어느 글자 때문인가" 를 다시 추측해야 한다.
+     *    HOLD 행의 `sent` 는 **이번 실행**의 값(false)이고, 앞선 모름은 `prior.sent` 다.
+     */
+    messageFingerprint: r.messageFingerprint ?? null,
+    prior: r.prior
+      ? {
+        sent: normalizeSent(r.prior.sent), kind: r.prior.kind ?? null, reason: r.prior.reason ?? null,
+        stage: r.prior.stage ?? null, date: r.prior.date ?? null, at: r.prior.at ?? null,
+        messageFingerprint: r.prior.messageFingerprint ?? null,
+      }
+      : null,
   }
 }
 

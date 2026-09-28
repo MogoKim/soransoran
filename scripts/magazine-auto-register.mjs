@@ -178,6 +178,7 @@ export function webuiRegenRunner({ slug, packetPath }, { runFn = run, resultDir 
         ok: false, sent: row.sent, resultSource: 'file',
         reason: row.reason ?? 'REGEN_RESULT_NOT_OK', stage: row.stage,
         errorName: row.errorName, errorDetail: row.errorDetail,
+        messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null,
         why: `${why} — ${describeFetchFailure(row)}`,
       }
     }
@@ -198,6 +199,8 @@ export function webuiRegenRunner({ slug, packetPath }, { runFn = run, resultDir 
       ok: false, sent: row.sent, resultSource: 'file',
       reason: row.reason, stage: row.stage,
       errorName: row.errorName, errorDetail: row.errorDetail,
+      // 🔴 HOLD 면 어느 글자 때문인지 · 앞선 전송이 무엇이었는지를 같이 올린다
+      messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null,
       why: `${why} — ${describeFetchFailure(row)}`,
     }
   }
@@ -384,7 +387,12 @@ export function drive(slug, opts, deps = {}) {
       ...(quarantinePath ? { quarantinePath } : {}),
       ...(packetDir ? { packetDir } : {}) })
     regenCalls = rr.regenCalls ?? regenCalls
-    if (rr.sent !== undefined) lastSent = rr.sent
+    /**
+     * 🔴 **HOLD 는 이번 실행이 안 보낸 것일 뿐, 그 글의 전송 사실이 아니다.**
+     *    `false` 를 올리면 장부가 앞 회차의 모름을 "안 보냄" 으로 덮는다 — 앞선 값을 올린다.
+     */
+    if (rr.held) lastSent = rr.priorSent ?? null
+    else if (rr.sent !== undefined) lastSent = rr.sent
     if (!rr.ok) {
       /**
        * 🔴 인프라·전송불명은 **원고 문제가 아니다.** 사유에 그 사실을 적어

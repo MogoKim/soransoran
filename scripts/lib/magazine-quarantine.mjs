@@ -156,6 +156,13 @@ export function clearDelivery(entry) {
  *    지문이 다르면(=brief 나 프롬프트가 바뀌었으면) 다른 글이므로 보낸다.
  *    결말이 INFRA·CONTENT 면 여기서 막지 않는다 — 각자 다른 장치가 센다.
  */
+/**
+ * 🔴 **전송 경계가 HOLD 로 멈췄다는 사유 코드 — 정본은 여기 하나다.**
+ *    전송 경계(`fetchSlug`)가 적고, 재생성(`attemptRegeneration`)이 읽는다.
+ *    이번 실행은 한 글자도 보내지 않았으므로 **재생성 횟수도 전송 기록도 바꾸지 않는다.**
+ */
+export const DELIVERY_HOLD_REASON = 'DELIVERY_UNCERTAIN_HOLD'
+
 export function deliveryHoldsFetch(entry, messageFingerprint) {
   const d = entry?.delivery
   if (!d || !d.messageFingerprint || !messageFingerprint) return null

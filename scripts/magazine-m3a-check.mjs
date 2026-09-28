@@ -2083,6 +2083,32 @@ console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재�
     deps2.runDate = DATE
     drive(SLUG, { write: true, pr: false, publishAt: '2027-04-01', alt: '시험 여성', allowOptional: true, autoLane: false }, deps2)
     check('🔴 ⑯ 기록이 없으면 재생성이 실제로 돈다 (죽은 게이트 아님)', runnerCalls2 > 0, `${runnerCalls2}회`)
+
+    /**
+     * ⑧ 🔴 **재생성이 전송 경계에서 HOLD 로 멈추면** (2026-09-28 · 재생성 중복 전송)
+     *    이번 실행의 `sent:false` 를 그 글의 전송 사실로 올리지 않는다. 실제 drive → 실제 ready 가
+     *    장부에 **앞선 모름(null)** 을 그대로 적고, 횟수를 하나도 쓰지 않아야 한다.
+     */
+    const QN16 = await import('./lib/magazine-quarantine.mjs')
+    const L3 = path.join(T, 'q3.json')
+    const deps3 = makeDeps({ qaFailsUntil: 99, ledgerPath: L3, packetDir: path.join(T, 'p3'), calls: [] })
+    deps3.regenRunner = () => ({ ok: false, sent: false, reason: QN16.DELIVERY_HOLD_REASON, stage: 'gate',
+      prior: { sent: null, kind: 'DELIVERY_UNCERTAIN' }, why: '이미 보낸 글이다' })
+    deps3.fetchResultPath = path.join(T, 'none3.json')
+    deps3.runDate = DATE
+    READY16.processCandidates({
+      write: true, wantPr: false, limit: 1, report: { blocked: [], done: [] },
+      quarantinePath: L3,
+      scanFn: () => ({ source: 'fixture', pool: 1,
+        eligible: [{ slug: SLUG, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: true } }],
+        skipped: [], quarantined: [] }),
+      driveFn: (sl, o) => drive(sl, o, deps3),
+    })
+    const e3 = readQuarantine(L3).store[SLUG] ?? {}
+    check('🔴 ⑯ HOLD 뒤 장부 sent 는 앞선 모름(null) 그대로 — "안 보냄" 으로 덮지 않는다',
+      e3.sent === null && e3.kind === 'DELIVERY_UNCERTAIN', JSON.stringify({ sent: e3.sent, kind: e3.kind }))
+    check('🔴 ⑯ HOLD 는 attempts·regenCalls 를 쓰지 않는다',
+      (e3.attempts ?? 0) === 0 && (e3.regenCalls ?? 0) === 0, `attempts ${e3.attempts} · regen ${e3.regenCalls}`)
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
@@ -2648,12 +2674,12 @@ console.log('\n㉔ 시험 폴더 주입은 시험 모드에서만 열린다')
   const plists = spawnSyncTop('git', ['ls-files', '--', 'docs/operations/launchd'])
     .split('\n').filter((f) => /\.plist(\.template)?$/.test(f))
   check('  ㉔ 검사할 launchd 템플릿을 실제로 찾았다', plists.length > 0, `${plists.length}개`)
-  const leaked = plists.filter((f) => /SORAN_MAGAZINE_(DRAFTS_DIR|TEST_MODE)/.test(fs.readFileSync(path.join(process.cwd(), f), 'utf8')))
+  const leaked = plists.filter((f) => /SORAN_MAGAZINE_(DRAFTS_DIR|TEST_MODE|TEST_FIXTURE)/.test(fs.readFileSync(path.join(process.cwd(), f), 'utf8')))
   check('🔴 ㉔ launchd plist 에 시험 변수가 없다', leaked.length === 0,
     leaked.join(', ') || `검사한 plist ${plists.length}개`)
   const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'))
   const badScripts = Object.entries(pkg.scripts ?? {})
-    .filter(([, v]) => /SORAN_MAGAZINE_DRAFTS_DIR/.test(String(v)))
+    .filter(([, v]) => /SORAN_MAGAZINE_(DRAFTS_DIR|TEST_FIXTURE)/.test(String(v)))
   check('🔴 ㉔ package.json 운영 명령에도 없다', badScripts.length === 0, badScripts.map(([k]) => k).join(', ') || '0건')
 }
 
@@ -3180,12 +3206,35 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
-console.log('\n㉚ --login 만 표식을 만든다 (실제 CLI 실행)')
+/**
+ * 🔴 **시험용 fixture 모듈을 만든다** — CLI 자식이 `SORAN_MAGAZINE_TEST_FIXTURE` 로 읽는다.
+ *    모든 fixture 는 **가짜 spawn 을 반드시 가진다.** 주입 경로가 망가져도(변이 포함)
+ *    실제 Chrome 이 뜨지 않게 하기 위해서다.
+ */
+const writeFixture = (file, body) => { fs.writeFileSync(file, body); return file }
+const fixtureHead = (log) => `import fs from 'node:fs'
+const LOG = ${JSON.stringify(log)}
+const rec = (ev, extra = {}) => fs.appendFileSync(LOG, JSON.stringify({ ev, pid: process.pid, ...extra }) + '\\n')
+export const spawn = (cmd, args) => { rec('spawn', { cmd, args }); return { unref() {} } }
+`
+const readEvents = (log) => (fs.existsSync(log)
+  ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
+const countEv = (log, ev) => readEvents(log).filter((e) => e.ev === ev).length
+/** 🔴 실제 Chrome 이 이 임시 폴더를 쓰고 있는가 — 명령줄로 본다 */
+const chromeUsing = (dir) => spawnSyncTop('ps', ['-Ao', 'command='])
+  .split('\n').filter((l) => /Chrome/.test(l) && l.includes(dir)).length
+
+console.log('\n㉚ --login 만 표식을 만든다 (실제 CLI · 실제 Chrome 없음 · 환경 독립)')
 {
   /**
    * 🔴 **`ensureAutomationProfile` 을 직접 부르는 시험만으로는 부족하다** (변이로 확인).
-   *    `login()` 에서 그 호출을 빼도 아무 검사가 깨지지 않았다.
-   *    실제 CLI 를 임시 HOME 으로 돌려 **표식 파일이 실제로 생기는지** 본다.
+   *    `login()` 에서 그 호출을 빼도 아무 검사가 깨지지 않았다. 그래서 실제 CLI 를 돌린다.
+   *
+   * 🔴 **앞판은 실제 환경을 읽었다** (2026-09-28 · P0-2).
+   *    Linux CI 에는 macOS Chrome 경로가 없어 표식 전에 `BROWSER_MISSING` 으로 끝났고,
+   *    로컬에서 9344 가 비어 있으면 **실제 Chrome 을 띄웠다.**
+   *    이제 브라우저 판정·spawn 은 `SORAN_MAGAZINE_TEST_MODE=1` 의 fixture 가 준다.
+   *    실제 경로·실제 포트를 한 번도 보지 않으므로 macOS·Linux 결과가 같다.
    */
   const { spawnSync } = await import('node:child_process')
   const AP30 = await import('./lib/chatgpt-automation-profile.mjs')
@@ -3193,12 +3242,37 @@ console.log('\n㉚ --login 만 표식을 만든다 (실제 CLI 실행)')
   try {
     const markerIn = (home) => path.join(home, 'Library', 'Application Support',
       'soransoran-chatgpt-auto', AP30.MARKER_FILE)
+    const LOG = path.join(T, 'events.jsonl')
+    const FX = writeFixture(path.join(T, 'fx-login.mjs'), `${fixtureHead(LOG)}
+export const browserAvailable = () => { rec('browserAvailable'); return true }
+export const cdpAvailable = async () => { rec('cdpAvailable'); return false }
+export const profileInUse = () => false
+`)
+    /**
+     * 🔴 **Linux 조건 재현** — macOS Chrome 절대경로가 없고 9344 에 아무도 없다.
+     *    preload 가 `existsSync(Chrome 경로)` 를 false 로, 9344 로 가는 fetch 를 거부로 바꾼다.
+     *    이 조건에서 **옛 방식(주입 없음)** 은 표식 전에 멈추고, 주입판은 macOS 와 같은 결과를 낸다.
+     */
+    const LINUX = writeFixture(path.join(T, 'linux-preload.mjs'), `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const real = fs.existsSync
+fs.existsSync = (p) => (String(p).startsWith('/Applications/Google Chrome.app') ? false : real(p))
+syncBuiltinESMExports()
+const realFetch = globalThis.fetch
+globalThis.fetch = (u, o) => (/:9344\\//.test(String(u)) ? Promise.reject(new Error('ECONNREFUSED 9344')) : realFetch(u, o))
+`)
+    const runLogin = (home, env, { linux = false } = {}) => spawnSync(process.execPath,
+      [...(linux ? ['--import', LINUX] : []), 'scripts/magazine-webui-runner.mjs', '--login'],
+      { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: home, ...env } })
+    const TEST = { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_TEST_FIXTURE: FX }
+
+    const chromeBefore = chromeUsing(T)
     check('  ㉚ 시작 전에는 표식이 없다', !fs.existsSync(markerIn(T)), '이미 있다')
 
-    const r = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--login'],
-      { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T } })
+    // ── macOS 그대로 ──
+    const r = runLogin(T, TEST)
     check('🔴 ㉚ --login 이 표식을 실제로 만든다', fs.existsSync(markerIn(T)),
-      `${r.status} · ${String(r.stdout ?? '').slice(0, 120)}`)
+      `${r.status} · ${String(r.stderr || r.stdout).slice(0, 160)}`)
     if (fs.existsSync(markerIn(T))) {
       const body = JSON.parse(fs.readFileSync(markerIn(T), 'utf8'))
       check('  ㉚ 표식 내용이 계약대로다',
@@ -3207,16 +3281,283 @@ console.log('\n㉚ --login 만 표식을 만든다 (실제 CLI 실행)')
       check('🔴 ㉚ 표식 권한 0600', (fs.statSync(markerIn(T)).mode & 0o777) === 0o600,
         (fs.statSync(markerIn(T)).mode & 0o777).toString(8))
     }
+    const spawns = readEvents(LOG).filter((e) => e.ev === 'spawn')
+    check('🔴 ㉚ 기동은 주입된 spawn 으로만 — 정확한 폴더 · 9344',
+      spawns.length === 1
+        && spawns[0].args.includes(`--user-data-dir=${path.dirname(markerIn(T))}`)
+        && spawns[0].args.includes('--remote-debugging-port=9344'),
+      JSON.stringify(spawns.map((s) => s.args.slice(0, 2))))
+    check('🔴 ㉚ 로컬 9344 가 실제로 살아 있어도 그 포트를 읽지 않는다 (fixture 판정만)',
+      countEv(LOG, 'cdpAvailable') === 1 && r.status === 0, `exit ${r.status}`)
+
+    // ── Linux 조건 재현 ──
+    const TL = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-linux-'))
+    const TO = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-old-'))
+    try {
+      const LOGL = path.join(TL, 'events.jsonl')
+      const FXL = writeFixture(path.join(TL, 'fx.mjs'), fs.readFileSync(FX, 'utf8').replace(JSON.stringify(LOG), JSON.stringify(LOGL)))
+      const rl = runLogin(TL, { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_TEST_FIXTURE: FXL }, { linux: true })
+      check('🔴 ㉚ [Linux 재현] 주입판은 macOS 와 같은 결과 — 표식 생성 · spawn 1 · exit 0',
+        fs.existsSync(markerIn(TL)) && countEv(LOGL, 'spawn') === 1 && rl.status === 0,
+        `exit ${rl.status} · spawn ${countEv(LOGL, 'spawn')} · ${String(rl.stderr).slice(0, 120)}`)
+      /** 🔴 옛 방식 반례 — 같은 Linux 조건에서 주입 없이 돌리면 표식 전에 멈춘다 (앞판 CI 실패의 재현) */
+      const ro = runLogin(TO, {}, { linux: true })
+      check('  ㉚ [Linux 재현] 주입 없는 옛 방식은 표식 전에 BROWSER_MISSING 으로 끝난다',
+        ro.status === 1 && !fs.existsSync(markerIn(TO)) && /Chrome 을 찾지 못했다/.test(`${ro.stderr}${ro.stdout}`),
+        `exit ${ro.status} · ${String(ro.stderr).trim().slice(0, 100)}`)
+    } finally {
+      fs.rmSync(TL, { recursive: true, force: true })
+      fs.rmSync(TO, { recursive: true, force: true })
+    }
+
+    /** 🔴 fixture 가 자리를 빠뜨려도 **운영 함수로 떨어지지 않는다** — 거부 stub 이 막는다 */
+    const TN = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-noinj-'))
+    try {
+      const LOGN = path.join(TN, 'events.jsonl')
+      const FXN = writeFixture(path.join(TN, 'fx.mjs'), `${fixtureHead(LOGN)}
+export const cdpAvailable = async () => false
+export const profileInUse = () => false
+`)
+      const rn = runLogin(TN, { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_TEST_FIXTURE: FXN })
+      check('🔴 ㉚ 시험 모드에서 browserAvailable 을 안 주면 실제 경로를 읽지 않고 멈춘다',
+        rn.status !== 0 && /TEST_MODE_NOT_INJECTED/.test(`${rn.stderr}${rn.stdout}`) && countEv(LOGN, 'spawn') === 0,
+        `exit ${rn.status} · spawn ${countEv(LOGN, 'spawn')}`)
+    } finally { fs.rmSync(TN, { recursive: true, force: true }) }
+
+    /** 🔴 운영 모드에서 주입값이 보이면 **첫 read/write 전에** 멈춘다 */
+    const TB = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-blocked-'))
+    try {
+      const LOGB = path.join(TB, 'events.jsonl')
+      const FXB = writeFixture(path.join(TB, 'fx.mjs'), fs.readFileSync(FX, 'utf8').replace(JSON.stringify(LOG), JSON.stringify(LOGB)))
+      const rb = runLogin(TB, { SORAN_MAGAZINE_TEST_FIXTURE: FXB })
+      check('🔴 ㉚ 운영 모드 + 시험 주입 → exit 2 · TEST_INJECTION_BLOCKED',
+        rb.status === 2 && /TEST_INJECTION_BLOCKED/.test(`${rb.stderr}${rb.stdout}`), `exit ${rb.status}`)
+      check('🔴 ㉚ 그때 표식·spawn·fixture 호출 0',
+        !fs.existsSync(markerIn(TB)) && readEvents(LOGB).length === 0, JSON.stringify(readEvents(LOGB)))
+      const rb2 = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch-run', '--dry-run'],
+        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: TB, SORAN_MAGAZINE_TEST_FIXTURE: FXB } })
+      check('  ㉚ 다른 명령도 같다 (--fetch-run --dry-run → exit 2)', rb2.status === 2, `exit ${rb2.status}`)
+      const H = await import('./lib/magazine-test-harness.mjs')
+      const h1 = H.resolveTestHarness({ SORAN_MAGAZINE_TEST_FIXTURE: '/x.mjs' })
+      const h2 = H.resolveTestHarness({ SORAN_MAGAZINE_TEST_FIXTURE: '/x.mjs', SORAN_MAGAZINE_TEST_MODE: '1' })
+      const h3 = await H.loadTestHarness({})
+      check('  ㉚ 판정표 — 운영+주입 차단 · 시험+주입 허용 · 운영 무주입은 빈 의존성',
+        h1.ok === false && h2.ok === true && h2.test === true && h3.ok && Object.keys(h3.deps).length === 0,
+        JSON.stringify({ h1: h1.code, h2: h2.ok, h3: Object.keys(h3.deps ?? {}).length }))
+    } finally { fs.rmSync(TB, { recursive: true, force: true }) }
 
     /** 🔴 자동 실행은 같은 조건에서 표식을 만들지 않는다 */
     const T2 = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-auto-'))
     try {
       const auto = spawnSync(process.execPath,
         ['scripts/magazine-webui-runner.mjs', '--fetch-run', '--dry-run'],
-        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T2 } })
-      void auto
-      check('🔴 ㉚ 자동 실행은 표식을 만들지 않는다', !fs.existsSync(markerIn(T2)), '표식이 생겼다')
+        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T2, ...TEST } })
+      check('🔴 ㉚ 자동 실행은 표식을 만들지 않는다', !fs.existsSync(markerIn(T2)) && auto.status === 0,
+        `exit ${auto.status}`)
     } finally { fs.rmSync(T2, { recursive: true, force: true }) }
+
+    check('🔴 ㉚ 이 시험 전체에서 실제 Chrome 이 임시 폴더로 뜨지 않았다',
+      chromeUsing(T) === 0 && chromeBefore === 0, `${chromeBefore} → ${chromeUsing(T)}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉛ 재생성 회수도 같은 지문 HOLD 를 지난다 (실제 CLI 2회 orchestration)')
+{
+  /**
+   * 🔴 **앞판의 구멍** (2026-09-28 · P0-1).
+   *    `fetchBatch` 만 장부 지문을 봤다. `--fetch --force --regen-packet`(`fetchOne`) 은
+   *    probe 부터 하고 곧장 보냈다 — 재생성 요청이 응답 대기에서 끊긴 뒤 다시 실행되면
+   *    **같은 글자를 두 번째로 보냈다.**
+   *
+   *    여기서는 실제 `attemptRegeneration` → 실제 `webuiRegenRunner` → **실제 CLI 자식**
+   *    (`--fetch <slug> --force --regen-packet <경로> --result-json <경로>`) 을 두 번 돌린다.
+   *    브라우저만 fixture 로 바꾼다 — 보내고 나서 응답 대기에서 터진다.
+   */
+  const { spawnSync } = await import('node:child_process')
+  const AR31 = await import('./magazine-auto-register.mjs')
+  const RG31 = await import('./lib/magazine-regen.mjs')
+  const QN31 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-twice-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const LEDGER = path.join(T, 'ledger.json')
+    const LOG = path.join(T, 'events.jsonl')
+    const PK = path.join(T, 'packets')
+    const mk = (slug) => {
+      fs.mkdirSync(path.join(D, slug), { recursive: true })
+      fs.writeFileSync(path.join(D, slug, 'brief.md'), `# ${slug}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
+      fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
+    }
+    for (const s of ['rg-a', 'rg-b']) mk(s)
+    const FX = writeFixture(path.join(T, 'fx-regen.mjs'), `${fixtureHead(LOG)}
+export const quarantinePath = ${JSON.stringify(LEDGER)}
+export const probe = async () => { rec('probe'); return { status: 'ok' } }
+export const ensureTab = async () => { rec('ensureTab'); return { ok: true } }
+export const connect = async () => {
+  rec('connect')
+  return { contexts: () => [{ pages: () => [], newPage: async () => makePage() }], async close() {} }
+}
+function makePage() {
+  let typed = ''
+  return {
+    async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+    // 🔴 보낸 뒤 응답 대기에서 터진다 — response_timeout · sent=true
+    async waitForFunction() { throw new Error('waitForFunction: Timeout 300000ms exceeded') },
+    async evaluate() { return '' },
+    locator(sel) {
+      const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+      const l = { async click() { if (isSend) rec('send', { len: typed.length }) }, async innerText() { return typed } }
+      return { first: () => l, ...l }
+    },
+    keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+  }
+}
+`)
+    const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
+    /** 운영 `run()` 과 같은 모양 — 실제 자식 프로세스를 띄운다. 환경만 시험용이다 */
+    const runFn = (file, args) => {
+      const r = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, ...ENV } })
+      return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
+    }
+    const regen = (slug, failures = [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }]) => RG31.attemptRegeneration({
+      slug, profile: 'MEDICAL', failures, quarantinePath: LEDGER, packetDir: PK,
+      runner: (ctx) => AR31.webuiRegenRunner(ctx, { runFn, resultDir: T }),
+    })
+    const row = (slug) => QN31.readQuarantine(LEDGER).store[slug] ?? {}
+    const ev = () => ({ probe: countEv(LOG, 'probe'), connect: countEv(LOG, 'connect'), send: countEv(LOG, 'send'), spawn: countEv(LOG, 'spawn') })
+
+    // ── 1회차: 보냈는데 응답을 못 받았다 ──
+    const r1 = regen('rg-a')
+    const e1 = ev()
+    const fpA = row('rg-a').delivery?.messageFingerprint
+    check('  ㉛ 1회차 — 실제로 1건 보냈다', e1.send === 1 && e1.probe === 1, JSON.stringify(e1))
+    check('  ㉛ 1회차 — 전송불명으로 분류된다', r1.code === 'REGEN_DELIVERY_UNCERTAIN', `${r1.code} — ${r1.why}`.slice(0, 160))
+    check('🔴 ㉛ 1회차 — 장부에 slug+지문 DELIVERY_UNCERTAIN',
+      row('rg-a').delivery?.kind === 'DELIVERY_UNCERTAIN' && /^sha256:/.test(fpA ?? ''), JSON.stringify(row('rg-a').delivery ?? null))
+    check('  ㉛ 1회차 — regenCalls 0 · attempts 0', (row('rg-a').regenCalls ?? 0) === 0 && (row('rg-a').attempts ?? 0) === 0,
+      `regen ${row('rg-a').regenCalls} · attempts ${row('rg-a').attempts}`)
+
+    /** 🔴 날짜·runId 가 바뀌어도 판정에 들어가지 않는다 — 장부 행의 출처 기록만 바꿔 본다 */
+    QN31.updateQuarantine((cur) => ({ ...cur, 'rg-a': { ...cur['rg-a'], delivery: { ...cur['rg-a'].delivery, date: '2026-10-05', runId: 'other-run' } } }), LEDGER)
+    const deliveryBefore = JSON.stringify(row('rg-a').delivery)
+    const sentBefore = row('rg-a').sent
+
+    // ── 2회차: 같은 재생성 요청 · 새 프로세스(재시작) · 다른 날짜 ──
+    const r2 = regen('rg-a')
+    const e2 = ev()
+    check('🔴 ㉛ 2회차 — send 0 (중복 전송 없음)', e2.send === e1.send, `${e1.send} → ${e2.send}`)
+    check('🔴 ㉛ 2회차 — 브라우저 접근 0 (probe·connect·Chrome 기동 없음)',
+      e2.probe === e1.probe && e2.connect === e1.connect && e2.spawn === 0, JSON.stringify(e2))
+    check('🔴 ㉛ 2회차 — HOLD 로 끝난다', r2.code === 'REGEN_DELIVERY_HOLD' && r2.held === true && r2.sent === false,
+      `${r2.code} — ${String(r2.why).slice(0, 120)}`)
+    check('🔴 ㉛ 2회차 — regenCalls 0 · attempts 0 유지', (row('rg-a').regenCalls ?? 0) === 0 && (row('rg-a').attempts ?? 0) === 0,
+      `regen ${row('rg-a').regenCalls} · attempts ${row('rg-a').attempts}`)
+    check('🔴 ㉛ 2회차 — 앞선 전송 기록·sent 를 덮지 않는다',
+      JSON.stringify(row('rg-a').delivery) === deliveryBefore && row('rg-a').sent === sentBefore,
+      `sent ${sentBefore} → ${row('rg-a').sent}`)
+    check('  ㉛ 2회차 — 판정한 지문이 1회차 지문과 같다', r2.messageFingerprint === fpA, `${r2.messageFingerprint}`)
+    check('  ㉛ 패킷이 남지 않는다', !fs.existsSync(RG31.packetPathFor('rg-a', PK)), '남았다')
+
+    /** 🔴 다른 후보는 계속 처리된다 */
+    const rb = regen('rg-b')
+    check('🔴 ㉛ 다른 후보(rg-b)는 그대로 보낸다', ev().send === e2.send + 1 && rb.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${rb.code} · send ${ev().send}`)
+
+    // ── fetchOne 구조화 결과 (요구 7) ──
+    const PKT = RG31.writePacket(RG31.buildFailurePacket({ slug: 'rg-a', profile: 'MEDICAL',
+      failures: [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }], attempt: 1 }), path.join(T, 'manual-packet.json'))
+    const RJ = path.join(T, 'one.json')
+    const before7 = ev()
+    const c7 = runFn('scripts/magazine-webui-runner.mjs', ['--fetch', 'rg-a', '--force', '--regen-packet', PKT, '--result-json', RJ])
+    const body7 = JSON.parse(fs.readFileSync(RJ, 'utf8'))
+    const row7 = body7.results?.[0] ?? {}
+    check('🔴 ㉛ fetchOne 결과 — held · 사유 · 지문 · sent=false · 앞선 기록',
+      c7.code === 1 && row7.status === 'held' && row7.reason === QN31.DELIVERY_HOLD_REASON
+        && row7.sent === false && row7.messageFingerprint === fpA
+        && row7.prior?.kind === 'DELIVERY_UNCERTAIN' && row7.prior?.messageFingerprint === fpA && body7.sentTotal === 0,
+      JSON.stringify({ exit: c7.code, status: row7.status, reason: row7.reason, sent: row7.sent, prior: row7.prior?.kind }))
+    check('  ㉛ 그 실행도 브라우저 접근 0', JSON.stringify(ev()) === JSON.stringify(before7), JSON.stringify(ev()))
+
+    // ── 달라진 글자만 다시 열린다 ──
+    const r3 = regen('rg-a', [{ code: 'MED_DOSAGE', label: '용량 단정', sentence: '하루 두 알' }])
+    check('🔴 ㉛ 재생성 지시가 바뀌면(지문 다름) 다시 보낸다', ev().send === before7.send + 1 && r3.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${r3.code} · send ${ev().send}`)
+    fs.appendFileSync(path.join(D, 'rg-a', 'brief.md'), '\n## 추가 지시\n- 한 줄 더\n')
+    const s4 = ev().send
+    const r4 = regen('rg-a')
+    check('🔴 ㉛ brief 가 바뀌면(지문 다름) 다시 보낸다', ev().send === s4 + 1 && r4.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${r4.code} · send ${ev().send}`)
+    check('  ㉛ 이 시험은 Chrome 을 한 번도 띄우지 않았다', countEv(LOG, 'spawn') === 0, `${countEv(LOG, 'spawn')}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉜ 전송 직전 재판정 — 다른 프로세스가 먼저 보냈거나 장부를 못 쓰면 누르지 않는다')
+{
+  /**
+   * 🔴 계획표 판정과 send 사이에 다른 프로세스가 **같은 글자**를 보냈을 수 있다.
+   *    `recordBeforeSend` 가 같은 읽기-수정-쓰기 안에서 다시 판정하는지 실제 `fetchBatch` 로 본다.
+   *    🔴 장부를 못 읽는 경우 `updateQuarantine` 은 **예외가 아니라 `ok:false`** 로 돌아온다 —
+   *       앞판은 이 반환값을 보지 않아 "적었다" 로 읽고 눌렀다.
+   */
+  const WEBUI32 = await import('./magazine-webui-runner.mjs')
+  const QN32 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-late-hold-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const DATE = '2026-09-28'
+    fs.mkdirSync(path.join(D, 'lh-a'), { recursive: true })
+    fs.writeFileSync(path.join(D, 'lh-a', 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+    fs.writeFileSync(path.join(D, 'lh-a', 'review.ts'), '#\n')
+    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
+    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
+      JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'lh-a' }] }))
+
+    const deps = (onTyped, world) => ({
+      ensureTab: async () => ({ ok: true }),
+      connect: async () => ({
+        contexts: () => [{ pages: () => [], newPage: async () => {
+          let typed = ''
+          return {
+            async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+            async waitForFunction() { throw new Error('Timeout') }, async evaluate() { return '' },
+            locator(sel) {
+              const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+              const l = { async click() { if (isSend) world.send += 1 }, async innerText() { return typed } }
+              return { first: () => l, ...l }
+            },
+            keyboard: { async insertText(t) { typed += String(t ?? ''); onTyped(typed) }, async press() {} },
+          }
+        } }],
+        async close() {},
+      }),
+    })
+
+    // ① 다른 프로세스가 같은 글자를 먼저 보냈다
+    const L1 = path.join(T, 'q1.json')
+    const w1 = { send: 0 }
+    const b1 = await WEBUI32.fetchBatch({
+      date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: L1, resultPath: path.join(T, 'r1.json'),
+      probeFn: async () => ({ status: 'ok' }),
+      browserDeps: deps((typed) => QN32.updateQuarantine((cur) => ({ ...cur, 'lh-a': QN32.recordDelivery(cur['lh-a'], {
+        sent: null, messageFingerprint: QN32.deliveryFingerprintOf(typed), kind: 'DELIVERY_UNCERTAIN',
+        reason: 'sending', stage: 'send', now: Date.now(), date: DATE }) }), L1), w1),
+    })
+    const res1 = (b1.results ?? []).find((x) => x.slug === 'lh-a') ?? {}
+    check('🔴 ㉜ 계획 뒤 다른 프로세스가 보냈으면 send 0', w1.send === 0, `send ${w1.send}`)
+    check('🔴 ㉜ 그 결과는 held · stage=send · sent=false',
+      res1.status === 'held' && res1.stage === 'send' && res1.sent === false, JSON.stringify(res1).slice(0, 160))
+
+    // ② send 직전에 장부가 깨졌다
+    const L2 = path.join(T, 'q2.json')
+    const w2 = { send: 0 }
+    const b2 = await WEBUI32.fetchBatch({
+      date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: L2, resultPath: path.join(T, 'r2.json'),
+      probeFn: async () => ({ status: 'ok' }),
+      browserDeps: deps(() => fs.writeFileSync(L2, '{ 깨진'), w2),
+    })
+    const res2 = (b2.results ?? []).find((x) => x.slug === 'lh-a') ?? {}
+    check('🔴 ㉜ send 직전 장부를 못 쓰면 누르지 않는다', w2.send === 0 && res2.sent === false,
+      `send ${w2.send} · ${res2.reason} — ${String(res2.errorDetail).slice(0, 80)}`)
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 

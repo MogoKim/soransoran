@@ -836,6 +836,12 @@ export async function fetchManuscript({
    * @type {((ctx: {messageFingerprint: string|null, stage: string}) => Promise<{ok: boolean, why?: string}>) | undefined}
    */
   onBeforeSend,
+  /**
+   * 🔴 **호출부가 전송 판정에 쓴 바로 그 메시지** (2026-09-28 · 재생성 HOLD).
+   *    여기서 다시 조립하면 판정한 글자와 보내는 글자가 갈라질 수 있다 —
+   *    갈라진 날 지문이 달라져 **막아야 할 것을 못 막는다.** 주면 그대로 보낸다.
+   */
+  message: plannedMessage = null,
 }) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
@@ -876,7 +882,8 @@ export async function fetchManuscript({
      *    2026-09-28 공급 0건의 최대 원인이었다 (`upload_timeout` 4건).
      *    글자는 글자로 넣는다 — 업로드라는 단계 자체를 없앤다.
      */
-    const message = buildManuscriptMessage({ promptText, briefText: readFileSync(briefPath, 'utf8') })
+    const message = plannedMessage
+      ?? buildManuscriptMessage({ promptText, briefText: readFileSync(briefPath, 'utf8') })
     /**
      * 🔴 **보낸 글자의 지문**을 만들어 결과에 싣는다 (P0-1).
      *    상위는 이 값으로 "같은 글을 또 보내는가" 를 판정한다.
