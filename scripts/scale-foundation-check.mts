@@ -32,7 +32,7 @@ import {
 } from '../src/lib/scale-workflow-render'
 // 🔴 댓글 슬롯의 정본 — 여기서 시각을 다시 적지 않는다
 import {
-  planRunnerSchedule, FIRST_COMMENT_MAX_MINUTES,
+  planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES,
   RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
 } from './lib/persona-comment-runner-template'
 import { BOOTSTRAP_DAILY_MAX } from '../src/lib/persona-comment-bootstrap-budget'
@@ -615,7 +615,7 @@ console.log('\n④ 슬롯 → 워크플로우')
   //       이 블록은 둘을 대조만 한다.
   // ─────────────────────────────────────────────────────────
   {
-    const runner = planRunnerSchedule(BOOTSTRAP_DAILY_MAX)
+    const runner = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX)
     const commentMins = runner.slots.map(minuteOfDay).sort((a, b) => a - b)
     const WIN_START = RUNNER_WINDOW_START_HOUR * 60
     const WIN_END = RUNNER_WINDOW_END_HOUR * 60

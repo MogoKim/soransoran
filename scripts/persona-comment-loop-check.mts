@@ -34,6 +34,7 @@ import type { TargetSource, GateContext } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
 import {
   COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SCRIPT, COMMENT_RUNNER_SLOTS, FIRST_COMMENT_MAX_MINUTES,
+  FIRST_COMMENT_ATTEMPTS, COMMENT_RUNNER_MAX_GAP_MINUTES,
   renderCommentRunnerPlist,
 } from './lib/persona-comment-runner-template'
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
@@ -258,6 +259,9 @@ console.log('\n⑦ schedule 템플릿 · 배포 quiesce')
   const mins = COMMENT_RUNNER_SLOTS.map((s) => s.hour * 60 + s.minute)
   const maxGap = mins.slice(1).reduce((m, x, i) => Math.max(m, x - mins[i]!), 0)
   check(`🔴 회차 간격 최대 ${maxGap}분 ≤ 첫 댓글 시한 ${FIRST_COMMENT_MAX_MINUTES}분`, maxGap <= FIRST_COMMENT_MAX_MINUTES)
+  // 🔴 (2026-09-28) 60분 안에 한 번뿐이면 9관문 한 번 막힘이 그 글의 첫 댓글을 통째로 잃는다
+  check(`🔴 한 글이 시한 안에 ${FIRST_COMMENT_ATTEMPTS}번 시도를 받는다 — 간격 ${maxGap}분 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,
+    maxGap <= COMMENT_RUNNER_MAX_GAP_MINUTES)
   check('🔴 배포 동안 멈출 job 에 댓글 루프가 있다', DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL))
 }
 

@@ -326,7 +326,7 @@ wgang         09:30 · 11:30 · 15:30 · 20:30 KST (4회)
 
 🔴 **파일 템플릿이 아니다.** plist 는 `scripts/lib/persona-comment-runner-template.ts` 가 코드로 렌더한다
 (Label `com.soransoran.persona-comment-runner` · 실행 `scripts/persona-comment-loop.mts --live` ·
-하루 20회 08:07~22:00 · 회차 간격 최대 44분 ≤ 첫 댓글 시한 60분). 공급 job(`RUNTIME_JOBS`)이 아니고,
+하루 43회 08:07~22:00 · 회차 간격 최대 20분 — 한 글이 첫 댓글 시한 60분 안에 시도 3번). 공급 job(`RUNTIME_JOBS`)이 아니고,
 배포 동안만 잠시 멈추는 job(`DEPLOY_QUIESCE_JOBS`)이다 — 격리 검사가 설치됐으면 원문·인자·SHA 를 대조한다.
 
 ```bash

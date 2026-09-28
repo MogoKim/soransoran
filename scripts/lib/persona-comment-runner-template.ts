@@ -256,10 +256,12 @@ export type RunnerSchedule = {
  * @param dailyTarget 하루 목표 발행 수
  * @param perRunMax   한 회차 상한 (기본은 배치 상한 25)
  */
-export function planRunnerSchedule(dailyTarget: number, perRunMax = 25): RunnerSchedule {
+export function planRunnerSchedule(dailyTarget: number, perRunMax = 25, minRuns = 0): RunnerSchedule {
   const target = Number.isInteger(dailyTarget) && dailyTarget > 0 ? dailyTarget : 0
   const perRun = Math.max(1, Math.min(perRunMax, target === 0 ? 1 : target))
-  const runs = target === 0 ? 0 : Math.ceil(target / perRun)
+  const capacityRuns = target === 0 ? 0 : Math.ceil(target / perRun)
+  // 🔴 재시도 바닥 — 용량이 요구하는 회차보다 적게 돌지 않는다. 목표 0 이면 바닥도 없다
+  const runs = target === 0 ? 0 : Math.max(capacityRuns, minRuns)
   const startMin = RUNNER_WINDOW_START_HOUR * 60 + RUNNER_WINDOW_OFFSET_MINUTES
   const endMin = RUNNER_WINDOW_END_HOUR * 60
   const span = endMin - startMin
@@ -285,7 +287,8 @@ export function planRunnerSchedule(dailyTarget: number, perRunMax = 25): RunnerS
     runs, perRun, slots, capacity: runs * perRun, maxGapMinutes, nightGapMinutes,
     reason: target === 0
       ? '하루 목표가 0 이다 — 도는 회차가 없다'
-      : `하루 ${target}건 ÷ 회차당 ${perRun}건 → ${runs}회`
+      : `하루 ${target}건 ÷ 회차당 ${perRun}건 → ${capacityRuns}회`
+        + (runs > capacityRuns ? ` · 🔴 재시도 바닥 ${runs}회` : '')
         + ` · ${RUNNER_WINDOW_START_HOUR}~${RUNNER_WINDOW_END_HOUR}시에 균등 분산`
         + ` · 감당 ${runs * perRun}건`
         + ` · 회차 간격 최대 ${maxGapMinutes ?? '—'}분 · 🔴 야간 공백 ${nightGapMinutes}분`,
@@ -296,5 +299,26 @@ export function planRunnerSchedule(dailyTarget: number, perRunMax = 25): RunnerS
  * 🔴 **template 슬롯의 정본.** 하루 절대 상한에서 역산한다 —
  *    상한이 바뀌면 슬롯도 함께 바뀐다. 손으로 적은 값이 남으면 반드시 어긋난다.
  */
+/**
+ * 🔴 **한 글이 첫 댓글 시한 안에 받는 시도 횟수** (2026-09-28).
+ *
+ *    옛 판은 회차 간격이 60분 **이하**이기만 하면 됐다 — 500/day 에서 20회 · 간격 44분.
+ *    그러면 한 글이 60분 안에 받는 시도는 **한 번**이다. 2026-09-28 20:00 글(cmul4z1j)은
+ *    20:32 회차에서 9관문에 한 번 막혔고, 다음 회차 21:16 은 시한 밖이라 댓글 0 으로 끝났다.
+ *    실패를 그 댓글에만 가두려면 **다음 시도가 시한 안에** 있어야 한다.
+ *    시도 3 → 간격 ≤ 20분. 할 일 없는 회차는 provider 0 · DB 읽기뿐이다.
+ */
+export const FIRST_COMMENT_ATTEMPTS = 3
+export const COMMENT_RUNNER_MAX_GAP_MINUTES = Math.floor(FIRST_COMMENT_MAX_MINUTES / FIRST_COMMENT_ATTEMPTS)
+
+/**
+ * 🔴 **댓글 루프의 실제 schedule** — 용량 역산(`planRunnerSchedule`)에 재시도 바닥을 얹는다.
+ *    창(08:07~22:00)을 `COMMENT_RUNNER_MAX_GAP_MINUTES` 이하 간격으로 덮는 최소 회차 수다.
+ */
+export function planCommentLoopSchedule(dailyTarget: number, perRunMax = 25): RunnerSchedule {
+  const span = RUNNER_WINDOW_END_HOUR * 60 - (RUNNER_WINDOW_START_HOUR * 60 + RUNNER_WINDOW_OFFSET_MINUTES)
+  return planRunnerSchedule(dailyTarget, perRunMax, Math.ceil(span / COMMENT_RUNNER_MAX_GAP_MINUTES) + 1)
+}
+
 export const COMMENT_RUNNER_SLOTS: readonly { hour: number; minute: number }[] =
-  planRunnerSchedule(BOOTSTRAP_DAILY_MAX).slots
+  planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX).slots
