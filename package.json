@@ -154,6 +154,7 @@
     "supply:process-check": "tsx scripts/supply-process-check.mts",
     "supply:stock-parity-check": "tsx scripts/supply-stock-parity-check.mts",
     "supply:stock-parity-db-check": "tsx scripts/supply-stock-parity-db-check.mts",
+    "supply:wip-contract-db-check": "tsx scripts/supply-wip-contract-db-check.mts",
     "supply:draft-deferral-e2e-db-check": "tsx scripts/supply-draft-deferral-e2e-db-check.mts",
     "supply:workset-check": "tsx scripts/supply-workset-check.mts",
     "supply:workset-e2e-check": "tsx scripts/supply-workset-e2e-check.mts",

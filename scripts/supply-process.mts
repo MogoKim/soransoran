@@ -255,6 +255,9 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *    🔴 검토 대기는 **WIP 에 남는다**(같은 화자로 또 만들지 않는다). 발행 가능 재고로는 세지 않는다.
  *    🔴 **WIP 여부는 칸마다 정해져 있다**(`STOCK_BUCKET_META`) — TTL 만료 · 영구 배정 예외 · 깨진 복구 ·
  *       스스로 풀리지 않는 신선도 실패는 화자를 **영구 점유하지 않는다**. 시간성 유예(WEEKLY_CAP · TOO_SOON)는 점유한다.
+ *    🔴 **옛 품질 계약의 기계 초안(`qualityContractMismatch`)도 점유하지 않는다** (2026-09-28) — 자동 경로가
+ *       영영 없는 글이 지금 계약의 생산 자리를 막으면 계약을 올린 날 새 계약은 몇 자리로만 만든다.
+ *       그 수는 따로 적는다(`wip.qualityContractMismatch` — WIP 합계에는 들어가지 않는다).
  */
 export async function buildSpeakerLoad(
   prisma: PrismaClient, runId: string,
@@ -263,7 +266,7 @@ export async function buildSpeakerLoad(
   stageByDate: readonly { date: string; stage: string }[]
   planningStage: string
   releaseStage: string
-  wip: { total: number; humanReviewPending: number; publishableNow: number }
+  wip: { total: number; humanReviewPending: number; publishableNow: number; qualityContractMismatch: number }
 }> {
   const { loaded, classification } = await loadStockClassification(prisma, opts.env, opts.now)
   const planning = supplyPlanningProfile(opts.scale)
@@ -325,6 +328,8 @@ export async function buildSpeakerLoad(
       total: wip.size,
       humanReviewPending: classification.counts.humanReviewPending,
       publishableNow: classification.counts.publishableNow,
+      /** 🔴 WIP 가 **아니다** — 옛 품질 계약이라 WIP 에서 빠진 수를 보이려고 적는다 */
+      qualityContractMismatch: classification.counts.qualityContractMismatch,
     },
   }
 }
@@ -693,7 +698,8 @@ async function main(): Promise<number> {
       try {
         const load = await writeSpeakerLoad(prisma, runId, scale)
         console.log(`   🟢 화자 여력 — 공급 눈금 ${load.planningStage}(capacity) · 발행 눈금 ${load.releaseStage}(release)`
-          + ` · WIP ${load.wip.total}건 (사람 검토 대기 ${load.wip.humanReviewPending} · 발행 가능 ${load.wip.publishableNow})`)
+          + ` · WIP ${load.wip.total}건 (사람 검토 대기 ${load.wip.humanReviewPending} · 발행 가능 ${load.wip.publishableNow})`
+          + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`)
       } catch (e) {
         const why = e instanceof Error ? e.message : 'unknown'
         console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)

@@ -83,9 +83,11 @@ console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
   check('EDITED 도 대상이다', selectAutoTargets([ok({ status: 'EDITED' })], allPass).targets.length === 1)
   // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED · TITLE_COPIES_SOURCE 를 더해 11개였다.
   //    2026-09-25 — 자동 READY 의 AUTO_READY_CLOSED · AUTO_READY_STALE 를 더해 13개다.
+  //    2026-09-28 — 옛 품질 계약 자동 도장 행의 QUALITY_CONTRACT_MISMATCH 를 더해 14개다.
   //    코드와 라벨이 1:1 이어야 한다
-  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 13
-    && 'AUTO_READY_CLOSED' in REJECT_LABEL && 'AUTO_READY_STALE' in REJECT_LABEL)
+  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 14
+    && 'AUTO_READY_CLOSED' in REJECT_LABEL && 'AUTO_READY_STALE' in REJECT_LABEL
+    && 'QUALITY_CONTRACT_MISMATCH' in REJECT_LABEL)
 }
 
 console.log('\n①-b 🔴 기계 profile — 통째로 맞아야 발행 후보다')
