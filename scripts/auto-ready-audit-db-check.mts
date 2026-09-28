@@ -483,6 +483,58 @@ async function main(): Promise<void> {
     check('감사 계약 판 상수는 repo 그대로다(품질 계약 digest 밖)', AUDIT_CONTRACT_VERSION === 'auto-ready-audit-v1' && (SEMANTIC_AUDIT_CONTRACT_VERSION as string) !== AUDIT_CONTRACT_VERSION)
   }
 
+  /**
+   * ⑨ 🔴 🔴 **스위치 OFF 인데 판정 전 감사가 있다** (2026-09-28 · launchd 등록 전 계약).
+   *
+   *    ① 은 판정 전 0 인 표에서 OFF 를 봤다 — 쓸 것이 없으니 "쓰기 0" 이 증명되지 않는다.
+   *    여기서는 **판정 전 감사 · 도장 전 기계 행 · 유료 ON · 감사 예산 · 가짜 키** 를 전부 갖춘
+   *    최악 조건에서 스위치만 끈다. 러너는 감사·도장·Post 를 한 칸도 바꾸지 않고, 제공사를 한 번도
+   *    부르지 않고(사전 계산 0 · 유료 0), 잠금·장부 파일도 만들지 않아야 한다.
+   *    🔴 양성 대조 — 같은 표에서 스위치만 켜면 제공사를 부르고 판정을 쓴다(검사가 죽은 게이트가 아님을 증명).
+   */
+  console.log('\n⑨ 🔴 🔴 스위치 OFF + 판정 전 감사 있음 — 쓰기 0 · 도장 0 · Post 0 · 제공사 0 · 잠금·장부 0')
+  {
+    const pend = await autoPublished(f, { personaCode: 'P03', title: '꺼진 날 이야기', body: '오늘은 비가 와서 집에 있었어요. 다들 뭐 하세요?', sourceTitle: '비 오는 날', sourceBody: '비 오는 날 집에 있었다는 이야기' })
+    await selectForAudit(f, pend)
+    const idle = await machineRow(f, 'W99')
+    check('기준선 — 판정 전 감사 ≥ 1 · 도장 전 기계 행 있음',
+      (await prisma.autoReadyAudit.count({ where: { defect: null } })) >= 1
+      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idle.id } })).decidedBy === 'machine:auto-draft-v5')
+    const snap = async (): Promise<string> => JSON.stringify({
+      audits: await prisma.autoReadyAudit.findMany({ orderBy: { queueId: 'asc' } }),
+      queue: await prisma.originalPostApprovalQueue.findMany({
+        orderBy: { id: 'asc' },
+        select: { id: true, status: true, decidedBy: true, decidedAt: true, editDiff: true, createdPostId: true, matchedPersonaId: true, updatedAt: true },
+      }),
+      posts: await prisma.post.findMany({ orderBy: { id: 'asc' }, select: { id: true, title: true, content: true } }),
+    })
+    const before = await snap()
+    // 🔴 OFF 는 `on` 이 아닌 모든 값이다 — unset · off · 흔한 오타(true/1/yes)
+    const variants: { tag: string; opt: Parameters<typeof runRunner>[1] }[] = [
+      { tag: 'unset', opt: { enabled: false } },
+      { tag: 'off', opt: { env: { SORAN_AUTO_READY_ENABLED: 'off' } } },
+      { tag: 'true', opt: { env: { SORAN_AUTO_READY_ENABLED: 'true' } } },
+      { tag: '1', opt: { env: { SORAN_AUTO_READY_ENABLED: '1' } } },
+    ]
+    for (const v of variants) {
+      const h = homeWithArtifacts(`off-pending-${v.tag}`)
+      const run = await runRunner(h, v.opt)
+      check(`🔴 🔴 **[OFF=${v.tag}] exit 0 · 제공사 호출 0 (사전 계산 0 · 유료 0)**`,
+        run.code === 0 && run.paid === 0 && run.count === 0 && run.out.includes('꺼져 있다'), `${run.code} · paid ${run.paid} · count ${run.count} · ${run.out.slice(0, 200)}`)
+      check(`🔴 🔴 **[OFF=${v.tag}] DB 쓰기 0 — 감사·큐(도장 포함)·Post 가 한 칸도 바뀌지 않았다**`, (await snap()) === before)
+      check(`🔴 [OFF=${v.tag}] 잠금 디렉터리·장부를 만들지 않았다`,
+        !existsSync(auditLockDir(h)) && !existsSync(auditLedgerDir(h))
+        && !existsSync(join(h, 'Library', 'Application Support', 'soransoran', LEDGER_DIR_NAME)))
+    }
+    // 🔴 양성 대조 — 같은 표 · 스위치만 켠다
+    const on = await runRunner(home)
+    const judged = await audit(pend.queueId)
+    check('🔴 🔴 **양성 대조: 스위치 ON 이면 같은 표에서 제공사를 부르고 판정을 쓴다**',
+      on.paid >= 1 && judged.defect !== null && (await snap()) !== before, `${on.code} · paid ${on.paid} · ${judged.defect} · ${on.out.slice(-200)}`)
+    check('🔴 감사 러너는 ON 에서도 도장을 찍지 않는다 — 기계 행 그대로',
+      (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idle.id } })).decidedBy === 'machine:auto-draft-v5')
+  }
+
   await wipeAuditFixtures(prisma)
   await prisma.$disconnect()
   rmSync(SCRATCH, { recursive: true, force: true })

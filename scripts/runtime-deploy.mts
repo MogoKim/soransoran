@@ -40,11 +40,11 @@ import {
   render, retireInstalled, rollbackDirOf, templatePathOf, unretireInstalled, valueOf, writeInstalled,
 } from './lib/launchd-install.mjs'
 /**
- * 🔴 **발행 러너 label 의 정본은 template 파일 하나다** — 여기에 문자열을 다시 적지 않는다.
- *    이 job 은 공급 job 이 아니지만 **같은 runtime 작업 트리**에서 돌기 때문에,
+ * 🔴 **잠시 멈출 job 의 정본은 `runtime-quiesce-jobs` 하나다** — 여기에 label 을 다시 적지 않는다.
+ *    발행 러너·감사 러너는 공급 job 이 아니지만 **같은 runtime 작업 트리**에서 돌기 때문에,
  *    배포 동안만 잠시 멈춘다. `RUNTIME_JOBS` 에 넣지 않는 이유가 그것이다.
  */
-import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
+import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
 /** 🔴 예약 실행이 절대 물으면 안 되는 곳 — 개발 작업트리들 */
@@ -58,8 +58,9 @@ const JOBS = RUNTIME_JOBS
 /**
  * 🔴 **배포 동안만 멈춰 두는 job.** 공급 job 도 퇴역 job 도 아니다 —
  *    render·install·env 판정 어디에도 들어가지 않고, 잠시 내렸다 그대로 되올린다.
+ *    🔴 설치되지 않은 job(감사 러너가 그렇다)은 끝까지 설치되지 않는다 — 배포는 설치하지 않는다.
  */
-const QUIESCE_JOBS: readonly string[] = [PUBLISH_RUNNER_LABEL]
+const QUIESCE_JOBS: readonly string[] = DEPLOY_QUIESCE_JOBS
 const AGENT_DIR = join(homedir(), 'Library', 'LaunchAgents')
 /**
  * 🔴 퇴역 plist 보관소 — 지우지 않고 옮긴다. 되돌릴 수 있어야 한다.
@@ -207,6 +208,19 @@ if (!APPLY) {
       console.log(`     🟡 ${deadSwitch} 가 남아 있다 — 퇴역 job 의 스위치다. 배포 뒤 지워도 된다`)
     }
   }
+  /**
+   * 🔴 **잠시 멈출 job 을 함께 찍는다** — 관측만 한다(`launchctl print`). 내리지도 올리지도 않는다.
+   *    설치되지 않은 job 은 배포 뒤에도 설치되지 않는다 — 그것을 화면에 그대로 적는다.
+   */
+  console.log('\n  ── 배포 동안만 잠시 멈출 job (🔴 idle 이면 내렸다 배포 전 상태 그대로 되올린다 · 돌고 있으면 배포하지 않는다)')
+  for (const l of QUIESCE_JOBS) {
+    const st = stateOf(l)
+    const installed = existsSync(join(AGENT_DIR, plistFileOf(l)))
+    const what = st === 'unknown' ? '🔴 관측 불가 — 배포가 멈춘다(fail-closed)'
+      : st === 'loaded' ? '🟢 loaded — 내렸다 되올린다'
+        : installed ? '🟡 설치본은 있는데 unloaded — 그대로 둔다' : '⚪ 미설치 — 건드리지 않는다 · 설치하지 않는다'
+    console.log(`     ${what} ${l}`)
+  }
   console.log(`\n  🔴 배포가 하지 않는 것: ${DEPLOY_FORBIDDEN.join(' · ')}`)
   console.log(`\n  실제 배포: npm run runtime:deploy -- --apply --target=${originMainDry ?? '<full sha>'}\n`)
   process.exit(0)
@@ -282,7 +296,7 @@ const fx: DeployEffects = {
     const running: string[] = []
     const unknown: string[] = []
     // 🔴 퇴역 job 도 본다 — 돌고 있는 옛 job 위로 배포하면 그 회차가 반쯤 잘린다
-    // 🔴 잠시 멈출 job 도 본다 — 돌고 있는 발행 회차 위로 checkout 하면 그 회차가 반쯤 잘린다
+    // 🔴 잠시 멈출 job 도 본다 — 돌고 있는 발행·감사 회차 위로 checkout 하면 그 회차가 반쯤 잘린다
     for (const l of [...JOBS, ...RETIRED_JOBS, ...QUIESCE_JOBS]) {
       const probe = probePrint(l)
       const { state } = judgeJobState(probe)

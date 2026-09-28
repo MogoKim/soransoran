@@ -340,6 +340,8 @@ export async function runDeploy(input: {
    *      · 배포 전 loaded 였을 때만 내리고, 끝나면 **같은 설치본으로** 되올린다
    *      · 원래 내려가 있었으면 끝까지 내려가 있다
    * 🔴 공급 job(`RUNTIME_JOBS`)에 섞지 않는다 — 템플릿·env·격리 책임이 다르다.
+   * 🔴 (2026-09-28) 자동 READY 감사 러너 `com.soransoran.auto-ready-audit` 도 같은 이유로 여기 있다.
+   *    설치가 선택인 job 이다 — 배포 전 설치본이 없고 unloaded 였으면 **끝까지 그대로**다(설치하지 않는다).
    */
   quiesceJobs?: readonly string[]
   /** 🔴 실제 loaded 경로를 판정할 기준 — runtime 안이어야 하는 것은 program 과 WorkingDirectory 뿐이다 */

@@ -572,3 +572,144 @@ export function judgeCanonicalMode(input: {
   }
   return { ok: problems.length === 0, problems }
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 설치가 선택인 runtime job — 자동 READY 감사 러너 (2026-09-28)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * `launchctl print` 원문에서 **실제로 load 된 plist 파일 경로**를 뽑는다 — 🔴 순수 함수.
+ *
+ *    `\tpath = …` 한 줄만 본다. `stdout path = …` · `stderr path = …` 는 로그 경로라 다르다.
+ */
+export function parseLaunchctlPlistPath(out: string | null): string | null {
+  if (out === null) return null
+  const m = /^\tpath = (.+)$/m.exec(out)
+  return m === null ? null : m[1]!.trim()
+}
+
+export type OptionalJobVerdict = {
+  ok: boolean
+  /** LaunchAgents 정본 자리에 설치본이 있는가 */
+  installed: boolean
+  problems: string[]
+  /** 🔴 통과여도 무엇을 봤는지 적는다 — "미설치" 를 조용히 넘기지 않는다 */
+  notes: string[]
+}
+
+/**
+ * 🔴 **설치가 선택인 runtime job 의 격리 판정** (2026-09-28).
+ *
+ *    `com.soransoran.auto-ready-audit` 는 공급 job(`RUNTIME_JOBS`)이 아니고 **설치 자체가 선택**이다.
+ *    그런데 설치되면 공급 job 과 **같은 runtime 작업 트리**에서 돈다. 앞선 격리 검사는 이 label 의
+ *    설치 경로·인자·loaded 상태를 전혀 보지 않았다 — 누가 개발 트리 경로로 다시 깔아도
+ *    잡는 게이트가 없었다(`judgeLoadedJobs` 는 여분 label 을 문제 삼지 않는다).
+ *
+ * 🔴 계약
+ *    · 설치본 없음 + unloaded → **통과(필수 아님)** · 그렇게 적는다
+ *    · 관측 unknown → 실패(fail-closed)
+ *    · 설치본 없음 + loaded → 실패 — 정본 자리 밖의 plist 로 올라와 있다
+ *    · 설치본 있음 + unloaded → 실패 — 다음 로그인에 그 파일로 등록된다(지금 상태와 다르다)
+ *    · 설치본 있음 + loaded → 전부 값으로 대조한다
+ *        ① 실제 load 된 plist 경로 = LaunchAgents 정본 자리
+ *        ② 설치본 원문 = runtime 템플릿 render 결과 (바이트)
+ *        ③ 설치본 program·WorkingDirectory 가 runtime 안 · 개발 트리 밖
+ *        ④ loaded program·WorkingDirectory 가 runtime 안 · loaded 인자 = 설치본 인자 · loaded WD = 설치본 WD
+ *        ⑤ runtime HEAD = 고정 SHA · 실행 스크립트가 그 SHA 에 추적되는 파일
+ */
+export function judgeOptionalRuntimeJob(input: {
+  label: string
+  /** 🔴 정본 설치 자리 — `~/Library/LaunchAgents/<label>.plist` */
+  expectedPlistPath: string
+  /** 그 자리의 설치본 원문 — 없으면 null */
+  installedXml: string | null
+  /** 설치본에서 뽑은 ProgramArguments */
+  installedArgs: readonly string[]
+  installedWorkingDirectory: string | null
+  state: JobState
+  /** loaded 일 때 `launchctl print` 의 `path =` */
+  loadedPlistPath: string | null
+  loaded: LoadedJobConfig
+  /** 🔴 **runtime 작업 트리의 템플릿**으로 render 한 기대 원문 — 못 했으면 null */
+  expectedXml: string | null
+  runtimeRoot: string
+  devRoots: readonly string[]
+  runtimeHead: string | null
+  pinnedSha: string | null
+  /** 실행 스크립트가 runtime HEAD 에 추적되는 파일인가 — 부르는 쪽이 `git cat-file -e` 로 실측 */
+  programTrackedAtHead: boolean | null
+}): OptionalJobVerdict {
+  const L = input.label
+  const installed = input.installedXml !== null
+  const problems: string[] = []
+  const notes: string[] = []
+  if (input.state === 'unknown') {
+    return { ok: false, installed, problems: [`${L}: launchctl 상태를 확인하지 못했다 — 통과시키지 않는다(fail-closed)`], notes }
+  }
+  if (!installed) {
+    if (input.state === 'loaded') {
+      problems.push(
+        `🔴 ${L}: LaunchAgents 정본 자리에 설치본이 없는데 loaded 다`
+        + ` — 다른 plist 로 올라와 있다 (${input.loadedPlistPath ?? '경로 모름'})`,
+      )
+      return { ok: false, installed, problems, notes }
+    }
+    notes.push(`${L}: 설치되지 않았다 — 필수 아님 (설치하면 이 검사가 경로·인자·SHA 를 대조한다)`)
+    return { ok: true, installed, problems, notes }
+  }
+  if (input.state !== 'loaded') {
+    problems.push(
+      `🔴 ${L}: 설치본은 있는데 loaded 가 아니다 — 다음 로그인·재부팅 때 그 파일로 등록된다`
+      + ' (설치를 되돌렸다면 plist 를 보관소로 옮긴다)',
+    )
+    return { ok: false, installed, problems, notes }
+  }
+  // ① 실제 load 된 plist 가 정본 자리인가
+  if (input.loadedPlistPath !== input.expectedPlistPath) {
+    problems.push(
+      `🔴 ${L}: 실제 load 된 plist 가 정본 자리가 아니다`
+      + ` — 기대 ${input.expectedPlistPath} · 실제 ${input.loadedPlistPath ?? '(없음)'}`,
+    )
+  }
+  // ② 설치본 = runtime 템플릿 render
+  if (input.expectedXml === null) {
+    problems.push(`${L}: runtime 템플릿을 render 하지 못했다 — 대조할 기준이 없다(fail-closed)`)
+  } else if (input.installedXml !== input.expectedXml) {
+    problems.push(`🔴 ${L}: 설치본이 runtime 템플릿 render 와 다르다 — 템플릿이 바뀌었거나 손으로 고쳤다 (다시 렌더해 설치한다)`)
+  }
+  // ③ 설치본 경로
+  const file = judgeJobPath({
+    label: `${L}(설치본)`,
+    programPath: input.installedArgs.find((a) => a.endsWith('.mts')) ?? null,
+    workingDirectory: input.installedWorkingDirectory,
+    runtimeRoot: input.runtimeRoot, devRoots: input.devRoots,
+  })
+  problems.push(...file.problems)
+  // ④ 실제 loaded 설정 — 설치본 인자·WD 와 값으로 같아야 한다
+  const live = judgeLoadedConfig({
+    label: L, loaded: input.loaded, runtimeRoot: input.runtimeRoot, devRoots: input.devRoots,
+    expectedArgs: input.installedArgs,
+  })
+  problems.push(...live.problems)
+  if (input.loaded.readable && input.loaded.workingDirectory !== input.installedWorkingDirectory) {
+    problems.push(
+      `${L}(loaded): WorkingDirectory 가 설치본과 다르다`
+      + ` — 설치본 ${input.installedWorkingDirectory ?? '(없음)'} · loaded ${input.loaded.workingDirectory ?? '(없음)'}`,
+    )
+  }
+  // ⑤ runtime SHA — 템플릿과 스크립트가 **고정 SHA 의 것**인가
+  if (input.runtimeHead === null || input.pinnedSha === null) {
+    problems.push(`${L}: runtime HEAD 또는 고정 SHA 를 읽지 못했다 — 어느 코드가 도는지 알 수 없다(fail-closed)`)
+  } else if (input.runtimeHead !== input.pinnedSha) {
+    problems.push(
+      `🔴 ${L}: runtime HEAD 가 고정 SHA 와 다르다 — head ${input.runtimeHead.slice(0, 7)} · 고정 ${input.pinnedSha.slice(0, 7)}`,
+    )
+  }
+  if (input.programTrackedAtHead !== true) {
+    problems.push(input.programTrackedAtHead === null
+      ? `${L}: 실행 스크립트가 runtime HEAD 에 있는지 확인하지 못했다(fail-closed)`
+      : `🔴 ${L}: 실행 스크립트가 runtime HEAD 에 추적되는 파일이 아니다 — 고정 SHA 밖의 코드를 돈다`)
+  }
+  if (problems.length === 0) notes.push(`${L}: 설치·loaded — 경로·인자·원문·SHA 전부 runtime 과 같다`)
+  return { ok: problems.length === 0, installed, problems, notes }
+}
