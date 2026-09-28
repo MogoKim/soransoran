@@ -25,6 +25,9 @@ import { isHumanReviewer, resolveHumanReviewer, LEGACY_DECISION_MARK } from '../
 import { planOriginalPostWithdrawal } from '../src/lib/original-post-withdrawal'
 import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
 import {
+  currentQualityContract, readQualityContract, QUALITY_CONTRACT_KEY, QUALITY_CONTRACT_VERSION,
+} from '../src/lib/quality-contract'
+import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticHoldsOf,
 } from '../src/lib/micro-seed-supply-autofill'
 
@@ -313,7 +316,9 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
     id: 'm1', status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
     promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL, matchedPersonaId: null,
     title: '제목', body: '본문', sourceSite: `${MACHINE_SITE_PREFIX}navercafe:x`,
-    gateResults: gateWith(GOOD_SR), decidedBy: AUTO_DECIDER, decidedAt: new Date(), createdAt: new Date(),
+    // 🔴 도장은 지금 품질 계약 행에만 찍힌다(`stampRowInTx`) — fixture 도 그 모양이다
+    gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: currentQualityContract() },
+    decidedBy: AUTO_DECIDER, decidedAt: new Date(), createdAt: new Date(),
     editDiff: { [AUTO_READY_RECORD_KEY]: makeStamp('제목', '본문', new Date()) },
     ...o,
   } as AutoRow)
@@ -331,6 +336,36 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
     codeOf(mk({ decidedBy: 'machine:auto-draft-v5' }), true) === 'HUMAN_REVIEW_REQUIRED')
   check('🔴 사람(founder) 결정 행 동작은 그대로다 — 옵션과 무관하게 대상',
     codeOf(mk({ decidedBy: HUMAN_DECIDER, editDiff: null })) === 'TARGET')
+
+  /**
+   * 🔴 **옛 품질 계약 자동 도장 행 (2026-09-28).** 도장은 판정 계약만 보므로 품질 계약이 올라가도
+   *    유효하게 읽힌다 — selector 가 거르지 않으면 발행 줄 선두에 서고 트랜잭션 재검증에서야 막힌다.
+   *    PR #591 에 기대지 않는다 — 행 쪽 표식을 "지금 계약이 아닌 것" 으로 만든다.
+   */
+  const oldGate = (m: 'otherDigest' | 'otherVersion' | 'none'): Record<string, unknown> => ({
+    ...gateWith(GOOD_SR),
+    ...(m === 'none' ? {} : {
+      [QUALITY_CONTRACT_KEY]: m === 'otherDigest'
+        ? { version: QUALITY_CONTRACT_VERSION, digest: digestOf('옛 게이트 · 옛 검수') }
+        : { version: 'quality-v0', digest: digestOf('옛 판') },
+    }),
+  })
+  check('fixture 표식은 모양이 온전하다 — digest 만 다르다(모양 탓 legacy 가 아니다)',
+    readQualityContract(oldGate('otherDigest')) !== null && readQualityContract(oldGate('otherVersion')) !== null
+    && readQualityContract(oldGate('otherDigest'))?.version === QUALITY_CONTRACT_VERSION)
+  check('🔴 🔴 **열림 + 유효한 도장이어도 같은 판 다른 digest → QUALITY_CONTRACT_MISMATCH** (자동 발행 0)',
+    codeOf(mk({ gateResults: oldGate('otherDigest') }), true) === 'QUALITY_CONTRACT_MISMATCH',
+    String(codeOf(mk({ gateResults: oldGate('otherDigest') }), true)))
+  check('🔴 🔴 **옛 판 · 표식 없음(legacy)도 같다**',
+    codeOf(mk({ gateResults: oldGate('otherVersion') }), true) === 'QUALITY_CONTRACT_MISMATCH'
+    && codeOf(mk({ gateResults: oldGate('none') }), true) === 'QUALITY_CONTRACT_MISMATCH')
+  check('🔴 🔴 **닫혀 있어도 영구 사유가 먼저다** — AUTO_READY_CLOSED(WIP)로 숨지 않는다',
+    codeOf(mk({ gateResults: oldGate('otherDigest') }), false) === 'QUALITY_CONTRACT_MISMATCH')
+  check('🔴 🔴 **사람이 검토한 옛 계약 행(founder)은 그대로 대상이다** — 임의로 빼지 않는다',
+    codeOf(mk({ decidedBy: HUMAN_DECIDER, editDiff: null, gateResults: oldGate('otherDigest') }), true) === 'TARGET'
+    && codeOf(mk({ decidedBy: HUMAN_DECIDER, editDiff: null, gateResults: oldGate('none') })) === 'TARGET')
+  check('🔴 사람 검토 전 옛 계약 기계 행의 selector 코드는 그대로 HUMAN_REVIEW_REQUIRED (사람 검토 묶음 불변)',
+    codeOf(mk({ decidedBy: 'machine:auto-draft-v5', gateResults: oldGate('otherDigest') }), true) === 'HUMAN_REVIEW_REQUIRED')
 }
 
 console.log('\n⑥ 🔴 열림 · 스위치 · 감사')

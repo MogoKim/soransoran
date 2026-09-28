@@ -34,6 +34,7 @@ import { snapshot, buildSpeakerLoad, supplyPlanningProfile } from './supply-proc
 import { planSpeakerAvailability, remainingCapacity } from '../src/lib/content-core/speaker-availability'
 import { MACHINE_REVIEWED_BY } from '../src/lib/original-post-auto-publish'
 import { readPostRequirements } from '../src/lib/original-post-persona-match'
+import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -63,9 +64,13 @@ const DAY = 864e5
 const envOf = (release: ReleaseStage, capacity: ReleaseStage): Record<string, string> =>
   ({ [RELEASE_ENV]: release, [CAPACITY_ENV]: capacity })
 
-/** 🔴 기계 profile 이 **통째로** 맞는 gate 기록 — 적재기가 남기는 모양 그대로 */
+/**
+ * 🔴 기계 profile 이 **통째로** 맞는 gate 기록 — 적재기가 남기는 모양 그대로.
+ *    🔴 적재기는 **지금 품질 계약** 표식을 함께 적는다(`buildQueuePayload`) — 검토 대기 WIP 는 그 행의 뜻이다.
+ *       옛 계약 행은 WIP 가 아니다 — `supply:wip-contract-db-check` 가 본다(2026-09-28).
+ */
 const machineGate = (voiceCode: string) => ({
-  holds: [], blocks: [],
+  holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: currentQualityContract(),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,

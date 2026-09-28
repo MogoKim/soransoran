@@ -8,6 +8,8 @@
  *   ② 공급 계획 눈금 — capacity. 발행 눈금 — release. 새 단계·새 숫자 없음.
  *   ③ Persona 여력 대기 — `noDraft`(초안 실패)가 아니라 `personaCapacityDeferred` 로 적는다.
  *   ④ 소비자 연결 — 공급 러너 · 보충기 · wave-c 가 공용 분류를 실제로 부른다.
+ *   ⑤ 옛 품질 계약 기계 초안 — 큐에 남고 · 자동 발행 0 · 지금 계약의 Persona WIP 0 (2026-09-28).
+ *      지금 계약 검토 대기 · 발행 가능 · 사람이 검토한 옛 계약 행은 기존 뜻 그대로다.
  *
  *   실제 DB 로 부딪혀 보는 반례(공급 9 · 발행 0 / release d1 · capacity d5)는
  *   `supply:stock-parity-db-check`(격리 Postgres)가 맡는다.
@@ -23,6 +25,10 @@ import { resolveScale } from '../src/lib/scale-runtime'
 import { PROFILES, CAPACITY_ENV, RELEASE_ENV, RELEASE_STAGES } from '../src/lib/scale-profile'
 import { pickDraft, DRAFT_REASON_LABEL } from '../src/lib/micro-seed-auto-draft'
 import type { RejectCode } from '../src/lib/original-post-auto-publish'
+import {
+  currentQualityContract, readQualityContract, QUALITY_CONTRACT_KEY, QUALITY_CONTRACT_VERSION,
+} from '../src/lib/quality-contract'
+import { digestOf } from '../src/lib/auto-ready-v2'
 
 let pass = 0
 let fail = 0
@@ -39,6 +45,21 @@ const sameProfile = (a: unknown, b: unknown): boolean => JSON.stringify(a) === J
 const same = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|')
 
+type ContractMark = 'current' | 'otherDigest' | 'otherVersion' | 'none'
+/** 🔴 PR #591 에 기대지 않는다 — "지금 계약 ≠ 행의 계약" 을 행 쪽 표식으로 만든다 */
+const gateOfMark = (m: ContractMark): Record<string, unknown> => {
+  switch (m) {
+    case 'current': return { holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: currentQualityContract() }
+    case 'otherDigest': return { holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: { version: QUALITY_CONTRACT_VERSION, digest: digestOf('옛 게이트 · 옛 검수') } }
+    case 'otherVersion': return { holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: { version: 'quality-v0', digest: digestOf('옛 판') } }
+    case 'none': return { holds: [], blocks: [] }
+    default: {
+      const never: never = m
+      return never
+    }
+  }
+}
+
 /** 🔴 분류가 읽는 칸만 채운 입력 — 판정은 이미 끝난 값이다(정본이 낸 모양 그대로) */
 function fixture(o: {
   rejected?: { id: string; code: RejectCode }[]
@@ -52,6 +73,11 @@ function fixture(o: {
   unassigned?: { id: string; deferredBy?: string[]; blocked?: { code: string; reasons: { code: string }[] }[] }[]
   /** 기계 글의 말투 — 주지 않으면 사람 profile(말투 없음)이다 */
   voiceOf?: Record<string, string>
+  /**
+   * 🔴 행에 저장된 품질 계약 표식 — 주지 않으면 **지금 계약**이다(`currentQualityContract()`).
+   *    `otherDigest` 같은 판 다른 digest(계약을 올린 뒤의 옛 행) · `otherVersion` 옛 판 · `none` 표식 없음(legacy)
+   */
+  contractOf?: Record<string, ContractMark>
 }): { loaded: LoadedStock; plan: PublishPlan } {
   const rejected = o.rejected ?? []
   const targets = (o.targets ?? []).map((id) => ({ id }))
@@ -61,7 +87,10 @@ function fixture(o: {
       ? { queueId: id, voice: null, profile: 'human' }
       : { queueId: id, voice: { personaCode: v, bundleDigest: `bd-${v}`, comments: 3 }, profile: 'machine' }
   })
-  const loaded = { queueTotal: rejected.length + targets.length, rejected, targets, queueCandidates } as unknown as LoadedStock
+  /** 🔴 분류가 읽는 저장값 — 정본 로더처럼 `allRows` 에 모든 행이 있다 */
+  const allRows = [...rejected.map((r) => r.id), ...targets.map((t) => t.id)]
+    .map((id) => ({ id, gateResults: gateOfMark(o.contractOf?.[id] ?? 'current') }))
+  const loaded = { queueTotal: rejected.length + targets.length, rejected, targets, queueCandidates, allRows } as unknown as LoadedStock
   const assignOf = new Map((o.unassigned ?? []).map((u) => [u.id, {
     queueId: u.id, assigned: null, deferredBy: u.deferredBy ?? [], blocked: u.blocked ?? [], recoveryProblem: null,
   }]))
@@ -93,6 +122,8 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
     freshnessHeld: { wip: false, owner: 'human' },
     recoveryBroken: { wip: false, owner: 'human' },
     assignmentException: { wip: false, owner: 'human' },
+    // 🔴 옛 품질 계약 기계 초안 — WIP 아님 · 사람 검토로만 나간다 (2026-09-28)
+    qualityContractMismatch: { wip: false, owner: 'human' },
     profileMismatch: { wip: false, owner: 'none' },
     gateBlocked: { wip: false, owner: 'human' },
   }
@@ -250,6 +281,73 @@ console.log('\n④ 소비자 연결 — 공용 분류를 실제로 부른다 · 
     && /stockBandOf\(publishableNow, LIMITS\)/.test(fill))
   check('🔴 wave-c 준비도가 publishableNow 로 잰다', /classification\.counts\.publishableNow/.test(wave) && !/readStock\(/.test(wave))
   check('🔴 🔴 **"러너가 먹을 수 있는 것" 이라는 거짓 문구가 없다**', !FALSE.test(code(proc)) && !FALSE.test(code(fill)))
+}
+
+console.log('\n⑤ 🔴 옛 품질 계약 기계 초안 — 큐에 남고 · 자동 발행 0 · 지금 계약의 Persona WIP 0')
+{
+  /**
+   * 🔴 반례 ① — 운영 모양: 옛 계약 기계 초안 46건(검토 대기) · 지금 계약이 올라갔다(digest 다름).
+   *    판 같고 digest 다름 · 옛 판 · 표식 없음(legacy) 셋을 섞는다 — 셋 다 정본상 "지금 계약 아님" 이다.
+   */
+  const marks: ContractMark[] = ['otherDigest', 'otherVersion', 'none']
+  const old = Array.from({ length: 46 }, (_, i) => ({ id: `v1-${i}`, code: 'HUMAN_REVIEW_REQUIRED' as const }))
+  const contractOf = Object.fromEntries(old.map((r, i) => [r.id, marks[i % 3]!])) as Record<string, ContractMark>
+  const c = classifyStock(fixture({ rejected: old, contractOf }))
+  check('🔴 🔴 **옛 계약 46건 → 전부 qualityContractMismatch** (앞판: humanReviewPending)',
+    c.counts.qualityContractMismatch === 46 && c.counts.humanReviewPending === 0, JSON.stringify(c.counts))
+  check('🔴 🔴 **지금 계약의 Persona WIP 점유 0** (앞판: 46)', c.personaWipIds.length === 0, String(c.personaWipIds.length))
+  check('🔴 자동 발행 가능 0', c.counts.publishableNow === 0)
+  check('🔴 큐에서 빠지지 않는다 — 칸의 합 = 대기열 46', STOCK_BUCKETS.reduce((n, b) => n + c.counts[b], 0) === 46 && c.queueTotal === 46)
+  check('fixture 표식은 모양이 온전하다 — 같은 판 · digest 만 다르다(모양 탓 legacy 가 아니다)',
+    readQualityContract(gateOfMark('otherDigest'))?.version === QUALITY_CONTRACT_VERSION
+    && readQualityContract(gateOfMark('otherVersion')) !== null && readQualityContract(gateOfMark('none')) === null)
+  check('🔴 표식 없음(legacy) · 옛 판 · 같은 판 다른 digest 가 모두 불일치다',
+    marks.every((m) => old.some((r) => contractOf[r.id] === m && c.ids.qualityContractMismatch.includes(r.id))))
+
+  /** 🔴 반례 ② ③ ④ — 지금 계약 검토 대기 · 발행 가능 · 사람이 검토한 옛 계약 행 */
+  const mix = classifyStock(fixture({
+    rejected: [
+      { id: 'curReview', code: 'HUMAN_REVIEW_REQUIRED' },
+      { id: 'oldReview', code: 'HUMAN_REVIEW_REQUIRED' },
+      { id: 'oldAuto', code: 'QUALITY_CONTRACT_MISMATCH' },
+      { id: 'curClosed', code: 'AUTO_READY_CLOSED' },
+    ],
+    targets: ['curReady', 'humanOld', 'humanOldDeferred'],
+    ready: ['curReady', 'humanOld'],
+    unassigned: [{ id: 'humanOldDeferred', deferredBy: ['P03'] }],
+    contractOf: { oldReview: 'otherDigest', oldAuto: 'otherDigest', humanOld: 'otherDigest', humanOldDeferred: 'none' },
+  }))
+  check('🔴 🔴 **지금 계약 검토 대기는 WIP 에 남는다** (humanReviewPending)',
+    same(mix.ids.humanReviewPending, ['curReview']) && wip(mix, 'curReview'))
+  check('🔴 🔴 **지금 계약 발행 가능 행은 기존 뜻 그대로** (publishableNow · WIP)',
+    mix.ids.publishableNow.includes('curReady') && wip(mix, 'curReady'))
+  check('🔴 🔴 **사람이 검토한 옛 계약 행은 제외하지 않는다** — selector 대상이면 배정 규칙이 정한다',
+    mix.ids.publishableNow.includes('humanOld') && mix.ids.assignmentDeferred.includes('humanOldDeferred')
+    && wip(mix, 'humanOld') && wip(mix, 'humanOldDeferred') && !mix.ids.qualityContractMismatch.includes('humanOld'))
+  check('🔴 🔴 **옛 계약 자동 도장 행(QUALITY_CONTRACT_MISMATCH) → 불일치 칸 · WIP 아님**',
+    mix.ids.qualityContractMismatch.includes('oldAuto') && !wip(mix, 'oldAuto'))
+  check('🔴 지금 계약 자동 도장 닫힘은 그대로 autoReadyClosed · WIP', same(mix.ids.autoReadyClosed, ['curClosed']) && wip(mix, 'curClosed'))
+  check('옛 계약 검토 대기 → 불일치 칸 · WIP 아님', mix.ids.qualityContractMismatch.includes('oldReview') && !wip(mix, 'oldReview'))
+  check('🔴 사람 검토로만 풀린다 — 복구 주체 human · 자동 READY 문이 아니다',
+    STOCK_BUCKET_META.qualityContractMismatch.owner === 'human' && STOCK_BUCKET_META.qualityContractMismatch.wip === false)
+
+  /** 🔴 회귀 ⑨ — 계약 칸이 생겨도 TTL · 배정 · 복구 칸은 그대로다(모든 행이 옛 계약이어도) */
+  const allOld = (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 'otherDigest' as const]))
+  const r = classifyStock(fixture({
+    targets: ['ttl', 'age', 'pinT', 'pinX', 'b', 'a'], held: [{ id: 'ttl', hold: 'TTL_EXPIRED' }, { id: 'age', hold: 'AGE_UNKNOWN' }],
+    deferred: ['pinT'], exceptions: ['pinX'], broken: ['b'], ready: ['a'],
+    contractOf: allOld(['ttl', 'age', 'pinT', 'pinX', 'b', 'a']),
+  }))
+  check('🔴 🔴 **TTL · 신선도 · 기존 배정 유예/예외 · 깨진 복구 분류는 계약과 무관하게 그대로** (selector 대상 행)',
+    same(r.ids.ttlExpired, ['ttl']) && same(r.ids.freshnessHeld, ['age']) && same(r.ids.assignmentDeferred, ['pinT'])
+    && same(r.ids.assignmentException, ['pinX']) && same(r.ids.recoveryBroken, ['b']) && same(r.ids.haltedByBrokenRecovery, ['a'])
+    && r.counts.qualityContractMismatch === 0)
+  const g = classifyStock(fixture({
+    rejected: [{ id: 'p', code: 'PROFILE' }, { id: 'gt', code: 'GATE' }, { id: 'st', code: 'AUTO_READY_STALE' }],
+    contractOf: allOld(['p', 'gt', 'st']),
+  }))
+  check('🔴 profile · gate · 도장 낡음 칸도 그대로 (계약 칸이 가로채지 않는다)',
+    same(g.ids.profileMismatch, ['p']) && same(g.ids.gateBlocked, ['gt']) && same(g.ids.autoReadyStale, ['st']))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
