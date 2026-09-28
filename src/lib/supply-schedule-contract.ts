@@ -34,9 +34,19 @@ export const SUPPLY_BUDGET_ENV_NAMES = [
   'SORAN_LLM_RESERVE_HEADROOM',
 ] as const
 
-/** 회차당 상한 — 🔴 정본(`supply-workset`)과 같은 값이어야 한다 */
-export const SUPPLY_WORKSET_PER_RUN = 5
-export const SUPPLY_REQUESTS_PER_RUN = 20
+/**
+ * 회차당 상한 — 🔴 정본(`supply-workset`)과 같은 값이어야 한다 (검사가 대조한다).
+ *
+ * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 원천 하나에 판정 1 · 생성 3 이므로
+ *    judge 10 · draft 30 · 합 40. 러너는 이 값을 **단계마다 자식 env 로** 싣는다
+ *    (`SORAN_LLM_RUN_REQUEST_CAP` — 장부 회차 id 도 `-j`·`-d` 로 갈린다).
+ * 🔴 정본 env 의 `SORAN_LLM_RUN_REQUEST_CAP`(운영 20)은 **손으로 부른 단독 실행**의 상한이다.
+ *    공급 러너의 자식은 그 값을 보지 않는다 — 단계 env 가 덮는다. 그래서 env 값은 이 합 이하면 된다.
+ */
+export const SUPPLY_WORKSET_PER_RUN = 10
+export const SUPPLY_JUDGE_REQUESTS_PER_RUN = 10
+export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 30
+export const SUPPLY_REQUESTS_PER_RUN = 40
 
 /**
  * 🔴 **창업자 승인값 $0.30/day** (2026-09-22 승인).
@@ -50,8 +60,58 @@ export const SUPPLY_REQUESTS_PER_RUN = 20
  *    그날 이미 정산된 액수가 이 상한에 함께 든다.
  * 🔴 승인값이 `null` 이면 어떤 회차도 돌지 않는다(`NO_BUDGET`).
  */
-export const SUPPLY_DAILY_USD_PROPOSED = 0.30
-export const SUPPLY_DAILY_USD_APPROVED: number | null = 0.30
+/**
+ * 🔴 **계약 천장 $0.50/day** (2026-09-28 공급 가속 P0). 위 $0.30 근거는 그대로 남긴다 —
+ *    천장은 "여기까지 허용한다" 이지 "이만큼 쓴다" 가 아니다.
+ *
+ *    🔴 **운영 env(`SORAN_LLM_DAILY_BUDGET_USD`)는 0.30 그대로다** — 이 PR 은 env 를 바꾸지 않는다.
+ *       장부는 env 값으로 막는다. 묶음 10 에서 하루 기대 지출(`estimateSupplySpend`)이 0.30 에
+ *       가까우므로, 무거운 날에는 **늦은 회차(21:15 · 22:15)가 `DAILY_EXHAUSTED` 로 보류될 수 있다**
+ *       (fail-closed · 입력은 남고 다음 날 첫 회차가 집는다). env 를 올릴지는 사람이 정한다 — 이 값 이하로만.
+ */
+export const SUPPLY_DAILY_USD_PROPOSED = 0.50
+export const SUPPLY_DAILY_USD_APPROVED: number | null = 0.50
+
+/**
+ * 🔴 **실측 단가** — 장부(`llm-ledger/2026-09-24~27.jsonl`) 정산액을 공급 회차별로 모은 값.
+ *    묶음 5 인 23회차(유료 판정 111건 · 생성 70건). 추정에만 쓴다 — 막는 것은 장부다.
+ *      판정 1회 평균 $0.002020 (최대 $0.002386) · 생성 1회 평균 $0.003695 (최대 $0.004317)
+ *      원천당 판정 0.974회 · 생성 0.722회 (평균)
+ */
+export const SUPPLY_MEASURED = Object.freeze({
+  window: '2026-09-24~27 · 23 runs · workset 5',
+  judgeUsdPerCall: 0.002020,
+  judgeUsdPerCallMax: 0.002386,
+  draftUsdPerCall: 0.003695,
+  draftUsdPerCallMax: 0.004317,
+  judgeCallsPerSource: 0.974,
+  draftCallsPerSource: 0.722,
+} as const)
+
+export type SupplySpendEstimate = {
+  /** 실측 평균 호출 수 × 평균 단가 */
+  expectedPerRun: number
+  expectedPerDay: number
+  /** 🔴 상한을 **전부** 쓰고 최대 단가일 때 — judge N · draft 3N */
+  capPerRun: number
+  capPerDay: number
+  /** 하루 예산이 주어졌을 때 기대 지출로 **다 돌 수 있는 회차 수** (정수 · 최대 하루 회차 수) */
+  expectedRunsWithin: (dailyUsd: number) => number
+}
+
+/** 🔴 **묶음 크기 → 하루 지출 추정.** 순수 함수 — 검사와 PR 문구가 같은 값을 쓴다 */
+export function estimateSupplySpend(limit: number, runsPerDay: number = SUPPLY_RUNS_PER_DAY): SupplySpendEstimate {
+  const m = SUPPLY_MEASURED
+  const expectedPerRun = limit * (m.judgeCallsPerSource * m.judgeUsdPerCall + m.draftCallsPerSource * m.draftUsdPerCall)
+  const capPerRun = limit * (1 * m.judgeUsdPerCallMax + 3 * m.draftUsdPerCallMax)
+  return {
+    expectedPerRun,
+    expectedPerDay: expectedPerRun * runsPerDay,
+    capPerRun,
+    capPerDay: capPerRun * runsPerDay,
+    expectedRunsWithin: (dailyUsd) => Math.min(runsPerDay, Math.floor(dailyUsd / expectedPerRun)),
+  }
+}
 
 /**
  * 🔴 **예약 여유 배수.** 입력 토큰 추정치에만 곱한다 — 출력은 `maxOutputTokens` 라
@@ -88,10 +148,11 @@ export function describeSupplySchedule(): string {
   const slots = SUPPLY_RUN_SLOTS_KST.map((s) => `${s.hour}:${String(s.minute).padStart(2, '0')}`).join(' · ')
   return [
     `회차 ${SUPPLY_RUNS_PER_DAY}회/day — ${slots} KST`,
-    `회차당 원천 ${SUPPLY_WORKSET_PER_RUN} · 요청 ${SUPPLY_REQUESTS_PER_RUN}`,
+    `회차당 원천 ${SUPPLY_WORKSET_PER_RUN} · 요청 ${SUPPLY_REQUESTS_PER_RUN}`
+      + ` (judge ${SUPPLY_JUDGE_REQUESTS_PER_RUN} · draft ${SUPPLY_DRAFT_REQUESTS_PER_RUN})`,
     SUPPLY_DAILY_USD_APPROVED === null
       ? `🔴 하루 비용 상한 **미승인** — 제안값 $${SUPPLY_DAILY_USD_PROPOSED.toFixed(2)}`
-      : `하루 비용 상한 $${SUPPLY_DAILY_USD_APPROVED.toFixed(2)}`,
+      : `하루 비용 계약 천장 $${SUPPLY_DAILY_USD_APPROVED.toFixed(2)} — 🔴 장부는 env 값으로 막는다(운영 0.30 · 이 천장 이하)`,
     `예산 env ${SUPPLY_BUDGET_ENV_NAMES.join(' · ')} — 🔴 정본 env 파일(~/${SUPPLY_ENV_FILE_REL}) 한 곳에 둔다`,
     `여유 배수 ${SUPPLY_RESERVE_HEADROOM} (입력 추정치에만 곱한다 · 출력은 확정 한도)`,
     `🔴 스위치 ${SUPPLY_ENABLE_ENV} 가 true 여야 --live 가 산다`,

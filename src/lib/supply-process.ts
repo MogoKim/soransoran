@@ -29,6 +29,20 @@ import { STOCK_BANDS } from './supply-stock-plan'
 //    한쪽만 고쳐진다 — 실제로 그랬다 (2026-09-11 Codex 리뷰).
 import { completedAdaptKeys } from './micro-seed-82cook-thin-adapt'
 import type { FillRecord } from './supply-fill-retry'
+import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+
+/**
+ * 🔴 **한 회차 적재 천장** (2026-09-28) — 묶음 크기 천장과 같다(10).
+ *    `--up-to` 는 버퍼 여유 · 묶음 크기 · 이 천장 중 **가장 작은 값**이다. 이월 파일을 얹어도 늘지 않는다.
+ */
+export const FILL_ROUND_CAP = SUPPLY_WORKSET_PER_RUN
+
+/** 🔴 적재 상한 계산은 이 함수 하나다 — 계획 두 곳이 같은 식을 쓴다 */
+export function fillUpToOf(bufferUpTo: number, limit: number): number {
+  const b = Number.isInteger(bufferUpTo) && bufferUpTo > 0 ? bufferUpTo : 0
+  const l = Number.isInteger(limit) && limit > 0 ? limit : 0
+  return Math.min(b, l, FILL_ROUND_CAP)
+}
 
 /** 🔴 처리기 kill switch. plist 를 지우지 않고도 멈출 수 있어야 한다 */
 export const PROCESS_KILL_SWITCH_ENV = 'SORAN_SUPPLY_PROCESS_ENABLED'
@@ -443,10 +457,13 @@ export function planBoundedCommonPhase(
      * 🔴 상한은 이월이 있어도 그대로다 — 이월이 이번 회차 몫을 늘리지 않는다.
      */
     const inputs = [workset.candidatesPath, ...(workset.carryOverPaths ?? [])]
-    out.push(mk('fill', [
-      '--apply', `--input=${inputs.join(',')}`,
-      `--up-to=${Math.min(policy.upTo, workset.limit)}`,
-    ], null))
+    const upTo = fillUpToOf(policy.upTo, workset.limit)
+    if (upTo > 0) {
+      out.push(mk('fill', [
+        '--apply', `--input=${inputs.join(',')}`,
+        `--up-to=${upTo}`,
+      ], null))
+    }
   }
   return out
 }
@@ -460,10 +477,11 @@ export function planBoundedCommonPhase(
 export function planCarryOverFill(
   policy: BufferPolicy, carryOverPaths: readonly string[], limit: number,
 ): StagePlan[] {
-  if (!policy.fill || policy.upTo <= 0 || carryOverPaths.length === 0 || limit < 1) return []
+  const upTo = fillUpToOf(policy.upTo, limit)
+  if (!policy.fill || upTo <= 0 || carryOverPaths.length === 0) return []
   return [mk('fill', [
     '--apply', `--input=${carryOverPaths.join(',')}`,
-    `--up-to=${Math.min(policy.upTo, limit)}`,
+    `--up-to=${upTo}`,
   ], null)]
 }
 

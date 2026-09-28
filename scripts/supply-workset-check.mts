@@ -14,7 +14,11 @@ import {
   artifactOutcome, baseIdOf, judgementOutcome, judgeStageBudget, readWorkset, selectWorkset,
   concludedSourceIds, attemptedOutcomes, latestOutcomes, parseInstantMs,
   worksetAxisCaps, worksetAxisOf, worksetAxisQuota, WORKSET_RAW_SLOT_EVERY,
-  OUTCOME_STATES, CONCLUDED_STATES, STAGE_RANK, WORKSET_RETRY_RESERVE, WORKSET_RETRY_STARVE_MS,
+  OUTCOME_STATES, CONCLUDED_STATES, STAGE_RANK, worksetRetryReserve, WORKSET_RETRY_STARVE_MS,
+  attributeRuns, runWindowOf, isLaterOutcome, runClockOf, retryTierOf, resolveWorksetLimit,
+  queuedSourceKeysOf, hasSource, originalSourceOf, EMPTY_SOURCE_KEYS, WORKSET_MAX_LIMIT,
+  shadowRecordOutcome,
+  type RunWindow, type SourceKeySet,
   type PriorArtifactRow, type PriorJudgementRow, type PriorOutcome,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
   WORKSET_VERSION, worksetFileName, type WorksetRow,
@@ -38,6 +42,7 @@ import {
   buildSpeakerPlanPayload, buildSpeakerPlanSystemPrompt,
 } from './lib/content-core-prompts.mjs'
 import { buildEvidencePacket } from '../src/lib/content-core/evidence'
+import { selectCarryOver } from '../src/lib/supply-fill-retry'
 import type { PoolCard } from '../src/lib/persona-pool-card'
 import {
   artifactRetryable, reviewShapeOk, DIRECT_REASONS, INCOMPLETE_CAUSES, NOT_RUN_CAUSES,
@@ -101,14 +106,20 @@ const sel = (o: {
   queuePending?: readonly string[]
   concluded?: readonly string[]
   attempted?: readonly string[] | Readonly<Record<string, string>>
+  /** 🔴 이미 본 원천을 **모양 그대로** 줄 때 — 차례(`retryTierOf`)를 시험한다 */
+  attemptedOutcomes?: ReadonlyMap<string, PriorOutcome>
+  queuedSources?: SourceKeySet
+  carriedOver?: SourceKeySet
   limit?: number
   takenAt?: Date
 }) => selectWorkset({
   rows: o.rows,
   humanDecided: new Set(o.humanDecided ?? []),
   queuePending: new Set(o.queuePending ?? []),
+  queuedSources: o.queuedSources ?? EMPTY_SOURCE_KEYS,
+  carriedOver: o.carriedOver ?? EMPTY_SOURCE_KEYS,
   concluded: new Set(o.concluded ?? []),
-  attempted: attemptedMap(o.attempted ?? []),
+  attempted: o.attemptedOutcomes ?? attemptedMap(o.attempted ?? []),
   limit: o.limit ?? 5, runId: RUN, takenAt: o.takenAt ?? NOW,
 })
 
@@ -143,7 +154,19 @@ console.log('\n② 🔴 단계별 상한 — 앞 단계가 뒤 단계를 굶기�
   check('🔴 판정 1 · 생성 3 · 전체 4 (원천당)',
     WORKSET_STAGE_PER_SOURCE.judge === 1 && WORKSET_STAGE_PER_SOURCE.draft === 3
     && WORKSET_TOTAL_PER_SOURCE === 4)
-  check('🔴 기본 묶음 크기는 5다', WORKSET_DEFAULT_LIMIT === 5)
+  check('🔴 🔴 **기본 묶음 크기는 10 이다** (2026-09-28 공급 가속)', WORKSET_DEFAULT_LIMIT === 10)
+  {
+    const b10 = judgeStageBudget(10)
+    check('🔴 🔴 **묶음 10 → judge 10 · draft 30 · 합 40**',
+      b10.ok && b10.perStage.judge === 10 && b10.perStage.draft === 30 && b10.total === 40,
+      b10.ok ? JSON.stringify(b10) : b10.reason)
+  }
+  check('🔴 🔴 **천장(10) 위는 거부한다 — 무제한 호출 없음**',
+    WORKSET_MAX_LIMIT === 10 && judgeStageBudget(11).ok === false && judgeStageBudget(100).ok === false)
+  check('🔴 🔴 **--workset-limit 해석 — 없으면 10 · 천장 위·모양 틀림은 -1**',
+    resolveWorksetLimit([]) === 10 && resolveWorksetLimit(['--workset-limit=7']) === 7
+    && resolveWorksetLimit(['--workset-limit=11']) === -1 && resolveWorksetLimit(['--workset-limit=5x']) === -1
+    && resolveWorksetLimit(['--workset-limit=0']) === -1 && resolveWorksetLimit(['--workset-limit=-3']) === -1)
   for (const bad of [0, -1, 2.5, Number.NaN]) {
     check(`🔴 상한이 ${String(bad)} 이면 거부한다`, judgeStageBudget(bad).ok === false)
   }
@@ -846,7 +869,18 @@ console.log('\n⑧-b 🔴 🔴 지속 유입에서도 재시도가 굶지 않는
     check('🔴 🔴 **신규 5건 × 10회차에도 재시도가 매 회차 자리를 얻는다**',
       pickedRounds === 10, `${pickedRounds}/10`)
   }
-  check('🔴 상한 5에서 신규는 최대 4다', WORKSET_RETRY_RESERVE === 1)
+  check('🔴 🔴 **재시도 자리 — 상한 5 에서 1 · 상한 10 에서 2 · 상한 1 은 0(기다린 시간 규칙)**',
+    worksetRetryReserve(5) === 1 && worksetRetryReserve(10) === 2 && worksetRetryReserve(7) === 1
+    && worksetRetryReserve(2) === 1 && worksetRetryReserve(1) === 0,
+    `5→${worksetRetryReserve(5)} · 10→${worksetRetryReserve(10)}`)
+  {
+    // 🔴 상한 10 · 신규가 넘쳐도 재시도 **2** 자리 — 1 로 되돌리면 여기서 깨진다
+    const rows = [...Array.from({ length: 20 }, (_, i) => R(`n${i}`, 90 - i)), R('r1', 1), R('r2', 1), R('r3', 1)]
+    const plan = sel({ rows, attempted: { r1: at(1), r2: at(2), r3: at(3) }, limit: 10 })
+    const retries = plan.workset.sourceIds.filter((x) => x.startsWith('r'))
+    check('🔴 🔴 **상한 10 — 신규 8 + 재시도 2 (오래 기다린 r1 · r2)**',
+      plan.workset.sourceIds.length === 10 && retries.join(',') === 'r1,r2', plan.workset.sourceIds.join(','))
+  }
   {
     const rows = [
       ...Array.from({ length: 6 }, (_, i) => R(`n${i}`, 90 - i)),
@@ -1098,6 +1132,330 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
     check('🔴 러너가 축별 자리를 로그에 적는다 (정본 plan.axis)',
       /plan\.axis\.quota\.seed/.test(runner) && /plan\.axis\.quota\.raw/.test(runner) && /worksetAxisOf\(r\)/.test(runner))
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 공급 가속 P0 (2026-09-28) — ⑪ 시계 역전 · ⑫ 같은 원천 두 번째 글 금지 · ⑬ 운영 33원천 · ⑭ 재시도 차례
+// ─────────────────────────────────────────────────────────
+const P0_CANON = {
+  ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2c', judgeModel: 'claude-haiku-4.5',
+}
+const P0_BASE: GenerationContract = {
+  sourceInputHash: 'h1',
+  pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
+  promptVersion: CONTENT_CORE_PROMPT_VERSION,
+  speakerPlanVersion: SPEAKER_PLAN_VERSION,
+  reviewVersion: REVIEW_VERSION,
+  planPromptDigest: 'plan000000000000',
+  stageModels: STAGE_MODEL,
+  stageMaxOutputLabel: STAGE_MAX_OUTPUT_LABEL,
+  voiceAssetDigest: 'v1', personaPoolDigest: 'p1',
+}
+const pj = (o: Partial<PriorJudgementRow> = {}): PriorOutcome => judgementOutcome({
+  sourceArticleId: 's1', inputHash: 'h1',
+  ruleVersion: P0_CANON.ruleVersion, promptVersion: P0_CANON.promptVersion, model: P0_CANON.judgeModel,
+  decision: 'AUTO_SEED', semanticStatus: 'ok', decidedAt: '2026-09-24T05:15:10.850Z', ...o,
+}, 'h1', P0_CANON)!
+const pa = (o: Partial<PriorArtifactRow> = {}): PriorOutcome => artifactOutcome({
+  sourceArticleId: 's1', artifactVersion: ARTIFACT_VERSION, contract: P0_BASE,
+  outcome: 'hold', retryable: false, generatedAt: '2026-09-24T05:15:00.850Z', ...o,
+}, P0_BASE, ARTIFACT_VERSION)!
+/** 🔴 공급 러너가 적는 회차 기록 모양 그대로 — 칸만 읽는다 */
+const runRecord = (runId: string, startedAt: string, judge: [string, string] | null): unknown => ({
+  runId, startedAt, status: 'done', completedAt: null,
+  stages: judge === null ? [] : [
+    { stage: 'judge', source: null, status: 'ok', exitCode: 0, startedAt: judge[0], endedAt: judge[1], note: '' },
+    { stage: 'draft', source: null, status: 'ok', exitCode: 0, startedAt: judge[1], endedAt: judge[1], note: '' },
+  ],
+})
+const latestOf = (rows: readonly PriorOutcome[]): PriorOutcome | undefined => latestOutcomes(rows).get('s1')
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑪ 🔴 🔴 같은 회차 안의 순서는 단계 순서다 — 벽시계가 아니다 (2026-09-28 시계 역전)')
+// ─────────────────────────────────────────────────────────
+{
+  const RUN_AT = '2026-09-24T05:15:00.850Z'
+  const W1 = runWindowOf(runRecord('20260924-051500', RUN_AT, ['2026-09-24T05:15:02.000Z', '2026-09-24T05:15:20.000Z']))
+  const NEXT_AT = '2026-09-24T08:15:04.100Z'
+  const W2 = runWindowOf(runRecord('20260924-081504', NEXT_AT, ['2026-09-24T08:15:06.000Z', '2026-09-24T08:15:30.000Z']))
+  check('🔴 회차 기록에서 구간을 읽는다 — runId · 회차 시각 · 판정 구간',
+    W1 !== null && W1.runId === '20260924-051500' && W1.runAtMs === Date.parse(RUN_AT)
+    && W1.judge?.startMs === Date.parse('2026-09-24T05:15:02.000Z') && W2 !== null)
+  const WINS: RunWindow[] = [W1!, W2!]
+
+  // ── (1) 같은 회차 · 판정이 초안보다 10초 늦게 적혔다 → 초안이 이긴다 ──
+  const judgeLate = pj({ decidedAt: '2026-09-24T05:15:10.850Z', runAt: RUN_AT, runId: '20260924-051500' })
+  const draftHold = pa({ generatedAt: RUN_AT, outcome: 'hold', retryable: false })
+  check('🔴 🔴 **(1) 같은 회차 · 판정 decidedAt 이 10초 늦어도 초안(terminal)이 최신이다** — 판정 기록 칸(runAt)',
+    latestOf([judgeLate, draftHold])?.stage === 'draft' && latestOf([draftHold, judgeLate])?.stage === 'draft'
+    && latestOf([judgeLate, draftHold])?.state === 'terminal',
+    JSON.stringify(latestOf([judgeLate, draftHold])))
+  const legacyJudge = pj({ decidedAt: '2026-09-24T05:15:10.850Z' })
+  check('🔴 🔴 **(1) 벽시계만 보면 판정(seeded)이 이긴다** — 결함이 fixture 에서 재현된다',
+    latestOf([legacyJudge, draftHold])?.stage === 'judge' && latestOf([legacyJudge, draftHold])?.state === 'seeded')
+  check('🔴 🔴 **(1) 회차 칸이 없는 옛 판정도 회차 기록의 판정 구간으로 같은 회차를 찾는다 → 초안이 이긴다**', (() => {
+    const at = attributeRuns([legacyJudge, draftHold], WINS)
+    return latestOf(at)?.stage === 'draft' && at[0]?.run?.id === '20260924-051500'
+      && at[0]?.run?.atMs === Date.parse(RUN_AT) && at[1]?.run?.id === '20260924-051500'
+  })())
+  check('🔴 🔴 **(1) 판정 기록 줄이 적은 runAt 을 읽는다** (`shadowRecordOutcome`)', (() => {
+    const o = shadowRecordOutcome({
+      sourceArticleId: 's1', inputHash: 'h1', ruleVersion: P0_CANON.ruleVersion,
+      promptVersion: P0_CANON.promptVersion, model: P0_CANON.judgeModel, decision: 'AUTO_SEED',
+      semanticStatus: 'ok', decidedAt: '2026-09-24T05:15:10.850Z', runAt: RUN_AT, runId: '20260924-051500',
+    }, new Map([['s1', 'h1']]), P0_CANON)
+    return o?.run?.atMs === Date.parse(RUN_AT) && o.run.id === '20260924-051500' && o.atMs === Date.parse('2026-09-24T05:15:10.850Z')
+  })())
+
+  // ── (2) 다음 회차의 판정은 앞 회차의 초안을 이긴다 ──
+  const draftPrev = pa({ generatedAt: RUN_AT, outcome: 'adopt', retryable: false })
+  const judgeNext = pj({ decidedAt: '2026-09-24T08:15:08.000Z', decision: 'AUTO_HOLD', runAt: NEXT_AT, runId: '20260924-081504' })
+  check('🔴 🔴 **(2) 다음 회차 판정(HOLD)이 앞 회차 초안(candidate)을 이긴다**',
+    latestOf([draftPrev, judgeNext])?.stage === 'judge' && latestOf([judgeNext, draftPrev])?.state === 'terminal')
+  check('🔴 🔴 **(2) 회차 칸 없는 옛 판정도 다음 회차 구간으로 찾으면 앞 회차 초안을 이긴다**', (() => {
+    const old = pj({ decidedAt: '2026-09-24T08:15:08.000Z', decision: 'AUTO_HOLD' })
+    const at = attributeRuns([draftPrev, old], WINS)
+    return latestOf(at)?.stage === 'judge' && at[1]?.run?.id === '20260924-081504'
+  })())
+  check('🔴 🔴 **(2) 다음 회차 초안은 그 회차 판정 뒤다 — 회차가 바뀌어도 규칙은 하나**', (() => {
+    const d2 = pa({ generatedAt: NEXT_AT, outcome: 'hold', retryable: false })
+    return latestOf([judgeNext, d2, draftPrev, judgeLate])?.stage === 'draft'
+      && latestOf([judgeNext, d2, draftPrev, judgeLate])?.atMs === Date.parse(NEXT_AT)
+  })())
+
+  // ── (3) 시각이 같으면 초안이 이긴다 ──
+  check('🔴 🔴 **(3) 같은 시각이면 초안이 이긴다** — 회차 정보가 없어도',
+    latestOf([pj({ decidedAt: RUN_AT }), pa({ generatedAt: RUN_AT })])?.stage === 'draft'
+    && latestOf([pa({ generatedAt: RUN_AT }), pj({ decidedAt: RUN_AT })])?.stage === 'draft')
+  check('🔴 🔴 **(3) 같은 회차 시각이면 기록 시각과 무관하게 초안이 이긴다** (`isLaterOutcome`)',
+    isLaterOutcome(draftHold, judgeLate) && !isLaterOutcome(judgeLate, draftHold)
+    && runClockOf(judgeLate) === runClockOf(draftHold))
+
+  // ── (4) 초안이 terminal 이면 재시도 풀을 떠난다 ──
+  check('🔴 🔴 **(4) 같은 회차 terminal 초안은 재시도 풀을 떠난다** (concluded)', (() => {
+    const at = attributeRuns([legacyJudge, draftHold], WINS)
+    const done = concludedSourceIds(at)
+    const p = sel({
+      rows: [ROW({ sourceArticleId: 's1', commentCount: 50 }), ROW({ sourceArticleId: 'n1', commentCount: 1 })],
+      concluded: [...done], attemptedOutcomes: attemptedOutcomes(at), limit: 5,
+    })
+    return done.has('s1') && !p.workset.sourceIds.includes('s1') && p.dropped.terminal === 1
+  })())
+  check('🔴 🔴 **(4) 벽시계 규칙이면 같은 원천이 seeded 로 남아 재시도 풀에 머문다** — 고치기 전 모양',
+    !concludedSourceIds([legacyJudge, draftHold]).has('s1'))
+  check('🔴 retryable 초안은 끝이 아니다 — 재시도 풀에 남는다',
+    !concludedSourceIds(attributeRuns([legacyJudge, pa({ generatedAt: RUN_AT, retryable: true })], WINS)).has('s1'))
+
+  // ── 경계 — 모르는 것을 안다고 하지 않는다 ──
+  check('🔴 판정 구간 밖(손으로 부른 판정)은 회차를 붙이지 않는다 — 자기 시각이다', (() => {
+    const at = attributeRuns([pj({ decidedAt: '2026-09-24T06:00:00.000Z' })], WINS)
+    return at[0]?.run === undefined
+  })())
+  check('🔴 구간이 겹치는 두 회차에 걸리면 붙이지 않는다', (() => {
+    const dup = runWindowOf(runRecord('20260924-051501', '2026-09-24T05:15:01.000Z', ['2026-09-24T05:15:05.000Z', '2026-09-24T05:15:30.000Z']))!
+    return attributeRuns([legacyJudge], [...WINS, dup])[0]?.run === undefined
+  })())
+  check('🔴 기록이 적은 회차가 우선이다 — 구간으로 덮어쓰지 않는다',
+    attributeRuns([judgeNext], WINS)[0]?.run?.id === '20260924-081504'
+    && attributeRuns([pj({ decidedAt: '2026-09-24T05:15:10.850Z', runAt: NEXT_AT, runId: 'X' })], WINS)[0]?.run?.id === 'X')
+  check('🔴 모양이 틀린 회차 기록은 구간이 아니다',
+    runWindowOf(null) === null && runWindowOf({ runId: '', startedAt: RUN_AT }) === null
+    && runWindowOf({ runId: 'r', startedAt: 'not-a-time' }) === null
+    && runWindowOf(runRecord('r', RUN_AT, ['2026-09-24T05:15:20.000Z', '2026-09-24T05:15:02.000Z']))?.judge === null)
+  check('🔴 🔴 **파일 이름에서 회차를 읽지 않는다** — 정본 함수에 파일명 파싱이 없다', (() => {
+    const lib = readFileSync('src/lib/supply-workset.ts', 'utf-8')
+    const reader = readFileSync('scripts/lib/prior-outcomes.mts', 'utf-8')
+    const body = lib.slice(lib.indexOf('export function runWindowOf'), lib.indexOf('/** 🔴 `#` 뒤 조각을 뗀 원문 id'))
+    return !/auto-judge-|auto-draft-|\\d\{8\}-\\d\{6\}/.test(body) && /attributeRuns\(out, readRunWindows\(o\.dataDir\)\)/.test(reader)
+  })())
+  check('🔴 🔴 **판정 러너가 회차 칸(runAt · runId)을 기록에 적는다**', (() => {
+    const judge = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
+    return /const RUN_CLOCK = runClockFrom\(process\.env\)/.test(judge)
+      && /runAt: RUN_CLOCK\.at\.toISOString\(\)/.test(judge)
+      && /JSON\.stringify\(\{ \.\.\.jd, \.\.\.runStamp \}\)/.test(judge)
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑫ 🔴 🔴 같은 원문으로 두 번째 글을 만들지 않는다 (2026-09-28 · C)')
+// ─────────────────────────────────────────────────────────
+{
+  const at = (h: number): string => `2026-09-20T${String(h).padStart(2, '0')}:00:00.000Z`
+  const SITE = (id: string, site: string, c = 10): WorksetRow => ({ ...ROW({ sourceArticleId: id, commentCount: c }), sourceSite: site })
+  const queued = queuedSourceKeysOf([
+    // 기계 행 · 발행 완료 — 상태를 보지 않는다
+    { sourceSite: 'publish-candidate:auto:navercafe:wgang', sourceArticleId: 'p1-abcdef12' },
+    // 사람 행 · `#` 조각이 있는 원천
+    { sourceSite: 'publish-candidate:navercafe:wgang', sourceArticleId: 'p2#c3-1234abcd' },
+    // 글(Post) 쪽 옛 모양 — `사이트:id`
+    { sourceSite: '82cook', sourceArticleId: '82cook:777' },
+    // 빈 id 는 아무것도 막지 않는다
+    { sourceSite: 'publish-candidate:auto:navercafe:wgang', sourceArticleId: '' },
+  ])
+  check('🔴 원래 원천으로 되돌린다 — synthetic 접두 · 해시 · `#` 조각 · `사이트:` 접두',
+    JSON.stringify(originalSourceOf('publish-candidate:auto:navercafe:wgang', 'p1-abcdef12')) === JSON.stringify({ site: 'navercafe:wgang', id: 'p1' })
+    && JSON.stringify(originalSourceOf('publish-candidate:navercafe:wgang', 'p2#c3-1234abcd')) === JSON.stringify({ site: 'navercafe:wgang', id: 'p2' })
+    && JSON.stringify(originalSourceOf('navercafe:remonterrace', 'navercafe:remonterrace:34783204')) === JSON.stringify({ site: 'navercafe:remonterrace', id: '34783204' })
+    && originalSourceOf('x', '') === null && originalSourceOf(null, null) === null)
+  check('🔴 사이트까지 맞춘다 — 다른 카페의 같은 글 번호는 다른 원천이다',
+    hasSource(queued, 'navercafe:wgang', 'p1') && !hasSource(queued, 'navercafe:remonterrace', 'p1')
+    && hasSource(queued, 'navercafe:wgang', 'p2#c9') && hasSource(queued, '82cook', '777'))
+  check('🔴 행의 사이트를 모르면 id 만으로 막는다 — 모르는 사이트로 중복을 통과시키지 않는다',
+    hasSource(queued, '', 'p1') && !hasSource(queued, '', 'zzz'))
+
+  const rows = [
+    SITE('p1', 'navercafe:wgang', 90), SITE('p2#c9', 'navercafe:wgang', 80), SITE('777', '82cook', 70),
+    SITE('p1', 'navercafe:remonterrace', 60), SITE('fresh', 'navercafe:wgang', 50),
+  ]
+  // 🔴 같은 id 두 사이트는 `selectWorkset` 이 id 로 합친다 — 그래서 다른 카페 행은 id 를 달리해 본다
+  const rows2 = [...rows.slice(0, 3), SITE('q1', 'navercafe:remonterrace', 60), SITE('fresh', 'navercafe:wgang', 50)]
+  const p = sel({ rows: rows2, queuedSources: queued, limit: 10 })
+  check('🔴 🔴 **발행된 형제가 있는 원천 · `#` 형제 · 옛 글 원천은 고르지 않는다**',
+    p.workset.sourceIds.join(',') === 'q1,fresh' && p.dropped.alreadyQueued === 3,
+    `${p.workset.sourceIds.join(',')} · alreadyQueued ${p.dropped.alreadyQueued}`)
+  check('🔴 🔴 **재시도 풀에서도 빠진다 — candidate 로 남아 있던 원천**', (() => {
+    const att = new Map<string, PriorOutcome>([
+      ['p1', pa({ sourceArticleId: 'p1', outcome: 'adopt', retryable: false })],
+      ['q1', pa({ sourceArticleId: 'q1', outcome: 'adopt', retryable: false })],
+    ])
+    const r = sel({ rows: rows2, queuedSources: queued, attemptedOutcomes: att, limit: 10 })
+    return !r.workset.sourceIds.includes('p1') && r.workset.sourceIds.includes('q1')
+  })())
+  check('🔴 🔴 **변이 대조 — 빈 집합이면(앞판) 발행된 원천이 다시 뽑힌다**',
+    sel({ rows: rows2, limit: 10 }).workset.sourceIds.includes('p1'))
+  check('🔴 러너가 큐 **전체**(상태 무관)와 글 원천을 읽어 넘긴다 — 미발행만이 아니다', (() => {
+    const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+    return /queuedSources = queuedSourceKeysOf\(\[/.test(runner)
+      && /prisma\.post\.findMany\(\{\s*where: \{ sourceArticleId: \{ not: null \} \}/.test(runner)
+      && /queuedSources,\n/.test(runner)
+      && /if \(snapOk && queuedSources !== null && policy\.llm\)/.test(runner)
+  })())
+
+  // ── (5) 적재 실패 후보만 이월로 되살린다 — 다시 만들지 않는다 ──
+  const cand = (id: string): PriorOutcome => pa({ sourceArticleId: id, outcome: 'adopt', retryable: false, generatedAt: at(3) })
+  const att5 = new Map<string, PriorOutcome>([['c1', cand('c1')], ['c2', cand('c2')], ['c3', cand('c3')]])
+  const carried = queuedSourceKeysOf([{ sourceSite: 'navercafe:wgang', sourceArticleId: 'c1' }])
+  const queued5 = queuedSourceKeysOf([{ sourceSite: 'publish-candidate:auto:navercafe:wgang', sourceArticleId: 'c2-0badf00d' }])
+  const p5 = sel({
+    rows: [SITE('c1', 'navercafe:wgang', 5), SITE('c2', 'navercafe:wgang', 5), SITE('c3', 'navercafe:wgang', 5)],
+    queuedSources: queued5, carriedOver: carried, attemptedOutcomes: att5, limit: 10,
+  })
+  check('🔴 🔴 **(5) 적재 실패 후보(c1)는 이월이 적재한다 — 묶음이 다시 만들지 않는다**',
+    !p5.workset.sourceIds.includes('c1') && p5.dropped.carriedOver === 1)
+  check('🔴 🔴 **(5) 큐 행이 이미 있는 후보(c2)는 다시 만들지 않는다**',
+    !p5.workset.sourceIds.includes('c2') && p5.dropped.alreadyQueued === 1)
+  check('🔴 (5) 큐에도 이월에도 없는 candidate(c3)는 재시도로 남는다 — 기한 밖 등',
+    p5.workset.sourceIds.join(',') === 'c3')
+  check('🔴 🔴 **(5) 이월은 적재를 끝내지 못한 파일만 고르고 그 원천을 넘긴다**', (() => {
+    const env = {}
+    const r = selectCarryOver({
+      files: [
+        { name: 'auto-draft-20260927-051506.candidates.json', envelope: env, candidateCount: 1, sources: [{ sourceSite: 'navercafe:wgang', sourceArticleId: 'c1' }] },
+        { name: 'auto-draft-20260927-081505.candidates.json', envelope: env, candidateCount: 1, sources: [{ sourceSite: 'navercafe:wgang', sourceArticleId: 'c9' }] },
+      ],
+      runs: [
+        { runId: '20260927-051506', stages: [{ stage: 'draft', status: 'ok' }, { stage: 'fill', status: 'failed' }] },
+        { runId: '20260927-081505', stages: [{ stage: 'draft', status: 'ok' }, { stage: 'fill', status: 'ok' }] },
+      ],
+      currentRunId: '20260927-121504', nowMs: Date.parse('2026-09-27T12:15:04Z'),
+    })
+    const picked = r.picked.map((x) => x.name)
+    // 🔴 품질 계약이 빈 봉투는 CONTRACT 로 빠질 수 있다 — 여기서는 "끝낸 파일은 고르지 않는다" 와 원천 전달만 본다
+    return !picked.includes('auto-draft-20260927-081505.candidates.json')
+      && r.rejected.some((x) => x.name === 'auto-draft-20260927-081505.candidates.json' && x.code === 'COMPLETED')
+      && r.picked.every((x) => x.sources.length === x.candidateCount)
+  })())
+  check('🔴 러너가 이월 원천을 묶음에 넘긴다', /carriedOver: queuedSourceKeysOf\(carry\.picked\.flatMap\(\(x\) => x\.sources\)\)/
+    .test(readFileSync('scripts/supply-process.mts', 'utf-8')))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 🔴 운영 33원천 재분류 — 읽기 전용 fixture (20260924-051500 이후 시계 역전)')
+// ─────────────────────────────────────────────────────────
+{
+  type FxRec = {
+    stage: 'judge' | 'draft'; decidedAt?: string; decision?: string; semanticStatus?: string
+    generatedAt?: string; machineOutcome?: string; retryable?: boolean | null; cause?: string | null
+  }
+  type Fx = {
+    kind: string
+    sources: { sourceArticleId: string; invertedRun: string[]; records: FxRec[]
+      expected: { state: string; stage: string; runId: string }; wallClock: { state: string; stage: string } }[]
+    runs: unknown[]
+  }
+  const fx = JSON.parse(readFileSync('scripts/__fixtures__/supply/clock-inversion-33.json', 'utf-8')) as Fx
+  const wins = fx.runs.map((r) => runWindowOf(r, (r as { manifest?: unknown }).manifest ?? undefined))
+    .filter((w): w is RunWindow => w !== null)
+  const outcomesOf = (src: Fx['sources'][number]): PriorOutcome[] => src.records.map((r) => (r.stage === 'judge'
+    ? pj({ sourceArticleId: src.sourceArticleId, decidedAt: r.decidedAt ?? '', decision: r.decision ?? '', semanticStatus: r.semanticStatus ?? '' })
+    : pa({ sourceArticleId: src.sourceArticleId, generatedAt: r.generatedAt ?? '', outcome: r.machineOutcome ?? '', retryable: r.retryable ?? null })))
+  check('🔴 fixture 는 33원천이다', fx.kind === 'supply-clock-inversion-fixture' && fx.sources.length === 33, `${fx.sources.length}`)
+  check('🔴 🔴 **원문·제목·본문·화자가 없다** — id · 시각 · 결과 · 회차 구간만', (() => {
+    const allowed = new Set(['stage', 'decidedAt', 'decision', 'semanticStatus', 'generatedAt', 'machineOutcome', 'retryable', 'cause'])
+    const txt = readFileSync('scripts/__fixtures__/supply/clock-inversion-33.json', 'utf-8')
+    return fx.sources.every((s) => s.records.every((r) => Object.keys(r).every((k) => allowed.has(k))))
+      && !/"(title|body|bodyHead|rawTitle|rawBody|personaCode|nickname|evidence|plan|voice)"\s*:/.test(txt)
+  })())
+  let fixed = 0
+  let wallBug = 0
+  let runMatch = 0
+  const got: Record<string, number> = {}
+  const miss: string[] = []
+  for (const src of fx.sources) {
+    const plain = outcomesOf(src)
+    const wall = latestOutcomes(plain).get(src.sourceArticleId)
+    if (wall?.stage === src.wallClock.stage && wall.state === src.wallClock.state && wall.stage === 'judge') wallBug += 1
+    const now = latestOutcomes(attributeRuns(plain, wins)).get(src.sourceArticleId)
+    if (now?.stage === src.expected.stage && now.state === src.expected.state) fixed += 1
+    else miss.push(`${src.sourceArticleId}:${now?.stage}:${now?.state}≠${src.expected.stage}:${src.expected.state}`)
+    if (now?.run?.id === src.expected.runId) runMatch += 1
+    got[now?.state ?? '?'] = (got[now?.state ?? '?'] ?? 0) + 1
+  }
+  check('🔴 🔴 **고치기 전 규칙(벽시계)으로는 33원천 모두 판정 seeded 가 최신이다** — 결함 재현',
+    wallBug === 33, `${wallBug}/33`)
+  check('🔴 🔴 **고친 규칙으로 33원천 모두 정답표(파일 회차로 만든 것)와 같다**',
+    fixed === 33, `${fixed}/33 ${miss.slice(0, 3).join(' ')}`)
+  check('🔴 🔴 **최신 기록의 회차를 파일 이름 없이 찾았다 — 정답표의 회차와 33/33 같다**',
+    runMatch === 33, `${runMatch}/33`)
+  check('🔴 🔴 **재분류 — candidate 18 · terminal 9 · retryable 6 (seeded 0)**',
+    got.candidate === 18 && got.terminal === 9 && got.retryable === 6 && (got.seeded ?? 0) === 0, JSON.stringify(got))
+  check('🔴 🔴 **terminal 9원천이 재시도 풀을 떠난다**', (() => {
+    const all = fx.sources.flatMap((s) => attributeRuns(outcomesOf(s), wins))
+    return concludedSourceIds(all).size === 9
+      && concludedSourceIds(fx.sources.flatMap((s) => outcomesOf(s))).size === 0
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ 🔴 🔴 재시도 차례 — 초안 없는 seeded 가 판정 retryable 보다 먼저 (2026-09-28)')
+// ─────────────────────────────────────────────────────────
+{
+  const at = (h: number): string => `2026-09-20T${String(h).padStart(2, '0')}:00:00.000Z`
+  const R = (id: string, c: number): WorksetRow => ROW({ sourceArticleId: id, commentCount: c })
+  const att = new Map<string, PriorOutcome>([
+    // 판정 retryable 이 **가장 오래** 기다렸다 — 그래도 seeded 가 먼저다
+    ['jr', pj({ sourceArticleId: 'jr', semanticStatus: 'providerError', decidedAt: at(1) })],
+    ['dr', pa({ sourceArticleId: 'dr', retryable: true, generatedAt: at(3) })],
+    ['sd', pj({ sourceArticleId: 'sd', decision: 'AUTO_SEED', decidedAt: at(9) })],
+  ])
+  check('🔴 차례 값 — seeded 0 · 생성 결과 1 · 판정 retryable 2',
+    retryTierOf(att.get('sd')) === 0 && retryTierOf(att.get('dr')) === 1 && retryTierOf(att.get('jr')) === 2
+    && att.get('jr')?.state === 'retryable' && att.get('sd')?.state === 'seeded')
+  const fresh = Array.from({ length: 20 }, (_, i) => R(`n${i}`, 90 - i))
+  const rows = [...fresh, R('jr', 1), R('dr', 1), R('sd', 1)]
+  const p5 = sel({ rows, attemptedOutcomes: att, limit: 5 })
+  check('🔴 🔴 **상한 5 · 재시도 1 자리 → seeded(sd)** — 더 오래 기다린 판정 retryable 보다 먼저',
+    p5.workset.sourceIds.filter((x) => !x.startsWith('n')).join(',') === 'sd', p5.workset.sourceIds.join(','))
+  const p10 = sel({ rows, attemptedOutcomes: att, limit: 10 })
+  check('🔴 🔴 **상한 10 · 재시도 2 자리 → sd · dr**',
+    p10.workset.sourceIds.filter((x) => !x.startsWith('n')).join(',') === 'sd,dr', p10.workset.sourceIds.join(','))
+  const pAll = sel({ rows: [R('jr', 1), R('dr', 1), R('sd', 1)], attemptedOutcomes: att, limit: 10 })
+  check('🔴 신규가 없으면 재시도가 전부 — 차례대로 sd · dr · jr',
+    pAll.workset.sourceIds.join(',') === 'sd,dr,jr', pAll.workset.sourceIds.join(','))
+  check('🔴 상한 10 — seed 8 · raw 2 기본 자리 · raw 는 빠지지 않는다',
+    JSON.stringify(worksetAxisQuota(10, { seed: 30, raw: 30 })) === JSON.stringify({ seed: 8, raw: 2 })
+    && JSON.stringify(worksetAxisQuota(10, { seed: 3, raw: 30 })) === JSON.stringify({ seed: 3, raw: 2 })
+    && JSON.stringify(worksetAxisQuota(10, { seed: 30, raw: 1 })) === JSON.stringify({ seed: 9, raw: 1 }))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

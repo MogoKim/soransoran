@@ -54,8 +54,9 @@ import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 /** 🔴 작업 묶음 정본 — 모양·상한·선택 규칙은 전부 저기 하나에 있다 */
 import {
-  attemptedOutcomes, concludedSourceIds, judgeStageBudget, selectWorkset, worksetAxisOf, worksetFileName,
-  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL, type PriorOutcome, type WorksetRow,
+  attemptedOutcomes, concludedSourceIds, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
+  selectWorkset, worksetAxisOf, worksetFileName,
+  WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
 } from '../src/lib/supply-workset'
 import {
   inputHashOf, mergeJudgeRows, PROMPT_VERSION, RULE_VERSION,
@@ -116,15 +117,11 @@ import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 const DATA_DIR = DATA_DIR_NAME
 const argv = process.argv.slice(2)
 /**
- * 🔴 **이번 회차가 끝까지 보낼 원천 수.** 기본은 정본 값이다 —
+ * 🔴 **이번 회차가 끝까지 보낼 원천 수.** 기본은 정본 값(10)이다 —
  *    올리면 유료 요청도 그만큼 는다(judge N · draft 3N · 전체 4N).
+ * 🔴 천장(`WORKSET_MAX_LIMIT`)을 넘기면 `-1` 이고 `judgeStageBudget` 이 실행 전에 멈춘다 — 무제한 호출 없음.
  */
-const WORKSET_LIMIT = ((): number => {
-  const hit = process.argv.slice(2).find((a) => a.startsWith('--workset-limit='))
-  if (hit === undefined) return WORKSET_DEFAULT_LIMIT
-  const n = Number.parseInt(hit.slice('--workset-limit='.length), 10)
-  return Number.isInteger(n) && n > 0 ? n : -1
-})()
+const WORKSET_LIMIT = resolveWorksetLimit(process.argv.slice(2))
 
 /**
  * 🔴 상세 파일을 **판정기와 같은 정규화**로 읽는다 (`mergeJudgeRows`).
@@ -805,11 +802,25 @@ async function main(): Promise<number> {
    *    AI 호출 전에 빼야 한다. 생성 직전에도 다시 쓰이므로 한 번만 뜬다.
    */
   let queuePending = new Set<string>()
+  /**
+   * 🔴 **큐 행(상태 무관) · 글에 이미 있는 원천** (2026-09-28). 발행된 원천을 다시 뽑아
+   *    두 번째 글을 만들지 않는다. 못 읽으면 스냅샷 실패와 같다 — 묶음을 만들지 않는다(fail-closed).
+   */
+  let queuedSources: SourceKeySet | null = null
   let snapOk = false
   try {
     const qrows = await prisma.originalPostApprovalQueue.findMany({
       select: { createdPostId: true, rawContent: { select: { sourceArticleId: true, sourceSite: true } } },
     })
+    // 🔴 글 쪽 원천 칸 — 큐를 거치지 않은 옛 글도 같은 원천이면 막는다. 제목·본문은 읽지 않는다
+    const posts = await prisma.post.findMany({
+      where: { sourceArticleId: { not: null } },
+      select: { sourceSite: true, sourceArticleId: true },
+    })
+    queuedSources = queuedSourceKeysOf([
+      ...qrows.map((r) => ({ sourceSite: r.rawContent?.sourceSite ?? '', sourceArticleId: r.rawContent?.sourceArticleId ?? '' })),
+      ...posts,
+    ])
     const snap = buildQueueSnapshot({
       runId, takenAt: new Date(),
       rows: qrows.map((r) => ({
@@ -822,7 +833,8 @@ async function main(): Promise<number> {
     writeAtomic(snapPath, `${JSON.stringify(snap, null, 2)}\n`)
     queuePending = new Set(snap.pendingSourceIds)
     snapOk = true
-    console.log(`\n   🟢 큐 스냅샷(묶음 선택용) ${snap.pendingSourceIds.length}건 미발행 원문`)
+    console.log(`\n   🟢 큐 스냅샷(묶음 선택용) ${snap.pendingSourceIds.length}건 미발행 원문`
+      + ` · 큐·글에 이미 있는 원천 ${queuedSources.bySiteId.size}건 (발행 포함 — 다시 만들지 않는다)`)
   } catch (e) {
     console.log(`\n   🔴 큐 스냅샷 실패 — ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -830,7 +842,7 @@ async function main(): Promise<number> {
   let workset: WorksetGate | undefined
   /** 🔴 고를 원천이 0건이었는가 — "못 만들었다" 와 구분한다 */
   let worksetEmpty = false
-  if (snapOk && policy.llm) {
+  if (snapOk && queuedSources !== null && policy.llm) {
     const rows = worksetRows(after1.detail.map((f) => join(DATA_DIR, f)))
     if (rows === null) {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
@@ -841,6 +853,9 @@ async function main(): Promise<number> {
     const prior = priorState(rows, currentContractBase(runAt))
     const plan = selectWorkset({
       rows, humanDecided: humanDecidedIds(), queuePending, ...prior,
+      queuedSources,
+      // 🔴 이월로 적재될 후보의 원천 — 다시 만들지 않는다(#587 이 적재한다)
+      carriedOver: queuedSourceKeysOf(carry.picked.flatMap((x) => x.sources)),
       limit: WORKSET_LIMIT, runId, takenAt: runAt,
     })
     if (plan.picked.length === 0) {

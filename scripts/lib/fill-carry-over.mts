@@ -50,7 +50,15 @@ export function readCarryOverState(dataDir: string, nowMs: number, lookbackMs: n
         stageModels: j.stageModels,
         qualityContractDigest: typeof j.qualityContractDigest === 'string' ? j.qualityContractDigest : undefined,
       }
-      files.push({ name, envelope, candidateCount: Array.isArray(j.candidates) ? j.candidates.length : 0 })
+      const rows = Array.isArray(j.candidates) ? (j.candidates as unknown[]) : []
+      /** 🔴 원천 두 칸만 꺼낸다 — 제목·본문은 여기서 읽지 않는다 */
+      const sources = rows.flatMap((c) => {
+        if (c === null || typeof c !== 'object') return []
+        const o = c as Record<string, unknown>
+        const id = typeof o.sourceArticleId === 'string' ? o.sourceArticleId.trim() : ''
+        return id === '' ? [] : [{ sourceSite: typeof o.sourceSite === 'string' ? o.sourceSite.trim() : '', sourceArticleId: id }]
+      })
+      files.push({ name, envelope, candidateCount: rows.length, sources })
     } catch {
       files.push({ name, envelope: null, candidateCount: 0 })
     }

@@ -39,6 +39,7 @@ import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 /** 🔴 작업 묶음 정본 — 여기서 모양을 다시 정하지 않는다 */
 import { readWorkset } from '../src/lib/supply-workset'
+import { runClockFrom } from './lib/run-clock.mjs'
 
 const DATA_DIR = '.microseed-data'
 const argv = process.argv.slice(2)
@@ -67,6 +68,11 @@ const APPLY = argv.includes('--apply')
  *    상한이 사실상 없는 것과 같아진다. 아래에서 유료 경로 직전에 막는다.
  */
 const RUN_ID = argv.find((a) => a.startsWith('--run-id='))?.slice('--run-id='.length) ?? null
+/**
+ * 🔴 **이 회차의 시각** (2026-09-28). 공급 러너가 준 `SORAN_RUN_AT` — 생성 러너와 **같은 값**이다.
+ *    단독 실행이면 이 프로세스가 뜬 시각이다. 판정 기록의 `runAt` 에 적는다(`decidedAt` 은 그대로 벽시계).
+ */
+const RUN_CLOCK = runClockFrom(process.env)
 /**
  * 🔴 **이번 회차가 판정할 원천 목록** (2026-09-20). 주면 **그 원천만** 판정한다.
  *    없으면 종전대로 전부다 — 손으로 부르는 경로는 그대로 둔다.
@@ -558,7 +564,17 @@ async function main(): Promise<void> {
   // 🔴 경로를 지정받았으면 **그대로** 쓴다 — 다음 단계가 이 파일 하나만 읽는다
   const out = SHADOW_OUT ?? join(DATA_DIR, `auto-judge-${runId}.shadow.jsonl`)
   if (!isInsideDataDir(out)) fail(`${out} 은 ${DATA_DIR}/ 밖이다`)
-  writeFileSync(out, `${judged.map((jd) => JSON.stringify(jd)).join('\n')}\n`, 'utf-8')
+  /**
+   * 🔴 **회차를 기록에 적는다** (2026-09-28 시계 역전 보정). `decidedAt` 은 벽시계라
+   *    같은 회차 생성(`generatedAt` = 회차 시각)보다 늦어 보였다. 다음 회차 선택이 순서를
+   *    **단계 순서**로 정하려면 이 판정이 어느 회차의 것인지 알아야 한다.
+   *    `runAt` 은 부모가 준 회차 시각(없으면 이 프로세스의 시각) · `runId` 는 `--run-id` (없으면 적지 않는다).
+   */
+  const runStamp = {
+    runAt: RUN_CLOCK.at.toISOString(),
+    ...(RUN_ID === null || RUN_ID.trim() === '' ? {} : { runId: RUN_ID.trim() }),
+  }
+  writeFileSync(out, `${judged.map((jd) => JSON.stringify({ ...jd, ...runStamp })).join('\n')}\n`, 'utf-8')
   saveCache(cache)
   console.log(`\n⑥ 🔴 판정 파일 ${judged.length}건`)
   console.log(`   ✅ ${out}`)

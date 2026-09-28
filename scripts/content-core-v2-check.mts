@@ -46,7 +46,7 @@ import {
   exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
   materializePersonaAt, bandOfAge,
 } from '../src/lib/persona-birth-anchor'
-import { selectWorkset, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX } from '../src/lib/supply-workset'
+import { EMPTY_SOURCE_KEYS, selectWorkset, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX } from '../src/lib/supply-workset'
 import {
   resolveLoadBearing, ACTIVATED_AXES, loadBearingRequirements, checkLoadBearingPreserved,
 } from '../src/lib/content-core/load-bearing'
@@ -1668,7 +1668,7 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
   const plan = (limit: number, attempted: Map<string, { atMs: number }>, fresh: string[]) =>
     selectWorkset({
       rows: [...fresh.map((f, i) => row(f, 50 - i)), ...[...attempted.keys()].map((k, i) => row(k, 40 - i))],
-      humanDecided: new Set<string>(), queuePending: new Set<string>(),
+      humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
       concluded: new Set<string>(), attempted: attempted as never,
       limit, runId: 'r1', takenAt: NOW,
     })
@@ -1693,7 +1693,7 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
   check('🔴 `concluded` 에 들어간 원천은 다시 뽑히지 않는다', (() => {
     const p2 = selectWorkset({
       rows: [row('done-1', 99), row('new-1', 10)],
-      humanDecided: new Set<string>(), queuePending: new Set<string>(),
+      humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
       concluded: new Set(['done-1']), attempted: new Map() as never,
       limit: 5, runId: 'r1', takenAt: NOW,
     })
@@ -3109,7 +3109,7 @@ console.log('\n🔴 🔴 **terminal 이 reason-aware 다 — 고칠 수 있는 �
   })
   const pick = (concluded: string[]) => selectWorkset({
     rows: [row('transform-fail', 50), row('new-1', 10)],
-    humanDecided: new Set<string>(), queuePending: new Set<string>(),
+    humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
     concluded: new Set(concluded), attempted: new Map() as never,
     limit: 5, runId: 'r1', takenAt: new Date('2026-09-23T05:00:00Z'),
   }).workset.sourceIds
