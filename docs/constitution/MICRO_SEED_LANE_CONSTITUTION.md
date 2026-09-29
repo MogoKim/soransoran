@@ -1,9 +1,21 @@
 # Micro Seed Lane / Voice Engine Constitution
 
+> 🔴 **2026-09-29 적용 경계:** 이 문서는 2026-08의 수동 Founder Gate와 초기 internal lane을
+> 설계한 역사 헌법이다. 현재 공개 D100 자동 운영의 목적·규모·현재 실행은 각각
+> [`NORTH-STAR.md`](../operations/NORTH-STAR.md),
+> [`2026-09-21-d100-goal-canon.md`](../operations/2026-09-21-d100-goal-canon.md),
+> [`CURRENT-MILESTONE.md`](../operations/CURRENT-MILESTONE.md)가 이긴다.
+>
+> 아래의 글별 창업자 승인, internal/noindex, hard daily cap 10, Sheet 승인 UI는 현재 자동 READY와
+> 공개 D3→D100의 운영 권한이 아니다. 원문 보호, 중복 방지, DB 정합성, idempotency, 비용 상한,
+> 감사·rollback 같은 안전 계약은 계속 유효하다. 옛 운영 제한을 되살리려면 최신 정본의 명시적
+> 결정이 필요하다.
+
 > 소란소란 커뮤니티 초기 공급 정본. **구현서가 아니라 운영 헌법이다.**
 >
 > 이후 schema · sitemap · JSON-LD · Google Sheet · 댓글 · 페르소나 · Voice Vault 작업을 하는
-> 구현자는 이 문서를 기준으로 삼는다. 이 문서와 코드가 어긋나면 코드를 고친다.
+> 구현자는 위 적용 경계 안의 안전 계약을 기준으로 삼는다. 최신 정본과 어긋나는 옛 운영 정책을
+> 이유로 자동화를 되돌리지 않는다.
 
 **문서 버전** v1.1 (소란소란 정본 · M1-A 계약 반영)
 **작성일** 2026-08-24 · **개정** 2026-08-25 (M0 완료 · M1-A 계약 고정)
