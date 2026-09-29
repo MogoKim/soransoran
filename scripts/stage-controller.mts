@@ -5,6 +5,8 @@
  *   npm run stage:controller              dry-run — 결정을 계산해 보여 준다. DB write 0
  *   npm run stage:controller -- --apply   저장 — 🔴 정본 env 에 STAGE_CONTROLLER_ENABLED=on 일 때만
  *   npm run stage:controller -- --json    기계가 읽는 값
+ *   npm run stage:controller -- --evidence-date=YYYY-MM-DD
+ *                                         🔴 read-only — 그날의 운영 증거 판정만 보여 준다(결정 계산·저장 0)
  *
  * 🔴 **쓰는 곳은 하나다** — `ensureStageDecision` → `createStageDecision`(create 뿐 · 덮어쓰기 0).
  *    그날 결정이 이미 있으면 **다시 계산하지도 덮지도 않고** 읽기만 한다.
@@ -15,6 +17,10 @@
  *    · DB 자체에 못 닿음       → 아무것도 쓰지 못한다 · exit 1 (consumer 는 정본 fallback)
  *
  * 🔴 판정에 새 숫자를 넣지 않는다 — 재고·시험·승격·품질·비용·오류 전부 정본 함수의 값이다.
+ *
+ * 🔴 **승격은 날짜가 아니라 운영 증거로 한다** (2026-09-29 P0 · 마스터 결정).
+ *    내일 시험 대상은 `trialPlanOf(전날 결정, 전날 운영 증거)` 다 — PASS 면 한 칸 위, 전날이 시험인데
+ *    PASS 가 아니면(FAIL · 모름) **같은 단계를 다시** 시험한다. 증거를 못 읽으면 모름 = PASS 아님.
  */
 import { execFileSync } from 'node:child_process'
 
@@ -23,7 +29,7 @@ import { PrismaClient } from '@prisma/client'
 import { PROFILES, resolveStage, type ReleaseStage, type StageVerdict } from '../src/lib/scale-profile'
 import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
 import { judgeOneDayCanary, kstDateString, slotsLeftToday } from '../src/lib/release-canary'
-import { previousKstDate, nextStage, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
+import { previousKstDate, isCalendarDate, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
 import { ensureStageDecision, controllerEnabled, CONTROLLER_ENV } from '../src/lib/stage-decision-store'
 import { readStageDecision, stageDecisionIo } from '../src/lib/stage-decision-repo'
 import type { DatedCanary } from '../src/lib/stage-ladder'
@@ -37,10 +43,16 @@ import { overdueAuditCount, retryableFailureCount } from '../src/lib/auto-ready-
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { observeJob, readProcessRuns, supplyFailing } from './lib/runner-health.mjs'
 import { fillDbConnection, readCostSignals, readEnvKeys } from './lib/ops-signals.mjs'
+import { judgeStageEvidence, trialPlanOf, evidenceReasonOf, type StageEvidenceVerdict, type StageEvidenceFacts, type EvidenceSideSignals } from '../src/lib/stage-evidence'
+import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
+import { personaCommentCapFor } from '../src/lib/stage-evidence'
+import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
 const JSON_OUT = argv.includes('--json')
+/** 🔴 read-only 증거 조회 — 이 모드는 결정을 계산하지도 저장하지도 않는다 */
+const EVIDENCE_DATE = argv.find((a) => a.startsWith('--evidence-date='))?.slice('--evidence-date='.length) ?? null
 const NOW = new Date()
 const TODAY = kstDateString(NOW)
 
@@ -64,7 +76,81 @@ function readPromotion(): { promotion: PromotionVerdict | null; note: string } {
   }
 }
 
+/**
+ * 🔴 **KST 날짜 D · 단계 S 의 운영 증거 판정** — 읽기만 한다.
+ *    DB 사실(`readStageEvidenceFacts`) · 그날 장부(`readCostSignals` · 정본 `judgeCost`) · 러너 최근 회차.
+ *    어느 것이든 못 읽으면 그 칸은 모름이다 — PASS 가 되지 않는다(fail-closed = 지금 단계에 머문다).
+ */
+async function evidenceFor(prisma: PrismaClient, i: {
+  kstDate: string; stage: ReleaseStage; decision: ValidatedStageDecision | null; errors: HealthSignal
+}): Promise<StageEvidenceVerdict> {
+  let facts: StageEvidenceFacts | null = null
+  try {
+    /**
+     * 🔴 글당 Persona 댓글 상한은 **정본 env 의 댓글 단계**에서 온다(`personaCommentCapFor`).
+     *    정본 env 를 못 읽었으면 모른다(null) — 무인 댓글 루프가 쓰는 같은 파일이다.
+     */
+    const ce = readEnvKeys([COMMENT_STAGE_ENV])
+    const commentCapPerPost = ce.ok ? personaCommentCapFor(readCommentStage(ce.values).stage) : null
+    facts = await readStageEvidenceFacts(prisma, {
+      kstDate: i.kstDate, stage: i.stage, decision: i.decision, now: NOW, commentCapPerPost,
+    })
+  } catch (e) { log(`   ⬚ 운영 증거를 읽지 못했다 — ${(e as Error).name} (모름 = PASS 아님)`) }
+  let side: EvidenceSideSignals | null = null
+  try {
+    // 🔴 그날의 장부 — 장부 날짜 경계는 KST 다(정본 `ledgerDateOf`). 정오는 그 날짜 안의 한 시각일 뿐이다
+    const c = readCostSignals(new Date(`${i.kstDate}T12:00:00+09:00`))
+    side = {
+      cost: [
+        { name: '공급 장부', health: c.supplyLedger.health },
+        { name: '댓글 장부', health: c.commentLedger.health },
+        { name: '감사 장부', health: c.auditLedger.health },
+      ],
+      errors: i.errors.health,
+    }
+  } catch (e) { log(`   ⬚ 그날 장부를 읽지 못했다 — ${(e as Error).name} (모름 = PASS 아님)`) }
+  return judgeStageEvidence(i.kstDate, i.stage, facts, side)
+}
+
+function observeErrors(): HealthSignal {
+  const pub = observeJob('com.soransoran.original-post-runner')
+  const sup = observeJob('com.soransoran.supply-process')
+  return errorSignalOf([
+    { label: pub.label, loaded: pub.state === 'loaded', failing: pub.launchdFailing },
+    { label: sup.label, loaded: sup.state === 'loaded', failing: supplyFailing(sup, readProcessRuns().runs) },
+  ])
+}
+
+/** 🔴 `--evidence-date` — 그날 결정을 읽어 그 단계로 판정한다. write 0 */
+async function evidenceOnly(date: string): Promise<number> {
+  if (!isCalendarDate(date)) { console.error(`🔴 달력에 없는 날짜 — ${date}`); return 1 }
+  if (!fillDbConnection()) { console.error('🔴 DATABASE_URL 이 없다'); return 1 }
+  const prisma = new PrismaClient()
+  try {
+    const r = await readStageDecision(prisma, date)
+    const decision = r.found && r.result.ok ? r.result.decision : null
+    const stageArg = argv.find((a) => a.startsWith('--evidence-stage='))?.slice('--evidence-stage='.length)
+    const stage = (stageArg !== undefined ? resolveStage(stageArg, 'release').stage : decision?.release) ?? null
+    if (stage === null) { console.error(`🔴 ${date} 결정이 없거나 깨졌다 — --evidence-stage 로 단계를 준다`); return 1 }
+    const v = await evidenceFor(prisma, { kstDate: date, stage, decision, errors: observeErrors() })
+    if (JSON_OUT) console.log(JSON.stringify({ date, decision: decision === null ? null : { state: decision.state, release: decision.release }, evidence: v }, null, 2))
+    else {
+      log(`\n══ 운영 증거 ${date} · ${stage} (read-only · DB write 0) ══`)
+      log(`   결정  ${decision === null ? '없음/깨짐' : `${decision.state} · 공개 ${decision.release}`}`)
+      log(`   ${evidenceReasonOf(v)}`)
+      if (decision !== null) {
+        const plan = trialPlanOf(decision, v)
+        log(`   ▸ 다음 날 시험  ${plan === null ? '없음 — 지금 단계를 지킨다' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}\n`)
+      }
+    }
+    return 0
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 async function main(): Promise<number> {
+  if (EVIDENCE_DATE !== null) return evidenceOnly(EVIDENCE_DATE)
   const env = readEnvKeys(['SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', CONTROLLER_ENV])
   const envRelease = resolveStage(env.values.SORAN_RELEASE_STAGE, 'release')
   const ceiling = resolveStage(env.values.SORAN_CAPACITY_STAGE, 'capacity')
@@ -93,6 +179,18 @@ async function main(): Promise<number> {
       }
     } catch (e) { failures.push(`전날 결정을 읽지 못했다 — ${(e as Error).name}`) }
 
+    // ①-b 전날 운영 증거 — 🔴 시험 대상은 날짜가 아니라 이 판정과 전날 결정이 정한다
+    const errorSignal = observeErrors()
+    let evidence: StageEvidenceVerdict | null = null
+    if (previous !== null) {
+      evidence = await evidenceFor(prisma, {
+        kstDate: previous.kstDate, stage: previous.release, decision: previous, errors: errorSignal,
+      })
+      log(`   ${evidence.verdict === 'PASS' ? '🟢' : '🔴'} ${evidenceReasonOf(evidence)}`)
+    }
+    const plan = previous === null ? null : trialPlanOf(previous, evidence)
+    log(`   시험 계획  ${plan === null ? '없음 — 지금 단계를 지킨다' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}`)
+
     // ② 재고 판정 · 하루 시험 — 발행 러너와 같은 조립(loadPublishableStock)
     let verdicts: StageVerdict[] = []
     let daily: DatedCanary | null = null
@@ -102,8 +200,9 @@ async function main(): Promise<number> {
       publishedToday = s.publishedToday
       const axis = { now: NOW, publishedToday }
       verdicts = stageVerdicts({ queue: s.queueCandidates, personas: s.personas as never, history: s.history, axis })
-      const base = previous?.release ?? null
-      const target = base === null ? null : nextStage(base)
+      // 🔴 앞판: `nextStage(previous.release)` — 전날 시험이 실패해도 날짜만으로 한 칸 올렸다
+      const base = plan?.base ?? null
+      const target = plan?.target ?? null
       if (base !== null && target !== null) {
         const slotsLeft = slotsLeftToday(target, NOW)
         const sim = simulateStage({
@@ -137,12 +236,7 @@ async function main(): Promise<number> {
       { name: '댓글 장부', health: cost.commentLedger.health, reasons: cost.commentLedger.reasons },
       { name: '감사 장부', health: cost.auditLedger.health, reasons: cost.auditLedger.reasons },
     ]))
-    const pub = observeJob('com.soransoran.original-post-runner')
-    const sup = observeJob('com.soransoran.supply-process')
-    signals.push(errorSignalOf([
-      { label: pub.label, loaded: pub.state === 'loaded', failing: pub.launchdFailing },
-      { label: sup.label, loaded: sup.state === 'loaded', failing: supplyFailing(sup, readProcessRuns().runs) },
-    ]))
+    signals.push(errorSignal)
 
     // ⑤ 결정
     let result: ControllerResult
@@ -155,13 +249,13 @@ async function main(): Promise<number> {
     } else {
       result = decideStage({
         kstDate: TODAY, decidedAt, envRelease: envRelease.stage, authorizedCeiling: ceiling.stage,
-        previousDecision: previous, verdicts, daily, promotion: promo.promotion, publishedToday, signals,
+        previousDecision: previous, previousEvidence: evidence, verdicts, daily, promotion: promo.promotion, publishedToday, signals,
       })
     }
     const v = validateForToday(result.decision)
 
     if (JSON_OUT) {
-      console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, result, valid: v.ok, signals, failures }, null, 2))
+      console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, result, valid: v.ok, signals, failures, evidence, plan }, null, 2))
     } else {
       for (const s of signals) log(`   ${s.health === 'ok' ? '🟢' : s.health === 'bad' ? '🔴' : '⚪'} ${s.axis.padEnd(8)} ${s.reasons.join(' · ') || '정상'}`)
       const d = result.decision

@@ -558,7 +558,7 @@ console.log('\n③ freshness (TTL · 시각 미상 hold · 상한 복구 · 오�
     && /prepareCandidates\(\{/.test(planSrc))
   check('🔴 그 순서를 pickPublishTarget 에 넘긴다', /ordered: freshOrdered/.test(planSrc))
   check('🔴 🔴 **러너가 그 함수를 실제로 부르고 결과만 쓴다**',
-    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runner)
+    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runner)
     && /const freshOrdered = plan\.freshOrdered/.test(runner)
     && !/pickPublishTarget\(\{/.test(runner))
   /** 🔴 조립 정본은 공용 로더다 — 러너는 그 결과를 소비한다 */

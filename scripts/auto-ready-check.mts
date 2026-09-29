@@ -494,7 +494,7 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
     /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
     && /autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/.test(runner)
-    && /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/.test(runner)
+    && /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \},/.test(runner)
     && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
   check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',
     /where: \{ id: target\.id, status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null, matchedPersonaId: null \}/.test(runner))
@@ -718,10 +718,10 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
     && /if \(!slot\.run \|\| !\(publishedTodayInTx < limit\)\) \{/.test(sched) && /dailyCap = target/.test(sched))
   check('🔴 🔴 **발행 방식은 필수 판별 유니온 — optional boolean 게이트 없음 · top-level dailyCap 없음**',
     /mode: PublishMode\n/.test(tx) && !/mode\?:/.test(tx) && !/slotGate|useSlots|slotGated/.test(tx)
-    && /\| \{ kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget \}/.test(tx) && /\| \{ kind: 'manual-live'; dailyCap: number; releaseStage\?: ReleaseStage \}/.test(tx)
+    && /\| \{ kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget; unattended: boolean \}/.test(tx) && /\| \{ kind: 'manual-live'; dailyCap: number; releaseStage\?: ReleaseStage \}/.test(tx)
     && !/^\s*dailyCap: number$/m.test(tx.slice(tx.indexOf('export type PublishTxInput'), tx.indexOf('export async function publishOriginalPostTx'))))
   check('🔴 🔴 **자동 러너는 scheduled 만 — manual-live · 숫자 상한을 넘기지 않는다**',
-    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \}/.test(runner) && !/manual-live/.test(runner)
+    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \}/.test(runner) && !/manual-live/.test(runner)
     && !/publishOriginalPostTx\(prisma, \{[^}]*dailyCap/.test(runner))
   check('🔴 🔴 **슬롯 경쟁 패자(SLOT_*)는 러너가 정상 무발행 exit 0 — 그 밖은 기존처럼 실패**',
     /if \(res\.kind === 'blocked' && \(NORMAL_NO_PUBLISH_CODES as readonly string\[\]\)\.includes\(res\.code\)\) \{[\s\S]{0,300}process\.exit\(0\)/.test(runner)
@@ -736,7 +736,7 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
     && /where: \{ kind: 'post', targetId: row\.createdPostId!, createdAt: \{ gte: kstDayStart\(txNow\) \} \}/.test(sched)
     && /if \(mine > 0\) \{\s*return \{\s*kind: 'blocked', publishedTodayInTx, code: 'TARGET_RACE_LOST'/.test(sched))
   check('🔴 🔴 **러너는 선택기 스냅샷을 그대로 넘긴다 — updatedAt 없으면 발행하지 않는다**',
-    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/.test(runner)
+    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \},/.test(runner)
     && /queueId: target\.id, status: target\.status, createdPostId: target\.createdPostId,\s*updatedAt: target\.updatedAt!, decidedBy: target\.decidedBy,/.test(runner)
     && /if \(target\.updatedAt === undefined\) \{\s*await prisma\.\$disconnect\(\)\s*fail\(/.test(runner)
     && /editDiff: true, updatedAt: true,/.test(codeOnly('scripts/lib/publishable-stock.mts')))

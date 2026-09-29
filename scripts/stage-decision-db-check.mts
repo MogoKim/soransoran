@@ -94,7 +94,7 @@ const rawDecision = (o: Partial<StageDecision> = {}): StageDecision => ({
   supply: { eligibleSpeakers: 3, excluded: [{ reason: 'noOpenDay', codes: ['P01', 'P02'] }] },
   decidedAt: `${DATE}T02:15:00.000Z`,
   contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER,
-  transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV, target: 'd5' },
+  transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV, target: 'd5', basis: 'PASS' },  // 🔴 d3 위 시험은 운영 증거 근거가 있어야 한다
   ...o,
 })
 /**

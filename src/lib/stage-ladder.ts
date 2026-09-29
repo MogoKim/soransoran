@@ -36,6 +36,7 @@ import {
   type ValidatedStageDecision, type ValidateResult,
 } from './stage-decision-contract'
 import type { CanaryVerdict } from './release-canary'
+import { trialPlanOf, evidenceReasonOf, type StageEvidenceVerdict, type TrialPlan } from './stage-evidence'
 import type { PromotionVerdict } from './d100-capacity'
 
 /**
@@ -92,6 +93,12 @@ export type StageInputs = {
    * 🔴 `sustainedRelease` 와 합치지 않는다 — 그쪽은 **지속 승격** 판단용이다.
    */
   previousDecision: ValidatedStageDecision | null
+  /**
+   * 🔴 **전날 운영 증거** (2026-09-29 P0) — `judgeStageEvidence` 의 판정. 없으면 모른다(= PASS 아님).
+   *    바닥 위로 올라가는 시험은 이 값이 **전날 결정과 같은 날짜·같은 단계의 PASS** 일 때만 열린다.
+   *    PASS 가 아니면 전날 시험 단계를 다시 시험한다(`trialPlanOf`). 날짜만으로 올라가지 않는다.
+   */
+  previousEvidence?: StageEvidenceVerdict | null
   /** 정본 `judgePromotion`. 없으면 `null` */
   promotion: PromotionVerdict | null
   publishedToday: number
@@ -105,8 +112,9 @@ const next = nextStage
  * 🔴 **판정의 출처를 검증한다** — 외부에서 아무 verdict 나 끼워 넣지 못하게.
  *    막힌 것은 코드로 남기고, 그 판정은 **쓰지 않는다**(fail-closed).
  */
-function checkProvenance(input: StageInputs): StageBlock[] {
+function checkProvenance(input: StageInputs): { blocks: StageBlock[]; plan: TrialPlan | null } {
   const out: StageBlock[] = []
+  let plan: TrialPlan | null = null
   const up = next(input.sustainedRelease)
   const p = input.promotion
   if (p !== null) {
@@ -160,27 +168,26 @@ function checkProvenance(input: StageInputs): StageBlock[] {
      *    🔴 이제 기반은 **바로 전 KST 날짜의 검증된 StageDecision 의 `release`** 뿐이다.
      *    `sustainedRelease` 는 **지속 승격** 판단에만 남는다 — 두 축을 합치지 않는다.
      */
-    const base = authoritativeTrialBase(input, out)
-    if (base !== null) {
+    plan = authoritativeTrialPlan(input, out)
+    if (plan !== null) {
       /** 🔴 caller 가 적어 온 `trialBase` 는 **주장**이다 — 정본과 다르면 막는다 */
-      if (d.trialBase !== base) {
+      if (d.trialBase !== plan.base) {
         out.push({
           code: 'PROVENANCE_PREVIOUS',
-          reason: `시험 기반 주장 ${d.trialBase} ≠ 전날 실제 결정의 공개 단계 ${base}`
+          reason: `시험 기반 주장 ${d.trialBase} ≠ 전날 결정·운영 증거가 정한 기반 ${plan.base}(${plan.basis})`
             + ' — caller 문자열로 전날 결정을 우회하지 않는다',
         })
       }
-      const up = next(base)
-      if (up === null || d.stage !== up) {
+      if (d.stage !== plan.target || next(plan.base) !== plan.target) {
         out.push({
           code: 'PROVENANCE_STAGE',
-          reason: `시험 대상 ${d.stage} 가 기반 ${base} 의 바로 다음 칸(${up ?? '없음'})이 아니다`
-            + ' — 단계 점프를 하루 시험으로 우회하지 않는다',
+          reason: `시험 대상 ${d.stage} ≠ 전날 결정·운영 증거가 정한 대상 ${plan.target}(${plan.basis})`
+            + ' — 단계 점프를 하루 시험으로 우회하지 않는다(PASS 없이 올라가지 않는다)',
         })
       }
     }
   }
-  return out
+  return { blocks: out, plan }
 }
 
 /**
@@ -190,7 +197,7 @@ function checkProvenance(input: StageInputs): StageBlock[] {
  *       "아무도 판단하지 않은 기반" 위에서 단계를 올리는 것이다. 열지 않는다(fail-closed).
  *       그날은 legacy 경로(`STAGE_CONTROLLER_ENABLED` 가 꺼진 상태)가 그대로 돈다.
  */
-function authoritativeTrialBase(input: StageInputs, out: StageBlock[]): ReleaseStage | null {
+function authoritativeTrialPlan(input: StageInputs, out: StageBlock[]): TrialPlan | null {
   const prev = input.previousDecision
   const want = previousKstDate(input.kstDate)
   if (want === null) {
@@ -218,7 +225,19 @@ function authoritativeTrialBase(input: StageInputs, out: StageBlock[]): ReleaseS
     })
     return null
   }
-  return prev.release
+  /**
+   * 🔴 **기반은 전날 결정 + 전날 운영 증거가 함께 정한다** (2026-09-29 P0).
+   *    앞판은 `prev.release` 를 그대로 기반으로 썼다 — 전날 시험이 실패했어도 다음 칸이 열렸다.
+   *    이제 PASS 면 한 칸 올리고, 전날이 시험인데 PASS 가 아니면 **같은 단계를 다시** 시험한다.
+   */
+  const plan = trialPlanOf(prev, input.previousEvidence ?? null)
+  if (plan === null) {
+    out.push({
+      code: 'PROVENANCE_PREVIOUS',
+      reason: `${want} ${prev.release} 는 운영 PASS 가 아니다 — 🔴 증거 없이 올라갈 칸이 없다(지금 단계를 지킨다)`,
+    })
+  }
+  return plan
 }
 
 /**
@@ -236,8 +255,12 @@ export function planStageDecision(input: StageInputs): StageDecision {
     /** 🔴 이 함수가 만든 결정은 언제나 controller 의 것이다 */
     decidedBy: DECISION_WRITER as string,
   } as const
-  const blocks = checkProvenance(input)
+  const { blocks, plan } = checkProvenance(input)
   const reasons: string[] = blocks.map((b) => `🔴 ${b.code}: ${b.reason}`)
+  /** 🔴 전날 운영 증거 판정 — 코드와 개수만 남긴다 */
+  if (input.previousEvidence !== undefined && input.previousEvidence !== null) {
+    reasons.push(evidenceReasonOf(input.previousEvidence))
+  }
 
   /** 🔴 출처가 어긋난 판정은 **쓰지 않는다** */
   const promotion = blocks.some((b) => b.code.startsWith('PROVENANCE_C') || b.code === 'PROVENANCE_NEXT')
@@ -303,7 +326,10 @@ export function planStageDecision(input: StageInputs): StageDecision {
         kind: 'TRIAL', trialBase: daily.trialBase,
         previousKstDate: input.previousDecision?.kstDate ?? '',
         target: daily.stage,
+        /** 🔴 위에서 대조를 통과했으면 `plan` 이 있다 — 근거 칸도 정본에서만 온다 */
+        ...(plan === null ? {} : { basis: plan.basis }),
       }
+      if (plan?.basis === 'RETEST') reasons.push(`🔴 RETEST — 전날 ${daily.stage} 가 운영 PASS 가 아니다. 같은 단계를 다시 시험한다`)
       reasons.push(`🟢 오늘 하루 ${daily.stage} 로 낸다(정본 judgeOneDayCanary)`)
       if (promotion !== null && !promotion.currentStable.ready) {
         reasons.push('🔴 지속 승격은 아직이다 — 오늘만이다')

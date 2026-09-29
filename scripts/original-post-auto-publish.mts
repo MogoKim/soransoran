@@ -60,6 +60,7 @@ import { authoritativeGate, selectAudits } from '../src/lib/auto-ready-repo'
 // 🔴 판정 대기 시한(2026-09-27) — 정본 열림 판정 + 시한 초과 감사. 도장 회차도 시한을 먼저 본다
 import { auditAwareGate, stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
 import { HEARTBEAT_FLAG, stageInputsOf, describeStageInputs } from './lib/original-post-runner-template'
+import { autoFirstNeeded, proofDayOf } from '../src/lib/stage-proof-day'
 import { claimHeartbeatTick, heartbeatInWindow, heartbeatTickKey, HEARTBEAT_TICK_DIR } from './lib/publish-heartbeat-tick.mjs'
 
 const argv = process.argv.slice(2)
@@ -275,7 +276,19 @@ if (scale.canaryStage) {
  *    한 덩어리다. 검사가 이 계산을 **베껴 두면** 러너가 바뀌어도 사본은 그대로여서
  *    갈라진 순간부터 조용히 거짓 초록이 된다. 그래서 러너가 여기서 부른다.
  */
-const plan = planPublishBatch({ loaded: stock, caps: RELEASE_CAPS, at: axisNow })
+/**
+ * 🔴 **단계 증명일 — 목표 슬롯을 자동 target 이 먼저** (2026-09-29 마스터 결정 · `stage-proof-day`).
+ *    consumer 가 그날 TRIAL/SUSTAIN 결정에서 넣은 두 칸만 믿는다. 자동 target 이 목표 N 에 닿기 전에는
+ *    사람 승인 행이 슬롯을 먼저 차지하지 못한다. 자동 후보가 없으면 사람 행이 나갈 수는 있지만
+ *    증거는 그것을 물량으로 세지 않는다(`PUBLISH_NOT_AUTO_READY` → 같은 단계 재시험).
+ */
+const proofDay = proofDayOf(process.env, RUN_AT)
+const proofAutoNeeded = autoFirstNeeded(proofDay, stock.autoTargetsToday ?? 0)
+console.log(proofDay === null
+  ? '\n③-p 단계 증명일 아님 — 기존 human/auto 공정성'
+  : `\n③-p 단계 증명일 ${proofDay.stage} · 자동 target 오늘 ${stock.autoTargetsToday ?? 0}/${proofDay.target}`
+    + (proofAutoNeeded > 0 ? ` · 🔴 자동 먼저(${proofAutoNeeded}건 더)` : ' · 목표를 채웠다 — 남는 슬롯은 기존 공정성'))
+const plan = planPublishBatch({ loaded: stock, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded })
 const prepared = plan.prepared
 const assignOf = plan.assignOf
 
@@ -528,7 +541,8 @@ const planned = {
 }
 const res = await publishOriginalPostTx(prisma, {
   queueId: target.id, publishedToday,
-  mode: { kind: 'scheduled', releaseStage: scale.releaseStage, planned },
+  // 🔴 launchd(`local`)·GitHub 예약(`schedule`)만 무인 회차다 — `manual` 은 표식을 남기지 않는다
+  mode: { kind: 'scheduled', releaseStage: scale.releaseStage, planned, unattended: TRIGGER === 'local' || TRIGGER === 'schedule' },
   // 🔴 자동 도장 행은 트랜잭션 안에서 스위치·도장·경고·DB 증거·결함을 다시 본다 · 단계 천장도 이 env 다
   autoReadyEnv: process.env,
   // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)
