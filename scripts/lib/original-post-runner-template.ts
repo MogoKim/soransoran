@@ -74,6 +74,51 @@ export function runnerPathValue(nodeBinDir: string): string {
 
 export const PUBLISH_RUNNER_LABEL = 'com.soransoran.original-post-runner'
 
+/**
+ * 🔴 **launchd 실행 표식** (2026-09-29) — plist `EnvironmentVariables` 에 **명시**한다.
+ *    발행 wrapper 는 이 두 값이 **정확할 때만** 마지막 회차 기록(`publish-runs/last.json`)을 남긴다.
+ *    `XPC_SERVICE_NAME` 같은 암묵적 주입에 기대지 않는다 — 설치본에 적혀 있고 설치 검사가 확인하는 값만 믿는다.
+ *    수동 실행에는 이 값이 없다 → 기록하지 않는다(수동 성공이 launchd 회차의 실패를 덮지 않는다).
+ */
+export const LAUNCHD_RUN_MARK_KEY = 'SORAN_LAUNCHD_RUN'
+export const LAUNCHD_RUN_MARK_VALUE = 'scheduled'
+export const LAUNCHD_LABEL_KEY = 'SORAN_LAUNCHD_LABEL'
+
+/** plist 원문의 `EnvironmentVariables` → 키·값. 없으면 null */
+export function plistEnvironmentOf(xml: string): Record<string, string> | null {
+  const block = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(xml)
+  if (block === null) return null
+  const env: Record<string, string> = {}
+  for (const m of block[1]!.matchAll(/<key>([^<]+)<\/key>\s*<string>([^<]*)<\/string>/g)) env[m[1]!] = m[2]!
+  return env
+}
+
+/** `launchctl print` 의 `environment = { … }` 블록 → 키·값 (inherited/default 는 보지 않는다). 못 읽으면 null */
+export function launchctlEnvironmentOf(out: string | null): Record<string, string> | null {
+  if (out === null) return null
+  const block = /^\tenvironment = \{\n([\s\S]*?)\n\t\}/m.exec(out)
+  if (block === null) return null
+  const env: Record<string, string> = {}
+  for (const line of block[1]!.split('\n')) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*) => (.*)$/.exec(line)
+    if (m !== null) env[m[1]!] = m[2]!.trim()
+  }
+  return env
+}
+
+/** 🔴 발행 job 의 env 에 실행 표식과 **정확한** label 이 있는가 — 설치 전(렌더)·설치 후(loaded) 둘 다 이것으로 본다 */
+export function judgeLaunchdRunMarker(env: Record<string, string> | null): RunnerEnvVerdict {
+  if (env === null) return { ok: false, problems: ['🔴 환경 변수 블록을 읽지 못했다 — 표식 미확인(fail-closed)'] }
+  const problems: string[] = []
+  if (env[LAUNCHD_RUN_MARK_KEY] !== LAUNCHD_RUN_MARK_VALUE) {
+    problems.push(`🔴 ${LAUNCHD_RUN_MARK_KEY} 가 ${LAUNCHD_RUN_MARK_VALUE} 가 아니다 — ${env[LAUNCHD_RUN_MARK_KEY] ?? '없음'}`)
+  }
+  if (env[LAUNCHD_LABEL_KEY] !== PUBLISH_RUNNER_LABEL) {
+    problems.push(`🔴 ${LAUNCHD_LABEL_KEY} 가 ${PUBLISH_RUNNER_LABEL} 가 아니다 — ${env[LAUNCHD_LABEL_KEY] ?? '없음'}`)
+  }
+  return { ok: problems.length === 0, problems }
+}
+
 /** 🔴 두 트리거 preflight 가 GitHub Variables 를 읽는 대상 저장소 — cwd 의 git remote 에 기대지 않는다 */
 export const PUBLISH_REPO = 'MogoKim/soransoran'
 
@@ -175,6 +220,8 @@ ${args}
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key><string>${runnerPathValue(input.nodeBinDir)}</string>
+        <key>${LAUNCHD_RUN_MARK_KEY}</key><string>${LAUNCHD_RUN_MARK_VALUE}</string>
+        <key>${LAUNCHD_LABEL_KEY}</key><string>${PUBLISH_RUNNER_LABEL}</string>
     </dict>
     <key>WorkingDirectory</key><string>${input.runtimeRoot}</string>
     <key>StartCalendarInterval</key>

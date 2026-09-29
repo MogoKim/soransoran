@@ -25,6 +25,7 @@ import { stageDecisionIo } from '../src/lib/stage-decision-repo'
 import { validateStoredDecision } from '../src/lib/stage-decision-contract'
 import { consumerEnvOf } from '../src/lib/stage-controller'
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
+import { recordPublishRun } from './lib/publish-run-record.mjs'
 
 const argv = process.argv.slice(2)
 const sep = argv.indexOf('--')
@@ -80,6 +81,16 @@ if (PRINT) {
   for (const [k, v] of Object.entries(overrides)) console.log(`${k}=${v}`)
   process.exit(0)
 }
+const startedAt = new Date()
 const r = spawnSync(cmd[0]!, cmd.slice(1), { stdio: 'inherit', env: { ...process.env, ...overrides } })
-if (r.error !== undefined) { console.error(`🔴 실행하지 못했다 — ${r.error.message}`); process.exit(127) }
-process.exit(r.status ?? 1)
+if (r.error !== undefined) console.error(`🔴 실행하지 못했다 — ${r.error.message}`)
+const exitCode = r.error !== undefined ? 127 : (r.status ?? 1)
+/**
+ * 🔴 발행 회차의 종료 값을 남긴다 — launchd 재등록 뒤에도 판정이 마지막 실제 회차를 읽는다.
+ *    plist 에 명시한 실행 표식·label 이 정확한 회차만 남고(`publish-run-record`), 쓰기 실패는 종료 값을 바꾸지 않는다.
+ */
+if (BY === 'publish') {
+  const rec = recordPublishRun({ env: process.env, startedAt, finishedAt: new Date(), exitCode })
+  if (!rec.written) console.error(`[stage-consume publish] 회차 기록 ✕ — ${rec.reason}`)
+}
+process.exit(exitCode)

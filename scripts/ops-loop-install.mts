@@ -20,6 +20,7 @@ import {
 import {
   PUBLISH_HEARTBEAT_ARGS, PUBLISH_RUNNER_ARGS, PUBLISH_RUNNER_LABEL,
   renderRunnerPlistFor, type RunnerTriggerMode,
+  judgeLaunchdRunMarker, launchctlEnvironmentOf, plistEnvironmentOf,
 } from './lib/original-post-runner-template'
 
 type SnapshotRow = { label: string; installed: boolean; loaded: boolean; file: string | null }
@@ -119,6 +120,10 @@ for (const [label, xml] of desired) {
   const left = leftoverPlaceholders(xml)
   if (left.length > 0) problems.push(`${label} placeholder가 남았다 — ${left.join(', ')}`)
 }
+// 🔴 발행 job 은 launchd 실행 표식·label 을 plist 에 명시해야 한다 — 회차 기록이 이것으로만 남는다
+for (const p of judgeLaunchdRunMarker(plistEnvironmentOf(desired.get(PUBLISH_RUNNER_LABEL)!)).problems) {
+  problems.push(`발행 러너 렌더 ${p}`)
+}
 
 const supplyLabel = 'com.soransoran.supply-process'
 const supplyTemplate = readFileSync(templatePathOf(supplyLabel), 'utf8')
@@ -177,6 +182,13 @@ for (const [label, xml] of desired) {
   const wdOk = label === KEEP_AWAKE_LABEL || (cfg.readable && cfg.workingDirectory === runtimeRoot)
   console.log(`   ${argsOk && wdOk ? '🟢' : '🔴'} ${label} loaded 인자·경로`)
   ok = argsOk && wdOk && ok
+  if (label === PUBLISH_RUNNER_LABEL) {
+    // 🔴 파일이 아니라 launchctl 이 **실제로 물고 있는** env 에서 표식·label 을 본다
+    const marker = judgeLaunchdRunMarker(launchctlEnvironmentOf(p.ok ? p.out : null))
+    console.log(`   ${marker.ok ? '🟢' : '🔴'} ${label} loaded 실행 표식·label`)
+    for (const m of marker.problems) console.log(`      ${m}`)
+    ok = marker.ok && ok
+  }
 }
 
 if (!ok) {
