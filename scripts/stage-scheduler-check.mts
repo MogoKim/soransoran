@@ -126,6 +126,13 @@ for (const s of ['d20', 'd30', 'd50'] as const) {
 const g100 = genericProfileOf('d100', GRID)
 check(`🔴 [blocker 실측] d100 은 지금 러너로 담을 수 없다 — 용량 ${cap} < 100`, !g100.ok && cap < 100,
   g100.ok ? '파생됐다' : '')
+{
+  const d = deriveSlots(100, GRID)
+  check('🔴 deriveSlots 자체가 용량 초과를 거절한다(겹친 슬롯으로 메우지 않는다)',
+    !d.ok && d.problems.some((x) => x.includes(`${cap}건`)), d.ok ? '만들었다' : d.problems.join(' / '))
+  const d80 = deriveSlots(cap, GRID)
+  check(`경계 — 용량 ${cap}건은 서로 다른 분으로 담긴다`, d80.ok && new Set(d80.slots.map(minuteOfDay)).size === cap)
+}
 check('반례 — 격자 5분 · 같은 댓글 표라면 d100 이 담긴다(격자가 병목임을 보인다)',
   deriveSlots(100, { ...GRID, gridMinutes: 5 }).ok)
 check('반례 — 목표 0 · 101 · 소수는 만들지 않는다',
@@ -248,6 +255,9 @@ check('🔴 d20 FAIL → TRIAL d20 재시험 (기반 d10)', p.state === 'TRIAL' 
 p = planGenericStage(base({ previous: prev('d20', 'TRIAL', { trialBase: 'd10' }), evidence: ev('d20', 'FAIL'), ceiling: 'd10', runtimeWired: allWired }))
 check('🔴 천장이 d10 으로 내려가면 d20 재시험도 막는다 — 기반 d10 증명일', p.state === 'REPROVE' && p.release === 'd10'
   && p.blocks.some((b) => b.code === 'CEILING'))
+p = planGenericStage(base({ previous: prev('d30', 'TRIAL', { trialBase: 'd20' }), evidence: ev('d30', 'FAIL'), ceiling: 'd10', runtimeWired: allWired }))
+check('🔴 재시험 기반(d20)이 천장(d10) 위면 기반도 천장으로 — 천장 위 증명일 0', p.state === 'REPROVE' && p.release === 'd10',
+  `${p.state}:${p.release}`)
 p = planGenericStage(base({ previous: prev('d20', 'SUSTAIN'), evidence: null, ceiling: 'd10', runtimeWired: allWired }))
 check('🔴 전날 공개가 천장 위였다면 천장으로 내린다(천장 위 공개 0)', p.release === 'd10')
 p = planGenericStage(base({ previous: prev('d50', 'TRIAL', { trialBase: 'd30' }), evidence: ev('d50', 'PASS'), ceiling: 'd100', runtimeWired: allWired }))
