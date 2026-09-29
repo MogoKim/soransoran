@@ -167,6 +167,7 @@
     "supply:workset-check": "tsx scripts/supply-workset-check.mts",
     "supply:workset-e2e-check": "tsx scripts/supply-workset-e2e-check.mts",
     "supply:ledger-check": "tsx scripts/supply-llm-ledger-check.mts",
+    "supply:reserve-check": "tsx scripts/supply-scheduled-reserve-check.mts",
     "supply:ledger-resolve": "tsx scripts/supply-llm-ledger-resolve.mts",
     "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",
     "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts",

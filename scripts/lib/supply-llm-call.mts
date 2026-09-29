@@ -21,8 +21,9 @@ import { randomUUID } from 'node:crypto'
 import {
   classifyReservations, judgeSettle, judgeSpend, ledgerDateOf, runPaidCountOf, tallyOf,
   type BlockCode, type BudgetLimits, type LedgerEntry, type LedgerStage,
-  type OpenReservation,
+  type OpenReservation, type SpendProtect,
 } from '../../src/lib/llm-ledger'
+import { supplySpendProtectAt, type SupplyRunKind } from '../../src/lib/supply-scheduled-reserve'
 import { PRICING_VERSION, costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
   addOpenReservation, appendLedgerLine, clearOpenReservation, defaultLedgerDir, ledgerPathOf,
@@ -137,7 +138,37 @@ export type SupplySessionConfig = {
   now?: () => Date
   /** 🔴 시험 전용 주입. 운영은 비워 두고 기본 저장소를 쓴다 */
   io?: LedgerIo
+  /**
+   * 🔴 **정기 회차 몫 보호** (2026-09-29) — 요청마다 판정 시각으로 부른다.
+   *
+   *    🔴 **공급 장부(기본 디렉터리)에서는 이 칸을 보지 않는다.** 그 장부는 언제나
+   *       `supplyProtectFromEnv` 를 쓴다 — 호출부가 끄거나 바꿀 수 있으면 그것이 우회로다.
+   *    다른 디렉터리(댓글 루프 · 사후 감사 · 시험 임시 장부)는 이 칸이 없으면 보호 없음이다.
+   */
+  protectAt?: (now: Date) => ProtectDecision
 }
+
+/** 보호 판정 한 건 — 🔴 정기 회차면 `protect` 가 `null` 이다 */
+export type ProtectDecision = { kind: SupplyRunKind; why: string; protect: SpendProtect | null }
+
+/**
+ * 🔴 **공급 장부의 보호 판정 — 운영 경로는 이것 하나다.**
+ *    정기 여부는 launchd 가 넣은 `XPC_SERVICE_NAME` 과 **벽시계**로만 정한다(정본 `supply-scheduled-reserve`).
+ */
+export function supplyProtectFromEnv(env: NodeJS.ProcessEnv): (now: Date) => ProtectDecision {
+  return (now) => supplySpendProtectAt({ env, now: SUPPLY_PROTECT_TEST_SEAM.clock?.() ?? now })
+}
+
+/**
+ * 🔴 **시험 전용 이음매 — 보호 판정의 벽시계만** 바꾼다. 운영은 `null`(진짜 시계)이다.
+ *
+ *    정기 슬롯 창은 벽시계로 판정한다. 러너를 띄우는 시험은 그 시각을 고르지 못하면
+ *    하루 중 언제 돌리느냐에 따라 결과가 달라진다. 그래서 `fake-provider-hook` 만 이 칸을 건다
+ *    (`FAKE_SUPPLY_PROTECT_NOW`). 🔴 그 훅은 provider 를 가짜로 바꾼다 — 이 칸이 걸린 프로세스는
+ *    **실제 유료 요청을 보낼 수 없다.** 운영 경로는 그 훅을 import 하지 않는다.
+ *    🔴 실행 종류(라벨)는 바꾸지 않는다 — 라벨은 여전히 진짜 env 에서 온다.
+ */
+export const SUPPLY_PROTECT_TEST_SEAM: { clock: (() => Date) | null } = { clock: null }
 
 /** 회차 집계 — 🔴 사전 계산과 유료 요청을 **따로** 센다 */
 export type SessionTally = {
@@ -188,6 +219,10 @@ export class SupplyLlmSession {
   readonly limits: BudgetLimits
   private readonly now: () => Date
   private readonly io: LedgerIo
+  /** 🔴 정기 회차 몫 보호 — 공급 장부면 언제나 켜져 있다 */
+  private readonly protectAt: ((now: Date) => ProtectDecision) | null
+  /** 마지막 판정의 실행 종류 — 사람이 읽는 줄에만 쓴다 */
+  private lastKind: ProtectDecision | null = null
   /** 🔴 이 세션의 표식 — pid 가 재사용돼도 갈린다 */
   private readonly sessionId = randomUUID()
   /**
@@ -209,6 +244,13 @@ export class SupplyLlmSession {
     this.limits = cfg.limits
     this.now = cfg.now ?? (() => new Date())
     this.io = cfg.io ?? REAL_LEDGER_IO
+    /**
+     * 🔴 **공급 장부면 호출부 설정을 보지 않는다.** 판정·초안·댓글 CLI 가 모두 이 장부를 쓴다 —
+     *    어느 하나가 보호를 끄는 칸을 가지면 손 실행이 정기 몫을 먹는 길이 다시 열린다.
+     */
+    this.protectAt = this.dir === defaultLedgerDir()
+      ? supplyProtectFromEnv(process.env)
+      : cfg.protectAt ?? null
   }
 
   get tally(): Readonly<SessionTally> { return this.t }
@@ -218,6 +260,10 @@ export class SupplyLlmSession {
     const by = [...this.t.blockedBy.entries()].map(([c, n]) => `${c} ${n}`).join(' · ')
     return [
       `장부 ${this.runId} · 유료 ${this.t.paid}건 · 보류 ${this.t.blocked}건${by === '' ? '' : ` (${by})`}`,
+      ...(this.lastKind === null ? [] : [
+        `  실행 종류 ${this.lastKind.kind === 'scheduled' ? '정기' : '손 실행'} — ${this.lastKind.why}`
+          + (this.lastKind.protect === null ? '' : ` · 🔴 정기 회차 몫을 남긴다: ${this.lastKind.protect.reason}`),
+      ]),
       `  사전 계산 ${this.t.countTokens}건 (무료)`,
       `  예약 $${this.t.reservedUsd.toFixed(6)} · 정산 $${this.t.settledUsd.toFixed(6)}`
         + ` · 사용량 미상 ${this.t.usageUnknown}건 · 예약 초과 ${this.t.overruns}건`,
@@ -334,7 +380,17 @@ export class SupplyLlmSession {
           open: openRead.ok ? openRead.list : [],
           now: startedAt, sessionId: this.sessionId, pid: process.pid, pidAlive: this.io.pidAlive,
         })
+        /**
+         * 🔴 **정기 회차 몫 — 잠금 안에서, 판정 시각으로 정한다** (2026-09-29).
+         *    같은 잠금 안에서 집계·판정·예약 기록이 일어나므로 손 실행과 정기 회차가 동시에 와도
+         *    둘이 같은 여력을 두 번 보지 않는다.
+         *    🔴 시각은 `startedAt` 이다 — 집계하는 장부 파일(`path`)과 **같은 KST 날짜**여야
+         *       자정 경계에서 어제 장부를 오늘 슬롯으로 판정하는 일이 없다.
+         */
+        const decided = this.protectAt === null ? null : this.protectAt(startedAt)
+        this.lastKind = decided
         const v = judgeSpend({
+          protect: decided?.protect ?? null,
           limits: this.limits,
           tally: read.ok ? tallyOf(read.entries) : tallyOf([]),
           runPaid: runRead.ok ? runPaidCountOf(runRead.entries, this.runId) : 0,

@@ -104,6 +104,30 @@ export type BlockCode =
    *    다음 프로세스가 그것을 본다. 저장 기능이 회복돼도 마찬가지다.
    */
   | 'UNRESOLVED_RESERVATION'
+  /**
+   * 🔴 **정기 회차 몫에 닿았다** (2026-09-29).
+   *
+   *    하루 여력은 남았지만 그 남은 것이 **아직 돌지 않은 정기 공급 슬롯의 몫**이다.
+   *    손 실행(수동 · commissioning)은 그 몫을 뺀 나머지만 쓴다 — 정본 `supply-scheduled-reserve`.
+   *    `DAILY_EXHAUSTED` 와 가른다: 이것은 운영 이상이 아니라 **의도한 양보**다.
+   */
+  | 'SCHEDULED_RESERVE'
+
+/**
+ * 🔴 **이 요청이 건드릴 수 없는 몫** — `judgeSpend` 의 선택 입력 (2026-09-29).
+ *
+ *    장부는 누가 먼저 왔는가만 본다. 그러면 손 실행이 정기 회차의 몫을 먼저 쓴다(2026-09-28 실측).
+ *    이 조건이 있으면 그 요청은 `min(하루 예산, 천장) − 쓴 것 − 열린 예약 − 떼어 둔 몫` 안에서만 통과한다.
+ *    🔴 값을 여기서 정하지 않는다. 호출부가 넘긴다(공급은 `supplySpendProtectAt`).
+ */
+export type SpendProtect = {
+  /** 다른 회차 몫으로 떼어 둔 금액 */
+  reservedForOthersUsd: number
+  /** 🔴 이 요청이 볼 수 있는 하루 총액 천장 — env 로 예산을 올려도 넘지 못한다. `null` 이면 천장 없음 */
+  ceilingUsd: number | null
+  /** 사람이 읽는 근거 — 막힌 줄의 사유에 그대로 실린다 */
+  reason: string
+}
 
 /**
  * 장부 한 줄 — 🔴 **이 모양이 계약이다.**
@@ -387,6 +411,12 @@ export function judgeSpend(input: {
    *    경우를 덮는 자리다.
    */
   unresolved: readonly ReservationVerdict[]
+  /**
+   * 🔴 **이 요청이 건드릴 수 없는 몫** (2026-09-29). 없거나 `null` 이면 앞판과 같다.
+   *    하루 예산 판정(`DAILY_EXHAUSTED`)을 **먼저** 하고, 통과한 뒤에 이것을 본다 —
+   *    총액이 모자란 것과 몫을 양보한 것을 다른 코드로 남기기 위해서다.
+   */
+  protect?: SpendProtect | null
 }): GateVerdict {
   if (!input.ledgerOk) {
     return { ok: false, code: 'LEDGER_ERROR', reason: '장부를 읽지 못했다 — 유료 요청을 보류한다' }
@@ -437,6 +467,25 @@ export function judgeSpend(input: {
       ok: false, code: 'DAILY_EXHAUSTED',
       reason: `남은 여력 $${remaining.toFixed(6)} < 예약 $${input.reserve.usd.toFixed(6)}`,
     }
+  }
+  const p = input.protect ?? null
+  if (p !== null) {
+    // 🔴 모양이 틀린 보호 조건은 **없는 것**이 아니라 **모르는 것**이다 — 막는다
+    const badReserve = !Number.isFinite(p.reservedForOthersUsd) || p.reservedForOthersUsd < 0
+    const badCeiling = p.ceilingUsd !== null && (!Number.isFinite(p.ceilingUsd) || p.ceilingUsd < 0)
+    if (badReserve || badCeiling) {
+      return { ok: false, code: 'SCHEDULED_RESERVE', reason: `정기 회차 몫을 계산하지 못했다 — ${p.reason}` }
+    }
+    const cap = p.ceilingUsd === null ? input.limits.dailyUsd : Math.min(input.limits.dailyUsd, p.ceilingUsd)
+    const allowance = cap - used - p.reservedForOthersUsd
+    if (input.reserve.usd > allowance) {
+      return {
+        ok: false, code: 'SCHEDULED_RESERVE',
+        reason: `정기 회차 몫을 남긴다 — 쓸 수 있는 여력 $${allowance.toFixed(6)} < 예약 $${input.reserve.usd.toFixed(6)}`
+          + ` · ${p.reason}`,
+      }
+    }
+    return { ok: true, reservedUsd: input.reserve.usd, remainingUsd: allowance - input.reserve.usd }
   }
   return { ok: true, reservedUsd: input.reserve.usd, remainingUsd: remaining - input.reserve.usd }
 }

@@ -16,7 +16,7 @@
  *
  * 🔴 **실제 운영 자산·env·장부를 건드리지 않는다.** 전부 임시 디렉터리와 임시 HOME 이다.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
   symlinkSync, utimesSync, writeFileSync,
@@ -51,6 +51,7 @@ import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-que
 /** 🔴 계획 정본 — 문자열이 아니라 **실제 인자**를 본다 */
 import { judgeBuffer, planCommonPhase, planPending } from '../src/lib/supply-process'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL } from '../src/lib/supply-scheduled-reserve'
 import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
 
 /** 🔴 주석을 지운다 — 검사가 주석의 낱말이 아니라 **코드**를 보게 한다 */
@@ -811,6 +812,13 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
           GEMINI_API_KEY: 'fixture-fake-gemini-key',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+          /**
+           * 🔴 **이 절의 러너는 정기 회차로 돈다** (2026-09-29). 이 절이 보는 것은 하루 예산 ·
+           *    미정산 · 재시작의 장부 규칙이다 — 정기 회차 몫 보호(손 실행 양보)는 ⑯ 이 따로 본다.
+           *    라벨은 launchd 가 넣는 값 그대로, 벽시계는 08:20 KST(08:15 슬롯 창 안)로 고정한다.
+           */
+          [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL,
+          FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T23:20:00.000Z',
           // 🔴 **시험 값이다. 운영 예산이 아니다** — 임시 환경에만 들어간다
           ...budget,
         },
@@ -1018,6 +1026,12 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       GEMINI_API_KEY: 'fixture-fake-gemini-key',
       FAKE_PROVIDER_LOG: '',
       NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+      /**
+       * 🔴 **정기 회차 둘이다** (2026-09-29). 손 실행이면 정기 몫에 먼저 막혀 **아무것도 안 쓰고**
+       *    이 검사가 저절로 통과한다(시각에 따라). 여기서 보는 것은 하루 예산의 동시성이다.
+       */
+      [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL,
+      FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T23:20:00.000Z',
       [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP,
     }
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
@@ -1030,7 +1044,89 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     check('🔴 [L] 두 회차를 함께 돌려도 장부가 깨지지 않는다',
       both.every((r) => r.status === 0) && after.length > 0)
     check('🔴 [L] 두 회차의 예약·정산 합이 하루 예산을 넘지 않는다', spent <= 0.02 + 1e-9)
+    check('🔴 [L] 두 회차가 실제로 썼다 — 아무것도 안 써서 통과한 것이 아니다', spent > 0)
     check('🔴 [L] 잠금이 남지 않는다', !existsSync(lockPathOf(ledgerDir)))
+  }
+
+  /**
+   * ⓚ' 🔴 **정기 회차 몫 보호 — 운영 러너 그대로** (2026-09-29).
+   *
+   *    2026-09-28 재현: 손 실행이 먼저 하루 예산을 쓰고 정기 회차가 `DAILY_EXHAUSTED` 로 0건이었다.
+   *    하루 예산을 "남은 정기 슬롯 몫" 보다 작게 잡으면 — 손 실행은 한 건도 못 보내고,
+   *    정기 회차는 같은 예산으로 보낸다. 🔴 시각은 훅이 고정한다(보호 판정의 벽시계만).
+   *    라벨은 launchd 가 넣는 env 이름 그대로 준다.
+   */
+  {
+    const SMALL = { [BUDGET_ENV.dailyUsd]: '0.2', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP }
+    const MANUAL_1113 = { [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T02:13:00.000Z' }
+    const codes = (r: Run): string[] => [...new Set(r.entries.map((e) => e.blockCode).filter((x): x is NonNullable<typeof x> => x !== null))]
+    const manual = run({ ...SMALL, ...MANUAL_1113 })
+    check('🔴 [L] 손 실행(11:13 · 라벨 없음) — 남은 정기 슬롯 몫에 막혀 유료 0건',
+      manual.paid === 0 && manual.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'),
+      `paid=${manual.paid} codes=${codes(manual).join(',')}`)
+    const sched = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' })
+    check('🔴 [L] 정기 회차(12:20 · 공급 job 라벨) — 같은 예산으로 유료 요청이 나간다',
+      sched.paid > 0 && !sched.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'),
+      `paid=${sched.paid} codes=${codes(sched).join(',')}`)
+    const kick = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T02:13:00.000Z' })
+    check('🔴 [L] 공급 job 라벨이어도 창 밖(11:13 kickstart)이면 손 실행이다 — 유료 0건',
+      kick.paid === 0 && kick.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'))
+    // 🔴 12:20(슬롯 창 안)에 위조한다 — 창 밖이면 위조가 먹혀도 창 판정이 막아 이 검사가 아무것도 못 가린다
+    const forged = run({
+      ...SMALL, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z',
+      SORAN_SUPPLY_RUN_KIND: 'scheduled', SORAN_TRIGGER: 'schedule',
+    })
+    // 🔴 `SORAN_RUN_AT` 은 러너 자체의 회차 시각이라 여기서 넣으면 러너가 다른 이유로 멈춘다 —
+    //    보호 판정이 그 값을 시각으로 쓰지 않는지는 supply:reserve-check ⓓ 가 본다
+    check('🔴 [L] 호출자가 적는 칸(SORAN_*)으로 정기가 되지 않는다 — 유료 0건',
+      forged.paid === 0 && forged.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'))
+    const other = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: 'com.soransoran.persona-comment-runner', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' })
+    check('🔴 [L] 다른 soransoran job 라벨은 정기 공급이 아니다 — 유료 0건',
+      other.paid === 0 && other.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'))
+    const late = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T14:10:00.000Z' })
+    check('🔴 [L] 손 실행(23:10 · 마지막 슬롯 창 뒤) — 몫이 풀려 유료 요청이 나간다', late.paid > 0,
+      `paid=${late.paid} codes=${codes(late).join(',')}`)
+
+    /**
+     * 🔴 **동시에 띄운다** — 손 실행과 정기 회차가 같은 장부를 같은 순간에 본다.
+     *    누가 먼저 잠금을 잡든 결과가 같아야 한다: 손 실행 0건 · 정기 회차는 보낸다.
+     */
+    wipeLedger()
+    writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    const spawnOne = (extra: Record<string, string>, runId: string, logFile: string): Promise<{ code: number | null; out: string }> =>
+      new Promise((resolve) => {
+        let out = ''
+        const c = spawn(join(process.cwd(), 'node_modules/.bin/tsx'), [
+          join(process.cwd(), 'scripts/micro-seed-auto-draft.mts'),
+          '--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', `--ledger-run-id=${runId}`,
+          '--require-queue-snapshot',
+        ], {
+          cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key', GEMINI_API_KEY: 'fixture-fake-gemini-key',
+            FAKE_PROVIDER_LOG: logFile,
+            NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+            ...SMALL, ...extra,
+          },
+        })
+        c.stdout?.on('data', (d: Buffer) => { out += d.toString() })
+        c.stderr?.on('data', (d: Buffer) => { out += d.toString() })
+        c.on('close', (code) => resolve({ code, out }))
+      })
+    const mLog = join(root, 'race-manual.log')
+    const sLog = join(root, 'race-sched.log')
+    writeFileSync(mLog, '', 'utf-8')
+    writeFileSync(sLog, '', 'utf-8')
+    const [rm, rs] = await Promise.all([
+      spawnOne({ [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RM', mLog),
+      spawnOne({ [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RS', sLog),
+    ])
+    const paidOf = (f: string): number => readFileSync(f, 'utf-8').split('\n').filter((l) => l.startsWith('paid\t')).length
+    check('🔴 [L] 동시 실행 — 손 실행은 0건 · 정기 회차는 보낸다 (잠금 순서와 무관)',
+      rm.code === 0 && rs.code === 0 && paidOf(mLog) === 0 && paidOf(sLog) > 0,
+      `manual code=${rm.code} paid=${paidOf(mLog)} · sched code=${rs.code} paid=${paidOf(sLog)}`
+      + `\n${rm.out.slice(-1200)}\n---\n${rs.out.slice(-1200)}`)
+    check('🔴 [L] 동시 실행 뒤 잠금이 남지 않는다', !existsSync(lockPathOf(ledgerDir)))
   }
 
   // ⓛ 🔴 정산을 못 적어도 예약은 남는다 — 그 방향이 안전하다

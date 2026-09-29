@@ -716,6 +716,12 @@ jobs:
       - name: 공급 AI 비용 장부 (요청 전 차단 · 미정산 예약 · 동시성 · 날짜 경계)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:ledger-check
+      # 🔴 정기 공급 회차 몫 보호 (2026-09-29) — 2026-09-28 손 실행 17회가 하루 예산을 먼저 써서
+      #    정기 4회차가 초안 0건이었다. 손 실행은 남은 정기 슬롯 몫을 남기고 쓴다.
+      #    네트워크 0 · 실제 provider 0 · 운영 env·장부 0 (임시 디렉터리 · 임시 HOME).
+      - name: 정기 공급 회차 몫 보호 (launchd 라벨 · 슬롯 창 · KST 자정 · 열린 예약)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run supply:reserve-check
       - name: D100 공급 계획 (게시판 배선 · 요청 상한)
         run: npm run supply:d100-plan-check
 

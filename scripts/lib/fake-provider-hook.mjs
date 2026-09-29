@@ -65,6 +65,21 @@ async function armSettleFail() {
     real(path, entry)
   }
 }
+/**
+ * 🔴 **정기 회차 몫 보호의 벽시계를 고정한다** (2026-09-29). `FAKE_SUPPLY_PROTECT_NOW` 에 ISO 시각을 준다.
+ *    슬롯 창 판정이 시험을 돌린 시각에 따라 달라지지 않게 하려는 것이다. 라벨(`XPC_SERVICE_NAME`)은
+ *    건드리지 않는다 — 시험이 env 로 직접 준다. 🔴 이 훅이 걸린 프로세스는 provider 가 가짜다.
+ */
+const PROTECT_NOW = process.env.FAKE_SUPPLY_PROTECT_NOW ?? ''
+let protectArmed = false
+async function armProtectClock() {
+  if (PROTECT_NOW === '' || protectArmed) return
+  protectArmed = true
+  const at = new Date(PROTECT_NOW)
+  if (!Number.isFinite(at.getTime())) throw new Error(`FAKE_SUPPLY_PROTECT_NOW 를 읽지 못했다 — ${PROTECT_NOW}`)
+  const mod = await import('./supply-llm-call.mjs')
+  mod.SUPPLY_PROTECT_TEST_SEAM.clock = () => at
+}
 const MODE = process.env.FAKE_PROVIDER_MODE ?? 'ok'
 /** 🔴 사전 계산이 돌려줄 입력 토큰 수 — 예약액을 시험에서 조절하는 손잡이 */
 const COUNT_TOKENS = Number(process.env.FAKE_PROVIDER_COUNT_TOKENS ?? '100')
@@ -261,6 +276,7 @@ const semanticVerdictOf = (body) => {
 
 globalThis.fetch = async (url, init) => {
   await armSettleFail()
+  await armProtectClock()
   const u = String(url)
   // 🔴 제공사마다 사전 계산 경로 이름이 다르다 — 둘 다 무료다
   const isCount = u.includes('/count_tokens') || u.includes(':countTokens')
