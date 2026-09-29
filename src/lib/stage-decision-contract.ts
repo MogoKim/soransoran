@@ -19,7 +19,7 @@
  * 🔴 이 파일은 `scale-profile`(단계 enum 정본) 외에 아무것도 import 하지 않는다.
  *    사다리도 저장소도 이 파일을 향하고, 이 파일은 아무 쪽도 향하지 않는다.
  */
-import { RELEASE_STAGES, type ReleaseStage } from './scale-profile'
+import { RELEASE_STAGES, SAFEST_STAGE, type ReleaseStage } from './scale-profile'
 
 export const STAGE_DECISION_VERSION = 'stage-decision-v4'
 
@@ -55,6 +55,17 @@ export type SupplySignal = {
 }
 
 /**
+ * 🔴 **시험을 연 근거** (2026-09-29 P0 · 운영 증거 게이트).
+ *    · `PASS`   전날 기반 단계가 운영 PASS 였다 — 그래서 한 칸 올린다
+ *    · `RETEST` 전날 같은 단계 시험이 PASS 가 아니었다 — 같은 단계를 다시 시험한다
+ *    · `FLOOR`  기반이 바닥(d1)이다 — 증명할 아래 칸이 없다
+ *    🔴 바닥 위 기반(d3 이상)에서의 시험은 `PASS`·`RETEST` 만이다 — **날짜만으로 올라가지 않는다.**
+ *    이 칸이 없는 옛 행은 기반이 바닥일 때만 받는다(09-29 TRIAL d3 · 기반 d1 이 그 모양이다).
+ */
+export const TRIAL_BASES = ['PASS', 'RETEST', 'FLOOR'] as const
+export type TrialBasis = (typeof TRIAL_BASES)[number]
+
+/**
  * 🔴 **왜 그 상태가 됐는가 — 문구가 아니라 구조화된 값이다.**
  *    저장된 행을 검증할 때 `reasons` 문자열을 파싱하지 않으려면 이것이 있어야 한다.
  */
@@ -67,6 +78,8 @@ export type TransitionProvenance =
     readonly previousKstDate: string
     /** 오늘 시험 대상 — `nextStage(trialBase)` 여야 한다 */
     readonly target: ReleaseStage
+    /** 🔴 시험을 연 근거 — 바닥 위 기반이면 필수다(`TRIAL_BASES`) */
+    readonly basis?: TrialBasis
   }
   | { readonly kind: 'SUSTAIN'; readonly from: ReleaseStage; readonly to: ReleaseStage }
 
@@ -329,9 +342,23 @@ export function validateStoredDecision(input: {
       return no(`TRIAL 공개 ${release} 가 기반 ${t.trialBase} 의 바로 다음 칸(${String(up)})이 아니다`)
     }
     if (t.target !== release) return no(`시험 대상 ${String(t.target)} ≠ 공개 ${release}`)
+    /**
+     * 🔴 **바닥 위 기반의 시험은 증거 근거가 있어야 한다** (2026-09-29 P0).
+     *    `d3 → d5` 를 근거 칸 없이 적은 행은 "날짜만으로 올린" 행이다 — 받지 않는다.
+     *    `FLOOR` 는 기반이 바닥일 때만 말이 된다.
+     */
+    const basisRaw: unknown = t.basis
+    if (basisRaw !== undefined && !(TRIAL_BASES as readonly unknown[]).includes(basisRaw)) {
+      return no(`모르는 시험 근거 — ${String(basisRaw)}`)
+    }
+    const basis = basisRaw as TrialBasis | undefined
+    if (t.trialBase !== SAFEST_STAGE && basis !== 'PASS' && basis !== 'RETEST') {
+      return no(`기반 ${t.trialBase} 위의 시험인데 운영 증거 근거(PASS·RETEST)가 없다 — ${String(basis)}`)
+    }
     transition = {
       kind: 'TRIAL', trialBase: t.trialBase,
       previousKstDate: t.previousKstDate, target: release,
+      ...(basis === undefined ? {} : { basis }),
     }
   } else if (state === 'SUSTAIN') {
     if (!isRec(t) || t.kind !== 'SUSTAIN') return no('SUSTAIN 인데 구조화된 승격 근거가 없다')

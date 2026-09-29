@@ -528,7 +528,8 @@ const planned = {
 }
 const res = await publishOriginalPostTx(prisma, {
   queueId: target.id, publishedToday,
-  mode: { kind: 'scheduled', releaseStage: scale.releaseStage, planned },
+  // 🔴 launchd(`local`)·GitHub 예약(`schedule`)만 무인 회차다 — `manual` 은 표식을 남기지 않는다
+  mode: { kind: 'scheduled', releaseStage: scale.releaseStage, planned, unattended: TRIGGER === 'local' || TRIGGER === 'schedule' },
   // 🔴 자동 도장 행은 트랜잭션 안에서 스위치·도장·경고·DB 증거·결함을 다시 본다 · 단계 천장도 이 env 다
   autoReadyEnv: process.env,
   // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)

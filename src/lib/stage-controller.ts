@@ -35,6 +35,7 @@ import { PUBLISH_ONLY_KEYS } from './stage-source'
 import { CANARY_DATE_ENV, CANARY_STAGE_ENV } from './release-canary'
 import type { ConsumeOutcome } from './stage-decision-store'
 import type { PromotionVerdict } from './d100-capacity'
+import type { StageEvidenceVerdict } from './stage-evidence'
 import type { Health } from './ops-status'
 
 /** 🔴 브레이크가 보는 축 — 재고는 사다리가 이미 본다 */
@@ -77,6 +78,11 @@ export type ControllerInputs = {
   /** 🔴 사람이 승인한 천장(`SORAN_CAPACITY_STAGE`) — 이 controller 가 올리지 않는다 */
   authorizedCeiling: ReleaseStage
   previousDecision: ValidatedStageDecision | null
+  /**
+   * 🔴 **전날 운영 증거** (2026-09-29 P0) — 사다리가 시험 대상·기반을 이 값과 전날 결정으로 다시 정한다.
+   *    PASS 가 아니면(FAIL · 모름 · 없음) 올라가지 않고 같은 단계를 다시 시험한다.
+   */
+  previousEvidence?: StageEvidenceVerdict | null
   /** 🔴 정본 `stageVerdicts` — 비어 있으면 **읽기 실패**로 본다(아래 `decideStage` 참고) */
   verdicts: readonly StageVerdict[]
   daily: DatedCanary | null
@@ -145,6 +151,7 @@ export function decideStage(i: ControllerInputs): ControllerResult {
   const planned = planStageDecision({
     kstDate: i.kstDate, sustainedRelease: sustained, authorizedCapacityCeiling: i.authorizedCeiling,
     verdicts: i.verdicts, daily: i.daily, previousDecision: i.previousDecision,
+    previousEvidence: i.previousEvidence ?? null,
     promotion: i.promotion, publishedToday: i.publishedToday, decidedAt: i.decidedAt,
   })
   const bad = i.signals.filter((s) => s.health === 'bad')
