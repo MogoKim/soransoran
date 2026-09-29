@@ -675,7 +675,7 @@ console.log('\n②-d5 🔴 🔴 D3 기간 운영 + D5 하루 시험이 겹치는
      */
     const shared = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
     check('🔴 판정을 만드는 함수가 하나다 — 창이 달라지지 않는다',
-      (shared.match(/const dayFor = \(stage: ReleaseStage\)/g) ?? []).length === 1
+      (shared.match(/const dayFor = \(stage: RuntimeStage\)/g) ?? []).length === 1
       && (shared.match(/anchor: 'now'/g) ?? []).length === 1
       // 🔴 러너 안에 사본이 남아 있지 않다
       && !/const dayFor = /.test(src) && !/anchor: 'now'/.test(src))
