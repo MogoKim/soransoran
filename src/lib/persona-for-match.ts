@@ -42,18 +42,28 @@ export async function personaMatchUsageOf(
   opts: { excludeQueueId?: string } = {},
 ): Promise<{ postsThisWeek: number; last: { matchedAt: Date | null } | null }> {
   const notSelf = opts.excludeQueueId === undefined ? {} : { id: { not: opts.excludeQueueId } }
-  const postsThisWeek = (await db.originalPostApprovalQueue.findMany({
-    where: { matchedPersona: { code }, matchedAt: { gte: weekAgo }, ...notSelf },
-    select: { gateResults: true },
-  })).filter((x) => !carriesRawAdaptMark(x.gateResults)).length
-  const rows = (await db.originalPostApprovalQueue.findMany({
-    where: { matchedPersona: { code }, ...notSelf },
-    select: { matchedAt: true, gateResults: true },
-  })).filter((x) => !carriesRawAdaptMark(x.gateResults))
-  if (rows.length === 0) return { postsThisWeek, last: null }
-  if (rows.some((x) => x.matchedAt === null)) return { postsThisWeek, last: { matchedAt: null } }
-  const latest = rows.reduce((m, x) => (x.matchedAt!.getTime() > m.getTime() ? x.matchedAt! : m), rows[0]!.matchedAt!)
-  return { postsThisWeek, last: { matchedAt: latest } }
+  const week = { matchedPersona: { code }, matchedAt: { gte: weekAgo }, ...notSelf }
+  const all = { matchedPersona: { code }, ...notSelf }
+  /**
+   * 🔴 **앞판 쿼리(`count` · `findFirst`)를 그대로 부르고, 격리 행만 뺀다.** 격리 행이 없으면 값이 앞판과 같다 —
+   *    조회 모양도 같아서 발행 러너 · 가짜 DB 검사가 보는 값이 바뀌지 않는다.
+   */
+  const weekCount = await db.originalPostApprovalQueue.count({ where: week })
+  const weekQuarantined = weekCount === 0 ? 0 : (await db.originalPostApprovalQueue.findMany({
+    where: week, select: { gateResults: true },
+  })).filter((x) => carriesRawAdaptMark(x.gateResults)).length
+  const postsThisWeek = Math.max(0, weekCount - weekQuarantined)
+  const first = await db.originalPostApprovalQueue.findFirst({
+    where: all, orderBy: { matchedAt: 'desc' }, select: { matchedAt: true, gateResults: true },
+  })
+  if (first === null || !carriesRawAdaptMark(first.gateResults)) {
+    return { postsThisWeek, last: first === null ? null : { matchedAt: first.matchedAt ?? null } }
+  }
+  // 🔴 가장 최근 배정이 격리 행이다 — 같은 정렬(`matchedAt desc`)에서 격리 행이 아닌 첫 행을 쓴다
+  const next = (await db.originalPostApprovalQueue.findMany({
+    where: all, orderBy: { matchedAt: 'desc' }, select: { matchedAt: true, gateResults: true },
+  })).find((x) => !carriesRawAdaptMark(x.gateResults))
+  return { postsThisWeek, last: next === undefined ? null : { matchedAt: next.matchedAt ?? null } }
 }
 
 /**
