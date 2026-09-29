@@ -14,7 +14,8 @@ import type { PrismaClient } from '@prisma/client'
 import { pickPostVisibility, POST_VISIBILITY_SELECT } from '../../src/lib/post-visibility'
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
 import type { FrequencyCorpus, FrequencyRead, TargetSource } from './persona-comment-targets'
-import { loadCanonCorpusTexts } from './persona-reference-store.mjs'
+import { loadCanonCorpusTexts, referenceSeedShareCount, stableAssignment } from './persona-reference-store.mjs'
+import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 
 /** 🔴 코퍼스는 회차마다 한 번만 읽는다 — 대상마다 다시 열면 같은 파일을 반복해서 연다 */
 let corpusOnce: FrequencyRead | null = null
@@ -24,8 +25,16 @@ export function makeDbTargetSource(args: {
   windowStart: Date
   /** ② 코퍼스를 읽을 것인가 — 🔴 inspect 회차도 읽는다. "돌 수 있는가" 를 알아야 하기 때문이다 */
   readCorpus?: boolean
+  /**
+   * ⑧ seed 재사용을 셀 고정 배정 — 🔴 시험용 주입. 운영은 생성 경로와 **같은** `stableAssignment` 를 읽는다
+   *    (묶음을 다시 나누지 않는다 — 나누면 생성과 판정이 다른 묶음을 본다).
+   */
+  referenceByCode?: () => ReadonlyMap<string, VoiceReferenceBundle>
 }): TargetSource {
   const { prisma } = args
+  let assignment: ReadonlyMap<string, VoiceReferenceBundle> | null = null
+  const referenceByCode = args.referenceByCode
+    ?? (() => (assignment ??= stableAssignment({ repoRoot: process.cwd() }).byCode))
   return {
     posts: async () => {
       const rows = await prisma.post.findMany({
@@ -145,18 +154,8 @@ export function makeDbTargetSource(args: {
      *    발화(Comment)와 적재된 후보(Queue)를 함께 센다. 못 세면 `null` 이다.
      */
     seedUseCount: async (personaCode) => {
-      try {
-        const persona = await prisma.persona.findUnique({
-          where: { code: personaCode }, select: { id: true },
-        })
-        if (persona === null) return null
-        const [comments, queued] = await Promise.all([
-          prisma.comment.count({ where: { personaId: persona.id, isDeleted: false } }),
-          prisma.personaApprovalQueue.count({ where: { personaId: persona.id } }),
-        ])
-        // 🔴 아직 한 번도 안 썼으면 이번이 1회째다
-        return comments + queued + 1
-      } catch { return null }
+      // 🔴 ⑧ seed 재사용 = 같은 seed 를 받은 Persona 수(전체 단위 · 계약 §3-⑧). 이력 수가 아니다
+      try { return referenceSeedShareCount(referenceByCode(), personaCode) } catch { return null }
     },
   }
 }
