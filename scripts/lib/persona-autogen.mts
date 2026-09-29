@@ -243,6 +243,18 @@ const digestOf = (b: VoiceReferenceBundle | undefined): string =>
   b === undefined ? '∅'
     : createHash('sha256').update(b.comments.map((x) => x.text).join('\u0000')).digest('hex').slice(0, 16)
 
+/**
+ * 🔴 **확장 배정이 운영 고정 배정을 바꿨는가** — 바뀐 코드 목록. 비어 있어야 한다.
+ *    한 코드라도 다른 묶음을 받으면 그 Persona 의 말투가 확장 때문에 바뀐 것이다.
+ */
+export function assignmentDrift(
+  base: ReadonlyMap<string, VoiceReferenceBundle>,
+  wide: ReadonlyMap<string, VoiceReferenceBundle>,
+  codes: readonly string[],
+): string[] {
+  return codes.filter((code) => digestOf(base.get(code)) !== digestOf(wide.get(code)))
+}
+
 export type VoicePool = {
   ok: boolean
   code: string
@@ -283,7 +295,7 @@ export function voicePoolFor(input: { repoRoot: string; newCodes: readonly strin
     personaCodes: Array.from({ length: 999 }, (_, i) => `X${String(i).padStart(3, '0')}`),
   })
   const wideBy = new Map(wide.bundles.map((b) => [b.personaCode, b]))
-  const drift = PRODUCTION_PERSONA_CODES.filter((code) => digestOf(base.byCode.get(code)) !== digestOf(wideBy.get(code)))
+  const drift = assignmentDrift(base.byCode, wideBy, PRODUCTION_PERSONA_CODES)
   const byCode: VoicePool['byCode'] = new Map()
   for (const code of input.newCodes) {
     const b = wideBy.get(code)

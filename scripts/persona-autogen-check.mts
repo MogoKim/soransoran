@@ -18,7 +18,7 @@ import {
   thinLifeAxisCount, voiceCoreFromBundle, isNameOnly,
   type AutogenBlockCode, type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
 } from '../src/lib/persona-autogen'
-import { judgeAutogenCandidate } from './lib/persona-autogen.mjs'
+import { assignmentDrift, judgeAutogenCandidate } from './lib/persona-autogen.mjs'
 import { judgeApplyBatch } from './lib/persona-autogen-apply.mjs'
 import { referenceSeedShareCount } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -165,6 +165,17 @@ console.log('④ 말투 칸')
   check('길이 토큰을 readLengthBand 가 읽는다', readLengthBand(vc.length) !== null)
   check('요 비율이 높으면 존댓말', vc.register === '존댓말')
   check('요 비율이 낮으면 구어체', voiceCoreFromBundle(bundleOf(code, TEXTS_B)).register === '구어체')
+}
+
+// ── ④-2 운영 말투 배정 불변 ──
+console.log('④-2 운영 말투 배정 불변')
+{
+  const a = bundleOf('P01', TEXTS_A)
+  const b = bundleOf('P02', TEXTS_B)
+  check('같은 배정이면 drift 0', assignmentDrift(new Map([['P01', a], ['P02', b]]), new Map([['P01', a], ['P02', b]]), ['P01', 'P02']).length === 0)
+  check('운영 코드의 묶음이 바뀌면 drift 로 잡는다',
+    assignmentDrift(new Map([['P01', a], ['P02', b]]), new Map([['P01', b], ['P02', a]]), ['P01', 'P02']).join(',') === 'P01,P02')
+  check('운영 코드가 묶음을 잃어도 drift 다', assignmentDrift(new Map([['P01', a]]), new Map(), ['P01']).length === 1)
 }
 
 // ── ⑤ 적재 배치 게이트 — DB 를 열기 전에 막는다 ──
