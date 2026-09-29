@@ -4501,11 +4501,18 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
       },
     } as unknown as Parameters<typeof makeDbTargetSource>[0]['prisma'])
 
+    /** 🔴 ⑧ seed — 고정 배정 묶음 fixture. P01·P02 는 서로 다른 화자, P03·P04 는 댓글 하나를 공유한다 */
+    const bundle = (code: string, texts: string[]) => ({ personaCode: code, comments: texts.map((text) => ({ text })) }) as never
+    const refs = new Map<string, never>([
+      ['P01', bundle('P01', ['가', '나', '다'])], ['P02', bundle('P02', ['라', '마', '바'])],
+      ['P03', bundle('P03', ['사', '공유'])], ['P04', bundle('P04', ['공유', '자'])],
+    ])
     const src = (throws: boolean): TargetSource => makeDbTargetSource({
       prisma: fakePrisma({ throws }),
       windowStart: new Date(0),
       // 🔴 외부 코퍼스는 이 검사에서 열지 않는다 — 네트워크 0
       readCorpus: false,
+      referenceByCode: () => { if (throws) throw new Error('자산 읽기 실패'); return refs },
     })
 
     const okCounts = await src(false).recentRoleCounts()
@@ -4517,7 +4524,26 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     check('🟢 정상이면 표시명을 돌려준다', (await src(false).knownNames())?.length === 1)
     check('🔴 seed 사용 횟수도 실패를 null 로 돌려준다',
       await src(true).seedUseCount('P01') === null)
-    check('🟢 정상이면 실측 횟수를 돌려준다', await src(false).seedUseCount('P01') === 6)
+    /**
+     * 🔴 (2026-09-29 운영 반례) 앞판은 `댓글 + Queue + 1` — 그 Persona 의 **이력**을 셌다. fake prisma 는
+     *    댓글 3 을 돌려주므로 앞판이면 여기서 ≥ 4 가 나온다. 계약(§3-⑧)은 같은 seed 를 받은 **Persona 수**다.
+     */
+    check('🔴 ⑧ seed 재사용은 이력이 아니라 같은 seed 를 받은 Persona 수다 — 겹침 없는 묶음은 1',
+      await src(false).seedUseCount('P01') === 1 && await src(false).seedUseCount('P02') === 1)
+    check('🔴 다른 Persona 와 seed 를 하나라도 나누면 그 수가 나온다(2 → review)',
+      await src(false).seedUseCount('P03') === 2 && await src(false).seedUseCount('P04') === 2)
+    check('🔴 배정은 읽혔고 묶음만 없는 Persona 는 1 — 회차 전체를 멈추지 않는다(생성에서 그 대상만 막힌다)',
+      await src(false).seedUseCount('P09') === 1)
+    check('🔴 배정이 통째로 비어도 1 — seed 가 없으면 나눈 seed 도 없다(회차 전체를 멈추지 않는다)',
+      await makeDbTargetSource({
+        prisma: fakePrisma({ throws: false }), windowStart: new Date(0), readCorpus: false,
+        referenceByCode: () => new Map(),
+      }).seedUseCount('P01') === 1)
+    {
+      const v = checkVoiceFingerprint('저도 그런 날이 있어요', { priorTexts: ['한 번 단 댓글이에요'], seedUseCount: 1 })
+      check('🔴 댓글 1건을 단 Persona 가 다음 댓글에서 ⑧ regenerate 로 영구히 막히지 않는다',
+        v.status !== 'regenerate' && !v.axes.includes('SEED_REUSE'))
+    }
     check('🔴 코퍼스를 열지 않기로 하면 corpus 가 null 이다',
       (await src(false).frequency()).corpus === null)
     check('🔴 그때도 사유는 남는다', (await src(false).frequency()).reason.trim() !== '')
