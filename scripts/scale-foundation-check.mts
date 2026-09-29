@@ -435,7 +435,7 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
   // 🔴 트랜잭션 재판정은 그대로다
   check('H 🔴 트랜잭션 재판정 — 수동 단건(manual-live)은 주입 상한 · 예약은 단계 목표로 다시 판정한다',
     /dailyCap = input\.mode\.dailyCap/.test(read('src/lib/original-post-publish-tx.ts'))
-    && /const target = PROFILES\[stage\]\.dailyTarget/.test(read('src/lib/original-post-publish-tx.ts')))
+    && /const target = profileOf\(stage\)\.dailyTarget/.test(read('src/lib/original-post-publish-tx.ts')))
 
   // ── health 판정을 **실제 함수로** 구성해 본다 ──
   //    🔴 필드 존재가 아니라 level·target·dailyCap 이 맞는지 본다

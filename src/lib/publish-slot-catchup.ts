@@ -32,7 +32,7 @@
  *
  *    한 겹만으로는 부족하다. ①만 있으면 동시 실행에 뚫리고, ②만 있으면 밀린 슬롯을 모른다.
  *
- * 🔴 **단계 정체성은 그대로다.** due 는 `PROFILES[stage].slots` 에서만 나온다 —
+ * 🔴 **단계 정체성은 그대로다.** due 는 `profileOf(stage).slots`(러너 프로필 · d1~d10 은 `PROFILES` 그대로)에서만 나온다 —
  *    d1 은 09:30 하나, d3 는 09:30·13:30·19:00. d1 이 d3 의 슬롯을 대신 내는 일은 없다.
  *
  * 🔴 **앞당겨 내지 않는다.** 도래하지 않은 슬롯은 due 가 아니다.
@@ -40,8 +40,8 @@
  */
 
 import {
-  minuteOfDay, slotLabel, PROFILES, kstMidnight,
-  type ReleaseStage,
+  minuteOfDay, slotLabel, profileOf, kstMidnight,
+  type RuntimeStage,
 } from './scale-profile'
 import { slotOfCron } from './scale-workflow-render'
 
@@ -112,16 +112,16 @@ export function kstMinuteOfDay(now: Date): number {
  * 🔴 그 단계에서 **지금까지 도래한** 슬롯들.
  *    `minuteOfDay <= nowMinute` 인 것만이다 — 앞당겨 내지 않는다.
  */
-export function dueSlotsAt(stage: ReleaseStage, nowMinute: number): DueSlot[] {
+export function dueSlotsAt(stage: RuntimeStage, nowMinute: number): DueSlot[] {
   if (!Number.isInteger(nowMinute)) return []
-  return [...PROFILES[stage].slots]
+  return [...profileOf(stage).slots]
     .sort((a, b) => minuteOfDay(a) - minuteOfDay(b))
     .filter((s) => minuteOfDay(s) <= nowMinute)
     .map((s) => ({ kst: slotLabel(s), minuteOfDay: minuteOfDay(s), count: s.count }))
 }
 
 /** 도래한 슬롯이 담당하는 누적 건수 */
-export function dueCountAt(stage: ReleaseStage, nowMinute: number): number {
+export function dueCountAt(stage: RuntimeStage, nowMinute: number): number {
   return dueSlotsAt(stage, nowMinute).reduce((n, s) => n + s.count, 0)
 }
 
@@ -131,7 +131,7 @@ export function dueCountAt(stage: ReleaseStage, nowMinute: number): number {
  *    하나라도 어긋나면 `run: false · allowed: 0` 이다. 애매한 중간을 두지 않는다.
  */
 export function judgeCatchUp(input: {
-  stage: ReleaseStage
+  stage: RuntimeStage
   /** 실행 시각 */
   now: Date
   /** 누가 불렀는가 */
@@ -183,7 +183,7 @@ export function judgeCatchUp(input: {
       return blocked(`예약 cron "${raw}" 를 슬롯으로 읽을 수 없다`, { publishedToday })
     }
     slotKst = slotLabel(slot)
-    ownSlot = PROFILES[input.stage].slots.some((s) => minuteOfDay(s) === minuteOfDay(slot))
+    ownSlot = profileOf(input.stage).slots.some((s) => minuteOfDay(s) === minuteOfDay(slot))
   }
 
   const nowMinute = kstMinuteOfDay(t)
@@ -207,7 +207,7 @@ export function judgeCatchUp(input: {
   if (dueCount === 0) {
     return {
       ...blocked('', base), run: false, allowed: 0, backlog: 0,
-      reason: `${input.stage} 의 첫 슬롯(${slotLabel(PROFILES[input.stage].slots[0]!)} KST)이 아직 오지 않았다`
+      reason: `${input.stage} 의 첫 슬롯(${slotLabel(profileOf(input.stage).slots[0]!)} KST)이 아직 오지 않았다`
         + ' — 앞당겨 내지 않는다',
     }
   }
@@ -245,8 +245,8 @@ export function judgeCatchUp(input: {
  * 🔴 **이것은 천장이지 달성치가 아니다.** 실제로 몇 건이 나가는지는 트리거가
  *    **몇 번, 언제** 도착하는지가 정한다 — `simulateDay` 가 그것을 답한다.
  */
-export function catchUpDailyCeiling(stage: ReleaseStage): number {
-  return Math.min(dueCountAt(stage, PUBLISH_WINDOW_END_MINUTE), PROFILES[stage].dailyTarget)
+export function catchUpDailyCeiling(stage: RuntimeStage): number {
+  return Math.min(dueCountAt(stage, PUBLISH_WINDOW_END_MINUTE), profileOf(stage).dailyTarget)
 }
 
 export type DaySimulation = {
@@ -279,7 +279,7 @@ export type DaySimulation = {
  * 🔴 순수 함수다. 시계를 읽지 않는다 — 시각은 전부 인자로 들어온다.
  */
 export function simulateDay(input: {
-  stage: ReleaseStage
+  stage: RuntimeStage
   /** 트리거 도착 시각들 (순서 무관 — 내부에서 정렬한다) */
   arrivals: readonly Date[]
   trigger?: TriggerKind
@@ -311,7 +311,7 @@ export function simulateDay(input: {
       reason: v.reason,
     })
   }
-  const target = PROFILES[stage].dailyTarget
+  const target = profileOf(stage).dailyTarget
   return {
     published, target, meetsTarget: published >= target,
     triggersInWindow: inWindow, triggersAfterWindow: afterWindow, perTrigger,

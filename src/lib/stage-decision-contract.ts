@@ -19,7 +19,7 @@
  * 🔴 이 파일은 `scale-profile`(단계 enum 정본) 외에 아무것도 import 하지 않는다.
  *    사다리도 저장소도 이 파일을 향하고, 이 파일은 아무 쪽도 향하지 않는다.
  */
-import { RELEASE_STAGES, SAFEST_STAGE, type ReleaseStage } from './scale-profile'
+import { RUNTIME_STAGES, SAFEST_STAGE, type RuntimeStage } from './scale-profile'
 
 export const STAGE_DECISION_VERSION = 'stage-decision-v4'
 
@@ -30,7 +30,16 @@ export const STAGE_DECISION_VERSION = 'stage-decision-v4'
 export const DECISION_WRITER = 'controller' as const
 export type DecisionWriter = typeof DECISION_WRITER
 
-export const TRANSITION_STATES = ['SUSTAIN', 'TRIAL', 'PREPARE', 'HOLD'] as const
+/**
+ * 🔴 **`REPROVE` — 지금 단계를 증명일로 다시 돈다** (2026-09-29 generic scheduler 배선).
+ *    다음 칸이 승인 천장 안인데 오늘 시험이 열리지 않은 날(전날 증거가 없거나 PASS 가 아니다 ·
+ *    다음 칸 preflight 가 막았다)에 쓴다. 공개 단계는 **올라가지 않는다** — 그날 자동 target 이
+ *    목표 슬롯을 먼저 채워(`stage-proof-day`) 내일 판정할 운영 증거를 만든다.
+ *    🔴 앞판에는 이 상태가 없어 PASS 뒤 하루라도 HOLD 가 끼면 그 뒤 증거가 전부
+ *       `DECISION_NOT_TRANSITION` 이 되어 **다시는 올라가지 못했다**(지속 승격 밖 영구 정체).
+ *    🔴 판(contractVersion)을 올리지 않는다 — 옛 행은 이 상태를 쓰지 않았을 뿐 전부 그대로 유효하다.
+ */
+export const TRANSITION_STATES = ['SUSTAIN', 'TRIAL', 'PREPARE', 'HOLD', 'REPROVE'] as const
 export type TransitionState = (typeof TRANSITION_STATES)[number]
 
 /** 🔴 왜 막혔나 — 문구가 아니라 코드다 */
@@ -38,6 +47,12 @@ export const BLOCK_CODES = [
   'CEILING', 'PROVENANCE_CURRENT', 'PROVENANCE_NEXT', 'PROVENANCE_STAGE', 'STALE_DAILY',
   /** 🔴 시험 기반을 **전날 실제 결정**에서 못 가져왔다 */
   'PROVENANCE_PREVIOUS',
+  /**
+   * 🔴 D20 이상 시험 관문 (2026-09-29 generic scheduler 배선) —
+   *    `PREFLIGHT_FAIL`·`PREFLIGHT_UNKNOWN` 다음 칸 preflight(재고 · Persona canary 하한 · 비용 · 러너 용량) ·
+   *    `LATE_START` 그 단계 첫 슬롯이 controller 실행 전에 지났다(조각 하루로 시험하지 않는다)
+   */
+  'PREFLIGHT_FAIL', 'PREFLIGHT_UNKNOWN', 'LATE_START',
 ] as const
 export type BlockCode = (typeof BLOCK_CODES)[number]
 
@@ -73,15 +88,15 @@ export type TransitionProvenance =
   | {
     readonly kind: 'TRIAL'
     /** 🔴 전날 결정의 `release` — 이것이 기반의 정본이다 */
-    readonly trialBase: ReleaseStage
+    readonly trialBase: RuntimeStage
     /** 그 결정의 KST 날짜 — 🔴 `kstDate` 의 **정확한 직전 날짜**여야 한다 */
     readonly previousKstDate: string
     /** 오늘 시험 대상 — `nextStage(trialBase)` 여야 한다 */
-    readonly target: ReleaseStage
+    readonly target: RuntimeStage
     /** 🔴 시험을 연 근거 — 바닥 위 기반이면 필수다(`TRIAL_BASES`) */
     readonly basis?: TrialBasis
   }
-  | { readonly kind: 'SUSTAIN'; readonly from: ReleaseStage; readonly to: ReleaseStage }
+  | { readonly kind: 'SUSTAIN'; readonly from: RuntimeStage; readonly to: RuntimeStage }
 
 /**
  * 🔴 **deeply readonly 다** (2026-09-24 8차 · 마스터 지적).
@@ -93,8 +108,8 @@ export type TransitionProvenance =
 export type StageDecision = {
   readonly kstDate: string
   /** 🔴 승인 천장 그대로 — 어떤 판정도 이 값을 올리지 않는다 */
-  readonly capacity: ReleaseStage
-  readonly release: ReleaseStage
+  readonly capacity: RuntimeStage
+  readonly release: RuntimeStage
   readonly state: TransitionState
   readonly reasons: readonly string[]
   readonly blocks: readonly StageBlock[]
@@ -121,7 +136,8 @@ export type StageDecision = {
 export const TRANSITION_FATAL_BLOCKS: Readonly<Record<'TRIAL' | 'SUSTAIN', readonly BlockCode[]>> =
   Object.freeze({
     TRIAL: Object.freeze(
-      ['CEILING', 'STALE_DAILY', 'PROVENANCE_STAGE', 'PROVENANCE_PREVIOUS'] as const,
+      ['CEILING', 'STALE_DAILY', 'PROVENANCE_STAGE', 'PROVENANCE_PREVIOUS',
+        'PREFLIGHT_FAIL', 'PREFLIGHT_UNKNOWN', 'LATE_START'] as const,
     ),
     SUSTAIN: Object.freeze(['CEILING', 'PROVENANCE_CURRENT', 'PROVENANCE_NEXT'] as const),
   })
@@ -176,10 +192,14 @@ export function previousKstDate(kstDate: string): string | null {
   return new Date(Date.parse(`${kstDate}T00:00:00Z`) - 864e5).toISOString().slice(0, 10)
 }
 
-/** 🔴 다음 칸 — 여기가 정본이다. 다른 파일이 다시 적지 않는다 */
-export function nextStage(s: ReleaseStage): ReleaseStage | null {
-  const i = RELEASE_STAGES.indexOf(s)
-  return i < 0 || i + 1 >= RELEASE_STAGES.length ? null : RELEASE_STAGES[i + 1]!
+/**
+ * 🔴 다음 칸 — 여기가 정본이다. 다른 파일이 다시 적지 않는다.
+ *    러너 단계(`RUNTIME_STAGES`) 위의 다음 칸이다 — d10 다음은 d20, d50 다음은 없다(D100 은 러너 밖).
+ *    🔴 다음 칸이 있다고 열리는 것이 아니다 — 승인 천장이 막는다(사다리 `CEILING`).
+ */
+export function nextStage(s: RuntimeStage): RuntimeStage | null {
+  const i = RUNTIME_STAGES.indexOf(s)
+  return i < 0 || i + 1 >= RUNTIME_STAGES.length ? null : RUNTIME_STAGES[i + 1]!
 }
 
 export type ValidateResult =
@@ -189,11 +209,11 @@ export type ValidateResult =
 const isRec = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
-const rank = (s: string): number => (RELEASE_STAGES as readonly string[]).indexOf(s)
+const rank = (s: string): number => (RUNTIME_STAGES as readonly string[]).indexOf(s)
 const nonNegInt = (v: unknown): boolean =>
   typeof v === 'number' && Number.isInteger(v) && Number.isFinite(v) && v >= 0
-const isStage = (v: unknown): v is ReleaseStage =>
-  typeof v === 'string' && (RELEASE_STAGES as readonly string[]).includes(v)
+const isStage = (v: unknown): v is RuntimeStage =>
+  typeof v === 'string' && (RUNTIME_STAGES as readonly string[]).includes(v)
 const isState = (v: unknown): v is TransitionState =>
   typeof v === 'string' && (TRANSITION_STATES as readonly string[]).includes(v)
 const isBlockCode = (v: unknown): v is BlockCode =>
@@ -370,6 +390,7 @@ export function validateStoredDecision(input: {
     }
     transition = { kind: 'SUSTAIN', from: t.from, to: release }
   } else {
+    /** 🔴 REPROVE 는 올라가지 않는 날이다 — HOLD·PREPARE 처럼 전이 근거가 없다 */
     if (t !== null) return no(`${state} 인데 전이 근거가 붙어 있다`)
     /** 🔴 PREPARE 는 천장이 공개보다 높다는 뜻이다 — 같거나 낮으면 그 상태일 수 없다 */
     if (state === 'PREPARE' && rank(capacity) <= rank(release)) {

@@ -19,7 +19,9 @@
  */
 
 /** 공개 발행 단계 — 🔴 이 목록 밖의 단계는 없다 */
-import { PROFILES, RELEASE_STAGES, RELEASE_ENV, type ReleaseStage } from './scale-profile'
+import {
+  PROFILES, RELEASE_ENV, RUNTIME_STAGES, isRuntimeStage, profileOf, type ReleaseStage, type RuntimeStage,
+} from './scale-profile'
 
 export const D100_STAGES = ['d3', 'd5', 'd10', 'd20', 'd30', 'd50', 'd100'] as const
 export type D100Stage = (typeof D100_STAGES)[number]
@@ -96,14 +98,16 @@ export type D100Plan = {
 /**
  * 🔴 **발행 계획과 실제 스케줄러를 잇는다** (2026-09-21 보정).
  *
- *    앞판은 `publishSlotCount` 를 계획값으로만 적어 두었다. 그런데 실제 cron 은
- *    `scale-profile.PROFILES` 에만 있고 그것은 **d1·d3·d5·d10 네 단계뿐**이다.
- *    d20 이상은 슬롯이 아예 없다 — 표에 20·30·50·100 을 적어 두면 "설정만 바꾸면 된다"
- *    로 읽히지만, 바꿀 설정이 없다. 그 사실을 `supported: false` 로 낸다.
+ *    앞판은 `publishSlotCount` 를 계획값으로만 적어 두었다. 실제 슬롯은 **러너 프로필
+ *    `scale-profile.RUNTIME_PROFILES` 하나**가 정본이다 (2026-09-29 generic scheduler 배선).
+ *    · d1·d3·d5·d10 — `PROFILES` 그대로(GitHub 예약 + 로컬 heartbeat)
+ *    · d20·d30·d50 — 파생 슬롯(로컬 heartbeat 10분 격자). 🔴 감당한다는 뜻이지 열렸다는 뜻이 아니다 —
+ *      승인 천장(`SORAN_CAPACITY_STAGE`)이 막고, 시험은 D20+ preflight 가 막는다
+ *    · d100 — 러너 프로필이 없다. 지금 러너 용량·댓글 예산으로는 열 수 없다(열 수 있는 천장 d50) → `supported: false`
  */
 export type SchedulerSupport = {
-  /** 대응하는 release 단계 — 없으면 `null` */
-  releaseStage: ReleaseStage | null
+  /** 대응하는 러너 단계 — 없으면 `null` (d100) */
+  releaseStage: RuntimeStage | null
   /** 하루 예약된 회차 수 — 프로필이 없으면 `null` */
   scheduledSlotsPerDay: number | null
   /** 🔴 회차당 실제 발행 건수 */
@@ -117,9 +121,9 @@ export type SchedulerSupport = {
   detail: string | null
 }
 
-/** 🔴 D100 단계 이름과 release 단계 이름이 같을 때만 대응한다 */
-function releaseStageOf(stage: D100Stage): ReleaseStage | null {
-  return (RELEASE_STAGES as readonly string[]).includes(stage) ? (stage as ReleaseStage) : null
+/** 🔴 D100 단계 이름과 러너 단계 이름이 같을 때만 대응한다 */
+function releaseStageOf(stage: D100Stage): RuntimeStage | null {
+  return isRuntimeStage(stage) ? stage : null
 }
 
 export function schedulerSupportOf(stage: D100Stage): SchedulerSupport {
@@ -131,11 +135,11 @@ export function schedulerSupportOf(stage: D100Stage): SchedulerSupport {
       actualPostsPerInvocation: POSTS_PER_INVOCATION,
       actualDailyPublishable: null, supported: false,
       reason: 'schedulerUnsupported',
-      detail: `${stage} 에 대응하는 release 프로필이 없다`
-        + ` (있는 것은 ${RELEASE_STAGES.join('·')}) — 설정으로 올릴 수 없다`,
+      detail: `${stage} 에 대응하는 러너 프로필이 없다`
+        + ` (있는 것은 ${RUNTIME_STAGES.join('·')}) — 지금 러너 용량·댓글 예산으로 열 수 없다`,
     }
   }
-  const slots = PROFILES[rs].slots.length
+  const slots = profileOf(rs).slots.length
   const actual = slots * POSTS_PER_INVOCATION
   return {
     releaseStage: rs, scheduledSlotsPerDay: slots,

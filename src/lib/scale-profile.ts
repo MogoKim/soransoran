@@ -144,6 +144,73 @@ export const PROFILES: Readonly<Record<ReleaseStage, ScaleProfile>> = {
 }
 
 // ─────────────────────────────────────────────────────────
+// 🔴 러너 단계 — D20·D30·D50 (2026-09-29 generic scheduler 배선)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **러너가 돌릴 수 있는 단계 — `RELEASE_STAGES` 위에 D20·D30·D50 을 얹는다.**
+ *
+ *    `RELEASE_STAGES`·`PROFILES` 는 **d1~d10 그대로 둔다.** GitHub 예약 합집합
+ *    (`allStageSlots` → `auto-publish.yml`)이 정본으로 쓴다 — 예약 10회를 늘리지 않는다.
+ *    D100 용량표(`d100-capacity.schedulerSupportOf`)는 이 러너 프로필을 읽는다 — d20~d50 감당 · d100 미감당.
+ *    D20 이상은 **로컬 heartbeat(10분 격자)** 로만 돈다. 슬롯이 전부 그 격자 위에 있어서
+ *    GitHub 예약 없이도 catch-up 이 도래한 슬롯을 낸다(`stage-scheduler-check` 가 격자·창·첫 댓글 3회를 본다).
+ *
+ * 🔴 **D100 은 여기 없다.** 지금 러너(격자 10분 · 회차당 1건 · 첫 댓글 3회 시도)는 하루 80건까지만
+ *    담고, 댓글 하루 상한 $0.20 은 첫 댓글 100건을 사지 못한다. 천장으로 **표현**은 되지만
+ *    (`stage-ladder-generic.resolveCeiling`) 열 수 있는 천장은 d50 이다.
+ *
+ * 🔴 **승인 천장은 그대로다.** 이 목록에 있다고 열리는 것이 아니다 — controller 는 승인 천장
+ *    (`SORAN_CAPACITY_STAGE`) 위로 어떤 단계도 열지 않는다. 지금 운영값은 d10 이다.
+ */
+export const RUNTIME_STAGES = ['d1', 'd3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const
+export type RuntimeStage = (typeof RUNTIME_STAGES)[number]
+
+/** 🔴 D20 이상 Persona 발행 간격 — 새 숫자가 아니라 d10 운영값 그대로다 */
+const EXTENDED_CAPS = { postsPerWeek: PROFILES.d10.postsPerWeek, minDaysBetween: PROFILES.d10.minDaysBetween }
+const at = (hm: readonly (readonly [number, number])[]): Slot[] => hm.map(([hour, minute]) => ({ hour, minute, count: 1 }))
+
+/**
+ * 🔴 **러너 프로필 — d1~d10 은 `PROFILES` 그대로, D20 이상은 파생 슬롯.**
+ *    D20 이상 슬롯은 `stage-ladder-generic.deriveSlots(n, 러너 격자)` 의 결과를 **그대로** 적었다 —
+ *    창(08:00~22:00) 안 · heartbeat 10분 격자 위 · 발행 뒤 60분 안 댓글 회차 3번 이상 · 한 분에 한 건.
+ *    `stage-scheduler-check` 가 여기 적힌 값과 파생값을 대조한다(손으로 고치면 CI 가 막는다).
+ */
+export const RUNTIME_PROFILES: Readonly<Record<RuntimeStage, ScaleProfile>> = {
+  ...PROFILES,
+  d20: {
+    dailyTarget: 20, ...EXTENDED_CAPS,
+    slots: at([[8, 0], [8, 40], [9, 20], [10, 0], [10, 50], [11, 30], [12, 10], [12, 50], [13, 30], [14, 10],
+      [15, 0], [15, 40], [16, 20], [17, 0], [17, 40], [18, 20], [19, 10], [19, 50], [20, 30], [21, 10]]),
+  },
+  d30: {
+    dailyTarget: 30, ...EXTENDED_CAPS,
+    slots: at([[8, 0], [8, 30], [8, 50], [9, 20], [9, 50], [10, 20], [10, 40], [11, 10], [11, 40], [12, 10],
+      [12, 30], [13, 0], [13, 30], [13, 50], [14, 20], [14, 50], [15, 20], [15, 40], [16, 10], [16, 40],
+      [17, 0], [17, 30], [18, 0], [18, 30], [18, 50], [19, 20], [19, 50], [20, 20], [20, 40], [21, 10]]),
+  },
+  d50: {
+    dailyTarget: 50, ...EXTENDED_CAPS,
+    slots: at([[8, 0], [8, 20], [8, 30], [8, 50], [9, 0], [9, 20], [9, 40], [9, 50], [10, 10], [10, 30],
+      [10, 40], [11, 0], [11, 10], [11, 30], [11, 50], [12, 0], [12, 20], [12, 30], [12, 50], [13, 10],
+      [13, 20], [13, 40], [13, 50], [14, 10], [14, 30], [14, 40], [15, 0], [15, 20], [15, 30], [15, 50],
+      [16, 0], [16, 20], [16, 40], [16, 50], [17, 10], [17, 20], [17, 40], [18, 0], [18, 10], [18, 30],
+      [18, 40], [19, 0], [19, 20], [19, 30], [19, 50], [20, 10], [20, 20], [20, 40], [20, 50], [21, 10]]),
+  },
+}
+
+export const isRuntimeStage = (v: unknown): v is RuntimeStage =>
+  typeof v === 'string' && (RUNTIME_STAGES as readonly string[]).includes(v)
+
+/** 🔴 러너 단계의 프로필 — 정본은 `RUNTIME_PROFILES` 하나다 */
+export function profileOf(s: RuntimeStage): ScaleProfile {
+  return RUNTIME_PROFILES[s]
+}
+
+/** 🔴 러너 단계 중 가장 높은 것 — 지금은 d50 */
+export const HIGHEST_RUNTIME_STAGE: RuntimeStage = RUNTIME_STAGES[RUNTIME_STAGES.length - 1]!
+
+// ─────────────────────────────────────────────────────────
 // 🔴 운영 설정 — env 주입. 코드 리터럴이 아니다
 // ─────────────────────────────────────────────────────────
 
@@ -173,9 +240,32 @@ export function resolveStage(raw: string | undefined, label = 'release'): StageR
   return { stage: v as ReleaseStage, fromEnv: true, fallbackReason: null }
 }
 
-/** 단계 순서 비교 — 공개량이 준비량을 넘지 못하게 한다 */
-export function stageRank(s: ReleaseStage): number {
-  return RELEASE_STAGES.indexOf(s)
+export type RuntimeStageResolution = {
+  stage: RuntimeStage
+  fromEnv: boolean
+  fallbackReason: string | null
+}
+
+/**
+ * 🔴 **env → 러너 단계** (2026-09-29). `resolveStage` 와 같은 규칙에 허용 목록만 `RUNTIME_STAGES` 다.
+ *    모르는 값(d100 포함 — 러너가 담지 못한다)은 **가장 안전한 단계**로 떨어진다.
+ *    🔴 `resolveStage` 는 d1~d10 보고서(D100 용량표 · 준비도)용으로 그대로 둔다.
+ */
+export function resolveRuntimeStage(raw: string | undefined, label = 'release'): RuntimeStageResolution {
+  const v = (raw ?? '').trim()
+  if (v === '') return { stage: SAFEST_STAGE, fromEnv: false, fallbackReason: `${label} 설정이 없다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다` }
+  if (!isRuntimeStage(v)) {
+    return { stage: SAFEST_STAGE, fromEnv: false, fallbackReason: `${label} 설정 "${v}" 는 러너 단계가 아니다 (${RUNTIME_STAGES.join('·')}) — ${SAFEST_STAGE} 로 둔다` }
+  }
+  return { stage: v, fromEnv: true, fallbackReason: null }
+}
+
+/**
+ * 단계 순서 비교 — 공개량이 준비량을 넘지 못하게 한다.
+ * 🔴 러너 단계 전체(`RUNTIME_STAGES`) 위의 순서다 — d1~d10 의 순서는 예전과 같다(0·1·2·3).
+ */
+export function stageRank(s: RuntimeStage): number {
+  return RUNTIME_STAGES.indexOf(s)
 }
 
 export type ProfileProblem = string
@@ -260,7 +350,7 @@ export function describeProfile(p: ScaleProfile): string {
 // ─────────────────────────────────────────────────────────
 
 /** 한 단계가 지금 달성 가능한가 — 판정 근거는 호출부(시뮬레이션)가 만든다 */
-export type StageVerdict = { stage: ReleaseStage; ready: boolean; reasons: readonly string[] }
+export type StageVerdict = { stage: RuntimeStage; ready: boolean; reasons: readonly string[] }
 
 /**
  * 🔴 요청 단계가 준비되지 않았으면 **ready 인 가장 높은 하위 단계**로 내린다.
@@ -271,7 +361,7 @@ export type StageVerdict = { stage: ReleaseStage; ready: boolean; reasons: reado
  *    호출부가 정한다(운영 러너는 판정을 반드시 만들어 넘긴다).
  */
 export type SafeStage = {
-  stage: ReleaseStage
+  stage: RuntimeStage
   throttled: boolean
   reason: string | null
   /**
@@ -287,7 +377,7 @@ export type SafeStage = {
   unknown: boolean
 }
 
-export function safeStageFor(requested: ReleaseStage, verdicts: readonly StageVerdict[]): SafeStage {
+export function safeStageFor(requested: RuntimeStage, verdicts: readonly StageVerdict[]): SafeStage {
   if (verdicts.length === 0) {
     return { stage: requested, throttled: false, reason: null, chosenReady: false, unknown: true }
   }
@@ -295,7 +385,7 @@ export function safeStageFor(requested: ReleaseStage, verdicts: readonly StageVe
   if (byStage.get(requested)?.ready === true) {
     return { stage: requested, throttled: false, reason: null, chosenReady: true, unknown: false }
   }
-  const lower = [...RELEASE_STAGES].filter((s) => stageRank(s) <= stageRank(requested)).reverse()
+  const lower = [...RUNTIME_STAGES].filter((s) => stageRank(s) <= stageRank(requested)).reverse()
   for (const s of lower) {
     if (byStage.get(s)?.ready === true) {
       return {

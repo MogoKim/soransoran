@@ -826,6 +826,9 @@ jobs:
           # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
           #    첫 댓글 보장/추가 댓글 상한 분리 · 감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다
           npm run stage:evidence-check
+          # 🔴 D1→D50 한 사다리(2026-09-29 generic scheduler 배선) — 운영 decideStage 를 여러 날 돌린다 ·
+          #    PASS 다음 날 한 칸 · 천장 d10 이면 D20 0 · REPROVE 증명일 · D20+ preflight · 슬롯/비용/롤백. 새 step 이 아니다
+          npm run stage:scheduler-check
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
       - name: 무인 운영 루프 (readiness 반례 · controller fail-closed · consumer · 템플릿)

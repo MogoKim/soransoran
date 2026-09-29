@@ -581,7 +581,7 @@ console.log('\n⑬ 🔴 🔴 발행 트랜잭션이 계획된 Persona 를 다시
   const postCreate = at(/const post = await tx\.post\.create/)
   check('🔴 🔴 **트랜잭션 안에서 Persona 를 다시 읽고 로더와 같은 조립(personaForMatchOf)을 쓴다**', reread > 0 && assemble > reread)
   check('🔴 🔴 **트랜잭션은 정본 판정 함수 judgeAutoAssignment 를 쓴다 (단계 상한과 함께)**',
-    judge > assemble && /caps: releaseCapsOf\(PROFILES\[stage\]\),/.test(tx))
+    judge > assemble && /caps: releaseCapsOf\(profileOf\(stage\)\),/.test(tx))
   check('🔴 🔴 **정본 판정 안에서 judgeVoiceMatch · readPostRequirements · hardFilter 를 재사용한다**',
     /judgeVoiceMatch\(\{ voice: voiceOfGateResults\(i\.gateResults\), personaCode: i\.persona\.code, profile: 'machine' \}\)/.test(judgeFn)
     && /hardFilter\(i\.persona, readPostRequirements\(i\.title, i\.body\), i\.title, i\.body, i\.caps\)/.test(judgeFn))
@@ -714,11 +714,11 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
     /const slot = judgeCatchUp\(\{ stage, now: txNow, trigger: 'local', cron: null, publishedToday: publishedTodayInTx \}\)/.test(sched)
     && !/function dueSlots|dueCountAt\(/.test(tx))
   check('🔴 🔴 **허용은 publishedTodayInTx < min(도래 슬롯, 정본 하루 목표) 일 때만**',
-    /const target = PROFILES\[stage\]\.dailyTarget/.test(sched) && /const limit = Math\.min\(slot\.dueCount, target\)/.test(sched)
+    /const target = profileOf\(stage\)\.dailyTarget/.test(sched) && /const limit = Math\.min\(slot\.dueCount, target\)/.test(sched)
     && /if \(!slot\.run \|\| !\(publishedTodayInTx < limit\)\) \{/.test(sched) && /dailyCap = target/.test(sched))
   check('🔴 🔴 **발행 방식은 필수 판별 유니온 — optional boolean 게이트 없음 · top-level dailyCap 없음**',
     /mode: PublishMode\n/.test(tx) && !/mode\?:/.test(tx) && !/slotGate|useSlots|slotGated/.test(tx)
-    && /\| \{ kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget; unattended: boolean \}/.test(tx) && /\| \{ kind: 'manual-live'; dailyCap: number; releaseStage\?: ReleaseStage \}/.test(tx)
+    && /\| \{ kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget; unattended: boolean \}/.test(tx) && /\| \{ kind: 'manual-live'; dailyCap: number; releaseStage\?: RuntimeStage \}/.test(tx)
     && !/^\s*dailyCap: number$/m.test(tx.slice(tx.indexOf('export type PublishTxInput'), tx.indexOf('export async function publishOriginalPostTx'))))
   check('🔴 🔴 **자동 러너는 scheduled 만 — manual-live · 숫자 상한을 넘기지 않는다**',
     /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \}/.test(runner) && !/manual-live/.test(runner)
