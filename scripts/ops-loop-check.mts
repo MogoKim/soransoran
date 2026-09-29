@@ -24,7 +24,8 @@ import {
   decideStage, holdAtCurrent, previousStage, sustainedReleaseOf, consumerEnvOf, validateForToday,
   qualitySignalOf, costSignalOf, errorSignalOf, type HealthSignal, type ControllerInputs,
 } from '../src/lib/stage-controller'
-import { validateStoredDecision, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
+import { STAGE_DECISION_VERSION, validateStoredDecision, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
+import { canaryAuthorization } from '../src/lib/release-canary'
 import { RELEASE_STAGES, type ReleaseStage, type StageVerdict } from '../src/lib/scale-profile'
 import type { PromotionVerdict } from '../src/lib/d100-capacity'
 import { judgeRecovery } from '../src/lib/runner-recovery'
@@ -304,7 +305,31 @@ console.log('\n④ consumer — 결정을 러너 env 로 옮긴다')
   const v = validateForToday(d)
   const ok = v.ok ? consumerEnvOf({ ok: true, decision: v.decision }) : {}
   check('결정 OK → 공개·천장 = 결정 · canary/window 빈 값(결정이 유일한 권한)',
-    ok.SORAN_RELEASE_STAGE === 'd3' && ok.SORAN_CAPACITY_STAGE === 'd10' && ok.SORAN_RELEASE_WINDOW_STAGE === '')
+    ok.SORAN_RELEASE_STAGE === 'd3' && ok.SORAN_CAPACITY_STAGE === 'd10' && ok.SORAN_RELEASE_WINDOW_STAGE === ''
+    && ok.SORAN_RELEASE_CANARY_STAGE === '')
+  /**
+   * 🔴 (2026-09-29 운영 반례) TRIAL d3 결정이 러너에서 준비도 감속으로 d1 이 됐다 — canary 가 빈 값이었다.
+   *    TRIAL 날에는 canary 두 칸이 그 결정 값이고, 러너의 정본 허가 판독기가 "오늘 켜짐" 으로 읽어야 한다.
+   */
+  const trialRow = {
+    kstDate: '2026-09-29', contractVersion: STAGE_DECISION_VERSION, capacity: 'd10', release: 'd3', state: 'TRIAL',
+    reasons: ['🟢 오늘 하루 d3 로 낸다(정본 judgeOneDayCanary)'], blocks: [], dayPinned: false, supply: null,
+    transition: { kind: 'TRIAL', target: 'd3', trialBase: 'd1', previousKstDate: '2026-09-28' },
+    decidedBy: 'controller', decidedAt: '2026-09-28T22:00:05.993Z',
+  }
+  const tv = validateStoredDecision({ row: trialRow, expectKstDate: '2026-09-29' })
+  const te = tv.ok ? consumerEnvOf({ ok: true, decision: tv.decision }) : {}
+  const tAuth = canaryAuthorization(te, new Date('2026-09-29T00:30:00Z'), RELEASE_STAGES)
+  check('🔴 TRIAL 결정 → 공개 = 시험 기반 d1 · canary = (d3 · 그 날짜) · window 는 빈 값',
+    tv.ok && te.SORAN_RELEASE_CANARY_STAGE === 'd3' && te.SORAN_RELEASE_CANARY_DATE === '2026-09-29'
+    && te.SORAN_RELEASE_WINDOW_STAGE === '' && te.SORAN_RELEASE_STAGE === 'd1' && te.SORAN_CAPACITY_STAGE === 'd10')
+  check('🔴 러너의 정본 허가 판독기가 그 canary 를 오늘 켜짐 · d3 로 읽는다', tAuth.activeToday && tAuth.stage === 'd3')
+  check('🔴 다음 날에는 같은 canary 가 꺼진다 — 하루 허가다',
+    !canaryAuthorization(te, new Date('2026-09-29T15:30:00Z'), RELEASE_STAGES).activeToday)
+  const prepRow = { ...trialRow, state: 'PREPARE', release: 'd1', transition: null, reasons: ['🟢 PREPARE'] }
+  const pv = validateStoredDecision({ row: prepRow, expectKstDate: '2026-09-29' })
+  const pe = pv.ok ? consumerEnvOf({ ok: true, decision: pv.decision }) : { SORAN_RELEASE_CANARY_STAGE: 'x' }
+  check('🔴 TRIAL 이 아닌 날(PREPARE)은 canary 도 빈 값', pv.ok && pe.SORAN_RELEASE_CANARY_STAGE === '' && pe.SORAN_RELEASE_CANARY_DATE === '')
   const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
   check('🔴 consumer 는 DB 를 쓰지 않는다', !/\.(create|update|upsert|delete)\w*\(/.test(exec))
   const loadEnv = readFileSync('scripts/lib/micro-seed-time.mjs', 'utf-8')
