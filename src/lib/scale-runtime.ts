@@ -22,9 +22,9 @@
  */
 
 import {
-  PROFILES, RELEASE_ENV, CAPACITY_ENV, SAFEST_STAGE, resolveStage, safeStageFor, stageRank,
-  RELEASE_STAGES,
-  type ReleaseStage, type ScaleProfile, type StageVerdict,
+  RELEASE_ENV, CAPACITY_ENV, SAFEST_STAGE, resolveRuntimeStage, safeStageFor, stageRank,
+  RUNTIME_STAGES, profileOf,
+  type RuntimeStage, type ScaleProfile, type StageVerdict,
 } from './scale-profile'
 import {
   canaryAuthorization, windowAuthorization, type CanaryVerdict,
@@ -32,11 +32,11 @@ import {
 
 export type ResolvedScale = {
   /** 준비된 능력 — 내부 공급(재고·수집)이 이것을 따른다 */
-  capacityStage: ReleaseStage
+  capacityStage: RuntimeStage
   /** env 가 요청한 공개량 */
-  requestedRelease: ReleaseStage
+  requestedRelease: RuntimeStage
   /** 🔴 capacity 상한과 준비도 감속을 **모두 적용한** 실제 공개량 */
-  releaseStage: ReleaseStage
+  releaseStage: RuntimeStage
   /** 🔴 내부 공급 정본 */
   capacityProfile: ScaleProfile
   /** 🔴 공개 발행 정본 */
@@ -73,8 +73,8 @@ export const SAFEST_SCALE: ResolvedScale = Object.freeze({
   capacityStage: SAFEST_STAGE,
   requestedRelease: SAFEST_STAGE,
   releaseStage: SAFEST_STAGE,
-  capacityProfile: PROFILES[SAFEST_STAGE],
-  releaseProfile: PROFILES[SAFEST_STAGE],
+  capacityProfile: profileOf(SAFEST_STAGE),
+  releaseProfile: profileOf(SAFEST_STAGE),
   throttledByCapacity: false,
   throttledByReadiness: false,
   readinessApplied: false,
@@ -108,8 +108,12 @@ export function resolveScale(
     window?: { now: Date; verdict: CanaryVerdict | null; dayVerdict: CanaryVerdict | null; publishedToday: number }
   } = {},
 ): ResolvedScale {
-  const cap = resolveStage(env[CAPACITY_ENV], 'capacity')
-  const rel = resolveStage(env[RELEASE_ENV], 'release')
+  /**
+   * 🔴 **러너 단계(d1~d50)로 읽는다** (2026-09-29 generic scheduler 배선).
+   *    D20 이상도 같은 규칙이다 — capacity 가 천장이고, 시험·기간 허가도 그 위로 올라가지 않는다.
+   */
+  const cap = resolveRuntimeStage(env[CAPACITY_ENV], 'capacity')
+  const rel = resolveRuntimeStage(env[RELEASE_ENV], 'release')
   const notes: string[] = [cap.fallbackReason, rel.fallbackReason].filter((x): x is string => x !== null)
 
   // ① capacity 상한 — 준비한 것보다 많이 낼 수 없다
@@ -148,7 +152,7 @@ export function resolveScale(
   let windowStage = false
   let windowRange: string | null = null
   if (win !== undefined) {
-    const wa = windowAuthorization(env, win.now, RELEASE_STAGES)
+    const wa = windowAuthorization(env, win.now, RUNTIME_STAGES)
     windowRange = wa.from === null ? null : `${wa.from}~${wa.until}`
     if (wa.note !== null) notes.push(wa.note)
     if (wa.activeToday && wa.stage !== null) {
@@ -158,7 +162,7 @@ export function resolveScale(
         notes.push('🔴 기간 허가는 있으나 그날치 판정을 받지 못했다 — 켜지 않는다(fail-closed)')
       } else if (win.dayVerdict.stage !== wa.stage) {
         notes.push(`🔴 기간 허가는 ${wa.stage} 인데 판정은 ${win.dayVerdict.stage} 다 — 켜지 않는다`)
-      } else if (win.publishedToday > PROFILES[stage].dailyTarget) {
+      } else if (win.publishedToday > profileOf(stage).dailyTarget) {
         /**
          * 🔴 **이미 기본 단계 상한을 넘겨 낸 날은 그 단계를 지킨다.**
          *    여기서 내리면 **이미 나간 글이 상한 초과**가 된다 — 그날치 판정이
@@ -167,7 +171,7 @@ export function resolveScale(
         stage = wa.stage
         windowStage = true
         notes.push(`🔴 오늘 이미 ${win.publishedToday}건 냈다 — 그날 단계 ${wa.stage} 를 **고정**한다`)
-        notes.push(`🔴 기본 단계 ${PROFILES[stage].dailyTarget}건을 넘겼다 — 내리면 이미 낸 것이 상한 초과가 된다`)
+        notes.push(`🔴 기본 단계 ${profileOf(stage).dailyTarget}건을 넘겼다 — 내리면 이미 낸 것이 상한 초과가 된다`)
       } else if (!win.dayVerdict.ok) {
         notes.push(`🔴 기간 ${wa.stage} 를 켜지 않는다 — ${win.dayVerdict.reasons.join(' / ')}`)
       } else if (stageRank(wa.stage) > stageRank(stage)) {
@@ -200,7 +204,7 @@ export function resolveScale(
   let canaryStage = false
   let canaryDate: string | null = null
   if (canary !== undefined) {
-    const auth = canaryAuthorization(env, canary.now, RELEASE_STAGES)
+    const auth = canaryAuthorization(env, canary.now, RUNTIME_STAGES)
     canaryDate = auth.date
     if (auth.note !== null) notes.push(auth.note)
     if (auth.activeToday && auth.stage !== null) {
@@ -262,8 +266,8 @@ export function resolveScale(
     capacityStage: cap.stage,
     requestedRelease: rel.stage,
     releaseStage: stage,
-    capacityProfile: PROFILES[cap.stage],
-    releaseProfile: PROFILES[stage],
+    capacityProfile: profileOf(cap.stage),
+    releaseProfile: profileOf(stage),
     throttledByCapacity,
     throttledByReadiness,
     readinessApplied: !canaryStage && !windowStage && readiness !== undefined && readiness.length > 0,
@@ -335,10 +339,10 @@ export function describeScale(r: ResolvedScale): string {
  *    발행 트랜잭션은 호출자가 넘긴 단계를 이 천장으로 누른다 — 넘긴 값이 더 높으면
  *    천장을 쓴다. 호출자 숫자가 상한을 여는 길을 없앤다.
  */
-export function releaseStageCeiling(env: Readonly<Record<string, string | undefined>>, now: Date): ReleaseStage {
-  const cap = resolveStage(env[CAPACITY_ENV], 'capacity').stage
-  let top = resolveStage(env[RELEASE_ENV], 'release').stage
-  for (const a of [windowAuthorization(env, now, RELEASE_STAGES), canaryAuthorization(env, now, RELEASE_STAGES)]) {
+export function releaseStageCeiling(env: Readonly<Record<string, string | undefined>>, now: Date): RuntimeStage {
+  const cap = resolveRuntimeStage(env[CAPACITY_ENV], 'capacity').stage
+  let top = resolveRuntimeStage(env[RELEASE_ENV], 'release').stage
+  for (const a of [windowAuthorization(env, now, RUNTIME_STAGES), canaryAuthorization(env, now, RUNTIME_STAGES)]) {
     if (a.activeToday && a.stage !== null && stageRank(a.stage) > stageRank(top)) top = a.stage
   }
   return stageRank(top) > stageRank(cap) ? cap : top
@@ -347,9 +351,9 @@ export function releaseStageCeiling(env: Readonly<Record<string, string | undefi
 /** 🔴 넘겨받은 단계(모르는 값은 가장 안전한 단계)를 env 천장으로 누른다 */
 export function boundedReleaseStage(
   requested: unknown, env: Readonly<Record<string, string | undefined>>, now: Date,
-): ReleaseStage {
-  const asked: ReleaseStage = typeof requested === 'string' && (RELEASE_STAGES as readonly string[]).includes(requested)
-    ? requested as ReleaseStage : SAFEST_STAGE
+): RuntimeStage {
+  const asked: RuntimeStage = typeof requested === 'string' && (RUNTIME_STAGES as readonly string[]).includes(requested)
+    ? requested as RuntimeStage : SAFEST_STAGE
   const ceil = releaseStageCeiling(env, now)
   return stageRank(asked) > stageRank(ceil) ? ceil : asked
 }

@@ -32,7 +32,7 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
   SAFEST_STOCK_LIMITS,
 } from '../src/lib/micro-seed-supply-autofill'
-import { PROFILES, CAPACITY_ENV, RELEASE_ENV, type ReleaseStage } from '../src/lib/scale-profile'
+import { PROFILES, RUNTIME_PROFILES, CAPACITY_ENV, RELEASE_ENV, type ReleaseStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { authoritativeGate, stampAutoReady, stampRound } from '../src/lib/auto-ready-repo'
 import {
@@ -371,7 +371,7 @@ async function main(): Promise<void> {
     check('🔴 공급 지평 자리는 capacity 로 잰다 (≤ d10 × 7)', open > 0 && open <= PROFILES.d10.dailyTarget * 7, `열린 자리 ${open}`)
     check('🔴 🔴 **발행 상한은 release 그대로 — 공급 눈금이 발행으로 새지 않는다**',
       pub.resolved.dailyCap === pub.resolved.scale.releaseProfile.dailyTarget
-      && PROFILES[pub.resolved.scale.releaseStage].dailyTarget <= PROFILES.d1.dailyTarget,
+      && RUNTIME_PROFILES[pub.resolved.scale.releaseStage].dailyTarget <= PROFILES.d1.dailyTarget,
       JSON.stringify({ stage: pub.resolved.scale.releaseStage, cap: pub.resolved.dailyCap }))
     check('🔴 계약 칸이 생겨도 열린 날(openDays)은 그대로다 — 분류는 WIP 만 바꾼다',
       SPEAKERS.every((code) => loadBefore.byCode[code]!.openDays === loadAfter.byCode[code]!.openDays))

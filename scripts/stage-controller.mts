@@ -21,12 +21,18 @@
  * 🔴 **승격은 날짜가 아니라 운영 증거로 한다** (2026-09-29 P0 · 마스터 결정).
  *    내일 시험 대상은 `trialPlanOf(전날 결정, 전날 운영 증거)` 다 — PASS 면 한 칸 위, 전날이 시험인데
  *    PASS 가 아니면(FAIL · 모름) **같은 단계를 다시** 시험한다. 증거를 못 읽으면 모름 = PASS 아님.
+ *
+ * 🔴 **D1 → D50 한 사다리** (2026-09-29 generic scheduler 배선).
+ *    · 천장은 `resolveCeiling` 으로 읽는다 — d20·d30·d50 은 그대로, d100 은 승인으로 적히되 열 수 있는 천장은 d50.
+ *      지금 운영값 d10 이면 d20 시험은 CEILING 으로 막힌다(천장은 사람이 올린다 · 이 controller 는 올리지 않는다).
+ *    · D20 이상 시험 대상이면 preflight 사실(`readPreflightFacts`)을 모아 `judgeNextPreflight` 로 판정해 넘긴다.
+ *    · 준비도 판정은 천장 단계까지 만든다(`stageVerdicts({ upTo })`) — 천장 d10 이면 예전과 같다.
  */
 import { execFileSync } from 'node:child_process'
 
 import { PrismaClient } from '@prisma/client'
 
-import { PROFILES, resolveStage, type ReleaseStage, type StageVerdict } from '../src/lib/scale-profile'
+import { profileOf, resolveRuntimeStage, type RuntimeStage, type StageVerdict } from '../src/lib/scale-profile'
 import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
 import { judgeOneDayCanary, kstDateString, slotsLeftToday } from '../src/lib/release-canary'
 import { previousKstDate, isCalendarDate, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
@@ -47,6 +53,8 @@ import { judgeStageEvidence, trialPlanOf, evidenceReasonOf, type StageEvidenceVe
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
+import { resolveCeiling, needsExtendedGate, judgeNextPreflight, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
+import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -82,7 +90,7 @@ function readPromotion(): { promotion: PromotionVerdict | null; note: string } {
  *    어느 것이든 못 읽으면 그 칸은 모름이다 — PASS 가 되지 않는다(fail-closed = 지금 단계에 머문다).
  */
 async function evidenceFor(prisma: PrismaClient, i: {
-  kstDate: string; stage: ReleaseStage; decision: ValidatedStageDecision | null; errors: HealthSignal
+  kstDate: string; stage: RuntimeStage; decision: ValidatedStageDecision | null; errors: HealthSignal
 }): Promise<StageEvidenceVerdict> {
   let facts: StageEvidenceFacts | null = null
   try {
@@ -130,7 +138,7 @@ async function evidenceOnly(date: string): Promise<number> {
     const r = await readStageDecision(prisma, date)
     const decision = r.found && r.result.ok ? r.result.decision : null
     const stageArg = argv.find((a) => a.startsWith('--evidence-stage='))?.slice('--evidence-stage='.length)
-    const stage = (stageArg !== undefined ? resolveStage(stageArg, 'release').stage : decision?.release) ?? null
+    const stage = (stageArg !== undefined ? resolveRuntimeStage(stageArg, 'release').stage : decision?.release) ?? null
     if (stage === null) { console.error(`🔴 ${date} 결정이 없거나 깨졌다 — --evidence-stage 로 단계를 준다`); return 1 }
     const v = await evidenceFor(prisma, { kstDate: date, stage, decision, errors: observeErrors() })
     if (JSON_OUT) console.log(JSON.stringify({ date, decision: decision === null ? null : { state: decision.state, release: decision.release }, evidence: v }, null, 2))
@@ -152,12 +160,18 @@ async function evidenceOnly(date: string): Promise<number> {
 async function main(): Promise<number> {
   if (EVIDENCE_DATE !== null) return evidenceOnly(EVIDENCE_DATE)
   const env = readEnvKeys(['SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', CONTROLLER_ENV])
-  const envRelease = resolveStage(env.values.SORAN_RELEASE_STAGE, 'release')
-  const ceiling = resolveStage(env.values.SORAN_CAPACITY_STAGE, 'capacity')
+  const envRelease = resolveRuntimeStage(env.values.SORAN_RELEASE_STAGE, 'release')
+  /**
+   * 🔴 **승인 천장 — `resolveCeiling`** (2026-09-29). d100 을 적어도 d1 로 떨어지지 않고, 열 수 있는 천장(d50)으로 묶인다.
+   *    모르는 값은 d1(fail-closed). 사다리에는 **열 수 있는 천장**만 넘긴다 — 이 controller 는 천장을 올리지 않는다.
+   */
+  const ceilingRes = resolveCeiling(env.values.SORAN_CAPACITY_STAGE)
+  const ceiling = { stage: ceilingRes.operable, fromEnv: ceilingRes.fallbackReason === null }
   const flagOn = controllerEnabled(env.values)
   log('\n══ 단계 controller ══')
   log(`   ${TODAY} · ${APPLY ? '--apply' : 'dry-run'} · ${CONTROLLER_ENV}=${flagOn ? 'on' : 'off'}`)
-  log(`   env 공개 ${envRelease.stage}${envRelease.fromEnv ? '' : ' (env 값 아님)'} · 승인 천장 ${ceiling.stage}${ceiling.fromEnv ? '' : ' (env 값 아님)'}`)
+  log(`   env 공개 ${envRelease.stage}${envRelease.fromEnv ? '' : ' (env 값 아님)'} · 승인 천장 ${ceilingRes.authorized}`
+    + `${ceilingRes.authorized !== ceilingRes.operable ? ` (러너가 담는 천장 ${ceilingRes.operable})` : ''}${ceiling.fromEnv ? '' : ' (env 값 아님)'}`)
 
   if (!fillDbConnection()) {
     console.error('🔴 DATABASE_URL 이 없다 — 결정을 읽지도 쓰지도 못한다. 지금 공개 단계는 바뀌지 않는다')
@@ -194,12 +208,14 @@ async function main(): Promise<number> {
     // ② 재고 판정 · 하루 시험 — 발행 러너와 같은 조립(loadPublishableStock)
     let verdicts: StageVerdict[] = []
     let daily: DatedCanary | null = null
+    let nextPreflight: PreflightVerdict | null = null
     let publishedToday = 0
     try {
       const s = await loadPublishableStock(prisma, NOW)
       publishedToday = s.publishedToday
       const axis = { now: NOW, publishedToday }
-      verdicts = stageVerdicts({ queue: s.queueCandidates, personas: s.personas as never, history: s.history, axis })
+      // 🔴 천장 단계까지 판정한다 — 천장 d10 이면 예전과 같은 네 단계다
+      verdicts = stageVerdicts({ queue: s.queueCandidates, personas: s.personas as never, history: s.history, axis, upTo: ceiling.stage })
       // 🔴 앞판: `nextStage(previous.release)` — 전날 시험이 실패해도 날짜만으로 한 칸 올렸다
       const base = plan?.base ?? null
       const target = plan?.target ?? null
@@ -207,11 +223,23 @@ async function main(): Promise<number> {
         const slotsLeft = slotsLeftToday(target, NOW)
         const sim = simulateStage({
           stage: target, queue: s.queueCandidates, personas: s.personas as never, history: s.history,
-          axis, days: 1, anchor: 'now', dailyCap: Math.max(0, PROFILES[target].dailyTarget - publishedToday),
+          axis, days: 1, anchor: 'now', dailyCap: Math.max(0, profileOf(target).dailyTarget - publishedToday),
         })
         daily = {
           kstDate: TODAY, stage: target, builtAt: decidedAt, trialBase: base,
           verdict: judgeOneDayCanary(sim, { publishedToday, slotsLeft }),
+        }
+        /**
+         * 🔴 **D20 이상 시험 대상 — preflight 사실을 모아 판정한다.** d3~d10 은 #620 관문 그대로라 모으지 않는다.
+         *    못 모은 칸은 모름(UNKNOWN)이다 — 사다리가 시험을 열지 않는다.
+         */
+        if (needsExtendedGate(target) && previous !== null) {
+          const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
+          const r = await readPreflightFacts(prisma, { now: NOW, evidenceDate: previous.kstDate, env: pe.values })
+          nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID)
+          log(`   ${target} preflight ${nextPreflight.verdict}${nextPreflight.codes.length > 0 ? ` [${nextPreflight.codes.join(',')}]` : ''}`
+            + ` (${Object.entries(nextPreflight.counts).map(([k, x]) => `${k}=${x}`).join(',')})`)
+          for (const n of r.notes) log(`      ⬚ ${n}`)
         }
       }
     } catch (e) { failures.push(`재고를 읽지 못했다 — ${(e as Error).name}`) }
@@ -249,13 +277,13 @@ async function main(): Promise<number> {
     } else {
       result = decideStage({
         kstDate: TODAY, decidedAt, envRelease: envRelease.stage, authorizedCeiling: ceiling.stage,
-        previousDecision: previous, previousEvidence: evidence, verdicts, daily, promotion: promo.promotion, publishedToday, signals,
+        previousDecision: previous, previousEvidence: evidence, verdicts, daily, nextPreflight, promotion: promo.promotion, publishedToday, signals,
       })
     }
     const v = validateForToday(result.decision)
 
     if (JSON_OUT) {
-      console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, result, valid: v.ok, signals, failures, evidence, plan }, null, 2))
+      console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, ceiling: ceilingRes, result, valid: v.ok, signals, failures, evidence, plan, nextPreflight }, null, 2))
     } else {
       for (const s of signals) log(`   ${s.health === 'ok' ? '🟢' : s.health === 'bad' ? '🔴' : '⚪'} ${s.axis.padEnd(8)} ${s.reasons.join(' · ') || '정상'}`)
       const d = result.decision

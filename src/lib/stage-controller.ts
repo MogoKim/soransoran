@@ -23,8 +23,8 @@
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0.
  */
 import {
-  PROFILES, RELEASE_STAGES, SAFEST_STAGE, safeStageFor, stageRank,
-  type ReleaseStage, type StageVerdict,
+  RUNTIME_STAGES, SAFEST_STAGE, safeStageFor, stageRank, profileOf,
+  type RuntimeStage, type StageVerdict,
 } from './scale-profile'
 import { planStageDecision, type DatedCanary } from './stage-ladder'
 import {
@@ -37,6 +37,7 @@ import { PROOF_DATE_ENV, PROOF_ENV_KEYS, PROOF_STAGE_ENV } from './stage-proof-d
 import type { ConsumeOutcome } from './stage-decision-store'
 import type { PromotionVerdict } from './d100-capacity'
 import type { StageEvidenceVerdict } from './stage-evidence'
+import type { PreflightVerdict } from './stage-ladder-generic'
 import type { Health } from './ops-status'
 
 /** 🔴 브레이크가 보는 축 — 재고는 사다리가 이미 본다 */
@@ -49,13 +50,13 @@ export type HealthSignal = {
   reasons: readonly string[]
 }
 
-/** 🔴 바로 아래 칸 — `nextStage` 의 거울. d1 아래는 없다 */
-export function previousStage(s: ReleaseStage): ReleaseStage {
-  const i = RELEASE_STAGES.indexOf(s)
-  return i <= 0 ? SAFEST_STAGE : RELEASE_STAGES[i - 1]!
+/** 🔴 바로 아래 칸 — `nextStage` 의 거울(러너 단계 위). d1 아래는 없다 */
+export function previousStage(s: RuntimeStage): RuntimeStage {
+  const i = RUNTIME_STAGES.indexOf(s)
+  return i <= 0 ? SAFEST_STAGE : RUNTIME_STAGES[i - 1]!
 }
 
-const lower = (a: ReleaseStage, b: ReleaseStage): ReleaseStage => (stageRank(a) <= stageRank(b) ? a : b)
+const lower = (a: RuntimeStage, b: RuntimeStage): RuntimeStage => (stageRank(a) <= stageRank(b) ? a : b)
 
 /**
  * 🔴 **지속 공개 단계의 원천.**
@@ -63,7 +64,7 @@ const lower = (a: ReleaseStage, b: ReleaseStage): ReleaseStage => (stageRank(a) 
  *    · 전날이 TRIAL 이면 그 **시험 기반** — 시험은 그날 하루였다
  *    · 그 밖(SUSTAIN · HOLD · PREPARE)이면 전날 공개 단계 — 그것이 지금 돌고 있는 값이다
  */
-export function sustainedReleaseOf(prev: ValidatedStageDecision | null, envRelease: ReleaseStage): ReleaseStage {
+export function sustainedReleaseOf(prev: ValidatedStageDecision | null, envRelease: RuntimeStage): RuntimeStage {
   if (prev === null) return envRelease
   if (prev.state === 'TRIAL' && prev.transition !== null && prev.transition.kind === 'TRIAL') {
     return prev.transition.trialBase
@@ -75,9 +76,12 @@ export type ControllerInputs = {
   kstDate: string
   decidedAt: string
   /** env 의 지속 공개 단계 — 전날 결정이 없을 때만 쓴다 */
-  envRelease: ReleaseStage
-  /** 🔴 사람이 승인한 천장(`SORAN_CAPACITY_STAGE`) — 이 controller 가 올리지 않는다 */
-  authorizedCeiling: ReleaseStage
+  envRelease: RuntimeStage
+  /**
+   * 🔴 사람이 승인한 천장(`SORAN_CAPACITY_STAGE`) — 이 controller 가 올리지 않는다.
+   *    러너가 담는 천장(`resolveCeiling(...).operable`)이다.
+   */
+  authorizedCeiling: RuntimeStage
   previousDecision: ValidatedStageDecision | null
   /**
    * 🔴 **전날 운영 증거** (2026-09-29 P0) — 사다리가 시험 대상·기반을 이 값과 전날 결정으로 다시 정한다.
@@ -87,6 +91,8 @@ export type ControllerInputs = {
   /** 🔴 정본 `stageVerdicts` — 비어 있으면 **읽기 실패**로 본다(아래 `decideStage` 참고) */
   verdicts: readonly StageVerdict[]
   daily: DatedCanary | null
+  /** 🔴 D20 이상 시험 대상의 preflight(`judgeNextPreflight`) — d3~d10 시험은 보지 않는다 */
+  nextPreflight?: PreflightVerdict | null
   promotion: PromotionVerdict | null
   publishedToday: number
   signals: readonly HealthSignal[]
@@ -96,7 +102,7 @@ export type ControllerResult = {
   decision: StageDecision
   /** 🔴 브레이크가 무엇을 했는가 — 없으면 `none` */
   brake: 'none' | 'slowdown' | 'holdUnknown' | 'controllerFailure'
-  sustained: ReleaseStage
+  sustained: RuntimeStage
 }
 
 /**
@@ -104,7 +110,7 @@ export type ControllerResult = {
  *    상태는 HOLD, 전이 근거 없음. 이유를 남긴다.
  */
 export function holdAtCurrent(input: {
-  kstDate: string; decidedAt: string; current: ReleaseStage; ceiling: ReleaseStage; reason: string
+  kstDate: string; decidedAt: string; current: RuntimeStage; ceiling: RuntimeStage; reason: string
 }): StageDecision {
   const release = lower(input.current, input.ceiling)
   return {
@@ -119,12 +125,12 @@ export function holdAtCurrent(input: {
 }
 
 /** 🔴 공개가 정해진 뒤의 정본 규칙 둘 — 사다리와 같은 순서·같은 규칙 */
-function finishHold(d: StageDecision, release: ReleaseStage, sustained: ReleaseStage, publishedToday: number,
+function finishHold(d: StageDecision, release: RuntimeStage, sustained: RuntimeStage, publishedToday: number,
   reasons: string[]): StageDecision {
   let rel = release
   let dayPinned = d.dayPinned
   // 사다리 정본: 오늘 이미 낸 편수가 낮춘 단계의 하루 목표를 넘으면 오늘은 지속 단계를 고정한다
-  if (stageRank(rel) < stageRank(sustained) && publishedToday > PROFILES[rel].dailyTarget) {
+  if (stageRank(rel) < stageRank(sustained) && publishedToday > profileOf(rel).dailyTarget) {
     reasons.push(`🔴 오늘 이미 ${publishedToday}건 냈다 — ${rel} 로 내리면 상한 초과다. 오늘은 ${sustained} 를 고정한다`)
     rel = lower(sustained, d.capacity)
     dayPinned = true
@@ -152,7 +158,7 @@ export function decideStage(i: ControllerInputs): ControllerResult {
   const planned = planStageDecision({
     kstDate: i.kstDate, sustainedRelease: sustained, authorizedCapacityCeiling: i.authorizedCeiling,
     verdicts: i.verdicts, daily: i.daily, previousDecision: i.previousDecision,
-    previousEvidence: i.previousEvidence ?? null,
+    previousEvidence: i.previousEvidence ?? null, nextPreflight: i.nextPreflight ?? null,
     promotion: i.promotion, publishedToday: i.publishedToday, decidedAt: i.decidedAt,
   })
   const bad = i.signals.filter((s) => s.health === 'bad')
@@ -166,8 +172,11 @@ export function decideStage(i: ControllerInputs): ControllerResult {
     ]
     return { decision: finishHold(planned, target, sustained, i.publishedToday, reasons), brake: 'slowdown', sustained }
   }
-  if (unknown.length > 0 && (planned.state === 'TRIAL' || planned.state === 'SUSTAIN')) {
-    // 🔴 모르는 신호로 올리지 않는다. 재고 감속(정본)은 그대로 둔다
+  /**
+   * 🔴 모르는 신호로 올리지 않는다. 재고 감속(정본)은 그대로 둔다.
+   *    REPROVE(증명일)도 되돌린다 — 품질·비용·오류를 모르는 날 자동 target 을 앞세우지 않는다.
+   */
+  if (unknown.length > 0 && (planned.state === 'TRIAL' || planned.state === 'SUSTAIN' || planned.state === 'REPROVE')) {
     const keep = safeStageFor(sustained, i.verdicts).stage
     const reasons = [
       ...planned.reasons,
@@ -210,6 +219,7 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
   /**
    * 🔴 **자동 단계 증명일** (2026-09-29 마스터 결정) — TRIAL(재시험 포함) · SUSTAIN 날에는
    *    그 단계 목표 슬롯을 자동 target 이 먼저 채우도록 러너에 알린다(`proofDayOf` · `autoFirstNeeded`).
+   *    REPROVE(지금 단계 재증명) 날도 증명일이다 — 공개는 결정 값 그대로, 자동 target 이 먼저 채운다.
    *    HOLD · PREPARE 날과 fallback 은 빈 값 — 기존 human/auto 공정성 그대로다.
    */
   const proofOf = (d: { release: string; kstDate: string }): Record<string, string> =>
@@ -241,7 +251,7 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
       SORAN_RELEASE_STAGE: o.decision.release,
       SORAN_CAPACITY_STAGE: o.decision.capacity,
       ...blankAuth,
-      ...(o.decision.state === 'SUSTAIN' ? proofOf(o.decision) : {}),
+      ...(o.decision.state === 'SUSTAIN' || o.decision.state === 'REPROVE' ? proofOf(o.decision) : {}),
     }
   }
   if (o.fallback === 'legacy') return {}

@@ -24,8 +24,8 @@
  * ```
  */
 import {
-  PROFILES, RELEASE_STAGES, SAFEST_STAGE, safeStageFor, stageRank,
-  type ReleaseStage, type StageVerdict,
+  SAFEST_STAGE, safeStageFor, stageRank, profileOf,
+  type RuntimeStage, type StageVerdict,
 } from './scale-profile'
 import {
   STAGE_DECISION_VERSION, DECISION_WRITER, TRANSITION_STATES, BLOCK_CODES,
@@ -38,6 +38,7 @@ import {
 import type { CanaryVerdict } from './release-canary'
 import { trialPlanOf, evidenceReasonOf, type StageEvidenceVerdict, type TrialPlan } from './stage-evidence'
 import type { PromotionVerdict } from './d100-capacity'
+import { needsExtendedGate, extendedTrialBlocks, type PreflightVerdict } from './stage-ladder-generic'
 
 /**
  * 🔴 **계약 정의는 `stage-decision-contract` 하나다** (2026-09-24 7차).
@@ -61,7 +62,7 @@ export type {
 export type DatedCanary = {
   kstDate: string
   /** 시험 대상 단계 */
-  stage: ReleaseStage
+  stage: RuntimeStage
   verdict: CanaryVerdict
   /** assembler 가 쓴 시각 — 같은 회차·같은 KST 날짜에서 나왔는지 본다 */
   builtAt: string
@@ -69,15 +70,18 @@ export type DatedCanary = {
    * 🔴 **이 값은 주장일 뿐 근거가 아니다.** 정본은 **바로 전 KST 날짜의 검증된
    *    StageDecision 의 `release`** 다. 다르면 `PROVENANCE_PREVIOUS` 로 막는다.
    */
-  trialBase: ReleaseStage
+  trialBase: RuntimeStage
 }
 
 export type StageInputs = {
   kstDate: string
   /** 지속 운영으로 확정된 공개 단계 */
-  sustainedRelease: ReleaseStage
-  /** 🔴 사람이 승인한 천장 — 이 판정이 올리지 않는다 */
-  authorizedCapacityCeiling: ReleaseStage
+  sustainedRelease: RuntimeStage
+  /**
+   * 🔴 사람이 승인한 천장 — 이 판정이 올리지 않는다.
+   *    러너가 담는 천장(`resolveCeiling(...).operable`)이다 — 승인이 d100 이어도 여기는 d50 이하다.
+   */
+  authorizedCapacityCeiling: RuntimeStage
   verdicts: readonly StageVerdict[]
   /** 그 KST 날짜의 하루 판정. 없으면 `null` */
   daily: DatedCanary | null
@@ -99,6 +103,12 @@ export type StageInputs = {
    *    PASS 가 아니면 전날 시험 단계를 다시 시험한다(`trialPlanOf`). 날짜만으로 올라가지 않는다.
    */
   previousEvidence?: StageEvidenceVerdict | null
+  /**
+   * 🔴 **D20 이상 시험 대상의 preflight** (2026-09-29 generic scheduler 배선) — `judgeNextPreflight`.
+   *    D3·D5·D10 시험은 이 값을 보지 않는다(#620 관문 그대로 — 하루 시뮬레이션 `judgeOneDayCanary`).
+   *    D20 이상은 이 값이 **그 대상의 PASS** 여야 열린다 — 없거나 다른 단계거나 PASS 가 아니면 막는다.
+   */
+  nextPreflight?: PreflightVerdict | null
   /** 정본 `judgePromotion`. 없으면 `null` */
   promotion: PromotionVerdict | null
   publishedToday: number
@@ -270,9 +280,26 @@ export function planStageDecision(input: StageInputs): StageDecision {
    *    앞판은 이 코드를 `blocks` 에 적기만 하고 **그 판정을 그대로 썼다** —
    *    "막았다" 고 기록해 놓고 시험을 연 것이다. 죽은 게이트였다.
    */
-  const daily = blocks.some((b) =>
+  let daily = blocks.some((b) =>
     b.code === 'STALE_DAILY' || b.code === 'PROVENANCE_STAGE' || b.code === 'PROVENANCE_PREVIOUS')
     ? null : input.daily
+  /**
+   * 🔴 **D20 이상 시험 관문** (2026-09-29 generic scheduler 배선).
+   *    D20 이상 대상은 하루 시뮬레이션(`judgeOneDayCanary`) 위에 preflight(재고 · Persona canary 하한 ·
+   *    댓글/감사/공급 비용 · 댓글 러너 용량 · 슬롯)와 첫 슬롯 시각(LATE_START)을 더 본다.
+   *    🔴 천장 위 대상은 여기서 보지 않는다 — 아래 CEILING 이 막고, 이유가 둘로 갈리지 않게 한다.
+   *    🔴 막히면 판정을 **쓰지 않는다**(TRIAL 없음) — 코드만 남기고 시험을 여는 죽은 게이트를 만들지 않는다.
+   */
+  if (daily !== null && needsExtendedGate(daily.stage) && stageRank(daily.stage) <= stageRank(ceiling)) {
+    const gate = extendedTrialBlocks({
+      target: daily.stage, kstDate: input.kstDate, runAt: input.decidedAt, preflight: input.nextPreflight ?? null,
+    })
+    if (gate.length > 0) {
+      blocks.push(...gate)
+      reasons.push(...gate.map((b) => `🔴 ${b.code}: ${b.reason}`))
+      daily = null
+    }
+  }
 
   /** 🔴 새 KST 날짜에 판정이 하나도 없으면 d1 — 빈 값을 근거로 어제를 잇지 않는다 */
   if (input.verdicts.length === 0 && daily === null) {
@@ -354,7 +381,7 @@ export function planStageDecision(input: StageInputs): StageDecision {
 
   let dayPinned = false
   if (stageRank(release) < stageRank(input.sustainedRelease)
-    && input.publishedToday > PROFILES[release].dailyTarget) {
+    && input.publishedToday > profileOf(release).dailyTarget) {
     reasons.push(
       `🔴 오늘 이미 ${input.publishedToday}건 냈다 — ${release} 로 내리면 상한 초과가 된다. `
       + `오늘은 ${input.sustainedRelease} 를 고정한다`,
@@ -406,6 +433,30 @@ export function planStageDecision(input: StageInputs): StageDecision {
     const pct = promotion?.nextPreflight.ready === true ? '준비 완료'
       : `준비 중 — ${promotion?.nextPreflight.blocking[0] ?? '진행률 미측정'}`
     reasons.push(`🟢 PREPARE — 공개 ${release} · 승인 천장 ${ceiling} 로 재고를 쌓는다 (${pct})`)
+  }
+  /**
+   * ── ⑥ REPROVE — 지금 단계를 증명일로 다시 돈다 (2026-09-29 generic scheduler 배선) ──
+   *
+   * 🔴 **왜.** 앞판은 시험이 열리지 않은 날을 HOLD·PREPARE 로 두었다. 그날은 증명일이 아니라서
+   *    (`stage-proof-day` 공정성 그대로) 증거가 `DECISION_NOT_TRANSITION` 이 되고, 다음 날 시험 계획이
+   *    다시 없다 — **PASS 뒤 하루라도 막히면 지속 승격 밖에서는 영구 정체**였다(실측 반례).
+   * 🔴 **언제.** 전날 결정이 바로 전날 것으로 검증됐고 · 공개가 바닥 위이고 · 다음 칸이 **승인 천장 안**
+   *    이고 · 그날 단계를 고정하지 않았을 때. 공개는 **그대로**다 — 올리지 않는다.
+   *    · 천장에 닿은 단계는 HOLD 로 남는다 — 올라갈 칸이 없는데 공정성을 바꾸지 않는다.
+   *      천장이 올라간 다음 날 이 규칙이 REPROVE 를 열고, 그 PASS 뒤 날 다음 칸 시험이 열린다.
+   *    · 바닥(d1)은 증거 없이 FLOOR 시험을 연다 — 여기 오지 않는다.
+   * 🔴 운영 신호 브레이크(`decideStage`)는 REPROVE 를 HOLD·PREPARE 로 되돌린다 — 품질·비용·오류가
+   *    나쁘거나 모르는 날 자동 target 을 앞세우지 않는다.
+   */
+  if ((state === 'HOLD' || state === 'PREPARE') && !dayPinned) {
+    const prev = input.previousDecision
+    const upNext = next(release)
+    if (prev !== null && prev.kstDate === previousKstDate(input.kstDate) && release !== SAFEST_STAGE
+      && upNext !== null && stageRank(upNext) <= stageRank(ceiling)) {
+      state = 'REPROVE'
+      reasons.push(`🟢 REPROVE — 공개 ${release} 를 증명일로 다시 돈다(자동 target 먼저). `
+        + `PASS 면 다음 날 ${upNext} 시험 — 승인 천장 ${ceiling} 안이다`)
+    }
   }
   if (state === 'HOLD' && reasons.length === 0) {
     reasons.push(`유지 — ${promotion?.nextAction ?? '판정 근거 없음'}`)

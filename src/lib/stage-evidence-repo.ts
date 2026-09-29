@@ -15,7 +15,7 @@
  */
 import type { PrismaClient } from '@prisma/client'
 
-import type { ReleaseStage } from './scale-profile'
+import type { RuntimeStage } from './scale-profile'
 import { isCalendarDate, type ValidatedStageDecision } from './stage-decision-contract'
 import { UNATTENDED_PUBLISH_DECIDED_BY } from './original-post-publish-tx'
 import { confirmedDefectCount, missingAutoPostCount } from './auto-ready-repo'
@@ -47,7 +47,7 @@ export function kstDayBounds(kstDate: string): { start: Date; end: Date } | null
 
 export async function readStageEvidenceFacts(db: PrismaClient, i: {
   kstDate: string
-  stage: ReleaseStage
+  stage: RuntimeStage
   /** 🔴 D 의 **검증된** 결정 — 없거나 검증에 떨어졌으면 null */
   decision: ValidatedStageDecision | null
   /** 시한 초과 감사를 세는 시각 — 판정하는 지금 */

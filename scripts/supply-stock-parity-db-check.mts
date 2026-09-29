@@ -23,7 +23,7 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
   readStock, SAFEST_STOCK_LIMITS,
 } from '../src/lib/micro-seed-supply-autofill'
-import { PROFILES, releaseCapsOf, CAPACITY_ENV, RELEASE_ENV, type ReleaseStage } from '../src/lib/scale-profile'
+import { PROFILES, RUNTIME_PROFILES, releaseCapsOf, CAPACITY_ENV, RELEASE_ENV, type ReleaseStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { authoritativeGate } from '../src/lib/auto-ready-repo'
 import {
@@ -307,7 +307,7 @@ async function main(): Promise<void> {
         load.planningStage === cap
         && pub.resolved.caps.minDaysBetween === releaseCapsOf(pub.resolved.scale.releaseProfile).minDaysBetween
         && pub.resolved.dailyCap === pub.resolved.scale.releaseProfile.dailyTarget
-        && PROFILES[pub.resolved.scale.releaseStage].dailyTarget <= PROFILES[rel].dailyTarget
+        && RUNTIME_PROFILES[pub.resolved.scale.releaseStage].dailyTarget <= PROFILES[rel].dailyTarget
         && open <= PROFILES[cap].dailyTarget * 7,
         `열린 자리 ${open} · 발행 일 ${pub.resolved.dailyCap}`)
     }

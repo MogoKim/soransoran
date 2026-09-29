@@ -20,8 +20,8 @@
  * 🔴 **새 계산이 없다.** 시뮬레이션은 러너와 같은 `simulateStage` 를 쓰고
  *    지평만 **1일**로 준다. 여기서 다시 계산하면 관제와 러너가 갈린다.
  */
-import type { ReleaseStage } from './scale-profile'
-import { PROFILES } from './scale-profile'
+import type { RuntimeStage } from './scale-profile'
+import { profileOf } from './scale-profile'
 import type { SimOutcome } from './scale-readiness'
 
 /** 🔴 값이 아니라 **이름**이다 */
@@ -37,7 +37,7 @@ export function kstDateString(now: Date): string {
 }
 
 export type CanaryVerdict = {
-  stage: ReleaseStage
+  stage: RuntimeStage
   /** 그날 슬롯 수 = 그날 목표 편수 */
   want: number
   /** 🔴 **오늘(KST) 이미 낸 수** — 회차마다 다시 세지 않는다 */
@@ -72,7 +72,7 @@ export type TodayState = {
  *    14일치 재고. 그 셋은 `judgeReadiness` 가 계속 본다.
  */
 export function judgeOneDayCanary(sim: SimOutcome, today: TodayState): CanaryVerdict {
-  const want = PROFILES[sim.stage].dailyTarget
+  const want = profileOf(sim.stage).dailyTarget
   /**
    * 🔴 **회차마다 하루치 전체를 다시 요구하지 않는다** (2026-09-21 보정).
    *
@@ -130,8 +130,8 @@ export function judgeOneDayCanary(sim: SimOutcome, today: TodayState): CanaryVer
  *    로그가 "몇 시 슬롯이 남았는가" 를 사람 말로 보여 주는 데 쓴다 —
  *    🔴 그리고 검사가 그 **같음**을 직접 잠근다.
  */
-export function slotsLeftToday(stage: ReleaseStage, now: Date): number {
-  const p = PROFILES[stage]
+export function slotsLeftToday(stage: RuntimeStage, now: Date): number {
+  const p = profileOf(stage)
   const kst = new Date(now.getTime() + 9 * 3_600_000)
   const minuteNow = kst.getUTCHours() * 60 + kst.getUTCMinutes()
   return p.slots.filter((sl) => sl.hour * 60 + sl.minute >= minuteNow)
@@ -140,7 +140,7 @@ export function slotsLeftToday(stage: ReleaseStage, now: Date): number {
 
 export type CanaryAuthorization = {
   /** 사람이 허가한 단계. 없으면 null */
-  stage: ReleaseStage | null
+  stage: RuntimeStage | null
   /** 사람이 허가한 KST 날짜. 없으면 null */
   date: string | null
   /** 오늘이 그날인가 */
@@ -160,7 +160,7 @@ export type CanaryAuthorization = {
 export function canaryAuthorization(
   env: Readonly<Record<string, string | undefined>>,
   now: Date,
-  allowed: readonly ReleaseStage[],
+  allowed: readonly RuntimeStage[],
 ): CanaryAuthorization {
   const rawStage = (env[CANARY_STAGE_ENV] ?? '').trim()
   const rawDate = (env[CANARY_DATE_ENV] ?? '').trim()
@@ -176,13 +176,13 @@ export function canaryAuthorization(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
     return { stage: null, date: null, activeToday: false, note: `🔴 시험 날짜 형식이 아니다 — ${rawDate}` }
   }
-  if (!allowed.includes(rawStage as ReleaseStage)) {
+  if (!allowed.includes(rawStage as RuntimeStage)) {
     return { stage: null, date: rawDate, activeToday: false, note: `🔴 모르는 단계다 — ${rawStage}` }
   }
   const today = kstDateString(now)
   const activeToday = rawDate === today
   return {
-    stage: rawStage as ReleaseStage,
+    stage: rawStage as RuntimeStage,
     date: rawDate,
     activeToday,
     note: activeToday
@@ -210,7 +210,7 @@ export const WINDOW_UNTIL_ENV = 'SORAN_RELEASE_WINDOW_UNTIL'
 export const WINDOW_MAX_DAYS = 7
 
 export type WindowAuthorization = {
-  stage: ReleaseStage | null
+  stage: RuntimeStage | null
   from: string | null
   until: string | null
   /** 오늘이 그 기간 안인가 */
@@ -244,7 +244,7 @@ const daysBetween = (a: string, b: string): number =>
 export function windowAuthorization(
   env: Readonly<Record<string, string | undefined>>,
   now: Date,
-  allowed: readonly ReleaseStage[],
+  allowed: readonly RuntimeStage[],
 ): WindowAuthorization {
   const rawStage = (env[WINDOW_STAGE_ENV] ?? '').trim()
   const rawFrom = (env[WINDOW_FROM_ENV] ?? '').trim()
@@ -256,7 +256,7 @@ export function windowAuthorization(
     return bad(`🔴 기간 허가가 반쪽이다 — ${WINDOW_STAGE_ENV} · ${WINDOW_FROM_ENV} · ${WINDOW_UNTIL_ENV} 를 **모두** 준다`)
   }
   if (!isDate(rawFrom) || !isDate(rawUntil)) return bad(`🔴 기간 날짜 형식이 아니다 — ${rawFrom}~${rawUntil}`)
-  if (!allowed.includes(rawStage as ReleaseStage)) return bad(`🔴 모르는 단계다 — ${rawStage}`)
+  if (!allowed.includes(rawStage as RuntimeStage)) return bad(`🔴 모르는 단계다 — ${rawStage}`)
   /**
    * 🔴 여기 닿을 때 두 값은 **실재하는 날짜**다 — `isDate` 가 되돌려 찍어 확인했다.
    *    그래서 `span` 은 유한하고, 아래 두 비교가 NaN 으로 함께 false 가 되는 일이 없다.
@@ -270,7 +270,7 @@ export function windowAuthorization(
   const today = kstDateString(now)
   const activeToday = today >= rawFrom && today <= rawUntil
   return {
-    stage: rawStage as ReleaseStage, from: rawFrom, until: rawUntil, activeToday,
+    stage: rawStage as RuntimeStage, from: rawFrom, until: rawUntil, activeToday,
     note: activeToday
       ? `🔴 기간형 제한 운영 — ${rawStage} · ${rawFrom}~${rawUntil} (KST). 오늘은 그 안이다`
       : `기간 허가는 ${rawFrom}~${rawUntil} 의 것이다 — 오늘(${today})은 밖이다`,

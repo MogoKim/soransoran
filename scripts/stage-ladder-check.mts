@@ -23,7 +23,7 @@ import {
   STORED_COLUMNS, decisionToRow, rowToDecisionInput, decisionKeyOf,
 } from '../src/lib/stage-decision-store'
 import { sameStageSnapshot, reconcileStageSources, type StageSnapshot } from '../src/lib/stage-source'
-import { PROFILES, RELEASE_STAGES, SAFEST_STAGE, type ReleaseStage } from '../src/lib/scale-profile'
+import { RUNTIME_PROFILES as PROFILES, RELEASE_STAGES, SAFEST_STAGE, type RuntimeStage, type ReleaseStage } from '../src/lib/scale-profile'
 import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
 import { judgeOneDayCanary } from '../src/lib/release-canary'
 import { judgePromotion, type PromotionInput } from '../src/lib/d100-capacity'
@@ -66,7 +66,7 @@ const PERSONAS = POOL.cards.filter((c) => c.voiceLength !== null).map(cardToPers
  *    검증된 `StageDecision.release` 하나뿐이다.
  */
 const PREV_DATE = previousKstDate(DATE)!
-const prevRow = (release: ReleaseStage, o: Record<string, unknown> = {}): unknown => ({
+const prevRow = (release: RuntimeStage, o: Record<string, unknown> = {}): unknown => ({
   kstDate: PREV_DATE, capacity: 'd10', release, state: 'HOLD',
   reasons: [], blocks: [], dayPinned: false, supply: null,
   decidedAt: `${PREV_DATE}T01:00:00.000Z`,
@@ -82,7 +82,7 @@ const validatePrev = (row: unknown): ValidatedStageDecision | null => {
   const v = validateStoredDecision({ row, expectKstDate: PREV_DATE })
   return v.ok ? v.decision : null
 }
-const prevDecision = (release: ReleaseStage, o: Record<string, unknown> = {}) =>
+const prevDecision = (release: RuntimeStage, o: Record<string, unknown> = {}) =>
   validatePrev(prevRow(release, o))
 /**
  * 🔴 **전날 운영 PASS — 정본 판정기로만 만든다** (2026-09-29 P0).
@@ -90,7 +90,7 @@ const prevDecision = (release: ReleaseStage, o: Record<string, unknown> = {}) =>
  *    운영 증거 PASS 여야 한다 — 손으로 `verdict:'PASS'` 를 지어내지 않고 `judgeStageEvidence` 에 깨끗한 사실을 넣는다.
  *    반례(증거 없음 · FAIL · 모름)는 `stage:evidence-check` 가 따로 본다.
  */
-const passEvidence = (stage: ReleaseStage): StageEvidenceVerdict => {
+const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
   const at = Date.parse(`${PREV_DATE}T09:30:00+09:00`)
   const n = PROFILES[stage].dailyTarget
   return judgeStageEvidence(PREV_DATE, stage, {
@@ -139,7 +139,7 @@ const assemble = (o: { stock: number; publishedToday: number }) => {
   const axis = { now: NOW, publishedToday: o.publishedToday }
   const verdicts = stageVerdicts({ queue, personas: PERSONAS, axis })
   /** 🔴 같은 `runAt` 에서 날짜와 대상 단계를 함께 붙인다 */
-  const daily = (stage: ReleaseStage, kstDate = DATE, base: ReleaseStage = 'd3'): DatedCanary => {
+  const daily = (stage: RuntimeStage, kstDate = DATE, base: RuntimeStage = 'd3'): DatedCanary => {
     const slotsLeft = Math.max(0, PROFILES[stage].dailyTarget - o.publishedToday)
     const sim = simulateStage({
       stage, queue, personas: PERSONAS, axis, days: 1, anchor: 'now', dailyCap: slotsLeft,
@@ -718,8 +718,8 @@ console.log('\n⑮ 🔴 🔴 trialBase 는 전날 실제 결정에서만 온다'
 {
   const a = assemble({ stock: 12, publishedToday: 0 })
   const plan = (o: {
-    sustained: ReleaseStage; ceiling: ReleaseStage; stage: ReleaseStage
-    base: ReleaseStage; prev: ValidatedStageDecision | null
+    sustained: RuntimeStage; ceiling: RuntimeStage; stage: RuntimeStage
+    base: RuntimeStage; prev: ValidatedStageDecision | null
   }) => planStageDecision({
     kstDate: DATE, sustainedRelease: o.sustained, authorizedCapacityCeiling: o.ceiling,
     verdicts: a.verdicts, daily: a.daily(o.stage, DATE, o.base),

@@ -1,63 +1,56 @@
 /**
- * 🔴 **D1 → D100 일반 단계 스케줄러 골격 — 순수 함수 · 운영 controller 에 배선하지 않았다** (2026-09-29)
+ * 🔴 **D1 → D100 일반 단계 스케줄러 — 운영 controller 에 배선했다** (2026-09-29)
  *
- * 🔴 **왜 생겼나.** 운영 사다리(`stage-ladder` · `stage-controller`)는 `RELEASE_STAGES`(d1·d3·d5·d10)
- *    위에서만 돈다. `nextStage(d10)` 은 `null` 이고, 저장 계약(`validateStoredDecision`)·러너 프로필
- *    (`PROFILES`)·승인 천장(`resolveStage`) 전부 d10 이 끝이다. D20 이상은 "설정만 바꾸면 되는" 칸이 없다.
- *    이 파일은 그 칸을 **숫자와 규칙으로** 먼저 세운다 — 러너가 쓰는 값은 하나도 바꾸지 않는다.
+ * 🔴 **무엇을 하나.** 운영 사다리(`stage-ladder.planStageDecision`)가 D20 이상을 다룰 때 쓰는 부품이다.
+ *    상태 기계는 **하나**다 — 운영 사다리가 그것이고, 이 파일은 거기에 들어가는 계산만 준다.
+ *      · 승인 천장 해석(`resolveCeiling`) — d100 을 표현하되 열 수 있는 천장은 러너 단계(d50) 이하
+ *      · 슬롯 파생(`deriveSlots`) — 운영 창 안 · heartbeat 격자 위 · 60분 안 댓글 회차 3번 이상
+ *      · 다음 칸 preflight(`judgeNextPreflight`) — 재고 · Persona canary 하한 · 댓글/감사/공급 비용 · 러너 용량
+ *      · D20 이상 시험 관문(`extendedTrialBlocks`) — preflight PASS + 첫 슬롯 전(LATE_START 아님)
+ *    🔴 앞판(#622 골격)의 별도 상태 기계(`planGenericStage`)는 지웠다 — 운영 사다리와 두 벌이 되면
+ *       갈라진 순간부터 한쪽만 고쳐진다. 그 전이 규칙(PASS 뒤 한 칸 · FAIL/UNKNOWN 재시험 · 막힌 날 증명일)은
+ *       운영 사다리의 `trialPlanOf` · `REPROVE` 로 옮겼고, 검사는 운영 `decideStage` 를 여러 날 돌려 본다.
  *
  * 🔴 **전이 규칙은 #620 과 같다 — 새 규칙을 만들지 않는다.**
- *    · 다음 단계 시험은 **지금 단계의 완전한 자동 운영 PASS 뒤에만** 열린다
- *      (판정 본체는 `stage-evidence.judgeEvidenceForTarget` 하나 — 자동 READY · 무인 물량 = 목표 ·
- *       자동 글마다 60분 안 첫 Persona 댓글 · 20% 감사 표본 · 중복 0 · 비용·러너 정상).
- *    · FAIL · UNKNOWN → **같은 단계 재시험**. 사람 승인 물량은 0건으로 센다.
- *    · 날짜로 기다리지 않는다 · 사람이 env 를 고치지 않는다 — PASS 뒤 다음 단계 preflight
- *      (재고 · Persona · 댓글 비용 · 댓글 러너 · 감사 비용)가 초록이면, 07:00 controller 가 그날
- *      첫 유효 슬롯에서 canary 를 연다(`opensAt`).
+ *    · 다음 단계 시험은 **지금 단계의 완전한 자동 운영 PASS 뒤에만** 열린다(`judgeEvidenceForTarget` 여섯 조건).
+ *    · FAIL · UNKNOWN → 같은 단계 재시험. 사람 승인 물량은 0건으로 센다.
+ *    · 날짜로 기다리지 않는다 · 사람이 env 를 고치지 않는다 — PASS 다음 날 07:00 controller 가 연다.
  *
- * 🔴 **#620 과 다른 점 하나 — 정체(stall)를 없앤다.** 운영 사다리는 PASS 뒤 천장·준비도에 막히면
- *    다음 날 HOLD 가 되고, HOLD 날의 증거는 `DECISION_NOT_TRANSITION` 이라 **다시는 PASS 를 못 만든다**
- *    (지속 승격 경로 밖에서는 영구 정체 — `stage-scheduler-check` 가 실측한다).
- *    여기서는 막힌 날을 `REPROVE`(지금 단계를 증명일로 다시 돈다)로 둔다. 올라가지 않고, 증거는 계속 쌓인다.
+ * 🔴 **D3·D5·D10 시험은 이 관문을 지나지 않는다** — #620 관문(하루 시뮬레이션 `judgeOneDayCanary`) 그대로다.
+ *    D20 이상만 그 위에 preflight 와 첫 슬롯 시각을 더 본다(`needsExtendedGate`). 지금 운영을 바꾸지 않는다.
  *
- * 🔴 **승인 천장은 fail-closed 다.** 천장보다 높은 단계는 어떤 경우에도 열리지 않는다.
- *    천장 타입은 d20 이상을 **표현할 수 있지만**, 지금 운영값(d10)을 바꾸지 않는다.
- *    러너 배선이 없는 단계(`RUNTIME_UNWIRED`)도 천장과 별개로 막는다 — 표현할 수 있다고 열 수 있는 것이 아니다.
- *
- * 🔴 순수 함수다 — DB · 파일 · env · 시각 조회 0. 러너 격자·댓글 예약표는 호출부가 주입한다
- *    (그 정본은 `scripts/lib/*-runner-template.ts` 이고 `src/lib` 가 `scripts` 를 import 하지 않는다).
+ * 🔴 순수 함수다 — DB · 파일 · env · 시각 조회 0. 러너 격자·댓글 예약표·비용 사실은 호출부가 주입한다
+ *    (그 정본은 `scripts/lib/*-runner-template.ts` · 장부이고 `src/lib` 가 `scripts` 를 import 하지 않는다).
  */
 import {
-  PROFILES, RELEASE_STAGES, MAX_DAILY_TARGET, SAFEST_STAGE, minuteOfDay, slotLabel, kstMidnight,
-  verifyProfile, type ReleaseStage, type ScaleProfile, type Slot,
+  RELEASE_STAGES, RUNTIME_STAGES, MAX_DAILY_TARGET, SAFEST_STAGE, HIGHEST_RUNTIME_STAGE,
+  minuteOfDay, slotLabel, kstMidnight, verifyProfile, isRuntimeStage, profileOf, stageRank,
+  type RuntimeStage, type ScaleProfile, type Slot,
 } from './scale-profile'
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { auditTarget } from './auto-ready-v2'
-import { PERSONA_CANARY_FLOOR } from './d100-capacity'
-import { DECISION_WRITER, previousKstDate } from './stage-decision-contract'
+import { PERSONA_CANARY_FLOOR, READY_NET_MARGIN } from './d100-capacity'
+import type { StageBlock } from './stage-decision-contract'
 import type { EvidenceVerdictKind } from './stage-evidence'
 
+export { HIGHEST_RUNTIME_STAGE, isRuntimeStage }
+
 // ─────────────────────────────────────────────────────────
-// 🔴 단계 목록 — 앞 넷은 운영 `RELEASE_STAGES` 그대로다
+// 🔴 단계 목록 — 러너 단계(d1~d50) + 표현만 되는 d100
 // ─────────────────────────────────────────────────────────
 
-export const GENERIC_STAGES = ['d1', 'd3', 'd5', 'd10', 'd20', 'd30', 'd50', 'd100'] as const
+export const GENERIC_STAGES = [...RUNTIME_STAGES, 'd100'] as const
 export type GenericStage = (typeof GENERIC_STAGES)[number]
 
 /**
- * 🔴 **D20 이상의 하루 목표** — 창업자 확정 계획(`d100-capacity` 의 `publicPostsPerDay`)과 같은 값이다.
- *    검사가 `d100Plan(stage).publicPostsPerDay` 와 대조한다. d1~d10 은 `PROFILES` 가 정본이다.
+ * 🔴 **D100 의 하루 목표** — 창업자 확정 계획(`d100-capacity` 의 `publicPostsPerDay`)과 같은 값이다.
+ *    검사가 `d100Plan(stage).publicPostsPerDay` 와 대조한다. d1~d50 은 러너 프로필(`profileOf`)이 정본이다.
  */
-const EXTENDED_DAILY_TARGET: Readonly<Record<Exclude<GenericStage, ReleaseStage>, number>> = {
-  d20: 20, d30: 30, d50: 50, d100: 100,
-}
+const UNWIRED_DAILY_TARGET: Readonly<Record<Exclude<GenericStage, RuntimeStage>, number>> = { d100: 100 }
 
 export const isGenericStage = (v: unknown): v is GenericStage =>
   typeof v === 'string' && (GENERIC_STAGES as readonly string[]).includes(v)
-
-export const isRuntimeStage = (s: GenericStage): s is ReleaseStage =>
-  (RELEASE_STAGES as readonly string[]).includes(s)
 
 export function genericRank(s: GenericStage): number {
   return GENERIC_STAGES.indexOf(s)
@@ -70,29 +63,25 @@ export function genericNextStage(s: GenericStage): GenericStage | null {
 }
 
 export function genericDailyTarget(s: GenericStage): number {
-  return isRuntimeStage(s) ? PROFILES[s].dailyTarget : EXTENDED_DAILY_TARGET[s]
+  return isRuntimeStage(s) ? profileOf(s).dailyTarget : UNWIRED_DAILY_TARGET[s]
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 승인 천장 — d20 이상을 표현하되 fail-closed
+// 🔴 승인 천장 — d100 을 표현하되 fail-closed
 // ─────────────────────────────────────────────────────────
 
 export type CeilingResolution = {
   /** 사람이 승인한 천장 — 모르는 값이면 가장 안전한 단계 */
   authorized: GenericStage
-  /** 🔴 실제로 열 수 있는 천장 — 승인 천장과 러너 배선 상한 중 낮은 쪽 */
-  operable: ReleaseStage
+  /** 🔴 실제로 열 수 있는 천장 — 승인 천장과 러너 단계 상한 중 낮은 쪽 */
+  operable: RuntimeStage
   fallbackReason: string | null
 }
 
-/** 🔴 러너가 배선된 가장 높은 단계 — 지금은 d10 */
-export const HIGHEST_RUNTIME_STAGE: ReleaseStage = RELEASE_STAGES[RELEASE_STAGES.length - 1]!
-
 /**
  * 🔴 **천장 env 문자열 → 천장.** 모르는 값은 가장 안전한 단계다(운영 `resolveStage` 와 같은 방향).
- *    다른 점은 하나다 — `d20` 을 적으면 운영 `resolveStage` 는 **d1 로 떨어뜨린다**(모르는 값).
- *    여기서는 승인 천장 d20 으로 읽고, 열 수 있는 천장은 러너 배선 상한(d10)으로 묶는다.
- *    🔴 어느 쪽도 천장보다 높은 단계를 열지 않는다.
+ *    `d100` 은 승인 천장 d100 으로 읽고, 열 수 있는 천장은 러너 단계 상한(d50)으로 묶는다.
+ *    🔴 어느 쪽도 천장보다 높은 단계를 열지 않는다. 지금 운영값(d10)은 d10 그대로다.
  */
 export function resolveCeiling(raw: string | undefined): CeilingResolution {
   const v = (raw ?? '').trim()
@@ -102,7 +91,7 @@ export function resolveCeiling(raw: string | undefined): CeilingResolution {
       fallbackReason: v === '' ? '천장 설정이 없다 — 가장 안전한 d1' : `천장 "${v}" 는 허용 단계가 아니다 — d1`,
     }
   }
-  const operable: ReleaseStage = isRuntimeStage(v) ? v : HIGHEST_RUNTIME_STAGE
+  const operable: RuntimeStage = isRuntimeStage(v) ? v : HIGHEST_RUNTIME_STAGE
   return { authorized: v, operable, fallbackReason: null }
 }
 
@@ -158,6 +147,8 @@ export type SlotDerivation =
  * 🔴 **n 건을 유효 분 위에 고르게 편다** — 한 분에 한 건(count 1).
  *    `PER_RUN_MAX=1` 이라 한 슬롯이 두 건을 맡으면 그 둘째 건은 다음 틱으로 밀린다 — 그래서 겹치지 않는다.
  *    유효 분이 모자라면 **만들지 않는다**(부족을 늦은 슬롯·창 밖 슬롯으로 메우지 않는다).
+ *    🔴 러너 프로필(`RUNTIME_PROFILES`)의 D20·D30·D50 슬롯은 이 함수의 결과를 그대로 적은 것이다 —
+ *       검사가 둘을 대조한다.
  */
 export function deriveSlots(n: number, grid: RunnerGrid): SlotDerivation {
   if (!Number.isInteger(n) || n < 1 || n > MAX_DAILY_TARGET) return { ok: false, problems: [`목표 ${n} — 1~${MAX_DAILY_TARGET} 정수`] }
@@ -179,23 +170,25 @@ export function deriveSlots(n: number, grid: RunnerGrid): SlotDerivation {
   return { ok: true, slots }
 }
 
-/** 🔴 D20 이상 Persona 발행 간격 — 새 숫자가 아니라 d10 운영값 그대로다 */
-const EXTENDED_PERSONA_CAPS = { postsPerWeek: PROFILES.d10.postsPerWeek, minDaysBetween: PROFILES.d10.minDaysBetween }
-
 export type GenericProfile =
   | { ok: true; stage: GenericStage; profile: ScaleProfile; source: 'runtime' | 'derived' }
   | { ok: false; stage: GenericStage; problems: string[] }
 
 /**
- * 🔴 **단계 프로필.** d1~d10 은 운영 `PROFILES` 를 **그대로** 돌려준다(바꾸지 않는다).
- *    d20 이상은 목표·Persona 간격·슬롯을 파생한다 — 슬롯이 담기지 않으면 프로필이 없다.
+ * 🔴 **단계 프로필.** d1~d50 은 러너 프로필(`profileOf`)을 **그대로** 돌려주되, 러너 격자 계약으로 다시 본다.
+ *    d100 은 목표·슬롯을 파생한다 — 슬롯이 담기지 않으면 프로필이 없다.
  */
 export function genericProfileOf(stage: GenericStage, grid: RunnerGrid): GenericProfile {
-  if (isRuntimeStage(stage)) return { ok: true, stage, profile: PROFILES[stage], source: 'runtime' }
+  if (isRuntimeStage(stage)) {
+    const profile = profileOf(stage)
+    const problems = verifyGenericProfile(profile, grid)
+    return problems.length > 0 ? { ok: false, stage, problems } : { ok: true, stage, profile, source: 'runtime' }
+  }
   const n = genericDailyTarget(stage)
   const d = deriveSlots(n, grid)
   if (!d.ok) return { ok: false, stage, problems: d.problems }
-  const profile: ScaleProfile = { dailyTarget: n, ...EXTENDED_PERSONA_CAPS, slots: d.slots }
+  const top = profileOf(HIGHEST_RUNTIME_STAGE)
+  const profile: ScaleProfile = { dailyTarget: n, postsPerWeek: top.postsPerWeek, minDaysBetween: top.minDaysBetween, slots: d.slots }
   const problems = verifyGenericProfile(profile, grid)
   return problems.length > 0 ? { ok: false, stage, problems } : { ok: true, stage, profile, source: 'derived' }
 }
@@ -227,13 +220,16 @@ export const PREFLIGHT_CODES = [
   'PERSONA_SHORT', 'PERSONA_UNKNOWN',
   'COMMENT_COST_SHORT', 'COMMENT_COST_UNKNOWN', 'COMMENT_RUNNER_SHORT',
   'AUDIT_COST_SHORT', 'AUDIT_COST_UNKNOWN',
+  'SUPPLY_COST_SHORT', 'SUPPLY_COST_UNKNOWN',
 ] as const
 export type PreflightCode = (typeof PREFLIGHT_CODES)[number]
-const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = ['STOCK_UNKNOWN', 'PERSONA_UNKNOWN', 'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN']
+const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = [
+  'STOCK_UNKNOWN', 'PERSONA_UNKNOWN', 'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN',
+]
 
 /**
  * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다.
- *    비용 상한은 정본 상수(`COMMENT_LOOP_DAILY_USD_MAX` 등)를, 단가는 장부 실측을 호출부가 넣는다.
+ *    상한은 정본(env 값을 정본 천장으로 누른 것)을, 단가는 장부 실측을 호출부가 넣는다.
  */
 export type PreflightFacts = {
   /** 자동 READY 재고(발행 가능) */
@@ -242,12 +238,16 @@ export type PreflightFacts = {
   activePersonas: number | null
   /** 댓글 1건 정산 단가(USD) — 장부 실측 */
   commentUsdPerRequest: number | null
-  /** 댓글 레인 하루 상한(USD) */
-  commentDailyUsdCap: number
+  /** 댓글 레인 하루 상한(USD) — 정본 최대 $0.20 */
+  commentDailyUsdCap: number | null
   /** 감사 1건 정산 단가(USD) — 장부 실측 */
   auditUsdPerCall: number | null
   /** 감사 레인 하루 상한(USD) — 모르면 null */
   auditDailyUsdCap: number | null
+  /** 🔴 자동 READY 한 건을 만드는 데 든 공급 비용(USD) — 장부 정산액 ÷ 그날 자동 READY 수. 모르면 null */
+  supplyUsdPerReady: number | null
+  /** 공급 하루 상한(USD) — 정본 최대 $0.50. 모르면 null */
+  supplyDailyUsdCap: number | null
 }
 
 export type PreflightVerdict = {
@@ -260,6 +260,8 @@ export type PreflightVerdict = {
 /**
  * 🔴 **다음 단계 preflight.** FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면 UNKNOWN.
  *    둘 다 시험을 열지 않는다.
+ *    🔴 Persona 는 **canary 하한**(`PERSONA_CANARY_FLOOR`)으로 본다 — 지속 다양성 목표
+ *       (`PERSONA_SUSTAINED_TARGET`)는 하루 시험을 막지 않는다(#618 정본 구분).
  */
 export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, grid: RunnerGrid): PreflightVerdict {
   const codes = new Set<PreflightCode>()
@@ -281,8 +283,9 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   // 댓글 — 자동 글마다 첫 댓글 1건(무인 레인 상한) · 하루 비용 상한 · 러너 회차 용량
   const firstComments = n * AUTO_PERSONA_COMMENTS_PER_POST_MAX
   counts.firstComments = firstComments
-  if (facts.commentUsdPerRequest === null || !(facts.commentUsdPerRequest > 0)) codes.add('COMMENT_COST_UNKNOWN')
-  else {
+  if (facts.commentUsdPerRequest === null || !(facts.commentUsdPerRequest > 0) || facts.commentDailyUsdCap === null) {
+    codes.add('COMMENT_COST_UNKNOWN')
+  } else {
     const affordable = Math.floor(facts.commentDailyUsdCap / facts.commentUsdPerRequest)
     counts.commentAffordable = affordable
     if (affordable < firstComments) codes.add('COMMENT_COST_SHORT')
@@ -290,11 +293,17 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   const runnerCap = grid.commentSlots.length * grid.commentRunRequestCap
   counts.commentRunnerCapacity = runnerCap
   if (runnerCap < firstComments) codes.add('COMMENT_RUNNER_SHORT')
-  // 감사 — 정본 표본 수 × 단가 ≤ 감사 하루 상한
+  // 감사 — 정본 표본 수(20%) × 단가 ≤ 감사 하루 상한
   const audits = auditTarget(n)
   counts.auditExpected = audits
   if (facts.auditUsdPerCall === null || facts.auditDailyUsdCap === null) codes.add('AUDIT_COST_UNKNOWN')
   else if (audits * facts.auditUsdPerCall > facts.auditDailyUsdCap) codes.add('AUDIT_COST_SHORT')
+  // 공급 — 하루 READY 생산 요구(공개 × `READY_NET_MARGIN`) × 건당 공급 비용 ≤ 공급 하루 상한
+  const readyNeeded = Math.ceil(n * READY_NET_MARGIN)
+  counts.readyNeeded = readyNeeded
+  if (facts.supplyUsdPerReady === null || !(facts.supplyUsdPerReady > 0) || facts.supplyDailyUsdCap === null) {
+    codes.add('SUPPLY_COST_UNKNOWN')
+  } else if (readyNeeded * facts.supplyUsdPerReady > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
   const ordered = PREFLIGHT_CODES.filter((c) => codes.has(c))
   const failing = ordered.filter((c) => !PREFLIGHT_UNKNOWN.includes(c))
   const verdict: EvidenceVerdictKind = failing.length > 0 ? 'FAIL' : ordered.length > 0 ? 'UNKNOWN' : 'PASS'
@@ -302,62 +311,16 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 상태 기계 — 전날 결정 + 전날 운영 증거 → 오늘
+// 🔴 D20 이상 시험 관문 — 운영 사다리가 부른다
 // ─────────────────────────────────────────────────────────
 
-export const GENERIC_STATES = ['TRIAL', 'REPROVE', 'HOLD'] as const
-export type GenericState = (typeof GENERIC_STATES)[number]
-export type GenericBasis = 'PASS' | 'RETEST' | 'FLOOR'
-
-export const GENERIC_BLOCK_CODES = [
-  'PROVENANCE_PREVIOUS', 'CEILING', 'RUNTIME_UNWIRED', 'PREFLIGHT_FAIL', 'PREFLIGHT_UNKNOWN', 'LATE_START', 'TOP',
-] as const
-export type GenericBlockCode = (typeof GENERIC_BLOCK_CODES)[number]
-
-/** 🔴 전날 결정 — controller 가 쓴 것만 기반이 된다 */
-export type GenericPrevious = {
-  kstDate: string
-  release: GenericStage
-  state: 'TRIAL' | 'SUSTAIN' | 'REPROVE' | 'HOLD' | 'PREPARE'
-  decidedBy: string
-  /** TRIAL 이면 시험 기반 — 아니면 null */
-  trialBase: GenericStage | null
+/**
+ * 🔴 **이 시험 대상이 D20 이상 관문을 지나야 하는가** — #620 이 닫은 d1~d10 밖이면 그렇다.
+ *    d3·d5·d10 시험은 #620 관문 그대로다(바꾸지 않는다).
+ */
+export function needsExtendedGate(target: RuntimeStage): boolean {
+  return !(RELEASE_STAGES as readonly string[]).includes(target)
 }
-
-/** 🔴 전날 운영 증거 — `judgeEvidenceForTarget` 결과에서 세 칸만 */
-export type GenericEvidence = { kstDate: string; stage: GenericStage; verdict: EvidenceVerdictKind }
-
-export type GenericPlanInput = {
-  kstDate: string
-  /** controller 가 도는 시각 — `opensAt` 이 이미 지났는지 본다 */
-  runAt: Date
-  previous: GenericPrevious | null
-  evidence: GenericEvidence | null
-  /** 🔴 승인 천장(`resolveCeiling(...).authorized`) — 이 기계가 올리지 않는다 */
-  ceiling: GenericStage
-  /** 러너 배선 여부 — 기본은 `isRuntimeStage` */
-  runtimeWired?: (s: GenericStage) => boolean
-  /** 시험 대상의 preflight — 호출부가 사실을 모아 `judgeNextPreflight` 로 만든다 */
-  preflight: (s: GenericStage) => PreflightVerdict
-  grid: RunnerGrid
-}
-
-export type GenericPlan = {
-  kstDate: string
-  state: GenericState
-  /** 오늘 공개 단계 */
-  release: GenericStage
-  base: GenericStage | null
-  target: GenericStage | null
-  basis: GenericBasis | null
-  /** 🔴 증명일인가 — 자동 target 이 목표 슬롯을 먼저 채운다(`stage-proof-day`) */
-  proofDay: boolean
-  /** TRIAL 이 열리는 첫 슬롯(ISO) */
-  opensAt: string | null
-  blocks: readonly { code: GenericBlockCode; reason: string }[]
-}
-
-const TRANSITION_OR_PROOF: readonly GenericPrevious['state'][] = ['TRIAL', 'SUSTAIN', 'REPROVE']
 
 /** 🔴 그 KST 날짜의 그 프로필 첫 슬롯(UTC Date) */
 export function firstSlotOn(kstDate: string, p: ScaleProfile): Date | null {
@@ -368,87 +331,37 @@ export function firstSlotOn(kstDate: string, p: ScaleProfile): Date | null {
 }
 
 /**
- * 🔴 **오늘의 계획.** 위에서 아래로 한 번만 간다.
- *    ① 전날 결정이 없거나 · 직전 날짜가 아니거나 · controller 가 쓴 것이 아니면 → HOLD (시험 없음)
- *    ② 전날 단계 S 가 운영 PASS                → 후보 S→next(S)  (`PASS`)
- *       전날 TRIAL 인데 PASS 아님               → 후보 기반→같은 대상 (`RETEST`)
- *       전날 공개가 바닥(d1)                     → 후보 d1→d3     (`FLOOR`)
- *       그 밖(증명 없는 d3 이상)                 → REPROVE S      (지금 단계를 증명일로 다시 돈다)
- *    ③ 후보 관문 — 천장 · 러너 배선 · preflight · 첫 슬롯 시각. 하나라도 막히면 **REPROVE 기반**
- *       (올리지 않고, 내일 다시 볼 증거를 만든다). 전부 열리면 TRIAL.
+ * 🔴 **D20 이상 시험을 막는 이유들** — 비었으면 열 수 있다.
+ *    · preflight 가 없거나 · 다른 단계 것이거나 · PASS 가 아니면 막는다(`PREFLIGHT_FAIL`·`PREFLIGHT_UNKNOWN`)
+ *    · 그 단계 오늘 첫 슬롯이 controller 실행보다 먼저면 막는다(`LATE_START`) — 조각 하루로 시험하지 않는다.
+ *      07:00 controller 는 08:00 첫 슬롯 전이다 — **다음 KST 날 07:00 이 가장 이른 시험**이다.
  */
-export function planGenericStage(i: GenericPlanInput): GenericPlan {
-  const wired = i.runtimeWired ?? isRuntimeStage
-  const blocks: { code: GenericBlockCode; reason: string }[] = []
-  const hold = (release: GenericStage): GenericPlan => ({
-    kstDate: i.kstDate, state: 'HOLD', release, base: null, target: null, basis: null,
-    proofDay: false, opensAt: null, blocks,
-  })
-  const reprove = (release: GenericStage): GenericPlan => ({
-    kstDate: i.kstDate, state: 'REPROVE', release, base: release, target: null, basis: null,
-    proofDay: true, opensAt: null, blocks,
-  })
-  const p = i.previous
-  const want = previousKstDate(i.kstDate)
-  if (p === null || want === null || p.kstDate !== want || p.decidedBy !== DECISION_WRITER) {
-    blocks.push({
-      code: 'PROVENANCE_PREVIOUS',
-      reason: p === null ? `${String(want)} 결정이 없다 — 시험을 열지 않는다`
-        : p.kstDate !== want ? `이전 결정 ${p.kstDate} ≠ 직전 날짜 ${String(want)}`
-          : `이전 결정을 ${p.decidedBy} 가 썼다 — ${DECISION_WRITER} 만 기반이 된다`,
+export function extendedTrialBlocks(i: {
+  target: RuntimeStage; kstDate: string; runAt: string; preflight: PreflightVerdict | null
+}): StageBlock[] {
+  const out: StageBlock[] = []
+  const pf = i.preflight
+  if (pf === null) {
+    out.push({ code: 'PREFLIGHT_UNKNOWN', reason: `${i.target} preflight 를 받지 못했다 — 시험을 열지 않는다` })
+  } else if (pf.stage !== i.target) {
+    out.push({ code: 'PREFLIGHT_UNKNOWN', reason: `preflight 대상 ${pf.stage} ≠ 시험 대상 ${i.target} — 다른 단계의 초록으로 열지 않는다` })
+  } else if (pf.verdict !== 'PASS') {
+    out.push({
+      code: pf.verdict === 'FAIL' ? 'PREFLIGHT_FAIL' : 'PREFLIGHT_UNKNOWN',
+      reason: `${i.target} preflight ${pf.verdict} [${pf.codes.join(',')}]`,
     })
-    // 🔴 천장 위로는 두지 않는다
-    const cur = p === null ? SAFEST_STAGE : p.release
-    return hold(genericRank(cur) > genericRank(i.ceiling) ? i.ceiling : cur)
   }
-  // 🔴 증거는 전날 결정과 **같은 날짜 · 같은 단계** 의 PASS 만 받는다 — 결정이 전이/증명일이어야 한다
-  const e = i.evidence
-  const passed = e !== null && e.verdict === 'PASS' && e.kstDate === p.kstDate && e.stage === p.release
-    && TRANSITION_OR_PROOF.includes(p.state)
-  let cand: { base: GenericStage; target: GenericStage; basis: GenericBasis } | null = null
-  if (passed) {
-    const up = genericNextStage(p.release)
-    if (up === null) {
-      blocks.push({ code: 'TOP', reason: `${p.release} 가 마지막 단계다 — 지금 단계를 계속 증명한다` })
-      return reprove(p.release)
-    }
-    cand = { base: p.release, target: up, basis: 'PASS' }
-  } else if (p.state === 'TRIAL' && p.trialBase !== null) {
-    cand = { base: p.trialBase, target: p.release, basis: 'RETEST' }
-  } else if (p.release === SAFEST_STAGE) {
-    cand = { base: SAFEST_STAGE, target: genericNextStage(SAFEST_STAGE)!, basis: 'FLOOR' }
-  } else {
-    return reprove(genericRank(p.release) > genericRank(i.ceiling) ? i.ceiling : p.release)
-  }
-  // ③ 관문 — 🔴 기반도 천장 위로는 두지 않는다
-  const base = genericRank(cand.base) > genericRank(i.ceiling) ? i.ceiling : cand.base
-  if (genericRank(cand.target) > genericRank(i.ceiling)) {
-    blocks.push({ code: 'CEILING', reason: `시험 대상 ${cand.target} 가 승인 천장 ${i.ceiling} 를 넘는다 — 열지 않는다` })
-    return reprove(base)
-  }
-  if (!wired(cand.target)) {
-    blocks.push({ code: 'RUNTIME_UNWIRED', reason: `${cand.target} 는 러너·저장 계약에 배선되지 않았다 — 열지 않는다` })
-    return reprove(base)
-  }
-  const pf = i.preflight(cand.target)
-  if (pf.stage !== cand.target || pf.verdict !== 'PASS') {
-    blocks.push({
-      code: pf.stage === cand.target && pf.verdict === 'FAIL' ? 'PREFLIGHT_FAIL' : 'PREFLIGHT_UNKNOWN',
-      reason: `${cand.target} preflight ${pf.stage === cand.target ? pf.verdict : `대상 불일치(${pf.stage})`} [${pf.codes.join(',')}]`,
-    })
-    return reprove(base)
-  }
-  const prof = genericProfileOf(cand.target, i.grid)
-  const opens = prof.ok ? firstSlotOn(i.kstDate, prof.profile) : null
-  if (opens === null || i.runAt.getTime() > opens.getTime()) {
-    blocks.push({
+  const opens = firstSlotOn(i.kstDate, profileOf(i.target))
+  const runMs = Date.parse(i.runAt)
+  if (opens === null || !Number.isFinite(runMs) || runMs > opens.getTime()) {
+    out.push({
       code: 'LATE_START',
-      reason: `${cand.target} 의 오늘 첫 슬롯이 이미 지났다(또는 없다) — 조각 하루로 시험하지 않는다. 기반을 증명일로 돈다`,
+      reason: `${i.target} 의 ${i.kstDate} 첫 슬롯(${opens === null ? '없음' : opens.toISOString()})이 결정 시각보다 앞이다`
+        + ' — 조각 하루로 시험하지 않는다',
     })
-    return reprove(base)
   }
-  return {
-    kstDate: i.kstDate, state: 'TRIAL', release: cand.target, base, target: cand.target, basis: cand.basis,
-    proofDay: true, opensAt: opens.toISOString(), blocks,
-  }
+  return out
 }
+
+/** 🔴 두 단계 중 높은 쪽 — 보고용 */
+export const higherRuntime = (a: RuntimeStage, b: RuntimeStage): RuntimeStage => (stageRank(a) >= stageRank(b) ? a : b)

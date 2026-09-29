@@ -11,8 +11,8 @@
  */
 
 import {
-  PROFILES, RELEASE_STAGES, SAFEST_STAGE, derive, safeStageFor, nextSlotAnchor, horizonStart,
-  type ReleaseStage, type ScaleProfile, type StageVerdict,
+  RELEASE_STAGES, RUNTIME_STAGES, SAFEST_STAGE, derive, safeStageFor, nextSlotAnchor, horizonStart, profileOf, stageRank,
+  type RuntimeStage, type ScaleProfile, type StageVerdict,
 } from './scale-profile'
 
 // 🔴 감속 정본은 `scale-profile` 하나뿐이다 — 여기서 다시 만들지 않고 그대로 내보낸다.
@@ -24,7 +24,7 @@ import type { PersonaForMatch } from './original-post-persona-match'
 import { prepareCandidates, type QueueCandidate } from './supply-candidates'
 
 export type SimOutcome = {
-  stage: ReleaseStage
+  stage: RuntimeStage
   /**
    * 🔴 **예측이 실제로 덮은 KST 날짜들** (2026-09-21 추가).
    *    "며칠치를 봤는가" 만으로는 **어느 날**을 봤는지 알 수 없다 —
@@ -59,7 +59,7 @@ export type SimOutcome = {
 }
 
 export type ReadinessVerdict = {
-  stage: ReleaseStage
+  stage: RuntimeStage
   ready: boolean
   reasons: string[]
   /** 🔴 산술 최소 — 참고값이다 */
@@ -72,7 +72,7 @@ export type ReadinessVerdict = {
  *    `recoveryBroken > 0` 이면 레인이 멈춘 상태이므로 무조건 not-ready 다.
  */
 export function judgeReadiness(sim: SimOutcome): ReadinessVerdict {
-  const p = PROFILES[sim.stage]
+  const p = profileOf(sim.stage)
   const d = derive(p)
   const reasons: string[] = []
   if (sim.recoveryBroken > 0) reasons.push(`기배정 복구가 깨진 행 ${sim.recoveryBroken}건 — 레인이 멈춘다`)
@@ -89,7 +89,7 @@ export function judgeReadiness(sim: SimOutcome): ReadinessVerdict {
 
 /** 사람이 읽을 한 줄 */
 export function describeReadiness(v: ReadinessVerdict, sim: SimOutcome): string {
-  const p: ScaleProfile = PROFILES[v.stage]
+  const p: ScaleProfile = profileOf(v.stage)
   return `${v.stage} (${p.dailyTarget}/day) — persona ${sim.personas}명 · 재고 ${sim.stock}건`
     + ` → 14일 ${sim.in14}/${sim.want14} · 공백 ${sim.gaps}일`
     + ` ${v.ready ? '✅ READY' : `🔴 ${v.reasons.join(' / ')}`}`
@@ -132,7 +132,7 @@ export type TimeAxis = {
  *    **그 단계의 cap 과 그 날짜의 여력**으로 `forecastPublishing` 안에서 매일 다시 정한다.
  */
 export function simulateStage(input: {
-  stage: ReleaseStage
+  stage: RuntimeStage
   queue: readonly QueueCandidate[]
   personas: readonly PersonaForMatch[]
   history?: readonly PersonaHistory[]
@@ -156,7 +156,7 @@ export function simulateStage(input: {
    */
   dailyCap?: number
 }): SimOutcome {
-  const p = PROFILES[input.stage]
+  const p = profileOf(input.stage)
   const days = input.days ?? 14
   /**
    * 🔴 **지평은 다음 운영일 0시부터 완전한 하루 `days` 개다.**
@@ -222,15 +222,25 @@ export function horizonMismatches(rows: readonly { sim: SimOutcome }[]): string[
   return out
 }
 
-/** 🔴 모든 단계를 한 번에 — 감속 판정은 이 목록 위에서 한다. 지평은 네 단계가 공유한다 */
+/**
+ * 🔴 **감속 판정을 볼 가장 높은 단계의 기본값 — d10** (2026-09-29 generic scheduler 배선).
+ *    러너 단계에 D20·D30·D50 이 생겼지만 **기본은 예전 네 단계 그대로**다 — 호출부가 천장(capacity)을
+ *    넘길 때만 그 위를 시뮬레이션한다. 천장 d10 인 지금 운영에서는 계산도 결과도 바뀌지 않는다.
+ */
+export const DEFAULT_VERDICT_TOP: RuntimeStage = RELEASE_STAGES[RELEASE_STAGES.length - 1]!
+
+/** 🔴 모든 단계를 한 번에 — 감속 판정은 이 목록 위에서 한다. 지평은 모든 단계가 공유한다 */
 export function simulateAllStages(input: {
   queue: readonly QueueCandidate[]
   personas: readonly PersonaForMatch[]
   history?: readonly PersonaHistory[]
   axis: TimeAxis
   days?: number
+  /** 🔴 이 단계까지만 본다 — 생략하면 d10(`DEFAULT_VERDICT_TOP`). 천장보다 위는 볼 필요가 없다 */
+  upTo?: RuntimeStage
 }): { sim: SimOutcome; verdict: ReadinessVerdict }[] {
-  return RELEASE_STAGES.map((stage) => {
+  const top = stageRank(input.upTo ?? DEFAULT_VERDICT_TOP)
+  return RUNTIME_STAGES.filter((st) => stageRank(st) <= Math.max(top, stageRank(DEFAULT_VERDICT_TOP))).map((stage) => {
     const sim = simulateStage({ ...input, stage })
     return { sim, verdict: judgeReadiness(sim) }
   })
@@ -246,6 +256,8 @@ export function stageVerdicts(input: {
   history?: readonly PersonaHistory[]
   axis: TimeAxis
   days?: number
+  /** 🔴 천장(capacity) — 생략하면 d10 까지. D20 이상 천장이면 그 단계까지 판정을 만든다 */
+  upTo?: RuntimeStage
 }): StageVerdict[] {
   return simulateAllStages(input).map((x) => ({
     stage: x.verdict.stage, ready: x.verdict.ready, reasons: x.verdict.reasons,
@@ -260,7 +272,7 @@ export function stageVerdicts(input: {
 // ─────────────────────────────────────────────────────────
 
 export type StagePlan = {
-  stage: ReleaseStage
+  stage: RuntimeStage
   ready: boolean
   /** 이 단계로 올라가려면 채워야 하는 것 */
   missing: string[]
@@ -298,7 +310,7 @@ export function promotionPlan(
 }
 
 /** 지금 올릴 수 있는 가장 높은 단계 — 없으면 null */
-export function highestReady(rows: readonly { verdict: ReadinessVerdict }[]): ReleaseStage | null {
+export function highestReady(rows: readonly { verdict: ReadinessVerdict }[]): RuntimeStage | null {
   const ready = rows.filter((r) => r.verdict.ready).map((r) => r.verdict.stage)
   return ready.length === 0 ? null : ready[ready.length - 1]!
 }
