@@ -24,7 +24,7 @@ import {
   type ValidatedStageDecision,
 } from '../src/lib/stage-decision-contract'
 import type { DatedCanary } from '../src/lib/stage-ladder'
-import { PROFILES, type ReleaseStage } from '../src/lib/scale-profile'
+import { RUNTIME_PROFILES as PROFILES, type RuntimeStage } from '../src/lib/scale-profile'
 import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
 import { judgeOneDayCanary, CANARY_STAGE_ENV } from '../src/lib/release-canary'
 import { judgeCost } from '../src/lib/ops-status'
@@ -69,7 +69,7 @@ const JUDGED = sample(0)
 const CLEAN_AUDITS = {
   rows: [JUDGED], globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
 }
-const facts = (stage: ReleaseStage = 'd3', o: Partial<StageEvidenceFacts> = {}): StageEvidenceFacts => ({
+const facts = (stage: RuntimeStage = 'd3', o: Partial<StageEvidenceFacts> = {}): StageEvidenceFacts => ({
   kstDate: D, stage,
   decision: { kstDate: D, state: 'TRIAL', release: stage, decidedBy: DECISION_WRITER },
   posts: Array.from({ length: PROFILES[stage].dailyTarget }, (_, i) => post(i)),
@@ -85,7 +85,7 @@ const side = (o: Partial<EvidenceSideSignals> = {}): EvidenceSideSignals => ({
   ],
   errors: 'ok', ...o,
 })
-const judge = (f: StageEvidenceFacts | null, s: EvidenceSideSignals | null = side(), stage: ReleaseStage = 'd3') =>
+const judge = (f: StageEvidenceFacts | null, s: EvidenceSideSignals | null = side(), stage: RuntimeStage = 'd3') =>
   judgeStageEvidence(D, stage, f, s)
 const has = (v: StageEvidenceVerdict, code: string): boolean => (v.codes as readonly string[]).includes(code)
 const failWith = (name: string, v: StageEvidenceVerdict, code: string): void =>
@@ -295,7 +295,7 @@ const PERSONAS = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')).cards.fil
 const axis = { now: NOW, publishedToday: 0 }
 const VERDICTS = stageVerdicts({ queue, personas: PERSONAS, axis })
 /** 🔴 controller 스크립트와 같은 조립 — 시험 대상·기반은 `trialPlanOf` 가 정한다 */
-const dailyOf = (target: ReleaseStage, base: ReleaseStage): DatedCanary => {
+const dailyOf = (target: RuntimeStage, base: RuntimeStage): DatedCanary => {
   const sim = simulateStage({ stage: target, queue, personas: PERSONAS, axis, days: 1, anchor: 'now', dailyCap: PROFILES[target].dailyTarget })
   return {
     kstDate: TODAY, stage: target, builtAt: AT, trialBase: base,
@@ -377,7 +377,7 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
 
 console.log('\n④ 저장 validator — 재시험 모양은 받고 근거 없는 점프는 거절')
 {
-  const trial = (tr: Record<string, unknown>, release: ReleaseStage) => validateStoredDecision({
+  const trial = (tr: Record<string, unknown>, release: RuntimeStage) => validateStoredDecision({
     row: row({ release, state: 'TRIAL', transition: { kind: 'TRIAL', previousKstDate: PREV, target: release, ...tr } }, TODAY),
     expectKstDate: TODAY,
   })

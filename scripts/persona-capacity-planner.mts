@@ -24,7 +24,7 @@ import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { parsePoolDoc, cardToPersona, type PoolCard } from '../src/lib/persona-pool-card'
 import {
-  PROFILES, derive as deriveProfile, describeProfile,
+  PROFILES, RUNTIME_PROFILES, derive as deriveProfile, describeProfile,
   effectiveWeeklyCap, slotLabel, type ReleaseStage,
   SAFEST_PROFILE,
 } from '../src/lib/scale-profile'
@@ -346,7 +346,7 @@ const payload = {
       capacityDailyTarget: resolved.capacityProfile.dailyTarget,
       releaseDailyCap: resolved.releaseProfile.dailyTarget,
       stages: rows.map(({ sim, verdict }) => {
-        const prof = PROFILES[sim.stage]
+        const prof = RUNTIME_PROFILES[sim.stage]
         const d = deriveProfile(prof)
         return {
           stage: sim.stage, dailyTarget: prof.dailyTarget,
@@ -441,7 +441,7 @@ if (JSON_OUT) {
       + `  ${r.ready ? '🟢 READY' : `🔴 ${r.reasons[0] ?? '미달'}`}`)
   }
   say(`   🔴 산술인원은 참고값이다 — 생활사 hardFilter 를 모른다. 판정은 위 "14일 실측" 이 한다.`)
-  say(`   🔴 지금 적용된 공개 프로필: ${describeProfile(PROFILES[payload.scale.releaseStage as ReleaseStage])}`)
+  say(`   🔴 지금 적용된 공개 프로필: ${describeProfile(RUNTIME_PROFILES[payload.scale.releaseStage as ReleaseStage])}`)
   if (payload.scale.throttledByReadiness) {
     say(`   🔴 준비되지 않아 감속 적용됨: 요청 ${payload.scale.requestedRelease} → 실제 ${payload.scale.releaseStage}`)
     say('      이것은 표시가 아니라 러너가 실제로 쓰는 값이다')

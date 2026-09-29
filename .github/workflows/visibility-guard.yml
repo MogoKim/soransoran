@@ -832,6 +832,9 @@ jobs:
           # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
           #    첫 댓글 보장/추가 댓글 상한 분리 · 감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다
           npm run stage:evidence-check
+          # 🔴 D1→D50 한 사다리(2026-09-29 generic scheduler 배선) — 운영 decideStage 를 여러 날 돌린다 ·
+          #    PASS 다음 날 한 칸 · 천장 d10 이면 D20 0 · REPROVE 증명일 · D20+ preflight · 슬롯/비용/롤백. 새 step 이 아니다
+          npm run stage:scheduler-check
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
       - name: 무인 운영 루프 (readiness 반례 · controller fail-closed · consumer · 템플릿)
@@ -953,6 +956,8 @@ jobs:
           #    결함 yes → 다음 도장·발행 닫힘 · 판정 대기 시한 · 동시 러너 결과 1 · 모델 오류는 no 가 아니다.
           #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
           npm run auto-ready:audit-db-check
+          # 🔴 감사 표본은 그날(KST) 자동 발행에서 — 누적 목표로 오늘 표본 0 이 되던 반례(2026-09-29). 새 step 이 아니다
+          npm run auto-ready:audit-day-db-check
           # 🔴 무인 댓글 루프 실행 반례 — 실제 materialize → 9관문 → PENDING → Serializable 발행(autoLane) ·
           #    새 글 1건 · 61분 0 · 자기 글 0 · 글당 1 · 실사용자 3건 0 · 한 건 실패 격리 · 장부 상한 · 동시 회차 1건.
           #    임시 HOME(확정 정본·장부) · 가짜 생성 텍스트 · 네트워크 0. 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다

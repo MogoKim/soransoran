@@ -27,8 +27,8 @@ import { prepareCandidates } from '../../src/lib/supply-candidates'
 import { judgeVoiceMatch } from '../../src/lib/original-post-voice-match'
 import type { HoldReason } from '../../src/lib/supply-freshness'
 import {
-  releaseCapsOf, PROFILES, RELEASE_STAGES,
-  type ReleaseStage,
+  releaseCapsOf, profileOf as runtimeProfileOf, RUNTIME_STAGES, CAPACITY_ENV, resolveRuntimeStage,
+  type RuntimeStage,
 } from '../../src/lib/scale-profile'
 // 🔴 `installFromEnv` 를 쓰지 않는다 — 그것은 module-global 을 바꾼다(아래 주석)
 import { resolveScale } from '../../src/lib/scale-runtime'
@@ -379,7 +379,7 @@ export function stageStock(input: {
  */
 
 /** 🔴 단계의 하루 목표 — 어느 소비자도 숫자를 손으로 적지 않는다 */
-const dailyTargetOf = (st: ReleaseStage): number => PROFILES[st].dailyTarget
+const dailyTargetOf = (st: RuntimeStage): number => runtimeProfileOf(st).dailyTarget
 
 export type ResolvedScale = {
   /**
@@ -421,12 +421,18 @@ export function resolvePublishScale(input: {
 }): ResolvedScale {
   const { loaded, now, env } = input
   const axis = { now, publishedToday: loaded.publishedToday }
+  /**
+   * 🔴 준비도 판정은 **capacity(천장) 단계까지** 만든다 (2026-09-29 generic scheduler 배선).
+   *    천장 d10 이면 예전과 같은 네 단계다. D20 이상 천장이면 그 단계 판정이 있어야
+   *    REPROVE·SUSTAIN d20 날 감속이 "판정 없음" 으로 d10 에 떨어지지 않는다.
+   */
   const readiness = stageVerdicts({
     queue: loaded.queueCandidates, personas: loaded.personas as never,
     history: loaded.history, axis,
+    upTo: resolveRuntimeStage(env[CAPACITY_ENV], 'capacity').stage,
   })
   /** 🔴 러너의 `dayFor` 와 같은 계산이다 — 같은 함수에 지평 1일을 준다 */
-  const dayFor = (stage: ReleaseStage): {
+  const dayFor = (stage: RuntimeStage): {
     sim: ReturnType<typeof simulateStage>; verdict: ReturnType<typeof judgeOneDayCanary>
   } => {
     const sim = simulateStage({
@@ -440,11 +446,11 @@ export function resolvePublishScale(input: {
     })
     return { sim, verdict }
   }
-  const canaryAuth = canaryAuthorization(env as never, now, RELEASE_STAGES)
+  const canaryAuth = canaryAuthorization(env as never, now, RUNTIME_STAGES)
   const canaryDay = canaryAuth.activeToday && canaryAuth.stage !== null
     ? dayFor(canaryAuth.stage) : null
   const canaryVerdict = canaryDay?.verdict ?? null
-  const windowAuth = windowAuthorization(env as never, now, RELEASE_STAGES)
+  const windowAuth = windowAuthorization(env as never, now, RUNTIME_STAGES)
   const windowDay = windowAuth.activeToday && windowAuth.stage !== null
     ? dayFor(windowAuth.stage) : null
   const windowVerdict = windowDay?.verdict ?? null

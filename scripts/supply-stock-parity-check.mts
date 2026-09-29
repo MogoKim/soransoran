@@ -22,7 +22,7 @@ import {
 } from './lib/publishable-stock.mjs'
 import { supplyPlanningProfile } from './supply-process.mjs'
 import { resolveScale } from '../src/lib/scale-runtime'
-import { PROFILES, CAPACITY_ENV, RELEASE_ENV, RELEASE_STAGES } from '../src/lib/scale-profile'
+import { PROFILES, RUNTIME_PROFILES, CAPACITY_ENV, RELEASE_ENV, RELEASE_STAGES } from '../src/lib/scale-profile'
 import { pickDraft, DRAFT_REASON_LABEL } from '../src/lib/micro-seed-auto-draft'
 import type { RejectCode } from '../src/lib/original-post-auto-publish'
 import {
@@ -225,7 +225,7 @@ console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽
       const scale = resolveScale({ [RELEASE_ENV]: rel, [CAPACITY_ENV]: cap })
       const p = supplyPlanningProfile(scale)
       if (!(p.stage === scale.capacityStage && sameProfile(p.profile, scale.capacityProfile)
-        && sameProfile(p.profile, PROFILES[scale.capacityStage]))) {
+        && sameProfile(p.profile, RUNTIME_PROFILES[scale.capacityStage]))) {
         check(`release ${rel} · capacity ${cap}`, false, `${p.stage}`)
       }
     }

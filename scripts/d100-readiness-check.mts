@@ -16,7 +16,7 @@ import {
   targetStageFor, currentPlanOf, dailyTargetOf, stableObservationDaysOf, PROMOTION_PHASES,
   PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, personaTargetReport, describePersonaTargets,
 } from '../src/lib/d100-capacity'
-import { resolveStage } from '../src/lib/scale-profile'
+import { resolveStage, RUNTIME_PROFILES } from '../src/lib/scale-profile'
 import { readyNetFromSnapshots, READY_SELECTOR_VERSION } from './lib/d100-ready-snapshot.mjs'
 import { detailThroughput, DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
 import {
@@ -367,12 +367,15 @@ console.log('\n⑥ 🔴 🔴 측정되지 않은 값 — 0 으로 채우지 않�
       && !v.blocking.some((b) => b.includes('재고 '))
   })())
   /**
-   * 🔴 **다음 단계를 스케줄러가 못 하면 올리지 않는다.** d10 은 전부 채워도
-   *    d20 에 cron 이 없어 막힌다 — "재고만 쌓으면 된다" 가 아니다.
+   * 🔴 **다음 단계 스케줄러 판정은 러너 프로필을 따른다** (2026-09-29 계약 정렬).
+   *    앞판: d20 에 cron 이 없어 d10→d20 이 스케줄러로 막혔다. 지금은 d20 러너 슬롯(heartbeat 격자)이 있어
+   *    스케줄러 칸이 막지 않는다 — 막는 것은 재고·Persona·상세·생산 같은 실제 준비다.
+   *    🔴 그래도 공개가 d20 으로 **지속 승격**되지는 않는다 — 사다리가 D20+ SUSTAIN 을 막고 TRIAL → 증거 PASS 로만 연다
+   *       (`stage:scheduler-check` S11). 스케줄러가 못 하는 단계(d100)는 `schedulerSupportOf` 가 막는다(⑩).
    */
-  check('🔴 🔴 **목표 단계에 cron 이 없으면 올리지 않는다 (d10 → d20)**', (() => {
+  check('🔴 🔴 **d10 → d20 은 스케줄러 칸이 막지 않는다 — 준비(재고)가 막는다**', (() => {
     const D20 = d100Plan('d20')
-    const v = judgePromotion({
+    const input = {
       current: 'd10', next: 'd20',
       readyStock: D20.readyStock14Days, activePersonas: D20.personaCanaryFloor,
       detailPerDay: D20.detailedSourcesRequiredPerDay,
@@ -380,9 +383,12 @@ console.log('\n⑥ 🔴 🔴 측정되지 않은 값 — 0 으로 채우지 않�
       readyStockDeltaPerDay: 1,
       publishedPerDay: dailyTargetOf('d10'),
       currentStableStreakDays: stableObservationDaysOf('d10'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: false,
-    })
-    return !v.ready && v.blocking.some((b) => b.includes('d20'))
+      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
+    } as const
+    const v = judgePromotion(input)
+    const short = judgePromotion({ ...input, readyStock: D20.readyStock14Days - 1 })
+    return v.nextPreflight.ready && !v.nextPreflight.blocking.some((b) => b.includes('스케줄러'))
+      && !short.ready && short.nextPreflight.blocking.some((b) => b.includes('재고'))
   })())
 }
 
@@ -686,14 +692,20 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
       && p.readyStock14Days === 1400
   })())
 
-  // ⑩ D20 이상은 스케줄러가 없다
-  check('🔴 ⑩ **D20 이상은 schedulerUnsupported 다 — 설정으로 올릴 수 없다**', (() => {
-    const un = (['d20', 'd30', 'd50', 'd100'] as const).every((st) => {
+  /**
+   * ⑩ D20·D30·D50 은 러너 프로필(`RUNTIME_PROFILES` · heartbeat 격자)로 감당한다 · D100 은 러너 밖이다 (2026-09-29 계약 정렬).
+   *    🔴 감당한다 ≠ 열렸다 — 승인 천장(지금 d10)과 D20+ preflight 가 막는다(`stage:scheduler-check` S2·S7·S11).
+   */
+  check('🔴 ⑩ **D20·D30·D50 은 러너 슬롯으로 감당한다 · D100 은 schedulerUnsupported (러너 용량·예산 밖)**', (() => {
+    const ok = (['d20', 'd30', 'd50'] as const).every((st) => {
       const sc = schedulerSupportOf(st)
-      return !sc.supported && sc.reason === 'schedulerUnsupported'
-        && sc.scheduledSlotsPerDay === null && sc.releaseStage === null
+      return sc.supported && sc.reason === null && sc.releaseStage === st
+        && sc.scheduledSlotsPerDay === RUNTIME_PROFILES[st].slots.length
+        && sc.actualDailyPublishable === d100Plan(st).publicPostsPerDay
     })
-    return un
+    const sc100 = schedulerSupportOf('d100')
+    return ok && !sc100.supported && sc100.reason === 'schedulerUnsupported'
+      && sc100.scheduledSlotsPerDay === null && sc100.releaseStage === null
   })())
 
   // ⑪ d3·d5·d10 은 실제 cron 으로 감당한다
@@ -2058,12 +2070,12 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
     (['d3', 'd5', 'd10'] as const).every((st) => PERSONA_CANARY_FLOOR[st] === PERSONA_SUSTAINED_TARGET[st])
     && (['d20', 'd30', 'd50', 'd100'] as const).every((st) => PERSONA_SUSTAINED_TARGET[st] > PERSONA_CANARY_FLOOR[st]))
 
-  // 🔴 release 프로필이 없는 D20+ 도 지속 목표를 **지금** 보고한다
-  check('🔴 🔴 **D20+ 는 release 프로필이 없어도 지속 목표를 보고한다**',
-    (['d20', 'd30', 'd50', 'd100'] as const).every((st) => {
+  // 🔴 D20+ 는 지속 목표를 **지금** 보고한다 — 러너 프로필이 없는 D100 도 마찬가지다
+  check('🔴 🔴 **D20+ 는 지속 목표를 보고한다 — 러너 프로필이 없는 D100 포함**',
+    schedulerSupportOf('d100').releaseStage === null
+    && (['d20', 'd30', 'd50', 'd100'] as const).every((st) => {
       const r = personaTargetReport(st, 0)
-      return schedulerSupportOf(st).releaseStage === null
-        && r.sustainedTarget === SUSTAINED[st] && r.sustainedMet === false
+      return r.sustainedTarget === SUSTAINED[st] && r.sustainedMet === false
         && r.sustainedShortfall === SUSTAINED[st]
     }))
 

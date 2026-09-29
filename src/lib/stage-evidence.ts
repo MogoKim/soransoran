@@ -10,9 +10,9 @@
  * 🔴 **계약 (마스터 결정 · 사람 승인을 더하지 않는다).**
  *    KST 날짜 D 의 단계 S **운영 PASS** 는 아래 여섯이 **전부** 참일 때만이다.
  *      ① D 의 StageDecision 을 controller 가 자동으로 골랐다 — `decidedBy=controller` ·
- *         상태 TRIAL/SUSTAIN · 공개 = S. 수동 실행 · 단계 override · env canary/window ·
+ *         상태 TRIAL/SUSTAIN/REPROVE(증명일) · 공개 = S. 수동 실행 · 단계 override · env canary/window ·
  *         사람 승인은 **세지 않는다**.
- *      ② **자동 target 물량** = `PROFILES[S].dailyTarget` 이상 — 자동 READY 도장(`AUTO_DECIDER`)으로
+ *      ② **자동 target 물량** = `profileOf(S).dailyTarget` 이상 — 자동 READY 도장(`AUTO_DECIDER`)으로
  *         만들어져 **무인 러너 표식**으로 예약 발행된 글만 센다(2026-09-29 마스터 최종 보정).
  *         🔴 사람이 승인한 글은 정상 발행·감사 면제일 수 있지만 **자동화 성공 물량으로는 0건**이다.
  *            혼합 물량도 자동 target 만 센다. 모자라면 `PUBLISH_NOT_AUTO_READY`.
@@ -38,16 +38,16 @@
  *    둘 다 PASS 가 아니다 — 올라가지 않고 **같은 단계를 다음 날 다시 시험**한다(`trialPlanOf`).
  *    이 게이트는 하루를 비우지 않는다 — 올라갈 칸을 막을 뿐, 지금 공개 단계는 그대로 둔다.
  *
- * 🔴 **범위 — D3 · D5 · D10 전이까지만 닫는다.** `RELEASE_STAGES` 는 d1~d10 이고 `nextStage(d10)` 은 없다.
- *    D20 이상은 운영 release profile · 저장 계약 · 러너 배선이 아직 없다 —
- *    이 파일이 여는 것이 아니라 **별도 blocker** 다. D10 PASS 뒤 계획은 `null`(시험 없음)이다.
- *    🔴 D20~D100 의 판정 골격은 `stage-ladder-generic` 에 있다 — 판정 본체(`judgeEvidenceForTarget`)는
- *       이 파일 하나를 같이 쓴다. 그 골격은 운영 controller 에 **배선되지 않았다**.
+ * 🔴 **범위 — 러너 단계 전체(`RUNTIME_STAGES` d1~d50)** (2026-09-29 generic scheduler 배선).
+ *    앞판은 D3·D5·D10 까지만 닫았다(`nextStage(d10)` 없음). 이제 `nextStage(d10)=d20` 이고,
+ *    D20·D30·D50 도 **같은 여섯 조건 · 같은 본체**로 판정한다. 목표는 `profileOf(S).dailyTarget`.
+ *    🔴 D100 은 러너 밖이다(`stage-ladder-generic.resolveCeiling` — 표현은 되지만 열 수 없다).
+ *    🔴 다음 칸이 있다고 열리는 것이 아니다 — 승인 천장과 D20 이상 preflight 가 사다리에서 막는다.
  *
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0. 모으기는 `stage-evidence-repo` 가 한다.
  * 🔴 판정 결과에 원문·닉네임·id 를 담지 않는다 — **코드와 개수만**.
  */
-import { PROFILES, SAFEST_STAGE, type ReleaseStage } from './scale-profile'
+import { SAFEST_STAGE, profileOf, type RuntimeStage } from './scale-profile'
 import { DECISION_WRITER, nextStage, type TrialBasis, type ValidatedStageDecision } from './stage-decision-contract'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
@@ -91,7 +91,7 @@ export type EvidenceVerdictFor<S extends string> = {
   /** 🔴 개수만 — 사람이 어느 조건이 모자랐는지 본다 */
   readonly counts: Readonly<Record<string, number>>
 }
-export type StageEvidenceVerdict = EvidenceVerdictFor<ReleaseStage>
+export type StageEvidenceVerdict = EvidenceVerdictFor<RuntimeStage>
 
 /**
  * 🔴 **글당 Persona 댓글 상한 — 댓글 단계의 정본 상수를 그대로 쓴다** (새 숫자 0).
@@ -131,8 +131,8 @@ export type EvidencePost = {
 }
 
 /**
- * 🔴 단계 칸만 일반화한 사실 묶음 — `StageEvidenceFacts` 는 d1~d10 판이다.
- *    결정 칸도 `release` 를 문자열로 받는다(D20 이상 결정 행은 아직 저장 계약에 없다 — 별도 blocker).
+ * 🔴 단계 칸만 일반화한 사실 묶음 — `StageEvidenceFacts` 는 러너 단계(d1~d50) 판이다.
+ *    결정 칸은 `release` 를 문자열로 받는다 — 판정 본체는 결정의 단계가 판정 단계와 같은지만 본다.
  */
 export type EvidenceFactsFor<S extends string> = Omit<StageEvidenceFacts, 'stage' | 'decision'> & {
   stage: S
@@ -141,7 +141,7 @@ export type EvidenceFactsFor<S extends string> = Omit<StageEvidenceFacts, 'stage
 
 export type StageEvidenceFacts = {
   kstDate: string
-  stage: ReleaseStage
+  stage: RuntimeStage
   /** D 의 저장된 결정 — 없거나 검증에 떨어졌으면 null */
   decision: Pick<ValidatedStageDecision, 'kstDate' | 'state' | 'release' | 'decidedBy'> | null
   posts: readonly EvidencePost[]
@@ -177,16 +177,22 @@ export type EvidenceSideSignals = {
  *    FAIL 코드가 하나라도 있으면 FAIL · 없고 모르는 것이 있으면 UNKNOWN · 둘 다 없으면 PASS.
  */
 export function judgeStageEvidence(
-  kstDate: string, stage: ReleaseStage,
+  kstDate: string, stage: RuntimeStage,
   facts: StageEvidenceFacts | null, side: EvidenceSideSignals | null,
 ): StageEvidenceVerdict {
-  return judgeEvidenceForTarget(kstDate, stage, PROFILES[stage].dailyTarget, facts, side)
+  return judgeEvidenceForTarget(kstDate, stage, profileOf(stage).dailyTarget, facts, side)
 }
 
 /**
+ * 🔴 **증명일 상태** — 그날 자동 target 이 목표 슬롯을 먼저 채운 날이다(`consumerEnvOf` 의 증명일 env).
+ *    TRIAL(재시험 포함) · SUSTAIN · REPROVE. HOLD·PREPARE 는 증명일이 아니다 — 공정성이 섞여 자동 물량을 증명하지 못한다.
+ */
+export const PROOF_STATES: readonly string[] = ['TRIAL', 'SUSTAIN', 'REPROVE']
+
+/**
  * 🔴 **단계 이름과 하루 목표를 받는 판정 본체** (2026-09-29 generic scheduler 골격).
- *    `judgeStageEvidence` 는 d1~d10(`PROFILES`) 목표로 이것을 부른다 — 동작은 한 글자도 바뀌지 않는다.
- *    D20 이상(`stage-ladder-generic`)은 같은 여섯 조건을 **같은 본체**로 판정한다. 판정 규칙을 두 벌로 적지 않는다.
+ *    `judgeStageEvidence` 는 러너 프로필(`profileOf`) 목표로 이것을 부른다 — d1~d10 목표는 예전 `PROFILES` 그대로다.
+ *    D100(`stage-ladder-generic`)도 같은 여섯 조건을 **같은 본체**로 판정한다. 판정 규칙을 두 벌로 적지 않는다.
  *    🔴 목표는 호출부가 정본 프로필에서 꺼내 넘긴다 — 여기서 숫자를 만들지 않는다.
  */
 export function judgeEvidenceForTarget<S extends string>(
@@ -205,7 +211,7 @@ export function judgeEvidenceForTarget<S extends string>(
     else {
       if (d.kstDate !== kstDate) codes.add('DECISION_MISSING')
       if (d.decidedBy !== DECISION_WRITER) codes.add('DECISION_NOT_CONTROLLER')
-      if (d.state !== 'TRIAL' && d.state !== 'SUSTAIN') codes.add('DECISION_NOT_TRANSITION')
+      if (!PROOF_STATES.includes(d.state)) codes.add('DECISION_NOT_TRANSITION')
       if (d.release !== stage) codes.add('DECISION_STAGE_MISMATCH')
     }
     // ② 발행 — 🔴 자동 READY 로 만들어져 무인 러너가 낸 글만 자동 target 이다. 사람 승인 글은 0건으로 센다
@@ -289,15 +295,17 @@ export function evidenceReasonOf(v: StageEvidenceVerdict): string {
   return `EVIDENCE ${v.kstDate} ${v.stage} ${v.verdict}${v.codes.length > 0 ? ` [${v.codes.join(',')}]` : ''}${n === '' ? '' : ` (${n})`}`
 }
 
-export type TrialPlan = { base: ReleaseStage; target: ReleaseStage; basis: TrialBasis }
+export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: TrialBasis }
 
 /**
  * 🔴 **오늘 무엇을 시험하는가 — 전날 결정 + 전날 운영 증거로만 정한다.**
  *
  *    · 전날 단계 S 가 운영 PASS            → S 의 다음 칸을 시험한다 (`PASS` · 기반 S)
+ *      (전날이 TRIAL · SUSTAIN · REPROVE 증명일이어야 PASS 가 난다 — 판정 본체 ①)
  *    · 전날이 TRIAL 인데 PASS 가 아니다     → **같은 단계를 다시** 시험한다 (`RETEST` · 기반은 전날 시험 기반)
  *    · 전날 공개가 바닥(d1)이다             → 바닥의 다음 칸을 시험한다 (`FLOOR` · 증명할 아래 칸이 없다)
  *    · 그 밖(증거 없는 d3 이상 유지 날)      → 시험하지 않는다 — 지금 단계를 지킨다
+ *      (사다리가 그날을 REPROVE 증명일로 둘지 정한다 — 다음 칸이 승인 천장 안일 때)
  *
  *    🔴 PASS 는 `kstDate`·`stage` 가 전날 결정과 **정확히** 같은 증거만 받는다 — 다른 날의 PASS 로 올리지 않는다.
  */
