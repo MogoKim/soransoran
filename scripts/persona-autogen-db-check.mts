@@ -183,6 +183,8 @@ try {
     const b = await counts()
     const r = await applyAutogenDrafts(prisma, { plans: [{ ...plan50, name: '보람' }], limit: 1, hashOf, reason: 'check' })
     check('같은 코드 재적재 → 거부', !r.ok)
+    // 🔴 unique 제약이 뒤에서 막아 주더라도 **사유가 코드 중복으로 먼저** 나와야 한다 — 쓰기 전에 멈춘 것이다
+    check('재적재 거부 사유가 "이미 있는 코드" 다', !r.ok && /이미 있는 코드: P50/.test(r.reason))
     check('재적재 거부 → write 0', same(b, await counts()))
   }
 
