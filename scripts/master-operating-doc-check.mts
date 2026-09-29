@@ -77,6 +77,8 @@ check('D100 목표가 참여 신호를 사용하되 안전 검사를 우회하�
   && d100Goal.includes('참여 신호는 안전·사실 검사를 우회하지 않는다'))
 check('D100 목표가 수동 물량을 단계 PASS에서 제외한다',
   d100Goal.includes('수동 물량은 성공이 아니다') && d100Goal.includes('commissioning'))
+check('D100 목표가 사람 승인 글을 자동 단계 목표에서 제외한다',
+  d100Goal.includes('단계 목표 편수는 자동 READY 글만으로 채워야 한다'))
 check('D100 목표가 Persona 다양성과 지속 용량을 단계 계약에 포함한다',
   d100Goal.includes('Persona 확장 계약') && d100Goal.includes('계약 유효 화자'))
 check('D100 목표가 canary 운영 하한과 지속 다양성 300명을 구분한다',
@@ -95,6 +97,8 @@ check('D100 목표와 현재 실행이 감사를 20% 표본 계약으로 고정�
   && d100Goal.includes('전수 감사를 새 선행조건으로 만들지 않는다')
   && current.includes('ceil(자동 발행 N × 20%)')
   && current.includes('전수 감사를 새 선행조건으로 만들지 않는다'))
+check('현재 실행이 사람 승인 글을 자동 단계 목표에서 제외한다',
+  current.includes('사람 승인 글은 정상 발행할 수 있지만 자동 단계 목표 편수로 세지 않는다'))
 check('현재 실행이 M1 PASS와 M2 NOT PASS를 구분한다',
   /\| M1 \|[^\n]*\*\*PASS\*\*/.test(current)
   && /\| M2 \|[^\n]*\*\*NOT PASS\*\*/.test(current))
