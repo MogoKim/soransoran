@@ -683,6 +683,9 @@ async function main() {
         if (cap.rows.length > 0) evidenceArticles += 1
         evidence.push(...cap.rows)
         if (cs.errors.length > 0) console.log(`  ⚠️ ${id} — 댓글 셀렉터가 터졌다(말투 근거 0): ${cs.errors[0]}`)
+        // 🔴 셀렉터 실측 — 글마다 **개수만** 남긴다(본문·작성자 0). 목록 댓글 수가 있는데 읽음 0 이면 셀렉터가 안 맞는다
+        console.log(`  💬 ${id} — 댓글 읽음 ${cap.seen} / 목록 ${row.sourceCommentCount} · 남김 ${cap.rows.length}`
+          + `${cap.seen === 0 && row.sourceCommentCount > 0 ? ' · 🔴 셀렉터 0건' : ''}`)
       }
       console.log(`  ✅ ${id} · ${[...body].length}자 · 댓글 ${row.sourceCommentCount}`)
     }
@@ -1021,8 +1024,9 @@ async function readArticleBody(page: NaverPage): Promise<{ body: string | null; 
  *    (프로필 링크 · 회원 키 · 댓글 시각 · 이미지는 꺼내지 않는다).
  *
  * ⚠️ 셀렉터는 네이버 카페 댓글 마크업(`.CommentItem` · `.comment_nickname` · `.text_comment`)을 따른다.
- *    이 PR 에서는 live 로 실측하지 않았다 — 첫 salt 회차의 "말투 근거 N행 (댓글 M건 중)" 이 실측이다.
- *    M 이 0 이면 셀렉터가 안 맞는 것이다(목록 댓글 수와 비교한다).
+ *    live 로 실측하지 않았다(2026-09-29 재검증도 live 0 — 수집 경로가 보호장치·원장·회차 기록을 쓰므로
+ *    시험 삼아 돌리지 않았다). 첫 salt 회차의 글별 `💬 댓글 읽음 M / 목록 C · 남김 K` 가 실측이다.
+ *    C > 0 인데 M 이 0 이면 셀렉터가 안 맞는 것이다(`🔴 셀렉터 0건`). M < C 는 답글 접힘·댓글 쪽 넘김이다.
  */
 async function readArticleComments(page: NaverPage): Promise<{ comments: CapturedComment[]; errors: string[] }> {
   const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))

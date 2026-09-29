@@ -286,6 +286,13 @@ check('🔴 이미지를 수집하지 않는다', /이미지를 가져오지 않
     && /evidenceRowProblems\(e\)\.length > 0/.test(COLLECTOR_CODE)
     && (COLLECTOR_CODE.match(/writeJsonl\(evPath, ev\)/g) ?? []).length === 1)
   check('🔴 salt 값을 출력하지 않는다(지문만)', !/console\.log\([^)]*\.salt\b(?!Id)/.test(COLLECTOR_CODE))
+  {
+    // 🔴 첫 salt 회차가 곧 셀렉터 실측이다 — 글마다 읽음/목록/남김 **개수만** 찍는다(본문·작성자 0)
+    const at = COLLECTOR_CODE.indexOf('댓글 읽음 ${cap.seen} / 목록 ${row.sourceCommentCount}')
+    const stmt = at < 0 ? '' : COLLECTOR_CODE.slice(COLLECTOR_CODE.lastIndexOf('console.log(', at), COLLECTOR_CODE.indexOf('\n', COLLECTOR_CODE.indexOf('\n', at) + 1))
+    check('🔴 댓글 셀렉터 실측 줄은 개수만 찍는다(읽음 · 목록 · 남김)',
+      at > 0 && !/\.text\b|\.author\b|cs\.comments|cap\.rows\[/.test(stmt) && /셀렉터 0건/.test(stmt))
+  }
 }
 
 // ─────────────────────────────────────────────────────────
