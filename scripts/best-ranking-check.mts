@@ -128,11 +128,24 @@ console.log('\n■ 3. 쓰기 경로 — syncBestEligibility(tx) 하나로 W 와 
     /\]\.sort\(\)/.test(block) && /for \(const postId of postIds\)[\s\S]{0,80}syncBestEligibility\(db, postId\)/.test(block))
 }
 
-console.log('\n■ 4. 기록은 한 번 — 지우지 않고 고치지 않는다')
+console.log('\n■ 4. 기록은 한 번 — 지우지 않고, 고치는 것은 이전 정책 행의 best-v2 전환뿐')
 {
   const all = files.map(code).join('\n')
-  check('src/ 에 BestSelection 을 고치거나 지우는 코드 0 (update · upsert · delete)',
-    !/bestSelection\.(update|updateMany|upsert|delete|deleteMany)\b/.test(all))
+  check('src/ 에 BestSelection 을 지우거나 upsert 하는 코드 0',
+    !/bestSelection\.(upsert|delete|deleteMany)\b/.test(all))
+  const updates = files.filter((f) => /bestSelection\.(update|updateMany)\b/.test(code(f)))
+  const entry = body('recordBestEntry') || (() => {
+    const at = db.indexOf('async function recordBestEntry(')
+    return at < 0 ? '' : db.slice(at, db.indexOf('\n}\n', at))
+  })()
+  check('BestSelection 을 고치는 곳은 recordBestEntry 한 곳 · updateMany 1회',
+    updates.join() === 'src/lib/best-ranking-db.ts' && count(db, /bestSelection\.(update|updateMany)\b/g) === 1 &&
+      count(entry, /bestSelection\.updateMany\(/g) === 1, updates.join(', '))
+  check('전환은 "이미 best-v2 면 아무것도 안 함" 뒤에만 · 읽은 정책 판 그대로일 때만(where policyVersion) · 대상 판은 BEST_POLICY_VERSION',
+    /if \(existing\.policyVersion === BEST_POLICY_VERSION\) return 'none'/.test(entry) &&
+      /updateMany\(\{\s*where:\s*\{\s*postId,\s*policyVersion:\s*existing\.policyVersion\s*\}/.test(entry) &&
+      /data:\s*\{\s*policyVersion:\s*BEST_POLICY_VERSION,[^}]*firstEnteredAt:\s*new Date\(\)/.test(entry) &&
+      entry.indexOf("return 'none'") < entry.indexOf('updateMany('))
   const sync = body('syncBestEligibility')
   check('syncBestEligibility: 그 글을 잠근 뒤 W 를 세고, 기준·공개 자격일 때만 기록',
     sync.indexOf('lockPost(') >= 0 && sync.indexOf('lockPost(') < sync.indexOf('countRealReactions(') &&
@@ -159,6 +172,9 @@ console.log('\n■ 5. 옛 순위 정책(best-v1)이 돌아오지 않는다')
   check('모든 쪽이 같은 계산 — skip = (page - 1) × 12 · current/archive 분기 0',
     /skip:\s*\(page - 1\) \* BEST_PAGE_SIZE/.test(q) && !/'current'|'archive'|kind:/.test(q))
   check('목록과 개수가 같은 where', /count\(\{\s*where\s*\}\)/.test(q) && /findMany\(\{\s*where,/.test(q))
+  check('그 where 가 지금 정책 판만 본다 — policyVersion: BEST_POLICY_VERSION (이전 정책 행 숨김)',
+    /function visibleTo[\s\S]{0,400}policyVersion:\s*BEST_POLICY_VERSION/.test(q) && /const where = visibleTo\(/.test(q) &&
+      !/count\(\{\s*where:/.test(q))
   const page = code('src/app/best/page.tsx')
   check('/best 화면: 순위 숫자(rank=) 0 · "지난 베스트" 0 · <ol> 0', !/\brank=/.test(page) && !page.includes('지난 베스트') && !/<ol\b/.test(page))
 }

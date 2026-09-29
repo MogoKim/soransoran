@@ -34,8 +34,10 @@ import {
  *
  * ── 기록(BestSelection) ─────────────────────────────────────────────
  *   W ≥ 2 이고 공개 자격이 있는 첫 순간 한 행을 만든다(firstEnteredAt = 그 트랜잭션 시각).
- *   🔴 행을 지우거나 고치지 않는다 — 반응 감소·차단·숨김 뒤에도 그대로다. 숨김·삭제 글은
+ *   🔴 best-v2 행은 지우거나 고치지 않는다 — 반응 감소·차단·숨김 뒤에도 그대로다. 숨김·삭제 글은
  *      읽기(queries/best.ts)가 목록·개수에서 뺄 뿐이라, 되살리면 원래 자리로 돌아온다.
+ *   🔴 이전 정책(best-v1) 행은 그 글이 best-v2 자격을 확인받는 순간 **같은 행을 best-v2 로 전환**한다
+ *      (recordBestEntry). 자격이 없으면 지우지도 고치지도 않고, 목록이 policyVersion 으로 숨긴다.
  *   🔴 글당 한 행 — postId PK + skipDuplicates. 동시 요청이 함께 기준을 넘어도 두 번째는 0 건이고,
  *      사용자의 공감·댓글 요청을 실패시키지 않는다.
  *
@@ -158,20 +160,48 @@ async function isBlockedForBest(db: Db, postId: string): Promise<boolean> {
   return !row || isPromotionWriteBlocked(pickPostVisibility(row))
 }
 
-/** 최초 입성 기록. 이미 있으면 0 건 — 오류가 아니다(글당 한 행 · 기존 행을 건드리지 않는다) */
-async function recordFirstEntry(db: Db, postId: string, recordedBy: BestRecordedBy): Promise<boolean> {
-  const r = await db.bestSelection.createMany({
-    data: [{ postId, policyVersion: BEST_POLICY_VERSION, recordedBy, ...BEST_V2_UNUSED_COLUMNS }],
-    skipDuplicates: true,
+/** 입성 판정이 기록에 한 일 */
+export type BestEntryChange =
+  | 'created' // 기록이 없던 글 — best-v2 행을 새로 만들었다
+  | 'upgraded' // 이전 정책(best-v1) 행 — 같은 행을 best-v2 로 전환했다
+  | 'none' // 이미 best-v2 행이 있다 — 아무것도 바꾸지 않았다
+
+/**
+ * 입성 기록 — 기준 통과 · 공개 자격이 확인된 뒤에만 부른다(syncBestEligibility).
+ *
+ *   기록 없음   → best-v2 행 생성(firstEnteredAt = DB 기본값, 이 트랜잭션 시각)
+ *   best-v2 행  → 아무것도 하지 않는다(재등록·상단 복귀 없음)
+ *   이전 정책 행 → **같은 행을 best-v2 로 전환**한다. 입성 시각은 best-v2 자격을 확인한 지금이다 —
+ *                 best-v1 은 "전역 12개에 든 순간" 이라 best-v2 의 "기준을 처음 넘은 순간" 과 뜻이 다르다.
+ *                 deprecated 칼럼은 best-v2 의 "해당 없음" 값으로 맞춘다.
+ *   🔴 이전 정책 행 중 지금 자격이 없는 것(W < 2 · 비공개 · C-4)은 여기 오지 않는다 — 지우지도 고치지도 않고,
+ *      목록(queries/best.ts)이 policyVersion 으로 숨긴다.
+ *   🔴 호출부가 그 글 행을 잠근 채로 부른다(lockPost). 같은 글의 두 트랜잭션은 줄을 서므로 생성·전환은 한 번이다.
+ *      그래도 생성은 skipDuplicates, 전환은 "읽은 정책 판 그대로일 때만" 조건으로 한 번 더 막는다.
+ */
+async function recordBestEntry(db: Db, postId: string, recordedBy: BestRecordedBy): Promise<BestEntryChange> {
+  const existing = await db.bestSelection.findUnique({ where: { postId }, select: { policyVersion: true } })
+  if (!existing) {
+    const r = await db.bestSelection.createMany({
+      data: [{ postId, policyVersion: BEST_POLICY_VERSION, recordedBy, ...BEST_V2_UNUSED_COLUMNS }],
+      skipDuplicates: true,
+    })
+    return r.count === 1 ? 'created' : 'none'
+  }
+  if (existing.policyVersion === BEST_POLICY_VERSION) return 'none'
+  const r = await db.bestSelection.updateMany({
+    where: { postId, policyVersion: existing.policyVersion },
+    data: { policyVersion: BEST_POLICY_VERSION, recordedBy, firstEnteredAt: new Date(), ...BEST_V2_UNUSED_COLUMNS },
   })
-  return r.count === 1
+  return r.count === 1 ? 'upgraded' : 'none'
 }
 
 export type BestSyncResult = {
   /** 지금의 실반응 가중치 */
   weight: number
-  /** 이 호출이 최초 입성 기록을 만들었는가 */
+  /** 이 호출이 best-v2 입성을 만들었는가(신규 생성 또는 이전 정책 행 전환) */
   entered: boolean
+  change: BestEntryChange
 }
 
 /**
@@ -200,10 +230,10 @@ export async function syncBestEligibility(
       select: { id: true },
     })
   }
-  const entered = meetsBestEntry(weight) && isBestPublic(post)
-    ? await recordFirstEntry(db, postId, recordedBy)
-    : false
-  return { weight, entered }
+  const change: BestEntryChange = meetsBestEntry(weight) && isBestPublic(post)
+    ? await recordBestEntry(db, postId, recordedBy)
+    : 'none'
+  return { weight, entered: change !== 'none', change }
 }
 
 /**
@@ -241,37 +271,42 @@ export async function applyMemberBlock(
 
 /** backfill 이 글마다 내리는 판정 */
 export type BestBackfillVerdict =
-  | 'enter' // 기준 통과 · 공개 · 기록 없음 → 새로 기록한다
-  | 'recorded' // 이미 기록이 있다 — 건드리지 않는다
-  | 'below' // W < 2
-  | 'not-public' // 숨김·삭제·게시판 밖 — W 가 넘어도 입성하지 않는다
-  | 'c4' // 승격 차단 글 — 계산하지 않는다
+  | 'enter' // 기록 없음 · 기준 통과 · 공개 → best-v2 행을 새로 만든다
+  | 'legacy-upgrade' // 이전 정책(best-v1) 행 · 지금 기준 통과 · 공개 → 같은 행을 best-v2 로 전환한다
+  | 'best-v2-recorded' // 이미 best-v2 행 — 건드리지 않는다
+  | 'legacy-ineligible' // 이전 정책 행 · 지금 best-v2 자격 없음(W < 2 · 비공개 · C-4) — 지우지도 고치지도 않는다
+  | 'below' // 기록 없음 · W < 2
+  | 'not-public' // 기록 없음 · 숨김·삭제·게시판 밖 — W 가 넘어도 입성하지 않는다
+  | 'c4' // 기록 없음 · 승격 차단 글 — 계산하지 않는다
+
+export const BEST_BACKFILL_VERDICTS: readonly BestBackfillVerdict[] = [
+  'enter', 'legacy-upgrade', 'best-v2-recorded', 'legacy-ineligible', 'below', 'not-public', 'c4',
+]
 
 export type BestBackfillSummary = {
   scanned: number
-  /** 저장된 W 가 원본 행과 달랐던 글 */
+  /** 저장된 W 가 원본 행과 달랐던 글(C-4 제외) */
   weightChanged: number
   /** 판정별 글 수 */
   verdicts: Record<BestBackfillVerdict, number>
-  /** W ≥ 1 이거나 기록이 있는 글의 판정 — dry-run 출력의 근거 */
-  rows: { id: string; title: string; boardType: BoardType; status: string; weight: number; verdict: BestBackfillVerdict }[]
-  /**
-   * 이미 있는 기록 중 지금 정책과 어긋나는 것 — **분류만 한다. 지우지 않는다.**
-   * (반응이 줄어 W < 2 가 된 기록은 정책상 정상이라 여기 넣지 않는다)
-   */
-  anomalies: { postId: string; reason: string }[]
+  /** W ≥ 1 이거나 기록이 있는 글의 판정 — dry-run 출력의 근거. reason 은 legacy-ineligible 의 사유 */
+  rows: {
+    id: string; title: string; boardType: BoardType; status: string; weight: number
+    verdict: BestBackfillVerdict; policyVersion: string | null; reason?: string
+  }[]
   /** apply 일 때 실제로 쓴 수 */
   weightWritten: number
   created: number
+  upgraded: number
 }
 
 /**
- * 도입 backfill — 모든 글의 W 를 원본 행으로 다시 세고, 기준을 넘었는데 기록이 없는 공개 글을
- * 기록한다(recordedBy='backfill', 그 시각이 입성 시각).
+ * 도입 backfill — 모든 글의 W 를 원본 행으로 다시 세고, 기준을 넘은 공개 글을 best-v2 로 기록한다
+ * (기록 없음 → 생성 · 이전 정책 행 → 전환). recordedBy='backfill', 그 시각이 입성 시각이다.
  *
  * 🔴 기본은 dry-run 이다. apply 가 아니면 아무것도 쓰지 않는다.
+ * 🔴 apply 가 쓰는 것은 enter 생성 · legacy-upgrade 전환 · 어긋난 W 저장뿐이다. 행 삭제는 0 이다.
  * 🔴 멱등이다 — 두 번째 apply 는 쓰기 0 이다.
- * 🔴 기존 기록을 지우거나 고치지 않는다. 어긋난 기록은 anomalies 로 보고만 한다.
  * 🔴 쓰기는 쓰기 경로와 같은 syncBestEligibility 다 — 글 행을 잠그고 그 순간의 원본으로 판정한다.
  *    글마다 짧은 트랜잭션이라 운영 중에 돌려도 한 글 이상 오래 잡지 않는다.
  */
@@ -282,11 +317,11 @@ export async function backfillBestEligibility(
   const sum: BestBackfillSummary = {
     scanned: 0,
     weightChanged: 0,
-    verdicts: { enter: 0, recorded: 0, below: 0, 'not-public': 0, c4: 0 },
+    verdicts: Object.fromEntries(BEST_BACKFILL_VERDICTS.map((v) => [v, 0])) as Record<BestBackfillVerdict, number>,
     rows: [],
-    anomalies: [],
     weightWritten: 0,
     created: 0,
+    upgraded: 0,
   }
   const existing = new Map(
     (await db.bestSelection.findMany({ select: { postId: true, policyVersion: true } })).map((r) => [r.postId, r.policyVersion]),
@@ -305,34 +340,37 @@ export async function backfillBestEligibility(
     cursor = rows[rows.length - 1].id
     for (const row of rows) {
       sum.scanned += 1
-      const policy = existing.get(row.id)
-      const recorded = policy !== undefined
-      if (recorded && policy !== BEST_POLICY_VERSION) {
-        sum.anomalies.push({ postId: row.id, reason: `이전 정책(${policy}) 규칙으로 생긴 기록` })
+      const policy = existing.get(row.id) ?? null
+      const legacy = policy !== null && policy !== BEST_POLICY_VERSION
+      const push = (verdict: BestBackfillVerdict, weight: number, reason?: string) => {
+        sum.verdicts[verdict] += 1
+        if (weight > 0 || policy !== null) {
+          sum.rows.push({ id: row.id, title: row.title, boardType: row.boardType, status: row.status, weight, verdict, policyVersion: policy, reason })
+        }
+        return verdict
       }
       if (isPromotionWriteBlocked(pickPostVisibility(row))) {
-        sum.verdicts.c4 += 1
-        if (recorded) sum.anomalies.push({ postId: row.id, reason: 'C-4 승격 차단 글인데 기록이 있다' })
+        push(legacy ? 'legacy-ineligible' : policy === BEST_POLICY_VERSION ? 'best-v2-recorded' : 'c4', row.bestReactionWeight, legacy ? 'C-4 승격 차단 글' : undefined)
         continue
       }
       const weight = reactionWeight(await countRealReactions(db, row))
       const weightDiffers = weight !== row.bestReactionWeight
       if (weightDiffers) sum.weightChanged += 1
-      const verdict: BestBackfillVerdict = recorded
-        ? 'recorded'
-        : !meetsBestEntry(weight)
-          ? 'below'
-          : !isBestPublic(row)
-            ? 'not-public'
-            : 'enter'
-      sum.verdicts[verdict] += 1
-      if (weight > 0 || recorded) {
-        sum.rows.push({ id: row.id, title: row.title, boardType: row.boardType, status: row.status, weight, verdict })
-      }
-      if (apply && (weightDiffers || verdict === 'enter')) {
+      const eligible = meetsBestEntry(weight) && isBestPublic(row)
+      const verdict = policy === BEST_POLICY_VERSION
+        ? push('best-v2-recorded', weight)
+        : legacy
+          ? eligible
+            ? push('legacy-upgrade', weight)
+            : push('legacy-ineligible', weight, !meetsBestEntry(weight) ? 'W < 2' : '비공개(숨김·삭제·게시판 밖)')
+          : eligible
+            ? push('enter', weight)
+            : push(!meetsBestEntry(weight) ? 'below' : 'not-public', weight)
+      if (apply && (weightDiffers || verdict === 'enter' || verdict === 'legacy-upgrade')) {
         const r = await db.$transaction((tx) => syncBestEligibility(tx, row.id, BEST_RECORDED_BY.backfill))
         if (weightDiffers) sum.weightWritten += 1
-        if (r?.entered) sum.created += 1
+        if (r?.change === 'created') sum.created += 1
+        if (r?.change === 'upgraded') sum.upgraded += 1
       }
     }
   }

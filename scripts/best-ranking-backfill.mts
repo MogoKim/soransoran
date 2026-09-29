@@ -9,13 +9,14 @@
  * 본체는 src/lib/best-ranking-db.ts backfillBestEligibility 다(격리 DB 검사가 같은 함수를 부른다).
  *   · 모든 글의 W 를 원본 행으로 다시 센다(저장값이 다르면 맞춘다)
  *   · 기준 통과 · 공개 · 기록 없음 → 새 기록(recordedBy='backfill', 입성 시각 = 실행 시각)
- *   🔴 과거 입성 시각을 추정하지 않는다. 기존 기록을 지우거나 고치지 않는다 — 어긋난 기록은 분류해 보고만 한다.
+ *   · 기준 통과 · 공개 · best-v1 행 → 같은 행을 best-v2 로 전환(입성 시각 = 실행 시각)
+ *   🔴 과거 입성 시각을 추정하지 않는다. 행을 지우지 않는다 — 자격 없는 best-v1 행은 분류해 보고만 한다.
  *   🔴 멱등이다 — 두 번째 apply 는 "쓰기 합계 = 0" 이어야 한다.
  *   🔴 C-4 — 승격이 막힌 글(Micro Seed · 첫 인사)은 계산하지 않는다.
  */
 import { PrismaClient } from '@prisma/client'
 
-import { backfillBestEligibility, type BestBackfillVerdict } from '../src/lib/best-ranking-db'
+import { BEST_BACKFILL_VERDICTS, backfillBestEligibility, type BestBackfillVerdict } from '../src/lib/best-ranking-db'
 import { BEST_ENTRY_WEIGHT } from '../src/lib/best-ranking'
 
 const args = new Set(process.argv.slice(2))
@@ -28,11 +29,13 @@ if (APPLY && !LOCAL && !args.has('--remote-ok')) {
 }
 
 const LABEL: Record<BestBackfillVerdict, string> = {
-  enter: '입성 대상',
-  recorded: '이미 기록 있음',
-  below: `W < ${BEST_ENTRY_WEIGHT} 미진입`,
-  'not-public': '비공개 제외(숨김·삭제·게시판 밖)',
-  c4: 'C-4 제외',
+  enter: '신규 입성(enter)',
+  'legacy-upgrade': 'best-v1 → best-v2 전환(legacy-upgrade)',
+  'best-v2-recorded': '이미 best-v2(best-v2-recorded)',
+  'legacy-ineligible': 'best-v1 · 자격 없음 — 그대로 둠(legacy-ineligible)',
+  below: `W < ${BEST_ENTRY_WEIGHT} 미진입(below)`,
+  'not-public': '비공개 제외(not-public)',
+  c4: 'C-4 제외(c4)',
 }
 
 const prisma = new PrismaClient()
@@ -44,20 +47,21 @@ async function main(): Promise<void> {
   const s = await backfillBestEligibility(prisma, { apply: APPLY })
 
   console.log(`\n  전체 ${s.scanned} · 저장된 W 가 원본과 다른 글 ${s.weightChanged}`)
-  console.log('  판정: ' + (Object.keys(LABEL) as BestBackfillVerdict[]).map((k) => `${LABEL[k]} ${s.verdicts[k]}`).join(' · '))
-  console.log('\n  | 판정 | 게시판 | 상태 | W | 제목 |')
+  console.log('  판정:')
+  for (const v of BEST_BACKFILL_VERDICTS) console.log(`   - ${LABEL[v]} ${s.verdicts[v]}`)
+  console.log('\n  | 판정 | 기존 기록 | 게시판 | 상태 | W | 제목 |')
   for (const r of s.rows.sort((a, b) => b.weight - a.weight || (a.id < b.id ? -1 : 1))) {
-    console.log(`  | ${LABEL[r.verdict]} | ${r.boardType} | ${r.status} | ${r.weight} | ${r.title.slice(0, 24)} |`)
+    console.log(`  | ${LABEL[r.verdict]}${r.reason ? ` · ${r.reason}` : ''} | ${r.policyVersion ?? '-'} | ${r.boardType} | ${r.status} | ${r.weight} | ${r.title.slice(0, 24)} |`)
   }
-  console.log(`\n  기존 기록 이상 분류(지우지 않는다): ${s.anomalies.length === 0 ? '0' : ''}`)
-  for (const a of s.anomalies) console.log(`   - ${a.postId} · ${a.reason}`)
+  console.log('\n  기존 행 삭제 0 — apply 는 신규 생성 · best-v1 전환 · 어긋난 W 저장만 한다')
 
   if (APPLY) {
-    console.log(`\n  W 저장 ${s.weightWritten} · 새 입성 기록 ${s.created}`)
-    console.log(`  쓰기 합계 = ${s.weightWritten + s.created}`)
+    console.log(`\n  W 저장 ${s.weightWritten} · 신규 입성 ${s.created} · best-v1 전환 ${s.upgraded}`)
+    console.log(`  쓰기 합계 = ${s.weightWritten + s.created + s.upgraded}`)
   } else {
-    console.log(`\n  W 저장 예정 ${s.weightChanged} · 새 입성 기록 예정 ${s.verdicts.enter}`)
-    console.log(`  예정 쓰기 합계 = ${s.weightChanged + s.verdicts.enter}`)
+    const planned = s.weightChanged + s.verdicts.enter + s.verdicts['legacy-upgrade']
+    console.log(`\n  W 저장 예정 ${s.weightChanged} · 신규 입성 예정 ${s.verdicts.enter} · best-v1 전환 예정 ${s.verdicts['legacy-upgrade']}`)
+    console.log(`  예정 쓰기 합계 = ${planned}`)
   }
 }
 

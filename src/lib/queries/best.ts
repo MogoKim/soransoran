@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { BEST_PUBLIC_WHERE } from '@/lib/best-ranking-db'
+import { BEST_POLICY_VERSION } from '@/lib/best-ranking'
 import { BEST_PAGE_SIZE, isPageOutOfRange, lastPageOf } from '@/lib/list-query'
 import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
 
@@ -11,7 +12,8 @@ import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
  * 🔴 1쪽과 2쪽의 뜻이 같다 — 1~12번째 입성 글, 13~24번째 입성 글. "현재" 와 "지난" 을 나누지 않는다.
  *
  * 보는 사람 필터
- *   숨김·삭제 글과 차단한 작성자의 글은 뺀다. **목록과 개수가 같은 where 를 쓴다.**
+ *   지금 정책 판(best-v2)이 아닌 행 · 숨김·삭제 글 · 차단한 작성자의 글은 뺀다.
+ *   **목록과 개수가 같은 where 를 쓴다.**
  *   전역 기록(BestSelection)은 보는 사람과 무관하다 — 여기서는 거르기만 한다.
  *   숨김 글은 행이 남아 있어, 되살리면 원래 입성 시각 자리로 돌아온다.
  */
@@ -31,6 +33,9 @@ export type BestPageResult =
 
 function visibleTo(blockedIds: readonly string[]): Prisma.BestSelectionWhereInput {
   return {
+    // 🔴 지금 정책 판의 행만. 이전 정책(best-v1) 행은 지우지 않고 남아 있지만 뜻이 다르다
+    //    ("전역 12개에 든 순간"). 그 글이 best-v2 자격을 얻으면 쓰기 경로가 같은 행을 전환한다.
+    policyVersion: BEST_POLICY_VERSION,
     post: {
       is: {
         ...BEST_PUBLIC_WHERE,

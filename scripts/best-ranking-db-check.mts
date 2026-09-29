@@ -436,41 +436,130 @@ async function main(): Promise<void> {
   expect('경합 2: 동기화가 먼저 잠금 → 수정이 뒤에 들어와 updatedAt = 수정 시각 · 제목 유지 · W 반영',
     [race2.updatedAt.toISOString() === editedAt2, editedAt2 > editedAt1, race2.title, await weightHolds(U)], [true, true, '수정2', true])
 
-  console.log('\n■ 12. backfill — 기준을 이미 넘었는데 기록이 없는 공개 글만 · 멱등 · 기존 기록은 분류만')
+  console.log('\n■ 12. backfill — 신규 입성 · best-v1 전환만 쓴다 · 멱등 · 행 삭제 0')
   await reset()
   const kw = await member('백필작가')
   const [k1, k2] = [await member('백필독자1'), await member('백필독자2')]
-  // 활성화 전 운영처럼: 반응은 원본 행만 있고 W·기록은 비어 있다(best-v1 시기 · 기준 도입 전)
+  // 활성화 전 운영처럼: 반응은 원본 행만 있고 저장 W 는 0 이다
   const raw = async (ageH: number, extra: Partial<Prisma.PostUncheckedCreateInput> = {}) => post(kw, ageH, extra)
-  const e1 = await raw(1) // 실회원 댓글 → W 2 · 입성 대상
-  await prisma.comment.create({ data: { postId: e1, authorId: k1, content: 'x' } })
-  const e2 = await raw(2) // 공감 2 → W 2 · 입성 대상
-  await prisma.like.createMany({ data: [{ postId: e2, userId: k1 }, { postId: e2, userId: k2 }] })
-  const low = await raw(3) // 공감 1 → W 1 · 미진입
-  await prisma.like.create({ data: { postId: low, userId: k1 } })
-  const gone = await raw(4, { status: 'DELETED' }) // W 2 인데 삭제 → 비공개 제외
-  await prisma.comment.create({ data: { postId: gone, authorId: k2, content: 'x' } })
-  const cseed = await raw(5, { isMicroSeed: true, permanentNoindex: true, indexPromotionBlocked: true }) // C-4
-  await prisma.comment.create({ data: { postId: cseed, authorId: k1, content: 'x' } })
-  const v1row = await raw(6) // best-v1 시기의 기록(W 1) — 분류만 하고 지우지 않는다
-  await prisma.like.create({ data: { postId: v1row, userId: k2 } })
-  await prisma.bestSelection.create({ data: { postId: v1row, policyVersion: 'best-v1', recordedBy: 'backfill', scoreAtEntry: 1, peakRank: 3 } })
-  await prisma.bestSelection.create({ data: { postId: cseed, policyVersion: 'best-v1', recordedBy: 'event', scoreAtEntry: 1, peakRank: 1 } })
+  const memberComment = (postId: string, userId: string) => prisma.comment.create({ data: { postId, authorId: userId, content: 'x' } })
+  const v1 = (postId: string, minutesAgo: number) => prisma.bestSelection.create({
+    data: { postId, policyVersion: 'best-v1', recordedBy: 'event', scoreAtEntry: 123, peakRank: 3, firstEnteredAt: new Date(Date.now() - minutesAgo * 60_000) },
+  })
+  const e1 = await raw(1); await memberComment(e1, k1) // W 2 · 기록 없음 → enter
+  const e2 = await raw(2); await prisma.like.createMany({ data: [{ postId: e2, userId: k1 }, { postId: e2, userId: k2 }] }) // W 2 → enter
+  const low = await raw(3); await prisma.like.create({ data: { postId: low, userId: k1 } }) // W 1 → below
+  const gone = await raw(4, { status: 'DELETED' }); await memberComment(gone, k2) // W 2 · 삭제 → not-public
+  const cseed = await raw(5, { isMicroSeed: true, permanentNoindex: true, indexPromotionBlocked: true }); await memberComment(cseed, k1) // → c4
+  const cLegacy = await raw(6, { isMicroSeed: true, permanentNoindex: true, indexPromotionBlocked: true }); await memberComment(cLegacy, k1); await v1(cLegacy, 60)
+  const up = await raw(7); await memberComment(up, k2); await v1(up, 120) // best-v1 · W 2 · 공개 → legacy-upgrade
+  const v1low = await raw(8); await prisma.like.create({ data: { postId: v1low, userId: k2 } }); await v1(v1low, 90) // best-v1 · W 1 → legacy-ineligible
+  const v1hidden = await raw(9, { status: 'HIDDEN' }); await memberComment(v1hidden, k1); await v1(v1hidden, 80) // best-v1 · W 2 · 숨김 → legacy-ineligible
+  const v2rec = await raw(10); await memberComment(v2rec, k1)
+  await prisma.bestSelection.create({ data: { postId: v2rec, policyVersion: 'best-v2', recordedBy: 'event', scoreAtEntry: 0, peakRank: 0, firstEnteredAt: new Date(Date.now() - 30 * 60_000) } })
+  const snapshot = async () => (await prisma.bestSelection.findMany({ orderBy: { postId: 'asc' } })).map((r) => JSON.stringify(r))
+  const beforeRows = await snapshot()
+  const list0 = await listPage()
+  expect('backfill 전 목록·개수 = best-v2 행만(v2rec 1) — best-v1 행 4개는 숨김', [ids(list0), list0.total], [[v2rec], 1])
   const dry = await backfillBestEligibility(prisma, { apply: false })
-  expect('dry-run: 입성 대상 2 · 미진입 1 · 비공개 1 · C-4 1 · 이미 기록 1 · W 불일치 5 · 쓰기 0',
-    [dry.verdicts, dry.weightChanged, dry.weightWritten, dry.created, await selCount(), await weightOf(e1)],
-    [{ enter: 2, recorded: 1, below: 1, 'not-public': 1, c4: 1 }, 5, 0, 0, 2, 0])
-  expect('dry-run: 기존 기록 이상 분류 — best-v1 행 2 · C-4 글 기록 1 (지우지 않는다)',
-    dry.anomalies.map((a) => a.reason).sort(), ['C-4 승격 차단 글인데 기록이 있다', '이전 정책(best-v1) 규칙으로 생긴 기록', '이전 정책(best-v1) 규칙으로 생긴 기록'])
+  expect('dry-run 판정: enter 2 · legacy-upgrade 1 · best-v2-recorded 1 · legacy-ineligible 3 · below 1 · not-public 1 · c4 1 · W 불일치 8',
+    [dry.verdicts, dry.weightChanged],
+    [{ enter: 2, 'legacy-upgrade': 1, 'best-v2-recorded': 1, 'legacy-ineligible': 3, below: 1, 'not-public': 1, c4: 1 }, 8])
+  expect('dry-run: legacy-ineligible 사유 = C-4 · W<2 · 비공개',
+    dry.rows.filter((r) => r.verdict === 'legacy-ineligible').map((r) => r.reason).sort(), ['C-4 승격 차단 글', 'W < 2', '비공개(숨김·삭제·게시판 밖)'].sort())
+  expect('dry-run 쓰기 0 — 기록 행 · 저장 W 그대로', [await snapshot(), await weightOf(e1), await weightOf(up)], [beforeRows, 0, 0])
+  const upBefore = await prisma.bestSelection.findUniqueOrThrow({ where: { postId: up } })
   const run1 = await backfillBestEligibility(prisma, { apply: true })
-  const recs = await prisma.bestSelection.findMany({ select: { postId: true, recordedBy: true, policyVersion: true } })
-  expect('apply: 새 기록 = e1 · e2 뿐 (recordedBy=backfill · best-v2) · W 5개 저장 · 기존 행 2개 그대로',
-    [run1.created, run1.weightWritten, recs.filter((r) => r.recordedBy === 'backfill' && r.policyVersion === 'best-v2').map((r) => r.postId).sort(), recs.length],
-    [2, 5, [e1, e2].sort(), 4])
-  expect('apply 뒤 모든 글의 저장 W = 원본 행', (await Promise.all([e1, e2, low, gone, v1row].map(weightHolds))).every(Boolean), true)
+  expect('첫 apply = 예측: W 저장 8 · 신규 2 · 전환 1', [run1.weightWritten, run1.created, run1.upgraded], [dry.weightChanged, dry.verdicts.enter, dry.verdicts['legacy-upgrade']])
+  const upAfter = await prisma.bestSelection.findUniqueOrThrow({ where: { postId: up } })
+  expect('전환된 행: best-v2 · recordedBy=backfill · 입성 시각 = 전환 시각(이전보다 뒤) · deprecated 칼럼 0',
+    [upAfter.policyVersion, upAfter.recordedBy, upAfter.firstEnteredAt > upBefore.firstEnteredAt, Date.now() - upAfter.firstEnteredAt.getTime() < 60_000, upAfter.scoreAtEntry, upAfter.peakRank],
+    ['best-v2', 'backfill', true, true, 0, 0])
+  const kept = await prisma.bestSelection.findMany({ where: { postId: { in: [cLegacy, v1low, v1hidden] } }, orderBy: { postId: 'asc' } })
+  expect('자격 없는 best-v1 행 3개는 한 글자도 안 바뀐다 · 행 삭제 0',
+    [kept.map((r) => JSON.stringify(r)), await selCount()],
+    [beforeRows.filter((r) => [cLegacy, v1low, v1hidden].some((id) => r.includes(`"postId":"${id}"`))), 7])
+  const list1 = await listPage()
+  expect('apply 뒤 목록·개수: 신규 e1·e2 · 전환 up · 기존 v2rec (best-v1 행 3개는 계속 숨김)',
+    [[...ids(list1)].sort(), list1.total, ids(list1).at(-1)], [[e1, e2, up, v2rec].sort(), 4, v2rec])
   const run2 = await backfillBestEligibility(prisma, { apply: true })
-  expect('두 번째 apply: 쓰기 0', [run2.weightWritten, run2.created], [0, 0])
-  expect('첫 apply 가 쓴 양 = dry-run 예측', [run1.weightWritten, run1.created], [dry.weightChanged, dry.verdicts.enter])
+  expect('두 번째 apply: 쓰기 0', [run2.weightWritten, run2.created, run2.upgraded], [0, 0, 0])
+
+  console.log('\n■ 13. 이벤트 경로의 best-v1 전환 — 숨김 · 한 번 전환 · 동시 · 롤백')
+  await reset()
+  const lw = await member('전환작가')
+  const [la, lb, lc, ld, le] = [await member('전환1'), await member('전환2'), await member('전환3'), await member('전환4'), await member('전환5')]
+  const oldV1 = (postId: string) => prisma.bestSelection.create({
+    data: { postId, policyVersion: 'best-v1', recordedBy: 'event', scoreAtEntry: 99, peakRank: 5, firstEnteredAt: new Date(Date.now() - 3 * H) },
+  })
+  const L = await post(lw, 1)
+  await like(L, la) // W 1
+  await oldV1(L) // #613 운영 중 W 1 로 기록된 best-v1 행
+  const lBefore = await prisma.bestSelection.findUniqueOrThrow({ where: { postId: L } })
+  const l0 = await listPage()
+  expect('best-v1 · W 1 행은 새 목록·개수에 나오지 않는다', [ids(l0).includes(L), l0.total], [false, 0])
+  await like(L, lb) // W 2 → 전환
+  const lAfter = await prisma.bestSelection.findUniqueOrThrow({ where: { postId: L } })
+  expect('같은 글이 W 2 가 되는 사건에서 best-v2 로 전환: 행 1 · recordedBy=event · 입성 시각 = 전환 시각 · deprecated 0',
+    [await selCount(L), lAfter.policyVersion, lAfter.recordedBy, lAfter.firstEnteredAt > lBefore.firstEnteredAt, Date.now() - lAfter.firstEnteredAt.getTime() < 60_000, lAfter.scoreAtEntry, lAfter.peakRank],
+    [1, 'best-v2', 'event', true, true, 0, 0])
+  expect('전환 뒤 목록 맨 앞 · 개수 1', [ids(await listPage())[0], (await listPage()).total], [L, 1])
+  await like(L, lc)
+  await comment(L, { authorId: ld })
+  expect('전환 뒤 반응이 더 와도 한 번뿐 — 입성 시각 그대로', (await prisma.bestSelection.findUniqueOrThrow({ where: { postId: L } })).firstEnteredAt.toISOString(), lAfter.firstEnteredAt.toISOString())
+
+  const Hd = await post(lw, 2, { status: 'HIDDEN' })
+  await oldV1(Hd)
+  const Cs = await post(lw, 3, { isMicroSeed: true, permanentNoindex: true, indexPromotionBlocked: true })
+  await oldV1(Cs)
+  const hdBefore = JSON.stringify(await prisma.bestSelection.findUniqueOrThrow({ where: { postId: Hd } }))
+  const csBefore = JSON.stringify(await prisma.bestSelection.findUniqueOrThrow({ where: { postId: Cs } }))
+  await comment(Hd, { authorId: la })
+  await like(Hd, lb)
+  await comment(Cs, { authorId: la })
+  await like(Cs, lb)
+  expect('best-v1 비공개·C-4 행: 반응이 W 2 를 넘겨도 그대로 남고 화면에는 없다',
+    [JSON.stringify(await prisma.bestSelection.findUniqueOrThrow({ where: { postId: Hd } })), JSON.stringify(await prisma.bestSelection.findUniqueOrThrow({ where: { postId: Cs } })),
+      ids(await listPage()).filter((id) => id === Hd || id === Cs).length],
+    [hdBefore, csBefore, 0])
+
+  const Z = await post(lw, 4)
+  await oldV1(Z)
+  const changes: string[] = []
+  const likeWith = (u: string) => prisma.$transaction(async (tx) => {
+    await tx.like.create({ data: { postId: Z, userId: u } })
+    await tx.post.update({ where: { id: Z }, data: { likeCount: { increment: 1 } }, select: { id: true } })
+    changes.push((await syncBestEligibility(tx, Z))?.change ?? 'null')
+  })
+  const guestWith = (i: number) => prisma.$transaction(async (tx) => {
+    await tx.comment.create({ data: { postId: Z, content: 'x', commentOrigin: 'GUEST', guestNickname: `동시전환${i}` }, select: { id: true } })
+    changes.push((await syncBestEligibility(tx, Z))?.change ?? 'null')
+  })
+  const conc = await Promise.allSettled([likeWith(la), likeWith(lb), likeWith(lc), guestWith(1), guestWith(2), backfillBestEligibility(prisma, { apply: true })])
+  const bfUpgraded = conc[5].status === 'fulfilled' ? conc[5].value.upgraded : -1
+  const upgradedTotal = changes.filter((c) => c === 'upgraded').length + bfUpgraded
+  expect('best-v1 행에 공감 3 · 비회원 댓글 2 · backfill 이 동시에 → 오류 0 · 전환 정확히 1 · 행 1 · best-v2',
+    [conc.filter((r) => r.status === 'rejected').length, upgradedTotal, await selCount(Z), (await prisma.bestSelection.findUniqueOrThrow({ where: { postId: Z } })).policyVersion, await weightHolds(Z)],
+    [0, 1, 1, 'best-v2', true])
+
+  const Rb = await post(lw, 5)
+  await like(Rb, la)
+  await oldV1(Rb)
+  const rbBefore = JSON.stringify(await prisma.bestSelection.findUniqueOrThrow({ where: { postId: Rb } }))
+  let rbThrew = ''
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.like.create({ data: { postId: Rb, userId: le } })
+      const r = await syncBestEligibility(tx, Rb)
+      if (r?.change !== 'upgraded') throw new Error('트랜잭션 안에서는 전환됐어야 한다')
+      throw new Error('전환 뒤 실패 흉내')
+    })
+  } catch (e) {
+    rbThrew = (e as Error).message
+  }
+  expect('공감 트랜잭션이 전환까지 간 뒤 실패 → 공감 · W · best-v1 행 모두 그대로',
+    [rbThrew, await prisma.like.count({ where: { postId: Rb } }), await weightOf(Rb), JSON.stringify(await prisma.bestSelection.findUniqueOrThrow({ where: { postId: Rb } }))],
+    ['전환 뒤 실패 흉내', 1, 1, rbBefore])
 
   console.log(`\n${fail === 0 ? '✅' : '🔴'} best-ranking-db-check: ${pass} 통과 · ${fail} 실패`)
 }
