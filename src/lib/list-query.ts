@@ -38,24 +38,13 @@ export const BOARD_PAGE_SIZE = 12
 export const MAGAZINE_PAGE_SIZE = 12
 
 /**
- * /best 한 쪽의 글 수. 1쪽은 현재 베스트, 2쪽부터는 과거 베스트 기록이다.
+ * /best 한 쪽의 글 수. 베스트 입성 글을 최초 입성 최신순으로 이만큼씩 나눈다.
  *
+ * 🔴 전체 상한이 아니라 쪽 크기다. 1쪽과 2쪽의 뜻이 같다(1~12번째 · 13~24번째 입성 글).
  * 🔴 게시판·매거진과 값이 같지만 별칭으로 두지 않는다 — 위 MAGAZINE_PAGE_SIZE 와 같은 이유다.
- * 🔴 1쪽 크기는 현재 베스트 12개(best-ranking.ts BEST_CURRENT_SIZE)와 같아야 한다.
- *    `npm run check:best` 가 둘이 같은지 본다.
+ *    마지막 쪽·범위 밖 판정은 게시판과 같은 lastPageOf · isPageOutOfRange 에 이 값을 넘겨 쓴다.
  */
 export const BEST_PAGE_SIZE = 12
-
-/**
- * /best 의 마지막 쪽. 1쪽(현재 베스트)은 언제나 있고, 과거 기록이 있을 때만 2쪽부터 생긴다.
- *
- * 🔴 `lastPageOf` 를 쓰지 않는다 — 그쪽은 글 0건이어도 1을 돌려주므로 1 을 더하면
- *    기록이 없는데 빈 2쪽이 생긴다.
- */
-export function bestLastPage(archiveTotal: number): number {
-  const total = Number.isFinite(archiveTotal) && archiveTotal > 0 ? Math.floor(archiveTotal) : 0
-  return 1 + Math.ceil(total / BEST_PAGE_SIZE)
-}
 
 /**
  * 게시판 목록 정렬.

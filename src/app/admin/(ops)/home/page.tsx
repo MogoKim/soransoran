@@ -28,7 +28,7 @@ import {
  * 🔴 홈과 같은 함수·같은 상수를 쓴다 (getHomePopularPosts · HOME_POPULAR_COUNT).
  *    따로 조회하면 화면과 다른 목록을 보게 되어 이 화면이 거짓말이 된다.
  *
- * 🔴 고정·숨김은 홈 첫 화면에만 걸린다. /best 는 자기 순위 키(queries/best.ts loadBestPage)를
+ * 🔴 고정·숨김은 홈 첫 화면에만 걸린다. /best 는 입성 기록(queries/best.ts loadBestPage)을
  *    써서 이 예외를 타지 않는다. 운영자가 이것을 "글 내리기" 로 오해하면
  *    지워야 할 글을 홈에서만 빼고 끝낸다 — 글을 내리는 것은 /admin/content 의 일이다.
  *

@@ -7,7 +7,7 @@ import { getBoardBySlug } from '@/lib/board-registry'
 import { requireOnboarded } from '@/lib/onboarding-guard'
 import { POST_NOT_FOUND } from '@/lib/post-policy'
 import { COMMENT_NOT_FOUND } from '@/lib/comment-policy'
-import { syncBestRanking } from '@/lib/best-ranking-db'
+import { syncBestEligibility } from '@/lib/best-ranking-db'
 
 /**
  * 작성자 본인 삭제
@@ -63,15 +63,15 @@ export async function deletePost(
   // 🔴 본인 확인 — 서버에서 반드시 검증한다. UI 노출 제어만으로는 부족하다.
   if (post.authorId !== userId) return { error: '본인이 쓴 글만 지울 수 있습니다.' }
 
-  // /best — 이 글이 12개에서 빠지면 13위가 올라온다. 상태를 바꾼 **뒤의** 공개 목록으로
-  //    기록을 판정한다. 상태 변경과 판정이 한 트랜잭션이라 하나만 남지 않는다.
+  // /best — 상태를 바꾼 **뒤의** 공개 자격으로 판정한다. 지운 글은 입성하지 않고,
+  //    이미 입성한 기록은 남되 목록·개수에서 빠진다(queries/best.ts). 상태 변경과 판정이 한 트랜잭션이다.
   await prisma.$transaction(async (tx) => {
     await tx.post.update({
       where: { id: postId },
       data: { status: 'DELETED' },
       select: { id: true },
     })
-    await syncBestRanking(tx, postId)
+    await syncBestEligibility(tx, postId)
   })
 
   const board = getBoardBySlug(boardSlug)
@@ -110,14 +110,14 @@ export async function deleteComment(
 
   if (comment.authorId !== userId) return { error: '본인이 쓴 댓글만 지울 수 있습니다.' }
 
-  // /best 순위 키·기록은 같은 트랜잭션에서 다시 본다.
+  // /best W 는 같은 트랜잭션에서 다시 센다. 이미 남은 입성 기록은 지우지 않는다.
   await prisma.$transaction(async (tx) => {
     await tx.comment.update({
       where: { id: commentId },
       data: { isDeleted: true },
       select: { id: true },
     })
-    await syncBestRanking(tx, comment.postId)
+    await syncBestEligibility(tx, comment.postId)
   })
 
   const board = getBoardBySlug(boardSlug)

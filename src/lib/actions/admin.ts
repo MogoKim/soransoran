@@ -14,7 +14,7 @@ import {
 import { checkContent } from '@/lib/content-guard'
 import { sanitizePostHtml, isHtmlContent } from '@/lib/post-html'
 import { firstImageUrl } from '@/lib/post-media'
-import { applyMemberBlock, syncBestRanking } from '@/lib/best-ranking-db'
+import { applyMemberBlock, syncBestEligibility } from '@/lib/best-ranking-db'
 
 /**
  * 어드민 1차 MVP — 운영 write 경로. 🔴 이 파일이 유일한 지점이다.
@@ -43,7 +43,7 @@ import { applyMemberBlock, syncBestRanking } from '@/lib/best-ranking-db'
  * 이 글이 바뀌면 다시 그려야 할 고객 화면들.
  *
  * 🔴 board.href 를 문자열로 적지 않는다. registry 가 유일한 출처다.
- * 🔴 홈(/)과 /best 도 함께 넣는다 — 인기글이 두 곳에서 뽑힌다.
+ * 🔴 홈(/)과 /best 도 함께 넣는다 — 글이 홈 인기글과 베스트 목록에도 나온다.
  */
 function revalidatePostSurfaces(postId: string, boardType: BoardType): void {
   const href = communityPostHref(postId, boardType)
@@ -120,15 +120,16 @@ export async function setPostHidden(postId: string, hidden: boolean): Promise<Ad
   // DELETED 는 이 화면이 만드는 상태가 아니다. 되돌리는 것도 여기서 하지 않는다.
   if (post.status === 'DELETED') return { error: '삭제 상태인 글은 여기서 바꾸지 않습니다.' }
 
-  // /best — 숨기면 13위가 올라오고, 되살리면 이 글이 다시 12개에 들 수 있다.
-  //    상태를 바꾼 **뒤의** 공개 목록으로 기록을 판정한다. 둘이 한 트랜잭션이다.
+  // /best — 상태를 바꾼 **뒤의** 공개 자격으로 판정한다. 둘이 한 트랜잭션이다.
+  //    숨긴 글은 입성하지 않는다(이미 입성한 기록은 남고 목록·개수에서만 빠진다).
+  //    되살린 글은 원래 입성 자리로 돌아오고, 기록이 없던 글이 그때 W ≥ 2 면 되살린 순간 입성한다.
   await prisma.$transaction(async (tx) => {
     await tx.post.update({
       where: { id: postId },
       data: { status: hidden ? 'HIDDEN' : 'PUBLISHED' },
       select: { id: true },
     })
-    await syncBestRanking(tx, postId)
+    await syncBestEligibility(tx, postId)
   })
 
   revalidatePath(`/admin/content/${postId}`)
@@ -154,10 +155,10 @@ export async function setCommentHidden(
   })
   if (!comment) return { error: '댓글을 찾지 못했습니다.' }
 
-  // 숨김·복구 모두 실반응 수가 바뀐다. /best 순위 키·기록을 같은 트랜잭션에서 다시 본다.
+  // 숨김·복구 모두 실반응 수가 바뀐다. /best 자격(W · 최초 입성)을 같은 트랜잭션에서 다시 본다.
   await prisma.$transaction(async (tx) => {
     await tx.comment.update({ where: { id: commentId }, data: { isDeleted: hidden }, select: { id: true } })
-    await syncBestRanking(tx, comment.postId)
+    await syncBestEligibility(tx, comment.postId)
   })
 
   revalidatePath(`/admin/content/${comment.postId}`)
@@ -238,8 +239,8 @@ export async function setMemberBlocked(
 
   /**
    * 차단 여부는 /best 실회원 판정의 입력이다(best-ranking-db.ts BEST_REAL_MEMBER_WHERE).
-   * 🔴 차단·해제 · 그 회원이 반응한 글들의 순위 재계산 · 그 뒤 한 번의 기록 판정이 한 트랜잭션이다 —
-   *    어느 하나만 남지 않는다.
+   * 🔴 차단·해제와 그 회원이 반응한 글들의 자격 재판정(W · 최초 입성)이 한 트랜잭션이다 —
+   *    어느 하나만 남지 않는다. 기존 입성 기록은 지우지 않는다.
    * 🔴 영향 글이 많으면 길어진다. 기본 5초 대신 넉넉히 준다(글당 수 ms · 실측은 PR 본문).
    */
   await prisma.$transaction((tx) => applyMemberBlock(tx, userId, blocked), {
