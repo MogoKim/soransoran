@@ -32,7 +32,7 @@ import { execFileSync } from 'node:child_process'
 
 import { PrismaClient } from '@prisma/client'
 
-import { profileOf, resolveRuntimeStage, type RuntimeStage, type StageVerdict } from '../src/lib/scale-profile'
+import { profileOf, resolveRuntimeStage, stageRank, type RuntimeStage, type StageVerdict } from '../src/lib/scale-profile'
 import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
 import { judgeOneDayCanary, kstDateString, slotsLeftToday } from '../src/lib/release-canary'
 import { previousKstDate, isCalendarDate, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
@@ -238,9 +238,10 @@ async function main(): Promise<number> {
         }
         /**
          * 🔴 **D20 이상 시험 대상 — preflight 사실을 모아 판정한다.** d3~d10 은 #620 관문 그대로라 모으지 않는다.
+         *    천장 위 대상도 모으지 않는다 — 사다리가 CEILING 으로 막는다(이유가 둘로 갈리지 않게).
          *    못 모은 칸은 모름(UNKNOWN)이다 — 사다리가 시험을 열지 않는다.
          */
-        if (needsExtendedGate(target) && previous !== null) {
+        if (needsExtendedGate(target) && previous !== null && stageRank(target) <= stageRank(ceiling.stage)) {
           const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
           const r = await readPreflightFacts(prisma, { loaded: s, autoOpen, evidenceDate: previous.kstDate, env: pe.values })
           nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID)

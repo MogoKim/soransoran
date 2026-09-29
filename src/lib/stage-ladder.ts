@@ -22,6 +22,11 @@
  * stageVerdicts     (scale-readiness) 14일 readiness
  * safeStageFor      (scale-profile)   감속
  * ```
+ *
+ * 🔴 **D1 → D50 한 사다리** (2026-09-29 generic scheduler 배선). 러너 단계(`RUNTIME_STAGES`)가 d50 까지다.
+ *    · 다음 칸 `nextStage` 는 d10 → d20 을 준다 — 승인 천장이 d10 이면 CEILING 이 막는다(천장은 사람이 올린다).
+ *    · D20 이상 시험은 preflight(`judgeNextPreflight`) PASS · 첫 슬롯 전일 때만 열린다(`extendedTrialBlocks`).
+ *    · 시험이 안 열린 날은 조건이 맞으면 `REPROVE`(증명일) — PASS 뒤 하루 막혔다고 영구 정체하지 않는다.
  */
 import {
   SAFEST_STAGE, safeStageFor, stageRank, profileOf,
