@@ -47,7 +47,8 @@ import {
 import { confirmedDefectCount, missingAutoPostCount } from '../src/lib/auto-ready-repo'
 import { auditAwareGate, overdueAuditCount, retryableFailureCount } from '../src/lib/auto-ready-audit-store'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
-import { observeJob, readProcessRuns, supplyFailing } from './lib/runner-health.mjs'
+import { observeJob, publishFailing, readProcessRuns, supplyFailing } from './lib/runner-health.mjs'
+import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-record.mjs'
 import { fillDbConnection, readCostSignals, readEnvKeys } from './lib/ops-signals.mjs'
 import { judgeStageEvidence, trialPlanOf, evidenceReasonOf, type StageEvidenceVerdict, type StageEvidenceFacts, type EvidenceSideSignals } from '../src/lib/stage-evidence'
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
@@ -124,7 +125,7 @@ function observeErrors(): HealthSignal {
   const pub = observeJob('com.soransoran.original-post-runner')
   const sup = observeJob('com.soransoran.supply-process')
   return errorSignalOf([
-    { label: pub.label, loaded: pub.state === 'loaded', failing: pub.launchdFailing },
+    { label: pub.label, loaded: pub.state === 'loaded', failing: publishFailing(pub, readPublishRunRecord(), NOW, PUBLISH_RUN_MAX_AGE_MS) },
     { label: sup.label, loaded: sup.state === 'loaded', failing: supplyFailing(sup, readProcessRuns().runs) },
   ])
 }
