@@ -820,7 +820,7 @@ async function main(): Promise<void> {
   const now = RUN_AT
   const nowIso = now.toISOString()
   console.log(`① 통과 판정 ${seeds.length}건 — AUTO_SEED ${seeds.filter((j) => j.decision === 'AUTO_SEED').length}건(seed 경로)`
-    + ` · AUTO_RAW ${seeds.filter((j) => j.decision === 'AUTO_RAW').length}건(적응 경로 · 사람 검토)`)
+    + ` · AUTO_RAW ${seeds.filter((j) => j.decision === 'AUTO_RAW').length}건(적응 경로 · 내부 실험 격리)`)
 
   if (!CALL) {
     console.log(`\n② 오프라인 계획 — 생성 대상 ${seeds.length}건`)
@@ -1417,7 +1417,7 @@ async function main(): Promise<void> {
       lifeReview: a.pick.lifeReview ?? null,
       /**
        * 🔴 **초안 경로** (2026-09-29) — artifact 계약에서 읽는다. 적응 artifact 는 적응 레인 표식을 달고
-       *    품질 계약(quality-v4) 밖에서 사람 검토로만 간다(`raw-adapt-lane.ts`).
+       *    품질 계약(quality-v4) 밖 내부 실험 격리로 간다(`raw-adapt-lane.ts` · 창업자 대기열 0).
        */
       draftRoute: isAdaptationContract(a.art.contract) ? 'adapt' : 'seed',
     })),

@@ -98,7 +98,7 @@ for (const r of personaRows) {
 console.log(`  페르소나 ${personas.length}명 (active ${personas.filter((p) => p.status === 'active').length})`)
 
 // ── 대상 조달 — 🔴 APPROVED · EDITED · createdPostId null ──
-const allRows = await prisma.originalPostApprovalQueue.findMany({
+const queueRead = await prisma.originalPostApprovalQueue.findMany({
   where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
   select: {
     id: true, status: true, gateVerdict: true, createdAt: true, createdPostId: true,
@@ -110,10 +110,11 @@ const allRows = await prisma.originalPostApprovalQueue.findMany({
   },
   orderBy: { createdAt: 'asc' },
 })
-// 🔴 지정한 id 만 남긴다 — 순서는 바꾸지 않는다(dry-run 재현성)
 // 🔴 적응 레인 격리 행(내부 실험)은 배정 대상이 아니다 — Persona 를 점유하지 않는다 (2026-09-29)
-const rows = filterByIds(founderQueueRowsOf(allRows), IDS)
-const missing = missingIds(founderQueueRowsOf(allRows), IDS)
+const allRows = founderQueueRowsOf(queueRead)
+// 🔴 지정한 id 만 남긴다 — 순서는 바꾸지 않는다(dry-run 재현성)
+const rows = filterByIds(allRows, IDS)
+const missing = missingIds(allRows, IDS)
 console.log(describeIdTargeting(IDS))
 if (missing.length > 0) {
   console.log(`  🟡 지정했지만 대상에 없는 id ${missing.length}건 — APPROVED·EDITED·발행 전이 아닙니다`)

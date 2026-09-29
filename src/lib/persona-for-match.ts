@@ -42,11 +42,14 @@ export async function personaMatchUsageOf(
   opts: { excludeQueueId?: string } = {},
 ): Promise<{ postsThisWeek: number; last: { matchedAt: Date | null } | null }> {
   const notSelf = opts.excludeQueueId === undefined ? {} : { id: { not: opts.excludeQueueId } }
+  const postsThisWeek = (await db.originalPostApprovalQueue.findMany({
+    where: { matchedPersona: { code }, matchedAt: { gte: weekAgo }, ...notSelf },
+    select: { gateResults: true },
+  })).filter((x) => !carriesRawAdaptMark(x.gateResults)).length
   const rows = (await db.originalPostApprovalQueue.findMany({
     where: { matchedPersona: { code }, ...notSelf },
     select: { matchedAt: true, gateResults: true },
   })).filter((x) => !carriesRawAdaptMark(x.gateResults))
-  const postsThisWeek = rows.filter((x) => x.matchedAt !== null && x.matchedAt.getTime() >= weekAgo.getTime()).length
   if (rows.length === 0) return { postsThisWeek, last: null }
   if (rows.some((x) => x.matchedAt === null)) return { postsThisWeek, last: { matchedAt: null } }
   const latest = rows.reduce((m, x) => (x.matchedAt!.getTime() > m.getTime() ? x.matchedAt! : m), rows[0]!.matchedAt!)

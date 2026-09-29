@@ -959,7 +959,8 @@ jobs:
           #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
           npm run persona:autogen-db-check
           # 🔴 적응 레인(2026-09-29 · #627) — main 이 적재·도장한 quality-v4 자동 READY 11건이 그대로 자동 재고 ·
-          #    적응 행은 실제 적재기 표식으로 사람 검토 전용(도장 0 · selector 거절 · 재검증 거절) · 적응 결함이 v4 열림을 닫지 않는다.
+          #    적응 행은 실제 적재기 표식으로 내부 실험 격리(도장 0 · selector 거절 · 재검증 거절 · 창업자 대기열 0 · WIP 0 ·
+          #    회차 2/하루 4 상한 · 7일 기한) · 적응 결함이 v4 열림을 닫지 않는다.
           #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
           npm run micro-seed:raw-adaptation-db-check
 
