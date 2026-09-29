@@ -34,6 +34,8 @@ import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { loadPublishableStock, stageStock } from './lib/publishable-stock.mjs'
 import { planPublishBatch, resolvePublishScale } from './lib/publishable-stock.mjs'
 import { activeScale } from '../src/lib/scale-runtime'
+import { judgeStageEvidence, type StageEvidenceVerdict } from '../src/lib/stage-evidence'
+import { auditTarget } from '../src/lib/auto-ready-v2'
 
 let pass = 0
 let fail = 0
@@ -82,6 +84,35 @@ const validatePrev = (row: unknown): ValidatedStageDecision | null => {
 }
 const prevDecision = (release: ReleaseStage, o: Record<string, unknown> = {}) =>
   validatePrev(prevRow(release, o))
+/**
+ * 🔴 **전날 운영 PASS — 정본 판정기로만 만든다** (2026-09-29 P0).
+ *    이 파일의 사다리 검사는 "전날 기반이 정당하다" 를 전제로 쓴 것이다. 이제 그 전제는
+ *    운영 증거 PASS 여야 한다 — 손으로 `verdict:'PASS'` 를 지어내지 않고 `judgeStageEvidence` 에 깨끗한 사실을 넣는다.
+ *    반례(증거 없음 · FAIL · 모름)는 `stage:evidence-check` 가 따로 본다.
+ */
+const passEvidence = (stage: ReleaseStage): StageEvidenceVerdict => {
+  const at = Date.parse(`${PREV_DATE}T09:30:00+09:00`)
+  const n = PROFILES[stage].dailyTarget
+  return judgeStageEvidence(PREV_DATE, stage, {
+    kstDate: PREV_DATE, stage,
+    decision: { kstDate: PREV_DATE, state: 'TRIAL', release: stage, decidedBy: DECISION_WRITER },
+    // 🔴 자동 READY 로 무인 발행된 글만 승격 물량이다 — 사람 승인 글로 만든 PASS 는 없다
+    posts: Array.from({ length: n }, (_, i) => ({
+      postId: `pp-${i}`, queueId: `pq-${i}`,
+      publishedAtMs: at + i * 3600_000, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `pa-${i}`,
+      decider: 'auto' as const,
+      personaComments: [{ personaId: `pc-${i}`, createdAtMs: at + i * 3600_000 + 600_000, topLevel: true }],
+    })),
+    orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
+    // 정본 표본 수 auditTarget(n) 만큼 — 서로 다른 자동 target 글
+    audits: {
+      rows: Array.from({ length: auditTarget(n) }, (_, i) => ({
+        postId: `pp-${i}`, queueId: `pq-${i}`, judged: true, defectYes: false, retryable: false, overdue: false,
+      })),
+      globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
+    },
+  }, { cost: [{ name: '공급', health: 'ok' }, { name: '댓글', health: 'ok' }, { name: '감사', health: 'ok' }], errors: 'ok' })
+}
 
 /**
  * 🔴 **하드코딩한 목록은 새 파일을 놓친다** (2026-09-25 마스터 지적).
@@ -185,7 +216,7 @@ console.log('\n③ 🔴 🔴 반례 — release d3 · 천장 d3 · d5 trial GO �
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd3',
     verdicts: a.verdicts, daily, promotion: promo({ current: 'd3', next: 'd5' }),
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     publishedToday: 0, decidedAt: AT,
   })
   check('🔴 🔴 **천장이 d3 면 d5 시험을 열지 않는다**',
@@ -203,7 +234,7 @@ console.log('\n④ 🔴 🔴 반례 — release d3 · 천장 d5 · d5 trial GO �
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
     verdicts: a.verdicts, daily: a.daily('d5'),
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: promo({ current: 'd3', next: 'd5' }), publishedToday: 0, decidedAt: AT,
   })
   check('🔴 🔴 **TRIAL · 오늘만 d5**',
@@ -271,7 +302,7 @@ console.log('\n⑥ 🔴 🔴 반례 — 잘못된 판정 출처는 fail-closed')
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
     verdicts: a.verdicts, daily: a.daily('d5', '2026-09-23'),
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: promo({ current: 'd3', next: 'd5' }), publishedToday: 0, decidedAt: AT,
   })
   check('🔴 🔴 **전날 canary 결과는 쓰지 않는다 (STALE_DAILY)**',
@@ -283,7 +314,7 @@ console.log('\n⑥ 🔴 🔴 반례 — 잘못된 판정 출처는 fail-closed')
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
     verdicts: a.verdicts, daily: { ...mixed, stage: 'd10' },
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: promo({ current: 'd3', next: 'd5' }), publishedToday: 0, decidedAt: AT,
   })
   check('🔴 🔴 **대상 단계와 verdict.stage 가 다르면 쓰지 않는다**',
@@ -298,7 +329,7 @@ console.log('\n⑦ 🔴 9/24 **구조 회귀** — q(12) fixture 다 (실제 운
     kstDate: DATE, sustainedRelease: 'd5', authorizedCapacityCeiling: 'd5',
     verdicts: a.verdicts, daily: a.daily('d5'),
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: promo({ current: 'd5', next: 'd10' }), publishedToday: 4, decidedAt: AT,
     supply: {
       eligibleSpeakers: 1,
@@ -473,7 +504,7 @@ console.log('\n⑪ 🔴 결정 하나에 여섯 칸이 남는다')
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
     verdicts: a.verdicts, daily: a.daily('d3'),
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: promo({ current: 'd3', next: 'd5' }), publishedToday: 0, decidedAt: AT,
   })
   check('날짜·천장·공개·상태·근거·시각·계약 판',
@@ -507,7 +538,7 @@ console.log('\n⑫ 🔴 🔴 단계 점프를 하루 시험으로 우회하지 �
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd10',
     verdicts: a.verdicts, daily: a.daily('d10', DATE, 'd3'),
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: null, publishedToday: 0, decidedAt: AT,
   })
   check('🔴 🔴 **d3 기반에서 d10 시험도 막힌다**',
@@ -516,7 +547,7 @@ console.log('\n⑫ 🔴 🔴 단계 점프를 하루 시험으로 우회하지 �
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
     verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: null, publishedToday: 0, decidedAt: AT,
   })
   check('🔴 유효한 d3 기반 뒤 d5 시험은 열린다 (현재 운영 모양)',
@@ -530,7 +561,7 @@ console.log('\n⑫ 🔴 🔴 단계 점프를 하루 시험으로 우회하지 �
     kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
     // 🔴 기반 주장은 d1 인데 전날 실제 결정은 d3 다 — 주장이 정본과 다르다
     verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd1'),
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: null, publishedToday: 0, decidedAt: AT,
   })
   check('🔴 🔴 **시험 기반 주장이 전날 실제 결정과 다르면 막는다**',
@@ -559,7 +590,7 @@ console.log('\n⑫ 🔴 🔴 단계 점프를 하루 시험으로 우회하지 �
     verdicts: a.verdicts,
     daily: { ...a.daily('d5', DATE, 'd3'), builtAt: '2026-09-23T10:00:00.000Z' },
     // 🔴 시험 기반의 정본 — 전날 실제로 공개한 단계다
-    previousDecision: prevDecision('d3'),
+    previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
     promotion: null, publishedToday: 0, decidedAt: AT,
   })
   check('🔴 🔴 **kstDate 라벨만 오늘로 바꾼 어제 판정은 막힌다 (builtAt 검증)**',
@@ -692,7 +723,8 @@ console.log('\n⑮ 🔴 🔴 trialBase 는 전날 실제 결정에서만 온다'
   }) => planStageDecision({
     kstDate: DATE, sustainedRelease: o.sustained, authorizedCapacityCeiling: o.ceiling,
     verdicts: a.verdicts, daily: a.daily(o.stage, DATE, o.base),
-    previousDecision: o.prev, promotion: null, publishedToday: 0, decidedAt: AT,
+    previousDecision: o.prev, previousEvidence: o.prev === null ? null : passEvidence(o.prev.release),
+    promotion: null, publishedToday: 0, decidedAt: AT,
   })
   const hasPrev = (d: ReturnType<typeof plan>) => d.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS')
 
@@ -776,7 +808,8 @@ console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 �
   const plan = (prev: ValidatedStageDecision | null) => planStageDecision({
     kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd5',
     verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
-    previousDecision: prev, promotion: null, publishedToday: 0, decidedAt: AT,
+    previousDecision: prev, previousEvidence: prev === null ? null : passEvidence(prev.release),
+    promotion: null, publishedToday: 0, decidedAt: AT,
   })
   check('🔴 기준선 — 멀쩡한 전날 d3 결정이면 열린다', plan(prevDecision('d3')).state === 'TRIAL')
 
@@ -897,7 +930,7 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
     supply: { eligibleSpeakers: 3, excluded: [{ reason: 'noOpenDay', codes: ['P01', 'P02'] }] },
     decidedAt: `${DATE}T02:15:00.000Z`,
     contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER,
-    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5' },
+    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5', basis: 'PASS' },
   }
   /** 🔴 제안 모델의 칸이 validator 가 보는 키를 전부 덮는가 */
   check('🔴 🔴 **모델 칸이 결정의 모든 키를 덮는다 — 빠지면 저장 못 한다**',
@@ -1039,7 +1072,7 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
   /** ── ② 🔴 검증된 결정은 입력과 참조를 공유하지 않는다 ── */
   const mutable = raw({
     state: 'TRIAL', release: 'd5',
-    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5' },
+    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5', basis: 'PASS' },
     reasons: ['처음'],
     blocks: [{ code: 'PROVENANCE_NEXT', reason: '어긋남' }],
     supply: { eligibleSpeakers: 2, excluded: [{ reason: 'noOpenDay', codes: ['P01'] }] },
@@ -1097,7 +1130,7 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
   /** ── ④ 🔴 선택된 전이를 무효로 만드는 block ── */
   const trialWith = (code: string) => V(raw({
     state: 'TRIAL', release: 'd5',
-    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5' },
+    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5', basis: 'PASS' },
     blocks: [{ code, reason: 'x' }],
   }))
   for (const code of TRANSITION_FATAL_BLOCKS.TRIAL) {
@@ -1123,7 +1156,7 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
   /** 🔴 실측 반례 — consumer 까지 fail-closed 인가 */
   const badTrial = raw({
     state: 'TRIAL', release: 'd5',
-    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5' },
+    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5', basis: 'PASS' },
     blocks: [{ code: 'PROVENANCE_PREVIOUS', reason: '전날 결정이 없다' }],
   })
   const consumed = await consumeStageDecision({
@@ -1177,18 +1210,18 @@ console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 vali
       d: planStageDecision({
         kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd5',
         verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
-        previousDecision: prevDecision('d3'), promotion: null, publishedToday: 0, decidedAt: AT }) },
+        previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'), promotion: null, publishedToday: 0, decidedAt: AT }) },
     { label: 'TRIAL + 승격 출처 어긋남(PROVENANCE_NEXT)',
       d: planStageDecision({
         kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd5',
         verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
-        previousDecision: prevDecision('d3'),
+        previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'),
         promotion: promo({ current: 'd1', next: 'd10' }), publishedToday: 0, decidedAt: AT }) },
     { label: 'TRIAL 이 천장에 막힘(CEILING)',
       d: planStageDecision({
         kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd3',
         verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
-        previousDecision: prevDecision('d3'), promotion: null, publishedToday: 0, decidedAt: AT }) },
+        previousDecision: prevDecision('d3'), previousEvidence: passEvidence('d3'), promotion: null, publishedToday: 0, decidedAt: AT }) },
     { label: 'PREPARE (천장이 공개보다 높다)',
       d: planStageDecision({
         kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
@@ -1431,7 +1464,9 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     && /stock\.queueCandidates/.test(runnerCode) && /stock\.publishedToday/.test(runnerCode)
     // 🔴 조립 결과가 판정 함수 둘로 **그대로** 흘러간다 — 러너가 중간에 다시 읽지 않는다
     && /resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/.test(runnerCode)
-    && /planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runnerCode),
+    && /planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runnerCode)
+    // 🔴 (2026-09-29) 증명일 필요 수도 같은 조립 결과(stock.autoTargetsToday)와 consumer env 에서만 나온다
+    && /const proofAutoNeeded = autoFirstNeeded\(proofDay, stock\.autoTargetsToday \?\? 0\)/.test(runnerCode),
     runnerCode.split('\n').filter((l) => l.includes('stock.')).slice(0, 6).join(' | '))
   check('🔴 🔴 **러너 안에 별도 조립이 남아 있지 않다**',
     !/selectAutoTargets\(rows,/.test(runner)
@@ -1463,7 +1498,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
    *    아니라 **이 줄**이 먼저 빨개진다 — 사본 비교가 아니라 실제 소비 경로다.
    */
   check('🔴 🔴 **러너가 planPublishBatch 를 부르고 그 결과만 쓴다**',
-    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runner)
+    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runner)
     && /const assignOf = plan\.assignOf/.test(runner)
     && /const freshOrdered = plan\.freshOrdered/.test(runner)
     && /const brokenRecovery = plan\.brokenRecovery/.test(runner)

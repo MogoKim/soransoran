@@ -101,7 +101,7 @@ async function wake(now: Date, stage: string, env: Record<string, string>): Prom
   if (row === null) return null
   const plan = await planOf(row.id)
   const r = await publishOriginalPostTx(prisma, {
-    queueId: row.id, publishedToday: outside, mode: { kind: 'scheduled', releaseStage: stage, planned: plan }, autoReadyEnv: env,
+    queueId: row.id, publishedToday: outside, mode: { kind: 'scheduled', releaseStage: stage, planned: plan, unattended: false }, autoReadyEnv: env,
   }, { now: () => now })
   return { r, id: row.id }
 }

@@ -84,8 +84,21 @@ export type PlannedTarget = {
   queueId: string; status: string; createdPostId: string | null; updatedAt: Date; decidedBy: string | null
 }
 
+/**
+ * 🔴 **무인 러너 발행 표식** (2026-09-29 P0 · 단계 승격 운영 증거).
+ *    `PersonaActivityLog.decidedBy` 에 남는다. 단계 controller 는 "그날 예약 발행 = 하루 목표" 를
+ *    **이 표식이 있는 발행만으로** 센다. 앞판은 예약·수동 단건이 모두 `operator` 여서
+ *    무인 러너가 낸 글과 사람이 부른 글을 가를 수 없었다(증명 없음 = 승격 없음).
+ *    🔴 이 값을 읽는 판정은 `stage-evidence-repo` 하나다 — 일일 상한 계산은 decidedBy 를 보지 않는다.
+ */
+export const UNATTENDED_PUBLISH_DECIDED_BY = 'runner:unattended'
+
+/**
+ * 🔴 `scheduled.unattended` — 예약(launchd · GitHub 예약)이 부른 회차인가. 러너의 `--trigger` 가 정한다.
+ *    **필수** 다(판별 유니온 규칙 — optional boolean 게이트를 두지 않는다). 참일 때만 무인 표식을 남긴다.
+ */
 export type PublishMode =
-  | { kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget }
+  | { kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget; unattended: boolean }
   | { kind: 'manual-live'; dailyCap: number; releaseStage?: ReleaseStage }
 
 /**
@@ -411,7 +424,9 @@ async function publishAttempt(
           kind: 'post',
           targetId: post.id,
           gateStatus: row.gateVerdict,
-          decidedBy: 'operator',
+          // 🔴 무인 예약 회차만 표식을 남긴다 — 사람이 부른 회차·수동 단건은 그대로 `operator`
+          decidedBy: input.mode.kind === 'scheduled' && input.mode.unattended === true
+            ? UNATTENDED_PUBLISH_DECIDED_BY : 'operator',
           publishedAt: txNow,
           /**
            * 🔴 **슬롯 소비 기록의 시각도 트랜잭션 시계다** (2026-09-26). 오늘 발행 수는

@@ -71,7 +71,7 @@ const planOf = async (id: string): Promise<PlannedTarget> => {
  */
 const scheduled = async (id: string, at: Date, stage: string, env: Record<string, string>, outsideSeen = 0, plan?: PlannedTarget): Promise<PublishResult> =>
   publishOriginalPostTx(prisma, {
-    queueId: id, publishedToday: outsideSeen, mode: { kind: 'scheduled', releaseStage: stage, planned: plan ?? await planOf(id) }, autoReadyEnv: env,
+    queueId: id, publishedToday: outsideSeen, mode: { kind: 'scheduled', releaseStage: stage, planned: plan ?? await planOf(id), unattended: false }, autoReadyEnv: env,
   }, { now: () => at })
 const posts = () => prisma.post.count()
 const logs = () => prisma.personaActivityLog.count({ where: { kind: 'post' } })

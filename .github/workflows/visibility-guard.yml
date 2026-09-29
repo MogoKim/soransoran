@@ -821,7 +821,11 @@ jobs:
       #       언제나 heavy 로 판정돼 이 step 이 돈다. 매일 main 예약 실행도 heavy 다.
       - name: 자동 단계 사다리 (승인 천장 · 전날 결정 · 저장 계약)
         if: steps.scope.outputs.heavy == 'true'
-        run: npm run stage:ladder-check
+        run: |
+          npm run stage:ladder-check
+          # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
+          #    첫 댓글 보장/추가 댓글 상한 분리 · 감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다
+          npm run stage:evidence-check
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
       - name: 무인 운영 루프 (readiness 반례 · controller fail-closed · consumer · 템플릿)
@@ -862,6 +866,12 @@ jobs:
           npm run stage:db-check
           # 🔴 controller·consumer 실제 진입점 — 같은 격리 DB · 가짜 HOME (운영 env·장부 0)
           npm run ops:loop-db-check
+          # 🔴 승격 운영 증거 실제 수집 — 실제 행 6조건 · 행 하나씩 비튼 반례 · 발행 트랜잭션 무인 표식 ·
+          #    controller 진입점(dry-run · 가짜 HOME). launchd 가 없는 러너에서는 "러너 모름 → 재시험" 을 본다
+          npm run stage:evidence-db-check
+          # 🔴 단계 증명일 — 목표 슬롯을 자동 target 이 먼저(사람 복구 행 포함) · 재고 부족이면 혼합 발행 + 증거 FAIL ·
+          #    비시험일은 기존 공정성. 실제 로더 · 계획 · 예약 무인 발행 트랜잭션
+          npm run stage:proof-day-db-check
 
       # 🔴 자동 READY v2 — 순수 계약 (DB 0 · 네트워크 0 · LLM 0).
       #    semanticReview fail-closed · 증거 복원 6분류 · 계약 값 불변 · 도장 hash ·

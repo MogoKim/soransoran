@@ -209,7 +209,7 @@ const prevOf = (release: ReleaseStage, state: 'SUSTAIN' | 'HOLD' | 'TRIAL', ceil
     reasons: [], blocks: [], dayPinned: false, supply: null,
     decidedAt: '2026-09-26T22:10:00.000Z', contractVersion: 'stage-decision-v4', decidedBy: 'controller',
     transition: state === 'SUSTAIN' ? { kind: 'SUSTAIN', from, to: release }
-      : state === 'TRIAL' ? { kind: 'TRIAL', trialBase: from, previousKstDate: '2026-09-26', target: release } : null,
+      : state === 'TRIAL' ? { kind: 'TRIAL', trialBase: from, previousKstDate: '2026-09-26', target: release, basis: from === 'd1' ? 'FLOOR' : 'PASS' } : null,
   }
   const v = validateStoredDecision({ row, expectKstDate: '2026-09-27' })
   if (!v.ok) throw new Error(`fixture 전날 결정이 깨졌다 — ${v.reason}`)
