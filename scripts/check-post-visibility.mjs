@@ -67,12 +67,12 @@ const HOME = {
 }
 
 /**
- * /best 는 자기 순위 키로 줄 세운 모아보기다 — 1쪽 현재 베스트, 2쪽부터 과거 기록.
+ * /best 는 입성 기준(W ≥ 2)을 처음 넘은 글을 최초 입성 최신순으로 쌓는 모아보기다.
  *
  * 홈 운영 큐레이션(PIN·HIDE)이 여기까지 따라오면 "베스트" 가 점수가 아니라
  * 운영자 선택이 된다. 실제로 그런 회귀가 났다 — 순수 점수 꼴찌 글을 홈에
  * 고정했더니 /best 2 번에 올라왔다.
- * 지금은 점수도 갈라졌다 — /best 는 queries/best.ts loadBestPage(best-ranking.ts 순위 키)를,
+ * 지금은 기준도 갈라졌다 — /best 는 queries/best.ts loadBestPage(best-ranking.ts 입성 기준)를,
  * 홈은 popularity.ts 점수를 쓴다. 홈 점수 함수가 여기로 새면 두 화면이 다시 섞인다.
  */
 const BEST = {
@@ -213,7 +213,7 @@ if (!existsSync(join(ROOT, GATE))) {
     if (!BEST.mustMatch.test(code)) {
       errors.push(
         `${BEST.file} 가 loadBestPage 를 쓰지 않는다. ` +
-          '베스트는 자기 순위 키(현재 12개)와 과거 기록 목록이다.',
+          '베스트는 입성 기록을 최초 입성 최신순으로 보여주는 목록이다.',
       )
     }
     const leak = code.match(BEST.mustNotMatch)

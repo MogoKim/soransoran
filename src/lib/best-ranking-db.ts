@@ -6,43 +6,43 @@ import {
   isDiscoveryEligible,
   isPromotionWriteBlocked,
   pickPostVisibility,
+  type PostVisibilityInput,
 } from '@/lib/post-visibility'
 import { REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import {
-  BEST_CURRENT_SIZE,
   BEST_POLICY_VERSION,
   BEST_RECORDED_BY,
-  bestRankScore,
-  hasValidReaction,
+  BEST_V2_UNUSED_COLUMNS,
+  meetsBestEntry,
   reactionWeight,
-  sameRankScore,
+  type BestRecordedBy,
   type RealReactions,
 } from '@/lib/best-ranking'
 
 /**
- * /best 순위 입력과 과거 기록을 쓰는 곳 — 반응·노출이 바뀌는 쓰기 경로가 **자기 트랜잭션 안에서** 부른다.
+ * /best 자격 동기화 — 반응·노출이 바뀌는 쓰기 경로가 **자기 트랜잭션 안에서** 부른다.
  *
  * 🔴 페이지 조회(GET)는 여기 어떤 함수도 부르지 않는다. 읽기는 queries/best.ts 다.
- * 🔴 `prisma` 를 import 하지 않는다. 호출부의 tx 를 받는다 — 원본 반응 저장 · 순위 키 갱신 ·
- *    기록이 한 트랜잭션이라 하나만 남는 부분 실패가 없다.
+ * 🔴 `prisma` 를 import 하지 않는다. 호출부의 tx 를 받는다 — 원본 반응 저장 · 가중치 갱신 ·
+ *    최초 입성 기록이 한 트랜잭션이라 하나만 남는 부분 실패가 없다.
  *
  * ── 쓰기 경로가 부르는 것 ──────────────────────────────────────────
- *   syncBestRanking(tx, postId)   공감·댓글·댓글 숨김/복구·글 삭제/숨김/복구·운영 글 숨김
- *   applyMemberBlock(tx, …)       회원 차단·해제 — 영향 글을 모두 다시 계산한 뒤 기록 판정은 한 번
- *   🔴 쓰기 경로는 recomputePostRanking · recordBestEntries 를 따로 부르지 않는다.
- *      둘 중 하나만 부르면 "점수는 바뀌었는데 12위 진입이 기록되지 않는" 경로가 생긴다.
- *      `npm run check:best` 가 호출부를 센다.
+ *   syncBestEligibility(tx, postId)   공감·댓글·댓글 숨김/복구·글 삭제/숨김/복구·운영 글 숨김
+ *   applyMemberBlock(tx, …)           회원 차단·해제 — 영향 글마다 syncBestEligibility
+ *   🔴 **바뀐 글 하나만 본다.** 전역 순위를 읽지 않는다 — 입성은 그 글의 W 와 공개 자격으로만 정해진다.
+ *      (best-v1 은 사건마다 전역 12개를 다시 읽었다. 그 로직은 지웠다)
  *
- * ── 기록(BestSelection)은 언제 생기는가 ─────────────────────────────
- *   사건마다 **전역 12개를 다시 보고**, 실반응이 있는데 아직 기록이 없는 글을 기록한다.
- *   사건이 난 글만 보지 않는다 — 위 글이 숨겨지거나 공감이 취소되면 13위가 끌려 올라오는데,
- *   그 글에는 사건이 없다.
- *   🔴 순위 키는 "지금" 이 들어가지 않는 고정값이다(best-ranking.ts). 시간이 흘러도 순서가
- *      바뀌지 않으므로, 순서가 바뀌는 순간은 언제나 위 쓰기 경로 중 하나다.
- *   🔴 도입 backfill(backfillBestRanking)이 활성화 직전의 12개를 초기 기록으로 맞춘다.
+ * ── 기록(BestSelection) ─────────────────────────────────────────────
+ *   W ≥ 2 이고 공개 자격이 있는 첫 순간 한 행을 만든다(firstEnteredAt = 그 트랜잭션 시각).
+ *   🔴 best-v2 행은 지우거나 고치지 않는다 — 반응 감소·차단·숨김 뒤에도 그대로다. 숨김·삭제 글은
+ *      읽기(queries/best.ts)가 목록·개수에서 뺄 뿐이라, 되살리면 원래 자리로 돌아온다.
+ *   🔴 이전 정책(best-v1) 행은 그 글이 best-v2 자격을 확인받는 순간 **같은 행을 best-v2 로 전환**한다
+ *      (recordBestEntry). 자격이 없으면 지우지도 고치지도 않고, 목록이 policyVersion 으로 숨긴다.
+ *   🔴 글당 한 행 — postId PK + skipDuplicates. 동시 요청이 함께 기준을 넘어도 두 번째는 0 건이고,
+ *      사용자의 공감·댓글 요청을 실패시키지 않는다.
  *
- * 🔴 잠금 순서: 글 행을 postId 순으로 잠그고(lockPost) → BestSelection 을 postId 순으로 쓴다.
- *    모든 호출부가 이 순서라 두 트랜잭션이 서로를 기다리는 고리가 생기지 않는다.
+ * 🔴 잠금 순서: 글 행을 잠그고(lockPost) → 그 글의 BestSelection 을 쓴다. 여러 글을 다루는 호출부
+ *    (차단·backfill)는 postId 순으로 하나씩 — 두 트랜잭션이 서로를 기다리는 고리가 생기지 않는다.
  */
 
 type Db = Prisma.TransactionClient
@@ -50,26 +50,25 @@ type Db = Prisma.TransactionClient
 const COMMUNITY_BOARD_TYPES = COMMUNITY_BOARDS.map((b) => b.type) as BoardType[]
 
 /**
- * 전역 베스트 후보 — 보는 사람과 무관한 공개 적격 글.
+ * 베스트 공개 자격 — 보는 사람과 무관하다. 목록(queries/best.ts)과 입성 판정이 같은 조건을 쓴다.
  * 🔴 차단 필터가 없다. 누가 누구를 차단했든 기록은 하나다. 화면 필터는 queries/best.ts 가 얹는다.
  */
-export const BEST_GLOBAL_WHERE = {
+export const BEST_PUBLIC_WHERE = {
   boardType: { in: COMMUNITY_BOARD_TYPES },
   ...DISCOVERY_ELIGIBLE_WHERE,
 } satisfies Prisma.PostWhereInput
 
-/** 순위 정렬 — 목록·기록이 같은 것을 쓴다. id 가 마지막 동점을 가른다 */
-export const BEST_RANK_ORDER = [
-  { bestRankScore: 'desc' as const },
-  { id: 'desc' as const },
-]
+/** BEST_PUBLIC_WHERE 의 행 판정판 — 잠근 행으로 입성 자격을 본다 */
+export function isBestPublic(row: PostVisibilityInput & { boardType: BoardType }): boolean {
+  return COMMUNITY_BOARD_TYPES.includes(row.boardType) && isDiscoveryEligible(pickPostVisibility(row))
+}
 
 /**
  * /best 가 "실회원" 으로 세는 사람 — 공감과 회원 댓글이 **같은 조건**을 쓴다.
  *
  * = 어드민 정본 REAL_MEMBER_WHERE(카카오 계정 · Persona 아님 · 운영 작성자 아님) + 운영 차단 아님.
  * 🔴 REAL_MEMBER_WHERE 자체를 고치지 않는다. 어드민의 "실회원 수" 는 차단된 사람도 센다 —
- *    그쪽의 뜻을 바꾸지 않고 랭킹 전용 조건을 여기서 덧붙인다.
+ *    그쪽의 뜻을 바꾸지 않고 베스트 전용 조건을 여기서 덧붙인다.
  */
 export const BEST_REAL_MEMBER_WHERE = {
   ...REAL_MEMBER_WHERE,
@@ -122,15 +121,15 @@ export async function countRealReactions(
 const LOCK_ATTEMPTS = 5
 
 /**
- * 글 행을 잠그고 순위 계산에 필요한 값을 읽는다.
+ * 글 행을 잠그고 자격 판정에 필요한 값을 읽는다.
  *
  * 🔴 UPDATE 로 잠근다(값은 그대로). 같은 글에 공감·댓글 트랜잭션이 동시에 오면
  *    뒤 트랜잭션이 여기서 기다렸다가 앞 트랜잭션이 커밋한 행까지 센다 —
- *    서로 상대의 반응을 못 본 채 절대값을 덮어쓰는 일이 없다.
+ *    둘 다 W=1 을 보고 아무도 기록하지 않는 일이 없다(합치면 W=2 인데도).
  *    Prisma 에는 SELECT … FOR UPDATE 가 없고 raw SQL 은 쓰지 않는다.
  *
  * 🔴 **Post.updatedAt 을 움직이지 않는다.** 이 값은 sitemap lastModified 와 어드민 "수정" 시각 —
- *    글 내용이 바뀐 때다. 순위 메타데이터 갱신은 글 수정이 아니다.
+ *    글 내용이 바뀐 때다. 가중치 갱신은 글 수정이 아니다.
  *    그래서 읽은 updatedAt 을 **그대로 다시 쓰되, 그 값이 아직 그대로일 때만** 잠근다.
  *    읽은 뒤 잠그기 전에 다른 쓰기(글 수정·조회수·공감 수)가 커밋되면 조건이 어긋나 0 건이 되고,
  *    다시 읽어 새 값으로 잠근다 — 남의 수정 시각을 과거 값으로 되돌리지 않는다(격리 DB 반례).
@@ -140,10 +139,7 @@ async function lockPost(db: Db, postId: string) {
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
     const seen = await db.post.findUnique({
       where: { id: postId },
-      select: {
-        id: true, authorId: true, createdAt: true, updatedAt: true,
-        bestRankScore: true, bestReactionWeight: true,
-      },
+      select: { id: true, authorId: true, boardType: true, updatedAt: true, bestReactionWeight: true, ...POST_VISIBILITY_SELECT },
     })
     if (!seen) return null
     const locked = await db.post.updateMany({
@@ -152,124 +148,110 @@ async function lockPost(db: Db, postId: string) {
     })
     if (locked.count === 1) return seen
   }
-  throw new Error(`best-ranking: 글 ${postId} 을 ${LOCK_ATTEMPTS}번 연속 잠그지 못했다(경합)`)
+  throw new Error(`best: 글 ${postId} 을 ${LOCK_ATTEMPTS}번 연속 잠그지 못했다(경합)`)
 }
 
 /**
  * C-4 — 승격이 막힌 글인가. 판정 축은 생성 때 고정되므로 잠그기 전에 읽어도 된다.
  * 🔴 막힌 글에는 잠금(UPDATE)조차 하지 않는다 — "진입 즉시 return".
  */
-async function isBlockedForRanking(db: Db, postId: string): Promise<boolean> {
+async function isBlockedForBest(db: Db, postId: string): Promise<boolean> {
   const row = await db.post.findUnique({ where: { id: postId }, select: POST_VISIBILITY_SELECT })
   return !row || isPromotionWriteBlocked(pickPostVisibility(row))
 }
 
+/** 입성 판정이 기록에 한 일 */
+export type BestEntryChange =
+  | 'created' // 기록이 없던 글 — best-v2 행을 새로 만들었다
+  | 'upgraded' // 이전 정책(best-v1) 행 — 같은 행을 best-v2 로 전환했다
+  | 'none' // 이미 best-v2 행이 있다 — 아무것도 바꾸지 않았다
+
 /**
- * 이 글의 순위 키를 처음부터 다시 계산해 쓴다. 기록은 하지 않는다.
- * 🔴 쓰기 경로는 이것을 직접 부르지 않는다 — syncBestRanking 을 부른다.
- *    이것만 따로 부르는 곳은 둘이다: 회원 차단(글마다 계산한 뒤 기록은 한 번)과
- *    backfill(전부 계산한 뒤 기록은 한 번). 중간 상태의 12개를 기록하지 않기 위해서다.
+ * 입성 기록 — 기준 통과 · 공개 자격이 확인된 뒤에만 부른다(syncBestEligibility).
  *
- * 🔴 C-4: Micro Seed · 첫 인사처럼 승격이 막힌 글은 들어오자마자 돌아간다. 아무것도 쓰지 않는다.
+ *   기록 없음   → best-v2 행 생성(firstEnteredAt = DB 기본값, 이 트랜잭션 시각)
+ *   best-v2 행  → 아무것도 하지 않는다(재등록·상단 복귀 없음)
+ *   이전 정책 행 → **같은 행을 best-v2 로 전환**한다. 입성 시각은 best-v2 자격을 확인한 지금이다 —
+ *                 best-v1 은 "전역 12개에 든 순간" 이라 best-v2 의 "기준을 처음 넘은 순간" 과 뜻이 다르다.
+ *                 deprecated 칼럼은 best-v2 의 "해당 없음" 값으로 맞춘다.
+ *   🔴 이전 정책 행 중 지금 자격이 없는 것(W < 2 · 비공개 · C-4)은 여기 오지 않는다 — 지우지도 고치지도 않고,
+ *      목록(queries/best.ts)이 policyVersion 으로 숨긴다.
+ *   🔴 호출부가 그 글 행을 잠근 채로 부른다(lockPost). 같은 글의 두 트랜잭션은 줄을 서므로 생성·전환은 한 번이다.
+ *      그래도 생성은 skipDuplicates, 전환은 "읽은 정책 판 그대로일 때만" 조건으로 한 번 더 막는다.
  */
-export async function recomputePostRanking(db: Db, postId: string) {
-  if (await isBlockedForRanking(db, postId)) return null
+async function recordBestEntry(db: Db, postId: string, recordedBy: BestRecordedBy): Promise<BestEntryChange> {
+  const existing = await db.bestSelection.findUnique({ where: { postId }, select: { policyVersion: true } })
+  if (!existing) {
+    const r = await db.bestSelection.createMany({
+      data: [{ postId, policyVersion: BEST_POLICY_VERSION, recordedBy, ...BEST_V2_UNUSED_COLUMNS }],
+      skipDuplicates: true,
+    })
+    return r.count === 1 ? 'created' : 'none'
+  }
+  if (existing.policyVersion === BEST_POLICY_VERSION) return 'none'
+  const r = await db.bestSelection.updateMany({
+    where: { postId, policyVersion: existing.policyVersion },
+    data: { policyVersion: BEST_POLICY_VERSION, recordedBy, firstEnteredAt: new Date(), ...BEST_V2_UNUSED_COLUMNS },
+  })
+  return r.count === 1 ? 'upgraded' : 'none'
+}
+
+export type BestSyncResult = {
+  /** 지금의 실반응 가중치 */
+  weight: number
+  /** 이 호출이 best-v2 입성을 만들었는가(신규 생성 또는 이전 정책 행 전환) */
+  entered: boolean
+  change: BestEntryChange
+}
+
+/**
+ * 쓰기 경로의 단일 진입점 — 이 글의 W 를 다시 세어 저장하고, 기준을 처음 넘었으면 입성을 기록한다.
+ *
+ * 🔴 원본 변경(공감·댓글·글 상태)과 **같은 트랜잭션, 원본 변경 뒤에** 부른다.
+ *    그래야 방금 바뀐 반응 수와 방금 바뀐 공개 상태로 판정한다.
+ * 🔴 숨겨지거나 지워진 글은 W 만 맞추고 기록하지 않는다 — 공개 자격이 없다.
+ *    되살린 글이 그때 W ≥ 2 이고 아직 기록이 없다면 되살린 순간 입성한다.
+ * 🔴 C-4 글이면 아무것도 쓰지 않고 null 이다.
+ */
+export async function syncBestEligibility(
+  db: Db,
+  postId: string,
+  recordedBy: BestRecordedBy = BEST_RECORDED_BY.event,
+): Promise<BestSyncResult | null> {
+  if (await isBlockedForBest(db, postId)) return null
   const post = await lockPost(db, postId)
   if (!post) return null
   const weight = reactionWeight(await countRealReactions(db, post))
-  const score = bestRankScore({ createdAt: post.createdAt, weight })
-  // 값이 그대로면 쓰지 않는다. 쓸 때도 updatedAt 은 잠글 때 읽은 값 그대로다(lockPost 주석).
-  // 🔴 점수는 `!==` 로 비교하지 않는다 — 소수 점수는 DB 를 한 번 거치면 마지막 자리가 달라진다
-  //    (실측 2.4e-7초). 그러면 매번 "바뀜" 으로 읽혀 쓰지 않아도 될 UPDATE 가 돈다.
-  if (weight !== post.bestReactionWeight || !sameRankScore(score, post.bestRankScore)) {
+  if (weight !== post.bestReactionWeight) {
+    // 쓸 때도 updatedAt 은 잠글 때 읽은 값 그대로다(lockPost 주석).
     await db.post.update({
       where: { id: postId },
-      data: { bestRankScore: score, bestReactionWeight: weight, updatedAt: post.updatedAt },
+      data: { bestReactionWeight: weight, updatedAt: post.updatedAt },
       select: { id: true },
     })
   }
-  return { weight, score }
+  const change: BestEntryChange = meetsBestEntry(weight) && isBestPublic(post)
+    ? await recordBestEntry(db, postId, recordedBy)
+    : 'none'
+  return { weight, entered: change !== 'none', change }
 }
 
 /**
- * 지금 전역 12개 중 실반응이 있고 아직 기록되지 않은 글을 기록한다. 이미 있으면 최고 순위만 올린다.
- *
- * 🔴 멱등이다. 몇 번을 불러도, 동시에 불러도 글당 한 행이다(PK + skipDuplicates).
- *    중복 충돌은 오류가 아니다 — 사용자의 공감·댓글 요청을 실패시키지 않는다.
- * 🔴 BestSelection 을 postId 순으로 쓴다(파일 머리 주석의 잠금 순서).
- */
-export async function recordBestEntries(
-  db: Db,
-  recordedBy: (typeof BEST_RECORDED_BY)[keyof typeof BEST_RECORDED_BY] = BEST_RECORDED_BY.event,
-): Promise<{ created: number; peakRaised: number }> {
-  const top = await db.post.findMany({
-    where: BEST_GLOBAL_WHERE,
-    orderBy: BEST_RANK_ORDER,
-    take: BEST_CURRENT_SIZE,
-    select: { id: true, bestRankScore: true, bestReactionWeight: true },
-  })
-  const entries = top
-    .map((p, i) => ({ ...p, rank: i + 1 }))
-    .filter((p) => hasValidReaction(p.bestReactionWeight))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-  if (entries.length === 0) return { created: 0, peakRaised: 0 }
-
-  const created = await db.bestSelection.createMany({
-    data: entries.map((e) => ({
-      postId: e.id,
-      scoreAtEntry: e.bestRankScore,
-      peakRank: e.rank,
-      policyVersion: BEST_POLICY_VERSION,
-      recordedBy,
-    })),
-    skipDuplicates: true,
-  })
-
-  let peakRaised = 0
-  for (const e of entries) {
-    const raised = await db.bestSelection.updateMany({
-      where: { postId: e.id, peakRank: { gt: e.rank } },
-      data: { peakRank: e.rank },
-    })
-    peakRaised += raised.count
-  }
-  return { created: created.count, peakRaised }
-}
-
-/**
- * 쓰기 경로의 단일 진입점 — 이 글의 순위 키를 다시 계산하고, 전역 12개를 보고 기록한다.
- *
- * 🔴 원본 변경(공감·댓글·글 상태)과 **같은 트랜잭션에서, 원본 변경 뒤에** 부른다.
- *    그래야 기록 판정이 방금 바뀐 12개를 본다.
- * 🔴 글이 숨겨지거나 지워진 뒤에 불러도 된다 — 그 글은 12개 후보에서 빠지고(BEST_GLOBAL_WHERE),
- *    대신 끌려 올라온 글이 기록된다. 되살린 글은 키를 다시 맞춘 뒤 판정한다.
- * 🔴 C-4 글이면 순위 키는 건드리지 않지만 기록 판정은 한다 — 그 글이 아니라 전역 12개를 보는 일이다.
- */
-export async function syncBestRanking(db: Db, postId: string) {
-  const ranking = await recomputePostRanking(db, postId)
-  const recorded = await recordBestEntries(db)
-  return { ranking, recorded }
-}
-
-/**
- * 회원 차단·해제 — 차단 여부를 바꾸고, 그 회원이 반응한 글의 순위 키를 다시 계산한다.
+ * 회원 차단·해제 — 차단 여부를 바꾸고, 그 회원이 반응한 글의 자격을 다시 본다.
  *
  * 🔴 차단 여부는 실회원 판정의 입력이다(BEST_REAL_MEMBER_WHERE). 바꾸기만 하고 다시 세지 않으면
- *    차단 회원의 공감·댓글이 다른 반응이 생길 때까지 순위에 남는다(해제도 반대로 복구되지 않는다).
- * 🔴 호출부 트랜잭션 안에서 부른다 — 차단과 재계산이 함께 커밋되거나 함께 되돌아간다.
- * 🔴 영향 글만 센다: 그 회원의 공감 글 ∪ MEMBER 댓글 글. 한 글은 한 번만(공감+댓글이어도).
- *    전체 글을 다시 계산하지 않는다. 동시 Promise 를 만들지 않고 postId 순으로 하나씩 —
+ *    차단 회원의 공감·댓글이 다른 반응이 생길 때까지 W 에 남는다(해제도 반대로 복구되지 않는다).
+ * 🔴 호출부 트랜잭션 안에서 부른다 — 차단과 재계산·입성이 함께 커밋되거나 함께 되돌아간다.
+ * 🔴 영향 글만 본다: 그 회원의 공감 글 ∪ MEMBER 댓글 글. 한 글은 한 번만(공감+댓글이어도).
+ *    전체 글을 다시 보지 않는다. 동시 Promise 를 만들지 않고 postId 순으로 하나씩 —
  *    글 행 잠금을 늘 같은 순서로 잡아 다른 트랜잭션과 고리가 생기지 않는다.
- * 🔴 기록 판정은 **모든 영향 글을 다시 계산한 뒤 한 번**이다. 글마다 판정하면 절반만 계산된
- *    12개를 보고 기록한다 — 해제 중간에 아직 복구 안 된 글 대신 다른 글이 기록되는 식이다.
- * 🔴 과거 기록(BestSelection)은 지우지 않는다. 작성자 본인 제외·같은 회원 한 번 규칙은
- *    countRealReactions 가 그대로 지킨다.
+ * 🔴 기존 기록은 지우지 않는다. 해제로 W 가 2 이상이 된 글은 그 순간 입성한다.
  */
 export async function applyMemberBlock(
   db: Db,
   userId: string,
   blocked: boolean,
-): Promise<{ affectedPosts: number; recorded: { created: number; peakRaised: number } }> {
+): Promise<{ affectedPosts: number; entered: number }> {
   await db.user.update({ where: { id: userId }, data: { isBlocked: blocked }, select: { id: true } })
   const [liked, commented] = await Promise.all([
     db.like.findMany({ where: { userId }, distinct: ['postId'], select: { postId: true } }),
@@ -280,45 +262,70 @@ export async function applyMemberBlock(
     }),
   ])
   const postIds = [...new Set([...liked, ...commented].map((r) => r.postId))].sort()
-  for (const postId of postIds) await recomputePostRanking(db, postId)
-  const recorded = await recordBestEntries(db)
-  return { affectedPosts: postIds.length, recorded }
+  let entered = 0
+  for (const postId of postIds) {
+    if ((await syncBestEligibility(db, postId))?.entered) entered += 1
+  }
+  return { affectedPosts: postIds.length, entered }
 }
 
-export type BackfillSummary = {
+/** backfill 이 글마다 내리는 판정 */
+export type BestBackfillVerdict =
+  | 'enter' // 기록 없음 · 기준 통과 · 공개 → best-v2 행을 새로 만든다
+  | 'legacy-upgrade' // 이전 정책(best-v1) 행 · 지금 기준 통과 · 공개 → 같은 행을 best-v2 로 전환한다
+  | 'best-v2-recorded' // 이미 best-v2 행 — 건드리지 않는다
+  | 'legacy-ineligible' // 이전 정책 행 · 지금 best-v2 자격 없음(W < 2 · 비공개 · C-4) — 지우지도 고치지도 않는다
+  | 'below' // 기록 없음 · W < 2
+  | 'not-public' // 기록 없음 · 숨김·삭제·게시판 밖 — W 가 넘어도 입성하지 않는다
+  | 'c4' // 기록 없음 · 승격 차단 글 — 계산하지 않는다
+
+export const BEST_BACKFILL_VERDICTS: readonly BestBackfillVerdict[] = [
+  'enter', 'legacy-upgrade', 'best-v2-recorded', 'legacy-ineligible', 'below', 'not-public', 'c4',
+]
+
+export type BestBackfillSummary = {
   scanned: number
-  /** C-4 로 계산하지 않은 글 */
-  blocked: number
-  /** 순위 키·가중치가 식과 달랐던 글 */
-  changed: number
-  /** 실제로 다시 쓴 글(apply 일 때만) */
-  written: number
-  /** 식으로 계산한 전역 12개 — 기록 후보 판단의 근거 */
-  top: { id: string; title: string; boardType: BoardType; score: number; weight: number; recorded: boolean }[]
-  /** 새로 만들 기록 수(apply 전 판단) */
-  toCreate: number
+  /** 저장된 W 가 원본 행과 달랐던 글(C-4 제외) */
+  weightChanged: number
+  /** 판정별 글 수 */
+  verdicts: Record<BestBackfillVerdict, number>
+  /** W ≥ 1 이거나 기록이 있는 글의 판정 — dry-run 출력의 근거. reason 은 legacy-ineligible 의 사유 */
+  rows: {
+    id: string; title: string; boardType: BoardType; status: string; weight: number
+    verdict: BestBackfillVerdict; policyVersion: string | null; reason?: string
+  }[]
+  /** apply 일 때 실제로 쓴 수 */
+  weightWritten: number
   created: number
-  peakRaised: number
+  upgraded: number
 }
 
 /**
- * 도입 backfill — 모든 글의 순위 키를 식으로 다시 계산하고, 끝난 뒤 **한 번** 지금 12개 중
- * 실반응 글만 기록한다(recordedBy='backfill', 그 시각이 최초 진입 시각).
+ * 도입 backfill — 모든 글의 W 를 원본 행으로 다시 세고, 기준을 넘은 공개 글을 best-v2 로 기록한다
+ * (기록 없음 → 생성 · 이전 정책 행 → 전환). recordedBy='backfill', 그 시각이 입성 시각이다.
  *
  * 🔴 기본은 dry-run 이다. apply 가 아니면 아무것도 쓰지 않는다.
+ * 🔴 apply 가 쓰는 것은 enter 생성 · legacy-upgrade 전환 · 어긋난 W 저장뿐이다. 행 삭제는 0 이다.
  * 🔴 멱등이다 — 두 번째 apply 는 쓰기 0 이다.
- * 🔴 과거 12위 진입을 재현하지 않는다(취소된 공감은 행이 없다). 추정 기록을 만들지 않는다.
- * 🔴 쓰기는 쓰기 경로와 같은 recomputePostRanking 이다 — 글 행을 잠그고 그 순간의 원본으로 계산한다.
+ * 🔴 쓰기는 쓰기 경로와 같은 syncBestEligibility 다 — 글 행을 잠그고 그 순간의 원본으로 판정한다.
  *    글마다 짧은 트랜잭션이라 운영 중에 돌려도 한 글 이상 오래 잡지 않는다.
  */
-export async function backfillBestRanking(
+export async function backfillBestEligibility(
   db: PrismaClient,
   { apply, batchSize = 200 }: { apply: boolean; batchSize?: number },
-): Promise<BackfillSummary> {
-  const sum: BackfillSummary = {
-    scanned: 0, blocked: 0, changed: 0, written: 0, top: [], toCreate: 0, created: 0, peakRaised: 0,
+): Promise<BestBackfillSummary> {
+  const sum: BestBackfillSummary = {
+    scanned: 0,
+    weightChanged: 0,
+    verdicts: Object.fromEntries(BEST_BACKFILL_VERDICTS.map((v) => [v, 0])) as Record<BestBackfillVerdict, number>,
+    rows: [],
+    weightWritten: 0,
+    created: 0,
+    upgraded: 0,
   }
-  const keep: Omit<BackfillSummary['top'][number], 'recorded'>[] = []
+  const existing = new Map(
+    (await db.bestSelection.findMany({ select: { postId: true, policyVersion: true } })).map((r) => [r.postId, r.policyVersion]),
+  )
   let cursor: string | undefined
   for (;;) {
     const rows = await db.post.findMany({
@@ -326,45 +333,46 @@ export async function backfillBestRanking(
       ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
       orderBy: { id: 'asc' },
       select: {
-        id: true, title: true, boardType: true, authorId: true, createdAt: true,
-        bestRankScore: true, bestReactionWeight: true, ...POST_VISIBILITY_SELECT,
+        id: true, title: true, boardType: true, authorId: true, bestReactionWeight: true, ...POST_VISIBILITY_SELECT,
       },
     })
     if (rows.length === 0) break
     cursor = rows[rows.length - 1].id
     for (const row of rows) {
       sum.scanned += 1
-      const vis = pickPostVisibility(row)
-      if (isPromotionWriteBlocked(vis)) {
-        sum.blocked += 1
+      const policy = existing.get(row.id) ?? null
+      const legacy = policy !== null && policy !== BEST_POLICY_VERSION
+      const push = (verdict: BestBackfillVerdict, weight: number, reason?: string) => {
+        sum.verdicts[verdict] += 1
+        if (weight > 0 || policy !== null) {
+          sum.rows.push({ id: row.id, title: row.title, boardType: row.boardType, status: row.status, weight, verdict, policyVersion: policy, reason })
+        }
+        return verdict
+      }
+      if (isPromotionWriteBlocked(pickPostVisibility(row))) {
+        push(legacy ? 'legacy-ineligible' : policy === BEST_POLICY_VERSION ? 'best-v2-recorded' : 'c4', row.bestReactionWeight, legacy ? 'C-4 승격 차단 글' : undefined)
         continue
       }
       const weight = reactionWeight(await countRealReactions(db, row))
-      const score = bestRankScore({ createdAt: row.createdAt, weight })
-      if (weight !== row.bestReactionWeight || !sameRankScore(score, row.bestRankScore)) {
-        sum.changed += 1
-        if (apply) {
-          await db.$transaction((tx) => recomputePostRanking(tx, row.id))
-          sum.written += 1
-        }
-      }
-      if (isDiscoveryEligible(vis) && COMMUNITY_BOARD_TYPES.includes(row.boardType)) {
-        keep.push({ id: row.id, title: row.title, boardType: row.boardType, score, weight })
-        keep.sort((a, b) => b.score - a.score || (a.id < b.id ? 1 : -1))
-        if (keep.length > BEST_CURRENT_SIZE) keep.pop()
+      const weightDiffers = weight !== row.bestReactionWeight
+      if (weightDiffers) sum.weightChanged += 1
+      const eligible = meetsBestEntry(weight) && isBestPublic(row)
+      const verdict = policy === BEST_POLICY_VERSION
+        ? push('best-v2-recorded', weight)
+        : legacy
+          ? eligible
+            ? push('legacy-upgrade', weight)
+            : push('legacy-ineligible', weight, !meetsBestEntry(weight) ? 'W < 2' : '비공개(숨김·삭제·게시판 밖)')
+          : eligible
+            ? push('enter', weight)
+            : push(!meetsBestEntry(weight) ? 'below' : 'not-public', weight)
+      if (apply && (weightDiffers || verdict === 'enter' || verdict === 'legacy-upgrade')) {
+        const r = await db.$transaction((tx) => syncBestEligibility(tx, row.id, BEST_RECORDED_BY.backfill))
+        if (weightDiffers) sum.weightWritten += 1
+        if (r?.change === 'created') sum.created += 1
+        if (r?.change === 'upgraded') sum.upgraded += 1
       }
     }
-  }
-  const recorded = new Set(
-    (await db.bestSelection.findMany({ where: { postId: { in: keep.map((t) => t.id) } }, select: { postId: true } }))
-      .map((r) => r.postId),
-  )
-  sum.top = keep.map((t) => ({ ...t, recorded: recorded.has(t.id) }))
-  sum.toCreate = sum.top.filter((t) => hasValidReaction(t.weight) && !t.recorded).length
-  if (apply) {
-    const r = await db.$transaction((tx) => recordBestEntries(tx, BEST_RECORDED_BY.backfill))
-    sum.created = r.created
-    sum.peakRaised = r.peakRaised
   }
   return sum
 }

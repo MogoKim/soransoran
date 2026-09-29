@@ -32,14 +32,15 @@ export function generateMetadata({ searchParams }: { searchParams: BestSearchPar
 }
 
 /**
- * 베스트 — 1쪽은 지금 베스트 12개(순위 표시), 2쪽부터는 지난 베스트 기록(순위 없음).
+ * 베스트 — 유효 반응 기준(W ≥ 2)을 처음 넘은 글을 최초 입성 최신순으로 12개씩, 끝까지.
  *
- * 순위 식은 src/lib/best-ranking.ts, 읽기는 src/lib/queries/best.ts 다.
+ * 입성 기준은 src/lib/best-ranking.ts, 읽기는 src/lib/queries/best.ts 다.
+ * 🔴 모든 쪽이 같은 목록이다 — 순위 숫자도 "현재/지난" 구분도 없다. 입성 순서이지 인기 순위가 아니다.
  * 🔴 홈 "지금 뜨는 이야기" 와는 공개 자격(DISCOVERY_ELIGIBLE_WHERE · 차단 필터)만 공유한다.
  *    점수·후보·개수·정렬·기록은 따로 둔다 — 홈은 홈의 함수(getHomePopularPosts)가 있고,
  *    홈 운영 큐레이션(PIN·HIDE)은 여기로 따라오지 않는다.
  * 🔴 이 화면은 읽기만 한다. 기록은 공감·댓글·노출 변경이 일어나는 쓰기 경로가 남긴다
- *    (best-ranking-db.ts syncBestRanking).
+ *    (best-ranking-db.ts syncBestEligibility).
  * 🔴 모아보기 영역이다. 글쓰기 진입점(FAB·빈 상태 버튼)을 두지 않는다.
  */
 export default async function BestPage({ searchParams }: { searchParams: BestSearchParams }) {
@@ -48,34 +49,20 @@ export default async function BestPage({ searchParams }: { searchParams: BestSea
   const blockedIds = await getBlockedUserIds()
   const result = await loadBestPage(prisma, { page, blockedIds })
 
-  // 없는 쪽은 빈 200 이 아니라 404 다 — 게시판과 같은 계약. 기록이 0건이면 2쪽부터 404 다.
+  // 없는 쪽은 빈 200 이 아니라 404 다 — 게시판과 같은 계약. 기록이 0건이면 1쪽은 빈 상태, 2쪽부터 404 다.
   if (result.outOfRange) notFound()
-
-  const isCurrent = result.kind === 'current'
 
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 pb-16">
         <ListHeader board={board} />
 
-        {!isCurrent ? (
-          <h2 className="mb-1 mt-2 text-sm font-bold text-content-secondary">지난 베스트</h2>
-        ) : null}
-
         {result.posts.length === 0 ? (
           <EmptyState title={board.emptyTitle} body={board.emptyBody} />
-        ) : isCurrent ? (
-          /* -mx-4 로 바깥 여백을 되돌린다 — 행이 자기 px-4 를 가지므로 그대로 두면 32px 이 된다.
-             구분선은 항목 사이에만 긋는다. */
-          <ol className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
-            {result.posts.map((post, index) => (
-              <li key={post.id}>
-                <PostListItem post={post} rank={index + 1} surface="page" emphasis hideEmptyStats />
-              </li>
-            ))}
-          </ol>
         ) : (
-          /* 🔴 순위 숫자를 붙이지 않는다. 기록은 들어온 순서이지 13위·14위가 아니다. */
+          /* -mx-4 로 바깥 여백을 되돌린다 — 행이 자기 px-4 를 가지므로 그대로 두면 32px 이 된다.
+             구분선은 항목 사이에만 긋는다.
+             🔴 rank 를 넘기지 않는다 — 순번 자리 자체가 그려지지 않는다(PostListItem). */
           <ul className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
             {result.posts.map((post) => (
               <li key={post.id}>
