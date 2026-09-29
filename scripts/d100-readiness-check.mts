@@ -107,9 +107,15 @@ console.log('\n① 🔴 🔴 D3→D100 용량 정본 — 숫자는 코드 한 �
       === Math.ceil(d100.publicPostsPerDay * PLANNED_DETAIL_PER_PUBLIC_POST))
   check('🔴 다음 단계가 이어진다',
     nextStage('d3') === 'd5' && nextStage('d50') === 'd100' && nextStage('d100') === null)
-  check('🔴 🔴 **숫자를 문서에 복사하지 않았다**', (() => {
+  check('🔴 🔴 **문서 단계 표가 코드 정본의 전 행과 같다**', (() => {
     const doc = readFileSync('docs/operations/2026-09-21-d100-goal-canon.md', 'utf-8')
-    return !/1,?400/.test(doc) && !/382/.test(doc)
+      .replaceAll('**', '')
+    return allD100Plans().every((p) => doc.includes(
+      `| ${p.stage.toUpperCase()} | ${p.publicPostsPerDay} | ${p.readyQualifiedRequiredPerDay}`
+      + ` | ${p.detailedSourcesRequiredPerDay} | ${p.personaCanaryFloor}`
+      + ` | ${p.personaSustainedTarget}${p.stage === 'd100' ? '+' : ''}`
+      + ` | ${p.commentMinPerDay}~${p.commentMaxPerDay} |`,
+    ))
   })())
 }
 
