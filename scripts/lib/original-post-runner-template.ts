@@ -39,8 +39,8 @@ import { join } from 'node:path'
 
 import { allStageSlots } from '../../src/lib/scale-workflow-render'
 import {
-  slotLabel, resolveStage, stageRank, RELEASE_STAGES, CAPACITY_ENV, RELEASE_ENV, PROFILES,
-  type ReleaseStage, type Slot,
+  slotLabel, resolveRuntimeStage, stageRank, RUNTIME_STAGES, CAPACITY_ENV, RELEASE_ENV, profileOf,
+  type RuntimeStage, type Slot,
 } from '../../src/lib/scale-profile'
 import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
 import { releaseStageCeiling } from '../../src/lib/scale-runtime'
@@ -288,7 +288,7 @@ export type StageInputs = {
   window: { stage: string | null; from: string | null; until: string | null; activeToday: boolean; note: string | null }
   canary: { stage: string | null; date: string | null; activeToday: boolean }
   /** 🔴 이 env 로 발행 트랜잭션이 허용하는 가장 높은 단계 */
-  ceiling: ReleaseStage
+  ceiling: RuntimeStage
   /** 그 천장의 하루 목표 — 이 트리거 혼자서는 이보다 많이 내지 못한다 */
   ceilingDailyTarget: number
 }
@@ -299,8 +299,8 @@ const rawOf = (env: Readonly<Record<string, string | undefined>>, k: string): st
 }
 
 export function stageInputsOf(env: Readonly<Record<string, string | undefined>>, now: Date): StageInputs {
-  const w = windowAuthorization(env, now, RELEASE_STAGES)
-  const c = canaryAuthorization(env, now, RELEASE_STAGES)
+  const w = windowAuthorization(env, now, RUNTIME_STAGES)
+  const c = canaryAuthorization(env, now, RUNTIME_STAGES)
   const ceiling = releaseStageCeiling(env, now)
   return {
     capacity: rawOf(env, CAPACITY_ENV), release: rawOf(env, RELEASE_ENV),
@@ -309,7 +309,7 @@ export function stageInputsOf(env: Readonly<Record<string, string | undefined>>,
       activeToday: w.activeToday, note: w.note,
     },
     canary: { stage: rawOf(env, CANARY_STAGE_ENV), date: rawOf(env, CANARY_DATE_ENV), activeToday: c.activeToday },
-    ceiling, ceilingDailyTarget: PROFILES[ceiling].dailyTarget,
+    ceiling, ceilingDailyTarget: profileOf(ceiling).dailyTarget,
   }
 }
 
@@ -641,10 +641,10 @@ export function readCanonicalStages(input?: {
 }
 
 export type ParitySide = {
-  capacity: ReleaseStage
-  release: ReleaseStage
+  capacity: RuntimeStage
+  release: RuntimeStage
   /** capacity 가 release 를 누른 뒤의 실제 공개 단계 */
-  effectiveRelease: ReleaseStage
+  effectiveRelease: RuntimeStage
   /** 값이 비어 있거나 허용 밖이라 안전 단계로 떨어졌는가 */
   fellBack: boolean
 }
@@ -658,10 +658,13 @@ export type ParityVerdict = {
   reason: string
 }
 
-/** 🔴 capacity 가 release 를 누른다 — `resolveScale` ① 과 같은 규칙이다 */
+/**
+ * 🔴 capacity 가 release 를 누른다 — `resolveScale` ① 과 같은 규칙이다.
+ *    러너 단계(d1~d50)로 읽는다 — `resolveScale` 과 같은 해석이어야 두 트리거 비교가 러너가 볼 값과 같다.
+ */
 function sideOf(s: StageSetting): ParitySide {
-  const cap = resolveStage(s.capacity, 'capacity')
-  const rel = resolveStage(s.release, 'release')
+  const cap = resolveRuntimeStage(s.capacity, 'capacity')
+  const rel = resolveRuntimeStage(s.release, 'release')
   const effectiveRelease = stageRank(rel.stage) > stageRank(cap.stage) ? cap.stage : rel.stage
   return {
     capacity: cap.stage, release: rel.stage, effectiveRelease,
@@ -710,8 +713,8 @@ export function judgeTriggerParity(input: {
   }
 }
 
-/** 🔴 허용 단계 목록 — 화면이 사람에게 보여 줄 때 쓴다 */
-export const PARITY_STAGES: readonly ReleaseStage[] = RELEASE_STAGES
+/** 🔴 허용 단계 목록 — 화면이 사람에게 보여 줄 때 쓴다(러너 단계 d1~d50) */
+export const PARITY_STAGES: readonly RuntimeStage[] = RUNTIME_STAGES
 
 export type TriggerPlan = {
   /** 정시 트리거가 담당하는 슬롯 수 */

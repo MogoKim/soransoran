@@ -40,7 +40,7 @@ import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 // 🔴 말투·profile 의 정본 — 러너와 같은 함수를 쓴다
 import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
-import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, minuteOfDay, slotLabel } from '../src/lib/scale-profile'
+import { PROFILES, RUNTIME_PROFILES, derive as deriveProfile, effectiveWeeklyCap, minuteOfDay, slotLabel } from '../src/lib/scale-profile'
 import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } from '../src/lib/scale-readiness'
 import { SOURCE_FACTS, THIN_82COOK_SLOTS, planSlots, type SourceId, type Phase } from '../src/lib/collect-schedule'
 
@@ -730,7 +730,7 @@ async function main(): Promise<void> {
       mismatches: horizonMismatches(scaleRows),
     },
     stages: scaleRows.map(({ sim, verdict }) => ({
-      stage: sim.stage, dailyTarget: PROFILES[sim.stage].dailyTarget,
+      stage: sim.stage, dailyTarget: RUNTIME_PROFILES[sim.stage].dailyTarget,
       in14: sim.in14, want14: sim.want14, gaps: sim.gaps, recoveryBroken: sim.recoveryBroken,
       ready: verdict.ready, reasons: verdict.reasons,
       personasNeededArithmetic: verdict.arithmeticPersonas,

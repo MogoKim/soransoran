@@ -17,7 +17,7 @@
     "scripts/lib/content-core-run.mts": "d1941a7157ad7d8557098454c1acd89d107779f9528410086e85a023f81ea168",
     "scripts/lib/content-core-prompts.mts": "331e3c47db1535e01092316afbfdae3b97b9120619b2508745fac103667a431f",
     "src/lib/auto-ready-quality-cohort.ts": "cdd18f8b1346f49ae37f8244ac2b353e98b726097a07100cfaa207dfe7e0ddbe",
-    "src/lib/auto-ready-repo.ts": "f9e39148446da4408af215dcf2879bd4c5e9eb1594eecd0a3078cb3b334bd9ca",
+    "src/lib/auto-ready-repo.ts": "e99f8f6b4b35b6310876b4c7a286e2238331b1259a26e207e99726e7a4d4b4e5",
     "src/lib/auto-ready-evidence.ts": "44876509f73df30bc067263cf3040203a44aafd93863b611a96ed2beee1f1503",
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
     "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d",
@@ -27,7 +27,7 @@
   },
   "acknowledgement": {
     "kind": "behaviorUnchanged",
-    "reason": "quality-v4 이 덮는 seed 경로 행동 불변 — 적응(raw-adapt-v1)은 별도 레인 계약(raw-adapt-lane.ts) · 사람 검토 전용. review.ts 는 타입·라벨만(DETERMINISTIC_CODES 불변) · 생성/프롬프트는 route=adapt 일 때만 · auto-ready-repo 는 적응 흔적 행 제외만 추가(v4 행 영향 0) · digest 379bf6c6 = main",
+    "reason": "quality-v4 이 덮는 seed 경로 행동 불변 — 적응(raw-adapt-v1)은 별도 레인 계약(raw-adapt-lane.ts) · 내부 실험 격리. review.ts 는 타입·라벨만(DETERMINISTIC_CODES 불변) · 생성/프롬프트는 route=adapt 일 때만 · auto-ready-repo 는 적응 흔적 행 제외만 추가(v4 행 영향 0) · digest 379bf6c6 = main · main(#628) 의 사후 감사 표본 선정 변경(그날 KST 자동 발행)과 합쳤다",
     "changedFiles": [
       "src/lib/content-core/review.ts",
       "src/lib/micro-seed-auto-draft.ts",

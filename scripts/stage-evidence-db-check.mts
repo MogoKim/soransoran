@@ -9,6 +9,9 @@
  *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 상한 5 에서 5건 PASS · 6건 FAIL
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
  *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → TRIAL d3 재시험 · 전날 PASS → TRIAL d5 · DB write 0
+ *   ⑤ (2026-09-29 generic scheduler 배선) REPROVE 증명일 실제 행 → PASS → 다음 날 d5 시험 · HOLD 는 아니다 ·
+ *      controller 진입점: 전날 TRIAL d20 · 천장 d10 → d20 을 열지 않는다(CEILING) · 천장 d20 → 실제 DB·장부로 모은
+ *      preflight(자동 READY 닫힘 · 장부 없음)가 막는다 · 천장 d100 → 열 수 있는 천장 d50
  *
  * 🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구한다. provider 0.
  * 🔴 HOME 을 임시 디렉터리로 바꿔 controller 를 돌린다 — 정본 env · 장부가 전부 가짜 HOME 안이다.
@@ -381,7 +384,9 @@ try {
     type Out = {
       evidence: StageEvidenceVerdict | null
       plan: { base: string; target: string; basis: string } | null
-      result: { decision: { state: string; release: string; reasons: string[]; transition: { trialBase?: string; basis?: string } | null }; brake: string }
+      result: { decision: { state: string; release: string; capacity: string; reasons: string[]; blocks: { code: string }[]; transition: { trialBase?: string; basis?: string } | null }; brake: string }
+      ceiling?: { authorized: string; operable: string }
+      nextPreflight?: { stage: string; verdict: string; codes: string[] } | null
     }
     /**
      * 🔴 **러너 신호는 진짜 launchd 를 본다** — 가짜로 만들지 않는다(fixture 가 실제보다 강할 수 없다).
@@ -470,6 +475,64 @@ try {
     }
     check('결정 reasons 에 증거 판정 코드가 남는다',
       [failRun, passRun].every((r) => r.out?.result.decision.reasons.some((x) => x.startsWith(`EVIDENCE ${D} d3 `)) === true))
+
+    console.log('\n⑤ REPROVE 증명일 · D20 진입점 (2026-09-29 generic scheduler 배선)')
+    {
+      // (가) REPROVE d3 실제 행 — 자동 3편 · 첫 댓글 · 감사 표본 → PASS → 다음 날 d5 시험
+      await wipe()
+      const reprove = await storeDecision({ release: 'd3', state: 'REPROVE' })
+      await seedDay()
+      const rv = await verdictOf(reprove)
+      check('🟢 REPROVE d3 증명일 · 실제 행 6조건 → PASS', rv.verdict === 'PASS', `${rv.verdict} ${rv.codes.join(',')}`)
+      const rp = trialPlanOf(reprove, rv)
+      check('🟢 REPROVE PASS 다음 날 = d5 시험 (기반 d3 · PASS)', rp?.target === 'd5' && rp.base === 'd3' && rp.basis === 'PASS', JSON.stringify(rp))
+      await wipe()
+      const hold = await storeDecision({ release: 'd3', state: 'HOLD' })
+      await seedDay()
+      const hv = await verdictOf(hold)
+      check('🔴 HOLD d3 는 같은 행이어도 DECISION_NOT_TRANSITION → 계획 없음', hv.verdict === 'FAIL' && has(hv, 'DECISION_NOT_TRANSITION')
+        && trialPlanOf(hold, hv) === null)
+
+      // (나) controller 진입점 — 전날 TRIAL d20(기반 d10) · 천장만 바꿔 본다
+      const envWith = (capacity: string): void => {
+        writeFileSync(join(APP, 'env.local'), [
+          'SORAN_RELEASE_STAGE=d10', `SORAN_CAPACITY_STAGE=${capacity}`, 'STAGE_CONTROLLER_ENABLED=on', 'SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto',
+          'SORAN_LLM_DAILY_BUDGET_USD=0.5', 'SORAN_LLM_RUN_REQUEST_CAP=20', 'SORAN_LLM_RESERVE_HEADROOM=1.2',
+          'SORAN_AUDIT_LLM_DAILY_BUDGET_USD=0.3', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP=25', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM=1.5', '',
+        ].join('\n'), { mode: 0o600 })
+      }
+      const trialD20 = { capacity: 'd20', release: 'd20', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd10', previousKstDate: D_PREV, target: 'd20', basis: 'PASS' } }
+      await wipe()
+      await storeDecision(trialD20)
+      await seedStock()
+      envWith('d10')
+      const c10 = runController()
+      const d10 = c10.out?.result.decision
+      console.log(`   (나-1) 천장 d10 → ${show(c10.out)}`)
+      check('exit 0 (dry-run)', c10.code === 0, c10.raw)
+      check('전날 d20 이 PASS 가 아니다 → 계획 = d20 재시험(기반 d10 · RETEST)', c10.out?.plan?.target === 'd20' && c10.out.plan.base === 'd10'
+        && c10.out.plan.basis === 'RETEST', JSON.stringify(c10.out?.plan))
+      check('🔴 🔴 **천장 d10 — 실제 진입점이 d20 을 열지 않는다(공개 ≤ d10 · 결정 천장 d10)**', d10 !== undefined && d10.release !== 'd20'
+        && ['d1', 'd3', 'd5', 'd10'].includes(d10.release) && d10.capacity === 'd10', `${d10?.state} ${d10?.release} ${d10?.capacity}`)
+      check('천장 위 대상이면 D20 preflight 를 모으지 않는다(사다리 CEILING 이 막는다)', c10.out?.nextPreflight === null, JSON.stringify(c10.out?.nextPreflight))
+      envWith('d20')
+      const c20 = runController()
+      const d20 = c20.out?.result.decision
+      console.log(`   (나-2) 천장 d20 → ${show(c20.out)} · preflight ${c20.out?.nextPreflight?.verdict} [${c20.out?.nextPreflight?.codes.join(',')}]`)
+      check('exit 0 (dry-run)', c20.code === 0, c20.raw)
+      check('🔴 천장 d20 — 실제 DB·장부로 모은 d20 preflight 가 PASS 가 아니다(자동 READY 닫힘 → 재고 0 · 장부 없음 → 단가 모름)',
+        c20.out?.nextPreflight?.stage === 'd20' && c20.out.nextPreflight.verdict === 'FAIL'
+        && c20.out.nextPreflight.codes.includes('STOCK_SHORT') && c20.out.nextPreflight.codes.includes('COMMENT_COST_UNKNOWN'),
+      JSON.stringify(c20.out?.nextPreflight))
+      check('🔴 🔴 **천장 d20 — preflight 가 막으면 d20 시험을 열지 않는다(PREFLIGHT_FAIL · 결정 천장 d20)**', d20 !== undefined
+        && !(d20.state === 'TRIAL' && d20.release === 'd20') && d20.capacity === 'd20' && d20.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
+      `${d20?.state} ${d20?.release} ${JSON.stringify(d20?.blocks)}`)
+      envWith('d100')
+      const c100 = runController()
+      check('🔴 천장 d100 — 승인 d100 으로 읽되 열 수 있는 천장 d50 · 결정 천장 d50', c100.code === 0 && c100.out?.ceiling?.authorized === 'd100'
+        && c100.out.ceiling.operable === 'd50' && c100.out.result.decision.capacity === 'd50', JSON.stringify(c100.out?.ceiling))
+      check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0)
+    }
   }
 } finally {
   await wipe()

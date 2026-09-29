@@ -42,7 +42,7 @@ PR, CI, helper, 수동 회차, 수동 stage override는 완료가 아니다. 완
 | 82cook | job 없음, 측정 없음 | 보수적 canary 미착수 |
 | Persona | active 24 | 자격 충돌 전원 미측정. 카드 기준은 미측정 제외 시 6명뿐 |
 | Persona 결손 | life axis 16, dormant 7, voice evidence 6, no-go 표현 15 | 이름 수가 아니라 계약 유효 인원이 병목 |
-| scheduler | D3/D5/D10 지원 | D20/D30/D50/D100 미지원 |
+| scheduler | D3/D5/D10 지원 · D20/D30/D50 러너 슬롯(heartbeat 10분 격자) 코드 지원 | D20~D50 은 승인 천장 d10 이라 닫힘(시험은 preflight·LATE_START 관문 · SUSTAIN 없음). D100 은 지금 러너 용량·댓글 예산으로 열 수 없음(열 수 있는 천장 d50) |
 | 자동 승격 | 코드가 7/14/21일 대기와 사람 stage 변경을 요구 | 최신 창업자 계약과 충돌 |
 | 상주 실행 | main MacBook job + keep-awake | 보조 MacBook 단일 소유권 cutover 미완료 |
 | North Star 계측 | 미등록 | 현재 P0 아님. D10 자동 운영 뒤 연결 |
@@ -222,7 +222,7 @@ M2와 D3~D10은 먼저 **글마다 첫 댓글 1건**을 확실히 만든다. 이
 | C3 | 승격 결과가 사람 env 변경을 요구 | controller 자동 적용 | founder/operator 명령 0으로 D3->D5 전이 |
 | C4 | M2 health 도구끼리 상태가 모순 | 실제 runner 장부가 단일 진실 | 공개 댓글 + DB/page 일치 + health green |
 | C5 | active 24지만 계약 유효 수가 0 또는 미측정 | 자격과 집중도 측정 후 자동 보강 | D10 30명, D20 60명 다양성 목표 |
-| C6 | D20 이상 release profile 없음 | generic D3~D100 scheduler | 각 단계 slot/catch-up/load fixture green |
+| C6 | D20~D50 러너 프로필은 생김(`RUNTIME_PROFILES` · 천장 d10 으로 닫힘) · D100 프로필 없음 | generic D3~D100 scheduler | 각 단계 slot/catch-up/load fixture green(`stage:scheduler-check`) · D100 러너 용량·예산 |
 | C7 | source 92.2/day로 D30부터 부족 | 참여 신호 기반 다원화와 82cook canary | D30 115/day, D100 382/day 실측 |
 | C8 | main MacBook이 runtime 소유 | 보조 MacBook 단일 소유 | reboot/network recovery 뒤 9 lane proof |
 | C9 | 코드가 D100 Persona 목표를 180~200 하나로 표현 | canary floor 180 / 지속 다양성 300+ 분리 | readiness와 assignment가 두 목표를 판정 |

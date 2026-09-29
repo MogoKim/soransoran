@@ -31,7 +31,7 @@
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
 import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from './persona-for-match'
-import { PROFILES, releaseCapsOf, type ReleaseStage } from './scale-profile'
+import { profileOf, releaseCapsOf, type RuntimeStage } from './scale-profile'
 import { boundedReleaseStage } from './scale-runtime'
 import { judgeCatchUp, kstMinuteOfDay, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_DECIDER } from './auto-ready-v2'
@@ -99,7 +99,7 @@ export const UNATTENDED_PUBLISH_DECIDED_BY = 'runner:unattended'
  */
 export type PublishMode =
   | { kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget; unattended: boolean }
-  | { kind: 'manual-live'; dailyCap: number; releaseStage?: ReleaseStage }
+  | { kind: 'manual-live'; dailyCap: number; releaseStage?: RuntimeStage }
 
 /**
  * 🔴 **시계 주입점 — 검사 전용이다.** 운영 호출자(러너 · publish-live)는 이 인자를 넘기지 않는다
@@ -120,7 +120,7 @@ export type PublishTxInput = {
   /**
    * 🔴 **발행 방식 — 필수이고 둘 중 하나다** (2026-09-26 마스터 P0 · 예약 지연).
    *
-   *    · `scheduled` — 예약 러너. **단계 이름만** 받는다. 하루 목표는 정본 `PROFILES[stage].dailyTarget`,
+   *    · `scheduled` — 예약 러너. **단계 이름만** 받는다. 하루 목표는 정본 `profileOf(stage).dailyTarget`,
    *      슬롯은 `judgeCatchUp`(기존 catch-up 계약)으로 **이 트랜잭션의 시계**로 다시 센다.
    *      발행은 `오늘 발행 수 < min(도래 슬롯 수, 하루 목표)` 일 때만이다. 호출자 숫자 상한은 없다.
    *      단계는 env 천장(`boundedReleaseStage` · `autoReadyEnv`)으로 누른다.
@@ -263,7 +263,7 @@ async function publishAttempt(
         const v = judgeAutoAssignment({
           persona: forMatch, gateResults: row.gateResults,
           title: row.editedTitle ?? row.draftTitle, body: row.editedBody ?? row.draftBody,
-          caps: releaseCapsOf(PROFILES[stage]),
+          caps: releaseCapsOf(profileOf(stage)),
         })
         if (!v.ok) {
           return {
@@ -298,14 +298,14 @@ async function publishAttempt(
        *    두 러너가 같은 "발행 0" 사진을 볼 수 있다. 그래서 **같은 판정 함수**를 이 트랜잭션의
        *    시계와 이 트랜잭션이 다시 센 오늘 발행 수로 한 번 더 부른다.
        *    · 운영 창·KST 날짜·도래 슬롯은 `judgeCatchUp` 계약 그대로(시각이 근거 → `local`)
-       *    · 하루 목표는 정본 `PROFILES[stage].dailyTarget` — 호출자 숫자가 아니다
+       *    · 하루 목표는 정본 `profileOf(stage).dailyTarget` — 호출자 숫자가 아니다
        *    · 허용: 오늘 발행 수 < min(도래 슬롯 수, 하루 목표)
        *    막히면 아무것도 쓰지 않는다(Post 0 · Queue 0 · ActivityLog 0) — 정상 무발행이다.
        */
       let dailyCap: number
       if (input.mode.kind === 'scheduled') {
         const stage = boundedReleaseStage(input.mode.releaseStage, input.autoReadyEnv ?? {}, txNow)
-        const target = PROFILES[stage].dailyTarget
+        const target = profileOf(stage).dailyTarget
         const slot = judgeCatchUp({ stage, now: txNow, trigger: 'local', cron: null, publishedToday: publishedTodayInTx })
         const limit = Math.min(slot.dueCount, target)
         if (!slot.run || !(publishedTodayInTx < limit)) {

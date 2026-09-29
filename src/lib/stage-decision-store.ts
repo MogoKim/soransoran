@@ -225,7 +225,7 @@ export async function ensureStageDecision(io: {
  *   contractVersion String
  *   capacity        String   // 승인 천장 그대로 (d1|d3|d5|d10)
  *   release         String   // 🔴 release rank <= capacity rank
- *   state           String   // SUSTAIN|TRIAL|PREPARE|HOLD
+ *   state           String   // SUSTAIN|TRIAL|PREPARE|HOLD|REPROVE (REPROVE 는 2026-09-29 추가 · 판 v4 그대로)
  *   reasons         Json     // string[]
  *   blocks          Json     // { code: BlockCode, reason: string }[]
  *   /// 🔴 그날 단계를 고정했는가 — 없으면 읽을 때 검증이 막힌다
