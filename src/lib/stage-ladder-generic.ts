@@ -24,7 +24,7 @@
  */
 import {
   RELEASE_STAGES, RUNTIME_STAGES, MAX_DAILY_TARGET, SAFEST_STAGE, HIGHEST_RUNTIME_STAGE,
-  minuteOfDay, slotLabel, kstMidnight, verifyProfile, isRuntimeStage, profileOf, stageRank,
+  minuteOfDay, slotLabel, kstMidnight, verifyProfile, isRuntimeStage, profileOf,
   type RuntimeStage, type ScaleProfile, type Slot,
 } from './scale-profile'
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
@@ -362,6 +362,3 @@ export function extendedTrialBlocks(i: {
   }
   return out
 }
-
-/** 🔴 두 단계 중 높은 쪽 — 보고용 */
-export const higherRuntime = (a: RuntimeStage, b: RuntimeStage): RuntimeStage => (stageRank(a) >= stageRank(b) ? a : b)

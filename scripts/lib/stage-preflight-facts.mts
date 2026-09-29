@@ -5,7 +5,7 @@
  * 🔴 **모르면 `null`** — 판정(`judgeNextPreflight`)이 UNKNOWN 으로 만든다. 모르는 것을 0 이나 기본값으로 메우지 않는다.
  *
  *   · 러너 격자      정본 템플릿 상수(heartbeat 10분 · 회차당 1건 · 댓글 예약표 43회 · 첫 댓글 3회 시도)
- *   · 자동 READY 재고 자동 READY 가 **실제로 열린** 상태(`auditAwareGate`)의 발행 대상 중 자동 도장 행
+ *   · 자동 READY 재고 자동 READY 가 **실제로 열린** 상태(`auditAwareGate` — 러너와 같은 판정)의 발행 대상 중 자동 도장 행
  *   · Persona       활성 Persona 수(정본 `loadPublishableStock` 과 같은 표)
  *   · 단가          증거일(전날) 장부의 정산 단가 — 댓글 1건 · 감사 1건 · 자동 READY 1건당 공급
  *   · 상한          정본 env 값을 정본 천장으로 누른 것 — 댓글 ≤ $0.20 · 공급 ≤ $0.50 · 감사는 env 값
@@ -20,7 +20,6 @@ import {
 } from '../../src/lib/persona-comment-auto-lane'
 import { AUTO_DECIDER, AUTO_READY_ENV } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
-import { auditAwareGate } from '../../src/lib/auto-ready-audit-store'
 import { SUPPLY_DAILY_USD_APPROVED } from '../../src/lib/supply-schedule-contract'
 import { HEARTBEAT_INTERVAL_MINUTES } from './original-post-runner-template'
 import { COMMENT_RUNNER_SLOTS, FIRST_COMMENT_ATTEMPTS } from './persona-comment-runner-template'
@@ -28,7 +27,7 @@ import { defaultLedgerDir, ledgerPathOf, readLedgerDay } from './llm-ledger-stor
 import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
 import { auditLedgerDir, auditLimitsFromEnv } from './auto-ready-semantic-provider.mjs'
 import { commentLoopLedgerDir } from './persona-comment-loop.mjs'
-import { loadPublishableStock } from './publishable-stock.mjs'
+import type { LoadedStock } from './publishable-stock.mjs'
 
 /** 🔴 정본 러너 사실 — 템플릿 상수 그대로. 여기서 숫자를 다시 적지 않는다 */
 export const RUNNER_GRID: RunnerGrid = {
@@ -85,19 +84,18 @@ const kstRange = (date: string): { gte: Date; lt: Date } => {
  *    어느 하나를 못 읽으면 그 칸만 `null` 이다(나머지는 계속 모은다).
  */
 export async function readPreflightFacts(prisma: PrismaClient, i: {
-  now: Date; evidenceDate: string; env: Readonly<Record<string, string>>
+  /** controller 가 이미 읽은 재고 — 🔴 러너와 같은 열림 판정(`autoOpen`)으로 읽은 것이어야 한다 */
+  loaded: Pick<LoadedStock, 'targets' | 'personas'>
+  autoOpen: { open: boolean; reasons: readonly string[] }
+  evidenceDate: string
+  env: Readonly<Record<string, string>>
 }): Promise<{ facts: PreflightFacts; notes: string[] }> {
   const notes: string[] = []
-  let readyAutoStock: number | null = null
-  let activePersonas: number | null = null
-  try {
-    // 🔴 러너와 같은 열림 판정 — 닫혀 있으면 자동 READY 는 발행 대상이 아니다(재고 0 으로 센다)
-    const gate = await auditAwareGate(prisma, i.env, i.now)
-    const loaded = await loadPublishableStock(prisma, i.now, { autoReadyOpen: gate.open })
-    readyAutoStock = gate.open ? loaded.targets.filter((t) => (t.decidedBy ?? '').trim() === AUTO_DECIDER).length : 0
-    activePersonas = loaded.personas.length
-    if (!gate.open) notes.push(`자동 READY 닫힘 — ${gate.reasons.join(' · ') || '이유 없음'}`)
-  } catch (e) { notes.push(`재고·Persona 를 읽지 못했다 — ${(e as Error).name}`) }
+  // 🔴 닫혀 있으면 자동 READY 는 발행 대상이 아니다 — 재고 0 으로 센다(STOCK_SHORT)
+  const readyAutoStock = i.autoOpen.open
+    ? i.loaded.targets.filter((t) => (t.decidedBy ?? '').trim() === AUTO_DECIDER).length : 0
+  const activePersonas = i.loaded.personas.length
+  if (!i.autoOpen.open) notes.push(`자동 READY 닫힘 — ${i.autoOpen.reasons.join(' · ') || '이유 없음'}`)
 
   const commentUsdPerRequest = settledUnitUsd(readDay(commentLoopLedgerDir(), i.evidenceDate))
   const auditUsdPerCall = settledUnitUsd(readDay(auditLedgerDir(), i.evidenceDate))

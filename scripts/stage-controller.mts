@@ -45,7 +45,7 @@ import {
   sustainedReleaseOf, type HealthSignal, type ControllerResult,
 } from '../src/lib/stage-controller'
 import { confirmedDefectCount, missingAutoPostCount } from '../src/lib/auto-ready-repo'
-import { overdueAuditCount, retryableFailureCount } from '../src/lib/auto-ready-audit-store'
+import { auditAwareGate, overdueAuditCount, retryableFailureCount } from '../src/lib/auto-ready-audit-store'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { observeJob, readProcessRuns, supplyFailing } from './lib/runner-health.mjs'
 import { fillDbConnection, readCostSignals, readEnvKeys } from './lib/ops-signals.mjs'
@@ -211,7 +211,14 @@ async function main(): Promise<number> {
     let nextPreflight: PreflightVerdict | null = null
     let publishedToday = 0
     try {
-      const s = await loadPublishableStock(prisma, NOW)
+      /**
+       * 🔴 **러너와 같은 열림 판정으로 읽는다** (2026-09-29 generic scheduler 배선).
+       *    앞판은 `autoReadyOpen` 을 넘기지 않아(기본 닫힘) 자동 READY 가 열린 날에도 하루 시험 판정이
+       *    자동 재고를 **0 으로** 봤다 — 러너(`auditAwareGate`)는 그 재고로 발행한다. 사람 재고로는 채울 수 없는
+       *    D20 이상 시험이 영영 열리지 않는다. 정본 env 에서 스위치 키 하나만 읽는다.
+       */
+      const autoOpen = await auditAwareGate(prisma, readEnvKeys(PREFLIGHT_ENV_KEYS).values, NOW)
+      const s = await loadPublishableStock(prisma, NOW, { autoReadyOpen: autoOpen.open })
       publishedToday = s.publishedToday
       const axis = { now: NOW, publishedToday }
       // 🔴 천장 단계까지 판정한다 — 천장 d10 이면 예전과 같은 네 단계다
@@ -235,7 +242,7 @@ async function main(): Promise<number> {
          */
         if (needsExtendedGate(target) && previous !== null) {
           const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
-          const r = await readPreflightFacts(prisma, { now: NOW, evidenceDate: previous.kstDate, env: pe.values })
+          const r = await readPreflightFacts(prisma, { loaded: s, autoOpen, evidenceDate: previous.kstDate, env: pe.values })
           nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID)
           log(`   ${target} preflight ${nextPreflight.verdict}${nextPreflight.codes.length > 0 ? ` [${nextPreflight.codes.join(',')}]` : ''}`
             + ` (${Object.entries(nextPreflight.counts).map(([k, x]) => `${k}=${x}`).join(',')})`)

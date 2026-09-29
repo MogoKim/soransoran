@@ -799,7 +799,7 @@ console.log('\n⑮ 🔴 🔴 trialBase 는 전날 실제 결정에서만 온다'
     `${bypass.state} · ${JSON.stringify(bypass.blocks.map((b) => b.code))}`)
   check('🔴 정본은 전날 결정이다 — env 문자열에서 기반을 만들지 않는다',
     !/trialBase[^\n]*SORAN_RELEASE_STAGE/.test(readFileSync('src/lib/stage-ladder.ts', 'utf-8')))
-  check('🔴 다음 칸 계산은 정본 하나다', nextStage('d3') === 'd5' && nextStage('d10') === null)
+  check('🔴 다음 칸 계산은 정본 하나다 — 러너 단계 위(d10 → d20 · d50 → 없음)', nextStage('d3') === 'd5' && nextStage('d10') === 'd20' && nextStage('d50') === null)
 }
 
 console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 열리면 안 된다')
