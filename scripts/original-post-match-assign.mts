@@ -37,6 +37,8 @@ import {
   type QueueStatus,
 } from '../src/lib/original-post-match-store'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { personaMatchUsageOf } from '../src/lib/persona-for-match'
+import { founderQueueRowsOf } from '../src/lib/raw-adapt-quarantine'
 import {
   parseIdArgs, filterByIds, missingIds, checkLimitAgainstIds, describeIdTargeting,
 } from '../src/lib/original-post-id-target'
@@ -73,14 +75,8 @@ for (const r of personaRows) {
   const bands = Array.isArray(id.childrenAgeBands) ? (id.childrenAgeBands as ChildAgeBand[]) : undefined
   // 🔴 주간 여력은 발행 이력(ActivityLog)이 아니라 **이번 주 배정**도 함께 봐야 한다.
   //    아직 발행 경로가 없어 ActivityLog 는 늘 0 이다 — 배정이 소비의 유일한 근거다.
-  const postsThisWeek = await prisma.originalPostApprovalQueue.count({
-    where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO } },
-  })
-  const last = await prisma.originalPostApprovalQueue.findFirst({
-    where: { matchedPersona: { code: r.code } },
-    orderBy: { matchedAt: 'desc' },
-    select: { matchedAt: true },
-  })
+  // 🔴 사용량은 배정기와 같은 함수로 센다 — 적응 레인 격리 행은 세지 않는다 (2026-09-29)
+  const { postsThisWeek, last } = await personaMatchUsageOf(prisma, r.code, WEEK_AGO)
   personas.push({
     code: r.code,
     status: r.status,
@@ -115,8 +111,9 @@ const allRows = await prisma.originalPostApprovalQueue.findMany({
   orderBy: { createdAt: 'asc' },
 })
 // 🔴 지정한 id 만 남긴다 — 순서는 바꾸지 않는다(dry-run 재현성)
-const rows = filterByIds(allRows, IDS)
-const missing = missingIds(allRows, IDS)
+// 🔴 적응 레인 격리 행(내부 실험)은 배정 대상이 아니다 — Persona 를 점유하지 않는다 (2026-09-29)
+const rows = filterByIds(founderQueueRowsOf(allRows), IDS)
+const missing = missingIds(founderQueueRowsOf(allRows), IDS)
 console.log(describeIdTargeting(IDS))
 if (missing.length > 0) {
   console.log(`  🟡 지정했지만 대상에 없는 id ${missing.length}건 — APPROVED·EDITED·발행 전이 아닙니다`)

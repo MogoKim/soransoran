@@ -32,7 +32,10 @@ import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } f
 /** 🔴 적응 레인(긴 사연 → AI 원작 글) — 품질 계약 밖의 별도 계약 · 사람 검토 전용 (2026-09-29) */
 import {
   isRawAdaptCandidate, isCurrentRawAdaptMark, currentRawAdaptContract, RAW_ADAPT_CONTRACT_KEY, RAW_ADAPT_REVIEW_HOLD,
+  RAW_ADAPT_QUARANTINE_KEY,
 } from './raw-adapt-lane'
+/** 🔴 적응 행 격리 표식 — 창업자 대기열 · Persona WIP · 자동 레인 밖 (2026-09-29 보강) */
+import { rawAdaptQuarantineMark } from './raw-adapt-quarantine'
 
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
@@ -697,7 +700,8 @@ export function buildQueuePayload(input: {
      * 🔴 **적응 레인** (2026-09-29 · `raw-adapt-lane.ts`). 긴 사연 적응 후보는 품질 계약(quality-v4) 밖이다.
      *    · 신호 셋 중 하나라도 있으면 적응이다(fail-closed) — 지금 적응 규칙 표식이 아니면 싣지 않는다
      *    · 품질 계약 표식을 **적지 않고** 적응 레인 표식을 적는다 → v4 cohort · 자동 도장 · 발행 재검증 밖
-     *    · 사람 검토 경고(`DRAFT_LIFE_REVIEW:rawAdaptation`)를 반드시 싣는다 → 자동 적격도 아니다
+     *    · 적응 경고(`DRAFT_LIFE_REVIEW:rawAdaptation`)를 반드시 싣는다 → 자동 적격도 아니다
+     *    · 🔴 (보강) 내부 실험 격리 표식을 싣는다 → 창업자 대기열 · Persona WIP 밖 · 기한 지나면 만료
      */
     const adapt = isRawAdaptCandidate(c)
     if (adapt && !isCurrentRawAdaptMark(c.rawAdaptContract)) return null
@@ -736,8 +740,12 @@ export function buildQueuePayload(input: {
          * 🔴 **적응 행은 품질 계약 표식 대신 적응 레인 표식** (2026-09-29). 둘을 함께 싣지 않는다 —
          *    적응 행이 v4 표식을 들면 v4 cohort 표본이 되고, 사람이 찾은 결함이 v4 자동 READY 를 닫는다.
          */
+        /**
+         * 🔴 **적응 행은 내부 실험 격리 표식도 반드시 싣는다** (2026-09-29 보강). 창업자 검토 대기열 ·
+         *    Persona WIP · 자동 레인이 이 칸으로 행을 뺀다(`carriesRawAdaptMark`) — 사람 검토 백로그가 되지 않는다.
+         */
         ...(adapt
-          ? { [RAW_ADAPT_CONTRACT_KEY]: currentRawAdaptContract() }
+          ? { [RAW_ADAPT_CONTRACT_KEY]: currentRawAdaptContract(), [RAW_ADAPT_QUARANTINE_KEY]: rawAdaptQuarantineMark(input.now) }
           : { [QUALITY_CONTRACT_KEY]: currentQualityContract() }),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',

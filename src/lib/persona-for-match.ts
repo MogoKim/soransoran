@@ -18,6 +18,8 @@ import {
   type BatchCaps, type ChildAgeBand, type PersonaForMatch,
 } from './original-post-persona-match'
 import { judgeVoiceMatch, voiceOfGateResults } from './original-post-voice-match'
+/** 🔴 적응 레인 격리 행 — Persona 사용량(WIP)에 넣지 않는다 (2026-09-29) */
+import { carriesRawAdaptMark } from './raw-adapt-lane'
 
 export const PERSONA_FOR_MATCH_SELECT = {
   id: true, code: true, status: true, userId: true, identity: true, voiceCore: true, noGoTopics: true,
@@ -25,6 +27,31 @@ export const PERSONA_FOR_MATCH_SELECT = {
 } as const satisfies Prisma.PersonaSelect
 
 export type PersonaRowForMatch = Prisma.PersonaGetPayload<{ select: typeof PERSONA_FOR_MATCH_SELECT }>
+
+/**
+ * 🔴 **Persona 한 명의 배정 사용량 — 주간 수 · 마지막 배정** (2026-09-29 분리).
+ *    배정기(`personaForMatchOf`)와 수동 배정 도구가 이 함수 하나를 쓴다.
+ *
+ * 🔴 **적응 레인 격리 행은 세지 않는다** — 내부 실험이라 발행 경로가 없다. 그 행에 배정이 잘못 남아 있어도
+ *    화자의 주간 상한 · 최소 간격을 점유하지 않는다(판정은 `carriesRawAdaptMark` 하나).
+ * 🔴 그 밖의 값은 앞판 쿼리 그대로다 — 주간 수는 `matchedAt ≥ weekAgo` 인 행 수,
+ *    마지막 배정은 `matchedAt desc` 첫 행(Postgres 는 desc 에서 NULL 이 먼저다 — 배정 시각 없는 행이 있으면 `null`).
+ */
+export async function personaMatchUsageOf(
+  db: PrismaClient | Prisma.TransactionClient, code: string, weekAgo: Date,
+  opts: { excludeQueueId?: string } = {},
+): Promise<{ postsThisWeek: number; last: { matchedAt: Date | null } | null }> {
+  const notSelf = opts.excludeQueueId === undefined ? {} : { id: { not: opts.excludeQueueId } }
+  const rows = (await db.originalPostApprovalQueue.findMany({
+    where: { matchedPersona: { code }, ...notSelf },
+    select: { matchedAt: true, gateResults: true },
+  })).filter((x) => !carriesRawAdaptMark(x.gateResults))
+  const postsThisWeek = rows.filter((x) => x.matchedAt !== null && x.matchedAt.getTime() >= weekAgo.getTime()).length
+  if (rows.length === 0) return { postsThisWeek, last: null }
+  if (rows.some((x) => x.matchedAt === null)) return { postsThisWeek, last: { matchedAt: null } }
+  const latest = rows.reduce((m, x) => (x.matchedAt!.getTime() > m.getTime() ? x.matchedAt! : m), rows[0]!.matchedAt!)
+  return { postsThisWeek, last: { matchedAt: latest } }
+}
 
 /**
  * 🔴 `excludeQueueId` — 이미 이 Persona 에 배정된 큐 행을 **자기 자신**으로 다시 판정할 때 쓴다
@@ -37,14 +64,7 @@ export async function personaForMatchOf(
 ): Promise<PersonaForMatch> {
   const WEEK_AGO = new Date(now.getTime() - 7 * 864e5)
   const id = (r.identity ?? {}) as Record<string, unknown>
-  const notSelf = opts.excludeQueueId === undefined ? {} : { id: { not: opts.excludeQueueId } }
-  const postsThisWeek = await db.originalPostApprovalQueue.count({
-    where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO }, ...notSelf },
-  })
-  const last = await db.originalPostApprovalQueue.findFirst({
-    where: { matchedPersona: { code: r.code }, ...notSelf },
-    orderBy: { matchedAt: 'desc' }, select: { matchedAt: true },
-  })
+  const { postsThisWeek, last } = await personaMatchUsageOf(db, r.code, WEEK_AGO, opts)
   const vc = (r.voiceCore ?? {}) as Record<string, unknown>
   return {
     code: r.code, status: r.status,

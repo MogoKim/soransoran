@@ -46,6 +46,8 @@ import {
 import {
   draftRouteOf, requiredRouteOf, adaptationContractOf, isAdaptationContract,
 } from '../src/lib/raw-adaptation'
+/** 🔴 적응 원천 — seed 뒤 · 회차 상한 (2026-09-29 · 내부 실험 격리) */
+import { planAdaptDrafts, RAW_ADAPT_DRAFT_CAP_PER_RUN } from '../src/lib/raw-adapt-quarantine'
 /**
  * 🔴 **생성 전 큐 스냅샷** (2026-09-17). 이 스크립트는 여전히 **DB 를 읽지 않는다** —
  *    러너가 읽어 파일로 건넨 것을 검증해서 쓴다. 판정 규칙은 여기서 만들지 않는다.
@@ -795,6 +797,18 @@ async function main(): Promise<void> {
   } else {
     // 🔴 손으로 부른 경우. 조용히 넘어가지 않는다
     console.log('\n⓪ 🟡 큐 스냅샷 없이 돈다 — **생성 전 제외를 적용하지 않았다**')
+  }
+  /**
+   * ── 🔴 **적응 원천은 seed 뒤 · 회차 상한까지** (2026-09-29 · `raw-adapt-quarantine.ts`) ──
+   *    화자 여력 계획 · 공동 호출 예산 · 회차 장부가 이 순서로 쓰인다 — seed 원천이 **먼저** 받는다.
+   *    적응 원천(내부 실험 격리)은 `RAW_ADAPT_DRAFT_CAP_PER_RUN` 까지만 이번에 가고, 나머지는 부르지 않는다
+   *    (판정 그대로 남아 다음 회차가 집는다 — 끝난 원천이 아니다). seed 만 있으면 순서 · 수 모두 앞판 그대로다.
+   */
+  {
+    const adaptPlan = planAdaptDrafts(seeds)
+    seeds = adaptPlan.ordered
+    console.log(`\n⓪-b 적응 원천 — 이번 회차 ${seeds.filter((j) => requiredRouteOf(j.decision) === 'adapt').length}건`
+      + ` (상한 ${RAW_ADAPT_DRAFT_CAP_PER_RUN} · seed 뒤) · 다음 회차로 미룸 ${adaptPlan.deferred.length}건 — 유료 호출 0`)
   }
   if (seeds.length === 0) {
     console.log('\n① 통과 판정 0건 — 전부 큐에 미발행 형제가 있다. 🟢 유료 호출 0\n')

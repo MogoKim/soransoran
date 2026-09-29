@@ -12,8 +12,9 @@
  *      대신 `gateResults.rawAdaptContract` 에 이 파일의 값을 적는다 → v4 cohort · 도장 · 발행 재검증 대상이 아니다
  *    · 적응 표식이 **어떤 모양으로든** 남아 있으면(키 · 사람 검토 경고) 자동 레인이 아니다(`carriesRawAdaptMark`)
  *      — 품질 계약 표식이 잘못 함께 실려도 자동 도장 · selector · 발행 재검증이 막는다(fail-closed)
- *    · 적응 행은 `machine:*` 결정으로 들어가 **사람 검토(HUMAN_REVIEW_REQUIRED)로만** 나간다
- *    · 사람이 적응 행에서 결함을 찾아도 v4 cohort 를 닫지 않는다 — 표식이 달라 v4 표본이 아니다
+ *    · 🔴 (2026-09-29 보강) 적응 행은 **내부 실험 격리**다 — 창업자 검토 대기열(HUMAN_REVIEW_REQUIRED)에도
+ *      Persona WIP 에도 들어가지 않고, 기한이 지나면 만료된다(`raw-adapt-quarantine.ts`). 발행 경로가 없다
+ *    · 적응 행의 결함이 v4 cohort 를 닫지 않는다 — 표식이 달라 v4 표본이 아니다
  * 🔴 **값은 코드 상수에서만 온다.** 후보 파일의 값은 대조 대상이다 — 다르면 적재하지 않는다.
  * 🔴 순수하다. DB · 네트워크 · 파일 · LLM 없음. 값은 부를 때 계산한다(순환 import 안전).
  */
@@ -28,8 +29,22 @@ import { DRAFT_LIFE_REVIEW_HOLD } from './semantic-summary-codes'
 /** 🔴 `gateResults` 안의 칸 이름 — 품질 계약 칸(`qualityContract`)과 다르다 */
 export const RAW_ADAPT_CONTRACT_KEY = 'rawAdaptContract'
 
-/** 🔴 이 레인이 갈 수 있는 곳 — 사람 검토뿐이다. 값으로 적어 두어 표식만 봐도 알 수 있게 한다 */
-export const RAW_ADAPT_LANE = 'humanReviewOnly'
+/**
+ * 🔴 이 레인이 갈 수 있는 곳 — **내부 실험 격리**다(2026-09-29 보강). 값으로 적어 두어 표식만 봐도 알 수 있게 한다.
+ *    앞판 값은 `humanReviewOnly` 였다 — 그러면 적응 행이 창업자 검토 대기열(백로그)로 쌓인다.
+ *    창업자 gold 에 적응 표본이 생기기 전까지 이 행은 **누구의 할 일도 아니다**: 자동 발행 0 · 창업자 대기열 0 ·
+ *    Persona WIP 0 · 기한(`raw-adapt-quarantine.ts`)이 지나면 만료. 풀어 주는 것은 별도 계약의 몫이다.
+ */
+export const RAW_ADAPT_LANE = 'experimentQuarantine'
+
+/**
+ * 🔴 **격리 표식 칸** — `gateResults` 안. 적재기가 적응 행에 **반드시** 싣는다.
+ *    창업자 대기열 · 사람 검토 목록 · Persona WIP · 자동 레인이 이 칸(또는 다른 적응 흔적)으로 행을 뺀다.
+ */
+export const RAW_ADAPT_QUARANTINE_KEY = 'experimentQuarantine'
+
+/** 🔴 격리 상태 값 — 하나뿐이다. 다른 값이 오더라도 칸이 있으면 격리다(fail-closed) */
+export const RAW_ADAPT_QUARANTINE_STATE = 'internalExperiment'
 
 /** 🔴 적응 행이 반드시 싣는 사람 검토 경고 — `eligibilityOf` 가 경고 0 을 요구하므로 자동 적격이 아니다 */
 export const RAW_ADAPT_REVIEW_HOLD = `${DRAFT_LIFE_REVIEW_HOLD}:${RAW_ADAPTATION_REVIEW_CODE}`
@@ -84,15 +99,19 @@ const recOf = (v: unknown): Record<string, unknown> | null =>
   (v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null)
 
 /**
- * 🔴 **적응 레인의 흔적이 있는가** — 모양을 따지지 않는다(fail-closed).
+ * 🔴 **적응 레인의 흔적이 있는가 = 내부 실험 격리 행인가** — 모양을 따지지 않는다(fail-closed).
  *    · `rawAdaptContract` 칸이 **있기만** 해도(깨진 모양 포함)
- *    · 또는 holds 에 적응 사람 검토 경고(`DRAFT_LIFE_REVIEW:rawAdaptation`)가 있으면
- *    자동 레인이 아니다. 흔적 하나만 지워져도 다른 하나가 막는다.
+ *    · 또는 `experimentQuarantine` 칸이 **있기만** 해도(2026-09-29 보강)
+ *    · 또는 holds 에 적응 경고(`DRAFT_LIFE_REVIEW:rawAdaptation`)가 있으면
+ *    자동 레인도 · 창업자 대기열도 · Persona WIP 도 아니다. 흔적 하나만 남아도 막는다.
+ * 🔴 **판정은 이 함수 하나다** — 자동 도장 · selector · 발행 재검증 · 창업자 검토 목록 · 어드민 대기열 ·
+ *    수동 배정 · Persona 주간 사용량이 전부 이것을 부른다. 곳마다 다시 적지 않는다.
  */
 export function carriesRawAdaptMark(gateResults: unknown): boolean {
   const g = recOf(gateResults)
   if (g === null) return false
   if (Object.prototype.hasOwnProperty.call(g, RAW_ADAPT_CONTRACT_KEY)) return true
+  if (Object.prototype.hasOwnProperty.call(g, RAW_ADAPT_QUARANTINE_KEY)) return true
   const holds = Array.isArray(g.holds) ? g.holds.map(String) : []
   return holds.includes(RAW_ADAPT_REVIEW_HOLD)
 }

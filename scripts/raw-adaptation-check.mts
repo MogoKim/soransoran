@@ -19,6 +19,11 @@
  *   🔴 네트워크 0 · provider 0 · DB 0 · 유료 호출 0.
  */
 import { randomUUID } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   judgeOne, conclusionHoldsUnder, RULE_VERSION, SEED_AXIS, RAW_AXIS, MIN_CONFIDENCE,
@@ -51,7 +56,15 @@ import {
 import { buildQueuePayload, queueProfileOf, type Candidate } from '../src/lib/micro-seed-supply-autofill'
 import { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } from '../src/lib/micro-seed-auto-draft'
 import { eligibilityOf, AUTO_DECIDER, makeStamp } from '../src/lib/auto-ready-v2'
-import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
+import { selectAutoTargets, MACHINE_REVIEWED_BY, type AutoRow } from '../src/lib/original-post-auto-publish'
+import { RAW_ADAPT_QUARANTINE_KEY, RAW_ADAPT_QUARANTINE_STATE } from '../src/lib/raw-adapt-lane'
+import {
+  RAW_ADAPT_LOAD_CAP_PER_RUN, RAW_ADAPT_LOAD_CAP_PER_DAY, RAW_ADAPT_DRAFT_CAP_PER_RUN, RAW_ADAPT_QUARANTINE_TTL_DAYS,
+  planAdaptLoads, planAdaptDrafts, isRawAdaptExpired, quarantineViewOf, planRawAdaptSweep, founderQueueRowsOf,
+  quarantineLoadedToday, kstDayStartOf,
+} from '../src/lib/raw-adapt-quarantine'
+import { worksetAxisQuota, worksetAxisCaps } from '../src/lib/supply-workset'
+import { SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 import { candidateEnvelope } from './lib/candidate-envelope.mjs'
 import { judgementOutcome, artifactOutcome } from '../src/lib/supply-workset'
 import { runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult } from './lib/content-core-run.mjs'
@@ -532,7 +545,8 @@ console.log('\n⑥ 별도 레인 — quality-v4 계약은 그대로 · 적응 �
  */
 const QUALITY_V4_MAIN_DIGEST = '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa'
 /** 🔴 적응 레인 계약 digest — 적응 규칙(지시문 · 표지 · 코드)을 바꾸면 이 값과 `RAW_ADAPTATION_VERSION` 을 함께 올린다 */
-const RAW_ADAPT_LANE_PINNED_DIGEST = '044305c20ee4df186c328de2eb53f006abb8e2d717ad92eb37bec9c404fb94e4'
+/** 🔴 (2026-09-29 보강) 레인 값 `humanReviewOnly` → `experimentQuarantine` 로 바뀌어 digest 가 새 값이다 — v4 digest 와 무관하다 */
+const RAW_ADAPT_LANE_PINNED_DIGEST = '5091910f4e30749beedcd48c4a1301a206514b9a9d0edecda4c144cbaedd9ddb'
 {
   const comp = qualityContractComponents()
   check(`🔴 🔴 **품질 계약 판 = quality-v4 · digest = main 의 값 (지금 ${QUALITY_CONTRACT_VERSION} · ${qualityContractDigest().slice(0, 12)}…)**`,
@@ -629,9 +643,195 @@ const RAW_ADAPT_LANE_PINNED_DIGEST = '044305c20ee4df186c328de2eb53f006abb8e2d717
   check('🟢 v4 도장 행은 selector 대상이다 (열림일 때)', code('v4') === 'TARGET', code('v4'))
   check('🔴 🔴 **적응 행은 도장이 있어도 selector 가 내지 않는다 (QUALITY_CONTRACT_MISMATCH)**',
     code('raw') === 'QUALITY_CONTRACT_MISMATCH', code('raw'))
-  check('🔴 도장 없는 적응 행 → HUMAN_REVIEW_REQUIRED (사람 검토로만)', code('rawUnstamped') === 'HUMAN_REVIEW_REQUIRED', code('rawUnstamped'))
+  check('🔴 🔴 **도장 없는 적응 행 → QUALITY_CONTRACT_MISMATCH — 창업자 검토 대기(HUMAN_REVIEW_REQUIRED)가 아니다** (격리)',
+    code('rawUnstamped') === 'QUALITY_CONTRACT_MISMATCH', code('rawUnstamped'))
   check('🔴 🔴 **적응 행이 품질 계약 표식까지 들고 와도 selector 가 막는다 (적응 흔적 우선)**',
     code('rawBoth') === 'QUALITY_CONTRACT_MISMATCH', code('rawBoth'))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 내부 실험 격리 — 창업자 대기열 0 · 상한 · 기한 · seed 몫 불변 (2026-09-29 보강)')
+// ─────────────────────────────────────────────────────────
+{
+  // ── 표식 — 실제 적재기 ──
+  const good = results.get('safe-gender')!
+  const art = good.art!
+  const d = art.draft!
+  const env = candidateEnvelope({
+    generatedAt: FIXTURE_NOW.toISOString(), ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, stageModels: STAGE_MODEL,
+    items: (['adapt', 'seed'] as const).map((route) => ({
+      artifact: art, sourceArticleId: `q-${route}`,
+      meta: { site: 'navercafe:synthetic', sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: FIXTURE_NOW.toISOString() },
+      draft: {
+        title: `${d.title} ${route}`, body: d.body, safetyVerdict: 'pass',
+        originality: measureOriginality(`${d.title}\n${d.body}`, '합성 원문\n합성 본문'), generatedAt: FIXTURE_NOW.toISOString(),
+      },
+      sourceTitleCopied: false, sourceTitleCheckVersion: 'v', autoJudge: null,
+      ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: FIXTURE_NOW.toISOString(),
+      lifeReview: route === 'adapt' ? [RAW_ADAPTATION_REVIEW_CODE] : [], draftRoute: route,
+    })),
+  })
+  const [ac, sc] = env.candidates as Record<string, unknown>[]
+  const aj = { ruleVersion: RULE_VERSION, promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine:auto-judge' }
+  const pa = buildQueuePayload({ envelope: env, candidate: ac as Candidate, autoJudge: aj, review: art.review, now: FIXTURE_NOW.toISOString() })
+  const ps = buildQueuePayload({ envelope: env, candidate: sc as Candidate, autoJudge: aj, review: art.review, now: FIXTURE_NOW.toISOString() })
+  const ga = (pa?.gateResults ?? {}) as Record<string, unknown>
+  const gs = (ps?.gateResults ?? {}) as Record<string, unknown>
+  const qm = (ga[RAW_ADAPT_QUARANTINE_KEY] ?? {}) as Record<string, unknown>
+  check('🔴 🔴 **적응 행 — 내부 실험 격리 표식(state=internalExperiment · founderQueue=false · 기한 7일)을 싣는다**',
+    qm.state === RAW_ADAPT_QUARANTINE_STATE && qm.founderQueue === false && qm.ttlDays === RAW_ADAPT_QUARANTINE_TTL_DAYS
+    && qm.lane === RAW_ADAPTATION_VERSION, JSON.stringify(qm))
+  check('🟢 seed 행 — 격리 표식 0 · 지금 품질 계약 그대로', !(RAW_ADAPT_QUARANTINE_KEY in gs) && isCurrentQualityContract(gs) && !carriesRawAdaptMark(gs))
+  check('🔴 격리 표식 **하나만** 남아도 격리 행이다 (계약 표식 · 경고가 지워져도)',
+    carriesRawAdaptMark({ holds: [], [RAW_ADAPT_QUARANTINE_KEY]: { state: 'anything' } }))
+
+  // ── 창업자 대기열 — 격리 행을 뺀다 · 사람 도장이 있어도 selector 가 내지 않는다 ──
+  const title = '명절 시댁 먼저 vs 친정 먼저'
+  const body = '명절마다 어느 집부터 가느냐로 말이 오간대요. 여러분이라면 어떻게 하세요?'
+  const row = (id: string, gateResults: unknown, decidedBy: string): AutoRow => ({
+    id, status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
+    promptVersion: pa?.promptVersion ?? '', model: pa?.model ?? '', matchedPersonaId: null, title, body,
+    sourceSite: pa?.syntheticSite ?? '', draftTitle: title, editedTitle: null, gateResults, decidedBy,
+    editDiff: null, decidedAt: FIXTURE_NOW, createdAt: FIXTURE_NOW,
+  })
+  const rows = [
+    row('seedPending', gs, ps?.decidedBy ?? ''), row('adaptPending', ga, pa?.decidedBy ?? ''),
+    row('adaptFounder', ga, MACHINE_REVIEWED_BY), row('seedFounder', gs, MACHINE_REVIEWED_BY),
+  ]
+  const sel = selectAutoTargets(rows, () => 'pass', { autoReadyOpen: true })
+  const code = (id: string): string => sel.rejected.find((r) => r.id === id)?.code
+    ?? (sel.targets.some((t) => t.id === id) ? 'TARGET' : '?')
+  check('🟢 seed 검토 전 기계 행 → HUMAN_REVIEW_REQUIRED (창업자 검토 대기 — 기존 그대로)', code('seedPending') === 'HUMAN_REVIEW_REQUIRED', code('seedPending'))
+  check('🔴 🔴 **적응 검토 전 행 → HUMAN_REVIEW_REQUIRED 가 아니다 (QUALITY_CONTRACT_MISMATCH)** — 창업자 백로그 0',
+    code('adaptPending') === 'QUALITY_CONTRACT_MISMATCH', code('adaptPending'))
+  check('🔴 🔴 **사람 도장(founder)이 있는 적응 행도 selector 가 내지 않는다** — 격리는 사람 경로도 닫는다',
+    code('adaptFounder') === 'QUALITY_CONTRACT_MISMATCH', code('adaptFounder'))
+  check('🟢 사람 도장 seed 행 → selector 대상 (기존 그대로)', code('seedFounder') === 'TARGET', code('seedFounder'))
+  const fq = founderQueueRowsOf(rows).map((r) => r.id)
+  check('🔴 🔴 **창업자 대기열(founderQueueRowsOf) — 적응 행 0 · seed 행 그대로 · 순서 그대로**',
+    fq.join(',') === 'seedPending,seedFounder', fq.join(','))
+
+  // ── 상한 — 이름 붙은 상수 ──
+  check('🔴 상한 상수 — 적재 회차 2 · 적재 하루 4 · 생성 회차 2 · 기한 7일',
+    RAW_ADAPT_LOAD_CAP_PER_RUN === 2 && RAW_ADAPT_LOAD_CAP_PER_DAY === 4 && RAW_ADAPT_DRAFT_CAP_PER_RUN === 2
+    && RAW_ADAPT_QUARANTINE_TTL_DAYS === 7)
+  check('🔴 생성 회차 상한 = 판정 묶음 raw 자리 상한(기본 10 → 2) — 적응 유료 호출이 raw 몫을 넘지 않는다',
+    RAW_ADAPT_DRAFT_CAP_PER_RUN === worksetAxisCaps(SUPPLY_WORKSET_PER_RUN).rawCap)
+  type T = { id: string; adapt: boolean }
+  // 🔴 적응과 seed 를 섞어 놓는다 — 적응이 앞에 와도 seed 가 먼저 자리를 받아야 한다
+  const mixed: T[] = [
+    { id: 'a0', adapt: true }, { id: 's0', adapt: false }, { id: 'a1', adapt: true }, { id: 'a2', adapt: true },
+    { id: 's1', adapt: false }, { id: 'a3', adapt: true }, { id: 'a4', adapt: true }, { id: 's2', adapt: false },
+  ]
+  const seedOnly = mixed.filter((t) => !t.adapt)
+  const isA = (t: T): boolean => t.adapt
+  const ids = (xs: readonly T[]): string => xs.map((t) => t.id).join(',')
+  const lp0 = planAdaptLoads({ targets: seedOnly, isAdapt: isA, loadedToday: 0 })
+  check('🟢 적재 — seed 만이면 입력과 같은 배열 (순서 · 수 불변)', ids(lp0.ordered) === ids(seedOnly) && lp0.capped.length === 0)
+  const lp1 = planAdaptLoads({ targets: mixed, isAdapt: isA, loadedToday: 0 })
+  check('🔴 🔴 **적재 — 회차 상한: 적응 5건 중 2건 · seed 3건 전부가 앞 (seed 몫 불변)**',
+    ids(lp1.ordered) === 's0,s1,s2,a0,a1' && ids(lp1.capped) === 'a2,a3,a4', ids(lp1.ordered))
+  const lp2 = planAdaptLoads({ targets: mixed, isAdapt: isA, loadedToday: 3 })
+  const lp3 = planAdaptLoads({ targets: mixed, isAdapt: isA, loadedToday: 4 })
+  const lp4 = planAdaptLoads({ targets: mixed, isAdapt: isA, loadedToday: 9 })
+  check('🔴 🔴 **적재 — 하루 상한: 오늘 3건이면 1건 · 4건이면 0건 · 넘어도 음수 없음**',
+    lp2.room === 1 && ids(lp2.ordered) === 's0,s1,s2,a0' && lp3.room === 0 && ids(lp3.ordered) === 's0,s1,s2'
+    && lp4.room === 0 && ids(lp4.ordered) === 's0,s1,s2')
+  const NOWD = new Date('2026-09-29T03:00:00.000Z')
+  check('하루 경계는 KST 자정 (2026-09-29 00:00 KST = 09-28 15:00Z)', kstDayStartOf(NOWD).toISOString() === '2026-09-28T15:00:00.000Z')
+  const qg = { [RAW_ADAPT_QUARANTINE_KEY]: {} }
+  check('🔴 오늘 적재 수 — 격리 행만 · KST 오늘만 센다',
+    quarantineLoadedToday([
+      { gateResults: qg, createdAt: new Date('2026-09-28T15:00:00.000Z') },
+      { gateResults: qg, createdAt: new Date('2026-09-28T14:59:59.000Z') },
+      { gateResults: gs, createdAt: NOWD },
+      { gateResults: qg, createdAt: null },
+    ], NOWD) === 1)
+  type J = { sourceArticleId: string; decision: string }
+  const js: J[] = [
+    { sourceArticleId: 'r1', decision: 'AUTO_RAW' }, { sourceArticleId: 's1', decision: 'AUTO_SEED' },
+    { sourceArticleId: 'r2', decision: 'AUTO_RAW' }, { sourceArticleId: 'r3', decision: 'AUTO_RAW' },
+    { sourceArticleId: 's2', decision: 'AUTO_SEED' }, { sourceArticleId: 'r4', decision: 'AUTO_RAW' },
+  ]
+  const jids = (xs: readonly J[]): string => xs.map((j) => j.sourceArticleId).join(',')
+  const dp = planAdaptDrafts(js)
+  check('🔴 🔴 **생성 — seed 원천이 먼저(화자·예산 먼저) · 적응은 회차 상한 2까지 · 나머지는 미룸**',
+    jids(dp.ordered) === 's1,s2,r1,r2' && jids(dp.deferred) === 'r3,r4', jids(dp.ordered))
+  check('🟢 생성 — seed 만이면 입력과 같은 배열', jids(planAdaptDrafts(js.filter((j) => j.decision === 'AUTO_SEED')).ordered) === 's1,s2')
+
+  // ── 배선 — 실제 생성 러너(오프라인 · 유료 0)가 seed 먼저 · 적응 상한을 쓰는가 ──
+  {
+    const WORKTREE = join(dirname(fileURLToPath(import.meta.url)), '..')
+    const home = mkdtempSync(join(process.env.RAW_ADAPT_CHECK_TMP ?? tmpdir(), 'draft-'))
+    mkdirSync(join(home, '.microseed-data'), { recursive: true })
+    const lines = [
+      { sourceArticleId: 'w-r1', decision: 'AUTO_RAW' }, { sourceArticleId: 'w-s1', decision: 'AUTO_SEED' },
+      { sourceArticleId: 'w-r2', decision: 'AUTO_RAW' }, { sourceArticleId: 'w-r3', decision: 'AUTO_RAW' },
+      { sourceArticleId: 'w-r4', decision: 'AUTO_RAW' }, { sourceArticleId: 'w-s2', decision: 'AUTO_SEED' },
+    ].map((x) => JSON.stringify({ ...x, semanticRisks: [] })).join('\n')
+    writeFileSync(join(home, '.microseed-data', 'q627.shadow.jsonl'), `${lines}\n`, 'utf-8')
+    const r = spawnSync(join(WORKTREE, 'node_modules', '.bin', 'tsx'), [join(WORKTREE, 'scripts', 'micro-seed-auto-draft.mts')], {
+      cwd: home, encoding: 'utf-8', timeout: 120_000,
+      env: { ...process.env, TSX_TSCONFIG_PATH: join(WORKTREE, 'tsconfig.json') },
+    })
+    const out = `${r.stdout}`
+    check('🔴 🔴 **실제 생성 러너(오프라인) — 적응 원천 4건 중 상한 2건만 이번 회차 · 2건 미룸 · 생성 대상 seed 2 + 적응 2**',
+      r.status === 0 && out.includes('⓪-b 적응 원천 — 이번 회차 2건') && out.includes('다음 회차로 미룸 2건')
+      && out.includes('생성 대상 4건'), `exit ${r.status} · ${out.split('\n').filter((l) => /⓪-b|생성 대상|통과 판정/.test(l)).join(' | ')}${r.stderr.slice(-200)}`)
+    // 🔴 어드민 초안 대기열(서버 컴포넌트) — 목록 · 상태별 수 둘 다 격리 행을 뺀 값에서 만든다
+    const page = readFileSync(join(WORKTREE, 'src', 'app', 'admin', 'original-post-candidates', 'page.tsx'), 'utf-8')
+    check('🔴 어드민 초안 대기열 — 목록 · 상태별 수가 founderQueueRowsOf 를 지난다 (groupBy 로 격리 행을 세지 않는다)',
+      page.includes('founderQueueRowsOf(rowsRead)') && page.includes('founderQueueRowsOf(statusRows)')
+      && !page.includes('groupBy(') && /rows\.map\(/.test(page) && !/rowsRead\.map\(/.test(page))
+    // 🔴 파일 write 0 — 오프라인 계획은 아무것도 쓰지 않는다 (입력 파일 그대로)
+    check('실제 생성 러너(오프라인) — 입력 판정 파일을 고치지 않았다',
+      readFileSync(join(home, '.microseed-data', 'q627.shadow.jsonl'), 'utf-8') === `${lines}\n`)
+  }
+
+  // ── 기한 ──
+  const at = (days: number): Date => new Date(NOWD.getTime() - days * 864e5)
+  check('🔴 기한 — 6.9일 살아 있음 · 7일 만료 · 시각 모름은 만료(fail-closed)',
+    !isRawAdaptExpired(at(6.9), NOWD) && isRawAdaptExpired(at(7), NOWD) && isRawAdaptExpired(null, NOWD))
+  const qrow = (id: string, days: number, o: { status?: string; decidedBy?: string; createdPostId?: string | null; g?: unknown } = {}) => ({
+    id, status: o.status ?? 'APPROVED', createdPostId: o.createdPostId ?? null, decidedBy: o.decidedBy ?? 'machine:supply-autofill',
+    gateResults: o.g ?? ga, createdAt: at(days),
+  })
+  const qrows = [
+    qrow('live', 1), qrow('old', 8), qrow('oldFounder', 8, { decidedBy: MACHINE_REVIEWED_BY }),
+    qrow('oldAuto', 8, { decidedBy: AUTO_DECIDER }), qrow('oldPublished', 8, { createdPostId: 'p1' }),
+    qrow('oldExpired', 8, { status: 'EXPIRED' }), qrow('seedOld', 30, { g: gs }),
+  ]
+  const view = quarantineViewOf(qrows, NOWD)
+  check('🔴 🔴 **읽기 배제 — 기한 지난 격리 행은 살아 있는 쪽에 없다 · seed 행은 어느 쪽에도 없다**',
+    view.live.map((r) => r.id).join(',') === 'live' && !view.expired.some((r) => r.id === 'seedOld') && view.expired.length === 5)
+  check('🔴 🔴 **청소 대상 — 기한 지난 · APPROVED · 발행 전 · machine:* 만 (사람·자동 도장 · 발행 · 이미 만료 · seed 는 제외)**',
+    planRawAdaptSweep(qrows, NOWD).map((r) => r.id).join(',') === 'old')
+
+  // ── seed 몫 — 판정 묶음 자리는 main 과 같다 ──
+  /** 🔴 main(3f8af5a)의 `worksetAxisQuota` 를 그대로 옮긴 참조 — 이 PR 이 seed 자리를 줄이면 여기서 갈린다 */
+  const mainQuota = (limit: number, a: { seed: number; raw: number }): { seed: number; raw: number } => {
+    const n = Number.isInteger(limit) && limit > 0 ? limit : 0
+    if (n === 0) return { seed: 0, raw: 0 }
+    const share = Math.floor(n / 5)
+    const reserved = Math.min(share, a.raw)
+    const seed = Math.min(a.seed, n - reserved)
+    return { seed, raw: Math.min(Math.max(1, share), a.raw, n - seed) }
+  }
+  let diff = 0
+  for (let limit = 0; limit <= 15; limit += 1) {
+    for (let sa = 0; sa <= 15; sa += 1) {
+      for (let ra = 0; ra <= 15; ra += 1) {
+        const q = worksetAxisQuota(limit, { seed: sa, raw: ra })
+        const m = mainQuota(limit, { seed: sa, raw: ra })
+        if (q.seed !== m.seed || q.raw !== m.raw) diff += 1
+      }
+    }
+  }
+  check('🔴 🔴 **판정 묶음 축별 자리 = main 과 같다 (상한 0~15 × 적격 0~15² 전부) — seed 자리 불변**', diff === 0, `${diff}곳 다름`)
+  const q10 = worksetAxisQuota(SUPPLY_WORKSET_PER_RUN, { seed: 30, raw: 30 })
+  const q10s = worksetAxisQuota(SUPPLY_WORKSET_PER_RUN, { seed: 30, raw: 0 })
+  check('🔴 🔴 **기본 상한 10 — raw 가 넘쳐도 seed 8 · raw 2 / raw 가 없으면 seed 10**',
+    q10.seed === 8 && q10.raw === 2 && q10s.seed === 10 && q10s.raw === 0, JSON.stringify({ q10, q10s }))
 }
 
 // ─────────────────────────────────────────────────────────

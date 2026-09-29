@@ -71,6 +71,8 @@ import { AUTO_GATE_VERDICT } from '../src/lib/original-post-auto-publish'
 import { DECLINE_REASONS, isDeclineReasonCode } from '../src/lib/original-post-decision'
 import { gateEditedDraft } from './lib/original-post-edit-gate.mjs'
 import { DATA_DIR } from './micro-seed-auto-draft.mjs'
+/** 🔴 적응 레인 격리 행 — 창업자 검토 대기열에 올리지 않는다 (2026-09-29 · 판정 정본 하나) */
+import { founderQueueRowsOf } from '../src/lib/raw-adapt-quarantine'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -133,7 +135,12 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
   },
   orderBy: [{ decidedAt: 'asc' }, { createdAt: 'asc' }],
 })
-const rows: AutoRow[] = raw.map((r) => ({
+/**
+ * 🔴 **창업자 검토 대기열 = 적응 레인 격리 행을 뺀 것** (2026-09-29 보강).
+ *    긴 사연 적응 초안은 내부 실험이다 — 목록 · 한 건 보기(`--id`) · `--apply` 어디서도 대상이 아니다.
+ *    그 id 를 넣으면 "대기열에 없는 id" 로 멈춘다(검토 완료로 바꿔 발행 경로로 보내지 않는다).
+ */
+const rows: AutoRow[] = founderQueueRowsOf(raw).map((r) => ({
   id: r.id, status: r.status, createdPostId: r.createdPostId, gateVerdict: String(r.gateVerdict),
   promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
   title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,

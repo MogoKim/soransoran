@@ -206,7 +206,8 @@ export const REJECT_LABEL: Record<RejectCode, string> = {
   AUTO_READY_STALE: '🔴 자동 도장 뒤에 제목·본문·판정 계약이 바뀌었다 — 그 도장은 무효다',
   QUALITY_CONTRACT_MISMATCH:
     '🔴 자동 도장 행인데 지금 품질 계약(판 · digest)으로 만든 글이 아니다 — 자동으로 나가지 않는다.'
-    + ' 글은 큐에 그대로 남는다(삭제 · 재도장 · 계약 고쳐 쓰기 없음)',
+    + ' 글은 큐에 그대로 남는다(삭제 · 재도장 · 계약 고쳐 쓰기 없음).'
+    + ' 적응 레인 격리 행(긴 사연 적응 · 내부 실험)도 이 코드다 — 창업자 검토 대기가 아니다',
 }
 
 export type Reject = { id: string; code: RejectCode }
@@ -335,6 +336,16 @@ export function selectAutoTargets(
     const profile = profileOf(r)
     if (profile === null) { push(r.id, 'PROFILE'); continue }
     /**
+     * 🔴 **적응 레인 행은 내부 실험 격리다 — 사람 검토 판정보다 먼저 뺀다** (2026-09-29 · `raw-adapt-lane.ts`).
+     *    · 자동 도장이 있어도 · 문이 열려 있어도 자동 경로가 아니다(자동 발행 3중 차단의 selector 자리)
+     *    · 🔴 **`HUMAN_REVIEW_REQUIRED` 로 내보내지 않는다** — 그 코드는 창업자 검토 대기(재고 칸 `humanReviewPending` ·
+     *      Persona WIP · 자동 READY 묶음 그림자)로 읽힌다. 적응 행은 누구의 할 일도 아니다
+     *    · 사람 도장(`founder`)이 있어도 나가지 않는다 — 격리를 푸는 것은 별도 계약의 몫이다
+     *    거절 코드를 새로 만들지 않는다 — 지금 품질 계약(quality-v4)으로 만든 글이 아니라는 같은 뜻이고,
+     *    재고 칸은 WIP 가 아닌 `qualityContractMismatch` 다.
+     */
+    if (carriesRawAdaptMark(r.gateResults)) { push(r.id, 'QUALITY_CONTRACT_MISMATCH'); continue }
+    /**
      * 🔴 **기계 글은 사람이 확인한 것만 자동 발행 대상이다** (2026-09-14).
      *
      *    나이·세대 모순을 3/3 잡는 검수 모델이 없다(실측). 그 사실을 상수로만 적어 두고
@@ -360,11 +371,6 @@ export function selectAutoTargets(
        *    🔴 사람이 검토한 행(`founder`)은 이 블록에 들어오지 않는다 — 그 뜻은 그대로다.
        */
       if (!isCurrentQualityContract(r.gateResults)) { push(r.id, 'QUALITY_CONTRACT_MISMATCH'); continue }
-      /**
-       * 🔴 **적응 레인 행은 자동 도장이 있어도 자동 경로가 아니다** (2026-09-29 · `raw-adapt-lane.ts`).
-       *    거절 코드를 새로 만들지 않는다 — 품질 계약(quality-v4) 밖이라는 같은 뜻이고 푸는 주체(사람)도 같다.
-       */
-      if (carriesRawAdaptMark(r.gateResults)) { push(r.id, 'QUALITY_CONTRACT_MISMATCH'); continue }
       if (opts.autoReadyOpen !== true) { push(r.id, 'AUTO_READY_CLOSED'); continue }
       if (!stampValidFor(readStamp(r.editDiff), r.title, r.body).ok) { push(r.id, 'AUTO_READY_STALE'); continue }
 
