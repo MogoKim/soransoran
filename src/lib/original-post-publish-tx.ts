@@ -93,15 +93,12 @@ export type PlannedTarget = {
  */
 export const UNATTENDED_PUBLISH_DECIDED_BY = 'runner:unattended'
 
+/**
+ * 🔴 `scheduled.unattended` — 예약(launchd · GitHub 예약)이 부른 회차인가. 러너의 `--trigger` 가 정한다.
+ *    **필수** 다(판별 유니온 규칙 — optional boolean 게이트를 두지 않는다). 참일 때만 무인 표식을 남긴다.
+ */
 export type PublishMode =
-  | {
-      kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget
-      /**
-       * 🔴 예약(launchd · GitHub 예약)이 부른 회차인가 — 러너의 `--trigger` 가 정한다.
-       *    주지 않으면 무인으로 보지 않는다(fail-closed · 표식 `operator`).
-       */
-      unattended?: boolean
-    }
+  | { kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget; unattended: boolean }
   | { kind: 'manual-live'; dailyCap: number; releaseStage?: ReleaseStage }
 
 /**

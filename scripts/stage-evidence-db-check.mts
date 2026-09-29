@@ -361,11 +361,11 @@ try {
     const rowC = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: qc }, select: { id: true, status: true, createdPostId: true, updatedAt: true, decidedBy: true } })
     const c = await publishOriginalPostTx(prisma, {
       queueId: qc, publishedToday: 0,
-      mode: { kind: 'scheduled', releaseStage: 'd1',
+      mode: { kind: 'scheduled', releaseStage: 'd1', unattended: false,
         planned: { queueId: rowC.id, status: rowC.status, createdPostId: rowC.createdPostId, updatedAt: rowC.updatedAt, decidedBy: rowC.decidedBy } },
     }, { now: () => txNow })
     const lc = c.kind === 'published' ? await prisma.personaActivityLog.findFirst({ where: { targetId: c.postId } }) : null
-    check('🔴 예약이어도 unattended 를 안 주면(수동 실행) 표식 없음', lc?.decidedBy === 'operator', `${c.kind} ${lc?.decidedBy ?? '-'}`)
+    check('🔴 예약이어도 unattended=false(수동 트리거)면 표식 없음', lc?.decidedBy === 'operator', `${c.kind} ${lc?.decidedBy ?? '-'}`)
   }
 
   console.log('\n④ controller 실제 진입점 (dry-run · --json · 가짜 HOME)')
