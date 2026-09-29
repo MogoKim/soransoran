@@ -1,0 +1,366 @@
+#!/usr/bin/env tsx
+/**
+ * Persona 말투 근거 공급 fixture — 🔴 **DB 0 · 네트워크 0 · 유료 호출 0 · 운영 파일 0** (2026-09-29, Lane 3)
+ *
+ * 🔴 **fixture 가 실제보다 강하면 안 된다.** 합성 댓글이지만 거르기(`checkContent` · `safetyFilter` ·
+ *    Gate ⑥-B · `identityLeakCheck` · `carriesExperience`) · 묶기(`planBundles`) · seed 공유
+ *    (`referenceSeedShareCount`) · 후보 판정(`judgeAutogenCandidate`)은 **운영 함수 그대로**다.
+ *    반례는 한 칸씩만 비틀어, 정확히 그 칸의 코드가 나오는지 본다.
+ *
+ * 🔴 실제 `$HOME` 을 쓰지 않는다 — 임시 HOME 에 합성 정본 자산을 두고 모든 모듈을 **그 뒤에** 부른다
+ *    (자산 경로는 import 시점에 정해진다). 장부도 임시 디렉터리만 읽는다.
+ */
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const HOME = mkdtempSync(join(tmpdir(), 'voice-supply-check-'))
+process.env.HOME = HOME
+
+const { writeFakePersonaAsset } = await import('./lib/fake-persona-asset.mjs')
+writeFakePersonaAsset({ home: HOME, speakers: 18, perSpeaker: 6 })
+
+const { judgeReferenceBundle } = await import('../src/lib/persona-voice-reference')
+const { PRODUCTION_PERSONA_CODES } = await import('../src/lib/persona-cohort')
+const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
+const { judgeAutogenCandidate } = await import('./lib/persona-autogen.mjs')
+const { carriesExperience, loadCanonCorpusTexts, stableAssignment } = await import('./lib/persona-reference-store.mjs')
+const {
+  assignmentBytes, bytesDrift, dropDuplicateSpeakers, planSupplyBundles, planVoiceSupply, rekeyByContent,
+  rowsFromCollectLine, rowsFromRawContent, screenPublicComments, supplyTargetCodes,
+} = await import('./lib/persona-voice-supply.mjs')
+const {
+  FixtureCreativeProvider, LiveCreativeProvider, creativeProblems, readCreativeBudget, runCreativeStep,
+} = await import('./lib/persona-voice-creative.mjs')
+const { draftGate, runVoiceSupply } = await import('./lib/persona-voice-supply-run.mjs')
+const { PERSONA_POOL_DOC } = await import('./lib/voice-runtime.mjs')
+const { tallyOf } = await import('../src/lib/llm-ledger')
+type PublicCommentRow = import('./lib/persona-voice-supply.mjs').PublicCommentRow
+type VoiceReferenceBundle = import('../src/lib/persona-voice-reference').VoiceReferenceBundle
+type CreativeProvider = import('./lib/persona-voice-creative.mjs').CreativeProvider
+type CreativeBudget = import('./lib/persona-voice-creative.mjs').CreativeBudget
+type PersonaCreative = import('../src/lib/persona-autogen').PersonaCreative
+
+let pass = 0
+let failN = 0
+const check = (name: string, ok: boolean): void => {
+  if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { failN += 1; console.log(`  🔴 FAIL  ${name}`) }
+}
+
+console.log('\n══ Persona 말투 근거 공급 fixture ══\n')
+
+// ─────────────────────────────────────────────────────────
+// 합성 재료 — 🔴 경험을 주장하지 않는 짧은 반응 · 화자마다 다른 문장
+// ─────────────────────────────────────────────────────────
+const STEMS = [
+  '그러게요 그 말씀 맞네요', '아이고 그건 좀 그렇네요', '음 그럴 수도 있겠네요',
+  '맞아요 같은 생각이에요', '흠 잘 되셨으면 좋겠네요', '그래요 천천히 하셔도 돼요',
+]
+const SOURCE = 'test:cafe'
+const AUTHORS = ['봄바람', '달빛정원', '초록우산', '가을하늘', '산들바다', '노을빛길', '은행나무', '푸른언덕', '솔향기']
+const MEMBER = '해솔맘' // 🔴 회원 표시명 — 이 이름을 쓰는 공개 화자는 실회원일 수 있다
+/** 화자 s 의 댓글 i — 화자·순번마다 다른 문장 */
+const line = (s: number, i: number): string => `${STEMS[(s + i) % STEMS.length]!} (${s}-${i})`
+const speakerRows = (s: number, n = 4, author = AUTHORS[s]!): PublicCommentRow[] =>
+  Array.from({ length: n }, (_, i) => ({ source: SOURCE, articleId: `a${s}`, author, text: line(s, i) }))
+const MEMBERS = { memberNames: [MEMBER] }
+const canon = loadCanonCorpusTexts()
+const base = stableAssignment({ repoRoot: process.cwd() })
+
+console.log('⓪ 재료 자체')
+check('합성 정본 자산이 임시 HOME 에서 읽힌다 (18칸 배정)', canon.ok && base.byCode.size === 18)
+check('정본 배정은 P20~P25 를 비워 둔다', ['P20', 'P21', 'P22', 'P23', 'P24', 'P25'].every((c) => !base.byCode.has(c)))
+check('합성 공개 댓글은 경험형이 아니다', AUTHORS.every((_, s) => speakerRows(s).every((r) => !carriesExperience(r.text))))
+
+// ─────────────────────────────────────────────────────────
+// ① 거르기 · 익명화
+// ─────────────────────────────────────────────────────────
+console.log('① 거르기 · 익명화')
+{
+  const rows = [0, 1].flatMap((s) => speakerRows(s))
+  const r = screenPublicComments(rows, MEMBERS, 'salt-a')
+  check('깨끗한 화자 두 명 — 8건 전부 남는다', r.kept.length === 8)
+  check('speakerId 는 불투명 12자 hex 다', r.kept.every((k) => /^[0-9a-f]{12}$/.test(k.speakerId)))
+  const out = JSON.stringify(r)
+  check('🔴 결과 어디에도 작성자 표시가 없다', AUTHORS.every((a) => !out.includes(a)))
+  check('식별자 유출 검사가 돌았고 0건이다', r.identityLeak.ran && r.identityLeak.hits === 0)
+  const r2 = screenPublicComments(rows, MEMBERS, 'salt-b')
+  check('salt 가 다르면 speakerId 도 다르다(되돌릴 수 없다)', r.kept[0]!.speakerId !== r2.kept[0]!.speakerId)
+  check('내용 digest 로 다시 이름 붙이면 salt 와 무관하게 같다',
+    JSON.stringify(rekeyByContent(r.kept)) === JSON.stringify(rekeyByContent(r2.kept)))
+}
+{
+  const drops = (text: string, author = AUTHORS[0]!): string[] => {
+    const r = screenPublicComments([{ source: SOURCE, articleId: 'x', author, text }], MEMBERS, 's')
+    return Object.entries(r.dropped).filter(([, n]) => n > 0).map(([k]) => k)
+  }
+  check('개인정보 — 전화번호 → PII', drops('연락 주세요 010-1234-5678 이에요').join() === 'PII')
+  check('개인정보 — 이메일 → PII', drops('여기로 보내요 abc.def@example.com 입니다').join() === 'PII')
+  check('개인정보 — 계좌번호 요청 → PII', drops('계좌번호 알려 주시면 보낼게요').join() === 'PII')
+  check('개인정보 — 메신저 ID → PII', drops('카톡 아이디 sunny_77 로 연락 주세요').join() === 'PII')
+  check('안전 — 욕설 → UNSAFE', drops('그 사람 진짜 병신 같네요 정말').join() === 'UNSAFE')
+  check('닉네임 혼입 — 다른 작성자 표시가 본문에 → NICKNAME_LEAK', (() => {
+    const r = screenPublicComments([
+      ...speakerRows(1),
+      { source: SOURCE, articleId: 'x', author: AUTHORS[0]!, text: `${AUTHORS[1]!}님 말이 맞아요 정말로` },
+    ], MEMBERS, 's')
+    return r.dropped.NICKNAME_LEAK === 1 && r.kept.length === 4
+  })())
+  check('닉네임 혼입 — 회원 표시명이 본문에 → NICKNAME_LEAK', drops(`${MEMBER}님 글 보고 왔어요 반가워요`).join() === 'NICKNAME_LEAK')
+  check('식별자 유출 — 본문이 작성자 표시 그 자체 → IDENTITY_LEAK', (() => {
+    const r = screenPublicComments([
+      ...speakerRows(1, 4, '달빛정원의하루'),
+      { source: SOURCE, articleId: 'x', author: AUTHORS[0]!, text: '달빛정원의하루' },
+    ], MEMBERS, 's')
+    return r.dropped.IDENTITY_LEAK === 1
+  })())
+  check('작성자 없음 → UNATTRIBUTED', drops('그러게요 그 말씀 맞네요 정말', '').join() === 'UNATTRIBUTED')
+  check('길이 밴드 밖 → OUT_OF_BAND', drops('네네').join() === 'OUT_OF_BAND')
+  const exp = '저도 작년에 병원 다녀오고 나서 한결 나아졌어요'
+  check('경험형 → EXPERIENCE (운영 carriesExperience 가 경험으로 본다)', carriesExperience(exp) && drops(exp).join() === 'EXPERIENCE')
+}
+{
+  const real = screenPublicComments([...speakerRows(0, 4, MEMBER), ...speakerRows(1)], MEMBERS, 's')
+  check('실회원 사칭 — 작성자 표시가 회원 표시명과 같다 → 그 화자 전부 REAL_MEMBER_SPEAKER',
+    real.dropped.REAL_MEMBER_SPEAKER === 4 && real.realMemberSpeakers === 1 && real.kept.length === 4)
+  const near = screenPublicComments(speakerRows(0, 4, `${MEMBER}.`), MEMBERS, 's')
+  check('실회원 사칭 — 기호만 다른 표시(N2 정규화 일치)도 막는다', near.dropped.REAL_MEMBER_SPEAKER === 4)
+  const unknown = screenPublicComments(speakerRows(0), null, 's')
+  check('회원 표시명을 못 읽었으면(null) 전부 REAL_MEMBER_UNMEASURED — 모르면 통과가 아니다',
+    unknown.kept.length === 0 && unknown.dropped.REAL_MEMBER_UNMEASURED === 4)
+  const empty = screenPublicComments(speakerRows(0), { memberNames: [] }, 's')
+  check('회원이 0명인 것(빈 배열)은 잰 것이다 — 통과', empty.kept.length === 4)
+}
+
+// ─────────────────────────────────────────────────────────
+// ② 중복 화자
+// ─────────────────────────────────────────────────────────
+console.log('② 중복 화자')
+{
+  const kept = rekeyByContent(screenPublicComments([0, 1].flatMap((s) => speakerRows(s)), MEMBERS, 's').kept)
+  // 정본 코퍼스 문장과 기호·띄어쓰기만 다른 댓글을 가진 화자
+  const canonLine = canon.texts.find((t) => !carriesExperience(t))!
+  const twin = rekeyByContent(screenPublicComments([
+    ...speakerRows(2, 3),
+    { source: SOURCE, articleId: 'x', author: AUTHORS[2]!, text: `${canonLine.replace(/\s+/g, '  ')}!!` },
+  ], MEMBERS, 's').kept)
+  const d1 = dropDuplicateSpeakers([...kept, ...twin], canon.texts)
+  check('정본 코퍼스와 (정규화해서) 겹치는 화자 → 뺀다', d1.duplicateSpeakers === 1
+    && !d1.rows.some((r) => twin.some((t) => t.speakerId === r.speakerId)))
+  // 두 공급 화자가 띄어쓰기만 다른 같은 댓글을 가짐
+  const a = speakerRows(3)
+  const b = [...speakerRows(4, 3), { source: SOURCE, articleId: 'y', author: AUTHORS[4]!, text: a[0]!.text.replace(' ', '   ') }]
+  const d2 = dropDuplicateSpeakers(rekeyByContent(screenPublicComments([...a, ...b], MEMBERS, 's').kept), [])
+  check('공급 화자끼리 겹치면 먼저 선 화자만 남긴다', d2.duplicateSpeakers === 1 && new Set(d2.rows.map((r) => r.speakerId)).size === 1)
+  check('겹치지 않으면 모두 남는다', dropDuplicateSpeakers(kept, canon.texts).duplicateSpeakers === 0)
+}
+
+// ─────────────────────────────────────────────────────────
+// ③ 대상 순서 · 배정 · seed 공유
+// ─────────────────────────────────────────────────────────
+console.log('③ 대상 · 배정 · seed 공유')
+const NEW = ['P26', 'P27', 'P28']
+{
+  const t = supplyTargetCodes({ productionCodes: PRODUCTION_PERSONA_CODES, baseAssigned: new Set(base.byCode.keys()), newCodes: NEW })
+  check('대상 순서 — P20~P25 먼저, 그다음 새 코드', t.join(',') === 'P20,P21,P22,P23,P24,P25,P26,P27,P28')
+  check('대상에 정본 배정 코드(P01~P19)가 없다', t.every((c) => !base.byCode.has(c)))
+}
+const ALL8 = AUTHORS.slice(0, 8).flatMap((_, s) => speakerRows(s, 4 + (s % 3)))
+const planOf = (rows: readonly PublicCommentRow[], baseAfter?: () => ReadonlyMap<string, VoiceReferenceBundle>) => planVoiceSupply({
+  rows, members: MEMBERS, canonTexts: canon.texts, base: base.byCode,
+  baseAfter: baseAfter ?? (() => stableAssignment({ repoRoot: process.cwd() }).byCode),
+  productionCodes: PRODUCTION_PERSONA_CODES, newCodes: NEW, salt: 'fixed',
+})
+const plan = planOf(ALL8)
+{
+  check('3건↑ 안전 화자 8명', plan.availableSpeakers === 8)
+  check('배정 8칸 — P20~P25 여섯 + P26·P27', plan.slots.map((s) => s.code).join(',') === 'P20,P21,P22,P23,P24,P25,P26,P27')
+  check('모든 칸의 seed 공유 수가 1 이다', plan.slots.every((s) => s.seedShareCount === 1 && s.blocks.length === 0))
+  check('묶음은 운영 judgeReferenceBundle 을 다시 통과한다',
+    plan.slots.every((s) => judgeReferenceBundle({ personaCode: s.code, texts: s.bundle.comments.map((c) => c.text) }).ok))
+  check('한 묶음은 한 화자 — anchor 비율 1', plan.slots.every((s) => s.bundle.anchorRatio === 1))
+  check('🔴 운영 배정 바이트 drift 0', plan.drift.length === 0 && plan.ok)
+  const again = planOf([...ALL8].reverse())
+  check('입력 순서가 달라도 같은 배정 (결정론)',
+    JSON.stringify(again.slots.map((s) => [s.code, s.bundle.comments])) === JSON.stringify(plan.slots.map((s) => [s.code, s.bundle.comments])))
+}
+{
+  // 🔴 중복 제거를 건너뛰고 정본 P01 묶음 문장을 그대로 가진 화자를 배정에 넣는다 — seed 공유 게이트만 남는다
+  const p01 = base.byCode.get('P01')!
+  const rows = [
+    ...p01.comments.slice(0, 1).map((c) => ({ speakerId: 'sharedsp0001', text: c.text })),
+    ...[0, 1, 2].map((i) => ({ speakerId: 'sharedsp0001', text: line(8, i) })),
+  ]
+  const r = planSupplyBundles({ rows, targets: ['P20'], base: base.byCode })
+  check('정본 묶음과 같은 문장을 가진 칸 → SHARED_SEED · 공유 수 2',
+    r.slots.length === 1 && r.slots[0]!.blocks.includes('SHARED_SEED') && r.slots[0]!.seedShareCount === 2)
+  const r2 = planSupplyBundles({ rows, targets: ['P26'], base: base.byCode })
+  const v = judgeAutogenCandidate({
+    code: 'P26', life: null, creative: null, cadence: null, displayName: null,
+    voice: { bundle: r2.slots[0]!.bundle, seedShareCount: r2.slots[0]!.seedShareCount },
+    binding: { accountCount: 0, providerId: null },
+  }, { takenCodes: new Set() })
+  check('공유 seed 칸으로 만든 후보 → #623 판정이 VOICE_SPEAKER_DUPLICATE 로 격리', v.status === 'quarantined' && v.blocks.includes('VOICE_SPEAKER_DUPLICATE'))
+  check('정본 배정이 있는 코드는 공급이 덮지 않는다', planSupplyBundles({ rows, targets: ['P01'], base: base.byCode }).slots.length === 0)
+}
+{
+  // 🔴 drift — 정본 배정이 한 바이트라도 바뀌면 잡는다
+  const mutated = new Map(base.byCode)
+  const p01 = mutated.get('P01')!
+  mutated.set('P01', { ...p01, lengths: { ...p01.lengths, max: p01.lengths.max + 1 } })
+  const bad = planOf(ALL8, () => mutated)
+  check('P01 묶음 길이 분포 1 바뀜 → drift P01', bad.drift.join() === 'P01' && !bad.ok)
+  const codes = [...base.byCode.keys()]
+  check('assignmentBytes 는 같은 배정에 같은 값', bytesDrift(assignmentBytes(base.byCode, codes), assignmentBytes(stableAssignment({ repoRoot: process.cwd() }).byCode, codes)).length === 0)
+  check('묶음을 잃어도 drift 다', bytesDrift(assignmentBytes(base.byCode, codes), assignmentBytes(new Map(), codes)).length === codes.length)
+}
+
+// ─────────────────────────────────────────────────────────
+// ④ creative — 예산 게이트 · 유료 호출 0
+// ─────────────────────────────────────────────────────────
+console.log('④ creative 예산 게이트')
+class SpyLive implements CreativeProvider {
+  readonly kind = 'live' as const
+  readonly model = 'gemini-3.7-flash'
+  calls = 0
+  private readonly inner = new FixtureCreativeProvider()
+  async generate(req: Parameters<CreativeProvider['generate']>[0]): Promise<PersonaCreative> {
+    this.calls += 1
+    return this.inner.generate(req)
+  }
+}
+const REQ = {
+  code: 'P26',
+  life: {
+    ageBand: '50대 초반', birthDate: '1973-03-08', region: '광역시', maritalStatus: '이혼',
+    spouseRelationship: '해당없음', childrenCount: 1, childrenAgeBands: ['대학·취준' as const], childrenLiving: '동거' as const,
+    workStatus: '파트타임', economicStatus: '빠듯', housing: '월세', menopauseStatus: '진행중', parentCare: '간헐',
+  },
+  voiceCore: { length: '짧은 문장', register: '존댓말', ending: '~요', emoji: '없음' },
+}
+const OK_BUDGET: CreativeBudget = {
+  limits: { dailyUsd: 1, runRequestCap: 10, headroomMultiplier: 1.2 },
+  tally: tallyOf([]), runPaid: 0, ledgerOk: true, settleHold: null, unresolved: [],
+  countedInputTokens: 1_000, maxOutputTokens: 1_200,
+}
+{
+  const spy = new SpyLive()
+  const o = await runCreativeStep(spy, REQ, { budget: null, liveEnabled: true })
+  check('🔴 예산 없이 유료 호출 시도 → CREATIVE_BUDGET_BLOCKED(NO_BUDGET) · provider 호출 0',
+    !o.ok && o.code === 'CREATIVE_BUDGET_BLOCKED' && o.blockCode === 'NO_BUDGET' && spy.calls === 0)
+  const noEnv = await runCreativeStep(spy, REQ, { budget: { ...OK_BUDGET, limits: { dailyUsd: null, runRequestCap: null, headroomMultiplier: null } }, liveEnabled: true })
+  check('예산 env 미설정 → NO_BUDGET · 호출 0', !noEnv.ok && noEnv.blockCode === 'NO_BUDGET' && spy.calls === 0)
+  const noCount = await runCreativeStep(spy, REQ, { budget: { ...OK_BUDGET, countedInputTokens: null }, liveEnabled: true })
+  check('사전 계산 없음 → NO_COUNT · 호출 0', !noCount.ok && noCount.blockCode === 'NO_COUNT' && spy.calls === 0)
+  const broke = await runCreativeStep(spy, REQ, { budget: { ...OK_BUDGET, limits: { ...OK_BUDGET.limits, dailyUsd: 0.000001 } }, liveEnabled: true })
+  check('일일 여력 부족 → DAILY_EXHAUSTED · 호출 0', !broke.ok && broke.blockCode === 'DAILY_EXHAUSTED' && spy.calls === 0)
+  const hold = await runCreativeStep(spy, REQ, { budget: { ...OK_BUDGET, settleHold: '정산 미기록' }, liveEnabled: true })
+  check('정산 보류 표식 → SETTLE_ERROR · 호출 0', !hold.ok && hold.blockCode === 'SETTLE_ERROR' && spy.calls === 0)
+  const off = await runCreativeStep(spy, REQ, { budget: OK_BUDGET, liveEnabled: false })
+  check('🔴 예산이 열려도 liveEnabled=false 면 LIVE_CALL_NOT_EXECUTED · 호출 0', !off.ok && off.code === 'LIVE_CALL_NOT_EXECUTED' && spy.calls === 0)
+  const on = await runCreativeStep(spy, REQ, { budget: OK_BUDGET, liveEnabled: true })
+  check('예산 · liveEnabled 둘 다 열리면 그때만 부른다(게이트가 유일한 차단임을 확인)', on.ok && on.origin === 'live' && spy.calls === 1)
+  const real = await runCreativeStep(new LiveCreativeProvider('gemini-3.7-flash'), REQ, { budget: OK_BUDGET, liveEnabled: true })
+  check('실제 live provider 는 구현되지 않았다 — 불러도 LIVE_CALL_NOT_EXECUTED', !real.ok && real.code === 'LIVE_CALL_NOT_EXECUTED')
+  const fx = new FixtureCreativeProvider()
+  const f = await runCreativeStep(fx, REQ, { budget: null, liveEnabled: false })
+  check('fixture 는 비용 0 — 예산 없이 서고 origin=fixture', f.ok && f.origin === 'fixture' && fx.calls === 1)
+  check('creative 계약 — 성격이 비면 막는다', creativeProblems({ ...(f.ok ? f.creative : ({} as PersonaCreative)), personality: [] }).length > 0)
+  const bud = readCreativeBudget({
+    limits: { dailyUsd: null, runRequestCap: null, headroomMultiplier: null },
+    runId: 'check', now: new Date('2026-09-29T00:00:00Z'), dir: mkdtempSync(join(tmpdir(), 'voice-supply-ledger-')),
+  })
+  check('장부 읽기(빈 임시 장부) — ledgerOk · 사전 계산 없음 · 쓰지 않는다', bud.ledgerOk && bud.countedInputTokens === null)
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑤ 후보 — 운영 검증기 · draft 게이트
+// ─────────────────────────────────────────────────────────
+console.log('⑤ 후보')
+const POOL = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')).cards
+const CADENCE = { dailyCap: 3, weeklyCap: 12, silenceRate: 0.3, activityRhythm: { activeHours: [[10, 13], [21, 23]], burstiness: 0.3, weekdayBias: 0.5 } }
+const NAMES = new Map([['P26', '해솔'], ['P27', '다온'], ['P28', '새봄']])
+const runWith = (over: Partial<Parameters<typeof runVoiceSupply>[0]> = {}) => runVoiceSupply({
+  plan, productionCodes: PRODUCTION_PERSONA_CODES, pool: POOL, takenCodes: new Set(POOL.map((c) => c.code)),
+  provider: new FixtureCreativeProvider(), budget: null, liveEnabled: false,
+  cadence: CADENCE, names: NAMES, gateOf: () => 'pass', allowFixture: true, ...over,
+})
+{
+  const r = await runWith()
+  check('P20~P25 말투 보충 6칸 — 각 묶음 · seed 공유 1', r.topUps.length === 6 && r.topUps.every((t) => t.comments >= 3 && t.seedShareCount === 1))
+  const p26 = r.candidates.find((c) => c.code === 'P26')!
+  check('P26 — 공급 말투 + 골격 + fixture creative → 운영 검증기 valid', p26.verdict.status === 'valid' && p26.verdict.blocks.length === 0)
+  check('P26 — 글·댓글 자격 둘 다 참', p26.verdict.postEligible && p26.verdict.commentEligible)
+  check('격리 DB 에서는 fixture 도 draft 가능', p26.draftable)
+  const p28 = r.candidates.find((c) => c.code === 'P28')!
+  check('P28 — 화자가 모자라 말투 없음 → NO_VOICE_EVIDENCE 격리 · creative 부르지 않음',
+    p28.verdict.status === 'quarantined' && p28.verdict.blocks.includes('NO_VOICE_EVIDENCE') && p28.creativeOrigin === null)
+  check('creative 는 말투 있는 후보에만 불렀다 (2회)', r.creativeCalls === 2)
+  const prod = await runWith({ allowFixture: false })
+  check('🔴 운영(격리 아님)에서는 fixture creative 후보를 draft 로 보내지 않는다',
+    prod.candidates.every((c) => !c.draftable) && prod.candidates.find((c) => c.code === 'P26')!.draftBlock!.includes('fixture'))
+  const live = await runWith({ provider: new LiveCreativeProvider('gemini-3.7-flash'), allowFixture: false })
+  check('live provider · 예산 없음 → CREATIVE_BUDGET_BLOCKED · LLM_STEP_UNIMPLEMENTED 격리 · draft 0',
+    live.candidates.filter((c) => c.creativeCode === 'CREATIVE_BUDGET_BLOCKED').length === 2
+    && live.candidates.every((c) => !c.draftable && c.verdict.blocks.includes('LLM_STEP_UNIMPLEMENTED')))
+  const drifted = await runWith({ plan: planOf(ALL8, () => new Map()) })
+  check('운영 배정 drift 가 있으면 전원 VOICE_ASSIGNMENT_DRIFT 격리 · draft 0',
+    drifted.candidates.every((c) => c.verdict.blocks.includes('VOICE_ASSIGNMENT_DRIFT') && !c.draftable))
+  const real = await runWith({ gateOf: () => 'reject' })
+  check('표시명 Gate ⑥-B reject → REAL_MEMBER_COLLISION 격리 · draft 0',
+    real.candidates.every((c) => !c.draftable) && real.candidates.find((c) => c.code === 'P26')!.verdict.blocks.includes('REAL_MEMBER_COLLISION'))
+  const taken = await runWith({ takenCodes: new Set([...POOL.map((c) => c.code), 'P26']) })
+  check('이미 있는 코드 → CODE_TAKEN 격리 (재적재 방지)', taken.candidates.find((c) => c.code === 'P26')!.verdict.blocks.includes('CODE_TAKEN'))
+}
+{
+  const nameOnly = judgeAutogenCandidate({
+    code: 'P29', life: null, voice: null, creative: null, cadence: CADENCE,
+    binding: { accountCount: 0, providerId: null }, displayName: { name: '새봄', gate: 'pass' },
+  }, { takenCodes: new Set() })
+  check('🔴 이름만 있는 후보 → rejected · draft 게이트가 막는다',
+    nameOnly.status === 'rejected' && draftGate({ status: nameOnly.status, origin: 'live', allowFixture: true }) !== null)
+  check('quarantined 도 draft 게이트가 막는다', draftGate({ status: 'quarantined', origin: 'live', allowFixture: true }) !== null)
+  check('valid · live 는 통과', draftGate({ status: 'valid', origin: 'live', allowFixture: false }) === null)
+  check('valid · creative 없음은 막는다', draftGate({ status: 'valid', origin: null, allowFixture: true }) !== null)
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑥ 입력 어댑터
+// ─────────────────────────────────────────────────────────
+console.log('⑥ 입력 어댑터')
+{
+  const raw = rowsFromRawContent([
+    { sourceSite: 's1', sourceArticleId: 'a', rawComments: [{ body: '그러게요 정말로요', author: '봄바람' }, { body: '작성자 없는 댓글이에요' }] },
+    { sourceSite: 's1', sourceArticleId: 'b', rawComments: null },
+  ])
+  check('rawComments — body 를 읽고 author 가 없으면 null', raw.length === 2 && raw[0]!.author === '봄바람' && raw[1]!.author === null)
+  check('rawComments null 행은 0건', rowsFromRawContent([{ sourceSite: 's', sourceArticleId: 'x', rawComments: null }]).length === 0)
+  const c = rowsFromCollectLine({ sourceSite: 's2', sourceArticleId: 'q', comments: [{ author: '달빛', content: '맞아요 저도 같은 생각' }, '맨 문자열 댓글이에요'] })
+  check('수집 산출물 — {author,content} 는 화자, 맨 문자열은 작성자 없음', c.length === 2 && c[0]!.author === '달빛' && c[1]!.author === null)
+  check('수집 산출물 — 댓글 칸이 없으면(현재 운영 모양) 0건', rowsFromCollectLine({ sourceSite: 's', commentCount: 12 }).length === 0)
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑦ CLI 연결
+// ─────────────────────────────────────────────────────────
+console.log('⑦ CLI 연결')
+{
+  const cli = readFileSync('scripts/persona-voice-supply.mts', 'utf-8')
+  check('CLI 가 planVoiceSupply 로 계획한다', /planVoiceSupply\(\{/.test(cli))
+  check('🔴 CLI 는 liveEnabled: false 만 넘긴다', /liveEnabled: false/.test(cli) && !/liveEnabled: true/.test(cli))
+  const gate = cli.indexOf('if (!APPLY) {')
+  const call = cli.indexOf('await applyAutogenDrafts(')
+  check('적재는 --apply 게이트 뒤에서만 부른다', gate > 0 && call > gate)
+  check('적재 대상은 draftable 만이다', /const plans = draftable\.map\(/.test(cli))
+  check('fixture creative 적재는 격리 DB 에서만', /APPLY && CREATIVE === 'fixture' && !ISOLATED/.test(cli))
+  check('대상 코드가 이미 있으면 다시 적재하지 않는다', /배정 보존 없이 다시 적재하지 않는다/.test(cli))
+  check('정본 자산이 없으면 멈춘다', /if \(!canon\.ok\) fail\(/.test(cli))
+  check('CLI 는 provider 호출 모듈·fetch 를 쓰지 않는다', !/voice-m3-provider|callProvider|fetch\(/.test(cli))
+  const creative = readFileSync('scripts/lib/persona-voice-creative.mts', 'utf-8')
+  check('creative 모듈은 provider 호출 모듈·장부 쓰기를 import 하지 않는다',
+    !/voice-m3-provider|callProvider|appendLedgerLine|addOpenReservation|writeSettleHold/.test(creative))
+}
+
+rmSync(HOME, { recursive: true, force: true })
+console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
+process.exit(failN === 0 ? 0 : 1)
