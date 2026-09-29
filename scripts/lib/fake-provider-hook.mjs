@@ -23,7 +23,9 @@
  *    둘을 한 줄로 세면 "무료 호출이 늘었나 유료 호출이 늘었나" 를 구분할 수 없다.
  *    로그 한 줄은 `count<TAB>url` 또는 `paid<TAB>url` 이다.
  */
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const LOG = process.env.FAKE_PROVIDER_LOG ?? ''
 
@@ -79,6 +81,16 @@ async function armProtectClock() {
   if (!Number.isFinite(at.getTime())) throw new Error(`FAKE_SUPPLY_PROTECT_NOW 를 읽지 못했다 — ${PROTECT_NOW}`)
   const mod = await import('./supply-llm-call.mjs')
   mod.SUPPLY_PROTECT_TEST_SEAM.clock = () => at
+  /**
+   * 🔴 러너를 **복사한 작업 디렉터리**(cwd 에 `scripts/` 사본)에서 띄우는 fixture 가 있다
+   *    (`supply:draft-deferral-e2e-db-check`). 그 러너는 사본의 모듈을 쓰므로, 이 훅 옆 모듈에만 걸면
+   *    시각이 안 걸린다(2026-09-29 CI 실측 — 정기 회차가 창 밖 손 실행으로 판정돼 유료 0건). 사본에도 건다.
+   */
+  const copy = join(process.cwd(), 'scripts', 'lib', 'supply-llm-call.mts')
+  if (existsSync(copy)) {
+    const cmod = await import(pathToFileURL(copy).href)
+    cmod.SUPPLY_PROTECT_TEST_SEAM.clock = () => at
+  }
 }
 const MODE = process.env.FAKE_PROVIDER_MODE ?? 'ok'
 /** 🔴 사전 계산이 돌려줄 입력 토큰 수 — 예약액을 시험에서 조절하는 손잡이 */
