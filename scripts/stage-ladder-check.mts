@@ -1464,7 +1464,9 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     && /stock\.queueCandidates/.test(runnerCode) && /stock\.publishedToday/.test(runnerCode)
     // 🔴 조립 결과가 판정 함수 둘로 **그대로** 흘러간다 — 러너가 중간에 다시 읽지 않는다
     && /resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/.test(runnerCode)
-    && /planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runnerCode),
+    && /planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runnerCode)
+    // 🔴 (2026-09-29) 증명일 필요 수도 같은 조립 결과(stock.autoTargetsToday)와 consumer env 에서만 나온다
+    && /const proofAutoNeeded = autoFirstNeeded\(proofDay, stock\.autoTargetsToday \?\? 0\)/.test(runnerCode),
     runnerCode.split('\n').filter((l) => l.includes('stock.')).slice(0, 6).join(' | '))
   check('🔴 🔴 **러너 안에 별도 조립이 남아 있지 않다**',
     !/selectAutoTargets\(rows,/.test(runner)
@@ -1496,7 +1498,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
    *    아니라 **이 줄**이 먼저 빨개진다 — 사본 비교가 아니라 실제 소비 경로다.
    */
   check('🔴 🔴 **러너가 planPublishBatch 를 부르고 그 결과만 쓴다**',
-    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runner)
+    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runner)
     && /const assignOf = plan\.assignOf/.test(runner)
     && /const freshOrdered = plan\.freshOrdered/.test(runner)
     && /const brokenRecovery = plan\.brokenRecovery/.test(runner)
