@@ -31,9 +31,9 @@ PR, CI, helper, 수동 회차, 수동 stage override는 완료가 아니다. 완
 | 축 | 실측 | 판정 |
 |---|---|---|
 | main / runtime | 서로 다름 | main에는 Persona 하한/지속 목표 분리가 반영됐고 runtime은 `2c20d40`. exact SHA는 `git ls-remote`와 `ops:status`로 다시 읽음 |
-| M1 글 루프 | 09:30 자동 발행, Queue/Post/ActivityLog 일치 | **OPERATING PASS** |
+| M1 글 루프 | 앞선 quality-v4 행이 자동 READY -> 예약 발행 -> 감사까지 무인 완주했고 Queue/Post/ActivityLog가 일치 | **OPERATING PASS** |
 | M2 첫 댓글 | 공개 댓글 0, 마지막 Persona 댓글은 09-15. runner는 절전 복구 뒤 exit 0·health `ok` | **NOT PASS** — 실행 회복과 공개 성공은 다르다 |
-| 오늘 단계 | controller `TRIAL d3`, 공개 글 1/3 | 09:30 글이 60분 내 댓글을 못 받아 오늘 통합 D3 PASS 불가 |
+| 오늘 단계 | controller `TRIAL d3`, 공개 글 1/3이지만 자동 단계 실적 0/3 | 09:30 글은 사람 승인 재고라 자동 목표에 포함되지 않고 60분 내 댓글도 없어 오늘 통합 D3 PASS 불가 |
 | 자동 READY | ON | M1에서 작동. 글별 창업자 승인 없음 |
 | 감사 | job loaded, 최근 exit 0 | 글 발행 후 감사 경로는 운영됨. D3의 20% 정본 표본 운영 증명은 남음 |
 | READY 재고 | publishable 21 | 하루 시험은 가능. 지속 D3 14일 목표 42에는 미달 |
