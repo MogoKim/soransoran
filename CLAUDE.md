@@ -21,6 +21,19 @@
 🔴 **이 세 문서의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
 낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다.
 
+## 운영 실행 역할
+
+- 창업자는 목적·브랜드·예산·credential·법률·하드웨어·비가역 정책을 결정한다.
+- Codex는 운영 마스터로 우선순위, 병렬 트랙, PASS 기준과 완료를 판정한다.
+- Claude Code는 실행자로 진단, 구현, 검사, PR, 허용된 merge·배포, 운영 관측과 rollback 준비를
+  끝까지 수행한다.
+- latest canon 안의 가역 변경은 exact head, 필수 CI, 통합 트리, preflight, rollback이 green이면
+  PR마다 창업자 승인을 다시 기다리지 않는다.
+- 새 비용 상한, credential, DB migration, 법률·브랜드 정책, host 최종 cutover는 창업자 결정
+  없이는 실행하지 않는다.
+- 같은 파일은 한 agent만 쓰고, 겹치지 않는 파일·fixture·관측 트랙은 병렬화한다. 예약 회차를
+  기다린다는 이유로 다음 단계 구현을 멈추지 않는다.
+
 🔴 **매거진의 검색 키워드·주제 선정·시리즈·관련 글·SEO 성장 작업은 반드시**
 [`docs/operations/M-GRAPH-PROJECT-CHARTER.md`](docs/operations/M-GRAPH-PROJECT-CHARTER.md)를 먼저 읽는다.
 M-GRAPH 목적과 M-AUTO 실행 계약을 섞거나, 검색 노출을 일일 발행 게이트로 만들지 않는다.

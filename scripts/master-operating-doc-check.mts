@@ -11,7 +11,7 @@ import {
   RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
 } from './lib/persona-comment-runner-template'
 import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
-import { PROFILES, RELEASE_STAGES, derive, minuteOfDay } from '../src/lib/scale-profile'
+import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
@@ -81,8 +81,26 @@ check('D100 목표가 Persona 다양성과 지속 용량을 단계 계약에 포
   d100Goal.includes('Persona 확장 계약') && d100Goal.includes('계약 유효 화자'))
 check('D100 목표가 canary 운영 하한과 지속 다양성 300명을 구분한다',
   d100Goal.includes('자동 canary를 실행할 **운영 하한**')
-  && d100Goal.includes('| D100 | **300** |')
+  && /\| D100 \| 100 \| 120 \| 382 \| 180 \| \*\*300\+\*\* \| 100~500 \|/.test(d100Goal)
   && /300명은 상한이\s*아니라 첫 지속 운영 목표/.test(d100Goal))
+check('D100 목표가 단계 PASS 직후 다음 자동 canary를 연다',
+  d100Goal.includes('같은 날 남은 유효 슬롯')
+  && d100Goal.includes('다음 KST 운영일의 첫 유효 슬롯')
+  && d100Goal.includes('사람이 env나 stage를 바꾸지 않는다'))
+check('D100 목표가 첫 canary 2일치와 지속 운영 14일치를 분리한다',
+  d100Goal.includes('첫 canary 재고는 목표 공개량의 **2일치**')
+  && d100Goal.includes('14일치 재고는 지속 운영 목표'))
+check('현재 실행이 M1 PASS와 M2 NOT PASS를 구분한다',
+  /\| M1 \|[^\n]*\*\*PASS\*\*/.test(current)
+  && /\| M2 \|[^\n]*\*\*NOT PASS\*\*/.test(current))
+check('현재 실행이 D20-D100 scheduler와 Persona 자동 확장을 빠뜨리지 않는다',
+  current.includes('generic D3~D100 scheduler')
+  && current.includes('부족 축 기반 자동 생성기')
+  && current.includes('D100 | 100 | 120 | 382 | 180 | **300+**'))
+check('현재 실행이 댓글을 첫 댓글 뒤 대화 확장까지 정의한다',
+  current.includes('## 7. 댓글과 대화 확장')
+  && current.includes('글 특성에 따라 총 1~5건')
+  && current.includes('reaction/best'))
 check('North Star가 재방문+글/댓글+고유 실사용자를 모두 요구한다',
   /최근 7일 안에 재방문했고 글 또는 댓글을 한 번 이상 남긴 고유 실사용자 수/.test(master))
 check('Persona를 North Star에서 제외한다', master.includes('Persona, 봇, 운영 계정은 제외한다'))
@@ -899,6 +917,10 @@ for (const f of ['AGENTS.md', 'CLAUDE.md']) {
   check(`🔴 ${f} 가 NORTH-STAR 를 가리킨다`, g.includes('docs/operations/NORTH-STAR.md'))
   check(`🔴 ${f} 가 D100 목표 정본을 가리킨다`, g.includes('docs/operations/2026-09-21-d100-goal-canon.md'))
   check(`🔴 ${f} 가 CURRENT-MILESTONE 을 가리킨다`, g.includes('docs/operations/CURRENT-MILESTONE.md'))
+  check(`🔴 ${f} 가 PR마다 창업자 승인을 요구하지 않는다`,
+    g.includes('PR마다') && g.includes('창업자') && g.includes('승인'))
+  check(`🔴 ${f} 가 Codex와 Claude Code 역할을 구분한다`,
+    g.includes('Codex') && g.includes('Claude Code') && g.includes('끝까지'))
 }
 /** 🔴 정본을 복제하지 않는다 — 복제하면 한쪽이 낡고 낡은 쪽이 먼저 읽힌다 */
 check('🔴 North Star 문장을 지침에 복제하지 않았다',
@@ -929,32 +951,28 @@ for (const f of ['AGENTS.md', 'CLAUDE.md']) {
   check(`🔴 ${f} 가 목표 수치를 복제하지 않는다`,
     !/100\s*(건)?\/day/.test(g) && !g.includes('1~5건'))
 }
-check('🔴 D100 목표와 현재 실행 문서가 코드 수치 정본을 함께 가리킨다',
-  d100Goal.includes('src/lib/d100-capacity.ts')
-  && current.includes('src/lib/d100-capacity.ts')
-  && current.includes('100건/day')
+check('🔴 D100 정책 정본과 현재 구현 보고를 구분한다',
+  d100Goal.includes('정책 목표는 이 문서가 정본')
+  && d100Goal.includes('현재 구현과 운영이 정본에서 얼마나 떨어졌는지')
+  && current.includes('100글 + 100~500댓글')
   && current.includes('1~5건'))
 
 /**
- * 🔴 **단계 진입 게이트는 `derive(profile).stockTarget` 하나다** (2026-09-12).
+ * 🔴 **첫 canary 재고와 지속 운영 재고를 분리한다** (2026-09-29).
  *
- *    옛 판은 "재고 300 을 넘어야 d1 해제" 라고 적혀 있었다. 그런데 코드의 d3 재고 목표는
- *    42 다 — 문서가 코드보다 7배 높은 별도 게이트를 만들어 두고 있었고, 그 수는
- *    어디서도 계산되지 않았다. 재고 100·300·700 은 **성장 마일스톤**이지 진입 규제가 아니다.
- *
- *    🔴 문서가 그 값을 복제하므로 **코드에서 계산한 값과 같은지** 본다.
+ *    옛 판은 14일 stock 하나만 두어 하루 canary까지 막았다. 첫 시험은 2일치,
+ *    지속 운영은 코드의 14일 목표를 쓴다. 둘 중 하나를 지우거나 같은 gate로 합치면 안 된다.
  */
 {
   const milestone = readFileSync('docs/operations/CURRENT-MILESTONE.md', 'utf-8')
-  for (const stage of ['d3', 'd5', 'd10'] as const) {
-    const want = derive(PROFILES[stage]).stockTarget
-    check(`🔴 CURRENT-MILESTONE 의 ${stage} 재고 목표가 코드(${want})와 같다`,
-      new RegExp(`\\| ${stage} \\| \\*\\*${want}\\*\\* \\|`).test(milestone))
-  }
-  check('🔴 재고 300 을 d3 진입 게이트로 쓰지 않는다',
-    !/재고\s*300\s*을?\s*(넘어야|이상이어야)/.test(milestone))
-  check('🔴 100·300·700 은 성장 마일스톤이라고 적는다',
-    milestone.includes('성장 마일스톤이지'))
+  check('🔴 첫 canary 는 2일치 publishable stock 을 쓴다',
+    milestone.includes('목표 공개량의 2일치 publishable stock'))
+  check('🔴 지속 운영은 14일치 stock 을 유지한다',
+    milestone.includes('14일치 stock'))
+  check('🔴 14일 재고 부족이 첫 시험을 막지 않는다고 적는다',
+    milestone.includes('D3 첫 시험을') && milestone.includes('일주일 멈추라는 명령이 아니다'))
+  check('🔴 정책과 현재 코드의 7/14/21일 충돌을 숨기지 않는다',
+    milestone.includes('7/14/21일') && milestone.includes('최신 창업자 계약과 충돌'))
 }
 
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
