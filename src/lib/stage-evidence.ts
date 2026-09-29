@@ -39,8 +39,10 @@
  *    이 게이트는 하루를 비우지 않는다 — 올라갈 칸을 막을 뿐, 지금 공개 단계는 그대로 둔다.
  *
  * 🔴 **범위 — D3 · D5 · D10 전이까지만 닫는다.** `RELEASE_STAGES` 는 d1~d10 이고 `nextStage(d10)` 은 없다.
- *    D20 이상은 release profile · generic scheduler · 승인 천장(authorized ceiling) 이 아직 없다 —
+ *    D20 이상은 운영 release profile · 저장 계약 · 러너 배선이 아직 없다 —
  *    이 파일이 여는 것이 아니라 **별도 blocker** 다. D10 PASS 뒤 계획은 `null`(시험 없음)이다.
+ *    🔴 D20~D100 의 판정 골격은 `stage-ladder-generic` 에 있다 — 판정 본체(`judgeEvidenceForTarget`)는
+ *       이 파일 하나를 같이 쓴다. 그 골격은 운영 controller 에 **배선되지 않았다**.
  *
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0. 모으기는 `stage-evidence-repo` 가 한다.
  * 🔴 판정 결과에 원문·닉네임·id 를 담지 않는다 — **코드와 개수만**.
@@ -80,15 +82,16 @@ const UNKNOWN_CODES: readonly StageEvidenceCode[] = [
 
 export type EvidenceVerdictKind = 'PASS' | 'FAIL' | 'UNKNOWN'
 
-export type StageEvidenceVerdict = {
+export type EvidenceVerdictFor<S extends string> = {
   readonly kstDate: string
-  readonly stage: ReleaseStage
+  readonly stage: S
   readonly verdict: EvidenceVerdictKind
   /** 🔴 코드만 — 중복 없이 정본 순서 */
   readonly codes: readonly StageEvidenceCode[]
   /** 🔴 개수만 — 사람이 어느 조건이 모자랐는지 본다 */
   readonly counts: Readonly<Record<string, number>>
 }
+export type StageEvidenceVerdict = EvidenceVerdictFor<ReleaseStage>
 
 /**
  * 🔴 **글당 Persona 댓글 상한 — 댓글 단계의 정본 상수를 그대로 쓴다** (새 숫자 0).
@@ -125,6 +128,15 @@ export type EvidencePost = {
   decider: PostDecider
   /** 이 글의 살아 있는 Persona 댓글 전부 */
   personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean }[]
+}
+
+/**
+ * 🔴 단계 칸만 일반화한 사실 묶음 — `StageEvidenceFacts` 는 d1~d10 판이다.
+ *    결정 칸도 `release` 를 문자열로 받는다(D20 이상 결정 행은 아직 저장 계약에 없다 — 별도 blocker).
+ */
+export type EvidenceFactsFor<S extends string> = Omit<StageEvidenceFacts, 'stage' | 'decision'> & {
+  stage: S
+  decision: { kstDate: string; state: string; release: string; decidedBy: string } | null
 }
 
 export type StageEvidenceFacts = {
@@ -168,6 +180,19 @@ export function judgeStageEvidence(
   kstDate: string, stage: ReleaseStage,
   facts: StageEvidenceFacts | null, side: EvidenceSideSignals | null,
 ): StageEvidenceVerdict {
+  return judgeEvidenceForTarget(kstDate, stage, PROFILES[stage].dailyTarget, facts, side)
+}
+
+/**
+ * 🔴 **단계 이름과 하루 목표를 받는 판정 본체** (2026-09-29 generic scheduler 골격).
+ *    `judgeStageEvidence` 는 d1~d10(`PROFILES`) 목표로 이것을 부른다 — 동작은 한 글자도 바뀌지 않는다.
+ *    D20 이상(`stage-ladder-generic`)은 같은 여섯 조건을 **같은 본체**로 판정한다. 판정 규칙을 두 벌로 적지 않는다.
+ *    🔴 목표는 호출부가 정본 프로필에서 꺼내 넘긴다 — 여기서 숫자를 만들지 않는다.
+ */
+export function judgeEvidenceForTarget<S extends string>(
+  kstDate: string, stage: S, target: number,
+  facts: EvidenceFactsFor<string> | null, side: EvidenceSideSignals | null,
+): EvidenceVerdictFor<S> {
   const codes = new Set<StageEvidenceCode>()
   const counts: Record<string, number> = {}
   if (facts === null) codes.add('READ_ERROR')
@@ -184,7 +209,6 @@ export function judgeStageEvidence(
       if (d.release !== stage) codes.add('DECISION_STAGE_MISMATCH')
     }
     // ② 발행 — 🔴 자동 READY 로 만들어져 무인 러너가 낸 글만 자동 target 이다. 사람 승인 글은 0건으로 센다
-    const target = PROFILES[stage].dailyTarget
     const autoTargets = facts.posts.filter((p) => p.decider === 'auto' && p.unattended)
     counts.target = target
     counts.published = facts.posts.length
