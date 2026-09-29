@@ -14,6 +14,7 @@ import {
   PLANNED_DETAIL_PER_PUBLIC_POST, STOCK_DAYS, D100_PERSONA_TARGET_MAX,
   READY_NET_MARGIN, POSTS_PER_INVOCATION, schedulerSupportOf,
   targetStageFor, currentPlanOf, dailyTargetOf, stableObservationDaysOf, PROMOTION_PHASES,
+  PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, personaTargetReport, describePersonaTargets,
 } from '../src/lib/d100-capacity'
 import { resolveStage } from '../src/lib/scale-profile'
 import { readyNetFromSnapshots, READY_SELECTOR_VERSION } from './lib/d100-ready-snapshot.mjs'
@@ -91,13 +92,13 @@ console.log('\n① 🔴 🔴 D3→D100 용량 정본 — 숫자는 코드 한 �
     const w = want[p.stage]!
     check(`🔴 🔴 **${p.stage} — 공개 ${w[0]} · 상세 ${w[1]} · 재고 ${w[2]} · Persona ${w[3]}**`,
       p.publicPostsPerDay === w[0] && p.detailedSourcesRequiredPerDay === w[1]
-      && p.readyStock14Days === w[2] && p.activePersonaTarget === w[3],
-      `${p.publicPostsPerDay}/${p.detailedSourcesRequiredPerDay}/${p.readyStock14Days}/${p.activePersonaTarget}`)
+      && p.readyStock14Days === w[2] && p.personaCanaryFloor === w[3],
+      `${p.publicPostsPerDay}/${p.detailedSourcesRequiredPerDay}/${p.readyStock14Days}/${p.personaCanaryFloor}`)
   }
   const d100 = d100Plan('d100')
   check('🔴 🔴 **D100 재고 1,400 · 댓글 100~500 · Persona 180~200**',
     d100.readyStock14Days === 1400 && d100.commentMinPerDay === 100
-    && d100.commentMaxPerDay === 500 && d100.activePersonaTarget === 180
+    && d100.commentMaxPerDay === 500 && d100.personaCanaryFloor === 180
     && D100_PERSONA_TARGET_MAX === 200)
   check('🔴 재고는 14일치다', STOCK_DAYS === 14
     && d100.readyStock14Days === d100.publicPostsPerDay * STOCK_DAYS)
@@ -317,7 +318,7 @@ console.log('\n⑥ 🔴 🔴 측정되지 않은 값 — 0 으로 채우지 않�
    */
   const full: Parameters<typeof judgePromotion>[0] = {
     current: 'd1', next: 'd3',
-    readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+    readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
     detailPerDay: D3.detailedSourcesRequiredPerDay,
     readyQualifiedPerDay: D3.readyQualifiedRequiredPerDay,
     readyStockDeltaPerDay: 1,
@@ -367,7 +368,7 @@ console.log('\n⑥ 🔴 🔴 측정되지 않은 값 — 0 으로 채우지 않�
     const D20 = d100Plan('d20')
     const v = judgePromotion({
       current: 'd10', next: 'd20',
-      readyStock: D20.readyStock14Days, activePersonas: D20.activePersonaTarget,
+      readyStock: D20.readyStock14Days, activePersonas: D20.personaCanaryFloor,
       detailPerDay: D20.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: D20.readyQualifiedRequiredPerDay,
       readyStockDeltaPerDay: 1,
@@ -416,13 +417,20 @@ console.log('\n⑦ 🔴 🔴 Persona 24 → 180~200 — 카드만 채우면 READ
       ...FULL, code: `P${i}`, voiceComments: 0,
     }))
     const v = judgePersonaScale({ stage: 'd100', candidates: cards })
-    return !v.ready && v.poolReady === 0 && v.cardsOnly === 180 && v.shortfall === 180
+    return !v.canaryReady && !v.sustainedReady && v.poolReady === 0 && v.cardsOnly === 180
+      && v.canaryShortfall === 180 && v.sustainedShortfall === 300
       && v.cardComplete === 0 && v.cards === 180
   })())
-  check('🔴 쓸 수 있는 사람이 목표만큼 있으면 READY', (() => {
+  check('🔴 쓸 수 있는 사람이 canary 하한만큼 있으면 canary READY — 🔴 지속 READY 는 아니다', (() => {
     const cards = Array.from({ length: 180 }, (_, i) => ({ ...FULL, code: `P${i}` }))
     const v = judgePersonaScale({ stage: 'd100', candidates: cards })
-    return v.ready && v.poolReady === 180 && v.target === 180 && v.targetMax === 200
+    return v.canaryReady && v.poolReady === 180 && v.canaryFloor === 180 && v.canaryFloorMax === 200
+      && !v.sustainedReady && v.sustainedTarget === 300 && v.sustainedShortfall === 120
+  })())
+  check('🔴 지속 목표(300)만큼 있으면 두 판정 모두 READY', (() => {
+    const cards = Array.from({ length: 300 }, (_, i) => ({ ...FULL, code: `P${i}` }))
+    const v = judgePersonaScale({ stage: 'd100', candidates: cards })
+    return v.canaryReady && v.sustainedReady && v.sustainedShortfall === 0 && v.canaryShortfall === 0
   })())
 }
 
@@ -896,7 +904,7 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
     // 🔴 d3 수치를 그대로 들고 d5 로 올라가려 하면 막혀야 한다
     const regress = judgePromotion({
       current: 'd3', next: 'd5',
-      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
       detailPerDay: D3.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: D3.readyQualifiedRequiredPerDay,
       readyStockDeltaPerDay: 1,
@@ -920,7 +928,7 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
      */
     const noD3Record = judgePromotion({
       current: 'd3', next: 'd5',
-      readyStock: D5.readyStock14Days, activePersonas: D5.activePersonaTarget,
+      readyStock: D5.readyStock14Days, activePersonas: D5.personaCanaryFloor,
       detailPerDay: D5.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: D5.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
       publishedPerDay: D3.publicPostsPerDay,
@@ -930,7 +938,7 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
     })
     const ok = judgePromotion({
       current: 'd3', next: 'd5',
-      readyStock: D5.readyStock14Days, activePersonas: D5.activePersonaTarget,
+      readyStock: D5.readyStock14Days, activePersonas: D5.personaCanaryFloor,
       detailPerDay: D5.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: D5.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
       publishedPerDay: D5.publicPostsPerDay,
@@ -1137,7 +1145,7 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
   check('🔴 ① **READY 생산 4 · 발행 3 · 재고 +1 은 처리량 조건을 통과한다**', (() => {
     const v = judgePromotion({
       current: 'd3', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
       detailPerDay: D3.detailedSourcesRequiredPerDay,
       // 🔴 생산 4 · 재고 증감 +1
       readyQualifiedPerDay: 4, readyStockDeltaPerDay: 1,
@@ -1150,7 +1158,7 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
     // 🔴 반대로 생산이 3 이면 막힌다 — 여유율은 생산량에 붙는다
     const tooLittle = judgePromotion({
       current: 'd3', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
       detailPerDay: D3.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: 3, readyStockDeltaPerDay: 1,
       publishedPerDay: 3, currentStableStreakDays: stableObservationDaysOf('d3'),
@@ -1159,7 +1167,7 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
     // 🔴 재고를 채운 뒤 줄고 있으면 고갈 위험으로 따로 막는다
     const depleting = judgePromotion({
       current: 'd3', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
       detailPerDay: D3.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: 4, readyStockDeltaPerDay: -2,
       publishedPerDay: 3, currentStableStreakDays: stableObservationDaysOf('d3'),
@@ -1168,7 +1176,7 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
     // 🔴 재고를 채우기 전이라면 음수여도 고갈로 막지 않는다 (아직 쌓는 중이다)
     const stillFilling = judgePromotion({
       current: 'd3', next: 'd3',
-      readyStock: 3, activePersonas: D3.activePersonaTarget,
+      readyStock: 3, activePersonas: D3.personaCanaryFloor,
       detailPerDay: D3.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: 4, readyStockDeltaPerDay: -2,
       publishedPerDay: 3, currentStableStreakDays: stableObservationDaysOf('d3'),
@@ -1187,7 +1195,7 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
   check('🔴 ② **d1→d3 preflight 는 3/day 를 요구하지 않는다**', (() => {
     const v = judgePromotion({
       current: 'd1', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
       detailPerDay: D3.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: D3.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
       // 🔴 d1 은 하루 1편이 자기 목표다
@@ -1377,7 +1385,7 @@ console.log('\n⑮ 🔴 🔴 PR #555 5차 보정 — 세 결함의 회귀')
     return judgePromotion({
       current, next,
       readyStock: d100Plan(next).readyStock14Days,
-      activePersonas: d100Plan(next).activePersonaTarget,
+      activePersonas: d100Plan(next).personaCanaryFloor,
       detailPerDay: d100Plan(next).detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: d100Plan(next).readyQualifiedRequiredPerDay,
       readyStockDeltaPerDay: 1,
@@ -1518,7 +1526,7 @@ console.log('\n⑯ 🔴 🔴 안정화 판정 — 7일 조건이 몰래 14일이
     const req = d100Plan(next)
     const v = judgePromotion({
       current, next,
-      readyStock: req.readyStock14Days, activePersonas: req.activePersonaTarget,
+      readyStock: req.readyStock14Days, activePersonas: req.personaCanaryFloor,
       detailPerDay: req.detailedSourcesRequiredPerDay,
       readyQualifiedPerDay: req.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
       publishedPerDay: avg, currentStableStreakDays: streak,
@@ -1951,7 +1959,7 @@ console.log('\n⑲ 🔴 🔴 회차 1번을 생산율로 · 다른 selector 를 
     const D3 = d100Plan('d3')
     const v = judgePromotion({
       current: 'd1', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
       detailPerDay: D3.detailedSourcesRequiredPerDay,
       // 🔴 canary 는 위에서 `measured:false` 임을 확인했다 — 그래서 `null` 이다
       readyQualifiedPerDay: null,
@@ -2016,6 +2024,115 @@ console.log('\n⑲ 🔴 🔴 회차 1번을 생산율로 · 다른 selector 를 
       /** 🔴 workset 판정을 정본 `readWorkset` 에 넘긴다 — 인라인 대체를 막는다 */
       && /worksetEvidenceOf\(\s*worksetFiles[\s\S]{0,200}?readWorkset,\s*\)/.test(strip(funnelCli))
     return named && sameSelector
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다양성 목표를 섞지 않는다 (2026-09-29)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **canary 하한은 옛 `activePersonaTarget` 값 그대로다.** 이 표가 바뀌면
+   *    첫 시험 문턱이 조용히 움직인 것이다 — 창업자 결정 없이 바꾸지 않는다.
+   */
+  const FLOOR: Readonly<Record<string, number>> = { d3: 24, d5: 24, d10: 30, d20: 40, d30: 60, d50: 100, d100: 180 }
+  const strip = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const SUSTAINED: Readonly<Record<string, number>> = { d3: 24, d5: 24, d10: 30, d20: 60, d30: 90, d50: 150, d100: 300 }
+  check('🔴 🔴 **canary 하한 = 옛 코드값 그대로 (24·24·30·40·60·100·180)**',
+    D100_STAGES.every((st) => PERSONA_CANARY_FLOOR[st] === FLOOR[st] && d100Plan(st).personaCanaryFloor === FLOOR[st]),
+    JSON.stringify(PERSONA_CANARY_FLOOR))
+  check('🔴 🔴 **지속 목표 = 24·24·30·60·90·150·300(이상)**',
+    D100_STAGES.every((st) => PERSONA_SUSTAINED_TARGET[st] === SUSTAINED[st]
+      && d100Plan(st).personaSustainedTarget === SUSTAINED[st]),
+    JSON.stringify(PERSONA_SUSTAINED_TARGET))
+  check('🔴 지속 목표는 어느 단계에서도 canary 하한보다 작지 않다',
+    D100_STAGES.every((st) => PERSONA_SUSTAINED_TARGET[st] >= PERSONA_CANARY_FLOOR[st]))
+  check('🔴 D3·D5·D10 은 두 값이 같고 D20 부터 갈린다 — 반례: 한 표로 되돌리면 FAIL',
+    (['d3', 'd5', 'd10'] as const).every((st) => PERSONA_CANARY_FLOOR[st] === PERSONA_SUSTAINED_TARGET[st])
+    && (['d20', 'd30', 'd50', 'd100'] as const).every((st) => PERSONA_SUSTAINED_TARGET[st] > PERSONA_CANARY_FLOOR[st]))
+
+  // 🔴 release 프로필이 없는 D20+ 도 지속 목표를 **지금** 보고한다
+  check('🔴 🔴 **D20+ 는 release 프로필이 없어도 지속 목표를 보고한다**',
+    (['d20', 'd30', 'd50', 'd100'] as const).every((st) => {
+      const r = personaTargetReport(st, 0)
+      return schedulerSupportOf(st).releaseStage === null
+        && r.sustainedTarget === SUSTAINED[st] && r.sustainedMet === false
+        && r.sustainedShortfall === SUSTAINED[st]
+    }))
+
+  const D20 = d100Plan('d20')
+  const base: Parameters<typeof judgePromotion>[0] = {
+    current: 'd10', next: 'd20',
+    readyStock: D20.readyStock14Days, activePersonas: D20.personaCanaryFloor,
+    detailPerDay: D20.detailedSourcesRequiredPerDay,
+    readyQualifiedPerDay: D20.readyQualifiedRequiredPerDay,
+    readyStockDeltaPerDay: 1,
+    publishedPerDay: dailyTargetOf('d10'),
+    currentStableStreakDays: stableObservationDaysOf('d10'),
+    publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
+  }
+  const atFloor = judgePromotion(base)
+  check('🔴 🔴 **canary 하한(40)만 채우면 preflight 가 Persona 로 막히지 않는다 — 지속 목표(60)로 막지 않는다**',
+    !atFloor.nextPreflight.blocking.some((b) => b.includes('Persona'))
+    && atFloor.persona.canaryFloorMet === true && atFloor.persona.sustainedMet === false,
+    JSON.stringify(atFloor.nextPreflight.blocking))
+  check('🔴 🔴 **canary 하한을 채웠다고 지속 준비라 말하지 않는다**',
+    atFloor.persona.sustainedMet === false && atFloor.persona.sustainedTarget === 60
+    && atFloor.persona.sustainedShortfall === 20)
+  check('🔴 지속 목표 미달은 blocking·unmeasured 어디에도 섞이지 않는다',
+    ![...atFloor.blocking, ...atFloor.unmeasured].some((b) => b.includes('지속')))
+  check('🔴 반례: canary 하한보다 1명 모자라면 preflight 가 막는다',
+    judgePromotion({ ...base, activePersonas: D20.personaCanaryFloor - 1 }).nextPreflight.blocking
+      .some((b) => b.includes(`canary 하한 ${D20.personaCanaryFloor}`)))
+  check('🔴 지속 목표를 채우면 두 칸 모두 충족',
+    (() => {
+      const v = judgePromotion({ ...base, activePersonas: 60 })
+      return v.persona.canaryFloorMet === true && v.persona.sustainedMet === true
+    })())
+  check('🔴 재지 못했으면 두 칸 모두 null — 통과로도 0 으로도 읽지 않는다',
+    (() => {
+      const v = judgePromotion({ ...base, activePersonas: null })
+      return v.persona.canaryFloorMet === null && v.persona.sustainedMet === null
+        && v.persona.active === null && v.nextPreflight.unmeasured.includes('활성 Persona')
+    })())
+
+  // 🔴 카드 층 — canary 하한으로 ready, 지속 목표는 따로
+  check('🔴 🔴 **카드 층: 40명 완성이면 d20 canary ready · 지속 목표 60 은 미충족으로 따로 보고**', (() => {
+    const cand: PersonaCandidate = {
+      code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
+      voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
+      daysSinceActive: 0, retired: false, qualificationConflict: false,
+      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+    }
+    const cards = Array.from({ length: 40 }, (_, i) => ({ ...cand, code: `P${i}` }))
+    const card = personaTierReadiness({ stage: 'd20', candidates: cards }).find((t) => t.tier === 'card')!
+    const scale = judgePersonaScale({ stage: 'd20', candidates: cards })
+    return card.ready && card.target === 40 && card.sustainedTarget === 60 && card.sustainedMet === false
+      && scale.canaryReady && !scale.sustainedReady && scale.sustainedShortfall === 20
+  })())
+
+  check('🔴 보고 한 줄에 두 숫자가 함께 나온다',
+    (() => {
+      const line = describePersonaTargets(personaTargetReport('d20', 40))
+      return line.includes('canary 하한 40명') && line.includes('지속 목표 60명')
+        && /🟢 충족/.test(line) && /🔴 미달/.test(line)
+    })())
+  check('🔴 D100 지속 목표는 "300명 이상" 으로 보고한다',
+    describePersonaTargets(personaTargetReport('d100', null)).includes('지속 목표 300명 이상'))
+
+  // 🔴 계기판이 두 목표를 **실제로** 찍는가 — 만든 것과 연결된 것은 다르다
+  check('🔴 🔴 **d100:readiness 가 두 목표를 모두 찍는다 (표 · 승격 · JSON)**', (() => {
+    const cli = strip(readFileSync('scripts/d100-master-readiness.mts', 'utf-8'))
+    return /describePersonaTargets\(promo\.persona\)/.test(cli)
+      && /personaCanaryFloor/.test(cli) && /personaSustainedTarget/.test(cli)
+      && /targetsByActiveCards/.test(cli)
+      && !/activePersonaTarget/.test(cli)
+  })())
+  check('🔴 옛 겹친 이름(`activePersonaTarget`)이 정본에 남아 있지 않다', (() => {
+    const cap = strip(readFileSync('src/lib/d100-capacity.ts', 'utf-8'))
+    const scale = strip(readFileSync('src/lib/d100-persona-scale.ts', 'utf-8'))
+    return !/activePersonaTarget/.test(cap) && !/activePersonaTarget/.test(scale)
   })())
 }
 
