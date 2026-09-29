@@ -321,7 +321,14 @@ export function planStageDecision(input: StageInputs): StageDecision {
   let transition: TransitionProvenance | null = null
   const up = next(input.sustainedRelease)
 
-  if (promotion?.ready === true && up !== null) {
+  /**
+   * 🔴 **D20 이상은 지속 승격(SUSTAIN)으로 건너가지 않는다** (2026-09-29 계약 정렬).
+   *    D100 용량표(`schedulerSupportOf`)가 이제 d20~d50 러너 프로필을 "감당한다" 고 말한다 —
+   *    그러면 `judgePromotion` 이 d10→d20 을 ready 로 낼 수 있다. 그 길로 가면 D20+ 관문
+   *    (preflight · LATE_START · 운영 증거 PASS)을 거치지 않고 공개가 오른다.
+   *    D20 이상은 **하루 시험(TRIAL) → 운영 증거 PASS** 로만 오른다 — 앞판 동작(SUSTAIN 은 d10 까지) 그대로다.
+   */
+  if (promotion?.ready === true && up !== null && !needsExtendedGate(up)) {
     /**
      * ── ① 지속 승격 ──
      * 🔴 **천장은 그대로다.** D3→D5 공개 승격이 D10 승인을 뜻하지 않는다.

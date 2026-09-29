@@ -150,9 +150,9 @@ export const PROFILES: Readonly<Record<ReleaseStage, ScaleProfile>> = {
 /**
  * 🔴 **러너가 돌릴 수 있는 단계 — `RELEASE_STAGES` 위에 D20·D30·D50 을 얹는다.**
  *
- *    `RELEASE_STAGES`·`PROFILES` 는 **d1~d10 그대로 둔다.** 그 둘은 두 곳이 정본으로 쓴다 —
- *      · GitHub 예약 합집합(`allStageSlots` → `auto-publish.yml`) — 예약 10회를 늘리지 않는다
- *      · D100 용량표(`d100-capacity.schedulerSupportOf`) — 그 파일은 이 배선 밖이다
+ *    `RELEASE_STAGES`·`PROFILES` 는 **d1~d10 그대로 둔다.** GitHub 예약 합집합
+ *    (`allStageSlots` → `auto-publish.yml`)이 정본으로 쓴다 — 예약 10회를 늘리지 않는다.
+ *    D100 용량표(`d100-capacity.schedulerSupportOf`)는 이 러너 프로필을 읽는다 — d20~d50 감당 · d100 미감당.
  *    D20 이상은 **로컬 heartbeat(10분 격자)** 로만 돈다. 슬롯이 전부 그 격자 위에 있어서
  *    GitHub 예약 없이도 catch-up 이 도래한 슬롯을 낸다(`stage-scheduler-check` 가 격자·창·첫 댓글 3회를 본다).
  *

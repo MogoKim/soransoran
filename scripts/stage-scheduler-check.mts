@@ -36,7 +36,9 @@ import {
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, simulateDay } from '../src/lib/publish-slot-catchup'
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
-import { d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
+import {
+  d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf, judgePromotion, dailyTargetOf, stableObservationDaysOf,
+} from '../src/lib/d100-capacity'
 import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
 import {
   judgeStageEvidence, judgeEvidenceForTarget, trialPlanOf, PROOF_STATES,
@@ -90,7 +92,7 @@ section('① 단계 목록 · 목표')
 check('러너 단계 = RELEASE_STAGES(d1·d3·d5·d10) + d20·d30·d50 · 표현 단계는 그 위 d100',
   RELEASE_STAGES.every((s, i) => RUNTIME_STAGES[i] === s) && RUNTIME_STAGES.join(',') === 'd1,d3,d5,d10,d20,d30,d50'
   && GENERIC_STAGES.join(',') === 'd1,d3,d5,d10,d20,d30,d50,d100')
-check('🔴 RELEASE_STAGES · PROFILES 는 d1~d10 그대로다(GitHub 예약 합집합 · D100 용량표 정본 불변)',
+check('🔴 RELEASE_STAGES · PROFILES 는 d1~d10 그대로다(GitHub 예약 합집합 불변 · D100 용량표 슬롯은 RUNTIME_PROFILES 를 읽는다)',
   RELEASE_STAGES.join(',') === 'd1,d3,d5,d10' && Object.keys(PROFILES).join(',') === 'd1,d3,d5,d10')
 check('🔴 d1~d10 러너 프로필은 PROFILES 와 같은 객체다(값 불변)', RELEASE_STAGES.every((s) => RUNTIME_PROFILES[s] === PROFILES[s]))
 for (const s of ['d20', 'd30', 'd50', 'd100'] as const) {
@@ -455,6 +457,39 @@ for (const [m, code] of [['dup', 'DUP_COMMENT'], ['auditShort', 'AUDIT_COVERAGE_
   const w = walk(startRow('d10', 'd50', 'REPROVE'), ['perfect', m])
   check(`🔴 S10 ${m} → FAIL ${code} → d20 재시험`, tr(w.days[1]!) === 'TRIAL:d20' && basisOf(w.days[1]!) === 'RETEST'
     && w.days[1]!.evidence?.codes.includes(code) === true, `${w.trace} ${JSON.stringify(w.days[1]!.evidence?.codes)}`)
+}
+
+// S11 — 계약 정렬: D100 용량표도 d20~d50 을 감당한다고 말한다 · 그래도 D20+ 는 SUSTAIN 으로 건너가지 않는다
+{
+  check('🔴 S11 D100 용량표 = 러너 프로필 — d20·d30·d50 감당(슬롯 = RUNTIME_PROFILES) · d100 은 schedulerUnsupported',
+    (['d20', 'd30', 'd50'] as const).every((s) => {
+      const sc = schedulerSupportOf(s)
+      return sc.supported && sc.releaseStage === s && sc.scheduledSlotsPerDay === RUNTIME_PROFILES[s].slots.length
+        && sc.actualDailyPublishable === d100Plan(s).publicPostsPerDay
+    }) && !schedulerSupportOf('d100').supported && schedulerSupportOf('d100').reason === 'schedulerUnsupported')
+  const promo = (current: 'd3' | 'd10', next: 'd5' | 'd20'): ReturnType<typeof judgePromotion> => {
+    const p = d100Plan(next)
+    return judgePromotion({
+      current, next, readyStock: p.readyStock14Days, activePersonas: p.personaCanaryFloor,
+      detailPerDay: p.detailedSourcesRequiredPerDay, readyQualifiedPerDay: p.readyQualifiedRequiredPerDay,
+      readyStockDeltaPerDay: 1, publishedPerDay: dailyTargetOf(current), currentStableStreakDays: stableObservationDaysOf(current),
+      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
+    })
+  }
+  const sustainDay = (release: RuntimeStage, ceiling: string, promotion: ReturnType<typeof judgePromotion>): ControllerResult => decideStage({
+    kstDate: addDays(D0, 1), decidedAt: at0700(addDays(D0, 1)), envRelease: 'd1', authorizedCeiling: resolveCeiling(ceiling).operable,
+    previousDecision: startRow(release, resolveCeiling(ceiling).operable), previousEvidence: null, verdicts: ALL_READY, daily: null,
+    nextPreflight: null, promotion, publishedToday: 0, signals: OK_SIGNALS,
+  })
+  const p20 = promo('d10', 'd20')
+  const up20 = sustainDay('d10', 'd20', p20)
+  check('🔴 🔴 S11 judgePromotion d10→d20 이 ready 여도(천장 d20) SUSTAIN d20 으로 건너가지 않는다 — D20+ 는 TRIAL → 증거 PASS 로만',
+    p20.ready && up20.decision.state === 'REPROVE' && up20.decision.release === 'd10' && up20.decision.transition === null,
+    `${p20.ready} ${up20.decision.state}:${up20.decision.release}`)
+  const p5 = promo('d3', 'd5')
+  const up5 = sustainDay('d3', 'd10', p5)
+  check('S11 대조 — d3→d5 지속 승격은 그대로 열린다(가드는 D20+ 만 막는다)',
+    p5.ready && up5.decision.state === 'SUSTAIN' && up5.decision.release === 'd5', `${p5.ready} ${up5.decision.state}:${up5.decision.release}`)
 }
 
 // 저장 계약

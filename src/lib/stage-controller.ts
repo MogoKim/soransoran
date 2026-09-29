@@ -4,7 +4,7 @@
  * 🔴 **새 문턱값을 만들지 않는다.** 판정은 전부 정본이 한다:
  *    · 재고        `stageVerdicts` → 사다리 안의 `safeStageFor`        (이미 사다리가 감속한다)
  *    · 하루 시험    `judgeOneDayCanary`  → TRIAL
- *    · 지속 승격    `judgePromotion`     → SUSTAIN (승인 천장 안에서만 · D100 용량표가 d10 까지라 SUSTAIN 도 d10 까지)
+ *    · 지속 승격    `judgePromotion`     → SUSTAIN (승인 천장 안에서만 · d10 까지 — D20+ 는 사다리가 SUSTAIN 을 막고 TRIAL 로만 오른다)
  *    · 재증명      사다리 `REPROVE`      → 다음 칸이 천장 안인데 시험이 안 열린 날, 지금 단계를 증명일로 (2026-09-29)
  *    · D20 이상    `judgeNextPreflight` → 사다리의 D20+ 관문(preflight · LATE_START). 러너 단계는 d1~d50
  *    · 품질        자동 READY 감사 정본 — 확정 결함 · 글 유실 · 재시도 가능 실패 · 판정 시한 초과(6h)
