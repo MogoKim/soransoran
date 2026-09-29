@@ -196,7 +196,7 @@ const HOME_POPULAR_MIN_MENOPAUSE = 7
 /**
  * 홈 인기 점수 목록 — 홈 노출 예외(PIN·HIDE)를 얹기 전의 순수 점수 순서.
  *
- * 🔴 홈 전용이다. /best 는 이것을 쓰지 않는다 — 자기 순위 키(best-ranking.ts)와
+ * 🔴 홈 전용이다. /best 는 이것을 쓰지 않는다 — 자기 입성 기준(best-ranking.ts)과
  *    읽기(queries/best.ts)가 있다. 두 화면의 점수를 합치지 않는다.
  *
  * getRecentDiscoveryPosts 와 짝이다. 둘 다 discovery 표면이고 고르는 기준만 다르다 —

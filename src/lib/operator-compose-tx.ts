@@ -33,7 +33,7 @@ import {
   judgeOperatorWriter,
   type OperatorBoard,
 } from './operator-writer'
-import { syncBestRanking } from './best-ranking-db'
+import { syncBestEligibility } from './best-ranking-db'
 
 /** 🔴 판정 쿼리가 여럿이라 기본 5초로는 부하가 있을 때 판정 도중 잘린다 */
 export const TX_MAX_WAIT_MS = 10_000
@@ -333,8 +333,9 @@ export async function deleteOperatorPostTx(
         data: { status: 'HIDDEN' },
         select: { id: true },
       })
-      // /best — 이 글이 12개에서 빠지면 13위가 올라온다. 숨긴 뒤의 공개 목록으로 같은 트랜잭션에서 판정한다.
-      await syncBestRanking(tx, post!.id)
+      // /best — 숨긴 뒤의 공개 자격으로 같은 트랜잭션에서 판정한다. 숨긴 글은 입성하지 않고,
+      //    이미 입성한 기록은 남되 목록·개수에서 빠진다.
+      await syncBestEligibility(tx, post!.id)
       await tx.operatorWriteLog.create({
         data: {
           operatorWriterId: own.operatorWriterId,
