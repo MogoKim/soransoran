@@ -598,6 +598,27 @@ async function runCalls(s: SupplyLlmSession, k: number, stage: typeof ASK.stage 
   rmSync(dir, { recursive: true, force: true })
 }
 {
+  // ⓑ' 🔴 **세션이 보호 판정에 오늘 장부를 넘긴다** — 다른 실행(손 실행)의 열린 예약을 배분 기준에서 뺀다.
+  //    넘기지 않으면(빈 목록) 기준액이 부풀어 뒤 5슬롯 몫이 커지고, 08:15 정기 회차가 자기 몫을 못 쓴다.
+  const dir = mkdtempSync(join(tmpdir(), 'reserve-b2-'))
+  const T = '2026-09-28T08:20:00'
+  const lim: BudgetLimits = { dailyUsd: 12 * perReq.usd, runRequestCap: 1000, headroomMultiplier: HEAD }
+  appendLedgerLine(ledgerPathOf(dir, '2026-09-28'), {
+    runId: 'MANUAL-inflight', stage: 'draftGen', attemptId: 'open-m', requestNo: 0,
+    provider: 'anthropic', apiModelId: 'x', model: 'claude-haiku-4.5', status: 'reserved', blockCode: null,
+    countedInputTokens: 100, maxOutputTokens: 1200, reservedUsd: 3 * perReq.usd,
+    inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+    settledUsd: null, pricingVersion: null, startedAt: kst('2026-09-28T08:10:00').toISOString(), endedAt: null, errorCode: null,
+    runKind: 'manual', runSlot: null,
+  })
+  // 몫 = 요청 10건분 → 6슬롯 몫이 여력(12건)보다 커서 비례 축소: (12 − 3)/6 = 1.5건분이 08:15 폭이다
+  const s = new SupplyLlmSession({ runId: 'S815', dir, limits: lim, now: at(T), protectAt: protectOf(LABEL, 10 * perReq.usd) })
+  const ok = await runCalls(s, 3)
+  check('🔴 손 실행의 열린 예약이 있어도 08:15 정기 회차는 (여력 − 그 예약)/6 안에서 돈다 — 1건 이상', ok >= 1, `ok=${ok}`)
+  check('🔴 그리고 그 폭을 넘지 않는다 — 3건 전부는 못 나간다', ok < 3, `ok=${ok}`)
+  rmSync(dir, { recursive: true, force: true })
+}
+{
   // ⓒ 🔴 마지막 슬롯 뒤 풀림 · KST 자정 경계
   const dir = mkdtempSync(join(tmpdir(), 'reserve-c-'))
   const lim: BudgetLimits = { dailyUsd: 3 * SH, runRequestCap: 1000, headroomMultiplier: HEAD }

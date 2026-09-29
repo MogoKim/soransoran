@@ -1137,9 +1137,19 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     const sLog = join(root, 'race-sched.log')
     writeFileSync(mLog, '', 'utf-8')
     writeFileSync(sLog, '', 'utf-8')
+    /**
+     * 🔴 **동시 실행의 하루 예산 — 정기 회차 몫이 실제로 걸리게 잡는다.** 가짜 provider 의 정산액은 예약보다
+     *    훨씬 작아서, 넉넉한 예산이면 정기 회차가 자기 몫에 닿지 않고 "몫까지만 쓴다" 가 저절로 참이 된다
+     *    (변이 — 정기 회차 무보호 — 가 살아남았다). 앞 12:20 회차의 **가장 큰 예약 1건 × 1.02** 를 몫으로
+     *    삼는다: 첫 요청은 반드시 나가고, 그 뒤는 뒤 4슬롯 몫에 막혀야 한다.
+     */
+    const maxReserve = Math.max(0, ...sched.entries.filter((e) => e.stage !== 'countTokens').map((e) => e.reservedUsd ?? 0))
+    const FAIR_RACE = maxReserve * 1.02
+    const RACE_USD = 5 * FAIR_RACE
+    const raceBudget = { [BUDGET_ENV.dailyUsd]: RACE_USD.toFixed(8) }
     const [rm, rs] = await Promise.all([
-      spawnOne({ [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RM', mLog),
-      spawnOne({ [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RS', sLog),
+      spawnOne({ ...raceBudget, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RM', mLog),
+      spawnOne({ ...raceBudget, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RS', sLog),
     ])
     const paidOf = (f: string): number => readFileSync(f, 'utf-8').split('\n').filter((l) => l.startsWith('paid\t')).length
     check('🔴 [L] 동시 실행 — 손 실행은 0건 · 정기 회차는 보낸다 (잠금 순서와 무관)',
@@ -1149,9 +1159,15 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     {
       const race = ledgerEntries()
       check('🔴 [L] 동시 실행 — 정기 회차도 자기 몫까지만 · 손 실행 0 · 뒤 슬롯 4개 몫이 그대로 남는다',
-        spentOf(race, 'RS') > 0 && spentOf(race, 'RS') <= FAIR_1220 + 1e-9 && spentOf(race, 'RM') === 0
-        && SMALL_USD - spentOf(race) >= 4 * FAIR_1220 - 1e-9,
-        `RS=${spentOf(race, 'RS').toFixed(6)} RM=${spentOf(race, 'RM').toFixed(6)} fair=${FAIR_1220.toFixed(6)}`)
+        maxReserve > 0 && spentOf(race, 'RS') > 0 && spentOf(race, 'RS') <= FAIR_RACE + 1e-9 && spentOf(race, 'RM') === 0
+        && RACE_USD - spentOf(race) >= 4 * FAIR_RACE - 1e-9,
+        `RS=${spentOf(race, 'RS').toFixed(6)} RM=${spentOf(race, 'RM').toFixed(6)} fair=${FAIR_RACE.toFixed(6)}`)
+      console.log(`     동시 실행 RS=$${spentOf(race, 'RS').toFixed(6)} RM=$${spentOf(race, 'RM').toFixed(6)} fair=$${FAIR_RACE.toFixed(6)}`
+        + ` · RS 예약 최대 $${Math.max(0, ...race.filter((e) => e.runId.startsWith('RS')).map((e) => e.reservedUsd ?? 0)).toFixed(6)}`
+        + ` · RS 유료 ${race.filter((e) => e.runId.startsWith('RS') && e.stage !== 'countTokens' && e.status !== 'blocked').length}건`)
+      // 🔴 이 fixture 가 이빨이 있는가 — 정기 회차가 자기 몫에 실제로 **막혀야**(수요 > 몫) 위 판정이 뜻을 갖는다
+      check('🔴 [L] 동시 실행 — 정기 회차의 수요가 자기 몫보다 커서 SCHEDULED_RESERVE 에 실제로 닿았다',
+        race.some((e) => e.runId.startsWith('RS') && e.blockCode === 'SCHEDULED_RESERVE'))
     }
     check('🔴 [L] 동시 실행 뒤 잠금이 남지 않는다', !existsSync(lockPathOf(ledgerDir)))
   }
