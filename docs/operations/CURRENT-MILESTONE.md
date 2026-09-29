@@ -105,7 +105,7 @@ DB와 공개 페이지가 일치하기 전까지 M2를 PASS로 읽지 않는다.
 | M6 | 자동 D10 | D5 PASS가 사람 없이 D10 시험을 열고 10글 사슬 완주 | 미완료 |
 | M7 | D20 준비·시험 | generic scheduler, READY 24/day, canary Persona 40, 다양성 60, 댓글 20~100/day | 미착수 |
 | M8 | D30 준비·시험 | READY 36/day, 원천 115/day, canary Persona 60, 다양성 90 | 미착수 |
-| M9 | D50 준비·시험 | READY 60/day, canary Persona 100, 다양성 150, 댓글 최대 250/day | 미착수 |
+| M9 | D50 준비·시험 | READY 60/day, canary Persona 100, 다양성 150, 하루 댓글 최대 250건 | 미착수 |
 | M10 | D100 첫 자동 운영 | 100글 + 100~500댓글 + 감사·복구·비용·중복 계약 | 미착수 |
 | M11 | 지속 D100 | READY 120/day, 원천 382/day, 계약 유효 Persona 300+, 반복 자동 운영 | 미착수 |
 | M12 | 실사용자 성장 | 7일 재방문 참여 실사용자 계측과 개선 | 자동 운영 뒤 착수 |
