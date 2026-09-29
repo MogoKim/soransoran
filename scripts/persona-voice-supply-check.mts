@@ -411,6 +411,9 @@ console.log('⑧ 수집 시점 말투 근거')
   const other = captureVoiceEvidence(clean, OTHER)
   check('salt 가 다르면 같은 사람도 다른 해시다', other.rows[0]!.speakerHash !== cap.rows[0]!.speakerHash)
   check('🔴 작성자 칸이 끼어든 행은 계약 위반', evidenceRowProblems({ ...cap.rows[0]!, author: AUTHORS[0]! }).length > 0)
+  check('🔴 모양은 맞아도 어느 칸에든 작성자 표시가 들어 있으면 계약 위반(수집기가 가진 이름으로 대조)',
+    evidenceRowProblems({ ...cap.rows[0]!, runId: `r-${AUTHORS[0]!}` }, AUTHORS).some((p) => p.includes('작성자'))
+    && evidenceRowProblems({ ...cap.rows[0]!, runId: `r-${AUTHORS[0]!}` }).length === 0)
   check('🔴 해시 대신 이름이 든 행은 계약 위반', evidenceRowProblems({ ...cap.rows[0]!, speakerHash: AUTHORS[0]! }).length > 0)
   check('🔴 개인정보 본문 행은 계약 위반', evidenceRowProblems({ ...cap.rows[0]!, text: '연락 주세요 010-1234-5678 이에요' }).length > 0)
 
