@@ -31,7 +31,8 @@ import { judgeCost } from '../src/lib/ops-status'
 import { tallyOf, type DayTally } from '../src/lib/llm-ledger'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
-import type { QueueCandidate } from '../src/lib/supply-candidates'
+import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
+import { autoFirstNeeded, proofDayOf, PROOF_DATE_ENV, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 
 let pass = 0
 let fail = 0
@@ -391,6 +392,41 @@ console.log('\n④ 저장 validator — 재시험 모양은 받고 근거 없는
   check('🔴 재시험이어도 점프(d1→d5)는 거절', !trial({ trialBase: 'd1', basis: 'RETEST' }, 'd5').ok)
   const v = trial({ trialBase: 'd1', basis: 'RETEST' }, 'd3')
   check('검증된 값에 근거 칸이 남는다', v.ok && v.decision.transition?.kind === 'TRIAL' && v.decision.transition.basis === 'RETEST')
+}
+
+console.log('\n⑤ 단계 증명일 — 목표 슬롯을 자동 target 이 먼저 (순수)')
+{
+  const envP = { [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }
+  const pd = proofDayOf(envP, NOW)
+  check('증명일 — 오늘 · d3 · 목표 3', pd !== null && pd.stage === 'd3' && pd.target === 3)
+  check('🔴 날짜가 다르면 증명일이 아니다', proofDayOf({ ...envP, [PROOF_DATE_ENV]: D }, NOW) === null)
+  check('🔴 칸이 비면 증명일이 아니다(비시험일)', proofDayOf({}, NOW) === null && proofDayOf({ [PROOF_STAGE_ENV]: 'd3' }, NOW) === null)
+  check('필요 수 = 목표 − 오늘 자동 target (음수 없음)', autoFirstNeeded(pd, 0) === 3 && autoFirstNeeded(pd, 2) === 1
+    && autoFirstNeeded(pd, 5) === 0 && autoFirstNeeded(null, 0) === 0)
+  // consumer — 증명일 칸의 출처
+  const trialEnv = consumerEnvOf({ ok: true, decision: validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL',
+    transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV, target: 'd3', basis: 'RETEST' } }, TODAY), expectKstDate: TODAY }).ok
+    ? (validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV, target: 'd3', basis: 'RETEST' } }, TODAY), expectKstDate: TODAY }) as { ok: true; decision: ValidatedStageDecision }).decision
+    : PREV_HOLD_D1 })
+  check('🟢 TRIAL(RETEST) → 증명일 d3 · 오늘', trialEnv[PROOF_STAGE_ENV] === 'd3' && trialEnv[PROOF_DATE_ENV] === TODAY, JSON.stringify(trialEnv))
+  const holdEnv = consumerEnvOf({ ok: true, decision: PREV_HOLD_D3 })
+  check('🔴 HOLD 결정 → 증명일 빈 값', holdEnv[PROOF_STAGE_ENV] === '' && holdEnv[PROOF_DATE_ENV] === '')
+  // 순서 — 증명일에는 앞세울 lane 이 복구 행보다 먼저
+  const cand = (id: string, recovery: boolean): QueueCandidate => ({
+    queueId: id, title: `${id} 산책`, body: `${id} 동네를 걸었어요. 다들 요즘 뭐 하세요?`, gateVerdict: 'PASS', createdAt: 0,
+    assignedPersonaCode: recovery ? PERSONAS[0]!.code : null, voice: null, profile: 'human' as const, capturedAt: CAPTURED,
+  })
+  const cands = [cand('h-rec', true), cand('h-1', false), cand('a-1', false), cand('a-2', false)]
+  const isAuto = (id: string) => id.startsWith('a-')
+  const orderOf = (laneBeforeRecovery: boolean) => prepareCandidates({ candidates: cands, personas: PERSONAS as never, at: NOW,
+    preferLane: isAuto, ...(laneBeforeRecovery ? { laneBeforeRecovery: true } : {}) }).auto.map((c) => c.queueId)
+  const proofOrder = orderOf(true)
+  const normalOrder = orderOf(false)
+  check('🔴 🔴 **증명일 순서 — auto 가 사람 복구 행보다 앞선다**', proofOrder.indexOf('a-1') < proofOrder.indexOf('h-rec')
+    && proofOrder.indexOf('a-2') < proofOrder.indexOf('h-rec'), proofOrder.join(','))
+  check('비시험일 순서 — 복구 행이 여전히 맨 앞(기존 규칙)', normalOrder[0] === 'h-rec', normalOrder.join(','))
+  check('lane 안 상대 순서 불변', proofOrder.filter(isAuto).join(',') === normalOrder.filter(isAuto).join(',')
+    && proofOrder.filter((x) => !isAuto(x)).join(',') === normalOrder.filter((x) => !isAuto(x)).join(','))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

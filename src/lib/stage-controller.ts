@@ -33,6 +33,7 @@ import {
 } from './stage-decision-contract'
 import { PUBLISH_ONLY_KEYS } from './stage-source'
 import { CANARY_DATE_ENV, CANARY_STAGE_ENV } from './release-canary'
+import { PROOF_DATE_ENV, PROOF_ENV_KEYS, PROOF_STAGE_ENV } from './stage-proof-day'
 import type { ConsumeOutcome } from './stage-decision-store'
 import type { PromotionVerdict } from './d100-capacity'
 import type { StageEvidenceVerdict } from './stage-evidence'
@@ -204,7 +205,15 @@ export function validateForToday(d: StageDecision): ReturnType<typeof validateSt
  *    · safest      → 정본 `consumeStageDecision` 의 fallback: 결정이 없거나 깨졌다 → d1
  */
 export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
-  const blankAuth = Object.fromEntries(PUBLISH_ONLY_KEYS.map((k) => [k, '']))
+  // 🔴 증명일 두 칸(`stage-proof-day`)도 허가처럼 비운다 — 결정이 주지 않으면 비시험일이다
+  const blankAuth = Object.fromEntries([...PUBLISH_ONLY_KEYS, ...PROOF_ENV_KEYS].map((k) => [k, '']))
+  /**
+   * 🔴 **자동 단계 증명일** (2026-09-29 마스터 결정) — TRIAL(재시험 포함) · SUSTAIN 날에는
+   *    그 단계 목표 슬롯을 자동 target 이 먼저 채우도록 러너에 알린다(`proofDayOf` · `autoFirstNeeded`).
+   *    HOLD · PREPARE 날과 fallback 은 빈 값 — 기존 human/auto 공정성 그대로다.
+   */
+  const proofOf = (d: { release: string; kstDate: string }): Record<string, string> =>
+    ({ [PROOF_STAGE_ENV]: d.release, [PROOF_DATE_ENV]: d.kstDate })
   if (o.ok) {
     /**
      * 🔴 **TRIAL 이 canary 의 자리다 — 말로만이 아니라 값으로** (2026-09-29).
@@ -225,12 +234,14 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
         ...blankAuth,
         [CANARY_STAGE_ENV]: o.decision.release,
         [CANARY_DATE_ENV]: o.decision.kstDate,
+        ...proofOf(o.decision),
       }
     }
     return {
       SORAN_RELEASE_STAGE: o.decision.release,
       SORAN_CAPACITY_STAGE: o.decision.capacity,
       ...blankAuth,
+      ...(o.decision.state === 'SUSTAIN' ? proofOf(o.decision) : {}),
     }
   }
   if (o.fallback === 'legacy') return {}

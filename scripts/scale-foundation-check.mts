@@ -376,8 +376,9 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
    *    트랜잭션이 그 단계를 env 천장으로 누르고, 하루 목표·도래 슬롯을 트랜잭션 시계로 다시 센다.
    *    설치된 단계가 write 경로에 도달해야 한다는 원래 목적은 그대로다 — 값이 숫자에서 단계로 바뀌었다.
    */
-  check('G 🔴 발행 러너가 설치된 단계를 write 경로에 넘긴다 (scheduled)',
-    /publishOriginalPostTx\(prisma, \{\s*queueId: target\.id, publishedToday,\s*mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/
+  // 🔴 (2026-09-29) 무인 표식 — launchd·GitHub 예약 회차만 unattended 다(단계 증거가 이 표식으로 물량을 센다)
+  check('G 🔴 발행 러너가 설치된 단계를 write 경로에 넘긴다 (scheduled · 무인 표식은 트리거로만)',
+    /publishOriginalPostTx\(prisma, \{\s*queueId: target\.id, publishedToday,\s*(?:\/\/[^\n]*\n\s*)*mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \},/
       .test(users['auto-publish']))
   // 🔴 러너는 이제 공용 준비 함수(`prepareCandidates`)를 통해 매칭한다.
   //    **주입 자체가 사라지면 안 된다** — 그 함수가 caps 를 planBatch 로 넘기는지도 함께 본다

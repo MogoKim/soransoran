@@ -42,6 +42,7 @@ import {
 } from '../../src/lib/persona-for-match'
 import type { PersonaForMatch, BatchAssignment } from '../../src/lib/original-post-persona-match'
 import { AUTO_DECIDER } from '../../src/lib/auto-ready-v2'
+import { UNATTENDED_PUBLISH_DECIDED_BY } from '../../src/lib/original-post-publish-tx'
 import { isCurrentQualityContract } from '../../src/lib/quality-contract'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
@@ -76,6 +77,11 @@ export type LoadedStock = {
    *    fixture 가 주지 않으면 둘 다 이력 0 으로 본다.
    */
   laneLastPublishedAt?: { auto: Date | null; human: Date | null }
+  /**
+   * 🔴 (2026-09-29) 오늘(KST) 자동 target 발행 수 — 자동 READY(`AUTO_DECIDER`) 행이 **무인 표식**으로 나간 것만.
+   *    단계 증명일의 "N 슬롯을 자동이 먼저" 가 이 값으로 남은 자리를 센다. fixture 가 주지 않으면 0.
+   */
+  autoTargetsToday?: number
   /** 🔴 `selectAutoTargets` 를 통과한 자동 발행 후보 */
   targets: AutoRow[]
   /** 🔴 정본 `selectAutoTargets` 가 낸 제외 목록 그대로 — 러너가 그대로 소비한다 */
@@ -242,6 +248,15 @@ export async function loadPublishableStock(
   const publishedToday = await prisma.personaActivityLog.count({
     where: { kind: 'post', createdAt: { gte: kstDayStart(now) } },
   })
+  /** 🔴 오늘 자동 target — 무인 표식 발행 기록 × 자동 READY Queue. 증거 판정(`stage-evidence-repo`)과 같은 두 표식이다 */
+  const unattendedToday = await prisma.personaActivityLog.findMany({
+    where: { kind: 'post', createdAt: { gte: kstDayStart(now) }, decidedBy: UNATTENDED_PUBLISH_DECIDED_BY },
+    select: { targetId: true },
+  })
+  const unattendedPostIds = [...new Set(unattendedToday.map((l) => l.targetId).filter((t): t is string => t !== null && t !== ''))]
+  const autoTargetsToday = unattendedPostIds.length === 0 ? 0 : await prisma.originalPostApprovalQueue.count({
+    where: { createdPostId: { in: unattendedPostIds }, status: 'PUBLISHED', decidedBy: AUTO_DECIDER },
+  })
 
   /**
    * 🔴 **사람 검토는 정본 계약으로 센다** (2026-09-24 마스터 지적).
@@ -254,7 +269,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId, allRows: rows, capturedAtOf, pinnedAutoPersona, laneLastPublishedAt,
+    codeOfPersonaId, allRows: rows, capturedAtOf, pinnedAutoPersona, laneLastPublishedAt, autoTargetsToday,
   }
 }
 
@@ -491,6 +506,13 @@ export function planPublishBatch(input: {
   loaded: LoadedStock
   caps: Parameters<typeof prepareCandidates>[0]['caps']
   at: Date
+  /**
+   * 🔴 **단계 증명일에 자동 target 이 더 필요한 수** (`autoFirstNeeded` · 2026-09-29 마스터 결정).
+   *    0 보다 크면 auto lane 이 **복구 행까지 포함해** 앞선다 — 사람 승인 행은 그 자리를 먼저 차지하지 못한다.
+   *    auto 후보가 없으면 기존 순서대로 사람 행이 나갈 수 있다(물량은 증거가 세지 않는다).
+   *    주지 않거나 0 이면 기존 공정성 그대로다.
+   */
+  proofAutoNeeded?: number
 }): PublishPlan {
   const { loaded } = input
   /**
@@ -513,7 +535,8 @@ export function planPublishBatch(input: {
   const targets = loaded.targets.filter((t) => !blocked.has(t.id))
   /** 🔴 lane 공정성 — 두 lane 이 모두 대기 중이면 가장 최근에 발행되지 않은 lane 을 앞세운다 */
   const laneById = new Map(targets.map((t) => [t.id, laneOf(t.decidedBy)]))
-  const lane = preferredLane({
+  const autoFirst = (input.proofAutoNeeded ?? 0) > 0
+  const lane: PublishLane | null = autoFirst ? 'auto' : preferredLane({
     waiting: new Set(targets.map((t) => laneById.get(t.id)!)),
     lastPublishedAt: loaded.laneLastPublishedAt ?? { auto: null, human: null },
   })
@@ -521,6 +544,8 @@ export function planPublishBatch(input: {
     candidates: loaded.queueCandidates.filter((c) => !blocked.has(c.queueId)), personas: loaded.personas as never,
     caps: input.caps, at: input.at,
     ...(lane === null ? {} : { preferLane: (id: string) => laneById.get(id) === lane }),
+    // 🔴 증명일 — 사람 복구 행도 자동 target 앞에 서지 못한다
+    ...(autoFirst ? { laneBeforeRecovery: true } : {}),
   })
   const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
   const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
@@ -540,7 +565,12 @@ export function planPublishBatch(input: {
     : pickPublishTarget({
       ordered: freshOrdered,
       assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
-      isRecovery: (id) => assignOf.get(id)?.recovery === true,
+      /**
+       * 🔴 증명일에는 **auto 복구 행만** 먼저 올린다. `pickPublishTarget` 의 "복구 먼저" 는 줄 순서를 무시하고
+       *    복구 행을 앞세우므로, 그대로 두면 사람 복구 행이 자동 target 슬롯을 차지한다(격리 DB 반례).
+       *    사람 복구 행은 배정을 그대로 둔 채 자동 행 뒤에서 기다린다 — 목표를 채우면 기존 규칙대로 복구된다.
+       */
+      isRecovery: (id) => assignOf.get(id)?.recovery === true && (!autoFirst || laneById.get(id) === 'auto'),
     })
   return {
     prepared, assignOf, freshOrdered, brokenRecovery, assignmentReady,

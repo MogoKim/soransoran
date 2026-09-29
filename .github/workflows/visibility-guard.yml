@@ -869,6 +869,9 @@ jobs:
           # 🔴 승격 운영 증거 실제 수집 — 실제 행 6조건 · 행 하나씩 비튼 반례 · 발행 트랜잭션 무인 표식 ·
           #    controller 진입점(dry-run · 가짜 HOME). launchd 가 없는 러너에서는 "러너 모름 → 재시험" 을 본다
           npm run stage:evidence-db-check
+          # 🔴 단계 증명일 — 목표 슬롯을 자동 target 이 먼저(사람 복구 행 포함) · 재고 부족이면 혼합 발행 + 증거 FAIL ·
+          #    비시험일은 기존 공정성. 실제 로더 · 계획 · 예약 무인 발행 트랜잭션
+          npm run stage:proof-day-db-check
 
       # 🔴 자동 READY v2 — 순수 계약 (DB 0 · 네트워크 0 · LLM 0).
       #    semanticReview fail-closed · 증거 복원 6분류 · 계약 값 불변 · 도장 hash ·

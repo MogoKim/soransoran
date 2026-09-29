@@ -126,6 +126,12 @@ export function prepareCandidates(input: {
    *    🔴 주지 않으면 기존 동작 그대로다. 발행 권한(슬롯 · 상한 · 트랜잭션)은 바꾸지 않는다.
    */
   preferLane?: (queueId: string) => boolean
+  /**
+   * 🔴 **단계 증명일** (2026-09-29) — 참이면 앞세울 lane 이 **복구 행보다도** 먼저다:
+   *    앞세울 lane(복구 → 나머지) → 다른 lane(복구 → 나머지). 각 묶음 안 순서 불변.
+   *    `preferLane` 이 없으면 아무 일도 하지 않는다.
+   */
+  laneBeforeRecovery?: boolean
 }): PreparedCandidates {
   const caps = input.caps ?? {}
   const at = input.at
@@ -174,7 +180,12 @@ export function prepareCandidates(input: {
   }))
   const fresh = orderForPublish(withFit).ordered
   const pref = input.preferLane
-  const ordered = pref === undefined ? fresh : [
+  const ordered = pref === undefined ? fresh : input.laneBeforeRecovery === true ? [
+    ...fresh.filter((c) => pref(c.queueId) && c.isRecovery),
+    ...fresh.filter((c) => pref(c.queueId) && !c.isRecovery),
+    ...fresh.filter((c) => !pref(c.queueId) && c.isRecovery),
+    ...fresh.filter((c) => !pref(c.queueId) && !c.isRecovery),
+  ] : [
     ...fresh.filter((c) => c.isRecovery),
     ...fresh.filter((c) => !c.isRecovery && pref(c.queueId)),
     ...fresh.filter((c) => !c.isRecovery && !pref(c.queueId)),
