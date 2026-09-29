@@ -20,7 +20,8 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 import {
-  allD100Plans, d100Plan, judgePromotion, currentPlanOf, targetStageFor,
+  allD100Plans, d100Plan, judgePromotion, currentPlanOf, targetStageFor, describePersonaTargets,
+  personaTargetReport, D100_STAGES,
   dailyTargetOf, stableObservationDaysOf, READY_NET_MARGIN, type D100Stage,
 } from '../src/lib/d100-capacity'
 import { RELEASE_ENV, PROFILES } from '../src/lib/scale-profile'
@@ -337,6 +338,11 @@ if (JSON_OUT) {
     promotionPhase: promo.phase,
     persona: {
       tiers: personaTiers, ready: personaReady, activeCount: activePersonas,
+      /**
+       * 🔴 **단계마다 두 목표를 나란히** — active 카드 수 기준이다(3계층 준비와 다르다).
+       *    승격 판정이 실제로 쓴 값은 `promotion.persona` 다.
+       */
+      targetsByActiveCards: D100_STAGES.map((st) => personaTargetReport(st, activePersonas)),
       missingAxes: read.ok ? read.personaMissingAxes : null,
     },
     scheduled: {
@@ -465,7 +471,9 @@ if (JSON_OUT) {
   } else {
     for (const t of personaTiers) {
       const mark = t.ready ? '🟢' : '🔴'
-      const tgt = t.target === null ? '회차마다 다름' : `목표 ${t.target}`
+      const tgt = t.target === null ? '회차마다 다름'
+        : `canary 하한 ${t.target} · 지속 목표 ${t.sustainedTarget ?? '?'}`
+          + ` ${t.sustainedMet === true ? '🟢' : '🔴'}`
       console.log(`    ${mark} ${t.tier.padEnd(11)} ${t.passed}/${t.total}  (${tgt})`)
       /**
        * 🔴 **"0명" 이 두 가지 뜻으로 읽힌다.** 재지 못한 축 때문에 완전 인증이 0명인 것과
@@ -490,20 +498,27 @@ if (JSON_OUT) {
     }
     console.log(`    전체 ${personaReady ? '🟢 준비됨' : '🔴 준비되지 않음'}`
       + `  · active 카드 ${activePersonas ?? '?'}명`)
+    // 🔴 active 카드 수를 두 목표에 나란히 견준다 — canary 하한 충족을 지속 준비로 읽지 않는다
+    for (const st of D100_STAGES) {
+      console.log(`      · ${describePersonaTargets(personaTargetReport(st, activePersonas))}`)
+    }
   }
 
   console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 다음 ${nextStage})`)
   console.log('    🔴 공개량 · READY 순증가 · 재고는 서로 다른 값이다 — 한 칸으로 합치지 않는다')
-  console.log('    단계   공개/day  READY생산/day  재고14일  상세/day  Persona  댓글/day  최소관측')
+  console.log('    단계   공개/day  READY생산/day  재고14일  상세/day  P.canary  P.지속  댓글/day  최소관측')
   for (const p of allD100Plans()) {
     console.log(`    ${p.stage.padEnd(6)} ${String(p.publicPostsPerDay).padStart(7)}`
       + `  ${String(p.readyQualifiedRequiredPerDay).padStart(12)}`
       + `  ${String(p.readyStock14Days).padStart(8)}`
       + `  ${String(p.detailedSourcesRequiredPerDay).padStart(8)}`
-      + `  ${String(p.activePersonaTarget).padStart(7)}`
+      + `  ${String(p.personaCanaryFloor).padStart(8)}`
+      + `  ${`${p.personaSustainedTarget}${p.stage === 'd100' ? '+' : ''}`.padStart(6)}`
       + `  ${`${p.commentMinPerDay}~${p.commentMaxPerDay}`.padStart(8)}`
       + `  ${String(p.minimumObservationDays).padStart(6)}일`)
   }
+  console.log('    🔴 Persona 는 두 값이다 — P.canary = 하루 시험 하한(승격 preflight 가 보는 값)'
+    + ' · P.지속 = 계속 운영할 다양성 목표(보고만 · canary 를 막지 않는다)')
   console.log(`    🔴 READY **생산** 목표 = 공개량 × ${READY_NET_MARGIN} (올림) —`
     + ' 같게 두면 재고가 영원히 늘지 않는다')
   console.log('    🔴 이 목표는 **재고 증감**에 요구하지 않는다 —'
@@ -537,6 +552,10 @@ if (JSON_OUT) {
     `${dailyTargetOf(currentReleaseStage)}/day 를 ${stableObservationDaysOf(currentReleaseStage)}일 냈는가`)
   gate(`${nextStage} preflight`, promo.nextPreflight,
     `재고·Persona·수집·생성·스케줄러 — 🔴 ${nextStage} 발행량은 묻지 않는다`)
+  // 🔴 두 목표를 **항상 같이** 찍는다. preflight 는 canary 하한만 보고, 지속 목표는 보고만 한다
+  console.log(`    Persona  ${describePersonaTargets(promo.persona)}`)
+  console.log('        🔴 preflight 는 canary 하한만 본다 · 지속 목표 미달은 첫 시험을 막지 않지만'
+    + ' "계속 운영 준비됨" 이라 말하지 못한다')
   console.log(`    ${promo.ready ? '🟢' : '🔴'} 제한을 ${nextStage} 로 올려도 되는가`
     + `  (지금 단계 stable + 다음 단계 preflight)`)
   console.log('    🔴 이 PR 은 어떤 단계도 실제로 켜지 않는다')
