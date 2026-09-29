@@ -1,5 +1,8 @@
 /**
- * Persona 24 → 180~200 **확장 계약** — 🔴 순수 함수
+ * Persona 24 → 300+ **확장 계약** — 🔴 순수 함수
+ *
+ * 🔴 **목표는 두 개다** (2026-09-29) — canary 하한(하루 시험) · 지속 다양성 목표(계속 운영).
+ *    정본은 `d100-capacity` 의 `PERSONA_CANARY_FLOOR` · `PERSONA_SUSTAINED_TARGET` 이다.
  *
  * 🔴 **카드만 늘린다고 READY 가 되지 않는다.** 이 파일이 그것을 타입과 판정으로 막는다.
  *    한 사람이 서려면 생활사 14축 · 말투 근거 · 활동 여력 · 자격이 전부 있어야 한다.
@@ -7,7 +10,9 @@
  * 🔴 **이번 PR 은 Persona 를 만들지 않는다.** 필요 인원과 준비 상태만 계산한다.
  */
 import { LIFE_CONTRACT_FIELDS } from './content-core/speaker'
-import { d100Plan, D100_PERSONA_TARGET_MAX, type D100Stage } from './d100-capacity'
+import {
+  d100Plan, D100_PERSONA_TARGET_MAX, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, type D100Stage,
+} from './d100-capacity'
 
 /** 🔴 생활사 축은 생성 계약과 **같은 목록**이다 — 여기서 다시 적지 않는다 */
 export const PERSONA_LIFE_AXES = LIFE_CONTRACT_FIELDS
@@ -218,8 +223,12 @@ export function personaUsable(p: PersonaCandidate): boolean {
 
 export type PersonaScaleNeed = {
   stage: D100Stage
-  target: number
-  targetMax: number
+  /** 🔴 **canary 하한** — 하루 시험을 켤 수 있는 최소 인원 (`PERSONA_CANARY_FLOOR`) */
+  canaryFloor: number
+  /** 🔴 canary 하한의 범위 상한 — D100 만 180~200 범위다 */
+  canaryFloorMax: number
+  /** 🔴 **지속 다양성 목표** (`PERSONA_SUSTAINED_TARGET`) — D100 은 하한 300 이다 */
+  sustainedTarget: number
   /** 전체 카드 수 */
   cards: number
   /** 🔴 사람 자체가 완성된 수 — 카드만 있는 것과 다르다 */
@@ -232,9 +241,14 @@ export type PersonaScaleNeed = {
   cardsOnly: number
   /** 🔴 배정 축을 재지 않아 판단할 수 없는 사람 수 */
   assignmentUnmeasured: number
-  /** 🔴 확장 목표 대비 부족분 — **`poolReady` 기준**이다 */
-  shortfall: number
-  ready: boolean
+  /** 🔴 canary 하한 대비 부족분 — **`poolReady` 기준**이다 */
+  canaryShortfall: number
+  /** 🔴 하루 시험을 켤 인원인가 */
+  canaryReady: boolean
+  /** 🔴 지속 목표 대비 부족분 — **`poolReady` 기준**이다 */
+  sustainedShortfall: number
+  /** 🔴 계속 돌릴 인원인가 — 🔴 canary 하한을 채웠다고 참이 되지 않는다 */
+  sustainedReady: boolean
   /** 층별로 몇 명이 무엇에 막혔는가 */
   blockedBy: Readonly<Record<PersonaBlockCode, number>>
 }
@@ -258,8 +272,18 @@ export type TierReadiness = {
   passedIgnoringUnmeasured: number
   /** 대상 인원 */
   total: number
-  /** 🔴 목표 인원 (카드·풀 층에만 뜻이 있다) */
+  /**
+   * 🔴 목표 인원 — **canary 하한**이다 (카드 층에만 뜻이 있다).
+   *    이 층의 `ready` 는 이 값으로 잰다 — 하루 시험을 켤 수 있는가.
+   */
   target: number | null
+  /**
+   * 🔴 **지속 다양성 목표** (카드 층에만 뜻이 있다). `ready` 에 넣지 않는다 —
+   *    보고만 한다. canary 하한을 채운 카드 층이 지속 준비라고 읽히지 않게 따로 든다.
+   */
+  sustainedTarget: number | null
+  /** 🔴 카드 층 통과 인원이 지속 목표를 채웠는가 — 카드 층 밖에서는 `null` */
+  sustainedMet: boolean | null
   /** 코드별 막힌 사람 수 */
   blocking: Readonly<Record<string, number>>
   /** 🔴 재지 못해 판단할 수 없는 코드별 사람 수 */
@@ -272,7 +296,9 @@ export function personaTierReadiness(input: {
   stage: D100Stage
   candidates: readonly PersonaCandidate[]
 }): TierReadiness[] {
-  const target = d100Plan(input.stage).activePersonaTarget
+  // 🔴 카드 층의 `ready` 는 **canary 하한**으로 잰다. 지속 목표는 따로 보고만 한다
+  const target = PERSONA_CANARY_FLOOR[input.stage]
+  const sustained = PERSONA_SUSTAINED_TARGET[input.stage]
   const total = input.candidates.length
   const out: TierReadiness[] = []
 
@@ -306,11 +332,13 @@ export function personaTierReadiness(input: {
       : hasUnmeasured
         ? `재지 못한 축이 있다 (${Object.keys(unmeasured).join('·')})`
           + ` — 🔴 그 축을 빼고 세면 ${passedIgnoringUnmeasured}명이다`
-        : tier === 'card' ? `${passed}명 < 목표 ${target}명`
+        : tier === 'card' ? `${passed}명 < canary 하한 ${target}명`
           : `${total - passed}명이 이 층을 통과하지 못한다`
     out.push({
       tier, ready, passed, passedIgnoringUnmeasured, total,
       target: tier === 'card' ? target : null,
+      sustainedTarget: tier === 'card' ? sustained : null,
+      sustainedMet: tier === 'card' ? !hasUnmeasured && passed >= sustained : null,
       blocking, unmeasured, reason,
     })
   }
@@ -349,14 +377,17 @@ export function judgePersonaScale(input: {
 
   return {
     stage: input.stage,
-    target: plan.activePersonaTarget,
-    targetMax: input.stage === 'd100' ? D100_PERSONA_TARGET_MAX : plan.activePersonaTarget,
+    canaryFloor: plan.personaCanaryFloor,
+    canaryFloorMax: input.stage === 'd100' ? D100_PERSONA_TARGET_MAX : plan.personaCanaryFloor,
+    sustainedTarget: plan.personaSustainedTarget,
     cards: input.candidates.length,
     cardComplete, poolReady, assignableNow,
     cardsOnly: input.candidates.length - poolReady,
     assignmentUnmeasured,
-    shortfall: Math.max(0, plan.activePersonaTarget - poolReady),
-    ready: poolReady >= plan.activePersonaTarget,
+    canaryShortfall: Math.max(0, plan.personaCanaryFloor - poolReady),
+    canaryReady: poolReady >= plan.personaCanaryFloor,
+    sustainedShortfall: Math.max(0, plan.personaSustainedTarget - poolReady),
+    sustainedReady: poolReady >= plan.personaSustainedTarget,
     blockedBy,
   }
 }

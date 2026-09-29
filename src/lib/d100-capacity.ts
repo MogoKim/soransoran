@@ -72,8 +72,16 @@ export type D100Plan = {
   readyQualifiedRequiredPerDay: number
   /** 14일치 재고 목표 */
   readyStock14Days: number
-  /** 필요한 활성 Persona 수 */
-  activePersonaTarget: number
+  /**
+   * 🔴 **canary 하한** — 이 단계를 **하루 시험**으로 켜 볼 수 있는 최소 활성 Persona 수.
+   *    `PERSONA_CANARY_FLOOR` 가 정본이다. 🔴 이 값을 채웠다고 지속 운영 준비라 말하지 않는다
+   */
+  personaCanaryFloor: number
+  /**
+   * 🔴 **지속 다양성 목표** — 이 단계를 **계속** 운영하는 데 필요한 활성 Persona 수.
+   *    `PERSONA_SUSTAINED_TARGET` 이 정본이다. 🔴 canary 를 막는 데 쓰지 않는다
+   */
+  personaSustainedTarget: number
   commentMinPerDay: number
   commentMaxPerDay: number
   /** 하루 발행 슬롯 수 */
@@ -140,28 +148,55 @@ export function schedulerSupportOf(stage: D100Stage): SchedulerSupport {
 }
 
 /**
+ * 🔴 **Persona 목표는 두 개다. 섞지 않는다** (2026-09-29 마스터 결정).
+ *
+ *    앞판은 `activePersonaTarget` 한 칸이 두 질문에 동시에 답했다 —
+ *      ① 이 단계를 **하루 시험(canary)** 으로 켜 볼 수 있는가
+ *      ② 이 단계를 **계속** 운영해도 사람들이 같은 얼굴로 반복되지 않는가
+ *    한 숫자로 두면 둘 중 하나가 틀린다. ①에 맞추면 지속 준비가 부풀고(40명으로
+ *    D20 을 계속 돌릴 수 있다고 읽힌다), ②에 맞추면 첫 시험이 막힌다.
+ *
+ *    `PERSONA_CANARY_FLOOR`      ① — **옛 `activePersonaTarget` 값 그대로**다. 승격 preflight 가 쓴다
+ *    `PERSONA_SUSTAINED_TARGET`  ② — 보고만 한다. 🔴 canary·preflight 를 막지 않는다
+ *
+ * 🔴 D3·D5·D10 은 두 값이 같다. D20 부터 갈린다 — release 프로필이 아직 없는 단계도
+ *    지속 목표는 **지금** 보고한다(없는 프로필을 이유로 숫자를 숨기지 않는다).
+ * 🔴 D100 지속 목표는 "300명 이상" 이다 — 여기 적는 300 은 **하한**이다.
+ */
+export const PERSONA_CANARY_FLOOR: Readonly<Record<D100Stage, number>> = {
+  d3: 24, d5: 24, d10: 30, d20: 40, d30: 60, d50: 100, d100: 180,
+}
+
+export const PERSONA_SUSTAINED_TARGET: Readonly<Record<D100Stage, number>> = {
+  d3: 24, d5: 24, d10: 30, d20: 60, d30: 90, d50: 150, d100: 300,
+}
+
+/**
  * 🔴 **단계별 계획.** 창업자가 확정한 값이다 —
- *    `publicPostsPerDay` · `activePersonaTarget` · 댓글 범위 · 관측 일수가 입력이고,
+ *    `publicPostsPerDay` · 댓글 범위 · 관측 일수가 입력이고,
  *    상세 필요량과 재고는 위 상수로 **계산한다**(손으로 적지 않는다).
+ *    Persona 두 목표는 위 두 표가 정본이다 — 여기 다시 적지 않는다.
  */
 const INPUT: Readonly<Record<D100Stage, {
   publicPostsPerDay: number
-  activePersonaTarget: number
   commentMinPerDay: number
   commentMaxPerDay: number
   publishSlotCount: number
   minimumObservationDays: number
 }>> = {
-  d3: { publicPostsPerDay: 3, activePersonaTarget: 24, commentMinPerDay: 3, commentMaxPerDay: 15, publishSlotCount: 3, minimumObservationDays: 7 },
-  d5: { publicPostsPerDay: 5, activePersonaTarget: 24, commentMinPerDay: 5, commentMaxPerDay: 25, publishSlotCount: 5, minimumObservationDays: 7 },
-  d10: { publicPostsPerDay: 10, activePersonaTarget: 30, commentMinPerDay: 10, commentMaxPerDay: 50, publishSlotCount: 10, minimumObservationDays: 14 },
-  d20: { publicPostsPerDay: 20, activePersonaTarget: 40, commentMinPerDay: 20, commentMaxPerDay: 100, publishSlotCount: 10, minimumObservationDays: 14 },
-  d30: { publicPostsPerDay: 30, activePersonaTarget: 60, commentMinPerDay: 30, commentMaxPerDay: 150, publishSlotCount: 15, minimumObservationDays: 14 },
-  d50: { publicPostsPerDay: 50, activePersonaTarget: 100, commentMinPerDay: 50, commentMaxPerDay: 250, publishSlotCount: 20, minimumObservationDays: 21 },
-  d100: { publicPostsPerDay: 100, activePersonaTarget: 180, commentMinPerDay: 100, commentMaxPerDay: 500, publishSlotCount: 25, minimumObservationDays: 21 },
+  d3: { publicPostsPerDay: 3, commentMinPerDay: 3, commentMaxPerDay: 15, publishSlotCount: 3, minimumObservationDays: 7 },
+  d5: { publicPostsPerDay: 5, commentMinPerDay: 5, commentMaxPerDay: 25, publishSlotCount: 5, minimumObservationDays: 7 },
+  d10: { publicPostsPerDay: 10, commentMinPerDay: 10, commentMaxPerDay: 50, publishSlotCount: 10, minimumObservationDays: 14 },
+  d20: { publicPostsPerDay: 20, commentMinPerDay: 20, commentMaxPerDay: 100, publishSlotCount: 10, minimumObservationDays: 14 },
+  d30: { publicPostsPerDay: 30, commentMinPerDay: 30, commentMaxPerDay: 150, publishSlotCount: 15, minimumObservationDays: 14 },
+  d50: { publicPostsPerDay: 50, commentMinPerDay: 50, commentMaxPerDay: 250, publishSlotCount: 20, minimumObservationDays: 21 },
+  d100: { publicPostsPerDay: 100, commentMinPerDay: 100, commentMaxPerDay: 500, publishSlotCount: 25, minimumObservationDays: 21 },
 }
 
-/** 🔴 D100 은 180~200 명이다 — 상한도 정본에 적는다 */
+/**
+ * 🔴 D100 **canary 하한의 범위**는 180~200 명이다 — 상한도 정본에 적는다.
+ *    🔴 지속 목표(300명 이상)의 상한이 아니다. 지속 목표에는 상한이 없다
+ */
 export const D100_PERSONA_TARGET_MAX = 200
 
 export function d100Plan(stage: D100Stage): D100Plan {
@@ -175,7 +210,8 @@ export function d100Plan(stage: D100Stage): D100Plan {
     // 🔴 공개량과 같게 두면 재고가 늘지 않는다 — 여유율을 곱하고 올린다
     readyQualifiedRequiredPerDay: Math.ceil(i.publicPostsPerDay * READY_NET_MARGIN),
     readyStock14Days: i.publicPostsPerDay * STOCK_DAYS,
-    activePersonaTarget: i.activePersonaTarget,
+    personaCanaryFloor: PERSONA_CANARY_FLOOR[stage],
+    personaSustainedTarget: PERSONA_SUSTAINED_TARGET[stage],
     commentMinPerDay: i.commentMinPerDay,
     commentMaxPerDay: i.commentMaxPerDay,
     publishSlotCount: i.publishSlotCount,
@@ -186,6 +222,50 @@ export function d100Plan(stage: D100Stage): D100Plan {
 
 export function allD100Plans(): D100Plan[] {
   return D100_STAGES.map(d100Plan)
+}
+
+/**
+ * 🔴 **Persona 두 목표를 한 줄에 나란히 적는다** — 보고서는 이 값만 찍는다.
+ *
+ *    `canaryFloorMet`   하루 시험을 켤 수 있는 인원인가 — **승격 preflight 가 보는 것은 이것뿐**
+ *    `sustainedMet`     계속 돌릴 인원인가 — 🔴 **보고만 한다.** canary 를 막지 않는다
+ *
+ * 🔴 canary 하한을 채웠다고 `sustainedMet` 가 참이 되지 않는다 — 두 값은 따로 잰다.
+ * 🔴 재지 못했으면(`active === null`) 둘 다 `null` 이다. 0 으로도 통과로도 읽지 않는다.
+ */
+export type PersonaTargetReport = {
+  stage: D100Stage
+  /** 🔴 재지 못했으면 `null` */
+  active: number | null
+  canaryFloor: number
+  canaryFloorMet: boolean | null
+  canaryFloorShortfall: number | null
+  sustainedTarget: number
+  sustainedMet: boolean | null
+  sustainedShortfall: number | null
+}
+
+export function personaTargetReport(stage: D100Stage, active: number | null): PersonaTargetReport {
+  const floor = PERSONA_CANARY_FLOOR[stage]
+  const sustained = PERSONA_SUSTAINED_TARGET[stage]
+  return {
+    stage, active,
+    canaryFloor: floor,
+    canaryFloorMet: active === null ? null : active >= floor,
+    canaryFloorShortfall: active === null ? null : Math.max(0, floor - active),
+    sustainedTarget: sustained,
+    sustainedMet: active === null ? null : active >= sustained,
+    sustainedShortfall: active === null ? null : Math.max(0, sustained - active),
+  }
+}
+
+/** 🔴 보고서 한 줄 — `canary 하한 N · 지속 목표 M` 을 항상 같이 적는다 */
+export function describePersonaTargets(r: PersonaTargetReport): string {
+  const mark = (met: boolean | null): string => met === null ? '⬚ 미측정' : met ? '🟢 충족' : '🔴 미달'
+  const act = r.active === null ? '?' : String(r.active)
+  return `${r.stage} 활성 Persona ${act}명 — canary 하한 ${r.canaryFloor}명 ${mark(r.canaryFloorMet)}`
+    + ` · 지속 목표 ${r.sustainedTarget}명${r.stage === 'd100' ? ' 이상' : ''} ${mark(r.sustainedMet)}`
+    + (r.sustainedShortfall !== null && r.sustainedShortfall > 0 ? ` (지속까지 ${r.sustainedShortfall}명 부족)` : '')
 }
 
 /** 🔴 다음 단계 — 마지막이면 `null` */
@@ -343,6 +423,12 @@ export type PromotionVerdict = {
   currentStable: GateVerdict
   /** 🔴 **다음 단계**의 사전 준비 — 다음 단계 발행량은 묻지 않는다 */
   nextPreflight: GateVerdict
+  /**
+   * 🔴 **다음 단계 Persona 두 목표.** `canaryFloorMet` 만 preflight 에 들어가고,
+   *    `sustainedMet` 는 **보고만** 한다 — `ready`·`blocking` 에 섞이지 않는다.
+   *    판정에 넘어간 인원(`activePersonas`)을 그대로 쓴다.
+   */
+  persona: PersonaTargetReport
   /** 🔴 세 칸을 합친 것 */
   blocking: string[]
   unmeasured: string[]
@@ -404,8 +490,13 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
     pre.blocking.push(`재고 ${input.readyStock} < 14일치 ${req.readyStock14Days}`)
   }
   if (input.activePersonas === null) pre.unmeasured.push('활성 Persona')
-  else if (input.activePersonas < req.activePersonaTarget) {
-    pre.blocking.push(`활성 Persona ${input.activePersonas} < 필요 ${req.activePersonaTarget}`)
+  /**
+   * 🔴 **preflight 는 canary 하한만 본다.** 다음 단계를 하루 시험으로 켜 볼 수 있는가가
+   *    이 칸의 질문이다 — 지속 목표로 막으면 D20 첫 시험이 60명을 채울 때까지 열리지 않는다.
+   *    지속 목표는 `persona` 칸에 따로 적는다.
+   */
+  else if (input.activePersonas < req.personaCanaryFloor) {
+    pre.blocking.push(`활성 Persona ${input.activePersonas} < canary 하한 ${req.personaCanaryFloor}`)
   }
   if (input.detailPerDay === null) pre.unmeasured.push('상세 수집/day')
   else if (input.detailPerDay < req.detailedSourcesRequiredPerDay) {
@@ -459,6 +550,7 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
     current: input.current, currentPlan: cur,
     next: input.next, requirement: req,
     currentCanary: canary, currentStable: stable, nextPreflight: pre,
+    persona: personaTargetReport(input.next, input.activePersonas),
     blocking: [...canary.blocking, ...stable.blocking, ...pre.blocking],
     unmeasured: [...new Set([...stable.unmeasured, ...pre.unmeasured])],
   }
