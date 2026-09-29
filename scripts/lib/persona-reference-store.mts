@@ -435,6 +435,37 @@ export function stableAssignment(input: {
 }
 
 /**
+ * 🔴 **⑧ seed 재사용 — 같은 seed 를 받은 Persona 가 몇 명인가** (2026-09-29).
+ *
+ *    계약(§3-⑧ · 안전·독창성 게이트 설계): seed 재사용은 "같은 source comment seed 가
+ *    **여러 페르소나에게** 반복 배분" 되는 것이고, **persona 단위가 아니라 전체 단위**로 본다.
+ *    이 경로의 seed 는 고정 배정 reference 묶음의 댓글이다. 그래서 내 묶음의 댓글 하나하나가
+ *    **몇 개의 묶음에 들어 있는가**를 세고, 그중 최대를 돌려준다(겹침 하나도 재사용이다).
+ *
+ *    🔴 앞판(`comments + queue + 1`)은 **그 Persona 의 댓글 이력**을 셌다 — 다른 축이다.
+ *       같은 댓글을 Comment 와 PUBLISHED Queue 로 두 번 세어, 댓글 1건을 단 Persona 는
+ *       3 → ⑧ regenerate 로 **영구히** 막혔다(2026-09-28·29 운영 반례 P01).
+ *       자기 말투 반복은 ⑧ 의 반복 축(`priorTexts` 말끝·시작어절·3-gram)이 본다.
+ *    🔴 배정 자체가 비었으면 `null`(못 셈) — 호출부가 입력 미비로 유료 호출을 막는다.
+ *    🔴 배정은 읽혔는데 이 Persona 에게 묶음이 없으면 `1` — 받은 seed 가 없으니 나눈 seed 도 없다.
+ *       그 대상은 생성 단계에서 `REFERENCE_MISSING` 으로 **그 대상만** 막힌다. 여기서 null 을 내면
+ *       materializer 가 **회차 전체**를 멈춘다(fail-closed 가 정상 대상까지 막는다).
+ */
+export function referenceSeedShareCount(
+  byCode: ReadonlyMap<string, VoiceReferenceBundle>,
+  personaCode: string,
+): number | null {
+  if (byCode.size === 0) return null
+  const mine = byCode.get(personaCode)
+  if (mine === undefined || mine.comments.length === 0) return 1
+  const holders = new Map<string, number>()
+  for (const b of byCode.values()) {
+    for (const t of new Set(b.comments.map((c) => c.text))) holders.set(t, (holders.get(t) ?? 0) + 1)
+  }
+  return Math.max(...mine.comments.map((c) => holders.get(c.text) ?? 1))
+}
+
+/**
  * 🔴 **생성 경로가 쓰는 단일 진입점.**
  *
  *    고정 배정에서 **필요한 것만 꺼낸다.** 여기서 다시 나누지 않는다 —
