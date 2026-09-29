@@ -90,6 +90,11 @@ check('D100 목표가 단계 PASS 직후 다음 자동 canary를 연다',
 check('D100 목표가 첫 canary 2일치와 지속 운영 14일치를 분리한다',
   d100Goal.includes('첫 canary 재고는 목표 공개량의 **2일치**')
   && d100Goal.includes('14일치 재고는 지속 운영 목표'))
+check('D100 목표와 현재 실행이 감사를 20% 표본 계약으로 고정한다',
+  d100Goal.includes('ceil(자동 발행 N × 20%)')
+  && d100Goal.includes('전수 감사를 새 선행조건으로 만들지 않는다')
+  && current.includes('ceil(자동 발행 N × 20%)')
+  && current.includes('전수 감사를 새 선행조건으로 만들지 않는다'))
 check('현재 실행이 M1 PASS와 M2 NOT PASS를 구분한다',
   /\| M1 \|[^\n]*\*\*PASS\*\*/.test(current)
   && /\| M2 \|[^\n]*\*\*NOT PASS\*\*/.test(current))
