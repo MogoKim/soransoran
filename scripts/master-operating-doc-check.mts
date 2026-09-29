@@ -15,9 +15,15 @@ import { PROFILES, RELEASE_STAGES, derive, minuteOfDay } from '../src/lib/scale-
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
+const NORTH_STAR = 'docs/operations/NORTH-STAR.md'
+const D100_GOAL = 'docs/operations/2026-09-21-d100-goal-canon.md'
+const CURRENT = 'docs/operations/CURRENT-MILESTONE.md'
 
 const master = readFileSync(MASTER, 'utf8')
 const index = readFileSync(INDEX, 'utf8')
+const northStar = readFileSync(NORTH_STAR, 'utf8')
+const d100Goal = readFileSync(D100_GOAL, 'utf8')
+const current = readFileSync(CURRENT, 'utf8')
 
 let passed = 0
 let failed = 0
@@ -52,7 +58,31 @@ for (const heading of requiredSections) {
   check(`Master 필수 절: ${heading}`, master.includes(heading))
 }
 
-check('운영 문서 index가 Master를 첫 진입점으로 지정한다', index.includes('[Master Operating System](./MASTER-OPERATING-SYSTEM.md)'))
+check('운영 문서 index가 목적→D100 목표→현재 실행→기술 지도의 권한 순서를 지킨다', (() => {
+  const positions = [
+    index.indexOf('`NORTH-STAR.md`'),
+    index.indexOf('`2026-09-21-d100-goal-canon.md`'),
+    index.indexOf('`CURRENT-MILESTONE.md`'),
+    index.indexOf('`MASTER-OPERATING-SYSTEM.md`'),
+  ]
+  return positions.every((position) => position >= 0)
+    && positions.every((position, i) => i === 0 || positions[i - 1]! < position)
+})())
+check('North Star가 원문의 참여 동력 보존과 억지 자극 금지를 함께 정의한다',
+  northStar.includes('원문의 참여 동력을 없애면 실패다')
+  && northStar.includes('잔잔한 일상 원문은 잔잔한 글로 살아나도 된다')
+  && northStar.includes('선정성을 억지로 넣는다'))
+check('D100 목표가 참여 신호를 사용하되 안전 검사를 우회하지 않는다',
+  d100Goal.includes('조회수·댓글 수·댓글 증가 속도·신선도')
+  && d100Goal.includes('참여 신호는 안전·사실 검사를 우회하지 않는다'))
+check('D100 목표가 수동 물량을 단계 PASS에서 제외한다',
+  d100Goal.includes('수동 물량은 성공이 아니다') && d100Goal.includes('commissioning'))
+check('D100 목표가 Persona 다양성과 지속 용량을 단계 계약에 포함한다',
+  d100Goal.includes('Persona 확장 계약') && d100Goal.includes('계약 유효 화자'))
+check('D100 목표가 canary 운영 하한과 지속 다양성 300명을 구분한다',
+  d100Goal.includes('자동 canary를 실행할 **운영 하한**')
+  && d100Goal.includes('| D100 | **300** |')
+  && /300명은 상한이\s*아니라 첫 지속 운영 목표/.test(d100Goal))
 check('North Star가 재방문+글/댓글+고유 실사용자를 모두 요구한다',
   /최근 7일 안에 재방문했고 글 또는 댓글을 한 번 이상 남긴 고유 실사용자 수/.test(master))
 check('Persona를 North Star에서 제외한다', master.includes('Persona, 봇, 운영 계정은 제외한다'))
@@ -686,7 +716,7 @@ check('🔴 Persona 준비 수를 정본 표 밖에서 또 주장하지 않는�
  *    표에 `100편 → 50건` 이라고 적어 두고 코드가 다른 답을 내면,
  *    그 표는 계약이 아니라 소망이다. 그래서 여기서 실제로 계산해 비교한다.
  */
-check('🔴 부트스트랩 정본 절(§9.5-g)이 있다',
+check('🔴 부트스트랩 역사 계약 절(§9.5-g)이 있다',
   master.includes('### 9.5-g 초기 부트스트랩'))
 check('🔴 단계 네 개를 코드와 같은 이름으로 적는다',
   COMMENT_STAGES.every((s) => master.includes(`\`${s}\``)))
@@ -698,20 +728,16 @@ check('🔴 옛 문자열 이동을 적는다',
   master.includes('`release` → `organic`') && master.includes('`inspect` → `shadow`'))
 check('🔴 옛 값이 bootstrap-auto 로 가지 않는다고 적는다',
   master.includes('옛 값이 `bootstrap-auto` 로 올라가는 경로는 없다'))
-/**
- * 🔴 **단기 정본은 한 곳에만 있다** (2026-09-11).
- *    §2 는 장기(North Star), §9.5-g 는 단기다. 같은 수가 두 곳에 있으면
- *    반드시 한쪽이 낡고, 낡은 쪽이 먼저 읽힌다.
- */
+/** §9.5-g의 수치는 역사 계약이며 현재 실행 권한이 아니다. */
 check('🔴 §2 를 장기 정본으로 선언한다',
   master.includes('### 2.1 North Star — 🔴 장기 정본')
   && master.includes('이 절은 장기 정본이다. 단기 목표는 여기 적지 않는다'))
-check('🔴 단기 목표가 §9.5-g 한 곳에만 있다고 적는다',
-  master.includes('**§9.5-g 한 곳에만**')
-  && master.includes('🔴 **이 절이 지금 분기의 단기 정본이다.**'))
+check('🔴 현재 단기 실행은 CURRENT-MILESTONE만 권한을 가진다',
+  master.includes('현재 목표와 상태는 이 절에서 읽지 않는다')
+  && master.includes('지금 병목과 다음 실행은 `CURRENT-MILESTONE.md`에서만 판정한다'))
 check('🔴 Persona·봇 활동을 North Star 에 넣지 않는다고 적는다',
   master.includes('Persona·봇 활동과 게시량은 North Star 에 넣지 않는다'))
-check('🔴 단기 정본 표가 있다', master.includes('#### 🔴 단기 정본 (2026-09-11 교체)'))
+check('🔴 2026-09-11 당시 단기 계약 표가 보존돼 있다', master.includes('#### 2026-09-11 당시 단기 계약'))
 check('🔴 글당 상한을 코드와 같은 수로 적는다',
   master.includes(`| 한 글의 Persona 댓글 | **1~${PERSONA_COMMENTS_PER_POST_MAX}건** |`))
 check('🔴 일 절대 상한을 코드와 같은 수로 적는다',
@@ -871,6 +897,7 @@ check('🔴 runner 를 등록하지 않았다고 적는다',
 for (const f of ['AGENTS.md', 'CLAUDE.md']) {
   const g = readFileSync(f, 'utf-8')
   check(`🔴 ${f} 가 NORTH-STAR 를 가리킨다`, g.includes('docs/operations/NORTH-STAR.md'))
+  check(`🔴 ${f} 가 D100 목표 정본을 가리킨다`, g.includes('docs/operations/2026-09-21-d100-goal-canon.md'))
   check(`🔴 ${f} 가 CURRENT-MILESTONE 을 가리킨다`, g.includes('docs/operations/CURRENT-MILESTONE.md'))
 }
 /** 🔴 정본을 복제하지 않는다 — 복제하면 한쪽이 낡고 낡은 쪽이 먼저 읽힌다 */
@@ -902,10 +929,11 @@ for (const f of ['AGENTS.md', 'CLAUDE.md']) {
   check(`🔴 ${f} 가 목표 수치를 복제하지 않는다`,
     !/100\s*(건)?\/day/.test(g) && !g.includes('1~5건'))
 }
-check('🔴 CURRENT-MILESTONE 이 그 목표의 단일 정본이다', (() => {
-  const m = readFileSync('docs/operations/CURRENT-MILESTONE.md', 'utf-8')
-  return m.includes('100건/day') && m.includes('1~5건')
-})())
+check('🔴 D100 목표와 현재 실행 문서가 코드 수치 정본을 함께 가리킨다',
+  d100Goal.includes('src/lib/d100-capacity.ts')
+  && current.includes('src/lib/d100-capacity.ts')
+  && current.includes('100건/day')
+  && current.includes('1~5건'))
 
 /**
  * 🔴 **단계 진입 게이트는 `derive(profile).stockTarget` 하나다** (2026-09-12).

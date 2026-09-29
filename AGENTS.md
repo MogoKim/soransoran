@@ -8,9 +8,10 @@
 | 문서 | 무엇 |
 |---|---|
 | [`docs/operations/NORTH-STAR.md`](docs/operations/NORTH-STAR.md) | 고객 · 본질 · 장기 North Star · 판단 우선순위 · 영구 안전장치 · 임시 제한 |
+| [`docs/operations/2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) | D3→D100 자동 운영 목표 · 생동감 · Persona 용량 · 단계 PASS 계약 |
 | [`docs/operations/CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) | 지금 분기 목표 · 지금 병목 · 임시 제한의 종료 조건 · 완료 지표 |
 
-🔴 **이 두 문서의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
+🔴 **이 세 문서의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
 낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다.
 
 🔴 **매거진의 검색 키워드·주제 선정·시리즈·관련 글·SEO 성장 작업은 반드시**
