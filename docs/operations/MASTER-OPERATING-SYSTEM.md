@@ -179,10 +179,14 @@ flowchart LR
   RE --> MEM
 ```
 
-현재 핵심 결손은 `Voice 자산 -> 글/댓글 생성`, `Persona -> 생성 입력`,
-`공개 글 -> 댓글 자동 분산 -> Memory -> 재응답` 연결이다.
+아래는 2026-09-10 설계 당시 확인한 결손이다. 현재 병목은 이 목록에서 판단하지 않고
+[`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md)에서 읽는다.
 
 ## 4. Lane별 계약과 실제 상태
+
+> **역사 스냅샷:** 아래 표의 `공개 미활성`, `자동 스케줄 0`, `d1 가동`은 당시 상태다.
+> 현재 lane 상태와 다음 실행은 [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md) 및
+> `npm run ops:status -- --json`이 이긴다. 이 표로 runner를 끄거나 과거 stage로 되돌리지 않는다.
 
 상태는 다섯 층을 분리한다.
 
@@ -549,6 +553,9 @@ npm run publish:trigger-preflight   # 다르면 exit 1 → local runner 등록�
 
 ### 7.1 운영 마일스톤 M1-M10
 
+> **역사 스냅샷:** 이 표는 2026-09-10까지 사용한 옛 M1~M10 namespace다. 현재 자동 운영
+> M0~M12의 완료 판정은 [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md)만 사용한다.
+
 | M | 이름 | 설계 | main 구현 | 실제 운영 | 판정 |
 |---|---|---|---|---|---|
 | M1 | Micro Seed Operating Rail | 완료 | 완료 | 5건 발행 | 완료 |
@@ -560,7 +567,7 @@ npm run publish:trigger-preflight   # 다르면 exit 1 → local runner 등록�
 | M7 | Offline Voice Analyzer | 완료 | 완료 | 전량 분석 | 완료 |
 | M8 | LLM Voice Engine | 분석 완료 | 분석 완료 | 생성 모델 provisional · 호출 0회 | 부분완료 |
 | M9 | Original Content Lane | 완료 | 완료 | d1 가동 | 부분완료 |
-| M10 | Comment/Conversation Engine | 완료 | Queue→승인→발행 실경로 · Serializable · provenance 칼럼(0024 **적용됨**) — PR #491 | 🔴 **공개 댓글 OFF** — shadow · 모델 미확정 · runner·schedule 없음 · 공개 0/day | 부분완료 |
+| M10 | Comment/Conversation Engine | 완료 | Queue→승인→발행 실경로 · Serializable · provenance 칼럼(0024 **적용됨**) — PR #491 | **2026-09-10 당시** 공개 댓글 OFF · shadow · runner/schedule 없음 | 부분완료 |
 
 이 번호는 운영 마일스톤이다. 제품 생애주기의 Phase/M 번호와 섞어 쓰지 않는다.
 
@@ -1486,7 +1493,7 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 
 | 항목 | 값 | 코드 정본 |
 |---|---|---|
-| 공개 글 | **100/day** (D100 목표 정본) | 단계 정본 `src/lib/d100-capacity.ts` · 슬롯 `scale-profile.ts` `PROFILES` — 🔴 지금은 `d1`(1/day) |
+| 공개 글 | **100/day** (D100 목표 정본) | 단계 정본 `src/lib/d100-capacity.ts` · 슬롯 `scale-profile.ts` `PROFILES` — **2026-09-11 당시** `d1`(1/day) |
 | 새 관리형 글의 첫 댓글 | **60분 안에** | `FIRST_COMMENT_MAX_MINUTES` |
 | 한 글의 Persona 댓글 | **1~5건** | `PERSONA_COMMENTS_PER_POST_MAX` |
 | Persona 댓글 하루 상한 | **500건** | `BOOTSTRAP_DAILY_MAX` |

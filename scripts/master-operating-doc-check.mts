@@ -249,18 +249,12 @@ check('단일 end-to-end 경로가 의도적으로 없다고 적는다',
     /\| \*\*실제 DB shadow\*\* \|[^\n]*Gate 입력 사전검사[^\n]*외부 호출 0[^\n]*후보 Gate 실행 0/.test(master))
   check('§9.4 가 합성 eval 만 provider·9관문까지 갔다고 적는다',
     /\| \*\*합성 eval\*\* \|[^\n]*provider[^\n]*9관문 Gate[^\n]*실행 완료/.test(master))
-  /**
-   * 🔴 **문구를 하드코딩하지 않는다** (2026-09-10 정정).
-   *
-   *    옛 검사는 `실제 DB preflight + 합성 eval` 이라는 **글자**를 찾았다.
-   *    그래서 M10 의 main 구현이 실제로 나아가도(PR #491 merge · 0024 적용)
-   *    문서를 고치는 순간 검사가 깨졌다 — 낡은 상태를 지키는 검사였다.
-   *    지금은 **계약**을 본다: 구현이 무엇이든 공개 댓글이 꺼져 있다고 말해야 한다.
-   */
+  /** 옛 M10은 역사로 보존하되 현재 실행 계약으로 읽히지 않아야 한다. */
   const m10 = lines.find((l) => /^\| M10 \|/.test(l)) ?? ''
   check('M10 행이 존재한다', m10 !== '')
-  check('🔴 M10 이 공개 댓글 OFF 를 명시한다',
-    /공개 (댓글 )?(OFF|0\/day)/.test(m10) || m10.includes('공개 0/day'))
+  check('🔴 옛 M10 상태가 날짜 붙은 역사 스냅샷으로 격리됐다',
+    m10.includes('2026-09-10 당시')
+    && master.includes('현재 자동 운영\n> M0~M12의 완료 판정은'))
   check('🔴 M10 이 운영을 "완료" 로 적지 않는다', !/\| 완료 \|\s*$/.test(m10))
   check('Lane 표의 Persona-first Generation 이 Comment 경로임을 밝힌다',
     master.includes('Persona-first Generation (Comment 경로)'))
@@ -412,8 +406,9 @@ check('공개 release 조건을 표로 적는다',
     .every((t) => master.includes(t)))
 check('하나라도 빠지면 0 이라고 못박는다',
   master.includes('하나라도 빠지면 0 이다'))
-check('runner 를 이번 PR 에서 등록하지 않았다고 적는다',
-  master.includes('plist 를 쓰지도 load 하지도 않았다'))
+check('역사 release 절이 당시 runner 미등록을 기록한다',
+  master.includes('plist 를 쓰지도 load 하지도 않았다')
+  && master.includes('### 9.5-g 초기 부트스트랩 — 역사 댓글 계약'))
 /**
  * 🔴 Queue 가 막힌 **이유**는 바뀌었다 — 모델은 확정됐고, 지금 막는 것은
  *    shadow 미완료·허용량 0·runner 미등록이다. 막혀 있다는 사실만 지킨다.
@@ -909,13 +904,15 @@ for (const m of ['M0', 'M1', 'M2', 'M3', 'M4', 'M5']) {
  *    댓글 목표 100/200 을 적으면서 글이 하루 1편인 사실을 빼면,
  *    읽는 사람은 100/day 가 이미 도는 줄로 읽는다.
  */
-check('🔴 지금 글 단계가 d1 이고 하루 1편임을 적는다',
+check('🔴 역사 절이 당시 글 단계 d1과 하루 1편을 기록한다',
   master.includes('`SORAN_RELEASE_STAGE=d1`')
-  && master.includes(`\`dailyTarget\` 은 **${PROFILES.d1.dailyTarget}**`))
+  && master.includes(`\`dailyTarget\` 은 **${PROFILES.d1.dailyTarget}**`)
+  && master.includes('2026-09-11 당시'))
 check('🔴 이번 변경이 글을 올린 것이 아니라고 적는다',
   master.includes('글 자체를 100 으로 올린 것이 아니다'))
-check('🔴 runner 를 등록하지 않았다고 적는다',
-  master.includes('runner 는 등록하지 않았다'))
+check('🔴 역사 절이 당시 runner 미등록을 기록한다',
+  master.includes('runner 는 등록하지 않았다')
+  && master.includes('역사 스냅샷'))
 
 /**
  * 🔴 **운영 정본을 두 지침이 모두 가리킨다** (2026-09-11).
