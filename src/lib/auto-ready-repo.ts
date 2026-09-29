@@ -314,12 +314,29 @@ export async function recheckAutoReadyInTx(tx: Tx, i: {
  *    고를 때 **발행된 Post 의 제목·본문 hash** 와 그 행의 **도장 계약 판**을 저장한다.
  *    결과는 이 묶음과 같은 글에만 붙는다.
  */
-export async function selectAudits(prisma: PrismaClient): Promise<
+/**
+ * 🔴 **감사 표본은 그날(KST) 자동 발행에서 고른다** (2026-09-29 운영 반례).
+ *
+ *    앞판은 전 기간 누적 자동 발행 N 으로 `ceil(N×20%)` 를 셌다. 09-28 글 하나가 감사됐으므로 09-29 에
+ *    자동 발행이 2건이 돼도 목표 1 은 이미 채워진 것으로 보고 **그날 글을 하나도 고르지 않았다**
+ *    ("자동 발행 2건 · 목표 1 · 이번에 고른 0건"). 단계 증거(`stage-evidence`)는 그날 자동 target N 에 대해
+ *    `auditTarget(N)` 표본이 **그날 집합 안에** 있어야 PASS 이므로, 이 어긋남은 D3 를 영원히
+ *    `AUDIT_COVERAGE_ZERO` 로 막았다. 이제 선정과 증거가 같은 창(KST 하루)을 본다.
+ *    누적 비율도 함께 지켜진다 — 날마다 ceil(N_day×20%) 이면 합은 ceil(N_total×20%) 이상이다.
+ */
+const KST_OFFSET_MS = 9 * 3_600_000
+const DAY_MS = 86_400_000
+function kstDayRange(now: Date): { gte: Date; lt: Date } {
+  const start = Math.floor((now.getTime() + KST_OFFSET_MS) / DAY_MS) * DAY_MS - KST_OFFSET_MS
+  return { gte: new Date(start), lt: new Date(start + DAY_MS) }
+}
+
+export async function selectAudits(prisma: PrismaClient, now: Date = new Date()): Promise<
   { kind: 'ok'; n: number; target: number; picked: string[]; missingPost: string[] } | { kind: 'race'; reason: string }
 > {
   try {
     return await prisma.$transaction(async (tx) => {
-      const published = await tx.originalPostApprovalQueue.findMany({
+      const allPublished = await tx.originalPostApprovalQueue.findMany({
         where: { decidedBy: AUTO_DECIDER, createdPostId: { not: null } },
         select: { id: true, createdPostId: true, editDiff: true },
       })
@@ -330,11 +347,17 @@ export async function selectAudits(prisma: PrismaClient): Promise<
        *    🔴 돌려주기만 하지 않는다 — 열림 판정(`missingAutoPostCount`)이 같은 상태를 세서
        *    다음 도장·발행을 닫고, 러너는 이 값이 있으면 회차를 실패로 끝낸다.
        */
-      const posts = await tx.post.findMany({
-        where: { id: { in: published.map((p) => p.createdPostId!) } }, select: { id: true, title: true, content: true },
+      const allPosts = await tx.post.findMany({
+        where: { id: { in: allPublished.map((p) => p.createdPostId!) } }, select: { id: true, title: true, content: true, createdAt: true },
       })
+      const existsPost = new Set(allPosts.map((p) => p.id))
+      // 🔴 글이 사라진 행은 날짜와 무관하게 알린다 — 열림 판정이 같은 상태를 센다
+      const missingPost = allPublished.filter((p) => !existsPost.has(p.createdPostId!)).map((p) => p.id)
+      // 🔴 표본의 모집단 = 그날(KST) 발행된 자동 글
+      const day = kstDayRange(now)
+      const posts = allPosts.filter((p) => p.createdAt >= day.gte && p.createdAt < day.lt)
       const postOf = new Map(posts.map((p) => [p.id, p]))
-      const missingPost = published.filter((p) => !postOf.has(p.createdPostId!)).map((p) => p.id)
+      const published = allPublished.filter((p) => postOf.has(p.createdPostId!))
       const existing = await tx.autoReadyAudit.findMany({ select: { queueId: true } })
       const { target, pick } = pickAudits({
         autoPublished: published.filter((p) => postOf.has(p.createdPostId!)).map((p) => p.id),
