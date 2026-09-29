@@ -32,6 +32,7 @@ import {
   type StageDecision, type ValidatedStageDecision,
 } from './stage-decision-contract'
 import { PUBLISH_ONLY_KEYS } from './stage-source'
+import { CANARY_DATE_ENV, CANARY_STAGE_ENV } from './release-canary'
 import type { ConsumeOutcome } from './stage-decision-store'
 import type { PromotionVerdict } from './d100-capacity'
 import type { Health } from './ops-status'
@@ -198,6 +199,27 @@ export function validateForToday(d: StageDecision): ReturnType<typeof validateSt
 export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
   const blankAuth = Object.fromEntries(PUBLISH_ONLY_KEYS.map((k) => [k, '']))
   if (o.ok) {
+    /**
+     * 🔴 **TRIAL 이 canary 의 자리다 — 말로만이 아니라 값으로** (2026-09-29).
+     *    앞판은 TRIAL 날에도 canary 를 빈 값으로 넣었다. 발행 러너(`resolvePublishScale`)는 canary·window
+     *    허가가 있을 때만 준비도 감속을 건너뛰므로, 09-29 TRIAL d3 가 러너에서 "준비도 미달 → d1" 로
+     *    내려앉아 09:30 에 "발행 0 / 1건" 으로 돌았다.
+     *    러너의 canary 모양은 **"지속 단계 + 그날 하루 더 높은 단계"** 다(`resolvePublishScale` — 허가 단계가
+     *    지금 단계보다 높을 때만 시험으로 켠다). 그래서 TRIAL 날에는 공개 = 시험 기반(`trialBase`),
+     *    canary = (결정의 공개 단계 · 그 날짜) 로 넘긴다. 러너는 그 허가로 **회차마다** 정본
+     *    `judgeOneDayCanary` 를 다시 돌린다(판정을 건너뛰지 않는다). window 는 여전히 빈 값이다.
+     *    TRIAL 이 아닌 날(HOLD · PREPARE · SUSTAIN)은 공개 = 결정 값 · canary 도 빈 값이다.
+     */
+    const t = o.decision.transition
+    if (o.decision.state === 'TRIAL' && t !== null && t.kind === 'TRIAL') {
+      return {
+        SORAN_RELEASE_STAGE: t.trialBase,
+        SORAN_CAPACITY_STAGE: o.decision.capacity,
+        ...blankAuth,
+        [CANARY_STAGE_ENV]: o.decision.release,
+        [CANARY_DATE_ENV]: o.decision.kstDate,
+      }
+    }
     return {
       SORAN_RELEASE_STAGE: o.decision.release,
       SORAN_CAPACITY_STAGE: o.decision.capacity,
