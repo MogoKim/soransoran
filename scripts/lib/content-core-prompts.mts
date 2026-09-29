@@ -20,6 +20,8 @@ import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT,
 } from '../../src/lib/content-core/review'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
+/** 🔴 적응 경로(긴 사연 → AI 원작 글) 지시문의 정본 — 여기서 문구를 다시 적지 않는다 */
+import { ADAPT_PLAN_RULE, ADAPT_DRAFT_RULES, ADAPT_REVIEW_RULES } from '../../src/lib/raw-adaptation'
 
 /**
  * 🔴 **판 값의 정본은 `src/lib/content-core/pipeline.ts` 다.** 봉투·큐·발행이 같은 값을
@@ -197,6 +199,11 @@ export function buildSpeakerPlanPayload(input: {
   priorFailures?: readonly string[]
   /** 🔴 지난 시도가 "조건을 만족하는 사람이 없다" 로 멈췄다 — 1인칭을 쓰면 안 된다 */
   selfForbidden?: boolean
+  /**
+   * 🔴 **적응 경로** (2026-09-29 · `raw-adaptation.ts`). 긴 사연은 한 회원의 삶이다 — 1인칭 자리를 고르지 않는다.
+   *    🔴 seed 경로에서는 칸을 싣지 않는다 — 기존 요청이 한 글자도 바뀌지 않는다.
+   */
+  adaptation?: boolean
 }): string {
   const p = input.packet
   const prior = input.priorFailures ?? []
@@ -215,6 +222,7 @@ export function buildSpeakerPlanPayload(input: {
         + '원문의 핵심 조건을 만족하는 사람이 없습니다. '
         + 'OBSERVATION · QUESTION · REFLECTION 중에서 고르고 selfBasis 는 비웁니다.'],
     }),
+    ...(input.adaptation !== true ? {} : { 적응: [ADAPT_PLAN_RULE] }),
   })
 }
 
@@ -239,6 +247,8 @@ export function buildV2DraftSystemPrompt(input: {
    *    `mappings`(바꿔라)와 **섞지 않는다** — 반대 지시다.
    */
   keep?: readonly LoadBearingRequirement[]
+  /** 🔴 **적응 경로** (2026-09-29) — 사연을 옮기지 않고 쟁점을 꺼낸다. seed 경로는 지시문이 그대로다 */
+  adaptation?: boolean
 }): string {
   const { plan, voice, life } = input
   const replacements = input.mappings.map((m) => m.outputRule)
@@ -277,6 +287,7 @@ export function buildV2DraftSystemPrompt(input: {
       : plan.closingIntent === 'none'
         ? ['- 원문은 묻지 않습니다. 억지로 질문을 붙이지 않습니다.']
         : []),
+    ...(input.adaptation === true ? ['', ...ADAPT_DRAFT_RULES] : []),
     '',
     '## 새로 쓰는 것',
     '- 문장과 문단 구성은 **처음부터 새로** 씁니다. 원문 문장을 옮겨 적지 않습니다.',
@@ -351,6 +362,8 @@ export function buildV2ReviewSystemPrompt(input: {
   plan: SpeakerPlan
   voice: VoiceEvidence
   life: PersonaLifeContract
+  /** 🔴 **적응 경로** (2026-09-29) — 사연 세부가 빠진 것은 결함이 아니다. seed 경로는 지시문이 그대로다 */
+  adaptation?: boolean
 }): string {
   const warrants = input.plan.warrants
   return [
@@ -408,6 +421,7 @@ export function buildV2ReviewSystemPrompt(input: {
     '      "남편이 집안일을 안 해서 답답하다" 는 원만한 사이에서도 하는 말이다.',
     '      상시 별거 · 이혼 절차 · 관계가 끝났다고 말할 때만 spouseRelationship 이다.',
     '',
+    ...(input.adaptation === true ? [...ADAPT_REVIEW_RULES, ''] : []),
     '## ④⑤⑥ issues — 해당하는 것만 고른다. 해당 없으면 빈 배열이다',
     ...SEMANTIC_AXES.map((a) => `   - ${a}: ${SEMANTIC_AXIS_PROMPT[a]}`),
     '',

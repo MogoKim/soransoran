@@ -50,6 +50,8 @@ export const FINGERPRINT_FILES = [
   // 🔴 (quality-v4) 창업자 gold 재생과 데이터 — 열림 근거 자체다
   'src/lib/founder-gold.ts',
   'src/lib/founder-gold-v1.data.ts',
+  // 🔴 (quality-v5) 적응 경로 — 긴 사연 원천의 경로 · 결정적 검사 · 지시문 · 계약 한 칸
+  'src/lib/raw-adaptation.ts',
 ] as const
 
 /**
@@ -73,6 +75,9 @@ export const JUDGE_DEFINITIONS: Readonly<Record<string, string>> = {
   judgeDraftLife: 'src/lib/content-core/draft-life-gates.ts',
   eligibilityOf: 'src/lib/auto-ready-v2.ts',
   isCurrentQualityContract: 'src/lib/quality-contract.ts',
+  // 🔴 (quality-v5) 적응 경로의 결정적 판정 · 경로 정본
+  judgeRawAdaptation: 'src/lib/raw-adaptation.ts',
+  requiredRouteOf: 'src/lib/raw-adaptation.ts',
 }
 
 export const FINGERPRINT_PATH = 'src/lib/quality-contract.fingerprint.json'

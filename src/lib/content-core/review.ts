@@ -19,6 +19,7 @@
  */
 import { CLAIM_FACTS } from './source-facts'
 import { DRAFT_GATE_CODES, DRAFT_GATE_LABEL } from './draft-life-gates'
+import { RAW_ADAPTATION_CODES, RAW_ADAPTATION_LABEL } from '../raw-adaptation'
 
 export const REVIEW_VERSION = 'review-v7'
 
@@ -36,6 +37,12 @@ export const DETERMINISTIC_CODES = [
    *    `draft-life-gates.ts` 하나다. 원문과 견주는 의미 검수는 이 셋을 볼 자리가 없다.
    */
   ...DRAFT_GATE_CODES,
+  /**
+   * 🔴 **적응 경로(긴 사연 → AI 원작 글)의 결정적 실패** (2026-09-29 · `raw-adapt-v1`).
+   *    1인칭 경험으로 옮김 · 주제 낱말 소실 · 논쟁 소실 — 정본은 `raw-adaptation.ts` 하나다.
+   *    seed 경로에서는 판정하지 않는다.
+   */
+  ...RAW_ADAPTATION_CODES,
 ] as const
 export type DeterministicCode = (typeof DETERMINISTIC_CODES)[number]
 
@@ -49,6 +56,7 @@ export const DETERMINISTIC_LABEL: Readonly<Record<DeterministicCode, string>> = 
   loadBearingLost: '🔴 글의 결론을 만드는 조건이 사라지거나 뒤바뀌었다',
   // 🔴 라벨도 게이트 정본에서 읽는다 — 여기서 다시 적지 않는다
   ...DRAFT_GATE_LABEL,
+  ...RAW_ADAPTATION_LABEL,
 }
 
 export type DeterministicFailure = { code: DeterministicCode; detail: string }

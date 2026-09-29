@@ -99,6 +99,7 @@
     "micro-seed:auto-judge-check": "tsx scripts/micro-seed-auto-judge-check.mts",
     "micro-seed:auto-draft": "tsx scripts/micro-seed-auto-draft.mts",
     "micro-seed:auto-draft-check": "tsx scripts/micro-seed-auto-draft-check.mts",
+    "micro-seed:raw-adaptation-check": "tsx scripts/raw-adaptation-check.mts",
     "check:supply-chain-e2e": "tsx scripts/supply-chain-e2e-check.mts",
     "draft-originality-check": "tsx scripts/draft-originality-check.mts",
     "micro-seed:collect-navercafe": "tsx scripts/micro-seed-collect-navercafe.mts",

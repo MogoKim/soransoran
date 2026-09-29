@@ -884,7 +884,7 @@ async function main(): Promise<number> {
       .map((k) => `${WORKSET_DROP_LABEL[k]} ${plan.dropped[k]}`)
     console.log(`      제외 ${dropNote.length === 0 ? '없음' : dropNote.join(' · ')}`)
     console.log(`      🔴 이번에 안 고른 ${plan.deferred}건은 **그대로 남는다** — 다음 회차가 집는다`)
-    // 🔴 축별 자리 (2026-09-28) — raw 는 초안이 없는 축이라 자리를 제한한다. 정본은 `worksetAxisQuota`
+    // 🔴 축별 자리 (2026-09-28) — raw 는 적응 경로(2026-09-29 · 사람 검토 · gold 표본 없음)라 자리를 제한한다. 정본은 `worksetAxisQuota`
     console.log(`      축  seed 적격 ${plan.axis.eligible.seed} · 자리 ${plan.axis.quota.seed} · 고름 ${plan.axis.picked.seed}`
       + `  |  raw 적격 ${plan.axis.eligible.raw} · 자리 ${plan.axis.quota.raw} · 고름 ${plan.axis.picked.raw}`)
     for (const r of plan.picked) {

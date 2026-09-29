@@ -656,8 +656,12 @@ jobs:
         run: npm run micro-seed:auto-judge-check
 
       # 기계 초안이 사람의 ADOPT 를 사칭하지 않는지 · 원천당 1개인지 본다 (§4-AS)
-      - name: 기계 초안 채택 (ADOPT 사칭 금지 · 원천당 1개)
-        run: npm run micro-seed:auto-draft-check
+      # 🔴 (2026-09-29) 적응 경로 — 긴 사연(AUTO_RAW)이 쟁점을 살린 AI 원작 글이 되는가 · 개인정보·명예훼손·
+      #    괴롭힘·위험한 의료 지시·복제는 여전히 막히는가 · 창업자 gold 30/30. 새 step 이 아니다(무조건 step 상한 불변)
+      - name: 기계 초안 채택 (ADOPT 사칭 금지 · 원천당 1개 · 적응 경로)
+        run: |
+          npm run micro-seed:auto-draft-check
+          npm run micro-seed:raw-adaptation-check
 
       # 🔴 독창성 — **흔한 표현은 통과하고 실질 복제만 막는지** 본다 (2026-09-13)
       #

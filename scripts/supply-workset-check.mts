@@ -465,9 +465,10 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     const kst = ao({ generatedAt: '2026-09-20T09:00:00+09:00' })!
     return z.atMs === kst.atMs && latestOutcomes([z, kst]).get('s1')?.stage === 'draft'
   })())
-  check('🔴 상태 어휘가 여섯이다',
-    OUTCOME_STATES.join(',') === 'seeded,terminal,rawLane,retryable,candidate,unknown')
-  check('🔴 이 레인에서 끝난 상태는 둘이다', CONCLUDED_STATES.join(',') === 'terminal,rawLane')
+  // 🔴 (2026-09-29) `rawLane` 을 없앴다 — AUTO_RAW 는 이 레인이 적응 경로로 초안화한다
+  check('🔴 상태 어휘가 다섯이다',
+    OUTCOME_STATES.join(',') === 'seeded,terminal,retryable,candidate,unknown')
+  check('🔴 이 레인에서 끝난 상태는 하나다', CONCLUDED_STATES.join(',') === 'terminal')
 
   // ── ② 같은 회차 AUTO_SEED → hard HOLD 는 HOLD 가 최종이다 ──
   const SAME = '2026-09-20T11:36:07.000Z'
@@ -479,10 +480,10 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
   check('🔴 🔴 **정본 decision 은 넷이다**',
     AUTO_DECISIONS.join(',') === 'AUTO_SEED,AUTO_RAW,AUTO_HOLD,AUTO_DROP')
   check('🟢 AUTO_SEED 는 seeded', jo({ decision: 'AUTO_SEED' })?.state === 'seeded')
-  check('🔴 🔴 **AUTO_RAW 는 unknown 이 아니다** — 다른 레인으로 끝난 것이다',
-    jo({ decision: 'AUTO_RAW' })?.state === 'rawLane')
-  check('🔴 🔴 **AUTO_RAW 는 다음 회차에 다시 올라오지 않는다**',
-    done([jo({ decision: 'AUTO_RAW' })]).has('s1'))
+  check('🔴 🔴 **AUTO_RAW 는 unknown 이 아니다 — 적응 경로의 초안 대상(seeded)이다** (2026-09-29)',
+    jo({ decision: 'AUTO_RAW' })?.state === 'seeded')
+  check('🔴 🔴 **AUTO_RAW 판정만으로 끝난 원천이 되지 않는다 — 생성이 결론을 낸다**',
+    !done([jo({ decision: 'AUTO_RAW' })]).has('s1'))
   check('🔴 AUTO_HOLD·AUTO_DROP 은 terminal',
     jo()?.state === 'terminal' && jo({ decision: 'AUTO_DROP' })?.state === 'terminal')
   check('🔴 물어보지 못한 판정은 결론이 아니다 — AUTO_RAW 라도',

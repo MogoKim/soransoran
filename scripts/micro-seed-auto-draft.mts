@@ -40,6 +40,13 @@ import {
   DRAFT_REASON_LABEL, DRAFT_RULE_VERSION, DRAFT_PROVENANCE, BANNED_WORDS,
 } from '../src/lib/micro-seed-auto-draft'
 /**
+ * 🔴 **초안 경로** (2026-09-29) — `AUTO_SEED` 는 seed 경로, `AUTO_RAW` 는 적응 경로(긴 사연 → 쟁점만 꺼낸 AI 원작 글).
+ *    경로는 판정 + 원천 축에서 정한다. 채택 자리(`pickV2`)가 판정 값에서 다시 읽어 대조한다.
+ */
+import {
+  draftRouteOf, requiredRouteOf, adaptationContractOf, isAdaptationContract,
+} from '../src/lib/raw-adaptation'
+/**
  * 🔴 **생성 전 큐 스냅샷** (2026-09-17). 이 스크립트는 여전히 **DB 를 읽지 않는다** —
  *    러너가 읽어 파일로 건넨 것을 검증해서 쓴다. 판정 규칙은 여기서 만들지 않는다.
  */
@@ -225,7 +232,10 @@ function jsonl(path: string): Record<string, unknown>[] {
   return out
 }
 
-/** 최신 판정 파일의 AUTO_SEED — 🔴 회차가 여럿이면 마지막 판정이 정본이다 */
+/**
+ * 최신 판정 파일의 통과 판정 — 🔴 회차가 여럿이면 마지막 판정이 정본이다.
+ * 🔴 (2026-09-29) `AUTO_SEED` 와 `AUTO_RAW` 둘 다 읽는다. `AUTO_RAW` 는 적응 경로로 간다(`raw-adaptation.ts`).
+ */
 /** 🔴 판정 출처. Judgement 는 초안 생성에 필요한 3필드만 담으므로 따로 모은다 —
  *  상수를 찍지 않고 **그 판에서 나온 값**을 후보에 이관하기 위한 것이다 (§4-AT) */
 type JudgeProv = {
@@ -267,7 +277,7 @@ function loadAutoSeeds(): Judgement[] {
       })
     }
   }
-  return [...byId.values()].filter((j) => j.decision === 'AUTO_SEED')
+  return [...byId.values()].filter((j) => requiredRouteOf(j.decision) !== null)
 }
 
 /** 소재의 제목 — 초안 생성에 필요하다. 🔴 본문은 쓰지 않는다 */
@@ -739,7 +749,7 @@ async function main(): Promise<void> {
   console.log(`  🔴 DB 0 · 큐 0 · 발행 0 · Sheet 0${CALL ? '' : ' · LLM 0 · 네트워크 0 · 파일 write 0'}\n`)
 
   const seedsAll = loadAutoSeeds()
-  if (seedsAll.length === 0) fail('AUTO_SEED 가 0건이다 — 먼저 micro-seed:auto-judge 를 돌린다')
+  if (seedsAll.length === 0) fail('통과 판정(AUTO_SEED · AUTO_RAW)이 0건이다 — 먼저 micro-seed:auto-judge 를 돌린다')
 
   /**
    * ── 🔴 **생성 전 제외 — 유료 호출보다 먼저** (2026-09-17) ──
@@ -787,7 +797,7 @@ async function main(): Promise<void> {
     console.log('\n⓪ 🟡 큐 스냅샷 없이 돈다 — **생성 전 제외를 적용하지 않았다**')
   }
   if (seeds.length === 0) {
-    console.log('\n① AUTO_SEED 0건 — 전부 큐에 미발행 형제가 있다. 🟢 유료 호출 0\n')
+    console.log('\n① 통과 판정 0건 — 전부 큐에 미발행 형제가 있다. 🟢 유료 호출 0\n')
     return
   }
   const metas = loadMeta()
@@ -795,7 +805,8 @@ async function main(): Promise<void> {
   // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
   const now = RUN_AT
   const nowIso = now.toISOString()
-  console.log(`① AUTO_SEED ${seeds.length}건`)
+  console.log(`① 통과 판정 ${seeds.length}건 — AUTO_SEED ${seeds.filter((j) => j.decision === 'AUTO_SEED').length}건(seed 경로)`
+    + ` · AUTO_RAW ${seeds.filter((j) => j.decision === 'AUTO_RAW').length}건(적응 경로 · 사람 검토)`)
 
   if (!CALL) {
     console.log(`\n② 오프라인 계획 — 생성 대상 ${seeds.length}건`)
@@ -860,6 +871,8 @@ async function main(): Promise<void> {
   let voiceHeld = 0
   /** 🔴 화자 여력 계획이 화자를 주지 못해 **생성 전에** 미룬 원천 수 — 초안 실패가 아니다 */
   let capacityDeferred = 0
+  /** 🔴 판정과 원천 축이 어긋나 **생성 전에** 멈춘 원천 수 (2026-09-29) */
+  let routeHeld = 0
   const statusCount = new Map<string, number>()
 
   const picks: Pick[] = []
@@ -1004,6 +1017,16 @@ async function main(): Promise<void> {
       }, nowIso))
     }
     if (meta === undefined) { holdPick(); continue }
+    /**
+     * 🔴 **초안 경로** (2026-09-29) — 판정 + 원천 축. 어긋나면(옛 판정 · 섞인 입력) 만들지 않는다 — provider 호출 0.
+     */
+    const route = draftRouteOf(j.decision, meta.axis)
+    if (route === null) {
+      routeHeld += 1
+      console.log(`   🟡 ${j.sourceArticleId} — 판정 ${j.decision} 와 축 ${meta.axis || '(없음)'} 이 어긋나 만들지 않는다`)
+      holdPick()
+      continue
+    }
     /** 🔴 정본을 못 읽었으면 전 원천을 멈춘다 — provider 호출 0 */
     if (voice.blockAllCode !== null) { voiceHeld += 1; holdPick(); continue }
     /**
@@ -1021,9 +1044,14 @@ async function main(): Promise<void> {
      *    앞판은 캐시 key 만 출력 상한·검수판·화자 계획판·계획 프롬프트를 담아서,
      *    그것들이 바뀌면 캐시는 miss 되는데 지난 HOLD 는 "지금 계약의 결론" 으로 남았다.
      */
-    const contract: GenerationContract = {
+    const seedContract: GenerationContract = {
       ...currentContractBase(RUN_AT), sourceInputHash: sourceIdentityHash(meta),
     }
+    /**
+     * 🔴 **적응 경로는 적응 계약으로** (2026-09-29) — seed 계약에서 계획 지시 지문 한 칸만 다르다.
+     *    캐시 key · artifact · 다음 회차의 "지난 결론" 판단이 이 값으로 두 경로를 가른다.
+     */
+    const contract: GenerationContract = route === 'adapt' ? adaptationContractOf(seedContract) : seedContract
     /**
      * 🔴 **캐시 key = 원천 id + 스키마 판 + 계약 identity.**
      *    스키마 판을 넣는 것은 캐시에 담긴 것이 **artifact 객체**이기 때문이다 —
@@ -1113,6 +1141,8 @@ async function main(): Promise<void> {
         contract,
         voiceSourceDigest: voice.sourceDigest,
         ask: v2Ask, now, callCap: V2_CALL_CAP,
+        // 🔴 (2026-09-29) 적응 경로 — 1인칭 금지 · 쟁점 보존 지시 · 결정적 검사
+        route,
       })
       // 🔴 완주한 회차만 캐시에 남긴다 — 막힌 결과를 재사용하면 다음 회차도 막힌다
       if (art.review.semanticCompletion.complete) {
@@ -1203,6 +1233,17 @@ async function main(): Promise<void> {
           source: { title: maskSensitive(meta.title), body: meta.bodyHead, ...gateSourceMetaOf(meta) },
         },
       },
+      /**
+       * 🔴 **적응 경로 입력** (2026-09-29) — 적응으로 만든 원천만 넘긴다. 채택 자리가 판정 값에서
+       *    경로를 다시 읽어 대조하고, 캐시 artifact 도 같은 함수로 다시 판정한다.
+       */
+      ...(route === 'adapt' ? {
+        adaptation: {
+          adapted: isAdaptationContract(art.contract),
+          stance: art.plan?.stance ?? null,
+          sourceTitle: maskSensitive(meta.title), sourceBody: meta.bodyHead,
+        },
+      } : {}),
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {
@@ -1255,6 +1296,9 @@ async function main(): Promise<void> {
   if (capacityDeferred > 0) {
     console.log(`   🟡 Persona 여력 대기로 미룬 원천 ${capacityDeferred}건 — AI 를 부르지 않았다 · 초안 실패 아님`
       + ' (원천은 끝나지 않았다 — 판정 seeded 그대로 남는다)')
+  }
+  if (routeHeld > 0) {
+    console.log(`   🟡 판정과 원천 축이 어긋나 만들지 않은 원천 ${routeHeld}건 — AI 를 부르지 않았다`)
   }
   {
     /**

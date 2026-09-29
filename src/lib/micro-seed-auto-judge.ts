@@ -32,7 +32,33 @@ export const HUMAN_PROVENANCE = ['human-curated', 'founder'] as const
 /** 규칙을 고치면 올린다 — 어느 판이 내린 결정인지 나중에 알 수 있어야 한다 */
 // 🔴 v2 — Semantic Shadow. v1 결과와 섞이지 않게 판을 올린다
 // 🔴 v3 — 정책 taxonomy 가 모델 decision 을 이긴다. v2 캐시와 섞이지 않는다
-export const RULE_VERSION = 'auto-judge-v3'
+// 🔴 v4 (2026-09-29) — 모델의 **통과 라벨**(SEED/RAW)로 HOLD 하지 않는다. 축은 우리가 정한다(`axisMismatch` 폐지)
+export const RULE_VERSION = 'auto-judge-v4'
+
+/**
+ * 🔴 **앞 판의 결론을 그대로 인정하는 조건** (2026-09-29, v3 → v4).
+ *
+ *    v4 가 바꾼 판정은 **한 자리**다 — 위험 0 · 확신 충분 · 모델도 통과라 했는데 통과 라벨이
+ *    우리 축과 달라 `axisMismatch` HOLD 로 보낸 자리. 그 밖의 v3 결론은 v4 규칙으로 다시 돌려도
+ *    같은 결정이다(같은 입력 · 같은 모델 답 → 같은 분기). 그래서 **다시 묻지 않는다** — 유료 판정 0.
+ *    🔴 `axisMismatch` 가 붙은 v3 기록만 결론이 아니다 → 다음 회차가 v4 로 다시 판정한다.
+ *    🔴 목록에 없는 판은 인정하지 않는다(v1·v2 는 입력·정책이 달랐다).
+ */
+export const RULE_CARRY_OVER: Readonly<Record<string, { readonly to: string; readonly unless: readonly ReasonCode[] }>> = {
+  'auto-judge-v3': { to: 'auto-judge-v4', unless: ['axisMismatch'] },
+}
+
+/** 🔴 그 판정 기록이 **지금 규칙의 결론**인가 — 같은 판이거나, 위 표가 인정한 앞 판이다 */
+export function conclusionHoldsUnder(
+  rec: { ruleVersion: string; reasonCodes?: readonly string[] }, currentRule: string,
+): boolean {
+  if (rec.ruleVersion === currentRule) return true
+  const c = RULE_CARRY_OVER[rec.ruleVersion]
+  if (c === undefined || c.to !== currentRule) return false
+  // 🔴 사유를 못 읽으면 인정하지 않는다 — 바뀐 자리인지 알 수 없다
+  if (!Array.isArray(rec.reasonCodes)) return false
+  return !rec.reasonCodes.some((r) => (c.unless as readonly string[]).includes(r))
+}
 /** 프롬프트를 고치면 올린다 — 같은 규칙판이라도 물음이 달라지면 답이 달라진다 */
 /**
  * 🔴 **v2c** (2026-09-16) — 위해 축에 `crisisSignal` · `medicalDecisionRequest` ·
@@ -96,7 +122,8 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   politicalCampaigning: '🔴 정치 · 진영 선동 (§4-K)',
   semanticFailed: '의미 판정 호출이 실패했다',
   unexplainedModelDrop: '🔴 모델이 버리라 했는데 버릴 사유를 대지 못했다 — 사람에게 넘긴다',
-  axisMismatch: '모델이 다른 축을 말했다 — 축은 우리가 정한다',
+  // 🔴 v4 는 이 사유를 내지 않는다 — v3 기록을 읽을 때만 쓴다(`RULE_CARRY_OVER`)
+  axisMismatch: '(v3) 모델 통과 라벨이 축과 달랐다 — v4 부터는 HOLD 사유가 아니다',
   // 🔴 2026-09-16 — 정본 §4 위기 신호 · §5 조언 제한을 코드로 세운 축
   crisisSignal: '자해·자살 위기 신호 — 재생성하지 않고 사람이 본다 (정본 §4)',
   medicalDecisionRequest: '치료·기기·약물의 부작용·교체·중단·계속 사용 판단을 요청한다',
@@ -590,12 +617,18 @@ export function judgeOne(
     return { ...base, decision: 'AUTO_HOLD', reasonCodes: dedupe([...risks, 'lowConfidence']) }
   }
 
-  // 🔴 위험 0 · 확신 충분 · 모델도 통과라 했다. 축은 여전히 우리가 정한다
+  /**
+   * 🔴 위험 0 · 확신 충분 · 모델도 통과라 했다. **축은 우리가 정한다** (v4, 2026-09-29).
+   *
+   *    v3 는 모델의 통과 라벨(`AUTO_SEED`/`AUTO_RAW`)이 축과 다르면 `axisMismatch` HOLD 로 보냈다.
+   *    그런데 판정 프롬프트는 두 라벨을 **정의하지 않는다** — 모델은 위험을 알려 주는 쪽이고, 라벨 선택은
+   *    잡음이었다. 실측(2026-09-29): axisMismatch 238건 전부 위험 0 · 확신 0.7 이상 → 초안 0건.
+   *    🔴 통과 라벨이 무엇이든 **통과는 통과**다. 결정은 우리 축이 정한다:
+   *       seedOriginality → `AUTO_SEED` · rawOriginality → `AUTO_RAW`(적응 경로 · `raw-adaptation.ts`).
+   *    🔴 막는 것은 하나도 풀지 않았다 — 위해 · 격리 · 확신 부족 · 모델 HOLD/DROP 분기는 위에서 그대로 끝난다.
+   */
   const axis = S(input.axis)
   const want: AutoDecision = axis === SEED_AXIS ? 'AUTO_SEED' : 'AUTO_RAW'
-  if (semantic.decision !== want) {
-    return { ...base, decision: 'AUTO_HOLD', reasonCodes: ['axisMismatch'] }
-  }
   return { ...base, decision: want, reasonCodes: [axis === SEED_AXIS ? 'axisSeed' : 'axisRaw'] }
 }
 
