@@ -38,6 +38,10 @@
  *    둘 다 PASS 가 아니다 — 올라가지 않고 **같은 단계를 다음 날 다시 시험**한다(`trialPlanOf`).
  *    이 게이트는 하루를 비우지 않는다 — 올라갈 칸을 막을 뿐, 지금 공개 단계는 그대로 둔다.
  *
+ * 🔴 **범위 — D3 · D5 · D10 전이까지만 닫는다.** `RELEASE_STAGES` 는 d1~d10 이고 `nextStage(d10)` 은 없다.
+ *    D20 이상은 release profile · generic scheduler · 승인 천장(authorized ceiling) 이 아직 없다 —
+ *    이 파일이 여는 것이 아니라 **별도 blocker** 다. D10 PASS 뒤 계획은 `null`(시험 없음)이다.
+ *
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0. 모으기는 `stage-evidence-repo` 가 한다.
  * 🔴 판정 결과에 원문·닉네임·id 를 담지 않는다 — **코드와 개수만**.
  */
