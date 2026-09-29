@@ -19,12 +19,14 @@
  *       슬롯당 실측 평균(오늘 회차는 넣지 않는다 — 하루 안에서 몫이 흔들리지 않게).
  *       표본이 `SCHEDULED_COST_MIN_SAMPLES` 개 미만이면 **보수 기본값**
  *       `estimateSupplySpend(묶음).capPerRun`(회차 상한 — 꽉 찬 회차 최대 단가) 을 쓴다(fail-closed).
+ *       🔴 이력 중 **하루라도 못 읽거나(깨짐) 어제 장부가 없거나 비었으면** 표본을 내지 않고 보수 기본값이다
+ *          (세션 `historyBefore`) — 남은 날의 일부 표본으로 몫을 낮추지 않는다.
  *    ② 오늘 정기 몫 전체 P = min(천장, 6 × 몫). 천장 = min(env 하루 예산, 계약 천장 $0.50).
  *    ③ 끝난 슬롯은 **자기 몫 안에서 쓴 만큼만** P 에서 뺀다 — 덜 쓰거나 안 돈 몫은 남은 슬롯에
  *       **똑같이 이월**된다(손 실행으로 가지 않는다). 몫을 넘겨 쓴 것은 P 를 줄이지 않는다.
  *    ④ 남은 P 가 실제 여력(천장 − 남은 슬롯 밖에서 쓴 것)보다 크면 **비례로 줄인다** — 늦은 슬롯도 같은 비율.
  *    ⑤ 슬롯 j 의 남은 몫 = max(0, 슬롯 몫 − 그 슬롯이 이미 쓴 것(정산 + 열린 예약)).
- *    ⑥ 손 실행(수동 · commissioning · 창 밖 kickstart · 늦게 뜬 launchd)은 **남은 슬롯 전부**의
+ *    ⑥ 손 실행(수동 · commissioning · 창 밖 kickstart · 늦게 뜬 launchd · 잠에서 깨 다른 창에 들어온 회차)은 **남은 슬롯 전부**의
  *       남은 몫을 떼어 둔 나머지(= 천장 − P 안쪽, 마지막 슬롯 뒤에는 전부)만 쓴다.
  *    ⑦ 정기 회차(슬롯 i)는 **자기 말고 남은 슬롯**의 남은 몫을 떼어 둔 나머지를 쓴다 —
  *       자기 몫(이월 포함) + 손 실행 몫 중 남은 것. 뒤 슬롯의 몫은 건드리지 못한다.
@@ -43,8 +45,11 @@
  *    · `--trigger=...` 같은 **인자**나 `SORAN_*` env 는 보지 않는다 — 손으로 넣을 수 있는 칸이다.
  *    · 라벨은 **정확히 공급 job 하나**여야 한다. 다른 soransoran job(댓글 러너 등)은 정기 공급이 아니다.
  *    · 라벨이 맞아도 **슬롯 창 밖이면 수동**이다 — `launchctl kickstart` 로 아무 때나 띄운 회차나
- *      잠에서 깬 뒤 늦게 뜬 회차가 정기 몫을 쓰지 못하게 한다. 시각은 **벽시계**다. 부모가 넘기는
- *      `SORAN_RUN_AT` 을 쓰지 않는다(손 실행이 그 값을 08:15 로 적어 넣을 수 있다).
+ *      잠에서 깬 뒤 늦게 뜬 회차가 정기 몫을 쓰지 못하게 한다. 요청 시각은 **벽시계**다.
+ *    · 🔴 (3차) 요청 시각뿐 아니라 **회차 시작 시각**도 같은 창이어야 한다 — 잠들었다 다른 창에서 깬 회차,
+ *      창 전에 kickstart 로 떠서 창으로 넘어온 회차는 수동이다(`supplyRunKindOf`). 시작 시각은
+ *      min(부모 `SORAN_RUN_AT`, 세션 생성 벽시계)이다 — `SORAN_RUN_AT` 은 **더 엄격하게만** 쓴다
+ *      (그 값으로 창 밖 요청이 정기가 되지는 않는다). 모양이 틀리면 모르는 것 → 수동.
  *    · 표식이 없거나 모르면 **수동**이다(fail-closed — 떼어 둔 몫을 지키는 쪽).
  *    🔴 남는 빈틈: 사람이 일부러 `XPC_SERVICE_NAME=com.soransoran.supply-process` 를 적고
  *       슬롯 창 안에서 손으로 돌리면 정기로 보인다. 실수로는 생기지 않는 경로다 — 숨기지 않고 적는다.
@@ -199,12 +204,26 @@ export function endedSlotsAt(
 }
 
 /**
- * 🔴 **정기 회차인가.** 라벨이 공급 job **정확히 하나**이고 **슬롯 창 안**일 때만이다.
- *    그 밖은 전부 수동이다 — 표식이 없음 · 다른 job · 창 밖 kickstart · 늦게 뜬 launchd 회차.
+ * 🔴 **정기 회차인가.** 라벨이 공급 job **정확히 하나**이고, 요청 시각과 **회차 시작 시각**이
+ *    **같은 슬롯 창 안**일 때만이다. 그 밖은 전부 수동이다 — 표식이 없음 · 다른 job · 창 밖 kickstart ·
+ *    늦게 뜬 launchd 회차 · 창 안에서 시작했지만 잠들었다가 **다른 창에서 깨어난** 회차.
+ *
+ * 🔴 **잠·늦은 복귀 규칙 (2026-09-29 3차)** — 요청 시각만 보면 두 가지가 샌다(실측 재현):
+ *    ① 08:15 회차가 08:16 에 시작해 잠들고 12:17 에 깨면, 그 회차의 남은 요청이 **12:15 슬롯 몫**으로
+ *       정기 판정을 받았다 — 제 슬롯이 아닌 몫을 먹고, 12:15 정기 회차가 굶는다.
+ *    ② 08:10 에 kickstart 로 뜬 회차가 08:15 를 넘기면 그 뒤 요청이 08:15 몫을 받았다.
+ *    그래서 `runStartedAt`(회차가 **실제로 시작한** 가장 이른 시각)도 같은 창이어야 한다.
+ *    · 창이 다르거나 시작 시각이 창 밖 → **수동**. 수동은 남은 슬롯 **전부**의 남은 몫을 떼어 둔
+ *      나머지만 쓴다(현재 예산에서는 23:00 전 사실상 $0). 그 회차가 쓰지 못한 제 슬롯 몫은
+ *      창이 끝나면 뒤 슬롯으로 **이월**된다(`allocateScheduledReserve` ②).
+ *    · `runStartedAt === null` = 시작 시각을 **모른다**(깨진 `SORAN_RUN_AT` 등) → 수동(fail-closed).
+ *    · `undefined` = 이 호출이 시작 시각을 따로 주지 않았다 → 요청 시각과 같다고 본다(순수 계산·시험용).
+ *      🔴 운영 경로(`supplyProtectFromEnv`)는 **언제나** 값을 준다 — 세션 검사가 그것을 본다.
  */
 export function supplyRunKindOf(
   env: Readonly<Record<string, string | undefined>>, now: Date,
   slots: readonly SlotKst[] = SUPPLY_RUN_SLOTS_KST, windowMs: number = SCHEDULED_RUN_WINDOW_MS,
+  runStartedAt?: Date | null,
 ): { kind: SupplyRunKind; why: string; slot: string | null } {
   const label = (env[LAUNCHD_LABEL_ENV] ?? '').trim()
   if (label !== SUPPLY_PROCESS_LAUNCHD_LABEL) {
@@ -216,6 +235,19 @@ export function supplyRunKindOf(
   const slot = activeSlotAt(now, slots, windowMs)
   if (slot === null) {
     return { kind: 'manual', slot: null, why: '공급 job 라벨이지만 슬롯 창 밖이다 — kickstart · 늦게 뜬 회차로 본다' }
+  }
+  if (runStartedAt !== undefined) {
+    if (runStartedAt === null || !Number.isFinite(runStartedAt.getTime())) {
+      return { kind: 'manual', slot: null, why: '회차 시작 시각을 모른다 — 정기로 인정하지 않는다(fail-closed)' }
+    }
+    const startSlot = activeSlotAt(runStartedAt, slots, windowMs)
+    if (startSlot === null || startSlot.label !== slot.label) {
+      return {
+        kind: 'manual', slot: null,
+        why: `회차가 ${slot.label} 창 안에서 시작하지 않았다(시작 ${startSlot?.label ?? '창 밖'})`
+          + ' — 잠에서 깬·창 밖에서 뜬 회차는 손 실행으로 본다',
+      }
+    }
   }
   return { kind: 'scheduled', slot: slot.label, why: `정기 슬롯 ${slot.label} 창 안` }
 }
@@ -245,19 +277,39 @@ export type ScheduledRunSample = { slot: string; usd: number }
  *      · 막힌 요청이 있는 슬롯 — 예산·몫·상한에 잘려 실제보다 적게 썼다
  *      · 사람이 마감한 줄이 있는 슬롯 — 사고 회차다
  *      · 기간(`lookbackDays`) 밖 슬롯
+ *
+ * 🔴 **사람이 마감한 줄은 표식이 없어도 잡는다 (2026-09-29 3차).**
+ *    `supply:ledger-resolve` 가 적는 마감 줄은 앞판에서 `runKind`/`runSlot` 을 싣지 않았다. 접으면 그 줄이
+ *    예약 줄을 **이기므로** 표식이 사라지고, "사람이 마감한 슬롯은 뺀다" 는 규칙이 운영에서 한 번도 걸리지
+ *    않았다(죽은 게이트 — 실제 resolve 경로로 재현). 게다가 그 건의 금액이 슬롯 합에서 빠져 그 슬롯이
+ *    **실제보다 싸게** 표본이 됐다. 이제 resolve 가 원래 줄의 표식을 옮겨 적고, 여기서는 표식이 없는
+ *    마감 줄도 그 요청의 `startedAt` 이 들어가는 슬롯 창으로 뺀다 — 정기 요청의 `startedAt` 은 정의상
+ *    제 슬롯 창 안이다(판정이 그 시각으로 정기를 정했다). 같은 창의 손 실행 마감이면 정기 슬롯 하나를
+ *    괜히 버리는 쪽으로 틀린다(표본이 줄면 보수 기본값 쪽이다).
+ *    `startedAt` 을 읽지 못하면 어느 슬롯인지 모른다 → **표본 전부를 버린다**(보수 기본값으로 간다).
  */
 export function scheduledRunSamples(input: {
   entries: readonly LedgerEntry[]
   now: Date
   windowMs?: number
   lookbackDays?: number
+  slots?: readonly SlotKst[]
 }): ScheduledRunSample[] {
   const windowMs = input.windowMs ?? SCHEDULED_RUN_WINDOW_MS
   const lookback = input.lookbackDays ?? SCHEDULED_COST_LOOKBACK_DAYS
+  const slots = input.slots ?? SUPPLY_RUN_SLOTS_KST
   const today0 = kstMidnightMs(input.now)
   const oldest0 = today0 - lookback * DAY_MS
   const bySlot = new Map<string, { usd: number; tainted: boolean; paid: number }>()
+  /** 🔴 표식 없는 사람 마감 줄이 가리키는 슬롯 */
+  const humanSlots = new Set<string>()
   for (const e of input.entries) {
+    if (e.resolvedBy === 'human' && !isScheduledTag(e)) {
+      const at = Date.parse(e.startedAt)
+      if (!Number.isFinite(at)) return []
+      const w = activeSlotAt(new Date(at), slots, windowMs)
+      if (w !== null) humanSlots.add(w.label)
+    }
     if (!isScheduledTag(e) || e.stage === 'countTokens') continue
     const g = bySlot.get(e.runSlot) ?? { usd: 0, tainted: false, paid: 0 }
     if (e.status === 'blocked') g.tainted = true
@@ -269,6 +321,7 @@ export function scheduledRunSamples(input: {
   const out: ScheduledRunSample[] = []
   for (const [slot, g] of bySlot) {
     const start = slotStartMsOf(slot)
+    if (humanSlots.has(slot)) continue
     if (start === null || g.tainted || g.paid === 0) continue
     if (start + windowMs > input.now.getTime()) continue
     // 🔴 어제까지만 — 오늘 슬롯은 표본이 아니다
@@ -422,16 +475,21 @@ export function supplySpendProtectAt(input: {
   windowMs?: number
   shareUsd?: number
   ceilingUsd?: number | null
+  /**
+   * 🔴 이 회차가 **실제로 시작한** 가장 이른 시각 — `supplyRunKindOf` 의 잠·늦은 복귀 규칙.
+   *    `null` 은 모름(→ 수동). 없으면(`undefined`) 요청 시각과 같다고 본다(순수 계산·시험용).
+   */
+  runStartedAt?: Date | null
 }): { kind: SupplyRunKind; why: string; slot: string | null; share: ShareDecision; allocation: ScheduledAllocation; protect: SpendProtect } {
   const slots = input.slots ?? SUPPLY_RUN_SLOTS_KST
   const windowMs = input.windowMs ?? SCHEDULED_RUN_WINDOW_MS
-  const k = supplyRunKindOf(input.env, input.now, slots, windowMs)
+  const k = supplyRunKindOf(input.env, input.now, slots, windowMs, input.runStartedAt)
   const pending = pendingSlotsAt(input.now, slots, windowMs)
   const share: ShareDecision = input.shareUsd !== undefined
     ? { usd: input.shareUsd, source: 'measured', samples: 0, why: `주어진 몫 $${input.shareUsd.toFixed(4)}` }
     : scheduledShareFrom(input.historyEntries === undefined || input.historyEntries === null
       ? null
-      : scheduledRunSamples({ entries: input.historyEntries, now: input.now, windowMs }))
+      : scheduledRunSamples({ entries: input.historyEntries, now: input.now, windowMs, slots }))
   const contract = input.ceilingUsd === undefined ? SUPPLY_DAILY_USD_APPROVED : input.ceilingUsd
   // 🔴 손 실행은 천장 미승인을 0 으로 읽는다. 정기 회차는 천장이 없으면 env 예산만 본다(앞판 그대로)
   const ceiling: number | null = k.kind === 'manual' ? (contract ?? 0) : contract

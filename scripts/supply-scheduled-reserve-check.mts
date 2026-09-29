@@ -17,12 +17,16 @@
  *    ⑨ (2차) 슬롯 몫은 장부의 **최근 정기 회차 실측**에서 온다 · 표본이 모자라면 보수 기본값(fail-closed)
  *    ⑩ (2차) 남은 몫 < 남은 슬롯 몫 합이면 **비례 축소** · 앞 슬롯이 덜 쓴 몫은 **뒤로 이월**
  *    ⑪ (2차) 정기 회차도 **뒤 슬롯 몫**을 남긴다 — 09-29 실측 비용으로 하루를 돌려 22:15 가 굶지 않는다
+ *    ⑫ (3차) 사람이 마감한 줄 — **실제 `supply:ledger-resolve` 경로**로 적은 줄에서 그 슬롯이 표본에서 빠진다
+ *    ⑬ (3차) 지난 날 장부가 깨졌거나 어제 장부가 없으면 **세션 경로에서** 보수 기본값이다(부분 표본 금지)
+ *    ⑭ (3차) 잠에서 깬 · 창 전에 kickstart 로 뜬 회차는 손 실행이다 — 회차 시작 시각도 같은 창이어야 한다
  *
  * 🔴 **확인하지 못하는 것** — 실제 launchd 가 이 라벨을 넣는지는 이 검사가 띄운 프로세스로 증명하지 못한다.
  *    근거는 수집 기록(같은 `judgeTrigger` 규칙으로 `schedule` 522건)이고, 운영 적용 뒤 장부의
  *    `SCHEDULED_RESERVE`·정기 회차 유료 건수로 다시 본다.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,10 +46,12 @@ import {
   scheduledRunSamples, scheduledShareFrom, supplyRunKindOf, supplySpendProtectAt,
 } from '../src/lib/supply-scheduled-reserve'
 import {
-  REAL_LEDGER_IO, SUPPLY_PROTECT_TEST_SEAM, SupplyLlmSession, supplyProtectFromEnv,
+  REAL_LEDGER_IO, SUPPLY_PROTECT_TEST_SEAM, SupplyLlmSession, runStartedAtOf, supplyProtectFromEnv,
   type LedgerIo, type ProtectContext, type ProtectDecision,
 } from './lib/supply-llm-call.mjs'
-import { appendLedgerLine, defaultLedgerDir, ledgerPathOf, readLedgerDay } from './lib/llm-ledger-store.mjs'
+import {
+  appendLedgerLine, defaultLedgerDir, ledgerPathOf, readLedgerDay, readOpenReservations,
+} from './lib/llm-ledger-store.mjs'
 
 let pass = 0
 let fail = 0
@@ -282,8 +288,37 @@ const NEXT_MORNING = kst('2026-09-30T07:00:00')
   const withBlocked = [...HIST_0929, line({ usd: 0, kind: 'scheduled', slot: '2026-09-29 17:15', status: 'blocked' })]
   check('🔴 막힌 요청이 있는 슬롯은 뺀다 — 잘린 회차는 실제보다 싸 보인다',
     scheduledRunSamples({ entries: withBlocked, now: NEXT_MORNING }).length === 2)
-  const withHuman = [...HIST_0929, line({ usd: 0.02, kind: 'scheduled', slot: '2026-09-29 17:15', resolvedBy: 'human' })]
-  check('🔴 사람이 마감한 줄이 있는 슬롯은 뺀다(사고 회차)', scheduledRunSamples({ entries: withHuman, now: NEXT_MORNING }).length === 2)
+  /**
+   * 🔴 **사람이 마감한 줄 — `supply:ledger-resolve` 가 실제로 적는 모양** (2026-09-29 3차).
+   *    앞판 fixture 는 "정기 표식 + resolvedBy=human" 줄을 손으로 만들었다 — 운영의 resolve 는 표식을 싣지 않았고,
+   *    그 줄이 접을 때 예약 줄을 이겨 표식이 사라졌다(죽은 게이트). 실제 resolve 경로는 ⑧ ⓖ 가 돌린다.
+   *    여기서는 resolve 가 적는 줄 모양(requestNo −1 · model '' · HUMAN_RESOLVED · 원래 요청의 startedAt)을 그대로 쓴다.
+   */
+  const humanLine = (o: { usd: number; startedAt: string; tags: boolean }): LedgerEntry => {
+    lineSeq += 1
+    return {
+      runId: 'SIM-1715', stage: 'draftGen', attemptId: `human-${lineSeq}`, requestNo: -1,
+      provider: 'anthropic', apiModelId: '', model: '', status: 'settled', blockCode: null,
+      countedInputTokens: null, maxOutputTokens: 0, reservedUsd: 0.01,
+      inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+      settledUsd: o.usd, pricingVersion: 'test', startedAt: o.startedAt, endedAt: null, errorCode: 'HUMAN_RESOLVED',
+      resolvedBy: 'human',
+      ...(o.tags ? { runKind: 'scheduled' as const, runSlot: '2026-09-29 17:15' } : {}),
+    }
+  }
+  const at1720 = kst('2026-09-29T17:20:00').toISOString()
+  const tagged = scheduledRunSamples({ entries: [...HIST_0929, humanLine({ usd: 0.5, startedAt: at1720, tags: true })], now: NEXT_MORNING })
+  check('🔴 사람이 마감한 줄(표식을 옮겨 적은 새 resolve 모양)이 있는 슬롯은 뺀다(사고 회차)',
+    tagged.length === 2 && tagged.every((x) => x.slot !== '2026-09-29 17:15'), tagged.map((x) => x.slot).join(','))
+  const legacyHuman = scheduledRunSamples({ entries: [...HIST_0929, humanLine({ usd: 0.5, startedAt: at1720, tags: false })], now: NEXT_MORNING })
+  check('🔴 표식 없는 마감 줄(앞판 resolve 모양)도 그 요청의 startedAt 이 든 슬롯 창으로 뺀다',
+    legacyHuman.length === 2 && legacyHuman.every((x) => x.slot !== '2026-09-29 17:15'), legacyHuman.map((x) => x.slot).join(','))
+  const outside = scheduledRunSamples({
+    entries: [...HIST_0929, humanLine({ usd: 0.5, startedAt: kst('2026-09-29T11:00:00').toISOString(), tags: false })], now: NEXT_MORNING,
+  })
+  check('표식 없는 마감 줄이 어느 슬롯 창에도 들지 않으면(손 실행 시각) 정기 표본은 그대로다', outside.length === 3)
+  check('🔴 표식 없는 마감 줄의 startedAt 을 읽지 못하면 어느 슬롯인지 모른다 → 표본 전부를 버린다(보수 기본값)',
+    scheduledRunSamples({ entries: [...HIST_0929, humanLine({ usd: 0.5, startedAt: '알 수 없음', tags: false })], now: NEXT_MORNING }).length === 0)
   check('🔴 오늘 슬롯(끝났어도)은 표본이 아니다 — 하루 안에서 몫이 흔들리지 않는다',
     scheduledRunSamples({ entries: HIST_0929, now: kst('2026-09-29T23:30:00') }).length === 0)
   check('🔴 자정이 지나면 어제 슬롯이 표본이 된다',
@@ -690,7 +725,7 @@ async function runCalls(s: SupplyLlmSession, k: number, stage: typeof ASK.stage 
      */
     SUPPLY_PROTECT_TEST_SEAM.clock = null
     const viaEnv = supplyProtectFromEnv({ ...LABEL, SORAN_RUN_AT: '2026-09-27T23:20:00.000Z' })(kst('2026-09-28T11:13:00'),
-      { todayEntries: [], historyEntries: null, dailyUsd: 0.5 })
+      { todayEntries: [], historyEntries: null, dailyUsd: 0.5, sessionStartedAt: kst('2026-09-28T11:13:00') })
     check('🔴 운영 보호 판정(supplyProtectFromEnv)은 SORAN_RUN_AT=08:20 을 적어도 11:13 을 본다 — 손 실행',
       viaEnv.kind === 'manual' && viaEnv.protect !== null)
     SUPPLY_PROTECT_TEST_SEAM.clock = () => kst('2026-09-28T12:20:00')
@@ -730,6 +765,183 @@ async function runCalls(s: SupplyLlmSession, k: number, stage: typeof ASK.stage 
     lockAt > 0 && lockAt < protectAt && protectAt < judgeAt && judgeAt < addAt)
   check('🔴 공급 장부면 호출부 보호 설정을 보지 않는다(코드)',
     /this\.dir === defaultLedgerDir\(\)\s*\?\s*supplyProtectFromEnv\(process\.env\)/.test(src))
+}
+
+{
+  // ⓖ 🔴 **실제 resolve 경로** — 정기 회차의 정산을 못 적게 하고, `supply:ledger-resolve` 를 임시 장부에 돌린다
+  const dir = mkdtempSync(join(tmpdir(), 'reserve-g-'))
+  const lim: BudgetLimits = { dailyUsd: 1000, runRequestCap: 1000, headroomMultiplier: HEAD }
+  for (const hm of ['08:15', '12:15', '17:15']) {
+    let settledWrites = 0
+    const io: LedgerIo = hm !== '17:15' ? REAL_LEDGER_IO : {
+      ...REAL_LEDGER_IO,
+      append: (p, e) => {
+        if (e.stage !== 'countTokens' && e.status === 'settled') {
+          settledWrites += 1
+          if (settledWrites === 2) throw new Error('fixture: 정산 줄을 쓰지 못했다')
+        }
+        REAL_LEDGER_IO.append(p, e)
+      },
+    }
+    const s = new SupplyLlmSession({
+      runId: `G${hm}`, dir, limits: lim, io, now: at(`2026-10-05T${hm.slice(0, 2)}:20:00`), protectAt: supplyProtectFromEnv(LABEL),
+    })
+    await runCalls(s, 2)
+  }
+  const open = readOpenReservations(dir)
+  const openId = open.ok ? (open.list[0]?.attemptId ?? '') : ''
+  const r = spawnSync(join(process.cwd(), 'node_modules/.bin/tsx'), [
+    join(process.cwd(), 'scripts/supply-llm-ledger-resolve.mts'), `--dir=${dir}`, `--attempt=${openId}`,
+    '--confirmed-with-provider', '--actual-usd=0.5',
+  ], { encoding: 'utf-8' })
+  const day = readLedgerDay(ledgerPathOf(dir, '2026-10-05'))
+  const human = day.ok ? day.entries.find((e) => e.resolvedBy === 'human') : undefined
+  check('[resolve] 17:15 정기 회차에 열린 예약 1건이 남았고 사람이 마감했다', openId !== '' && r.status === 0 && human !== undefined,
+    `open=${openId} exit=${r.status}`)
+  check('🔴 [resolve] 마감 줄이 원래 예약 줄의 runKind·runSlot 을 옮겨 적는다 — 접은 뒤에도 그 슬롯의 것이다',
+    human?.runKind === 'scheduled' && human.runSlot === '2026-10-05 17:15' && human.settledUsd === 0.5,
+    JSON.stringify({ runKind: human?.runKind, runSlot: human?.runSlot }))
+  const sm = day.ok ? scheduledRunSamples({ entries: day.entries, now: kst('2026-10-06T07:00:00') }) : []
+  check('🔴 [resolve] 사람이 마감한 17:15 는 정기 실측 표본에서 빠진다 — 실제 resolve 경로에서 규칙이 걸린다',
+    sm.length === 2 && sm.every((x) => x.slot !== '2026-10-05 17:15'), sm.map((x) => `${x.slot}=${x.usd}`).join(','))
+  rmSync(dir, { recursive: true, force: true })
+}
+{
+  /**
+   * ⓗ 🔴 **지난 날 장부가 없거나 깨졌을 때 — 세션 경로(`historyBefore`) 그대로** (2026-09-29 3차).
+   *    어제 싼 표본 3개면 몫이 바닥($0.0464)이라 11:13 손 실행이 천장 $0.50 − 6×바닥 안에서 나간다.
+   *    지난 날 하나가 깨졌거나 어제 장부가 없으면 **보수 기본값**(회차 상한)이라 6몫이 천장을 넘고 손 실행은 0 이다.
+   *    🔴 깨진 날을 건너뛰고 남은 표본으로 평균을 내면(부분 표본) 몫이 낮아져 손 실행이 나간다 — 그것을 잡는다.
+   */
+  const lim: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultiplier: HEAD }
+  const cheap = (date: string): LedgerEntry[] => ['08:15', '12:15', '17:15']
+    .map((hm) => line({ usd: 0.001, kind: 'scheduled', slot: `${date} ${hm}`, at: `${date}T${hm.slice(0, 2)}:20:00` }))
+  const manualOnce = async (setup: (dir: string) => void): Promise<{ ok: boolean; code: string; text: string }> => {
+    const dir = mkdtempSync(join(tmpdir(), 'reserve-h-'))
+    setup(dir)
+    const s = new SupplyLlmSession({ runId: 'H', dir, limits: lim, now: at('2026-10-06T11:13:00'), protectAt: supplyProtectFromEnv({}) })
+    const r = await s.call(ASK)
+    rmSync(dir, { recursive: true, force: true })
+    return { ok: r.ok, code: r.errorCode ?? '', text: s.describe() }
+  }
+  const put = (dir: string, date: string, rows: LedgerEntry[]): void => {
+    for (const e of rows) appendLedgerLine(ledgerPathOf(dir, date), e)
+  }
+  const ctrl = await manualOnce((d) => put(d, '2026-10-05', cheap('2026-10-05')))
+  check('[이력] 대조군 — 어제 싼 표본 3개 · 2~7일 전 장부는 없음(빈 날) → 몫 바닥 → 11:13 손 실행이 나간다', ctrl.ok && /정기 실측 3회/.test(ctrl.text), ctrl.code)
+  const corrupt = await manualOnce((d) => { put(d, '2026-10-05', cheap('2026-10-05')); writeFileSync(ledgerPathOf(d, '2026-10-03'), '{깨진 줄\n') })
+  check('🔴 [이력] 3일 전 장부가 깨졌다 → 이력 없음 → 보수 기본값 → 손 실행 SCHEDULED_RESERVE (건너뛰고 평균 내지 않는다)',
+    !corrupt.ok && corrupt.code.endsWith('SCHEDULED_RESERVE') && /이력을 읽지 못했다/.test(corrupt.text), corrupt.code)
+  const noYesterday = await manualOnce((d) => put(d, '2026-10-04', cheap('2026-10-04')))
+  check('🔴 [이력] 어제 장부가 없다(그제 싼 표본 3개뿐) → 보수 기본값 → 손 실행 SCHEDULED_RESERVE',
+    !noYesterday.ok && noYesterday.code.endsWith('SCHEDULED_RESERVE') && /이력을 읽지 못했다/.test(noYesterday.text), noYesterday.code)
+  const emptyYesterday = await manualOnce((d) => { put(d, '2026-10-04', cheap('2026-10-04')); writeFileSync(ledgerPathOf(d, '2026-10-05'), '') })
+  check('🔴 [이력] 어제 장부가 비었다 → 보수 기본값', !emptyYesterday.ok && emptyYesterday.code.endsWith('SCHEDULED_RESERVE'), emptyYesterday.code)
+  const yCorrupt = await manualOnce((d) => { put(d, '2026-10-04', cheap('2026-10-04')); writeFileSync(ledgerPathOf(d, '2026-10-05'), '{깨진 줄\n') })
+  check('🔴 [이력] 어제 장부가 깨졌으면 회차 집계부터 못 읽어 LEDGER_ERROR — 정기 회차까지 멈춘다(앞판 그대로 · 더 엄격)',
+    !yCorrupt.ok && yCorrupt.code.endsWith('LEDGER_ERROR'), yCorrupt.code)
+  {
+    // 🔴 운영 경로 그대로 — 기본 장부(임시 HOME) · 호출부 보호 설정 없음 · 시험 시계 이음매
+    const home = mkdtempSync(join(tmpdir(), 'reserve-h-home-'))
+    const prevHome = process.env.HOME
+    const prevLabel = process.env[LAUNCHD_LABEL_ENV]
+    process.env.HOME = home
+    delete process.env[LAUNCHD_LABEL_ENV]
+    SUPPLY_PROTECT_TEST_SEAM.clock = () => kst('2026-10-06T11:13:00')
+    try {
+      const d = defaultLedgerDir()
+      mkdirSync(d, { recursive: true })
+      put(d, '2026-10-05', cheap('2026-10-05'))
+      writeFileSync(ledgerPathOf(d, '2026-10-02'), '{깨진 줄\n')
+      const s1 = new SupplyLlmSession({ runId: 'HH1', limits: lim, now: at('2026-10-06T11:13:00') })
+      const a = await s1.call(ASK)
+      check('🔴 [이력·기본 장부] 5일 전 장부가 깨졌으면 운영 세션도 보수 기본값 — 손 실행이 막힌다',
+        !a.ok && (a.errorCode ?? '').endsWith('SCHEDULED_RESERVE'), a.errorCode ?? '')
+      rmSync(ledgerPathOf(d, '2026-10-02'))
+      const s2 = new SupplyLlmSession({ runId: 'HH2', limits: lim, now: at('2026-10-06T11:13:00') })
+      const b = await s2.call(ASK)
+      check('[이력·기본 장부] 깨진 파일을 치우면 같은 세션 경로가 실측 몫으로 나간다(대조군)', b.ok, b.errorCode ?? '')
+    } finally {
+      SUPPLY_PROTECT_TEST_SEAM.clock = null
+      if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome
+      if (prevLabel === undefined) delete process.env[LAUNCHD_LABEL_ENV]; else process.env[LAUNCHD_LABEL_ENV] = prevLabel
+      rmSync(home, { recursive: true, force: true })
+    }
+  }
+}
+{
+  /**
+   * ⓘ 🔴 **잠 · 늦은 복귀 · runner-recover kickstart** (2026-09-29 3차).
+   *    규칙: 정기 = 라벨 + 요청 시각 + **회차 시작 시각**(min(SORAN_RUN_AT, 세션 생성))이 같은 슬롯 창.
+   *    아니면 손 실행 — 남은 슬롯 전부의 몫을 떼어 둔 나머지만 쓰고, 제 슬롯의 쓰지 못한 몫은 뒤로 이월된다.
+   */
+  const S0815 = kst('2026-10-06T08:15:02')
+  check('🔴 08:16 에 시작해 잠들고 12:17 에 깬 회차 → 손 실행(12:15 몫을 받지 않는다)',
+    supplyRunKindOf(LABEL, kst('2026-10-06T12:17:00'), SUPPLY_RUN_SLOTS_KST, SCHEDULED_RUN_WINDOW_MS, kst('2026-10-06T08:16:00')).kind === 'manual')
+  check('🔴 창 전(08:10) kickstart 로 떠서 08:16 에 요청 → 손 실행(08:15 몫을 받지 않는다)',
+    supplyRunKindOf(LABEL, kst('2026-10-06T08:16:00'), SUPPLY_RUN_SLOTS_KST, SCHEDULED_RUN_WINDOW_MS, kst('2026-10-06T08:10:00')).kind === 'manual')
+  check('정시 회차(08:15:02 시작 · 08:40 요청) → 정기 08:15',
+    supplyRunKindOf(LABEL, kst('2026-10-06T08:40:00'), SUPPLY_RUN_SLOTS_KST, SCHEDULED_RUN_WINDOW_MS, S0815).slot === '2026-10-06 08:15')
+  check('🔴 시작 시각을 모름(null) → 손 실행',
+    supplyRunKindOf(LABEL, kst('2026-10-06T08:40:00'), SUPPLY_RUN_SLOTS_KST, SCHEDULED_RUN_WINDOW_MS, null).kind === 'manual')
+  // 운영 판정(supplyProtectFromEnv)이 시작 시각을 실제로 넣는다
+  const ctx = (sessionStartedAt: Date): ProtectContext => ({ todayEntries: [], historyEntries: null, dailyUsd: 0.3, sessionStartedAt })
+  check('🔴 부모 SORAN_RUN_AT=08:15 · 깨어난 뒤 띄운 자식(세션 12:18) · 요청 12:19 → 손 실행 (이른 쪽 시작 시각)',
+    supplyProtectFromEnv({ ...LABEL, SORAN_RUN_AT: S0815.toISOString() })(kst('2026-10-06T12:19:00'), ctx(kst('2026-10-06T12:18:00'))).kind === 'manual')
+  check('SORAN_RUN_AT 없음 · 세션 12:16 · 요청 12:19 → 정기 12:15',
+    supplyProtectFromEnv(LABEL)(kst('2026-10-06T12:19:00'), ctx(kst('2026-10-06T12:16:00'))).slot === '2026-10-06 12:15')
+  check('🔴 SORAN_RUN_AT 모양이 틀리면 시작 시각을 모른다 → 손 실행',
+    supplyProtectFromEnv({ ...LABEL, SORAN_RUN_AT: '08:15' })(kst('2026-10-06T12:19:00'), ctx(kst('2026-10-06T12:16:00'))).kind === 'manual')
+  check('🔴 SORAN_RUN_AT 이 세션보다 늦어도(미래) 판정을 느슨하게 만들지 못한다 — 세션 08:10 이면 손 실행',
+    supplyProtectFromEnv({ ...LABEL, SORAN_RUN_AT: kst('2026-10-06T08:20:00').toISOString() })(kst('2026-10-06T08:21:00'), ctx(kst('2026-10-06T08:10:00'))).kind === 'manual')
+  check('runStartedAtOf — 둘 중 이른 것 · 모양이 틀리면 null',
+    runStartedAtOf({ SORAN_RUN_AT: S0815.toISOString() }, kst('2026-10-06T12:18:00'))?.getTime() === S0815.getTime()
+    && runStartedAtOf({}, kst('2026-10-06T12:18:00'))?.getTime() === kst('2026-10-06T12:18:00').getTime()
+    && runStartedAtOf({ SORAN_RUN_AT: 'x' }, kst('2026-10-06T12:18:00')) === null)
+
+  // runner-recover kickstart — 앞 회차가 exit 1 로 끝난 뒤 같은 창(08:40)에서 다시 뜬 회차
+  const spent = [line({ usd: 0.03, kind: 'scheduled', slot: '2026-10-06 08:15', at: '2026-10-06T08:16:00' })]
+  const within = supplySpendProtectAt({ env: LABEL, now: kst('2026-10-06T08:41:00'), runStartedAt: kst('2026-10-06T08:40:00'),
+    todayEntries: spent, shareUsd: 0.05, dailyUsd: 0.3 })
+  const ownWithin = within.allocation.slots.find((x) => x.label === '2026-10-06 08:15')
+  check('🔴 [recover] 창 안 kickstart(08:40) → 정기 08:15 · 몫은 앞 회차가 쓴 것을 뺀 남은 몫(0.05 − 0.03)뿐이다',
+    within.kind === 'scheduled' && Math.abs((ownWithin?.claimUsd ?? -1) - 0.02) < 1e-12, JSON.stringify(ownWithin))
+  const after = supplySpendProtectAt({ env: LABEL, now: kst('2026-10-06T09:06:00'), runStartedAt: kst('2026-10-06T09:05:00'),
+    todayEntries: spent, shareUsd: 0.05, dailyUsd: 0.3 })
+  check('🔴 [recover] 창 뒤 kickstart(09:05) → 손 실행 · 08:15 가 못 쓴 몫(0.02)은 뒤 5슬롯으로 이월돼 떼어 둔다(6×0.05 − 0.03)',
+    after.kind === 'manual' && Math.abs(after.protect.reservedForOthersUsd - (6 * 0.05 - 0.03)) < 1e-12, `${after.protect.reservedForOthersUsd}`)
+
+  // 세션 — 같은 세션이 잠들었다 깬다. 표본 없음(보수 기본값) · 여력 $0.30 이면 손 실행 폭은 0 이다
+  const dir = mkdtempSync(join(tmpdir(), 'reserve-i-'))
+  const lim: BudgetLimits = { dailyUsd: 0.3, runRequestCap: 1000, headroomMultiplier: HEAD }
+  let clock = kst('2026-10-06T08:16:00')
+  const sleeper = new SupplyLlmSession({ runId: 'Z0815', dir, limits: lim, now: () => clock,
+    protectAt: supplyProtectFromEnv({ ...LABEL, SORAN_RUN_AT: S0815.toISOString() }) })
+  const b0 = paidFetches
+  const first = await sleeper.call(ASK)
+  clock = kst('2026-10-06T12:17:00')
+  const resumed = await sleeper.call(ASK)
+  check('🔴 [세션·잠] 08:16 요청은 정기로 나가고, 12:17 깨어난 요청은 손 실행 → SCHEDULED_RESERVE · fetch 1건',
+    first.ok && !resumed.ok && (resumed.errorCode ?? '').endsWith('SCHEDULED_RESERVE') && paidFetches - b0 === 1, resumed.errorCode ?? '')
+  const tags = ((): string => {
+    const d = readLedgerDay(ledgerPathOf(dir, '2026-10-06'))
+    return d.ok ? d.entries.filter((e) => e.runId === 'Z0815' && e.stage !== 'countTokens').map((e) => `${e.runKind}:${e.runSlot}`).join(',') : ''
+  })()
+  check('🔴 [세션·잠] 깨어난 요청은 장부에 manual 로 남는다 — 12:15 표본·지출로 세지 않는다',
+    tags === 'scheduled:2026-10-06 08:15,manual:null', tags)
+  const s1215 = new SupplyLlmSession({ runId: 'Z1215', dir, limits: lim, now: at('2026-10-06T12:20:00'),
+    protectAt: supplyProtectFromEnv({ ...LABEL, SORAN_RUN_AT: kst('2026-10-06T12:15:01').toISOString() }) })
+  check('🔴 [세션·잠] 그 뒤 12:15 정기 회차는 자기 몫으로 돈다', (await s1215.call(ASK)).ok)
+  // 창 전(08:10) kickstart — 세션이 08:10 에 생기고 요청은 08:16(08:15 창 안)
+  const dir2 = mkdtempSync(join(tmpdir(), 'reserve-i2-'))
+  let early = kst('2026-10-06T08:10:00')
+  const kick = new SupplyLlmSession({ runId: 'Z0810', dir: dir2, limits: lim, now: () => early, protectAt: supplyProtectFromEnv(LABEL) })
+  early = kst('2026-10-06T08:16:00')
+  const kr = await kick.call(ASK)
+  check('🔴 [세션·kickstart] 창 전(08:10)에 뜬 회차의 08:16 요청은 08:15 몫을 받지 못한다 → SCHEDULED_RESERVE',
+    !kr.ok && (kr.errorCode ?? '').endsWith('SCHEDULED_RESERVE'), kr.errorCode ?? '')
+  rmSync(dir, { recursive: true, force: true })
+  rmSync(dir2, { recursive: true, force: true })
 }
 
 globalThis.fetch = realFetch
