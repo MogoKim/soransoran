@@ -266,6 +266,12 @@ const OK_BUDGET: CreativeBudget = {
   const f = await runCreativeStep(fx, REQ, { budget: null, liveEnabled: false })
   check('fixture 는 비용 0 — 예산 없이 서고 origin=fixture', f.ok && f.origin === 'fixture' && fx.calls === 1)
   check('creative 계약 — 성격이 비면 막는다', creativeProblems({ ...(f.ok ? f.creative : ({} as PersonaCreative)), personality: [] }).length > 0)
+  const bad: CreativeProvider = {
+    kind: 'fixture', model: 'fixture',
+    generate: async (req) => ({ ...(await new FixtureCreativeProvider().generate(req)), noGoExpressions: ['따옴표 없는 표현'] }),
+  }
+  const badOut = await runCreativeStep(bad, REQ, { budget: null, liveEnabled: false })
+  check('계약을 어긴 creative 는 쓰지 않는다 → CREATIVE_INVALID', !badOut.ok && badOut.code === 'CREATIVE_INVALID')
   const bud = readCreativeBudget({
     limits: { dailyUsd: null, runRequestCap: null, headroomMultiplier: null },
     runId: 'check', now: new Date('2026-09-29T00:00:00Z'), dir: mkdtempSync(join(tmpdir(), 'voice-supply-ledger-')),
