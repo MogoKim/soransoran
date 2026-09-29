@@ -78,7 +78,10 @@ async function main(): Promise<void> {
       select: { id: true },
     })).id
   }
+  /** 자동 행에 이미 쓴 말투 Persona — 새 자동 행은 이 값을 다시 쓰지 않는다 */
+  const usedVoices = new Set<string>()
   const auto = async (voice: string, daysAgo: number) => {
+    usedVoices.add(voice)
     const r = await raw(`${MACHINE_SITE_PREFIX}navercafe:t`, new Date(NOW.getTime() - daysAgo * DAY))
     const title = `저녁 산책 이야기 ${seq}`
     const body = `저녁 먹고 동네를 한 바퀴 걸었어요 ${seq}. 다들 요즘 저녁에 뭐 하세요?`
@@ -98,6 +101,24 @@ async function main(): Promise<void> {
   const H = [await human(6), await human(5.5), await human(5), await human(4.5), await human(4), await human(3.5)]
   const A = [await auto('P01', 1), await auto('P02', 0.8), await auto('P03', 0.6)]
 
+  /**
+   * 🔴 **뒤에 만드는 자동 행의 말투 Persona 는 아직 아무 글도 배정받지 않은 Persona 로 고른다** (2026-09-29).
+   *    ② 의 사람 행은 `planStore` 의 가중 무작위(seed = 큐 id · cuid 라 회차마다 다르다)로 Persona 를 받는다.
+   *    말투를 'P04' 로 박아 두면 약 30% 회차에서 사람 행이 P04 를 먼저 가져가고, 자동 행은
+   *    WEEKLY_CAP · TOO_SOON 으로 배정이 막혀 ⑤ · ⑥ 이 lane 판정과 무관하게 빨개졌다(재현 9/30).
+   *    제품 동작은 그대로다 — 막힌 자동 행을 빼는 것은 정상이고, 이 검사가 보려는 것은 lane 차례다.
+   */
+  const freeVoice = async (): Promise<string> => {
+    const taken = new Set<string>(usedVoices)
+    const logged = await prisma.personaActivityLog.findMany({ where: { kind: 'post' }, select: { persona: { select: { code: true } } } })
+    for (const l of logged) taken.add(l.persona.code)
+    const matched = await prisma.originalPostApprovalQueue.findMany({ where: { matchedPersonaId: { not: null } }, select: { matchedPersona: { select: { code: true } } } })
+    for (const m of matched) if (m.matchedPersona !== null) taken.add(m.matchedPersona.code)
+    const code = CODES.find((c) => !taken.has(c))
+    if (code === undefined) throw new Error('fixture — 비어 있는 Persona 가 없다')
+    return code
+  }
+
   const view = async (release: ReleaseStage) => {
     const E = envOf(release)
     const gate = await authoritativeGate(prisma, E)
@@ -108,8 +129,8 @@ async function main(): Promise<void> {
   let publishSeq = 0
   /** 🔴 러너와 같은 순서 — 사람 행은 배정 먼저 쓰고, 자동 행은 배정 계획을 트랜잭션에 넘긴다 */
   const publish = async (v: Awaited<ReturnType<typeof view>>, id: string) => {
-    // Fast CI can commit adjacent posts in the same millisecond. Give each
-    // transaction a stable past timestamp so lane recency has a strict order.
+    // 트랜잭션 시계를 회차마다 1초씩 떨어뜨린다 — ActivityLog(슬롯 · Persona 이력) 시각이 겹치지 않게.
+    // 🔴 lane 차례는 Post.createdAt(@default(now()) · 벽시계)으로 정한다 — 이 값의 영향을 받지 않는다.
     const txNow = new Date(NOW.getTime() - 60_000 + publishSeq * 1000)
     publishSeq += 1
     const t = v.loaded.targets.find((x) => x.id === id)!
@@ -170,8 +191,11 @@ async function main(): Promise<void> {
   check('🔴 사람 행만 → 기존 순서의 첫 행(lane 선호 없음)', v3.plan.picked?.id === v3.plan.freshOrdered.find((t) => v3.plan.assignOf.get(t.id)?.assigned != null)?.id)
 
   console.log('\n── ⑤ 동시 두 발행 — 같은 대상은 정확히 한 번 ──')
-  const A4 = await auto('P04', 0.5)
+  const A4 = await auto(await freeVoice(), 0.5)
   const v5 = await view('d3')
+  // 🔴 fixture 전제 — 이것이 깨지면 아래 lane 판정은 배정 실패를 lane 실패로 잘못 보고한다
+  check('fixture 전제 — 새 자동 행(⑤)은 배정 가능', v5.plan.assignOf.get(A4)?.assigned != null,
+    JSON.stringify(v5.plan.assignOf.get(A4)?.blocked.map((b) => `${b.code}:${b.reasons.map((x) => x.code).join('+')}`)))
   check('d3 · 마지막 발행이 human → auto 차례', v5.plan.picked?.id === A4, String(v5.plan.picked?.id))
   const [r1, r2] = await Promise.all([publish(v5, A4), publish(v5, A4)])
   const n = await prisma.post.count({ where: { id: { in: [r1, r2].filter((x): x is Extract<typeof x, { kind: 'published' }> => x.kind === 'published').map((x) => x.postId) } } })
@@ -181,7 +205,7 @@ async function main(): Promise<void> {
   check('ActivityLog = 발행된 글 수(중복 0)', logs === await prisma.post.count(), `${logs}`)
 
   console.log('\n── ⑥ d1 — 이력으로 날짜별 번갈아: 오늘 human 이 나갔으면 다음 날은 auto ──')
-  const A5 = await auto('P05', 0.4)
+  const A5 = await auto(await freeVoice(), 0.4)
   await prisma.originalPostApprovalQueue.update({ where: { id: H[2]! }, data: {} })
   const lastAuto = await prisma.post.findFirst({ where: { id: { in: (await prisma.originalPostApprovalQueue.findMany({ where: { decidedBy: AUTO_DECIDER, createdPostId: { not: null } }, select: { createdPostId: true } })).map((x) => x.createdPostId!) } }, orderBy: { createdAt: 'desc' } })
   check('직전 발행은 auto(⑤)', lastAuto !== null)
