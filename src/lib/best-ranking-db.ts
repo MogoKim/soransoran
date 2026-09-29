@@ -20,20 +20,26 @@ import {
 } from '@/lib/best-ranking'
 
 /**
- * /best 순위 입력을 쓰는 곳 — 반응이 바뀌는 쓰기 경로가 **자기 트랜잭션 안에서** 부른다.
+ * /best 순위 입력과 과거 기록을 쓰는 곳 — 반응·노출이 바뀌는 쓰기 경로가 **자기 트랜잭션 안에서** 부른다.
  *
  * 🔴 페이지 조회(GET)는 여기 어떤 함수도 부르지 않는다. 읽기는 queries/best.ts 다.
- * 🔴 `prisma` 를 import 하지 않는다. 호출부의 tx 를 받는다 — 원본 반응 저장과
- *    순위 키 갱신이 한 트랜잭션이라 하나만 남는 부분 실패가 없다.
+ * 🔴 `prisma` 를 import 하지 않는다. 호출부의 tx 를 받는다 — 원본 반응 저장 · 순위 키 갱신 ·
+ *    기록이 한 트랜잭션이라 하나만 남는 부분 실패가 없다.
+ *
+ * ── 쓰기 경로가 부르는 것 ──────────────────────────────────────────
+ *   syncBestRanking(tx, postId)   공감·댓글·댓글 숨김/복구·글 삭제/숨김/복구·운영 글 숨김
+ *   applyMemberBlock(tx, …)       회원 차단·해제 — 영향 글을 모두 다시 계산한 뒤 기록 판정은 한 번
+ *   🔴 쓰기 경로는 recomputePostRanking · recordBestEntries 를 따로 부르지 않는다.
+ *      둘 중 하나만 부르면 "점수는 바뀌었는데 12위 진입이 기록되지 않는" 경로가 생긴다.
+ *      `npm run check:best` 가 호출부를 센다.
  *
  * ── 기록(BestSelection)은 언제 생기는가 ─────────────────────────────
- *   🔴 지금 판(PR-A)에서 쓰기 경로는 **순위 키만** 갱신한다(recomputePostRanking).
- *      과거 기록을 만드는 것은 도입 backfill(backfillBestRanking) 하나뿐이다.
- *      backfill 전에는 기존 글이 초기값(작성 시각)이라 12개가 불완전하다 — 그때 기록하면
- *      틀린 순위에서 만든 영구 행이 남고, backfill 은 기록을 지우지 않으므로 복구되지 않는다.
- *   🔴 반응·노출 변경 때 기록하는 연결은 새 /best 화면과 함께 켠다(PR-B).
- *      과거 베스트는 그 활성화 시점부터 이벤트로 쌓인다 — 켜기 직전 backfill 을 한 번 더 돌려
- *      그 순간의 12개를 초기 기록으로 맞춘다. 그 사이 12위에 잠깐 들었다 빠진 글은 기록되지 않는다.
+ *   사건마다 **전역 12개를 다시 보고**, 실반응이 있는데 아직 기록이 없는 글을 기록한다.
+ *   사건이 난 글만 보지 않는다 — 위 글이 숨겨지거나 공감이 취소되면 13위가 끌려 올라오는데,
+ *   그 글에는 사건이 없다.
+ *   🔴 순위 키는 "지금" 이 들어가지 않는 고정값이다(best-ranking.ts). 시간이 흘러도 순서가
+ *      바뀌지 않으므로, 순서가 바뀌는 순간은 언제나 위 쓰기 경로 중 하나다.
+ *   🔴 도입 backfill(backfillBestRanking)이 활성화 직전의 12개를 초기 기록으로 맞춘다.
  *
  * 🔴 잠금 순서: 글 행을 postId 순으로 잠그고(lockPost) → BestSelection 을 postId 순으로 쓴다.
  *    모든 호출부가 이 순서라 두 트랜잭션이 서로를 기다리는 고리가 생기지 않는다.
@@ -160,7 +166,9 @@ async function isBlockedForRanking(db: Db, postId: string): Promise<boolean> {
 
 /**
  * 이 글의 순위 키를 처음부터 다시 계산해 쓴다. 기록은 하지 않는다.
- * 백필은 이것만 부르고 기록은 마지막에 한 번 한다 — 중간 상태의 12개를 기록하지 않기 위해서다.
+ * 🔴 쓰기 경로는 이것을 직접 부르지 않는다 — syncBestRanking 을 부른다.
+ *    이것만 따로 부르는 곳은 둘이다: 회원 차단(글마다 계산한 뒤 기록은 한 번)과
+ *    backfill(전부 계산한 뒤 기록은 한 번). 중간 상태의 12개를 기록하지 않기 위해서다.
  *
  * 🔴 C-4: Micro Seed · 첫 인사처럼 승격이 막힌 글은 들어오자마자 돌아간다. 아무것도 쓰지 않는다.
  */
@@ -229,6 +237,21 @@ export async function recordBestEntries(
 }
 
 /**
+ * 쓰기 경로의 단일 진입점 — 이 글의 순위 키를 다시 계산하고, 전역 12개를 보고 기록한다.
+ *
+ * 🔴 원본 변경(공감·댓글·글 상태)과 **같은 트랜잭션에서, 원본 변경 뒤에** 부른다.
+ *    그래야 기록 판정이 방금 바뀐 12개를 본다.
+ * 🔴 글이 숨겨지거나 지워진 뒤에 불러도 된다 — 그 글은 12개 후보에서 빠지고(BEST_GLOBAL_WHERE),
+ *    대신 끌려 올라온 글이 기록된다. 되살린 글은 키를 다시 맞춘 뒤 판정한다.
+ * 🔴 C-4 글이면 순위 키는 건드리지 않지만 기록 판정은 한다 — 그 글이 아니라 전역 12개를 보는 일이다.
+ */
+export async function syncBestRanking(db: Db, postId: string) {
+  const ranking = await recomputePostRanking(db, postId)
+  const recorded = await recordBestEntries(db)
+  return { ranking, recorded }
+}
+
+/**
  * 회원 차단·해제 — 차단 여부를 바꾸고, 그 회원이 반응한 글의 순위 키를 다시 계산한다.
  *
  * 🔴 차단 여부는 실회원 판정의 입력이다(BEST_REAL_MEMBER_WHERE). 바꾸기만 하고 다시 세지 않으면
@@ -237,6 +260,8 @@ export async function recordBestEntries(
  * 🔴 영향 글만 센다: 그 회원의 공감 글 ∪ MEMBER 댓글 글. 한 글은 한 번만(공감+댓글이어도).
  *    전체 글을 다시 계산하지 않는다. 동시 Promise 를 만들지 않고 postId 순으로 하나씩 —
  *    글 행 잠금을 늘 같은 순서로 잡아 다른 트랜잭션과 고리가 생기지 않는다.
+ * 🔴 기록 판정은 **모든 영향 글을 다시 계산한 뒤 한 번**이다. 글마다 판정하면 절반만 계산된
+ *    12개를 보고 기록한다 — 해제 중간에 아직 복구 안 된 글 대신 다른 글이 기록되는 식이다.
  * 🔴 과거 기록(BestSelection)은 지우지 않는다. 작성자 본인 제외·같은 회원 한 번 규칙은
  *    countRealReactions 가 그대로 지킨다.
  */
@@ -244,7 +269,7 @@ export async function applyMemberBlock(
   db: Db,
   userId: string,
   blocked: boolean,
-): Promise<{ affectedPosts: number }> {
+): Promise<{ affectedPosts: number; recorded: { created: number; peakRaised: number } }> {
   await db.user.update({ where: { id: userId }, data: { isBlocked: blocked }, select: { id: true } })
   const [liked, commented] = await Promise.all([
     db.like.findMany({ where: { userId }, distinct: ['postId'], select: { postId: true } }),
@@ -256,7 +281,8 @@ export async function applyMemberBlock(
   ])
   const postIds = [...new Set([...liked, ...commented].map((r) => r.postId))].sort()
   for (const postId of postIds) await recomputePostRanking(db, postId)
-  return { affectedPosts: postIds.length }
+  const recorded = await recordBestEntries(db)
+  return { affectedPosts: postIds.length, recorded }
 }
 
 export type BackfillSummary = {
