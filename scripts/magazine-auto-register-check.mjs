@@ -530,46 +530,77 @@ const mixed = judgeOutstanding({
 expect('MERGED 가 있어도 OPEN 하나면 HOLD', mixed.code, 'OUTSTANDING_PR')
 expect('그 OPEN PR 을 지목한다', mixed.pr.number, 522)
 
-console.log('\n══════ P0-1 reader — gh 조회 실패는 fail closed')
-/** 🔴 실제 gh·git 을 부르지 않는다 */
-const ghList = 'gh pr list'
-expect(
-  'gh 가 실패하면 조회 실패로 넘긴다',
-  readOutstanding({ exec: fakeExec({ [ghList]: { code: 1, err: 'HTTP 503' } }) }).code,
-  'GITHUB_QUERY_FAILED',
-)
-expect(
-  'gh 출력이 JSON 이 아니면 조회 실패',
-  readOutstanding({ exec: fakeExec({ [ghList]: { out: 'not json' } }) }).code,
-  'GITHUB_QUERY_FAILED',
-)
+console.log('\n══════ P0-1 reader — 브랜치별 head 조회 · 조회 실패는 fail closed')
+/**
+ * 🔴 **2026-09-30 운영 실측.** 앞판은 `gh pr list --state all --limit 100` 한 번을 정본으로 썼다.
+ *    최저 번호가 #531 이 되자 2026-09-16 에 MERGED 된 #524 의 브랜치가 목록 밖으로 밀려
+ *    ORPHAN_REMOTE_BRANCH 로 오판 — producer·자동 등록이 선정 전에 멈췄다.
+ *
+ * 🔴 가짜 GitHub 은 **실제처럼** 답한다 — 전역 목록은 최근 100건(#531~)만, `--head` 는 그 브랜치의 PR 을.
+ *    그래서 전역 목록 방식으로 되돌리면 아래 #524 반례가 FAIL 한다.
+ */
+const OLD_B = `${PRE}2026-09-16-111904`
+const fakeGitHub = ({ prs = [], remote = [], local = [], failHead = null, brokenHead = null, calls = [] }) => (cmd, args) => {
+  const key = `${cmd} ${args.join(' ')}`
+  calls.push(key)
+  if (key.startsWith('git ls-remote')) return { code: 0, out: remote.map((b) => `abc\trefs/heads/${b}`).join('\n'), err: '' }
+  if (key.startsWith('git branch --list')) return { code: 0, out: local.join('\n'), err: '' }
+  if (key.startsWith('gh pr list')) {
+    const i = args.indexOf('--head')
+    if (i === -1) {
+      // 전역 목록 — 실제 GitHub 처럼 최근 100건(번호 531 이상)만 준다
+      return { code: 0, out: JSON.stringify(prs.filter((x) => x.number >= 531)), err: '' }
+    }
+    const head = args[i + 1]
+    if (head === failHead) return { code: 1, out: '', err: 'HTTP 502' }
+    if (head === brokenHead) return { code: 0, out: '{ 깨진', err: '' }
+    return { code: 0, out: JSON.stringify(prs.filter((x) => x.headRefName === head)), err: '' }
+  }
+  return { code: 0, out: '', err: '' }
+}
+const pr524 = { number: 524, url: 'https://github.com/MogoKim/soransoran/pull/524', headRefName: OLD_B, state: 'MERGED' }
+const recent = Array.from({ length: 100 }, (_, i) => ({ number: 531 + i, url: 'u', headRefName: `fix/human-${i}`, state: 'MERGED' }))
+const calls524 = []
+const r524 = readOutstanding({ exec: fakeGitHub({ prs: [pr524, ...recent], remote: [OLD_B], local: [OLD_B], calls: calls524 }) })
+expect('🔴 최근 100건 밖으로 밀린 #524 모양의 MERGED PR → CLEAR (해소된 작업)', r524.code, 'CLEAR')
+expect('🔴 자동 브랜치를 정확한 head 이름으로 직접 조회한다',
+  calls524.some((c) => c === `gh pr list --state all --head ${OLD_B} --limit 10 --json number,url,headRefName,state`), true)
+expect('🔴 전역 최근 목록을 정본으로 쓰지 않는다', calls524.some((c) => c.startsWith('gh pr list') && !c.includes('--head')), false)
+expect('🔴 진짜 PR 없는 원격 브랜치 → ORPHAN_REMOTE_BRANCH',
+  readOutstanding({ exec: fakeGitHub({ prs: recent, remote: [B1] }) }).code, 'ORPHAN_REMOTE_BRANCH')
+const rOpen = readOutstanding({ exec: fakeGitHub({ prs: [openPr], remote: [B1], local: [B1] }) })
+expect('🔴 OPEN PR → OUTSTANDING_PR (HOLD)', `${rOpen.code}·${rOpen.severity}`, `OUTSTANDING_PR·${SEVERITY.HOLD}`)
+expect('🔴 CLOSED 미병합 + 브랜치 존재 → ABANDONED_PR_BRANCH',
+  readOutstanding({ exec: fakeGitHub({ prs: [{ ...openPr, state: 'CLOSED' }], remote: [B1] }) }).code, 'ABANDONED_PR_BRANCH')
+expect('🔴 local 에만 있고 PR 없는 브랜치 → ORPHAN_LOCAL_BRANCH',
+  readOutstanding({ exec: fakeGitHub({ prs: [], remote: [], local: [B2] }) }).code, 'ORPHAN_LOCAL_BRANCH')
+expect('🔴 origin 에서 지워지고 local 에만 남은 브랜치도 직접 조회한다 — MERGED 면 CLEAR',
+  readOutstanding({ exec: fakeGitHub({ prs: [{ ...pr524, headRefName: B2 }, ...recent], remote: [], local: [B2] }) }).code, 'CLEAR')
+expect('🔴 브랜치별 GitHub 조회 실패 → GITHUB_QUERY_FAILED',
+  readOutstanding({ exec: fakeGitHub({ prs: [pr524], remote: [OLD_B], failHead: OLD_B }) }).code, 'GITHUB_QUERY_FAILED')
+expect('🔴 브랜치별 응답 JSON 손상 → GITHUB_QUERY_FAILED',
+  readOutstanding({ exec: fakeGitHub({ prs: [pr524], remote: [OLD_B], brokenHead: OLD_B }) }).code, 'GITHUB_QUERY_FAILED')
+expect('🔴 여러 브랜치 중 한 건만 조회 실패해도 전체 fail-closed',
+  readOutstanding({ exec: fakeGitHub({ prs: [pr524, { ...openPr, headRefName: B2, state: 'MERGED' }], remote: [OLD_B, B2], failHead: B2 }) }).code,
+  'GITHUB_QUERY_FAILED')
+expect('  여러 브랜치가 전부 MERGED 면 CLEAR (대조군)',
+  readOutstanding({ exec: fakeGitHub({ prs: [pr524, { ...openPr, number: 600, headRefName: B2, state: 'MERGED' }], remote: [OLD_B, B2], local: [B2] }) }).code, 'CLEAR')
+expect('  다른 head 가 섞여 돌아와도 그 브랜치 PR 만 쓴다',
+  readOutstanding({ exec: (cmd, args) => (cmd === 'gh'
+    ? { code: 0, out: JSON.stringify([{ ...openPr, headRefName: B2 }]), err: '' }
+    : fakeGitHub({ remote: [B1] })(cmd, args)) }).code, 'ORPHAN_REMOTE_BRANCH')
 expect(
   'ls-remote 실패도 조회 실패',
-  readOutstanding({ exec: fakeExec({ [ghList]: { out: '[]' }, 'git ls-remote': { code: 128 } }) }).code,
+  readOutstanding({ exec: fakeExec({ 'git ls-remote': { code: 128 } }) }).code,
   'GITHUB_QUERY_FAILED',
 )
 expect(
   'git branch --list 실패도 조회 실패',
-  readOutstanding({ exec: fakeExec({ [ghList]: { out: '[]' }, 'git branch --list': { code: 128 } }) }).code,
+  readOutstanding({ exec: fakeExec({ 'git branch --list': { code: 128 } }) }).code,
   'GITHUB_QUERY_FAILED',
 )
-const readOk = readOutstanding({
-  exec: fakeExec({ [ghList]: { out: JSON.stringify([{ ...openPr, state: 'MERGED' }]) } }),
-})
-expect('전부 읽히면 판정이 나온다', readOk.code, 'CLEAR')
-const readOpen = readOutstanding({
-  exec: fakeExec({
-    [ghList]: { out: JSON.stringify([openPr]) },
-    'git ls-remote': { out: `abc123\trefs/heads/${B1}` },
-    'git branch --list': { out: B1 },
-  }),
-})
-expect('열린 PR 을 실제로 잡는다', readOpen.code, 'OUTSTANDING_PR')
-// 🔴 --state all 이어야 MERGED 를 해소로 볼 수 있다
-let ghArgs = []
-readOutstanding({ exec: (cmd, args) => { if (cmd === 'gh') ghArgs = args; return { code: 0, out: '[]', err: '' } } })
-expect('gh 를 --state all 로 부른다', ghArgs.includes('--state') && ghArgs[ghArgs.indexOf('--state') + 1] === 'all', true)
-expect('PR state 를 받아온다', ghArgs.join(' ').includes('state'), true)
+expect('자동 브랜치가 하나도 없으면 CLEAR',
+  readOutstanding({ exec: fakeGitHub({ prs: recent }) }).code, 'CLEAR')
 
 console.log('\n══════ P0-1 배선 — 쓰기·AI 호출·브랜치보다 앞이다')
 expect('auto-register 가 같은 판정을 쓴다', readySrc.includes("from './lib/magazine-outstanding.mjs'"), true)
