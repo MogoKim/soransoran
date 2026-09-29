@@ -232,6 +232,7 @@
     "auto-ready:audit": "tsx scripts/auto-ready-audit.mts",
     "auto-ready:audit-check": "tsx scripts/auto-ready-audit-check.mts",
     "auto-ready:audit-db-check": "tsx scripts/auto-ready-audit-db-check.mts",
+    "auto-ready:audit-day-db-check": "tsx scripts/auto-ready-audit-day-db-check.mts",
     "auto-ready:defect-http-check": "tsx scripts/auto-ready-defect-http-check.mts"
   },
   "dependencies": {
