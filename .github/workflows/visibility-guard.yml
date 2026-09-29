@@ -957,6 +957,9 @@ jobs:
           #    새 글 1건 · 61분 0 · 자기 글 0 · 글당 1 · 실사용자 3건 0 · 한 건 실패 격리 · 장부 상한 · 동시 회차 1건.
           #    임시 HOME(확정 정본·장부) · 가짜 생성 텍스트 · 네트워크 0. 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
           npm run persona:comment-loop-db-check
+          # 🔴 Persona 자동 확장 적재(2026-09-29 · Track C) — valid 만 · draft 만 · 전원 아니면 0 ·
+          #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
+          npm run persona:autogen-db-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
@@ -1081,6 +1084,9 @@ jobs:
         run: |
           npm run persona:publish-rules-check
           npm run persona:target-rules-check
+          # 🔴 Persona 자동 확장(2026-09-29 · Track C) — 운영 검증기 그대로 · 반례(축 누락·말투 없음·중복 화자·
+          #    실회원·이름만) · 골격 결정론. DB · 네트워크 · LLM 0. 새 step 이 아니다
+          npm run persona:autogen-check
 
       - name: Original Post ↔ Persona 매칭 회귀
         run: npm run original-post:persona-match-check
