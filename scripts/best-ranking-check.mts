@@ -203,10 +203,11 @@ check('두 배당 시간은 기준을 지나는 값 중 가장 작다 (반응이
 const capsAtPer = passing.filter((k) => Number(k.split('/')[0]) === REACTION_HOURS_PER_DOUBLING).map((k) => Number(k.split('/')[1]))
 check('상한은 그 두 배당 시간에서 기준을 지나는 값 중 가장 작다 (가장 빨리 내려간다)', REACTION_BOOST_MAX_HOURS === Math.min(...capsAtPer))
 
-console.log('\n■ 7. 기록 연결 단계 — 지금 판(PR-A)은 backfill 만 기록한다')
+console.log('\n■ 7. 기록 연결 — 쓰기 경로는 syncBestRanking 하나로 순위와 기록을 함께 본다 (PR-B)')
 {
-  // 🔴 새 /best 화면을 켜는 PR-B 가 이벤트 기록을 연결하면서 이 기대값을 바꾼다.
-  //    그 전에 쓰기 경로가 기록을 부르면 backfill 전의 불완전한 12개가 영구 기록으로 남는다.
+  // 🔴 사건마다 전역 12개를 다시 보는 것이 기록 계약이다(best-ranking-db.ts 머리 주석).
+  //    한 경로라도 재계산만 부르면 "점수는 올랐는데 12위 진입이 기록되지 않는" 구멍이 생기고,
+  //    기록 판정만 따로 부르면 재계산 전의 12개를 기록한다. 그래서 호출을 **센다**.
   const files: string[] = []
   const walk = (d: string) => {
     for (const n of readdirSync(d)) {
@@ -217,11 +218,56 @@ console.log('\n■ 7. 기록 연결 단계 — 지금 판(PR-A)은 backfill 만 
   }
   walk('src')
   const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
-  const callers = files.filter((f) => !f.endsWith('best-ranking-db.ts') && /\brecordBestEntries\s*\(/.test(strip(readFileSync(f, 'utf-8'))))
-  check('src/ 의 쓰기 경로가 기록 판정(recordBestEntries)을 부르지 않는다', callers.length === 0, callers.join(', '))
-  const db = strip(readFileSync('src/lib/best-ranking-db.ts', 'utf-8'))
-  check('best-ranking-db.ts 안에서도 기록 판정 호출은 backfill 한 곳뿐이다 (정의 1 + 호출 1)', (db.match(/\brecordBestEntries\s*\(/g) ?? []).length === 2)
-  check('재계산+기록을 묶은 refreshBestRanking 이 없다', !/\brefreshBestRanking\b/.test(files.map((f) => strip(readFileSync(f, 'utf-8'))).join('\n')))
+  const code = (f: string) => strip(readFileSync(f, 'utf-8'))
+  const count = (text: string, re: RegExp) => (text.match(re) ?? []).length
+
+  /** 사건 → 파일 · 그 파일에서 tx 로 부르는 syncBestRanking 수 */
+  const WRITERS: { file: string; events: string; calls: number }[] = [
+    { file: 'src/lib/actions/likes.ts', events: '회원 공감 추가·취소', calls: 1 },
+    { file: 'src/lib/actions/comments.ts', events: '회원 댓글 작성', calls: 1 },
+    { file: 'src/lib/actions/guest-comments.ts', events: '비회원 댓글 작성·삭제', calls: 2 },
+    { file: 'src/lib/actions/delete.ts', events: '회원 글 삭제 · 회원 댓글 삭제', calls: 2 },
+    { file: 'src/lib/actions/admin.ts', events: '어드민 글 숨김·복구 · 댓글 숨김·복구', calls: 2 },
+    { file: 'src/lib/operator-compose-tx.ts', events: '운영 글 숨김', calls: 1 },
+  ]
+  for (const w of WRITERS) {
+    const c = code(w.file)
+    const viaTx = count(c, /\bsyncBestRanking\(\s*tx\b/g)
+    const any = count(c, /\bsyncBestRanking\(/g)
+    check(`${w.events}: syncBestRanking(tx, …) ${w.calls}곳 · 트랜잭션 밖 호출 0`, viaTx === w.calls && any === w.calls, `tx ${viaTx} · 전체 ${any}`)
+  }
+  const admin = code('src/lib/actions/admin.ts')
+  check('회원 차단·해제: applyMemberBlock 을 트랜잭션 안에서 부른다',
+    /\$transaction\(\s*\(tx\)\s*=>\s*applyMemberBlock\(\s*tx\b/.test(admin))
+
+  const outside = files.filter((f) => !f.endsWith('best-ranking-db.ts'))
+  const directRecompute = outside.filter((f) => /\brecomputePostRanking\s*\(/.test(code(f)))
+  check('src/ 의 쓰기 경로가 재계산(recomputePostRanking)만 따로 부르지 않는다', directRecompute.length === 0, directRecompute.join(', '))
+  const directRecord = outside.filter((f) => /\brecordBestEntries\s*\(/.test(code(f)))
+  check('src/ 의 쓰기 경로가 기록 판정(recordBestEntries)을 직접 부르지 않는다', directRecord.length === 0, directRecord.join(', '))
+  const syncCallers = outside.filter((f) => /\bsyncBestRanking\s*\(/.test(code(f))).sort()
+  check('syncBestRanking 을 부르는 파일 = 위 사건 목록 그대로 (새 호출부는 목록에 먼저 올린다)',
+    syncCallers.join() === WRITERS.map((w) => w.file).sort().join(), syncCallers.join(', '))
+
+  const db = code('src/lib/best-ranking-db.ts')
+  const body = (name: string) => {
+    const at = db.indexOf(`export async function ${name}(`)
+    const next = db.indexOf('\nexport ', at + 1)
+    return at < 0 ? '' : db.slice(at, next < 0 ? undefined : next)
+  }
+  const sync = body('syncBestRanking')
+  check('syncBestRanking: 재계산 뒤에 기록 판정 (순서 · 각 1회)',
+    count(sync, /\brecomputePostRanking\(/g) === 1 && count(sync, /\brecordBestEntries\(/g) === 1 &&
+      sync.indexOf('recomputePostRanking(') < sync.indexOf('recordBestEntries('))
+  const block = body('applyMemberBlock')
+  const loopAt = block.search(/for \(const postId of postIds\)/)
+  const recordAt = block.indexOf('recordBestEntries(')
+  check('applyMemberBlock: 영향 글은 재계산만 · 기록 판정은 모든 재계산 뒤 정확히 1회',
+    loopAt >= 0 && count(block, /\brecordBestEntries\(/g) === 1 && count(block, /\bsyncBestRanking\(/g) === 0 &&
+      recordAt > loopAt && !/for \(const postId of postIds\)[^\n]*recordBestEntries/.test(block))
+  check('best-ranking-db.ts 의 기록 판정 호출 = 정의 1 + sync 1 + 차단 1 + backfill 1',
+    count(db, /\brecordBestEntries\s*\(/g) === 4)
+  check('예전 이름 refreshBestRanking 이 남아 있지 않다', !/\brefreshBestRanking\b/.test(files.map(code).join('\n')))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} best-ranking-check: ${pass} 통과 · ${fail} 실패`)

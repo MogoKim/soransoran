@@ -20,9 +20,11 @@ export type PostListItemData = {
 /**
  * 리스트 한 줄 — 순위 · 제목 · 보드 배지 · 통계. 미리보기는 싣지 않는다.
  *
- * 🔴 두 화면이 이 한 줄을 나눠 쓴다 — 홈과 글 상세 하단(이어읽기).
- *    그래서 세 갈래를 prop 으로 열되 **기본값은 지금 화면 그대로**다.
+ * 🔴 세 화면이 이 한 줄을 나눠 쓴다 — 홈 · /best · 글 상세 하단(이어읽기).
+ *    그래서 갈래를 prop 으로 열되 **기본값은 지금 화면 그대로**다.
  *    기본값을 바꾸면 넘기지 않은 쪽이 조용히 같이 변한다.
+ *
+ * 🔴 rank 를 넘기지 않으면 순번 자리를 그리지 않는다 — /best 과거 기록은 순위가 아니다.
  *
  * 🔴 hover 는 면을 만들지 않는다. 제목만 브랜드색으로 반응한다.
  *    목록에 면이 없는데 가리킬 때만 네모가 생기면, 그 네모가 글보다 먼저 읽힌다.
@@ -41,7 +43,7 @@ export default function PostListItem({
   hideEmptyStats = false,
 }: {
   post: PostListItemData
-  rank: number
+  rank?: number
   surface?: 'card' | 'page'
   emphasis?: boolean
   hideEmptyStats?: boolean
@@ -67,9 +69,11 @@ export default function PostListItem({
           🔴 22px 고정이다. 글씨 크기 축을 따르게 두면 "크게" 에서 제목과 같은 24px 가 되어
              순번이 제목만큼 커진다. 순번은 읽는 대상이 아니라 자리표라 본문과 함께
              커질 이유가 없다 — 기준선(우나어)도 같은 값으로 고정해 두었다. */}
-      <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
-        {rank}
-      </span>
+      {rank !== undefined ? (
+        <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
+          {rank}
+        </span>
+      ) : null}
 
       <span className="flex min-w-0 flex-col gap-1.5">
         <span

@@ -35,7 +35,7 @@ const COMMUNITY_BOARD_TYPES = COMMUNITY_BOARDS.map((b) => b.type) as BoardType[]
  *
  * 차단 UI 를 D-day 에 숨기더라도 이 필터는 유지한다.
  */
-async function getBlockedUserIds(): Promise<string[]> {
+export async function getBlockedUserIds(): Promise<string[]> {
   const session = await auth()
   const viewerId = session?.user?.id
   if (!viewerId) return []
@@ -194,10 +194,10 @@ const HOME_OVERRIDE_HEADROOM = 2
 const HOME_POPULAR_MIN_MENOPAUSE = 7
 
 /**
- * 순수 인기 점수 목록 — 홈 노출 예외(PIN·HIDE)를 **얹지 않는다**.
+ * 홈 인기 점수 목록 — 홈 노출 예외(PIN·HIDE)를 얹기 전의 순수 점수 순서.
  *
- * /best 가 이 함수를 쓴다. 이름에 home 이 없는 것이 규칙이다 —
- * 홈 운영 큐레이션은 getHomePopularPosts 만 적용한다.
+ * 🔴 홈 전용이다. /best 는 이것을 쓰지 않는다 — 자기 순위 키(best-ranking.ts)와
+ *    읽기(queries/best.ts)가 있다. 두 화면의 점수를 합치지 않는다.
  *
  * getRecentDiscoveryPosts 와 짝이다. 둘 다 discovery 표면이고 고르는 기준만 다르다 —
  * 상세 하단 이어읽기는 최신순, 인기글은 점수순이라 함수를 나눈다.
@@ -206,15 +206,7 @@ const HOME_POPULAR_MIN_MENOPAUSE = 7
  * 상위를 채웠을 때 갱년기톡 후보가 애초에 손에 들어오지 않는다.
  *
  * 점수와 배분은 popularity.ts 가 맡는다 — 여기는 조회만 한다.
- */
-export async function getPopularDiscoveryPosts(take = 20) {
-  const blockedIds = await getBlockedUserIds()
-  return pickPopularByScore(take, blockedIds)
-}
-
-/**
- * 점수 계산 본체. 차단 목록을 인자로 받는다 —
- * 홈 경로가 getBlockedUserIds 를 두 번 부르지 않게 하려는 것이다.
+ * 차단 목록을 인자로 받는다 — 홈 경로가 getBlockedUserIds 를 두 번 부르지 않게 하려는 것이다.
  */
 async function pickPopularByScore(take: number, blockedIds: string[]) {
   const candidatesFor = (boardType: BoardType) =>
@@ -244,7 +236,7 @@ async function pickPopularByScore(take: number, blockedIds: string[]) {
  * 홈 "지금 뜨는 이야기" 용 — 순수 인기 점수 위에 홈 노출 예외를 한 겹 얹는다.
  *
  * 🔴 applyHomeExposure 를 부르는 곳은 여기 하나다.
- *    getPopularDiscoveryPosts 안에 두었더니 같은 함수를 쓰는 /best 까지
+ *    예전에 순수 점수 함수 안에 두었더니 그 함수를 함께 쓰던 /best 까지
  *    홈 고정·숨김을 따라갔다. 홈 큐레이션은 홈(/) 과 /admin/home 의 것이다.
  *
  * 쓰는 곳: src/app/page.tsx · src/app/admin/(ops)/home/page.tsx

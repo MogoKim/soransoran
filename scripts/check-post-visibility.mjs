@@ -56,7 +56,7 @@ const HOME = {
   file: 'src/app/page.tsx',
   // 홈이 써야 하는 것 — discovery 게이트를 지나는 쿼리.
   //
-  // getHomePopularPosts 는 순수 인기 목록(getPopularDiscoveryPosts) 위에
+  // getHomePopularPosts 는 홈 인기 점수 목록(pickPopularByScore) 위에
   // 홈 노출 예외를 한 겹 얹는 홈 전용 진입점이라 이름에 Discovery 가 없다.
   // 게이트를 우회하는 것이 아니다 — 아래 REQUIRED 가 posts.ts 에서
   // DISCOVERY_ELIGIBLE_WHERE 유지를 따로 강제하고, 1-d 가 그 예외를
@@ -67,17 +67,19 @@ const HOME = {
 }
 
 /**
- * /best 는 순수 인기글 모아보기다.
+ * /best 는 자기 순위 키로 줄 세운 모아보기다 — 1쪽 현재 베스트, 2쪽부터 과거 기록.
  *
  * 홈 운영 큐레이션(PIN·HIDE)이 여기까지 따라오면 "베스트" 가 점수가 아니라
  * 운영자 선택이 된다. 실제로 그런 회귀가 났다 — 순수 점수 꼴찌 글을 홈에
- * 고정했더니 /best 2 번에 올라왔다. 두 화면은 같은 점수를 쓰되
- * 노출 예외 한 겹에서만 갈라진다.
+ * 고정했더니 /best 2 번에 올라왔다.
+ * 지금은 점수도 갈라졌다 — /best 는 queries/best.ts loadBestPage(best-ranking.ts 순위 키)를,
+ * 홈은 popularity.ts 점수를 쓴다. 홈 점수 함수가 여기로 새면 두 화면이 다시 섞인다.
  */
 const BEST = {
   file: 'src/app/best/page.tsx',
-  mustMatch: /getPopularDiscoveryPosts\b/,
-  mustNotMatch: /getHomePopularPosts\b|applyHomeExposure\b|HomeExposureOverride\b|homeExposureOverride\b/,
+  mustMatch: /loadBestPage\b/,
+  mustNotMatch:
+    /getHomePopularPosts\b|applyHomeExposure\b|HomeExposureOverride\b|homeExposureOverride\b|pickHomePopular\b|pickPopularByScore\b/,
 }
 
 /**
@@ -210,8 +212,8 @@ if (!existsSync(join(ROOT, GATE))) {
     const code = stripComments(readFileSync(abs, 'utf-8'))
     if (!BEST.mustMatch.test(code)) {
       errors.push(
-        `${BEST.file} 가 getPopularDiscoveryPosts 를 쓰지 않는다. ` +
-          '베스트는 순수 인기 점수 목록이다.',
+        `${BEST.file} 가 loadBestPage 를 쓰지 않는다. ` +
+          '베스트는 자기 순위 키(현재 12개)와 과거 기록 목록이다.',
       )
     }
     const leak = code.match(BEST.mustNotMatch)
