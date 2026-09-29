@@ -269,8 +269,24 @@ check('🔴 Playwright 를 정적으로 import 하지 않는다',
 check('🔴 모듈을 못 찾으면 조용히 넘어가지 않고 안내하며 멈춘다',
   /Playwright 를 찾지 못했다/.test(COLLECTOR) && /playwright-core/.test(COLLECTOR),
   '안내가 없으면 실패 원인이 브라우저인지 세션인지 알 수 없다')
-check('🔴 댓글 본문 · 이미지를 수집하지 않는다',
-  /댓글 본문 미수집/.test(COLLECTOR) && /이미지를 가져오지 않는다|이미지 미수집/.test(COLLECTOR))
+check('🔴 이미지를 수집하지 않는다', /이미지를 가져오지 않는다|이미지 미수집/.test(COLLECTOR))
+{
+  // 🔴 댓글 본문은 salt 게이트 뒤에서만 · --thin 회차만 · 거른 행만 (2026-09-29, Track C)
+  const readAt = COLLECTOR_CODE.indexOf('await readArticleComments(page)')
+  const gateAt = COLLECTOR_CODE.lastIndexOf('if (EVIDENCE_SALT.ok && THIN) {', readAt)
+  check('🔴 댓글은 salt 가 있고 --thin 일 때만 읽는다',
+    readAt > 0 && gateAt > 0 && COLLECTOR_CODE.slice(gateAt, readAt).split('\n').length <= 3
+    && (COLLECTOR_CODE.match(/readArticleComments\(page\)/g) ?? []).length === 1,
+    'salt 가 없으면 읽지도 않는다 — fail-closed')
+  check('🔴 읽은 댓글은 captureVoiceEvidence 만 받는다(원문·작성자 배열을 쌓지 않는다)',
+    /const cap = captureVoiceEvidence\(\{[\s\S]{0,160}comments: cs\.comments/.test(COLLECTOR_CODE)
+    && (COLLECTOR_CODE.match(/cs\.comments/g) ?? []).length === 1)
+  check('🔴 말투 근거는 분류를 통과한 글 · 저장 계약 검사 뒤에만 쓴다',
+    /evidence\.filter\(\(e\) => keptIds\.has\(e\.articleId\)\)/.test(COLLECTOR_CODE)
+    && /evidenceRowProblems\(e\)\.length > 0/.test(COLLECTOR_CODE)
+    && (COLLECTOR_CODE.match(/writeJsonl\(evPath, ev\)/g) ?? []).length === 1)
+  check('🔴 salt 값을 출력하지 않는다(지문만)', !/console\.log\([^)]*\.salt\b(?!Id)/.test(COLLECTOR_CODE))
+}
 
 // ─────────────────────────────────────────────────────────
 console.log('\n⑨ 카페 설정 — 🔴 주제를 고정 라벨로 굳히지 않는다')

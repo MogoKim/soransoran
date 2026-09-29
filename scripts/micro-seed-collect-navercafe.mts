@@ -16,7 +16,12 @@
  * 🔴 **네이버는 raw-only 전용이다.** Micro Seed Sheet 레인으로 가는 경로가 없다.
  *    importer 의 judgeSourceSite 가 `navercafe:*` 를 micro-seed 레인에서 거부한다(PR-S2-b-1).
  *
- * 🔴 **댓글 본문을 수집하지 않는다.** 목록의 댓글 **수**만 신호로 쓴다.
+ * 🔴 **댓글 본문은 말투 근거로만, salt 게이트 뒤에서만 남긴다** (2026-09-29, Track C).
+ *    `SORAN_VOICE_EVIDENCE_SALT` 가 없으면 댓글을 **읽지도 않는다**(fail-closed · 저장 0) — 그때는 전과 같이
+ *    목록의 댓글 **수**만 신호로 쓴다. salt 가 있으면 상세 화면의 댓글을 메모리에서 거르고(개인정보 · 안전 ·
+ *    닉네임 혼입 · 식별자 유출 · 경험형 · 길이), 작성자 표시는 **곧바로** salt HMAC 으로 바꿔
+ *    `*.voice-evidence.jsonl` 에 남긴다. 작성자 표시·회원 ID·댓글 시각은 저장하지 않는다.
+ *    계약·보존·삭제는 `scripts/lib/voice-evidence-capture.mts` 머리말이 정본이다.
  * 🔴 **이미지를 가져오지 않는다.** 텍스트만 남긴다.
  *
  * 🔴 **사람 속도로 읽는다.** randomDelay(base, 0.8, 1.5) — 82cook 의 고정 2초와 다르다.
@@ -74,6 +79,10 @@ import {
   BODY_RETRY_MAX,
 } from './lib/collect-run-store.mjs'
 import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
+import {
+  captureVoiceEvidence, evidenceRowProblems, readEvidenceSalt, voiceEvidencePathOf,
+  type CapturedComment, type VoiceEvidenceRow,
+} from './lib/voice-evidence-capture.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
@@ -292,7 +301,14 @@ async function main() {
   console.log(`  세션   ${SESSION_PATH_ENV} ${sessionPath === null ? '🔴 없음' : '설정됨'}`)
   console.log('')
   console.log('  🔴 DB write 없음 · Sheet 접근 없음 · Candidate 없음 · Post 없음 · Queue 없음')
-  console.log('  🔴 댓글 본문 미수집 · 이미지 미수집 · 적재는 importer 가 따로 한다')
+  {
+    // 🔴 salt 값은 출력하지 않는다 — 켜짐/꺼짐과 지문만
+    const s = readEvidenceSalt(process.env)
+    console.log(s.ok
+      ? `  🟢 댓글 본문 — 말투 근거로만 (--thin · 거른 뒤 · 작성자는 salt 해시 · salt 지문 ${s.saltId})`
+      : `  🔴 댓글 본문 미수집 — 말투 근거 꺼짐 (${s.code} · fail-closed · 저장 0)`)
+  }
+  console.log('  🔴 이미지 미수집 · 적재는 importer 가 따로 한다')
   console.log(`  ① 목록 단계 제외 : ${AUTO_SKIP_LIST_FLAGS.join(' · ')}`)
   console.log(`  ② 상세 단계 보류 : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (적재 시점)`)
   console.log('')
@@ -478,6 +494,15 @@ async function main() {
   console.log(`     목록 ${OUT_LIST}\n`)
   const started = Date.now()
   const collected: CollectedCandidate[] = []
+  /**
+   * 🔴 **말투 근거** — salt 가 없으면 댓글을 읽지 않는다. 읽은 원문·작성자 표시는
+   *    `captureVoiceEvidence` 안에서만 살고, 여기에는 거르기·해시가 끝난 행만 쌓인다.
+   *    `--thin` 회차만 남긴다(분류로 버린 글의 댓글은 남기지 않으려면 분류 결과가 있어야 한다).
+   */
+  const EVIDENCE_SALT = readEvidenceSalt(process.env)
+  const evidence: VoiceEvidenceRow[] = []
+  let evidenceSeen = 0
+  let evidenceArticles = 0
   let browser: NaverBrowser | null = null
 
   try {
@@ -649,6 +674,16 @@ async function main() {
        *    분류 뒤(`dropped`)와 저장 뒤(`kept`)에 나눠 적는다.
        */
       collected.push(row)
+      if (EVIDENCE_SALT.ok && THIN) {
+        const cs = await readArticleComments(page)
+        const cap = captureVoiceEvidence({
+          source: sourceSiteOf(cafe!.cafeId), articleId: id, comments: cs.comments, runId: RUN_ID, now: new Date(),
+        }, EVIDENCE_SALT)
+        evidenceSeen += cap.seen
+        if (cap.rows.length > 0) evidenceArticles += 1
+        evidence.push(...cap.rows)
+        if (cs.errors.length > 0) console.log(`  ⚠️ ${id} — 댓글 셀렉터가 터졌다(말투 근거 0): ${cs.errors[0]}`)
+      }
       console.log(`  ✅ ${id} · ${[...body].length}자 · 댓글 ${row.sourceCommentCount}`)
     }
   } finally {
@@ -723,6 +758,24 @@ async function main() {
      *    되찾을 수 있는 상태로 남기는 것이 영구 유실보다 낫다.
      */
     writeJsonl(thinPath, thinRows)
+    /**
+     * 🔴 **말투 근거는 분류를 통과한 글의 것만** 남긴다. 저장 직전에 계약을 한 번 더 본다 —
+     *    한 행이라도 어기면 이 회차의 말투 근거를 **한 줄도 쓰지 않는다.**
+     */
+    if (EVIDENCE_SALT.ok) {
+      const keptIds = new Set(thinRows.map((r) => String(r.sourceArticleId ?? r.id ?? '')))
+      const ev = evidence.filter((e) => keptIds.has(e.articleId))
+      const broken = ev.filter((e) => evidenceRowProblems(e).length > 0).length
+      if (broken > 0) {
+        console.log(`  🔴 말투 근거 저장 계약 위반 ${broken}행 — 이 회차의 말투 근거를 쓰지 않았다`)
+      } else if (ev.length > 0) {
+        const evPath = voiceEvidencePathOf(dirname(OUT), CAFE_ID, RUN_ID)
+        writeJsonl(evPath, ev)
+        console.log(`  말투 근거 ${ev.length}행 (댓글 ${evidenceSeen}건 중 · 글 ${evidenceArticles}건) → ${evPath}`)
+      } else {
+        console.log(`  말투 근거 0행 (댓글 ${evidenceSeen}건 읽음)`)
+      }
+    }
     if (!existsSync(thinPath)) {
       fail(`THIN_WRITE_FAILED — 산출물을 저장하지 못했다 (${thinPath})\n`
         + '   🔴 kept 를 확정하지 않았다. 다음 회차가 그 글을 다시 연다.', 'OTHER')
@@ -961,6 +1014,34 @@ async function readArticleBody(page: NaverPage): Promise<{ body: string | null; 
     }
   }
   return { body: null, errors }
+}
+
+/**
+ * 🔴 **댓글 — 말투 근거용.** salt 가 있을 때만 부른다. 작성자 표시 · 본문 **문자열 둘만** 꺼낸다
+ *    (프로필 링크 · 회원 키 · 댓글 시각 · 이미지는 꺼내지 않는다).
+ *
+ * ⚠️ 셀렉터는 네이버 카페 댓글 마크업(`.CommentItem` · `.comment_nickname` · `.text_comment`)을 따른다.
+ *    이 PR 에서는 live 로 실측하지 않았다 — 첫 salt 회차의 "말투 근거 N행 (댓글 M건 중)" 이 실측이다.
+ *    M 이 0 이면 셀렉터가 안 맞는 것이다(목록 댓글 수와 비교한다).
+ */
+async function readArticleComments(page: NaverPage): Promise<{ comments: CapturedComment[]; errors: string[] }> {
+  const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
+  const errors: string[] = []
+  const sel = { item: '.CommentItem, .comment_list > li', author: '.comment_nickname', text: '.text_comment' }
+  for (const f of [page, ...frames]) {
+    try {
+      const got = await f.$$eval<CapturedComment[], typeof sel>(sel.item, (els, s) => els.map((el) => ({
+        author: (el.querySelector(s.author)?.textContent ?? '').trim() || null,
+        text: (el.querySelector(s.text)?.textContent ?? '').trim(),
+      })), sel)
+      const comments = got.filter((c) => c.text !== '')
+      if (comments.length > 0) return { comments, errors }
+    } catch (e) {
+      // 🔴 message 만 남긴다 — 댓글 HTML 을 로그로 흘리지 않는다
+      errors.push(e instanceof Error ? e.message : String(e))
+    }
+  }
+  return { comments: [], errors }
 }
 
 main()

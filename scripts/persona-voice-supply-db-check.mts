@@ -15,9 +15,13 @@
  *   ④ fixture --apply (격리) → P26·P27 draft · 계정 0 · 감사 +6 · 건드리지 않을 표 불변
  *   ⑤ 같은 계획 재적재 → 대상 코드가 이미 있어 멈춤 · write 0
  *   ⑥ live --apply → draft 가능 0 이라 적재 거부 · write 0
+ *   ⑦ 🔴 수집 시점 말투 근거 경로(Track C) — 수집기 함수(`captureVoiceEvidence` · `voiceEvidencePathOf`)가
+ *      만든 `*.voice-evidence.jsonl` **만** 있는 디렉터리 →
+ *      salt 없음: 공급 입력 0 · 화자 0 · write 0 / salt 있음: 실회원 화자 버림 · 3건↑ 화자 8 · drift 0 →
+ *      fixture --apply → P26·P27 draft(valid) · 산출물·출력에 작성자 표시 0
  */
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -114,9 +118,9 @@ const env = (over: Record<string, string | undefined> = {}): NodeJS.ProcessEnv =
   for (const [k, v] of Object.entries(over)) if (v === undefined) delete e[k]
   return e
 }
-const cli = (args: string[], over: Record<string, string | undefined> = {}) =>
-  spawnSync('npx', ['tsx', 'scripts/persona-voice-supply.mts', `--data-dir=${DATA}`, '--count=3', ...args], {
-    env: env(over), encoding: 'utf-8',
+const cli = (args: string[], over: Record<string, string | undefined> = {}, dataDir = DATA) =>
+  spawnSync('npx', ['tsx', 'scripts/persona-voice-supply.mts', `--data-dir=${dataDir}`, '--count=3', ...args], {
+    env: env({ SORAN_VOICE_EVIDENCE_SALT: undefined, ...over }), encoding: 'utf-8',
   })
 
 console.log('\n══ Persona 말투 근거 공급 — 격리 DB · 실제 CLI ══\n')
@@ -212,6 +216,63 @@ try {
     const r = cli(['--db', '--apply', '--limit=0', '--reason', 'x'])
     check('⑥ live · 예산 없음 --apply → 적재 거부', r.status !== 0 && /적재하지 않았다/.test(r.stderr))
     check('⑥ write 0', same(b, await counts()))
+  }
+
+  // ── ⑦ 수집 시점 말투 근거 경로 ──
+  {
+    const { captureVoiceEvidence, readEvidenceSalt, voiceEvidencePathOf } = await import('./lib/voice-evidence-capture.mjs')
+    const SALT_VALUE = `db-check-${TAG}-0123456789abcdef0123456789abcdef`
+    const salt = readEvidenceSalt({ SORAN_VOICE_EVIDENCE_SALT: SALT_VALUE })
+    const EV = join(HOME, 'collect-evidence')
+    mkdirSync(EV, { recursive: true })
+    const now = new Date()
+    // 🔴 수집기가 상세 화면에서 꺼내는 모양 그대로 — 글 3건에 화자 8명 + 실회원 사칭 + 개인정보
+    const thread = (t: number) => [
+      ...AUTHORS.flatMap((author, s) => Array.from({ length: 4 + (s % 3) }, (_, i) => i)
+        .filter((i) => i % 3 === t).map((i) => ({ author, text: `${STEMS[(s + i) % STEMS.length]!} (${s}-${i})` }))),
+      { author: MEMBER, text: `${STEMS[t]!} (m-${t})` },
+      { author: MEMBER, text: `${STEMS[t + 3]!} (m-${t + 3})` },
+      { author: AUTHORS[0]!, text: `연락 주세요 010-1234-567${t} 이에요` },
+    ]
+    for (const t of [0, 1, 2]) {
+      const cap = captureVoiceEvidence({ source: 'navercafe:testcafe', articleId: `ev${t}`, comments: thread(t), runId: `run${t}`, now }, salt)
+      writeFileSync(voiceEvidencePathOf(EV, 'testcafe', `run${t}`), cap.rows.map((r) => `${JSON.stringify(r)}\n`).join(''))
+    }
+    const stored = readdirSync(EV).map((f) => readFileSync(join(EV, f), 'utf-8')).join('')
+    check('⑦ 저장 파일에 작성자 표시·회원 이름·연락처가 없다',
+      [...AUTHORS, MEMBER].every((a) => !stored.includes(a)) && !/010-1234/.test(stored))
+
+    const b0 = await counts()
+    const off = cli(['--db', '--creative=fixture'], {}, EV)
+    check('⑦ salt 없음 → 말투 근거 전부 SALT_MISSING · 화자 0', off.status === 0 && /버림 SALT_MISSING \d+/.test(off.stdout) && /사용 가능\) 0/.test(off.stdout))
+    check('⑦ salt 없음 → write 0', same(b0, await counts()))
+
+    const dry = cli(['--db', '--creative=fixture'], { SORAN_VOICE_EVIDENCE_SALT: SALT_VALUE }, EV)
+    check('⑦ salt 있음 dry-run 종료 0', dry.status === 0)
+    if (dry.status !== 0) console.log(dry.stderr.slice(-600))
+    check('⑦ 실회원 사칭 화자 버림(REAL_MEMBER_SPEAKER 6)', /버림 REAL_MEMBER_SPEAKER 6/.test(dry.stdout))
+    check('⑦ 3건↑ 안전 화자 8 · P20 먼저 · drift 0',
+      /사용 가능\) 8/.test(dry.stdout) && /대상 순서 P20·/.test(dry.stdout) && /drift 0 \(P01~P19 그대로\)/.test(dry.stdout))
+    check('⑦ P26·P27 valid · P28 NO_VOICE_EVIDENCE',
+      /P26 {2}valid/.test(dry.stdout) && /P27 {2}valid/.test(dry.stdout) && /P28 {2}quarantined .*NO_VOICE_EVIDENCE/.test(dry.stdout))
+    check('⑦ dry-run → write 0', same(b0, await counts()))
+
+    const r = cli(['--db', '--creative=fixture', '--apply', '--limit=2', '--reason', 'voice-evidence db-check'], { SORAN_VOICE_EVIDENCE_SALT: SALT_VALUE }, EV)
+    check('⑦ 적재 종료 0', r.status === 0)
+    if (r.status !== 0) console.log(r.stderr.slice(-600))
+    const a = await counts()
+    check('⑦ User +2 · Persona +2 · 감사 +6 · 나머지 표 불변',
+      a.users === b0.users + 2 && a.personas === b0.personas + 2 && a.audits === b0.audits + 6
+      && a.posts === b0.posts && a.comments === b0.comments && a.raw === b0.raw && a.accounts === b0.accounts)
+    const rows = await prisma.persona.findMany({
+      where: { code: { in: CODES } }, orderBy: { code: 'asc' },
+      select: { code: true, status: true, voiceCore: true, noGoExpressions: true, user: { select: { _count: { select: { accounts: true } } } } },
+    })
+    check('⑦ P26·P27 draft · 계정 0 · seed 채움',
+      rows.map((x) => `${x.code}:${x.status}`).join() === 'P26:draft,P27:draft'
+      && rows.every((x) => x.user._count.accounts === 0 && x.voiceCore !== null && x.noGoExpressions.length > 0))
+    check('🔴 ⑦ 출력에 작성자 표시·회원 이름·salt 가 없다',
+      [...AUTHORS, MEMBER, SALT_VALUE].every((v) => ![dry.stdout, dry.stderr, r.stdout, r.stderr].some((o) => o.includes(v))))
   }
 } finally {
   await cleanup()

@@ -367,6 +367,87 @@ console.log('⑦ CLI 연결')
     !/voice-m3-provider|callProvider|appendLedgerLine|addOpenReservation|writeSettleHold/.test(creative))
 }
 
+// ─────────────────────────────────────────────────────────
+// ⑧ 수집 시점 말투 근거 — salt 해시 · fail-closed · 공급까지 (Track C)
+// ─────────────────────────────────────────────────────────
+console.log('⑧ 수집 시점 말투 근거')
+{
+  const {
+    captureVoiceEvidence, evidenceRowProblems, memberKeyOf, readEvidenceSalt, rowsFromVoiceEvidence,
+    speakerHashOf, VOICE_EVIDENCE_RETENTION_DAYS, VOICE_EVIDENCE_SALT_ENV,
+  } = await import('./lib/voice-evidence-capture.mjs')
+  const SALT = readEvidenceSalt({ [VOICE_EVIDENCE_SALT_ENV]: 'check-salt-0123456789abcdef0123456789abcdef' })
+  const OTHER = readEvidenceSalt({ [VOICE_EVIDENCE_SALT_ENV]: 'other-salt-0123456789abcdef0123456789abcdef' })
+  const NOW = new Date('2026-09-29T00:00:00Z')
+  const SRC = 'navercafe:testcafe'
+  /** 수집기가 상세 화면에서 꺼내는 모양 그대로 — 작성자 표시 · 본문 문자열 둘 */
+  const thread = (articleId: string, list: { author: string | null; text: string }[]) =>
+    ({ source: SRC, articleId, comments: list, runId: 'r1', now: NOW })
+
+  check('salt 없음 → SALT_MISSING', !readEvidenceSalt({}).ok)
+  check('salt 32자 미만 → SALT_TOO_SHORT', (() => { const s = readEvidenceSalt({ [VOICE_EVIDENCE_SALT_ENV]: 'short' }); return !s.ok && s.code === 'SALT_TOO_SHORT' })())
+  const clean = thread('t1', [0, 1, 2, 3].map((i) => ({ author: AUTHORS[0]!, text: line(0, i) })))
+  const none = captureVoiceEvidence(clean, readEvidenceSalt({}))
+  check('🔴 salt 없음 → 저장 0 (fail-closed)', !none.stored && none.rows.length === 0 && none.code === 'SALT_MISSING')
+  const short = captureVoiceEvidence(clean, readEvidenceSalt({ [VOICE_EVIDENCE_SALT_ENV]: 'x'.repeat(10) }))
+  check('🔴 짧은 salt → 저장 0', !short.stored && short.rows.length === 0)
+
+  const cap = captureVoiceEvidence(thread('t2', [
+    ...[0, 1, 2, 3].map((i) => ({ author: AUTHORS[0]!, text: line(0, i) })),
+    { author: AUTHORS[1]!, text: '연락 주세요 010-1234-5678 이에요' },
+    { author: AUTHORS[1]!, text: '메일 주세요 abc.def@example.com 이요' },
+    { author: AUTHORS[1]!, text: `${AUTHORS[0]!}님 말이 맞아요 정말로` },
+    { author: null, text: '작성자 없는 댓글이에요 정말' },
+  ]), SALT)
+  const flat = JSON.stringify(cap.rows)
+  check('깨끗한 댓글 4건만 남는다', cap.stored && cap.rows.length === 4)
+  check('🔴 저장 행 어디에도 작성자 표시가 없다', AUTHORS.every((a) => !flat.includes(a)))
+  check('🔴 개인정보 댓글은 저장되지 않는다(전화 · 이메일)', !/010-1234|example\.com/.test(flat) && cap.dropped.PII === 2)
+  check('닉네임 혼입 · 작성자 없음은 버린다', cap.dropped.NICKNAME_LEAK === 1 && cap.dropped.UNATTRIBUTED === 1)
+  check('speakerHash = salt HMAC (vs1:64hex) · memberKey = vm1:64hex',
+    cap.rows.every((r) => r.speakerHash === speakerHashOf(SALT.ok ? SALT.salt : '', SRC, AUTHORS[0]!)
+      && r.memberKey === memberKeyOf(SALT.ok ? SALT.salt : '', AUTHORS[0]!)))
+  check('저장 행은 계약을 지킨다', cap.rows.every((r) => evidenceRowProblems(r, AUTHORS).length === 0))
+  const other = captureVoiceEvidence(clean, OTHER)
+  check('salt 가 다르면 같은 사람도 다른 해시다', other.rows[0]!.speakerHash !== cap.rows[0]!.speakerHash)
+  check('🔴 작성자 칸이 끼어든 행은 계약 위반', evidenceRowProblems({ ...cap.rows[0]!, author: AUTHORS[0]! }).length > 0)
+  check('🔴 해시 대신 이름이 든 행은 계약 위반', evidenceRowProblems({ ...cap.rows[0]!, speakerHash: AUTHORS[0]! }).length > 0)
+  check('🔴 개인정보 본문 행은 계약 위반', evidenceRowProblems({ ...cap.rows[0]!, text: '연락 주세요 010-1234-5678 이에요' }).length > 0)
+
+  // ── 공급 시점 ──
+  const members = { memberNames: [MEMBER], personaNames: ['새봄이'] }
+  const real = captureVoiceEvidence(thread('t3', [0, 1, 2, 3].map((i) => ({ author: `${MEMBER}.`, text: line(7, i) }))), SALT)
+  const store = JSON.parse(JSON.stringify([...cap.rows, ...real.rows])) as unknown[]
+  const read = rowsFromVoiceEvidence(store, { salt: SALT, members, now: NOW })
+  check('🔴 회원 표시명과 (N2) 같은 화자 → REAL_MEMBER_SPEAKER 로 전부 버린다', read.dropped.REAL_MEMBER_SPEAKER === 4 && read.rows.length === 4)
+  check('🔴 공급 입력의 author 는 해시다', read.rows.every((r) => /^vs1:/.test(r.author ?? '')))
+  const unm = rowsFromVoiceEvidence(store, { salt: SALT, members: null, now: NOW })
+  check('🔴 회원 표시명을 못 읽었으면 전부 버린다', unm.rows.length === 0 && unm.dropped.REAL_MEMBER_UNMEASURED === 8)
+  const noSalt = rowsFromVoiceEvidence(store, { salt: readEvidenceSalt({}), members, now: NOW })
+  check('🔴 공급 쪽 salt 없음 → 전부 버린다', noSalt.rows.length === 0 && noSalt.dropped.SALT_MISSING === 8)
+  const rotated = rowsFromVoiceEvidence(store, { salt: OTHER, members, now: NOW })
+  check('🔴 salt 회전 → 전부 버린다(대조 불가)', rotated.rows.length === 0 && rotated.dropped.SALT_ROTATED === 8)
+  const late = new Date(NOW.getTime() + (VOICE_EVIDENCE_RETENTION_DAYS + 1) * 86_400_000)
+  check('보존 기한이 지나면 읽지 않는다', rowsFromVoiceEvidence(store, { salt: SALT, members, now: late }).dropped.EXPIRED === 8)
+  const bad = rowsFromVoiceEvidence([{ ...cap.rows[0]!, author: AUTHORS[0]! }, null, 'x'], { salt: SALT, members, now: NOW })
+  check('계약을 어긴 줄은 MALFORMED', bad.rows.length === 0 && bad.dropped.MALFORMED === 3)
+
+  // ── 끝까지: 여러 글에 흩어진 댓글 → 저장 → 공급 → P20~P25 먼저 → P26·P27 valid ──
+  const threads = [0, 1, 2].map((t) => thread(`e${t}`, AUTHORS.slice(0, 8).flatMap((a, s) =>
+    Array.from({ length: 4 + (s % 3) }, (_, i) => i).filter((i) => i % 3 === t).map((i) => ({ author: a, text: line(s, i) })))))
+  const saved = threads.flatMap((th) => captureVoiceEvidence(th, SALT).rows)
+  check('글 3건에 흩어진 화자 8명 — 저장 행에 작성자 표시 0', saved.length === ALL8.length && AUTHORS.every((a) => !JSON.stringify(saved).includes(a)))
+  const input = rowsFromVoiceEvidence(JSON.parse(JSON.stringify(saved)) as unknown[], { salt: SALT, members, now: NOW })
+  const evPlan = planOf(input.rows)
+  check('저장된 근거만으로 3건↑ 화자 8 · drift 0', evPlan.availableSpeakers === 8 && evPlan.drift.length === 0 && evPlan.ok)
+  check('P20~P25 먼저 채운다', evPlan.slots.slice(0, 6).map((s) => s.code).join() === 'P20,P21,P22,P23,P24,P25')
+  check('수집 시점 결과 = 직접 넣은 결과 (같은 배정)',
+    JSON.stringify(evPlan.slots.map((s) => [s.code, s.bundle.comments])) === JSON.stringify(plan.slots.map((s) => [s.code, s.bundle.comments])))
+  const evRun = await runWith({ plan: evPlan })
+  const p26 = evRun.candidates.find((c) => c.code === 'P26')!
+  check('P26 — 수집 근거 경로로도 운영 검증기 valid · draft 가능', p26.verdict.status === 'valid' && p26.draftable)
+}
+
 rmSync(HOME, { recursive: true, force: true })
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
 process.exit(failN === 0 ? 0 : 1)

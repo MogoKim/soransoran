@@ -10,7 +10,9 @@
  *     --apply --limit=<draftable 수> --reason "..."             # 🔴 격리 DB 에서만 — draft 적재
  *
  * 한 사이클
- *   ① 공개 댓글   수집 산출물(`comments:[{author,content}]`) + `MicroSeedRawContent.rawComments` 를 읽는다
+ *   ① 공개 댓글   수집 산출물(`comments:[{author,content}]`) + `MicroSeedRawContent.rawComments` +
+ *                 🔴 수집 시점 말투 근거(`*.voice-evidence.jsonl` — 작성자는 salt 해시뿐)를 읽는다.
+ *                 말투 근거는 `SORAN_VOICE_EVIDENCE_SALT` 와 회원 표시명(--db)이 있어야 쓴다 — 없으면 전부 버린다
  *   ② 공급 계획   거르기·익명화 → 중복 화자 제거 → 운영 `planBundles` → seed 공유 1 → 운영 배정 바이트 불변
  *   ③ P20~P25    말투 보충 계획 (Persona 는 이미 있다 — 🔴 이 도구는 운영 생성 경로에 연결하지 않는다)
  *   ④ P26~       골격 · creative(예산 게이트 → 🔴 live 미실행) · 운영 검증기 → valid / quarantined / rejected
@@ -39,6 +41,7 @@ import { runVoiceSupply } from './lib/persona-voice-supply-run.mjs'
 import { limitsFromEnv, missingBudgetEnvNames } from './lib/supply-llm-call.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { readEvidenceSalt, rowsFromVoiceEvidence, VOICE_EVIDENCE_SUFFIX } from './lib/voice-evidence-capture.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (k: string): string | null => {
@@ -73,23 +76,30 @@ console.log(`  정본 배정 ${base.byCode.size}칸 (${[...base.byCode.keys()].s
 
 // ── ① 공개 댓글 — 수집 산출물 ──
 const rows: PublicCommentRow[] = []
+/** 🔴 수집 시점 말투 근거 — 회원 대조(--db) 뒤에만 공급 입력이 된다 */
+const evidenceLines: unknown[] = []
 let files = 0
 let lines = 0
+let evidenceFiles = 0
 if (existsSync(DATA_DIR)) {
   for (const f of readdirSync(DATA_DIR)) {
     const p = join(DATA_DIR, f)
     if (!f.endsWith('.jsonl') || !statSync(p).isFile()) continue
-    files += 1
+    const isEvidence = f.endsWith(VOICE_EVIDENCE_SUFFIX)
+    if (isEvidence) evidenceFiles += 1
+    else files += 1
     for (const l of readFileSync(p, 'utf-8').split('\n')) {
       if (l.trim() === '') continue
-      lines += 1
       let o: unknown
-      try { o = JSON.parse(l) } catch { continue }
+      try { o = JSON.parse(l) } catch { if (isEvidence) evidenceLines.push(null); continue }
+      if (isEvidence) { evidenceLines.push(o); continue }
+      lines += 1
       rows.push(...rowsFromCollectLine(o))
     }
   }
 }
 console.log(`  수집 산출물 jsonl ${files}개 · ${lines}줄 → 댓글 ${rows.length}건`)
+console.log(`  말투 근거 jsonl ${evidenceFiles}개 · ${evidenceLines.length}줄`)
 
 // ── 운영 DB (read-only) ──
 type Db = {
@@ -130,8 +140,20 @@ if (USE_DB) {
       dailyCap: r.dailyCap!, weeklyCap: r.weeklyCap!, silenceRate: Number(r.silenceRate),
       activityRhythm: r.activityRhythm as Cadence['activityRhythm'],
     }))
+  const memberNames = await loadMemberNames(prisma)
+  {
+    // 🔴 말투 근거 — salt 가 없거나 다르면 실회원 대조를 못 하므로 전부 버린다(값은 출력하지 않는다)
+    const ev = rowsFromVoiceEvidence(evidenceLines, {
+      salt: readEvidenceSalt(process.env),
+      members: { memberNames, personaNames: sets.personaNames ?? [] },
+      now: new Date(),
+    })
+    rows.push(...ev.rows)
+    const dropped = Object.entries(ev.dropped).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(' · ')
+    console.log(`  말투 근거 ${ev.read}줄 → 공급 입력 ${ev.rows.length}건${dropped === '' ? '' : ` · 버림 ${dropped}`}`)
+  }
   db = {
-    memberNames: await loadMemberNames(prisma),
+    memberNames,
     codes: personas.map((p) => p.code),
     cadence: modeCadence(cadences),
     gateOf: (n) => checkNameCollision(n, sets, { hashOf: h }).status,
@@ -216,6 +238,9 @@ console.log(`  격리 사유  ${Object.entries(cnt).map(([k, n]) => `${k} ${n}`)
 console.log(`  creative provider 호출 ${run.creativeCalls}회 (말투 있는 후보만)`)
 if (plan.availableSpeakers === 0) {
   console.log('\n  🔴 첫 병목: 공급 파이프라인이 모은 공개 댓글에 작성자·원문이 없다 — 사용 가능 화자 0')
+  if (evidenceLines.length === 0) {
+    console.log('     말투 근거 0줄 — 수집기에 SORAN_VOICE_EVIDENCE_SALT 가 없으면 댓글을 읽지 않는다(fail-closed)')
+  }
 }
 
 if (!APPLY) {

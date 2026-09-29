@@ -133,11 +133,14 @@ export function isRealMemberSpeaker(author: string, sets: { memberNames: readonl
  *
  * @param members  회원·Persona 표시명. 🔴 `null` 이면 **재지 못한 것**이다 — 전부 막는다(빈 배열과 다르다)
  * @param salt     저장하지 않는 salt. 시험만 넘긴다 — 운영은 프로세스마다 새로 만든다
+ * @param idOf     작성자 → 불투명 id. 🔴 수집 시점 말투 근거(`voice-evidence-capture`)만 넘긴다 —
+ *                 비밀 salt 의 HMAC 으로 **저장해도 되는** id 를 만든다. 없으면 위 salt 로 만든 회차 한정 id 다
  */
 export function screenPublicComments(
   rows: readonly PublicCommentRow[],
   members: { memberNames: readonly string[]; personaNames?: readonly string[] } | null,
   salt: string = randomUUID(),
+  idOf?: (source: string, author: string) => string,
 ): ScreenResult {
   const dropped = emptyDrops()
   const kept: LocalComment[] = []
@@ -175,7 +178,7 @@ export function screenPublicComments(
       real = isRealMemberSpeaker(author, members)
       realMemberCache.set(key, real)
     }
-    const speakerId = sha(`${salt}\u0000${r.source}\u0000${author}`, 12)
+    const speakerId = idOf !== undefined ? idOf(r.source, author) : sha(`${salt}\u0000${r.source}\u0000${author}`, 12)
     if (real) { drop('REAL_MEMBER_SPEAKER'); realMemberSpeakerIds.add(speakerId); continue }
 
     // 🔴 식별자 유출 — 본문이 작성자 표시 그 자체
