@@ -1,6 +1,6 @@
 # 현재 실행 정본 - 자동 D100 커뮤니티
 
-> 마지막 창업자 동기화: 2026-09-29 10:59 KST
+> 마지막 창업자 동기화: 2026-09-29 11:20 KST
 >
 > 이 문서는 **지금 어디까지 왔고 무엇을 바로 끝낼지**만 정한다. 목적과 품질은
 > [`NORTH-STAR.md`](./NORTH-STAR.md), 단계 성공과 목표 수치는
@@ -26,11 +26,11 @@
 PR, CI, helper, 수동 회차, 수동 stage override는 완료가 아니다. 완료 이름은
 `code PASS`, `deployed PASS`, `operating PASS`로 나눠 쓴다.
 
-## 2. 2026-09-29 10:59 운영 실측
+## 2. 2026-09-29 11:20 운영 실측
 
 | 축 | 실측 | 판정 |
 |---|---|---|
-| main / runtime | `ef472aa` / `2c20d40` | main 차이는 D100 host 이전 묶음. 현재 D100 글·댓글 실행 코드는 runtime에 있음 |
+| main / runtime | 서로 다름 | main에는 Persona 하한/지속 목표 분리가 반영됐고 runtime은 `2c20d40`. exact SHA는 `git ls-remote`와 `ops:status`로 다시 읽음 |
 | M1 글 루프 | 09:30 자동 발행, Queue/Post/ActivityLog 일치 | **OPERATING PASS** |
 | M2 첫 댓글 | 공개 댓글 0, 마지막 Persona 댓글은 09-15. runner는 절전 복구 뒤 exit 0·health `ok` | **NOT PASS** — 실행 회복과 공개 성공은 다르다 |
 | 오늘 단계 | controller `TRIAL d3`, 공개 글 1/3 | 09:30 글이 60분 내 댓글을 못 받아 오늘 통합 D3 PASS 불가 |
