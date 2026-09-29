@@ -20,7 +20,8 @@
  * 🔴 **새 판정을 만들지 않는다.** 개인정보·안전은 `checkContent`(글쓰기 가드) · `safetyFilter`
  *    (공급 안전 필터) · 실회원은 Gate ⑥-B `checkNameCollision` · 닉네임 혼입은 ⑥-A 와 같은 본문 포함 대조 ·
  *    식별자 유출은 `identityLeakCheck` · 경험형은 `carriesExperience` · 묶음은 `planBundles` ·
- *    검증은 `judgeReferenceBundle` 이다. 새로 적은 규칙은 **이메일 꼴** 하나뿐이다(기존 가드에 없다).
+ *    검증은 `judgeReferenceBundle` 이다. 새로 적은 규칙은 **이메일 꼴**과 **말투 근거 전용 개인정보 한 겹**
+ *    (`voiceEvidencePii` — 가린 숫자·링크·가린 이메일·메신저 ID·주소·@멘션)뿐이다. 둘 다 이 줄기에만 걸린다.
  *
  * 🔴 **작성자 이름은 ① 밖으로 나가지 않는다.** 반환 타입에 작성자 칸이 없다.
  *    원문 댓글은 메모리에만 있다 — Git · DB 로 옮기지 않는다. 보고는 개수·코드만 한다.
@@ -81,6 +82,49 @@ export type SpeakerBlockCode = (typeof SPEAKER_BLOCK_CODES)[number]
  */
 const EMAIL_LIKE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
 
+/**
+ * 🔴 **말투 근거 전용 개인정보 한 겹** (2026-09-29, #624 실측 보정).
+ *
+ *    합성 변형으로 재 보니 기존 가드 둘(`checkContent` · `safetyFilter`)은 **사람이 쓰는 글쓰기 가드**라
+ *    오탐을 피하려고 좁게 잡혀 있었다 — 전각·원문자·이모지 숫자 · 한글 숫자 · 띄어 쓴 숫자 · 유선·국제번호 ·
+ *    계좌 숫자 · `open.kakao.com` 링크 · URL · 가린 이메일 · 한글 메신저 ID · 주소 · `@멘션` 이 전부 통과했다.
+ *    말투 근거는 **90일 저장**되고, 한 건 덜 모아도 잃는 것이 없다 — 그래서 여기서는 넓게 버린다.
+ *    🔴 글쓰기 가드(`content-guard`)는 바꾸지 않는다 — 실회원 글을 막게 되기 때문이다.
+ *
+ *    숫자 규칙은 **9자리↑ 숫자 열**(공백 · `-` · `.` 만 끼어 있어도 이어 본다)이다.
+ *    날짜 `2026.09.29`(8자리) · 금액 `1,000,000`(쉼표는 잇지 않는다)은 걸리지 않는다.
+ */
+const KO_DIGIT: Record<string, string> = {
+  공: '0', 영: '0', 일: '1', 이: '2', 삼: '3', 사: '4', 오: '5', 육: '6', 륙: '6', 칠: '7', 팔: '8', 구: '9',
+}
+const LONG_DIGIT_RUN = /\d(?:[\s.\-]{0,2}\d){8,}/
+const VOICE_PII_PATTERNS: readonly RegExp[] = [
+  // 링크 — 오픈채팅 · 블로그 · 단축 URL 은 곧 사람을 찾아가는 길이다
+  /https?:\/\/|www\.|open\.kakao|\b[a-z0-9-]{2,}\.(?:com|net|org|kr|co|me|ly|io|us|gl|to)\b/i,
+  // 가린 이메일 — 골뱅이 · (at) · 띄어 쓴 @ · 메일 도메인 이름
+  /골뱅이|[([]\s*at\s*[)\]]|\s@\s|(?:naver|daum|hanmail|gmail|nate|kakao)\s*(?:[.·]|dot|닷|점)\s*(?:com|net)/i,
+  // @멘션 — 누군가를 부르는 표시는 말투가 아니라 식별자다
+  /@\S/,
+  // 메신저 · SNS 아이디 — 한글 아이디 · 띄어 쓴 `카 톡` · 초성 `ㅋㅌ` 까지
+  /아이디(?!어)|\bid\s*[:：]|카\s+톡|ㅋㅌ|오픈\s*톡|인스타|instagram|라인\s*(?:아이디|id)|밴드\s*주소|블로그\s*주소/i,
+  // 주소 — 동·호 · 번지 · 광역 이름으로 시작하는 행정 구역 두 단계(`서울시 강남구 역삼동`)
+  /\d{1,4}\s*동\s*\d{1,4}\s*호|\d+\s*번지/,
+  /(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣]*\s+[가-힣]{1,5}(?:시|군|구)\s+[가-힣]{1,6}(?:구|동|읍|면|로|길)/,
+  // 전화 앞자리를 글자로 가린 꼴 — `010-l234-5678`
+  /01[016789]\s*[-.]\s*[0-9lIoO]{3,4}\s*[-.]\s*[0-9lIoO]{4}/,
+]
+/** 🔴 전각 · 원문자 · 이모지 숫자를 보통 숫자로 — 가리려고 바꾼 꼴을 되돌린다 */
+const foldDigits = (text: string): string => text.normalize('NFKC').replace(/[️⃣]/g, '')
+export function voiceEvidencePii(text: string): boolean {
+  const t = foldDigits(text)
+  if (LONG_DIGIT_RUN.test(t)) return true
+  // 🔴 한글 숫자는 `공일공`(010) 꼴이 있을 때만 바꾼다 — `이`·`사`·`오` 는 보통 낱말에 너무 흔하다
+  if (/[공영0]\s*[일1]\s*[공영0]/.test(t)
+    && LONG_DIGIT_RUN.test(t.replace(/[공영일이삼사오육륙칠팔구]/g, (c) => KO_DIGIT[c] ?? c))) return true
+  // 🔴 NFKC 는 `ㅋㅌ`(호환 자모)를 조합형으로 바꾼다 — 원문과 접은 꼴 둘 다 본다
+  return VOICE_PII_PATTERNS.some((re) => re.test(t) || re.test(text))
+}
+
 /** 이름 대조에 쓰는 최소 길이 — 한 글자 이름은 본문 어디에나 있어 대조가 성립하지 않는다 */
 const NAME_MATCH_MIN = 2
 
@@ -104,10 +148,11 @@ export type ScreenResult = {
 const emptyDrops = (): Record<CommentDropCode, number> =>
   Object.fromEntries(COMMENT_DROP_CODES.map((c) => [c, 0])) as Record<CommentDropCode, number>
 
-/** 🔴 개인 식별자 — 기존 가드 둘 + 이메일 꼴. 무엇이 걸렸는지 문자열은 돌려주지 않는다 */
+/** 🔴 개인 식별자 — 이메일 꼴 + 말투 근거 전용 한 겹 + 기존 가드 둘. 무엇이 걸렸는지 문자열은 돌려주지 않는다 */
 export function piiOrUnsafe(text: string): CommentDropCode | null {
   if (EMAIL_LIKE.test(text)) return 'PII'
-  const g = checkContent(text, { audience: 'bot' })
+  if (voiceEvidencePii(text)) return 'PII'
+  const g =checkContent(text, { audience: 'bot' })
   if (!g.ok) {
     const code = g.issue?.code
     return code === 'CONTACT_PHONE' || code === 'CONTACT_EXTERNAL_ID' ? 'PII' : 'UNSAFE'

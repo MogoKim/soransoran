@@ -30,8 +30,14 @@
  *
  * 🔴 **보존 · 삭제**
  *    · 보존 기한 `VOICE_EVIDENCE_RETENTION_DAYS`(90일). 공급은 기한이 지난 줄을 **읽지 않는다**(`EXPIRED`).
- *      파일 삭제는 자동으로 하지 않는다 — 이 PR 은 launchd 를 바꾸지 않는다. 지우려면 파일을 지운다
- *      (`*.voice-evidence.jsonl` · 다른 산출물과 섞여 있지 않다).
+ *      🔴 읽지 않는 것은 삭제가 아니다 — 실제 삭제는 `voice-evidence-retention.mts`
+ *      (`npm run persona:voice-evidence-purge -- --execute`)가 한다. 🔴 예약되어 있지 않다 —
+ *      launchd 를 바꾸지 않았다. 켜기 전에 삭제 주기(사람 · 예약)를 정해야 한다.
+ *    · **삭제 요청**도 같은 경로다 — salt 를 가진 사람이 `speakerHashOf(salt, 출처, 작성자 표시)` 를 계산해
+ *      `--speaker-hash=` 로 넘긴다. salt 가 없으면 누구의 줄인지 특정할 수 없다.
+ *    · 🔴 **이것은 익명화가 아니라 가명화다.** salt 를 가진 사람은 공개 화면의 작성자 표시를 다시 해시해
+ *      어느 줄이 누구의 것인지 되짚을 수 있다(공개 출처 + salt = 재식별). salt 는 비밀로 두고,
+ *      저장 행은 개인정보로 다룬다.
  *    · **salt 회전 = 전체 연결 끊기.** salt 를 바꾸면 이전 줄의 `speakerHash` 끼리는 여전히 묶이지만
  *      새 줄과는 묶이지 않고, 실회원 대조가 불가능해 공급이 전부 버린다(`SALT_ROTATED`).
  *      salt 를 버리면 어떤 해시도 누구의 것인지 다시 계산할 수 없다.
@@ -146,6 +152,13 @@ export function evidenceRowProblems(row: unknown, authors: readonly string[] = [
 
 export type CapturedComment = { author: string | null; text: string }
 
+/**
+ * 🔴 **자리표시 댓글** — 삭제·비밀 댓글은 작성자 표시가 남은 채 본문이 안내 문구로 바뀐다.
+ *    그 문구는 말투가 아니고, 여러 화자에게 같은 줄로 붙어 중복 화자 판정을 흔든다. 거르기 전에 뺀다.
+ *    (셀렉터 실측 전이라 마크업이 아니라 문구로 본다 — 마크업이 바뀌어도 문구는 남는다.)
+ */
+export const PLACEHOLDER_COMMENT = /^(?:삭제된|비밀|숨김 처리된|신고(?:로|에 의해)? 숨겨진)\s*댓글입니다\.?$|^작성자(?:가|에 의해)\s*삭제된\s*댓글입니다\.?$|^비밀\s*댓글$/
+
 export type CaptureResult = {
   /** 🔴 salt 가 없으면 false — rows 는 언제나 비어 있다 */
   stored: boolean
@@ -175,9 +188,9 @@ export function captureVoiceEvidence(input: {
 }, salt: EvidenceSalt): CaptureResult {
   const dropped = zeroDrops()
   if (!salt.ok) return { stored: false, code: salt.code, rows: [], seen: input.comments.length, dropped }
-  const rows: PublicCommentRow[] = input.comments.map((c) => ({
-    source: input.source, articleId: input.articleId, author: c.author, text: c.text,
-  }))
+  const rows: PublicCommentRow[] = input.comments
+    .filter((c) => !PLACEHOLDER_COMMENT.test(c.text.trim()))
+    .map((c) => ({ source: input.source, articleId: input.articleId, author: c.author, text: c.text }))
   const memberKeyBySpeaker = new Map<string, string>()
   const screen = screenPublicComments(rows, { memberNames: [] }, undefined, (source, author) => {
     const id = speakerHashOf(salt.salt, source, author)

@@ -10,7 +10,7 @@
  * 🔴 실제 `$HOME` 을 쓰지 않는다 — 임시 HOME 에 합성 정본 자산을 두고 모든 모듈을 **그 뒤에** 부른다
  *    (자산 경로는 import 시점에 정해진다). 장부도 임시 디렉터리만 읽는다.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -27,7 +27,7 @@ const { judgeAutogenCandidate } = await import('./lib/persona-autogen.mjs')
 const { carriesExperience, loadCanonCorpusTexts, stableAssignment } = await import('./lib/persona-reference-store.mjs')
 const {
   assignmentBytes, bytesDrift, dropDuplicateSpeakers, planSupplyBundles, planVoiceSupply, rekeyByContent,
-  rowsFromCollectLine, rowsFromRawContent, screenPublicComments, supplyTargetCodes,
+  rowsFromCollectLine, rowsFromRawContent, screenPublicComments, supplyTargetCodes, voiceEvidencePii,
 } = await import('./lib/persona-voice-supply.mjs')
 const {
   FixtureCreativeProvider, LiveCreativeProvider, creativeProblems, readCreativeBudget, runCreativeStep,
@@ -99,6 +99,46 @@ console.log('① 거르기 · 익명화')
   check('개인정보 — 계좌번호 요청 → PII', drops('계좌번호 알려 주시면 보낼게요').join() === 'PII')
   check('개인정보 — 메신저 ID → PII', drops('카톡 아이디 sunny_77 로 연락 주세요').join() === 'PII')
   check('안전 — 욕설 → UNSAFE', drops('그 사람 진짜 병신 같네요 정말').join() === 'UNSAFE')
+  /**
+   * 🔴 **가린 개인정보 변형** (#624 합성 실측 — 보정 전 전부 통과했다). 말투 근거는 90일 저장되므로 넓게 버린다.
+   *    반대쪽(평범한 문장이 걸리지 않는다)도 함께 본다 — 다 버리는 필터는 필터가 아니다.
+   */
+  const PII_VARIANTS: [string, string][] = [
+    ['전각 숫자', '０１０－１２３４－５６７８ 로 주세요'],
+    ['원문자 숫자', '⓪①⓪-①②③④-⑤⑥⑦⑧ 로 연락'],
+    ['이모지 숫자', '0️⃣1️⃣0️⃣ 1️⃣2️⃣3️⃣4️⃣ 5️⃣6️⃣7️⃣8️⃣ 연락주세요'],
+    ['한글 숫자', '공일공 일이삼사 오육칠팔 로 문자 주세요'],
+    ['한글 앞자리', '공일공-1234-5678 로 주세요'],
+    ['띄어 쓴 숫자', '0 1 0 1 2 3 4 5 6 7 8 로 연락주세요'],
+    ['유선 번호', '02-123-4567 로 전화주세요'],
+    ['국제 번호', '+82 10-1234-5678 로 연락주세요'],
+    ['글자로 가린 번호', '010-l234-5678 카톡주세요'],
+    ['계좌 숫자만', '농협 3021234567891 로 보내주세요'],
+    ['토스 계좌', '토스 1000-1234-5678 로 보내요'],
+    ['한글 메신저 ID', '카톡 아이디 햇살언니 로 찾아주세요'],
+    ['띄어 쓴 카톡', '카 톡 sunny77 로 연락해요'],
+    ['초성 카톡', 'ㅋㅌ sunny77 로 연락주세요'],
+    ['오픈채팅 링크', 'https://open.kakao.com/o/gAbCdEf 들어오세요'],
+    ['스킴 없는 링크', 'open.kakao.com/o/gAbCdEf 여기로 오세요'],
+    ['블로그 주소', 'blog.naver.com/sunny77 제 블로그예요'],
+    ['골뱅이 이메일', 'sunny77 골뱅이 naver.com 으로 메일'],
+    ['(at) 이메일', 'sunny77(at)naver(dot)com 으로 보내주세요'],
+    ['띄어 쓴 이메일', 'sunny77 @ naver . com 으로 보내요'],
+    ['아파트 동호', '느티마을 301동 1502호 살아요'],
+    ['행정 구역 주소', '경기도 성남시 분당구 정자일로 95 에 살아요'],
+    ['@멘션', '@햇살언니 님 말씀이 맞아요 저도 그래요'],
+    ['인스타 ID', '인스타 sunny_77 팔로우해 주세요'],
+    ['라인 ID', '라인 아이디 sunny77 이에요'],
+  ]
+  const missed = PII_VARIANTS.filter(([, t]) => drops(t).join() !== 'PII').map(([k]) => k)
+  check(`개인정보 — 가린 변형 ${PII_VARIANTS.length}종 전부 PII (놓침: ${missed.join(' · ') || '없음'})`, missed.length === 0)
+  const SAFE_LOOKALIKES = [
+    '좋은 아이디어네요 저도 해볼게요', '2026.09.29 에 다녀왔는데 좋았어요', '1,000,000원이나 들었대요 비싸네요',
+    '다시 친구랑 앞으로 3번은 가보려고요', '오이 사이사이 구일 오후에 일이 있어요', '요즘 10시에 자고 6시에 일어나요',
+    '서울 강남구 병원 다녀왔는데 좋았어요', '그 길로 3년을 버텼어요 대단하네요',
+  ]
+  const over = SAFE_LOOKALIKES.filter((t) => voiceEvidencePii(t))
+  check(`개인정보 — 닮은 평범한 문장 ${SAFE_LOOKALIKES.length}건은 걸지 않는다 (오탐 ${over.length})`, over.length === 0)
   check('닉네임 혼입 — 다른 작성자 표시가 본문에 → NICKNAME_LEAK', (() => {
     const r = screenPublicComments([
       ...speakerRows(1),
@@ -400,6 +440,14 @@ console.log('⑧ 수집 시점 말투 근거')
     { author: null, text: '작성자 없는 댓글이에요 정말' },
   ]), SALT)
   const flat = JSON.stringify(cap.rows)
+  const ph = captureVoiceEvidence(thread('t2p', [
+    ...[0, 1, 2, 3].map((i) => ({ author: AUTHORS[0]!, text: line(0, i) })),
+    { author: AUTHORS[2]!, text: '삭제된 댓글입니다.' },
+    { author: AUTHORS[2]!, text: '비밀 댓글입니다.' },
+    { author: AUTHORS[3]!, text: '작성자에 의해 삭제된 댓글입니다' },
+  ]), SALT)
+  check('🔴 삭제·비밀 댓글 자리표시는 말투 근거로 남지 않는다', ph.stored && ph.rows.length === 4
+    && ph.rows.every((r) => !/댓글입니다/.test(r.text)))
   check('깨끗한 댓글 4건만 남는다', cap.stored && cap.rows.length === 4)
   check('🔴 저장 행 어디에도 작성자 표시가 없다', AUTHORS.every((a) => !flat.includes(a)))
   check('🔴 개인정보 댓글은 저장되지 않는다(전화 · 이메일)', !/010-1234|example\.com/.test(flat) && cap.dropped.PII === 2)
@@ -434,6 +482,43 @@ console.log('⑧ 수집 시점 말투 근거')
   check('보존 기한이 지나면 읽지 않는다', rowsFromVoiceEvidence(store, { salt: SALT, members, now: late }).dropped.EXPIRED === 8)
   const bad = rowsFromVoiceEvidence([{ ...cap.rows[0]!, author: AUTHORS[0]! }, null, 'x'], { salt: SALT, members, now: NOW })
   check('계약을 어긴 줄은 MALFORMED', bad.rows.length === 0 && bad.dropped.MALFORMED === 3)
+
+  // ── 실제 삭제: 90일이 지나면 **파일에서** 지운다 (읽지 않는 것만으로는 보존 기한이 아니다) ──
+  {
+    const { purgeVoiceEvidence } = await import('./lib/voice-evidence-retention.mjs')
+    const dir = join(HOME, 'purge-data')
+    mkdirSync(dir, { recursive: true })
+    const old = new Date(NOW.getTime() - (VOICE_EVIDENCE_RETENTION_DAYS + 1) * 86_400_000)
+    const jl = (rows: object[]): string => rows.map((r) => `${JSON.stringify(r)}\n`).join('')
+    const oldRows = captureVoiceEvidence({ ...clean, articleId: 'o1', now: old }, SALT).rows
+    const newRows = cap.rows
+    writeFileSync(join(dir, 'navercafe-voice-testcafe-old.voice-evidence.jsonl'), jl(oldRows))
+    writeFileSync(join(dir, 'navercafe-voice-testcafe-new.voice-evidence.jsonl'), jl(newRows))
+    writeFileSync(join(dir, 'navercafe-voice-testcafe-mix.voice-evidence.jsonl'), jl([...oldRows, ...newRows]))
+    // 깨진 줄 — 나이는 파일 시각으로 잰다
+    const brokenPath = join(dir, 'navercafe-voice-testcafe-broken.voice-evidence.jsonl')
+    writeFileSync(brokenPath, '{not json\n')
+    utimesSync(brokenPath, old, old)
+    // 🔴 다른 산출물은 건드리지 않는다
+    writeFileSync(join(dir, 'navercafe-thin-testcafe-old.thin-detail.jsonl'), jl(oldRows))
+    const listing = (): string => readdirSync(dir).sort().join()
+    const before = listing()
+    const dry = purgeVoiceEvidence({ dataDir: dir, now: NOW, execute: false })
+    check('삭제 계획만 — 파일 write 0', listing() === before && dry.totals.deletedFiles === 0 && dry.totals.rewrittenFiles === 0)
+    check('계획이 기한 지난 줄을 센다(old 4 · mix 4 · 깨진 줄 1)', dry.totals.expired === oldRows.length * 2 + 1)
+    const done = purgeVoiceEvidence({ dataDir: dir, now: NOW, execute: true })
+    check('🔴 --execute — 전부 지난 파일은 지운다', !existsSync(join(dir, 'navercafe-voice-testcafe-old.voice-evidence.jsonl')) && !existsSync(brokenPath))
+    const mix = readFileSync(join(dir, 'navercafe-voice-testcafe-mix.voice-evidence.jsonl'), 'utf-8').trim().split('\n')
+    check('🔴 섞인 파일은 지난 줄만 빼고 다시 쓴다', mix.length === newRows.length && done.totals.rewrittenFiles === 1)
+    check('기한 안 파일은 그대로', readFileSync(join(dir, 'navercafe-voice-testcafe-new.voice-evidence.jsonl'), 'utf-8') === jl(newRows))
+    check('🔴 말투 근거가 아닌 파일은 건드리지 않는다', existsSync(join(dir, 'navercafe-thin-testcafe-old.thin-detail.jsonl')))
+    check('다시 돌리면 할 일 0 (멱등)', purgeVoiceEvidence({ dataDir: dir, now: NOW, execute: true }).totals.expired === 0)
+    // 삭제 요청 — salt 를 가진 사람만 화자를 특정할 수 있다
+    const target = speakerHashOf(SALT.ok ? SALT.salt : '', SRC, AUTHORS[0]!)
+    const req = purgeVoiceEvidence({ dataDir: dir, now: NOW, execute: true, speakerHashes: [target] })
+    check('🔴 삭제 요청 화자의 줄을 지운다(남은 줄 0 → 파일도 삭제)',
+      req.totals.requested === newRows.length * 2 && readdirSync(dir).filter((n) => n.endsWith('.voice-evidence.jsonl')).length === 0)
+  }
 
   // ── 끝까지: 여러 글에 흩어진 댓글 → 저장 → 공급 → P20~P25 먼저 → P26·P27 valid ──
   const threads = [0, 1, 2].map((t) => thread(`e${t}`, AUTHORS.slice(0, 8).flatMap((a, s) =>
