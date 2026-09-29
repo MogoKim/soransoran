@@ -87,10 +87,10 @@ if (r.error !== undefined) console.error(`🔴 실행하지 못했다 — ${r.er
 const exitCode = r.error !== undefined ? 127 : (r.status ?? 1)
 /**
  * 🔴 발행 회차의 종료 값을 남긴다 — launchd 재등록 뒤에도 판정이 마지막 실제 회차를 읽는다.
- *    launchd 가 띄운 회차만 남고(`publish-run-record`), 쓰기 실패는 종료 값을 바꾸지 않는다.
+ *    plist 에 명시한 실행 표식·label 이 정확한 회차만 남고(`publish-run-record`), 쓰기 실패는 종료 값을 바꾸지 않는다.
  */
 if (BY === 'publish') {
-  const rec = recordPublishRun({ launchdLabel: process.env.XPC_SERVICE_NAME, startedAt, finishedAt: new Date(), exitCode })
+  const rec = recordPublishRun({ env: process.env, startedAt, finishedAt: new Date(), exitCode })
   if (!rec.written) console.error(`[stage-consume publish] 회차 기록 ✕ — ${rec.reason}`)
 }
 process.exit(exitCode)

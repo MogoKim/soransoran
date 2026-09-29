@@ -2,7 +2,8 @@
  * 발행 러너 **마지막 실제 회차 기록** — 쓰기·읽기 (판정은 정본 `job-health.failingFromPublishRun`)
  *
  * 🔴 **쓰는 곳은 하나다** — `stage-consume-exec --by=publish` 가 러너가 끝난 뒤 한 번.
- *    launchd 가 띄운 회차(`XPC_SERVICE_NAME` = 발행 job label)만 쓴다. 손으로 돌린 회차는 쓰지 않는다 —
+ *    plist 에 **명시한** 실행 표식(`SORAN_LAUNCHD_RUN=scheduled`)과 정확한 label(`SORAN_LAUNCHD_LABEL`)이
+ *    둘 다 맞을 때만 쓴다. 손으로 돌린 회차 · 표식 없음 · label 다름은 쓰지 않는다 —
  *    수동 성공이 launchd 회차의 실패를 덮으면 안 된다.
  * 🔴 쓰기 실패는 발행 결과를 바꾸지 않는다 — 기록이 없으면 판정이 "모름" 으로 남을 뿐이다.
  * 🔴 파일 하나를 통째로 바꾼다(임시 파일 → rename). 반쯤 쓴 파일은 남지 않는다.
@@ -13,7 +14,9 @@ import { join } from 'node:path'
 
 import { parsePublishRunRecord, type PublishRunRead, type PublishRunRecord } from '../../src/lib/job-health'
 import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
-import { HEARTBEAT_INTERVAL_MINUTES, PUBLISH_RUNNER_LABEL } from './original-post-runner-template'
+import {
+  HEARTBEAT_INTERVAL_MINUTES, LAUNCHD_LABEL_KEY, LAUNCHD_RUN_MARK_KEY, LAUNCHD_RUN_MARK_VALUE, PUBLISH_RUNNER_LABEL,
+} from './original-post-runner-template'
 
 /** 🔴 저장소 밖 — runtime 작업트리를 더럽히지 않는다. heartbeat 틱 표식과 같은 부모 디렉터리 */
 export const PUBLISH_RUN_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran', 'publish-runs')
@@ -40,14 +43,19 @@ export type RecordOutcome = { written: true } | { written: false; reason: string
 
 /** 🔴 launchd 발행 회차 하나를 남긴다. 던지지 않는다 */
 export function recordPublishRun(
-  i: { launchdLabel: string | undefined; startedAt: Date; finishedAt: Date; exitCode: number },
+  i: { env: Readonly<Record<string, string | undefined>>; startedAt: Date; finishedAt: Date; exitCode: number },
   dir: string = PUBLISH_RUN_DIR,
 ): RecordOutcome {
-  if (i.launchdLabel !== PUBLISH_RUNNER_LABEL) {
-    return { written: false, reason: `launchd 발행 회차가 아니다(XPC_SERVICE_NAME=${i.launchdLabel ?? '없음'}) — 남기지 않는다` }
+  const mark = i.env[LAUNCHD_RUN_MARK_KEY]
+  const label = i.env[LAUNCHD_LABEL_KEY]
+  if (mark !== LAUNCHD_RUN_MARK_VALUE || label !== PUBLISH_RUNNER_LABEL) {
+    return {
+      written: false,
+      reason: `launchd 발행 회차 표식이 아니다(${LAUNCHD_RUN_MARK_KEY}=${mark ?? '없음'} · ${LAUNCHD_LABEL_KEY}=${label ?? '없음'}) — 남기지 않는다`,
+    }
   }
   const rec: PublishRunRecord = {
-    v: 1, label: i.launchdLabel,
+    v: 1, label,
     startedAt: i.startedAt.toISOString(), finishedAt: i.finishedAt.toISOString(), exitCode: i.exitCode,
   }
   try {
