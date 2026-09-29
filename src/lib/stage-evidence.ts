@@ -12,20 +12,24 @@
  *      ① D 의 StageDecision 을 controller 가 자동으로 골랐다 — `decidedBy=controller` ·
  *         상태 TRIAL/SUSTAIN · 공개 = S. 수동 실행 · 단계 override · env canary/window ·
  *         사람 승인은 **세지 않는다**.
- *      ② 그날 예약 발행 수 = `PROFILES[S].dailyTarget` — 무인 러너 표식이 있는 발행만 센다.
- *         표식이 없는 발행이 하나라도 있으면(수동 · 표식 이전) 증명이 없는 것이다 → FAIL.
+ *      ② **자동 target 물량** = `PROFILES[S].dailyTarget` 이상 — 자동 READY 도장(`AUTO_DECIDER`)으로
+ *         만들어져 **무인 러너 표식**으로 예약 발행된 글만 센다(2026-09-29 마스터 최종 보정).
+ *         🔴 사람이 승인한 글은 정상 발행·감사 면제일 수 있지만 **자동화 성공 물량으로는 0건**이다.
+ *            혼합 물량도 자동 target 만 센다. 모자라면 `PUBLISH_NOT_AUTO_READY`.
+ *         🔴 그날 전체 발행(사람 글 포함)이 목표를 넘으면 상한 초과다 → `PUBLISH_OVER`.
  *      ③ 댓글 — 두 판정으로 나눈다 (2026-09-29 마스터 보정).
- *         (a) **첫 댓글 보장** — 그 글마다 Persona 최상위 댓글(글쓴 Persona 아님)이 발행 후
+ *         (a) **첫 댓글 보장** — **자동 target 글마다** Persona 최상위 댓글(글쓴 Persona 아님)이 발행 후
  *             `AUTO_FIRST_COMMENT_WINDOW_MINUTES` 안에 **1건 이상**.
  *         (b) **추가 댓글 계약** — 글당 Persona 댓글 수 ≤ 그 댓글 단계의 상한(`personaCommentCapFor`) ·
  *             같은 Persona 두 번 0 · 자기 글 0. 🔴 "60분 안 2건" 자체는 실패가 아니다 — 상한을 넘을 때만이다.
  *             (bootstrap-auto 의 상한 1 이 "글당 정확히 1건" 을 지금 그대로 지킨다. 장기 1~5 는 상한 5 로 같은 판정이 받는다)
- *      ④ 사후 감사 — 그날 글을 **하나씩** 감사 대상인지 가른다.
- *         · 자동 READY 글(`AUTO_DECIDER`)은 감사 대상이다 — 그날 대상 수 A 에 대해 감사 행이
- *           정본 표본 수 `auditTarget(A)` 이상 있어야 한다(0 이면 닫는다). 행마다 판정 전 · 결함 yes ·
- *           시한 초과 · 재시도 가능 실패를 따로 본다.
- *         · 사람이 발행 전에 검토한 글은 사후 감사 대상이 아니다 — 그것이 **이유를 가진** 0 이다.
- *         · 누가 결정했는지 모르는 글은 대상인지도 모른다 → FAIL(공백을 PASS 로 삼키지 않는다).
+ *      ④ 사후 감사 — 🔴 **전수 감사가 아니라 정본 표본 계약이다** (마스터 정본 정정).
+ *         그날 자동 target N 에 대해 expected = `auditTarget(N)` = ceil(N × 20%) (N>0 이면 최소 1).
+ *         · 중복 없는 표본(글 기준) 수 ≥ expected — 0 이면 `AUDIT_COVERAGE_ZERO`, 미달이면 `AUDIT_COVERAGE_SHORT`
+ *         · 표본은 **그날 자동 target 집합**에 속해야 한다(postId · queueId 둘 다) — 밖이면 `AUDIT_OUTSIDE_TARGET`
+ *         · 표본은 전부 판정됐고 결함 yes · 재시도 가능 · 시한 초과 · 글 유실 0
+ *         🔴 모든 글의 감사를 새 선행조건으로 만들지 않는다 — 그것은 새 병목이다.
+ *         · 누가 결정했는지 모르는 글은 자동 target 인지도 모른다 → UNKNOWN(공백을 PASS 로 삼키지 않는다).
  *      ⑤ 중복 0 — Queue→Post 1:1 · 발행 기록 1:1 · (글, Persona) 댓글 1건.
  *      ⑥ 비용 · 러너 정상 — 그날 장부(공급 · 댓글 · 감사)에 막는 코드 0 · 발행/공급 러너 실패 0.
  *         (READY 재고가 다음 단계를 채우는가는 정본 `judgeOneDayCanary` 가 시험 대상에 대해 본다)
@@ -50,11 +54,11 @@ export const STAGE_EVIDENCE_CODES = [
   // ① 결정
   'DECISION_MISSING', 'DECISION_NOT_CONTROLLER', 'DECISION_NOT_TRANSITION', 'DECISION_STAGE_MISMATCH',
   // ② 발행
-  'PUBLISH_SHORT', 'PUBLISH_OVER', 'PUBLISH_NOT_UNATTENDED',
+  'PUBLISH_NOT_AUTO_READY', 'PUBLISH_OVER',
   // ③ 첫 댓글
   'COMMENT_MISSING', 'COMMENT_LATE', 'COMMENT_OVER_CAP', 'COMMENT_SELF', 'COMMENT_CAP_UNKNOWN',
   // ④ 감사
-  'AUDIT_TARGET_UNKNOWN', 'AUDIT_COVERAGE_ZERO', 'AUDIT_COVERAGE_SHORT',
+  'AUDIT_TARGET_UNKNOWN', 'AUDIT_COVERAGE_ZERO', 'AUDIT_COVERAGE_SHORT', 'AUDIT_OUTSIDE_TARGET',
   'AUDIT_UNJUDGED', 'AUDIT_DEFECT', 'AUDIT_OVERDUE', 'AUDIT_RETRYABLE', 'AUDIT_MISSING_POST',
   // ⑤ 중복
   'DUP_QUEUE', 'DUP_PUBLISH_LOG', 'UNLOGGED_PUBLISH', 'PUBLISH_LOG_ORPHAN', 'DUP_COMMENT',
@@ -67,7 +71,7 @@ export type StageEvidenceCode = (typeof STAGE_EVIDENCE_CODES)[number]
 
 /** 🔴 PASS 가 아닌 것 중 "몰라서" 인 코드 — FAIL 코드가 하나도 없을 때만 UNKNOWN 이 된다 */
 const UNKNOWN_CODES: readonly StageEvidenceCode[] = [
-  'COST_UNKNOWN', 'RUNNER_UNKNOWN', 'READ_ERROR', 'COMMENT_CAP_UNKNOWN', 'AUDIT_COVERAGE_SHORT',
+  'COST_UNKNOWN', 'RUNNER_UNKNOWN', 'READ_ERROR', 'COMMENT_CAP_UNKNOWN', 'AUDIT_TARGET_UNKNOWN',
 ]
 
 export type EvidenceVerdictKind = 'PASS' | 'FAIL' | 'UNKNOWN'
@@ -99,6 +103,10 @@ export type PostDecider = 'auto' | 'human' | 'unknown'
 
 /** 그날 발행된 글 하나 — 🔴 제목·본문 없음 */
 export type EvidencePost = {
+  /** 🔴 판정 안에서 감사 표본 소속을 대조하는 데만 쓴다 — 판정 결과에는 싣지 않는다 */
+  postId: string
+  /** 이 글을 만든 PUBLISHED Queue 행 — 없으면 null */
+  queueId: string | null
   /** 발행 시각(`publishAt ?? createdAt`) — 첫 댓글 시한의 기준 */
   publishedAtMs: number
   /** 🔴 무인 러너 표식이 있는 발행 기록인가 */
@@ -111,8 +119,6 @@ export type EvidencePost = {
   authorPersonaId: string | null
   /** 🔴 Queue 결정자 — 자동 READY(`auto`)만 사후 감사 대상이다 */
   decider: PostDecider
-  /** 이 글에 감사 행이 있는가 */
-  audited: boolean
   /** 이 글의 살아 있는 Persona 댓글 전부 */
   personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean }[]
 }
@@ -130,8 +136,11 @@ export type StageEvidenceFacts = {
   /** 🔴 그 날 댓글 단계의 글당 Persona 댓글 상한(`personaCommentCapFor`) — 모르면 null */
   commentCapPerPost: number | null
   audits: {
-    /** 🔴 그날 고른 감사 + 그날 글의 감사 — **행마다** 따로 본다 */
-    rows: readonly { judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean }[]
+    /** 🔴 그날 고른 감사 + 그날 글의 감사 — **행마다** 따로 본다. postId·queueId 로 표본 소속을 대조한다 */
+    rows: readonly {
+      postId: string; queueId: string
+      judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean
+    }[]
     /** 🔴 지금 표 전체 — 정본 `confirmedDefectCount` · `overdueAuditCount` · `retryableFailureCount` · `missingAutoPostCount` */
     globalDefectYes: number
     globalOverdue: number
@@ -170,15 +179,14 @@ export function judgeStageEvidence(
       if (d.state !== 'TRIAL' && d.state !== 'SUSTAIN') codes.add('DECISION_NOT_TRANSITION')
       if (d.release !== stage) codes.add('DECISION_STAGE_MISMATCH')
     }
-    // ② 발행 — 무인 표식이 있는 발행만 센다
+    // ② 발행 — 🔴 자동 READY 로 만들어져 무인 러너가 낸 글만 자동 target 이다. 사람 승인 글은 0건으로 센다
     const target = PROFILES[stage].dailyTarget
-    const unattended = facts.posts.filter((p) => p.unattended).length
-    const other = facts.posts.length - unattended
+    const autoTargets = facts.posts.filter((p) => p.decider === 'auto' && p.unattended)
     counts.target = target
     counts.published = facts.posts.length
-    counts.unattended = unattended
-    if (other > 0) codes.add('PUBLISH_NOT_UNATTENDED')
-    if (unattended < target) codes.add('PUBLISH_SHORT')
+    counts.autoTargets = autoTargets.length
+    counts.humanApproved = facts.posts.filter((p) => p.decider === 'human').length
+    if (autoTargets.length < target) codes.add('PUBLISH_NOT_AUTO_READY')
     if (facts.posts.length > target) codes.add('PUBLISH_OVER')
     // ③ 댓글 · ⑤ 중복
     const cap = facts.commentCapPerPost
@@ -198,7 +206,8 @@ export function judgeStageEvidence(
       const own = p.personaComments.filter((c) => p.authorPersonaId !== null && c.personaId === p.authorPersonaId)
       if (own.length > 0) codes.add('COMMENT_SELF')
       if (cap !== null && p.personaComments.length > cap) codes.add('COMMENT_OVER_CAP')
-      // (a) 첫 댓글 보장 — 60분 안 최상위 · 다른 Persona **1건 이상**
+      // (a) 첫 댓글 보장 — 🔴 자동 target 글만 · 60분 안 최상위 · 다른 Persona **1건 이상**
+      if (!(p.decider === 'auto' && p.unattended)) continue
       const eligible = p.personaComments.filter((c) =>
         c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId)
       const inWindow = eligible.filter((c) =>
@@ -210,26 +219,27 @@ export function judgeStageEvidence(
     counts.firstCommentOk = firstOk
     if (facts.orphanPublishLogs > 0) codes.add('PUBLISH_LOG_ORPHAN')
     if (facts.unloggedPublishes > 0) codes.add('UNLOGGED_PUBLISH')
-    // ④ 감사 — 대상 가르기 → 표본 수 → 행마다
-    const targets = facts.posts.filter((p) => p.decider === 'auto')
-    const human = facts.posts.filter((p) => p.decider === 'human').length
+    // ④ 감사 — 🔴 정본 표본 계약: expected = auditTarget(자동 target N) · 표본은 그 집합 안 · 표본 전부 판정·결함 0
     const unknownDecider = facts.posts.filter((p) => p.decider === 'unknown').length
-    const expected = auditTarget(targets.length)
-    const covered = targets.filter((p) => p.audited).length
-    counts.auditTargets = targets.length
-    counts.auditExpected = expected
-    counts.auditCovered = covered
-    counts.humanReviewed = human
-    // 🔴 대상인지 모르는 글 — 감사 0 을 "대상 없음" 으로 읽지 않는다
     if (unknownDecider > 0) codes.add('AUDIT_TARGET_UNKNOWN')
-    if (targets.length > 0 && covered === 0) codes.add('AUDIT_COVERAGE_ZERO')
-    else if (covered < expected) codes.add('AUDIT_COVERAGE_SHORT')
+    const targetKey = new Set(autoTargets.map((p) => `${p.postId}\u0000${p.queueId ?? ''}`))
+    const targetPost = new Set(autoTargets.map((p) => p.postId))
     const a = facts.audits
+    // 🔴 표본 = 그날 자동 target 집합에 postId·queueId 가 **둘 다** 맞는 행 — 글 기준으로 중복 없이 센다
+    const inSet = a.rows.filter((r) => targetKey.has(`${r.postId}\u0000${r.queueId}`))
+    const outside = a.rows.filter((r) => !targetKey.has(`${r.postId}\u0000${r.queueId}`))
+    const sampled = new Set(inSet.map((r) => r.postId).filter((id) => targetPost.has(id)))
+    const expected = auditTarget(autoTargets.length)
+    counts.auditExpected = expected
+    counts.auditSampled = sampled.size
     counts.auditRows = a.rows.length
-    if (a.rows.some((r) => !r.judged)) codes.add('AUDIT_UNJUDGED')
-    if (a.rows.some((r) => r.defectYes) || a.globalDefectYes > 0) codes.add('AUDIT_DEFECT')
-    if (a.rows.some((r) => r.overdue) || a.globalOverdue > 0) codes.add('AUDIT_OVERDUE')
-    if (a.rows.some((r) => r.retryable) || a.globalRetryable > 0) codes.add('AUDIT_RETRYABLE')
+    if (outside.length > 0) codes.add('AUDIT_OUTSIDE_TARGET')
+    if (autoTargets.length > 0 && sampled.size === 0) codes.add('AUDIT_COVERAGE_ZERO')
+    else if (sampled.size < expected) codes.add('AUDIT_COVERAGE_SHORT')
+    if (inSet.some((r) => !r.judged)) codes.add('AUDIT_UNJUDGED')
+    if (inSet.some((r) => r.defectYes) || a.globalDefectYes > 0) codes.add('AUDIT_DEFECT')
+    if (inSet.some((r) => r.overdue) || a.globalOverdue > 0) codes.add('AUDIT_OVERDUE')
+    if (inSet.some((r) => r.retryable) || a.globalRetryable > 0) codes.add('AUDIT_RETRYABLE')
     if (a.globalMissingPosts > 0) codes.add('AUDIT_MISSING_POST')
   }
   // ⑥ 비용 · 러너 — 못 받았으면 모른다

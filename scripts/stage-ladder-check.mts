@@ -35,6 +35,7 @@ import { loadPublishableStock, stageStock } from './lib/publishable-stock.mjs'
 import { planPublishBatch, resolvePublishScale } from './lib/publishable-stock.mjs'
 import { activeScale } from '../src/lib/scale-runtime'
 import { judgeStageEvidence, type StageEvidenceVerdict } from '../src/lib/stage-evidence'
+import { auditTarget } from '../src/lib/auto-ready-v2'
 
 let pass = 0
 let fail = 0
@@ -95,13 +96,21 @@ const passEvidence = (stage: ReleaseStage): StageEvidenceVerdict => {
   return judgeStageEvidence(PREV_DATE, stage, {
     kstDate: PREV_DATE, stage,
     decision: { kstDate: PREV_DATE, state: 'TRIAL', release: stage, decidedBy: DECISION_WRITER },
+    // 🔴 자동 READY 로 무인 발행된 글만 승격 물량이다 — 사람 승인 글로 만든 PASS 는 없다
     posts: Array.from({ length: n }, (_, i) => ({
+      postId: `pp-${i}`, queueId: `pq-${i}`,
       publishedAtMs: at + i * 3600_000, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `pa-${i}`,
-      decider: 'human' as const, audited: false,
+      decider: 'auto' as const,
       personaComments: [{ personaId: `pc-${i}`, createdAtMs: at + i * 3600_000 + 600_000, topLevel: true }],
     })),
     orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
-    audits: { rows: [], globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+    // 정본 표본 수 auditTarget(n) 만큼 — 서로 다른 자동 target 글
+    audits: {
+      rows: Array.from({ length: auditTarget(n) }, (_, i) => ({
+        postId: `pp-${i}`, queueId: `pq-${i}`, judged: true, defectYes: false, retryable: false, overdue: false,
+      })),
+      globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
+    },
   }, { cost: [{ name: '공급', health: 'ok' }, { name: '댓글', health: 'ok' }, { name: '감사', health: 'ok' }], errors: 'ok' })
 }
 

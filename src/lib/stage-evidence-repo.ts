@@ -7,7 +7,7 @@
  *    · 1:1    Queue(`createdPostId`) · 발행 기록 · Post 를 id 로 대조한다
  *             (🔴 관계 `is:null` 필터를 쓰지 않는다 — FK 쪽 null 검사로 바뀌어 유실을 0 으로 센다)
  *    · 댓글   `commentOrigin=PERSONA` · 지워지지 않은 것
- *    · 감사   그날 고른 감사 + 그날 글의 감사 · 표 전체의 정본 카운트(결함 yes · 시한 초과 · 재시도 가능 · 글 유실)
+ *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조) · 표 전체의 정본 카운트(결함 yes · 시한 초과 · 재시도 가능 · 글 유실)
  *
  * 🔴 결정(StageDecision)은 여기서 읽지 않는다 — 읽는 곳은 잠겨 있다(`stage-decision-repo` 주석).
  *    부르는 쪽(controller)이 이미 검증한 전날 결정을 넘긴다.
@@ -74,10 +74,12 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   })
   const queueOf = new Map<string, number>()
   const deciderOfPost = new Map<string, PostDecider>()
+  const queueIdOfPost = new Map<string, string>()
   for (const q of queue) {
     if (q.status !== 'PUBLISHED') continue
     queueOf.set(q.createdPostId!, (queueOf.get(q.createdPostId!) ?? 0) + 1)
     deciderOfPost.set(q.createdPostId!, deciderOf(q.decidedBy))
+    queueIdOfPost.set(q.createdPostId!, q.id)
   }
   const postOf = new Map(posts.map((p) => [p.id, p]))
   /** 🔴 Post 가 없거나 Queue 가 없는 발행 기록 — 원글 레인 밖이거나 유실이다 */
@@ -91,13 +93,14 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
 
   const audits = await db.autoReadyAudit.findMany({
     where: { OR: [{ selectedAt: inDay }, ...(targetIds.length === 0 ? [] : [{ postId: { in: targetIds } }])] },
-    select: { postId: true, defect: true, note: true, selectedAt: true },
+    select: { postId: true, queueId: true, defect: true, note: true, selectedAt: true },
   })
-  const auditedPosts = new Set(audits.map((a) => a.postId))
 
   const evidencePosts: EvidencePost[] = posts.map((p) => {
     const mine = logs.filter((l) => l.targetId === p.id)
     return {
+      postId: p.id,
+      queueId: queueIdOfPost.get(p.id) ?? null,
       publishedAtMs: (p.publishAt ?? p.createdAt).getTime(),
       // 🔴 발행 기록이 여럿이면 전부 표식이 있어야 무인이다 — 중복은 아래 DUP_PUBLISH_LOG 가 따로 잡는다
       unattended: mine.length > 0 && mine.every((l) => l.decidedBy === UNATTENDED_PUBLISH_DECIDED_BY),
@@ -105,7 +108,6 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
       publishLogs: mine.length,
       authorPersonaId: p.personaId,
       decider: deciderOfPost.get(p.id) ?? 'unknown',
-      audited: auditedPosts.has(p.id),
       personaComments: comments.filter((c) => c.postId === p.id).map((c) => ({
         personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null,
       })),
@@ -132,6 +134,8 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
     audits: {
       // 🔴 행마다 — 규칙은 정본 카운트와 같다(`retryableFailureCount` · `overdueAuditCount`)
       rows: audits.map((a) => ({
+        postId: a.postId,
+        queueId: a.queueId,
         judged: a.defect !== null,
         defectYes: a.defect === 'yes',
         retryable: a.defect === null && (a.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX),

@@ -4,8 +4,9 @@
  *
  *   ① 실제 행(StageDecision · Queue · Post · Comment · PersonaActivityLog · AutoReadyAudit)을 심고
  *      `readStageEvidenceFacts` → `judgeStageEvidence` 가 PASS 를 낸다
- *   ② 행 하나씩 비틀면(댓글 없음 · 61분 · 지운 댓글 · 감사 미판정/시한 초과 · 결함 yes · 발행 기록 중복 ·
- *      같은 Persona 두 번 · 표식 없는 발행 · 편수 부족 · HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다
+ *   ② 행 하나씩 비틀면(댓글 없음 · 61분 · 지운 댓글 · 자기 글 댓글 · 감사 미판정/시한 초과 · 결함 yes · 표본 0 ·
+ *      표본이 자동 target 밖 · 발행 기록 중복 · 같은 Persona 두 번 · 표식 없는 발행 · 편수 부족 · 사람 승인만/혼합 ·
+ *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 상한 5 에서 5건 PASS · 6건 FAIL
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
  *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → TRIAL d3 재시험 · 전날 PASS → TRIAL d5 · DB write 0
  *
@@ -184,9 +185,9 @@ try {
   await seedDay()
   const base = await verdictOf(dec)
   check('🟢 실제 행 6조건 → PASS', base.verdict === 'PASS', `${base.verdict} ${base.codes.join(',')}`)
-  check('편수 3 · 무인 3 · 첫 댓글 3 · 감사 대상 3 · 기대 1 · 덮음 1', base.counts.published === 3 && base.counts.unattended === 3
-    && base.counts.firstCommentOk === 3 && base.counts.auditTargets === 3 && base.counts.auditExpected === 1
-    && base.counts.auditCovered === 1, JSON.stringify(base.counts))
+  check('편수 3 · 자동 target 3 · 첫 댓글 3 · 감사 기대 ceil(3×20%)=1 · 표본 1', base.counts.published === 3 && base.counts.autoTargets === 3
+    && base.counts.firstCommentOk === 3 && base.counts.auditExpected === 1
+    && base.counts.auditSampled === 1, JSON.stringify(base.counts))
   const plan = trialPlanOf(dec, base)
   check('🟢 다음 날 계획 = d5 시험 (기반 d3 · PASS)', plan?.target === 'd5' && plan.base === 'd3' && plan.basis === 'PASS', JSON.stringify(plan))
 
@@ -230,8 +231,52 @@ try {
     const d3 = await storeDecision(TRIAL_D3)
     await seedDay(3, 'founder')
     const v = await verdictOf(d3)
-    check('🟢 자동 READY 0 · 전부 사람 검토(founder) · 감사 행 0 → 이유 있는 0 · PASS',
-      v.verdict === 'PASS' && v.counts.auditTargets === 0 && v.counts.humanReviewed === 3, `${v.verdict} ${v.codes.join(',')} ${JSON.stringify(v.counts)}`)
+    check('🔴 🔴 **전부 사람 승인(founder) 3건 · 감사 0 → 승격 물량 0 · FAIL (PUBLISH_NOT_AUTO_READY)**',
+      v.verdict === 'FAIL' && has(v, 'PUBLISH_NOT_AUTO_READY') && v.counts.autoTargets === 0 && v.counts.humanApproved === 3,
+      `${v.verdict} ${v.codes.join(',')} ${JSON.stringify(v.counts)}`)
+  }
+  await counter('🔴 혼합 — 자동 2 · 사람 승인 1(founder) → PUBLISH_NOT_AUTO_READY', 'PUBLISH_NOT_AUTO_READY', async (s) => {
+    await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[2]! }, data: { decidedBy: 'founder' } })
+  })
+  await counter('🔴 감사 표본이 그날 자동 target 밖(전날 글의 감사를 그날 고름) → AUDIT_OUTSIDE_TARGET', 'AUDIT_OUTSIDE_TARGET', async (s) => {
+    const a = await persona(`O-${seq}`)
+    const u = (await prisma.persona.findUniqueOrThrow({ where: { id: a }, select: { userId: true } })).userId
+    const old = new Date(SLOTS[0]!.getTime() - 86_400_000)
+    const post = await prisma.post.create({ data: { boardType: 'FREE', title: '전날 글', content: '전날', source: 'SYSTEM', authorId: u, personaId: a, createdAt: old }, select: { id: true } })
+    const q = await prisma.originalPostApprovalQueue.create({
+      data: { sourceRawContentId: await rawRow(old), status: 'PUBLISHED', draftTitle: '전날 글', draftBody: '전날', gateVerdict: 'PASS', gateResults: {},
+        promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: AUTO_DECIDER, dedupKey: `ev-old-${seq}`, createdPostId: post.id, matchedPersonaId: a },
+      select: { id: true },
+    })
+    // 그날 표본을 지우고 전날 글의 감사를 그날 시각으로 고른다
+    await prisma.autoReadyAudit.delete({ where: { queueId: s.queues[0]! } })
+    await prisma.autoReadyAudit.create({ data: { queueId: q.id, postId: post.id, selectedAtN: 3, selectedTarget: 1, selectedAt: SLOTS[1]!,
+      publishedTitleHash: 'a'.repeat(64), publishedBodyHash: 'b'.repeat(64), stampContractDigest: 'd', defect: 'no',
+      judgedAt: new Date(SLOTS[1]!.getTime() + MIN), auditor: 'machine:fixture', auditContractVersion: 'v', auditModel: 'm', auditPromptVersion: 'p' } })
+  })
+  await counter('🔴 글쓴 Persona 가 자기 글에 댓글 → COMMENT_SELF', 'COMMENT_SELF', async (s) => {
+    const u = (await prisma.persona.findUniqueOrThrow({ where: { id: s.authors[0]! }, select: { userId: true } })).userId
+    await prisma.comment.create({ data: { content: '제 글이에요', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s.posts[0]!, authorId: u,
+      personaId: s.authors[0]!, createdAt: new Date(SLOTS[0]!.getTime() + 30 * MIN) } })
+  }, undefined, personaCommentCapFor('organic'))
+  {
+    await wipe()
+    const d5 = await storeDecision(TRIAL_D3)
+    const s5 = await seedDay()
+    for (let k = 0; k < 4; k += 1) {
+      const o = await persona(`M${k}-${seq}`)
+      const u = (await prisma.persona.findUniqueOrThrow({ where: { id: o }, select: { userId: true } })).userId
+      await prisma.comment.create({ data: { content: `저도요 ${k}`, source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u,
+        personaId: o, createdAt: new Date(SLOTS[0]!.getTime() + (20 + k) * MIN) } })
+    }
+    const v5 = await verdictOf(d5, personaCommentCapFor('organic'))
+    check('🟢 상한 5 — 한 글에 서로 다른 Persona 5건(첫 1 + 추가 4) → PASS', v5.verdict === 'PASS', `${v5.verdict} ${v5.codes.join(',')}`)
+    const o6 = await persona(`M6-${seq}`)
+    const u6 = (await prisma.persona.findUniqueOrThrow({ where: { id: o6 }, select: { userId: true } })).userId
+    await prisma.comment.create({ data: { content: '여섯 번째', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u6,
+      personaId: o6, createdAt: new Date(SLOTS[0]!.getTime() + 40 * MIN) } })
+    const v6 = await verdictOf(d5, personaCommentCapFor('organic'))
+    check('🔴 상한 5 — 6건 → COMMENT_OVER_CAP', v6.verdict === 'FAIL' && has(v6, 'COMMENT_OVER_CAP'), `${v6.verdict} ${v6.codes.join(',')}`)
   }
   await counter('🔴 같은 Persona 가 한 글에 두 번 → DUP_COMMENT', 'DUP_COMMENT', async (s) => {
     const u = (await prisma.persona.findUniqueOrThrow({ where: { id: s.commenters[0]! }, select: { userId: true } })).userId
@@ -257,10 +302,10 @@ try {
   await counter('🔴 Queue 가 PUBLISHED 가 아니다(1:1 깨짐) → DUP_QUEUE', 'DUP_QUEUE', async (s) => {
     await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[1]! }, data: { status: 'APPROVED' } })
   })
-  await counter('🔴 표식 없는 발행(operator — 수동 · 표식 이전) → PUBLISH_NOT_UNATTENDED', 'PUBLISH_NOT_UNATTENDED', async (s) => {
+  await counter('🔴 표식 없는 발행(operator — 수동 · 표식 이전)은 자동 target 이 아니다 → PUBLISH_NOT_AUTO_READY', 'PUBLISH_NOT_AUTO_READY', async (s) => {
     await prisma.personaActivityLog.update({ where: { id: s.logs[0]! }, data: { decidedBy: 'operator' } })
   })
-  await counter('🔴 2건만 냈다 → PUBLISH_SHORT', 'PUBLISH_SHORT', async (s) => {
+  await counter('🔴 2건만 냈다 → PUBLISH_NOT_AUTO_READY', 'PUBLISH_NOT_AUTO_READY', async (s) => {
     await prisma.personaActivityLog.delete({ where: { id: s.logs[2]! } })
     await prisma.autoReadyAudit.deleteMany({ where: { postId: s.posts[2]! } })
     await prisma.comment.deleteMany({ where: { postId: s.posts[2]! } })

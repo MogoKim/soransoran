@@ -52,14 +52,19 @@ const HOUR = 3600_000
 const MIN = 60_000
 
 // ── ① 사실 fixture ──
-/** 🔴 기준선 — 자동 READY 글 · 첫 글만 감사 행이 있다(정본 표본 ceil(3×0.2)=1) */
+/** 🔴 기준선 — 자동 READY(AUTO_DECIDER) 로 무인 발행된 글 · 감사 표본은 첫 글 하나(정본 표본 ceil(3×0.2)=1) */
 const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
+  postId: `p-${i}`, queueId: `q-${i}`,
   publishedAtMs: T0 + i * 4 * HOUR, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `author-${i}`,
-  decider: 'auto', audited: i === 0,
+  decider: 'auto',
   personaComments: [{ personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN, topLevel: true }],
   ...o,
 })
-const JUDGED = { judged: true, defectYes: false, retryable: false, overdue: false }
+/** 🔴 감사 표본 한 행 — 그날 자동 target(postId·queueId)에 속해야 표본으로 센다 */
+const sample = (i: number, o: Partial<{ postId: string; queueId: string; judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean }> = {}) => ({
+  postId: `p-${i}`, queueId: `q-${i}`, judged: true, defectYes: false, retryable: false, overdue: false, ...o,
+})
+const JUDGED = sample(0)
 const CLEAN_AUDITS = {
   rows: [JUDGED], globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
 }
@@ -102,12 +107,19 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 결정 공개 단계 ≠ 판정 단계 → FAIL', judge(facts('d3', {
     decision: { kstDate: D, state: 'TRIAL', release: 'd1', decidedBy: DECISION_WRITER } })), 'DECISION_STAGE_MISMATCH')
 
-  // ② 발행
-  failWith('🔴 dailyTarget 보다 적게 냈다(2/3) → FAIL', judge(facts('d3', { posts: [post(0), post(1)] })), 'PUBLISH_SHORT')
+  // ② 발행 — 🔴 자동 READY 로 무인 발행된 글만 자동 target 이다(사람 승인 글은 0건)
+  failWith('🔴 자동 target 이 목표보다 적다(2/3) → FAIL', judge(facts('d3', { posts: [post(0), post(1)] })), 'PUBLISH_NOT_AUTO_READY')
   failWith('🔴 dailyTarget 보다 많이 냈다(4/3) → FAIL', judge(facts('d3', { posts: [post(0), post(1), post(2), post(3)] })), 'PUBLISH_OVER')
   const manual = judge(facts('d3', { posts: [post(0), post(1, { unattended: false }), post(2)] }))
-  failWith('🔴 무인 표식 없는 발행(수동 · 표식 이전)이 섞였다 → FAIL', manual, 'PUBLISH_NOT_UNATTENDED')
-  check('🔴 그 발행은 편수에 세지 않는다 → PUBLISH_SHORT 도 함께', has(manual, 'PUBLISH_SHORT'))
+  failWith('🔴 자동 READY 글이라도 무인 표식 없이(수동) 나갔으면 자동 target 이 아니다 → FAIL', manual, 'PUBLISH_NOT_AUTO_READY')
+  check('그때 counts — 자동 target 2', manual.counts.autoTargets === 2, JSON.stringify(manual.counts))
+  const humanOnly = judge(facts('d3', { posts: [0, 1, 2].map((i) => post(i, { decider: 'human', personaComments: [] })), audits: { ...CLEAN_AUDITS, rows: [] } }))
+  failWith('🔴 🔴 **전부 사람 승인 글 3건 · 감사 0 → 승격 물량 0 · FAIL (앞판은 PASS 였다)**', humanOnly, 'PUBLISH_NOT_AUTO_READY')
+  check('그때 counts — 자동 target 0 · 사람 승인 3', humanOnly.counts.autoTargets === 0 && humanOnly.counts.humanApproved === 3, JSON.stringify(humanOnly.counts))
+  const mixed = judge(facts('d3', { posts: [post(0), post(1), post(2, { decider: 'human' })] }))
+  failWith('🔴 혼합(자동 2 · 사람 1) — 사람 글은 세지 않는다 → FAIL', mixed, 'PUBLISH_NOT_AUTO_READY')
+  const d5mixed = judgeStageEvidence(D, 'd5', facts('d5', { posts: [post(0), post(1), post(2), post(3, { decider: 'human' }), post(4, { decider: 'human' })] }), side())
+  failWith('🔴 D5 혼합(자동 3 · 사람 2) → FAIL', d5mixed, 'PUBLISH_NOT_AUTO_READY')
 
   // ③ 첫 댓글
   failWith('🔴 09:30 글 Persona 댓글 없음 → FAIL (09-29 반례)', judge(facts('d3', {
@@ -149,29 +161,45 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     personaComments: [{ personaId: 'c0', createdAtMs: T0 + 5 * MIN, topLevel: false }] }), post(1), post(2)] })), 'COMMENT_MISSING')
   failWith('🔴 발행 전 시각의 댓글은 시한 안이 아니다', judge(facts('d3', { posts: [post(0, {
     personaComments: [{ personaId: 'c0', createdAtMs: T0 - MIN, topLevel: true }] }), post(1), post(2)] })), 'COMMENT_LATE')
+  const humanNoComment = judge(facts('d3', { posts: [post(0), post(1), post(2), post(3, { decider: 'human', personaComments: [] })] }))
+  check('첫 댓글 보장은 자동 target 글만 본다 — 사람 승인 글의 댓글 0 은 COMMENT_MISSING 이 아니다(그 날은 편수 초과로 FAIL)',
+    !has(humanNoComment, 'COMMENT_MISSING') && has(humanNoComment, 'PUBLISH_OVER'), humanNoComment.codes.join(','))
+  failWith('🔴 추가 댓글 계약은 사람 승인 글에도 든다 — 같은 Persona 2건 → FAIL', judge(facts('d3', {
+    posts: [post(0), post(1), post(2), post(3, { decider: 'human', personaComments: [
+      { personaId: 'c9', createdAtMs: T0 + 5 * MIN, topLevel: true }, { personaId: 'c9', createdAtMs: T0 + 9 * MIN, topLevel: true }] })] })), 'DUP_COMMENT')
 
-  // ④ 감사
-  // ④ 감사 — 대상 가르기 · 표본 수 · 행마다
-  const allAuto = (audited: boolean[]) => [0, 1, 2].map((i) => post(i, { audited: audited[i] ?? false }))
-  const zero = judge(facts('d3', { posts: allAuto([false, false, false]), audits: { ...CLEAN_AUDITS, rows: [] } }))
-  failWith('🔴 🔴 **자동 READY 글 3건 · 감사 행 0 → COVERAGE_ZERO FAIL (selected 0 을 PASS 로 삼키지 않는다)**', zero, 'AUDIT_COVERAGE_ZERO')
-  check('그때 counts — 대상 3 · 기대 1 · 덮음 0', zero.counts.auditTargets === 3 && zero.counts.auditExpected === 1 && zero.counts.auditCovered === 0, JSON.stringify(zero.counts))
-  failWith('🔴 감사 행은 있는데 그날 대상 글이 아니다(다른 글) → COVERAGE_ZERO', judge(facts('d3', { posts: allAuto([false, false, false]) })), 'AUDIT_COVERAGE_ZERO')
-  const d10Posts = Array.from({ length: 10 }, (_, i) => post(i, { audited: i === 0, publishedAtMs: T0 + i * HOUR,
+  // ④ 감사 — 🔴 정본 표본 계약: expected = auditTarget(자동 target N) = ceil(N×20%) · 전수 감사 아님
+  const zero = judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [] } }))
+  failWith('🔴 🔴 **자동 target 3 · 감사 표본 0 → COVERAGE_ZERO FAIL (selected 0 을 PASS 로 삼키지 않는다)**', zero, 'AUDIT_COVERAGE_ZERO')
+  check('그때 counts — 자동 target 3 · 기대 1 · 표본 0', zero.counts.autoTargets === 3 && zero.counts.auditExpected === 1 && zero.counts.auditSampled === 0, JSON.stringify(zero.counts))
+  const other = judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(9)] } }))
+  failWith('🔴 표본이 그날 자동 target 집합 밖(다른 글) → OUTSIDE_TARGET', other, 'AUDIT_OUTSIDE_TARGET')
+  check('그 행은 표본으로 세지 않는다 → COVERAGE_ZERO 도 함께', has(other, 'AUDIT_COVERAGE_ZERO'))
+  const wrongQueue = judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { queueId: 'q-9' })] } }))
+  failWith('🔴 postId 는 맞는데 queueId 가 다르다 → OUTSIDE_TARGET', wrongQueue, 'AUDIT_OUTSIDE_TARGET')
+  const humanRow = judge(facts('d3', { posts: [post(0), post(1), post(2)], audits: { ...CLEAN_AUDITS, rows: [sample(0), sample(3)] } }))
+  failWith('🔴 사람 승인 글(자동 target 아님)의 감사 행은 표본이 아니다 → OUTSIDE_TARGET', humanRow, 'AUDIT_OUTSIDE_TARGET')
+  // 정본 표본 수 — N=3→1 · N=5→1 · N=10→2
+  check('expected 정본 — N=3→1 · N=5→1 · N=10→2 · N=0→0',
+    judge(facts('d3')).counts.auditExpected === 1
+    && judgeStageEvidence(D, 'd5', facts('d5'), side()).counts.auditExpected === 1
+    && judgeStageEvidence(D, 'd10', facts('d10'), side()).counts.auditExpected === 2
+    && humanOnly.counts.auditExpected === 0)
+  check('🟢 🔴 **전수 감사가 아니다 — D5 자동 5건 · 표본 1 → PASS**', judgeStageEvidence(D, 'd5', facts('d5'), side()).verdict === 'PASS')
+  const d10Posts = Array.from({ length: 10 }, (_, i) => post(i, { publishedAtMs: T0 + i * HOUR,
     personaComments: [{ personaId: `c${i}`, createdAtMs: T0 + i * HOUR + 5 * MIN, topLevel: true }] }))
-  const short = judgeStageEvidence(D, 'd10', { ...facts('d10'), posts: d10Posts }, side())
-  check('⬚ D10 자동 10건 · 기대 ceil(10×0.2)=2 · 덮음 1 → COVERAGE_SHORT (PASS 아님)',
-    short.verdict === 'UNKNOWN' && has(short, 'AUDIT_COVERAGE_SHORT') && short.counts.auditExpected === 2, `${short.verdict} ${short.codes.join(',')}`)
-  const human = judge(facts('d3', { posts: [0, 1, 2].map((i) => post(i, { decider: 'human', audited: false })), audits: { ...CLEAN_AUDITS, rows: [] } }))
-  check('🟢 자동 READY 0 · 전부 사람이 발행 전 검토 → 감사 대상 없음(이유 있는 0) · PASS',
-    human.verdict === 'PASS' && human.counts.auditTargets === 0 && human.counts.humanReviewed === 3, `${human.verdict} ${human.codes.join(',')}`)
-  failWith('🔴 결정자를 모르는 글(빈 값 · 확인 안 된 machine:*) → AUDIT_TARGET_UNKNOWN',
-    judge(facts('d3', { posts: [post(0), post(1, { decider: 'unknown' }), post(2)] })), 'AUDIT_TARGET_UNKNOWN')
-  failWith('🔴 행 — 판정 전 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [{ ...JUDGED, judged: false }] } })), 'AUDIT_UNJUDGED')
-  failWith('🔴 행 — 시한 초과 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [{ ...JUDGED, judged: false, overdue: true }] } })), 'AUDIT_OVERDUE')
-  failWith('🔴 행 — 재시도 가능 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [{ ...JUDGED, judged: false, retryable: true }] } })), 'AUDIT_RETRYABLE')
+  const d10 = (rows: ReturnType<typeof sample>[]) => judgeStageEvidence(D, 'd10', { ...facts('d10'), posts: d10Posts, audits: { ...CLEAN_AUDITS, rows } }, side())
+  failWith('🔴 D10 자동 10 · 기대 2 · 표본 1 → COVERAGE_SHORT FAIL', d10([sample(0)]), 'AUDIT_COVERAGE_SHORT')
+  failWith('🔴 같은 글의 감사 행 2개는 표본 1개다(중복 없이 센다) → SHORT', d10([sample(0), sample(0)]), 'AUDIT_COVERAGE_SHORT')
+  check('🟢 D10 표본 2(서로 다른 글) → PASS', d10([sample(0), sample(5)]).verdict === 'PASS', d10([sample(0), sample(5)]).codes.join(','))
+  const unknownDecider = judge(facts('d3', { posts: [post(0), post(1, { decider: 'unknown' }), post(2)] }))
+  check('🔴 결정자를 모르는 글(빈 값 · 확인 안 된 machine:*) → AUDIT_TARGET_UNKNOWN · 자동 target 에도 못 든다',
+    has(unknownDecider, 'AUDIT_TARGET_UNKNOWN') && has(unknownDecider, 'PUBLISH_NOT_AUTO_READY') && unknownDecider.verdict === 'FAIL', unknownDecider.codes.join(','))
+  failWith('🔴 표본 — 판정 전 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false })] } })), 'AUDIT_UNJUDGED')
+  failWith('🔴 표본 — 시한 초과 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, overdue: true })] } })), 'AUDIT_OVERDUE')
+  failWith('🔴 표본 — 재시도 가능 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, retryable: true })] } })), 'AUDIT_RETRYABLE')
   failWith('🔴 표 전체 판정 시한 초과 감사 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalOverdue: 1 } })), 'AUDIT_OVERDUE')
-  failWith('🔴 행 — 결함 yes → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [{ ...JUDGED, defectYes: true }] } })), 'AUDIT_DEFECT')
+  failWith('🔴 표본 — 결함 yes → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { defectYes: true })] } })), 'AUDIT_DEFECT')
   failWith('🔴 표 전체에 결함 yes(끈적) → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalDefectYes: 1 } })), 'AUDIT_DEFECT')
   failWith('🔴 재시도 가능 감사 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalRetryable: 1 } })), 'AUDIT_RETRYABLE')
   failWith('🔴 글이 사라진 자동 발행 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalMissingPosts: 1 } })), 'AUDIT_MISSING_POST')
