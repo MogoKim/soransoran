@@ -19,11 +19,13 @@
 import { randomUUID } from 'node:crypto'
 
 import {
-  classifyReservations, judgeSettle, judgeSpend, ledgerDateOf, runPaidCountOf, tallyOf,
+  classifyReservations, judgeSettle, judgeSpend, ledgerDateOf, previousLedgerDate, runPaidCountOf, tallyOf,
   type BlockCode, type BudgetLimits, type LedgerEntry, type LedgerStage,
   type OpenReservation, type SpendProtect,
 } from '../../src/lib/llm-ledger'
-import { supplySpendProtectAt, type SupplyRunKind } from '../../src/lib/supply-scheduled-reserve'
+import {
+  SCHEDULED_COST_LOOKBACK_DAYS, supplySpendProtectAt, type SupplyRunKind,
+} from '../../src/lib/supply-scheduled-reserve'
 import { PRICING_VERSION, costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
   addOpenReservation, appendLedgerLine, clearOpenReservation, defaultLedgerDir, ledgerPathOf,
@@ -145,18 +147,35 @@ export type SupplySessionConfig = {
    *       `supplyProtectFromEnv` 를 쓴다 — 호출부가 끄거나 바꿀 수 있으면 그것이 우회로다.
    *    다른 디렉터리(댓글 루프 · 사후 감사 · 시험 임시 장부)는 이 칸이 없으면 보호 없음이다.
    */
-  protectAt?: (now: Date) => ProtectDecision
+  protectAt?: (now: Date, ctx: ProtectContext) => ProtectDecision
 }
 
-/** 보호 판정 한 건 — 🔴 정기 회차면 `protect` 가 `null` 이다 */
-export type ProtectDecision = { kind: SupplyRunKind; why: string; protect: SpendProtect | null }
+/**
+ * 보호 판정 한 건. `protect` 가 `null` 이면 보호 없음(공급 장부 밖의 시험·다른 장부 전용).
+ * 🔴 `slot` 은 정기 회차의 슬롯 이름 — 장부 줄의 `runSlot` 으로 남아 다음 날의 실측이 된다.
+ */
+export type ProtectDecision = { kind: SupplyRunKind; why: string; slot?: string | null; protect: SpendProtect | null }
+
+/**
+ * 🔴 **보호 판정이 받는 장부 문맥** — 전부 **잠금 안에서** 읽은 것이다.
+ *    `historyEntries` 는 어제까지 `SCHEDULED_COST_LOOKBACK_DAYS` 일 줄이고, 못 읽었으면 `null` 이다.
+ */
+export type ProtectContext = {
+  todayEntries: readonly LedgerEntry[]
+  historyEntries: readonly LedgerEntry[] | null
+  dailyUsd: number | null
+}
 
 /**
  * 🔴 **공급 장부의 보호 판정 — 운영 경로는 이것 하나다.**
  *    정기 여부는 launchd 가 넣은 `XPC_SERVICE_NAME` 과 **벽시계**로만 정한다(정본 `supply-scheduled-reserve`).
+ *    슬롯 몫은 장부의 최근 정기 회차 실측에서 온다(표본이 모자라면 보수 기본값).
  */
-export function supplyProtectFromEnv(env: NodeJS.ProcessEnv): (now: Date) => ProtectDecision {
-  return (now) => supplySpendProtectAt({ env, now: SUPPLY_PROTECT_TEST_SEAM.clock?.() ?? now })
+export function supplyProtectFromEnv(env: NodeJS.ProcessEnv): (now: Date, ctx: ProtectContext) => ProtectDecision {
+  return (now, ctx) => supplySpendProtectAt({
+    env, now: SUPPLY_PROTECT_TEST_SEAM.clock?.() ?? now,
+    todayEntries: ctx.todayEntries, historyEntries: ctx.historyEntries, dailyUsd: ctx.dailyUsd,
+  })
 }
 
 /**
@@ -220,7 +239,12 @@ export class SupplyLlmSession {
   private readonly now: () => Date
   private readonly io: LedgerIo
   /** 🔴 정기 회차 몫 보호 — 공급 장부면 언제나 켜져 있다 */
-  private readonly protectAt: ((now: Date) => ProtectDecision) | null
+  private readonly protectAt: ((now: Date, ctx: ProtectContext) => ProtectDecision) | null
+  /**
+   * 🔴 **지난 날 장부 캐시** — 정기 실측을 모으려고 읽은 어제 이전 파일. 세션 동안 한 번만 읽는다.
+   *    오늘 파일은 캐시하지 않는다 — 요청마다 잠금 안에서 새로 읽은 것을 쓴다.
+   */
+  private readonly pastDays = new Map<string, LedgerRead>()
   /** 마지막 판정의 실행 종류 — 사람이 읽는 줄에만 쓴다 */
   private lastKind: ProtectDecision | null = null
   /** 🔴 이 세션의 표식 — pid 가 재사용돼도 갈린다 */
@@ -361,6 +385,8 @@ export class SupplyLlmSession {
 
     // ── ③ 🔴 읽기·판정·예약 기록을 **한 잠금 안에서** 한다 ──
     let verdict: ReturnType<typeof judgeSpend>
+    /** 🔴 요청 전 판정이 정한 실행 종류 · 슬롯 — 예약 줄과 정산 줄에 똑같이 남긴다 */
+    let tag: { runKind: SupplyRunKind; runSlot: string | null } | null = null
     try {
       verdict = this.io.withLock(this.dir, () => {
         const read = this.io.readDay(path)
@@ -387,8 +413,13 @@ export class SupplyLlmSession {
          *    🔴 시각은 `startedAt` 이다 — 집계하는 장부 파일(`path`)과 **같은 KST 날짜**여야
          *       자정 경계에서 어제 장부를 오늘 슬롯으로 판정하는 일이 없다.
          */
-        const decided = this.protectAt === null ? null : this.protectAt(startedAt)
+        const decided = this.protectAt === null ? null : this.protectAt(startedAt, {
+          todayEntries: read.ok ? read.entries : [],
+          historyEntries: read.ok ? this.historyBefore(date) : null,
+          dailyUsd: this.limits.dailyUsd,
+        })
         this.lastKind = decided
+        tag = decided === null ? null : { runKind: decided.kind, runSlot: decided.slot ?? null }
         const v = judgeSpend({
           protect: decided?.protect ?? null,
           limits: this.limits,
@@ -403,6 +434,7 @@ export class SupplyLlmSession {
         })
         this.write(path, {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
+          ...(tag ?? {}),
           status: v.ok ? 'reserved' : 'blocked',
           blockCode: v.ok ? null : v.code,
           countedInputTokens: counted.inputTokens,
@@ -471,6 +503,8 @@ export class SupplyLlmSession {
       this.io.withLock(this.dir, () => {
         this.write(path, {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
+          // 🔴 정산 줄도 같은 표식을 싣는다 — 접을 때 이 줄이 이기므로, 빠뜨리면 실측에서 사라진다
+          ...(tag ?? {}),
           status: settled.status,
           blockCode: null,
           countedInputTokens: counted.inputTokens,
@@ -572,6 +606,26 @@ export class SupplyLlmSession {
       endedAt: null,
       errorCode: null,
     }
+  }
+
+  /**
+   * 🔴 **정기 실측용 장부 이력** — 어제부터 뒤로 `SCHEDULED_COST_LOOKBACK_DAYS` 일(오늘은 넣지 않는다).
+   *    지난 날 하나라도 못 읽으면 `null` 이다 → 보수 기본값(크게 떼어 둔다). 반쪽 이력으로 평균을 내지 않는다.
+   */
+  private historyBefore(date: string): LedgerEntry[] | null {
+    const out: LedgerEntry[] = []
+    let d = date
+    for (let i = 0; i < SCHEDULED_COST_LOOKBACK_DAYS; i += 1) {
+      d = previousLedgerDate(d)
+      let r = this.pastDays.get(d)
+      if (r === undefined) {
+        r = this.io.readDay(ledgerPathOf(this.dir, d))
+        this.pastDays.set(d, r)
+      }
+      if (!r.ok) return null
+      out.push(...r.entries)
+    }
+    return out
   }
 
   private write(path: string, entry: LedgerEntry): void {

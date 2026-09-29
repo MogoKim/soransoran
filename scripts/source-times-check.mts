@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 
 import { sourceTimesOf, thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
 import { NO_SOURCE_TIMES, THIN_COLUMNS } from '../src/lib/micro-seed-82cook-thin'
@@ -179,6 +180,8 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
         // 🔴 v2 계획·생성은 Gemini 를 쓴다 — 키가 없으면 러너가 시작 전에 멈춘다
         GEMINI_API_KEY: 'fixture-fake-gemini-key',
         NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+        // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+        ...LAST_SLOT_SCHEDULED_ENV,
         // 🔴 시험용 임시 값. 운영 예산이 아니다
         SORAN_LLM_DAILY_BUDGET_USD: '1000',
         SORAN_LLM_RESERVE_HEADROOM: '1.5',

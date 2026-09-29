@@ -29,6 +29,7 @@ import {
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -344,6 +345,8 @@ async function worksetAxisRunner(
       ...process.env, ...fakeKeys, HOME: H,
       SORAN_SUPPLY_PROCESS_ENABLED: 'true',
       NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
+      // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+      ...LAST_SLOT_SCHEDULED_ENV,
       FAKE_PROVIDER_LOG: fakeLog,
     },
   })
@@ -458,6 +461,8 @@ async function duplicateSourceRunner(
         SORAN_LLM_RUN_REQUEST_CAP: '20',
         FAKE_PROVIDER_JUDGE_DECISION: 'AUTO_SEED',
         NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
+        // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+        ...LAST_SLOT_SCHEDULED_ENV,
       },
     })
     const out = `${child.stdout ?? ''}${child.stderr ?? ''}`
