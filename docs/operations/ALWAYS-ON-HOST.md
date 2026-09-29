@@ -1,18 +1,44 @@
 # 상시 실행 호스트 — 의존성 목록 · 이전 묶음 · 전환/되돌리기
 
-> 작성 2026-09-29 · Track C (M3 상시 실행)
+> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-09-29 — 범위를 D100 레인 하나로 좁힘 · 기종 무관(AC 필수)
 > 코드 정본: `scripts/host-migrate.mts` (CLI) · `scripts/lib/host-migrate.mts` (판정) · `scripts/host-migrate-check.mts` (검사)
 > 🔴 이 문서의 숫자는 **2026-09-29 측정 스냅샷**이다. 현재값은 `npm run host:migrate` 로 다시 잰다.
 
-## 1. 왜 필요한가
+## 1. 왜 필요한가 · 이번 범위
 
-무인 루프 13개(공급 처리 · 네이버 수집 2 · 발행 heartbeat · 댓글 루프 · 자동 READY 감사 ·
-단계 controller · 복구 · keep-awake · 매거진 4)가 **창업자 노트북의 launchd gui 도메인**에서 돈다.
+D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에서 돈다.
 노트북이 잠들거나, 덮개가 닫히거나, 로그아웃하거나, 네트워크가 끊기면 전부 선다.
 `keep-awake`(caffeinate `-i -s`)는 임시 bridge 다 — `-s` 는 AC 전원에서만 듣는다.
 
-이 문서는 ① 지금 무엇에 기대고 있는지(측정/추정 구분), ② 그것을 전용 Mac 한 대로 옮기는 묶음,
-③ 두 호스트가 동시에 돌지 않게 하는 구조, ④ 창업자가 내려야 할 결정 하나를 적는다.
+**대상은 상시 켜 둘 Mac 한 대다 — 기종은 묻지 않는다.** 배터리 있는 MacBook 도 된다.
+단 **D100 운영 조건은 AC 전원**이다: 사전 점검은 `pmset -g batt`(못 읽으면 `pmset -g ps`)를 읽어
+"AC 에 꽂혀 있음(charging · charged · AC attached)" 이면 통과, "배터리로 돌고 있음(discharging · Battery Power)" 이면 실패로 본다.
+
+### 1.1 첫 이전 범위 = D100 레인 하나 (단일 정본 `D100_LANE_LABELS`)
+
+| job | 무엇 |
+|---|---|
+| `com.soransoran.navercafe-collect-wgang-multi` | 네이버 수집 |
+| `com.soransoran.navercafe-collect-remonterrace-multi` | 네이버 수집 |
+| `com.soransoran.supply-process` | 공급 처리 |
+| `com.soransoran.original-post-runner` | 발행 heartbeat |
+| `com.soransoran.persona-comment-runner` | 댓글 루프 |
+| `com.soransoran.auto-ready-audit` | 자동 READY 감사 |
+| `com.soransoran.stage-controller` | 단계 controller |
+| `com.soransoran.runner-recover` | 러너 복구 |
+| `com.soransoran.keep-awake` | 잠자기 방지 |
+
+묶음 · quiesce · 설치 · 되돌리기 · 소유/handoff 표식이 **전부 이 목록 하나에서 나온다**(`scripts/lib/host-migrate.mts`).
+판정 함수가 스스로 목록으로 거른다 — 부르는 쪽이 걸러 주기를 믿지 않는다.
+
+### 1.2 범위 밖 — 원 호스트에 그대로 남는다 (기본 거부)
+
+- **매거진 전부**: `magazine-producer` · `magazine-watch` · `magazine-graph-watch` · `magazine-auto-register` job,
+  매거진 runtime 작업트리(`~/Documents/soransoran-magazine-runtime`), 매거진 상태(`Application Support/soransoran/magazine-*` ·
+  `regen-packets`), 매거진 로그, 매거진 자격증명(ChatGPT 프로필 `soransoran-chatgpt*` · claude CLI).
+  원 호스트의 매거진 job 은 **loaded 그대로, plist 제자리**다. 묶음은 매거진 plist 를 **열어 보지도 않는다**.
+- **꺼 둔 82cook job**: `supply-collect-82cook-thin` · `raw-collect-82cook` (로그도 싣지 않는다).
+- **개발용·모르는 job**: allowlist 에 없으면 이름을 몰라도 건드리지 않는다.
 
 ## 2. 의존성 목록 (2026-09-29 측정)
 
@@ -22,18 +48,18 @@
 
 | 항목 | 현재 | 위험 |
 |---|---|---|
-| 기계 | [측정] `Mac15,13` (MacBook Air 15", arm64) · macOS 15.7.5 | 노트북 — 배터리·덮개가 있다 |
-| 전원 | [측정] `pmset -g batt` 배터리 23% 방전 중 · 9/28~29 pmset 로그 전원 표기 93건 중 81건이 `Using Batt` | 배터리에서는 caffeinate `-s` 무효 |
+| 기계 | [측정] `Mac15,13` (MacBook Air 15", arm64) · macOS 15.7.5 | 배터리·덮개가 있다 — 그 자체는 괜찮다. **AC 에 꽂혀 있지 않은 시간**이 문제다 |
+| 전원 | [측정] `pmset -g batt` 배터리 23% 방전 중(09/29 새벽) · 9/28~29 pmset 로그 전원 표기 93건 중 81건이 `Using Batt` | 배터리에서는 caffeinate `-s` 무효 |
 | 잠자기 | [측정] 9/29 03:10 `Software Sleep` → 05:20 사용자 깨움까지 **2시간 10분 잠듦**. 그 사이 DarkWake 만 8회(각 2~5초) | 이 창의 예약 job 은 돌지 않거나 깨어난 뒤 몰려서 돈다 |
 | 잠자기 빈도 | [측정] 9/26 14회 · 9/27 32회 · 9/28 23회 Sleep 진입 | — |
-| pmset | [측정] `sleep 0`(Chrome·caffeinate 등 assertion 때문) · `standby 1` · `powernap 1` · `hibernatemode 3` · `womp 0` · `autorestart` 항목 없음 | 정전 뒤 자동으로 켜지지 않는다 |
+| pmset | [측정] `sleep 0`(Chrome·caffeinate 등 assertion 때문) · `standby 1` · `powernap 1` · `hibernatemode 3` · `womp 0` · `autorestart` 항목 없음 | 배터리 없는 Mac 이면 정전 뒤 자동으로 켜지지 않는다 |
 | keep-awake | [측정] `com.soransoran.keep-awake` pid 상주, `PreventSystemSleep` assertion 보유 | [추정] 덮개 닫힘(clamshell)·배터리 잠자기는 막지 못한다 |
 
 ### 2.2 로그인 세션
 
 | 항목 | 현재 | 위험 |
 |---|---|---|
-| 도메인 | [측정] 13개 job 전부 `~/Library/LaunchAgents` (gui/501) | [추정] 로그아웃하면 전부 내려간다 |
+| 도메인 | [측정] D100 9개 · 매거진 4개 job 전부 `~/Library/LaunchAgents` (gui/501) | [추정] 로그아웃하면 전부 내려간다 |
 | 자동 로그인 | [측정] `autoLoginUser` 없음 | [추정] 재부팅 뒤 **누군가 로그인할 때까지 job 0개** |
 | FileVault | [측정] Off | 자동 로그인을 켤 수 있는 상태(FileVault 가 켜져 있으면 macOS 가 자동 로그인을 막는다) |
 
@@ -45,8 +71,7 @@
 | generativelanguage.googleapis.com | 공급 처리 · 댓글 · 감사 (Gemini) | [측정] 443 연결됨 |
 | api.anthropic.com · api.openai.com | 공급 LLM 경로 | [측정] 443 연결됨 |
 | cafe.naver.com · nid.naver.com | 네이버 수집 2개 | [측정] 443 연결됨 · [추정] 새 기기·IP 에서 세션 쿠키가 무효가 될 수 있다(사람이 다시 로그인) |
-| www.82cook.com | 82cook 수집 | [측정] 443 연결됨 |
-| github.com | runtime clone · `runtime:deploy` fetch · 매거진 PR | [측정] 443 연결됨 |
+| github.com | runtime clone · `runtime:deploy` fetch | [측정] 443 연결됨 |
 | hooks.slack.com | 알림 | [측정] 443 연결됨 |
 | sheets.googleapis.com · oauth2.googleapis.com | micro-seed 시트 | [측정] 443 연결됨 |
 | Wi-Fi 끊김 | 전부 | [추정] 잠에서 깬 직후 네트워크가 늦게 붙어 회차가 exit 1 로 끝나는 모양이 반복된다 |
@@ -60,19 +85,18 @@
 | Slack webhook | [측정] `~/.config/soransoran/slack.env` (0600) | 🔐 싣는다 |
 | GitHub | [추정] `gh` 토큰은 Keychain | ✋ 대상에서 `gh auth login` |
 | gcloud ADC | [측정] `~/.config/gcloud/application_default_credentials.json` 존재 | ✋ 대상에서 다시 로그인(refresh token 을 두 기기가 나눠 쓰지 않는다) |
-| ChatGPT 자동화 프로필 | [측정] `~/Library/Application Support/soransoran-chatgpt-auto` | ✋ 매거진 runbook 절차 |
-| claude CLI | [측정] `~/.local/bin/claude` (매거진 plist PATH) | ✋ 대상에서 설치·로그인 |
+| ChatGPT 프로필 · claude CLI | [측정] `~/Library/Application Support/soransoran-chatgpt*` · `~/.local/bin/claude` | ⚪ 매거진 전용 — 이번 범위 밖, 싣지 않는다 |
 | 옛 env 사본 9개 · `env-backup` | [측정] 운영 디렉터리 | ⚪ 싣지 않는다 — 비밀을 더 퍼뜨리지 않는다 |
 
 ### 2.5 절대경로 · nvm
 
-- [측정] 설치 plist 13개 전부가 `/Users/yanadoo/...` 를 박고 있다 — runtime 경로, 로그 경로, 매거진 runtime, `HOME`, `PATH`.
+- [측정] 설치 plist 13개 전부가 `/Users/yanadoo/...` 를 박고 있다 — runtime 경로, 로그 경로, `HOME`, `PATH`(매거진 4개는 매거진 runtime 도).
 - [측정] node 는 nvm `v24.14.0` 절대경로(`…/.nvm/versions/node/v24.14.0/bin/npx`)로 박혀 있다.
   [추정] nvm 으로 node 를 올리거나 지우면 job 전부가 `npx` 를 못 찾고 죽는다 — launchd PATH 에는 nvm 이 없다.
 - [측정] env 키 중 `SORAN_NAVERCAFE_SESSION_PATH` 의 값이 홈 경로다 — 대상 홈으로 바꿔 써야 한다.
 - [측정] runtime 배포기·격리 검사가 `join(homedir(), 'Documents', 'soransoran-runtime')` 를 박아 두었다 —
-  대상에서도 **홈 아래 같은 배치**(`~/Documents/soransoran` · `-runtime` · `-magazine-runtime`)를 지킨다.
-- [측정] runtime HEAD = pin = `7d29dbf`. 매거진 runtime HEAD = `ab17ca0`(분리되지 않은 `main` 브랜치).
+  대상에서도 **홈 아래 같은 배치**(`~/Documents/soransoran` · `-runtime`)를 지킨다. 대상에는 매거진 runtime 을 만들지 않는다.
+- [측정] runtime HEAD = pin = `7d29dbf`.
 
 ### 2.6 재부팅하면
 
@@ -83,20 +107,21 @@
 ### 2.7 측정 중 발견 (다른 레인)
 
 - [측정] 2026-09-29 07:35:21 KST `~/Library/LaunchAgents/com.soransoran.magazine-auto-register.plist` 가
-  **23바이트 JSON(`[{"Hour":1,"Minute":0}]`)으로 덮여 있다**. 같은 날 07:3x 의 plan 에서는 정상 plist 였다.
-  launchctl 은 아직 옛 설정을 물고 있지만(`last exit 1`), 다음 로그인·재부팅 때 이 job 은 올라오지 못한다.
-  매거진 레인 소유라 이 작업에서는 고치지 않았다. export/verify 가 이것을 `PLIST` 문제로 잡는다.
+  **23바이트 JSON(`[{"Hour":1,"Minute":0}]`)으로 덮여 있다**. launchctl 은 아직 옛 설정을 물고 있지만(`last exit 1`),
+  다음 로그인·재부팅 때 이 job 은 올라오지 못한다. 매거진 레인 소유라 이 작업에서는 고치지 않았다.
+  🔴 D100 묶음은 이 파일을 **열지 않는다**(allowlist 밖) — 매거진 plist 가 손상돼도, 아예 없어도 D100 이전은 막히지 않는다.
+  반대로 D100 plist 가 같은 모양으로 손상되면 verify 가 `PLIST` 로 잡는다(검사 ⑪ 반례).
 
 ## 3. 이전 묶음
 
 ```bash
-npm run host:migrate                                             # plan (읽기 전용)
+npm run host:migrate                                             # plan (읽기 전용 · D100 레인)
 npm run host:migrate -- export --out=<dir> [--cutover]           # 묶음 만들기
 npm run host:migrate -- verify --bundle=<dir>                    # 해시 · 권한 · 누출 · 템플릿
 npm run host:migrate -- install --bundle=<dir> --target-home=$HOME [--target-node-bin=<dir>] [--render-to=<dir>] [--apply]
 npm run host:migrate -- rollback --bundle=<dir> --target-home=$HOME [--apply]   # 대상
-npm run host:migrate -- quiesce [--apply]                                       # 원 호스트
-npm run host:migrate -- unquiesce --bundle-id=<id> [--apply]                    # 원 호스트
+npm run host:migrate -- quiesce [--apply]                                       # 원 호스트 · D100 만 내린다
+npm run host:migrate -- unquiesce --bundle-id=<id> [--apply]                    # 원 호스트 · D100 만 되살린다
 npm run host:migrate-check                                                      # 검사 (운영 홈 0 · launchctl 0)
 ```
 
@@ -104,11 +129,11 @@ npm run host:migrate-check                                                      
 
 | 폴더 | 내용 |
 |---|---|
-| `state/` | 운영 디렉터리 중 분류가 `state`·`secret` 인 항목 — 장부(llm·댓글·감사), 수집 원본, heartbeat 틱 표식, pin·manifest, env.local(0600), 네이버 세션(0600) |
+| `state/` | 운영 디렉터리 중 분류가 `state`·`secret` 인 항목 — 장부(llm·댓글·감사), 수집 원본, heartbeat 틱 표식, 러너 복구 표식, pin·manifest, env.local(0600), 네이버 세션(0600). 🔴 `magazine-*` · `regen-packets` 는 싣지 않는다 |
 | `home/.config/soransoran/slack.env` | Slack webhook (0600) |
-| `launchd/*.plist.template` | 설치 plist 를 **호스트 중립 템플릿**으로 되돌린 것(`__REPO__` · `__NPX__` · `__NODEBIN__` · `__LOGDIR__` · `__MAGAZINE_REPO__` · `__HOME__`) |
-| `logs/` | `~/Library/Logs/soransoran` (연속성) |
-| `host-bundle.json` | manifest — 파일마다 sha256 · 크기 · 권한 · 종류, env **키 이름만**, plist 별 내보낼 때 loaded 여부 |
+| `launchd/*.plist.template` | **D100 allowlist 의** 설치 plist 를 **호스트 중립 템플릿**으로 되돌린 것(`__REPO__` · `__NPX__` · `__NODEBIN__` · `__LOGDIR__` · `__HOME__`). 매거진 runtime 을 가리키는 D100 plist 는 거부한다 |
+| `logs/` | `~/Library/Logs/soransoran` 중 **D100 job 의 로그만** (연속성) |
+| `host-bundle.json` | manifest — `lane: "d100"` · `formatVersion 2`, 파일마다 sha256 · 크기 · 권한 · 종류, env **키 이름만**, plist 별 내보낼 때 loaded 여부, allowlist 에 있지만 설치 plist 가 없던 label(`laneMissing`) |
 
 - 🔴 **모르는 항목은 싣지 않고 export 를 멈춘다**(`unclassified`). 분류는 `scripts/lib/host-migrate.mts` 의 규칙 표에 적는다.
 - 🔴 쥔 잠금(`*.lock` · 매거진 임대 · 배포 잠금)은 싣지 않는다 — 대상에서 영영 풀리지 않는다. 예외: heartbeat `tick-<시각>.lock` 은 지난 틱 표식이라 싣는다.
@@ -121,22 +146,25 @@ npm run host:migrate-check                                                      
 대상에서 `launchd-install.render` 한 벌로 다시 찍는다. 찍은 뒤 **치환 안 된 placeholder 0 · 대상 홈이 아닌 `/Users/<누구>` 경로 0 ·
 Label = 파일 이름 · ProgramArguments 있음**이어야 쓴다. 저장소 템플릿과 두 벌을 만들지 않는다.
 
-## 4. 두 호스트가 동시에 돌 수 없게 하는 구조
+## 4. D100 이 두 Mac 에서 동시에 돌 수 없게 하는 구조 (레인 단위)
 
-같은 job 이 두 기계에서 돌면: 네이버·82cook 요청 간격이 두 배가 되고(영구 안전장치 위반), LLM 일 예산 장부가
+같은 job 이 두 기계에서 돌면: 네이버 요청 간격이 두 배가 되고(영구 안전장치 위반), LLM 일 예산 장부가
 기계마다 따로 차서 예산이 두 배가 되고, 발행·댓글은 DB 에서 경쟁한다.
+🔴 소유권은 **호스트가 아니라 레인 단위**다 — 표식은 `host-handoff-d100.json`(원) · `host-owner-d100.json`(대상).
+원 호스트의 매거진은 이 표식과 무관하게 계속 돈다.
 
-1. **원 호스트를 먼저 완전히 내린다** — `quiesce --apply` 는 실행 중 회차가 있으면(keep-awake 제외) 거부하고,
-   없으면 전부 `bootout` 한 뒤 **plist 파일을 LaunchAgents 밖**(`…/soransoran/host-migrate-quiesced/<시각>/`)으로 옮기고
-   `host-handoff.json` 을 쓴다. 파일이 없으니 재부팅·로그인으로도 되살아나지 않는다.
-2. **cutover 묶음은 원 호스트가 내려가 있을 때만 만들어진다** — `export --cutover` 는 launchctl 에 우리 job 0 ·
-   LaunchAgents 에 plist 0 · handoff 있음 · 아직 다른 묶음으로 넘기지 않음을 확인한다. launchctl 을 못 읽으면 거부한다.
+1. **원 호스트 D100 을 먼저 완전히 내린다** — `quiesce --apply` 는 D100 회차가 실행 중이면(keep-awake 제외) 거부하고,
+   없으면 **D100 job 만** `bootout` 한 뒤 **D100 plist 파일만** LaunchAgents 밖(`…/soransoran/host-migrate-quiesced-d100/<시각>/`)으로 옮기고
+   `host-handoff-d100.json` 을 쓴다. 파일이 없으니 재부팅·로그인으로도 되살아나지 않는다. 매거진·개발 job 은 loaded 그대로, plist 제자리다.
+2. **cutover 묶음은 원 호스트 D100 이 내려가 있을 때만 만들어진다** — `export --cutover` 는 launchctl 에 D100 job 0 ·
+   LaunchAgents 에 D100 plist 0 · d100 handoff 있음 · 아직 다른 묶음으로 넘기지 않음을 확인한다. launchctl 을 못 읽으면 거부한다.
    만든 묶음 id 를 handoff 에 적는다 — 두 번째 cutover 묶음은 만들어지지 않는다.
-3. **대상은 cutover 묶음만 올린다** — `install --apply` 는 rehearsal 묶음 · verify 실패 · 대상에 이미 plist/loaded job ·
-   대상 운영 디렉터리 비어 있지 않음 · 대상 사용자 셸이 아님 · 사전 점검 미충족 중 하나라도 있으면 거부한다.
-   소유 표식(`host-owner.json`)은 job 을 올리기 **전에** 쓴다.
+3. **대상은 d100 cutover 묶음만 올린다** — `install --apply` 는 rehearsal 묶음 · 다른 레인(또는 v1) 묶음 · verify 실패 ·
+   대상에 이미 D100 plist/loaded job · 대상에 이미 `host-owner-d100.json` · 묶음이 쓸 운영 항목이 대상에 이미 있음 ·
+   대상 runtime 있음 · 대상 사용자 셸이 아님 · 사전 점검 미충족 중 하나라도 있으면 거부한다.
+   소유 표식은 job 을 올리기 **전에** 쓴다.
 4. **원 호스트 되살리기는 대상 내림을 증거로 요구한다** — `unquiesce --apply` 는 대상 `rollback` 이 찍어 준
-   `--bundle-id` 가 handoff 의 id 와 같아야 한다. 원 호스트는 대상을 볼 수 없어서, 그 증거를 사람 손으로 한 번 건넨다.
+   `--bundle-id` 가 handoff 의 id 와 같아야 한다. 되살리는 것은 handoff 에 적힌 것 중 **allowlist 안**만이다.
 5. **마지막 방어선(DB)** — 글·댓글 발행 트랜잭션은 Serializable 안에서 오늘 수를 다시 센다
    (`src/lib/original-post-publish-tx.ts` · `src/lib/persona-publish-tx.ts`). 두 회차가 같은 스냅샷을 읽어도 뒤의 것이 직렬화 실패로 진다.
 
@@ -150,39 +178,55 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
 전환
 1. [원] `npm run host:migrate` — 계획
 2. [원] `export --out=<외장/임시>` rehearsal 묶음 → 대상에서 `verify` · `install` dry-run 으로 사전 점검
-3. [원] `quiesce --apply`
+3. [원] `quiesce --apply` — D100 만
 4. [원] `export --cutover --out=<dir>`
 5. 옮기기 — 암호화된 외장 볼륨 또는 AirDrop. 클라우드 드라이브·메신저 금지
 6. [대상] `verify --bundle=<dir>`
-7. [대상] `install --bundle=<dir> --target-home=$HOME --apply` — clone(pin SHA) → 매거진 runtime → `npm ci`·`prisma generate` →
-   state·로그 복원 → env(0600 · 홈 경로 키만 바꿈) + runtime `.env.local` 링크 → plist 쓰기·`plutil -lint` → 소유 표식 →
+7. [대상] `install --bundle=<dir> --target-home=$HOME --apply` — clone(pin SHA) → `npm ci`·`prisma generate`(매거진 runtime 은 만들지 않는다) →
+   state·로그 복원 → env(0600 · 홈 경로 키만 바꿈) + runtime `.env.local` 링크 → D100 plist 쓰기·`plutil -lint` → d100 소유 표식 →
    `launchctl bootstrap`(내보낼 때 loaded 였던 것만) → `runtime:isolation-check --require-runtime`. plist 를 쓴 뒤 실패하면
    올린 job bootout → plist 보관 → 소유 표식 삭제(되돌리다 실패해도 나머지를 계속하고 남은 것을 적는다)
 8. [대상] `npm run ops:status` · 첫 heartbeat · 댓글 회차 로그 확인
 9. 양쪽 묶음 삭제
 
 되돌리기
-1. [대상] `rollback --bundle=<dir> --target-home=$HOME --apply`
-2. [원] `unquiesce --bundle-id=<1이 찍은 id> --apply` — plist 제자리, 내리기 전 loaded 였던 job 만 bootstrap
+1. [대상] `rollback --bundle=<dir> --target-home=$HOME --apply` — D100 job 만 bootout · plist 보관 · `host-owner-d100.json` 삭제
+2. [원] `unquiesce --bundle-id=<1이 찍은 id> --apply` — D100 plist 제자리, 내리기 전 loaded 였던 D100 job 만 bootstrap
 3. [원] `npm run runtime:isolation-check -- --require-runtime`
 - pin 은 되돌릴 것이 없다 — 원 호스트의 `runtime-pinned-sha` 는 이전 내내 바뀌지 않는다.
+- 매거진은 되돌릴 것이 없다 — 이전 내내 원 호스트에서 돌았다.
 
-## 6. 이 기계에서 한 dry-run (2026-09-29 07:4x KST)
+### 5.1 이 절차 자체를 되돌리려면
 
-- `plan` — 운영 항목 41개 분류(state 19 · secret 2 · exclude 20 · 미분류 0), plist 13개 전부 다시 찍기 가능(당시), env 키 30개(이름만), 홈 경로 키 1개.
-- `export --out=/private/tmp/soran-host-rehearsal-0929` (rehearsal) — 1,821 파일 · 57.2MB(state 1,773 · 비밀 3 · 템플릿 13 · 로그 32).
-- `verify` — 해시·권한·누출 **통과**, `PLIST` 2건(§2.7 매거진 plist 손상) 때문에 실패로 끝남 — 의도대로 잡았다.
-- `install --target-home=/private/tmp/soran-fake-home --render-to=…` (dry-run) — 다시 찍은 plist 13개 중 `/Users/yanadoo` 포함 0개,
-  `plutil -lint` 실패 1개(손상된 매거진 plist). 사전 점검: 네트워크 12개 전부 연결, **배터리 있음 · autorestart 없음 · 자동 로그인 없음**으로 미충족 —
-  이 노트북이 상시 호스트 조건을 못 맞춘다는 측정이다. `--apply` 는 rehearsal · verify 실패 · 다른 사용자 홈 · 사전 점검 미충족으로 거부.
+- 코드: `scripts/host-migrate.mts` · `scripts/lib/host-migrate.mts` · `scripts/host-migrate-check.mts` 와 이 문서는 **새 파일**이다.
+  다른 코드는 이것을 부르지 않는다 — PR 을 revert 하면 끝난다(운영 launchd·env·DB 에 흔적 0).
+- `quiesce --apply` 까지만 했다면: `unquiesce --apply`(export 전이라 bundle-id 없이 허용).
+- cutover 묶음을 만든 뒤라면: 대상에 올리지 않았다는 것을 사람이 확인하고 묶음을 지운 뒤 `unquiesce --bundle-id=<그 id> --apply`.
+
+## 6. 이 기계에서 한 dry-run
+
+### 6.1 첫 판 (2026-09-29 07:4x KST · 호스트 전체 묶음 — 지금은 쓰지 않는다)
+
+- 호스트 전체(13 job) 묶음은 손상된 매거진 plist 때문에 verify `PLIST` 2건으로 실패했다. 이것이 레인 단위로 바꾼 이유 중 하나다.
+
+### 6.2 D100 레인 판 (2026-09-29 09:3x KST)
+
+- `plan` — D100 allowlist 9개 전부 설치본 있음 · 전부 다시 찍기 가능. 건드리지 않는 job 4개(매거진) 표시. 미분류 0.
+- `export --out=/private/tmp/…` (rehearsal) — 1,748 파일 · 57.2MB(state 1,718 · 비밀 3 · 템플릿 9 · 로그 18).
+  "다른 레인 plist 4개는 싣지 않았다". **verify 통과**(손상된 매거진 plist 를 열지 않았다).
+- `install --target-home=/private/tmp/soran-fake-target --render-to=…` (dry-run) — 다시 찍은 plist 9개 중 `/Users/yanadoo` 포함 0개.
+  전원: 🟢 `AC 연결 · 배터리 charging` (이 MacBook 이 당시 AC 에 꽂혀 있었다). `--apply` 는 rehearsal · 가짜 홈 node 없음 · 자동 로그인 없음으로 거부.
 - 묶음·렌더 결과는 곧바로 삭제했다. 실제 LaunchAgents · env.local · runtime · launchctl 은 건드리지 않았다.
 
 ## 7. 창업자 결정 하나
 
-**전용 Mac 한 대를 정하고, 그 기계를 "AC 상시 전원 + 자동 로그인(FileVault 끔)" 으로 둘 것인가.**
+**D100 을 돌릴 Mac 한 대를 정하고, 그 기계를 "AC 상시 연결 + 자동 로그인(FileVault 끔)" 으로 둘 것인가.**
 
-- 권장: 새 Mac mini (Apple Silicon 기본형 · 16GB/256GB). 가격은 구매 시점에 확인한다 — M4 기본형 국내 출시가가
-  약 89만 원(2024-11)이었다. 선택: 소형 UPS 약 10~20만 원(정전 뒤 깨끗한 종료 · `autorestart` 와 함께).
-- 그 기계에 필요한 설정(설치 전 사람이 한다): `sudo pmset -a sleep 0 autorestart 1 womp 1` · 유선 LAN ·
-  시스템 설정에서 자동 로그인 = 운영 사용자(→ FileVault 끔이 조건) · nvm node `v24.14.0` · gh/gcloud/claude 로그인.
+- 기종은 묻지 않는다. 쓰지 않는 MacBook 도, 데스크톱 Mac 도 된다. 조건은 사전 점검이 잰다.
+- **MacBook 이면**: 어댑터를 늘 꽂아 둔다(배터리로 돌기 시작하면 사전 점검이 실패로 본다 — 운영 중에는 `ops:status` 로 본다).
+  [추정] 덮개를 닫으면 외부 모니터 없이 잠든다 — 덮개를 열어 두거나, 외부 모니터·전원을 연결한 clamshell 로 둔다.
+  배터리가 짧은 정전을 버티므로 `autorestart` 는 요구하지 않는다.
+- **배터리 없는 Mac 이면**: `sudo pmset -a autorestart 1` 이 필요하다(정전 뒤 자동으로 켜짐). 선택: 소형 UPS.
+- 공통 설정(설치 전 사람이 한다): `sudo pmset -a sleep 0 womp 1` · 가능하면 유선 LAN ·
+  시스템 설정에서 자동 로그인 = 운영 사용자(→ FileVault 끔이 조건) · nvm node `v24.14.0` · gh/gcloud 로그인.
 - FileVault 를 끄지 않으면: 재부팅(업데이트·정전) 뒤 사람이 비밀번호를 칠 때까지 job 0개다. 이 교환을 받아들일지가 결정의 핵심이다.

@@ -1,14 +1,16 @@
 #!/usr/bin/env tsx
 /**
  * 상시 실행 호스트 이전 묶음 — 🔴 **기본은 계획만(읽기 전용). `--apply` 만 launchctl·파일을 바꾼다**
+ * 🔴 **범위는 D100 레인 하나** — `D100_LANE_LABELS`(scripts/lib/host-migrate.mts) 밖의 job 은 읽지도
+ *    내리지도 옮기지도 않는다. 원 호스트의 매거진·개발 job 은 loaded 그대로, plist 제자리다.
  *
  *   npm run host:migrate                                             plan — 무엇을 싣고 무엇을 다시 찍는지
  *   npm run host:migrate -- export --out=<dir> [--cutover]           묶음 만들기 (저장소·git 작업트리 안 거부)
  *   npm run host:migrate -- verify --bundle=<dir>                    해시 · 권한 · 비밀 누출 검사
  *   npm run host:migrate -- install --bundle=<dir> --target-home=<홈> [--target-node-bin=<dir>] [--apply]
  *   npm run host:migrate -- rollback --bundle=<dir> --target-home=<홈> [--apply]     (대상)
- *   npm run host:migrate -- quiesce [--apply]                                         (원 호스트)
- *   npm run host:migrate -- unquiesce --bundle-id=<id> [--apply]                      (원 호스트)
+ *   npm run host:migrate -- quiesce [--apply]                                         (원 호스트 · D100 만)
+ *   npm run host:migrate -- unquiesce --bundle-id=<id> [--apply]                      (원 호스트 · D100 만)
  *
  * 🔴 판단은 `scripts/lib/host-migrate.mts` 에 있다. 여기는 진짜 명령을 붙이는 자리다.
  * 🔴 env 값·토큰·네이버 세션 내용은 **어떤 경로로도 화면에 찍지 않는다** — 모든 출력이 `redact` 를 지난다.
@@ -26,12 +28,14 @@ import { homedir, userInfo } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 
 import {
-  BUNDLE_FORMAT_VERSION, BUNDLE_MANIFEST, CUTOVER_ORDER, HANDOFF_FILE, LABEL_PREFIX, MANUAL_REAUTH, OWNER_FILE,
-  QUIESCE_DIR_NAME, ROLLBACK_ORDER, TARGET_ROLLBACK_DIR_NAME,
-  busyLabels, classifyCanonEntry, foreignHomePaths, homePathKeys, hostPathsOf, isTransientFile,
-  judgeBundleOut, judgeCutoverExport, judgeManifest, judgeTargetInstall, judgeUnquiesce, nodeBinsIn,
-  parseEnv, parseLaunchctlList, redact, renderAndJudge, rewriteEnvHome, runInstall, scanForSecrets,
-  secretValuesOf, templatizePlist,
+  BUNDLE_FORMAT_VERSION, BUNDLE_MANIFEST, CUTOVER_ORDER, D100_LANE_LABELS, HANDOFF_FILE, LABEL_PREFIX, LANE,
+  MANUAL_REAUTH, OUT_OF_LANE_LABELS, OUT_OF_LANE_PATHS, OWNER_FILE, QUIESCE_DIR_NAME, ROLLBACK_ORDER,
+  TARGET_ROLLBACK_DIR_NAME,
+  classifyCanonEntry, foreignHomePaths, homePathKeys, hostPathsOf, isLaneLabel, isLaneLog, isTransientFile,
+  judgeAutorestart, judgeBundleOut, judgeCutoverExport, judgeManifest, judgePower, judgeTargetInstall,
+  judgeUnquiesce, lanePlistFiles, nodeBinsIn, parseEnv, parseLaunchctlList, parsePmsetBatt, planQuiesce,
+  redact, renderAndJudge, rewriteEnvHome, runInstall, runQuiesce, runUnquiesce, scanForSecrets,
+  secretValuesOf, targetRollbackLabels, templatizePlist,
   type BundleEntry, type BundleEntryKind, type BundleManifest, type HostVars, type InstallEffects,
   type LeakHit, type RenderedPlist,
 } from './lib/host-migrate.mjs'
@@ -122,7 +126,8 @@ const installedPlists = (agentDir: string): string[] =>
   existsSync(agentDir) ? readdirSync(agentDir).filter((f) => f.startsWith(LABEL_PREFIX) && f.endsWith('.plist')).sort() : []
 
 // ── 원 호스트 조사 ──
-type Handoff = { at: string; dir: string; loadedBefore: string[]; plists: string[]; bundleId: string | null }
+/** 🔴 D100 레인 handoff — 매거진은 이 표식과 무관하게 원 호스트에서 돈다 */
+type Handoff = { lane: string; at: string; dir: string; loadedBefore: string[]; plists: string[]; bundleId: string | null }
 const handoffPath = join(SRC.canonDir, HANDOFF_FILE)
 const readHandoff = (): Handoff | null => {
   try { return JSON.parse(readFileSync(handoffPath, 'utf-8')) as Handoff } catch { return null }
@@ -131,15 +136,21 @@ const readHandoff = (): Handoff | null => {
 type SourceSurvey = {
   entries: { name: string; kind: string; reason: string; files: FileInfo[] }[]
   plistDir: string
+  /** 🔴 D100 allowlist 안 plist 만 — 나머지는 내용을 읽지도 않는다 */
   plistFiles: string[]
+  /** allowlist 밖 plist 파일 이름 — plan 이 "건드리지 않음" 으로 보여 준다 */
+  otherPlists: string[]
+  /** allowlist 에 있지만 설치 plist 가 없는 label */
+  laneMissing: string[]
+  /** D100 loaded label (null = 관측 없음) */
   loaded: string[] | null
+  otherLoaded: string[] | null
   nodeBin: string | null
   nodeBins: string[]
   envKeys: string[]
   envHomeKeys: string[]
   pinnedSha: string | null
   runtimeHead: string | null
-  magazineSha: string | null
   slackEnv: boolean
   logs: FileInfo[]
   skippedLinks: string[]
@@ -155,22 +166,29 @@ function surveySource(fromQuiesced: boolean): SourceSurvey {
   })
   const handoff = readHandoff()
   const plistDir = fromQuiesced && handoff !== null ? handoff.dir : SRC.agentDir
-  const plistFiles = installedPlists(plistDir)
+  const allPlists = installedPlists(plistDir)
+  // 🔴 allowlist 로 먼저 거른다 — 손상된 매거진 plist(23바이트 JSON 등)는 열어 보지도 않는다
+  const plistFiles = lanePlistFiles(allPlists)
   const jobs = ourJobs()
-  const loaded = fromQuiesced && handoff !== null ? handoff.loadedBefore : (jobs === null ? null : jobs.map((j) => j.label))
+  const loaded = fromQuiesced && handoff !== null ? handoff.loadedBefore.filter(isLaneLabel)
+    : (jobs === null ? null : jobs.map((j) => j.label).filter(isLaneLabel))
+  const present = new Set(plistFiles.map((f) => f.replace(/\.plist$/, '')))
   const bins = [...new Set(plistFiles.flatMap((f) => nodeBinsIn(readFileSync(join(plistDir, f), 'utf-8'))))]
   const envText = existsSync(join(SRC.canonDir, 'env.local')) ? readFileSync(join(SRC.canonDir, 'env.local'), 'utf-8') : ''
   const pin = ((): string | null => { try { return readFileSync(join(SRC.canonDir, 'runtime-pinned-sha'), 'utf-8').trim() } catch { return null } })()
   return {
     entries, plistDir, plistFiles, loaded,
+    otherPlists: allPlists.filter((f) => !plistFiles.includes(f)),
+    laneMissing: D100_LANE_LABELS.filter((l) => !present.has(l)),
+    otherLoaded: jobs === null ? null : jobs.map((j) => j.label).filter((l) => !isLaneLabel(l)),
     nodeBin: bins[0] ?? null, nodeBins: bins,
     envKeys: [...parseEnv(envText).keys()],
     envHomeKeys: homePathKeys(envText, SOURCE_HOME),
     pinnedSha: pin,
     runtimeHead: existsSync(SRC.runtimeRoot) ? read('git', ['rev-parse', 'HEAD'], SRC.runtimeRoot) : null,
-    magazineSha: existsSync(SRC.magazineRuntimeRoot) ? read('git', ['rev-parse', 'HEAD'], SRC.magazineRuntimeRoot) : null,
     slackEnv: existsSync(SRC.slackEnv),
-    logs: existsSync(SRC.logDir) ? walk(SRC.logDir, SRC.logDir, skipped) : [],
+    // 🔴 D100 job 의 로그만 — 매거진·82cook·모르는 로그는 싣지 않는다
+    logs: existsSync(SRC.logDir) ? walk(SRC.logDir, SRC.logDir, skipped).filter((f) => !f.rel.includes('/') && isLaneLog(f.rel)) : [],
     skippedLinks: skipped,
   }
 }
@@ -183,7 +201,9 @@ function templatesOf(s: SourceSurvey): { label: string; template: string; proble
     const template = templatizePlist(readFileSync(join(s.plistDir, f), 'utf-8'), sourceVars(s))
     // 🔴 템플릿에 원 호스트 홈이 남으면 대상에서 다시 찍을 수 없다
     const left = foreignHomePaths(template, '__HOME__')
-    return { label, template, problems: left.length === 0 ? [] : [`템플릿화 못 한 경로 ${left.join(' ')}`] }
+    const problems = left.length === 0 ? [] : [`템플릿화 못 한 경로 ${left.join(' ')}`]
+    if (template.includes('__MAGAZINE_REPO__')) problems.push('매거진 runtime 을 가리킨다 — D100 레인에 싣지 않는다')
+    return { label, template, problems }
   })
 }
 
@@ -194,10 +214,9 @@ function cmdPlan(): void {
   addSecretsFrom(join(SRC.canonDir, 'env.local'))
   addSecretsFrom(SRC.slackEnv)
   const s = surveySource(false)
-  say(`\n══ 상시 실행 호스트 이전 — 계획 (읽기 전용 · 변경 0)${FIXTURE ? ' · 🟡 검사용 가짜 홈' : ''} ══\n`)
+  say(`\n══ 상시 실행 호스트 이전 — ${LANE} 레인 계획 (읽기 전용 · 변경 0)${FIXTURE ? ' · 🟡 검사용 가짜 홈' : ''} ══\n`)
   say(`  원 호스트 홈  ${SOURCE_HOME}`)
   say(`  runtime pin   ${s.pinnedSha ?? '🔴 없음'}   runtime HEAD ${s.runtimeHead ?? '관측 없음'}${s.pinnedSha !== null && s.runtimeHead !== null && s.pinnedSha !== s.runtimeHead ? '  🔴 불일치' : ''}`)
-  say(`  매거진 runtime HEAD ${s.magazineSha ?? '없음'}`)
   say(`  node          ${s.nodeBin ?? '(plist 에 nvm 경로 없음)'}${s.nodeBins.length > 1 ? `  🔴 서로 다른 node ${s.nodeBins.length}벌` : ''}`)
 
   say('\n  ── 운영 디렉터리 항목 (Application Support/soransoran)')
@@ -218,7 +237,7 @@ function cmdPlan(): void {
   say(`     대상 홈으로 바꿔 쓸 경로 키: ${s.envHomeKeys.length === 0 ? '없음' : s.envHomeKeys.join(' ')}`)
   say(`     slack.env (~/.config/soransoran): ${s.slackEnv ? '🔐 싣는다' : '없음'}`)
 
-  say(`\n  ── launchd — 설치본 ${s.plistFiles.length}개를 템플릿으로 되돌려 대상 홈·node 로 다시 찍는다`)
+  say(`\n  ── launchd — ${LANE} 레인 allowlist ${D100_LANE_LABELS.length}개 중 설치본 ${s.plistFiles.length}개를 템플릿으로 되돌려 대상 홈·node 로 다시 찍는다`)
   const fakeTarget: HostVars = { home: '/Users/target', nodeBin: '/Users/target/.nvm/versions/node/vX/bin' }
   const loadedSet = new Set(s.loaded ?? [])
   for (const t of templatesOf(s)) {
@@ -226,6 +245,14 @@ function cmdPlan(): void {
     const bad = [...t.problems, ...r.problems]
     say(`     ${bad.length === 0 ? '🟢' : '🔴'} ${t.label}  ${s.loaded === null ? '(loaded 관측 없음)' : loadedSet.has(t.label) ? 'loaded' : 'unloaded'}${bad.length > 0 ? ` — ${bad.join(' · ')}` : ''}`)
   }
+  for (const l of s.laneMissing) say(`     🟡 ${l}  설치 plist 없음 — 대상에도 없다`)
+  say('\n  ── 건드리지 않는 job (원 호스트에서 그대로 돈다 · 내용도 읽지 않는다)')
+  const why = new Map(OUT_OF_LANE_LABELS.map((x) => [x.label, x.why]))
+  const others = [...new Set([...s.otherPlists.map((f) => f.replace(/\.plist$/, '')), ...(s.otherLoaded ?? [])])].sort()
+  if (others.length === 0) say('     없음')
+  for (const l of others) say(`     ⚪ ${l} — ${why.get(l) ?? '레인 allowlist 밖(기본 거부)'}`)
+  say('\n  ── 싣지 않는 다른 레인 자격증명·작업트리 (원 호스트에 남는다)')
+  for (const x of OUT_OF_LANE_PATHS) say(`     ⚪ ${x.what} — ~/${x.rel}${existsSync(join(SOURCE_HOME, x.rel)) ? '' : ' (없음)'}`)
   say(`\n  ── 로그 ${s.logs.length}개 · ${kb(s.logs.reduce((a, f) => a + f.size, 0))} (연속성용으로 싣는다)`)
 
   say('\n  ── 대상에서 사람이 다시 로그인할 것 (싣지 않는다)')
@@ -243,9 +270,9 @@ const PREFLIGHT_DESC: readonly string[] = [
   'macOS 14 이상 · 대상 사용자로 로그인한 셸(홈 = --target-home)',
   'node — 원 호스트와 같은 major (nvm 경로 · --target-node-bin 으로 바꿀 수 있다)',
   'git · plutil · launchctl 존재',
-  '디스크 여유 ≥ 묶음 × 3 + 3GB (runtime 2벌 node_modules)',
-  '네트워크 — GitHub · Supabase pooler(DATABASE_URL/DIRECT_URL 호스트) · Gemini · Anthropic · OpenAI · 네이버 카페 · 82cook · Slack · Google Sheets',
-  '전원 — 배터리 없음(AC) · pmset sleep 0 · autorestart 1',
+  '디스크 여유 ≥ 묶음 × 3 + 3GB (runtime node_modules)',
+  '네트워크 — GitHub · Supabase pooler(DATABASE_URL/DIRECT_URL 호스트) · Gemini · Anthropic · OpenAI · 네이버 카페 · Slack · Google Sheets (82cook 은 꺼 둔 job 이라 보지 않는다)',
+  '전원 — AC 에 꽂혀 있을 것(기종 무관 · 배터리 있는 MacBook 도 AC 연결이면 통과 · 배터리로 돌고 있으면 실패) · pmset sleep 0 · 배터리 없는 Mac 은 autorestart 1',
   '로그인 — 자동 로그인 사용자 = 대상 사용자 (FileVault 켜져 있으면 재부팅 뒤 사람이 풀어야 한다)',
 ]
 
@@ -312,6 +339,7 @@ function cmdExport(): void {
 
   const manifest: BundleManifest = {
     formatVersion: BUNDLE_FORMAT_VERSION,
+    lane: LANE,
     bundleId,
     mode: CUTOVER ? 'cutover' : 'rehearsal',
     createdAt: new Date().toISOString(),
@@ -320,13 +348,14 @@ function cmdExport(): void {
       macos: read('sw_vers', ['-productVersion']), arch: process.arch,
       nodeBin: sourceVars(s).nodeBin, nodeVersion: /\/(v[\d.]+)\/bin$/.exec(sourceVars(s).nodeBin)?.[1] ?? process.version,
     },
-    runtime: { pinnedSha: s.pinnedSha, magazineSha: s.magazineSha },
+    runtime: { pinnedSha: s.pinnedSha },
     envKeys: s.envKeys,
     envHomePathKeys: s.envHomeKeys,
     plists: templates.map((t) => ({
       label: t.label, file: `launchd/${t.label}.plist.template`,
       loadedAtExport: s.loaded === null ? null : s.loaded.includes(t.label),
     })),
+    laneMissing: s.laneMissing,
     excluded: s.entries.filter((e) => e.kind === 'exclude').map((e) => ({ name: e.name, reason: e.reason })),
     quiesce: CUTOVER && handoff !== null ? { handoffAt: handoff.at, loadedBefore: handoff.loadedBefore } : null,
     entries,
@@ -336,7 +365,8 @@ function cmdExport(): void {
     writeFileSync(handoffPath, `${JSON.stringify({ ...handoff, bundleId }, null, 2)}\n`, { mode: 0o600 })
   }
   const bytes = entries.reduce((a, e) => a + e.size, 0)
-  say(`\n══ 묶음 만듦 — ${manifest.mode} · ${bundleId} ══`)
+  say(`\n══ 묶음 만듦 — ${LANE} · ${manifest.mode} · ${bundleId} ══`)
+  say(`  D100 job ${templates.length}개${s.laneMissing.length > 0 ? ` · 🟡 설치 plist 없음 ${s.laneMissing.join(' ')}` : ''} · 다른 레인 plist ${s.otherPlists.length}개는 싣지 않았다`)
   say(`  위치 ${out} (0700)`)
   for (const k of ['state', 'secret', 'plist-template', 'log'] as const) {
     const xs = entries.filter((e) => e.kind === k)
@@ -397,7 +427,7 @@ function verifyBundle(dir: string, loud = true): number {
   }
 
   if (loud) {
-    say(`\n══ 묶음 검사 — ${m.mode} · ${m.bundleId} ══`)
+    say(`\n══ 묶음 검사 — ${String(m.lane)} · ${m.mode} · ${m.bundleId} ══`)
     say(`  파일 ${m.entries.length}개 · 비밀 ${m.entries.filter((e) => e.kind === 'secret').length}개 · plist 템플릿 ${m.plists.length}개`)
   }
   for (const p of problems.slice(0, 40)) say(`  🔴 ${p.code} ${p.detail}`)
@@ -427,7 +457,7 @@ const tcp = (host: string, port: number, ms = 3000): Promise<boolean> => new Pro
 
 const PUBLIC_HOSTS: readonly string[] = [
   'github.com', 'api.anthropic.com', 'generativelanguage.googleapis.com', 'api.openai.com',
-  'cafe.naver.com', 'nid.naver.com', 'www.82cook.com', 'hooks.slack.com', 'sheets.googleapis.com', 'oauth2.googleapis.com',
+  'cafe.naver.com', 'nid.naver.com', 'hooks.slack.com', 'sheets.googleapis.com', 'oauth2.googleapis.com',
 ]
 
 async function preflight(m: BundleManifest, bundleDir: string, target: HostVars): Promise<Check[]> {
@@ -473,15 +503,17 @@ async function preflight(m: BundleManifest, bundleDir: string, target: HostVars)
   for (const r of results) out.push({ name: `${r.h}:443`, ok: r.ok, detail: r.ok ? '연결됨' : '연결 안 됨' })
   }
 
-  // 🔴 상시 실행 조건 — 이것이 이전의 이유다. 노트북에서 돌리면 여기가 빨개지는 것이 정상이다
-  const batt = read('pmset', ['-g', 'batt'])
-  out.push({ name: '배터리 없음(AC 전용)', ok: batt !== null && !/InternalBattery/.test(batt), detail: batt === null ? '관측 없음' : /InternalBattery/.test(batt) ? '배터리 있음 — 노트북' : 'AC' })
+  // 🔴 상시 실행 조건 — 기종은 묻지 않는다. AC 에 꽂혀 있는가만 본다(배터리 있는 MacBook 도 AC 면 통과)
+  const power = parsePmsetBatt(read('pmset', ['-g', 'batt']) ?? read('pmset', ['-g', 'ps']) ?? '')
+  const pv = judgePower(power)
+  out.push({ name: 'AC 전원 (배터리로 돌고 있으면 실패)', ok: pv.ok, detail: pv.detail })
   const pm = read('pmset', ['-g']) ?? ''
   const sleepV = /^\s*sleep\s+(\d+)/m.exec(pm)?.[1] ?? null
   out.push({ name: 'pmset sleep 0', ok: sleepV === '0', detail: sleepV ?? '관측 없음' })
   const custom = read('pmset', ['-g', 'custom']) ?? ''
   const ar = /autorestart\s+(\d)/.exec(custom)?.[1] ?? null
-  out.push({ name: 'pmset autorestart 1 (정전 뒤 자동 켜짐)', ok: ar === '1', detail: ar ?? '관측 없음' })
+  const arv = judgeAutorestart(power, ar)
+  out.push({ name: '정전 뒤 자동 켜짐 (배터리 없는 Mac 은 autorestart 1)', ok: arv.ok, detail: arv.detail })
   const auto = read('defaults', ['read', '/Library/Preferences/com.apple.loginwindow', 'autoLoginUser'])
   const targetUser = target.home.split('/').pop() ?? ''
   out.push({ name: '자동 로그인 = 대상 사용자', ok: auto === targetUser, detail: auto === null ? '설정 없음' : auto })
@@ -537,11 +569,16 @@ async function cmdInstall(): Promise<void> {
   const fails = checks.filter((c) => !c.ok).length
 
   const tJobs = FIXTURE || H !== REAL_HOME ? [] : (ourJobs() ?? null)
+  // 🔴 묶음이 쓸 운영 항목(state 최상위 이름 · slack.env)이 대상에 이미 있으면 덮어쓰지 않는다
+  const tops = [...new Set(m.entries.filter((e) => e.path.startsWith('state/')).map((e) => e.path.slice(6).split('/')[0]!))]
+  const collisions = tops.filter((n) => existsSync(join(T.canonDir, n)))
+  if (m.entries.some((e) => e.path === 'home/.config/soransoran/slack.env') && existsSync(T.slackEnv)) collisions.push('~/.config/soransoran/slack.env')
   const guard = judgeTargetInstall({
-    bundleMode: m.mode, verifyProblems: vp,
+    bundleMode: m.mode, bundleLane: m.lane, verifyProblems: vp,
     targetPlists: installedPlists(T.agentDir),
     targetLoaded: tJobs === null ? null : tJobs.map((j) => j.label),
-    targetCanonNonEmpty: existsSync(T.canonDir) && readdirSync(T.canonDir).length > 0,
+    targetOwnerPresent: existsSync(join(T.canonDir, OWNER_FILE)),
+    targetCanonCollisions: collisions,
     targetRuntimeExists: existsSync(T.runtimeRoot),
     runningHome: REAL_HOME, targetHome: H, preflightFailures: fails,
   })
@@ -551,12 +588,11 @@ async function cmdInstall(): Promise<void> {
   const steps = [
     `git clone https://github.com/MogoKim/soransoran.git ${T.repoRoot}`,
     `git -C ${T.repoRoot} worktree add --detach ${T.runtimeRoot} ${m.runtime.pinnedSha ?? '<pin 없음>'}`,
-    ...(m.runtime.magazineSha === null ? [] : [`git -C ${T.repoRoot} worktree add --detach ${T.magazineRuntimeRoot} ${m.runtime.magazineSha}`]),
-    `(runtime) npm ci && npx prisma generate${m.runtime.magazineSha === null ? '' : ' · (매거진 runtime) npm ci'}`,
+    '(runtime) npm ci && npx prisma generate   — 🔴 매거진 runtime 은 만들지 않는다',
     `state → ${T.canonDir} (0700) · 로그 → ${T.logDir}`,
     `env.local → ${T.canonDir}/env.local (0600 · 홈 경로 키만 바꿈) · ${T.runtimeRoot}/.env.local → 심볼릭 링크`,
-    `plist ${rendered.length}개 → ${T.agentDir} · plutil -lint`,
-    `소유 표식 ${OWNER_FILE} (job 을 올리기 전에)`,
+    `D100 plist ${rendered.length}개 → ${T.agentDir} · plutil -lint`,
+    `${LANE} 소유 표식 ${OWNER_FILE} (job 을 올리기 전에)`,
     `launchctl bootstrap gui/${uid} … ${loadLabels.length}개`,
     '(runtime) npm run runtime:isolation-check -- --require-runtime',
     '실패하면: 올린 job bootout → plist 를 host-migrate-rollback 으로 → 소유 표식 삭제',
@@ -574,9 +610,7 @@ async function cmdInstall(): Promise<void> {
   const fx: InstallEffects = {
     cloneRepo: () => existsSync(join(T.repoRoot, '.git')) || act('git', ['clone', 'https://github.com/MogoKim/soransoran.git', T.repoRoot]),
     addRuntime: (sha) => act('git', ['fetch', 'origin'], T.repoRoot) && act('git', ['worktree', 'add', '--detach', T.runtimeRoot, sha], T.repoRoot),
-    addMagazineRuntime: (sha) => act('git', ['worktree', 'add', '--detach', T.magazineRuntimeRoot, sha], T.repoRoot),
-    installDeps: () => act('npm', ['ci'], T.runtimeRoot) && act('npx', ['prisma', 'generate'], T.runtimeRoot)
-      && (m.runtime.magazineSha === null || act('npm', ['ci'], T.magazineRuntimeRoot)),
+    installDeps: () => act('npm', ['ci'], T.runtimeRoot) && act('npx', ['prisma', 'generate'], T.runtimeRoot),
     restoreState: () => {
       try {
         mkdirSync(T.canonDir, { recursive: true, mode: 0o700 })
@@ -610,7 +644,7 @@ async function cmdInstall(): Promise<void> {
     isolationCheck: () => act('npx', ['tsx', 'scripts/runtime-isolation-check.mts', '--require-runtime'], T.runtimeRoot),
     writeOwner: () => {
       try {
-        writeFileSync(join(T.canonDir, OWNER_FILE), `${JSON.stringify({ bundleId: m.bundleId, at: new Date().toISOString(), home: H }, null, 2)}\n`, { mode: 0o600 })
+        writeFileSync(join(T.canonDir, OWNER_FILE), `${JSON.stringify({ lane: LANE, bundleId: m.bundleId, at: new Date().toISOString(), home: H }, null, 2)}\n`, { mode: 0o600 })
         return true
       } catch { return false }
     },
@@ -623,7 +657,7 @@ async function cmdInstall(): Promise<void> {
     removeOwner: () => { try { rmSync(join(T.canonDir, OWNER_FILE), { force: true }); return true } catch { return false } },
     log: (x) => say(`   ${x}`),
   }
-  const r = runInstall({ pinnedSha: m.runtime.pinnedSha ?? '', magazineSha: m.runtime.magazineSha, plists: rendered, loadLabels }, fx)
+  const r = runInstall({ pinnedSha: m.runtime.pinnedSha ?? '', plists: rendered, loadLabels }, fx)
   if (r.ok) { say(`\n✅ 설치 완료 — 묶음 ${m.bundleId}. 원 호스트 묶음·이 묶음을 지운다(비밀)\n`); process.exit(0) }
   warn(`\n🔴 설치 멈춤 — ${r.phase}`)
   if (r.rollback !== null) for (const x of r.rollback.residual) warn(`   · 남은 것: ${x}`)
@@ -638,22 +672,24 @@ function cmdRollback(): void {
   if (b === null || th === null) die('--bundle=<dir> --target-home=<홈> 이 필요하다')
   const m = loadManifest(resolve(b!)); const H = resolve(th!); const T = hostPathsOf(H)
   const uid = process.getuid?.() ?? 0
-  say(`\n══ 대상 되돌리기 — ${APPLY ? '🔴 실제 적용' : 'dry-run'} · 묶음 ${m.bundleId} ══`)
+  say(`\n══ 대상 되돌리기 (${LANE} 레인만) — ${APPLY ? '🔴 실제 적용' : 'dry-run'} · 묶음 ${m.bundleId} ══`)
   const dst = join(T.canonDir, TARGET_ROLLBACK_DIR_NAME, new Date().toISOString().replace(/[:.]/g, '-'))
-  for (const p of m.plists) say(`   launchctl bootout gui/${uid}/${p.label} · ${plistFileOf(p.label)} → ${dst}`)
+  const labels = targetRollbackLabels(m.plists.map((p) => p.label))
+  for (const l of labels) say(`   launchctl bootout gui/${uid}/${l} · ${plistFileOf(l)} → ${dst}`)
   say(`   rm ${join(T.canonDir, OWNER_FILE)}`)
   say(`\n   다음: 원 호스트에서 npm run host:migrate -- unquiesce --bundle-id=${m.bundleId} --apply`)
   if (!APPLY) { say('\n   dry-run — 아무것도 바꾸지 않았다\n'); return }
   if (FIXTURE || H !== REAL_HOME) die('대상 사용자 셸에서만 적용한다')
   const residual: string[] = []
-  for (const p of m.plists) {
-    act('launchctl', ['bootout', `gui/${uid}/${p.label}`])
-    const f = join(T.agentDir, plistFileOf(p.label))
+  for (const l of labels) {
+    act('launchctl', ['bootout', `gui/${uid}/${l}`])
+    const f = join(T.agentDir, plistFileOf(l))
     if (existsSync(f)) {
-      try { mkdirSync(dst, { recursive: true }); renameSync(f, join(dst, plistFileOf(p.label))) } catch { residual.push(p.label) }
+      try { mkdirSync(dst, { recursive: true }); renameSync(f, join(dst, plistFileOf(l))) } catch { residual.push(l) }
     }
   }
-  const still = (ourJobs() ?? []).map((j) => j.label)
+  const after = ourJobs()
+  const still = after === null ? ['관측 실패'] : after.map((j) => j.label).filter(isLaneLabel)
   if (still.length > 0) residual.push(`아직 loaded ${still.join(' ')}`)
   rmSync(join(T.canonDir, OWNER_FILE), { force: true })
   if (residual.length > 0) die(`남은 것 ${residual.join(' · ')}`)
@@ -666,48 +702,49 @@ function cmdRollback(): void {
 function cmdQuiesce(): void {
   const uid = process.getuid?.() ?? 0
   const rows = ourJobs()
-  const plists = installedPlists(SRC.agentDir)
-  say(`\n══ 원 호스트 내리기 — ${APPLY ? '🔴 실제 적용' : 'dry-run'} ══`)
+  say(`\n══ 원 호스트 내리기 (${LANE} 레인만) — ${APPLY ? '🔴 실제 적용' : 'dry-run'} ══`)
   if (rows === null) die('launchctl 을 읽지 못했다 (또는 검사용 가짜 홈)')
-  const busy = busyLabels(rows!)
-  say(`   loaded ${rows!.length}개 · 설치 plist ${plists.length}개 · 실행 중 ${busy.length}개`)
+  // 🔴 거르는 것은 planQuiesce 다 — 매거진·개발·모르는 job 은 bootout 도 이동도 하지 않는다
+  const plan = planQuiesce({ rows: rows!, plistFiles: installedPlists(SRC.agentDir) })
+  say(`   D100 loaded ${plan.bootout.length}개 · D100 plist ${plan.move.length}개 · 실행 중 ${plan.busy.length}개`)
   const dir = join(SRC.canonDir, QUIESCE_DIR_NAME, new Date().toISOString().replace(/[:.]/g, '-'))
-  for (const r of rows!) say(`   launchctl bootout gui/${uid}/${r.label}`)
-  for (const f of plists) say(`   ${f} → ${dir}`)
-  if (busy.length > 0) say(`   🔴 실행 중인 회차 위로는 내리지 않는다: ${busy.join(' ')} — 끝난 뒤 다시`)
+  for (const l of plan.bootout) say(`   launchctl bootout gui/${uid}/${l}`)
+  for (const f of plan.move) say(`   ${f} → ${dir}`)
+  say(`   ⚪ 그대로 둔다 — loaded ${plan.untouchedLoaded.length}개 · plist ${plan.untouchedPlists.length}개: ${[...new Set([...plan.untouchedLoaded, ...plan.untouchedPlists.map((f) => f.replace(/\.plist$/, ''))])].sort().join(' ') || '없음'}`)
+  if (plan.busy.length > 0) say(`   🔴 실행 중인 회차 위로는 내리지 않는다: ${plan.busy.join(' ')} — 끝난 뒤 다시`)
   if (!APPLY) { say('\n   dry-run — 아무것도 바꾸지 않았다\n'); return }
-  if (busy.length > 0) die('실행 중 회차가 있다')
-  if (readHandoff() !== null) die(`이미 handoff 표식이 있다 — ${handoffPath}`)
-  for (const r of rows!) act('launchctl', ['bootout', `gui/${uid}/${r.label}`])
-  const left = (ourJobs() ?? [{ label: '관측 실패', pid: null }]).map((j) => j.label)
+  if (plan.busy.length > 0) die('실행 중 회차가 있다')
+  if (readHandoff() !== null) die(`이미 ${LANE} handoff 표식이 있다 — ${handoffPath}`)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const moved: string[] = []
-  for (const f of plists) { try { renameSync(join(SRC.agentDir, f), join(dir, f)); moved.push(f) } catch { /* 아래에서 판정 */ } }
-  const h = { at: new Date().toISOString(), dir, loadedBefore: rows!.map((r) => r.label), plists: moved, bundleId: null }
+  const r = runQuiesce(plan, {
+    bootout: (l) => act('launchctl', ['bootout', `gui/${uid}/${l}`]),
+    movePlist: (f) => { try { renameSync(join(SRC.agentDir, f), join(dir, f)); return true } catch { return false } },
+    loadedAfter: () => { const x = ourJobs(); return x === null ? null : x.map((j) => j.label) },
+  })
+  const h = { lane: LANE, at: new Date().toISOString(), dir, loadedBefore: plan.bootout, plists: r.moved, bundleId: null }
   writeFileSync(handoffPath, `${JSON.stringify(h, null, 2)}\n`, { mode: 0o600 })
-  if (left.length > 0 || moved.length !== plists.length) {
-    die(`완전히 내려가지 않았다 — loaded ${left.join(' ')} · 옮긴 plist ${moved.length}/${plists.length}. unquiesce --apply 로 되돌린다`)
-  }
-  say(`\n✅ 원 호스트 내림 완료 — 다음: export --cutover --out=<dir>\n`)
+  if (!r.ok) die(`D100 이 완전히 내려가지 않았다 — ${r.residual.join(' · ')}. unquiesce --apply 로 되돌린다`)
+  say(`\n✅ 원 호스트 D100 내림 완료 — 매거진·개발 job 은 그대로다. 다음: export --cutover --out=<dir>\n`)
 }
 
 function cmdUnquiesce(): void {
   const uid = process.getuid?.() ?? 0
   const h = readHandoff()
-  say(`\n══ 원 호스트 되살리기 — ${APPLY ? '🔴 실제 적용' : 'dry-run'} ══`)
-  if (h === null) die(`handoff 표식이 없다 — ${handoffPath}`)
+  say(`\n══ 원 호스트 되살리기 (${LANE} 레인만) — ${APPLY ? '🔴 실제 적용' : 'dry-run'} ══`)
+  if (h === null) die(`${LANE} handoff 표식이 없다 — ${handoffPath}`)
   const g = judgeUnquiesce({ handoffBundleId: h!.bundleId, givenBundleId: opt('bundle-id') })
-  for (const f of h!.plists) say(`   ${join(h!.dir, f)} → ${SRC.agentDir}`)
-  for (const l of h!.loadedBefore) say(`   launchctl bootstrap gui/${uid} ${join(SRC.agentDir, plistFileOf(l))}`)
+  for (const f of lanePlistFiles(h!.plists)) say(`   ${join(h!.dir, f)} → ${SRC.agentDir}`)
+  for (const l of h!.loadedBefore.filter(isLaneLabel)) say(`   launchctl bootstrap gui/${uid} ${join(SRC.agentDir, plistFileOf(l))}`)
   if (!g.ok) say(`   🔴 ${g.problems.join(' · ')}`)
   if (!APPLY) { say('\n   dry-run — 아무것도 바꾸지 않았다\n'); return }
   if (!g.ok || FIXTURE) die('적용하지 않는다')
-  const residual: string[] = []
-  for (const f of h!.plists) { try { renameSync(join(h!.dir, f), join(SRC.agentDir, f)) } catch { residual.push(f) } }
-  for (const l of h!.loadedBefore) if (!act('launchctl', ['bootstrap', `gui/${uid}`, join(SRC.agentDir, plistFileOf(l))])) residual.push(l)
-  renameSync(handoffPath, join(SRC.canonDir, `host-handoff.undone-${Date.now()}.json`))
-  if (residual.length > 0) die(`남은 것 ${residual.join(' ')}`)
-  say('\n✅ 원 호스트 되살림 — npm run runtime:isolation-check -- --require-runtime 로 확인한다\n')
+  const r = runUnquiesce(h!, {
+    restorePlist: (f) => { try { renameSync(join(h!.dir, f), join(SRC.agentDir, f)); return true } catch { return false } },
+    bootstrap: (l) => act('launchctl', ['bootstrap', `gui/${uid}`, join(SRC.agentDir, plistFileOf(l))]),
+  })
+  renameSync(handoffPath, join(SRC.canonDir, `host-handoff-${LANE}.undone-${Date.now()}.json`))
+  if (!r.ok) die(`남은 것 ${r.residual.join(' · ')}`)
+  say('\n✅ 원 호스트 D100 되살림 — npm run runtime:isolation-check -- --require-runtime 로 확인한다\n')
 }
 
 switch (CMD) {

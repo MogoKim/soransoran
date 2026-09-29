@@ -2,36 +2,96 @@
  * 상시 실행 호스트 이전 — 🔴 **판단만 한다. 파일·launchctl·네트워크를 직접 건드리지 않는다** (2026-09-29 · Track C)
  *
  * 🔴 **왜 생겼나.**
- *    무인 루프(공급·발행 heartbeat·댓글 루프·감사·단계 controller·복구·keep-awake·네이버 수집·매거진)가
+ *    D100 무인 루프(공급 처리·네이버 수집 2·발행 heartbeat·댓글 루프·감사·단계 controller·복구·keep-awake)가
  *    창업자 노트북의 launchd(gui 도메인)에서 돈다. 덮개·배터리 잠자기·로그아웃·네트워크 끊김이면 전부 선다.
  *    실측(2026-09-29 03:10~05:20): 배터리로 잠든 동안 DarkWake 만 반복됐다 — `caffeinate -s` 는 AC 에서만 듣는다.
- *    이것을 **전용 Mac 한 대로 한 번에 옮기는 묶음**이 필요하다.
+ *    이것을 **상시 켜 둘 Mac 한 대(기종 무관 · MacBook 도 AC 연결이면 된다)로 옮기는 묶음**이 필요하다.
+ *
+ * 🔴 **첫 이전 범위는 D100 레인 하나다 — `D100_LANE_LABELS` 가 유일한 정본이다.**
+ *    묶음·내리기·설치·되돌리기·소유 표식이 전부 이 목록에서 나온다. 목록 밖 job(매거진 4 · 꺼 둔 82cook ·
+ *    개발용 · 모르는 것)은 **읽지도 옮기지도 내리지도 않는다(기본 거부)**. 원 호스트의 매거진은 그대로 돈다.
  *
  * 🔴 이 파일은 순수 판정이다 — 부르는 쪽(`scripts/host-migrate.mts`)이 진짜 명령을 붙인다.
  *    그래야 검사(`scripts/host-migrate-check.mts`)가 가짜를 붙여 실패·되돌리기를 시험할 수 있다.
  *
- * 🔴 **두 호스트가 동시에 돌 수 없게 하는 구조** (정본 설명은 docs/operations/ALWAYS-ON-HOST.md)
- *    ① 원 호스트 `quiesce --apply` — job 전부 bootout + **plist 파일을 LaunchAgents 밖으로** 옮긴다
+ * 🔴 **D100 이 두 Mac 에서 동시에 돌 수 없게 하는 구조** (정본 설명은 docs/operations/ALWAYS-ON-HOST.md)
+ *    ① 원 호스트 `quiesce --apply` — D100 job 만 bootout + **그 plist 파일만 LaunchAgents 밖으로** 옮긴다
  *       (파일이 남으면 로그인·재부팅 때 launchd 가 되살린다 — 2026-09-09 실측 사고).
- *    ② `export --cutover` 는 원 호스트에 loaded job 0 · 설치 plist 0 · handoff 표식이 있을 때만 만든다.
- *    ③ 대상 `install --apply` 는 **cutover 묶음만** 받는다. rehearsal 묶음은 거부한다.
+ *    ② `export --cutover` 는 원 호스트에 D100 loaded 0 · D100 plist 0 · d100 handoff 표식이 있을 때만 만든다.
+ *    ③ 대상 `install --apply` 는 **d100 cutover 묶음만** 받는다. rehearsal 묶음·다른 레인 묶음은 거부한다.
  *    ④ 원 호스트 되살리기(`unquiesce`)는 대상 rollback 이 찍어 준 bundleId 를 요구한다.
  *    ⑤ 마지막 방어선: 글·댓글 발행 트랜잭션은 Serializable 안에서 오늘 수를 다시 센다
  *       (`src/lib/original-post-publish-tx.ts` · `src/lib/persona-publish-tx.ts`).
  */
 import { leftoverPlaceholders, programArguments, render, valueOf } from './launchd-install.mjs'
 
-export const BUNDLE_FORMAT_VERSION = 1
+/** 🔴 2 = 레인 단위 묶음(lane 필드). 1(호스트 전체 묶음)은 받지 않는다 */
+export const BUNDLE_FORMAT_VERSION = 2
 export const BUNDLE_MANIFEST = 'host-bundle.json'
 export const LABEL_PREFIX = 'com.soransoran.'
-/** 🔴 원 호스트가 소유권을 넘겼다는 표식 — CANON_DIR 바로 아래 */
-export const HANDOFF_FILE = 'host-handoff.json'
-/** 🔴 대상 호스트가 지금 주인이라는 표식 */
-export const OWNER_FILE = 'host-owner.json'
-/** quiesce 가 plist 를 옮겨 두는 곳 (CANON_DIR 아래) */
-export const QUIESCE_DIR_NAME = 'host-migrate-quiesced'
+
+// ─────────────────────────────────────────────────────────
+// 레인 — 🔴 이번 이전의 범위는 이 목록 하나다
+// ─────────────────────────────────────────────────────────
+
+export const LANE = 'd100'
+export type Lane = typeof LANE
+
+/**
+ * 🔴 **D100 레인 allowlist — 단일 정본.** 묶음·quiesce·설치·되돌리기·handoff 가 전부 여기서 나온다.
+ *    목록에 없는 label 은 판정 함수가 스스로 걸러 낸다(부르는 쪽이 걸러 주기를 믿지 않는다).
+ *    새 D100 job 을 옮기려면 이 목록에 적고 검사를 다시 돌린다.
+ */
+export const D100_LANE_LABELS: readonly string[] = [
+  'com.soransoran.navercafe-collect-wgang-multi',
+  'com.soransoran.navercafe-collect-remonterrace-multi',
+  'com.soransoran.supply-process',
+  'com.soransoran.original-post-runner',
+  'com.soransoran.persona-comment-runner',
+  'com.soransoran.auto-ready-audit',
+  'com.soransoran.stage-controller',
+  'com.soransoran.runner-recover',
+  'com.soransoran.keep-awake',
+]
+
+/**
+ * 이번 범위 **밖**이라고 이름으로 적어 둔 job — plan 이 "건드리지 않음" 으로 보여 주려는 것뿐이다.
+ * 🔴 판정은 이 목록을 보지 않는다. allowlist 에 없으면 여기 없어도(모르는 job 이어도) 건드리지 않는다.
+ */
+export const OUT_OF_LANE_LABELS: readonly { label: string; why: string }[] = [
+  { label: 'com.soransoran.magazine-producer', why: '매거진 레인 — 원 호스트에 남는다' },
+  { label: 'com.soransoran.magazine-watch', why: '매거진 레인 — 원 호스트에 남는다' },
+  { label: 'com.soransoran.magazine-graph-watch', why: '매거진 레인 — 원 호스트에 남는다' },
+  { label: 'com.soransoran.magazine-auto-register', why: '매거진 레인 — 원 호스트에 남는다' },
+  { label: 'com.soransoran.supply-collect-82cook-thin', why: '82cook — 꺼 둔 job' },
+  { label: 'com.soransoran.raw-collect-82cook', why: '82cook — 꺼 둔 job' },
+]
+
+export const isLaneLabel = (label: string): boolean => D100_LANE_LABELS.includes(label)
+/** 🔴 `<label>.plist` 이고 label 이 allowlist 에 있을 때만 label 을 돌려준다 */
+export function laneLabelOfPlistFile(file: string): string | null {
+  if (!file.endsWith('.plist')) return null
+  const label = file.slice(0, -'.plist'.length)
+  return isLaneLabel(label) ? label : null
+}
+export const lanePlistFiles = (files: readonly string[]): string[] =>
+  files.filter((f) => laneLabelOfPlistFile(f) !== null).sort()
+/**
+ * 로그 파일 → D100 레인인가. `<짧은 이름>[-error].log` 모양만 본다. 🔴 모르는 로그는 싣지 않는다.
+ */
+export function isLaneLog(name: string): boolean {
+  const m = /^([a-z0-9-]+?)(?:-error)?\.log$/.exec(name)
+  return m !== null && isLaneLabel(`${LABEL_PREFIX}${m[1]!}`)
+}
+
+/** 🔴 원 호스트가 **D100 레인** 소유권을 넘겼다는 표식 — CANON_DIR 바로 아래. 다른 레인은 이 표식과 무관하다 */
+export const HANDOFF_FILE = `host-handoff-${LANE}.json`
+/** 🔴 대상 호스트가 지금 **D100 레인** 주인이라는 표식 */
+export const OWNER_FILE = `host-owner-${LANE}.json`
+/** quiesce 가 D100 plist 를 옮겨 두는 곳 (CANON_DIR 아래) */
+export const QUIESCE_DIR_NAME = `host-migrate-quiesced-${LANE}`
 /** 대상 rollback 이 plist 를 옮겨 두는 곳 (대상 CANON_DIR 아래) */
-export const TARGET_ROLLBACK_DIR_NAME = 'host-migrate-rollback'
+export const TARGET_ROLLBACK_DIR_NAME = `host-migrate-rollback-${LANE}`
 
 // ─────────────────────────────────────────────────────────
 // 경로 — 🔴 홈 기준 상대 배치는 바꾸지 않는다
@@ -49,6 +109,7 @@ export type HostPaths = {
   logDir: string
   repoRoot: string
   runtimeRoot: string
+  /** 🔴 D100 레인은 쓰지 않는다 — 묶음 위치 거부·템플릿 오염 판정에만 쓴다 */
   magazineRuntimeRoot: string
   slackEnv: string
 }
@@ -89,15 +150,15 @@ const EXACT_RULES: Readonly<Record<string, EntryRule>> = {
   'persona-comment-eval': { kind: 'state', reason: '댓글 평가 기록' },
   'persona-reference': { kind: 'state', reason: '화자 reference 고정 배정' },
   'publish-heartbeat': { kind: 'state', reason: '발행 heartbeat 틱 기록' },
+  'runner-recover': { kind: 'state', reason: '러너 복구 표식' },
   'auto-ready-audit': { kind: 'state', reason: '감사 러너 잠금 디렉터리(잠금 파일은 뺀다)' },
   'auto-ready-audit-ledger': { kind: 'state', reason: '감사 예산 장부' },
   'auto-ready-review': { kind: 'state', reason: '자동 READY 검토 묶음' },
   'collect-detail': { kind: 'state', reason: '상세 수집 회차 기록' },
   'collect-runs': { kind: 'state', reason: '수집 회차 기록' },
-  'regen-packets': { kind: 'state', reason: '매거진 재생성 패킷' },
   'runtime-manifest.json': { kind: 'state', reason: 'runtime 배포 기록(SHA · 게이트)' },
   'runtime-pinned-sha': { kind: 'state', reason: 'runtime 고정 SHA — 대상 clone 기준' },
-  'magazine-manuscript-leases': { kind: 'exclude', reason: '진행 중 원고 임대(잠금) — 옮기면 대상이 남의 임대에 막힌다' },
+  'regen-packets': { kind: 'exclude', reason: '매거진 재생성 패킷 — 매거진 레인(원 호스트에 남는다)' },
   'runtime-deploy.lock': { kind: 'exclude', reason: '배포 잠금 — 옮기면 대상 첫 배포가 막힌다' },
   'env-backup': { kind: 'exclude', reason: '옛 env 사본 — 비밀을 더 퍼뜨리지 않는다(원 호스트에 남는다)' },
   'microseed-test-archive': { kind: 'exclude', reason: '시험 보관본' },
@@ -106,9 +167,9 @@ const EXACT_RULES: Readonly<Record<string, EntryRule>> = {
   'auto-ready-audit-rollback': { kind: 'exclude', reason: '원 호스트 전용 되돌리기 보관본' },
   'comment-runner-rollback': { kind: 'exclude', reason: '원 호스트 전용 되돌리기 보관본' },
   'publish-runner-rollback': { kind: 'exclude', reason: '원 호스트 전용 되돌리기 보관본' },
-  [HANDOFF_FILE]: { kind: 'exclude', reason: '원 호스트 handoff 표식 — manifest 가 따로 싣는다' },
+  [HANDOFF_FILE]: { kind: 'exclude', reason: '원 호스트 D100 handoff 표식 — manifest 가 따로 싣는다' },
   [QUIESCE_DIR_NAME]: { kind: 'exclude', reason: 'quiesce 로 내린 plist — launchd 입력으로 따로 싣는다' },
-  [OWNER_FILE]: { kind: 'exclude', reason: '호스트 소유 표식 — 호스트마다 새로 쓴다' },
+  [OWNER_FILE]: { kind: 'exclude', reason: 'D100 레인 소유 표식 — 호스트마다 새로 쓴다' },
   [TARGET_ROLLBACK_DIR_NAME]: { kind: 'exclude', reason: '대상 되돌리기 보관본' },
 }
 
@@ -116,8 +177,9 @@ const PREFIX_RULES: readonly { prefix: string; rule: EntryRule }[] = [
   { prefix: 'env.local.bak', rule: { kind: 'exclude', reason: '옛 env 사본 — 비밀을 더 퍼뜨리지 않는다' } },
   { prefix: 'incident-', rule: { kind: 'exclude', reason: '사고 기록 — 원 호스트에 남긴다' } },
   { prefix: 'ops-backup-', rule: { kind: 'exclude', reason: '원 호스트 백업' } },
-  { prefix: 'host-handoff.undone-', rule: { kind: 'exclude', reason: '되돌린 handoff 기록 — 원 호스트에 남긴다' } },
-  { prefix: 'magazine-', rule: { kind: 'state', reason: '매거진 레인 상태(quarantine · fetch 결과 등)' } },
+  { prefix: `host-handoff-${LANE}.undone-`, rule: { kind: 'exclude', reason: '되돌린 handoff 기록 — 원 호스트에 남긴다' } },
+  // 🔴 매거진 레인 상태(quarantine · fetch 결과 · 원고 임대 등) — 이번 범위 밖. 원 호스트 매거진이 계속 쓴다
+  { prefix: 'magazine-', rule: { kind: 'exclude', reason: '매거진 레인 상태 — 이번 이전 범위 밖(원 호스트에 남는다)' } },
 ]
 
 export function classifyCanonEntry(name: string): EntryRule {
@@ -143,10 +205,19 @@ export function isTransientFile(name: string, topEntry: string | null = null): b
  *    Keychain·OAuth refresh token 은 기기에 묶이거나 복사하면 두 기기가 같은 토큰을 쓴다.
  */
 export const MANUAL_REAUTH: readonly { what: string; why: string; how: string }[] = [
-  { what: 'GitHub (gh · git fetch)', why: 'runtime clone · runtime:deploy fetch · 매거진 PR', how: 'gh auth login (Keychain 저장)' },
+  { what: 'GitHub (gh · git fetch)', why: 'runtime clone · runtime:deploy fetch', how: 'gh auth login (Keychain 저장)' },
   { what: 'gcloud ADC', why: 'micro-seed 시트 읽기 (~/.config/gcloud)', how: 'gcloud auth application-default login' },
-  { what: 'ChatGPT 자동화 프로필', why: '매거진 레인(~/Library/Application Support/soransoran-chatgpt-auto)', how: '매거진 runbook 의 프로필 준비 절차' },
-  { what: 'claude CLI', why: '매거진 레인 PATH(~/.local/bin)', how: 'claude 설치 후 로그인' },
+]
+
+/**
+ * 🔴 **싣지 않는 매거진 자격증명·작업트리** — plan 이 "원 호스트에 남는다" 로 보여 준다.
+ *    이 경로들은 CANON_DIR 밖이라 묶음 걷기가 애초에 닿지 않는다. 여기 적는 것은 사람에게 알리려는 것이다.
+ */
+export const OUT_OF_LANE_PATHS: readonly { what: string; rel: string }[] = [
+  { what: '매거진 runtime 작업트리', rel: 'Documents/soransoran-magazine-runtime' },
+  { what: 'ChatGPT 자동화 프로필(매거진)', rel: 'Library/Application Support/soransoran-chatgpt-auto' },
+  { what: 'ChatGPT 프로필(매거진)', rel: 'Library/Application Support/soransoran-chatgpt' },
+  { what: 'claude CLI(매거진 PATH)', rel: '.local/bin/claude' },
 ]
 
 // ─────────────────────────────────────────────────────────
@@ -295,14 +366,21 @@ function reverseVars(v: HostVars): { from: string; to: string }[] {
   ]
 }
 
-/** 설치 plist → 호스트 중립 템플릿 */
+/**
+ * 설치 plist → 호스트 중립 템플릿.
+ * 🔴 매거진 runtime 경로도 `__MAGAZINE_REPO__` 로 되돌린다 — D100 템플릿에 이것이 남으면
+ *    `renderAndJudge` 가 잡는다(대상에는 매거진 runtime 을 만들지 않는다).
+ */
 export function templatizePlist(xml: string, source: HostVars): string {
   let out = xml
   for (const { from, to } of reverseVars(source)) out = out.split(from).join(to)
   return out
 }
 
-/** 템플릿 → 대상 호스트 plist — 🔴 치환 정본은 `launchd-install.render` 하나다 */
+/**
+ * 템플릿 → 대상 호스트 plist — 🔴 치환 정본은 `launchd-install.render` 하나다.
+ * 🔴 `__MAGAZINE_REPO__` 는 채우지 않는다 — D100 레인 대상에는 매거진 runtime 이 없다.
+ */
 export function renderForHost(template: string, target: HostVars): string {
   const p = hostPathsOf(target.home)
   return render(template, {
@@ -311,7 +389,7 @@ export function renderForHost(template: string, target: HostVars): string {
     nodebin: target.nodeBin,
     repo: p.runtimeRoot,
     logdir: p.logDir,
-    extra: { __MAGAZINE_REPO__: p.magazineRuntimeRoot, __HOME__: target.home },
+    extra: { __HOME__: target.home },
   })
 }
 
@@ -326,6 +404,8 @@ export type RenderedPlist = { label: string; xml: string; problems: string[] }
 export function renderAndJudge(label: string, template: string, target: HostVars): RenderedPlist {
   const xml = renderForHost(template, target)
   const problems: string[] = []
+  if (!isLaneLabel(label)) problems.push(`${LANE} 레인 allowlist 밖 label — 옮기지 않는다`)
+  if (template.includes('__MAGAZINE_REPO__')) problems.push('매거진 runtime 을 가리킨다 — D100 레인 job 이 아니다')
   const left = leftoverPlaceholders(xml)
   if (left.length > 0) problems.push(`치환 안 된 placeholder ${left.join(' ')}`)
   const foreign = foreignHomePaths(xml, target.home)
@@ -351,20 +431,24 @@ export type BundleMode = 'rehearsal' | 'cutover'
 
 export type BundleManifest = {
   formatVersion: number
+  /** 🔴 어느 레인의 묶음인가 — 대상은 `LANE` 과 같은 묶음만 받는다 */
+  lane: string
   bundleId: string
   mode: BundleMode
   createdAt: string
   source: { home: string; user: string; macos: string | null; arch: string; nodeBin: string; nodeVersion: string }
-  runtime: { pinnedSha: string | null; magazineSha: string | null }
+  runtime: { pinnedSha: string | null }
   envKeys: string[]
   envHomePathKeys: string[]
   plists: { label: string; file: string; loadedAtExport: boolean | null }[]
+  /** allowlist 에 있지만 원 호스트에 설치 plist 가 없던 label — 대상에도 없다 */
+  laneMissing: string[]
   excluded: { name: string; reason: string }[]
   quiesce: { handoffAt: string | null; loadedBefore: string[] } | null
   entries: BundleEntry[]
 }
 
-export type VerifyProblem = { code: 'HASH' | 'MISSING' | 'EXTRA' | 'PERM' | 'LEAK' | 'FORMAT' | 'PLIST'; detail: string }
+export type VerifyProblem = { code: 'HASH' | 'MISSING' | 'EXTRA' | 'PERM' | 'LEAK' | 'FORMAT' | 'PLIST' | 'LANE'; detail: string }
 
 /**
  * 🔴 **내용을 다시 읽고 비교한다.** 크기만 보면 같은 길이로 바뀐 비밀을 놓친다.
@@ -377,6 +461,11 @@ export function judgeManifest(input: {
   const out: VerifyProblem[] = []
   if (input.manifest.formatVersion !== BUNDLE_FORMAT_VERSION) {
     out.push({ code: 'FORMAT', detail: `formatVersion ${input.manifest.formatVersion} ≠ ${BUNDLE_FORMAT_VERSION}` })
+  }
+  if (input.manifest.lane !== LANE) out.push({ code: 'LANE', detail: `묶음 레인 ${String(input.manifest.lane)} ≠ ${LANE}` })
+  // 🔴 묶음에 allowlist 밖 job 이 끼어 있으면 대상에서 그것까지 올라간다
+  for (const p of input.manifest.plists ?? []) {
+    if (!isLaneLabel(p.label)) out.push({ code: 'LANE', detail: `allowlist 밖 job ${p.label}` })
   }
   const listed = new Set<string>()
   for (const e of input.manifest.entries) {
@@ -400,9 +489,10 @@ export function judgeManifest(input: {
 export type GuardVerdict = { ok: boolean; problems: string[] }
 
 /**
- * 🔴 **cutover 묶음을 만들 수 있는가** — 원 호스트가 완전히 내려가 있어야 한다.
+ * 🔴 **cutover 묶음을 만들 수 있는가** — 원 호스트의 **D100 레인**이 완전히 내려가 있어야 한다.
  *    loaded 0 만 보면 재부팅 때 plist 파일이 job 을 되살린다. 파일 0 까지 본다.
  *    launchctl 을 **못 읽었으면**(null) 내려갔다고 보지 않는다.
+ *    🔴 매거진·개발 job 은 여기서 세지 않는다 — 원 호스트에서 계속 돈다. 거르는 것은 이 함수 자신이다.
  */
 export function judgeCutoverExport(input: {
   loadedLabels: readonly string[] | null
@@ -411,10 +501,12 @@ export function judgeCutoverExport(input: {
   handoffBundleId: string | null
 }): GuardVerdict {
   const problems: string[] = []
-  if (input.loadedLabels === null) problems.push('launchctl 을 읽지 못했다 — 내려갔는지 모른다')
-  else if (input.loadedLabels.length > 0) problems.push(`원 호스트에 아직 loaded job ${input.loadedLabels.length}개: ${input.loadedLabels.join(' ')}`)
-  if (input.installedPlists.length > 0) {
-    problems.push(`원 호스트 LaunchAgents 에 plist ${input.installedPlists.length}개 — 재부팅·로그인 때 되살아난다`)
+  const loaded = input.loadedLabels === null ? null : input.loadedLabels.filter(isLaneLabel)
+  const files = lanePlistFiles(input.installedPlists)
+  if (loaded === null) problems.push('launchctl 을 읽지 못했다 — 내려갔는지 모른다')
+  else if (loaded.length > 0) problems.push(`원 호스트에 아직 D100 loaded job ${loaded.length}개: ${loaded.join(' ')}`)
+  if (files.length > 0) {
+    problems.push(`원 호스트 LaunchAgents 에 D100 plist ${files.length}개 — 재부팅·로그인 때 되살아난다`)
   }
   if (!input.handoffPresent) problems.push('handoff 표식이 없다 — 먼저 quiesce --apply')
   if (input.handoffBundleId !== null) {
@@ -425,30 +517,39 @@ export function judgeCutoverExport(input: {
 
 /**
  * 🔴 **대상에 올려도 되는가.**
- *    · rehearsal 묶음은 원 호스트가 살아 있는 채로 만든 것이다 — 올리면 두 호스트가 같이 돈다.
- *    · 대상에 이미 job 이 있으면 누가 주인인지 모른다.
+ *    · rehearsal 묶음은 원 호스트가 살아 있는 채로 만든 것이다 — 올리면 D100 이 두 호스트에서 같이 돈다.
+ *    · 다른 레인 묶음(또는 레인 없는 옛 묶음)은 받지 않는다.
+ *    · 대상에 이미 D100 job·소유 표식이 있으면 누가 주인인지 모른다.
+ *    · 묶음이 쓸 운영 파일이 대상에 이미 있으면 덮어쓰지 않는다.
  *    · 대상 사용자가 아닌 셸에서 부르면 `gui/<uid>` 가 다른 사람의 도메인이다.
  */
 export function judgeTargetInstall(input: {
   bundleMode: BundleMode
+  bundleLane: string
   verifyProblems: number
   targetPlists: readonly string[]
   targetLoaded: readonly string[] | null
-  targetCanonNonEmpty: boolean
+  targetOwnerPresent: boolean
+  targetCanonCollisions: readonly string[]
   targetRuntimeExists: boolean
   runningHome: string
   targetHome: string
   preflightFailures: number
 }): GuardVerdict {
   const problems: string[] = []
+  if (input.bundleLane !== LANE) problems.push(`${String(input.bundleLane)} 레인 묶음이다 — ${LANE} 묶음만 받는다`)
   if (input.bundleMode !== 'cutover') {
-    problems.push('rehearsal 묶음이다 — 원 호스트가 살아 있을 때 만든 것이라 올리면 두 호스트가 같이 돈다')
+    problems.push('rehearsal 묶음이다 — 원 호스트가 살아 있을 때 만든 것이라 올리면 D100 이 두 호스트에서 같이 돈다')
   }
   if (input.verifyProblems > 0) problems.push(`verify 실패 ${input.verifyProblems}건`)
-  if (input.targetPlists.length > 0) problems.push(`대상 LaunchAgents 에 이미 plist ${input.targetPlists.length}개`)
+  const plists = lanePlistFiles(input.targetPlists)
+  if (plists.length > 0) problems.push(`대상 LaunchAgents 에 이미 D100 plist ${plists.length}개`)
   if (input.targetLoaded === null) problems.push('대상 launchctl 을 읽지 못했다')
-  else if (input.targetLoaded.length > 0) problems.push(`대상에 이미 loaded job: ${input.targetLoaded.join(' ')}`)
-  if (input.targetCanonNonEmpty) problems.push('대상 운영 디렉터리가 비어 있지 않다 — 덮어쓰지 않는다')
+  else if (input.targetLoaded.some(isLaneLabel)) problems.push(`대상에 이미 D100 loaded job: ${input.targetLoaded.filter(isLaneLabel).join(' ')}`)
+  if (input.targetOwnerPresent) problems.push(`대상에 이미 ${OWNER_FILE} — D100 주인이 이미 있다`)
+  if (input.targetCanonCollisions.length > 0) {
+    problems.push(`대상 운영 디렉터리에 묶음이 쓸 항목이 이미 있다(${input.targetCanonCollisions.join(' ')}) — 덮어쓰지 않는다`)
+  }
   if (input.targetRuntimeExists) problems.push('대상 runtime 작업트리가 이미 있다')
   if (input.runningHome !== input.targetHome) {
     problems.push(`지금 셸의 홈(${input.runningHome})이 대상 홈(${input.targetHome})과 다르다 — 대상 사용자로 로그인해서 돌린다`)
@@ -498,13 +599,144 @@ export function busyLabels(rows: readonly { label: string; pid: number | null }[
 }
 
 // ─────────────────────────────────────────────────────────
+// 원 호스트 내리기 / 되살리기 — 🔴 D100 레인만. 매거진·개발 job 은 loaded 그대로, plist 제자리
+// ─────────────────────────────────────────────────────────
+
+export type QuiescePlan = {
+  /** bootout 할 D100 label */
+  bootout: string[]
+  /** LaunchAgents 밖으로 옮길 D100 plist 파일 이름 */
+  move: string[]
+  /** 실행 중이라 지금 내리면 안 되는 D100 label */
+  busy: string[]
+  /** 건드리지 않는 loaded job (매거진·개발·모르는 것) */
+  untouchedLoaded: string[]
+  /** 건드리지 않는 plist 파일 */
+  untouchedPlists: string[]
+}
+
+/** 🔴 allowlist 로 거르는 것이 이 함수의 일이다 — 부르는 쪽은 launchctl·디렉터리를 통째로 넘긴다 */
+export function planQuiesce(input: { rows: readonly { label: string; pid: number | null }[]; plistFiles: readonly string[] }): QuiescePlan {
+  const lane = input.rows.filter((r) => isLaneLabel(r.label))
+  return {
+    bootout: lane.map((r) => r.label),
+    move: lanePlistFiles(input.plistFiles),
+    busy: busyLabels(lane),
+    untouchedLoaded: input.rows.filter((r) => !isLaneLabel(r.label)).map((r) => r.label),
+    untouchedPlists: input.plistFiles.filter((f) => laneLabelOfPlistFile(f) === null),
+  }
+}
+
+export type QuiesceEffects = {
+  bootout: (label: string) => boolean
+  movePlist: (file: string) => boolean
+  /** 내린 뒤 다시 읽은 loaded label 전부 — 못 읽으면 null */
+  loadedAfter: () => string[] | null
+}
+
+export type QuiesceResult = { ok: boolean; moved: string[]; residual: string[] }
+
+/**
+ * 🔴 **plan.bootout · plan.move 밖은 절대 부르지 않는다.** 실행 중 회차가 있으면 아무것도 하지 않는다.
+ *    하나가 실패해도 나머지를 계속하고, 남은 D100 loaded·못 옮긴 파일을 적는다.
+ */
+export function runQuiesce(plan: QuiescePlan, fx: QuiesceEffects): QuiesceResult {
+  if (plan.busy.length > 0) return { ok: false, moved: [], residual: plan.busy.map((l) => `실행 중 ${l}`) }
+  const residual: string[] = []
+  for (const l of plan.bootout) if (!isLaneLabel(l) || !fx.bootout(l)) residual.push(`bootout 실패 ${l}`)
+  const moved: string[] = []
+  for (const f of plan.move) {
+    if (laneLabelOfPlistFile(f) !== null && fx.movePlist(f)) moved.push(f)
+    else residual.push(`plist 옮기기 실패 ${f}`)
+  }
+  const after = fx.loadedAfter()
+  if (after === null) residual.push('내린 뒤 launchctl 을 읽지 못했다')
+  else for (const l of after.filter(isLaneLabel)) residual.push(`아직 loaded ${l}`)
+  return { ok: residual.length === 0, moved, residual }
+}
+
+export type UnquiesceEffects = {
+  restorePlist: (file: string) => boolean
+  bootstrap: (label: string) => boolean
+}
+
+/**
+ * 🔴 **handoff 에 적힌 것 중 allowlist 안만 되살린다.** handoff 파일이 손으로 고쳐져 매거진 label 이
+ *    들어 있어도 여기서 걸러진다. 되살리는 job 은 내리기 전 loaded 였던 것만이다.
+ */
+export function runUnquiesce(handoff: { plists: readonly string[]; loadedBefore: readonly string[] }, fx: UnquiesceEffects): { ok: boolean; residual: string[] } {
+  const residual: string[] = []
+  for (const f of lanePlistFiles(handoff.plists)) if (!fx.restorePlist(f)) residual.push(`plist 제자리 실패 ${f}`)
+  for (const l of handoff.loadedBefore.filter(isLaneLabel)) if (!fx.bootstrap(l)) residual.push(`bootstrap 실패 ${l}`)
+  return { ok: residual.length === 0, residual }
+}
+
+/** 🔴 대상 되돌리기 — 묶음 manifest 의 label 중 allowlist 안만 내린다 */
+export function targetRollbackLabels(manifestLabels: readonly string[]): string[] {
+  return manifestLabels.filter(isLaneLabel)
+}
+
+// ─────────────────────────────────────────────────────────
+// 전원 — 🔴 기종은 묻지 않는다. **AC 에 꽂혀 있는가**만 본다
+// ─────────────────────────────────────────────────────────
+
+export type PowerReading = {
+  /** `Now drawing from '…'` */
+  source: 'ac' | 'battery' | 'ups' | 'unknown'
+  hasBattery: boolean
+  /** 배터리 줄의 상태 조각 — charging · charged · discharging · AC attached · finishing charge … */
+  batteryState: string | null
+  percent: number | null
+}
+
+/**
+ * `pmset -g batt` / `pmset -g ps` 출력 → 전원 상태. 두 명령은 같은 모양을 찍는다.
+ *   Now drawing from 'AC Power'
+ *    -InternalBattery-0 (id=…)	85%; charging; 1:02 remaining present: true
+ */
+export function parsePmsetBatt(text: string): PowerReading {
+  const src = /Now drawing from '([^']+)'/.exec(text)?.[1] ?? null
+  const source: PowerReading['source'] = src === null ? 'unknown'
+    : /^AC Power$/i.test(src) ? 'ac' : /^Battery Power$/i.test(src) ? 'battery' : /^UPS Power$/i.test(src) ? 'ups' : 'unknown'
+  const line = text.split('\n').find((l) => /InternalBattery/.test(l)) ?? null
+  if (line === null) return { source, hasBattery: false, batteryState: null, percent: null }
+  const m = /(\d+)%;\s*([^;]+);/.exec(line)
+  return { source, hasBattery: true, batteryState: m?.[2]?.trim() ?? null, percent: m === null ? null : Number(m[1]) }
+}
+
+/**
+ * 🔴 **D100 운영 조건 = AC 전원.** 배터리 있는 MacBook 도 된다 — 단 AC 에 꽂혀 있어야 한다.
+ *    · 배터리로 돌고 있음(discharging · 'Battery Power') → 실패 — `caffeinate -s` 가 듣지 않아 잠든다.
+ *    · UPS 로 돌고 있음 → 실패 — 정전 중이다.
+ *    · 못 읽음 → 실패(관측 없음은 통과가 아니다).
+ */
+export function judgePower(p: PowerReading): { ok: boolean; detail: string } {
+  if (p.source === 'unknown') return { ok: false, detail: '전원 관측 없음' }
+  if (p.source === 'battery') return { ok: false, detail: `배터리로 돌고 있다${p.percent === null ? '' : ` (${p.percent}%)`} — AC 에 꽂는다` }
+  if (p.source === 'ups') return { ok: false, detail: 'UPS 전원으로 돌고 있다 — 정전 중' }
+  if (!p.hasBattery) return { ok: true, detail: 'AC (배터리 없음)' }
+  const st = (p.batteryState ?? '').toLowerCase()
+  if (st === 'discharging') return { ok: false, detail: 'AC 표시지만 배터리 방전 중 — 어댑터 출력 부족' }
+  if (st === '') return { ok: false, detail: 'AC · 배터리 상태 관측 없음' }
+  return { ok: true, detail: `AC 연결 · 배터리 ${p.batteryState ?? ''}${p.percent === null ? '' : ` ${p.percent}%`}` }
+}
+
+/**
+ * 정전 뒤 자동으로 켜지는가 — 🔴 배터리가 있으면 배터리가 정전을 버티므로 autorestart 를 요구하지 않는다.
+ *    배터리 없는 Mac 은 `pmset autorestart 1` 이어야 한다.
+ */
+export function judgeAutorestart(p: PowerReading, autorestart: string | null): { ok: boolean; detail: string } {
+  if (p.hasBattery) return { ok: true, detail: '배터리가 짧은 정전을 버틴다 — autorestart 해당 없음' }
+  return autorestart === '1' ? { ok: true, detail: '1' } : { ok: false, detail: autorestart ?? '관측 없음' }
+}
+
+// ─────────────────────────────────────────────────────────
 // 대상 설치 — 🔴 진짜 명령은 부르는 쪽이 붙인다
 // ─────────────────────────────────────────────────────────
 
 export type InstallEffects = {
   cloneRepo: () => boolean
   addRuntime: (sha: string) => boolean
-  addMagazineRuntime: (sha: string) => boolean
   installDeps: () => boolean
   restoreState: () => boolean
   writeEnv: () => boolean
@@ -522,7 +754,6 @@ export type InstallEffects = {
 
 export type InstallInput = {
   pinnedSha: string
-  magazineSha: string | null
   plists: readonly RenderedPlist[]
   loadLabels: readonly string[]
 }
@@ -537,9 +768,10 @@ export type InstallResult = { ok: boolean; phase: string; rollback: { complete: 
 export function runInstall(input: InstallInput, fx: InstallEffects): InstallResult {
   const stop = (phase: string): InstallResult => ({ ok: false, phase, rollback: null })
   if (input.plists.some((p) => p.problems.length > 0)) return stop('render')
+  // 🔴 allowlist 밖 job 은 대상에 쓰지도 올리지도 않는다(render 판정을 건너뛴 입력이어도)
+  if (input.plists.some((p) => !isLaneLabel(p.label)) || input.loadLabels.some((l) => !isLaneLabel(l))) return stop('lane')
   if (!fx.cloneRepo()) return stop('clone')
   if (!fx.addRuntime(input.pinnedSha)) return stop('runtime')
-  if (input.magazineSha !== null && !fx.addMagazineRuntime(input.magazineSha)) return stop('magazine-runtime')
   if (!fx.installDeps()) return stop('deps')
   if (!fx.restoreState()) return stop('state')
   if (!fx.writeEnv()) return stop('env')
@@ -574,8 +806,8 @@ export function runInstall(input: InstallInput, fx: InstallEffects): InstallResu
 export const CUTOVER_ORDER: readonly string[] = [
   '① [원] npm run host:migrate                                   계획(읽기 전용)',
   '② [원] npm run host:migrate -- export --out=<외장/임시>       rehearsal 묶음 → 대상에서 verify · install dry-run 으로 사전 점검',
-  '③ [원] npm run host:migrate -- quiesce --apply                job 전부 bootout + plist 를 LaunchAgents 밖으로 · handoff 표식',
-  '④ [원] npm run host:migrate -- export --cutover --out=<dir>   loaded 0 · plist 0 · handoff 가 있어야 만든다',
+  '③ [원] npm run host:migrate -- quiesce --apply                D100 job 만 bootout + 그 plist 만 LaunchAgents 밖으로 · d100 handoff 표식 (매거진은 그대로 돈다)',
+  '④ [원] npm run host:migrate -- export --cutover --out=<dir>   D100 loaded 0 · D100 plist 0 · handoff 가 있어야 만든다',
   '⑤ 옮기기 — 암호화된 외장 볼륨 또는 AirDrop. 클라우드 드라이브·메신저 금지',
   '⑥ [대상] npm run host:migrate -- verify --bundle=<dir>',
   '⑦ [대상] npm run host:migrate -- install --bundle=<dir> --target-home=$HOME --apply',
@@ -584,8 +816,8 @@ export const CUTOVER_ORDER: readonly string[] = [
 ]
 
 export const ROLLBACK_ORDER: readonly string[] = [
-  '① [대상] npm run host:migrate -- rollback --bundle=<dir> --target-home=$HOME --apply   job bootout · plist 보관 · 소유 표식 삭제',
-  '② [원]   npm run host:migrate -- unquiesce --bundle-id=<①이 찍은 id> --apply           plist 제자리 · 내리기 전 loaded 였던 job 만 bootstrap',
+  '① [대상] npm run host:migrate -- rollback --bundle=<dir> --target-home=$HOME --apply   D100 job bootout · plist 보관 · d100 소유 표식 삭제',
+  '② [원]   npm run host:migrate -- unquiesce --bundle-id=<①이 찍은 id> --apply           D100 plist 제자리 · 내리기 전 loaded 였던 D100 job 만 bootstrap',
   '③ [원]   npm run runtime:isolation-check -- --require-runtime',
   '🔴 pin 은 되돌릴 것이 없다 — 원 호스트의 runtime-pinned-sha 는 이전 내내 바뀌지 않는다',
 ]

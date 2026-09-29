@@ -33,7 +33,7 @@
 | 문서 | 역할 |
 |---|---|
 | `M-GRAPH-PROJECT-CHARTER.md` | 🔴 매거진 검색 영토·주제망·시리즈·내부 연결·장기 발행 계획의 전략 정본 (정본 계층 4단계 · Master §4) |
-| `ALWAYS-ON-HOST.md` | 상시 실행 호스트 — 노트북 의존성 목록(측정/추정) · 전용 Mac 이전 묶음(`npm run host:migrate`) · 두 호스트 동시 실행 방지 · 전환/되돌리기 |
+| `ALWAYS-ON-HOST.md` | 상시 실행 호스트 — 노트북 의존성 목록(측정/추정) · D100 레인 9 job 을 상시 켜 둘 Mac(기종 무관 · AC 필수)으로 옮기는 묶음(`npm run host:migrate`) · 매거진 제외 · D100 두 호스트 동시 실행 방지 · 전환/되돌리기 |
 | `2026-09-03-controlled-activity-automation-strategy.md` | 자동화 속도·안전 전략 상세 |
 | `2026-09-02-original-post-lane-strategy.md` | Original Post Lane 상세 |
 | `2026-08-29-persona-network-strategy.md` | Persona와 댓글 비율 전략 상세 |
