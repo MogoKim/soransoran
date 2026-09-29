@@ -160,28 +160,19 @@ export function judgeOutstanding({ queryOk, prs = [], remoteBranches = [], local
 /**
  * GitHub·git 에서 판정에 필요한 값을 읽는다. **읽기 전용이다.**
  *
- * 🔴 `gh pr list` 를 쓴다. `--state all` 로 MERGED·CLOSED 까지 받아야
- *    "merge 됐으니 해소" 와 "닫혔지만 브랜치가 남음" 을 구분할 수 있다.
+ * 🔴 **브랜치마다 정확한 head 이름으로 PR 을 직접 조회한다** (2026-09-30 운영 실측).
+ *    앞판은 `gh pr list --state all --limit 100` 한 번을 정본으로 썼다. PR 이 쌓여 최저 번호가 #531 이
+ *    되자, 2026-09-16 에 MERGED 된 #524 의 브랜치가 목록 밖으로 밀려 **"PR 없는 브랜치"(ORPHAN_REMOTE_BRANCH)**
+ *    로 오판됐고 producer·자동 등록이 선정 전에 멈췄다. 창 크기를 키워도 언젠가 다시 밀린다.
+ *    그래서 ① origin·local 의 자동 브랜치 목록을 먼저 읽고 ② 각 브랜치를 `--head <이름>` 으로 조회해
+ *    ③ 합친 결과를 같은 `judgeOutstanding` 에 넘긴다.
+ *
+ * 🔴 `--state all` 이어야 MERGED(해소)·CLOSED(폐기 대기)를 구분한다.
+ * 🔴 **한 브랜치라도** 조회 실패·JSON 손상이면 전체가 "확정할 수 없다" 다 — fail closed.
+ *
+ * @param {{exec:(cmd:string,args:string[])=>{code:number,out:string,err?:string}}} p
  */
-export function readOutstanding({ exec, limit = 100 }) {
-  const pr = exec('gh', [
-    'pr', 'list', '--state', 'all', '--limit', String(limit),
-    '--json', 'number,url,headRefName,state',
-  ])
-  if (pr.code !== 0) {
-    return judgeOutstanding({ queryOk: false })
-  }
-
-  let prs = []
-  try {
-    const parsed = JSON.parse(pr.out || '[]')
-    if (!Array.isArray(parsed)) throw new Error('not an array')
-    prs = parsed
-  } catch {
-    // 🔴 읽기는 성공했는데 해석하지 못했다 — 이것도 "확정할 수 없다" 다
-    return judgeOutstanding({ queryOk: false })
-  }
-
+export function readOutstanding({ exec }) {
   // origin 의 자동 브랜치. 실패하면 목록을 비우지 않고 **확정 실패**로 넘긴다.
   const ls = exec('git', ['ls-remote', '--heads', 'origin', `refs/heads/${AUTO_BRANCH_PREFIX}*`])
   if (ls.code !== 0) return judgeOutstanding({ queryOk: false })
@@ -194,6 +185,25 @@ export function readOutstanding({ exec, limit = 100 }) {
   const lb = exec('git', ['branch', '--list', `${AUTO_BRANCH_PREFIX}*`, '--format=%(refname:short)'])
   if (lb.code !== 0) return judgeOutstanding({ queryOk: false })
   const localBranches = String(lb.out ?? '').split('\n').map((s) => s.trim()).filter(Boolean)
+
+  const prs = []
+  for (const head of [...new Set([...remoteBranches, ...localBranches])].filter(isAutoBranch)) {
+    const r = exec('gh', [
+      'pr', 'list', '--state', 'all', '--head', head, '--limit', '10',
+      '--json', 'number,url,headRefName,state',
+    ])
+    if (r.code !== 0) return judgeOutstanding({ queryOk: false })
+    let parsed
+    try {
+      parsed = JSON.parse(r.out || '[]')
+      if (!Array.isArray(parsed)) throw new Error('not an array')
+    } catch {
+      // 🔴 읽기는 성공했는데 해석하지 못했다 — 이것도 "확정할 수 없다" 다
+      return judgeOutstanding({ queryOk: false })
+    }
+    // 🔴 정확히 그 브랜치의 PR 만 받는다 — 다른 head 가 섞여 들어와도 판정에 쓰지 않는다
+    for (const pr of parsed) if (pr?.headRefName === head) prs.push(pr)
+  }
 
   return judgeOutstanding({ queryOk: true, prs, remoteBranches, localBranches })
 }
