@@ -4534,11 +4534,11 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
       await src(false).seedUseCount('P03') === 2 && await src(false).seedUseCount('P04') === 2)
     check('🔴 배정은 읽혔고 묶음만 없는 Persona 는 1 — 회차 전체를 멈추지 않는다(생성에서 그 대상만 막힌다)',
       await src(false).seedUseCount('P09') === 1)
-    check('🔴 배정 자체가 비었으면 null — 못 센 것을 1 로 채우지 않는다',
+    check('🔴 배정이 통째로 비어도 1 — seed 가 없으면 나눈 seed 도 없다(회차 전체를 멈추지 않는다)',
       await makeDbTargetSource({
         prisma: fakePrisma({ throws: false }), windowStart: new Date(0), readCorpus: false,
         referenceByCode: () => new Map(),
-      }).seedUseCount('P01') === null)
+      }).seedUseCount('P01') === 1)
     {
       const v = checkVoiceFingerprint('저도 그런 날이 있어요', { priorTexts: ['한 번 단 댓글이에요'], seedUseCount: 1 })
       check('🔴 댓글 1건을 단 Persona 가 다음 댓글에서 ⑧ regenerate 로 영구히 막히지 않는다',

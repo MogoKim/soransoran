@@ -446,16 +446,16 @@ export function stableAssignment(input: {
  *       같은 댓글을 Comment 와 PUBLISHED Queue 로 두 번 세어, 댓글 1건을 단 Persona 는
  *       3 → ⑧ regenerate 로 **영구히** 막혔다(2026-09-28·29 운영 반례 P01).
  *       자기 말투 반복은 ⑧ 의 반복 축(`priorTexts` 말끝·시작어절·3-gram)이 본다.
- *    🔴 배정 자체가 비었으면 `null`(못 셈) — 호출부가 입력 미비로 유료 호출을 막는다.
- *    🔴 배정은 읽혔는데 이 Persona 에게 묶음이 없으면 `1` — 받은 seed 가 없으니 나눈 seed 도 없다.
- *       그 대상은 생성 단계에서 `REFERENCE_MISSING` 으로 **그 대상만** 막힌다. 여기서 null 을 내면
- *       materializer 가 **회차 전체**를 멈춘다(fail-closed 가 정상 대상까지 막는다).
+ *    🔴 이 Persona 에게 묶음이 없으면(배정이 통째로 비었어도) `1` — 받은 seed 가 없으니 나눈 seed 도 없다.
+ *       생성 경로도 같은 뜻으로 읽는다(배정이 비면 reference 없이 부르고, 일부만 없으면 그 대상만
+ *       `REFERENCE_MISSING`). 여기서 null 을 내면 materializer 가 **회차 전체**를 멈춘다 —
+ *       fail-closed 가 정상 대상까지 막는다(CI 격리 DB 검사가 실제로 그렇게 멈췄다).
+ *    🔴 `null`(못 셈)은 **배정을 읽다 실패한 경우**뿐이다 — 호출부(`makeDbTargetSource`)가 예외를 null 로 바꾼다.
  */
 export function referenceSeedShareCount(
   byCode: ReadonlyMap<string, VoiceReferenceBundle>,
   personaCode: string,
 ): number | null {
-  if (byCode.size === 0) return null
   const mine = byCode.get(personaCode)
   if (mine === undefined || mine.comments.length === 0) return 1
   const holders = new Map<string, number>()
