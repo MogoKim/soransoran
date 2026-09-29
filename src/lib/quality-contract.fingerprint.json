@@ -1,11 +1,11 @@
 {
-  "version": "quality-v5",
-  "digest": "5223b92d149d5261791332fbb16b7e3bf80beb71446bc263c8ae6995051a2e30",
+  "version": "quality-v4",
+  "digest": "379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa",
   "files": {
-    "src/lib/quality-contract.ts": "3d11ee94c7fe936363570c9a8f38f8f52a18bf6de9539d1ff26cba726d7d7922",
+    "src/lib/quality-contract.ts": "930c0c2e3800e5531972337e98f27c6e987252f368294a4fc363b4bd2260ce25",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "b97fccac9bbc7deef3d03549187d5d6d1091f975146db08ad1f3629a31f13777",
-    "src/lib/content-core/review.ts": "0029367f5bfd3f8562376cf6da3621693aee6a2c1b052f02ba085e854154ec72",
+    "src/lib/content-core/review.ts": "789486486d4a2f31f171d328167a4a63352deec5393bcb3be896c89cea14ac34",
     "src/lib/content-core/pipeline.ts": "a20b40cdb7ca8e2030b3e25ab10d53739435e1f946b7fa10da79beed4a2a90b3",
     "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
@@ -17,25 +17,23 @@
     "scripts/lib/content-core-run.mts": "d1941a7157ad7d8557098454c1acd89d107779f9528410086e85a023f81ea168",
     "scripts/lib/content-core-prompts.mts": "331e3c47db1535e01092316afbfdae3b97b9120619b2508745fac103667a431f",
     "src/lib/auto-ready-quality-cohort.ts": "cdd18f8b1346f49ae37f8244ac2b353e98b726097a07100cfaa207dfe7e0ddbe",
-    "src/lib/auto-ready-repo.ts": "5ff5374ca08880fef1b2e9765d8bce3281085e19efd37f8e08d8746226bed535",
+    "src/lib/auto-ready-repo.ts": "f9e39148446da4408af215dcf2879bd4c5e9eb1594eecd0a3078cb3b334bd9ca",
     "src/lib/auto-ready-evidence.ts": "44876509f73df30bc067263cf3040203a44aafd93863b611a96ed2beee1f1503",
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
     "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d",
     "src/lib/persona-cap.ts": "83744d04e42d76a4402d31ff743c0da94db7456efe89091084ec87968cadbf50",
     "src/lib/founder-gold.ts": "92e7ddb5629d29f4fac275333ab029ffadeb7a0da4a77fcc8f2cda95e05b6b74",
-    "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
-    "src/lib/raw-adaptation.ts": "e232fc1f94fa41750b04610e54305a8f8afe73760f709ff91b99c599395a8147"
+    "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v4 → quality-v5",
+    "kind": "behaviorUnchanged",
+    "reason": "quality-v4 이 덮는 seed 경로 행동 불변 — 적응(raw-adapt-v1)은 별도 레인 계약(raw-adapt-lane.ts) · 사람 검토 전용. review.ts 는 타입·라벨만(DETERMINISTIC_CODES 불변) · 생성/프롬프트는 route=adapt 일 때만 · auto-ready-repo 는 적응 흔적 행 제외만 추가(v4 행 영향 0) · digest 379bf6c6 = main",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
       "src/lib/content-core/review.ts",
       "src/lib/micro-seed-auto-draft.ts",
       "scripts/lib/content-core-run.mts",
       "scripts/lib/content-core-prompts.mts",
-      "src/lib/raw-adaptation.ts"
+      "src/lib/auto-ready-repo.ts"
     ]
   }
 }

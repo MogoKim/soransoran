@@ -446,8 +446,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    // 🔴 (2026-09-29) v5 = 적응 경로 — 초안 게이트 자체는 v4 그대로다
-    check(`품질 계약 판 = quality-v5 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v5')
+    check(`품질 계약 판 = quality-v4 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v4')
     check(`초안 게이트 판 = draft-gates-v4 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v4')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)

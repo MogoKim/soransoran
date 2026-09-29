@@ -1401,6 +1401,11 @@ async function main(): Promise<void> {
       reviewedAt: nowIso,
       // 🔴 채택 판정(`pickV2`)이 캐시·새 생성 모두에서 다시 낸 값 — 없으면 적재기가 경고로 읽는다
       lifeReview: a.pick.lifeReview ?? null,
+      /**
+       * 🔴 **초안 경로** (2026-09-29) — artifact 계약에서 읽는다. 적응 artifact 는 적응 레인 표식을 달고
+       *    품질 계약(quality-v4) 밖에서 사람 검토로만 간다(`raw-adapt-lane.ts`).
+       */
+      draftRoute: isAdaptationContract(a.art.contract) ? 'adapt' : 'seed',
     })),
   }), null, 2)}\n`, 'utf-8')
   writeFileSync(artPath, `${JSON.stringify(artifacts, null, 2)}\n`, 'utf-8')

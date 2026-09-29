@@ -28,6 +28,8 @@ export const AUTO_GATE_VERDICT = 'PASS'
 import { AUTO_DECIDER, readStamp, stampValidFor } from './auto-ready-v2'
 import { LEGACY_DECISION_MARK } from './review-provenance'
 import { isCurrentQualityContract } from './quality-contract'
+/** 🔴 적응 레인(긴 사연 적응 초안) — 사람 검토 전용 (2026-09-29) */
+import { carriesRawAdaptMark } from './raw-adapt-lane'
 import { titleKey } from './draft-originality'
 import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
@@ -358,6 +360,11 @@ export function selectAutoTargets(
        *    🔴 사람이 검토한 행(`founder`)은 이 블록에 들어오지 않는다 — 그 뜻은 그대로다.
        */
       if (!isCurrentQualityContract(r.gateResults)) { push(r.id, 'QUALITY_CONTRACT_MISMATCH'); continue }
+      /**
+       * 🔴 **적응 레인 행은 자동 도장이 있어도 자동 경로가 아니다** (2026-09-29 · `raw-adapt-lane.ts`).
+       *    거절 코드를 새로 만들지 않는다 — 품질 계약(quality-v4) 밖이라는 같은 뜻이고 푸는 주체(사람)도 같다.
+       */
+      if (carriesRawAdaptMark(r.gateResults)) { push(r.id, 'QUALITY_CONTRACT_MISMATCH'); continue }
       if (opts.autoReadyOpen !== true) { push(r.id, 'AUTO_READY_CLOSED'); continue }
       if (!stampValidFor(readStamp(r.editDiff), r.title, r.body).ok) { push(r.id, 'AUTO_READY_STALE'); continue }
 

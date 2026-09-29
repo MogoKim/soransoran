@@ -15,8 +15,10 @@
  *    ② **쟁점 보존** — 원문 제목의 주제 낱말이 하나 이상 남아야 하고, 원문에 논쟁 표지(서운 · 누가 맞나 ·
  *       어떻게 생각하세요 …)가 있으면 초안에도 하나 이상 남아야 한다. 불편한 소재(남녀·부부·시댁 갈등 ·
  *       연예인 · 돈 · 흔한 건강 궁금증 · 거친 의견)를 **순하게 만들어 반응 거리를 없애는 것**을 막는다.
- *    ③ **사람 검토** — 적응 초안은 창업자 gold 에 표본이 한 건도 없다. 자동 READY 로 가지 않는다
- *       (`DRAFT_LIFE_REVIEW:rawAdaptation` 경고). 적응 초안의 자동 READY 는 gold 에 적응 표본이 생긴 뒤 다시 증명한다.
+ *    ③ **사람 검토 전용 레인** — 적응 초안은 창업자 gold 에 표본이 한 건도 없다. 자동 READY 로 가지 않는다.
+ *       적재기가 품질 계약 표식 대신 **적응 레인 표식**(`raw-adapt-lane.ts`)과 `DRAFT_LIFE_REVIEW:rawAdaptation`
+ *       경고를 싣는다 — quality-v4 계약 · cohort · 자동 도장 · 자동 발행 재검증 어디에도 들어가지 않는다.
+ *       적응 초안의 자동 READY 는 gold 에 적응 표본이 생긴 뒤 **별도 계약으로** 다시 증명한다.
  *
  * 🔴 **그대로인 것** — 실질 복제 · 원문 제목 복제 · 개인정보 · 금지어 · 위해(개인 특정 · 단정 명예훼손 ·
  *    괴롭힘 · 위험한 의료 지시) · 위기 신호 · 초안 게이트 · 의미 검수. 전부 기존 정본을 그대로 지난다.
@@ -28,7 +30,10 @@ import { createHash } from 'node:crypto'
 
 import { RAW_AXIS } from './micro-seed-auto-judge'
 
-/** 🔴 적응 경로의 판 — 규칙·지시문이 바뀌면 올린다. 품질 계약 digest 에 들어간다 */
+/**
+ * 🔴 적응 경로의 판 — 규칙·지시문이 바뀌면 올린다. **적응 레인 계약**(`raw-adapt-lane.ts`) digest 에 들어간다.
+ *    🔴 품질 계약(quality-v4) digest 에는 넣지 않는다 — 넣으면 지금 자동 READY 재고 전부가 legacy 가 된다.
+ */
 export const RAW_ADAPTATION_VERSION = 'raw-adapt-v1'
 
 /** 🔴 초안 경로 둘 — `seed` 는 기존 그대로, `adapt` 는 위 세 가지를 더 지킨다 */
@@ -58,7 +63,10 @@ export function requiredRouteOf(decision: string): DraftRoute | null {
   return null
 }
 
-/** 🔴 적응 경로의 결정적 실패 — 이름은 결정적 검사 정본(`DETERMINISTIC_CODES`)에 그대로 들어간다 */
+/**
+ * 🔴 적응 경로의 결정적 실패 — artifact 의 결정적 실패 칸(`DeterministicCode` 타입 · 라벨)에 담긴다.
+ *    🔴 `DETERMINISTIC_CODES` 배열(품질 계약 digest 의 구성)에는 넣지 않는다.
+ */
 export const RAW_ADAPTATION_CODES = ['adaptSelfExperience', 'adaptTopicLost', 'adaptDebateLost'] as const
 export type RawAdaptationCode = (typeof RAW_ADAPTATION_CODES)[number]
 

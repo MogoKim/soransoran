@@ -40,7 +40,6 @@ import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
 import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
-import { RAW_ADAPTATION_VERSION, RAW_ADAPTATION_RULES_DIGEST, RAW_ADAPTATION_CODES, RAW_ADAPTATION_REVIEW_CODE } from './raw-adaptation'
 
 /**
  * 🔴 **품질 계약 판** — 게이트·검수의 판정이 바뀌면 올린다.
@@ -59,14 +58,8 @@ import { RAW_ADAPTATION_VERSION, RAW_ADAPTATION_RULES_DIGEST, RAW_ADAPTATION_COD
  *      다가오는 명절 · 1인칭 금융 행동 · 결혼 전 연애 단계 · 받아칠 거리 없는 하소연 사람 검토) ② **열림 근거를 창업자 gold
  *      재생으로** 바꾼다(`QUALITY_EVIDENCE_BASIS`) — 새 30건 사람 검토를 요구하지 않는다. 감사 결함 · 재시도 가능 실패 ·
  *      판정 대기 시한 · 글 유실 · 사람 중대 결함은 그대로 닫는다. 🔴 v3 행을 고치거나 지우지 않는다.
- *    `quality-v5` (2026-09-29) = **적응 경로** — 긴 사연(raw 축 · `AUTO_RAW`) 원천을 쟁점만 꺼낸 AI 원작 글로 초안화한다
- *      (`raw-adaptation.ts` — 1인칭 경험 금지 · 주제 낱말 · 논쟁 보존 · 결정적 검사 3종 · 채택 자리 경로 대조).
- *      seed 경로의 게이트·검수·계약은 한 글자도 바뀌지 않았고 창업자 gold 30/30 재생도 그대로다 — 그러나
- *      🔴 **gold 에 적응 표본이 한 건도 없다.** 그래서 적응 초안은 `DRAFT_LIFE_REVIEW:rawAdaptation` 경고를 달고
- *      사람 검토로만 간다(자동 READY 표본 아님). 적응 초안의 자동 READY 열림 근거는 gold 에 적응 표본이 생긴 뒤
- *      **다시 증명**해야 한다. 🔴 v4 행을 고치거나 지우지 않는다 — digest 가 달라 legacy 가 된다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v5'
+export const QUALITY_CONTRACT_VERSION = 'quality-v4'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -106,11 +99,6 @@ export function qualityContractComponents(): Record<string, unknown> {
     evidenceBasis: QUALITY_EVIDENCE_BASIS,
     founderGold: { version: FOUNDER_GOLD_VERSION, digest: FOUNDER_GOLD_PINNED_DIGEST, shape: FOUNDER_GOLD_SHAPE },
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-    // 🔴 (v5) 적응 경로 — 판 · 지시문 지문 · 결정적 코드 · 사람 검토 경고 이름
-    rawAdaptation: {
-      version: RAW_ADAPTATION_VERSION, rulesDigest: RAW_ADAPTATION_RULES_DIGEST,
-      codes: RAW_ADAPTATION_CODES, reviewCode: RAW_ADAPTATION_REVIEW_CODE,
-    },
     semanticHoldCodes: SEMANTIC_HOLD_CODES,
     judgeContractDigest: JUDGE_CONTRACT_DIGEST,
   }

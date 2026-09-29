@@ -50,7 +50,7 @@ console.log('\n① 🔴 사람 판정을 사칭하지 않는다')
   check('🔴 provenance 가 사람 것이 아니다',
     !(HUMAN_PROVENANCE as readonly string[]).includes(AUTO_PROVENANCE))
   check('ruleVersion 이 붙는다', j().ruleVersion === RULE_VERSION)
-  // 🔴 v4 (2026-09-29) — 모델 통과 라벨로 HOLD 하지 않는다(axisMismatch 폐지)
+  // 🔴 v4 (2026-09-29) — raw 축에서만 모델 통과 라벨로 HOLD 하지 않는다(raw 축 axisMismatch 폐지 · seed 축 불변)
   check('🔴 v4 로 올랐다 — 판정 규칙이 바뀌면 캐시를 분리한다', RULE_VERSION === 'auto-judge-v4')
   check('promptVersion 이 붙는다', j().promptVersion === PROMPT_VERSION)
   check('decidedAt 이 붙는다', j().decidedAt === NOW)
@@ -157,11 +157,12 @@ console.log('\n②-c 🔴 semantic judge — 모르면 통과가 아니다')
   check('사유가 lowConfidence',
     j({}, okSem({ confidence: 0.1 })).reasonCodes.includes('lowConfidence'))
   /**
-   * 🔴 **v4 (2026-09-29) — 통과 라벨은 축 신호가 아니다.** 판정 프롬프트는 SEED 와 RAW 를 정의하지 않는다.
-   *    위험 0 · 확신 충분 · 모델도 통과라 했으면 **우리 축**이 결정을 정한다 (v3 는 axisMismatch HOLD 였다).
+   * 🔴 **v4 (2026-09-29) — raw 축에서만 통과 라벨을 축 신호로 쓰지 않는다.** 판정 프롬프트는 SEED 와 RAW 를 정의하지 않는다.
+   *    raw 축은 위험 0 · 확신 충분 · 모델도 통과라 했으면 `AUTO_RAW`(적응 레인 · 사람 검토 전용)다.
+   *    🔴 seed 축은 v3 그대로다 — `AUTO_SEED` 집합이 넓어지면 quality-v4 계약(자동 READY 재고)이 덮는 입력이 바뀐다.
    */
-  check('🟢 v4 — seed 축인데 모델이 AUTO_RAW 라 해도 AUTO_SEED 다 (축은 우리가 정한다)',
-    j({}, okSem({ decision: 'AUTO_RAW' })).decision === 'AUTO_SEED')
+  check('🔴 모델이 다른 축을 말하면 HOLD — seed 축은 v3 그대로 (축은 우리가 정한다)',
+    j({}, okSem({ decision: 'AUTO_RAW' })).decision === 'AUTO_HOLD')
   check('🟢 v4 — raw 축인데 모델이 AUTO_SEED 라 해도 AUTO_RAW 다 (적응 경로)',
     j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_SEED' })).decision === 'AUTO_RAW')
   check('🔴 v4 — 통과 라벨이 달라도 위험이 있으면 그대로 막는다 (라벨이 위해를 풀지 않는다)',
@@ -322,10 +323,10 @@ console.log('\n②-d 🔴 위험 축 — v1 이 못 잡던 것들')
     j({}, okSem({ decision: 'AUTO_DROP', risks: [] })).reasonCodes.includes('unexplainedModelDrop'))
   check('🔴 모델이 AUTO_HOLD 라 하면 격리한다',
     j({}, okSem({ decision: 'AUTO_HOLD' })).decision === 'AUTO_HOLD')
-  check('🔴 v4 는 axisMismatch 를 내지 않는다 — 사유는 우리 축(axisSeed · axisRaw)이다',
-    !j({}, okSem({ decision: 'AUTO_RAW' })).reasonCodes.includes('axisMismatch')
-    && j({}, okSem({ decision: 'AUTO_RAW' })).reasonCodes.join(',') === 'axisSeed'
-    && j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_SEED' })).reasonCodes.join(',') === 'axisRaw')
+  check('seed 축이 어긋나면 axisMismatch (v3 그대로)',
+    j({}, okSem({ decision: 'AUTO_RAW' })).reasonCodes.includes('axisMismatch'))
+  check('🔴 v4 raw 축은 axisMismatch 를 내지 않는다 — 사유는 우리 축(axisRaw)이다',
+    j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_SEED' })).reasonCodes.join(',') === 'axisRaw')
 }
 
 console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')

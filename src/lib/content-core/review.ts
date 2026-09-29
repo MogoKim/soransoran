@@ -19,7 +19,7 @@
  */
 import { CLAIM_FACTS } from './source-facts'
 import { DRAFT_GATE_CODES, DRAFT_GATE_LABEL } from './draft-life-gates'
-import { RAW_ADAPTATION_CODES, RAW_ADAPTATION_LABEL } from '../raw-adaptation'
+import { RAW_ADAPTATION_LABEL, type RawAdaptationCode } from '../raw-adaptation'
 
 export const REVIEW_VERSION = 'review-v7'
 
@@ -37,14 +37,16 @@ export const DETERMINISTIC_CODES = [
    *    `draft-life-gates.ts` 하나다. 원문과 견주는 의미 검수는 이 셋을 볼 자리가 없다.
    */
   ...DRAFT_GATE_CODES,
-  /**
-   * 🔴 **적응 경로(긴 사연 → AI 원작 글)의 결정적 실패** (2026-09-29 · `raw-adapt-v1`).
-   *    1인칭 경험으로 옮김 · 주제 낱말 소실 · 논쟁 소실 — 정본은 `raw-adaptation.ts` 하나다.
-   *    seed 경로에서는 판정하지 않는다.
-   */
-  ...RAW_ADAPTATION_CODES,
 ] as const
-export type DeterministicCode = (typeof DETERMINISTIC_CODES)[number]
+/**
+ * 🔴 **적응 경로(긴 사연 → AI 원작 글)의 결정적 실패도 같은 칸에 담긴다** (2026-09-29 · `raw-adapt-v1`).
+ *    1인칭 경험으로 옮김 · 주제 낱말 소실 · 논쟁 소실 — 정본은 `raw-adaptation.ts` 하나다.
+ *    🔴 **`DETERMINISTIC_CODES` 배열에는 넣지 않는다.** 그 배열은 품질 계약(quality-v4) digest 의 구성이다 —
+ *       넣는 순간 digest 가 바뀌어 지금 자동 READY 재고 전부가 legacy 가 된다. 적응 경로는 별도 계약
+ *       (`raw-adapt-lane.ts`)이고, 여기서는 **타입과 라벨만** 넓힌다(런타임 값 불변).
+ *    seed 경로에서는 판정하지 않는다.
+ */
+export type DeterministicCode = (typeof DETERMINISTIC_CODES)[number] | RawAdaptationCode
 
 export const DETERMINISTIC_LABEL: Readonly<Record<DeterministicCode, string>> = {
   personalInfo: '개인정보가 들어 있다',

@@ -29,6 +29,10 @@ import {
 import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, lifeReviewHoldsOf, type SemanticSummary } from './semantic-summary-codes'
 /** 🔴 품질 계약 — 적재기가 저장하는 값은 이 파일의 코드 상수다(후보 파일 값이 아니다) */
 import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } from './quality-contract'
+/** 🔴 적응 레인(긴 사연 → AI 원작 글) — 품질 계약 밖의 별도 계약 · 사람 검토 전용 (2026-09-29) */
+import {
+  isRawAdaptCandidate, isCurrentRawAdaptMark, currentRawAdaptContract, RAW_ADAPT_CONTRACT_KEY, RAW_ADAPT_REVIEW_HOLD,
+} from './raw-adapt-lane'
 
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
@@ -305,6 +309,12 @@ export type Candidate = {
    *    `lifeReviewHoldsOf` 가 본다: 없거나 어긋나면 `DRAFT_LIFE_REVIEW:unread` 경고다.
    */
   lifeReview?: unknown
+  /**
+   * 🔴 **초안 경로** (2026-09-29) — `adapt` 면 적응 레인(`raw-adapt-lane.ts`)이다. seed 후보에는 칸이 없다.
+   *    `rawAdaptContract` 는 생성 코드의 적응 레인 표식 — 적재기는 **대조만** 하고 저장은 자기 코드 상수로 한다.
+   */
+  draftRoute?: unknown
+  rawAdaptContract?: unknown
   candidateType?: string
   sourceArticleId?: string
   sourceSite?: string
@@ -683,6 +693,15 @@ export function buildQueuePayload(input: {
     const aj = input.autoJudge ?? {}
     // 🔴 판정 출처가 없으면 만들지 않는다 — 있지도 않은 근거를 지어내지 않는다
     if (S(aj.ruleVersion) === '' || S(aj.provenance) === '') return null
+    /**
+     * 🔴 **적응 레인** (2026-09-29 · `raw-adapt-lane.ts`). 긴 사연 적응 후보는 품질 계약(quality-v4) 밖이다.
+     *    · 신호 셋 중 하나라도 있으면 적응이다(fail-closed) — 지금 적응 규칙 표식이 아니면 싣지 않는다
+     *    · 품질 계약 표식을 **적지 않고** 적응 레인 표식을 적는다 → v4 cohort · 자동 도장 · 발행 재검증 밖
+     *    · 사람 검토 경고(`DRAFT_LIFE_REVIEW:rawAdaptation`)를 반드시 싣는다 → 자동 적격도 아니다
+     */
+    const adapt = isRawAdaptCandidate(c)
+    if (adapt && !isCurrentRawAdaptMark(c.rawAdaptContract)) return null
+    const lifeHolds = lifeReviewHoldsOf(c.lifeReview)
     return {
       profile: 'machine',
       // 🔴 여기가 P0 였다. 기계는 기계 접두다
@@ -703,7 +722,9 @@ export function buildQueuePayload(input: {
            * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2). 채택은 됐지만
            *    사람이 봐야 한다 — 자동 READY 에서만 빠진다. 칸이 없으면 `unread` 경고다(통과 아님).
            */
-          ...lifeReviewHoldsOf(c.lifeReview),
+          ...lifeHolds,
+          // 🔴 적응 행은 사람 검토 경고가 **반드시** 있다 — 후보가 빠뜨려도 여기서 싣는다
+          ...(adapt && !lifeHolds.includes(RAW_ADAPT_REVIEW_HOLD) ? [RAW_ADAPT_REVIEW_HOLD] : []),
         ],
         blocks: [],
         [SEMANTIC_SUMMARY_KEY]: semanticSummaryOf(input.review),
@@ -711,7 +732,13 @@ export function buildQueuePayload(input: {
          * 🔴 **품질 계약 — 지금 코드 상수다** (2026-09-27). 봉투 값을 옮기지 않는다 —
          *    봉투는 위 `machineProfileMismatch` 에서 **같은지만** 봤다. 입력으로 바꿀 칸이 없다.
          */
-        [QUALITY_CONTRACT_KEY]: currentQualityContract(),
+        /**
+         * 🔴 **적응 행은 품질 계약 표식 대신 적응 레인 표식** (2026-09-29). 둘을 함께 싣지 않는다 —
+         *    적응 행이 v4 표식을 들면 v4 cohort 표본이 되고, 사람이 찾은 결함이 v4 자동 READY 를 닫는다.
+         */
+        ...(adapt
+          ? { [RAW_ADAPT_CONTRACT_KEY]: currentRawAdaptContract() }
+          : { [QUALITY_CONTRACT_KEY]: currentQualityContract() }),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
           candidateType: S(c.candidateType),

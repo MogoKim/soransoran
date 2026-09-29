@@ -2,14 +2,17 @@
 /**
  * 적응 경로 검사 — 🔴 **긴 사연(raw) 원천이 쟁점을 살린 AI 원작 글이 되는가 · 막을 것은 여전히 막히는가** (2026-09-29)
  *
- *   ① 재현 모양 — 앞판 규칙(v3)이면 초안 0 인 원천이 v4 에서 적응 경로로 간다 · 바뀐 자리는 `axisMismatch` 하나뿐
+ *   ① 재현 모양 — 앞판 규칙(v3)이면 초안 0 인 원천이 v4 에서 적응 경로로 간다 · 바뀐 자리는 raw 축 `axisMismatch` 하나뿐
+ *      · seed 축 판정은 v3 와 같다 — `AUTO_SEED` 집합이 그대로여야 quality-v4 계약이 덮는 입력이 그대로다
  *   ② 앞 판 결론 인정 — v3 결론은 그대로(유료 재판정 0) · `axisMismatch` 기록만 다시 본다
  *   ③ 결정적 판정 — 주제 낱말 · 논쟁 표지 · 1인칭 자리
  *   ④ 전체 사슬 — 안전 필터 → 상세 축 → 판정 v4 → 경로 → Content Core(가짜 provider) → 채택
  *      · 불편하지만 안전한 소재(남녀·부부 갈등 · 연예인 · 돈 · 흔한 건강 궁금증 · 거친 의견 · 댓글 많은 글) → 채택
  *      · 개인정보 · 단정 명예훼손 · 괴롭힘 · 위험한 의료 지시 · 원문 복제 · 쟁점 소실 → 막힘
  *   ⑤ 경로 대조 — AUTO_RAW 를 적응 없이 만들면 채택하지 않는다 (raw 를 seed 로 흘리는 변이를 잡는다)
- *   ⑥ 사람 검토 — 적응 초안은 `DRAFT_LIFE_REVIEW:rawAdaptation` 경고로 적재 → 자동 READY 표본 아님
+ *   ⑥ 별도 레인 — 품질 계약(quality-v4) digest 는 main 과 **바이트 단위로 같다**(지금 자동 READY 재고가 legacy 가 되지 않는다).
+ *      적응 초안은 품질 계약 표식 대신 적응 레인 표식(`raw-adapt-v1`) + `DRAFT_LIFE_REVIEW:rawAdaptation` 경고로 적재 →
+ *      자동 도장 · selector · 발행 재검증 어디에도 들어가지 않는다(사람 검토 전용)
  *   ⑦ 창업자 gold 30/30 · 사람 중대 결함 누출 0 — seed 경로 판정은 그대로다
  *
  *   🔴 fixture 는 **합성 문장**이다 — 회원 원문을 옮기지 않았다. 모양(길이 · 축 · 댓글 수 · 판정 모양)만 실측을 따른다.
@@ -37,7 +40,19 @@ import {
 import type { HumanReviewArtifact } from '../src/lib/content-core/artifact'
 import { lifeReviewHoldsOf } from '../src/lib/semantic-summary-codes'
 import { replayFounderGold, describeFounderGold } from '../src/lib/founder-gold'
-import { qualityContractComponents, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
+import {
+  qualityContractComponents, qualityContractDigest, isCurrentQualityContract, QUALITY_CONTRACT_VERSION, QUALITY_CONTRACT_KEY,
+} from '../src/lib/quality-contract'
+import { DETERMINISTIC_CODES, DETERMINISTIC_LABEL } from '../src/lib/content-core/review'
+import {
+  rawAdaptContractDigest, currentRawAdaptContract, carriesRawAdaptMark, autoLaneContractOk, isRawAdaptCandidate,
+  RAW_ADAPT_CONTRACT_KEY, RAW_ADAPT_REVIEW_HOLD,
+} from '../src/lib/raw-adapt-lane'
+import { buildQueuePayload, queueProfileOf, type Candidate } from '../src/lib/micro-seed-supply-autofill'
+import { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } from '../src/lib/micro-seed-auto-draft'
+import { eligibilityOf, AUTO_DECIDER, makeStamp } from '../src/lib/auto-ready-v2'
+import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
+import { candidateEnvelope } from './lib/candidate-envelope.mjs'
 import { judgementOutcome, artifactOutcome } from '../src/lib/supply-workset'
 import { runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult } from './lib/content-core-run.mjs'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
@@ -127,6 +142,18 @@ console.log('① 재현 모양 — 앞판이면 초안 0, v4 는 적응 경로 �
   check('🔴 🔴 **바뀐 자리는 통과 라벨 불일치 하나뿐 — 위험·격리·실패·확신 분기는 한 건도 바뀌지 않았다**',
     changedNotMismatch === 0, String(changedNotMismatch))
   check('🔴 🔴 **DROP 수가 늘지 않았다 (안전한 논쟁 소재의 거짓 폐기 증가 0)**', v4Drop === v3Drop, `${v3Drop} → ${v4Drop}`)
+  // 🔴 seed 축 — v3 와 한 글자도 같다. 모델 라벨 둘 · 위험 · 확신 · 실패 전부
+  const seedCases: SemanticOutcome[] = [
+    ok(sem()), ok(sem({ decision: 'AUTO_RAW' })), ok(sem({ decision: 'AUTO_HOLD' })), ok(sem({ decision: 'AUTO_DROP' })),
+    ok(sem({ confidence: MIN_CONFIDENCE - 0.1 })), ok(sem({ risks: ['purchaseOrSellerRequest'] })), failed,
+  ]
+  const seedV3 = seedCases.map((o) => v3DecisionOf(input({ axis: SEED_AXIS }), o))
+  const seedV4 = seedCases.map((o) => judgeOne(input({ axis: SEED_AXIS }), NOW, o).decision)
+  check('🔴 🔴 **seed 축 판정은 v3 와 같다 — AUTO_SEED 집합이 그대로 (quality-v4 계약이 덮는 입력 불변)**',
+    seedV3.join('|') === seedV4.join('|'), `${seedV3.join(',')} vs ${seedV4.join(',')}`)
+  const sm = judgeOne(input({ axis: SEED_AXIS }), NOW, ok(sem({ decision: 'AUTO_RAW' })))
+  check('🔴 seed 축 · 모델 RAW 라벨은 v4 에서도 axisMismatch HOLD 다',
+    sm.decision === 'AUTO_HOLD' && sm.reasonCodes.join(',') === 'axisMismatch')
   check('🔴 위해 · 위기 · 의료 판단 · 구매처는 v4 에서도 그대로 막힌다',
     judgeOne(input(), NOW, ok(sem({ risks: ['identifiablePrivatePerson'] }))).decision === 'AUTO_DROP'
     && judgeOne(input(), NOW, ok(sem({ risks: ['unverifiedDefamation'] }))).decision === 'AUTO_DROP'
@@ -497,75 +524,114 @@ for (const c of CASES) {
 // ─────────────────────────────────────────────────────────
 console.log('\n⑤ 경로 대조 — AUTO_RAW 를 적응 없이 만들면 채택하지 않는다')
 // ─────────────────────────────────────────────────────────
+console.log('\n⑥ 별도 레인 — quality-v4 계약은 그대로 · 적응 초안은 사람 검토 전용')
+// ─────────────────────────────────────────────────────────
+/**
+ * 🔴 **main(3f8af5a)의 quality-v4 digest** — 지금 운영 자동 READY 재고(AUTO_DECIDER 도장)가 들고 있는 값이다.
+ *    이 PR 이 이 값을 바꾸면 그 재고 전부가 legacy 가 되어 자동 발행이 멈춘다. 적응 경로가 이 값을 건드리면 실패한다.
+ */
+const QUALITY_V4_MAIN_DIGEST = '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa'
+/** 🔴 적응 레인 계약 digest — 적응 규칙(지시문 · 표지 · 코드)을 바꾸면 이 값과 `RAW_ADAPTATION_VERSION` 을 함께 올린다 */
+const RAW_ADAPT_LANE_PINNED_DIGEST = '044305c20ee4df186c328de2eb53f006abb8e2d717ad92eb37bec9c404fb94e4'
 {
-  const c = CASES.find((x) => x.id === 'safe-gender')!
-  check('정본 경로 — AUTO_RAW(raw 축) → adapt · AUTO_SEED(seed 축) → seed', draftRouteOf('AUTO_RAW', RAW_AXIS) === 'adapt'
-    && draftRouteOf('AUTO_SEED', SEED_AXIS) === 'seed' && requiredRouteOf('AUTO_RAW') === 'adapt')
-  check('🔴 🔴 **raw 축의 AUTO_SEED(옛 판정·섞인 입력)는 초안을 만들지 않는다 — 사연을 seed 로 흘리지 않는다**',
-    draftRouteOf('AUTO_SEED', RAW_AXIS) === null && draftRouteOf('AUTO_RAW', SEED_AXIS) === null)
-  const asSeed = await runChain(c, { forceRoute: 'seed' })
-  check('🔴 🔴 **raw 원천을 seed 경로로 만들면(변이 흉내) 채택 자리가 routeMismatch 로 막는다**',
-    asSeed.pick?.decision === 'AUTO_HOLD' && asSeed.pick.reason === 'routeMismatch', asSeed.detail)
-  check('🔴 seed 경로로 만든 요청에는 적응 규칙이 실리지 않는다 (seed 요청은 그대로다)',
-    !asSeed.drafted.includes(RAW_ADAPTATION_VERSION))
-  // 적응 입력은 있는데 계약이 적응 계약이 아니다(옛 artifact · 배선 결함)
-  const good = results.get('safe-gender')!
-  const cand: DraftCandidate = {
-    sourceArticleId: c.id, draftNo: 1, title: c.draft.title, body: c.draft.body, safetyVerdict: 'pass',
-    originality: { runWords: 0, runChars: 0, coverRatio: 0 }, generatedAt: FIXTURE_NOW.toISOString(),
-  }
-  const base = {
-    draft: cand, seenTitles: new Set<string>(), seenBodies: new Set<string>(), sourceUsed: false,
-    machineOutcome: 'adopt' as const, machineReason: '', sourceTitleCopied: false, crisisStop: null,
-  }
-  const adaptIn = { adapted: true, stance: 'QUESTION', sourceTitle: c.title, sourceBody: c.body.slice(0, 300) }
-  check('🔴 적응 입력이 있어도 계약이 적응 계약이 아니면 routeMismatch',
-    pickV2({ ...base, judgement: { sourceArticleId: c.id, decision: 'AUTO_RAW' }, adaptation: { ...adaptIn, adapted: false } }, NOW).reason === 'routeMismatch')
-  check('🔴 AUTO_SEED 인데 적응 입력이 오면 routeMismatch',
-    pickV2({ ...base, judgement: { sourceArticleId: c.id, decision: 'AUTO_SEED' }, adaptation: adaptIn }, NOW).reason === 'routeMismatch')
-  check('🔴 통과 판정이 아니면(AUTO_HOLD) routeMismatch — 초안이 와도 채택하지 않는다',
-    pickV2({ ...base, judgement: { sourceArticleId: c.id, decision: 'AUTO_HOLD' } }, NOW).reason === 'routeMismatch')
-  check('🔴 🔴 **캐시 artifact 도 다시 판정한다 — 쟁점을 지운 초안이 adopt 로 저장돼 있어도 막는다**',
-    pickV2({
-      ...base, judgement: { sourceArticleId: c.id, decision: 'AUTO_RAW' }, adaptation: adaptIn,
-      draft: { ...cand, title: '명절엔 시댁도 친정도 즐겁게', body: '남편과 함께 명절 계획을 세우면 마음이 편해요.' },
-    }, NOW).reason === 'adaptDebateLost')
-  check('🟢 정상 적응 초안 → AUTO_ADOPT + rawAdaptation 경고',
-    good.pick?.decision === 'AUTO_ADOPT' && (good.pick.lifeReview ?? []).includes(RAW_ADAPTATION_REVIEW_CODE))
-  // 계약 한 칸만 다르고, seed 계약은 그대로다
-  const ad = adaptationContractOf(BASE_CONTRACT)
-  check('🔴 적응 계약은 seed 계약과 다르다 — 캐시·지난 결론이 섞이지 않는다',
-    !sameGenerationContract(ad, BASE_CONTRACT) && isAdaptationContract(ad) && !isAdaptationContract(BASE_CONTRACT)
-    && ad.promptVersion === BASE_CONTRACT.promptVersion)
-  // 작업 묶음 — 적응 artifact 도 지금 계약의 결론으로 읽힌다(같은 raw 원천을 유료로 되풀이하지 않는다)
-  const art = (contract: GenerationContract) => ({
-    sourceArticleId: 's1', artifactVersion: 'av', contract, outcome: 'hold', retryable: false, generatedAt: NOW,
-  })
-  check('🔴 🔴 **작업 묶음이 적응 artifact 를 지금 계약의 결론으로 읽는다 (terminal)**',
-    artifactOutcome(art(ad), BASE_CONTRACT, 'av')?.state === 'terminal'
-    && artifactOutcome(art(BASE_CONTRACT), BASE_CONTRACT, 'av')?.state === 'terminal'
-    && artifactOutcome(art({ ...BASE_CONTRACT, planPromptDigest: 'plan000000000000+raw-adapt-v0:0000' }), BASE_CONTRACT, 'av') === null)
-  // 🔴 러너가 적응 경로를 seed 계약으로 부르면 부르기 전에 멈춘다
-  const wiring = await runContentCore({
-    artifactId: 'x', sourceArticleId: c.id, title: c.title, maskedBody: c.body.slice(0, 300),
-    sourceMeta: { site: 's', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null },
-    personas: [], personaPoolSize: 0, voiceSourceDigest: 'v',
-    ask: async () => okAsk('{}'), now: FIXTURE_NOW, callCap: 6, contract: BASE_CONTRACT, route: 'adapt',
-  })
-  check('🔴 적응 경로인데 seed 계약이면 provider 0 으로 멈춘다 (wiringBroken)',
-    wiring.review.semanticCompletion.cause === 'wiringBroken' && wiring.cost.totalCalls === 0)
-}
+  const comp = qualityContractComponents()
+  check(`🔴 🔴 **품질 계약 판 = quality-v4 · digest = main 의 값 (지금 ${QUALITY_CONTRACT_VERSION} · ${qualityContractDigest().slice(0, 12)}…)**`,
+    QUALITY_CONTRACT_VERSION === 'quality-v4' && qualityContractDigest() === QUALITY_V4_MAIN_DIGEST)
+  check('🔴 품질 계약 구성에 적응 경로가 없다 — 칸 · 결정적 코드 · 판 이름 어디에도',
+    !Object.prototype.hasOwnProperty.call(comp, 'rawAdaptation')
+    && !JSON.stringify(comp).includes(RAW_ADAPTATION_VERSION)
+    && !(DETERMINISTIC_CODES as readonly string[]).some((c) => c.startsWith('adapt')))
+  check('적응 실패 코드는 결정적 실패 라벨로 읽힌다 (타입·라벨만 넓혔다)',
+    DETERMINISTIC_LABEL.adaptTopicLost !== undefined && DETERMINISTIC_LABEL.adaptDebateLost !== undefined
+    && DETERMINISTIC_LABEL.adaptSelfExperience !== undefined)
+  check(`🔴 적응 레인 digest 고정 (지금 ${rawAdaptContractDigest().slice(0, 12)}…) — 규칙을 바꾸면 판과 함께 올린다`,
+    rawAdaptContractDigest() === RAW_ADAPT_LANE_PINNED_DIGEST && currentRawAdaptContract().version === RAW_ADAPTATION_VERSION)
+  check('🔴 적응 레인 digest ≠ 품질 계약 digest', rawAdaptContractDigest() !== qualityContractDigest())
 
-// ─────────────────────────────────────────────────────────
-console.log('\n⑥ 사람 검토 — 적응 초안은 자동 READY 표본이 아니다')
-// ─────────────────────────────────────────────────────────
-{
-  const holds = lifeReviewHoldsOf([RAW_ADAPTATION_REVIEW_CODE])
-  check('🔴 적재기가 DRAFT_LIFE_REVIEW:rawAdaptation 경고로 싣는다', holds.includes('DRAFT_LIFE_REVIEW:rawAdaptation'), holds.join(','))
-  const c = qualityContractComponents() as Record<string, unknown>
-  const ra = c.rawAdaptation as Record<string, unknown> | undefined
-  check(`🔴 품질 계약 판 = quality-v5 (지금 ${QUALITY_CONTRACT_VERSION}) · digest 에 적응 경로가 들어간다`,
-    QUALITY_CONTRACT_VERSION === 'quality-v5' && ra?.version === RAW_ADAPTATION_VERSION && ra?.reviewCode === RAW_ADAPTATION_REVIEW_CODE)
+  // ── 실제 후보 봉투 → 실제 적재기 ──
+  const good = results.get('safe-gender')!
+  const src = CASES.find((x) => x.id === 'safe-gender')!
+  const art = good.art!
+  const d = art.draft!
+  const itemOf = (route: 'seed' | 'adapt', lifeReview: readonly string[] | null) => ({
+    artifact: art, sourceArticleId: src.id,
+    meta: { site: 'navercafe:synthetic', sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: FIXTURE_NOW.toISOString() },
+    draft: {
+      title: d.title, body: d.body, safetyVerdict: 'pass',
+      originality: measureOriginality(`${d.title}\n${d.body}`, `${src.title}\n${src.body.slice(0, 300)}`),
+      generatedAt: FIXTURE_NOW.toISOString(),
+    },
+    sourceTitleCopied: false, sourceTitleCheckVersion: 'v', autoJudge: null,
+    ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: FIXTURE_NOW.toISOString(),
+    lifeReview, draftRoute: route,
+  })
+  const envOf = (items: ReturnType<typeof itemOf>[]): Record<string, unknown> => candidateEnvelope({
+    generatedAt: FIXTURE_NOW.toISOString(), ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE,
+    stageModels: STAGE_MODEL, items,
+  })
+  const aj = { ruleVersion: RULE_VERSION, promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine:auto-judge' }
+  const load = (env: Record<string, unknown>, c: Record<string, unknown>) => buildQueuePayload({
+    envelope: env, candidate: c as Candidate, autoJudge: aj, review: art.review, now: FIXTURE_NOW.toISOString(),
+  })
+  const adaptEnv = envOf([itemOf('adapt', good.pick?.lifeReview ?? null)])
+  const adaptC = (adaptEnv.candidates as Record<string, unknown>[])[0]!
+  const seedEnv = envOf([itemOf('seed', [])])
+  const seedC = (seedEnv.candidates as Record<string, unknown>[])[0]!
+  check('후보 봉투 — 적응 후보만 경로 · 적응 레인 표식을 싣는다 (seed 후보 모양은 그대로)',
+    adaptC.draftRoute === 'adapt' && adaptC[RAW_ADAPT_CONTRACT_KEY] !== undefined
+    && !('draftRoute' in seedC) && !(RAW_ADAPT_CONTRACT_KEY in seedC) && isRawAdaptCandidate(adaptC) && !isRawAdaptCandidate(seedC))
+  const pa = load(adaptEnv, adaptC)
+  const ps = load(seedEnv, seedC)
+  const ga = (pa?.gateResults ?? {}) as Record<string, unknown>
+  const gs = (ps?.gateResults ?? {}) as Record<string, unknown>
+  check('🔴 🔴 **적응 후보 → 기계 행으로 적재 · 품질 계약 표식 없음 · 적응 레인 표식 있음 · 사람 검토 경고 있음**',
+    pa !== null && pa.profile === 'machine' && !(QUALITY_CONTRACT_KEY in ga) && RAW_ADAPT_CONTRACT_KEY in ga
+    && Array.isArray(ga.holds) && (ga.holds as string[]).includes(RAW_ADAPT_REVIEW_HOLD),
+    JSON.stringify({ profile: pa?.profile ?? null, keys: Object.keys(ga) }))
+  check('🟢 seed 후보 → 지금 품질 계약(v4) 표식 · 적응 흔적 0 (기존 그대로)',
+    ps !== null && isCurrentQualityContract(gs) && !carriesRawAdaptMark(gs) && autoLaneContractOk(gs))
+  check('🔴 적응 행은 발행 profile 이 기계다 — 사람이 검토하면 사람 검토 경로로 나간다',
+    pa !== null && queueProfileOf({ promptVersion: pa.promptVersion, model: pa.model, sourceSite: pa.syntheticSite, gateResults: ga }) === 'machine')
+  check('🔴 🔴 **적응 행은 자동 적격이 아니다 — 경고(rawAdaptation) · 품질 계약 아님 · 자동 레인 아님**',
+    !eligibilityOf({ gateVerdict: 'PASS', gateResults: ga, title: 't', body: 'b', sourceCapturedAt: FIXTURE_NOW }).auto
+    && !isCurrentQualityContract(ga) && carriesRawAdaptMark(ga) && !autoLaneContractOk(ga))
+  // 🔴 신호 하나만 남아도 적응이다(fail-closed) — 표식이 없거나 옛 규칙이면 싣지 않는다
+  const stripped: Record<string, unknown> = { ...adaptC }
+  delete stripped.draftRoute
+  delete stripped[RAW_ADAPT_CONTRACT_KEY]
+  check('🔴 경로·표식이 지워져도 lifeReview 의 rawAdaptation 이 남으면 적응 후보다 → 표식이 없어 적재 0',
+    isRawAdaptCandidate(stripped) && load(adaptEnv, stripped) === null)
+  check('🔴 옛 적응 규칙 표식(digest 다름)이면 적재 0',
+    load(adaptEnv, { ...adaptC, [RAW_ADAPT_CONTRACT_KEY]: { ...currentRawAdaptContract(), digest: 'f'.repeat(64) } }) === null)
+  const forged = load(adaptEnv, { ...adaptC, [QUALITY_CONTRACT_KEY]: { version: 'quality-v4', digest: qualityContractDigest() } })
+  check('🔴 후보 파일이 품질 계약 표식을 들고 와도 적응 행에는 싣지 않는다 (저장은 코드 상수 · 레인으로 정한다)',
+    forged !== null && !(QUALITY_CONTRACT_KEY in (forged.gateResults as Record<string, unknown>)))
+
+  // ── 자동 selector — 적응 행은 도장이 있어도 · 문이 열려 있어도 나가지 않는다 ──
+  const title = '명절 시댁 먼저 vs 친정 먼저'
+  const body = '명절마다 어느 집부터 가느냐로 말이 오간대요. 여러분이라면 어떻게 하세요?'
+  const row = (id: string, gateResults: unknown, stamped: boolean): AutoRow => ({
+    id, status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
+    promptVersion: pa?.promptVersion ?? '', model: pa?.model ?? '',
+    matchedPersonaId: null, title, body, sourceSite: pa?.syntheticSite ?? '', draftTitle: title, editedTitle: null,
+    gateResults, decidedBy: stamped ? AUTO_DECIDER : (pa?.decidedBy ?? ''),
+    editDiff: stamped ? { autoReady: makeStamp(title, body, FIXTURE_NOW) } : null,
+    decidedAt: FIXTURE_NOW, createdAt: FIXTURE_NOW,
+  })
+  const safe = (): 'pass' => 'pass'
+  const sel = selectAutoTargets([
+    row('v4', gs, true), row('raw', ga, true), row('rawUnstamped', ga, false),
+    // 🔴 변이 흉내 — 적응 행이 품질 계약 표식까지 들고 온 경우
+    row('rawBoth', { ...ga, [QUALITY_CONTRACT_KEY]: { version: 'quality-v4', digest: qualityContractDigest() } }, true),
+  ], safe, { autoReadyOpen: true })
+  const code = (id: string): string => sel.rejected.find((r) => r.id === id)?.code
+    ?? (sel.targets.some((t) => t.id === id) ? 'TARGET' : '?')
+  check('🟢 v4 도장 행은 selector 대상이다 (열림일 때)', code('v4') === 'TARGET', code('v4'))
+  check('🔴 🔴 **적응 행은 도장이 있어도 selector 가 내지 않는다 (QUALITY_CONTRACT_MISMATCH)**',
+    code('raw') === 'QUALITY_CONTRACT_MISMATCH', code('raw'))
+  check('🔴 도장 없는 적응 행 → HUMAN_REVIEW_REQUIRED (사람 검토로만)', code('rawUnstamped') === 'HUMAN_REVIEW_REQUIRED', code('rawUnstamped'))
+  check('🔴 🔴 **적응 행이 품질 계약 표식까지 들고 와도 selector 가 막는다 (적응 흔적 우선)**',
+    code('rawBoth') === 'QUALITY_CONTRACT_MISMATCH', code('rawBoth'))
 }
 
 // ─────────────────────────────────────────────────────────

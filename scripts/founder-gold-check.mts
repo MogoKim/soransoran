@@ -127,11 +127,7 @@ console.log('\n⑤ 열림 근거 — gold 재현 + 사람 중대 결함 0 일 �
 console.log('\n⑥ 품질 계약 — gold 가 digest 에 들어갔다')
 {
   const c = qualityContractComponents() as Record<string, any>
-  // 🔴 (2026-09-29) v5 = 적응 경로 추가 — gold 재생·열림 근거는 v4 와 같다. 적응 초안은 gold 표본이 없어 사람 검토로만 간다
-  check(`판 = quality-v5 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v5')
-  check('🔴 digest 구성에 적응 경로(판 · 지시문 지문 · 사람 검토 경고)가 있다',
-    c.rawAdaptation?.version === 'raw-adapt-v1' && typeof c.rawAdaptation?.rulesDigest === 'string'
-    && c.rawAdaptation?.reviewCode === 'rawAdaptation')
+  check(`판 = quality-v4 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v4')
   check('digest 구성에 열림 근거 · gold 판 · 고정 digest · 모양이 있다',
     c.evidenceBasis === 'founderGold' && c.founderGold?.digest === FOUNDER_GOLD_PINNED_DIGEST
     && JSON.stringify(c.founderGold?.shape) === JSON.stringify(FOUNDER_GOLD_SHAPE))
