@@ -8,10 +8,21 @@
  *    3계층을 만든 이유가 바로 그 구분이었는데, 정작 화면에는 옛 숫자가 남아 있었다.
  *
  * 🔴 **재지 못하는 축은 `null` 이다.** 0 으로 채우면 "쏠리지 않았다" 로 읽힌다 —
- *    실제로는 잰 적이 없다. 배정 층은 그래서 지금 통째로 `unmeasured` 다.
+ *    실제로는 잰 적이 없다. `candidateOf` 는 원자료만 옮기므로 이력 축은 여전히 `null` 이다.
+ *
+ * 🔴 **용량의 정본은 `readPersonaReserve` 다** (2026-09-30).
+ *    5개 null 축을 실제로 재는 값(자격 충돌 · 역할 쏠림 · 연속 노출 · 짝 간격 · 소재)은
+ *    `scripts/lib/persona-reserve-facts.mts` 가 읽고, 4상태 판정은 `src/lib/persona-reserve.ts`
+ *    `judgePersonaReserve` 하나가 한다. `readPersonaCandidates` → `personaTierReadiness` 는
+ *    **옛 3계층 계기판**이고 active 행을 사람 수로 센다 — 용량으로 쓰지 않는다.
  */
 import { LIFE_CONTRACT_FIELDS } from '../../src/lib/content-core/speaker'
 import type { PersonaCandidate } from '../../src/lib/d100-persona-scale'
+import {
+  judgePersonaReserve,
+  type ActivityHistory, type PersonaDbStatus, type PersonaReserveInput, type PersonaReserveResult,
+  type QualificationEvidence,
+} from '../../src/lib/persona-reserve'
 
 /** 🔴 한 사람의 원자료 — 판정은 하지 않는다 */
 export type PersonaRow = {
@@ -132,4 +143,72 @@ export async function readPersonaCandidates(repo: PersonaTierRepo): Promise<Pers
     return { ok: false, detail: e instanceof Error ? e.message : '알 수 없음' }
   }
   return { ok: true, candidates: rows.map(candidateOf), rows }
+}
+
+// ─────────────────────────────────────────────────────────
+// 4상태 — 🔴 용량 정본 (`contractValid`)
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 DB 행 + 잰 재료. 판정은 하지 않는다 */
+export type PersonaReserveRow = PersonaRow & {
+  /** `null` = 자격 재료를 읽지 못했다 */
+  qualification: QualificationEvidence | null
+  /** `null` = 이력을 읽지 못했다 — 이력 0 과 다르다 */
+  history: ActivityHistory | null
+}
+
+export type PersonaReserveFacts = {
+  rows: readonly PersonaReserveRow[]
+  /** 🔴 정본 카드는 있는데 DB 행이 없는 코드 — designed */
+  designedOnly: readonly string[]
+}
+
+export type PersonaReserveRepo = { reserveFacts: () => Promise<PersonaReserveFacts> }
+
+const DB_STATUSES: readonly PersonaDbStatus[] = ['draft', 'active', 'paused', 'retired']
+
+/** 🔴 DB 행 → 4상태 입력. 카드 층 원자료는 `candidateOf` 가 옮긴 값 그대로다 */
+export function reserveInputOf(r: PersonaReserveRow): PersonaReserveInput {
+  if (!(DB_STATUSES as readonly string[]).includes(r.status)) {
+    // 🔴 모르는 status 를 draft 로 읽지 않는다 — 읽기 실패로 올린다
+    throw new Error(`${r.code}: 모르는 Persona status "${r.status}"`)
+  }
+  const c = candidateOf(r)
+  return {
+    code: r.code,
+    stored: true,
+    status: r.status as PersonaDbStatus,
+    card: { filledAxes: c.filledAxes, ageBand: c.ageBand, voiceComments: c.voiceComments },
+    qualification: r.qualification,
+    history: r.history,
+  }
+}
+
+/** 🔴 설계만 있는 코드 — 잴 seed 가 없다 */
+export function designedInputOf(code: string): PersonaReserveInput {
+  return {
+    code, stored: false, status: null,
+    card: { filledAxes: [], ageBand: null, voiceComments: 0 },
+    qualification: null, history: null,
+  }
+}
+
+/**
+ * 🔴 **Persona 용량 — 4상태 판정.** 읽기에 실패하면 `contractValid = null` (0 이 아니다).
+ *    통합 레인의 `judgeNextPreflight` 는 `contractValidPersonas` 로 이 값만 받는다.
+ */
+export async function readPersonaReserve(repo: PersonaReserveRepo): Promise<PersonaReserveResult> {
+  try {
+    const f = await repo.reserveFacts()
+    const stored = new Set(f.rows.map((r) => r.code))
+    return judgePersonaReserve({
+      ok: true,
+      personas: [
+        ...f.rows.map(reserveInputOf),
+        ...f.designedOnly.filter((c) => !stored.has(c)).map(designedInputOf),
+      ],
+    })
+  } catch (e) {
+    return judgePersonaReserve({ ok: false, detail: e instanceof Error ? e.message : '알 수 없음' })
+  }
 }

@@ -22,6 +22,7 @@ import { assignmentDrift, judgeAutogenCandidate } from './lib/persona-autogen.mj
 import { judgeApplyBatch } from './lib/persona-autogen-apply.mjs'
 import { referenceSeedShareCount } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
+import { runPersonaReserveChecks } from './persona-reserve-check.mjs'
 
 let pass = 0
 let failN = 0
@@ -193,7 +194,8 @@ console.log('⑤ 적재 배치 게이트')
 console.log('⑥ CLI 연결')
 {
   const cli = readFileSync('scripts/persona-autogen.mts', 'utf-8')
-  check('CLI 가 judgeAutogenCandidate 로 판정한다', /judgeAutogenCandidate\(cand, \{ takenCodes: taken \}\)/.test(cli))
+  // 🔴 한 명씩(judgeAutogenCandidate) + 겹침·문체 거리를 배치로 본다(2026-09-30)
+  check('CLI 가 judgeAutogenBatch 로 판정한다', /judgeAutogenBatch\(cands, \{ takenCodes: taken,/.test(cli))
   check('CLI 가 운영 규칙 말투 풀(voicePoolFor)을 쓴다', /voicePoolFor\(\{ repoRoot: process\.cwd\(\), newCodes: codes \}\)/.test(cli))
   const gate = cli.indexOf('if (!APPLY) {')
   const call = cli.indexOf('await applyAutogenDrafts(')
@@ -201,6 +203,10 @@ console.log('⑥ CLI 연결')
   check('적재 대상은 valid 만이다', /const plans = valid\.map\(/.test(cli))
   check('CLI 는 LLM·provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(/i.test(cli))
 }
+
+// ── ⑦ 4상태 판정 — 🔴 CI 가 이 스크립트로 함께 돈다(`scripts/persona-reserve-check.mts`) ──
+console.log('⑦ Persona 4상태 판정')
+await runPersonaReserveChecks(check)
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
 process.exit(failN === 0 ? 0 : 1)
