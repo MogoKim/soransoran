@@ -16,6 +16,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import {
@@ -195,6 +196,8 @@ const runStage = (o: {
       ...process.env, HOME: o.world.home,
       ANTHROPIC_API_KEY: 'fixture-fake-key', GEMINI_API_KEY: 'fixture-fake-gemini-key',
       NODE_OPTIONS: `--import=${HOOK}`,
+      // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+      ...LAST_SLOT_SCHEDULED_ENV,
       ...(o.bodyLog === undefined ? {} : { FAKE_PROVIDER_BODY_LOG: o.bodyLog }),
       ...(o.judgeDecision === undefined ? {} : { FAKE_PROVIDER_JUDGE_DECISION: o.judgeDecision }),
       ...(o.selfAge === undefined ? {} : { FAKE_PROVIDER_SELF_AGE: o.selfAge }),

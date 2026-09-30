@@ -23,7 +23,9 @@
  *    둘을 한 줄로 세면 "무료 호출이 늘었나 유료 호출이 늘었나" 를 구분할 수 없다.
  *    로그 한 줄은 `count<TAB>url` 또는 `paid<TAB>url` 이다.
  */
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const LOG = process.env.FAKE_PROVIDER_LOG ?? ''
 
@@ -63,6 +65,31 @@ async function armSettleFail() {
       throw new Error('fixture: 정산 줄을 적지 못했다')
     }
     real(path, entry)
+  }
+}
+/**
+ * 🔴 **정기 회차 몫 보호의 벽시계를 고정한다** (2026-09-29). `FAKE_SUPPLY_PROTECT_NOW` 에 ISO 시각을 준다.
+ *    슬롯 창 판정이 시험을 돌린 시각에 따라 달라지지 않게 하려는 것이다. 라벨(`XPC_SERVICE_NAME`)은
+ *    건드리지 않는다 — 시험이 env 로 직접 준다. 🔴 이 훅이 걸린 프로세스는 provider 가 가짜다.
+ */
+const PROTECT_NOW = process.env.FAKE_SUPPLY_PROTECT_NOW ?? ''
+let protectArmed = false
+async function armProtectClock() {
+  if (PROTECT_NOW === '' || protectArmed) return
+  protectArmed = true
+  const at = new Date(PROTECT_NOW)
+  if (!Number.isFinite(at.getTime())) throw new Error(`FAKE_SUPPLY_PROTECT_NOW 를 읽지 못했다 — ${PROTECT_NOW}`)
+  const mod = await import('./supply-llm-call.mjs')
+  mod.SUPPLY_PROTECT_TEST_SEAM.clock = () => at
+  /**
+   * 🔴 러너를 **복사한 작업 디렉터리**(cwd 에 `scripts/` 사본)에서 띄우는 fixture 가 있다
+   *    (`supply:draft-deferral-e2e-db-check`). 그 러너는 사본의 모듈을 쓰므로, 이 훅 옆 모듈에만 걸면
+   *    시각이 안 걸린다(2026-09-29 CI 실측 — 정기 회차가 창 밖 손 실행으로 판정돼 유료 0건). 사본에도 건다.
+   */
+  const copy = join(process.cwd(), 'scripts', 'lib', 'supply-llm-call.mts')
+  if (existsSync(copy)) {
+    const cmod = await import(pathToFileURL(copy).href)
+    cmod.SUPPLY_PROTECT_TEST_SEAM.clock = () => at
   }
 }
 const MODE = process.env.FAKE_PROVIDER_MODE ?? 'ok'
@@ -261,6 +288,7 @@ const semanticVerdictOf = (body) => {
 
 globalThis.fetch = async (url, init) => {
   await armSettleFail()
+  await armProtectClock()
   const u = String(url)
   // 🔴 제공사마다 사전 계산 경로 이름이 다르다 — 둘 다 무료다
   const isCount = u.includes('/count_tokens') || u.includes(':countTokens')

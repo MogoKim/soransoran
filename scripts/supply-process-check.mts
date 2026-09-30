@@ -43,6 +43,7 @@ import { MAX_REQUESTS_PER_DAY, RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, thin82coo
 import { RETIRED_JOBS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 /** 🔴 적재 재시도 · 이월 (2026-09-27) — 새 npm 명령 · 새 step 없이 이 검사가 함께 돈다 */
 import { runFillRetryChecks } from './supply-fill-retry-check.mjs'
+import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 
 /** 🔴 큐 스냅샷이 준비된 상태 — 기존 기대(draft 계획됨)를 그대로 본다 */
 const GATE_READY = { kind: 'ready', snapshotPath: '.microseed-data/snap.json', runId: 'R1' } as const
@@ -1218,6 +1219,8 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
           SORAN_LLM_RUN_REQUEST_CAP: '10000',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+          // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+          ...LAST_SLOT_SCHEDULED_ENV,
         },
       },
     )

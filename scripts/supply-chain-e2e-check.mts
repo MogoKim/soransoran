@@ -46,6 +46,7 @@ import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-que
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 
 let pass = 0
 let fail = 0
@@ -110,6 +111,8 @@ const runRunner = (extraEnv: Record<string, string> = {}, rid = runId): ReturnTy
         ANTHROPIC_API_KEY: 'fixture-fake-key', GEMINI_API_KEY: 'fixture-fake-gemini-key',
         FAKE_PROVIDER_BODY_LOG: bodyLog,
         NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+        // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+        ...LAST_SLOT_SCHEDULED_ENV,
         SORAN_LLM_DAILY_BUDGET_USD: '1000',
         SORAN_LLM_RESERVE_HEADROOM: '1.5',
         SORAN_LLM_RUN_REQUEST_CAP: '10000',
@@ -132,6 +135,8 @@ const r = spawnSync(
       ANTHROPIC_API_KEY: 'fixture-fake-key', GEMINI_API_KEY: 'fixture-fake-gemini-key',
       FAKE_PROVIDER_BODY_LOG: bodyLog,
       NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+      // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+      ...LAST_SLOT_SCHEDULED_ENV,
       SORAN_LLM_DAILY_BUDGET_USD: '1000',
       SORAN_LLM_RESERVE_HEADROOM: '1.5',
       SORAN_LLM_RUN_REQUEST_CAP: '10000',
@@ -436,6 +441,8 @@ console.log('\n⑦ 🔴 🔴 정산 줄을 못 적으면 후보가 0건이다')
         ...process.env, HOME: home2,
         ANTHROPIC_API_KEY: 'fixture-fake-key', GEMINI_API_KEY: 'fixture-fake-gemini-key',
         NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+        // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
+        ...LAST_SLOT_SCHEDULED_ENV,
         // 🔴 의미 검수(=draftQuality) 의 **정산 줄만** 못 적게 한다
         FAKE_LEDGER_SETTLE_FAIL: 'draftQuality',
         SORAN_LLM_DAILY_BUDGET_USD: '1000',
