@@ -143,14 +143,13 @@ export function worksetRows(
   at: Date = RUN_AT,
 ): WorksetRow[] | null {
   const entries: { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[] = []
-  /** 증거 칸 — 🔴 판정 입력에는 없는 값이라 따로 모은다 */
-  const meta = new Map<string, {
-    site: string; posted: string; listed: string; captured: string
-    views: number | null; comments: number | null; page: number | null; rank: number | null
-  }>()
+  /**
+   * 증거 칸 — 🔴 판정 입력에는 없는 값이라 따로 모은다. **시각만** 모은다(2026-09-30 Lane B) —
+   *    반응(댓글 · 조회 · 자리)은 목록 관측이 정본이다(`evidenceMaterialFor` 가 `sourceListedAt` 으로 찾는다).
+   *    앞판은 상세 행의 복사본(`commentCount` · `sourceViewCount` …)을 여기서 읽었다 — 두 번째 권위를 지웠다.
+   */
+  const meta = new Map<string, { site: string; posted: string; listed: string; captured: string }>()
   const S2 = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
-  const C = (v: unknown, prev: number | null | undefined): number | null =>
-    typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : (prev ?? null)
   for (const f of paths) {
     const kind: 'detail' | 'raw-detail' = f.endsWith('.raw-detail.jsonl') ? 'raw-detail' : 'detail'
     let raw: string
@@ -170,11 +169,6 @@ export function worksetRows(
         posted: S2(r.sourcePostedAt) !== '' ? S2(r.sourcePostedAt) : prev?.posted ?? '',
         listed: S2(r.sourceListedAt) !== '' ? S2(r.sourceListedAt) : prev?.listed ?? '',
         captured: S2(r.sourceCapturedAt) !== '' ? S2(r.sourceCapturedAt) : prev?.captured ?? '',
-        // 🔴 수집 때 본 반응 — 센 값만 앞 값을 이긴다(옛 파일에는 칸이 없다 · 없으면 모름)
-        views: C(r.sourceViewCount, prev?.views),
-        comments: C(r.commentCount, prev?.comments),
-        page: C(r.sourcePage, prev?.page),
-        rank: C(r.sourceRankOnPage, prev?.rank),
       })
     }
   }
@@ -182,12 +176,9 @@ export function worksetRows(
     const id = String(input.sourceArticleId ?? '')
     const m = meta.get(id)
     const site = m?.site ?? ''
-    const response = m === undefined ? null : {
-      views: m.views, comments: m.comments, listRank: m.rank, listPage: m.page, observedAt: m.listed,
-    }
     const material = listIndex === null || site === '' ? null : evidenceMaterialFor(listIndex, {
       sourceKey: site, articleId: id, postedAt: m?.posted === '' ? null : m?.posted ?? null,
-      response: response === null ? null : { comments: response.comments, views: response.views, observedAt: m?.listed === '' ? null : m?.listed ?? null },
+      listedAt: m?.listed === '' ? null : m?.listed ?? null,
       at,
     })
     /**
@@ -197,7 +188,8 @@ export function worksetRows(
     const evidence: SourceEvidenceRecord | null = m === undefined ? null : buildSourceEvidence({
       postedAt: m.posted, listedAt: m.listed, capturedAt: m.captured,
       sourceSite: site, sourceArticleId: id, dedupKey: `${site}|${id}`,
-      response,
+      // 🔴 목록 관측이 없으면(파일 없음 · 열쇠 불일치) 반응을 모른다 — 상세 행 수로 메우지 않는다
+      response: material?.response ?? null,
       observations: material?.observations ?? [],
       sourceStats: material?.sourceStats ?? null,
       participationDriver: null,

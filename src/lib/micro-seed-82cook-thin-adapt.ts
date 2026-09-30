@@ -158,9 +158,8 @@ export const DETAIL_KEYS: readonly string[] = [
   'runId', 'axis', 'access', 'sourceSite', 'sourceArticleId', 'url', 'score', 'lane',
   'bodyLength', 'lengthBasis', 'imageCount', 'commentCount',
   'safetyVerdict', 'safetyReasons', 'assetAxes', 'reason', 'title', 'bodyHead',
+  // 🔴 반응(조회 · 자리)은 싣지 않는다 — 정본은 목록 artifact 다(`sourceListedAt` 으로 잇는다 · 2026-09-30 Lane B)
   'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
-  // 🔴 수집 때 본 반응(2026-09-30) — 얇은 행이 들고 온 수를 여기서 다시 버리지 않는다
-  'sourceViewCount', 'sourcePage', 'sourceRankOnPage',
 ] as const
 
 /** raw-review 화면(`.raw-detail.jsonl`)이 읽는 키 */
@@ -169,7 +168,6 @@ export const RAW_DETAIL_KEYS: readonly string[] = [
   'accessStatus', 'bodyLength', 'bodyHead', 'axis',
   'safetyVerdict', 'safetyReasons', 'imageCount', 'commentCount', 'runId', 'fetchedAt',
   'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
-  'sourceViewCount', 'sourcePage', 'sourceRankOnPage',
 ] as const
 
 /** 화면이 후보로 올리는 축 */
@@ -209,10 +207,6 @@ export type ThinRow = {
   sourcePostedAt?: string
   sourceListedAt?: string
   sourceCapturedAt?: string
-  /** 🔴 옛 얇은 행에는 없다 — 없으면 `null`(모른다) */
-  sourceViewCount?: number | null
-  sourcePage?: number | null
-  sourceRankOnPage?: number | null
 }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''))
@@ -256,7 +250,6 @@ export function toDetailRecord(r: ThinRow): Record<string, unknown> {
     bodyHead: S(r.bodyHead),
     // 🔴 얇은 행이 들고 온 세 시각을 그대로 옮긴다. 여기서 재지도 메우지도 않는다
     ...sourceTimesOf(r),
-    ...listResponseOf(r),
   }
 }
 
@@ -280,17 +273,7 @@ export function toRawDetailRecord(r: ThinRow): Record<string, unknown> {
     runId: S(r.runId),
     fetchedAt: S(r.fetchedAt),
     ...sourceTimesOf(r),
-    ...listResponseOf(r),
   }
-}
-
-/**
- * 🔴 얇은 행의 목록 반응 — **없으면 `null`(모른다)**. 0 으로 메우지 않는다 —
- *    "댓글 0개" 와 "안 셌다" 를 구분해야 원천 상대 반응을 잴 수 있다.
- */
-function listResponseOf(r: ThinRow): { sourceViewCount: number | null; sourcePage: number | null; sourceRankOnPage: number | null } {
-  const c = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null)
-  return { sourceViewCount: c(r.sourceViewCount), sourcePage: c(r.sourcePage), sourceRankOnPage: c(r.sourceRankOnPage) }
 }
 
 /**

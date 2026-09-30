@@ -55,7 +55,7 @@ import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
   ARTICLE_URL, BOARD_NAME, BOARD_NO, DELAY_MS, LIST_URL, ROBOTS_URL, SOURCE_SITE, USER_AGENT,
-  buildCollected, extractArticleBodyHtml, htmlToText, isPathAllowed,
+  buildCollected, buildListRow, extractArticleBodyHtml, htmlToText, isPathAllowed,
   parseArticleTitle, parseListHtml, parseRobotsTxt, toRobotsPath,
   type CollectedCandidate, type ListItem, type RobotsRules,
 } from './lib/micro-seed-82cook.mjs'
@@ -266,7 +266,8 @@ async function main() {
   const items: ListItem[] = []
   for (let p = 1; p <= (WANT_LIST ? PAGES : 0); p += 1) {
     const html = await get(LIST_URL(p))
-    const parsed = parseListHtml(html)
+    // 🔴 페이지 번호는 여기서만 안다 — 목록 관측의 자리(`sourcePage`)로 남긴다
+    const parsed = parseListHtml(html).map((i) => ({ ...i, sourcePage: p }))
     items.push(...parsed)
     console.log(`  목록 ${p}p → ${parsed.length}건`)
     if (p < PAGES) await sleep(DELAY_MS)
@@ -282,7 +283,11 @@ async function main() {
     //
     //    rawBody 는 **빈 문자열**이다 — 목록은 본문을 읽지 않는다.
     //    importer 는 rawBody 가 빈 행을 거부하므로 목록 파일이 잘못 들어와도 적재되지 않는다.
-    const rows = items.map((i) => buildCollected(i, '', now.toISOString()))
+    //
+    //    🔴 (2026-09-30 Lane B) 목록 줄은 `buildListRow` 로 만든다 — `buildCollected` 결과에 목록 관측 칸
+    //       (목록 시각 · 게시 시각 · 조회 · 자리)을 더한 것이다. 네이버 카페 목록 줄과 같은 칸 이름이라
+    //       하류(`source-list-observations`)가 **같은 sourceEvidence 계약**으로 읽는다.
+    const rows = items.map((i) => buildListRow(i, now.toISOString()))
     listRows = rows
     writeJsonl(listPath, rows)
     console.log(`  → ${listPath} (${rows.length}건)\n`)

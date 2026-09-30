@@ -49,6 +49,7 @@ import { echoesTitleAtEnd, hasBannedWord } from '../src/lib/micro-seed-auto-draf
 import { judgeCopy, readMeasure, describeOriginality } from '../src/lib/draft-originality'
 /** 🔴 원문 증거 재료 — 목록 관측(반복 관측 · 원천 상대 스냅샷). 읽기만 한다 */
 import { evidenceMaterialFor, readListObservations, type ListObservationIndex } from './lib/source-list-observations.mjs'
+import { runClockFrom } from './lib/run-clock.mjs'
 import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION }
   from '../src/lib/micro-seed-auto-judge'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
@@ -422,20 +423,27 @@ async function main(): Promise<void> {
    * 🔴 **원문 증거 재료를 목록 관측에서 한 번 모은다** (2026-09-30 · source-evidence-v1).
    *    못 읽으면 재료 없음(빈 관측 · 스냅샷 null) — 행은 적재되지만 발행 판정이 모르는 것으로 읽는다(fail-closed).
    */
-  const evidenceAt = new Date()
+  /**
+   * 🔴 **증거 시각은 회차 시각이다** (2026-09-30 Lane B) — 부모(`supply-process`)가 넘긴 `SORAN_RUN_AT` 을 쓴다.
+   *    앞판은 여기서 벽시계를 다시 만들었다 — 부모가 묶음을 고른 시각과 표본 창이 달라졌고, 시각을 고정한 검사가
+   *    이 단계만 재현하지 못했다. 단독 실행이면 자기 시계다(`runClockFrom`).
+   */
+  const evidenceAt = runClockFrom(process.env).at
   let listIndex: ListObservationIndex | null = null
   try { listIndex = readListObservations(DATA_DIR, evidenceAt) } catch (e) {
     console.log(`   🟡 목록 관측을 읽지 못했다 — ${e instanceof Error ? e.message : String(e)} (증거 재료 없음 = 모름)`)
   }
   if (listIndex !== null) console.log(`   목록 관측 ${listIndex.files}개 파일 · 관측 ${listIndex.sample.length}줄 · 못 읽음 ${listIndex.unreadable}`)
+  /**
+   * 🔴 **반응은 목록 관측에서 찾는다** (2026-09-30 Lane B) — 후보가 실어 온 목록 시각(`sourceListedAt`)이 열쇠다.
+   *    앞판은 생성 봉투의 복사본(`sourceResponse`)을 읽었다 — 복사본은 지웠다(정본은 목록 artifact 하나).
+   */
   const materialOf = (c: Candidate): EvidenceMaterial | null => {
     if (listIndex === null) return null
-    const r = c.sourceResponse !== null && typeof c.sourceResponse === 'object' ? c.sourceResponse as Record<string, unknown> : null
-    const n = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null)
     return evidenceMaterialFor(listIndex, {
       sourceKey: S(c.sourceSite), articleId: S(c.sourceArticleId),
       postedAt: S(c.sourcePostedAt) === '' ? null : S(c.sourcePostedAt),
-      response: r === null ? null : { comments: n(r.comments), views: n(r.views), observedAt: S(r.observedAt) === '' ? null : S(r.observedAt) },
+      listedAt: S(c.sourceListedAt) === '' ? null : S(c.sourceListedAt),
       at: evidenceAt,
     })
   }

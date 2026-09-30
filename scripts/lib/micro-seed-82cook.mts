@@ -121,6 +121,30 @@ export type ListItem = {
   originalTitle: string
   /** 🔴 목록에서 읽는다. 상세를 열어 세면 댓글 본문에 닿는다 — 수집 대상이 아니다 */
   sourceCommentCount: number
+  /**
+   * 🔴 **목록 줄이 보여 준 게시 시각** (2026-09-30 Lane B · source-evidence-v1).
+   *    82cook 목록의 날짜 칸은 `<td class="regdate numbers" title="YYYY-MM-DD HH:MM:SS"> HH:MM:SS</td>` 다
+   *    (2026-09-30 실제 페이지 구조 확인). `title` 속성의 KST 시각만 믿는다 — 칸 글자(`21:00:56`)에서
+   *    날짜를 추측하지 않는다. 속성이 없으면 null(모른다).
+   */
+  sourcePostedLabel?: string | null
+  sourcePostedAt?: string | null
+  /** 🔴 날짜 칸 바로 뒤 `<td class="numbers">` — 조회수. 못 읽으면 null */
+  sourceViewCount?: number | null
+  /** 🔴 그 페이지 안 순서(1부터 · 공지 제외) · 페이지 번호는 수집기가 붙인다 */
+  sourceRankOnPage?: number | null
+  sourcePage?: number | null
+}
+
+/** 🔴 82cook 목록의 게시 시각 속성 — KST 벽시계다(페이지가 한국 시각으로 쓴다) */
+const REGDATE_TITLE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/
+
+/** `YYYY-MM-DD HH:MM:SS`(KST) → ISO. 모양이 아니면 null — 🔴 고쳐 읽지 않는다 */
+export function kstRegdateToIso(v: string | null | undefined): string | null {
+  const m = REGDATE_TITLE.exec((v ?? '').trim())
+  if (m === null) return null
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}+09:00`)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
 
 const ENTITIES: Record<string, string> = {
@@ -157,14 +181,60 @@ export function parseListHtml(html: string): ListItem[] {
     if (!articleId || !title) continue
 
     const em = body.match(/<em>(\d+)<\/em>/)
-    out.set(articleId, {
-      sourceArticleId: articleId,
-      sourceUrl: ARTICLE_URL(articleId),
-      originalTitle: title,
-      sourceCommentCount: em ? Number(em[1]) : 0,
-    })
+    /**
+     * 🔴 **같은 줄의 날짜 · 조회 칸** (2026-09-30 Lane B). 제목 칸 뒤 · 그 줄(`</tr>`) 또는 다음 제목 칸 앞까지만 본다 —
+     *    다른 줄의 칸을 빌려 오지 않는다. 못 찾으면 null(모른다) — 0 이나 지금 시각으로 채우지 않는다.
+     */
+    const rest = html.slice(cellRe.lastIndex)
+    const ends = [rest.indexOf('</tr>'), rest.indexOf('<td class="title"')].filter((i) => i >= 0)
+    const row = rest.slice(0, ends.length === 0 ? rest.length : Math.min(...ends))
+    const cells = /<td class="regdate[^"]*"(?:\s+title="([^"]*)")?[^>]*>([^<]*)<\/td>\s*<td class="numbers">\s*([\d,]+)\s*<\/td>/.exec(row)
+    const views = cells === null ? null : Number(cells[3]!.replace(/,/g, ''))
+    if (!out.has(articleId)) {
+      out.set(articleId, {
+        sourceArticleId: articleId,
+        sourceUrl: ARTICLE_URL(articleId),
+        originalTitle: title,
+        sourceCommentCount: em ? Number(em[1]) : 0,
+        sourcePostedLabel: cells === null ? null : cells[2]!.trim(),
+        sourcePostedAt: cells === null ? null : kstRegdateToIso(cells[1]),
+        sourceViewCount: views !== null && Number.isSafeInteger(views) && views >= 0 ? views : null,
+        sourceRankOnPage: out.size + 1,
+      })
+    }
   }
   return [...out.values()]
+}
+
+/**
+ * 🔴 **목록 관측 한 줄 — 네이버 카페 목록 줄과 같은 칸 이름** (2026-09-30 Lane B · source-evidence-v1).
+ *
+ *    앞판은 목록 줄에 댓글 수 · 수집 시각만 남겼다 — 게시 시각 · 목록 시각 · 조회수 · 자리가 없어서
+ *    82cook 원천은 하류에서 전부 `POSTED_MISSING`(운영 artifact 136/136) 이었고, 목록 관측 읽기도
+ *    `navercafe-*` 파일 이름만 알아 82cook 표본이 0 이었다(`RESPONSE_UNNORMALIZED` · 재현).
+ *    이제 같은 칸(`sourceListedAt` · `sourcePostedAt` · `sourceViewCount` · `sourcePage` · `sourceRankOnPage` ·
+ *    `sourceCommentCountRead`)을 남긴다 — 원천이 달라도 **같은 sourceEvidence 계약**으로 읽힌다.
+ *
+ *    · `sourceListedAt` = 이 목록을 본 회차 시각 = `sourceCapturedAt`(네이버 카페 수집기와 같은 뜻)
+ *    · 게시 시각은 목록이 보여 준 KST 속성만 — 수집 시각으로 메우지 않는다
+ *    · 82cook 목록은 댓글이 있을 때만 `<em>N</em>` 을 그린다 — 없으면 0 이 **읽은 값**이다(`sourceCommentCountRead: true`)
+ *    · 본문 · 닉네임은 싣지 않는다(목록 단계 rawBody 는 빈 문자열)
+ */
+export function buildListRow(item: ListItem, listedAtIso: string): CollectedCandidate & {
+  sourceListedAt: string; sourcePostedLabel: string | null; sourcePostedAt: string | null
+  sourceViewCount: number | null; sourcePage: number | null; sourceRankOnPage: number | null
+  sourceCommentCountRead: boolean
+} {
+  return {
+    ...buildCollected(item, '', listedAtIso),
+    sourceListedAt: listedAtIso,
+    sourcePostedLabel: item.sourcePostedLabel ?? null,
+    sourcePostedAt: item.sourcePostedAt ?? null,
+    sourceViewCount: item.sourceViewCount ?? null,
+    sourcePage: item.sourcePage ?? null,
+    sourceRankOnPage: item.sourceRankOnPage ?? null,
+    sourceCommentCountRead: true,
+  }
 }
 
 /**

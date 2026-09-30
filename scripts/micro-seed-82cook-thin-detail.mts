@@ -48,6 +48,11 @@ import {
   COMMENT_TIER_HIGH, COMMENT_TIER_LOW,
   type ListRow, type ThinRow,
 } from '../src/lib/micro-seed-82cook-thin'
+/**
+ * 🔴 세 시각을 읽는 정본 helper — 네이버 카페 얇은 행과 **같은 함수**다(2026-09-30 Lane B).
+ *    82cook 목록 줄도 이제 같은 칸 이름(`sourcePostedAt` · `sourceListedAt` · `sourceCapturedAt`)을 싣는다.
+ */
+import { sourceTimesOf } from '../src/lib/micro-seed-navercafe-thin'
 
 const DATA_DIR = '.microseed-data'
 /** 🔴 두 스위치 중 하나 — env 가 없으면 `--live` 만으로는 열리지 않는다 */
@@ -88,14 +93,19 @@ function filesEnding(suffix: string): string[] {
 
 /** 목록 재고 — 이미 받아 둔 파일만 읽는다. 목록을 새로 수집하지 않는다 */
 function loadList(): ListRow[] {
-  const byId = new Map<string, ListRow>()
+  /**
+   * 🔴 **원천 · id 로 묶는다** (2026-09-30 Lane B). 앞판은 id 만으로 묶어, 네이버 카페 목록의 같은 번호가
+   *    82cook 줄을 덮을 수 있었다. 같은 글은 **나중에 본 줄**이 이긴다 — 82cook 목록 파일은 회차마다
+   *    뒤에 덧붙이므로 파일 안 마지막 줄이 가장 최근 관측이다(세 시각도 그 관측의 것이다).
+   */
+  const byKey = new Map<string, ListRow>()
   for (const f of filesEnding('.list.jsonl')) {
     for (const r of jsonl(f)) {
       const id = S(r.sourceArticleId)
-      if (id !== '') byId.set(id, r as ListRow)
+      if (id !== '') byKey.set(`${S(r.sourceSite)}::${id}`, r as ListRow)
     }
   }
-  return [...byId.values()]
+  return [...byKey.values()]
 }
 
 /**
@@ -257,6 +267,13 @@ async function main(): Promise<void> {
       reason: reason === '' ? v.reason : reason,
       runId,
       fetchedAt: new Date().toISOString(),
+      /**
+       * 🔴 **목록 줄의 세 시각을 옮긴다** (2026-09-30 Lane B). 앞판은 여기서 넘기지 않아 82cook 원천은
+       *    하류에서 전부 `POSTED_MISSING` 이었다(운영 artifact 136/136). 수집 시각은 **목록을 본 시각**이다 —
+       *    본문을 연 시각(`fetchedAt`)으로 바꾸지 않는다(반응 수가 관측된 순간과 같아야 한다 · 네이버 카페와 같은 뜻).
+       *    옛 목록 줄(칸 없음)은 빈 문자열(모른다) 그대로 간다.
+       */
+      times: sourceTimesOf(t),
     })
     // 🔴 저장 직전 마지막 관문 — 전문이 섞였으면 여기서 멈춘다
     const bad = violatesStorage(row as unknown as Record<string, unknown>, BODY_HEAD_CHARS)

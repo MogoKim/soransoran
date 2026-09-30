@@ -19,7 +19,7 @@
 /** 🔴 원문 증거 기록의 정본 — 적재기는 옮길 뿐 판정하지 않는다 */
 import {
   SOURCE_EVIDENCE_KEY, buildSourceEvidence,
-  type SourceObservation, type SourceStatsSnapshot,
+  type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
 } from './source-slot-release'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import { judgeCopy, readMeasure, describeOriginality } from './draft-originality'
@@ -316,7 +316,6 @@ export type Candidate = {
   sourcePostedAt?: string
   sourceListedAt?: string
   sourceCapturedAt?: string
-  sourceResponse?: unknown
   participationDriver?: string
 }
 
@@ -598,7 +597,12 @@ export type AutoJudgeProvenance = {
  *    반복 관측과 원천 상대 스냅샷은 파일(목록 산출)에만 있다 — 이 순수 함수는 받은 것을 옮길 뿐이다.
  *    주지 않으면 없다(빈 관측 · 스냅샷 null) — 판정 쪽이 모르는 것으로 읽는다.
  */
-export type EvidenceMaterial = { observations: readonly SourceObservation[]; sourceStats: SourceStatsSnapshot | null }
+export type EvidenceMaterial = {
+  /** 🔴 수집 때 본 반응 — 목록 관측(정본)에서 찾은 것 · 없으면 null */
+  response: SourceResponse | null
+  observations: readonly SourceObservation[]
+  sourceStats: SourceStatsSnapshot | null
+}
 
 /**
  * 🔴 **후보 → 원문 증거 기록** — 옛 `queueSourceTimesOf`(검사만 부르던 죽은 순수 함수)를 대신한다.
@@ -607,16 +611,13 @@ export type EvidenceMaterial = { observations: readonly SourceObservation[]; sou
  *    · 원문 URL · 제목 · 닉네임은 싣지 않는다(원문 id 는 해시만)
  */
 export function sourceEvidenceOf(c: Candidate, m: EvidenceMaterial | null): Record<string, unknown> {
-  const r = c.sourceResponse !== null && typeof c.sourceResponse === 'object' && !Array.isArray(c.sourceResponse)
-    ? c.sourceResponse as Record<string, unknown> : null
   return buildSourceEvidence({
     postedAt: c.sourcePostedAt, listedAt: c.sourceListedAt, capturedAt: c.sourceCapturedAt,
     sourceSite: c.sourceSite, sourceArticleId: c.sourceArticleId,
     artifactId: (c as unknown as Record<string, unknown>).artifactId,
     dedupKey: `${S(c.sourceSite)}|${S(c.sourceArticleId)}`,
-    response: r === null ? null : {
-      views: r.views, comments: r.comments, listRank: r.listRank, listPage: r.listPage, observedAt: r.observedAt,
-    },
+    // 🔴 반응은 목록 관측(정본)에서 온 것만 — 봉투 복사본은 지웠다(2026-09-30 Lane B)
+    response: m?.response ?? null,
     observations: m?.observations ?? [],
     sourceStats: m?.sourceStats ?? null,
     participationDriver: c.participationDriver,

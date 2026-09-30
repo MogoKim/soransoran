@@ -27,14 +27,6 @@ export type CandidateSourceMeta = {
   sourcePostedAt: string
   sourceListedAt: string
   sourceCapturedAt: string
-  /**
-   * 🔴 **수집 때 본 반응** (2026-09-30 · source-evidence-v1) — 적재기가 원문 증거 기록을 만든다.
-   *    수만 싣는다(원문 · 닉네임 없음). 모르면 `null`.
-   */
-  sourceResponse?: {
-    comments: number | null; views: number | null; listPage: number | null; listRank: number | null
-    observedAt: string
-  }
   /** 🔴 판정기가 낸 참여 동력(`communityAngle`) — 없으면 빈 문자열(모른다) */
   participationDriver?: string
 }
@@ -118,8 +110,10 @@ export function candidateEnvelopeItem(a: CandidateInput): Record<string, unknown
     sourcePostedAt: a.meta.sourcePostedAt,
     sourceListedAt: a.meta.sourceListedAt,
     sourceCapturedAt: a.meta.sourceCapturedAt,
-    /** 🔴 원문 반응 · 참여 동력 — 적재기(`buildSourceEvidence`)가 읽는다. 없으면 `null`(모른다) */
-    sourceResponse: a.meta.sourceResponse ?? null,
+    /**
+     * 🔴 참여 동력 — 적재기(`buildSourceEvidence`)가 읽는다. 반응(댓글 · 조회)은 **싣지 않는다** —
+     *    적재기가 `sourceListedAt` 으로 목록 관측(정본)에서 찾는다(2026-09-30 Lane B · 복사본 삭제).
+     */
     participationDriver: a.meta.participationDriver ?? '',
     provenanceNote: `기계 생성 · ${a.ruleVersion} · ${a.provenance} · ${CONTENT_CORE_PIPELINE_VERSION}`,
     autoJudge: a.autoJudge,

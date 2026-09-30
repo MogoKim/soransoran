@@ -15,7 +15,9 @@ import {
   SOURCE_SITE, BOARD_NAME, DELAY_MS, USER_AGENT, ARTICLE_URL, LIST_URL,
   computeDedupKey, parseRobotsTxt, isPathAllowed, toRobotsPath,
   parseListHtml, extractArticleBodyHtml, htmlToText, parseArticleTitle, buildCollected,
+  buildListRow, kstRegdateToIso,
 } from './lib/micro-seed-82cook.mjs'
+import { fixture82cookListHtml, FIXTURE_82COOK_ROWS } from './lib/fixture-82cook-list.mjs'
 import {
   assessCandidate, selectionScore, stripTruncationTail, linkCharRatioOf,
   DETAIL_ONLY_FLAGS, HIGH_ENGAGEMENT_MIN, SHORT_BODY_MAX, LINK_HEAVY_RATIO, SHORT_TITLE_MAX,
@@ -185,6 +187,29 @@ const bad = (name: string, kind: string, detail: string) => {
   }
 }
 
+// ── ⑧-b 🔴 목록 파싱 — **실제 페이지 구조**의 날짜 · 조회 · 자리 (2026-09-30 Lane B) ──
+//    앞판 목록 줄에는 게시 시각 · 조회수 · 자리가 없었다 → 82cook 원천은 하류에서 전부 POSTED_MISSING.
+//    fixture 는 실제 페이지(2026-09-30) 마크업 구조 그대로다(제목 · 닉네임 · 번호만 합성).
+{
+  const items = parseListHtml(fixture82cookListHtml(FIXTURE_82COOK_ROWS))
+  const byId = new Map(items.map((i) => [i.sourceArticleId, i]))
+  const checks: [string, boolean, string][] = [
+    ['공지 줄(noticeList · bbs_title_word)은 목록 관측이 아니다', !byId.has('4060855') && !byId.has('3414957') && items.length === FIXTURE_82COOK_ROWS.length, `${items.length}건`],
+    ['🔴 게시 시각은 날짜 칸 title 속성(KST) → UTC ISO', byId.get('9244772')?.sourcePostedAt === '2026-09-30T12:00:56.000Z', String(byId.get('9244772')?.sourcePostedAt)],
+    ['🔴 날짜 속성이 없는 줄은 게시 시각 null — 칸 글자(09.29)로 추측하지 않는다', byId.get('9244767')?.sourcePostedAt === null && byId.get('9244767')?.sourcePostedLabel === '09.29', String(byId.get('9244767')?.sourcePostedAt)],
+    ['🔴 조회 칸 — 천 단위 쉼표를 푼다', byId.get('9244768')?.sourceViewCount === 1234 && byId.get('9244772')?.sourceViewCount === 4, String(byId.get('9244768')?.sourceViewCount)],
+    ['댓글 수 — <em> 없음은 0 (82cook 은 댓글이 있을 때만 그린다)', byId.get('9244772')?.sourceCommentCount === 0 && byId.get('9244768')?.sourceCommentCount === 17, ''],
+    ['🔴 자리 — 공지를 뺀 페이지 안 순서(1부터 · 빈틈 없음)', items.every((i, k) => i.sourceRankOnPage === k + 1), items.map((i) => i.sourceRankOnPage).join(',')],
+    ['🔴 KST 변환은 모양이 맞을 때만 — 날짜만 · 잘못된 모양은 null', kstRegdateToIso('2026-09-30') === null && kstRegdateToIso('2026/09/30 21:00:56') === null && kstRegdateToIso(null) === null, ''],
+  ]
+  // 🔴 다른 줄의 칸을 빌려 오지 않는다 — 한 줄의 날짜 · 조회 칸이 비면 그 줄만 모른다
+  const broken = parseListHtml(fixture82cookListHtml(FIXTURE_82COOK_ROWS).replace('<td class="numbers">68</td>', ''))
+  checks.push(['🔴 한 줄의 조회 칸이 없으면 그 줄만 null — 다음 줄 칸을 빌리지 않는다',
+    broken.find((i) => i.sourceArticleId === '9244771')?.sourceViewCount === null
+    && broken.find((i) => i.sourceArticleId === '9244770')?.sourceViewCount === 114, ''])
+  for (const [n, pass, d] of checks) (pass ? ok : bad)(n, 'parse', d)
+}
+
 // ── ⑨ 본문 추출 — 중첩 div 에서 잘리지 않는다 ───────────
 //    🔴 non-greedy 정규식이면 첫 </div> 에서 끊겨 본문 일부만 가져온다.
 //       그 상태로 발행되면 원문이 훼손된 채 우리 이름으로 나간다.
@@ -252,17 +277,23 @@ const bad = (name: string, kind: string, detail: string) => {
     .split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
   // 목록 저장이 buildCollected 산출물(rows)을 그대로 넘기는지 본다.
   // 손으로 만든 객체 리터럴을 넘기면 필드가 빠진다 — 그것이 원래 결함이었다.
-  const usesBuilder = /const rows = items\.map\(\(i\) => buildCollected\(/.test(code)
+  // 🔴 (2026-09-30 Lane B) 목록 줄은 `buildListRow` — 안에서 `buildCollected` 를 부르고 목록 관측 칸을 더한다
+  const usesBuilder = /const rows = items\.map\(\(i\) => buildListRow\(/.test(code)
   const writesRows = /writeJsonl\(listPath, rows\)/.test(code)
   const noHandRolled = !/writeJsonl\(listPath, items\.map\(\(i\) => \(\{/.test(code)
   // 실제 산출물 모양도 확인한다 — rawBody 는 빈 문자열이어야 한다
-  const listRow = buildCollected(
-    { sourceArticleId: '1', sourceUrl: ARTICLE_URL('1'), originalTitle: 't', sourceCommentCount: 0 },
-    '', '2026-08-26T00:00:00.000Z',
+  const listRow = buildListRow(
+    { sourceArticleId: '1', sourceUrl: ARTICLE_URL('1'), originalTitle: 't', sourceCommentCount: 0,
+      sourcePostedAt: '2026-08-25T23:00:00.000Z', sourcePostedLabel: '08:00:00', sourceViewCount: 9, sourceRankOnPage: 1, sourcePage: 2 },
+    '2026-08-26T00:00:00.000Z',
   )
   const has11 = ['sourceSite','sourceUrl','sourceArticleId','sourceBoardName','sourceCommentCount',
     'originalTitle','rawBody','sourceCapturedAt','dedupKey','qualityFlags','qualitySignals']
     .every((k) => k in listRow)
+    // 🔴 (Lane B) 목록 관측 칸 — 네이버 카페 목록 줄과 같은 이름 · 목록 시각 = 수집 시각
+    && listRow.sourceListedAt === '2026-08-26T00:00:00.000Z' && listRow.sourceCapturedAt === listRow.sourceListedAt
+    && listRow.sourcePostedAt === '2026-08-25T23:00:00.000Z' && listRow.sourceViewCount === 9
+    && listRow.sourcePage === 2 && listRow.sourceRankOnPage === 1 && listRow.sourceCommentCountRead === true
   const emptyBody = listRow.rawBody === ''
   if (usesBuilder && writesRows && noHandRolled && has11 && emptyBody) {
     ok('목록 산출물도 11필드를 갖춘다', 'guard', 'buildCollected 경로 · rawBody 는 빈 값')
