@@ -94,7 +94,8 @@ const draft = (o: Partial<DraftCandidate> = {}): DraftCandidate => ({
  *    본다 — 의미 판정은 Content Core v2 통합 검수가 하고 `pickV2` 가 받는다.
  */
 const inp = (o: Partial<PickInput> = {}): PickInput => ({
-  judgement: { sourceArticleId: 's1', decision: 'AUTO_SEED', semanticRisks: [] },
+  // 🔴 (P0-B) 러너가 넘기는 판정은 원천 사이트를 싣는다
+  judgement: { sourceSite: 'navercafe:wgang', sourceArticleId: 's1', decision: 'AUTO_SEED', semanticRisks: [] },
   drafts: [draft()],
   seenTitles: new Set<string>(), seenBodies: new Set<string>(), sourceUsed: false, ...o,
 })
@@ -114,6 +115,14 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
 
   const row = p() as unknown as Record<string, unknown>
   check('🟢 온전한 채택은 통과', violatesDraftProvenance(row).length === 0)
+  check('🔴 🔴 **(P0-B) 원천 사이트 없는 결정 기록은 쓰지 않는다** — 빈 값 · 칸 없음 둘 다',
+    violatesDraftProvenance({ ...row, sourceSite: '' }).some((b) => b.includes('sourceSite'))
+    && violatesDraftProvenance((({ sourceSite: _s, ...r }) => r)(row)).some((b) => b.includes('sourceSite'))
+    && row.sourceSite === 'navercafe:wgang')
+  check('🔴 🔴 **(P0-B) pickV2 결정도 판정의 사이트를 옮겨 적는다**',
+    pickV2({ judgement: { sourceSite: '82cook', sourceArticleId: 's1', decision: 'AUTO_SEED' }, draft: draft(),
+      seenTitles: new Set(), seenBodies: new Set(), sourceUsed: false, machineOutcome: 'hold', machineReason: '',
+      sourceTitleCopied: false, crisisStop: null } as never, NOW).sourceSite === '82cook')
   for (const d of HUMAN_DRAFT_DECISIONS) {
     check(`🔴 decision=${d} 를 쓰면 잡는다`,
       violatesDraftProvenance({ ...row, decision: d }).length > 0)

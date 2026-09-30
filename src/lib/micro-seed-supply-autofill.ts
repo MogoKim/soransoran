@@ -23,6 +23,7 @@ import {
 } from './source-slot-release'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import { judgeCopy, readMeasure, describeOriginality } from './draft-originality'
+import { baseIdOf, sourceIdentityOf } from './source-identity'
 import { readVoiceProvenance } from './original-post-voice-match'
 // 🔴 판 값의 정본은 초안 lib 하나다 — 여기서 다시 적으면 올릴 때마다 갈라진다
 import { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } from './micro-seed-auto-draft'
@@ -170,6 +171,8 @@ export function machineShapeMismatch(
   eq(c.sourceDecision, MACHINE_PROFILE.sourceDecision, 'sourceDecision')
   eq(c.sourceInput, MACHINE_PROFILE.sourceInput, 'sourceInput')
   eq(c.candidateType, MACHINE_PROFILE.candidateType, 'candidateType')
+  // 🔴 (P0-B) 기계 후보는 원천 (사이트, id) 가 둘 다 있어야 한다 — 없으면 synthetic 사이트가 접두뿐인 행이 된다
+  if (sourceIdentityOf(c.sourceSite, c.sourceArticleId) === null) bad.push('원천 (sourceSite, sourceArticleId) 가 비었다')
   eq(c.safetyVerdict, 'pass', 'safetyVerdict')
   // 🔴 **재 둔 값이 있어야 한다.** 없으면 `?? 0` 이 0 을 만들어 통과시킨다 —
   //    "재지 않았다" 가 "겹침 없음" 이 되는 것이 provenance 세탁의 시작이다
@@ -369,6 +372,8 @@ export function isHeld(c: Candidate, held: readonly HeldEntry[]): boolean {
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
 export type QueueRow = {
+  /** 🔴 (P0-B) 큐 행의 사이트 — synthetic 접두가 있어도 된다(`originalSourceOf` 가 원래 사이트로 되돌린다) */
+  sourceSite: string
   sourceArticleId: string
   status: string
   createdPostId: string | null
@@ -383,9 +388,19 @@ export type QueueRow = {
  * 형제가 이미 나갔으면(발행 완료) 시간이 벌어졌으므로 넣어도 된다.
  */
 export function hasPendingSibling(
-  articleId: string, queue: readonly QueueRow[],
+  site: string, articleId: string, queue: readonly QueueRow[],
 ): boolean {
-  return queue.some((q) => baseArticleId(q.sourceArticleId) === articleId && isPendingRow(q))
+  /**
+   * 🔴 (2026-09-30 야간 P0-B) 형제 = **같은 원천 (원래 사이트, 기본 id)**. 앞판은 id 만 봐서 82cook 형제가
+   *    같은 번호의 네이버 카페 후보를 막았다. 원천을 모르는 후보는 형제가 있다고 본다(fail-closed · 신규 적재 안 함).
+   */
+  const key = sourceIdentityOf(site, articleId)
+  if (key === null) return true
+  return queue.some((q) => {
+    if (!isPendingRow(q)) return false
+    const o = originalSourceOf(q.sourceSite, q.sourceArticleId)
+    return o !== null && sourceIdentityOf(o.site, o.id) === key
+  })
 }
 
 /**
@@ -419,12 +434,57 @@ export function baseArticleId(synthetic: string): string {
   return i > 0 ? synthetic.slice(0, i) : synthetic
 }
 
+/**
+ * 🔴 **큐 행 · 글 한 줄 → 원래 원천.**
+ *    · 우리 synthetic 행(`publish-candidate:` · `publish-candidate:auto:`): 접두를 떼면 원래 사이트,
+ *      id 는 `<원래id>-<해시8>` 이므로 정본 `baseArticleId` 로 되돌린다
+ *    · 그 밖의 행(legacy · 글): 사이트는 그대로, id 가 `사이트:id` 모양이면 앞을 뗀다(운영 글 실측)
+ *    🔴 id 가 비면 `null` — 빈 키로 전부를 막지 않는다
+ */
+export function originalSourceOf(
+  site: string | null | undefined, articleId: string | null | undefined,
+): { site: string; id: string } | null {
+  const s0 = S(site)
+  const id0 = S(articleId)
+  if (id0 === '') return null
+  if (isOurSite(s0)) {
+    const s = s0.startsWith(MACHINE_SITE_PREFIX) ? s0.slice(MACHINE_SITE_PREFIX.length)
+      : s0.slice(AUTOFILL_SITE_PREFIX.length)
+    return { site: s, id: baseIdOf(baseArticleId(id0)) }
+  }
+  const id = s0 !== '' && id0.startsWith(`${s0}:`) ? id0.slice(s0.length + 1) : id0
+  return id === '' ? null : { site: s0, id: baseIdOf(id) }
+}
+
+/**
+ * 🔴 **적재된 후보의 출처 열쇠 — 원천 (사이트, id) + 제목** (2026-09-30 야간 P0-B).
+ *    앞판 `provenanceKeyOf(id, 제목)` 은 사이트가 없어, 같은 번호 · 같은 제목의 82cook · 네이버 후보가 서로를 ALREADY 로 막았다.
+ *    원천 열쇠는 정본 `sourceIdentityOf` 다. 사이트나 id 를 모르면 `null`.
+ */
+export function sourceProvenanceKeyOf(site: string, articleId: string, title: string): string | null {
+  const key = sourceIdentityOf(site, articleId)
+  return key === null ? null : `${key}\u0001${normTitle(title)}`
+}
+
+/** 🔴 큐 행(synthetic RawContent) → 출처 열쇠. 원래 사이트는 정본 `originalSourceOf` 로 되돌린다 */
+export function existingSourceKeysOf(rows: readonly { sourceSite: string; sourceArticleId: string; rawTitle: string }[]): Set<string> {
+  const out = new Set<string>()
+  for (const r of rows) {
+    const o = originalSourceOf(r.sourceSite, r.sourceArticleId)
+    const k = o === null ? null : sourceProvenanceKeyOf(o.site, o.id, r.rawTitle)
+    if (k !== null) out.add(k)
+  }
+  return out
+}
+
+const normTitle = (title: string): string => title.replace(/\s+/g, ' ').trim()
+
 export type RefillInput = {
   /** 🔴 파일 봉투 — 행만 읽고 버리면 기계 profile 을 검증할 수 없다 */
   envelope?: Envelope
   candidates: readonly Candidate[]
   held: readonly HeldEntry[]
-  /** 이미 큐에 올라간 것들의 provenanceKey */
+  /** 이미 큐에 올라간 것들의 출처 열쇠 — 🔴 (P0-B) `existingSourceKeysOf` · `sourceProvenanceKeyOf` */
   existing: ReadonlySet<string>
   /** 형제 검사용 — 큐 전체 */
   queue: readonly QueueRow[]
@@ -441,12 +501,14 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
   const targets: Candidate[] = []
   const skipped: Skip[] = []
   const push = (title: string, code: SkipCode): void => { skipped.push({ title, code }) }
-  // 이번 회차 안에서도 형제가 겹치면 안 된다 — 파일에 짝이 둘 다 있을 수 있다
-  const takenArticles = new Set<string>()
+  // 이번 회차 안에서도 형제가 겹치면 안 된다 — 파일에 짝이 둘 다 있을 수 있다. 🔴 (P0-B) 원천 열쇠로 센다
+  const takenSources = new Set<string>()
 
   for (const c of input.candidates) {
     const title = S(c.title)
     const id = S(c.sourceArticleId)
+    const site = S(c.sourceSite)
+    const srcKey = sourceIdentityOf(site, id)
     const type = S(c.candidateType)
 
     if (!AUTOFILL_ALLOWED_TYPES.includes(type)) { push(title, 'TYPE'); continue }
@@ -466,6 +528,12 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
       push(title, 'CONTRACT'); continue
     }
     if (!isHumanShape && !isMachineShape) { push(title, 'PROFILE'); continue }
+    /**
+     * 🔴 (P0-B) **신규 적재는 원천 (사이트, id) 가 둘 다 있어야 한다 — 사람 · 기계 모두.** 없으면 접두뿐인 synthetic 사이트 행이
+     *    되고 어느 원천의 글인지 영영 모른다. 기존 코드 PROFILE(후보 모양이 계약과 다르다)로 막는다.
+     *    과거 기록(보류 · 이미 적재된 행)의 사이트 없는 의미는 읽기 호환으로만 남는다(아래 HELD).
+     */
+    if (srcKey === null) { push(title, 'PROFILE'); continue }
     // 🔴 기계 후보가 사람 값을 쓰고 있으면 거절한다 — 사칭이다
     if (isMachineShape && impersonatesHuman(env, c)) { push(title, 'IMPERSONATION'); continue }
     if (S(c.safetyVerdict) !== 'pass') { push(title, 'SAFETY'); continue }
@@ -475,12 +543,16 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
     if (judgeCopy(measure).copied) { push(title, 'COPIED'); continue }
     if (S(c.leakedTokens) !== '') { push(title, 'LEAK'); continue }
     if (title === '' || S(c.body) === '') { push(title, 'EMPTY'); continue }
-    if (input.existing.has(provenanceKeyOf(id, title))) { push(title, 'ALREADY'); continue }
-    // 🔴 사람이 뺀 것을 기계가 도로 넣지 않는다
+    // 🔴 (P0-B) 같은 원천 · 같은 제목이면 이미 올라간 것이다
+    if (input.existing.has(sourceProvenanceKeyOf(site, id, title)!)) { push(title, 'ALREADY'); continue }
+    /**
+     * 🔴 사람이 뺀 것을 기계가 도로 넣지 않는다. **호환 경계** — 보류 기록(`HeldEntry`)에는 사이트가 없다(사람이 남긴 옛 기록).
+     *    그래서 보류는 id · 제목으로 대 본다 — 막는 방향이라 넓히지 않고 그대로 둔다(P0-B 에서 바꾸지 않은 유일한 id 대조).
+     */
     if (isHeld(c, input.held)) { push(title, 'HELD'); continue }
-    if (takenArticles.has(id) || hasPendingSibling(id, input.queue)) { push(title, 'SIBLING'); continue }
+    if (takenSources.has(srcKey) || hasPendingSibling(site, id, input.queue)) { push(title, 'SIBLING'); continue }
 
-    takenArticles.add(id)
+    takenSources.add(srcKey)
     targets.push(c)
   }
   return { targets, skipped }
@@ -638,6 +710,8 @@ export function buildQueuePayload(input: {
 }): QueuePayload | null {
   const { envelope: env, candidate: c } = input
   const site = S(c.sourceSite)
+  // 🔴 (P0-B) 신규 적재 행은 원천 (사이트, id) 가 둘 다 있어야 한다 — 사람 · 기계 모두(접두뿐인 synthetic 사이트를 만들지 않는다)
+  if (sourceIdentityOf(site, c.sourceArticleId) === null) return null
   const machineBad = machineProfileMismatch(env, c)
   const isMachine = machineBad.length === 0
 

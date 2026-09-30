@@ -83,7 +83,8 @@ writeFileSync(join(dd, 'x.detail.jsonl'), `${JSON.stringify({
   sourceCapturedAt: '2026-09-18T03:00:00.000Z',
 })}\n`, 'utf-8')
 writeFileSync(join(dd, 'x.shadow.jsonl'), `${JSON.stringify({
-  sourceArticleId: SRC_ID, decision: 'AUTO_SEED', semanticRisks: [],
+  // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
+  sourceSite: 'navercafe:wgang', sourceArticleId: SRC_ID, decision: 'AUTO_SEED', semanticRisks: [],
   ruleVersion: 'auto-judge-v1', promptVersion: 'p', model: 'm', inputHash: 'h',
   provenance: 'machine-judged',
 })}\n`, 'utf-8')

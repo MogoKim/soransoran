@@ -749,7 +749,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
 
   const OUR = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`
   const seed = (id: string): string => JSON.stringify({
-    sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+    // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
+    sourceSite: 'navercafe:remonterrace', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
   })
@@ -1506,7 +1507,7 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
     commentCount: 3, bodyLength: 200,
   }))
   const shadow = [1, 2, 3].map((i) => JSON.stringify({
-    sourceArticleId: `C${i}`, decision: 'AUTO_SEED', semanticRisks: [],
+    sourceSite: 'navercafe:remonterrace', sourceArticleId: `C${i}`, decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
   }))

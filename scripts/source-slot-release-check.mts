@@ -20,7 +20,7 @@ import { join } from 'node:path'
 
 import {
   buildSourceEvidence, compareReleaseRank, judgeSlotRelease, matchOpportunitiesToSlots, percentileOf,
-  observationBucketOf, readSourceEvidence, releaseStampStatusOf, releaseStampOf, sourceStatsSnapshot, velocityOf,
+  observationBucketOf, readSourceEvidence, releaseStampCheck, releaseStampStatusOf, releaseStampOf, publishEventAtOf, sourceStatsSnapshot, velocityOf,
   describeRelease, parseEvidence, relativePosition,
   EXPIRING_REASONS, RELEASE_CONTRACT, SOURCE_AGE_LIMIT_HOURS, SOURCE_EVIDENCE_KEY, SOURCE_EVIDENCE_VERSION, SOURCE_STATS_METHOD,
   type ListObservation, type SlotOpportunity, type SourceEvidenceRecord,
@@ -274,10 +274,47 @@ console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
     legacy.verdict === 'FAIL' && legacy.codes.includes('RELEASE_CONTRACT_MISSING'))
   const stale = judgeEvidenceForTarget('2026-09-30', 'd3', 3, facts([post('STAMPED_ELIGIBLE'), post('STALE'), post('STAMPED_ELIGIBLE')]), side)
   check('🔴 다른 판 · eligible 아닌 도장 하나라도 → FAIL STALE_RELEASE', stale.verdict === 'FAIL' && stale.codes.includes('STALE_RELEASE'))
-  check('도장 판정 함수 — 계약 · eligible 둘 다 맞아야 STAMPED_ELIGIBLE',
-    releaseStampStatusOf({ release: releaseStampOf(judge(ev())) }) === 'STAMPED_ELIGIBLE'
-    && releaseStampStatusOf({ release: { contract: 'source-slot-v0', verdict: 'eligible' } }) === 'STALE'
-    && releaseStampStatusOf({}) === 'MISSING' && RELEASE_CONTRACT === 'source-slot-v1')
+  // 🔴 도장 = 완전한 계약 + 발행 사건과 같은 시각 (2026-09-30 야간 P0-A)
+  const good = releaseStampOf(judge(ev()))
+  check('도장 판정 — 발행 트랜잭션 모양 · 같은 사건 시각이면 STAMPED_ELIGIBLE',
+    releaseStampStatusOf({ release: good }, NOW) === 'STAMPED_ELIGIBLE'
+    && releaseStampStatusOf({}, NOW) === 'MISSING' && releaseStampStatusOf(null, NOW) === 'MISSING'
+    && RELEASE_CONTRACT === 'source-slot-v1')
+  const bad: [string, unknown, Date | null, string][] = [
+    ['🔴 AS-IS 반례 — contract · verdict 두 칸뿐', { contract: 'source-slot-v1', verdict: 'eligible' }, NOW, 'stamp:fields'],
+    ['🔴 AS-IS 반례 — slotAt:x · evaluatedAt:x · reasons · issue · evidenceVersion 전부 깨짐',
+      { contract: 'source-slot-v1', verdict: 'eligible', slotAt: 'x', evaluatedAt: 'x', reasons: ['HARD_GATE'], issue: 'broken', evidenceVersion: null }, NOW, 'reasons:not-empty'],
+    ['다른 계약 판', { ...good, contract: 'source-slot-v0' }, NOW, 'contract:mismatch'],
+    ['eligible 아닌 판정', { ...good, verdict: 'unknown' }, NOW, 'verdict:not-eligible'],
+    ['모르는 칸이 더 있다', { ...good, extra: 1 }, NOW, 'stamp:fields'],
+    ['칸 하나 빠짐(issue)', (({ issue: _i, ...r }) => r)(good), NOW, 'stamp:fields'],
+    ['reasons 배열 아님', { ...good, reasons: 'HARD_GATE' }, NOW, 'reasons:type'],
+    ['reasons 모르는 코드', { ...good, reasons: ['NOPE'] }, NOW, 'reasons:type'],
+    ['reasons 비어 있지 않음', { ...good, reasons: ['HARD_GATE'] }, NOW, 'reasons:not-empty'],
+    ['issue non-null', { ...good, issue: 'observations[0]:not-object' }, NOW, 'issue:not-null'],
+    ['evidenceVersion null', { ...good, evidenceVersion: null }, NOW, 'evidenceVersion:mismatch'],
+    ['evidenceVersion 다른 판', { ...good, evidenceVersion: 'source-evidence-v0' }, NOW, 'evidenceVersion:mismatch'],
+    ['slotAt 손상', { ...good, slotAt: 'x' }, NOW, 'slotAt:corrupt'],
+    ['slotAt 비정규 ISO(시간대 없음)', { ...good, slotAt: NOW.toISOString().replace('Z', '') }, NOW, 'slotAt:corrupt'],
+    ['slotAt 비정규 ISO(+09:00 표기)', { ...good, slotAt: '2026-10-01T09:30:00+09:00' }, NOW, 'slotAt:corrupt'],
+    ['evaluatedAt 숫자', { ...good, evaluatedAt: NOW.getTime() }, NOW, 'evaluatedAt:corrupt'],
+    ['🔴 발행 사건 시각 모름(null)', good, null, 'publishEvent:unknown'],
+    ['🔴 도장 slotAt ≠ 발행 사건 (1ms)', good, new Date(NOW.getTime() + 1), 'slotAt:not-publish-event'],
+    ['🔴 evaluatedAt 만 다른 사건', { ...good, evaluatedAt: new Date(NOW.getTime() - 60_000).toISOString() }, NOW, 'evaluatedAt:not-publish-event'],
+    ['도장이 객체 아님', 'eligible', NOW, 'stamp:not-object'],
+    ['도장이 배열', [good], NOW, 'stamp:not-object'],
+  ]
+  for (const [name, stamp, at, want] of bad) {
+    const r = releaseStampCheck({ release: stamp }, at)
+    check(`🔴 fail-closed — ${name} → STALE(${want})`, r.status === 'STALE' && r.issue === want, JSON.stringify(r))
+  }
+  // 🔴 발행 사건 시각 — 기록 정확히 한 줄 · publishedAt = createdAt
+  check('🔴 발행 사건 helper — 한 줄 · 두 시각 같음만 시각이다 (허용 오차 없음)',
+    publishEventAtOf([{ publishedAt: NOW, createdAt: NOW }])?.getTime() === NOW.getTime()
+    && publishEventAtOf([]) === null
+    && publishEventAtOf([{ publishedAt: null, createdAt: NOW }]) === null
+    && publishEventAtOf([{ publishedAt: NOW, createdAt: new Date(NOW.getTime() + 1) }]) === null
+    && publishEventAtOf([{ publishedAt: NOW, createdAt: NOW }, { publishedAt: NOW, createdAt: NOW }]) === null)
   // 옛 판(v4) 결정 위의 PASS · 지속 단계는 근거가 아니다
   const v4 = validateStoredDecision({ expectKstDate: '2026-09-30', row: {
     kstDate: '2026-09-30', capacity: 'd10', release: 'd5', state: 'SUSTAIN', reasons: [], blocks: [], dayPinned: false,

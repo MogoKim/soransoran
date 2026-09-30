@@ -9,10 +9,13 @@ import {
   readGenerationContract, sameGenerationContract,
   type ContractBase, type GenerationContract,
 } from './content-core/pipeline'
-import {
-  AUTOFILL_SITE_PREFIX, MACHINE_SITE_PREFIX, baseArticleId, isOurSite,
-} from './micro-seed-supply-autofill'
+/** 🔴 원래 원천 복원(`originalSourceOf`)은 synthetic 사이트 접두의 주인인 적재 모듈에 있다 — 옮겼을 뿐 두 벌이 아니다 */
+import { originalSourceOf } from './micro-seed-supply-autofill'
+export { originalSourceOf }
 import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+/** 🔴 원천 identity 정본 — (sourceSite, sourceArticleId). 여기서 다시 내보낸다(옮겼을 뿐 두 벌이 아니다) */
+import { baseIdOf, sourceIdentityOf, sourceKeyOf, sourceOfKey } from './source-identity'
+export { baseIdOf, sourceIdentityOf, sourceKeyOf, sourceOfKey }
 /** 🔴 원천 기회 판정 정본 — 유료 생성 전에 예정 슬롯 기준으로 같은 함수를 부른다 */
 import {
   compareReleaseRank, judgeSlotRelease, parseEvidence,
@@ -43,7 +46,16 @@ import {
 
 /** 🔴 manifest 판 — 모양이 바뀌면 올린다. 옛 파일을 새 판으로 읽지 않는다 */
 export const WORKSET_KIND = 'supply-workset'
-export const WORKSET_VERSION = 'workset-v1'
+/**
+ * 🔴 `workset-v2` (2026-09-30 야간 P0-B) — 묶음은 원문 id 목록(`sourceIds`)이 아니라 **(사이트, id) 쌍**(`sources`)이다.
+ *    v1 은 같은 id 두 사이트를 구분하지 못했다. v1 파일은 판이 달라 읽지 않는다(fail-closed · 회차 안에서만 쓰는 파일이다).
+ */
+export const WORKSET_VERSION = 'workset-v2'
+/**
+ * 🔴 옛 판 — **개수만** 읽는다(관제 · 수율 창이 지난 7일 파일을 센다). 원천 열쇠는 없다(`sourceKeys: null`) —
+ *    판정 러너는 열쇠가 없는 묶음으로 돌지 않는다(`micro-seed-auto-judge` 가 멈춘다).
+ */
+export const WORKSET_VERSION_LEGACY = 'workset-v1'
 
 /** 🔴 회차 파일 이름 — 러너와 검사가 **같은 함수**를 쓴다 */
 export const worksetFileName = (runId: string): string => `supply-workset-${runId}.json`
@@ -155,17 +167,18 @@ export function preGenerationRelease(r: WorksetRow, slotAt: Date, now: Date): Sl
   return judgeSlotRelease({
     evidence: r.evidence ?? undefined, gateResults: r.evidence === null ? {} : undefined,
     slotAt, now, hardGates: { ok: true, codes: [] },
-    assignment: 'pending', driver: 'pending', tieBreak: r.sourceArticleId,
+    assignment: 'pending', driver: 'pending', tieBreak: sourceKeyOf(r.sourceSite, r.sourceArticleId),
   })
 }
 
 export const WORKSET_DROPS = [
-  'humanDecided', 'queueSibling', 'alreadyQueued', 'carriedOver', 'hardBlocked', 'preGated', 'terminal',
+  'identityMissing', 'humanDecided', 'queueSibling', 'alreadyQueued', 'carriedOver', 'hardBlocked', 'preGated', 'terminal',
   'slotIneligible', 'slotUnknown',
 ] as const
 export type WorksetDrop = (typeof WORKSET_DROPS)[number]
 
 export const WORKSET_DROP_LABEL: Readonly<Record<WorksetDrop, string>> = {
+  identityMissing: '🔴 원천 사이트 · id 중 하나를 모른다 — 다른 원천과 합칠 수 없어 고르지 않는다',
   humanDecided: '사람이 이미 판정한 원천',
   queueSibling: '같은 원문의 미발행 형제가 큐에 있다',
   alreadyQueued: '같은 원문으로 이미 큐 행이나 글이 있다 (발행된 것 포함 — 두 번째 글을 만들지 않는다)',
@@ -183,8 +196,11 @@ export type Workset = {
   runId: string
   takenAt: string
   limit: number
-  /** 🔴 이번 회차가 끝까지 보낼 원천 — 이 목록이 계약이다 */
-  sourceIds: string[]
+  /**
+   * 🔴 이번 회차가 끝까지 보낼 원천 — 이 목록이 계약이다. **(사이트, id) 쌍**으로 적는다 —
+   *    원문 id 만으로는 원천이 아니다(`source-identity`). 파일에는 원래 두 칸을 각각 남긴다.
+   */
+  sources: { sourceSite: string; sourceArticleId: string }[]
 }
 
 export type WorksetPlan = {
@@ -300,6 +316,8 @@ export const STAGE_RANK = Object.freeze({ judge: 0, draft: 1 } as const)
 export type OutcomeStage = keyof typeof STAGE_RANK
 
 export type PriorOutcome = {
+  /** 🔴 원천 열쇠(`sourceKeyOf`) — 지난 결과를 원천에 붙이는 **유일한** 열쇠다 */
+  sourceKey: string
   sourceArticleId: string
   /**
    * 🔴 **이번에 실패한 화자** (2026-09-23). 다음 시도에서 그 사람을 다시 고르지 않는다.
@@ -370,6 +388,8 @@ export type WorksetCanon = {
 
 /** 🔴 지난 판정 한 줄 — 파일에서 읽은 그대로 */
 export type PriorJudgementRow = {
+  /** 🔴 원천 사이트 — 이 판(P0-B) 전 판정 기록에는 없다 → `shadowRecordOutcome` 의 호환 경계가 정한다 */
+  sourceSite: string
   sourceArticleId: string
   inputHash: string
   ruleVersion: string
@@ -388,6 +408,8 @@ export type PriorJudgementRow = {
 
 /** 🔴 지난 artifact 한 장 — 파일에서 읽은 그대로 */
 export type PriorArtifactRow = {
+  /** 🔴 원천 사이트 — 이 판(P0-B) 전 artifact 에는 없다 → `artifactRecordOutcome` 의 호환 경계가 정한다 */
+  sourceSite: string
   sourceArticleId: string
   artifactVersion: string
   contract: GenerationContract | null
@@ -459,8 +481,10 @@ export function judgementOutcome(
   j: PriorJudgementRow, currentInputHash: string, canon: WorksetCanon,
 ): PriorOutcome | null {
   const id = S(j.sourceArticleId)
+  const key = sourceIdentityOf(j.sourceSite, id)
   const atMs = parseInstantMs(j.decidedAt)
-  if (id === '' || atMs === null) return null
+  // 🔴 사이트를 모르는 줄은 어느 원천의 결론도 아니다 — 호환 경계(`shadowRecordOutcome`)가 사이트를 정한 뒤에만 온다
+  if (key === null || atMs === null) return null
   if (S(j.inputHash) !== currentInputHash) return null
   if (S(j.ruleVersion) !== canon.ruleVersion) return null
   if (S(j.promptVersion) !== canon.promptVersion) return null
@@ -480,7 +504,7 @@ export function judgementOutcome(
   const runAtMs = j.runAt === undefined ? null : parseInstantMs(j.runAt)
   const runId = S(j.runId)
   return {
-    sourceArticleId: id, atMs, stage: 'judge', state,
+    sourceKey: key, sourceArticleId: id, atMs, stage: 'judge', state,
     ...(runAtMs === null ? {} : { run: { id: runId === '' ? null : runId, atMs: runAtMs } }),
   }
 }
@@ -493,8 +517,9 @@ export function artifactOutcome(
   a: PriorArtifactRow, currentContract: GenerationContract, artifactVersion: string,
 ): PriorOutcome | null {
   const id = S(a.sourceArticleId)
+  const key = sourceIdentityOf(a.sourceSite, id)
   const atMs = parseInstantMs(a.generatedAt)
-  if (id === '' || atMs === null) return null
+  if (key === null || atMs === null) return null
   if (S(a.artifactVersion) !== artifactVersion) return null
   if (!sameGenerationContract(a.contract, currentContract)) return null
   const outcome = S(a.outcome)
@@ -504,7 +529,7 @@ export function artifactOutcome(
       : a.retryable ? 'retryable'
         : outcome === 'adopt' ? 'candidate' : 'terminal'
   return {
-    sourceArticleId: id, atMs, stage: 'draft', state,
+    sourceKey: key, sourceArticleId: id, atMs, stage: 'draft', state,
     failedPersonaCode: state === 'retryable' ? (S(a.personaCode) || null) : null,
     failedStance: state === 'retryable' ? (S(a.stance) || null) : null,
     suggestedPersonaCodes: state === 'retryable'
@@ -514,24 +539,54 @@ export function artifactOutcome(
 }
 
 /**
+ * 🔴 **사이트 칸 호환 경계 — 지난 기록을 원천 하나에 붙이는 한 곳** (2026-09-30 야간 P0-B).
+ *
+ *    `hashOf` 는 **원천 열쇠(`sourceKeyOf`) → 지금 입력 지문**이다.
+ *    · 기록에 사이트가 있으면: 그 열쇠 하나만 본다. 지금 대상이 아니면 `null`.
+ *    · 기록에 사이트가 없으면(이 판 전 판정 · artifact): **묵시적으로 합치지 않는다.** 같은 id 를 가진 지금 대상
+ *      원천마다 기록을 대 보고(`outcomeAt`), **입력 지문 · 계약이 맞아 결론이 나는 원천이 정확히 하나일 때만**
+ *      그 원천의 기록으로 인정한다. 둘 이상이면(같은 id · 같은 지문 — 어느 쪽 기록인지 증명할 수 없다) 버린다.
+ *      🔴 지문은 제목 · 본문 앞머리로 만든다 — 다른 사이트의 다른 글은 지문이 달라 여기서 갈린다.
+ *    🔴 버린 기록은 결론이 아니다 — 그 원천은 다시 볼 수 있다(깨진 기록 하나가 원천을 영구 제외하지 않는 기존 태도와 같다).
+ */
+function resolveSourceOutcome(
+  raw: Record<string, unknown>, hashOf: ReadonlyMap<string, string>,
+  outcomeAt: (site: string, hash: string) => PriorOutcome | null,
+): PriorOutcome | null {
+  const id = baseIdOf(S(raw.sourceArticleId))
+  if (id === '') return null
+  const site = S(raw.sourceSite)
+  if (site !== '') {
+    const hash = hashOf.get(sourceKeyOf(site, id))
+    return hash === undefined ? null : outcomeAt(site, hash)
+  }
+  const hits: PriorOutcome[] = []
+  for (const [key, hash] of hashOf) {
+    const src = sourceOfKey(key)
+    if (src === null || src.id !== id) continue
+    const o = outcomeAt(src.site, hash)
+    if (o !== null) hits.push(o)
+  }
+  return hits.length === 1 ? hits[0]! : null
+}
+
+/**
  * 🔴 **판정 파일 한 줄을 그대로 상태로.** 러너와 검사가 **같은 함수**를 쓴다 —
  *    읽는 코드를 두 벌로 두면 검사가 구현을 흉내 내는 것으로 끝난다.
- *    🔴 지금 회차 대상이 아닌 원천(`hashOf` 에 없는 id)은 `null` 이다.
+ *    🔴 지금 회차 대상이 아닌 원천(`hashOf` 에 없는 열쇠)은 `null` 이다. 사이트 칸 호환은 `resolveSourceOutcome`.
  */
 export function shadowRecordOutcome(
   raw: Record<string, unknown>, hashOf: ReadonlyMap<string, string>, canon: WorksetCanon,
 ): PriorOutcome | null {
-  const hash = hashOf.get(S(raw.sourceArticleId))
-  if (hash === undefined) return null
-  return judgementOutcome({
-    sourceArticleId: S(raw.sourceArticleId), inputHash: S(raw.inputHash),
+  return resolveSourceOutcome(raw, hashOf, (site, hash) => judgementOutcome({
+    sourceSite: site, sourceArticleId: S(raw.sourceArticleId), inputHash: S(raw.inputHash),
     ruleVersion: S(raw.ruleVersion), promptVersion: S(raw.promptVersion), model: S(raw.model),
     decision: S(raw.decision), semanticStatus: S(raw.semanticStatus),
     decidedAt: S(raw.decidedAt),
     // 🔴 판정 러너가 적은 회차 칸 — 옛 줄에는 없다(없으면 넘기지 않는다)
     ...(typeof raw.runAt === 'string' ? { runAt: raw.runAt } : {}),
     ...(typeof raw.runId === 'string' ? { runId: raw.runId } : {}),
-  }, hash, canon)
+  }, hash, canon))
 }
 
 /** 🔴 **artifact 한 장을 그대로 상태로.** 위와 같은 이유로 여기 하나만 둔다 */
@@ -547,11 +602,9 @@ export function artifactRecordOutcome(
   raw: Record<string, unknown>, hashOf: ReadonlyMap<string, string>,
   base: ContractBase, artifactVersion: string,
 ): PriorOutcome | null {
-  const hash = hashOf.get(S(raw.sourceArticleId))
-  if (hash === undefined) return null
   const review = raw.review
-  return artifactOutcome({
-    sourceArticleId: S(raw.sourceArticleId), artifactVersion: S(raw.artifactVersion),
+  return resolveSourceOutcome(raw, hashOf, (site, hash) => artifactOutcome({
+    sourceSite: site, sourceArticleId: S(raw.sourceArticleId), artifactVersion: S(raw.artifactVersion),
     // 🔴 계약 칸이 하나라도 빠진 옛 artifact 는 `null` — 지금 계약과 같을 수 없다
     contract: readGenerationContract(raw.contract),
     outcome: S((review as Record<string, unknown> | undefined)?.machineOutcome),
@@ -569,7 +622,7 @@ export function artifactRecordOutcome(
       return Array.isArray(v) ? v.map((x) => S(x)).filter((x) => x !== '') : []
     })(),
     cause: S(readCause(review)),
-  }, { ...base, sourceInputHash: hash }, artifactVersion)
+  }, { ...base, sourceInputHash: hash }, artifactVersion))
 }
 
 /**
@@ -577,10 +630,11 @@ export function artifactRecordOutcome(
  *    같은 회차 안에서는 단계 순서(생성이 판정 뒤), 회차 사이에서는 회차 시각이다.
  */
 export function latestOutcomes(rows: readonly PriorOutcome[]): Map<string, PriorOutcome> {
+  // 🔴 원천 열쇠로 모은다 — 같은 id 다른 사이트의 결과가 서로를 가리지 않는다
   const out = new Map<string, PriorOutcome>()
   for (const r of rows) {
-    const cur = out.get(r.sourceArticleId)
-    if (cur === undefined || isLaterOutcome(r, cur)) out.set(r.sourceArticleId, r)
+    const cur = out.get(r.sourceKey)
+    if (cur === undefined || isLaterOutcome(r, cur)) out.set(r.sourceKey, r)
   }
   return out
 }
@@ -677,7 +731,7 @@ export function attributeRuns(
  *    `candidate` 는 여기서 빼지 않는다 — 큐·글에 이미 있으면 `queuedSources` 가, 적재가 실패했으면
  *    이월(`carriedOver`)이 묶음에서 뺀다(2026-09-28). 둘 다 아니면(기한 밖 등) 다시 볼 수 있다.
  */
-export function concludedSourceIds(rows: readonly PriorOutcome[]): Set<string> {
+export function concludedSourceKeys(rows: readonly PriorOutcome[]): Set<string> {
   const out = new Set<string>()
   for (const [id, v] of latestOutcomes(rows)) {
     if ((CONCLUDED_STATES as readonly OutcomeState[]).includes(v.state)) out.add(id)
@@ -696,8 +750,6 @@ export function attemptedOutcomes(rows: readonly PriorOutcome[]): Map<string, Pr
   return latestOutcomes(rows)
 }
 
-/** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 */
-export const baseIdOf = (id: string): string => id.split('#')[0] ?? id
 
 // ─────────────────────────────────────────────────────────
 // 🔴 **같은 원문으로 두 번째 글을 만들지 않는다** (2026-09-28 공급 가속 P0-C)
@@ -716,31 +768,6 @@ export const EMPTY_SOURCE_KEYS: SourceKeySet = Object.freeze({
   bySiteId: new Set<string>(), byId: new Set<string>(),
 })
 
-/** 🔴 원천 키 — 사이트 + (`#` 조각을 뗀) 원문 id */
-export const sourceKeyOf = (site: string, articleId: string): string =>
-  `${site.trim()}\u0000${baseIdOf(articleId.trim())}`
-
-/**
- * 🔴 **큐 행 · 글 한 줄 → 원래 원천.**
- *    · 우리 synthetic 행(`publish-candidate:` · `publish-candidate:auto:`): 접두를 떼면 원래 사이트,
- *      id 는 `<원래id>-<해시8>` 이므로 정본 `baseArticleId` 로 되돌린다
- *    · 그 밖의 행(legacy · 글): 사이트는 그대로, id 가 `사이트:id` 모양이면 앞을 뗀다(운영 글 실측)
- *    🔴 id 가 비면 `null` — 빈 키로 전부를 막지 않는다
- */
-export function originalSourceOf(
-  site: string | null | undefined, articleId: string | null | undefined,
-): { site: string; id: string } | null {
-  const s0 = S(site)
-  const id0 = S(articleId)
-  if (id0 === '') return null
-  if (isOurSite(s0)) {
-    const s = s0.startsWith(MACHINE_SITE_PREFIX) ? s0.slice(MACHINE_SITE_PREFIX.length)
-      : s0.slice(AUTOFILL_SITE_PREFIX.length)
-    return { site: s, id: baseIdOf(baseArticleId(id0)) }
-  }
-  const id = s0 !== '' && id0.startsWith(`${s0}:`) ? id0.slice(s0.length + 1) : id0
-  return id === '' ? null : { site: s0, id: baseIdOf(id) }
-}
 
 /**
  * 🔴 **이미 큐·글에 있는 원천 집합.** 큐 행은 **상태를 보지 않는다** — 미발행·발행·거절 모두다.
@@ -772,6 +799,36 @@ export function hasSource(keys: SourceKeySet, site: string, articleId: string): 
 }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+
+/**
+ * 🔴 **사람이 이미 판정한 원천 색인** (2026-09-30 야간 P0-B) — 판정 러너 · 공급 러너가 같은 함수를 쓴다.
+ *    승인 파일 행은 (사이트, id) 로 모은다. 사이트가 없는 옛 행은 **그 id 의 모든 원천**을 사람 판정으로 본다 —
+ *    막는 쪽 집합이라 모르는 사이트를 이유로 사람이 본 글을 기계가 다시 판정하지 않게 한다(보수 쪽 · `hasSource` 와 같은 태도).
+ */
+export type HumanDecisionIndex = { bySource: ReadonlyMap<string, string>; byIdOnly: ReadonlyMap<string, string> }
+
+export const EMPTY_HUMAN_DECISIONS: HumanDecisionIndex = Object.freeze({ bySource: new Map(), byIdOnly: new Map() })
+
+export function humanDecisionIndexOf(rows: readonly Record<string, unknown>[]): HumanDecisionIndex {
+  const bySource = new Map<string, string>()
+  const byIdOnly = new Map<string, string>()
+  for (const r of rows) {
+    const id = baseIdOf(S(r.sourceArticleId))
+    if (id === '') continue
+    const key = sourceIdentityOf(r.sourceSite, id)
+    if (key === null) byIdOnly.set(id, S(r.decision))
+    else bySource.set(key, S(r.decision))
+  }
+  return { bySource, byIdOnly }
+}
+
+/** 🔴 이 원천의 사람 판정 — 없으면 `null` */
+export function humanDecisionFor(ix: HumanDecisionIndex, site: string, articleId: string): string | null {
+  const id = baseIdOf(S(articleId))
+  const key = sourceIdentityOf(site, id)
+  if (key !== null && ix.bySource.has(key)) return ix.bySource.get(key)!
+  return ix.byIdOnly.get(id) ?? null
+}
 
 /**
  * 🔴 **재시도 자리를 남겨 둔다** (2026-09-20 보정 · 2026-09-28 비례).
@@ -830,9 +887,9 @@ export const WORKSET_RETRY_STARVE_MS = 6 * 60 * 60 * 1000
 export function selectWorkset(input: {
   /** post-adapt 상세 행 — 🔴 같은 id 가 여러 번 오면 **뒤에 온 것**이 최신이다 */
   rows: readonly WorksetRow[]
-  /** 사람이 이미 판정한 원천 */
-  humanDecided: ReadonlySet<string>
-  /** 큐에 미발행 형제가 있는 원문 (base id) */
+  /** 사람이 이미 판정한 원천 — 🔴 `humanDecisionIndexOf` (사이트까지 맞춘다) */
+  humanDecided: HumanDecisionIndex
+  /** 큐에 미발행 형제가 있는 원천 — 🔴 원천 열쇠 집합(`pendingSourceKeysOf`) */
   queuePending: ReadonlySet<string>
   /**
    * 🔴 **큐 행(상태 무관)이나 글이 이미 있는 원천** (`queuedSourceKeysOf`, 2026-09-28).
@@ -849,12 +906,12 @@ export function selectWorkset(input: {
    *    댓글 수 상위 자리를 영구 점유해 다음 회차가 같은 것만 보게 된다.
    *    🔴 **재시도해야 하는 것은 여기 넣지 않는다** (예산·상한에 막힌 것 등).
    */
-  concluded: ReadonlySet<string>
+  concluded: ReadonlySet<string>  // 🔴 원천 열쇠 집합(`concludedSourceKeys`)
   /**
    * 🔴 **지금 계약으로 이미 돌려 본 원천과 그 마지막 시각** (`attemptedOutcomes`).
    *    빼지 않는다 — 자리를 나눠 쓰고, 그 안에서는 **오래 기다린 것부터** 집는다.
    */
-  attempted: ReadonlyMap<string, PriorOutcome>
+  attempted: ReadonlyMap<string, PriorOutcome>  // 🔴 원천 열쇠 → 마지막 결과
   /**
    * 🔴 **정본 원천 기회 판정 — 예정 슬롯 기준 · 유료 생성 전** (`judgeSlotRelease` · 참여 동력 · 배정은 `pending`).
    *    eligible 이 아니면 고르지 않는다. 순서도 이 판정의 rank 다. 부르는 쪽이 넣는다 — 기본값이 없다.
@@ -865,27 +922,33 @@ export function selectWorkset(input: {
   takenAt: Date
 }): WorksetPlan {
   const dropped: Record<WorksetDrop, number> = {
-    humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
+    identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
     slotIneligible: 0, slotUnknown: 0,
   }
-  const releaseById = new Map<string, SlotReleaseVerdict>()
-  // 🔴 같은 원천이 여러 파일에 있으면 **마지막 행**만 남긴다
-  const byId = new Map<string, WorksetRow>()
+  const releaseByKey = new Map<string, SlotReleaseVerdict>()
+  /**
+   * 🔴 같은 원천이 여러 파일에 있으면 **마지막 행**만 남긴다 — 원천은 **(사이트, id)** 다.
+   *    앞판은 id 하나로 모아 같은 id 두 사이트 중 한쪽을 지웠다(P0-B). 사이트나 id 를 모르면 고르지 않는다.
+   */
+  const byKey = new Map<string, WorksetRow>()
+  const keyOf = new Map<WorksetRow, string>()
   for (const r of input.rows) {
-    const id = S(r.sourceArticleId)
-    if (id === '') continue
-    byId.set(id, { ...r, sourceArticleId: id })
+    const key = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
+    if (key === null) { dropped.identityMissing += 1; continue }
+    byKey.set(key, { ...r, sourceArticleId: S(r.sourceArticleId), sourceSite: S(r.sourceSite) })
   }
+  for (const [key, r] of byKey) keyOf.set(r, key)
+  const K = (r: WorksetRow): string => keyOf.get(r)!
 
   const eligible: WorksetRow[] = []
-  for (const r of byId.values()) {
-    if (input.humanDecided.has(r.sourceArticleId)) { dropped.humanDecided += 1; continue }
-    if (input.queuePending.has(baseIdOf(r.sourceArticleId))) { dropped.queueSibling += 1; continue }
+  for (const r of byKey.values()) {
+    if (humanDecisionFor(input.humanDecided, r.sourceSite, r.sourceArticleId) !== null) { dropped.humanDecided += 1; continue }
+    if (input.queuePending.has(K(r))) { dropped.queueSibling += 1; continue }
     // 🔴 발행된 형제까지 — 같은 원문으로 두 번째 글을 만들지 않는다
     if (hasSource(input.queuedSources, r.sourceSite, r.sourceArticleId)) { dropped.alreadyQueued += 1; continue }
     // 🔴 적재 실패 후보는 이월이 적재한다 — 다시 만들지 않는다
     if (hasSource(input.carriedOver, r.sourceSite, r.sourceArticleId)) { dropped.carriedOver += 1; continue }
-    if (input.concluded.has(r.sourceArticleId)) { dropped.terminal += 1; continue }
+    if (input.concluded.has(K(r))) { dropped.terminal += 1; continue }
     /**
      * 🔴 **판정기 정본 게이트를 그대로 부른다** — 여기서 규칙을 새로 만들지 않는다.
      *    `access`·`safety` 를 손으로 비교하던 앞판은 판정기와 어긋날 수 있었다.
@@ -908,18 +971,18 @@ export function selectWorkset(input: {
       else dropped.slotIneligible += 1
       continue
     }
-    releaseById.set(r.sourceArticleId, v)
+    releaseByKey.set(K(r), v)
     eligible.push(r)
   }
 
-  /** 🔴 정본 rank 사전식 비교 — 합산 점수 없음 · 마지막 열쇠는 id 다 */
+  /** 🔴 정본 rank 사전식 비교 — 합산 점수 없음 · 마지막 열쇠는 원천 열쇠다 */
   const byWeight = (a: WorksetRow, b: WorksetRow): number =>
-    compareReleaseRank(releaseById.get(a.sourceArticleId)!.rank, releaseById.get(b.sourceArticleId)!.rank)
-    || a.sourceArticleId.localeCompare(b.sourceArticleId)
+    compareReleaseRank(releaseByKey.get(K(a))!.rank, releaseByKey.get(K(b))!.rank)
+    || K(a).localeCompare(K(b))
 
-  const fresh = eligible.filter((r) => !input.attempted.has(r.sourceArticleId)).sort(byWeight)
-  const prior = (r: WorksetRow): PriorOutcome | undefined => input.attempted.get(r.sourceArticleId)
-  const retry = eligible.filter((r) => input.attempted.has(r.sourceArticleId))
+  const fresh = eligible.filter((r) => !input.attempted.has(K(r))).sort(byWeight)
+  const prior = (r: WorksetRow): PriorOutcome | undefined => input.attempted.get(K(r))
+  const retry = eligible.filter((r) => input.attempted.has(K(r)))
     /**
      * 🔴 **차례(`retryTierOf`) → 오래 기다린 것부터 → 신규와 같은 저울.**
      *    판정은 통과했는데 초안이 없는 원천(`seeded`)이 판정부터 다시 물어야 하는 원천보다 먼저다.
@@ -970,7 +1033,7 @@ export function selectWorkset(input: {
   const reserved = new Set<string>()
   for (const r of retryOpen) {
     if (reserved.size >= reserve) break
-    if (take(r)) reserved.add(r.sourceArticleId)
+    if (take(r)) reserved.add(K(r))
   }
   // 🔴 ② 신규 — 댓글 수 순서 그대로, 남긴 재시도 자리를 빼고 축 자리 안에서
   const freshPicked: WorksetRow[] = []
@@ -982,11 +1045,11 @@ export function selectWorkset(input: {
   const retryIds = new Set(reserved)
   for (const r of retryOpen) {
     if (freshPicked.length + retryIds.size >= limit) break
-    if (retryIds.has(r.sourceArticleId)) continue
-    if (take(r)) retryIds.add(r.sourceArticleId)
+    if (retryIds.has(K(r))) continue
+    if (take(r)) retryIds.add(K(r))
   }
   // 🔴 재시도는 **오래 기다린 순서** 그대로 적는다 — 먼저 잡은 자리가 앞에 오는 것이 아니다
-  const retryPicked = retryOpen.filter((r) => retryIds.has(r.sourceArticleId))
+  const retryPicked = retryOpen.filter((r) => retryIds.has(K(r)))
   const picked = [...freshPicked, ...retryPicked]
   const pickedByAxis: Record<WorksetAxis, number> = {
     seed: picked.filter((r) => worksetAxisOf(r) === 'seed').length,
@@ -997,7 +1060,7 @@ export function selectWorkset(input: {
     workset: {
       kind: WORKSET_KIND, version: WORKSET_VERSION,
       runId: input.runId, takenAt: input.takenAt.toISOString(), limit,
-      sourceIds: picked.map((r) => r.sourceArticleId),
+      sources: picked.map((r) => ({ sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId })),
     },
     picked,
     dropped,
@@ -1011,7 +1074,13 @@ export type WorksetFail = 'MISSING' | 'PARSE' | 'KIND' | 'VERSION' | 'RUN_MISMAT
 export type WorksetRead =
   | {
       ok: true
-      sourceIds: ReadonlySet<string>
+      /**
+       * 🔴 원천 열쇠(`sourceKeyOf`) 집합 — 판정 · 생성이 이 열쇠로 대 본다.
+       *    옛 판(v1 · 사이트 없음)이면 `null` — 개수만 믿을 수 있다. 판정 게이트로 쓰지 않는다
+       */
+      sourceKeys: ReadonlySet<string> | null
+      /** 🔴 묶음의 원천 수 — 관제 · 수율 창이 센다 */
+      count: number
       limit: number
       /** 🔴 이 묶음을 집은 시각(ms) — 관제가 단계 상태를 이 값으로 판정한다 */
       takenAtMs: number
@@ -1028,17 +1097,30 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   }
   const o = raw as Record<string, unknown>
   if (o.kind !== WORKSET_KIND) return { ok: false, code: 'KIND', reason: `다른 파일이다 (${String(o.kind)})` }
-  if (o.version !== WORKSET_VERSION) {
-    return { ok: false, code: 'VERSION', reason: `옛 판이다 (${String(o.version)})` }
+  const legacy = o.version === WORKSET_VERSION_LEGACY
+  if (o.version !== WORKSET_VERSION && !legacy) {
+    return { ok: false, code: 'VERSION', reason: `모르는 판이다 (${String(o.version)})` }
   }
   if (S(o.runId) !== expectRunId) {
     return { ok: false, code: 'RUN_MISMATCH', reason: `다른 회차 파일이다 (${S(o.runId)} ≠ ${expectRunId})` }
   }
   const limit = typeof o.limit === 'number' && Number.isInteger(o.limit) && o.limit > 0 ? o.limit : -1
   if (limit < 0) return { ok: false, code: 'SHAPE', reason: 'limit 이 양의 정수가 아니다' }
-  if (!Array.isArray(o.sourceIds)) return { ok: false, code: 'SHAPE', reason: 'sourceIds 가 배열이 아니다' }
-  const ids = o.sourceIds.map(S).filter((x) => x !== '')
-  if (ids.length !== o.sourceIds.length) return { ok: false, code: 'SHAPE', reason: '빈 id 가 섞여 있다' }
+  let ids: string[]
+  if (legacy) {
+    // 🔴 옛 판 — 원문 id 목록뿐이다. 개수만 센다(열쇠를 지어내지 않는다)
+    if (!Array.isArray(o.sourceIds)) return { ok: false, code: 'SHAPE', reason: 'sourceIds 가 배열이 아니다' }
+    ids = o.sourceIds.map(S).filter((x) => x !== '')
+    if (ids.length !== o.sourceIds.length) return { ok: false, code: 'SHAPE', reason: '빈 id 가 섞여 있다' }
+  } else {
+    if (!Array.isArray(o.sources)) return { ok: false, code: 'SHAPE', reason: 'sources 가 배열이 아니다' }
+    // 🔴 원천마다 사이트 · id 가 둘 다 있어야 한다 — 하나라도 비면 묶음 전체를 받지 않는다
+    const keys = o.sources.map((x: unknown) => (x !== null && typeof x === 'object'
+      ? sourceIdentityOf((x as Record<string, unknown>).sourceSite, (x as Record<string, unknown>).sourceArticleId) : null))
+    if (keys.some((k) => k === null)) return { ok: false, code: 'SHAPE', reason: '사이트 · id 가 빈 원천이 섞여 있다' }
+    ids = keys as string[]
+    if (new Set(ids).size !== ids.length) return { ok: false, code: 'SHAPE', reason: '같은 원천이 두 번 적혀 있다' }
+  }
   // 🔴 파일이 상한을 넘겨 적혀 있으면 받지 않는다 — 여기서 새는 것이 가장 위험하다
   if (ids.length > limit) {
     return { ok: false, code: 'OVER_LIMIT', reason: `${ids.length}건 > 상한 ${limit}건` }
@@ -1054,7 +1136,7 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   if (takenAtMs === null) {
     return { ok: false, code: 'SHAPE', reason: `takenAt 을 읽을 수 없다 (${String(o.takenAt)})` }
   }
-  return { ok: true, sourceIds: new Set(ids), limit, takenAtMs }
+  return { ok: true, sourceKeys: legacy ? null : new Set(ids), count: ids.length, limit, takenAtMs }
 }
 
 export type StageBudget = {

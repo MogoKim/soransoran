@@ -34,10 +34,10 @@ import { AUTO_DECIDER, AUTO_READY_ENV } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
 import { SUPPLY_DAILY_USD_APPROVED } from '../../src/lib/supply-schedule-contract'
 import {
-  judgeSlotRelease, matchOpportunitiesToSlots, readSourceEvidence, releaseStampStatusOf,
+  judgeSlotRelease, matchOpportunitiesToSlots, publishEventAtOf, readSourceEvidence, releaseStampStatusOf,
   type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
-import { OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot } from '../../src/lib/supply-workset'
+import { OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readWorkset } from '../../src/lib/supply-workset'
 import type { Health } from '../../src/lib/ops-status'
 import { HEARTBEAT_INTERVAL_MINUTES } from './original-post-runner-template'
 import { COMMENT_RUNNER_SLOTS, FIRST_COMMENT_ATTEMPTS } from './persona-comment-runner-template'
@@ -151,8 +151,9 @@ export function worksetSourcesIn(dataDir: string, fromMs: number, toMs: number):
     const at = runMsOf(m[1]!)
     if (at === null || at < fromMs || at >= toMs) continue
     try {
-      const j = JSON.parse(readFileSync(join(dataDir, f), 'utf-8')) as { sourceIds?: unknown }
-      if (Array.isArray(j.sourceIds)) { n += j.sourceIds.length; files += 1 }
+      // 🔴 정본 판독기(`readWorkset`)가 센다 — 옛 판(v1)은 개수만 · 새 판(v2)은 (사이트, id) 쌍. 두 번째 파서를 두지 않는다
+      const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
+      if (r.ok) { n += r.count; files += 1 }
     } catch { /* 못 읽는 파일은 표본에서 뺀다 */ }
   }
   return files === 0 ? null : n
@@ -197,6 +198,40 @@ export function slotValidOpportunitiesOf(input: {
  * 🔴 **preflight 사실을 모은다.** `evidenceDate` 는 전날(증거일) — 단가 · 수율 · 지연은 그날까지 최근 3일.
  *    어느 하나를 못 읽으면 그 칸만 `null` 이다(나머지는 계속 모은다).
  */
+/**
+ * 🔴 **원문 게시 → 공개 지연(시간) — 창 · 공개 시각 모두 발행 사건(발행 기록)이 정한다** (2026-09-30 야간 P0-A).
+ *    창 안에 **발행 기록**(`PersonaActivityLog` kind=post · `createdAt` — 상한 정본과 같은 칸)이 있는 글만 후보다.
+ *    앞판은 `Post.createdAt`(DB 기본값) 창으로 먼저 자르고 발행 기록 시각을 썼다 — 두 시계가 창 경계에서 갈렸다.
+ *    그 글의 발행 사건 시각(`publishEventAtOf` — 기록 정확히 한 줄)과 release 도장이 같은 사건일 때만 센다.
+ */
+export async function publishLatencyHours(prisma: PrismaClient, from: Date, to: Date): Promise<number[]> {
+  const inWindow = await prisma.personaActivityLog.findMany({
+    where: { kind: 'post', createdAt: { gte: from, lt: to }, targetId: { not: null } },
+    select: { targetId: true },
+  })
+  const postIds = [...new Set(inWindow.map((l) => l.targetId).filter((x): x is string => x !== null && x !== ''))]
+  if (postIds.length === 0) return []
+  // 🔴 사건 판정은 그 글의 **모든** 발행 기록으로 한다 — 창 밖 중복 기록이 있으면 같은 사건을 증명하지 못한다
+  const logs = await prisma.personaActivityLog.findMany({
+    where: { kind: 'post', targetId: { in: postIds } },
+    select: { targetId: true, publishedAt: true, createdAt: true },
+  })
+  const published = await prisma.originalPostApprovalQueue.findMany({
+    where: { status: 'PUBLISHED', createdPostId: { in: postIds } },
+    select: { gateResults: true, createdPostId: true },
+  })
+  const lat: number[] = []
+  for (const q of published) {
+    const eventAt = publishEventAtOf(logs.filter((l) => l.targetId === q.createdPostId))
+    if (eventAt === null || releaseStampStatusOf(q.gateResults, eventAt) !== 'STAMPED_ELIGIBLE') continue
+    const ev = readSourceEvidence(q.gateResults)
+    const posted = ev.ok && ev.record.postedAt !== null ? Date.parse(ev.record.postedAt) : Number.NaN
+    if (!Number.isFinite(posted)) continue
+    lat.push((eventAt.getTime() - posted) / 3_600_000)
+  }
+  return lat
+}
+
 export async function readPreflightFacts(prisma: PrismaClient, i: {
   /** controller 가 이미 읽은 재고 — 🔴 러너와 같은 열림 판정(`autoOpen`)으로 읽은 것이어야 한다 */
   loaded: LoadedStock
@@ -262,18 +297,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   let latencyP50H: number | null = null
   let latencyP90H: number | null = null
   try {
-    const published = await prisma.originalPostApprovalQueue.findMany({
-      where: { status: 'PUBLISHED', createdPost: { createdAt: { gte: windowFrom, lt: windowTo } } },
-      select: { gateResults: true, createdPost: { select: { createdAt: true } } },
-    })
-    const lat: number[] = []
-    for (const q of published) {
-      if (releaseStampStatusOf(q.gateResults) !== 'STAMPED_ELIGIBLE' || q.createdPost === null) continue
-      const ev = readSourceEvidence(q.gateResults)
-      const posted = ev.ok && ev.record.postedAt !== null ? Date.parse(ev.record.postedAt) : Number.NaN
-      if (!Number.isFinite(posted)) continue
-      lat.push((q.createdPost.createdAt.getTime() - posted) / 3_600_000)
-    }
+    const lat = await publishLatencyHours(prisma, windowFrom, windowTo)
     latencyP50H = quantileOf(lat, 0.5)
     latencyP90H = quantileOf(lat, 0.9)
     if (lat.length === 0) notes.push('지연 관측 없음 — 지금 계약 도장으로 나간 글이 창 안에 없다')

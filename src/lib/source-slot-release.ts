@@ -686,17 +686,75 @@ export function releaseStampOf(v: SlotReleaseVerdict): ReleaseStamp {
 }
 
 /**
- * 🔴 **이 행이 지금 계약으로 나갔는가** — 단계 증거 조항 7.
- *    · `STAMPED_ELIGIBLE` 지금 계약 · eligible 도장
- *    · `MISSING`          도장이 없다(이 계약 이전 발행 · 우회 발행)
- *    · `STALE`            다른 계약 판이거나 eligible 이 아닌 도장
+ * 🔴 **발행 기록(`PersonaActivityLog` kind=post) 한 줄의 시각** — 발행 트랜잭션이 `publishedAt` · `createdAt` 을
+ *    둘 다 트랜잭션 시계(txNow)로 쓴다. 도장의 `slotAt` · `evaluatedAt` 도 같은 txNow 다.
  */
-export function releaseStampStatusOf(gateResults: unknown): 'STAMPED_ELIGIBLE' | 'MISSING' | 'STALE' {
-  if (gateResults === null || typeof gateResults !== 'object' || Array.isArray(gateResults)) return 'MISSING'
-  const s = (gateResults as Record<string, unknown>)[RELEASE_STAMP_KEY]
-  if (s === undefined || s === null || typeof s !== 'object' || Array.isArray(s)) return 'MISSING'
-  const r = s as Record<string, unknown>
-  return r.contract === RELEASE_CONTRACT && r.verdict === 'eligible' ? 'STAMPED_ELIGIBLE' : 'STALE'
+export type PublishLogTimes = { publishedAt: Date | null; createdAt: Date }
+
+/**
+ * 🔴 **발행 사건 시각 — 정본 helper 하나.** 글 하나의 발행 기록이 **정확히 한 줄**이고
+ *    그 줄의 `publishedAt` 과 `createdAt` 이 **정확히 같을 때만** 그 시각이다. 아니면 null(모른다).
+ *    🔴 허용 오차 · 보정이 없다 — 같은 트랜잭션의 같은 사건이면 같은 값이다.
+ *    기록이 둘 이상이면 어느 쪽이 도장과 같은 사건인지 말할 수 없다(중복 자체는 단계 증거가 따로 잡는다).
+ */
+export function publishEventAtOf(logs: readonly PublishLogTimes[]): Date | null {
+  if (logs.length !== 1) return null
+  const l = logs[0]!
+  if (l.publishedAt === null || l.publishedAt.getTime() !== l.createdAt.getTime()) return null
+  return l.publishedAt
+}
+
+/** 🔴 도장의 칸 — 정확히 이 일곱 개다(`releaseStampOf` 가 쓰는 모양). 더 있거나 모자라면 이 계약이 아니다 */
+const RELEASE_STAMP_FIELDS: readonly string[] = ['contract', 'verdict', 'slotAt', 'evaluatedAt', 'reasons', 'issue', 'evidenceVersion']
+const RELEASE_REASON_SET: ReadonlySet<string> = new Set(RELEASE_REASONS)
+
+export type ReleaseStampStatus = 'STAMPED_ELIGIBLE' | 'MISSING' | 'STALE'
+
+/**
+ * 🔴 **release 도장 검증 — 정본은 이 함수 하나다.** 모든 소비자(단계 증거 · 사전점검 지연 · 깔때기 · 검사)가 이것만 부른다.
+ *
+ *    앞판은 `contract` · `verdict` 두 칸만 봤다. 그래서 `{contract:'source-slot-v1', verdict:'eligible'}` 두 칸짜리나
+ *    `slotAt:'x'` · `reasons:['HARD_GATE']` · `issue:'broken'` · `evidenceVersion:null` 도장이 증명으로 세어졌다(재현).
+ *    이제 **완전한 계약**을 본다 — 첫 문제에서 멈추고 `issue` 에 칸과 종류를 적는다(값 없음):
+ *      ① 칸 모양 — 정확히 일곱 칸 · `contract` 정확 일치
+ *      ② `verdict === 'eligible'` · `reasons` 가 빈 배열 · `issue === null` · `evidenceVersion === SOURCE_EVIDENCE_VERSION`
+ *      ③ `slotAt` · `evaluatedAt` 가 정규 ISO(`toISOString()` 모양)
+ *      ④ **같은 사건** — 두 시각이 `publishEventAt`(발행 기록 시각, `publishEventAtOf`)과 **정확히 같다**.
+ *         발행 사건 시각을 모르면(null) 증명이 아니다
+ *
+ *    · `STAMPED_ELIGIBLE` 위 넷을 전부 지난 도장
+ *    · `MISSING`          도장이 없다(이 계약 이전 발행 · 우회 발행)
+ *    · `STALE`            도장은 있지만 완전한 지금 계약 · 같은 사건의 증명이 아니다
+ */
+export function releaseStampCheck(
+  gateResults: unknown, publishEventAt: Date | null,
+): { status: ReleaseStampStatus; issue: string | null } {
+  const stale = (issue: string): { status: ReleaseStampStatus; issue: string } => ({ status: 'STALE', issue })
+  if (!isObj(gateResults)) return { status: 'MISSING', issue: null }
+  const s = gateResults[RELEASE_STAMP_KEY]
+  if (s === undefined || s === null) return { status: 'MISSING', issue: null }
+  if (!isObj(s)) return stale('stamp:not-object')
+  const keys = Object.keys(s)
+  if (keys.length !== RELEASE_STAMP_FIELDS.length || !RELEASE_STAMP_FIELDS.every((k) => keys.includes(k))) return stale('stamp:fields')
+  if (s.contract !== RELEASE_CONTRACT) return stale('contract:mismatch')
+  if (s.verdict !== 'eligible') return stale('verdict:not-eligible')
+  if (!Array.isArray(s.reasons) || !s.reasons.every((x) => typeof x === 'string' && RELEASE_REASON_SET.has(x))) return stale('reasons:type')
+  if (s.reasons.length !== 0) return stale('reasons:not-empty')
+  if (s.issue !== null) return stale('issue:not-null')
+  if (s.evidenceVersion !== SOURCE_EVIDENCE_VERSION) return stale('evidenceVersion:mismatch')
+  const slotAt = canonicalIso(s.slotAt)
+  const evaluatedAt = canonicalIso(s.evaluatedAt)
+  if (slotAt === null) return stale('slotAt:corrupt')
+  if (evaluatedAt === null) return stale('evaluatedAt:corrupt')
+  if (publishEventAt === null) return stale('publishEvent:unknown')
+  if (slotAt.getTime() !== publishEventAt.getTime()) return stale('slotAt:not-publish-event')
+  if (evaluatedAt.getTime() !== publishEventAt.getTime()) return stale('evaluatedAt:not-publish-event')
+  return { status: 'STAMPED_ELIGIBLE', issue: null }
+}
+
+/** 🔴 상태만 — `releaseStampCheck` 의 얇은 창(검증을 다시 하지 않는다) */
+export function releaseStampStatusOf(gateResults: unknown, publishEventAt: Date | null): ReleaseStampStatus {
+  return releaseStampCheck(gateResults, publishEventAt).status
 }
 
 /** 사람이 읽는 한 줄 — 코드와 수만 */

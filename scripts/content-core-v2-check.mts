@@ -46,7 +46,10 @@ import {
   exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
   materializePersonaAt, bandOfAge,
 } from '../src/lib/persona-birth-anchor'
-import { EMPTY_SOURCE_KEYS, selectWorkset, preGenerationRelease, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX } from '../src/lib/supply-workset'
+import { EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, selectWorkset, preGenerationRelease, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX, sourceKeyOf } from '../src/lib/supply-workset'
+/** 🔴 이 검사의 원천 사이트 — 원천 열쇠(P0-B)는 (사이트, id) 다 */
+const FX_SITE = 'navercafe:fixture'
+const RT_SITE = 'navercafe:remonterrace'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import {
   resolveLoadBearing, ACTIVATED_AXES, loadBearingRequirements, checkLoadBearingPreserved,
@@ -185,7 +188,7 @@ const run = (o: {
   return runContentCore({
     // 🔴 fixture 도 회차마다 새 불투명 id 를 준다 — 원문에서 유도하지 않는다
     artifactId: randomUUID().replace(/-/g, ''),
-    sourceArticleId: o.id, title: o.title, maskedBody: o.body,
+    sourceSite: FX_SITE, sourceArticleId: o.id, title: o.title, maskedBody: o.body,
     // 🔴 (quality-v3) 회차와 같은 날 올라온 커뮤니티 글 · 사진 수 미상 — 이 검사의 원문은 시점·출처 축을 부르지 않는다
     sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null },
     personas: o.personas ?? ALL,
@@ -1675,36 +1678,36 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
   const plan = (limit: number, attempted: Map<string, { atMs: number }>, fresh: string[]) =>
     selectWorkset({
       rows: [...fresh.map((f, i) => row(f, 50 - i)), ...[...attempted.keys()].map((k, i) => row(k, 40 - i))],
-      humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
-      concluded: new Set<string>(), attempted: attempted as never,
+      humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
+      concluded: new Set<string>(), attempted: new Map([...attempted].map(([k, v]) => [sourceKeyOf(RT_SITE, k), v])) as never,
       releaseOf, limit, runId: 'r1', takenAt: NOW,
     })
 
   const att = new Map([['old-1', { atMs: ago(30) }], ['old-2', { atMs: ago(5) }]])
   const p5 = plan(5, att, ['new-1', 'new-2', 'new-3', 'new-4', 'new-5'])
-  const ids5 = p5.workset.sourceIds
+  const ids5 = p5.workset.sources.map((s) => s.sourceArticleId)
   check('🔴 🔴 **신규가 충분해도 재시도 자리가 남는다**',
     ids5.some((x) => x.startsWith('old-')), JSON.stringify(ids5))
   check('🔴 🔴 **재시도 중에서는 오래 기다린 것이 먼저다**',
     ids5.filter((x) => x.startsWith('old-'))[0] === 'old-1', JSON.stringify(ids5))
   check('🔴 신규가 자리를 다 못 채우면 재시도가 남은 칸을 쓴다',
-    plan(5, att, ['new-1']).workset.sourceIds.length > 1)
+    plan(5, att, ['new-1']).workset.sources.map((s) => s.sourceArticleId).length > 1)
   check('🔴 🔴 **다음 회차 즉시 선택은 보장되지 않는다 — 자리가 하나면 신규가 가져갈 수 있다**', (() => {
     const one = plan(1, new Map([['old-2', { atMs: ago(1) }]]), ['new-1'])
-    return one.workset.sourceIds.length === 1 && one.workset.sourceIds[0] === 'new-1'
+    return one.workset.sources.map((s) => s.sourceArticleId).length === 1 && one.workset.sources.map((s) => s.sourceArticleId)[0] === 'new-1'
   })())
   check('🔴 🔴 **다만 오래 굶으면 자리 하나여도 재시도가 가져간다**', (() => {
     const one = plan(1, new Map([['old-1', { atMs: ago(72) }]]), ['new-1'])
-    return one.workset.sourceIds[0] === 'old-1'
+    return one.workset.sources.map((s) => s.sourceArticleId)[0] === 'old-1'
   })())
   check('🔴 `concluded` 에 들어간 원천은 다시 뽑히지 않는다', (() => {
     const p2 = selectWorkset({
       rows: [row('done-1', 99), row('new-1', 10)],
-      humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
-      concluded: new Set(['done-1']), attempted: new Map() as never,
+      humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
+      concluded: new Set([sourceKeyOf(RT_SITE, 'done-1')]), attempted: new Map() as never,
       releaseOf, limit: 5, runId: 'r1', takenAt: NOW,
     })
-    return !p2.workset.sourceIds.includes('done-1')
+    return !p2.workset.sources.map((s) => s.sourceArticleId).includes('done-1')
   })())
 }
 
@@ -2240,7 +2243,7 @@ console.log('\n🔴 🔴 **추천 Persona 를 다음 회차가 실제로 강제�
   const C = (code: string) => ({ code })
   /** 🔴 artifact 가 실제로 내는 모양 그대로 — 손으로 줄이지 않는다 */
   const outcome = (suggest: readonly string[]) => [{
-    sourceArticleId: SRC, atMs: Date.parse('2026-09-23T01:00:00.000Z'),
+    sourceKey: SRC, sourceArticleId: SRC, atMs: Date.parse('2026-09-23T01:00:00.000Z'),
     stage: 'draft' as const, state: 'retryable' as const,
     failedPersonaCode: 'P02', failedStance: 'SELF_EXPERIENCE',
     failedCause: 'loadBearingMismatch', suggestedPersonaCodes: suggest,
@@ -2248,7 +2251,7 @@ console.log('\n🔴 🔴 **추천 Persona 를 다음 회차가 실제로 강제�
 
   /** 🔴 ① 틀린 P01 이 정렬상 P04 보다 앞에 있어도 **P04 만** 고른다 */
   const only = personasForAttempt({
-    outcomes: outcome(['P04']), sourceArticleId: SRC,
+    outcomes: outcome(['P04']), sourceKey: SRC,
     slotCodes: ['P01', 'P02', 'P04', 'P08'],
     candidates: [C('P01'), C('P02'), C('P04'), C('P08')],
   })
@@ -2258,7 +2261,7 @@ console.log('\n🔴 🔴 **추천 Persona 를 다음 회차가 실제로 강제�
 
   /** 🔴 ② 지목이 여럿이면 그 집합 안에서 기존 정렬을 그대로 쓴다 */
   const many = personasForAttempt({
-    outcomes: outcome(['P08', 'P04']), sourceArticleId: SRC,
+    outcomes: outcome(['P08', 'P04']), sourceKey: SRC,
     slotCodes: ['P01', 'P02', 'P04', 'P08'],
     candidates: [C('P01'), C('P02'), C('P04'), C('P08')],
   })
@@ -2268,7 +2271,7 @@ console.log('\n🔴 🔴 **추천 Persona 를 다음 회차가 실제로 강제�
 
   /** 🔴 ③ 지목한 사람이 더 이상 적격하지 않으면 **조용히 전체로 돌아가지 않는다** */
   const gone = personasForAttempt({
-    outcomes: outcome(['P04']), sourceArticleId: SRC,
+    outcomes: outcome(['P04']), sourceKey: SRC,
     slotCodes: ['P01', 'P08'],
     candidates: [C('P01'), C('P08')],
   })
@@ -2277,7 +2280,7 @@ console.log('\n🔴 🔴 **추천 Persona 를 다음 회차가 실제로 강제�
 
   /** 🔴 ④ 지목이 없으면 제한이 없다 — 기존 경로가 그대로다 */
   const free = personasForAttempt({
-    outcomes: outcome([]), sourceArticleId: SRC,
+    outcomes: outcome([]), sourceKey: SRC,
     slotCodes: ['P01', 'P04', 'P08'],
     candidates: [C('P01'), C('P04'), C('P08')],
   })
@@ -2290,12 +2293,12 @@ console.log('\n🔴 🔴 **추천 Persona 를 다음 회차가 실제로 강제�
    */
   const selfImp = personasForAttempt({
     outcomes: [{
-      sourceArticleId: SRC, atMs: Date.parse('2026-09-23T01:00:00.000Z'),
+      sourceKey: SRC, sourceArticleId: SRC, atMs: Date.parse('2026-09-23T01:00:00.000Z'),
       stage: 'draft', state: 'retryable',
       failedPersonaCode: 'P02', failedStance: 'SELF_EXPERIENCE',
       failedCause: 'loadBearingSelfImpossible', suggestedPersonaCodes: [],
     }],
-    sourceArticleId: SRC, slotCodes: ['P01', 'P02', 'P04'],
+    sourceKey: SRC, slotCodes: ['P01', 'P02', 'P04'],
     candidates: [C('P01'), C('P02'), C('P04')],
   })
   check('🔴 🔴 **⑤ SELF_IMPOSSIBLE 은 같은 Persona 를 남긴다 — 자리만 바꾼다**',
@@ -2963,11 +2966,11 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
       `${JSON.stringify(arts, null, 2)}\n`, 'utf-8')
   }
   const outcomesOf = (dir: string) => readPriorOutcomes({
-    dataDir: dir, hashOf: new Map([[SRC_ID, HASH]]),
+    dataDir: dir, hashOf: new Map([[sourceKeyOf(FX_SITE, SRC_ID), HASH]]),
     base: BASE, artifactVersion: ARTIFACT_VERSION,
   })
   const planNext = (dir: string) => personasForAttempt({
-    outcomes: outcomesOf(dir), sourceArticleId: SRC_ID, slotCodes: SLOT, candidates: CANDS,
+    outcomes: outcomesOf(dir), sourceKey: sourceKeyOf(FX_SITE, SRC_ID), slotCodes: SLOT, candidates: CANDS,
   })
 
   const a02 = await failWith('P02')
@@ -3038,10 +3041,10 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
   check('🔴 🔴 **⑤ 원천 입력이 달라지면 지난 실패를 물려받지 않는다**', (() => {
     const got = personasForAttempt({
       outcomes: readPriorOutcomes({
-        dataDir: d1, hashOf: new Map([[SRC_ID, 'otherhash0000000']]),
+        dataDir: d1, hashOf: new Map([[sourceKeyOf(FX_SITE, SRC_ID), 'otherhash0000000']]),
         base: BASE, artifactVersion: ARTIFACT_VERSION,
       }),
-      sourceArticleId: SRC_ID, slotCodes: SLOT, candidates: CANDS,
+      sourceKey: sourceKeyOf(FX_SITE, SRC_ID), slotCodes: SLOT, candidates: CANDS,
     })
     return got.ok && got.excluded.length === 0
   })())
@@ -3118,11 +3121,11 @@ console.log('\n🔴 🔴 **terminal 이 reason-aware 다 — 고칠 수 있는 �
   })
   const pick = (concluded: string[]) => selectWorkset({
     rows: [row('transform-fail', 50), row('new-1', 10)],
-    humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
-    concluded: new Set(concluded), attempted: new Map() as never,
+    humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
+    concluded: new Set(concluded.map((k) => sourceKeyOf(RT_SITE, k))), attempted: new Map() as never,
     releaseOf: (r) => preGenerationRelease(r, AT, AT),
     limit: 5, runId: 'r1', takenAt: AT,
-  }).workset.sourceIds
+  }).workset.sources.map((s) => s.sourceArticleId)
   check('🔴 🔴 **변환 실패 원천은 `concluded` 에 들어가지 않아 다시 뽑힐 수 있다**',
     pick([]).includes('transform-fail'))
   check('🔴 🔴 **결론인 원천만 `concluded` 로 빠진다**',

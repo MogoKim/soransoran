@@ -251,7 +251,8 @@ console.log('\n③ Persona 여력 대기 — 초안 실패가 아니다')
   check('사람이 읽는 사유가 초안 실패가 아니라고 말한다', DRAFT_REASON_LABEL.personaCapacityDeferred.includes('초안 실패 아님'))
 
   const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-  const at = src.indexOf('const slotCodes = slotOf.get(j.sourceArticleId) ?? []')
+  // 🔴 (P0-B) 화자 묶음은 원천 열쇠(사이트, id)로 찾는다
+  const at = src.indexOf('const slotCodes = slotOf.get(keyOfJ(j)) ?? []')
   const line = src.slice(at, src.indexOf('\n', src.indexOf('if (slotCodes.length === 0)', at)))
   check('🔴 🔴 **생성 러너가 빈 화자 묶음을 여력 대기로 적는다** (호출 전)',
     at > 0 && /if \(slotCodes\.length === 0\) \{ capacityDeferred \+= 1; holdPick\(\{ personaDeferred: true \}\); continue \}/.test(line),

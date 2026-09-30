@@ -10,8 +10,8 @@
  * 🔴 원문 URL · 제목 · 본문 · 닉네임 없음.
  */
 import {
-  buildSourceEvidence, SOURCE_EVIDENCE_KEY, SOURCE_STATS_METHOD,
-  type SourceEvidenceRecord,
+  buildSourceEvidence, judgeSlotRelease, releaseStampOf, RELEASE_STAMP_KEY, SOURCE_EVIDENCE_KEY, SOURCE_STATS_METHOD,
+  type ReleaseStamp, type SourceEvidenceRecord,
 } from '../../src/lib/source-slot-release'
 
 const H = 3_600_000
@@ -52,4 +52,23 @@ export function fakeSourceEvidence(at: Date, opts: {
 /** 🔴 `gateResults` 에 섞어 넣을 한 칸 — `{ ...gate, ...fakeEvidenceGate(at) }` */
 export function fakeEvidenceGate(at: Date, opts: Parameters<typeof fakeSourceEvidence>[1] = {}): Record<string, unknown> {
   return { [SOURCE_EVIDENCE_KEY]: fakeSourceEvidence(at, opts) }
+}
+
+/**
+ * 🔴 **검사용 release 도장 — 발행 트랜잭션과 같은 길로 만든다.** 트랜잭션은 `judgeSlotRelease({slotAt: txNow, now: txNow})`
+ *    결과를 `releaseStampOf` 로 싣는다 — 여기서도 똑같이 부른다. 손으로 칸을 적은 도장(`slotAt:'x'`)은 쓰지 않는다.
+ *    `gate` 의 원문 증거가 `publishEventAt` 에 eligible 이 아니면 던진다 — fixture 가 실제보다 강할 수 없다.
+ */
+export function fakeReleaseStamp(gate: Record<string, unknown>, publishEventAt: Date): ReleaseStamp {
+  const v = judgeSlotRelease({
+    gateResults: gate, slotAt: publishEventAt, now: publishEventAt,
+    hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: 'fixture',
+  })
+  if (v.verdict !== 'eligible') throw new Error(`fixture 원문 증거가 발행 시각에 eligible 이 아니다: ${v.reasons.join(',')}`)
+  return releaseStampOf(v)
+}
+
+/** 🔴 `{ ...gate, ...fakeReleaseStampGate(gate, at) }` — 발행 트랜잭션이 남기는 도장 한 칸 */
+export function fakeReleaseStampGate(gate: Record<string, unknown>, publishEventAt: Date): Record<string, unknown> {
+  return { [RELEASE_STAMP_KEY]: fakeReleaseStamp(gate, publishEventAt) }
 }

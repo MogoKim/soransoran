@@ -50,10 +50,11 @@ import { acquireLock, lockAnomaly, releaseLock, type LockHandle } from './lib/co
  *    정본은 `micro-seed-supply-autofill.hasPendingSibling` · `baseArticleId` 이고,
  *    스냅샷은 그 정본이 만든 집합을 파일로 옮기기만 한다.
  */
-import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
+import { buildQueueSnapshot, pendingSourceKeysOf, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 /** 🔴 작업 묶음 정본 — 모양·상한·선택 규칙은 전부 저기 하나에 있다 */
 import {
-  attemptedOutcomes, concludedSourceIds, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
+  attemptedOutcomes, concludedSourceKeys, humanDecisionIndexOf, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
+  sourceIdentityOf, sourceKeyOf, type HumanDecisionIndex,
   selectWorkset, worksetAxisOf, worksetFileName,
   WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
   OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease,
@@ -148,6 +149,7 @@ export function worksetRows(
    *    반응(댓글 · 조회 · 자리)은 목록 관측이 정본이다(`evidenceMaterialFor` 가 `sourceListedAt` 으로 찾는다).
    *    앞판은 상세 행의 복사본(`commentCount` · `sourceViewCount` …)을 여기서 읽었다 — 두 번째 권위를 지웠다.
    */
+  /** 🔴 원천 열쇠(사이트, id) → 시각 — 같은 번호 다른 사이트의 시각이 섞이지 않는다(P0-B · 앞판은 id 하나로 모았다) */
   const meta = new Map<string, { site: string; posted: string; listed: string; captured: string }>()
   const S2 = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
   for (const f of paths) {
@@ -161,11 +163,12 @@ export function worksetRows(
       // 🔴 한 줄이라도 깨져 있으면 조용히 건너뛰지 않는다 — 고를 대상이 달라진다
       try { r = JSON.parse(t) as Record<string, unknown> } catch { return null }
       entries.push({ kind, row: r })
-      const id = S2(r.sourceArticleId)
-      if (id === '') continue
-      const prev = meta.get(id)
-      meta.set(id, {
-        site: S2(r.sourceSite) !== '' ? S2(r.sourceSite) : prev?.site ?? '',
+      const key = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
+      // 🔴 사이트 · id 를 모르는 행은 어느 원천의 시각도 아니다 — 판정 병합(`mergeJudgeRows`)도 같은 행을 버린다
+      if (key === null) continue
+      const prev = meta.get(key)
+      meta.set(key, {
+        site: S2(r.sourceSite),
         posted: S2(r.sourcePostedAt) !== '' ? S2(r.sourcePostedAt) : prev?.posted ?? '',
         listed: S2(r.sourceListedAt) !== '' ? S2(r.sourceListedAt) : prev?.listed ?? '',
         captured: S2(r.sourceCapturedAt) !== '' ? S2(r.sourceCapturedAt) : prev?.captured ?? '',
@@ -174,8 +177,9 @@ export function worksetRows(
   }
   return mergeJudgeRows(entries).map((input): WorksetRow => {
     const id = String(input.sourceArticleId ?? '')
-    const m = meta.get(id)
-    const site = m?.site ?? ''
+    const site = String(input.sourceSite ?? '')
+    // 🔴 `mergeJudgeRows` 는 사이트 · id 가 둘 다 있는 행만 낸다 — 같은 열쇠로 찾는다
+    const m = meta.get(sourceKeyOf(site, id))
     const material = listIndex === null || site === '' ? null : evidenceMaterialFor(listIndex, {
       sourceKey: site, articleId: id, postedAt: m?.posted === '' ? null : m?.posted ?? null,
       listedAt: m?.listed === '' ? null : m?.listed ?? null,
@@ -217,31 +221,30 @@ function priorState(rows: readonly WorksetRow[], base: ContractBase): {
 } {
   const outcomes = readPriorOutcomes({
     dataDir: DATA_DIR,
-    hashOf: new Map(rows.map((r) => [r.sourceArticleId, inputHashOf(r.input)])),
+    // 🔴 원천 열쇠 → 지금 입력 지문. 사이트 칸이 없는 옛 기록은 `resolveSourceOutcome` 이 지문으로만 붙인다
+    hashOf: new Map(rows.map((r) => [sourceKeyOf(r.sourceSite, r.sourceArticleId), inputHashOf(r.input)])),
     canon: {
       ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION, judgeModel: JUDGE_MODEL_NAME,
     },
     base, artifactVersion: ARTIFACT_VERSION,
   })
-  return { concluded: concludedSourceIds(outcomes), attempted: attemptedOutcomes(outcomes) }
+  return { concluded: concludedSourceKeys(outcomes), attempted: attemptedOutcomes(outcomes) }
 }
 
-/** 🔴 사람이 이미 판정한 원천 — 판정기와 **같은 파일들**을 본다 */
-function humanDecidedIds(): Set<string> {
-  const out = new Set<string>()
+/** 🔴 사람이 이미 판정한 원천 — 판정기와 **같은 파일들 · 같은 색인**(`humanDecisionIndexOf`)을 쓴다 */
+function humanDecided(): HumanDecisionIndex {
+  const rows: Record<string, unknown>[] = []
   for (const pre of ['seed-originality-source-approvals-', 'srn-approvals', 'raw-originality-approvals-']) {
     for (const f of readdirSync(DATA_DIR).filter((x) => x.startsWith(pre) && x.endsWith('.json'))) {
       try {
         const j = JSON.parse(readFileSync(join(DATA_DIR, f), 'utf-8')) as Record<string, unknown>
-        const rows = Array.isArray(j.decisions) ? j.decisions : []
-        for (const r of rows) {
-          const id = (r as Record<string, unknown>).sourceArticleId
-          if (typeof id === 'string' && id.trim() !== '') out.add(id.trim())
+        for (const r of Array.isArray(j.decisions) ? j.decisions : []) {
+          if (r !== null && typeof r === 'object') rows.push(r as Record<string, unknown>)
         }
       } catch { /* 못 읽는 파일은 건너뛴다 — 판정기와 같은 태도다 */ }
     }
   }
-  return out
+  return humanDecisionIndexOf(rows)
 }
 
 const LIVE = argv.includes('--live')
@@ -893,7 +896,7 @@ async function main(): Promise<number> {
    * 🔴 큐 스냅샷을 **묶음을 고르기 전에** 뜬다 — 같은 원문의 미발행 형제를
    *    AI 호출 전에 빼야 한다. 생성 직전에도 다시 쓰이므로 한 번만 뜬다.
    */
-  let queuePending = new Set<string>()
+  let queuePending = new Set<string>()  // 🔴 원천 열쇠(사이트, id) — `pendingSourceKeysOf`
   /**
    * 🔴 **큐 행(상태 무관) · 글에 이미 있는 원천** (2026-09-28). 발행된 원천을 다시 뽑아
    *    두 번째 글을 만들지 않는다. 못 읽으면 스냅샷 실패와 같다 — 묶음을 만들지 않는다(fail-closed).
@@ -923,9 +926,11 @@ async function main(): Promise<number> {
     })
     // 🔴 이 파일은 **묶음을 고르는 데만** 쓴다 — 생성 직전에 다시 뜬다
     writeAtomic(snapPath, `${JSON.stringify(snap, null, 2)}\n`)
-    queuePending = new Set(snap.pendingSourceIds)
+    queuePending = pendingSourceKeysOf(qrows.map((r) => ({
+      sourceArticleId: r.rawContent?.sourceArticleId ?? '', sourceSite: r.rawContent?.sourceSite ?? '', createdPostId: r.createdPostId,
+    })))
     snapOk = true
-    console.log(`\n   🟢 큐 스냅샷(묶음 선택용) ${snap.pendingSourceIds.length}건 미발행 원문`
+    console.log(`\n   🟢 큐 스냅샷(묶음 선택용) ${snap.pendingSources.length}건 미발행 원천`
       + ` · 큐·글에 이미 있는 원천 ${queuedSources.bySiteId.size}건 (발행 포함 — 다시 만들지 않는다)`)
   } catch (e) {
     console.log(`\n   🔴 큐 스냅샷 실패 — ${e instanceof Error ? e.message : String(e)}`)
@@ -970,7 +975,7 @@ async function main(): Promise<number> {
     const runAt = RUN_AT
     const prior = priorState(rows, currentContractBase(runAt))
     const plan = selectWorkset({
-      rows, humanDecided: humanDecidedIds(), queuePending, ...prior,
+      rows, humanDecided: humanDecided(), queuePending, ...prior,
       queuedSources,
       // 🔴 이월로 적재될 후보의 원천 — 다시 만들지 않는다(#587 이 적재한다)
       carriedOver: queuedSourceKeysOf(carry.picked.flatMap((x) => x.sources)),
@@ -1064,7 +1069,7 @@ async function main(): Promise<number> {
         })),
       })
       writeAtomic(snapPath, `${JSON.stringify(snap, null, 2)}\n`)
-      console.log(`   🟢 큐 스냅샷 ${snap.pendingSourceIds.length}건 미발행 원문 — ${snapPath}`)
+      console.log(`   🟢 큐 스냅샷 ${snap.pendingSources.length}건 미발행 원천 — ${snapPath}`)
       return { ok: true }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)

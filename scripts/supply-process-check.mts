@@ -29,11 +29,12 @@ import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
 /** 🔴 잠금 정본 — 러너와 **같은 함수**를 시험한다. 사본을 만들지 않는다 */
 import { acquireLock, lockAnomaly, releaseLock } from './lib/collect-lock.mjs'
-import { planRefill, provenanceKeyOf, hasPendingSibling, isOurSite, MACHINE_SITE_PREFIX, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
+import { planRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf, hasPendingSibling, isOurSite, MACHINE_SITE_PREFIX, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
 /** 🔴 생성 전 큐 스냅샷 — 러너와 **같은 함수**를 시험한다 */
 import {
-  buildQueueSnapshot, pendingSourceIdsOf, readQueueSnapshot, planPreDraftExclusion,
+  buildQueueSnapshot, pendingSourceKeysOf, readQueueSnapshot, planPreDraftExclusion,
 } from '../src/lib/supply-queue-snapshot'
+import { sourceKeyOf } from '../src/lib/source-identity'
 
 import { collectArgsFor, planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
@@ -355,15 +356,16 @@ const CAND = (o: Partial<Candidate> = {}): Candidate => ({
 })
 check('🔴 같은 입력을 다시 돌려도 이미 올린 것은 적재되지 않는다', (() => {
   const c = CAND()
-  const existing = new Set([provenanceKeyOf('34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')])
+  // 🔴 (P0-B) 러너와 같은 함수로 큐 행(synthetic)을 원래 원천 + 제목 열쇠로 되돌린다
+  const existing = existingSourceKeysOf([{ sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`, sourceArticleId: '34998804-0badf00d', rawTitle: '아이랑 같이 갈 숙소, 뭐 보고 고르세요?' }])
   const r = planRefill({ ...BASE, existing, candidates: [c] })
   return r.targets.length === 0 && r.skipped[0]?.code === 'ALREADY'
 })())
 check('🔴 두 처리기가 같은 후보를 봐도 DB 조회 결과가 같은 키를 막는다', (() => {
   // 🔴 두 프로세스가 같은 파일을 읽어도 **키가 같다** — 그래서 뒤에 들어온 쪽이 걸린다
-  const a = provenanceKeyOf('34998804', '아이랑  같이 갈 숙소, 뭐 보고 고르세요?')
-  const b = provenanceKeyOf('34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')
-  return a === b
+  const a = sourceProvenanceKeyOf('navercafe:remonterrace', '34998804', '아이랑  같이 갈 숙소, 뭐 보고 고르세요?')
+  const b = sourceProvenanceKeyOf('navercafe:remonterrace', '34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')
+  return a !== null && a === b
 })())
 check('🔴 적재는 트랜잭션 안에서 한 쌍으로 만든다', (() => {
   const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
@@ -912,21 +914,27 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     /** 🔴 적재가 실제로 만드는 것과 **같은 모양** — isOurSite 로 거른 뒤 형제를 본다 */
     const queueForSibling: QueueRow[] = rows
       .filter((r) => isOurSite(r.sourceSite))
-      .map((r) => ({ sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId }))
-    const set = pendingSourceIdsOf(rows)
+      .map((r) => ({ sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId }))
+    // 🔴 (P0-B) 스냅샷은 원천 열쇠(사이트, id)다 — 우리 synthetic 행의 원래 사이트(remonterrace)로 대 본다
+    const keys = pendingSourceKeysOf(rows)
+    const set = { has: (id: string): boolean => keys.has(sourceKeyOf(OUTSIDE, id)) }
     // 🔴 정본(hasPendingSibling)과 전수 대조 — 규칙이 두 벌이 되면 여기서 깨진다
     let same = true
     for (const id of ['A1', 'A2', 'A3', 'A4', 'A5']) {
-      if (set.has(id) !== hasPendingSibling(id, queueForSibling)) same = false
+      if (set.has(id) !== hasPendingSibling(OUTSIDE, id, queueForSibling)) same = false
+      // 🔴 (P0-B) 다른 사이트 같은 번호 — 스냅샷도 적재도 형제로 보지 않는다
+      if (keys.has(sourceKeyOf('82cook', id)) || hasPendingSibling('82cook', id, queueForSibling)) same = false
     }
+    check('🔴 🔴 [PQ] **(P0-B) 같은 번호의 다른 사이트 원천은 형제가 아니다** — 82cook A1 은 막지 않는다',
+      keys.has(sourceKeyOf(OUTSIDE, 'A1')) && !keys.has(sourceKeyOf('82cook', 'A1')))
     check('🔴 [PQ] 스냅샷 집합이 적재의 형제 판정과 전수 일치한다', same)
     check('🔴 [PQ] 발행 완료된 형제는 제외 대상이 아니다 (기존 정책 유지)', !set.has('A2'))
     check('🔴 [PQ] createdPostId 빈 문자열은 미발행이다', set.has('A3'))
     check('🔴 [PQ] 🔴 대상 밖(legacy·다른 레인) 행은 형제가 아니다 — 범위가 적재와 같다',
       !set.has('A5'))
     check('🔴 [PQ] 범위를 안 보면 A5 까지 막혔을 것이다 — 이 검사가 그것을 막는다',
-      hasPendingSibling('A5', rows.map((r) => ({
-        sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId,
+      hasPendingSibling(OUTSIDE, 'A5', rows.map((r) => ({
+        sourceSite: OUR, sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId,
       }))))
   }
 
@@ -944,7 +952,9 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
         raw: mkSnap({ takenAt: new Date(NOW.getTime() - 60 * 60_000).toISOString() }), runId: 'R1', now: NOW })],
       ['미래 시각', readQueueSnapshot({
         raw: mkSnap({ takenAt: new Date(NOW.getTime() + 60_000).toISOString() }), runId: 'R1', now: NOW })],
-      ['모양 어긋남', readQueueSnapshot({ raw: mkSnap({ pendingSourceIds: 'x' }), runId: 'R1', now: NOW })],
+      ['모양 어긋남', readQueueSnapshot({ raw: mkSnap({ pendingSources: 'x' }), runId: 'R1', now: NOW })],
+      ['🔴 사이트 없는 원천(P0-B)', readQueueSnapshot({ raw: mkSnap({ pendingSources: [{ sourceSite: '', sourceArticleId: 'A1' }] }), runId: 'R1', now: NOW })],
+      ['🔴 옛 판(v1 · 원문 id 목록)', readQueueSnapshot({ raw: mkSnap({ version: 'queue-snapshot-v1', pendingSourceIds: ['A1'] }), runId: 'R1', now: NOW })],
     ]
     for (const [label, r] of cases) {
       check(`🔴 [PQ] ${label} → 통과시키지 않는다`, !r.ok)
@@ -955,12 +965,26 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
 
   // ── ③ 제외 판정 — 다른 원문을 잘못 빼지 않는다 ──
   {
-    const pending = new Set(['A1', 'A3'])
-    const plan = planPreDraftExclusion({ sourceArticleIds: ['A1', 'A2', 'A3', 'A4'], pendingSourceIds: pending })
-    check('🔴 [PQ] 미발행 형제가 있는 원문만 뺀다', plan.excluded.join() === 'A1,A3')
-    check('🔴 [PQ] 🔴 다른 원문은 그대로 둔다', plan.keep.join() === 'A2,A4')
+    const pending = new Set(['A1', 'A3'].map((id) => sourceKeyOf(OUTSIDE, id)))
+    const src = (id: string, site = OUTSIDE) => ({ sourceSite: site, sourceArticleId: id })
+    const plan = planPreDraftExclusion({ sources: [src('A1'), src('A2'), src('A3'), src('A4'), src('A1', '82cook')], pendingSourceKeys: pending })
+    const idOf = (k: string): string => k.split('\u0000').join('/')
+    check('🔴 [PQ] 미발행 형제가 있는 원문만 뺀다', plan.excluded.map(idOf).join() === `${OUTSIDE}/A1,${OUTSIDE}/A3`)
+    check('🔴 [PQ] 🔴 다른 원문은 그대로 둔다 — 🔴 (P0-B) 같은 번호의 82cook A1 도 남는다',
+      plan.keep.map(idOf).join() === `${OUTSIDE}/A2,${OUTSIDE}/A4,82cook/A1`)
     check('🔴 [PQ] 뺀 것과 남긴 것을 둘 다 돌려준다 — 조용히 줄이지 않는다',
-      plan.keep.length + plan.excluded.length === 4)
+      plan.keep.length + plan.excluded.length === 5)
+    // 🔴 (리뷰 후속 · P0-B) 양방향 — 82cook 형제는 82cook 만, 네이버 형제는 네이버만 막는다. 정확한 (사이트, id) 열쇠 비교
+    const both = pendingSourceKeysOf([
+      { sourceArticleId: 'A1-deadbeef', sourceSite: `${MACHINE_SITE_PREFIX}82cook`, createdPostId: null },
+      { sourceArticleId: 'B1-cafebabe', sourceSite: OUR, createdPostId: null },
+    ])
+    const x = planPreDraftExclusion({
+      sources: [src('A1', '82cook'), src('A1'), src('B1'), src('B1', '82cook')], pendingSourceKeys: both,
+    })
+    check('🔴 🔴 [PQ] **(P0-B) 같은 id 다른 사이트는 서로를 빼지 않는다 — 82cook A1 · 네이버 B1 만 빠진다**',
+      x.excluded.map(idOf).sort().join() === `82cook/A1,${OUTSIDE}/B1`
+      && x.keep.map(idOf).sort().join() === `82cook/B1,${OUTSIDE}/A1`)
   }
 
   // ── ④ 러너 계획 — 🔴 못 읽으면 draft 를 **계획하지 않는다** ──
@@ -993,16 +1017,21 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     const root = mkdtempSync(join(tmpdir(), 'pq-'))
     const dd = join(root, DATA_DIR_NAME)
     mkdirSync(dd, { recursive: true })
+    /**
+     * 🔴 (P0-B) 원천은 (사이트, id) 다. 앞판 fixture 는 상세 사이트 `s` 와 큐 형제의 원래 사이트(`remonterrace`)가
+     *    달랐는데도 형제로 막히기를 기대했다 — id 하나로 합치던 결함에 기댄 것이다. 같은 원천이 되도록 사이트를 맞춘다.
+     */
+    const SITE_A = 'navercafe:remonterrace'
     const seed = (id: string): string => JSON.stringify({
-      sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+      sourceSite: SITE_A, sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
       ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
       provenance: 'machine-shadow',
     })
     writeFileSync(join(dd, 'x.shadow.jsonl'), `${seed('A1')}\n${seed('A9')}\n`, 'utf-8')
     writeFileSync(join(dd, 'x.detail.jsonl'), `${JSON.stringify({
-      sourceArticleId: 'A1', sourceSite: 's', title: '제목1', bodyHead: '본문', axis: 'a', lane: 'l',
+      sourceArticleId: 'A1', sourceSite: SITE_A, title: '제목1', bodyHead: '본문', axis: 'a', lane: 'l',
     })}\n${JSON.stringify({
-      sourceArticleId: 'A9', sourceSite: 's', title: '제목9', bodyHead: '본문', axis: 'a', lane: 'l',
+      sourceArticleId: 'A9', sourceSite: SITE_A, title: '제목9', bodyHead: '본문', axis: 'a', lane: 'l',
     })}\n`, 'utf-8')
     // 🔴 가짜 캐시 — 있어도 게이트가 먼저다
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
@@ -1116,12 +1145,14 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
       /ALREADY: '이미 큐에 올라갔다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8'))
       && /HELD: '🔴 사람이 보류한 글이다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
     check('🔴 [PQ] 스냅샷이 범위·미발행 조건을 **정본 함수로** 판단한다 — 다시 쓰지 않는다',
-      /import \{ baseArticleId, isOurSite, isPendingRow \}/
-        .test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
+      /import \{ isOurSite, isPendingRow \}/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
+      // 🔴 (P0-B) 원래 원천은 정본 `originalSourceOf`(synthetic 접두 → 사이트 · `baseArticleId`)가 정한다 — 사이트를 버리지 않는다
+      && /const o = originalSourceOf\(r\.sourceSite, r\.sourceArticleId\)/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
       && /if \(!isOurSite\(/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
       && /if \(!isPendingRow\(r\)\)/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8')))
     check('🔴 [PQ] hasPendingSibling 도 같은 정본 조건을 쓴다',
-      /baseArticleId\(q\.sourceArticleId\) === articleId && isPendingRow\(q\)/
+      // 🔴 (P0-B) 미발행 조건은 정본 `isPendingRow` · 원래 원천은 정본 `originalSourceOf`
+      /if \(!isPendingRow\(q\)\) return false\n\s*const o = originalSourceOf\(q\.sourceSite, q\.sourceArticleId\)/
         .test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
     check('🔴 [PQ] 적재 러너가 isOurSite 지역 사본을 갖고 있지 않다',
       !/^function isOurSite/m.test(readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')))
@@ -1161,8 +1192,9 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     existsSync(fakeAsset.corpus) && existsSync(fakeAsset.manifest)
     && fakeAsset.corpus.startsWith(root))
   const OUR = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`
+  // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양 그대로다
   const seed = (id: string): string => JSON.stringify({
-    sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+    sourceSite: 'navercafe:remonterrace', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
   })

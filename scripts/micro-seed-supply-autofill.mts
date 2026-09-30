@@ -34,7 +34,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PrismaClient } from '@prisma/client'
 import {
-  planRefill, judgeApply, readStock, verifyAfterRefill, provenanceKeyOf, baseArticleId,
+  planRefill, judgeApply, readStock, verifyAfterRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf,
   SKIP_LABEL, type EvidenceMaterial,
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Candidate, type HeldEntry,
@@ -298,17 +298,15 @@ async function main(): Promise<void> {
   console.log(`   형식이 맞는 미발행 행 ${stock.usable}건 (사람 ${stock.human} · 기계 ${stock.machine})`
     + ` / 큐 ${queueRows.length}건 — 🔴 형식 행 수일 뿐 · 발행 가능 재고가 아니다`)
 
-  // 이미 올라간 것 — synthetic RawContent 기준으로 되돌린 키
-  const existing = new Set<string>()
-  for (const r of queueRows) {
-    const rc = r.rawContent
-    // 🔴 사람 것과 기계 것 둘 다 본다 — 한쪽만 보면 중복이 샌다
-    if (rc === null || !isOurSite(rc.sourceSite)) continue
-    existing.add(provenanceKeyOf(baseArticleId(rc.sourceArticleId), rc.rawTitle))
-  }
+  // 이미 올라간 것 — synthetic RawContent 를 원래 원천 (사이트, id) + 제목으로 되돌린 열쇠(P0-B · `originalSourceOf`)
+  // 🔴 사람 것과 기계 것 둘 다 본다 — 한쪽만 보면 중복이 샌다
+  const existing = existingSourceKeysOf(queueRows.flatMap((r) =>
+    r.rawContent === null || !isOurSite(r.rawContent.sourceSite) ? [] : [r.rawContent]))
   const queueForSibling = queueRows
     .filter((r) => r.rawContent !== null && isOurSite(r.rawContent.sourceSite))
     .map((r) => ({
+      // 🔴 (P0-B) synthetic 사이트를 버리지 않는다 — 형제 검사가 원래 사이트로 되돌려 대 본다
+      sourceSite: r.rawContent!.sourceSite,
       sourceArticleId: r.rawContent!.sourceArticleId,
       status: r.status,
       createdPostId: r.createdPostId,
@@ -330,9 +328,11 @@ async function main(): Promise<void> {
     if (r.targets.length === 1) {
       targets.push(c)
       // 🔴 합친 뒤에도 중복·형제를 막는다
-      seenKeys.add(provenanceKeyOf(S(c.sourceArticleId), S(c.title)))
+      // 🔴 (P0-B) 같은 회차 — 원천 (사이트, id) 로 적는다. 사이트를 모르면 적재 선별이 이미 id 로 막는다
+      const k = sourceProvenanceKeyOf(S(c.sourceSite), S(c.sourceArticleId), S(c.title))
+      if (k !== null) seenKeys.add(k)
       siblingSeen.push({
-        sourceArticleId: syntheticArticleId(S(c.sourceArticleId), S(c.title)),
+        sourceSite: S(c.sourceSite), sourceArticleId: S(c.sourceArticleId),
         status: 'APPROVED', createdPostId: null,
       })
     } else if (r.skipped[0] !== undefined) {

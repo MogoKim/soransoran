@@ -11,7 +11,7 @@ import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-p
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import {
   planRefill, judgeApply, readStock, verifyAfterRefill, isHeld, hasPendingSibling,
-  provenanceKeyOf, baseArticleId,
+  provenanceKeyOf, baseArticleId, existingSourceKeysOf,
   AUTOFILL_ALLOWED_TYPES, REQUIRED_DECISION, SKIP_LABEL,
   type Candidate, type HeldEntry, type QueueRow,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY,
@@ -94,7 +94,8 @@ console.log('\n① 🔴 사람이 보류한 2건이 다시 들어오지 않는�
 console.log('\n② 이미 큐에 올라간 것은 제외한다')
 {
   const c = ok()
-  const existing = new Set([provenanceKeyOf('34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')])
+  // 🔴 (P0-B) 이미 올라간 열쇠는 큐의 synthetic 행을 원래 원천으로 되돌려 만든다 — 러너와 같은 함수
+  const existing = existingSourceKeysOf([{ sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`, sourceArticleId: '34998804-aaaaaaaa', rawTitle: '아이랑 같이 갈 숙소, 뭐 보고 고르세요?' }])
   const r = planRefill({ ...base, existing, candidates: [c] })
   check('🔴 이미 올린 후보는 제외', r.targets.length === 0 && r.skipped[0]?.code === 'ALREADY')
   check('synthetic id 를 원래 id 로 되돌린다', baseArticleId('34998804-9588cfda') === '34998804')
@@ -103,8 +104,8 @@ console.log('\n② 이미 큐에 올라간 것은 제외한다')
 
 console.log('\n③ 같은 원문의 형제가 안 나갔으면 제외한다')
 {
-  const q = (id: string, pub: string | null): QueueRow =>
-    ({ sourceArticleId: id, status: pub === null ? 'APPROVED' : 'PUBLISHED', createdPostId: pub })
+  const q = (id: string, pub: string | null, site = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`): QueueRow =>
+    ({ sourceSite: site, sourceArticleId: id, status: pub === null ? 'APPROVED' : 'PUBLISHED', createdPostId: pub })
   check('🔴 형제가 미발행으로 큐에 있으면 제외', (() => {
     const r = planRefill({ ...base, queue: [q('34998804-aaaaaaaa', null)], candidates: [ok()] })
     return r.targets.length === 0 && r.skipped[0]?.code === 'SIBLING'
@@ -114,7 +115,42 @@ console.log('\n③ 같은 원문의 형제가 안 나갔으면 제외한다')
     return r.targets.length === 1
   })())
   check('다른 원문은 형제가 아니다',
-    !hasPendingSibling('34998804', [q('35003196-bbbbbbbb', null)]))
+    !hasPendingSibling('navercafe:remonterrace', '34998804', [q('35003196-bbbbbbbb', null)]))
+  /**
+   * 🔴 🔴 (2026-09-30 야간 P0-B) **같은 번호 · 같은 제목의 82cook · 네이버 후보** — 원천은 (사이트, id) 다.
+   *    둘 다 targets 에 남고, 한 사이트의 큐 형제 · 이미 올라간 행은 **그 사이트 후보만** 막는다(양방향).
+   */
+  const C82 = '82cook'
+  const NC = 'navercafe:remonterrace'
+  const pair = [ok({ sourceSite: C82, title: '같은 제목 초안' }), ok({ sourceSite: NC, title: '같은 제목 초안' })]
+  check('🔴 🔴 **(P0-B) 두 사이트 같은 id · 같은 제목 후보가 둘 다 남는다** (같은 회차 SIBLING · ALREADY 없음)',
+    planRefill({ ...base, candidates: pair }).targets.length === 2)
+  check('🔴 🔴 **(P0-B) 82cook 큐 형제는 82cook 후보만 막는다 · 네이버 형제는 네이버 후보만 막는다**', (() => {
+    const a = planRefill({ ...base, queue: [q('34998804-aaaaaaaa', null, `${MACHINE_SITE_PREFIX}${C82}`)], candidates: pair })
+    const b = planRefill({ ...base, queue: [q('34998804-bbbbbbbb', null, `${AUTOFILL_SITE_PREFIX}${NC}`)], candidates: pair })
+    return a.targets.length === 1 && a.targets[0]!.sourceSite === NC && a.skipped[0]?.code === 'SIBLING'
+      && b.targets.length === 1 && b.targets[0]!.sourceSite === C82 && b.skipped[0]?.code === 'SIBLING'
+  })())
+  check('🔴 🔴 **(P0-B) 이미 올라간 82cook 행(같은 제목)은 82cook 후보만 ALREADY — 네이버 후보는 남는다**', (() => {
+    const existing = existingSourceKeysOf([{ sourceSite: `${MACHINE_SITE_PREFIX}${C82}`, sourceArticleId: '34998804-cccccccc', rawTitle: '같은 제목 초안' }])
+    const r = planRefill({ ...base, existing, candidates: pair })
+    return r.targets.length === 1 && r.targets[0]!.sourceSite === NC && r.skipped[0]?.code === 'ALREADY'
+  })())
+  /**
+   * 🔴 🔴 (P0-B 리뷰 후속) **원천 identity 가 없는 신규 적재는 사람 · 기계 모두 막는다** — 빈 사이트 · 빈 id →
+   *    targets 0 · PROFILE · payload 없음. 입력 순서와 무관하게 정상 후보는 그대로 남는다.
+   */
+  for (const [label, patch] of [['빈 사이트', { sourceSite: '' }], ['빈 id', { sourceArticleId: '' }]] as const) {
+    const bad = ok({ ...patch, title: '원천 모름 초안' })
+    const good = ok({ sourceSite: C82, title: '원천 아는 초안' })
+    const a1 = planRefill({ ...base, candidates: [bad, good] })
+    const a2 = planRefill({ ...base, candidates: [good, bad] })
+    check(`🔴 🔴 **(P0-B) 사람 후보 ${label} → 신규 적재 0 · PROFILE · payload 없음 · 순서 무관**`,
+      planRefill({ ...base, candidates: [bad] }).targets.length === 0
+      && planRefill({ ...base, candidates: [bad] }).skipped[0]?.code === 'PROFILE'
+      && buildQueuePayload({ envelope: {}, candidate: bad, now: NOW }) === null
+      && a1.targets.length === 1 && a1.targets[0] === good && a2.targets.length === 1 && a2.targets[0] === good)
+  }
   check('🔴 같은 회차 안에서도 형제가 겹치면 하나만', (() => {
     const r = planRefill({ ...base, candidates: [
       ok({ title: '첫 번째 초안' }), ok({ title: '두 번째 초안' }),
@@ -232,6 +268,14 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
   const p1 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, now: NOW })
   check('🟢 기계 payload 가 만들어진다', p1 !== null && p1.profile === 'machine')
+  // 🔴 (P0-B) 원천 identity 가 한 칸이라도 없으면 기계 후보가 아니다 — 접두뿐인 synthetic 사이트를 만들지 않는다
+  for (const [label, patch] of [['사이트 빈 값', { sourceSite: '' }], ['id 빈 값', { sourceArticleId: '' }]] as const) {
+    const bad = { ...mc, ...patch }
+    check(`🔴 🔴 **(P0-B) 기계 후보 ${label} → 모양 불일치 · 선별 PROFILE · payload 없음**`,
+      machineProfileMismatch(mEnv, bad).some((x) => x.includes('sourceSite, sourceArticleId'))
+      && planRefill({ ...base, envelope: mEnv, candidates: [bad] }).skipped[0]?.code === 'PROFILE'
+      && buildQueuePayload({ envelope: mEnv, candidate: bad, autoJudge: aj, now: NOW }) === null)
+  }
   // 🔴 이것이 P0 회귀 fixture다 — 만든 행을 그대로 발행 러너 눈으로 본다
   check('🔴 만들어진 machine 행이 profileOf=machine 이다', p1 !== null && queueProfileOf({
     promptVersion: p1.promptVersion, model: p1.model,

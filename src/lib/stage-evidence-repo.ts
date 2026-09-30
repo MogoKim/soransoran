@@ -8,7 +8,10 @@
  *             (🔴 관계 `is:null` 필터를 쓰지 않는다 — FK 쪽 null 검사로 바뀌어 유실을 0 으로 센다)
  *    · 댓글   `commentOrigin=PERSONA` · 지워지지 않은 것
  *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조) · 표 전체의 정본 카운트(결함 yes · 시한 초과 · 재시도 가능 · 글 유실)
- *    · 도장   Queue `gateResults.release` — 발행 트랜잭션이 같은 트랜잭션에서 남긴 source-slot-v1 도장(조항 ⑦)
+ *    · 도장   Queue `gateResults.release` — 발행 트랜잭션이 같은 트랜잭션에서 남긴 source-slot-v1 도장(조항 ⑦).
+ *             🔴 도장 시각이 **그 글의 발행 기록 시각과 정확히 같아야** 증명이다(`publishEventAtOf` · `releaseStampCheck`)
+ *    · 공개 시각 🔴 발행 기록(`PersonaActivityLog.createdAt` — 상한 정본과 같은 칸)이다. Post 시각을 쓰지 않는다
+ *             (Post.createdAt 은 DB 기본값 · publishAt 은 원글 레인에서 늘 null — 발행 사건의 시계가 아니다)
  *
  * 🔴 결정(StageDecision)은 여기서 읽지 않는다 — 읽는 곳은 잠겨 있다(`stage-decision-repo` 주석).
  *    부르는 쪽(controller)이 이미 검증한 전날 결정을 넘긴다.
@@ -24,7 +27,7 @@ import { overdueAuditCount, retryableFailureCount, RETRYABLE_NOTE_PREFIX, AUDIT_
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { machineReviewedByHuman } from './original-post-auto-publish'
 import type { EvidencePost, PostDecider, StageEvidenceFacts } from './stage-evidence'
-import { releaseStampStatusOf } from './source-slot-release'
+import { publishEventAtOf, releaseStampStatusOf } from './source-slot-release'
 
 /**
  * 🔴 **Queue 결정자 → 사후 감사 대상 여부.**
@@ -63,20 +66,29 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
 
   const logs = await db.personaActivityLog.findMany({
     where: { kind: 'post', createdAt: inDay },
-    select: { targetId: true, decidedBy: true },
+    select: { targetId: true, decidedBy: true, publishedAt: true, createdAt: true },
   })
   const targetIds = [...new Set(logs.map((l) => l.targetId).filter((t): t is string => t !== null && t !== ''))]
   const posts = targetIds.length === 0 ? [] : await db.post.findMany({
     where: { id: { in: targetIds } },
-    select: { id: true, personaId: true, publishAt: true, createdAt: true },
+    select: { id: true, personaId: true },
   })
   const queue = targetIds.length === 0 ? [] : await db.originalPostApprovalQueue.findMany({
     where: { createdPostId: { in: targetIds } },
     // 🔴 `gateResults` 는 도장(`release`) 한 칸만 읽는다 — 원문 · 본문은 여기 없다
     select: { id: true, createdPostId: true, status: true, decidedBy: true, gateResults: true },
   })
+  /**
+   * 🔴 **도장 사건 검증은 그 글의 모든 발행 기록으로 한다**(리뷰 후속 P0-A). 그날 기록만 넘기면 창 밖 두 번째 기록이
+   *    가려져 "정확히 한 줄" 이 거짓이 된다. 일일 대상 · 일일 수량(`publishLogs`)은 그대로 그날 기록(`logs`)이다.
+   */
+  const allLogs = targetIds.length === 0 ? [] : await db.personaActivityLog.findMany({
+    where: { kind: 'post', targetId: { in: targetIds } },
+    select: { targetId: true, publishedAt: true, createdAt: true },
+  })
   const queueOf = new Map<string, number>()
   const releaseOfPost = new Map<string, 'STAMPED_ELIGIBLE' | 'MISSING' | 'STALE'>()
+  const logsOf = (postId: string): typeof logs => logs.filter((l) => l.targetId === postId)
   const deciderOfPost = new Map<string, PostDecider>()
   const queueIdOfPost = new Map<string, string>()
   for (const q of queue) {
@@ -84,7 +96,8 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
     queueOf.set(q.createdPostId!, (queueOf.get(q.createdPostId!) ?? 0) + 1)
     deciderOfPost.set(q.createdPostId!, deciderOf(q.decidedBy))
     queueIdOfPost.set(q.createdPostId!, q.id)
-    releaseOfPost.set(q.createdPostId!, releaseStampStatusOf(q.gateResults))
+    // 🔴 도장 시각 = 그 글의 발행 기록 시각이어야 한다 — 같은 트랜잭션의 같은 사건
+    releaseOfPost.set(q.createdPostId!, releaseStampStatusOf(q.gateResults, publishEventAtOf(allLogs.filter((l) => l.targetId === q.createdPostId))))
   }
   const postOf = new Map(posts.map((p) => [p.id, p]))
   /** 🔴 Post 가 없거나 Queue 가 없는 발행 기록 — 원글 레인 밖이거나 유실이다 */
@@ -102,11 +115,12 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   })
 
   const evidencePosts: EvidencePost[] = posts.map((p) => {
-    const mine = logs.filter((l) => l.targetId === p.id)
+    const mine = logsOf(p.id)
     return {
       postId: p.id,
       queueId: queueIdOfPost.get(p.id) ?? null,
-      publishedAtMs: (p.publishAt ?? p.createdAt).getTime(),
+      // 🔴 공개 시각 = 발행 기록 시각(가장 이른 줄 — 중복은 DUP_PUBLISH_LOG 가 따로 잡는다). posts 는 logs 에서 왔으므로 mine ≥ 1
+      publishedAtMs: Math.min(...mine.map((l) => l.createdAt.getTime())),
       // 🔴 발행 기록이 여럿이면 전부 표식이 있어야 무인이다 — 중복은 아래 DUP_PUBLISH_LOG 가 따로 잡는다
       unattended: mine.length > 0 && mine.every((l) => l.decidedBy === UNATTENDED_PUBLISH_DECIDED_BY),
       queueRows: queueOf.get(p.id) ?? 0,

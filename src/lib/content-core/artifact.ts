@@ -62,6 +62,11 @@ export type HumanReviewArtifact = {
    *    🔴 같은 값이 artifact → candidate → gateResults.autoDraft → 사람 검토까지 간다.
    */
   artifactId: string
+  /**
+   * 🔴 **원천 사이트** (2026-09-30 야간 P0-B) — 원천은 (사이트, id) 쌍이다. 이 판부터 생성기가 반드시 싣는다.
+   *    옛 artifact 에는 없다(`undefined`) — 읽는 쪽(`artifactRecordOutcome`)이 호환 경계에서 지문으로만 원천을 정한다.
+   */
+  sourceSite?: string
   sourceArticleId: string
   generatedAt: string
   /**

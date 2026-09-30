@@ -142,6 +142,8 @@ import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
  *    읽는 코드·정하는 코드는 러너와 검사가 **같은 것**을 쓴다.
  */
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+/** 🔴 원천 identity 정본 — (사이트, id) */
+import { baseIdOf, sourceIdentityOf, sourceKeyOf, sourceOfKey } from '../src/lib/source-identity'
 import { personasForAttempt } from './lib/replan-personas.mjs'
 
 export const DATA_DIR = '.microseed-data'
@@ -232,7 +234,34 @@ type JudgeProv = {
   ruleVersion: string; promptVersion: string; model: string
   inputHash: string; provenance: string
 }
+/** 🔴 원천 열쇠(사이트, id) → 판정 출처 */
 const seedProv = new Map<string, JudgeProv>()
+
+/**
+ * 🔴 **판정 기록 한 줄 → 원천 (사이트, id)** (2026-09-30 야간 P0-B). 이 판의 판정 기록에는 `sourceSite` 가 있다.
+ *    🔴 옛 기록(사이트 칸 없음)은 **묵시적으로 합치지 않는다** — 같은 id 의 지금 원천 가운데 입력 지문
+ *    (`sourceIdentityHash` = 판정기가 적은 `inputHash`)이 맞는 것이 **정확히 하나일 때만** 그 원천의 기록이다.
+ *    둘 이상 · 없음이면 그 줄은 쓰지 않는다(공급 러너의 호환 경계 `resolveSourceOutcome` 와 같은 규칙).
+ */
+function shadowRowsResolved(metas: ReadonlyMap<string, Meta>): { key: string; site: string; id: string; r: Record<string, unknown> }[] {
+  const out: { key: string; site: string; id: string; r: Record<string, unknown> }[] = []
+  let legacyDropped = 0
+  for (const f of shadowOverride() ?? filesEnding('.shadow.jsonl')) {
+    for (const r of jsonl(f)) {
+      const id = baseIdOf(S(r.sourceArticleId))
+      if (id === '') continue
+      let site = S(r.sourceSite)
+      if (site === '') {
+        const hits = [...metas.entries()].filter(([k, m]) => sourceOfKey(k)?.id === id && sourceIdentityHash(m) === S(r.inputHash))
+        if (hits.length !== 1) { legacyDropped += 1; continue }
+        site = sourceOfKey(hits[0]![0])!.site
+      }
+      out.push({ key: sourceKeyOf(site, id), site, id, r })
+    }
+  }
+  if (legacyDropped > 0) console.log(`   🟡 사이트 칸 없는 옛 판정 ${legacyDropped}줄 — 원천을 하나로 증명하지 못해 쓰지 않았다(P0-B 호환 경계)`)
+  return out
+}
 
 /**
  * 🔴 **판정 결과 파일을 지정한다** (`--input=<path>`).
@@ -249,41 +278,26 @@ function shadowOverride(): string[] | null {
   return paths.length === 0 ? null : paths
 }
 
-function loadAutoSeeds(): Judgement[] {
-  const files = shadowOverride() ?? filesEnding('.shadow.jsonl')
-  if (files.length === 0) return []
-  const byId = new Map<string, Judgement>()
-  for (const f of files) {
-    for (const r of jsonl(f)) {
-      const id = S(r.sourceArticleId)
-      if (id === '') continue
-      byId.set(id, {
-        sourceArticleId: id, decision: S(r.decision),
-        semanticRisks: Array.isArray(r.semanticRisks) ? r.semanticRisks.map(String) : [],
-      })
-      seedProv.set(id, {
-        ruleVersion: S(r.ruleVersion), promptVersion: S(r.promptVersion),
-        model: S(r.model), inputHash: S(r.inputHash), provenance: S(r.provenance),
-      })
-    }
+/** 🔴 판정 기록의 AUTO_SEED — 원천 (사이트, id) 마다 마지막 판정이 정본이다 */
+function loadAutoSeeds(metas: ReadonlyMap<string, Meta>): Judgement[] {
+  const byKey = new Map<string, Judgement>()
+  for (const { key, site, id, r } of shadowRowsResolved(metas)) {
+    byKey.set(key, {
+      sourceSite: site, sourceArticleId: id, decision: S(r.decision),
+      semanticRisks: Array.isArray(r.semanticRisks) ? r.semanticRisks.map(String) : [],
+    })
+    seedProv.set(key, {
+      ruleVersion: S(r.ruleVersion), promptVersion: S(r.promptVersion),
+      model: S(r.model), inputHash: S(r.inputHash), provenance: S(r.provenance),
+    })
   }
-  return [...byId.values()].filter((j) => j.decision === 'AUTO_SEED')
+  return [...byKey.values()].filter((j) => j.decision === 'AUTO_SEED')
 }
 
-/** 소재의 제목 — 초안 생성에 필요하다. 🔴 본문은 쓰지 않는다 */
-function loadTitles(): Map<string, { title: string; site: string }> {
-  const out = new Map<string, { title: string; site: string }>()
-  for (const suffix of ['.detail.jsonl', '.raw-detail.jsonl']) {
-    for (const f of filesEnding(suffix)) {
-      for (const r of jsonl(f)) {
-        const id = S(r.sourceArticleId)
-        const t = S(r.title)
-        if (id !== '' && t !== '') out.set(id, { title: t, site: S(r.sourceSite) })
-      }
-    }
-  }
-  return out
-}
+/** 🔴 판정 한 건의 원천 열쇠 — 러너가 싣는 판정은 사이트가 늘 있다 */
+const keyOfJ = (j: Judgement): string => sourceKeyOf(S(j.sourceSite), j.sourceArticleId)
+/** 🔴 화면 한 줄용 — 열쇠의 NUL 구분자를 찍지 않는다 */
+const labelOfKey = (k: string): string => { const s = sourceOfKey(k); return s === null ? k : `${s.site}:${s.id}` }
 
 /** 이미 후보가 된 제목·본문 — 같은 글을 두 번 내지 않는다 */
 function seenFromCandidates(): { titles: Set<string>; bodies: Set<string> } {
@@ -619,6 +633,11 @@ const sourceIdentityHash = (m: Meta): string => inputHashOf({
   title: m.title, bodyHead: m.bodyHead, axis: m.axis, lane: m.lane, assetAxes: m.assetAxes,
 })
 
+/**
+ * 🔴 **원천 메타 — 원천 열쇠(사이트, id)로 모은다** (2026-09-30 야간 P0-B). 앞판은 id 하나로 모아 같은 번호의
+ *    다른 사이트 글의 제목 · 본문 · 시각이 한 Meta 로 섞였다(`keep` 이 앞 사이트 값을 지켜 혼합 레코드가 됐다).
+ *    🔴 사이트를 모르는 행은 어느 원천의 메타도 아니다 — 건너뛴다.
+ */
 function loadMeta(): Map<string, Meta> {
   const out = new Map<string, Meta>()
   for (const suffix of ['.detail.jsonl', '.raw-detail.jsonl']) {
@@ -626,7 +645,8 @@ function loadMeta(): Map<string, Meta> {
       for (const r of jsonl(f)) {
         const id = S(r.sourceArticleId)
         const t = S(r.title)
-        if (id === '' || t === '') continue
+        const key = sourceIdentityOf(r.sourceSite, id)
+        if (key === null || t === '') continue
         /**
          * 🔴 **아는 값을 모르는 값으로 덮어쓰지 않는다** (2026-09-23 실측 결함).
          *
@@ -637,11 +657,11 @@ function loadMeta(): Map<string, Meta> {
          *    적재가 신선도를 재지 못한다.
          *    🔴 빈 값은 "모른다" 이지 "없다" 가 아니다. 모른다로 아는 것을 지우지 않는다.
          */
-        const was = out.get(id)
+        const was = out.get(key)
         const keep = (next: string, prev: string | undefined): string =>
           next !== '' ? next : (prev ?? '')
-        out.set(id, {
-          title: t, site: keep(S(r.sourceSite), was?.site), bodyHead: keep(S(r.bodyHead), was?.bodyHead),
+        out.set(key, {
+          title: t, site: S(r.sourceSite), bodyHead: keep(S(r.bodyHead), was?.bodyHead),
           axis: keep(S(r.axis), was?.axis), lane: keep(S(r.lane), was?.lane), angle: '',
           assetAxes: keep(S(r.assetAxes), was?.assetAxes),
           // 🔴 옛 파일에는 이 키가 없다 — 그러면 앞서 읽은 값을 지키고, 그것도 없으면 빈 문자열이다
@@ -671,15 +691,12 @@ function loadMeta(): Map<string, Meta> {
    *       지금 판정이 "모른다" 인데 옛 설명으로 검수를 시키게 된다.
    *       모르는 것은 모르는 채로 둔다.
    *
-   * 🔴 `loadAutoSeeds` 와 **같은 파일 목록 · 같은 순서 · 마지막이 이긴다**.
+   * 🔴 `loadAutoSeeds` 와 **같은 줄 해석(`shadowRowsResolved`) · 같은 순서 · 마지막이 이긴다**.
    */
-  for (const f of shadowOverride() ?? filesEnding('.shadow.jsonl')) {
-    for (const r of jsonl(f)) {
-      const id = S(r.sourceArticleId)
-      const m = out.get(id)
-      // 🔴 빈 값도 덮는다 — 마지막 판정이 모른다고 하면 모르는 것이다
-      if (m !== undefined) m.angle = S(r.communityAngle)
-    }
+  for (const { key, r } of shadowRowsResolved(out)) {
+    const m = out.get(key)
+    // 🔴 빈 값도 덮는다 — 마지막 판정이 모른다고 하면 모르는 것이다
+    if (m !== undefined) m.angle = S(r.communityAngle)
   }
   return out
 }
@@ -742,7 +759,9 @@ async function main(): Promise<void> {
   console.log('  🔴 사람의 ADOPT 를 사칭하지 않는다')
   console.log(`  🔴 DB 0 · 큐 0 · 발행 0 · Sheet 0${CALL ? '' : ' · LLM 0 · 네트워크 0 · 파일 write 0'}\n`)
 
-  const seedsAll = loadAutoSeeds()
+  // 🔴 메타를 먼저 읽는다 — 사이트 칸 없는 옛 판정의 원천을 지문으로 정하려면 지금 원천 메타가 필요하다(파일 읽기만)
+  const metas = loadMeta()
+  const seedsAll = loadAutoSeeds(metas)
   if (seedsAll.length === 0) fail('AUTO_SEED 가 0건이다 — 먼저 micro-seed:auto-judge 를 돌린다')
 
   /**
@@ -777,11 +796,11 @@ async function main(): Promise<void> {
         + ' — 생성을 보류한다. 입력은 그대로 두고 다음 회차가 다시 집는다')
     }
     const plan = planPreDraftExclusion({
-      sourceArticleIds: seedsAll.map((j) => j.sourceArticleId),
-      pendingSourceIds: read.pendingSourceIds,
+      sources: seedsAll.map((j) => ({ sourceSite: S(j.sourceSite), sourceArticleId: j.sourceArticleId })),
+      pendingSourceKeys: read.pendingSourceKeys,
     })
     const keep = new Set(plan.keep)
-    seeds = seedsAll.filter((j) => keep.has(j.sourceArticleId))
+    seeds = seedsAll.filter((j) => keep.has(keyOfJ(j)))
     preExcluded = plan.excluded.length
     console.log(`\n⓪ 생성 전 제외 ${preExcluded}건 — 같은 원문의 미발행 후보가 큐에 있다`)
     console.log(`   스냅샷 ${QUEUE_SNAPSHOT} (${Math.round(read.ageMs / 1000)}초 전 · 회차 ${RUN_ID})`)
@@ -794,7 +813,6 @@ async function main(): Promise<void> {
     console.log('\n① AUTO_SEED 0건 — 전부 큐에 미발행 형제가 있다. 🟢 유료 호출 0\n')
     return
   }
-  const metas = loadMeta()
   const seen = seenFromCandidates()
   // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
   const now = RUN_AT
@@ -953,7 +971,7 @@ async function main(): Promise<void> {
    */
   const speakerPlanOfRun = speakerLoad.loaded
     ? planSpeakerAvailability({
-      sourceKeys: seeds.map((j) => j.sourceArticleId),
+      sourceKeys: seeds.map(keyOfJ),
       capacities: voice.candidates.map((c) => ({
         code: c.code,
         openDays: speakerLoad.openDaysOf(c.code),
@@ -962,7 +980,7 @@ async function main(): Promise<void> {
     })
     : {
       slots: seeds.map((j) => ({
-        sourceKey: j.sourceArticleId, codes: voice.candidates.map((c) => c.code),
+        sourceKey: keyOfJ(j), codes: voice.candidates.map((c) => c.code),
       })),
       eligible: voice.candidates.map((c) => c.code),
       identity: 'no-load-file',
@@ -974,7 +992,7 @@ async function main(): Promise<void> {
   console.log(`      ${speakerPlanOfRun.eligible.join(' ') || '(없음)'}`)
   for (const n of speakerPlanOfRun.notes) console.log(`      · ${n}`)
   for (const sl of speakerPlanOfRun.slots) {
-    console.log(`      ${sl.sourceKey} → ${sl.codes.join(' ') || '🔴 보류(배정할 화자 없음)'}`)
+    console.log(`      ${labelOfKey(sl.sourceKey)} → ${sl.codes.join(' ') || '🔴 보류(배정할 화자 없음)'}`)
   }
 
   /**
@@ -989,8 +1007,8 @@ async function main(): Promise<void> {
     dataDir: DATA_DIR,
     hashOf: new Map(
       seeds.flatMap((j) => {
-        const m = metas.get(j.sourceArticleId)
-        return m === undefined ? [] : [[j.sourceArticleId, sourceIdentityHash(m)] as const]
+        const m = metas.get(keyOfJ(j))
+        return m === undefined ? [] : [[keyOfJ(j), sourceIdentityHash(m)] as const]
       }),
     ),
     base: currentContractBase(RUN_AT),
@@ -999,8 +1017,8 @@ async function main(): Promise<void> {
 
   for (const j of seeds) {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
-    BUDGET.enter(j.sourceArticleId)
-    const meta = metas.get(j.sourceArticleId)
+    BUDGET.enter(keyOfJ(j))
+    const meta = metas.get(keyOfJ(j))
     const holdPick = (o: { personaDeferred?: boolean } = {}): void => {
       picks.push(pickDraft({
         judgement: j, drafts: [], seenTitles, seenBodies, sourceUsed: false,
@@ -1042,7 +1060,7 @@ async function main(): Promise<void> {
      *    🔴 대신 **캐시 key 와 artifact** 에 싣는다 — 실제로 보낸 후보와
      *       캐시·기록이 같은 것을 가리킨다. 그것이 앞판이 깨뜨린 지점이다.
      */
-    const slotCodes = slotOf.get(j.sourceArticleId) ?? []
+    const slotCodes = slotOf.get(keyOfJ(j)) ?? []
     // 🔴 **여력 대기로 적는다** — 초안 실패(`noDraft`)가 아니다. 부르기 전이다(provider 호출 0)
     if (slotCodes.length === 0) { capacityDeferred += 1; holdPick({ personaDeferred: true }); continue }
     /**
@@ -1051,7 +1069,7 @@ async function main(): Promise<void> {
      *    같은 원천을 무한히 다시 사는 경로가 여기서 끊긴다.
      */
     const replan = personasForAttempt({
-      outcomes: priorOutcomes, sourceArticleId: j.sourceArticleId,
+      outcomes: priorOutcomes, sourceKey: keyOfJ(j),
       slotCodes, candidates: voice.candidates,
     })
     if (!replan.ok) {
@@ -1073,7 +1091,8 @@ async function main(): Promise<void> {
     const slotDigest = digest16(slotCodes.join(','))
     const exclPart = replan.excluded.length === 0
       ? '' : `|excl=${digest16([...replan.excluded].sort().join(','))}`
-    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}${exclPart}`
+    // 🔴 원천 (사이트, id) 를 담는다(P0-B) — 옛 열쇠(사이트 없음)는 자연히 빗나간다(다시 만든다 · 남의 artifact 를 받지 않는다)
+    const v2Key = `v2|${S(j.sourceSite)}|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}${exclPart}`
 
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
@@ -1088,6 +1107,7 @@ async function main(): Promise<void> {
          *    유도하면 id 가 원문의 지문이 되어 DB·큐로 원문이 새어 나간다.
          */
         artifactId: randomUUID().replace(/-/g, ''),
+        sourceSite: S(j.sourceSite),
         sourceArticleId: j.sourceArticleId,
         /**
          * 🔴 **제목도 마스킹을 거친다** (2026-09-20). 본문은 수집 단계에서
@@ -1182,7 +1202,7 @@ async function main(): Promise<void> {
       : voice.candidates.find((c) => c.code === planned)
     const p = pickV2({
       judgement: j, draft: cand, seenTitles, seenBodies,
-      sourceUsed: usedSources.has(j.sourceArticleId),
+      sourceUsed: usedSources.has(keyOfJ(j)),
       machineOutcome: art.review.machineOutcome,
       machineReason: art.review.machineReason,
       sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
@@ -1211,7 +1231,7 @@ async function main(): Promise<void> {
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {
       adopted.push({ pick: p, draft: cand, meta, art })
-      usedSources.add(j.sourceArticleId)
+      usedSources.add(keyOfJ(j))
       seenTitles.add(normalize(cand.title))
       seenBodies.add(normalize(cand.body))
     }
@@ -1235,7 +1255,7 @@ async function main(): Promise<void> {
     const avg = per.length === 0 ? 0 : BUDGET.spent / per.length
     console.log(`   원천별 사용: 최다 ${BUDGET.worstPerSource}회`
       + ` (정상 경로 ${V2_CALL_CAP}회 · 원천당 상한) · 평균 ${avg.toFixed(1)}회`
-      + `${per.length > 0 ? ` · ${per.slice(0, 3).map(([k, n]) => `${k}×${n}`).join(' ')}` : ''}`)
+      + `${per.length > 0 ? ` · ${per.slice(0, 3).map(([k, n]) => `${labelOfKey(k)}×${n}`).join(' ')}` : ''}`)
   }
   // 🔴 단계마다 어느 모델이 몇 번 갔는가 — 혼합 회차라 합치면 알 수 없다
   {
@@ -1360,7 +1380,7 @@ async function main(): Promise<void> {
        */
       sourceTitleCopied: copiesSourceTitle(a.meta.title, a.draft.title),
       sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-      autoJudge: seedProv.get(a.pick.sourceArticleId) ?? null,
+      autoJudge: seedProv.get(sourceKeyOf(a.meta.site, a.pick.sourceArticleId)) ?? null,
       ruleVersion: DRAFT_RULE_VERSION,
       provenance: DRAFT_PROVENANCE,
       reviewedAt: nowIso,

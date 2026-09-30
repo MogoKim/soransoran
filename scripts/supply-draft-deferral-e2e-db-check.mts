@@ -223,7 +223,8 @@ async function main(): Promise<void> {
   const shadowPath = join('.microseed-data', `auto-judge-${rid}.shadow.jsonl`)
   const seeds = ['e2e-1001', 'e2e-1002', 'e2e-1003']
   writeFileSync(join(T, shadowPath), seeds.map((id) => JSON.stringify({
-    sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [], semanticStatus: 'ok',
+    // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — 아래 상세 행과 같은 사이트
+    sourceSite: 'navercafe:fixture', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [], semanticStatus: 'ok',
     ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${id}`, provenance: 'machine-shadow',
   })).join('\n') + '\n')
   writeFileSync(join(DATA, `fixture-${rid}.detail.jsonl`), seeds.map((id, i) => JSON.stringify({
@@ -383,14 +384,14 @@ async function worksetAxisRunner(
   const out = `${child.stdout ?? ''}${child.stderr ?? ''}`
   const wsFile = readdirSync(D2).find((f) => /^supply-workset-.*\.json$/.test(f))
   const ws = wsFile === undefined ? null
-    : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sourceIds: string[] }
+    : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] }
   check('🔴 러너가 실제로 돌아 묶음 파일을 적었다', ws !== null, `출력 끝: ${out.slice(-600)}`)
-  const got = ws?.sourceIds.join(',') ?? ''
+  const got = ws?.sources.map((s) => s.sourceArticleId).join(',') ?? ''
   // 🔴 묶음 10 (2026-09-28) — raw 자리 2 · seed 는 형제를 뺀 5건 전부. 옛 규칙(댓글 순)이면 raw 4 가 먼저 든다
   check('🔴 🔴 **러너가 적은 묶음 = raw 2 (댓글 상위) + seed 5 (형제 뺀 전부)** — raw 는 최대 2 · 빈 자리를 raw 로 채우지 않는다',
     got === 'wsxw1,wsxw2,wsxs2,wsxs3,wsxs4,wsxs5,wsxs6', got)
   check('🔴 🔴 **러너가 격리 DB 큐를 읽어 형제를 뺐다** — wsxs1 없음 · 제외 사유 1건',
-    ws !== null && !ws.sourceIds.includes('wsxs1') && /같은 원문의 미발행 형제가 큐에 있다 1/.test(out))
+    ws !== null && !ws.sources.some((s) => s.sourceArticleId === 'wsxs1') && /같은 원문의 미발행 형제가 큐에 있다 1/.test(out))
   check('🔴 러너 로그가 축별 자리를 적는다 (정본 plan.axis)',
     /축 {2}seed 적격 5 · 자리 5 · 고름 5 {2}\| {2}raw 적격 4 · 자리 2 · 고름 2/.test(out),
     (/축 .*/.exec(out) ?? [''])[0])
@@ -400,7 +401,7 @@ async function worksetAxisRunner(
       .map((l) => (JSON.parse(l) as { sourceArticleId: string }).sourceArticleId)
     : []
   check('🔴 🔴 **판정 단계가 그 묶음만 판정했다** — 묶음 밖 raw 2건 · 형제 0건',
-    ws !== null && same(judged, ws.sourceIds), `판정 ${judged.join(',')}`)
+    ws !== null && same(judged, ws.sources.map((s) => s.sourceArticleId)), `판정 ${judged.join(',')}`)
   rmSync(T2, { recursive: true, force: true })
 }
 
@@ -478,7 +479,7 @@ async function duplicateSourceRunner(
   })
 
   const fakeKeys = Object.fromEntries([...new Set(Object.values(PROVIDER_KEY_ENV as Record<string, string>))].map((k) => [k, 'fixture-not-a-key']))
-  const runOnce = (runAt: Date): { out: string; ws: { runId: string; sourceIds: string[] } | null } => {
+  const runOnce = (runAt: Date): { out: string; ws: { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] } | null } => {
     const child = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T3, 'scripts', 'supply-process.mts'), '--live'], {
       cwd: T3, encoding: 'utf-8', timeout: 600_000,
       env: {
@@ -500,13 +501,13 @@ async function duplicateSourceRunner(
     const out = `${child.stdout ?? ''}${child.stderr ?? ''}`
     const rid = `${runAt.toISOString().slice(0, 10).replace(/-/g, '')}-${runAt.toISOString().slice(11, 19).replace(/:/g, '')}`
     const f = join(D3, `supply-workset-${rid}.json`)
-    return { out, ws: existsSync(f) ? JSON.parse(readFileSync(f, 'utf-8')) as { runId: string; sourceIds: string[] } : null }
+    return { out, ws: existsSync(f) ? JSON.parse(readFileSync(f, 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] } : null }
   }
   const postBefore = await prisma.post.count()
   const r1At = new Date(RUN_AT.getTime() + 2 * 3600e3)
   const r1 = runOnce(r1At)
   check('🔴 1회차가 돌아 묶음 파일을 적었다', r1.ws !== null, r1.out.slice(-800))
-  const ids1 = r1.ws?.sourceIds ?? []
+  const ids1 = r1.ws?.sources.map((s) => s.sourceArticleId) ?? []
   check('🔴 🔴 **발행된 형제 · 거절된 형제 · 옛 글의 원천은 묶음에 없다** (dup1 · dup2 · dup3)',
     ids1.length > 0 && !ids1.some((x) => ['dup1', 'dup2', 'dup3'].includes(x)), ids1.join(','))
   // 🔴 거절된 형제(dup2)는 `createdPostId` 가 비어 앞판 규칙(미발행 형제)이 먼저 잡는다 — 발행된 것 · 옛 글 둘이 새 규칙 몫이다
@@ -551,7 +552,7 @@ async function duplicateSourceRunner(
 
   const r2At = new Date(r1At.getTime() + 4 * 3600e3)
   const r2 = runOnce(r2At)
-  const ids2 = r2.ws?.sourceIds ?? []
+  const ids2 = r2.ws?.sources.map((s) => s.sourceArticleId) ?? []
   check('🔴 🔴 **2회차 묶음에 1회차가 적재한 원천이 없다** — 재시도로도 다시 뽑히지 않는다',
     loaded1.every((x) => !ids2.includes(x)), `적재 ${loaded1.join(',')} · 2회차 ${ids2.join(',')}`)
   const q2 = await perSource()

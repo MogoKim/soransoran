@@ -23,7 +23,7 @@ import {
   runReadiness, SnapshotWriteFailed, readFailureOf, perDayMeasured,
 } from './lib/d100-operational-stock.mjs'
 import { appendSnapshot } from './lib/d100-ready-snapshot.mjs'
-import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { fakeEvidenceGate, fakeReleaseStampGate } from './lib/fake-source-evidence.mjs'
 import type { CollectRunRecord } from '../src/lib/collect-run-record'
 import {
   judgeFunnel, judgeFunnelRows, LINK_STATES, linkStateOf, summarizeLinks, linkCriticalCount,
@@ -1633,14 +1633,16 @@ console.log('\n⓪ 🔴 하나의 루프 깔때기 — 관측 전용 · 원문 �
   const H = 3_600_000
   const NOW_F = new Date('2026-09-30T12:00:00.000Z')
   const FROM = new Date(NOW_F.getTime() - 7 * 864e5).toISOString()
-  const stamp = { release: { contract: 'source-slot-v1', verdict: 'eligible', slotAt: 'x', evaluatedAt: 'x', reasons: [], evidenceVersion: 'source-evidence-v1' } }
   const pubAt = new Date(NOW_F.getTime() - 5 * H)
+  /** 🔴 도장은 발행 트랜잭션과 같은 길(`judgeSlotRelease` → `releaseStampOf`)로 만든다 — 손으로 적은 `slotAt:'x'` 도장을 쓰지 않는다 */
+  const stamp = fakeReleaseStampGate(fakeEvidenceGate(pubAt, { ageH: 4 }), pubAt)
   /** 🔴 게시 · 수집 · 초안 시각이 서로 다른 기록 — 게시는 공개 4h 전 */
   const good: LoopRow = {
     gateResults: { ...fakeEvidenceGate(pubAt, { ageH: 4 }), ...stamp },
     generatedAt: new Date(pubAt.getTime() - 2 * H).toISOString(),
     readyAt: new Date(pubAt.getTime() - 1 * H).toISOString(), decidedBy: AUTO_DECIDER,
-    publicAt: pubAt.toISOString(), firstPersonaCommentAt: new Date(pubAt.getTime() + 14 * 60_000).toISOString(),
+    publicAt: pubAt.toISOString(), publishEventAt: pubAt.toISOString(),
+    firstPersonaCommentAt: new Date(pubAt.getTime() + 14 * 60_000).toISOString(),
     audit: { judged: true, defect: false },
   }
   /** 🔴 원문 증거가 없는 공개 행 — 큐 생성 · READY · 공개 시각은 전부 있다(대용할 시각이 널려 있다) */
@@ -1665,6 +1667,10 @@ console.log('\n⓪ 🔴 하나의 루프 깔때기 — 관측 전용 · 원문 �
   check('🔴 지금 계약 도장이 없는 공개 글은 원문 게시 → 공개 모집단에 들지 않는다 (preflight 와 같은 모집단)',
     buildLoopFunnel({ ...base, rows: [unstamped] }).latency.sourceToPublic.n === 0
     && buildLoopFunnel({ ...base, rows: [unstamped] }).counts.publicStamped === 0)
+  check('🔴 🔴 **도장 시각 ≠ 발행 사건 시각 · 발행 사건 모름 → 계약 도장 공개로 세지 않는다** (같은 사건이어야 증명)',
+    buildLoopFunnel({ ...base, rows: [{ ...good, publishEventAt: new Date(pubAt.getTime() + 1).toISOString() }] }).counts.publicStamped === 0
+    && buildLoopFunnel({ ...base, rows: [{ ...good, publishEventAt: null }] }).counts.publicStamped === 0
+    && f1.counts.publicStamped === 1)
   check('🔴 모르는 것은 null — 후보 · 비용 · Persona 가 미관측으로 남는다',
     f1.counts.candidates === null && f1.cost.totalUsd === null && f1.persona.contractValid === null
     && f1.persona.firstBlockedTransition === null

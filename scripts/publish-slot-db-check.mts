@@ -23,7 +23,7 @@ import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
-import { releaseStampStatusOf, RELEASE_STAMP_KEY, RELEASE_CONTRACT } from '../src/lib/source-slot-release'
+import { publishEventAtOf, releaseStampStatusOf, RELEASE_STAMP_KEY, RELEASE_CONTRACT } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
 
@@ -329,8 +329,11 @@ async function main(): Promise<void> {
     check('🔴 🔴 **같은 슬롯(08:10 도래 1)을 다음 후보가 채운다 — 만료는 슬롯을 소비하지 않았다**',
       rFresh.kind === 'published' && (await posts()) === 1 && (await logs()) === 1 && qFresh.status === 'PUBLISHED' && qFresh.createdPostId === rFresh.postId,
       JSON.stringify(rFresh))
-    check('🔴 🔴 **정상 발행 행에 지금 계약 eligible 도장이 남는다 (증거 조항 ⑦ 입력)**',
-      releaseStampStatusOf(qFresh.gateResults) === 'STAMPED_ELIGIBLE')
+    const freshLogs = qFresh.createdPostId === null ? [] : await prisma.personaActivityLog.findMany({
+      where: { kind: 'post', targetId: qFresh.createdPostId }, select: { publishedAt: true, createdAt: true } })
+    check('🔴 🔴 **정상 발행 행에 지금 계약 eligible 도장이 남는다 — 도장 시각 = 발행 기록 시각(같은 사건) (증거 조항 ⑦ 입력)**',
+      releaseStampStatusOf(qFresh.gateResults, publishEventAtOf(freshLogs)) === 'STAMPED_ELIGIBLE'
+      && publishEventAtOf(freshLogs)?.toISOString() === K('2026-10-20T08:12:00').toISOString())
     // 멱등 — 이미 만료된 행을 다시 불러도 두 번째 전환 · 쓰기가 없다
     const before = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: old }, select: { updatedAt: true } })
     const again = await scheduled(old, K('2026-10-20T09:30:00'), 'd10', envOf('d10'), 1)

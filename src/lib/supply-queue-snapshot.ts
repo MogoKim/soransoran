@@ -25,7 +25,8 @@
  *    적재 단계의 `ALREADY`·`HELD`·중복·트랜잭션 검사는 **그대로 남는다.**
  */
 
-import { baseArticleId, isOurSite, isPendingRow } from './micro-seed-supply-autofill'
+import { isOurSite, isPendingRow } from './micro-seed-supply-autofill'
+import { originalSourceOf, sourceIdentityOf } from './supply-workset'
 
 /** 🔴 파일이 무엇인지 — 다른 파일을 잘못 읽었을 때 조용히 통과하지 않게 한다 */
 export const QUEUE_SNAPSHOT_KIND = 'supply-queue-snapshot'
@@ -34,7 +35,11 @@ export const QUEUE_SNAPSHOT_KIND = 'supply-queue-snapshot'
  * 🔴 계약 판. 모양이나 뜻이 바뀌면 **올린다** —
  *    옛 판을 새 판정에 쓰면 "걸렀다" 는 기록만 남고 실제로는 안 걸러진다.
  */
-export const QUEUE_SNAPSHOT_VERSION = 'queue-snapshot-v1'
+/**
+ * 🔴 `queue-snapshot-v2` (2026-09-30 야간 P0-B) — 미발행 형제를 원문 id 가 아니라 **(사이트, id) 쌍**으로 적는다.
+ *    v1 은 synthetic 사이트 접두를 떼면서 사이트를 버렸다 — 82cook 형제가 같은 번호의 네이버 카페 원천까지 막았다.
+ */
+export const QUEUE_SNAPSHOT_VERSION = 'queue-snapshot-v2'
 
 /**
  * 🔴 **오래된 스냅샷을 쓰지 않는다** — 30분.
@@ -60,7 +65,7 @@ export type QueueSnapshot = {
    * 🔴 **미발행 후보가 큐에 남아 있는 원문 id** (`baseArticleId` 적용 후).
    *    "이 원문으로 지금 만들어도 적재되지 않는다" 는 뜻이다.
    */
-  pendingSourceIds: string[]
+  pendingSources: { sourceSite: string; sourceArticleId: string }[]
 }
 
 /**
@@ -86,18 +91,25 @@ export type SnapshotQueueRow = {
  * 🔴 발행이 끝난 행은 넣지 않는다 — 형제가 이미 나갔으면 새 초안을 넣어도 된다는
  *    기존 계약 그대로다.
  */
-export function pendingSourceIdsOf(rows: readonly SnapshotQueueRow[]): Set<string> {
-  const out = new Set<string>()
+export function pendingSourcesOf(rows: readonly SnapshotQueueRow[]): { sourceSite: string; sourceArticleId: string }[] {
+  const out = new Map<string, { sourceSite: string; sourceArticleId: string }>()
   for (const r of rows) {
-    const id = typeof r.sourceArticleId === 'string' ? r.sourceArticleId : ''
-    if (id === '') continue
     // 🔴 적재와 같은 범위 — 우리가 만든 synthetic 행만 형제다
     if (!isOurSite(typeof r.sourceSite === 'string' ? r.sourceSite : '')) continue
     // 🔴 적재와 같은 미발행 조건 — 정본 함수를 그대로 부른다
     if (!isPendingRow(r)) continue
-    out.add(baseArticleId(id))
+    // 🔴 synthetic 행 → 원래 원천(사이트 접두를 떼고 · 정본 `baseArticleId`) — 사이트를 버리지 않는다
+    const o = originalSourceOf(r.sourceSite, r.sourceArticleId)
+    const key = o === null ? null : sourceIdentityOf(o.site, o.id)
+    if (o === null || key === null) continue
+    out.set(key, { sourceSite: o.site, sourceArticleId: o.id })
   }
-  return out
+  return [...out.values()]
+}
+
+/** 🔴 원천 열쇠 집합 — 작업 묶음 · 생성 전 제외가 이 열쇠로 대 본다 */
+export function pendingSourceKeysOf(rows: readonly SnapshotQueueRow[]): Set<string> {
+  return new Set(pendingSourcesOf(rows).map((s) => sourceIdentityOf(s.sourceSite, s.sourceArticleId)!))
 }
 
 export function buildQueueSnapshot(input: {
@@ -111,7 +123,8 @@ export function buildQueueSnapshot(input: {
     runId: input.runId,
     takenAt: input.takenAt.toISOString(),
     // 🔴 정렬한다 — 같은 입력이면 같은 파일이어야 사람이 대조할 수 있다
-    pendingSourceIds: [...pendingSourceIdsOf(input.rows)].sort(),
+    pendingSources: pendingSourcesOf(input.rows)
+      .sort((a, b) => a.sourceSite.localeCompare(b.sourceSite) || a.sourceArticleId.localeCompare(b.sourceArticleId)),
   }
 }
 
@@ -129,7 +142,7 @@ export type SnapshotFailCode =
   | 'MISSING' | 'PARSE' | 'KIND' | 'VERSION' | 'RUN_MISMATCH' | 'STALE' | 'SHAPE'
 
 export type SnapshotRead =
-  | { ok: true; pendingSourceIds: ReadonlySet<string>; ageMs: number }
+  | { ok: true; pendingSourceKeys: ReadonlySet<string>; ageMs: number }
   | { ok: false; code: SnapshotFailCode; reason: string }
 
 /**
@@ -191,44 +204,43 @@ export function readQueueSnapshot(input: {
       reason: `스냅샷이 ${Math.round(ageMs / 60000)}분 됐다 (허용 ${Math.round(ttl / 60000)}분)`,
     }
   }
-  const ids = o.pendingSourceIds
-  if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string')) {
-    return { ok: false, code: 'SHAPE', reason: 'pendingSourceIds 가 문자열 배열이 아니다' }
+  const xs = o.pendingSources
+  const keys = Array.isArray(xs) ? xs.map((x: unknown) => (x !== null && typeof x === 'object'
+    ? sourceIdentityOf((x as Record<string, unknown>).sourceSite, (x as Record<string, unknown>).sourceArticleId) : null)) : null
+  // 🔴 사이트 · id 가 빈 원천이 하나라도 있으면 받지 않는다 — 어느 원천을 막는지 모른다
+  if (keys === null || keys.some((k) => k === null)) {
+    return { ok: false, code: 'SHAPE', reason: 'pendingSources 가 (사이트, id) 쌍 배열이 아니다' }
   }
   return {
     ok: true,
-    pendingSourceIds: new Set((ids as string[]).map((x) => x.trim()).filter((x) => x !== '')),
+    pendingSourceKeys: new Set(keys as string[]),
     ageMs,
   }
 }
 
-/** 생성 전 제외 판정 — 🔴 **넣을 것과 뺀 것을 둘 다 돌려준다.** 조용히 줄이지 않는다 */
+/** 생성 전 제외 판정 — 🔴 **넣을 것과 뺀 것을 둘 다 돌려준다.** 조용히 줄이지 않는다. 값은 원천 열쇠다 */
 export type PreDraftPlan = {
   keep: string[]
-  /** 🔴 미발행 형제가 있어 지금 만들어도 적재되지 않는 원문 */
+  /** 🔴 미발행 형제가 있어 지금 만들어도 적재되지 않는 원천 */
   excluded: string[]
 }
 
 /**
- * 🔴 **원문 id 로만 판단한다.** 제목도 본문도 보지 않는다 —
+ * 🔴 **원천 열쇠(사이트, id)로만 판단한다.** 제목도 본문도 보지 않는다 —
  *    생성 전에는 아직 없고, 없는 것으로 판단하면 그것은 추측이다.
+ *    🔴 사이트 · id 중 하나를 모르는 원천은 **넣지 않는다**(`excluded`) — 어느 형제와 겹치는지 증명할 수 없다.
  */
 export function planPreDraftExclusion(input: {
-  sourceArticleIds: readonly string[]
-  pendingSourceIds: ReadonlySet<string>
+  sources: readonly { sourceSite: string; sourceArticleId: string }[]
+  pendingSourceKeys: ReadonlySet<string>
 }): PreDraftPlan {
   const keep: string[] = []
   const excluded: string[] = []
-  for (const raw of input.sourceArticleIds) {
-    const id = typeof raw === 'string' ? raw.trim() : ''
-    if (id === '') continue
-    // 🔴 seed 의 id 는 원문 id 그대로다. 그래도 한 번 정규화해 둔다 —
-    //    호출부가 synthetic id 를 넘겨도 같은 규칙으로 읽힌다
-    if (input.pendingSourceIds.has(baseArticleId(id)) || input.pendingSourceIds.has(id)) {
-      excluded.push(id)
-    } else {
-      keep.push(id)
-    }
+  for (const s of input.sources) {
+    const key = sourceIdentityOf(s.sourceSite, s.sourceArticleId)
+    if (key === null) continue
+    if (input.pendingSourceKeys.has(key)) excluded.push(key)
+    else keep.push(key)
   }
   return { keep, excluded }
 }

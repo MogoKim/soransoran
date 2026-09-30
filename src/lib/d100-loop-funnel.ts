@@ -11,7 +11,8 @@
  *    `d100-readiness-check` 가 import 그래프로 잠근다(보고 화면 두 곳만 허용).
  *
  * 🔴 **원문 게시 시각은 `gateResults.sourceEvidence` 에서만 읽는다**(정본 판독기 `readSourceEvidence`).
- *    공개 행의 계약 여부는 `gateResults.release` 도장(`releaseStampStatusOf`)으로만 본다.
+ *    공개 행의 계약 여부는 `gateResults.release` 도장(`releaseStampStatusOf`)으로만 본다 —
+ *    도장 시각이 발행 사건 시각(`publishEventAt`, 정본 helper `publishEventAtOf`)과 정확히 같아야 한다.
  *    capture 시각 · 초안 시각(`queue.createdAt`) · 목록 시각으로 게시 시각을 **대신하지 않는다** —
  *    기록이 없거나 손상됐으면 그 행은 게시 시각 **미관측**이다.
  *
@@ -39,8 +40,10 @@ export type LoopRow = {
   readyAt: string | null
   /** READY 를 누가 냈나 — `auto-ready:v1` 이면 자동 */
   decidedBy: string | null
-  /** 공개 시각 — 연결된 Post 의 생성 시각. 공개 전이면 null */
+  /** 공개 시각 — 그 글의 발행 기록(`PersonaActivityLog` kind=post) 중 가장 이른 `createdAt`(상한 정본과 같은 칸). 공개 전이면 null */
   publicAt: string | null
+  /** 🔴 발행 사건 시각 — `publishEventAtOf`(기록이 정확히 한 줄 · publishedAt = createdAt). 모르면 null → 도장 증명이 아니다 */
+  publishEventAt: string | null
   /** 그 글의 첫 Persona 댓글 시각. 없으면 null */
   firstPersonaCommentAt: string | null
   /** 자동 READY 감사 — 선정 안 됐으면 null */
@@ -190,7 +193,8 @@ export function buildLoopFunnel(i: LoopFunnelInput): LoopFunnel {
     if (rd !== null) r2p.push((pub - rd) / HOUR_MS)
     const { postedMs } = sourceTimesOf(r.gateResults)
     if (postedMs === null) postedUnknown += 1
-    if (releaseStampStatusOf(r.gateResults) !== 'STAMPED_ELIGIBLE') continue
+    const eventAt = r.publishEventAt === null ? null : new Date(r.publishEventAt)
+    if (releaseStampStatusOf(r.gateResults, eventAt) !== 'STAMPED_ELIGIBLE') continue
     stamped += 1
     if (postedMs === null) continue
     s2p.push((pub - postedMs) / HOUR_MS)

@@ -165,7 +165,8 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
   mkdirSync(fakeHome, { recursive: true })
   writeFakePersonaAsset({ home: fakeHome })
   writeFileSync(join(dd, 'x.shadow.jsonl'), `${JSON.stringify({
-    sourceArticleId: 'T9', decision: 'AUTO_SEED', semanticRisks: [],
+    // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
+    sourceSite: 'navercafe:wgang', sourceArticleId: 'T9', decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
     // 🔴 (2026-09-30) 참여 동력 — 앞판은 loadMeta 가 채우고 아무도 읽지 않았다(죽은 값)
@@ -361,6 +362,23 @@ console.log('\n⑤-b 🔴 (Lane B) 82cook **실제 artifact 형식** replay — 
   check('🔴 🔴 **원천별 비교 — 82cook 표본 n 은 82cook 줄만**(같은 번호의 네이버 줄 · 999 댓글이 섞이지 않는다)',
     w68?.evidence?.sourceStats?.n === FIXTURE_82COOK_ROWS.length - 2, String(w68?.evidence?.sourceStats?.n))
   check('🔴 실제 반복 관측 2회 → velocity (댓글 17 → 20 · 1시간)', v68?.rank.velocity === 3, String(v68?.rank.velocity))
+  {
+    // 🔴 (P0-B) 같은 번호 9244768 이 네이버 카페에도 있다 — 공급 러너 메타(게시 · 목록 · 수집 시각)가 원천마다 따로 산다
+    const NCP = '2026-09-29T01:00:00.000Z'
+    writeFileSync(join(d82, 'nc-adapt-RNC.detail.jsonl'), `${JSON.stringify({
+      sourceArticleId: '9244768', sourceSite: 'navercafe:wgang', title: '카페 쪽 다른 글', bodyHead: '카페 원문 머리',
+      axis: 'seedOriginality', access: 'ok', safetyVerdict: 'pass', sourcePostedAt: NCP, sourceListedAt: NCP, sourceCapturedAt: NCP,
+    })}\n`)
+    const both = worksetRows([join(d82, '82cook-adapt-R82.detail.jsonl'), join(d82, '82cook-adapt-R82.raw-detail.jsonl'),
+      join(d82, 'nc-adapt-RNC.detail.jsonl')], readListObservations(d82, at), at) ?? []
+    const c = both.find((r) => r.sourceArticleId === '9244768' && r.sourceSite === '82cook')
+    const n = both.find((r) => r.sourceArticleId === '9244768' && r.sourceSite === 'navercafe:wgang')
+    check('🔴 🔴 **(P0-B) 같은 번호 82cook · 네이버 행이 둘 다 남고 각자 게시 시각 · 증거 출처를 지킨다** (`worksetRows` 메타)',
+      c !== undefined && n !== undefined && c.sourcePostedAt === '2026-09-30T11:41:10.000Z' && n.sourcePostedAt === NCP
+      && c.evidence?.postedAt === '2026-09-30T11:41:10.000Z' && n.evidence?.postedAt === NCP
+      && c.evidence?.provenance.articleIdHash !== n.evidence?.provenance.articleIdHash,
+      JSON.stringify([c?.sourcePostedAt, n?.sourcePostedAt]))
+  }
   const w67 = rows?.find((r) => r.sourceArticleId === '9244767')
   check('🔴 날짜 속성 없는 82cook 줄 → POSTED_MISSING(추측하지 않는다)', w67 !== undefined && preGenerationRelease(w67, slot, at).reasons[0] === 'POSTED_MISSING')
   check('🔴 반응 원천은 목록 관측 하나 — 증거 기록에 원문 id · URL · 제목이 없다(해시만)',

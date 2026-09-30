@@ -92,7 +92,7 @@ const { classifyDetail } = await import('./lib/micro-seed-detail-classify.mjs')
 const { maskSensitive, BODY_HEAD_CHARS } = await import('./lib/micro-seed-raw-originality.mjs')
 const { toThinRow } = await import('../src/lib/micro-seed-82cook-thin')
 const { sourceTimesOf, thinRowFromCollected } = await import('../src/lib/micro-seed-navercafe-thin')
-const { SOURCE_EVIDENCE_KEY, RELEASE_STAMP_KEY, RELEASE_CONTRACT, releaseStampStatusOf, parseEvidence } = await import('../src/lib/source-slot-release')
+const { SOURCE_EVIDENCE_KEY, RELEASE_STAMP_KEY, RELEASE_CONTRACT, releaseStampStatusOf, publishEventAtOf, parseEvidence } = await import('../src/lib/source-slot-release')
 const { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE } = await import('../src/lib/micro-seed-supply-autofill')
 const { HUMAN_DECIDER, AUTO_DECIDER } = await import('../src/lib/auto-ready-v2')
 const { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf: evDigest } = await import('../src/lib/auto-ready-evidence')
@@ -325,7 +325,7 @@ async function consistent(queueId: string, tag: string, presetMatchedAt: Date | 
     && logs.length === 1 && logs[0]!.personaId === persona.id, JSON.stringify({ s: q.status, p: post?.id, logs: logs.length }))
   check(`🔴 🔴 **[${tag}] ⑩ release 도장 — source-slot-v1 · eligible · 판정 시각 = 공개 시각(ActivityLog publishedAt · createdAt) = 배정 시각(복구 행은 기존 배정 그대로)**`,
     stamp?.contract === RELEASE_CONTRACT && stamp?.verdict === 'eligible' && stamp?.issue === null
-    && releaseStampStatusOf(g) === 'STAMPED_ELIGIBLE'
+    && releaseStampStatusOf(g, publishEventAtOf(logs)) === 'STAMPED_ELIGIBLE'
     && logs[0]?.publishedAt?.toISOString() === stamp?.evaluatedAt && logs[0]?.createdAt.toISOString() === stamp?.evaluatedAt
     && q.matchedAt?.toISOString() === (presetMatchedAt === null ? stamp?.evaluatedAt : presetMatchedAt.toISOString()) && stamp?.slotAt === stamp?.evaluatedAt,
     JSON.stringify({ stamp, pub: logs[0]?.publishedAt, log: logs[0]?.createdAt, m: q.matchedAt }))
@@ -414,7 +414,7 @@ async function main(): Promise<void> {
     const st = f.gateResults[RELEASE_STAMP_KEY] as Record<string, unknown> | undefined
     check('🔴 만료 행의 release 도장 — ineligible · 사유 · 판정 시각이 계획 시각보다 뒤(트랜잭션 시계)',
       st?.verdict === 'ineligible' && JSON.stringify(st?.reasons) === '["SOURCE_TOO_OLD_AT_SLOT"]' && Date.parse(String(st?.evaluatedAt)) > PUBLISH_AT.getTime()
-      && releaseStampStatusOf(f.gateResults) === 'STALE', JSON.stringify(st))
+      && releaseStampStatusOf(f.gateResults, null) === 'STALE', JSON.stringify(st))
     check('🔴 🔴 **같은 회차에 다음 후보(정본 순위 2위)가 발행됐다** — 러너 exit 0 · 교체 1건',
       pub.code === 0 && published.length === 1 && published[0]!.id === planOrder[1]?.id && /같은 회차 교체 1건/.test(pub.out),
       `${pub.code} · ${published.map(srcId).join(',')} · 기대 ${planOrder[1] === undefined ? '-' : srcId(planOrder[1])}`)
@@ -508,7 +508,7 @@ async function main(): Promise<void> {
     const F2 = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: founder.id }, select: { gateResults: true, status: true } })
     check('🔴 위조 도장은 트랜잭션의 진짜 판정으로 덮였다(ineligible) · 단계 증거는 STALE 로 읽는다',
       F2.status === 'EXPIRED' && ((F2.gateResults as Record<string, unknown>)[RELEASE_STAMP_KEY] as Record<string, unknown>)?.verdict === 'ineligible'
-      && releaseStampStatusOf(F2.gateResults) === 'STALE')
+      && releaseStampStatusOf(F2.gateResults, null) === 'STALE')
     check('🔴 Post 는 러너가 낸 1건뿐', (await postsNow()) === 1 && (await logsNow()) === 1)
   }
 
@@ -517,10 +517,15 @@ async function main(): Promise<void> {
     const { sup } = await world('⑧ 동시 러너 — 같은 도래 슬롯을 두 프로세스가 노린다')
     check('공급 러너 정상 종료', sup.code === 0)
     /**
-     * 🔴 사람 결정 · 배정 끝(복구) 행으로 돈다 — 자동 READY 는 끈다.
-     *    주입 시계에서는 DB 기본값 시각(`AutoReadyAudit.selectedAt` · `Post.createdAt`)이 DB 서버 벽시계라, 먼저 발행한
-     *    러너가 고른 사후 감사가 뒤 러너의 트랜잭션 시계로는 "6시간 넘은 미판정" 으로 읽힌다(운영에서는 두 시계가 같다).
-     *    그 조합은 이 레인 밖 파일(감사 저장)의 시계 결속 문제라 보고로 넘긴다 — 여기서는 슬롯 경쟁만 본다.
+     * 🔴 사람 결정 · 배정 끝(복구) 행으로 돈다 — 자동 READY 는 끈다. **이것은 시험 틀(harness)의 한계 때문이다.**
+     *    (2026-09-30 야간 P1 격리 DB 재현) 기계 행 · 자동 READY 켬 · 러너 둘 동시로 돌리면 뒤 러너가 exit 1 이다:
+     *      먼저 발행한 러너가 사후 감사를 고르면 `AutoReadyAudit.selectedAt` 은 **DB 기본값(DB 서버 벽시계)**이고,
+     *      뒤 러너의 발행 트랜잭션은 **주입 시계**(`SORAN_RUN_AT` · 이 검사는 벽시계보다 몇 시간 뒤다)로
+     *      `selectedAt < txNow − 6h` 를 본다 → "판정 없이 6시간 넘은 감사" → `AUTO_READY_RECHECK` → exit 1.
+     *      (`Post.createdAt` · 발행 기록은 트랜잭션 시계로 쓴다 — 갈리는 칸은 감사 `selectedAt` 하나다.)
+     *    🔴 운영에서는 생기지 않는다: 운영 러너는 시계를 주입받지 않고(launchd env 에 `SORAN_RUN_AT` 없음 · 트랜잭션 시계 = 벽시계),
+     *       주입 시계 + `--apply` 는 격리 DB 가 아니면 DB 에 붙기 전에 멈춘다(아래 "주입 시계 가드" 절이 잠근다). 그래서 운영 코드를 고치지 않는다.
+     *    여기서는 슬롯 경쟁만 본다 — 자동 READY 감사의 동시성은 벽시계로 도는 `auto-ready-runner-chain-check` 가 본다.
      */
     const order = rankAt(await generated(), PUBLISH_AT)
     for (const r of order.slice(0, 2)) {

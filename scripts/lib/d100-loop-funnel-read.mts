@@ -12,6 +12,7 @@ import { PrismaClient } from '@prisma/client'
 
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
 import { buildLoopFunnel, kstDayOf, type LoopFunnel, type LoopRow, type SlotDay } from '../../src/lib/d100-loop-funnel'
+import { publishEventAtOf, type PublishLogTimes } from '../../src/lib/source-slot-release'
 import { GENERIC_STAGES, genericDailyTarget, type GenericStage } from '../../src/lib/stage-ladder-generic'
 import { auditLedgerDir } from './auto-ready-semantic-provider.mjs'
 import { defaultLedgerDir, ledgerPathOf, readLedgerDay } from './llm-ledger-store.mjs'
@@ -59,12 +60,18 @@ export function windowLedgerUsd(dir: string, dates: readonly string[]): number |
 }
 
 export async function collectLoopRows(db: ReadOnlyPrisma, from: Date): Promise<LoopRow[]> {
+  // 🔴 공개는 발행 기록(발행 사건)으로 창에 든다 — Post.createdAt(DB 기본값)으로 고르지 않는다(P0-A)
+  const publishedInWindow = await db.personaActivityLog.findMany({
+    where: { kind: 'post', createdAt: { gte: from }, targetId: { not: null } },
+    select: { targetId: true },
+  })
+  const publishedIds = [...new Set(publishedInWindow.map((l) => l.targetId).filter((x): x is string => x !== null && x !== ''))]
   const q = await db.originalPostApprovalQueue.findMany({
     where: {
       OR: [
         { createdAt: { gte: from } },
         { decidedAt: { gte: from } },
-        { createdPost: { createdAt: { gte: from } } },
+        ...(publishedIds.length === 0 ? [] : [{ createdPostId: { in: publishedIds } }]),
       ],
     },
     select: {
@@ -75,6 +82,18 @@ export async function collectLoopRows(db: ReadOnlyPrisma, from: Date): Promise<L
   })
   const postIds = q.map((r) => r.createdPost?.id).filter((x): x is string => typeof x === 'string')
   const firstComment = new Map<string, Date>()
+  // 🔴 공개 시각 · 발행 사건 시각은 발행 기록에서 읽는다 — Post.createdAt(DB 기본값)이 아니다
+  const logsOf = new Map<string, PublishLogTimes[]>()
+  if (postIds.length > 0) {
+    const logs = await db.personaActivityLog.findMany({
+      where: { kind: 'post', targetId: { in: postIds } },
+      select: { targetId: true, publishedAt: true, createdAt: true },
+    })
+    for (const l of logs) {
+      if (l.targetId === null) continue
+      logsOf.set(l.targetId, [...(logsOf.get(l.targetId) ?? []), { publishedAt: l.publishedAt, createdAt: l.createdAt }])
+    }
+  }
   if (postIds.length > 0) {
     const cs = await db.comment.findMany({
       where: { postId: { in: postIds }, personaId: { not: null } },
@@ -89,11 +108,20 @@ export async function collectLoopRows(db: ReadOnlyPrisma, from: Date): Promise<L
     generatedAt: r.createdAt.toISOString(),
     readyAt: READY.has(r.status) && r.decidedAt !== null ? r.decidedAt.toISOString() : null,
     decidedBy: r.decidedBy,
-    publicAt: r.createdPost?.createdAt.toISOString() ?? null,
+    ...publicTimesOf(r.createdPost === null ? [] : logsOf.get(r.createdPost.id) ?? []),
     firstPersonaCommentAt: r.createdPost === null ? null : firstComment.get(r.createdPost.id)?.toISOString() ?? null,
     audit: r.autoReadyAudit === null ? null
       : { judged: r.autoReadyAudit.judgedAt !== null, defect: r.autoReadyAudit.defect === 'yes' },
   }))
+}
+
+/** 🔴 공개 시각(가장 이른 발행 기록) · 발행 사건 시각(정본 helper) — 기록이 없으면 둘 다 null */
+function publicTimesOf(logs: readonly PublishLogTimes[]): { publicAt: string | null; publishEventAt: string | null } {
+  if (logs.length === 0) return { publicAt: null, publishEventAt: null }
+  return {
+    publicAt: new Date(Math.min(...logs.map((l) => l.createdAt.getTime()))).toISOString(),
+    publishEventAt: publishEventAtOf(logs)?.toISOString() ?? null,
+  }
 }
 
 export async function collectSlotDays(db: ReadOnlyPrisma, dates: readonly string[]): Promise<SlotDay[]> {

@@ -30,7 +30,8 @@ import { PrismaClient } from '@prisma/client'
 import { kstDateString } from '../src/lib/release-canary'
 import { previousKstDate, validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
 import { createStageDecision } from '../src/lib/stage-decision-repo'
-import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
+import { kstDayBounds, readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
+import { publishLatencyHours } from './lib/stage-preflight-facts.mjs'
 import { judgeStageEvidence, trialPlanOf, type StageEvidenceVerdict, type EvidenceSideSignals } from '../src/lib/stage-evidence'
 import { UNATTENDED_PUBLISH_DECIDED_BY, publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { AUTO_FIRST_COMMENT_WINDOW_MS } from '../src/lib/persona-comment-auto-lane'
@@ -39,7 +40,7 @@ import { AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX } from '.
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { observeJob } from './lib/runner-health.mjs'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
-import { judgeSlotRelease, releaseStampOf, RELEASE_STAMP_KEY } from '../src/lib/source-slot-release'
+import { judgeSlotRelease, publishEventAtOf, releaseStampOf, releaseStampStatusOf, RELEASE_STAMP_KEY } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 const URL = process.env.DATABASE_URL ?? ''
@@ -362,6 +363,67 @@ try {
     const v = judgeSlotRelease({ gateResults: ev, slotAt: t, now: t, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: 'stale' })
     await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[2]! }, data: { gateResults: { ...ev, [RELEASE_STAMP_KEY]: releaseStampOf(v) } as never } })
   })
+  // 🔴 P0-A (2026-09-30 야간) — 도장은 완전한 계약이어야 하고, 도장 시각 = 그 글의 발행 기록 시각(같은 사건)이어야 한다
+  const stampOf = async (s: Seeded, i: number): Promise<{ g: Record<string, unknown>; st: Record<string, unknown> }> => {
+    const g = (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: s.queues[i]! }, select: { gateResults: true } })).gateResults as Record<string, unknown>
+    return { g, st: g[RELEASE_STAMP_KEY] as Record<string, unknown> }
+  }
+  const setStamp = async (s: Seeded, i: number, f: (st: Record<string, unknown>) => unknown): Promise<void> => {
+    const { g, st } = await stampOf(s, i)
+    await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[i]! }, data: { gateResults: { ...g, [RELEASE_STAMP_KEY]: f(st) } as never } })
+  }
+  await counter('🔴 🔴 **AS-IS 반례 — contract · verdict 두 칸짜리 도장 → STALE_RELEASE** (앞판 STAMPED_ELIGIBLE)', 'STALE_RELEASE',
+    (s) => setStamp(s, 1, () => ({ contract: 'source-slot-v1', verdict: 'eligible' })))
+  await counter('🔴 🔴 **AS-IS 반례 — slotAt:x · evaluatedAt:x · reasons · issue · evidenceVersion null → STALE_RELEASE**', 'STALE_RELEASE',
+    (s) => setStamp(s, 1, () => ({ contract: 'source-slot-v1', verdict: 'eligible', slotAt: 'x', evaluatedAt: 'x', reasons: ['HARD_GATE'], issue: 'broken', evidenceVersion: null })))
+  await counter('🔴 evidenceVersion 다른 판 → STALE_RELEASE', 'STALE_RELEASE',
+    (s) => setStamp(s, 1, (st) => ({ ...st, evidenceVersion: 'source-evidence-v0' })))
+  await counter('🔴 🔴 **도장 시각(정규 ISO)이 발행 기록보다 1분 뒤 → STALE_RELEASE** (다른 사건)', 'STALE_RELEASE',
+    (s) => setStamp(s, 1, (st) => {
+      const d = new Date(Date.parse(String(st.slotAt)) + MIN).toISOString()
+      return { ...st, slotAt: d, evaluatedAt: d }
+    }))
+  await counter('🔴 🔴 **발행 기록 createdAt 만 1ms 다름(publishedAt ≠ createdAt) → STALE_RELEASE**', 'STALE_RELEASE', async (s) => {
+    const l = await prisma.personaActivityLog.findUniqueOrThrow({ where: { id: s.logs[1]! }, select: { createdAt: true } })
+    await prisma.personaActivityLog.update({ where: { id: s.logs[1]! }, data: { createdAt: new Date(l.createdAt.getTime() + 1) } })
+  })
+  await counter('🔴 🔴 **그날 밖(다음 날)에 같은 글의 두 번째 발행 기록 → STALE_RELEASE** (도장 사건은 모든 기록으로 본다)', 'STALE_RELEASE', async (s) => {
+    const l = await prisma.personaActivityLog.findUniqueOrThrow({ where: { id: s.logs[1]! }, select: { personaId: true, targetId: true } })
+    const next = new Date(SLOTS[1]!.getTime() + 86_400_000)
+    await prisma.personaActivityLog.create({ data: { personaId: l.personaId, kind: 'post', targetId: l.targetId, gateStatus: 'PASS',
+      decidedBy: UNATTENDED_PUBLISH_DECIDED_BY, publishedAt: next, createdAt: next } })
+  })
+  await counter('🔴 발행 기록 publishedAt 없음 → STALE_RELEASE', 'STALE_RELEASE', async (s) => {
+    await prisma.personaActivityLog.update({ where: { id: s.logs[1]! }, data: { publishedAt: null } })
+  })
+  {
+    // 🟢 Post 시각은 공개 시각이 아니다 — Post.createdAt 을 비틀어도 발행 기록 · 도장이 같은 사건이면 PASS 그대로
+    await wipe()
+    const decision = await storeDecision(TRIAL_D3)
+    const s = await seedDay()
+    await prisma.post.update({ where: { id: s.posts[1]! }, data: { createdAt: new Date(SLOTS[1]!.getTime() + 7 * MIN) } })
+    const v = await verdictOf(decision)
+    check('🟢 🔴 **Post.createdAt 이 달라도 발행 기록 = 도장이면 PASS — 공개 시각 정본은 발행 기록이다**', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+  }
+
+  {
+    // 🔴 P0-A (리뷰 후속) — 사전점검 지연의 창도 발행 사건(발행 기록)이 정한다. Post.createdAt 창으로 먼저 자르지 않는다
+    await wipe()
+    const s = await seedDay()
+    const day = kstDayBounds(D)!
+    const base = await publishLatencyHours(prisma, day.start, day.end)
+    // ⓐ Post 시각만 창 밖(전날) — 발행 기록 · 도장은 창 안 → 여전히 센다
+    await prisma.post.update({ where: { id: s.posts[0]! }, data: { createdAt: new Date(day.start.getTime() - 3_600_000) } })
+    const a = await publishLatencyHours(prisma, day.start, day.end)
+    // ⓑ 발행 기록 · 도장이 창 밖(다음 날) — Post 시각은 창 안 → 세지 않는다(앞판은 Post 창으로 골라 30h 로 셌다)
+    const next = new Date(SLOTS[1]!.getTime() + 86_400_000)
+    await prisma.personaActivityLog.update({ where: { id: s.logs[1]! }, data: { createdAt: next, publishedAt: next } })
+    await setStamp(s, 1, (st) => ({ ...st, slotAt: next.toISOString(), evaluatedAt: next.toISOString() }))
+    const b = await publishLatencyHours(prisma, day.start, day.end)
+    check('🔴 🔴 **사전점검 지연 — 후보 창은 발행 기록이다: Post 시각만 창 밖이면 센다 · 발행 기록이 창 밖이면 안 센다**',
+      base.length === 3 && a.length === 3 && b.length === 2 && b.every((h) => h === base[0]),
+      `${JSON.stringify(base)} → ${JSON.stringify(a)} → ${JSON.stringify(b)}`)
+  }
 
   console.log('\n③ 발행 트랜잭션이 무인 표식을 실제로 남긴다')
   {
@@ -385,6 +447,8 @@ try {
         planned: { queueId: rowA.id, status: rowA.status, createdPostId: rowA.createdPostId, updatedAt: rowA.updatedAt, decidedBy: rowA.decidedBy } },
     }, { now: () => txNow })
     const la = a.kind === 'published' ? await prisma.personaActivityLog.findFirst({ where: { targetId: a.postId } }) : null
+    // 🔴 아래에서 발행 기록을 지우기 전에 읽는다 — 도장과 같은 사건인지 대조할 원본이다
+    const aLogs = a.kind === 'published' ? await prisma.personaActivityLog.findMany({ where: { kind: 'post', targetId: a.postId }, select: { publishedAt: true, createdAt: true } }) : []
     check('🟢 예약 · unattended → 발행 기록 decidedBy = 무인 표식', la?.decidedBy === UNATTENDED_PUBLISH_DECIDED_BY, `${a.kind} ${la?.decidedBy ?? '-'} ${a.kind === 'blocked' ? a.code + ' ' + a.detail : ''}`)
     await prisma.personaActivityLog.deleteMany({})
     const qb = await mk('b')
@@ -405,8 +469,10 @@ try {
       ? (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: qa }, select: { gateResults: true } })).gateResults as Record<string, unknown>
       : {}
     const st = stamped[RELEASE_STAMP_KEY] as Record<string, unknown> | undefined
-    check('🔴 🔴 **발행 트랜잭션이 지금 계약의 eligible 도장을 실제로 남긴다(조항 ⑦ 입력)**',
-      st?.contract === 'source-slot-v1' && st?.verdict === 'eligible', JSON.stringify(st))
+    check('🔴 🔴 **발행 트랜잭션이 지금 계약의 완전한 eligible 도장을 실제로 남긴다 — 도장 시각 = 발행 기록 시각 = txNow (조항 ⑦ 입력)**',
+      st?.contract === 'source-slot-v1' && st?.verdict === 'eligible'
+      && releaseStampStatusOf(stamped, publishEventAtOf(aLogs)) === 'STAMPED_ELIGIBLE'
+      && publishEventAtOf(aLogs)?.getTime() === txNow.getTime(), JSON.stringify(st))
   }
 
   console.log('\n④ controller 실제 진입점 (dry-run · --json · 가짜 HOME)')
