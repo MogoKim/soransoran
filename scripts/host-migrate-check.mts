@@ -23,7 +23,8 @@ import {
   statSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { PUBLISH_RUN_DIR, PUBLISH_RUN_DIR_NAME } from './lib/publish-run-record.mjs'
 
 import {
   BUNDLE_MANIFEST, classifyCanonEntry, foreignHomePaths, homePathKeys, isTransientFile, judgeBundleOut,
@@ -69,6 +70,8 @@ check('러너 복구 표식은 D100 state', classifyCanonEntry('runner-recover')
 check('🔴 레인 handoff·소유 표식은 싣지 않는다', classifyCanonEntry(HANDOFF_FILE).kind === 'exclude' && classifyCanonEntry(OWNER_FILE).kind === 'exclude'
   && HANDOFF_FILE.includes(LANE) && OWNER_FILE.includes(LANE))
 check('🔴 쥔 잠금 파일은 뺀다', isTransientFile('audit.lock', 'auto-ready-audit'))
+check('🔴 발행 회차 기록(publish-runs)은 분류돼 있고 싣지 않는다 — 대상의 안 돈 러너를 정상으로 읽지 않는다',
+  classifyCanonEntry(PUBLISH_RUN_DIR_NAME).kind === 'exclude' && PUBLISH_RUN_DIR_NAME === basename(PUBLISH_RUN_DIR))
 check('heartbeat 지난 틱 표식은 싣는다', !isTransientFile('tick-2026-09-28T08-00.lock', 'publish-heartbeat'))
 check('🔴 heartbeat 디렉터리라도 틱 이름이 아니면 뺀다', isTransientFile('other.lock', 'publish-heartbeat'))
 

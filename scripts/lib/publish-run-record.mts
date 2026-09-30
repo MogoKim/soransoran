@@ -19,7 +19,9 @@ import {
 } from './original-post-runner-template'
 
 /** 🔴 저장소 밖 — runtime 작업트리를 더럽히지 않는다. heartbeat 틱 표식과 같은 부모 디렉터리 */
-export const PUBLISH_RUN_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran', 'publish-runs')
+/** 🔴 정본 디렉터리 이름 — `host-migrate` 분류가 이 상수를 쓴다(이름이 갈라지면 export 가 거부한다) */
+export const PUBLISH_RUN_DIR_NAME = 'publish-runs'
+export const PUBLISH_RUN_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran', PUBLISH_RUN_DIR_NAME)
 const LAST_FILE = 'last.json'
 
 /**
