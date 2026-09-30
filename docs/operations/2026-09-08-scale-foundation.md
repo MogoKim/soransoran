@@ -1,5 +1,10 @@
 # 10/day Scale Foundation
 
+> 📜 **2026-09-30 정책 대체 표시.** 현재 정책은 [`README.md`](./README.md) 가 가리키는 권위 문서,
+> 특히 [D100 canon](./2026-09-21-d100-goal-canon.md) 이 정한다. 완성 글 며칠 치 재고 목표와 사람이 stage env 를
+> 올리던 옛 단계 절차는 canon §3 JIT 공급·§3.1 준비도·§6 자동 사다리로 대체됐다.
+> 이 문서의 결정·사고·실측은 역사 증거로 남기지만 현재 정책에 투표하지 않는다.
+
 > 선행: [Pool 설계](2026-08-30-persona-pool-design.md) · [Wave2 runbook](2026-09-08-persona-wave2-runbook.md) ·
 > [lane 전략](2026-09-02-original-post-lane-strategy.md)
 >

@@ -1,5 +1,10 @@
 # d10 activation preparation
 
+> 📜 **2026-09-30 정책 대체 표시.** 현재 정책은 [`README.md`](./README.md) 가 가리키는 권위 문서,
+> 특히 [D100 canon](./2026-09-21-d100-goal-canon.md) 이 정한다. `sourceCapturedAt` 을 원문 나이 대용으로 쓰던 신선도와
+> 완성 글 재고 관문은 canon §2 source-to-slot 판정·§3.1 준비도로 대체됐다.
+> 이 문서의 결정·사고·실측은 역사 증거로 남기지만 현재 정책에 투표하지 않는다.
+
 > 선행: [Scale Foundation](2026-09-08-scale-foundation.md) · [Pool 설계](2026-08-30-persona-pool-design.md) ·
 > [Raw 공급망](2026-09-03-raw-supply-chain-design.md)
 >
