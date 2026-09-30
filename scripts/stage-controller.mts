@@ -49,6 +49,7 @@ import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
 import { judgeNextPreflight, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -215,7 +216,8 @@ async function main(): Promise<number> {
           loaded: s, autoOpen, proofSlots: slotTimesOn(TODAY, profileOf(target)),
           caps: releaseCapsOf(profileOf(target)), evidenceDate: previous.kstDate, env: pe.values,
           dataDir: SUPPLY_DATA_DIR, now: NOW, runnerHealth: errorSignal.health,
-          // 🔴 Persona 레인 제공 자리 — 아직 제공자가 없다(= 모름). 활성 행 수를 넣지 않는다
+          // 🔴 Persona 4상태 정본의 계약 유효 수 — 활성 행 수를 넣지 않는다(읽지 못하면 null = 모름)
+          contractValidPersonas: () => readContractValidPersonas(prisma, { now: NOW, repoRoot: process.cwd() }),
         })
         nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID)
         preflightDetail = r.detail

@@ -25,6 +25,8 @@ import {
   historyFromEvents, type ActivityHistory, type CommentEvent, type PostEvent, type QualificationEvidence,
 } from '../../src/lib/persona-reserve'
 import type { PersonaReserveFacts, PersonaReserveRepo, PersonaReserveRow } from './d100-persona-tiers.mjs'
+import { readPersonaReserve } from './d100-persona-tiers.mjs'
+import { readEnvKeys } from './ops-signals.mjs'
 import { checkNameCollision, type NameCollisionSets } from './persona-gate-name-collision.mjs'
 import { loadAuthorHashSets } from './persona-name-collision-sets.mjs'
 import { bundlesForPersonas } from './persona-reference-store.mjs'
@@ -185,4 +187,24 @@ export async function readReserveFacts(prisma: Reader, opts: ReserveFactsOptions
 
 export function prismaReserveRepo(prisma: Reader, opts: ReserveFactsOptions): PersonaReserveRepo {
   return { reserveFacts: () => readReserveFacts(prisma, opts) }
+}
+
+/**
+ * 🔴 **계약 유효 Persona 수 — 단계 preflight·D100 계기판이 받는 값은 이것 하나다.**
+ *    salt 는 정본 env 에서만 읽는다(없으면 null → 자격 대조 축은 모름 → 계약 유효로 세지 않는다).
+ *    읽기 실패는 0 이 아니라 null 이다. 활성 행 수로 대신하지 않는다.
+ */
+export async function readContractValidPersonas(
+  prisma: Reader, opts: { now: Date; repoRoot: string },
+): Promise<number | null> {
+  try {
+    const env = readEnvKeys(['VOICE_AUTHOR_HASH_SALT'])
+    const salt = env.ok ? (env.values.VOICE_AUTHOR_HASH_SALT ?? '').trim() : ''
+    const r = await readPersonaReserve(prismaReserveRepo(prisma, {
+      now: opts.now, repoRoot: opts.repoRoot, authorHashSalt: salt === '' ? null : salt,
+    }))
+    return r.contractValid
+  } catch {
+    return null
+  }
 }

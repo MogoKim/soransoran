@@ -30,6 +30,7 @@ import { MACHINE_AGE_HUMAN_REVIEW_REQUIRED } from '../../src/lib/micro-seed-auto
 import type { QueuePostLink, LinkSummary, Measured, StockFunnel } from '../../src/lib/d100-readiness'
 import { summarizeLinks } from '../../src/lib/d100-readiness'
 import { readStageDecision } from '../../src/lib/stage-decision-repo'
+import { readContractValidPersonas } from './persona-reserve-facts.mjs'
 import { kstDateString } from '../../src/lib/release-canary'
 import type { RuntimeStage } from '../../src/lib/scale-profile'
 
@@ -255,7 +256,7 @@ export type StockReadOptions = {
   targetStage: D100Stage
   /** 이 저장소 루트 */
   repoRoot: string
-  /** 🔴 Persona 레인 제공자(`readPersonaReserve(...).contractValid`) — 없으면 모름(null) */
+  /** 🔴 계약 유효 Persona 수를 직접 넣을 때만(시험용). 없으면 Persona 4상태 정본을 읽는다 */
   contractValidPersonas?: number | null
   /**
    * 🔴 **지금 재고를 스냅샷 장부에 적을 것인가.** 기본은 **적지 않는다** —
@@ -402,8 +403,10 @@ export async function readOperationalStock(
       readyStockDeltaPerDay: readyStockDelta.measured ? readyStockDelta.perDay : null,
       publishedPerDay: perDayMeasured(publishedInWindow, THROUGHPUT_WINDOW_DAYS),
       throughputWindowDays: THROUGHPUT_WINDOW_DAYS,
-      // 🔴 Persona 레인 제공자 연결 전 — 모름(null). 최종 통합에서 `readPersonaReserve(...).contractValid` 를 주입한다
-      contractValidPersonas: opts.contractValidPersonas ?? null,
+      // 🔴 Persona 4상태 정본의 계약 유효 수 — 주입값이 있으면 그것, 없으면 같은 정본을 읽는다(실패 → null)
+      contractValidPersonas: opts.contractValidPersonas !== undefined
+        ? opts.contractValidPersonas
+        : await readContractValidPersonas(prisma, { now, repoRoot: opts.repoRoot }),
       collectFailing,
     }
   } catch (e) {
