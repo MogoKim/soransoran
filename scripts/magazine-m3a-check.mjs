@@ -76,7 +76,7 @@ function adaptPage(pg) {
       catch { state = 'none' }
     }
     return state === 'ready'
-      ? { readOk: true, stop: false, units: [{ id: 'fake-assistant-1', role: 'assistant', source: 'new', codeBlocks: [String(text ?? '')], markdown: '', hasActions: true }] }
+      ? { readOk: true, stop: false, units: [{ id: 'fake-assistant-1', role: 'assistant', source: 'new', candidates: [{ form: 'code-block', text: String(text ?? '') }], text: '', hasActions: true }] }
       : { readOk: true, stop: false, units: [] }
   }
   return pg
@@ -4933,6 +4933,18 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
     el('h2', {}, '첫 문단'),
     el('p', {}, '갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40).trim()),
     el('p', {}, '[CTA] 이야기 나눠요'))
+  /**
+   * 🔴 **2026-09-30 실측 rich-block 의 축소 골격.** 원문은 `data-markdown-copy-text` 에 ```markdown 으로 감싸져 있고,
+   *    블록 안에는 제목 머리표(header)와 같은 원문을 담은 편집기(contenteditable 속 pre code)가 있다.
+   */
+  const richBlock = (raw, { title = '시험 원고 제목', editor = true, attrs = {} } = {}) => el('div', {
+    'data-oai-writing-block-surface': '', 'data-markdown-copy': 'rich-block', ...(raw === undefined ? {} : { 'data-markdown-copy-text': raw }), ...attrs },
+    el('div', { 'aria-hidden': 'true' }),
+    el('div', {}, el('header', {}, el('div', {}, title), el('button', { 'aria-label': '복사' })),
+      ...(editor ? [el('div', { contenteditable: 'true', 'aria-label': '작성을 시작하세요', role: 'textbox' },
+        el('pre', {}, el('code', {}, el('span', {}, String(raw ?? '').replace(/^```markdown\n|\n```$/g, '')))))] : [])))
+  const richContent = (...blocks) => el('div', { 'data-markdown-text-style': 'assistant-message' }, ...blocks)
+  const fenced = (t) => `\`\`\`markdown\n${t.replace(/\n$/, '')}\n\`\`\``
   const asstUnit = (aid, content, n = 2) => el('div', { 'data-content-search-unit-key': `fallback-turn-0:${n}:assistant`, 'data-chatgpt-search-unit-key': `fallback-turn-0:${n}:assistant`, 'data-chatgpt-search-message-ids': `${aid} ${aid}` },
     el('h4', { class: 'sr-only m-0 select-none', 'data-conversation-role': 'assistant' }, 'ChatGPT 답변:'),
     el('div', { class: 'group flex min-w-0 flex-col', 'data-chatgpt-selection-conversation-id': 'conv-1', 'data-chatgpt-selection-message-id': aid }, content))
@@ -4944,8 +4956,8 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
   const sNew = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a1', codeBlockContent(MS)), actions())))
   const aNew = sNew.units.find((u) => u.role === 'assistant')
   check('🔴 ㊶ 새 DOM — pre 없이 렌더된 코드블록의 원문을 그대로 읽는다 · 완료 액션 인식',
-    aNew?.id === 'a1' && aNew.codeBlocks.length === 1 && aNew.codeBlocks[0] === MS && aNew.hasActions === true,
-    JSON.stringify({ id: aNew?.id, blocks: aNew?.codeBlocks.length, actions: aNew?.hasActions }))
+    aNew?.id === 'a1' && aNew.candidates.length === 1 && aNew.candidates[0].text === MS && aNew.hasActions === true,
+    JSON.stringify({ id: aNew?.id, cands: aNew?.candidates.length, actions: aNew?.hasActions }))
   const exNew = RESP.extractManuscript(aNew)
   check('  ㊶ 새 DOM — "ChatGPT 답변:" · "Markdown" 머리표가 원고에 섞이지 않는다', exNew.ok && exNew.text === MS && exNew.via === 'code-block', exNew.via)
 
@@ -4954,15 +4966,34 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
   const aOld = RESP.readConversationDom(oldDoc).units.find((u) => u.role === 'assistant')
   check('🔴 ㊶ 옛 DOM (data-message-author-role · pre code) 도 읽는다', aOld?.id === 'o1' && RESP.extractManuscript(aOld).text === MS, aOld?.id)
 
-  // ── 판독: 코드블록 없음 (렌더된 마크다운) ──
-  const aMd = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a2', renderedContent()), actions()))).units.find((u) => u.role === 'assistant')
-  const exMd = RESP.extractManuscript(aMd)
-  check('🔴 ㊶ 코드블록 없는 응답 — 렌더된 마크다운을 원문으로 되돌린다 (frontmatter 복원)',
-    exMd.ok && exMd.via === 'markdown' && exMd.text.startsWith('---\ntitle: 시험 원고\ndescription:') && /\n---\n\n## 첫 문단\n/.test(exMd.text) && exMd.text.includes('[CTA] 이야기 나눠요'),
-    JSON.stringify(String(exMd.text ?? exMd.why).slice(0, 90)))
-  // 🔴 원문을 못 꺼냈으면 관문에 빈 문자열을 넣어 FAIL 로 남긴다 — 예외로 이후 시험을 끊지 않는다
-  check('🔴 ㊶ 되돌린 원문이 실제 원고 관문을 통과한다 (frontmatter·H2·CTA)', exMd.ok && MG41.validateManuscript(exMd.text).ok,
-    JSON.stringify(MG41.validateManuscript(exMd.text ?? '').reasons ?? []))
+  // ── 판독: rich-block (2026-09-30 실측) ──
+  const MS0 = MS.replace(/\n$/, '')
+  const aRich = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('r1', richContent(richBlock(fenced(MS), { title: '오랜만인 친구에게 먼저 연락해도 될까요?' }))), actions()))).units.find((u) => u.role === 'assistant')
+  const exRich = RESP.extractManuscript(aRich)
+  check('🔴 ㊶ rich-block 위에 제목이 있어도 원문은 --- 로 시작한다 (제목 머리표 미포함)',
+    exRich.ok && exRich.via === 'rich-block' && exRich.text.startsWith('---\ntitle: 시험 원고\n') && !exRich.text.includes('오랜만인 친구에게'),
+    JSON.stringify(String(exRich.text ?? exRich.why).slice(0, 60)))
+  check('🔴 ㊶ rich-block — ```markdown 감싸기만 정확히 벗기고 frontmatter 부터 끝까지 보존',
+    exRich.ok && exRich.text === MS0 && !exRich.text.includes('```'), `${exRich.text?.length} vs ${MS0.length}`)
+  check('  ㊶ rich-block 안의 편집기 pre code 는 후보로 세지 않는다 (같은 원문 이중 계산 없음)', aRich?.candidates?.length === 1, String(aRich?.candidates?.length))
+  check('🔴 ㊶ 되찾은 원문이 실제 원고 관문을 통과한다 (frontmatter·H2·CTA)', exRich.ok && MG41.validateManuscript(exRich.text).ok,
+    JSON.stringify(MG41.validateManuscript(exRich.text ?? '').reasons ?? []))
+  check('  ㊶ 감싸지 않은 원문 속성은 그대로 쓴다', RESP.stripMarkdownFence(MS0) === MS0 && RESP.stripMarkdownFence('```\nA\n```') === 'A' && RESP.stripMarkdownFence('```md\nA\nB\n```\n') === 'A\nB')
+  const exMulti = RESP.extractManuscript(RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('r2', richContent(richBlock(fenced(MS)), richBlock(fenced(MS)))), actions()))).units.find((u) => u.role === 'assistant'))
+  const exMix = RESP.extractManuscript(RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('r3', richContent(richBlock(fenced(MS)), el('pre', {}, el('code', {}, MS)))), actions()))).units.find((u) => u.role === 'assistant'))
+  check('🔴 ㊶ 원문 후보가 여러 개면 고르지 않는다 (rich-block 2 · rich-block+코드블록)',
+    !exMulti.ok && exMulti.code === 'response_multiple_candidates' && !exMix.ok && exMix.code === 'response_multiple_candidates', `${exMulti.code} · ${exMix.code}`)
+  const exNoAttr = RESP.extractManuscript(RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('r4', richContent(richBlock(undefined))), actions()))).units.find((u) => u.role === 'assistant'))
+  const exEmpty = RESP.extractManuscript(RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('r5', richContent(richBlock('  '))), actions()))).units.find((u) => u.role === 'assistant'))
+  check('🔴 ㊶ rich-block 속성 누락·빈 값 → 저장 0 (편집기 글자로 대신하지 않는다)',
+    !exNoAttr.ok && exNoAttr.code === 'response_rich_block_empty' && !exEmpty.ok && exEmpty.code === 'response_rich_block_empty', `${exNoAttr.code} · ${exEmpty.code}`)
+  const exRendered = RESP.extractManuscript(RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('r6', renderedContent()), actions()))).units.find((u) => u.role === 'assistant'))
+  check('🔴 ㊶ 그 밖의 형태(렌더된 마크다운만)는 추측하지 않는다 — response_format_unknown',
+    !exRendered.ok && exRendered.code === 'response_format_unknown' && exRendered.form === 'unknown', exRendered.code)
+  const FK41a = await import('./lib/magazine-failure-kind.mjs')
+  check('🔴 ㊶ 보낸 뒤 판독 실패 코드는 전부 전송불명(DELIVERY_UNCERTAIN)이다',
+    ['response_format_unknown', 'response_multiple_candidates', 'response_rich_block_empty']
+      .every((c) => FK41a.classifyFailure({ code: c, sent: true }).kind === 'DELIVERY_UNCERTAIN'))
 
   // ── 관찰기: 부분 생성 → 끝 → 안정 ──
   const empty = RESP.readConversationDom(docOf(turn('u0', userUnit('u0'))))
@@ -5008,7 +5039,7 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
   // ── 관찰기: 판정 불가 ──
   const two = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('x1', codeBlockContent(MS), 2), asstUnit('x2', codeBlockContent(MS), 3), actions())))
   const r3 = RESP.createResponseWatch(empty, { stablePolls: 2 }).observe(two)
-  const noId = { readOk: true, stop: false, units: [{ id: null, role: 'assistant', source: 'old', codeBlocks: [MS], markdown: '', hasActions: false }] }
+  const noId = { readOk: true, stop: false, units: [{ id: null, role: 'assistant', source: 'old', candidates: [{ form: 'code-block', text: MS }], text: '', hasActions: false }] }
   const r4 = RESP.createResponseWatch(empty, { stablePolls: 2 }).observe(noId)
   const r5 = RESP.createResponseWatch(withOld, { stablePolls: 2 }).observe(full)
   check('🔴 ㊶ 새 응답 2개 · 식별자 없음 · 기준선 응답 소실 → 판정 불가(저장 0)',
@@ -5048,16 +5079,33 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
       before: baseDoc,
       after: [
         docOf(turn('u1', userUnit('u1'), asstUnit('m1', el('div', { 'data-markdown-text-style': 'assistant-message' }, el('hr', {}))), stopBtn())),
-        docOf(turn('u1', userUnit('u1'), asstUnit('m1', renderedContent()), actions())),
+        docOf(turn('u1', userUnit('u1'), asstUnit('m1', richContent(richBlock(fenced(MS), { title: '제목 머리표' }))), actions())),
       ],
     }
     const W1 = pageWith(mdFrames)
     const out1 = path.join(T, 'out1.md')
     const f1 = await SESS41.fetchManuscript({ briefPath, outPath: out1, promptText: '시험', validate: MG41.validateManuscript,
       pollMs: 1, stablePolls: 2, timeoutMs: 2000, ...W1.deps })
-    check('🔴 ㊶ [통합] 코드블록 없는 일반 마크다운 응답을 회수해 저장한다 (via markdown · 관문 통과)',
-      f1.ok && f1.via === 'markdown' && fs.existsSync(out1) && fs.readFileSync(out1, 'utf8').startsWith('---\ntitle: 시험 원고') && W1.sends === 1,
+    check('🔴 ㊶ [통합] rich-block 응답을 회수해 저장한다 (via rich-block · --- 로 시작 · 관문 통과 · send 1)',
+      f1.ok && f1.via === 'rich-block' && fs.existsSync(out1) && fs.readFileSync(out1, 'utf8').startsWith('---\ntitle: 시험 원고') && W1.sends === 1,
       `${f1.reason ?? 'ok'} · via ${f1.via} · send ${W1.sends}`)
+    check('  ㊶ [통합] 성공 결과에 응답 식별자·형태를 남긴다', f1.assistantMessageId === 'm1' && f1.responseForm === 'rich-block', `${f1.assistantMessageId} · ${f1.responseForm}`)
+    // 🔴 모르는 형태 → 전송불명 중단 · 저장 0 · 추가 send 0 · 실패해도 대화 주소·식별자·형태 보존
+    const W5 = pageWith({ before: baseDoc, after: [docOf(turn('u1', userUnit('u1'), asstUnit('m5', renderedContent()), actions()))] })
+    const out5 = path.join(T, 'out5.md')
+    const f5 = await SESS41.fetchManuscript({ briefPath, outPath: out5, promptText: '시험', validate: MG41.validateManuscript,
+      pollMs: 1, stablePolls: 2, timeoutMs: 2000, ...W5.deps })
+    check('🔴 ㊶ [통합] 판독 실패 → 저장 0 · 추가 send 0 · 전송불명 · 대화 주소·응답 식별자·형태·stage 보존',
+      !f5.ok && f5.reason === 'response_format_unknown' && f5.sent === true && W5.sends === 1 && !fs.existsSync(out5)
+        && f5.conversationUrl === 'https://chatgpt.com/c/conv-1' && f5.assistantMessageId === 'm5' && f5.responseForm === 'unknown' && f5.stage === 'await-response',
+      JSON.stringify({ r: f5.reason, sends: W5.sends, url: f5.conversationUrl, id: f5.assistantMessageId, form: f5.responseForm, stage: f5.stage }))
+    const W6 = pageWith({ before: baseDoc, after: [docOf(turn('u1', userUnit('u1'), asstUnit('m6', richContent(richBlock(fenced('제목 없이 시작한 글')))), actions()))] })
+    const f6 = await SESS41.fetchManuscript({ briefPath, outPath: path.join(T, 'out6.md'), promptText: '시험', validate: MG41.validateManuscript,
+      pollMs: 1, stablePolls: 2, timeoutMs: 2000, ...W6.deps })
+    check('🔴 ㊶ [통합] 관문 실패(invalid_manuscript)도 대화 주소·응답 식별자·형태·stage 를 남긴다',
+      !f6.ok && f6.reason === 'invalid_manuscript' && f6.conversationUrl === 'https://chatgpt.com/c/conv-1' && f6.assistantMessageId === 'm6'
+        && f6.responseForm === 'rich-block' && f6.stage === 'validate' && W6.sends === 1,
+      JSON.stringify({ r: f6.reason, url: f6.conversationUrl, id: f6.assistantMessageId, form: f6.responseForm, stage: f6.stage }))
     check('  ㊶ [통합] 대화 주소를 남긴다 (쿼리 제거)', f1.conversationUrl === 'https://chatgpt.com/c/conv-1', String(f1.conversationUrl))
 
     const W2 = pageWith({ before: baseDoc, after: [docOf(turn('u1', userUnit('u1'), asstUnit('m2', codeBlockContent(MS.slice(0, 300)))), stopBtn())] })
@@ -5275,6 +5323,128 @@ console.log('\n㊸ HOLD 는 처리 자리를 쓰지 않는다 — 시도·등록
     check('  ㊸ HOLD 는 장부를 쓰지 않고 정상 실패만 센다 (대조군)',
       st6.h1?.attempts === 2 && st6.h1?.kind === undefined && st6.n1?.attempts === 1 && st6.n1?.kind === 'CONTENT',
       JSON.stringify([st6.h1, st6.n1?.attempts, st6.n1?.kind]))
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊹ 무전송 회수 — 이미 온 응답만 읽는다 · send·composer 0 · 신원·지문 불일치면 저장 0')
+{
+  /**
+   * 🔴 **2026-09-30 실측.** 원고는 rich-block 으로 온전히 왔는데 판독 결함으로 저장 0 · 같은 지문 HOLD.
+   *    다시 보내지 않고, 신원이 확정된 그 대화에서만 원문을 읽는다. 실제 `recoverSlug` → 실제 `recoverManuscript`.
+   */
+  const W44 = await import('./magazine-webui-runner.mjs')
+  const DG44 = await import('./lib/magazine-delivery-gate.mjs')
+  const FR44 = await import('./lib/magazine-fetch-result.mjs')
+  const SLUG44 = 'recover-canary'
+  const DATE44 = '2026-09-30'
+  const URL44 = 'https://chatgpt.com/c/6abc5296-452c-83ee-8788-44b8b66c8308'
+  const el44 = (tag, attrs = {}, ...kids) => {
+    const node = { tagName: tag.toUpperCase(), parentElement: null, attrs, kids: [] }
+    node.getAttribute = (k) => (k in attrs ? String(attrs[k]) : null)
+    for (const k of kids.flat()) if (k && typeof k === 'object') { k.parentElement = node; node.kids.push(k) } else if (k !== undefined && k !== null) node.kids.push(String(k))
+    Object.defineProperty(node, 'children', { get: () => node.kids.filter((k) => typeof k === 'object') })
+    Object.defineProperty(node, 'textContent', { get: () => node.kids.map((k) => (typeof k === 'object' ? k.textContent : k)).join('') })
+    return node
+  }
+  const doc44 = (...kids) => ({ body: el44('body', {}, el44('main', {}, ...kids)) })
+  const MS44 = `---\ntitle: 시험 회수\ndescription: 우리 또래가 오래된 친구에게 먼저 연락할지 망설이는 마음을 천천히 들여다보는 시험 원고입니다\ncluster: relationship\n---\n\n## 첫 문단\n${'오래된 이름 앞에서 손이 멈추는 날이 있습니다. '.repeat(60)}\n\n[CTA] /community/free | 이야기 남기기 | 남겨 주세요\n`
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-recover-'))
+  try {
+    const drafts = path.join(T, 'drafts')
+    fs.mkdirSync(path.join(drafts, SLUG44), { recursive: true })
+    fs.writeFileSync(path.join(drafts, SLUG44, 'brief.md'), '# 시험 brief\n\n본문 지시 `코드` 표시가 있다\n')
+    const planned = DG44.plannedMessageFor(SLUG44, drafts)
+    const fp = DG44.deliveryGate({ slug: SLUG44, draftsDir: drafts, quarantinePath: path.join(T, 'none.json') }).messageFingerprint
+    const deliveryRow = { sent: null, messageFingerprint: fp, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', at: 1, runId: 'r1', date: DATE44, reservationId: 'res-44' }
+    const setup = (name, { ledgerFp = fp, rowUrl = null, rowFp = fp } = {}) => {
+      const L = path.join(T, `${name}-q.json`)
+      saveQuarantine({ [SLUG44]: { attempts: 1, regenCalls: 1, delivery: { ...deliveryRow, messageFingerprint: ledgerFp } } }, L)
+      const R = path.join(T, `${name}-r.json`)
+      FR44.writeFetchResults(R, { date: DATE44, runId: 'r1', mode: 'fetch-run', sentTotal: 1,
+        results: [{ slug: SLUG44, status: 'failed', reason: 'invalid_manuscript', sent: true, messageFingerprint: rowFp, conversationUrl: rowUrl }] })
+      const draft = path.join(drafts, SLUG44, 'draft.md')
+      fs.rmSync(draft, { force: true })
+      return { L, R, draft }
+    }
+    const userBubble = (t) => el44('div', { 'data-chatgpt-search-unit-key': 'fallback-turn-0:0:user', 'data-chatgpt-search-message-ids': 'u-1' },
+      el44('div', { 'data-user-message-bubble': 'true' }, el44('div', {}, String(t).replace(/`/g, ''))), el44('button', { 'aria-label': '메시지 복사' }))
+    const asst = (id, raw) => el44('div', { 'data-chatgpt-search-unit-key': 'fallback-turn-0:1:assistant', 'data-chatgpt-search-message-ids': id },
+      el44('div', { 'data-markdown-text-style': 'assistant-message' }, el44('div', { 'data-markdown-copy': 'rich-block', 'data-markdown-copy-text': raw },
+        el44('header', {}, '오랜만인 친구에게 먼저 연락해도 될까요?'), el44('div', { contenteditable: 'true', role: 'textbox' }, el44('pre', {}, el44('code', {}, MS44))))))
+    const turn44 = (...kids) => el44('div', { 'data-turn-key': 't1' }, ...kids, el44('button', { 'aria-label': '응답 다시 생성' }))
+    const fenced44 = '```markdown\n' + MS44.replace(/\n$/, '') + '\n```'
+    const fakeBrowser = (docFn, { landUrl = URL44 } = {}) => {
+      const w = { sends: 0, typed: 0, locators: 0, opened: 0 }
+      let cur = null
+      const page = {
+        async goto(u) { cur = u; w.opened += 1 }, async waitForTimeout() {}, async close() {},
+        url: () => landUrl ?? cur,
+        async evaluate(fn) { return fn(docFn()) },
+        locator() { w.locators += 1; return { first: () => ({ async click() { w.sends += 1 } }), async click() { w.sends += 1 } } },
+        keyboard: { async insertText() { w.typed += 1 }, async press() { w.typed += 1 } },
+      }
+      w.deps = { ensureTab: async () => ({ ok: true }), connect: async () => ({ contexts: () => [{ newPage: async () => page }], async close() {} }), settleMs: 0 }
+      return w
+    }
+    const okAccess = async () => ({ status: 'ok' })
+    const run44 = (paths, w, opts = {}) => W44.recoverSlug(SLUG44, { conversationUrl: URL44, date: DATE44, resultPath: paths.R, quarantinePath: paths.L,
+      draftsDir: drafts, browserDeps: w.deps, accessFn: okAccess, ...opts })
+
+    // ── 성공: 기존 응답 1건 회수 ──
+    const P1 = setup('ok')
+    const B1 = fakeBrowser(() => doc44(turn44(userBubble(planned), asst('a-44', fenced44))))
+    const r1 = await run44(P1, B1)
+    const e1 = readQuarantine(P1.L).store[SLUG44] ?? {}
+    const row1 = FR44.readFetchResults(P1.R).body
+    const d1 = fs.existsSync(P1.draft) ? fs.readFileSync(P1.draft, 'utf8') : ''
+    check('🔴 ㊹ 기존 응답 1건 회수 — draft 는 --- 로 시작 · 제목 머리표 없음 · 원문 그대로',
+      r1.status === 'ok' && d1 === MS44.replace(/\n$/, '') && d1.startsWith('---\n') && !d1.includes('오랜만인 친구에게'), `${r1.status} ${r1.reason ?? ''} ${r1.errorDetail ?? ''} · ${d1.length}`)
+    check('🔴 ㊹ 재전송 0 — send 클릭 0 · composer 입력 0 · locator 0', B1.sends === 0 && B1.typed === 0 && B1.locators === 0, JSON.stringify(B1))
+    check('🔴 ㊹ 같은 지문 DELIVERY_UNCERTAIN 만 성공 경로처럼 해소 · attempts·regenCalls 증가 0',
+      e1.delivery === undefined && e1.attempts === 1 && e1.regenCalls === 1 && r1.released === true, JSON.stringify(e1))
+    check('🔴 ㊹ 구조화 결과를 status ok 로 기록 · sentTotal 1 그대로 · 대화 주소·응답 식별자·형태',
+      row1.results[0].status === 'ok' && row1.sentTotal === 1 && row1.runId === 'r1' && row1.results[0].conversationUrl === URL44
+        && row1.results[0].assistantMessageId === 'a-44' && row1.results[0].responseForm === 'rich-block', JSON.stringify(row1.results[0]))
+    check('  ㊹ 회수 뒤 slug lease 잔여 0', !fs.existsSync(path.join(T, 'magazine-manuscript-leases', `${SLUG44}.lease`)))
+
+    // ── 반례: 하나라도 어긋나면 저장 0 · 장부 불변 ──
+    const refuse = async (name, setupOpts, docFn, browserOpts = {}, runOpts = {}) => {
+      const P = setup(name, setupOpts)
+      const before = fs.readFileSync(P.L, 'utf8')
+      const B = fakeBrowser(docFn, browserOpts)
+      const r = await run44(P, B, runOpts)
+      return { r, B, kept: fs.readFileSync(P.L, 'utf8') === before, noDraft: !fs.existsSync(P.draft),
+        rowFailed: FR44.readFetchResults(P.R).body.results[0].status === 'failed' }
+    }
+    const good = () => doc44(turn44(userBubble(planned), asst('a-44', fenced44)))
+    const x1 = await refuse('fp', { ledgerFp: 'sha256:other' }, good)
+    check('🔴 ㊹ 지문 불일치 → 저장 0 · 기존 HOLD 유지 · 대화를 열지 않는다',
+      x1.r.reason === 'recover_fingerprint_mismatch' && x1.kept && x1.noDraft && x1.B.opened === 0, `${x1.r.reason} · opened ${x1.B.opened}`)
+    const x2 = await refuse('who', {}, () => doc44(turn44(userBubble('사람이 쓴 다른 대화입니다'), asst('a-44', fenced44))))
+    check('🔴 ㊹ 대화의 사용자 메시지가 우리가 보낸 것과 다르면 저장 0 · HOLD 유지',
+      x2.r.reason === 'recover_identity_mismatch' && x2.kept && x2.noDraft && x2.rowFailed, x2.r.reason)
+    const x3 = await refuse('redirect', {}, good, { landUrl: 'https://chatgpt.com/' })
+    check('🔴 ㊹ 다른 주소로 열리면 저장 0', x3.r.reason === 'recover_identity_mismatch' && x3.kept && x3.noDraft, x3.r.reason)
+    const x4 = await refuse('two', {}, () => doc44(turn44(userBubble(planned), asst('a-44', fenced44), asst('a-45', fenced44))))
+    check('🔴 ㊹ 응답이 둘 이상인 대화 → 저장 0 (한 번 보낸 한 대화가 아니다)', x4.r.reason === 'recover_identity_mismatch' && x4.kept && x4.noDraft, x4.r.reason)
+    const x5 = await refuse('url', { rowUrl: 'https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }, good)
+    check('🔴 ㊹ 결과 행의 대화 주소와 다르면 저장 0', x5.r.reason === 'recover_identity_mismatch' && x5.kept && x5.noDraft && x5.B.opened === 0, x5.r.reason)
+    const x6 = await refuse('form', {}, () => doc44(turn44(userBubble(planned), asst('a-44', ''))))
+    check('🔴 ㊹ rich-block 원문 속성이 비었으면 저장 0 · HOLD 유지', x6.r.reason === 'response_rich_block_empty' && x6.kept && x6.noDraft, x6.r.reason)
+    const x7 = await refuse('check', {}, good, {}, { checkOnly: true })
+    check('🔴 ㊹ --check 는 신원·원문·관문까지만 — 쓰기 0 · 장부 불변', x7.r.status === 'ok' && x7.r.checkOnly === true && x7.kept && x7.noDraft && x7.rowFailed, x7.r.status)
+    const x8 = await refuse('access', {}, good, {}, { accessFn: async () => ({ status: 'profile_mismatch' }) })
+    check('🔴 ㊹ 전용 자동화 프로필 신원 확인 실패 → 대화를 열지 않는다 · 저장 0', x8.r.status === 'failed' && x8.B.opened === 0 && x8.kept && x8.noDraft, x8.r.reason)
+    const P9 = setup('exists')
+    fs.writeFileSync(P9.draft, '사람이 둔 원고')
+    const r9 = await run44(P9, fakeBrowser(good))
+    check('  ㊹ draft.md 가 이미 있으면 덮지 않는다', r9.reason === 'recover_draft_exists' && fs.readFileSync(P9.draft, 'utf8') === '사람이 둔 원고', r9.reason)
+    fs.rmSync(P9.draft, { force: true })
+    const all = [B1, x1.B, x2.B, x3.B, x4.B, x5.B, x6.B, x7.B, x8.B]
+    check('🔴 ㊹ 모든 회수 시도에서 send·composer 호출 합계 0', all.every((b) => b.sends === 0 && b.typed === 0 && b.locators === 0))
+    const src44 = fs.readFileSync('scripts/lib/chatgpt-session.mjs', 'utf8')
+    const body44 = src44.slice(src44.indexOf('export async function recoverManuscript'), src44.indexOf('export async function fetchManuscript'))
+    check('  ㊹ 회수 함수 본문에 composer·send·keyboard 경로가 없다', !/composerLocator|send-button|keyboard|insertText|\.click\(/.test(body44))
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
