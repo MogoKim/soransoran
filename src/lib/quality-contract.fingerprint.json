@@ -17,7 +17,7 @@
     "scripts/lib/content-core-run.mts": "9f76ffba824a151d360740ed4d0109bdf6c49a169387210a4edc2859e963ac51",
     "scripts/lib/content-core-prompts.mts": "b3d2a4a22966d822d114d1162f57b0606c92aec0db1d40e7ae59d5b174112751",
     "src/lib/auto-ready-quality-cohort.ts": "cdd18f8b1346f49ae37f8244ac2b353e98b726097a07100cfaa207dfe7e0ddbe",
-    "src/lib/auto-ready-repo.ts": "09b346fd25310f7f8a647f8f5cd5022e70c440b80388263fbbf3768b5c86d8bd",
+    "src/lib/auto-ready-repo.ts": "32e164b45cd42e6f99de944b1a76784c1a96b0a5a5d7a1176a4a5f255f5ffb40",
     "src/lib/auto-ready-evidence.ts": "44876509f73df30bc067263cf3040203a44aafd93863b611a96ed2beee1f1503",
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
     "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d",
@@ -27,7 +27,7 @@
   },
   "acknowledgement": {
     "kind": "behaviorUnchanged",
-    "reason": "사후 감사 표본 선정(selectAudits)의 모집단을 전 기간 누적에서 그날(KST) 자동 발행으로 바꿨다 — 초안·검수·도장·발행 재검증 판정은 불변",
+    "reason": "도장 트랜잭션(stampAutoReady·stampRound)을 엔진이 잃은 P2028(Transaction not found·만료) 에 한해 최대 1회 새로 시작 — 열림·적격·CAS 판정과 결과는 그대로",
     "changedFiles": [
       "src/lib/auto-ready-repo.ts"
     ]

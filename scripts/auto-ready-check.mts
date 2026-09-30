@@ -7,6 +7,8 @@
  */
 import { readFileSync } from 'node:fs'
 
+import { Prisma } from '@prisma/client'
+
 import {
   warningsOfGate, semanticIssues, eligibilityOf, judgeRow, CONTRACT, AUTO_DECIDER, HUMAN_DECIDER,
   NO_SEMANTIC_RECORD, SEMANTIC_INVALID, SEMANTIC_HOLDS_MISMATCH,
@@ -14,6 +16,7 @@ import {
   autoReadyEnabled, AUTO_READY_ENV, judgeOpen, auditTarget, pickAudits, mergeDefect, isHumanEditRecord,
   AUDIT_CONTRACT_VERSION, verdictShapeOk,
 } from '../src/lib/auto-ready-v2'
+import { isTransientTxLost, withStampTxRetry, STAMP_TX_MAX_ATTEMPTS } from '../src/lib/auto-ready-repo'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { releaseStageCeiling, boundedReleaseStage, resolveScale } from '../src/lib/scale-runtime'
 import {
@@ -760,6 +763,69 @@ console.log('\n⑯ 🔴 rule 감사자는 "무결성·안전 감사" 다 — 의
   check('🔴 🔴 **규칙 감사자·판정 조각이 "독립 (의미) 감사" 를 한다고 주장하지 않는다**', !claims(judge) && !claims(codeOnly('src/lib/auto-ready-v2.ts')))
   check('🔴 🔴 **러너는 의미 감사를 실제로 부른다 — 규칙 감사만으로 기록하지 않는다**',
     /runCombinedAuditRound\(/.test(runner) && /makeAuditContextLoader\(/.test(runner) && !/runAuditRound\(/.test(runner))
+}
+
+console.log('\n⑰ 🔴 🔴 도장 트랜잭션 P2028 — 트랜잭션을 잃은 두 문구만 · 최대 1회 새로 시작 (2026-09-30 운영 반례)')
+{
+  /**
+   * 🔴 문구는 지어내지 않았다 — 운영 로그(09-30 09:40 · stampRowInTx)의 `meta.error` 원문과,
+   *    격리 DB 에서 실제 엔진이 낸 `meta.error` 원문(만료 query/commit · commit 뒤 · rollback 뒤)을 그대로 옮겼다.
+   */
+  const NOT_FOUND = "Transaction not found. Transaction ID is invalid, refers to an old closed transaction Prisma doesn't have information about anymore, or was obtained before disconnecting."
+  const EXPIRED_Q = 'Transaction already closed: A query cannot be executed on an expired transaction. The timeout for this transaction was 20000 ms, however 20041 ms passed since the start of the transaction. Consider increasing the interactive transaction timeout or doing less work in the transaction.'
+  const EXPIRED_C = 'Transaction already closed: A commit cannot be executed on an expired transaction. The timeout for this transaction was 20000 ms, however 20007 ms passed since the start of the transaction. Consider increasing the interactive transaction timeout or doing less work in the transaction.'
+  const COMMITTED = 'Transaction already closed: A query cannot be executed on a committed transaction.'
+  const ROLLED = 'Transaction already closed: A query cannot be executed on a transaction that was rolled back.'
+  const kre = (code: string, meta?: Record<string, unknown>, message = `Transaction API error: ${String(meta?.error ?? '')}`) =>
+    new Prisma.PrismaClientKnownRequestError(message, { code, clientVersion: '6.19.3', meta })
+  const p2028 = (error: string) => kre('P2028', { modelName: 'OriginalPostApprovalQueue', error })
+  check('🔴 🔴 **운영 로그 원문 "Transaction not found…" → transient**', isTransientTxLost(p2028(NOT_FOUND)))
+  check('🔴 만료 — query · commit (엔진 원문) → transient', isTransientTxLost(p2028(EXPIRED_Q)) && isTransientTxLost(kre('P2028', { error: EXPIRED_C })))
+  const nonTarget: [string, unknown][] = [
+    ['commit 된 트랜잭션 사용(코드 결함)', p2028(COMMITTED)],
+    ['rollback 된 트랜잭션 사용', p2028(ROLLED)],
+    ['시작 대기 초과', p2028('Unable to start a transaction in the given time.')],
+    ['중첩 시작', p2028('Attempted to start a transaction inside of a transaction.')],
+    ['알 수 없는 응답', p2028('Transaction already closed: Unexpected response: x')],
+    ['meta 없음(문구는 message 에만)', kre('P2028', undefined, `Transaction API error: ${NOT_FOUND}`)],
+    ['meta.error 가 문자열이 아님', kre('P2028', { error: { NOT_FOUND } })],
+    ['문구가 앞에 오지 않음', p2028(`wrapped: ${NOT_FOUND}`)],
+    ['P2034 에 같은 문구', kre('P2034', { error: NOT_FOUND })],
+    ['P2002', kre('P2002', { target: ['x'] })],
+    ['Prisma 오류가 아닌 Error', new Error(NOT_FOUND)],
+  ]
+  const wrongly = nonTarget.filter(([, e]) => isTransientTxLost(e)).map(([n]) => n)
+  check(`🔴 🔴 **P2028 전체가 아니다 — 비대상 ${nonTarget.length}종은 transient 아님**`, wrongly.length === 0, wrongly.join(' · '))
+
+  const attempt = async (errs: unknown[]): Promise<{ calls: number; ok: boolean; thrown: unknown }> => {
+    let calls = 0
+    try {
+      await withStampTxRetry(async () => { calls += 1; const e = errs[calls - 1]; if (e !== undefined) throw e; return 'ok' })
+      return { calls, ok: true, thrown: null }
+    } catch (e) { return { calls, ok: false, thrown: e } }
+  }
+  const once = await attempt([p2028(NOT_FOUND)])
+  check('🔴 🔴 **transient 1회 → 트랜잭션 전체를 한 번 새로 열어 성공 (시도 2)**', once.ok && once.calls === 2, JSON.stringify(once))
+  const twice = await attempt([p2028(NOT_FOUND), p2028(EXPIRED_Q), p2028(NOT_FOUND)])
+  check('🔴 🔴 **두 번째도 잃으면 던진다 — 시도는 정확히 2 (무한·3회 없음)**',
+    !twice.ok && twice.calls === 2 && isTransientTxLost(twice.thrown), JSON.stringify({ calls: twice.calls, ok: twice.ok }))
+  const other = await attempt([p2028(COMMITTED)])
+  check('🔴 🔴 **비대상 P2028 → 재시도 없이 즉시 던진다 (시도 1)**', !other.ok && other.calls === 1 && other.thrown instanceof Prisma.PrismaClientKnownRequestError)
+  for (const code of ['P2034', 'P2002']) {
+    const r = await attempt([kre(code, { error: 'x' })])
+    check(`🔴 ${code} 는 retry 가 건드리지 않는다 — 시도 1 · 그대로 부르는 쪽(race)으로`, !r.ok && r.calls === 1 && (r.thrown as { code?: string }).code === code)
+  }
+  const clean = await attempt([])
+  check('정상 → 시도 1', clean.ok && clean.calls === 1)
+  check('🔴 최대 시도 상수는 2', STAMP_TX_MAX_ATTEMPTS === 2)
+
+  const repo = codeOnly('src/lib/auto-ready-repo.ts')
+  check('🔴 🔴 **retry 는 도장 트랜잭션 둘(stampAutoReady · stampRound)에만 — 다른 트랜잭션은 그대로**',
+    (repo.match(/withStampTxRetry\(\(\) => prisma\.\$transaction\(/g) ?? []).length === 2
+    && /export async function stampAutoReady\([\s\S]*?return await withStampTxRetry\(\(\) => prisma\.\$transaction\([\s\S]*?\}, SERIALIZABLE\)\)\s*\} catch \(e\) \{\s*if \(isConflict\(e\)\) return \{ kind: 'race'/.test(repo)
+    && /const outs = await withStampTxRetry\(\(\) => prisma\.\$transaction\([\s\S]*?\}, SERIALIZABLE\)\)\s*for \(const k of outs\) bump\(k\)\s*\} catch \(e\) \{\s*if \(!isConflict\(e\)\) throw e/.test(repo))
+  check('🔴 🔴 **P2034/P2002 race 계약은 그대로**',
+    /const isConflict = \(e: unknown\): boolean =>\s*e instanceof Prisma\.PrismaClientKnownRequestError && \(e\.code === 'P2034' \|\| e\.code === 'P2002'\)/.test(repo))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
