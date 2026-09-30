@@ -24,6 +24,7 @@
  *       (`src/lib/original-post-publish-tx.ts` · `src/lib/persona-publish-tx.ts`).
  */
 import { leftoverPlaceholders, programArguments, render, valueOf } from './launchd-install.mjs'
+import { PUBLISH_RUN_DIR_NAME } from './publish-run-record.mjs'
 
 /** 🔴 2 = 레인 단위 묶음(lane 필드). 1(호스트 전체 묶음)은 받지 않는다 */
 export const BUNDLE_FORMAT_VERSION = 2
@@ -150,6 +151,12 @@ const EXACT_RULES: Readonly<Record<string, EntryRule>> = {
   'persona-comment-eval': { kind: 'state', reason: '댓글 평가 기록' },
   'persona-reference': { kind: 'state', reason: '화자 reference 고정 배정' },
   'publish-heartbeat': { kind: 'state', reason: '발행 heartbeat 틱 기록' },
+  /**
+   * 🔴 **싣지 않는다.** 원 호스트 launchd 회차의 기록이다. 옮기면 대상에서 한 번도 안 돈 러너가
+   *    07:00 판정에서 "최근 실제 회차 성공" 으로 읽힌다 — 재등록을 정상으로 간주하는 것과 같다.
+   *    대상은 기록 없음(모름)에서 시작해 첫 heartbeat 로 채운다.
+   */
+  [PUBLISH_RUN_DIR_NAME]: { kind: 'exclude', reason: '원 호스트 발행 회차 기록 — 대상은 첫 회차로 새로 쓴다(옮기면 안 돈 러너가 정상으로 읽힌다)' },
   'runner-recover': { kind: 'state', reason: '러너 복구 표식' },
   'auto-ready-audit': { kind: 'state', reason: '감사 러너 잠금 디렉터리(잠금 파일은 뺀다)' },
   'auto-ready-audit-ledger': { kind: 'state', reason: '감사 예산 장부' },
