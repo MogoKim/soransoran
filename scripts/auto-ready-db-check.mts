@@ -18,7 +18,7 @@
  *   export DATABASE_URL=... DIRECT_URL=... SORAN_ISOLATED_DB=yes-throwaway
  *   npx prisma migrate deploy && npm run auto-ready:db-check
  */
-import { PrismaClient } from '@prisma/client'
+import { Prisma, PrismaClient } from '@prisma/client'
 
 import {
   AUTO_DECIDER, HUMAN_DECIDER, AUTO_READY_RECORD_KEY, AUDIT_CONTRACT_VERSION,
@@ -26,7 +26,7 @@ import {
 } from '../src/lib/auto-ready-v2'
 import {
   authoritativeGate, stampAutoReady, stampRound, selectAudits, recordAuditResult,
-  confirmedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL, STAMP_BATCH_SIZE,
+  confirmedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL, STAMP_BATCH_SIZE, isTransientTxLost,
 } from '../src/lib/auto-ready-repo'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import {
@@ -304,6 +304,175 @@ async function main(): Promise<void> {
       [...rc].map(([k, v]) => `${k} ${v}`).join(' '))
     // 🔴 이 행들은 이후 구간의 발행 대상이 되지 않게 치운다(도장만 찍힌 채 남으면 selector 가 고른다)
     await prisma.originalPostApprovalQueue.updateMany({ where: { id: { in: [...many, extra.id] } }, data: { status: 'EXPIRED' } })
+  }
+
+  console.log('\n⑤-c 🔴 🔴 도장 트랜잭션이 엔진에서 사라졌다(P2028) — 한 번만 새로 시작 · 부분 커밋 0 · 중복 도장 0 (2026-09-30 운영 반례)')
+  {
+    /**
+     * 🔴 **P2028 을 지어내지 않는다.** 운영 반례는 엔진이 트랜잭션 id 를 잊은 것이다("Transaction not found").
+     *    격리 DB 에서 **실제로** 같은 일을 만든다 — 도장 트랜잭션 안에서 지정한 행을 읽기 직전에
+     *    엔진 연결을 끊었다 다시 붙인다(`$disconnect`→`$connect`). 그러면 진짜 엔진이 진짜 P2028 을 던지고,
+     *    Postgres 는 끊긴 연결의 트랜잭션(앞 행의 도장 쓰기 포함)을 실제로 롤백한다. fixture 가 실제보다 강하지 않다.
+     *    비대상 P2028 도 진짜다 — 이미 commit 된 트랜잭션 클라이언트로 읽게 해 엔진이 내는 "committed transaction" 이다.
+     *    P2034/P2002 만 같은 code 의 PrismaClientKnownRequestError 를 던진다(실제 동시 충돌은 ⑤ · ⑤-b 가 본다).
+     */
+    type Fault = 'lost' | 'committed' | 'P2034' | 'P2002'
+    /**
+     * 🔴 이미 commit 된 트랜잭션 클라이언트 — **쓰기 직전에 새로 만든다.** 엔진이 다시 붙은 뒤에는 옛 id 를 잊어
+     *    "committed" 가 아니라 "Transaction not found"(transient)가 나온다(이 검사를 처음 돌렸을 때 실측).
+     */
+    let dead: typeof prisma | null = null
+    const freshDead = async (): Promise<void> => {
+      let t: unknown = null
+      await prisma.$transaction(async (tx) => { t = tx; await tx.user.count() })
+      dead = t as typeof prisma
+    }
+    /** `faultAt(행 id, 시도 번호)` 가 준 결함을 그 행을 읽기 직전에 일으킨다. 시도 번호 = 몇 번째 `$transaction` 인가 */
+    const faulty = (faultAt: (id: string, attempt: number) => Fault | null) => {
+      const s = { attempts: 0 }
+      const wrapTx = (tx: object, attempt: number): object => new Proxy(tx, {
+        get(t, k) {
+          const v = Reflect.get(t, k) as unknown
+          if (k !== 'originalPostApprovalQueue') return v
+          const d = v as { findUnique: (a: { where: { id: string } }) => Promise<unknown> }
+          return new Proxy(d, {
+            get(dt, dk) {
+              if (dk !== 'findUnique') return Reflect.get(dt, dk)
+              return async (a: { where: { id: string } }) => {
+                const f = faultAt(a.where.id, attempt)
+                if (f === 'lost') { await prisma.$disconnect(); await prisma.$connect() }
+                if (f === 'committed') return dead!.originalPostApprovalQueue.findUnique(a as never)
+                if (f === 'P2034' || f === 'P2002') {
+                  throw new Prisma.PrismaClientKnownRequestError(`fixture ${f}`, { code: f, clientVersion: Prisma.prismaVersion.client })
+                }
+                return dt.findUnique(a)
+              }
+            },
+          })
+        },
+      })
+      const client = new Proxy(prisma, {
+        get(t, k) {
+          if (k !== '$transaction') return Reflect.get(t, k)
+          return (cb: (tx: object) => Promise<unknown>, opts: never) => {
+            s.attempts += 1
+            const attempt = s.attempts
+            return t.$transaction((tx) => cb(wrapTx(tx, attempt)), opts)
+          }
+        },
+      })
+      return { client: client as typeof prisma, s }
+    }
+    const rowOf = (id: string) => prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id } })
+    const isStampedOnce = async (id: string): Promise<boolean> => {
+      const r = await rowOf(id)
+      const st = readStamp(r.editDiff)
+      return r.decidedBy === AUTO_DECIDER && r.decidedAt?.getTime() === NOW.getTime()
+        && st !== null && st.bodyHash === digestOf(r.draftBody) && r.createdPostId === null
+    }
+    const untouched = async (ids: string[]): Promise<boolean> => (await prisma.originalPostApprovalQueue.count({
+      where: { id: { in: ids }, decidedBy: 'machine:auto-draft-v5', decidedAt: null, status: 'APPROVED' },
+    })) === ids.length
+    const errOf = async (f: () => Promise<unknown>): Promise<unknown> => { try { await f(); return null } catch (e) { return e } }
+    /** 🔴 던져도 검사를 멈추지 않는다 — 실패를 ❌ 로 센다(변이 시험에서 원인이 보이게) */
+    const threw = (e: unknown) => ({ kind: 'threw' as const, reason: String((e as { meta?: { error?: unknown } }).meta?.error ?? e).slice(0, 80) })
+    const noTally = new Map<string, number>()
+    const postsBefore = await postCount()
+    const mine: string[] = []
+    const mk = async (): Promise<string> => { const id = (await machineRow()).id; mine.push(id); return id }
+
+    // (a) stampAutoReady — 첫 시도에서 트랜잭션을 잃는다 → 새로 시작해 도장
+    {
+      const id = await mk()
+      const { client, s } = faulty((rid, at) => (rid === id && at === 1 ? 'lost' : null))
+      const o = await stampAutoReady(client, { queueId: id, env: ON, now: NOW }).catch(threw)
+      check('🔴 🔴 **(a) stampAutoReady — 실제 P2028(Transaction not found) 1회 → 트랜잭션 2번째에 stamped · 행 도장 1회**',
+        o.kind === 'stamped' && s.attempts === 2 && await isStampedOnce(id), `${JSON.stringify(o)} · 시도 ${s.attempts}`)
+    }
+    // (a)+(e) stampRound — 앞 행을 이미 쓴 뒤 다음 행에서 트랜잭션을 잃는다 → 첫 시도의 쓰기는 남지 않는다
+    {
+      const rs = [await mk(), await mk(), await mk()]
+      const { client, s } = faulty((rid, at) => (rid === rs[1] && at === 1 ? 'lost' : null))
+      const t: Map<string, number> = await stampRound(client, { env: ON, now: NOW }).catch(() => noTally)
+      const ok = (await Promise.all(rs.map(isStampedOnce))).every(Boolean)
+      /**
+       * 🔴 첫 시도의 R1 도장이 커밋돼 남았다면 두 번째 시도는 R1 을 `auto-ready:v1` 로 읽어 skip 했을 것이다 —
+       *    stamped 가 정확히 3 이면 첫 시도의 부분 쓰기는 없다. 행 잠금이 남았다면 두 번째 시도의 R1 쓰기가 막혔을 것이다.
+       */
+      check('🔴 🔴 **(a)(e) stampRound — 앞 행을 쓴 뒤 실제 P2028 → 묶음 전체를 한 번 새로 · stamped 정확히 3 · race 0 · 부분 커밋 0**',
+        (t.get('stamped') ?? 0) === 3 && (t.get('race') ?? 0) === 0 && s.attempts === 2 && ok,
+        `${[...t].map(([k, v]) => `${k} ${v}`).join(' ')} · 시도 ${s.attempts}`)
+    }
+    // (b) 두 번 연속 잃는다 → 던진다(fail-closed) · 시도는 정확히 2 · 쓴 것 0
+    {
+      const id = await mk()
+      const { client, s } = faulty((rid) => (rid === id ? 'lost' : null))
+      const e = await errOf(() => stampAutoReady(client, { queueId: id, env: ON, now: NOW }))
+      check('🔴 🔴 **(b) stampAutoReady — 반복 P2028 → throw · 시도 정확히 2 · 도장 0**',
+        isTransientTxLost(e) && s.attempts === 2 && await untouched([id]), `시도 ${s.attempts} · ${String(e).slice(0, 80)}`)
+      const rs = [await mk(), await mk()]
+      const r2 = faulty((rid) => (rid === rs[1] ? 'lost' : null))
+      const e2 = await errOf(() => stampRound(r2.client, { env: ON, now: NOW }))
+      check('🔴 🔴 **(b)(e) stampRound — 앞 행을 쓴 뒤 두 시도 모두 잃음 → throw · 시도 2 · 두 행 모두 그대로(부분 커밋 0)**',
+        isTransientTxLost(e2) && r2.s.attempts === 2 && await untouched([id, ...rs]), `시도 ${r2.s.attempts} · ${String(e2).slice(0, 80)}`)
+      // 🔴 끊긴 트랜잭션이 잠금을 쥐고 남지 않았다 — 결함 없는 회차가 같은 행을 바로 찍는다
+      const clean: Map<string, number> = await stampRound(prisma, { env: ON, now: NOW }).catch(() => noTally)
+      check('🔴 (b) 뒤 결함 없는 회차 — 남은 세 행을 정확히 한 번씩 찍는다(잠금·부분 쓰기 없음)',
+        (clean.get('stamped') ?? 0) === 3 && (await Promise.all([id, ...rs].map(isStampedOnce))).every(Boolean),
+        [...clean].map(([k, v]) => `${k} ${v}`).join(' '))
+    }
+    // (c) 비대상 P2028(엔진이 낸 진짜 "committed transaction") → 재시도 없이 즉시 throw
+    {
+      const id = await mk()
+      await freshDead()
+      const { client, s } = faulty((rid, at) => (rid === id && at === 1 ? 'committed' : null))
+      const e = await errOf(() => stampAutoReady(client, { queueId: id, env: ON, now: NOW }))
+      const meta = String((e as { meta?: { error?: unknown } } | null)?.meta?.error ?? '')
+      check('🔴 🔴 **(c) 비대상 P2028(committed transaction) → 즉시 throw · 시도 1 · 도장 0**',
+        (e as { code?: string } | null)?.code === 'P2028' && meta.includes('committed transaction') && !isTransientTxLost(e)
+        && s.attempts === 1 && await untouched([id]), `시도 ${s.attempts} · ${meta.slice(0, 80)}`)
+      await freshDead()
+      const r2 = faulty((rid, at) => (rid === id && at === 1 ? 'committed' : null))
+      const e2 = await errOf(() => stampRound(r2.client, { env: ON, now: NOW }))
+      check('🔴 (c) stampRound 도 비대상 P2028 은 시도 1 · 던진다 · 도장 0',
+        (e2 as { code?: string } | null)?.code === 'P2028' && r2.s.attempts === 1 && await untouched([id]), `시도 ${r2.s.attempts}`)
+      // 🔴 이 행은 도장되지 않았다(맞다) — 아래 "찍힌 행" 집합에서 빼고 치운다
+      mine.splice(mine.indexOf(id), 1)
+      await prisma.originalPostApprovalQueue.update({ where: { id }, data: { status: 'EXPIRED' } })
+    }
+    // (d) P2034/P2002 — 기존 race 계약 그대로 · 재시도 없음
+    {
+      const id = await mk()
+      for (const f of ['P2034', 'P2002'] as const) {
+        const { client, s } = faulty((rid) => (rid === id ? f : null))
+        const o = await stampAutoReady(client, { queueId: id, env: ON, now: NOW }).catch(threw)
+        check(`🔴 🔴 **(d) stampAutoReady ${f} → race · 시도 1 · 도장 0**`, o.kind === 'race' && s.attempts === 1 && await untouched([id]),
+          `${JSON.stringify(o)} · 시도 ${s.attempts}`)
+        const r2 = faulty((rid) => (rid === id ? f : null))
+        const t: Map<string, number> = await stampRound(r2.client, { env: ON, now: NOW }).catch(() => noTally)
+        const cands = await prisma.originalPostApprovalQueue.count({ where: { status: 'APPROVED', createdPostId: null, decidedBy: { startsWith: 'machine:' } } })
+        check(`🔴 (d) stampRound ${f} → 묶음 전체 race(${cands}) · 시도 1 · 도장 0`,
+          (t.get('race') ?? 0) === cands && (t.get('stamped') ?? 0) === 0 && r2.s.attempts === 1 && await untouched([id]),
+          `${[...t].map(([k, v]) => `${k} ${v}`).join(' ')} · 시도 ${r2.s.attempts}`)
+      }
+      mine.splice(mine.indexOf(id), 1)
+      await prisma.originalPostApprovalQueue.update({ where: { id }, data: { status: 'EXPIRED' } })
+    }
+    // 🔴 중복 발행 0 — 도장은 글을 만들지 않고, 재시도로 찍힌 행도 발행은 정확히 한 번이다
+    {
+      check('🔴 🔴 **재시도·실패 회차 전부 — Post 증가 0 (도장은 발행하지 않는다)**', (await postCount()) === postsBefore)
+      const stampedIds = (await prisma.originalPostApprovalQueue.findMany({
+        where: { id: { in: mine }, decidedBy: AUTO_DECIDER }, select: { id: true },
+      })).map((r) => r.id)
+      const once = stampedIds[0]!
+      const p1 = await publishOriginalPostTx(prisma, { queueId: once, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
+      const p2 = await publishOriginalPostTx(prisma, { queueId: once, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
+      check('🔴 🔴 **재시도로 찍힌 행을 두 번 발행해도 Post 는 정확히 1**',
+        stampedIds.length === mine.length && p1.kind === 'published' && p2.kind !== 'published' && (await postCount()) === postsBefore + 1,
+        `${stampedIds.length}/${mine.length} · ${p1.kind}/${p2.kind}`)
+      // 🔴 이후 구간의 발행 대상이 되지 않게 치운다(⑤-b 와 같다)
+      await prisma.originalPostApprovalQueue.updateMany({ where: { id: { in: mine.filter((x) => x !== once) } }, data: { status: 'EXPIRED' } })
+    }
   }
 
   console.log('\n⑥ 🔴 selector — 열림일 때만 · 도장이 지금 글과 같을 때만')

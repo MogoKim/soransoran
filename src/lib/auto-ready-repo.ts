@@ -41,6 +41,55 @@ const rec = (v: unknown): Record<string, unknown> =>
 const isConflict = (e: unknown): boolean =>
   e instanceof Prisma.PrismaClientKnownRequestError && (e.code === 'P2034' || e.code === 'P2002')
 
+/**
+ * 🔴 **트랜잭션을 잃은 P2028 — 도장 트랜잭션만 한 번 새로 시작한다** (2026-09-30 운영 반례).
+ *
+ *    09-30 09:40 발행 회차가 `stampRound` 묶음 트랜잭션 안의 첫 행 조회에서 P2028 로 죽었다
+ *    (`meta.error` = "Transaction not found. Transaction ID is invalid, refers to an old closed transaction
+ *    Prisma doesn't have information about anymore, or was obtained before disconnecting."). 같은 로그 구간에
+ *    "Can't reach database server" 가 이어졌다 — 가설: 엔진이 연결을 잃고 다시 붙으면 진행 중이던 트랜잭션 id 를 잊는다
+ *    (격리 DB 에서 트랜잭션 도중 `$disconnect`→`$connect` 로 **같은 문구가 그대로 재현된다**).
+ *    이 때 DB 쪽 트랜잭션은 연결과 함께 롤백됐다 — 쓴 것이 없다. 그래서 **트랜잭션 전체를** 새로 여는 것은 안전하다.
+ *    만에 하나 첫 시도가 commit 됐어도 두 번째 시도는 행을 새로 읽고 CAS 로 쓴다 — 이미 `auto-ready:v1` 인 행은 skip 이다(중복 도장 0).
+ *
+ *    🔴 P2028 전체가 아니다. 엔진 `meta.error` 의 **정확한 문구** 두 가지만 본다:
+ *      · 트랜잭션을 잊음 — 위 "Transaction not found. Transaction ID is invalid" 문구
+ *      · 만료 — "Transaction already closed: A query|commit cannot be executed on an expired transaction. The timeout ..."
+ *        (timeout 을 넘겨 엔진이 롤백했다 — commit 도 실행되지 않았다)
+ *    그 밖의 P2028 — 이미 commit/rollback 된 트랜잭션 사용(코드 결함) · 시작 대기 초과 · 중첩 · 알 수 없는 응답 ·
+ *    `meta.error` 가 없는 것 — 은 재시도하지 않고 그대로 던진다(러너 exit≠0 · bad 신호 보존).
+ */
+const TX_LOST_PATTERNS: readonly RegExp[] = [
+  /^Transaction not found\. Transaction ID is invalid, refers to an old closed transaction\b/,
+  /^Transaction already closed: A (?:query|commit) cannot be executed on an expired transaction\./,
+]
+
+export function isTransientTxLost(e: unknown): boolean {
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== 'P2028') return false
+  // 🔴 message 전체(코드 프레임 포함)를 보지 않는다 — 엔진이 넣은 `meta.error` 만 본다
+  const m = rec(e.meta).error
+  return typeof m === 'string' && TX_LOST_PATTERNS.some((re) => re.test(m))
+}
+
+/** 🔴 도장 트랜잭션의 최대 시도 수 — 처음 1 + 새로 시작 1. 두 번째도 잃으면 던진다 */
+export const STAMP_TX_MAX_ATTEMPTS = 2
+
+/**
+ * 🔴 **도장 트랜잭션 전용 bounded retry.** `run` 은 매번 **새 트랜잭션을 처음부터** 연다
+ *    (열림 판정 · 행 읽기 · CAS 전부 다시). 재시도 대상은 `isTransientTxLost` 뿐이고,
+ *    P2034/P2002(직렬화 충돌 · 유일 제약)는 여기서 건드리지 않는다 — 부르는 쪽이 기존대로 `race` 로 센다.
+ */
+export async function withStampTxRetry<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run()
+    } catch (e) {
+      if (attempt < STAMP_TX_MAX_ATTEMPTS && isTransientTxLost(e)) continue
+      throw e
+    }
+  }
+}
+
 /** 🔴 확정 결함(yes) 수 — 하나라도 있으면 자동 회차가 닫힌다 */
 export async function confirmedDefectCount(db: Db): Promise<number> {
   return db.autoReadyAudit.count({ where: { defect: 'yes' } })
@@ -165,11 +214,11 @@ export async function stampAutoReady(
 ): Promise<StampOutcome> {
   if (!autoReadyEnabled(i.env)) return { kind: 'closed', reason: '자동 READY 스위치가 꺼져 있다' }
   try {
-    return await prisma.$transaction(async (tx): Promise<StampOutcome> => {
+    return await withStampTxRetry(() => prisma.$transaction(async (tx): Promise<StampOutcome> => {
       const gate = await authoritativeGate(tx, i.env)
       if (!gate.open) return { kind: 'closed', reason: gate.reasons.join(' · ') }
       return stampRowInTx(tx, i.queueId, i.now)
-    }, SERIALIZABLE)
+    }, SERIALIZABLE))
   } catch (e) {
     if (isConflict(e)) return { kind: 'race', reason: '직렬화 충돌 — 다른 회차가 먼저 썼다' }
     throw e
@@ -264,13 +313,14 @@ export async function stampRound(
   for (let at = 0; at < rows.length; at += STAMP_BATCH_SIZE) {
     const batch = rows.slice(at, at + STAMP_BATCH_SIZE)
     try {
-      const outs = await prisma.$transaction(async (tx): Promise<StampOutcome['kind'][]> => {
+      // 🔴 트랜잭션을 잃으면(P2028 transient) 묶음 전체를 한 번 새로 연다 — `got` 도 새로 시작한다
+      const outs = await withStampTxRetry(() => prisma.$transaction(async (tx): Promise<StampOutcome['kind'][]> => {
         const gate = await authoritativeGate(tx, i.env)
         if (!gate.open) return batch.map(() => 'closed' as const)
         const got: StampOutcome['kind'][] = []
         for (const r of batch) got.push((await stampRowInTx(tx, r.id, i.now)).kind)
         return got
-      }, SERIALIZABLE)
+      }, SERIALIZABLE))
       for (const k of outs) bump(k)
     } catch (e) {
       if (!isConflict(e)) throw e
