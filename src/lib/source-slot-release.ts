@@ -18,8 +18,12 @@
  *       수집 시각 · 초안 시각 · 목록 시각으로 **대신하지 않는다**(A1 §6: 네이버 `sourceListedAt` 은 회차 시작 시각 하나라
  *       수집 시각과 같은 뜻이다 — 게시 시각의 대용이 될 수 없다).
  *    ③ 슬롯 시점 나이(시간) — `slotAt − postedAt`. 상한은 **기존 hot 72h 하나**. 이벤트·키워드·상시 분기 없음
+ *       🔴 (Lane B) 기록은 **모든 중첩 칸**을 먼저 확인한다(`parseEvidence`) — 손상은 예외가 아니라
+ *       `EVIDENCE_INVALID` + 손상 위치(`issue`)다. 게시 · 수집 코드 다음에 중첩 시각의 순서 · 미래를 본다.
  *    ④ 반응 증거 — 수집 때 관측이 없으면 unknown. 있으면 **같은 원천 · 같은 관측 나이 구간** 안 백분위로만 비교한다
- *       (원천 규모가 raw 수를 부풀리지 못하게). velocity 는 실제 반복 관측 2개 이상일 때만
+ *       (원천 규모가 raw 수를 부풀리지 못하게). velocity 는 실제 반복 관측 2개 이상일 때만.
+ *       🔴 (Lane B) 백분위는 **후보 자신을 뺀** 표본에 서로 다른 값이 둘 이상일 때만 선다(`relativePosition`) —
+ *       표본 0 · 1 · 한 점 분포는 정규화 신뢰도가 없다 → unknown. 새 최소 수 · 최소 조회수는 없다
  *    ⑤ 참여 동력 — 판정기가 낸 `communityAngle` 이 없으면 unknown (새 가중치 없음 · 존재만 본다)
  *    ⑥ Persona 배정 — 기존 판정(`judgeAutoAssignment` · `planBatch`)의 결과를 입력으로 받는다. 불가 → ineligible
  *
@@ -83,15 +87,26 @@ export type SourceResponse = {
 export type SourceObservation = { observedAt: string; views: number | null; comments: number | null }
 
 /**
+ * 🔴 **정규화 방법 판** — 스냅샷이 이 판이 아니면 판정은 `RESPONSE_UNNORMALIZED` 로 읽는다.
+ *    `leave-one-out-spread-v1` (2026-09-30 Lane B): 앞판(판 표시 없음)은 **후보 자신을 비교 표본에 넣었고**
+ *    표본이 자기 1건 · 전부 같은 값이어도 백분위 0.5 를 냈다 — 비교할 것이 없는데 "중간" 이라고 말했다(재현).
+ *    이제 ① 자기 자신을 빼고 ② 남은 표본에 서로 다른 값이 둘 이상일 때만 백분위를 낸다(`relativePosition`).
+ *    🔴 새 최소 표본 수 · 최소 조회수가 아니다 — "분포가 한 점이면 그 안의 자리는 정의되지 않는다" 는 정의다.
+ */
+export const SOURCE_STATS_METHOD = 'leave-one-out-spread-v1'
+
+/**
  * 🔴 **원천 상대 반응 — 적재 시점 스냅샷** (B-design §7). 같은 원천 · 같은 관측 나이 구간의 최근 표본 안에서
  *    이 글의 반응이 몇 백분위인가. 표본이 없으면 백분위도 없다(null) — 지어내지 않는다.
  */
 export type SourceStatsSnapshot = {
   basis: 'list-artifacts'
+  /** 🔴 정규화 방법 판 — `SOURCE_STATS_METHOD` 가 아니면 판정이 정규화되지 않은 것으로 읽는다 */
+  method: string
   sourceKey: string
   /** 관측 나이 구간 라벨(`<3h` · `3-6h` …) */
   bucket: string
-  /** 비교한 표본 수 — 글 기준 */
+  /** 비교한 표본 수 — 글 기준 · 🔴 후보 자신은 빼고 센다 */
   n: number
   commentsPct: number | null
   viewsPct: number | null
@@ -189,10 +204,15 @@ export function buildSourceEvidence(input: {
   }
 }
 
-/** 🔴 같은 시각의 관측은 하나로 — 한 번 본 것을 두 번 본 것으로 세지 않는다 */
-function distinctObservations(xs: readonly SourceObservation[]): SourceObservation[] {
+/**
+ * 🔴 같은 시각의 관측은 하나로 — 한 번 본 것을 두 번 본 것으로 세지 않는다.
+ *    🔴 파일에서 온 배열이라 원소가 객체라는 보장이 없다 — 객체가 아닌 원소는 관측이 아니다(던지지 않는다).
+ */
+function distinctObservations(xs: readonly unknown[]): SourceObservation[] {
   const byAt = new Map<string, SourceObservation>()
-  for (const o of xs) {
+  for (const x of xs) {
+    if (x === null || typeof x !== 'object' || Array.isArray(x)) continue
+    const o = x as Record<string, unknown>
     const at = normalizeEvidenceTime(o.observedAt)
     if (at === null || strictIso(at) === 'corrupt' || strictIso(at) === null) continue
     byAt.set(at, { observedAt: at, views: countOrNull(o.views), comments: countOrNull(o.comments) })
@@ -225,6 +245,17 @@ export function percentileOf(value: number | null, sample: readonly number[]): n
     else if (x === value) equal += 1
   }
   return Math.round(((below + equal / 2) / sample.length) * 10_000) / 10_000
+}
+
+/**
+ * 🔴 **원천 상대 자리 — 정규화 신뢰도가 있을 때만** (leave-one-out-spread-v1).
+ *    `sample` 은 **후보 자신을 뺀** 같은 원천 · 같은 관측 나이 구간의 값이다.
+ *    서로 다른 값이 둘 미만이면(표본 0 · 1 · 전부 같은 값) 분포에 모양이 없다 — 그 안의 자리를 말하지 않는다(null).
+ *    🔴 크기 기준(최소 n · 최소 조회수)을 만들지 않는다. 극단치는 순위 기반이라 자기 한 칸만 움직인다.
+ */
+export function relativePosition(value: number | null, sample: readonly number[]): number | null {
+  if (value === null || new Set(sample).size < 2) return null
+  return percentileOf(value, sample)
 }
 
 /** 🔴 목록 관측 한 줄 — 고정글은 넣지 않는다(자리가 반응이 아니다) */
@@ -267,6 +298,8 @@ export function sourceStatsSnapshot(input: {
     if (!(om instanceof Date) || !(pm instanceof Date)) continue
     if (om.getTime() < fromMs || om.getTime() > toMs) continue
     if (observationBucketOf((om.getTime() - pm.getTime()) / HOUR_MS) !== bucket) continue
+    // 🔴 후보 자신은 비교 표본이 아니다 — 자기와 비교하면 표본 1건이 "중간(0.5)" 을 만든다(재현)
+    if (o.articleKey === input.articleKey) continue
     const prev = latest.get(o.articleKey)
     if (prev === undefined || prev.observedAt < o.observedAt) latest.set(o.articleKey, o)
   }
@@ -274,9 +307,9 @@ export function sourceStatsSnapshot(input: {
   const comments = rows.map((r) => r.comments).filter((x): x is number => x !== null)
   const views = rows.map((r) => r.views).filter((x): x is number => x !== null)
   return {
-    basis: 'list-artifacts', sourceKey: input.sourceKey, bucket, n: rows.length,
-    commentsPct: percentileOf(input.comments, comments),
-    viewsPct: percentileOf(input.views, views),
+    basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: input.sourceKey, bucket, n: rows.length,
+    commentsPct: relativePosition(input.comments, comments),
+    viewsPct: relativePosition(input.views, views),
     windowFrom: new Date(fromMs).toISOString(), windowTo: input.at.toISOString(),
   }
 }
@@ -295,32 +328,139 @@ function strictIso(s: unknown): Date | 'corrupt' | null {
   return d
 }
 
+/**
+ * 🔴 **읽기 결과 — 실패면 어디가 왜 틀렸는지(`issue`)를 함께 낸다.**
+ *    `issue` 는 **경로와 종류만** 담는다(`observations[0]:not-object`) — 값 · 원문 · 식별자는 싣지 않는다.
+ *    감사(release 도장 · `declineReason`) · 운영 진단(보류 줄)이 이 문자열로 손상 위치를 식별한다.
+ */
 export type EvidenceRead =
   | { ok: true; record: SourceEvidenceRecord }
-  | { ok: false; code: 'EVIDENCE_MISSING' | 'EVIDENCE_INVALID' }
+  | { ok: false; code: 'EVIDENCE_MISSING' | 'EVIDENCE_INVALID'; issue: string | null }
 
 /**
  * 🔴 **`gateResults` 에서 기록을 읽는다.** 칸이 없으면 모르는 것이다(이 판 이전 적재 · 사람 후보 · backfill 없음).
- *    기록 자체(버전 · 모양)를 확인할 뿐 판정은 `judgeSlotRelease` 가 한다.
+ *    기록 자체(모든 중첩 칸의 타입 · 범위 · 순서)를 확인할 뿐 판정은 `judgeSlotRelease` 가 한다.
  */
 export function readSourceEvidence(gateResults: unknown): EvidenceRead {
   if (gateResults === null || typeof gateResults !== 'object' || Array.isArray(gateResults)) {
-    return { ok: false, code: 'EVIDENCE_MISSING' }
+    return { ok: false, code: 'EVIDENCE_MISSING', issue: null }
   }
   const rec = (gateResults as Record<string, unknown>)[SOURCE_EVIDENCE_KEY]
-  if (rec === undefined || rec === null) return { ok: false, code: 'EVIDENCE_MISSING' }
+  if (rec === undefined || rec === null) return { ok: false, code: 'EVIDENCE_MISSING', issue: null }
   return parseEvidence(rec)
 }
 
-/** 🔴 기록 한 개(이미 꺼낸 값)를 확인한다 — 공급 쪽 묶음 선택도 같은 확인을 지난다 */
+/** 🔴 관측 나이 구간 라벨 — `observationBucketOf` 가 낼 수 있는 값만 */
+const BUCKET_LABELS: ReadonlySet<string> = new Set(
+  OBSERVATION_AGE_EDGES_H.map((hi, k) => (k === 0 ? `<${hi}h` : `${OBSERVATION_AGE_EDGES_H[k - 1]}-${hi}h`)),
+)
+const HEX64 = /^[0-9a-f]{64}$/
+const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
+/** 🔴 센 수 — 음 아닌 안전 정수 또는 null. NaN · Infinity · 소수 · 문자열은 손상이다 */
+const isCountOrNull = (v: unknown): boolean => v === null || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0)
+const isPctOrNull = (v: unknown): boolean => v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1)
+const isStrOrNull = (v: unknown): boolean => v === null || typeof v === 'string'
+/** 🔴 정규 ISO(`toISOString()`) — 적재기가 이 모양으로만 쓴다 */
+const canonicalIso = (v: unknown): Date | null => {
+  if (typeof v !== 'string') return null
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) || d.toISOString() !== v ? null : d
+}
+
+/**
+ * 🔴 **기록 한 개(이미 꺼낸 값)를 끝까지 확인한다** — 공급 묶음 · 기회 스냅샷 · 발행 계획 · 발행 트랜잭션이 같은 확인을 지난다.
+ *
+ *    앞판은 판 · `observations` 배열 여부 · `provenance` 객체 여부만 봤다. 그래서 `observations: [null]` 은
+ *    판정 안에서 **TypeError 로 러너를 죽였고**, `response: "x"` · 댓글 `NaN` · 표본 `n: -1` 은 **eligible** 로 통과했다(재현).
+ *    이제 모든 중첩 칸을 본다. 첫 문제에서 멈추고 `issue` 에 경로와 종류를 적는다.
+ *
+ *    · 게시 · 수집 시각은 **문자열이면 받는다** — 손상 · 미래 · 순서는 판정이 고유 코드로 낸다(POSTED_CORRUPT …)
+ *    · 목록 · 초안 · 관측 · 표본 창 시각은 정규 ISO 이거나 null 이어야 한다 · 표본 창은 끝 ≥ 시작
+ *    · 표본의 원천은 기록의 원천과 같아야 한다 — 🔴 다른 원천 표본으로 정규화하면 원천 규모가 raw 수를 부풀린다
+ *    · 시각 **순서**(게시보다 이른 관측 · 판정 시각보다 미래)는 `evidenceTimeIssue` 가 본다 — 판정 시각이 필요하고,
+ *      게시 · 수집 시각의 고유 코드(POSTED_AFTER_CAPTURE …)가 먼저 나와야 해서 판정 안에서 그 뒤에 부른다
+ */
 export function parseEvidence(rec: unknown): EvidenceRead {
-  if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) return { ok: false, code: 'EVIDENCE_INVALID' }
-  const r = rec as Record<string, unknown>
-  if (r.version !== SOURCE_EVIDENCE_VERSION) return { ok: false, code: 'EVIDENCE_INVALID' }
-  const obs = Array.isArray(r.observations) ? r.observations : null
-  const prov = r.provenance
-  if (obs === null || prov === null || typeof prov !== 'object') return { ok: false, code: 'EVIDENCE_INVALID' }
+  const bad = (issue: string): EvidenceRead => ({ ok: false, code: 'EVIDENCE_INVALID', issue })
+  if (!isObj(rec)) return bad('record:not-object')
+  const r = rec
+  if (r.version !== SOURCE_EVIDENCE_VERSION) return bad('version:mismatch')
+  for (const k of ['postedAt', 'capturedAt'] as const) {
+    if (!(r[k] === null || (typeof r[k] === 'string' && (r[k] as string).length <= 64))) return bad(`${k}:type`)
+  }
+  for (const k of ['listedAt', 'draftedAt'] as const) {
+    if (r[k] !== null && canonicalIso(r[k]) === null) return bad(`${k}:corrupt`)
+  }
+  if (!(r.sourceKey === null || (typeof r.sourceKey === 'string' && r.sourceKey.trim() !== ''))) return bad('sourceKey:type')
+  if (!isStrOrNull(r.participationDriver)) return bad('participationDriver:type')
+
+  // ── 반응 ──
+  if (r.response !== null) {
+    if (!isObj(r.response)) return bad('response:not-object')
+    for (const k of ['views', 'comments', 'listRank', 'listPage'] as const) {
+      if (!isCountOrNull(r.response[k])) return bad(`response.${k}:not-count`)
+    }
+    if (r.response.observedAt !== null && canonicalIso(r.response.observedAt) === null) return bad('response.observedAt:corrupt')
+  }
+
+  // ── 반복 관측 ──
+  if (!Array.isArray(r.observations)) return bad('observations:not-array')
+  for (let i = 0; i < r.observations.length; i += 1) {
+    const o: unknown = r.observations[i]
+    if (!isObj(o)) return bad(`observations[${i}]:not-object`)
+    if (canonicalIso(o.observedAt) === null) return bad(`observations[${i}].observedAt:corrupt`)
+    if (!isCountOrNull(o.views)) return bad(`observations[${i}].views:not-count`)
+    if (!isCountOrNull(o.comments)) return bad(`observations[${i}].comments:not-count`)
+  }
+
+  // ── 원천 상대 표본 ──
+  if (r.sourceStats !== null) {
+    const s = r.sourceStats
+    if (!isObj(s)) return bad('sourceStats:not-object')
+    if (s.basis !== 'list-artifacts') return bad('sourceStats.basis:mismatch')
+    if (!(s.method === undefined || typeof s.method === 'string')) return bad('sourceStats.method:type')
+    if (typeof s.sourceKey !== 'string' || s.sourceKey !== r.sourceKey) return bad('sourceStats.sourceKey:cross-source')
+    if (typeof s.bucket !== 'string' || !BUCKET_LABELS.has(s.bucket)) return bad('sourceStats.bucket:unknown')
+    if (!(typeof s.n === 'number' && Number.isSafeInteger(s.n) && s.n >= 0)) return bad('sourceStats.n:not-count')
+    if (!isPctOrNull(s.commentsPct)) return bad('sourceStats.commentsPct:out-of-range')
+    if (!isPctOrNull(s.viewsPct)) return bad('sourceStats.viewsPct:out-of-range')
+    const from = canonicalIso(s.windowFrom)
+    const to = canonicalIso(s.windowTo)
+    if (from === null || to === null) return bad('sourceStats.window:corrupt')
+    if (to.getTime() < from.getTime()) return bad('sourceStats.window:end-before-start')
+  }
+
+  // ── 출처 ──
+  if (!isObj(r.provenance)) return bad('provenance:not-object')
+  for (const k of ['articleIdHash', 'dedupKeyHash'] as const) {
+    const v = r.provenance[k]
+    if (!(v === null || (typeof v === 'string' && HEX64.test(v)))) return bad(`provenance.${k}:not-hash`)
+  }
+  if (!isStrOrNull(r.provenance.artifactId)) return bad('provenance.artifactId:type')
   return { ok: true, record: r as unknown as SourceEvidenceRecord }
+}
+
+/**
+ * 🔴 **중첩 시각의 순서 · 미래 — 모양을 지난 기록에서만** (끝 < 시작 · 미래 시각). 문제가 없으면 null.
+ *    · 게시 시각보다 이른 목록 · 반응 · 반복 관측 시각 — 올라오기 전에 볼 수 없다(`…:before-posted`)
+ *    · 판정 시각보다 미래인 목록 · 반응 · 관측 · 표본 창 끝(`…:future`)
+ *    허용 오차는 판정과 같은 `SOURCE_CLOCK_SKEW_MS` 다. 경로와 종류만 돌려준다(값 없음).
+ */
+export function evidenceTimeIssue(ev: SourceEvidenceRecord, now: Date): string | null {
+  const posted = canonicalIso(ev.postedAt)
+  const timed: [string, unknown][] = [
+    ['listedAt', ev.listedAt],
+    ['response.observedAt', ev.response?.observedAt ?? null],
+    ...ev.observations.map((o, i): [string, unknown] => [`observations[${i}].observedAt`, o.observedAt]),
+    ['sourceStats.windowTo', ev.sourceStats?.windowTo ?? null],
+  ]
+  for (const [path, v] of timed) {
+    const d = canonicalIso(v)
+    if (d === null) continue
+    if (path !== 'sourceStats.windowTo' && posted !== null && posted.getTime() - d.getTime() > SOURCE_CLOCK_SKEW_MS) return `${path}:before-posted`
+    if (d.getTime() - now.getTime() > SOURCE_CLOCK_SKEW_MS) return `${path}:future`
+  }
+  return null
 }
 
 // ─────────────────────────────────────────────────────────
@@ -342,7 +482,7 @@ export type ReleaseReason = (typeof RELEASE_REASONS)[number]
 export const RELEASE_REASON_LABEL: Readonly<Record<ReleaseReason, string>> = {
   HARD_GATE: '영구 hard gate 실패(안전 · 품질 계약 · 독창성 · 중복 …)',
   EVIDENCE_MISSING: '원문 증거 기록이 없다(이 계약 이전 적재 · 사람 후보 — backfill 없음)',
-  EVIDENCE_INVALID: '원문 증거 기록의 판 · 모양이 다르다',
+  EVIDENCE_INVALID: '원문 증거 기록의 판 · 모양 · 중첩 칸이 손상됐다(어디가 왜 — 판정의 issue)',
   POSTED_MISSING: '원문 게시 시각을 모른다',
   POSTED_CORRUPT: '원문 게시 시각이 손상됐다',
   CAPTURED_MISSING: '원문 수집 시각을 모른다 — 게시가 수집보다 앞인지 확인할 수 없다',
@@ -352,7 +492,7 @@ export const RELEASE_REASON_LABEL: Readonly<Record<ReleaseReason, string>> = {
   POSTED_IN_FUTURE: '게시 시각이 판정 시각보다 미래다',
   SOURCE_TOO_OLD_AT_SLOT: `예정 슬롯에서 원문 나이가 ${SOURCE_AGE_LIMIT_HOURS}시간 이상이다`,
   RESPONSE_UNOBSERVED: '수집 때 관측한 반응이 없다',
-  RESPONSE_UNNORMALIZED: '같은 원천 · 같은 관측 나이의 비교 표본이 없다 — raw 수로 비교하지 않는다',
+  RESPONSE_UNNORMALIZED: '같은 원천 · 같은 관측 나이의 비교 표본이 없거나 한 점이다(자기 제외 서로 다른 값 2개 미만 · 옛 정규화 판) — raw 수로 비교하지 않는다',
   DRIVER_UNKNOWN: '참여 동력(판정기 communityAngle)이 없다',
   NO_PERSONA_AT_SLOT: '그 슬롯에 배정할 Persona 가 없다(기존 배정 판정)',
 }
@@ -411,6 +551,11 @@ export type SlotReleaseVerdict = {
   verdict: ReleaseVerdictKind
   /** 🔴 첫 실패 하나 — 코드만(문구 · 원문 없음) */
   reasons: ReleaseReason[]
+  /**
+   * 🔴 **손상 위치** — `EVIDENCE_INVALID` 일 때 경로와 종류(`observations[0]:not-object`). 그 밖에는 null.
+   *    값 · 원문 · 식별자를 싣지 않는다 — 감사 도장 · 운영 진단이 그대로 옮겨 적는다.
+   */
+  issue: string | null
   /** 🔴 원천 가치가 사라져 행을 만료시킬 사유인가 — hard gate · Persona 는 아니다 */
   expires: boolean
   /** 🔴 아직 없는 입력(공급 묶음 선택에서만) */
@@ -428,8 +573,8 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   const rank: ReleaseRank = { commentsPct: null, viewsPct: null, ageAtSlotH: null, velocity: null, tieBreak: i.tieBreak }
   const pending: ('driver' | 'assignment')[] = []
   let evidenceVersion: string | null = null
-  const out = (verdict: ReleaseVerdictKind, reason: ReleaseReason | null): SlotReleaseVerdict => ({
-    verdict, reasons: reason === null ? [] : [reason],
+  const out = (verdict: ReleaseVerdictKind, reason: ReleaseReason | null, issue: string | null = null): SlotReleaseVerdict => ({
+    verdict, reasons: reason === null ? [] : [reason], issue,
     expires: reason !== null && EXPIRING_REASONS.includes(reason),
     pending, rank, evidenceVersion,
     slotAt: i.slotAt.toISOString(), evaluatedAt: i.now.toISOString(),
@@ -439,8 +584,9 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   if (!i.hardGates.ok) return out('ineligible', 'HARD_GATE')
 
   // ② 원문 시각
+  // 🔴 모든 중첩 칸을 확인한 기록만 판정에 들어온다 — 손상은 예외가 아니라 닫힌 사유(EVIDENCE_INVALID + issue)다
   const read = i.evidence !== undefined ? parseEvidence(i.evidence) : readSourceEvidence(i.gateResults)
-  if (!read.ok) return out('unknown', read.code)
+  if (!read.ok) return out('unknown', read.code, read.issue)
   const ev = read.record
   evidenceVersion = ev.version
   const posted = strictIso(ev.postedAt)
@@ -452,6 +598,9 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   if (captured.getTime() - i.now.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'CAPTURED_IN_FUTURE')
   if (posted.getTime() - captured.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_AFTER_CAPTURE')
   if (posted.getTime() - i.now.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_IN_FUTURE')
+  // 🔴 중첩 시각(목록 · 반응 · 반복 관측 · 표본 창)의 순서 · 미래 — 게시 · 수집 고유 코드 다음이다
+  const timeIssue = evidenceTimeIssue(ev, i.now)
+  if (timeIssue !== null) return out('unknown', 'EVIDENCE_INVALID', timeIssue)
 
   // ③ 슬롯 시점 나이 — 시간 단위 · floor 없음
   const ageAtSlotH = Math.max(0, i.slotAt.getTime() - posted.getTime()) / HOUR_MS
@@ -465,7 +614,9 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   rank.commentsPct = stats?.commentsPct ?? null
   rank.viewsPct = stats?.viewsPct ?? null
   rank.velocity = velocityOf(ev.observations)
-  if (stats === null || stats.n === 0 || (stats.commentsPct === null && stats.viewsPct === null)) {
+  // 🔴 지금 정규화 판(`SOURCE_STATS_METHOD`)이 아닌 스냅샷은 자기 포함 · 한 점 표본의 0.5 를 담았을 수 있다 — 믿지 않는다
+  if (stats === null || stats.method !== SOURCE_STATS_METHOD || stats.n === 0
+    || (stats.commentsPct === null && stats.viewsPct === null)) {
     return out('unknown', 'RESPONSE_UNNORMALIZED')
   }
 
@@ -522,13 +673,15 @@ export type ReleaseStamp = {
   slotAt: string
   evaluatedAt: string
   reasons: ReleaseReason[]
+  /** 🔴 손상 위치(경로 · 종류) — 감사가 EXPIRED 행의 원인을 식별한다 */
+  issue: string | null
   evidenceVersion: string | null
 }
 
 export function releaseStampOf(v: SlotReleaseVerdict): ReleaseStamp {
   return {
     contract: RELEASE_CONTRACT, verdict: v.verdict, slotAt: v.slotAt, evaluatedAt: v.evaluatedAt,
-    reasons: [...v.reasons], evidenceVersion: v.evidenceVersion,
+    reasons: [...v.reasons], issue: v.issue, evidenceVersion: v.evidenceVersion,
   }
 }
 
@@ -550,7 +703,7 @@ export function releaseStampStatusOf(gateResults: unknown): 'STAMPED_ELIGIBLE' |
 export function describeRelease(v: SlotReleaseVerdict): string {
   const r = v.rank
   const f = (x: number | null): string => (x === null ? '—' : String(x))
-  return `${v.verdict}${v.reasons.length > 0 ? ` [${v.reasons.join(',')}]` : ''}`
+  return `${v.verdict}${v.reasons.length > 0 ? ` [${v.reasons.join(',')}${v.issue === null ? '' : ` @${v.issue}`}]` : ''}`
     + ` · 댓글pct ${f(r.commentsPct)} · 조회pct ${f(r.viewsPct)} · 슬롯나이 ${f(r.ageAtSlotH)}h · velocity ${f(r.velocity)}`
     + (v.pending.length > 0 ? ` · 대기 ${v.pending.join('·')}` : '')
 }

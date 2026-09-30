@@ -414,7 +414,8 @@ async function publishAttempt(
            *    그 Persona 가 며칠 동안 막힌다(러너가 사람 행 배정을 트랜잭션 앞에서 쓰므로 실제로 생긴다).
            */
           data: {
-            status: 'EXPIRED', declineReason: `RELEASE_EXPIRED:${release.reasons.join(',')}`, gateResults: stamped,
+            // 🔴 손상 위치(경로 · 종류)도 사유에 남긴다 — 감사가 "어느 칸이 깨져 만료됐는가" 를 도장 없이도 읽는다(값 · 원문 없음)
+            status: 'EXPIRED', declineReason: `RELEASE_EXPIRED:${release.reasons.join(',')}${release.issue === null ? '' : `@${release.issue}`}`, gateResults: stamped,
             matchedPersonaId: null, matchedAt: null,
           },
         })

@@ -9,6 +9,8 @@
  *     ⑦ 원문 시각 없음 · 손상 · 미래 · capture 이후  ⑧ deferred 가 증명일 안에 안 풀림
  *     ⑨ Persona voice/cadence 슬롯 부족               ⑩ 계약 변경 전 PASS 가 승급을 여는 시도
  *     ⑪ 개인정보 · 원문 노출                         ⑫ JIT 수요 · preflight UNKNOWN(계약 유효 Persona 없음)
+ *     ⑬ (Lane B) 손상된 중첩 증거 — 예외 없이 EVIDENCE_INVALID + 경로(issue) · 무작위 손상 fuzz
+ *     ⑭ (Lane B) 작은 표본 정규화 — 0 · 1 · 같은 값 · 극단치 · 조회만 · 순위만 · 댓글만 · 반복 1회 · 2회+
  *   발행 트랜잭션 경쟁 · 교체 · Queue/Post/ActivityLog 정합은 격리 DB 검사(`publish:slot-db-check`)가 본다.
  *
  *   `check:source-times` 가 이 파일을 실행한다(CI 연결).
@@ -19,7 +21,8 @@ import { join } from 'node:path'
 import {
   buildSourceEvidence, compareReleaseRank, judgeSlotRelease, matchOpportunitiesToSlots, percentileOf,
   observationBucketOf, readSourceEvidence, releaseStampStatusOf, releaseStampOf, sourceStatsSnapshot, velocityOf,
-  EXPIRING_REASONS, RELEASE_CONTRACT, SOURCE_AGE_LIMIT_HOURS, SOURCE_EVIDENCE_KEY, SOURCE_EVIDENCE_VERSION,
+  describeRelease, parseEvidence, relativePosition,
+  EXPIRING_REASONS, RELEASE_CONTRACT, SOURCE_AGE_LIMIT_HOURS, SOURCE_EVIDENCE_KEY, SOURCE_EVIDENCE_VERSION, SOURCE_STATS_METHOD,
   type ListObservation, type SlotOpportunity, type SourceEvidenceRecord,
 } from '../src/lib/source-slot-release'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -154,7 +157,11 @@ console.log('\n④ 한 번 관측을 velocity 로 해석 시도')
   const one = [{ observedAt: iso(hoursAgo(1)), views: 300, comments: 12 }]
   check('🔴 🔴 **관측 1개 → velocity null** (한 번 본 수를 시간으로 나누지 않는다)', velocityOf(one) === null)
   check('🔴 같은 시각 관측 두 줄은 한 번이다 → null', velocityOf([...one, ...one]) === null)
-  const two = [{ observedAt: iso(hoursAgo(5)), views: 100, comments: 2 }, { observedAt: iso(hoursAgo(1)), views: 300, comments: 10 }]
+  /**
+   * 🔴 (Lane B) 반복 관측도 게시 뒤여야 한다 — 앞판 fixture 는 게시(2h 전)보다 3시간 이른 관측(5h 전)을 썼다.
+   *    실제로는 있을 수 없는 관측이라 이제 판정이 `observations[0].observedAt:before-posted` 로 닫는다.
+   */
+  const two = [{ observedAt: iso(hoursAgo(1.5)), views: 100, comments: 2 }, { observedAt: iso(hoursAgo(1)), views: 300, comments: 3 }]
   check('실제 반복 관측 2개 → 시간당 댓글 증가 2', velocityOf(two) === 2)
   const withV = judge(ev({ observations: two }))
   check('판정 rank 에 실린다 · 1회 관측 행은 null(뒤로 간다)', withV.rank.velocity === 2 && judge(ev({ observations: one })).rank.velocity === null)
@@ -319,6 +326,178 @@ console.log('\n⑪ 개인정보 · 원문 노출')
     candidate: { sourceSite: 'navercafe:wgang', sourceArticleId: '1' } as never, now: iso(NOW),
   })
   check('(참고) 봉투가 기계 계약이 아니면 payload 를 만들지 않는다 — 기록만 찍는 우회가 없다', machine === null)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 (Lane B) 손상된 중첩 증거 — 러너를 죽이지 않고 EVIDENCE_INVALID + 손상 위치로 닫는다')
+// ─────────────────────────────────────────────────────────
+{
+  const good = ev()
+  check('기준 — 정상 기록은 모양 확인을 지난다', parseEvidence(good).ok && judge(good).verdict === 'eligible')
+  /** 🔴 [이름, 손상 기록, 기대 issue] — 앞판은 앞 넷을 eligible 로 통과시키거나(3) 예외로 러너를 죽였다(1) */
+  const W = (patch: Record<string, unknown>): unknown => ({ ...good, ...patch })
+  const S = (patch: Record<string, unknown>): unknown => ({ ...good, sourceStats: { ...good.sourceStats!, ...patch } })
+  const cases: [string, unknown, string][] = [
+    ['observations: [null] (앞판 TypeError)', W({ observations: [null] }), 'observations[0]:not-object'],
+    ['response: "x" (앞판 eligible)', W({ response: 'x' }), 'response:not-object'],
+    ['response.comments: NaN (앞판 eligible)', W({ response: { ...good.response!, comments: Number.NaN } }), 'response.comments:not-count'],
+    ['sourceStats.n: -1 (앞판 eligible)', S({ n: -1 }), 'sourceStats.n:not-count'],
+    ['response.views: 소수', W({ response: { ...good.response!, views: 1.5 } }), 'response.views:not-count'],
+    ['response.views: 문자열 숫자', W({ response: { ...good.response!, views: '600' } }), 'response.views:not-count'],
+    ['response.views: Infinity', W({ response: { ...good.response!, views: Number.POSITIVE_INFINITY } }), 'response.views:not-count'],
+    ['response.observedAt: 비정규', W({ response: { ...good.response!, observedAt: '어제' } }), 'response.observedAt:corrupt'],
+    ['observations: 객체', W({ observations: { a: 1 } }), 'observations:not-array'],
+    ['observations[0].observedAt: 없음', W({ observations: [{ views: 1, comments: 1 }] }), 'observations[0].observedAt:corrupt'],
+    ['observations[0].comments: -3', W({ observations: [{ observedAt: iso(hoursAgo(1)), views: 1, comments: -3 }] }), 'observations[0].comments:not-count'],
+    ['sourceStats: 배열', W({ sourceStats: [1] }), 'sourceStats:not-object'],
+    ['sourceStats.basis: 다른 값', S({ basis: 'db' }), 'sourceStats.basis:mismatch'],
+    ['🔴 sourceStats.sourceKey: 다른 원천(교차 정규화)', S({ sourceKey: 'navercafe:small' }), 'sourceStats.sourceKey:cross-source'],
+    ['sourceStats.bucket: 모르는 구간', S({ bucket: '0-1h' }), 'sourceStats.bucket:unknown'],
+    ['sourceStats.commentsPct: 1.5', S({ commentsPct: 1.5 }), 'sourceStats.commentsPct:out-of-range'],
+    ['sourceStats.viewsPct: NaN', S({ viewsPct: Number.NaN }), 'sourceStats.viewsPct:out-of-range'],
+    ['sourceStats.window: 끝 < 시작', S({ windowFrom: iso(NOW), windowTo: iso(hoursAgo(5)) }), 'sourceStats.window:end-before-start'],
+    ['sourceStats.windowTo: 손상', S({ windowTo: 'x' }), 'sourceStats.window:corrupt'],
+    ['provenance: null', W({ provenance: null }), 'provenance:not-object'],
+    ['provenance.articleIdHash: 원문 id 그대로', W({ provenance: { ...good.provenance, articleIdHash: 'A1' } }), 'provenance.articleIdHash:not-hash'],
+    ['provenance.artifactId: 숫자', W({ provenance: { ...good.provenance, artifactId: 7 } }), 'provenance.artifactId:type'],
+    ['postedAt: 숫자', W({ postedAt: 1_700_000_000 }), 'postedAt:type'],
+    ['listedAt: 비정규', W({ listedAt: '2026-10-01' }), 'listedAt:corrupt'],
+    ['sourceKey: 빈 문자열', W({ sourceKey: '' }), 'sourceKey:type'],
+    ['participationDriver: 객체', W({ participationDriver: {} }), 'participationDriver:type'],
+    ['version 없음', W({ version: undefined }), 'version:mismatch'],
+    ['기록이 문자열', 'x', 'record:not-object'],
+    // ── 시각 순서 · 미래 (판정 안 · 게시/수집 고유 코드 다음) ──
+    ['🔴 관측이 게시보다 이르다(끝 < 시작)', W({ observations: [{ observedAt: iso(hoursAgo(5)), views: 1, comments: 1 }] }), 'observations[0].observedAt:before-posted'],
+    ['🔴 목록 시각이 게시보다 이르다', W({ listedAt: iso(hoursAgo(4)) }), 'listedAt:before-posted'],
+    ['🔴 관측 시각이 판정 시각보다 미래', W({ observations: [{ observedAt: iso(new Date(NOW.getTime() + 2 * H)), views: 1, comments: 1 }] }), 'observations[0].observedAt:future'],
+    ['🔴 표본 창 끝이 판정 시각보다 미래', S({ windowTo: iso(new Date(NOW.getTime() + 2 * H)) }), 'sourceStats.windowTo:future'],
+  ]
+  for (const [name, rec, want] of cases) {
+    let v: ReturnType<typeof judge> | null = null
+    let threw = ''
+    try { v = judge(rec) } catch (e) { threw = e instanceof Error ? e.message : String(e) }
+    check(`🔴 ${name} → 예외 없이 unknown · EVIDENCE_INVALID @${want} · 만료 사유`,
+      threw === '' && v !== null && v.verdict === 'unknown' && v.reasons[0] === 'EVIDENCE_INVALID' && v.issue === want && v.expires,
+      threw !== '' ? `THROW ${threw}` : JSON.stringify({ r: v?.reasons, i: v?.issue }))
+  }
+  // 🔴 감사 · 운영 진단이 손상 위치를 식별한다 — 값 · 원문 · 원문 id 는 없다
+  const broken = judge(W({ observations: [null] }))
+  const stamp = releaseStampOf(broken)
+  check('🔴 🔴 **release 도장 · 설명 줄에 손상 위치가 남는다** (감사 · 운영 진단)',
+    stamp.issue === 'observations[0]:not-object' && describeRelease(broken).includes('@observations[0]:not-object'))
+  const cand = (id: string, g: unknown): QueueCandidate => ({
+    queueId: id, title: 't', body: 'b', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null,
+    gateResults: { [SOURCE_EVIDENCE_KEY]: g }, voice: null, profile: 'human',
+  })
+  const prep = prepareCandidates({ candidates: [cand('bad', W({ observations: [null] })), cand('ok', good)], personas: [], at: NOW })
+  check('🔴 🔴 **손상 행 하나가 계획 전체를 죽이지 않는다** — 그 행만 held(EVIDENCE_INVALID · issue · 만료) · 정상 행은 계획에 남는다',
+    prep.held.length === 1 && prep.held[0]!.queueId === 'bad' && prep.held[0]!.hold === 'EVIDENCE_INVALID'
+    && prep.held[0]!.issue === 'observations[0]:not-object' && prep.held[0]!.expires && prep.auto.some((a) => a.queueId === 'ok'))
+  check('🔴 issue 에는 값 · 원문 id 가 없다(경로 · 종류뿐)',
+    cases.every(([, rec]) => {
+      const i = ((): string => { try { return judge(rec).issue ?? '' } catch { return 'THROW' } })()
+      return /^[a-zA-Z.[\]0-9]+:[a-z-]+$/.test(i) && !i.includes('A1')
+    }))
+
+  /**
+   * 🔴 **무작위 손상 fuzz** — 정상 기록의 칸 하나를 무작위 타입 값으로 바꾸고 판정을 부른다. 예외 0 이어야 한다.
+   *    결정론적 PRNG(시드 고정) — 같은 입력이면 같은 결과다.
+   */
+  let seed = 20260930
+  const rnd = (): number => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed / 2 ** 31 }
+  const junk: unknown[] = [null, undefined, 0, -1, 1.5, Number.NaN, Infinity, '', 'x', '2026-10-01', true, [], [null], {}, { a: 1 }, [{}]]
+  const paths: string[][] = [
+    ['postedAt'], ['listedAt'], ['capturedAt'], ['draftedAt'], ['sourceKey'], ['participationDriver'], ['version'],
+    ['response'], ['response', 'views'], ['response', 'comments'], ['response', 'listRank'], ['response', 'observedAt'],
+    ['observations'], ['observations', '0'], ['observations', '0', 'observedAt'], ['observations', '0', 'comments'],
+    ['sourceStats'], ['sourceStats', 'n'], ['sourceStats', 'commentsPct'], ['sourceStats', 'windowFrom'], ['sourceStats', 'windowTo'],
+    ['sourceStats', 'sourceKey'], ['sourceStats', 'method'], ['provenance'], ['provenance', 'articleIdHash'],
+  ]
+  const base = ev({ observations: [{ observedAt: iso(hoursAgo(1)), views: 10, comments: 1 }] })
+  let throws = 0
+  let eligibleCorrupt = 0
+  const N = 2000
+  const okNumber = (leaf: string, value: unknown): boolean => value === null
+    || (typeof value === 'number' && (leaf === 'commentsPct' ? Number.isFinite(value) && value >= 0 && value <= 1 : Number.isSafeInteger(value) && value >= 0))
+  for (let k = 0; k < N; k += 1) {
+    const rec = JSON.parse(JSON.stringify(base)) as Record<string, unknown>
+    const path = paths[Math.floor(rnd() * paths.length)]!
+    const value = junk[Math.floor(rnd() * junk.length)]
+    let cur: Record<string, unknown> = rec
+    for (let d = 0; d < path.length - 1; d += 1) {
+      const next = cur[path[d]!]
+      if (next === null || typeof next !== 'object') { cur = {}; break }
+      cur = next as Record<string, unknown>
+    }
+    const leaf = path[path.length - 1]!
+    cur[leaf] = value
+    try {
+      const v = judgeSlotRelease({ evidence: rec, slotAt: NOW, now: NOW, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: 'f' })
+      // 🔴 숫자 칸에 수가 아닌 값이 들어갔는데 eligible 이면 손상이 통과한 것이다
+      if (v.verdict === 'eligible' && ['views', 'comments', 'listRank', 'n', 'commentsPct'].includes(leaf) && !okNumber(leaf, value)) eligibleCorrupt += 1
+    } catch { throws += 1 }
+  }
+  check(`🔴 🔴 **무작위 손상 ${N}건 — 예외 0** (러너가 죽지 않는다)`, throws === 0, `${throws}건 예외`)
+  check('🔴 🔴 **숫자 칸 손상이 eligible 로 통과한 경우 0**', eligibleCorrupt === 0, `${eligibleCorrupt}건`)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ 🔴 (Lane B) 작은 표본 정규화 — 신뢰도가 없으면 UNKNOWN · 새 최소 수 없음')
+// ─────────────────────────────────────────────────────────
+{
+  const at = NOW
+  const posted = iso(hoursAgo(2))
+  const seen = iso(hoursAgo(1))
+  const me = 'navercafe:t::me'
+  const obs = (i: number, c: number | null, v: number | null, key = `navercafe:t::o${i}`): ListObservation =>
+    ({ sourceKey: 'navercafe:t', articleKey: key, postedAt: posted, observedAt: seen, comments: c, views: v })
+  const snap = (smp: ListObservation[], c: number | null, v: number | null) => sourceStatsSnapshot({
+    sourceKey: 'navercafe:t', articleKey: me, postedAt: posted, observedAt: seen, comments: c, views: v, sample: smp, at,
+  })!
+  type Obs = { observedAt: string; views: number | null; comments: number | null }
+  const verdictOf = (st: ReturnType<typeof snap>, c: number | null, v: number | null, observations: Obs[] = []) =>
+    judge(buildSourceEvidence({
+      postedAt: posted, listedAt: seen, capturedAt: seen, sourceSite: 'navercafe:t', sourceArticleId: 'me',
+      response: { views: v, comments: c, listRank: 1, listPage: 1, observedAt: seen }, observations, sourceStats: st,
+      participationDriver: '동력', draftedAt: iso(hoursAgo(0.5)),
+    }))
+  const s0 = snap([], 5, 50)
+  check('🔴 표본 0 → 백분위 null · RESPONSE_UNNORMALIZED(unknown)', s0.n === 0 && s0.commentsPct === null && verdictOf(s0, 5, 50).reasons[0] === 'RESPONSE_UNNORMALIZED')
+  const sSelf = snap([obs(0, 5, 50, me)], 5, 50)
+  check('🔴 🔴 **표본이 자기 자신 1건 → 자기 제외 n=0 · UNKNOWN** (앞판: 백분위 0.5 · eligible)',
+    sSelf.n === 0 && sSelf.commentsPct === null && verdictOf(sSelf, 5, 50).verdict === 'unknown')
+  const s1 = snap([obs(1, 3, 30)], 5, 50)
+  check('🔴 표본 1건(남) → 분포에 모양이 없다 · null · UNKNOWN', s1.n === 1 && s1.commentsPct === null && s1.viewsPct === null && verdictOf(s1, 5, 50).verdict === 'unknown')
+  const same = [1, 2, 3, 4, 5, 6].map((i) => obs(i, 0, 10))
+  const sSame = snap(same, 0, 10)
+  check('🔴 🔴 **표본 전원 같은 값(댓글 0 · 조회 10) → null · UNKNOWN** (앞판: 0.5)', sSame.commentsPct === null && sSame.viewsPct === null && verdictOf(sSame, 0, 10).verdict === 'unknown')
+  check('🔴 같은 값 표본에서 후보만 크다 — 자리가 정의되지 않는다(크다고 1.0 을 주지 않는다)', snap(same, 9, 99).commentsPct === null)
+  const spread = [0, 1, 2, 3, 4, 5, 6, 7].map((c, i) => obs(i, c, c * 10))
+  const withExtreme = [...spread, obs(99, 100_000, 9_999_999)]
+  check('🔴 극단치 한 건은 순위 한 칸만 움직인다 — 중간 후보 백분위가 흔들리지 않는다',
+    Math.abs((snap(spread, 4, 40).commentsPct ?? 0) - (snap(withExtreme, 4, 40).commentsPct ?? 0)) < 0.07)
+  check('🔴 후보가 극단치여도 백분위는 1 을 넘지 않는다', snap(spread, 1_000_000, 1).commentsPct === 1)
+  const vOnly = verdictOf(snap(spread.map((o) => ({ ...o, comments: null })), null, 55), null, 55)
+  check('조회만 있다 → 조회 백분위로 정규화 · eligible · 댓글 백분위 null(순서에서 뒤)', vOnly.verdict === 'eligible' && vOnly.rank.commentsPct === null && vOnly.rank.viewsPct !== null)
+  const cOnly = verdictOf(snap(spread.map((o) => ({ ...o, views: null })), 5, null), 5, null)
+  check('댓글만 있다 → 댓글 백분위로 정규화 · eligible', cOnly.verdict === 'eligible' && cOnly.rank.commentsPct !== null && cOnly.rank.viewsPct === null)
+  check('🔴 조회 · 댓글 모두 모르고 순위만 있다 → RESPONSE_UNOBSERVED (자리는 반응이 아니다)',
+    judge(buildSourceEvidence({
+      postedAt: posted, listedAt: seen, capturedAt: seen, sourceSite: 'navercafe:t', sourceArticleId: 'me',
+      response: { views: null, comments: null, listRank: 1, listPage: 1, observedAt: seen }, sourceStats: snap(spread, null, null), participationDriver: '동력',
+    })).reasons[0] === 'RESPONSE_UNOBSERVED')
+  check('🔴 댓글만 있는 후보가 조회만 있는 후보보다 먼저다(모르는 성분은 뒤)', compareReleaseRank(cOnly.rank, vOnly.rank) < 0)
+  const once = verdictOf(snap(spread, 4, 40), 4, 40, [{ observedAt: seen, views: 40, comments: 4 }])
+  const twice = verdictOf(snap(spread, 4, 40), 4, 40, [{ observedAt: iso(hoursAgo(1.5)), views: 20, comments: 2 }, { observedAt: seen, views: 40, comments: 4 }])
+  check('반복 관측 1회 → velocity null · 판정은 그대로(eligible)', once.verdict === 'eligible' && once.rank.velocity === null)
+  check('반복 관측 2회 → velocity 4/h · 같은 백분위끼리만 가른다', twice.verdict === 'eligible' && twice.rank.velocity === 4
+    && compareReleaseRank(twice.rank, once.rank) < 0)
+  const legacy = { ...snap(spread, 4, 40), method: undefined } as unknown as ReturnType<typeof snap>
+  check('🔴 🔴 **정규화 판이 없는(옛) 스냅샷 → RESPONSE_UNNORMALIZED** — 자기 포함 0.5 를 믿지 않는다', verdictOf(legacy, 4, 40).reasons[0] === 'RESPONSE_UNNORMALIZED')
+  check('스냅샷은 지금 정규화 판을 적는다', snap(spread, 4, 40).method === SOURCE_STATS_METHOD)
+  check('relativePosition — 값 없음 · 한 점 분포 → null · 두 값 이상이면 백분위',
+    relativePosition(null, [1, 2]) === null && relativePosition(3, [2, 2]) === null && relativePosition(2, [1, 3]) === 0.5)
+  check('🔴 새 최소 표본 수를 만들지 않았다 — 서로 다른 값 둘이면 n=2 로도 정규화된다', snap([obs(1, 0, 0), obs(2, 3, 30)], 2, 20).commentsPct === 0.5)
 }
 
 // ─────────────────────────────────────────────────────────

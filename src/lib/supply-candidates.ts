@@ -63,6 +63,11 @@ export type HeldCandidate = {
   /** 🔴 원천 가치가 사라진 이유면 참 — 발행 트랜잭션 · 정리 계획이 EXPIRED 로 옮길 대상이다 */
   expires: boolean
   reason: string
+  /**
+   * 🔴 **손상 위치** (2026-09-30 Lane B) — `EVIDENCE_INVALID` 면 경로 · 종류(`observations[0]:not-object`), 아니면 null.
+   *    운영 진단(러너 보류 줄 · 관제)이 어느 칸이 깨졌는지 이 값으로 본다 — 값 · 원문은 없다.
+   */
+  issue: string | null
 }
 
 export type PreparedCandidates = {
@@ -138,7 +143,7 @@ export function prepareCandidates(input: {
     const v = first.get(c.queueId)!
     if (v.verdict === 'eligible') { keep.push(c); continue }
     const code = v.reasons[0]!
-    held.push({ queueId: c.queueId, hold: code, expires: v.expires, reason: v.verdict })
+    held.push({ queueId: c.queueId, hold: code, expires: v.expires, reason: v.verdict, issue: v.issue })
   }
 
   /**

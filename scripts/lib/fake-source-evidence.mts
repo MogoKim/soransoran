@@ -10,7 +10,7 @@
  * 🔴 원문 URL · 제목 · 본문 · 닉네임 없음.
  */
 import {
-  buildSourceEvidence, SOURCE_EVIDENCE_KEY,
+  buildSourceEvidence, SOURCE_EVIDENCE_KEY, SOURCE_STATS_METHOD,
   type SourceEvidenceRecord,
 } from '../../src/lib/source-slot-release'
 
@@ -39,8 +39,10 @@ export function fakeSourceEvidence(at: Date, opts: {
     response: { views: 200, comments: 8, listRank: 2, listPage: 1, observedAt: listed.toISOString() },
     observations: [],
     sourceStats: {
-      basis: 'list-artifacts', sourceKey: site, bucket: '<3h', n: 10, commentsPct: opts.commentsPct ?? 0.7, viewsPct: 0.6,
-      windowFrom: new Date(at.getTime() - 72 * H).toISOString(), windowTo: at.toISOString(),
+      basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: site, bucket: '<3h', n: 10, commentsPct: opts.commentsPct ?? 0.7, viewsPct: 0.6,
+      // 🔴 (Lane B) 스냅샷은 적재 때(초안 시각) 뜬다 — 판정 시각보다 미래일 수 없다. 앞판은 기준 시각 `at` 을 창 끝으로
+      //    써서, `at` 보다 이른 시각에 판정하는 검사가 "미래 표본" 을 들고 있었다(이제 판정이 `windowTo:future` 로 닫는다)
+      windowFrom: new Date(drafted.getTime() - 72 * H).toISOString(), windowTo: drafted.toISOString(),
     },
     participationDriver: '검사용 참여 동력',
     draftedAt: drafted.toISOString(),

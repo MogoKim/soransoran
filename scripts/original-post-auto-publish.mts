@@ -281,7 +281,7 @@ for (let attempt = 0; attempt <= stock.targets.length; attempt += 1) {
     }
     console.log(`\n③-d 공개 가치  ${describePrepared(prepared)}`)
     for (const h of prepared.held) {
-      console.log(`   ⌛ ${h.queueId}  [${h.hold}] ${h.expires ? '원천 가치 없음 — 만료 예정(사람이 살리는 칸이 아니다)' : h.reason}`)
+      console.log(`   ⌛ ${h.queueId}  [${h.hold}${h.issue === null ? '' : ` @${h.issue}`}] ${h.expires ? '원천 가치 없음 — 만료 예정(사람이 살리는 칸이 아니다)' : h.reason}`)
     }
   }
 
