@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 /**
- * 앱 아이콘 4종 생성 — 창업자 원본 asset/Favicon.png 전체를 그대로 축소한다
+ * 앱 아이콘 4종 생성 — 창업자가 지정한 최신 asset/Favicon.png 전체를 그대로 축소한다
  *
  *   node scripts/generate-app-icons.mjs <원본 경로>           대조만 한다 (기본 · 파일을 쓰지 않는다)
  *   node scripts/generate-app-icons.mjs <원본 경로> --write   4종을 덮어쓴다
  *
  * 🔴 허용되는 변형은 **정사각 원본 전체를 각 규격으로 축소하는 것 하나**다.
  *    크롭 · 여백 제거 · 배경 교체 · 색 보정 · 팔레트 양자화 · 알파 추가를 하지 않는다.
- *    (2026-09-21 의 반전안·A안은 원본에서 손 심볼만 뽑아 다시 칠한 것이라 폐기했다 —
- *     docs/operations/soransoran-brand-design-spec.md §3-2-A)
  *
  * 🔴 원본은 저장소에 들어오지 않는다. 대신 SHA-256 을 고정해 **다른 파일로 만든 아이콘**을 막는다.
  *    원본이 바뀌면 이 값을 고치기 전에 창업자 승인부터 받는다.
@@ -22,7 +20,7 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 
 const ROOT = process.cwd()
-const SOURCE_SHA256 = '1e580263b581013156e8ae09d34bd91a300a95c13efd76ce815dd604f5890c33'
+const SOURCE_SHA256 = '31386c4076006d7e8abb8abddd88ffb956e19a151aa0e8542acc5da3e262dcbe'
 const SOURCE_SIZE = 1254
 
 /** 쓰임새별 규격 — manifest.ts · brand-assets.ts 와 같은 값이어야 한다 (check:brand-assets 가 대조) */

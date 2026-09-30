@@ -98,14 +98,11 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     locked: false,
     pixels: '96x96',
     note:
-      '✅ 2026-09-29 원본 통일. ' +
-      '🔴 창업자 원본 asset/Favicon.png(1254×1254 · SHA-256 1e580263…890c33) **전체를 변경 없이 축소**했다 — ' +
-      '크림 카드 · 두 사람 · 빛 표시 · 하트 · 이름 글자 두 줄이 모두 들어 있다. ' +
-      '크롭·배경 교체·색 변경·반전을 하지 않았다. 네 아이콘(96·180·192·512)이 같은 원본의 같은 그림이다. ' +
-      '생성·재현 대조: node scripts/generate-app-icons.mjs <원본 경로> (기본 read-only · --write 로만 쓴다). ' +
-      '96 은 Google 이 권장하는 48px 초과 조건을 만족하는 우리 채택 규격이다(Google 강제 규격이 아니다). ' +
-      '🟡 16·32px 탭 표시에서는 글자가 읽히지 않는다 — 원본을 바꾸지 않는다는 결정의 대가로 기록한다. ' +
-      '🕘 2026-09-21~09-29 에는 손 심볼만 뽑아 색을 뒤집은 32×32 반전안이었다 — 원본과 달라 폐기했다. ' +
+      '✅ 2026-09-30 신규 원본으로 교체. ' +
+      '파비콘·Apple 홈 아이콘·Android/PWA 아이콘은 창업자가 지정한 최신 asset/Favicon.png 전체 이미지를 디자인 변경 없이 규격별로 축소해 사용한다. ' +
+      '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
+      '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다. ' +
+      '96 은 Google 이 권장하는 48px 초과 조건을 만족하는 우리 채택 규격이다. ' +
       '🔴 이름이 픽셀에 들어 있다. 이름이 바뀌면 코드로는 못 고친다(replace: true).',
   },
   {
@@ -117,13 +114,10 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     locked: false,
     pixels: '180x180',
     note:
-      '✅ 2026-09-29 원본 통일. ' +
-      '🔴 창업자 원본 asset/Favicon.png(1254×1254 · SHA-256 1e580263…890c33) **전체를 변경 없이 축소**했다 — ' +
-      '크림 카드 · 두 사람 · 빛 표시 · 하트 · 이름 글자 두 줄이 모두 들어 있다. ' +
-      '크롭·배경 교체·색 변경·반전을 하지 않았다. 네 아이콘(96·180·192·512)이 같은 원본의 같은 그림이다. ' +
-      '생성·재현 대조: node scripts/generate-app-icons.mjs <원본 경로> (기본 read-only · --write 로만 쓴다). ' +
-      'iOS 가 모서리를 둥글게 자르므로 원본 바깥의 흰 테두리가 모서리에 조금 보일 수 있다 — 원본 그대로다. ' +
-      '🕘 2026-09-21~09-29 에는 글자·하트를 지운 A안이었다 — 폐기했다.',
+      '✅ 2026-09-30 신규 원본으로 교체. ' +
+      '파비콘·Apple 홈 아이콘·Android/PWA 아이콘은 창업자가 지정한 최신 asset/Favicon.png 전체 이미지를 디자인 변경 없이 규격별로 축소해 사용한다. ' +
+      '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
+      '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다.',
   },
   {
     path: 'public/brand/icon-192.png',
@@ -134,12 +128,11 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     locked: false,
     pixels: '192x192',
     note:
-      '✅ 2026-09-29 원본 통일. ' +
-      '🔴 창업자 원본 asset/Favicon.png(1254×1254 · SHA-256 1e580263…890c33) **전체를 변경 없이 축소**했다 — ' +
-      '크림 카드 · 두 사람 · 빛 표시 · 하트 · 이름 글자 두 줄이 모두 들어 있다. ' +
-      '크롭·배경 교체·색 변경·반전을 하지 않았다. 네 아이콘(96·180·192·512)이 같은 원본의 같은 그림이다. ' +
-      '생성·재현 대조: node scripts/generate-app-icons.mjs <원본 경로> (기본 read-only · --write 로만 쓴다). ' +
-      '🔴 purpose 는 any 다(manifest.ts 참조) — 내용 1.2% 가 maskable 안전영역(지름 80%) 밖이다.',
+      '✅ 2026-09-30 신규 원본으로 교체. ' +
+      '파비콘·Apple 홈 아이콘·Android/PWA 아이콘은 창업자가 지정한 최신 asset/Favicon.png 전체 이미지를 디자인 변경 없이 규격별로 축소해 사용한다. ' +
+      '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
+      '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다. ' +
+      'purpose 는 any 다 — 내용 일부가 maskable 안전영역 밖이다(manifest.ts).',
   },
   {
     path: 'public/brand/icon-512.png',
@@ -149,10 +142,12 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     replace: true,
     locked: false,
     pixels: '512x512',
-    note: '✅ 2026-09-29 원본 통일. ' + '🔴 창업자 원본 asset/Favicon.png(1254×1254 · SHA-256 1e580263…890c33) **전체를 변경 없이 축소**했다 — ' +
-      '크림 카드 · 두 사람 · 빛 표시 · 하트 · 이름 글자 두 줄이 모두 들어 있다. ' +
-      '크롭·배경 교체·색 변경·반전을 하지 않았다. 네 아이콘(96·180·192·512)이 같은 원본의 같은 그림이다. ' +
-      '생성·재현 대조: node scripts/generate-app-icons.mjs <원본 경로> (기본 read-only · --write 로만 쓴다). ' + '192 와 같은 purpose 판단이다.',
+    note:
+      '✅ 2026-09-30 신규 원본으로 교체. ' +
+      '파비콘·Apple 홈 아이콘·Android/PWA 아이콘은 창업자가 지정한 최신 asset/Favicon.png 전체 이미지를 디자인 변경 없이 규격별로 축소해 사용한다. ' +
+      '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
+      '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다. ' +
+      'purpose 는 192 와 같다.',
   },
   {
     path: 'public/brand/soransoran-logo.png',
