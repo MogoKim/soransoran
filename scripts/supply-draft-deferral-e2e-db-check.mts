@@ -82,7 +82,13 @@ const writeListObs = (dir: string, rows: readonly { id: string; site: string; c:
   for (const r of rows) bySite.set(r.site, [...(bySite.get(r.site) ?? []), r])
   for (const [site, rs] of bySite) {
     const cafe = site.split(':')[1] ?? 'x'
-    writeFileSync(join(dir, `navercafe-${cafe}-${t}.list.jsonl`), `${rs.map((r) => JSON.stringify({
+    /**
+     * 🔴 (2026-09-30 Lane B) 목록 회차에는 후보 말고도 **같은 카페의 다른 글**이 찍힌다 — 그것이 비교 표본이다.
+     *    앞판 fixture 는 카페마다 후보 줄만 두어, 한 건뿐인 카페(dupx)는 **자기 자신과 비교해** 0.5 를 받았다.
+     *    이제 자기 제외 · 한 점 분포는 정규화되지 않는다(UNKNOWN) — 실제 목록처럼 다른 글 넷을 함께 둔다.
+     */
+    const population = [0, 1, 3, 8].map((c, k) => ({ id: `${cafe}-pop-${k}`, site, c }))
+    writeFileSync(join(dir, `navercafe-${cafe}-${t}.list.jsonl`), `${[...rs, ...population].map((r) => JSON.stringify({
       sourceSite: site, sourceArticleId: r.id, sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED,
       sourceCommentCount: r.c, sourceViewCount: r.c * 10,
     })).join('\n')}\n`)
