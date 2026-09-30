@@ -22,7 +22,7 @@
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0.
  */
 import {
-  RUNTIME_STAGES, SAFEST_STAGE, stageRank, profileOf,
+  RUNTIME_STAGES, SAFEST_STAGE, stageRank, profileOf, RELEASE_ENV, CAPACITY_ENV,
   type RuntimeStage,
 } from './scale-profile'
 import { planStageDecision, preparedStageOf } from './stage-ladder'
@@ -31,6 +31,7 @@ import {
   type StageDecision, type ValidatedStageDecision,
 } from './stage-decision-contract'
 import { PROOF_DATE_ENV, PROOF_ENV_KEYS, PROOF_STAGE_ENV } from './stage-proof-day'
+import { STAGE_DECISION_MARK_ENV } from './scale-runtime'
 import type { ConsumeOutcome } from './stage-decision-store'
 import type { StageEvidenceVerdict, TrialPlan } from './stage-evidence'
 import type { PreflightVerdict } from './stage-ladder-generic'
@@ -184,8 +185,11 @@ export function validateForToday(d: StageDecision): ReturnType<typeof validateSt
  * 🔴 **결정을 러너 env 로 옮긴다** — 결정이 유일한 단계 입력이다(2026-09-30).
  *    · 결정 OK      → 공개 = 결정의 `release`(TRIAL 이면 시험 단계 그대로) · 준비 눈금 = `capacity`
  *                     · 증명일(TRIAL · REPROVE)이면 증명일 두 칸(`stage-proof-day`), 아니면 빈 값
- *    · legacy      → 아무것도 넣지 않는다 (flag OFF — 롤백 경로 · 사람이 켜고 끄는 kill switch)
- *    · safest      → 결정이 없거나 깨졌다 → d1
+ *    · safest      → 결정이 없거나 깨졌다 · controller flag OFF(kill switch) → d1
+ * 🔴 **legacy(아무것도 넣지 않아 env 파일의 단계가 이기던 경로)는 지웠다** (2026-09-30 · Lane A).
+ *    그 경로에서는 `.env.local` · GitHub Variables 의 손으로 적은 단계가 결정을 대신했다 — 두 번째 권위다.
+ * 🔴 결정 OK 일 때만 **표식**(`STAGE_DECISION_MARK_ENV` = 결정의 KST 날짜)을 넣는다. 표식 없는 단계 칸은
+ *    `scale-runtime.decisionStageEnv` 가 읽지 않는다(= d1) — safest 에 표식을 붙이지 않아도 결과는 같다.
  * 🔴 **canary · window 는 없다** — 앞판은 TRIAL 을 "기반 + canary 허가" 로 옮겨 러너가 14일 준비도로
  *    다시 깎았다(09-29 TRIAL d3 → 러너 d1). 이제 러너는 결정의 단계를 그대로 쓴다.
  */
@@ -196,13 +200,13 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
       ? { [PROOF_STAGE_ENV]: o.decision.release, [PROOF_DATE_ENV]: o.decision.kstDate }
       : blankProof
     return {
-      SORAN_RELEASE_STAGE: o.decision.release,
-      SORAN_CAPACITY_STAGE: o.decision.capacity,
+      [RELEASE_ENV]: o.decision.release,
+      [CAPACITY_ENV]: o.decision.capacity,
+      [STAGE_DECISION_MARK_ENV]: o.decision.kstDate,
       ...proof,
     }
   }
-  if (o.fallback === 'legacy') return {}
-  return { SORAN_RELEASE_STAGE: SAFEST_STAGE, SORAN_CAPACITY_STAGE: SAFEST_STAGE, ...blankProof }
+  return { [RELEASE_ENV]: SAFEST_STAGE, [CAPACITY_ENV]: SAFEST_STAGE, [STAGE_DECISION_MARK_ENV]: '', ...blankProof }
 }
 
 // ─────────────────────────────────────────────────────────

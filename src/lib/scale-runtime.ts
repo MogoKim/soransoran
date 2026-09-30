@@ -27,6 +27,40 @@ import {
   type RuntimeStage, type ScaleProfile,
 } from './scale-profile'
 
+/**
+ * 🔴 **StageDecision 경유 표식** (2026-09-30 · Lane A 단일 실행 authority).
+ *
+ *    `SORAN_RELEASE_STAGE` · `SORAN_CAPACITY_STAGE` 는 이제 **운반용 칸**이다 — 사람이 적는 설정이 아니다.
+ *    consumer(`stage-consume-exec` → `consumerEnvOf`)가 그날 검증된 결정을 넣을 때 **이 표식에 결정의 KST 날짜**를
+ *    함께 넣는다. 표식이 없으면 두 칸은 **읽지 않는다** — 가장 안전한 단계다.
+ *
+ *    🔴 지운 권위: GitHub Variables(`vars.SORAN_*_STAGE`) · `.env.local` 의 손으로 적은 단계 ·
+ *       controller 가 꺼졌을 때 env 값을 그대로 쓰던 legacy 경로. 셋 다 결정 밖에서 단계를 정했다.
+ *    🔴 이 키를 워크플로 · plist · package.json · 운영 셸이나 허용 밖 코드에 적으면
+ *       `stage-authority-graph`(runtime-isolation-check ⑦)가 CI 에서 막는다 — 표식을 손으로 만드는 길을 코드에 두지 않는다.
+ *    🔴 날짜를 "오늘" 과 견주지 않는다. 표식은 **출처**의 증거이지 유효기간이 아니다 — 하루의 경계는 결정 자체
+ *       (`validateStoredDecision` 의 `expectKstDate`)와 증명일(`proofDayOf`)이 이미 지킨다.
+ */
+export const STAGE_DECISION_MARK_ENV = 'SORAN_STAGE_DECISION_DATE'
+
+/** 🔴 결정이 넣은 단계 칸 — 표식이 있을 때만 값이 있다. 아니면 둘 다 undefined(= 가장 안전한 단계) */
+export type DecisionStageEnv = { capacity: string | undefined; release: string | undefined; marked: boolean; reason: string | null }
+
+/**
+ * 🔴 **단계 env 를 읽는 유일한 문** — `resolveScale` · `releaseStageCeiling` · 증명일이 전부 이것을 지난다.
+ *    표식이 KST 날짜 모양(`YYYY-MM-DD`)일 때만 두 칸을 돌려준다.
+ */
+export function decisionStageEnv(env: Readonly<Record<string, string | undefined>>): DecisionStageEnv {
+  const mark = (env[STAGE_DECISION_MARK_ENV] ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(mark)) {
+    return {
+      capacity: undefined, release: undefined, marked: false,
+      reason: 'StageDecision 경유가 아니다(표식 없음) — env 단계 칸은 읽지 않는다 · 가장 안전한 단계',
+    }
+  }
+  return { capacity: env[CAPACITY_ENV], release: env[RELEASE_ENV], marked: true, reason: null }
+}
+
 export type ResolvedScale = {
   /** 🔴 다음에 증명할 단계(결정의 `capacity`) — 공급 준비 눈금 */
   capacityStage: RuntimeStage
@@ -63,12 +97,15 @@ export const SAFEST_SCALE: ResolvedScale = Object.freeze({
  *    그날 결정의 `release` · `capacity` 를 env 로 넣는다 — 이 함수는 그것을 읽을 뿐이다.
  *    🔴 **지운 입력**: 14일 준비도 감속(`readiness` · `safeStageFor`) · 하루짜리 시험 허가(canary) ·
  *    기간형 허가(window). 셋 다 결정 밖에서 단계를 올리거나 깎던 두 번째 · 세 번째 정본이었다.
- *    (controller flag 가 꺼진 롤백 경로에서는 env 파일 값이 그대로 쓰인다 — 사람이 켜고 끄는 kill switch 다.)
+ *    🔴 **표식(`STAGE_DECISION_MARK_ENV`)이 붙은 env 만 읽는다.** 표식이 없으면(GitHub Variables · 손으로 적은
+ *    `.env.local` · 러너 직접 실행) 가장 안전한 단계다. controller flag 가 꺼지면 consumer 도 가장 안전한 단계를
+ *    넣는다 — env 로 돌아가는 legacy 롤백 경로는 지웠다.
  */
 export function resolveScale(env: Readonly<Record<string, string | undefined>>): ResolvedScale {
-  const cap = resolveRuntimeStage(env[CAPACITY_ENV], 'capacity')
-  const rel = resolveRuntimeStage(env[RELEASE_ENV], 'release')
-  const notes: string[] = [cap.fallbackReason, rel.fallbackReason].filter((x): x is string => x !== null)
+  const d = decisionStageEnv(env)
+  const cap = resolveRuntimeStage(d.capacity, 'capacity')
+  const rel = resolveRuntimeStage(d.release, 'release')
+  const notes: string[] = [d.reason, cap.fallbackReason, rel.fallbackReason].filter((x): x is string => x !== null)
   // capacity 상한 — 결정 검증이 이미 release ≤ capacity 를 지킨다. 여기서는 손으로 적은 env 도 같은 규칙을 지나게 한다
   let stage = rel.stage
   let throttledByCapacity = false
@@ -130,14 +167,16 @@ export function describeScale(r: ResolvedScale): string {
 }
 
 /**
- * 🔴 **env 만으로 정하는 공개 단계 천장** (2026-09-25 · 2026-09-30 단순화) — `min(capacity, release)`.
+ * 🔴 **결정 표식이 붙은 env 로 정하는 공개 단계 천장** (2026-09-25 · 2026-09-30 단순화) — `min(capacity, release)`.
  *    발행 트랜잭션은 호출자가 넘긴 단계를 이 천장으로 누른다 — 호출자 숫자가 상한을 여는 길을 없앤다.
  *    🔴 canary · window 허가로 천장을 올리던 경로는 지웠다(결정이 유일한 단계 입력이다).
+ *    🔴 표식이 없으면(러너를 consumer 없이 직접 실행) 천장은 가장 안전한 단계다 — 트랜잭션 안에서도 같다.
  */
 export function releaseStageCeiling(env: Readonly<Record<string, string | undefined>>, now: Date): RuntimeStage {
   void now
-  const cap = resolveRuntimeStage(env[CAPACITY_ENV], 'capacity').stage
-  const top = resolveRuntimeStage(env[RELEASE_ENV], 'release').stage
+  const d = decisionStageEnv(env)
+  const cap = resolveRuntimeStage(d.capacity, 'capacity').stage
+  const top = resolveRuntimeStage(d.release, 'release').stage
   return stageRank(top) > stageRank(cap) ? cap : top
 }
 

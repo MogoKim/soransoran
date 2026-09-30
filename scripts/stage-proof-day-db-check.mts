@@ -30,6 +30,7 @@ import { createStageDecision } from '../src/lib/stage-decision-repo'
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { judgeStageEvidence, personaCommentCapFor } from '../src/lib/stage-evidence'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch, laneOf } from './lib/publishable-stock.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -115,10 +116,10 @@ const auto = async (voice: string, daysAgo: number) => {
  * 🔴 러너 env 모양 — consumer 가 넣는 그대로(2026-09-30 · canary 제거).
  *    증명일(TRIAL d3): release = d3 · 증명일 두 칸. 비시험일(지속 d3 · 증명 후 HOLD): release = d3 · 증명일 칸 없음.
  */
-const envOf = (proof: boolean): Record<string, string> => ({
+const envOf = (proof: boolean): Record<string, string> => markedStageEnv({
   [RELEASE_ENV]: 'd3', [CAPACITY_ENV]: 'd3', [AUTO_READY_ENV]: 'on',
   ...(proof ? { [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY } : {}),
-})
+}, TODAY)
 /** 🔴 증거 기준 시각 — 계획(REAL_NOW) · 트랜잭션(TX_BASE) 어느 쪽에서도 게시 72h 안 · 미래 시각 없음 */
 const EVIDENCE_AT = new Date(Math.min(REAL_NOW.getTime(), TX_BASE.getTime()))
 
@@ -187,8 +188,8 @@ async function main(): Promise<void> {
     check('🔴 PREPARE 날 → 증명일 빈 값(비시험일)', pe[PROOF_STAGE_ENV] === '' && pe[PROOF_DATE_ENV] === '', JSON.stringify(pe))
     const safe = consumerEnvOf({ ok: false, code: 'BROKEN', fallback: 'safest', reason: '' })
     check('🔴 결정이 깨졌다(safest) → 증명일 빈 값', safe[PROOF_STAGE_ENV] === '')
-    check('🔴 증명일 날짜가 오늘이 아니면 꺼진다', proofDayOf({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: previousKstDate(TODAY)! }, REAL_NOW) === null)
-    check('🔴 모르는 단계면 꺼진다', proofDayOf({ [PROOF_STAGE_ENV]: 'd7', [PROOF_DATE_ENV]: TODAY }, REAL_NOW) === null)
+    check('🔴 증명일 날짜가 오늘이 아니면 꺼진다', proofDayOf(markedStageEnv({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: previousKstDate(TODAY)! }), REAL_NOW) === null)
+    check('🔴 모르는 단계면 꺼진다', proofDayOf(markedStageEnv({ [PROOF_STAGE_ENV]: 'd7', [PROOF_DATE_ENV]: TODAY }), REAL_NOW) === null)
     check('필요 수 — 3 목표 · 오늘 자동 1 → 2 · 비시험일 → 0',
       autoFirstNeeded(proofDayOf(envOf(true), REAL_NOW), 1) === 2 && autoFirstNeeded(proofDayOf(envOf(false), REAL_NOW), 0) === 0)
   }

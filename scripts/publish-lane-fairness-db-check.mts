@@ -23,6 +23,7 @@ import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { planStore } from '../src/lib/original-post-match-store'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch, laneOf, preferredLane } from './lib/publishable-stock.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -39,7 +40,7 @@ const check = (label: string, ok: boolean, detail = ''): void => {
 const NOW = new Date()
 const DAY = 864e5
 const envOf = (release: ReleaseStage): Record<string, string> =>
-  ({ [RELEASE_ENV]: release, [CAPACITY_ENV]: 'd10', [AUTO_READY_ENV]: 'on' })
+  markedStageEnv({ [RELEASE_ENV]: release, [CAPACITY_ENV]: 'd10', [AUTO_READY_ENV]: 'on' })
 
 async function main(): Promise<void> {
   console.log('\n── 순수 — preferredLane ──')

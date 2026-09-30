@@ -9,9 +9,15 @@
  *    실행 직전에 결정 값을 env 로 넣으면 그 값이 이긴다 — 발행·공급 러너 파일을 건드리지 않고 연결된다.
  *
  * 🔴 계약 (정본 `consumeStageDecision` 그대로)
- *    · `STAGE_CONTROLLER_ENABLED` 가 on 이 아니다 → **아무것도 넣지 않고** 그대로 실행 (legacy)
- *    · 그날 결정이 검증을 통과했다 → 공개·천장 = 결정 · canary/window 허가는 빈 값
- *    · 결정이 없다 · 깨졌다 · DB 를 못 읽었다 → 가장 안전한 d1 (사후에 만들지 않는다)
+ *    · 그날 결정이 검증을 통과했다 → 공개·천장 = 결정 · **표식**(`STAGE_DECISION_MARK_ENV` = 결정 날짜)을 함께 넣는다
+ *    · 결정이 없다 · 깨졌다 · DB 를 못 읽었다 · `STAGE_CONTROLLER_ENABLED` 가 on 이 아니다(kill switch)
+ *      → 가장 안전한 d1 (사후에 만들지 않는다)
+ *
+ * 🔴 **자동 실행의 유일한 문이다** (2026-09-30 · Lane A 단일 실행 authority).
+ *    · 옛 legacy 경로(flag off → 아무것도 넣지 않고 `.env.local` 단계가 이기던 것)는 지웠다.
+ *    · 러너를 이 파일 없이 부르면 단계 칸에 표식이 없어 `scale-runtime` 이 **읽지 않는다**(= d1).
+ *    · 워크플로 · launchd 템플릿 · package.json 이 발행/공급 러너를 이 문 없이 부르면
+ *      `stage-authority-graph`(runtime-isolation-check ⑦)가 CI 에서 막는다.
  *
  * 🔴 DB write 0. 읽기는 오늘 결정 한 행뿐이다.
  */
@@ -47,10 +53,12 @@ const NOW = new Date()
 const today = kstDateString(NOW)
 const flagOn = controllerEnabled(readEnvKeys([CONTROLLER_ENV]).values)
 
-let overrides: Record<string, string> = {}
+let overrides: Record<string, string>
 let note: string
 if (!flagOn) {
-  note = `${CONTROLLER_ENV} off — legacy (아무것도 넣지 않는다)`
+  // 🔴 kill switch — 결정을 읽지 않고 가장 안전한 단계를 **명시해서** 넣는다(env 파일 단계가 이기지 못한다)
+  overrides = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: `${CONTROLLER_ENV} off` })
+  note = `${CONTROLLER_ENV} off — kill switch → safest`
 } else {
   let prisma: PrismaClient | null = null
   try {

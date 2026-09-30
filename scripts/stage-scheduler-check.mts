@@ -61,6 +61,7 @@ import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { settledUnitUsd, settledTotalUsd, cappedBy } from './lib/stage-preflight-facts.mjs'
 import { COMMENT_RUNNER_SLOTS, COMMENT_RUNNER_MAX_GAP_MINUTES } from './lib/persona-comment-runner-template'
 import { readEnvKeys } from './lib/ops-signals.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -504,7 +505,7 @@ section('⑥ 러너 연결 — consumer env → 러너 설정 · catch-up · 증
   check('러너 — 증명일 d20 · 목표 20', proof !== null && proof.stage === 'd20' && proof.target === 20)
   check('🔴 발행 트랜잭션 천장 — 같은 env 로 d20 · d10 env 면 d20 요청도 d10 으로 누른다(옛 canary 키는 무시)',
     boundedReleaseStage('d20', env, now) === 'd20'
-    && boundedReleaseStage('d20', { [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10', SORAN_RELEASE_CANARY_STAGE: 'd20', SORAN_RELEASE_CANARY_DATE: t.decision.kstDate }, now) === 'd10')
+    && boundedReleaseStage('d20', markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10', SORAN_RELEASE_CANARY_STAGE: 'd20', SORAN_RELEASE_CANARY_DATE: t.decision.kstDate }), now) === 'd10')
   const r = walk(startRow('d5', 'REPROVE'), ['unread']).days[0]!
   const renv = r.valid === null ? {} : consumerEnvOf({ ok: true, decision: r.valid })
   check('consumer — REPROVE d5 → 공개 d5 · 증명일 d5', tr(r) === 'REPROVE:d5' && renv.SORAN_RELEASE_STAGE === 'd5'
@@ -525,8 +526,10 @@ section('⑦ 롤백 — stage:switch --off')
     const after = readEnvKeys([CONTROLLER_ENV, 'SORAN_CAPACITY_STAGE', 'OTHER'], envFile).values
     check('🔴 stage:switch --off → controller off · 다른 키 그대로', r.status === 0 && !controllerEnabled(after)
       && after.SORAN_CAPACITY_STAGE === 'd20' && after.OTHER === '1', `${r.status} ${r.stderr.slice(-200)}`)
-    check('🔴 off 면 consumer 는 아무것도 넣지 않는다(legacy)',
-      Object.keys(consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'legacy', reason: '' })).length === 0)
+    check('🔴 off 면 consumer 는 d1 을 명시해서 넣는다(env 파일 단계가 이기는 legacy 경로 없음)', (() => {
+      const e = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: 'off' })
+      return e.SORAN_RELEASE_STAGE === 'd1' && e.SORAN_CAPACITY_STAGE === 'd1' && e.SORAN_STAGE_DECISION_DATE === ''
+    })())
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 

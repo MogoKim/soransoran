@@ -19,6 +19,7 @@ import * as canaryLib from '../src/lib/release-canary'
 import { judgeDayGuard, kstDateString, slotsLeftToday } from '../src/lib/release-canary'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { PROFILES } from '../src/lib/scale-profile'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -64,7 +65,7 @@ console.log('\n② 🔴 하루 보호장치 — 재고 부족과 결함을 같�
 console.log('\n③ 🔴 🔴 옛 canary · window env 는 죽은 입력이다')
 // ─────────────────────────────────────────────────────────
 {
-  const baseEnv = { SORAN_CAPACITY_STAGE: 'd1', SORAN_RELEASE_STAGE: 'd1' }
+  const baseEnv = markedStageEnv({ SORAN_CAPACITY_STAGE: 'd1', SORAN_RELEASE_STAGE: 'd1' })
   const legacy = {
     ...baseEnv,
     SORAN_RELEASE_CANARY_STAGE: 'd3', SORAN_RELEASE_CANARY_DATE: '2026-09-22',
@@ -77,8 +78,10 @@ console.log('\n③ 🔴 🔴 옛 canary · window env 는 죽은 입력이다')
     `${a.releaseStage} / ${b.releaseStage}`)
   check('🔴 결과 모양에 canary · readiness 칸이 없다',
     !('canary' in b) && !('readinessApplied' in b) && !('chosenReady' in b) && !('throttledByReadiness' in b))
-  const d3 = resolveScale({ SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3' } as NodeJS.ProcessEnv)
+  const d3 = resolveScale(markedStageEnv({ SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3' }) as NodeJS.ProcessEnv)
   check('🟢 단계는 결정(consumer env) 값 그대로 — d3 이면 d3', d3.releaseStage === 'd3')
+  const hand = resolveScale({ SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3' } as NodeJS.ProcessEnv)
+  check('🔴 🔴 **표식 없는 손 env d3 → d1 (GitHub Variables · .env.local 단계는 결정이 아니다)**', hand.releaseStage === 'd1')
 }
 
 // ─────────────────────────────────────────────────────────

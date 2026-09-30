@@ -39,6 +39,7 @@ import {
 } from '../src/lib/micro-seed-supply-autofill'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 import type { PersonaForMatch } from '../src/lib/original-post-persona-match'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -166,7 +167,7 @@ console.log('\n② 🔴 🔴 (2026-09-30) 기간형(window) · 하루 canary 경
    *    그 권위를 지웠으므로 여기서는 **그 키가 죽은 입력인지**만 본다. 하루 보호장치(`judgeDayGuard`)는
    *    `release:canary-check` ② 가, 단계 결정은 `stage:scheduler-check` 가 본다.
    */
-  const base = { SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd1' }
+  const base = markedStageEnv({ SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd1' })
   const withWindow = { ...base, SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-26',
     SORAN_RELEASE_CANARY_STAGE: 'd5', SORAN_RELEASE_CANARY_DATE: '2026-09-23' }
   check('🔴 🔴 **기간 · canary 키를 실어도 공개 단계는 결정 env(d1) 그대로**',

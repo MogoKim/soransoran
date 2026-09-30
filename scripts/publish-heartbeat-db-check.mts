@@ -28,6 +28,7 @@ import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
 import { heartbeatWakeTimes, PUBLISH_HEARTBEAT_ARGS } from './lib/original-post-runner-template'
 import { heartbeatInWindow, heartbeatTickKey } from './lib/publish-heartbeat-tick.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -51,17 +52,21 @@ const K = (s: string): Date => new Date(`${s}+09:00`)
 const at = (day: string, m: number): Date =>
   K(`${day}T${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:00`)
 const hhmm = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
-const envOf = (stage: string): Record<string, string> => ({ SORAN_RELEASE_STAGE: stage, SORAN_CAPACITY_STAGE: stage })
+const envOf = (stage: string): Record<string, string> => markedStageEnv({ SORAN_RELEASE_STAGE: stage, SORAN_CAPACITY_STAGE: stage })
 /** 🔴 운영 로컬 정본과 같은 모양 — 기간 변수 없음 */
-const LOCAL_ENV = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
+const LOCAL_ENV = markedStageEnv({ SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' })
 /**
  * 🔴 GitHub 쪽 env — (2026-09-30) 기간(window) · canary 변수는 지웠다. 단계는 StageDecision consumer 가 넣은
  *    그날 결정(TRIAL d3 = release d3 · capacity d3) 그대로다. 옛 기간 키를 같이 실어 **무시되는지**도 본다.
  */
-const GITHUB_ENV = {
+/**
+ * 🔴 (2026-09-30 · Lane A) GitHub 예약 발행자는 지웠다 — 이 env 는 이제 **천장이 다른 두 번째 동시 writer**
+ *    (예: 배포 전 옛 러너)를 흉내 낸다. 트랜잭션 수준 중복 0 · 천장 준수는 writer 수와 무관하게 지켜져야 한다.
+ */
+const GITHUB_ENV = markedStageEnv({
   SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3',
   SORAN_RELEASE_WINDOW_STAGE: 'd10', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29',
-}
+})
 /**
  * 🔴 원문 증거 기준 시각 — 시나리오 날의 KST 자정. 게시는 그보다 6시간 앞(전날 18시)이라 그날 · 다음 날 아침까지
  *    72h 안이다. 증거 없는 옛 fixture 는 트랜잭션이 EXPIRED 로 옮긴다(source-slot-v1).
@@ -317,7 +322,7 @@ async function main(): Promise<void> {
       check(`🔴 🔴 **같은 틱(${tick}) 동시 두 wake — 하나만 선택 단계로 · 하나는 TICK_TAKEN · 둘 다 exit 0**`,
         claimed.length === 1 && taken.length === 1 && a.code === 0 && b.code === 0, `${a.code}/${b.code}\n${a.out.slice(-600)}\n---\n${b.out.slice(-600)}`)
       check('🔴 선택 단계로 간 쪽이 단계 입력을 값으로 남겼다 — 천장 d1',
-        claimed[0]?.out.includes('③-s 단계 입력  capacity=d5 · release=d1 → 천장 d1') === true
+        claimed[0]?.out.includes('③-s 단계 입력  StageDecision · capacity=d5 · release=d1 → 천장 d1') === true
         && claimed[0]?.out.includes('천장 d1 (하루 1건)') === true, claimed[0]?.out.slice(0, 400) ?? '')
       check('🔴 TICK_TAKEN 쪽은 DB 에 붙기 전에 끝났다(재고 조립 줄이 없다)', taken[0]?.out.includes('① 대기열') === false)
       const c = await run(args)

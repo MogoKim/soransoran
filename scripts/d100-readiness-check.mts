@@ -43,7 +43,12 @@ import {
   EXISTING_ANALYTICS_EVENTS, NORTH_STAR_REQUIRED_EVENTS, countsTowardNorthStar,
   missingEvents, sumCountedActors,
 } from '../src/lib/north-star'
-import { compareWorkflowSuperset, allStageCronLines, stageGatingPresent } from '../src/lib/scale-workflow-render'
+import {
+  compareWorkflowSuperset, allStageCronLines, stageGatingPresent, scheduleTextOfSlots, retiredPublishWorkflowProblems,
+} from '../src/lib/scale-workflow-render'
+import { calendarSlots } from './lib/launchd-install.mjs'
+import { renderPublishRunnerPlist } from './lib/original-post-runner-template'
+import { AUTHORITY_RENDER_INPUT } from './lib/stage-authority-repo'
 import { readWorkset } from '../src/lib/supply-workset'
 import {
   judgeStageStatus, buildStageFacts, firstBrokenStage, rateOf, showRate, describeBacklog,
@@ -239,11 +244,17 @@ console.log('\n③ 🔴 🔴 Queue ↔ Post — 숨긴 글과 끊어진 연결�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n④ 🔴 🔴 workflow stage — superset 은 정상, gating 없는 cron 은 FAIL')
+console.log('\n④ 🔴 🔴 발행 예약(launchd 러너) — superset 은 정상, gating 없는 cron 은 FAIL')
 // ─────────────────────────────────────────────────────────
 {
-  const yml = readFileSync('.github/workflows/auto-publish.yml', 'utf-8')
-  check('🔴 🔴 **실제 yml 은 모든 단계의 합집합이다 — 불일치 0**',
+  /**
+   * 🔴 (2026-09-30 · 단일 실행 authority) 발행 예약의 정본은 launchd 러너 plist 다 — GitHub 예약은 지웠다.
+   *    합집합 계약은 그대로다: 러너 plist 의 `StartCalendarInterval` 을 같은 cron 표현으로 읽어 견준다.
+   */
+  const yml = scheduleTextOfSlots(calendarSlots(renderPublishRunnerPlist(AUTHORITY_RENDER_INPUT)))
+  check('🔴 🔴 **GitHub 발행 워크플로에 예약이 없다(두 번째 schedule owner 0)**',
+    retiredPublishWorkflowProblems(readFileSync('.github/workflows/auto-publish.yml', 'utf-8')).length === 0)
+  check('🔴 🔴 **실제 launchd 러너 예약은 모든 단계의 합집합이다 — 불일치 0**',
     compareWorkflowSuperset(yml).length === 0,
     JSON.stringify(compareWorkflowSuperset(yml)))
   check('🔴 🔴 **어느 단계 슬롯도 아닌 cron 은 FAIL**',
@@ -259,9 +270,9 @@ console.log('\n④ 🔴 🔴 workflow stage — superset 은 정상, gating 없�
     return stageGatingPresent(src)
   })())
   check('🔴 gating 이 없으면 FAIL', !stageGatingPresent('const x = 1'))
-  check('🔴 🔴 **health 가 합집합 기준을 쓴다** — 활성 단계로 견주지 않는다', (() => {
+  check('🔴 🔴 **health 가 GitHub 발행 예약 부활을 본다** — 활성 단계로 견주지 않는다', (() => {
     const h = readFileSync('scripts/supply-health.mts', 'utf-8')
-    return /compareWorkflowSuperset\(/.test(h)
+    return /retiredPublishWorkflowProblems\(/.test(h) && !/compareWorkflow\(/.test(h)
   })())
 }
 

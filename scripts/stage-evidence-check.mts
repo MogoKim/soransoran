@@ -33,6 +33,7 @@ import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
 import { autoFirstNeeded, proofDayOf, PROOF_DATE_ENV, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -404,11 +405,13 @@ console.log('\n④ 저장 validator — 재시험 모양은 받고 근거 없는
 
 console.log('\n⑤ 단계 증명일 — 목표 슬롯을 자동 target 이 먼저 (순수)')
 {
-  const envP = { [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }
+  const envP = markedStageEnv({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }, TODAY)
   const pd = proofDayOf(envP, NOW)
   check('증명일 — 오늘 · d3 · 목표 3', pd !== null && pd.stage === 'd3' && pd.target === 3)
   check('🔴 날짜가 다르면 증명일이 아니다', proofDayOf({ ...envP, [PROOF_DATE_ENV]: D }, NOW) === null)
   check('🔴 칸이 비면 증명일이 아니다(비시험일)', proofDayOf({}, NOW) === null && proofDayOf({ [PROOF_STAGE_ENV]: 'd3' }, NOW) === null)
+  check('🔴 🔴 **표식 없이 손으로 적은 두 칸은 증명일이 아니다 (consumer 경유만)**',
+    proofDayOf({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }, NOW) === null)
   check('필요 수 = 목표 − 오늘 자동 target (음수 없음)', autoFirstNeeded(pd, 0) === 3 && autoFirstNeeded(pd, 2) === 1
     && autoFirstNeeded(pd, 5) === 0 && autoFirstNeeded(null, 0) === 0)
   // consumer — 증명일 칸의 출처

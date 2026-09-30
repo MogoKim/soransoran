@@ -12,6 +12,7 @@ import {
 } from './lib/persona-comment-runner-template'
 import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
 import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
+import { PUBLISH_RUNNER_ARGS } from './lib/original-post-runner-template'
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
@@ -688,8 +689,13 @@ const workflow = readFileSync('.github/workflows/auto-publish.yml', 'utf8')
  *
  *    🔴 문자열 개수를 늘려 부풀리지 않는다. **사실이 갈라지는 다섯 지점**만 본다.
  */
-check('현재 scheduled publish는 회차당 1건이다',
-  /original-post-auto-publish\.mts --apply --limit=1\b/.test(workflow))
+/**
+ * 🔴 (2026-09-30 · 단일 실행 authority) 예약 발행의 정본은 launchd 러너다 — GitHub 워크플로는 dry-run 만 한다.
+ *    회차당 1건 계약은 러너 템플릿의 인자(`PUBLISH_RUNNER_ARGS`)에서 읽는다.
+ */
+check('현재 scheduled publish는 회차당 1건이다(launchd 러너 인자)',
+  PUBLISH_RUNNER_ARGS.includes('--apply') && PUBLISH_RUNNER_ARGS.includes('--limit=1')
+  && !workflow.split('\n').filter((l) => !l.trim().startsWith('#')).some((l) => l.includes('--apply')))
 check('🔴 workflow 상단이 "매일 한 번" 이라고 주장하지 않는다', !workflow.includes('매일 한 번'))
 check('🔴 Master 현재 상태에 workflow 1슬롯/day 가 남아 있지 않다', !master.includes('1슬롯/day'))
 check('🔴 Master 현재 병목에 workflow 1/10 슬롯이 남아 있지 않다', (() => {

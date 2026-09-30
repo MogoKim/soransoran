@@ -39,6 +39,7 @@ import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 
 import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 /**
  * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
  *    발행된 사람 결정 행 · 수정·폐기 없음 → noEdit 로 결속한다.
@@ -624,14 +625,14 @@ async function main(): Promise<void> {
     await stale('모르는 단계 문자열 → 가장 안전한 d1', idM, planFor(greedy), '(d1)', { releaseStage: 'd999' })
     const pm = await publishOriginalPostTx(prisma, {
       queueId: idM, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: 'd10' }, autoAssign: planFor(greedy),
-      autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' },
+      autoReadyEnv: markedStageEnv({ ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' }),
     })
     check('🔴 대조 — env 가 d10 을 허락하면 같은 행이 나간다 (2일 전 · d10 최소 1일)', pm.kind === 'published', JSON.stringify(pm))
     const pm2 = await (async () => {
       const id = await unassigned({ voice: greedy.code })
       return publishOriginalPostTx(prisma, {
         queueId: id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: 'd10' }, autoAssign: planFor(greedy),
-        autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd3' },
+        autoReadyEnv: markedStageEnv({ ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd3' }),
       })
     })()
     check('🔴 🔴 **env release 가 d10 이어도 capacity d3 이 천장이다**',

@@ -35,6 +35,7 @@ import { planPublishBatch, resolvePublishScale } from './lib/publishable-stock.m
 import { activeScale } from '../src/lib/scale-runtime'
 import { judgeStageEvidence, type StageEvidenceVerdict } from '../src/lib/stage-evidence'
 import { auditTarget } from '../src/lib/auto-ready-v2'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -338,8 +339,8 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
   const off = await consumeStageDecision({
     read: async () => D(), validate: pass, controllerOn: false, by: 'supply',
   })
-  check('🔴 🔴 **kill switch 가 꺼져 있으면 기존 경로로 간다**',
-    !off.ok && off.fallback === 'legacy', JSON.stringify(off))
+  check('🔴 🔴 **kill switch 가 꺼져 있으면 가장 안전한 단계로 간다 — env 로 돌아가는 legacy 경로는 없다**',
+    !off.ok && off.fallback === 'safest', JSON.stringify(off))
   const none = await consumeStageDecision({
     read: async () => null, validate: pass, controllerOn: true, by: 'publish',
   })
@@ -1210,7 +1211,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     const loaded = await loadPublishableStock(fakeOf(qrows, [prow('P01', 'p1')]), RUN_AT)
     const before = activeScale()
     const r = resolvePublishScale({
-      env: { SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }, loaded, now: RUN_AT,
+      env: markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }), loaded, now: RUN_AT,
     })
     const after = activeScale()
     check('🔴 🔴 **resolver 호출이 activeScale 을 바꾸지 않는다**',
@@ -1241,7 +1242,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
       qrow({ id: `q${String(i).padStart(2, '0')}`, persona: null, captured: fresh }))
     const prows = Array.from({ length: 30 }, (_, i) => prow(`P${String(i).padStart(2, '0')}`, `p${i}`))
     const loaded = await loadPublishableStock(fakeOf(qrows, prows), RUN_AT)
-    const BASE = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
+    const BASE = markedStageEnv({ SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' })
     const at = (env: Record<string, string>) => {
       const r = resolvePublishScale({ env, loaded, now: RUN_AT })
       return { r, plan: core(loaded, r.caps) }
@@ -1257,7 +1258,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
       && legacy.r.caps.postsPerWeek === bare.r.caps.postsPerWeek
       && legacy.plan.assignmentReady.join(',') === bare.plan.assignmentReady.join(','),
       `${legacy.r.scale.releaseStage} 일${legacy.r.dailyCap}`)
-    const d3 = at({ SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3' })
+    const d3 = at(markedStageEnv({ SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3' }))
     check('🟢 결정이 d3 이면(TRIAL · consumer env) d3 상한 — 배정이 늘어난다',
       d3.r.scale.releaseStage === 'd3' && d3.r.dailyCap === 3 && d3.plan.assignmentReady.length > bare.plan.assignmentReady.length,
       `bare ${bare.plan.assignmentReady.length} vs d3 ${d3.plan.assignmentReady.length}`)

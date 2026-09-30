@@ -49,6 +49,7 @@ import {
 import { snapshot, buildSpeakerLoad, supplyPlanningProfile } from './supply-process.mjs'
 import { remainingCapacity } from '../src/lib/content-core/speaker-availability'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -76,7 +77,7 @@ const NOW = new Date()
 const DAY = 864e5
 /** 🔴 단계 env 는 **값으로** 넘긴다 — 프로세스 env 를 바꾸지 않는다 */
 const envOf = (release: ReleaseStage, capacity: ReleaseStage, extra: Record<string, string> = {}): Record<string, string> =>
-  ({ [RELEASE_ENV]: release, [CAPACITY_ENV]: capacity, ...extra })
+  markedStageEnv({ [RELEASE_ENV]: release, [CAPACITY_ENV]: capacity, ...extra })
 
 type Mark = 'current' | 'otherDigest' | 'otherVersion' | 'none'
 /** 🔴 행 쪽 품질 계약 표식 — `current` 만 지금 코드 상수와 같다 */

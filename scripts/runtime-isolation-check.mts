@@ -45,6 +45,14 @@ import { RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-tem
 /** 🔴 배포기가 잠시 멈출 job 목록의 정본 — 배포기와 **같은 상수** */
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeEnv } from './lib/runtime-env.mjs'
+/** 🔴 단일 실행 authority — 활성 호출 그래프 판정(⑦) */
+import {
+  judgeAuthority, readAuthorityInputs, describeReach, entryKindOf, type AuthorityInputs, type ViolationCode,
+} from './lib/stage-authority-graph'
+import { renderedLaunchd } from './lib/stage-authority-repo'
+import { resolveScale, releaseStageCeiling, boundedReleaseStage } from '../src/lib/scale-runtime'
+import { proofDayOf } from '../src/lib/stage-proof-day'
+import { consumerEnvOf } from '../src/lib/stage-controller'
 
 /** 🔴 예약 실행 전용 worktree — 개발 작업트리와 **다른 곳**이다 */
 export const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
@@ -2266,6 +2274,114 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
   }
 
   for (const d of worlds) rmSync(d, { recursive: true, force: true })
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑦ 🔴 단일 실행 authority — 활성 호출 그래프 (2026-09-30 · D100 Lane A)
+// ─────────────────────────────────────────────────────────
+/**
+ * 🔴 정본 "single always-on runtime owner · no routine human stage/env command".
+ *    판정은 `stage-authority-graph` — workflow YAML 파싱 · package.json 해석 · launchd ProgramArguments ·
+ *    TypeScript import 그래프로 **실제로 닿는 경로**를 따라간다. 문자열 grep 이 아니다.
+ *    아래 변이는 실제 저장소 입력을 한 곳씩 되돌려(옛 authority 복원) **정확히 그 위반 코드**가 나는지 본다.
+ */
+console.log('\n⑦ 🔴 단일 실행 authority (StageDecision → consumer → launchd 러너 하나)')
+{
+  const base = readAuthorityInputs(process.cwd(), renderedLaunchd())
+  const v0 = judgeAuthority(base)
+  console.log(`   발행 엔트리(import 그래프) ${v0.publishEntries.join(' · ')}`)
+  console.log(`   예약 workflow ${v0.workflows.filter((w) => w.scheduled).map((w) => `${w.file}(${w.cronCount})`).join(' · ') || '없음'}`)
+  for (const r of v0.reaches.filter((x) => entryKindOf(x.entry, v0.publishEntries) !== null)) console.log(`   · ${describeReach(r)}`)
+  for (const p of v0.pending) console.log(`   🟡 다른 레인 소유(패치 사양 보고) — ${p.file}: ${p.detail}`)
+  for (const x of v0.violations) console.log(`   🔴 [${x.code}] ${x.where} — ${x.detail}`)
+  check('🔴 🔴 지금 저장소 — 단일 실행 authority 위반 0', v0.ok)
+  check('🔴 발행 엔트리는 import 그래프로 찾는다 — 자동 러너 · 수동 긴급 도구 둘',
+    v0.publishEntries.includes('scripts/original-post-auto-publish.mts') && v0.publishEntries.includes('scripts/original-post-publish-live.mts'))
+  check('🔴 launchd 발행 러너가 consumer(--by=publish)를 지나 러너에 닿는다(실제 렌더 plist)',
+    v0.reaches.some((r) => r.invoker === `launchd:${PUBLISH_RUNNER_LABEL}` && r.entry === 'scripts/original-post-auto-publish.mts' && r.wrappedBy === 'publish'))
+  check('🔴 launchd 공급 러너가 consumer(--by=supply)를 지나 supply-process 에 닿는다(템플릿)',
+    v0.reaches.some((r) => r.invoker === 'launchd:com.soransoran.supply-process' && r.entry === 'scripts/supply-process.mts' && r.wrappedBy === 'supply'))
+  check('🔴 발행 엔트리의 자동 schedule owner 는 launchd 러너 하나다',
+    JSON.stringify(v0.owners['scripts/original-post-auto-publish.mts'] ?? []) === JSON.stringify([`launchd:${PUBLISH_RUNNER_LABEL}`]))
+
+  // ── 행동 — 옛 변수는 어떤 결정도 내리지 못한다 ──
+  const T = new Date('2026-09-30T03:00:00Z')
+  const hand = { SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10', SORAN_RELEASE_WINDOW_STAGE: 'd10',
+    SORAN_RELEASE_WINDOW_FROM: '2026-09-01', SORAN_RELEASE_WINDOW_UNTIL: '2026-12-31', SORAN_RELEASE_CANARY_STAGE: 'd10',
+    SORAN_RELEASE_CANARY_DATE: '2026-09-30', SORAN_STAGE_PROOF_STAGE: 'd10', SORAN_STAGE_PROOF_DATE: '2026-09-30' }
+  check('🔴 🔴 **손으로 적은 옛 변수 전부(d10) → resolveScale d1 · 천장 d1 · 증명일 없음**',
+    resolveScale(hand).releaseStage === 'd1' && resolveScale(hand).capacityStage === 'd1'
+    && releaseStageCeiling(hand, T) === 'd1' && boundedReleaseStage('d10', hand, T) === 'd1' && proofDayOf(hand, T) === null)
+  const off = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: 'kill switch' })
+  check('🔴 🔴 **controller OFF(kill switch) → consumer 가 d1 을 명시해서 넣는다 — env 파일 단계가 이기는 legacy 경로 없음**',
+    resolveScale({ ...hand, ...off }).releaseStage === 'd1' && off.SORAN_RELEASE_STAGE === 'd1')
+  const withDecision = { ...hand, ...consumerEnvOf({ ok: true, decision: { kstDate: '2026-09-30', release: 'd3', capacity: 'd5', state: 'TRIAL' } as never }) }
+  check('🟢 결정이 넣은 칸(d3 · 표식)만 단계가 된다 — 옛 canary/window d10 은 무시',
+    resolveScale(withDecision).releaseStage === 'd3' && releaseStageCeiling(withDecision, T) === 'd3' && proofDayOf(withDecision, T)?.stage === 'd3')
+  const consumeSrc = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
+  check('🔴 consumer 는 kill switch 에서도 결정 칸을 넣는다(빈 overrides 로 실행하는 길 없음)',
+    !/let overrides: Record<string, string> = \{\}/.test(consumeSrc) && /overrides = consumerEnvOf\(\{ ok: false, code: 'NO_DECISION', fallback: 'safest'/.test(consumeSrc))
+
+  // ── 변이 — 옛 authority 를 한 곳씩 되살리면 정확히 그 코드로 실패한다 ──
+  type Mut = { name: string; want: ViolationCode; apply: (i: AuthorityInputs) => AuthorityInputs }
+  const wf = (i: AuthorityInputs, file: string, f: (t: string) => string): AuthorityInputs =>
+    ({ ...i, workflows: i.workflows.map((w) => (w.file === file ? { ...w, text: f(w.text) } : w)) })
+  const src = (i: AuthorityInputs, file: string, f: (t: string) => string): AuthorityInputs => {
+    const m = new Map(i.sources); m.set(file, f(m.get(file) ?? '')); return { ...i, sources: m }
+  }
+  const sched = (t: string): string => t.replace('on:\n  workflow_dispatch:', "on:\n  schedule:\n    - cron: '30 0 * * *'\n  workflow_dispatch:")
+  const muts: Mut[] = [
+    { name: 'auto-publish.yml 에 cron 복원', want: 'SCHEDULE_PUBLISH', apply: (i) => wf(i, 'auto-publish.yml', sched) },
+    { name: 'auto-publish.yml 이 러너를 직접 실행(--apply)', want: 'CONSUMER_BYPASS',
+      apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('npx tsx scripts/stage-consume-exec.mts --by=publish -- npx tsx scripts/original-post-auto-publish.mts', 'npx tsx scripts/original-post-auto-publish.mts --apply --limit=1 --trigger=schedule')) },
+    { name: 'auto-publish.yml 이 vars.SORAN_RELEASE_STAGE 를 넘김', want: 'LEGACY_ENV',
+      apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n', '      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n      SORAN_RELEASE_STAGE: ${{ vars.SORAN_RELEASE_STAGE }}\n')) },
+    { name: 'supply-collect.yml 이 window 변수를 넘김', want: 'LEGACY_ENV',
+      apply: (i) => wf(i, 'supply-collect.yml', (t) => t.replace('      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n', '      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n      SORAN_RELEASE_WINDOW_STAGE: ${{ vars.SORAN_RELEASE_WINDOW_STAGE }}\n')) },
+    { name: 'workflow 가 npm run original-post:auto-publish 로 우회(package.json 해석)', want: 'CONSUMER_BYPASS',
+      apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('npx tsx scripts/stage-consume-exec.mts --by=publish -- npx tsx scripts/original-post-auto-publish.mts', 'npm run -s original-post:auto-publish -- --apply --limit=1')) },
+    { name: '발행 러너를 --by=supply 로 감쌈', want: 'CONSUMER_BYPASS',
+      apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('--by=publish -- npx tsx scripts/original-post-auto-publish.mts', '--by=supply -- npx tsx scripts/original-post-auto-publish.mts')) },
+    { name: 'launchd 발행 plist 가 consumer 없이 러너를 부름', want: 'CONSUMER_BYPASS',
+      apply: (i) => ({ ...i, launchd: i.launchd.map((l) => (l.source.startsWith('render:original-post-runner(fixed)')
+        ? { ...l, xml: l.xml.replace(/<string>[^<]*stage-consume-exec\.mts<\/string>\s*<string>--by=publish<\/string>\s*<string>--<\/string>\s*<string>[^<]*<\/string>\s*<string>tsx<\/string>/, '') } : l)) }) },
+    { name: 'launchd 템플릿 env 에 SORAN_CAPACITY_STAGE', want: 'LEGACY_ENV',
+      apply: (i) => ({ ...i, launchd: i.launchd.map((l) => (l.source.endsWith('supply-process.plist.template')
+        ? { ...l, xml: l.xml.replace('<key>EnvironmentVariables</key>\n  <dict>', '<key>EnvironmentVariables</key>\n  <dict>\n    <key>SORAN_CAPACITY_STAGE</key><string>d10</string>') } : l)) }) },
+    { name: 'supply-collect.yml 에 cron 복원(launchd supply-process 와 같은 작업)', want: 'DUPLICATE_OWNER',
+      apply: (i) => wf(i, 'supply-collect.yml', (t) => t.replace('on:\n', "on:\n  schedule:\n    - cron: '0 */4 * * *'\n")) },
+    { name: 'workflow 예약이 package.json 을 거쳐 발행 엔트리에 닿음', want: 'SCHEDULE_PUBLISH',
+      apply: (i) => wf(i, 'supply-collect.yml', (t) => t.replace('on:\n', "on:\n  schedule:\n    - cron: '0 */4 * * *'\n")
+        .replace('npx tsx scripts/micro-seed-82cook-thin-detail.mts', 'npm run original-post:auto-publish; npx tsx scripts/micro-seed-82cook-thin-detail.mts')) },
+    { name: '러너 TS 가 SORAN_RELEASE_WINDOW_STAGE 를 다시 읽음', want: 'DEAD_KEY_READ',
+      apply: (i) => src(i, 'scripts/original-post-auto-publish.mts', (t) => `${t}\nconst w = process.env.SORAN_RELEASE_WINDOW_STAGE\nvoid w\n`) },
+    { name: '공급 TS 가 SORAN_RELEASE_STAGE 를 직접 읽음(두 번째 stage authority)', want: 'STAGE_ENV_OUTSIDE',
+      apply: (i) => src(i, 'scripts/supply-process.mts', (t) => `${t}\nconst s = process.env.SORAN_RELEASE_STAGE\nvoid s\n`) },
+    { name: '운영 러너가 검사 전용 표식 fixture 를 import', want: 'FIXTURE_IN_RUNTIME',
+      apply: (i) => src(i, 'scripts/original-post-auto-publish.mts', (t) => `import { markedStageEnv } from './lib/stage-decision-fixture'\n${t}\nvoid markedStageEnv\n`) },
+    { name: 'package.json script 가 SORAN_RELEASE_STAGE=d10 을 적음', want: 'LEGACY_ENV',
+      apply: (i) => ({ ...i, packageScripts: { ...i.packageScripts, 'publish:d10': 'SORAN_RELEASE_STAGE=d10 tsx scripts/stage-consume-exec.mts --by=publish -- npx tsx scripts/original-post-auto-publish.mts' } }) },
+    { name: '새 발행 스크립트(import 그래프로만 발견)를 launchd 가 직접 부름', want: 'CONSUMER_BYPASS',
+      apply: (i) => {
+        const m = new Map(i.sources)
+        m.set('scripts/new-publisher.mts', "import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'\nawait publishOriginalPostTx({} as never)\n")
+        return { ...i, sources: m, launchd: [...i.launchd, { source: 'mut:new', xml: '<plist><dict><key>Label</key><string>com.soransoran.new</string><key>ProgramArguments</key><array><string>/x/npx</string><string>tsx</string><string>/rt/scripts/new-publisher.mts</string></array><key>StartInterval</key><integer>600</integer></dict></plist>' }] }
+      } },
+    { name: '운영 셸이 러너를 직접 실행', want: 'CONSUMER_BYPASS',
+      apply: (i) => ({ ...i, shells: [...i.shells, { file: 'scripts/ops/publish-now.sh', text: '#!/bin/sh\ncd "$REPO" && npx tsx scripts/original-post-auto-publish.mts --apply --limit=1 --trigger=local\n' }] }) },
+    { name: '다른 레인 허용 목록이 낡음(이미 고쳐진 파일)', want: 'PENDING_STALE',
+      apply: (i) => src(i, 'scripts/ops-status.mts', (t) => t.replace(/'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', /g, '')) },
+  ]
+  let killed = 0
+  for (const m of muts) {
+    const v = judgeAuthority(m.apply(base))
+    const hit = v.violations.some((x) => x.code === m.want)
+    const baseHad = v0.violations.some((x) => x.code === m.want)
+    if (hit && !baseHad) killed += 1
+    else console.log(`   🔴 변이 생존 — ${m.name} (기대 ${m.want} · 실제 ${v.violations.map((x) => x.code).join(',') || '위반 0'})`)
+  }
+  console.log(`   변이 ${killed}/${muts.length} 잡힘`)
+  check(`🔴 🔴 **변이 ${muts.length}개 전부 정확한 코드로 잡힌다 (${killed}/${muts.length})**`, killed === muts.length)
 }
 
 // ─────────────────────────────────────────────────────────
