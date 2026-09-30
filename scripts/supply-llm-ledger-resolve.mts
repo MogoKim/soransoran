@@ -32,7 +32,7 @@ import {
 } from '../src/lib/llm-ledger'
 import {
   appendLedgerLine, clearOpenReservation, defaultLedgerDir, ledgerPathOf,
-  openReservationsPathOf, pidAlive, readOpenReservations, settleHoldPathOf, withLedgerLock,
+  openReservationsPathOf, pidAlive, readLedgerDay, readOpenReservations, settleHoldPathOf, withLedgerLock,
 } from './lib/llm-ledger-store.mjs'
 
 const argv = process.argv.slice(2)
@@ -97,6 +97,19 @@ function main(): void {
   if (target === undefined) fail(`열린 예약에 ${ATTEMPT} 가 없습니다`)
 
   withLedgerLock(DIR, () => {
+    const path = ledgerPathOf(DIR, ledgerDateOf(new Date(target.startedAt)))
+    /**
+     * 🔴 **원래 예약 줄의 실행 종류 · 슬롯을 옮겨 적는다** (2026-09-29 3차).
+     *    이 줄이 접을 때 예약 줄을 **이긴다** — 표식을 빼고 적으면 그 요청이 어느 정기 슬롯의 것이었는지
+     *    장부에서 사라진다. 그러면 ① "사람이 마감한 슬롯은 정기 실측에서 뺀다" 가 걸리지 않고
+     *    ② 그 금액이 슬롯 지출에서 빠진다. 원래 줄을 못 읽으면 표식 없이 적는다 — 실측 쪽이
+     *    `startedAt` 으로 그 슬롯을 따로 뺀다(`scheduledRunSamples`).
+     */
+    const day = readLedgerDay(path)
+    const original = day.ok ? day.entries.find((e) => e.attemptId === target.attemptId) : undefined
+    const tags = original?.runKind === undefined && original?.runSlot === undefined
+      ? {}
+      : { runKind: original?.runKind ?? null, runSlot: original?.runSlot ?? null }
     /**
      * 🔴 **줄을 하나 더 적는다.** 예약 줄은 그대로 남고, 접을 때 이 줄이 이긴다.
      *    `usageUnknown` 으로 마감하면 그 건은 **여력에서 계속 빠진다** —
@@ -117,8 +130,9 @@ function main(): void {
       errorCode: NOTE === '' ? 'HUMAN_RESOLVED' : `HUMAN_RESOLVED:${NOTE.slice(0, 80)}`,
       // 🔴 코드가 스스로 쓰지 않는 값이다. 사람이 마감했다는 표시다
       resolvedBy: 'human',
+      ...tags,
     }
-    appendLedgerLine(ledgerPathOf(DIR, ledgerDateOf(new Date(target.startedAt))), entry)
+    appendLedgerLine(path, entry)
     clearOpenReservation(DIR, target.attemptId)
   })
 
