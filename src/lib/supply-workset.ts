@@ -1,5 +1,5 @@
 import {
-  AUTO_DECISIONS, HARD_BLOCK, hardGate, holdBeforeAsking, RAW_AXIS,
+  AUTO_DECISIONS, HARD_BLOCK, hardGate, holdBeforeAsking, RAW_AXIS, conclusionHoldsUnder,
   type AutoDecision, type JudgeInput,
 } from './micro-seed-auto-judge'
 import {
@@ -13,6 +13,7 @@ import {
   AUTOFILL_SITE_PREFIX, MACHINE_SITE_PREFIX, baseArticleId, isOurSite,
 } from './micro-seed-supply-autofill'
 import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+import { adaptationContractOf } from './raw-adaptation'
 
 /**
  * 공급 회차의 **작업 묶음** — 🔴 AI 를 부르기 전에 **코드가** 정한다 (2026-09-20)
@@ -137,16 +138,16 @@ export type WorksetPlan = {
 // ─────────────────────────────────────────────────────────
 // 🔴 **축별 자리** (2026-09-28)
 //
-//   생성 레인은 판정이 `AUTO_SEED` 를 준 원천만 읽는다(`micro-seed-auto-draft` 의 입력).
-//   `rawOriginality` 축 원천은 판정이 `AUTO_RAW`(다른 레인) 이거나, 모델이 SEED 라고
-//   답하면 정책이 `axisMismatch` HOLD 로 바꾼다 — **어느 쪽이든 이 레인에서 초안이 0 이다.**
-//
 //   실측(2026-09-21~27, 39회차 195자리): raw 85자리 → AUTO_RAW 23 · HOLD 62(그중 axisMismatch 61)
 //   · 초안 0 · 채택 0. seed 110자리 → AUTO_SEED 90 · 초안 50 · 채택 33.
 //   댓글 수만 보고 고르니 raw 가 43% 자리를 먹었고, 마지막 두 회차는 5자리 중 3자리가 raw 였다.
 //
-//   🔴 **raw 를 영구 제외하지 않는다.** raw 레인의 판정도 이 회차가 내는 결론이고,
-//      제외하면 raw 원천은 영영 판정되지 않는다. 대신 **자리를 제한한다.**
+//   🔴 **2026-09-29 — raw 는 더 이상 초안 0 인 축이 아니다.** 판정 v4 가 `axisMismatch` HOLD 를 없앴고
+//      (`AUTO_RAW` 는 이제 "raw 축의 깨끗한 통과"), 생성 레인이 `AUTO_RAW` 를 **적응 경로**
+//      (`raw-adaptation.ts` — 1인칭 금지 · 쟁점 보존 · 내부 실험 격리)로 초안화한다.
+//   🔴 그래도 **자리 제한은 그대로 둔다.** 적응 경로는 창업자 gold 표본이 없는 새 경로다 —
+//      한 회차에 raw 가 차지할 수 있는 몫(상한 10 → 2)이 곧 이 경로의 유료 호출 상한이다.
+//      raw 를 영구 제외하지도 않는다 — 자리를 남겨 둔다.
 // ─────────────────────────────────────────────────────────
 
 /** 🔴 원천의 축 — 판정기 정본(`RAW_AXIS`) 하나로 가른다 */
@@ -210,23 +211,23 @@ export function worksetAxisQuota(
  * 🔴 **한 원천의 지난 결과 하나.** 판정이든 생성이든 같은 모양으로 본다 —
  *    두 벌로 두면 "어느 쪽이 최신인가" 를 비교할 수 없다.
  *
- * `seeded`    판정이 통과시켰다 — 생성으로 간다
+ * `seeded`    판정이 통과시켰다 — 생성으로 간다 (`AUTO_SEED` 는 seed 경로 · `AUTO_RAW` 는 적응 경로)
  * `terminal`  이 원천은 끝났다 — 다음 회차에서 뺀다
- * `rawLane`   판정이 **다른 레인(원문 그대로)** 으로 보냈다 — 이 생성 레인에서는 끝이다
  * `retryable` 못 물어봤거나 못 끝냈다 — 다시 본다
  * `candidate` 초안이 나왔다 — 적재되면 큐 형제로 걸린다
  * `unknown`   읽지 못했다 — 결론이 아니다. 영구 제외하지 않는다
  */
 export const OUTCOME_STATES = [
-  'seeded', 'terminal', 'rawLane', 'retryable', 'candidate', 'unknown',
+  'seeded', 'terminal', 'retryable', 'candidate', 'unknown',
 ] as const
 export type OutcomeState = (typeof OUTCOME_STATES)[number]
 
 /**
- * 🔴 **이 생성 레인에서 끝난 상태.** 다음 회차 선택에서 뺀다 —
- *    `terminal` 은 결론이고, `rawLane` 은 애초에 이 레인의 일이 아니다.
+ * 🔴 **이 생성 레인에서 끝난 상태.** 다음 회차 선택에서 뺀다 — `terminal` 은 결론이다.
+ *    🔴 (2026-09-29) `rawLane` 을 없앴다 — `AUTO_RAW` 는 이제 이 레인이 적응 경로로 초안화한다.
+ *       남겨 두면 raw 통과 원천이 다시 "끝남" 으로 빠져 초안 0 이 된다.
  */
-export const CONCLUDED_STATES = ['terminal', 'rawLane'] as const satisfies readonly OutcomeState[]
+export const CONCLUDED_STATES = ['terminal'] as const satisfies readonly OutcomeState[]
 
 /** 🔴 단계 순위 — **같은 시각이면 생성이 판정보다 뒤다** */
 export const STAGE_RANK = Object.freeze({ judge: 0, draft: 1 } as const)
@@ -312,6 +313,11 @@ export type PriorJudgementRow = {
   semanticStatus: string
   decidedAt: string
   /**
+   * 🔴 **판정 사유** (2026-09-29) — 앞 판(v3) 기록이 지금 규칙(v4)의 결론인지 가르는 데만 쓴다
+   *    (`conclusionHoldsUnder`). 없으면 앞 판 기록은 인정하지 않는다.
+   */
+  reasonCodes?: readonly string[]
+  /**
    * 🔴 **그 판정을 낸 회차** (2026-09-28). 판정 러너가 적는다 — `runId` 는 `--run-id`,
    *    `runAt` 은 회차 시각(`SORAN_RUN_AT`). 옛 기록에는 없다 → 회차 기록의 단계 구간으로 찾는다.
    */
@@ -373,8 +379,11 @@ export function parseInstantMs(raw: unknown): number | null {
 function seededState(decision: AutoDecision): OutcomeState {
   switch (decision) {
     case 'AUTO_SEED': return 'seeded'
-    // 🔴 원문 그대로 레인으로 갔다 — Content Core 생성 대상이 아니다. 여기서 끝이다
-    case 'AUTO_RAW': return 'rawLane'
+    /**
+     * 🔴 **raw 축의 깨끗한 통과 — 적응 경로로 초안화한다** (2026-09-29).
+     *    앞판은 `rawLane`(다른 레인)으로 끝냈는데 그 레인은 받아 쓰는 곳이 없었다 — 초안 0.
+     */
+    case 'AUTO_RAW': return 'seeded'
     case 'AUTO_HOLD': return 'terminal'
     case 'AUTO_DROP': return 'terminal'
     default: {
@@ -395,7 +404,14 @@ export function judgementOutcome(
   const atMs = parseInstantMs(j.decidedAt)
   if (id === '' || atMs === null) return null
   if (S(j.inputHash) !== currentInputHash) return null
-  if (S(j.ruleVersion) !== canon.ruleVersion) return null
+  /**
+   * 🔴 **규칙 판** — 같은 판이거나, 판정 정본이 "이 앞 판 결론은 지금도 같다" 고 인정한 기록만 (2026-09-29).
+   *    v3 → v4 는 `axisMismatch` 한 자리만 바꿨다. 그 밖의 v3 결론까지 버리면 끝난 원천(HOLD·DROP)을
+   *    전부 유료로 다시 판정하게 된다.
+   */
+  if (!conclusionHoldsUnder({ ruleVersion: S(j.ruleVersion), reasonCodes: j.reasonCodes }, canon.ruleVersion)) {
+    return null
+  }
   if (S(j.promptVersion) !== canon.promptVersion) return null
   if (S(j.model) !== canon.judgeModel) return null
   const decision = S(j.decision)
@@ -429,7 +445,13 @@ export function artifactOutcome(
   const atMs = parseInstantMs(a.generatedAt)
   if (id === '' || atMs === null) return null
   if (S(a.artifactVersion) !== artifactVersion) return null
-  if (!sameGenerationContract(a.contract, currentContract)) return null
+  /**
+   * 🔴 **지금 계약은 둘이다** (2026-09-29) — seed 계약과, 그것에서 한 칸만 바꾼 적응 계약.
+   *    적응 artifact 를 seed 계약으로만 견주면 영영 "지금 계약" 이 아니어서 같은 raw 원천을 유료로 되풀이한다.
+   *    🔴 원천 지문(`sourceInputHash`)은 둘 다 같은 칸이다 — 다른 원천의 artifact 는 여전히 걸러진다.
+   */
+  if (!sameGenerationContract(a.contract, currentContract)
+    && !sameGenerationContract(a.contract, adaptationContractOf(currentContract))) return null
   const outcome = S(a.outcome)
   const state: OutcomeState =
     // 🔴 모양을 읽지 못했으면(`retryable === null`) 결론이 아니다
@@ -461,6 +483,8 @@ export function shadowRecordOutcome(
     ruleVersion: S(raw.ruleVersion), promptVersion: S(raw.promptVersion), model: S(raw.model),
     decision: S(raw.decision), semanticStatus: S(raw.semanticStatus),
     decidedAt: S(raw.decidedAt),
+    // 🔴 앞 판 기록의 인정 여부를 가른다 — 배열이 아니면 넘기지 않는다(= 앞 판 기록은 인정하지 않는다)
+    ...(Array.isArray(raw.reasonCodes) ? { reasonCodes: raw.reasonCodes.map((x) => S(x)) } : {}),
     // 🔴 판정 러너가 적은 회차 칸 — 옛 줄에는 없다(없으면 넘기지 않는다)
     ...(typeof raw.runAt === 'string' ? { runAt: raw.runAt } : {}),
     ...(typeof raw.runId === 'string' ? { runId: raw.runId } : {}),

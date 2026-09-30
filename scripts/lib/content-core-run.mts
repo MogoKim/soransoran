@@ -43,6 +43,10 @@ import {
 } from '../../src/lib/content-core/replan-input'
 /** 🔴 초안 게이트 — 자료 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제 (2026-09-26) */
 import { judgeDraftGates, type DraftGateSource } from '../../src/lib/content-core/draft-life-gates'
+/** 🔴 적응 경로(긴 사연 → AI 원작 글) — 정본은 `raw-adaptation.ts` 하나다 (2026-09-29) */
+import {
+  judgeRawAdaptation, isAdaptationContract, RAW_ADAPTATION_LABEL, type DraftRoute,
+} from '../../src/lib/raw-adaptation'
 
 /** 🔴 KST 날짜 한 줄 — 주입된 시각에서만 만든다 */
 function kstDateKey(at: Date): string {
@@ -231,6 +235,13 @@ export type RunInput = {
    *    같은 계획을 되풀이하지 않게 한다. 🔴 유료 호출을 늘리지 않는다 — 입력만 늘린다.
    */
   priorFailures?: readonly PriorPlanFailure[]
+  /**
+   * 🔴 **초안 경로** (2026-09-29) — `seed`(기존 그대로) · `adapt`(긴 사연 → 쟁점만 꺼낸 AI 원작 글).
+   *    없으면 `seed` 다 — 기존 호출부의 요청이 한 글자도 바뀌지 않는다.
+   *    🔴 `adapt` 면 계약도 적응 계약이어야 한다(`adaptationContractOf`) — 어긋나면 부르기 전에 멈춘다.
+   *    🔴 러너가 경로를 잘못 넘겨도 채택 자리(`pickV2`)가 판정 값에서 다시 읽어 막는다.
+   */
+  route?: DraftRoute
 }
 
 /**
@@ -358,11 +369,20 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   })
 
   const noDet: DeterministicResult = { pass: true, failures: [] }
+  const adapt = input.route === 'adapt'
   /**
    * 🔴 **추천 후보는 artifact 에 값으로 남는다** (2026-09-23 마스터 P0-3).
    *    `blank()` 가 이 변수를 읽는다 — 실패 경로마다 따로 넘기면 한 곳이 빠진다.
    */
   let suggested: readonly string[] = []
+  /**
+   * 🔴 **경로와 계약이 같은 말을 하는가** (2026-09-29). 적응 경로인데 seed 계약이면(또는 반대면)
+   *    그 artifact 는 다음 회차가 "어느 규칙의 결론인가" 를 가를 수 없다 — 부르기 전에 멈춘다.
+   */
+  if (adapt !== isAdaptationContract(input.contract)) {
+    return blank(null, [], null, null, noDet, null, notRun('wiringBroken'),
+      'hold', `초안 경로(${input.route ?? 'seed'})와 생성 계약이 어긋났다 — 배선이 어긋났다`)
+  }
   if (budgetProblems.length > 0) {
     return blank(null, [], null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
@@ -409,6 +429,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const pRes = await ask('speakerPlan', buildSpeakerPlanSystemPrompt(),
     buildSpeakerPlanPayload({
       packet, personas: ordered, priorFailures: priorFailureLines(prior), selfForbidden,
+      ...(adapt ? { adaptation: true } : {}),
     }))
   const pC = completionOf(pRes)
   if (!pC.complete) {
@@ -456,6 +477,15 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    아래로 흘렀다 — 말투 근거도 자격 판정도 없는 글이 만들어진다.
    *    🔴 제안 밖이면 만들지 않는다(fail-closed).
    */
+  /**
+   * 🔴 **적응 경로는 1인칭 경험 자리를 쓰지 않는다** (2026-09-29). 계획 요청에 금지를 실었는데도
+   *    SELF 로 왔으면 **생성 전에** 멈춘다 — 유료 초안·검수 0. 긴 사연을 화자의 일로 옮기지 않는다.
+   */
+  if (adapt && plan.stance === 'SELF_EXPERIENCE') {
+    return blank(plan, dropped, null, null,
+      { pass: false, failures: [{ code: 'adaptSelfExperience', detail: 'stance=SELF_EXPERIENCE' }] },
+      null, notRun('deterministicFailed'), 'hold', RAW_ADAPTATION_LABEL.adaptSelfExperience)
+  }
   // 🔴 계획이 본 것과 **같은 dated 스냅샷**에서 고른다 — 정적 카드로 되돌아가지 않는다
   const persona = dated.find((p) => p.code === plan.personaCode)
   if (persona === undefined) {
@@ -582,8 +612,11 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   })
   const draftSystem = buildV2DraftSystemPrompt({
     plan, voice, life: persona, mappings: mapping.mappings, keep: keepRules,
+    ...(adapt ? { adaptation: true } : {}),
   })
-  const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona })
+  const reviewSystem = buildV2ReviewSystemPrompt({
+    plan, voice, life: persona, ...(adapt ? { adaptation: true } : {}),
+  })
   const voiceless = [
     ...(voiceStandardMissingFrom(draftSystem, voice) ? ['생성'] : []),
     ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
@@ -680,6 +713,16 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       source: { title: input.title, body: input.maskedBody, ...input.sourceMeta },
     },
   })) failures.push(g)
+  /**
+   * 🔴 **적응 경로의 결정적 검사** (2026-09-29) — 주제 낱말 · 논쟁이 남았는가 · 1인칭 경험이 아닌가.
+   *    유료 검수 요청 **앞**이다. 채택 자리(`pickV2`)가 같은 함수로 다시 본다(캐시 artifact 포함).
+   */
+  if (adapt) {
+    for (const f of judgeRawAdaptation({
+      stance: plan.stance, sourceTitle: input.title, sourceBody: input.maskedBody,
+      draftTitle: draft.title, draftBody: draft.body,
+    })) failures.push(f)
+  }
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {
     const stop = notRun('deterministicFailed')

@@ -648,7 +648,9 @@ export const STOCK_BUCKET_META: Record<StockBucket, { wip: boolean; owner: Recov
   assignmentException: { wip: false, owner: 'human', label: '배정 예외 — 말투 · 생활사 · 비활성 (시간이 풀지 않는다)' },
   qualityContractMismatch: {
     wip: false, owner: 'human',
-    label: '옛 품질 계약 기계 초안 — 자동 READY · 자동 발행 영구 제외 (큐에 남는다 · 사람 검토로만 나간다)',
+    // 🔴 (2026-09-29 · #627) 적응 레인 격리 행(긴 사연 적응 · 내부 실험)도 이 칸이다 — 창업자 검토 대기가 아니다
+    label: '옛 품질 계약 기계 초안(사람 검토로만 나간다) · 적응 레인 격리 행(내부 실험 · 창업자 대기열 아님 · 7일 기한)'
+      + ' — 자동 READY · 자동 발행 영구 제외 (큐에 남는다)',
   },
   profileMismatch: { wip: false, owner: 'none', label: 'profile 불일치 (legacy · 영영 나가지 않는다)' },
   gateBlocked: { wip: false, owner: 'human', label: 'gate · 안전 · 제목 복제 · 빈 글' },

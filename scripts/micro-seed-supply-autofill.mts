@@ -56,6 +56,11 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { loadStockClassification, describeStockClassification } from './lib/publishable-stock.mjs'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
+/** 🔴 적응 레인 격리 — 회차·하루 상한 · seed 먼저 (2026-09-29) */
+import { isRawAdaptCandidate } from '../src/lib/raw-adapt-lane'
+import {
+  planAdaptLoads, quarantineLoadedToday, RAW_ADAPT_LOAD_CAP_PER_RUN, RAW_ADAPT_LOAD_CAP_PER_DAY,
+} from '../src/lib/raw-adapt-quarantine'
 
 const DATA_DIR = '.microseed-data'
 /** 🔴 사람이 보류한 글 — 재생성되는 후보 파일과 따로 산다 (§4-AN ②) */
@@ -282,6 +287,8 @@ async function main(): Promise<void> {
       status: true, promptVersion: true, createdPostId: true,
       // 🔴 재고는 profile 로 센다 — 판만 보면 못 먹는 행까지 센다
       model: true, gateResults: true,
+      // 🔴 적응 행 하루 상한을 DB 가 적은 적재 시각으로 센다 (2026-09-29)
+      createdAt: true,
       rawContent: { select: { sourceArticleId: true, rawTitle: true, sourceSite: true } },
     },
   })
@@ -327,7 +334,7 @@ async function main(): Promise<void> {
 
   // ── ② 선별 ──
   // 🔴 후보마다 자기 봉투로 판정한다 — 합친 뒤에도 어느 갈래인지 잃지 않는다
-  const targets: Candidate[] = []
+  let targets: Candidate[] = []
   const skipped: { title: string; code: string }[] = []
   /** 🔴 보고서용 — 제목이 아니라 후보 자체를 잡아 둔다(파일별로 센다) */
   const skippedC: { c: Candidate; code: FillSkipCode }[] = []
@@ -351,6 +358,18 @@ async function main(): Promise<void> {
       skippedC.push({ c, code: r.skipped[0].code })
     }
   }
+  /**
+   * ── ②-a 🔴 **적응 레인 상한 — seed 먼저** (2026-09-29 · `raw-adapt-quarantine.ts`) ──
+   *    적응 후보(내부 실험 격리)는 회차 상한 · 하루(KST) 상한까지만 싣는다. seed 후보는 하나도 빠지지 않고
+   *    원래 순서 그대로 앞에 선다 — 적응이 `--up-to` 자리를 먼저 먹지 않는다.
+   *    🔴 상한에 걸린 적응 후보는 **건너뜀**(`RAW_ADAPT_CAP`)이다. `cut` 이 아니다 — 이월 파일 자리를 차지하지 않는다.
+   */
+  const adaptToday = quarantineLoadedToday(queueRows, new Date())
+  const adaptPlan = planAdaptLoads({ targets, isAdapt: (c) => isRawAdaptCandidate(c), loadedToday: adaptToday })
+  targets = adaptPlan.ordered
+  for (const c of adaptPlan.capped) skippedC.push({ c, code: 'RAW_ADAPT_CAP' })
+  console.log(`\n②-a 적응 레인(내부 실험 격리) — 오늘 적재 ${adaptToday}건 · 이번 회차 자리 ${adaptPlan.room}건`
+    + ` (회차 ${RAW_ADAPT_LOAD_CAP_PER_RUN} · 하루 ${RAW_ADAPT_LOAD_CAP_PER_DAY}) · 상한으로 건너뜀 ${adaptPlan.capped.length}건`)
   console.log(`\n② 파일 ${candidates.length}건 → 보충 후보 ${targets.length}건`)
   for (const t of targets) {
     console.log(`   · [${S(t.candidateType)}] ${S(t.title).slice(0, 24)}`)

@@ -23,6 +23,7 @@ import {
 } from '../src/lib/micro-seed-auto-judge'
 import { JUDGE_MODEL } from './micro-seed-auto-judge.mjs'
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
+import { RAW_ADAPTATION_VERSION, isAdaptationContract } from '../src/lib/raw-adaptation'
 import {
   EMPTY_SOURCE_KEYS, attemptedOutcomes, concludedSourceIds, judgeStageBudget, latestOutcomes, selectWorkset,
   worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
@@ -683,10 +684,12 @@ console.log('\n⑦ 🔴 🔴 묻기 전에 HOLD 인 원천에는 유료 요청�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 끝이다')
+console.log('\n⑧ 🔴 🔴 AUTO_RAW — 적응 경로로 초안화한다 (2026-09-29 · raw-adapt-v1)')
 // ─────────────────────────────────────────────────────────
 {
-  const w4 = makeWorld()
+  const tag = '20260920-888888'
+  // 🔴 생성 러너가 이 회차의 화자 여력 파일을 읽어야 유료 생성이 돈다
+  const w4 = makeWorld({ speakerLoadRunId: tag })
   /** 🔴 원문 그대로 레인의 축이어야 판정기가 AUTO_RAW 를 낸다 — 축은 우리가 정한다 */
   writeAdaptPair(w4.dd, [
     { id: 'raw1', comments: 30, posted: '2026-09-19T00:00:00Z', axis: RAW_AXIS, lane: 'originalRaw' },
@@ -699,7 +702,6 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
   const out4 = (): PriorOutcome[] => readPriorOutcomes({
     dataDir: w4.dd, hashOf: hash4, canon: canon4, base: base4, artifactVersion: ARTIFACT_VERSION,
   })
-  const tag = '20260920-888888'
   const first = selectWorkset({
     rows: rows4, humanDecided: new Set(), queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
     concluded: new Set(), attempted: new Map(), limit: 5, runId: tag, takenAt: new Date(),
@@ -731,19 +733,11 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
     `code=${r.code} · ${shadow.map((x) => x.decision).join(',')}\n${r.out.slice(-400)}`)
 
   const states = [...latestOutcomes(out4()).values()].map((o) => o.state)
-  check('🔴 🔴 **AUTO_RAW 는 unknown 이 아니라 rawLane 이다**',
-    states.length === 1 && states.every((x) => x === 'rawLane'), states.join(','))
-  const next = selectWorkset({
-    rows: rows4, humanDecided: new Set(), queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
-    concluded: concludedSourceIds(out4()), attempted: attemptedOutcomes(out4()),
-    limit: 5, runId: `${tag}-2`, takenAt: new Date(),
-  })
-  // 🔴 판정이 끝난 raw1 은 빠지고, 기다리던 raw2 가 그 raw 자리를 받는다 — raw 는 굶지 않는다
-  check('🔴 🔴 **다음 회차에 다시 올라오지 않는다 — 다음 raw 가 차례를 받는다**',
-    next.workset.sourceIds.join(',') === 'raw2' && next.dropped.terminal === 1,
-    `${next.workset.sourceIds.join(',')} · 제외 ${next.dropped.terminal}`)
+  check('🔴 🔴 **AUTO_RAW 는 끝난 원천이 아니다 — 적응 경로의 초안 대상(seeded)이다**',
+    states.length === 1 && states.every((x) => x === 'seeded'), states.join(','))
+  check('🔴 판정만으로는 끝난 원천으로 세지 않는다', !concludedSourceIds(out4()).has('raw1'))
 
-  // 🔴 생성 러너가 AUTO_RAW 를 초안 대상으로 집지 않는다 — 유료 호출 0
+  // 🔴 생성 러너가 AUTO_RAW 를 **적응 경로**로 집는다 — 계획 요청에 적응 규칙이 실린다
   const snap = join(w4.dd, queueSnapshotFileName(tag))
   writeFileSync(snap, `${JSON.stringify(buildQueueSnapshot({
     runId: tag, takenAt: new Date(), rows: [],
@@ -757,11 +751,34 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
       `--queue-snapshot=.microseed-data/${queueSnapshotFileName(tag)}`, '--require-queue-snapshot',
       `--input=.microseed-data/auto-judge-${tag}.shadow.jsonl`],
   })
-  const dPaid = readFileSync(dLog, 'utf-8').split('\n').filter((l) => l.trim() !== '').length
-  check('🔴 🔴 **AUTO_RAW 는 draft 슬롯을 쓰지 않는다 — 유료 호출 0**',
-    dPaid === 0, `${dPaid}회 · code=${d.code}\n${d.out.slice(-300)}`)
-  check('🔴 후보 파일도 만들지 않는다',
-    readdirSync(w4.dd).filter((f) => /\.candidates\.json$/.test(f)).length === 0)
+  const dBodies = readFileSync(dLog, 'utf-8').split('\n').filter((l) => l.trim() !== '')
+  check('🔴 🔴 **생성 러너가 AUTO_RAW 를 집었다 — 계획 요청에 적응 규칙(1인칭 금지)이 실렸다**',
+    d.code === 0 && dBodies.length >= 1 && dBodies[0]!.includes(RAW_ADAPTATION_VERSION),
+    `${dBodies.length}회 · code=${d.code}\n${d.out.slice(-400)}`)
+  /**
+   * 🔴 가짜 provider 기본값은 `SELF_EXPERIENCE` 계획이다(지시를 따르지 않는 모델) — 적응 경로는
+   *    그 계획으로 **초안을 만들지 않는다.** 유료 요청은 계획 1회뿐이고 후보는 0 이다.
+   */
+  check('🔴 🔴 **1인칭 계획을 받으면 생성 전에 멈춘다 — 유료 1회(계획)뿐**', dBodies.length === 1, `${dBodies.length}회`)
+  const cands = JSON.parse(readFileSync(join(w4.dd, `auto-draft-${tag}.candidates.json`), 'utf-8')) as { candidates: unknown[] }
+  check('🔴 후보 0 건', cands.candidates.length === 0, String(cands.candidates.length))
+  const arts = JSON.parse(readFileSync(join(w4.dd, `auto-draft-${tag}.artifacts.json`), 'utf-8')) as {
+    contract: { planPromptDigest: string }
+    review: { deterministic: { failures: { code: string }[] }; machineOutcome: string }
+  }[]
+  check('🔴 🔴 **artifact 는 적응 계약이고 사유는 adaptSelfExperience 다**',
+    arts.length === 1 && isAdaptationContract(arts[0]!.contract)
+    && arts[0]!.review.deterministic.failures.some((f) => f.code === 'adaptSelfExperience'),
+    JSON.stringify(arts.map((x) => x.review.deterministic.failures)))
+  const next = selectWorkset({
+    rows: rows4, humanDecided: new Set(), queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
+    concluded: concludedSourceIds(out4()), attempted: attemptedOutcomes(out4()),
+    limit: 5, runId: `${tag}-2`, takenAt: new Date(),
+  })
+  // 🔴 적응 artifact 가 **지금 계약의 결론**으로 읽혀야 raw1 이 끝나고 raw2 가 차례를 받는다
+  check('🔴 🔴 **적응 artifact 가 지금 계약의 결론이다 — 다음 raw 가 차례를 받는다(같은 원천 유료 반복 0)**',
+    next.workset.sourceIds.join(',') === 'raw2' && next.dropped.terminal === 1,
+    `${next.workset.sourceIds.join(',')} · 제외 ${next.dropped.terminal}`)
 }
 
 // ─────────────────────────────────────────────────────────

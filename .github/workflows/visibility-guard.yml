@@ -656,8 +656,12 @@ jobs:
         run: npm run micro-seed:auto-judge-check
 
       # 기계 초안이 사람의 ADOPT 를 사칭하지 않는지 · 원천당 1개인지 본다 (§4-AS)
-      - name: 기계 초안 채택 (ADOPT 사칭 금지 · 원천당 1개)
-        run: npm run micro-seed:auto-draft-check
+      # 🔴 (2026-09-29) 적응 경로 — 긴 사연(AUTO_RAW)이 쟁점을 살린 AI 원작 글이 되는가 · 개인정보·명예훼손·
+      #    괴롭힘·위험한 의료 지시·복제는 여전히 막히는가 · 창업자 gold 30/30. 새 step 이 아니다(무조건 step 상한 불변)
+      - name: 기계 초안 채택 (ADOPT 사칭 금지 · 원천당 1개 · 적응 경로)
+        run: |
+          npm run micro-seed:auto-draft-check
+          npm run micro-seed:raw-adaptation-check
 
       # 🔴 독창성 — **흔한 표현은 통과하고 실질 복제만 막는지** 본다 (2026-09-13)
       #
@@ -959,6 +963,11 @@ jobs:
           # 🔴 Persona 자동 확장 적재(2026-09-29 · Track C) — valid 만 · draft 만 · 전원 아니면 0 ·
           #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
           npm run persona:autogen-db-check
+          # 🔴 적응 레인(2026-09-29 · #627) — main 이 적재·도장한 quality-v4 자동 READY 11건이 그대로 자동 재고 ·
+          #    적응 행은 실제 적재기 표식으로 내부 실험 격리(도장 0 · selector 거절 · 재검증 거절 · 창업자 대기열 0 · WIP 0 ·
+          #    회차 2/하루 4 상한 · 7일 기한) · 적응 결함이 v4 열림을 닫지 않는다.
+          #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
+          npm run micro-seed:raw-adaptation-db-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.

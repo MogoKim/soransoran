@@ -145,10 +145,14 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
   })())
 }
 
-console.log('\n② 🔴 AUTO_SEED 만 초안화한다')
+console.log('\n② 🔴 통과 판정(AUTO_SEED · AUTO_RAW)만 초안화한다')
 {
   check('🟢 AUTO_SEED 는 통과', p().decision === 'AUTO_ADOPT')
-  for (const d of ['AUTO_HOLD', 'AUTO_DROP', 'AUTO_RAW', '']) {
+  // 🔴 (2026-09-29) AUTO_RAW 는 적응 경로로 초안화한다 — 여기서 버리지 않는다(적응 검사는 raw-adaptation-check 가 본다)
+  check('🟢 AUTO_RAW 는 버리지 않는다 — 적응 경로의 초안 대상이다', p({
+    judgement: { sourceArticleId: 's1', decision: 'AUTO_RAW', semanticRisks: [] },
+  }).reason !== 'notAutoSeed')
+  for (const d of ['AUTO_HOLD', 'AUTO_DROP', '']) {
     check(`🔴 ${d || '(빈값)'} 은 초안화하지 않는다`, p({
       judgement: { sourceArticleId: 's1', decision: d, semanticRisks: [] },
     }).decision === 'AUTO_DROP')

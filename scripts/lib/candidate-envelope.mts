@@ -13,6 +13,9 @@ import { CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION }
 import { semanticSummaryOf } from '../../src/lib/micro-seed-supply-autofill'
 import { qualityContractDigest } from '../../src/lib/quality-contract'
 import type { HumanReviewArtifact } from '../../src/lib/content-core/artifact'
+/** 🔴 적응 레인 표식 — 품질 계약과 별도 계약이다 (2026-09-29 · `raw-adapt-lane.ts`) */
+import { currentRawAdaptContract, RAW_ADAPT_CONTRACT_KEY } from '../../src/lib/raw-adapt-lane'
+import type { DraftRoute } from '../../src/lib/raw-adaptation'
 
 /** 🔴 적재 정본이 읽는 모양 — v2 의 `sampleCount` 를 `comments` 로 잇는다 */
 export type CandidateVoiceProvenance = {
@@ -55,6 +58,11 @@ export type CandidateInput = {
    *    `null` 은 "판정하지 않았다" — 적재기가 `DRAFT_LIFE_REVIEW:unread` 경고로 읽는다(통과 아님).
    */
   lifeReview: readonly string[] | null
+  /**
+   * 🔴 **초안 경로** (2026-09-29). `adapt` 면 후보에 `draftRoute` 와 **적응 레인 표식**을 싣는다 —
+   *    적재기가 품질 계약 대신 그 표식으로 싣고 사람 검토로만 보낸다. 없거나 `seed` 면 후보 모양이 한 글자도 그대로다.
+   */
+  draftRoute?: DraftRoute
 }
 
 /**
@@ -110,6 +118,8 @@ export function candidateEnvelopeItem(a: CandidateInput): Record<string, unknown
     sourceCapturedAt: a.meta.sourceCapturedAt,
     provenanceNote: `기계 생성 · ${a.ruleVersion} · ${a.provenance} · ${CONTENT_CORE_PIPELINE_VERSION}`,
     autoJudge: a.autoJudge,
+    // 🔴 적응 후보만 — 입력으로 받지 않고 이 코드의 상수를 싣는다(적재기는 대조만 한다)
+    ...(a.draftRoute === 'adapt' ? { draftRoute: 'adapt', [RAW_ADAPT_CONTRACT_KEY]: currentRawAdaptContract() } : {}),
   }
 }
 

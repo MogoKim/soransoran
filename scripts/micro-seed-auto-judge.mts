@@ -26,7 +26,7 @@ import {
   judgeOne, summarize, checkRegression, violatesProvenance, parseSemantic, inputHashOf,
   mergeJudgeRows,
   hardGate, holdBeforeAsking, HARD_BLOCK, BODY_HEAD_MAX,
-  REASON_LABEL, RULE_VERSION, PROMPT_VERSION, AUTO_PROVENANCE, SEED_AXIS, RAW_AXIS, SKIPPED,
+  REASON_LABEL, RULE_VERSION, RULE_CARRY_OVER, PROMPT_VERSION, AUTO_PROVENANCE, SEED_AXIS, RAW_AXIS, SKIPPED,
   type Judgement, type JudgeInput, type RegressionRow, type SemanticOutcome, type SemanticStatus,
 } from '../src/lib/micro-seed-auto-judge'
 // 🔴 기존 LLM 경로를 그대로 쓴다. 새 HTTP 클라이언트도 새 SDK 도 만들지 않는다
@@ -345,6 +345,22 @@ type CacheEntry = {
 function cacheKey(id: string, hash: string): string {
   return `${id}|${hash}|${RULE_VERSION}|${PROMPT_VERSION}|${JUDGE_MODEL}`
 }
+/**
+ * 🔴 **캐시에 담긴 것은 모델의 답이다 — 규칙이 아니다** (2026-09-29, v3 → v4).
+ *    같은 입력 · 같은 프롬프트 · 같은 모델이면 모델 답은 같고, 규칙(`judgeOne`)은 그 답 위에 **다시** 건다.
+ *    판정 정본이 인정한 앞 판(`RULE_CARRY_OVER`)의 캐시만 읽는다 — 다시 묻지 않는다(유료 0).
+ *    🔴 쓰기는 언제나 지금 판 key 다. 프롬프트·모델 판은 key 에 그대로 있다 — 둘이 바뀌면 여전히 miss 다.
+ */
+function cachedVerdict(cache: ReadonlyMap<string, CacheEntry>, id: string, hash: string): CacheEntry | undefined {
+  const now = cache.get(cacheKey(id, hash))
+  if (now !== undefined) return now
+  for (const [prev, c] of Object.entries(RULE_CARRY_OVER)) {
+    if (c.to !== RULE_VERSION) continue
+    const hit = cache.get(`${id}|${hash}|${prev}|${PROMPT_VERSION}|${JUDGE_MODEL}`)
+    if (hit !== undefined) return hit
+  }
+  return undefined
+}
 function loadCache(): Map<string, CacheEntry> {
   try {
     const j = JSON.parse(readFileSync(CACHE_PATH, 'utf-8')) as Record<string, CacheEntry>
@@ -448,7 +464,7 @@ async function main(): Promise<void> {
   const statusCount = new Map<string, number>()
   for (const [i, t] of needAsk.entries()) {
     const k = cacheKey(S(t.sourceArticleId), inputHashOf(t))
-    const c = cache.get(k)
+    const c = cachedVerdict(cache, S(t.sourceArticleId), inputHashOf(t))
     let outcome: SemanticOutcome
     if (c !== undefined) {
       hit += 1
@@ -507,7 +523,7 @@ async function main(): Promise<void> {
     let outcome: SemanticOutcome = SKIPPED
     if (!blocked && !pre) {
       const k = cacheKey(S(t.sourceArticleId), inputHashOf(t))
-      const c = cache.get(k)
+      const c = cachedVerdict(cache, S(t.sourceArticleId), inputHashOf(t))
       if (c !== undefined) {
         hit += 1
         outcome = {

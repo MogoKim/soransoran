@@ -8,6 +8,7 @@ import {
   OP_STATUS_LABEL, OP_VERDICT_LABEL, OP_VERDICT_TONE, OP_REASON_LABEL,
   toGateFindings, maskDraft,
 } from '@/lib/original-post-admin'
+import { founderQueueRowsOf } from '@/lib/raw-adapt-quarantine'
 
 /**
  * 오리지널 초안 검수 대기열 — 🔴 읽기 전용
@@ -53,7 +54,12 @@ export default async function OriginalPostCandidatesPage() {
     )
   }
 
-  const [rows, counts] = await Promise.all([
+  /**
+   * 🔴 **적응 레인 격리 행은 이 대기열에 없다** (2026-09-29). 긴 사연 적응 초안은 내부 실험이다 —
+   *    목록에도 상태별 수에도 넣지 않는다(창업자가 볼 차례가 아니다). 판정은 `carriesRawAdaptMark` 하나다.
+   *    격리 행을 빼도 한 화면 200건을 채우도록 두 배를 읽고 거른 뒤 자른다.
+   */
+  const [rowsRead, statusRows] = await Promise.all([
     prisma.originalPostApprovalQueue.findMany({
       select: {
         id: true, status: true, draftTitle: true, draftBody: true,
@@ -65,13 +71,16 @@ export default async function OriginalPostCandidatesPage() {
       },
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       // 🔴 상한을 둔다. 대기열이 커져도 한 화면이 DB 를 통째로 끌어오지 않는다
-      take: 200,
+      take: 400,
     }),
-    prisma.originalPostApprovalQueue.groupBy({ by: ['status'], _count: true }),
+    // 🔴 상태별 수도 격리 행을 빼고 센다 — 상태와 격리 표식만 읽는다
+    prisma.originalPostApprovalQueue.findMany({ select: { status: true, gateResults: true } }),
   ])
+  const rows = founderQueueRowsOf(rowsRead).slice(0, 200)
+  const counted = founderQueueRowsOf(statusRows)
 
-  const countOf = (s: string): number => counts.find((c) => c.status === s)?._count ?? 0
-  const total = counts.reduce((sum, c) => sum + c._count, 0)
+  const countOf = (s: string): number => counted.filter((c) => c.status === s).length
+  const total = counted.length
   const holdCount = rows.filter((r) => r.gateVerdict === 'HOLD').length
 
   return (

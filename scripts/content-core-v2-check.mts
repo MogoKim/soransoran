@@ -1504,7 +1504,7 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
 
   const run = (body: string, ageBand: string | null, selfBasis: 'lifeFacts' | 'noLifeFactNeeded' | null,
     withAgeFact = true) => pickV2({
-    judgement: { sourceArticleId: '35040880', decision: 'SEED', reason: 'ok' } as never,
+    judgement: { sourceArticleId: '35040880', decision: 'AUTO_SEED', reason: 'ok' } as never,
     draft: { sourceArticleId: '35040880', draftNo: 1, title: TITLE, body,
       safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
       generatedAt: '2026-09-23T00:00:00.000Z' } as never,
@@ -1591,7 +1591,7 @@ console.log('\n🔴 🔴 **실행 사슬 — artifact.plan → voice candidate a
     const planned = art.plan?.personaCode ?? null
     const card = planned === null ? undefined : CANDIDATES.find((c) => c.code === planned)
     const p = pickV2({
-      judgement: { sourceArticleId: '35040880', decision: 'SEED', reason: 'ok' } as never,
+      judgement: { sourceArticleId: '35040880', decision: 'AUTO_SEED', reason: 'ok' } as never,
       draft: { sourceArticleId: '35040880', draftNo: 1, title: TITLE, body,
         safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
         generatedAt: '2026-09-23T00:00:00.000Z' } as never,
@@ -3375,7 +3375,7 @@ console.log('\n🔴 🔴 **나이 전 경로 — exact 와 band 를 각각 끝�
       generatedAt: NOW.toISOString(),
     }
     const pick = pickV2({
-      judgement: { sourceArticleId: 'full-1', decision: 'SEED', reason: 'ok' } as never,
+      judgement: { sourceArticleId: 'full-1', decision: 'AUTO_SEED', reason: 'ok' } as never,
       draft: cand as never, seenTitles: new Set<string>(), seenBodies: new Set<string>(),
       sourceUsed: false, machineOutcome: art.review.machineOutcome,
       machineReason: art.review.machineReason, sourceTitleCopied: false, crisisStop: null,
@@ -3662,7 +3662,7 @@ console.log('\n🔴 🔴 **artifact → pickV2 → adopted → candidate payload
     generatedAt: NOW.toISOString(),
   }
   const pick = pickV2({
-    judgement: { sourceArticleId: '35040880', decision: 'SEED', reason: 'ok' } as never,
+    judgement: { sourceArticleId: '35040880', decision: 'AUTO_SEED', reason: 'ok' } as never,
     draft: cand as never, seenTitles: new Set<string>(), seenBodies: new Set<string>(),
     sourceUsed: false, machineOutcome: art.review.machineOutcome,
     machineReason: art.review.machineReason, sourceTitleCopied: false, crisisStop: null,

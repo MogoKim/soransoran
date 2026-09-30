@@ -28,6 +28,8 @@ export const AUTO_GATE_VERDICT = 'PASS'
 import { AUTO_DECIDER, readStamp, stampValidFor } from './auto-ready-v2'
 import { LEGACY_DECISION_MARK } from './review-provenance'
 import { isCurrentQualityContract } from './quality-contract'
+/** 🔴 적응 레인(긴 사연 적응 초안) — 사람 검토 전용 (2026-09-29) */
+import { carriesRawAdaptMark } from './raw-adapt-lane'
 import { titleKey } from './draft-originality'
 import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
@@ -204,7 +206,8 @@ export const REJECT_LABEL: Record<RejectCode, string> = {
   AUTO_READY_STALE: '🔴 자동 도장 뒤에 제목·본문·판정 계약이 바뀌었다 — 그 도장은 무효다',
   QUALITY_CONTRACT_MISMATCH:
     '🔴 자동 도장 행인데 지금 품질 계약(판 · digest)으로 만든 글이 아니다 — 자동으로 나가지 않는다.'
-    + ' 글은 큐에 그대로 남는다(삭제 · 재도장 · 계약 고쳐 쓰기 없음)',
+    + ' 글은 큐에 그대로 남는다(삭제 · 재도장 · 계약 고쳐 쓰기 없음).'
+    + ' 적응 레인 격리 행(긴 사연 적응 · 내부 실험)도 이 코드다 — 창업자 검토 대기가 아니다',
 }
 
 export type Reject = { id: string; code: RejectCode }
@@ -332,6 +335,16 @@ export function selectAutoTargets(
     // 🔴 두 profile 중 하나를 **통째로** 만족해야 한다. 일부만 섞인 행은 거절이다
     const profile = profileOf(r)
     if (profile === null) { push(r.id, 'PROFILE'); continue }
+    /**
+     * 🔴 **적응 레인 행은 내부 실험 격리다 — 사람 검토 판정보다 먼저 뺀다** (2026-09-29 · `raw-adapt-lane.ts`).
+     *    · 자동 도장이 있어도 · 문이 열려 있어도 자동 경로가 아니다(자동 발행 3중 차단의 selector 자리)
+     *    · 🔴 **`HUMAN_REVIEW_REQUIRED` 로 내보내지 않는다** — 그 코드는 창업자 검토 대기(재고 칸 `humanReviewPending` ·
+     *      Persona WIP · 자동 READY 묶음 그림자)로 읽힌다. 적응 행은 누구의 할 일도 아니다
+     *    · 사람 도장(`founder`)이 있어도 나가지 않는다 — 격리를 푸는 것은 별도 계약의 몫이다
+     *    거절 코드를 새로 만들지 않는다 — 지금 품질 계약(quality-v4)으로 만든 글이 아니라는 같은 뜻이고,
+     *    재고 칸은 WIP 가 아닌 `qualityContractMismatch` 다.
+     */
+    if (carriesRawAdaptMark(r.gateResults)) { push(r.id, 'QUALITY_CONTRACT_MISMATCH'); continue }
     /**
      * 🔴 **기계 글은 사람이 확인한 것만 자동 발행 대상이다** (2026-09-14).
      *

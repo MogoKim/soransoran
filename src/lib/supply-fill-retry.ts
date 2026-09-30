@@ -181,9 +181,11 @@ export const FILL_REPORT_PREFIX = 'FILL_REPORT '
  * 적재기가 끝에 한 줄로 찍는 결과. 🔴 파일별로 센다 — 이월이 "그 파일을 끝냈는가" 를 여기서 읽는다.
  *
  *    `skipped`  적재기 관문의 코드(`SkipCode`) + 적재 직전 재검증(`RECHECK`) · payload 거절(`PAYLOAD`)
+ *               + 적응 레인 상한(`RAW_ADAPT_CAP` · 2026-09-29) — 🔴 건너뜀이다. 이월로 다시 얹지 않는다
+ *               (적응 후보가 이월 파일 자리를 차지하면 seed 후보 파일이 밀린다)
  *    `cut`      관문은 지났는데 **상한 때문에 이번에 넣지 못한** 수 — 0 이 아니면 그 파일은 안 끝났다
  */
-export type FillSkipCode = SkipCode | 'RECHECK' | 'PAYLOAD'
+export type FillSkipCode = SkipCode | 'RECHECK' | 'PAYLOAD' | 'RAW_ADAPT_CAP'
 export type FillReportFile = {
   name: string
   candidates: number

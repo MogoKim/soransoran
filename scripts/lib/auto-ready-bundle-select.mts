@@ -15,6 +15,7 @@ import { evidenceFromDb } from '../../src/lib/auto-ready-repo'
 import { profileOf } from '../../src/lib/original-post-auto-publish'
 import type { QualityCohortVerdict } from '../../src/lib/auto-ready-quality-cohort'
 import { loadPublishableStock } from './publishable-stock.mjs'
+import { carriesRawAdaptMark } from '../../src/lib/raw-adapt-lane'
 
 export const BUNDLE_ROW_SELECT = {
   ...EVIDENCE_ROW_SELECT,
@@ -44,6 +45,12 @@ export async function selectBundleRows(prisma: PrismaClient, now: Date): Promise
   const byId = new Map(winRows.map((r) => [r.id, r]))
   const window = cohort.windowIds.flatMap((id, i) => {
     const row = byId.get(id)
+    /**
+     * 🔴 적응 레인 흔적이 있는 행은 창업자 검토 묶음에 넣지 않는다 (2026-09-29). 실제 적재기는 적응 행에 품질 계약
+     *    표식을 싣지 않으므로 창에 들어올 일이 없다 — 표식이 잘못 함께 실린 행도 창업자 할 일이 아니다.
+     *    자리 번호(index)는 창 순서 그대로 둔다 — 빠진 자리가 보인다.
+     */
+    if (row !== undefined && carriesRawAdaptMark(row.gateResults)) return []
     return row === undefined ? [] : [{
       row, slot: { index: i + 1, firstBlocking: cohort.firstBlocking?.id === id, contractVersion: cohort.contractVersion },
     }]
@@ -52,11 +59,14 @@ export async function selectBundleRows(prisma: PrismaClient, now: Date): Promise
   /** ② 사람 결정 표식이 있는 기계 후보 — 결과(무수정/수정/폐기)가 이미 있다 */
   const decided = (await prisma.originalPostApprovalQueue.findMany({ where: { decidedBy: HUMAN_DECIDER }, select: BUNDLE_ROW_SELECT, orderBy: { createdAt: 'asc' } }) as BundleRow[])
     .filter(machine).filter((r) => !inWindow.has(r.id))
+    // 🔴 적응 레인 격리 행(내부 실험)은 창업자 검토 묶음에 넣지 않는다 (2026-09-29)
+    .filter((r) => !carriesRawAdaptMark(r.gateResults))
   /** ③ 현재 그림자 — 사람 검토를 기다리는 기계 후보 중 경고 없는 것. 🔴 결정이 없으므로 기록해도 아직 표본이 아니다 */
   const stock = await loadPublishableStock(prisma, now)
   const waitIds = stock.rejected.filter((r) => r.code === 'HUMAN_REVIEW_REQUIRED').map((r) => r.id)
   const shadow = (await prisma.originalPostApprovalQueue.findMany({ where: { id: { in: waitIds } }, select: BUNDLE_ROW_SELECT, orderBy: { createdAt: 'asc' } }) as BundleRow[])
     .filter((r) => !inWindow.has(r.id))
+    .filter((r) => !carriesRawAdaptMark(r.gateResults))
     .filter((r) => eligibilityOf({
       gateVerdict: r.gateVerdict, gateResults: r.gateResults, title: r.editedTitle ?? r.draftTitle,
       body: r.editedBody ?? r.draftBody, sourceCapturedAt: r.rawContent.sourceCapturedAt,

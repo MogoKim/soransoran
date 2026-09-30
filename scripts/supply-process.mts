@@ -112,6 +112,8 @@ import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofi
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
+/** 🔴 적응 레인 격리 행 — 화자 이력(WIP)에 넣지 않는다 (2026-09-29) */
+import { carriesRawAdaptMark } from '../src/lib/raw-adapt-lane'
 
 /** 🔴 정본은 lib 하나다 — 여기서 문자열을 다시 쓰지 않는다 */
 const DATA_DIR = DATA_DIR_NAME
@@ -283,10 +285,11 @@ export async function buildSpeakerLoad(
    * 🔴 **이력은 배정기(`personaForMatchOf`)가 보는 것과 같다** — 큐의 `matchedAt`.
    *    발행 트랜잭션이 배정할 때 쓰는 근거다. 여기서 다른 표(ActivityLog)를 보면 두 계산이 갈린다.
    */
-  const logs = await prisma.originalPostApprovalQueue.findMany({
+  // 🔴 적응 레인 격리 행은 화자 이력에 넣지 않는다 — 배정기(`personaMatchUsageOf`)와 같은 기준 (2026-09-29)
+  const logs = (await prisma.originalPostApprovalQueue.findMany({
     where: { matchedAt: { not: null } },
-    select: { matchedAt: true, matchedPersona: { select: { code: true } } },
-  })
+    select: { matchedAt: true, matchedPersona: { select: { code: true } }, gateResults: true },
+  })).filter((l) => !carriesRawAdaptMark(l.gateResults))
   const history = loaded.personas.map((p) => ({
     code: String(p.code),
     matchedAts: logs.filter((l) => l.matchedPersona?.code === p.code && l.matchedAt !== null)
@@ -884,7 +887,7 @@ async function main(): Promise<number> {
       .map((k) => `${WORKSET_DROP_LABEL[k]} ${plan.dropped[k]}`)
     console.log(`      제외 ${dropNote.length === 0 ? '없음' : dropNote.join(' · ')}`)
     console.log(`      🔴 이번에 안 고른 ${plan.deferred}건은 **그대로 남는다** — 다음 회차가 집는다`)
-    // 🔴 축별 자리 (2026-09-28) — raw 는 초안이 없는 축이라 자리를 제한한다. 정본은 `worksetAxisQuota`
+    // 🔴 축별 자리 (2026-09-28) — raw 는 적응 경로(2026-09-29 · 내부 실험 격리 · gold 표본 없음)라 자리를 제한한다. 정본은 `worksetAxisQuota`
     console.log(`      축  seed 적격 ${plan.axis.eligible.seed} · 자리 ${plan.axis.quota.seed} · 고름 ${plan.axis.picked.seed}`
       + `  |  raw 적격 ${plan.axis.eligible.raw} · 자리 ${plan.axis.quota.raw} · 고름 ${plan.axis.picked.raw}`)
     for (const r of plan.picked) {

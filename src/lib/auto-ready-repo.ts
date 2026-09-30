@@ -29,6 +29,8 @@ import { isCurrentQualityContract, qualityContractDigest, QUALITY_CONTRACT_KEY, 
 /** 🔴 (quality-v4) 창업자 gold 재생 — 열림 근거 */
 import { replayFounderGold, describeFounderGold } from './founder-gold'
 import { MACHINE_PROMPT_VERSION } from './micro-seed-supply-autofill'
+/** 🔴 적응 레인(긴 사연 적응 초안) — 사람 검토 전용. 자동 레인에 들어오지 않는다 (2026-09-29) */
+import { carriesRawAdaptMark } from './raw-adapt-lane'
 
 type Tx = Prisma.TransactionClient
 type Db = PrismaClient | Tx
@@ -207,6 +209,13 @@ async function stampRowInTx(tx: Tx, queueId: string, now: Date): Promise<StampOu
   if (!isCurrentQualityContract(row.gateResults)) {
     return { kind: 'skip', reason: '지금 품질 계약 행이 아니다(legacy) — 사람 검토 경로로만 나간다' }
   }
+  /**
+   * 🔴 **적응 레인 행은 자동 도장하지 않는다** (2026-09-29 · `raw-adapt-lane.ts`). 적재기는 적응 행에
+   *    품질 계약 표식을 적지 않으므로 위에서 이미 빠진다 — 이 줄은 표식이 잘못 함께 실린 행을 막는다.
+   */
+  if (carriesRawAdaptMark(row.gateResults)) {
+    return { kind: 'skip', reason: '적응 레인 행이다 — 사람 검토 경로로만 나간다' }
+  }
   const title = row.editedTitle ?? row.draftTitle
   const body = row.editedBody ?? row.draftBody
   const v = eligibilityOf({
@@ -299,6 +308,8 @@ export async function recheckAutoReadyInTx(tx: Tx, i: {
   if (!sv.ok) return { ok: false, reason: sv.reason }
   // 🔴 발행 순간에도 지금 품질 계약인지 **지금 코드 상수**로 다시 본다 — 옛 계약 행은 자동으로 나가지 않는다
   if (!isCurrentQualityContract(i.gateResults)) return { ok: false, reason: '지금 품질 계약 행이 아니다(legacy) — 자동 발행하지 않는다' }
+  // 🔴 적응 레인 행은 발행 순간에도 자동으로 나가지 않는다 — 도장이 있어도 (2026-09-29)
+  if (carriesRawAdaptMark(i.gateResults)) return { ok: false, reason: '적응 레인 행이다 — 자동 발행하지 않는다(사람 검토 전용)' }
   const v = eligibilityOf({
     gateVerdict: i.gateVerdict, gateResults: i.gateResults,
     title: i.title, body: i.body, sourceCapturedAt: i.sourceCapturedAt,

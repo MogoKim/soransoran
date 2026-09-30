@@ -31,6 +31,11 @@ import {
   judgeDraftLife, DRAFT_GATE_LABEL,
   type DraftGateCard, type DraftGateCode, type DraftGatePlan, type DraftLifeReviewCode, type DraftGateContext,
 } from './content-core/draft-life-gates'
+/** 🔴 적응 경로(긴 사연 → AI 원작 글)의 정본 — 채택 자리가 판정 값에서 경로를 다시 읽는다 (2026-09-29) */
+import {
+  judgeRawAdaptation, requiredRouteOf, RAW_ADAPTATION_LABEL, RAW_ADAPTATION_REVIEW_CODE,
+  type RawAdaptationCode,
+} from './raw-adaptation'
 
 export const AUTO_DRAFT_DECISIONS = ['AUTO_ADOPT', 'AUTO_HOLD', 'AUTO_DROP'] as const
 export type AutoDraftDecision = (typeof AUTO_DRAFT_DECISIONS)[number]
@@ -78,6 +83,13 @@ export type DraftReason =
    */
   | 'personaCapacityDeferred'
   /**
+   * 🔴 **판정과 초안 경로가 어긋났다** (2026-09-29) — `AUTO_RAW` 인데 적응 경로로 만들지 않았거나,
+   *    `AUTO_SEED` 인데 적응 경로로 만들었거나, 통과 판정이 아닌데 초안이 왔다. 배선 결함이다.
+   */
+  | 'routeMismatch'
+  /** 🔴 **적응 경로의 결정적 실패** (2026-09-29) — 이름은 `raw-adaptation.ts` 정본과 같다 */
+  | RawAdaptationCode
+  /**
    * 🔴 **초안 게이트** (2026-09-26) — 이름은 게이트 정본(`DRAFT_GATE_CODES`)과 같다.
    *    캐시에서 꺼낸 옛 artifact 는 그 판정을 거치지 않았으므로 **채택 자리에서 다시 건다.**
    */
@@ -95,7 +107,7 @@ export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   duplicateTitle: '같은 제목이 이미 있다',
   duplicateBody: '같은 본문이 이미 있다',
   sourceAlreadyUsed: '이 원천에서 이미 하나를 골랐다',
-  notAutoSeed: '🔴 AUTO_SEED 가 아니다 — 판정을 통과한 소재만 초안화한다',
+  notAutoSeed: '🔴 통과 판정이 아니다 — AUTO_SEED(seed 경로) · AUTO_RAW(적응 경로)만 초안화한다',
   laneRisk: '🔴 위해 판정이 남아 있다 (개인 특정 · 명예훼손 · 위협 · 위험한 의료 지시 · 정치 선동)',
   titleEchoedInBody: '🔴 제목을 본문 끝에 그대로 되풀이한다',
   genericWithoutSourceAngle: '🔴 소재가 사라진 일반론이다',
@@ -106,6 +118,9 @@ export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   qualitySchemaMismatch: '🔴 품질 판정이 우리 축이 아닌 이름만 돌려줬다 — 다시 물어도 같았다',
   generatedHarm: '🔴 생성된 글에 위해가 있다 (개인 특정 · 명예훼손 · 위협 · 위험한 의료 지시)',
   personaCapacityDeferred: '🟡 Persona 여력 대기 — 이 회차에 배정할 화자가 없어 부르기 전에 미뤘다 (초안 실패 아님)',
+  routeMismatch: '🔴 판정과 초안 경로가 어긋났다 — AUTO_SEED 는 seed 경로, AUTO_RAW 는 적응 경로로만 만든다',
+  // 🔴 라벨은 적응 정본에서 읽는다 — 여기서 다시 적지 않는다
+  ...RAW_ADAPTATION_LABEL,
   // 🔴 게이트 라벨은 정본에서 읽는다 — 여기서 다시 적지 않는다
   ...DRAFT_GATE_LABEL,
 }
@@ -366,6 +381,20 @@ export type PickV2Input = {
      */
     context: DraftGateContext
   }
+  /**
+   * 🔴 **적응 경로 입력** (2026-09-29) — 러너가 `AUTO_RAW` 원천을 적응 경로로 만들었을 때만 넘긴다.
+   *    🔴 **경로는 판정 값에서 다시 읽는다**(`requiredRouteOf`) — `AUTO_RAW` 인데 이 칸이 없거나
+   *       artifact 계약이 적응 계약이 아니면 채택하지 않는다(`routeMismatch`). 반대로 `AUTO_SEED` 인데 이 칸이 있으면
+   *       역시 채택하지 않는다. 캐시 artifact 도 여기서 같은 함수로 다시 판정한다.
+   */
+  adaptation?: {
+    /** artifact 계약이 지금 적응 계약인가 (`isAdaptationContract`) */
+    adapted: boolean
+    stance: string | null
+    /** 🔴 모델에 준 그 원문(마스킹된 제목 · 본문 머리) — 생성 때와 같은 값이다 */
+    sourceTitle: string
+    sourceBody: string
+  }
 }
 
 export function pickV2(input: PickV2Input, now: string): Pick {
@@ -385,6 +414,27 @@ export function pickV2(input: PickV2Input, now: string): Pick {
   // 🔴 위기 신호가 먼저다 — 정상 초안이 함께 있어도 채택하지 않는다 (정본 §4)
   if (input.crisisStop !== null) return held('semanticHold')
   if (input.machineOutcome === 'drop') return held('generatedHarm')
+  /**
+   * 🔴 **경로 대조** (2026-09-29) — 판정 값이 요구하는 경로와 실제로 만든 경로가 같은가.
+   *    raw 원천을 적응 없이 seed 로 흘려보내면(사연 그대로 옮기기) 여기서 멈춘다.
+   */
+  const route = requiredRouteOf(S(input.judgement.decision))
+  const adaptation = input.adaptation
+  if (route === null) return held('routeMismatch')
+  if (route === 'adapt' && (adaptation === undefined || !adaptation.adapted)) return held('routeMismatch')
+  if (route === 'seed' && adaptation !== undefined) return held('routeMismatch')
+  if (route === 'adapt' && adaptation !== undefined) {
+    const bad = judgeRawAdaptation({
+      stance: adaptation.stance, sourceTitle: adaptation.sourceTitle, sourceBody: adaptation.sourceBody,
+      draftTitle: d.title, draftBody: d.body,
+    })
+    if (bad.length > 0) {
+      return {
+        ...base, decision: 'AUTO_HOLD', draftNo: null, reason: bad[0]!.code,
+        rejected: bad.map((b) => ({ draftNo: d.draftNo, reason: b.code })),
+      }
+    }
+  }
   /**
    * 🔴 **초안 게이트** (2026-09-26) — 자료 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제.
    *    `hold` 를 `semanticHold` 로 뭉개기 **전에** 본다 — `runContentCore` 가 이미 같은 이유로
@@ -445,9 +495,16 @@ export function pickV2(input: PickV2Input, now: string): Pick {
     if (age.hold) return held('lifeHistoryConflict')
   }
   if (input.sourceTitleCopied) return held('copiedFromSource')
+  /**
+   * 🔴 **적응 초안은 사람이 본다** (2026-09-29). 창업자 gold 에 적응 표본이 한 건도 없다 —
+   *    `rawAdaptation` 경고가 붙으면 자동 READY 표본이 아니다(적재기가 `DRAFT_LIFE_REVIEW:rawAdaptation` 으로 싣는다).
+   */
+  const review: PickLifeReviewCode[] | undefined = route === 'adapt'
+    ? [...(lifeReview ?? []), RAW_ADAPTATION_REVIEW_CODE]
+    : lifeReview
   return {
     ...base, decision: 'AUTO_ADOPT', draftNo: d.draftNo, reason: 'ok', rejected: [],
-    ...(lifeReview === undefined ? {} : { lifeReview }),
+    ...(review === undefined ? {} : { lifeReview: review }),
   }
 }
 
@@ -481,8 +538,11 @@ export type Pick = {
    *    입력을 받았을 때만 값이 있다(빈 배열 = 모호함 없음). 후보 봉투가 그대로 나르고 적재기가
    *    `gateResults.holds` 에 싣는다. `undefined` 는 "판정하지 않았다" 이다 — 적재기가 경고로 읽는다.
    */
-  lifeReview?: DraftLifeReviewCode[]
+  lifeReview?: PickLifeReviewCode[]
 }
+
+/** 🔴 채택 결과가 나르는 사람 검토 경고 — 생활 일관성 게이트의 모호 축 + 적응 경로 표시(2026-09-29) */
+export type PickLifeReviewCode = DraftLifeReviewCode | typeof RAW_ADAPTATION_REVIEW_CODE
 
 /**
  * 초안 하나를 고른다 — 🔴 **막는 것부터 본다. 통과가 마지막이다.**
@@ -499,8 +559,8 @@ export function pickDraft(input: PickInput, now: string): Pick {
   const no = (decision: AutoDraftDecision, reason: DraftReason): Pick =>
     ({ ...base, decision, draftNo: null, reason, rejected: [] })
 
-  // ① 판정을 통과한 소재만 초안화한다
-  if (S(input.judgement.decision) !== 'AUTO_SEED') return no('AUTO_DROP', 'notAutoSeed')
+  // ① 판정을 통과한 소재만 초안화한다 — 🔴 (2026-09-29) AUTO_RAW 는 적응 경로로 초안화한다
+  if (requiredRouteOf(S(input.judgement.decision)) === null) return no('AUTO_DROP', 'notAutoSeed')
   const risks = input.judgement.semanticRisks ?? []
   if (risks.some((r) => BLOCKING_RISKS.includes(String(r)))) return no('AUTO_DROP', 'laneRisk')
   // ② 원천당 하나
