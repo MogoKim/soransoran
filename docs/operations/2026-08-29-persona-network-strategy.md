@@ -1,5 +1,11 @@
 # 소란소란 Persona Network 전략
 
+> 📜 **2026-09-30 정책 대체 표시.** 현재 정책은 [`README.md`](./README.md) 가 가리키는 권위 문서,
+> 특히 [D100 canon](./2026-09-21-d100-goal-canon.md) 이 정한다. Persona 용량과 대화 정책은 canon §4·§5 가 정한다.
+> Persona 사이 대화 일괄 금지·30% ratio 같은 옛 대화 규칙은 canon §5(같은 reply-worthiness · 답글 안전 불변식)로
+> 대체됐다. 재사용할 설계 자산은 그대로 둔다.
+> 이 문서의 결정·사고·실측은 역사 증거로 남기지만 현재 정책에 투표하지 않는다.
+
 > 작성 2026-08-29 · 상태 **방향 확정 · 구현 부분 완료**
 > 현재 구현·운영 상태: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
 > 이 문서의 인원·DB 숫자·`없음` 표시는 작성 당시 스냅샷이다.
