@@ -83,9 +83,14 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
     check('이력 0 → 소재 0 · 역할 0 · 연속 0 · 짝 never → 통과(근거 none)',
       h0.valid && h0.evidence.topicShare === 'none' && h0.evidence.roleShare === 'none'
       && h0.evidence.consecutiveExposures === 'none')
-    const one = contractAxes(P({ history: { ...H0, recentEvents: 1, daysSinceActive: 1 } }))
-    check('활동 1건 → 소재 모름(분류표 없음) → contract-valid 아님',
-      !one.valid && one.unknown.topicShare !== undefined && one.unknown.topicShare.includes('소재 정의가 없다'))
+    // 🔴 (2026-10-01) 소재 표본 하한 = 역할과 같은 SHARE_MIN_EVENTS — 1~4건은 비율을 재지 않는다(thin · 0)
+    const at = (n: number) => contractAxes(P({ history: { ...H0, recentEvents: n, daysSinceActive: 1 } }))
+    check('활동 1건 → 소재 thin(1<5) · 0 · 계약 통과(다른 축 정상)',
+      at(1).valid && at(1).unknown.topicShare === undefined && at(1).evidence.topicShare === 'thin(1<5)')
+    check('활동 4건 → 소재 thin(4<5) · 계약 통과',
+      at(4).valid && at(4).evidence.topicShare === 'thin(4<5)')
+    check('🔴 활동 5건 → 소재 모름(분류표 없음 · 라벨 추정 없음) → contract-valid 아님',
+      !at(5).valid && at(5).unknown.topicShare?.includes('소재 정의가 없다') === true && at(5).evidence.topicShare === undefined)
     check('이력을 못 읽음(null) → 소재·역할·연속·짝 전부 모름',
       ['topicShare', 'roleShare', 'consecutiveExposures', 'postsSinceLastPairing']
         .every((a) => contractAxes(P({ history: null })).unknown[a as 'topicShare'] !== undefined))
@@ -111,8 +116,14 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
       contractAxes(P({ history: hr({ empathy: 3, question: 2 }) })).blocked.roleShare !== undefined
       && contractAxes(P({ history: hr({ empathy: 2, question: 2, experience: 1 }) })).blocked.roleShare === undefined)
     check('역할 모르는 댓글 1건 → 역할 쏠림 모름', contractAxes(P({ history: hr({ empathy: 1 }, 1) })).unknown.roleShare !== undefined)
-    check('소재: recentEvents 0 이면 0, 1 이상이면 모름',
-      !('unknown' in topicShareOf(H0)) && 'unknown' in topicShareOf({ ...H0, recentEvents: 1 }))
+    check(`소재: 0 → none · 1·4 → thin(<${SHARE_MIN_EVENTS}) · 5 → 모름 (상한 · 임계값 불변)`, (() => {
+      const v = (n: number) => topicShareOf({ ...H0, recentEvents: n })
+      const z = v(0); const a = v(1); const b = v(4); const c = v(5)
+      return !('unknown' in z) && z.value === 0 && z.evidence === 'none'
+        && !('unknown' in a) && a.value === 0 && a.evidence === 'thin(1<5)'
+        && !('unknown' in b) && b.value === 0 && b.evidence === 'thin(4<5)'
+        && 'unknown' in c && SHARE_MIN_EVENTS === 5
+    })())
     const streak = contractAxes(P({ history: { ...H0, consecutiveExposures: 2 } }))
     check('연속 노출 2 → 이번 회차만 막힘(roundBlocked) · 계약은 통과',
       streak.valid && streak.roundBlocked.includes('consecutiveExposures'))
@@ -189,7 +200,7 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
   {
     const forty = Array.from({ length: 40 }, (_, i) => P({
       code: `Q${String(i).padStart(2, '0')}`, status: 'active',
-      history: { ...H0, recentEvents: 2, daysSinceActive: 1 }, // 활동 있음 → 소재 모름
+      history: { ...H0, recentEvents: SHARE_MIN_EVENTS, daysSinceActive: 1 }, // 활동 5건 → 소재 모름(1~4건은 thin)
     }))
     const r = judgePersonaReserve({ ok: true, personas: forty })
     const g = reserveFloorGap(r.contractValid, 'd20')
