@@ -21,6 +21,7 @@ import {
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -224,7 +225,8 @@ async function seedAutoReadyEvidence(): Promise<void> {
 // ─────────────────────────────────────────────────────────
 const baseEnv = (): Record<string, string> => ({
   PATH: process.env.PATH ?? '', HOME: HM, DATABASE_URL: URL, DIRECT_URL: URL, SORAN_ISOLATED_DB: 'yes-throwaway',
-  SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3',
+  // 🔴 운영과 같은 경로 — 단계 칸은 StageDecision consumer 가 표식과 함께 넣은 값만 읽힌다(표식 없으면 d1)
+  ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3' }, '2026-10-01'),
 })
 function runSupply(at: Date, extra: Record<string, string> = {}): { code: number; out: string } {
   const r = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T, 'scripts', 'supply-process.mts'), '--live'], {
@@ -497,7 +499,7 @@ async function main(): Promise<void> {
       return { queueId: r.id, status: r.status, createdPostId: r.createdPostId, updatedAt: r.updatedAt, decidedBy: r.decidedBy }
     }
     const at1331 = K('2026-10-01T13:31:00')
-    const env = { SORAN_RELEASE_STAGE: 'd3', SORAN_CAPACITY_STAGE: 'd3' }
+    const env = markedStageEnv({ SORAN_RELEASE_STAGE: 'd3', SORAN_CAPACITY_STAGE: 'd3' }, '2026-10-01')
     const txF = await publishOriginalPostTx(prisma, { queueId: founder.id, publishedToday: 1, mode: { kind: 'scheduled', releaseStage: 'd3', planned: await planOf(founder.id), unattended: false }, autoReadyEnv: env }, { now: () => at1331 })
     const txL = await publishOriginalPostTx(prisma, { queueId: legacy.id, publishedToday: 1, mode: { kind: 'scheduled', releaseStage: 'd3', planned: await planOf(legacy.id), unattended: false }, autoReadyEnv: env }, { now: () => at1331 })
     check('🔴 🔴 **⑦ 사람 경로로 발행 트랜잭션을 직접 불러도 — founder 행 EXPIRED(SOURCE_TOO_OLD_AT_SLOT) · 옛 READY EXPIRED(EVIDENCE_MISSING)**',
