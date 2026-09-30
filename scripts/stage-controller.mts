@@ -21,7 +21,8 @@
  *    · 🔴 **지운 입력** — 14일 준비도(`stageVerdicts`) · 하루 시뮬레이션(`judgeOneDayCanary`) · 지속 승격
  *      (`d100:readiness` 자식 프로세스 · `judgePromotion`) · env 공개 단계(`SORAN_RELEASE_STAGE`) · env 천장
  *      (`SORAN_CAPACITY_STAGE` · `resolveCeiling`). 현재 단계의 입력원은 StageDecision 하나다.
- *    · 🔴 Persona 는 계약 유효 수(Persona 레인 제공)만 받는다 — 제공자가 없으면 UNKNOWN 이고 시험은 열리지 않는다.
+ *    · 🔴 Persona 는 계약 유효 수(Persona 4상태 정본)만 받는다 — 하한 미달이면 FAIL, 읽기 실패면 UNKNOWN. 둘 다 시험을 열지 않는다
+ *      (2026-09-30 실측 0 → D1→D3 부터 막힌다).
  */
 import { PrismaClient } from '@prisma/client'
 

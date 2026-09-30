@@ -201,7 +201,8 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '수율이 필요량 아래(처리량 부족)', s: 'd20', o: { readyPerSource: yieldFor('d20') * 0.9 }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
   { name: '수율 모름', s: 'd20', o: { readyPerSource: null }, want: 'UNKNOWN', code: 'THROUGHPUT_UNKNOWN' },
   { name: '지연 미관측', s: 'd5', o: { latencyP90H: null }, want: 'UNKNOWN', code: 'LATENCY_UNKNOWN' },
-  { name: '🔴 계약 유효 Persona 모름(제공자 없음 · 오늘 운영)', s: 'd3', o: { contractValidPersonas: null }, want: 'UNKNOWN', code: 'PERSONA_UNKNOWN' },
+  { name: '🔴 계약 유효 Persona 모름(읽기 실패)', s: 'd3', o: { contractValidPersonas: null }, want: 'UNKNOWN', code: 'PERSONA_UNKNOWN' },
+  { name: '🔴 계약 유효 Persona 0 < D3 하한 24 (2026-09-30 운영 실측) — D1→D3 부터 막힌다', s: 'd3', o: { contractValidPersonas: 0 }, want: 'FAIL', code: 'PERSONA_SHORT' },
   { name: '러너 최근 회차 실패', s: 'd5', o: { runnerHealth: 'bad' }, want: 'FAIL', code: 'RUNNER_BAD' },
   { name: '러너 모름', s: 'd5', o: { runnerHealth: null }, want: 'UNKNOWN', code: 'RUNNER_UNKNOWN' },
   { name: '댓글 단가 모름', s: 'd20', o: { commentUsdPerRequest: null }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
@@ -345,13 +346,22 @@ const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) =>
   check('🔴 S1 어느 날도 SUSTAIN 을 만들지 않는다', w.days.every((d) => d.decision.state !== 'SUSTAIN'))
 }
 
-// S2 — 🔴 오늘 운영 모양: 계약 유효 Persona 제공자가 없다(null) → 바닥에서 올라가지 않는다
+// S2 — 🔴 계약 유효 Persona 를 읽지 못함(null) → 바닥에서 올라가지 않는다
 {
   const w = walk(startRow('d1'), Array.from({ length: 5 }, () => 'perfect' as const), { facts: (s) => factsFor(s, { contractValidPersonas: null }) })
   console.log(`   S2 Persona 모름: ${w.trace}`)
   check('🔴 🔴 S2 contractValidPersonas=null 5일 — d3 도 열리지 않는다(PREFLIGHT_UNKNOWN) · 바닥 PREPARE',
     w.days.every((d) => tr(d) === 'PREPARE:d1' && blocked(d, 'PREFLIGHT_UNKNOWN')), w.trace)
   check('S2 모든 결정이 저장 계약을 통과한다', w.allValid)
+}
+
+// S2b — 🔴 오늘 운영 모양(2026-09-30 실측): 계약 유효 Persona 0 → D3 하한 24 미달 → D1→D3 시험부터 열리지 않는다
+{
+  const w = walk(startRow('d1'), Array.from({ length: 5 }, () => 'perfect' as const), { facts: (s) => factsFor(s, { contractValidPersonas: 0 }) })
+  console.log(`   S2b Persona 0: ${w.trace}`)
+  check('🔴 🔴 S2b contractValidPersonas=0 5일 — d3 시험이 한 번도 열리지 않는다(PREFLIGHT_FAIL) · 바닥 PREPARE',
+    w.days.every((d) => tr(d) === 'PREPARE:d1' && blocked(d, 'PREFLIGHT_FAIL')), w.trace)
+  check('S2b 모든 결정이 저장 계약을 통과한다', w.allValid)
 }
 
 // S3 — FAIL · UNKNOWN · 모름 → 같은 단계 재시험

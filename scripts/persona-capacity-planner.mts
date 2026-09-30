@@ -20,5 +20,5 @@
 console.log('\n══ Persona 확장 planner — 🔴 퇴역 (2026-09-30) ══\n')
 console.log('  이 명령은 더 이상 계산하지 않는다 — 14일 예측 · 카드 수동 계획 경로를 지웠다.')
 console.log('  Persona 가 다음 단계를 감당하는가: `npm run stage:controller`(dry-run) 의 preflight 가')
-console.log('    Persona 레인이 제공하는 계약 유효 Persona 수(`contractValidPersonas`)로 본다. 제공자가 없으면 UNKNOWN 이다.')
+console.log('    Persona 레인이 제공하는 계약 유효 Persona 수(`contractValidPersonas`)로 본다. 읽지 못하면 UNKNOWN, 하한 미달이면 FAIL 이다(2026-09-30 실측 0 → D1→D3 부터 막힌다).')
 console.log('  🔴 DB 0 · 네트워크 0 · 파일 write 0\n')

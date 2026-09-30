@@ -367,7 +367,7 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   check('기존 브레이크는 그대로 — 모르는 신호면 PASS 여도 시험을 되돌린다(증명된 d3 를 지킨다)',
     unknownSig.brake === 'holdUnknown' && unknownSig.decision.release === 'd3' && unknownSig.decision.state !== 'TRIAL',
     `${unknownSig.decision.state} ${unknownSig.decision.release}`)
-  /** 🔴 계약 유효 Persona 제공자가 없는 오늘의 운영 모양 — preflight UNKNOWN → 시험이 열리지 않는다 */
+  /** 🔴 계약 유효 Persona 를 읽지 못한 경우 — preflight UNKNOWN → 시험이 열리지 않는다 (운영 실측 0 은 FAIL — stage-scheduler S2b) */
   const noPersona = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { contractValidPersonas: null }) }).decision
   check('🔴 🔴 **계약 유효 Persona 를 모르면(null) PASS 여도 d5 를 열지 않는다 — PERSONA_UNKNOWN**',
     noPersona.release === 'd3' && noPersona.state !== 'TRIAL' && noPersona.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN')

@@ -10,7 +10,7 @@
  *   · 처리량 · 수율  최근 3일 자동 READY 수 ÷ 그 3일 공급 묶음 원천 수(회차 파일)
  *   · 지연          최근 3일 지금 계약 도장(`source-slot-v1`)으로 나간 글의 원천 게시 → 공개 p50 · p90
  *   · Persona       🔴 **계약 유효 수는 Persona 레인이 제공한다** — 이 파일은 주입 인터페이스(`contractValidPersonas`)만 둔다.
- *                   제공자가 없으면 `null`(UNKNOWN). 🔴 활성 행 수로 대체하지 않는다(정본: active rows are not capacity).
+ *                   읽기 실패면 `null`(UNKNOWN). 🔴 활성 행 수로 대체하지 않는다(정본: active rows are not capacity).
  *   · 단가          최근 3일(증거일 포함) 장부 정산 평균 — 댓글 1건 · 감사 1건 · 자동 READY 1건당 공급 (PR3 KEEP)
  *   · 상한          공급은 env 값을 승인 천장($0.50)으로 누른 것 · 댓글 · 감사는 각 레인 정본 env 판독기 값 그대로
  *                  (`commentLoopLimitsFromEnv` · `auditLimitsFromEnv` — 여기서 $0.20 · $0.30 을 따로 누르지 않는다)

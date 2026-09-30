@@ -217,7 +217,8 @@ export type PreflightFacts = {
   latencyP90H: number | null
   /**
    * 🔴 **계약 유효 Persona 수 — Persona 레인이 제공한다(주입 인터페이스).** 활성 행 수로 대체하지 않는다.
-   *    지금은 제공자가 없어 `null`(모름) — 모든 단계 시험이 열리지 않는 것이 정직한 결과다.
+   *    Persona 4상태 정본(`readContractValidPersonas`)이 넣는다. 읽기 실패만 `null`(모름).
+   *    2026-09-30 운영 실측은 0 — D3 하한 24 가 막아 **D1→D3 시험부터** 열리지 않는다(PERSONA_SHORT).
    */
   contractValidPersonas: number | null
   /** 댓글 1건 정산 단가(USD) — 장부 실측(최근 3일) */

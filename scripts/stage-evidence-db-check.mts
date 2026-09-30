@@ -508,17 +508,17 @@ try {
        */
       const fd = failRun.out?.result.decision
       const pd = passRun.out?.result.decision
-      const pfUnknown = (o: Out | null): boolean => o?.nextPreflight !== null && o?.nextPreflight !== undefined
+      const pfPersonaShort = (o: Out | null): boolean => o?.nextPreflight !== null && o?.nextPreflight !== undefined
         && o.nextPreflight.verdict !== 'PASS' && o.nextPreflight.codes.includes('PERSONA_SHORT')
         && !o.nextPreflight.codes.includes('PERSONA_UNKNOWN') && o.nextPreflight.counts.personas === 0
       const pfBlocked = (d: Out['result']['decision'] | undefined): boolean =>
         d !== undefined && d.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN' || b.code === 'PREFLIGHT_FAIL')
       check('🔴 🔴 **러너 수준 — 전날 FAIL → 계획 d3 재시험 · 계약 유효 Persona 0(연결됨) → 시험 없이 바닥 PREPARE d1**',
-        fd?.state === 'PREPARE' && fd.release === 'd1' && pfBlocked(fd) && pfUnknown(failRun.out),
+        fd?.state === 'PREPARE' && fd.release === 'd1' && pfBlocked(fd) && pfPersonaShort(failRun.out),
         `${fd?.state} ${fd?.release} ${JSON.stringify(failRun.out?.nextPreflight)}`)
       if (launchdOk) {
         check('🟢 🔴 **러너 수준 — 전날 PASS → 지속 d3(증명됐다) · 계획 d5 · 계약 유효 Persona 0(연결됨) → REPROVE d3 (d5 를 열지 않는다)**',
-          pd?.state === 'REPROVE' && pd.release === 'd3' && pfBlocked(pd) && pfUnknown(passRun.out),
+          pd?.state === 'REPROVE' && pd.release === 'd3' && pfBlocked(pd) && pfPersonaShort(passRun.out),
           `${pd?.state} ${pd?.release}`)
       }
     }

@@ -68,10 +68,7 @@ export const STAGE_ENV_ALLOWED: readonly string[] = [
  *    여기 있는 파일이 더 이상 위반하지 않으면 **실패한다**(낡은 허용 목록을 남기지 않는다).
  *    새 파일은 여기에 넣어 통과시키지 않는다 — 소유 레인이 고친 뒤 이 줄을 지운다.
  */
-export const PENDING_OTHER_LANE: Readonly<Record<string, string>> = {
-  'src/lib/wave-c-readiness.ts': 'Lane D — `planPromotion` 이 `.env.local` 의 SORAN_RELEASE_STAGE 를 사람이 바꾸라고 안내한다(수동 단계 명령)',
-  'scripts/ops-status.mts': 'Lane D — 정본 env 에서 SORAN_RELEASE_STAGE · SORAN_CAPACITY_STAGE 를 읽는다(쓰지 않는 읽기 · 지울 것)',
-}
+export const PENDING_OTHER_LANE: Readonly<Record<string, string>> = {}
 
 export type EntryKind = 'publish' | 'supply'
 

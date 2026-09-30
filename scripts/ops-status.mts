@@ -104,7 +104,7 @@ async function main(): Promise<void> {
   const env = readEnvKeys([
     'SORAN_LLM_DAILY_BUDGET_USD', 'SORAN_LLM_RUN_REQUEST_CAP', 'SORAN_LLM_RESERVE_HEADROOM',
     'SORAN_AUDIT_LLM_DAILY_BUDGET_USD', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM',
-    'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', CONTROLLER_ENV, ...COMMENT_LEDGER_ENV_KEYS,
+    CONTROLLER_ENV, ...COMMENT_LEDGER_ENV_KEYS,
   ])
   const cost = readCostSignals(NOW, env.values)
   const { runs } = readProcessRuns()
