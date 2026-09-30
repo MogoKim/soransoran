@@ -18,23 +18,86 @@
  * 🔴 **원문·프롬프트·응답 본문·API 키·개인정보를 쓰지 않는다.** 줄의 모양이 그것을 막는다.
  */
 import {
-  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync,
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync,
   statSync, writeSync,
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, userInfo } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
 
 import {
   LEDGER_STAGES, previousLedgerDate,
   type LedgerEntry, type LedgerStage, type LedgerStatus, type OpenReservation,
 } from '../../src/lib/llm-ledger'
 
-/** 🔴 운영 자산과 같은 자리 규칙을 따른다 — `$HOME` 을 존중하므로 시험은 임시 HOME 을 준다 */
 export const LEDGER_DIR_NAME = 'llm-ledger'
 
+/** 한 HOME 아래의 공급 장부 자리 — 🔴 어느 HOME 인지는 부르는 쪽이 정한다 */
+export function ledgerDirForHome(home: string): string {
+  return join(home, 'Library', 'Application Support', 'soransoran', LEDGER_DIR_NAME)
+}
+
+/**
+ * **이 프로세스의 `$HOME`** 이 가리키는 공급 장부 — 읽는 쪽(관제·보고)과 시험(임시 HOME)이 쓴다.
+ *
+ * 🔴 **이것은 정본이 아니다** (2026-09-30). `$HOME` 은 명령 한 줄로 바꿀 수 있다 —
+ *    앞판은 공급 세션이 이 값을 그대로 장부로 써서, `HOME=/tmp/x` 로 띄운 손 실행이
+ *    **빈 장부 = 새 하루 예산**을 받았다(A4 진단 §5 ①). 이제 공급 세션은 이 자리가
+ *    `canonicalLedgerDir()` 와 **실경로로 같을 때만** 쓴다(`supplyLedgerDirError`).
+ */
 export function defaultLedgerDir(): string {
-  return join(homedir(), 'Library', 'Application Support', 'soransoran', LEDGER_DIR_NAME)
+  return ledgerDirForHome(homedir())
+}
+
+/**
+ * 🔴 **공급 장부의 정본 자리** — 계정의 passwd 홈(`os.userInfo().homedir`) 기준이다. `$HOME` 을 보지 않는다.
+ *    계정 정보를 못 읽으면 `null` 이다(정본을 모른다 → 공급 세션은 보류).
+ */
+export function canonicalLedgerDir(): string | null {
+  try {
+    const home = userInfo().homedir
+    return typeof home === 'string' && home !== '' ? ledgerDirForHome(home) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 경로의 **실경로** — 없는 끝부분은 가장 가까운 있는 조상의 실경로 뒤에 붙인다.
+ *    끝 `/` · `..` · 심볼릭 링크 · 아직 없는 장부 디렉터리(첫 실행)를 모두 같은 모양으로 만든다.
+ */
+export function realDirOf(p: string): string {
+  let cur = resolve(p)
+  const rest: string[] = []
+  for (;;) {
+    try {
+      return join(realpathSync(cur), ...rest.reverse())
+    } catch {
+      const up = dirname(cur)
+      if (up === cur) return join(cur, ...rest.reverse())
+      rest.push(basename(cur))
+      cur = up
+    }
+  }
+}
+
+/** 두 경로가 **실경로로** 같은 디렉터리인가 — 문자열 비교를 쓰지 않는다 */
+export function sameRealDir(a: string, b: string): boolean {
+  return realDirOf(a) === realDirOf(b)
+}
+
+/**
+ * 🔴 **공급 장부로 쓰려는 자리가 정본인가** — 아니면 사유, 맞으면 `null`.
+ *
+ *    `$HOME` 을 바꿔 띄운 손 실행은 여기서 걸린다: 그 자리는 정본과 실경로가 다르다.
+ *    빈 장부로 새 예산을 여는 대신 `LEDGER_ERROR` 로 보류한다(fail-closed).
+ *    시험(가짜 provider 프로세스)이 임시 HOME 을 쓰는 길은 세션 쪽 격리 표식 하나뿐이다.
+ */
+export function supplyLedgerDirError(dir: string, canonical: string | null = canonicalLedgerDir()): string | null {
+  if (canonical === null) return '공급 장부의 정본 자리(계정 홈)를 읽지 못했다 — 유료 요청을 보류한다'
+  if (sameRealDir(dir, canonical)) return null
+  return `공급 장부 자리가 정본과 다르다 — ${realDirOf(dir)} ≠ ${realDirOf(canonical)}`
+    + ' · 🔴 $HOME 을 바꿔 띄운 실행은 빈 장부로 새 예산을 열 수 있어 보류한다'
 }
 
 export function ledgerPathOf(dir: string, date: string): string {
@@ -152,6 +215,10 @@ function asEntry(v: unknown): LedgerEntry | null {
  *
  * 🔴 깨진 줄이 하나라도 있으면 **실패로 끝낸다.** 건너뛰면 그 줄이 예약이었을 때
  *    이미 보낸 요청이 장부에서 사라지고, 여력이 실제보다 많아 보인다.
+ *
+ * 🔴 **파일이 없으면 빈 장부다 — 이 함수에서는.** 읽는 쪽(관제·이력·다른 장부)에게는 그것이 맞다.
+ *    공급 장부의 **오늘** 파일이 없는 것을 "사용액 0" 으로 믿어도 되는지는 여기서 정하지 않는다 —
+ *    공급 세션이 요청 전에 `missingTodayLedgerVerdict`(정본 `supply-scheduled-reserve`)로 판정한다(2026-09-30).
  */
 export function readLedgerDay(path: string): LedgerRead {
   if (!existsSync(path)) return { ok: true, entries: [] }

@@ -30,6 +30,15 @@ import { pathToFileURL } from 'node:url'
 const LOG = process.env.FAKE_PROVIDER_LOG ?? ''
 
 /**
+ * 🔴 **공급 장부 시험 격리 표식** (2026-09-30) — `supply-llm-call.SUPPLY_LEDGER_ISOLATION_MARK` 와 같은 이름.
+ *    공급 세션은 장부 자리가 정본(계정 홈)이 아니면 `LEDGER_ERROR` 로 막는다(`$HOME` 바꾸기 우회 차단).
+ *    이 훅이 걸린 프로세스는 아래에서 `fetch` 를 가짜로 바꾸므로 실제 유료 요청을 보낼 수 없다 —
+ *    그래서 임시 HOME 장부를 써도 된다는 표식을 **여기서만** 건다. 로더보다 먼저 돌아 모듈을 import 하지 않고
+ *    `Symbol.for` 이름으로 건다(복사한 작업 디렉터리의 모듈 사본에도 같은 표식이 보인다).
+ */
+globalThis[Symbol.for('soransoran.test.fake-provider-ledger-isolation')] = true
+
+/**
  * 🔴 시험 모드 — **가짜 provider 안에서만 뜻이 있다.** 운영 env 가 아니다.
  *
  *    ok            정상 — 사용량을 준다

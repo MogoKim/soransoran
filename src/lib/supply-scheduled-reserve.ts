@@ -6,6 +6,10 @@
  *    **먼저** 다 썼다. 그 뒤 정기 회차 14:15 · 17:15 · 21:15 · 22:15 는 요청마다
  *    `DAILY_EXHAUSTED` 로 막혀(77건) 초안이 0건이었다. 장부는 "누가 먼저 왔는가" 만 봤다 —
  *    정기 회차가 하루 생산의 근거인데, 그 몫을 아무도 지키지 않았다.
+ *    🔴 (2026-09-30 정정, A4 진단) "먼저 썼다" 는 11시대 손 실행 6회($0.44)에만 맞다. 오후 손 실행 9회는
+ *       프로세스 env 로 덮어쓴 더 큰 하루 예산으로 **$0.50 을 넘겨** 썼다(장부 합계 $1.1925). 그 길은 이 파일의
+ *       천장(min(env, 계약 천장))이 닫고, 별도 장부로 새 예산을 여는 길(`$HOME` 바꾸기 · 오늘 파일 없음)은
+ *       `supply-llm-call` 의 정본 자리 확인과 `missingTodayLedgerVerdict` 가 닫는다.
  *
  * 🔴 **2차 보정 (같은 날) — 고정 몫 $0.0464 로는 늦은 슬롯이 여전히 굶는다.**
  *    앞판은 슬롯 몫을 `estimateSupplySpend(10).expectedPerRun`(묶음 5 시절 09-24~27 단가로 만든 추정)
@@ -250,6 +254,62 @@ export function supplyRunKindOf(
     }
   }
   return { kind: 'scheduled', slot: slot.label, why: `정기 슬롯 ${slot.label} 창 안` }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 오늘 장부 파일이 없을 때 — "사용액 0" 으로 믿어도 되는가 (2026-09-30)
+// ─────────────────────────────────────────────────────────
+
+export type MissingTodayVerdict = { ok: true; why: string } | { ok: false; reason: string }
+
+/**
+ * 🔴 **공급 장부의 오늘 파일이 없다 — 그것을 "오늘 쓴 돈 0" 으로 읽어도 되는가.**
+ *
+ *    장부 저장소는 없는 파일을 빈 장부로 읽는다. 그래서 오늘 파일을 옮기거나 지우면
+ *    그날 쓴 것이 0 으로 돌아가 **새 하루 예산**이 열렸다(A4 진단 §5 ②). 이력 쪽은 이미
+ *    "어제 파일 없음 → 보수 기본값" 으로 fail-closed 인데, 오늘 파일에는 같은 규칙이 없었다.
+ *
+ *    **오늘 파일이 없는 것이 정상인 경우** — 전부 허용한다:
+ *      ① 최근 `SCHEDULED_COST_LOOKBACK_DAYS` 일 장부가 하나도 없다 — 새 장부이거나 오래 꺼져 있었다
+ *      ② 오늘 첫 정기 슬롯 시각(08:15 KST) 전이다 — 자정 직후 · 이른 아침의 첫 호출
+ *      ③ 이 요청이 **정기 회차**다 — 노트북이 아침 슬롯 동안 꺼져 있었던 날, 정기 회차가 그날 첫 줄을 연다
+ *    그 밖(최근 장부가 있고 · 첫 슬롯 시각이 지났고 · 손 실행)은 **보류**다 — 호출부가 `LEDGER_ERROR` 로 막고
+ *    오늘 파일을 만들지 않는다(만들면 다음 요청부터는 "있는 파일" 이 되어 규칙이 한 번만 걸린다).
+ *
+ *    🔴 **잃는 것** — 아침 슬롯 동안 노트북이 꺼져 있던 날, 그날 첫 정기 회차가 돌기 전의 손 실행은 막힌다
+ *       (23:00 전 손 실행 몫은 원래 거의 0 이라 실제로 잃는 것은 작다). 정기 회차가 하루 종일 한 번도
+ *       못 돈 날에는 23:00 이후 손 실행도 막힌다. 검사(`supply:reserve-check` ⓙ)가 이 경계를 값으로 적는다.
+ *    🔴 **남는 빈틈** — 사람이 오늘 파일과 최근 7일 파일을 **모두** 옮기면 ① 로 허용된다. 그때도 이력이 없어
+ *       몫은 보수 기본값이라 23:00 전 손 실행 몫은 0 이다. 오늘 파일만 지운 뒤 다음 **정기** 회차가 새 파일을
+ *       열면 그 회차는 자기 몫 + 손 실행 몫을 새 장부 기준으로 쓴다 — 실수로는 생기지 않는 경로라 적어 둔다.
+ */
+export function missingTodayLedgerVerdict(input: {
+  now: Date
+  todayExists: boolean
+  /** 어제부터 `SCHEDULED_COST_LOOKBACK_DAYS` 일 중 하나라도 장부 파일이 있다 */
+  recentDaysExist: boolean
+  kind: SupplyRunKind
+  slots?: readonly SlotKst[]
+}): MissingTodayVerdict {
+  if (input.todayExists) return { ok: true, why: '오늘 장부가 있다' }
+  if (!input.recentDaysExist) {
+    return { ok: true, why: `최근 ${SCHEDULED_COST_LOOKBACK_DAYS}일 장부가 없다 — 새 장부(또는 오래 꺼져 있었다)로 본다` }
+  }
+  const slots = input.slots ?? SUPPLY_RUN_SLOTS_KST
+  const today0 = kstMidnightMs(input.now)
+  const firstStart = Math.min(...slots.map((s) => today0 + (s.hour * 60 + s.minute) * 60_000))
+  if (!Number.isFinite(firstStart) || input.now.getTime() < firstStart) {
+    return { ok: true, why: '오늘 첫 정기 슬롯 전이다 — 오늘 첫 호출이 파일을 연다' }
+  }
+  if (input.kind === 'scheduled') {
+    return { ok: true, why: '정기 회차가 오늘 첫 줄을 연다 — 아침 슬롯 동안 꺼져 있었던 날' }
+  }
+  return {
+    ok: false,
+    reason: '오늘 공급 장부 파일이 없다 — 최근 장부는 있고 오늘 첫 정기 슬롯 시각이 지났다.'
+      + ' 🔴 파일이 옮겨졌거나 지워졌을 수 있어 "오늘 쓴 돈 0" 으로 읽지 않는다(손 실행 보류).'
+      + ' 다음 정기 회차가 오늘 장부를 열면 풀린다',
+  }
 }
 
 // ─────────────────────────────────────────────────────────
