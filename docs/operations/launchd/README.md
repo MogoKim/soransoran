@@ -31,6 +31,18 @@ required  그 capacity 단계가 요구하는 상세 요청 수
 🔴 **등록은 창업자 승인 후 별도 절차다.** 등록하는 순간 되돌리는 주체가 사람이 된다 —
 이 PR 은 "무엇을 등록할 것인가" 까지만 정한다.
 
+## 🔴 목표 상태 — 자동 일정 owner 는 launchd 하나 · 단계는 StageDecision 하나 (구현 중 · 미배포)
+
+정책은 [D100 canon](../2026-09-21-d100-goal-canon.md) §6 자동 사다리가 정하고, 이 문서는 그 **실행 설명**이다.
+
+- D100 레인의 자동 일정(수집 · 공급 처리 · 발행 · 첫 댓글 · 감사 · 단계 controller)은 **이 기계의 launchd 하나**가
+  소유한다. 같은 일을 GitHub Actions schedule 이 따로 돌리면 owner 가 둘이다 — 결함이다.
+- 오늘 단계는 **`StageDecision` 행 하나**가 정한다. GitHub stage Variables · `.env` 의 단계 값 · canary 창은
+  단계를 정하는 근거가 아니다. 사람이 단계를 올리는 routine 절차는 없다.
+- 🔴 **지금은 목표 상태가 아니다.** 단계 입력원 단일화와 GitHub 발행 예약 퇴역은 코드 레인(Lane A)이 구현 중이고
+  main · runtime 에 배포되지 않았다. 배포 전까지 runtime 은 옛 경로를 읽는다 —
+  [`CURRENT-MILESTONE.md`](../CURRENT-MILESTONE.md) 충돌 장부 C4 가 그 상태를 적는다.
+
 ## 🔴 손으로 치지 않는다 — `runtime:deploy` 가 cutover 를 한다 (2026-09-11)
 
 아래 "등록 절차" 는 **첫 등록과 진단용**이다. 평소 전환은 배포가 한다.
@@ -220,8 +232,8 @@ supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 �
 
 | 템플릿 | 무엇을 | 환경 |
 |---|---|---|
-| `com.soransoran.raw-collect-82cook.plist.template` | 82cook Raw Vault 수집 (**5회/day** 07:00·10:00·13:00·16:00·19:00 KST) | 로컬 또는 GHA 대체 가능 |
-| `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (4슬롯) | 로컬 또는 GHA 대체 가능 |
+| `com.soransoran.raw-collect-82cook.plist.template` | 82cook Raw Vault 수집 (**5회/day** 07:00·10:00·13:00·16:00·19:00 KST) | 로컬 (GHA `supply-collect` 는 수동 dispatch 전용 — 자동 owner 가 아니다) |
+| `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (4슬롯) | 로컬 (위와 같다 — owner 는 한쪽뿐) |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
 | `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
 | `com.soransoran.navercafe-collect-wgang-multi.plist.template` | 우아한 갱년기 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
@@ -241,7 +253,7 @@ supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 �
 
 # ── 1) 첫 실행은 사람이 본다 — dry-run 은 네트워크 0 · LLM 0 · DB write 0 ──
 npm run supply:process                        # 무엇이 밀려 있는지 · 무엇을 할지
-npm run supply:process -- --simulate-stock=5  # 재고가 모자랐다면 무엇을 할지
+npm run supply:process -- --simulate-stock=5  # 다가오는 슬롯 중 eligible READY 가 5개 덮었다면(JIT 모의)
 
 # ── 2) 위 "등록 절차" 의 0~5 를 JOB 만 바꿔 그대로 돌린다 ──
 JOB=com.soransoran.supply-process
@@ -255,8 +267,11 @@ JOB=com.soransoran.supply-process
 🔴 **미처리 입력이 없으면 정상 no-op 이다** — 네트워크 0 · LLM 0 · DB write 0.
 조용한 날이 실패로 보이지 않아야 진짜 실패가 눈에 띈다.
 
-🔴 **재고 700 은 APPROVED 버퍼 목표이지 수집 스위치가 아니다.** 재고가 700 이상이면
-파일 단계(얇은 변환 · 검수용 변환)만 돌고 모델과 DB 는 쉰다. **수집 job 은 영향받지 않는다.**
+🔴 **유료 생성 수요는 JIT 하나다** — 다가오는 슬롯 수 − 그 슬롯들에 eligible 로 남을 READY 수(`judgeJitDemand`).
+수요가 0 이거나 모르면 파일 단계(얇은 변환 · 검수용 변환)만 돌고 모델과 DB 는 쉰다. **수집 job 은 영향받지 않는다.**
+
+📜 HISTORICAL — 옛 판은 "APPROVED 재고 700 이상이면 모델 · DB 를 쉰다" 는 버퍼 목표(`judgeBuffer` · `STOCK_BANDS`)로
+이 job 을 켜고 껐다. 2026-09-30 D100 canon 이 완성 글 재고 목표를 폐기했고, 코드에서도 지웠다.
 
 🔴 **멈추는 가장 빠른 방법**은 `.env.local` 의 `SORAN_SUPPLY_PROCESS_ENABLED` 를 지우는 것이다.
 job 은 계속 돌지만 무엇이 밀려 있는지만 읽고 끝난다.

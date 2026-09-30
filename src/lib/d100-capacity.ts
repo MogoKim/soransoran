@@ -77,12 +77,12 @@ export type D100Plan = {
    */
   readyQualifiedRequiredPerDay: number
   /**
-   * 🔴 **canary 하한** — 이 단계를 **하루 시험**으로 켜 볼 수 있는 최소 활성 Persona 수.
+   * 🔴 **canary 하한** — 이 단계를 **하루 시험**으로 켜 볼 수 있는 최소 **계약 유효** Persona 수(active 행 수가 아니다).
    *    `PERSONA_CANARY_FLOOR` 가 정본이다. 🔴 이 값을 채웠다고 지속 운영 준비라 말하지 않는다
    */
   personaCanaryFloor: number
   /**
-   * 🔴 **지속 다양성 목표** — 이 단계를 **계속** 운영하는 데 필요한 활성 Persona 수.
+   * 🔴 **지속 다양성 목표** — 이 단계를 **계속** 운영하는 데 필요한 **계약 유효** Persona 수.
    *    `PERSONA_SUSTAINED_TARGET` 이 정본이다. 🔴 canary 를 막는 데 쓰지 않는다
    */
   personaSustainedTarget: number
@@ -90,8 +90,10 @@ export type D100Plan = {
   commentMaxPerDay: number
   /** 하루 발행 슬롯 수 */
   publishSlotCount: number
-  /** 다음 단계로 올리기 전 최소 관측 일수 */
-  minimumObservationDays: number
+  /**
+   * 📜 `minimumObservationDays`(7·14·21일 최소 관측)를 지웠다 (2026-09-30). 보고 화면만 읽던 값이지만
+   *    정본은 "no arbitrary 7/14/21-day wait" 다 — PASS + 다음 단계 preflight green 이면 다음 증명일이 잡힌다.
+   */
   /** 🔴 **계획이 아니라 실제 스케줄러가 할 수 있는 것** */
   scheduler: SchedulerSupport
 }
@@ -179,7 +181,7 @@ export const PERSONA_SUSTAINED_TARGET: Readonly<Record<D100Stage, number>> = {
 
 /**
  * 🔴 **단계별 계획.** 창업자가 확정한 값이다 —
- *    `publicPostsPerDay` · 댓글 범위 · 관측 일수가 입력이고,
+ *    `publicPostsPerDay` · 댓글 범위 · 슬롯 수가 입력이고,
  *    상세 필요량과 재고는 위 상수로 **계산한다**(손으로 적지 않는다).
  *    Persona 두 목표는 위 두 표가 정본이다 — 여기 다시 적지 않는다.
  */
@@ -188,15 +190,14 @@ const INPUT: Readonly<Record<D100Stage, {
   commentMinPerDay: number
   commentMaxPerDay: number
   publishSlotCount: number
-  minimumObservationDays: number
 }>> = {
-  d3: { publicPostsPerDay: 3, commentMinPerDay: 3, commentMaxPerDay: 15, publishSlotCount: 3, minimumObservationDays: 7 },
-  d5: { publicPostsPerDay: 5, commentMinPerDay: 5, commentMaxPerDay: 25, publishSlotCount: 5, minimumObservationDays: 7 },
-  d10: { publicPostsPerDay: 10, commentMinPerDay: 10, commentMaxPerDay: 50, publishSlotCount: 10, minimumObservationDays: 14 },
-  d20: { publicPostsPerDay: 20, commentMinPerDay: 20, commentMaxPerDay: 100, publishSlotCount: 10, minimumObservationDays: 14 },
-  d30: { publicPostsPerDay: 30, commentMinPerDay: 30, commentMaxPerDay: 150, publishSlotCount: 15, minimumObservationDays: 14 },
-  d50: { publicPostsPerDay: 50, commentMinPerDay: 50, commentMaxPerDay: 250, publishSlotCount: 20, minimumObservationDays: 21 },
-  d100: { publicPostsPerDay: 100, commentMinPerDay: 100, commentMaxPerDay: 500, publishSlotCount: 25, minimumObservationDays: 21 },
+  d3: { publicPostsPerDay: 3, commentMinPerDay: 3, commentMaxPerDay: 15, publishSlotCount: 3 },
+  d5: { publicPostsPerDay: 5, commentMinPerDay: 5, commentMaxPerDay: 25, publishSlotCount: 5 },
+  d10: { publicPostsPerDay: 10, commentMinPerDay: 10, commentMaxPerDay: 50, publishSlotCount: 10 },
+  d20: { publicPostsPerDay: 20, commentMinPerDay: 20, commentMaxPerDay: 100, publishSlotCount: 10 },
+  d30: { publicPostsPerDay: 30, commentMinPerDay: 30, commentMaxPerDay: 150, publishSlotCount: 15 },
+  d50: { publicPostsPerDay: 50, commentMinPerDay: 50, commentMaxPerDay: 250, publishSlotCount: 20 },
+  d100: { publicPostsPerDay: 100, commentMinPerDay: 100, commentMaxPerDay: 500, publishSlotCount: 25 },
 }
 
 /**
@@ -220,7 +221,6 @@ export function d100Plan(stage: D100Stage): D100Plan {
     commentMinPerDay: i.commentMinPerDay,
     commentMaxPerDay: i.commentMaxPerDay,
     publishSlotCount: i.publishSlotCount,
-    minimumObservationDays: i.minimumObservationDays,
     scheduler: schedulerSupportOf(stage),
   }
 }
@@ -230,47 +230,45 @@ export function allD100Plans(): D100Plan[] {
 }
 
 /**
- * 🔴 **Persona 두 목표를 한 줄에 나란히 적는다** — 보고서는 이 값만 찍는다.
+ * 🔴 **Persona 두 목표 대비 공백을 한 줄에 적는다 — 계약 유효 수 기준** (2026-09-30 정정).
  *
- *    `canaryFloorMet`   하루 시험을 켤 수 있는 인원인가 — **승격 preflight 가 보는 것은 이것뿐**
- *    `sustainedMet`     계속 돌릴 인원인가 — 🔴 **보고만 한다.** canary 를 막지 않는다
+ *    앞판은 **active 카드 수**를 두 목표에 견줘 "d3·d5 🟢 충족" 을 찍었다. 정본은
+ *    "names or active rows are not capacity" 이고, 같은 화면의 preflight 는 **계약 유효 수**를 본다 —
+ *    한 화면이 두 답을 냈다. 이제 입력은 Persona 4상태 정본의 계약 유효 수 하나다.
  *
- * 🔴 canary 하한을 채웠다고 `sustainedMet` 가 참이 되지 않는다 — 두 값은 따로 잰다.
- * 🔴 재지 못했으면(`active === null`) 둘 다 `null` 이다. 0 으로도 통과로도 읽지 않는다.
+ *    `canaryGap`     다음 단계 하루 시험 하한까지 모자란 수 — `judgeNextPreflight` 가 같은 하한을 본다
+ *    `sustainedGap`  계속 운영할 다양성 목표까지 모자란 수 — 🔴 보고만 한다
+ *
+ * 🔴 이 함수는 **표시용**이다. 판정(`judgeNextPreflight`)은 이 값을 읽지 않는다.
+ * 🔴 재지 못했으면(`contractValid === null`) 공백도 `null` 이다. 0 으로도 통과로도 읽지 않는다.
  */
 export type PersonaTargetReport = {
   stage: D100Stage
-  /** 🔴 재지 못했으면 `null` */
-  active: number | null
+  /** 🔴 계약 유효 Persona 수 — 재지 못했으면 `null`. active 행 수가 아니다 */
+  contractValid: number | null
   canaryFloor: number
-  canaryFloorMet: boolean | null
-  canaryFloorShortfall: number | null
+  canaryGap: number | null
   sustainedTarget: number
-  sustainedMet: boolean | null
-  sustainedShortfall: number | null
+  sustainedGap: number | null
 }
 
-export function personaTargetReport(stage: D100Stage, active: number | null): PersonaTargetReport {
+export function personaTargetReport(stage: D100Stage, contractValid: number | null): PersonaTargetReport {
   const floor = PERSONA_CANARY_FLOOR[stage]
   const sustained = PERSONA_SUSTAINED_TARGET[stage]
   return {
-    stage, active,
+    stage, contractValid,
     canaryFloor: floor,
-    canaryFloorMet: active === null ? null : active >= floor,
-    canaryFloorShortfall: active === null ? null : Math.max(0, floor - active),
+    canaryGap: contractValid === null ? null : Math.max(0, floor - contractValid),
     sustainedTarget: sustained,
-    sustainedMet: active === null ? null : active >= sustained,
-    sustainedShortfall: active === null ? null : Math.max(0, sustained - active),
+    sustainedGap: contractValid === null ? null : Math.max(0, sustained - contractValid),
   }
 }
 
-/** 🔴 보고서 한 줄 — `canary 하한 N · 지속 목표 M` 을 항상 같이 적는다 */
+/** 🔴 보고서 한 줄 — `canary 하한 N · 지속 목표 M` 대비 공백을 항상 같이 적는다 */
 export function describePersonaTargets(r: PersonaTargetReport): string {
-  const mark = (met: boolean | null): string => met === null ? '⬚ 미측정' : met ? '🟢 충족' : '🔴 미달'
-  const act = r.active === null ? '?' : String(r.active)
-  return `${r.stage} 활성 Persona ${act}명 — canary 하한 ${r.canaryFloor}명 ${mark(r.canaryFloorMet)}`
-    + ` · 지속 목표 ${r.sustainedTarget}명${r.stage === 'd100' ? ' 이상' : ''} ${mark(r.sustainedMet)}`
-    + (r.sustainedShortfall !== null && r.sustainedShortfall > 0 ? ` (지속까지 ${r.sustainedShortfall}명 부족)` : '')
+  const gap = (g: number | null): string => g === null ? '⬚ 미관측' : g === 0 ? '공백 0' : `🔴 공백 ${g}명`
+  return `${r.stage} 계약 유효 ${r.contractValid ?? '?'}명 — canary 하한 ${r.canaryFloor}명 ${gap(r.canaryGap)}`
+    + ` · 지속 목표 ${r.sustainedTarget}명${r.stage === 'd100' ? ' 이상' : ''} ${gap(r.sustainedGap)}`
 }
 
 /** 🔴 다음 단계 — 마지막이면 `null` */

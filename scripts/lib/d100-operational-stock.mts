@@ -389,8 +389,8 @@ export async function readOperationalStock(
 
     return {
       ok: true,
-      // 🔴 14일 예측을 지웠다 — 예약 전망은 미측정(null)이다. 다가오는 슬롯은 `supply:health` 의 JIT 가 본다
-      funnel: { ...read.funnel, scheduledIn7Days: null, scheduledIn14Days: null },
+      // 📜 7·14일 예약 전망 칸을 지웠다(2026-09-30) — 다가오는 슬롯은 `supply:health` 의 JIT 가 본다
+      funnel: read.funnel,
       readyStockIds: [...read.rows.sets.publishableNow],
       links,
       activePersonas,

@@ -5,11 +5,13 @@
  * 🔴 **경계 행동만 잠근다.** 수치를 베껴 적는 fixture 는 만들지 않는다 —
  *    그런 검사는 코드를 복사한 두 번째 사본이 되고, 값이 바뀔 때마다 함께 고쳐야 한다.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
+import * as stockPlan from '../src/lib/supply-stock-plan'
 import {
-  APPROVED_NET_PER_DAY, APPROVED_PER_DAY_TARGET, BASELINE_OBSERVED_AT, SOURCE_BASELINE, STOCK_BANDS,
-  capacityOf, judgeStockBand, judgeSupplyGap, planSourceRequests, stockEta,
+  APPROVED_NET_PER_DAY, APPROVED_PER_DAY_TARGET, BASELINE_OBSERVED_AT, SOURCE_BASELINE,
+  capacityOf, judgeSupplyGap, planSourceRequests,
 } from '../src/lib/supply-stock-plan'
 import { judgeJitDemand } from '../src/lib/supply-process'
 import { collectArgsFor, planCafeRun } from './lib/navercafe-run-plan.mjs'
@@ -26,34 +28,42 @@ const check = (n: string, ok: boolean): void => {
 console.log('\n══ D100 공급 계획 검사 (🔴 DB 0 · 네트워크 0) ══\n')
 
 // ─────────────────────────────────────────────────────────
-console.log('① 재고 정책은 한 선이다 — 700 미만 적재, 이상 버퍼 정지')
+console.log('① 📜 옛 재고선(100/300/700)은 지웠다 — 보고 화면에도 남지 않는다 (2026-09-30)')
 // ─────────────────────────────────────────────────────────
-check('🔴 재고선이 100 · 300 · 700 이다',
-  STOCK_BANDS.bootstrap === 100 && STOCK_BANDS.min === 300 && STOCK_BANDS.target === 700)
-for (const [usable, band, collect] of [
-  [0, 'critical', true], [99, 'critical', true], [100, 'low', true],
-  [299, 'low', true], [300, 'build', true], [699, 'build', true],
-  [700, 'full', false], [5_000, 'full', false],
-] as const) {
-  const r = judgeStockBand(usable)
-  check(`🔴 재고 ${usable} → ${band} · 수집 ${collect}`, r.band === band && r.shouldCollect === collect)
-}
-check('🔴 재고를 못 세면 "충분하다" 로 읽지 않는다',
-  judgeStockBand(Number.NaN).shouldCollect)
 /**
- * 🔴 **죽은 배수를 되살리지 않는다** (2026-09-11).
- *    `critical ×1.5` 는 재고 687 이하 전 구간에서 상한 50 에 포화돼 ×1 과 결과가 같았고,
- *    `full ×0.25` 는 700 에 닿기 전에 중앙 게이트가 먼저 멈춰 도달 자체가 불가능했다.
+ * 🔴 앞판은 `STOCK_BANDS`(100/300/700) · `judgeStockBand`("700 미만이면 수집") · `stockEta`(재고선 도달 일수)를
+ *    이 파일이 export 하고 `supply:d100-plan` 이 찍었다. 정본(Sep 30)은 fixed 700 finished-content target 을
+ *    실행 게이트로도 보고 눈금으로도 두지 않는다 — 다시 들어오면 실패한다.
  */
-check('🔴 밴드가 속도 배수를 돌려주지 않는다',
-  !Object.prototype.hasOwnProperty.call(judgeStockBand(29), 'multiplier'))
+check('🔴 🔴 **supply-stock-plan 이 STOCK_BANDS · judgeStockBand · stockEta 를 내보내지 않는다**',
+  !('STOCK_BANDS' in stockPlan) && !('judgeStockBand' in stockPlan) && !('stockEta' in stockPlan))
+{
+  const code = (f: string): string => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
+  check('🔴 supply-stock-plan 코드(주석 제외)에 700 이 없다', !/\b700\b/.test(code('src/lib/supply-stock-plan.ts')))
+  check('🔴 supply:d100-plan 코드(주석 제외)에 재고선 · 700 이 없다',
+    !/STOCK_BANDS|stockEta|judgeStockBand|\b700\b|재고선/.test(code('scripts/supply-d100-plan.mts')))
+  /**
+   * 🔴 **보고용 lib 는 결정 경로가 읽지 않는다** — import 그래프로 본다.
+   *    supply-stock-plan 을 읽어도 되는 것은 보고 화면과 그 검사뿐이다.
+   */
+  const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
+    const p = join(d, n)
+    return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx|mts|mjs)$/.test(n) ? [p] : []
+  })
+  const ALLOWED = new Set(['scripts/supply-d100-plan.mts', 'scripts/supply-d100-plan-check.mts'])
+  const importers = [...walk('src'), ...walk('scripts')]
+    .filter((p) => /from '[^']*supply-stock-plan(\.mjs)?'/.test(readFileSync(p, 'utf8')))
+  const stray = importers.filter((p) => !ALLOWED.has(p))
+  check(`🔴 🔴 **supply-stock-plan 을 읽는 것은 보고 화면뿐이다** (${importers.length}곳)`, stray.length === 0)
+  for (const p of stray) console.log(`     🔴 ${p}`)
+}
 
 // ─────────────────────────────────────────────────────────
-console.log('\n② 🔴 재고선은 보고용이다 — 공급 러너 · 적재기의 상한이 아니다 (2026-09-30 · JIT)')
+console.log('\n② 🔴 공급 수요는 JIT 하나다 — 700 은 공급 러너 · 적재기의 상한이 아니다 (2026-09-30)')
 // ─────────────────────────────────────────────────────────
 /**
  * 🔴 앞판은 700(`STOCK_BANDS.target`)을 적재 천장 · 모델 스위치로 썼다(`judgeBuffer`). 정본(Sep 30)은
- *    "다가오는 슬롯 − eligible READY" 만큼만 만든다. 이 파일의 재고선은 `supply:d100-plan` 보고 화면에만 남는다.
+ *    "다가오는 슬롯 − eligible READY" 만큼만 만든다. 재고선은 보고 화면에서도 지웠다(①).
  */
 for (const usable of [0, 42, 100, 300, 699, 700, 5_000]) {
   const b = judgeJitDemand({ slots: 4, readyFilled: Math.min(usable, 4) })
@@ -137,28 +147,13 @@ check('🔴 미관측 source 로는 역산하지 않는다', planSourceRequests(
   check('🔴 잔여 목록은 유량과 따로 센다', gap.backlogOnce === 5)
 }
 
-/**
- * 🔴 **ETA 는 APPROVED 순증가가 측정되기 전까지 내지 않는다** (2026-09-11).
- *    앞선 판은 신규 thin 수를 순증가로 넣어 "n일" 을 찍었다.
- *    주석에 "가정" 이라고 적어도 표에 남는 것은 숫자이고, 읽는 사람은 숫자를 믿는다.
- */
-check('🔴 기본값은 미측정 — 며칠인지 내지 않는다',
-  stockEta(29).every((e) => e.days === null || e.need === 0))
-check('🟢 모자란 양은 사실이므로 그대로 낸다',
-  stockEta(29).find((e) => e.band === 'target')!.need === STOCK_BANDS.target - 29)
-check('🔴 미측정임을 표에 적는다', stockEta(29)[0]!.note.includes('미측정'))
-check('🔴 순증가가 0 이면 도달 예상은 null 이다 — 9999일이 아니다',
-  stockEta(29, 0).every((e) => e.days === null || e.need === 0))
-check('🟢 이미 넘은 선은 0일이다', stockEta(1_000, 10).every((e) => e.days === 0))
-check('🟢 측정된 순증가를 넣으면 그때는 날짜가 나온다',
-  stockEta(29, 10).find((e) => e.band === 'bootstrap')!.days === Math.ceil((100 - 29) / 10))
 // 🔴 러너 출력도 thin 과 APPROVED 를 갈라 적는다
 {
   const plan = readFileSync('scripts/supply-d100-plan.mts', 'utf8')
   check('🔴 출력이 APPROVED 순증가를 미측정으로 적는다',
     /APPROVED 순증가\/day/.test(plan) && /\*\*미측정\*\*/.test(plan))
   check('🔴 출력이 부족분을 "최소" 로만 적는다', /부족분\s+최소 \$\{gap\.thinShortfallFloorPerDay\}/.test(plan))
-  check('🔴 출력에서 thin 으로 ETA 를 찍지 않는다', !/stockEta\(db\.usable, (rate|gap\.)/.test(plan))
+  check('🔴 출력에 재고선 도달 표가 없다', !/stockEta|걸리는 날|건까지/.test(plan))
 }
 
 // ─────────────────────────────────────────────────────────

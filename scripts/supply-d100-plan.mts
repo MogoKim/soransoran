@@ -14,7 +14,11 @@
  *
  * 사용법
  *   npm run supply:d100-plan            실측(원장 + DB)
- *   npm run supply:d100-plan -- --stock=250   모의 재고(DB 조회 없이)
+ *   npm run supply:d100-plan -- --stock=250   모의 승인 행 수(DB 조회 없이 · 보고용)
+ *
+ * 🔴 **지운 옛 화면 (2026-09-30 · D100 canon)** — 📜 HISTORICAL: 재고선 100/300/700 · "700 미만 수집" 정책 줄 ·
+ *    재고선까지 모자란 건수 표(⑤). 완성 글 재고는 성공 기준이 아니다 — 공급 수요는 `judgeJitDemand` 하나,
+ *    단계 준비도는 `judgeNextPreflight` 하나다. 이 화면은 thin 유량과 요청량만 본다.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -25,8 +29,7 @@ import { PrismaClient } from '@prisma/client'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
   APPROVED_PER_DAY_FLOOR, APPROVED_PER_DAY_TARGET, SOURCE_BASELINE,
-  STOCK_BANDS, judgeStockBand, judgeSupplyGap, planBacklogSweep,
-  planSourceRequests, stockEta, type SourceBaseline,
+  judgeSupplyGap, planBacklogSweep, planSourceRequests, type SourceBaseline,
 } from '../src/lib/supply-stock-plan'
 
 const argv = process.argv.slice(2)
@@ -90,7 +93,7 @@ const measured: Measured[] = SOURCE_BASELINE.map((b) => {
 // ─────────────────────────────────────────────────────────
 const db = await (async (): Promise<{ usable: number; net7: number | null }> => {
   if (SIM !== null && Number.isInteger(SIM) && SIM >= 0) {
-    console.log(`  🟡 모의 재고 ${SIM}건 — DB 를 읽지 않는다\n`)
+    console.log(`  🟡 모의 승인 행 ${SIM}건 — DB 를 읽지 않는다\n`)
     return { usable: SIM, net7: null }
   }
   await loadEnvLocal()
@@ -107,14 +110,11 @@ const db = await (async (): Promise<{ usable: number; net7: number | null }> => 
   }
 })()
 
-const reading = judgeStockBand(db.usable)
-console.log(`  재고   승인 가능(APPROVED 미발행) ${db.usable}건`
+console.log(`  승인 행 APPROVED 미발행 ${db.usable}건 (보고용 · 🔴 목표선 없음)`
   + (db.net7 === null ? '' : ` · 최근 7일 Queue **생성** ${db.net7}건(= ${(db.net7 / 7).toFixed(1)}/day)`))
 console.log('         🔴 생성 건수는 APPROVED **순증가**가 아니다 — 순증가는 미측정이다')
-console.log(`  정책   ${reading.reason}`)
-console.log(`  목표   승인 가능 순증가 ${APPROVED_PER_DAY_FLOOR}~${APPROVED_PER_DAY_TARGET}/day`)
-console.log(`  재고선 초기 ${STOCK_BANDS.bootstrap} · 최소 ${STOCK_BANDS.min} · 권장 ${STOCK_BANDS.target}`
-  + '  (🔴 runtime 이 보는 것은 권장선 하나다)')
+console.log(`  D100   READY 생산 ${APPROVED_PER_DAY_FLOOR}~${APPROVED_PER_DAY_TARGET}/day (canon 처리량 · 쌓아 둘 재고가 아니다)`)
+console.log('  🔴 공급 수요는 `supply:process` 의 JIT(다가오는 슬롯 − eligible READY) 하나가 정한다 — 이 화면은 정하지 않는다')
 
 // ─────────────────────────────────────────────────────────
 console.log('\n── ① 24h 관측값 (원장에서 다시 셌다)')
@@ -167,14 +167,6 @@ for (const x of measured.filter((y) => (y.m.listRowsPerPage ?? 0) > 0)) {
   console.log(`   ${x.m.id.padEnd(24)} ${planBacklogSweep({ m: x.m, toPages: 5, overDays: 5 }).reason}`)
 }
 
-console.log('\n── ⑤ 재고까지 얼마나 모자란가')
-console.log('   🔴 **며칠 걸리는지는 내지 않는다.** 그러려면 APPROVED 순증가/day 가 있어야 하고,')
-console.log('      그것은 상태별 시점 스냅숏에서만 나온다 — 지금은 없다.')
-console.log('      앞선 판은 신규 thin 수를 순증가로 써서 "n일" 을 찍었다. 그것은 "thin 1건 =')
-console.log('      APPROVED 1건" 을 가정한 값이었다. 주석에 "가정" 이라 적어도 표에 남는 건 숫자다.')
-for (const e of stockEta(db.usable)) {
-  console.log(`   ${String(STOCK_BANDS[e.band]).padStart(4)}건까지  모자란 ${String(e.need).padStart(4)}건`
-    + `  ·  걸리는 날 ${e.days === null ? '🔴 미측정' : `${e.days}일`}`)
-}
-console.log(`   └ ${stockEta(db.usable)[0]!.note}`)
+console.log('\n── ⑤ 루프 깔때기(원문 게시 → 공개 지연 · 같은 날 비율 · 슬롯 채움)는 `npm run d100:readiness` ⓪ 에 있다')
+console.log('   🔴 완성 글 재고 도달 표는 지웠다(2026-09-30) — 완성 글 재고는 성공 기준이 아니다')
 console.log('\n🔴 이 명령은 아무것도 바꾸지 않았다 — 네트워크 0 · LLM 0 · DB write 0\n')
