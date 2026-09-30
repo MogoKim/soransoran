@@ -211,6 +211,10 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   직접 회수는 부모가 `deliveryGate` 로 먼저 보고 HOLD 면 runner 0 · 전송 0, 재생성 HOLD(`REGEN_DELIVERY_HOLD`)도 같다.
 >   HOLD 후보는 시도·등록 상한을 소비하지 않고 장부도 쓰지 않는다 — 후보 목록은 한 번만 훑는다(유한).
 >   brief·재생성 지시가 바뀌어 지문이 달라지면 새 작업이다. HOLD 여부를 판정할 수 없으면(장부 못 읽음) 회차 전체를 멈춘다.
+> - 🔴 **미해결 자동 작업 판정은 브랜치마다 PR 을 직접 조회한다** (`magazine-outstanding.mjs`). origin·local 자동 브랜치를
+>   먼저 읽고 각각 `gh pr list --state all --head <브랜치>` 로 본다. 최근 N건 전역 목록을 정본으로 쓰지 않는다
+>   (2026-09-30: `--limit 100` 창 밖으로 밀린 MERGED #524 를 PR 없는 브랜치로 오판 → producer·등록이 선정 전 정지).
+>   한 브랜치라도 조회 실패·JSON 손상이면 전체 fail-closed. 옛 자동 브랜치는 지우지 않는다.
 > - 🔴 **자동 병합의 CI 관찰 한도는 20분이다** — 필수 검사 실측 13분 남짓보다 길다. 명시적 실패는 즉시 멈추고,
 >   누락·진행 중은 20분까지 본 뒤 `CI_OBSERVE_TIMEOUT`. PR head SHA 의 검사만 센다.
 > - 🔴 **재생성 패킷은 `regen-packet/3` · `slug.<attemptId>.json`** — attemptId 는 필수 UUID 이고 파일

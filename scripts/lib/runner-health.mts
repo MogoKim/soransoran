@@ -12,8 +12,8 @@ import { join } from 'node:path'
 
 import { judgeJobState, type JobState } from '../../src/lib/runtime-isolation'
 import {
-  parseLaunchdRunInfo, failingFromLaunchd, failingFromProcessRuns, combineFailing,
-  type LaunchdRunInfo,
+  parseLaunchdRunInfo, failingFromLaunchd, failingFromProcessRuns, combineFailing, failingFromPublishRun,
+  type LaunchdRunInfo, type PublishRunRead,
 } from '../../src/lib/job-health'
 import { RUN_FILE_RE } from '../../src/lib/supply-process'
 
@@ -122,4 +122,20 @@ export function supplyFailing(obs: JobObservation, runs: readonly ProcessRunLite
    */
   if (obs.launchdFailing === null && obs.run.readable && obs.run.lastExitCode === null) return byRecord
   return combineFailing([obs.launchdFailing, byRecord])
+}
+
+/**
+ * 🔴 **발행 job 의 최근 회차 실패 여부.** launchd 가 종료 값을 갖고 있으면 그것이 전부다.
+ *    **재등록 직후 한 번도 안 돈 상태**(`runs = 0 · (never exited)` · 돌고 있지 않음)에서만
+ *    wrapper 가 남긴 마지막 실제 회차 기록을 읽는다 — 판정은 `failingFromPublishRun`.
+ *    🔴 공급 `ProcessRun` 은 발행의 근거가 아니다 — 여기서 읽지 않는다.
+ *    launchctl 을 못 읽었거나 재등록 뒤 한 번이라도 떴으면(돌고 있는 중 포함) 기록으로 채우지 않는다.
+ */
+export function publishFailing(
+  obs: JobObservation, read: PublishRunRead, now: Date, maxAgeMs: number,
+): boolean | null {
+  // `runs` 는 launchd 가 띄울 때 오른다 — `runs = 0` 이면 지금 돌고 있는 중일 수도 없다
+  const reloadedNeverRan = obs.run.readable && obs.run.runs === 0 && obs.run.lastExitCode === null
+  if (obs.launchdFailing === null && reloadedNeverRan) return failingFromPublishRun(read, obs.label, now, maxAgeMs)
+  return obs.launchdFailing
 }

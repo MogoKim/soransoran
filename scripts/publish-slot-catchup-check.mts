@@ -28,6 +28,7 @@ import {
   renderPublishRunnerPlist, PUBLISH_RUNNER_LABEL, PUBLISH_RUNNER_INSTALL_STEPS,
   judgeTriggerParity, describeTriggers, readCanonicalStages, parseCanonicalStages,
   RUNNER_SYSTEM_PATH, runnerPathValue, judgeRunnerEnv, judgeRunnerSecrets,
+  LAUNCHD_LABEL_KEY, LAUNCHD_RUN_MARK_KEY,
 } from './lib/original-post-runner-template'
 
 let pass = 0
@@ -345,10 +346,12 @@ console.log('\n⑩ 정시 트리거 템플릿 — 🔴 등록하지 않는다')
     }).ok)
   check('🔴 [P0] plist 에 비밀값이 없다', judgeRunnerSecrets(plist).ok)
   check('🔴 [P0] 비밀 키가 섞이면 잡는다', !judgeRunnerSecrets(`${plist}<key>DATABASE_URL</key>`).ok)
-  check('🔴 [P0] EnvironmentVariables 에 PATH 말고 다른 키를 넣지 않는다', (() => {
+  // 🔴 허용 목록은 정확히 셋 — PATH 와 launchd 실행 표식·label(2026-09-29 · 회차 기록의 근거). 그 밖의 키는 없다
+  check('🔴 [P0] EnvironmentVariables 에 PATH · 실행 표식 · label 말고 다른 키를 넣지 않는다', (() => {
     const dict = plist.slice(
       plist.indexOf('<key>EnvironmentVariables</key>'), plist.indexOf('<key>WorkingDirectory</key>'))
-    return (dict.match(/<key>/g) ?? []).length === 2
+    const keys = [...dict.matchAll(/<key>([^<]+)<\/key>/g)].map((m) => m[1]).filter((k) => k !== 'EnvironmentVariables')
+    return JSON.stringify(keys.sort()) === JSON.stringify(['PATH', LAUNCHD_LABEL_KEY, LAUNCHD_RUN_MARK_KEY].sort())
   })())
   check('🔴 [P0] 인자가 그대로다 (--apply --limit=1 --trigger=local)',
     PUBLISH_RUNNER_ARGS.join(' ') === '--apply --limit=1 --trigger=local')

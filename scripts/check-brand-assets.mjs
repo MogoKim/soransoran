@@ -14,6 +14,7 @@
  *   · 외부 브랜드(locked)가 구분돼 있다
  *   · 🔴 **PNG 자산의 실제 픽셀 크기가 적힌 값과 같다** (PNG 헤더를 직접 읽는다)
  *   · 🔴 **manifest 의 아이콘 4종이 실제 파일·실제 크기·MIME 과 맞는다**
+ *   · 🔴 **탭·검색 favicon(src/app/icon.png)이 정사각이고 48px 보다 크다** (소란소란 제품 계약)
  *   · 🔴 **가로형 로고 파일이 표시 상자(brand-logo.ts)의 정확히 2배다**
  *   · 🔴 **구 텍스트 워드마크 계약이 코드에 남아 있지 않다**
  *
@@ -106,6 +107,21 @@ const APP_CONVENTION = { '/icon.png': 'src/app/icon.png', '/apple-icon.png': 'sr
 export function manifestSrcToPath(src) {
   return APP_CONVENTION[src] ?? (src.startsWith('/') ? join('public', src.slice(1)) : null)
 }
+
+/**
+ * 검색 결과 favicon 조건 — Google 공식 문서는 정사각 · 최소 8×8 을 요구하고,
+ * 여러 플랫폼에서 잘 보이도록 48×48 보다 큰 크기를 권장한다. 배수 조건은 없다.
+ * 소란소란은 그 권장을 **제품 계약으로 올려** 48px 초과를 강제한다(채택 규격 96×96).
+ *
+ * 🔴 2026-09-21~09-29 에 탭 아이콘이 32×32 였다. 탭에서는 멀쩡히 보이지만 검색 결과용으로는
+ *    권장 크기에 못 미친다 — 파일만 봐서는 아무도 모른다. 그래서 크기 자체를 검사로 고정한다.
+ */
+export function faviconSizeProblem(size) {
+  if (size.width !== size.height) return `정사각이 아닙니다 (${size.width}x${size.height})`
+  if (size.width <= 48) return `${size.width}px — 48 보다 커야 합니다`
+  return null
+}
+const FAVICON_PATH = 'src/app/icon.png'
 
 /** manifest.ts 의 icons 배열에서 { src, sizes, type } 을 읽는다 */
 export function readManifestIcons(text) {
@@ -391,6 +407,11 @@ function selfTest() {
     })(),
     ['PNG 가 아니면 오류를 돌려준다', Boolean(readPngSize(Buffer.from('not a png at all......')).error)],
     ['너무 짧은 파일도 오류다', Boolean(readPngSize(Buffer.alloc(8)).error)],
+    ['favicon 96×96 은 통과', faviconSizeProblem({ width: 96, height: 96 }) === null],
+    ['🔴 favicon 32×32 는 잡는다', faviconSizeProblem({ width: 32, height: 32 }) !== null],
+    ['🔴 favicon 48×48 은 잡는다 (48 보다 커야 한다)', faviconSizeProblem({ width: 48, height: 48 }) !== null],
+    ['favicon 100×100 은 통과 (배수 조건 없음)', faviconSizeProblem({ width: 100, height: 100 }) === null],
+    ['🔴 favicon 96×48 은 잡는다 (정사각 아님)', faviconSizeProblem({ width: 96, height: 48 }) !== null],
     ["pixels 문자열을 읽는다", parsePixels('192x96')?.width === 192 && parsePixels('192x96')?.height === 96],
     ['pixels 형식 오류를 잡는다', parsePixels('192 x 96') === null && parsePixels('big') === null],
     [
@@ -528,6 +549,16 @@ for (const a of assets) {
   }
 }
 
+// ── 🔴 탭·검색 favicon 이 정사각 · 48px 초과인가 (Google 권장을 올린 제품 계약) ──
+{
+  const got = pngSize.get(FAVICON_PATH)
+  if (!got) pixelProblems.push(`${FAVICON_PATH} — 자산 목록에 없거나 크기를 재지 못했습니다`)
+  else {
+    const why = faviconSizeProblem(got)
+    if (why) pixelProblems.push(`${FAVICON_PATH} — 검색 favicon 조건 위반: ${why}`)
+  }
+}
+
 // ── 🔴 manifest 가 선언한 아이콘이 실제와 맞는가 ──
 const MANIFEST_TS = join(ROOT, 'src/app/manifest.ts')
 const icons = readManifestIcons(readFileSync(MANIFEST_TS, 'utf8'))
@@ -647,6 +678,7 @@ for (const a of locked) console.log(`    🔒 ${a.path}`)
 console.log('')
 console.log(`PNG 실측 ${pngSize.size}건 — 전부 적힌 크기와 일치`)
 for (const [rel, s] of pngSize) console.log(`    ${s.width}x${s.height}  ${rel}`)
+console.log(`검색 favicon ${FAVICON_PATH} — 정사각 · 48px 초과`)
 console.log(`manifest 아이콘 ${icons.length}건 — 경로·크기·MIME 전부 실제와 일치`)
 console.log('가로형 로고 — 파일이 표시 상자의 정확히 2배 (@2x)')
 console.log('가로형 로고 — 화면 주소 · OG 런타임 경로 · 파일 추적 설정이 모두 같은 파일을 가리킨다')
@@ -654,7 +686,8 @@ console.log('구 텍스트 워드마크 계약(HEAD·TAIL·SPLIT_AT) 코드 잔�
 console.log('')
 console.log('🔴 이 검사는 manifest 에 적힌 것만 본다 —')
 console.log('   목록에 넣지 않은 새 자산, 이미지 **안에** 무엇이 그려져 있는지는 잡지 못한다.')
-console.log('   크기는 재지만 "두 사람이 손을 맞대고 있는가" 는 사람이 본다.')
+console.log('   크기는 재지만 "아이콘이 원본 Favicon.png 를 그대로 줄인 것인가" 는')
+console.log('   node scripts/generate-app-icons.mjs <원본 경로> 가 원본과 대조한다 (원본은 저장소 밖).')
 
 if (process.argv.includes('--verbose')) {
   console.log('')

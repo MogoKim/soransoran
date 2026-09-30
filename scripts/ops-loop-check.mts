@@ -8,8 +8,10 @@
  *   ④ consumer — flag OFF 면 아무것도 넣지 않는다 · 결정이 없으면 d1
  *   ⑤ keep-awake · controller · 복구 템플릿 — sudo/pmset 0 · 발행 창 전 · 수집 job 제외
  *   ⑥ 복구 판정 — 모르면 건드리지 않는다 · 같은 창에서 한 번만
+ *   ⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 실제 회차 기록으로만 판정 · 없음/손상/오래됨/실패는 정상이 아니다
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ledgerDateOf } from '../src/lib/llm-ledger'
@@ -29,7 +31,9 @@ import { canaryAuthorization } from '../src/lib/release-canary'
 import { RELEASE_STAGES, type ReleaseStage, type StageVerdict } from '../src/lib/scale-profile'
 import type { PromotionVerdict } from '../src/lib/d100-capacity'
 import { judgeRecovery } from '../src/lib/runner-recovery'
-import { supplyFailing, type JobObservation } from './lib/runner-health.mjs'
+import { publishFailing, supplyFailing, type JobObservation } from './lib/runner-health.mjs'
+import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from './lib/publish-run-record.mjs'
+import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
   RECOVERABLE_LABELS, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL,
@@ -37,7 +41,11 @@ import {
 import { PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
 import { RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 import { programArguments } from './lib/launchd-install.mjs'
-import { renderPublishHeartbeatPlist, STAGE_CONSUMER_SCRIPT } from './lib/original-post-runner-template'
+import {
+  renderPublishHeartbeatPlist, renderPublishRunnerPlist, STAGE_CONSUMER_SCRIPT, PUBLISH_RUNNER_LABEL,
+  LAUNCHD_RUN_MARK_KEY, LAUNCHD_RUN_MARK_VALUE, LAUNCHD_LABEL_KEY,
+  judgeLaunchdRunMarker, launchctlEnvironmentOf, plistEnvironmentOf,
+} from './lib/original-post-runner-template'
 
 let pass = 0
 let fail = 0
@@ -365,6 +373,26 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
       '/n/npx', 'tsx', '/r/scripts/original-post-auto-publish.mts',
       '--apply', '--limit=1', '--trigger=local', '--heartbeat',
     ].join(' '))
+  const markOk = (xml: string): boolean => {
+    const env = plistEnvironmentOf(xml)
+    return env !== null && env[LAUNCHD_RUN_MARK_KEY] === LAUNCHD_RUN_MARK_VALUE && env[LAUNCHD_LABEL_KEY] === PUBLISH_RUNNER_LABEL
+      && judgeLaunchdRunMarker(env).ok
+  }
+  check('🔴 발행 plist(heartbeat·정시판) 은 EnvironmentVariables 에 실행 표식과 정확한 label 을 명시한다',
+    markOk(renderPublishHeartbeatPlist(input)) && markOk(renderPublishRunnerPlist(input)))
+  check('🔴 표식 판정: 블록 없음 · 표식 없음 · label 다름 · 값 다름 → 거절',
+    !judgeLaunchdRunMarker(null).ok
+    && !judgeLaunchdRunMarker({ PATH: '/x' }).ok
+    && !judgeLaunchdRunMarker({ [LAUNCHD_RUN_MARK_KEY]: LAUNCHD_RUN_MARK_VALUE, [LAUNCHD_LABEL_KEY]: 'com.soransoran.x' }).ok
+    && !judgeLaunchdRunMarker({ [LAUNCHD_RUN_MARK_KEY]: 'manual', [LAUNCHD_LABEL_KEY]: PUBLISH_RUNNER_LABEL }).ok)
+  const PRINT_ENV = (inner: string): string => 'gui/501/x = {\n\tinherited environment = {\n'
+    + `\t\t${LAUNCHD_RUN_MARK_KEY} => ${LAUNCHD_RUN_MARK_VALUE}\n\t\t${LAUNCHD_LABEL_KEY} => ${PUBLISH_RUNNER_LABEL}\n\t}\n`
+    + `\tenvironment = {\n\t\tPATH => /n:/usr/bin\n${inner}\t}\n}`
+  check('🔴 loaded 판정은 launchctl 의 environment 블록만 본다 — inherited 에 있는 값은 인정하지 않는다',
+    !judgeLaunchdRunMarker(launchctlEnvironmentOf(PRINT_ENV(''))).ok
+    && judgeLaunchdRunMarker(launchctlEnvironmentOf(PRINT_ENV(
+      `\t\t${LAUNCHD_RUN_MARK_KEY} => ${LAUNCHD_RUN_MARK_VALUE}\n\t\t${LAUNCHD_LABEL_KEY} => ${PUBLISH_RUNNER_LABEL}\n`))).ok
+    && launchctlEnvironmentOf(null) === null)
   const supplyTemplate = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
   const supplyArgs = programArguments(supplyTemplate)
   check('🔴 공급 job 이 stage consumer를 거쳐 기존 --live 인자를 보존한다',
@@ -381,6 +409,10 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
     /installed\.trimEnd\(\) === expected\.trimEnd\(\)/.test(installer))
   check('🔴 공식 설치기는 설치 전 snapshot을 남기고 검증 실패면 자동 rollback한다',
     /manifest\.json/.test(installer) && /설치 검증 실패/.test(installer) && /restore\(backupDir\)/.test(installer))
+  check('🔴 공식 설치기는 발행 러너의 렌더 표식과 **loaded** 표식·label 을 둘 다 확인하고, 틀리면 rollback 한다',
+    /judgeLaunchdRunMarker\(plistEnvironmentOf\(desired\.get\(PUBLISH_RUNNER_LABEL\)!\)\)/.test(installer)
+    && /judgeLaunchdRunMarker\(launchctlEnvironmentOf\(p\.ok \? p\.out : null\)\)/.test(installer)
+    && /ok = marker\.ok && ok/.test(installer))
   const stageSwitch = readFileSync('scripts/stage-controller-switch.mts', 'utf-8')
   check('🔴 단계 스위치는 다른 env 키가 바뀌면 원본으로 되돌린다',
     /othersSame/.test(stageSwitch) && /copyFileSync\(backup, envPath\)/.test(stageSwitch))
@@ -409,6 +441,121 @@ console.log('\n⑥ 복구 판정')
     /모른다/.test(judgeRecovery({ ...base, lastExitCode: 1, state: 'unknown' }).reason)
     && /load 되어 있지 않다/.test(judgeRecovery({ ...base, lastExitCode: 1, state: 'unloaded' }).reason))
   check('🔴 복구 대상이 아니면(수집) 실패여도 깨우지 않는다', judgeRecovery({ ...base, recoverable: false, lastExitCode: 1 }).action === 'skip')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 실제 회차 기록으로만')
+// ─────────────────────────────────────────────────────────
+{
+  const L = PUBLISH_RUNNER_LABEL
+  const pubObs = (print: string | null): JobObservation => {
+    const run = parseLaunchdRunInfo(print)
+    return { label: L, installed: true, state: print === null ? 'unknown' : 'loaded', stateReason: '', run, launchdFailing: failingFromLaunchd(run) }
+  }
+  // 07:00 판정 — 전날 22:00 회차가 22:01 에 끝났고 22:29 에 배포(재등록)됐다
+  const NOW7 = new Date('2026-09-30T07:00:00+09:00')
+  const rec = (exitCode: number, finishedAt = '2026-09-29T22:01:00+09:00', label = L): PublishRunRead => ({
+    kind: 'ok', record: { v: 1, label, startedAt: '2026-09-29T22:00:05+09:00', finishedAt, exitCode },
+  })
+  const pf = (print: string | null, read: PublishRunRead, now = NOW7): boolean | null => publishFailing(pubObs(print), read, now, PUBLISH_RUN_MAX_AGE_MS)
+  const supOk = { label: 'com.soransoran.supply-process', loaded: true, failing: false }
+
+  // AS-IS 재현 — 앞판은 launchd 값만 넘겼다. 정상 회차가 있어도 모른다
+  const asIs = errorSignalOf([{ label: L, loaded: true, failing: pubObs(PRINT_NEVER).launchdFailing }, supOk])
+  check('AS-IS 재현: 재등록 직후(never exited) 발행 job 은 앞판에서 errors=unknown → RUNNER_UNKNOWN', asIs.health === 'unknown', JSON.stringify(asIs))
+  const toBe = errorSignalOf([{ label: L, loaded: true, failing: pf(PRINT_NEVER, rec(0)) }, supOk])
+  check('🔴 재등록 + 최근 실제 회차 성공 기록 → ok', toBe.health === 'ok', JSON.stringify(toBe))
+
+  check('🔴 재등록 + 기록 없음 → 모름(null)', pf(PRINT_NEVER, { kind: 'missing' }) === null)
+  check('🔴 재등록 + 기록 손상 → 모름(null)', pf(PRINT_NEVER, { kind: 'corrupt', reason: 'x' }) === null)
+  check('🔴 재등록 + 마지막 회차 실패(exit 1) → 실패(true)', pf(PRINT_NEVER, rec(1)) === true)
+  check('🔴 재등록 + 마지막 회차 실행 불가(127) → 실패(true)', pf(PRINT_NEVER, rec(127)) === true)
+  check('🔴 재등록 + 오래된 기록(최대 나이 초과) → 모름(null)',
+    pf(PRINT_NEVER, rec(0, '2026-09-28T22:01:00+09:00')) === null
+    && pf(PRINT_NEVER, rec(0), new Date(Date.parse('2026-09-29T22:01:00+09:00') + PUBLISH_RUN_MAX_AGE_MS + 60_000)) === null)
+  check('밤 공백은 최대 나이 안이다 — 22:01 끝난 회차를 07:40 판정이 읽는다',
+    pf(PRINT_NEVER, rec(0), new Date('2026-09-30T07:40:00+09:00')) === false)
+  check('🔴 재등록 + 다른 label 기록(수동 실행 등) → 모름(null)', pf(PRINT_NEVER, rec(0, undefined, 'application.com.x.1')) === null)
+  check('🔴 재등록 + 미래에 끝난 기록 → 모름(null)', pf(PRINT_NEVER, rec(0, '2026-09-30T08:00:00+09:00')) === null)
+  check('🔴 재등록 + 끝난 시각이 시작보다 이르다 → 모름(null)', pf(PRINT_NEVER, rec(0, '2026-09-29T21:00:00+09:00')) === null)
+  check('🔴 launchd 가 종료 값을 갖고 있으면 그것이 이긴다 — exit 1 은 성공 기록이 있어도 실패',
+    pf(PRINT_FAIL, rec(0)) === true && pf(PRINT_OK, rec(1)) === false)
+  check('🔴 launchctl 을 못 읽었으면 성공 기록이 있어도 모름', pf(null, rec(0)) === null)
+  check('🔴 재등록 뒤 첫 회차가 돌고 있는 중(runs 1 · never exited)이면 기록으로 채우지 않는다',
+    pf('gui/501/x = {\n\tstate = running\n\truns = 1\n\tlast exit code = (never exited)\n}', rec(0)) === null)
+  check('🔴 공급 ProcessRun 은 발행 근거가 아니다 — 공급 done 이어도 발행 기록 없음이면 unknown',
+    errorSignalOf([{ label: L, loaded: true, failing: pf(PRINT_NEVER, { kind: 'missing' }) }, supOk]).health === 'unknown')
+
+  check('파싱: 깨진 JSON · v 다름 · exitCode 비정수 → corrupt',
+    parsePublishRunRecord('{').kind === 'corrupt'
+    && parsePublishRunRecord(JSON.stringify({ v: 2, label: L, startedAt: 'a', finishedAt: 'b', exitCode: 0 })).kind === 'corrupt'
+    && parsePublishRunRecord(JSON.stringify({ v: 1, label: L, startedAt: 'a', finishedAt: 'b', exitCode: '0' })).kind === 'corrupt'
+    && parsePublishRunRecord(null).kind === 'missing')
+
+  // 파일 — 쓰기·읽기 (임시 디렉터리)
+  const dir = mkdtempSync(join(tmpdir(), 'pubrun-'))
+  try {
+    check('파일 없음 → missing', readPublishRunRecord(dir).kind === 'missing')
+    const MARK = { [LAUNCHD_RUN_MARK_KEY]: LAUNCHD_RUN_MARK_VALUE, [LAUNCHD_LABEL_KEY]: L }
+    const refused = [
+      recordPublishRun({ env: {}, startedAt: new Date(), finishedAt: new Date(), exitCode: 0 }, dir),
+      recordPublishRun({ env: { XPC_SERVICE_NAME: L }, startedAt: new Date(), finishedAt: new Date(), exitCode: 0 }, dir),
+      recordPublishRun({ env: { ...MARK, [LAUNCHD_LABEL_KEY]: 'com.soransoran.supply-process' }, startedAt: new Date(), finishedAt: new Date(), exitCode: 0 }, dir),
+      recordPublishRun({ env: { ...MARK, [LAUNCHD_RUN_MARK_KEY]: 'manual' }, startedAt: new Date(), finishedAt: new Date(), exitCode: 0 }, dir),
+    ]
+    check('🔴 표식 없음 · XPC_SERVICE_NAME 만 · label 다름 · 표식 값 다름 → 남기지 않는다',
+      refused.every((r) => !r.written) && readPublishRunRecord(dir).kind === 'missing')
+    const t0 = new Date('2026-09-29T13:00:00Z')
+    const w = recordPublishRun({ env: MARK, startedAt: t0, finishedAt: new Date(t0.getTime() + 60_000), exitCode: 2 }, dir)
+    const back = readPublishRunRecord(dir)
+    check('launchd 회차는 남고 그대로 읽힌다', w.written && back.kind === 'ok' && back.record.exitCode === 2 && back.record.label === L, JSON.stringify(back))
+    recordPublishRun({ env: {}, startedAt: t0, finishedAt: t0, exitCode: 0 }, dir)
+    const kept = readPublishRunRecord(dir)
+    check('🔴 수동 성공이 launchd 회차의 실패를 덮지 않는다', kept.kind === 'ok' && kept.record.exitCode === 2)
+    writeFileSync(join(dir, 'last.json'), 'garbage')
+    check('🔴 손상된 파일 → corrupt', readPublishRunRecord(dir).kind === 'corrupt')
+    const dir2 = mkdtempSync(join(tmpdir(), 'pubrun-'))
+    mkdirSync(join(dir2, 'last.json'))
+    check('🔴 읽을 수 없는 자리(디렉터리) → corrupt(missing 아님)', readPublishRunRecord(dir2).kind === 'corrupt')
+    rmSync(dir2, { recursive: true, force: true })
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+
+  // 🔴 연결 — wrapper 를 실제로 돌린다. HOME 을 임시로 → 정본 env 없음 → legacy · 기록도 임시 HOME 아래
+  const home = mkdtempSync(join(tmpdir(), 'pubrun-home-'))
+  const recDir = join(home, 'Library', 'Application Support', 'soransoran', 'publish-runs')
+  const MARKED = { [LAUNCHD_RUN_MARK_KEY]: LAUNCHD_RUN_MARK_VALUE, [LAUNCHD_LABEL_KEY]: L }
+  const runWrap = (by: string, code: string, extra: Record<string, string>): number | null => {
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home }
+    delete env[LAUNCHD_RUN_MARK_KEY]; delete env[LAUNCHD_LABEL_KEY]; delete env.XPC_SERVICE_NAME
+    Object.assign(env, extra)
+    return spawnSync('npx', ['tsx', 'scripts/stage-consume-exec.mts', `--by=${by}`, '--', process.execPath, '-e', code],
+      { env, stdio: ['ignore', 'ignore', 'ignore'] }).status
+  }
+  try {
+    const s1 = runWrap('publish', 'process.exit(3)', MARKED)
+    const r1 = readPublishRunRecord(recDir)
+    check('🔴 연결: 표식이 정확한 발행 회차 exit 3 → 종료 값 그대로 · 기록 exit 3', s1 === 3 && r1.kind === 'ok' && r1.record.exitCode === 3, `${s1} ${JSON.stringify(r1)}`)
+    const s2 = runWrap('publish', 'process.exit(0)', MARKED)
+    const r2 = readPublishRunRecord(recDir)
+    check('🔴 연결: 다음 회차 exit 0 → 기록 exit 0', s2 === 0 && r2.kind === 'ok' && r2.record.exitCode === 0)
+    const unchanged = (): boolean => { const r = readPublishRunRecord(recDir); return r.kind === 'ok' && r.record.exitCode === 0 }
+    const s3 = runWrap('publish', 'process.exit(5)', {})
+    check('🔴 연결: 일반 수동 실행(표식 없음)은 기록을 바꾸지 않는다 · 종료 값은 그대로', s3 === 5 && unchanged())
+    runWrap('publish', 'process.exit(5)', { XPC_SERVICE_NAME: L })
+    check('🔴 연결: XPC_SERVICE_NAME 만 있으면 기록하지 않는다 — 암묵 주입에 기대지 않는다', unchanged())
+    runWrap('publish', 'process.exit(5)', { ...MARKED, [LAUNCHD_LABEL_KEY]: 'com.soransoran.supply-process' })
+    check('🔴 연결: label 이 다르면 기록하지 않는다', unchanged())
+    runWrap('publish', 'process.exit(5)', { ...MARKED, [LAUNCHD_RUN_MARK_KEY]: 'manual' })
+    check('🔴 연결: 표식 값이 다르면 기록하지 않는다', unchanged())
+    rmSync(recDir, { recursive: true, force: true })
+    runWrap('supply', 'process.exit(0)', MARKED)
+    check('🔴 연결: supply consumer 는 발행 기록을 쓰지 않는다', !existsSync(join(recDir, 'last.json')))
+  } finally { rmSync(home, { recursive: true, force: true }) }
+
+  const ctl = readFileSync('scripts/stage-controller.mts', 'utf-8')
+  check('🔴 연결: 판정 controller 가 발행 job 을 publishFailing + 회차 기록으로 본다',
+    /failing: publishFailing\(pub, readPublishRunRecord\(\), NOW, PUBLISH_RUN_MAX_AGE_MS\)/.test(ctl)
+    && !/failing: pub\.launchdFailing/.test(ctl))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
