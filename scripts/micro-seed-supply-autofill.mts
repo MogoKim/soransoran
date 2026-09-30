@@ -286,8 +286,8 @@ async function main(): Promise<void> {
   })))
   /**
    * 🔴 **두 수를 섞지 않는다** (2026-09-26). `stock.usable` 은 형식이 맞는 미발행 행이다 —
-   *    사람 검토를 기다리는 기계 초안도 들어간다. **적재 천장**(700)에만 쓴다.
-   *    발행 가능 재고 · 경고선 · 부족분은 발행 러너와 같은 분류(`publishableNow`)로 잰다.
+   *    사람 검토를 기다리는 기계 초안도 들어간다. **표시용**이다(2026-09-30 · 700 적재 천장 삭제 — 상한은 `--up-to`
+   *    하나 = 공급 러너의 JIT 수요). 발행 가능 수는 발행 러너와 같은 분류(`publishableNow`)로 잰다.
    *    앞판은 형식 행을 "러너가 먹을 수 있는 것" 이라 찍었다 — 같은 DB 에서 러너는 0건이었다.
    */
   const view = await loadStockClassification(prisma, process.env, new Date())
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
   console.log(`① 큐  발행 러너 기준 지금 발행 가능 ${publishableNow}건 (분류 정본 · 슬롯 판정 source-slot-v1)`)
   for (const line of describeStockClassification(view.classification)) console.log(`   ${line}`)
   console.log(`   형식이 맞는 미발행 행 ${stock.usable}건 (사람 ${stock.human} · 기계 ${stock.machine})`
-    + ` / 큐 ${queueRows.length}건 — 🔴 적재 천장 계산용 · 발행 가능 재고가 아니다`)
+    + ` / 큐 ${queueRows.length}건 — 🔴 형식 행 수일 뿐 · 발행 가능 재고가 아니다`)
 
   // 이미 올라간 것 — synthetic RawContent 기준으로 되돌린 키
   const existing = new Set<string>()

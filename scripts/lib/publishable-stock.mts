@@ -664,10 +664,12 @@ function bucketOfReject(code: RejectCode, gateResults: unknown): StockBucket {
   }
 }
 
-/** 🔴 정본 슬롯 판정 제외 → 칸. 나이 초과만 ineligible · 나머지(모름)는 unknown */
+/**
+ * 🔴 정본 슬롯 판정 제외 → 칸. 나이 초과만 ineligible · 나머지(증거 · 시각 · 반응 · 동력 모름)는 unknown.
+ *    계획의 첫 판정은 hard gate 를 이미 지난 행 · 배정 전(pending)이라 HARD_GATE · NO_PERSONA_AT_SLOT 은 여기 오지 않는다.
+ */
 function bucketOfHold(hold: ReleaseReason): StockBucket {
-  return hold === 'SOURCE_TOO_OLD_AT_SLOT' || hold === 'HARD_GATE' || hold === 'NO_PERSONA_AT_SLOT'
-    ? 'releaseIneligible' : 'releaseUnknown'
+  return hold === 'SOURCE_TOO_OLD_AT_SLOT' ? 'releaseIneligible' : 'releaseUnknown'
 }
 
 /**

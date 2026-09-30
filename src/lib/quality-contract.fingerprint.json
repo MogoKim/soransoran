@@ -10,15 +10,15 @@
     "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "d122b6778a8687e2031c9b62cb23509bc61ecfe1dc4eeb2ed62ab58e0967c3f2",
-    "src/lib/auto-ready-v2.ts": "5853c144bec97bbff67417569d01f6aa3907ceef1271d31d6ef3cf5915e6e678",
+    "src/lib/auto-ready-v2.ts": "1fc9e27acc68916eb7802fccfaa0d6abf09eabe68b7b916961d9162b41f27fc2",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "c4fd83b706912022c221b8e0db09fec90f911028782e29a701f97ef544aa6751",
     "scripts/lib/content-core-run.mts": "9f76ffba824a151d360740ed4d0109bdf6c49a169387210a4edc2859e963ac51",
     "scripts/lib/content-core-prompts.mts": "b3d2a4a22966d822d114d1162f57b0606c92aec0db1d40e7ae59d5b174112751",
-    "src/lib/auto-ready-quality-cohort.ts": "cdd18f8b1346f49ae37f8244ac2b353e98b726097a07100cfaa207dfe7e0ddbe",
-    "src/lib/auto-ready-repo.ts": "32e164b45cd42e6f99de944b1a76784c1a96b0a5a5d7a1176a4a5f255f5ffb40",
-    "src/lib/auto-ready-evidence.ts": "44876509f73df30bc067263cf3040203a44aafd93863b611a96ed2beee1f1503",
+    "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
+    "src/lib/auto-ready-repo.ts": "3442679bbd04e2f5b24b64495cb532bd2935ba449f0be919ee18db92c2757a00",
+    "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
     "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d",
     "src/lib/persona-cap.ts": "83744d04e42d76a4402d31ff743c0da94db7456efe89091084ec87968cadbf50",
@@ -27,9 +27,12 @@
   },
   "acknowledgement": {
     "kind": "behaviorUnchanged",
-    "reason": "도장 트랜잭션(stampAutoReady·stampRound)을 엔진이 잃은 P2028(Transaction not found·만료) 에 한해 최대 1회 새로 시작 — 열림·적격·CAS 판정과 결과는 그대로",
+    "reason": "auto-ready-v2 죽은 가드(sourceCapturedKnown — MicroSeedRawContent.sourceCapturedAt 은 NOT NULL 이라 언제나 참) 제거 · 그 칸을 나르던 select·필드 정리 · 판정 행동 불변 (2026-09-30 source-slot-v1)",
     "changedFiles": [
-      "src/lib/auto-ready-repo.ts"
+      "src/lib/auto-ready-v2.ts",
+      "src/lib/auto-ready-quality-cohort.ts",
+      "src/lib/auto-ready-repo.ts",
+      "src/lib/auto-ready-evidence.ts"
     ]
   }
 }

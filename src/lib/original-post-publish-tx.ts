@@ -409,7 +409,14 @@ async function publishAttempt(
             id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null,
             decidedBy: row.decidedBy, updatedAt: row.updatedAt,
           },
-          data: { status: 'EXPIRED', declineReason: `RELEASE_EXPIRED:${release.reasons.join(',')}`, gateResults: stamped },
+          /**
+           * 🔴 **배정을 풀어 준다** — 나가지 않은 행이 Persona 의 주간 사용량 · 최소 간격(`matchedAt` 기준)을 먹으면
+           *    그 Persona 가 며칠 동안 막힌다(러너가 사람 행 배정을 트랜잭션 앞에서 쓰므로 실제로 생긴다).
+           */
+          data: {
+            status: 'EXPIRED', declineReason: `RELEASE_EXPIRED:${release.reasons.join(',')}`, gateResults: stamped,
+            matchedPersonaId: null, matchedAt: null,
+          },
         })
         if (expired.count !== 1) throw new Error(QUEUE_RACE)
         return { kind: 'expired', queueId: row.id, reasons: release.reasons, publishedTodayInTx }
