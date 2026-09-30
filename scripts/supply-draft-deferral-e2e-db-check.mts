@@ -30,6 +30,7 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -66,6 +67,27 @@ let year = new Date(wall).getUTCFullYear()
 const birthdayKst = (y: number): number => Date.parse(`${y}-${bm}-${bd}T00:00:00+09:00`)
 while (birthdayKst(year) - wall < 7 * 864e5) year += 1
 const RUN_AT = new Date(birthdayKst(year) - 500)
+/**
+ * 🔴 (2026-09-30 · source-slot-v1) 원천 시각은 회차 시각 기준이다 — 게시 6h 전 · 목록 관측 5h 전 · 수집 4.9h 전.
+ *    고정 날짜(2026-09-27)를 쓰면 회차가 그 72h 뒤일 때 원천이 전부 SOURCE_TOO_OLD_AT_SLOT 이 되어
+ *    생성 전 판정이 묶음을 비운다(이 검사가 보려는 여력 대기 경로에 닿지 않는다).
+ */
+const SRC_POSTED = new Date(RUN_AT.getTime() - 6 * 3_600_000).toISOString()
+const SRC_LISTED = new Date(RUN_AT.getTime() - 5 * 3_600_000).toISOString()
+const SRC_CAPTURED = new Date(RUN_AT.getTime() - 4.9 * 3_600_000).toISOString()
+/** 🔴 목록 관측 파일 — 원천 상대 표본(sourceStats)의 재료. 러너가 읽는 이름 모양 그대로(`navercafe-<카페>-<RUN>.list.jsonl`) */
+const writeListObs = (dir: string, rows: readonly { id: string; site: string; c: number }[]): void => {
+  const t = new Date(RUN_AT.getTime() - 5 * 3_600_000).toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-')
+  const bySite = new Map<string, typeof rows[number][]>()
+  for (const r of rows) bySite.set(r.site, [...(bySite.get(r.site) ?? []), r])
+  for (const [site, rs] of bySite) {
+    const cafe = site.split(':')[1] ?? 'x'
+    writeFileSync(join(dir, `navercafe-${cafe}-${t}.list.jsonl`), `${rs.map((r) => JSON.stringify({
+      sourceSite: site, sourceArticleId: r.id, sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED,
+      sourceCommentCount: r.c, sourceViewCount: r.c * 10,
+    })).join('\n')}\n`)
+  }
+}
 const AFTER = new Date(birthdayKst(year) + 500)
 
 // ── 🔴 임시 cwd · 임시 HOME — import 전에 세운다(말투 자산 · 장부 경로가 import 때 굳는다) ──
@@ -171,7 +193,7 @@ async function main(): Promise<void> {
         gateResults: { holds: [], blocks: [], autoDraft: {
           provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: code, bundleDigest: `bd-${code}`, comments: 3 },
-        }, [QUALITY_CONTRACT_KEY]: currentQualityContract() } as never,
+        }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN_AT, { id: `dd-${seq}` }) } as never,
         decidedBy: 'machine:auto-draft-v5', dedupKey: `dd-${seq}`,
       },
     })
@@ -308,12 +330,13 @@ async function worksetAxisRunner(
     title: `우리 나이 이야기 ${x.id}`,
     bodyHead: `${x.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: x.c, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
-    sourcePostedAt: '2026-09-27T00:00:00Z', sourceListedAt: '2026-09-27T00:00:00Z',
+    sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED, sourceCapturedAt: SRC_CAPTURED,
   })
   writeFileSync(join(D2, 'wsaxis-1.detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), access: 'ok', imageCount: 0 })).join('\n')}\n`)
   writeFileSync(join(D2, 'wsaxis-1.raw-detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), accessStatus: 'ok' })).join('\n')}\n`)
+  writeListObs(D2, src.map((x) => ({ id: x.id, site: 'navercafe:wgang', c: x.c })))
 
   // 🔴 같은 원문의 미발행 형제 — 러너가 **이 DB 를 읽어야만** wsxs1 을 뺄 수 있다.
   //    적재 행의 id 는 `<원문id>-<해시8>` 이다(`baseArticleId` 가 뒤를 뗀다) — 그 모양 그대로 넣는다
@@ -331,7 +354,7 @@ async function worksetAxisRunner(
       gateResults: { holds: [], blocks: [], autoDraft: {
         provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
         draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: codes[0] ?? 'P01', bundleDigest: 'bd-wsx', comments: 3 },
-      }, [QUALITY_CONTRACT_KEY]: currentQualityContract() } as never,
+      }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN_AT, { id: 'wsx-dd-1' }) } as never,
       decidedBy: 'machine:auto-draft-v5', dedupKey: 'wsx-dd-1',
     },
   })
@@ -414,12 +437,13 @@ async function duplicateSourceRunner(
     title: `우리 나이 이야기 ${x.id}`,
     bodyHead: `${x.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: x.c, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
-    sourcePostedAt: '2026-09-27T00:00:00Z', sourceListedAt: '2026-09-27T00:00:00Z',
+    sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED, sourceCapturedAt: SRC_CAPTURED,
   })
   writeFileSync(join(D3, 'dupsrc-1.detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), access: 'ok', imageCount: 0 })).join('\n')}\n`)
   writeFileSync(join(D3, 'dupsrc-1.raw-detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), accessStatus: 'ok' })).join('\n')}\n`)
+  writeListObs(D3, src)
 
   // ── 큐 · 글 — 🔴 원천 칸만 의미가 있다. 적재 행의 id 는 `<원문id>-<해시8>` 모양 그대로 ──
   const u = await prisma.user.create({ data: { nickname: '중복검사' }, select: { id: true } })
