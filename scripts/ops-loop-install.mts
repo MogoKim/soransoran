@@ -2,6 +2,7 @@
 /**
  * 무인 운영 루프 공식 설치기. 기본은 계획만이며 `--apply`만 변경한다.
  * 발행 러너의 현재 trigger(fixed/heartbeat)를 보존하고 controller·recover·keep-awake를 설치한다.
+ * 판정·적용 순서는 `lib/ops-loop-install-core.mts` 에 있다(검사가 가짜 launchctl 로 실행해 본다).
  * 공급 job은 runtime deploy가 설치한 stage consumer 배선을 읽기 전용으로 검증한다.
  */
 import { execFileSync } from 'node:child_process'
@@ -9,18 +10,13 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
-import { parseLaunchctlPrint } from '../src/lib/runtime-isolation'
 import {
   leftoverPlaceholders, programArguments, readInstalled, removeInstalled, render, templatePathOf, writeInstalled,
 } from './lib/launchd-install.mjs'
+import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import {
-  KEEP_AWAKE_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL,
-  renderKeepAwakePlist, renderRunnerRecoverPlist, renderStageControllerPlist,
-} from './lib/ops-loop-templates'
-import {
-  PUBLISH_HEARTBEAT_ARGS, PUBLISH_RUNNER_ARGS, PUBLISH_RUNNER_LABEL,
-  renderRunnerPlistFor, type RunnerTriggerMode,
-  judgeLaunchdRunMarker, launchctlEnvironmentOf, plistEnvironmentOf,
+  PUBLISH_HEARTBEAT_ARGS, PUBLISH_RUNNER_ARGS, PUBLISH_RUNNER_LABEL, type RunnerTriggerMode,
+  judgeLaunchdRunMarker, plistEnvironmentOf,
 } from './lib/original-post-runner-template'
 
 type SnapshotRow = { label: string; installed: boolean; loaded: boolean; file: string | null }
@@ -110,12 +106,7 @@ const publishMode: RunnerTriggerMode = heartbeat ? 'heartbeat' : 'fixed'
 if (installedPublish === null) problems.push('발행 러너 설치본이 없다')
 else if (!fixedShape) problems.push('발행 러너 인자를 알아볼 수 없다 — trigger를 추측하지 않는다')
 
-const desired = new Map<string, string>([
-  [PUBLISH_RUNNER_LABEL, renderRunnerPlistFor(publishMode, input)],
-  [STAGE_CONTROLLER_LABEL, renderStageControllerPlist(input)],
-  [RUNNER_RECOVER_LABEL, renderRunnerRecoverPlist(input)],
-  [KEEP_AWAKE_LABEL, renderKeepAwakePlist({ logDir })],
-])
+const desired = desiredPlists(publishMode, input)
 for (const [label, xml] of desired) {
   const left = leftoverPlaceholders(xml)
   if (left.length > 0) problems.push(`${label} placeholder가 남았다 — ${left.join(', ')}`)
@@ -133,9 +124,8 @@ const expectedSupply = render(supplyTemplate, {
 const installedSupply = readInstalled(agentDir, supplyLabel)
 if (!samePlist(installedSupply, expectedSupply)) problems.push('공급 job이 stage consumer 배선이 아니다 — 이 runtime으로 deploy 먼저')
 
-for (const label of desired.keys()) {
-  if (running(label)) problems.push(`${label}이 실행 중이다 — 회차 종료 뒤 다시 실행`)
-}
+// 🔴 회차가 돌고 있는 job 위로 내리지 않는다 — 늘 떠 있는 keep-awake 만 예외(판정은 ops-loop-install-core)
+problems.push(...runningBlockers(desired.keys(), running))
 
 console.log(`   runtime ${head.ok ? head.out.slice(0, 7) : '읽기 실패'} · publish ${publishMode}`)
 console.log(`   supply consumer ${samePlist(installedSupply, expectedSupply) ? '✅' : '🔴'}`)
@@ -167,32 +157,17 @@ for (const label of desired.keys()) {
 }
 writeFileSync(join(backupDir, 'manifest.json'), `${JSON.stringify({ createdAt: new Date().toISOString(), rows } satisfies Snapshot, null, 2)}\n`, { mode: 0o600 })
 
-let ok = true
-for (const label of desired.keys()) bootout(label)
-for (const [label, xml] of desired) {
-  ok = writeInstalled(agentDir, label, xml) && ok
-  ok = run('plutil', ['-lint', plistPath(label)], home).ok && ok
-}
-for (const label of desired.keys()) ok = bootstrap(label) && ok
-
-for (const [label, xml] of desired) {
-  const p = run('launchctl', ['print', `${domain}/${label}`], home)
-  const cfg = parseLaunchctlPrint(p.ok ? p.out : null)
-  const argsOk = cfg.readable && JSON.stringify(cfg.args) === JSON.stringify(programArguments(xml))
-  const wdOk = label === KEEP_AWAKE_LABEL || (cfg.readable && cfg.workingDirectory === runtimeRoot)
-  console.log(`   ${argsOk && wdOk ? '🟢' : '🔴'} ${label} loaded 인자·경로`)
-  ok = argsOk && wdOk && ok
-  if (label === PUBLISH_RUNNER_LABEL) {
-    // 🔴 파일이 아니라 launchctl 이 **실제로 물고 있는** env 에서 표식·label 을 본다
-    const marker = judgeLaunchdRunMarker(launchctlEnvironmentOf(p.ok ? p.out : null))
-    console.log(`   ${marker.ok ? '🟢' : '🔴'} ${label} loaded 실행 표식·label`)
-    for (const m of marker.problems) console.log(`      ${m}`)
-    ok = marker.ok && ok
-  }
-}
-
-if (!ok) {
-  console.error('🔴 설치 검증 실패 — 설치 전 상태로 되돌린다')
-  process.exit(restore(backupDir) ? 1 : 2)
-}
+const outcome = applyInstall(desired, runtimeRoot, {
+  bootout,
+  write: (label, xml) => writeInstalled(agentDir, label, xml),
+  lint: (label) => run('plutil', ['-lint', plistPath(label)], home).ok,
+  bootstrap,
+  print: (label) => {
+    const p = run('launchctl', ['print', `${domain}/${label}`], home)
+    return p.ok ? p.out : null
+  },
+  restore: () => restore(backupDir),
+  log: (line) => console.log(line),
+})
+if (!outcome.ok) process.exit(outcome.restored ? 1 : 2)
 console.log(`\n✅ 설치 완료 · rollback: npm run ops:loop-install -- --rollback=${backupDir}\n`)
