@@ -17,20 +17,22 @@
  *    "일단 이 정도" 를 기본값으로 넣으면 아무도 정하지 않은 숫자가 운영값이 된다.
  */
 import { randomUUID } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import {
   classifyReservations, judgeSettle, judgeSpend, ledgerDateOf, previousLedgerDate, runPaidCountOf, tallyOf,
-  type BlockCode, type BudgetLimits, type LedgerEntry, type LedgerStage,
+  type BlockCode, type BudgetEnvSource, type BudgetLimits, type LedgerEntry, type LedgerStage,
   type OpenReservation, type SpendProtect,
 } from '../../src/lib/llm-ledger'
 import {
-  SCHEDULED_COST_LOOKBACK_DAYS, supplySpendProtectAt, type SupplyRunKind,
+  SCHEDULED_COST_LOOKBACK_DAYS, missingTodayLedgerVerdict, supplySpendProtectAt, type SupplyRunKind,
 } from '../../src/lib/supply-scheduled-reserve'
 import { PRICING_VERSION, costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
-  addOpenReservation, appendLedgerLine, clearOpenReservation, defaultLedgerDir, ledgerPathOf,
+  addOpenReservation, appendLedgerLine, canonicalLedgerDir, clearOpenReservation, defaultLedgerDir, ledgerPathOf,
   openReservationsPathOf, pidAlive, readLedgerDay, readLedgerRun, readOpenReservations,
-  readSettleHold, settleHoldPathOf, withLedgerLock,
+  readSettleHold, sameRealDir, settleHoldPathOf, supplyLedgerDirError, withLedgerLock,
   type LedgerRead, type OpenRead, type SettleHold,
 } from './llm-ledger-store.mjs'
 import {
@@ -91,6 +93,77 @@ export function missingBudgetEnvNames(limits: BudgetLimits): string[] {
 }
 
 /**
+ * 🔴 **예산 env 값의 출처** (2026-09-30) — 순수 함수. `.env.local` 본문을 **받는다**.
+ *
+ *    `loadEnvLocal` 은 이미 있는 `process.env` 를 덮지 않는다. 그래서 셸에서
+ *    `SORAN_LLM_DAILY_BUDGET_USD=5 npx tsx …` 로 띄우면 `.env.local` 의 0.50 이 아니라 5 가 쓰인다 —
+ *    2026-09-28 손 실행 9회가 그 길로 예산을 넘겼다(A4 진단 §3). 공급 장부의 판정은 이제
+ *    min(env, 계약 천장)이라 덮어써도 천장을 못 넘지만, **덮어썼다는 사실**은 사람이 봐야 한다.
+ *    이 함수는 키마다 출처를 가르고, `.env.local` 과 다른 값이면 `overrides` 에 담는다(값은 예산 숫자뿐이다).
+ *
+ *    `envLocalText === null` — `.env.local` 이 없다(→ 있는 값은 `process`). `undefined` — 읽지 못했다(→ `unknown`).
+ */
+export function budgetEnvProvenance(
+  env: Readonly<Record<string, string | undefined>>, envLocalText: string | null | undefined,
+): { sources: Record<keyof typeof BUDGET_ENV, BudgetEnvSource>; overrides: { name: string; envLocal: string; process: string }[] } {
+  const fileVals = new Map<string, string>()
+  if (typeof envLocalText === 'string') {
+    // 🔴 `loadEnvLocal`(micro-seed-time) 과 같은 규칙으로 읽는다 — 다른 규칙이면 "다르다" 가 거짓이 된다
+    for (const line of envLocalText.split('\n')) {
+      const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
+      if (m === null) continue
+      let v = (m[2] ?? '').trim()
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+      fileVals.set(m[1] ?? '', v)
+    }
+  }
+  const same = (a: string, b: string): boolean => {
+    const x = Number(a.trim())
+    const y = Number(b.trim())
+    return a.trim() === b.trim() || (a.trim() !== '' && b.trim() !== '' && Number.isFinite(x) && x === y)
+  }
+  const sources = {} as Record<keyof typeof BUDGET_ENV, BudgetEnvSource>
+  const overrides: { name: string; envLocal: string; process: string }[] = []
+  for (const key of Object.keys(BUDGET_ENV) as (keyof typeof BUDGET_ENV)[]) {
+    const name = BUDGET_ENV[key]
+    const pv = env[name]
+    const fv = fileVals.get(name)
+    if (pv === undefined || pv.trim() === '') sources[key] = 'missing'
+    else if (envLocalText === undefined) sources[key] = 'unknown'
+    else if (fv === undefined) sources[key] = 'process'
+    else if (same(fv, pv)) sources[key] = 'env.local'
+    else {
+      sources[key] = 'process-override'
+      overrides.push({ name, envLocal: fv, process: pv })
+    }
+  }
+  return { sources, overrides }
+}
+
+/** `.env.local` 본문 — 없으면 `null`, 읽지 못하면 `undefined` */
+function readEnvLocalText(path: string): string | null | undefined {
+  if (!existsSync(path)) return null
+  try { return readFileSync(path, 'utf-8') } catch { return undefined }
+}
+
+/**
+ * 🔴 **시험 격리 표식** (2026-09-30) — 가짜 provider 프로세스만 건다.
+ *
+ *    공급 세션은 장부 자리가 정본(`canonicalLedgerDir`, 계정 홈)과 실경로로 같아야 요청을 보낸다.
+ *    러너를 띄우는 시험은 임시 HOME 장부를 써야 운영 장부를 건드리지 않는다 — 그 시험만 이 표식을 건다.
+ *    · 거는 곳: `scripts/lib/fake-provider-hook.mjs`(맨 위, `fetch` 를 가짜로 바꾸는 같은 파일) ·
+ *      in-process 검사(`supply:reserve-check`)는 `fetch` 를 가짜로 바꾼 뒤 직접 건다.
+ *    · 🔴 이 표식이 걸린 프로세스는 **실제 provider 로 나갈 수 없다**(fetch 가 가짜다). 운영 CLI·lib 는
+ *      이 이름을 쓰지 않는다 — `supply:ledger-check` 가 저장소 전체를 훑어 확인한다.
+ *    · env 가 아니다 — env 는 셸 한 줄로 넣을 수 있다. 이 표식은 코드(`--import`)로만 걸린다.
+ */
+export const SUPPLY_LEDGER_ISOLATION_MARK: unique symbol = Symbol.for('soransoran.test.fake-provider-ledger-isolation')
+
+export function ledgerIsolationActive(): boolean {
+  return (globalThis as unknown as Record<symbol, unknown>)[SUPPLY_LEDGER_ISOLATION_MARK] === true
+}
+
+/**
  * 🔴 **장부 입출력.** 운영은 기본 저장소를 쓰고, 시험이 실패를 주입한다.
  *
  *    이 저장소가 이미 쓰는 방식(`beforeStage` · `exec` 주입)과 같다.
@@ -109,6 +182,8 @@ export type LedgerIo = {
   addOpen: (dir: string, r: OpenReservation) => void
   clearOpen: (dir: string, attemptId: string) => void
   pidAlive: (pid: number) => boolean
+  /** 🔴 장부 파일이 있는가 — 공급 장부의 "오늘 파일 없음" 판정. 없으면 `existsSync` */
+  exists?: (path: string) => boolean
 }
 
 export const REAL_LEDGER_IO: LedgerIo = {
@@ -122,6 +197,7 @@ export const REAL_LEDGER_IO: LedgerIo = {
   addOpen: addOpenReservation,
   clearOpen: clearOpenReservation,
   pidAlive,
+  exists: existsSync,
 }
 
 export type SupplyCallInput = {
@@ -135,7 +211,10 @@ export type SupplyCallInput = {
 
 export type SupplySessionConfig = {
   runId: string
-  /** 장부 디렉터리. 🔴 시험은 임시 경로를 준다 */
+  /**
+   * 장부 디렉터리. 🔴 시험·다른 장부(댓글 루프 · 사후 감사)는 자기 자리를 준다.
+   *    비우거나 공급 장부 자리(실경로 비교)를 주면 **공급 장부**다 — 보호·정본 확인·오늘 파일 판정이 켜진다.
+   */
   dir?: string
   limits: BudgetLimits
   now?: () => Date
@@ -149,6 +228,8 @@ export type SupplySessionConfig = {
    *    다른 디렉터리(댓글 루프 · 사후 감사 · 시험 임시 장부)는 이 칸이 없으면 보호 없음이다.
    */
   protectAt?: (now: Date, ctx: ProtectContext) => ProtectDecision
+  /** 예산 출처를 가를 `.env.local` — 없으면 `cwd/.env.local`(`loadEnvLocal` 과 같은 자리). 🔴 시험 전용 */
+  envLocalPath?: string
 }
 
 /**
@@ -270,6 +351,14 @@ export class SupplyLlmSession {
   readonly limits: BudgetLimits
   private readonly now: () => Date
   private readonly io: LedgerIo
+  /**
+   * 🔴 **공급 장부인가** — 정본 자리(계정 홈) 또는 이 프로세스 `$HOME` 의 공급 장부 자리와 **실경로로** 같으면 참.
+   *    참이면 ① 호출부 보호 설정을 보지 않고 ② 자리가 정본인지 요청마다 확인하고 ③ 오늘 파일 없음을 판정하고
+   *    ④ 적용 한도·출처를 줄에 남긴다. 댓글 루프·사후 감사·시험 임시 장부(다른 자리)는 거짓이다.
+   */
+  readonly supply: boolean
+  /** 🔴 예산 env 출처 — 공급 장부만. 덮어쓴 키가 있으면 세션을 만들 때 한 번 경고한다 */
+  readonly budgetEnv: ReturnType<typeof budgetEnvProvenance> | null
   /** 🔴 정기 회차 몫 보호 — 공급 장부면 언제나 켜져 있다 */
   private readonly protectAt: ((now: Date, ctx: ProtectContext) => ProtectDecision) | null
   /**
@@ -306,10 +395,72 @@ export class SupplyLlmSession {
     /**
      * 🔴 **공급 장부면 호출부 설정을 보지 않는다.** 판정·초안·댓글 CLI 가 모두 이 장부를 쓴다 —
      *    어느 하나가 보호를 끄는 칸을 가지면 손 실행이 정기 몫을 먹는 길이 다시 열린다.
+     *
+     * 🔴 **실경로로 비교한다** (2026-09-30). 앞판은 `this.dir === defaultLedgerDir()` 문자열 비교였다 —
+     *    끝 `/` 하나, 심볼릭 경로 하나로 거짓이 되어 보호가 꺼지고(`cfg.protectAt ?? null` → 천장 없음)
+     *    env 예산만 남았다. 그 비교는 지웠다. 이제 정본(계정 홈) 자리와 이 프로세스 `$HOME` 자리 둘 다와
+     *    **실경로**로 대조한다 — 어느 쪽과 같아도 공급 장부이고, 보호는 끌 수 없다.
      */
-    this.protectAt = this.dir === defaultLedgerDir()
+    const canonical = canonicalLedgerDir()
+    this.supply = cfg.dir === undefined
+      || sameRealDir(this.dir, defaultLedgerDir())
+      || (canonical !== null && sameRealDir(this.dir, canonical))
+    this.protectAt = this.supply
       ? supplyProtectFromEnv(process.env)
       : cfg.protectAt ?? null
+    this.budgetEnv = this.supply
+      ? budgetEnvProvenance(process.env, readEnvLocalText(cfg.envLocalPath ?? join(process.cwd(), '.env.local')))
+      : null
+    if (this.budgetEnv !== null && this.budgetEnv.overrides.length > 0) {
+      console.warn(`🔴 예산 env 를 프로세스가 .env.local 과 다르게 덮었다 — ${this.budgetEnv.overrides
+        .map((o) => `${o.name} (.env.local ${o.envLocal} · 프로세스 ${o.process})`).join(' · ')}`
+        + ' · 공급 장부 하루 상한은 min(env, 계약 천장) 그대로다 — 장부 줄에 budgetSource=process-override 로 남긴다')
+    }
+  }
+
+  /**
+   * 🔴 **공급 장부 자리가 정본인가** — 요청마다 본다(세션을 만든 뒤 `$HOME` 이 바뀌어도 같은 판정).
+   *    시험 격리 표식(가짜 provider 프로세스)이 걸렸을 때만 정본이 아닌 자리(임시 HOME)를 허용한다.
+   */
+  private ledgerDirError(): string | null {
+    if (!this.supply || ledgerIsolationActive()) return null
+    return supplyLedgerDirError(this.dir)
+  }
+
+  /**
+   * 🔴 **오늘 공급 장부 파일이 없을 때** — 잠금 안에서, 오늘 파일에 첫 줄을 적기 **전에** 부른다.
+   *    보류면 사유를, 아니면 `null`. 판정 정본은 `missingTodayLedgerVerdict`.
+   */
+  private missingTodayError(path: string, date: string, startedAt: Date): string | null {
+    if (!this.supply || this.protectAt === null) return null
+    const exists = this.io.exists ?? existsSync
+    if (exists(path)) return null
+    let recent = false
+    let d = date
+    for (let i = 0; i < SCHEDULED_COST_LOOKBACK_DAYS && !recent; i += 1) {
+      d = previousLedgerDate(d)
+      recent = exists(ledgerPathOf(this.dir, d))
+    }
+    // 실행 종류만 본다 — 몫 계산은 여기서 쓰지 않는다
+    const kind = this.protectAt(startedAt, {
+      todayEntries: [], historyEntries: null, dailyUsd: this.limits.dailyUsd, sessionStartedAt: this.createdAt,
+    }).kind
+    const v = missingTodayLedgerVerdict({ now: startedAt, todayExists: false, recentDaysExist: recent, kind })
+    return v.ok ? null : v.reason
+  }
+
+  /** 🔴 적용 한도 — 공급 장부 줄에만 싣는다(다른 장부의 줄 모양은 그대로) */
+  private budgetTag(protect: SpendProtect | null): Pick<LedgerEntry,
+    'budgetDailyUsd' | 'budgetCeilingUsd' | 'budgetCapUsd' | 'budgetSource'> | Record<string, never> {
+    if (!this.supply) return {}
+    const daily = this.limits.dailyUsd
+    const ceiling = protect?.ceilingUsd ?? null
+    return {
+      budgetDailyUsd: daily,
+      budgetCeilingUsd: ceiling,
+      budgetCapUsd: daily === null ? null : ceiling === null ? daily : Math.min(daily, ceiling),
+      budgetSource: this.budgetEnv?.sources.dailyUsd ?? null,
+    }
   }
 
   get tally(): Readonly<SessionTally> { return this.t }
@@ -323,6 +474,12 @@ export class SupplyLlmSession {
         `  실행 종류 ${this.lastKind.kind === 'scheduled' ? '정기' : '손 실행'} — ${this.lastKind.why}`
           + (this.lastKind.protect === null ? '' : ` · 🔴 정기 회차 몫을 남긴다: ${this.lastKind.protect.reason}`),
       ]),
+      ...(this.supply && this.budgetEnv !== null ? [
+        `  적용 한도 — env 하루 예산 ${this.limits.dailyUsd === null ? '없음' : `$${this.limits.dailyUsd}`}`
+          + ` (출처 ${this.budgetEnv.sources.dailyUsd})`
+          + (this.lastKind?.protect == null ? '' : ` · 천장 ${this.lastKind.protect.ceilingUsd === null ? '없음' : `$${this.lastKind.protect.ceilingUsd}`}`)
+          + (this.budgetEnv.overrides.length > 0 ? ' · 🔴 프로세스가 .env.local 예산을 덮었다' : ''),
+      ] : []),
       `  사전 계산 ${this.t.countTokens}건 (무료)`,
       `  예약 $${this.t.reservedUsd.toFixed(6)} · 정산 $${this.t.settledUsd.toFixed(6)}`
         + ` · 사용량 미상 ${this.t.usageUnknown}건 · 예약 초과 ${this.t.overruns}건`,
@@ -367,6 +524,15 @@ export class SupplyLlmSession {
       this.bump('SETTLE_ERROR')
       return { ...blockedResponse('SETTLE_ERROR', this.settleFailed), settledUsd: null, settlementRecorded: false }
     }
+    /**
+     * 🔴 **공급 장부 자리가 정본이 아니면 아무것도 하지 않는다** (2026-09-30) — 사전 계산도, 잠금도, 장부 쓰기도.
+     *    `$HOME` 을 바꿔 띄운 손 실행이 빈 장부로 새 예산을 여는 길을 막는다. 그 자리에 줄을 적지도 않는다.
+     */
+    const dirError = this.ledgerDirError()
+    if (dirError !== null) {
+      this.bump('LEDGER_ERROR')
+      return { ...blockedResponse('LEDGER_ERROR', dirError), settledUsd: null, settlementRecorded: false }
+    }
     const startedAt = this.now()
     /**
      * 🔴 **날짜는 요청을 시작한 때로 고정한다.** 자정을 넘겨 응답이 와도 정산은
@@ -387,6 +553,12 @@ export class SupplyLlmSession {
     const seq = this.t.paid + this.t.blocked
     try {
       this.io.withLock(this.dir, () => {
+        /**
+         * 🔴 **오늘 파일에 첫 줄을 적기 전에** 본다 — 이 줄이 파일을 만들면 다음 요청부터는
+         *    "있는 파일" 이 되어 규칙이 한 번만 걸린다. 보류면 던지고 아무 줄도 적지 않는다.
+         */
+        const missing = this.missingTodayError(path, date, startedAt)
+        if (missing !== null) throw new Error(missing)
         this.write(path, {
           ...this.base(`${attemptId}-count`, 'countTokens', input, startedAt, seq),
           status: counted.ok ? 'settled' : 'blocked',
@@ -422,9 +594,18 @@ export class SupplyLlmSession {
     let verdict: ReturnType<typeof judgeSpend>
     /** 🔴 요청 전 판정이 정한 실행 종류 · 슬롯 — 예약 줄과 정산 줄에 똑같이 남긴다 */
     let tag: { runKind: SupplyRunKind; runSlot: string | null } | null = null
+    /** 🔴 요청 전 판정에 적용한 한도 — 예약 줄과 정산 줄에 똑같이 남긴다(접으면 정산 줄이 이긴다) */
+    let budget: ReturnType<SupplyLlmSession['budgetTag']> = {}
     try {
       verdict = this.io.withLock(this.dir, () => {
-        const read = this.io.readDay(path)
+        /**
+         * 🔴 **공급 장부면 오늘 파일이 있어야 한다** — 바로 앞 잠금에서 사전 계산 줄을 적었다.
+         *    없으면 그 사이 누군가 옮기거나 지운 것이다. 빈 장부(= 사용액 0)로 읽지 않는다.
+         */
+        const vanished = this.supply && !(this.io.exists ?? existsSync)(path)
+        const read: LedgerRead = vanished
+          ? { ok: false, reason: '오늘 공급 장부 파일이 사전 계산 줄을 적은 뒤 사라졌다' }
+          : this.io.readDay(path)
         /**
          * 🔴 **회차 사용량을 장부에서 센다 — 잠금 안에서.**
          *    메모리 카운터는 판정·생성이 다른 프로세스라 서로를 못 보고,
@@ -456,6 +637,7 @@ export class SupplyLlmSession {
         })
         this.lastKind = decided
         tag = decided === null ? null : { runKind: decided.kind, runSlot: decided.slot ?? null }
+        budget = this.budgetTag(decided?.protect ?? null)
         const v = judgeSpend({
           protect: decided?.protect ?? null,
           limits: this.limits,
@@ -471,6 +653,7 @@ export class SupplyLlmSession {
         this.write(path, {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
           ...(tag ?? {}),
+          ...budget,
           status: v.ok ? 'reserved' : 'blocked',
           blockCode: v.ok ? null : v.code,
           countedInputTokens: counted.inputTokens,
@@ -541,6 +724,7 @@ export class SupplyLlmSession {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
           // 🔴 정산 줄도 같은 표식을 싣는다 — 접을 때 이 줄이 이기므로, 빠뜨리면 실측에서 사라진다
           ...(tag ?? {}),
+          ...budget,
           status: settled.status,
           blockCode: null,
           countedInputTokens: counted.inputTokens,

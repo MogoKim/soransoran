@@ -20,13 +20,15 @@
  *    ⑫ (3차) 사람이 마감한 줄 — **실제 `supply:ledger-resolve` 경로**로 적은 줄에서 그 슬롯이 표본에서 빠진다
  *    ⑬ (3차) 지난 날 장부가 깨졌거나 어제 장부가 없으면 **세션 경로에서** 보수 기본값이다(부분 표본 금지)
  *    ⑭ (3차) 잠에서 깬 · 창 전에 kickstart 로 뜬 회차는 손 실행이다 — 회차 시작 시각도 같은 창이어야 한다
+ *    ⑮ (2026-09-30) 별도 장부로 새 예산을 여는 길 — `$HOME` 바꾸기(정본 실경로 대조) · 오늘 파일 없음(경계 포함)
+ *       · 적용 한도·env 출처 기록 · 9/28 모양(env $5 덮어쓰기)이 $0.50 안에 머무는지
  *
  * 🔴 **확인하지 못하는 것** — 실제 launchd 가 이 라벨을 넣는지는 이 검사가 띄운 프로세스로 증명하지 못한다.
  *    근거는 수집 기록(같은 `judgeTrigger` 규칙으로 `schedule` 522건)이고, 운영 적용 뒤 장부의
  *    `SCHEDULED_RESERVE`·정기 회차 유료 건수로 다시 본다.
  */
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,15 +44,18 @@ import {
 import {
   LAUNCHD_LABEL_ENV, SCHEDULED_COST_LOOKBACK_DAYS, SCHEDULED_COST_MIN_SAMPLES, SCHEDULED_RUN_WINDOW_MS,
   SUPPLY_PROCESS_LAUNCHD_LABEL,
-  activeSlotAt, allocateScheduledReserve, conservativeShareUsd, endedSlotsAt, measuredShareFloorUsd, pendingSlotsAt,
+  activeSlotAt, allocateScheduledReserve, conservativeShareUsd, endedSlotsAt, measuredShareFloorUsd,
+  missingTodayLedgerVerdict, pendingSlotsAt,
   scheduledRunSamples, scheduledShareFrom, supplyRunKindOf, supplySpendProtectAt,
 } from '../src/lib/supply-scheduled-reserve'
 import {
-  REAL_LEDGER_IO, SUPPLY_PROTECT_TEST_SEAM, SupplyLlmSession, runStartedAtOf, supplyProtectFromEnv,
+  BUDGET_ENV, REAL_LEDGER_IO, SUPPLY_LEDGER_ISOLATION_MARK, SUPPLY_PROTECT_TEST_SEAM, SupplyLlmSession,
+  budgetEnvProvenance, ledgerIsolationActive, runStartedAtOf, supplyProtectFromEnv,
   type LedgerIo, type ProtectContext, type ProtectDecision,
 } from './lib/supply-llm-call.mjs'
 import {
-  appendLedgerLine, defaultLedgerDir, ledgerPathOf, readLedgerDay, readOpenReservations,
+  appendLedgerLine, canonicalLedgerDir, defaultLedgerDir, ledgerDirForHome, ledgerPathOf, readLedgerDay,
+  readOpenReservations, realDirOf, sameRealDir, supplyLedgerDirError,
 } from './lib/llm-ledger-store.mjs'
 
 let pass = 0
@@ -532,10 +537,12 @@ console.log('\n⑧ 세션 — 🔴 실제 장부 파일 · 가짜 fetch 로 요�
 // ─────────────────────────────────────────────────────────
 const realFetch = globalThis.fetch
 let paidFetches = 0
+let countFetches = 0
 const OUT_TOKENS = 1000
 globalThis.fetch = (async (url: string | URL | Request) => {
   const u = String(url)
   if (u.includes('/count_tokens')) {
+    countFetches += 1
     return new Response(JSON.stringify({ input_tokens: 100 }), { status: 200, headers: { 'content-type': 'application/json' } })
   }
   paidFetches += 1
@@ -545,6 +552,14 @@ globalThis.fetch = (async (url: string | URL | Request) => {
 }) as typeof globalThis.fetch
 const prevKey = process.env.ANTHROPIC_API_KEY
 process.env.ANTHROPIC_API_KEY = 'fixture-fake-key'
+/**
+ * 🔴 **시험 격리 표식** — 이 프로세스의 `fetch` 는 위에서 가짜로 바꿨다. 그래서 임시 HOME 장부를 공급 장부로
+ *    써도 된다(운영 장부 0). 표식이 없으면 공급 세션은 정본(계정 홈)이 아닌 자리를 `LEDGER_ERROR` 로 막는다 — ⓙ 가 본다.
+ */
+const setIsolation = (on: boolean): void => {
+  (globalThis as unknown as Record<symbol, unknown>)[SUPPLY_LEDGER_ISOLATION_MARK] = on
+}
+setIsolation(true)
 
 const ASK = {
   stage: 'judge' as const, model: 'claude-haiku-4.5' as const,
@@ -758,13 +773,17 @@ async function runCalls(s: SupplyLlmSession, k: number, stage: typeof ASK.stage 
   // ⓕ 🔴 판정은 잠금 안에서 — 집계·보호·예약 기록이 한 잠금이다(두 실행이 같은 여력을 두 번 보지 않는다)
   const src = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
   const lockAt = src.indexOf('verdict = this.io.withLock(this.dir, () => {')
-  const protectAt = src.indexOf('this.protectAt(startedAt, {')
+  const protectAt = src.indexOf('this.protectAt(startedAt, {', lockAt)
   const judgeAt = src.indexOf('const v = judgeSpend({', lockAt)
   const addAt = src.indexOf('this.io.addOpen(', lockAt)
   check('🔴 보호 판정이 집계와 같은 잠금 안에서, 예약 기록보다 앞에서 일어난다',
     lockAt > 0 && lockAt < protectAt && protectAt < judgeAt && judgeAt < addAt)
   check('🔴 공급 장부면 호출부 보호 설정을 보지 않는다(코드)',
-    /this\.dir === defaultLedgerDir\(\)\s*\?\s*supplyProtectFromEnv\(process\.env\)/.test(src))
+    /this\.protectAt = this\.supply\s*\?\s*supplyProtectFromEnv\(process\.env\)/.test(src))
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  check('🔴 옛 문자열 비교(this.dir === defaultLedgerDir())는 지웠다 — 공급 장부 판정은 실경로 비교 하나다',
+    !/this\.dir\s*===\s*defaultLedgerDir\(\)/.test(code) && /sameRealDir\(this\.dir, defaultLedgerDir\(\)\)/.test(code)
+    && (code.match(/this\.supply = /g) ?? []).length === 1)
 }
 
 {
@@ -852,6 +871,8 @@ async function runCalls(s: SupplyLlmSession, k: number, stage: typeof ASK.stage 
       const d = defaultLedgerDir()
       mkdirSync(d, { recursive: true })
       put(d, '2026-10-05', cheap('2026-10-05'))
+      // 🔴 오늘 08:15 정기 회차가 이미 돌았다 — 오늘 장부가 있어야 손 실행이 "오늘 파일 없음"(ⓙ)으로 막히지 않는다
+      put(d, '2026-10-06', [line({ usd: 0.001, kind: 'scheduled', slot: '2026-10-06 08:15', at: '2026-10-06T08:20:00' })])
       writeFileSync(ledgerPathOf(d, '2026-10-02'), '{깨진 줄\n')
       const s1 = new SupplyLlmSession({ runId: 'HH1', limits: lim, now: at('2026-10-06T11:13:00') })
       const a = await s1.call(ASK)
@@ -942,6 +963,268 @@ async function runCalls(s: SupplyLlmSession, k: number, stage: typeof ASK.stage 
     !kr.ok && (kr.errorCode ?? '').endsWith('SCHEDULED_RESERVE'), kr.errorCode ?? '')
   rmSync(dir, { recursive: true, force: true })
   rmSync(dir2, { recursive: true, force: true })
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 새 예산을 여는 별도 장부 — 🔴 $HOME 바꾸기 · 오늘 파일 없음 · 적용 한도 기록 (2026-09-30, A4 진단 §5)')
+// ─────────────────────────────────────────────────────────
+/**
+ * 🔴 **임시 HOME 에서 공급 세션을 돌린다** — 운영 장부 0. `mark` 는 시험 격리 표식(가짜 fetch 프로세스),
+ *    `label` 은 launchd 라벨, `clock` 은 보호 판정의 벽시계(세션 시각과 같게 준다).
+ */
+async function inHome<T>(o: { mark: boolean; label: boolean; clock: string }, fn: (home: string) => Promise<T>): Promise<T> {
+  const home = mkdtempSync(join(tmpdir(), 'reserve-j-home-'))
+  const prevHome = process.env.HOME
+  const prevLabel = process.env[LAUNCHD_LABEL_ENV]
+  process.env.HOME = home
+  if (o.label) process.env[LAUNCHD_LABEL_ENV] = SUPPLY_PROCESS_LAUNCHD_LABEL; else delete process.env[LAUNCHD_LABEL_ENV]
+  SUPPLY_PROTECT_TEST_SEAM.clock = () => kst(o.clock)
+  setIsolation(o.mark)
+  try {
+    return await fn(home)
+  } finally {
+    setIsolation(true)
+    SUPPLY_PROTECT_TEST_SEAM.clock = null
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome
+    if (prevLabel === undefined) delete process.env[LAUNCHD_LABEL_ENV]; else process.env[LAUNCHD_LABEL_ENV] = prevLabel
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+const cheapDay = (date: string): LedgerEntry[] => ['08:15', '12:15', '17:15']
+  .map((hm) => line({ usd: 0.001, kind: 'scheduled', slot: `${date} ${hm}`, at: `${date}T${hm.slice(0, 2)}:20:00` }))
+const putRows = (dir: string, date: string, rows: LedgerEntry[]): void => {
+  mkdirSync(dir, { recursive: true })
+  for (const e of rows) appendLedgerLine(ledgerPathOf(dir, date), e)
+}
+const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultiplier: HEAD }
+{
+  // ⓙ-1 🔴 $HOME 바꾸기 — 정본(계정 홈)과 실경로가 다른 공급 장부는 쓰지 않는다
+  const t = mkdtempSync(join(tmpdir(), 'reserve-j1-'))
+  const canon = join(t, 'canon', 'llm-ledger')
+  mkdirSync(canon, { recursive: true })
+  symlinkSync(join(t, 'canon'), join(t, 'alias'))
+  check('[정본] 같은 자리 · 끝 `/` · 심볼릭 경로 · `..` 표기는 모두 정본이다',
+    supplyLedgerDirError(canon, canon) === null && supplyLedgerDirError(`${canon}/`, canon) === null
+    && supplyLedgerDirError(join(t, 'alias', 'llm-ledger'), canon) === null
+    && supplyLedgerDirError(`${t}/canon/../canon/llm-ledger`, canon) === null)
+  check('[정본] 아직 없는 장부 디렉터리(첫 실행)도 실경로로 비교한다',
+    sameRealDir(join(t, 'alias', 'new-ledger'), join(t, 'canon', 'new-ledger')) && realDirOf(join(t, 'x', 'y')).endsWith(join('x', 'y')))
+  check('🔴 [정본] 다른 HOME 의 장부 자리는 정본이 아니다 → 사유',
+    (supplyLedgerDirError(ledgerDirForHome(join(t, 'other-home')), canon) ?? '').includes('정본과 다르다'))
+  check('🔴 [정본] 계정 홈을 못 읽으면(null) 정본을 모른다 → 보류 사유', supplyLedgerDirError(canon, null) !== null)
+  const passwd = canonicalLedgerDir()
+  check('[정본] 정본은 $HOME 이 아니라 계정 홈(passwd)에서 온다 — 임시 HOME 을 줘도 바뀌지 않는다',
+    await inHome({ mark: true, label: false, clock: '2026-09-28T23:30:00' }, async (home) =>
+      passwd !== null && canonicalLedgerDir() === passwd && !passwd.startsWith(home) && defaultLedgerDir().startsWith(home)))
+  rmSync(t, { recursive: true, force: true })
+
+  const bypass = await inHome({ mark: false, label: false, clock: '2026-09-28T23:30:00' }, async () => {
+    const d = defaultLedgerDir()
+    const b0 = paidFetches
+    const c0 = countFetches
+    const s = new SupplyLlmSession({ runId: 'HOME-BYPASS', limits: LIM50, now: at('2026-09-28T23:30:00') })
+    const r = await s.call(ASK)
+    return { r, paid: paidFetches - b0, count: countFetches - c0, touched: existsSync(d), supply: s.supply }
+  })
+  check('🔴 [HOME] HOME 을 바꿔 띄운 손 실행(23:30 · 빈 장부) → LEDGER_ERROR · 사전 계산 0 · 유료 0',
+    !bypass.r.ok && (bypass.r.errorCode ?? '').endsWith('LEDGER_ERROR') && bypass.paid === 0 && bypass.count === 0 && bypass.supply,
+    `${bypass.r.errorCode} paid=${bypass.paid} count=${bypass.count}`)
+  check('🔴 [HOME] 그 자리에 장부를 만들지도 않는다 — 빈 장부가 다음 실행의 "새 예산" 이 되지 않게',
+    !bypass.touched && /정본과 다르다/.test(bypass.r.errorMessage ?? ''), bypass.r.errorMessage ?? '')
+  const control = await inHome({ mark: true, label: false, clock: '2026-09-28T23:30:00' }, async () => {
+    const s = new SupplyLlmSession({ runId: 'HOME-ISOLATED', limits: LIM50, now: at('2026-09-28T23:30:00') })
+    return s.call(ASK)
+  })
+  check('[HOME] 대조군 — 같은 임시 HOME 이라도 시험 격리 표식(가짜 fetch 프로세스)이면 돈다', control.ok, control.errorCode ?? '')
+  {
+    setIsolation(false)
+    process.env.SORAN_LEDGER_ISOLATION = '1'
+    const a = ledgerIsolationActive()
+    delete process.env.SORAN_LEDGER_ISOLATION
+    setIsolation(true)
+    check('🔴 [HOME] 격리 표식은 코드(Symbol)로만 걸린다 — env 로 켤 수 없다', !a)
+  }
+
+  // 🔴 dir 에 공급 장부 자리를 다른 표기로 넘겨도 공급 장부다 — 호출부 보호 설정(위조)을 보지 않는다
+  const forgedDir = await inHome({ mark: true, label: false, clock: '2026-09-28T11:13:00' }, async (home) => {
+    const d = defaultLedgerDir()
+    mkdirSync(d, { recursive: true })
+    symlinkSync(join(home, 'Library'), join(home, 'LibAlias'))
+    const forged = (): ProtectDecision => ({ kind: 'scheduled', why: 'forged', protect: null })
+    const lim: BudgetLimits = { dailyUsd: 6 * perReq.usd, runRequestCap: 1000, headroomMultiplier: HEAD }
+    const a = new SupplyLlmSession({ runId: 'FS', dir: `${d}/`, limits: lim, now: at('2026-09-28T11:13:00'), protectAt: forged })
+    const b = new SupplyLlmSession({
+      runId: 'FL', dir: join(home, 'LibAlias', 'Application Support', 'soransoran', 'llm-ledger'),
+      limits: lim, now: at('2026-09-28T11:13:00'), protectAt: forged,
+    })
+    return { a: a.supply, b: b.supply, ra: await a.call(ASK), rb: await b.call(ASK) }
+  })
+  check('🔴 [dir] 끝 `/` · 심볼릭 표기로 넘긴 공급 장부도 공급 장부다 — 위조한 "정기·보호 없음" 을 무시하고 막는다',
+    forgedDir.a && forgedDir.b && !forgedDir.ra.ok && !forgedDir.rb.ok
+    && (forgedDir.ra.errorCode ?? '').endsWith('SCHEDULED_RESERVE') && (forgedDir.rb.errorCode ?? '').endsWith('SCHEDULED_RESERVE'),
+    `${forgedDir.ra.errorCode} ${forgedDir.rb.errorCode}`)
+}
+{
+  // ⓙ-2 🔴 오늘 파일 없음 — 판정(순수)의 경계
+  const v = (now: string, o: { today?: boolean; recent?: boolean; kind?: 'scheduled' | 'manual' } = {}) => missingTodayLedgerVerdict({
+    now: kst(now), todayExists: o.today ?? false, recentDaysExist: o.recent ?? true, kind: o.kind ?? 'manual',
+  })
+  check('[오늘 없음] 오늘 파일이 있으면 통과', v('2026-10-06T11:13:00', { today: true }).ok)
+  check('[오늘 없음] 🟢 자정 직후(00:00:01) 첫 호출은 허용 — 오늘 파일이 아직 없는 게 정상이다', v('2026-10-06T00:00:01').ok)
+  check('[오늘 없음] 🟢 첫 정기 슬롯 직전(08:14:59)까지 손 실행도 허용', v('2026-10-06T08:14:59').ok)
+  check('🔴 [오늘 없음] 첫 정기 슬롯 시각(08:15:00)부터 손 실행은 보류', !v('2026-10-06T08:15:00').ok)
+  check('🔴 [오늘 없음] 23:30 손 실행도 보류 — 하루 종일 정기 회차가 못 돈 날의 손실(문서화된 대가)', !v('2026-10-06T23:30:00').ok)
+  check('[오늘 없음] 🟢 정기 회차는 오늘 첫 줄을 연다 — 아침 슬롯 동안 꺼져 있었던 날', v('2026-10-06T12:20:00', { kind: 'scheduled' }).ok)
+  check('[오늘 없음] 🟢 최근 7일 장부가 하나도 없으면(새 장부) 허용', v('2026-10-06T11:13:00', { recent: false }).ok)
+}
+{
+  // ⓙ-3 🔴 오늘 파일 없음 — 세션 경로(기본 장부 · 임시 HOME · 격리 표식)
+  const seed = (d: string): void => putRows(d, '2026-10-05', cheapDay('2026-10-05'))
+  const gone = await inHome({ mark: true, label: false, clock: '2026-10-06T11:13:00' }, async () => {
+    const d = defaultLedgerDir()
+    seed(d)
+    const b0 = paidFetches
+    const s = new SupplyLlmSession({ runId: 'GONE', limits: LIM50, now: at('2026-10-06T11:13:00') })
+    const r1 = await s.call(ASK)
+    const r2 = await s.call(ASK)
+    return { r1, r2, paid: paidFetches - b0, created: existsSync(ledgerPathOf(d, '2026-10-06')) }
+  })
+  check('🔴 [오늘 없음·세션] 어제 장부가 있고 11:13 인데 오늘 파일이 없다 → 손 실행 LEDGER_ERROR · 유료 0',
+    !gone.r1.ok && (gone.r1.errorCode ?? '').endsWith('LEDGER_ERROR') && /오늘 공급 장부 파일이 없다/.test(gone.r1.errorMessage ?? '') && gone.paid === 0,
+    `${gone.r1.errorCode} ${gone.r1.errorMessage}`)
+  check('🔴 [오늘 없음·세션] 막힌 요청이 오늘 파일을 만들지 않는다 — 두 번째 요청도 같은 이유로 막힌다',
+    !gone.created && !gone.r2.ok && /오늘 공급 장부 파일이 없다/.test(gone.r2.errorMessage ?? ''))
+  const midnight = await inHome({ mark: true, label: false, clock: '2026-10-06T00:05:00' }, async () => {
+    const d = defaultLedgerDir()
+    seed(d)
+    const s = new SupplyLlmSession({ runId: 'MID', limits: LIM50, now: at('2026-10-06T00:05:00') })
+    const r = await s.call(ASK)
+    return { r, created: existsSync(ledgerPathOf(d, '2026-10-06')) }
+  })
+  check('[오늘 없음·세션] 🟢 자정 직후(00:05) 첫 손 실행 — 어제 실측 몫(바닥) 안에서 나가고 오늘 파일을 연다',
+    midnight.r.ok && midnight.created, midnight.r.errorCode ?? '')
+  const sched = await inHome({ mark: true, label: true, clock: '2026-10-06T12:20:00' }, async () => {
+    const d = defaultLedgerDir()
+    seed(d)
+    const s = new SupplyLlmSession({ runId: 'OPEN1215', limits: LIM50, now: at('2026-10-06T12:20:00') })
+    const r = await s.call(ASK)
+    delete process.env[LAUNCHD_LABEL_ENV]
+    SUPPLY_PROTECT_TEST_SEAM.clock = () => kst('2026-10-06T12:25:00')
+    const m = await new SupplyLlmSession({ runId: 'AFTER', limits: LIM50, now: at('2026-10-06T12:25:00') }).call(ASK)
+    return { r, m }
+  })
+  check('[오늘 없음·세션] 🟢 아침 슬롯에 꺼져 있던 날 — 12:15 정기 회차가 오늘 첫 줄을 연다(통과)', sched.r.ok, sched.r.errorCode ?? '')
+  check('[오늘 없음·세션] 그 뒤 손 실행은 "오늘 없음" 으로 막히지 않는다 — 정기 몫을 뺀 나머지(실측 몫 바닥) 안에서 나간다',
+    sched.m.ok, sched.m.errorCode ?? '')
+  const fresh = await inHome({ mark: true, label: false, clock: '2026-10-06T23:30:00' }, async () => {
+    const s = new SupplyLlmSession({ runId: 'FRESH', limits: LIM50, now: at('2026-10-06T23:30:00') })
+    return s.call(ASK)
+  })
+  check('[오늘 없음·세션] 🟢 최근 장부가 없는 새 장부(23:30)는 막지 않는다', fresh.ok, fresh.errorCode ?? '')
+  const vanish = await inHome({ mark: true, label: false, clock: '2026-10-06T23:30:00' }, async () => {
+    const d = defaultLedgerDir()
+    let locks = 0
+    const io: LedgerIo = {
+      ...REAL_LEDGER_IO,
+      withLock: <T,>(dir: string, fn: () => T): T => {
+        locks += 1
+        // 🔴 사전 계산 줄을 적은 잠금과 판정 잠금 **사이**에 오늘 파일을 옮긴다
+        if (locks === 2) unlinkSync(ledgerPathOf(d, '2026-10-06'))
+        return REAL_LEDGER_IO.withLock(dir, fn)
+      },
+    }
+    const b0 = paidFetches
+    const r = await new SupplyLlmSession({ runId: 'VANISH', limits: LIM50, io, now: at('2026-10-06T23:30:00') }).call(ASK)
+    return { r, paid: paidFetches - b0 }
+  })
+  check('🔴 [오늘 없음·세션] 사전 계산 뒤 판정 전에 오늘 파일이 사라지면 빈 장부로 읽지 않는다 → LEDGER_ERROR · 유료 0',
+    !vanish.r.ok && (vanish.r.errorCode ?? '').endsWith('LEDGER_ERROR') && vanish.paid === 0, vanish.r.errorCode ?? '')
+  // 🔴 다른 장부(댓글 루프 · 사후 감사처럼 자기 dir 를 주는 세션)는 이 규칙을 타지 않는다 — 별도 예산이다
+  const other = mkdtempSync(join(tmpdir(), 'reserve-j3-other-'))
+  putRows(other, '2026-10-05', cheapDay('2026-10-05'))
+  const o = await new SupplyLlmSession({ runId: 'OTHER', dir: other, limits: LIM50, now: at('2026-10-06T11:13:00') }).call(ASK)
+  check('[오늘 없음] 🟢 다른 장부(자기 dir · 댓글·감사 같은 별도 예산)는 영향 없음 — 오늘 파일이 없어도 돈다',
+    o.ok, o.errorCode ?? '')
+  rmSync(other, { recursive: true, force: true })
+}
+{
+  // ⓙ-4 🔴 적용 한도·env 출처 기록 — 9/28 모양(오늘 $0.4978 사용 · 손 실행이 env 를 $5 로 덮음)
+  const pv = budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '5', [BUDGET_ENV.runRequestCap]: '20', [BUDGET_ENV.headroomMultiplier]: '1.2' },
+    `${BUDGET_ENV.dailyUsd}=0.50\n${BUDGET_ENV.runRequestCap}="20"\n${BUDGET_ENV.headroomMultiplier}=1.2\n`)
+  check('🔴 [출처] .env.local 0.50 · 프로세스 5 → process-override · 다른 두 키는 env.local',
+    pv.sources.dailyUsd === 'process-override' && pv.sources.runRequestCap === 'env.local' && pv.sources.headroomMultiplier === 'env.local'
+    && pv.overrides.length === 1 && pv.overrides[0]?.envLocal === '0.50' && pv.overrides[0]?.process === '5', JSON.stringify(pv))
+  check('[출처] 0.5 와 0.50 은 같은 값(숫자 비교) · 파일에 키가 없으면 process · 값이 없으면 missing · 못 읽으면 unknown',
+    budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '0.5' }, `${BUDGET_ENV.dailyUsd}=0.50`).sources.dailyUsd === 'env.local'
+    && budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '0.5' }, '').sources.dailyUsd === 'process'
+    && budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '0.5' }, null).sources.dailyUsd === 'process'
+    && budgetEnvProvenance({}, `${BUDGET_ENV.dailyUsd}=0.50`).sources.dailyUsd === 'missing'
+    && budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '0.5' }, undefined).sources.dailyUsd === 'unknown')
+
+  const envDir = mkdtempSync(join(tmpdir(), 'reserve-j4-env-'))
+  const envFile = join(envDir, '.env.local')
+  writeFileSync(envFile, `${BUDGET_ENV.dailyUsd}=0.50\n${BUDGET_ENV.runRequestCap}=1000\n${BUDGET_ENV.headroomMultiplier}=${HEAD}\n`)
+  const prevDaily = process.env[BUDGET_ENV.dailyUsd]
+  process.env[BUDGET_ENV.dailyUsd] = '5'
+  const warned: string[] = []
+  const realWarn = console.warn
+  console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(' ')) }
+  const LIM5: BudgetLimits = { dailyUsd: 5, runRequestCap: 1000, headroomMultiplier: HEAD }
+  try {
+    const res = await inHome({ mark: true, label: false, clock: '2026-09-28T23:10:00' }, async () => {
+      const d = defaultLedgerDir()
+      // 9/28 15시 무렵 모양 — 이미 $0.4978 을 썼다
+      putRows(d, '2026-09-28', [line({ usd: 0.4978, kind: 'scheduled', slot: '2026-09-28 12:15', at: '2026-09-28T12:20:00' })])
+      const s = new SupplyLlmSession({ runId: 'OVR', limits: LIM5, now: at('2026-09-28T23:10:00'), envLocalPath: envFile })
+      const b0 = paidFetches
+      const r = await s.call(ASK)
+      const day = readLedgerDay(ledgerPathOf(d, '2026-09-28'))
+      const row = day.ok ? day.entries.find((e) => e.runId === 'OVR' && e.stage !== 'countTokens') : undefined
+      return { r, paid: paidFetches - b0, row, text: s.describe() }
+    })
+    check('🔴 [9/28 재현] 오늘 $0.4978 사용 · 손 실행이 env 를 $5 로 덮어도 23:10 에 막힌다 — min(env, 천장 $0.50) · 유료 0',
+      !res.r.ok && (res.r.errorCode ?? '').endsWith('SCHEDULED_RESERVE') && res.paid === 0, res.r.errorCode ?? '')
+    check('🔴 [기록] 막힌 예약 줄에 적용 한도가 남는다 — env $5 · 천장 $0.50 · 적용 $0.50 · 출처 process-override',
+      res.row !== undefined && res.row.budgetDailyUsd === 5 && res.row.budgetCeilingUsd === SUPPLY_DAILY_USD_APPROVED
+      && res.row.budgetCapUsd === SUPPLY_DAILY_USD_APPROVED && res.row.budgetSource === 'process-override', JSON.stringify(res.row))
+    check('🔴 [경고] 프로세스가 .env.local 예산을 덮으면 세션이 한 번 경고한다(키 이름 · 두 값)',
+      warned.length === 1 && warned[0]!.includes(BUDGET_ENV.dailyUsd) && warned[0]!.includes('0.50') && warned[0]!.includes('프로세스 5'), warned.join('|'))
+    check('[기록] 사람이 읽는 줄에도 적용 한도·출처가 적힌다', /적용 한도/.test(res.text) && /process-override/.test(res.text), res.text)
+    const okRun = await inHome({ mark: true, label: false, clock: '2026-09-28T23:10:00' }, async () => {
+      const d = defaultLedgerDir()
+      const s = new SupplyLlmSession({ runId: 'OVR2', limits: LIM5, now: at('2026-09-28T23:10:00'), envLocalPath: envFile })
+      let n = 0
+      for (let i = 0; i < 400 && (await s.call(ASK)).ok; i += 1) n += 1
+      const day = readLedgerDay(ledgerPathOf(d, '2026-09-28'))
+      const t = day.ok ? tallyOf(day.entries) : null
+      const settledRow = day.ok ? day.entries.find((e) => e.runId === 'OVR2' && e.status === 'settled' && e.stage !== 'countTokens') : undefined
+      return { n, t, settledRow }
+    })
+    check('🔴 [9/28 재현] 빈 장부에서 env $5 로 덮고 23:10 부터 계속 불러도 합계(정산+열린 예약) ≤ $0.50',
+      okRun.n > 0 && okRun.t !== null && okRun.t.settledUsd + okRun.t.openReservedUsd <= (SUPPLY_DAILY_USD_APPROVED ?? 0) + 1e-12,
+      `n=${okRun.n} settled=${okRun.t?.settledUsd} open=${okRun.t?.openReservedUsd}`)
+    check('[기록] 정산 줄(접은 뒤 이기는 줄)에도 같은 한도가 남는다',
+      okRun.settledRow?.budgetCapUsd === SUPPLY_DAILY_USD_APPROVED && okRun.settledRow?.budgetSource === 'process-override')
+  } finally {
+    console.warn = realWarn
+    if (prevDaily === undefined) delete process.env[BUDGET_ENV.dailyUsd]; else process.env[BUDGET_ENV.dailyUsd] = prevDaily
+    rmSync(envDir, { recursive: true, force: true })
+  }
+  // 🔴 하위호환 — 한도 칸이 없는 옛 줄과 있는 새 줄이 한 파일에 섞여도 읽힌다 · 다른 장부 줄에는 칸이 없다
+  const mix = mkdtempSync(join(tmpdir(), 'reserve-j4-mix-'))
+  appendLedgerLine(ledgerPathOf(mix, '2026-09-28'), line({ usd: 0.01 }))
+  appendLedgerLine(ledgerPathOf(mix, '2026-09-28'), {
+    ...line({ usd: 0.02 }), budgetDailyUsd: 0.5, budgetCeilingUsd: 0.5, budgetCapUsd: 0.5, budgetSource: 'env.local',
+  })
+  const mixed = readLedgerDay(ledgerPathOf(mix, '2026-09-28'))
+  check('[하위호환] 옛 줄(한도 칸 없음)과 새 줄이 섞인 장부를 읽고 합계가 같다',
+    mixed.ok && mixed.entries.length === 2 && Math.abs(tallyOf(mixed.entries).settledUsd - 0.03) < 1e-12)
+  await new SupplyLlmSession({ runId: 'PLAIN', dir: mix, limits: LIM50, now: at('2026-09-28T23:10:00') }).call(ASK)
+  const plain = readLedgerDay(ledgerPathOf(mix, '2026-09-28'))
+  check('[하위호환] 다른 장부(자기 dir) 줄의 모양은 그대로다 — 한도 칸을 싣지 않는다',
+    plain.ok && plain.entries.some((e) => e.runId === 'PLAIN')
+    && plain.entries.filter((e) => e.runId === 'PLAIN').every((e) => !('budgetCapUsd' in e) && !('budgetSource' in e)))
+  rmSync(mix, { recursive: true, force: true })
 }
 
 globalThis.fetch = realFetch

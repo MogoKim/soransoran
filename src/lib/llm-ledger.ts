@@ -185,7 +185,31 @@ export type LedgerEntry = {
   runKind?: 'scheduled' | 'manual' | null
   /** 🔴 정기 회차면 그 슬롯 이름(`2026-09-29 08:15`). 손 실행이면 `null` */
   runSlot?: string | null
+  /**
+   * 🔴 **이 요청에 적용한 한도** (2026-09-30) — 공급 장부의 예약·정산 줄에만 실린다. 없으면 모르는 것(옛 줄).
+   *
+   *    2026-09-28 손 실행 9회가 어떤 예산으로 통과했는지 장부로 확정할 수 없었다 — 한도를 적지 않았기 때문이다.
+   *    · `budgetDailyUsd`   env 가 준 하루 예산(`SORAN_LLM_DAILY_BUDGET_USD`) — 덮어쓴 값이면 그 값 그대로
+   *    · `budgetCeilingUsd` 보호 판정의 천장(계약 천장 · 손 실행이면 미승인 = 0)
+   *    · `budgetCapUsd`     실제로 판정에 쓴 하루 총액 = min(env, 천장)
+   *    · `budgetSource`     env 예산 값의 출처 — `BudgetEnvSource`
+   *    🔴 판정은 이 칸을 읽지 않는다. 사람이 사후에 대조하는 기록이다.
+   */
+  budgetDailyUsd?: number | null
+  budgetCeilingUsd?: number | null
+  budgetCapUsd?: number | null
+  budgetSource?: BudgetEnvSource | null
 }
+
+/**
+ * 하루 예산 env 값이 어디서 왔는가 (2026-09-30).
+ *    `env.local`          프로세스 값이 `.env.local` 과 같다
+ *    `process`            `.env.local` 에 그 키가 없다 — 프로세스(셸·launchd)만 준 값이다
+ *    `process-override`   🔴 `.env.local` 과 **다른** 값으로 프로세스가 덮었다 — 경고 대상
+ *    `missing`            어디에도 없다(그러면 판정은 `NO_BUDGET`)
+ *    `unknown`            `.env.local` 을 읽지 못했다
+ */
+export type BudgetEnvSource = 'env.local' | 'process' | 'process-override' | 'missing' | 'unknown'
 
 /** 하루치 집계 — 🔴 예약·정산·미정산을 섞지 않는다 */
 export type DayTally = {
