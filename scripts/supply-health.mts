@@ -478,12 +478,11 @@ async function main(): Promise<void> {
   const stock = readStock(mapped)
   const legacyExcluded = live.length - stock.usable
   const supply = judgeSupply({
-    // 🔴 usable = 다가오는 슬롯 중 eligible READY 가 덮은 수 · 최소 = 목표 = 다가오는 슬롯 수(JIT)
-    usable: jit.readyFilled, human: stock.human, machine: stock.machine, legacyExcluded,
+    // 🔴 공급 러너와 같은 JIT 수요 재료(`jitCoverageOf`) — 완성 글 재고 눈금 없음
+    jit, human: stock.human, machine: stock.machine, legacyExcluded,
     pendingThin: pendingThinCount(), historicRawNoop: historicRawNoop(),
     runningCheckpoints: cp.running, failedCheckpoints: cp.failed,
     lock: lockState(now), lastSupplyOkAt: cp.lastOkAt, now, staleAfterMs: SUPPLY_STALE_MS,
-    stockMin: jit.slots, stockTarget: jit.slots,
   })
   const publish = judgePublish({
     todayCount, dailyCap: RELEASE_DAILY_CAP,
@@ -491,7 +490,8 @@ async function main(): Promise<void> {
     // 🔴 연결이 깨진 행만 CRITICAL 이다 — 숨겨진 글은 따로 센다
     mismatched: verdict.bad.length, hiddenPost: verdict.hiddenPost.length,
     legacyPublishedToday, historicUnknownProfile,
-    candidates: view.classification.counts.publishableNow, now,
+    candidates: view.classification.counts.publishableNow,
+    recoveryBroken: view.plan.brokenRecovery, now,
   })
   const startAt = nextScheduleAt({ now, publishedToday: todayCount, profile: resolved.releaseProfile })
 

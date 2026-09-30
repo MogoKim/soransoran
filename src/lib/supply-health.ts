@@ -58,9 +58,11 @@ export type FindingCode =
   | 'SOURCE_SELECTOR_FAIL'
   | 'SOURCE_JOB_FAILED'
   // 공급
-  | 'STOCK_OK'
-  | 'STOCK_LOW'
-  | 'STOCK_CRITICAL'
+  /** 🔴 (2026-09-30 · JIT) 다가오는 슬롯을 eligible READY 가 다 덮는다 · 일부만 · 하나도 · 못 읽었다 */
+  | 'SLOTS_COVERED'
+  | 'SLOTS_SHORT'
+  | 'SLOTS_EMPTY'
+  | 'SLOTS_UNKNOWN'
   | 'PENDING_THIN'
   | 'CHECKPOINT_RUNNING'
   | 'CHECKPOINT_FAILED'
@@ -379,7 +381,12 @@ export function rollUpSources(perSource: readonly { sourceId: string; findings: 
 // ══════════════════════════════════════════════════════════════════
 
 export type SupplyInput = {
-  usable: number
+  /**
+   * 🔴 **JIT 수요 재료** (2026-09-30 · source-slot-v1) — 공급 러너와 같은 함수(`jitCoverageOf`)의 값.
+   *    다가오는 슬롯 수(오늘 남은 + 다음 증명일 전체)와 그중 eligible READY 가 덮은 수. 못 읽었으면 `null`(모름).
+   *    🔴 옛 입력 `usable · stockMin · stockTarget`(완성 글 재고 눈금 5/14 · capacity ×14)은 지웠다.
+   */
+  jit: { slots: number; readyFilled: number } | null
   human: number
   machine: number
   legacyExcluded: number
@@ -393,27 +400,22 @@ export type SupplyInput = {
   now: Date
   /** 마지막 성공이 이보다 오래되면 경고 */
   staleAfterMs: number
-  /**
-   * 🔴 **재고 기준선을 주입받는다** (2026-09-08, Codex P1).
-   *    모듈 상수(가장 안전한 d1 값)를 쓰면 `capacity=d10` 인데 "재고 14/14 정상" 이라고
-   *    말하게 된다 — 관제가 준비 부족을 초록으로 보여 주는 것이 가장 나쁜 실패다.
-   *    내부 공급 기준이므로 **capacity 프로필**에서 만들어 넘긴다.
-   */
-  stockMin: number
-  stockTarget: number
 }
 
 export function judgeSupply(input: SupplyInput): Finding[] {
   const out: Finding[] = []
 
-  if (input.usable === 0) {
-    out.push(f('CRITICAL', 'STOCK_CRITICAL', '발행 가능한 재고가 0건이다 — 다음 회차에 내보낼 것이 없다'))
-  } else if (input.usable < input.stockMin) {
-    out.push(f('WARNING', 'STOCK_LOW',
-      `재고 ${input.usable}건 — 최소 ${input.stockMin}건 아래다 (사람 ${input.human} · 기계 ${input.machine})`))
+  const jit = input.jit
+  if (jit === null) {
+    out.push(f('WARNING', 'SLOTS_UNKNOWN', '다가오는 슬롯 · eligible READY 를 읽지 못했다 — 공급 러너는 파일 단계까지만 한다'))
+  } else if (jit.slots > 0 && jit.readyFilled === 0) {
+    out.push(f('CRITICAL', 'SLOTS_EMPTY', `다가오는 슬롯 ${jit.slots}개를 덮는 eligible READY 가 0건이다 — 다음 슬롯에 내보낼 것이 없다`))
+  } else if (jit.readyFilled < jit.slots) {
+    out.push(f('WARNING', 'SLOTS_SHORT',
+      `다가오는 슬롯 ${jit.slots}개 중 ${jit.readyFilled}개만 eligible READY 가 덮는다 — 생성 수요 ${jit.slots - jit.readyFilled}건 (사람 ${input.human} · 기계 ${input.machine})`))
   } else {
-    out.push(f('HEALTHY', 'STOCK_OK',
-      `재고 ${input.usable}/${input.stockTarget}건 (사람 ${input.human} · 기계 ${input.machine} · legacy ${input.legacyExcluded} 제외)`))
+    out.push(f('HEALTHY', 'SLOTS_COVERED',
+      `다가오는 슬롯 ${jit.readyFilled}/${jit.slots}개를 eligible READY 가 덮는다 (형식 행 사람 ${input.human} · 기계 ${input.machine} · legacy ${input.legacyExcluded} 제외)`))
   }
 
   if (input.failedCheckpoints > 0) {
@@ -498,11 +500,23 @@ export type PublishInput = {
   historicUnknownProfile: number
   /** 다음에 나갈 수 있는 후보 수 */
   candidates: number
+  /**
+   * 🔴 **깨진 복구 행** (2026-09-30 · 앞판 `judgeCapacity` 에서 옮김) — 발행 러너와 같은 계획(`planPublishBatch`)의
+   *    `brokenRecovery`. 하나라도 있으면 러너가 전체 중단하므로 다른 판정을 덮는 CRITICAL 이다.
+   */
+  recoveryBroken?: readonly { id: string; problem: string }[]
   now: Date
 }
 
 export function judgePublish(input: PublishInput): Finding[] {
   const out: Finding[] = []
+
+  const broken = input.recoveryBroken ?? []
+  if (broken.length > 0) {
+    // 🔴 발행이 돈다는 전제가 깨졌다 — 다른 판정을 섞지 않는다
+    return [f('CRITICAL', 'RECOVERY_BROKEN',
+      `기배정 복구가 깨진 행 ${broken.length}건 — 발행 러너가 멈춘다: ${broken.map((b) => `${b.id} (${b.problem})`).join(' · ')}`)]
+  }
 
   if (input.legacyPublishedToday > 0) {
     out.push(f('CRITICAL', 'PUBLISH_LEGACY',
