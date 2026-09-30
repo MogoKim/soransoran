@@ -5,14 +5,27 @@
 
 ## 🔴 작업 시작 전 반드시 읽는다 — 운영 정본
 
-| 문서 | 무엇 |
-|---|---|
-| [`docs/operations/NORTH-STAR.md`](docs/operations/NORTH-STAR.md) | 고객 · 본질 · 장기 North Star · 판단 우선순위 · 영구 안전장치 · 임시 제한 |
-| [`docs/operations/2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) | D3→D100 자동 운영 목표 · 생동감 · Persona 용량 · 단계 PASS 계약 |
-| [`docs/operations/CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) | 지금 분기 목표 · 지금 병목 · 임시 제한의 종료 조건 · 완료 지표 |
+[`docs/operations/README.md`](docs/operations/README.md) 가 **권위 인덱스 하나**다. 현재 정책이나 실행을 말할 수
+있는 문서는 그 인덱스가 싣는 넷뿐이고, 정책이 충돌하면 아래 순서의 앞 문서가 이긴다.
 
-🔴 **이 세 문서의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
-낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다.
+| 순서 | 문서 | 무엇 |
+|---|---|---|
+| 1 | [`docs/operations/NORTH-STAR.md`](docs/operations/NORTH-STAR.md) | 고객 · 본질 · 장기 North Star · 판단 우선순위 · 영구 안전장치 |
+| 2 | [`docs/operations/2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) | D100 정책과 **목표 수치의 정본** — source-to-slot 판정 · JIT 공급 · Persona 4상태 · 대화 · 단계 PASS · 단계 표 |
+| 3 | [`docs/operations/CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) | as-of 가 붙은 검증 상태 · code/deployed/operating PASS · 다음 critical path · 코드와 정본의 충돌 |
+| 4 | [`docs/operations/MASTER-OPERATING-SYSTEM.md`](docs/operations/MASTER-OPERATING-SYSTEM.md) | 기술 지도 · 모델과 비용 구조 · 역사 증거 (현재 상태 · 정책이 아니다) |
+
+🔴 **이 문서들의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
+낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다. 목표 수치는 [`2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) 하나에 있다.
+
+### 실행 authority — 하나씩만 있다
+
+- **단계**: 그날의 단계는 `StageDecision` 행 하나가 정한다. GitHub stage Variables · env 의 단계 값 ·
+  canary 창은 단계를 정하는 근거가 아니다. 사람이 단계를 올리는 routine 절차는 없다.
+- **자동 일정 owner**: D100 레인 job 의 자동 일정 owner 는 상시 호스트의 launchd 하나다. GitHub Actions 예약과 겹치지 않는다.
+- 🔴 위 둘은 **목표 상태이며 구현 중 · 미배포**다. 지금 runtime 이 무엇을 읽는지는
+  [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 충돌 장부가 적는다 — 문서 문장을 운영 사실로 읽지 않는다.
+- 완성 글을 쌓아 둔 편수 · 며칠치는 성공 기준이 아니다 — 준비도는 canon 의 증명일/지속 준비도 하나이고, 폐기한 옛 목표는 canon §10 이 적는다.
 
 🔴 **매거진의 검색 키워드·주제 선정·시리즈·관련 글·SEO 성장 작업은 반드시**
 [`docs/operations/M-GRAPH-PROJECT-CHARTER.md`](docs/operations/M-GRAPH-PROJECT-CHARTER.md)를 먼저 읽는다.
@@ -48,7 +61,7 @@ cutover처럼 외부 권한이나 비가역성이 있는 변경은 창업자 결
 
 ```
 ✅ 켠다   실제 회원 글쓰기 · 댓글
-✅ 켠다   관리형 공개 글 · Persona 댓글 — 🔴 승인된 단기 목표다 (CURRENT-MILESTONE)
+✅ 켠다   관리형 공개 글 · Persona 댓글 — 🔴 승인된 목표다 (D100 canon)
 🔴 끈다   가짜 접속자 수 · 가짜 실시간 지표 · 붉은 알림 도트 남발
 🔴 끈다   실제 회원 원문을 건드리는 모든 자동화
 ```
@@ -57,8 +70,8 @@ cutover처럼 외부 권한이나 비가역성이 있는 변경은 창업자 결
 처음 온 사람이 읽을 글과 사람 같은 반응은 **있어야 한다** — 그것이 본질이다.
 없는 접속자 수를 띄우는 것은 다른 일이고, 그것만 금지다.
 
-목표 수치와 단계(`shadow` → `bootstrap-review` → `bootstrap-auto`)는
-[`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 하나에만 적는다.
+목표 수치와 단계 계약은 [`2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) 하나에 적고,
+지금 어디까지 왔는지는 [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 가 적는다.
 
 ### 우나어와의 분리
 

@@ -7,6 +7,9 @@
  *      ③ 그 job 이 도는 runtime SHA  ④ 오늘 비용 / 하루 상한
  *    을 한 번에 본다. 여기에 단계 결정(StageDecision)과 깨어 있기 상태를 덧붙인다.
  *
+ * 🔴 **하나의 루프 깔때기**(원문 게시 → 공개 p50·p90 · 같은 날 비율 · 슬롯 채움 · 비용 · 첫 댓글 · 감사 · Persona 공백)를
+ *    같은 화면 끝에 붙인다 — 🔴 관측 전용이다. 단계 결정 · 공급 · 발행은 이 값을 읽지 않는다.
+ *
  * 🔴 **모르는 것은 모른다고 적는다.** 로그 시각은 "그 파일이 마지막으로 바뀐 때" 다 —
  *    회차 기록이 있는 레인(공급)만 회차 시각을 쓴다.
  *
@@ -31,6 +34,9 @@ import { readStageDecision } from '../src/lib/stage-decision-repo'
 import { KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
 import { observeJob, printJob, readProcessRuns, type JobObservation } from './lib/runner-health.mjs'
 import { COMMENT_LEDGER_ENV_KEYS, LOG_DIR, fillDbConnection, readCostSignals, readEnvKeys, tailFile } from './lib/ops-signals.mjs'
+import { readLoopFunnel } from './lib/d100-loop-funnel-read.mjs'
+import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
+import { describeLoopFunnel, type LoopFunnel } from '../src/lib/d100-loop-funnel'
 
 const JSON_OUT = process.argv.slice(2).includes('--json')
 const NOW = new Date()
@@ -108,6 +114,8 @@ async function main(): Promise<void> {
     ok: boolean; reason: string | null; lastPostAt: string | null; lastCommentAt: string | null
     lastAuditJudgedAt: string | null; stage: string
   } = { ok: false, reason: null, lastPostAt: null, lastCommentAt: null, lastAuditJudgedAt: null, stage: '(읽지 않음)' }
+  /** 🔴 관측 전용 깔때기 — 못 읽으면 미관측(문구) */
+  let loop: { ok: true; funnel: LoopFunnel } | { ok: false; detail: string } = { ok: false, detail: 'DB 를 읽지 않았다' }
   if (fillDbConnection()) {
     const prisma = new PrismaClient()
     try {
@@ -123,6 +131,8 @@ async function main(): Promise<void> {
       db.stage = !sd.found ? `${today} 결정 없음`
         : sd.result.ok ? `${today} ${sd.result.decision.state} · 공개 ${sd.result.decision.release} · 천장 ${sd.result.decision.capacity}`
           : `🔴 ${today} 결정이 깨졌다 — ${sd.result.reason}`
+      const contractValidPersonas = await readContractValidPersonas(prisma, { now: NOW, repoRoot: process.cwd() })
+      loop = await readLoopFunnel(NOW, { contractValidPersonas, prisma })
     } catch (e) {
       db.reason = `DB 를 읽지 못했다 — ${(e as Error).name}`
     } finally { await prisma.$disconnect() }
@@ -194,6 +204,7 @@ async function main(): Promise<void> {
       at: NOW.toISOString(), runtime: { head: runtimeHead, pin: pinSha },
       lanes, db, stageController: { flag: env.values[CONTROLLER_ENV] ?? null, job: jobWord(controllerObs) },
       keepAwake: { job: jobWord(keepAwake), caffeinateAssertion: caffeinateHeld },
+      loopFunnel: loop.ok ? loop.funnel : { unobserved: loop.detail },
     }, null, 2))
     return
   }
@@ -219,6 +230,9 @@ async function main(): Promise<void> {
   console.log(`\n   단계 결정   ${db.ok ? db.stage : db.reason}`)
   console.log(`   단계 controller  flag ${CONTROLLER_ENV}=${env.values[CONTROLLER_ENV] ?? '(없음)'} · job ${jobWord(controllerObs)}`)
   console.log(`   깨어 있기   job ${jobWord(keepAwake)} · caffeinate assertion ${caffeinateHeld === null ? '?' : caffeinateHeld ? '있음' : '없음'}`)
+  console.log('\n   하나의 루프 깔때기 (최근 7일 · 관측 전용)')
+  if (!loop.ok) console.log(`   미관측 — ${loop.detail}`)
+  else for (const l of describeLoopFunnel(loop.funnel)) console.log(`   ${l}`)
   console.log('\n🔴 이 명령은 아무것도 바꾸지 않았다 — DB write 0 · launchctl 변경 0 · provider 0\n')
 }
 

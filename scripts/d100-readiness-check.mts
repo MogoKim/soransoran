@@ -5,7 +5,7 @@
  * 🔴 **숫자를 여기 하드코딩하지 않는다.** 정본 함수를 돌려 나온 값을 본다 —
  *    문서와 코드가 갈라지면 여기서 걸린다.
  */
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -67,6 +67,11 @@ import {
 import {
   readStockFunnel, type StockRepo, type QueueRowFacts,
 } from './lib/d100-stock-reader.mjs'
+import * as loopFunnelLib from '../src/lib/d100-loop-funnel'
+import { buildLoopFunnel, describeLoopFunnel, type LoopRow } from '../src/lib/d100-loop-funnel'
+import { readOnlyPrisma } from './lib/d100-loop-funnel-read.mjs'
+import { PrismaClient } from '@prisma/client'
+import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 
 let pass = 0
 let fail = 0
@@ -130,8 +135,7 @@ console.log('\n② 🔴 🔴 재고 깔때기 — 다른 집합을 섞지 않는
     queueTotal: 239, unpublishedApproved: 221, legacyExcluded: 217,
     profileCompatible: 4, humanReviewed: 3, fresh: 3,
     personaAssignable: 1, publishableNow: 0,
-    // 🔴 예측하지 않았으면 0 이 아니라 null 이다
-    scheduledIn7Days: null, scheduledIn14Days: null, readyStock: 3,
+    readyStock: 3,
   }
   check('🔴 🔴 **실측 모양은 깔때기로 말이 된다**',
     judgeFunnel(REAL).length === 0, JSON.stringify(judgeFunnel(REAL)))
@@ -1558,8 +1562,7 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
     schedulerSupportOf('d100').releaseStage === null
     && (['d20', 'd30', 'd50', 'd100'] as const).every((st) => {
       const r = personaTargetReport(st, 0)
-      return r.sustainedTarget === SUSTAINED[st] && r.sustainedMet === false
-        && r.sustainedShortfall === SUSTAINED[st]
+      return r.sustainedTarget === SUSTAINED[st] && r.sustainedGap === SUSTAINED[st]
     }))
 
   const D20 = d100Plan('d20')
@@ -1578,21 +1581,29 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
       && scale.canaryReady && !scale.sustainedReady && scale.sustainedShortfall === 20
   })())
 
-  check('🔴 보고 한 줄에 두 숫자가 함께 나온다',
+  check('🔴 보고 한 줄에 두 숫자와 공백이 함께 나온다 — 계약 유효 기준',
     (() => {
       const line = describePersonaTargets(personaTargetReport('d20', 40))
-      return line.includes('canary 하한 40명') && line.includes('지속 목표 60명')
-        && /🟢 충족/.test(line) && /🔴 미달/.test(line)
+      return line.includes('계약 유효 40명') && line.includes('canary 하한 40명') && line.includes('지속 목표 60명')
+        && line.includes('공백 0') && line.includes('🔴 공백 20명') && !/충족|활성/.test(line)
     })())
+  check('🔴 🔴 **계약 유효 0 이면 d3 부터 공백이다 — "d3·d5 충족" 을 찍지 않는다**',
+    personaTargetReport('d3', 0).canaryGap === 24 && personaTargetReport('d5', 0).canaryGap === 24
+    && !describePersonaTargets(personaTargetReport('d3', 0)).includes('공백 0'))
+  check('🔴 계약 유효 수를 모르면 공백도 미관측이다',
+    personaTargetReport('d3', null).canaryGap === null
+    && describePersonaTargets(personaTargetReport('d3', null)).includes('미관측'))
   check('🔴 D100 지속 목표는 "300명 이상" 으로 보고한다',
     describePersonaTargets(personaTargetReport('d100', null)).includes('지속 목표 300명 이상'))
 
   // 🔴 계기판이 두 목표를 **실제로** 찍는가 — 만든 것과 연결된 것은 다르다
   check('🔴 🔴 **d100:readiness 가 두 목표를 모두 찍는다 (표 · JSON)**', (() => {
     const cli = strip(readFileSync('scripts/d100-master-readiness.mts', 'utf-8'))
-    return /describePersonaTargets\(personaTargetReport\(st, activePersonas\)\)/.test(cli)
+    return /describePersonaTargets\(personaTargetReport\(st, contractValidPersonas\)\)/.test(cli)
       && /personaCanaryFloor/.test(cli) && /personaSustainedTarget/.test(cli)
-      && /targetsByActiveCards/.test(cli)
+      && /targetsByContractValid: D100_STAGES\.map\(\(st\) => personaTargetReport\(st, contractValidPersonas\)\)/.test(cli)
+      && !/personaTargetReport\(st, activePersonas\)/.test(cli)
+      && !/targetsByActiveCards/.test(cli)
       && !/activePersonaTarget/.test(cli)
   })())
   check('🔴 옛 겹친 이름(`activePersonaTarget`)이 정본에 남아 있지 않다', (() => {
@@ -1600,6 +1611,129 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
     const scale = strip(readFileSync('src/lib/d100-persona-scale.ts', 'utf-8'))
     return !/activePersonaTarget/.test(cap) && !/activePersonaTarget/.test(scale)
   })())
+}
+
+// ═════════════════════════════════════════════════════════
+console.log('\n⓪ 🔴 하나의 루프 깔때기 — 관측 전용 · 원문 게시 시각은 sourceEvidence 에서만 (2026-09-30)')
+// ═════════════════════════════════════════════════════════
+{
+  const strip = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const H = 3_600_000
+  const NOW_F = new Date('2026-09-30T12:00:00.000Z')
+  const FROM = new Date(NOW_F.getTime() - 7 * 864e5).toISOString()
+  const stamp = { release: { contract: 'source-slot-v1', verdict: 'eligible', slotAt: 'x', evaluatedAt: 'x', reasons: [], evidenceVersion: 'source-evidence-v1' } }
+  const pubAt = new Date(NOW_F.getTime() - 5 * H)
+  /** 🔴 게시 · 수집 · 초안 시각이 서로 다른 기록 — 게시는 공개 4h 전 */
+  const good: LoopRow = {
+    gateResults: { ...fakeEvidenceGate(pubAt, { ageH: 4 }), ...stamp },
+    generatedAt: new Date(pubAt.getTime() - 2 * H).toISOString(),
+    readyAt: new Date(pubAt.getTime() - 1 * H).toISOString(), decidedBy: AUTO_DECIDER,
+    publicAt: pubAt.toISOString(), firstPersonaCommentAt: new Date(pubAt.getTime() + 14 * 60_000).toISOString(),
+    audit: { judged: true, defect: false },
+  }
+  /** 🔴 원문 증거가 없는 공개 행 — 큐 생성 · READY · 공개 시각은 전부 있다(대용할 시각이 널려 있다) */
+  const noEvidence: LoopRow = { ...good, gateResults: { ...stamp } }
+  /** 🔴 게시 시각만 비고 수집 시각은 있다 — capture 로 대신하면 FAIL */
+  const capturedOnly: LoopRow = { ...good, gateResults: { ...fakeEvidenceGate(pubAt, { postedAt: null }), ...stamp } }
+  /** 🔴 게시 시각은 있지만 지금 계약 도장이 없다(옛 계약 공개) */
+  const unstamped: LoopRow = { ...good, gateResults: { ...fakeEvidenceGate(pubAt, { ageH: 30 }) } }
+  const base = {
+    windowFrom: FROM, windowTo: NOW_F.toISOString(), candidates: null,
+    slotDays: [], costs: { supplyUsd: null, commentUsd: null, auditUsd: null }, contractValidPersonas: null,
+  }
+  const f1 = buildLoopFunnel({ ...base, rows: [good] })
+  check('🟢 계약 도장 · 게시 시각이 있는 글은 원문 게시 → 공개 지연을 잰다 (4h)',
+    f1.latency.sourceToPublic.n === 1 && f1.latency.sourceToPublic.p50H === 4 && f1.sameDayPublicShare.share === 1)
+  const f2 = buildLoopFunnel({ ...base, rows: [noEvidence, capturedOnly] })
+  check('🔴 🔴 **원문 증거가 없으면 게시 시각 미관측 — 큐 생성 · READY · 공개 시각으로 대신하지 않는다**',
+    f2.latency.sourceToPublic.n === 0 && f2.latency.sourceToPublic.p50H === null
+    && f2.counts.publicPostedUnknown === 2 && f2.sameDayPublicShare.share === null)
+  check('🔴 🔴 **capture 시각은 게시 시각을 대신하지 않는다** (게시 null · 수집 있음 → 원문 게시 → 수집도 미관측)',
+    buildLoopFunnel({ ...base, rows: [capturedOnly] }).latency.sourceToCapture.n === 0)
+  check('🔴 지금 계약 도장이 없는 공개 글은 원문 게시 → 공개 모집단에 들지 않는다 (preflight 와 같은 모집단)',
+    buildLoopFunnel({ ...base, rows: [unstamped] }).latency.sourceToPublic.n === 0
+    && buildLoopFunnel({ ...base, rows: [unstamped] }).counts.publicStamped === 0)
+  check('🔴 모르는 것은 null — 후보 · 비용 · Persona 가 미관측으로 남는다',
+    f1.counts.candidates === null && f1.cost.totalUsd === null && f1.persona.contractValid === null
+    && f1.persona.firstBlockedTransition === null
+    && f1.unobserved.some((u) => u.startsWith('비용')) && f1.unobserved.some((u) => u.startsWith('후보')))
+  check('🔴 화면이 미관측을 "미관측" 이라고 찍는다 — 0 이 아니다',
+    describeLoopFunnel(f2).some((l) => l.includes('원문 게시 → 공개    미관측'))
+    && describeLoopFunnel(f1).some((l) => l.includes('비용                미관측')))
+  check('🟢 첫 댓글 지연 14분 · 60분 안 100% · 감사 1/1',
+    f1.comment.firstCommentLatency.p50Min === 14 && f1.comment.within60Share === 1
+    && f1.audit.autoPublic === 1 && f1.audit.selected === 1 && f1.audit.judged === 1)
+  // 🔴 Persona — judgeNextPreflight 는 다음 단계 하한을 본다 → 계약 유효 0 이면 D1→D3 부터 막힌다
+  const pz = buildLoopFunnel({ ...base, rows: [], contractValidPersonas: 0 })
+  check('🔴 🔴 **계약 유효 0 이면 D1→D3 부터 막힌다 — "D3→D5" 가 아니다**',
+    pz.persona.firstBlockedTransition === 'D1→D3' && pz.persona.gapByStage[0]!.gap === 24,
+    String(pz.persona.firstBlockedTransition))
+  check('🟢 계약 유효 24 면 d3 · d5 하한은 채우고 D5→D10 에서 막힌다',
+    buildLoopFunnel({ ...base, rows: [], contractValidPersonas: 24 }).persona.firstBlockedTransition === 'D5→D10')
+  check('🟢 슬롯 채움은 자동 공개만 · 그날 목표까지만 센다',
+    (() => {
+      const day = new Date(pubAt.getTime() + 9 * H).toISOString().slice(0, 10)
+      const human: LoopRow = { ...good, decidedBy: 'founder' }
+      const f = buildLoopFunnel({ ...base, rows: [good, good, human], slotDays: [{ kstDate: day, release: 'd1', target: 1 }] })
+      return f.slots.target === 1 && f.slots.filledAuto === 1 && f.slots.fillRate === 1
+    })())
+
+  // 🔴 관측 전용 — 판정 · 결정이 없다
+  check('🔴 🔴 **깔때기 lib 는 verdict · judge · PASS 를 내보내지 않는다**',
+    Object.keys(loopFunnelLib).every((k) => !/judge|verdict|decide|promot|pass/i.test(k))
+    && !('verdict' in f1) && !JSON.stringify(f1).includes('"PASS"'))
+  {
+    const code = strip(readFileSync('src/lib/d100-loop-funnel.ts', 'utf-8'))
+    check('🔴 깔때기 lib 가 게시 시각 대용(?? 로 capture · 초안 · 생성 시각)을 쓰지 않는다',
+      !/postedMs\s*\?\?|postedAt\s*\?\?|sourceCapturedAt|draftedAt/.test(code)
+      && /readSourceEvidence\(/.test(code) && /releaseStampStatusOf\(/.test(code))
+  }
+  const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
+    const p = join(d, n)
+    return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx|mts|mjs)$/.test(n) ? [p] : []
+  })
+  const ALLOWED = new Set([
+    'scripts/d100-master-readiness.mts', 'scripts/ops-status.mts',
+    'scripts/lib/d100-loop-funnel-read.mts', 'scripts/d100-readiness-check.mts',
+  ])
+  const importers = [...walk('src'), ...walk('scripts')]
+    .filter((p) => /from '[^']*d100-loop-funnel(-read)?(\.mjs)?'/.test(readFileSync(p, 'utf-8')))
+  const stray = importers.filter((p) => !ALLOWED.has(p))
+  check(`🔴 🔴 **깔때기 값은 결정 경로가 읽지 않는다 — 보고 화면만 import 한다** (${importers.length}곳)`,
+    stray.length === 0 && importers.includes('scripts/d100-master-readiness.mts') && importers.includes('scripts/ops-status.mts'),
+    stray.join(' · '))
+  for (const [file, label] of [['scripts/d100-master-readiness.mts', 'd100:readiness'], ['scripts/ops-status.mts', 'ops:status']] as const) {
+    const cli = strip(readFileSync(file, 'utf-8'))
+    check(`🔴 ${label} 가 깔때기를 실제로 읽고 찍는다 (표 · JSON)`,
+      /readLoopFunnel\(/.test(cli) && /describeLoopFunnel\(/.test(cli) && /loopFunnel:/.test(cli))
+  }
+  // 🔴 쓰기 차단 — 운영 DB 에 닿기 전에 막힌다(닿을 수 없는 주소로 시험한다)
+  const ro = readOnlyPrisma(new PrismaClient({ datasourceUrl: 'postgresql://ro@127.0.0.1:1/none' }))
+  const blocked = async (p: () => Promise<unknown>): Promise<boolean> => {
+    try { await p(); return false } catch (e) { return (e as Error).message.startsWith('read-only 판독기:') }
+  }
+  const results = await Promise.all([
+    blocked(() => ro.originalPostApprovalQueue.update({ where: { id: 'x' }, data: { status: 'EXPIRED' } })),
+    blocked(() => ro.stageDecision.create({ data: {} as never })),
+    blocked(() => ro.comment.deleteMany({})),
+    blocked(() => ro.post.upsert({ where: { id: 'x' }, create: {} as never, update: {} })),
+    blocked(() => ro.$executeRawUnsafe('SELECT 1')),
+  ])
+  check(`🔴 🔴 **판독기는 쓰기 · raw 를 호출 시점에 막는다** (${results.filter(Boolean).length}/${results.length})`,
+    results.every(Boolean))
+  const readTried = await blocked(() => ro.post.findFirst({}))
+  check('🟢 읽기는 막지 않는다 (차단 문구가 아니라 연결 실패로 끝난다)', readTried === false)
+  await ro.$disconnect()
+
+  // 📜 지운 옛 칸이 되살아나지 않는다
+  check('🔴 📜 최소 관측 일수(7·14·21일) 칸이 없다 — 달력 대기는 승급 조건이 아니다',
+    !/minimumObservationDays/.test(strip(readFileSync('src/lib/d100-capacity.ts', 'utf-8')))
+    && !D100_STAGES.some((st) => 'minimumObservationDays' in d100Plan(st)))
+  check('🔴 📜 7·14일 예약 전망 칸이 없다',
+    !/scheduledIn(7|14)Days/.test(strip(readFileSync('src/lib/d100-readiness.ts', 'utf-8'))))
+  check('🔴 📜 d100:readiness 가 Persona 를 "제공자 연결 전" 이라고 찍지 않는다 (지금 연결돼 있다)',
+    !/제공자 연결 전/.test(readFileSync('scripts/d100-master-readiness.mts', 'utf-8')))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

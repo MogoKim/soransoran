@@ -1176,5 +1176,16 @@ check('🔴 D100 정책 정본과 현재 구현 보고를 구분한다',
   for (const [label, ok] of REQUIRED()) check(`🟢 ${label}`, ok)
 }
 
+// 🔴 에이전트 지침(AGENTS · CLAUDE) · launchd/상시 호스트 설명도 같은 authority 를 말한다 (Lane D · 2026-09-30)
+{
+  const { authorityViolations, authorityRequired } = await import('./lib/active-doc-authority.mjs')
+  console.log('\n── 활성 지침 · 실행 설명 authority (2026-09-30)')
+  for (const v of authorityViolations()) {
+    check(`🔴 ${v.file}: ${v.label}`, v.hits.length === 0)
+    for (const h of v.hits.slice(0, 2)) console.log(`     🔴 ${h.slice(0, 140)}`)
+  }
+  for (const [label, ok] of authorityRequired()) check(`🟢 ${label}`, ok)
+}
+
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
 if (failed > 0) process.exit(1)

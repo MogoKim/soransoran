@@ -42,6 +42,8 @@ import { describeProduction, MIN_PRODUCTION_DAYS } from '../src/lib/d100-supply-
 import { NORTH_STAR_MISSING_EVENTS, northStar } from '../src/lib/north-star'
 import { collectCapabilityFailing } from '../src/lib/job-health'
 import { observeJob, readProcessRuns, supplyFailing } from './lib/runner-health.mjs'
+import { readLoopFunnel } from './lib/d100-loop-funnel-read.mjs'
+import { describeLoopFunnel } from '../src/lib/d100-loop-funnel'
 
 const JSON_OUT = process.argv.slice(2).includes('--json')
 
@@ -136,6 +138,13 @@ const readyStockDeltaPerDay: Measured = read.ok ? read.readyStockDeltaPerDay : n
 const publishedPerDay: Measured = read.ok ? read.publishedPerDay : null
 /** 🔴 계약 유효 Persona — Persona 레인 제공자(주입 인터페이스). 연결 전에는 모름(null) · 활성 행 수로 대체하지 않는다 */
 const contractValidPersonas: Measured = read.ok ? read.contractValidPersonas : null
+
+/**
+ * 🔴 **하나의 루프 깔때기 — 관측 전용** (2026-09-30 · D100 canon "Required operating measures").
+ *    원문 게시/수집 → 후보 → 생성 → READY → 공개 p50·p90 · 같은 날 비율 · 슬롯 채움 · 비용 · 첫 댓글 · 감사 · Persona 공백.
+ *    🔴 이 값은 어떤 결정에도 들어가지 않는다 — 화면과 JSON 에만 간다. 못 읽으면 미관측이다.
+ */
+const loop = await readLoopFunnel(new Date(), { contractValidPersonas })
 
 /**
  * 🔴 **runner 는 라벨 하나가 아니라 사실의 묶음이다.**
@@ -298,16 +307,20 @@ if (JSON_OUT) {
       snapshotPath: SNAPSHOT_PATH,
     },
     persona: {
-      /** 🔴 다음 단계 preflight 가 읽는 값 — Persona 레인 reserve 의 `contractValid` (모르면 null) */
-      contractValid: contractValidPersonas, activeCount: activePersonas,
+      /** 🔴 다음 단계 preflight 가 읽는 값 — Persona 4상태 정본의 `contractValid` (모르면 null) */
+      contractValid: contractValidPersonas,
+      /** 🔴 active 행 수 — **용량이 아니다**(보고용 참고값). 어떤 목표와도 견주지 않는다 */
+      activeRowsNotCapacity: activePersonas,
       /**
-       * 🔴 **단계마다 두 목표를 나란히** — active 카드 수 기준 보고다. 준비 판정이 아니다
-       *    (앞판의 3계층 `personaTierReadiness` 계기판은 두 번째 정본이라 지웠다 · 2026-09-30).
+       * 🔴 **단계마다 두 목표 대비 공백 — 계약 유효 수 기준** (2026-09-30 정정). 앞판은 active 카드 수를
+       *    견줘 "d3·d5 충족" 을 찍었다 — 같은 화면의 preflight(계약 유효 수)와 두 답이었다.
        */
-      targetsByActiveCards: D100_STAGES.map((st) => personaTargetReport(st, activePersonas)),
+      targetsByContractValid: D100_STAGES.map((st) => personaTargetReport(st, contractValidPersonas)),
     },
     // 🔴 14일 예약 예측을 지웠다(2026-09-30) — 다가오는 슬롯 수요는 `supply:health` 의 JIT 한 곳이 보여 준다
     scheduled: { publishRunnerLoaded },
+    /** 🔴 관측 전용 — 결정에 쓰이지 않는다. 못 읽었으면 `{ unobserved }` */
+    loopFunnel: loop.ok ? loop.funnel : { unobserved: loop.detail },
     links: linkSummary, linkCritical: linkCriticalCount(linkSummary),
     northStar: ns,
     stages: allD100Plans(),
@@ -333,6 +346,10 @@ if (JSON_OUT) {
   if (currentPlan === null) {
     console.log(`    🔴 ${currentReleaseStage} 은 D100 용량표에 없는 칸이다 (표는 d3 부터다)`)
   }
+
+  console.log('\n⓪ 하나의 루프 깔때기 — 🔴 관측 전용 · 최근 7일 · 원문 게시 시각은 gateResults.sourceEvidence 에서만')
+  if (!loop.ok) console.log(`    미관측 — ${loop.detail}`)
+  else for (const l of describeLoopFunnel(loop.funnel)) console.log(`    ${l}`)
 
   console.log('\n① 능력별 준비도 — 🔴 하나로 뭉쳐 GREEN 이라 하지 않는다')
   console.log('    능력       상태              설치 load 스위치 최근실패 용량')
@@ -415,25 +432,35 @@ if (JSON_OUT) {
   console.log('       (시작하려면 --record-snapshot · 🔴 과거 값은 만들 수 없다)')
 
   console.log('\n②-b Persona — 🔴 계약 유효 수는 Persona 레인 정본 하나다(여기서 다시 판정하지 않는다)')
-  console.log(`    계약 유효 Persona      ${contractValidPersonas === null ? '⬚ 모름 — 제공자 연결 전 (preflight PERSONA_UNKNOWN)' : `${contractValidPersonas}명`}`)
-  console.log(`    active 카드(보고용)    ${activePersonas ?? '?'}명 — 🔴 준비 판정이 아니다`)
-  // 🔴 active 카드 수를 두 목표에 나란히 견준다 — canary 하한 충족을 지속 준비로 읽지 않는다
+  console.log(`    계약 유효 Persona      ${contractValidPersonas === null ? '⬚ 미관측 — 4상태 정본을 읽지 못했다 (preflight PERSONA_UNKNOWN)' : `${contractValidPersonas}명`}`)
+  console.log(`    active 행(참고)        ${activePersonas ?? '?'}명 — 🔴 용량이 아니다. 어떤 하한과도 견주지 않는다`)
+  /**
+   * 🔴 `judgeNextPreflight` 는 **다음 단계**의 canary 하한을 본다. 그래서 계약 유효 수가 d3 하한보다 작으면
+   *    D3→D5 가 아니라 **D1→D3 부터** 막힌다(옛 보고 "Persona 0명이라 D3→D5 승급이 막힌다" 는 틀렸다).
+   */
+  const firstShort = contractValidPersonas === null ? null
+    : D100_STAGES.find((st) => (personaTargetReport(st, contractValidPersonas).canaryGap ?? 0) > 0) ?? null
+  if (firstShort !== null) {
+    const prev = D100_STAGES.indexOf(firstShort) === 0 ? 'D1' : D100_STAGES[D100_STAGES.indexOf(firstShort) - 1]!.toUpperCase()
+    console.log(`    🔴 ${prev}→${firstShort.toUpperCase()} 부터 preflight PERSONA_SHORT`
+      + ` — 다음 단계 canary 하한 ${personaTargetReport(firstShort, contractValidPersonas).canaryFloor}명`)
+  }
   for (const st of D100_STAGES) {
-    console.log(`      · ${describePersonaTargets(personaTargetReport(st, activePersonas))}`)
+    console.log(`      · ${describePersonaTargets(personaTargetReport(st, contractValidPersonas))}`)
   }
 
   console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 다음 ${nextStage})`)
   console.log('    🔴 공개량 · READY 생산량은 서로 다른 값이다 — 14일치 재고 목표는 지웠다(2026-09-30)')
-  console.log('    단계   공개/day  READY생산/day  상세/day  P.canary  P.지속  댓글/day  최소관측')
+  console.log('    단계   공개/day  READY생산/day  상세/day  P.canary  P.지속  댓글/day')
   for (const p of allD100Plans()) {
     console.log(`    ${p.stage.padEnd(6)} ${String(p.publicPostsPerDay).padStart(7)}`
       + `  ${String(p.readyQualifiedRequiredPerDay).padStart(12)}`
       + `  ${String(p.detailedSourcesRequiredPerDay).padStart(8)}`
       + `  ${String(p.personaCanaryFloor).padStart(8)}`
       + `  ${`${p.personaSustainedTarget}${p.stage === 'd100' ? '+' : ''}`.padStart(6)}`
-      + `  ${`${p.commentMinPerDay}~${p.commentMaxPerDay}`.padStart(8)}`
-      + `  ${String(p.minimumObservationDays).padStart(6)}일`)
+      + `  ${`${p.commentMinPerDay}~${p.commentMaxPerDay}`.padStart(8)}`)
   }
+  console.log('    📜 최소 관측 일수(7·14·21일) 칸은 지웠다 — 달력 대기는 승급 조건이 아니다(canon §6)')
   console.log('    🔴 Persona 는 두 값이다 — P.canary = 하루 시험 하한(승격 preflight 가 보는 값)'
     + ' · P.지속 = 계속 운영할 다양성 목표(보고만 · canary 를 막지 않는다)')
   console.log(`    🔴 READY **생산** 목표 = 공개량 × ${READY_NET_MARGIN} (올림) —`

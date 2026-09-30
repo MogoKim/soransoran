@@ -32,6 +32,8 @@ Persona 용량·답글·다음 실행에 답할 수 있어야 한다.
 | Persona 용량은 무엇으로 세나 | canon §4 |
 | 첫 댓글 · 답글 · 대화 계속/멈춤 | canon §5 |
 | 단계 PASS · 승격 · 재시험 | canon §6 |
+| 오늘 단계는 누가 정하나 · 자동 일정 owner | canon §6 (`StageDecision` 하나 · launchd 하나) — 구현·배포 상태는 `CURRENT-MILESTONE.md` |
+| 루프가 어디서 막히나(원문 게시 → 공개 지연 · 슬롯 채움 · 첫 댓글 · Persona 공백) | canon §8 측정 — 관측 화면 `npm run d100:readiness` ⓪ · `npm run ops:status` |
 | 어디까지 왔고 다음에 무엇을 하나 | `CURRENT-MILESTONE.md` |
 | 전체 구조 · 어떤 AI 를 쓰고 비용이 드나 · 과거 사고 | `MASTER-OPERATING-SYSTEM.md` |
 | 매거진 (D100 과 별도 영역) | `M-GRAPH-PROJECT-CHARTER.md`(검색 주제망 전략) · `magazine-automation-runbook.md`(M-AUTO 실행·안전) |

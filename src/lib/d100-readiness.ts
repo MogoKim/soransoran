@@ -24,7 +24,7 @@
  *    fresh                TTL 을 넘기지 않은 행
  *    personaAssignable    지금 인원·간격으로 배정 가능한 행
  *    publishableNow       위 전부 + 지금 슬롯·상한까지 통과한 행
- *    readyStock           14일 재고로 세는 값 = `fresh` (배정·슬롯은 그날 사정이다)
+ *    readyStock           지금 신선한 READY 행 수 = `fresh` — 🔴 보고용이다. 목표 재고선(700 · 2일/14일치)은 없다
  */
 export type StockFunnel = {
   queueTotal: number
@@ -35,9 +35,10 @@ export type StockFunnel = {
   fresh: number
   personaAssignable: number
   publishableNow: number
-  /** 🔴 실제 예측기가 낸 7일 전망. **재지 못했으면 `null`** — 0 이 아니다 */
-  scheduledIn7Days: Measured
-  scheduledIn14Days: Measured
+  /**
+   * 📜 `scheduledIn7Days` · `scheduledIn14Days`(7·14일 예약 전망)를 지웠다 (2026-09-30) — 예측기가 없어
+   *    언제나 null/0 이던 죽은 칸이었고, 14일 전망은 준비도 근거가 아니다. 다가오는 슬롯은 JIT 한 곳이 본다.
+   */
   readyStock: number
 }
 
@@ -97,11 +98,7 @@ export function judgeFunnelRows(input: FunnelRowsInput): FunnelProblem[] {
 }
 
 /** 🔴 행 집합 → 숫자. 숫자를 따로 세지 않는다 — 같은 집합에서 만든다 */
-export function funnelFromRows(input: FunnelRowsInput & {
-  /** 🔴 예측기가 낸 값. 입력이 없으면 `null` 이다 — 0 을 넣지 않는다 */
-  scheduledIn7Days: Measured
-  scheduledIn14Days: Measured
-}): StockFunnel {
+export function funnelFromRows(input: FunnelRowsInput): StockFunnel {
   const n = (k: FunnelStage): number => input.sets[k].length
   return {
     queueTotal: n('all'),
@@ -112,8 +109,6 @@ export function funnelFromRows(input: FunnelRowsInput & {
     fresh: n('fresh'),
     personaAssignable: n('personaAssignable'),
     publishableNow: n('publishableNow'),
-    scheduledIn7Days: input.scheduledIn7Days,
-    scheduledIn14Days: input.scheduledIn14Days,
     readyStock: n('fresh'),
   }
 }

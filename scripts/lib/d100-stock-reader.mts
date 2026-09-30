@@ -128,7 +128,6 @@ export async function readStockFunnel(input: {
   return {
     ok: true,
     rows: rowsInput,
-    // 🔴 예약 건수는 아직 측정하지 않는다 — 0 이 아니라 별도 경로다
-    funnel: funnelFromRows({ ...rowsInput, scheduledIn7Days: 0, scheduledIn14Days: 0 }),
+    funnel: funnelFromRows(rowsInput),
   }
 }
