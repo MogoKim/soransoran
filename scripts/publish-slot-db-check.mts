@@ -12,8 +12,14 @@
  *   ⑩ (2026-09-30 · source-slot-v1) 트랜잭션 시계 재판정 — 원천 가치가 사라진 행은 EXPIRED(사유 + 도장) · Post 0 ·
  *      같은 슬롯을 다음 후보가 채운다 · 두 번 불러도 한 번만 · 동시 두 러너도 전환 한 번 · 정상 발행에는 eligible 도장
  *
+ *   ⑪ (2026-09-30 Lane B) 원천 기회 → 공개 글 **결정론적 전체 E2E** — `source-evidence-e2e-db-check.mts` 를 같은 격리 DB 로
+ *      실행한다(목록 artifact → 증거 → JIT 생성(가짜 provider) → READY → 발행 직전 재검사 → 만료 → 교체 → 공개 글 · 도장).
+ *
  *   npm run publish:slot-db-check
  */
+import { spawnSync } from 'node:child_process'
+import { join } from 'node:path'
+
 import { PrismaClient } from '@prisma/client'
 
 import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
@@ -358,6 +364,18 @@ async function main(): Promise<void> {
 
   await wipe()
   await prisma.$disconnect()
+
+  console.log('\n⑪ 🔴 🔴 원천 기회 → 공개 글 결정론적 전체 E2E — 검사 파일을 같은 격리 DB 로 실행한다')
+  {
+    // 🔴 같은 격리 가드를 그 파일도 다시 본다(sentinel · localhost · soran_test) · 부모 env 의 격리 주소 그대로
+    const r = spawnSync(join(process.cwd(), 'node_modules/.bin/tsx'), [join(process.cwd(), 'scripts/source-evidence-e2e-db-check.mts')],
+      { encoding: 'utf-8', timeout: 1_800_000, env: process.env })
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
+    const tail = out.trim().split('\n').filter((l) => /pass ·/.test(l)).pop() ?? '(요약 없음)'
+    check(`🔴 🔴 **source-evidence-e2e-db-check 통과** — ${tail.trim()}`, r.status === 0)
+    if (r.status !== 0) console.log(out.split('\n').filter((l) => /❌|Error|중단/.test(l)).slice(0, 20).map((l) => `    ${l}`).join('\n'))
+  }
+
   console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
   console.log('🔴 격리 DB 에서만 돌았다 — 운영 DB write 0 · 모델 호출 0\n')
   if (fail > 0) process.exit(1)

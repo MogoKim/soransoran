@@ -47,6 +47,7 @@ import { describePrepared } from '../src/lib/supply-candidates'
 import { describeRelease } from '../src/lib/source-slot-release'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { RUN_AT_ENV, runClockFrom } from './lib/run-clock.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { authoritativeGate, selectAudits } from '../src/lib/auto-ready-repo'
@@ -91,7 +92,27 @@ const brief = (v: string): string => `"${[...v][0] ?? ''}…" (${[...v].length}�
  *    두 번 만들면 같은 회차 안에서 서로 다른 순간을 본다. 🔴 heartbeat 틱·창 판정도 이 값이다
  *    (2026-09-26) — 틱을 판정한 순간과 재고를 읽은 순간이 달라지지 않게 맨 위로 올렸다.
  */
-const RUN_AT = new Date()
+/**
+ * 🔴 **회차 시각은 주입할 수 있다 — 격리 DB 에서만** (2026-09-30 Lane B · 결정론적 E2E).
+ *    공급 러너 · 생성 러너와 **같은 규칙**(`runClockFrom` · `SORAN_RUN_AT`)이다. 비어 있으면 벽시계(운영 정기 회차 그대로).
+ *    앞판은 벽시계만 써서 러너 사슬 검사가 "슬롯 · 운영 창 밖이면 미관측" 으로 CI 밖에 남았다(auto-ready:runner-check).
+ *    🔴 주입 시계로 **실제 발행(--apply)** 은 격리 DB 표식(sentinel · localhost · soran_test)이 있을 때만 — 운영 DB 에
+ *       가짜 시각으로 글을 내는 길을 닫는다. 발행 트랜잭션의 시계는 주입 시각에서 **실제 경과만큼 흐른다**
+ *       (계획 시각 = 주입 시각 · 트랜잭션 시각 ≥ 계획 시각 — 운영의 "계획 뒤 트랜잭션" 순서 그대로).
+ */
+const RUN_CLOCK = runClockFrom(process.env)
+const RUN_AT = RUN_CLOCK.at
+const CLOCK_T0 = performance.now()
+const TX_CLOCK: { now: () => Date } | undefined = RUN_CLOCK.from === 'parent'
+  ? { now: () => new Date(RUN_AT.getTime() + (performance.now() - CLOCK_T0)) }
+  : undefined
+if (RUN_CLOCK.from === 'parent' && APPLY) {
+  const url = process.env.DATABASE_URL ?? ''
+  const isolated = (process.env.SORAN_ISOLATED_DB ?? '').trim() === 'yes-throwaway'
+    && /^postgresql:\/\/[^@/]*@(127\.0\.0\.1|localhost):\d+\//.test(url) && /\/soran_test(\?|$)/.test(url)
+  if (!isolated) fail(`${RUN_AT_ENV} 주입 시각으로 --apply 는 격리 DB 에서만 — 운영 DB 에 가짜 시각으로 발행하지 않는다`)
+  console.log(`\n⓪-c 회차 시각 주입 ${RUN_AT.toISOString()} (격리 DB · 트랜잭션 시계는 여기서 실제 경과만큼 흐른다)`)
+}
 /**
  * 🔴 **heartbeat 모드** (2026-09-26 · 후보 — 설치는 별도 승인).
  *    launchd 가 운영 창 안에서 10분마다 깨운다. 깨운다는 것은 **물으러 간다**는 뜻일 뿐이다 —
@@ -403,7 +424,7 @@ for (let attempt = 0; attempt <= stock.targets.length; attempt += 1) {
     autoReadyEnv: process.env,
     // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)
     autoAssign,
-  })
+  }, TX_CLOCK)
   if (res.kind === 'expired') {
     // 🔴 그 행만 EXPIRED 로 옮겨졌다(Post 0 · ActivityLog 0 · 슬롯 그대로) — 같은 회차에서 다음 후보로 교체한다
     console.log(`   ⌛ 만료 — ${res.queueId} [${res.reasons.join(',')}] · 원천 가치가 트랜잭션 시각에 사라졌다 → 다음 후보로 교체`)

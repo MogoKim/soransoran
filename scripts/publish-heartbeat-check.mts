@@ -305,9 +305,13 @@ console.log('\n⑦ 러너 배선 — 줄이는 것만 · 발행 권한은 트랜
   check('🔴 단계 입력을 값으로 로그한다', /describeStageInputs\(stageInputsOf\(process\.env, axisNow\)\)/.test(r))
   check('🔴 발행은 여전히 scheduled 트랜잭션이다 — 트리거가 건수를 정하지 않는다',
     /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \}/.test(r) && !/HEARTBEAT[^\n]*dailyCap|dailyCap[^\n]*HEARTBEAT/.test(r))
-  check('🔴 러너의 시계는 하나다 — 틱·창 판정도 RUN_AT', r.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 1
-    && r.indexOf('const RUN_AT = new Date()') < r.indexOf('const HEARTBEAT = '))
-  check('🔴 러너가 트랜잭션 시계를 주입하지 않는다', !/publishOriginalPostTx\([^)]*\{\s*now:/.test(r))
+  // 🔴 (2026-09-30 Lane B) 회차 시각은 `runClockFrom` 하나(비면 벽시계 · 주입은 격리 DB 에서만) — 벽시계 직접 호출 0
+  check('🔴 러너의 시계는 하나다 — 틱·창 판정도 RUN_AT', r.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 0
+    && r.indexOf('const RUN_AT = RUN_CLOCK.at') > 0 && r.indexOf('const RUN_AT = RUN_CLOCK.at') < r.indexOf('const HEARTBEAT = '))
+  check('🔴 러너가 트랜잭션 시계를 고정하지 않는다 — 운영(주입 없음)은 트랜잭션 자기 시계 · 주입일 때만 주입 시각에서 흐르는 시계',
+    !/publishOriginalPostTx\([^)]*\{\s*now:/.test(r)
+    && /const TX_CLOCK: \{ now: \(\) => Date \} \| undefined = RUN_CLOCK\.from === 'parent'/.test(r)
+    && /: undefined\n/.test(r.slice(r.indexOf('const TX_CLOCK'), r.indexOf('const TX_CLOCK') + 400)))
   const tx = codeOf('src/lib/original-post-publish-tx.ts')
   check('🔴 트랜잭션은 트리거 종류와 무관하게 local 계약으로 슬롯을 다시 센다',
     /judgeCatchUp\(\{ stage, now: txNow, trigger: 'local', cron: null, publishedToday: publishedTodayInTx \}\)/.test(tx)

@@ -527,11 +527,12 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
     return fields.every((f) => stockSrc.includes(f) && assign.includes(f))
   })())
   check('🔴 🔴 **러너가 그 조립을 실제로 소비한다 — 옮기고 안 쓰면 아무 뜻이 없다**',
-    /^const RUN_AT = new Date\(\)\s*$/m.test(src)
+    // 🔴 (2026-09-30 Lane B) 회차 시각은 공급 · 생성 러너와 같은 규칙(`runClockFrom`) 하나다 — 비면 벽시계
+    /^const RUN_CLOCK = runClockFrom\(process\.env\)\s*$/m.test(src) && /^const RUN_AT = RUN_CLOCK\.at\s*$/m.test(src)
     && /const stock = await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)/.test(src)
     && /stock\.personas/.test(src)
-    // 🔴 러너 전체에 시계가 하나뿐이다 — 단계마다 다른 `now` 는 경계에서 답을 가른다
-    && (src.match(/new Date\(\)/g) ?? []).length === 1)
+    // 🔴 러너 전체에 시계가 하나뿐이다 — 단계마다 다른 `now` 는 경계에서 답을 가른다(벽시계 직접 호출 0)
+    && (src.match(/new Date\(\)/g) ?? []).length === 0)
 }
 
 console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발행 대상이다 (2026-09-14)')
