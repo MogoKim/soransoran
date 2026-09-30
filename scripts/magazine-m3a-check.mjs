@@ -5344,6 +5344,9 @@ console.log('\n㊹ 무전송 회수 — 이미 온 응답만 읽는다 · send·
     for (const k of kids.flat()) if (k && typeof k === 'object') { k.parentElement = node; node.kids.push(k) } else if (k !== undefined && k !== null) node.kids.push(String(k))
     Object.defineProperty(node, 'children', { get: () => node.kids.filter((k) => typeof k === 'object') })
     Object.defineProperty(node, 'textContent', { get: () => node.kids.map((k) => (typeof k === 'object' ? k.textContent : k)).join('') })
+    // 🔴 브라우저처럼 글자 노드(nodeType 3)와 요소(nodeType 1)를 섞어 준다 — 화면 조작 요소를 빼는 분기를 실제로 태운다
+    Object.defineProperty(node, 'childNodes', { get: () => node.kids.map((k) => (typeof k === 'object' ? k : { nodeType: 3, textContent: k })) })
+    node.nodeType = 1
     return node
   }
   const doc44 = (...kids) => ({ body: el44('body', {}, el44('main', {}, ...kids)) })
@@ -5366,8 +5369,11 @@ console.log('\n㊹ 무전송 회수 — 이미 온 응답만 읽는다 · send·
       fs.rmSync(draft, { force: true })
       return { L, R, draft }
     }
+    // 🔴 2026-09-30 실측: 긴 메시지 말풍선 끝에 `…`(aria-hidden) 와 "더 보기" 버튼(data-thread-find-skip)이 붙는다
     const userBubble = (t) => el44('div', { 'data-chatgpt-search-unit-key': 'fallback-turn-0:0:user', 'data-chatgpt-search-message-ids': 'u-1' },
-      el44('div', { 'data-user-message-bubble': 'true' }, el44('div', {}, String(t).replace(/`/g, ''))), el44('button', { 'aria-label': '메시지 복사' }))
+      el44('div', { 'data-user-message-bubble': 'true' }, el44('div', {}, el44('div', {}, String(t).replace(/`/g, '')), el44('span', { 'aria-hidden': 'true' }, '…')),
+        el44('button', { type: 'button', 'aria-expanded': 'false', 'data-thread-find-skip': 'true' }, el44('span', {}, '더 보기'))),
+      el44('button', { 'aria-label': '메시지 복사' }))
     const asst = (id, raw) => el44('div', { 'data-chatgpt-search-unit-key': 'fallback-turn-0:1:assistant', 'data-chatgpt-search-message-ids': id },
       el44('div', { 'data-markdown-text-style': 'assistant-message' }, el44('div', { 'data-markdown-copy': 'rich-block', 'data-markdown-copy-text': raw },
         el44('header', {}, '오랜만인 친구에게 먼저 연락해도 될까요?'), el44('div', { contenteditable: 'true', role: 'textbox' }, el44('pre', {}, el44('code', {}, MS44))))))
@@ -5421,6 +5427,9 @@ console.log('\n㊹ 무전송 회수 — 이미 온 응답만 읽는다 · send·
     check('🔴 ㊹ 지문 불일치 → 저장 0 · 기존 HOLD 유지 · 대화를 열지 않는다',
       x1.r.reason === 'recover_fingerprint_mismatch' && x1.kept && x1.noDraft && x1.B.opened === 0, `${x1.r.reason} · opened ${x1.B.opened}`)
     const x2 = await refuse('who', {}, () => doc44(turn44(userBubble('사람이 쓴 다른 대화입니다'), asst('a-44', fenced44))))
+    check('🔴 ㊹ 말풍선의 "…더 보기" 버튼 글자는 신원 대조에 섞이지 않는다 (실측 모양 · 같은 메시지 → 회수 성공)', r1.status === 'ok', `${r1.status} ${r1.reason ?? ''}`)
+    const x2b = await refuse('who-tail', {}, () => doc44(turn44(userBubble(planned + ' 덧붙인 문장'), asst('a-44', fenced44))))
+    check('🔴 ㊹ 보낸 메시지 뒤에 글자가 더 붙은 대화는 다른 대화다 — 저장 0', x2b.r.reason === 'recover_identity_mismatch' && x2b.kept && x2b.noDraft, x2b.r.reason)
     check('🔴 ㊹ 대화의 사용자 메시지가 우리가 보낸 것과 다르면 저장 0 · HOLD 유지',
       x2.r.reason === 'recover_identity_mismatch' && x2.kept && x2.noDraft && x2.rowFailed, x2.r.reason)
     const x3 = await refuse('redirect', {}, good, { landUrl: 'https://chatgpt.com/' })
