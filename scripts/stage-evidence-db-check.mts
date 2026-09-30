@@ -9,10 +9,11 @@
  *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 상한 5 에서 5건 PASS · 6건 FAIL
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
  *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → 계획 d3 재시험 · 전날 PASS → 계획 d5 · DB write 0
- *      🔴 (2026-09-30) 실제 진입점의 preflight 는 계약 유효 Persona 제공자가 없어 PERSONA_UNKNOWN 이다 — 시험이 열리지 않고
+ *      🔴 (2026-09-30) 실제 진입점의 preflight 는 Persona 4상태 정본(`readContractValidPersonas`)을 읽는다 — 격리 DB 에는
+ *      계약 유효 Persona 가 0 이라 PERSONA_SHORT(personas=0 · 제공자 연결 증명)이다 — 시험이 열리지 않고
  *         지금 단계를 다시 증명한다(REPROVE · 바닥은 PREPARE). 이것이 오늘 운영의 정직한 결과다.
  *   ⑤ REPROVE 증명일 실제 행 → PASS → 다음 날 d5 계획 · HOLD 는 아니다 · controller 진입점: 전날 TRIAL d20 → d20 재시험
- *      계획이어도 preflight(실제 DB·장부 · Persona 모름)가 막는다 · env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
+ *      계획이어도 preflight(실제 DB·장부 · 계약 유효 Persona 0)가 막는다 · env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
  *   ⑥ (2026-09-30 · 조항 ⑦) 발행 도장 — 도장 없는 발행 → RELEASE_CONTRACT_MISSING · 옛/ineligible 도장 → STALE_RELEASE
  *
  * 🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구한다. provider 0.
@@ -422,7 +423,7 @@ try {
       evidence: StageEvidenceVerdict | null
       plan: { base: string; target: string; basis: string } | null
       result: { decision: { state: string; release: string; capacity: string; reasons: string[]; blocks: { code: string }[]; transition: { trialBase?: string; basis?: string } | null }; brake: string }
-      nextPreflight?: { stage: string; verdict: string; codes: string[] } | null
+      nextPreflight?: { stage: string; verdict: string; codes: string[]; counts: Record<string, number> } | null
     }
     /**
      * 🔴 **러너 신호는 진짜 launchd 를 본다** — 가짜로 만들지 않는다(fixture 가 실제보다 강할 수 없다).
@@ -500,21 +501,23 @@ try {
     check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0)
     {
       /**
-       * 🔴 (2026-09-30) 실제 진입점 — 계약 유효 Persona 제공자가 아직 없다(`contractValidPersonas` = null) →
-       *    모든 단계 preflight 가 PERSONA_UNKNOWN → 시험은 열리지 않는다. 지속 단계를 다시 증명한다.
+       * 🔴 (2026-09-30) 실제 진입점 — Persona 4상태 정본이 연결돼 있다. 격리 DB 에는 계약 유효 Persona 가 0 →
+       *    preflight 가 PERSONA_SHORT(personas=0) → 시험은 열리지 않는다. 지속 단계를 다시 증명한다.
+       *    🔴 personas 가 null(PERSONA_UNKNOWN)이면 제공자 미연결이다 — 그것도 실패로 본다.
        *    TRIAL 경로 자체(PASS → d5 · FAIL → d3 재시험)는 같은 정본 함수로 `stage:evidence-check` ③ 이 본다.
        */
       const fd = failRun.out?.result.decision
       const pd = passRun.out?.result.decision
       const pfUnknown = (o: Out | null): boolean => o?.nextPreflight !== null && o?.nextPreflight !== undefined
-        && o.nextPreflight.verdict !== 'PASS' && o.nextPreflight.codes.includes('PERSONA_UNKNOWN')
+        && o.nextPreflight.verdict !== 'PASS' && o.nextPreflight.codes.includes('PERSONA_SHORT')
+        && !o.nextPreflight.codes.includes('PERSONA_UNKNOWN') && o.nextPreflight.counts.personas === 0
       const pfBlocked = (d: Out['result']['decision'] | undefined): boolean =>
         d !== undefined && d.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN' || b.code === 'PREFLIGHT_FAIL')
-      check('🔴 🔴 **러너 수준 — 전날 FAIL → 계획 d3 재시험 · Persona 모름 → 시험 없이 바닥 PREPARE d1**',
+      check('🔴 🔴 **러너 수준 — 전날 FAIL → 계획 d3 재시험 · 계약 유효 Persona 0(연결됨) → 시험 없이 바닥 PREPARE d1**',
         fd?.state === 'PREPARE' && fd.release === 'd1' && pfBlocked(fd) && pfUnknown(failRun.out),
         `${fd?.state} ${fd?.release} ${JSON.stringify(failRun.out?.nextPreflight)}`)
       if (launchdOk) {
-        check('🟢 🔴 **러너 수준 — 전날 PASS → 지속 d3(증명됐다) · 계획 d5 · Persona 모름 → REPROVE d3 (d5 를 열지 않는다)**',
+        check('🟢 🔴 **러너 수준 — 전날 PASS → 지속 d3(증명됐다) · 계획 d5 · 계약 유효 Persona 0(연결됨) → REPROVE d3 (d5 를 열지 않는다)**',
           pd?.state === 'REPROVE' && pd.release === 'd3' && pfBlocked(pd) && pfUnknown(passRun.out),
           `${pd?.state} ${pd?.release}`)
       }
@@ -564,9 +567,10 @@ try {
       check('exit 0 (dry-run)', c1.code === 0, c1.raw)
       check('전날 d20 이 PASS 가 아니다 → 계획 = d20 재시험(기반 d10 · RETEST)', c1.out?.plan?.target === 'd20' && c1.out.plan.base === 'd10'
         && c1.out.plan.basis === 'RETEST', JSON.stringify(c1.out?.plan))
-      check('🔴 🔴 **실제 DB · 장부로 모은 d20 preflight 가 PASS 가 아니다(Persona 모름 · 단가 모름)**',
+      check('🔴 🔴 **실제 DB · 장부로 모은 d20 preflight 가 PASS 가 아니다(계약 유효 Persona 0 · 단가 모름)**',
         c1.out?.nextPreflight?.stage === 'd20' && c1.out.nextPreflight.verdict !== 'PASS'
-        && c1.out.nextPreflight.codes.includes('PERSONA_UNKNOWN') && c1.out.nextPreflight.codes.includes('COMMENT_COST_UNKNOWN'),
+        && c1.out.nextPreflight.codes.includes('PERSONA_SHORT') && c1.out.nextPreflight.counts.personas === 0
+        && c1.out.nextPreflight.codes.includes('COMMENT_COST_UNKNOWN'),
       JSON.stringify(c1.out?.nextPreflight))
       check('🔴 🔴 **preflight 가 막으면 d20 시험을 열지 않는다 — 지속 d10 을 다시 증명(REPROVE) · capacity 는 다음 증명 d20**', r1 !== undefined
         && !(r1.state === 'TRIAL' && r1.release === 'd20') && r1.release === 'd10' && r1.capacity === 'd20'
