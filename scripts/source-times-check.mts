@@ -320,6 +320,13 @@ console.log('\n⑤-b 🔴 (Lane B) 82cook **실제 artifact 형식** replay — 
   check('🔴 목록 시각 없는 옛 82cook 줄은 관측이 아니다(센다 · 지어내지 않는다)', idx.unobservable === 1, String(idx.unobservable))
   check('🔴 82cook 관측 — 두 회차 × 줄 수 · 같은 글이 회차마다 한 번씩',
     idx.byArticle.get('82cook::9244768')?.length === 2 && idx.sample.filter((o) => o.sourceKey === '82cook').length === FIXTURE_82COOK_ROWS.length * 2)
+  // 🔴 덧붙이기 파일에 같은 회차가 두 번 붙었다(재시도) — 한 번 본 것을 두 번 본 것으로 세지 않는다
+  const dupDir = mkdtempSync(join(tmpdir(), 'st82dup-'))
+  writeFileSync(join(dupDir, '82cook.list.jsonl'), `${[...r1, ...r1, ...r2].map((r) => JSON.stringify(r)).join('\n')}\n`)
+  const dupIdx = readListObservations(dupDir, new Date(L2))
+  check('🔴 같은 글 · 같은 회차 줄이 두 번 붙어도 관측은 회차당 하나(재시도 덧붙이기)',
+    dupIdx.byArticle.get('82cook::9244768')?.length === 2 && dupIdx.sample.length === idx.sample.filter((o) => o.sourceKey === '82cook').length,
+    String(dupIdx.byArticle.get('82cook::9244768')?.length))
   check('활성 · 예정 connector 모양이 표에 다 있다(네이버 회차 · 82cook 덧붙이기)',
     LIST_ARTIFACT_FORMATS.map((f) => f.kind).join(',') === 'navercafe-run,82cook-append')
 
