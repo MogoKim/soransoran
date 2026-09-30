@@ -201,6 +201,13 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   원문이 연속 관찰에서 같을 때만 끝난 것으로 본다. 코드블록(`<pre>` 없는 새 DOM 포함)과 일반 마크다운 응답을 둘 다
 >   읽고, 원고 관문(frontmatter·H2·CTA)은 그대로다. 새 응답이 둘 이상·식별자 없음·기준선 소실은
 >   `response_ambiguous`, 끝나지 않으면 `response_timeout` — 둘 다 저장 0 · 전송불명 HOLD 다. 시간을 늘려 풀지 않는다.
+>   🔴 **원문 후보는 두 형태뿐이다** (2026-09-30 개정): `pre code`(코드블록) 와 `data-markdown-copy="rich-block"` 의
+>   `data-markdown-copy-text` 속성(```markdown 감싸기만 벗긴다 · 블록 위 제목 머리표·편집기 글자는 쓰지 않는다).
+>   후보 0(모르는 형태)·여럿·빈 속성은 추측하지 않고 전송불명으로 멈춘다. 렌더된 화면을 되살리던 경로는 없앴다
+>   (그 경로가 rich-block 제목까지 원고로 읽어 NO_FRONTMATTER · 저장 0). 실패 행에도 대화 주소·응답 식별자·형태·stage 를 남긴다.
+> - 🔴 **이미 온 응답은 다시 보내지 않고 회수한다** — `magazine-webui-runner.mjs --recover <slug> --conversation <url> [--check]`.
+>   장부 전송불명 기록 · 그날 결과 행 · 지금 메시지의 지문이 같고, 그 대화의 사용자 메시지가 우리가 보낸 것과 같을 때만
+>   원문을 저장한다. send·composer 0 · attempts·regenCalls 0 · 성공 경로와 같은 예약 ID 해소만. 하나라도 어긋나면 저장 0 · HOLD 유지.
 >   (2026-09-28: 옛 판은 `pre code` 만 봐서 원고가 다 왔는데도 회수 4/5 · 재생성 4/4 가 timeout 으로 끝났다.)
 > - 🔴 **등록 경로는 회수 결과를 자식의 구조화 결과 파일(`--result-json`)로만 분류한다** — stdout 을 파싱하지 않는다.
 >   HOLD·보낸 뒤 timeout 은 DELIVERY_UNCERTAIN(attempts +0 · 7일 격리 0 · 재전송 0). 결과 파일이 없거나 깨졌으면
