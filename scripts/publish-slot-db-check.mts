@@ -19,6 +19,7 @@ import { PrismaClient } from '@prisma/client'
 import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
 import { releaseStampStatusOf, RELEASE_STAMP_KEY, RELEASE_CONTRACT } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -40,7 +41,7 @@ const check = (label: string, ok: boolean, detail = ''): void => {
 const prisma = new PrismaClient()
 /** KST 벽시계 → Date */
 const K = (s: string): Date => new Date(`${s}+09:00`)
-const envOf = (stage: string): Record<string, string> => ({ SORAN_RELEASE_STAGE: stage, SORAN_CAPACITY_STAGE: stage })
+const envOf = (stage: string): Record<string, string> => markedStageEnv({ SORAN_RELEASE_STAGE: stage, SORAN_CAPACITY_STAGE: stage })
 
 let seq = 0
 /**

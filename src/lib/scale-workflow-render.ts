@@ -6,8 +6,9 @@
  *    d3 로 올리면서 프로필만 고치면 워크플로우는 그대로 하루 한 번 돈다 —
  *    "3/day 로 올렸다" 고 적어 두고 실제로는 1건만 나간다. 그 어긋남을 아무도 못 본다.
  *
- * 🔴 그래서 **프로필이 정본**이고, 워크플로우는 여기서 렌더한 결과와 같아야 한다.
- *    fixture 가 실제 yml 을 읽어 대조한다 — 어긋나면 CI 가 먼저 막는다.
+ * 🔴 그래서 **프로필이 정본**이고, 예약은 여기서 렌더한 결과와 같아야 한다.
+ *    🔴 (2026-09-30) 발행 예약의 주인은 launchd 러너 하나다 — GitHub 예약은 지웠다(맨 아래 절).
+ *    fixture 가 러너 plist 의 예약을 cron 표현으로 읽어 대조한다 — 어긋나면 CI 가 먼저 막는다.
  *
  * 🔴 시각 표현은 **분 단위**다. 시(hour) 정수 배열로는 `09:30`·`08:10` 같은 슬롯을 적을 수 없다.
  */
@@ -243,4 +244,26 @@ export function scheduledRunsPerDay(stage: ReleaseStage, yml: string): number {
  */
 export function actualDailyPublishable(stage: ReleaseStage, yml: string): number {
   return Math.min(scheduledRunsPerDay(stage, yml), PROFILES[stage].dailyTarget)
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **발행 예약의 정본은 launchd 러너다** (2026-09-30 · 단일 실행 authority)
+//
+//    GitHub `auto-publish.yml` 의 cron 합집합은 지웠다 — 두 번째 schedule owner 였다(2026-09-22~24 에
+//    자기 변수로 11건을 따로 발행). 합집합 슬롯(`allStageSlots`)은 이제 launchd 러너 plist 의
+//    `StartCalendarInterval` 이 예약한다. 위의 cron 도구들은 **그 예약을 같은 모양으로 읽기 위한 표현**으로 남는다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 KST 슬롯 목록 → cron 줄 텍스트 — launchd 예약을 위 판정 함수(`scheduledRunsPerDay` 등)에 그대로 넣는다 */
+export function scheduleTextOfSlots(slots: readonly { hour: number; minute: number }[]): string {
+  return slots.map((s) => `    - cron: '${slotCronUtc(s)}'`).join('\n')
+}
+
+/**
+ * 🔴 **발행 워크플로에 예약이 되살아났는가.** 한 줄이라도 있으면 두 번째 발행 schedule owner 다.
+ *    (전체 판정 — consumer 우회 · 옛 변수 · 중복 owner — 은 `scripts/lib/stage-authority-graph` 가 한다.)
+ */
+export function retiredPublishWorkflowProblems(yml: string): string[] {
+  const crons = parseCronLines(yml)
+  return crons.length === 0 ? [] : [`auto-publish.yml 에 예약 ${crons.length}줄이 되살아났다 — 발행 schedule owner 는 launchd 러너 하나다`]
 }

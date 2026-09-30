@@ -301,8 +301,10 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
 console.log('\n④ consumer — 결정을 러너 env 로 옮긴다')
 // ─────────────────────────────────────────────────────────
 {
-  const legacy = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'legacy', reason: '' })
-  check('🔴 flag OFF(legacy) → 아무것도 넣지 않는다', Object.keys(legacy).length === 0)
+  // 🔴 legacy(flag OFF → 아무것도 넣지 않아 env 파일 단계가 이기던 경로)는 지웠다 — flag OFF 도 d1 이다(Lane A)
+  const off = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: 'flag off' })
+  check('🔴 flag OFF → d1 을 명시해서 넣는다 · 표식 없음(env 파일 단계가 이기지 못한다)',
+    off.SORAN_RELEASE_STAGE === 'd1' && off.SORAN_CAPACITY_STAGE === 'd1' && off.SORAN_STAGE_DECISION_DATE === '')
   const safest = consumerEnvOf({ ok: false, code: 'BROKEN', fallback: 'safest', reason: '' })
   check('🔴 결정 없음·깨짐 → d1 · 증명일 빈 값 · canary/window 키는 아예 없다',
     safest.SORAN_RELEASE_STAGE === 'd1' && safest.SORAN_CAPACITY_STAGE === 'd1' && safest[PROOF_STAGE_ENV] === ''
@@ -310,8 +312,9 @@ console.log('\n④ consumer — 결정을 러너 env 로 옮긴다')
   const d = decideStage(inputs({})).decision
   const v = validateForToday(d)
   const ok = v.ok ? consumerEnvOf({ ok: true, decision: v.decision }) : {}
-  check('결정 OK(PREPARE d1) → 공개 d1 · capacity(다음 증명) d3 · 결정이 유일한 권한',
-    ok.SORAN_RELEASE_STAGE === 'd1' && ok.SORAN_CAPACITY_STAGE === 'd3' && !Object.keys(ok).some((k) => /CANARY|WINDOW/.test(k)))
+  check('결정 OK(PREPARE d1) → 공개 d1 · capacity(다음 증명) d3 · 표식 = 결정 날짜 · 결정이 유일한 권한',
+    ok.SORAN_RELEASE_STAGE === 'd1' && ok.SORAN_CAPACITY_STAGE === 'd3' && ok.SORAN_STAGE_DECISION_DATE === d.kstDate
+    && !Object.keys(ok).some((k) => /CANARY|WINDOW/.test(k)))
   /**
    * 🔴 (2026-09-29 운영 반례) TRIAL d3 결정이 러너에서 준비도 감속으로 d1 이 됐다.
    *    (2026-09-30) 이제 TRIAL 날 공개는 결정의 단계 그대로다 — canary 허가 · 준비도 감속 경로가 없다.

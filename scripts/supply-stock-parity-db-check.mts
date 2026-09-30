@@ -36,6 +36,7 @@ import { MACHINE_REVIEWED_BY } from '../src/lib/original-post-auto-publish'
 import { readPostRequirements } from '../src/lib/original-post-persona-match'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -63,7 +64,7 @@ const NOW = new Date()
 const DAY = 864e5
 /** 🔴 단계 env 는 **값으로** 넘긴다 — 프로세스 env 를 바꾸지 않는다 */
 const envOf = (release: ReleaseStage, capacity: ReleaseStage): Record<string, string> =>
-  ({ [RELEASE_ENV]: release, [CAPACITY_ENV]: capacity })
+  markedStageEnv({ [RELEASE_ENV]: release, [CAPACITY_ENV]: capacity })
 
 /**
  * 🔴 기계 profile 이 **통째로** 맞는 gate 기록 — 적재기가 남기는 모양 그대로.

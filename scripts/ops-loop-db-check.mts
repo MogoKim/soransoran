@@ -118,8 +118,12 @@ try {
   const code7 = run('scripts/stage-consume-exec.mts', ['--by=publish', '--', process.execPath, '-e', 'process.exit(7)'])
   check('감싼 명령의 종료 코드를 그대로 돌려준다', code7.code === 7, String(code7.code))
   writeEnv('off')
-  const legacy = run('scripts/stage-consume-exec.mts', ['--by=publish', '--print'])
-  check('🔴 flag OFF → 아무것도 넣지 않는다(legacy)', legacy.code === 0 && legacy.out.trim() === '', legacy.out)
+  // 🔴 (2026-09-30 · 단일 실행 authority) legacy(flag OFF → 아무것도 넣지 않아 env 파일 단계가 이기던 경로)는 지웠다
+  const offOut = run('scripts/stage-consume-exec.mts', ['--by=publish', '--print'])
+  check('🔴 flag OFF(kill switch) → 결정을 읽지 않고 d1 을 명시해서 넣는다 · 표식 없음',
+    offOut.code === 0 && offOut.out.includes('SORAN_RELEASE_STAGE=d1') && offOut.out.includes('SORAN_CAPACITY_STAGE=d1')
+    && /^SORAN_STAGE_DECISION_DATE=$/m.test(offOut.out), offOut.out)
+  check('🔴 flag ON 결정 경로는 표식(결정 날짜)을 넣는다', pr.out.includes(`SORAN_STAGE_DECISION_DATE=${today}`), pr.out)
 
   console.log('\n⑤ DB 에 못 닿으면')
   writeEnv('on')

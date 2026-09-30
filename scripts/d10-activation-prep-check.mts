@@ -53,6 +53,7 @@ import { classifyNavigation } from './lib/collect-guard-store.mjs'
 import { findBottlenecks, thin82cookDetailPerDay } from '../src/lib/scale-supply-plan'
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { planBatch, type BatchDraft } from '../src/lib/original-post-persona-match'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -505,7 +506,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   const q140 = q(140)
   check('🔴 queue id 140개가 전부 다르다', new Set(q140.map((x) => x.queueId)).size === 140)
 
-  const split = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' })
+  const split = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }))
   check('🔴 공개 1 · 준비 눈금 d10(10/day)', split.releaseProfile.dailyTarget === 1 && split.capacityProfile.dailyTarget === 10)
   // 🔴 (2026-09-30) 14일 준비도 시뮬레이션 · 감속(`safeStageFor`) · 승격표(`promotionPlan`)는 지웠다 — 관제도 그것을 내지 않는다
   check('🔴 관제가 14일 준비도 · 승격표를 다시 내지 않는다', !/promotionPlan|simulateAllStages|safeStageFor/.test(codeOf('scripts/supply-health.mts')))

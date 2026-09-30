@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -479,7 +480,8 @@ async function duplicateSourceRunner(
         // 🔴 ⑤ 와 장부 회차 id 가 겹치지 않게 회차 시각을 따로 준다(회차 요청 상한은 장부 id 로 센다)
         SORAN_RUN_AT: runAt.toISOString(),
         SORAN_SUPPLY_PROCESS_ENABLED: 'true',
-        SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10',
+        // 🔴 결정이 넣은 모양(표식 포함) — 표식 없는 손 env 는 d1 이다(Lane A)
+        ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
         SORAN_LLM_DAILY_BUDGET_USD: '1000', SORAN_LLM_RESERVE_HEADROOM: '1.5',
         // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 30 으로 덮는다
         SORAN_LLM_RUN_REQUEST_CAP: '20',

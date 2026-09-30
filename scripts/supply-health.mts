@@ -52,7 +52,7 @@ import { planSupply, collectReadiness } from '../src/lib/scale-supply-plan'
 import { currentCapacity, preparedCapacity, describeInventory } from '../src/lib/collect-inventory'
 import { observeJobsSafe } from './lib/launchd-observe.mjs'
 import { describePrepared } from '../src/lib/supply-candidates'
-import { compareWorkflowSuperset } from '../src/lib/scale-workflow-render'
+import { retiredPublishWorkflowProblems } from '../src/lib/scale-workflow-render'
 import { nextScheduleAt, kstStamp } from '../src/lib/supply-capacity-forecast'
 import { loadStockClassification, describeStockClassification, jitCoverageOf } from './lib/publishable-stock.mjs'
 import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
@@ -518,12 +518,14 @@ async function main(): Promise<void> {
       ? `규모 설정이 설치되지 않았다 — 안전 기본값(${DAILY_PUBLISH_CAP}/day)으로 돈다`
       : null,
     /**
-     * 🔴 **워크플로는 설계상 모든 단계의 합집합이다** (2026-09-21 실측 보정) — 합집합과 견준다.
+     * 🔴 **발행 예약의 정본은 launchd 러너 하나다** (2026-09-30 · 단일 실행 authority).
+     *    GitHub 발행 워크플로에 예약이 되살아나면 두 번째 schedule owner 다 — 그것을 불일치로 적는다.
+     *    (앞판은 yml 이 모든 단계 슬롯의 합집합인지 견줬다 — GitHub 이 발행하던 시절의 계약이다.)
      */
     workflowMismatch: (() => {
       const f = join(process.cwd(), '.github/workflows/auto-publish.yml')
-      if (!existsSync(f)) return ['auto-publish.yml 을 찾지 못했다 — 스케줄을 확인할 수 없다']
-      return compareWorkflowSuperset(readFileSync(f, 'utf-8')).map((m) => m.detail)
+      if (!existsSync(f)) return []
+      return retiredPublishWorkflowProblems(readFileSync(f, 'utf-8'))
     })(),
     slots: resolved.releaseProfile.slots.map((x) => slotLabel(x)),
   }

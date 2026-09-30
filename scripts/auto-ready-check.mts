@@ -33,6 +33,7 @@ import {
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticHoldsOf,
 } from '../src/lib/micro-seed-supply-autofill'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -687,9 +688,13 @@ console.log('\n⑰ 🔴 🔴 도장 회차는 bounded Serializable batch — 묶
 console.log('\n⑱ 🔴 🔴 공개 단계 천장 — 호출자 단계는 env 천장을 넘지 못한다')
 {
   const T = new Date('2026-09-25T03:00:00Z')
-  const E = (rel?: string, cap?: string): Record<string, string> => ({
+  // 🔴 결정이 넣은 env 를 흉내 낸다(표식 포함) — 표식 없는 손 env 는 아래에서 따로 본다(Lane A)
+  const E = (rel?: string, cap?: string): Record<string, string> => (rel === undefined && cap === undefined ? {} : markedStageEnv({
     ...(rel === undefined ? {} : { SORAN_RELEASE_STAGE: rel }), ...(cap === undefined ? {} : { SORAN_CAPACITY_STAGE: cap }),
-  })
+  }))
+  check('🔴 🔴 **표식 없는 손 env(release d10 · capacity d10) → 천장 d1 — 트랜잭션도 결정만 믿는다**',
+    releaseStageCeiling({ SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' }, T) === 'd1'
+    && boundedReleaseStage('d10', { SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' }, T) === 'd1')
   check('🔴 설정 없음 → d1', releaseStageCeiling({}, T) === 'd1')
   check('🔴 🔴 **release d10 · capacity d3 → d3 (capacity 가 천장)**', releaseStageCeiling(E('d10', 'd3'), T) === 'd3')
   check('release d5 · capacity d10 → d5', releaseStageCeiling(E('d5', 'd10'), T) === 'd5')

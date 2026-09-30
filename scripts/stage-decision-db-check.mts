@@ -409,8 +409,8 @@ async function main(): Promise<void> {
     const off = await consumeStageDecision({
       ...stageDecisionIo(prisma, DATE), controllerOn: false, by: 'supply',
     })
-    check('🔴 kill switch 가 꺼져 있으면 기존 경로로 간다',
-      !off.ok && off.fallback === 'legacy')
+    check('🔴 kill switch 가 꺼져 있으면 가장 안전한 단계로 간다(env 경로 없음)',
+      !off.ok && off.fallback === 'safest')
   }
 
   console.log('\n⑦ 🔴 만든 행은 덮이지 않는다 (adapter 에 갱신 경로가 없다)')

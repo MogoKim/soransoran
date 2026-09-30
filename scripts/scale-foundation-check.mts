@@ -29,7 +29,12 @@ import {
 import {
   renderSlots, cronLines, parseCronLines, compareWorkflow, dailyCeiling, verifySlotRenderable,
   allStageCronLines, judgeSlotRun, slotOfCron, scheduledRunsPerDay, actualDailyPublishable,
+  scheduleTextOfSlots, retiredPublishWorkflowProblems,
 } from '../src/lib/scale-workflow-render'
+/** 🔴 발행 예약의 정본 — launchd 러너 plist(2026-09-30 단일 실행 authority) */
+import { calendarSlots, programArguments } from './lib/launchd-install.mjs'
+import { renderPublishRunnerPlist } from './lib/original-post-runner-template'
+import { AUTHORITY_RENDER_INPUT } from './lib/stage-authority-repo'
 // 🔴 댓글 슬롯의 정본 — 여기서 시각을 다시 적지 않는다
 import {
   planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES,
@@ -60,6 +65,8 @@ import {
 } from '../src/lib/supply-health'
 import { personaAvailableAt, availablePersonasAt } from '../src/lib/supply-capacity-forecast'
 import { readStock, judgeApply as judgeFill } from '../src/lib/micro-seed-supply-autofill'
+/** 🔴 결정이 넣은 env 를 흉내 낸다 — 표식 없는 손 env 는 d1 이다(Lane A) */
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -157,9 +164,13 @@ console.log('\n③ capacity vs release 분리 · 감속 강제')
   const none = resolveScale({})
   check('🔴 설정이 없으면 d1 (fail-closed)', none.releaseStage === 'd1' && none.capacityStage === 'd1')
   check('설정 없음을 사유로 남긴다', none.notes.length >= 2)
+  // 🔴 (2026-09-30 · Lane A) 손으로 적은 단계(GitHub Variables · .env.local)는 표식이 없다 — 읽지 않는다
+  const hand = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' })
+  check('🔴 🔴 **표식 없는 env d10 → d1 (StageDecision 경유가 아니면 단계 칸을 읽지 않는다)**',
+    hand.releaseStage === 'd1' && hand.capacityStage === 'd1' && hand.notes.some((x) => x.includes('StageDecision')))
 
   // 🔴 **P0-2 — 두 프로필이 실제로 다르다**
-  const split = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' })
+  const split = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }))
   check('🔴 capacity=d10 · release=d1 → 내부 재고 목표는 140', derive(split.capacityProfile).stockTarget === 140)
   check('🔴 같은 설정에서 공개 하루 상한은 1', split.releaseProfile.dailyTarget === 1)
   check('🔴 공개 주 cap 1 · 간격 5일 (d1 기준)',
@@ -170,12 +181,12 @@ console.log('\n③ capacity vs release 분리 · 감속 강제')
     derive(split.capacityProfile).stockMin === 50 && derive(split.capacityProfile).stockWarn === 30)
   check('🔴 두 프로필이 같은 객체가 아니다', split.capacityProfile !== split.releaseProfile)
 
-  const ok2 = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd3' })
+  const ok2 = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd3' }))
   check('🟢 capacity 안쪽이면 그대로', ok2.releaseStage === 'd3' && !ok2.throttledByCapacity)
-  const over = resolveScale({ [CAPACITY_ENV]: 'd3', [RELEASE_ENV]: 'd10' })
+  const over = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd3', [RELEASE_ENV]: 'd10' }))
   check('🔴 capacity 를 넘으면 감속', over.releaseStage === 'd3' && over.throttledByCapacity)
   check('감속 사유가 남는다', over.notes.some((x) => x.includes('d10') && x.includes('d3')))
-  const bad = resolveScale({ [CAPACITY_ENV]: 'nope', [RELEASE_ENV]: 'd10' })
+  const bad = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'nope', [RELEASE_ENV]: 'd10' }))
   check('🔴 못 읽는 값은 가장 안전한 단계로 (fail-closed)', bad.capacityStage === SAFEST_STAGE && bad.releaseStage === SAFEST_STAGE)
   check('🔴 빈 문자열도 fail-closed', resolveRuntimeStage('   ').stage === SAFEST_STAGE)
   check('단계 순서가 d1 < d3 < d5 < d10', stageRank('d1') < stageRank('d3')
@@ -187,7 +198,7 @@ console.log('\n③ capacity vs release 분리 · 감속 강제')
 
   // 🔴 코드를 고치지 않고 1→3→5→10 을 오간다
   for (const st of RELEASE_STAGES) {
-    const r = resolveScale({ [CAPACITY_ENV]: st, [RELEASE_ENV]: st })
+    const r = resolveScale(markedStageEnv({ [CAPACITY_ENV]: st, [RELEASE_ENV]: st }))
     check(`🔴 env 만으로 ${st} 가 된다 — 코드·fixture 수정 0`, r.releaseProfile.dailyTarget === PROFILES[st].dailyTarget)
   }
   check('요약 문장이 두 단계를 모두 말한다', describeScale(split).includes('capacity=d10') && describeScale(split).includes('release=d1'))
@@ -198,7 +209,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
 {
   resetScale()
   // ── A. (2026-09-30) 결정 env d1 → 설치된 publisher config 도 dailyCap=1 (준비도 감속은 없다) ──
-  const a = installFromEnv({ [CAPACITY_ENV]: 'd3', [RELEASE_ENV]: 'd1' })
+  const a = installFromEnv(markedStageEnv({ [CAPACITY_ENV]: 'd3', [RELEASE_ENV]: 'd1' }))
   check('A 🔴 결정 d1 → 설치된 공개 상한이 1', a.releaseProfile.dailyTarget === 1)
   check('A 🔴 activeScale 도 같은 값이다', activeScale().releaseProfile.dailyTarget === 1)
   const cand = (): PublishCandidate => ({
@@ -214,7 +225,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     judgePublish(cand(), { killSwitchEnabled: false, publishedToday: 1, dailyCap: 10 }).ok)
 
   // ── B. capacity d10 + release d1 → stockTarget=140, public dailyCap=1 ──
-  const b = installFromEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' })
+  const b = installFromEnv(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }))
   const bCap = derive(b.capacityProfile)
   check('B 🔴 내부 재고 목표 140', bCap.stockTarget === 140)
   check('B 🔴 공개 하루 상한 1', b.releaseProfile.dailyTarget === 1)
@@ -234,7 +245,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   //       env 는 그 뒤에 들어왔다. 그런데도 설치된 값은 바뀐다.
   check('C 🔴 모듈 상수는 안전 기본값 그대로다 (import 시점에 굳었다)',
     DAILY_PUBLISH_CAP === 1 && POST_CAP_PER_WEEK === 1)
-  const late = { ...process.env, [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' }
+  const late = markedStageEnv({ ...process.env, [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' })
   const c = installFromEnv(late)
   check('C 🔴 시작 뒤에 읽은 설정이 반영된다', c.releaseProfile.dailyTarget === 5 && activeScale().releaseStage === 'd5')
   check('C 🔴 그래도 모듈 상수는 안전값이다 — 주입을 잊으면 1건이다', DAILY_PUBLISH_CAP === 1)
@@ -263,26 +274,29 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     return !src.includes('process.env')
   })())
 
-  // ── D. GHA vars 누락/invalid → d1, 정상 d5 → workflow·runner 모두 d5 ──
-  const wf = read('.github/workflows/auto-publish.yml')
-  check('D 🔴 워크플로우가 두 vars 를 러너에 전달한다',
-    /SORAN_CAPACITY_STAGE:\s*\$\{\{\s*vars\.SORAN_CAPACITY_STAGE\s*\}\}/.test(wf)
-    && /SORAN_RELEASE_STAGE:\s*\$\{\{\s*vars\.SORAN_RELEASE_STAGE\s*\}\}/.test(wf))
-  check('D 🔴 워크플로우에 설정 확인 스텝이 있다', /name:\s*규모 설정 확인/.test(wf))
+  // ── D. (2026-09-30) GHA vars 는 단계를 정하지 않는다 · 누락/invalid → d1, 정상 d5 → launchd 예약·러너 모두 d5 ──
+  // 🔴 YAML 주석은 설명문이다(지운 권위의 이름이 "왜 지웠는지" 로 남는다) — 값 줄만 본다
+  const wfRaw = read('.github/workflows/auto-publish.yml').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+  check('D 🔴 🔴 **발행 워크플로가 단계 vars 를 러너에 넘기지 않는다 — 단계는 StageDecision 하나**',
+    !/vars\.SORAN_(CAPACITY|RELEASE)_STAGE|vars\.SORAN_RELEASE_(CANARY|WINDOW)/.test(wfRaw))
+  check('D 🔴 발행 워크플로에 예약이 없다(두 번째 schedule owner 0)', retiredPublishWorkflowProblems(wfRaw).length === 0)
+  // 🔴 발행 예약은 launchd 러너 plist 가 갖는다 — 같은 cron 표현으로 읽어 아래 판정에 넣는다
+  const publishPlist = renderPublishRunnerPlist(AUTHORITY_RENDER_INPUT)
+  const wf = scheduleTextOfSlots(calendarSlots(publishPlist))
   check('D 🔴 누락이면 d1', resolveScale({}).releaseStage === 'd1'
-    && resolveScale({ [CAPACITY_ENV]: '', [RELEASE_ENV]: '' }).releaseStage === 'd1')
+    && resolveScale(markedStageEnv({ [CAPACITY_ENV]: '', [RELEASE_ENV]: '' })).releaseStage === 'd1')
   // 🔴 앞뒤 공백은 **의도적으로 다듬는다** — GH vars 에 흔한 실수이고, 다듬는 쪽이 안전하다
   check('D 🟢 "d10 " 은 공백만 다듬어 d10 으로 읽는다', resolveRuntimeStage('d10 ').stage === 'd10')
   for (const bogus of ['d2', 'D5', 'd 10', 'daily', '5', 'true', 'd10;d1']) {
-    const r = resolveScale({ [CAPACITY_ENV]: bogus, [RELEASE_ENV]: bogus })
+    const r = resolveScale(markedStageEnv({ [CAPACITY_ENV]: bogus, [RELEASE_ENV]: bogus }))
     check(`D 🔴 허용 밖 "${bogus}" → d1`, r.releaseStage === 'd1' && r.capacityStage === 'd1')
   }
-  const d5 = resolveScale({ [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' })
+  const d5 = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' }))
   check('D 🟢 정상 d5 → 러너가 d5 를 쓴다', d5.releaseProfile.dailyTarget === 5
     && effectiveWeeklyCap(d5.releaseProfile.postsPerWeek, d5.releaseProfile.minDaysBetween) === 4)
-  check('D 🟢 그때 워크플로우가 내야 할 cron 은 5줄이다', cronLines(d5.releaseProfile).length === 5)
-  // 🔴 이제 yml 은 **모든 단계의 합집합**을 예약한다 — d5 슬롯이 전부 들어 있어야 한다
-  check('D 🟢 yml 에 d5 슬롯이 하나도 빠지지 않았다',
+  check('D 🟢 그때 d5 가 쓰는 회차는 5개다', cronLines(d5.releaseProfile).length === 5)
+  // 🔴 launchd 러너는 **모든 단계의 합집합**을 예약한다 — d5 슬롯이 전부 들어 있어야 한다
+  check('D 🟢 launchd 예약에 d5 슬롯이 하나도 빠지지 않았다',
     compareWorkflow(d5.releaseProfile, wf).filter((m) => m.kind === 'missing').length === 0)
   check('D 🟢 d5 는 실제로 하루 5번 불린다', scheduledRunsPerDay('d5', wf) === 5)
 
@@ -400,7 +414,7 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
   check('H 🔴 --limit 없음·0·소수도 거부',
     !judgeManualLimit(null).ok && !judgeManualLimit(0).ok && !judgeManualLimit(1.5).ok)
   // 🔴 **환경이 d10 이어도 수동 상한은 안 바뀐다** — env 는 인자로만 들어오므로 값이 고정이다
-  const envD10 = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' })
+  const envD10 = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }))
   check('H 🔴 env 가 d10 이어도 수동 상한은 1', envD10.releaseProfile.dailyTarget === 10 && MANUAL_PUBLISH_CAP === 1)
   check('H 🔴 수동 도구는 설치하지 않는다 (결정 우회 금지)', (() => {
     const src = codeOf('scripts/original-post-publish-live.mts')
@@ -412,7 +426,7 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
     /judgeManualLimit\(LIMIT\)/.test(codeOf('scripts/original-post-publish-live.mts')))
   // 🔴 자동 레인은 결정이 d10 이면 d10 을 받는다 — 확장 경로가 막힌 것이 아니다
   check('H 🟢 자동 레인은 결정 d10 이면 d10 을 받는다',
-    resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }).releaseProfile.dailyTarget === 10)
+    resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' })).releaseProfile.dailyTarget === 10)
   // 🔴 트랜잭션 재판정은 그대로다
   check('H 🔴 트랜잭션 재판정 — 수동 단건(manual-live)은 주입 상한 · 예약은 단계 목표로 다시 판정한다',
     /dailyCap = input\.mode\.dailyCap/.test(read('src/lib/original-post-publish-tx.ts'))
@@ -481,8 +495,8 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
   resetScale()
 }
 
-// ── ④ 슬롯 · 워크플로우 렌더 (🔴 실제 yml 대조) ──
-console.log('\n④ 슬롯 → 워크플로우')
+// ── ④ 슬롯 · 발행 예약 렌더 (🔴 실제 launchd 러너 plist 대조 — 2026-09-30 GitHub 예약 제거) ──
+console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
 {
   check('분 단위 계산', minuteOfDay({ hour: 1, minute: 30 }) === 90)
   check('KST 표기', slotLabel({ hour: 0, minute: 5 }) === '00:05')
@@ -495,7 +509,8 @@ console.log('\n④ 슬롯 → 워크플로우')
   check('🔴 슬롯 표현 가능성 검사', verifySlotRenderable({ hour: 24, minute: 0, count: 1 }).length > 0
     && verifySlotRenderable({ hour: 0, minute: 5, count: 1 }).length === 0)
 
-  const yml = read('.github/workflows/auto-publish.yml')
+  const plist = renderPublishRunnerPlist(AUTHORITY_RENDER_INPUT)
+  const yml = scheduleTextOfSlots(calendarSlots(plist))
   const have = parseCronLines(yml)
   // 🔴 **yml 은 모든 단계 슬롯의 합집합을 예약한다** (2026-09-12).
   //    옛 판은 cron 이 하나(00:05 KST)뿐이었다. 그래서 단계를 d10 으로 올려도 하루 한 번만
@@ -503,7 +518,7 @@ console.log('\n④ 슬롯 → 워크플로우')
   //    cron 은 파일 고정이라 변수로 못 바꾼다 — 합집합을 예약하고 러너가 자기 회차를 고른다.
   // 🔴 **계약은 "빠짐없이 담는다" 다.** 슬롯을 바꾸면 yml 을 함께 갱신하면 된다 —
   //    포함 관계나 개수를 여기서 고정하지 않는다.
-  check('🔴 yml 이 allStageCronLines() 를 빠짐없이 담는다 (주석은 세지 않는다)',
+  check('🔴 launchd 러너 예약이 allStageCronLines() 를 빠짐없이 담는다',
     allStageCronLines().every((c) => have.includes(c)))
   check('🔴 계획에 없는 회차를 예약하지 않는다', have.every((c) => allStageCronLines().includes(c)))
 
@@ -624,33 +639,16 @@ console.log('\n④ 슬롯 → 워크플로우')
     new Set(allStageCronLines()).size === allStageCronLines().length)
   // 🔴 슬롯이 두 번 돌아도 하루 상한을 넘지 않는다 — 상한은 러너가 지킨다
   check('🔴 중복 실행에도 하루 상한이 지켜진다', dailyCeiling(PROFILES.d10, 2) === 10 && dailyCeiling(PROFILES.d1, 5) === 1)
-  // 🔴 워크플로우가 예약을 러너에 그대로 넘긴다 — 이것이 없으면 슬롯 판정이 불가능하다
-  check('🔴 yml 이 github.event.schedule 을 러너에 넘긴다',
-    /SLOT_CRON:\s*\$\{\{\s*github\.event\.schedule\s*\}\}/.test(yml)
-    && /--slot-cron=/.test(yml))
-  // 🔴 수동 실행은 여전히 dry-run 이다
-  // 🔴 발행 명령이 붙은 줄이 **어느 조건 아래**에 있는가 — 줄 단위로 본다
-  const runLines = yml.split('\n')
-  const condOfPublishLines = runLines
-    .map((l, i) => ({ l, i }))
-    .filter(({ l }) => l.includes('original-post-auto-publish.mts'))
-    .map(({ i }) => {
-      // 위로 올라가며 가장 가까운 `if:` 를 찾는다
-      for (let k = i; k >= 0; k -= 1) {
-        const m = /if:\s*github\.event_name == '(\w+)'/.exec(runLines[k] ?? '')
-        if (m?.[1] !== undefined) return { cond: m[1], line: runLines[i] ?? '' }
-      }
-      return { cond: '(없음)', line: runLines[i] ?? '' }
-    })
-  check('🔴 러너를 부르는 곳은 두 군데다 — 수동·스케줄', condOfPublishLines.length === 2)
-  check('🔴 수동 실행(workflow_dispatch)은 --apply 를 붙이지 않는다',
-    condOfPublishLines.filter((x) => x.cond === 'workflow_dispatch')
-      .every((x) => !x.line.includes('--apply')))
-  check('🔴 실제 발행은 schedule 경로에서만 --apply --limit=1 한다', (() => {
-    const sched = condOfPublishLines.filter((x) => x.cond === 'schedule')
-    return sched.length === 1 && sched[0]!.line.includes('--apply')
-      && sched[0]!.line.includes('--limit=1') && sched[0]!.line.includes('--slot-cron=')
-  })())
+  // 🔴 (2026-09-30) 발행 예약은 launchd 러너 하나 — consumer 를 지나 `--apply --limit=1 --trigger=local` 로 부른다
+  const argv = programArguments(plist)
+  const sep = argv.indexOf('--')
+  check('🔴 launchd 러너는 consumer(--by=publish)를 지난다',
+    argv.some((a) => a.endsWith('scripts/stage-consume-exec.mts')) && argv.includes('--by=publish') && sep > 0
+    && argv.slice(sep + 1).some((a) => a.endsWith('scripts/original-post-auto-publish.mts')))
+  check('🔴 실제 발행은 launchd 경로에서만 --apply --limit=1 --trigger=local 한다',
+    argv.includes('--apply') && argv.includes('--limit=1') && argv.includes('--trigger=local'))
+  const wfLines = read('.github/workflows/auto-publish.yml').split('\n').filter((l) => !l.trim().startsWith('#'))
+  check('🔴 수동 실행(workflow_dispatch)은 --apply 를 붙이지 않는다', !wfLines.some((l) => l.includes('--apply')))
 }
 
 // ── ⑤ 공급 모델 (🔴 근거·실제 plist 대조) ──
@@ -1041,12 +1039,10 @@ console.log('\n⑩ 소스 계약')
   check('🔴 health 가 설정 불일치를 화면에 적는다', /configMismatch/.test(health)
     && /설정 불일치/.test(read('scripts/supply-health.mts')))
   /**
-   * 🔴 **워크플로는 모든 단계의 합집합이다** (2026-09-21 보정).
-   *    활성 단계 프로필과 견주면 d1 에서 10개 중 9개가 거짓 경보로 잡혔다(실측).
-   *    이제 `compareWorkflowSuperset` 으로 본다 — 빠진 단계 슬롯과 계획에 없는 cron 만 잡는다.
+   * 🔴 (2026-09-30) 발행 예약의 정본은 launchd 러너다 — health 는 GitHub 발행 예약이 되살아났는지를 본다.
    */
-  check('🔴 health 가 워크플로우 어긋남을 본다 — 합집합 기준으로',
-    /compareWorkflowSuperset\(/.test(health) && /workflowMismatch/.test(health)
+  check('🔴 health 가 워크플로우 어긋남을 본다 — GitHub 발행 예약 부활',
+    /retiredPublishWorkflowProblems\(/.test(health) && /workflowMismatch/.test(health)
     && /워크플로우 불일치/.test(read('scripts/supply-health.mts')))
   check('🔴 🔴 **활성 단계 프로필로 견주던 옛 판이 돌아오지 않았다**',
     !/compareWorkflow\(resolved\.releaseProfile/.test(health))

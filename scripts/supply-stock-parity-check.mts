@@ -29,6 +29,7 @@ import {
   currentQualityContract, readQualityContract, QUALITY_CONTRACT_KEY, QUALITY_CONTRACT_VERSION,
 } from '../src/lib/quality-contract'
 import { digestOf } from '../src/lib/auto-ready-v2'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -223,7 +224,7 @@ console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽
 {
   for (const rel of RELEASE_STAGES) {
     for (const cap of RELEASE_STAGES) {
-      const scale = resolveScale({ [RELEASE_ENV]: rel, [CAPACITY_ENV]: cap })
+      const scale = resolveScale(markedStageEnv({ [RELEASE_ENV]: rel, [CAPACITY_ENV]: cap }))
       const p = supplyPlanningProfile(scale)
       if (!(p.stage === scale.capacityStage && sameProfile(p.profile, scale.capacityProfile)
         && sameProfile(p.profile, RUNTIME_PROFILES[scale.capacityStage]))) {
@@ -232,7 +233,7 @@ console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽
     }
   }
   check('🔴 모든 release × capacity 조합에서 공급 눈금 = capacity (새 단계 없음)', true)
-  const s15 = resolveScale({ [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd5' })
+  const s15 = resolveScale(markedStageEnv({ [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd5' }))
   check('🔴 🔴 **release d1 · capacity d5 → 공급 d5 · 발행 d1**',
     supplyPlanningProfile(s15).stage === 'd5' && s15.releaseStage === 'd1' && sameProfile(s15.releaseProfile, PROFILES.d1))
 }
