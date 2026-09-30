@@ -13,7 +13,8 @@
  *   ② 생활사 얇은 축을 메우는 골격 — 결정론 (`proposeLifeSkeletons`)
  *   ③ 말투   아직 배정되지 않은 정본 화자 — 운영과 같은 규칙 (`voicePoolFor`)
  *   ④ creative 🔴 LLM 단계 — **구현하지 않았다.** `--supplement` 로 받은 것만 쓴다
- *   ⑤ 검증   운영 검증기 그대로 (`judgeAutogenCandidate`) → valid / quarantined / rejected
+ *   ⑤ 검증   운영 검증기 그대로 (`judgeAutogenBatch` → `judgeAutogenCandidate` · 겹침 · 문체 거리)
+ *            → valid / quarantined / rejected
  *   ⑥ 계획   valid 만 활성화 계획에 올린다 — 문서 카드 · cohort manifest · seed · activate
  *
  * 🔴 출력에는 코드·개수·사유 코드만 나온다. 코퍼스 원문 · 화자 식별자 · 회원 이름은 나오지 않는다.
@@ -30,7 +31,7 @@ import {
   subjectOfCard, subjectOfLife, thinLifeAxisCount,
   type AutogenCandidate, type Cadence, type DisplayNameCheck, type PersonaCreative,
 } from '../src/lib/persona-autogen'
-import { judgeAutogenCandidate, voicePoolFor, type AutogenVerdict } from './lib/persona-autogen.mjs'
+import { judgeAutogenBatch, voicePoolFor, type AutogenVerdict } from './lib/persona-autogen.mjs'
 import { applyAutogenDrafts } from './lib/persona-autogen-apply.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -125,21 +126,22 @@ if (SUPPLEMENT !== null) {
 const names = db === null ? null : assignCandidates(codes, db.isTaken)
 const cadence = db === null ? null : modeCadence(db.cadences)
 
-// ── ⑤ 검증 ──
-const verdicts: AutogenVerdict[] = codes.map((code) => {
-  const v = voice.byCode.get(code) ?? null
+// ── ⑤ 검증 — 🔴 한 명씩 + 서로·정본과 겹치는가(성격·관점·noGo·말투) ──
+const cands: AutogenCandidate[] = codes.map((code) => {
   const name = names?.picked.get(code) ?? null
-  const cand: AutogenCandidate = {
+  return {
     code,
     life: lifeOf.get(code) ?? null,
     creative: creative[code] ?? null,
-    voice: v,
+    voice: voice.byCode.get(code) ?? null,
     cadence,
     // 🔴 자동 후보는 언제나 **새 User** 를 만든다 — 계정 0 · providerId 없음이 사실이다
     binding: { accountCount: 0, providerId: null },
     displayName: db === null || name === null ? null : { name, gate: db.gateOf(name) },
   }
-  const verdict = judgeAutogenCandidate(cand, { takenCodes: taken })
+})
+const batch = judgeAutogenBatch(cands, { takenCodes: taken, existingCards: pool.cards, productionBundles: voice.productionBundles })
+const verdicts: AutogenVerdict[] = batch.verdicts.map((verdict) => {
   if (!voice.ok) {
     verdict.blocks.push('VOICE_ASSIGNMENT_DRIFT')
     verdict.status = verdict.status === 'rejected' ? 'rejected' : 'quarantined'
@@ -153,6 +155,7 @@ console.log(`  자산 ${voice.code} · 3건↑ 안전 화자 ${voice.eligibleSpe
   + ` · 남은 화자 ${Math.max(0, voice.eligibleSpeakers - voice.assignedSpeakers)}`)
 console.log(`  운영 active 인데 말투 없음 ${voice.productionWithoutVoice.length} (${voice.productionWithoutVoice.join('·') || '—'}) — 새 화자는 여기부터 간다`)
 console.log(`  새 코드에 돌아간 묶음 ${voice.byCode.size}/${codes.length}${voice.drift.length > 0 ? ` · 🔴 운영 배정 변동 ${voice.drift.join('·')}` : ''}`)
+console.log(`  문체 분리 기준(운영 묶음 최소 거리) ${batch.voiceBaseline === null ? '모름' : batch.voiceBaseline.toFixed(3)}`)
 console.log(`\n── 생활사 골격 ${skeletons.length}/${codes.length} · 얇은 생활사 축 ${thinBefore} → ${thinAfter}`)
 
 console.log('\n── 후보 판정 (코드만)')

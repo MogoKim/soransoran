@@ -55,6 +55,10 @@ export const AUTOGEN_BLOCK_CODES = [
   'LLM_STEP_UNIMPLEMENTED',
   'CARD_PARSE_FAILED', 'SEED_INVALID',
   'POST_INELIGIBLE', 'COMMENT_INELIGIBLE',
+  // 🔴 4상태 계약(`persona-reserve` `contractAxes`) — 운영 계기판과 같은 판정이 막은 것
+  'QUALIFICATION_CONFLICT', 'CONTRACT_INVALID',
+  // 🔴 이름만 다른 사람 — 후보·정본 카드와 성격·관점·noGo·말투가 겹친다
+  'NEAR_DUPLICATE_PERSONA', 'VOICE_TOO_CLOSE', 'VOICE_SEPARATION_UNMEASURED',
 ] as const
 export type AutogenBlockCode = (typeof AUTOGEN_BLOCK_CODES)[number]
 
@@ -511,4 +515,83 @@ export function isNameOnly(c: AutogenCandidate): boolean {
     || (c.creative.personality.length === 0 && c.creative.noGoTopics.length === 0
       && c.creative.noGoExpressions.length === 0)
   return c.life === null && c.voice === null && creativeEmpty
+}
+
+// ─────────────────────────────────────────────────────────
+// 이름만 다른 사람 — 🔴 성격 · 관점 · noGo · 생활사 겹침 (2026-09-30)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **비교 대상 한 사람** — 정본 카드도, 이번 배치의 후보도 같은 모양으로 본다.
+ *    `title` 은 카드 제목 = 이 사람이 세상을 보는 **관점** 한 줄이다(예: "시어머니 모시는 맏며느리").
+ */
+export type DistinctSubject = {
+  code: string
+  title: string
+  personality: readonly string[]
+  noGoTopics: readonly string[]
+  noGoExpressions: readonly string[]
+  life: {
+    ageBand: string; maritalStatus: string; childrenAgeBands: readonly string[]
+    workStatus: string; economicStatus: string; housing: string; parentCare: string
+  }
+}
+
+/**
+ * 🔴 **겹침 상한** — 성격어(또는 noGo) 집합이 **절반을 넘게** 같으면 같은 성격이다.
+ *    쏠림 상한(`TOPIC_SHARE_CAP` 0.5)과 같은 뜻: 절반을 넘으면 "그 사람만의 것" 이 아니다.
+ */
+export const DISTINCT_OVERLAP_MAX = 0.5
+/** 🔴 생활사 7칸 중 이 수 이하만 다르면 생활사가 "거의 같다" — 한 칸 차이 */
+export const LIFE_NEAR_DIFF_MAX = 1
+
+const norm = (s: string): string => s.replace(/["'“”‘’\s·,.()~]/g, '').replace(/류$/, '')
+const jaccard = (a: readonly string[], b: readonly string[]): number => {
+  const A = new Set(a.map(norm).filter((x) => x !== ''))
+  const B = new Set(b.map(norm).filter((x) => x !== ''))
+  if (A.size === 0 && B.size === 0) return 0
+  let inter = 0
+  for (const x of A) if (B.has(x)) inter += 1
+  return inter / (A.size + B.size - inter)
+}
+const lifeDiff = (a: DistinctSubject['life'], b: DistinctSubject['life']): number => [
+  a.ageBand !== b.ageBand, a.maritalStatus !== b.maritalStatus,
+  a.childrenAgeBands.join('/') !== b.childrenAgeBands.join('/'), a.workStatus !== b.workStatus,
+  a.economicStatus !== b.economicStatus, a.housing !== b.housing, a.parentCare !== b.parentCare,
+].filter(Boolean).length
+
+export const distinctSubjectOfCard = (c: PoolCard): DistinctSubject => ({
+  code: c.code, title: c.title, personality: c.personality,
+  noGoTopics: c.noGoTopics, noGoExpressions: c.noGoExpressions,
+  life: {
+    ageBand: c.ageBand, maritalStatus: c.maritalStatus, childrenAgeBands: c.childrenAgeBands,
+    workStatus: c.workStatus, economicStatus: c.economicStatus, housing: c.housing, parentCare: c.parentCare,
+  },
+})
+
+/**
+ * 🔴 **이 후보가 누군가와 이름만 다른 사람인가** — 겹친 상대마다 한 줄. 비어 있으면 다른 사람이다.
+ *
+ *    관점     제목이 (기호를 뺀 뒤) 같다                          → 같은 관점의 사람
+ *    복제     성격 집합과 noGo 집합이 **둘 다** 상한을 넘게 겹친다  → 생활사가 달라도 같은 사람
+ *    근접     생활사가 한 칸 이하로 다르고 성격 또는 noGo 가 상한을 넘게 겹친다
+ *
+ * 🔴 **생활사 한 칸 차이만으로는 막지 않는다.** 같은 또래 여성은 생활사가 많이 겹치는 것이
+ *    자연스럽다 — 사람을 가르는 것은 성격·관점·금기·말투다. 그것까지 겹칠 때만 막는다.
+ */
+export function judgeDistinctness(c: DistinctSubject, peers: readonly DistinctSubject[]): string[] {
+  const out: string[] = []
+  for (const p of peers) {
+    if (p.code === c.code) continue
+    const pers = jaccard(c.personality, p.personality)
+    const nogo = jaccard([...c.noGoTopics, ...c.noGoExpressions], [...p.noGoTopics, ...p.noGoExpressions])
+    const diff = lifeDiff(c.life, p.life)
+    if (norm(c.title) !== '' && norm(c.title) === norm(p.title)) out.push(`${p.code}: 관점(제목)이 같다`)
+    else if (pers > DISTINCT_OVERLAP_MAX && nogo > DISTINCT_OVERLAP_MAX) {
+      out.push(`${p.code}: 성격 ${pers.toFixed(2)} · noGo ${nogo.toFixed(2)} 겹침 — 생활사만 다른 같은 사람`)
+    } else if (diff <= LIFE_NEAR_DIFF_MAX && (pers > DISTINCT_OVERLAP_MAX || nogo > DISTINCT_OVERLAP_MAX)) {
+      out.push(`${p.code}: 생활사 ${diff}칸 차이 · 성격 ${pers.toFixed(2)} · noGo ${nogo.toFixed(2)}`)
+    }
+  }
+  return out
 }
