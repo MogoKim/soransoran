@@ -1,6 +1,6 @@
 # 현재 실행 — 자동 D100 커뮤니티
 
-> as-of: 2026-09-30 21:20 KST
+> as-of: 2026-10-01 02:05 KST
 > 마지막 창업자 동기화: 2026-09-30 (opportunity → conversation 하나의 루프)
 >
 > 이 문서는 **검증된 현재 상태와 다음 critical path** 만 적는다. 정책과 숫자는 적지 않는다.
@@ -15,12 +15,12 @@
 
 | 항목 | 값 | 근거 |
 |---|---|---|
-| origin/main | `dd0c017` | `git fetch` 2026-09-30 |
+| origin/main | `dd0c017` (변경 없음) | `git fetch` 2026-10-01 |
 | runtime | `2c88642` (#635 포함) | D100 경로 코드는 main 과 같다. 차이는 브랜드 에셋·매거진 파일뿐 |
 | 오늘 단계 결정 | **PREPARE d1** (2026-09-30) | 아래 §3 |
 | 다음 증명일 | **새 계약의 D3 증명일 없음** — 2026-10-01 D3 시험은 옛 runtime(`2c88642` · stage-decision-v4)에서만 성립한다 | 새 계약(source-slot-v1)은 D1→D3 부터 다시 증명한다. 계약 유효 Persona 0 이라 D3 preflight 가 `PERSONA_SHORT` 로 열리지 않는다(아래 §2) |
-| 새 루프 구조 (source-to-slot · JIT · 단일 준비도 · Persona 4상태 · 루프 깔때기) | **로컬 통합 브랜치에 구현 · main 미반영 · 미배포** | 코드 레인 작업 중 |
-| 단계 authority 하나 · 자동 일정 owner(launchd) 하나 | **구현 중 · 미배포** | runtime 은 아직 GitHub 발행 예약 + 로컬 heartbeat, 사람 천장 env 를 읽는다(C4) |
+| 새 루프 구조 (source-to-slot · JIT · 단일 준비도 · Persona 4상태 · 루프 깔때기) | **Draft PR #639 · head `dbd194b` · CI green · CLEAN · MERGEABLE · main 미반영 · 미배포** | runtime 은 `2c88642` 그대로 |
+| 단계 authority 하나 · 자동 일정 owner(launchd) 하나 | **#639 에 구현 · 미배포** | GitHub `auto-publish` 예약은 **`disabled_manually`**(2026-09-30) — 지금 운영 발행 주체는 **launchd 하나**다. runtime 은 아직 사람 천장 env 를 읽는다(C4) |
 
 ## 2. 상태 — code / deployed / operating PASS 를 섞지 않는다
 
@@ -36,7 +36,7 @@
 | JIT 공급 · 단일 준비도 | ❌ | ❌ | ❌ | 통합 브랜치는 700 정지선·14일 감속·재고선 화면을 지웠다. main · runtime 에는 아직 남아 있다(옛 경로) |
 | 자동 사다리 (사람 env 0) | 부분 | 부분 | ❌ | controller 는 돈다. 단계 입력원이 여럿이고 사람 천장 env 를 읽는다(옛 경로) |
 | 공급 예산 천장 | 부분 | 부분 | ❌ | 2026-09-28 공급 장부 $1.1925 > 승인 $0.50 (손 실행 env). main 에서 그 경로는 닫혔고 남은 우회 두 개를 비용 레인이 고치는 중 |
-| Persona 4상태 · contract-valid 수 | ❌ | ❌ | ❌ | 4상태 판정은 통합 브랜치에 있다(main 미반영 · 미배포). 운영 DB 읽기 전용 실측: 계약 유효 **0** · active 24 는 용량이 아니다 · 카드↔DB 자격 충돌 5명(P05·P07·P10·P15·P17). 다음 단계 preflight 는 **올라갈 단계의** 하한을 보므로 D3 하한 24 가 먼저 막는다 — **D1→D3 부터 `PERSONA_SHORT`** |
+| Persona 4상태 · contract-valid 수 | ❌ | ❌ | ❌ | 4상태 판정은 #639 에 있다(main 미반영 · 미배포). 운영 DB 읽기 전용 실측(2026-10-01 01시 · 쓰기 0): 계약 유효 **0** · active 24 는 용량이 아니다 · 축별 — lifeAxes 막힘 16 · 말투 근거 막힘 6(P20~P25) · 자격 막힘 5(P05·P07·P10·P15·P17 카드↔DB seed 불일치) · 자격 모름 19(`VOICE_AUTHOR_HASH_SALT` 없음) · 소재 모름 18. 소재 표본 하한 정합 PR(`fix/persona-contract-consistency`, #639 위) 적용 시 소재 모름 **18 → 1(P02)** · 계약 유효는 **0 그대로**(salt). 다음 단계 preflight 는 **올라갈 단계의** 하한을 보므로 D3 하한 24 가 먼저 막는다 — **D1→D3 부터 `PERSONA_SHORT`** |
 | 선택적 다중 턴 답글 | ❌ | ❌ | ❌ | 설계 전. 첫 댓글 운영이 먼저다 |
 | 상시 실행 호스트 하나 | 부분 | ❌ | ❌ | 보조 MacBook cutover 미완료 |
 | 82cook 수집 | 부분 | ❌ | ❌ | 수집 job 미설치. 마지막 artifact 2026-09-12. 공급원은 네이버 카페 둘 |

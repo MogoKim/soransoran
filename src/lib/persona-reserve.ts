@@ -196,8 +196,12 @@ export function roleShareOf(h: ActivityHistory): { value: number; evidence: stri
 /**
  * 🔴 **소재 쏠림** — 소재를 담는 칸이 어느 표에도 없다(Persona 글 `Post.category` 전부 null ·
  *    `PersonaApprovalQueue.topicTags` 채워진 행 0 · 수집 원문·후보에 소재 칸 없음).
- *    🔴 **소재 정의 없이 분류표를 지어내지 않는다.** 그래서 활동이 한 건이라도 있으면 모른다.
- *    활동이 0 이면 분류할 것이 없다 — 0 은 정의가 없어도 참이다(측정한 사실).
+ *    🔴 **소재 정의 없이 분류표를 지어내지 않는다.**
+ *    표본 하한은 역할 쏠림과 **같은 정본 `SHARE_MIN_EVENTS`** 다(Gate ⑧ 과 같은 규칙):
+ *      활동 0                    → 0 · none(분류할 것이 없다)
+ *      활동 1 ~ SHARE_MIN_EVENTS-1 → 0 · thin(비율 자체를 재지 않는 구간 — 라벨이 있어도 답이 같다)
+ *      그 이상                    → 소재 라벨이 없으므로 **모른다**
+ *    🔴 앞판은 활동이 한 건이라도 있으면 모른다고 했다 — 라벨이 판정을 바꿀 수 없는 구간까지 모름으로 두었다(2026-10-01 실측 17/18명).
  */
 export const TOPIC_UNKNOWN_REASON =
   '소재 정의가 없다 — Post.category(Persona 글 전부 null)·Queue.topicTags(0행)·원문 어디에도 소재 칸이 없고, '
@@ -205,6 +209,7 @@ export const TOPIC_UNKNOWN_REASON =
 
 export function topicShareOf(h: ActivityHistory): { value: number; evidence: string } | { unknown: string } {
   if (h.recentEvents === 0) return { value: 0, evidence: 'none' }
+  if (h.recentEvents < SHARE_MIN_EVENTS) return { value: 0, evidence: `thin(${h.recentEvents}<${SHARE_MIN_EVENTS})` }
   return { unknown: TOPIC_UNKNOWN_REASON }
 }
 
