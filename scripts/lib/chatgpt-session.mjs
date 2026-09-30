@@ -29,7 +29,7 @@ import { existsSync, lstatSync, readlinkSync, mkdirSync, chmodSync, writeFileSyn
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { deliveryFingerprintOf } from './magazine-quarantine.mjs'
-import { readConversationDom, createResponseWatch } from './chatgpt-response.mjs'
+import { readConversationDom, createResponseWatch, extractManuscript } from './chatgpt-response.mjs'
 
 /** 🔴 응답 관찰 — 간격 2초 · 연속 3번 같으면 안정 (전체 한도는 `timeoutMs` 그대로) */
 export const RESPONSE_POLL_MS = 2000
@@ -823,6 +823,100 @@ export async function probe({
  * @param {(text: string) => { ok: boolean, reasons?: {code:string, why:string}[] }} [validate]
  * @returns {{ ok: boolean, reason?: string, length?: number, sent: boolean }}
  */
+/**
+ * 저장 전 관문 — 🔴 회수(`fetchManuscript`)와 무전송 회수(`recoverManuscript`)가 **같은 함수**를 지난다.
+ *    지정 문장(requiredMarkers) → 원고 관문(frontmatter·H2·CTA). 원고를 고치지 않고 판정만 한다.
+ */
+export function checkManuscript(text, { requiredMarkers = [], validate = null } = {}) {
+  const missing = requiredMarkers.filter((m) => !text.includes(m))
+  if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length }
+  if (validate) {
+    const v = validate(text)
+    if (!v.ok) return { ok: false, reason: 'invalid_manuscript', invalid: v.reasons ?? [] }
+  }
+  return { ok: true }
+}
+
+/** 신원 대조용 정규화 — 공백·코드 표시 차이만 지운다 (사용자 말풍선은 마크다운 일부를 그려 보여 준다) */
+const identityNorm = (t) => String(t ?? '').replace(/`/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * 🔴 **이미 온 응답을 다시 보내지 않고 회수한다** (2026-09-30 · 무전송 회수).
+ *
+ *    보낸 원고가 판독 결함으로 저장되지 못했을 때, 같은 brief 를 다시 보내면 중복 전송이다.
+ *    그래서 **신원이 확정된 기존 대화 하나**만 열어 원문을 읽는다.
+ *
+ *    🔴 이 함수는 composer·send·키보드를 **참조하지 않는다** — 전송 경로가 코드에 없다.
+ *    🔴 신원: 주소가 `https://chatgpt.com/c/<id>` 그대로 열리고 · 사용자 메시지 1 · assistant 응답 1 ·
+ *       그 사용자 메시지가 **우리가 보낸 메시지와 같다**(공백·코드 표시만 무시). 하나라도 어긋나면 저장 0.
+ *    🔴 원문은 `extractManuscript` 하나로 꺼내고, 관문은 `checkManuscript` 하나로 본다 — 회수 경로와 같다.
+ *    🔴 이미 draft 가 있으면 덮지 않는다.
+ */
+export async function recoverManuscript({
+  conversationUrl, expectedMessage, outPath, requiredMarkers = [], validate = null,
+  connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS, settleMs = 6000, connect, ensureTab,
+  /** 🔴 true 면 신원·원문·관문까지만 보고 **쓰지 않는다** (실제 회수 전 점검) */
+  checkOnly = false,
+}) {
+  if (!/^https:\/\/chatgpt\.com\/c\/[0-9a-f-]{20,}$/.test(String(conversationUrl ?? ''))) {
+    return { ok: false, reason: 'recover_bad_url', sent: false, errorDetail: '대화 주소가 https://chatgpt.com/c/<id> 형태가 아니다' }
+  }
+  if (!expectedMessage) return { ok: false, reason: 'recover_no_expected_message', sent: false }
+  if (existsSync(outPath)) return { ok: false, reason: 'recover_draft_exists', sent: false, errorDetail: 'draft.md 가 이미 있다 — 덮지 않는다' }
+  const tab = await (ensureTab ?? ensurePageTarget)()
+  if (!tab.ok) return { ok: false, reason: STATUS.CHROME_NOT_RUNNING, sent: false }
+  const connectFn = connect ?? (async (url, opts) => {
+    const { chromium } = await import('playwright-core')
+    return chromium.connectOverCDP(url, opts)
+  })
+  let browser = null
+  let page = null
+  let stage = 'connect'
+  try {
+    browser = await connectFn(CDP_URL, { timeout: connectTimeoutMs })
+    const ctx = browser.contexts()[0]
+    if (!ctx) return { ok: false, reason: 'no_context', stage, sent: false }
+    stage = 'open-conversation'
+    page = await ctx.newPage()
+    await page.goto(conversationUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+    await page.waitForTimeout(settleMs)
+    const where = { conversationUrl: safeUrl(page) }
+    if (where.conversationUrl !== conversationUrl) {
+      return { ok: false, reason: 'recover_identity_mismatch', stage, sent: false, ...where, errorDetail: '다른 주소로 열렸다 — 저장하지 않는다' }
+    }
+    stage = 'read'
+    const snap = await page.evaluate(readConversationDom).catch(() => null)
+    if (!snap?.readOk || snap.stop) {
+      return { ok: false, reason: 'response_unreadable', stage, sent: false, ...where, errorDetail: '대화를 읽지 못했거나 아직 생성 중이다' }
+    }
+    const users = snap.units.filter((u) => u.role === 'user')
+    const assistants = snap.units.filter((u) => u.role === 'assistant')
+    if (users.length !== 1 || assistants.length !== 1 || !assistants[0].id) {
+      return { ok: false, reason: 'recover_identity_mismatch', stage, sent: false, ...where,
+        errorDetail: `사용자 ${users.length} · 응답 ${assistants.length} — 한 번 보낸 한 대화가 아니다` }
+    }
+    if (identityNorm(users[0].text) !== identityNorm(expectedMessage)) {
+      return { ok: false, reason: 'recover_identity_mismatch', stage, sent: false, ...where, assistantMessageId: assistants[0].id,
+        errorDetail: '대화의 사용자 메시지가 우리가 보낸 메시지와 다르다 — 저장하지 않는다' }
+    }
+    const ex = extractManuscript(assistants[0])
+    const at = { ...where, assistantMessageId: assistants[0].id, responseForm: ex.ok ? ex.via : ex.form }
+    if (!ex.ok) return { ok: false, reason: ex.code, stage, sent: false, ...at, errorDetail: ex.why }
+    const g = checkManuscript(ex.text, { requiredMarkers, validate })
+    if (!g.ok) return { ...g, stage: 'validate', sent: false, length: ex.text.length, ...at }
+    if (checkOnly) return { ok: true, checkOnly: true, sent: false, length: ex.text.length, via: ex.via, ...at }
+    stage = 'write'
+    writeFileSync(outPath, ex.text, { flag: 'wx' })
+    return { ok: true, sent: false, length: ex.text.length, via: ex.via, ...at }
+  } catch (err) {
+    return { ok: false, reason: 'connect_failed', stage, sent: false,
+      errorName: err?.name ?? 'Error', errorDetail: String(err?.message ?? '').split('\n')[0].slice(0, 200) }
+  } finally {
+    try { await page?.close() } catch { /* 이미 닫혔으면 그만 */ }
+    try { await browser?.close() } catch { /* 연결만 끊는다 */ }
+  }
+}
+
 export async function fetchManuscript({
   briefPath, outPath, promptText, requiredMarkers = [], validate = null, timeoutMs = 300000,
   connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
@@ -993,32 +1087,30 @@ export async function fetchManuscript({
       if (o.done) { text = o.text; seen = o; break }
       if (o.abort) {
         return { ok: false, reason: o.code, stage, sent, messageFingerprint, preRecorded,
-          conversationUrl: safeUrl(page), errorDetail: `${o.why} — 저장하지 않았다` }
+          conversationUrl: safeUrl(page), assistantMessageId: o.messageId ?? null, responseForm: o.form ?? 'unknown',
+          errorDetail: `${o.why} — 저장하지 않았다` }
       }
       seen = o
       if (Date.now() >= deadline) {
         // 🔴 닫기는 finally 가 한다 — 여기서 닫으면 뒤 경로가 닫힌 page 를 만진다
         return { ok: false, reason: 'response_timeout', stage, sent, messageFingerprint, preRecorded,
-          conversationUrl: safeUrl(page),
+          conversationUrl: safeUrl(page), assistantMessageId: seen?.messageId ?? null, responseForm: seen?.form ?? 'unknown',
           errorDetail: `응답이 끝나지 않았다 (${seen?.phase ?? '-'}${seen?.partial ? ` · 부분 ${seen.partial}자` : ''}) — 저장하지 않았다` }
       }
       await page.waitForTimeout(pollMs)
     }
 
-    // 지정 문장이 빠졌으면 저장하지 않는다 — 원고를 고치지 않고 되돌린다
-    const missing = requiredMarkers.filter((m) => !text.includes(m))
-    if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length, length: text.length, sent, messageFingerprint, preRecorded }
-
-    // 🔴 관문. 여기서 막히면 파일이 생기지 않는다 — 다음 실행이 깨끗한 상태에서 다시 받는다.
-    if (validate) {
-      const v = validate(text)
-      if (!v.ok) return { ok: false, reason: 'invalid_manuscript', invalid: v.reasons ?? [], length: text.length, sent, messageFingerprint, preRecorded }
-    }
+    /**
+     * 🔴 **실패해도 어느 대화의 어느 응답이었는지 남긴다** (2026-09-30).
+     *    앞판은 관문 실패 행에 대화 주소가 없어, 온전히 온 응답을 되찾으려면 사이드바를 뒤져 신원을 맞춰야 했다.
+     */
+    const where = { conversationUrl: safeUrl(page), assistantMessageId: seen?.messageId ?? null, responseForm: seen?.via ?? 'unknown' }
+    const g = checkManuscript(text, { requiredMarkers, validate })
+    if (!g.ok) return { ...g, stage: 'validate', length: text.length, sent, messageFingerprint, preRecorded, ...where }
 
     // 🔴 여기서 처음이자 마지막으로 원고가 디스크에 닿는다. 문자열을 손대지 않는다
     writeFileSync(outPath, text)
-    return { ok: true, length: text.length, sent, messageFingerprint, preRecorded, via: seen?.via ?? null,
-      conversationUrl: safeUrl(page) }
+    return { ok: true, length: text.length, sent, messageFingerprint, preRecorded, via: seen?.via ?? null, ...where }
   } catch (err) {
     /**
      * 🔴 **`connect_failed` 한 단어로 삼키지 않는다** (2026-09-27 사고).

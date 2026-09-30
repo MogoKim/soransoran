@@ -128,7 +128,7 @@ export function classifyFailure({ code = null, message = '', stage = null, sent 
 
   // 보냈는데 응답을 못 받았다 — 가장 먼저 가른다. 다시 보내면 안 되기 때문이다.
   // 🔴 응답을 식별·판독하지 못한 것도 같다 — 보냈으니 다시 보내면 안 된다 (2026-09-28 응답 회수 재설계)
-  if (sent && /response_timeout|response_ambiguous|response_unreadable/.test(text)) {
+  if (sent && /response_timeout|response_ambiguous|response_unreadable|response_format_unknown|response_multiple_candidates|response_rich_block_empty/.test(text)) {
     return { kind: 'DELIVERY_UNCERTAIN', why: '보냈지만 응답을 확인하지 못했다 — 다시 보내지 않는다' }
   }
   if (/DELIVERY_UNCERTAIN/.test(text)) {

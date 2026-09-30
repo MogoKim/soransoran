@@ -65,6 +65,9 @@ export function normalizeFetchResult(r = {}) {
     attemptId: r.attemptId ?? null,
     // 🔴 보낸 대화의 주소 — 전송불명 응답을 나중에 읽기 전용으로 회수할 근거
     conversationUrl: r.conversationUrl ?? null,
+    // 🔴 어느 응답을 어떤 형태로 읽었는가 — 실패해도 남긴다 (2026-09-30: 없어서 신원을 사이드바로 맞춰야 했다)
+    assistantMessageId: r.assistantMessageId ?? null,
+    responseForm: r.responseForm ?? null,
     prior: r.prior
       ? {
         sent: normalizeSent(r.prior.sent), kind: r.prior.kind ?? null, reason: r.prior.reason ?? null,

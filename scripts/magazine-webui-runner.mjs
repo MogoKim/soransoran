@@ -50,7 +50,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 import { ROOT, DRAFTS_DIR, loadQueue } from './lib/magazine-load.mjs'
 import { validateManuscript, describeReasons } from './lib/magazine-manuscript-guard.mjs'
 import {
-  probe, fetchManuscript, isFatal, browserAvailable, profileExists, profileInUse, cdpAvailable,
+  probe, fetchManuscript, recoverManuscript, isFatal, browserAvailable, profileExists, profileInUse, cdpAvailable,
   chromeArgs, CHROME_APP, CDP_PORT,
   STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE, buildManuscriptMessage,
   verifyAutomationProfile,
@@ -65,7 +65,7 @@ import {
   reserveDelivery, releaseDeliveryReservation, regenBudget, REGEN_EXHAUSTED_REASON,
   acquireManuscriptLease, MANUSCRIPT_IN_PROGRESS_REASON,
 } from './lib/magazine-quarantine.mjs'
-import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
+import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
 import { manuscriptPromptText, plannedMessageFor, deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
@@ -363,6 +363,86 @@ export function describeFetchFailure(r) {
   return `${where}${r?.reason ?? 'unknown'}${detail ? ` — ${detail}` : ''}${extra} · 전송 ${r?.sent ? '1건' : '0건'}`
 }
 
+/** brief 의 "반드시 그대로 넣을 문장" — 회수·무전송 회수가 **같은 대조 기준**을 쓴다 */
+function markersOf(brief) {
+  const markerBlock = String(brief ?? '').split('## 반드시 그대로 넣을 문장')[1]
+  return markerBlock
+    ? [...markerBlock.matchAll(/^\d+\.\s+(.+)$/gm)].map((m) => m[1].trim()).slice(0, 5)
+    : []
+}
+
+/**
+ * 🔴 **이미 온 응답을 다시 보내지 않고 회수한다** (2026-09-30 · Codex 승인 무전송 회수).
+ *
+ *    그날 원고는 온전히 왔는데 판독 결함(rich-block)으로 저장되지 못했다. 같은 brief 를 다시 보내면
+ *    중복 전송이다. 그래서 **세 가지가 모두 맞을 때만** 기존 대화에서 원문을 읽어 저장한다.
+ *      ① 지문 — 장부의 전송불명 기록 · 그날 회수 결과 행 · 지금 보낼 메시지가 **같은 지문**이다
+ *      ② 대화 — 결과 행에 주소가 있으면 그 주소와 같다 (없으면 사람이 신원을 확인해 넘긴 주소)
+ *      ③ 신원 — 그 대화의 사용자 메시지가 우리가 보낸 메시지와 같다 (`recoverManuscript`)
+ *    하나라도 어긋나면 **저장 0 · 장부 불변** — 기존 HOLD 가 그대로 남는다.
+ *
+ *    🔴 send·composer·ChatGPT 호출 0. attempts·regenCalls 는 건드리지 않는다.
+ *    🔴 성공하면 회수 성공 경로와 **같은 방식**(`releaseDeliveryReservation` · 그 예약 ID)으로만 기록을 푼다.
+ *    🔴 `checkOnly` 는 신원·원문·관문까지만 보고 아무것도 쓰지 않는다.
+ */
+export async function recoverSlug(slug, { conversationUrl, checkOnly = false, date = todayKst(),
+  resultPath = null, quarantinePath = QUARANTINE_PATH, draftsDir = DRAFTS_DIR, browserDeps = {},
+  /** 🔴 전용 자동화 프로필 신원 관문(probe) — 회수와 같은 확인을 지난다. 시험은 주입한다 */
+  accessFn = null } = {}) {
+  const fail = (reason, errorDetail) => ({ slug, status: 'failed', reason, stage: 'recover', sent: false, errorDetail })
+  const outPath = join(draftsDir, slug, 'draft.md')
+  if (existsSync(outPath)) return fail('recover_draft_exists', 'draft.md 가 이미 있다 — 덮지 않는다')
+  const gate = deliveryGate({ slug, draftsDir, quarantinePath })
+  if (!gate.ok) return fail(gate.code, gate.why)
+  const d = gate.entry?.delivery
+  if (!d || d.kind !== 'DELIVERY_UNCERTAIN' || !gate.messageFingerprint || d.messageFingerprint !== gate.messageFingerprint) {
+    return fail('recover_fingerprint_mismatch', '장부의 전송불명 기록과 지금 메시지의 지문이 같지 않다 — 회수하지 않는다')
+  }
+  const rp = resultPath ?? fetchResultPath(date)
+  const res = readFetchResults(rp, { expectDate: date })
+  const row = res.ok ? fetchResultFor(res.body, slug) : null
+  if (!row || row.status === 'ok' || row.sent !== true || row.messageFingerprint !== gate.messageFingerprint) {
+    return fail('recover_result_mismatch', `그날 회수 결과에 같은 지문으로 보낸 실패 행이 없다 (${res.ok ? (row ? row.status : '행 없음') : res.why})`)
+  }
+  if (row.conversationUrl && row.conversationUrl !== conversationUrl) {
+    return fail('recover_identity_mismatch', '회수 결과에 적힌 대화 주소와 다르다')
+  }
+  const lease = acquireManuscriptLease({ slug, work: 'recover', attemptId: null, path: quarantinePath })
+  if (!lease.ok) return fail(lease.code, lease.why)
+  try {
+    if (accessFn) {
+      const p = await accessFn()
+      if (p?.status !== STATUS.OK) {
+        return fail(p?.status ?? STATUS.UNKNOWN, `자동화 프로필 접근 확인 실패 — 대화를 열지 않았다 (${p?.errorDetail ?? '-'})`)
+      }
+    }
+    const r = await recoverManuscript({
+      conversationUrl, expectedMessage: gate.message, outPath,
+      requiredMarkers: markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),
+      validate: validateManuscript, checkOnly, ...browserDeps,
+    })
+    if (!r.ok) {
+      return { slug, status: 'failed', reason: r.reason, stage: r.stage ?? 'recover', sent: false,
+        messageFingerprint: gate.messageFingerprint, conversationUrl: r.conversationUrl ?? conversationUrl,
+        assistantMessageId: r.assistantMessageId ?? null, responseForm: r.responseForm ?? null,
+        invalid: r.invalid ?? null, errorDetail: r.errorDetail ?? null }
+    }
+    const okRow = { slug, status: 'ok', sent: true, messageFingerprint: gate.messageFingerprint,
+      conversationUrl: r.conversationUrl, assistantMessageId: r.assistantMessageId, responseForm: r.responseForm,
+      length: r.length, checkOnly: r.checkOnly === true }
+    if (checkOnly) return okRow
+    // 🔴 회수 성공 경로와 같다 — **그 예약 ID** 의 전송불명 기록만 푼다 (잠금 안에서 대조)
+    releaseDeliveryReservation({ slug, reservationId: d.reservationId, path: quarantinePath })
+    const after = readQuarantine(quarantinePath)
+    const released = after.ok && after.store[slug]?.delivery === undefined
+    // 🔴 구조화 결과는 그 행만 ok 로 바꾼다 — 그날 전송 수(sentTotal)·회차(runId)는 그대로다
+    writeFetchResults(rp, { ...res.body, results: res.body.results.map((x) => (x.slug === slug ? okRow : x)) })
+    return { ...okRow, released }
+  } finally {
+    lease.release()
+  }
+}
+
 /** HOLD 로 멈춘 한 건의 결과 — 🔴 이전 전송 사실을 그대로 싣는다. 새로 지어내지 않는다 */
 function heldResult(slug, gate, stage) {
   return {
@@ -444,12 +524,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
   }
   if (!existsSync(briefPath)) return { slug, status: 'skipped', reason: 'brief_missing', sent: false }
 
-  // brief 의 "반드시 그대로 넣을 문장" 을 대조 기준으로 뽑는다
-  const brief = readFileSync(briefPath, 'utf8')
-  const markerBlock = brief.split('## 반드시 그대로 넣을 문장')[1]
-  const markers = markerBlock
-    ? [...markerBlock.matchAll(/^\d+\.\s+(.+)$/gm)].map((m) => m[1].trim()).slice(0, 5)
-    : []
+  const markers = markersOf(readFileSync(briefPath, 'utf8'))
 
   if (!quiet) console.log(`     전송 — 대조 문장 ${markers.length}개`)
 
@@ -601,7 +676,10 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     }
   }
 
-  if (r.ok) return { slug, status: 'ok', sent: r.sent, length: r.length, messageFingerprint: r.messageFingerprint ?? null, conversationUrl: r.conversationUrl ?? null }
+  if (r.ok) {
+    return { slug, status: 'ok', sent: r.sent, length: r.length, messageFingerprint: r.messageFingerprint ?? null,
+      conversationUrl: r.conversationUrl ?? null, assistantMessageId: r.assistantMessageId ?? null, responseForm: r.responseForm ?? null }
+  }
   return {
     slug,
     status: 'failed',
@@ -616,6 +694,8 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     errorName: r.errorName ?? null,
     errorDetail: r.errorDetail ?? null,
     conversationUrl: r.conversationUrl ?? null,
+    assistantMessageId: r.assistantMessageId ?? null,
+    responseForm: r.responseForm ?? null,
   }
 }
 /** 저장된 원고를 기계 검사만 한다. 내용을 출력하지 않는다 */
@@ -1043,6 +1123,24 @@ async function main() {
       ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab, ...(T.fetchTiming ?? {}) } } : {}),
       ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),
     })
+  }
+  if (argv.includes('--recover')) {
+    const slug = argv[argv.indexOf('--recover') + 1]
+    const url = argv.includes('--conversation') ? argv[argv.indexOf('--conversation') + 1] : null
+    if (!slug || slug.startsWith('--') || !url || url.startsWith('--')) {
+      console.error('  --recover <slug> --conversation <https://chatgpt.com/c/...> 가 필요하다')
+      process.exit(2)
+    }
+    const r = await recoverSlug(slug, {
+      conversationUrl: url, checkOnly: argv.includes('--check'),
+      // 🔴 Chrome 을 새로 띄우지 않는다 — 이미 떠 있는 전용 자동화 프로필만 쓴다
+      accessFn: () => (T.probe ?? probe)({ autoStart: false }),
+      ...(argv.includes('--date') ? { date: argv[argv.indexOf('--date') + 1] } : {}),
+      ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab } } : {}),
+      ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),
+    })
+    console.log(JSON.stringify(r, null, 2))
+    process.exit(r.status === 'ok' ? 0 : 1)
   }
   if (argv.includes('--fetch-run')) {
     const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : todayKst()
