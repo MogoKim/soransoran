@@ -1030,10 +1030,12 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     .filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
   check('🔴 🔴 **발행 러너가 공용 조립 함수를 실제로 호출하고 그 결과를 쓴다**',
     /import \{[^}]*loadPublishableStock[^}]*\} from '\.\/lib\/publishable-stock\.mjs'/.test(runnerCode)
-    && /^const RUN_AT = new Date\(\)\s*$/m.test(runnerCode)
+    // 🔴 (2026-09-30) 회차 시각은 `runClockFrom(SORAN_RUN_AT)` 하나 — 비어 있으면 벽시계(운영 그대로)
+    && /^const RUN_CLOCK = runClockFrom\(process\.env\)\s*$/m.test(runnerCode)
+    && /^const RUN_AT = RUN_CLOCK\.at\s*$/m.test(runnerCode)
     && /const stock = await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)\s*$/m.test(runnerCode)
-    // 🔴 러너의 시계는 하나다 — 단계마다 다른 `now` 를 쓰면 경계에서 답이 갈린다
-    && runnerCode.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 1
+    // 🔴 러너의 시계는 하나다 — 단계마다 다른 `now` 를 쓰면 경계에서 답이 갈린다(벽시계 직접 호출 0)
+    && runnerCode.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 0
     && /const targets = stock\.targets/.test(runnerCode)
     && /const rejected = stock\.rejected/.test(runnerCode)
     // 🔴 (2026-09-30) 오늘 발행 수는 슬롯 판정 직전에 DB 로 다시 센다(준비도 축 `axisPublishedToday` 삭제)

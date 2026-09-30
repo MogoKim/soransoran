@@ -56,7 +56,6 @@ function stageGate(): void {
   console.log('\n⑥ 단일 실행 authority (StageDecision → consumer → launchd 러너 하나)')
   console.log(`   발행 엔트리  ${v.publishEntries.join(' · ')}`)
   console.log(`   예약 workflow  ${v.workflows.filter((w) => w.scheduled).map((w) => w.file).join(' · ') || '없음'}`)
-  for (const p of v.pending) console.log(`   🟡 다른 레인 소유 — ${p.file}`)
   console.log(`   authority  ${v.ok ? '🟢 하나다' : `🔴 위반 ${v.violations.length}건`}`)
   for (const x of v.violations) { const b = `[${x.code}] ${x.where} — ${x.detail}`; console.log(`   🔴 ${b}`); blockers.push(b) }
 }

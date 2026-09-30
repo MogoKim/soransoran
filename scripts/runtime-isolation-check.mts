@@ -2292,7 +2292,6 @@ console.log('\n⑦ 🔴 단일 실행 authority (StageDecision → consumer → 
   console.log(`   발행 엔트리(import 그래프) ${v0.publishEntries.join(' · ')}`)
   console.log(`   예약 workflow ${v0.workflows.filter((w) => w.scheduled).map((w) => `${w.file}(${w.cronCount})`).join(' · ') || '없음'}`)
   for (const r of v0.reaches.filter((x) => entryKindOf(x.entry, v0.publishEntries) !== null)) console.log(`   · ${describeReach(r)}`)
-  for (const p of v0.pending) console.log(`   🟡 다른 레인 소유(패치 사양 보고) — ${p.file}: ${p.detail}`)
   for (const x of v0.violations) console.log(`   🔴 [${x.code}] ${x.where} — ${x.detail}`)
   check('🔴 🔴 지금 저장소 — 단일 실행 authority 위반 0', v0.ok)
   check('🔴 발행 엔트리는 import 그래프로 찾는다 — 자동 러너 · 수동 긴급 도구 둘',
@@ -2369,8 +2368,8 @@ console.log('\n⑦ 🔴 단일 실행 authority (StageDecision → consumer → 
       } },
     { name: '운영 셸이 러너를 직접 실행', want: 'CONSUMER_BYPASS',
       apply: (i) => ({ ...i, shells: [...i.shells, { file: 'scripts/ops/publish-now.sh', text: '#!/bin/sh\ncd "$REPO" && npx tsx scripts/original-post-auto-publish.mts --apply --limit=1 --trigger=local\n' }] }) },
-    { name: '다른 레인 허용 목록이 낡음(이미 고쳐진 파일)', want: 'PENDING_STALE',
-      apply: (i) => src(i, 'scripts/ops-status.mts', (t) => t.replace(/'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', /g, '')) },
+    { name: '고친 관제 화면이 단계 env 읽기를 되살림(ops-status)', want: 'STAGE_ENV_OUTSIDE',
+      apply: (i) => src(i, 'scripts/ops-status.mts', (t) => t.replace('    CONTROLLER_ENV, ...COMMENT_LEDGER_ENV_KEYS,', "    'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', CONTROLLER_ENV, ...COMMENT_LEDGER_ENV_KEYS,")) },
   ]
   let killed = 0
   for (const m of muts) {

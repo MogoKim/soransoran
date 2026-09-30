@@ -31,7 +31,7 @@ if (WANT_JSON) {
     publishEntries: v.publishEntries,
     consumerReaches: consumerReaches.map((r) => ({ invoker: r.invoker, entry: r.entry, wrappedBy: r.wrappedBy, via: r.via })),
     scheduledWorkflows: v.workflows.filter((w) => w.scheduled).map((w) => w.file),
-    violations: v.violations, pending: v.pending,
+    violations: v.violations,
   }, null, 2))
 } else {
   console.log('\n══ 발행 트리거 — 단일 실행 authority preflight (read-only) ══\n')
@@ -39,7 +39,6 @@ if (WANT_JSON) {
   console.log(`  예약 workflow  ${v.workflows.filter((w) => w.scheduled).map((w) => `${w.file}(${w.cronCount})`).join(' · ') || '없음'}`)
   console.log('\n  발행 · 공급 엔트리를 부르는 곳')
   for (const r of consumerReaches) console.log(`   ${r.wrappedBy === null ? '🔴' : '✅'} ${describeReach(r)}`)
-  for (const p of v.pending) console.log(`\n  🟡 다른 레인 소유 · 남은 소비 지점 — ${p.file}: ${p.detail}`)
   console.log(`\n  ${v.ok ? '🟢 발행 authority 는 하나다 — StageDecision → consumer → launchd 러너' : `🔴 위반 ${v.violations.length}건`}`)
   for (const x of v.violations) console.log(`     · [${x.code}] ${x.where} — ${x.detail}`)
   console.log('\n  🔴 이 명령은 아무것도 바꾸지 않았다 — DB 0 · write 0 · 발행 0 · GitHub Variables 읽기 0\n')

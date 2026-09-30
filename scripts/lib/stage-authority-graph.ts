@@ -63,12 +63,6 @@ export const STAGE_ENV_ALLOWED: readonly string[] = [
   FIXTURE_MODULE,
 ]
 
-/**
- * 🔴 **다른 레인 소유 파일의 남은 소비 지점 — 정확한 패치 사양과 함께 보고한다.**
- *    여기 있는 파일이 더 이상 위반하지 않으면 **실패한다**(낡은 허용 목록을 남기지 않는다).
- *    새 파일은 여기에 넣어 통과시키지 않는다 — 소유 레인이 고친 뒤 이 줄을 지운다.
- */
-export const PENDING_OTHER_LANE: Readonly<Record<string, string>> = {}
 
 export type EntryKind = 'publish' | 'supply'
 
@@ -430,7 +424,6 @@ export type ViolationCode =
   | 'DEAD_KEY_READ'         // ③ TypeScript 가 CANARY · WINDOW 키를 읽는다
   | 'STAGE_ENV_OUTSIDE'     // ④ 허용 밖 TypeScript 가 단계 칸 · 표식을 다룬다
   | 'FIXTURE_IN_RUNTIME'    // ⑤ 운영 엔트리가 검사 전용 표식 fixture 에 닿는다
-  | 'PENDING_STALE'         // 허용 목록이 낡았다(이미 고쳐진 파일이 남아 있다)
   | 'PARSE_ERROR'
 
 export type Violation = { code: ViolationCode; where: string; detail: string }
@@ -439,7 +432,6 @@ export type AuthorityVerdict = {
   ok: boolean
   violations: Violation[]
   /** 🔴 다른 레인 소유 · 보고 대상 — 실패로 세지 않지만 숨기지 않는다 */
-  pending: { file: string; detail: string }[]
   reaches: Reach[]
   /** 엔트리 → 자동 schedule owner 목록 */
   owners: Record<string, string[]>
@@ -545,8 +537,6 @@ export function judgeAuthority(inp: AuthorityInputs): AuthorityVerdict {
   }
 
   // ── ③ ④ ⑤ TypeScript ──
-  const pending: { file: string; detail: string }[] = []
-  const pendingHit = new Set<string>()
   for (const [file, src] of inp.sources) {
     if (isCheckFile(file)) continue
     const code = stripTsComments(src)
@@ -557,13 +547,9 @@ export function judgeAuthority(inp: AuthorityInputs): AuthorityVerdict {
     if (!STAGE_ENV_ALLOWED.includes(file)) {
       const hits = [...new Set([...code.matchAll(STAGE_ENV_TOKEN_RE)].map((m) => m[0]))]
       if (hits.length > 0) {
-        if (file in PENDING_OTHER_LANE) { pendingHit.add(file); pending.push({ file, detail: `${PENDING_OTHER_LANE[file]} · ${hits.join(',')}` }) }
-        else violations.push({ code: 'STAGE_ENV_OUTSIDE', where: file, detail: `허용 밖에서 단계 칸 · 표식을 다룬다 — ${hits.join(', ')}` })
+        violations.push({ code: 'STAGE_ENV_OUTSIDE', where: file, detail: `허용 밖에서 단계 칸 · 표식을 다룬다 — ${hits.join(', ')}` })
       }
     }
-  }
-  for (const f of Object.keys(PENDING_OTHER_LANE)) {
-    if (!pendingHit.has(f)) violations.push({ code: 'PENDING_STALE', where: f, detail: '이미 고쳐졌다 — PENDING_OTHER_LANE 에서 지운다(낡은 허용 목록 금지)' })
   }
   for (const f of inp.sources.keys()) {
     if (!/^scripts\/[^/]+\.mts$/.test(f) || isCheckFile(f)) continue
@@ -572,7 +558,7 @@ export function judgeAuthority(inp: AuthorityInputs): AuthorityVerdict {
     }
   }
 
-  return { ok: violations.length === 0, violations, pending, reaches, owners: ownersOut, publishEntries, workflows }
+  return { ok: violations.length === 0, violations, reaches, owners: ownersOut, publishEntries, workflows }
 }
 
 // ─────────────────────────────────────────────────────────
