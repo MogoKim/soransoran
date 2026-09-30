@@ -9,11 +9,14 @@
  *   ⑤ keep-awake · controller · 복구 템플릿 — sudo/pmset 0 · 발행 창 전 · 수집 job 제외
  *   ⑥ 복구 판정 — 모르면 건드리지 않는다 · 같은 창에서 한 번만
  *   ⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 실제 회차 기록으로만 판정 · 없음/손상/오래됨/실패는 정상이 아니다
+ *   ⑧ 설치기 — 실행 중 예외는 keep-awake 하나 · 적용은 keep-awake 도 내렸다 다시 띄우고, 실패면 전체 rollback
+ *      (설치기 plan 은 임시 HOME 에서 **가짜 launchctl 만 PATH 에 둔 채** 실제로 실행한다 — 진짜 launchctl 0)
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { ledgerDateOf } from '../src/lib/llm-ledger'
 import { readCostSignals } from './lib/ops-signals.mjs'
 
@@ -36,11 +39,13 @@ import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from '
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
-  RECOVERABLE_LABELS, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL,
+  RECOVERABLE_LABELS, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
 } from './lib/ops-loop-templates'
+import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
+import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
 import { PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
 import { RUNTIME_JOBS } from '../src/lib/runtime-isolation'
-import { programArguments } from './lib/launchd-install.mjs'
+import { programArguments, render, valueOf } from './lib/launchd-install.mjs'
 import {
   renderPublishHeartbeatPlist, renderPublishRunnerPlist, STAGE_CONSUMER_SCRIPT, PUBLISH_RUNNER_LABEL,
   LAUNCHD_RUN_MARK_KEY, LAUNCHD_RUN_MARK_VALUE, LAUNCHD_LABEL_KEY,
@@ -404,15 +409,19 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const installer = readFileSync('scripts/ops-loop-install.mts', 'utf-8')
   check('🔴 공식 설치기는 runtime/pin·공급 consumer·실행 중 job을 모두 확인한다',
     /runtime HEAD와 pin/.test(installer) && /samePlist\(installedSupply, expectedSupply\)/.test(installer)
-    && /running\(label\)/.test(installer))
+    && /runningBlockers\(desired\.keys\(\), running\)/.test(installer))
   check('🔴 runtime deploy가 제거한 plist 끝 개행만으로 consumer를 거절하지 않는다',
     /installed\.trimEnd\(\) === expected\.trimEnd\(\)/.test(installer))
-  check('🔴 공식 설치기는 설치 전 snapshot을 남기고 검증 실패면 자동 rollback한다',
-    /manifest\.json/.test(installer) && /설치 검증 실패/.test(installer) && /restore\(backupDir\)/.test(installer))
+  const installCore = readFileSync('scripts/lib/ops-loop-install-core.mts', 'utf-8')
+  check('🔴 공식 설치기는 설치 전 snapshot을 남기고 검증 실패면 자동 rollback한다(실행 시험은 ⑧)',
+    /manifest\.json/.test(installer) && /설치 검증 실패/.test(installCore)
+    && /applyInstall\(desired, runtimeRoot, \{/.test(installer) && /restore: \(\) => restore\(backupDir\),/.test(installer)
+    && /process\.exit\(outcome\.restored \? 1 : 2\)/.test(installer))
   check('🔴 공식 설치기는 발행 러너의 렌더 표식과 **loaded** 표식·label 을 둘 다 확인하고, 틀리면 rollback 한다',
     /judgeLaunchdRunMarker\(plistEnvironmentOf\(desired\.get\(PUBLISH_RUNNER_LABEL\)!\)\)/.test(installer)
-    && /judgeLaunchdRunMarker\(launchctlEnvironmentOf\(p\.ok \? p\.out : null\)\)/.test(installer)
-    && /ok = marker\.ok && ok/.test(installer))
+    && /judgeLaunchdRunMarker\(launchctlEnvironmentOf\(printOut\)\)/.test(installCore)
+    && /ok = marker\.ok && ok/.test(installCore)
+    && /print: \(label\) => \{\n\s+const p = run\('launchctl', \['print', `\$\{domain\}\/\$\{label\}`\], home\)\n\s+return p\.ok \? p\.out : null/.test(installer))
   const stageSwitch = readFileSync('scripts/stage-controller-switch.mts', 'utf-8')
   check('🔴 단계 스위치는 다른 env 키가 바뀌면 원본으로 되돌린다',
     /othersSame/.test(stageSwitch) && /copyFileSync\(backup, envPath\)/.test(stageSwitch))
@@ -556,6 +565,181 @@ console.log('\n⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 �
   check('🔴 연결: 판정 controller 가 발행 job 을 publishFailing + 회차 기록으로 본다',
     /failing: publishFailing\(pub, readPublishRunRecord\(\), NOW, PUBLISH_RUN_MAX_AGE_MS\)/.test(ctl)
     && !/failing: pub\.launchdFailing/.test(ctl))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 keep-awake 도 내렸다 다시 띄우고, 실패면 전체 rollback')
+// ─────────────────────────────────────────────────────────
+{
+  const KA = KEEP_AWAKE_LABEL
+  const BLOCKING = [PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL] as const
+  const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
+  const desired = desiredPlists('fixed', input)
+  check('교체 대상은 발행·controller·복구·keep-awake 넷이다 — keep-awake 도 같은 적용 경로를 탄다',
+    JSON.stringify([...desired.keys()]) === JSON.stringify([...BLOCKING, KA]))
+  check('🔴 예외 정본(호스트 이전 ALWAYS_RUNNING_LABELS)은 keep-awake 하나뿐이다 — 넓히면 여기서 막힌다',
+    JSON.stringify(ALWAYS_RUNNING_LABELS) === JSON.stringify([KA]))
+
+  // ── (a)(b) preflight 순수 판정
+  const blockersWith = (runningSet: readonly string[]): string[] => runningBlockers(desired.keys(), (l) => runningSet.includes(l))
+  check('(a) keep-awake 만 running → 막힘 0', blockersWith([KA]).length === 0)
+  for (const label of BLOCKING) {
+    const b = blockersWith([label])
+    check(`(b) 🔴 ${label} 만 running → 막힘 1(그 job)`, b.length === 1 && b[0]!.startsWith(label), JSON.stringify(b))
+  }
+  const mixed = blockersWith([KA, PUBLISH_RUNNER_LABEL])
+  check('(b) keep-awake + 발행 running → 발행 하나만 막는다(keep-awake 는 이유로 적지 않는다)',
+    mixed.length === 1 && mixed[0]!.startsWith(PUBLISH_RUNNER_LABEL) && !mixed.some((m) => m.includes(KA)))
+
+  // ── (a)(b) 실제 설치기(plan) 실행 — 임시 HOME · PATH 에는 가짜 launchctl(print 만 답한다)과 git·cat 만
+  const which = (cmd: string): string | null => {
+    const r = spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' })
+    return r.status === 0 && r.stdout.trim() !== '' ? r.stdout.trim() : null
+  }
+  const gitBin = which('git')
+  const catBin = which('cat')
+  const npxBesideNode = join(dirname(process.execPath), 'npx')
+  if (gitBin === null || catBin === null || !existsSync(npxBesideNode)) {
+    check('설치기 plan 실행 준비(git·cat·node 옆 npx)', false, `git=${gitBin} cat=${catBin} npx=${existsSync(npxBesideNode)}`)
+  } else {
+    const home = mkdtempSync(join(tmpdir(), 'ops-loop-install-'))
+    try {
+      const rt = join(home, 'Documents', 'soransoran-runtime')
+      const tplRel = 'docs/operations/launchd/com.soransoran.supply-process.plist.template'
+      mkdirSync(join(rt, 'docs', 'operations', 'launchd'), { recursive: true })
+      writeFileSync(join(rt, tplRel), readFileSync(tplRel, 'utf-8'))
+      const git = (args: string[]): string => {
+        const r = spawnSync(gitBin, ['-c', 'user.name=check', '-c', 'user.email=check@example.invalid', '-c', 'commit.gpgsign=false', ...args],
+          { cwd: rt, encoding: 'utf8', env: { ...process.env, HOME: home } })
+        return r.stdout.trim()
+      }
+      git(['init', '-q'])
+      git(['add', tplRel])
+      git(['commit', '-q', '-m', 'fixture'])
+      const canon = join(home, 'Library', 'Application Support', 'soransoran')
+      mkdirSync(canon, { recursive: true })
+      writeFileSync(join(canon, 'runtime-pinned-sha'), `${git(['rev-parse', 'HEAD'])}\n`)
+      const logDir = join(home, 'Library', 'Logs', 'soransoran')
+      const nodeBinDir = dirname(process.execPath)
+      const agentDir = join(home, 'Library', 'LaunchAgents')
+      mkdirSync(agentDir, { recursive: true })
+      writeFileSync(join(agentDir, `${PUBLISH_RUNNER_LABEL}.plist`),
+        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }).get(PUBLISH_RUNNER_LABEL)!)
+      writeFileSync(join(agentDir, 'com.soransoran.supply-process.plist'), render(readFileSync(tplRel, 'utf-8'), {
+        npx: npxBesideNode, node: process.execPath, repo: rt, nodebin: nodeBinDir, logdir: logDir,
+      }))
+      const bin = join(home, 'fake-bin')
+      mkdirSync(bin)
+      symlinkSync(gitBin, join(bin, 'git'))
+      symlinkSync(catBin, join(bin, 'cat'))
+      // 🔴 print 만 답한다 — bootout·bootstrap 등 다른 하위 명령은 기록만 하고 실패한다(plan 은 부르지 않아야 한다)
+      writeFileSync(join(bin, 'launchctl'), [
+        '#!/bin/sh',
+        'echo "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+        'if [ "$1" = print ]; then',
+        '  label="${2##*/}"',
+        '  case " $FAKE_RUNNING " in *" $label "*) printf \'%s = {\\n\\tstate = running\\n}\\n\' "$2"; exit 0;; esac',
+        '  printf \'%s = {\\n\\tstate = not running\\n}\\n\' "$2"; exit 0',
+        'fi',
+        'exit 1',
+        '',
+      ].join('\n'), { mode: 0o755 })
+      const callLog = join(home, 'launchctl.log')
+      const tsxCli = createRequire(import.meta.url).resolve('tsx/cli')
+      const installerPath = join(process.cwd(), 'scripts', 'ops-loop-install.mts')
+      const plan = (runningSet: readonly string[]): { status: number | null; out: string } => {
+        const r = spawnSync(process.execPath, [tsxCli, installerPath], {
+          cwd: rt, encoding: 'utf8',
+          env: { HOME: home, PATH: bin, FAKE_RUNNING: runningSet.join(' '), FAKE_LAUNCHCTL_LOG: callLog },
+        })
+        return { status: r.status, out: `${r.stdout}${r.stderr}` }
+      }
+      const idle = plan([])
+      check('설치기 plan: 아무것도 안 돌면 적용 가능(fixture 가 막힘 0 인 정상 호스트다)',
+        idle.status === 0 && idle.out.includes('🟢 적용 가능'), idle.out.slice(-600))
+      const ka = plan([KA])
+      check('(a) 🔴 설치기 plan: keep-awake 만 running → 🟢 적용 가능 · exit 0',
+        ka.status === 0 && ka.out.includes('🟢 적용 가능') && !ka.out.includes('실행 중이다'), ka.out.slice(-600))
+      for (const label of BLOCKING) {
+        const r = plan([label])
+        check(`(b) 🔴 설치기 plan: ${label} 만 running → 막힘 1건 · exit 1`,
+          r.status === 1 && r.out.includes(`${label}이 실행 중이다`) && r.out.includes('🔴 막힘 1건'), r.out.slice(-600))
+      }
+      const all = plan([KA, ...BLOCKING])
+      check('(b) 설치기 plan: 넷 다 running → 막힘 3건(keep-awake 제외)',
+        all.status === 1 && all.out.includes('🔴 막힘 3건') && !all.out.includes(`${KA}이 실행 중이다`), all.out.slice(-600))
+      const calls = existsSync(callLog) ? readFileSync(callLog, 'utf-8').trim().split('\n') : []
+      check('🔴 plan 은 가짜 launchctl 을 실제로 불렀고(print) 그 밖의 하위 명령은 0이다',
+        calls.length > 0 && calls.every((c) => c.startsWith('print ')), calls.slice(0, 5).join(' | '))
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  }
+
+  // ── (c)(d) 적용 경로 — launchd 를 흉내 내는 io. 🔴 실제처럼: bootout 하면 내려가고, 이미 loaded 인 것을
+  //    bootstrap 하면 실패하고(launchctl: service already loaded), print 는 loaded 인 plist 그대로를 보여 준다.
+  const printOf = (label: string, xml: string): string => {
+    const args = programArguments(xml)
+    const wd = valueOf(xml, 'WorkingDirectory')
+    const env = plistEnvironmentOf(xml) ?? {}
+    return `gui/501/${label} = {\n\tactive count = 1\n\tstate = running\n\tprogram = ${args[0] ?? ''}\n`
+      + `\targuments = {\n${args.map((a) => `\t\t${a}\n`).join('')}\t}\n\n`
+      + (wd === null ? '' : `\tworking directory = ${wd}\n\n`)
+      + `\tenvironment = {\n${Object.entries(env).map(([k, v]) => `\t\t${k} => ${v}\n`).join('')}\t}\n}`
+  }
+  type Sim = { calls: string[]; restores: number; loaded: Map<string, string> }
+  const simulate = (opt: {
+    failBootstrap?: string; printOverride?: (label: string, out: string | null) => string | null; restoreOk?: boolean
+  } = {}): { outcome: ReturnType<typeof applyInstall>; sim: Sim } => {
+    const old = desiredPlists('heartbeat', input)
+    const sim: Sim = { calls: [], restores: 0, loaded: new Map(old) }
+    const written = new Map(old)
+    const outcome = applyInstall(desired, '/r', {
+      bootout: (l) => { sim.calls.push(`bootout ${l}`); sim.loaded.delete(l) },
+      write: (l, x) => { sim.calls.push(`write ${l}`); written.set(l, x); return true },
+      lint: () => true,
+      bootstrap: (l) => {
+        sim.calls.push(`bootstrap ${l}`)
+        if (sim.loaded.has(l) || opt.failBootstrap === l) return false
+        sim.loaded.set(l, written.get(l)!)
+        return true
+      },
+      print: (l) => {
+        const x = sim.loaded.get(l)
+        const out = x === undefined ? null : printOf(l, x)
+        return opt.printOverride === undefined ? out : opt.printOverride(l, out)
+      },
+      restore: () => { sim.restores += 1; return opt.restoreOk ?? true },
+      log: () => {},
+    })
+    return { outcome, sim }
+  }
+  const good = simulate()
+  const idx = (c: string): number => good.sim.calls.indexOf(c)
+  check('(c) 🔴 적용 성공: keep-awake 를 내렸다가 다시 띄우고(loaded · caffeinate 인자) rollback 은 부르지 않는다',
+    good.outcome.ok && good.sim.restores === 0
+    && idx(`bootout ${KA}`) >= 0 && idx(`bootstrap ${KA}`) > idx(`bootout ${KA}`)
+    && JSON.stringify(programArguments(good.sim.loaded.get(KA) ?? '')) === JSON.stringify(programArguments(desired.get(KA)!)),
+    good.sim.calls.join(' | '))
+  const lastOf = (kind: string): number => Math.max(...[...desired.keys()].map((l) => idx(`${kind} ${l}`)))
+  const firstOf = (kind: string): number => Math.min(...[...desired.keys()].map((l) => idx(`${kind} ${l}`)))
+  check('(c) 순서: 넷 다 bootout → 넷 다 교체 → 넷 다 bootstrap',
+    firstOf('bootout') >= 0 && lastOf('bootout') < firstOf('write') && lastOf('write') < firstOf('bootstrap'))
+  check('(c) 발행 러너도 heartbeat → fixed 로 실제 교체돼 loaded 인자가 새 plist 다',
+    JSON.stringify(programArguments(good.sim.loaded.get(PUBLISH_RUNNER_LABEL) ?? '')) === JSON.stringify(programArguments(desired.get(PUBLISH_RUNNER_LABEL)!)))
+
+  const rolledBack = (r: ReturnType<typeof simulate>): boolean => !r.outcome.ok && r.outcome.restored && r.sim.restores === 1
+  check('(d) 🔴 keep-awake 재기동(bootstrap) 실패 → 전체 rollback', rolledBack(simulate({ failBootstrap: KA })))
+  check('(d) 🔴 keep-awake 가 bootstrap 뒤 loaded 로 안 보임 → 전체 rollback',
+    rolledBack(simulate({ printOverride: (l, out) => (l === KA ? null : out) })))
+  check('(d) 🔴 keep-awake loaded 인자가 caffeinate 가 아님 → 전체 rollback',
+    rolledBack(simulate({ printOverride: (l, out) => (l === KA && out !== null ? out.replace('\t\t-s\n', '') : out) })))
+  check('(d) 🔴 발행 러너 bootstrap 실패 → 전체 rollback', rolledBack(simulate({ failBootstrap: PUBLISH_RUNNER_LABEL })))
+  check('(d) 🔴 발행 러너 loaded 실행 표식 없음 → 전체 rollback',
+    rolledBack(simulate({ printOverride: (l, out) => (l === PUBLISH_RUNNER_LABEL && out !== null ? out.replace(`\t\t${LAUNCHD_RUN_MARK_KEY} => ${LAUNCHD_RUN_MARK_VALUE}\n`, '') : out) })))
+  check('(d) 🔴 controller 작업 경로가 runtime 이 아님 → 전체 rollback',
+    rolledBack(simulate({ printOverride: (l, out) => (l === STAGE_CONTROLLER_LABEL && out !== null ? out.replace('working directory = /r', 'working directory = /elsewhere') : out) })))
+  const restoreFail = simulate({ failBootstrap: KA, restoreOk: false })
+  check('(d) rollback 자체가 실패하면 restored=false 로 알린다(설치기는 exit 2)',
+    !restoreFail.outcome.ok && !restoreFail.outcome.restored && restoreFail.sim.restores === 1)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
