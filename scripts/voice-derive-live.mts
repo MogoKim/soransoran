@@ -35,6 +35,8 @@ import {
 import { computeStyleSignals, STYLE_RULE_VERSION } from './lib/voice-style-signals.mjs'
 import { toCommentSignals, summarizeCommentSignals } from './lib/voice-comment-signals.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { readAuthorHashKey, writableStateOf } from './lib/voice-author-hash.mjs'
+import { storedAuthorHashState } from './lib/persona-name-collision-sets.mjs'
 
 /** 🔴 명시 상수다. 규칙이 바뀌면 이 값을 올리고, 옛 행은 그대로 둔다 */
 const RULE_VERSION = STYLE_RULE_VERSION
@@ -44,8 +46,6 @@ const METHOD = 'rule' as const
 const MODEL = ''
 const PROMPT_VERSION = ''
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 const APPLY = process.argv.includes('--apply')
 const arg = (n: string): string | undefined => {
@@ -79,7 +79,13 @@ async function main() {
     )
   }
 
-  const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
+  // 🔴 작가 해시 key — 정본 helper 하나(정본 env). 없으면 공개 기본값으로 내려가지 않고 멈춘다(author-hash v2)
+  const keyRead = readAuthorHashKey()
+  if (!keyRead.ok) {
+    console.error(`\n❌ 중단: ${keyRead.reason}\n`)
+    process.exit(1)
+  }
+  const authorKey = keyRead.key
   const unaoUrl = loadUnaoReadonlyUrl()
 
   console.log('\nVoice — 규칙 신호 계산 (VE-M2-2)')
@@ -97,6 +103,15 @@ async function main() {
   const unao = new pg.Client({ connectionString: unaoUrl, ssl: { rejectUnauthorized: false } })
   await unao.connect()
   const prisma = new PrismaClient()
+  // 🔴 옛 세대(v1) · 섞임 · 손상 · 다른 key 위에 v2 를 섞어 쓰지 않는다 — 비었거나 지금 key 의 v2 일 때만 쓴다
+  if (APPLY) {
+    const w = writableStateOf((await storedAuthorHashState(prisma, authorKey)).census)
+    if (!w.ok) {
+      console.error(`\n❌ 중단: ${w.reason}\n`)
+      await prisma.$disconnect()
+      process.exit(1)
+    }
+  }
 
   let scanned = 0
   let derived = 0
@@ -160,7 +175,7 @@ async function main() {
 
         const style = computeStyleSignals(content)
         const comments = toCommentSignals(src.topComments, {
-          authorSalt: salt, capturedAt: item.capturedAt,
+          authorKey, capturedAt: item.capturedAt,
         })
 
         if (style.artifactFrequency.lowSample) lowSample += 1

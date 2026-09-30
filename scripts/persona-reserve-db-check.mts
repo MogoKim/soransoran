@@ -7,10 +7,10 @@
  *
  * 보는 것
  *   ① 정본 카드와 같은 seed 의 draft(이력 0) → reserve  — 운영에 draft 가 0행이라 실측으로는 못 보는 경로
- *   ② 같은 사람을 active + 공개 글 1 · 발행 댓글 1 → 소재 모름 → qualification-pending
+ *   ② 같은 사람을 active + 공개 글 1 · 발행 댓글 1 → 소재 thin(1<5 · #640 표본 하한) — 모름이 아니다
  *   ③ retired → 네 상태 밖 · 정본 카드만 있는 코드 → designed
  *   ④ 두 Persona 가 한 글에 붙음 → 짝 간격 · 발행 역할(reactionType) 이 어댑터를 거쳐 읽힌다
- *   ⑤ salt 없음 → Gate ⑥-B 모름(공개 기본값으로 대조하지 않는다)
+ *   ⑤ key 없음 · 저장 작가 해시가 v2 가 아님(v1 만 · 빈 집합) → Gate ⑥-B 모름(공개 기본값으로 대조하지 않는다 · 2026-10-01 author-hash v2)
  *   ⑥ 어댑터 자체는 write 0 — 전 표 행 수 불변
  */
 import { readFileSync } from 'node:fs'
@@ -33,6 +33,12 @@ const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
 const { readReserveFacts } = await import('./lib/persona-reserve-facts.mjs')
 const { readPersonaReserve } = await import('./lib/d100-persona-tiers.mjs')
 const { PERSONA_POOL_DOC } = await import('./lib/voice-runtime.mjs')
+const { authorHashKeyOf, authorHashV2Of } = await import('./lib/voice-author-hash.mjs')
+const { normalizeN2 } = await import('./lib/persona-gate-name-collision.mjs')
+/** 🔴 시험 전용 key(합성 32자 이상) — 운영 key 가 아니다 */
+const TEST_KEY = authorHashKeyOf('reserve-db-check-key-0123456789abcdef0123')
+if (!TEST_KEY.ok) throw new Error('test key')
+const CRAWL_AUTHOR = '크롤작가시험'
 
 let pass = 0
 let failN = 0
@@ -52,6 +58,20 @@ async function cleanup(): Promise<void> {
   await prisma.post.deleteMany({ where: { id: { in: posts.map((p) => p.id) } } })
   await prisma.persona.deleteMany({ where: { id: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: mine.map((m) => m.userId) } } })
+  await prisma.voiceSource.deleteMany({ where: { sourceRef: { startsWith: 'reserve-db-check' } } })
+}
+/** 🔴 작가 해시 fixture 1행 — 지금 key 의 v2(비교 집합이 비면 Gate ⑥-B 는 모름이다) */
+async function seedAuthor(gen: 'v2' | 'v1'): Promise<void> {
+  await prisma.voiceSource.deleteMany({ where: { sourceRef: { startsWith: 'reserve-db-check' } } })
+  const key = (TEST_KEY as { ok: true; key: Parameters<typeof authorHashV2Of>[1] }).key
+  const v2 = authorHashV2Of(CRAWL_AUTHOR, key)
+  const v2n = authorHashV2Of(normalizeN2(CRAWL_AUTHOR), key)
+  // 🔴 v1 모양 fixture 는 합성 hex 다(공개 사슬을 쓰지 않는다) — 세대 판정만 본다
+  const v1 = `sha256:${'a'.repeat(64)}`
+  await prisma.voiceSource.create({ data: {
+    origin: 'fixture', sourceRef: `reserve-db-check-${gen}`, sourceSite: 'navercafe:fixture', sourceUrl: 'https://example.invalid/r',
+    capturedAt: new Date(0), authorHash: gen === 'v2' ? v2 : v1, authorHashNorm: gen === 'v2' ? v2n : v1,
+  } })
 }
 const counts = async (): Promise<string> => JSON.stringify([
   await prisma.user.count(), await prisma.persona.count(), await prisma.post.count(),
@@ -87,9 +107,11 @@ try {
   const p14 = await make('P14', 'draft', '새봄')
   const p01 = await make('P01', 'active', '가람')
   await make('P25', 'retired', '누리')
+  // 🔴 Gate ⑥-B 비교 집합 — 지금 key 의 v2 작가 해시 1행(없으면 표시명 판정은 모름이다)
+  await seedAuthor('v2')
 
   const read = async () => {
-    const facts = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashSalt: 'test-salt' })
+    const facts = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashKey: TEST_KEY })
     return { facts, res: await readPersonaReserve({ reserveFacts: async () => facts }) }
   }
 
@@ -123,8 +145,9 @@ try {
   })
   const r2 = await read()
   const a14 = r2.res.verdicts.find((v) => v.code === 'P14')!
-  check('active + 공개 글 1 → 소재 모름 → qualification-pending', a14.state === 'qualification-pending'
-    && a14.contract?.unknown.topicShare !== undefined)
+  // 🔴 (#640) 소재 표본 하한 = SHARE_MIN_EVENTS(5) — 1건은 비율을 재지 않는다(thin · 0). 이 격리 DB 검사는 CI 목록 밖이라 #640 때 갱신되지 않았다
+  check('active + 공개 글 1 → 소재 thin(1<5) · 모름 아님(#640)',
+    a14.contract?.unknown.topicShare === undefined && a14.contract?.evidence.topicShare === 'thin(1<5)')
   const h14 = r2.facts.rows.find((r) => r.code === 'P14')!.history!
   const h01 = r2.facts.rows.find((r) => r.code === 'P01')!.history!
   check('연속 노출 — 맨 끝 글이 P14 → 1', h14.consecutiveExposures === 1)
@@ -133,10 +156,19 @@ try {
   check('짝 간격 0 은 이번 회차만 막는다(roundBlocked) — 계약 사유가 아니다',
     a14.contract?.roundBlocked.includes('postsSinceLastPairing') === true && a14.contract.blocked.postsSinceLastPairing === undefined)
 
-  // ── ⑤ salt 없음 ──
-  const noSalt = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashSalt: null })
-  check('salt 없음 → Gate ⑥-B 모름(null) · 공개 기본값 대조 없음',
-    noSalt.rows.every((r) => r.qualification?.nameGate === null && (r.qualification.nameGateUnknown ?? '').includes('SALT')))
+  // ── ⑤ key 없음 · 저장 세대 ──
+  const noKey = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashKey: authorHashKeyOf('') })
+  check('key 없음 → Gate ⑥-B 모름(null) · 공개 기본값 대조 없음',
+    noKey.rows.every((r) => r.qualification?.nameGate === null && (r.qualification.nameGateUnknown ?? '').includes('VOICE_AUTHOR_HASH_SALT')))
+  await prisma.voiceSource.deleteMany({ where: { sourceRef: { startsWith: 'reserve-db-check' } } })
+  const empty = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashKey: TEST_KEY })
+  check('🔴 key 있음 · 작가 해시 집합이 비었다 → 모름(빈 집합을 통과로 읽지 않는다)',
+    empty.rows.every((r) => r.qualification?.nameGate === null && (r.qualification.nameGateUnknown ?? '').includes('비었다')))
+  await seedAuthor('v1')
+  const v1only = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashKey: TEST_KEY })
+  check('🔴 key 있음 · 저장값이 v1 만(새 key 만 넣고 전환 안 함) → 모름',
+    v1only.rows.every((r) => r.qualification?.nameGate === null && (r.qualification.nameGateUnknown ?? '').includes('옛 세대')))
+  await seedAuthor('v2')
 } catch (e) {
   failN += 1
   console.log(`  🔴 FAIL  예외: ${e instanceof Error ? e.message : String(e)}`)

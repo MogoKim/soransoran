@@ -22,7 +22,6 @@
  *      · 일부만 처리하는 것 — 하나라도 어긋나면 **전원 롤백**한다
  */
 import { PrismaClient, type Prisma, type PersonaStatus } from '@prisma/client'
-import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 
 import {
@@ -40,20 +39,9 @@ import { assignCandidates, verifyNamePolicy } from '../src/lib/persona-nickname-
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { authorGateOf, readAuthorHashKey } from './lib/voice-author-hash.mjs'
+import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 
-/**
- * 🔴 크롤 author 해시 salt — `persona-wave2-assign` 과 **같은 계약**이다.
- *    `hashOf` 를 넘기지 않으면 `matchAuthorHashes` 가 `return []` 로 빠져
- *    **authorHash 대조가 통째로 건너뛰어진다** (실측 17,992건 무시).
- *
- * 🔴 **값을 읽는 것은 `loadEnvLocal()` 뒤다.** 여기서는 이름만 둔다 —
- *    salt 는 `.env.local` 에만 있어서, 모듈 최상단에서 읽으면 언제나 기본값으로 굳는다.
- *    그러면 해시가 적재 때와 달라져 `authorHashes.has(...)` 가 전부 빗나가고,
- *    **Gate ⑥-B 의 B2 갈래가 조용히 전원 pass 로 통과한다.**
- *    (`persona-wave2-assign` 은 `loadEnvLocal()` 뒤에서 만든다 — 그쪽이 정본 순서다)
- */
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 const DRAFT: PersonaStatus = 'draft'
 
@@ -70,6 +58,16 @@ const REASON = REASON_AT >= 0 ? (argv[REASON_AT + 1] ?? null) : null
 const ACTOR = (process.env.ACTOR_USER_ID ?? '').trim() || null
 
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
+/**
+ * 🔴 **Gate ⑥-B B2 해시 — 정본 `authorGateOf`(voice-author-hash) 가 허락할 때만** (2026-10-01 author-hash v2).
+ *    key 는 정본 env 에서만 읽는다. key 없음 · 저장 작가 해시가 지금 key 의 v2 가 아님(옛 세대 · 섞임 · 손상 ·
+ *    빈 집합 · 다른 key) 이면 **배정하지 않고 멈춘다** — 공개 기본값으로 대조하지 않는다.
+ */
+const AUTHOR_KEY = readAuthorHashKey()
+const hashOfFor = (sets: NameCollisionSets): ((v: string) => string) => {
+  const g = authorGateOf(AUTHOR_KEY, sets)
+  return g.ok ? g.hashOf : fail(`표시명 Gate ⑥-B 를 쓸 수 없다 — ${g.reason}`)
+}
 const ok = (m: string): void => console.log(`   ✅ ${m}`)
 
 // ── 인자 게이트 — 🔴 DB 를 열기 전에 막는다 ──
@@ -93,8 +91,6 @@ await loadEnvLocal()
  *    그 상태로는 후보 해시가 적재 해시와 달라 B2(크롤 author) 대조가 한 건도 걸리지 않고,
  *    Gate ⑥-B 는 "전원 pass" 라고 말한다 — 검사한 적이 없는데도.
  */
-const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
-const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
 
 const prisma = new PrismaClient()
 
@@ -270,7 +266,8 @@ if (STEP === 'create') {
   } else {
     // 🔴 후보를 만들고 Gate ⑥-B 로 걸러 **자동으로** 고른다
     const sets0 = await loadNameCollisionSets(prisma)
-    const auto = assignCandidates(M.codes, (n) => checkNameCollision(n, sets0, { hashOf }).status !== 'pass')
+    const h0 = hashOfFor(sets0)
+    const auto = assignCandidates(M.codes, (n) => checkNameCollision(n, sets0, { hashOf: h0 }).status !== 'pass')
     if (!auto.ok) {
       await prisma.$disconnect()
       fail(`닉네임 후보를 자동으로 고르지 못했습니다:\n     ${auto.problems.join('\n     ')}`)
@@ -300,7 +297,8 @@ if (STEP === 'create') {
    */
   const preSets = await loadNameCollisionSets(prisma)
   console.log(`   대조 대상 — ${describeSets(preSets)}`)
-  const preVerdicts = creates.map((c) => ({ ...c, v: checkNameCollision(c.name, preSets, { hashOf }) }))
+  const hPre = hashOfFor(preSets)
+  const preVerdicts = creates.map((c) => ({ ...c, v: checkNameCollision(c.name, preSets, { hashOf: hPre }) }))
 
   /**
    * 🔴 **P 코드 → 예정 닉네임과 그 자리의 Gate ⑥-B 결과를 함께 보여 준다** (2026-09-08).
@@ -430,7 +428,7 @@ try {
        */
       const txSets = await loadNameCollisionSets(tx)
       const txBlocked = creates
-        .map((c) => ({ ...c, v: checkNameCollision(c.name, txSets, { hashOf }) }))
+        .map((c) => ({ ...c, v: checkNameCollision(c.name, txSets, { hashOf: hashOfFor(txSets) }) }))
         .filter((x) => x.v.status !== 'pass')
       if (txBlocked.length > 0) {
         throw new Error('트랜잭션 안 Gate ⑥-B 재판정 실패 — '

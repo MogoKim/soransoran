@@ -16,15 +16,14 @@
  */
 import pg from 'pg'
 import { PrismaClient } from '@prisma/client'
-import { createHash } from 'node:crypto'
 import { loadUnaoReadonlyUrl } from './lib/voice-unao-readonly.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { authorHashV2Of, readAuthorHashKey, setStateOf, censusOf, type AuthorHashKey } from './lib/voice-author-hash.mjs'
+import { loadAuthorHashSets } from './lib/persona-name-collision-sets.mjs'
 
 const APPLY = process.argv.includes('--apply')
 const CHECK = process.argv.includes('--check')
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 /** 정규화 N2 — trim + NFC + 소문자 + 공백·기호 제거 (설계 §5-1) */
 export function normalizeN2(raw: string): string {
@@ -35,9 +34,8 @@ export function normalizeN2(raw: string): string {
     .replace(/[\s._\-~·♡★☆!@#$%^&*()+=|\\/[\]{}<>?,;:'"`]/g, '')
 }
 
-function hashOf(value: string, salt: string): string {
-  return `sha256:${createHash('sha256').update(`${salt}::${value}`, 'utf8').digest('hex')}`
-}
+/** 🔴 (2026-10-01 author-hash v2) 계산은 정본 `authorHashV2Of` 하나다 — 여기서 salt 로 따로 해시하지 않는다 */
+const hashOf = (value: string, key: AuthorHashKey): string => authorHashV2Of(value, key)
 
 /** topComments 항목에서 author 를 뽑는다 — toCommentSignals 와 같은 키 우선순위 */
 function pickAuthor(item: Record<string, unknown>): string | null {
@@ -165,7 +163,16 @@ async function main(): Promise<void> {
 
   if (CHECK) { await runCheck(prisma); await prisma.$disconnect(); return }
 
-  const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
+  // 🔴 key 는 정본 helper 하나(정본 env). 저장 작가 해시가 지금 key 의 v2 가 아니면 대조 자체가 성립하지 않는다 — 멈춘다
+  const keyRead = readAuthorHashKey()
+  if (!keyRead.ok) { console.error(`\n❌ 중단: ${keyRead.reason}\n`); process.exit(1) }
+  const salt = keyRead.key
+  const hashState = setStateOf(censusOf((await loadAuthorHashSets(prisma)).authorHashes, salt))
+  if (hashState !== 'v2-ready') {
+    console.error(`\n❌ 중단: 저장 authorHash 가 지금 key 의 v2 가 아니다(${hashState}) — 전환(voice:author-hash-migrate) 뒤에만 돈다\n`)
+    await prisma.$disconnect()
+    process.exit(1)
+  }
   console.log(`══ authorHashNorm backfill ${APPLY ? '(--apply)' : '(dry-run · DB write 0)'} ══\n`)
 
   const hasColumn = await prisma.$queryRaw<Array<{ n: bigint }>>`

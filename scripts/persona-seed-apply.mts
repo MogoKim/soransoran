@@ -28,13 +28,13 @@
  *      · kill switch 조작
  */
 import { PrismaClient, type PersonaStatus } from '@prisma/client'
-import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 import { checkNameCollision, type NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { duplicateKeys, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
+import { authorGateOf, readAuthorHashKey } from './lib/voice-author-hash.mjs'
 
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 
@@ -75,10 +75,18 @@ function isFilled(v: unknown): boolean {
   return true
 }
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
+/**
+ * 🔴 **Gate ⑥-B B2 해시 — 정본 `authorGateOf`(voice-author-hash) 가 허락할 때만** (2026-10-01 author-hash v2).
+ *    key 는 정본 env 에서만 읽는다. key 없음 · 저장 작가 해시가 지금 key 의 v2 가 아님(옛 세대 · 섞임 · 손상 ·
+ *    빈 집합 · 다른 key) 이면 **배정하지 않고 멈춘다** — 공개 기본값으로 대조하지 않는다.
+ */
+const AUTHOR_KEY = readAuthorHashKey()
+const hashOfFor = (sets: NameCollisionSets): ((v: string) => string) => {
+  const g = authorGateOf(AUTHOR_KEY, sets)
+  return g.ok ? g.hashOf : fail(`표시명 Gate ⑥-B 를 쓸 수 없다 — ${g.reason}`)
+}
 const ok = (m: string) => console.log(`   ✅ ${m}`)
 
 /** seed 한 명분 — 🔴 전부 optional. 있는 것만 채운다 */
@@ -130,8 +138,6 @@ function scanForbidden(value: unknown, path: string, hits: string[]): void {
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
-const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
-const hashOf = (v: string) => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
 
 
 // ── seed 파일 ──
@@ -320,6 +326,7 @@ ok('전부 User.nickname 보유')
 
 // 🔴 Gate ⑥-B 재검사 — seed 단계에서도 이름이 여전히 유효한지 본다
 const sets: NameCollisionSets = await loadNameCollisionSets(prisma)
+const hashOf = hashOfFor(sets)
 const blocked: string[] = []
 for (const p of personas) {
   const name = ((p.user.nickname ?? p.user.name) ?? '').trim()

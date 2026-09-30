@@ -22,7 +22,6 @@
  *      · 기존 User 재사용 — 항상 새로 만든다
  */
 import { PrismaClient, type PersonaStatus } from '@prisma/client'
-import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 
 import {
@@ -32,6 +31,8 @@ import { judgeRealMember } from '../src/lib/real-member-gate'
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { authorGateOf, readAuthorHashKey } from './lib/voice-author-hash.mjs'
+import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 
 /**
  * 🔴 크롤 author 해시 salt — `persona-mvp-assign` 과 **같은 계약**이다.
@@ -39,8 +40,6 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
  *    **authorHash 대조가 통째로 건너뛰어진다** (실측 17,992건 무시).
  *    salt 를 호출부가 쥐는 이유는 판정부를 순수하게 두기 위해서다.
  */
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 const APPLY = process.argv.includes('--apply')
 const CHECK = process.argv.includes('--check')
@@ -48,6 +47,16 @@ const DRAFT: PersonaStatus = 'draft'
 const AUDIT_REASON = 'Persona 2차 확장 (P01·P02·P11) — planner 364조합 전수 근거'
 
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
+/**
+ * 🔴 **Gate ⑥-B B2 해시 — 정본 `authorGateOf`(voice-author-hash) 가 허락할 때만** (2026-10-01 author-hash v2).
+ *    key 는 정본 env 에서만 읽는다. key 없음 · 저장 작가 해시가 지금 key 의 v2 가 아님(옛 세대 · 섞임 · 손상 ·
+ *    빈 집합 · 다른 key) 이면 **배정하지 않고 멈춘다** — 공개 기본값으로 대조하지 않는다.
+ */
+const AUTHOR_KEY = readAuthorHashKey()
+const hashOfFor = (sets: NameCollisionSets): ((v: string) => string) => {
+  const g = authorGateOf(AUTHOR_KEY, sets)
+  return g.ok ? g.hashOf : fail(`표시명 Gate ⑥-B 를 쓸 수 없다 — ${g.reason}`)
+}
 const ok = (m: string): void => console.log(`   ✅ ${m}`)
 
 await loadEnvLocal()
@@ -142,9 +151,8 @@ if (new Set(names).size !== names.length) { await prisma.$disconnect(); fail('�
 ok(`이름 선택 ${names.length}개`)
 
 // ── 🔴 Gate ⑥-B — **적용 직전에 다시 본다.** 작명과 배정 사이에 회원이 같은 이름을 만들 수 있다 ──
-const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
-const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
 const sets = await loadNameCollisionSets(prisma)
+const hashOf = hashOfFor(sets)
 console.log(`   대조 대상 — ${describeSets(sets)}`)
 const verdicts = WAVE2_CODES.map((code, i) => ({ code, name: names[i]!, v: checkNameCollision(names[i]!, sets, { hashOf }) }))
 const blocked = verdicts.filter((x) => x.v.status !== 'pass')

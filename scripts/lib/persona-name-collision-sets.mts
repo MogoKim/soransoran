@@ -12,6 +12,7 @@
  * 🔴 조회한 이름 원문을 로그 · 반환 요약에 출력하지 않는다.
  *    반환값은 판정부에 그대로 넘길 배열이며, 사람이 보는 출력은 개수뿐이다.
  */
+import { censusOf, setStateOf, type AuthorHashCensus, type AuthorHashKey, type AuthorHashSetState } from './voice-author-hash.mjs'
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 /**
@@ -94,6 +95,18 @@ export async function loadAuthorHashSets(prisma: Reader): Promise<{
   for (const r of srcNorm) if (r.authorHashNorm !== null) authorHashNorms.add(r.authorHashNorm)
   for (const r of sigNorm) if (r.authorHashNorm !== null) authorHashNorms.add(r.authorHashNorm)
   return { authorHashes, authorHashNorms }
+}
+
+/**
+ * 🔴 **저장 작가 해시의 세대 상태** — 적재 도구가 쓰기 전 · 전환 도구가 계획할 때 같은 함수로 본다(read-only).
+ *    판정은 정본 `setStateOf`(voice-author-hash) 하나다. 값은 돌려주지 않는다 — 수와 상태만.
+ */
+export async function storedAuthorHashState(prisma: Reader, key: AuthorHashKey | null): Promise<{
+  census: AuthorHashCensus; state: AuthorHashSetState
+}> {
+  const s = await loadAuthorHashSets(prisma)
+  const census = censusOf([...s.authorHashes, ...s.authorHashNorms], key)
+  return { census, state: setStateOf(census) }
 }
 
 /** 대조 집합 전체를 모은다. 🔴 read-only */

@@ -16,6 +16,8 @@
  */
 import { createHash } from 'node:crypto'
 
+import { authorHashV2Of, type AuthorHashKey } from './voice-author-hash.mjs'
+
 /** 이 규칙 묶음의 버전 */
 export const COMMENT_RULE_VERSION = 'voice-m2-rule-v1'
 
@@ -72,8 +74,9 @@ export function commentHashOf(text: string): string {
   return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`
 }
 
-export function commentAuthorHashOf(author: string, salt: string): string {
-  return `sha256:${createHash('sha256').update(`${salt}::${author}`, 'utf8').digest('hex')}`
+/** 🔴 (2026-10-01 author-hash v2) 계산은 정본 `authorHashV2Of` 하나다 — VoiceSource 와 같은 값이어야 같은 사람으로 잡힌다 */
+export function commentAuthorHashOf(author: string, key: AuthorHashKey): string {
+  return authorHashV2Of(author, key)
 }
 
 // ── 반응 분류 ─────────────────────────────────────────────
@@ -150,7 +153,7 @@ function pickNumber(item: unknown, keys: readonly string[]): number {
  *    같은 입력이 매번 다른 출력을 내고 fixture 로 잠글 수 없다.
  */
 export function toCommentSignals(
-  raw: unknown, opts: { authorSalt: string; capturedAt: Date },
+  raw: unknown, opts: { authorKey: AuthorHashKey; capturedAt: Date },
 ): CommentSignalRow[] {
   if (!Array.isArray(raw)) return []
   const out: CommentSignalRow[] = []
@@ -160,7 +163,7 @@ export function toCommentSignals(
     const author = pick(item, ['author', 'nickname', 'writer', 'name'])
     out.push({
       ordinal: index,
-      authorHash: author ? commentAuthorHashOf(author, opts.authorSalt) : null,
+      authorHash: author ? commentAuthorHashOf(author, opts.authorKey) : null,
       contentHash: commentHashOf(body),
       contentLength: body.length,
       likeCount: pickNumber(item, ['likeCount', 'likes', 'like']),

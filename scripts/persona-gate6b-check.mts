@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHash } from 'node:crypto'
+import { authorHashKeyOf, authorHashV2Of, type AuthorHashKey } from './lib/voice-author-hash.mjs'
 import {
   checkNameCollision, summarizeForAdmin,
   normalizeN1, normalizeN2, normalizeN3, editDistance,
@@ -47,18 +47,22 @@ const gateCode = stripComments(gateRaw)
 const setsCode = stripComments(readFileSync(SETS_LIB, 'utf-8'))
 
 // 🔴 fixture 전용 salt. 실제 salt 가 아니다
-const FIXTURE_SALT = 'fixture-salt-not-real'
-const hashOf = (v: string) => `sha256:${createHash('sha256').update(`${FIXTURE_SALT}::${v}`, 'utf8').digest('hex')}`
+// 🔴 (2026-10-01 author-hash v2) 해시는 정본 helper 하나 — 시험 전용 key(합성 32자 이상)
+const FIXTURE_KEY = authorHashKeyOf('fixture-key-not-real-0123456789abcdef')
+if (!FIXTURE_KEY.ok) throw new Error('fixture key')
+const hashOf = (v: string): string => authorHashV2Of(v, (FIXTURE_KEY as { ok: true; key: AuthorHashKey }).key)
+/** 🔴 작가 해시 집합이 없는 순수 gate 시험용 — 운영 경로에서는 `authorGateOf` 가 빈 집합을 거절한다 */
+const NO_AUTHOR = { authorHashes: new Set<string>(), authorHashNorms: new Set<string>() }
 
 // 🔴 전부 합성 문자열이다
 const MEMBER = ['봄뜰하나', '겨울숲둘', '가을바다셋']
 const PERSONA = ['여름길넷']
 
-const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA }
+const baseSets: NameCollisionSets = { ...NO_AUTHOR, memberNames: MEMBER, personaNames: PERSONA }
 
 // ── ① pass ─────────────────────────────────────────────
 {
-  const v = checkNameCollision('민들레섬', baseSets)
+  const v = checkNameCollision('민들레섬', baseSets, { hashOf })
   if (v.status !== 'pass') bad('pass — 겹치지 않는 후보', 'case', `🔴 ${v.status} (${v.reason})`)
   else if (v.hits.length !== 0) bad('pass — 겹치지 않는 후보', 'case', `🔴 hit ${v.hits.length}건`)
   else ok('pass — 겹치지 않는 후보', 'case', 'status=pass · hit 0')
@@ -66,7 +70,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ② reject — 완전 일치 (B1 회원) ──────────────────────
 {
-  const v = checkNameCollision('봄뜰하나', baseSets)
+  const v = checkNameCollision('봄뜰하나', baseSets, { hashOf })
   const hit = v.hits.find((h) => h.kind === 'B1_MEMBER')
   if (v.status !== 'reject') bad('reject — 회원 완전 일치', 'case', `🔴 ${v.status}`)
   else if (hit?.stage !== 'N0' || hit.distance !== 0) bad('reject — 회원 완전 일치', 'case', `🔴 stage=${hit?.stage} d=${hit?.distance}`)
@@ -76,7 +80,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ③ reject — N2 에서 일치 (공백·기호 차이) ─────────────
 {
-  const v = checkNameCollision('겨울 숲.둘', baseSets)
+  const v = checkNameCollision('겨울 숲.둘', baseSets, { hashOf })
   const hit = v.hits.find((h) => h.kind === 'B1_MEMBER')
   if (v.status !== 'reject') bad('reject — N2 정규화 일치', 'case', `🔴 ${v.status}`)
   else if (hit?.stage !== 'N2') bad('reject — N2 정규화 일치', 'case', `🔴 stage=${hit?.stage}`)
@@ -85,21 +89,21 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ④ reject — 5자 이상 거리 1 ──────────────────────────
 {
-  const v = checkNameCollision('가을바다셋넷', baseSets)
+  const v = checkNameCollision('가을바다셋넷', baseSets, { hashOf })
   if (v.status !== 'reject') bad('reject — 5자+ 거리1', 'case', `🔴 ${v.status} (${v.reason})`)
   else ok('reject — 5자+ 거리1', 'case', `길이 ${v.candidateLength} · reject`)
 }
 
 // ── ⑤ review — 3~4자 거리 1 은 reject 가 아니다 ──────────
 {
-  const v = checkNameCollision('솔잎바다', { memberNames: ['솔잎하늘'] })
+  const v = checkNameCollision('솔잎바다', { ...NO_AUTHOR, memberNames: ['솔잎하늘'] }, { hashOf })
   if (v.status !== 'review') bad('review — 3~4자 거리1', 'case', `🔴 ${v.status} (${v.reason})`)
   else ok('review — 3~4자 거리1', 'case', `길이 ${v.candidateLength} · review`)
 }
 
 // ── ⑥ 🔴 2자 이하는 유사도를 하지 않는다 ────────────────
 {
-  const v = checkNameCollision('솔밤', { memberNames: ['솔달'] })
+  const v = checkNameCollision('솔밤', { ...NO_AUTHOR, memberNames: ['솔달'] }, { hashOf })
   if (v.status !== 'pass') bad('2자 이하 유사도 제외', 'guard', `🔴 ${v.status} — 짧은 이름에 유사도가 걸렸다`)
   else ok('2자 이하 유사도 제외', 'guard', `임계 minLength=${NAME_COLLISION_THRESHOLDS.minLengthForSimilarity}`)
 }
@@ -107,7 +111,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 // ── ⑦ 🔴 N3 일치는 reject 가 아니라 review 다 ────────────
 {
   // N2 는 다르고(숫자 유무) N3 는 같아지는 쌍
-  const v = checkNameCollision('들꽃77', { memberNames: ['들꽃'] })
+  const v = checkNameCollision('들꽃77', { ...NO_AUTHOR, memberNames: ['들꽃'] }, { hashOf })
   const n3hit = v.hits.find((h) => h.stage === 'N3')
   if (n3hit === undefined) bad('N3 는 review 신호', 'guard', '🔴 N3 신호가 없다 — 케이스가 성립하지 않는다')
   else if (v.status === 'reject') bad('N3 는 review 신호', 'guard', '🔴 N3 가 reject 로 샜다')
@@ -117,7 +121,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 // ── ⑧ 🔴 N3 결과가 빈 문자열이면 비교하지 않는다 ─────────
 {
   // 둘 다 한글이 없어 N3 가 '' 가 된다 — 여기서 같다고 하면 안 된다
-  const v = checkNameCollision('ab12', { memberNames: ['xy99'] })
+  const v = checkNameCollision('ab12', { ...NO_AUTHOR, memberNames: ['xy99'] }, { hashOf })
   const n3hit = v.hits.find((h) => h.stage === 'N3')
   if (n3hit !== undefined) bad('N3 빈 문자열 비교 제외', 'guard', '🔴 빈 문자열끼리 일치로 잡혔다')
   else ok('N3 빈 문자열 비교 제외', 'guard', 'N3 hit 0 — 비교하지 않았다')
@@ -128,7 +132,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   const cases = ['소란지기', '운영도우미', 'sunny', '들꽃7']
   const offenders: string[] = []
   for (const c of cases) {
-    const v = checkNameCollision(c, baseSets)
+    const v = checkNameCollision(c, baseSets, { hashOf })
     if (v.status !== 'regenerate') offenders.push(`${c}=${v.status}`)
     if (!v.hits.some((h) => h.kind === 'B5_OPERATOR_AI')) offenders.push(`${c} B5 미검출`)
   }
@@ -141,7 +145,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   const cases = ['52세아줌마', '분당동', '갑상선맘', '며느리']
   const offenders: string[] = []
   for (const c of cases) {
-    const v = checkNameCollision(c, baseSets)
+    const v = checkNameCollision(c, baseSets, { hashOf })
     if (v.status !== 'regenerate' && v.status !== 'reject') offenders.push(`${c}=${v.status}`)
     if (!v.hits.some((h) => h.kind === 'B6_IDENTIFYING')) offenders.push(`${c} B6 미검출`)
   }
@@ -151,7 +155,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ⑪ reject — B4 출처 커뮤니티 marker ──────────────────
 {
-  const v = checkNameCollision('레테님들모임', baseSets)
+  const v = checkNameCollision('레테님들모임', baseSets, { hashOf })
   const hit = v.hits.find((h) => h.kind === 'B4_SOURCE_MARKER')
   if (v.status !== 'reject') bad('reject — 출처 marker', 'case', `🔴 ${v.status}`)
   else if (hit?.term === undefined) bad('reject — 출처 marker', 'case', '🔴 term 이 없다')
@@ -160,7 +164,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ⑫ B2 — 해시 완전 일치는 reject ──────────────────────
 {
-  const sets: NameCollisionSets = { authorHashes: new Set([hashOf('밤바다길')]) }
+  const sets: NameCollisionSets = { authorHashes: new Set([hashOf('밤바다길')]), authorHashNorms: new Set<string>() }
   const v = checkNameCollision('밤바다길', sets, { hashOf })
   const hit = v.hits.find((h) => h.kind === 'B2_CRAWL_AUTHOR')
   if (v.status !== 'reject') bad('B2 — 해시 완전 일치', 'case', `🔴 ${v.status}`)
@@ -170,7 +174,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ⑬ B2 — authorHashNorm 으로 N2 변형을 잡는다 ─────────
 {
-  const sets: NameCollisionSets = { authorHashNorms: new Set([hashOf(normalizeN2('밤바다길'))]) }
+  const sets: NameCollisionSets = { authorHashes: new Set<string>(), authorHashNorms: new Set([hashOf(normalizeN2('밤바다길'))]) }
   const v = checkNameCollision('밤 바다.길', sets, { hashOf })
   const hit = v.hits.find((h) => h.kind === 'B2_CRAWL_AUTHOR')
   if (hit?.refType !== 'authorHashNorm') bad('B2 — Norm 으로 변형 검출', 'case', `🔴 refType=${hit?.refType}`)
@@ -180,7 +184,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ⑭ 🔴 B2 는 유사도를 하지 않는다 ─────────────────────
 {
-  const sets: NameCollisionSets = { authorHashes: new Set([hashOf('밤바다길')]) }
+  const sets: NameCollisionSets = { authorHashes: new Set([hashOf('밤바다길')]), authorHashNorms: new Set<string>() }
   const v = checkNameCollision('밤바다칼', sets, { hashOf })  // 거리 1
   if (v.hits.some((h) => h.kind === 'B2_CRAWL_AUTHOR')) {
     bad('B2 유사도 금지', 'guard', '🔴 해시에서 유사 일치가 나왔다 — 불가능한 결과다')
@@ -191,7 +195,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ⑮ 🔴 반환값에 원문 문자열이 없다 ────────────────────
 {
-  const v = checkNameCollision('겨울숲둘', baseSets)
+  const v = checkNameCollision('겨울숲둘', baseSets, { hashOf })
   const json = JSON.stringify(v)
   const leaked = [...MEMBER, ...PERSONA, '겨울숲둘'].filter((n) => json.includes(n))
   if (leaked.length > 0) bad('반환값에 원문 없음', 'guard', `🔴 원문 ${leaked.length}건이 반환값에 있다`)
@@ -200,7 +204,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ⑯ 어드민 요약에도 원문이 없다 ───────────────────────
 {
-  const v = checkNameCollision('봄뜰하나', baseSets)
+  const v = checkNameCollision('봄뜰하나', baseSets, { hashOf })
   const s = summarizeForAdmin(v)
   const json = JSON.stringify(s)
   if ([...MEMBER, '봄뜰하나'].some((n) => json.includes(n))) {
@@ -213,14 +217,14 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 // ── ⑰ 가장 엄격한 쪽을 따른다 ───────────────────────────
 {
   // B5(regenerate) 와 B1 완전 일치(reject) 가 함께 걸리는 후보
-  const v = checkNameCollision('봄뜰하나7', { memberNames: ['봄뜰하나7'] })
+  const v = checkNameCollision('봄뜰하나7', { ...NO_AUTHOR, memberNames: ['봄뜰하나7'] }, { hashOf })
   if (v.status !== 'reject') bad('가장 엄격한 쪽', 'policy', `🔴 ${v.status} — regenerate 가 reject 를 덮었다`)
   else ok('가장 엄격한 쪽', 'policy', 'B5 regenerate + B1 reject → reject')
 }
 
 // ── ⑱ 빈 후보 ──────────────────────────────────────────
 {
-  const v = checkNameCollision('   ', baseSets)
+  const v = checkNameCollision('   ', baseSets, { hashOf })
   if (v.status !== 'regenerate') bad('빈 후보', 'case', `🔴 ${v.status}`)
   else ok('빈 후보', 'case', 'regenerate')
 }
@@ -289,7 +293,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   ]
   const offenders: string[] = []
   for (const [cand, member] of cases) {
-    const v = checkNameCollision(cand, { memberNames: [member] })
+    const v = checkNameCollision(cand, { ...NO_AUTHOR, memberNames: [member] }, { hashOf })
     const onlyN3 = v.hits.length > 0 && v.hits.every((h) => h.stage === 'N3' || h.kind === 'B5_OPERATOR_AI')
     const n3 = v.hits.some((h) => h.stage === 'N3')
     if (!n3) { offenders.push(`${cand}: N3 신호 없음`); continue }
@@ -304,7 +308,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 {
   // "솔 밤" 은 원본 3자지만 N2 로는 "솔밤" 2자다.
   // 원본 길이로 재면 유사도 검사에 들어가 review 가 나온다 — 그러면 안 된다.
-  const v = checkNameCollision('솔 밤', { memberNames: ['솔 달'] })
+  const v = checkNameCollision('솔 밤', { ...NO_AUTHOR, memberNames: ['솔 달'] }, { hashOf })
   if (v.status !== 'pass') {
     bad('길이 구간은 N2 기준', 'guard', `🔴 ${v.status} — 원본 길이로 재고 있다 (${v.reason})`)
   } else if (v.candidateLength !== 2) {
@@ -321,7 +325,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   ]
   const offenders: string[] = []
   for (const [cand, member] of cases) {
-    const v = checkNameCollision(cand, { memberNames: [member] })
+    const v = checkNameCollision(cand, { ...NO_AUTHOR, memberNames: [member] }, { hashOf })
     if (v.status !== 'pass') offenders.push(`${v.status}(len=${v.candidateLength})`)
   }
   if (offenders.length) bad('기호로 길이 가드 우회 불가', 'guard', `🔴 ${offenders.join(' / ')}`)
@@ -331,7 +335,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 // ── ㉕ N2 기준 5자 이상이면 기호가 있어도 거리1 은 reject ──
 {
   // "가을 바다.셋" → N2 "가을바다셋" 5자. 회원 "가을바다솔" 과 거리 1
-  const v = checkNameCollision('가을 바다.셋', { memberNames: ['가을바다솔'] })
+  const v = checkNameCollision('가을 바다.셋', { ...NO_AUTHOR, memberNames: ['가을바다솔'] }, { hashOf })
   if (v.candidateLength !== 5) bad('N2 5자+ 거리1 reject', 'guard', `🔴 len=${v.candidateLength}`)
   else if (v.status !== 'reject') bad('N2 5자+ 거리1 reject', 'guard', `🔴 ${v.status}`)
   else ok('N2 5자+ 거리1 reject', 'guard', 'N2 5자 · d1 · reject')

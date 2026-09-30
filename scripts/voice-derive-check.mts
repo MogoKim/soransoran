@@ -26,6 +26,14 @@ import {
 import {
   toCommentSignals, classifyReaction, summarizeCommentSignals, COMMENT_TRUNCATE_AT,
 } from './lib/voice-comment-signals.mjs'
+import { authorHashKeyOf, type AuthorHashKey } from './lib/voice-author-hash.mjs'
+
+/** 🔴 (2026-10-01 author-hash v2) 시험 전용 key — 합성 문자열(32자 이상). 운영 key 가 아니다 */
+const testKey = (label: string): AuthorHashKey => {
+  const r = authorHashKeyOf(`test-key-${label}-0123456789abcdef0123456789`)
+  if (!r.ok) throw new Error('test key')
+  return r.key
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-derive-live.mts')
@@ -92,14 +100,14 @@ const SAMPLE_BODY = [
   const body = '저도 작년에 똑같이 겪었어요. 병원은 큰 데로 가시는 게 나아요.'
   const rows = toCommentSignals(
     [{ author: '햇살가득', content: body, likeCount: 4, replyCount: 1 }],
-    { authorSalt: 'salt-x', capturedAt: new Date('2026-08-01T00:00:00Z') },
+    { authorKey: testKey('x'), capturedAt: new Date('2026-08-01T00:00:00Z') },
   )
   const json = JSON.stringify(rows)
   const offenders: string[] = []
   if (json.includes('똑같이 겪었')) offenders.push('댓글 본문이 남았다')
   if (json.includes('햇살가득')) offenders.push('닉네임 원문이 남았다')
   if (!rows[0]?.contentHash?.startsWith('sha256:')) offenders.push('contentHash 형식')
-  if (!rows[0]?.authorHash?.startsWith('sha256:')) offenders.push('authorHash 형식')
+  if (!rows[0]?.authorHash?.startsWith('hmac-v2:')) offenders.push('authorHash 형식(v2)')
   if (rows[0]?.contentLength !== body.length) offenders.push('길이가 틀리다')
   if (rows[0]?.likeCount !== 4 || rows[0]?.replyCount !== 1) offenders.push('반응 수치 손실')
   if (offenders.length) bad('댓글 본문 · 닉네임 미저장', 'policy', `🔴 ${offenders.join(' / ')}`)
@@ -223,7 +231,7 @@ const SAMPLE_BODY = [
   if (COMMENT_TRUNCATE_AT !== 199) offenders.push(`COMMENT_TRUNCATE_AT 가 ${COMMENT_TRUNCATE_AT} (1차값은 199)`)
   const rows = toCommentSignals(
     [{ content: '가'.repeat(198) }, { content: '가'.repeat(199) }],
-    { authorSalt: 's', capturedAt: new Date(0) },
+    { authorKey: testKey('s'), capturedAt: new Date(0) },
   )
   if (rows[0].truncated) offenders.push('198자가 잘림으로 잡힌다')
   if (!rows[1].truncated) offenders.push('199자가 잘림으로 안 잡힌다')
@@ -326,7 +334,7 @@ const SAMPLE_BODY = [
   // 요약 함수도 본문을 담지 않아야 한다
   const s = summarizeCommentSignals(toCommentSignals(
     [{ author: '홍길동', content: '저도 겪었어요 병원 다녀오세요' }],
-    { authorSalt: 's', capturedAt: new Date(0) },
+    { authorKey: testKey('s'), capturedAt: new Date(0) },
   ))
   const sj = JSON.stringify(s)
   if (sj.includes('겪었어요') || sj.includes('홍길동')) offenders.push('요약에 본문 · 닉네임')

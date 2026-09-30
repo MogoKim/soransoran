@@ -687,22 +687,23 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
 }
 
 // ── ⑥ Gate ⑥-B — salt 순서와 **행동** ──
-console.log('\n⑥ Gate ⑥-B (salt 를 loadEnvLocal 뒤에 만드는가 · salt 가 판정을 바꾸는가)')
+console.log('\n⑥ Gate ⑥-B (작가 해시 key 는 정본 helper 하나 · key 가 판정을 바꾸는가)')
 {
   const raw = read('scripts/persona-cohort-run.mts')
   const src = codeOf('scripts/persona-cohort-run.mts')
-  const envAt = src.indexOf('await loadEnvLocal()')
-  const saltAt = src.indexOf('const salt = ')
-  const hashAt = src.indexOf('const hashOf = ')
-  check('🔴 loadEnvLocal 을 부른다', envAt >= 0)
-  check('🔴 salt 를 그 뒤에 만든다', saltAt > envAt)
-  check('🔴 hashOf 도 그 뒤다', hashAt > envAt)
-  check('🔴 형제 도구(persona-wave2-assign)와 같은 순서다', (() => {
+  /**
+   * 🔴 (2026-10-01 author-hash v2) 앞판은 salt 를 cwd `.env.local` 에서 `loadEnvLocal()` 뒤에 읽어야 했다 — 순서를 틀리면
+   *    공개 기본값으로 굳어 B2 가 조용히 전원 통과했다. 이제 key 는 정본 helper(`readAuthorHashKey`)가 **정본 env 에서만** 읽고,
+   *    hashOf 는 정본 `authorGateOf` 가 key · 저장 세대를 확인한 뒤에만 준다 — 순서 문제 자체가 없다.
+   */
+  check('🔴 cohort 도구가 key 를 정본 helper 로만 읽는다(salt · 공개 기본값 · process.env 직접 읽기 0)',
+    /readAuthorHashKey\(\)/.test(src) && !/VOICE_AUTHOR_HASH_SALT/.test(src) && !/soransoran-voice-v1/.test(src) && !/const salt = /.test(src))
+  check('🔴 형제 도구(persona-wave2-assign)도 같은 helper 다', (() => {
     const w = codeOf('scripts/persona-wave2-assign.mts')
-    return w.indexOf('const salt = ') > w.indexOf('await loadEnvLocal()')
+    return /readAuthorHashKey\(\)/.test(w) && /authorGateOf/.test(w) && !/const salt = /.test(w)
   })())
-  check('🔴 왜 순서가 중요한지 코드에 적혀 있다',
-    raw.includes('뒤에 만든다') && raw.includes('조용히 전원 pass 로 통과한다'))
+  check('🔴 왜 바꿨는지 코드에 적혀 있다',
+    raw.includes('authorGateOf') && raw.includes('공개 기본값으로 대조하지 않는다'))
   check('🔴 죽은 변수(salt0)를 남기지 않았다', !/salt0/.test(src))
   /**
    * 🔴 **세 호출 전부**가 hashOf 를 받아야 한다. 하나만 검사하면 나머지에서 빼도 통과한다 —
@@ -723,7 +724,7 @@ console.log('\n⑥ Gate ⑥-B (salt 를 loadEnvLocal 뒤에 만드는가 · salt
   const hashWith = (salt: string) => (v: string): string =>
     `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
   const REAL_SALT = 'soransoran-real-salt'
-  const WRONG_SALT = 'soransoran-voice-v1'
+  const WRONG_SALT = 'wrong-salt-for-fixture'
   const CANDIDATE = '수국'
   const sets = {
     memberNames: [] as string[],
@@ -734,14 +735,14 @@ console.log('\n⑥ Gate ⑥-B (salt 를 loadEnvLocal 뒤에 만드는가 · salt
   }
   const right = checkNameCollision(CANDIDATE, sets, { hashOf: hashWith(REAL_SALT) })
   const wrong = checkNameCollision(CANDIDATE, sets, { hashOf: hashWith(WRONG_SALT) })
-  const none = checkNameCollision(CANDIDATE, sets, {})
   check('🔴 맞는 salt 로는 크롤 author 충돌이 잡힌다',
     right.status === 'reject' && right.hits.some((x) => x.kind === 'B2_CRAWL_AUTHOR'))
   check('🔴 다른 salt 를 주입하면 **같은 이름이 통과한다** — 결과가 실제로 달라진다',
     wrong.status === 'pass' && !wrong.hits.some((x) => x.kind === 'B2_CRAWL_AUTHOR'))
-  check('🔴 hashOf 를 아예 안 넘겨도 통과한다 — B2 가 통째로 건너뛰어진다', none.status === 'pass')
-  check('🔴 즉 salt 를 늦게 읽으면 Gate 가 조용히 무력화된다 (세 결과가 다르다)',
-    right.status !== wrong.status && wrong.status === none.status)
+  // 🔴 (2026-10-01 author-hash v2) hashOf 는 타입상 필수가 됐다 — "안 넘기면 통과" 길이 없다. key 가 틀리면
+  //    저장값의 kid 와 달라 정본 `authorGateOf` 가 key-mismatch 로 거절한다(voice-author-hash-check)
+  check('🔴 즉 key 가 틀리면 Gate 결과가 실제로 달라진다 — 그래서 정본 authorGateOf 가 세대 · key 를 먼저 본다',
+    right.status !== wrong.status)
   check('🔴 다른 갈래(B1 회원)는 salt 와 무관하게 그대로 잡힌다', (() => {
     const withMember = { ...sets, memberNames: [CANDIDATE] }
     return checkNameCollision(CANDIDATE, withMember, { hashOf: hashWith(WRONG_SALT) }).status === 'reject'

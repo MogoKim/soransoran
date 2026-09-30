@@ -165,10 +165,12 @@ console.log('\n⑥ Gate ⑥-B · authorHash 충돌')
   check('🔴 authorHash 가 겹치면 pass 가 아니다', withHash.status !== 'pass')
   check('🔴 사유가 크롤 author 다', withHash.hits.some((h) => h.kind === 'B2_CRAWL_AUTHOR'))
 
-  // 🔴 **이것이 결함이었다** — hashOf 를 넘기지 않으면 대조가 `return []` 로 빠진다
-  const withoutHash = checkNameCollision(NAME, sets)
-  check('🔴 hashOf 없이 부르면 같은 이름이 통과해 버린다 (그래서 반드시 넘겨야 한다)',
-    withoutHash.status === 'pass')
+  // 🔴 **이것이 결함이었다** — hashOf 를 넘기지 않으면 대조가 `return []` 로 빠졌다.
+  //    (2026-10-01 author-hash v2) 이제 hashOf · 작가 해시 집합이 **타입상 필수**다 — 빠뜨린 호출은 컴파일되지 않는다
+  const gateSrc = readFileSync(join(HERE, '..', 'scripts/lib/persona-gate-name-collision.mts'), 'utf-8')
+  check('🔴 hashOf · authorHashes · authorHashNorms 가 필수다 — B2 를 조용히 건너뛰는 길이 없다',
+    /hashOf: \(value: string\) => string/.test(gateSrc) && !/hashOf\?:/.test(gateSrc)
+    && /authorHashes: ReadonlySet<string>/.test(gateSrc) && !/if \(hashOf === undefined\) return \[\]/.test(gateSrc))
 
   // 🔴 정규화된 해시(N2)도 잡는다
   const normSets = { authorHashes: new Set<string>(), authorHashNorms: new Set([hashOf(NAME)]) }
@@ -180,8 +182,9 @@ console.log('\n⑥ Gate ⑥-B · authorHash 충돌')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   check('🔴 assign 이 checkNameCollision 에 hashOf 를 넘긴다',
     /checkNameCollision\([^)]*\{\s*hashOf\s*\}/.test(assignSrc))
-  check('🔴 assign 이 MVP 와 같은 salt 계약을 쓴다',
-    /VOICE_AUTHOR_HASH_SALT/.test(assignSrc) && /soransoran-voice-v1/.test(assignSrc))
+  check('🔴 assign 이 정본 authorGateOf 로만 hashOf 를 받는다 — salt · 공개 기본값을 직접 읽지 않는다',
+    /authorGateOf/.test(assignSrc) && /hashOfFor\(sets\)/.test(assignSrc)
+    && !/soransoran-voice-v1/.test(assignSrc) && !/VOICE_AUTHOR_HASH_SALT/.test(assignSrc) && !/createHash/.test(assignSrc))
 }
 
 // ── ⑦ 🔴 seed 완전성 — 생활사 5축만으로 판정하지 않는다 ──

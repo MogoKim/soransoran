@@ -21,6 +21,14 @@ import {
   maskConnectionString, loadUnaoReadonlyUrl, contentHashOf, authorHashOf,
   toSourceRow, countTopComments, summarize,
 } from './lib/voice-unao-readonly.mjs'
+import { authorHashKeyOf, type AuthorHashKey } from './lib/voice-author-hash.mjs'
+
+/** 🔴 (2026-10-01 author-hash v2) 시험 전용 key — 합성 문자열(32자 이상). 운영 key 가 아니다 */
+const testKey = (label: string): AuthorHashKey => {
+  const r = authorHashKeyOf(`test-key-${label}-0123456789abcdef0123456789`)
+  if (!r.ok) throw new Error('test key')
+  return r.key
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIB = join(HERE, 'lib/voice-unao-readonly.mts')
@@ -135,7 +143,7 @@ const raw = readFileSync(LIB, 'utf-8')
   // 요약 타입에 본문이 없는지 — 실제 호출로 확인한다
   const s = summarize(
     toSourceRow({ id: 'x', cafeId: 'c', postUrl: 'u', author: '홍길동', content: '본문입니다'.repeat(20),
-                  commentCount: 3, crawledAt: new Date(0) }, 'salt'),
+                  commentCount: 3, crawledAt: new Date(0) }, testKey('s')),
     5,
   )
   const summaryKeys = Object.keys(s)
@@ -156,7 +164,7 @@ const raw = readFileSync(LIB, 'utf-8')
   const offenders: string[] = []
   // 커넥터가 만드는 행 타입에 본문 필드가 없는가
   const row = toSourceRow({ id: 'x', cafeId: 'c', postUrl: 'u', author: 'a',
-                            content: '본문', commentCount: 1, crawledAt: new Date(0) }, 'salt')
+                            content: '본문', commentCount: 1, crawledAt: new Date(0) }, testKey('s'))
   for (const f of FORBIDDEN_VOICE_SOURCE_COLUMNS) {
     if (f in (row as Record<string, unknown>)) offenders.push(`UnaoSourceRow.${f}`)
   }
@@ -191,9 +199,9 @@ const raw = readFileSync(LIB, 'utf-8')
   if (/approved[A-Za-z]*\s*:\s*raw\.usedAt/.test(code)) offenders.push('usedAt 을 approved 필드로 옮긴다')
   // 커넥터가 usedAt 을 referencedAt 으로 옮기는가
   const withUsed = toSourceRow({ id: 'x', cafeId: 'c', postUrl: 'u', content: '본문',
-                                 crawledAt: new Date(0), usedAt: new Date('2026-05-14T00:00:00Z') }, 'salt')
+                                 crawledAt: new Date(0), usedAt: new Date('2026-05-14T00:00:00Z') }, testKey('s'))
   const withoutUsed = toSourceRow({ id: 'y', cafeId: 'c', postUrl: 'u', content: '본문',
-                                    crawledAt: new Date(0) }, 'salt')
+                                    crawledAt: new Date(0) }, testKey('s'))
   if (withUsed.referencedAt === null) offenders.push('usedAt 이 referencedAt 으로 오지 않는다')
   if (withoutUsed.referencedAt !== null) offenders.push('usedAt 없는데 referencedAt 이 생겼다')
   if (!('approvedAt' in (withUsed as Record<string, unknown>))) {
@@ -226,9 +234,9 @@ const raw = readFileSync(LIB, 'utf-8')
   const distinct = a !== c
   const noPlain = !a.includes('본문')
   // 닉네임 해시는 salt 가 다르면 달라진다
-  const h1 = authorHashOf('홍길동', 'salt-1')
-  const h2 = authorHashOf('홍길동', 'salt-2')
-  const h3 = authorHashOf('홍길동', 'salt-1')
+  const h1 = authorHashOf('홍길동', testKey('1'))
+  const h2 = authorHashOf('홍길동', testKey('2'))
+  const h3 = authorHashOf('홍길동', testKey('1'))
   const saltMatters = h1 !== h2 && h1 === h3 && !h1.includes('홍길동')
   if (shape && stable && distinct && noPlain && saltMatters) {
     ok('해시 — 결정적 · 되돌릴 수 없음', 'policy', 'sha256:{64hex} · salt 반영')
@@ -259,12 +267,12 @@ const raw = readFileSync(LIB, 'utf-8')
   const row = toSourceRow({
     id: 'x', cafeId: 'c', postUrl: 'u', content: '본문', crawledAt: new Date(0),
     desireCategory: 'HEALTH', ageSignal: '50s', urgencyLevel: 3, emotionTags: ['ANXIOUS'],
-  }, 'salt')
+  }, testKey('s'))
   const kept = row.legacyLabels && row.legacyLabels.desireCategory === 'HEALTH'
     && row.legacyLabels.ageSignal === '50s' && row.legacyLabels.urgencyLevel === 3
   const versioned = row.legacyLabelVersion !== null
   // 라벨이 하나도 없으면 null 이어야 한다 — 빈 객체를 만들지 않는다
-  const empty = toSourceRow({ id: 'y', cafeId: 'c', postUrl: 'u', content: '본문', crawledAt: new Date(0) }, 'salt')
+  const empty = toSourceRow({ id: 'y', cafeId: 'c', postUrl: 'u', content: '본문', crawledAt: new Date(0) }, testKey('s'))
   const nullWhenEmpty = empty.legacyLabels === null && empty.legacyLabelVersion === null
   // 라벨 키 목록에 본문 필드가 섞이지 않았는가
   // 🔴 부분 일치로 보면 `commentSplit` 의 `commentS` 가 `comments` 와 걸린다(실제로 걸렸다).

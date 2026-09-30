@@ -19,7 +19,6 @@
  *
  * 🔴 출력에는 코드·개수·사유 코드만 나온다. 코퍼스 원문 · 화자 식별자 · 회원 이름은 나오지 않는다.
  */
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
@@ -35,6 +34,7 @@ import { judgeAutogenBatch, voicePoolFor, type AutogenVerdict } from './lib/pers
 import { applyAutogenDrafts } from './lib/persona-autogen-apply.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { authorGateOf, readAuthorHashKey } from './lib/voice-author-hash.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (k: string): string | null => {
@@ -74,15 +74,17 @@ if (USE_DB) {
   const { PrismaClient } = await import('@prisma/client')
   const { loadNameCollisionSets } = await import('./lib/persona-name-collision-sets.mjs')
   const { checkNameCollision } = await import('./lib/persona-gate-name-collision.mjs')
-  const salt = (process.env.VOICE_AUTHOR_HASH_SALT ?? 'soransoran-voice-v1').trim()
-  const h = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
-  hashOf = h
   const prisma = new PrismaClient()
   prismaRef = prisma
   const rows = await prisma.persona.findMany({
     select: { code: true, status: true, dailyCap: true, weeklyCap: true, silenceRate: true, activityRhythm: true },
   })
   const sets = await loadNameCollisionSets(prisma)
+  // 🔴 Gate ⑥-B B2 — 정본 `authorGateOf` 가 허락할 때만(key · 저장 해시 v2). 아니면 멈춘다(author-hash v2)
+  const gate = authorGateOf(readAuthorHashKey(), sets)
+  if (!gate.ok) { await prisma.$disconnect(); fail(`표시명 Gate ⑥-B 를 쓸 수 없다 — ${gate.reason}`) }
+  const h = (gate as { ok: true; hashOf: (v: string) => string }).hashOf
+  hashOf = h
   const cadences: Cadence[] = rows
     .filter((r) => r.status === 'active' && r.dailyCap !== null && r.weeklyCap !== null && r.silenceRate !== null
       && r.activityRhythm !== null && typeof r.activityRhythm === 'object')

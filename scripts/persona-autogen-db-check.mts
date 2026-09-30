@@ -10,7 +10,7 @@
  *   ② 같은 코드 재적재 → 전원 롤백 · write 0
  *   ③ 표시명이 실회원 이름과 같음 → 트랜잭션 안 Gate ⑥-B 가 막음 · write 0
  *   ④ quarantined 섞인 배치 · --limit 불일치 → DB 를 열기 전에 막음 · write 0
- *   ⑤ CLI dry-run(--db) → write 0
+ *   ⑤ CLI dry-run(--db) → write 0 · key 없음 / 작가 해시 빈 집합 → 멈춤(author-hash v2)
  *   ⑥ 건드리지 않기로 한 표(Post · Comment · Queue · ActivityLog · RawContent · Account) 불변
  */
 import { spawnSync } from 'node:child_process'
@@ -189,19 +189,52 @@ try {
   }
 
   // ── ⑤ CLI dry-run 은 쓰지 않는다 ──
+  //    🔴 (2026-10-01 author-hash v2) `--db` 는 Gate ⑥-B B2 를 정본 `authorGateOf` 로만 연다 —
+  //       key 없음 · 저장 작가 해시가 v2 가 아님(빈 집합 포함) → 멈춘다. 공개 기본값으로 대조하지 않는다.
   {
-    const b = await counts()
-    const run = spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', '--db', '--count=3'], {
-      env: process.env, encoding: 'utf-8',
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { authorHashKeyOf, authorHashV2Of } = await import('./lib/voice-author-hash.mjs')
+    const home = mkdtempSync(join(tmpdir(), 'autogen-db-check-home-'))
+    const cli = (args: string[]) => spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], {
+      env: { ...process.env, HOME: home }, encoding: 'utf-8',
     })
-    check('CLI dry-run(--db) 종료 코드 0', run.status === 0)
-    check('CLI dry-run 이 dry-run 이라고 말한다', /dry-run — DB write 0/.test(run.stdout))
-    check('CLI dry-run → write 0', same(b, await counts()))
-    const runApply = spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', '--db', '--count=3', '--apply', '--limit=0', '--reason', 'x'], {
-      env: process.env, encoding: 'utf-8',
-    })
-    check('valid 0 인데 --apply → 실패 종료', runApply.status !== 0)
-    check('valid 0 --apply → write 0', same(b, await counts()))
+    try {
+      const b = await counts()
+      const noKey = cli(['--db', '--count=3'])
+      check('CLI --db · key 없음 → 멈춤(공개 기본값 대조 0)', noKey.status !== 0 && /Gate ⑥-B 를 쓸 수 없다/.test(`${noKey.stdout}${noKey.stderr}`))
+      check('CLI --db · key 없음 → write 0', same(b, await counts()))
+
+      // 시험 전용 key(합성) + 지금 key 의 v2 작가 해시 1행 — Gate 가 열리는 최소 상태
+      const secret = 'autogen-db-check-key-0123456789abcdef0123'
+      const envDir = join(home, 'Library', 'Application Support', 'soransoran')
+      mkdirSync(envDir, { recursive: true })
+      writeFileSync(join(envDir, 'env.local'), `VOICE_AUTHOR_HASH_SALT=${secret}\n`, { mode: 0o600 })
+      const k = authorHashKeyOf(secret)
+      if (!k.ok) throw new Error('test key')
+      const noRows = cli(['--db', '--count=3'])
+      check('CLI --db · key 있음 · 작가 해시 집합 비었음 → 멈춤(빈 집합을 통과로 읽지 않는다)',
+        noRows.status !== 0 && /Gate ⑥-B 를 쓸 수 없다/.test(`${noRows.stdout}${noRows.stderr}`))
+      const vs = await prisma.voiceSource.create({ data: {
+        origin: 'fixture', sourceRef: `${TAG}-author`, sourceSite: 'navercafe:fixture', sourceUrl: 'https://example.invalid/ag',
+        capturedAt: new Date(0), authorHash: authorHashV2Of('크롤작가', k.key), authorHashNorm: authorHashV2Of('크롤작가', k.key),
+      } })
+      try {
+        const b2 = await counts()
+        const run = cli(['--db', '--count=3'])
+        check('CLI dry-run(--db) 종료 코드 0', run.status === 0)
+        check('CLI dry-run 이 dry-run 이라고 말한다', /dry-run — DB write 0/.test(run.stdout))
+        check('CLI dry-run → write 0', same(b2, await counts()))
+        const runApply = cli(['--db', '--count=3', '--apply', '--limit=0', '--reason', 'x'])
+        check('valid 0 인데 --apply → 실패 종료', runApply.status !== 0)
+        check('valid 0 --apply → write 0', same(b2, await counts()))
+      } finally {
+        await prisma.voiceSource.delete({ where: { id: vs.id } })
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   }
 } finally {
   await cleanup()

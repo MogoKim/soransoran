@@ -10,12 +10,11 @@
  *    이력           `Post.personaId`(공개 글 순서) · `Comment.personaId`
  *    말투 근거      `bundlesForPersonas` — 운영 생성이 쓰는 그 묶음
  *
- * 🔴 Gate ⑥-B 의 author 해시 salt 가 없으면 **공개 기본값으로 대조하지 않는다** —
- *    표시명 판정을 모른다(`null`)로 둔다. 모르는 것은 통과가 아니다.
+ * 🔴 Gate ⑥-B 의 작가 해시는 정본 `authorGateOf`(voice-author-hash) 하나로 본다 — key 가 없거나 저장 집합이
+ *    지금 key 의 v2 가 아니면(옛 세대 · 섞임 · 손상 · 빈 집합) 표시명 판정을 모른다(`null`)로 둔다. 모르는 것은 통과가 아니다.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
 
 import type { Prisma, PrismaClient } from '@prisma/client'
 
@@ -26,10 +25,10 @@ import {
 } from '../../src/lib/persona-reserve'
 import type { PersonaReserveFacts, PersonaReserveRepo, PersonaReserveRow } from './d100-persona-tiers.mjs'
 import { readPersonaReserve } from './d100-persona-tiers.mjs'
-import { readEnvKeys } from './ops-signals.mjs'
 import { checkNameCollision, type NameCollisionSets } from './persona-gate-name-collision.mjs'
 import { loadAuthorHashSets } from './persona-name-collision-sets.mjs'
 import { bundlesForPersonas } from './persona-reference-store.mjs'
+import { authorGateOf, readAuthorHashKey, type AuthorHashKeyRead } from './voice-author-hash.mjs'
 import { PERSONA_POOL_DOC } from './voice-runtime.mjs'
 
 type Reader = PrismaClient | Prisma.TransactionClient
@@ -38,10 +37,10 @@ export type ReserveFactsOptions = {
   now: Date
   repoRoot: string
   /**
-   * Gate ⑥-B author 해시 salt. 🔴 `null`/빈 값이면 표시명 판정을 `null`(모른다)로 둔다 —
-   *    공개 기본값(`soransoran-voice-v1`)으로 대조하면 사전 대입이 가능한 해시와 비교하는 셈이다.
+   * Gate ⑥-B 작가 해시 key — 정본 `readAuthorHashKey()` 결과를 그대로 넘긴다(검사는 `authorHashKeyOf(시험 key)`).
+   *    🔴 key 가 없거나 저장 집합이 v2 가 아니면 표시명 판정을 `null`(모른다)로 둔다 — 공개 기본값으로 대조하지 않는다.
    */
-  authorHashSalt: string | null
+  authorHashKey: AuthorHashKeyRead
 }
 
 const nonEmpty = (v: unknown): boolean =>
@@ -105,11 +104,12 @@ export async function readReserveFacts(prisma: Reader, opts: ReserveFactsOptions
     // 🔴 자산을 못 열면 0 이다 — 말투 근거가 **없는** 것이 맞다(운영 어댑터와 같은 규칙)
   }
 
-  // ── Gate ⑥-B — 자기 User 를 뺀 실회원 표시명 · author 해시 ──
-  const salt = (opts.authorHashSalt ?? '').trim()
+  // ── Gate ⑥-B — 자기 User 를 뺀 실회원 표시명 · author 해시(정본 `authorGateOf` 하나) ──
   const users = await prisma.user.findMany({ select: { id: true, nickname: true, name: true } })
-  const hashSets = salt === '' ? null : await loadAuthorHashSets(prisma)
-  const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
+  const hashSets = opts.authorHashKey.ok ? await loadAuthorHashSets(prisma) : null
+  const gate = hashSets === null
+    ? authorGateOf(opts.authorHashKey, { authorHashes: new Set(), authorHashNorms: new Set() })
+    : authorGateOf(opts.authorHashKey, hashSets)
   const namesExcept = (userId: string): string[] => {
     const out: string[] = []
     for (const u of users) {
@@ -146,14 +146,14 @@ export async function readReserveFacts(prisma: Reader, opts: ReserveFactsOptions
     const name = ((p.user.nickname ?? p.user.name) ?? '').trim()
     let nameGate: QualificationEvidence['nameGate'] = null
     let nameGateUnknown: string | undefined
-    if (hashSets === null) nameGateUnknown = 'VOICE_AUTHOR_HASH_SALT 없음 — 공개 기본값으로 대조하지 않는다'
+    if (!gate.ok || hashSets === null) nameGateUnknown = `표시명 Gate ⑥-B 미측정 — ${gate.ok ? '작가 해시 집합을 읽지 못했다' : gate.reason}`
     else if (name === '') nameGateUnknown = '표시명이 없다'
     else {
       const sets: NameCollisionSets = {
         memberNames: namesExcept(p.user.id), personaNames: [],
         authorHashes: hashSets.authorHashes, authorHashNorms: hashSets.authorHashNorms,
       }
-      nameGate = checkNameCollision(name, sets, { hashOf }).status
+      nameGate = checkNameCollision(name, sets, { hashOf: gate.hashOf }).status
     }
     const seed = seedOfRow(p)
     const card = cards === null ? null : (cards.find((c) => c.code === p.code) ?? null)
@@ -191,17 +191,16 @@ export function prismaReserveRepo(prisma: Reader, opts: ReserveFactsOptions): Pe
 
 /**
  * 🔴 **계약 유효 Persona 수 — 단계 preflight·D100 계기판이 받는 값은 이것 하나다.**
- *    salt 는 정본 env 에서만 읽는다(없으면 null → 자격 대조 축은 모름 → 계약 유효로 세지 않는다).
+ *    작가 해시 key 는 정본 `readAuthorHashKey` 가 정본 env 에서만 읽는다(없으면 자격 대조 축은 모름 → 계약 유효로 세지 않는다).
  *    읽기 실패는 0 이 아니라 null 이다. 활성 행 수로 대신하지 않는다.
  */
 export async function readContractValidPersonas(
   prisma: Reader, opts: { now: Date; repoRoot: string },
 ): Promise<number | null> {
   try {
-    const env = readEnvKeys(['VOICE_AUTHOR_HASH_SALT'])
-    const salt = env.ok ? (env.values.VOICE_AUTHOR_HASH_SALT ?? '').trim() : ''
+    // 🔴 key 는 정본 helper 하나가 정본 env 에서만 읽는다
     const r = await readPersonaReserve(prismaReserveRepo(prisma, {
-      now: opts.now, repoRoot: opts.repoRoot, authorHashSalt: salt === '' ? null : salt,
+      now: opts.now, repoRoot: opts.repoRoot, authorHashKey: readAuthorHashKey(),
     }))
     return r.contractValid
   } catch {

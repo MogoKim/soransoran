@@ -146,18 +146,24 @@ export type NameCollisionSets = {
   memberNames?: readonly string[]
   /** 기존 persona displayName — 🔴 retired·paused 포함 전부 */
   personaNames?: readonly string[]
-  /** 크롤 author 원본 해시 — VoiceSource·VoiceCommentSignal */
-  authorHashes?: ReadonlySet<string>
-  /** 크롤 author N2 정규화 해시 */
-  authorHashNorms?: ReadonlySet<string>
+  /**
+   * 크롤 author 원본 해시 — VoiceSource·VoiceCommentSignal.
+   * 🔴 (2026-10-01 author-hash v2) **필수다.** 앞판은 선택 칸이라 빠뜨린 호출부가 B2 를 조용히 건너뛰고 통과했다.
+   *    운영 호출부는 정본 `authorGateOf`(voice-author-hash) 가 허락한 집합 · `hashOf` 만 넘긴다 —
+   *    빈 집합 · 옛 세대 · 섞임 · 다른 key 는 거기서 거절된다(여기까지 오지 않는다).
+   */
+  authorHashes: ReadonlySet<string>
+  /** 크롤 author N2 정규화 해시 — 필수(위와 같은 이유) */
+  authorHashNorms: ReadonlySet<string>
 }
 
 export type NameCollisionOptions = {
   /**
-   * 후보를 해시하는 함수. 🔴 호출부가 salt 를 쥔다 —
-   * 판정부가 salt 를 알면 순수 함수가 아니게 되고 fixture 가 환경에 묶인다.
+   * 후보를 해시하는 함수. 🔴 호출부가 key 를 쥔다 —
+   * 판정부가 key 를 알면 순수 함수가 아니게 되고 fixture 가 환경에 묶인다.
+   * 🔴 **필수다**(2026-10-01). 운영에서는 정본 `authorGateOf(...).hashOf` 하나만 넘긴다.
    */
-  hashOf?: (value: string) => string
+  hashOf: (value: string) => string
 }
 
 // ── 길이 구간 (설계 §6-2) ────────────────────────────────────
@@ -289,16 +295,15 @@ function matchNames(
 function matchAuthorHashes(
   candidate: string,
   sets: NameCollisionSets,
-  hashOf?: (value: string) => string,
+  hashOf: (value: string) => string,
 ): NameCollisionHit[] {
-  if (hashOf === undefined) return []
   const hits: NameCollisionHit[] = []
 
-  if (sets.authorHashes !== undefined && sets.authorHashes.has(hashOf(candidate))) {
+  if (sets.authorHashes.has(hashOf(candidate))) {
     hits.push({ kind: 'B2_CRAWL_AUTHOR', stage: 'N0', distance: 0, refType: 'authorHash' })
   }
   const n2 = normalizeN2(candidate)
-  if (n2 !== '' && sets.authorHashNorms !== undefined && sets.authorHashNorms.has(hashOf(n2))) {
+  if (n2 !== '' && sets.authorHashNorms.has(hashOf(n2))) {
     hits.push({ kind: 'B2_CRAWL_AUTHOR', stage: 'N2', distance: 0, refType: 'authorHashNorm' })
   }
   return hits
@@ -320,8 +325,8 @@ function statusOfNameHit(hit: NameCollisionHit, candidateLength: number): NameCo
  */
 export function checkNameCollision(
   candidateName: string,
-  sets: NameCollisionSets = {},
-  opts: NameCollisionOptions = {},
+  sets: NameCollisionSets,
+  opts: NameCollisionOptions,
 ): NameCollisionVerdict {
   const candidate = (candidateName ?? '').trim()
   // 🔴 판정에 쓰는 길이와 같은 기준이어야 한다 — N2 정규화 후 길이다

@@ -965,6 +965,10 @@ jobs:
           # 🔴 Persona 자동 확장 적재(2026-09-29 · Track C) — valid 만 · draft 만 · 전원 아니면 0 ·
           #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
           npm run persona:autogen-db-check
+          # 🔴 작가 해시 v1 → v2 전환(2026-10-01 author-hash v2) — 계획 write 0 · key 없음/섞임/미증명/lock → 거절 ·
+          #    중간 실패 전체 롤백 · 재실행 noop(이중 HMAC 0) · 되돌리기 정확 복원 · 두 프로세스 동시 적용 1회 · CLI 기본 계획만.
+          #    voice 표를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
+          npm run voice:author-hash-db-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
@@ -1140,8 +1144,15 @@ jobs:
       #    문제는 데이터가 쌓인 뒤에야 드러난다. CI 가 대신 봐야 한다.
       #
       # 네트워크 · DB 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
-      - name: Voice 우나어 커넥터 (read-only · 원문 미복제)
-        run: npm run voice:unao-readonly-check
+      #
+      # 🔴 (2026-10-01 author-hash v2) 작가 해시 정본 helper 하나 — key 없음 → 공개 기본값 금지 · 세대(v1/v2/섞임/손상/다른 key/빈 집합) ·
+      #    Gate ⑥-B 는 v2-ready 에서만 · 정적 잠금(helper 밖 공개 사슬 · key env · 인라인 salt 해시 0) · 출력 노출 0.
+      #    같은 순수 fixture 라 이 step 에 붙인다(무조건 step 상한 불변).
+      - name: Voice 우나어 커넥터 (read-only · 원문 미복제) · 작가 해시 v2 계약
+        run: |
+          npm run voice:unao-readonly-check
+          npm run voice:author-hash-check
+          npm run persona:gate6b-check
 
       # VoiceSource 적재 경로의 계약.
       #

@@ -26,6 +26,8 @@
  *    터미널 기록과 CI 로그는 우리가 통제하지 못하는 곳으로 남는다.
  */
 import { createHash } from 'node:crypto'
+
+import { authorHashV2Of, type AuthorHashKey } from './voice-author-hash.mjs'
 import { readFileSync, existsSync } from 'node:fs'
 
 /** 🔴 이 커넥터가 쓰는 유일한 환경변수 */
@@ -92,9 +94,12 @@ export function contentHashOf(text: string): string {
   return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`
 }
 
-/** 닉네임은 단방향 해시로만 다룬다. 우나어 닉네임은 3~7자라 원문을 두면 특정된다 */
-export function authorHashOf(author: string, salt: string): string {
-  return `sha256:${createHash('sha256').update(`${salt}::${author}`, 'utf8').digest('hex')}`
+/**
+ * 닉네임은 단방향 해시로만 다룬다. 우나어 닉네임은 3~7자라 원문을 두면 특정된다.
+ * 🔴 (2026-10-01 author-hash v2) 계산은 정본 `authorHashV2Of` 하나다 — 여기서 salt 로 따로 해시하지 않는다.
+ */
+export function authorHashOf(author: string, key: AuthorHashKey): string {
+  return authorHashV2Of(author, key)
 }
 
 /**
@@ -471,7 +476,7 @@ export const MAX_BATCH_SIZE = 500
 export const DEFAULT_BATCH_SIZE = 100
 
 /** CafePost 한 행 → VoiceSource 후보. 🔴 본문을 옮기지 않고 해시만 남긴다 */
-export function toSourceRow(raw: Record<string, unknown>, authorSalt: string): UnaoSourceRow {
+export function toSourceRow(raw: Record<string, unknown>, authorKey: AuthorHashKey): UnaoSourceRow {
   const content = typeof raw.content === 'string' ? raw.content : ''
   const author = typeof raw.author === 'string' ? raw.author.trim() : ''
   const labels: Record<string, unknown> = {}
@@ -490,7 +495,7 @@ export function toSourceRow(raw: Record<string, unknown>, authorSalt: string): U
     sourceSite: `navercafe:${String(raw.cafeId ?? '')}`,
     sourceUrl: String(raw.postUrl ?? ''),
     sourceBoardName: typeof raw.boardName === 'string' ? raw.boardName : null,
-    authorHash: author ? authorHashOf(author, authorSalt) : null,
+    authorHash: author ? authorHashOf(author, authorKey) : null,
     postedAt: raw.postedAt instanceof Date ? raw.postedAt : null,
     capturedAt: raw.crawledAt instanceof Date ? raw.crawledAt : new Date(0),
     contentHash: content ? contentHashOf(content) : null,

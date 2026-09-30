@@ -20,28 +20,14 @@ import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
 import { COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv } from '../../src/lib/persona-comment-auto-lane'
 import { commentLoopLedgerDir } from './persona-comment-loop.mjs'
 
-export const CANONICAL_ENV_FILE = join(homedir(), 'Library', 'Application Support', 'soransoran', 'env.local')
-export const LOG_DIR = join(homedir(), 'Library', 'Logs', 'soransoran')
+/**
+ * 🔴 정본 env 판독기는 의존성 없는 `canonical-env` 로 옮겼다(2026-10-01) — 작가 해시 helper 가 이 파일의 무거운
+ *    의존성 없이 읽게 하려는 것이다. 옮겼을 뿐 두 벌이 아니다(여기서 다시 내보낸다).
+ */
+import { CANONICAL_ENV_FILE, readEnvKeys } from './canonical-env.mjs'
 
-/** 🔴 정본 env 에서 **이 목록의 키만** 읽는다. 목록 밖의 값은 메모리에도 올리지 않는다 */
-export function readEnvKeys(keys: readonly string[], path: string = CANONICAL_ENV_FILE): {
-  ok: boolean; values: Record<string, string>; reason: string | null
-} {
-  if (!existsSync(path)) return { ok: false, values: {}, reason: `정본 env 가 없다 — ${path}` }
-  let text: string
-  try { text = readFileSync(path, 'utf-8') } catch (e) {
-    return { ok: false, values: {}, reason: `정본 env 를 읽지 못했다 — ${(e as Error).name}` }
-  }
-  const values: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
-    if (m === null || !keys.includes(m[1]!)) continue
-    let v = m[2]!.trim()
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
-    values[m[1]!] = v
-  }
-  return { ok: true, values, reason: null }
-}
+export { CANONICAL_ENV_FILE, readEnvKeys }
+export const LOG_DIR = join(homedir(), 'Library', 'Logs', 'soransoran')
 
 /** 🔴 DB 접속 주소 두 개만 채운다 — 이미 있으면 덮지 않고, 어디에도 찍지 않는다 */
 export function fillDbConnection(): boolean {

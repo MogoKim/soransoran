@@ -33,6 +33,7 @@ import {
   buildCacheKey, estimateCost, checkCaps, pricingFor,
 } from './lib/voice-m3-contract.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { readAuthorHashKey } from './lib/voice-author-hash.mjs'
 
 // 🔴 --apply 는 존재하지 않는다. 넘어오면 즉시 거부한다
 if (process.argv.includes('--apply')) {
@@ -57,8 +58,6 @@ const LIMIT = LIMIT_RAW === undefined ? M3_CAPS.itemLimit : Number(LIMIT_RAW)
  */
 const MODEL_RAW = arg('model')
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 /** 🔴 SELECT 다. 원문은 여기서만 나오고 보고에는 실리지 않는다 */
 const READ_SOURCE = 'SELECT id, content, "topComments" FROM "CafePost" WHERE id = ANY($1)'
@@ -81,7 +80,13 @@ async function main(): Promise<void> {
   const pricing = MODEL_RAW ? pricingFor(MODEL_RAW) : undefined
   const modelForKey = MODEL_RAW ?? M3_MODEL_UNDETERMINED
 
-  const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
+  // 🔴 작가 해시 key — 정본 helper 하나(정본 env). 없으면 공개 기본값으로 내려가지 않고 멈춘다(author-hash v2)
+  const keyRead = readAuthorHashKey()
+  if (!keyRead.ok) {
+    console.error(`\n❌ 중단: ${keyRead.reason}\n`)
+    process.exit(1)
+  }
+  const authorKey = keyRead.key
   const unaoUrl = loadUnaoReadonlyUrl()
 
   console.log('\nVoice — VE-M3 dry-run (payload · cap 계산)')
@@ -158,7 +163,7 @@ async function main(): Promise<void> {
         : {}
 
       const commentSignals = toCommentSignals(raw.topComments, {
-        authorSalt: salt, capturedAt: new Date(0),
+        authorKey, capturedAt: new Date(0),
       })
       const reaction = summarizeCommentSignals(commentSignals)
 
