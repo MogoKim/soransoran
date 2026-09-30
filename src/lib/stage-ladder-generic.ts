@@ -226,7 +226,7 @@ export type PreflightFacts = {
   commentDailyUsdCap: number | null
   /** 감사 1건 정산 단가(USD) — 장부 실측(최근 3일) */
   auditUsdPerCall: number | null
-  /** 감사 레인 하루 상한(USD) — 정본 최대 $0.30 */
+  /** 감사 레인 하루 상한(USD) — 감사 레인 env 판독기(`auditLimitsFromEnv`) 값 */
   auditDailyUsdCap: number | null
   /** 🔴 자동 READY 한 건을 만드는 데 든 공급 비용(USD) — 최근 3일 정산 ÷ 그 3일 자동 READY 수 */
   supplyUsdPerReady: number | null
@@ -249,7 +249,7 @@ export type PreflightVerdict = {
  *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`)
  *      · READY 여유 `READY_NET_MARGIN` · Persona canary 하한 `PERSONA_CANARY_FLOOR` — `d100-capacity`
  *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 하루 회차(`SUPPLY_RUNS_PER_DAY`)
- *      · 비용 상한 — 호출부가 정본 천장($0.50 · $0.20 · $0.30)으로 누른 값
+ *      · 비용 상한 — 호출부가 각 레인 정본 판독기로 읽은 값(공급은 승인 천장 $0.50 으로 누른다)
  *    🔴 지연은 **관측됐는가**만 본다 — 행마다의 나이 상한은 `judgeSlotRelease` 가 이미 지킨다(두 번째 문턱을 만들지 않는다).
  */
 export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, grid: RunnerGrid): PreflightVerdict {

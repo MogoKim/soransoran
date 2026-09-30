@@ -20,15 +20,10 @@ import { detailThroughput, DETAIL_SOURCES, type DetailThroughput } from './d100-
 import {
   readSnapshots, readyNetFromSnapshots, appendSnapshot, SNAPSHOT_PATH, type NetChange,
 } from './d100-ready-snapshot.mjs'
-import {
-  readPersonaCandidates, missingAxisHistogram, type PersonaRow, type PersonaTierRepo,
-} from './d100-persona-tiers.mjs'
-import { personaTierReadiness, personaReadinessOk, type TierReadiness } from '../../src/lib/d100-persona-scale'
 import type { D100Stage } from '../../src/lib/d100-capacity'
 import {
   productionRateOf, rateOf, type ProductionRate, type RateReading,
 } from '../../src/lib/d100-supply-funnel'
-import { ANCHOR_MIN_COMMENTS, bundlesForPersonas } from './persona-reference-store.mjs'
 // 🔴 재고와 **같은 판정 함수**를 쓴다 — 여기서 규칙을 다시 적으면 두 숫자가 갈라진다
 import { profileOf, machineReviewedByHuman } from '../../src/lib/original-post-auto-publish'
 import { MACHINE_AGE_HUMAN_REVIEW_REQUIRED } from '../../src/lib/micro-seed-auto-draft'
@@ -76,11 +71,13 @@ export type OperationalStock =
       publishedPerDay: Measured
       /** 🔴 처리량을 본 **창**의 길이다 — "이 단계를 며칠 관측했다" 가 아니다 */
       throughputWindowDays: number
-      /** 🔴 Persona 3계층 — 계기판이 이 값을 그대로 찍는다 */
-      personaTiers: TierReadiness[]
-      /** 🔴 어느 생활사 축이 몇 명에게서 비었는가 */
-      personaMissingAxes: Record<string, number>
-      personaReady: boolean
+      /**
+       * 🔴 **계약 유효 Persona 수 — Persona 레인이 제공한다(주입 인터페이스 · 2026-09-30).**
+       *    앞판은 여기서 `personaTierReadiness`(카드 · Pool · 운영 3계층)를 **따로** 판정해 계기판 두 번째 정본을 만들었다.
+       *    지웠다 — 같은 질문의 정본은 Persona 레인의 reserve(`contractValid`)이고, 다음 단계 preflight 가 그 값을 읽는다.
+       *    제공자가 연결되기 전에는 `null`(모름)이다. 활성 행 수로 대체하지 않는다.
+       */
+      contractValidPersonas: number | null
       /** 공급원별 최근 회차 성패 — `null` 이면 모른다 */
       collectFailing: Record<string, boolean | null>
     }
@@ -152,67 +149,6 @@ export async function publishedAtsOf(prisma: PrismaClient): Promise<Date[]> {
   return posts.map((p) => p.createdAt)
 }
 
-/**
- * 🔴 **Persona 원자료.** 여기서 판정하지 않는다 —
- *    무엇이 비었는지만 옮기고 3계층 판정은 정본 순수 함수가 한다.
- */
-export function prismaPersonaRepo(prisma: PrismaClient, now: Date, repoRoot: string): PersonaTierRepo {
-  return {
-    personaRows: async (): Promise<readonly PersonaRow[]> => {
-      const rows = await prisma.persona.findMany({
-        select: {
-          code: true, status: true, identity: true, ageBand: true, region: true,
-          noGoTopics: true, noGoExpressions: true,
-        },
-        orderBy: { code: 'asc' },
-      })
-      // 🔴 오늘(KST) 경계 — 활동 상한은 하루 단위다
-      const kstNow = new Date(now.getTime() + 9 * 3600_000)
-      const dayStart = new Date(Date.UTC(
-        kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate(),
-      ) - 9 * 3600_000)
-
-      const logs = await prisma.personaActivityLog.findMany({
-        where: { createdAt: { gte: new Date(now.getTime() - 400 * 86_400_000) } },
-        select: { createdAt: true, persona: { select: { code: true } } },
-      })
-      const todayBy = new Map<string, number>()
-      const lastBy = new Map<string, Date>()
-      for (const l of logs) {
-        const code = l.persona.code
-        if (l.createdAt >= dayStart) todayBy.set(code, (todayBy.get(code) ?? 0) + 1)
-        const had = lastBy.get(code)
-        if (had === undefined || l.createdAt > had) lastBy.set(code, l.createdAt)
-      }
-
-      /**
-       * 🔴 **말투 근거는 정본 묶음이 정한다.** 여기서 다시 세지 않는다 —
-       *    실제 생성이 쓰는 것과 다른 수를 세면 준비도가 생성과 어긋난다.
-       */
-      const voiceBy = new Map<string, number>()
-      try {
-        const b = bundlesForPersonas({ repoRoot, personaCodes: rows.map((r) => r.code) })
-        for (const t of b.table) voiceBy.set(t.personaCode, t.anchorComments)
-      } catch {
-        // 🔴 자산을 못 열면 0 이다 — 말투 근거가 **없는** 것이 맞다(fail-closed)
-      }
-
-      return rows.map((r) => {
-        const last = lastBy.get(r.code) ?? null
-        return {
-          code: r.code, status: String(r.status),
-          identity: (r.identity ?? {}) as Record<string, unknown>,
-          ageBand: r.ageBand, region: r.region,
-          noGoTopics: r.noGoTopics, noGoExpressions: r.noGoExpressions,
-          activityToday: todayBy.get(r.code) ?? 0,
-          daysSinceActive: last === null ? null
-            : Math.floor((now.getTime() - last.getTime()) / 86_400_000),
-          voiceComments: voiceBy.get(r.code) ?? 0,
-        }
-      })
-    },
-  }
-}
 
 /**
  * 🔴 **지운 관측 (2026-09-30 · source-slot-v1)** — `forecastPersonasOf` · `forecastFromRows`(14일 발행 예측 ·
@@ -315,10 +251,12 @@ export async function readCurrentStageDecision(now: Date): Promise<{
 }
 
 export type StockReadOptions = {
-  /** 다음 단계 — Persona 3계층 목표 인원이 여기서 나온다(보고용) */
+  /** 다음 단계 — 보고용 필요량 표가 이 단계를 쓴다 */
   targetStage: D100Stage
-  /** 이 저장소 루트 — 말투 묶음 자산을 찾는 데 쓴다 */
+  /** 이 저장소 루트 */
   repoRoot: string
+  /** 🔴 Persona 레인 제공자(`readPersonaReserve(...).contractValid`) — 없으면 모름(null) */
+  contractValidPersonas?: number | null
   /**
    * 🔴 **지금 재고를 스냅샷 장부에 적을 것인가.** 기본은 **적지 않는다** —
    *    계기판은 read-only 다. 시계열을 시작하려면 사람이 명시적으로 켠다.
@@ -444,14 +382,6 @@ export async function readOperationalStock(
     const publishedAts = await publishedAtsOf(prisma)
     const publishedInWindow = publishedAts.filter((d) => d >= since).length
 
-    // ── Persona 3계층 — 🔴 active 수 하나로 준비 완료를 말하지 않는다 ──
-    const personaRead = await readPersonaCandidates(
-      prismaPersonaRepo(prisma, now, opts.repoRoot),
-    )
-    if (!personaRead.ok) return { ok: false, detail: `Persona 를 읽지 못했다 — ${personaRead.detail}` }
-    const tiers = personaTierReadiness({
-      stage: opts.targetStage, candidates: personaRead.candidates,
-    })
 
     const collectFailing: Record<string, boolean | null> = {}
     for (const src of DETAIL_SOURCES) collectFailing[src] = latestRunFailing(readRunRecords(src))
@@ -472,9 +402,8 @@ export async function readOperationalStock(
       readyStockDeltaPerDay: readyStockDelta.measured ? readyStockDelta.perDay : null,
       publishedPerDay: perDayMeasured(publishedInWindow, THROUGHPUT_WINDOW_DAYS),
       throughputWindowDays: THROUGHPUT_WINDOW_DAYS,
-      personaTiers: tiers,
-      personaMissingAxes: missingAxisHistogram(personaRead.candidates),
-      personaReady: personaReadinessOk(tiers),
+      // 🔴 Persona 레인 제공자 연결 전 — 모름(null). 최종 통합에서 `readPersonaReserve(...).contractValid` 를 주입한다
+      contractValidPersonas: opts.contractValidPersonas ?? null,
       collectFailing,
     }
   } catch (e) {

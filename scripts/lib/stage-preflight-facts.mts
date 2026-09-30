@@ -12,7 +12,8 @@
  *   · Persona       🔴 **계약 유효 수는 Persona 레인이 제공한다** — 이 파일은 주입 인터페이스(`contractValidPersonas`)만 둔다.
  *                   제공자가 없으면 `null`(UNKNOWN). 🔴 활성 행 수로 대체하지 않는다(정본: active rows are not capacity).
  *   · 단가          최근 3일(증거일 포함) 장부 정산 평균 — 댓글 1건 · 감사 1건 · 자동 READY 1건당 공급 (PR3 KEEP)
- *   · 상한          정본 env 값을 정본 천장으로 누른 것 — 댓글 ≤ $0.20 · 공급 ≤ $0.50 · 감사 ≤ $0.30
+ *   · 상한          공급은 env 값을 승인 천장($0.50)으로 누른 것 · 댓글 · 감사는 각 레인 정본 env 판독기 값 그대로
+ *                  (`commentLoopLimitsFromEnv` · `auditLimitsFromEnv` — 여기서 $0.20 · $0.30 을 따로 누르지 않는다)
  *   · 러너 건강      controller 가 이미 관측한 오류 신호(`errorSignalOf`)
  *
  * 🔴 **지운 입력** — `readyAutoStock`(지금 시각 기준 완성 글 수 · `STOCK_SHORT`) · `activePersonas`(활성 행 수) ·

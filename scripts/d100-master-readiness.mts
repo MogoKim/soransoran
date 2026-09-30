@@ -134,8 +134,8 @@ const readyQualifiedPerDay: Measured = read.ok ? read.readyQualifiedPerDay : nul
 /** 🔴 **재고 증감.** 생산량과 다른 값이고, 여기에 4/day 를 요구하지 않는다 */
 const readyStockDeltaPerDay: Measured = read.ok ? read.readyStockDeltaPerDay : null
 const publishedPerDay: Measured = read.ok ? read.publishedPerDay : null
-const personaTiers = read.ok ? read.personaTiers : []
-const personaReady = read.ok ? read.personaReady : false
+/** 🔴 계약 유효 Persona — Persona 레인 제공자(주입 인터페이스). 연결 전에는 모름(null) · 활성 행 수로 대체하지 않는다 */
+const contractValidPersonas: Measured = read.ok ? read.contractValidPersonas : null
 
 /**
  * 🔴 **runner 는 라벨 하나가 아니라 사실의 묶음이다.**
@@ -298,13 +298,13 @@ if (JSON_OUT) {
       snapshotPath: SNAPSHOT_PATH,
     },
     persona: {
-      tiers: personaTiers, ready: personaReady, activeCount: activePersonas,
+      /** 🔴 다음 단계 preflight 가 읽는 값 — Persona 레인 reserve 의 `contractValid` (모르면 null) */
+      contractValid: contractValidPersonas, activeCount: activePersonas,
       /**
-       * 🔴 **단계마다 두 목표를 나란히** — active 카드 수 기준이다(3계층 준비와 다르다).
-       *    승격 판정이 실제로 쓴 값은 `promotion.persona` 다.
+       * 🔴 **단계마다 두 목표를 나란히** — active 카드 수 기준 보고다. 준비 판정이 아니다
+       *    (앞판의 3계층 `personaTierReadiness` 계기판은 두 번째 정본이라 지웠다 · 2026-09-30).
        */
       targetsByActiveCards: D100_STAGES.map((st) => personaTargetReport(st, activePersonas)),
-      missingAxes: read.ok ? read.personaMissingAxes : null,
     },
     // 🔴 14일 예약 예측을 지웠다(2026-09-30) — 다가오는 슬롯 수요는 `supply:health` 의 JIT 한 곳이 보여 준다
     scheduled: { publishRunnerLoaded },
@@ -414,43 +414,12 @@ if (JSON_OUT) {
   console.log(`    🔴 순증가 시계열: ${SNAPSHOT_PATH}`)
   console.log('       (시작하려면 --record-snapshot · 🔴 과거 값은 만들 수 없다)')
 
-  console.log('\n②-b Persona 3계층 — 🔴 active 수 하나로 준비 완료라 하지 않는다')
-  if (personaTiers.length === 0) {
-    console.log('    🔴 읽지 못했다')
-  } else {
-    for (const t of personaTiers) {
-      const mark = t.ready ? '🟢' : '🔴'
-      const tgt = t.target === null ? '회차마다 다름'
-        : `canary 하한 ${t.target} · 지속 목표 ${t.sustainedTarget ?? '?'}`
-          + ` ${t.sustainedMet === true ? '🟢' : '🔴'}`
-      console.log(`    ${mark} ${t.tier.padEnd(11)} ${t.passed}/${t.total}  (${tgt})`)
-      /**
-       * 🔴 **"0명" 이 두 가지 뜻으로 읽힌다.** 재지 못한 축 때문에 완전 인증이 0명인 것과
-       *    실제로 쓸 사람이 0명인 것은 할 일이 정반대다.
-       */
-      if (t.passed !== t.passedIgnoringUnmeasured) {
-        console.log(`        🔴 이 ${t.passed}명은 **완전 인증** 수다.`
-          + ` 재지 못한 축을 빼고 세면 ${t.passedIgnoringUnmeasured}명이 막힌 데 없다`)
-        console.log('        🔴 둘은 할 일이 다르다 — 앞은 재는 방법을 만들고, 뒤는 사람을 채운다')
-      }
-      if (t.reason !== null) console.log(`        · ${t.reason}`)
-      for (const [code, n] of Object.entries(t.blocking)) {
-        console.log(`        🔴 ${code} ${n}명`)
-        // 🔴 "축이 비었다" 만으로는 무엇을 채울지 모른다 — 축 이름까지 적는다
-        if (code === 'lifeAxisMissing' && read.ok) {
-          for (const [axis, m] of Object.entries(read.personaMissingAxes)) {
-            console.log(`            · ${axis} ${m}명`)
-          }
-        }
-      }
-      for (const [code, n] of Object.entries(t.unmeasured)) console.log(`        ⬚ ${code} ${n}명 (재지 않았다)`)
-    }
-    console.log(`    전체 ${personaReady ? '🟢 준비됨' : '🔴 준비되지 않음'}`
-      + `  · active 카드 ${activePersonas ?? '?'}명`)
-    // 🔴 active 카드 수를 두 목표에 나란히 견준다 — canary 하한 충족을 지속 준비로 읽지 않는다
-    for (const st of D100_STAGES) {
-      console.log(`      · ${describePersonaTargets(personaTargetReport(st, activePersonas))}`)
-    }
+  console.log('\n②-b Persona — 🔴 계약 유효 수는 Persona 레인 정본 하나다(여기서 다시 판정하지 않는다)')
+  console.log(`    계약 유효 Persona      ${contractValidPersonas === null ? '⬚ 모름 — 제공자 연결 전 (preflight PERSONA_UNKNOWN)' : `${contractValidPersonas}명`}`)
+  console.log(`    active 카드(보고용)    ${activePersonas ?? '?'}명 — 🔴 준비 판정이 아니다`)
+  // 🔴 active 카드 수를 두 목표에 나란히 견준다 — canary 하한 충족을 지속 준비로 읽지 않는다
+  for (const st of D100_STAGES) {
+    console.log(`      · ${describePersonaTargets(personaTargetReport(st, activePersonas))}`)
   }
 
   console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 다음 ${nextStage})`)
