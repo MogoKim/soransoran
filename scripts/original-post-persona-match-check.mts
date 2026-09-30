@@ -799,8 +799,7 @@ function always0Diff(): number {
     'src/lib/persona-for-match.ts',
     'scripts/original-post-match-assign.mts',
     'scripts/original-post-persona-match-dry-run.mts',
-    'scripts/supply-health.mts',
-    'scripts/persona-capacity-planner.mts',
+    // 🔴 (2026-09-30) supply-health 는 러너와 같은 공용 적재(publishable-stock)를 읽고 · persona-capacity-planner 는 퇴역 — 조립 사본이 없다
   ] as const
   for (const f of PRODUCERS) {
     const src = readFileSync(join(HERE, '..', f), 'utf-8')
@@ -1287,8 +1286,7 @@ export function hasDirectAccountCompare(src: string): boolean {
     const SITES = [
       // 🔴 auto-publish 의 Persona 조립 정본은 persona-for-match.ts 다 (로더·발행 트랜잭션 공용)
       'src/lib/persona-for-match.ts',
-      'scripts/persona-capacity-planner.mts',
-      'scripts/supply-health.mts',
+      // 🔴 (2026-09-30) supply-health 는 러너와 같은 공용 적재(publishable-stock)를 읽고 · persona-capacity-planner 는 퇴역 — 조립 사본이 없다
     ]
     for (const f of SITES) {
       const src = readFileSync(join(HERE, '..', f), 'utf-8')

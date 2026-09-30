@@ -495,7 +495,7 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   const runner = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
     /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
-    && /autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/.test(runner)
+    && /autoAssign = \{ personaId: persona\.id, matchMeta: ps\.meta \}/.test(runner)
     && /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \},/.test(runner)
     && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
   check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',

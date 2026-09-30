@@ -30,7 +30,6 @@ import { PrismaClient } from '@prisma/client'
 import {
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
-  SAFEST_STOCK_LIMITS,
 } from '../src/lib/micro-seed-supply-autofill'
 import { PROFILES, RUNTIME_PROFILES, CAPACITY_ENV, RELEASE_ENV, type ReleaseStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
@@ -49,6 +48,7 @@ import {
 } from './lib/publishable-stock.mjs'
 import { snapshot, buildSpeakerLoad, supplyPlanningProfile } from './supply-process.mjs'
 import { remainingCapacity } from '../src/lib/content-core/speaker-availability'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -93,8 +93,11 @@ const markOf = (m: Mark): Record<string, unknown> => {
   }
 }
 /** 🔴 기계 profile 이 **통째로** 맞는 gate 기록 — 적재기가 남기는 모양 그대로 + 품질 계약 표식 */
+let gateSeq = 0
 const machineGate = (voiceCode: string, m: Mark) => ({
   holds: [], blocks: [],
+  // 🔴 (2026-09-30) 원문 증거 — 적재기가 늘 싣는다. 없으면 정본 슬롯 판정이 releaseUnknown 으로 뺀다
+  ...fakeEvidenceGate(NOW, { id: `wc-${voiceCode}-${(gateSeq += 1)}` }),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
@@ -188,12 +191,13 @@ async function main(): Promise<void> {
       select: { id: true },
     })).id
   }
-  const humanRow = async (capturedAt: Date, title: string, body: string) => {
-    const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, capturedAt)
+  /** 🔴 원문 게시 시각 = `postedAt`(증거 기록) — 40일 전 원문은 예정 슬롯에서 72h 를 넘긴다 */
+  const humanRow = async (postedAt: Date, title: string, body: string) => {
+    const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, postedAt)
     return (await prisma.originalPostApprovalQueue.create({
       data: {
         sourceRawContentId: r.id, status: 'APPROVED', draftTitle: title, draftBody: body,
-        gateVerdict: 'PASS', gateResults: {} as never, promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
+        gateVerdict: 'PASS', gateResults: fakeEvidenceGate(NOW, { postedAt, id: `wc-h-${seq}` }) as never, promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
         decidedBy: 'founder', dedupKey: `wc-${seq}`,
       },
       select: { id: true },
@@ -223,7 +227,7 @@ async function main(): Promise<void> {
   const humanOldId = await machineRow({ voice: 'P18', mark: 'otherDigest', decidedBy: MACHINE_REVIEWED_BY })
   /** ③ 지금 발행 가능 — 사람이 고른 새 글(쉰 P19 가 받을 수 있다) */
   const freshId = await humanRow(new Date(NOW.getTime() - 1 * DAY), '가을 이불 꺼낸 날', '가을 이불을 꺼내 햇볕에 말렸어요. 다들 이불 바꾸셨어요?')
-  /** ⑨ 회귀 — TTL 만료 · profile 불일치 · gate 탈락 */
+  /** ⑨ 회귀 — 원천 72h 초과 · profile 불일치 · gate 탈락 */
   const ttlId = await humanRow(new Date(NOW.getTime() - 40 * DAY), '베란다 화분 이야기', '베란다에 화분을 들였더니 아침이 달라졌어요. 다들 키우는 식물 있으세요?')
   const legacyRaw = await raw('legacy:site', new Date(NOW.getTime() - 3 * DAY))
   const legacyId = (await prisma.originalPostApprovalQueue.create({
@@ -321,7 +325,7 @@ async function main(): Promise<void> {
 
   console.log('\n⑦ 공급 분류 = 발행 러너 경로 분류')
   {
-    const sup = await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: E, now: NOW })
+    const sup = await snapshot(prisma, { env: E, now: NOW })
     check('공급 snapshot 이 분류를 읽었다', sup.classification !== null, sup.classifyError ?? '')
     check('🔴 🔴 **공급 분류 = 발행 러너 경로 분류 (칸마다 같은 id · 새 칸 포함)**',
       sup.classification !== null && STOCK_BUCKETS.every((b) => same(sup.classification!.ids[b], c.ids[b])))
@@ -333,8 +337,8 @@ async function main(): Promise<void> {
       `합 ${total} · 대기열 ${c.queueTotal}`)
   }
 
-  console.log('\n⑨ 회귀 — TTL · profile · gate')
-  check('🔴 TTL 만료 → ttlExpired · WIP 아님', c.ids.ttlExpired.includes(ttlId) && !c.personaWipIds.includes(ttlId))
+  console.log('\n⑨ 회귀 — 원천 72h · profile · gate')
+  check('🔴 슬롯에서 72h 넘은 원문 → releaseIneligible · WIP 아님', c.ids.releaseIneligible.includes(ttlId) && !c.personaWipIds.includes(ttlId))
   check('profile 불일치 · gate 탈락 칸 그대로', c.ids.profileMismatch.includes(legacyId) && c.ids.gateBlocked.includes(gateId))
 
   console.log('\n🔴 실제 공급 러너 함수(`buildSpeakerLoad`) — Persona 별 WIP 전후')
@@ -386,7 +390,7 @@ async function main(): Promise<void> {
     await publisherView(prisma, ON)
     await publisherView(prisma, envOf('d5', 'd10'), true)
     for (const rel of ['d1', 'd3', 'd5', 'd10'] as const) await loadStockClassification(prisma, envOf(rel, 'd10'), NOW)
-    await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: E, now: NOW })
+    await snapshot(prisma, { env: E, now: NOW })
     await buildSpeakerLoad(prisma, 'wc-again', { env: E, now: NOW, scale })
     check('자동 도장 경로 — 닫힘(stamped 0)', st.kind !== 'stamped' && (round.get('stamped') ?? 0) === 0,
       `${st.kind} · ${JSON.stringify([...round])}`)

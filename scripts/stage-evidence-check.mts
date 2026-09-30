@@ -7,7 +7,7 @@
  *   ③ controller 끝까지 — 09-29 반례: D3 FAIL 이면 09-30 은 TRIAL d3(재시험)이지 d5 가 아니다
  *   ④ 저장 validator — 재시험 모양은 받고, 근거 없는 d3→d5 는 거절한다 · 옛 d1 기반 행은 그대로 읽힌다
  *
- * 🔴 fixture 는 정본 판정기(`judgeStageEvidence` · `judgeOneDayCanary` · `judgeCost` · `validateStoredDecision`)만
+ * 🔴 fixture 는 정본 판정기(`judgeStageEvidence` · `judgeNextPreflight` · `judgeCost` · `validateStoredDecision`)만
  *    지난다 — 손으로 PASS 를 지어내지 않는다. DB 왕복은 `stage:evidence-db-check`(격리 DB)가 본다.
  */
 import { readFileSync } from 'node:fs'
@@ -23,10 +23,10 @@ import {
   validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, previousKstDate,
   type ValidatedStageDecision,
 } from '../src/lib/stage-decision-contract'
-import type { DatedCanary } from '../src/lib/stage-ladder'
 import { RUNTIME_PROFILES as PROFILES, type RuntimeStage } from '../src/lib/scale-profile'
-import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
-import { judgeOneDayCanary, CANARY_STAGE_ENV } from '../src/lib/release-canary'
+import { judgeNextPreflight, type PreflightFacts } from '../src/lib/stage-ladder-generic'
+import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { judgeCost } from '../src/lib/ops-status'
 import { tallyOf, type DayTally } from '../src/lib/llm-ledger'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
@@ -57,7 +57,7 @@ const MIN = 60_000
 const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
   postId: `p-${i}`, queueId: `q-${i}`,
   publishedAtMs: T0 + i * 4 * HOUR, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `author-${i}`,
-  decider: 'auto',
+  decider: 'auto', release: 'STAMPED_ELIGIBLE',
   personaComments: [{ personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN, topLevel: true }],
   ...o,
 })
@@ -282,42 +282,35 @@ console.log('\n② 시험 계획 — 날짜가 아니라 증거로')
   check('바닥(d1) 유지 날 → d3 시험(FLOOR — 증명할 아래 칸이 없다)', p(PREV_HOLD_D1, null) === 'd1→d3:FLOOR')
 }
 
-// ── controller 끝까지 — 정본 조립(재고 · 하루 시험) ──
-const N = ['아침 산책', '무릎 이야기', '김장 준비', '동네 마실', '주말 반찬']
-const CAPTURED = new Date(NOW.getTime() - 3 * 86_400_000)
-const queue: QueueCandidate[] = Array.from({ length: 140 }, (_, i) => ({
-  queueId: `q-${String(i).padStart(3, '0')}`, title: `${N[i % N.length]} (${i})`,
-  body: `${N[i % N.length]}\n\n있었던 소소한 이야기를 적어 봅니다. ${i}번째 글이에요.`,
-  gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
-  voice: null, profile: 'human' as const, capturedAt: CAPTURED,
-}))
+// ── controller 끝까지 — 정본 조립(다음 칸 preflight · 운영 신호) ──
 const PERSONAS = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')).cards.filter((c) => c.voiceLength !== null).map(cardToPersona)
-const axis = { now: NOW, publishedToday: 0 }
-const VERDICTS = stageVerdicts({ queue, personas: PERSONAS, axis })
-/** 🔴 controller 스크립트와 같은 조립 — 시험 대상·기반은 `trialPlanOf` 가 정한다 */
-const dailyOf = (target: RuntimeStage, base: RuntimeStage): DatedCanary => {
-  const sim = simulateStage({ stage: target, queue, personas: PERSONAS, axis, days: 1, anchor: 'now', dailyCap: PROFILES[target].dailyTarget })
-  return {
-    kstDate: TODAY, stage: target, builtAt: AT, trialBase: base,
-    verdict: judgeOneDayCanary(sim, { publishedToday: 0, slotsLeft: PROFILES[target].dailyTarget }),
-  }
-}
+/**
+ * 🔴 preflight 는 정본 `judgeNextPreflight` 로 만든다 — PASS 를 손으로 적지 않는다.
+ *    넉넉한 사실(기회 · 수율 · 지연 · 계약 유효 Persona · 비용 · 러너)이면 PASS 가 **나와야** 한다.
+ */
+const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
+  slotValidOpportunities: PROFILES[s].dailyTarget * 2, readyPerSource: 1, latencyP50H: 20, latencyP90H: 50,
+  contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
+  supplyUsdPerReady: 0.001, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+})
+const preflightFor = (s: RuntimeStage, o: Partial<PreflightFacts> = {}) => judgeNextPreflight(s, { ...GOOD_FACTS(s), ...o }, RUNNER_GRID)
 const OK_SIGNALS: HealthSignal[] = [
   { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'ok', reasons: [] }, { axis: 'errors', health: 'ok', reasons: [] },
 ]
+/** 🔴 controller 스크립트와 같은 조립 — 시험 대상은 `trialPlanOf` 가 정하고, 그 대상의 preflight 를 넘긴다 */
 const run = (prev: ValidatedStageDecision, ev: StageEvidenceVerdict | null, o: Partial<ControllerInputs> = {}) => {
   const plan = trialPlanOf(prev, ev)
   return decideStage({
-    kstDate: TODAY, decidedAt: AT, envRelease: 'd1', authorizedCeiling: 'd10', previousDecision: prev,
-    previousEvidence: ev, verdicts: VERDICTS, daily: plan === null ? null : dailyOf(plan.target, plan.base),
-    promotion: null, publishedToday: 0, signals: OK_SIGNALS, ...o,
+    kstDate: TODAY, decidedAt: AT, previousDecision: prev, previousEvidence: ev,
+    nextPreflight: plan === null ? null : preflightFor(plan.target), publishedToday: 0, signals: OK_SIGNALS, ...o,
   })
 }
 
 console.log('\n③ controller 끝까지 — 09-29 운영 반례')
 {
-  check('fixture 기준선 — 재고가 d10 까지 준비돼 있다(시험이 재고로 막히지 않는다)',
-    VERDICTS.filter((v) => v.ready).length >= 3, VERDICTS.map((v) => `${v.stage}:${v.ready}`).join(','))
+  check('fixture 기준선 — 넉넉한 사실이면 d3 · d5 · d10 preflight 가 정본 판정으로 PASS',
+    (['d3', 'd5', 'd10'] as const).every((s) => preflightFor(s).verdict === 'PASS'),
+    (['d3', 'd5', 'd10'] as const).map((s) => `${s}:${preflightFor(s).verdict}[${preflightFor(s).codes.join(',')}]`).join(' '))
   const retest = run(PREV_TRIAL_D3, FAIL3)
   const d = retest.decision
   const t = d.transition
@@ -327,7 +320,8 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   check('재시험 결정은 정본 validator 를 통과한다', validateForToday(d).ok)
   check('지속 단계는 d1 그대로다(하루를 비우지 않는다)', retest.sustained === 'd1')
   const env = consumerEnvOf({ ok: true, decision: (validateForToday(d) as { ok: true; decision: ValidatedStageDecision }).decision })
-  check('러너 env — 공개 d1 + 오늘 하루 d3 canary', env.SORAN_RELEASE_STAGE === 'd1' && env[CANARY_STAGE_ENV] === 'd3', JSON.stringify(env))
+  check('🔴 러너 env — 공개 d3 (결정 그대로 · canary 없음) + 증명일 d3',
+    env.SORAN_RELEASE_STAGE === 'd3' && env[PROOF_STAGE_ENV] === 'd3' && !Object.keys(env).some((k) => /CANARY|WINDOW/.test(k)), JSON.stringify(env))
   check('reasons 에 증거 판정(코드)이 남는다', d.reasons.some((r) => r.startsWith(`EVIDENCE ${D} d3 FAIL [`) && r.includes('COMMENT_MISSING')))
 
   const promote = run(PREV_TRIAL_D3, PASS3).decision
@@ -339,20 +333,19 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   const noEv = run(PREV_TRIAL_D3, null).decision
   check('🔴 증거 없음 → TRIAL d3 재시험', noEv.state === 'TRIAL' && noEv.release === 'd3')
 
-  /** 🔴 옛 조립(날짜만) 그대로의 하루 판정을 넣으면 사다리가 막는다 */
+  /** 🔴 계획과 다른 단계의 초록 preflight(d5)를 끼워 넣어도 열리지 않는다 */
   const forged = decideStage({
-    kstDate: TODAY, decidedAt: AT, envRelease: 'd1', authorizedCeiling: 'd10', previousDecision: PREV_TRIAL_D3,
-    previousEvidence: FAIL3, verdicts: VERDICTS, daily: dailyOf('d5', 'd3'), promotion: null, publishedToday: 0, signals: OK_SIGNALS,
+    kstDate: TODAY, decidedAt: AT, previousDecision: PREV_TRIAL_D3, previousEvidence: FAIL3,
+    nextPreflight: preflightFor('d5'), publishedToday: 0, signals: OK_SIGNALS,
   }).decision
-  check('🔴 🔴 **날짜만으로 만든 d5 시험(기반 d3)을 끼워 넣어도 열리지 않는다**',
-    forged.release !== 'd5' && forged.state !== 'TRIAL'
-    && forged.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS') && forged.blocks.some((b) => b.code === 'PROVENANCE_STAGE'),
+  check('🔴 🔴 **d5 초록 preflight 를 끼워 넣어도(계획은 d3 재시험) d5 가 열리지 않는다**',
+    forged.release !== 'd5' && forged.state !== 'TRIAL' && forged.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'),
     `${forged.state} ${forged.release} ${forged.blocks.map((b) => b.code).join(',')}`)
-  check('그 결정도 저장 가능한 모양이다(막힌 채 HOLD/PREPARE)', validateForToday(forged).ok)
+  check('그 결정도 저장 가능한 모양이다', validateForToday(forged).ok)
 
   const noEvidenceForged = decideStage({
-    kstDate: TODAY, decidedAt: AT, envRelease: 'd1', authorizedCeiling: 'd10', previousDecision: PREV_TRIAL_D3,
-    verdicts: VERDICTS, daily: dailyOf('d5', 'd3'), promotion: null, publishedToday: 0, signals: OK_SIGNALS,
+    kstDate: TODAY, decidedAt: AT, previousDecision: PREV_TRIAL_D3,
+    nextPreflight: preflightFor('d5'), publishedToday: 0, signals: OK_SIGNALS,
   }).decision
   check('🔴 previousEvidence 를 아예 안 넘기면(옛 호출) d5 가 열리지 않는다', noEvidenceForged.release !== 'd5')
 
@@ -364,15 +357,30 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   check('🟢 D5 PASS → TRIAL d10', d10.state === 'TRIAL' && d10.release === 'd10' && validateForToday(d10).ok, `${d10.state} ${d10.release}`)
 
   const hold3 = run(PREV_HOLD_D3, null)
-  check('🔴 증거 없는 d3 유지 날 → 시험 없이 d3 를 지킨다(내리지 않는다)',
-    hold3.decision.release === 'd3' && hold3.decision.state !== 'TRIAL', `${hold3.decision.state} ${hold3.decision.release}`)
+  check('🔴 증거 없는 d3 유지 날 → 시험 없이 d3 를 증명일로 다시 돈다(REPROVE · 내리지 않는다)',
+    hold3.decision.release === 'd3' && hold3.decision.state === 'REPROVE', `${hold3.decision.state} ${hold3.decision.release}`)
 
   const braked = run(PREV_TRIAL_D3, FAIL3, { signals: [{ axis: 'quality', health: 'bad', reasons: ['확정 결함 1건'] }, OK_SIGNALS[1]!, OK_SIGNALS[2]!] })
   check('기존 브레이크는 그대로 — 나쁜 신호면 재시험도 없다(감속)', braked.brake === 'slowdown' && braked.decision.state !== 'TRIAL')
   const unknownSig = run(PREV_TRIAL_D3, PASS3, { signals: [OK_SIGNALS[0]!, { axis: 'cost', health: 'unknown', reasons: [] }, OK_SIGNALS[2]!] })
-  check('기존 브레이크는 그대로 — 모르는 신호면 PASS 여도 시험을 되돌린다', unknownSig.brake === 'holdUnknown' && unknownSig.decision.release === 'd1')
-  const ceil = run(PREV_TRIAL_D3, PASS3, { authorizedCeiling: 'd3' }).decision
-  check('승인 천장은 그대로 — PASS 여도 d3 천장이면 d5 를 열지 않는다', ceil.release !== 'd5' && ceil.state !== 'TRIAL')
+  check('기존 브레이크는 그대로 — 모르는 신호면 PASS 여도 시험을 되돌린다(증명된 d3 를 지킨다)',
+    unknownSig.brake === 'holdUnknown' && unknownSig.decision.release === 'd3' && unknownSig.decision.state !== 'TRIAL',
+    `${unknownSig.decision.state} ${unknownSig.decision.release}`)
+  /** 🔴 계약 유효 Persona 제공자가 없는 오늘의 운영 모양 — preflight UNKNOWN → 시험이 열리지 않는다 */
+  const noPersona = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { contractValidPersonas: null }) }).decision
+  check('🔴 🔴 **계약 유효 Persona 를 모르면(null) PASS 여도 d5 를 열지 않는다 — PERSONA_UNKNOWN**',
+    noPersona.release === 'd3' && noPersona.state !== 'TRIAL' && noPersona.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN')
+    && noPersona.reasons.some((r) => r.includes('PERSONA_UNKNOWN')), `${noPersona.state} ${noPersona.release}`)
+  const shortOpp = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 2 }) }).decision
+  check('🔴 slot-valid 기회가 d5 목표(5)보다 적으면 PREFLIGHT_FAIL', shortOpp.release === 'd3' && shortOpp.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'))
+  /** 🔴 계약 경계 — 옛 판(v4) 전날 결정은 PASS 여도 근거가 아니다 */
+  const legacyPrev = validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL', contractVersion: 'stage-decision-v4',
+    transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV2, target: 'd3' } }), expectKstDate: PREV })
+  if (!legacyPrev.ok) throw new Error(`v4 fixture 가 깨졌다 — ${legacyPrev.reason}`)
+  const fromLegacy = run(legacyPrev.decision, PASS3)
+  check('🔴 🔴 **v4 전날 TRIAL d3 + PASS → 지속 d1 · 계획 FLOOR d1→d3 (d5 로 오르지 않는다)**',
+    fromLegacy.sustained === 'd1' && fromLegacy.decision.release === 'd3' && fromLegacy.decision.transition?.kind === 'TRIAL'
+    && fromLegacy.decision.transition.basis === 'FLOOR', `${fromLegacy.sustained} ${fromLegacy.decision.state} ${fromLegacy.decision.release}`)
 }
 
 console.log('\n④ 저장 validator — 재시험 모양은 받고 근거 없는 점프는 거절')
@@ -414,7 +422,8 @@ console.log('\n⑤ 단계 증명일 — 목표 슬롯을 자동 target 이 먼�
   // 순서 — 증명일에는 앞세울 lane 이 복구 행보다 먼저
   const cand = (id: string, recovery: boolean): QueueCandidate => ({
     queueId: id, title: `${id} 산책`, body: `${id} 동네를 걸었어요. 다들 요즘 뭐 하세요?`, gateVerdict: 'PASS', createdAt: 0,
-    assignedPersonaCode: recovery ? PERSONAS[0]!.code : null, voice: null, profile: 'human' as const, capturedAt: CAPTURED,
+    assignedPersonaCode: recovery ? PERSONAS[0]!.code : null, voice: null, profile: 'human' as const,
+    gateResults: fakeEvidenceGate(NOW, { id }),
   })
   const cands = [cand('h-rec', true), cand('h-1', false), cand('a-1', false), cand('a-2', false)]
   const isAuto = (id: string) => id.startsWith('a-')

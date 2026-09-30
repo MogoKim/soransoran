@@ -77,7 +77,7 @@ try {
   check('exit 0', off.code === 0, off.err.slice(-300))
   check('🔴 행 0', (await prisma.stageDecision.count({ where: { kstDate: today } })) === 0)
 
-  console.log('\n② flag ON — 전날 SUSTAIN d5 위에서 결정 하나를 쓴다')
+  console.log('\n② flag ON — 전날 옛 판(v4) SUSTAIN d5 위에서 결정 하나를 쓴다 · 계약 경계로 지속은 d1')
   writeEnv('on')
   const prevRow = {
     kstDate: yesterday, capacity: 'd10', release: 'd5', state: 'SUSTAIN', reasons: ['fixture'], blocks: [],
@@ -93,7 +93,10 @@ try {
   check('🔴 오늘 결정 행 1', row !== null)
   const v = row === null ? null : validateStoredDecision({ row: rowToValidatorInput(row), expectKstDate: today })
   check('🔴 저장된 행이 정본 validator 를 통과한다', v?.ok === true, v !== null && !v.ok ? v.reason : '')
-  check('writer = controller · 천장 = env 승인값 d10 그대로', row?.decidedBy === 'controller' && row?.capacity === 'd10')
+  // 🔴 (2026-09-30) capacity = 다음에 증명할 단계(공개의 다음 칸) — env 천장이 아니다
+  check('writer = controller · capacity = 공개의 다음 칸(env 천장 d10 을 읽지 않는다)',
+    row?.decidedBy === 'controller' && row !== null && row.capacity === ({ d1: 'd3', d3: 'd5', d5: 'd10' } as Record<string, string>)[row.release])
+  check('🔴 🔴 **계약 경계 — 옛 판(v4) 전날 SUSTAIN d5 는 근거가 아니다 → 공개 d1**', row?.release === 'd1', String(row?.release))
   check('🔴 공개는 지속 단계 d5 를 넘지 않는다(빈 재고 · 신호 모름 → 올리지 않는다)',
     row !== null && ['d1', 'd3', 'd5'].includes(row.release), String(row?.release))
 
@@ -107,9 +110,9 @@ try {
 
   console.log('\n④ consumer — 결정을 러너 env 로 옮긴다')
   const pr = run('scripts/stage-consume-exec.mts', ['--by=publish', '--print'])
-  check('flag ON → 공개·천장 = 결정 · window 허가 빈 값',
-    pr.code === 0 && pr.out.includes(`SORAN_RELEASE_STAGE=${row?.release ?? '?'}`) && pr.out.includes('SORAN_CAPACITY_STAGE=d10')
-    && /^SORAN_RELEASE_WINDOW_STAGE=$/m.test(pr.out), pr.out)
+  check('flag ON → 공개·준비 눈금 = 결정 · canary/window 키는 내보내지 않는다',
+    pr.code === 0 && pr.out.includes(`SORAN_RELEASE_STAGE=${row?.release ?? '?'}`) && pr.out.includes(`SORAN_CAPACITY_STAGE=${row?.capacity ?? '?'}`)
+    && !/^SORAN_RELEASE_(WINDOW|CANARY)_/m.test(pr.out), pr.out)
   const child = run('scripts/stage-consume-exec.mts', ['--by=supply', '--', process.execPath, '-e', 'console.log("REL="+process.env.SORAN_RELEASE_STAGE)'])
   check('🔴 감싼 명령이 결정 값을 본다', child.out.includes(`REL=${row?.release ?? '?'}`), child.out + child.err.slice(-200))
   const code7 = run('scripts/stage-consume-exec.mts', ['--by=publish', '--', process.execPath, '-e', 'process.exit(7)'])

@@ -33,6 +33,7 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
 } from '../src/lib/micro-seed-supply-autofill'
 import { loadPublishableStock, planPublishBatch } from './lib/publishable-stock.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { PROFILES, releaseCapsOf } from '../src/lib/scale-profile'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
@@ -83,8 +84,10 @@ const GOOD_SR = {
  * 🔴 **지금 품질 계약으로 적재된 행** (2026-09-27) — 적재기가 남기는 표식 그대로다.
  *    `legacy: true` 면 표식이 없다(옛 계약 행) — 증거 표본도 자동 도장 대상도 아니다.
  */
+// 🔴 (2026-09-30 · source-slot-v1) 원문 증거 — 적재기가 늘 싣는다. 없으면 발행 트랜잭션이 EVIDENCE_MISSING 으로 만료한다
 const gate = (sr: unknown = GOOD_SR, holds: string[] = [], voiceCode: string | null = null, legacy = false) => ({
   holds, blocks: [], semanticReview: sr,
+  ...fakeEvidenceGate(NOW),
   ...(legacy ? {} : { [QUALITY_CONTRACT_KEY]: currentQualityContract() }),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,

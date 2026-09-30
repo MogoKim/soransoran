@@ -9,11 +9,16 @@
  *
  * 🔴 운영 DB 에 절대 붙이지 않는다(sentinel · localhost · soran_test). 모델 호출 0.
  *
+ *   ⑩ (2026-09-30 · source-slot-v1) 트랜잭션 시계 재판정 — 원천 가치가 사라진 행은 EXPIRED(사유 + 도장) · Post 0 ·
+ *      같은 슬롯을 다음 후보가 채운다 · 두 번 불러도 한 번만 · 동시 두 러너도 전환 한 번 · 정상 발행에는 eligible 도장
+ *
  *   npm run publish:slot-db-check
  */
 import { PrismaClient } from '@prisma/client'
 
 import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
+import { releaseStampStatusOf, RELEASE_STAMP_KEY, RELEASE_CONTRACT } from '../src/lib/source-slot-release'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -38,11 +43,16 @@ const K = (s: string): Date => new Date(`${s}+09:00`)
 const envOf = (stage: string): Record<string, string> => ({ SORAN_RELEASE_STAGE: stage, SORAN_CAPACITY_STAGE: stage })
 
 let seq = 0
+/**
+ * 🔴 원문 증거 기준 시각 — 그 절의 KST 자정. 게시는 6시간 앞(전날 18시)이라 그날 · 다음 날 아침까지 72h 안이다.
+ *    `evidence: 'old'` 는 기준보다 80시간 앞 게시(슬롯에서 72h 초과) · `'none'` 은 증거 칸 없음.
+ */
+let evidenceAt = K('2026-10-01T00:00:00')
 async function wipe(): Promise<void> {
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "AutoReadyAudit","PersonaActivityLog","OriginalPostApprovalQueue","MicroSeedRawContent","Post","Persona","User" CASCADE')
 }
 /** 발행 가능한 사람 결정 후보 한 건 — Persona 도 각자 */
-async function cand(): Promise<string> {
+async function cand(evidence: 'fresh' | 'old' | 'none' = 'fresh'): Promise<string> {
   seq += 1
   const u = await prisma.user.create({ data: { nickname: `슬롯${seq}` }, select: { id: true } })
   const p = await prisma.persona.create({ data: { code: `S${String(seq).padStart(3, '0')}`, userId: u.id, status: 'active' }, select: { id: true } })
@@ -53,7 +63,10 @@ async function cand(): Promise<string> {
   const q = await prisma.originalPostApprovalQueue.create({
     data: {
       sourceRawContentId: raw.id, status: 'APPROVED', draftTitle: `평범한 하루 ${seq}`, draftBody: `아침에 산책을 다녀왔어요 ${seq}. 다들 어떻게 지내세요?`,
-      gateVerdict: 'PASS', gateResults: { holds: [], blocks: [] } as never, promptVersion: 'p', model: 'm', decidedBy: 'founder',
+      gateVerdict: 'PASS', gateResults: {
+        holds: [], blocks: [],
+        ...(evidence === 'none' ? {} : fakeEvidenceGate(evidenceAt, { id: `slot-${seq}`, ...(evidence === 'old' ? { ageH: 80 } : {}) })),
+      } as never, promptVersion: 'p', model: 'm', decidedBy: 'founder',
       dedupKey: `slot-${seq}`, matchedPersonaId: p.id, matchedAt: new Date(),
     },
     select: { id: true },
@@ -83,6 +96,7 @@ async function main(): Promise<void> {
   console.log('① 🔴 🔴 08:10 d10 · 도래 1 · 두 러너가 밖에서 발행 0 을 봤다 — 순차')
   {
     await wipe()
+    evidenceAt = K('2026-10-01T00:00:00')
     const [a, b] = [await cand(), await cand()]
     const ra = await scheduled(a, K('2026-10-01T08:10:00'), 'd10', envOf('d10'), 0)
     const rb = await scheduled(b, K('2026-10-01T08:12:00'), 'd10', envOf('d10'), 0)
@@ -98,6 +112,7 @@ async function main(): Promise<void> {
   console.log('\n② 🔴 🔴 같은 입력 동시 실행 → Post 정확히 1 · 패자는 재시도 뒤 정상 무발행')
   {
     await wipe()
+    evidenceAt = K('2026-10-01T00:00:00')
     const [a, b] = [await cand(), await cand()]
     const at = K('2026-10-01T08:10:00')
     const [r1, r2] = await Promise.all([scheduled(a, at, 'd10', envOf('d10')), scheduled(b, at, 'd10', envOf('d10'))])
@@ -106,6 +121,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **패자는 충돌 뒤 한 번 재시도 → 슬롯을 다시 세어 SLOT_CONSUMED (오류 아님)**',
       loser.kind === 'blocked' && loser.code === 'SLOT_CONSUMED', JSON.stringify(loser))
     await wipe()
+    evidenceAt = K('2026-10-01T00:00:00')
     const c = await cand()
     const [s1, s2] = await Promise.all([scheduled(c, at, 'd10', envOf('d10')), scheduled(c, at, 'd10', envOf('d10'))])
     check('🔴 같은 후보 동시 — Post 정확히 1', (await posts()) === 1 && [s1, s2].filter((x) => x.kind === 'published').length === 1, `${s1.kind}/${s2.kind}`)
@@ -119,6 +135,7 @@ async function main(): Promise<void> {
       await wipe()
       day += 1
       const date = `2026-10-${String(day).padStart(2, '0')}`
+      evidenceAt = K(`${date}T00:00:00`)
       const [hh, mm] = first[stage]!.split(':').map(Number) as [number, number]
       const before = `${String(mm === 0 ? hh - 1 : hh).padStart(2, '0')}:${String(mm === 0 ? 59 : mm - 1).padStart(2, '0')}`
       const id = await cand()
@@ -132,6 +149,7 @@ async function main(): Promise<void> {
   console.log('\n④ 🔴 22:00 경계 · 22:00 이후 · 자정 뒤 전날 backlog 0')
   {
     await wipe()
+    evidenceAt = K('2026-10-08T00:00:00')
     const ids = [await cand(), await cand(), await cand()]
     // d10 · 하루 목표 10 · 22:00 에는 도래 10 — 오늘 9건을 이미 냈다고 둔다(ActivityLog 를 그 날짜로)
     const u = await prisma.user.create({ data: { nickname: '기록' }, select: { id: true } })
@@ -145,6 +163,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **22:01 — 운영 창 밖 → SLOT_CLOSED · 쓰기 0**', r2201.kind === 'blocked' && r2201.code === 'SLOT_CLOSED' && (await q(ids[1]!)).status === 'APPROVED', JSON.stringify(r2201))
     // 자정 뒤 — 전날 밀린 슬롯을 메우지 않는다(새 날짜의 첫 슬롯 전)
     await wipe()
+    evidenceAt = K('2026-10-09T00:00:00')
     const late = await cand()
     const r0054 = await scheduled(late, K('2026-10-09T00:54:00'), 'd10', envOf('d10'), 0)
     check('🔴 🔴 **자정 뒤 00:54 — 전날 backlog 0 · SLOT_CLOSED**', r0054.kind === 'blocked' && r0054.code === 'SLOT_CLOSED', JSON.stringify(r0054))
@@ -155,6 +174,7 @@ async function main(): Promise<void> {
   console.log('\n⑤ 🔴 🔴 호출자가 d10 · 거대 상한을 주장해도 env 천장이 d1 이면 d1')
   {
     await wipe()
+    evidenceAt = K('2026-10-10T00:00:00')
     const [a, b] = [await cand(), await cand()]
     const env = {} // 천장 d1
     const r0810 = await scheduled(a, K('2026-10-10T08:10:00'), 'd10', env)
@@ -173,6 +193,7 @@ async function main(): Promise<void> {
   console.log('\n⑥ 🔴 manual-live 경로 동작 불변 — 슬롯 게이트 없음 · 주입 상한')
   {
     await wipe()
+    evidenceAt = K('2026-10-11T00:00:00')
     const [a, b] = [await cand(), await cand()]
     const at = K('2026-10-11T03:00:00') // 🔴 운영 창 밖 · 도래 슬롯 0 — 예약이면 막혔을 시각
     const m1 = await publishOriginalPostTx(prisma, { queueId: a, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 1 } }, { now: () => at })
@@ -184,6 +205,7 @@ async function main(): Promise<void> {
   console.log('\n⑧ 🔴 🔴 같은 후보 경합 — 09:30 d10 · 도래 2 · 두 러너가 같은 후보를 골랐다')
   {
     await wipe()
+    evidenceAt = K('2026-10-13T00:00:00')
     const [a, b] = [await cand(), await cand()]
     const at = K('2026-10-13T09:30:00')
     // 🔴 두 러너가 같은 순간 같은 후보를 골랐다 — 둘 다 이 행을 미발행으로 본 스냅샷을 들고 있다
@@ -199,6 +221,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **남은 두 번째 슬롯 — 다음 heartbeat 가 다른 후보로 소비**', r3.kind === 'published' && (await posts()) === 2, JSON.stringify(r3))
 
     await wipe()
+    evidenceAt = K('2026-10-13T00:00:00')
     const c = await cand()
     const [pc1, pc2] = [await planOf(c), await planOf(c)]
     const [c1, c2] = await Promise.all([scheduled(c, at, 'd10', envOf('d10'), 0, pc1), scheduled(c, at, 'd10', envOf('d10'), 0, pc2)])
@@ -209,6 +232,7 @@ async function main(): Promise<void> {
 
     // 🔴 선택기 결함은 여전히 실패다 — 전날 발행된 행을 오늘 골랐다
     await wipe()
+    evidenceAt = K('2026-10-13T00:00:00')
     const [old, other] = [await cand(), await cand()]
     const y = await scheduled(old, K('2026-10-13T09:30:00'), 'd10', envOf('d10'), 0) // 전날 발행
     const t1 = await scheduled(other, K('2026-10-14T08:10:00'), 'd10', envOf('d10'), 0) // 오늘 다른 글 1
@@ -219,6 +243,7 @@ async function main(): Promise<void> {
     check('🔴 계획 뒤 발행 수가 늘지 않았으면 경합이 아니다 → ALREADY_PUBLISHED', bug2.kind === 'blocked' && bug2.code === 'ALREADY_PUBLISHED', JSON.stringify(bug2))
     // 🔴 오늘 발행된 행 — 러너가 밖에서 이미 그 발행을 보고도(밖 1 · 안 1) 그 행을 골랐다 → 선택기 결함
     await wipe()
+    evidenceAt = K('2026-10-15T00:00:00')
     const td = await cand()
     const t0 = await scheduled(td, K('2026-10-15T08:10:00'), 'd10', envOf('d10'), 0)
     const seen = await scheduled(td, K('2026-10-15T09:30:00'), 'd10', envOf('d10'), 1)
@@ -229,6 +254,7 @@ async function main(): Promise<void> {
   console.log('\n⑨ 🔴 🔴 [마스터 반례] A 는 오늘 이미 발행 · 계획은 A 포함 1 · stale plan 이 A 를 다시 고름 · 계획 뒤 무관한 B 발행')
   {
     await wipe()
+    evidenceAt = K('2026-10-16T00:00:00')
     const [A, B] = [await cand(), await cand()]
     const pa = await scheduled(A, K('2026-10-16T08:10:00'), 'd10', envOf('d10'), 0) // A 오늘 발행
     const planA = await planOf(A) // 🔴 계획 — A 는 이미 발행된 채로 스냅샷에 들어 있다
@@ -238,6 +264,7 @@ async function main(): Promise<void> {
       pa.kind === 'published' && pb.kind === 'published' && stale.kind === 'blocked' && stale.code === 'ALREADY_PUBLISHED', JSON.stringify(stale))
     // 🔴 스냅샷이 다른 행을 가리키면 경합이 아니다
     await wipe()
+    evidenceAt = K('2026-10-17T00:00:00')
     const [X, Y] = [await cand(), await cand()]
     const planY = await planOf(Y)
     await scheduled(X, K('2026-10-17T08:10:00'), 'd10', envOf('d10'), 0)
@@ -245,6 +272,7 @@ async function main(): Promise<void> {
     check('🔴 계획 스냅샷의 queueId 가 이 행이 아니면 경합이 아니다 → ALREADY_PUBLISHED', wrong.kind === 'blocked' && wrong.code === 'ALREADY_PUBLISHED', JSON.stringify(wrong))
     // 🔴 스냅샷이 "미발행" 이라 주장하지만 그 시각이 발행 뒤다 — 대상 자신의 전환이 계획 뒤가 아니다
     await wipe()
+    evidenceAt = K('2026-10-18T00:00:00')
     const [F, G] = [await cand(), await cand()]
     await scheduled(F, K('2026-10-18T08:10:00'), 'd10', envOf('d10'), 0)
     await scheduled(G, K('2026-10-18T09:30:00'), 'd10', envOf('d10'), 1)
@@ -257,6 +285,7 @@ async function main(): Promise<void> {
   console.log('\n⑦ 🔴 정상 발행 — Post · Queue · ActivityLog 원자적 정합')
   {
     await wipe()
+    evidenceAt = K('2026-10-12T00:00:00')
     const a = await cand()
     const at = K('2026-10-12T08:10:00')
     const r = await scheduled(a, at, 'd10', envOf('d10'))
@@ -265,6 +294,66 @@ async function main(): Promise<void> {
     check('🔴 🔴 **Post 1 · Queue PUBLISHED(createdPostId=Post) · ActivityLog 1(createdAt=txNow)**',
       r.kind === 'published' && (await posts()) === 1 && qa.status === 'PUBLISHED' && qa.createdPostId === r.postId
       && (await logs()) === 1 && log?.targetId === r.postId && log.createdAt.getTime() === at.getTime(), JSON.stringify(r))
+  }
+
+
+  console.log('\n⑩ 🔴 🔴 트랜잭션 시계 재판정 — 원천 가치가 사라진 행은 EXPIRED · 슬롯은 다음 후보가 채운다 (source-slot-v1)')
+  {
+    await wipe()
+    evidenceAt = K('2026-10-20T00:00:00')
+    const [old, none, fresh] = [await cand('old'), await cand('none'), await cand('fresh')]
+    const at = K('2026-10-20T08:10:00')
+    const rOld = await scheduled(old, at, 'd10', envOf('d10'))
+    const qOld = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: old }, select: { status: true, createdPostId: true, declineReason: true, gateResults: true, matchedPersonaId: true, matchedAt: true } })
+    const stamp = (qOld.gateResults as Record<string, unknown>)[RELEASE_STAMP_KEY] as Record<string, unknown> | undefined
+    check('🔴 🔴 **게시 80h 원문 → expired(SOURCE_TOO_OLD_AT_SLOT) · Queue EXPIRED · 사유 코드 · 도장(ineligible)**',
+      rOld.kind === 'expired' && rOld.reasons.includes('SOURCE_TOO_OLD_AT_SLOT') && qOld.status === 'EXPIRED'
+      && qOld.createdPostId === null && (qOld.declineReason ?? '').startsWith('RELEASE_EXPIRED:SOURCE_TOO_OLD_AT_SLOT')
+      && stamp?.contract === RELEASE_CONTRACT && stamp?.verdict === 'ineligible', `${JSON.stringify(rOld)} ${qOld.status} ${qOld.declineReason}`)
+    check('🔴 🔴 **만료는 배정을 풀어 준다 — 나가지 않은 행이 Persona 주간 사용량 · 최소 간격을 먹지 않는다**',
+      qOld.matchedPersonaId === null && qOld.matchedAt === null)
+    check('🔴 🔴 **만료는 Post 0 · ActivityLog 0 · 원래 증거는 그대로 남는다**',
+      (await posts()) === 0 && (await logs()) === 0 && (qOld.gateResults as Record<string, unknown>).sourceEvidence !== undefined)
+    const rNone = await scheduled(none, K('2026-10-20T08:11:00'), 'd10', envOf('d10'))
+    check('🔴 증거가 없는 행 → expired(EVIDENCE_MISSING) — 모름은 eligible 이 아니다',
+      rNone.kind === 'expired' && rNone.reasons.includes('EVIDENCE_MISSING') && (await q(none)).status === 'EXPIRED', JSON.stringify(rNone))
+    const rFresh = await scheduled(fresh, K('2026-10-20T08:12:00'), 'd10', envOf('d10'))
+    const qFresh = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: fresh }, select: { status: true, createdPostId: true, gateResults: true } })
+    check('🔴 🔴 **같은 슬롯(08:10 도래 1)을 다음 후보가 채운다 — 만료는 슬롯을 소비하지 않았다**',
+      rFresh.kind === 'published' && (await posts()) === 1 && (await logs()) === 1 && qFresh.status === 'PUBLISHED' && qFresh.createdPostId === rFresh.postId,
+      JSON.stringify(rFresh))
+    check('🔴 🔴 **정상 발행 행에 지금 계약 eligible 도장이 남는다 (증거 조항 ⑦ 입력)**',
+      releaseStampStatusOf(qFresh.gateResults) === 'STAMPED_ELIGIBLE')
+    // 멱등 — 이미 만료된 행을 다시 불러도 두 번째 전환 · 쓰기가 없다
+    const before = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: old }, select: { updatedAt: true } })
+    const again = await scheduled(old, K('2026-10-20T09:30:00'), 'd10', envOf('d10'), 1)
+    const after = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: old }, select: { status: true, updatedAt: true } })
+    check('🔴 🔴 **이미 만료된 행을 다시 불러도 쓰기 0 — blocked · EXPIRED 그대로 · updatedAt 불변**',
+      again.kind === 'blocked' && after.status === 'EXPIRED' && after.updatedAt.getTime() === before.updatedAt.getTime() && (await posts()) === 1,
+      JSON.stringify(again))
+
+    // 경합 — 같은 만료 대상을 두 러너가 동시에 — 전환은 한 번 · Post 0
+    await wipe()
+    evidenceAt = K('2026-10-21T00:00:00')
+    const race = await cand('old')
+    const [p1, p2] = [await planOf(race), await planOf(race)]
+    const rat = K('2026-10-21T08:10:00')
+    const [x1, x2] = await Promise.all([scheduled(race, rat, 'd10', envOf('d10'), 0, p1), scheduled(race, rat, 'd10', envOf('d10'), 0, p2)])
+    const kinds = [x1, x2].map((r) => (r.kind === 'blocked' ? r.code : r.kind))
+    check('🔴 🔴 **동시 두 러너 — 만료 전환 정확히 한 번 · 다른 쪽은 쓰기 없이 blocked · Post 0**',
+      kinds.filter((k) => k === 'expired').length === 1 && [x1, x2].some((r) => r.kind === 'blocked')
+      && (await q(race)).status === 'EXPIRED' && (await posts()) === 0 && (await logs()) === 0, kinds.join(','))
+
+    // 🔴 만료가 오늘 발행 수에 들어가지 않는다 — 같은 날 슬롯 계산이 그대로다
+    await wipe()
+    evidenceAt = K('2026-10-22T00:00:00')
+    const [o2, f2, f3] = [await cand('old'), await cand('fresh'), await cand('fresh')]
+    const e1 = await scheduled(o2, K('2026-10-22T08:10:00'), 'd10', envOf('d10'))
+    const e2 = await scheduled(f2, K('2026-10-22T08:10:30'), 'd10', envOf('d10'))
+    const e3 = await scheduled(f3, K('2026-10-22T08:11:00'), 'd10', envOf('d10'), 1)
+    check('🔴 만료 뒤 발행 1 → 같은 슬롯에서 세 번째는 SLOT_CONSUMED (만료가 발행으로 세이지 않고, 발행은 한 번만)',
+      e1.kind === 'expired' && e2.kind === 'published' && e3.kind === 'blocked' && e3.code === 'SLOT_CONSUMED' && (await posts()) === 1,
+      `${e1.kind}/${e2.kind}/${JSON.stringify(e3)}`)
   }
 
   await wipe()

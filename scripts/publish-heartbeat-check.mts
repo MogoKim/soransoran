@@ -267,12 +267,19 @@ console.log('\n⑥-b 🔴 실행 반례 — 실제 preflight 프로세스(`--sta
       '--stage-only', `--local-env-file=${local}`, `--github-vars-file=${gh}`, `--now=${AT}`], { encoding: 'utf-8' })
     return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
   }
+  /**
+   * 🔴 (2026-09-30 · source-slot-v1) 기간(window) · canary 키는 죽은 입력이다 — 실효 천장은 release · capacity 두 키로만 정한다.
+   *    그래서 GitHub 에만 window d3 가 남아 있어도 양쪽 천장은 d1 로 같다(앞판은 여기서 exit 1 이었다).
+   */
   const c1 = run(envFile('l1', base), ghFile('g1', { ...base, ...w3, ...oldCanary }))
-  check('🔴 🔴 **① 실측 모양 local d1 / GitHub d3 → exit 1**', c1.code === 1 && c1.out.includes('실효 천장 불일치 — local d1'), `exit ${c1.code}`)
+  check('🔴 🔴 **① local d1 / GitHub d1 + 옛 window d3 · canary → 천장 같다 (옛 키는 무시) · exit 0**',
+    c1.code === 0 && c1.out.includes('🟢 같다') && !c1.out.includes('실효 천장 불일치'), `exit ${c1.code} ${c1.out.slice(-300)}`)
   const c2 = run(envFile('l2', { ...base, ...w3 }), ghFile('g2', { ...base, ...w3 }))
-  check('🟢 ② local d3 / GitHub d3 → exit 0', c2.code === 0 && c2.out.includes('🟢 같다'), `exit ${c2.code}`)
-  const c3 = run(envFile('l3', { ...base, ...w3 }), ghFile('g3', { ...base, ...w5 }))
-  check('🔴 🔴 **③ local d3 / GitHub d5 → exit 1**', c3.code === 1 && c3.out.includes('local d3') && c3.out.includes('GitHub d5'), `exit ${c3.code}`)
+  check('🟢 ② 같은 키 · 같은 값 → exit 0', c2.code === 0 && c2.out.includes('🟢 같다'), `exit ${c2.code}`)
+  const c3 = run(envFile('l3', { ...base, SORAN_RELEASE_STAGE: 'd3' }), ghFile('g3', { ...base, SORAN_RELEASE_STAGE: 'd5' }))
+  check('🔴 🔴 **③ release 키가 다르다 — local d3 / GitHub d5 → exit 1**', c3.code === 1 && c3.out.includes('local d3') && c3.out.includes('GitHub d5'), `exit ${c3.code}`)
+  const c3b = run(envFile('l3b', { ...base, ...w3 }), ghFile('g3b', { ...base, ...w5 }))
+  check('🔴 window 값만 다르면(d3 / d5) 천장은 같다 — 죽은 키로 exit 1 을 내지 않는다', c3b.code === 0, `exit ${c3b.code}`)
   const c4 = run(envFile('l4', { ...base, ...w3 }), ghFile('g4', { ...base, ...w3, ...oldCanary }))
   check('🟢 ④ 지난 canary 문자열만 다르고 양쪽 천장 d3 → 분기 표시 · exit 0',
     c4.code === 0 && c4.out.includes('분기 SORAN_RELEASE_CANARY_STAGE') && !c4.out.includes('실효 천장 불일치'), `exit ${c4.code}`)

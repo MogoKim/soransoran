@@ -22,6 +22,7 @@ import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { planStore } from '../src/lib/original-post-match-store'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch, laneOf, preferredLane } from './lib/publishable-stock.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -73,7 +74,8 @@ async function main(): Promise<void> {
     const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, new Date(NOW.getTime() - daysAgo * DAY))
     return (await prisma.originalPostApprovalQueue.create({
       data: { sourceRawContentId: r.id, status: 'APPROVED', draftTitle: `가을 이불 꺼낸 날 ${seq}`,
-        draftBody: `가을 이불을 꺼내 햇볕에 말렸어요 ${seq}. 다들 이불 바꾸셨어요?`, gateVerdict: 'PASS', gateResults: {} as never,
+        draftBody: `가을 이불을 꺼내 햇볕에 말렸어요 ${seq}. 다들 이불 바꾸셨어요?`, gateVerdict: 'PASS',
+        gateResults: fakeEvidenceGate(NOW, { id: `lf-h-${seq}` }) as never,
         promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: 'founder', dedupKey: `lf-h-${seq}` },
       select: { id: true },
     })).id
@@ -87,7 +89,7 @@ async function main(): Promise<void> {
     const body = `저녁 먹고 동네를 한 바퀴 걸었어요 ${seq}. 다들 요즘 저녁에 뭐 하세요?`
     return (await prisma.originalPostApprovalQueue.create({
       data: { sourceRawContentId: r.id, status: 'APPROVED', draftTitle: title, draftBody: body, gateVerdict: 'PASS',
-        gateResults: { holds: [], blocks: [],
+        gateResults: { holds: [], blocks: [], ...fakeEvidenceGate(NOW, { id: `lf-a-${seq}` }),
           semanticReview: { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 },
           autoDraft: { provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: voice, bundleDigest: `bd-${voice}`, comments: 3 } },

@@ -317,9 +317,9 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
   const txSrc = readFileSync('src/lib/original-post-publish-tx.ts', 'utf-8')
   check('🔴 matchedAt 을 쓰는 경로가 사람 행 하나 · 자동 행 하나뿐이다',
     (runnerSrc.match(/data: \{ matchedPersonaId: persona\.id, matchedAt: RUN_AT/g) ?? []).length === 1
-    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/g) ?? []).length === 1
+    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchMeta: ps\.meta \}/g) ?? []).length === 1
     && (txSrc.match(/matchedPersonaId: persona\.id, matchedAt: txNow,/g) ?? []).length === 1
-    && !/matchedAt: RUN_AT, matchMeta: plan\.meta, caps/.test(runnerSrc)
+    && !/matchedAt: RUN_AT, matchMeta: ps\.meta, caps/.test(runnerSrc)
     && !/matchedAt: new Date\(\)/.test(runnerSrc) && !/matchedAt: new Date\(\)/.test(txSrc))
   /**
    * 🔴 조립이 `scripts/lib/publishable-stock.mts` 로 옮겨졌다(2026-09-24) —
@@ -612,10 +612,8 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
     return /decidedBy: true,/.test(loader) && /decidedBy: r\.decidedBy,/.test(loader)
       && /loadPublishableStock\(/.test(runner)
   })())
-  check('🔴 [회귀] 예측기도 같은 게이트를 본다', (() => {
-    const planner = codeOf('scripts/persona-capacity-planner.mts')
-    return /decidedBy: true,/.test(planner) && /decidedBy: r\.decidedBy,/.test(planner)
-  })())
+  // 🔴 (2026-09-30) 14일 예측기(persona-capacity-planner)는 퇴역했다 — 같은 게이트를 볼 사본이 없다
+  check('🔴 [회귀] 퇴역한 예측기는 큐를 읽지 않는다', !/originalPostApprovalQueue|findMany/.test(codeOf('scripts/persona-capacity-planner.mts')))
 
   // ── ⑥ 🔴 자동 보충기는 founder 를 찍지 못한다 ──
   const autofill = codeOf('src/lib/micro-seed-supply-autofill.ts')

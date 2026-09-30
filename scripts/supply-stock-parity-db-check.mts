@@ -21,7 +21,7 @@ import { PrismaClient } from '@prisma/client'
 import {
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
-  readStock, SAFEST_STOCK_LIMITS,
+  readStock,
 } from '../src/lib/micro-seed-supply-autofill'
 import { PROFILES, RUNTIME_PROFILES, releaseCapsOf, CAPACITY_ENV, RELEASE_ENV, type ReleaseStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
@@ -35,6 +35,7 @@ import { planSpeakerAvailability, remainingCapacity } from '../src/lib/content-c
 import { MACHINE_REVIEWED_BY } from '../src/lib/original-post-auto-publish'
 import { readPostRequirements } from '../src/lib/original-post-persona-match'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -69,8 +70,11 @@ const envOf = (release: ReleaseStage, capacity: ReleaseStage): Record<string, st
  *    🔴 적재기는 **지금 품질 계약** 표식을 함께 적는다(`buildQueuePayload`) — 검토 대기 WIP 는 그 행의 뜻이다.
  *       옛 계약 행은 WIP 가 아니다 — `supply:wip-contract-db-check` 가 본다(2026-09-28).
  */
+let gateSeq = 0
 const machineGate = (voiceCode: string) => ({
   holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: currentQualityContract(),
+  // 🔴 (2026-09-30) 원문 증거 — 없으면 정본 슬롯 판정이 releaseUnknown 으로 뺀다(적재기는 이제 늘 싣는다)
+  ...fakeEvidenceGate(NOW, { id: `pp-${voiceCode}-${(gateSeq += 1)}` }),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
@@ -158,13 +162,16 @@ async function main(): Promise<void> {
       select: { id: true },
     })).id)
   }
-  /** 🔴 사람이 고른 글인데 원천이 40일 전이다 — TTL(상시 28일)을 넘겼다 */
-  const humanRow = async (capturedAt: Date, title: string, body: string) => {
-    const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, capturedAt)
+  /**
+   * 🔴 사람이 고른 글 — 원문 게시 시각은 `postedAt`(증거 기록). 40일 전 원문은 예정 슬롯에서 72h 를 넘겼다
+   *    (2026-09-30 · 옛 TTL 28일 대신 정본 `SOURCE_AGE_LIMIT_HOURS`).
+   */
+  const humanRow = async (postedAt: Date, title: string, body: string) => {
+    const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, postedAt)
     return (await prisma.originalPostApprovalQueue.create({
       data: {
         sourceRawContentId: r.id, status: 'APPROVED', draftTitle: title, draftBody: body,
-        gateVerdict: 'PASS', gateResults: {} as never,
+        gateVerdict: 'PASS', gateResults: fakeEvidenceGate(NOW, { postedAt, id: `pp-h-${seq}` }) as never,
         promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
         decidedBy: 'founder', dedupKey: `pp-${seq}`,
       },
@@ -202,24 +209,24 @@ async function main(): Promise<void> {
     const profiled = readStock(rows.map((r) => ({
       status: r.status, createdPostId: r.createdPostId, promptVersion: r.promptVersion, model: r.model,
       sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
-    })), SAFEST_STOCK_LIMITS)
+    })))
     check('형식 행(readStock) = 9 — 운영 반례와 같은 모양 (사람 1 · 기계 8)',
       profiled.usable === 9 && profiled.human === 1 && profiled.machine === 8, JSON.stringify(profiled))
     const pub = await publisherView(prisma, E15)
     check('🔴 발행 러너가 낼 수 있는 것 = 0', pub.runnable.length === 0, pub.runnable.join(','))
 
-    const sup = await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: E15, now: NOW })
+    const sup = await snapshot(prisma, { env: E15, now: NOW })
     check('공급 snapshot 이 분류를 읽었다', sup.classification !== null, sup.classifyError ?? '')
     const c = sup.classification!
     check('🔴 🔴 **공급의 발행 가능 재고 = 발행 러너 = 0** (앞판: 공급 9)',
       c.counts.publishableNow === 0 && same(c.ids.publishableNow, pub.runnable),
       `공급 ${c.counts.publishableNow} · 러너 ${pub.runnable.length}`)
-    check('🔴 공급 snapshot 의 형식 행은 9 로 남는다 — 버퍼 천장 계산용 (발행 가능이 아니다)', sup.profiled === 9)
+    check('🔴 공급 snapshot 의 형식 행은 9 로 남는다 — 표시용 (발행 가능이 아니다)', sup.profiled === 9)
     check('🔴 🔴 **검토 대기 8건은 publishable 이 아니라 humanReviewPending 이다**',
       same(c.ids.humanReviewPending, reviewIds) && !c.ids.publishableNow.some((id) => reviewIds.includes(id)))
-    check('🔴 TTL 만료 1건은 ttlExpired — 신선 재고로 합치지 않는다',
-      same(c.ids.ttlExpired, [ttlId]) && !c.ids.publishableNow.includes(ttlId))
-    check('🔴 🔴 **TTL 만료는 WIP 를 점유하지 않는다 · 검토 대기는 점유한다**',
+    check('🔴 슬롯에서 72h 넘은 원문 1건은 releaseIneligible — 발행 재고로 합치지 않는다',
+      same(c.ids.releaseIneligible, [ttlId]) && !c.ids.publishableNow.includes(ttlId))
+    check('🔴 🔴 **원천 가치 없는 행은 WIP 를 점유하지 않는다 · 검토 대기는 점유한다**',
       !c.personaWipIds.includes(ttlId) && reviewIds.every((id) => c.personaWipIds.includes(id)))
     check('profile 불일치 1건 · gate 탈락 1건',
       same(c.ids.profileMismatch, [legacyId]) && same(c.ids.gateBlocked, [gateId]))
@@ -273,18 +280,18 @@ async function main(): Promise<void> {
   {
     const freshId = await humanRow(new Date(NOW.getTime() - 1 * DAY), '가을 옷장 정리', '가을 옷을 꺼내다가 작년에 산 니트를 찾았어요. 다들 옷장 정리 하셨어요?')
     const pub = await publisherView(prisma, envOf('d1', 'd5'))
-    const sup = (await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: envOf('d1', 'd5'), now: NOW })).classification!
+    const sup = (await snapshot(prisma, { env: envOf('d1', 'd5'), now: NOW })).classification!
     check('🔴 d1(최소 5일) — 이틀 전에 쓴 Persona 뿐이라 배정 유예(시간성) → 러너 0 · 공급 0',
       pub.runnable.length === 0 && sup.counts.publishableNow === 0 && sup.ids.assignmentDeferred.includes(freshId),
       `러너 ${pub.runnable.length} · 공급 ${sup.counts.publishableNow}`)
     /**
      * 🔴 **최근에 쓰지 않은 Persona 가 들어오면** 러너가 d1 로도 낸다 — 공급도 같은 한 건을 센다.
-     *    (release d5 를 env 로 요청해도 준비도 감속으로 d1 이 된다 — ④ 에서 본다. 그래서 사람을 늘린다.)
+     *    (release 는 env 의 d1 그대로다 — 준비도 감속은 지웠다(2026-09-30). 그래서 사람을 늘린다.)
      */
     const u = await prisma.user.create({ data: { nickname: '패리티25' }, select: { id: true } })
     await prisma.persona.create({ data: { code: 'P25', userId: u.id, status: 'active' } })
     const pub5 = await publisherView(prisma, envOf('d1', 'd5'))
-    const sup5 = (await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: envOf('d1', 'd5'), now: NOW })).classification!
+    const sup5 = (await snapshot(prisma, { env: envOf('d1', 'd5'), now: NOW })).classification!
     check('🔴 쉰 Persona 가 생기면 — 같은 글이 러너에서 나가고 공급도 같은 한 건을 센다',
       pub5.runnable.length === 1 && same(sup5.ids.publishableNow, pub5.runnable) && sup5.ids.publishableNow[0] === freshId,
       `러너 ${pub5.runnable.join(',')} · 공급 ${sup5.ids.publishableNow.join(',')}`)
@@ -302,11 +309,12 @@ async function main(): Promise<void> {
       const load = await buildSpeakerLoad(prisma, `parity-${rel}-${cap}`, { env, now: NOW, scale })
       const pub = await publisherView(prisma, env)
       const open = Object.values(load.byCode).reduce((n, r) => n + r.openDays, 0)
-      /** 🔴 발행은 준비도 감속을 받는다 — 요청한 release 를 넘지 않고, 공급 눈금으로 올라가지 않는다 */
+      /** 🔴 발행은 결정된 release 그대로다 — 공급 눈금으로 올라가지 않는다(준비도 감속 · canary 는 지웠다) */
       check(`release ${rel} · capacity ${cap} — 공급 ${load.planningStage} · 발행 ${pub.resolved.scale.releaseStage}`,
         load.planningStage === cap
         && pub.resolved.caps.minDaysBetween === releaseCapsOf(pub.resolved.scale.releaseProfile).minDaysBetween
         && pub.resolved.dailyCap === pub.resolved.scale.releaseProfile.dailyTarget
+        && pub.resolved.scale.releaseStage === (PROFILES[rel].dailyTarget <= PROFILES[cap].dailyTarget ? rel : cap)
         && RUNTIME_PROFILES[pub.resolved.scale.releaseStage].dailyTarget <= PROFILES[rel].dailyTarget
         && open <= PROFILES[cap].dailyTarget * 7,
         `열린 자리 ${open} · 발행 일 ${pub.resolved.dailyCap}`)
@@ -362,7 +370,7 @@ async function main(): Promise<void> {
       && blockedOf(pos, 'P01').join(',') === 'TOO_SOON,WEEKLY_CAP')
     check('🔴 🔴 **voice=P01 글(글쓴이 본인 리듬만) → assignmentDeferred · WIP**',
       c.ids.assignmentDeferred.includes(posId) && c.personaWipIds.includes(posId))
-    const sup = (await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: envOf('d1', 'd5'), now: NOW })).classification!
+    const sup = (await snapshot(prisma, { env: envOf('d1', 'd5'), now: NOW })).classification!
     check('🔴 공급 분류도 같은 답이다', sup.ids.assignmentException.includes(negId) && sup.ids.assignmentDeferred.includes(posId))
     const load = await buildSpeakerLoad(prisma, 'parity-voice', { env: envOf('d1', 'd5'), now: NOW, scale: resolveScale(envOf('d1', 'd5')) })
     const load0 = { P01: 1, P03: 0 }

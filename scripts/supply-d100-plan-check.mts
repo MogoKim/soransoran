@@ -11,7 +11,7 @@ import {
   APPROVED_NET_PER_DAY, APPROVED_PER_DAY_TARGET, BASELINE_OBSERVED_AT, SOURCE_BASELINE, STOCK_BANDS,
   capacityOf, judgeStockBand, judgeSupplyGap, planSourceRequests, stockEta,
 } from '../src/lib/supply-stock-plan'
-import { judgeBuffer } from '../src/lib/supply-process'
+import { judgeJitDemand } from '../src/lib/supply-process'
 import { collectArgsFor, planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch } from './lib/micro-seed-supply.mjs'
@@ -49,28 +49,20 @@ check('🔴 밴드가 속도 배수를 돌려주지 않는다',
   !Object.prototype.hasOwnProperty.call(judgeStockBand(29), 'multiplier'))
 
 // ─────────────────────────────────────────────────────────
-console.log('\n② 버퍼 목표 — 42 가 아니라 700 이다')
+console.log('\n② 🔴 재고선은 보고용이다 — 공급 러너 · 적재기의 상한이 아니다 (2026-09-30 · JIT)')
 // ─────────────────────────────────────────────────────────
 /**
- * 🔴 **옛 정지선 42 의 회귀를 막는다.** capacity d3 의 `stockTarget` 은 42 이고,
- *    그것을 적재 천장으로 쓰면 D100 의 100 → 300 → 700 은 **산술적으로 도달 불가능**하다.
- *
- * 🔴 그리고 이 수는 **적재 상한**이지 회차 스위치가 아니다 —
- *    한 숫자가 세 source 의 수집까지 멈추던 옛 구조를 되살리지 않는다.
- *    회차 판정과 실패 격리는 `supply:process-check` 가 행동으로 본다.
+ * 🔴 앞판은 700(`STOCK_BANDS.target`)을 적재 천장 · 모델 스위치로 썼다(`judgeBuffer`). 정본(Sep 30)은
+ *    "다가오는 슬롯 − eligible READY" 만큼만 만든다. 이 파일의 재고선은 `supply:d100-plan` 보고 화면에만 남는다.
  */
-for (const usable of [0, 42, 100, 300, 699]) {
-  const b = judgeBuffer(usable)
-  check(`🟢 재고 ${usable} — 공급 경로가 살아 있다`,
-    b.llm && b.fill && b.upTo === STOCK_BANDS.target - usable)
+for (const usable of [0, 42, 100, 300, 699, 700, 5_000]) {
+  const b = judgeJitDemand({ slots: 4, readyFilled: Math.min(usable, 4) })
+  check(`🔴 형식 행 ${usable} 과 무관하게 수요는 슬롯 − READY 다`, b.upTo === 4 - Math.min(usable, 4))
 }
-for (const usable of [700, 5_000]) {
-  const b = judgeBuffer(usable)
-  check(`🟡 재고 ${usable} — 버퍼가 찼다 (모델 0 · DB write 0)`, !b.llm && !b.fill)
-}
-check('🔴 적재 천장 정본이 STOCK_BANDS.target 이다', (() => {
-  const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf8')
-  return /const BUFFER_TARGET = STOCK_BANDS\.target/.test(cli) && /target: BUFFER_TARGET/.test(cli)
+check('🔴 🔴 **공급 러너 · 적재기가 STOCK_BANDS 를 읽지 않는다**', (() => {
+  const strip = (f: string): string => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
+  return ['scripts/micro-seed-supply-autofill.mts', 'scripts/supply-process.mts', 'src/lib/supply-process.ts']
+    .every((f) => !/STOCK_BANDS|BUFFER_TARGET/.test(strip(f)))
 })())
 
 // ─────────────────────────────────────────────────────────

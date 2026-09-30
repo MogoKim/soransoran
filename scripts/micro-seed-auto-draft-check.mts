@@ -5,6 +5,7 @@
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
 import { digest16, PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { readFileSync } from 'node:fs'
 import {
   pickDraft, pickV2, checkDraft, summarizeDrafts, violatesDraftProvenance,
@@ -263,8 +264,7 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
      *    (2026-09-24 — 러너와 관제가 같은 함수를 쓰게 하려고). 그 자리를 본다.
      */
     'scripts/lib/publishable-stock.mts',
-    'scripts/supply-health.mts',
-    'scripts/persona-capacity-planner.mts',
+    // 🔴 (2026-09-30) supply-health 는 러너와 같은 공용 적재(publishable-stock)를 읽고 · persona-capacity-planner 는 퇴역 — 조립 사본이 없다
     'scripts/original-post-match-assign.mts',
     'scripts/original-post-persona-match-dry-run.mts',
   ]) {
@@ -400,7 +400,9 @@ console.log('\n⑭-a 🔴 운영 호출 그래프 전체를 지난다')
   const qc = (o: Record<string, unknown> = {}) => ({
     queueId: 'q1', title: '간식 뭐 드세요',
     body: '요즘 간식을 자꾸 찾게 되네요. 다들 어떤 거 두고 드시나요',
-    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: AT,
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null,
+    // 🔴 (2026-09-30) 원문 증거 — 없으면 정본 슬롯 판정이 계획에서 뺀다(배정까지 가지 않는다)
+    gateResults: fakeEvidenceGate(AT, { id: 'q1' }),
     voice: VP, profile: 'machine' as const, ...o,
   })
   const assignedOf = (c: Record<string, unknown>, codes: readonly string[]): string | null =>

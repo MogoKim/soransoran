@@ -16,9 +16,7 @@ import {
   logHintOf, perItemSkipCount, rollUpSources, worstOf, PUBLISH_GRACE_MS,
   type Finding, type SourceInput,
 } from '../src/lib/supply-health'
-import { STOCK_MIN, STOCK_TARGET } from '../src/lib/micro-seed-supply-autofill'
 import { verifyPublishedRow } from '../src/lib/original-post-publish-verify'
-import { judgeCapacity } from '../src/lib/supply-capacity-forecast'
 
 let pass = 0
 let failN = 0
@@ -181,27 +179,31 @@ check('🔴 [독립] 죽은 소스 이름이 메시지에 남는다', (() => {
 })())
 
 // ── B. 공급 ──
-// 🔴 재고 기준선은 **주입값**이다 (2026-09-08). 기본은 지금 운영값(d1)과 같다
+// 🔴 (2026-09-30 · JIT) 완성 글 재고 눈금(5/14 · capacity ×14)은 없다 — 다가오는 슬롯을 eligible READY 가 덮는가다
 const sup = (over: Partial<Parameters<typeof judgeSupply>[0]> = {}): Finding[] => judgeSupply({
-  usable: 14, human: 5, machine: 9, legacyExcluded: 5, pendingThin: 0, historicRawNoop: 0,
+  jit: { slots: 4, readyFilled: 4 }, human: 5, machine: 9, legacyExcluded: 5, pendingThin: 0, historicRawNoop: 0,
   runningCheckpoints: 0, failedCheckpoints: 0, lock: 'free',
   lastSupplyOkAt: ago(2), now: NOW, staleAfterMs: STALE,
-  stockMin: 5, stockTarget: 14,
   ...over,
 })
-check('🟢 재고가 목표면 HEALTHY', sup()[0].code === 'STOCK_OK')
-// 🔴 **기준선이 주입값을 따른다** — capacity=d10 이면 재고 14건은 부족이다
-check('🔴 capacity 기준(50/140)에서 재고 14건은 STOCK_LOW',
-  sup({ stockMin: 50, stockTarget: 140 })[0].code === 'STOCK_LOW'
-  && sup({ stockMin: 50, stockTarget: 140 })[0].level === 'WARNING')
-check('🔴 그 메시지에 주입한 최소값이 적힌다', sup({ stockMin: 50, stockTarget: 140 })[0].message.includes('50건'))
-check('🟢 재고가 capacity 목표를 채우면 HEALTHY',
-  sup({ usable: 140, stockMin: 50, stockTarget: 140 })[0].code === 'STOCK_OK')
-check('🔴 정상 요약에도 주입한 목표가 적힌다',
-  sup({ usable: 140, stockMin: 50, stockTarget: 140 })[0].message.includes('140/140건'))
-check('🔴 재고 0 은 CRITICAL', sup({ usable: 0 })[0].level === 'CRITICAL')
-check('🟡 재고가 최소 미만이면 WARNING', sup({ usable: STOCK_MIN - 1 })[0].level === 'WARNING')
-check('🟢 재고 최소 경계는 정상', sup({ usable: STOCK_MIN })[0].code === 'STOCK_OK')
+check('🟢 다가오는 슬롯을 다 덮으면 HEALTHY', sup()[0].code === 'SLOTS_COVERED' && sup()[0].level === 'HEALTHY')
+check('🟢 요약에 덮은 수 / 슬롯 수가 적힌다', sup()[0].message.includes('4/4개'))
+check('🟡 일부만 덮으면 WARNING · 생성 수요가 적힌다', (() => {
+  const r = sup({ jit: { slots: 4, readyFilled: 1 } })[0]
+  return r.code === 'SLOTS_SHORT' && r.level === 'WARNING' && r.message.includes('생성 수요 3건')
+})())
+check('🔴 슬롯이 있는데 하나도 못 덮으면 CRITICAL', (() => {
+  const r = sup({ jit: { slots: 4, readyFilled: 0 } })[0]
+  return r.code === 'SLOTS_EMPTY' && r.level === 'CRITICAL'
+})())
+check('🟢 🔴 다가오는 슬롯이 0 이면 READY 0 도 정상이다 — 재고 0 을 사고로 부르지 않는다',
+  sup({ jit: { slots: 0, readyFilled: 0 } })[0].code === 'SLOTS_COVERED')
+check('🟡 못 읽었으면 모름(WARNING) — 0 으로 적지 않는다', (() => {
+  const r = sup({ jit: null })[0]
+  return r.code === 'SLOTS_UNKNOWN' && r.level === 'WARNING'
+})())
+check('🔴 READY 가 슬롯보다 많아도 초과를 "재고" 로 자랑하지 않는다 — 덮은 수만 센다',
+  sup({ jit: { slots: 3, readyFilled: 3 } })[0].message.includes('3/3개'))
 check('🟡 실패한 회차는 WARNING', codes(sup({ failedCheckpoints: 1 })).includes('CHECKPOINT_FAILED'))
 check('🟡 미완료 회차는 WARNING', codes(sup({ runningCheckpoints: 1 })).includes('CHECKPOINT_RUNNING'))
 check('🟡 죽은 lock 은 WARNING', (() => {
@@ -273,11 +275,11 @@ check('🟢 다 정상이면 HEALTHY · exit 0', (() => {
   return r.level === 'HEALTHY' && r.exitCode === 0
 })())
 check('🟡 WARNING 은 exit 0 이다 — 종료 코드를 바꾸면 사람이 곧 무시한다', (() => {
-  const r = buildReport({ sources: [alive('a')], supply: sup({ usable: 2 }), publish: pub() })
+  const r = buildReport({ sources: [alive('a')], supply: sup({ jit: { slots: 4, readyFilled: 2 } }), publish: pub() })
   return r.level === 'WARNING' && r.exitCode === 0
 })())
 check('🔴 CRITICAL 만 exit 1', (() => {
-  const r = buildReport({ sources: [alive('a')], supply: sup({ usable: 0 }), publish: pub() })
+  const r = buildReport({ sources: [alive('a')], supply: sup({ jit: { slots: 4, readyFilled: 0 } }), publish: pub() })
   return r.level === 'CRITICAL' && r.exitCode === 1
 })())
 check('🟡 소스 하나만 죽으면 전체는 WARNING 이다 — 전면 중단과 구분한다', (() => {
@@ -667,59 +669,35 @@ check('🔴 cap 을 자체 정의하지 않는다',
   /DAILY_PUBLISH_CAP/.test(code) && !/DAILY_PUBLISH_CAP\s*=/.test(code))
 check('🔴 금지 키 목록을 lib 과 공유한다', /FORBIDDEN_BODY_KEYS/.test(code))
 check('🟢 금지 키 목록에 rawBody 가 있다', FORBIDDEN_BODY_KEYS.includes('rawBody'))
-check('🟢 목표 재고는 lib 상수를 쓴다', STOCK_TARGET === 14 && STOCK_MIN === 5)
+check('🔴 (2026-09-30) 완성 글 재고 상수(STOCK_MIN · STOCK_TARGET)를 관제가 읽지 않는다', !/STOCK_MIN|STOCK_TARGET|stockMin|stockTarget/.test(code))
+check('🔴 관제가 공급 러너와 같은 JIT 함수로 센다', /jitCoverageOf\(view, now\)/.test(code) && /judgeSupply\(\{[\s\S]{0,200}\bjit,/.test(code))
 
-// ── [11] 🔴 생산 경로 — supply-health 가 기존 배정을 forecast 에 넘기는가 (2026-09-07) ──
+// ── [11] 🔴 생산 경로 — 관제가 러너와 **같은 적재 · 같은 계획**을 읽는가 (2026-09-30 재작성) ──
 //
-//    fixture 에서 assignedPersonaCode 를 직접 넣어 라이브러리만 시험하면,
-//    **러너는 넘기는데 관제는 안 넘기는** 상태를 못 잡는다. 실제로 그랬다 —
-//    러너와 forecast 라이브러리는 고쳤는데 supply-health 만 끊겨 있었다.
-//    그래서 여기서는 **소스를 읽어** 생산 경로를 검사한다.
+//    앞판은 관제가 Queue · Persona 를 따로 조립해 14일 예측(`forecastPublishing`)에 넘겼다 — 러너는 넘기는데
+//    관제는 안 넘기는 배정 누락이 실제로 있었다. 이제 관제는 조립을 하지 않는다: `loadStockClassification`
+//    (러너와 같은 로더 · 같은 `planPublishBatch`)의 결과만 본다. 그래서 여기서는 **소스를 읽어** 그것을 잠근다.
 {
   const health = readFileSync('scripts/supply-health.mts', 'utf-8')
   const codeOnly = health.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-
-  check('🔴 [11] persona id → code 매핑을 만든다',
-    /const codeOfPersonaId = new Map\(personaRows\.map\(/.test(codeOnly))
-  check('🔴 [11] forecast 큐에 assignedPersonaCode 를 넘긴다',
-    /assignedPersonaCode:/.test(codeOnly))
-  check('🔴 [11] matchedPersonaId 를 근거로 넘긴다',
-    /t\.matchedPersonaId === null/.test(codeOnly))
-  check('🔴 [11] 못 찾은 persona 는 빈 값이 아니라 모르는 코드로 넘긴다 — fail-closed 로 잡히게',
-    /__unknown:/.test(codeOnly))
-  check('🔴 [11] forecast 와 매칭률이 **같은 큐·같은 cap** 을 쓴다 — 두 수치가 갈리지 않는다',
-    /forecastPublishing\(\{\s*queue: forecastQueue/.test(codeOnly)
-    && /planBatch\(forecastQueue, personas as never, RELEASE_CAPS\)/.test(codeOnly)
-    && /caps: RELEASE_CAPS/.test(codeOnly))
-  check('🔴 [11] 깨진 복구를 관제 판정에 넘긴다',
-    /recoveryBroken: fc\.recoveryBroken/.test(codeOnly))
-  // 🔴 queueRows 가 matchedPersonaId 를 실제로 읽어 오는가 — 안 읽으면 위가 다 무의미하다
-  check('🔴 [11] 큐를 읽을 때 matchedPersonaId 를 가져온다',
-    /matchedPersonaId: true/.test(codeOnly))
-  // 🔴 persona 를 읽을 때 id 가 있어야 매핑이 성립한다
-  check('🔴 [11] persona 를 읽을 때 id 를 가져온다',
-    /id: true, code: true, status: true/.test(codeOnly))
+  check('🔴 [11] 관제가 러너와 같은 로더를 쓴다', /loadStockClassification\(prisma, process\.env, now\)/.test(codeOnly))
+  check('🔴 [11] 관제가 14일 예측 · 따로 조립한 큐를 쓰지 않는다',
+    !/forecastPublishing|forecastQueue|planBatch\(|judgeCapacity|personasNeededFor/.test(codeOnly))
+  check('🔴 [11] 깨진 복구를 러너 계획에서 가져와 관제 판정에 넘긴다',
+    /recoveryBroken: view\.plan\.brokenRecovery/.test(codeOnly))
 }
 
-// ── [12] 🔴 RECOVERY_BROKEN 은 CRITICAL 이고 다른 판정을 덮는다 ──
+// ── [12] 🔴 RECOVERY_BROKEN 은 CRITICAL 이고 다른 판정을 덮는다 (judgePublish 로 옮김) ──
 {
-  const broken = [{ queueId: 'q1', problem: '배정된 persona ZZZ 를 찾을 수 없다' }]
-  // 🔴 나머지 입력이 전부 건강해도 CRITICAL 이다
-  const healthy = {
-    stockUsable: 14, in7: 7, nextWillPublish: true, nextCandidates: 5,
-    shortfallMin: 0, dailyCap: 1,
-  }
-  const okCase = judgeCapacity(healthy)
+  const broken = [{ id: 'q1', problem: '배정된 persona ZZZ 를 찾을 수 없다' }]
+  const okCase = pub()
   check('🔴 [12] 깨진 복구가 없으면 예전과 같다', okCase.every((f) => f.code !== 'RECOVERY_BROKEN'))
-
-  const badCase = judgeCapacity({ ...healthy, recoveryBroken: broken })
+  const badCase = pub({ recoveryBroken: broken })
   check('🔴 [12] 깨진 복구가 있으면 CRITICAL', badCase.some((f) => f.level === 'CRITICAL' && f.code === 'RECOVERY_BROKEN'))
   check('🔴 [12] 다른 판정을 섞지 않는다 — 발행이 돈다는 전제가 깨졌다', badCase.length === 1)
   check('🔴 [12] 어느 행인지 말한다', badCase[0]!.message.includes('q1'))
   check('🔴 [12] 왜인지 말한다', badCase[0]!.message.includes('찾을 수 없다'))
-
-  // 🔴 CRITICAL 이므로 전체 등급이 CRITICAL 이 된다 = exit 1
-  const rep = buildReport({ sources: [], supply: [], publish: badCase as Finding[] })
+  const rep = buildReport({ sources: [], supply: [], publish: badCase })
   check('🔴 [12] 레인 전체 등급이 CRITICAL 이 된다', rep.level === 'CRITICAL')
 }
 

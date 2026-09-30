@@ -19,6 +19,7 @@ import { AUTO_DECIDER, AUTO_READY_RECORD_KEY, HUMAN_DECIDER, digestOf, makeStamp
 import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf } from '../../src/lib/auto-ready-evidence'
 import { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE } from '../../src/lib/micro-seed-supply-autofill'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../../src/lib/quality-contract'
+import { fakeEvidenceGate } from './fake-source-evidence.mjs'
 
 export function requireIsolatedDb(): void {
   const url = process.env.DATABASE_URL ?? ''
@@ -74,8 +75,10 @@ export function flushArtifacts(f: Fixture): void {
   writeFileSync(join(f.artifactDir, 'fx-run.candidates.json'), JSON.stringify({ candidates: f.candidates }))
 }
 
+// 🔴 (2026-09-30 · source-slot-v1) 원문 증거 — 적재기가 늘 싣는다. 없으면 발행 트랜잭션이 EVIDENCE_MISSING 으로 만료한다
 const gateOf = (voiceCode: string | null, extra: Record<string, unknown> = {}) => ({
   holds: [], blocks: [], semanticReview: GOOD_SR, [QUALITY_CONTRACT_KEY]: currentQualityContract(),
+  ...fakeEvidenceGate(new Date()),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,

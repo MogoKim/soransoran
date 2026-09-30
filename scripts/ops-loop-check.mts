@@ -30,9 +30,9 @@ import {
   qualitySignalOf, costSignalOf, errorSignalOf, type HealthSignal, type ControllerInputs,
 } from '../src/lib/stage-controller'
 import { STAGE_DECISION_VERSION, validateStoredDecision, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
-import { canaryAuthorization } from '../src/lib/release-canary'
-import { RELEASE_STAGES, type ReleaseStage, type StageVerdict } from '../src/lib/scale-profile'
-import type { PromotionVerdict } from '../src/lib/d100-capacity'
+import { type RuntimeStage } from '../src/lib/scale-profile'
+import { resolveScale } from '../src/lib/scale-runtime'
+import { PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 import { judgeRecovery } from '../src/lib/runner-recovery'
 import { publishFailing, supplyFailing, type JobObservation } from './lib/runner-health.mjs'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from './lib/publish-run-record.mjs'
@@ -202,25 +202,18 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 단계 controller — 승인 천장 안 승격 · 나쁘면 감속 · 모르면 유지 · 실패면 지금 단계')
+console.log('\n③ 단계 controller — 결정 하나가 입력원 · 나쁘면 감속 · 모르면 유지 · 실패면 지금 단계')
 // ─────────────────────────────────────────────────────────
 const KST = '2026-09-28'
 const AT = '2026-09-27T22:10:00.000Z' // 2026-09-28 07:10 KST
-const verdicts = (readyUpTo: ReleaseStage): StageVerdict[] => RELEASE_STAGES.map((s) => ({
-  stage: s, ready: RELEASE_STAGES.indexOf(s) <= RELEASE_STAGES.indexOf(readyUpTo), reasons: [],
-}))
-const gate = (ready: boolean) => ({ ready, blocking: ready ? [] : ['막힘'], unmeasured: [] })
-const promo = (current: ReleaseStage, next: string, ready: boolean): PromotionVerdict => ({
-  ready, phase: ready ? 'readyToPromote' : 'preflight', nextAction: '',
-  current, currentPlan: null, next, requirement: null, currentCanary: gate(true),
-  currentStable: gate(ready), nextPreflight: gate(ready), blocking: [], unmeasured: [],
-} as unknown as PromotionVerdict)
-const prevOf = (release: ReleaseStage, state: 'SUSTAIN' | 'HOLD' | 'TRIAL', ceiling: ReleaseStage = 'd10'): ValidatedStageDecision => {
+/** 🔴 전날 결정 — 정본 validator 를 지난다(v5 · 옛 v4 는 `legacy` 로) */
+const prevOf = (release: RuntimeStage, state: 'HOLD' | 'TRIAL' | 'REPROVE' | 'SUSTAIN', o: { legacy?: boolean } = {}): ValidatedStageDecision => {
   const from = previousStage(release)
   const row = {
-    kstDate: '2026-09-27', capacity: ceiling, release, state,
+    kstDate: '2026-09-27', capacity: 'd50', release, state,
     reasons: [], blocks: [], dayPinned: false, supply: null,
-    decidedAt: '2026-09-26T22:10:00.000Z', contractVersion: 'stage-decision-v4', decidedBy: 'controller',
+    decidedAt: '2026-09-26T22:10:00.000Z', contractVersion: o.legacy === true ? 'stage-decision-v4' : STAGE_DECISION_VERSION,
+    decidedBy: 'controller',
     transition: state === 'SUSTAIN' ? { kind: 'SUSTAIN', from, to: release }
       : state === 'TRIAL' ? { kind: 'TRIAL', trialBase: from, previousKstDate: '2026-09-26', target: release, basis: from === 'd1' ? 'FLOOR' : 'PASS' } : null,
   }
@@ -234,53 +227,53 @@ const OK: HealthSignal[] = [
 ]
 const withSignal = (axis: HealthSignal['axis'], health: HealthSignal['health']): HealthSignal[] =>
   OK.map((s) => (s.axis === axis ? { axis, health, reasons: [`${axis} ${health}`] } : s))
-const inputs = (o: Partial<ControllerInputs>): ControllerInputs => ({
-  kstDate: KST, decidedAt: AT, envRelease: 'd1', authorizedCeiling: 'd10',
-  previousDecision: null, verdicts: verdicts('d10'), daily: null, promotion: null,
-  publishedToday: 0, signals: OK, ...o,
-})
+function inputs(o: Partial<ControllerInputs>): ControllerInputs {
+  const base: ControllerInputs = {
+    kstDate: KST, decidedAt: AT, previousDecision: null, previousEvidence: null, nextPreflight: null,
+    publishedToday: 0, signals: OK,
+  }
+  return { ...base, ...o }
+}
 {
-  const up = decideStage(inputs({ envRelease: 'd1', promotion: promo('d1', 'd3', true) }))
-  check('🟢 조건이 되면 한 칸 승격 — d1 → d3 SUSTAIN', up.decision.state === 'SUSTAIN' && up.decision.release === 'd3' && up.brake === 'none')
-  check('결정은 정본 validator 를 통과한다', validateForToday(up.decision).ok)
-
-  const ceil = decideStage(inputs({ previousDecision: prevOf('d3', 'SUSTAIN', 'd3'), authorizedCeiling: 'd3', promotion: promo('d3', 'd5', true) }))
-  check('🔴 승인 천장 d3 이면 d5 로 올리지 않는다(CEILING)',
-    ceil.decision.release === 'd3' && ceil.decision.capacity === 'd3' && ceil.decision.blocks.some((b) => b.code === 'CEILING'))
-  const top = decideStage(inputs({ previousDecision: prevOf('d10', 'SUSTAIN'), promotion: promo('d10', 'd20', true) }))
-  check('🔴 d10 위로는 없다 — 승인 범위 d1~d10', top.decision.release === 'd10' && top.decision.state !== 'SUSTAIN')
-  check('🔴 어떤 결정도 d10 을 넘지 않는다', RELEASE_STAGES[RELEASE_STAGES.length - 1] === 'd10')
+  const first = decideStage(inputs({}))
+  check('🔴 첫 실행(전날 결정 없음) — 바닥 d1 · 시험 없음 · PREPARE(다음 증명 d3)',
+    first.decision.release === 'd1' && first.decision.state === 'PREPARE' && first.decision.capacity === 'd3' && validateForToday(first.decision).ok,
+    `${first.decision.state} ${first.decision.release}`)
+  check('🔴 🔴 **controller 입력에 env 단계 · 천장 · 준비도 · 승격 칸이 없다**', (() => {
+    const src = readFileSync('src/lib/stage-controller.ts', 'utf-8')
+    const t = src.slice(src.indexOf('export type ControllerInputs'), src.indexOf('export type ControllerResult'))
+    return !/envRelease|authorizedCeiling|verdicts|daily|promotion/.test(t)
+  })())
 
   for (const axis of ['quality', 'cost', 'errors'] as const) {
-    const r = decideStage(inputs({ previousDecision: prevOf('d5', 'SUSTAIN'), promotion: promo('d5', 'd10', true), signals: withSignal(axis, 'bad') }))
-    check(`🔴 ${axis} 나쁨 → 승격 없이 한 칸 감속 d5 → d3`,
-      r.brake === 'slowdown' && r.decision.release === 'd3' && r.decision.state !== 'SUSTAIN' && r.decision.transition === null
+    const r = decideStage(inputs({ previousDecision: prevOf('d5', 'HOLD'), signals: withSignal(axis, 'bad') }))
+    check(`🔴 ${axis} 나쁨 → 시험 없이 한 칸 감속 d5 → d3`,
+      r.brake === 'slowdown' && r.decision.release === 'd3' && r.decision.state !== 'TRIAL' && r.decision.transition === null
       && validateForToday(r.decision).ok, `${r.decision.state} ${r.decision.release}`)
   }
-  const floor = decideStage(inputs({ envRelease: 'd1', signals: withSignal('cost', 'bad') }))
+  const floor = decideStage(inputs({ signals: withSignal('cost', 'bad') }))
   check('감속은 d1 아래로 가지 않는다', floor.decision.release === 'd1' && validateForToday(floor.decision).ok)
-  const stockLow = decideStage(inputs({ previousDecision: prevOf('d10', 'SUSTAIN'), verdicts: verdicts('d1'), signals: withSignal('cost', 'bad') }))
-  check('🔴 브레이크는 사다리보다 높이지 않는다 — 재고 감속 d1 이 한 칸 감속 d5 보다 낮으면 d1', stockLow.decision.release === 'd1')
 
-  const unk = decideStage(inputs({ previousDecision: prevOf('d3', 'SUSTAIN'), promotion: promo('d3', 'd5', true), signals: withSignal('errors', 'unknown') }))
-  check('🔴 신호를 모르면 승격하지 않고 지금 단계 d3 를 지킨다(내리지도 않는다)',
-    unk.brake === 'holdUnknown' && unk.decision.release === 'd3' && unk.decision.state !== 'SUSTAIN' && validateForToday(unk.decision).ok,
+  const unk = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), signals: withSignal('errors', 'unknown') }))
+  check('🔴 신호를 모르면 증명일(REPROVE)도 되돌리고 지금 단계 d3 를 지킨다(내리지도 않는다)',
+    unk.brake === 'holdUnknown' && unk.decision.release === 'd3' && unk.decision.state !== 'REPROVE' && validateForToday(unk.decision).ok,
     `${unk.decision.state} ${unk.decision.release}`)
 
-  const noStock = decideStage(inputs({ previousDecision: prevOf('d5', 'SUSTAIN'), verdicts: [] }))
-  check('🔴 controller 실패(재고 판정 없음) → 지금 단계 d5 유지 — 사다리의 d1 경로로 떨어지지 않는다',
-    noStock.brake === 'controllerFailure' && noStock.decision.release === 'd5' && validateForToday(noStock.decision).ok,
-    `${noStock.decision.release}`)
-  const hold = holdAtCurrent({ kstDate: KST, decidedAt: AT, current: 'd5', ceiling: 'd3', reason: 'x' })
-  check('실패 유지도 승인 천장을 넘지 않는다', hold.release === 'd3' && validateForToday(hold).ok)
+  const legacy = decideStage(inputs({ previousDecision: prevOf('d5', 'SUSTAIN', { legacy: true }) }))
+  check('🔴 🔴 **계약 경계 — 옛 v4 전날 결정(SUSTAIN d5)은 근거가 아니다 → 지속 d1**',
+    legacy.sustained === 'd1' && legacy.decision.release !== 'd5', `${legacy.sustained} ${legacy.decision.state} ${legacy.decision.release}`)
 
-  check('지속 공개 단계의 원천 — 없음=env · TRIAL=기반 · 그 밖=전날 공개',
-    sustainedReleaseOf(null, 'd1') === 'd1'
-    && sustainedReleaseOf(prevOf('d5', 'TRIAL'), 'd1') === 'd3'
-    && sustainedReleaseOf(prevOf('d5', 'SUSTAIN'), 'd1') === 'd5'
-    && sustainedReleaseOf(prevOf('d3', 'HOLD'), 'd1') === 'd3')
+  const hold = holdAtCurrent({ kstDate: KST, decidedAt: AT, current: 'd5', reason: 'x' })
+  check('controller 실패 → 지금 공개 단계 d5 를 지킨다 · 저장 가능', hold.release === 'd5' && hold.state === 'HOLD' && validateForToday(hold).ok)
 
-  const pinned = decideStage(inputs({ previousDecision: prevOf('d5', 'SUSTAIN'), publishedToday: 4, signals: withSignal('cost', 'bad') }))
+  check('지속 공개 단계의 원천 — 없음=d1 · TRIAL(PASS 없음)=기반 · 그 밖=전날 공개 · 옛 판=d1',
+    sustainedReleaseOf(null) === 'd1'
+    && sustainedReleaseOf(prevOf('d5', 'TRIAL')) === 'd3'
+    && sustainedReleaseOf(prevOf('d3', 'HOLD')) === 'd3'
+    && sustainedReleaseOf(prevOf('d10', 'REPROVE')) === 'd10'
+    && sustainedReleaseOf(prevOf('d5', 'SUSTAIN', { legacy: true })) === 'd1')
+
+  const pinned = decideStage(inputs({ previousDecision: prevOf('d5', 'HOLD'), publishedToday: 4, signals: withSignal('cost', 'bad') }))
   check('오늘 이미 낸 편수가 낮춘 단계 목표를 넘으면 그날은 고정(사다리 정본 규칙)',
     pinned.decision.dayPinned && pinned.decision.release === 'd5' && validateForToday(pinned.decision).ok)
 
@@ -311,38 +304,35 @@ console.log('\n④ consumer — 결정을 러너 env 로 옮긴다')
   const legacy = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'legacy', reason: '' })
   check('🔴 flag OFF(legacy) → 아무것도 넣지 않는다', Object.keys(legacy).length === 0)
   const safest = consumerEnvOf({ ok: false, code: 'BROKEN', fallback: 'safest', reason: '' })
-  check('🔴 결정 없음·깨짐 → d1 · 발행 전용 허가는 빈 값',
-    safest.SORAN_RELEASE_STAGE === 'd1' && safest.SORAN_CAPACITY_STAGE === 'd1'
-    && safest.SORAN_RELEASE_CANARY_STAGE === '' && safest.SORAN_RELEASE_WINDOW_STAGE === '')
-  const d = decideStage(inputs({ envRelease: 'd1', promotion: promo('d1', 'd3', true) })).decision
+  check('🔴 결정 없음·깨짐 → d1 · 증명일 빈 값 · canary/window 키는 아예 없다',
+    safest.SORAN_RELEASE_STAGE === 'd1' && safest.SORAN_CAPACITY_STAGE === 'd1' && safest[PROOF_STAGE_ENV] === ''
+    && !Object.keys(safest).some((k) => /CANARY|WINDOW/.test(k)))
+  const d = decideStage(inputs({})).decision
   const v = validateForToday(d)
   const ok = v.ok ? consumerEnvOf({ ok: true, decision: v.decision }) : {}
-  check('결정 OK → 공개·천장 = 결정 · canary/window 빈 값(결정이 유일한 권한)',
-    ok.SORAN_RELEASE_STAGE === 'd3' && ok.SORAN_CAPACITY_STAGE === 'd10' && ok.SORAN_RELEASE_WINDOW_STAGE === ''
-    && ok.SORAN_RELEASE_CANARY_STAGE === '')
+  check('결정 OK(PREPARE d1) → 공개 d1 · capacity(다음 증명) d3 · 결정이 유일한 권한',
+    ok.SORAN_RELEASE_STAGE === 'd1' && ok.SORAN_CAPACITY_STAGE === 'd3' && !Object.keys(ok).some((k) => /CANARY|WINDOW/.test(k)))
   /**
-   * 🔴 (2026-09-29 운영 반례) TRIAL d3 결정이 러너에서 준비도 감속으로 d1 이 됐다 — canary 가 빈 값이었다.
-   *    TRIAL 날에는 canary 두 칸이 그 결정 값이고, 러너의 정본 허가 판독기가 "오늘 켜짐" 으로 읽어야 한다.
+   * 🔴 (2026-09-29 운영 반례) TRIAL d3 결정이 러너에서 준비도 감속으로 d1 이 됐다.
+   *    (2026-09-30) 이제 TRIAL 날 공개는 결정의 단계 그대로다 — canary 허가 · 준비도 감속 경로가 없다.
    */
   const trialRow = {
     kstDate: '2026-09-29', contractVersion: STAGE_DECISION_VERSION, capacity: 'd10', release: 'd3', state: 'TRIAL',
-    reasons: ['🟢 오늘 하루 d3 로 낸다(정본 judgeOneDayCanary)'], blocks: [], dayPinned: false, supply: null,
+    reasons: ['🟢 d3 증명일 — preflight PASS(FLOOR)'], blocks: [], dayPinned: false, supply: null,
     transition: { kind: 'TRIAL', target: 'd3', trialBase: 'd1', previousKstDate: '2026-09-28' },
     decidedBy: 'controller', decidedAt: '2026-09-28T22:00:05.993Z',
   }
   const tv = validateStoredDecision({ row: trialRow, expectKstDate: '2026-09-29' })
   const te = tv.ok ? consumerEnvOf({ ok: true, decision: tv.decision }) : {}
-  const tAuth = canaryAuthorization(te, new Date('2026-09-29T00:30:00Z'), RELEASE_STAGES)
-  check('🔴 TRIAL 결정 → 공개 = 시험 기반 d1 · canary = (d3 · 그 날짜) · window 는 빈 값',
-    tv.ok && te.SORAN_RELEASE_CANARY_STAGE === 'd3' && te.SORAN_RELEASE_CANARY_DATE === '2026-09-29'
-    && te.SORAN_RELEASE_WINDOW_STAGE === '' && te.SORAN_RELEASE_STAGE === 'd1' && te.SORAN_CAPACITY_STAGE === 'd10')
-  check('🔴 러너의 정본 허가 판독기가 그 canary 를 오늘 켜짐 · d3 로 읽는다', tAuth.activeToday && tAuth.stage === 'd3')
-  check('🔴 다음 날에는 같은 canary 가 꺼진다 — 하루 허가다',
-    !canaryAuthorization(te, new Date('2026-09-29T15:30:00Z'), RELEASE_STAGES).activeToday)
+  check('🔴 🔴 **TRIAL 결정 → 공개 = 시험 단계 d3 그대로 · 증명일 d3 · canary 키 없음**',
+    tv.ok && te.SORAN_RELEASE_STAGE === 'd3' && te[PROOF_STAGE_ENV] === 'd3' && !Object.keys(te).some((k) => /CANARY|WINDOW/.test(k)),
+    JSON.stringify(te))
+  check('🔴 🔴 **러너가 그 env 를 d3 · 하루 3건으로 읽는다(09-29 반례 해소)**',
+    resolveScale(te).releaseStage === 'd3' && resolveScale(te).releaseProfile.dailyTarget === 3)
   const prepRow = { ...trialRow, state: 'PREPARE', release: 'd1', transition: null, reasons: ['🟢 PREPARE'] }
   const pv = validateStoredDecision({ row: prepRow, expectKstDate: '2026-09-29' })
-  const pe = pv.ok ? consumerEnvOf({ ok: true, decision: pv.decision }) : { SORAN_RELEASE_CANARY_STAGE: 'x' }
-  check('🔴 TRIAL 이 아닌 날(PREPARE)은 canary 도 빈 값', pv.ok && pe.SORAN_RELEASE_CANARY_STAGE === '' && pe.SORAN_RELEASE_CANARY_DATE === '')
+  const pe = pv.ok ? consumerEnvOf({ ok: true, decision: pv.decision }) : { [PROOF_STAGE_ENV]: 'x' }
+  check('🔴 TRIAL 이 아닌 날(PREPARE)은 증명일 빈 값', pv.ok && pe[PROOF_STAGE_ENV] === '')
   const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
   check('🔴 consumer 는 DB 를 쓰지 않는다', !/\.(create|update|upsert|delete)\w*\(/.test(exec))
   const loadEnv = readFileSync('scripts/lib/micro-seed-time.mjs', 'utf-8')

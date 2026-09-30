@@ -25,9 +25,10 @@ import {
 import { JUDGE_MODEL } from './micro-seed-auto-judge.mjs'
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 import {
-  EMPTY_SOURCE_KEYS, attemptedOutcomes, concludedSourceIds, judgeStageBudget, latestOutcomes, selectWorkset,
-  worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
+  EMPTY_SOURCE_KEYS, attemptedOutcomes, concludedSourceIds, judgeStageBudget, latestOutcomes, selectWorkset as selectWorksetCore,
+  preGenerationRelease, worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
 } from '../src/lib/supply-workset'
+import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
 import { missingCandidateKeys } from './lib/candidate-envelope.mjs'
 import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
@@ -171,9 +172,24 @@ function rowsOf(dd: string): WorksetRow[] {
     sourceArticleId: String(input.sourceArticleId ?? ''), sourceSite: 'navercafe:wgang',
     commentCount: Number(input.commentCount ?? 0),
     sourcePostedAt: meta.get(String(input.sourceArticleId))?.posted ?? '',
-    sourceListedAt: '', input,
+    sourceListedAt: '', input, evidence: null,
   }))
 }
+
+/**
+ * 🔴 **원천 증거 · 생성 전 판정** (2026-09-30 · source-slot-v1) — 이 검사는 묶음 → judge → draft 배선을 본다.
+ *    원천 기회 판정(나이 · 반응 · 증거)은 `supply:workset-check` · `source:slot-release-check` 가 실제 목록 관측으로 본다.
+ *    여기서는 회차 시각(`takenAt`)에 **eligible 인** 증거를 싣고(댓글 수 순서를 원천 상대 백분위로 옮긴다),
+ *    러너와 같은 정본 `preGenerationRelease` 를 `releaseOf` 로 넘긴다 — 판정을 건너뛰지 않는다.
+ */
+const selectWorkset = (o: Omit<Parameters<typeof selectWorksetCore>[0], 'releaseOf'>): ReturnType<typeof selectWorksetCore> =>
+  selectWorksetCore({
+    ...o,
+    rows: o.rows.map((r) => (r.evidence !== null ? r : {
+      ...r, evidence: fakeSourceEvidence(o.takenAt, { id: r.sourceArticleId, site: r.sourceSite, commentsPct: Math.min(0.99, r.commentCount / 100) }),
+    })),
+    releaseOf: (r) => preGenerationRelease(r, o.takenAt, o.takenAt),
+  })
 
 type Spawned = { code: number | null; out: string }
 const runStage = (o: {

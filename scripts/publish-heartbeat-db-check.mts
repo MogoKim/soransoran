@@ -7,8 +7,8 @@
  *
  *     ① 10분마다 깨우는 하루(00:00~23:50 · 144틱) — 첫 슬롯 전 0 · 누적 ≤ 도래 수 · 천장까지 · 지연 0
  *     ② 절전 뒤 wake — 같은 날짜 · 운영 창 안에서만 한 틱 1건씩 메운다 · 다음 날로 넘기지 않는다
- *     ③ 기간 변수가 없는 로컬 env — 러너가 더 높은 단계를 넘겨도 로컬 천장(d1 · 하루 1)을 넘지 않는다
- *     ④ 로컬 heartbeat + GitHub 예약(실측 지연 110~408분) — 순차 · 동시 · 같은 후보 · 틱 잠금 없이도 중복 0
+ *     ③ 로컬 env(d5/d1) — 러너가 더 높은 단계를 넘겨도 로컬 천장(d1 · 하루 1)을 넘지 않는다
+ *     ④ 로컬 heartbeat(d1) + GitHub 예약(결정 d3 · 실측 지연 110~408분) — 순차 · 동시 · 같은 후보 · 틱 잠금 없이도 중복 0
  *     ⑤ 러너 프로세스 자체 — 같은 틱 두 wake 동시 → 하나만 선택 단계로 · 창 밖/트리거 오용 처리
  *
  * 🔴 운영 DB 에 절대 붙이지 않는다(sentinel · localhost · soran_test). 모델 호출 0 · launchctl 0.
@@ -27,6 +27,7 @@ import { catchUpDailyCeiling, dueCountAt, kstMinuteOfDay } from '../src/lib/publ
 import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
 import { heartbeatWakeTimes, PUBLISH_HEARTBEAT_ARGS } from './lib/original-post-runner-template'
 import { heartbeatInWindow, heartbeatTickKey } from './lib/publish-heartbeat-tick.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -53,10 +54,19 @@ const hhmm = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0
 const envOf = (stage: string): Record<string, string> => ({ SORAN_RELEASE_STAGE: stage, SORAN_CAPACITY_STAGE: stage })
 /** 🔴 운영 로컬 정본과 같은 모양 — 기간 변수 없음 */
 const LOCAL_ENV = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
-/** 🔴 GitHub Variables 와 같은 모양 — 기간 d3 (2026-09-23~29) */
+/**
+ * 🔴 GitHub 쪽 env — (2026-09-30) 기간(window) · canary 변수는 지웠다. 단계는 StageDecision consumer 가 넣은
+ *    그날 결정(TRIAL d3 = release d3 · capacity d3) 그대로다. 옛 기간 키를 같이 실어 **무시되는지**도 본다.
+ */
 const GITHUB_ENV = {
-  ...LOCAL_ENV, SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29',
+  SORAN_CAPACITY_STAGE: 'd3', SORAN_RELEASE_STAGE: 'd3',
+  SORAN_RELEASE_WINDOW_STAGE: 'd10', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29',
 }
+/**
+ * 🔴 원문 증거 기준 시각 — 시나리오 날의 KST 자정. 게시는 그보다 6시간 앞(전날 18시)이라 그날 · 다음 날 아침까지
+ *    72h 안이다. 증거 없는 옛 fixture 는 트랜잭션이 EXPIRED 로 옮긴다(source-slot-v1).
+ */
+let evidenceAt = K('2026-09-26T00:00:00')
 
 let seq = 0
 async function wipe(): Promise<void> {
@@ -74,7 +84,7 @@ async function cand(): Promise<string> {
   const q = await prisma.originalPostApprovalQueue.create({
     data: {
       sourceRawContentId: raw.id, status: 'APPROVED', draftTitle: `평범한 하루 ${seq}`, draftBody: `아침에 산책을 다녀왔어요 ${seq}. 다들 어떻게 지내세요?`,
-      gateVerdict: 'PASS', gateResults: { holds: [], blocks: [] } as never, promptVersion: 'p', model: 'm', decidedBy: 'founder',
+      gateVerdict: 'PASS', gateResults: { holds: [], blocks: [], ...fakeEvidenceGate(evidenceAt, { id: `hb-${seq}` }) } as never, promptVersion: 'p', model: 'm', decidedBy: 'founder',
       dedupKey: `hb-${seq}`, matchedPersonaId: p.id, matchedAt: new Date(),
     },
     select: { id: true },
@@ -127,6 +137,7 @@ async function main(): Promise<void> {
     await wipe()
     day += 1
     const date = `2026-10-${String(day).padStart(2, '0')}`
+    evidenceAt = K(`${date}T00:00:00`)
     for (let i = 0; i < PROFILES[stage].dailyTarget + 2; i += 1) await cand()
     const first = Math.min(...PROFILES[stage].slots.map(minuteOfDay))
     let early = 0
@@ -151,6 +162,7 @@ async function main(): Promise<void> {
   console.log('\n② 🔴 절전 뒤 wake — 같은 날짜 · 운영 창 안에서만 · 한 틱 1건')
   {
     await wipe()
+    evidenceAt = K('2026-10-10T00:00:00')
     for (let i = 0; i < 14; i += 1) await cand()
     const date = '2026-10-10'
     const awake = heartbeatWakeTimes().map(minuteOfDay).filter((m) => m < 9 * 60 || (m >= 15 * 60 + 10 && m < 18 * 60))
@@ -176,23 +188,25 @@ async function main(): Promise<void> {
     check('🔴 중복 0', (await dupFree()).ok, (await dupFree()).detail)
   }
 
-  console.log('\n③ 🔴 🔴 기간 변수 없는 로컬 env — 러너가 d3·d10 을 넘겨도 로컬 천장 d1 (하루 1)')
+  console.log('\n③ 🔴 🔴 로컬 env(d5/d1) — 러너가 d3·d10 을 넘겨도 로컬 천장 d1 (하루 1)')
   for (const asked of ['d3', 'd10'] as const) {
     await wipe()
+    evidenceAt = K('2026-09-26T00:00:00')
     for (let i = 0; i < 12; i += 1) await cand()
-    const date = '2026-09-26' // GitHub 쪽 기간(09-23~29) 안의 날 — 로컬에는 그 변수가 없다
+    const date = '2026-09-26'
     const pub: string[] = []
     for (const m of heartbeatWakeTimes().map(minuteOfDay)) {
       const w = await wake(at(date, m), asked, LOCAL_ENV)
       if (w?.r.kind === 'published') pub.push(hhmm(m))
     }
-    check(`🔴 🔴 **요청 ${asked} · 로컬 env(d5/d1 · 기간 없음) — 하루 ${pub.length}건 ${pub.join(',')} (천장 d1 = 1건 · 09:30)**`,
+    check(`🔴 🔴 **요청 ${asked} · 로컬 env(d5/d1) — 하루 ${pub.length}건 ${pub.join(',')} (천장 d1 = 1건 · 09:30)**`,
       pub.join(',') === '09:30', pub.join(','))
   }
 
-  console.log('\n④ 🔴 🔴 로컬 heartbeat(d1 천장) + GitHub 예약(기간 d3 · 실측 지연 110~408분) — 중복 0')
+  console.log('\n④ 🔴 🔴 로컬 heartbeat(d1 천장) + GitHub 예약(결정 d3 · 옛 기간 키 d10 은 무시 · 실측 지연 110~408분) — 중복 0')
   {
     await wipe()
+    evidenceAt = K('2026-09-26T00:00:00')
     for (let i = 0; i < 16; i += 1) await cand()
     const date = '2026-09-26'
     const cronSlots = [490, 570, 650, 730, 810, 890, 970, 1050, 1140, 1230] // 08:10 … 20:30 (KST 분)
@@ -243,6 +257,7 @@ async function main(): Promise<void> {
   console.log('\n④-b 🔴 🔴 같은 틱 잠금이 **없다고** 쳐도 — 같은 순간 로컬 wake 2 + GitHub 1 이 같은 후보를 노린다')
   {
     await wipe()
+    evidenceAt = K('2026-09-26T00:00:00')
     for (let i = 0; i < 6; i += 1) await cand()
     const t = K('2026-09-26T09:30:00')
     const rs = await Promise.all([wake(t, 'd1', LOCAL_ENV), wake(t, 'd1', LOCAL_ENV), wake(t, 'd3', GITHUB_ENV)])
@@ -301,8 +316,8 @@ async function main(): Promise<void> {
       const taken = [a, b].filter((x) => x.out.includes('TICK_TAKEN'))
       check(`🔴 🔴 **같은 틱(${tick}) 동시 두 wake — 하나만 선택 단계로 · 하나는 TICK_TAKEN · 둘 다 exit 0**`,
         claimed.length === 1 && taken.length === 1 && a.code === 0 && b.code === 0, `${a.code}/${b.code}\n${a.out.slice(-600)}\n---\n${b.out.slice(-600)}`)
-      check('🔴 선택 단계로 간 쪽이 단계 입력을 값으로 남겼다 — 천장 d1 (기간 변수 없음)',
-        claimed[0]?.out.includes('③-s 단계 입력  capacity=d5 · release=d1 · window=(없음)') === true
+      check('🔴 선택 단계로 간 쪽이 단계 입력을 값으로 남겼다 — 천장 d1',
+        claimed[0]?.out.includes('③-s 단계 입력  capacity=d5 · release=d1 → 천장 d1') === true
         && claimed[0]?.out.includes('천장 d1 (하루 1건)') === true, claimed[0]?.out.slice(0, 400) ?? '')
       check('🔴 TICK_TAKEN 쪽은 DB 에 붙기 전에 끝났다(재고 조립 줄이 없다)', taken[0]?.out.includes('① 대기열') === false)
       const c = await run(args)

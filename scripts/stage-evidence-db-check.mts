@@ -8,10 +8,12 @@
  *      표본이 자동 target 밖 · 발행 기록 중복 · 같은 Persona 두 번 · 표식 없는 발행 · 편수 부족 · 사람 승인만/혼합 ·
  *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 상한 5 에서 5건 PASS · 6건 FAIL
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
- *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → TRIAL d3 재시험 · 전날 PASS → TRIAL d5 · DB write 0
- *   ⑤ (2026-09-29 generic scheduler 배선) REPROVE 증명일 실제 행 → PASS → 다음 날 d5 시험 · HOLD 는 아니다 ·
- *      controller 진입점: 전날 TRIAL d20 · 천장 d10 → d20 을 열지 않는다(CEILING) · 천장 d20 → 실제 DB·장부로 모은
- *      preflight(자동 READY 닫힘 · 장부 없음)가 막는다 · 천장 d100 → 열 수 있는 천장 d50
+ *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → 계획 d3 재시험 · 전날 PASS → 계획 d5 · DB write 0
+ *      🔴 (2026-09-30) 실제 진입점의 preflight 는 계약 유효 Persona 제공자가 없어 PERSONA_UNKNOWN 이다 — 시험이 열리지 않고
+ *         지금 단계를 다시 증명한다(REPROVE · 바닥은 PREPARE). 이것이 오늘 운영의 정직한 결과다.
+ *   ⑤ REPROVE 증명일 실제 행 → PASS → 다음 날 d5 계획 · HOLD 는 아니다 · controller 진입점: 전날 TRIAL d20 → d20 재시험
+ *      계획이어도 preflight(실제 DB·장부 · Persona 모름)가 막는다 · env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
+ *   ⑥ (2026-09-30 · 조항 ⑦) 발행 도장 — 도장 없는 발행 → RELEASE_CONTRACT_MISSING · 옛/ineligible 도장 → STALE_RELEASE
  *
  * 🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구한다. provider 0.
  * 🔴 HOME 을 임시 디렉터리로 바꿔 controller 를 돌린다 — 정본 env · 장부가 전부 가짜 HOME 안이다.
@@ -36,6 +38,8 @@ import { AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX } from '.
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { observeJob } from './lib/runner-health.mjs'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
+import { judgeSlotRelease, releaseStampOf, RELEASE_STAMP_KEY } from '../src/lib/source-slot-release'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -100,6 +104,15 @@ async function storeDecision(o: Record<string, unknown>): Promise<ValidatedStage
 }
 
 let seq = 0
+/**
+ * 🔴 **발행 트랜잭션이 남기는 모양 그대로의 gateResults** — 원문 증거 + 그 시각 정본 판정의 도장(source-slot-v1).
+ *    도장은 손으로 적지 않는다: 같은 증거를 `judgeSlotRelease` 에 넣어 나온 판정을 `releaseStampOf` 로 옮긴다.
+ */
+const publishedGate = (t: Date, id: string): Record<string, unknown> => {
+  const ev = fakeEvidenceGate(t, { id })
+  const v = judgeSlotRelease({ gateResults: ev, slotAt: t, now: t, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: id })
+  return { ...ev, [RELEASE_STAMP_KEY]: releaseStampOf(v) }
+}
 async function persona(code: string): Promise<string> {
   const u = await prisma.user.create({ data: { nickname: `ev${code}` }, select: { id: true } })
   return (await prisma.persona.create({ data: { code, userId: u.id, status: 'active' }, select: { id: true } })).id
@@ -133,7 +146,7 @@ async function seedDay(n = 3, decidedBy: string | null = AUTO_DECIDER): Promise<
     })
     const q = await prisma.originalPostApprovalQueue.create({
       data: { sourceRawContentId: await rawRow(t), status: 'PUBLISHED', draftTitle: `저녁 산책 ${i}`, draftBody: `동네 한 바퀴 ${i}`,
-        gateVerdict: 'PASS', gateResults: {}, promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
+        gateVerdict: 'PASS', gateResults: publishedGate(t, `ev-${seq}-${i}`) as never, promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
         decidedBy, dedupKey: `ev-${seq}-${i}`, createdPostId: post.id, matchedPersonaId: author },
       select: { id: true },
     })
@@ -247,7 +260,7 @@ try {
     const old = new Date(SLOTS[0]!.getTime() - 86_400_000)
     const post = await prisma.post.create({ data: { boardType: 'FREE', title: '전날 글', content: '전날', source: 'SYSTEM', authorId: u, personaId: a, createdAt: old }, select: { id: true } })
     const q = await prisma.originalPostApprovalQueue.create({
-      data: { sourceRawContentId: await rawRow(old), status: 'PUBLISHED', draftTitle: '전날 글', draftBody: '전날', gateVerdict: 'PASS', gateResults: {},
+      data: { sourceRawContentId: await rawRow(old), status: 'PUBLISHED', draftTitle: '전날 글', draftBody: '전날', gateVerdict: 'PASS', gateResults: publishedGate(old, `ev-old-${seq}`) as never,
         promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: AUTO_DECIDER, dedupKey: `ev-old-${seq}`, createdPostId: post.id, matchedPersonaId: a },
       select: { id: true },
     })
@@ -330,6 +343,24 @@ try {
     const v = await verdictOf(null)
     check('🔴 결정 행이 없다 → DECISION_MISSING', v.verdict === 'FAIL' && has(v, 'DECISION_MISSING'), v.codes.join(','))
   }
+  // 🔴 조항 ⑦ — 지금 계약(source-slot-v1)의 eligible 도장 없이 나간 글은 단계 증거가 아니다
+  await counter('🔴 🔴 **도장 없는 발행(계약 이전 · 우회) → RELEASE_CONTRACT_MISSING**', 'RELEASE_CONTRACT_MISSING', async (s) => {
+    const g = (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: s.queues[1]! }, select: { gateResults: true } })).gateResults as Record<string, unknown>
+    const rest = { ...g }
+    delete rest[RELEASE_STAMP_KEY]
+    await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[1]! }, data: { gateResults: rest as never } })
+  })
+  await counter('🔴 🔴 **옛 계약 판 도장 → STALE_RELEASE**', 'STALE_RELEASE', async (s) => {
+    const g = (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: s.queues[1]! }, select: { gateResults: true } })).gateResults as Record<string, unknown>
+    await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[1]! }, data: {
+      gateResults: { ...g, [RELEASE_STAMP_KEY]: { ...(g[RELEASE_STAMP_KEY] as Record<string, unknown>), contract: 'source-slot-v0' } } as never } })
+  })
+  await counter('🔴 🔴 **ineligible 도장(원천 72h 초과로 판정된 글이 나갔다) → STALE_RELEASE**', 'STALE_RELEASE', async (s) => {
+    const t = SLOTS[2]!
+    const ev = fakeEvidenceGate(t, { id: 'stale', ageH: 90 })
+    const v = judgeSlotRelease({ gateResults: ev, slotAt: t, now: t, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: 'stale' })
+    await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[2]! }, data: { gateResults: { ...ev, [RELEASE_STAMP_KEY]: releaseStampOf(v) } as never } })
+  })
 
   console.log('\n③ 발행 트랜잭션이 무인 표식을 실제로 남긴다')
   {
@@ -339,7 +370,7 @@ try {
     const txNow = new Date(`${TODAY}T09:40:00+09:00`)
     const mk = async (k: string): Promise<string> => (await prisma.originalPostApprovalQueue.create({
       data: { sourceRawContentId: await rawRow(new Date(txNow.getTime() - 86_400_000)), status: 'APPROVED', draftTitle: `가을 이불 ${k}`,
-        draftBody: `가을 이불을 꺼냈어요 ${k}. 다들 바꾸셨어요?`, gateVerdict: 'PASS', gateResults: {},
+        draftBody: `가을 이불을 꺼냈어요 ${k}. 다들 바꾸셨어요?`, gateVerdict: 'PASS', gateResults: fakeEvidenceGate(txNow, { id: `ev-pub-${k}` }) as never,
         promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: 'founder', dedupKey: `ev-pub-${k}`, matchedPersonaId: p },
       select: { id: true, status: true, createdPostId: true, updatedAt: true, decidedBy: true },
     })).id
@@ -369,6 +400,12 @@ try {
     }, { now: () => txNow })
     const lc = c.kind === 'published' ? await prisma.personaActivityLog.findFirst({ where: { targetId: c.postId } }) : null
     check('🔴 예약이어도 unattended=false(수동 트리거)면 표식 없음', lc?.decidedBy === 'operator', `${c.kind} ${lc?.decidedBy ?? '-'}`)
+    const stamped = a.kind === 'published'
+      ? (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: qa }, select: { gateResults: true } })).gateResults as Record<string, unknown>
+      : {}
+    const st = stamped[RELEASE_STAMP_KEY] as Record<string, unknown> | undefined
+    check('🔴 🔴 **발행 트랜잭션이 지금 계약의 eligible 도장을 실제로 남긴다(조항 ⑦ 입력)**',
+      st?.contract === 'source-slot-v1' && st?.verdict === 'eligible', JSON.stringify(st))
   }
 
   console.log('\n④ controller 실제 진입점 (dry-run · --json · 가짜 HOME)')
@@ -385,7 +422,6 @@ try {
       evidence: StageEvidenceVerdict | null
       plan: { base: string; target: string; basis: string } | null
       result: { decision: { state: string; release: string; capacity: string; reasons: string[]; blocks: { code: string }[]; transition: { trialBase?: string; basis?: string } | null }; brake: string }
-      ceiling?: { authorized: string; operable: string }
       nextPreflight?: { stage: string; verdict: string; codes: string[] } | null
     }
     /**
@@ -410,7 +446,8 @@ try {
         const captured = new Date(NOW.getTime() - (2 + k * 0.1) * 86_400_000)
         await prisma.originalPostApprovalQueue.create({
           data: { sourceRawContentId: await rawRow(captured), status: 'APPROVED', draftTitle: `가을 이불 꺼낸 날 ${seq}-${k}`,
-            draftBody: `가을 이불을 꺼내 햇볕에 말렸어요 ${seq}-${k}. 다들 이불 바꾸셨어요?`, gateVerdict: 'PASS', gateResults: {},
+            draftBody: `가을 이불을 꺼내 햇볕에 말렸어요 ${seq}-${k}. 다들 이불 바꾸셨어요?`, gateVerdict: 'PASS',
+            gateResults: fakeEvidenceGate(NOW, { id: `ev-stock-${seq}-${k}` }) as never,
             promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: 'founder', dedupKey: `ev-stock-${seq}-${k}` },
         })
       }
@@ -461,11 +498,26 @@ try {
       check('⬚ 모름 → 머문다: 시험 계획 = d3 재시험', passRun.out?.plan?.target === 'd3' && passRun.out.plan.basis === 'RETEST')
     }
     check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0)
-    if (launchdOk) {
+    {
+      /**
+       * 🔴 (2026-09-30) 실제 진입점 — 계약 유효 Persona 제공자가 아직 없다(`contractValidPersonas` = null) →
+       *    모든 단계 preflight 가 PERSONA_UNKNOWN → 시험은 열리지 않는다. 지속 단계를 다시 증명한다.
+       *    TRIAL 경로 자체(PASS → d5 · FAIL → d3 재시험)는 같은 정본 함수로 `stage:evidence-check` ③ 이 본다.
+       */
       const fd = failRun.out?.result.decision
       const pd = passRun.out?.result.decision
-      check('🔴 🔴 **러너 수준 — 전날 FAIL → 결정 TRIAL d3 (재시험)**', fd?.state === 'TRIAL' && fd.release === 'd3', `${fd?.state} ${fd?.release}`)
-      check('🟢 🟢 **러너 수준 — 전날 PASS → 결정 TRIAL d5**', pd?.state === 'TRIAL' && pd.release === 'd5', `${pd?.state} ${pd?.release}`)
+      const pfUnknown = (o: Out | null): boolean => o?.nextPreflight !== null && o?.nextPreflight !== undefined
+        && o.nextPreflight.verdict !== 'PASS' && o.nextPreflight.codes.includes('PERSONA_UNKNOWN')
+      const pfBlocked = (d: Out['result']['decision'] | undefined): boolean =>
+        d !== undefined && d.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN' || b.code === 'PREFLIGHT_FAIL')
+      check('🔴 🔴 **러너 수준 — 전날 FAIL → 계획 d3 재시험 · Persona 모름 → 시험 없이 바닥 PREPARE d1**',
+        fd?.state === 'PREPARE' && fd.release === 'd1' && pfBlocked(fd) && pfUnknown(failRun.out),
+        `${fd?.state} ${fd?.release} ${JSON.stringify(failRun.out?.nextPreflight)}`)
+      if (launchdOk) {
+        check('🟢 🔴 **러너 수준 — 전날 PASS → 지속 d3(증명됐다) · 계획 d5 · Persona 모름 → REPROVE d3 (d5 를 열지 않는다)**',
+          pd?.state === 'REPROVE' && pd.release === 'd3' && pfBlocked(pd) && pfUnknown(passRun.out),
+          `${pd?.state} ${pd?.release}`)
+      }
     }
     for (const r of [failRun, passRun]) {
       const d = r.out?.result.decision
@@ -493,44 +545,40 @@ try {
       check('🔴 HOLD d3 는 같은 행이어도 DECISION_NOT_TRANSITION → 계획 없음', hv.verdict === 'FAIL' && has(hv, 'DECISION_NOT_TRANSITION')
         && trialPlanOf(hold, hv) === null)
 
-      // (나) controller 진입점 — 전날 TRIAL d20(기반 d10) · 천장만 바꿔 본다
-      const envWith = (capacity: string): void => {
+      // (나) controller 진입점 — 전날 TRIAL d20(기반 d10) · 증거 없음 → d20 재시험 계획 · preflight 가 막는다
+      const envWith = (release: string, capacity: string): void => {
         writeFileSync(join(APP, 'env.local'), [
-          'SORAN_RELEASE_STAGE=d10', `SORAN_CAPACITY_STAGE=${capacity}`, 'STAGE_CONTROLLER_ENABLED=on', 'SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto',
+          `SORAN_RELEASE_STAGE=${release}`, `SORAN_CAPACITY_STAGE=${capacity}`, 'STAGE_CONTROLLER_ENABLED=on', 'SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto',
           'SORAN_LLM_DAILY_BUDGET_USD=0.5', 'SORAN_LLM_RUN_REQUEST_CAP=20', 'SORAN_LLM_RESERVE_HEADROOM=1.2',
           'SORAN_AUDIT_LLM_DAILY_BUDGET_USD=0.3', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP=25', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM=1.5', '',
         ].join('\n'), { mode: 0o600 })
       }
-      const trialD20 = { capacity: 'd20', release: 'd20', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd10', previousKstDate: D_PREV, target: 'd20', basis: 'PASS' } }
+      const trialD20 = { capacity: 'd30', release: 'd20', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd10', previousKstDate: D_PREV, target: 'd20', basis: 'PASS' } }
       await wipe()
       await storeDecision(trialD20)
       await seedStock()
-      envWith('d10')
-      const c10 = runController()
-      const d10 = c10.out?.result.decision
-      console.log(`   (나-1) 천장 d10 → ${show(c10.out)}`)
-      check('exit 0 (dry-run)', c10.code === 0, c10.raw)
-      check('전날 d20 이 PASS 가 아니다 → 계획 = d20 재시험(기반 d10 · RETEST)', c10.out?.plan?.target === 'd20' && c10.out.plan.base === 'd10'
-        && c10.out.plan.basis === 'RETEST', JSON.stringify(c10.out?.plan))
-      check('🔴 🔴 **천장 d10 — 실제 진입점이 d20 을 열지 않는다(공개 ≤ d10 · 결정 천장 d10)**', d10 !== undefined && d10.release !== 'd20'
-        && ['d1', 'd3', 'd5', 'd10'].includes(d10.release) && d10.capacity === 'd10', `${d10?.state} ${d10?.release} ${d10?.capacity}`)
-      check('천장 위 대상이면 D20 preflight 를 모으지 않는다(사다리 CEILING 이 막는다)', c10.out?.nextPreflight === null, JSON.stringify(c10.out?.nextPreflight))
-      envWith('d20')
-      const c20 = runController()
-      const d20 = c20.out?.result.decision
-      console.log(`   (나-2) 천장 d20 → ${show(c20.out)} · preflight ${c20.out?.nextPreflight?.verdict} [${c20.out?.nextPreflight?.codes.join(',')}]`)
-      check('exit 0 (dry-run)', c20.code === 0, c20.raw)
-      check('🔴 천장 d20 — 실제 DB·장부로 모은 d20 preflight 가 PASS 가 아니다(자동 READY 닫힘 → 재고 0 · 장부 없음 → 단가 모름)',
-        c20.out?.nextPreflight?.stage === 'd20' && c20.out.nextPreflight.verdict === 'FAIL'
-        && c20.out.nextPreflight.codes.includes('STOCK_SHORT') && c20.out.nextPreflight.codes.includes('COMMENT_COST_UNKNOWN'),
-      JSON.stringify(c20.out?.nextPreflight))
-      check('🔴 🔴 **천장 d20 — preflight 가 막으면 d20 시험을 열지 않는다(PREFLIGHT_FAIL · 결정 천장 d20)**', d20 !== undefined
-        && !(d20.state === 'TRIAL' && d20.release === 'd20') && d20.capacity === 'd20' && d20.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
-      `${d20?.state} ${d20?.release} ${JSON.stringify(d20?.blocks)}`)
-      envWith('d100')
-      const c100 = runController()
-      check('🔴 천장 d100 — 승인 d100 으로 읽되 열 수 있는 천장 d50 · 결정 천장 d50', c100.code === 0 && c100.out?.ceiling?.authorized === 'd100'
-        && c100.out.ceiling.operable === 'd50' && c100.out.result.decision.capacity === 'd50', JSON.stringify(c100.out?.ceiling))
+      envWith('d10', 'd10')
+      const c1 = runController()
+      const r1 = c1.out?.result.decision
+      console.log(`   (나-1) 전날 TRIAL d20 · 증거 없음 → ${show(c1.out)} · preflight ${c1.out?.nextPreflight?.verdict} [${c1.out?.nextPreflight?.codes.join(',')}]`)
+      check('exit 0 (dry-run)', c1.code === 0, c1.raw)
+      check('전날 d20 이 PASS 가 아니다 → 계획 = d20 재시험(기반 d10 · RETEST)', c1.out?.plan?.target === 'd20' && c1.out.plan.base === 'd10'
+        && c1.out.plan.basis === 'RETEST', JSON.stringify(c1.out?.plan))
+      check('🔴 🔴 **실제 DB · 장부로 모은 d20 preflight 가 PASS 가 아니다(Persona 모름 · 단가 모름)**',
+        c1.out?.nextPreflight?.stage === 'd20' && c1.out.nextPreflight.verdict !== 'PASS'
+        && c1.out.nextPreflight.codes.includes('PERSONA_UNKNOWN') && c1.out.nextPreflight.codes.includes('COMMENT_COST_UNKNOWN'),
+      JSON.stringify(c1.out?.nextPreflight))
+      check('🔴 🔴 **preflight 가 막으면 d20 시험을 열지 않는다 — 지속 d10 을 다시 증명(REPROVE) · capacity 는 다음 증명 d20**', r1 !== undefined
+        && !(r1.state === 'TRIAL' && r1.release === 'd20') && r1.release === 'd10' && r1.capacity === 'd20'
+        && r1.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN' || b.code === 'PREFLIGHT_FAIL'),
+      `${r1?.state} ${r1?.release} ${r1?.capacity} ${JSON.stringify(r1?.blocks)}`)
+      // 🔴 env 단계 키는 결정의 입력이 아니다 — d50/d100 을 적어도 같은 결정이다
+      envWith('d50', 'd100')
+      const c2 = runController()
+      const r2 = c2.out?.result.decision
+      check('🔴 🔴 **env 에 SORAN_RELEASE_STAGE=d50 · CAPACITY=d100 을 적어도 결정은 그대로 — 단계 입력원은 StageDecision 하나**',
+        c2.code === 0 && r2 !== undefined && r1 !== undefined && r2.state === r1.state && r2.release === r1.release && r2.capacity === r1.capacity,
+        `${r2?.state} ${r2?.release} ${r2?.capacity}`)
       check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0)
     }
   }
