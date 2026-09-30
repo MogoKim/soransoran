@@ -94,7 +94,7 @@ const forgedEnv = af.buildQueuePayload({ envelope: { ...mEnv, qualityContractDig
 check('🔴 🔴 **#9 봉투 digest 가 다르면(호출자 주입) payload 없음**', forgedEnv === null)
 const noEnvDigest = af.buildQueuePayload({ envelope: { ...mEnv, qualityContractDigest: undefined }, candidate: mc as never, autoJudge: aj, now: 'x' })
 check('🔴 🔴 **#10 봉투에 digest 가 없으면(수정 전 코드가 만든 파일) payload 없음**', noEnvDigest === null)
-const plan = (env: Record<string, unknown>) => af.planRefill({ envelope: env as never, candidates: [mc as never], held: [], existing: new Set(), queue: [], usable: 0 })
+const plan = (env: Record<string, unknown>) => af.planRefill({ envelope: env as never, candidates: [mc as never], held: [], existing: new Set(), queue: [] })
 check('🔴 🔴 **#10 수정 전 파일 → SkipCode CONTRACT (PROFILE 로 뭉개지 않는다)**',
   plan({ ...mEnv, qualityContractDigest: undefined }).skipped[0]?.code === 'CONTRACT')
 check('🔴 🔴 **#9 다른 digest 파일 → SkipCode CONTRACT**', plan({ ...mEnv, qualityContractDigest: FORGED }).skipped[0]?.code === 'CONTRACT')
@@ -114,7 +114,6 @@ console.log('\nB. 🔴 cohort — 지금 계약 · 생성 순서 · 첫 30건 ·
 // ─────────────────────────────────────────────────────────
 const GOOD_SR = { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 }
 const T0 = Date.parse('2026-09-27T00:00:00.000Z')
-const CAP = new Date(T0 - 864e5)
 type Kind = 'noEdit' | 'edited' | 'declined' | 'pending' | 'unreviewed'
 type Rev = { user?: string; hd: 'yes' | 'no' | 'unmeasured'; at?: string }
 let n = 0
@@ -148,7 +147,7 @@ const row = (o: {
     createdAt: new Date(o.at ?? T0 + n * 60_000),
     decidedBy: kind === 'pending' ? 'machine:auto-draft-v5' : 'founder',
     editDiff: records.length === 0 ? null : { [EVIDENCE_REVIEW_KEY]: records },
-    ...bound, gateVerdict: 'PASS', sourceCapturedAt: CAP, machine: o.machine ?? true,
+    ...bound, gateVerdict: 'PASS', machine: o.machine ?? true,
     gateResults: { holds: o.holds ?? [], blocks: [], semanticReview: GOOD_SR, ...qcm },
   }
 }

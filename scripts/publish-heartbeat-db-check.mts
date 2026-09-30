@@ -222,11 +222,13 @@ async function main(): Promise<void> {
         .then((w) => ({ e, w }))))
       for (const { e, w } of rs) {
         if (w === null) continue
-        const k = w.r.kind === 'published' ? 'published' : w.r.kind === 'blocked' ? w.r.code : 'error'
+        const k = w.r.kind === 'published' ? 'published' : w.r.kind === 'blocked' ? w.r.code : w.r.kind
         if (e.who === 'github') githubLog.push(`${heartbeatTickKey(t).slice(5)}${group.length > 1 ? '(동시)' : ''}:${k}`)
         if (w.r.kind === 'published') {
           if (e.who === 'local') { localPub += 1; if (beforeN >= Math.min(dueCountAt('d1', m), 1)) localOver += 1 } else githubPub += 1
         } else if (w.r.kind === 'error') errs.push(`${hhmm(m)} ${e.who} ${w.r.message}`)
+        // 🔴 (2026-09-30) 만료는 오류가 아니지만 이 fixture 에서는 나오면 안 된다 — 증거가 eligible 이다
+        else if (w.r.kind === 'expired') errs.push(`${hhmm(m)} ${e.who} EXPIRED ${w.r.reasons.join(',')}`)
         else if (!['SLOT_CLOSED', 'SLOT_CONSUMED', 'TARGET_RACE_LOST'].includes(w.r.code)) errs.push(`${hhmm(m)} ${e.who} ${w.r.code}`)
       }
     }

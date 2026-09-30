@@ -66,7 +66,7 @@ export function makeAuditContextLoader(prisma: PrismaClient, opts: { artifactDir
         id: true, decidedBy: true, createdPostId: true, draftTitle: true, draftBody: true, gateVerdict: true,
         gateResults: true, editDiff: true, declineReason: true,
         matchedPersona: { select: { code: true, userId: true } },
-        rawContent: { select: { sourceSite: true, sourceArticleId: true, sourceCapturedAt: true } },
+        rawContent: { select: { sourceSite: true, sourceArticleId: true } },
       },
     })
     if (q === null) return fail('NO_QUEUE', '감사 대상 큐 행이 없다')
@@ -84,7 +84,7 @@ export function makeAuditContextLoader(prisma: PrismaClient, opts: { artifactDir
       id: q.id, decidedBy: q.decidedBy, draftTitle: q.draftTitle, draftBody: q.draftBody,
       gateVerdict: q.gateVerdict, gateResults: q.gateResults, editDiff: q.editDiff, declineReason: q.declineReason,
       rawSourceSite: q.rawContent.sourceSite, rawSourceArticleId: q.rawContent.sourceArticleId,
-      sourceCapturedAt: q.rawContent.sourceCapturedAt, matchedPersonaCode: q.matchedPersona.code,
+      matchedPersonaCode: q.matchedPersona.code,
     }, ix.artifacts, ix.candidates)
     // 🔴 결속(열쇠·한 장·출처·Persona·계약·최초 초안)이 선 것만 — 의미 검수 경고 유무(warning)는 결속과 무관하다
     if (restored.klass !== 'clean' && restored.klass !== 'warning') {

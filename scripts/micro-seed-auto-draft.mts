@@ -584,6 +584,11 @@ type Meta = {
   assetAxes: string
   sourcePostedAt: string; sourceListedAt: string; sourceCapturedAt: string
   /**
+   * 🔴 **수집 때 본 반응** (2026-09-30 · source-evidence-v1) — 목록의 댓글 · 조회 · 자리.
+   *    프롬프트에 넣지 않는다 — 적재가 원천 상대 반응을 잴 수 있게 **뒤로 전달할 값**이다. 모르면 `null`.
+   */
+  response: { comments: number | null; views: number | null; listPage: number | null; listRank: number | null }
+  /**
    * 🔴 **원천 사진 수** (2026-09-28 quality-v3) — 초안 게이트의 자료 축이 읽는다. 원천 지문에 넣지 않는다.
    *    🔴 **양수만 증거다** — 수집기 여럿이 세지 않고 `0` 을 적는다. `null` 은 파일에 칸이 없다는 뜻이다.
    */
@@ -615,6 +620,10 @@ const sourceIdentityHash = (m: Meta): string => inputHashOf({
   title: m.title, bodyHead: m.bodyHead, axis: m.axis, lane: m.lane, assetAxes: m.assetAxes,
 })
 
+/** 🔴 음 아닌 정수만 센 값이다 — 없거나 못 읽으면 앞서 읽은 값을 지킨다(모르면 `null`) */
+const countKeep = (v: unknown, prev: number | null | undefined): number | null =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : (prev ?? null)
+
 function loadMeta(): Map<string, Meta> {
   const out = new Map<string, Meta>()
   for (const suffix of ['.detail.jsonl', '.raw-detail.jsonl']) {
@@ -644,6 +653,13 @@ function loadMeta(): Map<string, Meta> {
           sourcePostedAt: keep(S(r.sourcePostedAt), was?.sourcePostedAt),
           sourceListedAt: keep(S(r.sourceListedAt), was?.sourceListedAt),
           sourceCapturedAt: keep(S(r.sourceCapturedAt), was?.sourceCapturedAt),
+          // 🔴 센 값만 앞 값을 이긴다 — 칸이 없는 옛 파일(`null`)이 아는 수를 지우지 않는다
+          response: {
+            comments: countKeep(r.commentCount, was?.response.comments),
+            views: countKeep(r.sourceViewCount, was?.response.views),
+            listPage: countKeep(r.sourcePage, was?.response.listPage),
+            listRank: countKeep(r.sourceRankOnPage, was?.response.listRank),
+          },
           // 🔴 센 값(양수)만 앞 값을 이긴다 — `0` 은 "안 셌다" 일 수 있어 아는 값을 지우지 않는다
           imageCount: typeof r.imageCount === 'number' && Number.isFinite(r.imageCount) && r.imageCount > 0
             ? r.imageCount
@@ -1338,6 +1354,13 @@ async function main(): Promise<void> {
         sourcePostedAt: a.meta.sourcePostedAt,
         sourceListedAt: a.meta.sourceListedAt,
         sourceCapturedAt: a.meta.sourceCapturedAt,
+        /**
+         * 🔴 **원문 반응과 참여 동력도 싣는다** (2026-09-30 · source-evidence-v1).
+         *    앞판은 여기서 둘 다 끊겼다 — `angle` 은 채워 놓고 아무도 읽지 않았다(A1 ⑥ 죽은 값).
+         *    관측 시각은 목록 회차 시각이다(수를 본 그 순간).
+         */
+        sourceResponse: { ...a.meta.response, observedAt: a.meta.sourceListedAt },
+        participationDriver: a.meta.angle,
       },
       draft: {
         title: a.draft.title, body: a.draft.body,

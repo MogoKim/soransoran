@@ -121,8 +121,6 @@ export type RowInput = {
   gateVerdict: string
   /** 생성 시점 게이트가 남긴 경고 코드 — 빈 배열이면 경고 없음 */
   warnings: readonly string[]
-  /** 원천을 언제 봤는지 아는가 — 모르면 사람이 본다 */
-  sourceCapturedKnown: boolean
   title: string
   body: string
 }
@@ -136,7 +134,11 @@ export function judgeRow(i: RowInput): RowVerdict {
   const reasons: string[] = []
   if (i.gateVerdict !== 'PASS') reasons.push(`gate=${i.gateVerdict}`)
   if (i.warnings.length > 0) reasons.push(`경고 ${i.warnings.join(',')}`)
-  if (!i.sourceCapturedKnown) reasons.push('원천 수집 시각을 모른다')
+  /**
+   * 🔴 **죽은 가드를 지웠다** (2026-09-30 · source-slot-v1). 앞판은 여기서 `sourceCapturedKnown` 을 봤다 —
+   *    `MicroSeedRawContent.sourceCapturedAt` 은 NOT NULL 이고 적재기가 **초안 시각**을 넣으므로 언제나 참이었다(A1 ⑧).
+   *    원문 시각 · 나이 · 반응 판정은 `judgeSlotRelease`(선택기 · 발행 트랜잭션) 하나가 한다. 행동은 바뀌지 않는다.
+   */
   const both = `${i.title}\n${i.body}`
   for (const [name, re] of Object.entries(AUTO_READY_BLOCKERS)) {
     const hit = re.exec(both)
@@ -151,12 +153,10 @@ export function eligibilityOf(r: {
   gateResults: unknown
   title: string
   body: string
-  sourceCapturedAt: Date | null
 }): RowVerdict {
   return judgeRow({
     gateVerdict: String(r.gateVerdict),
     warnings: warningsOfGate(r.gateResults),
-    sourceCapturedKnown: r.sourceCapturedAt !== null,
     title: r.title, body: r.body,
   })
 }

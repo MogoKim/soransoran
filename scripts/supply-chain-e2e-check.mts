@@ -260,7 +260,7 @@ console.log('\n④ 🔴 planRefill → buildQueuePayload')
 // ─────────────────────────────────────────────────────────
 {
   const plan = planRefill({
-    envelope, candidates, held: [], existing: new Set<string>(), queue: [], usable: 0,
+    envelope, candidates, held: [], existing: new Set<string>(), queue: [],
   })
   check('🔴 🔴 **실제 후보가 보충 대상으로 선정된다**',
     plan.targets.length === 1,

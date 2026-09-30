@@ -8,6 +8,7 @@
  *             (🔴 관계 `is:null` 필터를 쓰지 않는다 — FK 쪽 null 검사로 바뀌어 유실을 0 으로 센다)
  *    · 댓글   `commentOrigin=PERSONA` · 지워지지 않은 것
  *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조) · 표 전체의 정본 카운트(결함 yes · 시한 초과 · 재시도 가능 · 글 유실)
+ *    · 도장   Queue `gateResults.release` — 발행 트랜잭션이 같은 트랜잭션에서 남긴 source-slot-v1 도장(조항 ⑦)
  *
  * 🔴 결정(StageDecision)은 여기서 읽지 않는다 — 읽는 곳은 잠겨 있다(`stage-decision-repo` 주석).
  *    부르는 쪽(controller)이 이미 검증한 전날 결정을 넘긴다.
@@ -23,6 +24,7 @@ import { overdueAuditCount, retryableFailureCount, RETRYABLE_NOTE_PREFIX, AUDIT_
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { machineReviewedByHuman } from './original-post-auto-publish'
 import type { EvidencePost, PostDecider, StageEvidenceFacts } from './stage-evidence'
+import { releaseStampStatusOf } from './source-slot-release'
 
 /**
  * 🔴 **Queue 결정자 → 사후 감사 대상 여부.**
@@ -70,9 +72,11 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   })
   const queue = targetIds.length === 0 ? [] : await db.originalPostApprovalQueue.findMany({
     where: { createdPostId: { in: targetIds } },
-    select: { id: true, createdPostId: true, status: true, decidedBy: true },
+    // 🔴 `gateResults` 는 도장(`release`) 한 칸만 읽는다 — 원문 · 본문은 여기 없다
+    select: { id: true, createdPostId: true, status: true, decidedBy: true, gateResults: true },
   })
   const queueOf = new Map<string, number>()
+  const releaseOfPost = new Map<string, 'STAMPED_ELIGIBLE' | 'MISSING' | 'STALE'>()
   const deciderOfPost = new Map<string, PostDecider>()
   const queueIdOfPost = new Map<string, string>()
   for (const q of queue) {
@@ -80,6 +84,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
     queueOf.set(q.createdPostId!, (queueOf.get(q.createdPostId!) ?? 0) + 1)
     deciderOfPost.set(q.createdPostId!, deciderOf(q.decidedBy))
     queueIdOfPost.set(q.createdPostId!, q.id)
+    releaseOfPost.set(q.createdPostId!, releaseStampStatusOf(q.gateResults))
   }
   const postOf = new Map(posts.map((p) => [p.id, p]))
   /** 🔴 Post 가 없거나 Queue 가 없는 발행 기록 — 원글 레인 밖이거나 유실이다 */
@@ -111,6 +116,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
       personaComments: comments.filter((c) => c.postId === p.id).map((c) => ({
         personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null,
       })),
+      release: releaseOfPost.get(p.id) ?? 'MISSING',
     }
   })
 

@@ -58,7 +58,6 @@ export type DecidedRow = {
   declineReason: string | null
   rawSourceSite: string
   rawSourceArticleId: string
-  sourceCapturedAt: Date | null
   /** 🔴 큐에 배정된 Persona code — 미배정 그림자는 null */
   matchedPersonaCode: string | null
 }
@@ -165,7 +164,6 @@ export function restoreRow(
   const warnings = [...new Set([...sem.issues, ...warningsOfGate(restoredGate)])]
   const verdict = judgeRow({
     gateVerdict: row.gateVerdict, warnings,
-    sourceCapturedKnown: row.sourceCapturedAt !== null,
     title: row.draftTitle, body: row.draftBody,
   })
   if (!verdict.auto) return out('warning', verdict.reasons, a.file)

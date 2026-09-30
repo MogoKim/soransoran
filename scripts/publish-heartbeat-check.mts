@@ -214,22 +214,25 @@ console.log('\n⑥ 로컬/GitHub 단계 입력 분기 — 값으로 · fail-clos
   const local = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
   const github = { ...local, SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29' }
   const li = stageInputsOf(local, NOW)
-  check('🔴 기간 변수 없는 로컬 — 천장 d1 · 하루 1', li.ceiling === 'd1' && li.ceilingDailyTarget === 1 && li.window.stage === null)
-  check('🔴 로그 한 줄에 천장이 값으로 찍힌다', describeStageInputs(li).includes('천장 d1 (하루 1건)') && describeStageInputs(li).includes('window=(없음)'))
+  check('🔴 로컬 — 천장 d1 · 하루 1 · 옛 키 없음', li.ceiling === 'd1' && li.ceilingDailyTarget === 1 && li.ignoredLegacy.length === 0)
+  check('🔴 로그 한 줄에 천장이 값으로 찍힌다', describeStageInputs(li).includes('천장 d1 (하루 1건)'))
   const gi = stageInputsOf(github, NOW)
-  check('🟢 GitHub(기간 d3 · 오늘 유효) — 천장 d3', gi.ceiling === 'd3' && gi.window.activeToday)
+  check('🔴 🔴 **(2026-09-30) 기간 변수는 무시된다 — 천장을 올리지 않는다 · 무시된다는 사실은 적는다**',
+    gi.ceiling === 'd1' && gi.ignoredLegacy.includes('SORAN_RELEASE_WINDOW_STAGE')
+    && describeStageInputs(gi).includes('무시되는 옛 키'))
   const v = judgeHeartbeatStageInputs({ local, github, now: NOW })
-  check('🔴 🔴 **로컬 d1 < GitHub d3 — 막는다(설치 목적을 이루지 못한다) · 분기는 값으로 적는다**',
-    !v.ok && v.blockers.some((b) => b.includes('local d1') && b.includes('GitHub d3'))
-    && v.divergences.some((d) => d.includes('SORAN_RELEASE_WINDOW_STAGE')))
-  const flip = judgeHeartbeatStageInputs({ local: github, github: local, now: NOW })
+  check('🟢 옛 기간 변수만 다르면 실효 천장이 같다(d1 · d1) — 통과 · 분기는 값으로 적는다',
+    v.ok && v.divergences.some((d) => d.includes('SORAN_RELEASE_WINDOW_STAGE')))
+  const up = { ...local, SORAN_RELEASE_STAGE: 'd3' }
+  const lower = judgeHeartbeatStageInputs({ local, github: up, now: NOW })
+  check('🔴 🔴 **로컬 d1 < GitHub d3 — 막는다(설치 목적을 이루지 못한다)**',
+    !lower.ok && lower.blockers.some((b) => b.includes('local d1') && b.includes('GitHub d3')))
+  const flip = judgeHeartbeatStageInputs({ local: up, github: local, now: NOW })
   check('🔴 🔴 **로컬 > GitHub — 막는다(자주 깨는 쪽이 더 넓으면 fail-open)**', !flip.ok && flip.blockers.some((b) => b.includes('fail-open')))
-  const both3 = judgeHeartbeatStageInputs({ local: github, github, now: NOW })
+  const both3 = judgeHeartbeatStageInputs({ local: up, github: up, now: NOW })
   check('🟢 실효 천장이 같으면(d3 · d3) 통과', both3.ok && both3.blockers.length === 0)
   const none = judgeHeartbeatStageInputs({ local, github: null, now: NOW })
   check('🔴 GitHub 을 못 읽으면 막는다', !none.ok)
-  check('🟢 기간이 끝난 날은 GitHub 도 d1 — 분기 없이 같은 천장',
-    stageInputsOf(github, K('2026-09-30T10:00:00')).ceiling === 'd1')
   const picked = pickStageInputKeys('DATABASE_URL=postgres://secret\nSORAN_RELEASE_STAGE=d1\nSORAN_RELEASE_WINDOW_STAGE="d3"\nGEMINI_API_KEY=x')
   check('🔴 정본 env 에서 단계 키만 뽑는다 — 비밀값 키는 메모리에도 없다',
     Object.keys(picked).sort().join(',') === 'SORAN_RELEASE_STAGE,SORAN_RELEASE_WINDOW_STAGE' && picked.SORAN_RELEASE_WINDOW_STAGE === 'd3')

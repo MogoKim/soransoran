@@ -49,7 +49,7 @@ import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 /** 🔴 계획 정본 — 문자열이 아니라 **실제 인자**를 본다 */
-import { judgeBuffer, planCommonPhase, planPending } from '../src/lib/supply-process'
+import { judgeJitDemand, planCommonPhase, planPending } from '../src/lib/supply-process'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, conservativeShareUsd,
@@ -455,7 +455,7 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
       '82cook-adapt-20260911-010000.detail.jsonl',
       '82cook-adapt-20260911-010000.raw-detail.jsonl',
     ])
-    const stages = planCommonPhase(pend, judgeBuffer(120), {
+    const stages = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0 }), {
       kind: 'ready', snapshotPath: '/tmp/s.json', runId: 'RUN-XYZ',
     })
     const judge = stages.find((x) => x.stage === 'judge')
@@ -466,7 +466,7 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
       judge !== undefined && draft !== undefined
       && judge.args.filter((a) => a.startsWith('--run-id=')).join()
         === draft.args.filter((a) => a.startsWith('--run-id=')).join())
-    const held = planCommonPhase(pend, judgeBuffer(120), {
+    const held = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0 }), {
       kind: 'hold', reason: '큐를 못 읽었다', runId: 'RUN-XYZ',
     })
     check('🔴 생성을 보류해도 판정은 회차 id 를 받는다 — 보류가 상한을 풀지 않는다',

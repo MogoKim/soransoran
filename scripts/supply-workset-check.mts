@@ -21,8 +21,9 @@ import {
   type RunWindow, type SourceKeySet,
   type PriorArtifactRow, type PriorJudgementRow, type PriorOutcome,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
-  WORKSET_VERSION, worksetFileName, type WorksetRow,
+  WORKSET_VERSION, worksetFileName, preGenerationRelease, type WorksetRow,
 } from '../src/lib/supply-workset'
+import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import {
   ledgerRunIdOf, planBoundedCommonPhase, planCarryOverFill, planCommonPhase, type Pending,
 } from '../src/lib/supply-process'
@@ -77,11 +78,21 @@ const ROW = (o: {
       qualityFlags: [],
     },
   }])
+  /**
+   * 🔴 (2026-09-30) 원천 증거 — 순서는 정본 rank 다. 옛 fixture 의 댓글 수는 원천 상대 백분위로, 게시 시각은
+   *    그 나이로 옮겨 싣는다(없으면 6시간 전). 72h 를 넘긴 게시 시각이면 예정 슬롯에서 ineligible 이다.
+   */
+  const posted = o.sourcePostedAt !== undefined && o.sourcePostedAt !== '' ? new Date(o.sourcePostedAt) : undefined
   return {
     sourceArticleId: o.sourceArticleId, sourceSite: 'navercafe:wgang',
     commentCount: o.commentCount ?? 0,
     sourcePostedAt: o.sourcePostedAt ?? '', sourceListedAt: o.sourceListedAt ?? '',
     input: input!,
+    evidence: fakeSourceEvidence(NOW, {
+      id: o.sourceArticleId, commentsPct: Math.min(1, (o.commentCount ?? 0) / 100),
+      // 🔴 게시 시각이 없고 목록 시각만 있으면 **게시 시각 모름**이다 — 목록 시각으로 대신하지 않는다
+      ...(posted !== undefined ? { postedAt: posted } : o.sourceListedAt !== undefined ? { postedAt: null } : {}),
+    }),
   }
 }
 const NOW = new Date('2026-09-20T12:00:00Z')
@@ -120,6 +131,7 @@ const sel = (o: {
   carriedOver: o.carriedOver ?? EMPTY_SOURCE_KEYS,
   concluded: new Set(o.concluded ?? []),
   attempted: o.attemptedOutcomes ?? attemptedMap(o.attempted ?? []),
+  releaseOf: (r) => preGenerationRelease(r, o.takenAt ?? NOW, o.takenAt ?? NOW),
   limit: o.limit ?? 5, runId: RUN, takenAt: o.takenAt ?? NOW,
 })
 
@@ -211,20 +223,23 @@ console.log('\n④ 🔴 순서 — 지금 있는 신호만 쓴다')
   const rows = [
     ROW({ sourceArticleId: 'low', commentCount: 1, sourcePostedAt: '2026-09-20T00:00:00Z' }),
     ROW({ sourceArticleId: 'high', commentCount: 40, sourcePostedAt: '2026-09-01T00:00:00Z' }),
-    ROW({ sourceArticleId: 'mid-new', commentCount: 10, sourcePostedAt: '2026-09-19T00:00:00Z' }),
-    ROW({ sourceArticleId: 'mid-old', commentCount: 10, sourcePostedAt: '2026-09-02T00:00:00Z' }),
+    ROW({ sourceArticleId: 'mid-new', commentCount: 10, sourcePostedAt: '2026-09-20T02:00:00Z' }),
+    ROW({ sourceArticleId: 'mid-old', commentCount: 10, sourcePostedAt: '2026-09-19T00:00:00Z' }),
   ]
-  const ids = sel({ rows, limit: 4 }).workset.sourceIds
-  check('🔴 🔴 **댓글 수가 먼저다**', ids[0] === 'high', ids.join(','))
-  check('🔴 같은 댓글 수면 최신이 먼저다', ids[1] === 'mid-new' && ids[2] === 'mid-old')
-  check('🔴 목록에서 본 시각도 쓴다 (작성 시각이 없을 때)', (() => {
+  const p4 = sel({ rows, limit: 4 })
+  const ids = p4.workset.sourceIds
+  check('🔴 🔴 **(2026-09-30) 반응이 커도 예정 슬롯에서 72h 를 넘긴 원문은 유료 생성에 들어가지 않는다**',
+    !ids.includes('high') && p4.dropped.slotIneligible === 1, ids.join(','))
+  check('🔴 🔴 **원천 상대 반응 백분위가 먼저다**', ids[0] === 'mid-new' || ids[0] === 'mid-old', ids.join(','))
+  check('🔴 같은 백분위면 예정 슬롯에서 더 어린 원문이 먼저다', ids[0] === 'mid-new' && ids[1] === 'mid-old' && ids[2] === 'low')
+  check('🔴 🔴 **게시 시각이 없으면 목록 시각으로 대신하지 않는다 — 모름으로 빠진다(유료 0)**', (() => {
     const two = sel({
       rows: [
-        ROW({ sourceArticleId: 'x', commentCount: 5, sourceListedAt: '2026-09-01T00:00:00Z' }),
-        ROW({ sourceArticleId: 'y', commentCount: 5, sourceListedAt: '2026-09-19T00:00:00Z' }),
+        ROW({ sourceArticleId: 'x', commentCount: 5, sourceListedAt: '2026-09-20T10:00:00Z' }),
+        ROW({ sourceArticleId: 'y', commentCount: 5, sourcePostedAt: '2026-09-20T09:00:00Z' }),
       ], limit: 2,
-    }).workset.sourceIds
-    return two[0] === 'y'
+    })
+    return two.workset.sourceIds.join(',') === 'y' && two.dropped.slotUnknown === 1
   })())
   check('🔴 같은 값이면 id 오름차순 — 같은 입력이면 같은 결과다', (() => {
     const a = sel({ rows: [ROW({ sourceArticleId: 'b' }), ROW({ sourceArticleId: 'a' })], limit: 2 })
@@ -1113,7 +1128,8 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
     for (let k = 0; k < CASES; k += 1) {
       const n = 1 + rnd(12)
       const rows = Array.from({ length: n }, (_, i) =>
-        ROW({ sourceArticleId: `c${k}-${i}`, commentCount: rnd(6), sourcePostedAt: `2026-09-${String(10 + rnd(9))}T00:00:00Z` }))
+        // 🔴 (2026-09-30) 게시 시각은 모든 회차 시각에서 72h 안이다 — 여기서는 자리 나눔 규칙만 대조한다
+        ROW({ sourceArticleId: `c${k}-${i}`, commentCount: rnd(6), sourcePostedAt: `2026-09-${String(18 + rnd(2))}T1${String(rnd(9))}:00:00Z` }))
       const att: Record<string, string> = {}
       for (const r of rows) if (rnd(3) === 0) att[r.sourceArticleId] = at(1 + rnd(20))
       const limit = 1 + rnd(8)
@@ -1328,7 +1344,7 @@ console.log('\n⑫ 🔴 🔴 같은 원문으로 두 번째 글을 만들지 않
     return /queuedSources = queuedSourceKeysOf\(\[/.test(runner)
       && /prisma\.post\.findMany\(\{\s*where: \{ sourceArticleId: \{ not: null \} \}/.test(runner)
       && /queuedSources,\n/.test(runner)
-      && /if \(snapOk && queuedSources !== null && policy\.llm\)/.test(runner)
+      && /if \(snapOk && queuedSources !== null\) \{/.test(runner) && /if \(policy\.llm\) \{/.test(runner)
   })())
 
   // ── (5) 적재 실패 후보만 이월로 되살린다 — 다시 만들지 않는다 ──

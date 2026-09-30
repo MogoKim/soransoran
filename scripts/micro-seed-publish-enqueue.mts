@@ -83,7 +83,12 @@ export type Plan = {
   /** synthetic RawContent 에 쓸 값 */
   syntheticSite: string
   syntheticUrl: string
-  capturedAt: Date
+  /**
+   * 🔴 **초안(검토) 시각이다 — 원문 시각이 아니다** (2026-09-30 이름 정직화). `sourceCapturedAt` 칸에 들어가지만
+   *    어떤 판정도 그 칸을 원문 나이로 읽지 않는다. 이 다리로 올라간 행에는 원문 증거 기록이 없다 →
+   *    발행 판정(`judgeSlotRelease`)이 모르는 것(unknown)으로 읽고 자동 발행하지 않는다.
+   */
+  draftedAt: Date
   /** 큐 dedupKey 계산에 쓰는 안정 키 — RawContent id 를 아직 모르므로 이것으로 갈음한다 */
   provenanceKey: string
 }
@@ -156,13 +161,13 @@ export function planEnqueue(
     const key = provenanceKey(id, title)
     if (opts.existing.has(key)) { skipped.push({ title, reason: '이미 올림' }); continue }
 
-    const at = S(c.reviewedAt) !== '' ? new Date(S(c.reviewedAt)) : new Date()
+    const draftedAt = S(c.reviewedAt) !== '' ? new Date(S(c.reviewedAt)) : new Date()
     plan.push({
       candidate: c,
       // 🔴 원래 sourceSite 를 지우지 않고 **앞에 표시를 붙인다** — 어디서 온 소재인지는 남아야 한다
       syntheticSite: `${SYNTHETIC_SITE_PREFIX}${S(c.sourceSite)}`,
       syntheticUrl: `publish-candidate://${S(c.sourceInput) || 'unknown'}#${id}`,
-      capturedAt: Number.isNaN(at.getTime()) ? new Date() : at,
+      draftedAt: Number.isNaN(draftedAt.getTime()) ? new Date() : draftedAt,
       provenanceKey: key,
     })
   }
@@ -303,7 +308,8 @@ async function main(): Promise<void> {
           sourceSite: p.syntheticSite,
           sourceUrl: p.syntheticUrl,
           sourceArticleId: syntheticArticleId(S(c.sourceArticleId), title),
-          sourceCapturedAt: p.capturedAt,
+          // 🔴 초안 시각(칸 이름과 다르다) — 판정 입력이 아니다
+          sourceCapturedAt: p.draftedAt,
           // 🔴 원문이 아니다. **사람이 고른 글**이다 — 큐 생성을 위해 여기 담는다
           rawTitle: title,
           rawBody: body,

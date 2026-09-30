@@ -34,7 +34,7 @@ import type { PrismaClient } from '@prisma/client'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
   PROCESS_KILL_SWITCH_ENV, LOCK_FILE, LOCK_TTL_MS, SUPPLY_SOURCES,
-  fmtCount, hasWork, judgeBuffer, judgeProcessRun,
+  fmtCount, hasWork, judgeJitDemand, judgeProcessRun,
   mayWriteRunState, planBoundedCommonPhase, planCarryOverFill, planCommonPhase, planPending, planSourcePhase,
   ledgerRunIdOf, type WorksetGate,
   runCommonPhase, runSourcePhase, runFileName, runStatusOf, verifyRun,
@@ -45,7 +45,6 @@ import {
  *    `wx` 획득 · token 대조 해제 · 자동 회수 없음. 여기서 새 프로토콜을 만들지 않는다.
  */
 import { acquireLock, lockAnomaly, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
-import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
 /**
  * 🔴 **생성 전 큐 스냅샷** (2026-09-17) — 판정 규칙은 여기서 만들지 않는다.
  *    정본은 `micro-seed-supply-autofill.hasPendingSibling` · `baseArticleId` 이고,
@@ -57,7 +56,14 @@ import {
   attemptedOutcomes, concludedSourceIds, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
   selectWorkset, worksetAxisOf, worksetFileName,
   WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
+  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease,
 } from '../src/lib/supply-workset'
+/** 🔴 원천 기회 판정 정본 — 유료 생성 전 · 예정 슬롯 기준 */
+import {
+  buildSourceEvidence, judgeSlotRelease,
+  type SlotReleaseVerdict, type SourceEvidenceRecord,
+} from '../src/lib/source-slot-release'
+import { evidenceMaterialFor, readListObservations, type ListObservationIndex } from './lib/source-list-observations.mjs'
 import {
   inputHashOf, mergeJudgeRows, PROMPT_VERSION, RULE_VERSION,
 } from '../src/lib/micro-seed-auto-judge'
@@ -90,14 +96,16 @@ export const RUN_AT = RUN_CLOCK.at
 import {
   SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
 } from '../src/lib/content-core/speaker-load-file'
-import { planOpenDays } from '../src/lib/content-core/speaker-availability'
+import { planOpenDays, wipCountsBySpeaker } from '../src/lib/content-core/speaker-availability'
+/** 🔴 말투 근거가 선 화자 — 생성 러너와 **같은 함수**로 읽는다(파일까지 · DB 0) */
+import { loadVoice } from './lib/voice-runtime.mjs'
 import { kstDateString } from '../src/lib/release-canary'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
-import { horizonStart, type ScaleProfile } from '../src/lib/scale-profile'
+import { horizonStart, nextSlotAnchor, type ScaleProfile } from '../src/lib/scale-profile'
 import type { ResolvedScale } from '../src/lib/scale-runtime'
 /** 🔴 재고 분류 정본 — 발행 러너와 **같은 조립 · 같은 판정**을 나눠 읽는다 */
 import {
-  loadStockClassification, describeStockClassification, type StockClassification,
+  loadStockClassification, describeStockClassification, jitCoverageOf, upcomingSlots, type StockClassification,
 } from './lib/publishable-stock.mjs'
 
 /**
@@ -108,9 +116,8 @@ const SPEAKER_LOAD_HORIZON_DAYS = 7
 import type { ContractBase } from '../src/lib/content-core/pipeline'
 /** 🔴 판정 모델 이름 — 판정 러너가 쓰는 그 값이다 */
 import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
-import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
+import { readStock } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
-import { derive as deriveProfile } from '../src/lib/scale-profile'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 
 /** 🔴 정본은 lib 하나다 — 여기서 문자열을 다시 쓰지 않는다 */
@@ -129,11 +136,21 @@ const WORKSET_LIMIT = resolveWorksetLimit(process.argv.slice(2))
  *    여기서 손으로 파싱하면 raw 행이 정상 원천을 덮어쓴다.
  * 🔴 **파싱에 실패하면 `null`** — 부르는 쪽이 fail-closed 한다.
  */
-function worksetRows(paths: readonly string[]): WorksetRow[] | null {
+export function worksetRows(
+  paths: readonly string[],
+  /** 🔴 목록 관측(반복 관측 · 원천 상대 표본) — 없으면 증거 재료 없음(모름) */
+  listIndex: ListObservationIndex | null = null,
+  at: Date = RUN_AT,
+): WorksetRow[] | null {
   const entries: { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[] = []
-  /** 정렬에 쓰는 칸 — 🔴 판정 입력에는 없는 값이라 따로 모은다 */
-  const meta = new Map<string, { site: string; posted: string; listed: string }>()
+  /** 증거 칸 — 🔴 판정 입력에는 없는 값이라 따로 모은다 */
+  const meta = new Map<string, {
+    site: string; posted: string; listed: string; captured: string
+    views: number | null; comments: number | null; page: number | null; rank: number | null
+  }>()
   const S2 = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  const C = (v: unknown, prev: number | null | undefined): number | null =>
+    typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : (prev ?? null)
   for (const f of paths) {
     const kind: 'detail' | 'raw-detail' = f.endsWith('.raw-detail.jsonl') ? 'raw-detail' : 'detail'
     let raw: string
@@ -152,20 +169,49 @@ function worksetRows(paths: readonly string[]): WorksetRow[] | null {
         site: S2(r.sourceSite) !== '' ? S2(r.sourceSite) : prev?.site ?? '',
         posted: S2(r.sourcePostedAt) !== '' ? S2(r.sourcePostedAt) : prev?.posted ?? '',
         listed: S2(r.sourceListedAt) !== '' ? S2(r.sourceListedAt) : prev?.listed ?? '',
+        captured: S2(r.sourceCapturedAt) !== '' ? S2(r.sourceCapturedAt) : prev?.captured ?? '',
+        // 🔴 수집 때 본 반응 — 센 값만 앞 값을 이긴다(옛 파일에는 칸이 없다 · 없으면 모름)
+        views: C(r.sourceViewCount, prev?.views),
+        comments: C(r.commentCount, prev?.comments),
+        page: C(r.sourcePage, prev?.page),
+        rank: C(r.sourceRankOnPage, prev?.rank),
       })
     }
   }
   return mergeJudgeRows(entries).map((input): WorksetRow => {
     const id = String(input.sourceArticleId ?? '')
     const m = meta.get(id)
+    const site = m?.site ?? ''
+    const response = m === undefined ? null : {
+      views: m.views, comments: m.comments, listRank: m.rank, listPage: m.page, observedAt: m.listed,
+    }
+    const material = listIndex === null || site === '' ? null : evidenceMaterialFor(listIndex, {
+      sourceKey: site, articleId: id, postedAt: m?.posted === '' ? null : m?.posted ?? null,
+      response: response === null ? null : { comments: response.comments, views: response.views, observedAt: m?.listed === '' ? null : m?.listed ?? null },
+      at,
+    })
+    /**
+     * 🔴 **생성 전 원천 증거** — 판정기가 아직 돌지 않아 참여 동력은 없다(판정이 `pending` 으로 본다).
+     *    게시 · 목록 · 수집 시각을 서로 메우지 않는다 · 반응이 없으면 null.
+     */
+    const evidence: SourceEvidenceRecord | null = m === undefined ? null : buildSourceEvidence({
+      postedAt: m.posted, listedAt: m.listed, capturedAt: m.captured,
+      sourceSite: site, sourceArticleId: id, dedupKey: `${site}|${id}`,
+      response,
+      observations: material?.observations ?? [],
+      sourceStats: material?.sourceStats ?? null,
+      participationDriver: null,
+    })
     return {
-      sourceArticleId: id, sourceSite: m?.site ?? '',
+      sourceArticleId: id, sourceSite: site,
       commentCount: Number(input.commentCount ?? 0),
       sourcePostedAt: m?.posted ?? '', sourceListedAt: m?.listed ?? '',
-      input,
+      input, evidence,
     }
   })
 }
+
+
 
 /**
  * 🔴 **앞 회차가 끝낸 원천** — 판정 파일과 artifact 에서 모은다. 새 파일을 만들지 않는다.
@@ -261,12 +307,21 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  */
 export async function buildSpeakerLoad(
   prisma: PrismaClient, runId: string,
-  opts: { env: Readonly<Record<string, string | undefined>>; now: Date; scale: ResolvedScale },
+  opts: {
+    env: Readonly<Record<string, string | undefined>>; now: Date; scale: ResolvedScale
+    /**
+     * 🔴 **하루 자리를 받을 수 있는 화자(말투 근거가 선 사람)** — PR2 KEEP. `null`·생략이면 전원(앞판과 같다).
+     *    정기 경로(`writeSpeakerLoad`)는 생성 러너와 같은 `loadVoice` 로 채운다.
+     */
+    slotEligible?: ReadonlySet<string> | null
+  },
 ): Promise<SpeakerLoadFile & {
   stageByDate: readonly { date: string; stage: string }[]
   planningStage: string
   releaseStage: string
   wip: { total: number; humanReviewPending: number; publishableNow: number; qualityContractMismatch: number }
+  /** 🔴 원천 가치가 사라진 WIP(정본 판정 만료 사유) — 화자 칸을 막지 않는다 · 화자 미상 · 말투 필터 */
+  slots: { releasedExpired: number; unattributed: number; voiceFiltered: boolean; slotEligibleCount: number | null }
 }> {
   const { loaded, classification } = await loadStockClassification(prisma, opts.env, opts.now)
   const planning = supplyPlanningProfile(opts.scale)
@@ -278,7 +333,20 @@ export async function buildSpeakerLoad(
     return (r.matchedPersonaId === null ? null : loaded.codeOfPersonaId.get(r.matchedPersonaId) ?? null)
       ?? draftSpeakerOf(r.gateResults)
   }
-  const wipCodes = [...wip].map(speakerOf)
+  /**
+   * 🔴 **칸에서 뺄 행 — 원천 가치가 이미 사라진 WIP** (2026-09-30). 정본 `judgeSlotRelease` 가 지금 시각에
+   *    만료 사유(나이 · 증거 모름)를 낸 행은 자동으로는 영영 못 나간다 — 그 화자의 칸을 막지 않는다.
+   */
+  const expiresNow = (id: string): boolean => {
+    const r = byId.get(id)
+    if (r === undefined) return false
+    return judgeSlotRelease({
+      gateResults: r.gateResults, slotAt: opts.now, now: opts.now,
+      hardGates: { ok: true, codes: [] }, assignment: 'pending', tieBreak: id,
+    }).expires
+  }
+  const wipBy = wipCountsBySpeaker({ wip: [...wip].map((id) => ({ id, code: speakerOf(id) })), releasesSlot: expiresNow })
+  const eligible = opts.slotEligible ?? null
   /**
    * 🔴 **이력은 배정기(`personaForMatchOf`)가 보는 것과 같다** — 큐의 `matchedAt`.
    *    발행 트랜잭션이 배정할 때 쓰는 근거다. 여기서 다른 표(ActivityLog)를 보면 두 계산이 갈린다.
@@ -307,13 +375,15 @@ export async function buildSpeakerLoad(
     availableAt: (h, at, caps) => availablePersonasAt(
       h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
     dateLabel: (at) => kstDateString(at),
+    // 🔴 말투 없는 화자는 기계 초안을 받지 못한다 — 하루 자리를 차지하지 않게 뺀다
+    ...(eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }),
   })
   const byCode: Record<string, { openDays: number; readyCount: number }> = {}
   for (const p of loaded.personas) {
     const code = String(p.code)
     byCode[code] = {
       openDays: plan.openDays.get(code) ?? 0,
-      readyCount: wipCodes.filter((c) => c === code).length,
+      readyCount: wipBy.byCode.get(code) ?? 0,
     }
   }
   return {
@@ -331,6 +401,10 @@ export async function buildSpeakerLoad(
       /** 🔴 WIP 가 **아니다** — 옛 품질 계약이라 WIP 에서 빠진 수를 보이려고 적는다 */
       qualityContractMismatch: classification.counts.qualityContractMismatch,
     },
+    slots: {
+      releasedExpired: wipBy.released.length, unattributed: wipBy.unattributed,
+      voiceFiltered: eligible !== null, slotEligibleCount: eligible === null ? null : eligible.size,
+    },
   }
 }
 
@@ -346,7 +420,14 @@ export function supplyPlanningProfile(scale: ResolvedScale): { stage: string; pr
 export async function writeSpeakerLoad(
   prisma: PrismaClient, runId: string, scale: ResolvedScale,
 ): Promise<Awaited<ReturnType<typeof buildSpeakerLoad>>> {
-  const payload = await buildSpeakerLoad(prisma, runId, { env: process.env, now: RUN_AT, scale })
+  /**
+   * 🔴 말투 근거가 선 화자 — 생성 러너가 후보로 쓰는 그 집합(`loadVoice().candidates`). 정본을 못 읽으면 좁히지 않는다
+   *    (그 회차는 생성 러너가 provider 호출 전에 멈춘다).
+   */
+  const voice = loadVoice(RUN_AT)
+  const slotEligible = voice.blockAllCode === null && voice.candidates.length > 0
+    ? new Set(voice.candidates.map((c) => c.code)) : null
+  const payload = await buildSpeakerLoad(prisma, runId, { env: process.env, now: RUN_AT, scale, slotEligible })
   mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), JSON.stringify(payload, null, 2))
   return payload
@@ -439,10 +520,15 @@ export type SupplySnapshot = {
   profiled: number; human: number; machine: number; post: number; legacy: number
   classification: StockClassification | null
   classifyError: string | null
+  /**
+   * 🔴 **JIT 수요 재료** — 다가오는 슬롯 수와 그 슬롯에 eligible 로 남을 READY 가 덮은 수(정본 판정 · 슬롯 시각).
+   *    분류를 못 읽으면 `null` 이다(모름 → 파일 단계만).
+   */
+  jit: { slots: number; readyFilled: number; publishedToday: number } | null
 }
 
 export async function snapshot(
-  prisma: PrismaClient, limits: StockLimits,
+  prisma: PrismaClient,
   opts: { env: Readonly<Record<string, string | undefined>>; now: Date },
 ): Promise<SupplySnapshot> {
   const rows: QueueRow[] = await prisma.originalPostApprovalQueue.findMany({
@@ -456,14 +542,18 @@ export async function snapshot(
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   }))
-  const st = readStock(mapped, limits)
+  const st = readStock(mapped)
   const liveRows = mapped.filter((r) =>
     (r.status === 'APPROVED' || r.status === 'EDITED')
     && (r.createdPostId === null || r.createdPostId === ''))
   let classification: StockClassification | null = null
   let classifyError: string | null = null
+  let jit: SupplySnapshot['jit'] = null
   try {
-    classification = (await loadStockClassification(prisma, opts.env, opts.now)).classification
+    const view = await loadStockClassification(prisma, opts.env, opts.now)
+    classification = view.classification
+    // 🔴 관제(`supply:health`)와 같은 함수 — 수요를 두 곳에서 따로 세지 않는다
+    jit = { ...jitCoverageOf(view, opts.now), publishedToday: view.loaded.publishedToday }
   } catch (e) {
     classifyError = e instanceof Error ? e.message : String(e)
   }
@@ -472,7 +562,7 @@ export async function snapshot(
     post: await prisma.post.count(),
     // 🔴 legacy 는 세기만 한다. 후보에도 재고에도 발행 대상에도 넣지 않는다
     legacy: liveRows.length - st.usable,
-    classification, classifyError,
+    classification, classifyError, jit,
   }
 }
 
@@ -497,9 +587,6 @@ async function main(): Promise<number> {
   await loadEnvLocal()
   // 🔴 `loadEnvLocal()` **뒤에** 설치한다 — import 시점에 읽으면 .env.local 이 반영되지 않는다
   const scale = installFromEnv(process.env)
-  const capD = deriveProfile(scale.capacityProfile)
-  /** 🔴 경고·최소선은 capacity 프로필 눈금이다. **버퍼 목표는 `STOCK_BANDS.target` 하나다** */
-  const limits: StockLimits = { warn: capD.stockWarn, min: capD.stockMin, target: STOCK_BANDS.target }
 
   const killOpen = S(process.env[PROCESS_KILL_SWITCH_ENV]) === 'true'
   // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
@@ -511,8 +598,8 @@ async function main(): Promise<number> {
   console.log(`  규모 설정 ${describeScale(scale)}`)
   for (const n of scale.notes) console.log(`     · ${n}`)
   console.log('  🔴 이 러너는 **수집하지 않는다** — 수집은 source 마다 독립 job 이 한다')
-  console.log(`  버퍼 목표 ${STOCK_BANDS.target}건 (APPROVED 재고)`
-    + ` · capacity 목표 ${capD.stockTarget}건(${scale.capacityStage} — 발행 쪽 눈금)`)
+  console.log('  🔴 공급 수요 = 다가오는 슬롯(오늘 남은 + 다음 증명일 전체) − 그 슬롯에 eligible 로 남을 READY (JIT)'
+    + ' · 700 · ×14 재고 목표 없음')
   console.log('  순서 source 별 (얇은 변환 → 검수용 변환) → 공통 (판정 → 초안 → 보충)')
   console.log('  🔴 발행 0 — Post · persona 배정 · ActivityLog 를 만들지 않는다')
   console.log(`  스위치  ${PROCESS_KILL_SWITCH_ENV}=${killOpen ? 'true' : '없음'}\n`)
@@ -592,19 +679,24 @@ async function main(): Promise<number> {
   let before: Awaited<ReturnType<typeof snapshot>> | null = null
   if (SIM === null) {
     try {
-      before = await snapshot(prisma, limits, { env: process.env, now })
+      before = await snapshot(prisma, { env: process.env, now })
     } catch (e) {
       console.log(`\n③ 재고  🔴 읽지 못했다 — ${e instanceof Error ? e.message : String(e)}`)
     }
   }
-  /** 🔴 버퍼 천장은 형식 행 수로 잰다 — 발행 가능 재고가 아니다(아래에 따로 찍는다) */
-  const usable = SIM ?? before?.profiled ?? null
-  const policy = judgeBuffer(usable)
-  console.log('\n③ 재고')
-  if (SIM !== null) console.log(`   🟡 모의 재고 ${SIM}건으로 계획만 본다 (DB 를 읽지 않았다)`)
+  /**
+   * 🔴 **공급 수요 — JIT** (2026-09-30). `--simulate-stock=N` 은 "다가오는 슬롯 중 eligible READY 가 덮은 수 = N" 모의다
+   *    (dry-run 전용 · 슬롯 수는 지금 결정의 단계에서 센다).
+   */
+  const jitIn = SIM !== null
+    ? { slots: upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile, capacity: scale.capacityProfile }).length, readyFilled: SIM }
+    : before?.jit ?? null
+  const policy = judgeJitDemand(jitIn)
+  console.log('\n③ 다가오는 슬롯 · READY')
+  if (SIM !== null) console.log(`   🟡 모의 — eligible READY ${SIM}건으로 계획만 본다 (DB 를 읽지 않았다)`)
   else if (before !== null) {
     console.log(`   형식이 맞는 미발행 행 ${before.profiled}건 (사람 ${before.human} · 기계 ${before.machine})`
-      + ' — 🔴 버퍼 천장 계산용 · 발행 가능 재고가 아니다')
+      + ' — 🔴 형식 행 수일 뿐 · 발행 가능 재고가 아니다')
     if (before.classification !== null) {
       console.log(`   🔴 발행 러너 기준 — 지금 발행 가능 ${before.classification.counts.publishableNow}건`
         + ` (분류 정본 · release 상한)`)
@@ -615,8 +707,8 @@ async function main(): Promise<number> {
     console.log(`   legacy ${before.legacy}건 — 🔴 재고에도 후보에도 넣지 않는다`)
     console.log(`   Post ${before.post}건`)
   }
-  if (usable !== null) console.log(`   구간 ${judgeStockBand(usable).band}`)
-  console.log(`   버퍼 ${policy.reason}`)
+  if (jitIn !== null) console.log(`   슬롯 ${jitIn.slots}개 · eligible READY 가 덮은 슬롯 ${jitIn.readyFilled}개`)
+  console.log(`   수요 ${policy.reason}`)
 
   // ── ④ 판정 ──
   const verdict = judgeProcessRun({ live: LIVE, killOpen, lock: lockView, hasWork: hasWork(pending) })
@@ -665,7 +757,7 @@ async function main(): Promise<number> {
     })(),
     startedAt: now.toISOString(),
     status: 'running', completedAt: null,
-    buffer: { usable, upTo: policy.upTo, reason: policy.reason },
+    jit: { slots: jitIn?.slots ?? null, readyFilled: jitIn?.readyFilled ?? null, upTo: policy.upTo, reason: policy.reason },
     sources: [], stages: [],
   }
   const save = (): void => { writeAtomic(runPath, `${JSON.stringify(record, null, 2)}\n`) }
@@ -699,7 +791,9 @@ async function main(): Promise<number> {
         const load = await writeSpeakerLoad(prisma, runId, scale)
         console.log(`   🟢 화자 여력 — 공급 눈금 ${load.planningStage}(capacity) · 발행 눈금 ${load.releaseStage}(release)`
           + ` · WIP ${load.wip.total}건 (사람 검토 대기 ${load.wip.humanReviewPending} · 발행 가능 ${load.wip.publishableNow})`
-          + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`)
+          + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`
+          + ` · 원천 가치 없음으로 칸 해제 ${load.slots.releasedExpired}건 · 화자 미상 ${load.slots.unattributed}건`
+          + ` · 말투 ${load.slots.voiceFiltered ? `있는 ${load.slots.slotEligibleCount}명만 자리를 받는다` : '필터 없음(정본을 못 읽었다)'}`)
       } catch (e) {
         const why = e instanceof Error ? e.message : 'unknown'
         console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)
@@ -848,12 +942,38 @@ async function main(): Promise<number> {
   let workset: WorksetGate | undefined
   /** 🔴 고를 원천이 0건이었는가 — "못 만들었다" 와 구분한다 */
   let worksetEmpty = false
-  if (snapOk && queuedSources !== null && policy.llm) {
-    const rows = worksetRows(after1.detail.map((f) => join(DATA_DIR, f)))
+  /**
+   * 🔴 **예정 슬롯 — 다음 열린 공개 슬롯** (2026-09-30). 생성 전 판정은 이 시각에서 원천 나이를 잰다.
+   */
+  // 🔴 오늘 발행 수는 스냅샷(정본 적재 `loadStock`)에서 읽는다 — 러너가 발행 기록을 따로 세지 않는다.
+  //    모르면(null) 모델 단계가 이미 닫혀 있다(`judgeJitDemand(null)`) — 여기 0 은 dry-run 모의 표시에만 쓰인다
+  const nextSlotAt = nextSlotAnchor(scale.releaseProfile, {
+    now: RUN_AT, publishedToday: before?.jit?.publishedToday ?? 0,
+  })
+  if (snapOk && queuedSources !== null) {
+    let listIndex: ListObservationIndex | null = null
+    try { listIndex = readListObservations(DATA_DIR, RUN_AT) } catch (e) {
+      console.log(`   🟡 목록 관측을 읽지 못했다 — ${e instanceof Error ? e.message : String(e)} (원천 상대 표본 없음 = 모름)`)
+    }
+    const rows = worksetRows(after1.detail.map((f) => join(DATA_DIR, f)), listIndex, RUN_AT)
     if (rows === null) {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
       return 1
     }
+    const releaseOf = (r: WorksetRow): SlotReleaseVerdict => preGenerationRelease(r, nextSlotAt, RUN_AT)
+    /**
+     * 🔴 **원천 기회 스냅샷** — 생성 전 판정 eligible 원천의 증거 기록(원문 없음). 다음 단계 preflight 가 읽는다.
+     *    쓰기는 live 회차에서만(dry-run 파일 write 0).
+     */
+    if (canWrite) {
+      const opp = rows.filter((r) => r.evidence !== null && releaseOf(r).verdict === 'eligible').map((r) => r.evidence!)
+      writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify({
+        kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT.toISOString(),
+        slotAt: nextSlotAt.toISOString(), evidence: opp,
+      }, null, 2)}\n`)
+      console.log(`   🟢 원천 기회 스냅샷 ${opp.length}건 (예정 슬롯 ${nextSlotAt.toISOString()})`)
+    }
+    if (policy.llm) {
     // 🔴 회차 시각 하나 — 자식(auto-draft)이 env 로 **같은 값**을 받는다
     const runAt = RUN_AT
     const prior = priorState(rows, currentContractBase(runAt))
@@ -862,6 +982,7 @@ async function main(): Promise<number> {
       queuedSources,
       // 🔴 이월로 적재될 후보의 원천 — 다시 만들지 않는다(#587 이 적재한다)
       carriedOver: queuedSourceKeysOf(carry.picked.flatMap((x) => x.sources)),
+      releaseOf,
       limit: WORKSET_LIMIT, runId, takenAt: runAt,
     })
     if (plan.picked.length === 0) {
@@ -889,6 +1010,7 @@ async function main(): Promise<number> {
       + `  |  raw 적격 ${plan.axis.eligible.raw} · 자리 ${plan.axis.quota.raw} · 고름 ${plan.axis.picked.raw}`)
     for (const r of plan.picked) {
       console.log(`      · ${r.sourceArticleId} · ${r.sourceSite} · ${worksetAxisOf(r)} · 댓글 ${r.commentCount}`)
+    }
     }
   }
 
@@ -999,7 +1121,7 @@ async function main(): Promise<number> {
 
   let ok = record.status === 'done'
   if (before !== null) {
-    const after = await snapshot(prisma, limits, { env: process.env, now: RUN_AT })
+    const after = await snapshot(prisma, { env: process.env, now: RUN_AT })
     const queuedMachine = after.machine - before.machine
     const queuedNonMachine = (after.profiled - before.profiled) - queuedMachine
     const v = verifyRun({
@@ -1008,7 +1130,7 @@ async function main(): Promise<number> {
       machineBefore: before.machine, machineAfter: after.machine,
       queuedMachine, queuedNonMachine,
     })
-    console.log(`   형식 행  ${before.profiled} → ${after.profiled} (버퍼 목표 ${STOCK_BANDS.target})`)
+    console.log(`   형식 행  ${before.profiled} → ${after.profiled} (적재 정합용 수 — 재고 목표 없음)`)
     const pn = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.publishableNow))
     const hr = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.humanReviewPending))
     console.log(`   발행 가능 ${pn(before)} → ${pn(after)} · 사람 검토 대기 ${hr(before)} → ${hr(after)}`)

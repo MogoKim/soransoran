@@ -30,6 +30,12 @@ export const THIN_COLUMNS: readonly string[] = [
   'axis', 'safetyVerdict', 'safetyReasons', 'reason',
   'runId', 'fetchedAt',
   'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
+  /**
+   * 🔴 **수집 때 본 반응을 버리지 않는다** (2026-09-30 · source-evidence-v1).
+   *    앞판은 여기서 `commentCount` 만 남기고 조회수 · 목록 자리를 버렸다 — 하류가 원천 상대 반응을
+   *    잴 재료가 없었다(A1 ② `thinRowFromCollected`). 수만 옮긴다 · 모르면 `null` 이다.
+   */
+  'sourceViewCount', 'sourcePage', 'sourceRankOnPage',
 ] as const
 
 /**
@@ -209,6 +215,17 @@ export const NO_SOURCE_TIMES: SourceTimes = Object.freeze({
   sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: '',
 })
 
+/** 🔴 수집 때 목록에서 본 반응 — 모르면 `null`(0 이 아니다) */
+export type SourceListResponse = {
+  sourceViewCount: number | null
+  sourcePage: number | null
+  sourceRankOnPage: number | null
+}
+
+export const NO_LIST_RESPONSE: SourceListResponse = Object.freeze({
+  sourceViewCount: null, sourcePage: null, sourceRankOnPage: null,
+})
+
 export type ThinRow = {
   sourceArticleId: string
   sourceSite: string
@@ -224,7 +241,11 @@ export type ThinRow = {
   reason: string
   runId: string
   fetchedAt: string
-} & SourceTimes
+} & SourceTimes & SourceListResponse
+
+/** 🔴 음 아닌 정수만 센 값이다 — 나머지는 모른다 */
+const countOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null
 
 /**
  * 저장할 행을 만든다 — 🔴 **전문은 인자로만 받고 결과에 남지 않는다.**
@@ -252,8 +273,11 @@ export function toThinRow(input: {
    *    **없는 값을 지어내지 않는다.**
    */
   times?: Partial<SourceTimes>
+  /** 🔴 수집물이 들고 있는 목록 반응. 없으면 전부 `null`(모른다) */
+  response?: Partial<Record<keyof SourceListResponse, unknown>>
 }): ThinRow {
   const t = input.times ?? {}
+  const r = input.response ?? {}
   return {
     sourceArticleId: input.id,
     sourceSite: input.sourceSite ?? '82cook',
@@ -273,6 +297,9 @@ export function toThinRow(input: {
     reason: input.reason,
     runId: input.runId,
     fetchedAt: input.fetchedAt,
+    sourceViewCount: countOrNull(r.sourceViewCount),
+    sourcePage: countOrNull(r.sourcePage),
+    sourceRankOnPage: countOrNull(r.sourceRankOnPage),
   }
 }
 

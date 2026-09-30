@@ -1,29 +1,25 @@
 /**
- * 🔴 **D1 → D100 일반 단계 스케줄러 — 운영 controller 에 배선했다** (2026-09-29)
+ * 🔴 **D1 → D100 단계 부품 — 운영 사다리가 부른다** (2026-09-29 · 2026-09-30 source-slot-v1)
  *
- * 🔴 **무엇을 하나.** 운영 사다리(`stage-ladder.planStageDecision`)가 D20 이상을 다룰 때 쓰는 부품이다.
- *    상태 기계는 **하나**다 — 운영 사다리가 그것이고, 이 파일은 거기에 들어가는 계산만 준다.
- *      · 승인 천장 해석(`resolveCeiling`) — d100 을 표현하되 열 수 있는 천장은 러너 단계(d50) 이하
+ * 🔴 **무엇을 하나.** 운영 사다리(`stage-ladder.planStageDecision`)에 들어가는 계산만 준다. 상태 기계는 하나다.
  *      · 슬롯 파생(`deriveSlots`) — 운영 창 안 · heartbeat 격자 위 · 60분 안 댓글 회차 3번 이상
- *      · 다음 칸 preflight(`judgeNextPreflight`) — 재고 · Persona canary 하한 · 댓글/감사/공급 비용 · 러너 용량
- *      · D20 이상 시험 관문(`extendedTrialBlocks`) — preflight PASS + 첫 슬롯 전(LATE_START 아님)
- *    🔴 앞판(#622 골격)의 별도 상태 기계(`planGenericStage`)는 지웠다 — 운영 사다리와 두 벌이 되면
- *       갈라진 순간부터 한쪽만 고쳐진다. 그 전이 규칙(PASS 뒤 한 칸 · FAIL/UNKNOWN 재시험 · 막힌 날 증명일)은
- *       운영 사다리의 `trialPlanOf` · `REPROVE` 로 옮겼고, 검사는 운영 `decideStage` 를 여러 날 돌려 본다.
+ *      · 다음 단계 preflight(`judgeNextPreflight`) — **D3 부터 D100 까지 같은 한 함수** (숫자는 기존 profile)
+ *      · 시험 관문(`trialBlocks`) — preflight PASS + 첫 슬롯 전(LATE_START 아님)
  *
- * 🔴 **전이 규칙은 #620 과 같다 — 새 규칙을 만들지 않는다.**
- *    · 다음 단계 시험은 **지금 단계의 완전한 자동 운영 PASS 뒤에만** 열린다(`judgeEvidenceForTarget` 여섯 조건).
- *    · FAIL · UNKNOWN → 같은 단계 재시험. 사람 승인 물량은 0건으로 센다.
- *    · 날짜로 기다리지 않는다 · 사람이 env 를 고치지 않는다 — PASS 다음 날 07:00 controller 가 연다.
+ * 🔴 **이 파일이 대신한 옛 정본 (실행 경로에서 지웠다 · 2026-09-30)**
+ *      · `resolveCeiling`(env `SORAN_CAPACITY_STAGE` 사람 천장) — 천장은 이제 비용 preflight 가 정한다
+ *      · `needsExtendedGate` · `extendedTrialBlocks` — D3~D10 은 하루 시뮬레이션, D20+ 만 preflight 로 가르던 두 벌 관문
+ *      · `STOCK_SHORT` = "다음 단계 하루치 **완성 글**이 미리 있어야 연다" — 완성 글 재고 게이트
+ *      · Persona 를 **활성 행 수**로 보던 입력(정본: active rows are not capacity)
  *
- * 🔴 **D3·D5·D10 시험은 이 관문을 지나지 않는다** — #620 관문(하루 시뮬레이션 `judgeOneDayCanary`) 그대로다.
- *    D20 이상만 그 위에 preflight 와 첫 슬롯 시각을 더 본다(`needsExtendedGate`). 지금 운영을 바꾸지 않는다.
+ * 🔴 **전이 규칙** — 날짜로 기다리지 않는다 · 사람이 env 를 고치지 않는다.
+ *    다음 단계 시험은 지금 단계의 완전한 자동 운영 PASS 뒤, 이 preflight 가 PASS 일 때만 열린다.
+ *    FAIL · UNKNOWN 은 **어느 하나라도** 열지 않는다(같은 단계 재증명).
  *
- * 🔴 순수 함수다 — DB · 파일 · env · 시각 조회 0. 러너 격자·댓글 예약표·비용 사실은 호출부가 주입한다
- *    (그 정본은 `scripts/lib/*-runner-template.ts` · 장부이고 `src/lib` 가 `scripts` 를 import 하지 않는다).
+ * 🔴 순수 함수다 — DB · 파일 · env · 시각 조회 0. 러너 격자 · 댓글 예약표 · 비용 · 기회 사실은 호출부가 주입한다.
  */
 import {
-  RELEASE_STAGES, RUNTIME_STAGES, MAX_DAILY_TARGET, SAFEST_STAGE, HIGHEST_RUNTIME_STAGE,
+  RUNTIME_STAGES, MAX_DAILY_TARGET, HIGHEST_RUNTIME_STAGE,
   minuteOfDay, slotLabel, kstMidnight, verifyProfile, isRuntimeStage, profileOf,
   type RuntimeStage, type ScaleProfile, type Slot,
 } from './scale-profile'
@@ -31,6 +27,8 @@ import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publis
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { auditTarget } from './auto-ready-v2'
 import { PERSONA_CANARY_FLOOR, READY_NET_MARGIN } from './d100-capacity'
+import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+import type { Health } from './ops-status'
 import type { StageBlock } from './stage-decision-contract'
 import type { EvidenceVerdictKind } from './stage-evidence'
 
@@ -64,35 +62,6 @@ export function genericNextStage(s: GenericStage): GenericStage | null {
 
 export function genericDailyTarget(s: GenericStage): number {
   return isRuntimeStage(s) ? profileOf(s).dailyTarget : UNWIRED_DAILY_TARGET[s]
-}
-
-// ─────────────────────────────────────────────────────────
-// 🔴 승인 천장 — d100 을 표현하되 fail-closed
-// ─────────────────────────────────────────────────────────
-
-export type CeilingResolution = {
-  /** 사람이 승인한 천장 — 모르는 값이면 가장 안전한 단계 */
-  authorized: GenericStage
-  /** 🔴 실제로 열 수 있는 천장 — 승인 천장과 러너 단계 상한 중 낮은 쪽 */
-  operable: RuntimeStage
-  fallbackReason: string | null
-}
-
-/**
- * 🔴 **천장 env 문자열 → 천장.** 모르는 값은 가장 안전한 단계다(운영 `resolveStage` 와 같은 방향).
- *    `d100` 은 승인 천장 d100 으로 읽고, 열 수 있는 천장은 러너 단계 상한(d50)으로 묶는다.
- *    🔴 어느 쪽도 천장보다 높은 단계를 열지 않는다. 지금 운영값(d10)은 d10 그대로다.
- */
-export function resolveCeiling(raw: string | undefined): CeilingResolution {
-  const v = (raw ?? '').trim()
-  if (!isGenericStage(v)) {
-    return {
-      authorized: SAFEST_STAGE, operable: SAFEST_STAGE,
-      fallbackReason: v === '' ? '천장 설정이 없다 — 가장 안전한 d1' : `천장 "${v}" 는 허용 단계가 아니다 — d1`,
-    }
-  }
-  const operable: RuntimeStage = isRuntimeStage(v) ? v : HIGHEST_RUNTIME_STAGE
-  return { authorized: v, operable, fallbackReason: null }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -211,43 +180,60 @@ export function verifyGenericProfile(p: ScaleProfile, grid: RunnerGrid): string[
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 다음 단계 preflight — 시험을 열어도 되는가 (재고 · Persona · 비용 · 용량)
+// 🔴 다음 단계 preflight — 시험을 열어도 되는가 (D3 ~ D100 한 함수)
 // ─────────────────────────────────────────────────────────
 
 export const PREFLIGHT_CODES = [
   'SLOTS_INFEASIBLE', 'PUBLISH_CAPACITY_SHORT',
-  'STOCK_SHORT', 'STOCK_UNKNOWN',
+  'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN',
+  'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN',
+  'LATENCY_UNKNOWN',
   'PERSONA_SHORT', 'PERSONA_UNKNOWN',
   'COMMENT_COST_SHORT', 'COMMENT_COST_UNKNOWN', 'COMMENT_RUNNER_SHORT',
   'AUDIT_COST_SHORT', 'AUDIT_COST_UNKNOWN',
   'SUPPLY_COST_SHORT', 'SUPPLY_COST_UNKNOWN',
+  'RUNNER_BAD', 'RUNNER_UNKNOWN',
 ] as const
 export type PreflightCode = (typeof PREFLIGHT_CODES)[number]
 const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = [
-  'STOCK_UNKNOWN', 'PERSONA_UNKNOWN', 'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN',
+  'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_UNKNOWN', 'LATENCY_UNKNOWN', 'PERSONA_UNKNOWN',
+  'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN', 'RUNNER_UNKNOWN',
 ]
 
 /**
- * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다.
- *    상한은 정본(env 값을 정본 천장으로 누른 것)을, 단가는 장부 실측을 호출부가 넣는다.
+ * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다(하나라도 모르면 열지 않는다).
  */
 export type PreflightFacts = {
-  /** 자동 READY 재고(발행 가능) */
-  readyAutoStock: number | null
-  /** 활성 Persona 수 */
-  activePersonas: number | null
-  /** 댓글 1건 정산 단가(USD) — 장부 실측 */
+  /**
+   * 🔴 **다음 증명일 전체 슬롯 중 slot-valid 기회로 덮이는 슬롯 수** — 정본 `judgeSlotRelease` 가 **그 슬롯 시각에**
+   *    eligible 로 본 READY 와, 아직 초안이 없는 원천 기회(측정 수율로 할인)를 슬롯에 짝지은 수.
+   *    완성 글 며칠치가 아니다 — 그 하루의 슬롯을 그 슬롯 시점 가치로 채울 수 있는가다.
+   */
+  slotValidOpportunities: number | null
+  /** 🔴 원천 1건당 자동 READY 수율(최근 3일 공급 회차 실측: 적재 ÷ 묶음 원천) — 모르면 null */
+  readyPerSource: number | null
+  /** 🔴 원천 게시 → 공개 지연(시간) p50 · p90 — 지금 계약 도장으로 나간 글만(최근 3일). 관측이 없으면 null */
+  latencyP50H: number | null
+  latencyP90H: number | null
+  /**
+   * 🔴 **계약 유효 Persona 수 — Persona 레인이 제공한다(주입 인터페이스).** 활성 행 수로 대체하지 않는다.
+   *    지금은 제공자가 없어 `null`(모름) — 모든 단계 시험이 열리지 않는 것이 정직한 결과다.
+   */
+  contractValidPersonas: number | null
+  /** 댓글 1건 정산 단가(USD) — 장부 실측(최근 3일) */
   commentUsdPerRequest: number | null
   /** 댓글 레인 하루 상한(USD) — 정본 최대 $0.20 */
   commentDailyUsdCap: number | null
-  /** 감사 1건 정산 단가(USD) — 장부 실측 */
+  /** 감사 1건 정산 단가(USD) — 장부 실측(최근 3일) */
   auditUsdPerCall: number | null
-  /** 감사 레인 하루 상한(USD) — 모르면 null */
+  /** 감사 레인 하루 상한(USD) — 정본 최대 $0.30 */
   auditDailyUsdCap: number | null
-  /** 🔴 자동 READY 한 건을 만드는 데 든 공급 비용(USD) — 장부 정산액 ÷ 그날 자동 READY 수. 모르면 null */
+  /** 🔴 자동 READY 한 건을 만드는 데 든 공급 비용(USD) — 최근 3일 정산 ÷ 그 3일 자동 READY 수 */
   supplyUsdPerReady: number | null
-  /** 공급 하루 상한(USD) — 정본 최대 $0.50. 모르면 null */
+  /** 공급 하루 상한(USD) — 정본 최대 $0.50 */
   supplyDailyUsdCap: number | null
+  /** 🔴 발행 · 공급 러너 최근 회차(`errorSignalOf`) — 모르면 null */
+  runnerHealth: Health | null
 }
 
 export type PreflightVerdict = {
@@ -258,10 +244,13 @@ export type PreflightVerdict = {
 }
 
 /**
- * 🔴 **다음 단계 preflight.** FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면 UNKNOWN.
- *    둘 다 시험을 열지 않는다.
- *    🔴 Persona 는 **canary 하한**(`PERSONA_CANARY_FLOOR`)으로 본다 — 지속 다양성 목표
- *       (`PERSONA_SUSTAINED_TARGET`)는 하루 시험을 막지 않는다(#618 정본 구분).
+ * 🔴 **다음 단계 preflight — D3~D100 같은 구조.** FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면 UNKNOWN.
+ *    둘 다 시험을 열지 않는다. 숫자는 기존 정본뿐이다:
+ *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`)
+ *      · READY 여유 `READY_NET_MARGIN` · Persona canary 하한 `PERSONA_CANARY_FLOOR` — `d100-capacity`
+ *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 하루 회차(`SUPPLY_RUNS_PER_DAY`)
+ *      · 비용 상한 — 호출부가 정본 천장($0.50 · $0.20 · $0.30)으로 누른 값
+ *    🔴 지연은 **관측됐는가**만 본다 — 행마다의 나이 상한은 `judgeSlotRelease` 가 이미 지킨다(두 번째 문턱을 만들지 않는다).
  */
 export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, grid: RunnerGrid): PreflightVerdict {
   const codes = new Set<PreflightCode>()
@@ -272,14 +261,26 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   const pubCap = publishCapacityOf(grid)
   counts.publishCapacity = pubCap
   if (pubCap < n) codes.add('PUBLISH_CAPACITY_SHORT')
-  // 재고 — 하루 시험은 목표만큼 자동 READY 가 있어야 한다(정본 `judgeOneDayCanary` 와 같은 요구)
-  if (facts.readyAutoStock === null) codes.add('STOCK_UNKNOWN')
-  else { counts.stock = facts.readyAutoStock; if (facts.readyAutoStock < n) codes.add('STOCK_SHORT') }
-  // Persona — canary 하한(정본 `PERSONA_CANARY_FLOOR`). d1 은 표에 없다 → 산술 하한 1
+  // 기회 — 증명일 전체 슬롯이 슬롯 시점 가치로 덮이는가
+  if (facts.slotValidOpportunities === null) codes.add('OPPORTUNITY_UNKNOWN')
+  else { counts.opportunities = facts.slotValidOpportunities; if (facts.slotValidOpportunities < n) codes.add('OPPORTUNITY_SHORT') }
+  // 처리량 — 측정 수율 × 공급 회차 용량이 하루 READY 필요량을 채우는가
+  const readyNeeded = Math.ceil(n * READY_NET_MARGIN)
+  counts.readyNeeded = readyNeeded
+  if (facts.readyPerSource === null || !(facts.readyPerSource >= 0)) codes.add('THROUGHPUT_UNKNOWN')
+  else {
+    const capacity = Math.floor(facts.readyPerSource * SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY)
+    counts.readyCapacity = capacity
+    if (capacity < readyNeeded) codes.add('THROUGHPUT_SHORT')
+  }
+  // 지연 — 관측됐는가
+  if (facts.latencyP50H === null || facts.latencyP90H === null) codes.add('LATENCY_UNKNOWN')
+  else { counts.latencyP50H = facts.latencyP50H; counts.latencyP90H = facts.latencyP90H }
+  // Persona — 계약 유효 reserve 가 canary 하한 이상인가(행 수로 대체하지 않는다)
   const floor = stage === 'd1' ? 1 : PERSONA_CANARY_FLOOR[stage]
   counts.personaFloor = floor
-  if (facts.activePersonas === null) codes.add('PERSONA_UNKNOWN')
-  else { counts.personas = facts.activePersonas; if (facts.activePersonas < floor) codes.add('PERSONA_SHORT') }
+  if (facts.contractValidPersonas === null) codes.add('PERSONA_UNKNOWN')
+  else { counts.personas = facts.contractValidPersonas; if (facts.contractValidPersonas < floor) codes.add('PERSONA_SHORT') }
   // 댓글 — 자동 글마다 첫 댓글 1건(무인 레인 상한) · 하루 비용 상한 · 러너 회차 용량
   const firstComments = n * AUTO_PERSONA_COMMENTS_PER_POST_MAX
   counts.firstComments = firstComments
@@ -298,12 +299,13 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   counts.auditExpected = audits
   if (facts.auditUsdPerCall === null || facts.auditDailyUsdCap === null) codes.add('AUDIT_COST_UNKNOWN')
   else if (audits * facts.auditUsdPerCall > facts.auditDailyUsdCap) codes.add('AUDIT_COST_SHORT')
-  // 공급 — 하루 READY 생산 요구(공개 × `READY_NET_MARGIN`) × 건당 공급 비용 ≤ 공급 하루 상한
-  const readyNeeded = Math.ceil(n * READY_NET_MARGIN)
-  counts.readyNeeded = readyNeeded
+  // 공급 — 하루 READY 필요량 × 3일 정산 건당 비용 ≤ 공급 하루 상한
   if (facts.supplyUsdPerReady === null || !(facts.supplyUsdPerReady > 0) || facts.supplyDailyUsdCap === null) {
     codes.add('SUPPLY_COST_UNKNOWN')
   } else if (readyNeeded * facts.supplyUsdPerReady > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
+  // 러너 건강
+  if (facts.runnerHealth === null || facts.runnerHealth === 'unknown') codes.add('RUNNER_UNKNOWN')
+  else if (facts.runnerHealth === 'bad') codes.add('RUNNER_BAD')
   const ordered = PREFLIGHT_CODES.filter((c) => codes.has(c))
   const failing = ordered.filter((c) => !PREFLIGHT_UNKNOWN.includes(c))
   const verdict: EvidenceVerdictKind = failing.length > 0 ? 'FAIL' : ordered.length > 0 ? 'UNKNOWN' : 'PASS'
@@ -311,16 +313,8 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 D20 이상 시험 관문 — 운영 사다리가 부른다
+// 🔴 시험 관문 — 운영 사다리가 부른다 (모든 단계)
 // ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 **이 시험 대상이 D20 이상 관문을 지나야 하는가** — #620 이 닫은 d1~d10 밖이면 그렇다.
- *    d3·d5·d10 시험은 #620 관문 그대로다(바꾸지 않는다).
- */
-export function needsExtendedGate(target: RuntimeStage): boolean {
-  return !(RELEASE_STAGES as readonly string[]).includes(target)
-}
 
 /** 🔴 그 KST 날짜의 그 프로필 첫 슬롯(UTC Date) */
 export function firstSlotOn(kstDate: string, p: ScaleProfile): Date | null {
@@ -330,13 +324,22 @@ export function firstSlotOn(kstDate: string, p: ScaleProfile): Date | null {
   return new Date(mid.getTime() + first * 60_000)
 }
 
+/** 🔴 그 KST 날짜의 그 프로필 슬롯 시각 전부(UTC Date · 오름차순) — 증명일 기회 짝짓기 · JIT 수요가 쓴다 */
+export function slotTimesOn(kstDate: string, p: ScaleProfile): Date[] {
+  const mid = kstMidnight(new Date(`${kstDate}T12:00:00+09:00`))
+  const out: Date[] = []
+  for (const s of [...p.slots].sort((a, b) => minuteOfDay(a) - minuteOfDay(b))) {
+    for (let k = 0; k < s.count; k += 1) out.push(new Date(mid.getTime() + minuteOfDay(s) * 60_000))
+  }
+  return out
+}
+
 /**
- * 🔴 **D20 이상 시험을 막는 이유들** — 비었으면 열 수 있다.
+ * 🔴 **시험을 막는 이유들** — 비었으면 열 수 있다. **모든 시험 대상이 같은 관문이다**(D3 도 D50 도).
  *    · preflight 가 없거나 · 다른 단계 것이거나 · PASS 가 아니면 막는다(`PREFLIGHT_FAIL`·`PREFLIGHT_UNKNOWN`)
  *    · 그 단계 오늘 첫 슬롯이 controller 실행보다 먼저면 막는다(`LATE_START`) — 조각 하루로 시험하지 않는다.
- *      07:00 controller 는 08:00 첫 슬롯 전이다 — **다음 KST 날 07:00 이 가장 이른 시험**이다.
  */
-export function extendedTrialBlocks(i: {
+export function trialBlocks(i: {
   target: RuntimeStage; kstDate: string; runAt: string; preflight: PreflightVerdict | null
 }): StageBlock[] {
   const out: StageBlock[] = []

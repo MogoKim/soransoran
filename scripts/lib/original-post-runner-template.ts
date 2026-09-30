@@ -44,10 +44,15 @@ import {
 } from '../../src/lib/scale-profile'
 import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
 import { releaseStageCeiling } from '../../src/lib/scale-runtime'
-import {
-  windowAuthorization, canaryAuthorization,
-  WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, CANARY_STAGE_ENV, CANARY_DATE_ENV,
-} from '../../src/lib/release-canary'
+
+/**
+ * 🔴 **더 이상 어떤 판정도 읽지 않는 옛 단계 키** (2026-09-30 · source-slot-v1).
+ *    canary · window 허가는 지웠다 — 단계 입력은 StageDecision 하나다. env 에 남아 있으면 **무시된다는 사실**만 적는다.
+ */
+export const IGNORED_LEGACY_STAGE_KEYS: readonly string[] = [
+  'SORAN_RELEASE_CANARY_STAGE', 'SORAN_RELEASE_CANARY_DATE',
+  'SORAN_RELEASE_WINDOW_STAGE', 'SORAN_RELEASE_WINDOW_FROM', 'SORAN_RELEASE_WINDOW_UNTIL',
+]
 
 /**
  * 🔴 **PATH 정본은 `launchd-template-check.mts` 의 `PATH_VALUE` 하나다.**
@@ -332,8 +337,8 @@ export function renderRunnerPlistFor(mode: RunnerTriggerMode, input: RunnerPlist
 export type StageInputs = {
   capacity: string | null
   release: string | null
-  window: { stage: string | null; from: string | null; until: string | null; activeToday: boolean; note: string | null }
-  canary: { stage: string | null; date: string | null; activeToday: boolean }
+  /** 🔴 env 에 남아 있지만 **무시되는** 옛 키 이름(값은 담지 않는다) */
+  ignoredLegacy: readonly string[]
   /** 🔴 이 env 로 발행 트랜잭션이 허용하는 가장 높은 단계 */
   ceiling: RuntimeStage
   /** 그 천장의 하루 목표 — 이 트리거 혼자서는 이보다 많이 내지 못한다 */
@@ -346,33 +351,24 @@ const rawOf = (env: Readonly<Record<string, string | undefined>>, k: string): st
 }
 
 export function stageInputsOf(env: Readonly<Record<string, string | undefined>>, now: Date): StageInputs {
-  const w = windowAuthorization(env, now, RUNTIME_STAGES)
-  const c = canaryAuthorization(env, now, RUNTIME_STAGES)
   const ceiling = releaseStageCeiling(env, now)
   return {
     capacity: rawOf(env, CAPACITY_ENV), release: rawOf(env, RELEASE_ENV),
-    window: {
-      stage: rawOf(env, WINDOW_STAGE_ENV), from: rawOf(env, WINDOW_FROM_ENV), until: rawOf(env, WINDOW_UNTIL_ENV),
-      activeToday: w.activeToday, note: w.note,
-    },
-    canary: { stage: rawOf(env, CANARY_STAGE_ENV), date: rawOf(env, CANARY_DATE_ENV), activeToday: c.activeToday },
+    ignoredLegacy: IGNORED_LEGACY_STAGE_KEYS.filter((k) => rawOf(env, k) !== null),
     ceiling, ceilingDailyTarget: profileOf(ceiling).dailyTarget,
   }
 }
 
-/** 🔴 러너 로그 한 줄 — 비밀값은 없다(단계 키 일곱 개만 읽는다) */
+/** 🔴 러너 로그 한 줄 — 비밀값은 없다(단계 키만 읽는다) */
 export function describeStageInputs(s: StageInputs): string {
   const v = (x: string | null): string => x ?? '(없음)'
   return `capacity=${v(s.capacity)} · release=${v(s.release)}`
-    + ` · window=${v(s.window.stage)}[${v(s.window.from)}~${v(s.window.until)}]${s.window.activeToday ? ' 오늘 유효' : ''}`
-    + ` · canary=${v(s.canary.stage)}@${v(s.canary.date)}${s.canary.activeToday ? ' 오늘 유효' : ''}`
+    + (s.ignoredLegacy.length === 0 ? '' : ` · 무시되는 옛 키 ${s.ignoredLegacy.join(',')}`)
     + ` → 천장 ${s.ceiling} (하루 ${s.ceilingDailyTarget}건)`
 }
 
-/** 🔴 정본 env 에서 읽는 단계 키 — 비밀값 키는 읽지 않는다 */
-export const STAGE_INPUT_KEYS: readonly string[] = [
-  CAPACITY_ENV, RELEASE_ENV, WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, CANARY_STAGE_ENV, CANARY_DATE_ENV,
-]
+/** 🔴 정본 env 에서 읽는 단계 키 — 비밀값 키는 읽지 않는다(옛 키는 무시된다고 적으려고 이름만 본다) */
+export const STAGE_INPUT_KEYS: readonly string[] = [CAPACITY_ENV, RELEASE_ENV, ...IGNORED_LEGACY_STAGE_KEYS]
 
 /** 🔴 `KEY=VALUE` 텍스트에서 **단계 키만** 뽑는다. 다른 줄은 메모리에도 올리지 않는다 */
 export function pickStageInputKeys(text: string): Record<string, string> {

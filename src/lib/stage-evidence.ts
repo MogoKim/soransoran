@@ -32,7 +32,12 @@
  *         · 누가 결정했는지 모르는 글은 자동 target 인지도 모른다 → UNKNOWN(공백을 PASS 로 삼키지 않는다).
  *      ⑤ 중복 0 — Queue→Post 1:1 · 발행 기록 1:1 · (글, Persona) 댓글 1건.
  *      ⑥ 비용 · 러너 정상 — 그날 장부(공급 · 댓글 · 감사)에 막는 코드 0 · 발행/공급 러너 실패 0.
- *         (READY 재고가 다음 단계를 채우는가는 정본 `judgeOneDayCanary` 가 시험 대상에 대해 본다)
+ *      ⑦ 🔴 **공개 증명 행 자체가 지금 원천 → 슬롯 계약을 만족한다** (2026-09-30 · source-slot-v1).
+ *         자동 target 글마다 발행 트랜잭션이 같은 트랜잭션에서 남긴 도장(`gateResults.release`)이
+ *         `source-slot-v1` · eligible 이어야 한다. 없으면 `RELEASE_CONTRACT_MISSING`, 판이 다르거나 eligible 이
+ *         아니면 `STALE_RELEASE` — 둘 다 FAIL 이다. 🔴 이 계약 이전 날의 증거는 이 조항으로 PASS 가 날 수 없다 —
+ *         옛 PASS 는 승급 · 이어진 계획 · 지속 단계의 근거가 되지 않는다(같은 단계를 다시 증명한다).
+ *         (다음 단계를 채울 기회가 있는가는 정본 `judgeNextPreflight` 가 시험 대상에 대해 본다)
  *
  * 🔴 **fail-closed = 지금 단계에 머문다.** 하나라도 어긋나면 FAIL, 하나라도 못 읽으면 UNKNOWN.
  *    둘 다 PASS 가 아니다 — 올라가지 않고 **같은 단계를 다음 날 다시 시험**한다(`trialPlanOf`).
@@ -48,7 +53,7 @@
  * 🔴 판정 결과에 원문·닉네임·id 를 담지 않는다 — **코드와 개수만**.
  */
 import { SAFEST_STAGE, profileOf, type RuntimeStage } from './scale-profile'
-import { DECISION_WRITER, nextStage, type TrialBasis, type ValidatedStageDecision } from './stage-decision-contract'
+import { DECISION_WRITER, isLegacyDecision, nextStage, type TrialBasis, type ValidatedStageDecision } from './stage-decision-contract'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
 import type { CommentStage } from './persona-comment-stage'
@@ -70,6 +75,8 @@ export const STAGE_EVIDENCE_CODES = [
   'DUP_QUEUE', 'DUP_PUBLISH_LOG', 'UNLOGGED_PUBLISH', 'PUBLISH_LOG_ORPHAN', 'DUP_COMMENT',
   // ⑥ 비용 · 러너
   'COST_BAD', 'COST_UNKNOWN', 'RUNNER_BAD', 'RUNNER_UNKNOWN',
+  // ⑦ 공개 증명 행의 release 계약 도장
+  'RELEASE_CONTRACT_MISSING', 'STALE_RELEASE',
   // 못 읽음
   'READ_ERROR',
 ] as const
@@ -128,6 +135,11 @@ export type EvidencePost = {
   decider: PostDecider
   /** 이 글의 살아 있는 Persona 댓글 전부 */
   personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean }[]
+  /**
+   * 🔴 **발행 트랜잭션이 남긴 release 도장 상태**(`releaseStampStatusOf`) — 조항 ⑦.
+   *    Queue 가 없으면 `MISSING` 이다(도장을 확인할 곳이 없다).
+   */
+  release: 'STAMPED_ELIGIBLE' | 'MISSING' | 'STALE'
 }
 
 /**
@@ -187,7 +199,7 @@ export function judgeStageEvidence(
  * 🔴 **증명일 상태** — 그날 자동 target 이 목표 슬롯을 먼저 채운 날이다(`consumerEnvOf` 의 증명일 env).
  *    TRIAL(재시험 포함) · SUSTAIN · REPROVE. HOLD·PREPARE 는 증명일이 아니다 — 공정성이 섞여 자동 물량을 증명하지 못한다.
  */
-export const PROOF_STATES: readonly string[] = ['TRIAL', 'SUSTAIN', 'REPROVE']
+export const PROOF_STATES: readonly string[] = ['TRIAL', 'REPROVE']
 
 /**
  * 🔴 **단계 이름과 하루 목표를 받는 판정 본체** (2026-09-29 generic scheduler 골격).
@@ -275,6 +287,11 @@ export function judgeEvidenceForTarget<S extends string>(
     if (inSet.some((r) => r.overdue) || a.globalOverdue > 0) codes.add('AUDIT_OVERDUE')
     if (inSet.some((r) => r.retryable) || a.globalRetryable > 0) codes.add('AUDIT_RETRYABLE')
     if (a.globalMissingPosts > 0) codes.add('AUDIT_MISSING_POST')
+    // ⑦ 🔴 공개 증명 행 — 자동 target 전부가 지금 계약 · eligible 도장을 가져야 한다
+    const stamped = autoTargets.filter((p) => p.release === 'STAMPED_ELIGIBLE').length
+    counts.releaseStamped = stamped
+    if (autoTargets.some((p) => p.release === 'MISSING')) codes.add('RELEASE_CONTRACT_MISSING')
+    if (autoTargets.some((p) => p.release === 'STALE')) codes.add('STALE_RELEASE')
   }
   // ⑥ 비용 · 러너 — 못 받았으면 모른다
   if (side === null) { codes.add('COST_UNKNOWN'); codes.add('RUNNER_UNKNOWN') } else {
@@ -300,6 +317,9 @@ export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: Trial
 /**
  * 🔴 **오늘 무엇을 시험하는가 — 전날 결정 + 전날 운영 증거로만 정한다.**
  *
+ *    🔴 **계약 경계** (2026-09-30) — 전날 결정이 옛 판(`isLegacyDecision`)이면 그 위의 PASS · RETEST · 이어진 계획을
+ *       쓰지 않는다. 바닥(d1)에서 다시 증명한다(FLOOR). 지속 단계도 같은 규칙이다(`sustainedReleaseOf`).
+ *
  *    · 전날 단계 S 가 운영 PASS            → S 의 다음 칸을 시험한다 (`PASS` · 기반 S)
  *      (전날이 TRIAL · SUSTAIN · REPROVE 증명일이어야 PASS 가 난다 — 판정 본체 ①)
  *    · 전날이 TRIAL 인데 PASS 가 아니다     → **같은 단계를 다시** 시험한다 (`RETEST` · 기반은 전날 시험 기반)
@@ -310,8 +330,12 @@ export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: Trial
  *    🔴 PASS 는 `kstDate`·`stage` 가 전날 결정과 **정확히** 같은 증거만 받는다 — 다른 날의 PASS 로 올리지 않는다.
  */
 export function trialPlanOf(
-  prev: ValidatedStageDecision, evidence: StageEvidenceVerdict | null,
+  prev: ValidatedStageDecision, evidence: StageEvidenceVerdict | null, carried: TrialPlan | null = null,
 ): TrialPlan | null {
+  if (isLegacyDecision(prev)) {
+    const up = nextStage(SAFEST_STAGE)
+    return up === null ? null : { base: SAFEST_STAGE, target: up, basis: 'FLOOR' }
+  }
   const passed = evidence !== null && evidence.verdict === 'PASS'
     && evidence.kstDate === prev.kstDate && evidence.stage === prev.release
   if (passed) {
@@ -322,9 +346,44 @@ export function trialPlanOf(
   if (prev.state === 'TRIAL' && t !== null && t.kind === 'TRIAL') {
     return { base: t.trialBase, target: prev.release, basis: 'RETEST' }
   }
+  /**
+   * 🔴 **브레이크 날을 건너 계획을 잇는다** (PR3 · 2026-09-30 자동 승급 부품 보존). `carried` 는 **전날(prev)의 계획**이다.
+   *    전날이 HOLD·PREPARE(증명일 아님 — 운영 신호 브레이크로 시험이 되돌려진 날)이고 그날 공개가 계획의 기반과
+   *    같으면 그 계획을 잇는다. 🔴 증명일(TRIAL·REPROVE)의 결과는 잇지 않는다 — 그날 증거가 스스로 말한다.
+   */
+  if (carried !== null && CARRY_STATES.includes(prev.state) && prev.release === carried.base) return carried
   if (prev.release === SAFEST_STAGE) {
     const up = nextStage(SAFEST_STAGE)
     return up === null ? null : { base: SAFEST_STAGE, target: up, basis: 'FLOOR' }
   }
   return null
 }
+
+/** 🔴 계획을 잇는 날 — 증명일이 아닌 두 상태뿐이다 */
+const CARRY_STATES: readonly string[] = ['HOLD', 'PREPARE']
+
+/**
+ * 🔴 **계획을 잇는 브레이크 날 수의 상한** — 이만큼 넘게 연속으로 막히면 계획을 버린다(오래된 증거로 올리지 않는다).
+ *    controller 가 읽는 지난 결정 행 수도 이 값으로 묶인다(PR3 KEEP).
+ */
+export const PLAN_CARRY_MAX_DAYS = 3
+
+/**
+ * 🔴 **연속된 날들의 결정·증거로 그 다음 날 계획을 되짚는다** — 오래된 날부터. 날짜가 이어지지 않으면 계획을 버린다.
+ *    `days` 의 마지막 날이 오늘의 전날이다. 증명일이 아닌 날(HOLD·PREPARE)의 증거는 `null` 이어도 된다(PASS 가 날 수 없다).
+ */
+export function trialPlanThrough(
+  days: readonly { decision: ValidatedStageDecision; evidence: StageEvidenceVerdict | null }[],
+): TrialPlan | null {
+  let plan: TrialPlan | null = null
+  let prevDate: string | null = null
+  for (const d of days) {
+    if (prevDate !== null && nextKstDate(prevDate) !== d.decision.kstDate) plan = null
+    plan = trialPlanOf(d.decision, d.evidence, plan)
+    prevDate = d.decision.kstDate
+  }
+  return plan
+}
+
+const nextKstDate = (d: string): string =>
+  new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)

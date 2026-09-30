@@ -20,11 +20,10 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 import {
-  allD100Plans, d100Plan, judgePromotion, currentPlanOf, targetStageFor, describePersonaTargets,
-  personaTargetReport, D100_STAGES,
-  dailyTargetOf, stableObservationDaysOf, READY_NET_MARGIN, type D100Stage,
+  allD100Plans, d100Plan, describePersonaTargets, nextStage as d100NextStage,
+  personaTargetReport, D100_STAGES, READY_NET_MARGIN, type D100Stage,
 } from '../src/lib/d100-capacity'
-import { RELEASE_ENV, PROFILES } from '../src/lib/scale-profile'
+import { SAFEST_STAGE, profileOf, type RuntimeStage } from '../src/lib/scale-profile'
 import { DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
 import {
   CAPABILITIES, allCapabilitiesReady, capabilityBlockers, runnerFactsOf, capabilityFactsReady,
@@ -36,7 +35,7 @@ import {
   capacities82, judgeLadder, TOP_STEP_INCIDENT_FREE_DAYS,
 } from '../src/lib/collect-82cook-recovery'
 import {
-  readOperationalStock, releaseStageFromEnvText, runReadiness,
+  readOperationalStock, readCurrentStageDecision, runReadiness,
 } from './lib/d100-operational-stock.mjs'
 import { SNAPSHOT_PATH } from './lib/d100-ready-snapshot.mjs'
 import { describeProduction, MIN_PRODUCTION_DAYS } from '../src/lib/d100-supply-funnel'
@@ -74,20 +73,19 @@ const envFlag = (name: string): boolean =>
   new RegExp(`^${name}=true\\s*$`, 'm').test(envText)
 
 /**
- * 🔴 **지금 단계는 코드가 아니라 env 가 정한다** (2026-09-21 3차 보정).
- *
- *    앞판은 `stage = 'd3'` 를 박아 두고 그것을 "지금 단계" 라고 적었다.
- *    실제 `SORAN_RELEASE_STAGE` 는 **d1** 이다 — 하루 1편 내는 레인을 3편이라고
- *    적어 두고 그 위에서 승격을 물었으니, 한 칸이 통째로 건너뛰어졌다.
- *
- * 🔴 판정은 정본 `resolveStage` 가 한다. 모르는 값은 가장 안전한 단계로 떨어진다.
+ * 🔴 **지금 단계는 StageDecision 하나가 정한다** (2026-09-30 · source-slot-v1). env 파일을 읽지 않는다 —
+ *    앞판은 `SORAN_RELEASE_STAGE` 를 읽어 결정 테이블과 따로 놀았다(A2 C8 · `PROVENANCE_CURRENT` 의 원인).
+ *    오늘 결정이 없으면 가장 안전한 d1 로 **보고**한다(단계를 정하는 것이 아니다 — 보여 줄 뿐이다).
+ * 🔴 이 화면은 승격을 판정하지 않는다 — `judgePromotion` 을 지웠다. 승급은 `stage:controller` 하나다.
  */
-const resolved = releaseStageFromEnvText(envText)
-const currentReleaseStage = resolved.stage
-/** 🔴 **다음** 단계 — 사전 준비(preflight)가 이 단계의 필요량을 쓴다 */
-const nextStage: D100Stage = targetStageFor(currentReleaseStage)
+const decisionRead = await readCurrentStageDecision(new Date())
+const decision = decisionRead.ok ? decisionRead.decision : null
+const currentReleaseStage: RuntimeStage = decision?.release ?? SAFEST_STAGE
+/** 🔴 **다음** 단계 — 보고용 필요량 표 · Persona 3계층 목표가 이 단계를 쓴다 */
+const nextStage: D100Stage = currentReleaseStage === 'd1' ? D100_STAGES[0]
+  : (d100NextStage(currentReleaseStage as D100Stage) ?? currentReleaseStage as D100Stage)
 /** 🔴 d1 은 D100 표에 없다 — 없는 칸을 d3 으로 올려 읽지 않는다 */
-const currentPlan = currentPlanOf(currentReleaseStage)
+const currentPlan = (D100_STAGES as readonly string[]).includes(currentReleaseStage) ? d100Plan(currentReleaseStage as D100Stage) : null
 const plan = d100Plan(nextStage)
 
 /**
@@ -109,10 +107,6 @@ const publishRunnerLoaded = installed(PUBLISH_LABEL) && loadedJobs.has(PUBLISH_L
 const run = await runReadiness({
   read: () => readOperationalStock(new Date(), {
     targetStage: nextStage,
-    // 🔴 예측기에는 **지금 운영 중인** 단계의 상한을 넘긴다 — 목표 단계가 아니다
-    dailyCap: PROFILES[currentReleaseStage].dailyTarget,
-    currentDailyTarget: dailyTargetOf(currentReleaseStage),
-    publishRunnerLoaded,
     /**
      * 🔴 공급이 **예약으로** 도는가. 스위치가 꺼져 있으면 최근 산출물이 있어도
      *    그것은 손으로 돌린 회차이고, 정기 생산율의 근거가 되지 않는다.
@@ -139,7 +133,6 @@ const detailPerDay: Measured = read.ok ? read.detailPerDay : null
 const readyQualifiedPerDay: Measured = read.ok ? read.readyQualifiedPerDay : null
 /** 🔴 **재고 증감.** 생산량과 다른 값이고, 여기에 4/day 를 요구하지 않는다 */
 const readyStockDeltaPerDay: Measured = read.ok ? read.readyStockDeltaPerDay : null
-const stableStreak: number | null = read.ok ? read.stableStreakDays : null
 const publishedPerDay: Measured = read.ok ? read.publishedPerDay : null
 const personaTiers = read.ok ? read.personaTiers : []
 const personaReady = read.ok ? read.personaReady : false
@@ -242,35 +235,6 @@ const readiness: CapabilityReadiness = {
   publish: facts.publish.state, comment: facts.comment.state, measure: facts.measure.state,
 }
 
-const promo = judgePromotion({
-  current: currentReleaseStage,
-  // 🔴 **다음 단계의 필요량**으로 사전 준비를 잰다
-  next: nextStage,
-  // 🔴 못 읽었으면 승격 판정도 하지 않는다 — 0 으로도 -1 로도 내려가지 않는다
-  readyStock: funnel?.readyStock ?? null,
-  /**
-   * 🔴 **Persona 3계층이 전부 ready 일 때만 인원을 셌다고 말한다.**
-   *    active 수만 넘기면 카드만 있는 사람이 "쓸 수 있는 사람" 으로 들어간다.
-   */
-  activePersonas: personaReady ? activePersonas : null,
-  detailPerDay,
-  // 🔴 여유율은 **생산량**에 붙는다
-  readyQualifiedPerDay,
-  // 🔴 재고 증감은 고갈 감시용이다 — 여기에 4/day 를 요구하지 않는다
-  readyStockDeltaPerDay,
-  publishedPerDay,
-  currentStableStreakDays: stableStreak,
-  publishRunnerReady: capabilityFactsReady(facts.publish),
-  commentRunnerReady: capabilityFactsReady(facts.comment),
-  /**
-   * 🔴 **지금 단계의 제한이 확정돼 있는가.** env 가 그 단계를 명시했을 때만 참이다 —
-   *    안전 단계로 떨어진 것(`fromEnv:false`)은 "그 단계를 운영하기로 했다" 가 아니다.
-   *
-   *    🔴 앞판은 여기에 `현재 === 다음` 을 넣었다. 다음은 정의상 현재가 아니므로
-   *    **언제나 false** 였고, canary 칸은 통과할 수 있는 경우가 없었다.
-   */
-  currentLimitsActive: resolved.fromEnv,
-})
 
 /**
  * 🔴 **재지 않았다.** actor 별 0 을 넣는 것이 아니라 **빈 집계 + `measuredWeeks: null`** 이다 —
@@ -301,11 +265,12 @@ if (JSON_OUT) {
   console.log(JSON.stringify({
     basis: { codeSha, runtimeSha, pinSha, mixed: codeSha !== runtimeSha },
     currentReleaseStage,
-    currentReleaseFromEnv: resolved.fromEnv,
-    currentReleaseFallbackReason: resolved.fallbackReason,
+    /** 🔴 지금 단계의 출처 — 오늘 StageDecision(없으면 null · 보고는 d1) */
+    stageDecision: decision,
+    stageDecisionReadError: decisionRead.ok ? null : decisionRead.detail,
     currentPlan,
     nextStage,
-    plan, promotion: promo,
+    plan,
     stock: read.ok ? funnel : { readFailed: read.detail },
     // 🔴 `d100:funnel` 과 **같은 selector** 의 산물 — 집합으로 대조한다
     readyStockIds: read.ok ? read.readyStockIds : null,
@@ -328,14 +293,10 @@ if (JSON_OUT) {
         : { measured: false, reason: '재고를 읽지 못했다' },
       readyStockDeltaPerDay,
       publishedPerDay,
-      /** 🔴 고정 14일 상수를 없앤 자리 — 실제로 연속 달성한 날 수다 */
-      currentStableStreakDays: stableStreak,
-      currentDailyTarget: dailyTargetOf(currentReleaseStage),
-      stableObservationDaysNeeded: stableObservationDaysOf(currentReleaseStage),
+      currentDailyTarget: profileOf(currentReleaseStage).dailyTarget,
       throughputWindowDays: read.ok ? read.throughputWindowDays : null,
       snapshotPath: SNAPSHOT_PATH,
     },
-    promotionPhase: promo.phase,
     persona: {
       tiers: personaTiers, ready: personaReady, activeCount: activePersonas,
       /**
@@ -345,14 +306,8 @@ if (JSON_OUT) {
       targetsByActiveCards: D100_STAGES.map((st) => personaTargetReport(st, activePersonas)),
       missingAxes: read.ok ? read.personaMissingAxes : null,
     },
-    scheduled: {
-      // 🔴 runner 가 내려가 있으면 실제 예약은 0 이다. 예측값과 섞지 않는다
-      actualIn7Days: read.ok ? read.actualScheduledIn7Days : null,
-      actualIn14Days: read.ok ? read.actualScheduledIn14Days : null,
-      forecastIfLoadedIn7Days: read.ok ? read.forecastIfLoadedIn7Days : null,
-      forecastIfLoadedIn14Days: read.ok ? read.forecastIfLoadedIn14Days : null,
-      publishRunnerLoaded,
-    },
+    // 🔴 14일 예약 예측을 지웠다(2026-09-30) — 다가오는 슬롯 수요는 `supply:health` 의 JIT 한 곳이 보여 준다
+    scheduled: { publishRunnerLoaded },
     links: linkSummary, linkCritical: linkCriticalCount(linkSummary),
     northStar: ns,
     stages: allD100Plans(),
@@ -370,10 +325,10 @@ if (JSON_OUT) {
   console.log(`    pin   ${pinSha || '(모름)'}`)
 
   console.log('\n  단계 — 🔴 지금 돌고 있는 것과 올라가려는 것은 다른 값이다')
-  console.log(`    지금 운영(${RELEASE_ENV})  ${currentReleaseStage}`
-    + `  · 하루 ${PROFILES[currentReleaseStage].dailyTarget}편`
-    + `${resolved.fromEnv ? '' : '  🔴 env 값이 아니다'}`)
-  if (resolved.fallbackReason !== null) console.log(`      · ${resolved.fallbackReason}`)
+  console.log(`    지금 운영(StageDecision)  ${currentReleaseStage}`
+    + `  · 하루 ${profileOf(currentReleaseStage).dailyTarget}편`
+    + `${decision === null ? '  🔴 오늘 결정이 없다(보고는 d1)' : ` · ${decision.state} · ${decision.contractVersion}`}`)
+  if (!decisionRead.ok) console.log(`      · 🔴 결정을 읽지 못했다 — ${decisionRead.detail}`)
   console.log(`    다음 단계              ${nextStage}  · 하루 ${plan.publicPostsPerDay}편`)
   if (currentPlan === null) {
     console.log(`    🔴 ${currentReleaseStage} 은 D100 용량표에 없는 칸이다 (표는 d3 부터다)`)
@@ -453,15 +408,9 @@ if (JSON_OUT) {
       + ` (${read.readyStockDelta.spanDays}일 · ${read.readyStockDelta.fromAt})`)
   }
   console.log(`    공개 발행/day       ${showMeasured(publishedPerDay)}`
-    + `   (${currentReleaseStage} 자기 목표 ${dailyTargetOf(currentReleaseStage)}/day)`)
-  console.log(`    연속 달성 일수      ${stableStreak ?? '?'}일`
-    + `   (${currentReleaseStage} 가 stable 이 되려면 ${stableObservationDaysOf(currentReleaseStage)}일)`)
-  console.log('    🔴 예약과 전망은 다른 값이다 — runner 가 내려가 있으면 실제 예약은 0 이다')
-  console.log(`    지금 예약 7일/14일   ${showMeasured(read.ok ? read.actualScheduledIn7Days : null)}`
-    + ` / ${showMeasured(read.ok ? read.actualScheduledIn14Days : null)}`
-    + `   (발행 runner ${publishRunnerLoaded ? '올라와 있다' : '🔴 내려가 있다'})`)
-  console.log(`    올렸다면 7일/14일    ${showMeasured(read.ok ? read.forecastIfLoadedIn7Days : null)}`
-    + ` / ${showMeasured(read.ok ? read.forecastIfLoadedIn14Days : null)}`)
+    + `   (${currentReleaseStage} 자기 목표 ${profileOf(currentReleaseStage).dailyTarget}/day)`)
+  console.log(`    발행 runner ${publishRunnerLoaded ? '올라와 있다' : '🔴 내려가 있다'}`
+    + ' — 🔴 연속 달성 일수 · 14일 예약 예측은 지웠다(달력 대기 · 재고 전망은 승급 근거가 아니다)')
   console.log(`    🔴 순증가 시계열: ${SNAPSHOT_PATH}`)
   console.log('       (시작하려면 --record-snapshot · 🔴 과거 값은 만들 수 없다)')
 
@@ -505,12 +454,11 @@ if (JSON_OUT) {
   }
 
   console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 다음 ${nextStage})`)
-  console.log('    🔴 공개량 · READY 순증가 · 재고는 서로 다른 값이다 — 한 칸으로 합치지 않는다')
-  console.log('    단계   공개/day  READY생산/day  재고14일  상세/day  P.canary  P.지속  댓글/day  최소관측')
+  console.log('    🔴 공개량 · READY 생산량은 서로 다른 값이다 — 14일치 재고 목표는 지웠다(2026-09-30)')
+  console.log('    단계   공개/day  READY생산/day  상세/day  P.canary  P.지속  댓글/day  최소관측')
   for (const p of allD100Plans()) {
     console.log(`    ${p.stage.padEnd(6)} ${String(p.publicPostsPerDay).padStart(7)}`
       + `  ${String(p.readyQualifiedRequiredPerDay).padStart(12)}`
-      + `  ${String(p.readyStock14Days).padStart(8)}`
       + `  ${String(p.detailedSourcesRequiredPerDay).padStart(8)}`
       + `  ${String(p.personaCanaryFloor).padStart(8)}`
       + `  ${`${p.personaSustainedTarget}${p.stage === 'd100' ? '+' : ''}`.padStart(6)}`
@@ -537,28 +485,10 @@ if (JSON_OUT) {
     if (sc.detail !== null) console.log(`        · ${sc.detail}`)
   }
 
-  console.log(`\n④ 승격 상태 전이 — ${currentReleaseStage} 운영 중 · 다음은 ${nextStage}`)
-  console.log('    🔴 canary·stable 은 **지금 단계**의 것이고, preflight 는 **다음 단계**의 것이다')
-  console.log(`    지금 칸  ${promo.phase}`)
-  console.log(`    다음 할 일  ${promo.nextAction}`)
-  const gate = (name: string, g: typeof promo.nextPreflight, note: string): void => {
-    console.log(`    ${g.ready ? '🟢' : '🔴'} ${name.padEnd(18)} ${note}`)
-    for (const b of g.blocking) console.log(`        🔴 ${b}`)
-    for (const u of g.unmeasured) console.log(`        ⬚ 측정되지 않음: ${u}`)
-  }
-  gate(`${currentReleaseStage} canary`, promo.currentCanary,
-    '지금 단계 제한이 힘을 쓰고 있는가')
-  gate(`${currentReleaseStage} stable`, promo.currentStable,
-    `${dailyTargetOf(currentReleaseStage)}/day 를 ${stableObservationDaysOf(currentReleaseStage)}일 냈는가`)
-  gate(`${nextStage} preflight`, promo.nextPreflight,
-    `재고·Persona·수집·생성·스케줄러 — 🔴 ${nextStage} 발행량은 묻지 않는다`)
-  // 🔴 두 목표를 **항상 같이** 찍는다. preflight 는 canary 하한만 보고, 지속 목표는 보고만 한다
-  console.log(`    Persona  ${describePersonaTargets(promo.persona)}`)
-  console.log('        🔴 preflight 는 canary 하한만 본다 · 지속 목표 미달은 첫 시험을 막지 않지만'
-    + ' "계속 운영 준비됨" 이라 말하지 못한다')
-  console.log(`    ${promo.ready ? '🟢' : '🔴'} 제한을 ${nextStage} 로 올려도 되는가`
-    + `  (지금 단계 stable + 다음 단계 preflight)`)
-  console.log('    🔴 이 PR 은 어떤 단계도 실제로 켜지 않는다')
+  console.log(`\n④ 단계 — ${currentReleaseStage} 운영 중 · 다음 증명 ${nextStage}`)
+  console.log('    🔴 승급 판정은 이 화면에 없다 — `npm run stage:controller`(dry-run) 가 운영 증거 PASS +'
+    + ' `judgeNextPreflight`(증명일 slot-valid 기회 · 처리량 · 계약 유효 Persona · 비용 · 러너) 로 정한다')
+  console.log('    🔴 지운 판정: 현 단계 연속 달력 일수 stable · 다음 단계 14일치 재고 preflight · 사람 env 승격 문구')
 
   console.log('\n⑤ North Star — 주간 재방문 참여 실사용자')
   console.log(`    ${ns.measured ? `${ns.weeklyReturningEngagedUsers}명` : `unmeasured — ${ns.reason}`}`)

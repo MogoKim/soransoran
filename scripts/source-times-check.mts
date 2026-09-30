@@ -24,15 +24,15 @@ import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 import { sourceTimesOf, thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
 import { NO_SOURCE_TIMES, THIN_COLUMNS } from '../src/lib/micro-seed-82cook-thin'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
-import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
+import { MACHINE_SITE_PREFIX, sourceEvidenceOf } from '../src/lib/micro-seed-supply-autofill'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
 
 let pass = 0
 let fail = 0
-const check = (n: string, ok: boolean): void => {
-  if (ok) { pass += 1; console.log(`  ✅ ${n}`) } else { fail += 1; console.log(`  🔴 FAIL ${n}`) }
+const check = (n: string, ok: boolean, detail = ''): void => {
+  if (ok) { pass += 1; console.log(`  ✅ ${n}`) } else { fail += 1; console.log(`  🔴 FAIL ${n}${detail === '' ? '' : ` — ${detail}`}`) }
 }
 console.log('\n══ 원문 게시 시각 전달 검사 (🔴 네트워크 0 · provider 0 · DB 0) ══\n')
 
@@ -121,12 +121,16 @@ mkdirSync(dd, { recursive: true })
       sourceUrl: 'https://cafe.naver.com/x/9', originalTitle: '합성 소재 제목입니다',
       sourceCommentCount: 5,
       sourcePostedAt: POSTED, sourceListedAt: LISTED, sourceCapturedAt: CAPTURED,
+      // 🔴 (2026-09-30) 목록에서 본 반응 — 얇은 변환이 버리면 안 된다
+      sourceViewCount: 321, sourcePage: 1, sourceRankOnPage: 4,
     },
     maskedBody: '합성 본문입니다. 사람이 쓴 글이 아니고 시험용으로 지어냈습니다. 충분히 길게 적어 둡니다.',
     bodyHeadChars: 300,
     axis: 'sourceCandidate', safetyVerdict: 'pass', safetyReasons: [],
     reason: 'ok', runId: 'R9', fetchedAt: CAPTURED,
   })
+  check('🔴 (source-evidence-v1) 얇은 행이 조회수 · 목록 자리를 버리지 않는다',
+    row.sourceViewCount === 321 && row.sourcePage === 1 && row.sourceRankOnPage === 4 && row.commentCount === 5)
   writeFileSync(join(dd, 'navercafe-thin-wgang-R9.thin-detail.jsonl'), `${JSON.stringify(row)}\n`, 'utf-8')
 
   const r = spawnSync(
@@ -145,6 +149,8 @@ mkdirSync(dd, { recursive: true })
   check('🔴 목록 시각·가져온 시각도 남는다',
     String(t9?.sourceListedAt ?? '') === LISTED && String(t9?.sourceCapturedAt ?? '') === CAPTURED)
   check('🔴 🔴 게시 시각이 가져온 시각으로 바뀌지 않았다', String(t9?.sourcePostedAt) !== CAPTURED)
+  check('🔴 (source-evidence-v1) adapt 를 지나도 반응 수가 남는다',
+    t9?.sourceViewCount === 321 && t9?.sourcePage === 1 && t9?.sourceRankOnPage === 4 && t9?.commentCount === 5)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -159,6 +165,8 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
     sourceArticleId: 'T9', decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
+    // 🔴 (2026-09-30) 참여 동력 — 앞판은 loadMeta 가 채우고 아무도 읽지 않았다(죽은 값)
+    communityAngle: '합성 참여 동력',
   })}\n`, 'utf-8')
   const runId = 'ST1'
   const snapPath = join(dd, queueSnapshotFileName(runId))
@@ -204,6 +212,18 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
     String(c?.sourceListedAt ?? '') === LISTED && String(c?.sourceCapturedAt ?? '') === CAPTURED)
   check('🔴 후보의 게시 시각이 빈 문자열이 아니다 — 실측 결함 그대로 재현되지 않는다',
     String(c?.sourcePostedAt ?? '') !== '')
+  const resp = (c?.sourceResponse ?? null) as Record<string, unknown> | null
+  check('🔴 🔴 **(source-evidence-v1) 후보 파일까지 반응 수가 살아남는다** — 댓글 · 조회 · 자리 · 관측 시각',
+    resp !== null && resp.comments === 5 && resp.views === 321 && resp.listRank === 4 && resp.listPage === 1 && resp.observedAt === LISTED,
+    JSON.stringify(resp))
+  check('🔴 🔴 **참여 동력이 후보 파일까지 온다**(죽은 값이 아니다)', String(c?.participationDriver ?? '') === '합성 참여 동력')
+  if (c !== undefined) {
+    const ev = sourceEvidenceOf(c as never, null)
+    check('🔴 적재기가 만든 원문 증거 — 세 시각 그대로 · 반응 · 동력 · URL 없음 · 초안 시각은 draftedAt 에만',
+      ev.postedAt === POSTED && ev.listedAt === LISTED && ev.capturedAt === CAPTURED
+      && (ev.response as Record<string, unknown>).views === 321 && ev.participationDriver === '합성 참여 동력'
+      && !JSON.stringify(ev).includes('cafe.naver.com') && ev.draftedAt !== POSTED)
+  }
   if (!existsSync(join(dd, 'x.shadow.jsonl'))) check('입력이 남아 있다', false)
   if (fail > 0) {
     const af = readdirSync(dd).filter((f) => /\.artifacts\.json$/.test(f))
@@ -236,6 +256,17 @@ console.log('\n⑤ 표현 — 🔴 게시 시각을 사건 시각이라고 적�
   }
   check('🔴 정본이 "사건 시각이 아니다" 를 명시한다',
     /사건이 일어난 시각.*아니|사건 시각이 아니다/.test(readFileSync('src/lib/micro-seed-82cook-thin.ts', 'utf-8')))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑥ 🔴 원천 기회 → 슬롯 판정(source-slot-v1) 반례 — 순수 검사 파일을 실행한다')
+// ─────────────────────────────────────────────────────────
+{
+  const r = spawnSync(join(process.cwd(), 'node_modules/.bin/tsx'), [join(process.cwd(), 'scripts/source-slot-release-check.mts')], { encoding: 'utf-8' })
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
+  const tail = out.trim().split('\n').filter((l) => /pass ·/.test(l)).pop() ?? '(요약 없음)'
+  check(`🔴 🔴 **source-slot-release-check 통과** — ${tail.trim()}`, r.status === 0)
+  if (r.status !== 0) console.log(out.split('\n').filter((l) => /FAIL/.test(l)).map((l) => `    ${l}`).join('\n'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

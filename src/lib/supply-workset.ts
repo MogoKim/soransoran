@@ -13,6 +13,11 @@ import {
   AUTOFILL_SITE_PREFIX, MACHINE_SITE_PREFIX, baseArticleId, isOurSite,
 } from './micro-seed-supply-autofill'
 import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+/** 🔴 원천 기회 판정 정본 — 유료 생성 전에 예정 슬롯 기준으로 같은 함수를 부른다 */
+import {
+  compareReleaseRank, judgeSlotRelease, parseEvidence,
+  type SlotReleaseVerdict, type SourceEvidenceRecord,
+} from './source-slot-release'
 
 /**
  * 공급 회차의 **작업 묶음** — 🔴 AI 를 부르기 전에 **코드가** 정한다 (2026-09-20)
@@ -30,8 +35,10 @@ import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
  *    판정 → 생성 → 적재까지 끝까지 보낸다. 고르지 않은 것은 **그대로 남는다** —
  *    지우지도, 판정하지도, 완료로 적지도 않는다. 다음 회차가 다시 집는다.
  *
- * 🔴 **새 점수 체계를 만들지 않는다.** 지금 있는 반응 신호(댓글 수)와 시각만 쓴다.
- *    AI 점수 호출도, 낱말 사전도 없다.
+ * 🔴 **새 점수 체계를 만들지 않는다.** 순서는 원천 기회 정본(`judgeSlotRelease`)의 rank 하나다 —
+ *    원천 상대 반응 백분위 → 예정 슬롯 나이 → velocity(반복 관측이 있을 때만). AI 점수 호출도, 낱말 사전도 없다.
+ * 🔴 **예정 슬롯에서 eligible 이 아닌 원천은 유료 생성에 들어가지 않는다** (2026-09-30 · source-slot-v1).
+ *    앞판은 원시 댓글 수 순(`byWeight`)으로 골랐다 — 원천 규모 · 관측 나이 보정이 없고 나이 상한도 없었다(A1 ④).
  */
 
 /** 🔴 manifest 판 — 모양이 바뀌면 올린다. 옛 파일을 새 판으로 읽지 않는다 */
@@ -40,6 +47,47 @@ export const WORKSET_VERSION = 'workset-v1'
 
 /** 🔴 회차 파일 이름 — 러너와 검사가 **같은 함수**를 쓴다 */
 export const worksetFileName = (runId: string): string => `supply-workset-${runId}.json`
+/** 🔴 묶음 파일 이름 모양 — 회차 id 를 꺼낸다(수율 창을 세는 쪽이 쓴다) */
+export const WORKSET_FILE_RE = /^supply-workset-(\d{8}-\d{6})\.json$/
+
+// ─────────────────────────────────────────────────────────
+// 🔴 원천 기회 스냅샷 — 초안이 아직 없는 slot-valid 원천 (2026-09-30)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 공급 러너가 회차마다 적는다 — **생성 전 판정(예정 슬롯 · 참여 동력 · 배정 대기)이 eligible 인 원천의 증거 기록**.
+ *    다음 단계 preflight 가 "증명일 슬롯을 채울 기회가 있는가" 를 이 파일과 READY 로 센다.
+ *    🔴 원문 제목 · 본문 · URL 없음 — `source-evidence-v1` 기록뿐이다(해시 · 시각 · 수).
+ */
+export const OPPORTUNITY_KIND = 'supply-opportunities'
+export const OPPORTUNITY_VERSION = 'opportunities-v1'
+export const opportunitiesFileName = (runId: string): string => `supply-opportunities-${runId}.json`
+export const OPPORTUNITY_FILE_RE = /^supply-opportunities-\d{8}-\d{6}\.json$/
+
+export type OpportunitySnapshot = {
+  kind: typeof OPPORTUNITY_KIND
+  version: typeof OPPORTUNITY_VERSION
+  runId: string
+  takenAt: string
+  /** 예정 슬롯(판정 기준) */
+  slotAt: string
+  evidence: SourceEvidenceRecord[]
+}
+
+/** 🔴 모양이 틀리면 `null` — 부르는 쪽이 다음 파일을 본다(지어내지 않는다) */
+export function readOpportunitySnapshot(raw: unknown): OpportunitySnapshot | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  if (r.kind !== OPPORTUNITY_KIND || r.version !== OPPORTUNITY_VERSION) return null
+  if (typeof r.runId !== 'string' || typeof r.takenAt !== 'string' || !Number.isFinite(Date.parse(r.takenAt))) return null
+  if (typeof r.slotAt !== 'string' || !Array.isArray(r.evidence)) return null
+  const evidence: SourceEvidenceRecord[] = []
+  for (const e of r.evidence) {
+    const p = parseEvidence(e)
+    if (p.ok) evidence.push(p.record)
+  }
+  return { kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId: r.runId, takenAt: r.takenAt, slotAt: r.slotAt, evidence }
+}
 
 /**
  * 🔴 **단계마다 원천 하나에 몇 번까지 허용하는가.**
@@ -86,17 +134,34 @@ export function resolveWorksetLimit(argv: readonly string[]): number {
 export type WorksetRow = {
   sourceArticleId: string
   sourceSite: string
-  /** 지금 있는 반응 신호 — 🔴 새로 만들지 않는다 */
+  /** 지금 있는 반응 신호 — 🔴 새로 만들지 않는다(화면 한 줄용) */
   commentCount: number
   /** 원문이 올라온 시각 · 목록에서 본 시각 (없으면 빈 문자열) */
   sourcePostedAt: string
   sourceListedAt: string
   /** 🔴 정본 게이트에 그대로 넘길 판정 입력 */
   input: JudgeInput
+  /**
+   * 🔴 **원천 증거 기록**(source-evidence-v1) — 러너가 상세 파일 · 목록 관측으로 만든다. 없으면 null(모름 → 고르지 않는다).
+   */
+  evidence: SourceEvidenceRecord | null
+}
+
+/**
+ * 🔴 **생성 전 원천 기회 판정** — 정본 `judgeSlotRelease` 를 예정 슬롯(다음 열린 슬롯)으로 부른다.
+ *    참여 동력 · 배정은 아직 없다(`pending`). 증거가 없으면 모른다(EVIDENCE_MISSING) — 고르지 않는다.
+ */
+export function preGenerationRelease(r: WorksetRow, slotAt: Date, now: Date): SlotReleaseVerdict {
+  return judgeSlotRelease({
+    evidence: r.evidence ?? undefined, gateResults: r.evidence === null ? {} : undefined,
+    slotAt, now, hardGates: { ok: true, codes: [] },
+    assignment: 'pending', driver: 'pending', tieBreak: r.sourceArticleId,
+  })
 }
 
 export const WORKSET_DROPS = [
   'humanDecided', 'queueSibling', 'alreadyQueued', 'carriedOver', 'hardBlocked', 'preGated', 'terminal',
+  'slotIneligible', 'slotUnknown',
 ] as const
 export type WorksetDrop = (typeof WORKSET_DROPS)[number]
 
@@ -108,6 +173,8 @@ export const WORKSET_DROP_LABEL: Readonly<Record<WorksetDrop, string>> = {
   hardBlocked: 'deterministic hard block',
   preGated: '접근·안전 조건을 충족하지 않는다',
   terminal: '앞 회차가 이미 끝낸 원천 (HOLD·DROP·생성 hard HOLD)',
+  slotIneligible: '🔴 예정 슬롯에서 원천 가치가 없다 (원문 나이 ≥ 72h) — 유료 생성 0',
+  slotUnknown: '🔴 원천 증거를 모른다 (게시 시각 · 반응 · 원천 상대 표본 없음) — 유료 생성 0',
 }
 
 export type Workset = {
@@ -705,11 +772,6 @@ export function hasSource(keys: SourceKeySet, site: string, articleId: string): 
 }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
-const N = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-
-/** 시각 하나로 — 🔴 둘 다 없으면 빈 문자열이고, 정렬에서 맨 뒤로 간다 */
-const timeKeyOf = (r: WorksetRow): string =>
-  r.sourcePostedAt !== '' ? r.sourcePostedAt : r.sourceListedAt
 
 /**
  * 🔴 **재시도 자리를 남겨 둔다** (2026-09-20 보정 · 2026-09-28 비례).
@@ -793,13 +855,20 @@ export function selectWorkset(input: {
    *    빼지 않는다 — 자리를 나눠 쓰고, 그 안에서는 **오래 기다린 것부터** 집는다.
    */
   attempted: ReadonlyMap<string, PriorOutcome>
+  /**
+   * 🔴 **정본 원천 기회 판정 — 예정 슬롯 기준 · 유료 생성 전** (`judgeSlotRelease` · 참여 동력 · 배정은 `pending`).
+   *    eligible 이 아니면 고르지 않는다. 순서도 이 판정의 rank 다. 부르는 쪽이 넣는다 — 기본값이 없다.
+   */
+  releaseOf: (r: WorksetRow) => SlotReleaseVerdict
   limit: number
   runId: string
   takenAt: Date
 }): WorksetPlan {
   const dropped: Record<WorksetDrop, number> = {
     humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
+    slotIneligible: 0, slotUnknown: 0,
   }
+  const releaseById = new Map<string, SlotReleaseVerdict>()
   // 🔴 같은 원천이 여러 파일에 있으면 **마지막 행**만 남긴다
   const byId = new Map<string, WorksetRow>()
   for (const r of input.rows) {
@@ -829,13 +898,23 @@ export function selectWorkset(input: {
      *    나서 보던 사유를 `holdBeforeAsking` 하나로 모았다 — 같은 함수를 부른다.
      */
     if (holdBeforeAsking(r.input).length > 0) { dropped.preGated += 1; continue }
+    /**
+     * 🔴 **예정 슬롯에서 eligible 인가 — 정본 판정 하나** (2026-09-30). 오래된 원문을 오늘 수집했어도,
+     *    반응 증거가 없어도, 원천 상대 표본이 없어도 유료 생성에 들어가지 않는다.
+     */
+    const v = input.releaseOf(r)
+    if (v.verdict !== 'eligible') {
+      if (v.verdict === 'unknown') dropped.slotUnknown += 1
+      else dropped.slotIneligible += 1
+      continue
+    }
+    releaseById.set(r.sourceArticleId, v)
     eligible.push(r)
   }
 
-  /** 🔴 값이 같으면 순서도 같아야 한다 — 마지막 열쇠는 언제나 id 다 */
+  /** 🔴 정본 rank 사전식 비교 — 합산 점수 없음 · 마지막 열쇠는 id 다 */
   const byWeight = (a: WorksetRow, b: WorksetRow): number =>
-    N(b.commentCount) - N(a.commentCount)
-    || timeKeyOf(b).localeCompare(timeKeyOf(a))
+    compareReleaseRank(releaseById.get(a.sourceArticleId)!.rank, releaseById.get(b.sourceArticleId)!.rank)
     || a.sourceArticleId.localeCompare(b.sourceArticleId)
 
   const fresh = eligible.filter((r) => !input.attempted.has(r.sourceArticleId)).sort(byWeight)

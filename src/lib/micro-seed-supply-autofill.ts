@@ -16,7 +16,11 @@
  *    그래서 "사람이 이미 판단한 것" 만 통과시킨다 — 판단을 새로 하지 않는다.
  */
 
-import { derive, SAFEST_PROFILE } from './scale-profile'
+/** 🔴 원문 증거 기록의 정본 — 적재기는 옮길 뿐 판정하지 않는다 */
+import {
+  SOURCE_EVIDENCE_KEY, buildSourceEvidence,
+  type SourceObservation, type SourceStatsSnapshot,
+} from './source-slot-release'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import { judgeCopy, readMeasure, describeOriginality } from './draft-originality'
 import { readVoiceProvenance } from './original-post-voice-match'
@@ -237,22 +241,6 @@ export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
  *    기준이 두 벌이면 반드시 그런 날이 온다. 이제 `draft-originality.ts` 하나가 판정한다.
  */
 
-/** 재고 기준선 (§4-AN) */
-/**
- * 🔴 **가장 안전한 기본값이다** (2026-09-08 개정).
- *    내부 공급 기준은 **capacity 단계**를 따르며, 러너가 `readStock`·`judgeFill` 에 주입한다.
- *    주입을 잊으면 여기로 떨어진다 — 재고 목표가 조용히 커지지 않는다.
- */
-export const STOCK_WARN = derive(SAFEST_PROFILE).stockWarn
-export const STOCK_MIN = derive(SAFEST_PROFILE).stockMin
-export const STOCK_TARGET = derive(SAFEST_PROFILE).stockTarget
-
-/** 🔴 재고 기준선 묶음 — capacity 프로필에서 만들어 주입한다 */
-export type StockLimits = { warn: number; min: number; target: number }
-export const SAFEST_STOCK_LIMITS: StockLimits = { warn: STOCK_WARN, min: STOCK_MIN, target: STOCK_TARGET }
-
-export type StockLevel = 'critical' | 'low' | 'ok'
-
 /**
  * **형식이 맞는 미발행 행**을 센다 — 🔴 **발행 가능 재고가 아니다** (2026-09-26 정정).
  *
@@ -263,6 +251,11 @@ export type StockLevel = 'critical' | 'low' | 'ok'
  * 🔴 쓰임은 **적재 천장·적재 정합**뿐이다. 발행 가능 재고는 `scripts/lib/publishable-stock`
  *    의 `classifyStock().counts.publishableNow` 가 정본이다.
  */
+/**
+ * 🔴 **재고 눈금을 지웠다** (2026-09-30 · source-slot-v1). `STOCK_WARN/MIN/TARGET`(×3·×5·×14) ·
+ *    `stockBandOf` · 700 적재 천장은 완성 글 재고를 성공으로 보던 옛 정본이다. 적재 상한은 이제
+ *    공급 러너의 JIT 수요(`judgeJitDemand`)가 `--up-to` 로만 준다. 이 수는 **적재 정합**에만 남는다.
+ */
 /** 🔴 러너가 먹는 판 — 사람 것과 기계 것 둘 다 */
 export const USABLE_PROMPT_VERSIONS: readonly string[] = [
   AUTOFILL_PROMPT_VERSION, MACHINE_PROMPT_VERSION,
@@ -270,10 +263,7 @@ export const USABLE_PROMPT_VERSIONS: readonly string[] = [
 
 export function readStock(rows: readonly (QueueProfileRow & {
   status: string; createdPostId: string | null
-})[],
-/** 🔴 capacity 프로필에서 만든 기준선. 주지 않으면 가장 안전한 값이다 */
-limits: StockLimits = SAFEST_STOCK_LIMITS,
-): { usable: number; level: StockLevel; shortfall: number; human: number; machine: number } {
+})[]): { usable: number; human: number; machine: number } {
   // 🔴 **promptVersion 만 보지 않는다.** 발행 러너가 인정하는 행만 재고다 —
   //    판만 맞고 접두나 게이트 기록이 어긋난 행은 넣어도 아무도 못 먹는다.
   const live = rows.filter((r) =>
@@ -282,19 +272,7 @@ limits: StockLimits = SAFEST_STOCK_LIMITS,
   const human = live.filter((r) => queueProfileOf(r) === 'human').length
   const machine = live.filter((r) => queueProfileOf(r) === 'machine').length
   const usable = human + machine
-  return { usable, ...stockBandOf(usable, limits), human, machine }
-}
-
-/**
- * 🔴 **경고선 · 부족분 판정 하나** (2026-09-26). 무엇을 넣을지는 부르는 쪽이 정한다 —
- *    발행 가능 재고를 재려면 **발행 러너 분류의 `publishableNow`** 를 넣는다.
- *    `readStock().usable` 은 형식이 맞는 행 수라 사람 검토 대기 기계 초안도 들어 있다.
- */
-export function stockBandOf(
-  n: number, limits: StockLimits = SAFEST_STOCK_LIMITS,
-): { level: StockLevel; shortfall: number } {
-  const level: StockLevel = n <= limits.warn ? 'critical' : n < limits.min ? 'low' : 'ok'
-  return { level, shortfall: Math.max(0, limits.target - n) }
+  return { usable, human, machine }
 }
 
 export type Candidate = {
@@ -331,6 +309,15 @@ export type Candidate = {
   leakedTokens?: string
   reviewedAt?: string
   provenanceNote?: string
+  /**
+   * 🔴 **원문 증거 재료** (2026-09-30 · source-evidence-v1) — 생성 봉투가 싣는다(`candidate-envelope`).
+   *    적재기는 이 값을 `gateResults.sourceEvidence` 로 **옮길 뿐** 판정하지 않는다. 없으면 모른다.
+   */
+  sourcePostedAt?: string
+  sourceListedAt?: string
+  sourceCapturedAt?: string
+  sourceResponse?: unknown
+  participationDriver?: string
 }
 
 /** 보류 목록 한 줄 — 사람이 "이건 지금 내지 말자" 고 정한 것 */
@@ -442,8 +429,6 @@ export type RefillInput = {
   existing: ReadonlySet<string>
   /** 형제 검사용 — 큐 전체 */
   queue: readonly QueueRow[]
-  /** 지금 재고 (readStock 결과) */
-  usable: number
 }
 
 /**
@@ -531,9 +516,6 @@ export function judgeApply(input: {
    *    🔴 `limit` 과 함께 주지 않는다 — 둘 중 하나만 쓴다.
    */
   upTo?: number | null
-  usable: number
-  /** 🔴 capacity 프로필의 재고 목표. 주지 않으면 가장 안전한 값 */
-  target?: number
 }): ApplyGate {
   if (!input.apply) return { ok: false, reason: 'dry-run — --apply 가 없다' }
   const upTo = input.upTo ?? null
@@ -546,19 +528,17 @@ export function judgeApply(input: {
     return { ok: false, reason: `${flag}=N 이 필요하다 (받은 값 ${asked ?? '없음'})` }
   }
   if (input.targets.length === 0) return { ok: false, reason: '보충할 후보가 0건이다' }
-  // 🔴 목표는 capacity 프로필에서 주입한다. 주지 않으면 가장 안전한 값이다
-  const target = input.target ?? STOCK_TARGET
-  const room = Math.max(0, target - input.usable)
-  if (room === 0) {
-    return { ok: false, reason: `재고가 이미 목표 ${target}건이다 (현재 ${input.usable}건)` }
-  }
-  const n = Math.min(asked, input.targets.length, room)
+  /**
+   * 🔴 **재고 목표로 여력을 다시 재지 않는다** (2026-09-30 · source-slot-v1). 앞판은 `target − 재고`
+   *    (capacity ×14 · 700)로 한 번 더 잘랐다 — 완성 글 재고가 공급을 정하는 두 번째 정본이었다.
+   *    상한은 부르는 쪽이 준 수 하나다(공급 러너는 JIT 수요로 `--up-to` 를 정한다).
+   */
+  const n = Math.min(asked, input.targets.length)
   // 🔴 `--limit` 은 **정확히** 그 수여야 한다. `--up-to` 는 상한이므로 부분 적재가 정상이다
   if (upTo === null && n < asked) {
     return {
       ok: false,
-      reason: `--limit ${asked} 을 채울 수 없다 — 후보 ${input.targets.length}건 · 남은 여력 ${room}건.`
-        + ' 잘라내지 않고 멈춘다',
+      reason: `--limit ${asked} 을 채울 수 없다 — 후보 ${input.targets.length}건. 잘라내지 않고 멈춘다`,
     }
   }
   if (n < 1) return { ok: false, reason: '보충할 후보가 0건이다' }
@@ -614,54 +594,34 @@ export type AutoJudgeProvenance = {
 }
 
 /**
- * 🔴 **원문 쪽 세 시각 — 적재가 쓸 값** (2026-09-17).
- *
- *    `sourcePostedAt` 은 **원문이 올라온 시각**이다. 사건·방송·발언 시각이 아니고,
- *    우리가 초안을 쓴 시각(`writtenAt`)도 아니다. 셋을 한 칸에 뭉치면
- *    "오래된 이슈를 오늘 다시 수집한 것" 과 "오늘 올라온 글" 을 구분할 수 없게 된다.
- *
- * 🔴 **`null` 은 "모른다" 다.** 읽을 수 없는 값을 지금 시각이나 `sourceCapturedAt` 으로
- *    메우지 않는다 — 그렇게 메우는 것이 지금 고치려는 결함 그 자체다.
- *
- * 🔴 **이 PR 은 이 값을 DB 에 쓰지 않는다. 활성 schema 에도 컬럼이 없다.**
- *
- *    초안은 `prisma/migrations-draft/0026_raw_content_source_times` 에 있다.
- *    schema 에 컬럼만 올리고 DB 에 적용하지 않으면 **`select` 없는 `create()` 가
- *    없는 컬럼을 RETURNING 하다가 죽는다** — 실측으로
- *    `scripts/micro-seed-import-82cook-live.mts` 의 두 곳이 그렇다.
- *    그래서 schema 변경·migration 적용·적재 연결을 **한 작업으로 묶어** 별도 PR 로 낸다.
- *
- * 🔴 그때까지 이 함수는 **파일에서 파일로** 흐르는 값을 읽는 순수 함수로만 쓰인다.
+ * 🔴 **원문 증거 재료 — 적재 러너가 목록 관측에서 모은다** (2026-09-30 · source-evidence-v1).
+ *    반복 관측과 원천 상대 스냅샷은 파일(목록 산출)에만 있다 — 이 순수 함수는 받은 것을 옮길 뿐이다.
+ *    주지 않으면 없다(빈 관측 · 스냅샷 null) — 판정 쪽이 모르는 것으로 읽는다.
  */
-export type QueueSourceTimes = {
-  sourcePostedAt: Date | null
-  sourceListedAt: Date | null
-  sourceCapturedAt: Date | null
-}
-
-/** 🔴 ISO 문자열 하나를 Date 로 — 빈 값도 못 읽는 값도 전부 `null`(모른다) 이다 */
-function isoOrNull(v: unknown): Date | null {
-  const s = typeof v === 'string' ? v.trim() : ''
-  if (s === '') return null
-  const d = new Date(s)
-  return Number.isNaN(d.getTime()) ? null : d
-}
+export type EvidenceMaterial = { observations: readonly SourceObservation[]; sourceStats: SourceStatsSnapshot | null }
 
 /**
- * 후보가 실어 온 세 시각을 적재용으로 읽는다 — 🔴 **순수 함수. 지어내지 않는다.**
- *
- * 🔴 `sourcePostedAt` 이 없다고 `sourceCapturedAt` 을 대신 쓰지 않는다.
- *    둘은 서로 다른 것을 뜻하고, 대신 쓰는 순간 **오래된 이슈 재수집**이
- *    **오늘 올라온 글**과 같아 보인다.
+ * 🔴 **후보 → 원문 증거 기록** — 옛 `queueSourceTimesOf`(검사만 부르던 죽은 순수 함수)를 대신한다.
+ *    · 게시 · 목록 · 수집 시각은 후보가 실어 온 그대로(서로 메우지 않는다)
+ *    · 초안 시각(`reviewedAt`)은 `draftedAt` 칸에만 — 신선도에 쓰지 않는다
+ *    · 원문 URL · 제목 · 닉네임은 싣지 않는다(원문 id 는 해시만)
  */
-export function queueSourceTimesOf(c: {
-  sourcePostedAt?: unknown; sourceListedAt?: unknown; sourceCapturedAt?: unknown
-}): QueueSourceTimes {
-  return {
-    sourcePostedAt: isoOrNull(c.sourcePostedAt),
-    sourceListedAt: isoOrNull(c.sourceListedAt),
-    sourceCapturedAt: isoOrNull(c.sourceCapturedAt),
-  }
+export function sourceEvidenceOf(c: Candidate, m: EvidenceMaterial | null): Record<string, unknown> {
+  const r = c.sourceResponse !== null && typeof c.sourceResponse === 'object' && !Array.isArray(c.sourceResponse)
+    ? c.sourceResponse as Record<string, unknown> : null
+  return buildSourceEvidence({
+    postedAt: c.sourcePostedAt, listedAt: c.sourceListedAt, capturedAt: c.sourceCapturedAt,
+    sourceSite: c.sourceSite, sourceArticleId: c.sourceArticleId,
+    artifactId: (c as unknown as Record<string, unknown>).artifactId,
+    dedupKey: `${S(c.sourceSite)}|${S(c.sourceArticleId)}`,
+    response: r === null ? null : {
+      views: r.views, comments: r.comments, listRank: r.listRank, listPage: r.listPage, observedAt: r.observedAt,
+    },
+    observations: m?.observations ?? [],
+    sourceStats: m?.sourceStats ?? null,
+    participationDriver: c.participationDriver,
+    draftedAt: c.reviewedAt,
+  }) as unknown as Record<string, unknown>
 }
 
 export function buildQueuePayload(input: {
@@ -671,6 +631,8 @@ export function buildQueuePayload(input: {
   autoJudge?: AutoJudgeProvenance
   /** 🔴 artifact 의 `review` 블록. 없으면 **재지 못한 것**으로 읽는다 */
   review?: unknown
+  /** 🔴 목록 관측에서 모은 증거 재료 — 없으면 null(모른다) */
+  evidence?: EvidenceMaterial | null
   now: string
 }): QueuePayload | null {
   const { envelope: env, candidate: c } = input
@@ -712,6 +674,12 @@ export function buildQueuePayload(input: {
          *    봉투는 위 `machineProfileMismatch` 에서 **같은지만** 봤다. 입력으로 바꿀 칸이 없다.
          */
         [QUALITY_CONTRACT_KEY]: currentQualityContract(),
+        /**
+         * 🔴 **원문 증거** (2026-09-30 · source-evidence-v1) — 선택기 · 발행 트랜잭션 · 단계 증거가
+         *    같은 판정(`judgeSlotRelease`)으로 읽는다. 앞판은 여기서 세 시각을 버렸고, 대신 `sourceCapturedAt`
+         *    칸에 초안 시각이 들어가 그것이 원문 나이처럼 쓰였다(A1 ⑦).
+         */
+        [SOURCE_EVIDENCE_KEY]: sourceEvidenceOf(c, input.evidence ?? null),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
           candidateType: S(c.candidateType),
@@ -774,6 +742,8 @@ export function buildQueuePayload(input: {
     model: AUTOFILL_MODEL,
     gateResults: {
       holds: [], blocks: [],
+      // 🔴 사람 후보도 같은 기록을 싣는다 — 재료가 없으면 모르는 기록이 되고 발행 판정이 unknown 으로 읽는다
+      [SOURCE_EVIDENCE_KEY]: sourceEvidenceOf(c, input.evidence ?? null),
       autofill: {
         note: '공급 자동 보충 — 사람이 고른 글이다. LLM 생성이 아니다',
         candidateType: type,

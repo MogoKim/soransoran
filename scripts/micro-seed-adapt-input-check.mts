@@ -24,7 +24,7 @@ import {
   SOURCE_AXIS,
 } from '../src/lib/micro-seed-82cook-thin-adapt'
 import {
-  planPending, planSourcePhase, planCommonPhase, runSourcePhase, judgeBuffer, adaptKeyOf,
+  planPending, planSourcePhase, planCommonPhase, runSourcePhase, judgeJitDemand, adaptKeyOf,
   type Pending,
 } from '../src/lib/supply-process'
 
@@ -190,7 +190,7 @@ console.log('\n⑦-b 🔴 **실제 오케스트레이터 경로** — planPendin
   check('thin + 두 산출물 → pending thin 0건', thinOf([THIN, D, R]).length === 0)
   check('thin + 두 산출물 → adapt 를 다시 걸지 않는다', !adaptPlanned([THIN, D, R]))
   check('🔴 두 산출물이 있으면 공통 judge·draft·fill 이 실제로 선다', (() => {
-    const stages = planCommonPhase(planPending([THIN, D, R]), judgeBuffer(24), GATE_READY).map((x) => x.stage)
+    const stages = planCommonPhase(planPending([THIN, D, R]), judgeJitDemand({ slots: 12, readyFilled: 0 }), GATE_READY).map((x) => x.stage)
     return stages.includes('judge') && stages.includes('draft') && stages.includes('fill')
   })())
   check('🔴 planPending 이 옛 한쪽 기준 정규식을 쓰지 않는다', (() => {
@@ -242,7 +242,7 @@ console.log('\n⑨ adapt 가 끝나면 공통 judge·draft·fill 계획이 선�
     candidates: ['auto-draft-A.candidates.json'],
   }
   // 🔴 재고가 버퍼 목표보다 적을 때만 모델·적재가 돈다 — 그 정본을 그대로 쓴다
-  const plan = planCommonPhase(pending, judgeBuffer(24), GATE_READY)
+  const plan = planCommonPhase(pending, judgeJitDemand({ slots: 12, readyFilled: 0 }), GATE_READY)
   const stages = plan.map((p) => p.stage)
   check('judge · draft · fill 순서로 선다',
     stages.includes('judge') && stages.includes('draft') && stages.includes('fill')

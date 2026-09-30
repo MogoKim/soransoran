@@ -59,7 +59,7 @@ export async function selectBundleRows(prisma: PrismaClient, now: Date): Promise
     .filter((r) => !inWindow.has(r.id))
     .filter((r) => eligibilityOf({
       gateVerdict: r.gateVerdict, gateResults: r.gateResults, title: r.editedTitle ?? r.draftTitle,
-      body: r.editedBody ?? r.draftBody, sourceCapturedAt: r.rawContent.sourceCapturedAt,
+      body: r.editedBody ?? r.draftBody,
     }).auto)
   return { cohort, window, decided, shadow }
 }

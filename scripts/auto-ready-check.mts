@@ -56,9 +56,8 @@ const gateWith = (sr: unknown, holds: string[] = []): Record<string, unknown> =>
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
   },
 })
-const CAP = new Date('2026-09-24T11:30:00Z')
 const elig = (gate: unknown, title = '평범한 하루 이야기', body = '아침에 산책을 다녀왔어요. 다들 어떻게 지내세요?') =>
-  eligibilityOf({ gateVerdict: 'PASS', gateResults: gate, title, body, sourceCapturedAt: CAP })
+  eligibilityOf({ gateVerdict: 'PASS', gateResults: gate, title, body })
 
 console.log('\n① 🔴 semanticReview 는 fail-closed 다 — "객체이기만 하면 통과" 가 아니다')
 {
@@ -137,7 +136,7 @@ console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지'
     },
     editDiff: null, declineReason: null,
     rawSourceSite: `${MACHINE_SITE_PREFIX}navercafe:x`, rawSourceArticleId: `${base}-deadbeef`,
-    sourceCapturedAt: CAP, matchedPersonaCode: null, ...o,
+    matchedPersonaCode: null, ...o,
   })
   const idx = (arts: ArtifactDoc[], cands: CandidateDoc[]) => ({
     a: new Map([[ART, arts]]), c: new Map([[ART, cands]]),
@@ -695,16 +694,16 @@ console.log('\n⑱ 🔴 🔴 공개 단계 천장 — 호출자 단계는 env �
   check('🔴 🔴 **release d10 · capacity d3 → d3 (capacity 가 천장)**', releaseStageCeiling(E('d10', 'd3'), T) === 'd3')
   check('release d5 · capacity d10 → d5', releaseStageCeiling(E('d5', 'd10'), T) === 'd5')
   check('🔴 모르는 값 → d1', releaseStageCeiling(E('d999', 'd10'), T) === 'd1')
-  check('🔴 🔴 **기간 허가(오늘 유효)는 release 위로 올리되 capacity 는 못 넘는다**',
-    releaseStageCeiling({ ...E('d1', 'd5'), SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd3'
-    && releaseStageCeiling({ ...E('d1', 'd3'), SORAN_RELEASE_WINDOW_STAGE: 'd5', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd3')
+  check('🔴 🔴 **(2026-09-30) 기간 · 시험 허가 env 는 천장을 올리지 않는다 — 단계 입력은 결정 하나**',
+    releaseStageCeiling({ ...E('d1', 'd5'), SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd1'
+    && releaseStageCeiling({ ...E('d1', 'd3'), SORAN_RELEASE_CANARY_STAGE: 'd3', SORAN_RELEASE_CANARY_DATE: '2026-09-25' }, T) === 'd1')
   check('🔴 🔴 **호출자 d10 · env 천장 d1 → d1**', boundedReleaseStage('d10', {}, T) === 'd1')
   check('호출자 d3 · env 천장 d10 → d3 (낮추는 것은 받는다)', boundedReleaseStage('d3', E('d10', 'd10'), T) === 'd3')
   check('🔴 호출자 값이 없거나 모르면 가장 안전한 d1', boundedReleaseStage(undefined, E('d10', 'd10'), T) === 'd1'
     && boundedReleaseStage(1e9, E('d10', 'd10'), T) === 'd1')
   const envs = [E(), E('d10', 'd3'), E('d5', 'd10'), E('d3', 'd3'), E('d10', 'd10'), E('x', 'd5')]
   check('🔴 🔴 **정본 resolveScale 이 낸 단계는 언제나 천장 이하다**',
-    envs.every((e) => { const r = resolveScale(e, {}).releaseStage; return boundedReleaseStage(r, e, T) === r }))
+    envs.every((e) => { const r = resolveScale(e).releaseStage; return boundedReleaseStage(r, e, T) === r }))
 }
 
 console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안 슬롯 재계산 (2026-09-26 마스터 P0)')

@@ -306,7 +306,7 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
     const bad = { ...c, voiceProvenance: undefined }
     const plan = planRefill({
       envelope: MACHINE_ENV, candidates: [bad as never],
-      existing: new Set(), held: [], queue: [], usable: 0,
+      existing: new Set(), held: [], queue: [],
     })
     return plan.targets.length === 0 && plan.skipped[0]?.code === 'PROFILE'
   })())
@@ -315,7 +315,7 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
     const bad = { ...c, voiceProvenance: { personaCode: '', comments: 1, bundleDigest: 'x' } }
     const plan = planRefill({
       envelope: MACHINE_ENV, candidates: [bad as never],
-      existing: new Set(), held: [], queue: [], usable: 0,
+      existing: new Set(), held: [], queue: [],
     })
     return plan.targets.length === 0 && plan.skipped[0]?.code === 'PROFILE'
   })())

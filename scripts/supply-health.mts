@@ -30,18 +30,15 @@ import {
   staleAfterFromSlots,
   PUBLISH_GRACE_MS, type Finding, type HealthReport, type LogFacts,
 } from '../src/lib/supply-health'
-import { STOCK_TARGET, readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
+import { readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
 import { LOCK_FILE, LOCK_TTL_MS, RUN_FILE_RE, adaptKeyOf } from '../src/lib/supply-process'
 // 🔴 완료 판정은 러너·어댑터와 **같은 함수**를 쓴다. 여기서 정규식을 다시 쓰지 않는다
 import { completedAdaptKeys } from '../src/lib/micro-seed-82cook-thin-adapt'
 /** 🔴 잠금 판정 정본 하나 — 관제도 러너와 같은 함수로 본다 */
 import { lockAnomaly as processLockAnomaly } from './lib/collect-lock.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
-// 🔴 말투·profile 의 정본 — 러너와 같은 함수를 쓴다
-import { voiceInputOf } from '../src/lib/original-post-auto-publish'
-import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
-import { PROFILES, RUNTIME_PROFILES, derive as deriveProfile, effectiveWeeklyCap, minuteOfDay, slotLabel } from '../src/lib/scale-profile'
-import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } from '../src/lib/scale-readiness'
+import { describeScale } from '../src/lib/scale-runtime'
+import { minuteOfDay, slotLabel } from '../src/lib/scale-profile'
 import { SOURCE_FACTS, THIN_82COOK_SLOTS, planSlots, type SourceId, type Phase } from '../src/lib/collect-schedule'
 
 /** 🔴 지금 운영 중인 단계. 시각 정본이 단계별 표를 갖고 있으므로 어느 단계인지 한 번만 적는다 */
@@ -54,14 +51,10 @@ import { guardPath, kstDayOf } from './lib/collect-guard-store.mjs'
 import { planSupply, collectReadiness } from '../src/lib/scale-supply-plan'
 import { currentCapacity, preparedCapacity, describeInventory } from '../src/lib/collect-inventory'
 import { observeJobsSafe } from './lib/launchd-observe.mjs'
-import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
+import { describePrepared } from '../src/lib/supply-candidates'
 import { compareWorkflowSuperset } from '../src/lib/scale-workflow-render'
-import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
-import {
-  forecastPublishing, nextScheduleAt, capacityOf, personasNeededFor,
-  blockRatesByCombination, kstStamp, judgeCapacity,
-  type PersonaHistory,
-} from '../src/lib/supply-capacity-forecast'
+import { nextScheduleAt, kstStamp } from '../src/lib/supply-capacity-forecast'
+import { loadStockClassification, describeStockClassification, jitCoverageOf } from './lib/publishable-stock.mjs'
 import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
 import { kstDayStart } from '../src/lib/persona-cap'
 // 🔴 3축 판정은 정본 게이트 함수가 한다 (노출 게이트 C-2 · C-4)
@@ -456,148 +449,24 @@ async function main(): Promise<void> {
   }).length
   const historicUnknownProfile = noProfile.length - legacyPublishedToday
 
-  // 🔴 발행 판정도 규모 확정 뒤로 미룬다 — 상한이 release 프로필에서 나온다
-
-  // ── ③-b 발행 여력 — 🔴 재고가 있어도 사람이 없으면 나가지 못한다 ──
-  //    러너와 **같은 함수**를 날짜만 밀어 가며 부른다. 새 판정을 만들지 않는다.
-  const queueRows = await prisma.originalPostApprovalQueue.findMany({
-    where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
-    select: {
-      id: true, status: true, createdPostId: true, gateVerdict: true, matchedAt: true,
-      draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-      promptVersion: true, model: true, matchedPersonaId: true, gateResults: true,
-      // 🔴 러너와 **같은 필드**를 읽는다 — compareAutoRow 가 decidedAt·createdAt 으로 정렬한다
-      decidedAt: true, createdAt: true,
-      // 🔴 freshness 근거도 러너와 같은 필드다. 없으면 나이를 모르므로 hold 로 간다
-      rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
-    },
-    orderBy: { createdAt: 'asc' },
-  })
-  // 🔴 queueId → 원문 확인 시각. 러너의 `capturedAtOf` 와 같은 값이다
-  const capturedAtOfHealth = new Map<string, Date | null>(
-    queueRows.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]),
-  )
-  // 🔴 legacy 를 여기서 뺀다 — selectAutoTargets 가 발행 러너와 같은 기준으로 거른다
-  const { targets: autoTargets } = selectAutoTargets(
-    queueRows.map((r) => ({
-      id: r.id, status: r.status, createdPostId: r.createdPostId,
-      gateVerdict: r.gateVerdict, matchedAt: r.matchedAt,
-      title: S(r.editedTitle) !== '' ? S(r.editedTitle) : S(r.draftTitle),
-      body: S(r.editedBody) !== '' ? S(r.editedBody) : S(r.draftBody),
-      promptVersion: r.promptVersion, model: r.model,
-      matchedPersonaId: r.matchedPersonaId, gateResults: r.gateResults,
-      decidedAt: r.decidedAt, createdAt: r.createdAt,
-      sourceSite: r.rawContent?.sourceSite ?? '',
-    })) as never,
-    (t: string, b: string) => safetyFilter({ title: t, body: b }).verdict,
-  )
-
-  const personaRows = await prisma.persona.findMany({
-    where: { status: 'active' },
-    select: {
-      id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-      user: { select: { providerId: true, _count: { select: { accounts: true } } } },
-    },
-  })
-  const history: PersonaHistory[] = []
-  const personas = []
-  for (const r of personaRows) {
-    const id = (r.identity ?? {}) as Record<string, unknown>
-    const vc = (r.voiceCore ?? {}) as Record<string, unknown>
-    const past = await prisma.originalPostApprovalQueue.findMany({
-      where: { matchedPersona: { code: r.code }, NOT: { matchedAt: null } },
-      select: { matchedAt: true },
-    })
-    const ats = past.map((x) => x.matchedAt as Date)
-    history.push({ code: r.code, matchedAts: ats })
-    // 🔴 매칭률 집계는 **지금 시점의 실제 여력**으로 봐야 한다.
-    //    0 으로 넣으면 WEEKLY_CAP·TOO_SOON 이 한 번도 안 잡혀 생활사 비율이 100% 로 왜곡된다.
-    const weekAgoNow = new Date(now.getTime() - 7 * 86_400_000)
-    const usedNow = ats.filter((d) => d.getTime() >= weekAgoNow.getTime()).length
-    const lastNow = ats.length === 0 ? null : ats.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
-    personas.push({
-      code: r.code, status: r.status, providerId: r.user?.providerId ?? null,
-    // 🔴 실회원 판별 정본. 넘기지 않으면 hardFilter 가 fail-closed 로 막는다
-    accountCount: r.user?._count.accounts ?? null,
-      ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
-      maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
-      // 🔴 auto-publish 와 **같은 필드**를 넘긴다 — 빠지면 전원 무자녀로 판정된다 (#468)
-      childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
-      ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),
-      parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
-      menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
-      workStatus: null, economicStatus: null, region: null,
-      noGoTopics: r.noGoTopics,
-      voiceLength: typeof vc.length === 'string' ? vc.length : null,
-      postsThisWeek: usedNow,
-      daysSinceLastPost: lastNow === null ? null
-        : Math.floor((now.getTime() - lastNow.getTime()) / 86_400_000),
-    })
-  }
-
-  // 🔴 **이미 배정된 행은 기존 배정이 정본이다** — 러너와 같아야 한다.
-  //    이것을 넘기지 않으면 예측이 그 행을 새로 매칭해 **다른 사람**에게 주고,
-  //    화면이 보여준 필자와 실제로 나갈 필자가 달라진다.
-  //    배정된 persona 를 못 찾으면 빈 값이 아니라 **모르는 코드**를 넘긴다 —
-  //    forecast 가 fail-closed(RECOVERY_BROKEN)로 잡아야 하기 때문이다
-  const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
   /**
-   * 🔴 **러너와 같은 준비 함수를 부른다** (2026-09-08).
-   *
-   *    예전에는 여기서 필터 전 Queue 를 그대로 세어 재고·예측·준비도를 냈다.
-   *    러너만 freshness hold 를 적용하니 화면이 READY 라 적은 날 실제 발행이 모자랐다.
-   *    자동 대상 id · hold 사유 · 순서가 이제 러너와 **글자 그대로 같다**.
+   * ── ③-b 🔴 **발행 러너와 같은 조립 · 같은 판정** (2026-09-30 · source-slot-v1) ──
+   *    앞판은 여기서 Queue · Persona 를 **따로** 조립했다(`matchedAt` 이력 · workStatus 등 null · window 무시) —
+   *    러너와 다른 입력으로 재고(21) · 예측(14일) · 필요 인원 · 14일 준비도를 따로 판정했다(A2 P5 · 2.2).
+   *    🔴 이제 **러너와 같은 함수**(`loadStockClassification` → 정본 `judgeSlotRelease` · `planPublishBatch`)와
+   *       **공급 러너와 같은 JIT 수요**(`jitCoverageOf`)만 보여 준다. 여기서 판정을 새로 만들지 않는다.
+   *    🔴 지운 옛 화면: `forecastPublishing` 14일 예측 · `judgeCapacity` · `personasNeededFor` · `simulateAllStages`
+   *       14일 준비도 · 승격 표(`promotionPlan`) · 재고 눈금(capacity ×14 · ×5 · ×3).
    */
-  const queueCandidates: QueueCandidate[] = autoTargets.map((t, i) => ({
-    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: i,
-    assignedPersonaCode: t.matchedPersonaId === null
-      ? null
-      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
-    // 🔴 나이를 굳히지 않는다 — 예측이 매일 다시 잰다
-    capturedAt: capturedAtOfHealth.get(t.id) ?? null,
-    // 🔴 러너와 **같은 함수**로 말투·profile 을 넣는다. 여기서 빠지면 관제가 다른 답을 낸다
-    ...voiceInputOf(t),
-  }))
-  const prepared = prepareCandidates({ candidates: queueCandidates, personas: personas as never, at: now })
-  /**
-   * 🔴 **예측에는 거르지 않은 후보를 넘긴다.** 예측기가 날짜마다 나이를 다시 재고
-   *    그날 hold 를 다시 판정한다 — 오늘 통과한 글이 8일 뒤에는 빠질 수 있다.
-   */
-  const forecastQueue = queueCandidates
-
-  /**
-   * ── ③-c 🔴 **규모를 여기서 확정한다.** 이 아래의 모든 판정이 이 값을 쓴다 ──
-   *
-   *    ① 지금 큐·지금 사람으로 각 단계가 14일을 버티는지 시뮬레이션하고
-   *    ② 그 판정을 넘겨 release 를 실제로 낮춘다.
-   *    🔴 준비도 지평은 **다음 KST 운영일 0시부터 완전한 하루 14일**이고 네 단계가 공유한다.
-   *       다음 발행 슬롯을 시작점으로 쓰면 오늘 낸 몫 위에 그 단계의 하루 상한이 통째로
-   *       다시 얹히고(d10 · 오늘 3건 → 오늘 13건), 단계마다 창이 달라 비교가 성립하지 않는다.
-   */
-  const scaleRows = simulateAllStages({
-    queue: forecastQueue, personas: personas as never, history,
-    // 🔴 러너와 **같은 시간축**이다 — 단계별 시작점은 lib 이 만든다
-    axis: { now, publishedToday: todayCount }, days: 14,
-  })
-  const resolved = installFromEnv(process.env, { readiness: scaleRows.map((x) => x.verdict) })
-  const capDerived = deriveProfile(resolved.capacityProfile)
-  /** 🔴 내부 공급 기준 — capacity 프로필 */
-  const CAPACITY_LIMITS = { warn: capDerived.stockWarn, min: capDerived.stockMin, target: capDerived.stockTarget }
-  /** 🔴 공개 발행 기준 — release 프로필 */
+  const view = await loadStockClassification(prisma, process.env, now)
+  const resolved = view.resolved.scale
+  const prepared = view.plan.prepared
+  const jit = jitCoverageOf(view, now)
   const RELEASE_DAILY_CAP = resolved.releaseProfile.dailyTarget
-  const RELEASE_CAPS = {
-    postsPerWeek: effectiveWeeklyCap(resolved.releaseProfile.postsPerWeek, resolved.releaseProfile.minDaysBetween),
-    minDaysBetween: resolved.releaseProfile.minDaysBetween,
-  }
+  const RELEASE_CAPS = view.resolved.caps
 
   /**
-   * 🔴 **오늘의 첫 발행 예정 시각 + 유예.** cron 은 정시에 돌지 않는다 —
-   *    유예 없이 경고하면 거짓 경보다.
-   *
-   * 🔴 **시각을 여기서 계산하지 않는다** (2026-09-12). 옛 판은 `dayStart + 5분` 이었다.
-   *    발행 슬롯을 댓글 운영 창 안으로 옮긴 뒤에도 관제는 00:05 를 기준으로 삼아,
-   *    d1 의 첫 슬롯이 09:30 인데 **01:05 부터 "오늘 발행 0건" 경고**가 떴다.
-   *    기준은 지금 적용된 profile 의 **가장 이른 슬롯**이다.
+   * 🔴 **오늘의 첫 발행 예정 시각 + 유예.** 기준은 지금 적용된 profile 의 **가장 이른 슬롯**이다.
    */
   const firstSlotMin = Math.min(
     ...resolved.releaseProfile.slots.map(minuteOfDay),
@@ -605,16 +474,16 @@ async function main(): Promise<void> {
   const scheduledPublishAt = new Date(dayStart.getTime() + firstSlotMin * 60_000)
   const graceUntil = new Date(scheduledPublishAt.getTime() + PUBLISH_GRACE_MS)
 
-  // ── ③-d 규모가 정해진 뒤에 판정한다 ──
-  const stock = readStock(mapped, CAPACITY_LIMITS)
+  // ── ③-d 판정 — 🔴 재고 눈금이 아니라 **다가오는 슬롯을 eligible READY 가 덮는가** 다 ──
+  const stock = readStock(mapped)
   const legacyExcluded = live.length - stock.usable
   const supply = judgeSupply({
-    usable: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
+    // 🔴 usable = 다가오는 슬롯 중 eligible READY 가 덮은 수 · 최소 = 목표 = 다가오는 슬롯 수(JIT)
+    usable: jit.readyFilled, human: stock.human, machine: stock.machine, legacyExcluded,
     pendingThin: pendingThinCount(), historicRawNoop: historicRawNoop(),
     runningCheckpoints: cp.running, failedCheckpoints: cp.failed,
     lock: lockState(now), lastSupplyOkAt: cp.lastOkAt, now, staleAfterMs: SUPPLY_STALE_MS,
-    // 🔴 capacity 기준이다 — 모듈 안전 상수를 운영 숫자로 다시 쓰지 않는다
-    stockMin: CAPACITY_LIMITS.min, stockTarget: CAPACITY_LIMITS.target,
+    stockMin: jit.slots, stockTarget: jit.slots,
   })
   const publish = judgePublish({
     todayCount, dailyCap: RELEASE_DAILY_CAP,
@@ -622,56 +491,17 @@ async function main(): Promise<void> {
     // 🔴 연결이 깨진 행만 CRITICAL 이다 — 숨겨진 글은 따로 센다
     mismatched: verdict.bad.length, hiddenPost: verdict.hiddenPost.length,
     legacyPublishedToday, historicUnknownProfile,
-    candidates: stock.usable, now,
+    candidates: view.classification.counts.publishableNow, now,
   })
-
-  // 🔴 다음 예약 — 지금 적용된 profile 의 **실제 다음 슬롯**이다.
-  //    오늘 상한을 채웠으면 내일 첫 슬롯, 아니면 오늘 남은 슬롯 중 첫 번째.
   const startAt = nextScheduleAt({ now, publishedToday: todayCount, profile: resolved.releaseProfile })
-  const fc = forecastPublishing({
-    queue: forecastQueue,
-    personas: personas as never, history, startAt, days: 14,
-    dailyCap: RELEASE_DAILY_CAP, caps: RELEASE_CAPS,
-  })
-
-  // 🔴 매칭률은 **조합 단위**로 센다 — 후보 × persona. 사유 개수가 아니다.
-  //    한 조합에 사유가 여러 개여도 한 번만 센다.
-  const blockedCombos: string[][] = []
-  {
-    const { planBatch } = await import('../src/lib/original-post-persona-match')
-    // 🔴 예측과 **같은 입력**이다. 여기서만 기존 배정을 빼면 두 수치가 갈린다
-    const b = planBatch(forecastQueue, personas as never, RELEASE_CAPS)
-    for (const a of b.assignments) {
-      for (const x of a.blocked) blockedCombos.push(x.reasons.map((r) => r.code))
-    }
-  }
-  const rates = blockRatesByCombination({
-    candidates: autoTargets.length, personas: personas.length, blockedCombos,
-  })
-  const cap = capacityOf({
-    activePersonas: personas.length, lifeBlockRate: rates.lifeRate, weeklyCap: RELEASE_CAPS.postsPerWeek,
-  })
-  const need = personasNeededFor({
-    targetPerDay: RELEASE_DAILY_CAP, lifeBlockRate: rates.lifeRate, activePersonas: personas.length,
-    weeklyCap: RELEASE_CAPS.postsPerWeek,
-  })
-  const capacity = judgeCapacity({
-    stockUsable: stock.usable, in7: fc.in7, nextWillPublish: fc.nextScheduleWillPublish,
-    nextCandidates: fc.nextPersonaCandidates.length, shortfallMin: need.shortfallMin,
-    dailyCap: RELEASE_DAILY_CAP,
-    // 🔴 기존 배정이 깨졌으면 이것 하나로 CRITICAL 이다 — 다른 수치는 의미를 잃는다
-    recoveryBroken: fc.recoveryBroken,
-  })
 
   await prisma.$disconnect()
 
-  const report: HealthReport = buildReport({ sources, supply, publish: [...publish, ...capacity] })
+  const report: HealthReport = buildReport({ sources, supply, publish })
 
   /**
-   * 🔴 규모 설정 — **한 번만 계산해 화면과 JSON 이 같은 객체를 읽는다** (2026-09-08).
-   *    설정(env)과 실제 달성 가능성이 어긋나면 여기서 감속 사유가 나온다.
+   * 🔴 규모 설정 — **한 번만 계산해 화면과 JSON 이 같은 객체를 읽는다.** 단계는 결정(env) 그대로다.
    */
-  // 🔴 규모는 위 ③-c 에서 이미 확정했다 — 여기서 다시 계산하지 않는다
   const scale = {
     capacityStage: resolved.capacityStage,
     releaseStage: resolved.releaseStage,
@@ -679,40 +509,16 @@ async function main(): Promise<void> {
     throttledByCapacity: resolved.throttledByCapacity,
     notes: resolved.notes,
     summary: describeScale(resolved),
-    throttledByReadiness: resolved.throttledByReadiness,
-    readinessApplied: resolved.readinessApplied,
-    /** 🔴 고른 단계가 실제로 달성 가능한가 — 화면 색은 이 값이 정한다 */
-    chosenReady: resolved.chosenReady,
-    /**
-     * 🔴 **내부 공급은 capacity, 공개 발행은 release.**
-     *    한 프로필로 둘을 다루면 `capacity=d10 · release=d1` 에서 재고 목표가 14가 된다.
-     */
-    capacity: {
-      stockTarget: CAPACITY_LIMITS.target, stockMin: CAPACITY_LIMITS.min, stockWarn: CAPACITY_LIMITS.warn,
-      internalDailyTarget: resolved.capacityProfile.dailyTarget,
-    },
     release: {
       dailyCap: RELEASE_DAILY_CAP,
       weeklyCap: RELEASE_CAPS.postsPerWeek,
       minDaysBetween: RELEASE_CAPS.minDaysBetween,
     },
-    // 🔴 설정과 러너 상수가 어긋났는가 — 어긋나면 화면이 말하는 값과 실제가 다르다
-    /**
-     * 🔴 설치된 release 와 **모듈 안전 상수**가 다른 것은 정상이다(주입이 그 일을 한다).
-     *    문제가 되는 것은 설치가 아예 일어나지 않은 경우다 — 그때는 `source` 가 default 다.
-     */
     configMismatch: resolved.source === 'default-safest'
       ? `규모 설정이 설치되지 않았다 — 안전 기본값(${DAILY_PUBLISH_CAP}/day)으로 돈다`
       : null,
     /**
-     * 🔴 **워크플로는 설계상 모든 단계의 합집합이다** (2026-09-21 실측 보정).
-     *
-     *    앞판은 **활성 단계 프로필**과 견줬다. 그런데 yml 은 단계마다 고쳐 배포하지
-     *    않으려고 합집합을 예약하고 **러너가 자기 슬롯인지 판정**한다 —
-     *    그래서 d1 에서 10개 중 9개가 "프로필에 없다" 로 잡혔다. **거짓 경보다.**
-     *
-     * 🔴 느슨해진 것이 아니다: 어느 단계 슬롯도 아닌 cron 과, 빠진 단계 슬롯은 여전히 잡는다.
-     *    yml 을 못 읽는 경우도 사유로 남긴다(조용히 통과시키지 않는다).
+     * 🔴 **워크플로는 설계상 모든 단계의 합집합이다** (2026-09-21 실측 보정) — 합집합과 견준다.
      */
     workflowMismatch: (() => {
       const f = join(process.cwd(), '.github/workflows/auto-publish.yml')
@@ -720,23 +526,6 @@ async function main(): Promise<void> {
       return compareWorkflowSuperset(readFileSync(f, 'utf-8')).map((m) => m.detail)
     })(),
     slots: resolved.releaseProfile.slots.map((x) => slotLabel(x)),
-    /** 🔴 무엇이 채워지면 올라가는가 — 감속 조건은 이 표의 뒤집음이다 */
-    promotion: promotionPlan(scaleRows),
-    highestReady: highestReady(scaleRows),
-    /** 🔴 네 단계가 **같은 창**을 봤는가 — 하나라도 다르면 단계 비교가 성립하지 않는다 */
-    horizon: {
-      startKst: kstStamp(scaleRows[0]!.sim.horizonStartAt),
-      days: scaleRows[0]!.sim.horizonDays,
-      mismatches: horizonMismatches(scaleRows),
-    },
-    stages: scaleRows.map(({ sim, verdict }) => ({
-      stage: sim.stage, dailyTarget: RUNTIME_PROFILES[sim.stage].dailyTarget,
-      in14: sim.in14, want14: sim.want14, gaps: sim.gaps, recoveryBroken: sim.recoveryBroken,
-      ready: verdict.ready, reasons: verdict.reasons,
-      personasNeededArithmetic: verdict.arithmeticPersonas,
-      // 🔴 준비도 창과 **다음 발행 슬롯은 다른 값**이다. 둘을 같이 보여 준다
-      nextSlotKst: kstStamp(sim.nextSlotAt),
-    })),
   }
 
   /**
@@ -811,47 +600,20 @@ async function main(): Promise<void> {
       scale,
       // 🔴 화면 ④-b 와 같은 객체다 — 보호장치 상태와 수집 준비도
       collect,
-      // 🔴 화면 ④-c 와 같은 값이다 — 러너가 세는 것과 같은 자동 대상·hold
+      // 🔴 화면 ④-c 와 같은 값이다 — 러너가 세는 것과 같은 자동 대상 · 판정 제외(source-slot-v1)
       candidates: {
         auto: prepared.auto.map((c) => c.queueId),
         held: prepared.held,
         summary: describePrepared(prepared),
       },
+      /** 🔴 공급 러너와 같은 JIT 수요 재료 — 다가오는 슬롯 · eligible READY 가 덮은 슬롯 */
+      jit: { ...jit, demand: Math.max(0, jit.slots - jit.readyFilled), nextScheduleAtKst: kstStamp(startAt) },
       numbers: {
-        stock: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
-        // 🔴 적용값이다 — 재고 목표는 capacity, 발행 상한은 release
-        target: CAPACITY_LIMITS.target, todayPublished: todayCount, dailyCap: RELEASE_DAILY_CAP,
+        formatRows: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
+        publishableNow: view.classification.counts.publishableNow,
+        todayPublished: todayCount, dailyCap: RELEASE_DAILY_CAP,
       },
-      // 🔴 화면과 같은 결과다 — 두 번 계산하지 않는다
-      capacity: {
-        nextScheduleAtKst: kstStamp(startAt),
-        nextQueueId: fc.nextQueueId,
-        nextPersonaCandidates: fc.nextPersonaCandidates,
-        nextScheduleWillPublish: fc.nextScheduleWillPublish,
-        in7: fc.in7, in14: fc.in14,
-        gapDates7: fc.gapDates7, gapDates14: fc.gapDates14,
-        nextBlockReason: fc.nextBlockReason,
-        days: fc.days.map((d) => ({
-          date: d.date,
-          // 🔴 배열이다 — dailyCap 이 2 이상이면 하루에 여러 건이 나간다
-          published: d.published,
-          blocked: d.blockedReason, blockedQueueId: d.blockedQueueId,
-          available: d.availableCodes,
-        })),
-        theoreticalPerWeek: cap.theoreticalPerWeek,
-        theoreticalPerDay: cap.theoreticalPerDay,
-        effectivePerDay: cap.effectivePerDay,
-        activePersonas: personas.length,
-        personasNeeded: { min: need.min, max: need.max },
-        shortfall: { min: need.shortfallMin, max: need.shortfallMax },
-        // 🔴 조합 단위 — 사유 개수가 아니다
-        combinations: {
-          total: rates.total, eligible: rates.eligible,
-          lifeBlocked: rates.lifeBlocked, capacityBlocked: rates.capacityBlocked,
-          lifeRate: rates.lifeRate, capacityRate: rates.capacityRate,
-        },
-        autoCandidates: autoTargets.length,
-      },
+      classification: view.classification.counts,
     }, null, 2))
     process.exit(report.exitCode)
   }
@@ -878,77 +640,22 @@ async function main(): Promise<void> {
   console.log('\n③ 발행')
   for (const x of report.publish) console.log(`   ${mark(x)} ${x.message}`)
 
-  console.log('\n③-b 발행 여력 (KST 기준)')
-  const REASON_LABEL: Record<string, string> = {
-    NONE: '', DAILY_CAP_DONE: '오늘 상한을 채웠다',
-    LIFE_BLOCKED: '🔴 생활사로 영구 매칭 불가 — persona 를 늘려야 풀린다',
-    CAPACITY_WAIT: '🟡 맞는 persona 는 있으나 cap·간격으로 일시 대기',
-    BATCH_EXHAUSTED: '🟡 배치 배정에서 여력이 소진됨',
-    NO_CANDIDATE: '🔴 후보가 없다',
-  }
+  console.log('\n③-b 다가오는 슬롯 (JIT — 공급 러너와 같은 함수)')
   console.log(`   다음 예약     ${kstStamp(startAt)}`)
-  console.log(`   다음 대상     ${fc.nextQueueId ?? '(없음)'}`)
-  console.log(`   배정 가능     ${fc.nextPersonaCandidates.length}명`
-    + `${fc.nextPersonaCandidates.length > 0 ? ` (${fc.nextPersonaCandidates.join(' ')})` : ''}`)
-  console.log(`   다음 예약 발행 ${fc.nextScheduleWillPublish ? '🟢 가능' : '🔴 불가'}`
-    + `${fc.nextScheduleWillPublish ? '' : ` — ${REASON_LABEL[fc.nextBlockReason] ?? fc.nextBlockReason}`}`)
-  console.log(`   향후 7일      ${fc.in7}건 · 공백 ${fc.gapDates7.length}일`
-    + `${fc.gapDates7.length > 0 ? ` (${fc.gapDates7.join(' ')})` : ''}`)
-  console.log(`   향후 14일     ${fc.in14}건`)
-  console.log(`   이론 capacity ${cap.theoreticalPerWeek}건/주 = ${cap.theoreticalPerDay.toFixed(2)}/day`
-    + ` · 실매칭 반영 ${cap.effectivePerDay.toFixed(2)}/day`)
-  console.log(`   목표 ${RELEASE_DAILY_CAP}/day 에 필요한 persona ${need.min}~${need.max}명`
-    + ` · 현재 ${personas.length}명 · 부족 ${need.shortfallMin}~${need.shortfallMax}명`)
-  console.log(`   매칭 조합     후보 ${autoTargets.length} × persona ${personas.length} = ${rates.total}개`)
-  console.log(`     가능        ${rates.eligible}개`)
-  console.log(`     생활사 영구  ${rates.lifeBlocked}개 (${(rates.lifeRate * 100).toFixed(1)}%)`)
-  console.log(`     cap·간격 임시 ${rates.capacityBlocked}개 (${(rates.capacityRate * 100).toFixed(1)}%)`)
-  console.log('   🔴 표본이 작다 — persona 권장 수는 범위로 읽는다')
-  for (const d of fc.days.slice(0, 7)) {
-    const who = d.published.length === 0 ? '—' : d.published.map((x) => x.persona).join(' ')
-    const why = d.published.length > 0 ? ''
-      : `  ${REASON_LABEL[d.blockedReason] ?? d.blockedReason}`
-        + `${d.blockedQueueId === null ? '' : ` (${d.blockedQueueId.slice(0, 12)})`}`
-    console.log(`     ${d.date}  ${who}${why}`)
-  }
+  console.log(`   다가오는 슬롯 ${jit.slots}개 (오늘 남은 + 다음 증명일 전체) · eligible READY 가 덮은 슬롯 ${jit.readyFilled}개`)
+  console.log(`   생성 수요     ${Math.max(0, jit.slots - jit.readyFilled)}건 — 🔴 완성 글 재고 목표(700 · ×14)는 없다`)
+  for (const line of describeStockClassification(view.classification)) console.log(`   ${line}`)
 
   // ── ④ 🔴 규모 설정 — JSON `scale` 과 **같은 객체**를 읽는다 ──
   console.log('\n④ 규모 설정')
   console.log(`   ${scale.summary} · 슬롯 ${scale.slots.join(' ')}`)
-  console.log(`   내부 공급(capacity ${scale.capacityStage})  재고 목표 ${scale.capacity.stockTarget}건`
-    + ` · 최소 ${scale.capacity.stockMin} · 경고 ${scale.capacity.stockWarn}`)
+  console.log(`   준비 단계(다음 증명 ${scale.capacityStage}) — 공급 수요(JIT) 눈금`)
   console.log(`   공개 발행(release ${scale.releaseStage})   일 ${scale.release.dailyCap}건`
     + ` · 주 ${scale.release.weeklyCap}건 · 최소 ${scale.release.minDaysBetween}일`)
   for (const n of scale.notes) console.log(`   · ${n}`)
   if (scale.configMismatch !== null) console.log(`   🔴 설정 불일치 — ${scale.configMismatch}`)
   for (const m of scale.workflowMismatch) console.log(`   🔴 워크플로우 불일치 — ${m}`)
-  for (const r of scale.stages) {
-    console.log(`   ${r.ready ? '🟢' : '🔴'} ${r.stage.padEnd(4)} ${String(r.dailyTarget).padStart(3)}/day`
-      + ` → 14일 ${r.in14}/${r.want14} · 공백 ${r.gaps}일`
-      + `${r.ready ? '' : `  ${r.reasons[0] ?? ''}`}`)
-  }
-  if (scale.throttledByReadiness) {
-    // 🔴 표시가 아니라 **실제로 적용된 값**이다 — 러너가 쓰는 상한이 아래 숫자다
-    console.log(`   🔴 자동 감속 적용됨 — 요청 ${scale.requestedRelease} → 실제 ${scale.releaseStage}`
-      + ` (공개 ${scale.release.dailyCap}건/day)`)
-  } else if (!scale.readinessApplied) {
-    console.log('   🟡 준비도 판정이 없어 감속이 적용되지 않았다')
-  } else if (!scale.chosenReady) {
-    // 🔴 더 내려갈 곳이 없어 감속은 안 됐지만 **그 단계도 미달**이다. 초록으로 쓰지 않는다
-    console.log(`   🔴 NOT_READY — ${scale.releaseStage} 를 유지하지만 그 단계도 지금 큐·인원으로는 미달이다`)
-  } else {
-    console.log(`   🟢 ${scale.releaseStage} 는 지금 큐·인원으로 달성 가능하다`)
-  }
-  console.log('   🔴 산술 인원은 참고값이다 — 판정은 위 14일 실측이 한다')
-  // 🔴 **승격·감속 조건** — 무엇을 채우면 올라가는지 숫자로 적는다
-  console.log(`   지금 올릴 수 있는 최고 단계: ${scale.highestReady ?? '없음'}`)
-  for (const pl of scale.promotion) {
-    if (pl.ready) { console.log(`     🟢 ${pl.stage.padEnd(4)} 승격 가능`); continue }
-    console.log(`     🔴 ${pl.stage.padEnd(4)} 승격 조건 — ${pl.missing.join(' · ')}`)
-  }
-  console.log('   🔴 감속 조건은 같은 표의 뒤집음이다 — ready 였던 단계가 아니게 되면 내려간다')
-  console.log(`   준비도 지평 ${scale.horizon.startKst} 부터 ${scale.horizon.days}일 — 네 단계가 같은 창을 본다`)
-  for (const m of scale.horizon.mismatches) console.log(`   🔴 지평 불일치 — ${m}`)
+  console.log('   🔴 단계는 StageDecision(consumer env) 그대로다 — 이 화면은 준비도로 단계를 다시 판정하지 않는다')
 
   // ── ④-b 🔴 수집 보호장치와 수집 준비도 — JSON `collect` 와 **같은 객체**를 읽는다 ──
   console.log('\n④-b 수집 보호장치 · 준비도')
@@ -983,11 +690,11 @@ async function main(): Promise<void> {
   console.log('   🔴 이론 최대가 아니라 성공률을 곱한 유효 처리량으로 판정한다')
   console.log('   🔴 템플릿이 있다는 것은 "준비" 다. "현재" 는 launchctl 에 올라온 것만 센다')
 
-  // ── ④-c 🔴 freshness — **러너·예측·준비도가 같은 목록을 센다** ──
-  console.log('\n④-c 발행 후보 준비 (러너와 같은 함수)')
+  // ── ④-c 🔴 공개 판정 — **러너와 같은 목록을 센다** ──
+  console.log('\n④-c 발행 후보 준비 (러너와 같은 함수 · source-slot-v1)')
   console.log(`   ${describePrepared(prepared)}`)
-  for (const h of prepared.held) console.log(`   ⏸️  ${h.queueId}  [${h.hold}] ${h.reason}`)
-  console.log('   🔴 hold 는 자동 발행에서만 빠진다 — 큐에 그대로 있고 삭제·재배정하지 않는다')
+  for (const h of prepared.held) console.log(`   ⌛ ${h.queueId}  [${h.hold}]${h.expires ? ' 만료 예정' : ''}`)
+  console.log('   🔴 제외 행은 사람이 살리는 칸이 아니다 — 발행 트랜잭션이 만나면 EXPIRED 로 옮긴다(일괄 정리는 계획만)')
 
   console.log(`\n⑤ 판정 ${report.level}${report.exitCode === 1 ? ' — exit 1' : ''}`)
   console.log('   🔴 CRITICAL 만 exit 1 이다. WARNING 은 사람이 보고 판단한다\n')

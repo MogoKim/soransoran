@@ -170,7 +170,15 @@ export function planOpenDays(input: {
   ) => string[]
   /** KST 날짜 문자열 */
   dateLabel: (at: Date) => string
+  /**
+   * 🔴 **그날 자리를 받을 수 있는 화자인가 — 주입한다** (PR2 KEEP · 2026-09-30).
+   *    말투 근거(reference)가 없는 화자는 기계 초안을 받을 수 없다. 그런데 "덜 쓴 사람 먼저" 규칙이
+   *    그들을 **먼저** 집어 하루 자리를 차지했다(진단 B: capacity d10 70칸 중 17칸 · P20~P25).
+   *    🔴 주지 않으면 앞판과 같다(전원). 누가 말투를 가졌는지는 여기서 판정하지 않는다 — 부르는 쪽이 넘긴다.
+   */
+  canTakeSlot?: (code: string) => boolean
 }): OpenDayPlan {
+  const canTake = input.canTakeSlot ?? ((): boolean => true)
   // 🔴 호출자의 배열을 바꾸지 않는다
   const hist = input.history.map((h) => ({ code: h.code, matchedAts: [...h.matchedAts] }))
   const openDays = new Map<string, number>()
@@ -181,7 +189,7 @@ export function planOpenDays(input: {
     const caps = { postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween }
     const picked: string[] = []
     for (let slot = 0; slot < p.dailyTarget; slot += 1) {
-      const free = input.availableAt(hist, at, caps).filter((c) => !picked.includes(c))
+      const free = input.availableAt(hist, at, caps).filter((c) => !picked.includes(c) && canTake(c))
       if (free.length === 0) break
       /**
        * 🔴 **덜 쓴 사람 먼저.** 코드순으로 집으면 앞자리 사람이 지평을 독식한다 —
@@ -198,4 +206,32 @@ export function planOpenDays(input: {
     byDate.push({ date: input.dateLabel(at), codes: picked })
   }
   return { openDays, byDate }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 WIP 칸 — 원천 가치가 사라진 행은 화자 칸을 막지 않는다 (PR2 KEEP · 2026-09-30)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **화자별 WIP 수 — 칸에서 뺄 행은 주입받는다.**
+ *
+ *    발행 분류는 사람 검토 대기(`humanReviewPending`) · 자동 READY 닫힘 행을 WIP 로 센다. 그러면 **원천 가치가
+ *    이미 사라져 자동으로는 영영 못 나가는 초안**이 그 화자의 칸을 영구히 막는다(진단 B: 말투 있는 18명 중 11명 여력 0).
+ *    🔴 이 함수는 가치를 판정하지 않는다 — "칸에서 뺄 행" 판정(`releasesSlot`)을 **입력으로 받을 뿐**이다.
+ *       정기 경로는 정본 `judgeSlotRelease` 가 만료 사유를 낸 행을 넘긴다. 주지 않으면 앞판과 같다(전부 점유).
+ *    🔴 화자를 모르는 행(`code: null`)은 누구의 칸도 막지 않는다 — 따로 센다.
+ */
+export function wipCountsBySpeaker(input: {
+  wip: readonly { id: string; code: string | null }[]
+  releasesSlot?: (id: string) => boolean
+}): { byCode: ReadonlyMap<string, number>; released: readonly string[]; unattributed: number } {
+  const byCode = new Map<string, number>()
+  const released: string[] = []
+  let unattributed = 0
+  for (const w of input.wip) {
+    if (input.releasesSlot?.(w.id) === true) { released.push(w.id); continue }
+    if (w.code === null || w.code.trim() === '') { unattributed += 1; continue }
+    byCode.set(w.code, (byCode.get(w.code) ?? 0) + 1)
+  }
+  return { byCode, released, unattributed }
 }

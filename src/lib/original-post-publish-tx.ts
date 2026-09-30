@@ -29,6 +29,13 @@
  *    그래서 같은 처방을 쓴다 — Serializable + 트랜잭션 안 재counting.
  *
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
+ *
+ * 🔴 **발행 직전 공개 가치를 다시 판정한다 — 자동 · 사람 레인 모두** (2026-09-30 · source-slot-v1).
+ *    선택기와 **같은 정본 함수**(`judgeSlotRelease`)를 **이 트랜잭션의 시계**로 부른다(슬롯 = 지금 공개 시각).
+ *    · eligible → 발행 · 같은 트랜잭션에서 Queue `gateResults.release` 도장(`source-slot-v1`)을 쓴다(단계 증거 조항 ⑦)
+ *    · 원천 가치가 사라졌거나 모른다 → **그 행을 EXPIRED 로 옮긴다**(기존 enum · 사유 코드 + 도장) — Post 0 · ActivityLog 0.
+ *      같은 CAS 로 쓴다(상태 · 미발행 · 결정자 · updatedAt). 부르는 쪽은 **같은 회차에서 다음 후보**로 교체한다.
+ *    🔴 이미 비용을 쓴 초안이라는 이유로 살리지 않는다(sunk-cost 구제 없음).
  */
 import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from './persona-for-match'
 import { profileOf, releaseCapsOf, type RuntimeStage } from './scale-profile'
@@ -37,6 +44,9 @@ import { judgeCatchUp, kstMinuteOfDay, PUBLISH_WINDOW_END_MINUTE } from './publi
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
 import { auditBlockInTx } from './auto-ready-audit-store'
+import {
+  judgeSlotRelease, releaseStampOf, RELEASE_STAMP_KEY, type ReleaseReason,
+} from './source-slot-release'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
@@ -72,6 +82,11 @@ export type PublishResult =
       publishedTodayInTx?: number
     }
   | { kind: 'blocked'; code: PublishBlockCode; detail: string; publishedTodayInTx?: number }
+  /**
+   * 🔴 **원천 가치가 사라져 만료했다** — 그 행만 EXPIRED 로 옮겼다(Post 0 · ActivityLog 0). 슬롯은 소비되지 않았다.
+   *    부르는 쪽은 같은 회차에서 다음 후보로 교체한다.
+   */
+  | { kind: 'expired'; queueId: string; reasons: ReleaseReason[]; publishedTodayInTx?: number }
   | { kind: 'error'; message: string }
 
 /**
@@ -197,7 +212,6 @@ async function publishAttempt(
           draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
           // 🔴 자동 도장 재검증용 — 누가 결정했고 무엇을 보고 찍었나
           decidedBy: true, editDiff: true, gateResults: true,
-          rawContent: { select: { sourceCapturedAt: true } },
           matchedPersona: {
             select: {
               id: true, code: true, status: true, userId: true,
@@ -223,7 +237,6 @@ async function publishAttempt(
           title: row.editedTitle ?? row.draftTitle,
           body: row.editedBody ?? row.draftBody,
           editDiff: row.editDiff, gateVerdict: row.gateVerdict, gateResults: row.gateResults,
-          sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
         })
         if (!recheck.ok) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason }
         /**
@@ -376,6 +389,32 @@ async function publishAttempt(
 
       const persona = personaRow!
 
+      /**
+       * ── ⓪-c 🔴 **공개 가치 재판정 — 정본 `judgeSlotRelease` · 트랜잭션 시계** (2026-09-30 · source-slot-v1) ──
+       *    hard gate(자동 행 재검증 · gate · 안전 · 중복 · 상한)와 배정은 위에서 이미 통과했다 — 그 결과를 넘긴다.
+       *    남은 질문은 하나다: **이 원천이 지금 이 공개 시각에도 대화할 가치가 있는가.**
+       *    아니거나 모르면 이 행을 EXPIRED 로 옮기고 끝낸다(Post · ActivityLog · 배정 쓰기 0). 부르는 쪽이 다음 후보로 교체한다.
+       */
+      const release = judgeSlotRelease({
+        gateResults: row.gateResults, slotAt: txNow, now: txNow,
+        hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: row.id,
+      })
+      const baseGate = row.gateResults !== null && typeof row.gateResults === 'object' && !Array.isArray(row.gateResults)
+        ? row.gateResults as Record<string, unknown> : {}
+      const stamped = { ...baseGate, [RELEASE_STAMP_KEY]: releaseStampOf(release) } as Prisma.InputJsonValue
+      if (release.verdict !== 'eligible') {
+        // 🔴 같은 CAS — 읽은 뒤 그 사이 누가 바꿨으면 0건이 되어 롤백한다(아무것도 남지 않는다)
+        const expired = await tx.originalPostApprovalQueue.updateMany({
+          where: {
+            id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null,
+            decidedBy: row.decidedBy, updatedAt: row.updatedAt,
+          },
+          data: { status: 'EXPIRED', declineReason: `RELEASE_EXPIRED:${release.reasons.join(',')}`, gateResults: stamped },
+        })
+        if (expired.count !== 1) throw new Error(QUEUE_RACE)
+        return { kind: 'expired', queueId: row.id, reasons: release.reasons, publishedTodayInTx }
+      }
+
       // ── ⓪-b 🔴 자동 행 배정 — 재검증·발행 판정을 모두 통과한 뒤, 같은 트랜잭션에서 ──
       if (pendingAssign) {
         const assigned = await tx.originalPostApprovalQueue.updateMany({
@@ -412,7 +451,8 @@ async function publishAttempt(
       const updated = await tx.originalPostApprovalQueue.updateMany({
         // 🔴 결정자도 읽은 그대로여야 한다 — 그 사이 도장이 바뀌었으면 0건이 되어 롤백한다
         where: { id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null, decidedBy: row.decidedBy },
-        data: { status: 'PUBLISHED', createdPostId: post.id },
+        // 🔴 release 도장 — 같은 트랜잭션에서 쓴다(단계 증거 조항 ⑦ 이 읽는다)
+        data: { status: 'PUBLISHED', createdPostId: post.id, gateResults: stamped },
       })
       if (updated.count === 0) throw new Error(QUEUE_RACE)
 

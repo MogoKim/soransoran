@@ -72,7 +72,7 @@ async function main(): Promise<void> {
        *    (`publish:machine-review` 와 같은 이유). DB 값은 참고로만 남긴다.
        */
       artifactSource: (() => { const ra = a === null ? null : readReviewArtifact(a); return ra === null ? null : sourceEvidenceOf(ra) })(),
-      source: { site: r.rawContent.sourceSite, articleId: r.rawContent.sourceArticleId, capturedAt: r.rawContent.sourceCapturedAt, dbRawTitle: r.rawContent.rawTitle, dbRawBody: r.rawContent.rawBody },
+      source: { site: r.rawContent.sourceSite, articleId: r.rawContent.sourceArticleId, dbRawTitle: r.rawContent.rawTitle, dbRawBody: r.rawContent.rawBody },
       draft: { title: r.draftTitle, body: r.draftBody, titleDigest: digestOf(r.draftTitle), bodyDigest: digestOf(r.draftBody) },
       edit: r.editedTitle !== null || r.editedBody !== null
         ? { before: { title: r.draftTitle, body: r.draftBody }, after: { title: r.editedTitle, body: r.editedBody }, editDiff: r.editDiff } : null,

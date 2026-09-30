@@ -113,10 +113,10 @@ console.log('\n⑥ synthetic 행 — 원문이 아님을 표시한다')
   check('같은 글이면 같은 id, 다른 글이면 다른 id',
     syntheticArticleId('A1', '제목') === syntheticArticleId('A1', '제목')
     && syntheticArticleId('A1', '제목') !== syntheticArticleId('A1', '다른제목'))
-  check('reviewedAt 이 capturedAt 이 된다', p.capturedAt.toISOString().startsWith('2026-09-06'))
+  check('reviewedAt 이 draftedAt 이 된다 (원문 시각이 아니다 — 이름 정직화)', p.draftedAt.toISOString().startsWith('2026-09-06'))
   check('reviewedAt 이 깨져도 죽지 않는다',
     planEnqueue([cand({ reviewedAt: '깨진값' })], { all: false, existing: none })
-      .plan[0]!.capturedAt instanceof Date)
+      .plan[0]!.draftedAt instanceof Date)
 }
 
 console.log('\n⑦ 큐 필드 — 사람이 쓴 글임을 못박는다')

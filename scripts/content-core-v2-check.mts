@@ -46,7 +46,8 @@ import {
   exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
   materializePersonaAt, bandOfAge,
 } from '../src/lib/persona-birth-anchor'
-import { EMPTY_SOURCE_KEYS, selectWorkset, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX } from '../src/lib/supply-workset'
+import { EMPTY_SOURCE_KEYS, selectWorkset, preGenerationRelease, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX } from '../src/lib/supply-workset'
+import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import {
   resolveLoadBearing, ACTIVATED_AXES, loadBearingRequirements, checkLoadBearingPreserved,
 } from '../src/lib/content-core/load-bearing'
@@ -1658,6 +1659,8 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
    *      · **다음 회차 즉시 선택은 보장하지 않는다** — 신규가 자리를 채울 수 있다
    *      · `WORKSET_RETRY_RESERVE` 한 자리와 **오래 기다린 순** 정렬이 굶김을 막는다
    */
+  const NOW = new Date('2026-09-23T05:00:00Z')
+  // 🔴 (2026-09-30) 순서는 정본 rank(원천 상대 백분위)다 — 옛 댓글 수 순서를 백분위로 옮겨 싣는다
   const row = (id: string, comments: number) => ({
     sourceArticleId: id, sourceSite: 'navercafe:remonterrace',
     commentCount: comments, sourcePostedAt: '', sourceListedAt: '',
@@ -1665,15 +1668,16 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
       bodyHead: '주변에 물어보면 반반이더라고요. 다들 어떻게 하시는지 궁금해서 여쭤봐요.',
       bodyLength: 120, commentCount: comments,
       safetyVerdict: 'pass', access: 'ok', axis: SEED_AXIS } as never,
+    evidence: fakeSourceEvidence(NOW, { id, commentsPct: comments / 100 }),
   })
-  const NOW = new Date('2026-09-23T05:00:00Z')
+  const releaseOf = (r: Parameters<typeof preGenerationRelease>[0]) => preGenerationRelease(r, NOW, NOW)
   const ago = (h: number) => NOW.getTime() - h * 3600e3
   const plan = (limit: number, attempted: Map<string, { atMs: number }>, fresh: string[]) =>
     selectWorkset({
       rows: [...fresh.map((f, i) => row(f, 50 - i)), ...[...attempted.keys()].map((k, i) => row(k, 40 - i))],
       humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
       concluded: new Set<string>(), attempted: attempted as never,
-      limit, runId: 'r1', takenAt: NOW,
+      releaseOf, limit, runId: 'r1', takenAt: NOW,
     })
 
   const att = new Map([['old-1', { atMs: ago(30) }], ['old-2', { atMs: ago(5) }]])
@@ -1698,7 +1702,7 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
       rows: [row('done-1', 99), row('new-1', 10)],
       humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
       concluded: new Set(['done-1']), attempted: new Map() as never,
-      limit: 5, runId: 'r1', takenAt: NOW,
+      releaseOf, limit: 5, runId: 'r1', takenAt: NOW,
     })
     return !p2.workset.sourceIds.includes('done-1')
   })())
@@ -3103,18 +3107,21 @@ console.log('\n🔴 🔴 **terminal 이 reason-aware 다 — 고칠 수 있는 �
     && artifactRetryable(rev('deterministicFailed')) === false)
 
   // 🔴 실제 사슬 — `selectWorkset` 이 그 원천을 다시 볼 수 있는가
+  const AT = new Date('2026-09-23T05:00:00Z')
   const row = (id: string, c: number) => ({
     sourceArticleId: id, sourceSite: 'navercafe:remonterrace', commentCount: c,
     sourcePostedAt: '', sourceListedAt: '',
     input: { sourceArticleId: id, title: `요즘 김치 담그기 어떠신가요 ${id}`,
       bodyHead: '주변에 물어보면 반반이더라고요. 다들 어떻게 하시는지 궁금해서 여쭤봐요.',
       bodyLength: 120, commentCount: c, safetyVerdict: 'pass', access: 'ok', axis: SEED_AXIS } as never,
+    evidence: fakeSourceEvidence(AT, { id, commentsPct: c / 100 }),
   })
   const pick = (concluded: string[]) => selectWorkset({
     rows: [row('transform-fail', 50), row('new-1', 10)],
     humanDecided: new Set<string>(), queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
     concluded: new Set(concluded), attempted: new Map() as never,
-    limit: 5, runId: 'r1', takenAt: new Date('2026-09-23T05:00:00Z'),
+    releaseOf: (r) => preGenerationRelease(r, AT, AT),
+    limit: 5, runId: 'r1', takenAt: AT,
   }).workset.sourceIds
   check('🔴 🔴 **변환 실패 원천은 `concluded` 에 들어가지 않아 다시 뽑힐 수 있다**',
     pick([]).includes('transform-fail'))

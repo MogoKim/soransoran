@@ -15,7 +15,8 @@ import {
 } from '../../src/lib/original-post-auto-publish'
 // 🔴 사람 검토 요구 스위치의 정본은 생성 쪽이다 — 여기서 다시 정하지 않는다
 import { MACHINE_AGE_HUMAN_REVIEW_REQUIRED } from '../../src/lib/micro-seed-auto-draft'
-import { classifyTopic, freshnessOf, isAutoPublishable } from '../../src/lib/supply-freshness'
+/** 🔴 공개 가치 판정 정본 — 러너 · 트랜잭션 · 공급과 같은 함수(2026-09-30 · 옛 F2 복제 신선도 삭제) */
+import { judgeSlotRelease } from '../../src/lib/source-slot-release'
 import {
   funnelFromRows, judgeFunnelRows,
   type FunnelRead, type FunnelSets, type QueuePostLink,
@@ -35,16 +36,12 @@ export type StockRepo = {
   activePersonas: () => Promise<number>
 }
 
-export type QueueRowFacts = AutoRow & {
-  /** 원천을 우리가 본 시각 — freshness 판정 입력 */
-  sourceCapturedAt: Date | null
-  /** 신선도 판정에 쓰는 문안 */
-  freshTitle: string
-  freshBody: string
-}
-
-const dayAge = (from: Date | null, now: Date): number | null =>
-  from === null ? null : Math.floor((now.getTime() - from.getTime()) / 86_400_000)
+/**
+ * 🔴 큐 한 줄 — 원문 증거는 `gateResults.sourceEvidence` 에 있다(AutoRow 가 이미 싣는다).
+ *    🔴 `sourceCapturedAt`(초안 시각) · 원문 제목 · 본문을 싣지 않는다 — 옛 복제 신선도(`dayAge` floor 일 ·
+ *       키워드 현재성 분기)의 입력이었다.
+ */
+export type QueueRowFacts = AutoRow
 
 /**
  * 🔴 **한 행 집합에 단계별 selector 를 적용한다.** 각 단계는 앞 단계의 부분집합이다 —
@@ -91,11 +88,11 @@ export async function readStockFunnel(input: {
     !(MACHINE_AGE_HUMAN_REVIEW_REQUIRED && profileOf(r) === 'machine')
     || machineReviewedByHuman(r.decidedBy))
 
-  // ⑤ TTL — 🔴 정본 freshness 로 판정한다
-  const fresh = humanReviewed.filter((r) => isAutoPublishable(freshnessOf({
-    ageDays: dayAge(r.sourceCapturedAt, input.now),
-    topic: classifyTopic(r.freshTitle, r.freshBody),
-  })))
+  // ⑤ 공개 가치 — 🔴 정본 `judgeSlotRelease`(지금 슬롯 · 배정은 러너가 본다)
+  const fresh = humanReviewed.filter((r) => judgeSlotRelease({
+    gateResults: r.gateResults, slotAt: input.now, now: input.now,
+    hardGates: { ok: true, codes: [] }, assignment: 'pending', tieBreak: r.id,
+  }).verdict === 'eligible')
 
   // ⑥⑦ Persona 배정·지금 발행 가능 — 🔴 발행기 정본이 고른다
   const select = input.selectTargets ?? selectAutoTargets

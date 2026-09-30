@@ -36,6 +36,10 @@ export type CafeRow = {
   sourcePostedAt?: unknown
   sourceListedAt?: unknown
   sourceCapturedAt?: unknown
+  /** 🔴 목록에서 본 반응 — 수집기(`buildCollected`)가 이미 들고 있다. 얇은 행으로 옮긴다 */
+  sourceViewCount?: unknown
+  sourcePage?: unknown
+  sourceRankOnPage?: unknown
 }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
@@ -98,6 +102,11 @@ export function thinRowFromCollected(input: {
     sourceSite: S(c.sourceSite),
     // 🔴 여기가 빠져 있던 자리다 — 세 시각을 정본 helper 로 넘긴다
     times: sourceTimesOf(c),
+    /**
+     * 🔴 **조회수 · 목록 자리도 옮긴다** (2026-09-30 · source-evidence-v1). 앞판은 여기서 버렸다 —
+     *    원천 상대 반응을 잴 재료가 첫 변환에서 사라졌다(A1 ②).
+     */
+    response: { sourceViewCount: c.sourceViewCount, sourcePage: c.sourcePage, sourceRankOnPage: c.sourceRankOnPage },
   })
 }
 
