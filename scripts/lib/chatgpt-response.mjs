@@ -49,6 +49,24 @@ export function readConversationDom(doc) {
   const stop = all.some((e) => attr(e, 'data-testid') === 'stop-button'
     || (tag(e) === 'button' && STOP_LABELS.test(String(attr(e, 'aria-label') ?? '').trim())))
 
+  /**
+   * 🔴 **사용자 메시지의 글자만** — 화면 조작 요소의 글자는 뺀다 (2026-09-30 실측).
+   *    긴 메시지는 말풍선 끝에 `<span aria-hidden>…</span>` 과 "더 보기" 버튼(`data-thread-find-skip`)이 붙는다.
+   *    그 글자까지 읽으면 **우리가 보낸 바로 그 메시지**가 신원 대조에서 다른 글로 보인다.
+   *    `childNodes` 가 없는 트리(시험 골격)는 전체 글자를 쓴다 — 골격도 같은 요소를 넣어 이 분기를 시험한다.
+   */
+  const SKIP_IN_MESSAGE = (x) => tag(x) === 'button' || attr(x, 'aria-hidden') === 'true' || attr(x, 'data-thread-find-skip') !== null
+  const messageText = (x) => {
+    if (SKIP_IN_MESSAGE(x)) return ''
+    const nodes = x?.childNodes
+    if (!nodes) return text(x)
+    let out = ''
+    for (const n of Array.from(nodes)) {
+      if (n.nodeType === 3) out += String(n.textContent ?? '')
+      else if (n.nodeType === 1) out += messageText(n)
+    }
+    return out
+  }
   const readUnit = (e, role, id, source) => {
     const sub = within(e)
     /**
@@ -90,7 +108,7 @@ export function readConversationDom(doc) {
     })
     // 🔴 `text` 는 사용자 메시지의 신원 대조용이다 — 원고 후보로 쓰지 않는다
     const bubble = sub.find((x) => attr(x, 'data-user-message-bubble') === 'true')
-    return { id, role, source, candidates, text: role === 'user' ? text(bubble ?? e) : '', hasActions }
+    return { id, role, source, candidates, text: role === 'user' ? messageText(bubble ?? e) : '', hasActions }
   }
 
   const units = []
