@@ -25,6 +25,178 @@ const northStar = readFileSync(NORTH_STAR, 'utf8')
 const d100Goal = readFileSync(D100_GOAL, 'utf8')
 const current = readFileSync(CURRENT, 'utf8')
 
+/**
+ * 🔴 **역사 표시를 뺀 "지금 이렇다" 는 주장만 남긴다** (2026-09-30).
+ *
+ *    - 제목에 📜 가 붙은 절: 같은 수준 이상의 다음 제목 전까지 전부 역사다.
+ *    - 📜 · 취소선(~~) · `옛 경로` 가 있는 줄: 그 줄만 역사다.
+ *    - 코드 펜스 안의 `#` 은 제목이 아니다.
+ *
+ *    역사를 지우지 않으면서 옛 정책이 현재 문장으로 되살아나는 것을 잡으려면
+ *    "역사라고 밝힌 곳" 과 "주장" 을 먼저 갈라야 한다.
+ */
+function activeTextOf(body: string): string {
+  const out: string[] = []
+  let historyLevel: number | null = null
+  let fence = false
+  for (const line of body.split('\n')) {
+    if (/^\s*```/.test(line)) fence = !fence
+    const h = fence ? null : /^(#{1,6})\s/.exec(line)
+    if (h !== null) {
+      const level = h[1]!.length
+      if (historyLevel !== null && level <= historyLevel) historyLevel = null
+      if (historyLevel === null && line.includes('📜')) {
+        historyLevel = level
+        continue
+      }
+    }
+    if (historyLevel !== null) continue
+    if (line.includes('📜') || line.includes('~~') || line.includes('옛 경로')) continue
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
+/** `from` 이 처음 나오는 곳부터 그 뒤의 `to` 전까지 */
+function sectionIn(body: string, from: string, to: string): string {
+  const a = body.indexOf(from)
+  if (a < 0) return ''
+  const b = body.indexOf(to, a + from.length)
+  return body.slice(a, b < 0 ? body.length : b)
+}
+
+interface ForbiddenRule {
+  readonly label: string
+  readonly re: RegExp
+  /** 이 파일들에만 적용한다. 없으면 권위 문서 다섯 전부 */
+  readonly only?: readonly string[]
+}
+
+/**
+ * 🔴 **active 문서에 다시 들어오면 실패하는 옛 정책** (reconciliation 2026-09-30 §10).
+ *    부정문("~하지 않는다")은 걸리지 않게 긍정 서술형만 잡는다.
+ */
+const FORBIDDEN: readonly ForbiddenRule[] = [
+  {
+    label: 'capture·초안 시각을 원문 게시 시각처럼 쓰지 않는다',
+    re: /관측 시각 proxy|capture[- ]time proxy|(수집|capture|적재|초안|draft) 시각을 (원문 )?(게시|publication) 시각(으로|처럼|대신)|sourceCapturedAt[^\n]{0,30}(으로|로) (신선도|나이|freshness)를? (잰다|판정한다|쓴다)|(적재|초안|draft) 시각[^\n]{0,15}(신선도|나이)[^\n]{0,8}(잰다|판정한다)/,
+  },
+  {
+    label: '완성 글 700·2일치·14일치 재고를 성공 기준으로 쓰지 않는다',
+    re: /(700|이틀|2일|14일)\s*(치|편|건)?[^\n|]{0,20}(완성 글|재고|stock|inventory)|(재고|stock)[^\n|]{0,15}(700|2일치|14일치)/,
+  },
+  {
+    label: '사건별 신선도 분기·옛 초안 구제 경로를 두지 않는다',
+    re: /(명절|선거|방송|날씨|이벤트|사건)[^\n]{0,15}(신선도|freshness|TTL)[^\n]{0,15}(분기|예외|연장)(한다|을 둔다|를 둔다|을 만든다|를 만든다)|timely|evergreen|(옛|오래된|이미 만든|식은) (초안|draft|글)[^\n]{0,20}(구제한다|살린다|되살린다|재사용한다|내보낸다)|rescue/,
+  },
+  {
+    label: '사람이 env·stage 를 올리는 승격을 routine 으로 쓰지 않는다',
+    re: /SORAN_(RELEASE|CAPACITY)_STAGE\s*=\s*d\d+|로 올리는 절차|(사람|운영자|창업자)[이가]?[^\n]{0,20}(stage|단계|env|Variable)[^\n]{0,12}(올린다|바꾼다|승격한다)|(7|14|21)일 (연속|대기)[^\n]{0,10}(뒤|후)에? 승격/,
+  },
+  {
+    label: '별도 SEO 정보형 레인을 만들지 않는다',
+    re: /SEO Bulk|SEO100|SEO[^\n]{0,8}(레인|Lane|lane)[^\n]{0,20}(만든다|운영한다|추가한다|가동한다|착수한다|준비한다)/,
+  },
+  {
+    label: 'Persona 이름·active 행을 contract-valid 로 세지 않는다',
+    re: /(active|이름)[^\n]{0,20}(곧|=|→)\s*(계약 유효|contract-valid)(?![^\n]{0,20}(않|아니))|(active 행|active 수|이름 수)[^\n]{0,15}(계약 유효|contract-valid)[^\n]{0,6}(로|으로) (센다|본다)/,
+  },
+  {
+    label: '답글·대댓글을 영구 범위 밖으로 두지 않는다',
+    re: /(대댓글|답글|reply|replies)[^\n]{0,25}(범위 \*{0,2}아님|범위가 아니다|범위 밖|영구히 (하지 않는다|만들지 않는다)|out of scope)/,
+  },
+  {
+    label: 'Persona 사이 답글을 일괄 금지하지 않는다 (정본: 같은 reply-worthiness)',
+    re: /(Persona|페르소나|봇)\s*끼리[^\n]{0,30}(만들지 않|금지|하지 않|않고)|Persona-to-Persona[^\n]{0,30}(금지|prohibit|forbid)|(Persona|페르소나) (간|사이)의? (대화|답글|대댓글)[^\n]{0,10}(금지|하지 않)/,
+  },
+  {
+    label: '현재 SHA·PR 번호를 적지 않는다',
+    only: [NORTH_STAR, MASTER],
+    re: /`(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,12}`|`[0-9a-f]{40}`|(^|[\s(])#\d{3,4}\b|\bPR\s*#?\d{3,4}\b/,
+  },
+  {
+    label: '현재 DB 수를 적지 않는다',
+    only: [NORTH_STAR, MASTER],
+    re: /(현재|지금)[^\n|]{0,30}\b\d+\s*(건|명|행)(?![가-힣])|\|\s*(User \/ Account|PersonaAuditLog|현재 사용 가능 재고|현재 행 수)\s*\|/,
+  },
+  {
+    label: '단계 숫자·단계 상태를 적지 않는다',
+    only: [NORTH_STAR],
+    // 파일 이름(`…-d100-goal-canon.md`) 속 글자는 단계 주장이 아니다
+    re: /(?<![-\w])[Dd](1|3|5|10|20|30|50|100)\b|\bPASS\b|\/day/,
+  },
+  {
+    label: 'D100 canon 밖에 단계 표를 두지 않는다',
+    only: [NORTH_STAR, CURRENT, MASTER, INDEX],
+    re: /^\|\s*\*{0,2}[Dd](1|3|5|10|20|30|50|100)\*{0,2}\s*\|\s*\*{0,2}\d/,
+  },
+]
+
+/** 🔴 새 정책의 뼈대 — 빠지면 실패한다 (reconciliation 2026-09-30 §10 "Checks should also require") */
+function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
+  const out: Array<readonly [string, boolean]> = []
+  const AUTHORITY = [
+    'NORTH-STAR.md', '2026-09-21-d100-goal-canon.md', 'CURRENT-MILESTONE.md', 'MASTER-OPERATING-SYSTEM.md',
+  ]
+  // ① 권위 인덱스는 하나
+  const table = sectionIn(index, '## 권위 문서', '\n## ')
+  const listed = [...table.matchAll(/^\|\s*\d+\s*\|\s*`([^`]+\.md)`/gm)].map((m) => m[1])
+  out.push(['README 권위 표가 정확히 네 문서를 이 순서로 싣는다',
+    JSON.stringify(listed) === JSON.stringify(AUTHORITY)])
+  out.push(['README 가 자기를 권위 인덱스 하나라고 밝힌다', index.includes('이 README 가 권위 인덱스 하나다')])
+  for (const [file, body] of [[NORTH_STAR, northStar], [D100_GOAL, d100Goal], [CURRENT, current], [MASTER, master]] as const) {
+    out.push([`${file} 가 README 권위 지도를 가리킨다`, body.includes('(./README.md)')])
+  }
+  const rivals = readdirSync('docs/operations')
+    .filter((n) => n.endsWith('.md') && n !== 'README.md')
+    .filter((n) => readFileSync(join('docs/operations', n), 'utf8').includes('권위 인덱스 하나'))
+  out.push(['다른 문서가 권위 인덱스를 자처하지 않는다', rivals.length === 0])
+  // ② CURRENT-MILESTONE 은 as-of 시각을 가진다
+  out.push(['CURRENT-MILESTONE 이 as-of 시각을 KST 분 단위로 적는다',
+    /^> as-of: 20\d\d-\d\d-\d\d \d\d:\d\d KST$/m.test(current)])
+  // ③ 답글 안전 불변식
+  const invariants = ['자기 답글', '중복 답글', '고아 답글', '상한 없는 깊이', '두 화자 자동 루프',
+    '삭제·신고된 대상', '안전 우회', '예산 우회']
+  out.push(['canon 이 답글 안전 불변식 여덟 가지를 적는다', invariants.every((t) => d100Goal.includes(t))])
+  out.push(['canon 이 실회원·Persona 댓글에 같은 reply-worthiness 판정을 쓰고 실회원을 우선한다',
+    d100Goal.includes('같은 reply-worthiness 판정') && d100Goal.includes('실회원 대화가 우선한다')])
+  // ④ source-to-slot 판정과 용어
+  out.push(['canon 이 source-to-slot 판정 하나와 원문 증거 용어를 정의한다',
+    ['source-to-slot', '`sourcePostedAt`', '`sourceListedAt`', '`sourceCapturedAt`',
+      'capture 시각은 게시 시각을 대신하지 않는다', '판정 함수는 하나다', '발행 직전',
+      '`unknown` 은 공개 경로에 들어가지 않는다'].every((t) => d100Goal.includes(t))])
+  out.push(['canon 이 Persona 네 상태와 "이름·active 행은 용량이 아니다" 를 적는다',
+    ['designed', 'qualification-pending', 'contract-valid reserve', 'stage-active',
+      '이름이나 active 행은 용량이 아니다'].every((t) => d100Goal.includes(t))])
+  // ⑤ 새 정책마다 제거한 옛 경로
+  const legacy = sectionIn(d100Goal, '## 10. 제거·대체한 옛 경로', '\n### ')
+  const cells = legacy.split('\n')
+    .filter((l) => l.startsWith('| ') && !l.startsWith('| 새 정책') && !l.startsWith('|---'))
+    .map((l) => l.split('|').map((c) => c.trim()))
+  out.push(['제거한 옛 경로 표가 10행 이상이고 모든 행이 옛 경로를 적는다',
+    cells.length >= 10 && cells.every((c) => (c[2] ?? '').length >= 8)])
+  for (const p of ['source-to-slot 판정', '발행 직전 재판정', '판정 함수 하나', 'JIT 공급', '증명일 준비도',
+    '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계']) {
+    out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
+      cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
+  }
+  // ⑥ 문서별 역할
+  out.push(['NORTH-STAR 가 현재성과 이어지는 대화를 다시 올 이유로 적는다',
+    northStar.includes('**현재성.**') && northStar.includes('**이어지는 대화.**')])
+  out.push(['MASTER 가 자기를 기술 지도와 역사 증거로 한정한다',
+    master.includes('현재 운영 상태도, 현재 정책도 말하지 않는다')])
+  out.push(['MASTER 목표 루프 지도가 구현 상태를 주장하지 않는다고 밝힌다',
+    master.includes('### 3.1 목표 루프') && master.includes('이 지도는 목표 구조다')])
+  out.push(['MASTER DB 스냅샷(§6.3)은 역사 절 안에만 있다',
+    master.includes('### 6.3 DB 스냅샷') && !activeTextOf(master).includes('### 6.3 DB 스냅샷')])
+  out.push(['MASTER 완성 글 고정 재고선 절(§8.0-D100)은 역사 절 안에만 있다',
+    master.includes('### 8.0-D100') && !activeTextOf(master).includes('### 8.0-D100')])
+  out.push(['MASTER 30% ratio 기본 상한 문단은 역사 절 안에만 있다',
+    master.includes('Persona 댓글은 전체 댓글의 30% 이하를 기본 안전 상한으로 한다')
+    && !activeTextOf(master).includes('전체 댓글의 30% 이하를 기본 안전 상한')])
+  return out
+}
+
 let passed = 0
 let failed = 0
 
@@ -73,7 +245,7 @@ check('North Star가 원문의 참여 동력 보존과 억지 자극 금지를 �
   && northStar.includes('잔잔한 일상 원문은 잔잔한 글로 살아나도 된다')
   && northStar.includes('선정성을 억지로 넣는다'))
 check('D100 목표가 참여 신호를 사용하되 안전 검사를 우회하지 않는다',
-  d100Goal.includes('조회수·댓글 수·댓글 증가 속도·신선도')
+  d100Goal.includes('원천 상대 반응 증거')
   && d100Goal.includes('참여 신호는 안전·사실 검사를 우회하지 않는다'))
 check('D100 목표가 수동 물량을 단계 PASS에서 제외한다',
   d100Goal.includes('수동 물량은 성공이 아니다') && d100Goal.includes('commissioning'))
@@ -89,27 +261,27 @@ check('D100 목표가 단계 PASS 직후 다음 자동 canary를 연다',
   d100Goal.includes('같은 날 남은 유효 슬롯')
   && d100Goal.includes('다음 KST 운영일의 첫 유효 슬롯')
   && d100Goal.includes('사람이 env나 stage를 바꾸지 않는다'))
-check('D100 목표가 첫 canary 2일치와 지속 운영 14일치를 분리한다',
-  d100Goal.includes('첫 canary 재고는 목표 공개량의 **2일치**')
-  && d100Goal.includes('14일치 재고는 지속 운영 목표'))
-check('D100 목표와 현재 실행이 감사를 20% 표본 계약으로 고정한다',
+/**
+ * 🔴 2026-09-30: 첫 canary 2일치 · 지속 14일치 **완성 글 재고** 검사를 뒤집었다.
+ *    옛 판은 그 문구를 **강제**했다 — 검사가 폐기된 정책의 편에 서 있었다.
+ *    지금은 증명일 준비도와 지속 준비도를 따로 정의하고, 둘 다 완성 글 며칠 치로 재지 않는다.
+ */
+check('D100 목표가 증명일 준비도와 지속 준비도를 따로 정의한다',
+  /\*\*증명일 준비도\*\*:[^\n]*슬롯/.test(d100Goal)
+  && /\*\*지속 준비도\*\*:[^\n]*반복 관측/.test(d100Goal)
+  && d100Goal.includes('둘 다 완성 글을 며칠 치 쌓아 둔 양으로 증명하지 않는다'))
+check('D100 목표가 감사를 20% 표본 계약으로 고정한다',
   d100Goal.includes('ceil(자동 발행 N × 20%)')
-  && d100Goal.includes('전수 감사를 새 선행조건으로 만들지 않는다')
-  && current.includes('ceil(자동 발행 N × 20%)')
-  && current.includes('전수 감사를 새 선행조건으로 만들지 않는다'))
-check('현재 실행이 사람 승인 글을 자동 단계 목표에서 제외한다',
-  current.includes('사람 승인 글은 정상 발행할 수 있지만 자동 단계 목표 편수로 세지 않는다'))
-check('현재 실행이 M1 PASS와 M2 NOT PASS를 구분한다',
-  /\| M1 \|[^\n]*\*\*PASS\*\*/.test(current)
-  && /\| M2 \|[^\n]*\*\*NOT PASS\*\*/.test(current))
-check('현재 실행이 D20-D100 scheduler와 Persona 자동 확장을 빠뜨리지 않는다',
-  current.includes('generic D3~D100 scheduler')
-  && current.includes('부족 축 기반 자동 생성기')
-  && current.includes('D100 | 100 | 120 | 382 | 180 | **300+**'))
-check('현재 실행이 댓글을 첫 댓글 뒤 대화 확장까지 정의한다',
-  current.includes('## 7. 댓글과 대화 확장')
-  && current.includes('글 특성에 따라 총 1~5건')
-  && current.includes('reaction/best'))
+  && d100Goal.includes('전수 감사를 새 선행조건으로 만들지 않는다'))
+/** 🔴 CURRENT-MILESTONE 은 정책을 복제하지 않는다 — 상태와 다음 실행만 */
+check('현재 실행이 code / deployed / operating PASS 를 한 표의 세 칸으로 나눈다',
+  /^\| 축 \| code PASS \| deployed PASS \| operating PASS \|/m.test(current))
+check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있다',
+  current.includes('UNKNOWN') && current.includes('관측하지 않은 것을 PASS 로 쓰지 않는다'))
+check('현재 실행이 다음 critical path 를 표 하나로 적는다',
+  current.includes('## 4. 다음 critical path') && /^\| P0-1 \|/m.test(current))
+check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
+  current.includes('같은 reply-worthiness 판정') && current.includes('canon §5'))
 check('North Star가 재방문+글/댓글+고유 실사용자를 모두 요구한다',
   /최근 7일 안에 재방문했고 글 또는 댓글을 한 번 이상 남긴 고유 실사용자 수/.test(master))
 check('Persona를 North Star에서 제외한다', master.includes('Persona, 봇, 운영 계정은 제외한다'))
@@ -461,8 +633,13 @@ check('옛 생성기 오진을 정정한 채로 둔다',
   && !master.includes('옛 생성기는 근거를 그 Persona 가 과거에 쓴'))
 check('모델 비교가 합성 입력이었음을 명시한다',
   master.includes('합성 fixture') && master.includes('원문·닉네임·개인정보는 나가지 않았다'))
-check('Memory·대댓글이 이번 범위가 아님을 명시한다',
-  /Memory · 대댓글 \| 🔴 이번 범위 \*\*아님\*\*/.test(master))
+/**
+ * 🔴 2026-09-30: "대댓글은 이번 범위 아님" 은 **2026-09-10 당시 PR 범위**였다.
+ *    지금 대댓글은 canon §5 의 다음 제품 층이다. 그 줄은 역사 절(§9.4 📜) 안에만 남는다.
+ */
+check('Memory·대댓글 범위 제외는 역사 절 안에만 남는다',
+  /Memory · 대댓글 \| 🔴 이번 범위 \*\*아님\*\*/.test(master)
+  && !/Memory · 대댓글 \| 🔴 이번 범위/.test(activeTextOf(master)))
 /** 🔴 옛 수치가 "현재값" 으로 되살아나지 않게 한다 */
 for (const stale of ['댓글 0개 25/30', '댓글 15건, 고유 기여자']) {
   check(`옛 댓글 수치가 상단에 남아 있지 않다 — ${stale}`, !master.includes(stale))
@@ -523,9 +700,14 @@ check('🔴 Master 현재 병목에 workflow 1/10 슬롯이 남아 있지 않다
 check('🔴 현재 설정을 "저장된 d1" 이라고 오기하지 않는다',
   /`SORAN_CAPACITY_STAGE`\s*\|\s*🔴 \*\*Variable 없음\*\*/.test(master)
   && /`SORAN_RELEASE_STAGE`\s*\|\s*🔴 \*\*Variable 없음\*\*/.test(master))
-check('🔴 d3 전환 안내에 capacity 와 release 가 둘 다 있다', (() => {
+/**
+ * 🔴 2026-09-30: 사람이 env 를 올리는 d3 절차는 **역사**다(canon §6 자동 사다리).
+ *    기록은 남기되(당시 사고의 증거) 역사 절 밖에서 다시 절차로 읽히면 실패다.
+ */
+check('🔴 d3 수동 전환 절차는 역사 절 안에만 남는다', (() => {
   const m = /#### d3 로 올리는 절차[\s\S]*?(?=\n#{1,4} |$)/.exec(master)?.[0] ?? ''
   return m.includes('SORAN_CAPACITY_STAGE=d3') && m.includes('SORAN_RELEASE_STAGE=d3')
+    && !activeTextOf(master).includes('로 올리는 절차')
 })())
 
 const historicalDocs = [
@@ -960,25 +1142,38 @@ for (const f of ['AGENTS.md', 'CLAUDE.md']) {
 check('🔴 D100 정책 정본과 현재 구현 보고를 구분한다',
   d100Goal.includes('정책 목표는 이 문서가 정본')
   && d100Goal.includes('현재 구현과 운영이 정본에서 얼마나 떨어졌는지')
-  && current.includes('100글 + 100~500댓글')
-  && current.includes('1~5건'))
+  && d100Goal.includes('이 문서는 **현재 상태를 적지 않는다.**')
+  && /\| D100 \| 100 \| 120 \| 382 \| 180 \| \*\*300\+\*\* \| 100~500 \|/.test(d100Goal))
 
 /**
- * 🔴 **첫 canary 재고와 지속 운영 재고를 분리한다** (2026-09-29).
+ * ══ 🔴 하나의 루프 — 권위 문서 재정렬 (2026-09-30 창업자 재동기화) ══
  *
- *    옛 판은 14일 stock 하나만 두어 하루 canary까지 막았다. 첫 시험은 2일치,
- *    지속 운영은 코드의 14일 목표를 쓴다. 둘 중 하나를 지우거나 같은 gate로 합치면 안 된다.
+ *    옛 판(2026-09-29)은 "첫 canary 2일치 · 지속 14일치 완성 글 재고" 문구를 **강제**했다.
+ *    창업자가 그 정책을 폐기한 날, 문서를 사실대로 고치면 검사가 깨지는 구조였다 —
+ *    검사가 폐기된 정책의 편에 선 것이다. 그래서 방향을 뒤집는다:
+ *
+ *      ① 금지: active 문서에 옛 정책이 **다시 들어오면** 실패한다(아래 FORBIDDEN).
+ *      ② 요구: 새 정책의 뼈대가 **빠지면** 실패한다(아래 REQUIRED).
+ *
+ *    역사는 지우지 않는다. 📜 가 붙은 절(제목의 수준까지)과 줄, 취소선(~~) 줄,
+ *    `옛 경로` 라고 밝힌 줄은 역사 증거로 보고 ① 의 대상에서 뺀다.
+ *    그 표시 없이 옛 문구를 쓰면 그것은 "지금 이렇다" 는 주장이다.
  */
 {
-  const milestone = readFileSync('docs/operations/CURRENT-MILESTONE.md', 'utf-8')
-  check('🔴 첫 canary 는 2일치 publishable stock 을 쓴다',
-    milestone.includes('목표 공개량의 2일치 publishable stock'))
-  check('🔴 지속 운영은 14일치 stock 을 유지한다',
-    milestone.includes('14일치 stock'))
-  check('🔴 14일 재고 부족이 첫 시험을 막지 않는다고 적는다',
-    milestone.includes('D3 첫 시험을') && milestone.includes('일주일 멈추라는 명령이 아니다'))
-  check('🔴 정책과 현재 코드의 7/14/21일 충돌을 숨기지 않는다',
-    milestone.includes('7/14/21일') && milestone.includes('최신 창업자 계약과 충돌'))
+  console.log('\n── 하나의 루프 — 권위 문서 (2026-09-30)')
+  const ACTIVE: ReadonlyArray<readonly [string, string]> = [
+    [NORTH_STAR, northStar], [D100_GOAL, d100Goal], [CURRENT, current], [MASTER, master], [INDEX, index],
+  ]
+  for (const [file, body] of ACTIVE) {
+    const live = activeTextOf(body)
+    for (const rule of FORBIDDEN) {
+      if (rule.only !== undefined && !rule.only.includes(file)) continue
+      const hits = live.split('\n').filter((l) => rule.re.test(l))
+      check(`🔴 ${file}: ${rule.label}`, hits.length === 0)
+      for (const h of hits.slice(0, 3)) console.log(`     🔴 ${h.trim().slice(0, 120)}`)
+    }
+  }
+  for (const [label, ok] of REQUIRED()) check(`🟢 ${label}`, ok)
 }
 
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
