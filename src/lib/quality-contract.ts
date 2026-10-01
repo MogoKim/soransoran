@@ -70,8 +70,10 @@ import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } 
  * 🔴 `quality-v6` (2026-10-01) = **1인칭 만남·대화·들음도 생활사 주장이다**. 운영 자동 READY 감사 결함 yes 1건 —
  *    P04 · 자리 QUESTION · `selfBasis=null` 초안이 원문 글쓴이의 만남(`어제 60대 만났는데`)을 자기 만남
  *    (`어제 60대 분과 이야기를 나누다 들었는데요`)으로 옮겼고, 초안 게이트(B 는 가족·일 축만 셌다) · 의미 검수 · 도장이 모두 지나갔다.
- *    초안 게이트 `draft-gates-v6`(`unwarrantedSelfClaim` 의 만남 축 — 겪었다고 말하지 않는 자리는 원문에 있어도 확정 ·
- *    그 밖은 원천 대조) · 초안 프롬프트 `v2-draft-p9`. 열림 근거는 그대로 창업자 gold 재생이다.
+ *    초안 게이트 `draft-gates-v6.1`(`unwarrantedSelfClaim` 의 만남 축 — 원문에 만남이 있어도 Persona 경험이 아니다.
+ *    모든 자리에서 확정이고 `lifeFacts` 의 검증된 근거 문장이 그 만남을 직접 담을 때만 통과 · 관형어를 임자로 읽지 않는다) ·
+ *    초안 프롬프트 `v2-draft-p10`. 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v6 보정(같은 날)은 판 이름을 올리지 않고 digest 만 `--revise` 로 기록했다 — 운영 v6 행 0.
  *    🔴 v5 이하 행을 고치거나 지우거나 v6 으로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  */
 export const QUALITY_CONTRACT_VERSION = 'quality-v6'

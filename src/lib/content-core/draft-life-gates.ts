@@ -91,9 +91,10 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  */
 /**
  * 🔴 `draft-gates-v6` (2026-10-01 · quality-v6) — 1인칭 만남·대화·들음(`readSelfEncounters`)을 `unwarrantedSelfClaim` 이 센다.
- *    겪었다고 말하지 않는 자리(QUESTION · REFLECTION)는 원문에 있어도 확정 · 그 밖은 원천 대조(없으면 확정/사람 검토).
+ * 🔴 `draft-gates-v6.1` (같은 날 · quality-v6 보정 · 운영 v6 행 0) — 자리 · 원천 대조를 없앴다. 모든 자리에서 확정이고
+ *    `lifeFacts` 의 검증된 근거 문장이 그 만남을 직접 담을 때만 통과. 절 머리 주어 판정이 관형어(`아는 사람한테`)를 임자로 읽지 않는다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v6'
+export const DRAFT_GATE_VERSION = 'draft-gates-v6.1'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -152,11 +153,6 @@ export type DraftGatePlan = {
    */
   closingIntent?: string | null
   contentRoles?: readonly string[]
-  /**
-   * 🔴 (v6) 계획이 고른 자리(`STANCES`) — 1인칭 만남·대화·들음(`readSelfEncounters`)만 읽는다.
-   *    정본 `SpeakerPlan` · artifact `plan` 둘 다 이 칸을 가진다. 🔴 없으면 OBSERVATION 이 아닌 것으로 본다(막는 쪽).
-   */
-  stance?: string | null
 }
 
 /**
@@ -269,7 +265,7 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
   const life = input.card === null ? { hard: [], review: [] } : judgeLifeConsistency(input.title, input.body, input.plan, input.card)
   const ctx = judgeSourceContext(input.title, input.body, input.context)
   const basis = [
-    ...judgeNoLifeFactClaims(input.title, input.body, input.plan, input.context),
+    ...judgeNoLifeFactClaims(input.title, input.body, input.plan),
     ...judgeThinVent(input.title, input.body, input.plan),
   ]
   /**
@@ -315,8 +311,6 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
     const bad: { axis: string; clause: string }[] = claims
       .filter((c) => !WARRANT_OF[c.axis].some((f) => warranted.has(f)))
     bad.push(...readSelfFamilyLikeTopic(title, body).map((clause) => ({ axis: 'family', clause })))
-    // 🔴 (v6) 글쓴이가 누구를 만나·이야기하고·들은 일 — 자리가 겪었다고 말하지 않는 곳이거나 원천에 없는 만남
-    bad.push(...judgeSelfEncounters(title, body, input.plan, input.context).hard.map((clause) => ({ axis: 'encounter', clause })))
     if (bad.length > 0) {
       const axes = [...new Set(bad.map((c) => c.axis))]
       out.push({
@@ -324,6 +318,17 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
         detail: `${axes.join('·')} — ${[...new Set(bad.map((c) => c.clause))].slice(0, 3).join(' / ')}`,
       })
     }
+  }
+  /**
+   * 🔴 (v6) **1인칭 만남·대화·들음** — 계획의 1인칭 허가와 무관하게 본다. Persona 근거(검증된 근거 문장)가 그 만남을
+   *    직접 담지 않으면 확정이다(`judgeSelfEncounters`). 같은 코드(`unwarrantedSelfClaim`)로 낸다.
+   */
+  const meets = judgeSelfEncounters(title, body, input.plan)
+  if (meets.length > 0) {
+    const i = out.findIndex((f) => f.code === 'unwarrantedSelfClaim')
+    const d = `encounter — ${[...new Set(meets)].slice(0, 3).join(' / ')}`
+    if (i < 0) out.push({ code: 'unwarrantedSelfClaim', detail: d })
+    else out[i] = { code: 'unwarrantedSelfClaim', detail: `${out[i]!.detail} · ${d}` }
   }
 
   // ── C. 카드의 지금 삶 vs 초안의 시제 ──
@@ -463,12 +468,24 @@ const personIn = (w: string, m: string): boolean => {
 const otherIn = (w: string, counterpart: readonly string[]): boolean =>
   PERSON_WORDS.some((m) => personIn(w, m) && !counterpart.some((c) => c.includes(m) || w.includes(c)))
 
+/**
+ * 🔴 **관형어는 임자가 아니다** (v6 보정 · 2026-10-01). `아는 사람한테 들었는데` 의 `아는` 은 `은/는` 으로 끝나
+ *    주어 꼴로 읽혔고, 정본 표지(`OTHER_MARKERS` 의 `아는`)에 걸려 "남의 일" 이 됐다 — 1인칭 들음이 샜다.
+ *    `은/는` 어절이 **사람 명사가 아니고 바로 뒤 어절이 사람 명사**면 그 사람을 꾸미는 말이다(`아는 사람` · `옆집 사는 언니`).
+ *    🔴 `친구는 언니한테` 의 `친구는` 은 그 자체가 사람이라 여전히 임자다.
+ */
+const TOPIC_END_RE = /(?:은|는)$/
+const isPersonWord = (w: string): boolean => PERSON_NOUN_RE.test(w) || PERSON_WORDS.some((m) => personIn(w, m))
+const isAdnominal = (w: string, next: string | undefined): boolean =>
+  TOPIC_END_RE.test(w) && next !== undefined && isPersonWord(next) && !isPersonWord(w.replace(TOPIC_END_RE, ''))
+
 /** 🔴 절 머리 주어가 누구인가 — 나(1인칭 낱말 · 축의 상대) / 남(`OTHER_MARKERS`) / 모름 */
 const personSubject = (clause: string, counterpart: readonly string[]): 'self' | 'other' | null => {
-  const words = clause.split(/\s+/).filter((w) => w !== '').slice(0, 4)
-  for (const w of words) {
+  const all = clause.split(/\s+/).filter((w) => w !== '')
+  const words = all.slice(0, 4)
+  for (const [k, w] of words.entries()) {
     if (SELF_SUBJECT_RE.test(w)) return 'self'
-    if (!SUBJECT_END_RE.test(w)) continue
+    if (!SUBJECT_END_RE.test(w) || isAdnominal(w, all[k + 1])) continue
     if (counterpart.some((c) => w.includes(c))) return 'self'
     if (otherIn(w, counterpart)) return 'other'
   }
@@ -881,8 +898,7 @@ function judgeThinVent(title: string, body: string, plan: DraftGatePlan | null):
 /**
  * 🔴 (v6 · 2026-10-01 운영 감사 결함 yes 1건) **1인칭 만남·대화·들음** — `어제 60대 분과 이야기를 나누다 들었는데요`.
  *    P04 · 자리 QUESTION · `selfBasis=null` 초안이 원문 글쓴이의 만남을 **자기 만남**으로 옮겼다. 원문에는 있었다
- *    (`어제 60대 만났는데`) — 🔴 **원문에 있다는 것은 허가가 아니다**(위 생활 일관성 원칙과 같다). 자리가
- *    "겪었다고 말하지 않는다"(`STANCE_LABEL` QUESTION · REFLECTION)인데 겪은 일을 말했다.
+ *    (`어제 60대 만났는데`) — 🔴 **원문에 있다는 것은 허가가 아니다**(위 생활 일관성 원칙과 같다).
  *    B 게이트는 축 낱말(배우자 · 자녀 · 부모 · 일 …)이 있어야 세서, 가족 아닌 사람과의 만남은 볼 자리가 없었다.
  *
  *    🔴 **문구 목록이 아니다.** 판정은 기존 틀 그대로다:
@@ -911,7 +927,7 @@ const PERSON_NOUN_RE = /(?<![가-힣])(?:분|분들|사람|사람들)(?:과|와|
 const hasPerson = (clause: string): boolean =>
   PERSON_NOUN_RE.test(clause) || clause.split(/\s+/).some((w) => PERSON_WORDS.some((m) => personIn(w, m)))
 
-/** 🔴 글쓴이 자신이 누구를 만나·이야기하고·들은 절 — 원천에도 같은 함수를 돌린다(같은 판정 하나) */
+/** 🔴 글쓴이 자신이 누구를 만나·이야기하고·들은 절 — 계획의 근거 문장에도 같은 함수를 돌린다(같은 판정 하나) */
 function readSelfEncounters(title: string, body: string): string[] {
   const frames = readClauseFrames(title, body, OWNER_OPTS)
   // 🔴 가족·일 축은 정본 축이 카드·허가와 견준다 — 여기서 다시 세지 않는다(두 판정 금지)
@@ -946,47 +962,26 @@ function readSelfEncounters(title: string, body: string): string[] {
 }
 
 /**
- * 🔴 `selfBasis=null` 에서 **곁에서 본 일을 쓰는 자리**는 OBSERVATION 하나다(`STANCE_LABEL`). 나머지(QUESTION · REFLECTION)는
- *    "겪었다고 말하지 않는다". 🔴 자리를 모르면(호출부가 칸을 빠뜨림) 겪지 않는 자리로 본다 — 빠뜨린 호출부가 새지 않는다.
+ * 🔴 **만남 판정 — 자리 · 원천이 아니라 Persona 근거로 가른다** (v6 보정 · 2026-10-01 코디네이터 결정).
+ *    🔴 원문에 만남이 있다는 것은 Persona 의 1인칭 경험을 허가하지 않는다 — 원천의 경험은 제3자 주어(`어떤 분이 그러셨대요`)로만 옮긴다.
+ *    · `selfBasis=null`(QUESTION · REFLECTION · OBSERVATION 모두) → 확정
+ *    · `noLifeFactNeeded` → 확정(보편 감정 글은 생활사 허가가 아니다)
+ *    · `lifeFacts` → 계획이 코드로 확인한 근거 문장(`verifySelfWarrants` 가 원문 · 정본 카드와 대조한 `warrants[].evidenceText`)이
+ *      **그 만남 자체를 담았을 때만** 통과 — 근거 문장에도 같은 함수(`readSelfEncounters`)를 돌린다(같은 판정 하나)
  */
-const WITNESS_STANCE = 'OBSERVATION'
-
-/**
- * 🔴 **만남 판정 — 자리와 원천으로 가른다.**
- *    · `selfBasis=null` 이고 자리가 겪었다고 말하지 않는 곳(QUESTION · REFLECTION · 자리 모름) → 원천에 있어도 확정
- *      (원문 글쓴이의 만남이다)
- *    · `selfBasis=null` · OBSERVATION(곁에서 본 일) → 원천에 만남·전언이 있으면 통과 · 없으면 확정 · 원천 모름은 사람
- *    · 1인칭 허가 계획(`lifeFacts` · `noLifeFactNeeded`) → 원천에 있으면 통과 · 없거나 모르면 사람 검토
- *    🔴 "원천에 있다" = 원천 글에서 같은 함수(`readSelfEncounters`)가 만남을 찾았거나 원천에 전언 절이 있다(남의 사연).
- */
-function judgeSelfEncounters(
-  title: string, body: string, plan: DraftGatePlan | null, ctx: DraftGateContext,
-): { hard: string[]; review: string[] } {
-  if (plan === null) return { hard: [], review: [] }
+function judgeSelfEncounters(title: string, body: string, plan: DraftGatePlan | null): string[] {
+  if (plan === null) return []
   const mine = readSelfEncounters(title, body)
-  if (mine.length === 0) return { hard: [], review: [] }
-  const src = ctx.source
-  const inSource = src === null ? null
-    : readSelfEncounters(src.title, src.body).length > 0
-      || readClauseFrames(src.title, src.body, OWNER_OPTS).some((f) => REPORTED_RE.test(f.clause))
-  if (plan.selfBasis === null) {
-    if (plan.stance !== WITNESS_STANCE) return { hard: mine, review: [] }
-    return inSource === true ? { hard: [], review: [] } : inSource === false ? { hard: mine, review: [] } : { hard: [], review: mine }
-  }
-  return inSource === true ? { hard: [], review: [] } : { hard: [], review: mine }
+  if (mine.length === 0) return []
+  const backed = plan.selfBasis === 'lifeFacts'
+    && plan.warrants.some((w) => (w.evidenceText ?? '').trim() !== '' && readSelfEncounters('', w.evidenceText!).length > 0)
+  return backed ? [] : mine
 }
 
-function judgeNoLifeFactClaims(
-  title: string, body: string, plan: DraftGatePlan | null, ctx: DraftGateContext,
-): DraftLifeReview[] {
+function judgeNoLifeFactClaims(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
   const fin = judgeFinanceSelf(title, body, plan)
   const finReview: DraftLifeReview[] = fin.length === 0 ? []
     : [{ code: 'unwarrantedSelfClaim', detail: `계획 ${plan?.selfBasis ?? 'null'} · 1인칭 금융 행동 — ${fin.slice(0, 2).join(' / ')}` }]
-  // 🔴 (v6) 만남 — 확정이 아닌 것(원천 모름 · 1인칭 허가 계획의 원천 밖 만남)은 사람 검토
-  const enc = judgeSelfEncounters(title, body, plan, ctx).review
-  if (enc.length > 0) {
-    finReview.push({ code: 'unwarrantedSelfClaim', detail: `계획 ${plan?.selfBasis ?? 'null'} · 원천에 없는 1인칭 만남·들음 — ${enc.slice(0, 2).join(' / ')}` })
-  }
   if (plan === null || plan.selfBasis !== 'noLifeFactNeeded') return finReview
   const clauses = [
     ...readSelfClaims(title, body, OWNER_OPTS)

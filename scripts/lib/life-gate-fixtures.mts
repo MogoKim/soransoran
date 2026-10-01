@@ -561,6 +561,15 @@ const V6_FIXTURES: readonly LifeFixture[] = [
     plan: PEER_PLAN, card: realCard('P04'), ...hold(['unwarrantedSelfClaim']),
   },
   {
+    queueId: 'counter-v6-peer-observation', label: '🔴 같은 원천 · OBSERVATION 이어도 "어제 60대 분을 만났는데" — 원천의 만남은 Persona 경험이 아니다',
+    source: { id: 'fx-v6-peer-o', ...SRC_PEER },
+    draft: {
+      title: '동년배 배우가 나오면 싫다는 분을 만났어요',
+      body: '어제 60대 분을 만났는데 TV에 70.80 배우들 나와서 연기하는 게 보기 싫으시대요.\n\n왜 나이 들수록 동년배를 덜 좋아하게 되는 걸까요?',
+    },
+    plan: planOf({ ...PEER_PLAN, stance: 'OBSERVATION' }), card: realCard('P04'), ...hold(['unwarrantedSelfClaim']),
+  },
+  {
     queueId: 'control-v6-peer-third-party', label: '🟢 같은 원천 · 제3자 사연을 제3자 주어로 · P04 QUESTION',
     source: { id: 'fx-v6-peer-c', ...SRC_PEER },
     // 🔴 제목은 반례와 다르게 — 적재 검사(`draft-life-gates-db-check`)가 큐 행을 제목으로 찾는다

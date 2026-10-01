@@ -94,7 +94,7 @@ export function judgeGoldRow(r: FounderGoldRow): { cls: GoldClass; codes: string
   const s = r.source
   const out = judgeDraftLife({
     title: r.draft.title, body: r.draft.body,
-    plan: { selfBasis: r.plan.selfBasis, warrants: r.plan.warrants, closingIntent: r.plan.closingIntent, contentRoles: r.plan.contentRoles, stance: r.plan.stance },
+    plan: { selfBasis: r.plan.selfBasis, warrants: r.plan.warrants, closingIntent: r.plan.closingIntent, contentRoles: r.plan.contentRoles },
     card: r.card,
     context: {
       at: new Date(r.runAt),

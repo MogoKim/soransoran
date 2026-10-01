@@ -30,7 +30,11 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p5'
  * 🔴 **v2-draft-p9 (2026-10-01 · quality-v6)** — 겪었다고 말하지 않는 자리에 "원문 글쓴이의 만남·대화·들음도 경험이다" 를 적었다
  *    (운영 감사 결함 yes · P04 `어제 60대 분과 이야기를 나누다 들었는데요`). 옛 프롬프트 artifact 를 재사용하지 않는다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p9'
+/**
+ * 🔴 **v2-draft-p10 (같은 날 · quality-v6 보정)** — 만남·들음 줄을 겪지 않는 자리 칸에서 "새로 쓰는 것"(모든 자리)으로 옮기고
+ *    "그 사람을 주어로 전한다" 를 적었다. 운영 v6 행 0 — 판 이름은 그대로 두고 digest 를 `--revise` 로 기록한다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p10'
 export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p7'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
