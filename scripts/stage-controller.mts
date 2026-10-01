@@ -275,7 +275,7 @@ async function main(): Promise<number> {
 
     if (!APPLY) { log('\n🔴 dry-run — DB write 0. 저장은 --apply + 정본 env 의 flag on 일 때만\n'); return 0 }
     if (!flagOn) {
-      log(`\n🔴 ${CONTROLLER_ENV} 가 on 이 아니다 — 저장하지 않는다 (러너는 롤백 env 경로로 돈다)\n`)
+      log(`\n🔴 ${CONTROLLER_ENV} 가 on 이 아니다 — 저장하지 않는다 (consumer 는 옛 env/canary 단계로 돌아가지 않고 가장 안전한 d1 로 감속한다)\n`)
       return 0
     }
     const io = stageDecisionIo(prisma, TODAY)

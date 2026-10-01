@@ -10,7 +10,7 @@
  *   ④ preflight(D3~D100 한 함수) — slot-valid 기회 · 처리량 · 지연 · 계약 유효 Persona canary 하한 · 비용 상한 · 러너
  *   ⑤ 상태 기계 — **운영 `decideStage` 를 여러 날 돌린다**(저장 계약 · 증거 판정 · consumer 까지 한 줄로)
  *   ⑥ 러너 연결 — consumer env(결정 그대로 · canary 없음) → `resolveScale` · catch-up · 증명일 · 발행 천장
- *   ⑦ 롤백 — `stage:switch --off` → consumer legacy(아무것도 넣지 않는다)
+ *   ⑦ 롤백 — `stage:switch --off` → consumer 는 d1 을 명시해서 넣는다(옛 env/canary 단계로 돌아가지 않는다)
  *   ⑧ 증거 본체 — d1~d10 두 입구 동일 · 사람 물량 0건 · REPROVE 증명일
  *
  * 🔴 러너 사실(격자 · 댓글 예약표 · 회차 상한)은 **정본 템플릿에서 읽는다**(`RUNNER_GRID`).
