@@ -240,7 +240,10 @@
     "auto-ready:audit-check": "tsx scripts/auto-ready-audit-check.mts",
     "auto-ready:audit-db-check": "tsx scripts/auto-ready-audit-db-check.mts",
     "auto-ready:audit-day-db-check": "tsx scripts/auto-ready-audit-day-db-check.mts",
-    "auto-ready:defect-http-check": "tsx scripts/auto-ready-defect-http-check.mts"
+    "auto-ready:defect-http-check": "tsx scripts/auto-ready-defect-http-check.mts",
+    "auto-ready:defect-resolve": "tsx scripts/auto-ready-defect-resolve.mts",
+    "auto-ready:defect-resolution-check": "tsx scripts/auto-ready-defect-resolution-check.mts",
+    "auto-ready:defect-resolution-db-check": "tsx scripts/auto-ready-defect-resolution-db-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

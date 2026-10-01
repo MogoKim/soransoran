@@ -26,7 +26,7 @@ import {
 } from '../src/lib/auto-ready-v2'
 import {
   authoritativeGate, stampAutoReady, stampRound, selectAudits, recordAuditResult,
-  confirmedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL, STAMP_BATCH_SIZE, isTransientTxLost,
+  unresolvedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL, STAMP_BATCH_SIZE, isTransientTxLost,
 } from '../src/lib/auto-ready-repo'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import {
@@ -881,7 +881,7 @@ async function main(): Promise<void> {
       t3.defect === 'yes' && t3.auditor === INTEGRITY_AUDITOR && (t3.note ?? '').includes('바뀌었다'), `${t3.defect} · ${t3.auditor} · ${t3.note}`)
     check('🔴 바뀌지 않은 감사는 판정자의 no 가 그대로 기록됐다 — 과하게 막지 않는다',
       (await prisma.autoReadyAudit.count({ where: { defect: 'no', auditor: 'always-no-auditor' } })) >= 1)
-    check('확정 결함 ≥ 1', await confirmedDefectCount(prisma) >= 1)
+    check('확정 결함 ≥ 1', await unresolvedDefectCount(prisma) >= 1)
     const next = await authoritativeGate(prisma, ON)
     check('🔴 🔴 **다음 회차 열림 판정 → 닫힘**', !next.open && next.reasons.some((x) => x.includes('확정 결함')))
     const fresh = await machineRow()

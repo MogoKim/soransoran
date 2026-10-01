@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import { AUDIT_CONTRACT_VERSION, AUTO_DECIDER, digestOf, readStamp, type AuditVerdict } from '../src/lib/auto-ready-v2'
-import { authoritativeGate, confirmedDefectCount, recordAuditResult, selectAudits } from '../src/lib/auto-ready-repo'
+import { authoritativeGate, unresolvedDefectCount, recordAuditResult, selectAudits } from '../src/lib/auto-ready-repo'
 import {
   AUDIT_OVERDUE_MS, RETRYABLE_NOTE_PREFIX, auditAwareGate, readRetryableFailure, recordCombinedAudit, runCombinedAuditRound,
   stampRoundAuditAware,
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
     const row = await audit(r.queueId)
     check('🔴 🔴 **유료 OFF → defect null · 재시도 가능 실패 PAID_OFF · exit 2**',
       off.code === 2 && row.defect === null && readRetryableFailure(row.note)?.code === 'PAID_OFF' && readRetryableFailure(row.note)?.attempts === 1, `${off.code} · ${row.note}`)
-    check('🔴 🔴 **확정 결함이 아니다 — 정본 열림 판정(repo)은 열림 · 확정 결함 0**', (await authoritativeGate(prisma, ON)).open && await confirmedDefectCount(prisma) === 0)
+    check('🔴 🔴 **확정 결함이 아니다 — 정본 열림 판정(repo)은 열림 · 확정 결함 0**', (await authoritativeGate(prisma, ON)).open && await unresolvedDefectCount(prisma) === 0)
     const ga = await auditAwareGate(prisma, ON, f.now)
     check('🔴 🔴 **재시도 가능 실패 1건 → 열림 판정 즉시 닫힘(시한과 별개)**', !ga.open && ga.reasons.some((x) => x.includes('재시도 가능 감사 실패 1건')) && !ga.reasons.some((x) => x.includes('시간을 넘긴')), ga.reasons.join(' · '))
     const w7 = await machineRow(f, 'W07')
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
 
   console.log('\n④ 🔴 🔴 결함 yes → 다음 도장·발행이 실제로 닫힌다')
   {
-    check('확정 결함 ≥ 1', await confirmedDefectCount(prisma) >= 1)
+    check('확정 결함 ≥ 1', await unresolvedDefectCount(prisma) >= 1)
     const g = await authoritativeGate(prisma, ON)
     check('🔴 🔴 **정본 열림 판정 → 닫힘(확정 결함)**', !g.open && g.reasons.some((x) => x.includes('확정 결함')), g.reasons.join(' · '))
     const fresh = await machineRow(f, 'W04')

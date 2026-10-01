@@ -53,6 +53,10 @@ export const FINGERPRINT_FILES = [
   // 🔴 (quality-v5) 초안 게이트 personaNoGo · 발행 배정 NOGO_EXPRESSION/COMMON · 초안 프롬프트의 판정 정본 —
   //    이 파일만 바꿔 글 게이트 행동을 조용히 바꾸지 못하게 지문에 넣는다
   'src/lib/persona-no-go.ts',
+  // 🔴 (v6 보정 2026-10-01) 결함 축 정본 — 해소 판정과 그 기록을 쓰는 유일한 길(재검증). 이 둘만 바꿔
+  //    끈적한 결함을 조용히 풀지 못하게 지문에 넣는다
+  'src/lib/auto-ready-defect-resolution.ts',
+  'src/lib/auto-ready-defect-resolution-store.ts',
 ] as const
 
 /**
@@ -78,6 +82,9 @@ export const JUDGE_DEFINITIONS: Readonly<Record<string, string>> = {
   isCurrentQualityContract: 'src/lib/quality-contract.ts',
   // 🔴 (quality-v5) 글 No-Go 판정 정본
   noGoHits: 'src/lib/persona-no-go.ts',
+  // 🔴 (v6 보정) 결함 축 정본
+  unresolvedDefectCount: 'src/lib/auto-ready-repo.ts',
+  judgeDefectResolution: 'src/lib/auto-ready-defect-resolution.ts',
 }
 
 export const FINGERPRINT_PATH = 'src/lib/quality-contract.fingerprint.json'

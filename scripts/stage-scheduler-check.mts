@@ -269,7 +269,7 @@ function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null 
     kstDate: d.kstDate, stage: d.release,
     decision: { kstDate: d.kstDate, state: d.state, release: d.release, decidedBy: d.decidedBy },
     posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
-    audits: { rows, globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+    audits: { rows, globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
   }
 }
 const evidenceOfDay = (d: StageDecision, mode: DayMode): StageEvidenceVerdict =>

@@ -264,9 +264,9 @@ console.log('\nC. 🔴 전역 차단 — cohort 판과 무관')
 // ─────────────────────────────────────────────────────────
 {
   const ev = open([...good(27), ...good(3, { kind: 'edited' })])
-  check('대조 — cohort 충족 · 결함 0 · 유실 0 → 열림', judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **#14 cohort 충족이어도 발행 뒤 감사 결함 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 1, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **#14 cohort 충족이어도 글 유실 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 1 }).open)
+  check('대조 — cohort 충족 · 결함 0 · 유실 0 → 열림', judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **#14 cohort 충족이어도 발행 뒤 감사 결함 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 1, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **#14 cohort 충족이어도 글 유실 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 1 }).open)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ console.log('\nE. 🔴 배선 — 판정 시점 재검증 · 생성 캐시 key')
   check('🔴 증거는 정본 qualityCohortOf 하나 · 열림 근거는 applyFounderGoldBasis 하나',
     /const cohort = qualityCohortOf\(/.test(ev) && /return applyFounderGoldBasis\(cohort,/.test(ev) && !/return qualityCohortOf\(/.test(ev))
   const gate = repo.split('export async function authoritativeGate(')[1]?.split('export type StampOutcome')[0] ?? ''
-  check('🔴 전역 차단(감사 결함 · 글 유실)은 그대로 게이트에 있다', /confirmedDefectCount\(db\)/.test(gate) && /missingAutoPostCount\(db\)/.test(gate))
+  check('🔴 전역 차단(감사 결함 · 글 유실)은 그대로 게이트에 있다', /unresolvedDefectCount\(db\)/.test(gate) && /missingAutoPostCount\(db\)/.test(gate))
   const coh = readFileSync('src/lib/auto-ready-quality-cohort.ts', 'utf8')
   check('🔴 cohort 는 행마다 isCurrentQualityContract 로 다시 본다(저장된 표식을 믿지 않는다)', /isCurrentQualityContract\(r\.gateResults\)/.test(coh))
   const gen = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf8')

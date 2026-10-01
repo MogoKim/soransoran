@@ -40,6 +40,7 @@ import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
 import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
+import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-ready-defect-resolution'
 
 /**
  * 🔴 **품질 계약 판** — 게이트·검수의 판정이 바뀌면 올린다.
@@ -118,6 +119,9 @@ export function qualityContractComponents(): Record<string, unknown> {
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
     semanticHoldCodes: SEMANTIC_HOLD_CODES,
     judgeContractDigest: JUDGE_CONTRACT_DIGEST,
+    // 🔴 (v6 보정 2026-10-01) 결함 축 정본 — "지금 계약에서 해소되지 않은 확정 결함" 의 기록 판.
+    //    해소 기록은 이 digest 에 묶인다 — 판정 규칙(기록 판)이 바뀌면 digest 가 바뀌어 옛 기록은 아무것도 해소하지 못한다
+    defectResolution: { recordVersion: DEFECT_RESOLUTION_RECORD_VERSION, key: DEFECT_RESOLUTION_KEY },
   }
 }
 

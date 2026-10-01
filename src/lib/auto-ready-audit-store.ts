@@ -2,7 +2,7 @@
  * 🔴 **자동 READY 사후 감사 — 독립 감사 러너 · 운영자 결함 신고의 저장 경로** (2026-09-27)
  *
  *   발행(auto-ready:v1) → 감사 선정(`selectAudits`) → **[여기] 규칙 + 의미 감사 → 결과 저장**
- *   → 결함 yes → `confirmedDefectCount` 가 늘고 다음 도장·발행이 각자의 트랜잭션에서 닫힌다.
+ *   → 결함 yes → `unresolvedDefectCount` 가 늘고 다음 도장·발행이 각자의 트랜잭션에서 닫힌다.
  *
  * 🔴 **왜 `auto-ready-repo.ts` 를 고치지 않고 새 파일인가** — repo 는 품질 계약 지문 대상이다.
  *    거기 판정 행동을 바꾸면 "행동 불변" 이라고 적을 수 없다. 그래서 repo 의 판정(열림 · 도장 · 발행
@@ -380,7 +380,7 @@ export function adminReasonsOf(v: unknown): string[] | null {
  *    · 감사로 뽑히지 않은 글이면 감사 행을 **지금 글·지금 도장**에 묶어 만든다
  *    · 이미 yes 면 그대로 둔다(`alreadyDefect`) — 동시 신고도 결과는 하나다
  *    · no 를 yes 로 올린다. 어떤 no 도 이 yes 를 덮지 못한다(자동 감사는 판정 전일 때만 쓴다)
- *    · 기록 즉시 `confirmedDefectCount` 가 늘고 다음 도장·발행이 닫힌다
+ *    · 기록 즉시 `unresolvedDefectCount` 가 늘고 다음 도장·발행이 닫힌다
  */
 export async function recordAdminDefectReport(prisma: PrismaClient, i: {
   actor: { userId: string }; postId: string; reasons: unknown; now: Date

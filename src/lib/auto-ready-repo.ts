@@ -25,7 +25,9 @@ import {
 import { cohortSampleOf } from './auto-ready-evidence'
 import { profileOf } from './original-post-auto-publish'
 import { qualityCohortOf, applyFounderGoldBasis, type QualityCohortVerdict } from './auto-ready-quality-cohort'
-import { isCurrentQualityContract, qualityContractDigest, QUALITY_CONTRACT_KEY, QUALITY_EVIDENCE_BASIS } from './quality-contract'
+import { currentQualityContract, isCurrentQualityContract, qualityContractDigest, QUALITY_CONTRACT_KEY, QUALITY_EVIDENCE_BASIS } from './quality-contract'
+/** 🔴 (2026-10-01) 결함 축 정본 — 지금 계약에서 해소되지 않은 확정 결함만 닫는다 */
+import { judgeDefectResolution } from './auto-ready-defect-resolution'
 /** 🔴 (quality-v4) 창업자 gold 재생 — 열림 근거 */
 import { replayFounderGold, describeFounderGold } from './founder-gold'
 import { MACHINE_PROMPT_VERSION } from './micro-seed-supply-autofill'
@@ -90,9 +92,23 @@ export async function withStampTxRetry<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** 🔴 확정 결함(yes) 수 — 하나라도 있으면 자동 회차가 닫힌다 */
-export async function confirmedDefectCount(db: Db): Promise<number> {
-  return db.autoReadyAudit.count({ where: { defect: 'yes' } })
+/**
+ * 🔴 **지금 품질 계약에서 해소되지 않은 확정 결함(yes) 수** — 하나라도 있으면 자동 회차가 닫힌다 (2026-10-01 · Lane E).
+ *    앞판(`confirmedDefectCount`)은 전 기간 · 전 계약의 yes 를 셌다 — 끈적한 yes 하나가 게이트를 영원히 닫았다.
+ *    이제 yes 행마다 정본 `judgeDefectResolution` 하나로 본다: 해소 기록(큐 행 `editDiff`)이 **지금 계약 판·digest ·
+ *    그 감사 행(지문) · 그 큐·글 · 저장 초안 · 지금 게이트의 재검증 차단**에 모두 묶였을 때만 빠진다. 나머지는 전부 센다.
+ *    🔴 감사 행은 읽기만 한다 — 지우거나 고치지 않는다.
+ */
+export async function unresolvedDefectCount(db: Db): Promise<number> {
+  const audits = await db.autoReadyAudit.findMany({ where: { defect: 'yes' } })
+  if (audits.length === 0) return 0
+  const queues = await db.originalPostApprovalQueue.findMany({
+    where: { id: { in: audits.map((a) => a.queueId) } },
+    select: { id: true, createdPostId: true, draftTitle: true, draftBody: true, gateResults: true, editDiff: true },
+  })
+  const byId = new Map(queues.map((q) => [q.id, q]))
+  const contract = currentQualityContract()
+  return audits.filter((a) => !judgeDefectResolution(a, byId.get(a.queueId) ?? null, contract).resolved).length
 }
 
 /**
@@ -181,19 +197,19 @@ export async function evidenceFromDb(db: Db): Promise<QualityCohortVerdict> {
 }
 
 /**
- * 🔴 **권위 있는 열림 판정** — 스위치 · DB 증거 · 확정 결함 · 글 유실을 **넘겨받은 db 에서** 직접 읽는다.
+ * 🔴 **권위 있는 열림 판정** — 스위치 · DB 증거 · 미해소 확정 결함 · 글 유실을 **넘겨받은 db 에서** 직접 읽는다.
  *    도장·발행 트랜잭션은 자기 `tx` 를 넘겨 같은 스냅샷에서 판정한다.
  *    스위치가 꺼져 있으면 DB 를 읽지 않고 닫힘이다.
  */
 export async function authoritativeGate(db: Db, env: Env): Promise<OpenState> {
   const enabled = autoReadyEnabled(env)
   if (!enabled) {
-    return judgeOpen({ enabled: false, evidence: { meetsContract: false, reasons: [] }, confirmedDefects: 0, missingAutoPosts: 0 })
+    return judgeOpen({ enabled: false, evidence: { meetsContract: false, reasons: [] }, unresolvedDefects: 0, missingAutoPosts: 0 })
   }
   const evidence = await evidenceFromDb(db)
-  const confirmedDefects = await confirmedDefectCount(db)
+  const unresolvedDefects = await unresolvedDefectCount(db)
   const missingAutoPosts = await missingAutoPostCount(db)
-  return judgeOpen({ enabled, evidence, confirmedDefects, missingAutoPosts })
+  return judgeOpen({ enabled, evidence, unresolvedDefects, missingAutoPosts })
 }
 
 export type StampOutcome =

@@ -260,14 +260,15 @@ export type OpenState = { open: boolean; reasons: string[] }
 
 /**
  * 🔴 **자동 READY 가 열려 있는가.** 넷 다 참이어야 연다:
- *    스위치 ON · 증거 표본이 계약을 채움 · **확정된 결함(yes)이 하나도 없음** ·
+ *    스위치 ON · 증거 표본이 계약을 채움 · **지금 품질 계약에서 해소되지 않은 확정 결함(yes)이 하나도 없음**
+ *    (정본 `unresolvedDefectCount` — 해소 판정은 `auto-ready-defect-resolution` 하나) ·
  *    **글이 사라진 자동 발행 행이 없음**.
  *    🔴 감사 **대기**(판정 전)는 막지 않는다 — 대기를 매 회차 사람 허가로 만들지 않는다.
  */
 export function judgeOpen(i: {
   enabled: boolean
   evidence: { meetsContract: boolean; reasons: readonly string[] }
-  confirmedDefects: number
+  unresolvedDefects: number
   /**
    * 🔴 **글이 사라진 자동 발행 행 수** (2026-09-25 마스터 지적). 감사로 뽑히지 않은 행이면
    *    감사 행이 없어 확정 결함으로 잡히지 않는다 — 그래서 열림 판정이 직접 본다.
@@ -278,8 +279,8 @@ export function judgeOpen(i: {
   const reasons: string[] = []
   if (!i.enabled) reasons.push(`${AUTO_READY_ENV} 가 꺼져 있다`)
   if (!i.evidence.meetsContract) reasons.push(`증거 미달 — ${i.evidence.reasons.join(' · ') || '사유 없음'}`)
-  if (!Number.isInteger(i.confirmedDefects) || i.confirmedDefects < 0) reasons.push('결함 수를 읽지 못했다')
-  else if (i.confirmedDefects > 0) reasons.push(`🔴 확정 결함 ${i.confirmedDefects}건 — 자동 회차를 멈춘다`)
+  if (!Number.isInteger(i.unresolvedDefects) || i.unresolvedDefects < 0) reasons.push('결함 수를 읽지 못했다')
+  else if (i.unresolvedDefects > 0) reasons.push(`🔴 미해소 확정 결함 ${i.unresolvedDefects}건 — 자동 회차를 멈춘다`)
   if (!Number.isInteger(i.missingAutoPosts) || i.missingAutoPosts < 0) reasons.push('글 유실 수를 읽지 못했다')
   else if (i.missingAutoPosts > 0) reasons.push(`🔴 무결성 — 글이 사라진 자동 발행 ${i.missingAutoPosts}건 — 자동 회차를 멈춘다`)
   return { open: reasons.length === 0, reasons }

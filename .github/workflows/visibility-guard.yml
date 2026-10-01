@@ -904,6 +904,9 @@ jobs:
           # 🔴 독립 감사 루프(2026-09-27) — 의미 감사 fail-closed · 묶음(글·도장·원문 근거·카드) · 판 분리 ·
           #    유료 기본 OFF · 감사 러너 launchd 템플릿(렌더만) · 배선. 새 step 이 아니다(무조건 step 상한 불변)
           npm run auto-ready:audit-check
+          # 🔴 결함 축 정본(2026-10-01) — 지금 계약에서 해소되지 않은 확정 결함만 닫는다 · 다른 digest·판·행·불완전한
+          #    기록·재검증 실패는 미해소 · 옛 전 기간 카운트 삭제 확인. 새 step 이 아니다
+          npm run auto-ready:defect-resolution-check
 
       # 🔴 자동 READY v2 실행 사슬 — 격리 Postgres 17 에서만. 운영 DB 0.
       #    후보 → 도장 → selector → 발행 트랜잭션 재검증 → Post → 감사 저장 → 결함 시 자동 중지,
@@ -962,6 +965,9 @@ jobs:
           npm run auto-ready:audit-db-check
           # 🔴 감사 표본은 그날(KST) 자동 발행에서 — 누적 목표로 오늘 표본 0 이 되던 반례(2026-09-29). 새 step 이 아니다
           npm run auto-ready:audit-day-db-check
+          # 🔴 확정 결함 해소 실행 반례 — 감사 행 불변 · 계획/적용 사이 변경 write 0 · 두 번째 적용 write 0 · 동시 적용 1 ·
+          #    지금 계약의 새 결함은 닫힘 · 운영 주소 --apply 거절. 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
+          npm run auto-ready:defect-resolution-db-check
           # 🔴 댓글 대화선 쓰기 경로 — 답글 대상 검증(같은 글·삭제·차단) · 삭제/답글 경쟁 잠금 · 비회원 중복 판정 ·
           #    동시 수정 경쟁. 같은 격리 DB 를 쓰고, 남긴 행은 바로 뒤 Persona 댓글 루프 검사가 시작할 때 비운다.
           #    새 step 이 아니다(무조건 step 상한 불변)

@@ -98,7 +98,7 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
       rows: Array.from({ length: auditTarget(n) }, (_, i) => ({
         postId: `pp-${i}`, queueId: `pq-${i}`, judged: true, defectYes: false, retryable: false, overdue: false,
       })),
-      globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
+      globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
     },
   }, { cost: [{ name: '공급', health: 'ok' }, { name: '댓글', health: 'ok' }, { name: '감사', health: 'ok' }], errors: 'ok' })
 }

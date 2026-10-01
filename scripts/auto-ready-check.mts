@@ -393,18 +393,18 @@ console.log('\n⑥ 🔴 열림 · 스위치 · 감사')
   check('🔴 🔴 **스위치 기본 OFF**', !autoReadyEnabled({}) && !autoReadyEnabled({ [AUTO_READY_ENV]: '' })
     && !autoReadyEnabled({ [AUTO_READY_ENV]: 'true' }) && !autoReadyEnabled({ [AUTO_READY_ENV]: '1' })
     && autoReadyEnabled({ [AUTO_READY_ENV]: 'on' }))
-  check('기준선 — 넷 다 참이면 열림', judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 스위치가 꺼져 있으면 닫힘', !judgeOpen({ enabled: false, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **증거 미달이면 닫힘**', !judgeOpen({ enabled: true, evidence: { meetsContract: false, reasons: ['8/30'] }, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **확정 결함 하나면 닫힘 — 다음 회차를 멈춘다**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 1, missingAutoPosts: 0 }).open)
+  check('기준선 — 넷 다 참이면 열림', judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 스위치가 꺼져 있으면 닫힘', !judgeOpen({ enabled: false, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **증거 미달이면 닫힘**', !judgeOpen({ enabled: true, evidence: { meetsContract: false, reasons: ['8/30'] }, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **확정 결함 하나면 닫힘 — 다음 회차를 멈춘다**', !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 1, missingAutoPosts: 0 }).open)
   check('🔴 결함 수를 못 읽으면(음수·NaN) 닫힘',
-    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: Number.NaN, missingAutoPosts: 0 }).open
-    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: -1, missingAutoPosts: 0 }).open)
+    !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: Number.NaN, missingAutoPosts: 0 }).open
+    && !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: -1, missingAutoPosts: 0 }).open)
   check('🔴 🔴 **글이 사라진 자동 발행이 하나면 닫힘 — 감사로 뽑히지 않았어도**',
-    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 1 }).open)
+    !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 1 }).open)
   check('🔴 글 유실 수를 못 읽으면(음수·NaN) 닫힘',
-    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: Number.NaN }).open
-    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: -1 }).open)
+    !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: Number.NaN }).open
+    && !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: -1 }).open)
   check('🔴 🔴 **감사 대기는 열림 판정의 입력이 아니다 — 매 회차 사람 허가가 아니다**',
     !/pending|대기/.test(codeOnly('src/lib/auto-ready-v2.ts').split('export function judgeOpen')[1]?.split('export function auditTarget')[0] ?? 'x'))
   let exact = true
@@ -486,7 +486,7 @@ console.log('\n⑨ 🔴 열림은 호출자가 정하지 않는다 — 쓰기 �
     /const gate = await authoritativeGate\(tx, i\.env\)/.test(recheck))
   const gate = repo.split('export async function authoritativeGate(')[1]?.split('export type StampOutcome')[0] ?? ''
   check('🔴 🔴 **게이트가 증거를 DB 에서 직접 읽는다 (정본 cohortSampleOf)**',
-    /evidenceFromDb\(db\)/.test(gate) && /confirmedDefectCount\(db\)/.test(gate)
+    /evidenceFromDb\(db\)/.test(gate) && /unresolvedDefectCount\(db\)/.test(gate)
     && /return cohortSampleOf\(eligible\)/.test(repo))
   check('🔴 OpenState 를 받는 쓰기 함수가 없다',
     !/open: OpenState/.test(repo) && !/i\.open\b/.test(repo))
@@ -673,7 +673,7 @@ console.log('\n⑮ 🔴 🔴 감사 대상 유실은 대기가 아니라 무결�
   const runnerSrc = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **열림 판정이 글 유실을 직접 센다 — 감사 선정과 무관하게 닫는다**',
     /const missingAutoPosts = await missingAutoPostCount\(db\)/.test(repo)
-    && /return judgeOpen\(\{ enabled, evidence, confirmedDefects, missingAutoPosts \}\)/.test(repo)
+    && /return judgeOpen\(\{ enabled, evidence, unresolvedDefects, missingAutoPosts \}\)/.test(repo)
     && !/createdPost: \{ is: null \}/.test(repo))
   check('🔴 🔴 **러너는 missingPost 를 로그로만 흘리지 않는다 — 회차를 실패로 끝낸다**',
     /if \(au\.kind === 'ok' && au\.missingPost\.length > 0\) \{\s*auditIntegrityOk = false/.test(runnerSrc)
