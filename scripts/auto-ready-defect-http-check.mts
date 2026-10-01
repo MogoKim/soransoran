@@ -27,7 +27,7 @@ import { encode } from '@auth/core/jwt'
 import { PrismaClient } from '@prisma/client'
 
 import { digestOf, readStamp } from '../src/lib/auto-ready-v2'
-import { authoritativeGate, confirmedDefectCount, recordAuditResult } from '../src/lib/auto-ready-repo'
+import { authoritativeGate, unresolvedDefectCount, recordAuditResult } from '../src/lib/auto-ready-repo'
 import {
   ADMIN_DEFECT_AUDITOR, ADMIN_DEFECT_CONTRACT_VERSION, recordCombinedAudit, stampRoundAuditAware,
 } from '../src/lib/auto-ready-audit-store'
@@ -136,10 +136,10 @@ async function main(): Promise<void> {
     check('비로그인 화면 → 접근 권한 없음', (await page.text()).includes('접근 권한이 없습니다'))
     const body = { postId: A.postId, reasons: ['생활사 모순'] }
     const anon = await report(body, null)
-    check('🔴 🔴 **비로그인 신고 → 감사 행 0 · 확정 결함 0**', (await auditOf(A.queueId)) === null && await confirmedDefectCount(prisma) === 0, `status ${anon.status}`)
+    check('🔴 🔴 **비로그인 신고 → 감사 행 0 · 확정 결함 0**', (await auditOf(A.queueId)) === null && await unresolvedDefectCount(prisma) === 0, `status ${anon.status}`)
     const non = await report(body, await cookieFor(plain.id))
     check('🔴 🔴 **비관리자 신고 → 권한 없음 · 감사 행 0 · 확정 결함 0**',
-      (await auditOf(A.queueId)) === null && await confirmedDefectCount(prisma) === 0 && non.payload?.error === '권한이 없습니다.', non.text.slice(0, 200))
+      (await auditOf(A.queueId)) === null && await unresolvedDefectCount(prisma) === 0 && non.payload?.error === '권한이 없습니다.', non.text.slice(0, 200))
     const adminPage = await (await fetch(`${BASE}/admin/auto-ready-defects`, { headers: { cookie: adminCookie } })).text()
     check('관리자 화면 — 자동 발행 글과 신고 버튼이 보인다', adminPage.includes('뽑히지 않은 글') && adminPage.includes('결함 신고'))
   }
@@ -160,7 +160,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **판정 시각 = 서버 시각 (요청의 2099 무시)**', at >= t0 - 1000 && at <= t1 + 1000, String(a?.judgedAt?.toISOString()))
     check('🔴 🔴 **지금 글 hash · 지금 도장 계약 판에 묶였다**', a?.postId === A.postId && a.publishedTitleHash === digestOf(post.title)
       && a.publishedBodyHash === digestOf(post.content) && a.stampContractDigest === readStamp(q.editDiff)?.contractDigest && a.auditContractVersion === ADMIN_DEFECT_CONTRACT_VERSION)
-    check('🔴 🔴 **기록 즉시 확정 결함 수가 늘었다 (0 → 1)**', await confirmedDefectCount(prisma) === 1)
+    check('🔴 🔴 **기록 즉시 확정 결함 수가 늘었다 (0 → 1)**', await unresolvedDefectCount(prisma) === 1)
   }
 
   console.log('\n④ 🔴 🔴 다음 자동 회차가 실제로 닫힌다')

@@ -278,9 +278,9 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
     pinned.decision.dayPinned && pinned.decision.release === 'd5' && validateForToday(pinned.decision).ok)
 
   check('신호 — 품질: 결함·유실·재시도 실패·시한 초과 중 하나라도 있으면 bad · 못 읽으면 unknown',
-    qualitySignalOf({ confirmedDefects: 0, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'ok'
-    && qualitySignalOf({ confirmedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'bad'
-    && qualitySignalOf({ confirmedDefects: 0, missingPosts: 0, retryableFailures: 0, overdueAudits: 2 }).health === 'bad'
+    qualitySignalOf({ unresolvedDefects: 0, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'ok'
+    && qualitySignalOf({ unresolvedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'bad'
+    && qualitySignalOf({ unresolvedDefects: 0, missingPosts: 0, retryableFailures: 0, overdueAudits: 2 }).health === 'bad'
     && qualitySignalOf(null).health === 'unknown')
   check('신호 — 비용: bad 가 이긴다 · 그다음 unknown',
     costSignalOf([{ name: 'a', health: 'ok', reasons: [] }, { name: 'b', health: 'bad', reasons: ['x'] }]).health === 'bad'

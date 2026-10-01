@@ -35,7 +35,7 @@ import {
   decideStage, holdAtCurrent, validateForToday, qualitySignalOf, costSignalOf, errorSignalOf,
   sustainedReleaseOf, type HealthSignal, type ControllerResult,
 } from '../src/lib/stage-controller'
-import { confirmedDefectCount, missingAutoPostCount } from '../src/lib/auto-ready-repo'
+import { unresolvedDefectCount, missingAutoPostCount } from '../src/lib/auto-ready-repo'
 import { auditAwareGate, overdueAuditCount, retryableFailureCount } from '../src/lib/auto-ready-audit-store'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { observeJob, publishFailing, readProcessRuns, supplyFailing, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
@@ -232,7 +232,7 @@ async function main(): Promise<number> {
     const signals: HealthSignal[] = []
     try {
       signals.push(qualitySignalOf({
-        confirmedDefects: await confirmedDefectCount(prisma),
+        unresolvedDefects: await unresolvedDefectCount(prisma),
         missingPosts: await missingAutoPostCount(prisma),
         retryableFailures: await retryableFailureCount(prisma),
         overdueAudits: await overdueAuditCount(prisma, NOW),

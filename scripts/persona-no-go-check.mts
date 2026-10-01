@@ -110,7 +110,7 @@ console.log('\n④ C8 — 개인 말버릇은 없어도 되는 칸 · 소재 경
       posts: authors.map((a, i) => ({ postId: `p${i}`, queueId: `q${i}`, publishedAtMs: 0, unattended: true, queueRows: 1, publishLogs: 1,
         authorPersonaId: a, decider: 'auto' as const, personaComments: [], release: 'STAMPED_ELIGIBLE' as const })),
       orphanPublishLogs: 0, unloggedPublishes: 0,
-      audits: { rows: [], globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+      audits: { rows: [], globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
     } as unknown as EvidenceFactsFor<string>
     return [...judgeEvidenceForTarget('2026-10-02', 'd3', 3, facts, null).codes]
   }

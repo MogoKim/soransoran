@@ -169,8 +169,8 @@ export type StageEvidenceFacts = {
       postId: string; queueId: string
       judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean
     }[]
-    /** 🔴 지금 표 전체 — 정본 `confirmedDefectCount` · `overdueAuditCount` · `retryableFailureCount` · `missingAutoPostCount` */
-    globalDefectYes: number
+    /** 🔴 지금 표 전체 — 정본 `unresolvedDefectCount`(지금 계약에서 해소되지 않은 확정 결함) · `overdueAuditCount` · `retryableFailureCount` · `missingAutoPostCount` */
+    globalUnresolvedDefects: number
     globalOverdue: number
     globalRetryable: number
     globalMissingPosts: number
@@ -290,7 +290,7 @@ export function judgeEvidenceForTarget<S extends string>(
     if (autoTargets.length > 0 && sampled.size === 0) codes.add('AUDIT_COVERAGE_ZERO')
     else if (sampled.size < expected) codes.add('AUDIT_COVERAGE_SHORT')
     if (inSet.some((r) => !r.judged)) codes.add('AUDIT_UNJUDGED')
-    if (inSet.some((r) => r.defectYes) || a.globalDefectYes > 0) codes.add('AUDIT_DEFECT')
+    if (inSet.some((r) => r.defectYes) || a.globalUnresolvedDefects > 0) codes.add('AUDIT_DEFECT')
     if (inSet.some((r) => r.overdue) || a.globalOverdue > 0) codes.add('AUDIT_OVERDUE')
     if (inSet.some((r) => r.retryable) || a.globalRetryable > 0) codes.add('AUDIT_RETRYABLE')
     if (a.globalMissingPosts > 0) codes.add('AUDIT_MISSING_POST')

@@ -12,6 +12,9 @@
  *   ⑩ (2026-09-30 · source-slot-v1) 트랜잭션 시계 재판정 — 원천 가치가 사라진 행은 EXPIRED(사유 + 도장) · Post 0 ·
  *      같은 슬롯을 다음 후보가 채운다 · 두 번 불러도 한 번만 · 동시 두 러너도 전환 한 번 · 정상 발행에는 eligible 도장
  *
+ *   ⑫ (2026-10-01) 두 번 연속 직렬화 충돌 — 결함 주입(`deps.fault`)으로 결정론 재현. 다시 읽어 소비 증거(SLOT_CONSUMED ·
+ *      TARGET_RACE_LOST)일 때만 정상 무발행 · 증거 없음 · 선택기 결함 · 비직렬화 오류 · 커밋 전 실패는 error · 부분 write 0
+ *
  *   ⑪ (2026-09-30 Lane B) 원천 기회 → 공개 글 **결정론적 전체 E2E** — `source-evidence-e2e-db-check.mts` 를 같은 격리 DB 로
  *      실행한다(목록 artifact → 증거 → JIT 생성(가짜 provider) → READY → 발행 직전 재검사 → 만료 → 교체 → 공개 글 · 도장).
  *
@@ -20,9 +23,10 @@
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 
-import { PrismaClient } from '@prisma/client'
+import { Prisma, PrismaClient } from '@prisma/client'
 
 import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
+import { NORMAL_NO_PUBLISH_CODES } from '../src/lib/original-post-publish'
 import { publishEventAtOf, releaseStampStatusOf, RELEASE_STAMP_KEY, RELEASE_CONTRACT } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
@@ -364,6 +368,106 @@ async function main(): Promise<void> {
     check('🔴 만료 뒤 발행 1 → 같은 슬롯에서 세 번째는 SLOT_CONSUMED (만료가 발행으로 세이지 않고, 발행은 한 번만)',
       e1.kind === 'expired' && e2.kind === 'published' && e3.kind === 'blocked' && e3.code === 'SLOT_CONSUMED' && (await posts()) === 1,
       `${e1.kind}/${e2.kind}/${JSON.stringify(e3)}`)
+  }
+
+  console.log('\n⑫ 🔴 🔴 두 번 연속 직렬화 충돌 — 다시 읽어 소비 증거가 있을 때만 정상 무발행 (2026-10-01 · PR #647 CI ⑧)')
+  {
+    /**
+     * 🔴 결정론 반례 — 패자의 write 시도 1 · 2 에 P2034 를 넣는다(`deps.fault` · 검사 전용 주입점).
+     *    시도 1 의 트랜잭션 안(첫 읽기 전 · 잠금 0)에서 승자가 **실제로** 같은 후보를 발행하고 커밋한다.
+     *    앞판: 두 번째 충돌 = 무조건 error → 러너 exit 1(CI 실패 그대로). 지금: 새 스냅샷으로 다시 읽어 소비 증거면 정상 무발행.
+     */
+    const p2034 = (): Error => new Prisma.PrismaClientKnownRequestError(
+      'Transaction failed due to a write conflict or a deadlock. Please retry your transaction', { code: 'P2034', clientVersion: 'fixture' })
+    type FaultAt = { attempt: 1 | 2; point: 'begin' | 'written' }
+    const withFault = async (id: string, at: Date, stage: string, outsideSeen: number, plan: PlannedTarget, fault: (f: FaultAt) => Promise<void>): Promise<PublishResult> =>
+      publishOriginalPostTx(prisma, {
+        queueId: id, publishedToday: outsideSeen, mode: { kind: 'scheduled', releaseStage: stage, planned: plan, unattended: true }, autoReadyEnv: envOf(stage),
+      }, { now: () => at, fault })
+    const normal = (r: PublishResult): boolean => r.kind === 'blocked' && (NORMAL_NO_PUBLISH_CODES as readonly string[]).includes(r.code)
+
+    // (a) 같은 후보 · 도래 1(d10 08:10) — 승자가 시도 1 도중 발행 → 패자 두 번 충돌 → SLOT_CONSUMED
+    for (const [label, at, code] of [
+      ['도래 1(08:10) → SLOT_CONSUMED', K('2026-10-23T08:10:00'), 'SLOT_CONSUMED'],
+      ['도래 2(09:30) → TARGET_RACE_LOST', K('2026-10-23T09:30:00'), 'TARGET_RACE_LOST'],
+    ] as const) {
+      await wipe()
+      evidenceAt = K('2026-10-23T00:00:00')
+      const a = await cand()
+      const [planW, planL] = [await planOf(a), await planOf(a)]
+      let winner: PublishResult | null = null
+      const calls: string[] = []
+      const loser = await withFault(a, at, 'd10', 0, planL, async (f) => {
+        calls.push(`${f.attempt}:${f.point}`)
+        if (f.point !== 'begin') return
+        if (f.attempt === 1) winner = await scheduled(a, at, 'd10', envOf('d10'), 0, planW)
+        throw p2034()
+      })
+      const w = winner as PublishResult | null
+      const qa = await q(a)
+      check(`🔴 🔴 **[반례] 두 번 연속 P2034 · 승자 실제 발행 — ${label} · 정상 무발행(러너 exit 0 코드) · Post 1 · ActivityLog 1 · Queue = 승자 글**`,
+        w?.kind === 'published' && loser.kind === 'blocked' && loser.code === code && normal(loser)
+        && (await posts()) === 1 && (await logs()) === 1 && qa.status === 'PUBLISHED' && qa.createdPostId === (w?.kind === 'published' ? w.postId : '?'),
+        `${JSON.stringify(w)} / ${JSON.stringify(loser)}`)
+      check('🔴 write 시도는 정확히 2 — 다시 읽기는 세 번째 write 시도가 아니다(주입점 호출 1:begin · 2:begin 뿐)',
+        calls.join(',') === '1:begin,2:begin', calls.join(','))
+    }
+
+    // (b) 두 번 연속 충돌 · 아무도 발행하지 않았다 → 소비 증거 없음 → error · write 0
+    await wipe()
+    evidenceAt = K('2026-10-23T00:00:00')
+    const b = await cand()
+    const rb = await withFault(b, K('2026-10-23T08:10:00'), 'd10', 0, await planOf(b), async (f) => { if (f.point === 'begin') throw p2034() })
+    check('🔴 🔴 **[반례] 두 번 연속 충돌 · 소비 증거 없음(다시 읽으니 낼 수 있다) → error · Post 0 · ActivityLog 0 · Queue 그대로**',
+      rb.kind === 'error' && /소비 증거가 없다/.test(rb.message) && (await posts()) === 0 && (await logs()) === 0 && (await q(b)).status === 'APPROVED', JSON.stringify(rb))
+
+    // (c) 도래 2 · 승자는 **다른** 후보를 냈다 — 슬롯도 이 후보도 소비되지 않았다 → error
+    await wipe()
+    evidenceAt = K('2026-10-23T00:00:00')
+    const [c1, c2] = [await cand(), await cand()]
+    const at2 = K('2026-10-23T09:30:00')
+    const rc = await withFault(c1, at2, 'd10', 0, await planOf(c1), async (f) => {
+      if (f.point !== 'begin') return
+      if (f.attempt === 1) await scheduled(c2, at2, 'd10', envOf('d10'), 0)
+      throw p2034()
+    })
+    check('🔴 🔴 **[반례] 다른 후보 발행 · 도래 2 중 1 소비 → 이 회차의 소비 증거 아님 → error (정상 무발행으로 숨기지 않는다)**',
+      rc.kind === 'error' && (await posts()) === 1 && (await q(c1)).status === 'APPROVED', JSON.stringify(rc))
+
+    // (d) 선택기 결함 — 전날 발행된 행을 오늘 골랐다 + 두 번 연속 충돌 → ALREADY_PUBLISHED 를 정상으로 바꾸지 않는다
+    await wipe()
+    evidenceAt = K('2026-10-23T00:00:00')
+    const [old, other] = [await cand(), await cand()]
+    const y = await scheduled(old, K('2026-10-23T09:30:00'), 'd10', envOf('d10'), 0)
+    const t1 = await scheduled(other, K('2026-10-24T08:10:00'), 'd10', envOf('d10'), 0)
+    const rd = await withFault(old, K('2026-10-24T09:30:00'), 'd10', 0, await planOf(old), async (f) => { if (f.point === 'begin') throw p2034() })
+    check('🔴 🔴 **[반례] 선택기 결함(전날 발행 행) + 두 번 연속 충돌 → error(ALREADY_PUBLISHED) · 정상 무발행 아님**',
+      y.kind === 'published' && t1.kind === 'published' && rd.kind === 'error' && /ALREADY_PUBLISHED/.test(rd.message) && (await posts()) === 2, JSON.stringify(rd))
+
+    // (e) 직렬화가 아닌 DB 오류 — 재시도도 다시 읽기도 없이 error
+    await wipe()
+    evidenceAt = K('2026-10-23T00:00:00')
+    const e = await cand()
+    const ecalls: string[] = []
+    const re = await withFault(e, K('2026-10-23T08:10:00'), 'd10', 0, await planOf(e), async (f) => {
+      ecalls.push(`${f.attempt}:${f.point}`)
+      if (f.point === 'begin') throw new Prisma.PrismaClientKnownRequestError('connection reset', { code: 'P1017', clientVersion: 'fixture' })
+    })
+    check('🔴 🔴 **[반례] P2034 아닌 DB 오류 → error · 재시도 0 · Post 0**',
+      re.kind === 'error' && ecalls.join(',') === '1:begin' && (await posts()) === 0 && (await logs()) === 0, `${JSON.stringify(re)} ${ecalls.join(',')}`)
+
+    // (f) 부분 write — 세 write 뒤 커밋 전 실패: 충돌 2회든 일반 오류든 Post · Queue · ActivityLog 전부 되돌아간다
+    for (const kind of ['P2034', 'other'] as const) {
+      await wipe()
+      evidenceAt = K('2026-10-23T00:00:00')
+      const f0 = await cand()
+      const rf = await withFault(f0, K('2026-10-23T08:10:00'), 'd10', 0, await planOf(f0), async (f) => {
+        if (f.point === 'written') throw kind === 'P2034' ? p2034() : new Error('boom')
+      })
+      const qf = await q(f0)
+      check(`🔴 🔴 **[반례] 세 write 뒤 커밋 전 실패(${kind}) → error · Post 0 · ActivityLog 0 · Queue APPROVED(부분 write 없음)**`,
+        rf.kind === 'error' && (await posts()) === 0 && (await logs()) === 0 && qf.status === 'APPROVED' && qf.createdPostId === null, JSON.stringify(rf))
+    }
   }
 
   await wipe()

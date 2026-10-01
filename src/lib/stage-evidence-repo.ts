@@ -22,7 +22,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { RuntimeStage } from './scale-profile'
 import { isCalendarDate, type ValidatedStageDecision } from './stage-decision-contract'
 import { UNATTENDED_PUBLISH_DECIDED_BY } from './original-post-publish-tx'
-import { confirmedDefectCount, missingAutoPostCount } from './auto-ready-repo'
+import { unresolvedDefectCount, missingAutoPostCount } from './auto-ready-repo'
 import { overdueAuditCount, retryableFailureCount, RETRYABLE_NOTE_PREFIX, AUDIT_OVERDUE_MS } from './auto-ready-audit-store'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { machineReviewedByHuman } from './original-post-auto-publish'
@@ -161,7 +161,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
         retryable: a.defect === null && (a.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX),
         overdue: a.defect === null && a.selectedAt.getTime() < i.now.getTime() - AUDIT_OVERDUE_MS,
       })),
-      globalDefectYes: await confirmedDefectCount(db),
+      globalUnresolvedDefects: await unresolvedDefectCount(db),
       globalOverdue: await overdueAuditCount(db, i.now),
       globalRetryable: await retryableFailureCount(db),
       globalMissingPosts: await missingAutoPostCount(db),

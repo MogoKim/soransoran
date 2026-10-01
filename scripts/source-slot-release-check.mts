@@ -266,7 +266,7 @@ console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
     kstDate: '2026-09-30', stage: 'd3',
     decision: { kstDate: '2026-09-30', state: 'TRIAL', release: 'd3', decidedBy: 'controller' },
     posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
-    audits: { rows: posts.slice(0, 1).map((p) => ({ postId: p.postId, queueId: p.queueId!, judged: true, defectYes: false, retryable: false, overdue: false })), globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+    audits: { rows: posts.slice(0, 1).map((p) => ({ postId: p.postId, queueId: p.queueId!, judged: true, defectYes: false, retryable: false, overdue: false })), globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
   })
   const side = { cost: [{ name: 'x', health: 'ok' as const }], errors: 'ok' as const }
   const stamped = judgeEvidenceForTarget('2026-09-30', 'd3', 3, facts([post('STAMPED_ELIGIBLE'), post('STAMPED_ELIGIBLE'), post('STAMPED_ELIGIBLE')]), side)

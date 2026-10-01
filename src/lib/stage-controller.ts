@@ -215,14 +215,14 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
 
 /**
  * 🔴 **품질** — 자동 READY 감사 정본이 자동 회차를 닫는 네 가지 중 하나라도 있으면 나쁘다.
- *    (확정 결함 yes · 글 유실 · 재시도 가능 감사 실패 · 판정 시한 초과) 못 읽었으면 모른다.
+ *    (지금 계약에서 해소되지 않은 확정 결함 yes · 글 유실 · 재시도 가능 감사 실패 · 판정 시한 초과) 못 읽었으면 모른다.
  */
 export function qualitySignalOf(c: {
-  confirmedDefects: number; missingPosts: number; retryableFailures: number; overdueAudits: number
+  unresolvedDefects: number; missingPosts: number; retryableFailures: number; overdueAudits: number
 } | null, readError: string | null = null): HealthSignal {
   if (c === null) return { axis: 'quality', health: 'unknown', reasons: [`감사 표를 읽지 못했다 — ${readError ?? '이유 모름'}`] }
   const reasons: string[] = []
-  if (c.confirmedDefects > 0) reasons.push(`확정 결함 ${c.confirmedDefects}건`)
+  if (c.unresolvedDefects > 0) reasons.push(`미해소 확정 결함 ${c.unresolvedDefects}건`)
   if (c.missingPosts > 0) reasons.push(`글이 사라진 자동 발행 ${c.missingPosts}건`)
   if (c.retryableFailures > 0) reasons.push(`재시도 가능 감사 실패 ${c.retryableFailures}건`)
   if (c.overdueAudits > 0) reasons.push(`판정 시한 초과 감사 ${c.overdueAudits}건`)

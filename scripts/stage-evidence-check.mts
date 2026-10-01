@@ -68,7 +68,7 @@ const sample = (i: number, o: Partial<{ postId: string; queueId: string; judged:
 })
 const JUDGED = sample(0)
 const CLEAN_AUDITS = {
-  rows: [JUDGED], globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
+  rows: [JUDGED], globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
 }
 const facts = (stage: RuntimeStage = 'd3', o: Partial<StageEvidenceFacts> = {}): StageEvidenceFacts => ({
   kstDate: D, stage,
@@ -202,7 +202,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 표본 — 재시도 가능 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, retryable: true })] } })), 'AUDIT_RETRYABLE')
   failWith('🔴 표 전체 판정 시한 초과 감사 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalOverdue: 1 } })), 'AUDIT_OVERDUE')
   failWith('🔴 표본 — 결함 yes → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { defectYes: true })] } })), 'AUDIT_DEFECT')
-  failWith('🔴 표 전체에 결함 yes(끈적) → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalDefectYes: 1 } })), 'AUDIT_DEFECT')
+  failWith('🔴 표 전체에 결함 yes(끈적) → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalUnresolvedDefects: 1 } })), 'AUDIT_DEFECT')
   failWith('🔴 재시도 가능 감사 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalRetryable: 1 } })), 'AUDIT_RETRYABLE')
   failWith('🔴 글이 사라진 자동 발행 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalMissingPosts: 1 } })), 'AUDIT_MISSING_POST')
 

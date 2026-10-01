@@ -114,10 +114,10 @@ console.log('\n⑤ 열림 근거 — gold 재현 + 사람 중대 결함 0 일 �
   check('🔴 gold 재현 실패 → 증거 미달', !applyFounderGoldBasis(base, bad).meetsContract)
   check('🔴 지금 계약 행에 사람 중대 결함 1건 → 증거 미달',
     !applyFounderGoldBasis({ ...base, cohortHardDefects: 1 } as QualityCohortVerdict, ok).meetsContract)
-  check('🔴 증거 충족이어도 스위치 OFF → 닫힘', !judgeOpen({ enabled: false, evidence: a, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 증거 충족 · 스위치 ON · 발행 뒤 감사 결함 1 → 닫힘', !judgeOpen({ enabled: true, evidence: a, confirmedDefects: 1, missingAutoPosts: 0 }).open)
-  check('🔴 증거 충족 · 스위치 ON · 글 유실 1 → 닫힘', !judgeOpen({ enabled: true, evidence: a, confirmedDefects: 0, missingAutoPosts: 1 }).open)
-  check('🟢 증거 충족 · 스위치 ON · 결함 0 · 유실 0 → 열림', judgeOpen({ enabled: true, evidence: a, confirmedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 증거 충족이어도 스위치 OFF → 닫힘', !judgeOpen({ enabled: false, evidence: a, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 증거 충족 · 스위치 ON · 발행 뒤 감사 결함 1 → 닫힘', !judgeOpen({ enabled: true, evidence: a, unresolvedDefects: 1, missingAutoPosts: 0 }).open)
+  check('🔴 증거 충족 · 스위치 ON · 글 유실 1 → 닫힘', !judgeOpen({ enabled: true, evidence: a, unresolvedDefects: 0, missingAutoPosts: 1 }).open)
+  check('🟢 증거 충족 · 스위치 ON · 결함 0 · 유실 0 → 열림', judgeOpen({ enabled: true, evidence: a, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
   check('품질 계약의 열림 근거 = founderGold', QUALITY_EVIDENCE_BASIS === 'founderGold')
   const repo = readFileSync('src/lib/auto-ready-repo.ts', 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
   check('🔴 🔴 **런타임 증거(`evidenceFromDb`)가 gold 재생을 적용한다 — 도장·발행 트랜잭션이 같은 함수를 쓴다**',
