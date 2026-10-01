@@ -62,7 +62,14 @@ export type VoiceReferenceBundle = {
   supplementCount: number
   /** anchor 비중 — 낮으면 그 묶음은 "한 사람의 말투" 가 아니다 */
   anchorRatio: number
-  /** 이 묶음의 문체 좌표 (관찰값) */
+  /**
+   * 🔴 **이 화자의 실제 관측 총수** (2026-10-01 · Phase F) — 원문으로 싣는 댓글 + style-only 관측.
+   *    계약의 말투 근거 수(`VOICE_MIN_COMMENTS`)는 이 값이다. 원문 수가 아니다.
+   */
+  observedCount: number
+  /** 🔴 경험형이라 원문을 싣지 않고 **문체 좌표·길이 분포에만** 쓴 관측 수 */
+  styleOnlyCount: number
+  /** 이 묶음의 문체 좌표 (관찰값 — style-only 관측 포함) */
   style: StyleVector
 }
 
@@ -142,6 +149,28 @@ export const REFERENCE_MIN_CHARS = 5
  *    3건 미만은 `REFERENCE_MISSING` 이다.
  */
 export const REFERENCE_MIN_COUNT = 3
+/**
+ * 🔴 **provider 로 나가는 안전 원문의 최소치** (2026-10-01 · Phase F).
+ *    관측 3건은 그대로 요구한다(`REFERENCE_MIN_COUNT`). 다만 경험형 댓글은 **원문을 싣지 않고**
+ *    문체·길이 관측으로만 센다 — 그래서 원문 예시는 이 수 이상, 관측 총수는 3 이상이다.
+ */
+export const REFERENCE_MIN_SAFE_TEXTS = 2
+
+/**
+ * 🔴 **한 화자의 말투 근거가 서는가 — 정본 판정 하나** (2026-10-01 · Phase F).
+ *    화자 배정(`planBundles`) · 묶음 판정(`judgeReferenceBundle`) · 자동 생성(`persona-autogen`)이 이것을 부른다.
+ *
+ *    observed   같은 화자의 실제 관측 총수(경험형 포함 · 중복 제거)  ≥ REFERENCE_MIN_COUNT
+ *    safeTexts  그중 provider 로 원문을 보낼 수 있는 안전 댓글 수     ≥ REFERENCE_MIN_SAFE_TEXTS
+ */
+export function judgeVoiceEvidence(input: { observed: number; safeTexts: number }): { ok: boolean; reason: string } {
+  const why: string[] = []
+  if (input.observed < REFERENCE_MIN_COUNT) why.push(`관측 ${input.observed}건 < ${REFERENCE_MIN_COUNT}`)
+  if (input.safeTexts < REFERENCE_MIN_SAFE_TEXTS) why.push(`안전 원문 ${input.safeTexts}건 < ${REFERENCE_MIN_SAFE_TEXTS}`)
+  return why.length === 0
+    ? { ok: true, reason: `관측 ${input.observed}건 · 안전 원문 ${input.safeTexts}건` }
+    : { ok: false, reason: why.join(' · ') }
+}
 
 const charLen = (s: string): number => [...s].length
 
@@ -205,6 +234,11 @@ export function judgeReferenceBundle(input: {
   texts: readonly string[]
   /** 🔴 그중 anchor 작성자에게서 온 건수. 모르면 전부 anchor 로 본다(단위 시험) */
   anchorCount?: number
+  /**
+   * 🔴 **같은 화자의 style-only 관측** (2026-10-01 · Phase F) — 경험형이라 원문을 싣지 않는 댓글.
+   *    관측 수 · 문체 좌표 · 길이 분포에만 들어가고 `comments` 에는 **절대 들어가지 않는다.**
+   */
+  styleOnlyTexts?: readonly string[]
 }): ReferenceVerdict {
   const blocks: { code: ReferenceBlockCode; message: string }[] = []
   const trimmed = input.texts.map((t) => (t ?? '').trim()).filter((t) => t !== '')
@@ -237,11 +271,13 @@ export function judgeReferenceBundle(input: {
       message: `${input.personaCode}: 중복 ${trimmed.length - unique.length}건`,
     })
   }
-  if (unique.length < REFERENCE_MIN_COUNT) {
-    blocks.push({
-      code: 'REFERENCE_TOO_FEW',
-      message: `${input.personaCode}: ${unique.length}건 — ${REFERENCE_MIN_COUNT}건 이상이어야 한다`,
-    })
+  // 🔴 style-only 관측은 원문과 겹치지 않게 센다 — 같은 문장을 두 번 세면 관측이 부풀려진다
+  const styleOnly = [...new Set((input.styleOnlyTexts ?? []).map((t) => (t ?? '').trim()))]
+    .filter((t) => t !== '' && !unique.includes(t) && !looksLikePostBody(t) && charLen(t) >= REFERENCE_MIN_CHARS)
+  const observed = [...unique, ...styleOnly]
+  const evidence = judgeVoiceEvidence({ observed: observed.length, safeTexts: unique.length })
+  if (!evidence.ok) {
+    blocks.push({ code: 'REFERENCE_TOO_FEW', message: `${input.personaCode}: ${evidence.reason}` })
   }
   if (blocks.length > 0) return { ok: false, blocks }
 
@@ -252,11 +288,14 @@ export function judgeReferenceBundle(input: {
     bundle: {
       personaCode: input.personaCode,
       comments: unique.map((text) => ({ text })),
-      lengths: lengthProfile(unique),
+      // 🔴 길이·문체는 **숫자 관찰값**이다 — style-only 관측까지 반영하되 원문은 싣지 않는다
+      lengths: lengthProfile(observed),
       anchorCount,
       supplementCount: unique.length - anchorCount,
       anchorRatio: unique.length === 0 ? 0 : anchorCount / unique.length,
-      style: styleCentroid(unique),
+      observedCount: observed.length,
+      styleOnlyCount: styleOnly.length,
+      style: styleCentroid(observed),
     },
   }
 }

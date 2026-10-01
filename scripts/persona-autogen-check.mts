@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
-import { verifySeedCard } from '../src/lib/persona-card-verify'
+import { explicitEndingsOf, verifySeedCard } from '../src/lib/persona-card-verify'
 import { readLengthBand } from '../src/lib/original-post-persona-match'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import {
@@ -79,6 +79,8 @@ console.log('① 온전한 후보')
   check('렌더된 카드를 정본 파서가 다시 읽는다', v.cardMarkdown !== null && parsePoolDoc(v.cardMarkdown).cards.length === 1)
   check('seed 가 운영 verifySeedCard 를 통과한다', v.seed !== null && v.card !== null && verifySeedCard(code, v.seed, v.card).length === 0)
   check('lifeStage 가 운영 어휘다 (자녀 독립 준비)', v.seed?.lifeStage === '자녀 독립 준비')
+  check('🔴 렌더된 카드에 고정 말끝 토큰 0 · seed 에 ending 칸 0', v.card !== null && explicitEndingsOf(v.card.voiceTokens).length === 0
+    && !('ending' in ((v.seed?.voiceCore ?? {}) as Record<string, unknown>)))
 }
 
 // ── ② 반례 — 한 칸씩 비튼다 ──
@@ -169,6 +171,8 @@ console.log('④ 말투 칸')
   check('길이 토큰을 readLengthBand 가 읽는다', readLengthBand(vc.length) !== null)
   check('요 비율이 높으면 존댓말', vc.register === '존댓말')
   check('요 비율이 낮으면 구어체', voiceCoreFromBundle(bundleOf(code, TEXTS_B)).register === '구어체')
+  // 🔴 고정 말끝은 카드가 명시할 때만 — 관측에서 합성하지 않는다(Phase F 보정)
+  check('🔴 voiceCoreFromBundle 은 ending 을 만들지 않는다', !('ending' in vc) && !('ending' in voiceCoreFromBundle(bundleOf(code, TEXTS_B))))
 }
 
 // ── ④-2 운영 말투 배정 불변 ──

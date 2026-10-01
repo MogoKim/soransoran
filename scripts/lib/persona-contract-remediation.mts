@@ -7,6 +7,8 @@
  * 🔴 적용(`applyRemediation`)은 전원 아니면 0 이다.
  *    · 하나의 Serializable 트랜잭션 · 트랜잭션 **안에서** 행을 다시 읽어 precondition(행 지문)을 대조한다
  *    · 다시 세운 계획의 digest 가 승인된 digest 와 같아야 한다
+ *    · 🔴 승인한 **계약 유효 기대값 쌍**(지금 → 적용 뒤)이 트랜잭션 안의 지금 · 예측 · 실제와 모두 같아야 한다
+ *    · 계획에 든 **칸만** 쓴다 — Persona 의 다른 칸 · 다른 표는 건드리지 않는다(감사 기록 1행/사람 제외)
  *    · 적용 뒤 같은 트랜잭션 안에서 계약을 다시 재고 — 예측과 다르거나 · 계약 유효가 줄거나 · 전에 유효하던
  *      사람이 빠지거나 · 어느 축이든 막힘/모름이 늘면 throw → 롤백
  *    · Post · Comment · Queue · 활동 · 원문 · 계정 행 수가 그대로인지 본다 — 활동을 만들지 않는다
@@ -76,7 +78,7 @@ export function patchFacts(facts: PersonaReserveFacts, full: readonly FullRow[],
       if (p === undefined || raw === undefined || row.qualification === null) return row
       const fixed = patchedRow(remediationRowOf(raw), p.changes)
       const seed = { ...seedOfRow(raw), identity: fixed.identity ?? undefined, voiceCore: fixed.voiceCore ?? undefined,
-        ageBand: fixed.ageBand, region: fixed.region,
+        ageBand: fixed.ageBand, region: fixed.region, lifeStage: fixed.lifeStage,
         noGoTopics: [...fixed.noGoTopics], noGoExpressions: [...fixed.noGoExpressions], forbiddenReactionRoles: [...fixed.forbiddenReactionRoles] }
       return {
         ...row,
@@ -138,12 +140,31 @@ export type ApplyOutcome =
   | { ok: true; updated: string[]; before: number | null; after: number | null }
   | { ok: false; reason: string; wrote: 0 }
 
+/** 🔴 계획에 든 칸만 Prisma data 로 옮긴다 — identity · voiceCore 는 JSON 한 칸이라 통째로, 나머지는 그 칸만 */
+export function updateDataOf(fixed: RemediationRow, fields: readonly string[]): Prisma.PersonaUpdateManyMutationInput {
+  const data: Prisma.PersonaUpdateManyMutationInput = {}
+  for (const f of new Set(fields.map((x) => (x.includes('.') ? x.slice(0, x.indexOf('.')) : x)))) {
+    if (f === 'identity') data.identity = (fixed.identity ?? {}) as Prisma.InputJsonValue
+    else if (f === 'voiceCore') data.voiceCore = (fixed.voiceCore ?? {}) as Prisma.InputJsonValue
+    else if (f === 'ageBand') data.ageBand = fixed.ageBand
+    else if (f === 'region') data.region = fixed.region
+    else if (f === 'lifeStage') data.lifeStage = fixed.lifeStage
+    else if (f === 'noGoTopics') data.noGoTopics = [...fixed.noGoTopics]
+    else if (f === 'noGoExpressions') data.noGoExpressions = [...fixed.noGoExpressions]
+    else if (f === 'forbiddenReactionRoles') data.forbiddenReactionRoles = [...fixed.forbiddenReactionRoles]
+    else throw new Error(`모르는 복구 칸: ${f}`)
+  }
+  return data
+}
+
 /**
  * 🔴 **적용 — 전원 아니면 0.** 부르는 쪽이 운영 여부를 막는다(CLI 는 이번 Phase 에서 격리 DB 만 연다).
  *    `hooks.beforeUpdate` 는 부분 실패 반례용이다 — 던지면 앞서 쓴 행까지 롤백된다.
  */
 export async function applyRemediation(prisma: PrismaClient, input: {
   approvedDigest: string
+  /** 🔴 dry-run 이 보고한 계약 유효 수 — 지금(before) → 적용 뒤(after). 하나라도 다르면 롤백 */
+  expected: { before: number; after: number }
   reason: string
   now: Date
   repoRoot: string
@@ -160,7 +181,11 @@ export async function applyRemediation(prisma: PrismaClient, input: {
       if (r.plan.digest !== input.approvedDigest) {
         throw new Error(`PLAN_STALE — 승인 ${input.approvedDigest} · 지금 ${r.plan.digest} (계획 뒤 DB 가 바뀌었다)`)
       }
+      // 🔴 계획이 비면 쓸 것이 없다 — 두 번째 실행은 write 0 이다
       if (r.plan.personas.length === 0) { result = { updated: [], before: r.before.contractValid, after: r.before.contractValid }; return }
+      if (r.before.contractValid !== input.expected.before || r.predicted.contractValid !== input.expected.after) {
+        throw new Error(`EXPECTATION_MISMATCH — 승인 ${input.expected.before}→${input.expected.after} · 지금 ${r.before.contractValid}→예측 ${r.predicted.contractValid}`)
+      }
       const pre = regressionOf(r.before, r.predicted, r.predicted)
       if (pre.length > 0) throw new Error(`예측이 이미 나쁘다 — ${pre.join(' · ')}`)
       const kept = await untouched(tx)
@@ -175,13 +200,7 @@ export async function applyRemediation(prisma: PrismaClient, input: {
         const n = await tx.persona.updateMany({
           // 🔴 조건부 write — 읽은 뒤 누가 바꿨으면 0 행 → throw
           where: { code: p.code, updatedAt: raw.updatedAt },
-          data: {
-            ageBand: fixed.ageBand, region: fixed.region,
-            identity: (fixed.identity ?? {}) as Prisma.InputJsonValue,
-            ...(fixed.voiceCore === null ? {} : { voiceCore: fixed.voiceCore as Prisma.InputJsonValue }),
-            noGoTopics: [...fixed.noGoTopics], noGoExpressions: [...fixed.noGoExpressions],
-            forbiddenReactionRoles: [...fixed.forbiddenReactionRoles],
-          },
+          data: updateDataOf(fixed, p.changes.map((c) => c.field)),
         })
         if (n.count !== 1) throw new Error(`${p.code} 조건부 write ${n.count}행 — 계획 뒤 바뀌었다`)
         const id = (await tx.persona.findUniqueOrThrow({ where: { code: p.code }, select: { id: true } })).id
@@ -195,6 +214,9 @@ export async function applyRemediation(prisma: PrismaClient, input: {
       const after = await readPersonaReserve({ reserveFacts: () => readReserveFacts(tx, { now: input.now, repoRoot: input.repoRoot }) })
       const bad = regressionOf(r.before, after, r.predicted)
       if (bad.length > 0) throw new Error(`적용 뒤 회귀 — ${bad.join(' · ')}`)
+      if (after.contractValid !== input.expected.after) {
+        throw new Error(`EXPECTATION_MISMATCH — 적용 뒤 ${after.contractValid} ≠ 승인 ${input.expected.after}`)
+      }
       const now = await untouched(tx)
       const drift = Object.entries(now).filter(([k, v]) => v !== kept[k])
       if (drift.length > 0) throw new Error(`건드리지 않기로 한 표가 변했다: ${drift.map(([k, v]) => `${k} ${kept[k]}→${v}`).join(' · ')}`)

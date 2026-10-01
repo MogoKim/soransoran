@@ -26,7 +26,7 @@ import { hardFilter, readLengthBand, readPostRequirements } from '../../src/lib/
 import { judgePlannerPersona, type PlannerPersona, type PlannerPost } from '../../src/lib/persona-comment-planner'
 import { COMMENT_REACTION_ROLES } from '../../src/lib/persona-reaction-roles'
 import {
-  judgeReferenceBundle, judgeVoiceSeparation, type VoiceReferenceBundle,
+  judgeVoiceEvidence, judgeVoiceSeparation, type VoiceReferenceBundle,
 } from '../../src/lib/persona-voice-reference'
 import { PRODUCTION_PERSONA_CODES } from '../../src/lib/persona-cohort'
 import { isPoolCode } from '../../src/lib/persona-card-verify'
@@ -112,16 +112,18 @@ export function judgeAutogenCandidate(
   let voiceCore: ReturnType<typeof voiceCoreFromBundle> | null = null
   if (c.voice === null) add('NO_VOICE_EVIDENCE', '배정되지 않은 정본 화자 묶음이 없다')
   else {
+    // 🔴 말투 근거 판정은 `judgeVoiceEvidence` 하나다 — 관측 총수(style-only 포함) · 안전 원문 수
     const texts = c.voice.bundle.comments.map((x) => x.text)
-    const ref = judgeReferenceBundle({ personaCode: c.code, texts, anchorCount: c.voice.bundle.anchorCount })
-    if (!ref.ok) add('VOICE_EVIDENCE_THIN', ref.blocks.map((b) => b.code).join('·'))
-    else if (texts.length < VOICE_MIN_COMMENTS || c.voice.bundle.anchorRatio < 1) {
-      add('VOICE_EVIDENCE_THIN', `한 화자 댓글 ${texts.length}건 · anchor 비율 ${c.voice.bundle.anchorRatio}`)
+    const ev = judgeVoiceEvidence({ observed: c.voice.bundle.observedCount, safeTexts: new Set(texts).size })
+    if (!ev.ok) add('VOICE_EVIDENCE_THIN', ev.reason)
+    else if (c.voice.bundle.observedCount < VOICE_MIN_COMMENTS || c.voice.bundle.anchorRatio < 1) {
+      add('VOICE_EVIDENCE_THIN', `한 화자 관측 ${c.voice.bundle.observedCount}건 · anchor 비율 ${c.voice.bundle.anchorRatio}`)
     }
     if (c.voice.seedShareCount === null) add('VOICE_SPEAKER_DUPLICATE', '묶음 공유 수를 세지 못했다')
     else if (c.voice.seedShareCount > 1) add('VOICE_SPEAKER_DUPLICATE', `같은 댓글이 ${c.voice.seedShareCount}개 묶음에 있다`)
     voiceCore = voiceCoreFromBundle(c.voice.bundle)
-    voiceTokens = [voiceCore.length, voiceCore.register, `"${voiceCore.ending}" 기본`, `이모티콘 ${voiceCore.emoji}`]
+    // 🔴 따옴표 말끝 토큰을 만들지 않는다 — 관측에서 고정 말끝을 합성하지 않는다(Phase F 보정)
+    voiceTokens = [voiceCore.length, voiceCore.register, `이모티콘 ${voiceCore.emoji}`]
     if (readLengthBand(voiceCore.length) === null) add('VOICE_LENGTH_UNREADABLE', voiceCore.length)
   }
 

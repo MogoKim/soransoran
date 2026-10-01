@@ -65,11 +65,22 @@ console.log('\n② 카드 정본 칸만 · 근거 없는 칸은 채우지 않는
   const fields = p.personas[0]?.changes.map((c) => c.field) ?? []
   check('비어 있는 noGoTopics → 카드 값', fields.includes('noGoTopics')
     && JSON.stringify(p.personas[0]!.changes.find((c) => c.field === 'noGoTopics')!.after) === JSON.stringify(card('P17').noGoTopics))
-  check('🔴 lifeStage · voiceCore.ending 은 채우지 않는다 — 근거 필요로 낸다',
-    !fields.some((f) => /lifeStage|ending/.test(f))
-    && p.evidenceRequired.some((g) => g.field === 'lifeStage') && p.evidenceRequired.some((g) => g.field === 'voiceCore.ending'))
+  // 🔴 Phase F — 비어 있는 lifeStage 는 **카드 제목 그대로**만 · 카드가 말끝을 적지 않으면 말끝은 만들지 않는다
+  check('🔴 빈 lifeStage → 카드 제목 그대로(자유 생성 0)', p.personas[0]!.changes.find((c) => c.field === 'lifeStage')?.after === card('P17').title)
+  check('🔴 카드가 말끝을 적지 않은 P17 — 말끝 칸 생성 0 · 근거 필요로도 내지 않는다',
+    !fields.includes('voiceCore.ending') && !p.evidenceRequired.some((g) => g.field === 'voiceCore.ending' || g.field === 'lifeStage'))
   const fixed = patchedRow(drift, p.personas[0]!.changes)
-  check('고친 행도 lifeStage 는 비어 있다(기본값 0)', fixed.lifeStage === null && !('ending' in (fixed.voiceCore ?? {})))
+  check('고친 행: lifeStage = 제목 · 말끝 칸 없음', fixed.lifeStage === card('P17').title && !('ending' in (fixed.voiceCore ?? {})))
+  check('🔴 이미 있는 lifeStage 는 건드리지 않는다', !planRemediation([rowOf('P17', { lifeStage: '자녀 독립기' })], cards)
+    .personas.some((x) => x.changes.some((c) => c.field === 'lifeStage')))
+  const p15 = planRemediation([rowOf('P15', { lifeStage: null, voiceCore: { length: card('P15').voiceLength, register: '존댓말', emoji: '없음' } })], cards)
+  check('P15(카드 말끝 미명시) — lifeStage 만 제목으로', JSON.stringify(p15.personas[0]?.changes.map((c) => c.field)) === '["lifeStage"]'
+    && p15.personas[0]!.changes[0]!.after === card('P15').title)
+  const oneEnding = planRemediation([rowOf('P01', { voiceCore: { length: card('P01').voiceLength, register: '존댓말', emoji: '없음' } })], cards)
+  check('카드가 말끝을 하나 명시(P01 "~해요") · 저장값 비었음 → 그 값', oneEnding.personas[0]?.changes.find((c) => c.field === 'voiceCore.ending')?.after === '~해요')
+  const twoEndings = planRemediation([rowOf('P02', { voiceCore: { length: card('P02').voiceLength, register: '존댓말', emoji: '없음' } })], cards)
+  check('카드가 말끝을 둘 명시(P02) · 저장값 비었음 → 고르지 않고 근거 필요', !twoEndings.personas.some((x) => x.changes.some((c) => c.field === 'voiceCore.ending'))
+    && twoEndings.evidenceRequired.some((g) => g.field === 'voiceCore.ending'))
   const roles = planRemediation([rowOf('P05', { forbiddenReactionRoles: ['information'] })], cards)
   check('금지 역할이 카드와 다르면 카드 값(더 넓은 금지)', roles.personas[0]?.changes[0]?.field === 'forbiddenReactionRoles'
     && JSON.stringify(roles.personas[0]!.changes[0]!.after) === JSON.stringify(card('P05').forbiddenReactionRoles))

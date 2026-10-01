@@ -6,7 +6,7 @@
  *   npx tsx scripts/persona-contract-remediation.mts --json
  *   # 🔴 apply 는 이번 Phase 에서 격리 DB 만 연다(운영 apply 는 별도 승인 PR)
  *   SORAN_ISOLATED_DB=yes-throwaway DATABASE_URL=postgresql://…@localhost:…/soran_test \
- *     npx tsx scripts/persona-contract-remediation.mts --apply --digest=<dry-run 의 digest> --reason "…"
+ *     npx tsx scripts/persona-contract-remediation.mts --apply --digest=<dry-run 의 digest> --expect=<지금>:<예측> --reason "…"
  *
  * 🔴 출력은 코드 · 축 · 필드 이름 · 개수다. 표시명 · 값 · 원문 · 해시를 찍지 않는다.
  */
@@ -45,7 +45,10 @@ try {
     const digest = arg('--digest')
     const reason = arg('--reason') ?? ''
     if (digest === null) { console.error('🔴 --digest=<dry-run digest> 가 필요하다 — 본 계획만 적용한다'); process.exit(2) }
-    const r = await applyRemediation(prisma, { approvedDigest: digest, reason, now, repoRoot })
+    const m = /^(\d+):(\d+)$/.exec(arg('--expect') ?? '')
+    if (m === null) { console.error('🔴 --expect=<지금>:<예측> 이 필요하다 — dry-run 이 보고한 계약 유효 수 그대로'); process.exit(2) }
+    const expected = { before: Number(m[1]), after: Number(m[2]) }
+    const r = await applyRemediation(prisma, { approvedDigest: digest, expected, reason, now, repoRoot })
     console.log(r.ok ? `✅ 적용 ${r.updated.length}명 [${r.updated.join(',')}] · 계약 유효 ${r.before}→${r.after}` : `🔴 ${r.reason} (write ${r.wrote})`)
     process.exitCode = r.ok ? 0 : 1
   } else {
@@ -60,6 +63,12 @@ try {
       before: { contractValid: r.before.contractValid, valid: valid(r.before), gaps: gaps(r.before) },
       predicted: { contractValid: r.predicted.contractValid, valid: valid(r.predicted), gaps: gaps(r.predicted) },
       changes: r.plan.personas.map((p) => ({ code: p.code, fields: p.changes.map((c) => c.field) })),
+      // 🔴 새로 유효가 되는 사람 — 지금 막힌 축과 근거 유형(코드 · 축 이름만)
+      additions: valid(r.predicted).filter((c) => !valid(r.before).includes(c)).map((code) => {
+        const v = r.before.verdicts.find((x) => x.code === code)
+        return { code, axes: Object.keys(v?.contract?.blocked ?? {}), fields: r.plan.personas.find((p) => p.code === code)?.changes.map((c) => c.field) ?? [] }
+      }),
+      lost: valid(r.before).filter((c) => !valid(r.predicted).includes(c)),
       evidenceRequired: r.plan.evidenceRequired.map((g) => `${g.code}:${g.field}`),
       skipped: r.plan.skipped,
     }
@@ -67,7 +76,8 @@ try {
     else {
       console.log(`\n══ Persona 계약 복구 — dry-run (DB write 0) ══\n`)
       console.log(`   계획 digest ${out.digest}`)
-      console.log(`   계약 유효 ${out.before.contractValid} → 예측 ${out.predicted.contractValid}`)
+      console.log(`   계약 유효 ${out.before.contractValid} → 예측 ${out.predicted.contractValid} · 이탈 ${out.lost.length}`)
+      for (const a of out.additions) console.log(`   + ${a.code}: 막힌 축 ${a.axes.join('·')} · 복구 칸 ${a.fields.join('·') || '없음(DB write 없이 서는 사람)'}`)
       for (const c of out.changes) console.log(`   · ${c.code}: ${c.fields.join(' · ')}`)
       console.log('\n   남는 막힘(예측):')
       for (const [a, g] of Object.entries(out.predicted.gaps)) console.log(`   · ${a}: 막힘 ${g.blocked.length} [${g.blocked.join(',')}] · 모름 ${g.unknown.length} [${g.unknown.join(',')}]`)

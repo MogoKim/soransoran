@@ -2,8 +2,13 @@
  * Persona 계약 **결정적 복구 계획** — 🔴 순수 함수. DB · 파일 · 네트워크 · LLM 없음 (2026-10-01 · Phase 2A)
  *
  *   저장된 seed 가 **정본 Pool 카드**와 어긋난 칸만, 카드가 그 값을 **직접 적고 있을 때만** 카드 값으로 맞춘다.
- *   카드에 없는 값은 채우지 않는다 — 생활 단계 · 말끝 · 말투 변주 · 활동 리듬은 사람이 고른 값이고,
+ *   카드에 없는 값은 채우지 않는다 — 말투 변주 · 활동 리듬 · 카드가 적지 않은 말끝은 사람이 고른 값이고,
  *   카드로부터 유도되지 않는다(2026-09-07 seed 파일도 지금 계약을 통과하지 못한다 — 근거가 아니다).
+ *
+ * 🔴 **Phase F (2026-10-01) 에 넓힌 결정적 복구 둘** — 둘 다 카드 글자 그대로다. 생성하지 않는다.
+ *    · `lifeStage` 가 비었으면 **카드 제목**(`### P07 — 대학생 하나, 요양원 오가며` 의 제목)으로만 채운다
+ *    · `voiceCore.ending` 이 비었고 카드가 말끝을 **정확히 하나** 따옴표로 적었으면 그 값으로 채운다
+ *      (카드가 말끝을 적지 않으면 채우지 않는다 — 말끝은 더 이상 필수 칸이 아니다 · `REQUIRED_VOICE`)
  *
  * 🔴 하지 않는 것
  *    · 하한 · 품질 기준 변경 · active 행을 계약 유효로 세기
@@ -16,11 +21,11 @@
  */
 import { createHash } from 'node:crypto'
 
-import { MARITAL_VALUES } from './persona-card-verify'
+import { MARITAL_VALUES, explicitEndingsOf } from './persona-card-verify'
 import { noGoExpressionKey } from './persona-no-go'
 import type { PoolCard } from './persona-pool-card'
 
-export const REMEDIATION_PLAN_VERSION = 'persona-remediation-v1'
+export const REMEDIATION_PLAN_VERSION = 'persona-remediation-v2'
 
 /** 🔴 카드가 직접 적는 칸 — 어긋나면 카드 값으로 맞춘다 */
 export const CARD_CANON_FIELDS = [
@@ -28,15 +33,20 @@ export const CARD_CANON_FIELDS = [
   'identity.maritalStatus', 'identity.childrenCount', 'identity.parentCare', 'identity.menopauseStatus',
   'identity.spouseRelationship', 'voiceCore.length',
 ] as const
-/** 🔴 카드가 직접 적지만 `verifySeedCard` ⑧ 이 대조하지 않는 칸 — **비었을 때만** 채운다 */
+/**
+ * 🔴 카드가 직접 적지만 `verifySeedCard` ⑧ 이 대조하지 않는 칸 — **비었을 때만** 채운다.
+ *    `lifeStage` 는 카드 **제목** 그대로다(Phase F). 이미 값이 있는 사람의 생활 단계는 건드리지 않는다.
+ */
 export const CARD_FILL_FIELDS = [
-  'ageBand', 'region', 'identity.workStatus', 'identity.economicStatus', 'identity.housing', 'identity.personality',
+  'ageBand', 'region', 'lifeStage', 'identity.workStatus', 'identity.economicStatus', 'identity.housing', 'identity.personality',
 ] as const
-export type RemediableField = (typeof CARD_CANON_FIELDS)[number] | (typeof CARD_FILL_FIELDS)[number]
+/** 🔴 카드가 말끝을 **정확히 하나** 명시했고 저장값이 비었을 때만 채운다 */
+export const CARD_ENDING_FIELD = 'voiceCore.ending' as const
+export type RemediableField = (typeof CARD_CANON_FIELDS)[number] | (typeof CARD_FILL_FIELDS)[number] | typeof CARD_ENDING_FIELD
 
 /** 🔴 카드에서 유도할 수 없는 칸 — 비어 있으면 계획이 채우지 않고 `evidenceRequired` 로 낸다 */
 export const EVIDENCE_REQUIRED_FIELDS = [
-  'lifeStage', 'voiceCore.register', 'voiceCore.ending', 'voiceCore.emoji',
+  'voiceCore.register', 'voiceCore.emoji',
 ] as const
 
 export type RemediationRow = {
@@ -130,11 +140,17 @@ export function changesOf(r: RemediationRow, card: PoolCard): { changes: FieldCh
   if (card.voiceLength !== null && getField(r, 'voiceCore.length') !== card.voiceLength) put('voiceCore.length', card.voiceLength)
 
   const fill: Record<(typeof CARD_FILL_FIELDS)[number], unknown> = {
-    ageBand: card.ageBand, region: card.region,
+    ageBand: card.ageBand, region: card.region, lifeStage: card.title,
     'identity.workStatus': card.workStatus, 'identity.economicStatus': card.economicStatus,
     'identity.housing': card.housing, 'identity.personality': card.personality,
   }
   for (const f of CARD_FILL_FIELDS) if (empty(getField(r, f)) && !empty(fill[f])) put(f, fill[f])
+
+  const endings = explicitEndingsOf(card.voiceTokens)
+  if (empty(getField(r, CARD_ENDING_FIELD)) && endings.length === 1) put(CARD_ENDING_FIELD, endings[0])
+  else if (empty(getField(r, CARD_ENDING_FIELD)) && endings.length > 1) {
+    gaps.push({ code: r.code, field: CARD_ENDING_FIELD, reason: `카드가 말끝을 ${endings.length}개 적는다 — 하나를 고를 근거가 없다` })
+  }
 
   for (const f of EVIDENCE_REQUIRED_FIELDS) {
     if (empty(getField(r, f))) gaps.push({ code: r.code, field: f, reason: '카드에서 유도할 수 없다 — 근거 필요' })

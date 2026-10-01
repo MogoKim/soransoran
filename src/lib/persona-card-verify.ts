@@ -30,7 +30,25 @@ export const REQUIRED_IDENTITY = [
  *    내용은 자녀 수와의 **정합 검사**(⑤)가 판단한다.
  */
 export const REQUIRED_ARRAY_IDENTITY = ['childrenAgeBands'] as const
-export const REQUIRED_VOICE = ['length', 'register', 'ending', 'emoji'] as const
+/**
+ * 🔴 **말끝(`ending`)은 필수 칸이 아니다** (2026-10-01 · Phase F — 옛 "필수 4칸" 권위 삭제).
+ *    카드가 말끝을 **따옴표로 명시**하면(`"~해요" 기본`) 그 값과 정확히 대조한다(⑧).
+ *    카드가 말끝을 적지 않으면 값을 만들지 않는다 — 말투의 유효성은 카드의 voice 토큰 · variation 수와
+ *    같은 화자의 실제 관측 3건(계약 축 `voiceEvidence`)이 판정한다.
+ */
+export const REQUIRED_VOICE = ['length', 'register', 'emoji'] as const
+
+/**
+ * 🔴 **카드가 명시한 말끝** — voiceCore 토큰 안의 따옴표 `"~…"` 만 읽는다.
+ *    `말끝 흐림` 처럼 따옴표 없는 서술은 고정 말끝이 아니다. `"ㅋㅋ"` · `"진짜"` 는 말끝이 아니다(`~` 로 시작하지 않는다).
+ */
+export function explicitEndingsOf(voiceTokens: readonly string[]): string[] {
+  const out: string[] = []
+  for (const t of voiceTokens) {
+    for (const m of t.matchAll(/"(~[^"]+)"/gu)) if (!out.includes(m[1]!.trim())) out.push(m[1]!.trim())
+  }
+  return out
+}
 export const REQUIRED_SCALAR = ['ageBand', 'region', 'lifeStage', 'dailyCap', 'weeklyCap', 'silenceRate'] as const
 export const REQUIRED_LIST = ['noGoTopics', 'noGoExpressions', 'forbiddenReactionRoles'] as const
 
@@ -146,6 +164,18 @@ export function verifySeedCard(code: string, card: SeedCard, poolCard: PoolCard 
     problems.push('정본 카드의 voiceCore 길이가 미상이다 — 사람이 추정한 값을 넣지 않는다. 정본을 먼저 보완하라')
   } else if (vcv.length !== poolCard.voiceLength) {
     problems.push(`voiceCore.length 가 정본과 다르다 (정본 "${poolCard.voiceLength}")`)
+  }
+  // 🔴 **말투는 카드가 적은 것으로 판정한다** — voice 토큰 · variation 수 · 명시된 말끝
+  if (poolCard.voiceTokens.length === 0) problems.push('정본 카드의 voiceCore 토큰이 없다')
+  if (vv.length !== poolCard.variationCount) {
+    problems.push(`voiceVariations ${vv.length}개가 정본 variation ${poolCard.variationCount}개와 다르다`)
+  }
+  const endings = explicitEndingsOf(poolCard.voiceTokens)
+  if (endings.length > 0) {
+    if (!filled(vcv.ending)) problems.push(`voiceCore.ending 이 없다 — 정본 카드가 명시한다(${endings.join('·')})`)
+    else if (!endings.includes(String(vcv.ending).trim())) {
+      problems.push(`voiceCore.ending 이 정본과 다르다 (정본 ${endings.join('·')})`)
+    }
   }
 
   return problems

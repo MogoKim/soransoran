@@ -73,7 +73,7 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
  *
  * 🔴 **Persona 를 점유하지 않는다.** `planBundles` 에 Persona 코드가 아니라
  *    말투 슬롯 이름을 준다. 묶음은 **리듬 근거**일 뿐이고 생활사를 주장하지 않는다 —
- *    `allowExperience: false` 가 경험형 댓글을 빼기 때문에, 발행 시점에 어떤 Persona 가
+ *    경험형 댓글은 언제나 원문에서 빠지기 때문에(style-only), 발행 시점에 어떤 Persona 가
  *    배정되든 모순될 사실이 없다.
  */
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'

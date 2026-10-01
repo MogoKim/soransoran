@@ -1007,14 +1007,13 @@ console.log('⑤-b 🔴 Wave E — 말투 근거 · 무효 회차 · manifest ·
       ...Array.from({ length: 6 }, (_, i) => ({ speakerId: 'aaaaaaaaaaaa', text: `저도 작년에 그거 겪었어요 ${i}` })),
       ...Array.from({ length: 20 }, (_, i) => ({ speakerId: `cccccccccc${String(i).padStart(2, '0')}`, text: `보완 문장 ${i} 그렇군요` })),
     ]
-    const safe = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: false })
+    const safe = planBundles({ rows, personaCodes: ['P1'], target: 8 })
     const safeTexts = safe.bundles.flatMap((b) => b.comments.map((c) => c.text))
     check(`🔴 경험 근거 없으면 경험형 0건 (${safeTexts.filter(carriesExperience).length}건)`,
       safeTexts.length > 0 && safeTexts.every((t) => !carriesExperience(t)))
     check('🔴 제외했다고 소리 내어 말한다', safe.blocks.some((b) => b.includes('경험형 참고 댓글')))
-    const rich = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: true })
-    check('🟢 근거가 있으면 경험형도 받을 수 있다',
-      rich.bundles.flatMap((b) => b.comments.map((c) => c.text)).some(carriesExperience))
+    check('🔴 경험형은 style-only 관측으로만 센다(원문 0 · 관측에는 들어간다)',
+      safe.bundles.every((b) => b.styleOnlyCount > 0 && b.observedCount === b.comments.length + b.styleOnlyCount))
   }
 
   // ── P0-1 🔴 역할과 무관하게 근거 없는 자기 경험을 막는다 ──
@@ -1594,11 +1593,16 @@ console.log('⑤-d 🔴 Persona reference 안정 배정 (배치가 바뀌어도 
         check('A-2 🔴 표에 보완 0 으로 남는다',
           [...fwd.byCode.keys()].every((c) =>
             (fwd.table.find((t) => t.personaCode === c)?.supplements ?? -1) === 0))
-        /** 🔴 3~8 가변 길이 — 8 로 맞추려고 채우지 않는다 */
+        /**
+         * 🔴 원문 2~8 가변 길이 · 관측 3건 이상 (2026-10-01 · Phase F) — 8 로 맞추려고 채우지 않는다.
+         *    경험형 댓글은 원문이 아니라 style-only 관측으로만 센다.
+         */
         const sizes = [...fwd.byCode.values()].map((b) => b.comments.length)
-        check(`A-2 🟢 3~8 가변 길이다 (${Math.min(...sizes)}~${Math.max(...sizes)})`,
-          Math.min(...sizes) >= 3 && Math.max(...sizes) <= 8)
-        check('A-2 🔴 3건 미만은 묶음이 되지 않는다', sizes.every((n) => n >= 3))
+        check(`A-2 🟢 원문 2~8 가변 길이다 (${Math.min(...sizes)}~${Math.max(...sizes)})`,
+          Math.min(...sizes) >= 2 && Math.max(...sizes) <= 8)
+        check('A-2 🔴 관측 3건 미만 · 안전 원문 2건 미만은 묶음이 되지 않는다',
+          [...fwd.byCode.values()].every((b) => b.observedCount >= 3 && b.comments.length >= 2))
+        check('A-2 🔴 원문에 경험형 댓글 0', [...fwd.byCode.values()].every((b) => !b.comments.some((c) => carriesExperience(c.text))))
       }
     }
 
