@@ -45,8 +45,6 @@ const LIMIT = LIMIT_RAW === undefined ? null : Number(LIMIT_RAW)
 const BATCH_RAW = arg('batch')
 const BATCH_SIZE = BATCH_RAW === undefined ? DEFAULT_BATCH_SIZE : Number(BATCH_RAW)
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 async function main() {
   await loadEnvLocal()
@@ -66,7 +64,6 @@ async function main() {
     )
   }
 
-  const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
   const unaoUrl = loadUnaoReadonlyUrl()
 
   console.log('\nVoice — 우나어 고품질 코퍼스 → VoiceSource 배치 적재')
@@ -127,7 +124,7 @@ async function main() {
       for (const rawRow of rows) {
         cursor = String(rawRow.id ?? '')
         scanned += 1
-        const row = toSourceRow(rawRow, salt)
+        const row = toSourceRow(rawRow)
 
         // 🔴 중복은 건너뛴다 — 중단 후 재개가 이것으로 성립한다
         if (existingRefs.has(row.sourceRef)) {

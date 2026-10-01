@@ -20,6 +20,7 @@
  * 🔴 **같은 판단을 새로 쓰지 않는다.** 정치·안전·축 판정은 이미 정본이 있다.
  *    여기서는 그 결과를 **읽어서 조합만** 한다 — 새 정규식을 만들지 않는다.
  */
+import { sourceIdentityOf } from './source-identity'
 
 /** 🔴 사람 값과 절대 겹치지 않는 이름 */
 export const AUTO_DECISIONS = ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const
@@ -253,6 +254,8 @@ export const SEED_AXIS = 'seedOriginality'
 export const RAW_AXIS = 'rawOriginality'
 
 export type JudgeInput = {
+  /** 🔴 원천 사이트 — (사이트, id) 가 원천이다(`source-identity`). 없으면 병합 · 묶음에서 빠진다 */
+  sourceSite?: string
   sourceArticleId?: string
   /** 🔴 v1 이 빠뜨렸던 것 — 이게 없으면 의미를 볼 수 없다 */
   title?: string
@@ -300,6 +303,7 @@ export function normalizeJudgeRow(
   const id = S(raw.sourceArticleId)
   if (id === '') return null
   return {
+    sourceSite: S(raw.sourceSite),
     sourceArticleId: id,
     axis: S(raw.axis),
     // 🔴 키 이름이 화면마다 다르다. 여기서 맞춘다
@@ -321,21 +325,28 @@ export function normalizeJudgeRow(
 export function mergeJudgeRows(
   entries: readonly { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[],
 ): JudgeInput[] {
-  const byId = new Map<string, JudgeInput>()
+  /**
+   * 🔴 **원천 = (사이트, id)** (2026-09-30 야간 P0-B). 앞판은 id 하나로 합쳐 같은 번호의 82cook · 네이버 카페 글이
+   *    한 행이 됐다(뒤 행이 앞 행을 지웠다). 사이트나 id 를 모르는 행은 합치지 않는다 — 버린다(fail-closed).
+   */
+  const byKey = new Map<string, JudgeInput>()
   for (const e of entries.filter((x) => x.kind === 'detail')) {
     const v = normalizeJudgeRow(e.row, 'detail')
-    if (v !== null) byId.set(S(v.sourceArticleId), v)
+    const key = v === null ? null : sourceIdentityOf(v.sourceSite, v.sourceArticleId)
+    if (v !== null && key !== null) byKey.set(key, v)
   }
   for (const e of entries.filter((x) => x.kind === 'raw-detail')) {
     const v = normalizeJudgeRow(e.row, 'raw-detail')
-    if (v === null) continue
-    const id = S(v.sourceArticleId)
-    if (!byId.has(id) || S(v.axis) === RAW_AXIS) byId.set(id, v)
+    const key = v === null ? null : sourceIdentityOf(v.sourceSite, v.sourceArticleId)
+    if (v === null || key === null) continue
+    if (!byKey.has(key) || S(v.axis) === RAW_AXIS) byKey.set(key, v)
   }
-  return [...byId.values()]
+  return [...byKey.values()]
 }
 
 export type Judgement = {
+  /** 🔴 원천 사이트 — 판정 기록(shadow)이 원천 (사이트, id) 를 그대로 남긴다(2026-09-30 야간 P0-B) */
+  sourceSite: string
   sourceArticleId: string
   decision: AutoDecision
   reasonCodes: ReasonCode[]
@@ -529,7 +540,7 @@ export function judgeOne(
   const id = S(input.sourceArticleId)
   const semantic = outcome.verdict
   const base = {
-    sourceArticleId: id, ruleVersion: RULE_VERSION,
+    sourceSite: S(input.sourceSite), sourceArticleId: id, ruleVersion: RULE_VERSION,
     provenance: AUTO_PROVENANCE, decidedAt: now,
     model: outcome.model, promptVersion: PROMPT_VERSION,
     inputHash: inputHashOf(input),
@@ -670,7 +681,8 @@ export function violatesProvenance(row: Record<string, unknown>): string[] {
     bad.push(`🔴 provenance ${p} 은 사람 것이다 — 사칭이다`)
   }
   if (p !== AUTO_PROVENANCE) bad.push(`🔴 provenance 가 ${AUTO_PROVENANCE} 가 아니다`)
-  for (const k of ['ruleVersion', 'decidedAt', 'sourceArticleId'] as const) {
+  // 🔴 원천 사이트가 없는 판정 기록은 어느 원천의 판정인지 말할 수 없다(P0-B)
+  for (const k of ['ruleVersion', 'decidedAt', 'sourceSite', 'sourceArticleId'] as const) {
     if (String(row[k] ?? '') === '') bad.push(`🔴 ${k} 가 비었다`)
   }
   if (!Array.isArray(row.reasonCodes)) bad.push('🔴 reasonCodes 가 배열이 아니다')

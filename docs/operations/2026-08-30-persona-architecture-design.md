@@ -1,5 +1,10 @@
 # Persona Architecture 설계
 
+> 📜 **2026-09-30 정책 대체 표시.** 현재 정책은 [`README.md`](./README.md) 가 가리키는 권위 문서,
+> 특히 [D100 canon](./2026-09-21-d100-goal-canon.md) 이 정한다. Persona 용량(네 상태)과 대화 정책은 canon §4·§5 가 정한다.
+> Persona 사이 상호작용 단계 개방 같은 옛 대화 규칙은 canon §5 로 대체됐다. 재사용할 설계 자산은 그대로 둔다.
+> 이 문서의 결정·사고·실측은 역사 증거로 남기지만 현재 정책에 투표하지 않는다.
+
 > 작성 2026-08-30 · 상태 **설계 확정 · 구현은 부분 완료**
 > 현재 구현·운영 상태: [Master Operating System §4, §7](./MASTER-OPERATING-SYSTEM.md)
 >

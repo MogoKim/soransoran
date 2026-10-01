@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
-import { verifySeedCard } from '../src/lib/persona-card-verify'
+import { explicitEndingsOf, verifySeedCard } from '../src/lib/persona-card-verify'
 import { readLengthBand } from '../src/lib/original-post-persona-match'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import {
@@ -22,6 +22,7 @@ import { assignmentDrift, judgeAutogenCandidate } from './lib/persona-autogen.mj
 import { judgeApplyBatch } from './lib/persona-autogen-apply.mjs'
 import { referenceSeedShareCount } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
+import { runPersonaReserveChecks } from './persona-reserve-check.mjs'
 
 let pass = 0
 let failN = 0
@@ -78,14 +79,19 @@ console.log('① 온전한 후보')
   check('렌더된 카드를 정본 파서가 다시 읽는다', v.cardMarkdown !== null && parsePoolDoc(v.cardMarkdown).cards.length === 1)
   check('seed 가 운영 verifySeedCard 를 통과한다', v.seed !== null && v.card !== null && verifySeedCard(code, v.seed, v.card).length === 0)
   check('lifeStage 가 운영 어휘다 (자녀 독립 준비)', v.seed?.lifeStage === '자녀 독립 준비')
+  check('🔴 렌더된 카드에 고정 말끝 토큰 0 · seed 에 ending 칸 0', v.card !== null && explicitEndingsOf(v.card.voiceTokens).length === 0
+    && !('ending' in ((v.seed?.voiceCore ?? {}) as Record<string, unknown>)))
 }
 
 // ── ② 반례 — 한 칸씩 비튼다 ──
 console.log('② 반례')
 check('축 누락 — 생활사 골격 없음 → LIFE_AXIS_MISSING · quarantined',
   has({ ...base, life: null }, 'LIFE_AXIS_MISSING') && judge({ ...base, life: null }).status === 'quarantined')
-check('축 누락 — noGo 표현 비움 → LIFE_AXIS_MISSING',
-  has({ ...base, creative: { ...CREATIVE, noGoExpressions: [] } }, 'LIFE_AXIS_MISSING'))
+// 🔴 (2026-10-01 · C8) 개인 말버릇은 없어도 되는 칸 — 공통 금지는 `persona-no-go` 가 강제한다. 소재 경계는 그대로 필수
+check('🔴 개인 noGo 표현 비움 → LIFE_AXIS_MISSING 아님 (C8)',
+  !has({ ...base, creative: { ...CREATIVE, noGoExpressions: [] } }, 'LIFE_AXIS_MISSING'))
+check('🔴 noGo 소재 비움 → LIFE_AXIS_MISSING (소재 경계 약화 0)',
+  has({ ...base, creative: { ...CREATIVE, noGoTopics: [] } }, 'LIFE_AXIS_MISSING'))
 check('축 누락 — 성격 비움 → LIFE_AXIS_MISSING',
   has({ ...base, creative: { ...CREATIVE, personality: [] } }, 'LIFE_AXIS_MISSING'))
 check('말투 근거 없음 → NO_VOICE_EVIDENCE · quarantined',
@@ -165,6 +171,8 @@ console.log('④ 말투 칸')
   check('길이 토큰을 readLengthBand 가 읽는다', readLengthBand(vc.length) !== null)
   check('요 비율이 높으면 존댓말', vc.register === '존댓말')
   check('요 비율이 낮으면 구어체', voiceCoreFromBundle(bundleOf(code, TEXTS_B)).register === '구어체')
+  // 🔴 고정 말끝은 카드가 명시할 때만 — 관측에서 합성하지 않는다(Phase F 보정)
+  check('🔴 voiceCoreFromBundle 은 ending 을 만들지 않는다', !('ending' in vc) && !('ending' in voiceCoreFromBundle(bundleOf(code, TEXTS_B))))
 }
 
 // ── ④-2 운영 말투 배정 불변 ──
@@ -193,7 +201,8 @@ console.log('⑤ 적재 배치 게이트')
 console.log('⑥ CLI 연결')
 {
   const cli = readFileSync('scripts/persona-autogen.mts', 'utf-8')
-  check('CLI 가 judgeAutogenCandidate 로 판정한다', /judgeAutogenCandidate\(cand, \{ takenCodes: taken \}\)/.test(cli))
+  // 🔴 한 명씩(judgeAutogenCandidate) + 겹침·문체 거리를 배치로 본다(2026-09-30)
+  check('CLI 가 judgeAutogenBatch 로 판정한다', /judgeAutogenBatch\(cands, \{ takenCodes: taken,/.test(cli))
   check('CLI 가 운영 규칙 말투 풀(voicePoolFor)을 쓴다', /voicePoolFor\(\{ repoRoot: process\.cwd\(\), newCodes: codes \}\)/.test(cli))
   const gate = cli.indexOf('if (!APPLY) {')
   const call = cli.indexOf('await applyAutogenDrafts(')
@@ -201,6 +210,10 @@ console.log('⑥ CLI 연결')
   check('적재 대상은 valid 만이다', /const plans = valid\.map\(/.test(cli))
   check('CLI 는 LLM·provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(/i.test(cli))
 }
+
+// ── ⑦ 4상태 판정 — 🔴 CI 가 이 스크립트로 함께 돈다(`scripts/persona-reserve-check.mts`) ──
+console.log('⑦ Persona 4상태 판정')
+await runPersonaReserveChecks(check)
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
 process.exit(failN === 0 ? 0 : 1)

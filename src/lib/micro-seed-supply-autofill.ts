@@ -16,9 +16,14 @@
  *    그래서 "사람이 이미 판단한 것" 만 통과시킨다 — 판단을 새로 하지 않는다.
  */
 
-import { derive, SAFEST_PROFILE } from './scale-profile'
+/** 🔴 원문 증거 기록의 정본 — 적재기는 옮길 뿐 판정하지 않는다 */
+import {
+  SOURCE_EVIDENCE_KEY, buildSourceEvidence,
+  type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
+} from './source-slot-release'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import { judgeCopy, readMeasure, describeOriginality } from './draft-originality'
+import { baseIdOf, sourceIdentityOf } from './source-identity'
 import { readVoiceProvenance } from './original-post-voice-match'
 // 🔴 판 값의 정본은 초안 lib 하나다 — 여기서 다시 적으면 올릴 때마다 갈라진다
 import { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } from './micro-seed-auto-draft'
@@ -166,6 +171,8 @@ export function machineShapeMismatch(
   eq(c.sourceDecision, MACHINE_PROFILE.sourceDecision, 'sourceDecision')
   eq(c.sourceInput, MACHINE_PROFILE.sourceInput, 'sourceInput')
   eq(c.candidateType, MACHINE_PROFILE.candidateType, 'candidateType')
+  // 🔴 (P0-B) 기계 후보는 원천 (사이트, id) 가 둘 다 있어야 한다 — 없으면 synthetic 사이트가 접두뿐인 행이 된다
+  if (sourceIdentityOf(c.sourceSite, c.sourceArticleId) === null) bad.push('원천 (sourceSite, sourceArticleId) 가 비었다')
   eq(c.safetyVerdict, 'pass', 'safetyVerdict')
   // 🔴 **재 둔 값이 있어야 한다.** 없으면 `?? 0` 이 0 을 만들어 통과시킨다 —
   //    "재지 않았다" 가 "겹침 없음" 이 되는 것이 provenance 세탁의 시작이다
@@ -237,22 +244,6 @@ export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
  *    기준이 두 벌이면 반드시 그런 날이 온다. 이제 `draft-originality.ts` 하나가 판정한다.
  */
 
-/** 재고 기준선 (§4-AN) */
-/**
- * 🔴 **가장 안전한 기본값이다** (2026-09-08 개정).
- *    내부 공급 기준은 **capacity 단계**를 따르며, 러너가 `readStock`·`judgeFill` 에 주입한다.
- *    주입을 잊으면 여기로 떨어진다 — 재고 목표가 조용히 커지지 않는다.
- */
-export const STOCK_WARN = derive(SAFEST_PROFILE).stockWarn
-export const STOCK_MIN = derive(SAFEST_PROFILE).stockMin
-export const STOCK_TARGET = derive(SAFEST_PROFILE).stockTarget
-
-/** 🔴 재고 기준선 묶음 — capacity 프로필에서 만들어 주입한다 */
-export type StockLimits = { warn: number; min: number; target: number }
-export const SAFEST_STOCK_LIMITS: StockLimits = { warn: STOCK_WARN, min: STOCK_MIN, target: STOCK_TARGET }
-
-export type StockLevel = 'critical' | 'low' | 'ok'
-
 /**
  * **형식이 맞는 미발행 행**을 센다 — 🔴 **발행 가능 재고가 아니다** (2026-09-26 정정).
  *
@@ -263,6 +254,11 @@ export type StockLevel = 'critical' | 'low' | 'ok'
  * 🔴 쓰임은 **적재 천장·적재 정합**뿐이다. 발행 가능 재고는 `scripts/lib/publishable-stock`
  *    의 `classifyStock().counts.publishableNow` 가 정본이다.
  */
+/**
+ * 🔴 **재고 눈금을 지웠다** (2026-09-30 · source-slot-v1). `STOCK_WARN/MIN/TARGET`(×3·×5·×14) ·
+ *    `stockBandOf` · 700 적재 천장은 완성 글 재고를 성공으로 보던 옛 정본이다. 적재 상한은 이제
+ *    공급 러너의 JIT 수요(`judgeJitDemand`)가 `--up-to` 로만 준다. 이 수는 **적재 정합**에만 남는다.
+ */
 /** 🔴 러너가 먹는 판 — 사람 것과 기계 것 둘 다 */
 export const USABLE_PROMPT_VERSIONS: readonly string[] = [
   AUTOFILL_PROMPT_VERSION, MACHINE_PROMPT_VERSION,
@@ -270,10 +266,7 @@ export const USABLE_PROMPT_VERSIONS: readonly string[] = [
 
 export function readStock(rows: readonly (QueueProfileRow & {
   status: string; createdPostId: string | null
-})[],
-/** 🔴 capacity 프로필에서 만든 기준선. 주지 않으면 가장 안전한 값이다 */
-limits: StockLimits = SAFEST_STOCK_LIMITS,
-): { usable: number; level: StockLevel; shortfall: number; human: number; machine: number } {
+})[]): { usable: number; human: number; machine: number } {
   // 🔴 **promptVersion 만 보지 않는다.** 발행 러너가 인정하는 행만 재고다 —
   //    판만 맞고 접두나 게이트 기록이 어긋난 행은 넣어도 아무도 못 먹는다.
   const live = rows.filter((r) =>
@@ -282,19 +275,7 @@ limits: StockLimits = SAFEST_STOCK_LIMITS,
   const human = live.filter((r) => queueProfileOf(r) === 'human').length
   const machine = live.filter((r) => queueProfileOf(r) === 'machine').length
   const usable = human + machine
-  return { usable, ...stockBandOf(usable, limits), human, machine }
-}
-
-/**
- * 🔴 **경고선 · 부족분 판정 하나** (2026-09-26). 무엇을 넣을지는 부르는 쪽이 정한다 —
- *    발행 가능 재고를 재려면 **발행 러너 분류의 `publishableNow`** 를 넣는다.
- *    `readStock().usable` 은 형식이 맞는 행 수라 사람 검토 대기 기계 초안도 들어 있다.
- */
-export function stockBandOf(
-  n: number, limits: StockLimits = SAFEST_STOCK_LIMITS,
-): { level: StockLevel; shortfall: number } {
-  const level: StockLevel = n <= limits.warn ? 'critical' : n < limits.min ? 'low' : 'ok'
-  return { level, shortfall: Math.max(0, limits.target - n) }
+  return { usable, human, machine }
 }
 
 export type Candidate = {
@@ -331,6 +312,14 @@ export type Candidate = {
   leakedTokens?: string
   reviewedAt?: string
   provenanceNote?: string
+  /**
+   * 🔴 **원문 증거 재료** (2026-09-30 · source-evidence-v1) — 생성 봉투가 싣는다(`candidate-envelope`).
+   *    적재기는 이 값을 `gateResults.sourceEvidence` 로 **옮길 뿐** 판정하지 않는다. 없으면 모른다.
+   */
+  sourcePostedAt?: string
+  sourceListedAt?: string
+  sourceCapturedAt?: string
+  participationDriver?: string
 }
 
 /** 보류 목록 한 줄 — 사람이 "이건 지금 내지 말자" 고 정한 것 */
@@ -383,6 +372,8 @@ export function isHeld(c: Candidate, held: readonly HeldEntry[]): boolean {
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
 export type QueueRow = {
+  /** 🔴 (P0-B) 큐 행의 사이트 — synthetic 접두가 있어도 된다(`originalSourceOf` 가 원래 사이트로 되돌린다) */
+  sourceSite: string
   sourceArticleId: string
   status: string
   createdPostId: string | null
@@ -397,9 +388,19 @@ export type QueueRow = {
  * 형제가 이미 나갔으면(발행 완료) 시간이 벌어졌으므로 넣어도 된다.
  */
 export function hasPendingSibling(
-  articleId: string, queue: readonly QueueRow[],
+  site: string, articleId: string, queue: readonly QueueRow[],
 ): boolean {
-  return queue.some((q) => baseArticleId(q.sourceArticleId) === articleId && isPendingRow(q))
+  /**
+   * 🔴 (2026-09-30 야간 P0-B) 형제 = **같은 원천 (원래 사이트, 기본 id)**. 앞판은 id 만 봐서 82cook 형제가
+   *    같은 번호의 네이버 카페 후보를 막았다. 원천을 모르는 후보는 형제가 있다고 본다(fail-closed · 신규 적재 안 함).
+   */
+  const key = sourceIdentityOf(site, articleId)
+  if (key === null) return true
+  return queue.some((q) => {
+    if (!isPendingRow(q)) return false
+    const o = originalSourceOf(q.sourceSite, q.sourceArticleId)
+    return o !== null && sourceIdentityOf(o.site, o.id) === key
+  })
 }
 
 /**
@@ -433,17 +434,60 @@ export function baseArticleId(synthetic: string): string {
   return i > 0 ? synthetic.slice(0, i) : synthetic
 }
 
+/**
+ * 🔴 **큐 행 · 글 한 줄 → 원래 원천.**
+ *    · 우리 synthetic 행(`publish-candidate:` · `publish-candidate:auto:`): 접두를 떼면 원래 사이트,
+ *      id 는 `<원래id>-<해시8>` 이므로 정본 `baseArticleId` 로 되돌린다
+ *    · 그 밖의 행(legacy · 글): 사이트는 그대로, id 가 `사이트:id` 모양이면 앞을 뗀다(운영 글 실측)
+ *    🔴 id 가 비면 `null` — 빈 키로 전부를 막지 않는다
+ */
+export function originalSourceOf(
+  site: string | null | undefined, articleId: string | null | undefined,
+): { site: string; id: string } | null {
+  const s0 = S(site)
+  const id0 = S(articleId)
+  if (id0 === '') return null
+  if (isOurSite(s0)) {
+    const s = s0.startsWith(MACHINE_SITE_PREFIX) ? s0.slice(MACHINE_SITE_PREFIX.length)
+      : s0.slice(AUTOFILL_SITE_PREFIX.length)
+    return { site: s, id: baseIdOf(baseArticleId(id0)) }
+  }
+  const id = s0 !== '' && id0.startsWith(`${s0}:`) ? id0.slice(s0.length + 1) : id0
+  return id === '' ? null : { site: s0, id: baseIdOf(id) }
+}
+
+/**
+ * 🔴 **적재된 후보의 출처 열쇠 — 원천 (사이트, id) + 제목** (2026-09-30 야간 P0-B).
+ *    앞판 `provenanceKeyOf(id, 제목)` 은 사이트가 없어, 같은 번호 · 같은 제목의 82cook · 네이버 후보가 서로를 ALREADY 로 막았다.
+ *    원천 열쇠는 정본 `sourceIdentityOf` 다. 사이트나 id 를 모르면 `null`.
+ */
+export function sourceProvenanceKeyOf(site: string, articleId: string, title: string): string | null {
+  const key = sourceIdentityOf(site, articleId)
+  return key === null ? null : `${key}\u0001${normTitle(title)}`
+}
+
+/** 🔴 큐 행(synthetic RawContent) → 출처 열쇠. 원래 사이트는 정본 `originalSourceOf` 로 되돌린다 */
+export function existingSourceKeysOf(rows: readonly { sourceSite: string; sourceArticleId: string; rawTitle: string }[]): Set<string> {
+  const out = new Set<string>()
+  for (const r of rows) {
+    const o = originalSourceOf(r.sourceSite, r.sourceArticleId)
+    const k = o === null ? null : sourceProvenanceKeyOf(o.site, o.id, r.rawTitle)
+    if (k !== null) out.add(k)
+  }
+  return out
+}
+
+const normTitle = (title: string): string => title.replace(/\s+/g, ' ').trim()
+
 export type RefillInput = {
   /** 🔴 파일 봉투 — 행만 읽고 버리면 기계 profile 을 검증할 수 없다 */
   envelope?: Envelope
   candidates: readonly Candidate[]
   held: readonly HeldEntry[]
-  /** 이미 큐에 올라간 것들의 provenanceKey */
+  /** 이미 큐에 올라간 것들의 출처 열쇠 — 🔴 (P0-B) `existingSourceKeysOf` · `sourceProvenanceKeyOf` */
   existing: ReadonlySet<string>
   /** 형제 검사용 — 큐 전체 */
   queue: readonly QueueRow[]
-  /** 지금 재고 (readStock 결과) */
-  usable: number
 }
 
 /**
@@ -457,12 +501,14 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
   const targets: Candidate[] = []
   const skipped: Skip[] = []
   const push = (title: string, code: SkipCode): void => { skipped.push({ title, code }) }
-  // 이번 회차 안에서도 형제가 겹치면 안 된다 — 파일에 짝이 둘 다 있을 수 있다
-  const takenArticles = new Set<string>()
+  // 이번 회차 안에서도 형제가 겹치면 안 된다 — 파일에 짝이 둘 다 있을 수 있다. 🔴 (P0-B) 원천 열쇠로 센다
+  const takenSources = new Set<string>()
 
   for (const c of input.candidates) {
     const title = S(c.title)
     const id = S(c.sourceArticleId)
+    const site = S(c.sourceSite)
+    const srcKey = sourceIdentityOf(site, id)
     const type = S(c.candidateType)
 
     if (!AUTOFILL_ALLOWED_TYPES.includes(type)) { push(title, 'TYPE'); continue }
@@ -482,6 +528,12 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
       push(title, 'CONTRACT'); continue
     }
     if (!isHumanShape && !isMachineShape) { push(title, 'PROFILE'); continue }
+    /**
+     * 🔴 (P0-B) **신규 적재는 원천 (사이트, id) 가 둘 다 있어야 한다 — 사람 · 기계 모두.** 없으면 접두뿐인 synthetic 사이트 행이
+     *    되고 어느 원천의 글인지 영영 모른다. 기존 코드 PROFILE(후보 모양이 계약과 다르다)로 막는다.
+     *    과거 기록(보류 · 이미 적재된 행)의 사이트 없는 의미는 읽기 호환으로만 남는다(아래 HELD).
+     */
+    if (srcKey === null) { push(title, 'PROFILE'); continue }
     // 🔴 기계 후보가 사람 값을 쓰고 있으면 거절한다 — 사칭이다
     if (isMachineShape && impersonatesHuman(env, c)) { push(title, 'IMPERSONATION'); continue }
     if (S(c.safetyVerdict) !== 'pass') { push(title, 'SAFETY'); continue }
@@ -491,12 +543,16 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
     if (judgeCopy(measure).copied) { push(title, 'COPIED'); continue }
     if (S(c.leakedTokens) !== '') { push(title, 'LEAK'); continue }
     if (title === '' || S(c.body) === '') { push(title, 'EMPTY'); continue }
-    if (input.existing.has(provenanceKeyOf(id, title))) { push(title, 'ALREADY'); continue }
-    // 🔴 사람이 뺀 것을 기계가 도로 넣지 않는다
+    // 🔴 (P0-B) 같은 원천 · 같은 제목이면 이미 올라간 것이다
+    if (input.existing.has(sourceProvenanceKeyOf(site, id, title)!)) { push(title, 'ALREADY'); continue }
+    /**
+     * 🔴 사람이 뺀 것을 기계가 도로 넣지 않는다. **호환 경계** — 보류 기록(`HeldEntry`)에는 사이트가 없다(사람이 남긴 옛 기록).
+     *    그래서 보류는 id · 제목으로 대 본다 — 막는 방향이라 넓히지 않고 그대로 둔다(P0-B 에서 바꾸지 않은 유일한 id 대조).
+     */
     if (isHeld(c, input.held)) { push(title, 'HELD'); continue }
-    if (takenArticles.has(id) || hasPendingSibling(id, input.queue)) { push(title, 'SIBLING'); continue }
+    if (takenSources.has(srcKey) || hasPendingSibling(site, id, input.queue)) { push(title, 'SIBLING'); continue }
 
-    takenArticles.add(id)
+    takenSources.add(srcKey)
     targets.push(c)
   }
   return { targets, skipped }
@@ -531,9 +587,6 @@ export function judgeApply(input: {
    *    🔴 `limit` 과 함께 주지 않는다 — 둘 중 하나만 쓴다.
    */
   upTo?: number | null
-  usable: number
-  /** 🔴 capacity 프로필의 재고 목표. 주지 않으면 가장 안전한 값 */
-  target?: number
 }): ApplyGate {
   if (!input.apply) return { ok: false, reason: 'dry-run — --apply 가 없다' }
   const upTo = input.upTo ?? null
@@ -546,19 +599,17 @@ export function judgeApply(input: {
     return { ok: false, reason: `${flag}=N 이 필요하다 (받은 값 ${asked ?? '없음'})` }
   }
   if (input.targets.length === 0) return { ok: false, reason: '보충할 후보가 0건이다' }
-  // 🔴 목표는 capacity 프로필에서 주입한다. 주지 않으면 가장 안전한 값이다
-  const target = input.target ?? STOCK_TARGET
-  const room = Math.max(0, target - input.usable)
-  if (room === 0) {
-    return { ok: false, reason: `재고가 이미 목표 ${target}건이다 (현재 ${input.usable}건)` }
-  }
-  const n = Math.min(asked, input.targets.length, room)
+  /**
+   * 🔴 **재고 목표로 여력을 다시 재지 않는다** (2026-09-30 · source-slot-v1). 앞판은 `target − 재고`
+   *    (capacity ×14 · 700)로 한 번 더 잘랐다 — 완성 글 재고가 공급을 정하는 두 번째 정본이었다.
+   *    상한은 부르는 쪽이 준 수 하나다(공급 러너는 JIT 수요로 `--up-to` 를 정한다).
+   */
+  const n = Math.min(asked, input.targets.length)
   // 🔴 `--limit` 은 **정확히** 그 수여야 한다. `--up-to` 는 상한이므로 부분 적재가 정상이다
   if (upTo === null && n < asked) {
     return {
       ok: false,
-      reason: `--limit ${asked} 을 채울 수 없다 — 후보 ${input.targets.length}건 · 남은 여력 ${room}건.`
-        + ' 잘라내지 않고 멈춘다',
+      reason: `--limit ${asked} 을 채울 수 없다 — 후보 ${input.targets.length}건. 잘라내지 않고 멈춘다`,
     }
   }
   if (n < 1) return { ok: false, reason: '보충할 후보가 0건이다' }
@@ -614,54 +665,36 @@ export type AutoJudgeProvenance = {
 }
 
 /**
- * 🔴 **원문 쪽 세 시각 — 적재가 쓸 값** (2026-09-17).
- *
- *    `sourcePostedAt` 은 **원문이 올라온 시각**이다. 사건·방송·발언 시각이 아니고,
- *    우리가 초안을 쓴 시각(`writtenAt`)도 아니다. 셋을 한 칸에 뭉치면
- *    "오래된 이슈를 오늘 다시 수집한 것" 과 "오늘 올라온 글" 을 구분할 수 없게 된다.
- *
- * 🔴 **`null` 은 "모른다" 다.** 읽을 수 없는 값을 지금 시각이나 `sourceCapturedAt` 으로
- *    메우지 않는다 — 그렇게 메우는 것이 지금 고치려는 결함 그 자체다.
- *
- * 🔴 **이 PR 은 이 값을 DB 에 쓰지 않는다. 활성 schema 에도 컬럼이 없다.**
- *
- *    초안은 `prisma/migrations-draft/0026_raw_content_source_times` 에 있다.
- *    schema 에 컬럼만 올리고 DB 에 적용하지 않으면 **`select` 없는 `create()` 가
- *    없는 컬럼을 RETURNING 하다가 죽는다** — 실측으로
- *    `scripts/micro-seed-import-82cook-live.mts` 의 두 곳이 그렇다.
- *    그래서 schema 변경·migration 적용·적재 연결을 **한 작업으로 묶어** 별도 PR 로 낸다.
- *
- * 🔴 그때까지 이 함수는 **파일에서 파일로** 흐르는 값을 읽는 순수 함수로만 쓰인다.
+ * 🔴 **원문 증거 재료 — 적재 러너가 목록 관측에서 모은다** (2026-09-30 · source-evidence-v1).
+ *    반복 관측과 원천 상대 스냅샷은 파일(목록 산출)에만 있다 — 이 순수 함수는 받은 것을 옮길 뿐이다.
+ *    주지 않으면 없다(빈 관측 · 스냅샷 null) — 판정 쪽이 모르는 것으로 읽는다.
  */
-export type QueueSourceTimes = {
-  sourcePostedAt: Date | null
-  sourceListedAt: Date | null
-  sourceCapturedAt: Date | null
-}
-
-/** 🔴 ISO 문자열 하나를 Date 로 — 빈 값도 못 읽는 값도 전부 `null`(모른다) 이다 */
-function isoOrNull(v: unknown): Date | null {
-  const s = typeof v === 'string' ? v.trim() : ''
-  if (s === '') return null
-  const d = new Date(s)
-  return Number.isNaN(d.getTime()) ? null : d
+export type EvidenceMaterial = {
+  /** 🔴 수집 때 본 반응 — 목록 관측(정본)에서 찾은 것 · 없으면 null */
+  response: SourceResponse | null
+  observations: readonly SourceObservation[]
+  sourceStats: SourceStatsSnapshot | null
 }
 
 /**
- * 후보가 실어 온 세 시각을 적재용으로 읽는다 — 🔴 **순수 함수. 지어내지 않는다.**
- *
- * 🔴 `sourcePostedAt` 이 없다고 `sourceCapturedAt` 을 대신 쓰지 않는다.
- *    둘은 서로 다른 것을 뜻하고, 대신 쓰는 순간 **오래된 이슈 재수집**이
- *    **오늘 올라온 글**과 같아 보인다.
+ * 🔴 **후보 → 원문 증거 기록** — 옛 `queueSourceTimesOf`(검사만 부르던 죽은 순수 함수)를 대신한다.
+ *    · 게시 · 목록 · 수집 시각은 후보가 실어 온 그대로(서로 메우지 않는다)
+ *    · 초안 시각(`reviewedAt`)은 `draftedAt` 칸에만 — 신선도에 쓰지 않는다
+ *    · 원문 URL · 제목 · 닉네임은 싣지 않는다(원문 id 는 해시만)
  */
-export function queueSourceTimesOf(c: {
-  sourcePostedAt?: unknown; sourceListedAt?: unknown; sourceCapturedAt?: unknown
-}): QueueSourceTimes {
-  return {
-    sourcePostedAt: isoOrNull(c.sourcePostedAt),
-    sourceListedAt: isoOrNull(c.sourceListedAt),
-    sourceCapturedAt: isoOrNull(c.sourceCapturedAt),
-  }
+export function sourceEvidenceOf(c: Candidate, m: EvidenceMaterial | null): Record<string, unknown> {
+  return buildSourceEvidence({
+    postedAt: c.sourcePostedAt, listedAt: c.sourceListedAt, capturedAt: c.sourceCapturedAt,
+    sourceSite: c.sourceSite, sourceArticleId: c.sourceArticleId,
+    artifactId: (c as unknown as Record<string, unknown>).artifactId,
+    dedupKey: `${S(c.sourceSite)}|${S(c.sourceArticleId)}`,
+    // 🔴 반응은 목록 관측(정본)에서 온 것만 — 봉투 복사본은 지웠다(2026-09-30 Lane B)
+    response: m?.response ?? null,
+    observations: m?.observations ?? [],
+    sourceStats: m?.sourceStats ?? null,
+    participationDriver: c.participationDriver,
+    draftedAt: c.reviewedAt,
+  }) as unknown as Record<string, unknown>
 }
 
 export function buildQueuePayload(input: {
@@ -671,10 +704,14 @@ export function buildQueuePayload(input: {
   autoJudge?: AutoJudgeProvenance
   /** 🔴 artifact 의 `review` 블록. 없으면 **재지 못한 것**으로 읽는다 */
   review?: unknown
+  /** 🔴 목록 관측에서 모은 증거 재료 — 없으면 null(모른다) */
+  evidence?: EvidenceMaterial | null
   now: string
 }): QueuePayload | null {
   const { envelope: env, candidate: c } = input
   const site = S(c.sourceSite)
+  // 🔴 (P0-B) 신규 적재 행은 원천 (사이트, id) 가 둘 다 있어야 한다 — 사람 · 기계 모두(접두뿐인 synthetic 사이트를 만들지 않는다)
+  if (sourceIdentityOf(site, c.sourceArticleId) === null) return null
   const machineBad = machineProfileMismatch(env, c)
   const isMachine = machineBad.length === 0
 
@@ -712,6 +749,12 @@ export function buildQueuePayload(input: {
          *    봉투는 위 `machineProfileMismatch` 에서 **같은지만** 봤다. 입력으로 바꿀 칸이 없다.
          */
         [QUALITY_CONTRACT_KEY]: currentQualityContract(),
+        /**
+         * 🔴 **원문 증거** (2026-09-30 · source-evidence-v1) — 선택기 · 발행 트랜잭션 · 단계 증거가
+         *    같은 판정(`judgeSlotRelease`)으로 읽는다. 앞판은 여기서 세 시각을 버렸고, 대신 `sourceCapturedAt`
+         *    칸에 초안 시각이 들어가 그것이 원문 나이처럼 쓰였다(A1 ⑦).
+         */
+        [SOURCE_EVIDENCE_KEY]: sourceEvidenceOf(c, input.evidence ?? null),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
           candidateType: S(c.candidateType),
@@ -774,6 +817,8 @@ export function buildQueuePayload(input: {
     model: AUTOFILL_MODEL,
     gateResults: {
       holds: [], blocks: [],
+      // 🔴 사람 후보도 같은 기록을 싣는다 — 재료가 없으면 모르는 기록이 되고 발행 판정이 unknown 으로 읽는다
+      [SOURCE_EVIDENCE_KEY]: sourceEvidenceOf(c, input.evidence ?? null),
       autofill: {
         note: '공급 자동 보충 — 사람이 고른 글이다. LLM 생성이 아니다',
         candidateType: type,

@@ -316,6 +316,8 @@ export async function publishCandidateTx(
           code: row.persona.id, status: 'active', accountCount: 0, providerId: null,
           postsThisWeek: 0, daysSinceLastPost: null,
           noGoTopics: row.persona.noGoTopics,
+          // 🔴 대상 글(남의 글)에는 말버릇 판정을 하지 않는다 — `judgeLifeHistory` 는 소재만 본다
+          noGoExpressions: [],
           ...readIdentityLife(row.persona.identity),
         },
         readPostRequirements(post.title, post.content),

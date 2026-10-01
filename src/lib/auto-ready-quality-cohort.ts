@@ -30,7 +30,6 @@ export type CohortRow = Pick<DecidedRow, 'decidedBy' | 'editDiff'> & BoundRow & 
   createdAt: Date
   gateVerdict: string
   gateResults: unknown
-  sourceCapturedAt: Date | null
   /** 🔴 발행 러너와 같은 눈(`profileOf`)으로 본 기계 후보인가 — 부르는 쪽이 정본 함수로 채운다 */
   machine: boolean
 }
@@ -113,7 +112,7 @@ export function qualityCohortOf(rows: readonly CohortRow[]): QualityCohortVerdic
   const current = machine.filter((r) => isCurrentQualityContract(r.gateResults))
   const seq = current.filter((r) => eligibilityOf({
     gateVerdict: r.gateVerdict, gateResults: r.gateResults,
-    title: r.draftTitle, body: r.draftBody, sourceCapturedAt: r.sourceCapturedAt,
+    title: r.draftTitle, body: r.draftBody,
   }).auto).slice().sort(byGeneration)
   const N = CONTRACT.reviewSampleMin
   const window = seq.slice(0, N)

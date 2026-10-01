@@ -5,25 +5,25 @@
  * 🔴 **숫자를 여기 하드코딩하지 않는다.** 정본 함수를 돌려 나온 값을 본다 —
  *    문서와 코드가 갈라지면 여기서 걸린다.
  */
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  D100_STAGES, allD100Plans, d100Plan, judgePromotion, nextStage,
-  PLANNED_DETAIL_PER_PUBLIC_POST, STOCK_DAYS, D100_PERSONA_TARGET_MAX,
+  D100_STAGES, allD100Plans, d100Plan, nextStage,
+  PLANNED_DETAIL_PER_PUBLIC_POST, D100_PERSONA_TARGET_MAX,
   READY_NET_MARGIN, POSTS_PER_INVOCATION, schedulerSupportOf,
-  targetStageFor, currentPlanOf, dailyTargetOf, stableObservationDaysOf, PROMOTION_PHASES,
   PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, personaTargetReport, describePersonaTargets,
 } from '../src/lib/d100-capacity'
-import { resolveStage, RUNTIME_PROFILES } from '../src/lib/scale-profile'
+import { RUNTIME_PROFILES } from '../src/lib/scale-profile'
 import { readyNetFromSnapshots, READY_SELECTOR_VERSION } from './lib/d100-ready-snapshot.mjs'
 import { detailThroughput, DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
 import {
-  forecastFromRows, releaseStageFromEnvText, stableStreakDays, latestRunFailing,
+  latestRunFailing,
   runReadiness, SnapshotWriteFailed, readFailureOf, perDayMeasured,
 } from './lib/d100-operational-stock.mjs'
 import { appendSnapshot } from './lib/d100-ready-snapshot.mjs'
+import { fakeEvidenceGate, fakeReleaseStampGate } from './lib/fake-source-evidence.mjs'
 import type { CollectRunRecord } from '../src/lib/collect-run-record'
 import {
   judgeFunnel, judgeFunnelRows, LINK_STATES, linkStateOf, summarizeLinks, linkCriticalCount,
@@ -43,7 +43,12 @@ import {
   EXISTING_ANALYTICS_EVENTS, NORTH_STAR_REQUIRED_EVENTS, countsTowardNorthStar,
   missingEvents, sumCountedActors,
 } from '../src/lib/north-star'
-import { compareWorkflowSuperset, allStageCronLines, stageGatingPresent } from '../src/lib/scale-workflow-render'
+import {
+  compareWorkflowSuperset, allStageCronLines, stageGatingPresent, scheduleTextOfSlots, retiredPublishWorkflowProblems,
+} from '../src/lib/scale-workflow-render'
+import { calendarSlots } from './lib/launchd-install.mjs'
+import { renderPublishRunnerPlist } from './lib/original-post-runner-template'
+import { AUTHORITY_RENDER_INPUT } from './lib/stage-authority-repo'
 import { readWorkset } from '../src/lib/supply-workset'
 import {
   judgeStageStatus, buildStageFacts, firstBrokenStage, rateOf, showRate, describeBacklog,
@@ -67,6 +72,11 @@ import {
 import {
   readStockFunnel, type StockRepo, type QueueRowFacts,
 } from './lib/d100-stock-reader.mjs'
+import * as loopFunnelLib from '../src/lib/d100-loop-funnel'
+import { buildLoopFunnel, describeLoopFunnel, type LoopRow } from '../src/lib/d100-loop-funnel'
+import { readOnlyPrisma } from './lib/d100-loop-funnel-read.mjs'
+import { PrismaClient } from '@prisma/client'
+import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 
 let pass = 0
 let fail = 0
@@ -83,25 +93,27 @@ console.log('\n① 🔴 🔴 D3→D100 용량 정본 — 숫자는 코드 한 �
 {
   check('🔴 단계는 일곱이다', D100_STAGES.join(',') === 'd3,d5,d10,d20,d30,d50,d100')
   const want: Readonly<Record<string, [number, number, number, number]>> = {
-    // 단계: [공개/day, 상세/day, 재고14일, Persona]
-    d3: [3, 12, 42, 24], d5: [5, 20, 70, 24], d10: [10, 39, 140, 30],
-    d20: [20, 77, 280, 40], d30: [30, 115, 420, 60],
-    d50: [50, 191, 700, 100], d100: [100, 382, 1400, 180],
+    // 단계: [공개/day, 상세/day, Persona canary] — 🔴 (2026-09-30) 14일치 완성 글 재고 칸은 지웠다
+    d3: [3, 12, 0, 24], d5: [5, 20, 0, 24], d10: [10, 39, 0, 30],
+    d20: [20, 77, 0, 40], d30: [30, 115, 0, 60],
+    d50: [50, 191, 0, 100], d100: [100, 382, 0, 180],
   }
   for (const p of allD100Plans()) {
     const w = want[p.stage]!
-    check(`🔴 🔴 **${p.stage} — 공개 ${w[0]} · 상세 ${w[1]} · 재고 ${w[2]} · Persona ${w[3]}**`,
+    check(`🔴 🔴 **${p.stage} — 공개 ${w[0]} · 상세 ${w[1]} · Persona ${w[3]} · 14일 재고 칸 없음**`,
       p.publicPostsPerDay === w[0] && p.detailedSourcesRequiredPerDay === w[1]
-      && p.readyStock14Days === w[2] && p.personaCanaryFloor === w[3],
-      `${p.publicPostsPerDay}/${p.detailedSourcesRequiredPerDay}/${p.readyStock14Days}/${p.personaCanaryFloor}`)
+      && !('readyStock14Days' in p) && p.personaCanaryFloor === w[3],
+      `${p.publicPostsPerDay}/${p.detailedSourcesRequiredPerDay}/${p.personaCanaryFloor}`)
   }
   const d100 = d100Plan('d100')
-  check('🔴 🔴 **D100 재고 1,400 · 댓글 100~500 · Persona 180~200**',
-    d100.readyStock14Days === 1400 && d100.commentMinPerDay === 100
+  check('🔴 🔴 **D100 댓글 100~500 · Persona 180~200**',
+    d100.commentMinPerDay === 100
     && d100.commentMaxPerDay === 500 && d100.personaCanaryFloor === 180
     && D100_PERSONA_TARGET_MAX === 200)
-  check('🔴 재고는 14일치다', STOCK_DAYS === 14
-    && d100.readyStock14Days === d100.publicPostsPerDay * STOCK_DAYS)
+  check('🔴 🔴 **(2026-09-30) 14일치 완성 글 재고 · 지속 승격 판정이 정본에 없다**', (() => {
+    const cap = readFileSync('src/lib/d100-capacity.ts', 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
+    return !/export const STOCK_DAYS|export function judgePromotion|readyStock14Days|export function targetStageFor/.test(cap)
+  })())
   check('🔴 상세 필요량은 계획 전환율에서 계산된다',
     d100.detailedSourcesRequiredPerDay
       === Math.ceil(d100.publicPostsPerDay * PLANNED_DETAIL_PER_PUBLIC_POST))
@@ -128,8 +140,7 @@ console.log('\n② 🔴 🔴 재고 깔때기 — 다른 집합을 섞지 않는
     queueTotal: 239, unpublishedApproved: 221, legacyExcluded: 217,
     profileCompatible: 4, humanReviewed: 3, fresh: 3,
     personaAssignable: 1, publishableNow: 0,
-    // 🔴 예측하지 않았으면 0 이 아니라 null 이다
-    scheduledIn7Days: null, scheduledIn14Days: null, readyStock: 3,
+    readyStock: 3,
   }
   check('🔴 🔴 **실측 모양은 깔때기로 말이 된다**',
     judgeFunnel(REAL).length === 0, JSON.stringify(judgeFunnel(REAL)))
@@ -233,11 +244,17 @@ console.log('\n③ 🔴 🔴 Queue ↔ Post — 숨긴 글과 끊어진 연결�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n④ 🔴 🔴 workflow stage — superset 은 정상, gating 없는 cron 은 FAIL')
+console.log('\n④ 🔴 🔴 발행 예약(launchd 러너) — superset 은 정상, gating 없는 cron 은 FAIL')
 // ─────────────────────────────────────────────────────────
 {
-  const yml = readFileSync('.github/workflows/auto-publish.yml', 'utf-8')
-  check('🔴 🔴 **실제 yml 은 모든 단계의 합집합이다 — 불일치 0**',
+  /**
+   * 🔴 (2026-09-30 · 단일 실행 authority) 발행 예약의 정본은 launchd 러너 plist 다 — GitHub 예약은 지웠다.
+   *    합집합 계약은 그대로다: 러너 plist 의 `StartCalendarInterval` 을 같은 cron 표현으로 읽어 견준다.
+   */
+  const yml = scheduleTextOfSlots(calendarSlots(renderPublishRunnerPlist(AUTHORITY_RENDER_INPUT)))
+  check('🔴 🔴 **GitHub 발행 워크플로에 예약이 없다(두 번째 schedule owner 0)**',
+    retiredPublishWorkflowProblems(readFileSync('.github/workflows/auto-publish.yml', 'utf-8')).length === 0)
+  check('🔴 🔴 **실제 launchd 러너 예약은 모든 단계의 합집합이다 — 불일치 0**',
     compareWorkflowSuperset(yml).length === 0,
     JSON.stringify(compareWorkflowSuperset(yml)))
   check('🔴 🔴 **어느 단계 슬롯도 아닌 cron 은 FAIL**',
@@ -253,9 +270,9 @@ console.log('\n④ 🔴 🔴 workflow stage — superset 은 정상, gating 없�
     return stageGatingPresent(src)
   })())
   check('🔴 gating 이 없으면 FAIL', !stageGatingPresent('const x = 1'))
-  check('🔴 🔴 **health 가 합집합 기준을 쓴다** — 활성 단계로 견주지 않는다', (() => {
+  check('🔴 🔴 **health 가 GitHub 발행 예약 부활을 본다** — 활성 단계로 견주지 않는다', (() => {
     const h = readFileSync('scripts/supply-health.mts', 'utf-8')
-    return /compareWorkflowSuperset\(/.test(h)
+    return /retiredPublishWorkflowProblems\(/.test(h) && !/compareWorkflow\(/.test(h)
   })())
 }
 
@@ -305,91 +322,8 @@ console.log('\n⑥ 🔴 🔴 측정되지 않은 값 — 0 으로 채우지 않�
     showMeasured(null) === UNMEASURED && showMeasured(80, '/day') === '80/day')
   check('🔴 🔴 **thin 수를 READY 순증가로 대체하면 FAIL**',
     readyNetFromThin(80) === null)
-  const promo = judgePromotion({
-    current: 'd1', next: 'd3', readyStock: 9999, activePersonas: 9999,
-    detailPerDay: null, readyQualifiedPerDay: null, readyStockDeltaPerDay: null,
-    publishedPerDay: null, currentStableStreakDays: null,
-    publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: false,
-  })
-  check('🔴 🔴 **측정되지 않으면 올리지 않는다 — 통과로 세지 않는다**',
-    !promo.ready && promo.unmeasured.length > 0
-    && promo.unmeasured.includes('상세 수집/day')
-    && promo.unmeasured.includes('READY 생산량/day'),
-    JSON.stringify(promo.unmeasured))
-  // 🔴 필요량을 여기 다시 적지 않는다 — 정본이 바뀌면 이 fixture 도 따라 움직여야 한다
-  const D3 = d100Plan('d3')
-  /**
-   * 🔴 지금 운영은 d1 이고 올라가려는 칸은 d3 이다.
-   *    d1 의 자기 목표는 **1/day** 다 — d3 의 3/day 를 사전 조건으로 요구하지 않는다.
-   */
-  const full: Parameters<typeof judgePromotion>[0] = {
-    current: 'd1', next: 'd3',
-    readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
-    detailPerDay: D3.detailedSourcesRequiredPerDay,
-    readyQualifiedPerDay: D3.readyQualifiedRequiredPerDay,
-    readyStockDeltaPerDay: 1,
-    publishedPerDay: dailyTargetOf('d1'),
-    currentStableStreakDays: stableObservationDaysOf('d1'),
-    publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: false,
-  }
-  const ok = judgePromotion(full)
-  check('🔴 🔴 **d1→d3 preflight 는 d1 실적(1/day)만으로 통과한다**',
-    ok.nextPreflight.ready, JSON.stringify(ok.nextPreflight))
-  check('🔴 🔴 **d1 제한이 확정되지 않았으면 canary 부터 막힌다**',
-    !ok.ready && !ok.currentCanary.ready && ok.phase === 'canary'
-    && ok.currentCanary.blocking.some((b) => b.includes('제한')))
-  check('🔴 🔴 **지금 단계가 자리를 잡고 다음 준비가 끝나야 올릴 수 있다**', (() => {
-    const v = judgePromotion({
-      ...full, currentLimitsActive: true,
-      // 🔴 d1 의 자기 목표는 1/day 다 — d3 의 3/day 가 아니다
-      publishedPerDay: dailyTargetOf('d1'),
-      currentStableStreakDays: stableObservationDaysOf('d1'),
-    })
-    return v.ready && v.phase === 'preflight'
-      && v.currentCanary.ready && v.currentStable.ready && v.nextPreflight.ready
-  })())
-  /**
-   * 🔴 **공개량만큼 만들어서는 올라가지 못한다** (2026-09-21 보정).
-   *    앞판은 `readyNetRequiredPerDay = publicPostsPerDay` 였고, 하루 3편 공개에
-   *    하루 3편 생산이면 통과였다 — 그러면 재고는 영원히 늘지 않는다.
-   */
-  check('🔴 🔴 **공개량만큼만 만들면 올리지 않는다 — 재고가 늘지 않는다**',
-    !judgePromotion({ ...full, readyQualifiedPerDay: D3.publicPostsPerDay }).nextPreflight.ready)
-  check('🔴 runner 가 못 돌면 올리지 않는다',
-    !judgePromotion({ ...full, publishRunnerReady: false }).nextPreflight.ready)
-  /**
-   * 🔴 **재지 못한 재고를 0 이나 -1 로 바꿔 넣지 않는다.** 그러면 "재고가 부족하다"
-   *    라는 **틀린 이유**가 뜬다 — 사실은 읽지 못한 것이다.
-   */
-  check('🔴 🔴 **재고를 못 재면 blocking 이 아니라 unmeasured 다**', (() => {
-    const v = judgePromotion({ ...full, readyStock: null, activePersonas: null })
-    return !v.ready && v.unmeasured.includes('재고') && v.unmeasured.includes('활성 Persona')
-      && !v.blocking.some((b) => b.includes('재고 '))
-  })())
-  /**
-   * 🔴 **다음 단계 스케줄러 판정은 러너 프로필을 따른다** (2026-09-29 계약 정렬).
-   *    앞판: d20 에 cron 이 없어 d10→d20 이 스케줄러로 막혔다. 지금은 d20 러너 슬롯(heartbeat 격자)이 있어
-   *    스케줄러 칸이 막지 않는다 — 막는 것은 재고·Persona·상세·생산 같은 실제 준비다.
-   *    🔴 그래도 공개가 d20 으로 **지속 승격**되지는 않는다 — 사다리가 D20+ SUSTAIN 을 막고 TRIAL → 증거 PASS 로만 연다
-   *       (`stage:scheduler-check` S11). 스케줄러가 못 하는 단계(d100)는 `schedulerSupportOf` 가 막는다(⑩).
-   */
-  check('🔴 🔴 **d10 → d20 은 스케줄러 칸이 막지 않는다 — 준비(재고)가 막는다**', (() => {
-    const D20 = d100Plan('d20')
-    const input = {
-      current: 'd10', next: 'd20',
-      readyStock: D20.readyStock14Days, activePersonas: D20.personaCanaryFloor,
-      detailPerDay: D20.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: D20.readyQualifiedRequiredPerDay,
-      readyStockDeltaPerDay: 1,
-      publishedPerDay: dailyTargetOf('d10'),
-      currentStableStreakDays: stableObservationDaysOf('d10'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    } as const
-    const v = judgePromotion(input)
-    const short = judgePromotion({ ...input, readyStock: D20.readyStock14Days - 1 })
-    return v.nextPreflight.ready && !v.nextPreflight.blocking.some((b) => b.includes('스케줄러'))
-      && !short.ready && short.nextPreflight.blocking.some((b) => b.includes('재고'))
-  })())
+  // 🔴 (2026-09-30) 지속 승격(`judgePromotion`)의 측정 · preflight 반례는 지웠다 — 다음 단계는 `judgeNextPreflight` 하나가
+  //    UNKNOWN(측정 안 됨)을 통과로 세지 않는다(`stage:scheduler-check` ④ · OPPORTUNITY/THROUGHPUT/PERSONA_UNKNOWN).
 }
 
 // ─────────────────────────────────────────────────────────
@@ -400,9 +334,10 @@ console.log('\n⑦ 🔴 🔴 Persona 24 → 180~200 — 카드만 채우면 READ
     code: 'P01', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '40대 후반',
     voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
     daysSinceActive: 0, retired: false, qualificationConflict: false,
-    topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+    roleShare: 0, postsSinceLastPairing: 'never',
   }
-  check('🔴 생활사 축은 생성 계약과 같은 14축이다', PERSONA_LIFE_AXES.length === 14)
+  // 🔴 (2026-10-01 · C8) 생성 계약 14칸 중 개인 말버릇만 뺀 13축 — 공통 금지는 `persona-no-go` 가 강제한다
+  check('🔴 생활사 계약 축은 생성 계약 14칸 − 개인 말버릇 = 13축', PERSONA_LIFE_AXES.length === 13 && !PERSONA_LIFE_AXES.includes('noGoExpressions'))
   check('🔴 다 갖추면 쓸 수 있다', personaUsable(FULL))
   check('🔴 🔴 **생활사 한 축만 비어도 못 쓴다**',
     personaBlockers({ ...FULL, filledAxes: PERSONA_LIFE_AXES.slice(1) }).includes('lifeAxisMissing'))
@@ -578,17 +513,18 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
     id, status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
     promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
     sourceSite: `${AUTOFILL_SITE_PREFIX}82cook`,
-    matchedPersonaId: 'per-1', gateResults: {},
+    // 🔴 (2026-09-30) 원문 증거 — 없으면 정본 슬롯 판정(깔때기 ⑤)이 fresh 에서 뺀다
+    matchedPersonaId: 'per-1', gateResults: fakeEvidenceGate(NOW, { id }),
     title: `제목 ${id}`, body: `본문 ${id} 입니다`,
     draftTitle: `제목 ${id}`, editedTitle: null,
     decidedBy: 'founder', decidedAt: NOW, createdAt: NOW,
-    sourceCapturedAt: NOW, freshTitle: `제목 ${id}`, freshBody: `본문 ${id} 입니다`,
     ...over,
   })
   const machineRow = (id: string, over: Partial<QueueRowFacts> = {}): QueueRowFacts => humanRow(id, {
     promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
     sourceSite: `${MACHINE_SITE_PREFIX}82cook`,
     gateResults: {
+      ...fakeEvidenceGate(NOW, { id }),
       autoDraft: {
         provenance: MACHINE_PROFILE.envelopeProvenance,
         sourceDecision: MACHINE_PROFILE.sourceDecision,
@@ -686,10 +622,10 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
     && d100Plan('d3').readyQualifiedRequiredPerDay === 4)
 
   // ⑨ 세 값은 서로 다르다
-  check('🔴 ⑨ **공개량·READY 생산·재고는 서로 다른 값이다**', (() => {
+  check('🔴 ⑨ **공개량·READY 생산은 서로 다른 값이다 · 14일 재고 칸은 없다**', (() => {
     const p = d100Plan('d100')
     return p.publicPostsPerDay === 100 && p.readyQualifiedRequiredPerDay === 120
-      && p.readyStock14Days === 1400
+      && !('readyStock14Days' in p)
   })())
 
   /**
@@ -728,7 +664,7 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     const v = judgePersonaScale({
       stage: 'd3',
@@ -748,14 +684,13 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
-    return personaBlockers({ ...base, topicShare: 0.9 }).includes('topicConcentrated')
-      && personaBlockers({ ...base, roleShare: 0.9 }).includes('roleConcentrated')
+    return personaBlockers({ ...base, roleShare: 0.9 }).includes('roleConcentrated')
       && personaBlockers({ ...base, postsSinceLastPairing: 1 }).includes('pairRepeat')
-      // 🔴 재지 않은 것은 **통과가 아니라 unmeasured** 다
-      && personaUnmeasured({ ...base, topicShare: null }).includes('topicConcentrated')
-      && !personaUsable({ ...base, topicShare: null })
+      // 🔴 재지 않은 것은 **통과가 아니라 unmeasured** 다 — 역할 쏠림은 회차 조건(C9)
+      && personaUnmeasured({ ...base, roleShare: null }).includes('roleConcentrated')
+      && !personaUsable({ ...base, roleShare: null })
   })())
 
   // ⑮ 숨겨진 글을 의도된 takedown 이라 부르지 않는다
@@ -890,100 +825,7 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
     t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
   // ① 운영 d1 을 d3 으로 표시하면 FAIL
-  check('🔴 ① **지금 단계는 env 가 정한다 — 코드에 박지 않는다**', (() => {
-    const code = strip(cli)
-    const fromEnv = /releaseStageFromEnvText\(envText\)/.test(code)
-      && /currentReleaseStage = resolved\.stage/.test(code)
-      && /nextStage[^=]*= targetStageFor\(currentReleaseStage\)/.test(code)
-    /**
-     * 🔴 **단계 이름 문자열을 어디에도 배정하지 않는다.** `resolveStage` 를 부르면서
-     *    결과만 `'d3'` 으로 덮어써도 통과하던 것이 앞판의 구멍이었다.
-     */
-    const noHardcode = !/(currentReleaseStage|nextStage)[^=\n]*=\s*'d\d+'/.test(code)
-      && !/const\s+stage\s*:\s*D100Stage\s*=\s*'/.test(code)
-    // 🔴 실제로 env 글에서 읽어 오는가 — 값이 바뀌면 답도 바뀐다
-    const readsEnv = releaseStageFromEnvText('SORAN_RELEASE_STAGE=d1\n').stage === 'd1'
-      && releaseStageFromEnvText('SORAN_RELEASE_STAGE=d5\n').stage === 'd5'
-      && releaseStageFromEnvText('SORAN_RELEASE_STAGE=d5\n').fromEnv
-      && releaseStageFromEnvText('').stage === 'd1'
-      && releaseStageFromEnvText('').fromEnv === false
-    // 🔴 정본 판정: 빈 env → 가장 안전한 d1
-    const resolves = resolveStage(undefined).stage === 'd1'
-      && resolveStage('d3').stage === 'd3' && resolveStage('허튼값').stage === 'd1'
-    const maps = targetStageFor('d1') === 'd3' && targetStageFor('d3') === 'd5'
-      && targetStageFor('d5') === 'd10' && targetStageFor('d10') === 'd20'
-    // 🔴 d1 은 D100 용량표에 없다 — 없는 칸을 d3 으로 올려 읽지 않는다
-    return fromEnv && noHardcode && readsEnv && resolves && maps && currentPlanOf('d1') === null
-  })())
-
   // ② D3 수치로 D5 승격하면 FAIL
-  check('🔴 ② **목표 단계의 필요량으로 잰다 — 현재 단계 수치로 올라가지 않는다**', (() => {
-    const D3 = d100Plan('d3'); const D5 = d100Plan('d5')
-    // 🔴 d3 수치를 그대로 들고 d5 로 올라가려 하면 막혀야 한다
-    const regress = judgePromotion({
-      current: 'd3', next: 'd5',
-      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
-      detailPerDay: D3.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: D3.readyQualifiedRequiredPerDay,
-      readyStockDeltaPerDay: 1,
-      publishedPerDay: D3.publicPostsPerDay,
-      currentStableStreakDays: stableObservationDaysOf('d3'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    const blocked = !regress.ready
-      && regress.nextPreflight.blocking.some((b) => b.includes(`${D5.readyStock14Days}`))
-      && regress.nextPreflight.blocking.some((b) => b.includes(`${D5.readyQualifiedRequiredPerDay}/day`))
-      && regress.nextPreflight.blocking.some((b) => b.includes(`${D5.detailedSourcesRequiredPerDay}/day`))
-      /**
-       * 🔴 **d5 발행량은 어느 칸에서도 사전 조건이 아니다.**
-       *    d3 을 돌리는 동안 물을 것은 d3 의 3/day 이지 d5 의 5/day 가 아니다.
-       */
-      && !regress.blocking.some((b) => b.includes(`${D5.publicPostsPerDay}/day`))
-    // 🔴 d5 수치를 채우면 통과한다
-    /**
-     * 🔴 **d3→d5 는 d3 이 실제로 3/day 를 7일 낸 뒤에만 열린다.**
-     *    d3 실적이 없으면 preflight 부터 막힌다 — 재고만 쌓아서는 올라가지 않는다.
-     */
-    const noD3Record = judgePromotion({
-      current: 'd3', next: 'd5',
-      readyStock: D5.readyStock14Days, activePersonas: D5.personaCanaryFloor,
-      detailPerDay: D5.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: D5.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
-      publishedPerDay: D3.publicPostsPerDay,
-      // 🔴 3/day 를 냈지만 아직 6일뿐이다
-      currentStableStreakDays: stableObservationDaysOf('d3') - 1,
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    const ok = judgePromotion({
-      current: 'd3', next: 'd5',
-      readyStock: D5.readyStock14Days, activePersonas: D5.personaCanaryFloor,
-      detailPerDay: D5.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: D5.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
-      publishedPerDay: D5.publicPostsPerDay,
-      currentStableStreakDays: D5.minimumObservationDays,
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    // 🔴 d1→d3 은 D3 의 42 · 4/day · 12/day · 24명을 본다 — **3편/day 는 묻지 않는다**
-    const d1 = judgePromotion({
-      current: 'd1', next: 'd3',
-      readyStock: 41, activePersonas: 24, detailPerDay: 12,
-      readyQualifiedPerDay: 4, readyStockDeltaPerDay: 1,
-      publishedPerDay: dailyTargetOf('d1'),
-      currentStableStreakDays: stableObservationDaysOf('d1'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: false,
-    })
-    return blocked && ok.ready && ok.next === 'd5'
-      /**
-       * 🔴 **d3 이 7일을 못 채웠으면 전환이 막힌다** — 다만 막히는 곳은
-       *    `nextPreflight` 가 아니라 **지금 단계의 stable** 이다. 다음 단계 준비는
-       *    그와 별개로 진행될 수 있어야 한다.
-       */
-      && !noD3Record.ready && !noD3Record.currentStable.ready
-      && noD3Record.currentStable.blocking.some((b) => b.includes('연속 달성'))
-      && noD3Record.nextPreflight.ready
-      && !d1.nextPreflight.ready && d1.nextPreflight.blocking.some((b) => b.includes('42'))
-  })())
-
   // ③ readyProduced 를 readyNet 으로 연결하면 FAIL
   check('🔴 ③ **생산량과 재고 증감이 다른 값이고, 증감은 스냅샷 차이로만 나온다**', (() => {
     const wired = /readyQualifiedPerDay/.test(strip(cli)) && /readyStockDeltaPerDay/.test(strip(cli))
@@ -1060,31 +902,17 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
   })())
 
   // ⑤ 예약 전망을 0 으로 하드코딩하면 FAIL
-  check('🔴 ⑤ **예약 전망은 예측기가 낸다 — 0 을 주입하지 않는다**', (() => {
-    const noZero = !/(scheduledIn7Days|forecastIfLoadedIn7Days)\s*:\s*0/.test(strip(stock))
-      && !/(scheduledIn14Days|forecastIfLoadedIn14Days)\s*:\s*0/.test(strip(stock))
-      && /forecastPublishing/.test(strip(stock))
-    // 🔴 사람이 없으면 0 건이 아니라 **계산할 수 없다**
-    const noPersona = forecastFromRows({
-      rows: [], publishableIds: [], personas: [], codeOfPersonaId: new Map(),
-      history: [], dailyCap: 1, now: new Date('2026-09-21T00:00:00.000Z'),
-    })
-    // 🔴 타입이 `Measured` 라 0 과 null 을 구분한다
-    const typed = /scheduledIn7Days: Measured/.test(readFileSync('src/lib/d100-readiness.ts', 'utf-8'))
-    return noZero && noPersona.in7 === null && noPersona.in14 === null && typed
-  })())
-
   // ⑥ Persona 3계층 중 하나를 계기판에서 제거하면 FAIL
-  check('🔴 ⑥ **3계층이 계기판에 연결돼 있다 — 순수 함수만 있으면 없는 것이다**', (() => {
-    const wired = /personaTierReadiness/.test(strip(stock)) && /personaReadinessOk/.test(strip(stock))
-      && /personaTiers/.test(strip(cli)) && /personaReady/.test(strip(cli))
-      // 🔴 active 수만으로 승격 입력을 채우지 않는다
-      && /activePersonas: personaReady \? activePersonas : null/.test(strip(cli))
+  check('🔴 ⑥ **계기판이 Persona 준비를 따로 판정하지 않는다 — 계약 유효 수 주입 하나(두 번째 정본 없음)**', (() => {
+    // 🔴 (2026-09-30) 계기판은 3계층을 **따로 판정하지 않는다** — 계약 유효 Persona 는 Persona 레인 정본 하나를
+    //    주입 인터페이스(`contractValidPersonas`)로 받는다. 아래 순수 함수 검사는 lib 계약으로만 남는다.
+    const wired = !/personaTierReadiness|personaReadinessOk/.test(strip(stock)) && !/personaTiers|personaReady\b/.test(strip(cli))
+      && /contractValidPersonas/.test(strip(stock)) && /contractValidPersonas/.test(strip(cli))
     const FULL: PersonaCandidate = {
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     const many = Array.from({ length: 24 }, (_, i) => ({ ...FULL, code: `P${i}` }))
     const all = personaTierReadiness({ stage: 'd3', candidates: many })
@@ -1093,14 +921,14 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
     const cardBroken = personaTierReadiness({
       stage: 'd3', candidates: many.map((p) => ({ ...p, ageBand: null })),
     })
-    // 🔴 재지 않은 축이 있으면 그 층은 ready 가 아니다 — topic/role 은 **Pool** 층이다
+    // 🔴 재지 않은 축이 있으면 그 층은 ready 가 아니다 — 역할 쏠림은 **회차** 층이다(2026-10-01 · C9)
     const unmeasured = personaTierReadiness({
-      stage: 'd3', candidates: many.map((p) => ({ ...p, topicShare: null })),
+      stage: 'd3', candidates: many.map((p) => ({ ...p, roleShare: null })),
     })
     return wired && ready
       && !personaReadinessOk(cardBroken) && cardBroken[0]!.ready === false
       && !personaReadinessOk(unmeasured)
-      && unmeasured[1]!.tier === 'pool' && unmeasured[1]!.unmeasured.topicConcentrated === 24
+      && unmeasured[2]!.tier === 'assignment' && unmeasured[2]!.unmeasured.roleConcentrated === 24
   })())
 
   // ⑦ 82cook operating 이 canary 20요청 상한을 상속하면 FAIL
@@ -1160,97 +988,13 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
    * ① 🔴 **D3 에서 4건 만들고 3건 내보내 재고 +1 은 정상이다.**
    *    앞판은 이것을 "순증가 1 < 필요 4" 로 막았다 — 정상 운영이 승격을 막은 셈이다.
    */
-  check('🔴 ① **READY 생산 4 · 발행 3 · 재고 +1 은 처리량 조건을 통과한다**', (() => {
-    const v = judgePromotion({
-      current: 'd3', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
-      detailPerDay: D3.detailedSourcesRequiredPerDay,
-      // 🔴 생산 4 · 재고 증감 +1
-      readyQualifiedPerDay: 4, readyStockDeltaPerDay: 1,
-      publishedPerDay: 3, currentStableStreakDays: stableObservationDaysOf('d3'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    const throughputOk = !v.nextPreflight.blocking.some((b) => b.includes('READY 생산'))
-      && !v.nextPreflight.blocking.some((b) => b.includes('고갈'))
-      && v.nextPreflight.ready
-    // 🔴 반대로 생산이 3 이면 막힌다 — 여유율은 생산량에 붙는다
-    const tooLittle = judgePromotion({
-      current: 'd3', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
-      detailPerDay: D3.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: 3, readyStockDeltaPerDay: 1,
-      publishedPerDay: 3, currentStableStreakDays: stableObservationDaysOf('d3'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    // 🔴 재고를 채운 뒤 줄고 있으면 고갈 위험으로 따로 막는다
-    const depleting = judgePromotion({
-      current: 'd3', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
-      detailPerDay: D3.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: 4, readyStockDeltaPerDay: -2,
-      publishedPerDay: 3, currentStableStreakDays: stableObservationDaysOf('d3'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    // 🔴 재고를 채우기 전이라면 음수여도 고갈로 막지 않는다 (아직 쌓는 중이다)
-    const stillFilling = judgePromotion({
-      current: 'd3', next: 'd3',
-      readyStock: 3, activePersonas: D3.personaCanaryFloor,
-      detailPerDay: D3.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: 4, readyStockDeltaPerDay: -2,
-      publishedPerDay: 3, currentStableStreakDays: stableObservationDaysOf('d3'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    return throughputOk
-      && tooLittle.nextPreflight.blocking.some((b) => b.includes('READY 생산 3/day'))
-      && depleting.nextPreflight.blocking.some((b) => b.includes('고갈'))
-      && !stillFilling.nextPreflight.blocking.some((b) => b.includes('고갈'))
-  })())
-
   /**
    * ② 🔴 **D1 에서 이미 3/day 를 요구하면 통과할 수 없다.**
    *    올라가야 낼 수 있는 양을 올라가기 전에 요구하는 것이기 때문이다.
    */
-  check('🔴 ② **d1→d3 preflight 는 3/day 를 요구하지 않는다**', (() => {
-    const v = judgePromotion({
-      current: 'd1', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
-      detailPerDay: D3.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: D3.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
-      // 🔴 d1 은 하루 1편이 자기 목표다
-      publishedPerDay: 1, currentStableStreakDays: stableObservationDaysOf('d1'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: false,
-    })
-    const phases = (PROMOTION_PHASES as readonly string[]).join(',') === 'preflight,canary,stable'
-    return phases && v.nextPreflight.ready && v.phase === 'canary'
-      && !v.nextPreflight.blocking.some((b) => b.includes('3/day'))
-      // 🔴 그래도 제한을 켜기 전에는 끝난 것이 아니다
-      && !v.ready && v.currentStable.blocking.length > 0
-      && dailyTargetOf('d1') === 1 && dailyTargetOf('d3') === 3
-  })())
-
   /**
    * ③ 🔴 **빈 이력을 넘기면 주 상한·간격이 한 번도 적용되지 않는다.**
    */
-  check('🔴 ③ **forecast 에 실제 PersonaActivityLog 이력을 넘긴다**', (() => {
-    const wired = /kind: 'post'/.test(strip(stock))
-      && /personaActivityLog\.findMany/.test(strip(stock))
-      // 🔴 빈 배열을 만들어 넘기는 배선이 없어야 한다
-      && !/matchedAts: \[\]/.test(strip(stock))
-      && /history: input\.history/.test(strip(stock))
-    // 🔴 사람 수와 이력 수가 어긋나면 계산하지 않는다 (빈 배열 주입 방어)
-    const mismatch = forecastFromRows({
-      rows: [], publishableIds: [],
-      personas: [{ code: 'P01' } as never], codeOfPersonaId: new Map(),
-      history: [], dailyCap: 1, now: new Date('2026-09-21T00:00:00.000Z'),
-    })
-    // 🔴 예약량과 예측값이 서로 다른 필드다
-    const split = /actualScheduledIn7Days/.test(strip(stock))
-      && /forecastIfLoadedIn7Days/.test(strip(stock))
-      && /publishRunnerLoaded \? fc\.in7 : 0/.test(strip(stock))
-      && /actualIn7Days/.test(strip(cli)) && /forecastIfLoadedIn7Days/.test(strip(cli))
-    return wired && mismatch.in7 === null && split
-  })())
-
   /**
    * ④ 🔴 **층 배치와 미측정 처리.**
    */
@@ -1259,14 +1003,15 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
     const canon = tiers.lifeAxisMissing === 'card' && tiers.noAgeBand === 'card'
       && tiers.voiceEvidenceThin === 'card' && tiers.retired === 'card'
       && tiers.dormant === 'card' && tiers.qualificationConflict === 'card'
-      && tiers.topicConcentrated === 'pool' && tiers.roleConcentrated === 'pool'
+      // 🔴 (2026-10-01 · C9) 역할 쏠림은 회차 층 · 라벨 없는 소재 쏠림 코드는 없다
+      && tiers.topicConcentrated === undefined && tiers.roleConcentrated === 'assignment'
       && tiers.activityOverCap === 'assignment' && tiers.consecutiveExposure === 'assignment'
       && tiers.pairRepeat === 'assignment'
     const FULL: PersonaCandidate = {
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     // 🔴 모르면 통과가 아니다 — 0/false 로 떨어뜨리지 않는다
     const unknownExposure = personaTiers({ ...FULL, consecutiveExposures: null })
@@ -1363,22 +1108,6 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
   })())
 
   /** 🔴 관측 일수 상수를 없앴다 */
-  check('🔴 ⑤-c **observedDays 상수 대신 실제 연속 달성 일수를 쓴다**', (() => {
-    /**
-     * 🔴 **고정 14일 상수 자리**만 본다. `productionRateOf` 의 `observedDays` 는
-     *    "산출이 있던 날 수" 라는 **실측값**이고, 없앤 그 상수와 다른 것이다.
-     */
-    const noConst = !/observedDays: THROUGHPUT_WINDOW_DAYS/.test(strip(stock))
-      && !/observedDays: 14/.test(strip(cli)) && !/observedDays: 14/.test(strip(stock))
-      && /stableStreakDays/.test(strip(stock)) && /currentStableStreakDays/.test(strip(cli))
-    const NOW = new Date('2026-09-21T00:00:00.000Z')
-    const day = (n: number): Date => new Date(NOW.getTime() - n * 86_400_000)
-    // 🔴 어제·그제 각 1건 → 연속 2일. 오늘은 아직 끝나지 않아 세지 않는다
-    const s2 = stableStreakDays({ publishedAts: [day(1), day(2)], dailyTarget: 1, now: NOW })
-    // 🔴 목표가 2 면 하루 1건으로는 끊긴다
-    const s0 = stableStreakDays({ publishedAts: [day(1), day(2)], dailyTarget: 2, now: NOW })
-    return noConst && s2 === 2 && s0 === 0
-  })())
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1395,127 +1124,14 @@ console.log('\n⑮ 🔴 🔴 PR #555 5차 보정 — 세 결함의 회귀')
    *    앞판은 `currentLimitsActive` 자리에 `현재 === 다음` 을 넣었다 —
    *    다음은 정의상 현재가 아니므로 canary 는 **언제나 false** 였다.
    */
-  const assemble = (envText: string, over: Partial<Parameters<typeof judgePromotion>[0]> = {}) => {
-    // 🔴 CLI 와 같은 순서로 만든다: env → 지금 단계 → 다음 단계 → 판정
-    const resolved = releaseStageFromEnvText(envText)
-    const current = resolved.stage
-    const next = targetStageFor(current)
-    return judgePromotion({
-      current, next,
-      readyStock: d100Plan(next).readyStock14Days,
-      activePersonas: d100Plan(next).personaCanaryFloor,
-      detailPerDay: d100Plan(next).detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: d100Plan(next).readyQualifiedRequiredPerDay,
-      readyStockDeltaPerDay: 1,
-      publishedPerDay: dailyTargetOf(current),
-      currentStableStreakDays: stableObservationDaysOf(current),
-      publishRunnerReady: true, commentRunnerReady: true,
-      currentLimitsActive: resolved.fromEnv,
-      ...over,
-    })
-  }
-
-  check('🔴 ① **d1 운영 중 — canary/stable 은 d1 의 것, preflight 는 d3 의 것**', (() => {
-    const v = assemble('SORAN_RELEASE_STAGE=d1\n')
-    return v.current === 'd1' && v.next === 'd3'
-      // 🔴 canary 가 통과할 수 있다 — 앞판에서는 불가능했다
-      && v.currentCanary.ready
-      // 🔴 d1 은 1/day 로 stable 이 된다. d3 의 3/day 를 미리 요구하지 않는다
-      && v.currentStable.ready
-      && !v.blocking.some((b) => b.includes(`${D3.publicPostsPerDay}/day`))
-      && v.nextPreflight.ready && v.ready
-  })())
-
-  check('🔴 ①-b **운영이 d3 으로 바뀌면 d3 canary·stable 을 판정하고 d5 를 따로 준비한다**', (() => {
-    const v = assemble('SORAN_RELEASE_STAGE=d3\n')
-    // 🔴 이제 물어야 할 실적은 d3 의 3/day 다
-    const askD3 = v.current === 'd3' && v.next === 'd5' && v.currentCanary.ready
-    /**
-     * 🔴 **안정화는 연속 달성 일수가 답한다** (6차 보정).
-     *    14일 평균을 조건으로 두면 단계를 막 올린 직후가 가장 오래 막힌다.
-     */
-    const notYet = assemble('SORAN_RELEASE_STAGE=d3\n', {
-      currentStableStreakDays: stableObservationDaysOf('d3') - 1,
-    })
-    // 🔴 d5 준비는 d3 실적과 **따로** 판정된다
-    return askD3 && v.currentStable.ready
-      && !notYet.currentStable.ready
-      && notYet.currentStable.blocking.some((b) => b.includes('연속 달성'))
-      && notYet.nextPreflight.ready && !notYet.ready
-      && d100Plan(v.next).publicPostsPerDay === D5.publicPostsPerDay
-  })())
-
-  check('🔴 ①-c **env 가 확정되지 않으면 canary 부터 막힌다**', (() => {
-    // 🔴 안전 단계로 떨어진 것은 "그 단계를 운영하기로 했다" 가 아니다
-    const v = assemble('')
-    return !v.currentCanary.ready && v.phase === 'canary'
-      && v.currentCanary.blocking.some((b) => b.includes('확정'))
-  })())
-
-  check('🔴 ①-d **CLI 가 그 조립을 그대로 쓴다**', (() => {
+  check('🔴 ①-d **CLI 의 지금 단계는 저장된 StageDecision 에서 온다 — env 문자열 · 승격 조립 없음**', (() => {
     const code = strip(cli)
-    return /currentLimitsActive: resolved\.fromEnv/.test(code)
-      // 🔴 `현재 === 다음` 비교가 돌아오면 잡힌다
-      && !/currentLimitsActive:[^\n]*===/.test(code)
-      && /next: nextStage/.test(code)
-      && /promo\.currentCanary/.test(code) && /promo\.currentStable/.test(code)
-      && /promo\.nextPreflight/.test(code)
+    return /readCurrentStageDecision\(/.test(code) && !/releaseStageFromEnvText|judgePromotion|promo\./.test(code)
   })())
 
   /**
    * ③ 🔴 **정상 조회 0 건은 측정된 0/day 다.**
    */
-  check('🔴 ③ **0/day 는 unmeasured 가 아니고, 승격을 통과시키지 않는다**', (() => {
-    // 🔴 READY 생산 0 — blocking 이지 unmeasured 가 아니다
-    const zeroProduce = assemble('SORAN_RELEASE_STAGE=d1\n', { readyQualifiedPerDay: 0 })
-    const produceBlocked = !zeroProduce.nextPreflight.ready
-      && zeroProduce.nextPreflight.blocking.some((b) => b.includes('READY 생산 0/day'))
-      && !zeroProduce.nextPreflight.unmeasured.includes('READY 생산량/day')
-    /**
-     * 🔴 **공개 발행 0 — 같은 원칙.** 다만 안정화를 막는 것은 14일 평균이 아니라
-     *    **연속 달성 일수**다. 한 건도 안 나갔으면 연속 달성은 0 일이다.
-     */
-    const NOW0 = new Date('2026-09-21T03:00:00.000Z')
-    const zeroStreak = stableStreakDays({ publishedAts: [], dailyTarget: 1, now: NOW0 })
-    const zeroPublish = assemble('SORAN_RELEASE_STAGE=d1\n', {
-      publishedPerDay: perDayMeasured(0, 14), currentStableStreakDays: zeroStreak,
-    })
-    const publishBlocked = zeroStreak === 0
-      // 🔴 0/day 는 측정된 값이다 — unmeasured 가 아니다
-      && perDayMeasured(0, 14) === 0
-      && !zeroPublish.currentStable.ready
-      && zeroPublish.currentStable.blocking.some((b) => b.includes('연속 달성 0일'))
-      && !zeroPublish.currentStable.unmeasured.includes('연속 달성 일수')
-    // 🔴 반면 `null` 은 unmeasured 로 남는다 — 둘이 구분된다
-    const nullProduce = assemble('SORAN_RELEASE_STAGE=d1\n', { readyQualifiedPerDay: null })
-    const nullStaysUnmeasured = nullProduce.nextPreflight.unmeasured.includes('READY 생산량/day')
-      && !nullProduce.nextPreflight.blocking.some((b) => b.includes('READY 생산'))
-    // 🔴 상세 수집도 같다 — 회차가 있었는데 0 건이면 0/day 다
-    const NOW = new Date('2026-09-21T00:00:00.000Z')
-    const rec: CollectRunRecord = {
-      runId: 'r', source: 'navercafe:wgang', trigger: 'schedule', mode: 'detail',
-      status: 'failed', startedAt: '2026-09-20T00:00:00.000Z', endedAt: null, code: 'NETWORK',
-      listRows: 0, detailRequests: 0, bodyRows: 0, thinRows: 0,
-      skippedSeen: 0, repeatedRows: 0, newUniqueThinRows: 0,
-    }
-    const ran = detailThroughput({
-      windowDays: 10, now: NOW,
-      recordsOf: (src) => src === 'navercafe:wgang' ? [rec] : [],
-    })
-    const detailZero = ran.bySource[0]!.perDay === 0
-      && !ran.unmeasuredSources.includes('navercafe:wgang')
-      // 🔴 기록이 아예 없는 공급원은 여전히 unmeasured 다
-      && ran.unmeasuredSources.includes('82cook')
-    /**
-     * 🔴 **나눗셈 자체가 0 을 0 으로 낸다.** 위 판정들은 숫자를 직접 넣어 보므로
-     *    `perDayMeasured` 를 지나지 않는다 — 실제로 값을 만드는 곳도 확인한다.
-     */
-    const divides = perDayMeasured(0, 14) === 0
-      && perDayMeasured(3, 14) === 0.2
-      // 🔴 창 길이가 없을 때만 `null` 이다
-      && perDayMeasured(0, 0) === null
-    return produceBlocked && publishBlocked && nullStaysUnmeasured && detailZero && divides
-  })())
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1534,79 +1150,14 @@ console.log('\n⑯ 🔴 🔴 안정화 판정 — 7일 조건이 몰래 14일이
     return out
   }
   /** 🔴 **실제 생산값 계산부터 승격 판정까지 이어 붙인다** */
-  const endToEnd = (publishedAts: readonly Date[], current: 'd1' | 'd3' | 'd5' | 'd10') => {
-    const target = dailyTargetOf(current)
-    const streak = stableStreakDays({ publishedAts, dailyTarget: target, now: NOW })
-    // 🔴 14일 평균 — 진단값이다. 승격 판정에 넣지 않는다
-    const since = NOW.getTime() - 14 * 86_400_000
-    const avg = perDayMeasured(publishedAts.filter((d) => d.getTime() >= since).length, 14)
-    const next = targetStageFor(current)
-    const req = d100Plan(next)
-    const v = judgePromotion({
-      current, next,
-      readyStock: req.readyStock14Days, activePersonas: req.personaCanaryFloor,
-      detailPerDay: req.detailedSourcesRequiredPerDay,
-      readyQualifiedPerDay: req.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
-      publishedPerDay: avg, currentStableStreakDays: streak,
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    return { streak, avg, v }
-  }
-
   /**
    * 🔴 **d1 에서 7일 1편 → d3 에서 7일 3편.**
    *    연속 달성은 7일로 찼는데 14일 평균은 (7 + 21)/14 = 2편/day 다 —
    *    앞판은 여기서 "3/day 미달" 로 막았다. 단계를 올린 직후가 가장 오래 막히는 구조였다.
    */
-  check('🔴 🔴 **d1 7일×1편 → d3 7일×3편 이면 d3 stable 이다**', (() => {
-    const ats = [...days(1, 7, 3), ...days(8, 7, 1)]
-    const { streak, avg, v } = endToEnd(ats, 'd3')
-    return streak === 7 && avg === 2
-      // 🔴 14일 평균이 목표 미달인데도 stable 이다 — 그것이 이 보정의 요점이다
-      && avg < dailyTargetOf('d3')
-      && v.currentStable.ready
-      && !v.blocking.some((b) => b.includes('공개 발행'))
-  })())
-
-  check('🔴 🔴 **d3 7일 중 하루가 2편이면 FAIL**', (() => {
-    // 🔴 3일 전 하루만 2편
-    const ats = [...days(1, 2, 3), ...days(3, 1, 2), ...days(4, 4, 3), ...days(8, 7, 1)]
-    const { streak, v } = endToEnd(ats, 'd3')
-    return streak === 2 && !v.currentStable.ready
-      && v.currentStable.blocking.some((b) => b.includes('연속 달성 2일'))
-  })())
-
   /** 🔴 관측 기간이 다른 단계도 같은 규칙이다 — d5 는 7일, d10 은 14일 */
-  check('🔴 🔴 **d5 는 7일 · d10 은 14일 — 단계마다 제 기간을 쓴다**', (() => {
-    const d5Ok = endToEnd(days(1, 7, 5), 'd5')
-    const d5Short = endToEnd(days(1, 6, 5), 'd5')
-    const d10Ok = endToEnd(days(1, 14, 10), 'd10')
-    const d10Short = endToEnd(days(1, 13, 10), 'd10')
-    return stableObservationDaysOf('d5') === 7 && stableObservationDaysOf('d10') === 14
-      && d5Ok.v.currentStable.ready && !d5Short.v.currentStable.ready
-      && d10Ok.v.currentStable.ready && !d10Short.v.currentStable.ready
-  })())
-
   /** 🔴 **오늘의 미완료 날짜는 달성일에 넣지 않는다** */
-  check('🔴 🔴 **오늘은 세지 않는다 — 아침마다 연속 기록이 0 이 되지 않는다**', (() => {
-    // 🔴 어제까지 7일은 채웠고 오늘은 아직 한 건도 없다
-    const ats = days(1, 7, 3)
-    const withToday = stableStreakDays({ publishedAts: ats, dailyTarget: 3, now: NOW })
-    // 🔴 오늘 1편만 나간 상태여도 어제까지의 기록은 그대로다
-    const partial = stableStreakDays({
-      publishedAts: [...ats, new Date(NOW.getTime() - 1000)], dailyTarget: 3, now: NOW,
-    })
-    return withToday === 7 && partial === 7
-  })())
-
   /** 🔴 14일 평균을 다시 필수 조건으로 넣으면 여기서 깨진다 */
-  check('🔴 🔴 **14일 평균은 stable 의 필수 조건이 아니다**', (() => {
-    const src = readFileSync('src/lib/d100-capacity.ts', 'utf-8')
-    const i = src.indexOf('const stable: GateVerdict')
-    const block = src.slice(i, src.indexOf('stable.ready =', i))
-    // 🔴 stable 블록 안에서 `publishedPerDay` 를 보지 않는다
-    return i > 0 && !/publishedPerDay/.test(block)
-  })())
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1704,7 +1255,7 @@ console.log('\n⑰ 🔴 🔴 공급 깔때기 재대조 — 이름을 흐리면 
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     // 🔴 전원이 자격 감사만 미측정 — 막힌 데는 없다
     const onlyUnmeasured = personaTierReadiness({
@@ -1719,7 +1270,8 @@ console.log('\n⑰ 🔴 🔴 공급 깔때기 재대조 — 이름을 흐리면 
       stage: 'd3',
       candidates: Array.from({ length: 24 }, (_, i) => ({ ...FULL, code: `P${i}`, ageBand: null })),
     }).find((t) => t.tier === 'card')!
-    const wired = /passedIgnoringUnmeasured/.test(
+    // 🔴 (2026-09-30) 계기판은 3계층을 찍지 않는다 — 이 구분은 lib 계약으로만 남는다(Persona 레인 reserve 가 정본)
+    const wired = !/passedIgnoringUnmeasured/.test(
       readFileSync('scripts/d100-master-readiness.mts', 'utf-8'))
     return card.passed === 0 && card.passedIgnoringUnmeasured === 24
       && (card.reason ?? '').includes('24명')
@@ -1955,59 +1507,6 @@ console.log('\n⑲ 🔴 🔴 회차 1번을 생산율로 · 다른 selector 를 
    * ① 🔴 **canary 3건을 14 로 나눠 승격 입력에 넣지 않는다.**
    *    실측이 그 모양이었다 — `3 ÷ 14 = 0.2/day` 가 "필요 4/day 에 못 미친다" 의 근거였다.
    */
-  check('🔴 ① **한 회차 3건은 생산율이 아니다 — 승격 입력이 unmeasured 가 된다**', (() => {
-    // 🔴 공급이 예약으로 돌지 않으면 잴 수 없다
-    const canary = productionRateOf({
-      rows: 3, observedDays: 1, windowDays: 14, scheduledSupplyOn: false,
-    })
-    // 🔴 예약으로 돌아도 산출이 있던 날이 모자라면 잴 수 없다
-    const tooFewDays = productionRateOf({
-      rows: 30, observedDays: MIN_PRODUCTION_DAYS - 1, windowDays: 14, scheduledSupplyOn: true,
-    })
-    // 🔴 여러 날 스스로 돌았을 때만 값을 낸다
-    const real = productionRateOf({
-      rows: 56, observedDays: 14, windowDays: 14, scheduledSupplyOn: true,
-    })
-    if (canary.measured || tooFewDays.measured || !real.measured) return false
-    if (real.perDay !== 4) return false
-    if (!/예약으로 돌고 있지 않다/.test(canary.reason)) return false
-    if (!/산출이 있던 날/.test(tooFewDays.reason)) return false
-
-    /** 🔴 그 unmeasured 가 **승격 판정까지** 이어진다 */
-    const D3 = d100Plan('d3')
-    const v = judgePromotion({
-      current: 'd1', next: 'd3',
-      readyStock: D3.readyStock14Days, activePersonas: D3.personaCanaryFloor,
-      detailPerDay: D3.detailedSourcesRequiredPerDay,
-      // 🔴 canary 는 위에서 `measured:false` 임을 확인했다 — 그래서 `null` 이다
-      readyQualifiedPerDay: null,
-      readyStockDeltaPerDay: 1,
-      publishedPerDay: dailyTargetOf('d1'),
-      currentStableStreakDays: stableObservationDaysOf('d1'),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-    const blocked = !v.nextPreflight.ready
-      && v.nextPreflight.unmeasured.includes('READY 생산량/day')
-      // 🔴 **0.2/day 미달** 이라는 거짓 이유가 뜨지 않는다
-      && !v.nextPreflight.blocking.some((b) => b.includes('READY 생산'))
-
-    /** 🔴 회차 사실은 따로 적는다 — 나눈 값이 아니다 */
-    const fact = rateOf({ count: 3, runs: 1, days: 14, lastAt: '2026-09-21 11:35' })
-    const lines = describeProduction(canary, fact).join(' ')
-    const separated = /unmeasured/.test(lines) && /회차 1번 3건/.test(lines)
-      && /나눠 생산율이라 부르지 않는다/.test(lines)
-      && !/0\.2/.test(lines)
-
-    /** 🔴 계기판이 그 규칙을 실제로 쓴다 */
-    const wired = /productionRateOf\(/.test(strip(stock))
-      && /scheduledSupplyOn/.test(strip(stock))
-      && /readyQualifiedPerDay: production\.measured \? production\.perDay : null/.test(strip(stock))
-      // 🔴 창 일수로 나누던 옛 배선이 없어야 한다
-      && !/readyQualifiedPerDay: perDayMeasured\(produced/.test(strip(stock))
-      && /describeProduction\(/.test(strip(cli))
-    return blocked && separated && wired
-  })())
-
   /**
    * ② 🔴 **두 CLI 가 같은 이름에 같은 selector 를 써야 한다.**
    *    실측이 4 와 3 으로 갈렸고 양쪽 다 "READY" 라고 불렀다.
@@ -2075,53 +1574,17 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
     schedulerSupportOf('d100').releaseStage === null
     && (['d20', 'd30', 'd50', 'd100'] as const).every((st) => {
       const r = personaTargetReport(st, 0)
-      return r.sustainedTarget === SUSTAINED[st] && r.sustainedMet === false
-        && r.sustainedShortfall === SUSTAINED[st]
+      return r.sustainedTarget === SUSTAINED[st] && r.sustainedGap === SUSTAINED[st]
     }))
 
   const D20 = d100Plan('d20')
-  const base: Parameters<typeof judgePromotion>[0] = {
-    current: 'd10', next: 'd20',
-    readyStock: D20.readyStock14Days, activePersonas: D20.personaCanaryFloor,
-    detailPerDay: D20.detailedSourcesRequiredPerDay,
-    readyQualifiedPerDay: D20.readyQualifiedRequiredPerDay,
-    readyStockDeltaPerDay: 1,
-    publishedPerDay: dailyTargetOf('d10'),
-    currentStableStreakDays: stableObservationDaysOf('d10'),
-    publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-  }
-  const atFloor = judgePromotion(base)
-  check('🔴 🔴 **canary 하한(40)만 채우면 preflight 가 Persona 로 막히지 않는다 — 지속 목표(60)로 막지 않는다**',
-    !atFloor.nextPreflight.blocking.some((b) => b.includes('Persona'))
-    && atFloor.persona.canaryFloorMet === true && atFloor.persona.sustainedMet === false,
-    JSON.stringify(atFloor.nextPreflight.blocking))
-  check('🔴 🔴 **canary 하한을 채웠다고 지속 준비라 말하지 않는다**',
-    atFloor.persona.sustainedMet === false && atFloor.persona.sustainedTarget === 60
-    && atFloor.persona.sustainedShortfall === 20)
-  check('🔴 지속 목표 미달은 blocking·unmeasured 어디에도 섞이지 않는다',
-    ![...atFloor.blocking, ...atFloor.unmeasured].some((b) => b.includes('지속')))
-  check('🔴 반례: canary 하한보다 1명 모자라면 preflight 가 막는다',
-    judgePromotion({ ...base, activePersonas: D20.personaCanaryFloor - 1 }).nextPreflight.blocking
-      .some((b) => b.includes(`canary 하한 ${D20.personaCanaryFloor}`)))
-  check('🔴 지속 목표를 채우면 두 칸 모두 충족',
-    (() => {
-      const v = judgePromotion({ ...base, activePersonas: 60 })
-      return v.persona.canaryFloorMet === true && v.persona.sustainedMet === true
-    })())
-  check('🔴 재지 못했으면 두 칸 모두 null — 통과로도 0 으로도 읽지 않는다',
-    (() => {
-      const v = judgePromotion({ ...base, activePersonas: null })
-      return v.persona.canaryFloorMet === null && v.persona.sustainedMet === null
-        && v.persona.active === null && v.nextPreflight.unmeasured.includes('활성 Persona')
-    })())
-
   // 🔴 카드 층 — canary 하한으로 ready, 지속 목표는 따로
   check('🔴 🔴 **카드 층: 40명 완성이면 d20 canary ready · 지속 목표 60 은 미충족으로 따로 보고**', (() => {
     const cand: PersonaCandidate = {
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     const cards = Array.from({ length: 40 }, (_, i) => ({ ...cand, code: `P${i}` }))
     const card = personaTierReadiness({ stage: 'd20', candidates: cards }).find((t) => t.tier === 'card')!
@@ -2130,21 +1593,29 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
       && scale.canaryReady && !scale.sustainedReady && scale.sustainedShortfall === 20
   })())
 
-  check('🔴 보고 한 줄에 두 숫자가 함께 나온다',
+  check('🔴 보고 한 줄에 두 숫자와 공백이 함께 나온다 — 계약 유효 기준',
     (() => {
       const line = describePersonaTargets(personaTargetReport('d20', 40))
-      return line.includes('canary 하한 40명') && line.includes('지속 목표 60명')
-        && /🟢 충족/.test(line) && /🔴 미달/.test(line)
+      return line.includes('계약 유효 40명') && line.includes('canary 하한 40명') && line.includes('지속 목표 60명')
+        && line.includes('공백 0') && line.includes('🔴 공백 20명') && !/충족|활성/.test(line)
     })())
+  check('🔴 🔴 **계약 유효 0 이면 d3 부터 공백이다 — "d3·d5 충족" 을 찍지 않는다**',
+    personaTargetReport('d3', 0).canaryGap === 24 && personaTargetReport('d5', 0).canaryGap === 24
+    && !describePersonaTargets(personaTargetReport('d3', 0)).includes('공백 0'))
+  check('🔴 계약 유효 수를 모르면 공백도 미관측이다',
+    personaTargetReport('d3', null).canaryGap === null
+    && describePersonaTargets(personaTargetReport('d3', null)).includes('미관측'))
   check('🔴 D100 지속 목표는 "300명 이상" 으로 보고한다',
     describePersonaTargets(personaTargetReport('d100', null)).includes('지속 목표 300명 이상'))
 
   // 🔴 계기판이 두 목표를 **실제로** 찍는가 — 만든 것과 연결된 것은 다르다
-  check('🔴 🔴 **d100:readiness 가 두 목표를 모두 찍는다 (표 · 승격 · JSON)**', (() => {
+  check('🔴 🔴 **d100:readiness 가 두 목표를 모두 찍는다 (표 · JSON)**', (() => {
     const cli = strip(readFileSync('scripts/d100-master-readiness.mts', 'utf-8'))
-    return /describePersonaTargets\(promo\.persona\)/.test(cli)
+    return /describePersonaTargets\(personaTargetReport\(st, contractValidPersonas\)\)/.test(cli)
       && /personaCanaryFloor/.test(cli) && /personaSustainedTarget/.test(cli)
-      && /targetsByActiveCards/.test(cli)
+      && /targetsByContractValid: D100_STAGES\.map\(\(st\) => personaTargetReport\(st, contractValidPersonas\)\)/.test(cli)
+      && !/personaTargetReport\(st, activePersonas\)/.test(cli)
+      && !/targetsByActiveCards/.test(cli)
       && !/activePersonaTarget/.test(cli)
   })())
   check('🔴 옛 겹친 이름(`activePersonaTarget`)이 정본에 남아 있지 않다', (() => {
@@ -2152,6 +1623,135 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
     const scale = strip(readFileSync('src/lib/d100-persona-scale.ts', 'utf-8'))
     return !/activePersonaTarget/.test(cap) && !/activePersonaTarget/.test(scale)
   })())
+}
+
+// ═════════════════════════════════════════════════════════
+console.log('\n⓪ 🔴 하나의 루프 깔때기 — 관측 전용 · 원문 게시 시각은 sourceEvidence 에서만 (2026-09-30)')
+// ═════════════════════════════════════════════════════════
+{
+  const strip = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const H = 3_600_000
+  const NOW_F = new Date('2026-09-30T12:00:00.000Z')
+  const FROM = new Date(NOW_F.getTime() - 7 * 864e5).toISOString()
+  const pubAt = new Date(NOW_F.getTime() - 5 * H)
+  /** 🔴 도장은 발행 트랜잭션과 같은 길(`judgeSlotRelease` → `releaseStampOf`)로 만든다 — 손으로 적은 `slotAt:'x'` 도장을 쓰지 않는다 */
+  const stamp = fakeReleaseStampGate(fakeEvidenceGate(pubAt, { ageH: 4 }), pubAt)
+  /** 🔴 게시 · 수집 · 초안 시각이 서로 다른 기록 — 게시는 공개 4h 전 */
+  const good: LoopRow = {
+    gateResults: { ...fakeEvidenceGate(pubAt, { ageH: 4 }), ...stamp },
+    generatedAt: new Date(pubAt.getTime() - 2 * H).toISOString(),
+    readyAt: new Date(pubAt.getTime() - 1 * H).toISOString(), decidedBy: AUTO_DECIDER,
+    publicAt: pubAt.toISOString(), publishEventAt: pubAt.toISOString(),
+    firstPersonaCommentAt: new Date(pubAt.getTime() + 14 * 60_000).toISOString(),
+    audit: { judged: true, defect: false },
+  }
+  /** 🔴 원문 증거가 없는 공개 행 — 큐 생성 · READY · 공개 시각은 전부 있다(대용할 시각이 널려 있다) */
+  const noEvidence: LoopRow = { ...good, gateResults: { ...stamp } }
+  /** 🔴 게시 시각만 비고 수집 시각은 있다 — capture 로 대신하면 FAIL */
+  const capturedOnly: LoopRow = { ...good, gateResults: { ...fakeEvidenceGate(pubAt, { postedAt: null }), ...stamp } }
+  /** 🔴 게시 시각은 있지만 지금 계약 도장이 없다(옛 계약 공개) */
+  const unstamped: LoopRow = { ...good, gateResults: { ...fakeEvidenceGate(pubAt, { ageH: 30 }) } }
+  const base = {
+    windowFrom: FROM, windowTo: NOW_F.toISOString(), candidates: null,
+    slotDays: [], costs: { supplyUsd: null, commentUsd: null, auditUsd: null }, contractValidPersonas: null,
+  }
+  const f1 = buildLoopFunnel({ ...base, rows: [good] })
+  check('🟢 계약 도장 · 게시 시각이 있는 글은 원문 게시 → 공개 지연을 잰다 (4h)',
+    f1.latency.sourceToPublic.n === 1 && f1.latency.sourceToPublic.p50H === 4 && f1.sameDayPublicShare.share === 1)
+  const f2 = buildLoopFunnel({ ...base, rows: [noEvidence, capturedOnly] })
+  check('🔴 🔴 **원문 증거가 없으면 게시 시각 미관측 — 큐 생성 · READY · 공개 시각으로 대신하지 않는다**',
+    f2.latency.sourceToPublic.n === 0 && f2.latency.sourceToPublic.p50H === null
+    && f2.counts.publicPostedUnknown === 2 && f2.sameDayPublicShare.share === null)
+  check('🔴 🔴 **capture 시각은 게시 시각을 대신하지 않는다** (게시 null · 수집 있음 → 원문 게시 → 수집도 미관측)',
+    buildLoopFunnel({ ...base, rows: [capturedOnly] }).latency.sourceToCapture.n === 0)
+  check('🔴 지금 계약 도장이 없는 공개 글은 원문 게시 → 공개 모집단에 들지 않는다 (preflight 와 같은 모집단)',
+    buildLoopFunnel({ ...base, rows: [unstamped] }).latency.sourceToPublic.n === 0
+    && buildLoopFunnel({ ...base, rows: [unstamped] }).counts.publicStamped === 0)
+  check('🔴 🔴 **도장 시각 ≠ 발행 사건 시각 · 발행 사건 모름 → 계약 도장 공개로 세지 않는다** (같은 사건이어야 증명)',
+    buildLoopFunnel({ ...base, rows: [{ ...good, publishEventAt: new Date(pubAt.getTime() + 1).toISOString() }] }).counts.publicStamped === 0
+    && buildLoopFunnel({ ...base, rows: [{ ...good, publishEventAt: null }] }).counts.publicStamped === 0
+    && f1.counts.publicStamped === 1)
+  check('🔴 모르는 것은 null — 후보 · 비용 · Persona 가 미관측으로 남는다',
+    f1.counts.candidates === null && f1.cost.totalUsd === null && f1.persona.contractValid === null
+    && f1.persona.firstBlockedTransition === null
+    && f1.unobserved.some((u) => u.startsWith('비용')) && f1.unobserved.some((u) => u.startsWith('후보')))
+  check('🔴 화면이 미관측을 "미관측" 이라고 찍는다 — 0 이 아니다',
+    describeLoopFunnel(f2).some((l) => l.includes('원문 게시 → 공개    미관측'))
+    && describeLoopFunnel(f1).some((l) => l.includes('비용                미관측')))
+  check('🟢 첫 댓글 지연 14분 · 60분 안 100% · 감사 1/1',
+    f1.comment.firstCommentLatency.p50Min === 14 && f1.comment.within60Share === 1
+    && f1.audit.autoPublic === 1 && f1.audit.selected === 1 && f1.audit.judged === 1)
+  // 🔴 Persona — judgeNextPreflight 는 다음 단계 하한을 본다 → 계약 유효 0 이면 D1→D3 부터 막힌다
+  const pz = buildLoopFunnel({ ...base, rows: [], contractValidPersonas: 0 })
+  check('🔴 🔴 **계약 유효 0 이면 D1→D3 부터 막힌다 — "D3→D5" 가 아니다**',
+    pz.persona.firstBlockedTransition === 'D1→D3' && pz.persona.gapByStage[0]!.gap === 24,
+    String(pz.persona.firstBlockedTransition))
+  check('🟢 계약 유효 24 면 d3 · d5 하한은 채우고 D5→D10 에서 막힌다',
+    buildLoopFunnel({ ...base, rows: [], contractValidPersonas: 24 }).persona.firstBlockedTransition === 'D5→D10')
+  check('🟢 슬롯 채움은 자동 공개만 · 그날 목표까지만 센다',
+    (() => {
+      const day = new Date(pubAt.getTime() + 9 * H).toISOString().slice(0, 10)
+      const human: LoopRow = { ...good, decidedBy: 'founder' }
+      const f = buildLoopFunnel({ ...base, rows: [good, good, human], slotDays: [{ kstDate: day, release: 'd1', target: 1 }] })
+      return f.slots.target === 1 && f.slots.filledAuto === 1 && f.slots.fillRate === 1
+    })())
+
+  // 🔴 관측 전용 — 판정 · 결정이 없다
+  check('🔴 🔴 **깔때기 lib 는 verdict · judge · PASS 를 내보내지 않는다**',
+    Object.keys(loopFunnelLib).every((k) => !/judge|verdict|decide|promot|pass/i.test(k))
+    && !('verdict' in f1) && !JSON.stringify(f1).includes('"PASS"'))
+  {
+    const code = strip(readFileSync('src/lib/d100-loop-funnel.ts', 'utf-8'))
+    check('🔴 깔때기 lib 가 게시 시각 대용(?? 로 capture · 초안 · 생성 시각)을 쓰지 않는다',
+      !/postedMs\s*\?\?|postedAt\s*\?\?|sourceCapturedAt|draftedAt/.test(code)
+      && /readSourceEvidence\(/.test(code) && /releaseStampStatusOf\(/.test(code))
+  }
+  const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
+    const p = join(d, n)
+    return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx|mts|mjs)$/.test(n) ? [p] : []
+  })
+  const ALLOWED = new Set([
+    'scripts/d100-master-readiness.mts', 'scripts/ops-status.mts',
+    'scripts/lib/d100-loop-funnel-read.mts', 'scripts/d100-readiness-check.mts',
+  ])
+  const importers = [...walk('src'), ...walk('scripts')]
+    .filter((p) => /from '[^']*d100-loop-funnel(-read)?(\.mjs)?'/.test(readFileSync(p, 'utf-8')))
+  const stray = importers.filter((p) => !ALLOWED.has(p))
+  check(`🔴 🔴 **깔때기 값은 결정 경로가 읽지 않는다 — 보고 화면만 import 한다** (${importers.length}곳)`,
+    stray.length === 0 && importers.includes('scripts/d100-master-readiness.mts') && importers.includes('scripts/ops-status.mts'),
+    stray.join(' · '))
+  for (const [file, label] of [['scripts/d100-master-readiness.mts', 'd100:readiness'], ['scripts/ops-status.mts', 'ops:status']] as const) {
+    const cli = strip(readFileSync(file, 'utf-8'))
+    check(`🔴 ${label} 가 깔때기를 실제로 읽고 찍는다 (표 · JSON)`,
+      /readLoopFunnel\(/.test(cli) && /describeLoopFunnel\(/.test(cli) && /loopFunnel:/.test(cli))
+  }
+  // 🔴 쓰기 차단 — 운영 DB 에 닿기 전에 막힌다(닿을 수 없는 주소로 시험한다)
+  const ro = readOnlyPrisma(new PrismaClient({ datasourceUrl: 'postgresql://ro@127.0.0.1:1/none' }))
+  const blocked = async (p: () => Promise<unknown>): Promise<boolean> => {
+    try { await p(); return false } catch (e) { return (e as Error).message.startsWith('read-only 판독기:') }
+  }
+  const results = await Promise.all([
+    blocked(() => ro.originalPostApprovalQueue.update({ where: { id: 'x' }, data: { status: 'EXPIRED' } })),
+    blocked(() => ro.stageDecision.create({ data: {} as never })),
+    blocked(() => ro.comment.deleteMany({})),
+    blocked(() => ro.post.upsert({ where: { id: 'x' }, create: {} as never, update: {} })),
+    blocked(() => ro.$executeRawUnsafe('SELECT 1')),
+  ])
+  check(`🔴 🔴 **판독기는 쓰기 · raw 를 호출 시점에 막는다** (${results.filter(Boolean).length}/${results.length})`,
+    results.every(Boolean))
+  const readTried = await blocked(() => ro.post.findFirst({}))
+  check('🟢 읽기는 막지 않는다 (차단 문구가 아니라 연결 실패로 끝난다)', readTried === false)
+  await ro.$disconnect()
+
+  // 📜 지운 옛 칸이 되살아나지 않는다
+  check('🔴 📜 최소 관측 일수(7·14·21일) 칸이 없다 — 달력 대기는 승급 조건이 아니다',
+    !/minimumObservationDays/.test(strip(readFileSync('src/lib/d100-capacity.ts', 'utf-8')))
+    && !D100_STAGES.some((st) => 'minimumObservationDays' in d100Plan(st)))
+  check('🔴 📜 7·14일 예약 전망 칸이 없다',
+    !/scheduledIn(7|14)Days/.test(strip(readFileSync('src/lib/d100-readiness.ts', 'utf-8'))))
+  check('🔴 📜 d100:readiness 가 Persona 를 "제공자 연결 전" 이라고 찍지 않는다 (지금 연결돼 있다)',
+    !/제공자 연결 전/.test(readFileSync('scripts/d100-master-readiness.mts', 'utf-8')))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

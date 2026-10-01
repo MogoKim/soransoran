@@ -23,13 +23,14 @@ export type PersonaCoded = { code: string }
  * 🔴 오래된 순으로 낸다. `planReplan` 이 시도 수를 세기 때문이다.
  */
 export function attemptsForSource(
-  outcomes: readonly PriorOutcome[], sourceArticleId: string,
+  outcomes: readonly PriorOutcome[], sourceKey: string,
 ): {
   failedPersonaCode?: string | null; failedStance?: string | null; failedCause?: string | null
   suggestedPersonaCodes?: readonly string[]
 }[] {
   return outcomes
-    .filter((o) => o.sourceArticleId === sourceArticleId && o.stage === 'draft')
+    // 🔴 원천 열쇠(사이트, id)로 대 본다 — 같은 번호 다른 사이트의 실패 화자를 빼지 않는다(P0-B)
+    .filter((o) => o.sourceKey === sourceKey && o.stage === 'draft')
     .sort((a, b) => a.atMs - b.atMs)
     .map((o) => ({
       failedPersonaCode: o.failedPersonaCode,
@@ -62,7 +63,8 @@ export type PersonaPick<T extends PersonaCoded = PersonaCoded> =
  */
 export function personasForAttempt<T extends PersonaCoded>(input: {
   outcomes: readonly PriorOutcome[]
-  sourceArticleId: string
+  /** 🔴 원천 열쇠(`sourceKeyOf`) */
+  sourceKey: string
   /** 이 원천에 배정된 화자 코드 (여력 계획이 좁힌 묶음) */
   slotCodes: readonly string[]
   /** 🔴 전체 후보 — 여기서 골라 보낸다. **카드를 그대로 낸다**(형을 깎지 않는다) */
@@ -76,7 +78,7 @@ export function personasForAttempt<T extends PersonaCoded>(input: {
    *    **유료 호출이 또 나가면** "한 번에 결론" 이라는 계약이 거짓이 된다.
    */
   const concluded = input.outcomes.some(
-    (o) => o.sourceArticleId === input.sourceArticleId && o.stage === 'draft' && o.state === 'terminal',
+    (o) => o.sourceKey === input.sourceKey && o.stage === 'draft' && o.state === 'terminal',
   )
   if (concluded) {
     return {
@@ -84,7 +86,7 @@ export function personasForAttempt<T extends PersonaCoded>(input: {
       reason: '이 원천은 이미 결론이 났다 — 다시 만들지 않는다',
     }
   }
-  const attempts = attemptsForSource(input.outcomes, input.sourceArticleId)
+  const attempts = attemptsForSource(input.outcomes, input.sourceKey)
   const plan: ReplanPlan = planReplan({
     attempts, eligible: input.slotCodes, attemptMax: input.attemptMax,
   })

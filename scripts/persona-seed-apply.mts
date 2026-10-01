@@ -28,7 +28,6 @@
  *      · kill switch 조작
  */
 import { PrismaClient, type PersonaStatus } from '@prisma/client'
-import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 import { checkNameCollision, type NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets } from './lib/persona-name-collision-sets.mjs'
@@ -75,8 +74,6 @@ function isFilled(v: unknown): boolean {
   return true
 }
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const ok = (m: string) => console.log(`   ✅ ${m}`)
@@ -130,8 +127,6 @@ function scanForbidden(value: unknown, path: string, hits: string[]): void {
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
-const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
-const hashOf = (v: string) => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
 
 
 // ── seed 파일 ──
@@ -330,7 +325,7 @@ for (const p of personas) {
     memberNames: (sets.memberNames ?? []).filter((n) => !own.has(n)),
     personaNames: (sets.personaNames ?? []).filter((n) => !own.has(n)),
   }
-  const v = checkNameCollision(name, scoped, { hashOf })
+  const v = checkNameCollision(name, scoped)
   if (v.status !== 'pass') blocked.push(`${p.code}:${v.status}`)
 }
 if (blocked.length > 0) { await prisma.$disconnect(); fail(`Gate ⑥-B 재검사 실패: ${blocked.join(', ')}`) }

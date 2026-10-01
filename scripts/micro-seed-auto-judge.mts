@@ -38,7 +38,7 @@ import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-
 import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 /** 🔴 작업 묶음 정본 — 여기서 모양을 다시 정하지 않는다 */
-import { readWorkset } from '../src/lib/supply-workset'
+import { humanDecisionFor, humanDecisionIndexOf, readWorkset, sourceIdentityOf, type HumanDecisionIndex } from '../src/lib/supply-workset'
 import { runClockFrom } from './lib/run-clock.mjs'
 
 const DATA_DIR = '.microseed-data'
@@ -121,18 +121,15 @@ function jsonList(path: string, keys: readonly string[]): Record<string, unknown
   } catch { return [] }
 }
 
-/** 사람이 이미 판정한 글 — 회귀 표본이자 중복 판정 방지 */
-function humanDecisions(): Map<string, string> {
-  const out = new Map<string, string>()
+/** 사람이 이미 판정한 글 — 회귀 표본이자 중복 판정 방지. 🔴 원천 (사이트, id) 로 색인한다(`humanDecisionIndexOf`) */
+function humanDecisions(): HumanDecisionIndex {
+  const rows: Record<string, unknown>[] = []
   for (const re of ['seed-originality-source-approvals-', 'srn-approvals', 'raw-originality-approvals-']) {
     for (const f of readdirSync(DATA_DIR).filter((x) => x.startsWith(re) && x.endsWith('.json'))) {
-      for (const r of jsonList(join(DATA_DIR, f), ['decisions'])) {
-        const id = S(r.sourceArticleId)
-        if (id !== '') out.set(id, S(r.decision))
-      }
+      rows.push(...jsonList(join(DATA_DIR, f), ['decisions']))
     }
   }
-  return out
+  return humanDecisionIndexOf(rows)
 }
 
 /**
@@ -342,8 +339,12 @@ type CacheEntry = {
   decision: string; confidence: number | null; semanticRisks: string[]
   communityAngle: string; semanticStatus: string; attemptCount: number
 }
-function cacheKey(id: string, hash: string): string {
-  return `${id}|${hash}|${RULE_VERSION}|${PROMPT_VERSION}|${JUDGE_MODEL}`
+/**
+ * 🔴 캐시 열쇠 — **원천 (사이트, id)** 를 담는다(2026-09-30 야간 P0-B). 앞판은 id 만 담아 같은 번호 다른 사이트 글이
+ *    지문까지 같으면 한쪽 판정을 다른 쪽이 받았다. 옛 열쇠는 자연히 빗나간다(다시 묻는다 — 공짜 판정을 지어내지 않는다).
+ */
+function cacheKey(t: JudgeInput): string {
+  return `${S(t.sourceSite)}|${S(t.sourceArticleId)}|${inputHashOf(t)}|${RULE_VERSION}|${PROMPT_VERSION}|${JUDGE_MODEL}`
 }
 function loadCache(): Map<string, CacheEntry> {
   try {
@@ -383,13 +384,18 @@ async function main(): Promise<void> {
     }
     const ws = readWorkset(parsed, RUN_ID)
     if (!ws.ok) fail(`작업 묶음이 계약과 다르다 [${ws.code}] ${ws.reason}`)
-    all = all0.filter((t) => ws.sourceIds.has(S(t.sourceArticleId)))
-    console.log(`  🔴 작업 묶음 ${ws.sourceIds.size}건만 판정한다 (상한 ${ws.limit}) — ${WORKSET_PATH}`)
+    // 🔴 옛 판 묶음(사이트 없음)으로는 판정하지 않는다 — 같은 번호 다른 사이트 글이 묶음을 빌려 탈 수 있다
+    if (ws.sourceKeys === null) fail('작업 묶음이 옛 판(workset-v1 · 사이트 없음)이다 — 판정하지 않는다')
+    const wsKeys = ws.sourceKeys
+    // 🔴 묶음은 원천 열쇠(사이트, id) 집합이다 — 같은 번호 다른 사이트 글이 묶음을 빌려 타지 않는다
+    all = all0.filter((t) => { const k = sourceIdentityOf(t.sourceSite, t.sourceArticleId); return k !== null && wsKeys.has(k) })
+    console.log(`  🔴 작업 묶음 ${wsKeys.size}건만 판정한다 (상한 ${ws.limit}) — ${WORKSET_PATH}`)
     console.log(`     고르지 않은 ${all0.length - all.length}건은 **그대로 남는다** — 다음 회차가 집는다\n`)
   }
   const human = humanDecisions()
-  const fresh = all.filter((t) => !human.has(S(t.sourceArticleId)))
-  const seen = all.filter((t) => human.has(S(t.sourceArticleId)))
+  const humanOf = (t: JudgeInput): string | null => humanDecisionFor(human, S(t.sourceSite), S(t.sourceArticleId))
+  const fresh = all.filter((t) => humanOf(t) === null)
+  const seen = all.filter((t) => humanOf(t) !== null)
   const now = new Date().toISOString()
 
   // ① deterministic 게이트 — 🔴 여기서 확정되는 것은 모델을 부르지 않는다
@@ -447,7 +453,7 @@ async function main(): Promise<void> {
   const asked: Judgement[] = []
   const statusCount = new Map<string, number>()
   for (const [i, t] of needAsk.entries()) {
-    const k = cacheKey(S(t.sourceArticleId), inputHashOf(t))
+    const k = cacheKey(t)
     const c = cache.get(k)
     let outcome: SemanticOutcome
     if (c !== undefined) {
@@ -506,7 +512,7 @@ async function main(): Promise<void> {
     const pre = holdBeforeAsking(t).length > 0
     let outcome: SemanticOutcome = SKIPPED
     if (!blocked && !pre) {
-      const k = cacheKey(S(t.sourceArticleId), inputHashOf(t))
+      const k = cacheKey(t)
       const c = cache.get(k)
       if (c !== undefined) {
         hit += 1
@@ -533,7 +539,7 @@ async function main(): Promise<void> {
     const v = judgeOne(t, now, outcome)
     regRows.push({
       sourceArticleId: S(t.sourceArticleId),
-      humanDecision: human.get(S(t.sourceArticleId)) ?? '',
+      humanDecision: humanOf(t) ?? '',
       autoDecision: v.decision,
     })
   }

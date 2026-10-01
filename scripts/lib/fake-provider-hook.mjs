@@ -30,6 +30,15 @@ import { pathToFileURL } from 'node:url'
 const LOG = process.env.FAKE_PROVIDER_LOG ?? ''
 
 /**
+ * 🔴 **공급 장부 시험 격리 표식** (2026-09-30) — `supply-llm-call.SUPPLY_LEDGER_ISOLATION_MARK` 와 같은 이름.
+ *    공급 세션은 장부 자리가 정본(계정 홈)이 아니면 `LEDGER_ERROR` 로 막는다(`$HOME` 바꾸기 우회 차단).
+ *    이 훅이 걸린 프로세스는 아래에서 `fetch` 를 가짜로 바꾸므로 실제 유료 요청을 보낼 수 없다 —
+ *    그래서 임시 HOME 장부를 써도 된다는 표식을 **여기서만** 건다. 로더보다 먼저 돌아 모듈을 import 하지 않고
+ *    `Symbol.for` 이름으로 건다(복사한 작업 디렉터리의 모듈 사본에도 같은 표식이 보인다).
+ */
+globalThis[Symbol.for('soransoran.test.fake-provider-ledger-isolation')] = true
+
+/**
  * 🔴 시험 모드 — **가짜 provider 안에서만 뜻이 있다.** 운영 env 가 아니다.
  *
  *    ok            정상 — 사용량을 준다
@@ -212,8 +221,38 @@ const selfForbiddenIn = (body) => {
     return text.includes('SELF_EXPERIENCE 로 쓰지 마십시오')
   } catch { return false }
 }
+/**
+ * 🔴 **제목을 요청마다 다르게** (2026-09-30 Lane B · `FAKE_PROVIDER_VARY_TITLE=1` 일 때만 · 기본은 앞판 그대로).
+ *    실제 모델은 원천마다 다른 제목을 낸다 — 한 회차에 여러 원천을 생성하는 E2E 에서 모든 초안이 같은 제목이면
+ *    초안 게이트가 "같은 제목이 이미 있다" 로 하나만 남긴다(가짜가 실제보다 약해 시험이 한 줄로 줄었다).
+ *    합성 원문과 겹치지 않는 낱말만 쓴다 — 요청 순서대로 고른다(결정론적).
+ */
+const VARY_TITLE = process.env.FAKE_PROVIDER_VARY_TITLE === '1'
+const VARIED_TITLES = [
+  '오늘 있었던 작은 일', '창문 너머 풍경 이야기', '주말 장보기 다녀왔어요', '새로 산 화분 자랑', '요즘 듣는 노래 한 곡',
+  '옛날 사진을 꺼내 봤어요', '뜨개질 다시 시작했어요', '버스에서 본 풍경', '손주 편지를 받았어요', '동네 빵집이 새로 생겼어요',
+  '서랍 정리를 했어요', '국수 한 그릇 이야기', '달력 넘기다 든 생각', '우편함에 온 엽서', '새 운동화를 샀어요',
+  '라디오 사연 이야기', '화분에 꽃이 폈어요', '오래된 친구 전화', '시장 구경 다녀왔어요', '빨래 개다 든 생각',
+]
+/** 🔴 본문도 가운데 한 문장만 다르게 — "같은 본문이 이미 있다" 로 줄지 않게(같은 knob) */
+const VARIED_LINES = [
+  '어제는 오랜만에 이불 빨래를 했어요.', '냉장고 정리를 하다 보니 반찬이 많더라고요.', '베란다 화분에 물을 듬뿍 줬어요.',
+  '옷장 속 겨울옷을 꺼내 볼까 해요.', '오랜만에 편지지를 사 왔어요.', '부엌 창틀을 닦고 나니 개운하네요.',
+  '작은 달력을 하나 새로 걸었어요.', '뜨개 바구니를 정리해 두었어요.', '현관 신발장을 비웠어요.', '차 한 잔 우려 놓고 앉았어요.',
+  '책장 먼지를 털어 냈어요.', '묵은 사진첩을 넘겨 봤어요.', '새 행주를 몇 장 샀어요.', '이웃이 호박을 나눠 줬어요.',
+  '라디오를 켜 두고 다림질을 했어요.', '손톱을 단정히 다듬었어요.', '안 쓰는 그릇을 정리했어요.', '오랜만에 머리를 짧게 잘랐어요.',
+  '국화 화분을 하나 들였어요.', '베개 커버를 새로 바꿨어요.', '장바구니를 새로 하나 장만했어요.', '창가에 앉아 뜨개질을 했어요.',
+  '벽시계 건전지를 갈았어요.', '손수건을 곱게 다려 두었어요.',
+]
+let varyIdx = 0
 const payloadFor = (body) => {
   const base = { ...PAYLOAD, personaCode: pickOffered(body) }
+  if (VARY_TITLE) {
+    base.title = VARIED_TITLES[varyIdx % VARIED_TITLES.length]
+    base.body = `아침에 창문을 열어 두었더니 바람이 제법 선선하더라고요.\n${VARIED_LINES[varyIdx % VARIED_LINES.length]}\n`
+      + '다들 어떻게 지내시는지 궁금해서 한 줄 남겨 봅니다.'
+    varyIdx += 1
+  }
   /**
    * 🔴 **초안이 나이를 통째로 빼는 반례** — 원문에 나이가 있어도 쓰지 않는다.
    *    그러면 이행 후조건이 `PERSONA_AGE_ABSENT` 로 잡고 `personaTransformFailed` 가 된다.

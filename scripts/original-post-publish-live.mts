@@ -265,6 +265,10 @@ for (const id of take) {
   } else if (res.kind === 'blocked') {
     failedCount += 1
     console.log(`  ⛔ ${id} — ${PUBLISH_BLOCK_LABEL[res.code as PublishBlockCode] ?? res.code}: ${res.detail}`)
+  } else if (res.kind === 'expired') {
+    // 🔴 사람이 부른 단건도 같은 공개 가치 판정을 지난다 — 원천 가치가 사라졌으면 EXPIRED 로 옮겼다(Post 0)
+    failedCount += 1
+    console.log(`  ⌛ ${id} — 원천 가치 없음으로 만료했다 [${res.reasons.join(',')}] — 발행하지 않았다 · 사람이 살리는 경로가 아니다`)
   } else {
     failedCount += 1
     console.log(`  🔴 ${id} — ${res.message}`)

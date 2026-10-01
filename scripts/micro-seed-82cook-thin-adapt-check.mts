@@ -4,7 +4,7 @@
  *
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import {
   toDetailRecord, toRawDetailRecord, statsOf, violatesAdapt, accessOf,
   DETAIL_KEYS, RAW_DETAIL_KEYS, FORBIDDEN_KEYS,
@@ -259,13 +259,13 @@ console.log('\n⑥ 🔴 상수를 건드리지 않았다')
     ageFrom('') === null)
   check('🔴 [SF] 읽을 수 없는 값도 모른다 (null)', ageFrom('어제쯤') === null)
 
-  // 🔴 이번 PR 이 판정을 바꾸지 않았다는 증거
+  // 🔴 (2026-09-30 · source-slot-v1) TTL 판정(supply-freshness)은 지웠다 — 원문 나이는 정본 `judgeSlotRelease` 가
+  //    **게시 시각(postedAt)만으로** 잰다. 수집 · 초안 시각으로 대신하지 않는다
   {
-    const src = readFileSync('src/lib/supply-freshness.ts', 'utf-8')
-    check('🔴 [SF] TTL 상수를 건드리지 않았다',
-      /hot:\s*2,/.test(src) && /timelyWarm:\s*7,/.test(src))
-    check('🔴 [SF] 신선도 판정이 아직 게시 시각을 읽지 않는다 — 별도 PR 이다',
-      !/sourcePostedAt/.test(src))
+    const src = readFileSync('src/lib/source-slot-release.ts', 'utf-8')
+    check('🔴 [SF] 옛 TTL 판정 파일이 없다', !existsSync('src/lib/supply-freshness.ts'))
+    check('🔴 [SF] 정본 판정이 게시 시각으로 나이를 잰다 — 72h 상한 하나',
+      /SOURCE_AGE_LIMIT_HOURS = 72/.test(src) && /POSTED_MISSING/.test(src))
   }
 }
 

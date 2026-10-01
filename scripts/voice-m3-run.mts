@@ -314,7 +314,7 @@ async function main(): Promise<void> {
         },
       })
       const reaction = summarizeCommentSignals(
-        toCommentSignals(raw.topComments, { authorSalt: 'soransoran-voice-v1', capturedAt: new Date(0) }),
+        toCommentSignals(raw.topComments, { capturedAt: new Date(0) }),
       )
       const { payload, summary } = buildPromptPayload({
         sourceRef: row.sourceRef, body, comments,

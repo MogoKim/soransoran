@@ -20,6 +20,7 @@
  */
 import { isRuntimeStage, profileOf, type RuntimeStage } from './scale-profile'
 import { kstDateString } from './release-canary'
+import { decisionStageEnv } from './scale-runtime'
 
 /** 🔴 consumer 가 넣는 두 칸 — 결정의 공개 단계 · 그 KST 날짜 */
 export const PROOF_STAGE_ENV = 'SORAN_STAGE_PROOF_STAGE'
@@ -31,8 +32,11 @@ export type ProofDay = { stage: RuntimeStage; kstDate: string; target: number }
 /**
  * 🔴 **오늘이 증명일인가.** 두 칸이 다 있고 · 단계가 러너 단계(`RUNTIME_STAGES`) 안이고 · 날짜가 **오늘(KST)** 일 때만.
  *    하나라도 어긋나면 `null` — 비시험일(기존 공정성)이다.
+ * 🔴 **StageDecision 표식이 있어야 한다** (2026-09-30 · Lane A) — 단계 칸과 같은 문(`decisionStageEnv`)을 지난다.
+ *    consumer 없이 손으로 두 칸을 적어 증명일을 만들 수 없다.
  */
 export function proofDayOf(env: Readonly<Record<string, string | undefined>>, now: Date): ProofDay | null {
+  if (!decisionStageEnv(env).marked) return null
   const stage = (env[PROOF_STAGE_ENV] ?? '').trim()
   const date = (env[PROOF_DATE_ENV] ?? '').trim()
   if (stage === '' || date === '') return null

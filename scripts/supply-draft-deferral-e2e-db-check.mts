@@ -30,6 +30,8 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -66,6 +68,33 @@ let year = new Date(wall).getUTCFullYear()
 const birthdayKst = (y: number): number => Date.parse(`${y}-${bm}-${bd}T00:00:00+09:00`)
 while (birthdayKst(year) - wall < 7 * 864e5) year += 1
 const RUN_AT = new Date(birthdayKst(year) - 500)
+/**
+ * 🔴 (2026-09-30 · source-slot-v1) 원천 시각은 회차 시각 기준이다 — 게시 6h 전 · 목록 관측 5h 전 · 수집 4.9h 전.
+ *    고정 날짜(2026-09-27)를 쓰면 회차가 그 72h 뒤일 때 원천이 전부 SOURCE_TOO_OLD_AT_SLOT 이 되어
+ *    생성 전 판정이 묶음을 비운다(이 검사가 보려는 여력 대기 경로에 닿지 않는다).
+ */
+const SRC_POSTED = new Date(RUN_AT.getTime() - 6 * 3_600_000).toISOString()
+const SRC_LISTED = new Date(RUN_AT.getTime() - 5 * 3_600_000).toISOString()
+const SRC_CAPTURED = new Date(RUN_AT.getTime() - 4.9 * 3_600_000).toISOString()
+/** 🔴 목록 관측 파일 — 원천 상대 표본(sourceStats)의 재료. 러너가 읽는 이름 모양 그대로(`navercafe-<카페>-<RUN>.list.jsonl`) */
+const writeListObs = (dir: string, rows: readonly { id: string; site: string; c: number }[]): void => {
+  const t = new Date(RUN_AT.getTime() - 5 * 3_600_000).toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-')
+  const bySite = new Map<string, typeof rows[number][]>()
+  for (const r of rows) bySite.set(r.site, [...(bySite.get(r.site) ?? []), r])
+  for (const [site, rs] of bySite) {
+    const cafe = site.split(':')[1] ?? 'x'
+    /**
+     * 🔴 (2026-09-30 Lane B) 목록 회차에는 후보 말고도 **같은 카페의 다른 글**이 찍힌다 — 그것이 비교 표본이다.
+     *    앞판 fixture 는 카페마다 후보 줄만 두어, 한 건뿐인 카페(dupx)는 **자기 자신과 비교해** 0.5 를 받았다.
+     *    이제 자기 제외 · 한 점 분포는 정규화되지 않는다(UNKNOWN) — 실제 목록처럼 다른 글 넷을 함께 둔다.
+     */
+    const population = [0, 1, 3, 8].map((c, k) => ({ id: `${cafe}-pop-${k}`, site, c }))
+    writeFileSync(join(dir, `navercafe-${cafe}-${t}.list.jsonl`), `${[...rs, ...population].map((r) => JSON.stringify({
+      sourceSite: site, sourceArticleId: r.id, sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED,
+      sourceCommentCount: r.c, sourceViewCount: r.c * 10,
+    })).join('\n')}\n`)
+  }
+}
 const AFTER = new Date(birthdayKst(year) + 500)
 
 // ── 🔴 임시 cwd · 임시 HOME — import 전에 세운다(말투 자산 · 장부 경로가 import 때 굳는다) ──
@@ -171,7 +200,7 @@ async function main(): Promise<void> {
         gateResults: { holds: [], blocks: [], autoDraft: {
           provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: code, bundleDigest: `bd-${code}`, comments: 3 },
-        }, [QUALITY_CONTRACT_KEY]: currentQualityContract() } as never,
+        }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN_AT, { id: `dd-${seq}` }) } as never,
         decidedBy: 'machine:auto-draft-v5', dedupKey: `dd-${seq}`,
       },
     })
@@ -194,7 +223,8 @@ async function main(): Promise<void> {
   const shadowPath = join('.microseed-data', `auto-judge-${rid}.shadow.jsonl`)
   const seeds = ['e2e-1001', 'e2e-1002', 'e2e-1003']
   writeFileSync(join(T, shadowPath), seeds.map((id) => JSON.stringify({
-    sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [], semanticStatus: 'ok',
+    // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — 아래 상세 행과 같은 사이트
+    sourceSite: 'navercafe:fixture', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [], semanticStatus: 'ok',
     ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${id}`, provenance: 'machine-shadow',
   })).join('\n') + '\n')
   writeFileSync(join(DATA, `fixture-${rid}.detail.jsonl`), seeds.map((id, i) => JSON.stringify({
@@ -308,12 +338,13 @@ async function worksetAxisRunner(
     title: `우리 나이 이야기 ${x.id}`,
     bodyHead: `${x.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: x.c, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
-    sourcePostedAt: '2026-09-27T00:00:00Z', sourceListedAt: '2026-09-27T00:00:00Z',
+    sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED, sourceCapturedAt: SRC_CAPTURED,
   })
   writeFileSync(join(D2, 'wsaxis-1.detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), access: 'ok', imageCount: 0 })).join('\n')}\n`)
   writeFileSync(join(D2, 'wsaxis-1.raw-detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), accessStatus: 'ok' })).join('\n')}\n`)
+  writeListObs(D2, src.map((x) => ({ id: x.id, site: 'navercafe:wgang', c: x.c })))
 
   // 🔴 같은 원문의 미발행 형제 — 러너가 **이 DB 를 읽어야만** wsxs1 을 뺄 수 있다.
   //    적재 행의 id 는 `<원문id>-<해시8>` 이다(`baseArticleId` 가 뒤를 뗀다) — 그 모양 그대로 넣는다
@@ -331,7 +362,7 @@ async function worksetAxisRunner(
       gateResults: { holds: [], blocks: [], autoDraft: {
         provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
         draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: codes[0] ?? 'P01', bundleDigest: 'bd-wsx', comments: 3 },
-      }, [QUALITY_CONTRACT_KEY]: currentQualityContract() } as never,
+      }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN_AT, { id: 'wsx-dd-1' }) } as never,
       decidedBy: 'machine:auto-draft-v5', dedupKey: 'wsx-dd-1',
     },
   })
@@ -353,14 +384,14 @@ async function worksetAxisRunner(
   const out = `${child.stdout ?? ''}${child.stderr ?? ''}`
   const wsFile = readdirSync(D2).find((f) => /^supply-workset-.*\.json$/.test(f))
   const ws = wsFile === undefined ? null
-    : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sourceIds: string[] }
+    : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] }
   check('🔴 러너가 실제로 돌아 묶음 파일을 적었다', ws !== null, `출력 끝: ${out.slice(-600)}`)
-  const got = ws?.sourceIds.join(',') ?? ''
+  const got = ws?.sources.map((s) => s.sourceArticleId).join(',') ?? ''
   // 🔴 묶음 10 (2026-09-28) — raw 자리 2 · seed 는 형제를 뺀 5건 전부. 옛 규칙(댓글 순)이면 raw 4 가 먼저 든다
   check('🔴 🔴 **러너가 적은 묶음 = raw 2 (댓글 상위) + seed 5 (형제 뺀 전부)** — raw 는 최대 2 · 빈 자리를 raw 로 채우지 않는다',
     got === 'wsxw1,wsxw2,wsxs2,wsxs3,wsxs4,wsxs5,wsxs6', got)
   check('🔴 🔴 **러너가 격리 DB 큐를 읽어 형제를 뺐다** — wsxs1 없음 · 제외 사유 1건',
-    ws !== null && !ws.sourceIds.includes('wsxs1') && /같은 원문의 미발행 형제가 큐에 있다 1/.test(out))
+    ws !== null && !ws.sources.some((s) => s.sourceArticleId === 'wsxs1') && /같은 원문의 미발행 형제가 큐에 있다 1/.test(out))
   check('🔴 러너 로그가 축별 자리를 적는다 (정본 plan.axis)',
     /축 {2}seed 적격 5 · 자리 5 · 고름 5 {2}\| {2}raw 적격 4 · 자리 2 · 고름 2/.test(out),
     (/축 .*/.exec(out) ?? [''])[0])
@@ -370,7 +401,7 @@ async function worksetAxisRunner(
       .map((l) => (JSON.parse(l) as { sourceArticleId: string }).sourceArticleId)
     : []
   check('🔴 🔴 **판정 단계가 그 묶음만 판정했다** — 묶음 밖 raw 2건 · 형제 0건',
-    ws !== null && same(judged, ws.sourceIds), `판정 ${judged.join(',')}`)
+    ws !== null && same(judged, ws.sources.map((s) => s.sourceArticleId)), `판정 ${judged.join(',')}`)
   rmSync(T2, { recursive: true, force: true })
 }
 
@@ -414,12 +445,13 @@ async function duplicateSourceRunner(
     title: `우리 나이 이야기 ${x.id}`,
     bodyHead: `${x.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: x.c, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
-    sourcePostedAt: '2026-09-27T00:00:00Z', sourceListedAt: '2026-09-27T00:00:00Z',
+    sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED, sourceCapturedAt: SRC_CAPTURED,
   })
   writeFileSync(join(D3, 'dupsrc-1.detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), access: 'ok', imageCount: 0 })).join('\n')}\n`)
   writeFileSync(join(D3, 'dupsrc-1.raw-detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), accessStatus: 'ok' })).join('\n')}\n`)
+  writeListObs(D3, src)
 
   // ── 큐 · 글 — 🔴 원천 칸만 의미가 있다. 적재 행의 id 는 `<원문id>-<해시8>` 모양 그대로 ──
   const u = await prisma.user.create({ data: { nickname: '중복검사' }, select: { id: true } })
@@ -447,7 +479,7 @@ async function duplicateSourceRunner(
   })
 
   const fakeKeys = Object.fromEntries([...new Set(Object.values(PROVIDER_KEY_ENV as Record<string, string>))].map((k) => [k, 'fixture-not-a-key']))
-  const runOnce = (runAt: Date): { out: string; ws: { runId: string; sourceIds: string[] } | null } => {
+  const runOnce = (runAt: Date): { out: string; ws: { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] } | null } => {
     const child = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T3, 'scripts', 'supply-process.mts'), '--live'], {
       cwd: T3, encoding: 'utf-8', timeout: 600_000,
       env: {
@@ -455,7 +487,8 @@ async function duplicateSourceRunner(
         // 🔴 ⑤ 와 장부 회차 id 가 겹치지 않게 회차 시각을 따로 준다(회차 요청 상한은 장부 id 로 센다)
         SORAN_RUN_AT: runAt.toISOString(),
         SORAN_SUPPLY_PROCESS_ENABLED: 'true',
-        SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10',
+        // 🔴 결정이 넣은 모양(표식 포함) — 표식 없는 손 env 는 d1 이다(Lane A)
+        ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
         SORAN_LLM_DAILY_BUDGET_USD: '1000', SORAN_LLM_RESERVE_HEADROOM: '1.5',
         // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 30 으로 덮는다
         SORAN_LLM_RUN_REQUEST_CAP: '20',
@@ -468,13 +501,13 @@ async function duplicateSourceRunner(
     const out = `${child.stdout ?? ''}${child.stderr ?? ''}`
     const rid = `${runAt.toISOString().slice(0, 10).replace(/-/g, '')}-${runAt.toISOString().slice(11, 19).replace(/:/g, '')}`
     const f = join(D3, `supply-workset-${rid}.json`)
-    return { out, ws: existsSync(f) ? JSON.parse(readFileSync(f, 'utf-8')) as { runId: string; sourceIds: string[] } : null }
+    return { out, ws: existsSync(f) ? JSON.parse(readFileSync(f, 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] } : null }
   }
   const postBefore = await prisma.post.count()
   const r1At = new Date(RUN_AT.getTime() + 2 * 3600e3)
   const r1 = runOnce(r1At)
   check('🔴 1회차가 돌아 묶음 파일을 적었다', r1.ws !== null, r1.out.slice(-800))
-  const ids1 = r1.ws?.sourceIds ?? []
+  const ids1 = r1.ws?.sources.map((s) => s.sourceArticleId) ?? []
   check('🔴 🔴 **발행된 형제 · 거절된 형제 · 옛 글의 원천은 묶음에 없다** (dup1 · dup2 · dup3)',
     ids1.length > 0 && !ids1.some((x) => ['dup1', 'dup2', 'dup3'].includes(x)), ids1.join(','))
   // 🔴 거절된 형제(dup2)는 `createdPostId` 가 비어 앞판 규칙(미발행 형제)이 먼저 잡는다 — 발행된 것 · 옛 글 둘이 새 규칙 몫이다
@@ -519,7 +552,7 @@ async function duplicateSourceRunner(
 
   const r2At = new Date(r1At.getTime() + 4 * 3600e3)
   const r2 = runOnce(r2At)
-  const ids2 = r2.ws?.sourceIds ?? []
+  const ids2 = r2.ws?.sources.map((s) => s.sourceArticleId) ?? []
   check('🔴 🔴 **2회차 묶음에 1회차가 적재한 원천이 없다** — 재시도로도 다시 뽑히지 않는다',
     loaded1.every((x) => !ids2.includes(x)), `적재 ${loaded1.join(',')} · 2회차 ${ids2.join(',')}`)
   const q2 = await perSource()

@@ -22,6 +22,7 @@
  *    한쪽만 바뀌는 날이 오고, 그날부터 Gate 는 자기가 막는 것을 프롬프트가 시킨다.
  */
 import { BRAND_BANNED_WORDS } from '../../src/lib/content-guard'
+import { promptNoGoExpressions } from '../../src/lib/persona-no-go'
 import { TARGET_DESCRIPTOR_TERMS } from './voice-style-signals.mjs'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../../src/lib/comment-policy'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
@@ -407,7 +408,8 @@ export function buildPrompt(input: {
     `- 상대를 설명하는 말을 쓰지 않습니다: ${[...TARGET_DESCRIPTOR_TERMS].slice(0, 15).join(' · ')}`,
     '  (커뮤니티 안에서는 서로를 설명하지 않습니다. 그냥 말합니다)',
     `- 다루지 않는 주제: ${listOr(persona.noGoTopics, '(없음)')}`,
-    `- 쓰지 않는 표현: ${listOr(persona.noGoExpressions, '(없음)')}`,
+    // 🔴 개인 말버릇(열쇠) + 전원 공통 금지(§7-2) — `persona-no-go` 하나
+    `- 쓰지 않는 표현: ${promptNoGoExpressions(persona.noGoExpressions).join(' · ')}`,
     '- 진단·처방·약 이름·용량을 말하지 않습니다. 병원에 가라 마라도 정하지 않습니다.',
     '- 방법을 알려주지 않습니다. 무엇이 좋다 나쁘다 판단하지 않습니다.',
     '  묻지 않은 정보를 얹지 않습니다 — 여기는 답하는 자리가 아니라 곁에 있는 자리입니다.',

@@ -29,6 +29,7 @@ import {
   currentQualityContract, readQualityContract, QUALITY_CONTRACT_KEY, QUALITY_CONTRACT_VERSION,
 } from '../src/lib/quality-contract'
 import { digestOf } from '../src/lib/auto-ready-v2'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -64,7 +65,7 @@ const gateOfMark = (m: ContractMark): Record<string, unknown> => {
 function fixture(o: {
   rejected?: { id: string; code: RejectCode }[]
   targets?: string[]
-  held?: { id: string; hold: 'TTL_EXPIRED' | 'AGE_UNKNOWN' | 'RECOVERY_STALE' }[]
+  held?: { id: string; hold: 'SOURCE_TOO_OLD_AT_SLOT' | 'POSTED_MISSING' | 'EVIDENCE_MISSING' }[]
   ready?: string[]
   deferred?: string[]
   exceptions?: string[]
@@ -118,8 +119,9 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
     autoReadyClosed: { wip: true, owner: 'autoReadyGate' },
     autoReadyStale: { wip: true, owner: 'human' },
     assignmentDeferred: { wip: true, owner: 'time' },
-    ttlExpired: { wip: false, owner: 'human' },
-    freshnessHeld: { wip: false, owner: 'human' },
+    // 🔴 (2026-09-30) 원천 가치 없음 · 증거 모름 — 사람이 살리는 칸이 아니다(owner none · 트랜잭션이 EXPIRED)
+    releaseIneligible: { wip: false, owner: 'none' },
+    releaseUnknown: { wip: false, owner: 'none' },
     recoveryBroken: { wip: false, owner: 'human' },
     assignmentException: { wip: false, owner: 'human' },
     // 🔴 옛 품질 계약 기계 초안 — WIP 아님 · 사람 검토로만 나간다 (2026-09-28)
@@ -135,15 +137,15 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   const review = Array.from({ length: 8 }, (_, i) => ({ id: `m${i}`, code: 'HUMAN_REVIEW_REQUIRED' as const }))
   const f = fixture({
     rejected: [...review, { id: 'legacy', code: 'PROFILE' }, { id: 'gate', code: 'GATE' }],
-    targets: ['ttl'], held: [{ id: 'ttl', hold: 'TTL_EXPIRED' }],
+    targets: ['ttl'], held: [{ id: 'ttl', hold: 'SOURCE_TOO_OLD_AT_SLOT' }],
   })
   const c = classifyStock(f)
   check('🔴 🔴 **운영 반례 — 발행 가능 0** (앞판 공급 표시 9)', c.counts.publishableNow === 0)
   check('🔴 🔴 **검토 대기 8건은 humanReviewPending** — publishable 이 아니다',
     c.counts.humanReviewPending === 8 && !c.ids.publishableNow.some((id) => id.startsWith('m')))
   check('🔴 🔴 **검토 대기는 WIP 에 남는다**', review.every((r) => wip(c, r.id)))
-  check('🔴 TTL 만료는 ttlExpired — 신선 재고가 아니다', same(c.ids.ttlExpired, ['ttl']) && !c.ids.publishableNow.includes('ttl'))
-  check('🔴 🔴 **TTL 만료는 WIP 를 점유하지 않는다**', !wip(c, 'ttl'))
+  check('🔴 슬롯에서 원문 72h 초과는 releaseIneligible — 발행 재고가 아니다', same(c.ids.releaseIneligible, ['ttl']) && !c.ids.publishableNow.includes('ttl'))
+  check('🔴 🔴 **원천 가치 없는 행은 WIP 를 점유하지 않는다**', !wip(c, 'ttl'))
   check('legacy → profileMismatch · gate → gateBlocked', same(c.ids.profileMismatch, ['legacy']) && same(c.ids.gateBlocked, ['gate']))
   check('🔴 legacy · gate 탈락은 WIP 가 아니다', !wip(c, 'legacy') && !wip(c, 'gate'))
   const total = STOCK_BUCKETS.reduce((n, b) => n + c.counts[b], 0)
@@ -151,7 +153,7 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
 
   const g = classifyStock(fixture({
     targets: ['ok', 'age', 'stale', 'pinT', 'pinX', 'seat', 'weekly', 'life'],
-    held: [{ id: 'age', hold: 'AGE_UNKNOWN' }, { id: 'stale', hold: 'RECOVERY_STALE' }],
+    held: [{ id: 'age', hold: 'POSTED_MISSING' }, { id: 'stale', hold: 'EVIDENCE_MISSING' }],
     ready: ['ok'], deferred: ['pinT'], exceptions: ['pinX'],
     unassigned: [
       { id: 'seat', deferredBy: ['P03'] },
@@ -168,8 +170,8 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   check('🔴 새 배정 — 시간성 사유만 가진 Persona 가 있다 → 유예 · WIP', g.ids.assignmentDeferred.includes('weekly') && wip(g, 'weekly'))
   check('🔴 🔴 **새 배정 — 시간이 풀지 않는 사유가 섞인 Persona 뿐 → 예외 · WIP 아님**',
     g.ids.assignmentException.includes('life') && !wip(g, 'life'))
-  check('🔴 스스로 풀리지 않는 신선도 실패(시각 미상 · 복구 글 상함) → WIP 아님',
-    same(g.ids.freshnessHeld, ['age', 'stale']) && !wip(g, 'age') && !wip(g, 'stale'))
+  check('🔴 원천 증거 모름(게시 시각 없음 · 증거 없음) → releaseUnknown · WIP 아님',
+    same(g.ids.releaseUnknown, ['age', 'stale']) && !wip(g, 'age') && !wip(g, 'stale'))
 
   /**
    * 🔴 **마스터 반례 (2026-09-26 3차)** — voice=P03 · 성인 딸 글 · P03 무자녀(NO_CHILDREN) ·
@@ -222,7 +224,7 @@ console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽
 {
   for (const rel of RELEASE_STAGES) {
     for (const cap of RELEASE_STAGES) {
-      const scale = resolveScale({ [RELEASE_ENV]: rel, [CAPACITY_ENV]: cap })
+      const scale = resolveScale(markedStageEnv({ [RELEASE_ENV]: rel, [CAPACITY_ENV]: cap }))
       const p = supplyPlanningProfile(scale)
       if (!(p.stage === scale.capacityStage && sameProfile(p.profile, scale.capacityProfile)
         && sameProfile(p.profile, RUNTIME_PROFILES[scale.capacityStage]))) {
@@ -231,7 +233,7 @@ console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽
     }
   }
   check('🔴 모든 release × capacity 조합에서 공급 눈금 = capacity (새 단계 없음)', true)
-  const s15 = resolveScale({ [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd5' })
+  const s15 = resolveScale(markedStageEnv({ [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd5' }))
   check('🔴 🔴 **release d1 · capacity d5 → 공급 d5 · 발행 d1**',
     supplyPlanningProfile(s15).stage === 'd5' && s15.releaseStage === 'd1' && sameProfile(s15.releaseProfile, PROFILES.d1))
 }
@@ -249,7 +251,8 @@ console.log('\n③ Persona 여력 대기 — 초안 실패가 아니다')
   check('사람이 읽는 사유가 초안 실패가 아니라고 말한다', DRAFT_REASON_LABEL.personaCapacityDeferred.includes('초안 실패 아님'))
 
   const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-  const at = src.indexOf('const slotCodes = slotOf.get(j.sourceArticleId) ?? []')
+  // 🔴 (P0-B) 화자 묶음은 원천 열쇠(사이트, id)로 찾는다
+  const at = src.indexOf('const slotCodes = slotOf.get(keyOfJ(j)) ?? []')
   const line = src.slice(at, src.indexOf('\n', src.indexOf('if (slotCodes.length === 0)', at)))
   check('🔴 🔴 **생성 러너가 빈 화자 묶음을 여력 대기로 적는다** (호출 전)',
     at > 0 && /if \(slotCodes\.length === 0\) \{ capacityDeferred \+= 1; holdPick\(\{ personaDeferred: true \}\); continue \}/.test(line),
@@ -267,7 +270,7 @@ console.log('\n④ 소비자 연결 — 공용 분류를 실제로 부른다 · 
   /** 🔴 주석(앞판 기록)은 빼고 **찍히는 코드**만 본다 */
   const code = (t: string): string => t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*\*)/.test(l)).join('\n')
   check('🔴 공급 러너 snapshot 이 공용 분류를 부른다',
-    /classification = \(await loadStockClassification\(prisma, opts\.env, opts\.now\)\)\.classification/.test(proc))
+    /const view = await loadStockClassification\(prisma, opts\.env, opts\.now\)\s*\n\s*classification = view\.classification/.test(proc))
   check('🔴 공급 러너 화자 여력이 공용 분류와 capacity 눈금을 쓴다',
     /const planning = supplyPlanningProfile\(opts\.scale\)/.test(proc) && /classification\.personaWipIds/.test(proc)
     && /profileOf: \(\) => \(\{\s*dailyTarget: planning\.profile\.dailyTarget/.test(proc))
@@ -278,7 +281,8 @@ console.log('\n④ 소비자 연결 — 공용 분류를 실제로 부른다 · 
     /export const RUN_CLOCK = runClockFrom\(process\.env\)/.test(proc))
   check('🔴 보충기가 공용 분류로 발행 가능 재고를 잰다',
     /loadStockClassification\(prisma, process\.env, new Date\(\)\)/.test(fill)
-    && /stockBandOf\(publishableNow, LIMITS\)/.test(fill))
+    // 🔴 (2026-09-30) 재고 눈금(stockBandOf · 700 LIMITS)은 지웠다 — 적재 상한은 `--up-to` 하나다
+    && !/stockBandOf|LIMITS|STOCK_BANDS/.test(code(fill)))
   check('🔴 wave-c 준비도가 publishableNow 로 잰다', /classification\.counts\.publishableNow/.test(wave) && !/readStock\(/.test(wave))
   check('🔴 🔴 **"러너가 먹을 수 있는 것" 이라는 거짓 문구가 없다**', !FALSE.test(code(proc)) && !FALSE.test(code(fill)))
 }
@@ -334,12 +338,12 @@ console.log('\n⑤ 🔴 옛 품질 계약 기계 초안 — 큐에 남고 · 자
   /** 🔴 회귀 ⑨ — 계약 칸이 생겨도 TTL · 배정 · 복구 칸은 그대로다(모든 행이 옛 계약이어도) */
   const allOld = (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 'otherDigest' as const]))
   const r = classifyStock(fixture({
-    targets: ['ttl', 'age', 'pinT', 'pinX', 'b', 'a'], held: [{ id: 'ttl', hold: 'TTL_EXPIRED' }, { id: 'age', hold: 'AGE_UNKNOWN' }],
+    targets: ['ttl', 'age', 'pinT', 'pinX', 'b', 'a'], held: [{ id: 'ttl', hold: 'SOURCE_TOO_OLD_AT_SLOT' }, { id: 'age', hold: 'POSTED_MISSING' }],
     deferred: ['pinT'], exceptions: ['pinX'], broken: ['b'], ready: ['a'],
     contractOf: allOld(['ttl', 'age', 'pinT', 'pinX', 'b', 'a']),
   }))
-  check('🔴 🔴 **TTL · 신선도 · 기존 배정 유예/예외 · 깨진 복구 분류는 계약과 무관하게 그대로** (selector 대상 행)',
-    same(r.ids.ttlExpired, ['ttl']) && same(r.ids.freshnessHeld, ['age']) && same(r.ids.assignmentDeferred, ['pinT'])
+  check('🔴 🔴 **원천 판정 · 기존 배정 유예/예외 · 깨진 복구 분류는 계약과 무관하게 그대로** (selector 대상 행)',
+    same(r.ids.releaseIneligible, ['ttl']) && same(r.ids.releaseUnknown, ['age']) && same(r.ids.assignmentDeferred, ['pinT'])
     && same(r.ids.assignmentException, ['pinX']) && same(r.ids.recoveryBroken, ['b']) && same(r.ids.haltedByBrokenRecovery, ['a'])
     && r.counts.qualityContractMismatch === 0)
   const g = classifyStock(fixture({

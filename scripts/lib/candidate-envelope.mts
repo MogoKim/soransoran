@@ -27,6 +27,8 @@ export type CandidateSourceMeta = {
   sourcePostedAt: string
   sourceListedAt: string
   sourceCapturedAt: string
+  /** 🔴 판정기가 낸 참여 동력(`communityAngle`) — 없으면 빈 문자열(모른다) */
+  participationDriver?: string
 }
 
 export type CandidateDraft = {
@@ -108,6 +110,11 @@ export function candidateEnvelopeItem(a: CandidateInput): Record<string, unknown
     sourcePostedAt: a.meta.sourcePostedAt,
     sourceListedAt: a.meta.sourceListedAt,
     sourceCapturedAt: a.meta.sourceCapturedAt,
+    /**
+     * 🔴 참여 동력 — 적재기(`buildSourceEvidence`)가 읽는다. 반응(댓글 · 조회)은 **싣지 않는다** —
+     *    적재기가 `sourceListedAt` 으로 목록 관측(정본)에서 찾는다(2026-09-30 Lane B · 복사본 삭제).
+     */
+    participationDriver: a.meta.participationDriver ?? '',
     provenanceNote: `기계 생성 · ${a.ruleVersion} · ${a.provenance} · ${CONTENT_CORE_PIPELINE_VERSION}`,
     autoJudge: a.autoJudge,
   }

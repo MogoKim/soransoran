@@ -15,15 +15,18 @@
  *      ③ 노트북이면 뚜껑을 닫는 순간 ②가 된다.
  *
  *    🔴 그래서 **"Mac OFF·sleep 상태에서 d10 10건을 보장한다" 고 쓰지 않는다.** 보장하지 못한다.
- *       launchd 가 하는 일은 **맥이 깨어 있는 동안 정시성을 주는 것** 하나이고,
- *       그 조건이 깨지면 GitHub 예약(늦지만 서버에서 도는 것)이 남는다.
+ *       launchd 가 하는 일은 **host 가 깨어 있는 동안 정시성을 주는 것** 하나다.
+ *    🔴 **GitHub 예약 백업은 지웠다** (2026-09-30 · 단일 실행 authority). 두 번째 schedule owner 는
+ *       자기 변수(`vars.SORAN_*`)로 단계를 정해 2026-09-22~24 에 11건을 따로 발행했다. host 가 멈추면
+ *       그날은 덜 나간다 — 옳은 쪽의 실패다. 복구는 host(`runner-recover` · always-on owner)가 맡는다.
  *
  * 🔴 **단기 임시 bridge 인 이유.** 지금 필요한 것은 "예약 시각 근처에 나가게 하는 것" 이고,
  *    그것을 새 vendor·요금제 없이 **오늘** 할 수 있는 유일한 수단이 이것이다.
  *    수집(`supply-collect-*`)·처리(`supply-process`)가 이미 같은 트리거 위에 있다.
  *    맥 전원과 무관한 정시성이 필요해지면 그때는 **다른 것으로 바꾼다** — 이 파일이 정답이 아니다.
  *
- * 🔴 **왜 catch-up 이 먼저 필요했나.** 트리거가 둘이 되면 겹친다. 겹쳐도 중복이 0 이어야 한다 —
+ * 🔴 **왜 catch-up 이 먼저 필요했나.** 트리거가 둘이던 시절(GitHub + launchd)에 겹쳐도 중복이 0 이어야 했다 —
+ *    트리거는 이제 하나지만 같은 label 의 절전 wake · 수동 kickstart 가 겹칠 수 있으므로 계약은 그대로 둔다 —
  *      ① `judgeCatchUp` 이 **도래한 슬롯 − 오늘 발행 수**로 판정한다(같은 슬롯 두 번 → 0)
  *      ② `publishOriginalPostTx` 가 Serializable 안에서 오늘 발행 수를 다시 센다
  *    🔴 ①②는 **코드·static 검증까지** 마쳤다. 실제 동시 DB 부하 검증은 하지 않았다(§ PR 본문).
@@ -38,16 +41,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { allStageSlots } from '../../src/lib/scale-workflow-render'
-import {
-  slotLabel, resolveRuntimeStage, stageRank, RUNTIME_STAGES, CAPACITY_ENV, RELEASE_ENV, profileOf,
-  type RuntimeStage, type Slot,
-} from '../../src/lib/scale-profile'
+import { slotLabel, profileOf, type RuntimeStage, type Slot } from '../../src/lib/scale-profile'
 import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
-import { releaseStageCeiling } from '../../src/lib/scale-runtime'
-import {
-  windowAuthorization, canaryAuthorization,
-  WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, CANARY_STAGE_ENV, CANARY_DATE_ENV,
-} from '../../src/lib/release-canary'
+import { decisionStageEnv, releaseStageCeiling } from '../../src/lib/scale-runtime'
 
 /**
  * 🔴 **PATH 정본은 `launchd-template-check.mts` 의 `PATH_VALUE` 하나다.**
@@ -118,27 +114,6 @@ export function judgeLaunchdRunMarker(env: Record<string, string> | null): Runne
   }
   return { ok: problems.length === 0, problems }
 }
-
-/** 🔴 두 트리거 preflight 가 GitHub Variables 를 읽는 대상 저장소 — cwd 의 git remote 에 기대지 않는다 */
-export const PUBLISH_REPO = 'MogoKim/soransoran'
-
-/**
- * 🔴 **local 설정의 정본은 이 파일 하나다** (2026-09-14 정정).
- *
- *    앞선 판은 `loadEnvLocal()` → `process.cwd()/.env.local` → `process.env` 로 읽었다.
- *    그 경로는 **실행 위치에 따라 답이 달라진다** — PR 작업트리에는 `.env.local` 이 없으므로
- *    preflight 가 `local d1/d1` 로 읽고 **exit 0(거짓 통과)** 를 냈다.
- *    실제 정본은 `capacity=d3 · release=d1` 이었다(실측).
- *
- *    "어디서 실행하든 같은 답" 이어야 등록 게이트로 쓸 수 있다. 그래서 절대 경로 하나만 본다.
- */
-export const CANONICAL_ENV_PATH = join(
-  homedir(), 'Library', 'Application Support', 'soransoran', 'env.local',
-)
-
-/** 🔴 정본에서 읽는 키는 **이 둘뿐**이다. 다른 값은 메모리에도 올리지 않는다 */
-export const CANONICAL_STAGE_KEYS: readonly string[] = [CAPACITY_ENV, RELEASE_ENV]
-
 
 /** 🔴 러너는 runtime worktree 에서 돈다. 개발 작업트리를 가리키면 격리가 깨진다 */
 export const PUBLISH_RUNNER_SCRIPT = 'scripts/original-post-auto-publish.mts'
@@ -323,120 +298,42 @@ export function renderRunnerPlistFor(mode: RunnerTriggerMode, input: RunnerPlist
 }
 
 /**
- * 🔴 **로컬 러너가 본 단계 입력 — 값으로 남긴다** (2026-09-26).
- *
- *    GitHub 에는 기간형 변수(d3 · 2026-09-23~29)가 있고 로컬 정본 env 에는 없다(알려진 분기).
- *    그 사실을 문장이 아니라 **값**으로 남긴다 — 러너 로그 한 줄 · preflight 표 한 줄.
+ * 🔴 **러너가 본 단계 입력 — 값으로 남긴다** (2026-09-26 · 2026-09-30 단일 authority).
+ *    단계 칸은 consumer 가 넣은 **StageDecision 표식이 붙었을 때만** 읽힌다(`decisionStageEnv`).
+ *    표식이 없으면(러너 직접 실행 · 손으로 적은 env) 천장은 가장 안전한 단계다 — 로그 한 줄이 그 사실을 말한다.
  *    🔴 천장은 `releaseStageCeiling` 정본 하나다. 발행 트랜잭션도 같은 함수로 단계를 누른다.
+ *    🔴 지운 것: 옛 canary · window 키 이름 목록 · 로컬 env 와 GitHub Variables 대조(두 번째 발행자가 없으니 대조할 상대가 없다).
  */
 export type StageInputs = {
   capacity: string | null
   release: string | null
-  window: { stage: string | null; from: string | null; until: string | null; activeToday: boolean; note: string | null }
-  canary: { stage: string | null; date: string | null; activeToday: boolean }
+  /** 🔴 StageDecision 표식이 붙었는가 — 아니면 두 칸은 읽히지 않았다 */
+  fromDecision: boolean
   /** 🔴 이 env 로 발행 트랜잭션이 허용하는 가장 높은 단계 */
   ceiling: RuntimeStage
   /** 그 천장의 하루 목표 — 이 트리거 혼자서는 이보다 많이 내지 못한다 */
   ceilingDailyTarget: number
 }
 
-const rawOf = (env: Readonly<Record<string, string | undefined>>, k: string): string | null => {
-  const v = (env[k] ?? '').trim()
-  return v === '' ? null : v
+const blankToNull = (v: string | undefined): string | null => {
+  const t = (v ?? '').trim()
+  return t === '' ? null : t
 }
 
 export function stageInputsOf(env: Readonly<Record<string, string | undefined>>, now: Date): StageInputs {
-  const w = windowAuthorization(env, now, RUNTIME_STAGES)
-  const c = canaryAuthorization(env, now, RUNTIME_STAGES)
+  const d = decisionStageEnv(env)
   const ceiling = releaseStageCeiling(env, now)
   return {
-    capacity: rawOf(env, CAPACITY_ENV), release: rawOf(env, RELEASE_ENV),
-    window: {
-      stage: rawOf(env, WINDOW_STAGE_ENV), from: rawOf(env, WINDOW_FROM_ENV), until: rawOf(env, WINDOW_UNTIL_ENV),
-      activeToday: w.activeToday, note: w.note,
-    },
-    canary: { stage: rawOf(env, CANARY_STAGE_ENV), date: rawOf(env, CANARY_DATE_ENV), activeToday: c.activeToday },
+    capacity: blankToNull(d.capacity), release: blankToNull(d.release), fromDecision: d.marked,
     ceiling, ceilingDailyTarget: profileOf(ceiling).dailyTarget,
   }
 }
 
-/** 🔴 러너 로그 한 줄 — 비밀값은 없다(단계 키 일곱 개만 읽는다) */
+/** 🔴 러너 로그 한 줄 — 비밀값은 없다(단계 칸만 읽는다) */
 export function describeStageInputs(s: StageInputs): string {
   const v = (x: string | null): string => x ?? '(없음)'
-  return `capacity=${v(s.capacity)} · release=${v(s.release)}`
-    + ` · window=${v(s.window.stage)}[${v(s.window.from)}~${v(s.window.until)}]${s.window.activeToday ? ' 오늘 유효' : ''}`
-    + ` · canary=${v(s.canary.stage)}@${v(s.canary.date)}${s.canary.activeToday ? ' 오늘 유효' : ''}`
+  return (s.fromDecision ? `StageDecision · capacity=${v(s.capacity)} · release=${v(s.release)}` : 'StageDecision 표식 없음 — env 단계 칸을 읽지 않는다')
     + ` → 천장 ${s.ceiling} (하루 ${s.ceilingDailyTarget}건)`
-}
-
-/** 🔴 정본 env 에서 읽는 단계 키 — 비밀값 키는 읽지 않는다 */
-export const STAGE_INPUT_KEYS: readonly string[] = [
-  CAPACITY_ENV, RELEASE_ENV, WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, CANARY_STAGE_ENV, CANARY_DATE_ENV,
-]
-
-/** 🔴 `KEY=VALUE` 텍스트에서 **단계 키만** 뽑는다. 다른 줄은 메모리에도 올리지 않는다 */
-export function pickStageInputKeys(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line)
-    if (m === null || !STAGE_INPUT_KEYS.includes(m[1]!)) continue
-    let v = m[2] ?? ''
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
-    out[m[1]!] = v
-  }
-  return out
-}
-
-export type StageInputVerdict = {
-  /** 🔴 heartbeat 를 등록해도 되는가 */
-  ok: boolean
-  local: StageInputs
-  github: StageInputs | null
-  /** 값으로 드러난 분기 — 막지 않는 것도 여기 적힌다 */
-  divergences: readonly string[]
-  blockers: readonly string[]
-}
-
-/**
- * 🔴 **로컬과 GitHub 의 단계 입력 — 설치하려면 두 트리거의 실효 천장이 같아야 한다** (2026-09-26 마스터 보정).
- *
- *    · GitHub 을 못 읽었다 → 막는다(모를 때 등록하지 않는다)
- *    · 로컬 천장 **≠** GitHub 천장 → 막는다. 어느 방향이든 막는다:
- *        - 로컬이 높다 — 새로 자주 깨는 쪽이 백업보다 넓으면 fail-open 이다
- *        - 로컬이 낮다 — 안전하지만 heartbeat 가 하루 첫 글 하나만 제때 내고 나머지는 늦은 GitHub 예약을
- *          기다린다. 설치해도 목적(제때 발행)을 이루지 못하므로 **설치 가능으로 세지 않는다**
- *          (실측 모양 2026-09-26: local d1 · GitHub d3)
- *    · 천장이 같다 → 통과. raw 문자열이 달라도(지난 canary · 끝난 기간) **분기로 적을 뿐** 그 이유로 막지 않는다
- *
- * 🔴 판정에 쓰는 천장은 `releaseStageCeiling` 하나다. 이 함수가 숫자를 새로 만들지 않고 env 도 바꾸지 않는다.
- */
-export function judgeHeartbeatStageInputs(input: {
-  local: Readonly<Record<string, string | undefined>>
-  github: Readonly<Record<string, string | undefined>> | null
-  now: Date
-}): StageInputVerdict {
-  const local = stageInputsOf(input.local, input.now)
-  if (input.github === null) {
-    return {
-      ok: false, local, github: null, divergences: [],
-      blockers: ['GitHub Variables 를 읽지 못했다 — 두 트리거의 천장을 대조할 수 없다(fail-closed)'],
-    }
-  }
-  const github = stageInputsOf(input.github, input.now)
-  const divergences: string[] = []
-  for (const k of STAGE_INPUT_KEYS) {
-    const a = rawOf(input.local, k)
-    const b = rawOf(input.github, k)
-    if (a !== b) divergences.push(`${k} — local ${a ?? '(없음)'} · GitHub ${b ?? '(없음)'}`)
-  }
-  const blockers: string[] = []
-  if (local.ceiling !== github.ceiling) {
-    const dir = stageRank(local.ceiling) > stageRank(github.ceiling)
-      ? '자주 깨는 쪽이 더 넓다 — fail-open 이다'
-      : 'heartbeat 가 로컬 천장까지만 제때 내고 나머지는 늦은 GitHub 예약을 기다린다 — 설치 목적을 이루지 못한다'
-    blockers.push(`🔴 실효 천장 불일치 — local ${local.ceiling}(하루 ${local.ceilingDailyTarget}) ≠ GitHub ${github.ceiling}(하루 ${github.ceilingDailyTarget}) · ${dir}`)
-  }
-  return { ok: blockers.length === 0, local, github, divergences, blockers }
 }
 
 /**
@@ -491,10 +388,10 @@ export function heartbeatCommands(input: {
 export const HEARTBEAT_INSTALL_STEPS: readonly string[] = [
   '① 이 PR 은 등록하지 않는다 — 아래는 별도 승인 뒤의 순서다',
   '🔴 ② runtime 을 이 커밋 이상으로 배포한다 — 옛 러너는 --heartbeat 를 **조용히 무시하고** 틱 잠금·창 밖 생략 없이 돈다(트랜잭션 게이트는 그대로지만 매 틱 DB 에 붙는다)',
-  '🔴 ③ npm run publish:heartbeat-preflight -- --check-runtime — runtime 인지 · plutil lint(임시 파일) · 설치본 대조 · 단계 입력 분기 · 명령 출력',
+  '🔴 ③ npm run publish:heartbeat-preflight -- --check-runtime — runtime 인지 · plutil lint(임시 파일) · 설치본 대조 · 단일 실행 authority · 명령 출력',
   '🔴 ④ **exit 0 일 때만** 출력된 설치 명령을 사람이 실행한다. 먼저 설치본을 백업한다',
   '⑤ 같은 label 을 교체한다 — 정시판과 heartbeat 가 동시에 등록되는 길이 없다',
-  '🔴 ⑥ GitHub 예약은 **끄지 않는다** — 맥이 꺼져 있으면 남는 것은 그것뿐이다',
+  '🔴 ⑥ GitHub 예약 발행자는 없다(2026-09-30 제거) — 되살리면 runtime-isolation-check ⑦ 이 CI 에서 막는다',
   '⑦ rollback 은 백업한 정시판을 같은 자리에 다시 까는 것이다(출력된 rollback 명령)',
 ]
 
@@ -579,9 +476,8 @@ export const PUBLISH_RUNNER_INSTALL_STEPS: readonly string[] = [
   '① 이 PR 은 등록하지 않는다 — 아래는 별도 승인 뒤의 순서다',
   '② runtime 을 배포하고 SHA 를 확인한다 — npm run runtime:isolation-check -- --require-runtime',
   '      🔴 정본 env 를 읽는 것도 runtime 배포가 끝난 뒤여야 한다. 순서를 바꾸지 않는다',
-  '🔴 ③ npm run publish:trigger-preflight — 정본 env(절대 경로)와 GitHub Variables 를 대조한다.',
-  `      정본은 ${CANONICAL_ENV_PATH} 하나다 — cwd 도 process.env 도 보지 않는다`,
-  '      다르거나 정본을 읽지 못하면 exit 1 이다. 두 트리거가 다른 단계로 발행하면 상한이 두 벌이 된다',
+  '🔴 ③ npm run publish:trigger-preflight — 단일 실행 authority 를 본다(발행 schedule owner 하나 · consumer 경유 ·',
+  '      옛 단계 변수 0). 위반이 하나라도 있으면 exit 1 이다. 발행자가 둘이면 상한이 두 벌이 된다',
   '🔴 ④ **exit 0 일 때만** 아래로 내려간다',
   `⑤ plist 를 ~/Library/LaunchAgents/${PUBLISH_RUNNER_LABEL}.plist 로 쓴다`,
   '⑥ plutil -lint 로 문법을 확인한다',
@@ -589,179 +485,9 @@ export const PUBLISH_RUNNER_INSTALL_STEPS: readonly string[] = [
   '🔴 ⑦-b **PATH 를 대조한다** — 설치본·launchctl·렌더 결과가 같고,'
   + ' 그 PATH 에서 node 가 보이고, 절대 npx 가 실제로 실행되는지까지 본다(`judgeRunnerEnv`).'
   + ' 2026-09-15: 이 검사가 없어 08:10·09:30 두 슬롯이 exit 127 로 죽었다',
-  '🔴 ⑧ GitHub 예약은 **끄지 않는다.** 맥이 꺼져 있으면 launchd 는 아무것도 하지 않는다 —',
-  '      그때 남는 것은 GitHub 예약뿐이다. 둘이 겹쳐도 catch-up + Serializable 이 막는다',
+  '🔴 ⑧ GitHub 예약 발행자는 없다(2026-09-30 제거). host 가 멈추면 그날은 덜 나간다 — 복구는 host 가 맡는다',
   '🔴 ⑨ 이것은 **단기 임시 bridge** 다. 맥 전원과 무관한 정시성이 필요해지면 다른 것으로 바꾼다',
 ]
-
-// ─────────────────────────────────────────────────────────
-// 🔴 설정 분리 preflight — **두 트리거가 같은 단계를 봐야 한다**
-// ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 **왜 필요한가** (2026-09-14 실측).
- *
- *    GitHub Actions 는 Repository Variables 를, launchd 는 runtime `env.local` 을 읽는다.
- *    **두 곳이 달랐다** —
- *      · runtime env.local     `SORAN_CAPACITY_STAGE=d3` · `SORAN_RELEASE_STAGE=d1`
- *      · GitHub Variables      **비어 있음** → 러너가 `d1` 로 fail-closed
- *
- *    지금은 두 effective release 가 우연히 같아서(d1) 사고가 나지 않았을 뿐이다.
- *    한쪽만 d3 로 올리면 **같은 날 두 트리거가 서로 다른 하루 상한을 본다** —
- *    launchd 는 3건까지 열려 있다고 보고, GitHub 은 1건까지라고 본다.
- *    발행 트랜잭션이 상한을 지키지만, **어느 상한을 지키는지가 트리거마다 달라진다.**
- *
- * 🔴 **새 중앙 설정을 만들지 않는다.** 값을 한 곳으로 옮기는 대신 **다르면 멈춘다**.
- *    설정이 둘인 것은 인프라의 사실이고, 그 사실을 감추는 추상화가 더 위험하다.
- */
-export type StageSetting = {
-  capacity: string | undefined
-  release: string | undefined
-}
-
-export type CanonicalRead =
-  | { ok: true; setting: StageSetting; path: string }
-  | { ok: false; reason: string; path: string }
-
-/**
- * 🔴 **두 키만 뽑는다.** 파일 전체를 파싱해 들고 다니지 않는다 —
- *    이 파일에는 DATABASE_URL · API key 가 함께 산다. 필요 없는 것을 읽지 않는 것이
- *    "출력하지 않는다" 보다 확실하다.
- *
- * 🔴 **fail-closed 두 가지.**
- *    · `KEY=VALUE` 로 읽히는 줄이 하나도 없다 → 파싱 실패
- *    · 두 단계 키가 **둘 다** 없다 → 정본이 단계를 말하지 않는다
- *      (조용히 d1 로 떨어뜨리면 위에서 고친 거짓 통과가 그대로 돌아온다)
- */
-export function parseCanonicalStages(text: string, path = CANONICAL_ENV_PATH): CanonicalRead {
-  let parsedAnyLine = false
-  let capacity: string | undefined
-  let release: string | undefined
-  for (const line of text.split('\n')) {
-    const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line)
-    if (m === null) continue
-    parsedAnyLine = true
-    const key = m[1]!
-    if (key !== CAPACITY_ENV && key !== RELEASE_ENV) continue
-    let v = m[2] ?? ''
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      v = v.slice(1, -1)
-    }
-    if (key === CAPACITY_ENV) capacity = v
-    else release = v
-  }
-  if (!parsedAnyLine) {
-    return { ok: false, path, reason: `정본을 파싱하지 못했다 — KEY=VALUE 줄이 없다 (${path})` }
-  }
-  if (capacity === undefined && release === undefined) {
-    return {
-      ok: false, path,
-      reason: `정본에 ${CAPACITY_ENV} · ${RELEASE_ENV} 가 둘 다 없다`
-        + ' — 단계를 말하지 않는 정본으로 등록하지 않는다(fail-closed)',
-    }
-  }
-  return { ok: true, path, setting: { capacity, release } }
-}
-
-/**
- * 🔴 **정본 파일을 직접 읽는다.** cwd 도 `process.env` 도 보지 않는다.
- *    `read` 는 시험용 주입구다 — 없으면 실제 파일을 읽는다.
- */
-export function readCanonicalStages(input?: {
-  path?: string
-  read?: (p: string) => string
-}): CanonicalRead {
-  const path = input?.path ?? CANONICAL_ENV_PATH
-  let text: string
-  try {
-    text = (input?.read ?? ((p: string) => readFileSync(p, 'utf-8')))(path)
-  } catch (e) {
-    const code = (e as { code?: string }).code
-    return {
-      ok: false, path,
-      reason: code === 'ENOENT'
-        ? `정본 파일이 없다 — ${path}`
-        : `정본 파일을 읽지 못했다 (${code ?? 'UNKNOWN'}) — ${path}`,
-    }
-  }
-  return parseCanonicalStages(text, path)
-}
-
-export type ParitySide = {
-  capacity: RuntimeStage
-  release: RuntimeStage
-  /** capacity 가 release 를 누른 뒤의 실제 공개 단계 */
-  effectiveRelease: RuntimeStage
-  /** 값이 비어 있거나 허용 밖이라 안전 단계로 떨어졌는가 */
-  fellBack: boolean
-}
-
-export type ParityVerdict = {
-  /** 🔴 local runner 를 등록해도 되는가 */
-  ok: boolean
-  local: ParitySide
-  github: ParitySide | null
-  blockers: readonly string[]
-  reason: string
-}
-
-/**
- * 🔴 capacity 가 release 를 누른다 — `resolveScale` ① 과 같은 규칙이다.
- *    러너 단계(d1~d50)로 읽는다 — `resolveScale` 과 같은 해석이어야 두 트리거 비교가 러너가 볼 값과 같다.
- */
-function sideOf(s: StageSetting): ParitySide {
-  const cap = resolveRuntimeStage(s.capacity, 'capacity')
-  const rel = resolveRuntimeStage(s.release, 'release')
-  const effectiveRelease = stageRank(rel.stage) > stageRank(cap.stage) ? cap.stage : rel.stage
-  return {
-    capacity: cap.stage, release: rel.stage, effectiveRelease,
-    fellBack: !cap.fromEnv || !rel.fromEnv,
-  }
-}
-
-/**
- * 🔴 **두 트리거가 같은 단계를 보는가.** 다르면 local runner 를 등록하지 않는다.
- *    GitHub 쪽을 읽지 못했으면(`null`) 그것도 막는다 — 모를 때 등록하지 않는다(fail-closed).
- */
-export function judgeTriggerParity(input: {
-  local: StageSetting
-  /** 🔴 읽지 못했으면 `null`. `{}` 로 보정하지 않는다 */
-  github: StageSetting | null
-}): ParityVerdict {
-  const local = sideOf(input.local)
-  if (input.github === null) {
-    return {
-      ok: false, local, github: null,
-      blockers: ['GitHub Variables 를 읽지 못했다 — 두 트리거가 같은 단계를 보는지 확인할 수 없다(fail-closed)'],
-      reason: 'GitHub Variables 를 읽지 못했다',
-    }
-  }
-  const github = sideOf(input.github)
-  const blockers: string[] = []
-  if (local.capacity !== github.capacity) {
-    blockers.push(`capacity 가 다르다 — local ${local.capacity} · GitHub ${github.capacity}`)
-  }
-  if (local.release !== github.release) {
-    blockers.push(`release 가 다르다 — local ${local.release} · GitHub ${github.release}`)
-  }
-  if (local.effectiveRelease !== github.effectiveRelease) {
-    blockers.push(
-      `🔴 실제 공개 단계가 다르다 — local ${local.effectiveRelease} · GitHub ${github.effectiveRelease}.`
-      + ' 두 트리거가 서로 다른 하루 상한을 본다',
-    )
-  }
-  return {
-    ok: blockers.length === 0,
-    local, github, blockers,
-    reason: blockers.length === 0
-      ? `두 트리거가 같은 단계를 본다 — capacity ${local.capacity} · release ${local.release}`
-        + ` → 공개 ${local.effectiveRelease}`
-      : blockers[0]!,
-  }
-}
-
-/** 🔴 허용 단계 목록 — 화면이 사람에게 보여 줄 때 쓴다(러너 단계 d1~d50) */
-export const PARITY_STAGES: readonly RuntimeStage[] = RUNTIME_STAGES
 
 export type TriggerPlan = {
   /** 정시 트리거가 담당하는 슬롯 수 */
@@ -769,7 +495,7 @@ export type TriggerPlan = {
   /** 🔴 launchd 가 **보장하는 것과 보장하지 못하는 것** */
   localNote: string
   localLimits: readonly string[]
-  /** GitHub 예약만 있을 때의 실측 지연 */
+  /** 🔴 GitHub 예약 — 지웠다. 무엇이 그 자리를 대신하지 않는지 적는다 */
   scheduleNote: string
 }
 
@@ -786,6 +512,6 @@ export function describeTriggers(): TriggerPlan {
       '절전 중 지나간 여러 회차는 wake 때 **1회로 합쳐진다**(man launchd.plist) — 한 회차는 1건만 낸다',
       '따라서 Mac OFF·sleep 상태에서 d10 10건을 **보장하지 못한다**',
     ],
-    scheduleNote: 'GitHub Actions 예약 — 2026-09-13 실측 지연 108~331분 · 2026-09-14 `30 0 * * *` 미도착',
+    scheduleNote: 'GitHub Actions 예약 발행 — 2026-09-30 제거(두 번째 schedule owner). 실측 지연 108~331분 · 미도착도 있었다',
   }
 }

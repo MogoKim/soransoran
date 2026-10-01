@@ -36,6 +36,16 @@
     "micro-seed:approve-live": "tsx scripts/micro-seed-approve-live.mts",
     "micro-seed:approve-check": "tsx scripts/micro-seed-approve-check.mts",
     "voice:unao-readonly-check": "tsx scripts/voice-unao-readonly-check.mts",
+    "persona:gate6b-check": "tsx scripts/persona-gate6b-check.mts",
+    "persona:source-author-check": "tsx scripts/persona-source-author-check.mts",
+    "persona:reserve-db-check": "tsx scripts/persona-reserve-db-check.mts",
+    "persona:remediation": "tsx scripts/persona-contract-remediation.mts",
+    "persona:remediation-check": "tsx scripts/persona-remediation-check.mts",
+    "persona:reserve24-check": "tsx scripts/persona-reserve24-check.mts",
+    "production:activation-check": "tsx scripts/production-activation-check.mts",
+    "persona:no-go-check": "tsx scripts/persona-no-go-check.mts",
+    "persona:reserve-check": "tsx scripts/persona-reserve-check.mts",
+    "persona:remediation-db-check": "tsx scripts/persona-remediation-db-check.mts",
     "voice:unao-import": "tsx scripts/voice-unao-import-live.mts",
     "voice:unao-import-check": "tsx scripts/voice-unao-import-check.mts",
     "voice:derive": "tsx scripts/voice-derive-live.mts",
@@ -232,7 +242,10 @@
     "auto-ready:audit-check": "tsx scripts/auto-ready-audit-check.mts",
     "auto-ready:audit-db-check": "tsx scripts/auto-ready-audit-db-check.mts",
     "auto-ready:audit-day-db-check": "tsx scripts/auto-ready-audit-day-db-check.mts",
-    "auto-ready:defect-http-check": "tsx scripts/auto-ready-defect-http-check.mts"
+    "auto-ready:defect-http-check": "tsx scripts/auto-ready-defect-http-check.mts",
+    "auto-ready:defect-resolve": "tsx scripts/auto-ready-defect-resolve.mts",
+    "auto-ready:defect-resolution-check": "tsx scripts/auto-ready-defect-resolution-check.mts",
+    "auto-ready:defect-resolution-db-check": "tsx scripts/auto-ready-defect-resolution-db-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

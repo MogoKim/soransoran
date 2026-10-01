@@ -11,8 +11,7 @@ import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-p
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import {
   planRefill, judgeApply, readStock, verifyAfterRefill, isHeld, hasPendingSibling,
-  provenanceKeyOf, baseArticleId,
-  STOCK_TARGET, STOCK_MIN, STOCK_WARN,
+  provenanceKeyOf, baseArticleId, existingSourceKeysOf,
   AUTOFILL_ALLOWED_TYPES, REQUIRED_DECISION, SKIP_LABEL,
   type Candidate, type HeldEntry, type QueueRow,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY,
@@ -20,8 +19,9 @@ import {
   machineProfileMismatch, impersonatesHuman, buildQueuePayload, queueProfileOf, semanticSummaryOf,
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Envelope, type QueueProfileRow,
-  queueSourceTimesOf,
+  sourceEvidenceOf,
 } from '../src/lib/micro-seed-supply-autofill'
+import { SOURCE_EVIDENCE_KEY } from '../src/lib/source-slot-release'
 import { qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
@@ -51,7 +51,7 @@ const ok = (o: Partial<Candidate> = {}): Candidate => ({
   voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' },
   ...o,
 })
-const base = { held: [] as HeldEntry[], existing: new Set<string>(), queue: [] as QueueRow[], usable: 5 }
+const base = { held: [] as HeldEntry[], existing: new Set<string>(), queue: [] as QueueRow[] }
 
 // 🔴 2026-09-07 에 사람이 실제로 뺀 2건 — 이 fixture 의 존재 이유다
 const HELD_REAL: HeldEntry[] = [
@@ -94,7 +94,8 @@ console.log('\n① 🔴 사람이 보류한 2건이 다시 들어오지 않는�
 console.log('\n② 이미 큐에 올라간 것은 제외한다')
 {
   const c = ok()
-  const existing = new Set([provenanceKeyOf('34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')])
+  // 🔴 (P0-B) 이미 올라간 열쇠는 큐의 synthetic 행을 원래 원천으로 되돌려 만든다 — 러너와 같은 함수
+  const existing = existingSourceKeysOf([{ sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`, sourceArticleId: '34998804-aaaaaaaa', rawTitle: '아이랑 같이 갈 숙소, 뭐 보고 고르세요?' }])
   const r = planRefill({ ...base, existing, candidates: [c] })
   check('🔴 이미 올린 후보는 제외', r.targets.length === 0 && r.skipped[0]?.code === 'ALREADY')
   check('synthetic id 를 원래 id 로 되돌린다', baseArticleId('34998804-9588cfda') === '34998804')
@@ -103,8 +104,8 @@ console.log('\n② 이미 큐에 올라간 것은 제외한다')
 
 console.log('\n③ 같은 원문의 형제가 안 나갔으면 제외한다')
 {
-  const q = (id: string, pub: string | null): QueueRow =>
-    ({ sourceArticleId: id, status: pub === null ? 'APPROVED' : 'PUBLISHED', createdPostId: pub })
+  const q = (id: string, pub: string | null, site = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`): QueueRow =>
+    ({ sourceSite: site, sourceArticleId: id, status: pub === null ? 'APPROVED' : 'PUBLISHED', createdPostId: pub })
   check('🔴 형제가 미발행으로 큐에 있으면 제외', (() => {
     const r = planRefill({ ...base, queue: [q('34998804-aaaaaaaa', null)], candidates: [ok()] })
     return r.targets.length === 0 && r.skipped[0]?.code === 'SIBLING'
@@ -114,7 +115,42 @@ console.log('\n③ 같은 원문의 형제가 안 나갔으면 제외한다')
     return r.targets.length === 1
   })())
   check('다른 원문은 형제가 아니다',
-    !hasPendingSibling('34998804', [q('35003196-bbbbbbbb', null)]))
+    !hasPendingSibling('navercafe:remonterrace', '34998804', [q('35003196-bbbbbbbb', null)]))
+  /**
+   * 🔴 🔴 (2026-09-30 야간 P0-B) **같은 번호 · 같은 제목의 82cook · 네이버 후보** — 원천은 (사이트, id) 다.
+   *    둘 다 targets 에 남고, 한 사이트의 큐 형제 · 이미 올라간 행은 **그 사이트 후보만** 막는다(양방향).
+   */
+  const C82 = '82cook'
+  const NC = 'navercafe:remonterrace'
+  const pair = [ok({ sourceSite: C82, title: '같은 제목 초안' }), ok({ sourceSite: NC, title: '같은 제목 초안' })]
+  check('🔴 🔴 **(P0-B) 두 사이트 같은 id · 같은 제목 후보가 둘 다 남는다** (같은 회차 SIBLING · ALREADY 없음)',
+    planRefill({ ...base, candidates: pair }).targets.length === 2)
+  check('🔴 🔴 **(P0-B) 82cook 큐 형제는 82cook 후보만 막는다 · 네이버 형제는 네이버 후보만 막는다**', (() => {
+    const a = planRefill({ ...base, queue: [q('34998804-aaaaaaaa', null, `${MACHINE_SITE_PREFIX}${C82}`)], candidates: pair })
+    const b = planRefill({ ...base, queue: [q('34998804-bbbbbbbb', null, `${AUTOFILL_SITE_PREFIX}${NC}`)], candidates: pair })
+    return a.targets.length === 1 && a.targets[0]!.sourceSite === NC && a.skipped[0]?.code === 'SIBLING'
+      && b.targets.length === 1 && b.targets[0]!.sourceSite === C82 && b.skipped[0]?.code === 'SIBLING'
+  })())
+  check('🔴 🔴 **(P0-B) 이미 올라간 82cook 행(같은 제목)은 82cook 후보만 ALREADY — 네이버 후보는 남는다**', (() => {
+    const existing = existingSourceKeysOf([{ sourceSite: `${MACHINE_SITE_PREFIX}${C82}`, sourceArticleId: '34998804-cccccccc', rawTitle: '같은 제목 초안' }])
+    const r = planRefill({ ...base, existing, candidates: pair })
+    return r.targets.length === 1 && r.targets[0]!.sourceSite === NC && r.skipped[0]?.code === 'ALREADY'
+  })())
+  /**
+   * 🔴 🔴 (P0-B 리뷰 후속) **원천 identity 가 없는 신규 적재는 사람 · 기계 모두 막는다** — 빈 사이트 · 빈 id →
+   *    targets 0 · PROFILE · payload 없음. 입력 순서와 무관하게 정상 후보는 그대로 남는다.
+   */
+  for (const [label, patch] of [['빈 사이트', { sourceSite: '' }], ['빈 id', { sourceArticleId: '' }]] as const) {
+    const bad = ok({ ...patch, title: '원천 모름 초안' })
+    const good = ok({ sourceSite: C82, title: '원천 아는 초안' })
+    const a1 = planRefill({ ...base, candidates: [bad, good] })
+    const a2 = planRefill({ ...base, candidates: [good, bad] })
+    check(`🔴 🔴 **(P0-B) 사람 후보 ${label} → 신규 적재 0 · PROFILE · payload 없음 · 순서 무관**`,
+      planRefill({ ...base, candidates: [bad] }).targets.length === 0
+      && planRefill({ ...base, candidates: [bad] }).skipped[0]?.code === 'PROFILE'
+      && buildQueuePayload({ envelope: {}, candidate: bad, now: NOW }) === null
+      && a1.targets.length === 1 && a1.targets[0] === good && a2.targets.length === 1 && a2.targets[0] === good)
+  }
   check('🔴 같은 회차 안에서도 형제가 겹치면 하나만', (() => {
     const r = planRefill({ ...base, candidates: [
       ok({ title: '첫 번째 초안' }), ok({ title: '두 번째 초안' }),
@@ -203,10 +239,11 @@ console.log('\n⑤ 재고 계산 — 🔴 발행 러너가 인정하는 행만 �
   check('🔴 사람 판인데 기계 접두 → 재고 0',
     readStock([hRow({ sourceSite: `${MACHINE_SITE_PREFIX}x` })]).usable === 0)
 
-  check(`경고선 ${STOCK_WARN} 이하`, readStock(Array.from({ length: 3 }, () => hRow())).level === 'critical')
-  check(`${STOCK_MIN} 이상은 ok`, readStock(Array.from({ length: 5 }, () => hRow())).level === 'ok')
-  check('부족분을 목표 기준으로 센다',
-    readStock(Array.from({ length: 5 }, () => hRow())).shortfall === STOCK_TARGET - 5)
+  // 🔴 (2026-09-30) 재고 눈금(경고 3 · 최소 5 · 목표 14 · level · shortfall)은 지웠다 — 형식 행 수만 센다
+  check('🔴 readStock 은 수만 돌려준다 — 재고 등급 · 부족분 없음', (() => {
+    const r = readStock(Array.from({ length: 5 }, () => hRow())) as Record<string, unknown>
+    return r.usable === 5 && !('level' in r) && !('shortfall' in r)
+  })())
 }
 
 console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 machine 으로 보이는가')
@@ -231,6 +268,14 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
   const p1 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, now: NOW })
   check('🟢 기계 payload 가 만들어진다', p1 !== null && p1.profile === 'machine')
+  // 🔴 (P0-B) 원천 identity 가 한 칸이라도 없으면 기계 후보가 아니다 — 접두뿐인 synthetic 사이트를 만들지 않는다
+  for (const [label, patch] of [['사이트 빈 값', { sourceSite: '' }], ['id 빈 값', { sourceArticleId: '' }]] as const) {
+    const bad = { ...mc, ...patch }
+    check(`🔴 🔴 **(P0-B) 기계 후보 ${label} → 모양 불일치 · 선별 PROFILE · payload 없음**`,
+      machineProfileMismatch(mEnv, bad).some((x) => x.includes('sourceSite, sourceArticleId'))
+      && planRefill({ ...base, envelope: mEnv, candidates: [bad] }).skipped[0]?.code === 'PROFILE'
+      && buildQueuePayload({ envelope: mEnv, candidate: bad, autoJudge: aj, now: NOW }) === null)
+  }
   // 🔴 이것이 P0 회귀 fixture다 — 만든 행을 그대로 발행 러너 눈으로 본다
   check('🔴 만들어진 machine 행이 profileOf=machine 이다', p1 !== null && queueProfileOf({
     promptVersion: p1.promptVersion, model: p1.model,
@@ -290,14 +335,14 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
 console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
 {
   const t = [ok()]
-  const g = { targets: t, apply: true, limit: 1, usable: 5 }
+  const g = { targets: t, apply: true, limit: 1 }
   check('🟢 전부 맞으면 통과', judgeApply(g).ok)
   check('🔴 --apply 없으면 안 돈다', !judgeApply({ ...g, apply: false }).ok)
   check('🔴 --limit 없으면 안 돈다', !judgeApply({ ...g, limit: null }).ok)
   check('🔴 --limit 0 이면 안 돈다', !judgeApply({ ...g, limit: 0 }).ok)
   check('🔴 --limit 이 음수면 안 돈다', !judgeApply({ ...g, limit: -1 }).ok)
   check('🔴 후보 0건이면 안 돈다', !judgeApply({ ...g, targets: [] }).ok)
-  check(`🔴 재고가 목표 ${STOCK_TARGET}건이면 안 돈다`, !judgeApply({ ...g, usable: STOCK_TARGET }).ok)
+  check('🔴 (2026-09-30) 재고 목표 인자가 없다 — 판정이 형식 행 수로 적재를 막지 않는다', !/usable|target:/.test(judgeApply.toString()))
   check('🔴 --limit 을 못 채우면 잘라내지 않고 멈춘다', (() => {
     const r = judgeApply({ ...g, limit: 3 })
     return !r.ok && r.reason.includes('잘라내지 않고 멈춘다')
@@ -313,13 +358,13 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
   })())
   check('🔴 --up-to 도 상한을 넘기지 않는다', (() => {
     const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
-    const r = judgeApply({ targets: many, apply: true, limit: null, upTo: 2, usable: 0, target: 42 })
+    const r = judgeApply({ targets: many, apply: true, limit: null, upTo: 2 })
     return r.ok && r.take.length === 2
   })())
-  check('🔴 --up-to 도 목표 여력을 넘기지 않는다', (() => {
+  check('🔴 --up-to 가 후보보다 크면 있는 만큼만 — 재고 목표로 다시 자르지 않는다(JIT 수요가 유일한 상한)', (() => {
     const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
-    const r = judgeApply({ targets: many, apply: true, limit: null, upTo: 99, usable: 41, target: 42 })
-    return r.ok && r.take.length === 1
+    const r = judgeApply({ targets: many, apply: true, limit: null, upTo: 99 })
+    return r.ok && r.take.length === 5
   })())
   check('🔴 --up-to 와 --limit 을 함께 주면 막는다', (() => {
     const r = judgeApply({ ...g, limit: 1, upTo: 1 })
@@ -357,11 +402,11 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
   check('🔴 autofill CLI 가 --up-to 를 실제로 판정부에 넘긴다', (() => {
     const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
     return /const UP_TO = UP_TO_RAW === null \? null : Number\.parseInt\(UP_TO_RAW, 10\)/.test(cli)
-      && /judgeApply\(\{ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO,/.test(cli)
+      && /judgeApply\(\{ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
   })())
   check('여력만큼만 가져간다', (() => {
     const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
-    const r = judgeApply({ targets: many, apply: true, limit: 2, usable: 10 })
+    const r = judgeApply({ targets: many, apply: true, limit: 2 })
     return r.ok && r.take.length === 2
   })())
 }
@@ -454,21 +499,31 @@ console.log('\n⑨ 🔴 pacing 상수를 건드리지 않았다')
   const POSTED = '2020-12-13T15:00:00.000Z'
   const CAPTURED = '2026-09-17T00:00:00.000Z'
 
-  const t = queueSourceTimesOf({
-    sourcePostedAt: POSTED, sourceListedAt: CAPTURED, sourceCapturedAt: CAPTURED,
-  })
-  check('🔴 [ST] 게시 시각을 Date 로 읽는다', t.sourcePostedAt?.toISOString() === POSTED)
-  check('🔴 [ST] 세 칸이 서로 다른 값을 들 수 있다',
-    t.sourcePostedAt?.getTime() !== t.sourceCapturedAt?.getTime())
-
-  const none = queueSourceTimesOf({ sourceCapturedAt: CAPTURED })
-  check('🔴 [ST] 게시 시각이 없으면 null (모른다)', none.sourcePostedAt === null)
+  /**
+   * 🔴 (2026-09-30 · source-slot-v1) 옛 `queueSourceTimesOf`(검사만 부르던 죽은 함수)를 지웠다.
+   *    같은 계약을 **적재 경로가 실제로 쓰는** `sourceEvidenceOf` 로 잠근다 — 증거는 `gateResults.sourceEvidence` 에 실린다.
+   */
+  const cand = (o: Record<string, unknown>) => ({ ...ok(), ...o }) as Candidate
+  const ev = (o: Record<string, unknown>) => sourceEvidenceOf(cand(o), null) as Record<string, unknown>
+  const t = ev({ sourcePostedAt: POSTED, sourceListedAt: CAPTURED, sourceCapturedAt: CAPTURED })
+  check('🔴 [ST] 게시 시각을 ISO 로 싣는다', t.postedAt === POSTED)
+  check('🔴 [ST] 세 칸이 서로 다른 값을 들 수 있다', t.postedAt !== t.capturedAt)
+  const none = ev({ sourcePostedAt: undefined, sourceCapturedAt: CAPTURED })
+  check('🔴 [ST] 게시 시각이 없으면 null (모른다)', none.postedAt === null)
   check('🔴 [ST] 🔴 가져온 시각으로 **메우지 않는다** — 옛 이슈가 새 글이 되는 길을 막는다',
-    none.sourcePostedAt === null && none.sourceCapturedAt !== null)
-  const bad = queueSourceTimesOf({ sourcePostedAt: '2020년 겨울쯤', sourceCapturedAt: CAPTURED })
-  check('🔴 [ST] 읽을 수 없는 값은 null 이다 — 지금 시각으로 바꾸지 않는다',
-    bad.sourcePostedAt === null)
-  check('🔴 [ST] 빈 문자열도 null 이다', queueSourceTimesOf({ sourcePostedAt: '' }).sourcePostedAt === null)
+    none.postedAt === null && none.capturedAt === CAPTURED)
+  const bad = ev({ sourcePostedAt: '2020년 겨울쯤', sourceCapturedAt: CAPTURED })
+  check('🔴 [ST] 읽을 수 없는 값은 지금 시각으로 바꾸지 않는다 — 받은 글자 그대로(손상 표시)',
+    bad.postedAt === '2020년 겨울쯤')
+  check('🔴 [ST] 빈 문자열은 null 이다', ev({ sourcePostedAt: '' }).postedAt === null)
+  check('🔴 [ST] 초안 시각은 draftedAt 칸에만 — 게시 시각으로 새지 않는다', (() => {
+    const d = ev({ sourcePostedAt: undefined, reviewedAt: '2026-09-18T00:00:00.000Z' })
+    return d.draftedAt === '2026-09-18T00:00:00.000Z' && d.postedAt === null
+  })())
+  check('🔴 [ST] 적재 payload 가 증거를 gateResults 에 싣는다(사람 · 기계 둘 다)', (() => {
+    const lib = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
+    return (lib.match(/\[SOURCE_EVIDENCE_KEY\]: sourceEvidenceOf\(/g) ?? []).length >= 2 && SOURCE_EVIDENCE_KEY === 'sourceEvidence'
+  })())
 
   // 🔴 이번 PR 의 **정지선** — 적재가 아직 이 값을 쓰지 않는다
   {

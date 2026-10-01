@@ -24,6 +24,7 @@ import { evidenceFromDb, legacyEvidenceFromDb } from '../src/lib/auto-ready-repo
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticSummaryOf,
 } from '../src/lib/micro-seed-supply-autofill'
@@ -101,6 +102,8 @@ async function main(): Promise<void> {
         gateVerdict: 'PASS', promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
         gateResults: {
           holds: [], blocks: [],
+          // 🔴 (2026-09-30) 원문 증거 — 없으면 발행 트랜잭션이 만료한다
+          ...fakeEvidenceGate(new Date(), { id: base }),
           autoDraft: {
             provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
             draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,

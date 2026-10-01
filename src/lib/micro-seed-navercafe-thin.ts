@@ -98,6 +98,10 @@ export function thinRowFromCollected(input: {
     sourceSite: S(c.sourceSite),
     // 🔴 여기가 빠져 있던 자리다 — 세 시각을 정본 helper 로 넘긴다
     times: sourceTimesOf(c),
+    /*
+     * 🔴 (2026-09-30 Lane B) 조회수 · 목록 자리는 옮기지 않는다 — 반응의 정본은 목록 artifact 한 곳이다
+     *    (`source-list-observations` 가 `sourceListedAt` 으로 잇는다). 앞판의 복사본을 지웠다.
+     */
   })
 }
 

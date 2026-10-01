@@ -20,21 +20,21 @@ import { join, resolve } from 'node:path'
 import {
   COMMON_STAGES, LOCK_FILE, LOCK_TTL_MS, NETWORK_STAGES, PER_SOURCE_STAGES,
   PROCESS_KILL_SWITCH_ENV, RUN_FILE_RE, SUPPLY_SOURCES,
-  adaptKeyOf, hasWork, judgeBuffer, judgeProcessRun,
+  adaptKeyOf, hasWork, judgeJitDemand, judgeProcessRun,
   mayWriteRunState, planCommonPhase, planPending, planSourcePhase,
   runCommonPhase, runSourcePhase, runStatusOf, sourceOfDataFile, verifyRun,
   type ExecResult, type ProcessStage, type StagePlan, type SupplySourceId, type StageGate,
 } from '../src/lib/supply-process'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
-import { STOCK_BANDS } from '../src/lib/supply-stock-plan'
 /** 🔴 잠금 정본 — 러너와 **같은 함수**를 시험한다. 사본을 만들지 않는다 */
 import { acquireLock, lockAnomaly, releaseLock } from './lib/collect-lock.mjs'
-import { planRefill, provenanceKeyOf, hasPendingSibling, isOurSite, MACHINE_SITE_PREFIX, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
+import { planRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf, hasPendingSibling, isOurSite, MACHINE_SITE_PREFIX, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
 /** 🔴 생성 전 큐 스냅샷 — 러너와 **같은 함수**를 시험한다 */
 import {
-  buildQueueSnapshot, pendingSourceIdsOf, readQueueSnapshot, planPreDraftExclusion,
+  buildQueueSnapshot, pendingSourceKeysOf, readQueueSnapshot, planPreDraftExclusion,
 } from '../src/lib/supply-queue-snapshot'
+import { sourceKeyOf } from '../src/lib/source-identity'
 
 import { collectArgsFor, planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
@@ -106,7 +106,7 @@ const FILES_AFTER_ADAPT = [
   '82cook-adapt-remonterrace-20260910-222000.raw-detail.jsonl',
 ]
 const pendingAfter = planPending(FILES_AFTER_ADAPT)
-const FULL_BUFFER = judgeBuffer(120)
+const FULL_BUFFER = judgeJitDemand({ slots: 12, readyFilled: 0 })
 
 // ─────────────────────────────────────────────────────────
 console.log('① 미처리 입력을 source 별로 가른다')
@@ -162,7 +162,7 @@ check('🔴 같은 runId 의 다른 카페가 서로를 막지 않는다', (() =
   check('🔴 두 산출물이 다 있으면 adapt 를 다시 계획하지 않는다',
     !adaptPlanned([THIN, D, R]))
   check('🔴 두 산출물이 다 있으면 공통 judge·draft·fill 이 선다', (() => {
-    const stages = planCommonPhase(planPending([THIN, D, R]), judgeBuffer(24), GATE_READY).map((x) => x.stage)
+    const stages = planCommonPhase(planPending([THIN, D, R]), judgeJitDemand({ slots: 12, readyFilled: 0 }), GATE_READY).map((x) => x.stage)
     return stages.includes('judge') && stages.includes('draft') && stages.includes('fill')
   })())
 }
@@ -300,46 +300,44 @@ console.log('\n⑤ 미처리 입력이 없으면 정상 no-op 이다')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑥ 버퍼 정책 — 🔴 재고는 적재 상한이지 수집 스위치가 아니다')
+console.log('\n⑥ 공급 수요(JIT) — 🔴 다가오는 슬롯 − eligible READY · 700 버퍼 없음 (2026-09-30)')
 // ─────────────────────────────────────────────────────────
-check('🔴 버퍼 목표는 700 이다', STOCK_BANDS.target === 700)
-for (const usable of [0, 100, 300, 699]) {
-  const p = judgeBuffer(usable)
-  check(`🟢 재고 ${usable} — 공급 경로가 살아 있다 (모델 · 적재 둘 다)`,
-    p.llm && p.fill && p.upTo === 700 - usable)
+for (const [slots, filled] of [[4, 0], [4, 3], [23, 20]] as const) {
+  const p = judgeJitDemand({ slots, readyFilled: filled })
+  check(`🟢 슬롯 ${slots} · READY ${filled} — 수요 ${slots - filled} · 모델 · 적재 둘 다`, p.llm && p.fill && p.upTo === slots - filled)
   const common = planCommonPhase(pendingAfter, p, GATE_READY)
-  check(`🟢 재고 ${usable} — 판정·초안·보충이 계획에 다 있다`,
-    common.map((c) => c.stage).join(',') === 'judge,draft,fill')
-  check(`🔴 재고 ${usable} — 적재 상한이 인자에 실린다`,
-    common.find((c) => c.stage === 'fill')!.args.includes(`--up-to=${700 - usable}`))
+  check(`🟢 수요 ${slots - filled} — 판정·초안·보충이 계획에 다 있다`, common.map((c) => c.stage).join(',') === 'judge,draft,fill')
+  check(`🔴 수요 ${slots - filled} — 적재 상한이 인자에 실린다`,
+    common.find((c) => c.stage === 'fill')!.args.includes(`--up-to=${slots - filled}`))
 }
-for (const usable of [700, 1_000]) {
-  const p = judgeBuffer(usable)
-  check(`🟡 재고 ${usable} — 버퍼가 찼다: 모델 0 · DB write 0`, !p.llm && !p.fill && p.upTo === 0)
-  check(`🟢 재고 ${usable} — 그래도 파일 단계는 계획에 남는다 (수집물을 방치하지 않는다)`,
+for (const [slots, filled] of [[4, 4], [0, 0], [3, 9]] as const) {
+  const p = judgeJitDemand({ slots, readyFilled: filled })
+  check(`🟡 슬롯 ${slots} 을 READY ${filled} 가 덮는다 — 모델 0 · DB write 0`, !p.llm && !p.fill && p.upTo === 0)
+  check(`🟢 그래도 파일 단계는 계획에 남는다 (수집물을 방치하지 않는다)`,
     planSourcePhase(pendingAll).length === 3 && planCommonPhase(pendingAfter, p, GATE_READY).length === 0)
 }
-check('🔴 재고를 못 읽으면 파일 단계까지만 한다 — 모르는 수로 DB 에 쓰지 않는다', (() => {
-  const p = judgeBuffer(null)
+check('🔴 수요를 못 읽으면 파일 단계까지만 한다 — 모르는 수로 DB 에 쓰지 않는다', (() => {
+  const p = judgeJitDemand(null)
   return !p.llm && !p.fill
     && planSourcePhase(pendingAll).length === 3
     && planCommonPhase(pendingAfter, p, GATE_READY).length === 0
+})())
+check('🔴 🔴 **700 버퍼 · STOCK_BANDS 를 실행 경로(공급 러너 · 적재기 · lib)가 읽지 않는다**', (() => {
+  const files = ['src/lib/supply-process.ts', 'scripts/supply-process.mts', 'scripts/micro-seed-supply-autofill.mts']
+  return files.every((f) => !/STOCK_BANDS|judgeBuffer|BUFFER_TARGET/.test(readFileSync(f, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')))
+})())
+check('🔴 🔴 **공급 러너가 수요를 정본 JIT 함수로 만든다(관제와 같은 함수)**', (() => {
+  const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+  return /jit = \{ \.\.\.jitCoverageOf\(view, opts\.now\)/.test(runner) && /const policy = judgeJitDemand\(jitIn\)/.test(runner)
 })())
 check('🔴 재고는 회차를 막지 않는다 — judgeProcessRun 이 재고를 인자로 받지 않는다', (() => {
   const src = readFileSync('src/lib/supply-process.ts', 'utf-8')
   const fn = /export function judgeProcessRun\(input: \{[\s\S]*?\n\}\)/.exec(src)?.[0] ?? ''
   return fn !== '' && !/stock|usable|재고/.test(fn)
 })())
-/**
- * 🔴 **여기가 진짜 병목이었다** (2026-09-11).
- *    적재 천장이 capacity 프로필의 `stockTarget`(d3 에서 42)이면, 재고가 42 에 닿는 순간
- *    `judgeApply` 가 `room = 0` 으로 보고 거절한다 — 100 → 300 → 700 은 산술적으로 불가능하다.
- */
-check('🔴 적재 천장 정본이 STOCK_BANDS.target 이다 — capacity 눈금으로 자르지 않는다', (() => {
+check('🔴 적재기는 재고 목표로 여력을 다시 재지 않는다 — 상한은 `--up-to` 하나다', (() => {
   const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
-  return /const BUFFER_TARGET = STOCK_BANDS\.target/.test(cli)
-    && /judgeApply\(\{[^}]*target: BUFFER_TARGET/.test(cli)
-    && !/judgeApply\(\{[^}]*target: LIMITS\.target/.test(cli)
+  return /judgeApply\(\{ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli) && !/target: /.test(cli.slice(cli.indexOf('judgeApply(')))
 })())
 
 // ─────────────────────────────────────────────────────────
@@ -358,19 +356,20 @@ const CAND = (o: Partial<Candidate> = {}): Candidate => ({
 })
 check('🔴 같은 입력을 다시 돌려도 이미 올린 것은 적재되지 않는다', (() => {
   const c = CAND()
-  const existing = new Set([provenanceKeyOf('34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')])
+  // 🔴 (P0-B) 러너와 같은 함수로 큐 행(synthetic)을 원래 원천 + 제목 열쇠로 되돌린다
+  const existing = existingSourceKeysOf([{ sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`, sourceArticleId: '34998804-0badf00d', rawTitle: '아이랑 같이 갈 숙소, 뭐 보고 고르세요?' }])
   const r = planRefill({ ...BASE, existing, candidates: [c] })
   return r.targets.length === 0 && r.skipped[0]?.code === 'ALREADY'
 })())
 check('🔴 두 처리기가 같은 후보를 봐도 DB 조회 결과가 같은 키를 막는다', (() => {
   // 🔴 두 프로세스가 같은 파일을 읽어도 **키가 같다** — 그래서 뒤에 들어온 쪽이 걸린다
-  const a = provenanceKeyOf('34998804', '아이랑  같이 갈 숙소, 뭐 보고 고르세요?')
-  const b = provenanceKeyOf('34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')
-  return a === b
+  const a = sourceProvenanceKeyOf('navercafe:remonterrace', '34998804', '아이랑  같이 갈 숙소, 뭐 보고 고르세요?')
+  const b = sourceProvenanceKeyOf('navercafe:remonterrace', '34998804', '아이랑 같이 갈 숙소, 뭐 보고 고르세요?')
+  return a !== null && a === b
 })())
 check('🔴 적재는 트랜잭션 안에서 한 쌍으로 만든다', (() => {
   const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
-  return /prisma\.\$transaction\(async \(tx\) => \{[\s\S]{0,600}tx\.microSeedRawContent\.create[\s\S]{0,600}tx\.originalPostApprovalQueue\.create/.test(cli)
+  return /prisma\.\$transaction\(async \(tx\) => \{[\s\S]{0,600}tx\.microSeedRawContent\.create[\s\S]{0,900}tx\.originalPostApprovalQueue\.create/.test(cli)
 })())
 check('🔴 처리기 lock 은 수집 job 의 lock 과 다른 파일이다', LOCK_FILE === 'supply-process.lock')
 check('🔴 앞 회차가 돌고 있으면 이번 회차는 돌지 않는다', (() => {
@@ -820,8 +819,8 @@ console.log('\n⑪ 발행하지 않는다')
   check('🟢 정상 회차는 통과', verifyRun(base).ok)
   check('🔴 Post 가 늘면 사고다', !verifyRun({ ...base, postAfter: 11 }).ok)
   check('🔴 재고가 줄면 사고다', !verifyRun({ ...base, stockAfter: 4, machineAfter: 3, queuedMachine: 0 }).ok)
-  check('🔴 버퍼 목표를 넘겨 적재하면 사고다',
-    !verifyRun({ ...base, stockAfter: STOCK_BANDS.target + 1 }).ok)
+  check('🔴 (2026-09-30) 700 창고 천장 조항은 없다 — 형식 행이 많아도 그것만으로 사고가 아니다',
+    verifyRun({ ...base, stockAfter: 5000, machineAfter: 4998, queuedMachine: 4995 }).ok)
   check('🔴 기계가 아닌 행이 적재되면 사고다', !verifyRun({ ...base, queuedNonMachine: 1 }).ok)
   const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
   check('🔴 러너가 Post·persona·ActivityLog 를 만들지 않는다',
@@ -915,21 +914,27 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     /** 🔴 적재가 실제로 만드는 것과 **같은 모양** — isOurSite 로 거른 뒤 형제를 본다 */
     const queueForSibling: QueueRow[] = rows
       .filter((r) => isOurSite(r.sourceSite))
-      .map((r) => ({ sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId }))
-    const set = pendingSourceIdsOf(rows)
+      .map((r) => ({ sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId }))
+    // 🔴 (P0-B) 스냅샷은 원천 열쇠(사이트, id)다 — 우리 synthetic 행의 원래 사이트(remonterrace)로 대 본다
+    const keys = pendingSourceKeysOf(rows)
+    const set = { has: (id: string): boolean => keys.has(sourceKeyOf(OUTSIDE, id)) }
     // 🔴 정본(hasPendingSibling)과 전수 대조 — 규칙이 두 벌이 되면 여기서 깨진다
     let same = true
     for (const id of ['A1', 'A2', 'A3', 'A4', 'A5']) {
-      if (set.has(id) !== hasPendingSibling(id, queueForSibling)) same = false
+      if (set.has(id) !== hasPendingSibling(OUTSIDE, id, queueForSibling)) same = false
+      // 🔴 (P0-B) 다른 사이트 같은 번호 — 스냅샷도 적재도 형제로 보지 않는다
+      if (keys.has(sourceKeyOf('82cook', id)) || hasPendingSibling('82cook', id, queueForSibling)) same = false
     }
+    check('🔴 🔴 [PQ] **(P0-B) 같은 번호의 다른 사이트 원천은 형제가 아니다** — 82cook A1 은 막지 않는다',
+      keys.has(sourceKeyOf(OUTSIDE, 'A1')) && !keys.has(sourceKeyOf('82cook', 'A1')))
     check('🔴 [PQ] 스냅샷 집합이 적재의 형제 판정과 전수 일치한다', same)
     check('🔴 [PQ] 발행 완료된 형제는 제외 대상이 아니다 (기존 정책 유지)', !set.has('A2'))
     check('🔴 [PQ] createdPostId 빈 문자열은 미발행이다', set.has('A3'))
     check('🔴 [PQ] 🔴 대상 밖(legacy·다른 레인) 행은 형제가 아니다 — 범위가 적재와 같다',
       !set.has('A5'))
     check('🔴 [PQ] 범위를 안 보면 A5 까지 막혔을 것이다 — 이 검사가 그것을 막는다',
-      hasPendingSibling('A5', rows.map((r) => ({
-        sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId,
+      hasPendingSibling(OUTSIDE, 'A5', rows.map((r) => ({
+        sourceSite: OUR, sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId,
       }))))
   }
 
@@ -947,7 +952,9 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
         raw: mkSnap({ takenAt: new Date(NOW.getTime() - 60 * 60_000).toISOString() }), runId: 'R1', now: NOW })],
       ['미래 시각', readQueueSnapshot({
         raw: mkSnap({ takenAt: new Date(NOW.getTime() + 60_000).toISOString() }), runId: 'R1', now: NOW })],
-      ['모양 어긋남', readQueueSnapshot({ raw: mkSnap({ pendingSourceIds: 'x' }), runId: 'R1', now: NOW })],
+      ['모양 어긋남', readQueueSnapshot({ raw: mkSnap({ pendingSources: 'x' }), runId: 'R1', now: NOW })],
+      ['🔴 사이트 없는 원천(P0-B)', readQueueSnapshot({ raw: mkSnap({ pendingSources: [{ sourceSite: '', sourceArticleId: 'A1' }] }), runId: 'R1', now: NOW })],
+      ['🔴 옛 판(v1 · 원문 id 목록)', readQueueSnapshot({ raw: mkSnap({ version: 'queue-snapshot-v1', pendingSourceIds: ['A1'] }), runId: 'R1', now: NOW })],
     ]
     for (const [label, r] of cases) {
       check(`🔴 [PQ] ${label} → 통과시키지 않는다`, !r.ok)
@@ -958,12 +965,26 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
 
   // ── ③ 제외 판정 — 다른 원문을 잘못 빼지 않는다 ──
   {
-    const pending = new Set(['A1', 'A3'])
-    const plan = planPreDraftExclusion({ sourceArticleIds: ['A1', 'A2', 'A3', 'A4'], pendingSourceIds: pending })
-    check('🔴 [PQ] 미발행 형제가 있는 원문만 뺀다', plan.excluded.join() === 'A1,A3')
-    check('🔴 [PQ] 🔴 다른 원문은 그대로 둔다', plan.keep.join() === 'A2,A4')
+    const pending = new Set(['A1', 'A3'].map((id) => sourceKeyOf(OUTSIDE, id)))
+    const src = (id: string, site = OUTSIDE) => ({ sourceSite: site, sourceArticleId: id })
+    const plan = planPreDraftExclusion({ sources: [src('A1'), src('A2'), src('A3'), src('A4'), src('A1', '82cook')], pendingSourceKeys: pending })
+    const idOf = (k: string): string => k.split('\u0000').join('/')
+    check('🔴 [PQ] 미발행 형제가 있는 원문만 뺀다', plan.excluded.map(idOf).join() === `${OUTSIDE}/A1,${OUTSIDE}/A3`)
+    check('🔴 [PQ] 🔴 다른 원문은 그대로 둔다 — 🔴 (P0-B) 같은 번호의 82cook A1 도 남는다',
+      plan.keep.map(idOf).join() === `${OUTSIDE}/A2,${OUTSIDE}/A4,82cook/A1`)
     check('🔴 [PQ] 뺀 것과 남긴 것을 둘 다 돌려준다 — 조용히 줄이지 않는다',
-      plan.keep.length + plan.excluded.length === 4)
+      plan.keep.length + plan.excluded.length === 5)
+    // 🔴 (리뷰 후속 · P0-B) 양방향 — 82cook 형제는 82cook 만, 네이버 형제는 네이버만 막는다. 정확한 (사이트, id) 열쇠 비교
+    const both = pendingSourceKeysOf([
+      { sourceArticleId: 'A1-deadbeef', sourceSite: `${MACHINE_SITE_PREFIX}82cook`, createdPostId: null },
+      { sourceArticleId: 'B1-cafebabe', sourceSite: OUR, createdPostId: null },
+    ])
+    const x = planPreDraftExclusion({
+      sources: [src('A1', '82cook'), src('A1'), src('B1'), src('B1', '82cook')], pendingSourceKeys: both,
+    })
+    check('🔴 🔴 [PQ] **(P0-B) 같은 id 다른 사이트는 서로를 빼지 않는다 — 82cook A1 · 네이버 B1 만 빠진다**',
+      x.excluded.map(idOf).sort().join() === `82cook/A1,${OUTSIDE}/B1`
+      && x.keep.map(idOf).sort().join() === `82cook/B1,${OUTSIDE}/A1`)
   }
 
   // ── ④ 러너 계획 — 🔴 못 읽으면 draft 를 **계획하지 않는다** ──
@@ -996,16 +1017,21 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     const root = mkdtempSync(join(tmpdir(), 'pq-'))
     const dd = join(root, DATA_DIR_NAME)
     mkdirSync(dd, { recursive: true })
+    /**
+     * 🔴 (P0-B) 원천은 (사이트, id) 다. 앞판 fixture 는 상세 사이트 `s` 와 큐 형제의 원래 사이트(`remonterrace`)가
+     *    달랐는데도 형제로 막히기를 기대했다 — id 하나로 합치던 결함에 기댄 것이다. 같은 원천이 되도록 사이트를 맞춘다.
+     */
+    const SITE_A = 'navercafe:remonterrace'
     const seed = (id: string): string => JSON.stringify({
-      sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+      sourceSite: SITE_A, sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
       ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
       provenance: 'machine-shadow',
     })
     writeFileSync(join(dd, 'x.shadow.jsonl'), `${seed('A1')}\n${seed('A9')}\n`, 'utf-8')
     writeFileSync(join(dd, 'x.detail.jsonl'), `${JSON.stringify({
-      sourceArticleId: 'A1', sourceSite: 's', title: '제목1', bodyHead: '본문', axis: 'a', lane: 'l',
+      sourceArticleId: 'A1', sourceSite: SITE_A, title: '제목1', bodyHead: '본문', axis: 'a', lane: 'l',
     })}\n${JSON.stringify({
-      sourceArticleId: 'A9', sourceSite: 's', title: '제목9', bodyHead: '본문', axis: 'a', lane: 'l',
+      sourceArticleId: 'A9', sourceSite: SITE_A, title: '제목9', bodyHead: '본문', axis: 'a', lane: 'l',
     })}\n`, 'utf-8')
     // 🔴 가짜 캐시 — 있어도 게이트가 먼저다
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
@@ -1081,7 +1107,7 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
   {
     const lib = readFileSync('src/lib/supply-process.ts', 'utf-8')
     check('🔴 [PQ] planCommonPhase 가 게이트를 **필수 인자**로 받는다 (기본값 없음)',
-      /planCommonPhase\(\s*\n?\s*pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,/.test(lib))
+      /planCommonPhase\(\s*\n?\s*pending: Pending, policy: SupplyPolicy, gate: DraftQueueGate,/.test(lib))
     const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
     check('🔴 [PQ] 스냅샷을 **draft 직전**에 만든다 — 계획 시점이 아니다',
       /if \(plan\.stage !== 'draft'\) return \{ ok: true \}/.test(runner)
@@ -1119,12 +1145,14 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
       /ALREADY: '이미 큐에 올라갔다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8'))
       && /HELD: '🔴 사람이 보류한 글이다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
     check('🔴 [PQ] 스냅샷이 범위·미발행 조건을 **정본 함수로** 판단한다 — 다시 쓰지 않는다',
-      /import \{ baseArticleId, isOurSite, isPendingRow \}/
-        .test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
+      /import \{ isOurSite, isPendingRow \}/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
+      // 🔴 (P0-B) 원래 원천은 정본 `originalSourceOf`(synthetic 접두 → 사이트 · `baseArticleId`)가 정한다 — 사이트를 버리지 않는다
+      && /const o = originalSourceOf\(r\.sourceSite, r\.sourceArticleId\)/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
       && /if \(!isOurSite\(/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
       && /if \(!isPendingRow\(r\)\)/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8')))
     check('🔴 [PQ] hasPendingSibling 도 같은 정본 조건을 쓴다',
-      /baseArticleId\(q\.sourceArticleId\) === articleId && isPendingRow\(q\)/
+      // 🔴 (P0-B) 미발행 조건은 정본 `isPendingRow` · 원래 원천은 정본 `originalSourceOf`
+      /if \(!isPendingRow\(q\)\) return false\n\s*const o = originalSourceOf\(q\.sourceSite, q\.sourceArticleId\)/
         .test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
     check('🔴 [PQ] 적재 러너가 isOurSite 지역 사본을 갖고 있지 않다',
       !/^function isOurSite/m.test(readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')))
@@ -1164,8 +1192,9 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     existsSync(fakeAsset.corpus) && existsSync(fakeAsset.manifest)
     && fakeAsset.corpus.startsWith(root))
   const OUR = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`
+  // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양 그대로다
   const seed = (id: string): string => JSON.stringify({
-    sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+    sourceSite: 'navercafe:remonterrace', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
   })

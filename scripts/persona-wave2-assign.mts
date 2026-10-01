@@ -22,7 +22,6 @@
  *      · 기존 User 재사용 — 항상 새로 만든다
  */
 import { PrismaClient, type PersonaStatus } from '@prisma/client'
-import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 
 import {
@@ -32,15 +31,7 @@ import { judgeRealMember } from '../src/lib/real-member-gate'
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-
-/**
- * 🔴 크롤 author 해시 salt — `persona-mvp-assign` 과 **같은 계약**이다.
- *    `hashOf` 를 넘기지 않으면 `matchAuthorHashes` 가 `return []` 로 빠져
- *    **authorHash 대조가 통째로 건너뛰어진다** (실측 17,992건 무시).
- *    salt 를 호출부가 쥐는 이유는 판정부를 순수하게 두기 위해서다.
- */
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
+import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 
 const APPLY = process.argv.includes('--apply')
 const CHECK = process.argv.includes('--check')
@@ -142,11 +133,9 @@ if (new Set(names).size !== names.length) { await prisma.$disconnect(); fail('�
 ok(`이름 선택 ${names.length}개`)
 
 // ── 🔴 Gate ⑥-B — **적용 직전에 다시 본다.** 작명과 배정 사이에 회원이 같은 이름을 만들 수 있다 ──
-const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
-const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
 const sets = await loadNameCollisionSets(prisma)
 console.log(`   대조 대상 — ${describeSets(sets)}`)
-const verdicts = WAVE2_CODES.map((code, i) => ({ code, name: names[i]!, v: checkNameCollision(names[i]!, sets, { hashOf }) }))
+const verdicts = WAVE2_CODES.map((code, i) => ({ code, name: names[i]!, v: checkNameCollision(names[i]!, sets) }))
 const blocked = verdicts.filter((x) => x.v.status !== 'pass')
 if (blocked.length > 0) {
   await prisma.$disconnect()

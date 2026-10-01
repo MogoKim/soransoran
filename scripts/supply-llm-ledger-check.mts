@@ -41,7 +41,7 @@ import {
   readSettleHold, settleHoldPathOf, withLedgerLock, writeSettleHold,
 } from './lib/llm-ledger-store.mjs'
 import {
-  BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SupplyLlmSession, limitsFromEnv,
+  BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SUPPLY_LEDGER_ISOLATION_MARK, SupplyLlmSession, limitsFromEnv,
   type LedgerIo,
 } from './lib/supply-llm-call.mjs'
 import { STAGE_MODEL, STAGE_MAX_OUTPUT_TOKENS } from '../src/lib/content-core/pipeline'
@@ -49,7 +49,7 @@ import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 /** 🔴 계획 정본 — 문자열이 아니라 **실제 인자**를 본다 */
-import { judgeBuffer, planCommonPhase, planPending } from '../src/lib/supply-process'
+import { judgeJitDemand, planCommonPhase, planPending } from '../src/lib/supply-process'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, conservativeShareUsd,
@@ -455,7 +455,7 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
       '82cook-adapt-20260911-010000.detail.jsonl',
       '82cook-adapt-20260911-010000.raw-detail.jsonl',
     ])
-    const stages = planCommonPhase(pend, judgeBuffer(120), {
+    const stages = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0 }), {
       kind: 'ready', snapshotPath: '/tmp/s.json', runId: 'RUN-XYZ',
     })
     const judge = stages.find((x) => x.stage === 'judge')
@@ -466,7 +466,7 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
       judge !== undefined && draft !== undefined
       && judge.args.filter((a) => a.startsWith('--run-id=')).join()
         === draft.args.filter((a) => a.startsWith('--run-id=')).join())
-    const held = planCommonPhase(pend, judgeBuffer(120), {
+    const held = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0 }), {
       kind: 'hold', reason: '큐를 못 읽었다', runId: 'RUN-XYZ',
     })
     check('🔴 생성을 보류해도 판정은 회차 id 를 받는다 — 보류가 상한을 풀지 않는다',
@@ -749,7 +749,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
 
   const OUR = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`
   const seed = (id: string): string => JSON.stringify({
-    sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+    // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
+    sourceSite: 'navercafe:remonterrace', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
   })
@@ -1506,7 +1507,7 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
     commentCount: 3, bodyLength: 200,
   }))
   const shadow = [1, 2, 3].map((i) => JSON.stringify({
-    sourceArticleId: `C${i}`, decision: 'AUTO_SEED', semanticRisks: [],
+    sourceSite: 'navercafe:remonterrace', sourceArticleId: `C${i}`, decision: 'AUTO_SEED', semanticRisks: [],
     ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
     provenance: 'machine-shadow',
   }))
@@ -1619,6 +1620,55 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
     check('🔴 [RC] 🔴 정산 보류 표식이 있으면 새 회차도 **유료 요청 0회**', paidSoFar() === 0)
     rmSync(settleHoldPathOf(ledgerDir), { force: true })
     check('🔴 [RC] 사람이 표식을 지우면 다시 돈다', stage(DRAFT[0], DRAFT[1], '10000', 'RE2') > 0)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑫ 공급 장부 정본 자리 · 시험 격리 표식 — 🔴 운영 경로가 격리 표식을 쓰지 않는다 (2026-09-30)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 공급 세션은 장부 자리가 정본(계정 홈)과 실경로로 같아야 요청을 보낸다. 예외는 **시험 격리 표식** 하나 —
+   *    가짜 provider 프로세스만 건다. 운영 CLI·lib 가 이 표식을 걸 수 있으면 `$HOME` 바꾸기 우회가 다시 열린다.
+   *    그래서 저장소 전체를 훑어 표식 이름이 나오는 파일을 정해진 자리로 묶는다.
+   */
+  const MARK_NAME = Symbol.keyFor(SUPPLY_LEDGER_ISOLATION_MARK) ?? ''
+  const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+    if (e.name === 'node_modules' || e.name.startsWith('.')) return []
+    const p = join(d, e.name)
+    return e.isDirectory() ? walk(p) : /\.(m?[jt]sx?|mjs)$/.test(e.name) ? [p] : []
+  })
+  const files = [...walk('scripts'), ...walk('src')]
+  const users = files.filter((f) => {
+    const src = readFileSync(f, 'utf-8')
+    return (MARK_NAME !== '' && src.includes(MARK_NAME))
+      || /SUPPLY_LEDGER_ISOLATION_MARK|ledgerIsolationActive/.test(src)
+  })
+  const allowed = (f: string): boolean => f === join('scripts', 'lib', 'supply-llm-call.mts')
+    || f === join('scripts', 'lib', 'fake-provider-hook.mjs') || /-check\.mts$/.test(f)
+  check('🔴 격리 표식 이름은 Symbol.for 전역 이름이다(모듈 사본에서도 같은 표식)', MARK_NAME.startsWith('soransoran.test.'))
+  check('🔴 격리 표식을 쓰는 파일은 세션 · 가짜 provider 훅 · 검사뿐이다 — 운영 CLI·lib 0',
+    users.length > 0 && users.every(allowed), users.filter((f) => !allowed(f)).join('\n'))
+  const hook = readFileSync('scripts/lib/fake-provider-hook.mjs', 'utf-8')
+  check('🔴 가짜 provider 훅이 같은 이름으로 표식을 건다 — 그리고 같은 파일이 fetch 를 가짜로 바꾼다',
+    hook.includes(`Symbol.for('${MARK_NAME}')] = true`) && /globalThis\.fetch = async/.test(hook))
+  const call = stripComments(readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8'))
+  check('🔴 세션이 격리 표식을 env 로 읽지 않는다 — 코드(`--import`)로만 걸린다',
+    !/process\.env\[[^\]]*ISOLATION/i.test(call) && !/SORAN_[A-Z_]*ISOLAT/.test(call))
+  check('🔴 세션이 요청마다 정본 자리를 확인한다 — 사전 계산·잠금보다 먼저',
+    call.indexOf('const dirError = this.ledgerDirError()') > 0
+    && call.indexOf('const dirError = this.ledgerDirError()') < call.indexOf('const counted = await countInputTokens'))
+  check('🔴 세션이 $HOME 을 직접 읽지 않는다 — 정본은 계정 홈(`canonicalLedgerDir`)이다',
+    !/\bhomedir\(\)/.test(call) && /canonicalLedgerDir\(\)/.test(call))
+  const store = stripComments(readFileSync('scripts/lib/llm-ledger-store.mts', 'utf-8'))
+  check('🔴 정본 자리는 passwd 홈(os.userInfo)에서 온다',
+    /export function canonicalLedgerDir\(\)[\s\S]{0,200}userInfo\(\)\.homedir/.test(store))
+  // 🔴 공급 CLI 는 장부 자리를 넘기지 않는다 — 넘기는 칸이 생기면 정본이 아닌 자리로 새 예산이 열릴 수 있다
+  for (const f of ['scripts/micro-seed-auto-judge.mts', 'scripts/micro-seed-auto-draft.mts', 'scripts/persona-comment-queue.mts']) {
+    const src = stripComments(readFileSync(f, 'utf-8'))
+    const at = src.indexOf('new SupplyLlmSession(')
+    const cfg = at < 0 ? '' : src.slice(at, src.indexOf(')', at))
+    check(`🔴 ${f} 가 공급 장부 세션에 dir 를 넘기지 않는다(정본 자리만 쓴다)`, at > 0 && !/\bdir\s*:/.test(cfg), cfg)
   }
 }
 

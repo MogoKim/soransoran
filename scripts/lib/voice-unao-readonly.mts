@@ -92,11 +92,6 @@ export function contentHashOf(text: string): string {
   return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`
 }
 
-/** 닉네임은 단방향 해시로만 다룬다. 우나어 닉네임은 3~7자라 원문을 두면 특정된다 */
-export function authorHashOf(author: string, salt: string): string {
-  return `sha256:${createHash('sha256').update(`${salt}::${author}`, 'utf8').digest('hex')}`
-}
-
 /**
  * VoiceSource 한 행이 될 값. 🔴 본문 · 댓글 원문이 없다.
  *
@@ -110,7 +105,11 @@ export type UnaoSourceRow = {
   sourceSite: string
   sourceUrl: string
   sourceBoardName: string | null
-  authorHash: string | null
+  /**
+   * 🔴 (2026-10-01 · #641) 작가 식별값을 새로 만들지 않는다. 원본 작가명이 복구 불가(우나어 CafePost 폐기)라
+   *    크롤 작가 대조(B2)를 Gate ⑥-B 에서 뺐고, 그 대조 말고는 쓰는 곳이 없다. 옛 행의 v1 값은 판정에 쓰지 않는 inert 값으로 남는다.
+   */
+  authorHash: null
   postedAt: Date | null
   capturedAt: Date
   contentHash: string | null
@@ -471,9 +470,8 @@ export const MAX_BATCH_SIZE = 500
 export const DEFAULT_BATCH_SIZE = 100
 
 /** CafePost 한 행 → VoiceSource 후보. 🔴 본문을 옮기지 않고 해시만 남긴다 */
-export function toSourceRow(raw: Record<string, unknown>, authorSalt: string): UnaoSourceRow {
+export function toSourceRow(raw: Record<string, unknown>): UnaoSourceRow {
   const content = typeof raw.content === 'string' ? raw.content : ''
-  const author = typeof raw.author === 'string' ? raw.author.trim() : ''
   const labels: Record<string, unknown> = {}
   for (const k of LEGACY_LABEL_KEYS) {
     if (raw[k] !== undefined && raw[k] !== null) labels[k] = raw[k]
@@ -490,7 +488,7 @@ export function toSourceRow(raw: Record<string, unknown>, authorSalt: string): U
     sourceSite: `navercafe:${String(raw.cafeId ?? '')}`,
     sourceUrl: String(raw.postUrl ?? ''),
     sourceBoardName: typeof raw.boardName === 'string' ? raw.boardName : null,
-    authorHash: author ? authorHashOf(author, authorSalt) : null,
+    authorHash: null,
     postedAt: raw.postedAt instanceof Date ? raw.postedAt : null,
     capturedAt: raw.crawledAt instanceof Date ? raw.crawledAt : new Date(0),
     contentHash: content ? contentHashOf(content) : null,

@@ -29,6 +29,13 @@
  *    그래서 같은 처방을 쓴다 — Serializable + 트랜잭션 안 재counting.
  *
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
+ *
+ * 🔴 **발행 직전 공개 가치를 다시 판정한다 — 자동 · 사람 레인 모두** (2026-09-30 · source-slot-v1).
+ *    선택기와 **같은 정본 함수**(`judgeSlotRelease`)를 **이 트랜잭션의 시계**로 부른다(슬롯 = 지금 공개 시각).
+ *    · eligible → 발행 · 같은 트랜잭션에서 Queue `gateResults.release` 도장(`source-slot-v1`)을 쓴다(단계 증거 조항 ⑦)
+ *    · 원천 가치가 사라졌거나 모른다 → **그 행을 EXPIRED 로 옮긴다**(기존 enum · 사유 코드 + 도장) — Post 0 · ActivityLog 0.
+ *      같은 CAS 로 쓴다(상태 · 미발행 · 결정자 · updatedAt). 부르는 쪽은 **같은 회차에서 다음 후보**로 교체한다.
+ *    🔴 이미 비용을 쓴 초안이라는 이유로 살리지 않는다(sunk-cost 구제 없음).
  */
 import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from './persona-for-match'
 import { profileOf, releaseCapsOf, type RuntimeStage } from './scale-profile'
@@ -37,6 +44,9 @@ import { judgeCatchUp, kstMinuteOfDay, PUBLISH_WINDOW_END_MINUTE } from './publi
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
 import { auditBlockInTx } from './auto-ready-audit-store'
+import {
+  judgeSlotRelease, releaseStampOf, RELEASE_STAMP_KEY, type ReleaseReason,
+} from './source-slot-release'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
@@ -72,6 +82,11 @@ export type PublishResult =
       publishedTodayInTx?: number
     }
   | { kind: 'blocked'; code: PublishBlockCode; detail: string; publishedTodayInTx?: number }
+  /**
+   * 🔴 **원천 가치가 사라져 만료했다** — 그 행만 EXPIRED 로 옮겼다(Post 0 · ActivityLog 0). 슬롯은 소비되지 않았다.
+   *    부르는 쪽은 같은 회차에서 다음 후보로 교체한다.
+   */
+  | { kind: 'expired'; queueId: string; reasons: ReleaseReason[]; publishedTodayInTx?: number }
   | { kind: 'error'; message: string }
 
 /**
@@ -105,7 +120,24 @@ export type PublishMode =
  * 🔴 **시계 주입점 — 검사 전용이다.** 운영 호출자(러너 · publish-live)는 이 인자를 넘기지 않는다
  *    (소스 검사가 막는다). 트랜잭션 시도마다 **한 번** 읽는다 — 그 값이 txNow 다.
  */
-export type PublishTxDeps = { now?: () => Date }
+export type PublishTxDeps = {
+  now?: () => Date
+  /**
+   * 🔴 **결함 주입점 — 검사 전용이다** (2026-10-01 · 두 번 연속 충돌 반례). 운영 호출자는 넘기지 않는다(소스 검사가 막는다).
+   *    write 시도(1 · 2번째) 트랜잭션 **안에서** 불린다 — `begin` 첫 읽기 전 · `written` 세 write 뒤 커밋 전.
+   *    던지면 실제 예외와 같은 분류(직렬화 충돌 · 그 밖의 오류)를 거친다. 충돌 뒤 다시 읽기에서는 부르지 않는다.
+   */
+  fault?: (at: { attempt: 1 | 2; point: 'begin' | 'written' }) => Promise<void>
+}
+
+/**
+ * 🔴 **두 번 연속 충돌 뒤 다시 읽어 정상 무발행으로 인정하는 코드 — 소비 증거만이다** (2026-10-01).
+ *    · `SLOT_CONSUMED`     도래한 슬롯을 이미 다 냈다(트랜잭션 안 재counting · 정본 `judgeCatchUp`)
+ *    · `TARGET_RACE_LOST`  이 후보를 계획 뒤 다른 러너가 오늘 냈다(정본 경합 판정 넷 다 참)
+ *    🔴 `SLOT_CLOSED` 는 넣지 않는다 — 창 밖·도래 0 은 "누가 가져갔다" 는 증거가 아니다.
+ *    그 밖의 차단(ALREADY_PUBLISHED 같은 선택기 결함 · 자동 재검증 등)과 "다시 읽으니 낼 수 있다" 는 실패다.
+ */
+const CONSUMED_AFTER_CONFLICT = ['SLOT_CONSUMED', 'TARGET_RACE_LOST'] as const satisfies readonly PublishBlockCode[]
 
 export type PublishTxInput = {
   queueId: string
@@ -166,24 +198,40 @@ export async function publishOriginalPostTx(
   /**
    * 🔴 **직렬화 충돌은 한 번만 다시 시도한다** (2026-09-26 마스터 P0).
    *    다시 시도해도 슬롯·오늘 발행 수·상태를 **처음부터 다시 센다** — 이미 소비됐으면
-   *    `SLOT_CONSUMED`(정상 무발행)이고, 두 번째도 충돌하면 실패다. 상한을 넘기려는 재시도가 아니다.
+   *    `SLOT_CONSUMED`(정상 무발행)이다. 상한을 넘기려는 재시도가 아니다.
+   *
+   * 🔴 **두 번째도 충돌하면 write 없이 한 번 다시 읽는다** (2026-10-01 · PR #647 CI 동시 러너 ⑧).
+   *    두 러너가 같은 슬롯을 노리면 패자는 승자의 발행 트랜잭션과 · 이어지는 승자의 사후 write 와
+   *    연달아 부딪힐 수 있다. 승자는 정확히 1건을 냈는데 패자가 "실패(exit 1)" 로 끝났다.
+   *    재시도를 늘리지 않는다 — **세 번째 write 시도는 없다**. 새 트랜잭션에서 같은 판정 경로
+   *    (`publishAttempt` 의 `recheck` — 같은 행 읽기 · 같은 `judgeCatchUp` · 같은 경합 판정 · 같은 `judgePublish`)를
+   *    write 직전까지만 돌리고, **소비 증거**(`CONSUMED_AFTER_CONFLICT`)가 나올 때만 정상 무발행이다.
+   *    증거가 없거나(다시 읽으니 낼 수 있다 · 다른 차단) 오류면 그대로 실패다.
    */
-  const first = await publishAttempt(prisma, input, deps)
-  if (first.kind === 'conflict') {
-    const second = await publishAttempt(prisma, input, deps)
-    if (second.kind === 'conflict') {
-      return { kind: 'error', message: '다른 발행과 두 번 연속 부딪혔다 — 이 회차는 실패다. 공개 write 는 남지 않았다.' }
-    }
-    return second
+  const first = await publishAttempt(prisma, input, deps, 1)
+  if (first.kind !== 'conflict') return first
+  const second = await publishAttempt(prisma, input, deps, 2)
+  if (second.kind !== 'conflict') return second
+  const recheck = await publishAttempt(prisma, input, deps, 'recheck')
+  if (recheck.kind === 'blocked' && (CONSUMED_AFTER_CONFLICT as readonly string[]).includes(recheck.code)) {
+    return { ...recheck, detail: `충돌 2회 뒤 다시 읽음 — ${recheck.detail}` }
   }
-  return first
+  const seen = recheck.kind === 'blocked' ? recheck.code : recheck.kind === 'error' ? recheck.message : recheck.kind
+  return {
+    kind: 'error',
+    message: `다른 발행과 두 번 연속 부딪혔고, 다시 읽어도 소비 증거가 없다(${seen}) — 이 회차는 실패다. 공개 write 는 남지 않았다.`,
+  }
 }
 
+/** 🔴 write 시도 1 · 2 와 충돌 뒤 다시 읽기(`recheck` — 판정만 · write 0) */
+type AttemptPhase = 1 | 2 | 'recheck'
+
 async function publishAttempt(
-  prisma: PrismaClient, input: PublishTxInput, deps: PublishTxDeps,
+  prisma: PrismaClient, input: PublishTxInput, deps: PublishTxDeps, phase: AttemptPhase,
 ): Promise<PublishResult | { kind: 'conflict' }> {
   try {
     return await prisma.$transaction(async (tx) => {
+      if (phase !== 'recheck') await deps.fault?.({ attempt: phase, point: 'begin' })
       /**
        * 🔴 **이 트랜잭션의 시계는 하나다** (2026-09-25 마스터 지적). 배정 시각 · 주간 사용량 ·
        *    최소 간격 · 오늘 발행 수 · 단계 천장이 모두 이 값을 쓴다. 호출자 시각을 받지 않는다 —
@@ -197,7 +245,6 @@ async function publishAttempt(
           draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
           // 🔴 자동 도장 재검증용 — 누가 결정했고 무엇을 보고 찍었나
           decidedBy: true, editDiff: true, gateResults: true,
-          rawContent: { select: { sourceCapturedAt: true } },
           matchedPersona: {
             select: {
               id: true, code: true, status: true, userId: true,
@@ -223,7 +270,6 @@ async function publishAttempt(
           title: row.editedTitle ?? row.draftTitle,
           body: row.editedBody ?? row.draftBody,
           editDiff: row.editDiff, gateVerdict: row.gateVerdict, gateResults: row.gateResults,
-          sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
         })
         if (!recheck.ok) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason }
         /**
@@ -373,8 +419,47 @@ async function publishAttempt(
       if (!verdict.ok) {
         return { kind: 'blocked', code: verdict.code, detail: verdict.detail, publishedTodayInTx }
       }
+      /**
+       * 🔴 **충돌 뒤 다시 읽기는 여기서 멈춘다 — 이 아래는 전부 write 다**(만료 전환 · 배정 · Post · Queue · ActivityLog).
+       *    여기까지 왔다 = 슬롯도 후보도 아직 소비되지 않았다(낼 수 있다) → 소비 증거 없음. 부르는 쪽이 실패로 만든다.
+       */
+      if (phase === 'recheck') return { kind: 'error', message: '다시 읽으니 아직 낼 수 있다 — 소비 증거 없음' }
 
       const persona = personaRow!
+
+      /**
+       * ── ⓪-c 🔴 **공개 가치 재판정 — 정본 `judgeSlotRelease` · 트랜잭션 시계** (2026-09-30 · source-slot-v1) ──
+       *    hard gate(자동 행 재검증 · gate · 안전 · 중복 · 상한)와 배정은 위에서 이미 통과했다 — 그 결과를 넘긴다.
+       *    남은 질문은 하나다: **이 원천이 지금 이 공개 시각에도 대화할 가치가 있는가.**
+       *    아니거나 모르면 이 행을 EXPIRED 로 옮기고 끝낸다(Post · ActivityLog · 배정 쓰기 0). 부르는 쪽이 다음 후보로 교체한다.
+       */
+      const release = judgeSlotRelease({
+        gateResults: row.gateResults, slotAt: txNow, now: txNow,
+        hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: row.id,
+      })
+      const baseGate = row.gateResults !== null && typeof row.gateResults === 'object' && !Array.isArray(row.gateResults)
+        ? row.gateResults as Record<string, unknown> : {}
+      const stamped = { ...baseGate, [RELEASE_STAMP_KEY]: releaseStampOf(release) } as Prisma.InputJsonValue
+      if (release.verdict !== 'eligible') {
+        // 🔴 같은 CAS — 읽은 뒤 그 사이 누가 바꿨으면 0건이 되어 롤백한다(아무것도 남지 않는다)
+        const expired = await tx.originalPostApprovalQueue.updateMany({
+          where: {
+            id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null,
+            decidedBy: row.decidedBy, updatedAt: row.updatedAt,
+          },
+          /**
+           * 🔴 **배정을 풀어 준다** — 나가지 않은 행이 Persona 의 주간 사용량 · 최소 간격(`matchedAt` 기준)을 먹으면
+           *    그 Persona 가 며칠 동안 막힌다(러너가 사람 행 배정을 트랜잭션 앞에서 쓰므로 실제로 생긴다).
+           */
+          data: {
+            // 🔴 손상 위치(경로 · 종류)도 사유에 남긴다 — 감사가 "어느 칸이 깨져 만료됐는가" 를 도장 없이도 읽는다(값 · 원문 없음)
+            status: 'EXPIRED', declineReason: `RELEASE_EXPIRED:${release.reasons.join(',')}${release.issue === null ? '' : `@${release.issue}`}`, gateResults: stamped,
+            matchedPersonaId: null, matchedAt: null,
+          },
+        })
+        if (expired.count !== 1) throw new Error(QUEUE_RACE)
+        return { kind: 'expired', queueId: row.id, reasons: release.reasons, publishedTodayInTx }
+      }
 
       // ── ⓪-b 🔴 자동 행 배정 — 재검증·발행 판정을 모두 통과한 뒤, 같은 트랜잭션에서 ──
       if (pendingAssign) {
@@ -412,7 +497,8 @@ async function publishAttempt(
       const updated = await tx.originalPostApprovalQueue.updateMany({
         // 🔴 결정자도 읽은 그대로여야 한다 — 그 사이 도장이 바뀌었으면 0건이 되어 롤백한다
         where: { id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null, decidedBy: row.decidedBy },
-        data: { status: 'PUBLISHED', createdPostId: post.id },
+        // 🔴 release 도장 — 같은 트랜잭션에서 쓴다(단계 증거 조항 ⑦ 이 읽는다)
+        data: { status: 'PUBLISHED', createdPostId: post.id, gateResults: stamped },
       })
       if (updated.count === 0) throw new Error(QUEUE_RACE)
 
@@ -436,6 +522,8 @@ async function publishAttempt(
           createdAt: txNow,
         },
       })
+      // 🔴 검사 전용 — 세 write 뒤 커밋 전 실패를 넣는다(부분 write 가 남지 않는지 본다)
+      await deps.fault?.({ attempt: phase, point: 'written' })
 
       return {
         kind: 'published', postId: post.id, personaCode: persona.code,
@@ -448,7 +536,11 @@ async function publishAttempt(
        *    후보의 두 트랜잭션이 같은 스냅샷을 읽어 둘 다 통과한다. Serializable 에서
        *    두 번째 트랜잭션은 직렬화 실패(P2034)로 되돌아간다.
        */
-      isolationLevel: 'Serializable',
+      /**
+       *    🔴 충돌 뒤 다시 읽기는 write 가 없다 — 한 스냅샷(RepeatableRead)이면 충분하고, 읽기 전용 스냅샷은
+       *    PostgreSQL 에서 직렬화 실패로 되돌아가지 않는다(세 번째 충돌로 다시 실패하지 않는다).
+       */
+      isolationLevel: phase === 'recheck' ? 'RepeatableRead' : 'Serializable',
       maxWait: TX_MAX_WAIT_MS,
       timeout: TX_TIMEOUT_MS,
     })
@@ -459,6 +551,7 @@ async function publishAttempt(
     /**
      * 🔴 **직렬화 실패 — 부르는 쪽이 한 번만 다시 시도한다.** 공개 write 는 남지 않았다.
      *    다시 시도는 슬롯·오늘 발행 수를 처음부터 다시 세므로, 이미 소비됐으면 정상 무발행이 된다.
+     *    두 번째도 충돌이면 write 없는 다시 읽기(`recheck`)가 소비 증거를 찾는다 — 없으면 실패다.
      */
     if (isSerializationConflict(err)) return { kind: 'conflict' }
     // 🔴 예외 원문을 호출부로 흘리지 않는다

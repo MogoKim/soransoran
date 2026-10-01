@@ -40,6 +40,7 @@ import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
 import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
+import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-ready-defect-resolution'
 
 /**
  * 🔴 **품질 계약 판** — 게이트·검수의 판정이 바뀌면 올린다.
@@ -59,7 +60,24 @@ import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } 
  *      재생으로** 바꾼다(`QUALITY_EVIDENCE_BASIS`) — 새 30건 사람 검토를 요구하지 않는다. 감사 결함 · 재시도 가능 실패 ·
  *      판정 대기 시한 · 글 유실 · 사람 중대 결함은 그대로 닫는다. 🔴 v3 행을 고치거나 지우지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v4'
+/**
+ * 🔴 `quality-v5` (2026-10-01 · Phase 2C) = **글 No-Go 를 댓글과 같은 판정 하나로**. 초안 확정 게이트 `personaNoGo`
+ *    (`draft-gates-v5`) · 초안 프롬프트 `v2-draft-p8` · 발행 배정 `hardFilter` 의 NOGO_EXPRESSION · NOGO_COMMON 이 전부
+ *    `persona-no-go` 를 부른다(따옴표 · `류` 표기 무관 · 전원 공통 금지 Pool §7-2). 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v4 행을 고치거나 지우거나 v5 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ *    새 READY 는 최근 원천 → 다음 슬롯 → 새 계약 생성(JIT)으로만 생긴다.
+ */
+/**
+ * 🔴 `quality-v6` (2026-10-01) = **1인칭 만남·대화·들음도 생활사 주장이다**. 운영 자동 READY 감사 결함 yes 1건 —
+ *    P04 · 자리 QUESTION · `selfBasis=null` 초안이 원문 글쓴이의 만남(`어제 60대 만났는데`)을 자기 만남
+ *    (`어제 60대 분과 이야기를 나누다 들었는데요`)으로 옮겼고, 초안 게이트(B 는 가족·일 축만 셌다) · 의미 검수 · 도장이 모두 지나갔다.
+ *    초안 게이트 `draft-gates-v6.1`(`unwarrantedSelfClaim` 의 만남 축 — 원문에 만남이 있어도 Persona 경험이 아니다.
+ *    모든 자리에서 확정이고 `lifeFacts` 의 검증된 근거 문장이 그 만남을 직접 담을 때만 통과 · 관형어를 임자로 읽지 않는다) ·
+ *    초안 프롬프트 `v2-draft-p10`. 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v6 보정(같은 날)은 판 이름을 올리지 않고 digest 만 `--revise` 로 기록했다 — 운영 v6 행 0.
+ *    🔴 v5 이하 행을 고치거나 지우거나 v6 으로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v6'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -101,6 +119,9 @@ export function qualityContractComponents(): Record<string, unknown> {
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
     semanticHoldCodes: SEMANTIC_HOLD_CODES,
     judgeContractDigest: JUDGE_CONTRACT_DIGEST,
+    // 🔴 (v6 보정 2026-10-01) 결함 축 정본 — "지금 계약에서 해소되지 않은 확정 결함" 의 기록 판.
+    //    해소 기록은 이 digest 에 묶인다 — 판정 규칙(기록 판)이 바뀌면 digest 가 바뀌어 옛 기록은 아무것도 해소하지 못한다
+    defectResolution: { recordVersion: DEFECT_RESOLUTION_RECORD_VERSION, key: DEFECT_RESOLUTION_KEY },
   }
 }
 

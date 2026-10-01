@@ -10,6 +10,7 @@
 
 import { CHILD_AGE_BANDS, readLengthBand } from './original-post-persona-match'
 import type { PoolCard } from './persona-pool-card'
+import { noGoExpressionKey } from './persona-no-go'
 
 /** 🔴 제어값 — 자유 문장이면 카드마다 말이 달라져 비교가 불가능해진다 */
 export const MARITAL_VALUES = ['기혼', '이혼', '사별', '비혼', '별거'] as const
@@ -29,7 +30,25 @@ export const REQUIRED_IDENTITY = [
  *    내용은 자녀 수와의 **정합 검사**(⑤)가 판단한다.
  */
 export const REQUIRED_ARRAY_IDENTITY = ['childrenAgeBands'] as const
-export const REQUIRED_VOICE = ['length', 'register', 'ending', 'emoji'] as const
+/**
+ * 🔴 **말끝(`ending`)은 필수 칸이 아니다** (2026-10-01 · Phase F — 옛 "필수 4칸" 권위 삭제).
+ *    카드가 말끝을 **따옴표로 명시**하면(`"~해요" 기본`) 그 값과 정확히 대조한다(⑧).
+ *    카드가 말끝을 적지 않으면 값을 만들지 않는다 — 말투의 유효성은 카드의 voice 토큰 · variation 수와
+ *    같은 화자의 실제 관측 3건(계약 축 `voiceEvidence`)이 판정한다.
+ */
+export const REQUIRED_VOICE = ['length', 'register', 'emoji'] as const
+
+/**
+ * 🔴 **카드가 명시한 말끝** — voiceCore 토큰 안의 따옴표 `"~…"` 만 읽는다.
+ *    `말끝 흐림` 처럼 따옴표 없는 서술은 고정 말끝이 아니다. `"ㅋㅋ"` · `"진짜"` 는 말끝이 아니다(`~` 로 시작하지 않는다).
+ */
+export function explicitEndingsOf(voiceTokens: readonly string[]): string[] {
+  const out: string[] = []
+  for (const t of voiceTokens) {
+    for (const m of t.matchAll(/"(~[^"]+)"/gu)) if (!out.includes(m[1]!.trim())) out.push(m[1]!.trim())
+  }
+  return out
+}
 export const REQUIRED_SCALAR = ['ageBand', 'region', 'lifeStage', 'dailyCap', 'weeklyCap', 'silenceRate'] as const
 export const REQUIRED_LIST = ['noGoTopics', 'noGoExpressions', 'forbiddenReactionRoles'] as const
 
@@ -45,6 +64,12 @@ const filled = (v: unknown): boolean => {
   return true
 }
 const sorted = (xs: readonly unknown[]): string => [...xs].map(String).sort().join('|')
+/**
+ * 🔴 **자녀 나이대는 고유 밴드 집합끼리 비교한다** (Pool 설계 §4 · 2026-10-01).
+ *    카드 파서는 고유 집합(`['성인']`), DB 는 자녀 한 명당 한 칸(`['성인','성인']`)이다.
+ *    중복까지 맞대면 자녀 2명인 사람이 언제나 "정본과 다르다" 가 된다(P17 실측).
+ */
+const bandSet = (xs: readonly unknown[]): string => [...new Set(xs.map(String))].sort().join('|')
 
 /**
  * 카드 한 장 — 🔴 문제 목록을 돌려준다. 비어 있으면 통과다.
@@ -124,12 +149,13 @@ export function verifySeedCard(code: string, card: SeedCard, poolCard: PoolCard 
     if (sorted(a) !== sorted(b)) problems.push(`${label} 가 정본과 다르다 (정본 ${b.length}개 / seed ${a.length}개)`)
   }
   same(Array.isArray(card.noGoTopics) ? card.noGoTopics : [], poolCard.noGoTopics, 'noGoTopics')
-  same(Array.isArray(card.noGoExpressions) ? card.noGoExpressions : [], poolCard.noGoExpressions, 'noGoExpressions')
+  same((Array.isArray(card.noGoExpressions) ? card.noGoExpressions : []).map((e) => noGoExpressionKey(String(e))),
+    poolCard.noGoExpressions.map(noGoExpressionKey), 'noGoExpressions')
   same(Array.isArray(card.forbiddenReactionRoles) ? card.forbiddenReactionRoles : [], poolCard.forbiddenReactionRoles, 'forbiddenReactionRoles')
   // 🔴 매칭에 쓰이는 축은 정본과 **같아야 한다** — 다르면 시뮬레이션한 사람과 만들 사람이 다르다
   if (idv.maritalStatus !== poolCard.maritalStatus) problems.push(`maritalStatus 가 정본과 다르다 (정본 ${poolCard.maritalStatus})`)
   if (idv.childrenCount !== poolCard.childrenCount) problems.push(`childrenCount 가 정본과 다르다 (정본 ${poolCard.childrenCount})`)
-  if (sorted(bands) !== sorted(poolCard.childrenAgeBands)) problems.push('childrenAgeBands 가 정본과 다르다')
+  if (bandSet(bands) !== bandSet(poolCard.childrenAgeBands)) problems.push('childrenAgeBands 가 정본과 다르다')
   if (idv.parentCare !== poolCard.parentCare) problems.push(`parentCare 가 정본과 다르다 (정본 ${poolCard.parentCare})`)
   if (idv.menopauseStatus !== poolCard.menopauseStatus) problems.push(`menopauseStatus 가 정본과 다르다 (정본 ${poolCard.menopauseStatus})`)
   // 🔴 **길이도 정본과 같아야 한다.** 정본이 미상인데 seed 에 값이 있으면,
@@ -138,6 +164,18 @@ export function verifySeedCard(code: string, card: SeedCard, poolCard: PoolCard 
     problems.push('정본 카드의 voiceCore 길이가 미상이다 — 사람이 추정한 값을 넣지 않는다. 정본을 먼저 보완하라')
   } else if (vcv.length !== poolCard.voiceLength) {
     problems.push(`voiceCore.length 가 정본과 다르다 (정본 "${poolCard.voiceLength}")`)
+  }
+  // 🔴 **말투는 카드가 적은 것으로 판정한다** — voice 토큰 · variation 수 · 명시된 말끝
+  if (poolCard.voiceTokens.length === 0) problems.push('정본 카드의 voiceCore 토큰이 없다')
+  if (vv.length !== poolCard.variationCount) {
+    problems.push(`voiceVariations ${vv.length}개가 정본 variation ${poolCard.variationCount}개와 다르다`)
+  }
+  const endings = explicitEndingsOf(poolCard.voiceTokens)
+  if (endings.length > 0) {
+    if (!filled(vcv.ending)) problems.push(`voiceCore.ending 이 없다 — 정본 카드가 명시한다(${endings.join('·')})`)
+    else if (!endings.includes(String(vcv.ending).trim())) {
+      problems.push(`voiceCore.ending 이 정본과 다르다 (정본 ${endings.join('·')})`)
+    }
   }
 
   return problems

@@ -20,25 +20,19 @@ import { detailThroughput, DETAIL_SOURCES, type DetailThroughput } from './d100-
 import {
   readSnapshots, readyNetFromSnapshots, appendSnapshot, SNAPSHOT_PATH, type NetChange,
 } from './d100-ready-snapshot.mjs'
-import {
-  readPersonaCandidates, missingAxisHistogram, type PersonaRow, type PersonaTierRepo,
-} from './d100-persona-tiers.mjs'
-import { forecastPublishing } from '../../src/lib/supply-capacity-forecast'
-import { voiceInputOf, type AutoRow } from '../../src/lib/original-post-auto-publish'
-import { personaTierReadiness, personaReadinessOk, type TierReadiness } from '../../src/lib/d100-persona-scale'
-import type { QueueCandidate } from '../../src/lib/supply-candidates'
-import type { PersonaForMatch } from '../../src/lib/original-post-persona-match'
 import type { D100Stage } from '../../src/lib/d100-capacity'
 import {
   productionRateOf, rateOf, type ProductionRate, type RateReading,
 } from '../../src/lib/d100-supply-funnel'
-import { resolveStage, RELEASE_ENV } from '../../src/lib/scale-profile'
-import { ANCHOR_MIN_COMMENTS, bundlesForPersonas } from './persona-reference-store.mjs'
 // 🔴 재고와 **같은 판정 함수**를 쓴다 — 여기서 규칙을 다시 적으면 두 숫자가 갈라진다
 import { profileOf, machineReviewedByHuman } from '../../src/lib/original-post-auto-publish'
 import { MACHINE_AGE_HUMAN_REVIEW_REQUIRED } from '../../src/lib/micro-seed-auto-draft'
 import type { QueuePostLink, LinkSummary, Measured, StockFunnel } from '../../src/lib/d100-readiness'
 import { summarizeLinks } from '../../src/lib/d100-readiness'
+import { readStageDecision } from '../../src/lib/stage-decision-repo'
+import { readContractValidPersonas } from './persona-reserve-facts.mjs'
+import { kstDateString } from '../../src/lib/release-canary'
+import type { RuntimeStage } from '../../src/lib/scale-profile'
 
 /** 🔴 처리량을 보는 창 — 하루치 튀는 값으로 판정하지 않는다 */
 export const THROUGHPUT_WINDOW_DAYS = 14
@@ -78,24 +72,13 @@ export type OperationalStock =
       publishedPerDay: Measured
       /** 🔴 처리량을 본 **창**의 길이다 — "이 단계를 며칠 관측했다" 가 아니다 */
       throughputWindowDays: number
-      /** 🔴 Persona 3계층 — 계기판이 이 값을 그대로 찍는다 */
-      personaTiers: TierReadiness[]
-      /** 🔴 어느 생활사 축이 몇 명에게서 비었는가 */
-      personaMissingAxes: Record<string, number>
-      personaReady: boolean
       /**
-       * 🔴 **지금 실제로 예약된 양.** 발행 runner 가 내려가 있으면 0 이다 —
-       *    예측값을 여기 적으면 "곧 3건 나간다" 로 읽히는데 아무것도 나가지 않는다.
+       * 🔴 **계약 유효 Persona 수 — Persona 레인이 제공한다(주입 인터페이스 · 2026-09-30).**
+       *    앞판은 여기서 `personaTierReadiness`(카드 · Pool · 운영 3계층)를 **따로** 판정해 계기판 두 번째 정본을 만들었다.
+       *    지웠다 — 같은 질문의 정본은 Persona 레인의 reserve(`contractValid`)이고, 다음 단계 preflight 가 그 값을 읽는다.
+       *    제공자가 연결되기 전에는 `null`(모름)이다. 활성 행 수로 대체하지 않는다.
        */
-      actualScheduledIn7Days: Measured
-      actualScheduledIn14Days: Measured
-      /** 🔴 **runner 를 올렸다면** 나갈 수 있는 양 — 예측기가 낸 값 */
-      forecastIfLoadedIn7Days: Measured
-      forecastIfLoadedIn14Days: Measured
-      /** 지금 발행 runner 가 돌 수 있는가 — 위 두 값을 가르는 사실 */
-      publishRunnerLoaded: boolean
-      /** 🔴 지금 단계에서 목표 발행량을 연속 달성한 날 수 */
-      stableStreakDays: number
+      contractValidPersonas: number | null
       /** 공급원별 최근 회차 성패 — `null` 이면 모른다 */
       collectFailing: Record<string, boolean | null>
     }
@@ -111,7 +94,7 @@ export function prismaStockRepo(prisma: PrismaClient): StockRepo {
           promptVersion: true, model: true, matchedPersonaId: true,
           draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
           gateResults: true, decidedBy: true, decidedAt: true, createdAt: true,
-          rawContent: { select: { sourceSite: true, sourceCapturedAt: true, rawTitle: true, rawBody: true } },
+          rawContent: { select: { sourceSite: true } },
         },
         orderBy: { createdAt: 'asc' },
       })
@@ -126,10 +109,6 @@ export function prismaStockRepo(prisma: PrismaClient): StockRepo {
         editedTitle: r.editedTitle,
         sourceSite: r.rawContent.sourceSite,
         decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt,
-        // 🔴 신선도는 **원문**으로 본다. 우리 초안 문안으로 보면 주제가 바뀐다
-        sourceCapturedAt: r.rawContent.sourceCapturedAt,
-        freshTitle: r.rawContent.rawTitle,
-        freshBody: r.rawContent.rawBody,
       }))
     },
 
@@ -171,161 +150,12 @@ export async function publishedAtsOf(prisma: PrismaClient): Promise<Date[]> {
   return posts.map((p) => p.createdAt)
 }
 
-/**
- * 🔴 **Persona 원자료.** 여기서 판정하지 않는다 —
- *    무엇이 비었는지만 옮기고 3계층 판정은 정본 순수 함수가 한다.
- */
-export function prismaPersonaRepo(prisma: PrismaClient, now: Date, repoRoot: string): PersonaTierRepo {
-  return {
-    personaRows: async (): Promise<readonly PersonaRow[]> => {
-      const rows = await prisma.persona.findMany({
-        select: {
-          code: true, status: true, identity: true, ageBand: true, region: true,
-          noGoTopics: true, noGoExpressions: true,
-        },
-        orderBy: { code: 'asc' },
-      })
-      // 🔴 오늘(KST) 경계 — 활동 상한은 하루 단위다
-      const kstNow = new Date(now.getTime() + 9 * 3600_000)
-      const dayStart = new Date(Date.UTC(
-        kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate(),
-      ) - 9 * 3600_000)
-
-      const logs = await prisma.personaActivityLog.findMany({
-        where: { createdAt: { gte: new Date(now.getTime() - 400 * 86_400_000) } },
-        select: { createdAt: true, persona: { select: { code: true } } },
-      })
-      const todayBy = new Map<string, number>()
-      const lastBy = new Map<string, Date>()
-      for (const l of logs) {
-        const code = l.persona.code
-        if (l.createdAt >= dayStart) todayBy.set(code, (todayBy.get(code) ?? 0) + 1)
-        const had = lastBy.get(code)
-        if (had === undefined || l.createdAt > had) lastBy.set(code, l.createdAt)
-      }
-
-      /**
-       * 🔴 **말투 근거는 정본 묶음이 정한다.** 여기서 다시 세지 않는다 —
-       *    실제 생성이 쓰는 것과 다른 수를 세면 준비도가 생성과 어긋난다.
-       */
-      const voiceBy = new Map<string, number>()
-      try {
-        const b = bundlesForPersonas({ repoRoot, personaCodes: rows.map((r) => r.code) })
-        for (const t of b.table) voiceBy.set(t.personaCode, t.anchorComments)
-      } catch {
-        // 🔴 자산을 못 열면 0 이다 — 말투 근거가 **없는** 것이 맞다(fail-closed)
-      }
-
-      return rows.map((r) => {
-        const last = lastBy.get(r.code) ?? null
-        return {
-          code: r.code, status: String(r.status),
-          identity: (r.identity ?? {}) as Record<string, unknown>,
-          ageBand: r.ageBand, region: r.region,
-          noGoTopics: r.noGoTopics, noGoExpressions: r.noGoExpressions,
-          activityToday: todayBy.get(r.code) ?? 0,
-          daysSinceActive: last === null ? null
-            : Math.floor((now.getTime() - last.getTime()) / 86_400_000),
-          voiceComments: voiceBy.get(r.code) ?? 0,
-        }
-      })
-    },
-  }
-}
 
 /**
- * 🔴 **예측기가 쓰는 사람 목록.** 관제(`supply-health`)와 **같은 필드**를 넘긴다 —
- *    하나라도 빠지면 배정이 통째로 막히거나(fail-closed) 반대로 전원 통과가 된다.
+ * 🔴 **지운 관측 (2026-09-30 · source-slot-v1)** — `forecastPersonasOf` · `forecastFromRows`(14일 발행 예측 ·
+ *    `forecastPublishing` 을 재고 전망으로 쓰던 경로) · `stableStreakDays`(연속 달력 일수 stable — 승격 판정 입력) ·
+ *    `releaseStageFromEnvText`(env 파일로 "지금 단계" 를 읽던 두 번째 출처). 단계는 StageDecision 하나다.
  */
-export async function forecastPersonasOf(prisma: PrismaClient, now: Date): Promise<{
-  personas: PersonaForMatch[]
-  codeOfPersonaId: Map<string, string>
-  /** 🔴 러너와 **같은 표**에서 읽는다 — `PersonaActivityLog(kind='post')` */
-  history: { code: string; matchedAts: Date[] }[]
-  /** 이 사람이 최근에 쓴 글 수 — 연속 노출 판정의 근거가 될 원자료 */
-  postLogs: { code: string; at: Date }[]
-}> {
-  const rows = await prisma.persona.findMany({
-    where: { status: 'active' },
-    select: {
-      id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-      user: { select: { providerId: true, _count: { select: { accounts: true } } } },
-    },
-  })
-  const codeOfPersonaId = new Map(rows.map((r) => [r.id, r.code]))
-  const weekAgo = new Date(now.getTime() - 7 * 86_400_000)
-  /**
-   * 🔴 **발행 이력의 정본은 `PersonaActivityLog(kind='post')` 다.**
-   *    러너(`original-post-auto-publish.mts` ③)가 읽는 바로 그 표다 —
-   *    큐의 `matchedAt` 은 "배정했다" 이지 "발행했다" 가 아니다.
-   */
-  const postLogRows = await prisma.personaActivityLog.findMany({
-    where: { kind: 'post' },
-    select: { createdAt: true, persona: { select: { code: true } } },
-  })
-  const postLogs = postLogRows
-    .filter((l) => l.persona !== null)
-    .map((l) => ({ code: l.persona!.code, at: l.createdAt }))
-  const history = rows.map((r) => ({
-    code: r.code,
-    matchedAts: postLogs.filter((l) => l.code === r.code).map((l) => l.at),
-  }))
-  const personas: PersonaForMatch[] = []
-  for (const r of rows) {
-    const id = (r.identity ?? {}) as Record<string, unknown>
-    const vc = (r.voiceCore ?? {}) as Record<string, unknown>
-    const past = await prisma.originalPostApprovalQueue.findMany({
-      where: { matchedPersonaId: r.id, NOT: { matchedAt: null } },
-      select: { matchedAt: true },
-    })
-    const ats = past.map((x) => x.matchedAt as Date)
-    const last = ats.length === 0 ? null : ats.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
-    personas.push({
-      code: r.code, status: String(r.status), providerId: r.user?.providerId ?? null,
-      accountCount: r.user?._count.accounts ?? null,
-      ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
-      maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
-      childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
-      ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),
-      parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
-      menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
-      workStatus: null, economicStatus: null, region: null,
-      noGoTopics: r.noGoTopics,
-      voiceLength: typeof vc.length === 'string' ? vc.length : null,
-      postsThisWeek: ats.filter((d) => d.getTime() >= weekAgo.getTime()).length,
-      daysSinceLastPost: last === null ? null
-        : Math.floor((now.getTime() - last.getTime()) / 86_400_000),
-    } as PersonaForMatch)
-  }
-  return { personas, codeOfPersonaId, history, postLogs }
-}
-
-/**
- * 🔴 **연속으로 몇 날 목표를 냈는가.** 고정 14일 상수를 없앤 자리다 —
- *    상수는 "14일 관측했다" 는 주장인데 아무도 재지 않았다.
- *
- * 🔴 **오늘은 세지 않는다.** 아직 끝나지 않은 날을 "목표 미달" 로 세면
- *    매일 아침 연속 기록이 0 으로 떨어진다.
- */
-export function stableStreakDays(input: {
-  publishedAts: readonly Date[]
-  dailyTarget: number
-  now: Date
-  maxLookbackDays?: number
-}): number {
-  const kstDay = (d: Date): string => new Date(d.getTime() + 9 * 3600_000).toISOString().slice(0, 10)
-  const byDay = new Map<string, number>()
-  for (const d of input.publishedAts) byDay.set(kstDay(d), (byDay.get(kstDay(d)) ?? 0) + 1)
-  let streak = 0
-  const look = input.maxLookbackDays ?? 120
-  for (let i = 1; i <= look; i += 1) {
-    const day = kstDay(new Date(input.now.getTime() - i * 86_400_000))
-    if ((byDay.get(day) ?? 0) < input.dailyTarget) break
-    streak += 1
-  }
-  return streak
-}
-
 /**
  * 🔴 **최근 회차가 정상이었는가** — `null` 은 모른다는 뜻이다.
  *    기록이 하나도 없으면 "정상" 이 아니라 **모른다**.
@@ -335,52 +165,6 @@ export function latestRunFailing(records: readonly CollectRunRecord[]): boolean 
   if (done.length === 0) return null
   const last = done.reduce((a, b) => (a.startedAt >= b.startedAt ? a : b))
   return last.status === 'failed'
-}
-
-/**
- * 🔴 **예약 전망은 실제 예측기가 낸다** (2026-09-21 3차 보정).
- *
- *    앞판은 `scheduledIn7Days: 0, scheduledIn14Days: 0` 을 **직접 주입**했다.
- *    0 은 "한 건도 안 나간다" 라는 강한 주장인데, 아무도 계산하지 않았다.
- *    러너·관제와 같은 `forecastPublishing` 을 부른다 — 입력이 없으면 `null` 이다.
- */
-export function forecastFromRows(input: {
-  rows: readonly QueueRowFacts[]
-  publishableIds: readonly string[]
-  personas: readonly PersonaForMatch[]
-  /** personaId → code. 🔴 못 찾으면 **모르는 코드**를 넘겨 예측이 fail-closed 로 멈추게 한다 */
-  codeOfPersonaId: ReadonlyMap<string, string>
-  /** 🔴 **공식 발행 러너와 같은 이력** — `PersonaActivityLog(kind='post')` */
-  history: readonly { code: string; matchedAts: Date[] }[]
-  dailyCap: number
-  now: Date
-}): { in7: Measured; in14: Measured } {
-  // 🔴 사람이 없으면 배정이 성립하지 않는다 — 0 건이 아니라 **계산할 수 없다**
-  if (input.personas.length === 0) return { in7: null, in14: null }
-  const want = new Set(input.publishableIds)
-  const queue: QueueCandidate[] = input.rows
-    .filter((r) => want.has(r.id))
-    .map((r, i) => ({
-      queueId: r.id, title: r.title, body: r.body, gateVerdict: r.gateVerdict, createdAt: i,
-      // 🔴 이미 배정된 사람이 정본이다. 모르면 예측이 fail-closed 로 멈춰야 한다
-      assignedPersonaCode: r.matchedPersonaId === null ? null
-        : (input.codeOfPersonaId.get(r.matchedPersonaId) ?? `__unknown:${r.matchedPersonaId}`),
-      capturedAt: r.sourceCapturedAt,
-      ...voiceInputOf(r as AutoRow),
-    }))
-  /**
-   * 🔴 **빈 이력을 넘기지 않는다** (2026-09-21 4차 보정).
-   *
-   *    앞판은 `matchedAts: []` 를 넘겼다. 그러면 예측기는 **아무도 최근에 안 썼다**고 믿고
-   *    주 상한·최소 간격을 한 번도 적용하지 않는다 — 그래서 7일 전망이 3/3 으로 꽉 찼다.
-   *    실제 러너는 `PersonaActivityLog(kind='post')` 를 넘긴다. 같은 것을 넘긴다.
-   */
-  if (input.history.length !== input.personas.length) return { in7: null, in14: null }
-  const f = forecastPublishing({
-    queue, personas: input.personas, history: input.history,
-    startAt: input.now, days: 14, dailyCap: input.dailyCap,
-  })
-  return { in7: f.in7, in14: f.in14 }
 }
 
 /**
@@ -445,24 +229,35 @@ function fillConnectionFromAppSupport(): void {
 }
 
 /**
- * 🔴 **운영 env 글에서 지금 단계를 읽는다** — 판정은 정본 `resolveStage` 가 한다.
- *
- * 🔴 **따로 함수로 뺀 이유**: 계기판 안에 인라인으로 두면 "그 값이 정말 env 에서 왔는가" 를
- *    fixture 가 물어볼 방법이 없다. 실제로 앞선 돌연변이 시험에서, `resolveStage` 를
- *    부르면서 결과만 `'d3'` 으로 덮어써도 검사가 통과했다.
+ * 🔴 **지금 단계 — StageDecision 하나에서 읽는다** (2026-09-30). 오늘(KST) 검증된 결정이 없으면 `null` 이다 —
+ *    env 파일(`SORAN_RELEASE_STAGE`)로 대신하지 않는다(그것이 두 번째 출처였다 · A2 C8).
  */
-export function releaseStageFromEnvText(envText: string): ReturnType<typeof resolveStage> {
-  const raw = new RegExp(`^${RELEASE_ENV}=(.*)$`, 'm').exec(envText)?.[1]?.trim()
-  return resolveStage(raw, 'release')
+export async function readCurrentStageDecision(now: Date): Promise<{
+  ok: true; decision: { kstDate: string; state: string; release: RuntimeStage; capacity: RuntimeStage; contractVersion: string } | null
+} | { ok: false; detail: string }> {
+  await loadEnvLocal()
+  fillConnectionFromAppSupport()
+  if ((process.env.DATABASE_URL ?? '') === '') return { ok: false, detail: 'DATABASE_URL 이 없다' }
+  const prisma = new PrismaClient()
+  try {
+    const r = await readStageDecision(prisma, kstDateString(now))
+    if (!r.found || !r.result.ok) return { ok: true, decision: null }
+    const d = r.result.decision
+    return { ok: true, decision: { kstDate: d.kstDate, state: d.state, release: d.release, capacity: d.capacity, contractVersion: d.contractVersion } }
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : '알 수 없음' }
+  } finally {
+    await prisma.$disconnect()
+  }
 }
 
 export type StockReadOptions = {
-  /** 승격 판정을 할 목표 단계 — Persona 3계층 목표 인원이 여기서 나온다 */
+  /** 다음 단계 — 보고용 필요량 표가 이 단계를 쓴다 */
   targetStage: D100Stage
-  /** 목표 단계의 하루 발행 상한 — 예측기에 넘긴다 */
-  dailyCap: number
-  /** 이 저장소 루트 — 말투 묶음 자산을 찾는 데 쓴다 */
+  /** 이 저장소 루트 */
   repoRoot: string
+  /** 🔴 계약 유효 Persona 수를 직접 넣을 때만(시험용). 없으면 Persona 4상태 정본을 읽는다 */
+  contractValidPersonas?: number | null
   /**
    * 🔴 **지금 재고를 스냅샷 장부에 적을 것인가.** 기본은 **적지 않는다** —
    *    계기판은 read-only 다. 시계열을 시작하려면 사람이 명시적으로 켠다.
@@ -475,10 +270,6 @@ export type StockReadOptions = {
    *    시험하려면 일부러 실패하는 writer 를 넣어 봐야 한다.
    */
   appendSnapshotFn?: (readyStock: number, now: Date) => boolean
-  /** 지금 단계의 하루 발행 목표 — 연속 달성 일수를 세는 기준 */
-  currentDailyTarget: number
-  /** 🔴 발행 runner 가 실제로 돌 수 있는가 — 예약량과 예측값을 가른다 */
-  publishRunnerLoaded: boolean
   /**
    * 🔴 **공급이 예약으로 도는가.** 손으로 돌린 회차로 정기 생산율을 말하지 않는다.
    */
@@ -592,39 +383,14 @@ export async function readOperationalStock(
     const publishedAts = await publishedAtsOf(prisma)
     const publishedInWindow = publishedAts.filter((d) => d >= since).length
 
-    // ── Persona 3계층 — 🔴 active 수 하나로 준비 완료를 말하지 않는다 ──
-    const personaRead = await readPersonaCandidates(
-      prismaPersonaRepo(prisma, now, opts.repoRoot),
-    )
-    if (!personaRead.ok) return { ok: false, detail: `Persona 를 읽지 못했다 — ${personaRead.detail}` }
-    const tiers = personaTierReadiness({
-      stage: opts.targetStage, candidates: personaRead.candidates,
-    })
 
-    // ── 예약 전망 — 🔴 0 을 주입하지 않는다. 러너와 같은 예측기를 부른다 ──
-    const {
-      personas: personasForMatch, codeOfPersonaId, history,
-    } = await forecastPersonasOf(prisma, now)
-    const fc = forecastFromRows({
-      rows, publishableIds: read.rows.sets.publishableNow,
-      personas: personasForMatch, codeOfPersonaId, history, dailyCap: opts.dailyCap, now,
-    })
-    /**
-     * 🔴 **예약된 양과 예측값은 다르다.** 발행 runner 가 내려가 있으면 실제로는
-     *    한 건도 나가지 않는다 — 예측값을 "예약" 이라 적으면 멎은 레인이 초록으로 보인다.
-     */
-    const actual7 = opts.publishRunnerLoaded ? fc.in7 : 0
-    const actual14 = opts.publishRunnerLoaded ? fc.in14 : 0
-    const streak = stableStreakDays({
-      publishedAts, dailyTarget: opts.currentDailyTarget, now,
-    })
     const collectFailing: Record<string, boolean | null> = {}
     for (const src of DETAIL_SOURCES) collectFailing[src] = latestRunFailing(readRunRecords(src))
 
     return {
       ok: true,
-      // 🔴 깔때기에는 **지금 실제로 예약된 양**을 적는다. 예측값이 아니다
-      funnel: { ...read.funnel, scheduledIn7Days: actual7, scheduledIn14Days: actual14 },
+      // 📜 7·14일 예약 전망 칸을 지웠다(2026-09-30) — 다가오는 슬롯은 `supply:health` 의 JIT 가 본다
+      funnel: read.funnel,
       readyStockIds: [...read.rows.sets.publishableNow],
       links,
       activePersonas,
@@ -637,15 +403,10 @@ export async function readOperationalStock(
       readyStockDeltaPerDay: readyStockDelta.measured ? readyStockDelta.perDay : null,
       publishedPerDay: perDayMeasured(publishedInWindow, THROUGHPUT_WINDOW_DAYS),
       throughputWindowDays: THROUGHPUT_WINDOW_DAYS,
-      personaTiers: tiers,
-      personaMissingAxes: missingAxisHistogram(personaRead.candidates),
-      personaReady: personaReadinessOk(tiers),
-      actualScheduledIn7Days: actual7,
-      actualScheduledIn14Days: actual14,
-      forecastIfLoadedIn7Days: fc.in7,
-      forecastIfLoadedIn14Days: fc.in14,
-      publishRunnerLoaded: opts.publishRunnerLoaded,
-      stableStreakDays: streak,
+      // 🔴 Persona 4상태 정본의 계약 유효 수 — 주입값이 있으면 그것, 없으면 같은 정본을 읽는다(실패 → null)
+      contractValidPersonas: opts.contractValidPersonas !== undefined
+        ? opts.contractValidPersonas
+        : await readContractValidPersonas(prisma, { now, repoRoot: opts.repoRoot }),
       collectFailing,
     }
   } catch (e) {

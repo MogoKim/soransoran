@@ -5,6 +5,7 @@
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
 import { digest16, PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { readFileSync } from 'node:fs'
 import {
   pickDraft, pickV2, checkDraft, summarizeDrafts, violatesDraftProvenance,
@@ -93,7 +94,8 @@ const draft = (o: Partial<DraftCandidate> = {}): DraftCandidate => ({
  *    본다 — 의미 판정은 Content Core v2 통합 검수가 하고 `pickV2` 가 받는다.
  */
 const inp = (o: Partial<PickInput> = {}): PickInput => ({
-  judgement: { sourceArticleId: 's1', decision: 'AUTO_SEED', semanticRisks: [] },
+  // 🔴 (P0-B) 러너가 넘기는 판정은 원천 사이트를 싣는다
+  judgement: { sourceSite: 'navercafe:wgang', sourceArticleId: 's1', decision: 'AUTO_SEED', semanticRisks: [] },
   drafts: [draft()],
   seenTitles: new Set<string>(), seenBodies: new Set<string>(), sourceUsed: false, ...o,
 })
@@ -113,6 +115,14 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
 
   const row = p() as unknown as Record<string, unknown>
   check('🟢 온전한 채택은 통과', violatesDraftProvenance(row).length === 0)
+  check('🔴 🔴 **(P0-B) 원천 사이트 없는 결정 기록은 쓰지 않는다** — 빈 값 · 칸 없음 둘 다',
+    violatesDraftProvenance({ ...row, sourceSite: '' }).some((b) => b.includes('sourceSite'))
+    && violatesDraftProvenance((({ sourceSite: _s, ...r }) => r)(row)).some((b) => b.includes('sourceSite'))
+    && row.sourceSite === 'navercafe:wgang')
+  check('🔴 🔴 **(P0-B) pickV2 결정도 판정의 사이트를 옮겨 적는다**',
+    pickV2({ judgement: { sourceSite: '82cook', sourceArticleId: 's1', decision: 'AUTO_SEED' }, draft: draft(),
+      seenTitles: new Set(), seenBodies: new Set(), sourceUsed: false, machineOutcome: 'hold', machineReason: '',
+      sourceTitleCopied: false, crisisStop: null } as never, NOW).sourceSite === '82cook')
   for (const d of HUMAN_DRAFT_DECISIONS) {
     check(`🔴 decision=${d} 를 쓰면 잡는다`,
       violatesDraftProvenance({ ...row, decision: d }).length > 0)
@@ -263,8 +273,7 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
      *    (2026-09-24 — 러너와 관제가 같은 함수를 쓰게 하려고). 그 자리를 본다.
      */
     'scripts/lib/publishable-stock.mts',
-    'scripts/supply-health.mts',
-    'scripts/persona-capacity-planner.mts',
+    // 🔴 (2026-09-30) supply-health 는 러너와 같은 공용 적재(publishable-stock)를 읽고 · persona-capacity-planner 는 퇴역 — 조립 사본이 없다
     'scripts/original-post-match-assign.mts',
     'scripts/original-post-persona-match-dry-run.mts',
   ]) {
@@ -306,7 +315,7 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
     const bad = { ...c, voiceProvenance: undefined }
     const plan = planRefill({
       envelope: MACHINE_ENV, candidates: [bad as never],
-      existing: new Set(), held: [], queue: [], usable: 0,
+      existing: new Set(), held: [], queue: [],
     })
     return plan.targets.length === 0 && plan.skipped[0]?.code === 'PROFILE'
   })())
@@ -315,7 +324,7 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
     const bad = { ...c, voiceProvenance: { personaCode: '', comments: 1, bundleDigest: 'x' } }
     const plan = planRefill({
       envelope: MACHINE_ENV, candidates: [bad as never],
-      existing: new Set(), held: [], queue: [], usable: 0,
+      existing: new Set(), held: [], queue: [],
     })
     return plan.targets.length === 0 && plan.skipped[0]?.code === 'PROFILE'
   })())
@@ -400,7 +409,9 @@ console.log('\n⑭-a 🔴 운영 호출 그래프 전체를 지난다')
   const qc = (o: Record<string, unknown> = {}) => ({
     queueId: 'q1', title: '간식 뭐 드세요',
     body: '요즘 간식을 자꾸 찾게 되네요. 다들 어떤 거 두고 드시나요',
-    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: AT,
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null,
+    // 🔴 (2026-09-30) 원문 증거 — 없으면 정본 슬롯 판정이 계획에서 뺀다(배정까지 가지 않는다)
+    gateResults: fakeEvidenceGate(AT, { id: 'q1' }),
     voice: VP, profile: 'machine' as const, ...o,
   })
   const assignedOf = (c: Record<string, unknown>, codes: readonly string[]): string | null =>

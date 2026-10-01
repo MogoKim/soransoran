@@ -5,30 +5,35 @@
  *
  *      카드 형식      `parsePoolDoc`            — 정본 문서를 읽는 바로 그 파서 (렌더 → 다시 읽기)
  *      seed          `verifySeedCard`           — `persona-cohort-run --step=seed` 가 쓰는 검증
- *      14축 · 층     `candidateOf` → `personaTiers` — D100 계기판이 쓰는 3계층 카드 층
+ *      계약 축       `candidateOf` → `contractAxes` — 운영 4상태 판정(`persona-reserve`)과 **같은 함수**
  *      실회원        `judgeRealMember`          — 모든 경로의 단일 판정
  *      글 자격       `cardToPersona` → `hardFilter` — 배정 판정(`judgeAutoAssignment`)의 정적 축
  *      댓글 자격     `judgePlannerPersona`      — 댓글 분산 planner 의 Persona 쪽 판정
  *      말투 근거     `planBundles` · `referenceSeedShareCount` — 고정 배정과 같은 규칙
+ *      다른 사람인가 `judgeDistinctness`(성격·관점·noGo·생활사) · `judgeVoiceSeparation`(문체 거리)
  *
  * 🔴 DB · 네트워크 · LLM 없음. 정본 말투 자산(로컬 파일)만 읽는다 — `voicePoolFor`.
  */
+import { noGoExpressionKey } from '../../src/lib/persona-no-go'
 import { createHash } from 'node:crypto'
 
 import { cardToPersona, parsePoolDoc, type PoolCard } from '../../src/lib/persona-pool-card'
 import { verifySeedCard } from '../../src/lib/persona-card-verify'
-import { personaTiers, VOICE_MIN_COMMENTS } from '../../src/lib/d100-persona-scale'
+import { VOICE_MIN_COMMENTS } from '../../src/lib/d100-persona-scale'
+import { contractAxes, type ContractAxis } from '../../src/lib/persona-reserve'
 import { judgeRealMember } from '../../src/lib/real-member-gate'
 import { hardFilter, readLengthBand, readPostRequirements } from '../../src/lib/original-post-persona-match'
 import { judgePlannerPersona, type PlannerPersona, type PlannerPost } from '../../src/lib/persona-comment-planner'
 import { COMMENT_REACTION_ROLES } from '../../src/lib/persona-reaction-roles'
-import { judgeReferenceBundle, type VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
+import {
+  judgeVoiceEvidence, judgeVoiceSeparation, type VoiceReferenceBundle,
+} from '../../src/lib/persona-voice-reference'
 import { PRODUCTION_PERSONA_CODES } from '../../src/lib/persona-cohort'
 import { isPoolCode } from '../../src/lib/persona-card-verify'
 import {
-  AUTOGEN_CODE_FIRST, AUTOGEN_FORBIDDEN_ROLES, isNameOnly, lifeProblems, renderPoolCardBlock,
-  seedFromCard, voiceCoreFromBundle,
-  type AutogenBlockCode, type AutogenCandidate,
+  AUTOGEN_CODE_FIRST, AUTOGEN_FORBIDDEN_ROLES, distinctSubjectOfCard, isNameOnly, judgeDistinctness,
+  lifeProblems, renderPoolCardBlock, seedFromCard, voiceCoreFromBundle,
+  type AutogenBlockCode, type AutogenCandidate, type DistinctSubject,
 } from '../../src/lib/persona-autogen'
 import { candidateOf } from './d100-persona-tiers.mjs'
 import {
@@ -64,10 +69,12 @@ const NEUTRAL_POST: PlannerPost = {
  * 🔴 **한 후보를 운영 검증기에 통과시킨다.** 막힌 이유를 전부 모은다 — 첫 이유에서 멈추지 않는다
  *    (무엇을 채우면 서는지 한 번에 보여야 한다).
  *
- * 🔴 판정에서 **빼는 것** — 둘 다 "아직 켜지 않은 사람" 이라 당연히 붙는 상태다.
- *      `dormant`  활동 기록이 없으면 휴면이다(운영 어댑터 규칙) — 새 후보는 늘 그렇다
- *      `retired`  status≠active — 새 후보는 draft 로 만들어진다
- *    `qualificationConflict` 는 운영에서도 재지 않는 축이라(`null`) 운영 계기판과 같게 뺀다.
+ * 🔴 **계약 판정은 운영 4상태와 같은 함수다** (2026-09-30, `contractAxes`).
+ *    옛 판은 여기서 `candidateOf({ status: 'active', daysSinceActive: 0 })` 로 휴면·퇴역을
+ *    **거짓 입력으로** 지우고 `qualificationConflict` 를 뺀 별도 기준을 썼다 — 운영 계기판과
+ *    다른 답을 내는 두 번째 정본이었다. 이제 휴면·퇴역은 계약 밖(`CONTRACT_EXCLUDED_CODES`)이고,
+ *    자격 충돌은 이 후보의 seed 검증 · 실회원 · Gate ⑥-B · seedComplete 로 **잰다**.
+ *    이력은 "새 사람 = 이력 0" 이 사실이므로 측정한 0 으로 넘긴다.
  */
 export function judgeAutogenCandidate(
   c: AutogenCandidate,
@@ -105,16 +112,18 @@ export function judgeAutogenCandidate(
   let voiceCore: ReturnType<typeof voiceCoreFromBundle> | null = null
   if (c.voice === null) add('NO_VOICE_EVIDENCE', '배정되지 않은 정본 화자 묶음이 없다')
   else {
+    // 🔴 말투 근거 판정은 `judgeVoiceEvidence` 하나다 — 관측 총수(style-only 포함) · 안전 원문 수
     const texts = c.voice.bundle.comments.map((x) => x.text)
-    const ref = judgeReferenceBundle({ personaCode: c.code, texts, anchorCount: c.voice.bundle.anchorCount })
-    if (!ref.ok) add('VOICE_EVIDENCE_THIN', ref.blocks.map((b) => b.code).join('·'))
-    else if (texts.length < VOICE_MIN_COMMENTS || c.voice.bundle.anchorRatio < 1) {
-      add('VOICE_EVIDENCE_THIN', `한 화자 댓글 ${texts.length}건 · anchor 비율 ${c.voice.bundle.anchorRatio}`)
+    const ev = judgeVoiceEvidence({ observed: c.voice.bundle.observedCount, safeTexts: new Set(texts).size })
+    if (!ev.ok) add('VOICE_EVIDENCE_THIN', ev.reason)
+    else if (c.voice.bundle.observedCount < VOICE_MIN_COMMENTS || c.voice.bundle.anchorRatio < 1) {
+      add('VOICE_EVIDENCE_THIN', `한 화자 관측 ${c.voice.bundle.observedCount}건 · anchor 비율 ${c.voice.bundle.anchorRatio}`)
     }
     if (c.voice.seedShareCount === null) add('VOICE_SPEAKER_DUPLICATE', '묶음 공유 수를 세지 못했다')
     else if (c.voice.seedShareCount > 1) add('VOICE_SPEAKER_DUPLICATE', `같은 댓글이 ${c.voice.seedShareCount}개 묶음에 있다`)
     voiceCore = voiceCoreFromBundle(c.voice.bundle)
-    voiceTokens = [voiceCore.length, voiceCore.register, `"${voiceCore.ending}" 기본`, `이모티콘 ${voiceCore.emoji}`]
+    // 🔴 따옴표 말끝 토큰을 만들지 않는다 — 관측에서 고정 말끝을 합성하지 않는다(Phase F 보정)
+    voiceTokens = [voiceCore.length, voiceCore.register, `이모티콘 ${voiceCore.emoji}`]
     if (readLengthBand(voiceCore.length) === null) add('VOICE_LENGTH_UNREADABLE', voiceCore.length)
   }
 
@@ -136,7 +145,6 @@ export function judgeAutogenCandidate(
   } else {
     if (c.creative.personality.length === 0) add('LIFE_AXIS_MISSING', 'personality')
     if (c.creative.noGoTopics.length === 0) add('LIFE_AXIS_MISSING', 'noGoTopics')
-    if (c.creative.noGoExpressions.length === 0) add('LIFE_AXIS_MISSING', 'noGoExpressions')
   }
 
   // ── ⑦ 카드 → 운영 파서 → seed → 운영 검증기 ──
@@ -161,22 +169,37 @@ export function judgeAutogenCandidate(
   const seedProblems = verifySeedCard(c.code, seed, card)
   if (seedProblems.length > 0) add('SEED_INVALID', seedProblems.join(' / '))
 
-  // ── ⑧ 14축 — D100 계기판의 카드 층 ──
+  // ── ⑧ 계약 축 — 🔴 운영 4상태(`judgePersonaReserve`)와 같은 `contractAxes` ──
   const idn = seed.identity as Record<string, unknown>
-  const tiers = personaTiers(candidateOf({
-    code: c.code, status: 'active', identity: idn,
+  const cand = candidateOf({
+    code: c.code, status: 'draft', identity: idn,
     ageBand: card.ageBand, region: card.region,
     noGoTopics: card.noGoTopics, noGoExpressions: card.noGoExpressions,
-    activityToday: 0, daysSinceActive: 0,
+    activityToday: 0, daysSinceActive: null,
     voiceComments: c.voice?.bundle.comments.length ?? 0,
-  }))
-  for (const b of tiers.card.blocked) {
-    if (b === 'lifeAxisMissing') add('LIFE_AXIS_MISSING', '14축 중 빈 축이 있다 (카드 층)')
-    else if (b === 'noAgeBand') add('NO_AGE_BAND', '카드 층')
-    else if (b === 'voiceEvidenceThin') add('VOICE_EVIDENCE_THIN', '카드 층')
-    // 🔴 dormant·retired 는 입력에서 이미 "활성·오늘 활동" 으로 두었다 — 여기 오면 규칙이 바뀐 것이다
-    else add('SEED_INVALID', `카드 층 ${b}`)
+  })
+  const contract = contractAxes({
+    code: c.code,
+    card: { filledAxes: cand.filledAxes, ageBand: cand.ageBand, voiceComments: cand.voiceComments },
+    qualification: {
+      seedProblems,
+      realMember: { accountCount: c.binding.accountCount, providerId: c.binding.providerId },
+      nameGate: c.displayName?.gate ?? null,
+      seedComplete: seedComplete(seed),
+    },
+    // 🔴 아직 없는 사람 — 글·댓글 0 이 사실이다(측정한 0). 쏠림 0 · 짝 never · cadence 근거 없음
+    history: {
+      recentEvents: 0, roleCounts: {}, unresolvedRoleEvents: 0, consecutiveExposures: 0,
+      postsSinceLastPairing: 'never', daysSinceActive: null, activityToday: 0,
+    },
+  })
+  const CODE_OF_AXIS: Readonly<Record<ContractAxis, AutogenBlockCode>> = {
+    lifeAxes: 'LIFE_AXIS_MISSING', ageBand: 'NO_AGE_BAND', voiceEvidence: 'VOICE_EVIDENCE_THIN',
+    qualificationConflict: 'QUALIFICATION_CONFLICT',
+    consecutiveExposures: 'CONTRACT_INVALID', postsSinceLastPairing: 'CONTRACT_INVALID',
   }
+  for (const [axis, d] of Object.entries(contract.blocked) as [ContractAxis, string][]) add(CODE_OF_AXIS[axis], `계약 ${axis}: ${d}`)
+  for (const [axis, d] of Object.entries(contract.unknown) as [ContractAxis, string][]) add(CODE_OF_AXIS[axis], `계약 ${axis} 모름: ${d}`)
 
   // ── ⑨ 글 자격 — 배정 판정의 정적 축 (요구가 없는 글) ──
   const forMatch = { ...cardToPersona(card), accountCount: c.binding.accountCount ?? null, providerId: c.binding.providerId }
@@ -190,15 +213,16 @@ export function judgeAutogenCandidate(
     code: c.code, status: 'active',
     realMember: { accountCount: c.binding.accountCount, providerId: c.binding.providerId },
     // 🔴 운영 materializer 와 같은 뜻 — identity · voiceCore · lifeStage 가 모두 있는가
-    seedComplete: seed.identity !== undefined && seed.voiceCore !== undefined
-      && String(seed.lifeStage ?? '').trim() !== '',
+    seedComplete: seedComplete(seed),
     forbiddenReactionRoles: card.forbiddenReactionRoles,
     recentComments: 0,
+    // 🔴 아직 없는 사람 — 측정한 이력 0 이다(모름이 아니다)
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     life: {
       ageBand: pm.ageBand, maritalStatus: pm.maritalStatus, childrenCount: pm.childrenCount,
       childrenAgeBands: pm.childrenAgeBands, parentCare: pm.parentCare, menopauseStatus: pm.menopauseStatus,
       workStatus: pm.workStatus, economicStatus: pm.economicStatus, region: pm.region,
-      noGoTopics: pm.noGoTopics, voiceLength: pm.voiceLength,
+      noGoTopics: pm.noGoTopics, noGoExpressions: pm.noGoExpressions, voiceLength: pm.voiceLength,
     },
   }
   const roleOk = COMMENT_REACTION_ROLES.some((role) => judgePlannerPersona(planner, NEUTRAL_POST, role).length === 0)
@@ -208,6 +232,10 @@ export function judgeAutogenCandidate(
   const status = blocks.size === 0 ? 'valid' : 'quarantined'
   return out(status, { postEligible, commentEligible, cardMarkdown, seed, card })
 }
+
+/** 🔴 운영 materializer 와 같은 뜻 — identity · voiceCore · lifeStage 가 모두 있는가 */
+const seedComplete = (seed: Record<string, unknown>): boolean =>
+  seed.identity !== undefined && seed.voiceCore !== undefined && String(seed.lifeStage ?? '').trim() !== ''
 
 /** 🔴 렌더 입력과 파서 결과가 같은 사람인가 — 칸 이름만 돌려준다 */
 function roundTripDrift(c: AutogenCandidate, card: PoolCard): string[] {
@@ -230,7 +258,8 @@ function roundTripDrift(c: AutogenCandidate, card: PoolCard): string[] {
   if (card.parentCare !== l.parentCare) out.push('parentCare')
   if (!same(card.personality, cr.personality)) out.push('personality')
   if (!same(card.noGoTopics, cr.noGoTopics)) out.push('noGoTopics')
-  if (!same(card.noGoExpressions, cr.noGoExpressions)) out.push('noGoExpressions')
+  // 🔴 말버릇은 표기(따옴표 · `류`)가 아니라 열쇠로 대조한다 — `persona-no-go` 하나
+  if (!same(card.noGoExpressions.map(noGoExpressionKey), cr.noGoExpressions.map(noGoExpressionKey))) out.push('noGoExpressions')
   if (card.variationCount !== cr.variations.length) out.push('variations')
   return out
 }
@@ -268,6 +297,8 @@ export type VoicePool = {
   byCode: Map<string, { bundle: VoiceReferenceBundle; seedShareCount: number | null }>
   /** 🔴 확장 배정이 운영 고정 배정을 바꿨는가 — 바꾸면 전부 막는다 */
   drift: string[]
+  /** 🔴 운영 고정 배정 묶음 — 새 후보의 문체 거리를 잴 기준(`judgeAutogenBatch`) */
+  productionBundles: VoiceReferenceBundle[]
 }
 
 /**
@@ -283,7 +314,7 @@ export function voicePoolFor(input: { repoRoot: string; newCodes: readonly strin
   const canon = loadCanonAsset()
   const empty: VoicePool = {
     ok: false, code: canon.code, eligibleSpeakers: 0, assignedSpeakers: 0,
-    productionWithoutVoice: [], byCode: new Map(), drift: [],
+    productionWithoutVoice: [], byCode: new Map(), drift: [], productionBundles: [],
   }
   if (!canon.ok || canon.rows.length === 0) return empty
   const base = stableAssignment({ repoRoot: input.repoRoot })
@@ -310,5 +341,74 @@ export function voicePoolFor(input: { repoRoot: string; newCodes: readonly strin
     productionWithoutVoice: PRODUCTION_PERSONA_CODES.filter((c) => !base.byCode.has(c)),
     byCode,
     drift,
+    productionBundles: PRODUCTION_PERSONA_CODES.map((c) => base.byCode.get(c))
+      .filter((b): b is VoiceReferenceBundle => b !== undefined),
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// 배치 — 🔴 이름만 다른 사람을 만들지 않는다 (2026-09-30)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **후보 전원을 판정하고, 서로·정본 카드와 겹치는 후보를 격리한다.**
+ *
+ *    ① 한 명씩 `judgeAutogenCandidate` (운영 검증기 · 4상태 계약 축)
+ *    ② 성격·관점·noGo·생활사 겹침 — `judgeDistinctness` (정본 카드 + **앞선 코드의** 후보)
+ *    ③ 문체 거리 — `judgeVoiceSeparation`. 기준은 **운영 고정 배정 묶음끼리의 최소 거리**다:
+ *       운영 Persona 들이 서로 떨어진 것보다 더 가까우면 "이미 있는 누구와 같은 말투" 다.
+ *       새 임계값을 지어내지 않는다 — 운영에서 실제로 쓰는 분리도를 넘지 못하면 막는다.
+ *       기준을 못 재면(운영 묶음 2개 미만) 모른다 → 격리.
+ *
+ * 🔴 먼저 선 후보는 남고 뒤 코드가 격리된다 — 같은 입력이면 언제나 같은 쪽이 남는다.
+ */
+export function judgeAutogenBatch(
+  cands: readonly AutogenCandidate[],
+  ctx: { takenCodes: ReadonlySet<string>; existingCards: readonly PoolCard[]; productionBundles: readonly VoiceReferenceBundle[] },
+): { verdicts: AutogenVerdict[]; voiceBaseline: number | null } {
+  const sorted = [...cands].sort((a, b) => a.code.localeCompare(b.code))
+  const verdicts = sorted.map((c) => judgeAutogenCandidate(c, { takenCodes: ctx.takenCodes }))
+  const demote = (v: AutogenVerdict, b: AutogenBlockCode, d: string): void => {
+    if (!v.blocks.includes(b)) v.blocks.push(b)
+    v.details.push(`${b}: ${d}`)
+    if (v.status === 'valid') v.status = 'quarantined'
+  }
+
+  // ── ② 성격·관점·noGo·생활사 ──
+  const peers: DistinctSubject[] = ctx.existingCards.map(distinctSubjectOfCard)
+  sorted.forEach((c, i) => {
+    const v = verdicts[i]!
+    if (v.status === 'rejected' || c.life === null || c.creative === null) return
+    const me: DistinctSubject = {
+      code: c.code, title: c.creative.title, personality: c.creative.personality,
+      noGoTopics: c.creative.noGoTopics, noGoExpressions: c.creative.noGoExpressions,
+      life: c.life,
+    }
+    for (const hit of judgeDistinctness(me, peers)) demote(v, 'NEAR_DUPLICATE_PERSONA', hit)
+    peers.push(me)
+  })
+
+  // ── ③ 문체 거리 ──
+  const base = judgeVoiceSeparation(ctx.productionBundles)
+  const voiceBaseline = ctx.productionBundles.length >= 2 ? base.minDistance : null
+  const withVoice = sorted
+    .map((c, i) => ({ c, v: verdicts[i]! }))
+    .filter((x) => x.v.status !== 'rejected' && x.c.voice !== null)
+  withVoice.forEach((x, i) => {
+    if (voiceBaseline === null) {
+      demote(x.v, 'VOICE_SEPARATION_UNMEASURED', `운영 묶음 ${ctx.productionBundles.length}개 — 분리 기준을 재지 못했다`)
+      return
+    }
+    // 🔴 정본 운영 묶음 + 앞선 후보만 상대로 본다(뒤 코드가 격리된다)
+    const mine = { ...x.c.voice!.bundle, personaCode: x.c.code }
+    const others = [...ctx.productionBundles, ...withVoice.slice(0, i).map((y) => ({ ...y.c.voice!.bundle, personaCode: y.c.code }))]
+    const sep = judgeVoiceSeparation([mine, ...others])
+    const near = sep.perBundle.find((p) => p.personaCode === x.c.code)
+    if (near !== undefined && near.distance < voiceBaseline) {
+      demote(x.v, 'VOICE_TOO_CLOSE',
+        `${near.nearest} 와 문체 거리 ${near.distance.toFixed(3)} < 운영 최소 분리 ${voiceBaseline.toFixed(3)}`)
+    }
+  })
+
+  return { verdicts, voiceBaseline }
 }

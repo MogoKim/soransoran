@@ -21,7 +21,7 @@ import { ANCHOR_BASE_DATE, checkLifeConsistency, exactAgeOn, bandOfAge } from '.
 import { coverageOf, gainOf, THIN_THRESHOLD, type AxisSubject } from './persona-axis-coverage'
 import { MARITAL_VALUES } from './persona-card-verify'
 import type { PoolCard } from './persona-pool-card'
-import { styleCentroid, type VoiceReferenceBundle } from './persona-voice-reference'
+import type { VoiceReferenceBundle } from './persona-voice-reference'
 
 // ─────────────────────────────────────────────────────────
 // 코드 · 판정 코드
@@ -55,6 +55,10 @@ export const AUTOGEN_BLOCK_CODES = [
   'LLM_STEP_UNIMPLEMENTED',
   'CARD_PARSE_FAILED', 'SEED_INVALID',
   'POST_INELIGIBLE', 'COMMENT_INELIGIBLE',
+  // 🔴 4상태 계약(`persona-reserve` `contractAxes`) — 운영 계기판과 같은 판정이 막은 것
+  'QUALIFICATION_CONFLICT', 'CONTRACT_INVALID',
+  // 🔴 이름만 다른 사람 — 후보·정본 카드와 성격·관점·noGo·말투가 겹친다
+  'NEAR_DUPLICATE_PERSONA', 'VOICE_TOO_CLOSE', 'VOICE_SEPARATION_UNMEASURED',
 ] as const
 export type AutogenBlockCode = (typeof AUTOGEN_BLOCK_CODES)[number]
 
@@ -385,23 +389,25 @@ export const AUTOGEN_FORBIDDEN_ROLES: readonly string[] = ['advice', 'caution', 
  *    length   묶음 중앙 길이 — ≤25자 `짧은 문장` · ≤70자 `중간 길이` · 그 위 `길게`
  *             (🔴 `readLengthBand` 가 읽는 표현만 쓴다)
  *    register `요` 로 끝나는 비율 ≥ 0.5 → `존댓말`, 아니면 `구어체`
- *    ending   같은 비율로 `~요` / `말끝 짧게`
+ *    ending   🔴 **만들지 않는다**(Phase F 보정) — 고정 말끝은 카드가 따옴표로 명시할 때만 존재한다.
+ *             관측 비율에서 `~요` · `말끝 짧게` 를 합성하던 옛 경로를 지웠다(새 근거 생성 금지)
  *    emoji    자모 웃음·꾸밈 비율 > 0.3 → `가끔`, 아니면 `없음`
  */
 export const VOICE_LENGTH_SHORT_MAX = 25
 export const VOICE_LENGTH_MEDIUM_MAX = 70
 
-export function voiceCoreFromBundle(b: VoiceReferenceBundle): {
-  length: string; register: string; ending: string; emoji: string
-} {
-  const c = styleCentroid(b.comments.map((x) => x.text))
+/** 🔴 seed 의 voiceCore — `ending` 은 **선택형**이다. 카드가 명시한 말끝이 있을 때만 들어간다 */
+export type SeedVoiceCore = { length: string; register: string; ending?: string; emoji: string }
+
+export function voiceCoreFromBundle(b: VoiceReferenceBundle): SeedVoiceCore {
+  // 🔴 묶음의 문체 좌표 — style-only 관측까지 반영한 관찰값이다(원문은 안전 댓글뿐)
+  const c = b.style
   const med = b.lengths.median
   const length = med <= VOICE_LENGTH_SHORT_MAX ? '짧은 문장' : med <= VOICE_LENGTH_MEDIUM_MAX ? '중간 길이' : '길게'
   const polite = c.yo >= 0.5
   return {
     length,
     register: polite ? '존댓말' : '구어체',
-    ending: polite ? '~요' : '말끝 짧게',
     emoji: c.jamo + c.deco > 0.3 ? '가끔' : '없음',
   }
 }
@@ -468,7 +474,7 @@ export function renderPoolCardBlock(input: {
 export function seedFromCard(input: {
   card: PoolCard
   life: LifeSkeleton
-  voiceCore: { length: string; register: string; ending: string; emoji: string }
+  voiceCore: SeedVoiceCore
   variations: readonly string[]
   cadence: Cadence
 }): Record<string, unknown> {
@@ -511,4 +517,83 @@ export function isNameOnly(c: AutogenCandidate): boolean {
     || (c.creative.personality.length === 0 && c.creative.noGoTopics.length === 0
       && c.creative.noGoExpressions.length === 0)
   return c.life === null && c.voice === null && creativeEmpty
+}
+
+// ─────────────────────────────────────────────────────────
+// 이름만 다른 사람 — 🔴 성격 · 관점 · noGo · 생활사 겹침 (2026-09-30)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **비교 대상 한 사람** — 정본 카드도, 이번 배치의 후보도 같은 모양으로 본다.
+ *    `title` 은 카드 제목 = 이 사람이 세상을 보는 **관점** 한 줄이다(예: "시어머니 모시는 맏며느리").
+ */
+export type DistinctSubject = {
+  code: string
+  title: string
+  personality: readonly string[]
+  noGoTopics: readonly string[]
+  noGoExpressions: readonly string[]
+  life: {
+    ageBand: string; maritalStatus: string; childrenAgeBands: readonly string[]
+    workStatus: string; economicStatus: string; housing: string; parentCare: string
+  }
+}
+
+/**
+ * 🔴 **겹침 상한** — 성격어(또는 noGo) 집합이 **절반을 넘게** 같으면 같은 성격이다.
+ *    역할 쏠림 상한(`ROLE_SHARE_CAP` 0.5)과 같은 뜻: 절반을 넘으면 "그 사람만의 것" 이 아니다.
+ */
+export const DISTINCT_OVERLAP_MAX = 0.5
+/** 🔴 생활사 7칸 중 이 수 이하만 다르면 생활사가 "거의 같다" — 한 칸 차이 */
+export const LIFE_NEAR_DIFF_MAX = 1
+
+const norm = (s: string): string => s.replace(/["'“”‘’\s·,.()~]/g, '').replace(/류$/, '')
+const jaccard = (a: readonly string[], b: readonly string[]): number => {
+  const A = new Set(a.map(norm).filter((x) => x !== ''))
+  const B = new Set(b.map(norm).filter((x) => x !== ''))
+  if (A.size === 0 && B.size === 0) return 0
+  let inter = 0
+  for (const x of A) if (B.has(x)) inter += 1
+  return inter / (A.size + B.size - inter)
+}
+const lifeDiff = (a: DistinctSubject['life'], b: DistinctSubject['life']): number => [
+  a.ageBand !== b.ageBand, a.maritalStatus !== b.maritalStatus,
+  a.childrenAgeBands.join('/') !== b.childrenAgeBands.join('/'), a.workStatus !== b.workStatus,
+  a.economicStatus !== b.economicStatus, a.housing !== b.housing, a.parentCare !== b.parentCare,
+].filter(Boolean).length
+
+export const distinctSubjectOfCard = (c: PoolCard): DistinctSubject => ({
+  code: c.code, title: c.title, personality: c.personality,
+  noGoTopics: c.noGoTopics, noGoExpressions: c.noGoExpressions,
+  life: {
+    ageBand: c.ageBand, maritalStatus: c.maritalStatus, childrenAgeBands: c.childrenAgeBands,
+    workStatus: c.workStatus, economicStatus: c.economicStatus, housing: c.housing, parentCare: c.parentCare,
+  },
+})
+
+/**
+ * 🔴 **이 후보가 누군가와 이름만 다른 사람인가** — 겹친 상대마다 한 줄. 비어 있으면 다른 사람이다.
+ *
+ *    관점     제목이 (기호를 뺀 뒤) 같다                          → 같은 관점의 사람
+ *    복제     성격 집합과 noGo 집합이 **둘 다** 상한을 넘게 겹친다  → 생활사가 달라도 같은 사람
+ *    근접     생활사가 한 칸 이하로 다르고 성격 또는 noGo 가 상한을 넘게 겹친다
+ *
+ * 🔴 **생활사 한 칸 차이만으로는 막지 않는다.** 같은 또래 여성은 생활사가 많이 겹치는 것이
+ *    자연스럽다 — 사람을 가르는 것은 성격·관점·금기·말투다. 그것까지 겹칠 때만 막는다.
+ */
+export function judgeDistinctness(c: DistinctSubject, peers: readonly DistinctSubject[]): string[] {
+  const out: string[] = []
+  for (const p of peers) {
+    if (p.code === c.code) continue
+    const pers = jaccard(c.personality, p.personality)
+    const nogo = jaccard([...c.noGoTopics, ...c.noGoExpressions], [...p.noGoTopics, ...p.noGoExpressions])
+    const diff = lifeDiff(c.life, p.life)
+    if (norm(c.title) !== '' && norm(c.title) === norm(p.title)) out.push(`${p.code}: 관점(제목)이 같다`)
+    else if (pers > DISTINCT_OVERLAP_MAX && nogo > DISTINCT_OVERLAP_MAX) {
+      out.push(`${p.code}: 성격 ${pers.toFixed(2)} · noGo ${nogo.toFixed(2)} 겹침 — 생활사만 다른 같은 사람`)
+    } else if (diff <= LIFE_NEAR_DIFF_MAX && (pers > DISTINCT_OVERLAP_MAX || nogo > DISTINCT_OVERLAP_MAX)) {
+      out.push(`${p.code}: 생활사 ${diff}칸 차이 · 성격 ${pers.toFixed(2)} · noGo ${nogo.toFixed(2)}`)
+    }
+  }
+  return out
 }

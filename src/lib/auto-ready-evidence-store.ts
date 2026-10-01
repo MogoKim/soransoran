@@ -44,7 +44,7 @@ export const EVIDENCE_ROW_SELECT = {
   matchedPersona: { select: { code: true } },
   draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
   gateVerdict: true, gateResults: true, editDiff: true, declineReason: true, promptVersion: true, model: true,
-  rawContent: { select: { sourceSite: true, sourceArticleId: true, sourceCapturedAt: true } },
+  rawContent: { select: { sourceSite: true, sourceArticleId: true } },
 } as const satisfies Prisma.OriginalPostApprovalQueueSelect
 
 export type EvidenceRow = Prisma.OriginalPostApprovalQueueGetPayload<{ select: typeof EVIDENCE_ROW_SELECT }>
@@ -53,7 +53,7 @@ export const decidedRowOf = (r: EvidenceRow): DecidedRow => ({
   id: r.id, decidedBy: r.decidedBy, draftTitle: r.draftTitle, draftBody: r.draftBody,
   gateVerdict: r.gateVerdict, gateResults: r.gateResults, editDiff: r.editDiff,
   declineReason: r.declineReason, rawSourceSite: r.rawContent.sourceSite,
-  rawSourceArticleId: r.rawContent.sourceArticleId, sourceCapturedAt: r.rawContent.sourceCapturedAt,
+  rawSourceArticleId: r.rawContent.sourceArticleId,
   matchedPersonaCode: r.matchedPersona?.code ?? null,
 })
 

@@ -21,7 +21,17 @@
  */
 import { RUNTIME_STAGES, SAFEST_STAGE, type RuntimeStage } from './scale-profile'
 
-export const STAGE_DECISION_VERSION = 'stage-decision-v4'
+/**
+ * 🔴 **결정 판 v5 — 원천 기회 → 슬롯 계약(`source-slot-v1`)으로 운영한 결정** (2026-09-30).
+ *    판을 올리는 이유는 행 모양이 아니라 **증거 계약**이다: 그 이전(v4) 결정은 약한 release 계약 아래에서
+ *    나왔고, 그 위의 PASS · 지속 단계 · 이어진 계획은 승급 근거가 될 수 없다(정본: old proof cannot open
+ *    a higher stage after the contract changes). 그래서 v4 행은 **읽기만** 한다 — 검증은 통과하지만
+ *    `sustainedReleaseOf` · `trialPlanOf` 가 바닥(d1)에서 다시 증명하게 만든다(`isLegacyDecision`).
+ */
+export const STAGE_DECISION_VERSION = 'stage-decision-v5'
+/** 🔴 읽기만 하는 옛 판 — 새로 쓰지 않는다 · 근거로 쓰지 않는다 */
+export const LEGACY_STAGE_DECISION_VERSIONS = ['stage-decision-v4'] as const
+export type StageDecisionVersion = typeof STAGE_DECISION_VERSION | (typeof LEGACY_STAGE_DECISION_VERSIONS)[number]
 
 /**
  * 🔴 **결정을 쓰는 주체는 하나다** — 전용 daily controller 뿐이다.
@@ -117,7 +127,8 @@ export type StageDecision = {
   /** 🔴 **필수 키다.** `null` 이거나 완전한 구조다 — `undefined`·키 누락은 거절한다 */
   readonly supply: SupplySignal | null
   readonly decidedAt: string
-  readonly contractVersion: typeof STAGE_DECISION_VERSION
+  /** 🔴 새 결정은 언제나 v5 다 — v4 는 저장된 옛 행을 읽을 때만 나온다 */
+  readonly contractVersion: StageDecisionVersion
   /** 🔴 누가 썼나 — controller 하나뿐이다 */
   readonly decidedBy: string
   /** 🔴 **필수 키다.** `TRIAL`·`SUSTAIN` 이면 구조가 있고, 나머지 상태에서는 `null` */
@@ -166,6 +177,14 @@ export const REQUIRED_KEYS = [
 
 declare const VALIDATED: unique symbol
 export type ValidatedStageDecision = StageDecision & { readonly [VALIDATED]: true }
+
+/**
+ * 🔴 **이 결정이 지금 증거 계약 이전의 것인가** — 그렇다면 그 위의 지속 단계 · 계획 · PASS 를 근거로 쓰지 않는다.
+ *    (행은 유효하다 — 모양은 같다. 쓰지 않는 것은 **그 결정이 증명한 것**이다.)
+ */
+export function isLegacyDecision(d: { contractVersion: string }): boolean {
+  return d.contractVersion !== STAGE_DECISION_VERSION
+}
 
 /** 🔴 ISO 시각의 KST 날짜 — 정본과 같은 경계다 */
 export function kstDateOfIso(iso: string): string | null {
@@ -270,9 +289,12 @@ export function validateStoredDecision(input: {
     if (r[k] === undefined) return no(`필수 키가 undefined 다 — ${k}`)
   }
 
-  if (r.contractVersion !== STAGE_DECISION_VERSION) {
+  const version = r.contractVersion
+  if (version !== STAGE_DECISION_VERSION
+    && !(LEGACY_STAGE_DECISION_VERSIONS as readonly unknown[]).includes(version)) {
     return no(`계약 판 ${String(r.contractVersion)} ≠ ${STAGE_DECISION_VERSION}`)
   }
+  const contractVersion = version as StageDecisionVersion
   if (!isCalendarDate(r.kstDate)) return no(`달력에 없는 날짜다 — ${String(r.kstDate)}`)
   const kstDate = r.kstDate
   if (!isCalendarDate(input.expectKstDate)) {
@@ -381,6 +403,12 @@ export function validateStoredDecision(input: {
       ...(basis === undefined ? {} : { basis }),
     }
   } else if (state === 'SUSTAIN') {
+    /**
+     * 🔴 **v5 는 SUSTAIN 을 쓰지 않는다** (2026-09-30 · source-slot-v1). 지속 단계는 전날 TRIAL 결정 + 그 증거
+     *    PASS 에서만 나온다(`sustainedReleaseOf`) — 날짜 · 연속 일수로 올리는 승격 경로(`judgePromotion`)를 지웠다.
+     *    옛 v4 행은 읽되 `isLegacyDecision` 이 지속 d1 · 시험 계획 FLOOR 로 다룬다.
+     */
+    if (contractVersion === STAGE_DECISION_VERSION) return no('v5 결정은 SUSTAIN 을 쓰지 않는다 — 지속 승격 경로를 지웠다')
     if (!isRec(t) || t.kind !== 'SUSTAIN') return no('SUSTAIN 인데 구조화된 승격 근거가 없다')
     if (!isStage(t.from)) return no(`승격 출발이 정본이 아니다 — ${String(t.from)}`)
     if (t.to !== release) return no(`승격 도착 ${String(t.to)} ≠ 공개 ${release}`)
@@ -416,7 +444,7 @@ export function validateStoredDecision(input: {
   /** 🔴 **검증한 값만으로 새로 만든다.** 입력과 참조를 공유하지 않는다 */
   const decision: StageDecision = {
     kstDate, capacity, release, state, reasons, blocks, dayPinned, supply,
-    decidedAt, contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER, transition,
+    decidedAt, contractVersion, decidedBy: DECISION_WRITER, transition,
   }
   return { ok: true, decision: deepFreeze(decision) as ValidatedStageDecision }
 }

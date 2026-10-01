@@ -57,7 +57,7 @@ const D = qualityContractDigest()
 const INDEPENDENT = createHash('sha256').update(stableJson(qualityContractComponents()), 'utf8').digest('hex')
 check('digest 는 sha256 hex 64', /^[0-9a-f]{64}$/.test(D))
 check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 digest 는 코드 상수 그대로 (독립 재계산과 같다)**',
-  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v4', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
+  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v6', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
 const comps = qualityContractComponents()
 check('🔴 digest 구성 — 게이트·검수·판정 판이 들어 있다',
   ['version', 'pipelineVersion', 'promptVersion', 'reviewVersion', 'draftRuleVersion', 'draftGateVersion', 'draftGateCodes', 'judgeContractDigest', 'semanticHoldCodes']
@@ -94,7 +94,7 @@ const forgedEnv = af.buildQueuePayload({ envelope: { ...mEnv, qualityContractDig
 check('🔴 🔴 **#9 봉투 digest 가 다르면(호출자 주입) payload 없음**', forgedEnv === null)
 const noEnvDigest = af.buildQueuePayload({ envelope: { ...mEnv, qualityContractDigest: undefined }, candidate: mc as never, autoJudge: aj, now: 'x' })
 check('🔴 🔴 **#10 봉투에 digest 가 없으면(수정 전 코드가 만든 파일) payload 없음**', noEnvDigest === null)
-const plan = (env: Record<string, unknown>) => af.planRefill({ envelope: env as never, candidates: [mc as never], held: [], existing: new Set(), queue: [], usable: 0 })
+const plan = (env: Record<string, unknown>) => af.planRefill({ envelope: env as never, candidates: [mc as never], held: [], existing: new Set(), queue: [] })
 check('🔴 🔴 **#10 수정 전 파일 → SkipCode CONTRACT (PROFILE 로 뭉개지 않는다)**',
   plan({ ...mEnv, qualityContractDigest: undefined }).skipped[0]?.code === 'CONTRACT')
 check('🔴 🔴 **#9 다른 digest 파일 → SkipCode CONTRACT**', plan({ ...mEnv, qualityContractDigest: FORGED }).skipped[0]?.code === 'CONTRACT')
@@ -114,7 +114,6 @@ console.log('\nB. 🔴 cohort — 지금 계약 · 생성 순서 · 첫 30건 ·
 // ─────────────────────────────────────────────────────────
 const GOOD_SR = { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 }
 const T0 = Date.parse('2026-09-27T00:00:00.000Z')
-const CAP = new Date(T0 - 864e5)
 type Kind = 'noEdit' | 'edited' | 'declined' | 'pending' | 'unreviewed'
 type Rev = { user?: string; hd: 'yes' | 'no' | 'unmeasured'; at?: string }
 let n = 0
@@ -148,7 +147,7 @@ const row = (o: {
     createdAt: new Date(o.at ?? T0 + n * 60_000),
     decidedBy: kind === 'pending' ? 'machine:auto-draft-v5' : 'founder',
     editDiff: records.length === 0 ? null : { [EVIDENCE_REVIEW_KEY]: records },
-    ...bound, gateVerdict: 'PASS', sourceCapturedAt: CAP, machine: o.machine ?? true,
+    ...bound, gateVerdict: 'PASS', machine: o.machine ?? true,
     gateResults: { holds: o.holds ?? [], blocks: [], semanticReview: GOOD_SR, ...qcm },
   }
 }
@@ -265,9 +264,9 @@ console.log('\nC. 🔴 전역 차단 — cohort 판과 무관')
 // ─────────────────────────────────────────────────────────
 {
   const ev = open([...good(27), ...good(3, { kind: 'edited' })])
-  check('대조 — cohort 충족 · 결함 0 · 유실 0 → 열림', judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **#14 cohort 충족이어도 발행 뒤 감사 결함 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 1, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **#14 cohort 충족이어도 글 유실 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 1 }).open)
+  check('대조 — cohort 충족 · 결함 0 · 유실 0 → 열림', judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **#14 cohort 충족이어도 발행 뒤 감사 결함 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 1, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **#14 cohort 충족이어도 글 유실 1 → 닫힘**', !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 1 }).open)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -322,7 +321,7 @@ console.log('\nE. 🔴 배선 — 판정 시점 재검증 · 생성 캐시 key')
   check('🔴 증거는 정본 qualityCohortOf 하나 · 열림 근거는 applyFounderGoldBasis 하나',
     /const cohort = qualityCohortOf\(/.test(ev) && /return applyFounderGoldBasis\(cohort,/.test(ev) && !/return qualityCohortOf\(/.test(ev))
   const gate = repo.split('export async function authoritativeGate(')[1]?.split('export type StampOutcome')[0] ?? ''
-  check('🔴 전역 차단(감사 결함 · 글 유실)은 그대로 게이트에 있다', /confirmedDefectCount\(db\)/.test(gate) && /missingAutoPostCount\(db\)/.test(gate))
+  check('🔴 전역 차단(감사 결함 · 글 유실)은 그대로 게이트에 있다', /unresolvedDefectCount\(db\)/.test(gate) && /missingAutoPostCount\(db\)/.test(gate))
   const coh = readFileSync('src/lib/auto-ready-quality-cohort.ts', 'utf8')
   check('🔴 cohort 는 행마다 isCurrentQualityContract 로 다시 본다(저장된 표식을 믿지 않는다)', /isCurrentQualityContract\(r\.gateResults\)/.test(coh))
   const gen = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf8')

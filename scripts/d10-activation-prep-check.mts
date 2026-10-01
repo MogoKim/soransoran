@@ -3,31 +3,23 @@
  * d10 activation preparation fixture — 🔴 **DB 0 · 네트워크 0 · LLM 0 · 파일 write 0**
  *
  * 일곱 가지를 고정한다.
- *   ① 준비도 시간축   **지평(완전한 KST 운영일 14일)과 다음 발행 슬롯을 분리했는가**
+ *   ① (지움 2026-09-30) 14일 준비도 시간축 — 정본은 다음 단계 preflight 다
  *   ② persona 24명    얇은 축을 **측정해서** 메웠는가 · 닉네임이 정본 두세 글자인가
- *   ③ freshness       시각 미상은 hold 인가 · 상한 복구는 사람에게 가는가 · '설' 오탐이 없는가
+ *   ③ (지움 2026-09-30) freshness TTL — 정본은 `judgeSlotRelease` 다
  *   ④ 수집원 다회      1,147 을 페이지로 쓰지 않는가 · 성공률을 곱하는가 · 보호장치가 있는가
  *   ⑤ d10 dry-run     24명·140건에서 140/140 인가 · 수집 준비도가 **BLOCKED** 인가
- *   ⑥ Gate ⑥-B        salt 를 loadEnvLocal 뒤에 만드는가 · **salt 가 판정을 실제로 바꾸는가**
+ *   ⑥ Gate ⑥-B        세 호출이 같은 판정 · 작가 해시 · salt 없음 · B1/B3 행동 (2026-10-01 · #641)
  *   ⑦ advice/caution  이번 PR 에서 풀지 않았는가 · 다음 작업으로 문서에 남겼는가
  */
 import { existsSync, readFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
   PROFILES, RELEASE_STAGES, SAFEST_STAGE, HORIZON_DAYS, CAPACITY_ENV, RELEASE_ENV,
-  nextSlotAnchor, kstMidnight, horizonStart, safeStageFor, minuteOfDay,
+  nextSlotAnchor, kstMidnight, horizonStart, minuteOfDay,
 } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
-import {
-  simulateStage, simulateAllStages, judgeReadiness, promotionPlan, highestReady, horizonMismatches,
-} from '../src/lib/scale-readiness'
-import {
-  TTL_DAYS, TIMELY_MARKERS, TIMELY_SYLLABLES, classifyTopic, freshnessOf, isAutoPublishable,
-  judgeCandidate, orderForPublish, describeFreshness, timelyMarkersIn, type FreshCandidate,
-} from '../src/lib/supply-freshness'
 import {
   COHORTS, RUNNABLE_COHORTS, CLOSED_COHORTS, TARGET_PERSONA_COUNT, verifyAllCohorts, EXCLUDED_CODES,
 } from '../src/lib/persona-cohort'
@@ -53,14 +45,14 @@ import {
   JOB_LABELS, currentCapacity, preparedCapacity, inventoryMismatches, runsPlannedMulti,
   sourceOfLabel, type ObservedJob,
 } from '../src/lib/collect-inventory'
-import { prepareCandidates, priorityTierOf, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
-import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
+import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { cardToPersona as toPersona } from '../src/lib/persona-pool-card'
 import { PROBE_TIMEOUT_MS } from '../src/lib/collect-guard'
 import { classifyNavigation } from './lib/collect-guard-store.mjs'
 import { findBottlenecks, thin82cookDetailPerDay } from '../src/lib/scale-supply-plan'
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { planBatch, type BatchDraft } from '../src/lib/original-post-persona-match'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -113,192 +105,14 @@ const RUNBOOK = 'docs/operations/2026-09-08-d10-activation-prep.md'
  */
 const N = ['아침에 산책을 다녀왔습니다', '주말에 산책을 다녀왔습니다', '오랜만에 김치를 담갔어요',
   '장 보러 다녀왔어요', '커피 한 잔 마시며 쉬는 중이에요']
-/** 🔴 `capturedAt` 을 들고 다닌다 — 나이는 계획 시점마다 다시 잰다 */
-const CAPTURED = new Date('2026-09-08T00:00:00+09:00')
-const q = (n: number, capturedAt: Date = CAPTURED): QueueCandidate[] => Array.from({ length: n }, (_, i) => ({
+const q = (n: number): QueueCandidate[] => Array.from({ length: n }, (_, i) => ({
   queueId: `q-${String(i).padStart(3, '0')}`, title: `${N[i % N.length]} (${i})`,
   body: `${N[i % N.length]}\n\n있었던 소소한 이야기를 적어 봅니다. ${i}번째 글이에요.`,
   gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
-  voice: null, profile: 'human' as const, capturedAt,
+  voice: null, profile: 'human' as const, gateResults: null,
 }))
 
-// ── ① 준비도 시간축 ──
-console.log('① 준비도 시간축 (지평 ≠ 다음 발행 슬롯)')
-{
-  // 2026-09-08 12:00 KST
-  const noon = new Date('2026-09-08T12:00:00+09:00')
-  const mid = kstMidnight(noon)
-  const tomorrow = mid.getTime() + 864e5
-  check('KST 자정 계산', new Date(mid.getTime() + 9 * 3600e3).toISOString().startsWith('2026-09-08T00:00'))
-
-  /**
-   * ── 다음 발행 슬롯 — 표시용. 단계마다 다르다 ──
-   *
-   * 🔴 **시각을 여기 적지 않는다** (2026-09-12). 옛 판은 `00:05` · `13:25` 를 손으로 박아 두어
-   *    `PROFILES` 의 슬롯을 댓글 운영 창 안으로 옮기자 통째로 깨졌다. 값은 정본에서 파생시킨다.
-   */
-  const firstOf = (p: typeof PROFILES.d1): number => Math.min(...p.slots.map(minuteOfDay))
-  const nextTodayAfter = (p: typeof PROFILES.d1, min: number): number | undefined =>
-    p.slots.map(minuteOfDay).sort((a, b) => a - b).find((m) => m > min)
-  const NOON_MIN = 12 * 60
-  // d1 은 슬롯이 오전 하나뿐이라 정오에는 오늘 몫이 남아 있지 않다 → 내일 첫 슬롯
-  check('🔴 d1 · 정오 → 내일 첫 슬롯',
-    nextSlotAnchor(PROFILES.d1, { now: noon, publishedToday: 0 }).getTime()
-    === tomorrow + firstOf(PROFILES.d1) * 60_000)
-  check('🔴 d10 · 오늘 상한을 다 채우면 → 내일 첫 슬롯',
-    nextSlotAnchor(PROFILES.d10, { now: noon, publishedToday: 10 }).getTime()
-    === tomorrow + firstOf(PROFILES.d10) * 60_000)
-  check('🔴 d10 · 오늘 여력이 남으면 → 오늘 남은 첫 슬롯', (() => {
-    const want = nextTodayAfter(PROFILES.d10, NOON_MIN)
-    return want !== undefined
-      && nextSlotAnchor(PROFILES.d10, { now: noon, publishedToday: 3 }).getTime()
-        === mid.getTime() + want * 60_000
-  })())
-
-  /**
-   * 🔴 **지평은 슬롯이 아니다.** 여기가 이번 수정의 핵심이다.
-   *    지평 시작점을 다음 슬롯으로 잡으면 오늘 이미 낸 몫 위에 그 단계의 하루 상한이
-   *    통째로 다시 얹힌다 — d10 에서 오늘 3건을 내고도 오늘 10건을 더 셀 수 있게 된다.
-   */
-  check('🔴 지평은 다음 KST 운영일 0시다', horizonStart(noon).getTime() === tomorrow)
-  check('🔴 지평은 단계를 모른다 — 인자가 now 하나다',
-    horizonStart(noon).getTime() === horizonStart(new Date('2026-09-08T23:59:00+09:00')).getTime())
-  check('🔴 지평 시작점은 언제나 now 보다 뒤다', horizonStart(noon).getTime() > noon.getTime())
-  check('🔴 오늘(조각 하루)은 지평에 들어가지 않는다', horizonStart(noon).getTime() >= tomorrow)
-
-  const pool = parsePoolDoc(read(POOL_DOC))
-  const personas = pool.cards.filter((c) => c.voiceLength !== null).map(cardToPersona)
-
-  const d10open = simulateStage({ stage: 'd10', queue: q(140), personas, axis: { now: noon, publishedToday: 3 } })
-  const d10done = simulateStage({ stage: 'd10', queue: q(140), personas, axis: { now: noon, publishedToday: 10 } })
-  const d1noon = simulateStage({ stage: 'd1', queue: q(14), personas, axis: { now: noon, publishedToday: 1 } })
-
-  check('🔴 두 값이 분리돼 있다 — 지평 ≠ 다음 슬롯',
-    d10open.horizonStartAt.getTime() !== d10open.nextSlotAt.getTime())
-  check('🔴 오늘 여력이 남았을 때 그 차이가 실제로 벌어진다', (() => {
-    const want = nextTodayAfter(PROFILES.d10, NOON_MIN)
-    return want !== undefined
-      && d10open.nextSlotAt.getTime() === mid.getTime() + want * 60_000
-      && d10open.horizonStartAt.getTime() === tomorrow
-  })())
-  check('🔴 오늘 발행 수는 **다음 슬롯만** 바꾼다',
-    d10open.nextSlotAt.getTime() !== d10done.nextSlotAt.getTime()
-    && d10open.horizonStartAt.getTime() === d10done.horizonStartAt.getTime())
-  /**
-   * 🔴 **오늘 3건을 낸 뒤에도 첫날에 10건을 다시 계산하지 않는다.**
-   *    지평이 내일부터이므로 오늘 낸 몫은 지평 밖이다 — 더할 것도 뺄 것도 없다.
-   *    같은 큐·같은 인원이면 오늘 3건이든 10건이든 준비도는 같아야 한다.
-   */
-  check('🔴 오늘 낸 몫이 준비도를 흔들지 않는다',
-    d10open.in14 === d10done.in14 && d10open.want14 === d10done.want14 && d10open.gaps === d10done.gaps)
-  check('🔴 지평 첫날은 내일이다 — 오늘이 아니다',
-    d10open.horizonStartAt.getTime() === kstMidnight(noon).getTime() + 864e5)
-  check('🔴 지평 일수는 재고 지평과 같다', d10open.horizonDays === HORIZON_DAYS && d10open.horizonDays === 14)
-
-  // 🔴 **네 단계가 같은 창을 본다** — 예전 판은 단계마다 다른 창(조각 하루)을 봤다
-  const rows = simulateAllStages({ queue: q(140), personas, axis: { now: noon, publishedToday: 3 } })
-  check('🔴 네 단계의 지평이 같다', horizonMismatches(rows).length === 0)
-  check('🔴 그 지평은 완전한 운영일이다 (KST 0시)',
-    rows.every((r) => (r.sim.horizonStartAt.getTime() + 9 * 3600e3) % 864e5 === 0))
-  check('🔴 그런데 다음 슬롯은 단계마다 다르다 — 두 값이 같은 것이 아니다',
-    new Set(rows.map((r) => r.sim.nextSlotAt.getTime())).size > 1)
-  check('🔴 지평이 어긋나면 잡는다', horizonMismatches([
-    { sim: { ...rows[0]!.sim } },
-    { sim: { ...rows[1]!.sim, horizonStartAt: new Date(tomorrow + 3600e3) } },
-  ]).length > 0)
-
-  // 🔴 요구 조건 — d1 · 오늘 1건 완료 · 후보 14건 → 14/14 · 공백 0 · READY
-  check('🔴 d1 · 오늘 1건 완료 · 후보 14 → 14/14', d1noon.in14 === 14 && d1noon.want14 === 14)
-  check('🔴 그때 공백은 0일이다', d1noon.gaps === 0)
-  check('🔴 READY 다 — 화면이 미달이라고 말하지 않는다', judgeReadiness(d1noon).ready)
-
-  // 🔴 최저 단계마저 미달인 synthetic 상태 → d1 유지 + NOT_READY
-  const allBad = RELEASE_STAGES.map((s) => ({ stage: s, ready: false, reasons: ['미달'] }))
-  const safe = safeStageFor('d10', allBad)
-  check('🔴 전부 미달이면 d1 을 유지한다', safe.stage === SAFEST_STAGE)
-  check('🔴 그런데 chosenReady 는 false 다 — 초록으로 쓰지 않는다', !safe.chosenReady)
-  check('🔴 사유에 "그 단계도 미달" 이 적힌다', (safe.reason ?? '').includes('그 단계도 미달'))
-  const rs = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, { readiness: allBad })
-  check('🔴 resolveScale 도 chosenReady=false 로 전한다', !rs.chosenReady && rs.releaseStage === 'd1')
-  check('🔴 d1 만 ready 면 chosenReady=true',
-    resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, {
-      readiness: RELEASE_STAGES.map((s) => ({ stage: s, ready: s === 'd1', reasons: [] })),
-    }).chosenReady)
-
-  // 🔴 화면이 그 값을 읽는가
-  for (const f of ['scripts/supply-health.mts', 'scripts/persona-capacity-planner.mts'] as const) {
-    check(`🔴 ${f.split('/').pop()} 이 chosenReady 로 색을 정한다`, /chosenReady/.test(codeOf(f)))
-    check(`🔴 ${f.split('/').pop()} 이 NOT_READY 문구를 낸다`, /NOT_READY/.test(read(f)))
-  }
-  // 🔴 세 곳이 같은 시간축을 쓴다
-  for (const f of ['scripts/supply-health.mts', 'scripts/persona-capacity-planner.mts',
-    'scripts/original-post-auto-publish.mts'] as const) {
-    /**
-     * 🔴 러너의 축 계산은 `scripts/lib/publishable-stock.mts` 의
-     *    `resolvePublishScale` 로 옮겨졌다(2026-09-24 5차) — 러너와 관제가 같은
-     *    축을 보게 하려고 뺐다. **지키는 것은 같다**: 축을 넘기고, 시작점을 짓지 않는다.
-     */
-    const axisSrc = f === 'scripts/original-post-auto-publish.mts'
-      ? codeOf('scripts/lib/publishable-stock.mts') : codeOf(f)
-    check(`🔴 ${f.split('/').pop()} 이 axis 로 넘긴다`,
-      /axis: \{ now/.test(axisSrc) || /const axis = \{ now, publishedToday: loaded\.publishedToday \}/.test(axisSrc))
-    check(`🔴 ${f.split('/').pop()} 이 시작점을 직접 만들지 않는다`,
-      !/startAt: (now|new Date\(\))/.test(codeOf(f)))
-  }
-  // 🔴 오늘 발행 수를 실제로 세어 넘기는가 (다음 슬롯 표시가 거짓말하지 않게)
-  for (const [f, expr] of [
-    // 🔴 러너는 `loaded: stock` 을 그대로 넘기고, 공용 함수가 실측값을 읽는다
-    ['scripts/original-post-auto-publish.mts', /resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/],
-    ['scripts/supply-health.mts', /publishedToday: todayCount/],
-    ['scripts/persona-capacity-planner.mts', /publishedToday: todayCount/],
-  ] as const) {
-    check(`🔴 ${f.split('/').pop()} 이 오늘 발행 수를 실측해 넘긴다`, expr.test(codeOf(f)))
-    check(`🔴 ${f.split('/').pop()} 이 0 을 박아 넘기지 않는다`, !/axis: \{ now[^}]*publishedToday: 0/.test(codeOf(f)))
-  }
-  /**
-   * 🔴 조립이 `scripts/lib/publishable-stock.mts` 로 옮겨졌다(2026-09-24) —
-   *    러너와 관제가 같은 함수를 쓰게 하려고 뺀 것이다. 지키는 것은 같다:
-   *    **그 수를 PersonaActivityLog 로 세고, 러너가 그 값을 실제로 쓴다.**
-   */
-  check('🔴 발행 경로가 그 수를 PersonaActivityLog 로 센다', (() => {
-    const stock = codeOf('scripts/lib/publishable-stock.mts')
-    const runner = codeOf('scripts/original-post-auto-publish.mts')
-    return /publishedToday = await prisma\.personaActivityLog\.count/.test(stock)
-      && /axisPublishedToday = stock\.publishedToday/.test(runner)
-  })())
-  /**
-   * 🔴 lib 이 지평을 만든다 — 호출부가 만들면 두 화면이 갈린다.
-   *
-   * 🔴 **앵커가 둘로 늘었다** (2026-09-21). 하루짜리 첫 시험만 `'now'` 를 쓴다.
-   *    그래도 지평을 만드는 것은 여전히 lib 이고, 호출부가 **임의 시작점을
-   *    넘길 길은 없다** — 그것이 이 가드가 지키던 것이다.
-   *    기본값이 `horizonStart` 라는 사실은 `release:canary-check` 가
-   *    **행동으로도** 잠근다(앵커를 생략한 호출의 지평 시작점을 값으로 단정).
-   */
-  const simCode = codeOf('src/lib/scale-readiness.ts')
-  check('🔴 simulateStage 의 **기본** 지평을 horizonStart 가 만든다',
-    /\(input\.anchor \?\? 'nextDay'\) === 'now'/.test(simCode)
-    && /: horizonStart\(input\.axis\.now\)/.test(simCode))
-  /**
-   * 🔴 **입력 타입 블록만 본다.** 본문의 `startAt: horizonStartAt` 은
-   *    예측기로 **넘기는** 값이지 호출부가 주는 값이 아니다 — 둘을 섞으면
-   *    가드가 엉뚱한 줄을 보고 빨개진다(실측).
-   */
-  const simInput = simCode.slice(
-    simCode.indexOf('export function simulateStage(input: {'),
-    simCode.indexOf('}): SimOutcome {'))
-  check('🔴 🔴 앵커는 둘 중 하나다 — 임의 시작점을 받지 않는다',
-    /anchor\?: 'nextDay' \| 'now'/.test(simInput)
-    // 🔴 `startAt` 을 입력으로 받으면 호출부마다 다른 창을 쓰게 된다
-    && !/startAt/.test(simInput))
-  check('🔴 예측기에 넘기는 것은 지평이지 슬롯이 아니다',
-    /startAt: horizonStartAt/.test(codeOf('src/lib/scale-readiness.ts'))
-    && !/startAt: nextSlotAt/.test(codeOf('src/lib/scale-readiness.ts')))
-  // 🔴 관제가 두 값을 함께 보여 준다
-  check('🔴 health JSON 이 지평을 적는다', /horizon: \{/.test(codeOf('scripts/supply-health.mts')))
-  check('🔴 health JSON 이 단계별 다음 슬롯도 함께 적는다',
-    /nextSlotKst: kstStamp\(sim\.nextSlotAt\)/.test(codeOf('scripts/supply-health.mts')))
-}
+// 🔴 (2026-09-30 · source-slot-v1) 이 절은 지웠다 — ① 14일 준비도 시간축(`simulateStage` · `horizonStart` 지평) — 14일치 완성 글 재고를 준비도로 쓰던 정본. 대신 다음 단계 preflight(`judgeNextPreflight` · `stage:scheduler-check`) 가 본다.
 
 // ── ② persona 24명 · 닉네임 ──
 console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 글자')
@@ -422,159 +236,7 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
     read('scripts/persona-cohort-run.mts').includes('트랜잭션 안에서 다시 판정한다'))
 }
 
-// ── ③ freshness ──
-console.log('\n③ freshness (TTL · 시각 미상 hold · 상한 복구 · 오탐 · 적합도)')
-{
-  check('🔴 TTL 근거가 문서에 있다', codeOf('src/lib/supply-freshness.ts').includes('TTL_DAYS'))
-  check('🔴 hot 은 2일', TTL_DAYS.hot === 2)
-  check('🔴 현재성 warm 은 7일 (실측 max 6일 + 하루)', TTL_DAYS.timelyWarm === 7)
-  check('🔴 상시 warm 은 재고 지평의 2배', TTL_DAYS.evergreenWarm === HORIZON_DAYS * 2)
-
-  check('🔴 현재성 신호를 잡는다', classifyTopic('요즘 날씨가', '') === 'timely')
-  check('🔴 절기도 현재성이다', classifyTopic('김장 준비', '') === 'timely')
-  check('🟢 시간을 안 타면 상시', classifyTopic('무릎이 시큰거려요', '오래된 이야기입니다') === 'evergreen')
-  check('🔴 본문에서도 찾는다', classifyTopic('제목', '이번 주에 있었던 일이에요') === 'timely')
-  check('신호 목록이 비어 있지 않다', TIMELY_MARKERS.length >= 30)
-
-  /**
-   * 🔴 **부분 문자열 오탐 제거.** `'설'` 을 includes 로 찾으면 `설거지` 가 명절이 된다 —
-   *    그러면 상시 글의 TTL 이 28일에서 7일로 줄어 멀쩡한 재고가 3주 만에 빠진다.
-   */
-  check('🔴 한 글자 신호는 목록이 따로 있다', TIMELY_SYLLABLES.includes('설') && TIMELY_SYLLABLES.includes('봄'))
-  check('🔴 한 글자 신호는 TIMELY_MARKERS 에 없다',
-    !TIMELY_MARKERS.includes('설') && !TIMELY_MARKERS.includes('봄'))
-  for (const t of ['설거지가 산더미예요', '소설 한 권 읽었어요', '주말설계를 해봤어요', '말설임 없이 갔어요']) {
-    check(`🔴 오탐 없음 — "${t}" 는 상시다`, classifyTopic(t, '무릎 이야기') === 'evergreen')
-  }
-  for (const t of ['설날 준비하느라', '설 연휴에 있었던 일', '봄이 왔어요', '봄날 산책']) {
-    check(`🟢 진짜 신호는 잡는다 — "${t}"`, classifyTopic(t, '') === 'timely')
-  }
-  check('🔴 근거 목록에도 같은 규칙이 걸린다',
-    timelyMarkersIn('설거지', '').length === 0 && timelyMarkersIn('설날', '').includes('설'))
-
-  check('🔴 2일 이하는 hot', freshnessOf({ ageDays: 0, topic: 'timely' }) === 'hot'
-    && freshnessOf({ ageDays: 2, topic: 'evergreen' }) === 'hot')
-  check('🔴 현재성은 7일까지 warm, 8일부터 expired',
-    freshnessOf({ ageDays: 7, topic: 'timely' }) === 'warm'
-    && freshnessOf({ ageDays: 8, topic: 'timely' }) === 'expired')
-  check('🔴 상시는 28일까지 warm, 29일부터 expired',
-    freshnessOf({ ageDays: 28, topic: 'evergreen' }) === 'warm'
-    && freshnessOf({ ageDays: 29, topic: 'evergreen' }) === 'expired')
-
-  /**
-   * 🔴 **시각 미상은 낙관하지 않는다.** 예전 판은 `warm` 이라 적었고 그것은
-   *    "괜찮다" 는 뜻이라 자동 발행 대상에 그대로 들어갔다 — 몇 년 전 글일 수도 있는데도.
-   */
-  check('🔴 나이를 모르면 unknown 이다 (warm 이 아니다)',
-    freshnessOf({ ageDays: null, topic: 'timely' }) === 'unknown'
-    && freshnessOf({ ageDays: Number.NaN, topic: 'timely' }) === 'unknown'
-    && freshnessOf({ ageDays: -1, topic: 'evergreen' }) === 'unknown')
-  check('🔴 unknown 은 자동 발행 대상이 아니다', !isAutoPublishable('unknown'))
-  check('🔴 expired 도 아니다', !isAutoPublishable('expired'))
-  check('🟢 hot · warm 만 자동이다', isAutoPublishable('hot') && isAutoPublishable('warm'))
-  const unk = judgeCandidate({ queueId: 'u', title: '요즘', body: '', ageDays: null, isRecovery: false, seq: 0 })
-  check('🔴 사유가 hold 라고 말한다', unk.hold === 'AGE_UNKNOWN' && unk.reason.includes('보류(hold)'))
-  check('🔴 사람이 확인한다고 적는다', unk.reason.includes('사람이 확인한다'))
-  check('🔴 지운다고 말하지 않는다', unk.reason.includes('삭제하지 않는다'))
-  check('🔴 TTL 초과도 삭제가 아니라고 적는다',
-    judgeCandidate({ queueId: 'x', title: '요즘', body: '', ageDays: 30, isRecovery: false, seq: 0 })
-      .reason.includes('삭제하지 않는다'))
-
-  // 🔴 FIFO 로 오래된 것부터 먹지 않는다
-  const c = (o: Partial<FreshCandidate> & { queueId: string; seq: number }): FreshCandidate => ({
-    title: '', body: '', ageDays: 0, isRecovery: false, ...o,
-  })
-  const mix: FreshCandidate[] = [
-    c({ queueId: 'old-ever', seq: 0, title: '무릎 이야기', body: '', ageDays: 20 }),
-    c({ queueId: 'new-timely', seq: 1, title: '요즘 날씨', body: '', ageDays: 0 }),
-    c({ queueId: 'mid-timely', seq: 2, title: '이번 주 장보기', body: '', ageDays: 5 }),
-    c({ queueId: 'new-ever', seq: 3, title: '오래된 살림 이야기', body: '', ageDays: 1 }),
-  ]
-  const r = orderForPublish(mix)
-  check('🔴 FIFO 였다면 old-ever 가 맨 앞이다 — 그렇지 않다', r.ordered[0]!.queueId !== 'old-ever')
-  check('🔴 현재성 hot 이 맨 앞', r.ordered[0]!.queueId === 'new-timely')
-  check('🔴 현재성 warm 이 그다음', r.ordered[1]!.queueId === 'mid-timely')
-  check('🔴 상시는 뒤로 밀린다', r.ordered.slice(2).every((x) => classifyTopic(x.title, x.body) === 'evergreen'))
-  check('🔴 결정적이다', orderForPublish(mix).ordered.map((x) => x.queueId).join()
-    === r.ordered.map((x) => x.queueId).join())
-
-  /**
-   * 🔴 **적합도가 실제로 순서를 바꾸는가.** 계약만 적어 두고 값이 늘 0 이면
-   *    상시 후보는 그냥 FIFO 다 — 그것이 예전 상태였다.
-   */
-  const ever = (id: string, seq: number, fit: number, age: number): FreshCandidate =>
-    c({ queueId: id, seq, title: '무릎 이야기', body: '살림 이야기', ageDays: age, fitScore: fit })
-  const byFit = orderForPublish([ever('low', 0, 10, 1), ever('high', 1, 90, 1)])
-  check('🔴 적합도가 높은 상시가 먼저 나간다 — 줄 순서를 이긴다',
-    byFit.ordered[0]!.queueId === 'high')
-  check('🔴 적합도가 같으면 신선도 → 줄 순서로 떨어진다',
-    orderForPublish([ever('older', 0, 50, 20), ever('newer', 1, 50, 1)]).ordered[0]!.queueId === 'newer')
-
-  // 🔴 복구 — 신선하면 맨 앞, 상했으면 사람에게
-  const freshRec = orderForPublish([
-    c({ queueId: 'fresh', seq: 0, title: '요즘 날씨', body: '', ageDays: 0 }),
-    c({ queueId: 'rec-ok', seq: 1, title: '요즘 날씨', body: '', ageDays: 3, isRecovery: true }),
-  ])
-  check('🔴 살아 있는 복구는 여전히 맨 앞이다', freshRec.ordered[0]!.queueId === 'rec-ok')
-  const staleRec = orderForPublish([
-    c({ queueId: 'fresh', seq: 0, title: '요즘 날씨', body: '', ageDays: 0 }),
-    c({ queueId: 'rec-old', seq: 1, title: '요즘 날씨', body: '', ageDays: 99, isRecovery: true }),
-  ])
-  check('🔴 TTL 을 넘긴 복구는 자동 발행되지 않는다',
-    !staleRec.ordered.some((x) => x.queueId === 'rec-old'))
-  check('🔴 그것은 사람 검수로 간다 (삭제·재배정 아님)',
-    staleRec.heldForReview.some((x) => x.candidate.queueId === 'rec-old' && x.hold === 'RECOVERY_STALE'))
-  check('🔴 사유에 재배정하지 않는다고 적는다',
-    staleRec.verdicts.get('rec-old')!.reason.includes('재배정하지도 삭제하지도 않는다'))
-  const unkRec = orderForPublish([c({ queueId: 'rec-unk', seq: 0, title: '요즘', body: '', ageDays: null, isRecovery: true })])
-  check('🔴 시각 미상 복구도 사람에게 간다', unkRec.ordered.length === 0
-    && unkRec.heldForReview[0]!.hold === 'RECOVERY_STALE')
-
-  // 🔴 expired · unknown 은 목록에서만 빠진다
-  const withExp = orderForPublish([
-    c({ queueId: 'ok', seq: 0, title: '요즘 날씨', body: '', ageDays: 1 }),
-    c({ queueId: 'gone', seq: 1, title: '요즘 날씨', body: '', ageDays: 40 }),
-    c({ queueId: 'unknown', seq: 2, title: '요즘 날씨', body: '', ageDays: null }),
-  ])
-  check('🔴 자동 대상은 살아 있는 것뿐', withExp.ordered.length === 1 && withExp.ordered[0]!.queueId === 'ok')
-  check('🔴 나머지는 사유별로 사람 검수 목록에 남는다',
-    withExp.heldForReview.length === 2
-    && withExp.heldForReview.some((x) => x.hold === 'TTL_EXPIRED')
-    && withExp.heldForReview.some((x) => x.hold === 'AGE_UNKNOWN'))
-  check('🔴 판정은 남는다 (지운 것이 아니다)', withExp.verdicts.size === 3)
-  check('요약이 등급과 hold 사유를 모두 말한다',
-    describeFreshness(withExp.ordered.concat()).includes('hot')
-    && describeFreshness([...withExp.heldForReview.map((x) => x.candidate)]).includes('사람 검수'))
-
-  // 🔴 러너가 실제로 쓰는가 — **공용 준비 함수 하나**로 바뀌었다 (⑨에서 행동까지 본다)
-  const runner = codeOf('scripts/original-post-auto-publish.mts')
-  /**
-   * 🔴 `prepareCandidates → freshOrdered → pickPublishTarget` 은
-   *    `planPublishBatch` (publishable-stock.mts) 한 함수로 묶였다(2026-09-24 5차).
-   *    러너·probe·검사 셋이 그 함수를 부른다 — 러너 안에 사본을 두지 않는다.
-   */
-  const planSrc = codeOf('scripts/lib/publishable-stock.mts')
-  check('🔴 공용 준비 함수가 한 곳에 있다', /export function planPublishBatch\(/.test(planSrc)
-    && /prepareCandidates\(\{/.test(planSrc))
-  check('🔴 그 순서를 pickPublishTarget 에 넘긴다', /ordered: freshOrdered/.test(planSrc))
-  check('🔴 🔴 **러너가 그 함수를 실제로 부르고 결과만 쓴다**',
-    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runner)
-    && /const freshOrdered = plan\.freshOrdered/.test(runner)
-    && !/pickPublishTarget\(\{/.test(runner))
-  /** 🔴 조립 정본은 공용 로더다 — 러너는 그 결과를 소비한다 */
-  const stockSrc = codeOf('scripts/lib/publishable-stock.mts')
-  check('🔴 발행 경로가 원문 확인 시각을 읽는다', /sourceCapturedAt: true/.test(stockSrc))
-  check('🔴 발행 경로가 복구 여부를 배정 코드로 넘긴다',
-    /assignedPersonaCode: t\.matchedPersonaId === null/.test(stockSrc))
-  check('🔴 🔴 **러너가 그 조립 결과를 실제로 소비한다**',
-    /await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)/.test(runner)
-    && /const queueCandidates: QueueCandidate\[\] = stock\.queueCandidates/.test(runner))
-  check('🔴 러너가 사람 검수 목록을 출력한다', /prepared\.held/.test(runner))
-  check('🔴 legacy 제외·안전 판정은 그대로다',
-    /selectAutoTargets\(/.test(stockSrc) && /safetyFilter/.test(stockSrc))
-  check('🔴 최대 매칭 계약도 그대로다 — 준비 함수가 planBatch 를 부른다',
-    /planBatch\(/.test(codeOf('src/lib/supply-candidates.ts')))
-}
+// 🔴 (2026-09-30 · source-slot-v1) 이 절은 지웠다 — ③ freshness(TTL 28일 · 시각 미상 hold · 상한 복구 사람 레인 · 계절 오탐). 대신 정본 `judgeSlotRelease`(원문 게시 72h · 증거 · 반응 · 동력 — `source:slot-release-check`) 가 본다.
 
 // ── ④ 수집원 다회 · 보호장치 ──
 console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff · 차단기)')
@@ -843,45 +505,10 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   const q140 = q(140)
   check('🔴 queue id 140개가 전부 다르다', new Set(q140.map((x) => x.queueId)).size === 140)
 
-  const split = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' })
-  check('🔴 내부 목표 140', split.capacityProfile.dailyTarget * HORIZON_DAYS === 140)
-  check('🔴 공개 1', split.releaseProfile.dailyTarget === 1)
-
-  const at = (n: number): ReturnType<typeof simulateStage> =>
-    simulateStage({ stage: 'd10', queue: q140, personas: personas.slice(0, n), axis: AXIS })
-  check('🔴 19명(옛 Pool)은 139/140 — 여유가 없었다', at(19).in14 === 139 && !judgeReadiness(at(19)).ready)
-  check('🟢 20명부터 140/140', at(20).in14 === 140 && judgeReadiness(at(20)).ready)
-  check('🟢 24명은 140/140 · 공백 0', at(24).in14 === 140 && at(24).gaps === 0 && judgeReadiness(at(24)).ready)
-
-  const rowsAt = (n: number): ReturnType<typeof simulateAllStages> =>
-    simulateAllStages({ queue: q140, personas: personas.slice(0, n), axis: AXIS })
-  for (const n of [24, 23, 22]) {
-    const safe = safeStageFor('d10', rowsAt(n).map((r) => r.verdict))
-    check(`🟢 ${n}명(1~2명 pause)에서도 d10 유지`, safe.stage === 'd10' && !safe.throttled && safe.chosenReady)
-  }
-  const at19 = safeStageFor('d10', rowsAt(19).map((r) => r.verdict))
-  check('🔴 5명 pause(19명)면 d5 로 감속', at19.stage === 'd5' && at19.throttled)
-  check('🔴 그때도 고른 단계는 달성 가능하다', at19.chosenReady)
-  check('🔴 감속 사유가 남는다', (at19.reason ?? '').includes('d10'))
-  check('🔴 여유는 4명이다 — 20명까지 d10',
-    safeStageFor('d10', rowsAt(20).map((r) => r.verdict)).stage === 'd10'
-    && safeStageFor('d10', rowsAt(19).map((r) => r.verdict)).stage !== 'd10')
-
-  const plans24 = promotionPlan(rowsAt(24))
-  check('🔴 24명·140건이면 네 단계 모두 승격 가능', plans24.every((p) => p.ready))
-  check('🔴 최고 단계는 d10', highestReady(rowsAt(24)) === 'd10')
-  const plansLow = promotionPlan(simulateAllStages({ queue: q140.slice(0, 14), personas: personas.slice(0, 8), axis: AXIS }))
-  const d10plan = plansLow.find((p) => p.stage === 'd10')!
-  check('🔴 재고가 모자라면 필요 수량을 적는다', d10plan.missing.some((m) => m.includes('재고 +126건')))
-  check('🔴 지금/필요를 함께 낸다', d10plan.need.stock.now === 14 && d10plan.need.stock.want === 140)
-  const stuck = promotionPlan(simulateAllStages({ queue: q140, personas: personas.slice(0, 10), axis: AXIS }))
-    .find((p) => p.stage === 'd10')!
-  check('🔴 재고가 있는데 미달이면 인원·조합 문제라고 적는다',
-    stuck.missing.some((m) => m.includes('재고는 있으나')))
-  const h = codeOf('scripts/supply-health.mts')
-  check('🔴 health JSON 에 승격 조건이 들어간다', /promotion: promotionPlan\(scaleRows\)/.test(h))
-  check('🔴 health 화면이 그 값을 읽는다', /scale\.promotion/.test(h))
-  check('🔴 감속 조건이 같은 표의 뒤집음이라고 적는다', read('scripts/supply-health.mts').includes('감속 조건은 같은 표의 뒤집음'))
+  const split = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }))
+  check('🔴 공개 1 · 준비 눈금 d10(10/day)', split.releaseProfile.dailyTarget === 1 && split.capacityProfile.dailyTarget === 10)
+  // 🔴 (2026-09-30) 14일 준비도 시뮬레이션 · 감속(`safeStageFor`) · 승격표(`promotionPlan`)는 지웠다 — 관제도 그것을 내지 않는다
+  check('🔴 관제가 14일 준비도 · 승격표를 다시 내지 않는다', !/promotionPlan|simulateAllStages|safeStageFor/.test(codeOf('scripts/supply-health.mts')))
 
   /**
    * ── 🔴 **수집 준비도 — current · prepared · required 를 따로 본다** ──
@@ -1058,66 +685,29 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   }
 }
 
-// ── ⑥ Gate ⑥-B — salt 순서와 **행동** ──
-console.log('\n⑥ Gate ⑥-B (salt 를 loadEnvLocal 뒤에 만드는가 · salt 가 판정을 바꾸는가)')
+// ── ⑥ Gate ⑥-B — 세 호출이 같은 판정 · 크롤 작가 대조 없음 (2026-10-01 · #641) ──
+console.log('\n⑥ Gate ⑥-B (세 호출 같은 함수 · 작가 해시 · salt 없음 · B1/B3 행동)')
 {
-  const raw = read('scripts/persona-cohort-run.mts')
   const src = codeOf('scripts/persona-cohort-run.mts')
-  const envAt = src.indexOf('await loadEnvLocal()')
-  const saltAt = src.indexOf('const salt = ')
-  const hashAt = src.indexOf('const hashOf = ')
-  check('🔴 loadEnvLocal 을 부른다', envAt >= 0)
-  check('🔴 salt 를 그 뒤에 만든다', saltAt > envAt)
-  check('🔴 hashOf 도 그 뒤다', hashAt > envAt)
-  check('🔴 형제 도구(persona-wave2-assign)와 같은 순서다', (() => {
-    const w = codeOf('scripts/persona-wave2-assign.mts')
-    return w.indexOf('const salt = ') > w.indexOf('await loadEnvLocal()')
-  })())
-  check('🔴 왜 순서가 중요한지 코드에 적혀 있다',
-    raw.includes('뒤에 만든다') && raw.includes('조용히 전원 pass 로 통과한다'))
-  check('🔴 죽은 변수(salt0)를 남기지 않았다', !/salt0/.test(src))
   /**
-   * 🔴 **세 호출 전부**가 hashOf 를 받아야 한다. 하나만 검사하면 나머지에서 빼도 통과한다 —
-   *    빠진 그 한 곳에서 B2(크롤 author) 갈래가 통째로 건너뛰어진다.
+   * 🔴 앞판은 salt 순서 · key 를 검사했다. 원본 작가명이 복구 불가라 크롤 작가 대조(B2)를 뺐으므로
+   *    이제 지킬 것은 "salt · 작가 해시 · 공개 사슬이 도구로 돌아오지 않는다" 와 "세 호출이 같은 판정을 쓴다" 다.
    */
+  check('🔴 cohort 도구가 작가 해시 · salt · 공개 사슬을 쓰지 않는다',
+    !/hashOf|authorHash|VOICE_AUTHOR_HASH_SALT|soransoran-voice-v1|const salt = /.test(src))
+  check('🔴 형제 도구(persona-wave2-assign)도 같다',
+    !/hashOf|authorHash|VOICE_AUTHOR_HASH_SALT|soransoran-voice-v1|const salt = /.test(codeOf('scripts/persona-wave2-assign.mts')))
+  check('🔴 죽은 변수(salt0)를 남기지 않았다', !/salt0/.test(src))
   const collisionCalls = src.match(/checkNameCollision\([^;]*?\)/g) ?? []
   check('🔴 자동 선정 · 사전 검사 · 트랜잭션 재판정 셋 다 같은 함수다', collisionCalls.length === 3)
-  check('🔴 세 호출 **전부** hashOf 를 넘긴다 — 하나라도 빠지면 그 자리에서 B2 가 사라진다',
-    collisionCalls.length === 3 && collisionCalls.every((c) => c.includes('hashOf')))
-
-  /**
-   * 🔴 **행동 fixture — salt 가 다르면 Gate 결과가 실제로 달라지는가.**
-   *
-   *    순서만 검사하면 "그 줄을 옮겨도 아무 일 없다" 는 반론을 막지 못한다.
-   *    적재 때 쓴 salt 로 만든 authorHash 집합에 대고, **다른 salt** 로 후보를 해시하면
-   *    B2 대조가 한 건도 걸리지 않는다 — 즉 검사한 적이 없는데 pass 가 된다.
-   */
-  const hashWith = (salt: string) => (v: string): string =>
-    `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
-  const REAL_SALT = 'soransoran-real-salt'
-  const WRONG_SALT = 'soransoran-voice-v1'
+  check('🔴 세 호출 전부 정본 대조 집합(loadNameCollisionSets)에서 온 집합을 쓴다',
+    (src.match(/loadNameCollisionSets\(/g) ?? []).length >= 3)
   const CANDIDATE = '수국'
-  const sets = {
-    memberNames: [] as string[],
-    personaNames: [] as string[],
-    // 🔴 적재 때 쓴 salt 로 만든 집합이다 — 크롤 author 중 한 명이 이 이름을 쓴다
-    authorHashes: new Set([hashWith(REAL_SALT)(CANDIDATE)]),
-    authorHashNorms: new Set<string>(),
-  }
-  const right = checkNameCollision(CANDIDATE, sets, { hashOf: hashWith(REAL_SALT) })
-  const wrong = checkNameCollision(CANDIDATE, sets, { hashOf: hashWith(WRONG_SALT) })
-  const none = checkNameCollision(CANDIDATE, sets, {})
-  check('🔴 맞는 salt 로는 크롤 author 충돌이 잡힌다',
-    right.status === 'reject' && right.hits.some((x) => x.kind === 'B2_CRAWL_AUTHOR'))
-  check('🔴 다른 salt 를 주입하면 **같은 이름이 통과한다** — 결과가 실제로 달라진다',
-    wrong.status === 'pass' && !wrong.hits.some((x) => x.kind === 'B2_CRAWL_AUTHOR'))
-  check('🔴 hashOf 를 아예 안 넘겨도 통과한다 — B2 가 통째로 건너뛰어진다', none.status === 'pass')
-  check('🔴 즉 salt 를 늦게 읽으면 Gate 가 조용히 무력화된다 (세 결과가 다르다)',
-    right.status !== wrong.status && wrong.status === none.status)
-  check('🔴 다른 갈래(B1 회원)는 salt 와 무관하게 그대로 잡힌다', (() => {
-    const withMember = { ...sets, memberNames: [CANDIDATE] }
-    return checkNameCollision(CANDIDATE, withMember, { hashOf: hashWith(WRONG_SALT) }).status === 'reject'
-  })())
+  check('🔴 B1 회원 이름은 그대로 잡힌다',
+    checkNameCollision(CANDIDATE, { memberNames: [CANDIDATE], personaNames: [] }).status === 'reject')
+  check('🔴 B3 다른 Persona 이름도 그대로 잡힌다',
+    checkNameCollision(CANDIDATE, { memberNames: [], personaNames: [CANDIDATE] }).status === 'reject')
+  check('🔴 아무와도 겹치지 않으면 pass', checkNameCollision(CANDIDATE, { memberNames: ['다른이름'], personaNames: [] }).status === 'pass')
 }
 
 // ── ⑦ advice · caution — 이번 PR 에서 풀지 않는다 ──
@@ -1286,197 +876,7 @@ console.log('\n⑧ 차단기 상태 전이 (half-open 재실패 · 시험 한 �
   })())
 }
 
-// ── ⑨ freshness 단일 계약 (P0-C) ──
-console.log('\n⑨ freshness — 러너 · 관제 · 예측 · 준비도가 같은 함수를 쓴다')
-{
-  const pool = parsePoolDoc(read(POOL_DOC))
-  const personas = pool.cards.filter((c) => c.voiceLength !== null).map(toPersona)
-  const AT = new Date('2026-09-08T12:00:00+09:00')
-  /** 🔴 나이를 직접 넣지 않는다 — `AT` 기준으로 `capturedAt` 을 거꾸로 만든다 */
-  const mk = (id: string, title: string, age: number | null, assigned: string | null = null): QueueCandidate => ({
-    // 🔴 본문에 현재성 낱말을 넣지 않는다 — 주제 판정은 **제목이 정하게** 둔다.
-    //    본문에 `오늘` 이 들어가면 모든 후보가 timely 가 되어 무엇을 재는지 흐려진다
-    queueId: id, title, body: `${title}\n\n있었던 소소한 이야기를 적어 봅니다.`,
-    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: assigned,
-    voice: null, profile: 'human' as const, capturedAt: age === null ? null : new Date(AT.getTime() - age * 864e5),
-  })
-
-  /**
-   * 🔴 **사고 재현** — 후보 14건 중 1건이 시각 미상이다.
-   *    예전에는 관제가 14건을 세어 READY 라 적고 러너만 13건을 냈다.
-   */
-  const fourteen: QueueCandidate[] = [
-    ...Array.from({ length: 13 }, (_, i) => mk(`q-${i}`, `아침에 산책을 다녀왔습니다 (${i})`, 1)),
-    mk('q-unknown', '오랜만에 김치를 담갔어요', null),
-  ]
-  const prep14 = prepareCandidates({ candidates: fourteen, personas, at: AT })
-  check('🔴 자동 대상은 13건이다 (14건이 아니다)', prep14.auto.length === 13)
-  check('🔴 빠진 1건은 시각 미상 hold 다',
-    prep14.held.length === 1 && prep14.held[0]!.hold === 'AGE_UNKNOWN' && prep14.held[0]!.queueId === 'q-unknown')
-  check('🔴 예측도 같은 목록을 센다 — 관제가 14를 세고 러너가 13을 내지 않는다', (() => {
-    const f = forecastPublishing({
-      // 🔴 거르지 않은 후보를 넘긴다 — 예측기가 그날 나이로 다시 판정한다
-      queue: fourteen, personas, history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
-      startAt: new Date('2026-09-09T00:00:00+09:00'), days: 14, dailyCap: 1,
-      caps: { postsPerWeek: 1, minDaysBetween: 5 },
-    })
-    return f.in14 === 13
-  })())
-  check('🔴 준비도도 같은 목록을 센다', (() => {
-    const sim = simulateStage({
-      stage: 'd1', queue: fourteen, personas,
-      axis: { now: new Date('2026-09-08T12:00:00+09:00'), publishedToday: 0 },
-    })
-    return sim.stock === 13 && sim.in14 === 13 && !judgeReadiness(sim).ready
-  })())
-  check('🔴 같은 입력이면 자동 대상 id 가 글자 그대로 같다',
-    prepareCandidates({ candidates: fourteen, personas, at: AT }).auto.map((c) => c.queueId).join()
-    === prep14.auto.map((c) => c.queueId).join())
-  check('🔴 hold 사유도 같다',
-    JSON.stringify(prepareCandidates({ candidates: fourteen, personas, at: AT }).held) === JSON.stringify(prep14.held))
-  check('🔴 입력 순서를 뒤집어도 같은 결과다', (() => {
-    const rev = prepareCandidates({ candidates: [...fourteen].reverse(), personas, at: AT })
-    return rev.auto.length === 13 && rev.held.length === 1 && rev.held[0]!.queueId === 'q-unknown'
-  })())
-
-  /**
-   * 🔴 **persona 자리가 하나뿐일 때 hot 이 이긴다.**
-   *    예전 러너는 planBatch 를 먼저 돌리고 순서를 나중에 바꿔, 오래된 글이 자리를 쥐었다.
-   */
-  const onePersona = personas.slice(0, 1)
-  const CAP1 = { postsPerWeek: 1, minDaysBetween: 1 }
-  /**
-   * 🔴 **두 후보가 같은 요건이라 같은 persona 한 명을 놓고 다툰다.**
-   *    id 를 일부러 `a-ever` · `z-hot` 로 두어, 우선권이 없으면 사전순으로 상시가 이기게 만든다 —
-   *    그래야 "우선권이 실제로 작동하는가" 를 이 검사 하나가 가른다.
-   */
-  const EV_BODY = '아침에 산책을 다녀왔습니다. 커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
-  const HOT_BODY = '요즘 날씨가 부쩍 서늘해졌어요. 커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
-  const race: QueueCandidate[] = [
-    { queueId: 'a-ever', title: '아침에 산책을 다녀왔습니다', body: EV_BODY, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
-    { queueId: 'z-hot', title: '요즘 날씨가 부쩍 서늘해졌어요', body: HOT_BODY, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: AT },
-  ]
-  const raced = prepareCandidates({ candidates: race, personas: onePersona, caps: CAP1, at: AT })
-  check('🔴 둘 다 자동 대상이다 — 진짜 자리 경쟁이다', raced.auto.length === 2)
-  check('🔴 자리가 하나면 현재성 hot 이 먼저 선다', raced.auto[0]!.queueId === 'z-hot')
-  const assignedIds = raced.batch.assignments.filter((a) => a.assigned !== null).map((a) => a.queueId)
-  check('🔴 그 한 자리를 hot 이 가져간다', assignedIds.join() === 'z-hot')
-  /**
-   * 🔴 **대조군** — 우선권을 넘기지 않으면 같은 입력에서 상시가 자리를 가져간다.
-   *    즉 이 검사는 "우선권이 실제로 결과를 바꾼다" 를 증명한다.
-   */
-  const noPriority = planBatch(raced.auto, onePersona, CAP1)
-  check('🔴 우선권이 없으면 상시가 자리를 가져간다 (대조군)',
-    noPriority.assignments.filter((a) => a.assigned !== null).map((a) => a.queueId).join() === 'a-ever')
-  check('🔴 최대 매칭 총량은 그대로다 — 우선순위가 배정 수를 줄이지 않는다',
-    noPriority.assignments.filter((a) => a.assigned !== null).length === assignedIds.length)
-  check('🔴 입력 순서를 뒤집어도 hot 이 이긴다',
-    prepareCandidates({ candidates: [...race].reverse(), personas: onePersona, caps: CAP1, at: AT })
-      .batch.assignments.filter((a) => a.assigned !== null).map((a) => a.queueId).join() === 'z-hot')
-  check('🔴 persona 주 상한을 넘기지 않는다', (() => {
-    const load = new Map<string, number>()
-    for (const a of raced.batch.assignments) {
-      if (a.assigned !== null) load.set(a.assigned, (load.get(a.assigned) ?? 0) + 1)
-    }
-    return [...load.values()].every((n) => n <= CAP1.postsPerWeek)
-  })())
-  /**
-   * 🔴 **상시끼리는 적합도가 순서를 가른다.** `fitScore` 를 0 으로 박으면 이 순서가 무너진다.
-   */
-  /**
-   * 🔴 **상시끼리는 적합도가 순서를 가른다.**
-   *    본문 길이가 그 persona 의 문체 밴드와 얼마나 맞느냐로 점수가 갈린다(95 vs 85 실측).
-   *    낮은 점수 글을 **먼저** 넣어, 순서가 줄 순서가 아니라 점수로 정해지는지 본다.
-   */
-  check('🔴 상시 후보는 적합도 높은 쪽이 먼저 선다 (줄 순서를 이긴다)', (() => {
-    const long = `${EV_BODY} ${'커피 한 잔 마시며 쉬는 중이에요. '.repeat(10)}`
-    const evergreens: QueueCandidate[] = [
-      // seq 0 · 점수 낮음(긴 본문)
-      { queueId: 'ev-low', title: '아침에 산책을 다녀왔습니다', body: long, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
-      // seq 1 · 점수 높음(짧은 본문)
-      { queueId: 'ev-high', title: '아침에 산책을 다녀왔습니다', body: EV_BODY, gateVerdict: 'PASS', createdAt: 1, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
-    ]
-    const pr = prepareCandidates({ candidates: evergreens, personas: onePersona, caps: { postsPerWeek: 5, minDaysBetween: 1 }, at: AT })
-    if (pr.auto.length !== 2) return false
-    const scores = pr.auto.map((c) => pr.fitScoreOf(c.queueId))
-    // 🔴 점수가 실제로 갈려야 이 검사가 뜻을 갖는다
-    return new Set(scores).size > 1 && pr.auto[0]!.queueId === 'ev-high'
-      && scores.every((v, i) => i === 0 || scores[i - 1]! >= v)
-  })())
-
-  // 🔴 상한 복구는 hold — 다른 글로 우회하지 않는다
-  const stale = prepareCandidates({
-    candidates: [mk('rec-stale', '요즘 날씨', 99, 'P01'), mk('fresh', '요즘 날씨', 0)],
-    personas, at: AT,
-  })
-  check('🔴 상한 복구는 자동에서 빠진다', !stale.auto.some((c) => c.queueId === 'rec-stale'))
-  check('🔴 사유가 RECOVERY_STALE 이다',
-    stale.held.some((h) => h.queueId === 'rec-stale' && h.hold === 'RECOVERY_STALE'))
-  check('🔴 재배정하지 않는다고 적는다',
-    stale.held.find((h) => h.queueId === 'rec-stale')!.reason.includes('재배정하지도 삭제하지도 않는다'))
-
-  // 🔴 깨진 복구는 전체 중단 — 우회 금지
-  const broken = prepareCandidates({
-    candidates: [mk('rec-broken', '요즘 날씨', 1, 'P99-없는사람'), mk('other', '요즘 날씨', 0)],
-    personas, at: AT,
-  })
-  check('🔴 깨진 복구는 recoveryProblem 으로 잡힌다',
-    broken.batch.assignments.some((a) => a.queueId === 'rec-broken' && a.recoveryProblem !== null))
-  check('🔴 예측도 그때 발행 0 으로 멈춘다', (() => {
-    const f = forecastPublishing({
-      queue: [mk('rec-broken', '요즘 날씨', 1, 'P99-없는사람'), mk('other', '요즘 날씨', 0)],
-      personas, history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
-      startAt: new Date('2026-09-09T00:00:00+09:00'), days: 3, dailyCap: 1,
-    })
-    return f.recoveryBroken.length > 0 && f.in14 === 0
-  })())
-
-  // 🔴 fitScore 는 실제 배정된 persona 의 점수다
-  const fitCase = prepareCandidates({
-    candidates: [mk('a', '무릎이 시큰거려요', 5), mk('b', '오래된 살림 이야기', 5)],
-    personas, at: AT,
-  })
-  check('🔴 fitScore 가 배정된 persona 의 점수와 같다', (() => {
-    for (const a of fitCase.batch.assignments) {
-      if (a.assigned === null) continue
-      const want = a.eligible.find((c) => c.code === a.assigned)?.score.total ?? -1
-      if (fitCase.fitScoreOf(a.queueId) !== want) return false
-    }
-    return true
-  })())
-  check('🔴 우선순위 계층이 복구 → hot → warm → 상시 순이다', (() => {
-    const t = (title: string, age: number, rec: boolean): number =>
-      priorityTierOf(judgeCandidate({ queueId: 'x', title, body: '', ageDays: age, isRecovery: rec, seq: 0 }), rec)
-    return t('요즘 날씨', 1, true) === 0 && t('요즘 날씨', 0, false) === 1
-      && t('요즘 날씨', 5, false) === 2 && t('무릎 이야기', 5, false) === 3
-  })())
-
-  // 🔴 생산 경로가 그 함수를 실제로 부르는가
-  const runner = codeOf('scripts/original-post-auto-publish.mts')
-  const health = codeOf('scripts/supply-health.mts')
-  const planSrc2 = codeOf('scripts/lib/publishable-stock.mts')
-  check('🔴 prepareCandidates 결과를 **그대로** 쓴다 — 대체 경로를 두지 않는다',
-    /const prepared = prepareCandidates\(\{/.test(planSrc2)
-    && !/const prepared = [^\n]*\?\?/.test(planSrc2)
-    // 🔴 러너는 공용 결과만 쓴다 — 자기 자리에서 다시 준비하지 않는다
-    && /const prepared = plan\.prepared/.test(runner)
-    && !/prepareCandidates\(\{/.test(runner))
-  check('🔴 러너가 자체 planBatch 를 다시 돌리지 않는다', !/const batch = planBatch\(/.test(runner))
-  check('🔴 관제도 같은 함수를 쓴다', /prepareCandidates\(\{/.test(health))
-  check('🔴 관제가 예측에 **거르지 않은 후보**를 넘긴다 — 예측기가 날짜마다 다시 판정한다',
-    /const forecastQueue = queueCandidates/.test(health))
-  check('🔴 stageVerdicts 도 거르지 않은 후보를 넘긴다 — 단계마다 그 cap 으로 다시 정한다',
-    /queue: loaded\.queueCandidates, personas: loaded\.personas as never,/.test(planSrc2)
-    && /stageVerdicts\(\{/.test(planSrc2))
-  check('🔴 발행 경로가 assignedPersonaCode 를 null 로 박지 않는다', (() => {
-    const stock = codeOf('scripts/lib/publishable-stock.mts')
-    return !/assignedPersonaCode: null,\n\s*\}\)\),\n\s*personas: personas as never/.test(stock)
-      && /assignedPersonaCode: t\.matchedPersonaId === null/.test(stock)
-      && /loadPublishableStock\(/.test(runner)
-  })())
-  check('🔴 관제 JSON 이 자동 대상·hold 를 낸다', /candidates: \{/.test(health) && /held: prepared\.held/.test(health))
-  check('🔴 관제 화면도 같은 값을 읽는다', /describePrepared\(prepared\)/.test(health))
-}
+// 🔴 (2026-09-30 · source-slot-v1) 이 절은 지웠다 — ⑨ freshness 단일 계약(러너 · 관제 · 예측 · 준비도). 대신 `source:slot-release-check` ⑫ · `supply:stock-parity-check`(러너 · 관제 · 공급이 같은 `judgeSlotRelease`) 가 본다.
 
 // ── ⑩ 차단기 관제 시각 (P1-D) ──
 console.log('\n⑩ 차단기 관제 시각 — 준비도와 화면이 같은 시각을 본다')
@@ -1600,168 +1000,7 @@ console.log('\n⑪ 403 사람 해제 도구')
     ma.includes('| 기능 | 구현 | runtime | 운영 검증 |'))
 }
 
-// ── ⑫ 러너 == forecast 실제 선택 (P0-A) ──
-console.log('\n⑫ 러너와 예측이 같은 글·같은 persona 를 고르는가')
-{
-  const pool = parsePoolDoc(read(POOL_DOC))
-  const personas = pool.cards.filter((c) => c.voiceLength !== null).map(toPersona)
-  const one = personas.slice(0, 1)
-  const AT = new Date('2026-09-08T12:00:00+09:00')
-  const START = new Date('2026-09-09T00:00:00+09:00')
-  const EV = '아침에 산책을 다녀왔습니다. 커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
-  const HOT = '요즘 날씨가 부쩍 서늘해졌어요. 커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
-  const CAP1 = { postsPerWeek: 1, minDaysBetween: 1 }
-  /**
-   * 🔴 id 를 `a-ever` · `z-hot` 으로 둔다 — 우선권이 없으면 사전순으로 **상시**가 이긴다.
-   *    그래야 "우선권이 실제로 작동하는가" 를 이 검사 하나가 가른다.
-   */
-  const race: QueueCandidate[] = [
-    { queueId: 'a-ever', title: '아침에 산책을 다녀왔습니다', body: EV, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(START.getTime() - 10 * 864e5) },
-    { queueId: 'z-hot', title: '요즘 날씨가 부쩍 서늘해졌어요', body: HOT, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START },
-  ]
-  const runner = prepareCandidates({ candidates: race, personas: one, caps: CAP1, at: START })
-  const runnerPick = runner.batch.assignments.filter((a2) => a2.assigned !== null)
-    .map((a2) => `${a2.queueId}→${a2.assigned}`).join()
-  const fc = forecastPublishing({
-    queue: race, personas: one, history: one.map((x) => ({ code: x.code, matchedAts: [] })),
-    startAt: START, days: 1, dailyCap: 1, caps: CAP1,
-  })
-  const fcPick = fc.days[0]!.published.map((x) => `${x.queueId}→${x.persona}`).join()
-  check('🔴 러너가 현재성 hot 을 고른다', runnerPick === 'z-hot→P01')
-  /**
-   * 🔴 **수만 맞추면 안 된다 — queueId 와 persona 까지 같아야 한다.**
-   *    예전에는 러너 `z-hot`, 예측 `a-ever` 였다(같은 1건이라 수로는 구분되지 않았다).
-   */
-  check('🔴 예측도 **같은 글·같은 persona** 를 고른다', fcPick === runnerPick)
-  check('🔴 예측이 고른 것이 상시가 아니다 (예전 동작)', fcPick !== 'a-ever→P01')
-  // 🔴 대조군 — 우선권이 없으면 상시가 자리를 가져간다. 이 fixture 의 검증력이 여기서 드러난다
-  check('🔴 우선권을 빼면 상시가 이긴다 (대조군)',
-    planBatch(runner.auto, one, CAP1).assignments.filter((a2) => a2.assigned !== null)
-      .map((a2) => a2.queueId).join() === 'a-ever')
-  check('🔴 입력 순서를 뒤집어도 둘 다 같은 선택이다', (() => {
-    const r2 = prepareCandidates({ candidates: [...race].reverse(), personas: one, caps: CAP1, at: START })
-    const f2 = forecastPublishing({
-      queue: [...race].reverse(), personas: one, history: one.map((x) => ({ code: x.code, matchedAts: [] })),
-      startAt: START, days: 1, dailyCap: 1, caps: CAP1,
-    })
-    return r2.batch.assignments.filter((a2) => a2.assigned !== null).map((a2) => a2.queueId).join() === 'z-hot'
-      && f2.days[0]!.published.map((x) => x.queueId).join() === 'z-hot'
-  })())
-
-  /**
-   * 🔴 **d1 cap 으로 미리 정렬한 큐로 d10 을 계산하지 않는다.**
-   *    persona 한 명 · 주 1건이면 d1 은 하루 1건뿐이지만 d10 은 주 5건까지 쓴다.
-   *    단계마다 그 cap 으로 다시 계산해야 d10 실제 선택과 d10 준비도가 같아진다.
-   */
-  check('🔴 d10 준비도의 선택이 d10 실제 계획과 같다', (() => {
-    const many = Array.from({ length: 6 }, (_, i) => ({
-      queueId: `m-${i}`, title: `아침에 산책을 다녀왔습니다 ${i}`, body: EV,
-      gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START,
-    }))
-    const d10caps = { postsPerWeek: PROFILES.d10.postsPerWeek, minDaysBetween: PROFILES.d10.minDaysBetween }
-    const plan = prepareCandidates({ candidates: many, personas: one, caps: d10caps, at: START })
-    const f10 = forecastPublishing({
-      queue: many, personas: one, history: one.map((x) => ({ code: x.code, matchedAts: [] })),
-      startAt: START, days: 1, dailyCap: PROFILES.d10.dailyTarget, caps: d10caps,
-    })
-    const planIds = plan.batch.assignments.filter((a2) => a2.assigned !== null).map((a2) => a2.queueId)
-    const fcIds = f10.days[0]!.published.map((x) => x.queueId)
-    // d1 cap 에서는 1건뿐이지만 d10 cap 에서는 더 나간다 — 그것이 단계별 재계산의 뜻이다
-    const d1caps = { postsPerWeek: PROFILES.d1.postsPerWeek, minDaysBetween: PROFILES.d1.minDaysBetween }
-    const d1plan = prepareCandidates({ candidates: many, personas: one, caps: d1caps, at: START })
-    const d1n = d1plan.batch.assignments.filter((a2) => a2.assigned !== null).length
-    return fcIds.length > 0 && fcIds.every((id) => planIds.includes(id)) && planIds.length > d1n
-  })())
-  /**
-   * 🔴 **단계별 cap 이 예측에 실제로 들어가는가.** 같은 큐·같은 한 명이라도
-   *    d1(주 1건)과 d10(주 5건)은 14일 발행량이 달라야 한다. 같으면 cap 이 안 들어간 것이다.
-   */
-  check('🔴 같은 큐·같은 인원인데 단계마다 결과가 다르다 — cap 이 실제로 주입된다', (() => {
-    const many: QueueCandidate[] = Array.from({ length: 30 }, (_, i) => ({
-      queueId: `s-${i}`, title: `아침에 산책을 다녀왔습니다 ${i}`, body: EV,
-      gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START,
-    }))
-    const axis = { now: START, publishedToday: 0 }
-    const d1 = simulateStage({ stage: 'd1', queue: many, personas: one, axis })
-    const d10 = simulateStage({ stage: 'd10', queue: many, personas: one, axis })
-    // d10 은 주 5건 · 최소 1일이라 같은 한 명으로도 더 많이 낸다
-    return d10.in14 > d1.in14 && d1.in14 > 0
-  })())
-  check('🔴 준비도가 단계별 프로필을 예측에 넘긴다 — 코드로도 확인',
-    /caps: \{ postsPerWeek: p\.postsPerWeek, minDaysBetween: p\.minDaysBetween \}/
-      .test(codeOf('src/lib/scale-readiness.ts')))
-  check('🔴 준비도의 재고도 그 단계 기준이다 — 필터 전 큐 길이가 아니다', (() => {
-    const withUnknown: QueueCandidate[] = [
-      ...race,
-      { queueId: 'unknown', title: '아침에 산책을 다녀왔습니다', body: EV, gateVerdict: 'PASS', createdAt: 2, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: null },
-    ]
-    return simulateStage({ stage: 'd1', queue: withUnknown, personas: one, axis: { now: AT, publishedToday: 0 } }).stock === 2
-  })())
-}
-
-// ── ⑬ 예측에서 나이가 흐른다 (P0-B) ──
-console.log('\n⑬ 예측일마다 나이를 다시 잰다')
-{
-  const pool = parsePoolDoc(read(POOL_DOC))
-  const personas = pool.cards.filter((c) => c.voiceLength !== null).map(toPersona)
-  const START = new Date('2026-09-09T00:00:00+09:00')
-  const hist = personas.map((x) => ({ code: x.code, matchedAts: [] as Date[] }))
-  const TIMELY_BODY = '커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
-  /** 🔴 지금 나이 2일인 현재성 후보 14건 — 지금은 전부 hot 이다 */
-  const timely14: QueueCandidate[] = Array.from({ length: 14 }, (_, i) => ({
-    queueId: `t-${i}`, title: `요즘 날씨가 부쩍 서늘해졌어요 ${i}`, body: TIMELY_BODY,
-    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
-    voice: null, profile: 'human' as const, capturedAt: new Date(START.getTime() - 2 * 864e5),
-  }))
-  check('🔴 지금은 14건 전부 자동 대상이다',
-    prepareCandidates({ candidates: timely14, personas, at: START }).auto.length === 14)
-  const f = forecastPublishing({
-    queue: timely14, personas, history: hist, startAt: START, days: 14, dailyCap: 1,
-    caps: { postsPerWeek: 1, minDaysBetween: 5 },
-  })
-  /**
-   * 🔴 **14건이 전부 나가면 안 된다.** timelyWarm 은 7일이고 후보는 이미 2일 됐다.
-   *    START 를 0일차로 보면 5일차에 나이가 7일 = 아직 warm, 6일차에 8일 = expired.
-   *    즉 0~5일차 여섯 번만 나갈 수 있다.
-   */
-  check('🔴 나이가 흘러 TTL 을 넘긴 후보는 빠진다 — 14건이 아니다', f.in14 < 14)
-  check('🔴 만료 경계가 정확하다 — 0~5일차 6건', f.in14 === 6)
-  check('🔴 6일차부터는 발행이 없다',
-    f.days.slice(0, 6).every((d) => d.published.length === 1)
-    && f.days.slice(6).every((d) => d.published.length === 0))
-  check('🔴 그 뒤 사유는 후보 없음이다 — 자리 경쟁에서도 빠졌다',
-    f.days[6]!.blockedReason === 'NO_CANDIDATE')
-  /** 🔴 상시 28일 경계 — 같은 방식으로 잰다 */
-  const EVER_BODY = '커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
-  const ever: QueueCandidate[] = Array.from({ length: 14 }, (_, i) => ({
-    queueId: `e-${i}`, title: `아침에 산책을 다녀왔습니다 ${i}`, body: EVER_BODY,
-    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
-    voice: null, profile: 'human' as const, capturedAt: new Date(START.getTime() - 25 * 864e5),
-  }))
-  const fe = forecastPublishing({
-    queue: ever, personas, history: hist, startAt: START, days: 14, dailyCap: 1,
-    caps: { postsPerWeek: 1, minDaysBetween: 5 },
-  })
-  check('🔴 상시 28일 경계 — 25일 된 후보는 0~3일차 4건만', fe.in14 === 4)
-  check('🔴 상시는 현재성보다 오래 버틴다', TTL_DAYS.evergreenWarm > TTL_DAYS.timelyWarm)
-  /** 🔴 시각 미상은 첫날부터 빠진다 */
-  const unknown: QueueCandidate[] = [{
-    queueId: 'u', title: '아침에 산책을 다녀왔습니다', body: EVER_BODY,
-    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: null,
-  }]
-  check('🔴 시각 미상은 예측 첫날부터 빠진다', forecastPublishing({
-    queue: unknown, personas, history: hist, startAt: START, days: 3, dailyCap: 1,
-  }).in14 === 0)
-  // 🔴 계약이 코드에 남아 있는가
-  const fcSrc = codeOf('src/lib/supply-capacity-forecast.ts')
-  check('🔴 예측기가 공용 계획 함수를 그날 시각으로 부른다',
-    /prepareCandidates\(\{\s*candidates: remaining, personas: personasNow, caps: input\.caps \?\? \{\}, at,/.test(fcSrc))
-  check('🔴 예측기가 planBatch 를 직접 부르지 않는다', !/planBatch\(/.test(fcSrc))
-  check('🔴 준비 함수가 나이를 인자 시각으로 잰다',
-    /ageDays: ageDaysAt\(c\.capturedAt, at\)/.test(codeOf('src/lib/supply-candidates.ts')))
-  check('🔴 QueueCandidate 가 ageDays 스냅숏을 들고 다니지 않는다',
-    !/ageDays: number \| null/.test(codeOf('src/lib/supply-candidates.ts')))
-}
+// 🔴 (2026-09-30 · source-slot-v1) 이 절은 지웠다 — ⑫ 러너 == 14일 예측 선택 · ⑬ 예측일마다 나이 — 14일 발행 예측기(`forecastPublishing`)를 지웠다. 대신 `stage:ladder-check` ⑭(러너 · probe 같은 `planPublishBatch`) 가 본다.
 
 // ── ⑭ 잠금 프로토콜 구조 (P0-C · 행동은 collect:guard-lock-check 가 본다) ──
 console.log('\n⑭ 잠금 프로토콜 — 회수는 reaper 뒤로 · reaper 자체는 회수하지 않는다')

@@ -19,17 +19,21 @@ import {
   judgeCatchUp, simulateDay, dueSlotsAt, dueCountAt, kstMinuteOfDay, catchUpDailyCeiling,
   PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE, PER_RUN_MAX,
 } from '../src/lib/publish-slot-catchup'
+import { spawnSync } from 'node:child_process'
+
 import {
-  PROFILES, RELEASE_STAGES, slotCronUtc, minuteOfDay, CAPACITY_ENV, RELEASE_ENV,
+  PROFILES, RELEASE_STAGES, slotCronUtc, minuteOfDay,
 } from '../src/lib/scale-profile'
 import { allStageSlots } from '../src/lib/scale-workflow-render'
 import {
   PUBLISH_RUNNER_ARGS, publishRunnerSlots, verifyRunnerSlotsInWindow,
   renderPublishRunnerPlist, PUBLISH_RUNNER_LABEL, PUBLISH_RUNNER_INSTALL_STEPS,
-  judgeTriggerParity, describeTriggers, readCanonicalStages, parseCanonicalStages,
+  describeTriggers,
   RUNNER_SYSTEM_PATH, runnerPathValue, judgeRunnerEnv, judgeRunnerSecrets,
   LAUNCHD_LABEL_KEY, LAUNCHD_RUN_MARK_KEY,
 } from './lib/original-post-runner-template'
+import { judgeAuthority, readAuthorityInputs } from './lib/stage-authority-graph'
+import { renderedLaunchd } from './lib/stage-authority-repo'
 
 let pass = 0
 let fail = 0
@@ -251,7 +255,8 @@ console.log('\n⑨ 배선 — 🔴 판정이 실제 쓰기 경로에 닿는가')
     runner.indexOf('if (!gate.ok)') < runner.indexOf('updateMany('))
 
   const tx = codeOf('src/lib/original-post-publish-tx.ts')
-  check('🔴 트랜잭션이 Serializable 이다', /isolationLevel: 'Serializable'/.test(tx))
+  // 🔴 write 시도는 Serializable 이다 — RepeatableRead 는 충돌 뒤 write 없는 다시 읽기(`recheck`)에만
+  check('🔴 트랜잭션이 Serializable 이다', /isolationLevel: phase === 'recheck' \? 'RepeatableRead' : 'Serializable'/.test(tx))
   check('🔴 트랜잭션 안에서 오늘 발행 수를 다시 센다',
     /publishedTodayInTx = await tx\.personaActivityLog\.count/.test(tx))
   check('🔴 [회귀] 판정이 밖에서 받은 값을 쓰지 않는다',
@@ -262,11 +267,24 @@ console.log('\n⑨ 배선 — 🔴 판정이 실제 쓰기 경로에 닿는가')
    *    두 번째 충돌은 실패다. 시도 횟수를 소스 구조로 고정한다 — 재시도를 없애도 늘려도 빨개진다.
    */
   const outer = tx.slice(tx.indexOf('export async function publishOriginalPostTx'), tx.indexOf('async function publishAttempt'))
-  check('🔴 🔴 **직렬화 충돌은 정확히 한 번 재시도 — 두 번째 충돌은 실패**',
+  /**
+   * 🔴 (2026-10-01 개정) 두 번째 충돌 뒤에는 **write 없는 다시 읽기 한 번**(`'recheck'`)만 있다 — 세 번째 write 시도가 아니다.
+   *    다시 읽기는 소비 증거(SLOT_CONSUMED · TARGET_RACE_LOST)일 때만 정상 무발행이고, 그 밖은 error 다.
+   */
+  check('🔴 🔴 **직렬화 충돌은 정확히 한 번 재시도 — 두 번째 충돌 뒤엔 write 없는 다시 읽기 하나 · 소비 증거 아니면 실패**',
     /if \(isSerializationConflict\(err\)\) return \{ kind: 'conflict' \}/.test(tx)
-    && (outer.match(/await publishAttempt\(prisma, input, deps\)/g) ?? []).length === 2
-    && /const first = await publishAttempt\(prisma, input, deps\)\s*if \(first\.kind === 'conflict'\) \{\s*const second = await publishAttempt\(prisma, input, deps\)\s*if \(second\.kind === 'conflict'\) \{\s*return \{ kind: 'error'/.test(outer)
+    && (outer.match(/await publishAttempt\(prisma, input, deps, (1|2)\)/g) ?? []).length === 2
+    && (outer.match(/await publishAttempt\(/g) ?? []).length === 3
+    && /const first = await publishAttempt\(prisma, input, deps, 1\)\s*if \(first\.kind !== 'conflict'\) return first\s*const second = await publishAttempt\(prisma, input, deps, 2\)\s*if \(second\.kind !== 'conflict'\) return second\s*const recheck = await publishAttempt\(prisma, input, deps, 'recheck'\)/.test(outer)
+    && /const CONSUMED_AFTER_CONFLICT = \['SLOT_CONSUMED', 'TARGET_RACE_LOST'\] as const/.test(tx)
+    && /if \(phase === 'recheck'\) return \{ kind: 'error'/.test(tx)
+    // 🔴 다시 읽기의 멈춤은 첫 write(만료 전환 updateMany) 앞이다
+    && tx.indexOf("if (phase === 'recheck') return") < tx.indexOf('const expired = await tx.originalPostApprovalQueue.updateMany')
     && !/while\s*\(|for\s*\(/.test(outer))
+  // 🔴 결함 주입점은 검사 전용 — 운영 호출자(러너 · 수동 단건)는 넘기지 않는다
+  for (const f of ['scripts/original-post-auto-publish.mts', 'scripts/original-post-publish-live.mts', 'src/lib/original-post-auto-publish.ts', 'src/lib/publish-slot-catchup.ts']) {
+    check(`🔴 운영 호출자 ${f} 는 결함 주입점(fault)을 넘기지 않는다`, !/\bfault\b/.test(codeOf(f)))
+  }
   check('🔴 조건부 UPDATE 가 그대로 있다',
     /status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null/.test(tx))
   check('🔴 cap 정본(ActivityLog) write 가 그대로 있다', /kind: 'post'/.test(tx))
@@ -364,26 +382,21 @@ console.log('\n⑩ 정시 트리거 템플릿 — 🔴 등록하지 않는다')
 
   const tpl = codeOf('scripts/lib/original-post-runner-template.ts')
   check('🔴 템플릿이 파일을 쓰지 않는다', !/writeFileSync|mkdirSync|execFileSync|execSync/.test(tpl))
-  check('🔴 템플릿이 GitHub 예약을 끄라고 말하지 않는다',
-    tpl.includes('GitHub 예약은 **끄지 않는다.**'))
+  check('🔴 템플릿이 GitHub 예약 백업을 지웠다고 적는다(2026-09-30 단일 실행 authority)',
+    tpl.includes('GitHub 예약 백업은 지웠다') && !tpl.includes('GitHub 예약은 **끄지 않는다.**'))
 
-  // 🔴 워크플로우 cron 을 늘려 문제를 덮지 않았는가
-  const yml = codeOf('.github/workflows/auto-publish.yml')
-  const crons = (yml.match(/-\s*cron:/g) ?? []).length
-  check('🔴 [계약] 워크플로우 예약 수를 늘리지 않았다 (10개 그대로)', crons === 10)
-  check('🔴 워크플로우가 트리거를 명시로 넘긴다', /--trigger=schedule/.test(yml))
   /**
-   * 🔴 수동 실행 경로가 발행 경로로 새지 않는가 — **그 step 안만** 본다.
-   *    `on:` 블록의 `workflow_dispatch` 까지 세면 검사가 뜻을 잃는다.
+   * 🔴 (2026-09-30) GitHub 발행 예약은 없다 — 발행 schedule owner 는 launchd 러너 하나다.
+   *    수동 실행 경로는 dry-run 이고 consumer 를 지난다. 판정은 ⑬ 에서 authority 그래프로 한다.
    */
-  const dispatchStep = yml
-    .slice(yml.indexOf('자동 발행 (dry-run — 수동 실행)'), yml.indexOf('자동 발행 (apply — 스케줄)'))
-    // 🔴 주석은 설명문이다. 거기 적힌 `--apply` 를 실행 인자로 세지 않는다
-    .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
-  check('🔴 수동 실행 step 이 실제로 있다', dispatchStep.length > 0)
-  check('🔴 수동 실행 경로는 여전히 dry-run 이다 (--apply 없음)', !dispatchStep.includes('--apply'))
-  check('🔴 수동 실행 경로는 트리거를 schedule 로 속이지 않는다',
-    !dispatchStep.includes('--trigger=schedule') && !dispatchStep.includes('--trigger=local'))
+  const yml = codeOf('.github/workflows/auto-publish.yml')
+  check('🔴 🔴 **[계약] 발행 워크플로 예약 0 — 발행 schedule owner 는 host launchd 하나**', (yml.match(/-\s*cron:/g) ?? []).length === 0)
+  const runLines = yml.split('\n').filter((l) => !l.trim().startsWith('#'))
+  check('🔴 수동 실행 경로는 dry-run 이다 (--apply 없음)', !runLines.some((l) => l.includes('--apply')))
+  check('🔴 수동 실행 경로는 트리거를 schedule/local 로 속이지 않는다',
+    !runLines.some((l) => l.includes('--trigger=schedule') || l.includes('--trigger=local')))
+  check('🔴 수동 실행 경로도 consumer(--by=publish)를 지난다',
+    runLines.some((l) => /stage-consume-exec\.mts --by=publish -- npx tsx scripts\/original-post-auto-publish\.mts/.test(l)))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -520,150 +533,35 @@ console.log('\n⑫ 🔴 실제 트리거 도착 시각으로 본 **단계별 실
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑬ 🔴 설정 분리 preflight — 두 트리거가 같은 단계를 봐야 한다')
+console.log('\n⑬ 🔴 발행 트리거 preflight — 단일 실행 authority (2026-09-30)')
 // ─────────────────────────────────────────────────────────
 {
-  // 🔴 2026-09-14 실측 상태 재현 — local d3/d1 · GitHub 부재
-  const real = judgeTriggerParity({
-    local: { capacity: 'd3', release: 'd1' },
-    github: { capacity: undefined, release: undefined },
-  })
-  check('🔴 [실측] local capacity=d3 · GitHub 부재면 capacity 가 다르다고 말한다',
-    !real.ok && real.blockers.some((b) => b.includes('capacity 가 다르다')))
-  check('🟢 그래도 실제 공개 단계는 양쪽 d1 로 같다 (지금 사고가 없는 이유)',
-    real.local.effectiveRelease === 'd1' && real.github?.effectiveRelease === 'd1')
-
-  check('🟢 양쪽이 완전히 같으면 통과',
-    judgeTriggerParity({
-      local: { capacity: 'd3', release: 'd3' }, github: { capacity: 'd3', release: 'd3' },
-    }).ok)
-  check('🔴 한쪽만 release 를 올리면 막힌다 — 실제 공개 단계가 갈린다',
-    (() => {
-      const v = judgeTriggerParity({
-        local: { capacity: 'd3', release: 'd3' }, github: { capacity: 'd3', release: 'd1' },
-      })
-      return !v.ok && v.blockers.some((b) => b.includes('실제 공개 단계가 다르다'))
-    })())
-  check('🔴 GitHub 을 읽지 못하면 막는다 (fail-closed)',
-    !judgeTriggerParity({ local: { capacity: 'd3', release: 'd3' }, github: null }).ok)
-  check('🔴 허용 밖 값은 안전 단계로 떨어지고 그 사실이 남는다',
-    (() => {
-      const v = judgeTriggerParity({
-        local: { capacity: 'd99', release: 'd3' }, github: { capacity: 'd99', release: 'd3' },
-      })
-      return v.local.capacity === 'd1' && v.local.fellBack && v.local.effectiveRelease === 'd1'
-    })())
-  check('🔴 capacity 가 release 를 누르는 규칙이 양쪽에 같이 적용된다',
-    judgeTriggerParity({
-      local: { capacity: 'd1', release: 'd10' }, github: { capacity: 'd1', release: 'd10' },
-    }).local.effectiveRelease === 'd1')
-
   /**
-   * 🔴 주석은 설명문이다 — 옛 함수 이름이 "왜 바꿨는지" 로 적혀 있을 수 있다.
-   *    실제 호출만 보려면 주석을 걷어내고 본다(`original-post-publish-check` 와 같은 방식).
+   * 🔴 앞판 ⑬ · ⑭ 는 정본 env 와 GitHub Variables 의 단계 대조(parity)를 잠갔다. 두 트리거가 각자 단계를
+   *    읽던 시절의 게이트다 — 대조가 같아도 권위는 둘이었다(2026-09-22~24 GitHub 예약이 11건을 따로 발행).
+   *    이제 preflight 는 `stage-authority-graph` 로 **발행자가 하나인가**를 본다.
    */
+  const v = judgeAuthority(readAuthorityInputs(process.cwd(), renderedLaunchd()))
+  check('🟢 지금 저장소 — authority 위반 0', v.ok)
+  check('🔴 발행 엔트리를 부르는 경로는 전부 --by=publish · launchd 러너가 그중 하나',
+    v.reaches.filter((r) => v.publishEntries.includes(r.entry)).every((r) => r.wrappedBy === 'publish')
+    && v.reaches.some((r) => r.invoker === 'launchd:com.soransoran.original-post-runner' && r.entry === 'scripts/original-post-auto-publish.mts'))
   const pre = codeOf('scripts/publish-trigger-preflight.mts').split('\n')
-    .filter((l) => {
-      const t = l.trim()
-      return !t.startsWith('*') && !t.startsWith('//') && !t.startsWith('/**')
-    }).join('\n')
-  check('🔴 preflight 가 GitHub 을 못 읽으면 null 로 둔다 ({} 로 보정하지 않는다)',
-    /return null/.test(pre) && !/github = \{ capacity: undefined/.test(pre))
-  check('🔴 preflight 가 실패하면 exit 1 이다', /process\.exit\(verdict\.ok \? 0 : 1\)/.test(pre))
+    .filter((l) => { const t = l.trim(); return !t.startsWith('*') && !t.startsWith('//') && !t.startsWith('/**') }).join('\n')
+  check('🔴 preflight 가 authority 판정을 부른다', /judgeRepoAuthority\(\)/.test(pre))
+  check('🔴 preflight 가 실패하면 exit 1 이다', /process\.exit\(v\.ok \? 0 : 1\)/.test(pre))
   check('🔴 preflight 가 DB 를 열지 않는다', !/PrismaClient/.test(pre))
-  check('🔴 preflight 가 설정을 쓰지 않는다', !/writeFileSync|gh variable set|launchctl/.test(pre))
-  // 🔴 [회귀] cwd/.env.local · process.env 를 local 정본으로 쓰던 자리
-  check('🔴 [회귀] preflight 가 loadEnvLocal 을 쓰지 않는다', !/loadEnvLocal/.test(pre))
-  check('🔴 [회귀] preflight 가 process.env 를 local 정본으로 읽지 않는다',
-    !/process\.env\[/.test(pre))
-  check('🔴 preflight 가 정본 절대 경로를 읽는다', /readCanonicalStages\(\)/.test(pre))
-  check('🔴 preflight 가 정본을 못 읽으면 대조 전에 exit 1 한다',
-    /if \(!canonical\.ok\)/.test(pre) && pre.indexOf('if (!canonical.ok)') < pre.indexOf('judgeTriggerParity('))
-  check('🔴 gh variable list 가 --repo 를 명시한다',
-    // 🔴 정본은 template 한 곳이다(2026-09-26) — heartbeat preflight 와 같은 값을 import 한다
-    /'--repo', PUBLISH_REPO/.test(pre) && /PUBLISH_REPO,/.test(pre)
-    && /PUBLISH_REPO = 'MogoKim\/soransoran'/.test(codeOf('scripts/lib/original-post-runner-template.ts')))
+  check('🔴 preflight 가 GitHub Variables · 정본 env 단계를 읽지 않는다(읽을 이유가 없다)',
+    !/execFileSync|readEnvKeys|loadEnvLocal|process\.env\[/.test(pre))
+  check('🔴 preflight 가 설정을 쓰지 않는다', !/writeFileSync|launchctl/.test(pre))
+  const r = spawnSync(process.execPath, [...process.execArgv, 'scripts/publish-trigger-preflight.mts', '--json'], { encoding: 'utf-8' })
+  check('🔴 실제 preflight 프로세스 — exit 0 · JSON ok', r.status === 0 && (JSON.parse(r.stdout) as { ok: boolean }).ok === true)
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑭ 🔴 [회귀] 정본 env 읽기 — cwd · process.env 를 정본으로 쓰지 않는다')
+console.log('\n⑭ 설치 순서 · 템플릿 기록')
 // ─────────────────────────────────────────────────────────
 {
-  /**
-   * 🔴 **실측 재현 (2026-09-14).** PR 작업트리에는 `.env.local` 이 없다.
-   *    옛 preflight 는 `loadEnvLocal()` → cwd → `process.env` 순으로 읽어
-   *    `local d1/d1` 로 보고 **exit 0(거짓 통과)** 를 냈다. 실제 정본은 `d3/d1` 이었다.
-   */
-  const CANON_TEXT = [
-    '# 로컬 전용. 커밋하지 않는다',
-    'DATABASE_URL=postgresql://user:secret@host/db',
-    'OPENAI_API_KEY=sk-should-never-be-read',
-    'SORAN_CAPACITY_STAGE=d3',
-    'SORAN_RELEASE_STAGE=d1',
-  ].join('\n')
-
-  const canon = readCanonicalStages({ path: '/fake/env.local', read: () => CANON_TEXT })
-  check('🟢 [실측 재현] cwd 에 .env.local 이 없어도 정본에서 d3/d1 을 읽는다',
-    canon.ok && canon.setting.capacity === 'd3' && canon.setting.release === 'd1')
-
-  // 🔴 정본에서 단계 키 **둘만** 뽑는다 — 비밀은 메모리에도 올리지 않는다
-  check('🔴 정본 파서가 단계 키 둘만 돌려준다 (DATABASE_URL · API key 미포함)',
-    canon.ok && Object.keys(canon.setting).length === 2
-    && !JSON.stringify(canon).includes('secret') && !JSON.stringify(canon).includes('sk-'))
-
-  // 🔴 [회귀] process.env 를 d1/d1 로 심어도 정본이 이긴다
-  const savedCap = process.env[CAPACITY_ENV]
-  const savedRel = process.env[RELEASE_ENV]
-  process.env[CAPACITY_ENV] = 'd1'
-  process.env[RELEASE_ENV] = 'd1'
-  const underEnv = readCanonicalStages({ path: '/fake/env.local', read: () => CANON_TEXT })
-  check('🔴 [회귀] process.env 를 d1/d1 로 주입해도 정본 d3/d1 을 덮지 못한다',
-    underEnv.ok && underEnv.setting.capacity === 'd3' && underEnv.setting.release === 'd1')
-  if (savedCap === undefined) delete process.env[CAPACITY_ENV]; else process.env[CAPACITY_ENV] = savedCap
-  if (savedRel === undefined) delete process.env[RELEASE_ENV]; else process.env[RELEASE_ENV] = savedRel
-
-  // 🔴 그 정본과 GitHub 부재를 대조하면 불일치다
-  const v = judgeTriggerParity({
-    local: canon.ok ? canon.setting : { capacity: undefined, release: undefined },
-    github: { capacity: undefined, release: undefined },
-  })
-  check('🔴 [실측 재현] 정본 d3/d1 vs GitHub d1/d1 → 불일치로 막는다',
-    !v.ok && v.blockers.some((b) => b.includes('capacity 가 다르다')))
-
-  // ── fail-closed 세 갈래 ──
-  const missing = readCanonicalStages({
-    path: '/fake/none', read: () => { const e = new Error('no'); (e as { code?: string }).code = 'ENOENT'; throw e },
-  })
-  check('🔴 정본 파일이 없으면 fail-closed', !missing.ok && missing.reason.includes('정본 파일이 없다'))
-  const unreadable = readCanonicalStages({
-    path: '/fake/x', read: () => { const e = new Error('no'); (e as { code?: string }).code = 'EACCES'; throw e },
-  })
-  check('🔴 정본을 읽지 못하면 fail-closed', !unreadable.ok && unreadable.reason.includes('읽지 못했다'))
-  check('🔴 KEY=VALUE 줄이 없으면 파싱 실패다',
-    !parseCanonicalStages('그냥 글\n또 글').ok)
-  check('🔴 정본에 단계 키가 둘 다 없으면 fail-closed (조용히 d1 로 떨어뜨리지 않는다)',
-    (() => {
-      const r = parseCanonicalStages('DATABASE_URL=x\nFOO=bar')
-      return !r.ok && r.reason.includes('둘 다 없다')
-    })())
-
-  // ── 통과 조건 ──
-  const both = parseCanonicalStages('SORAN_CAPACITY_STAGE=d3\nSORAN_RELEASE_STAGE=d3')
-  check('🟢 정본 d3/d3 · GitHub d3/d3 이면 통과',
-    both.ok && judgeTriggerParity({ local: both.setting, github: { capacity: 'd3', release: 'd3' } }).ok)
-  check('🟢 따옴표로 감싼 값도 읽는다',
-    (() => {
-      const r = parseCanonicalStages('SORAN_CAPACITY_STAGE="d5"\nSORAN_RELEASE_STAGE=\'d5\'')
-      return r.ok && r.setting.capacity === 'd5' && r.setting.release === 'd5'
-    })())
-  check('🔴 한 키만 있으면 나머지는 (없음) 이고 fail-closed 로 d1 이 된다',
-    (() => {
-      const r = parseCanonicalStages('SORAN_CAPACITY_STAGE=d5')
-      if (!r.ok) return false
-      const p = judgeTriggerParity({ local: r.setting, github: { capacity: 'd5', release: undefined } })
-      return r.setting.release === undefined && p.local.release === 'd1' && p.ok
-    })())
-
   // ── 설치 순서: 배포·SHA → preflight → exit 0 일 때만 plist ──
   const steps = PUBLISH_RUNNER_INSTALL_STEPS
   const iDeploy = steps.findIndex((s) => s.includes('runtime:isolation-check'))

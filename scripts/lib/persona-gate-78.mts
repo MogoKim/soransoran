@@ -102,9 +102,8 @@ export function checkPersonaConsistency(
   if (FAMILY_PROXY.test(text)) codes.push('FAMILY_PROXY')
 
   // ── 축 2. No-Go ──
-  const noGo = [...(input.noGoTopics ?? []), ...(input.noGoExpressions ?? [])]
-    .filter((v) => v.trim() !== '')
-  if (noGo.some((v) => text.includes(v.trim()))) codes.push('NO_GO')
+  // 🔴 판정은 `persona-no-go` 하나 — 말버릇은 따옴표 · `류` 를 벗긴 열쇠로 보고, 전원 공통 금지(§7-2)도 본다
+  if (anyNoGo(noGoHits(text, { noGoTopics: input.noGoTopics, noGoExpressions: input.noGoExpressions }))) codes.push('NO_GO')
 
   // ── 축 3~5. 설정 모순 — identity 가 있어야 본다 ──
   const id = input.identity ?? null
@@ -126,8 +125,9 @@ export function checkPersonaConsistency(
     return { status: 'regenerate', codes, detail: `모순 ${codes.length} — ${codes.join(' · ')}` }
   }
   // 🔴 대조 집합이 없으면 "모순 없음" 이 아니라 "보지 못했다" 다
-  if (id === null && noGo.length === 0) {
-    return { status: 'notRun', codes: [], detail: 'identity · No-Go 없음 — 가족 경유 진술만 확인' }
+  const personalNoGo = [...(input.noGoTopics ?? []), ...(input.noGoExpressions ?? [])].filter((v) => v.trim() !== '')
+  if (id === null && personalNoGo.length === 0) {
+    return { status: 'notRun', codes: [], detail: 'identity · 개인 No-Go 없음 — 가족 경유 진술 · 공통 금지만 확인' }
   }
   return { status: 'pass', codes: [], detail: '설정 모순 없음' }
 }
@@ -164,6 +164,7 @@ export {
   DEFAULT_FINGERPRINT_THRESHOLDS, REQUIRED_PRIOR_TEXTS, gateEightCanRun,
   type FingerprintThresholds,
 } from '../../src/lib/persona-fingerprint-thresholds'
+import { anyNoGo, noGoHits } from '../../src/lib/persona-no-go'
 import {
   DEFAULT_FINGERPRINT_THRESHOLDS, type FingerprintThresholds,
 } from '../../src/lib/persona-fingerprint-thresholds'

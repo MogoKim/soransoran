@@ -150,11 +150,12 @@ export const PROFILES: Readonly<Record<ReleaseStage, ScaleProfile>> = {
 /**
  * 🔴 **러너가 돌릴 수 있는 단계 — `RELEASE_STAGES` 위에 D20·D30·D50 을 얹는다.**
  *
- *    `RELEASE_STAGES`·`PROFILES` 는 **d1~d10 그대로 둔다.** GitHub 예약 합집합
- *    (`allStageSlots` → `auto-publish.yml`)이 정본으로 쓴다 — 예약 10회를 늘리지 않는다.
+ *    `RELEASE_STAGES`·`PROFILES` 는 **d1~d10 그대로 둔다.** 발행 예약 합집합
+ *    (`allStageSlots` → launchd 발행 러너 plist)이 정본으로 쓴다 — 예약 10회를 늘리지 않는다.
+ *    🔴 (2026-09-30) GitHub `auto-publish.yml` 예약은 지웠다 — 두 번째 schedule owner 였다.
  *    D100 용량표(`d100-capacity.schedulerSupportOf`)는 이 러너 프로필을 읽는다 — d20~d50 감당 · d100 미감당.
  *    D20 이상은 **로컬 heartbeat(10분 격자)** 로만 돈다. 슬롯이 전부 그 격자 위에 있어서
- *    GitHub 예약 없이도 catch-up 이 도래한 슬롯을 낸다(`stage-scheduler-check` 가 격자·창·첫 댓글 3회를 본다).
+ *    정시판 예약 없이도 catch-up 이 도래한 슬롯을 낸다(`stage-scheduler-check` 가 격자·창·첫 댓글 3회를 본다).
  *
  * 🔴 **D100 은 여기 없다.** 지금 러너(격자 10분 · 회차당 1건 · 첫 댓글 3회 시도)는 하루 80건까지만
  *    담고, 댓글 하루 상한 $0.20 은 첫 댓글 100건을 사지 못한다. 천장으로 **표현**은 되지만
@@ -219,27 +220,10 @@ export const RELEASE_ENV = 'SORAN_RELEASE_STAGE'
 /** 준비된 capacity 단계 — 사람을 몇 단계까지 켜 뒀는가 */
 export const CAPACITY_ENV = 'SORAN_CAPACITY_STAGE'
 
-export type StageResolution = {
-  stage: ReleaseStage
-  /** 설정이 그대로 쓰였는가 */
-  fromEnv: boolean
-  /** 안전 단계로 떨어졌다면 그 이유 */
-  fallbackReason: string | null
-}
-
 /**
- * 🔴 env → 단계. **모르는 값은 안전 단계로 떨어진다.**
- *    "설정이 이상하니 일단 많이 낸다" 는 없다.
+ * 🔴 **`resolveStage`(d1~d10 만 받는 env 해석)를 지웠다** (2026-09-30). `resolveRuntimeStage` 와 허용 목록이 달라
+ *    release 가 d20 이 되면 d1 로 떨어뜨려 읽었다(A2 C9). 러너 단계 해석은 `resolveRuntimeStage` 하나다.
  */
-export function resolveStage(raw: string | undefined, label = 'release'): StageResolution {
-  const v = (raw ?? '').trim()
-  if (v === '') return { stage: SAFEST_STAGE, fromEnv: false, fallbackReason: `${label} 설정이 없다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다` }
-  if (!(RELEASE_STAGES as readonly string[]).includes(v)) {
-    return { stage: SAFEST_STAGE, fromEnv: false, fallbackReason: `${label} 설정 "${v}" 는 허용 단계가 아니다 (${RELEASE_STAGES.join('·')}) — ${SAFEST_STAGE} 로 둔다` }
-  }
-  return { stage: v as ReleaseStage, fromEnv: true, fallbackReason: null }
-}
-
 export type RuntimeStageResolution = {
   stage: RuntimeStage
   fromEnv: boolean
@@ -342,67 +326,12 @@ export function describeProfile(p: ScaleProfile): string {
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 단계 감속 — **여기 한 곳에서만 정한다** (2026-09-08)
+// 🔴 단계 감속(`safeStageFor` · `StageVerdict`)을 지웠다 (2026-09-30 · source-slot-v1)
 //
-//    준비도 판정(`scale-readiness`)과 런타임 해석(`scale-runtime`) 이 각자 감속하면
-//    화면이 말하는 단계와 실제로 쓰이는 단계가 갈린다 — 그것이 P0-1 결함이었다.
-//    이 파일은 아무것도 import 하지 않으므로 양쪽이 순환 없이 같은 함수를 쓸 수 있다.
+//    14일 준비도 판정으로 공개 단계를 깎던 규칙이다 — 러너(`resolveScale`)와 controller 가 함께 썼다.
+//    정본: 14일 완성 글 재고는 지속 준비도가 아니다. 단계는 StageDecision 하나가 정하고,
+//    그 결정은 운영 증거 PASS + `judgeNextPreflight` 로 오른다 · 운영 신호 브레이크로만 내려간다.
 // ─────────────────────────────────────────────────────────
-
-/** 한 단계가 지금 달성 가능한가 — 판정 근거는 호출부(시뮬레이션)가 만든다 */
-export type StageVerdict = { stage: RuntimeStage; ready: boolean; reasons: readonly string[] }
-
-/**
- * 🔴 요청 단계가 준비되지 않았으면 **ready 인 가장 높은 하위 단계**로 내린다.
- *    아무 단계도 준비되지 않았으면 가장 안전한 단계다.
- *
- *    🔴 판정이 아예 없으면(`verdicts` 가 비었으면) **감속하지 않는다** —
- *    "모른다" 를 "준비됐다" 로도 "실패" 로도 읽지 않는다. 모를 때의 안전장치는
- *    호출부가 정한다(운영 러너는 판정을 반드시 만들어 넘긴다).
- */
-export type SafeStage = {
-  stage: RuntimeStage
-  throttled: boolean
-  reason: string | null
-  /**
-   * 🔴 **고른 단계가 실제로 달성 가능한가.**
-   *
-   *    최저 단계마저 미달이면 `stage` 는 여전히 d1 이고 `throttled` 는 false 다
-   *    (더 내려갈 곳이 없으므로). 그 상태에서 "달성 가능" 이라고 적으면
-   *    화면이 미달을 초록으로 보여 준다 — 실제로 그런 모순이 나왔다.
-   *    그래서 **고른 단계의 준비 여부를 따로 들고 다닌다.**
-   */
-  chosenReady: boolean
-  /** 판정을 받지 못했다 (모른다). `chosenReady` 를 신뢰하지 않는다 */
-  unknown: boolean
-}
-
-export function safeStageFor(requested: RuntimeStage, verdicts: readonly StageVerdict[]): SafeStage {
-  if (verdicts.length === 0) {
-    return { stage: requested, throttled: false, reason: null, chosenReady: false, unknown: true }
-  }
-  const byStage = new Map(verdicts.map((v) => [v.stage, v]))
-  if (byStage.get(requested)?.ready === true) {
-    return { stage: requested, throttled: false, reason: null, chosenReady: true, unknown: false }
-  }
-  const lower = [...RUNTIME_STAGES].filter((s) => stageRank(s) <= stageRank(requested)).reverse()
-  for (const s of lower) {
-    if (byStage.get(s)?.ready === true) {
-      return {
-        stage: s, throttled: s !== requested, chosenReady: true, unknown: false,
-        reason: s === requested ? null
-          : `${requested} 는 준비되지 않았다 (${(byStage.get(requested)?.reasons ?? ['판정 없음']).join(' / ')}) — ${s} 로 감속`,
-      }
-    }
-  }
-  // 🔴 최저 단계마저 미달이다. 더 내려갈 곳이 없으니 d1 을 유지하되 **NOT_READY 로 말한다**
-  return {
-    stage: SAFEST_STAGE, throttled: requested !== SAFEST_STAGE,
-    chosenReady: false, unknown: false,
-    reason: `어느 단계도 준비되지 않았다 — 가장 안전한 ${SAFEST_STAGE} 를 유지하지만 그 단계도 미달이다`
-      + ` (${(byStage.get(SAFEST_STAGE)?.reasons ?? ['판정 없음']).join(' / ')})`,
-  }
-}
 
 // ─────────────────────────────────────────────────────────
 // 🔴 시간축 — **두 개다. 섞으면 준비도가 부풀거나 깎인다** (2026-09-08)

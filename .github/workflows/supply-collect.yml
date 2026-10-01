@@ -35,20 +35,23 @@
 #    🔴 반대로 **처리는 겹쳐도 중복 적재가 생기지 않는다** — 적재 단계가
 #    `provenanceKey` 로 DB 를 대조하고 트랜잭션 안에서 만든다.
 #
-# 🔴 **이 워크플로우가 하지 않는 것**: 발행 0 · 네이버 접근 0 ·
-#    재고가 버퍼 목표(700) 이상이면 모델과 DB 를 쓰지 않는다(판정은 `supply-process` 안에 있다).
+# 🔴 **이 워크플로우가 하지 않는 것**: 발행 0 · 네이버 접근 0 · 예약(schedule) 0 · 단계 판단 0.
+#
+# 🔴 **단일 실행 authority** (2026-09-30 · D100 정본 "single always-on runtime owner").
+#    공급 처리의 자동 schedule owner 는 always-on host 의 launchd(`com.soransoran.supply-process`) 하나다.
+#    이 워크플로는 **손으로 누르는 비상 경로**뿐이고, 처리 step 은 launchd 와 같은 문
+#    (`stage-consume-exec --by=supply`)을 지난다 — 단계는 StageDecision 만 정한다.
+#    GitHub 러너에는 host 의 controller 스위치가 없어 consumer 는 가장 안전한 d1 로 본다.
+#    🔴 지운 옛 authority: `vars.SORAN_CAPACITY_STAGE` · `vars.SORAN_RELEASE_STAGE` 전달 ·
+#       `supply:d100-plan` 계획 step(계획이 실행과 따로 단계를 읽던 두 번째 계산).
 name: supply-collect
 
 on:
-  # 🔴 켜지 않았다. 켜기 전에 로컬 82cook 얇은 상세 job 을 먼저 내린다(owner 는 한쪽뿐이다).
-  #    슬롯은 `npm run supply:d100-plan` 이 역산한 값을 쓴다 —
-  #    여기에 손으로 적으면 계획과 실행이 두 벌이 된다.
-  # schedule:
-  #   - cron: '0 */4 * * *'   # 4시간마다 = 6회/day (UTC)
+  # 🔴 schedule 을 두지 않는다 — 자동 owner 는 host launchd 하나다(두 owner 는 `stage-authority-graph` 가 막는다).
   workflow_dispatch:
     inputs:
       apply:
-        description: '🔴 true 면 실제 수집·처리. 비우면 계획만(네트워크 0)'
+        description: '🔴 true 면 실제 수집·처리. 비우면 secret · 스위치 확인만(네트워크 0 · DB write 0)'
         required: false
         default: 'false'
 
@@ -74,8 +77,6 @@ jobs:
       #    하나로 묶으면 82cook 을 멈추려다 공급 전체가 멈춘다(옛 구조의 실패다)
       SORAN_82COOK_THIN_DETAIL_ENABLED: ${{ vars.SORAN_82COOK_THIN_DETAIL_ENABLED }}
       SORAN_SUPPLY_PROCESS_ENABLED: ${{ vars.SORAN_SUPPLY_PROCESS_ENABLED }}
-      SORAN_CAPACITY_STAGE: ${{ vars.SORAN_CAPACITY_STAGE }}
-      SORAN_RELEASE_STAGE: ${{ vars.SORAN_RELEASE_STAGE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,7 +94,7 @@ jobs:
             exit 1
           fi
           echo "✅ secret 3종 있음 (값은 찍지 않습니다)"
-          # 🔴 스위치는 --apply 회차에서만 필수다. 계획만 보는 회차는 없어도 돈다.
+          # 🔴 스위치는 --apply 회차에서만 필수다. 확인만 하는 회차는 없어도 돈다.
           if [ "${{ inputs.apply }}" = "true" ]; then
             sw=""
             [ "$SORAN_82COOK_THIN_DETAIL_ENABLED" != "true" ] && sw="$sw SORAN_82COOK_THIN_DETAIL_ENABLED(variable)"
@@ -105,7 +106,7 @@ jobs:
             fi
             echo "✅ 스위치 2종 true"
           else
-            echo "🟡 계획 회차 — 스위치는 확인만 합니다 (82cook=$SORAN_82COOK_THIN_DETAIL_ENABLED · 처리=$SORAN_SUPPLY_PROCESS_ENABLED)"
+            echo "🟡 확인 회차 — 스위치는 확인만 합니다 (82cook=$SORAN_82COOK_THIN_DETAIL_ENABLED · 처리=$SORAN_SUPPLY_PROCESS_ENABLED)"
           fi
 
       - uses: actions/setup-node@v4
@@ -118,19 +119,6 @@ jobs:
 
       - name: Prisma Client 생성
         run: npx prisma generate
-
-      # 🔴 무엇을 할지 **먼저 찍는다.** 네트워크 0 · DB write 0.
-      #    계획을 못 세우면 여기서 멈춘다 — 모르는 채로 남의 서버를 두드리지 않는다.
-      - name: 공급 계획 (네트워크 0)
-        run: |
-          set -o pipefail
-          npm run supply:d100-plan 2>&1 | tee /tmp/plan.txt
-          {
-            echo "## D100 공급 계획"
-            echo '```'
-            cat /tmp/plan.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
       # ── ① 82cook 수집 — 🔴 **이 step 은 수집만 한다.** 판정도 적재도 하지 않는다.
       #    상한·요청 간격·robots·403/429 차단기는 이 스크립트 안에 이미 있다.
@@ -157,7 +145,7 @@ jobs:
         if: always() && github.event_name == 'workflow_dispatch' && inputs.apply == 'true'
         run: |
           set -o pipefail
-          npx tsx scripts/supply-process.mts --live 2>&1 | tee /tmp/process.txt
+          npx tsx scripts/stage-consume-exec.mts --by=supply -- npx tsx scripts/supply-process.mts --live 2>&1 | tee /tmp/process.txt
           {
             echo "## 공급 처리"
             echo "수집 step 결과: ${{ steps.collect82.outcome }}"

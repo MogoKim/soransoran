@@ -15,60 +15,70 @@
  *      공개 발행(하루 상한·주 cap·간격·슬롯)은 release 기준으로 작게 잡는다.
  *      하나의 프로필로 둘을 다루면 `capacity=d10, release=d1` 에서 재고 목표가 14가 된다.
  *
- *   ③ **감속은 표시가 아니라 강제여야 한다.** 준비도 판정 결과가 `releaseProfile` 을
- *      실제로 낮춘다. 화면 문구만 바꾸면 관제는 d1 이라 말하는데 러너는 10건을 낸다.
+ *   ③ **단계의 정본은 StageDecision 하나다** (2026-09-30). 준비도 · canary · window 로 여기서 다시 올리거나
+ *      깎지 않는다 — 결정이 이미 증거와 preflight 로 정했다.
  *
  * 🔴 설치를 잊으면 **가장 안전한 d1** 이다. 조용히 큰 값으로 열리지 않는다.
  */
 
 import {
-  RELEASE_ENV, CAPACITY_ENV, SAFEST_STAGE, resolveRuntimeStage, safeStageFor, stageRank,
+  RELEASE_ENV, CAPACITY_ENV, SAFEST_STAGE, resolveRuntimeStage, stageRank,
   RUNTIME_STAGES, profileOf,
-  type RuntimeStage, type ScaleProfile, type StageVerdict,
+  type RuntimeStage, type ScaleProfile,
 } from './scale-profile'
-import {
-  canaryAuthorization, windowAuthorization, type CanaryVerdict,
-} from './release-canary'
+
+/**
+ * 🔴 **StageDecision 경유 표식** (2026-09-30 · Lane A 단일 실행 authority).
+ *
+ *    `SORAN_RELEASE_STAGE` · `SORAN_CAPACITY_STAGE` 는 이제 **운반용 칸**이다 — 사람이 적는 설정이 아니다.
+ *    consumer(`stage-consume-exec` → `consumerEnvOf`)가 그날 검증된 결정을 넣을 때 **이 표식에 결정의 KST 날짜**를
+ *    함께 넣는다. 표식이 없으면 두 칸은 **읽지 않는다** — 가장 안전한 단계다.
+ *
+ *    🔴 지운 권위: GitHub Variables(`vars.SORAN_*_STAGE`) · `.env.local` 의 손으로 적은 단계 ·
+ *       controller 가 꺼졌을 때 env 값을 그대로 쓰던 legacy 경로. 셋 다 결정 밖에서 단계를 정했다.
+ *    🔴 이 키를 워크플로 · plist · package.json · 운영 셸이나 허용 밖 코드에 적으면
+ *       `stage-authority-graph`(runtime-isolation-check ⑦)가 CI 에서 막는다 — 표식을 손으로 만드는 길을 코드에 두지 않는다.
+ *    🔴 날짜를 "오늘" 과 견주지 않는다. 표식은 **출처**의 증거이지 유효기간이 아니다 — 하루의 경계는 결정 자체
+ *       (`validateStoredDecision` 의 `expectKstDate`)와 증명일(`proofDayOf`)이 이미 지킨다.
+ */
+export const STAGE_DECISION_MARK_ENV = 'SORAN_STAGE_DECISION_DATE'
+
+/** 🔴 결정이 넣은 단계 칸 — 표식이 있을 때만 값이 있다. 아니면 둘 다 undefined(= 가장 안전한 단계) */
+export type DecisionStageEnv = { capacity: string | undefined; release: string | undefined; marked: boolean; reason: string | null }
+
+/**
+ * 🔴 **단계 env 를 읽는 유일한 문** — `resolveScale` · `releaseStageCeiling` · 증명일이 전부 이것을 지난다.
+ *    표식이 KST 날짜 모양(`YYYY-MM-DD`)일 때만 두 칸을 돌려준다.
+ */
+export function decisionStageEnv(env: Readonly<Record<string, string | undefined>>): DecisionStageEnv {
+  const mark = (env[STAGE_DECISION_MARK_ENV] ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(mark)) {
+    return {
+      capacity: undefined, release: undefined, marked: false,
+      reason: 'StageDecision 경유가 아니다(표식 없음) — env 단계 칸은 읽지 않는다 · 가장 안전한 단계',
+    }
+  }
+  return { capacity: env[CAPACITY_ENV], release: env[RELEASE_ENV], marked: true, reason: null }
+}
 
 export type ResolvedScale = {
-  /** 준비된 능력 — 내부 공급(재고·수집)이 이것을 따른다 */
+  /** 🔴 다음에 증명할 단계(결정의 `capacity`) — 공급 준비 눈금 */
   capacityStage: RuntimeStage
-  /** env 가 요청한 공개량 */
+  /** env(= consumer 가 넣은 결정 값)가 요청한 공개량 */
   requestedRelease: RuntimeStage
-  /** 🔴 capacity 상한과 준비도 감속을 **모두 적용한** 실제 공개량 */
+  /** 🔴 capacity 상한을 적용한 실제 공개량 */
   releaseStage: RuntimeStage
   /** 🔴 내부 공급 정본 */
   capacityProfile: ScaleProfile
   /** 🔴 공개 발행 정본 */
   releaseProfile: ScaleProfile
   throttledByCapacity: boolean
-  throttledByReadiness: boolean
-  /** 준비도 판정을 받았는가. false 면 감속이 적용되지 않았다는 뜻이다 */
-  readinessApplied: boolean
-  /**
-   * 🔴 **고른 단계가 실제로 달성 가능한가.**
-   *    최저 단계마저 미달이면 더 내려갈 곳이 없어 `throttledByReadiness` 는 false 다.
-   *    그때 "달성 가능" 이라고 적으면 화면이 미달을 초록으로 보여 준다 —
-   *    그래서 이 값을 따로 들고 다니고, 화면은 이것으로 색을 정한다.
-   */
-  chosenReady: boolean
-  /**
-   * 🔴 **하루짜리 첫 시험으로 올라간 단계인가** (2026-09-21).
-   *
-   *    `true` 면 이 회차는 **지속 운영이 아니다.** 준비도 감속을 그날 하루만
-   *    비켜 간 것이고, `chosenReady` 는 여전히 `false` 다 —
-   *    14일 누적·공백·재고 조건은 그대로 미달이라는 뜻이다.
-   *    🔴 두 값을 같은 이름으로 부르지 않으려고 칸을 따로 둔다.
-   */
-  canaryStage: boolean
-  /** 그 허가가 묶인 KST 날짜. 허가가 없으면 null */
-  canaryDate: string | null
   notes: readonly string[]
   /** 이 설정이 어디서 왔는가 — 화면·JSON 에 같이 적는다 */
   source: 'default-safest' | 'env'
 }
 
-/** 🔴 아무것도 설치되지 않았을 때의 값 — 지금 운영값과 정확히 같다 */
+/** 🔴 아무것도 설치되지 않았을 때의 값 — 가장 안전한 d1 */
 export const SAFEST_SCALE: ResolvedScale = Object.freeze({
   capacityStage: SAFEST_STAGE,
   requestedRelease: SAFEST_STAGE,
@@ -76,11 +86,6 @@ export const SAFEST_SCALE: ResolvedScale = Object.freeze({
   capacityProfile: profileOf(SAFEST_STAGE),
   releaseProfile: profileOf(SAFEST_STAGE),
   throttledByCapacity: false,
-  throttledByReadiness: false,
-  readinessApplied: false,
-  chosenReady: false,
-  canaryStage: false,
-  canaryDate: null,
   notes: Object.freeze([`규모 설정이 설치되지 않았다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다`]),
   source: 'default-safest',
 })
@@ -88,35 +93,20 @@ export const SAFEST_SCALE: ResolvedScale = Object.freeze({
 /**
  * 🔴 env → 설정. **순수 함수다** — `process.env` 를 직접 읽지 않는다.
  *
- *    `readiness` 를 주면 준비되지 않은 단계를 실제로 낮춘다.
- *    주지 않으면 `throttledByReadiness=false` · `readinessApplied=false` 로 남고,
- *    그 사실이 `notes` 에 적힌다 — "감속을 안 했다" 를 숨기지 않는다.
+ * 🔴 **단계의 정본은 StageDecision 하나다** (2026-09-30 · source-slot-v1). consumer(`stage-consume-exec`)가
+ *    그날 결정의 `release` · `capacity` 를 env 로 넣는다 — 이 함수는 그것을 읽을 뿐이다.
+ *    🔴 **지운 입력**: 14일 준비도 감속(`readiness` · `safeStageFor`) · 하루짜리 시험 허가(canary) ·
+ *    기간형 허가(window). 셋 다 결정 밖에서 단계를 올리거나 깎던 두 번째 · 세 번째 정본이었다.
+ *    🔴 **표식(`STAGE_DECISION_MARK_ENV`)이 붙은 env 만 읽는다.** 표식이 없으면(GitHub Variables · 손으로 적은
+ *    `.env.local` · 러너 직접 실행) 가장 안전한 단계다. controller flag 가 꺼지면 consumer 도 가장 안전한 단계를
+ *    넣는다 — env 로 돌아가는 legacy 롤백 경로는 지웠다.
  */
-export function resolveScale(
-  env: Readonly<Record<string, string | undefined>>,
-  opts: {
-    readiness?: readonly StageVerdict[]
-    /**
-     * 🔴 **하루짜리 첫 시험.** 호출부가 그날치 시뮬레이션으로 판정해 넘긴다 —
-     *    이 파일은 DB 를 모르므로 여기서 계산하지 않는다(`readiness` 와 같은 방식).
-     */
-    canary?: { now: Date; verdict: CanaryVerdict | null }
-    /**
-     * 🔴 **기간형 제한 운영.** `publishedToday` 는 그날 단계를 고정하는 근거다 —
-     *    이미 낸 날의 단계를 낮추면 그 발행이 상한 초과가 된다.
-     */
-    window?: { now: Date; verdict: CanaryVerdict | null; dayVerdict: CanaryVerdict | null; publishedToday: number }
-  } = {},
-): ResolvedScale {
-  /**
-   * 🔴 **러너 단계(d1~d50)로 읽는다** (2026-09-29 generic scheduler 배선).
-   *    D20 이상도 같은 규칙이다 — capacity 가 천장이고, 시험·기간 허가도 그 위로 올라가지 않는다.
-   */
-  const cap = resolveRuntimeStage(env[CAPACITY_ENV], 'capacity')
-  const rel = resolveRuntimeStage(env[RELEASE_ENV], 'release')
-  const notes: string[] = [cap.fallbackReason, rel.fallbackReason].filter((x): x is string => x !== null)
-
-  // ① capacity 상한 — 준비한 것보다 많이 낼 수 없다
+export function resolveScale(env: Readonly<Record<string, string | undefined>>): ResolvedScale {
+  const d = decisionStageEnv(env)
+  const cap = resolveRuntimeStage(d.capacity, 'capacity')
+  const rel = resolveRuntimeStage(d.release, 'release')
+  const notes: string[] = [d.reason, cap.fallbackReason, rel.fallbackReason].filter((x): x is string => x !== null)
+  // capacity 상한 — 결정 검증이 이미 release ≤ capacity 를 지킨다. 여기서는 손으로 적은 env 도 같은 규칙을 지나게 한다
   let stage = rel.stage
   let throttledByCapacity = false
   if (stageRank(rel.stage) > stageRank(cap.stage)) {
@@ -124,144 +114,6 @@ export function resolveScale(
     throttledByCapacity = true
     notes.push(`release=${rel.stage} 가 capacity=${cap.stage} 를 넘는다 — ${cap.stage} 로 감속`)
   }
-
-  /**
-   * ②-a 🔴 **하루짜리 첫 시험 허가** (2026-09-21).
-   *
-   *    허가는 `SORAN_RELEASE_CANARY_STAGE` 와 `SORAN_RELEASE_CANARY_DATE` 를
-   *    **둘 다** 요구하고, 그 KST 날짜 하루만 산다. 날짜가 지나면 아무도 끄지
-   *    않아도 꺼진다 — "설정을 올려 두었다" 가 조용히 상시 승격이 되지 않게 한다.
-   *
-   * 🔴 **capacity 상한은 비켜 가지 않는다.** 위 ① 을 통과한 뒤에만 본다 —
-   *    내부 공급이 준비한 것보다 많이 내는 길은 시험이라도 열지 않는다.
-   *
-   * 🔴 그날치 판정이 `ok` 가 아니면 켜지지 않는다. 허가만으로는 올라가지 않는다.
-   */
-  /**
-   * ②-0 🔴 **기간형 제한 운영** (2026-09-22).
-   *
-   *    하루짜리와 달리 **기간**을 명시한다 — 매일 날짜를 바꾸지 않아도 되고,
-   *    끝나면 사람 개입 없이 닫힌다. 🔴 지속 운영 승격이 아니다.
-   *
-   * 🔴 **그날 첫 발행 뒤에는 단계가 바뀌지 않는다.** 아침에 d3 로 한 편을 내고
-   *    낮에 d1 로 내려가면, 이미 낸 그 한 편이 "상한 초과" 가 된다 —
-   *    같은 날 두 규칙이 겹치면 어느 쪽도 지켜지지 않는다.
-   *    그래서 `publishedToday > 0` 이면 **그날 단계를 고정**한다.
-   */
-  const win = opts.window
-  let windowStage = false
-  let windowRange: string | null = null
-  if (win !== undefined) {
-    const wa = windowAuthorization(env, win.now, RUNTIME_STAGES)
-    windowRange = wa.from === null ? null : `${wa.from}~${wa.until}`
-    if (wa.note !== null) notes.push(wa.note)
-    if (wa.activeToday && wa.stage !== null) {
-      if (stageRank(wa.stage) > stageRank(cap.stage)) {
-        notes.push(`🔴 기간 허가 ${wa.stage} 가 capacity=${cap.stage} 를 넘는다 — 열지 않는다`)
-      } else if (win.dayVerdict === null) {
-        notes.push('🔴 기간 허가는 있으나 그날치 판정을 받지 못했다 — 켜지 않는다(fail-closed)')
-      } else if (win.dayVerdict.stage !== wa.stage) {
-        notes.push(`🔴 기간 허가는 ${wa.stage} 인데 판정은 ${win.dayVerdict.stage} 다 — 켜지 않는다`)
-      } else if (win.publishedToday > profileOf(stage).dailyTarget) {
-        /**
-         * 🔴 **이미 기본 단계 상한을 넘겨 낸 날은 그 단계를 지킨다.**
-         *    여기서 내리면 **이미 나간 글이 상한 초과**가 된다 — 그날치 판정이
-         *    지금 NO-GO 여도 마찬가지다. 더 낼지 말지는 `judgeDayGuard` 가 따로 정한다.
-         */
-        stage = wa.stage
-        windowStage = true
-        notes.push(`🔴 오늘 이미 ${win.publishedToday}건 냈다 — 그날 단계 ${wa.stage} 를 **고정**한다`)
-        notes.push(`🔴 기본 단계 ${profileOf(stage).dailyTarget}건을 넘겼다 — 내리면 이미 낸 것이 상한 초과가 된다`)
-      } else if (!win.dayVerdict.ok) {
-        notes.push(`🔴 기간 ${wa.stage} 를 켜지 않는다 — ${win.dayVerdict.reasons.join(' / ')}`)
-      } else if (stageRank(wa.stage) > stageRank(stage)) {
-        stage = wa.stage
-        windowStage = true
-        notes.push(`🔴 **기간형 제한 운영** ${wa.stage} · ${wa.from}~${wa.until}`)
-        notes.push('🔴 지속 운영 승격이 아니다 — 14일 누적·공백·재고 조건은 그대로 미달이다')
-        if (win.publishedToday > 0) {
-          /**
-           * 🔴 **`publishedToday > 0` 만으로 단계를 확정하지 않는다** (2026-09-22 보정).
-           *
-           *    앞판은 오늘 발행이 하나라도 있으면 그것만 보고 기간 단계를 확정했다.
-           *    그래서 **d1 로 한 편이 나간 날 오후에 변수를 켜는 것만으로** 그날이 d3 가 됐다 —
-           *    그날치 판정(재고·화자·신선도)을 한 번도 묻지 않고 두 편이 더 열렸다.
-           *    그 한 편이 어느 단계에서 나갔는지는 `PersonaActivityLog` 에 남지 않아
-           *    **구분할 수 없다.** 구분할 수 없으면 판정을 물어야 한다.
-           *
-           * 🔴 **안전한 활성화 조건**: 기간은 *그날 발행이 시작되기 전에* 켠다.
-           *    이미 낸 날 오후에 켜면, 그날치 판정이 GO 일 때만 열린다(지금 이 자리다).
-           *    판정이 NO-GO 면 열리지 않고, 기본 단계 상한을 이미 넘긴 날만 고정된다.
-           */
-          notes.push(`🔴 오늘 이미 ${win.publishedToday}건 냈다 — 어느 단계에서 나갔는지 구분할 수 없다`)
-          notes.push('🔴 그래서 발행 수만으로 확정하지 않았다 — 그날치 판정이 GO 라서 열었다')
-        }
-      }
-    }
-  }
-
-  const canary = opts.canary
-  let canaryStage = false
-  let canaryDate: string | null = null
-  if (canary !== undefined) {
-    const auth = canaryAuthorization(env, canary.now, RUNTIME_STAGES)
-    canaryDate = auth.date
-    if (auth.note !== null) notes.push(auth.note)
-    if (auth.activeToday && auth.stage !== null) {
-      if (stageRank(auth.stage) > stageRank(cap.stage)) {
-        notes.push(`🔴 첫 시험 ${auth.stage} 가 capacity=${cap.stage} 를 넘는다 — 시험이라도 열지 않는다`)
-      } else if (canary.verdict === null) {
-        notes.push('🔴 첫 시험 허가는 있으나 그날치 판정을 받지 못했다 — 켜지 않는다(fail-closed)')
-      } else if (canary.verdict.stage !== auth.stage) {
-        /**
-         * 🔴 **허가한 단계와 판정한 단계가 다르면 거부한다** (2026-09-21).
-         *
-         *    호출부가 d5 를 판정해 놓고 d3 허가에 붙이면, 여기서는 그 차이를
-         *    볼 수 없어 **다른 단계의 계산으로 단계를 올리게** 된다.
-         *    두 값이 같은지는 이 자리에서만 확인할 수 있다.
-         */
-        notes.push(`🔴 첫 시험 허가는 ${auth.stage} 인데 판정은 ${canary.verdict.stage} 다`
-          + ' — 다른 단계의 계산으로 올리지 않는다(fail-closed)')
-      } else if (!canary.verdict.ok) {
-        notes.push(`🔴 첫 시험 ${auth.stage} 를 켜지 않는다 — ${canary.verdict.reasons.join(' / ')}`)
-      } else if (stageRank(auth.stage) <= stageRank(stage)) {
-        notes.push(`첫 시험 ${auth.stage} 는 지금 단계보다 높지 않다 — 그대로 둔다`)
-      } else {
-        stage = auth.stage
-        canaryStage = true
-        notes.push(`🔴 **하루짜리 첫 시험** ${auth.stage} · ${auth.date}`
-          + ` — 오늘 ${canary.verdict.published}/${canary.verdict.want}건 발행`
-          + ` · 이 회차 필요 ${canary.verdict.need}건 · 낼 수 있는 것 ${canary.verdict.can}건`)
-        notes.push('🔴 지속 운영 승격이 아니다 — 14일 누적·공백·재고 조건은 그대로 미달이다')
-      }
-    }
-  }
-
-  // ② 준비도 감속 — 🔴 표시가 아니라 **실제 프로필을 낮춘다**
-  let throttledByReadiness = false
-  let chosenReady = false
-  const readiness = opts.readiness
-  if (canaryStage || windowStage) {
-    /**
-     * 🔴 **시험 회차는 준비도 감속을 건너뛴다.** 그것이 이 기능의 전부다 —
-     *    다른 안전장치(하루 상한 · 슬롯 · 신선도 · persona 적격 · 중복 · 트랜잭션)는
-     *    아래 경로에서 그대로 돈다. 🔴 `chosenReady` 는 **false 로 남긴다.**
-     */
-    notes.push('🔴 시험 회차라 준비도 감속을 적용하지 않았다 — 준비됐다는 뜻이 아니다')
-  } else if (readiness !== undefined && readiness.length > 0) {
-    const safe = safeStageFor(stage, readiness)
-    if (safe.stage !== stage) {
-      throttledByReadiness = true
-      notes.push(safe.reason ?? `${stage} → ${safe.stage} 감속`)
-      stage = safe.stage
-    }
-    chosenReady = safe.chosenReady
-    // 🔴 더 내려갈 곳이 없어 감속 플래그가 안 서는 경우도 **사유는 남긴다**
-    if (!safe.chosenReady && !throttledByReadiness && safe.reason !== null) notes.push(safe.reason)
-  } else {
-    notes.push('준비도 판정을 받지 않았다 — 준비도 감속은 적용되지 않았다')
-  }
-
   return {
     capacityStage: cap.stage,
     requestedRelease: rel.stage,
@@ -269,11 +121,6 @@ export function resolveScale(
     capacityProfile: profileOf(cap.stage),
     releaseProfile: profileOf(stage),
     throttledByCapacity,
-    throttledByReadiness,
-    readinessApplied: !canaryStage && !windowStage && readiness !== undefined && readiness.length > 0,
-    chosenReady,
-    canaryStage: canaryStage || windowStage,
-    canaryDate: canaryDate ?? windowRange,
     notes,
     source: 'env',
   }
@@ -307,19 +154,9 @@ export function resetScale(): void {
   installed = SAFEST_SCALE
 }
 
-/**
- * 🔴 편의 함수 — `loadEnvLocal()` 뒤에 이 한 줄이면 된다.
- *    준비도는 DB 를 읽어야 나오므로, 그것을 만든 뒤 다시 부른다(2단계).
- */
-export function installFromEnv(
-  env: Readonly<Record<string, string | undefined>>,
-  opts: {
-    readiness?: readonly StageVerdict[]
-    canary?: { now: Date; verdict: CanaryVerdict | null }
-    window?: { now: Date; verdict: CanaryVerdict | null; dayVerdict: CanaryVerdict | null; publishedToday: number }
-  } = {},
-): ResolvedScale {
-  return applyScale(resolveScale(env, opts))
+/** 🔴 편의 함수 — `loadEnvLocal()` 뒤에 이 한 줄이면 된다 */
+export function installFromEnv(env: Readonly<Record<string, string | undefined>>): ResolvedScale {
+  return applyScale(resolveScale(env))
 }
 
 /** 사람이 읽을 한 줄 — 화면과 JSON 이 같은 문장을 쓴다 */
@@ -330,21 +167,16 @@ export function describeScale(r: ResolvedScale): string {
 }
 
 /**
- * 🔴 **env 만으로 정하는 공개 단계 천장** (2026-09-25 · auto-ready-v2).
- *
- *    `resolveScale` 은 준비도·그날치 판정으로 단계를 **낮추고**, 기간·첫 시험 허가로만
- *    `release` 위로 **올린다** — 그리고 어떤 경우에도 capacity 를 넘지 않는다.
- *    그래서 `resolveScale` 이 낼 수 있는 가장 높은 단계는 env 만으로 정해진다:
- *      min(capacity, max(release, 오늘 유효한 기간 허가, 오늘 유효한 첫 시험 허가))
- *    발행 트랜잭션은 호출자가 넘긴 단계를 이 천장으로 누른다 — 넘긴 값이 더 높으면
- *    천장을 쓴다. 호출자 숫자가 상한을 여는 길을 없앤다.
+ * 🔴 **결정 표식이 붙은 env 로 정하는 공개 단계 천장** (2026-09-25 · 2026-09-30 단순화) — `min(capacity, release)`.
+ *    발행 트랜잭션은 호출자가 넘긴 단계를 이 천장으로 누른다 — 호출자 숫자가 상한을 여는 길을 없앤다.
+ *    🔴 canary · window 허가로 천장을 올리던 경로는 지웠다(결정이 유일한 단계 입력이다).
+ *    🔴 표식이 없으면(러너를 consumer 없이 직접 실행) 천장은 가장 안전한 단계다 — 트랜잭션 안에서도 같다.
  */
 export function releaseStageCeiling(env: Readonly<Record<string, string | undefined>>, now: Date): RuntimeStage {
-  const cap = resolveRuntimeStage(env[CAPACITY_ENV], 'capacity').stage
-  let top = resolveRuntimeStage(env[RELEASE_ENV], 'release').stage
-  for (const a of [windowAuthorization(env, now, RUNTIME_STAGES), canaryAuthorization(env, now, RUNTIME_STAGES)]) {
-    if (a.activeToday && a.stage !== null && stageRank(a.stage) > stageRank(top)) top = a.stage
-  }
+  void now
+  const d = decisionStageEnv(env)
+  const cap = resolveRuntimeStage(d.capacity, 'capacity').stage
+  const top = resolveRuntimeStage(d.release, 'release').stage
   return stageRank(top) > stageRank(cap) ? cap : top
 }
 

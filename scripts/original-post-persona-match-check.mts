@@ -37,7 +37,7 @@ const base: PersonaForMatch = {
   accountCount: 0,
   maritalStatus: '기혼', childrenCount: 2, childrenAgeBands: ['중고등'],
   parentCare: '상시', menopauseStatus: '진행중', workStatus: '전업',
-  economicStatus: '보통', region: null, noGoTopics: [], voiceLength: '보통',
+  economicStatus: '보통', region: null, noGoTopics: [], noGoExpressions: [], voiceLength: '보통',
   postsThisWeek: 0, daysSinceLastPost: null,
 }
 const P = (o: Partial<PersonaForMatch>): PersonaForMatch => ({ ...base, ...o })
@@ -255,6 +255,8 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
   //    판정을 여기로 복붙하면 두 벌이 되므로 부른다. 아래 검사가 그 파일의 순수성도 본다.
   const ALLOWED_IMPORTS = [
     './real-member-gate', './scale-profile', './scale-runtime', './original-post-voice-match',
+    // 🔴 (quality-v5) No-Go 판정 하나 — 순수 함수(DB · 파일 · 네트워크 0)
+    './persona-no-go',
   ] as const
   // 🔴 부르는 쪽이 순수해도 불린 쪽이 더러우면 의미가 없다
   {
@@ -799,8 +801,7 @@ function always0Diff(): number {
     'src/lib/persona-for-match.ts',
     'scripts/original-post-match-assign.mts',
     'scripts/original-post-persona-match-dry-run.mts',
-    'scripts/supply-health.mts',
-    'scripts/persona-capacity-planner.mts',
+    // 🔴 (2026-09-30) supply-health 는 러너와 같은 공용 적재(publishable-stock)를 읽고 · persona-capacity-planner 는 퇴역 — 조립 사본이 없다
   ] as const
   for (const f of PRODUCERS) {
     const src = readFileSync(join(HERE, '..', f), 'utf-8')
@@ -1287,8 +1288,7 @@ export function hasDirectAccountCompare(src: string): boolean {
     const SITES = [
       // 🔴 auto-publish 의 Persona 조립 정본은 persona-for-match.ts 다 (로더·발행 트랜잭션 공용)
       'src/lib/persona-for-match.ts',
-      'scripts/persona-capacity-planner.mts',
-      'scripts/supply-health.mts',
+      // 🔴 (2026-09-30) supply-health 는 러너와 같은 공용 적재(publishable-stock)를 읽고 · persona-capacity-planner 는 퇴역 — 조립 사본이 없다
     ]
     for (const f of SITES) {
       const src = readFileSync(join(HERE, '..', f), 'utf-8')

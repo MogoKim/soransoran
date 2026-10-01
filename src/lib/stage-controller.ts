@@ -1,48 +1,43 @@
 /**
- * 🔴 **단계 controller — 사다리(`planStageDecision`) 위에 운영 신호 브레이크를 얹는다** (2026-09-28)
+ * 🔴 **단계 controller — 사다리(`planStageDecision`) 위에 운영 신호 브레이크를 얹는다** (2026-09-28 · 2026-09-30 단순화)
  *
  * 🔴 **새 문턱값을 만들지 않는다.** 판정은 전부 정본이 한다:
- *    · 재고        `stageVerdicts` → 사다리 안의 `safeStageFor`        (이미 사다리가 감속한다)
- *    · 하루 시험    `judgeOneDayCanary`  → TRIAL
- *    · 지속 승격    `judgePromotion`     → SUSTAIN (승인 천장 안에서만 · d10 까지 — D20+ 는 사다리가 SUSTAIN 을 막고 TRIAL 로만 오른다)
- *    · 재증명      사다리 `REPROVE`      → 다음 칸이 천장 안인데 시험이 안 열린 날, 지금 단계를 증명일로 (2026-09-29)
- *    · D20 이상    `judgeNextPreflight` → 사다리의 D20+ 관문(preflight · LATE_START). 러너 단계는 d1~d50
+ *    · 시험 대상    `trialPlanOf`(전날 결정 + 전날 운영 증거 + 이어진 계획) → TRIAL / RETEST / REPROVE
+ *    · 다음 칸      `judgeNextPreflight`(D3~D100 한 함수) — 기회 · 처리량 · 지연 · Persona · 비용 · 러너
+ *    · 운영 증거    `judgeStageEvidence`(조항 ⑦ source-slot-v1 도장 포함)
  *    · 품질        자동 READY 감사 정본 — 확정 결함 · 글 유실 · 재시도 가능 실패 · 판정 시한 초과(6h)
  *    · 비용        장부 정본의 막는 코드 — LEDGER_ERROR · SETTLE_ERROR · UNSETTLED_OVERRUN · DAILY_EXHAUSTED
  *    · 오류        발행·공급 job 의 최근 회차 실패(launchd 종료 값 + 회차 기록)
  *
+ * 🔴 **지운 입력 (2026-09-30)** — 14일 준비도(`stageVerdicts`/`safeStageFor`) · 하루 시뮬레이션(`judgeOneDayCanary`) ·
+ *    지속 승격(`judgePromotion` · `d100:readiness` 자식 프로세스) · env 단계(`SORAN_RELEASE_STAGE`)와 env 천장
+ *    (`SORAN_CAPACITY_STAGE`) · canary/window 허가. **현재 단계의 입력원은 StageDecision 하나다.**
+ *
  * 🔴 **브레이크의 두 모양.**
- *    · 신호가 `bad`     → **감속**: 지속 공개 단계의 바로 아래 칸(`nextStage` 의 거울). 승격·시험 없음.
- *    · 신호가 `unknown` → **유지**: 승격·시험만 막는다. 지금 단계를 지킨다(모르는 것으로 내리지도 올리지도 않는다).
- *    감속 폭(한 칸)은 사다리가 올릴 때 쓰는 폭(한 칸)과 같다 — 새 숫자가 아니다.
+ *    · 신호가 `bad`     → **감속**: 지속 공개 단계의 바로 아래 칸. 승격·시험·증명일 없음.
+ *    · 신호가 `unknown` → **유지**: 승격·시험·증명일만 막는다. 지금 단계를 지킨다.
  *
  * 🔴 **controller 실패는 지금 공개 단계를 지킨다(fail-closed · keep current).**
- *    입력을 못 읽으면 `holdAtCurrent` — 지속 공개 단계 그대로의 HOLD 결정이다. 사다리 정본의
- *    "판정이 하나도 없으면 d1"(`planStageDecision`) 경로로 **떨어뜨리지 않는다** — 그 규칙은
- *    "새 날에 아무 판정도 없는 상태"를 위한 것이고, controller 가 읽기에 실패한 날은 그 상태가 아니다.
- *    그래서 재고 판정을 못 읽은 경우는 사다리에 빈 `verdicts` 를 넘기지 않고 여기서 멈춘다.
  *
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0.
  */
 import {
-  RUNTIME_STAGES, SAFEST_STAGE, safeStageFor, stageRank, profileOf,
-  type RuntimeStage, type StageVerdict,
+  RUNTIME_STAGES, SAFEST_STAGE, stageRank, profileOf, RELEASE_ENV, CAPACITY_ENV,
+  type RuntimeStage,
 } from './scale-profile'
-import { planStageDecision, type DatedCanary } from './stage-ladder'
+import { planStageDecision, preparedStageOf } from './stage-ladder'
 import {
-  DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision,
+  DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision, isLegacyDecision,
   type StageDecision, type ValidatedStageDecision,
 } from './stage-decision-contract'
-import { PUBLISH_ONLY_KEYS } from './stage-source'
-import { CANARY_DATE_ENV, CANARY_STAGE_ENV } from './release-canary'
 import { PROOF_DATE_ENV, PROOF_ENV_KEYS, PROOF_STAGE_ENV } from './stage-proof-day'
+import { STAGE_DECISION_MARK_ENV } from './scale-runtime'
 import type { ConsumeOutcome } from './stage-decision-store'
-import type { PromotionVerdict } from './d100-capacity'
-import type { StageEvidenceVerdict } from './stage-evidence'
+import type { StageEvidenceVerdict, TrialPlan } from './stage-evidence'
 import type { PreflightVerdict } from './stage-ladder-generic'
 import type { Health } from './ops-status'
 
-/** 🔴 브레이크가 보는 축 — 재고는 사다리가 이미 본다 */
+/** 🔴 브레이크가 보는 축 */
 export const SIGNAL_AXES = ['quality', 'cost', 'errors'] as const
 export type SignalAxis = (typeof SIGNAL_AXES)[number]
 
@@ -61,15 +56,21 @@ export function previousStage(s: RuntimeStage): RuntimeStage {
 const lower = (a: RuntimeStage, b: RuntimeStage): RuntimeStage => (stageRank(a) <= stageRank(b) ? a : b)
 
 /**
- * 🔴 **지속 공개 단계의 원천.**
- *    · 전날 결정이 없으면 env(`SORAN_RELEASE_STAGE`) — legacy 가 지금 돌고 있는 값이다
- *    · 전날이 TRIAL 이면 그 **시험 기반** — 시험은 그날 하루였다
- *    · 그 밖(SUSTAIN · HOLD · PREPARE)이면 전날 공개 단계 — 그것이 지금 돌고 있는 값이다
+ * 🔴 **증명된 지속 공개 단계 — StageDecision 하나에서만 온다** (2026-09-30).
+ *    · 전날 결정이 없다 → 바닥(d1). env(`SORAN_RELEASE_STAGE`)를 읽지 않는다
+ *    · 전날 결정이 옛 판(v4 · source-slot-v1 이전) → 바닥(d1) — 옛 계약의 단계는 근거가 아니다(재증명)
+ *    · 전날이 TRIAL 이고 그날 운영 증거가 PASS 면 **그 시험 단계**(증명됐다 · PR3 KEEP)
+ *    · 전날이 TRIAL 인데 PASS 가 아니면 그 **시험 기반**
+ *    · 그 밖(HOLD · PREPARE · REPROVE)이면 전날 공개 단계
  */
-export function sustainedReleaseOf(prev: ValidatedStageDecision | null, envRelease: RuntimeStage): RuntimeStage {
-  if (prev === null) return envRelease
+export function sustainedReleaseOf(
+  prev: ValidatedStageDecision | null, evidence: StageEvidenceVerdict | null = null,
+): RuntimeStage {
+  if (prev === null || isLegacyDecision(prev)) return SAFEST_STAGE
   if (prev.state === 'TRIAL' && prev.transition !== null && prev.transition.kind === 'TRIAL') {
-    return prev.transition.trialBase
+    const passed = evidence !== null && evidence.verdict === 'PASS'
+      && evidence.kstDate === prev.kstDate && evidence.stage === prev.release
+    return passed ? prev.release : prev.transition.trialBase
   }
   return prev.release
 }
@@ -77,25 +78,13 @@ export function sustainedReleaseOf(prev: ValidatedStageDecision | null, envRelea
 export type ControllerInputs = {
   kstDate: string
   decidedAt: string
-  /** env 의 지속 공개 단계 — 전날 결정이 없을 때만 쓴다 */
-  envRelease: RuntimeStage
-  /**
-   * 🔴 사람이 승인한 천장(`SORAN_CAPACITY_STAGE`) — 이 controller 가 올리지 않는다.
-   *    러너가 담는 천장(`resolveCeiling(...).operable`)이다.
-   */
-  authorizedCeiling: RuntimeStage
   previousDecision: ValidatedStageDecision | null
-  /**
-   * 🔴 **전날 운영 증거** (2026-09-29 P0) — 사다리가 시험 대상·기반을 이 값과 전날 결정으로 다시 정한다.
-   *    PASS 가 아니면(FAIL · 모름 · 없음) 올라가지 않고 같은 단계를 다시 시험한다.
-   */
+  /** 🔴 전날 운영 증거 — PASS 가 아니면(FAIL · 모름 · 없음) 올라가지 않고 같은 단계를 다시 시험한다 */
   previousEvidence?: StageEvidenceVerdict | null
-  /** 🔴 정본 `stageVerdicts` — 비어 있으면 **읽기 실패**로 본다(아래 `decideStage` 참고) */
-  verdicts: readonly StageVerdict[]
-  daily: DatedCanary | null
-  /** 🔴 D20 이상 시험 대상의 preflight(`judgeNextPreflight`) — d3~d10 시험은 보지 않는다 */
-  nextPreflight?: PreflightVerdict | null
-  promotion: PromotionVerdict | null
+  /** 🔴 전날(브레이크 날)이 이은 계획 — `trialPlanThrough` 로 되짚은 값 */
+  carriedPlan?: TrialPlan | null
+  /** 🔴 시험 대상의 preflight(`judgeNextPreflight`) — 모든 단계 같은 관문 */
+  nextPreflight: PreflightVerdict | null
   publishedToday: number
   signals: readonly HealthSignal[]
 }
@@ -108,15 +97,14 @@ export type ControllerResult = {
 }
 
 /**
- * 🔴 **controller 실패 — 지금 공개 단계를 지킨다.** 천장보다 높을 수는 없다(검증기 불변식).
- *    상태는 HOLD, 전이 근거 없음. 이유를 남긴다.
+ * 🔴 **controller 실패 — 지금 공개 단계를 지킨다.** 상태는 HOLD, 전이 근거 없음. 이유를 남긴다.
  */
 export function holdAtCurrent(input: {
-  kstDate: string; decidedAt: string; current: RuntimeStage; ceiling: RuntimeStage; reason: string
+  kstDate: string; decidedAt: string; current: RuntimeStage; reason: string
 }): StageDecision {
-  const release = lower(input.current, input.ceiling)
+  const release = input.current
   return {
-    kstDate: input.kstDate, capacity: input.ceiling, release, state: 'HOLD',
+    kstDate: input.kstDate, capacity: release, release, state: 'HOLD',
     reasons: [
       `🔴 controller 입력 실패 — 지금 공개 단계 ${release} 를 지킨다(fail-closed · 올리지도 내리지도 않는다)`,
       `🔴 ${input.reason}`,
@@ -126,20 +114,20 @@ export function holdAtCurrent(input: {
   }
 }
 
-/** 🔴 공개가 정해진 뒤의 정본 규칙 둘 — 사다리와 같은 순서·같은 규칙 */
+/** 🔴 브레이크가 정한 공개로 결정을 닫는다 — 시험·증명일 없음 */
 function finishHold(d: StageDecision, release: RuntimeStage, sustained: RuntimeStage, publishedToday: number,
   reasons: string[]): StageDecision {
   let rel = release
   let dayPinned = d.dayPinned
-  // 사다리 정본: 오늘 이미 낸 편수가 낮춘 단계의 하루 목표를 넘으면 오늘은 지속 단계를 고정한다
+  // 오늘 이미 낸 편수가 낮춘 단계의 하루 목표를 넘으면 오늘은 지속 단계를 고정한다(이미 낸 것이 상한 초과가 된다)
   if (stageRank(rel) < stageRank(sustained) && publishedToday > profileOf(rel).dailyTarget) {
     reasons.push(`🔴 오늘 이미 ${publishedToday}건 냈다 — ${rel} 로 내리면 상한 초과다. 오늘은 ${sustained} 를 고정한다`)
-    rel = lower(sustained, d.capacity)
+    rel = sustained
     dayPinned = true
   }
-  // 사다리 정본: 이미 승인된 천장이 공개보다 높으면 PREPARE(재고를 쌓는다)
-  const state = stageRank(d.capacity) > stageRank(rel) ? 'PREPARE' as const : 'HOLD' as const
-  return { ...d, release: rel, state, transition: null, dayPinned, reasons }
+  const capacity = preparedStageOf(rel)
+  const state = stageRank(capacity) > stageRank(rel) ? 'PREPARE' as const : 'HOLD' as const
+  return { ...d, capacity, release: rel, state, transition: null, dayPinned, reasons }
 }
 
 /**
@@ -147,21 +135,11 @@ function finishHold(d: StageDecision, release: RuntimeStage, sustained: RuntimeS
  *    브레이크는 **내리거나 붙잡기만** 한다 — 어떤 경우에도 사다리보다 높게 올리지 않는다.
  */
 export function decideStage(i: ControllerInputs): ControllerResult {
-  const sustained = lower(sustainedReleaseOf(i.previousDecision, i.envRelease), i.authorizedCeiling)
-  if (i.verdicts.length === 0) {
-    return {
-      decision: holdAtCurrent({
-        kstDate: i.kstDate, decidedAt: i.decidedAt, current: sustained, ceiling: i.authorizedCeiling,
-        reason: '재고 판정(stageVerdicts)을 받지 못했다 — 빈 판정으로 사다리의 d1 경로에 떨어뜨리지 않는다',
-      }),
-      brake: 'controllerFailure', sustained,
-    }
-  }
+  const sustained = sustainedReleaseOf(i.previousDecision, i.previousEvidence ?? null)
   const planned = planStageDecision({
-    kstDate: i.kstDate, sustainedRelease: sustained, authorizedCapacityCeiling: i.authorizedCeiling,
-    verdicts: i.verdicts, daily: i.daily, previousDecision: i.previousDecision,
-    previousEvidence: i.previousEvidence ?? null, nextPreflight: i.nextPreflight ?? null,
-    promotion: i.promotion, publishedToday: i.publishedToday, decidedAt: i.decidedAt,
+    kstDate: i.kstDate, sustainedRelease: sustained, previousDecision: i.previousDecision,
+    previousEvidence: i.previousEvidence ?? null, carriedPlan: i.carriedPlan ?? null,
+    nextPreflight: i.nextPreflight, publishedToday: i.publishedToday, decidedAt: i.decidedAt,
   })
   const bad = i.signals.filter((s) => s.health === 'bad')
   const unknown = i.signals.filter((s) => s.health === 'unknown')
@@ -170,22 +148,20 @@ export function decideStage(i: ControllerInputs): ControllerResult {
     const reasons = [
       ...planned.reasons,
       ...bad.map((s) => `🔴 감속(${s.axis}): ${s.reasons.join(' · ') || '나쁨'}`),
-      `🔴 운영 신호 ${bad.map((s) => s.axis).join('·')} 가 나쁘다 — 승격·시험 없이 ${sustained} → ${target}`,
+      `🔴 운영 신호 ${bad.map((s) => s.axis).join('·')} 가 나쁘다 — 시험·증명일 없이 ${sustained} → ${target}`,
     ]
     return { decision: finishHold(planned, target, sustained, i.publishedToday, reasons), brake: 'slowdown', sustained }
   }
   /**
-   * 🔴 모르는 신호로 올리지 않는다. 재고 감속(정본)은 그대로 둔다.
-   *    REPROVE(증명일)도 되돌린다 — 품질·비용·오류를 모르는 날 자동 target 을 앞세우지 않는다.
+   * 🔴 모르는 신호로 올리지 않는다. REPROVE(증명일)도 되돌린다 — 품질·비용·오류를 모르는 날 자동 target 을 앞세우지 않는다.
    */
-  if (unknown.length > 0 && (planned.state === 'TRIAL' || planned.state === 'SUSTAIN' || planned.state === 'REPROVE')) {
-    const keep = safeStageFor(sustained, i.verdicts).stage
+  if (unknown.length > 0 && (planned.state === 'TRIAL' || planned.state === 'REPROVE')) {
     const reasons = [
       ...planned.reasons,
       ...unknown.map((s) => `⬚ 모름(${s.axis}): ${s.reasons.join(' · ') || '관측 없음'}`),
-      `🔴 ${planned.state} 를 되돌린다 — 운영 신호 ${unknown.map((s) => s.axis).join('·')} 를 확인하지 못했다. ${keep} 를 지킨다`,
+      `🔴 ${planned.state} 를 되돌린다 — 운영 신호 ${unknown.map((s) => s.axis).join('·')} 를 확인하지 못했다. ${sustained} 를 지킨다`,
     ]
-    return { decision: finishHold(planned, keep, sustained, i.publishedToday, reasons), brake: 'holdUnknown', sustained }
+    return { decision: finishHold(planned, sustained, sustained, i.publishedToday, reasons), brake: 'holdUnknown', sustained }
   }
   if (unknown.length > 0) {
     return {
@@ -206,58 +182,31 @@ export function validateForToday(d: StageDecision): ReturnType<typeof validateSt
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 **결정을 러너 env 로 옮긴다.** 러너(`original-post-auto-publish` · `supply-process`)는
- *    `loadEnvLocal()` 로 `.env.local` 을 읽되 **이미 있는 값은 덮지 않는다** — 그래서 실행 직전에
- *    이 값을 넣으면 러너 코드를 한 줄도 바꾸지 않고 결정이 적용된다.
- *
- *    · 결정 OK      → 공개·천장 = 결정 값 · 발행 전용 허가(canary·window)는 **빈 값**으로 막는다
- *                     (결정이 유일한 권한이다 — TRIAL 이 canary 의 자리다)
- *    · legacy      → 아무것도 넣지 않는다 (flag OFF · 기존 env/canary 경로 그대로)
- *    · safest      → 정본 `consumeStageDecision` 의 fallback: 결정이 없거나 깨졌다 → d1
+ * 🔴 **결정을 러너 env 로 옮긴다** — 결정이 유일한 단계 입력이다(2026-09-30).
+ *    · 결정 OK      → 공개 = 결정의 `release`(TRIAL 이면 시험 단계 그대로) · 준비 눈금 = `capacity`
+ *                     · 증명일(TRIAL · REPROVE)이면 증명일 두 칸(`stage-proof-day`), 아니면 빈 값
+ *    · safest      → 결정이 없거나 깨졌다 · controller flag OFF(kill switch) → d1
+ * 🔴 **legacy(아무것도 넣지 않아 env 파일의 단계가 이기던 경로)는 지웠다** (2026-09-30 · Lane A).
+ *    그 경로에서는 `.env.local` · GitHub Variables 의 손으로 적은 단계가 결정을 대신했다 — 두 번째 권위다.
+ * 🔴 결정 OK 일 때만 **표식**(`STAGE_DECISION_MARK_ENV` = 결정의 KST 날짜)을 넣는다. 표식 없는 단계 칸은
+ *    `scale-runtime.decisionStageEnv` 가 읽지 않는다(= d1) — safest 에 표식을 붙이지 않아도 결과는 같다.
+ * 🔴 **canary · window 는 없다** — 앞판은 TRIAL 을 "기반 + canary 허가" 로 옮겨 러너가 14일 준비도로
+ *    다시 깎았다(09-29 TRIAL d3 → 러너 d1). 이제 러너는 결정의 단계를 그대로 쓴다.
  */
 export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
-  // 🔴 증명일 두 칸(`stage-proof-day`)도 허가처럼 비운다 — 결정이 주지 않으면 비시험일이다
-  const blankAuth = Object.fromEntries([...PUBLISH_ONLY_KEYS, ...PROOF_ENV_KEYS].map((k) => [k, '']))
-  /**
-   * 🔴 **자동 단계 증명일** (2026-09-29 마스터 결정) — TRIAL(재시험 포함) · SUSTAIN 날에는
-   *    그 단계 목표 슬롯을 자동 target 이 먼저 채우도록 러너에 알린다(`proofDayOf` · `autoFirstNeeded`).
-   *    REPROVE(지금 단계 재증명) 날도 증명일이다 — 공개는 결정 값 그대로, 자동 target 이 먼저 채운다.
-   *    HOLD · PREPARE 날과 fallback 은 빈 값 — 기존 human/auto 공정성 그대로다.
-   */
-  const proofOf = (d: { release: string; kstDate: string }): Record<string, string> =>
-    ({ [PROOF_STAGE_ENV]: d.release, [PROOF_DATE_ENV]: d.kstDate })
+  const blankProof = Object.fromEntries(PROOF_ENV_KEYS.map((k) => [k, '']))
   if (o.ok) {
-    /**
-     * 🔴 **TRIAL 이 canary 의 자리다 — 말로만이 아니라 값으로** (2026-09-29).
-     *    앞판은 TRIAL 날에도 canary 를 빈 값으로 넣었다. 발행 러너(`resolvePublishScale`)는 canary·window
-     *    허가가 있을 때만 준비도 감속을 건너뛰므로, 09-29 TRIAL d3 가 러너에서 "준비도 미달 → d1" 로
-     *    내려앉아 09:30 에 "발행 0 / 1건" 으로 돌았다.
-     *    러너의 canary 모양은 **"지속 단계 + 그날 하루 더 높은 단계"** 다(`resolvePublishScale` — 허가 단계가
-     *    지금 단계보다 높을 때만 시험으로 켠다). 그래서 TRIAL 날에는 공개 = 시험 기반(`trialBase`),
-     *    canary = (결정의 공개 단계 · 그 날짜) 로 넘긴다. 러너는 그 허가로 **회차마다** 정본
-     *    `judgeOneDayCanary` 를 다시 돌린다(판정을 건너뛰지 않는다). window 는 여전히 빈 값이다.
-     *    TRIAL 이 아닌 날(HOLD · PREPARE · SUSTAIN)은 공개 = 결정 값 · canary 도 빈 값이다.
-     */
-    const t = o.decision.transition
-    if (o.decision.state === 'TRIAL' && t !== null && t.kind === 'TRIAL') {
-      return {
-        SORAN_RELEASE_STAGE: t.trialBase,
-        SORAN_CAPACITY_STAGE: o.decision.capacity,
-        ...blankAuth,
-        [CANARY_STAGE_ENV]: o.decision.release,
-        [CANARY_DATE_ENV]: o.decision.kstDate,
-        ...proofOf(o.decision),
-      }
-    }
+    const proof = o.decision.state === 'TRIAL' || o.decision.state === 'REPROVE'
+      ? { [PROOF_STAGE_ENV]: o.decision.release, [PROOF_DATE_ENV]: o.decision.kstDate }
+      : blankProof
     return {
-      SORAN_RELEASE_STAGE: o.decision.release,
-      SORAN_CAPACITY_STAGE: o.decision.capacity,
-      ...blankAuth,
-      ...(o.decision.state === 'SUSTAIN' || o.decision.state === 'REPROVE' ? proofOf(o.decision) : {}),
+      [RELEASE_ENV]: o.decision.release,
+      [CAPACITY_ENV]: o.decision.capacity,
+      [STAGE_DECISION_MARK_ENV]: o.decision.kstDate,
+      ...proof,
     }
   }
-  if (o.fallback === 'legacy') return {}
-  return { SORAN_RELEASE_STAGE: SAFEST_STAGE, SORAN_CAPACITY_STAGE: SAFEST_STAGE, ...blankAuth }
+  return { [RELEASE_ENV]: SAFEST_STAGE, [CAPACITY_ENV]: SAFEST_STAGE, [STAGE_DECISION_MARK_ENV]: '', ...blankProof }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -266,14 +215,14 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
 
 /**
  * 🔴 **품질** — 자동 READY 감사 정본이 자동 회차를 닫는 네 가지 중 하나라도 있으면 나쁘다.
- *    (확정 결함 yes · 글 유실 · 재시도 가능 감사 실패 · 판정 시한 초과) 못 읽었으면 모른다.
+ *    (지금 계약에서 해소되지 않은 확정 결함 yes · 글 유실 · 재시도 가능 감사 실패 · 판정 시한 초과) 못 읽었으면 모른다.
  */
 export function qualitySignalOf(c: {
-  confirmedDefects: number; missingPosts: number; retryableFailures: number; overdueAudits: number
+  unresolvedDefects: number; missingPosts: number; retryableFailures: number; overdueAudits: number
 } | null, readError: string | null = null): HealthSignal {
   if (c === null) return { axis: 'quality', health: 'unknown', reasons: [`감사 표를 읽지 못했다 — ${readError ?? '이유 모름'}`] }
   const reasons: string[] = []
-  if (c.confirmedDefects > 0) reasons.push(`확정 결함 ${c.confirmedDefects}건`)
+  if (c.unresolvedDefects > 0) reasons.push(`미해소 확정 결함 ${c.unresolvedDefects}건`)
   if (c.missingPosts > 0) reasons.push(`글이 사라진 자동 발행 ${c.missingPosts}건`)
   if (c.retryableFailures > 0) reasons.push(`재시도 가능 감사 실패 ${c.retryableFailures}건`)
   if (c.overdueAudits > 0) reasons.push(`판정 시한 초과 감사 ${c.overdueAudits}건`)

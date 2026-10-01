@@ -4,6 +4,11 @@
 > 현재 구현·운영 상태: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
 > 정본 상위: [Safety / Originality Gate 설계](2026-08-30-persona-safety-originality-gate-design.md) §3-⑥
 > 관련: [Persona Pool 설계](2026-08-30-persona-pool-design.md) §3-2 · [전략 §10-7](2026-08-29-persona-network-strategy.md)
+>
+> 🔴 **2026-10-01 결정 (#641) — B2 크롤 author 대조 제거.** 원본 작가명(우나어 CafePost 33,031건)이 9/10 폐기돼 복구할 수 없다.
+> 저장된 작가 해시는 증명할 수도 다시 만들 수도 없어 계약 판정의 권위에서 뺐다. 옛 `authorHash`·`authorHashNorm` 값은 판정에 쓰지 않는 inert 값이고, 새 원천 행은 작가 식별값을 만들지 않는다.
+> 대신 지키는 단일 불변식은 **원본 작가명·source author 를 Persona 작명·생성 입력에 넣지 않는다**(`npm run persona:source-author-check`)이다.
+> B1(실회원 · Persona 계정 제외) · B3(기존 Persona, retired·paused 포함 — 이제 실제 Persona 를 읽는다) · B4 · B5 · B6 은 그대로다. 아래 B2 서술은 역사 기록이다.
 
 ---
 

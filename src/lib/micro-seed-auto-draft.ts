@@ -135,6 +135,8 @@ export type DraftCandidate = {
 }
 
 export type Judgement = {
+  /** 🔴 원천 사이트 — 러너는 반드시 싣는다(P0-B). 원천은 (사이트, id) 쌍이다 */
+  sourceSite?: string
   sourceArticleId: string
   decision: string
   semanticRisks?: readonly string[]
@@ -371,6 +373,7 @@ export type PickV2Input = {
 export function pickV2(input: PickV2Input, now: string): Pick {
   const d = input.draft
   const base = {
+    ...(input.judgement.sourceSite === undefined ? {} : { sourceSite: S(input.judgement.sourceSite) }),
     sourceArticleId: input.judgement.sourceArticleId,
     ruleVersion: DRAFT_RULE_VERSION,
     provenance: DRAFT_PROVENANCE,
@@ -467,6 +470,8 @@ export type PickInput = {
 }
 
 export type Pick = {
+  /** 🔴 원천 사이트 — picks 기록이 원천 (사이트, id) 를 각각 남긴다(P0-B) */
+  sourceSite?: string
   sourceArticleId: string
   decision: AutoDraftDecision
   draftNo: number | null
@@ -493,6 +498,7 @@ export type Pick = {
 export function pickDraft(input: PickInput, now: string): Pick {
   const id = S(input.judgement.sourceArticleId)
   const base = {
+    ...(input.judgement.sourceSite === undefined ? {} : { sourceSite: S(input.judgement.sourceSite) }),
     sourceArticleId: id, ruleVersion: DRAFT_RULE_VERSION,
     provenance: DRAFT_PROVENANCE, decidedAt: now,
   }
@@ -558,7 +564,9 @@ export function violatesDraftProvenance(row: Record<string, unknown>): string[] 
     bad.push(`🔴 provenance ${p} 은 사람 것이다`)
   }
   if (p !== DRAFT_PROVENANCE) bad.push(`🔴 provenance 가 ${DRAFT_PROVENANCE} 가 아니다`)
-  for (const k of ['ruleVersion', 'decidedAt', 'sourceArticleId'] as const) {
+  // 🔴 (P0-B) 원천은 (사이트, id) 다 — 판정 기록(`violatesProvenance`)처럼 새 결정 기록도 사이트 없는 행을 쓰지 않는다.
+  //    이 검사는 **쓰기 직전**(러너가 채택 후보를 파일로 내기 전)에만 돈다 — 옛 picks 파일을 읽는 경로가 아니다
+  for (const k of ['ruleVersion', 'decidedAt', 'sourceSite', 'sourceArticleId'] as const) {
     if (String(row[k] ?? '') === '') bad.push(`🔴 ${k} 가 비었다`)
   }
   return bad

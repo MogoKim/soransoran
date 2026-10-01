@@ -25,17 +25,16 @@ import {
 import { authoritativeGate } from '../../src/lib/auto-ready-repo'
 import { prepareCandidates } from '../../src/lib/supply-candidates'
 import { judgeVoiceMatch } from '../../src/lib/original-post-voice-match'
-import type { HoldReason } from '../../src/lib/supply-freshness'
 import {
-  releaseCapsOf, profileOf as runtimeProfileOf, RUNTIME_STAGES, CAPACITY_ENV, resolveRuntimeStage,
-  type RuntimeStage,
-} from '../../src/lib/scale-profile'
+  judgeSlotRelease, matchOpportunitiesToSlots, type ReleaseReason, type SlotOpportunity,
+} from '../../src/lib/source-slot-release'
+import { slotTimesOn } from '../../src/lib/stage-ladder-generic'
+import { kstDateString } from '../../src/lib/release-canary'
+import { availablePersonasAt } from '../../src/lib/supply-capacity-forecast'
+import { draftSpeakerOf } from '../../src/lib/content-core/speaker-load-file'
+import { releaseCapsOf, kstMidnight, type ScaleProfile } from '../../src/lib/scale-profile'
 // 🔴 `installFromEnv` 를 쓰지 않는다 — 그것은 module-global 을 바꾼다(아래 주석)
 import { resolveScale } from '../../src/lib/scale-runtime'
-import { stageVerdicts, simulateStage } from '../../src/lib/scale-readiness'
-import {
-  canaryAuthorization, judgeOneDayCanary, slotsLeftToday, windowAuthorization,
-} from '../../src/lib/release-canary'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
 import {
   PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment, TIME_BOUND_ASSIGN_CODES,
@@ -117,8 +116,6 @@ export type LoadedStock = {
    *    다시 읽으면 두 번째 조립이 생기므로 여기서 같이 돌려준다. 러너는 쓰지 않는다.
    */
   allRows: AutoRow[]
-  /** 원천 수집 시각 — `queueCandidateOf` 가 쓴다 */
-  capturedAtOf: Map<string, Date | null>
   /**
    * 🔴 **기존 배정 자동 행 → 그 Persona 의 지금 상태(자기 배정 제외)** (2026-09-25 마스터 P0).
    *    발행 트랜잭션과 같은 조립(`personaForMatchOf(…, { excludeQueueId })`)이다.
@@ -136,7 +133,6 @@ export type LoadedStock = {
 export function queueCandidateOf(
   t: AutoRow, order: number,
   codeOfPersonaId: ReadonlyMap<string, string>,
-  capturedAt: Date | null,
 ): QueueCandidate {
   return {
     queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: order,
@@ -144,7 +140,11 @@ export function queueCandidateOf(
       ? null
       : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
     ...voiceInputOf(t),
-    capturedAt,
+    /**
+     * 🔴 **원문 증거는 그 행에 저장된 기록에서 읽는다** (2026-09-30 · source-slot-v1).
+     *    앞판은 `MicroSeedRawContent.sourceCapturedAt`(적재기가 쓴 **초안 시각**)을 원문 나이로 넘겼다(A1 ⑨).
+     */
+    gateResults: t.gateResults,
   }
 }
 
@@ -169,7 +169,8 @@ export async function loadPublishableStock(
       promptVersion: true, model: true, matchedPersonaId: true,
       draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
       gateResults: true, decidedBy: true, decidedAt: true, createdAt: true, editDiff: true, updatedAt: true,
-      rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
+      // 🔴 `sourceCapturedAt` 을 읽지 않는다 — 초안 시각이다(판정 입력이 아니다)
+      rawContent: { select: { sourceSite: true } },
     },
     orderBy: { createdAt: 'asc' },
   })
@@ -194,8 +195,6 @@ export async function loadPublishableStock(
   const rejectedByCode = [...byCode]
     .map(([code, ids]) => ({ code, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count)
-
-  const capturedAtOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
 
   /** 🔴 lane 별 마지막 발행 — 발행된 큐 행의 Post 생성 시각. 읽기만 한다 */
   const publishedRows = await prisma.originalPostApprovalQueue.findMany({
@@ -235,8 +234,7 @@ export async function loadPublishableStock(
   }
 
   /** 🔴 말투·profile 은 정본 `voiceInputOf` 가 만든다 — 여기서 하드코딩하지 않는다 */
-  const queueCandidates: QueueCandidate[] = targets.map((t, i) =>
-    queueCandidateOf(t, i, codeOfPersonaId, capturedAtOf.get(t.id) ?? null))
+  const queueCandidates: QueueCandidate[] = targets.map((t, i) => queueCandidateOf(t, i, codeOfPersonaId))
 
   const historyRows = await prisma.personaActivityLog.findMany({
     where: { kind: 'post' }, select: { createdAt: true, persona: { select: { code: true } } },
@@ -269,7 +267,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId, allRows: rows, capturedAtOf, pinnedAutoPersona, laneLastPublishedAt, autoTargetsToday,
+    codeOfPersonaId, allRows: rows, pinnedAutoPersona, laneLastPublishedAt, autoTargetsToday,
   }
 }
 
@@ -304,8 +302,8 @@ export type StockStages = {
   queueTotal: number
   /** ② `selectAutoTargets` 통과 */
   selectorTargets: { count: number; ids: string[] }
-  /** ③ 신선도 통과 — 🔴 `prepared.auto` 에서 **직접** 가져온다(정규식 분류 없음) */
-  freshnessPassed: { count: number; ids: string[] }
+  /** ③ 🔴 정본 슬롯 판정(`judgeSlotRelease`) eligible — `prepared.auto` 에서 **직접** 가져온다 */
+  releaseEligible: { count: number; ids: string[] }
   /** ④ 🔴 배정 **성공** — `assigned !== null` 이고 `recoveryProblem === null` 인 행만 */
   successfullyAssigned: { count: number; ids: string[] }
   /**
@@ -325,8 +323,8 @@ export type StockStages = {
   nextPickedId: string | null
   /** 🔴 전체 중단 사유 — 있으면 `runnableNow` 는 0 이다 */
   brokenRecovery: { id: string; problem: string }[]
-  /** hold 사유별 — 🔴 닫힌 enum 값 그대로다 */
-  holdsByReason: { reason: HoldReason; count: number; ids: string[] }[]
+  /** 판정 제외 사유별 — 🔴 닫힌 enum(`ReleaseReason`) 값 그대로다 */
+  holdsByReason: { reason: ReleaseReason; count: number; ids: string[] }[]
 }
 
 export function stageStock(input: {
@@ -338,14 +336,14 @@ export function stageStock(input: {
   /** 🔴 러너와 **같은 `planPublishBatch`** 를 부른다 — 여기서 다시 판정하지 않는다 */
   const plan = planPublishBatch({ loaded, caps: input.caps, at: input.at })
 
-  /** 🔴 `HoldReason` 은 닫힌 enum 이다 — 정규식으로 분류하지 않는다 */
-  const holdIds = new Map<HoldReason, string[]>()
+  /** 🔴 `ReleaseReason` 은 닫힌 enum 이다 — 정규식으로 분류하지 않는다 */
+  const holdIds = new Map<ReleaseReason, string[]>()
   for (const h of plan.prepared.held) {
     holdIds.set(h.hold, [...(holdIds.get(h.hold) ?? []), h.queueId])
   }
   const selectorIds = loaded.targets.map((t) => t.id)
-  /** 🔴 신선도 통과는 `prepared.auto` 가 정본이다 */
-  const freshIds = plan.prepared.auto.map((c) => c.queueId)
+  /** 🔴 슬롯 판정 통과는 `prepared.auto` 가 정본이다 */
+  const eligibleIds = plan.prepared.auto.map((c) => c.queueId)
   const readyIds = plan.brokenRecovery.length > 0
     ? []
     : plan.freshOrdered.filter((t) => (plan.assignOf.get(t.id)?.assigned ?? null) !== null)
@@ -354,7 +352,7 @@ export function stageStock(input: {
   return {
     queueTotal: loaded.queueTotal,
     selectorTargets: { count: selectorIds.length, ids: selectorIds },
-    freshnessPassed: { count: freshIds.length, ids: freshIds },
+    releaseEligible: { count: eligibleIds.length, ids: eligibleIds },
     successfullyAssigned: { count: plan.assignmentReady.length, ids: plan.assignmentReady },
     assignmentReady: { count: readyIds.length, ids: readyIds },
     nextPickedId: plan.nextPickedId,
@@ -366,116 +364,93 @@ export function stageStock(input: {
 }
 
 /**
- * ══ 🔴 **여기부터 — 러너의 판정 경로를 소비자 셋이 함께 부른다** (2026-09-24 5차) ══
+ * ══ 🔴 **발행 상한 — 러너 · 관제 · 공급이 같은 함수를 부른다** ══
  *
- * 🔴 **왜 옮기나.** 앞판은 probe 가 `installFromEnv(process.env)` 만 불렀다.
- *    러너는 거기에 **readiness · canary · window** 를 넣어 설치한다. 그래서
- *    bare env 가 d1 이어도 러너는 window 허가로 d3·d5 를 열 수 있고, 그때
- *    probe 는 여전히 d1 상한으로 배정해 **다른 재고·다른 picked** 를 냈다.
- *    오늘 둘 다 d1 이 나온 것은 허가가 꺼져 있었기 때문이지 같은 계산이어서가 아니다.
- *
- * 🔴 **검사 안에 러너 계산을 베껴 두지 않는다.** 베낀 사본은 러너가 바뀌어도
- *    같이 바뀌지 않아, 갈라진 순간부터 조용히 거짓 초록이 된다.
+ * 🔴 **단계 입력은 StageDecision 하나다** (2026-09-30 · source-slot-v1). consumer(`stage-consume-exec`)가 결정의
+ *    `release` · `capacity` 를 env 로 넣는다. 앞판은 여기서 14일 준비도(`stageVerdicts`) · 하루 시뮬레이션
+ *    (`judgeOneDayCanary`) · canary/window 허가(`canaryAuthorization` · `windowAuthorization`)를 다시 계산해
+ *    결정을 깎거나 올렸다 — 09-29 TRIAL d3 가 러너에서 d1 로 떨어진 길이다. 전부 지웠다.
+ * 🔴 **계산만 한다 — 설치하지 않는다.** 설치는 publisher 만 한다(`applyScale`).
  */
-
-/** 🔴 단계의 하루 목표 — 어느 소비자도 숫자를 손으로 적지 않는다 */
-const dailyTargetOf = (st: RuntimeStage): number => runtimeProfileOf(st).dailyTarget
-
 export type ResolvedScale = {
-  /**
-   * 🔴 readiness·canary·window 를 **넣어 계산한** 결과 — bare env 가 아니다.
-   * 🔴 **계산했을 뿐 설치하지 않았다.** 설치는 publisher 만 한다(`applyScale`).
-   */
   scale: ReturnType<typeof resolveScale>
   caps: { postsPerWeek: number; minDaysBetween: number }
   dailyCap: number
-  readiness: ReturnType<typeof stageVerdicts>
-  canaryVerdict: ReturnType<typeof judgeOneDayCanary> | null
-  windowVerdict: ReturnType<typeof judgeOneDayCanary> | null
-  canaryAuth: ReturnType<typeof canaryAuthorization>
-  windowAuth: ReturnType<typeof windowAuthorization>
-  /**
-   * 🔴 **설치가 끝난 뒤 그 단계로 다시 낸 판정** — 이것이 실제로 문을 여닫는다.
-   *    D3 기간 운영과 D5 하루 시험이 겹치면 설치는 d5 인데 판정은 d3 것이 된다.
-   *    허가가 하나도 없는 날에는 `null` 이고, 그때 동작은 허가 이전과 같다.
-   */
-  effectiveVerdict: ReturnType<typeof judgeOneDayCanary> | null
-  /** 🔴 그 단계 예측이 센 **깨진 복구 배정** 수 — 판정이 아니라 결함 신호다 */
-  effectiveRecoveryBroken: number
 }
 
-/**
- * 🔴 **러너가 실제로 쓰는 상한을 만드는 유일한 경로.**
- *
- * 🔴 **정말로 순수하다** (2026-09-24 6차 · 마스터 지적).
- *    앞판은 "순수 함수다" 라고 적어 두고 `installFromEnv` 를 불렀다 —
- *    그 함수는 `applyScale` 을 거쳐 **module-global `installed` 를 바꾼다.**
- *    그래서 probe 를 한 번 돌리거나 fixture 검사를 돌리기만 해도
- *    그 프로세스의 `activeScale()` 이 조용히 바뀌었다. 계산과 설치를 섞은 것이다.
- *    🔴 지금은 `resolveScale` 만 쓴다. **설치는 publisher 가 한 번만 한다.**
- */
 export function resolvePublishScale(input: {
   env: Readonly<Record<string, string | undefined>>
   loaded: LoadedStock
   now: Date
 }): ResolvedScale {
-  const { loaded, now, env } = input
-  const axis = { now, publishedToday: loaded.publishedToday }
-  /**
-   * 🔴 준비도 판정은 **capacity(천장) 단계까지** 만든다 (2026-09-29 generic scheduler 배선).
-   *    천장 d10 이면 예전과 같은 네 단계다. D20 이상 천장이면 그 단계 판정이 있어야
-   *    REPROVE·SUSTAIN d20 날 감속이 "판정 없음" 으로 d10 에 떨어지지 않는다.
-   */
-  const readiness = stageVerdicts({
-    queue: loaded.queueCandidates, personas: loaded.personas as never,
-    history: loaded.history, axis,
-    upTo: resolveRuntimeStage(env[CAPACITY_ENV], 'capacity').stage,
-  })
-  /** 🔴 러너의 `dayFor` 와 같은 계산이다 — 같은 함수에 지평 1일을 준다 */
-  const dayFor = (stage: RuntimeStage): {
-    sim: ReturnType<typeof simulateStage>; verdict: ReturnType<typeof judgeOneDayCanary>
-  } => {
-    const sim = simulateStage({
-      stage, queue: loaded.queueCandidates, personas: loaded.personas as never,
-      history: loaded.history, axis, days: 1, anchor: 'now',
-      dailyCap: Math.max(0, dailyTargetOf(stage) - loaded.publishedToday),
-    })
-    const verdict = judgeOneDayCanary(sim, {
-      publishedToday: loaded.publishedToday,
-      slotsLeft: slotsLeftToday(stage, now),
-    })
-    return { sim, verdict }
-  }
-  const canaryAuth = canaryAuthorization(env as never, now, RUNTIME_STAGES)
-  const canaryDay = canaryAuth.activeToday && canaryAuth.stage !== null
-    ? dayFor(canaryAuth.stage) : null
-  const canaryVerdict = canaryDay?.verdict ?? null
-  const windowAuth = windowAuthorization(env as never, now, RUNTIME_STAGES)
-  const windowDay = windowAuth.activeToday && windowAuth.stage !== null
-    ? dayFor(windowAuth.stage) : null
-  const windowVerdict = windowDay?.verdict ?? null
+  const scale = resolveScale(input.env as never)
+  return { scale, caps: releaseCapsOf(scale.releaseProfile), dailyCap: scale.releaseProfile.dailyTarget }
+}
 
-  const scale = resolveScale(env as never, {
-    readiness,
-    canary: { now, verdict: canaryVerdict },
-    window: {
-      now, verdict: windowVerdict, dayVerdict: windowVerdict,
-      publishedToday: loaded.publishedToday,
-    },
-  })
-  const effectiveDay = (canaryAuth.activeToday || windowAuth.activeToday)
-    ? (scale.releaseStage === windowAuth.stage ? windowDay
-      : scale.releaseStage === canaryAuth.stage ? canaryDay
-        : dayFor(scale.releaseStage))
-    : null
-  return {
-    scale, caps: releaseCapsOf(scale.releaseProfile),
-    dailyCap: scale.releaseProfile.dailyTarget,
-    readiness, canaryVerdict, windowVerdict, canaryAuth, windowAuth,
-    effectiveVerdict: effectiveDay?.verdict ?? null,
-    /** 🔴 `recoveryBroken` 은 판정이 아니라 예측 쪽에만 있다 — 결함 신호다 */
-    effectiveRecoveryBroken: effectiveDay?.sim.recoveryBroken ?? 0,
+/**
+ * 🔴 **READY 기회 — 슬롯마다 정본 판정으로 eligible 인가** (2026-09-30).
+ *    JIT 공급 수요와 다음 단계 preflight 가 **같은 함수**로 센다(`matchOpportunitiesToSlots` 입력).
+ *    · 원천 가치 — `judgeSlotRelease`(그 슬롯 시각 · 이미 hard gate 를 지난 `targets` 만)
+ *    · Persona — 기존 배정 Persona 또는 **그 글을 쓴 말투 Persona** 가 그 슬롯에 풀려 있는가
+ *      (`availablePersonasAt` · 주간 상한 · 최소 간격). 🔴 `assignmentDeferred` 를 통째로 세지 않는다 —
+ *      슬롯 전에 실제로 풀리는 것만 그 슬롯의 기회다. 말투 · 배정을 모르는 사람 행은 배정기가 정한다(통과)
+ *    🔴 `autoOnly` — 단계 증명은 자동 READY 만 센다(사람 승인 행은 물량이 아니다).
+ */
+export function readyOpportunitiesOf(loaded: LoadedStock, opts: {
+  caps: { postsPerWeek: number; minDaysBetween: number }
+  now: Date
+  autoOnly: boolean
+}): SlotOpportunity[] {
+  const out: SlotOpportunity[] = []
+  for (const t of loaded.targets) {
+    if (opts.autoOnly && laneOf(t.decidedBy) !== 'auto') continue
+    const code = t.matchedPersonaId !== null
+      ? (loaded.codeOfPersonaId.get(t.matchedPersonaId) ?? null)
+      : draftSpeakerOf(t.gateResults)
+    out.push({
+      key: t.id,
+      personaCode: code,
+      validAt: (slotAt) => {
+        const free = code === null || availablePersonasAt(loaded.history, slotAt, opts.caps).includes(code)
+        return judgeSlotRelease({
+          gateResults: t.gateResults, slotAt, now: opts.now, hardGates: { ok: true, codes: [] },
+          assignment: free ? { ok: true } : { ok: false, route: 'defer', codes: ['PERSONA_NOT_FREE_AT_SLOT'] },
+          tieBreak: t.id,
+        }).verdict === 'eligible'
+      },
+    })
   }
+  return out
+}
+
+/**
+ * 🔴 **다가오는 슬롯** — 오늘 남은 공개 슬롯(release) + 다음 운영일 증명일 전체 슬롯(capacity = 다음에 증명할 단계).
+ *    오늘 이미 낸 편수만큼 앞 슬롯은 소비됐다 — 남은 슬롯은 지금 뒤의 슬롯 중 목표 − 낸 수만큼이다.
+ */
+export function upcomingSlots(input: {
+  now: Date; publishedToday: number; release: ScaleProfile; capacity: ScaleProfile
+}): Date[] {
+  const today = kstDateString(input.now)
+  const tomorrow = kstDateString(new Date(kstMidnight(input.now).getTime() + 86_400_000))
+  const remain = Math.max(0, input.release.dailyTarget - input.publishedToday)
+  const todayLeft = slotTimesOn(today, input.release).filter((d) => d.getTime() >= input.now.getTime())
+  return [...todayLeft.slice(Math.max(0, todayLeft.length - remain)), ...slotTimesOn(tomorrow, input.capacity)]
+}
+
+/**
+ * 🔴 **JIT 수요 재료 — 공급 러너 · 관제가 같은 함수를 부른다** (2026-09-30).
+ *    다가오는 슬롯마다 READY 가 **그 슬롯 시각에** eligible 인지 정본으로 판정해 짝짓는다.
+ *    Persona 여력은 준비 단계(capacity) 상한으로 본다 — 다가오는 슬롯 대부분이 다음 증명일이다.
+ */
+export function jitCoverageOf(
+  view: { loaded: LoadedStock; resolved: ResolvedScale }, now: Date,
+): { slots: number; readyFilled: number } {
+  const scale = view.resolved.scale
+  const slots = upcomingSlots({
+    now, publishedToday: view.loaded.publishedToday, release: scale.releaseProfile, capacity: scale.capacityProfile,
+  })
+  const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.capacityProfile), now, autoOnly: false })
+  return { slots: slots.length, readyFilled: matchOpportunitiesToSlots(slots, ready).filled }
 }
 
 /**
@@ -597,13 +572,13 @@ export function planPublishBatch(input: {
  * 🔴 **그래서 판정을 새로 적지 않는다.** 아래는 이미 계산된 정본 결과를 **나누기만** 한다.
  *    · profile · gate · 검토 — `selectAutoTargets` 가 낸 `rejected` 코드
  *    · 기존 배정 — `planPublishBatch` 의 `autoDeferred`(route defer) · `autoExceptions`(route exception)
- *    · TTL · 신선도 — `prepareCandidates` 의 `held`(닫힌 enum `HoldReason`)
+ *    · 원천 가치 — `prepareCandidates` 의 `held`(정본 `judgeSlotRelease` 의 닫힌 enum `ReleaseReason`)
  *    · 새 배정 — `batch.assignments` 의 `deferredBy` · `blocked` 사유 · `recoveryProblem` · `brokenRecovery`
  *    시간성 판정은 정본 `TIME_BOUND_ASSIGN_CODES`(WEEKLY_CAP · TOO_SOON) 하나다 — 새 숫자·새 상한이 없다.
  *
  * 🔴 **칸마다 WIP 여부와 복구 주체가 정해져 있다** (2026-09-26 2차 · 마스터 지적).
  *    Persona WIP 는 "그 화자가 곧 낼 글" 이다. 사람 손이 닿거나 시간이 지나면 나갈 글만 WIP 다 —
- *    TTL 만료 · 영구 예외 · 깨진 복구 · 스스로 풀리지 않는 신선도 실패가 WIP 를 **영구 점유**하면
+ *    원천 가치 없음 · 영구 예외 · 깨진 복구가 WIP 를 **영구 점유**하면
  *    그 화자에게는 새 글이 영영 배정되지 않는다(앞판이 그랬다).
  *
  * 🔴 **칸은 겹치지 않고 빠지지 않는다** — 합이 `queueTotal` 이다. 검사가 그것을 단정한다.
@@ -622,7 +597,7 @@ export type StockBucket =
   | 'publishableNow' | 'haltedByBrokenRecovery'
   | 'humanReviewPending' | 'autoReadyClosed' | 'autoReadyStale'
   | 'assignmentDeferred'
-  | 'ttlExpired' | 'freshnessHeld' | 'recoveryBroken' | 'assignmentException'
+  | 'releaseIneligible' | 'releaseUnknown' | 'recoveryBroken' | 'assignmentException'
   | 'qualityContractMismatch'
   | 'profileMismatch' | 'gateBlocked'
 
@@ -642,8 +617,13 @@ export const STOCK_BUCKET_META: Record<StockBucket, { wip: boolean; owner: Recov
   autoReadyClosed: { wip: true, owner: 'autoReadyGate', label: '자동 도장 행 · 자동 READY 문이 닫혔다' },
   autoReadyStale: { wip: true, owner: 'human', label: '자동 도장 뒤 글이 바뀌었다 — 도장 무효 · 사람이 다시 본다' },
   assignmentDeferred: { wip: true, owner: 'time', label: '배정 유예 — 주간 상한 · 최소 간격 (시간이 풀면 나간다)' },
-  ttlExpired: { wip: false, owner: 'human', label: 'TTL 만료 — 사람이 버릴지 살릴지' },
-  freshnessHeld: { wip: false, owner: 'human', label: '신선도 보류 — 시각 미상 · 복구 글 상함' },
+  /**
+   * 🔴 **원천 가치 없음 — 사람이 살리는 칸이 아니다** (2026-09-30 · source-slot-v1). 앞판의 `ttlExpired`("사람이 버릴지
+   *    살릴지") · `freshnessHeld`("사람 검수로") 는 sunk-cost 구제 레인이었다. 이제 발행 트랜잭션이 만난 즉시 EXPIRED 로
+   *    옮기고 다음 후보로 교체한다. 레거시 행 일괄 만료는 **계획만** 있다(운영 write 승인 필요).
+   */
+  releaseIneligible: { wip: false, owner: 'none', label: '원천 가치 없음 — 예정 슬롯에서 원문 나이 ≥ 72h (만료 예정 · 사람이 살리지 않는다)' },
+  releaseUnknown: { wip: false, owner: 'none', label: '원천 증거 모름 — 게시 시각 · 반응 · 동력 없음 (만료 예정 · backfill 없음)' },
   recoveryBroken: { wip: false, owner: 'human', label: '깨진 복구 — 기존 배정이 쓸 수 없는 Persona' },
   assignmentException: { wip: false, owner: 'human', label: '배정 예외 — 말투 · 생활사 · 비활성 (시간이 풀지 않는다)' },
   qualityContractMismatch: {
@@ -684,16 +664,12 @@ function bucketOfReject(code: RejectCode, gateResults: unknown): StockBucket {
   }
 }
 
-/** 🔴 정본 신선도 보류 → 칸. 닫힌 enum 이다 */
-function bucketOfHold(hold: HoldReason): StockBucket {
-  switch (hold) {
-    case 'TTL_EXPIRED': return 'ttlExpired'
-    case 'AGE_UNKNOWN': case 'RECOVERY_STALE': return 'freshnessHeld'
-    default: {
-      const never: never = hold
-      return never
-    }
-  }
+/**
+ * 🔴 정본 슬롯 판정 제외 → 칸. 나이 초과만 ineligible · 나머지(증거 · 시각 · 반응 · 동력 모름)는 unknown.
+ *    계획의 첫 판정은 hard gate 를 이미 지난 행 · 배정 전(pending)이라 HARD_GATE · NO_PERSONA_AT_SLOT 은 여기 오지 않는다.
+ */
+function bucketOfHold(hold: ReleaseReason): StockBucket {
+  return hold === 'SOURCE_TOO_OLD_AT_SLOT' ? 'releaseIneligible' : 'releaseUnknown'
 }
 
 /**
@@ -785,6 +761,7 @@ export async function loadStockClassification(
 ): Promise<{ loaded: LoadedStock; resolved: ResolvedScale; plan: PublishPlan; classification: StockClassification }> {
   const autoOpen = await authoritativeGate(prisma, env as never)
   const loaded = await loadPublishableStock(prisma, now, { autoReadyOpen: autoOpen.open })
+  // 🔴 발행 상한은 결정(env 로 들어온 release) 그대로다 — 준비도로 깎지 않는다
   const resolved = resolvePublishScale({ env, loaded, now })
   const plan = planPublishBatch({ loaded, caps: resolved.caps, at: now })
   return { loaded, resolved, plan, classification: classifyStock({ loaded, plan }) }

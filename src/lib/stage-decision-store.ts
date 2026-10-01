@@ -4,10 +4,11 @@
  *   이 파일은 **순서만** 정의한다: 읽고 · 없으면 계산하고 · 넣고 · 충돌이면 다시 읽는다.
  *   Prisma 는 `stage-decision-repo` 가 끼워 넣고, 검증은 `stage-decision-contract` 가 한다.
  *
- * 🔴 **지금 상태** (2026-09-28 read-only 확인) — 운영 DB 에 `StageDecision` 표가 **있고 행은 0** 이다.
- *    controller(`scripts/stage-controller.mts`) · consumer 감싸기(`scripts/stage-consume-exec.mts`)가
- *    이 순서를 부른다. 🔴 `STAGE_CONTROLLER_ENABLED` 는 정본 env 에 없다(꺼짐) — 켜기 전까지
- *    controller 는 저장하지 않고 consumer 는 legacy 로 그대로 통과한다.
+ * 🔴 **단계 authority 는 `StageDecision` 한 행이다.** controller(`scripts/stage-controller.mts`)가 만들고
+ *    consumer 감싸기(`scripts/stage-consume-exec.mts`)가 읽는다. 운영 상태(행 수 · switch 값)는 이 주석에 적지 않는다.
+ *    🔴 canonical env 에 kill switch `STAGE_CONTROLLER_ENABLED` 가 있을 수 있다 — 정확히 `on` 일 때만 이 순서를 쓴다.
+ *    switch 는 단계 값을 정하지 않는다. OFF · 누락이면 controller 는 저장하지 않고 consumer 는 가장 안전한
+ *    단계(d1)로 간다 — 옛 env 단계 · canary 경로로 돌아가지 않는다.
  *
  * 🔴 **왜 저장이 필요한가.** 공급(로컬 launchd)과 발행(GitHub Actions)은 서로 다른
  *    env 원천을 읽는다. 2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.
@@ -50,7 +51,8 @@ export type DecisionConsumer = (typeof DECISION_CONSUMERS)[number]
 /**
  * 🔴 **kill switch.** rollback 은 `contractVersion` 되돌리기가 아니다 —
  *    그것은 옛 결정을 되살려 더 헷갈리게 만든다.
- *    이 값이 꺼지면 두 러너는 **기존 env/canary 경로**로 그대로 돌아간다.
+ *    이 값이 꺼지면 두 러너는 **가장 안전한 단계(d1)** 로 간다 (2026-09-30 · Lane A).
+ *    🔴 옛 판은 "기존 env/canary 경로" 로 돌아갔다 — 손으로 적은 env 단계가 결정을 대신하는 두 번째 권위였다.
  */
 export const CONTROLLER_ENV = 'STAGE_CONTROLLER_ENABLED'
 
@@ -65,7 +67,7 @@ export function controllerEnabled(env: Readonly<Record<string, string | undefine
  *    두 번째 행이 만들어진다** — 하루 결정이 둘이 되고, 아침에 옛 판으로 낸 글과
  *    낮에 새 판으로 낸 글이 서로 다른 상한 아래 놓인다. immutable 이 깨지는 것이다.
  *    🔴 하루에 결정은 하나다. 같은 날 판이 달라지면 **두 번째 행을 만들지 않고**
- *    fail-closed(`BROKEN`) 로 간다 — 그러면 consumer 는 legacy/가장 안전한 단계로 간다.
+ *    fail-closed(`BROKEN`) 로 간다 — 그러면 consumer 는 가장 안전한 단계로 간다.
  */
 export type DecisionKey = { kstDate: string }
 
@@ -87,26 +89,26 @@ export type EnsureOutcome =
  *
  *    첫 발행 전에 행이 없다는 것은 controller 가 돌지 않았다는 뜻이다.
  *    그때 발행 러너가 **높은 단계를 사후에 만들어** 내보내면, 아무도 판단하지 않은
- *    양이 나간다. 기존 env/canary 경로로 가거나 가장 안전한 단계로 간다.
+ *    양이 나간다. 🔴 가장 안전한 단계로 간다 — env 로 돌아가는 경로는 없다.
  */
 export type ConsumeOutcome =
   | { ok: true; decision: ValidatedStageDecision }
-  | { ok: false; code: 'NO_DECISION' | 'BROKEN'; reason: string; fallback: 'legacy' | 'safest' }
+  | { ok: false; code: 'NO_DECISION' | 'BROKEN'; reason: string; fallback: 'safest' }
 
 export async function consumeStageDecision(io: {
   /** 🔴 **`unknown` 이다** — 저장소가 무엇을 돌려줄지 약속하지 않는다 */
   read: () => Promise<unknown>
   /** 🔴 controller 와 **같은** validator 여야 한다 — 양쪽이 다르면 한쪽만 통과한다 */
   validate: (row: unknown) => ValidateResult
-  /** kill switch 가 꺼져 있으면 기존 경로로 간다 */
+  /** kill switch 가 꺼져 있으면 가장 안전한 단계로 간다(결정을 읽지 않는다) */
   controllerOn: boolean
   by: DecisionConsumer
 }): Promise<ConsumeOutcome> {
   void io.by
   if (!io.controllerOn) {
     return {
-      ok: false, code: 'NO_DECISION', fallback: 'legacy',
-      reason: `${CONTROLLER_ENV} 가 켜져 있지 않다 — 기존 env/canary 경로로 간다`,
+      ok: false, code: 'NO_DECISION', fallback: 'safest',
+      reason: `${CONTROLLER_ENV} 가 켜져 있지 않다 — kill switch · 가장 안전한 단계로 간다(env 단계로 돌아가지 않는다)`,
     }
   }
   const row = await io.read()
@@ -246,7 +248,7 @@ export async function ensureStageDecision(io: {
  *    🔴 `kstDate` 를 기본키로 둬 **KST 날짜당 하나**를 DB 가 강제한다.
  *    같은 날 판이 달라지면 두 번째 행을 만들지 않는다 — 읽은 행의 판이 현재 판과
  *    다르므로 `validateStoredDecision` 이 거절하고, `ensureStageDecision` 은 `BROKEN`,
- *    consumer 는 legacy 또는 가장 안전한 단계로 간다(fail-closed).
+ *    consumer 는 가장 안전한 단계로 간다(fail-closed).
  *
  * 🔴 **JSON 왕복이 검증을 통과해야 한다.** `decidedAt` 은 DateTime 이므로 읽을 때
  *    `toISOString()` 으로 되돌린다 — 그 문자열의 KST 날짜가 `kstDate` 와 같아야 한다.

@@ -14,7 +14,7 @@
  *    ⑧ GitHub Actions 예약 수 불변 — heartbeat 는 어느 워크플로우에도 없다
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -23,7 +23,7 @@ import {
   DEFAULT_RUNNER_TRIGGER_MODE, PUBLISH_RUNNER_LABEL, HEARTBEAT_INSTALL_STEPS,
   renderPublishRunnerPlist, renderPublishHeartbeatPlist, renderRunnerPlistFor, publishRunnerSlots,
   heartbeatWakeTimes, verifyHeartbeatGrid, parseInstalledRunnerPlist, heartbeatCommands,
-  stageInputsOf, describeStageInputs, judgeHeartbeatStageInputs, pickStageInputKeys,
+  stageInputsOf, describeStageInputs,
   judgeRunnerSecrets, type RunnerTriggerMode,
 } from './lib/original-post-runner-template'
 import { claimHeartbeatTick, heartbeatTickKey, heartbeatInWindow, pruneOldTicks } from './lib/publish-heartbeat-tick.mjs'
@@ -32,6 +32,7 @@ import {
   PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE,
 } from '../src/lib/publish-slot-catchup'
 import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -101,7 +102,8 @@ const wakes = heartbeatWakeTimes()
   check('🔴 설치 명령에 lint 가 bootstrap 앞에 있다',
     cmds.install.findIndex((c) => c.startsWith('plutil -lint')) < cmds.install.findIndex((c) => c.includes('bootstrap')))
   check('🔴 rollback 은 백업을 같은 자리에 되돌린다', cmds.rollback.some((c) => c.startsWith('cp "/B/f.plist" "/A/x.plist"')))
-  check('🔴 설치 절차가 GitHub 예약을 끄지 않는다고 적는다', HEARTBEAT_INSTALL_STEPS.some((s) => s.includes('GitHub 예약은 **끄지 않는다**')))
+  check('🔴 설치 절차가 GitHub 예약 발행자가 없다고 적는다(2026-09-30 단일 실행 authority)',
+    HEARTBEAT_INSTALL_STEPS.some((s) => s.includes('GitHub 예약 발행자는 없다')) && !HEARTBEAT_INSTALL_STEPS.some((s) => s.includes('GitHub 예약은 **끄지 않는다**')))
   const tpl = codeOf('scripts/lib/original-post-runner-template.ts')
   check('🔴 템플릿은 여전히 파일을 쓰지 않는다', !/writeFileSync|mkdirSync|execFileSync|execSync/.test(tpl))
   const pre = codeOf('scripts/publish-heartbeat-preflight.mts')
@@ -207,32 +209,21 @@ async function race(n: number): Promise<number> {
 check('🔴 🔴 **8 프로세스 동시 — 정확히 1개만 차지 · 나머지 7개 TICK_TAKEN**', (await race(8)) === 1)
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑥ 로컬/GitHub 단계 입력 분기 — 값으로 · fail-closed')
+console.log('\n⑥ 단계 입력 — StageDecision 표식이 붙은 칸만 · 값으로 로그한다')
 // ─────────────────────────────────────────────────────────
 {
+  /**
+   * 🔴 (2026-09-30 · 단일 실행 authority) 앞판은 로컬 env 와 GitHub Variables 의 실효 천장을 대조했다.
+   *    GitHub 예약 발행자를 지웠으므로 대조할 두 번째 권위가 없다 — 러너는 consumer 가 넣은 결정만 읽는다.
+   */
   const NOW = K('2026-09-26T16:00:00')
-  const local = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
-  const github = { ...local, SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29' }
-  const li = stageInputsOf(local, NOW)
-  check('🔴 기간 변수 없는 로컬 — 천장 d1 · 하루 1', li.ceiling === 'd1' && li.ceilingDailyTarget === 1 && li.window.stage === null)
-  check('🔴 로그 한 줄에 천장이 값으로 찍힌다', describeStageInputs(li).includes('천장 d1 (하루 1건)') && describeStageInputs(li).includes('window=(없음)'))
-  const gi = stageInputsOf(github, NOW)
-  check('🟢 GitHub(기간 d3 · 오늘 유효) — 천장 d3', gi.ceiling === 'd3' && gi.window.activeToday)
-  const v = judgeHeartbeatStageInputs({ local, github, now: NOW })
-  check('🔴 🔴 **로컬 d1 < GitHub d3 — 막는다(설치 목적을 이루지 못한다) · 분기는 값으로 적는다**',
-    !v.ok && v.blockers.some((b) => b.includes('local d1') && b.includes('GitHub d3'))
-    && v.divergences.some((d) => d.includes('SORAN_RELEASE_WINDOW_STAGE')))
-  const flip = judgeHeartbeatStageInputs({ local: github, github: local, now: NOW })
-  check('🔴 🔴 **로컬 > GitHub — 막는다(자주 깨는 쪽이 더 넓으면 fail-open)**', !flip.ok && flip.blockers.some((b) => b.includes('fail-open')))
-  const both3 = judgeHeartbeatStageInputs({ local: github, github, now: NOW })
-  check('🟢 실효 천장이 같으면(d3 · d3) 통과', both3.ok && both3.blockers.length === 0)
-  const none = judgeHeartbeatStageInputs({ local, github: null, now: NOW })
-  check('🔴 GitHub 을 못 읽으면 막는다', !none.ok)
-  check('🟢 기간이 끝난 날은 GitHub 도 d1 — 분기 없이 같은 천장',
-    stageInputsOf(github, K('2026-09-30T10:00:00')).ceiling === 'd1')
-  const picked = pickStageInputKeys('DATABASE_URL=postgres://secret\nSORAN_RELEASE_STAGE=d1\nSORAN_RELEASE_WINDOW_STAGE="d3"\nGEMINI_API_KEY=x')
-  check('🔴 정본 env 에서 단계 키만 뽑는다 — 비밀값 키는 메모리에도 없다',
-    Object.keys(picked).sort().join(',') === 'SORAN_RELEASE_STAGE,SORAN_RELEASE_WINDOW_STAGE' && picked.SORAN_RELEASE_WINDOW_STAGE === 'd3')
+  const decided = stageInputsOf(markedStageEnv({ SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd3' }), NOW)
+  check('🟢 결정 표식 env — 천장 d3 · 하루 3 · 결정에서 왔다', decided.ceiling === 'd3' && decided.ceilingDailyTarget === 3 && decided.fromDecision)
+  check('🔴 로그 한 줄에 출처와 천장이 값으로 찍힌다', describeStageInputs(decided).includes('StageDecision') && describeStageInputs(decided).includes('천장 d3 (하루 3건)'))
+  const hand = stageInputsOf({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10',
+    SORAN_RELEASE_WINDOW_STAGE: 'd10', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29' }, NOW)
+  check('🔴 🔴 **손으로 적은 env(GitHub Variables · .env.local 모양) d10 + window → 천장 d1 · 칸을 읽지 않았다고 적는다**',
+    hand.ceiling === 'd1' && !hand.fromDecision && hand.release === null && describeStageInputs(hand).includes('표식 없음'))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -240,42 +231,27 @@ console.log('\n⑥-b 🔴 실행 반례 — 실제 preflight 프로세스(`--sta
 // ─────────────────────────────────────────────────────────
 {
   /**
-   * 🔴 판정 함수가 아니라 **preflight 프로세스**를 띄워 종료 코드를 본다. 단계 게이트는 전체 실행과
-   *    같은 함수(`stageGate`)다. 입력은 임시 파일 — 정본 env · gh 를 읽지 않는다.
+   * 🔴 판정 함수가 아니라 **preflight 프로세스**를 띄워 종료 코드를 본다(전체 실행과 같은 `stageGate`).
+   *    ① 이 저장소 그대로 → exit 0  ② 저장소 사본의 auto-publish.yml 에 schedule 을 되살림 → exit 1
    */
-  const dir = mkdtempSync(join(tmpdir(), 'soran-hb-stage-'))
-  const envFile = (name: string, kv: Record<string, string>): string => {
-    const f = join(dir, `${name}.env`)
-    writeFileSync(f, Object.entries(kv).map(([k, v]) => `${k}=${v}`).join('\n') + '\nDATABASE_URL=must-not-be-read\n')
-    return f
-  }
-  const ghFile = (name: string, kv: Record<string, string>): string => {
-    const f = join(dir, `${name}.json`)
-    writeFileSync(f, JSON.stringify(Object.entries(kv).map(([k, v]) => ({ name: k, value: v }))))
-    return f
-  }
-  const AT = '2026-09-26T07:00:00Z'
-  const base = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
-  const w3 = { SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29' }
-  const w5 = { SORAN_RELEASE_WINDOW_STAGE: 'd5', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29' }
-  const oldCanary = { SORAN_RELEASE_CANARY_STAGE: 'd5', SORAN_RELEASE_CANARY_DATE: '2026-09-24' }
-  const run = (local: string, gh: string): { code: number | null; out: string } => {
+  const run = (root: string): { code: number | null; out: string } => {
     const r = spawnSync(process.execPath, [...process.execArgv, 'scripts/publish-heartbeat-preflight.mts',
-      '--stage-only', `--local-env-file=${local}`, `--github-vars-file=${gh}`, `--now=${AT}`], { encoding: 'utf-8' })
+      '--stage-only', `--root=${root}`], { encoding: 'utf-8' })
     return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
   }
-  const c1 = run(envFile('l1', base), ghFile('g1', { ...base, ...w3, ...oldCanary }))
-  check('🔴 🔴 **① 실측 모양 local d1 / GitHub d3 → exit 1**', c1.code === 1 && c1.out.includes('실효 천장 불일치 — local d1'), `exit ${c1.code}`)
-  const c2 = run(envFile('l2', { ...base, ...w3 }), ghFile('g2', { ...base, ...w3 }))
-  check('🟢 ② local d3 / GitHub d3 → exit 0', c2.code === 0 && c2.out.includes('🟢 같다'), `exit ${c2.code}`)
-  const c3 = run(envFile('l3', { ...base, ...w3 }), ghFile('g3', { ...base, ...w5 }))
-  check('🔴 🔴 **③ local d3 / GitHub d5 → exit 1**', c3.code === 1 && c3.out.includes('local d3') && c3.out.includes('GitHub d5'), `exit ${c3.code}`)
-  const c4 = run(envFile('l4', { ...base, ...w3 }), ghFile('g4', { ...base, ...w3, ...oldCanary }))
-  check('🟢 ④ 지난 canary 문자열만 다르고 양쪽 천장 d3 → 분기 표시 · exit 0',
-    c4.code === 0 && c4.out.includes('분기 SORAN_RELEASE_CANARY_STAGE') && !c4.out.includes('실효 천장 불일치'), `exit ${c4.code}`)
-  const c5 = run(envFile('l5', { ...base, ...w3 }), join(dir, 'missing.json'))
-  check('🔴 ⑤ GitHub 을 못 읽으면 → exit 1 (fail-closed)', c5.code === 1 && c5.out.includes('읽지 못했다'), `exit ${c5.code}`)
-  check('🔴 단계 게이트는 env 에서 단계 키만 읽는다 — 비밀값 줄이 출력에 없다', ![c1, c2, c3, c4, c5].some((c) => c.out.includes('must-not-be-read')))
+  const c1 = run(process.cwd())
+  check('🟢 ① 지금 저장소 — authority 하나 · exit 0', c1.code === 0 && c1.out.includes('🟢 하나다'), `exit ${c1.code} ${c1.out.slice(-400)}`)
+  const dir = mkdtempSync(join(tmpdir(), 'soran-hb-authority-'))
+  cpSync('.github', join(dir, '.github'), { recursive: true })
+  cpSync('docs/operations/launchd', join(dir, 'docs/operations/launchd'), { recursive: true })
+  cpSync('package.json', join(dir, 'package.json'))
+  cpSync('src', join(dir, 'src'), { recursive: true })
+  cpSync('scripts', join(dir, 'scripts'), { recursive: true })
+  const wf = join(dir, '.github/workflows/auto-publish.yml')
+  writeFileSync(wf, readFileSync(wf, 'utf-8').replace('on:\n  workflow_dispatch:\n', "on:\n  schedule:\n    - cron: '30 0 * * *'\n  workflow_dispatch:\n"))
+  const c2 = run(dir)
+  check('🔴 🔴 **② 사본에 GitHub 발행 예약을 되살리면 → exit 1 (SCHEDULE_PUBLISH)**', c2.code === 1 && c2.out.includes('SCHEDULE_PUBLISH'), `exit ${c2.code} ${c2.out.slice(-400)}`)
+  rmSync(dir, { recursive: true, force: true })
 }
 
 // ─────────────────────────────────────────────────────────
@@ -295,9 +271,13 @@ console.log('\n⑦ 러너 배선 — 줄이는 것만 · 발행 권한은 트랜
   check('🔴 단계 입력을 값으로 로그한다', /describeStageInputs\(stageInputsOf\(process\.env, axisNow\)\)/.test(r))
   check('🔴 발행은 여전히 scheduled 트랜잭션이다 — 트리거가 건수를 정하지 않는다',
     /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \}/.test(r) && !/HEARTBEAT[^\n]*dailyCap|dailyCap[^\n]*HEARTBEAT/.test(r))
-  check('🔴 러너의 시계는 하나다 — 틱·창 판정도 RUN_AT', r.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 1
-    && r.indexOf('const RUN_AT = new Date()') < r.indexOf('const HEARTBEAT = '))
-  check('🔴 러너가 트랜잭션 시계를 주입하지 않는다', !/publishOriginalPostTx\([^)]*\{\s*now:/.test(r))
+  // 🔴 (2026-09-30 Lane B) 회차 시각은 `runClockFrom` 하나(비면 벽시계 · 주입은 격리 DB 에서만) — 벽시계 직접 호출 0
+  check('🔴 러너의 시계는 하나다 — 틱·창 판정도 RUN_AT', r.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 0
+    && r.indexOf('const RUN_AT = RUN_CLOCK.at') > 0 && r.indexOf('const RUN_AT = RUN_CLOCK.at') < r.indexOf('const HEARTBEAT = '))
+  check('🔴 러너가 트랜잭션 시계를 고정하지 않는다 — 운영(주입 없음)은 트랜잭션 자기 시계 · 주입일 때만 주입 시각에서 흐르는 시계',
+    !/publishOriginalPostTx\([^)]*\{\s*now:/.test(r)
+    && /const TX_CLOCK: \{ now: \(\) => Date \} \| undefined = RUN_CLOCK\.from === 'parent'/.test(r)
+    && /: undefined\n/.test(r.slice(r.indexOf('const TX_CLOCK'), r.indexOf('const TX_CLOCK') + 400)))
   const tx = codeOf('src/lib/original-post-publish-tx.ts')
   check('🔴 트랜잭션은 트리거 종류와 무관하게 local 계약으로 슬롯을 다시 센다',
     /judgeCatchUp\(\{ stage, now: txNow, trigger: 'local', cron: null, publishedToday: publishedTodayInTx \}\)/.test(tx)
@@ -306,7 +286,7 @@ console.log('\n⑦ 러너 배선 — 줄이는 것만 · 발행 권한은 트랜
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ GitHub Actions 사용량 — 예약 변화 0')
+console.log('\n⑧ GitHub Actions — 발행 예약 0 (2026-09-30 단일 실행 authority)')
 // ─────────────────────────────────────────────────────────
 {
   const wfDir = '.github/workflows'
@@ -314,10 +294,10 @@ console.log('\n⑧ GitHub Actions 사용량 — 예약 변화 0')
   const withHb = files.filter((f) => codeOf(join(wfDir, f)).includes(HEARTBEAT_FLAG))
   check('🔴 어느 워크플로우도 --heartbeat 로 러너를 부르지 않는다', withHb.length === 0, withHb.join(','))
   const cronsOf = (f: string): number => codeOf(join(wfDir, f)).split('\n').filter((l) => /^\s*-\s*cron:/.test(l)).length
-  check('🔴 auto-publish 예약은 10개 그대로다(GitHub 백업 wake 유지 · 늘리지 않음)', cronsOf('auto-publish.yml') === 10)
+  check('🔴 🔴 **auto-publish 예약은 0 이다 — 발행 schedule owner 는 host launchd 하나**', cronsOf('auto-publish.yml') === 0)
   check('🔴 visibility-guard 예약은 하루 1개 그대로다', cronsOf('visibility-guard.yml') === 1)
   const total = files.reduce((n, f) => n + cronsOf(f), 0)
-  console.log(`     워크플로우 ${files.length}개 · cron 줄 합계 ${total} (이 변경은 cron 을 더하지도 빼지도 않는다)`)
+  console.log(`     워크플로우 ${files.length}개 · cron 줄 합계 ${total}`)
 }
 
 // 🔴 KST 분 계산이 러너·트랜잭션과 같은 함수인지 — 다른 시계로 틱을 세지 않는다

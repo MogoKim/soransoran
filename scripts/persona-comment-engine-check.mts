@@ -259,8 +259,8 @@ console.log('③ 댓글 분산 planner')
   })
   const persona = (o: Partial<PlannerPersona> & { code: string }): PlannerPersona => ({
     status: 'active', realMember: { accountCount: 0, providerId: null }, seedComplete: true,
-    forbiddenReactionRoles: [], recentComments: 0,
-    life: { noGoTopics: [] }, ...o,
+    forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
+    life: { noGoTopics: [], noGoExpressions: [] }, ...o,
   })
   // 🔴 정본 어휘를 쓴다. `share` 는 REACTION_TYPES 에 없어 생성기가 거부한다
   const ROLES = [...COMMENT_REACTION_ROLES]
@@ -321,7 +321,7 @@ console.log('③ 댓글 분산 planner')
       ['seed·voice 가 불완전하면 제외', persona({ code: 'P04', seedComplete: false }), 'PERSONA_SEED_INCOMPLETE'],
       ['자기 글에는 달지 않는다', persona({ code: 'P09' }), 'PERSONA_OWN_POST'],
       // 🔴 실제 본문에서 요구를 읽어 판정한다 — 고정 목록이 아니다
-      ['noGo 주제가 본문에 있으면 제외', persona({ code: 'P05', life: { noGoTopics: ['무릎'] } }), 'PERSONA_LIFE_CONFLICT'],
+      ['noGo 주제가 본문에 있으면 제외', persona({ code: 'P05', life: { noGoTopics: ['무릎'], noGoExpressions: [] } }), 'PERSONA_LIFE_CONFLICT'],
     ]
     for (const [label, pers, code] of cases) {
       check(`🔴 ${label}`, judgePlannerPersona(pers, p, 'empathy').some((b) => b.code === code))
@@ -1007,14 +1007,13 @@ console.log('⑤-b 🔴 Wave E — 말투 근거 · 무효 회차 · manifest ·
       ...Array.from({ length: 6 }, (_, i) => ({ speakerId: 'aaaaaaaaaaaa', text: `저도 작년에 그거 겪었어요 ${i}` })),
       ...Array.from({ length: 20 }, (_, i) => ({ speakerId: `cccccccccc${String(i).padStart(2, '0')}`, text: `보완 문장 ${i} 그렇군요` })),
     ]
-    const safe = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: false })
+    const safe = planBundles({ rows, personaCodes: ['P1'], target: 8 })
     const safeTexts = safe.bundles.flatMap((b) => b.comments.map((c) => c.text))
     check(`🔴 경험 근거 없으면 경험형 0건 (${safeTexts.filter(carriesExperience).length}건)`,
       safeTexts.length > 0 && safeTexts.every((t) => !carriesExperience(t)))
     check('🔴 제외했다고 소리 내어 말한다', safe.blocks.some((b) => b.includes('경험형 참고 댓글')))
-    const rich = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: true })
-    check('🟢 근거가 있으면 경험형도 받을 수 있다',
-      rich.bundles.flatMap((b) => b.comments.map((c) => c.text)).some(carriesExperience))
+    check('🔴 경험형은 style-only 관측으로만 센다(원문 0 · 관측에는 들어간다)',
+      safe.bundles.every((b) => b.styleOnlyCount > 0 && b.observedCount === b.comments.length + b.styleOnlyCount))
   }
 
   // ── P0-1 🔴 역할과 무관하게 근거 없는 자기 경험을 막는다 ──
@@ -1594,11 +1593,16 @@ console.log('⑤-d 🔴 Persona reference 안정 배정 (배치가 바뀌어도 
         check('A-2 🔴 표에 보완 0 으로 남는다',
           [...fwd.byCode.keys()].every((c) =>
             (fwd.table.find((t) => t.personaCode === c)?.supplements ?? -1) === 0))
-        /** 🔴 3~8 가변 길이 — 8 로 맞추려고 채우지 않는다 */
+        /**
+         * 🔴 원문 2~8 가변 길이 · 관측 3건 이상 (2026-10-01 · Phase F) — 8 로 맞추려고 채우지 않는다.
+         *    경험형 댓글은 원문이 아니라 style-only 관측으로만 센다.
+         */
         const sizes = [...fwd.byCode.values()].map((b) => b.comments.length)
-        check(`A-2 🟢 3~8 가변 길이다 (${Math.min(...sizes)}~${Math.max(...sizes)})`,
-          Math.min(...sizes) >= 3 && Math.max(...sizes) <= 8)
-        check('A-2 🔴 3건 미만은 묶음이 되지 않는다', sizes.every((n) => n >= 3))
+        check(`A-2 🟢 원문 2~8 가변 길이다 (${Math.min(...sizes)}~${Math.max(...sizes)})`,
+          Math.min(...sizes) >= 2 && Math.max(...sizes) <= 8)
+        check('A-2 🔴 관측 3건 미만 · 안전 원문 2건 미만은 묶음이 되지 않는다',
+          [...fwd.byCode.values()].every((b) => b.observedCount >= 3 && b.comments.length >= 2))
+        check('A-2 🔴 원문에 경험형 댓글 0', [...fwd.byCode.values()].every((b) => !b.comments.some((c) => carriesExperience(c.text))))
       }
     }
 
@@ -1909,7 +1913,7 @@ console.log('⑨ 생활사 정본 재사용')
 // ─────────────────────────────────────────────────────────
 {
   const base = {
-    code: 'P01', noGoTopics: [] as string[],
+    code: 'P01', noGoTopics: [] as string[], noGoExpressions: [] as string[],
   }
   const req = readPostRequirements('고3 딸 수능 이야기', '딸이 고3인데 수능이 코앞입니다')
   /** 🔴 글 매칭과 **같은 함수**를 부른다 — 복붙이면 한쪽만 고쳐진다 */
@@ -1956,7 +1960,7 @@ console.log('⑩ 실회원 정본 — judgeRealMember 하나만')
   })
   const pers = (probe: PlannerPersona['realMember']): PlannerPersona => ({
     code: 'P01', status: 'active', realMember: probe, seedComplete: true,
-    forbiddenReactionRoles: [], recentComments: 0, life: { noGoTopics: [] },
+    forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 }, life: { noGoTopics: [], noGoExpressions: [] },
   })
   /** 🔴 조회가 어긋난 모든 모양을 fail-closed 로 막는다 */
   const bad: [string, PlannerPersona['realMember']][] = [
@@ -3832,6 +3836,7 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
     user: { providerId: null, accountCount: 0 },
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     // 🔴 ⑧ 은 후보를 포함해 minSamples 건이 되어야 돈다 — 이전 발화 5건을 준다
     comments: [
       '저도 그런 날이 있었어요', '무릎이 시큰해서 병원에 갔어요', '햇살이 좋더라고요',
@@ -4406,6 +4411,7 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
     user: { providerId: null, accountCount: 0 },
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     comments: [
       '저도 그런 날이 있었어요', '무릎이 시큰해서 병원에 갔어요', '햇살이 좋더라고요',
       '같이 걸으면 더 좋아요', '오늘은 좀 쉬려고요',
@@ -5026,8 +5032,8 @@ console.log('㊻ 글당 1~5 · 댓글 0개 우선 · 같은 Persona 재댓글 �
   })
   const mkPersona = (code: string, o: Partial<PlannerPersona> = {}): PlannerPersona => ({
     code, status: 'active', realMember: { accountCount: 0, providerId: null },
-    seedComplete: true, forbiddenReactionRoles: [], recentComments: 0,
-    life: { noGoTopics: [] }, ...o,
+    seedComplete: true, forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
+    life: { noGoTopics: [], noGoExpressions: [] }, ...o,
   })
   const personas = (n: number): PlannerPersona[] =>
     Array.from({ length: n }, (_, i) => mkPersona(`P${String(i + 1).padStart(2, '0')}`))

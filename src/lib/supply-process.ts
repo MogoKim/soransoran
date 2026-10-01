@@ -24,7 +24,6 @@
  *    그래서 "어디까지 했는지" 를 파일에 적어 둘 이유가 없다 — 다시 돌리면 남은 것만 처리된다.
  */
 
-import { STOCK_BANDS } from './supply-stock-plan'
 // 🔴 **사본 완료 판정은 어댑터와 같은 함수를 쓴다.** 여기서 정규식을 다시 쓰면
 //    한쪽만 고쳐진다 — 실제로 그랬다 (2026-09-11 Codex 리뷰).
 import { completedAdaptKeys } from './micro-seed-82cook-thin-adapt'
@@ -33,7 +32,7 @@ import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
 
 /**
  * 🔴 **한 회차 적재 천장** (2026-09-28) — 묶음 크기 천장과 같다(10).
- *    `--up-to` 는 버퍼 여유 · 묶음 크기 · 이 천장 중 **가장 작은 값**이다. 이월 파일을 얹어도 늘지 않는다.
+ *    `--up-to` 는 JIT 수요 · 묶음 크기 · 이 천장 중 **가장 작은 값**이다. 이월 파일을 얹어도 늘지 않는다.
  */
 export const FILL_ROUND_CAP = SUPPLY_WORKSET_PER_RUN
 
@@ -222,47 +221,50 @@ export function hasWork(p: Pending): boolean {
 }
 
 // ─────────────────────────────────────────────────────────
-// 버퍼 정책 — 🔴 **중앙 게이트가 아니다**
+// 공급 수요 — 🔴 다가오는 슬롯에서 시작한다 (JIT · 2026-09-30 source-slot-v1)
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 **재고 700 은 APPROVED 버퍼 목표이지 수집 스위치가 아니다.**
+ * 🔴 **유료 생성 수요 = 다가오는 슬롯 − 그 슬롯들에 eligible 로 남을 READY.**
  *
- *    옛 판은 재고가 목표에 닿으면 회차 전체를 no-op 으로 만들었다 —
- *    그래서 한 숫자가 세 source 의 수집까지 멈췄다. 지금은 이렇게 나눈다.
+ *    다가오는 슬롯 = 오늘 남은 슬롯(공개 단계) + 다음 운영일 증명일 전체 슬롯(준비 단계).
+ *    READY 가 그 슬롯에 eligible 로 남는가는 정본 `judgeSlotRelease` 가 **그 슬롯 시각에** 본다 —
+ *    Persona 는 그 슬롯에 실제로 풀리는 것만 센다(`readyOpportunitiesOf` · `matchOpportunitiesToSlots`).
  *
- *      재고 < 700   파일 단계 + 모델 단계 + 적재. 적재 상한은 `700 − 재고`
- *      재고 ≥ 700   **파일 단계만** — 수집물을 방치하지 않되 모델도 DB 도 쓰지 않는다
- *
- *    어느 쪽이든 **수집 job 은 이 판정을 보지 않는다.** 저마다 자기 스케줄로 돈다.
- *
- * 🔴 재고를 못 읽으면(`null`) 파일 단계까지만 한다 — 모르는 수를 근거로 DB 에 쓰지 않는다.
+ *    🔴 **지운 옛 정본**: `judgeBuffer(700)`(형식 행 수로 700 버퍼를 채우던 적재 on/off) ·
+ *       `STOCK_BANDS`(100/300/700) · capacity ×14 · ×5 · ×3 재고 눈금. 완성 글 재고를 쌓는 목표는 없다.
+ *    🔴 수요를 모르면(`null`) 파일 단계만 돈다 — 모르는 수로 모델도 DB 도 쓰지 않는다.
+ *    🔴 수집 job 은 이 판정을 보지 않는다 — 저마다 자기 스케줄로 돈다.
  */
-export type BufferPolicy = {
+export type SupplyPolicy = {
   /** 모델 단계(judge · draft)를 돌리는가 */
   llm: boolean
   /** 적재 단계(fill)를 돌리는가 */
   fill: boolean
-  /** `--up-to` 로 넘길 상한 */
+  /** `--up-to` 로 넘길 상한 = 채우지 못한 슬롯 수 */
   upTo: number
   reason: string
 }
 
-export function judgeBuffer(usable: number | null, target: number = STOCK_BANDS.target): BufferPolicy {
-  if (usable === null || !Number.isInteger(usable) || usable < 0) {
+export function judgeJitDemand(input: { slots: number; readyFilled: number } | null): SupplyPolicy {
+  if (input === null || !Number.isInteger(input.slots) || input.slots < 0
+    || !Number.isInteger(input.readyFilled) || input.readyFilled < 0) {
     return {
       llm: false, fill: false, upTo: 0,
-      reason: '🔴 재고를 읽지 못했다 — 파일 단계만 돈다 (모델 0 · DB write 0)',
+      reason: '🔴 다가오는 슬롯 수요를 읽지 못했다 — 파일 단계만 돈다 (모델 0 · DB write 0)',
     }
   }
-  if (usable >= target) {
+  const demand = Math.max(0, input.slots - input.readyFilled)
+  if (demand === 0) {
     return {
       llm: false, fill: false, upTo: 0,
-      reason: `재고 ${usable}건 ≥ 버퍼 목표 ${target}건 — 파일 단계만 돈다 (수집 job 은 영향받지 않는다)`,
+      reason: `다가오는 슬롯 ${input.slots}개를 eligible READY ${input.readyFilled}건이 덮는다 — 생성 0 (파일 단계만)`,
     }
   }
-  const upTo = target - usable
-  return { llm: true, fill: true, upTo, reason: `재고 ${usable}건 < 버퍼 목표 ${target}건 — 적재 상한 ${upTo}건` }
+  return {
+    llm: true, fill: true, upTo: demand,
+    reason: `다가오는 슬롯 ${input.slots}개 중 ${input.readyFilled}개만 eligible READY 로 덮인다 — 생성 수요 ${demand}건`,
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -389,7 +391,7 @@ const LEDGER_CAP_ENV = 'SORAN_LLM_RUN_REQUEST_CAP'
  *    live 공급은 이 함수를 쓰지 않는다 (`planBoundedCommonPhase` 를 쓴다).
  */
 export function planCommonPhase(
-  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,
+  pending: Pending, policy: SupplyPolicy, gate: DraftQueueGate,
 ): StagePlan[] {
   const out: StagePlan[] = []
   if (!policy.llm) return out
@@ -424,7 +426,7 @@ export function planCommonPhase(
  *    새는 길이 없다 — 그것이 2026-09-20 canary 를 만든 구조다.
  */
 export function planBoundedCommonPhase(
-  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate, workset: WorksetGate,
+  pending: Pending, policy: SupplyPolicy, gate: DraftQueueGate, workset: WorksetGate,
 ): StagePlan[] {
   const out: StagePlan[] = []
   if (!policy.llm) return out
@@ -475,7 +477,7 @@ export function planBoundedCommonPhase(
  *    `fill` 하나만 세운다. 🔴 버퍼 정책이 적재를 허락할 때만(`policy.fill`) · 상한은 묶음 크기와 같다.
  */
 export function planCarryOverFill(
-  policy: BufferPolicy, carryOverPaths: readonly string[], limit: number,
+  policy: SupplyPolicy, carryOverPaths: readonly string[], limit: number,
 ): StagePlan[] {
   const upTo = fillUpToOf(policy.upTo, limit)
   if (!policy.fill || upTo <= 0 || carryOverPaths.length === 0) return []
@@ -542,7 +544,7 @@ export type RunVerdict = { ok: true; reason: string } | ({ ok: false } & RunBloc
 /**
  * 돌 것인가 — 🔴 **재고는 여기 없다.**
  *
- *    재고는 `judgeBuffer` 가 **적재 상한**으로만 쓴다. 회차 자체를 막지 않는다 —
+ *    수요는 `judgeJitDemand` 가 **모델 · 적재 상한**으로만 쓴다. 회차 자체를 막지 않는다 —
  *    막으면 그것이 곧 중앙 게이트이고, 우리가 없앤 것이 바로 그것이다.
  */
 export function judgeProcessRun(input: {
@@ -755,7 +757,8 @@ export type ProcessRun = {
   startedAt: string
   status: RunStatus
   completedAt: string | null
-  buffer: { usable: number | null; upTo: number; reason: string }
+  /** 🔴 JIT 수요 — 다가오는 슬롯 · eligible READY 가 덮은 슬롯 · 생성 수요(`upTo`) */
+  jit: { slots: number | null; readyFilled: number | null; upTo: number; reason: string }
   sources: SourceOutcome[]
   stages: StageOutcome[]
   /**
@@ -788,13 +791,11 @@ export function verifyRun(input: {
   postAfter: number
   stockBefore: number
   stockAfter: number
-  target?: number
   queuedMachine: number
   queuedNonMachine: number
   machineBefore: number
   machineAfter: number
 }): { ok: boolean; problems: RunProblem[] } {
-  const target = input.target ?? STOCK_BANDS.target
   const problems: RunProblem[] = []
 
   if (input.postAfter !== input.postBefore) {
@@ -803,9 +804,7 @@ export function verifyRun(input: {
   if (input.stockAfter < input.stockBefore) {
     problems.push(`🔴 재고가 줄었다 ${input.stockBefore} → ${input.stockAfter}`)
   }
-  if (input.stockAfter > target) {
-    problems.push(`🔴 버퍼 목표 ${target}건을 넘겨 적재했다 (${input.stockAfter}건)`)
-  }
+  // 🔴 700 창고 천장 조항을 지웠다(2026-09-30) — 적재 상한은 JIT 수요(`--up-to`) 하나다
   if (input.queuedNonMachine > 0) {
     problems.push(`🔴 기계가 아닌 행이 ${input.queuedNonMachine}건 적재됐다`)
   }

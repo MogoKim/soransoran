@@ -16,7 +16,7 @@ import {
   PROFILES, RELEASE_STAGES, SAFEST_STAGE, HORIZON_DAYS, MAX_DAILY_TARGET,
   RELEASE_ENV, CAPACITY_ENV, derive, verifyProfile, describeProfile,
   maxPostsPerWeek, effectiveWeeklyCap, minuteOfDay, slotLabel, slotCronUtc,
-  expandSlots, resolveStage, stageRank, horizonStart,
+  expandSlots, resolveRuntimeStage, stageRank,
 } from '../src/lib/scale-profile'
 import {
   resolveScale, installFromEnv, activeScale, resetScale, describeScale, SAFEST_SCALE,
@@ -29,14 +29,18 @@ import {
 import {
   renderSlots, cronLines, parseCronLines, compareWorkflow, dailyCeiling, verifySlotRenderable,
   allStageCronLines, judgeSlotRun, slotOfCron, scheduledRunsPerDay, actualDailyPublishable,
+  scheduleTextOfSlots, retiredPublishWorkflowProblems,
 } from '../src/lib/scale-workflow-render'
+/** 🔴 발행 예약의 정본 — launchd 러너 plist(2026-09-30 단일 실행 authority) */
+import { calendarSlots, programArguments } from './lib/launchd-install.mjs'
+import { renderPublishRunnerPlist } from './lib/original-post-runner-template'
+import { AUTHORITY_RENDER_INPUT } from './lib/stage-authority-repo'
 // 🔴 댓글 슬롯의 정본 — 여기서 시각을 다시 적지 않는다
 import {
   planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES,
   RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
 } from './lib/persona-comment-runner-template'
 import { BOOTSTRAP_DAILY_MAX } from '../src/lib/persona-comment-bootstrap-budget'
-import { judgeReadiness, safeStageFor, simulateStage, simulateAllStages, stageVerdicts } from '../src/lib/scale-readiness'
 import {
   COHORTS, EXCLUDED_CODES, cohortOf, verifyManifest, verifyAllCohorts, stageOf,
   judgeCreate, judgeSeed, judgeActivate, judgePause, judgePrerequisites, judgeArgs,
@@ -48,9 +52,8 @@ import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
-import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { currentCapacity, preparedCapacity, type ObservedJob } from '../src/lib/collect-inventory'
-import { STOCK_TARGET, STOCK_MIN, STOCK_WARN } from '../src/lib/micro-seed-supply-autofill'
+import * as autofillLib from '../src/lib/micro-seed-supply-autofill'
 import {
   RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, THIN_82COOK_SLOTS, thin82cookCapPerRun,
 } from '../src/lib/collect-schedule'
@@ -60,10 +63,10 @@ import {
 import {
   buildReport, judgeSupply, judgePublish as judgePublishHealth,
 } from '../src/lib/supply-health'
-import {
-  personaAvailableAt, availablePersonasAt, capacityOf, personasNeededFor,
-} from '../src/lib/supply-capacity-forecast'
-import { readStock, judgeApply as judgeFill, SAFEST_STOCK_LIMITS } from '../src/lib/micro-seed-supply-autofill'
+import { personaAvailableAt, availablePersonasAt } from '../src/lib/supply-capacity-forecast'
+import { readStock, judgeApply as judgeFill } from '../src/lib/micro-seed-supply-autofill'
+/** 🔴 결정이 넣은 env 를 흉내 낸다 — 표식 없는 손 env 는 d1 이다(Lane A) */
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -91,9 +94,11 @@ console.log('① 회귀 0 (env 없음 → d1 · 옛 하드코딩과 동일)')
   check('🔴 DAILY_PUBLISH_CAP = 1', DAILY_PUBLISH_CAP === 1 && d.dailyPublishCap === 1)
   check('🔴 POST_CAP_PER_WEEK = 1', POST_CAP_PER_WEEK === 1)
   check('🔴 MIN_DAYS_BETWEEN_POSTS = 5', MIN_DAYS_BETWEEN_POSTS === 5 && d1.minDaysBetween === 5)
-  check('🔴 STOCK_TARGET = 14', STOCK_TARGET === 14 && d.stockTarget === 14)
-  check('🔴 STOCK_MIN = 5', STOCK_MIN === 5 && d.stockMin === 5)
-  check('🔴 STOCK_WARN = 3', STOCK_WARN === 3 && d.stockWarn === 3)
+  // 🔴 (2026-09-30 · JIT) 적재기의 완성 글 재고 상수(STOCK_TARGET 14 · MIN 5 · WARN 3)는 지웠다.
+  //    `derive()` 의 재고 칸은 보고용(wave-c · scale-supply-plan)으로만 남는다 — 실행 경로가 읽지 않는다
+  check('🔴 적재기가 재고 상수를 내보내지 않는다', !['STOCK_TARGET', 'STOCK_MIN', 'STOCK_WARN', 'SAFEST_STOCK_LIMITS']
+    .some((k) => k in autofillLib))
+  check('derive 의 보고용 재고 칸은 그대로(14 · 5 · 3)', d.stockTarget === 14 && d.stockMin === 5 && d.stockWarn === 3)
   check('지평은 14일', HORIZON_DAYS === 14)
   // 🔴 지금 도는 발행 시각은 09:30 KST 다 — 분 단위라야 적을 수 있다.
   //    (2026-09-12 이전에는 00:05 였다. 댓글 창 밖이라 첫 댓글이 8시간 넘게 걸렸다)
@@ -159,9 +164,13 @@ console.log('\n③ capacity vs release 분리 · 감속 강제')
   const none = resolveScale({})
   check('🔴 설정이 없으면 d1 (fail-closed)', none.releaseStage === 'd1' && none.capacityStage === 'd1')
   check('설정 없음을 사유로 남긴다', none.notes.length >= 2)
+  // 🔴 (2026-09-30 · Lane A) 손으로 적은 단계(GitHub Variables · .env.local)는 표식이 없다 — 읽지 않는다
+  const hand = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' })
+  check('🔴 🔴 **표식 없는 env d10 → d1 (StageDecision 경유가 아니면 단계 칸을 읽지 않는다)**',
+    hand.releaseStage === 'd1' && hand.capacityStage === 'd1' && hand.notes.some((x) => x.includes('StageDecision')))
 
   // 🔴 **P0-2 — 두 프로필이 실제로 다르다**
-  const split = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' })
+  const split = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }))
   check('🔴 capacity=d10 · release=d1 → 내부 재고 목표는 140', derive(split.capacityProfile).stockTarget === 140)
   check('🔴 같은 설정에서 공개 하루 상한은 1', split.releaseProfile.dailyTarget === 1)
   check('🔴 공개 주 cap 1 · 간격 5일 (d1 기준)',
@@ -172,33 +181,24 @@ console.log('\n③ capacity vs release 분리 · 감속 강제')
     derive(split.capacityProfile).stockMin === 50 && derive(split.capacityProfile).stockWarn === 30)
   check('🔴 두 프로필이 같은 객체가 아니다', split.capacityProfile !== split.releaseProfile)
 
-  const ok2 = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd3' })
+  const ok2 = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd3' }))
   check('🟢 capacity 안쪽이면 그대로', ok2.releaseStage === 'd3' && !ok2.throttledByCapacity)
-  const over = resolveScale({ [CAPACITY_ENV]: 'd3', [RELEASE_ENV]: 'd10' })
+  const over = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd3', [RELEASE_ENV]: 'd10' }))
   check('🔴 capacity 를 넘으면 감속', over.releaseStage === 'd3' && over.throttledByCapacity)
   check('감속 사유가 남는다', over.notes.some((x) => x.includes('d10') && x.includes('d3')))
-  const bad = resolveScale({ [CAPACITY_ENV]: 'nope', [RELEASE_ENV]: 'd10' })
+  const bad = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'nope', [RELEASE_ENV]: 'd10' }))
   check('🔴 못 읽는 값은 가장 안전한 단계로 (fail-closed)', bad.capacityStage === SAFEST_STAGE && bad.releaseStage === SAFEST_STAGE)
-  check('🔴 빈 문자열도 fail-closed', resolveStage('   ').stage === SAFEST_STAGE)
+  check('🔴 빈 문자열도 fail-closed', resolveRuntimeStage('   ').stage === SAFEST_STAGE)
   check('단계 순서가 d1 < d3 < d5 < d10', stageRank('d1') < stageRank('d3')
     && stageRank('d3') < stageRank('d5') && stageRank('d5') < stageRank('d10'))
 
-  // 🔴 **P0-1 — 준비도 감속이 실제 프로필을 낮춘다**
-  const notReady = RELEASE_STAGES.map((st) => ({ stage: st, ready: st === 'd1', reasons: st === 'd1' ? [] : ['미달'] }))
-  const forced = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, { readiness: notReady })
-  check('🔴 준비되지 않으면 releaseStage 가 실제로 내려간다', forced.releaseStage === 'd1')
-  check('🔴 그때 releaseProfile 도 d1 이다 — 표시만 바뀌는 것이 아니다', forced.releaseProfile.dailyTarget === 1)
-  check('🔴 감속 사실이 플래그로 남는다', forced.throttledByReadiness && forced.readinessApplied)
-  check('🔴 그래도 capacity 는 d10 이다 — 내부 준비를 줄이지 않는다',
-    forced.capacityStage === 'd10' && derive(forced.capacityProfile).stockTarget === 140)
-  const readyAll = RELEASE_STAGES.map((st) => ({ stage: st, ready: true, reasons: [] as string[] }))
-  check('🟢 전부 준비되면 그대로', resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, { readiness: readyAll }).releaseStage === 'd10')
-  check('🔴 판정을 안 넘기면 "적용 안 됨" 을 숨기지 않는다',
-    !ok2.readinessApplied && ok2.notes.some((x) => x.includes('준비도 판정을 받지 않았다')))
+  // 🔴 (2026-09-30) 준비도 감속(readiness) 입력은 지웠다 — 공개 단계는 결정(consumer env) 그대로다
+  check('🔴 🔴 **resolveScale 에 준비도 · canary 입력 자리가 없다**',
+    resolveScale.length === 1 && !('readinessApplied' in ok2) && !('throttledByReadiness' in ok2))
 
   // 🔴 코드를 고치지 않고 1→3→5→10 을 오간다
   for (const st of RELEASE_STAGES) {
-    const r = resolveScale({ [CAPACITY_ENV]: st, [RELEASE_ENV]: st })
+    const r = resolveScale(markedStageEnv({ [CAPACITY_ENV]: st, [RELEASE_ENV]: st }))
     check(`🔴 env 만으로 ${st} 가 된다 — 코드·fixture 수정 0`, r.releaseProfile.dailyTarget === PROFILES[st].dailyTarget)
   }
   check('요약 문장이 두 단계를 모두 말한다', describeScale(split).includes('capacity=d10') && describeScale(split).includes('release=d1'))
@@ -208,10 +208,9 @@ console.log('\n③ capacity vs release 분리 · 감속 강제')
 console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
 {
   resetScale()
-  // ── A. requested d10 + readiness d1 → 실제 publisher config 도 dailyCap=1 ──
-  const readinessD1 = RELEASE_STAGES.map((st) => ({ stage: st, ready: st === 'd1', reasons: st === 'd1' ? [] : ['미달'] }))
-  const a = installFromEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, { readiness: readinessD1 })
-  check('A 🔴 요청 d10 · 준비 d1 → 설치된 공개 상한이 1', a.releaseProfile.dailyTarget === 1)
+  // ── A. (2026-09-30) 결정 env d1 → 설치된 publisher config 도 dailyCap=1 (준비도 감속은 없다) ──
+  const a = installFromEnv(markedStageEnv({ [CAPACITY_ENV]: 'd3', [RELEASE_ENV]: 'd1' }))
+  check('A 🔴 결정 d1 → 설치된 공개 상한이 1', a.releaseProfile.dailyTarget === 1)
   check('A 🔴 activeScale 도 같은 값이다', activeScale().releaseProfile.dailyTarget === 1)
   const cand = (): PublishCandidate => ({
     status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
@@ -222,37 +221,31 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   })
   check('A 🔴 그 상한이 **실제 발행 판정을 막는다** (1건 나간 뒤 두 번째 차단)',
     !cap1.ok && cap1.code === 'DAILY_CAP')
-  check('A 🔴 감속이 없었다면 통과했을 상황이다 (대조)',
+  check('A 🔴 상한이 컸다면 통과했을 상황이다 (대조)',
     judgePublish(cand(), { killSwitchEnabled: false, publishedToday: 1, dailyCap: 10 }).ok)
 
   // ── B. capacity d10 + release d1 → stockTarget=140, public dailyCap=1 ──
-  const b = installFromEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' })
+  const b = installFromEnv(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }))
   const bCap = derive(b.capacityProfile)
   check('B 🔴 내부 재고 목표 140', bCap.stockTarget === 140)
   check('B 🔴 공개 하루 상한 1', b.releaseProfile.dailyTarget === 1)
-  // 🔴 그 값이 **실제 재고 판정에 쓰인다**
-  // 🔴 러너가 실제로 재고로 인정하는 모양이어야 한다 (`queueProfileOf` = human)
+  // 🔴 (2026-09-30) 재고 눈금은 판정에 쓰이지 않는다 — 형식 행 수만 센다 · 적재 상한은 `--up-to` 하나
   const rows = Array.from({ length: 20 }, () => ({
     status: 'APPROVED', createdPostId: null,
     promptVersion: 'publish-candidate-v1', model: 'human-curated',
     sourceSite: 'publish-candidate:x', gateResults: null,
   })) as never[]
-  const stockCap = readStock(rows, { warn: bCap.stockWarn, min: bCap.stockMin, target: bCap.stockTarget })
-  const stockSafe = readStock(rows, SAFEST_STOCK_LIMITS)
-  check('B 🔴 재고 20건이 실제로 세어진다 (모양이 맞다)', stockCap.usable === 20 && stockSafe.usable === 20)
-  check('B 🔴 capacity 기준 부족분 120건', stockCap.shortfall === 140 - 20 && stockCap.shortfall === 120)
-  check('B 🔴 안전 기본값이면 0건 — 두 값이 실제로 다르다', stockSafe.shortfall === 0)
-  check('B 🔴 capacity 기준에서는 재고 20건이 critical 이다', stockCap.level === 'critical' && stockSafe.level === 'ok')
-  check('B 🔴 보충 게이트도 capacity 목표를 쓴다',
-    judgeFill({ targets: [{}] as never[], apply: true, limit: 1, usable: 20, target: bCap.stockTarget }).ok
-    && !judgeFill({ targets: [{}] as never[], apply: true, limit: 1, usable: 20 }).ok)
+  check('B 🔴 재고 20건이 실제로 세어진다 (모양이 맞다)', readStock(rows).usable === 20)
+  check('B 🔴 보충 게이트는 재고 목표를 받지 않는다 — 상한은 부르는 쪽의 --up-to',
+    judgeFill({ targets: [{}] as never[], apply: true, limit: 1 }).ok
+    && judgeFill({ targets: [{}, {}] as never[], apply: true, limit: null, upTo: 5 }).ok)
 
   // ── C. 시작 후에 읽은 env 도 실제 config 에 반영 ──
   //    🔴 이 fixture 자신이 증거다 — 아래 상수들은 **이 파일이 import 될 때** 굳었고,
   //       env 는 그 뒤에 들어왔다. 그런데도 설치된 값은 바뀐다.
   check('C 🔴 모듈 상수는 안전 기본값 그대로다 (import 시점에 굳었다)',
-    DAILY_PUBLISH_CAP === 1 && POST_CAP_PER_WEEK === 1 && STOCK_TARGET === 14)
-  const late = { ...process.env, [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' }
+    DAILY_PUBLISH_CAP === 1 && POST_CAP_PER_WEEK === 1)
+  const late = markedStageEnv({ ...process.env, [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' })
   const c = installFromEnv(late)
   check('C 🔴 시작 뒤에 읽은 설정이 반영된다', c.releaseProfile.dailyTarget === 5 && activeScale().releaseStage === 'd5')
   check('C 🔴 그래도 모듈 상수는 안전값이다 — 주입을 잊으면 1건이다', DAILY_PUBLISH_CAP === 1)
@@ -281,26 +274,29 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     return !src.includes('process.env')
   })())
 
-  // ── D. GHA vars 누락/invalid → d1, 정상 d5 → workflow·runner 모두 d5 ──
-  const wf = read('.github/workflows/auto-publish.yml')
-  check('D 🔴 워크플로우가 두 vars 를 러너에 전달한다',
-    /SORAN_CAPACITY_STAGE:\s*\$\{\{\s*vars\.SORAN_CAPACITY_STAGE\s*\}\}/.test(wf)
-    && /SORAN_RELEASE_STAGE:\s*\$\{\{\s*vars\.SORAN_RELEASE_STAGE\s*\}\}/.test(wf))
-  check('D 🔴 워크플로우에 설정 확인 스텝이 있다', /name:\s*규모 설정 확인/.test(wf))
+  // ── D. (2026-09-30) GHA vars 는 단계를 정하지 않는다 · 누락/invalid → d1, 정상 d5 → launchd 예약·러너 모두 d5 ──
+  // 🔴 YAML 주석은 설명문이다(지운 권위의 이름이 "왜 지웠는지" 로 남는다) — 값 줄만 본다
+  const wfRaw = read('.github/workflows/auto-publish.yml').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+  check('D 🔴 🔴 **발행 워크플로가 단계 vars 를 러너에 넘기지 않는다 — 단계는 StageDecision 하나**',
+    !/vars\.SORAN_(CAPACITY|RELEASE)_STAGE|vars\.SORAN_RELEASE_(CANARY|WINDOW)/.test(wfRaw))
+  check('D 🔴 발행 워크플로에 예약이 없다(두 번째 schedule owner 0)', retiredPublishWorkflowProblems(wfRaw).length === 0)
+  // 🔴 발행 예약은 launchd 러너 plist 가 갖는다 — 같은 cron 표현으로 읽어 아래 판정에 넣는다
+  const publishPlist = renderPublishRunnerPlist(AUTHORITY_RENDER_INPUT)
+  const wf = scheduleTextOfSlots(calendarSlots(publishPlist))
   check('D 🔴 누락이면 d1', resolveScale({}).releaseStage === 'd1'
-    && resolveScale({ [CAPACITY_ENV]: '', [RELEASE_ENV]: '' }).releaseStage === 'd1')
+    && resolveScale(markedStageEnv({ [CAPACITY_ENV]: '', [RELEASE_ENV]: '' })).releaseStage === 'd1')
   // 🔴 앞뒤 공백은 **의도적으로 다듬는다** — GH vars 에 흔한 실수이고, 다듬는 쪽이 안전하다
-  check('D 🟢 "d10 " 은 공백만 다듬어 d10 으로 읽는다', resolveStage('d10 ').stage === 'd10')
+  check('D 🟢 "d10 " 은 공백만 다듬어 d10 으로 읽는다', resolveRuntimeStage('d10 ').stage === 'd10')
   for (const bogus of ['d2', 'D5', 'd 10', 'daily', '5', 'true', 'd10;d1']) {
-    const r = resolveScale({ [CAPACITY_ENV]: bogus, [RELEASE_ENV]: bogus })
+    const r = resolveScale(markedStageEnv({ [CAPACITY_ENV]: bogus, [RELEASE_ENV]: bogus }))
     check(`D 🔴 허용 밖 "${bogus}" → d1`, r.releaseStage === 'd1' && r.capacityStage === 'd1')
   }
-  const d5 = resolveScale({ [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' })
+  const d5 = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd5', [RELEASE_ENV]: 'd5' }))
   check('D 🟢 정상 d5 → 러너가 d5 를 쓴다', d5.releaseProfile.dailyTarget === 5
     && effectiveWeeklyCap(d5.releaseProfile.postsPerWeek, d5.releaseProfile.minDaysBetween) === 4)
-  check('D 🟢 그때 워크플로우가 내야 할 cron 은 5줄이다', cronLines(d5.releaseProfile).length === 5)
-  // 🔴 이제 yml 은 **모든 단계의 합집합**을 예약한다 — d5 슬롯이 전부 들어 있어야 한다
-  check('D 🟢 yml 에 d5 슬롯이 하나도 빠지지 않았다',
+  check('D 🟢 그때 d5 가 쓰는 회차는 5개다', cronLines(d5.releaseProfile).length === 5)
+  // 🔴 launchd 러너는 **모든 단계의 합집합**을 예약한다 — d5 슬롯이 전부 들어 있어야 한다
+  check('D 🟢 launchd 예약에 d5 슬롯이 하나도 빠지지 않았다',
     compareWorkflow(d5.releaseProfile, wf).filter((m) => m.kind === 'missing').length === 0)
   check('D 🟢 d5 는 실제로 하루 5번 불린다', scheduledRunsPerDay('d5', wf) === 5)
 
@@ -332,7 +328,8 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   const txBlock = toolSrc.slice(txAt, toolSrc.indexOf("isolationLevel: 'Serializable'"))
   check('F 🔴 Gate ⑥-B 대조를 **트랜잭션 안에서** 다시 한다',
     txBlock.includes('loadNameCollisionSets(tx)') && txBlock.includes('checkNameCollision'))
-  check('F 🔴 그 재판정에 authorHash salt 를 넘긴다', /checkNameCollision\([^)]*\{ hashOf \}\)/.test(txBlock))
+  check('F 🔴 그 재판정은 트랜잭션 안 집합(txSets)으로 한다',
+    /checkNameCollision\([^)]*txSets\)/.test(txBlock))
   check('F 🔴 걸리면 **throw** 한다 — 로그만 남기지 않는다 (전원 롤백)',
     /throw new Error\('트랜잭션 안 Gate ⑥-B 재판정 실패/.test(txBlock))
   check('F 🔴 재판정은 사전 검사와 **같은 판정 함수**를 쓴다 — 두 규칙이 갈리지 않는다',
@@ -353,7 +350,9 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     'supply-process': read('scripts/supply-process.mts'),
     'supply-autofill': read('scripts/micro-seed-supply-autofill.mts'),
   }
-  for (const [name, src] of Object.entries(users)) {
+  // 🔴 (2026-09-30) 설치는 실제로 발행 · 공급하는 러너만 한다 — 관제(supply-health)는 러너와 같은 적재
+  //    (`loadStockClassification` → `resolveScale`)로 계산만 하고, planner 는 퇴역했다
+  for (const [name, src] of Object.entries(users).filter(([n]) => n !== 'supply-health' && n !== 'planner')) {
     /**
      * 🔴 발행 러너만 계산(`resolvePublishScale`)과 설치(`applyScale`)를 나눴다 —
      *    관제·검사가 그 계산을 불러도 전역이 바뀌지 않게 하려는 것이다.
@@ -386,11 +385,10 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     /caps: RELEASE_CAPS/.test(users['auto-publish']))
   check('G 🔴 공용 준비 함수가 그 cap 을 planBatch 로 넘긴다', (() => {
     const lib = read('src/lib/supply-candidates.ts')
-    return /planBatch\(keep\.map\(draftOf\), input\.personas, caps\)/.test(lib)
-      && /planBatch\(autoDrafts, input\.personas, caps, \{/.test(lib)
+    return /planBatch\(autoDrafts, input\.personas, caps, \{/.test(lib)
   })())
-  check('G 🔴 공급 러너는 capacity 프로필로 재고 기준을 만든다',
-    /scale\.capacityProfile/.test(users['supply-process']) && /scale\.capacityProfile/.test(users['supply-autofill']))
+  check('G 🔴 공급 러너는 capacity 프로필(다음 증명 단계)로 화자 여력 · JIT 슬롯을 만든다',
+    /scale\.capacityProfile/.test(users['supply-process']) && !/scale\.capacityProfile/.test(users['supply-autofill']))
   check('G 🔴 health 가 capacity 와 release 를 따로 보여 준다',
     /capacity: \{/.test(users['supply-health']) && /release: \{/.test(users['supply-health']))
   check('G 🔴 write 경로가 모듈 상수를 상한으로 쓰지 않는다',
@@ -417,9 +415,9 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
   check('H 🔴 --limit 없음·0·소수도 거부',
     !judgeManualLimit(null).ok && !judgeManualLimit(0).ok && !judgeManualLimit(1.5).ok)
   // 🔴 **환경이 d10 이어도 수동 상한은 안 바뀐다** — env 는 인자로만 들어오므로 값이 고정이다
-  const envD10 = resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' })
+  const envD10 = resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }))
   check('H 🔴 env 가 d10 이어도 수동 상한은 1', envD10.releaseProfile.dailyTarget === 10 && MANUAL_PUBLISH_CAP === 1)
-  check('H 🔴 수동 도구는 설치하지 않는다 (readiness 우회 금지)', (() => {
+  check('H 🔴 수동 도구는 설치하지 않는다 (결정 우회 금지)', (() => {
     const src = codeOf('scripts/original-post-publish-live.mts')
     return !src.includes('installFromEnv(') && src.includes('SAFEST_SCALE')
   })())
@@ -427,63 +425,34 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
     /RELEASE_DAILY_CAP = MANUAL_PUBLISH_CAP/.test(codeOf('scripts/original-post-publish-live.mts')))
   check('H 🔴 수동 도구가 판정도 정본(judgeManualLimit)을 쓴다',
     /judgeManualLimit\(LIMIT\)/.test(codeOf('scripts/original-post-publish-live.mts')))
-  // 🔴 자동 레인은 준비되면 d10 을 받는다 — 확장 경로가 막힌 것이 아니다
-  const allReady = RELEASE_STAGES.map((st) => ({ stage: st, ready: true, reasons: [] as string[] }))
-  check('H 🟢 자동 레인은 준비도 충족 시 d10 을 받는다',
-    resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, { readiness: allReady })
-      .releaseProfile.dailyTarget === 10)
+  // 🔴 자동 레인은 결정이 d10 이면 d10 을 받는다 — 확장 경로가 막힌 것이 아니다
+  check('H 🟢 자동 레인은 결정 d10 이면 d10 을 받는다',
+    resolveScale(markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' })).releaseProfile.dailyTarget === 10)
   // 🔴 트랜잭션 재판정은 그대로다
   check('H 🔴 트랜잭션 재판정 — 수동 단건(manual-live)은 주입 상한 · 예약은 단계 목표로 다시 판정한다',
     /dailyCap = input\.mode\.dailyCap/.test(read('src/lib/original-post-publish-tx.ts'))
     && /const target = profileOf\(stage\)\.dailyTarget/.test(read('src/lib/original-post-publish-tx.ts')))
 
-  // ── health 판정을 **실제 함수로** 구성해 본다 ──
-  //    🔴 필드 존재가 아니라 level·target·dailyCap 이 맞는지 본다
-  const healthOf = (env: Record<string, string>, usable: number, readiness?: readonly {
-    stage: typeof RELEASE_STAGES[number]; ready: boolean; reasons: string[]
-  }[]): { level: string; target: number; dailyCap: number; stockTarget: number; notes: readonly string[] } => {
-    const r = resolveScale(env, readiness === undefined ? {} : { readiness })
-    const capD = derive(r.capacityProfile)
-    const dailyCap = r.releaseProfile.dailyTarget
+  // ── health 판정을 **실제 함수로** 구성해 본다 (2026-09-30 · JIT) ──
+  //    🔴 재고 눈금(capacity ×14)이 아니라 **다가오는 슬롯을 eligible READY 가 덮는가**다
+  const healthOf = (slots: number, readyFilled: number, candidates = readyFilled): string => {
     const supply = judgeSupply({
-      usable, human: usable, machine: 0, legacyExcluded: 0, pendingThin: 0, historicRawNoop: 0,
+      jit: { slots, readyFilled }, human: readyFilled, machine: 0, legacyExcluded: 0, pendingThin: 0, historicRawNoop: 0,
       runningCheckpoints: 0, failedCheckpoints: 0, lock: 'free',
       lastSupplyOkAt: new Date('2026-09-08T00:00:00Z'), now: new Date('2026-09-08T01:00:00Z'),
       staleAfterMs: 86_400_000,
-      stockMin: capD.stockMin, stockTarget: capD.stockTarget,
     })
     const publish = judgePublishHealth({
-      todayCount: 1, dailyCap, afterPublishGrace: false, mismatched: 0,
-      legacyPublishedToday: 0, historicUnknownProfile: 0, candidates: usable,
+      todayCount: 1, dailyCap: 1, afterPublishGrace: false, mismatched: 0,
+      legacyPublishedToday: 0, historicUnknownProfile: 0, candidates,
       now: new Date('2026-09-08T01:00:00Z'),
     })
-    const rep = buildReport({ sources: [], supply, publish })
-    return { level: rep.level, target: capD.stockTarget, dailyCap, stockTarget: capD.stockTarget, notes: r.notes }
+    return buildReport({ sources: [], supply, publish }).level
   }
-  const notReadyD1 = RELEASE_STAGES.map((st) => ({ stage: st, ready: st === 'd1', reasons: st === 'd1' ? [] : ['미달'] }))
-
-  // A. d10/d10 + 재고 14 → WARNING · target 140 · dailyCap 1 · 감속 사유 존재
-  const A = healthOf({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, 14, notReadyD1)
-  check('A 🔴 level=WARNING', A.level === 'WARNING')
-  check('A 🔴 numbers.target=140', A.target === 140)
-  check('A 🔴 numbers.dailyCap=1', A.dailyCap === 1)
-  check('A 🔴 scale.capacity.stockTarget=140', A.stockTarget === 140)
-  check('A 🔴 감속 사유가 있다', A.notes.some((n) => n.includes('감속') || n.includes('안전한')))
-
-  // B. d10/d1 + 재고 14 → 내부 재고 부족 WARNING · 공개 dailyCap 1
-  const B2 = healthOf({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }, 14)
-  check('B 🔴 내부 재고 부족으로 WARNING', B2.level === 'WARNING' && B2.target === 140)
-  check('B 🔴 공개 dailyCap=1', B2.dailyCap === 1)
-
-  // C. env 없음 → 기존 d1 HEALTHY 회귀
-  const C2 = healthOf({}, 14)
-  check('C 🔴 env 없으면 HEALTHY 회귀', C2.level === 'HEALTHY')
-  check('C 🔴 target 14 · dailyCap 1', C2.target === 14 && C2.dailyCap === 1)
-  // 🔴 capacity 를 올렸을 뿐인데 초록이 유지되면 그것이 P1 결함이었다
-  check('🔴 같은 재고 14건이 capacity 에 따라 판정이 갈린다', C2.level === 'HEALTHY' && B2.level === 'WARNING')
-  // 🔴 재고가 capacity 목표를 채우면 다시 HEALTHY
-  check('🟢 재고 140이면 d10 capacity 에서도 HEALTHY',
-    healthOf({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd1' }, 140).level === 'HEALTHY')
+  check('🔴 d10 증명일 슬롯 10 · READY 가 4 슬롯만 덮는다 → WARNING', healthOf(10, 4) === 'WARNING')
+  check('🟢 다 덮으면 HEALTHY', healthOf(10, 10) === 'HEALTHY')
+  check('🔴 슬롯이 있는데 하나도 못 덮으면 CRITICAL', healthOf(3, 0) === 'CRITICAL')
+  check('🟢 🔴 다가오는 슬롯이 0 이면 READY 0 도 HEALTHY — 재고 0 을 사고로 부르지 않는다', healthOf(0, 0, 1) === 'HEALTHY')
   // 🔴 상한 초과 발행은 release 기준으로 잡힌다
   check('🔴 release=d1 에서 오늘 2건이면 CRITICAL', (() => {
     const p = judgePublishHealth({
@@ -516,37 +485,19 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
   check('🔴 availablePersonasAt 도 같은 cap 을 쓴다',
     availablePersonasAt([hist], at).length === 0
     && availablePersonasAt([hist], at, { postsPerWeek: 5, minDaysBetween: 1 }).length === 1)
-  check('🔴 capacityOf 가 주입 주 cap 을 쓴다',
-    capacityOf({ activePersonas: 10, lifeBlockRate: 0 }).theoreticalPerWeek === 10
-    && capacityOf({ activePersonas: 10, lifeBlockRate: 0, weeklyCap: 5 }).theoreticalPerWeek === 50)
-  check('🔴 personasNeededFor 가 주입 주 cap 을 쓴다',
-    personasNeededFor({ targetPerDay: 10, lifeBlockRate: 0, activePersonas: 0 }).min === 70
-    && personasNeededFor({ targetPerDay: 10, lifeBlockRate: 0, activePersonas: 0, weeklyCap: 5 }).min === 14)
-  check('🔴 부족 인원도 그만큼 달라진다',
-    personasNeededFor({ targetPerDay: 10, lifeBlockRate: 0, activePersonas: 8, weeklyCap: 5 }).shortfallMin === 6)
-
-  // 🔴 health 가 규모 확정 **뒤에** 판정하는가 — 순서를 소스로 확인한다(행동 검사의 보조)
+  // 🔴 (2026-09-30) `capacityOf` · `personasNeededFor`(14일 필요 인원)는 지웠다 — 계약 유효 Persona 는 preflight 가 본다
   const h = read('scripts/supply-health.mts')
-  check('🔴 health 는 규모 확정 뒤에 재고를 판정한다',
-    h.indexOf('const resolved = installFromEnv') < h.indexOf('const stock = readStock(mapped, CAPACITY_LIMITS)'))
-  check('🔴 health 는 규모 확정 뒤에 발행을 판정한다',
-    h.indexOf('const resolved = installFromEnv') < h.indexOf('const publish = judgePublish({'))
+  const hc = codeOf('scripts/supply-health.mts')
+  check('🔴 health 는 러너와 같은 적재(규모 확정 포함) 뒤에 발행을 판정한다',
+    h.indexOf('loadStockClassification(prisma, process.env, now)') < h.indexOf('const publish = judgePublish({'))
   check('🔴 health 가 모듈 안전 상수를 운영 숫자로 쓰지 않는다',
     !/dailyCap: DAILY_PUBLISH_CAP/.test(h) && !/target: STOCK_TARGET/.test(h))
-  // 🔴 여력·필요인원·예측에 release cap 을 실제로 넘기는가
-  check('🔴 health 가 forecast 에 release cap 을 넘긴다', /caps: RELEASE_CAPS/.test(codeOf('scripts/supply-health.mts')))
-  // 🔴 **호출부마다** 확인한다 — 총 개수를 세면 JSON 필드 같은 무관한 등장까지 세어져
-  //    한 호출부가 빠져도 통과한다
-  const hc = codeOf('scripts/supply-health.mts')
-  check('🔴 health 가 capacityOf 에 주 cap 을 넘긴다',
-    /capacityOf\(\{[\s\S]{0,200}?weeklyCap: RELEASE_CAPS\.postsPerWeek/.test(hc))
-  check('🔴 health 가 personasNeededFor 에 주 cap 을 넘긴다',
-    /personasNeededFor\(\{[\s\S]{0,200}?weeklyCap: RELEASE_CAPS\.postsPerWeek/.test(hc))
+  check('🔴 health 가 14일 필요 인원 · 여력 계산을 하지 않는다', !/capacityOf\(|personasNeededFor\(/.test(hc))
   resetScale()
 }
 
-// ── ④ 슬롯 · 워크플로우 렌더 (🔴 실제 yml 대조) ──
-console.log('\n④ 슬롯 → 워크플로우')
+// ── ④ 슬롯 · 발행 예약 렌더 (🔴 실제 launchd 러너 plist 대조 — 2026-09-30 GitHub 예약 제거) ──
+console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
 {
   check('분 단위 계산', minuteOfDay({ hour: 1, minute: 30 }) === 90)
   check('KST 표기', slotLabel({ hour: 0, minute: 5 }) === '00:05')
@@ -559,7 +510,8 @@ console.log('\n④ 슬롯 → 워크플로우')
   check('🔴 슬롯 표현 가능성 검사', verifySlotRenderable({ hour: 24, minute: 0, count: 1 }).length > 0
     && verifySlotRenderable({ hour: 0, minute: 5, count: 1 }).length === 0)
 
-  const yml = read('.github/workflows/auto-publish.yml')
+  const plist = renderPublishRunnerPlist(AUTHORITY_RENDER_INPUT)
+  const yml = scheduleTextOfSlots(calendarSlots(plist))
   const have = parseCronLines(yml)
   // 🔴 **yml 은 모든 단계 슬롯의 합집합을 예약한다** (2026-09-12).
   //    옛 판은 cron 이 하나(00:05 KST)뿐이었다. 그래서 단계를 d10 으로 올려도 하루 한 번만
@@ -567,7 +519,7 @@ console.log('\n④ 슬롯 → 워크플로우')
   //    cron 은 파일 고정이라 변수로 못 바꾼다 — 합집합을 예약하고 러너가 자기 회차를 고른다.
   // 🔴 **계약은 "빠짐없이 담는다" 다.** 슬롯을 바꾸면 yml 을 함께 갱신하면 된다 —
   //    포함 관계나 개수를 여기서 고정하지 않는다.
-  check('🔴 yml 이 allStageCronLines() 를 빠짐없이 담는다 (주석은 세지 않는다)',
+  check('🔴 launchd 러너 예약이 allStageCronLines() 를 빠짐없이 담는다',
     allStageCronLines().every((c) => have.includes(c)))
   check('🔴 계획에 없는 회차를 예약하지 않는다', have.every((c) => allStageCronLines().includes(c)))
 
@@ -688,33 +640,16 @@ console.log('\n④ 슬롯 → 워크플로우')
     new Set(allStageCronLines()).size === allStageCronLines().length)
   // 🔴 슬롯이 두 번 돌아도 하루 상한을 넘지 않는다 — 상한은 러너가 지킨다
   check('🔴 중복 실행에도 하루 상한이 지켜진다', dailyCeiling(PROFILES.d10, 2) === 10 && dailyCeiling(PROFILES.d1, 5) === 1)
-  // 🔴 워크플로우가 예약을 러너에 그대로 넘긴다 — 이것이 없으면 슬롯 판정이 불가능하다
-  check('🔴 yml 이 github.event.schedule 을 러너에 넘긴다',
-    /SLOT_CRON:\s*\$\{\{\s*github\.event\.schedule\s*\}\}/.test(yml)
-    && /--slot-cron=/.test(yml))
-  // 🔴 수동 실행은 여전히 dry-run 이다
-  // 🔴 발행 명령이 붙은 줄이 **어느 조건 아래**에 있는가 — 줄 단위로 본다
-  const runLines = yml.split('\n')
-  const condOfPublishLines = runLines
-    .map((l, i) => ({ l, i }))
-    .filter(({ l }) => l.includes('original-post-auto-publish.mts'))
-    .map(({ i }) => {
-      // 위로 올라가며 가장 가까운 `if:` 를 찾는다
-      for (let k = i; k >= 0; k -= 1) {
-        const m = /if:\s*github\.event_name == '(\w+)'/.exec(runLines[k] ?? '')
-        if (m?.[1] !== undefined) return { cond: m[1], line: runLines[i] ?? '' }
-      }
-      return { cond: '(없음)', line: runLines[i] ?? '' }
-    })
-  check('🔴 러너를 부르는 곳은 두 군데다 — 수동·스케줄', condOfPublishLines.length === 2)
-  check('🔴 수동 실행(workflow_dispatch)은 --apply 를 붙이지 않는다',
-    condOfPublishLines.filter((x) => x.cond === 'workflow_dispatch')
-      .every((x) => !x.line.includes('--apply')))
-  check('🔴 실제 발행은 schedule 경로에서만 --apply --limit=1 한다', (() => {
-    const sched = condOfPublishLines.filter((x) => x.cond === 'schedule')
-    return sched.length === 1 && sched[0]!.line.includes('--apply')
-      && sched[0]!.line.includes('--limit=1') && sched[0]!.line.includes('--slot-cron=')
-  })())
+  // 🔴 (2026-09-30) 발행 예약은 launchd 러너 하나 — consumer 를 지나 `--apply --limit=1 --trigger=local` 로 부른다
+  const argv = programArguments(plist)
+  const sep = argv.indexOf('--')
+  check('🔴 launchd 러너는 consumer(--by=publish)를 지난다',
+    argv.some((a) => a.endsWith('scripts/stage-consume-exec.mts')) && argv.includes('--by=publish') && sep > 0
+    && argv.slice(sep + 1).some((a) => a.endsWith('scripts/original-post-auto-publish.mts')))
+  check('🔴 실제 발행은 launchd 경로에서만 --apply --limit=1 --trigger=local 한다',
+    argv.includes('--apply') && argv.includes('--limit=1') && argv.includes('--trigger=local'))
+  const wfLines = read('.github/workflows/auto-publish.yml').split('\n').filter((l) => !l.trim().startsWith('#'))
+  check('🔴 수동 실행(workflow_dispatch)은 --apply 를 붙이지 않는다', !wfLines.some((l) => l.includes('--apply')))
 }
 
 // ── ⑤ 공급 모델 (🔴 근거·실제 plist 대조) ──
@@ -910,154 +845,11 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
   check('예산 없으면 상한 없음', estimateCost(p100, { ...priced, dailyBudgetUsd: null }).safeQueuePerDay === null)
 }
 
-// ── ⑥ 🔴 준비도 — 산술이 아니라 **시뮬레이션**이 판정한다 ──
-console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
-{
-  const pool = parsePoolDoc(read('docs/operations/2026-08-30-persona-pool-design.md'))
-  check('정본 Pool 파싱 문제 0', pool.problems.length === 0)
-  const usable = pool.cards.filter((c) => c.voiceLength !== null)
-  // 🔴 Pool 이 25장으로 늘었다 (P21~P25 · 얇은 축 보강). P09 만 길이 미상이다
-  check('🔴 길이를 읽을 수 있는 카드 24장 (Pool 25 - P09)', usable.length === 24)
-  const personas = usable.map(cardToPersona)
-
-  // 🔴 **재현 가능한 fixture** — 시각 · 난수 · DB 없이 같은 결과가 나온다
-  const START = new Date('2026-09-09T00:05:00+09:00')
-  /**
-   * 🔴 **상시(evergreen) 문구만 쓴다.** 이 큐로 재는 것은 **persona 여력**이지 TTL 이 아니다.
-   *    현재성 문구를 섞으면 14일 지평 중간에 TTL(7일)로 빠져 무엇을 재는지 흐려진다 —
-   *    나이가 흐르는 것은 `d10:prep-check ⑬` 이 따로 잰다.
-   */
-  const NEUTRAL = ['아침에 산책을 다녀왔습니다', '주말에 산책을 다녀왔습니다', '오랜만에 김치를 담갔어요',
-    '장 보러 다녀왔어요', '커피 한 잔 마시며 쉬는 중이에요']
-  const q = (n: number): QueueCandidate[] => Array.from({ length: n }, (_, i) => ({
-    queueId: `q-${String(i).padStart(3, '0')}`,
-    title: `${NEUTRAL[i % NEUTRAL.length]} (${i})`,
-    body: `${NEUTRAL[i % NEUTRAL.length]}\n\n있었던 소소한 이야기를 적어 봅니다. ${i}번째 글이에요.`,
-    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
-    // 🔴 나이는 계획 시점마다 다시 잰다 — 갓 수집된 글로 둔다
-    voice: null, profile: 'human' as const, capturedAt: START,
-  }))
-  const q140 = q(140)
-  check('🔴 queue id 140개가 전부 다르다', new Set(q140.map((x) => x.queueId)).size === 140)
-
-  // 🔴 시작점을 직접 주지 않는다 — 단계별 anchor 는 lib 이 만든다
-  const AXIS = { now: START, publishedToday: 0 }
-  const sim = (stage: 'd1' | 'd3' | 'd5' | 'd10', ps = personas, queue = q140): ReturnType<typeof simulateStage> =>
-    simulateStage({ stage, queue, personas: ps, axis: AXIS })
-
-  // 🔴 산술 최소 인원만으로는 채우지 못한다 — 이것이 이번 수정의 핵심 근거다
-  const arithmetic = derive(PROFILES.d10).personasNeededArithmetic
-  check('🔴 d10 산술 최소는 14명', arithmetic === 14)
-  const at14 = sim('d10', personas.slice(0, 14))
-  check('🔴 그 14명으로 돌리면 129/140 — 산술만 보고 READY 라 하면 안 된다', at14.in14 === 129)
-  check('🔴 14명 d10 은 not-ready', !judgeReadiness(at14).ready)
-  check('🔴 not-ready 사유에 미달 건수가 적힌다', judgeReadiness(at14).reasons.some((r) => r.includes('11건 미달')))
-  check('🔴 산술값은 참고로만 적는다', judgeReadiness(at14).arithmeticPersonas === 14)
-
-  // 🔴 옛 Pool(19명)은 미달이었다 — 그래서 얇은 축을 메웠다
-  const at19 = sim('d10', personas.slice(0, 19))
-  check('🔴 옛 Pool 19명은 139/140 — 여유가 없었다', at19.in14 === 139 && !judgeReadiness(at19).ready)
-  const at24 = sim('d10')
-  check('🟢 24명이면 140/140 — 얇은 축 보강의 결과다', at24.in14 === 140 && judgeReadiness(at24).ready)
-  check('🔴 공백 0일 · 복구 깨짐 0 (막힌 것이 아니라 모자란 것이다)', at19.gaps === 0 && at19.recoveryBroken === 0)
-  check('🔴 24명에서도 공백 0 · 복구 깨짐 0', at24.gaps === 0 && at24.recoveryBroken === 0)
-
-  const d5at19 = sim('d5', personas, q(70))
-  check('🟢 d5 는 19명 · 재고 70 이면 70/70 · 공백 0 → READY', d5at19.in14 === 70 && d5at19.gaps === 0
-    && judgeReadiness(d5at19).ready)
-  const d3at19 = sim('d3', personas, q(42))
-  check('🟢 d3 도 READY', judgeReadiness(d3at19).ready)
-  const d1at19 = sim('d1', personas, q(14))
-  check('🟢 d1 은 14/14 · 공백 0 → READY', d1at19.in14 === 14 && judgeReadiness(d1at19).ready)
-
-  /**
-   * 🔴 persona 가 줄면 자동으로 낮춘다.
-   *
-   *    🔴 경계가 11명 → **10명**으로 내려갔다. 예측이 이제 러너와 **같은 발행 순서**
-   *    (복구 → 현재성 → 상시 적합도)를 쓰기 때문이다 — 자리 경쟁에서 더 잘 맞는 사람이
-   *    먼저 앉으므로 같은 인원으로 더 많이 나간다. 값이 흔들린 것이 아니라 **정확해진 것**이다.
-   */
-  const d5at10 = sim('d5', personas.slice(0, 10), q(70))
-  const d5at9 = sim('d5', personas.slice(0, 9), q(70))
-  check('🟢 d5 는 10명이면 70/70', d5at10.in14 === 70 && judgeReadiness(d5at10).ready)
-  check('🔴 한 명이 멈춰 9명이 되면 66/70 — not-ready', d5at9.in14 === 66 && !judgeReadiness(d5at9).ready)
-  const throttled = safeStageFor('d5', [
-    judgeReadiness(sim('d1', personas.slice(0, 9), q(14))),
-    judgeReadiness(sim('d3', personas.slice(0, 9), q(42))),
-    judgeReadiness(d5at9),
-    judgeReadiness(sim('d10', personas.slice(0, 9))),
-  ])
-  check('🔴 자동으로 아래 단계로 감속한다', throttled.throttled && stageRank(throttled.stage) < stageRank('d5'))
-  check('🔴 감속 사유에 어느 단계가 미달인지 적는다', (throttled.reason ?? '').includes('d5'))
-
-  // 🔴 재고가 모자라면 그것도 not-ready 다
-  const lowStock = sim('d10', personas, q(100))
-  check('🔴 재고 100건이면 100/140 · 공백 4일', lowStock.in14 === 100 && lowStock.gaps === 4)
-  check('🔴 재고 부족 사유가 적힌다', judgeReadiness(lowStock).reasons.some((r) => r.includes('재고')))
-
-  // 🔴 생활사 쏠림 — **큐가 한 축을 요구할 때** 인원 수는 답이 아니다.
-  //    아래 큐는 전부 "중학생 아이" 이야기다. `hardFilter` 는 그 축을 가진 사람만 통과시킨다
-  const kidQ = Array.from({ length: 140 }, (_, i) => ({
-    queueId: `k-${String(i).padStart(3, '0')}`,
-    // 🔴 현재성 낱말을 넣지 않는다 — 이 큐가 재는 것은 **생활사 축 쏠림**이다
-    title: `중학생 아이 시험 때문에 잠을 못 잡니다 (${i})`,
-    body: `중학생 아이 시험 준비로 온 집이 예민해요. 저녁마다 학원 데려다주고 오면 하루가 다 갑니다. ${i}`,
-    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START,
-  }))
-  const kidDiverse = sim('d10', personas, kidQ)
-  check('🔴 큐가 한 축으로 쏠리면 19명이어도 40/140 뿐이다', kidDiverse.in14 === 40 && kidDiverse.gaps === 4)
-  check('🔴 그때 READY 라고 하지 않는다', !judgeReadiness(kidDiverse).ready)
-  // 🔴 축이 맞지 않는 사람만 19명이면 **0건**이다 — 인원을 늘려도 소용없다
-  const wrongAxis = pool.cards.find((c) => c.code === 'P02')!
-  const kidNone = sim('d10', Array.from({ length: 19 }, (_, i) => ({ ...cardToPersona(wrongAxis), code: `X${i}` })), kidQ)
-  check('🔴 축이 맞지 않는 19명은 0/140 · 공백 14일', kidNone.in14 === 0 && kidNone.gaps === 14)
-  check('🔴 산술 인원은 이 상황을 전혀 모른다',
-    judgeReadiness(kidNone).arithmeticPersonas === 14 && !judgeReadiness(kidNone).ready)
-  // 🔴 축이 맞는 사람만 19명이면 140/140 — 같은 인원인데 결과가 갈린다
-  const rightAxis = pool.cards.find((c) => c.code === 'P01')!
-  const kidAll = sim('d10', Array.from({ length: 19 }, (_, i) => ({ ...cardToPersona(rightAxis), code: `Y${i}` })), kidQ)
-  check('🔴 축이 맞는 19명은 140/140 — 인원이 아니라 조합이 정한다', kidAll.in14 === 140 && kidAll.gaps === 0)
-
-  // 🔴 **판정 분기를 직접 시험한다.** 시뮬레이션만 돌리면 그 분기가 한 번도 안 켜져
-  //    가드를 지워도 fixture 가 통과한다 — 실제로 그랬다(복구 깨짐 가드).
-  const synth = (o: Partial<ReturnType<typeof simulateStage>> = {}): ReturnType<typeof simulateStage> => ({
-    stage: 'd1', dates: [], in14: 14, want14: 14, gaps: 0, recoveryBroken: 0, personas: 19, stock: 14,
-    // 🔴 지평 시작점과 다음 슬롯은 **다른 값**이다 — 판정 분기 시험에는 둘 다 필요하다
-    horizonStartAt: horizonStart(START), nextSlotAt: START, horizonDays: 14, ...o,
-  })
-  check('🟢 아무 문제 없으면 READY', judgeReadiness(synth()).ready)
-  check('🔴 복구 깨짐이 1건이라도 있으면 not-ready — 레인이 멈춘 것이다',
-    !judgeReadiness(synth({ recoveryBroken: 1 })).ready
-    && judgeReadiness(synth({ recoveryBroken: 1 })).reasons.some((r) => r.includes('복구')))
-  check('🔴 미달이면 not-ready', !judgeReadiness(synth({ in14: 13 })).ready
-    && judgeReadiness(synth({ in14: 13 })).reasons.some((r) => r.includes('1건 미달')))
-  check('🔴 공백이 있으면 not-ready', !judgeReadiness(synth({ gaps: 1 })).ready
-    && judgeReadiness(synth({ gaps: 1 })).reasons.some((r) => r.includes('공백')))
-  check('🔴 재고가 목표보다 적으면 not-ready', !judgeReadiness(synth({ stock: 13 })).ready
-    && judgeReadiness(synth({ stock: 13 })).reasons.some((r) => r.includes('재고')))
-  check('🔴 사유가 여러 개면 전부 적는다',
-    judgeReadiness(synth({ in14: 0, gaps: 14, stock: 0, recoveryBroken: 2 })).reasons.length === 4)
-  check('🔴 복구가 깨진 단계는 감속 대상에서 빠진다', safeStageFor('d3', [
-    judgeReadiness(synth({ stage: 'd1', recoveryBroken: 1 })),
-    judgeReadiness(synth({ stage: 'd3', in14: 0, want14: 42 })),
-  ]).stage === SAFEST_STAGE)
-
-  // 🔴 아무 단계도 준비되지 않으면 가장 안전한 단계로
-  const none = safeStageFor('d10', RELEASE_STAGES.map((s) => ({
-    stage: s, ready: false, reasons: ['x'], arithmeticPersonas: 1,
-  })))
-  check('🔴 전부 not-ready 면 d1 로 내린다', none.stage === SAFEST_STAGE && none.throttled)
-  check('🟢 요청 단계가 ready 면 그대로', safeStageFor('d3', [judgeReadiness(d3at19)]).throttled === false)
-
-  // 🔴 네 단계를 한 번에 — planner 와 같은 함수다
-  const all = simulateAllStages({ queue: q140, personas, axis: AXIS })
-  check('네 단계를 모두 판정한다', all.length === 4)
-  // 🔴 24명·재고 140 이면 네 단계가 전부 ready 다 — 그것이 이번 보강의 목적이다
-  check('🔴 24명·재고 140 이면 네 단계 모두 ready', all.every((x) => x.verdict.ready))
-  check('🔴 19명이면 d10 만 not-ready 다', simulateAllStages({
-    queue: q140, personas: personas.slice(0, 19), axis: AXIS,
-  }).filter((x) => !x.verdict.ready).map((x) => x.sim.stage).join() === 'd10')
-}
+// ── ⑥ (지움 2026-09-30 · source-slot-v1) 14일 준비도 시뮬레이션 ──
+//    `simulateStage` · `judgeReadiness` · `safeStageFor` 는 14일치 완성 글 재고로 단계를 감속하던 두 번째 정본이었다.
+//    다음 단계를 감당하는가는 `judgeNextPreflight`(stage:scheduler-check) 하나가 본다.
+console.log('\n⑥ (지움) 14일 준비도 — 모듈이 없다')
+check('🔴 scale-readiness 모듈이 없다', !existsSync(join(ROOT, 'src/lib/scale-readiness.ts')))
 
 // ── ⑦ cohort manifest ──
 console.log('\n⑦ cohort manifest')
@@ -1177,12 +969,11 @@ console.log('\n⑩ 소스 계약')
   // 🔴 상수는 **가장 안전한 프로필**에서 온다. 실제 값은 러너가 주입한다 (P0-3)
   check('🔴 DAILY_PUBLISH_CAP 이 안전 프로필에서 온다',
     /DAILY_PUBLISH_CAP\s*=\s*derive\(SAFEST_PROFILE\)/.test(code('src/lib/original-post-publish.ts')))
-  check('🔴 STOCK_TARGET 이 안전 프로필에서 온다',
-    /STOCK_TARGET\s*=\s*derive\(SAFEST_PROFILE\)/.test(code('src/lib/micro-seed-supply-autofill.ts')))
+  check('🔴 (2026-09-30) 적재기에 재고 목표 상수가 없다', !/STOCK_TARGET\s*=/.test(code('src/lib/micro-seed-supply-autofill.ts')))
   check('🔴 POST_CAP_PER_WEEK 이 안전 프로필에서 온다',
     /POST_CAP_PER_WEEK\s*=\s*effectiveWeeklyCap\(SAFEST_PROFILE/.test(code('src/lib/original-post-persona-match.ts')))
   // 🔴 lib 어디에서도 module-load 시점에 env 를 읽지 않는다
-  for (const f of ['src/lib/scale-profile.ts', 'src/lib/scale-runtime.ts', 'src/lib/scale-readiness.ts',
+  for (const f of ['src/lib/scale-profile.ts', 'src/lib/scale-runtime.ts',
     'src/lib/original-post-publish.ts', 'src/lib/original-post-persona-match.ts',
     'src/lib/micro-seed-supply-autofill.ts', 'src/lib/scale-supply-plan.ts'] as const) {
     check(`🔴 ${f.split('/').pop()} 에 process.env 가 없다`, !code(f).includes('process.env'))
@@ -1198,7 +989,7 @@ console.log('\n⑩ 소스 계약')
     return !rt.includes('process.env') && /env: Readonly<Record<string, string \| undefined>>/.test(rt)
   })())
   // 🔴 옛 계약이 사라졌는가 — 규모를 올릴 때마다 fixture 를 함께 고치게 만들던 리터럴이다
-  for (const f of ['src/lib/scale-profile.ts', 'src/lib/scale-runtime.ts', 'src/lib/scale-readiness.ts',
+  for (const f of ['src/lib/scale-profile.ts', 'src/lib/scale-runtime.ts',
     'src/lib/original-post-publish.ts', 'src/lib/micro-seed-supply-autofill.ts', 'src/lib/original-post-persona-match.ts']) {
     check(`🔴 ${f} 코드에 ACTIVE_PROFILE 이 없다`, !code(f).includes('ACTIVE_PROFILE'))
   }
@@ -1208,8 +999,8 @@ console.log('\n⑩ 소스 계약')
   check('🔴 cohort 도구가 Serializable 을 쓴다', /isolationLevel:\s*'Serializable'/.test(tool))
   check('🔴 cohort 도구가 조건부 updateMany 를 쓴다', /updateMany\(\{\s*where:\s*\{\s*code,\s*status:\s*expect\s*\}/.test(tool))
   check('🔴 cohort 도구가 count !== 1 을 막는다', /u\.count\s*!==\s*1/.test(tool))
-  check('🔴 cohort 도구가 authorHash salt 를 넘긴다',
-    /VOICE_AUTHOR_HASH_SALT/.test(tool) && /checkNameCollision\([^)]*hashOf/.test(tool))
+  check('🔴 cohort 도구가 작가 해시 · salt · 공개 사슬을 쓰지 않는다(크롤 작가 대조 제거 · 2026-10-01 #641)',
+    !/hashOf|authorHash|VOICE_AUTHOR_HASH_SALT|soransoran-voice-v1/.test(tool))
   check('🔴 cohort 도구가 실회원 정본을 쓴다', /judgeRealMember/.test(tool))
   check('🔴 cohort 도구가 전체 seed 정합을 본다', /verifyPersonaSeed/.test(tool) && /verifySeedCard/.test(tool))
   check('🔴 cohort 도구가 불변 테이블을 대조한다',
@@ -1239,32 +1030,20 @@ console.log('\n⑩ 소스 계약')
   // 🔴 planner 가 낡은 문구를 쓰지 않는다
   const planner = code('scripts/persona-capacity-planner.mts')
   check('🔴 planner 에 "현재 5명" 이 없다', !/현재 5명/.test(planner))
-  check('🔴 planner 가 실제 active 수를 쓴다', /지금 active \$\{active\.length\}명/.test(planner))
-
-  // 🔴 **화면과 JSON 이 같은 값을 본다** — 두 번 계산하면 언젠가 한쪽만 고쳐진다
-  for (const [label, src] of [['planner', planner], ['supply-health', code('scripts/supply-health.mts')]] as const) {
-    const calls = (src.match(/simulateAllStages\(/g) ?? []).length
-    check(`🔴 ${label} 이 규모 시뮬레이션을 한 번만 돌린다`, calls === 1)
-    // 🔴 감속은 `resolveScale` 안에서 한 번만 일어난다 — 화면이 따로 감속하지 않는다
-    check(`🔴 ${label} 이 스스로 감속하지 않는다`, !/safeStageFor\(/.test(src))
-    check(`🔴 ${label} 이 설치 결과를 그대로 쓴다`, /installFromEnv\(/.test(src))
-  }
-  check('🔴 planner 화면이 payload.scale 을 읽는다 (다시 계산하지 않는다)',
-    /payload\.scale\.stages/.test(planner) && /payload\.scale\.releaseStage/.test(planner))
+  // 🔴 (2026-09-30) planner 는 퇴역했다 · 관제는 14일 시뮬레이션 · 감속을 하지 않는다 — 결정(StageDecision)이 단계다
+  check('🔴 planner 는 계산하지 않는다(퇴역 안내만)', !/simulateAllStages\(|installFromEnv\(|forecastPublishing\(/.test(planner))
   const health = code('scripts/supply-health.mts')
+  check('🔴 관제가 14일 시뮬레이션 · 감속을 하지 않는다', !/simulateAllStages\(|safeStageFor\(|throttledByReadiness/.test(health))
   check('🔴 health JSON 에 scale 이 들어간다', /\n\s*scale,/.test(health))
-  check('🔴 health 화면이 같은 scale 객체를 읽는다',
-    /scale\.stages/.test(health) && /scale\.throttledByReadiness/.test(health))
+  check('🔴 health 화면이 같은 scale 객체를 읽는다(capacity · release)',
+    /scale\.capacityStage/.test(health) && /scale\.releaseStage/.test(health))
   check('🔴 health 가 설정 불일치를 화면에 적는다', /configMismatch/.test(health)
     && /설정 불일치/.test(read('scripts/supply-health.mts')))
-  check('🔴 health 가 감속 사유를 화면에 적는다', /자동 감속/.test(read('scripts/supply-health.mts')))
   /**
-   * 🔴 **워크플로는 모든 단계의 합집합이다** (2026-09-21 보정).
-   *    활성 단계 프로필과 견주면 d1 에서 10개 중 9개가 거짓 경보로 잡혔다(실측).
-   *    이제 `compareWorkflowSuperset` 으로 본다 — 빠진 단계 슬롯과 계획에 없는 cron 만 잡는다.
+   * 🔴 (2026-09-30) 발행 예약의 정본은 launchd 러너다 — health 는 GitHub 발행 예약이 되살아났는지를 본다.
    */
-  check('🔴 health 가 워크플로우 어긋남을 본다 — 합집합 기준으로',
-    /compareWorkflowSuperset\(/.test(health) && /workflowMismatch/.test(health)
+  check('🔴 health 가 워크플로우 어긋남을 본다 — GitHub 발행 예약 부활',
+    /retiredPublishWorkflowProblems\(/.test(health) && /workflowMismatch/.test(health)
     && /워크플로우 불일치/.test(read('scripts/supply-health.mts')))
   check('🔴 🔴 **활성 단계 프로필로 견주던 옛 판이 돌아오지 않았다**',
     !/compareWorkflow\(resolved\.releaseProfile/.test(health))

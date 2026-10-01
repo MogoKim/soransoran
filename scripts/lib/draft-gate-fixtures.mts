@@ -417,7 +417,8 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
   const persona = personaInputOf(fx.card, { samples: SAMPLES, bundleDigest: `bundle-${fx.card.code}` })
   let art = await runContentCore({
     artifactId: randomUUID().replace(/-/g, ''),
-    sourceArticleId: fx.source.id, title: fx.source.title, maskedBody: fx.source.body,
+    // 🔴 러너와 같다 — 원천은 (사이트, id) 쌍이다(P0-B). fixture 는 사이트 하나만 쓴다
+    sourceSite: 'navercafe:fixture', sourceArticleId: fx.source.id, title: fx.source.title, maskedBody: fx.source.body,
     // 🔴 (quality-v3) 러너와 같다 — 원천 사실은 채택 자리와 같은 함수에서 온다
     sourceMeta: sourceMetaOf(fx),
     personas: [persona], personaPoolSize: 1, voiceSourceDigest: 'asset000000000',

@@ -26,18 +26,20 @@ import {
 } from '../src/lib/auto-ready-v2'
 import {
   authoritativeGate, stampAutoReady, stampRound, selectAudits, recordAuditResult,
-  confirmedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL, STAMP_BATCH_SIZE, isTransientTxLost,
+  unresolvedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL, STAMP_BATCH_SIZE, isTransientTxLost,
 } from '../src/lib/auto-ready-repo'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
 } from '../src/lib/micro-seed-supply-autofill'
 import { loadPublishableStock, planPublishBatch } from './lib/publishable-stock.mjs'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { PROFILES, releaseCapsOf } from '../src/lib/scale-profile'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 
 import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 /**
  * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
  *    발행된 사람 결정 행 · 수정·폐기 없음 → noEdit 로 결속한다.
@@ -83,8 +85,10 @@ const GOOD_SR = {
  * 🔴 **지금 품질 계약으로 적재된 행** (2026-09-27) — 적재기가 남기는 표식 그대로다.
  *    `legacy: true` 면 표식이 없다(옛 계약 행) — 증거 표본도 자동 도장 대상도 아니다.
  */
+// 🔴 (2026-09-30 · source-slot-v1) 원문 증거 — 적재기가 늘 싣는다. 없으면 발행 트랜잭션이 EVIDENCE_MISSING 으로 만료한다
 const gate = (sr: unknown = GOOD_SR, holds: string[] = [], voiceCode: string | null = null, legacy = false) => ({
   holds, blocks: [], semanticReview: sr,
+  ...fakeEvidenceGate(NOW),
   ...(legacy ? {} : { [QUALITY_CONTRACT_KEY]: currentQualityContract() }),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
@@ -621,14 +625,14 @@ async function main(): Promise<void> {
     await stale('모르는 단계 문자열 → 가장 안전한 d1', idM, planFor(greedy), '(d1)', { releaseStage: 'd999' })
     const pm = await publishOriginalPostTx(prisma, {
       queueId: idM, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: 'd10' }, autoAssign: planFor(greedy),
-      autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' },
+      autoReadyEnv: markedStageEnv({ ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' }),
     })
     check('🔴 대조 — env 가 d10 을 허락하면 같은 행이 나간다 (2일 전 · d10 최소 1일)', pm.kind === 'published', JSON.stringify(pm))
     const pm2 = await (async () => {
       const id = await unassigned({ voice: greedy.code })
       return publishOriginalPostTx(prisma, {
         queueId: id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: 'd10' }, autoAssign: planFor(greedy),
-        autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd3' },
+        autoReadyEnv: markedStageEnv({ ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd3' }),
       })
     })()
     check('🔴 🔴 **env release 가 d10 이어도 capacity d3 이 천장이다**',
@@ -877,7 +881,7 @@ async function main(): Promise<void> {
       t3.defect === 'yes' && t3.auditor === INTEGRITY_AUDITOR && (t3.note ?? '').includes('바뀌었다'), `${t3.defect} · ${t3.auditor} · ${t3.note}`)
     check('🔴 바뀌지 않은 감사는 판정자의 no 가 그대로 기록됐다 — 과하게 막지 않는다',
       (await prisma.autoReadyAudit.count({ where: { defect: 'no', auditor: 'always-no-auditor' } })) >= 1)
-    check('확정 결함 ≥ 1', await confirmedDefectCount(prisma) >= 1)
+    check('확정 결함 ≥ 1', await unresolvedDefectCount(prisma) >= 1)
     const next = await authoritativeGate(prisma, ON)
     check('🔴 🔴 **다음 회차 열림 판정 → 닫힘**', !next.open && next.reasons.some((x) => x.includes('확정 결함')))
     const fresh = await machineRow()

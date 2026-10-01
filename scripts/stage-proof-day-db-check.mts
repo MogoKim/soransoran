@@ -5,7 +5,7 @@
  *   ① 사람 승인 재고가 많고(복구 행 포함) 자동 3건 — D3 증명일 3슬롯은 **전부 auto** · 목표를 채운 뒤에는 기존 공정성
  *   ② 자동 재고 부족(1건) — 사람 글은 나갈 수 있다(혼합 발행) · 증거는 `PUBLISH_NOT_AUTO_READY` 로 FAIL
  *   ③ 비시험일(증명일 env 없음) — 기존 human/auto 번갈아 그대로
- *   ④ 증명일 env 는 consumer 가 그날 TRIAL/SUSTAIN 결정에서만 넣는다 · 날짜가 오늘이 아니면 꺼진다
+ *   ④ 증명일 env 는 consumer 가 그날 TRIAL/REPROVE 결정에서만 넣는다 · 날짜가 오늘이 아니면 꺼진다 · v5 SUSTAIN 거절
  *
  *   발행은 정본 트랜잭션의 **예약 · 무인** 모드로만 한다 — 증거가 세는 무인 표식이 실제로 남는다.
  *   🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구한다. provider 0. raw SQL 0.
@@ -21,7 +21,8 @@ import { AUTO_DECIDER, AUTO_READY_ENV, AUTO_READY_RECORD_KEY, makeStamp } from '
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { publishOriginalPostTx, UNATTENDED_PUBLISH_DECIDED_BY } from '../src/lib/original-post-publish-tx'
 import { planStore } from '../src/lib/original-post-match-store'
-import { CANARY_DATE_ENV, CANARY_STAGE_ENV, kstDateString } from '../src/lib/release-canary'
+import { kstDateString } from '../src/lib/release-canary'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { autoFirstNeeded, proofDayOf, PROOF_DATE_ENV, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 import { consumerEnvOf } from '../src/lib/stage-controller'
 import { validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, previousKstDate } from '../src/lib/stage-decision-contract'
@@ -29,6 +30,7 @@ import { createStageDecision } from '../src/lib/stage-decision-repo'
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { judgeStageEvidence, personaCommentCapFor } from '../src/lib/stage-evidence'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch, laneOf } from './lib/publishable-stock.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -86,7 +88,7 @@ const human = async (daysAgo: number, pinnedCode: string | null = null) => {
     : (await prisma.persona.findUniqueOrThrow({ where: { code: pinnedCode }, select: { id: true } })).id
   return (await prisma.originalPostApprovalQueue.create({
     data: { sourceRawContentId: r.id, status: 'APPROVED', draftTitle: `가을 이불 꺼낸 날 ${seq}`,
-      draftBody: `가을 이불을 꺼내 햇볕에 말렸어요 ${seq}. 다들 이불 바꾸셨어요?`, gateVerdict: 'PASS', gateResults: {} as never,
+      draftBody: `가을 이불을 꺼내 햇볕에 말렸어요 ${seq}. 다들 이불 바꾸셨어요?`, gateVerdict: 'PASS', gateResults: fakeEvidenceGate(EVIDENCE_AT, { id: `pd-h-${seq}` }) as never,
       promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: 'founder', dedupKey: `pd-h-${seq}`,
       // 🔴 복구 행 — 앞 회차가 배정만 쓰고 끊긴 사람 행(평소에는 줄 맨 앞이다)
       ...(pinned === null ? {} : { matchedPersonaId: pinned, matchedAt: new Date(REAL_NOW.getTime() - DAY) }) },
@@ -99,7 +101,7 @@ const auto = async (voice: string, daysAgo: number) => {
   const body = `저녁 먹고 동네를 한 바퀴 걸었어요 ${seq}. 다들 요즘 저녁에 뭐 하세요?`
   return (await prisma.originalPostApprovalQueue.create({
     data: { sourceRawContentId: r.id, status: 'APPROVED', draftTitle: title, draftBody: body, gateVerdict: 'PASS',
-      gateResults: { holds: [], blocks: [],
+      gateResults: { holds: [], blocks: [], ...fakeEvidenceGate(EVIDENCE_AT, { id: `pd-a-${seq}` }),
         semanticReview: { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 },
         autoDraft: { provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: voice, bundleDigest: `bd-${voice}`, comments: 3 } },
@@ -110,12 +112,16 @@ const auto = async (voice: string, daysAgo: number) => {
   })).id
 }
 
-/** 🔴 러너 env 모양 — 지속 d1 + 오늘 하루 d3 canary(TRIAL) · 증명일이면 consumer 가 넣는 두 칸 */
-const envOf = (proof: boolean): Record<string, string> => ({
-  [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd10', [AUTO_READY_ENV]: 'on',
-  [CANARY_STAGE_ENV]: 'd3', [CANARY_DATE_ENV]: TODAY,
+/**
+ * 🔴 러너 env 모양 — consumer 가 넣는 그대로(2026-09-30 · canary 제거).
+ *    증명일(TRIAL d3): release = d3 · 증명일 두 칸. 비시험일(지속 d3 · 증명 후 HOLD): release = d3 · 증명일 칸 없음.
+ */
+const envOf = (proof: boolean): Record<string, string> => markedStageEnv({
+  [RELEASE_ENV]: 'd3', [CAPACITY_ENV]: 'd3', [AUTO_READY_ENV]: 'on',
   ...(proof ? { [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY } : {}),
-})
+}, TODAY)
+/** 🔴 증거 기준 시각 — 계획(REAL_NOW) · 트랜잭션(TX_BASE) 어느 쪽에서도 게시 72h 안 · 미래 시각 없음 */
+const EVIDENCE_AT = new Date(Math.min(REAL_NOW.getTime(), TX_BASE.getTime()))
 
 /** 🔴 러너와 같은 조립 — 로더 → 규모 → 증명일 필요 수 → 계획 */
 const view = async (proof: boolean) => {
@@ -172,15 +178,18 @@ async function main(): Promise<void> {
     const te = trial.ok ? consumerEnvOf({ ok: true, decision: trial.decision }) : {}
     check('🟢 TRIAL(RETEST) 결정 → 증명일 d3 · 오늘', te[PROOF_STAGE_ENV] === 'd3' && te[PROOF_DATE_ENV] === TODAY, JSON.stringify(te))
     const sustain = row('SUSTAIN', 'd3', { kind: 'SUSTAIN', from: 'd1', to: 'd3' })
-    const se = sustain.ok ? consumerEnvOf({ ok: true, decision: sustain.decision }) : {}
-    check('🟢 SUSTAIN 결정 → 증명일 d3', se[PROOF_STAGE_ENV] === 'd3', sustain.ok ? JSON.stringify(se) : sustain.reason)
+    check('🔴 v5 는 SUSTAIN 결정을 받지 않는다 — 지속 승격 경로가 없다', !sustain.ok, sustain.ok ? 'accepted' : sustain.reason)
+    const reprove = row('REPROVE', 'd3', null)
+    const re = reprove.ok ? consumerEnvOf({ ok: true, decision: reprove.decision }) : {}
+    check('🟢 REPROVE d3 결정 → 증명일 d3 · 공개 d3', re[PROOF_STAGE_ENV] === 'd3' && re.SORAN_RELEASE_STAGE === 'd3',
+      reprove.ok ? JSON.stringify(re) : reprove.reason)
     const prep = row('PREPARE', 'd1', null)
     const pe = prep.ok ? consumerEnvOf({ ok: true, decision: prep.decision }) : { [PROOF_STAGE_ENV]: 'x' }
     check('🔴 PREPARE 날 → 증명일 빈 값(비시험일)', pe[PROOF_STAGE_ENV] === '' && pe[PROOF_DATE_ENV] === '', JSON.stringify(pe))
     const safe = consumerEnvOf({ ok: false, code: 'BROKEN', fallback: 'safest', reason: '' })
     check('🔴 결정이 깨졌다(safest) → 증명일 빈 값', safe[PROOF_STAGE_ENV] === '')
-    check('🔴 증명일 날짜가 오늘이 아니면 꺼진다', proofDayOf({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: previousKstDate(TODAY)! }, REAL_NOW) === null)
-    check('🔴 모르는 단계면 꺼진다', proofDayOf({ [PROOF_STAGE_ENV]: 'd7', [PROOF_DATE_ENV]: TODAY }, REAL_NOW) === null)
+    check('🔴 증명일 날짜가 오늘이 아니면 꺼진다', proofDayOf(markedStageEnv({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: previousKstDate(TODAY)! }), REAL_NOW) === null)
+    check('🔴 모르는 단계면 꺼진다', proofDayOf(markedStageEnv({ [PROOF_STAGE_ENV]: 'd7', [PROOF_DATE_ENV]: TODAY }), REAL_NOW) === null)
     check('필요 수 — 3 목표 · 오늘 자동 1 → 2 · 비시험일 → 0',
       autoFirstNeeded(proofDayOf(envOf(true), REAL_NOW), 1) === 2 && autoFirstNeeded(proofDayOf(envOf(false), REAL_NOW), 0) === 0)
   }

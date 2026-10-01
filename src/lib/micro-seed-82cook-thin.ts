@@ -29,6 +29,11 @@ export const THIN_COLUMNS: readonly string[] = [
   'commentCount', 'score', 'bodyLength', 'bodyHead',
   'axis', 'safetyVerdict', 'safetyReasons', 'reason',
   'runId', 'fetchedAt',
+  /**
+   * 🔴 `sourceListedAt` 은 **목록 관측과 잇는 열쇠**다 — 반응(조회 · 댓글 · 자리)은 여기 복사하지 않는다.
+   *    (2026-09-30 Lane B) 반응의 정본은 목록 artifact 한 곳이다(`source-list-observations`). 앞판은 조회수 ·
+   *    자리를 이 행 · 상세 행 · 생성 봉투로 세 번 복사했고, 네이버의 "댓글 수 못 읽음" 이 여기서 0 으로 굳었다.
+   */
   'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
 ] as const
 
@@ -61,6 +66,10 @@ export type ListRow = {
   sourceExcludeReason?: string
   sourcePoliticsExcluded?: boolean
   qualityFlags?: readonly string[] | Record<string, unknown>
+  /** 🔴 목록 줄의 세 시각 (2026-09-30 Lane B `buildListRow`) — 옛 줄에는 없다(모른다) */
+  sourcePostedAt?: string | null
+  sourceListedAt?: string
+  sourceCapturedAt?: string
 }
 
 export type SkipCode =
@@ -247,9 +256,8 @@ export function toThinRow(input: {
    */
   sourceSite?: string
   /**
-   * 🔴 수집물이 이미 들고 있는 세 시각. 없으면 전부 `''`(모른다) 다.
-   *    82cook 얇은 상세는 지금 게시 시각을 뽑지 않으므로 기본값이 그대로 간다 —
-   *    **없는 값을 지어내지 않는다.**
+   * 🔴 수집물이 이미 들고 있는 세 시각. 없으면 전부 `''`(모른다) 다 — **없는 값을 지어내지 않는다.**
+   *    (2026-09-30 Lane B) 82cook 목록 줄도 이제 게시 · 목록 시각을 싣는다(`buildListRow`) — 러너가 넘긴다.
    */
   times?: Partial<SourceTimes>
 }): ThinRow {

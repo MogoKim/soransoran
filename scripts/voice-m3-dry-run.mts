@@ -57,8 +57,6 @@ const LIMIT = LIMIT_RAW === undefined ? M3_CAPS.itemLimit : Number(LIMIT_RAW)
  */
 const MODEL_RAW = arg('model')
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 /** 🔴 SELECT 다. 원문은 여기서만 나오고 보고에는 실리지 않는다 */
 const READ_SOURCE = 'SELECT id, content, "topComments" FROM "CafePost" WHERE id = ANY($1)'
@@ -81,7 +79,6 @@ async function main(): Promise<void> {
   const pricing = MODEL_RAW ? pricingFor(MODEL_RAW) : undefined
   const modelForKey = MODEL_RAW ?? M3_MODEL_UNDETERMINED
 
-  const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
   const unaoUrl = loadUnaoReadonlyUrl()
 
   console.log('\nVoice — VE-M3 dry-run (payload · cap 계산)')
@@ -158,7 +155,7 @@ async function main(): Promise<void> {
         : {}
 
       const commentSignals = toCommentSignals(raw.topComments, {
-        authorSalt: salt, capturedAt: new Date(0),
+        capturedAt: new Date(0),
       })
       const reaction = summarizeCommentSignals(commentSignals)
 

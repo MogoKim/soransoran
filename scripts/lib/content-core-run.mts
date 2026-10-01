@@ -195,6 +195,8 @@ export type RunInput = {
    *    원문에서 유도하지 않는다(원문 지문이 DB 로 새는 것을 막는다).
    */
   artifactId: string
+  /** 🔴 원천 사이트 — (사이트, id) 가 원천이다. artifact 에 그대로 싣는다(P0-B) */
+  sourceSite: string
   sourceArticleId: string
   /** 🔴 이미 마스킹된 값이다 */
   title: string
@@ -312,6 +314,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   ): HumanReviewArtifact => ({
     artifactVersion: ARTIFACT_VERSION,
     artifactId: input.artifactId,
+    sourceSite: input.sourceSite,
     sourceArticleId: packet.sourceArticleId,
     generatedAt: input.now.toISOString(),
     // 🔴 **어떤 계약으로 만들었는가** — 조기 종료한 artifact 에도 반드시 실린다

@@ -34,8 +34,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PrismaClient } from '@prisma/client'
 import {
-  planRefill, judgeApply, readStock, stockBandOf, verifyAfterRefill, provenanceKeyOf, baseArticleId,
-  SKIP_LABEL, STOCK_TARGET, STOCK_MIN, STOCK_WARN,
+  planRefill, judgeApply, readStock, verifyAfterRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf,
+  SKIP_LABEL, type EvidenceMaterial,
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Candidate, type HeldEntry,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY, MACHINE_SITE_PREFIX,
@@ -47,15 +47,15 @@ import { FILL_REPORT_PREFIX, type FillReport, type FillReportFile, type FillSkip
 import { echoesTitleAtEnd, hasBannedWord } from '../src/lib/micro-seed-auto-draft'
 /** 🔴 독창성 정본 — 생성 · 적재 · 여기가 같은 함수를 쓴다 */
 import { judgeCopy, readMeasure, describeOriginality } from '../src/lib/draft-originality'
-// 🔴 재고 버퍼 목표의 정본 — 여기에 숫자를 적지 않는다
-import { STOCK_BANDS } from '../src/lib/supply-stock-plan'
+/** 🔴 원문 증거 재료 — 목록 관측(반복 관측 · 원천 상대 스냅샷). 읽기만 한다 */
+import { evidenceMaterialFor, readListObservations, type ListObservationIndex } from './lib/source-list-observations.mjs'
+import { runClockFrom } from './lib/run-clock.mjs'
 import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION }
   from '../src/lib/micro-seed-auto-judge'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { loadStockClassification, describeStockClassification } from './lib/publishable-stock.mjs'
-import { derive as deriveProfile } from '../src/lib/scale-profile'
 
 const DATA_DIR = '.microseed-data'
 /** 🔴 사람이 보류한 글 — 재생성되는 후보 파일과 따로 산다 (§4-AN ②) */
@@ -214,19 +214,13 @@ function dedupKeyOf(rawContentId: string, body: string): string {
 
 async function main(): Promise<void> {
   await loadEnvLocal()
-  // 🔴 `loadEnvLocal()` 뒤에 설치한다. 내부 공급이므로 **capacity 단계**를 쓴다
+  // 🔴 `loadEnvLocal()` 뒤에 설치한다 — 화면 한 줄에만 쓴다(적재 상한은 `--up-to` 하나다)
   const scale = installFromEnv(process.env)
-  const capD = deriveProfile(scale.capacityProfile)
   /**
-   * 🔴 **적재 천장은 `STOCK_BANDS.target`(700) 하나다** (2026-09-11).
-   *
-   *    앞선 판은 여기에 `capD.stockTarget` 을 넣었다. capacity d3 에서 그 값은 **42** 이고,
-   *    재고가 42 에 닿는 순간 `judgeApply` 가 `room = 0` 으로 보고 적재를 거절했다 —
-   *    D100 의 재고 목표 100 → 300 → 700 은 그 산식 아래에서 **산술적으로 도달 불가능**했다.
-   *    capacity 목표는 **발행 쪽 눈금**이다. 경고·최소선으로는 그대로 쓰되, 버퍼 천장은 아니다.
+   * 🔴 **적재 천장(700) · capacity 재고 눈금을 지웠다** (2026-09-30 · source-slot-v1).
+   *    상한은 부르는 쪽이 준 `--up-to`/`--limit` 하나다 — 공급 러너는 다가오는 슬롯 수요(JIT)로 정한다.
+   *    완성 글 재고를 채우는 목표는 더 이상 없다(정본: 700 · 2일치 · 14일치 창고 목표 폐기).
    */
-  const LIMITS = { warn: capD.stockWarn, min: capD.stockMin, target: capD.stockTarget }
-  const BUFFER_TARGET = STOCK_BANDS.target
   const override = arg('input')
   // 🔴 쉼표로 여러 파일 — 공급 러너가 이번 회차 파일에 **끝내지 못한 앞 회차 파일**을 얹는다
   const inputPaths = override !== null
@@ -264,9 +258,7 @@ async function main(): Promise<void> {
   console.log(`  후보 파일  ${fileNote.join(' · ')} → 합계 ${candidates.length}건`)
   console.log(`  보류 목록  ${missing ? '🔴 없음' : `${HELD_FILE} · ${held.length}건`}`)
   console.log(`  규모 설정  ${describeScale(scale)}`)
-  console.log(`  재고 기준  경고 ${LIMITS.warn} 이하 · 최소 ${LIMITS.min} · capacity 목표 ${LIMITS.target}`
-    + `  (capacity=${scale.capacityStage} 기준 · 안전 기본값은 ${STOCK_WARN}/${STOCK_MIN}/${STOCK_TARGET})`)
-  console.log(`  적재 천장  ${BUFFER_TARGET}건 (APPROVED 버퍼 목표 — 🔴 capacity 목표가 아니다)`)
+  console.log('  적재 상한  --up-to/--limit 하나 — 🔴 재고 목표(700 · ×14) 없음 · 공급 러너가 JIT 수요로 정한다')
   console.log('  🔴 이 도구는 발행하지 않는다 — Post · persona 배정 · ActivityLog 를 만들지 않는다\n')
 
   if (missing) {
@@ -292,34 +284,29 @@ async function main(): Promise<void> {
     status: r.status, createdPostId: r.createdPostId,
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
-  })), LIMITS)
+  })))
   /**
    * 🔴 **두 수를 섞지 않는다** (2026-09-26). `stock.usable` 은 형식이 맞는 미발행 행이다 —
-   *    사람 검토를 기다리는 기계 초안도 들어간다. **적재 천장**(700)에만 쓴다.
-   *    발행 가능 재고 · 경고선 · 부족분은 발행 러너와 같은 분류(`publishableNow`)로 잰다.
+   *    사람 검토를 기다리는 기계 초안도 들어간다. **표시용**이다(2026-09-30 · 700 적재 천장 삭제 — 상한은 `--up-to`
+   *    하나 = 공급 러너의 JIT 수요). 발행 가능 수는 발행 러너와 같은 분류(`publishableNow`)로 잰다.
    *    앞판은 형식 행을 "러너가 먹을 수 있는 것" 이라 찍었다 — 같은 DB 에서 러너는 0건이었다.
    */
   const view = await loadStockClassification(prisma, process.env, new Date())
   const publishableNow = view.classification.counts.publishableNow
-  const band = stockBandOf(publishableNow, LIMITS)
-  const mark = band.level === 'critical' ? '🔴' : band.level === 'low' ? '🟡' : '🟢'
-  console.log(`① 재고  ${mark} 발행 러너 기준 지금 발행 가능 ${publishableNow}건 (release 상한 · 분류 정본)`)
+  console.log(`① 큐  발행 러너 기준 지금 발행 가능 ${publishableNow}건 (분류 정본 · 슬롯 판정 source-slot-v1)`)
   for (const line of describeStockClassification(view.classification)) console.log(`   ${line}`)
-  if (band.shortfall > 0) console.log(`   capacity 목표까지 ${band.shortfall}건 부족 (발행 가능 기준)`)
   console.log(`   형식이 맞는 미발행 행 ${stock.usable}건 (사람 ${stock.human} · 기계 ${stock.machine})`
-    + ` / 큐 ${queueRows.length}건 — 🔴 적재 천장 계산용 · 발행 가능 재고가 아니다`)
+    + ` / 큐 ${queueRows.length}건 — 🔴 형식 행 수일 뿐 · 발행 가능 재고가 아니다`)
 
-  // 이미 올라간 것 — synthetic RawContent 기준으로 되돌린 키
-  const existing = new Set<string>()
-  for (const r of queueRows) {
-    const rc = r.rawContent
-    // 🔴 사람 것과 기계 것 둘 다 본다 — 한쪽만 보면 중복이 샌다
-    if (rc === null || !isOurSite(rc.sourceSite)) continue
-    existing.add(provenanceKeyOf(baseArticleId(rc.sourceArticleId), rc.rawTitle))
-  }
+  // 이미 올라간 것 — synthetic RawContent 를 원래 원천 (사이트, id) + 제목으로 되돌린 열쇠(P0-B · `originalSourceOf`)
+  // 🔴 사람 것과 기계 것 둘 다 본다 — 한쪽만 보면 중복이 샌다
+  const existing = existingSourceKeysOf(queueRows.flatMap((r) =>
+    r.rawContent === null || !isOurSite(r.rawContent.sourceSite) ? [] : [r.rawContent]))
   const queueForSibling = queueRows
     .filter((r) => r.rawContent !== null && isOurSite(r.rawContent.sourceSite))
     .map((r) => ({
+      // 🔴 (P0-B) synthetic 사이트를 버리지 않는다 — 형제 검사가 원래 사이트로 되돌려 대 본다
+      sourceSite: r.rawContent!.sourceSite,
       sourceArticleId: r.rawContent!.sourceArticleId,
       status: r.status,
       createdPostId: r.createdPostId,
@@ -336,14 +323,16 @@ async function main(): Promise<void> {
   for (const c of candidates) {
     const r = planRefill({
       envelope: envelopeOf(c), candidates: [c], held,
-      existing: seenKeys, queue: siblingSeen, usable: stock.usable,
+      existing: seenKeys, queue: siblingSeen,
     })
     if (r.targets.length === 1) {
       targets.push(c)
       // 🔴 합친 뒤에도 중복·형제를 막는다
-      seenKeys.add(provenanceKeyOf(S(c.sourceArticleId), S(c.title)))
+      // 🔴 (P0-B) 같은 회차 — 원천 (사이트, id) 로 적는다. 사이트를 모르면 적재 선별이 이미 id 로 막는다
+      const k = sourceProvenanceKeyOf(S(c.sourceSite), S(c.sourceArticleId), S(c.title))
+      if (k !== null) seenKeys.add(k)
       siblingSeen.push({
-        sourceArticleId: syntheticArticleId(S(c.sourceArticleId), S(c.title)),
+        sourceSite: S(c.sourceSite), sourceArticleId: S(c.sourceArticleId),
         status: 'APPROVED', createdPostId: null,
       })
     } else if (r.skipped[0] !== undefined) {
@@ -376,7 +365,7 @@ async function main(): Promise<void> {
   // 🔴 dry-run 에서도 실제 create 에 쓰일 값을 그대로 만들어 profileOf 를 확인한다.
   //    P0 (기계 행에 사람 접두가 붙어 러너가 전부 거절) 이 다시 나면 여기서 먼저 걸린다.
   const askedN = UP_TO ?? LIMIT
-  const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, targets.length) : Math.min(stock.shortfall, targets.length)
+  const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, targets.length) : 0
   const preview = targets.slice(0, previewN).map((c) => {
     const pl = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c,
@@ -405,7 +394,7 @@ async function main(): Promise<void> {
   if (nNull > 0) console.log('   🔴 profile 을 못 만든 건이 있다 — 그 건은 적재 단계에서 건너뛴다')
 
   // ── ④ 실행 판정 ──
-  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO, usable: stock.usable, target: BUFFER_TARGET })
+  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO })
   if (!gate.ok) {
     console.log(`\n④ 보충하지 않는다 — ${gate.reason}`)
     // 🔴 관문을 지난 후보가 있었는데 넣지 않았으면 전부 `cut` 이다 — 끝낸 것이 아니다
@@ -430,10 +419,43 @@ async function main(): Promise<void> {
   console.log(`\n⑤ 🔴 보충 ${gate.take.length}건 (${UP_TO !== null ? `--up-to ${UP_TO} · 상한까지` : `--limit ${LIMIT} · 정확히`})`)
   let done = 0
   const loadedC: Candidate[] = []
+  /**
+   * 🔴 **원문 증거 재료를 목록 관측에서 한 번 모은다** (2026-09-30 · source-evidence-v1).
+   *    못 읽으면 재료 없음(빈 관측 · 스냅샷 null) — 행은 적재되지만 발행 판정이 모르는 것으로 읽는다(fail-closed).
+   */
+  /**
+   * 🔴 **증거 시각은 회차 시각이다** (2026-09-30 Lane B) — 부모(`supply-process`)가 넘긴 `SORAN_RUN_AT` 을 쓴다.
+   *    앞판은 여기서 벽시계를 다시 만들었다 — 부모가 묶음을 고른 시각과 표본 창이 달라졌고, 시각을 고정한 검사가
+   *    이 단계만 재현하지 못했다. 단독 실행이면 자기 시계다(`runClockFrom`).
+   */
+  const evidenceAt = runClockFrom(process.env).at
+  let listIndex: ListObservationIndex | null = null
+  try { listIndex = readListObservations(DATA_DIR, evidenceAt) } catch (e) {
+    console.log(`   🟡 목록 관측을 읽지 못했다 — ${e instanceof Error ? e.message : String(e)} (증거 재료 없음 = 모름)`)
+  }
+  if (listIndex !== null) console.log(`   목록 관측 ${listIndex.files}개 파일 · 관측 ${listIndex.sample.length}줄 · 못 읽음 ${listIndex.unreadable}`)
+  /**
+   * 🔴 **반응은 목록 관측에서 찾는다** (2026-09-30 Lane B) — 후보가 실어 온 목록 시각(`sourceListedAt`)이 열쇠다.
+   *    앞판은 생성 봉투의 복사본(`sourceResponse`)을 읽었다 — 복사본은 지웠다(정본은 목록 artifact 하나).
+   */
+  const materialOf = (c: Candidate): EvidenceMaterial | null => {
+    if (listIndex === null) return null
+    return evidenceMaterialFor(listIndex, {
+      sourceKey: S(c.sourceSite), articleId: S(c.sourceArticleId),
+      postedAt: S(c.sourcePostedAt) === '' ? null : S(c.sourcePostedAt),
+      listedAt: S(c.sourceListedAt) === '' ? null : S(c.sourceListedAt),
+      at: evidenceAt,
+    })
+  }
   for (const c of gate.take) {
     const title = S(c.title)
     const body = S(c.body)
-    const at = S(c.reviewedAt) !== '' ? new Date(S(c.reviewedAt)) : new Date()
+    /**
+     * 🔴 **초안 시각이다 — 원문 시각이 아니다** (2026-09-30 이름 정직화). 아래 `sourceCapturedAt` 칸에 계속
+     *    들어가지만(스키마 변경 없음) **어떤 판정도 이 칸을 읽지 않는다.** 원문 나이는 `gateResults.sourceEvidence`
+     *    의 게시 시각으로만 잰다(`judgeSlotRelease`).
+     */
+    const draftedAt = S(c.reviewedAt) !== '' ? new Date(S(c.reviewedAt)) : new Date()
     // 🔴 적재 직전 마지막 관문 — 하나라도 어긋나면 이 건만 건너뛴다
     const bad = recheck(title, body, c.originality)
     if (bad.length > 0) {
@@ -444,7 +466,7 @@ async function main(): Promise<void> {
     // 🔴 큐에 넣을 값을 순수 함수가 만든다 — 러너가 접두를 붙이다 P0 를 냈다
     const payload = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c,
-      autoJudge: autoJudgeOf(c), review: reviewOf(c), now: new Date().toISOString(),
+      autoJudge: autoJudgeOf(c), review: reviewOf(c), evidence: materialOf(c), now: new Date().toISOString(),
     })
     if (payload === null) {
       console.log(`   ⏭ 건너뜀 ${title.slice(0, 20)} — profile 이 어긋나 payload 를 만들지 않는다`)
@@ -460,7 +482,8 @@ async function main(): Promise<void> {
           sourceSite: payload.syntheticSite,
           sourceUrl: `publish-candidate://${S(c.sourceInput) || 'unknown'}#${S(c.sourceArticleId)}`,
           sourceArticleId: syntheticArticleId(S(c.sourceArticleId), title),
-          sourceCapturedAt: Number.isNaN(at.getTime()) ? new Date() : at,
+          // 🔴 초안 시각(칸 이름과 다르다) — 판정 입력이 아니다
+          sourceCapturedAt: Number.isNaN(draftedAt.getTime()) ? new Date() : draftedAt,
           rawTitle: title,
           rawBody: body,
         },
@@ -512,7 +535,7 @@ async function main(): Promise<void> {
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   })))
-  console.log(`   형식 행 ${stock.usable} → ${stockAfter.usable}건 (버퍼 목표 ${BUFFER_TARGET}) — 🔴 발행 가능 재고가 아니다`)
+  console.log(`   형식 행 ${stock.usable} → ${stockAfter.usable}건 — 🔴 적재 정합용 수 · 발행 가능 재고가 아니다`)
   console.log('\n   🔴 발행하지 않았다. 다음 발행은 auto-publish 러너가 스케줄에 따라 한다.\n')
   // 🔴 상한 때문에 이번에 못 넣은 것 — `take` 밖의 관문 통과 후보
   const takenSet = new Set<object>(gate.take as object[])

@@ -10,6 +10,7 @@
  *    보내면 남의 글이 화자 선택에 섞인다.
  */
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
+import { promptNoGoExpressions } from '../../src/lib/persona-no-go'
 import { type AxisMapping } from '../../src/lib/content-core/speaker-relative-facts'
 import type { LoadBearingRequirement } from '../../src/lib/content-core/load-bearing'
 import { CLAIM_FACT_LABEL } from '../../src/lib/content-core/source-facts'
@@ -282,6 +283,10 @@ export function buildV2DraftSystemPrompt(input: {
     '- 문장과 문단 구성은 **처음부터 새로** 씁니다. 원문 문장을 옮겨 적지 않습니다.',
     '- 원문이 짧으면 **짧게** 씁니다. 늘려서 사연으로 만들지 않습니다.',
     '- 🔴 원문에 없는 **사건 · 날짜 · 대사 · 겪은 일**을 만들지 않습니다.',
+    // 🔴 (v2-draft-p10 · quality-v6) 원문 글쓴이의 만남·대화·들음은 그 사람의 경험이다 — 모든 자리에서.
+    //    최종 게이트(`draft-life-gates` 만남)가 같은 선으로 막는다(위 "이번에 원문이 부른 것" 근거가 그 만남을 담을 때만 예외)
+    '- 🔴 원문 글쓴이가 **누구를 만나고 · 이야기를 나누고 · 들은 일**은 그 사람의 경험입니다. 당신이 만나고 들은 일로 옮기지 않습니다.',
+    '  그 이야기는 "어떤 분이 … 그러셨대요" 처럼 **그 사람을 주어로** 전합니다.',
     '  예) 원문이 "남편이 집안일을 안 한다" 뿐이면,',
     '      "주말에 밥 차려달라고 하면 난리가 난다" 같은 장면을 **지어내지 않습니다.**',
     '',
@@ -297,8 +302,10 @@ export function buildV2DraftSystemPrompt(input: {
       ? [`🔴 이 행동은 하지 않습니다: ${life.noGoTopics.join(' · ')}`,
          '   (비슷한 주제를 통째로 피하라는 뜻이 아닙니다)']
       : []),
-    ...(life.noGoExpressions.length > 0
-      ? [`🔴 이 말버릇은 쓰지 않습니다: ${life.noGoExpressions.join(' · ')}`] : []),
+    // 🔴 (quality-v5) 개인 말버릇(열쇠) + 전원 공통 금지(§7-2) — `persona-no-go` 하나. 개인 목록이 비어도 공통은 싣는다.
+    //    생성 뒤 최종 게이트(`draft-life-gates` personaNoGo)가 같은 판정으로 막는다
+    `🔴 이 말버릇은 쓰지 않습니다: ${promptNoGoExpressions(life.noGoExpressions).join(' · ')}`,
+    '🔴 불릿 · 번호 목록 · 마크다운 제목 · 굵은 글씨 · "먼저/다음으로/마지막으로" 식 정리를 쓰지 않습니다',
     '',
     `## 당신이 서는 자리 — 🔴 ${STANCE_LABEL[plan.stance ?? 'REFLECTION']}`,
     ...(plan.stance !== null && plan.stance !== 'SELF_EXPERIENCE'

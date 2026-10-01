@@ -22,6 +22,7 @@
  *
  * 🔴 **이 파일은 provider 를 부르지 않고 DB 에 쓰지도 않는다.** 판정 재료만 만든다.
  */
+import type { RoleHistory } from '../../src/lib/persona-reserve'
 import {
   buildCommentInput, voiceEvidenceFromAssets, type CommentInput,
 } from '../../src/lib/persona-comment-input'
@@ -69,6 +70,11 @@ export type SourcePersona = BuildPersona & {
   user: { providerId: string | null; accountCount: number | null } | null
   /** 🔴 이 persona 의 이전 발화. ⑧ 표본이자 voice 근거다 */
   comments: readonly { content: string; createdAtMs: number }[]
+  /**
+   * 🔴 최근 역할 이력 — 정본 `roleHistoryOf`(계약과 같은 재료). **못 읽으면 `null`** →
+   *    planner 가 이번 회차에서 이 사람을 뺀다(fail-closed). 실제 0건과 조회 실패는 다른 사실이다.
+   */
+  recentRoles: RoleHistory | null
 }
 
 /** ② 코퍼스 — 🔴 원문은 담지 않는다. 조회 함수와 규모만 넘긴다 */
@@ -240,6 +246,8 @@ function lifeOf(identity: unknown): PlannerPersona['life'] {
     economicStatus: str(id.economicStatus),
     region: str(id.region),
     noGoTopics: [],
+    // 🔴 댓글 대상은 남의 글이다 — 말버릇 판정은 댓글 Gate ⑦⑧ 가 **이 사람이 쓴 댓글**에 한다
+    noGoExpressions: [],
     voiceLength: undefined,
   }
 }
@@ -345,6 +353,8 @@ export async function materializeTargets(args: {
       && pe.lifeStage !== null && pe.lifeStage.trim() !== '',
     forbiddenReactionRoles: pe.forbiddenReactionRoles,
     recentComments: pe.comments.filter((c) => c.createdAtMs >= windowStartMs).length,
+    // 🔴 역할 쏠림은 회차 조건 — planner 가 `roleRoundVerdict` 로 이 역할만 이번 회차에 빼고, 모르면 사람을 뺀다
+    recentRoles: pe.recentRoles,
     // 🔴 **생활사 축을 전부 넘긴다.** 한 축만 넘기면 planner 의 다양성 판정이 죽는다
     life: { ...lifeOf(pe.identity), noGoTopics: pe.noGoTopics },
   }))

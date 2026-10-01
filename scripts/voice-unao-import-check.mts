@@ -208,7 +208,7 @@ function createDataBlock(): string {
     crawledAt: new Date('2026-08-01T00:00:00Z'), postedAt: new Date('2020-03-01T00:00:00Z'),
     usedAt: new Date('2026-05-14T00:00:00Z'),
     desireCategory: 'HEALTH', ageSignal: '50s', urgencyLevel: 4,
-  }, 'salt-x')
+  })
   const json = JSON.stringify(row)
   const offenders: string[] = []
   if (json.includes('이건 원문 본문입니다')) offenders.push('본문이 남았다')
@@ -359,7 +359,7 @@ function leakRow(labels: Record<string, unknown>, extra: Record<string, unknown>
     author: '아무개', content: LEAK_BODY, commentCount: 7,
     crawledAt: new Date('2026-08-01T00:00:00Z'), postedAt: new Date('2021-01-01T00:00:00Z'),
     ...labels, ...extra,
-  }, 'salt-x')
+  })
 }
 
 // ── ⑮ 본문을 물고 온 자유서술 라벨은 버려진다 ───────────
@@ -384,7 +384,7 @@ function leakRow(labels: Record<string, unknown>, extra: Record<string, unknown>
     crawledAt: new Date('2026-08-01T00:00:00Z'),
     topComments: [{ author: 'x', content: commentQuote }],
     betrayalFactor: commentQuote, qualityScore: 7,
-  }, 'salt-x')
+  })
   const keys = Object.keys(row.legacyLabels ?? {})
   const offenders: string[] = []
   if (keys.includes('betrayalFactor')) offenders.push('댓글 인용이 남았다')
@@ -432,7 +432,7 @@ function leakRow(labels: Record<string, unknown>, extra: Record<string, unknown>
     id: 'n-1', cafeId: 'w', postUrl: 'u', author: 'a',
     content: '숫자 3 이 본문에 있다.'.repeat(20), crawledAt: new Date('2026-08-01T00:00:00Z'),
     commentSplit: 3, urgencyLevel: 4, ageSignal: '50s',
-  }, 's')
+  })
   const keys = Object.keys(row.legacyLabels ?? {})
   for (const k of ['commentSplit', 'urgencyLevel', 'ageSignal']) {
     if (!keys.includes(k)) offenders.push(`${k} 가 버려졌다`)

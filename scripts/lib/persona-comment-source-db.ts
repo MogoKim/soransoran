@@ -13,6 +13,7 @@ import type { PrismaClient } from '@prisma/client'
 
 import { pickPostVisibility, POST_VISIBILITY_SELECT } from '../../src/lib/post-visibility'
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
+import { RECENT_WINDOW_DAYS, roleHistoryOf } from '../../src/lib/persona-reserve'
 import type { FrequencyCorpus, FrequencyRead, TargetSource } from './persona-comment-targets'
 import { loadCanonCorpusTexts, referenceSeedShareCount, stableAssignment } from './persona-reference-store.mjs'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
@@ -23,6 +24,8 @@ let corpusOnce: FrequencyRead | null = null
 export function makeDbTargetSource(args: {
   prisma: PrismaClient
   windowStart: Date
+  /** 🔴 역할 이력 창의 기준 시각 — 생략하면 지금. 창 길이는 계약과 같은 `RECENT_WINDOW_DAYS` 다 */
+  now?: Date
   /** ② 코퍼스를 읽을 것인가 — 🔴 inspect 회차도 읽는다. "돌 수 있는가" 를 알아야 하기 때문이다 */
   readCorpus?: boolean
   /**
@@ -90,9 +93,23 @@ export function makeDbTargetSource(args: {
           forbiddenReactionRoles: true,
           // 🔴 실회원 판별 정본에 **두 값 다** 필요하다. 하나라도 빠지면 unknown 으로 막힌다
           user: { select: { providerId: true, _count: { select: { accounts: true } } } },
-          comments: { where: { isDeleted: false }, select: { content: true, createdAt: true } },
+          comments: { where: { isDeleted: false }, select: { id: true, content: true, createdAt: true } },
         },
       })
+      /**
+       * 🔴 **역할 이력 — 계약과 같은 원천 · 같은 함수**(`roleHistoryOf`). 발행된 Queue 행의 `reactionType` 이 역할이다.
+       *    못 읽으면 전원 `null` — planner 가 이번 회차에서 뺀다(fail-closed). `{}` 로 삼키지 않는다.
+       */
+      const now = args.now ?? new Date()
+      const since = now.getTime() - RECENT_WINDOW_DAYS * 86_400_000
+      let roleOf: Map<string, string> | null = null
+      try {
+        const ids = rows.flatMap((p) => p.comments.filter((c) => c.createdAt.getTime() >= since).map((c) => c.id))
+        const q = ids.length === 0 ? [] : await prisma.personaApprovalQueue.findMany({
+          where: { publishedCommentId: { in: ids } }, select: { publishedCommentId: true, reactionType: true },
+        })
+        roleOf = new Map(q.flatMap((r) => (r.publishedCommentId === null ? [] : [[r.publishedCommentId, r.reactionType] as const])))
+      } catch { roleOf = null }
       return rows.map((p) => ({
         code: p.code,
         status: String(p.status),
@@ -109,6 +126,8 @@ export function makeDbTargetSource(args: {
           providerId: p.user.providerId, accountCount: p.user._count.accounts,
         },
         comments: p.comments.map((c) => ({ content: c.content, createdAtMs: c.createdAt.getTime() })),
+        recentRoles: roleOf === null ? null
+          : roleHistoryOf({ comments: p.comments.map((c) => ({ id: c.id, at: c.createdAt })), roleOf, now }),
       }))
     },
 

@@ -158,6 +158,7 @@ export const DETAIL_KEYS: readonly string[] = [
   'runId', 'axis', 'access', 'sourceSite', 'sourceArticleId', 'url', 'score', 'lane',
   'bodyLength', 'lengthBasis', 'imageCount', 'commentCount',
   'safetyVerdict', 'safetyReasons', 'assetAxes', 'reason', 'title', 'bodyHead',
+  // 🔴 반응(조회 · 자리)은 싣지 않는다 — 정본은 목록 artifact 다(`sourceListedAt` 으로 잇는다 · 2026-09-30 Lane B)
   'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
 ] as const
 

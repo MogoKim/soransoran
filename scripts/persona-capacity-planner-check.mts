@@ -20,9 +20,8 @@ import { readLengthBand } from '../src/lib/original-post-persona-match'
 import {
   planBatch, POST_CAP_PER_WEEK, type BatchDraft, type PersonaForMatch,
 } from '../src/lib/original-post-persona-match'
-import { duplicateKeys, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
+import { duplicateKeys, explicitEndingsOf, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
-import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 
 let pass = 0
 let failN = 0
@@ -121,7 +120,7 @@ console.log('\n③ 조합 탐색 규칙 (synthetic)')
 {
   const draft = (n: number, title = '오늘', body = '국수를 삶았어요.'): QueueCandidate =>
     ({ queueId: `q${n}`, title, body, gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null,
-      voice: null, profile: 'human' as const, capturedAt: new Date('2026-09-08T00:00:00Z') })
+      voice: null, profile: 'human' as const, gateResults: null })
   // 🔴 `as never` 를 쓰지 않는다 — 카드에 필드가 늘었을 때 컴파일러가 잡아야 한다.
   //    실측: 캐스팅 때문에 `noGoTopics` 누락이 런타임 오류로만 드러났다
   const card = (code: string, over: Partial<PoolCard> = {}): PersonaForMatch =>
@@ -137,33 +136,8 @@ console.log('\n③ 조합 탐색 규칙 (synthetic)')
       ...over,
     })
 
-  // 🔴 조합 크기가 커지면 발행량이 줄 수 없다 — E-2b 단조성이 planner 층에서도 유지된다
+  // 🔴 (2026-09-30) 14일 발행 예측 기반 조합 탐색(단조성 · 순서 불변)은 지웠다 — planner 가 퇴역했다.
   const queue = Array.from({ length: 8 }, (_, i) => draft(i))
-  const start = new Date('2026-09-08T15:05:00.000Z')
-  const runWith = (codes: string[]): number => {
-    const personas = codes.map((c) => card(c))
-    return forecastPublishing({
-      queue, personas, history: codes.map((c) => ({ code: c, matchedAts: [] })),
-      startAt: start, days: 14, dailyCap: 1,
-    }).in14
-  }
-  const a = runWith(['A', 'B'])
-  const b = runWith(['A', 'B', 'C'])
-  check('🔴 사람을 늘리면 14일 발행량이 줄지 않는다', b >= a)
-  check('fixture 가 헛돌지 않는다 — 실제로 늘어난다', b > a)
-
-  // 🔴 같은 입력이면 같은 결과 — 조합 순서가 결과를 바꾸지 않는다
-  check('🔴 persona 입력 순서가 결과를 바꾸지 않는다', (() => {
-    const p = ['A', 'B', 'C'].map((c) => card(c))
-    const key = (ps: typeof p): string => {
-      const f = forecastPublishing({
-        queue, personas: ps, history: ps.map((x) => ({ code: x.code, matchedAts: [] })),
-        startAt: start, days: 14, dailyCap: 1,
-      })
-      return f.days.map((d) => d.published.map((x) => `${d.date}:${x.queueId}`).join(';')).join(',')
-    }
-    return key(p) === key([...p].reverse())
-  })())
 
   // 🔴 주간 상한을 planner 층에서도 넘기지 않는다
   const many = ['A', 'B', 'C'].map((c) => card(c))
@@ -188,29 +162,12 @@ console.log('\n④ planner 계약 (소스)')
   const src = readFileSync('scripts/persona-capacity-planner.mts', 'utf-8')
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
+  // 🔴 (2026-09-30 · source-slot-v1) planner 는 퇴역했다 — 14일 예측 · 카드 수동 계획 경로가 없다.
+  //    Persona 가 다음 단계를 감당하는가는 preflight 의 `contractValidPersonas` 하나가 본다.
+  check('🔴 퇴역 — import 도 계산도 없다(안내만 찍는다)', !/^import /m.test(code) && !/forecastPublishing|planBatch|prisma/i.test(code))
   check('🔴 DB 에 쓰지 않는다', !/\.(create|update|upsert|delete|createMany|updateMany|deleteMany)\(/.test(code))
   check('🔴 발행하지 않는다', !/publishOriginalPostTx|\bpublish\(/.test(code))
-  check('🔴 판정을 다시 만들지 않는다 — 정본 함수를 부른다',
-    /forecastPublishing\(/.test(code) && /selectAutoTargets\(/.test(code)
-    && !/function forecastPublishing|function planBatch/.test(code))
-  check('🔴 카드를 손으로 옮겨 적지 않는다 — 문서를 읽는다',
-    /parsePoolDoc\(/.test(code) && /persona-pool-design\.md/.test(code))
-  check('🔴 상한을 스스로 정하지 않는다', /DAILY_PUBLISH_CAP/.test(code) && !/dailyCap:\s*[0-9]/.test(code))
-  check('🔴 기존 배정을 정본으로 넘긴다 (러너·관제와 같다)', /assignedPersonaCode:/.test(code))
-  check('🔴 얇은 축을 손으로 박지 않는다 — 자동 산출한다',
-    /ALL_THIN = Object\.entries\(BASE_COVERAGE\)/.test(code))
-  check('🔴 채울 수 없는 축은 순위에서 빼고 따로 보고한다',
-    /UNFILLABLE = ALL_THIN\.filter/.test(code) && /unfillableAxes/.test(code))
-  check('🔴 길이 미상 카드를 후보에서 뺀다 — 추정값을 넣지 않는다',
-    /excludedNoLength = notActive\.filter\(\(c\) => c\.voiceLength === null\)/.test(code)
-    && /inactive = notActive\.filter\(\(c\) => c\.voiceLength !== null\)/.test(code))
-  check('🔴 재고가 목표보다 적으면 inventory-limited 로 표시한다',
-    /inventoryLimited/.test(code) && /queueCount < GOAL\.in14/.test(code))
-  check('🔴 이미 켜진 사람은 DB identity 로 축을 센다 — 문서가 아니다',
-    /activeSubjects: AxisSubject\[\] = active\.map/.test(code))
-  check('🔴 화면과 --json 이 같은 값을 쓴다 — 두 번 계산하지 않는다',
-    /const payload = \{/.test(code) && /JSON\.stringify\(payload/.test(code))
-  check('🔴 특정 P 코드를 결론으로 박아 두지 않는다', !/'P0[1-9]'|"P0[1-9]"/.test(code))
+  check('🔴 정본 경로를 안내한다', /contractValidPersonas/.test(code))
 }
 
 // ── ⑤ 🔴 noGo — cardToPersona 가 실제 hardFilter 입력으로 넘기는가 (2026-09-08) ──
@@ -486,8 +443,9 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
         spouseRelationship: pc.spouseRelationship ?? '해당없음',
         personality: [...pc.personality],
       },
-      voiceCore: { emoji: '없음', ending: '~네요', length: pc.voiceLength, register: '존댓말' },
-      voiceVariations: ['a', 'b', 'c', 'd', 'e'],
+      // 🔴 카드가 적은 말끝 · variation 수를 그대로 쓴다(Phase F — verifySeedCard 가 정본과 대조한다)
+      voiceCore: { emoji: '없음', ending: explicitEndingsOf(pc.voiceTokens)[0] ?? '~네요', length: pc.voiceLength, register: '존댓말' },
+      voiceVariations: Array.from({ length: pc.variationCount }, (_, i) => `v${i}`),
       activityRhythm: { burstiness: 0.3, activeHours: [[10, 13]], weekdayBias: 0.5 },
       noGoTopics: [...pc.noGoTopics], noGoExpressions: [...pc.noGoExpressions],
       forbiddenReactionRoles: [...pc.forbiddenReactionRoles],

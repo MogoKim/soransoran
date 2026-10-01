@@ -26,8 +26,7 @@ import { evidenceFromDb, legacyEvidenceFromDb } from '../src/lib/auto-ready-repo
 import { describeCohort } from '../src/lib/auto-ready-quality-cohort'
 import { profileOf } from '../src/lib/original-post-auto-publish'
 import { PROFILES } from '../src/lib/scale-profile'
-import { simulateStage } from '../src/lib/scale-readiness'
-import { judgeOneDayCanary, slotsLeftToday, kstDateString } from '../src/lib/release-canary'
+import { kstDateString } from '../src/lib/release-canary'
 
 const NOW = new Date()
 
@@ -62,7 +61,7 @@ async function main(): Promise<void> {
     row: r,
     v: eligibilityOf({
       gateVerdict: r.gateVerdict, gateResults: r.gateResults,
-      title: r.title, body: r.body, sourceCapturedAt: s.capturedAtOf.get(r.id) ?? null,
+      title: r.title, body: r.body,
     }),
   }))
   const shadowAuto = verdicts.filter((x) => x.v.auto).map((x) => x.row)
@@ -96,28 +95,18 @@ async function main(): Promise<void> {
   const poolStock: LoadedStock = {
     ...s,
     targets: pool,
-    queueCandidates: pool.map((t, i) =>
-      queueCandidateOf(t, i, s.codeOfPersonaId, s.capturedAtOf.get(t.id) ?? null)),
+    queueCandidates: pool.map((t, i) => queueCandidateOf(t, i, s.codeOfPersonaId)),
   }
   const plan = planPublishBatch({ loaded: poolStock, caps: d10caps, at: NOW })
   const assignedPersonas = new Set(plan.prepared.batch.assignments
     .filter((a) => a.assigned !== null && (a.recoveryProblem ?? null) === null)
     .map((a) => a.assigned))
-  const sim = simulateStage({
-    stage: 'd10', queue: poolStock.queueCandidates, personas: s.personas as never,
-    history: s.history, axis: { now: NOW, publishedToday: s.publishedToday },
-    days: 1, anchor: 'now', dailyCap: Math.max(0, PROFILES.d10.dailyTarget - s.publishedToday),
-  })
-  const day = judgeOneDayCanary(sim, {
-    publishedToday: s.publishedToday, slotsLeft: slotsLeftToday('d10', NOW),
-  })
   console.log('\n④ D10 — (실제 재고 ∪ 그림자 자동 대상)을 D10 상한으로 배정')
   console.log(`   상한  일 ${PROFILES.d10.dailyTarget}건 · persona 주 ${d10caps.postsPerWeek}건 · 최소 ${d10caps.minDaysBetween}일`)
   console.log(`   풀 ${pool.length}건 (실제 재고 ${s.targets.length} + 그림자 ${shadowAuto.length})`)
-  console.log(`   신선도 통과 ${plan.prepared.auto.length}건 · hold ${plan.prepared.held.length}건`)
+  console.log(`   공개 판정(source-slot-v1) eligible ${plan.prepared.auto.length}건 · 제외 ${plan.prepared.held.length}건`)
   console.log(`   🟢 배정 가능 글 ${plan.assignmentReady.length}건 · 서로 다른 Persona ${assignedPersonas.size}명`)
-  console.log(`   하루 판정(d10) 목표 ${day.want} · 낼 수 있음 ${day.can} · ${day.ok ? 'GO' : 'NO-GO'}`)
-  for (const r of day.reasons) console.log(`     🔴 ${r}`)
+  // 🔴 하루 시뮬레이션 판정(judgeOneDayCanary)은 지웠다 — 단계 관문은 judgeNextPreflight 하나다
 
   /** Persona 차단 사유 — 신선도를 통과한 글 기준 */
   const freshIds = new Set(plan.prepared.auto.map((c) => c.queueId))

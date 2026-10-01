@@ -9,8 +9,10 @@
  *    본문은 해시를 계산하고 분류하는 순간에만 메모리에 있고, 반환값에는 남지 않는다.
  *    본문이 필요한 순간마다 우나어 DB 를 다시 읽는다.
  *
- * 🔴 닉네임 원문을 저장하지 않는다
- *    우나어 닉네임은 3~7자라 원문을 두면 검색으로 특정된다. salt 해시만 남긴다.
+ * 🔴 닉네임 원문도 닉네임 해시도 저장하지 않는다
+ *    우나어 닉네임은 3~7자라 원문을 두면 검색으로 특정된다.
+ *    🔴 (2026-10-01 · #641) 작가 식별값을 새로 만들지 않는다. 원본 작가명이 복구 불가(우나어 CafePost 폐기)라
+ *       크롤 작가 대조(B2)를 Gate ⑥-B 에서 뺐고, 그 대조 말고는 쓰는 곳이 없다. 옛 행의 v1 값은 판정에 쓰지 않는 inert 값으로 남는다.
  *
  * 🔴 비용 0원 — 네트워크 · LLM · 난수가 없다.
  */
@@ -56,7 +58,8 @@ export type ReactionType =
 /** 🔴 DB 로 가는 한 행. 댓글 본문 · 닉네임이 없다 */
 export type CommentSignalRow = {
   ordinal: number
-  authorHash: string | null
+  /** 🔴 항상 null — 작가 식별값을 새로 만들지 않는다(머리말) */
+  authorHash: null
   contentHash: string | null
   contentLength: number
   likeCount: number
@@ -70,10 +73,6 @@ export type CommentSignalRow = {
 
 export function commentHashOf(text: string): string {
   return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`
-}
-
-export function commentAuthorHashOf(author: string, salt: string): string {
-  return `sha256:${createHash('sha256').update(`${salt}::${author}`, 'utf8').digest('hex')}`
 }
 
 // ── 반응 분류 ─────────────────────────────────────────────
@@ -150,17 +149,16 @@ function pickNumber(item: unknown, keys: readonly string[]): number {
  *    같은 입력이 매번 다른 출력을 내고 fixture 로 잠글 수 없다.
  */
 export function toCommentSignals(
-  raw: unknown, opts: { authorSalt: string; capturedAt: Date },
+  raw: unknown, opts: { capturedAt: Date },
 ): CommentSignalRow[] {
   if (!Array.isArray(raw)) return []
   const out: CommentSignalRow[] = []
   raw.forEach((item, index) => {
     const body = pick(item, ['content', 'text', 'body', 'comment'])
     if (!body) return
-    const author = pick(item, ['author', 'nickname', 'writer', 'name'])
     out.push({
       ordinal: index,
-      authorHash: author ? commentAuthorHashOf(author, opts.authorSalt) : null,
+      authorHash: null,
       contentHash: commentHashOf(body),
       contentLength: body.length,
       likeCount: pickNumber(item, ['likeCount', 'likes', 'like']),

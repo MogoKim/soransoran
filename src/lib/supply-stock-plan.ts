@@ -1,73 +1,21 @@
 /**
- * D100 공급 **재고선 · 관측 baseline** — 🔴 순수 함수. DB · 시계 · 네트워크 없음
+ * D100 공급 **관측 baseline · thin 유량 보고** — 🔴 순수 함수. DB · 시계 · 네트워크 없음
  *
- * 🔴 **이 파일은 두 가지만 한다.**
- *    ① 재고선(100/300/700)을 **보고·승격 기준**으로 정의한다.
- *    ② source 별 **관측값**을 날짜와 함께 들고 있고, 관측되지 않은 것은 `null` 로 둔다.
+ * 🔴 **이 파일은 보고용이다.** `npm run supply:d100-plan` 화면만 읽는다 — 공급 러너 · 적재기 ·
+ *    단계 판정은 이 파일을 읽지 않는다(`supply-d100-plan-check` 가 import 그래프로 잠근다).
  *
- * 🔴 **runtime 정책은 한 줄이다: 700 미만이면 수집, 700 이상이면 no-op.**
- *
- *    앞선 판은 밴드마다 `multiplier`(critical ×1.5 · full ×0.25)를 두었다.
- *    둘 다 **실행되지 않는 코드**였다 —
- *      · `full ×0.25` 는 `judgeRun` 이 700 에서 먼저 NOOP 을 내므로 도달 자체가 불가능했고,
- *      · `critical ×1.5` 는 `collectCapFor` 가 재고 687 이하 전 구간에서 상한 50 에 포화돼
- *        ×1 과 결과가 **완전히 같았다**(실측).
- *    돌지 않는 가속·감속을 코드에 두면 다음 사람이 그것을 능력으로 읽는다. 지웠다.
+ * 🔴 **지운 옛 정본 (2026-09-30 · D100 canon "one loop")** — 📜 HISTORICAL
+ *    · `STOCK_BANDS`(100/300/700) · `judgeStockBand`(700 미만 수집 · 이상 no-op) · `stockEta`(재고선 도달 일수)
+ *    정본은 완성 글 재고를 성공 기준으로 두지 않는다 — 공급 수요는 `judgeJitDemand`(다가오는 슬롯 − eligible READY)
+ *    하나가 정하고, 준비도는 `judgeNextPreflight` 하나가 본다. 700 은 이 화면에서도 더는 눈금이 아니다.
  */
 
 /**
- * 🔴 **재고선** — D100 실행 기준 (창업자 지정).
- *
- *    · `bootstrap` 100  D10·D30 초기 가동 재고
- *    · `min`       300  D100 시작 최소 안전재고
- *    · `target`    700  D100 권장 7일 재고 (100/day × 7일)
- *
- * 🔴 셋 중 **runtime 이 쓰는 것은 `target` 하나**다. 100·300 은 보고와 승격 판단에만 쓴다 —
- *    "지금 어디쯤 왔나" 를 사람이 읽기 위한 눈금이지 수집기가 보는 값이 아니다.
+ * 🔴 **D100 READY 생산 처리량** — canon 단계 표의 D100 행(공개 100 · READY 120/day)과 같은 값이다.
+ *    하루 **생산량**이지 쌓아 둘 재고량이 아니다. thin 관측과 단위가 다르다는 것을 보고할 때만 쓴다.
  */
-export const STOCK_BANDS = Object.freeze({ bootstrap: 100, min: 300, target: 700 })
-
-/** 🔴 승인 가능 글 **순증가** 목표 — 공급 능력의 정본은 Raw 수가 아니라 이것이다 */
 export const APPROVED_PER_DAY_FLOOR = 100
 export const APPROVED_PER_DAY_TARGET = 120
-
-export type StockBand = 'critical' | 'low' | 'build' | 'full'
-
-export type StockReading = {
-  band: StockBand
-  /** 🔴 runtime 이 보는 유일한 값 — `false` 면 수집하지 않는다 */
-  shouldCollect: boolean
-  reason: string
-}
-
-/** 🔴 count 가 아닌 값은 "충분하다" 로 읽지 않는다 */
-const isCount = (v: unknown): v is number =>
-  typeof v === 'number' && Number.isInteger(v) && v >= 0
-
-/**
- * 🔴 **밴드는 보고용 이름이고, 수집 여부는 `target` 한 선이 정한다.**
- *    속도 배수를 돌려주지 않는다 — 앞선 판의 배수는 어느 구간에서도 효과가 없었다.
- */
-export function judgeStockBand(usable: number): StockReading {
-  if (!isCount(usable)) {
-    return {
-      band: 'critical', shouldCollect: true,
-      reason: '재고를 세지 못했다 — 모르는 것을 "충분하다" 로 읽지 않는다',
-    }
-  }
-  if (usable >= STOCK_BANDS.target) {
-    return {
-      band: 'full', shouldCollect: false,
-      reason: `재고 ${usable} ≥ ${STOCK_BANDS.target} — 수집하지 않는다(no-op)`,
-    }
-  }
-  const band: StockBand = usable >= STOCK_BANDS.min ? 'build'
-    : usable >= STOCK_BANDS.bootstrap ? 'low' : 'critical'
-  return {
-    band, shouldCollect: true,
-    reason: `재고 ${usable} < ${STOCK_BANDS.target} — 수집한다 (보고 구간 ${band})`,
-  }
-}
 
 // ─────────────────────────────────────────────────────────
 // 🔴 source 별 관측 — **날짜 없는 수는 쓰지 않는다**
@@ -291,46 +239,6 @@ export function judgeSupplyGap(
         : `thin 은 APPROVED 의 상한이므로 **최소 ${want - thinAll}건** 모자란다`)
       + (unconfirmed.length > 0 ? ` · 유량 미확인 ${unconfirmed.length}종(합계에 넣지 않았다)` : ''),
   }
-}
-
-// ─────────────────────────────────────────────────────────
-// 🔴 재고 도달 예상
-// ─────────────────────────────────────────────────────────
-
-export type StockEta = {
-  band: keyof typeof STOCK_BANDS
-  /** 🔴 **사실이다** — 목표 재고 − 지금 재고. 관측이 필요 없다 */
-  need: number
-  /** 🔴 며칠 걸리는가. **APPROVED 순증가가 측정되기 전에는 `null`** 이다 */
-  days: number | null
-  /** days 가 왜 그 값인지 — 표에서 사실과 구분되게 적는다 */
-  note: string
-}
-
-/**
- * 재고 도달 예상 — 🔴 **APPROVED 순증가가 없으면 날짜를 내지 않는다.**
- *
- *    앞선 판은 신규 thin 수를 `netPerDay` 로 받아 "n일" 을 찍었다. 그것은
- *    **thin 1건 = APPROVED 1건** 을 가정한 값인데, 그 비율은 측정되지 않았다.
- *    주석에 "가정" 이라고 적어 두어도 표에 남는 것은 숫자이고, 읽는 사람은 숫자를 믿는다.
- *
- * 🔴 그래서 `netPerDay: null` 이면 `days: null` 이다. 남는 것은 `need` —
- *    "얼마나 모자란가" 는 사실이고, "며칠 걸리는가" 는 아직 아무도 모른다.
- * 🔴 도달 불가도 큰 수로 눌러 쓰지 않는다. "9999일" 은 숫자처럼 보이지만 "영원히" 라는 뜻이다.
- */
-export function stockEta(
-  usable: number,
-  /** 🔴 **측정된** APPROVED 순증가/day. 없으면 `null` — 추정치를 넣지 않는다 */
-  netPerDay: number | null = APPROVED_NET_PER_DAY,
-  note = '🔴 미측정 — APPROVED 순증가에 상태별 시점 스냅숏이 필요하다',
-): StockEta[] {
-  return (Object.keys(STOCK_BANDS) as (keyof typeof STOCK_BANDS)[]).map((band) => {
-    const need = Math.max(0, STOCK_BANDS[band] - usable)
-    if (need === 0) return { band, need: 0, days: 0, note: '이미 넘었다' }
-    if (netPerDay === null) return { band, need, days: null, note }
-    if (!(netPerDay > 0)) return { band, need, days: null, note: '순증가가 0 이하다 — 도달하지 못한다' }
-    return { band, need, days: Math.ceil(need / netPerDay), note }
-  })
 }
 
 // ─────────────────────────────────────────────────────────

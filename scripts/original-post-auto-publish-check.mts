@@ -317,9 +317,9 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
   const txSrc = readFileSync('src/lib/original-post-publish-tx.ts', 'utf-8')
   check('🔴 matchedAt 을 쓰는 경로가 사람 행 하나 · 자동 행 하나뿐이다',
     (runnerSrc.match(/data: \{ matchedPersonaId: persona\.id, matchedAt: RUN_AT/g) ?? []).length === 1
-    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/g) ?? []).length === 1
+    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchMeta: ps\.meta \}/g) ?? []).length === 1
     && (txSrc.match(/matchedPersonaId: persona\.id, matchedAt: txNow,/g) ?? []).length === 1
-    && !/matchedAt: RUN_AT, matchMeta: plan\.meta, caps/.test(runnerSrc)
+    && !/matchedAt: RUN_AT, matchMeta: ps\.meta, caps/.test(runnerSrc)
     && !/matchedAt: new Date\(\)/.test(runnerSrc) && !/matchedAt: new Date\(\)/.test(txSrc))
   /**
    * 🔴 조립이 `scripts/lib/publishable-stock.mts` 로 옮겨졌다(2026-09-24) —
@@ -527,11 +527,12 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
     return fields.every((f) => stockSrc.includes(f) && assign.includes(f))
   })())
   check('🔴 🔴 **러너가 그 조립을 실제로 소비한다 — 옮기고 안 쓰면 아무 뜻이 없다**',
-    /^const RUN_AT = new Date\(\)\s*$/m.test(src)
+    // 🔴 (2026-09-30 Lane B) 회차 시각은 공급 · 생성 러너와 같은 규칙(`runClockFrom`) 하나다 — 비면 벽시계
+    /^const RUN_CLOCK = runClockFrom\(process\.env\)\s*$/m.test(src) && /^const RUN_AT = RUN_CLOCK\.at\s*$/m.test(src)
     && /const stock = await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)/.test(src)
     && /stock\.personas/.test(src)
-    // 🔴 러너 전체에 시계가 하나뿐이다 — 단계마다 다른 `now` 는 경계에서 답을 가른다
-    && (src.match(/new Date\(\)/g) ?? []).length === 1)
+    // 🔴 러너 전체에 시계가 하나뿐이다 — 단계마다 다른 `now` 는 경계에서 답을 가른다(벽시계 직접 호출 0)
+    && (src.match(/new Date\(\)/g) ?? []).length === 0)
 }
 
 console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발행 대상이다 (2026-09-14)')
@@ -612,10 +613,8 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
     return /decidedBy: true,/.test(loader) && /decidedBy: r\.decidedBy,/.test(loader)
       && /loadPublishableStock\(/.test(runner)
   })())
-  check('🔴 [회귀] 예측기도 같은 게이트를 본다', (() => {
-    const planner = codeOf('scripts/persona-capacity-planner.mts')
-    return /decidedBy: true,/.test(planner) && /decidedBy: r\.decidedBy,/.test(planner)
-  })())
+  // 🔴 (2026-09-30) 14일 예측기(persona-capacity-planner)는 퇴역했다 — 같은 게이트를 볼 사본이 없다
+  check('🔴 [회귀] 퇴역한 예측기는 큐를 읽지 않는다', !/originalPostApprovalQueue|findMany/.test(codeOf('scripts/persona-capacity-planner.mts')))
 
   // ── ⑥ 🔴 자동 보충기는 founder 를 찍지 못한다 ──
   const autofill = codeOf('src/lib/micro-seed-supply-autofill.ts')

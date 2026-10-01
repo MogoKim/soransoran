@@ -25,7 +25,12 @@
  *      · DB 조회 (대조 집합을 만들지 않는다)
  *      · displayName 작명
  *      · ⑥-A 생성물 혼입 검사
- *      · authorHash 원문 복원 — 불가능하다. 해시는 일치 계열만 본다
+ *      · 크롤 작가(옛 B2) 대조 — 🔴 (2026-10-01 · #641) **뺐다.**
+ *        우나어 원본 작가명이 복구 불가로 폐기돼(CafePost 9/10) 저장된 작가 해시를 증명할 수도, 새로 만들 수도 없다.
+ *        대조할 수 없는 축을 필수 권위로 두면 판정이 영원히 "모름" 이거나, 비교 집합이 비어 거짓 PASS 가 된다.
+ *        대신 **새 단일 불변식**: 원본 작가명 · source author 를 Persona 작명 · 생성 입력에 넣지 않는다
+ *        (작명은 `persona-nickname-candidates` 의 고정 후보 생성 · 말투는 aggregate · opaque 근거만 — 검사가 잠근다).
+ *        `VoiceSource` · `VoiceCommentSignal` 의 옛 `authorHash` 값은 판정에 쓰지 않는 inert 값이다.
  */
 import { SOURCE_SPECIFIC_TERMS, SOURCE_CONTEXT_TERMS } from './voice-style-signals.mjs'
 
@@ -93,12 +98,47 @@ export function editDistance(a: string, b: string): number {
   return prev[y.length]
 }
 
+/** 한글 음절 → 초성·중성·종성 자모 (호환 자모 문자). 한글이 아니면 그대로 */
+const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'
+const JUNG = 'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ'
+const JONG = ['', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+export function jamoOf(value: string): string {
+  let out = ''
+  for (const ch of value) {
+    const c = ch.codePointAt(0)! - 0xac00
+    if (c < 0 || c > 11171) { out += ch; continue }
+    out += CHO[Math.floor(c / 588)]! + JUNG[Math.floor((c % 588) / 28)]! + JONG[c % 28]!
+  }
+  return out
+}
+
+/**
+ * 🔴 **혼동 판정 — raw 편집 거리 하나를 폐기했다** (2026-10-01 · Phase F).
+ *
+ *    앞판은 N2 음절 거리 `d ≤ 2` 면 길이와 상관없이 review 로 올렸다. 3음절 이름에서 거리 2 는
+ *    **한 음절만 같다**는 뜻이다 — 끝 음절 하나만 같은 서로 다른 3음절 이름이 늘 review 였다(운영 Persona 둘이 실제로 그렇게 막혔다).
+ *    혼동은 **얼마나 남았는가**의 문제다. 그래서 두 신호를 함께 본다(어느 하나면 혼동):
+ *
+ *      음절   d ≤ max(1, ⌊긴 쪽 길이 / 2⌋) — **절반 이상**이 같은 자리에 남는다(3음절 1 · 4~5음절 2 · 6~7음절 3)
+ *      자모   자모 거리 ≤ JAMO_CONFUSION_MAX — 음절은 둘 바뀌어도 소리·모양이 거의 같다(`물봉선`·`물방석`)
+ *
+ *    🔴 코드별 예외가 아니다. 완전 일치 · 정규화 일치 · 반복 축약 일치는 이 판정 **앞에서** 그대로 reject 다.
+ */
+export const JAMO_CONFUSION_MAX = 2
+export function nameConfusion(a: string, b: string): { confusable: boolean; distance: number; jamoDistance: number } {
+  const x = normalizeN2(a)
+  const y = normalizeN2(b)
+  const distance = editDistance(x, y)
+  const jamoDistance = editDistance(jamoOf(x), jamoOf(y))
+  const allowed = Math.max(1, Math.floor(Math.max(charLength(x), charLength(y)) / 2))
+  return { confusable: distance > 0 && (distance <= allowed || jamoDistance <= JAMO_CONFUSION_MAX), distance, jamoDistance }
+}
+
 // ── 판정 대상 · 결과 타입 ────────────────────────────────────
 
 /** 대조 대상 (설계 §3) */
 export type CollisionKind =
-  | 'B1_MEMBER'        // 실회원 표시명 — User.nickname ∪ User.name
-  | 'B2_CRAWL_AUTHOR'  // 크롤 author — 🔴 해시. 일치 계열만
+  | 'B1_MEMBER'        // 실회원 표시명 — User.nickname ∪ User.name (Persona 계정 제외)
   | 'B3_PERSONA'       // 기존 persona displayName (retired·paused 포함)
   | 'B4_SOURCE_MARKER' // 출처 커뮤니티 marker — 코드 상수
   | 'B5_OPERATOR_AI'   // 운영자 / AI 느낌
@@ -120,7 +160,7 @@ export type NameCollisionHit = {
   /** 편집 거리. 완전 일치는 0 */
   distance?: number
   /** 대조 대상의 참조 타입 — 값이 아니라 종류다 */
-  refType?: 'userId' | 'personaId' | 'authorHash' | 'authorHashNorm'
+  refType?: 'userId' | 'personaId'
   /** 🔴 코드 상수 또는 규칙 이름만. 개인 닉네임은 절대 담지 않는다 */
   term?: string
 }
@@ -146,18 +186,6 @@ export type NameCollisionSets = {
   memberNames?: readonly string[]
   /** 기존 persona displayName — 🔴 retired·paused 포함 전부 */
   personaNames?: readonly string[]
-  /** 크롤 author 원본 해시 — VoiceSource·VoiceCommentSignal */
-  authorHashes?: ReadonlySet<string>
-  /** 크롤 author N2 정규화 해시 */
-  authorHashNorms?: ReadonlySet<string>
-}
-
-export type NameCollisionOptions = {
-  /**
-   * 후보를 해시하는 함수. 🔴 호출부가 salt 를 쥔다 —
-   * 판정부가 salt 를 알면 순수 함수가 아니게 되고 fixture 가 환경에 묶인다.
-   */
-  hashOf?: (value: string) => string
 }
 
 // ── 길이 구간 (설계 §6-2) ────────────────────────────────────
@@ -263,11 +291,11 @@ function matchNames(
       continue
     }
 
-    // ── 유사도 — 🔴 짧은 이름에서는 하지 않는다 (설계 §6-2)
+    // ── 유사도 — 🔴 짧은 이름에서는 하지 않는다 (설계 §6-2) · 판정은 `nameConfusion` 하나
     const nLen = normalizedLength(name)
     if (cLen >= LENGTH_MIN_FOR_SIMILARITY && nLen >= LENGTH_MIN_FOR_SIMILARITY) {
-      const d = editDistance(normalizeN2(candidate), normalizeN2(name))
-      if (d > 0 && d <= 2) hits.push({ kind, stage: 'N2', distance: d, refType })
+      const c = nameConfusion(candidate, name)
+      if (c.confusable) hits.push({ kind, stage: 'N2', distance: c.distance, refType })
     }
 
     // ── N3 — 🔴 reject 키가 아니다. review 참고 신호로만 남긴다
@@ -277,29 +305,6 @@ function matchNames(
     if (c3 !== '' && n3 !== '' && c3 === n3) {
       hits.push({ kind, stage: 'N3', distance: 0, refType })
     }
-  }
-  return hits
-}
-
-/**
- * B2 — 크롤 author.
- * 🔴 해시는 부분 문자열도 거리도 보존하지 않는다. **일치 계열만** 본다.
- *    여기서 유사도를 하겠다고 쓰면 그것은 거짓 설계다(설계 §4-2).
- */
-function matchAuthorHashes(
-  candidate: string,
-  sets: NameCollisionSets,
-  hashOf?: (value: string) => string,
-): NameCollisionHit[] {
-  if (hashOf === undefined) return []
-  const hits: NameCollisionHit[] = []
-
-  if (sets.authorHashes !== undefined && sets.authorHashes.has(hashOf(candidate))) {
-    hits.push({ kind: 'B2_CRAWL_AUTHOR', stage: 'N0', distance: 0, refType: 'authorHash' })
-  }
-  const n2 = normalizeN2(candidate)
-  if (n2 !== '' && sets.authorHashNorms !== undefined && sets.authorHashNorms.has(hashOf(n2))) {
-    hits.push({ kind: 'B2_CRAWL_AUTHOR', stage: 'N2', distance: 0, refType: 'authorHashNorm' })
   }
   return hits
 }
@@ -320,8 +325,7 @@ function statusOfNameHit(hit: NameCollisionHit, candidateLength: number): NameCo
  */
 export function checkNameCollision(
   candidateName: string,
-  sets: NameCollisionSets = {},
-  opts: NameCollisionOptions = {},
+  sets: NameCollisionSets,
 ): NameCollisionVerdict {
   const candidate = (candidateName ?? '').trim()
   // 🔴 판정에 쓰는 길이와 같은 기준이어야 한다 — N2 정규화 후 길이다
@@ -347,7 +351,6 @@ export function checkNameCollision(
   const nameHits: NameCollisionHit[] = [
     ...matchNames(candidate, sets.personaNames ?? [], 'B3_PERSONA', 'personaId'),
     ...matchNames(candidate, sets.memberNames ?? [], 'B1_MEMBER', 'userId'),
-    ...matchAuthorHashes(candidate, sets, opts.hashOf),
   ]
 
   const hits = [...ruleHits, ...nameHits]
@@ -392,7 +395,7 @@ export function summarizeForAdmin(verdict: NameCollisionVerdict): {
   minDistance: number | null
 } {
   const counts = {
-    B1_MEMBER: 0, B2_CRAWL_AUTHOR: 0, B3_PERSONA: 0,
+    B1_MEMBER: 0, B3_PERSONA: 0,
     B4_SOURCE_MARKER: 0, B5_OPERATOR_AI: 0, B6_IDENTIFYING: 0,
   } satisfies Record<CollisionKind, number>
   const stages = { N0: 0, N1: 0, N2: 0, N3: 0 } satisfies Record<NormalizeStage, number>
@@ -411,5 +414,7 @@ export function summarizeForAdmin(verdict: NameCollisionVerdict): {
 export const NAME_COLLISION_THRESHOLDS = {
   minLengthForSimilarity: LENGTH_MIN_FOR_SIMILARITY,
   strictRejectFromLength: LENGTH_STRICT_FROM,
-  maxReviewDistance: 2,
+  /** 🔴 음절 거리 상한은 길이 비례다 — `nameConfusion` */
+  syllableDistanceRatio: 1 / 2,
+  jamoConfusionMax: JAMO_CONFUSION_MAX,
 } as const

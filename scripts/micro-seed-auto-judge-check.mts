@@ -32,7 +32,8 @@ const okSem = (o: Partial<SemanticVerdict> = {}): SemanticVerdict => ({
 const oc = (v: SemanticVerdict | null, status: SemanticOutcome['status'] = v === null ? 'timeout' : 'ok'): SemanticOutcome =>
   ({ verdict: v, status, attemptCount: 1, providerErrorCode: null, model: 'claude-haiku-4.5' })
 const j = (o: Partial<JudgeInput> = {}, sem: SemanticVerdict | null = okSem()) => judgeOne({
-  sourceArticleId: '4234470', axis: SEED_AXIS, access: 'ok', lane: 'microSeedQuestion',
+  // 🔴 (P0-B) 상세 행은 원천 사이트를 싣는다 — 판정 기록도 그 사이트를 옮겨 적는다
+  sourceSite: 'navercafe:wgang', sourceArticleId: '4234470', axis: SEED_AXIS, access: 'ok', lane: 'microSeedQuestion',
   assetAxes: '', safetyVerdict: 'pass', safetyReasons: '', bodyLength: 816, qualityFlags: [],
   title: '당근에서 집안일 도와주실 분', bodyHead: '가'.repeat(120), commentCount: 10, ...o,
 }, NOW, oc(sem))
@@ -58,6 +59,8 @@ console.log('\n① 🔴 사람 판정을 사칭하지 않는다')
   // 🔴 기록 직전 관문
   const row = j() as unknown as Record<string, unknown>
   check('🟢 온전한 판정은 통과', violatesProvenance(row).length === 0)
+  check('🔴 🔴 **(P0-B) 원천 사이트 없는 판정 기록은 쓰지 않는다**',
+    violatesProvenance({ ...row, sourceSite: '' }).some((x) => x.includes('sourceSite')) && row.sourceSite === 'navercafe:wgang')
   for (const d of HUMAN_DECISIONS) {
     check(`🔴 decision=${d} 를 쓰면 잡는다`,
       violatesProvenance({ ...row, decision: d }).some((m) => m.includes('사칭') || m.includes('AUTO_')))

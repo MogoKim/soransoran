@@ -33,6 +33,7 @@ import {
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticHoldsOf,
 } from '../src/lib/micro-seed-supply-autofill'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -56,9 +57,8 @@ const gateWith = (sr: unknown, holds: string[] = []): Record<string, unknown> =>
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
   },
 })
-const CAP = new Date('2026-09-24T11:30:00Z')
 const elig = (gate: unknown, title = '평범한 하루 이야기', body = '아침에 산책을 다녀왔어요. 다들 어떻게 지내세요?') =>
-  eligibilityOf({ gateVerdict: 'PASS', gateResults: gate, title, body, sourceCapturedAt: CAP })
+  eligibilityOf({ gateVerdict: 'PASS', gateResults: gate, title, body })
 
 console.log('\n① 🔴 semanticReview 는 fail-closed 다 — "객체이기만 하면 통과" 가 아니다')
 {
@@ -137,7 +137,7 @@ console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지'
     },
     editDiff: null, declineReason: null,
     rawSourceSite: `${MACHINE_SITE_PREFIX}navercafe:x`, rawSourceArticleId: `${base}-deadbeef`,
-    sourceCapturedAt: CAP, matchedPersonaCode: null, ...o,
+    matchedPersonaCode: null, ...o,
   })
   const idx = (arts: ArtifactDoc[], cands: CandidateDoc[]) => ({
     a: new Map([[ART, arts]]), c: new Map([[ART, cands]]),
@@ -359,6 +359,22 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
   check('🔴 🔴 **열림 + 유효한 도장이어도 같은 판 다른 digest → QUALITY_CONTRACT_MISMATCH** (자동 발행 0)',
     codeOf(mk({ gateResults: oldGate('otherDigest') }), true) === 'QUALITY_CONTRACT_MISMATCH',
     String(codeOf(mk({ gateResults: oldGate('otherDigest') }), true)))
+  /**
+   * 🔴 (quality-v5 · 2026-10-01) **실제 v4 표식** 그대로 — v4 로 도장 찍힌 운영 READY 는 v5 에서 자동 발행되지 않는다.
+   *    구제 · 일괄 변환 경로가 없다: 표식을 지금 계약으로 바꾸는 코드는 도장(`stampRowInTx`) 하나뿐이고 지금 계약 행에만 찍는다.
+   */
+  const V4_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
+  check('🔴 🔴 **실제 v4 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
+    codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V4_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
+    && QUALITY_CONTRACT_VERSION === 'quality-v6' && currentQualityContract().digest !== V4_MARK.digest)
+  /**
+   * 🔴 (quality-v6 · 2026-10-01) **실제 v5 표식**도 같다 — 만남 게이트 전에 도장 찍힌 READY 는 v6 에서 자동 발행되지 않는다(구제 없음).
+   */
+  const V5_MARK = { version: 'quality-v5', digest: '61716a4df9e09d5e42d58e9066d4336cd8c733fd63035ef32b93539190a4efc9' }
+  check('🔴 🔴 **실제 v5 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
+    codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V5_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
+    && currentQualityContract().digest !== V5_MARK.digest)
+  check('🔴 새 계약(v6) 표식 READY 만 대상', codeOf(mk(), true) === 'TARGET')
   check('🔴 🔴 **옛 판 · 표식 없음(legacy)도 같다**',
     codeOf(mk({ gateResults: oldGate('otherVersion') }), true) === 'QUALITY_CONTRACT_MISMATCH'
     && codeOf(mk({ gateResults: oldGate('none') }), true) === 'QUALITY_CONTRACT_MISMATCH')
@@ -377,18 +393,18 @@ console.log('\n⑥ 🔴 열림 · 스위치 · 감사')
   check('🔴 🔴 **스위치 기본 OFF**', !autoReadyEnabled({}) && !autoReadyEnabled({ [AUTO_READY_ENV]: '' })
     && !autoReadyEnabled({ [AUTO_READY_ENV]: 'true' }) && !autoReadyEnabled({ [AUTO_READY_ENV]: '1' })
     && autoReadyEnabled({ [AUTO_READY_ENV]: 'on' }))
-  check('기준선 — 넷 다 참이면 열림', judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 스위치가 꺼져 있으면 닫힘', !judgeOpen({ enabled: false, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **증거 미달이면 닫힘**', !judgeOpen({ enabled: true, evidence: { meetsContract: false, reasons: ['8/30'] }, confirmedDefects: 0, missingAutoPosts: 0 }).open)
-  check('🔴 🔴 **확정 결함 하나면 닫힘 — 다음 회차를 멈춘다**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 1, missingAutoPosts: 0 }).open)
+  check('기준선 — 넷 다 참이면 열림', judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 스위치가 꺼져 있으면 닫힘', !judgeOpen({ enabled: false, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **증거 미달이면 닫힘**', !judgeOpen({ enabled: true, evidence: { meetsContract: false, reasons: ['8/30'] }, unresolvedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **확정 결함 하나면 닫힘 — 다음 회차를 멈춘다**', !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 1, missingAutoPosts: 0 }).open)
   check('🔴 결함 수를 못 읽으면(음수·NaN) 닫힘',
-    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: Number.NaN, missingAutoPosts: 0 }).open
-    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: -1, missingAutoPosts: 0 }).open)
+    !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: Number.NaN, missingAutoPosts: 0 }).open
+    && !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: -1, missingAutoPosts: 0 }).open)
   check('🔴 🔴 **글이 사라진 자동 발행이 하나면 닫힘 — 감사로 뽑히지 않았어도**',
-    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 1 }).open)
+    !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: 1 }).open)
   check('🔴 글 유실 수를 못 읽으면(음수·NaN) 닫힘',
-    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: Number.NaN }).open
-    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: -1 }).open)
+    !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: Number.NaN }).open
+    && !judgeOpen({ enabled: true, evidence: ev, unresolvedDefects: 0, missingAutoPosts: -1 }).open)
   check('🔴 🔴 **감사 대기는 열림 판정의 입력이 아니다 — 매 회차 사람 허가가 아니다**',
     !/pending|대기/.test(codeOnly('src/lib/auto-ready-v2.ts').split('export function judgeOpen')[1]?.split('export function auditTarget')[0] ?? 'x'))
   let exact = true
@@ -470,7 +486,7 @@ console.log('\n⑨ 🔴 열림은 호출자가 정하지 않는다 — 쓰기 �
     /const gate = await authoritativeGate\(tx, i\.env\)/.test(recheck))
   const gate = repo.split('export async function authoritativeGate(')[1]?.split('export type StampOutcome')[0] ?? ''
   check('🔴 🔴 **게이트가 증거를 DB 에서 직접 읽는다 (정본 cohortSampleOf)**',
-    /evidenceFromDb\(db\)/.test(gate) && /confirmedDefectCount\(db\)/.test(gate)
+    /evidenceFromDb\(db\)/.test(gate) && /unresolvedDefectCount\(db\)/.test(gate)
     && /return cohortSampleOf\(eligible\)/.test(repo))
   check('🔴 OpenState 를 받는 쓰기 함수가 없다',
     !/open: OpenState/.test(repo) && !/i\.open\b/.test(repo))
@@ -496,7 +512,7 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   const runner = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
     /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
-    && /autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/.test(runner)
+    && /autoAssign = \{ personaId: persona\.id, matchMeta: ps\.meta \}/.test(runner)
     && /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned, unattended: TRIGGER === 'local' \|\| TRIGGER === 'schedule' \},/.test(runner)
     && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
   check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',
@@ -657,7 +673,7 @@ console.log('\n⑮ 🔴 🔴 감사 대상 유실은 대기가 아니라 무결�
   const runnerSrc = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **열림 판정이 글 유실을 직접 센다 — 감사 선정과 무관하게 닫는다**',
     /const missingAutoPosts = await missingAutoPostCount\(db\)/.test(repo)
-    && /return judgeOpen\(\{ enabled, evidence, confirmedDefects, missingAutoPosts \}\)/.test(repo)
+    && /return judgeOpen\(\{ enabled, evidence, unresolvedDefects, missingAutoPosts \}\)/.test(repo)
     && !/createdPost: \{ is: null \}/.test(repo))
   check('🔴 🔴 **러너는 missingPost 를 로그로만 흘리지 않는다 — 회차를 실패로 끝낸다**',
     /if \(au\.kind === 'ok' && au\.missingPost\.length > 0\) \{\s*auditIntegrityOk = false/.test(runnerSrc)
@@ -688,23 +704,27 @@ console.log('\n⑰ 🔴 🔴 도장 회차는 bounded Serializable batch — 묶
 console.log('\n⑱ 🔴 🔴 공개 단계 천장 — 호출자 단계는 env 천장을 넘지 못한다')
 {
   const T = new Date('2026-09-25T03:00:00Z')
-  const E = (rel?: string, cap?: string): Record<string, string> => ({
+  // 🔴 결정이 넣은 env 를 흉내 낸다(표식 포함) — 표식 없는 손 env 는 아래에서 따로 본다(Lane A)
+  const E = (rel?: string, cap?: string): Record<string, string> => (rel === undefined && cap === undefined ? {} : markedStageEnv({
     ...(rel === undefined ? {} : { SORAN_RELEASE_STAGE: rel }), ...(cap === undefined ? {} : { SORAN_CAPACITY_STAGE: cap }),
-  })
+  }))
+  check('🔴 🔴 **표식 없는 손 env(release d10 · capacity d10) → 천장 d1 — 트랜잭션도 결정만 믿는다**',
+    releaseStageCeiling({ SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' }, T) === 'd1'
+    && boundedReleaseStage('d10', { SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' }, T) === 'd1')
   check('🔴 설정 없음 → d1', releaseStageCeiling({}, T) === 'd1')
   check('🔴 🔴 **release d10 · capacity d3 → d3 (capacity 가 천장)**', releaseStageCeiling(E('d10', 'd3'), T) === 'd3')
   check('release d5 · capacity d10 → d5', releaseStageCeiling(E('d5', 'd10'), T) === 'd5')
   check('🔴 모르는 값 → d1', releaseStageCeiling(E('d999', 'd10'), T) === 'd1')
-  check('🔴 🔴 **기간 허가(오늘 유효)는 release 위로 올리되 capacity 는 못 넘는다**',
-    releaseStageCeiling({ ...E('d1', 'd5'), SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd3'
-    && releaseStageCeiling({ ...E('d1', 'd3'), SORAN_RELEASE_WINDOW_STAGE: 'd5', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd3')
+  check('🔴 🔴 **(2026-09-30) 기간 · 시험 허가 env 는 천장을 올리지 않는다 — 단계 입력은 결정 하나**',
+    releaseStageCeiling({ ...E('d1', 'd5'), SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd1'
+    && releaseStageCeiling({ ...E('d1', 'd3'), SORAN_RELEASE_CANARY_STAGE: 'd3', SORAN_RELEASE_CANARY_DATE: '2026-09-25' }, T) === 'd1')
   check('🔴 🔴 **호출자 d10 · env 천장 d1 → d1**', boundedReleaseStage('d10', {}, T) === 'd1')
   check('호출자 d3 · env 천장 d10 → d3 (낮추는 것은 받는다)', boundedReleaseStage('d3', E('d10', 'd10'), T) === 'd3')
   check('🔴 호출자 값이 없거나 모르면 가장 안전한 d1', boundedReleaseStage(undefined, E('d10', 'd10'), T) === 'd1'
     && boundedReleaseStage(1e9, E('d10', 'd10'), T) === 'd1')
   const envs = [E(), E('d10', 'd3'), E('d5', 'd10'), E('d3', 'd3'), E('d10', 'd10'), E('x', 'd5')]
   check('🔴 🔴 **정본 resolveScale 이 낸 단계는 언제나 천장 이하다**',
-    envs.every((e) => { const r = resolveScale(e, {}).releaseStage; return boundedReleaseStage(r, e, T) === r }))
+    envs.every((e) => { const r = resolveScale(e).releaseStage; return boundedReleaseStage(r, e, T) === r }))
 }
 
 console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안 슬롯 재계산 (2026-09-26 마스터 P0)')
@@ -746,9 +766,13 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
   check('🔴 manual-live 는 사람이 부르는 publish-live 만 쓴다', /mode: \{ kind: 'manual-live', dailyCap: RELEASE_DAILY_CAP \}/.test(live))
   check('🔴 🔴 **운영 호출자는 시계를 주입하지 않는다 — 두 호출 모두 인자 둘**',
     [runner, live].every((c) => { const m = c.match(/publishOriginalPostTx\(prisma, \{[\s\S]*?\}\)/); return m !== null && !/\}, \{ now/.test(m[0]) }))
-  check('🔴 🔴 **직렬화 충돌은 한 번만 재시도 — 재시도도 처음부터 다시 센다 · 두 번째 충돌은 실패**',
-    (tx.match(/await publishAttempt\(prisma, input, deps\)/g) ?? []).length === 2
-    && /if \(second\.kind === 'conflict'\) \{\s*return \{ kind: 'error'/.test(tx))
+  // 🔴 (2026-10-01) 두 번째 충돌 뒤엔 write 없는 다시 읽기 하나 — 소비 증거(SLOT_CONSUMED · TARGET_RACE_LOST)만 정상 무발행
+  check('🔴 🔴 **직렬화 충돌은 한 번만 재시도 — 재시도도 처음부터 다시 센다 · 두 번째 충돌 뒤엔 write 없는 다시 읽기 · 소비 증거 아니면 실패**',
+    (tx.match(/await publishAttempt\(prisma, input, deps, (1|2)\)/g) ?? []).length === 2
+    && (tx.match(/await publishAttempt\(prisma, input, deps, 'recheck'\)/g) ?? []).length === 1
+    && /if \(second\.kind !== 'conflict'\) return second\s*const recheck = await publishAttempt/.test(tx)
+    && /const CONSUMED_AFTER_CONFLICT = \['SLOT_CONSUMED', 'TARGET_RACE_LOST'\] as const/.test(tx)
+    && /return \{\s*kind: 'error',\s*message: `다른 발행과 두 번 연속 부딪혔고/.test(tx))
   check('🔴 슬롯 소비 기록 시각도 트랜잭션 시계 — ActivityLog.createdAt = txNow', /publishedAt: txNow,[\s\S]{0,400}createdAt: txNow,/.test(tx))
 }
 

@@ -5,7 +5,8 @@
  *    공개 발행량을 3배로 올리는 결정은 그렇게 내리면 안 된다 —
  *    하나라도 미달이면 **한 줄로 NOT_READY** 라고 말해야 한다.
  *
- * 🔴 이 판정은 **승격하지 않는다.** 승격은 사람이 `.env.local` 을 바꾸는 별도 행위다.
+ * 🔴 이 판정은 **승격하지 않는다.** 단계 전환은 stage-controller 가 StageDecision 한 행으로만 한다 —
+ *    사람이 env·workflow 로 단계를 바꾸는 경로는 없다(📜 옛 `.env.local` 승격 절차는 폐기).
  */
 
 export type WaveCInput = {
@@ -96,7 +97,6 @@ export function judgeWaveC(input: WaveCInput): WaveCVerdict {
 
 /** 🔴 공개 d3 의 슬롯. 지금 d1 은 1개다 */
 export const D3_PUBLIC_SLOTS = 3
-export const RELEASE_ENV_KEY = 'SORAN_RELEASE_STAGE'
 
 export type PromotionPlan = {
   /** 사람이 그대로 따라 할 수 있는 단계 */
@@ -115,15 +115,12 @@ export function planPromotion(input: { from: string; to: string }): PromotionPla
   return {
     steps: [
       `① 준비도 재확인 — npm run wave-c:readiness (🔴 NOT_READY 면 여기서 멈춘다)`,
-      `② 공개 발행 workflow 슬롯을 ${D3_PUBLIC_SLOTS}개로 올린다 (창업자 승인 필요 · GitHub 설정)`,
-      `③ .env.local 의 ${RELEASE_ENV_KEY} 를 ${input.from} → ${input.to} 로 바꾼다 (대상 key 만)`,
-      `④ npm run supply:health -- --json 으로 releaseStage=${input.to} · dailyCap 반영을 확인한다`,
-      `⑤ 첫 회차 발행 전후로 아래 검증을 돌린다`,
+      `② 단계 전환(${input.from} → ${input.to})은 stage-controller 가 StageDecision 으로 한다 — 사람은 env·workflow 를 바꾸지 않는다`,
+      `③ npm run stage:controller (dry-run) 으로 그날 결정·preflight 를 확인만 한다`,
+      `④ 첫 회차 발행 전후로 아래 검증을 돌린다`,
     ],
     rollback: [
-      `🔴 ${RELEASE_ENV_KEY} 를 ${input.from} 로 되돌린다 — env 한 줄이면 끝난다`,
-      `🔴 workflow 슬롯을 1개로 되돌린다`,
-      `🔴 되돌린 뒤 supply:health 로 releaseStage=${input.from} · dailyCap 1 을 확인한다`,
+      `🔴 STAGE_CONTROLLER_ENABLED off(npm run stage:switch -- --off) 이면 consumer 가 d1 로 돈다`,
       `🔴 이미 나간 글은 되돌리지 않는다 — 발행 취소는 회원이 본 것을 지우는 일이다`,
     ],
     verify: [

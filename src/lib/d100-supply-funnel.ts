@@ -402,7 +402,7 @@ export type WorksetFileRead = {
 export function worksetEvidenceOf(
   files: readonly WorksetFileRead[],
   read: (raw: unknown, expectRunId: string) => (
-    | { ok: true; sourceIds: ReadonlySet<string>; limit: number; takenAtMs: number }
+    | { ok: true; count: number; limit: number; takenAtMs: number }
     | { ok: false; code: string; reason: string }
   ),
 ): WorksetEvidence {
@@ -415,7 +415,7 @@ export function worksetEvidenceOf(
     const r = read(f.json, f.runId)
     if (!r.ok) { out.broken.push({ file: f.file, code: r.code, reason: r.reason }); continue }
     out.ok += 1
-    out.sourceIds += r.sourceIds.size
+    out.sourceIds += r.count
     if (out.lastTakenAtMs === null || r.takenAtMs > out.lastTakenAtMs) out.lastTakenAtMs = r.takenAtMs
   }
   return out

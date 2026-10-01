@@ -5,12 +5,12 @@
  *   DB 0 · 네트워크 0 · 유료 호출 0 · 운영 env 0. 파일 write 는 OS 임시 디렉터리의 가짜 env 하나(롤백 확인)뿐이다.
  *
  *   ① 단계 목록 · 목표 — 러너 단계 d1~d50 · d100 은 표현만 · 목표는 창업자 계획(`d100Plan`)과 같다
- *   ② 승인 천장 — d20·d30·d50 을 읽고 d100 은 러너 천장 d50 으로 묶는다 · 지금 운영값 d10 은 그대로
+ *   ② (2026-09-30) 승인 천장 env 는 없다 — 러너 단계 해석만 남는다(d100 은 러너 밖)
  *   ③ 슬롯 · 러너 — 08:00~22:00 · heartbeat 격자 · 60분 안 댓글 3회(43회 · 간격 ≤20분) · 하루 시뮬레이션
- *   ④ preflight — 재고 · Persona canary 하한(지속 목표로 막지 않는다) · 비용 상한(공급 $0.50 · 댓글 $0.20 · 감사 $0.30)
+ *   ④ preflight(D3~D100 한 함수) — slot-valid 기회 · 처리량 · 지연 · 계약 유효 Persona canary 하한 · 비용 상한 · 러너
  *   ⑤ 상태 기계 — **운영 `decideStage` 를 여러 날 돌린다**(저장 계약 · 증거 판정 · consumer 까지 한 줄로)
- *   ⑥ 러너 연결 — consumer env → `resolveScale` · catch-up · 증명일 · 발행 천장
- *   ⑦ 롤백 — `stage:switch --off` → consumer legacy(아무것도 넣지 않는다)
+ *   ⑥ 러너 연결 — consumer env(결정 그대로 · canary 없음) → `resolveScale` · catch-up · 증명일 · 발행 천장
+ *   ⑦ 롤백 — `stage:switch --off` → consumer 는 d1 을 명시해서 넣는다(옛 env/canary 단계로 돌아가지 않는다)
  *   ⑧ 증거 본체 — d1~d10 두 입구 동일 · 사람 물량 0건 · REPROVE 증명일
  *
  * 🔴 러너 사실(격자 · 댓글 예약표 · 회차 상한)은 **정본 템플릿에서 읽는다**(`RUNNER_GRID`).
@@ -18,27 +18,28 @@
  *    감사 $0.005 · 공급 READY 1건당 $0.008(가정 — 장부 실측 전). 🔴 운영 단가는 controller 가 전날 장부에서 읽는다.
  */
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  GENERIC_STAGES, genericNextStage, genericDailyTarget, resolveCeiling, HIGHEST_RUNTIME_STAGE,
+  GENERIC_STAGES, genericNextStage, genericDailyTarget, HIGHEST_RUNTIME_STAGE,
   validPublishMinutes, publishCapacityOf, deriveSlots, genericProfileOf, verifyGenericProfile, commentCoverageOf,
-  judgeNextPreflight, needsExtendedGate, extendedTrialBlocks, firstSlotOn,
+  judgeNextPreflight, trialBlocks, firstSlotOn,
   type PreflightFacts, type GenericStage, type PreflightVerdict, type PreflightCode,
 } from '../src/lib/stage-ladder-generic'
 import {
-  PROFILES, RELEASE_STAGES, RUNTIME_STAGES, RUNTIME_PROFILES, resolveStage, resolveRuntimeStage, minuteOfDay, profileOf,
+  PROFILES, RELEASE_STAGES, RUNTIME_STAGES, RUNTIME_PROFILES, resolveRuntimeStage, minuteOfDay, profileOf,
   stageRank, isRuntimeStage, CAPACITY_ENV, RELEASE_ENV,
-  type RuntimeStage, type StageVerdict,
+  type RuntimeStage,
 } from '../src/lib/scale-profile'
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, simulateDay } from '../src/lib/publish-slot-catchup'
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import {
-  d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf, judgePromotion, dailyTargetOf, stableObservationDaysOf,
+  d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf, READY_NET_MARGIN,
 } from '../src/lib/d100-capacity'
+import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
 import {
   judgeStageEvidence, judgeEvidenceForTarget, trialPlanOf, PROOF_STATES,
@@ -52,9 +53,7 @@ import {
 import {
   decideStage, consumerEnvOf, validateForToday, type HealthSignal, type ControllerResult,
 } from '../src/lib/stage-controller'
-import type { DatedCanary } from '../src/lib/stage-ladder'
-import type { CanaryVerdict } from '../src/lib/release-canary'
-import { CANARY_STAGE_ENV, CANARY_DATE_ENV } from '../src/lib/release-canary'
+import { preparedStageOf } from '../src/lib/stage-ladder'
 import { resolveScale, boundedReleaseStage } from '../src/lib/scale-runtime'
 import { proofDayOf, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 import { CONTROLLER_ENV, controllerEnabled } from '../src/lib/stage-decision-store'
@@ -62,6 +61,7 @@ import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { settledUnitUsd, settledTotalUsd, cappedBy } from './lib/stage-preflight-facts.mjs'
 import { COMMENT_RUNNER_SLOTS, COMMENT_RUNNER_MAX_GAP_MINUTES } from './lib/persona-comment-runner-template'
 import { readEnvKeys } from './lib/ops-signals.mjs'
+import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -105,21 +105,14 @@ check('다음 칸(저장 계약 정본) d10 → d20 · d30 → d50 · d50 → �
 check('표현 사다리 d50 → d100 · d100 → 없음', genericNextStage('d50') === 'd100' && genericNextStage('d100') === null)
 
 // ─────────────────────────────────────────────────────────
-section('② 승인 천장 — fail-closed · 지금 운영값 불변')
-const c10 = resolveCeiling('d10')
-check('🔴 지금 운영값 d10 → 승인 d10 · 열 수 있는 천장 d10', c10.authorized === 'd10' && c10.operable === 'd10' && c10.fallbackReason === null)
-for (const s of ['d20', 'd30', 'd50'] as const) {
-  const r = resolveCeiling(s)
-  check(`천장 ${s} → 승인 ${s} · 열 수 있는 ${s}`, r.authorized === s && r.operable === s)
-}
-const c100 = resolveCeiling('d100')
-check('🔴 천장 d100 → 승인 d100 · 열 수 있는 천장은 러너 상한 d50 (d1 로 떨어지지 않는다)', c100.authorized === 'd100' && c100.operable === 'd50')
-for (const raw of ['', 'd200', 'D20', ' d7 ', 'd100x', 'd40']) {
-  const r = resolveCeiling(raw)
-  check(`모르는 천장 "${raw}" → d1 (fail-closed)`, r.authorized === 'd1' && r.operable === 'd1' && r.fallbackReason !== null)
-}
+section('② 🔴 승인 천장 env 없음 — 러너 단계 해석만')
 check('러너 env 해석 — d20 은 d20 · d100 은 러너 밖이라 d1', resolveRuntimeStage('d20').stage === 'd20' && resolveRuntimeStage('d100').stage === 'd1')
-check('🔴 보고용 resolveStage(d1~d10)는 그대로다 — d20 을 모르는 값으로 본다(D100 용량표 불변)', resolveStage('d20').stage === 'd1')
+check('🔴 🔴 **천장 해석(resolveCeiling) · D20 전용 관문(needsExtendedGate) 이 없다 — D3~D100 한 관문**', (() => {
+  const src = readFileSync('src/lib/stage-ladder-generic.ts', 'utf-8')
+  return !/export function resolveCeiling|export function needsExtendedGate|export function extendedTrialBlocks/.test(src)
+    && /export function trialBlocks/.test(src)
+})())
+check('capacity 칸 = 다음 증명 단계 — d10 → d20 · d50 → d50(맨 위)', preparedStageOf('d10') === 'd20' && preparedStageOf('d50') === 'd50')
 
 // ─────────────────────────────────────────────────────────
 section('③ 슬롯 · 러너 — 08:00~22:00 · 격자 · 첫 댓글')
@@ -169,15 +162,22 @@ check('반례 — 격자 밖 분(09:35)은 계약 위반', verifyGenericProfile(
 check('반례 — 목표 0 · 101 · 소수는 만들지 않는다', !deriveSlots(0, GRID).ok && !deriveSlots(101, GRID).ok && !deriveSlots(2.5, GRID).ok)
 
 // ─────────────────────────────────────────────────────────
-section('④ preflight — 재고 · Persona canary 하한 · 비용 상한')
+section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 유효 Persona · 비용 상한 · 러너')
+/**
+ * 🔴 경계값 fixture — 각 칸이 그 단계를 **딱** 채운다(기회 = 목표 · 수율 = 필요량을 겨우 채움 · Persona = canary 하한).
+ *    넉넉한 값으로 PASS 를 만들면 경계 반례가 헛돈다.
+ */
+const yieldFor = (s: GenericStage): number =>
+  Math.ceil(genericDailyTarget(s) * READY_NET_MARGIN) / (SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY)
 const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFacts => ({
-  readyAutoStock: genericDailyTarget(s), activePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
+  slotValidOpportunities: genericDailyTarget(s), readyPerSource: yieldFor(s), latencyP50H: 20, latencyP90H: 60,
+  contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
   commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
   auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
-  supplyUsdPerReady: SUPPLY_USD_PER_READY, supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, ...o,
+  supplyUsdPerReady: SUPPLY_USD_PER_READY, supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
 })
 check('비용 상한 정본 — 공급 $0.50 · 댓글 $0.20', SUPPLY_DAILY_USD_APPROVED === 0.5 && COMMENT_LOOP_DAILY_USD_MAX === 0.2)
-for (const s of ['d20', 'd30', 'd50'] as const) {
+for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
   const v = judgeNextPreflight(s, factsFor(s), GRID)
   check(`${s} preflight PASS — 댓글 ${v.counts.firstComments}건 · 감사 ${v.counts.auditExpected}건 · READY ${v.counts.readyNeeded}건 비용 상한 안`,
     v.verdict === 'PASS', `${v.verdict} [${v.codes.join(',')}]`)
@@ -187,7 +187,7 @@ for (const s of ['d20', 'd30', 'd50'] as const) {
   check('🔴 canary 하한(d20 40명)이면 연다 — 지속 목표(60명)로 막지 않는다',
     PERSONA_CANARY_FLOOR.d20 === 40 && PERSONA_SUSTAINED_TARGET.d20 === 60 && s20.verdict === 'PASS' && s20.counts.personaFloor === 40)
   check('Persona canary 하한 미달(39) → FAIL PERSONA_SHORT',
-    judgeNextPreflight('d20', factsFor('d20', { activePersonas: 39 }), GRID).codes.includes('PERSONA_SHORT'))
+    judgeNextPreflight('d20', factsFor('d20', { contractValidPersonas: 39 }), GRID).codes.includes('PERSONA_SHORT'))
 }
 const pf100 = judgeNextPreflight('d100', factsFor('d100'), GRID)
 console.log(`   d100: ${pf100.verdict} [${pf100.codes.join(',')}] · 댓글 감당 ${pf100.counts.commentAffordable}건/day`)
@@ -195,9 +195,16 @@ check('🔴 [blocker 실측] d100 — 댓글 $0.20 로 첫 댓글 100건 불가 
   pf100.verdict === 'FAIL' && pf100.codes.includes('COMMENT_COST_SHORT') && pf100.codes.includes('PUBLISH_CAPACITY_SHORT')
   && pf100.codes.includes('SLOTS_INFEASIBLE') && pf100.codes.includes('SUPPLY_COST_SHORT'))
 const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want: 'FAIL' | 'UNKNOWN'; code: PreflightCode }[] = [
-  { name: '재고 19 < 20', s: 'd20', o: { readyAutoStock: 19 }, want: 'FAIL', code: 'STOCK_SHORT' },
-  { name: '재고 모름', s: 'd20', o: { readyAutoStock: null }, want: 'UNKNOWN', code: 'STOCK_UNKNOWN' },
-  { name: 'Persona 모름', s: 'd20', o: { activePersonas: null }, want: 'UNKNOWN', code: 'PERSONA_UNKNOWN' },
+  { name: 'slot-valid 기회 19 < 20', s: 'd20', o: { slotValidOpportunities: 19 }, want: 'FAIL', code: 'OPPORTUNITY_SHORT' },
+  { name: '기회 모름', s: 'd20', o: { slotValidOpportunities: null }, want: 'UNKNOWN', code: 'OPPORTUNITY_UNKNOWN' },
+  { name: 'D3 도 같은 관문 — 기회 2 < 3', s: 'd3', o: { slotValidOpportunities: 2 }, want: 'FAIL', code: 'OPPORTUNITY_SHORT' },
+  { name: '수율이 필요량 아래(처리량 부족)', s: 'd20', o: { readyPerSource: yieldFor('d20') * 0.9 }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
+  { name: '수율 모름', s: 'd20', o: { readyPerSource: null }, want: 'UNKNOWN', code: 'THROUGHPUT_UNKNOWN' },
+  { name: '지연 미관측', s: 'd5', o: { latencyP90H: null }, want: 'UNKNOWN', code: 'LATENCY_UNKNOWN' },
+  { name: '🔴 계약 유효 Persona 모름(읽기 실패)', s: 'd3', o: { contractValidPersonas: null }, want: 'UNKNOWN', code: 'PERSONA_UNKNOWN' },
+  { name: '🔴 계약 유효 Persona 0 < D3 하한 24 (2026-09-30 운영 실측) — D1→D3 부터 막힌다', s: 'd3', o: { contractValidPersonas: 0 }, want: 'FAIL', code: 'PERSONA_SHORT' },
+  { name: '러너 최근 회차 실패', s: 'd5', o: { runnerHealth: 'bad' }, want: 'FAIL', code: 'RUNNER_BAD' },
+  { name: '러너 모름', s: 'd5', o: { runnerHealth: null }, want: 'UNKNOWN', code: 'RUNNER_UNKNOWN' },
   { name: '댓글 단가 모름', s: 'd20', o: { commentUsdPerRequest: null }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
   { name: '댓글 단가 0 은 모름', s: 'd20', o: { commentUsdPerRequest: 0 }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
   { name: '댓글 상한 모름', s: 'd20', o: { commentDailyUsdCap: null }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
@@ -233,7 +240,6 @@ type DayMode = 'perfect' | 'human' | 'mixed' | 'manualRun' | 'late' | 'dup' | 'a
 const OK_SIGNALS: HealthSignal[] = [
   { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'ok', reasons: [] }, { axis: 'errors', health: 'ok', reasons: [] },
 ]
-const ALL_READY: StageVerdict[] = RUNTIME_STAGES.map((stage) => ({ stage, ready: true, reasons: [] }))
 
 /** 🔴 그날 실제로 일어난 일 — 결정의 공개 단계 슬롯에 글이 나가고 댓글 러너 예약표대로 첫 댓글이 붙는다 */
 function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null {
@@ -247,7 +253,7 @@ function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null 
     return {
       postId: `p-${d.kstDate}-${i}`, queueId: `q-${d.kstDate}-${i}`, publishedAtMs: t,
       unattended: mode !== 'manualRun', queueRows: 1, publishLogs: 1, authorPersonaId: `a-${i}`,
-      decider: human ? 'human' : 'auto',
+      decider: human ? 'human' : 'auto', release: 'STAMPED_ELIGIBLE' as const,
       personaComments: [
         { personaId: `c-${i}`, createdAtMs: t + (mode === 'late' && i === 0 ? (AUTO_FIRST_COMMENT_WINDOW_MINUTES + 1) : wait) * 60_000, topLevel: true },
         ...(mode === 'dup' && i === 0 ? [{ personaId: `c-${i}`, createdAtMs: t + 90 * 60_000, topLevel: false }] : []),
@@ -263,47 +269,38 @@ function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null 
     kstDate: d.kstDate, stage: d.release,
     decision: { kstDate: d.kstDate, state: d.state, release: d.release, decidedBy: d.decidedBy },
     posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
-    audits: { rows, globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+    audits: { rows, globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
   }
 }
 const evidenceOfDay = (d: StageDecision, mode: DayMode): StageEvidenceVerdict =>
   judgeStageEvidence(d.kstDate, d.release, factsOfDay(d, mode),
     mode === 'costUnknown' ? { cost: [{ name: '댓글', health: 'unknown' }], errors: 'ok' } : SIDE_OK)
 
-const canary = (stage: RuntimeStage, ok: boolean): CanaryVerdict => {
-  const want = profileOf(stage).dailyTarget
-  return { stage, want, published: 0, slotsLeft: want, need: want, can: ok ? want : 0, ok, reasons: ok ? [] : ['하루 시뮬레이션 미달'] }
-}
-
 type DayOpts = {
-  ceiling?: string
   facts?: (s: GenericStage) => PreflightFacts
   runAt?: (kstDate: string) => string
-  canaryOk?: boolean
   signals?: HealthSignal[]
 }
 type Day = { decision: StageDecision; valid: ValidatedStageDecision | null; result: ControllerResult; evidence: StageEvidenceVerdict | null; reason: string }
 
-/** 🔴 07:00 controller 한 번 — controller 스크립트와 같은 순서: 전날 증거 → 계획 → 하루 판정 → D20+ preflight → 결정 → 저장 검증 */
+/** 🔴 07:00 controller 한 번 — controller 스크립트와 같은 순서: 전날 증거 → 계획 → 그 대상 preflight(D3~D100) → 결정 → 저장 검증 */
 function runDay(kstDate: string, prev: ValidatedStageDecision | null, prevMode: DayMode | null, o: DayOpts = {}): Day {
-  const ceiling = resolveCeiling(o.ceiling ?? 'd50').operable
   const runAt = (o.runAt ?? at0700)(kstDate)
   const evidence = prev === null || prevMode === null ? null : evidenceOfDay(prev, prevMode)
   const plan = prev === null ? null : trialPlanOf(prev, evidence)
-  const daily: DatedCanary | null = plan === null ? null
-    : { kstDate, stage: plan.target, builtAt: runAt, trialBase: plan.base, verdict: canary(plan.target, o.canaryOk ?? true) }
-  const nextPreflight: PreflightVerdict | null = plan !== null && needsExtendedGate(plan.target)
-    ? judgeNextPreflight(plan.target, (o.facts ?? ((s) => factsFor(s)))(plan.target), GRID) : null
+  const nextPreflight: PreflightVerdict | null = plan === null ? null
+    : judgeNextPreflight(plan.target, (o.facts ?? ((s) => factsFor(s)))(plan.target), GRID)
   const result = decideStage({
-    kstDate, decidedAt: runAt, envRelease: 'd1', authorizedCeiling: ceiling, previousDecision: prev, previousEvidence: evidence,
-    verdicts: ALL_READY, daily, nextPreflight, promotion: null, publishedToday: 0, signals: o.signals ?? OK_SIGNALS,
+    kstDate, decidedAt: runAt, previousDecision: prev, previousEvidence: evidence,
+    nextPreflight, publishedToday: 0, signals: o.signals ?? OK_SIGNALS,
   })
   const v = validateForToday(result.decision)
   return { decision: result.decision, valid: v.ok ? v.decision : null, result, evidence, reason: v.ok ? '' : v.reason }
 }
 
-/** 🔴 시작 행 — controller 가 쓴 HOLD */
-function startRow(release: RuntimeStage, capacity: RuntimeStage, state: 'HOLD' | 'REPROVE' = 'HOLD'): ValidatedStageDecision {
+/** 🔴 시작 행 — controller 가 쓴 HOLD/REPROVE · capacity 는 다음 증명 단계 */
+function startRow(release: RuntimeStage, state: 'HOLD' | 'REPROVE' = 'HOLD'): ValidatedStageDecision {
+  const capacity = preparedStageOf(release)
   const r = validateStoredDecision({
     row: {
       kstDate: D0, capacity, release, state, reasons: [], blocks: [], dayPinned: false, supply: null,
@@ -331,39 +328,47 @@ const basisOf = (d: Day): string | null => (d.decision.transition?.kind === 'TRI
 const baseOf = (d: Day): string | null => (d.decision.transition?.kind === 'TRIAL' ? d.decision.transition.trialBase : null)
 const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) => b.code === code)
 
-// S1 — 전부 PASS · 천장 d50 → 날마다 한 칸(가장 이른 canary)
+// S1 — 전부 PASS → 날마다 한 칸 · 맨 위 d50 에서 멈춘다
 {
-  const w = walk(startRow('d1', 'd50'), ['perfect', 'perfect', 'perfect', 'perfect', 'perfect', 'perfect', 'perfect', 'perfect'])
-  console.log(`   S1 천장 d50 · 전부 PASS: ${w.trace}`)
+  const w = walk(startRow('d1'), ['perfect', 'perfect', 'perfect', 'perfect', 'perfect', 'perfect', 'perfect', 'perfect'])
+  console.log(`   S1 전부 PASS: ${w.trace}`)
   check('🟢 S1 PASS 다음 날마다 한 칸 — d3 → d5 → d10 → d20 → d30 → d50 (날짜로 기다리지 않는다)',
     w.days.slice(0, 6).map(tr).join(' ') === 'TRIAL:d3 TRIAL:d5 TRIAL:d10 TRIAL:d20 TRIAL:d30 TRIAL:d50', w.trace)
   check('S1 근거 — FLOOR 다음은 전부 PASS · 기반은 전날 공개', basisOf(w.days[0]!) === 'FLOOR'
     && w.days.slice(1, 6).every((d) => basisOf(d) === 'PASS')
     && w.days.slice(1, 6).every((d, i) => baseOf(d) === w.days[i]!.decision.release))
   check('S1 모든 결정이 저장 계약을 통과한다', w.allValid, w.days.map((d) => d.reason).filter((x) => x !== '').join(' / '))
-  check('🔴 S1 d50 PASS 뒤 — 러너 단계 끝(d100 은 러너 밖) · 시험 기반 d30 증명일 REPROVE',
-    tr(w.days[6]!) === 'REPROVE:d30' && w.days.every((d) => stageRank(d.decision.release) <= stageRank('d50')))
-  check('S1 d20 시험은 07:00 에 열려 08:00 첫 슬롯부터 20건 — 결정의 천장은 d50 그대로',
-    w.days[3]!.decision.capacity === 'd50' && firstSlotOn(w.days[3]!.decision.kstDate, profileOf('d20'))!.toISOString()
+  check('🔴 S1 d50 PASS 뒤 — 지속 d50(증명됐다) · 위 칸 없음 → REPROVE d50 · 러너 밖(d100)으로 가지 않는다',
+    tr(w.days[6]!) === 'REPROVE:d50' && w.days.every((d) => stageRank(d.decision.release) <= stageRank('d50')), w.trace)
+  check('S1 d20 시험은 07:00 에 열려 08:00 첫 슬롯부터 20건 — 결정의 capacity 는 다음 증명 d30',
+    w.days[3]!.decision.capacity === 'd30' && firstSlotOn(w.days[3]!.decision.kstDate, profileOf('d20'))!.toISOString()
       === new Date(`${w.days[3]!.decision.kstDate}T08:00:00+09:00`).toISOString())
+  check('🔴 S1 어느 날도 SUSTAIN 을 만들지 않는다', w.days.every((d) => d.decision.state !== 'SUSTAIN'))
 }
 
-// S2 — 지금 운영 천장 d10 → D20 은 열리지 않는다
+// S2 — 🔴 계약 유효 Persona 를 읽지 못함(null) → 바닥에서 올라가지 않는다
 {
-  const w = walk(startRow('d1', 'd10'), Array.from({ length: 10 }, () => 'perfect' as const), { ceiling: 'd10' })
-  console.log(`   S2 천장 d10 · 전부 PASS: ${w.trace}`)
-  check('🔴 🔴 S2 d10 PASS · 천장 d10 → D20 을 열지 않는다(10일 동안 d10 위 0)', w.days.every((d) => stageRank(d.decision.release) <= stageRank('d10'))
-    && !w.days.some((d) => d.decision.release === 'd20' || d.decision.capacity !== 'd10'), w.trace)
-  check('S2 d10 PASS 다음 날 CEILING 이 남는다', blocked(w.days[3]!, 'CEILING'), JSON.stringify(w.days[3]!.decision.blocks))
-  check('S2 천장에 막힌 다음 날은 기반 d5 증명일(REPROVE) → 다시 d10 시험', tr(w.days[3]!) === 'REPROVE:d5' && tr(w.days[4]!) === 'TRIAL:d10')
+  const w = walk(startRow('d1'), Array.from({ length: 5 }, () => 'perfect' as const), { facts: (s) => factsFor(s, { contractValidPersonas: null }) })
+  console.log(`   S2 Persona 모름: ${w.trace}`)
+  check('🔴 🔴 S2 contractValidPersonas=null 5일 — d3 도 열리지 않는다(PREFLIGHT_UNKNOWN) · 바닥 PREPARE',
+    w.days.every((d) => tr(d) === 'PREPARE:d1' && blocked(d, 'PREFLIGHT_UNKNOWN')), w.trace)
   check('S2 모든 결정이 저장 계약을 통과한다', w.allValid)
+}
+
+// S2b — 🔴 오늘 운영 모양(2026-09-30 실측): 계약 유효 Persona 0 → D3 하한 24 미달 → D1→D3 시험부터 열리지 않는다
+{
+  const w = walk(startRow('d1'), Array.from({ length: 5 }, () => 'perfect' as const), { facts: (s) => factsFor(s, { contractValidPersonas: 0 }) })
+  console.log(`   S2b Persona 0: ${w.trace}`)
+  check('🔴 🔴 S2b contractValidPersonas=0 5일 — d3 시험이 한 번도 열리지 않는다(PREFLIGHT_FAIL) · 바닥 PREPARE',
+    w.days.every((d) => tr(d) === 'PREPARE:d1' && blocked(d, 'PREFLIGHT_FAIL')), w.trace)
+  check('S2b 모든 결정이 저장 계약을 통과한다', w.allValid)
 }
 
 // S3 — FAIL · UNKNOWN · 모름 → 같은 단계 재시험
 {
   const modes: DayMode[] = ['perfect', 'perfect', 'perfect', 'late', 'costUnknown', 'unread', 'perfect']
-  const w = walk(startRow('d5', 'd50', 'REPROVE'), modes)
-  console.log(`   S3 d20 에서 FAIL·UNKNOWN·못 읽음: ${w.trace}`)
+  const w = walk(startRow('d5', 'REPROVE'), modes)
+  console.log(`   S3 d30 에서 FAIL·UNKNOWN·못 읽음: ${w.trace}`)
   check('S3 앞 셋 — REPROVE d5 PASS → d10 → d20 → d30', w.days.slice(0, 3).map(tr).join(' ') === 'TRIAL:d10 TRIAL:d20 TRIAL:d30', w.trace)
   check('🔴 S3 d30 첫 댓글 61분(FAIL) → 다음 날 d30 재시험(기반 d20 · RETEST)', tr(w.days[3]!) === 'TRIAL:d30'
     && basisOf(w.days[3]!) === 'RETEST' && baseOf(w.days[3]!) === 'd20' && w.days[3]!.evidence?.verdict === 'FAIL')
@@ -372,94 +377,85 @@ const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) =>
   check('S3 PASS 가 난 다음 날에야 d50', tr(w.days[6]!) === 'TRIAL:d50' && basisOf(w.days[6]!) === 'PASS')
 }
 
-// S4 — 날짜만으로는 오르지 않는다
+// S4 — 날짜만으로는 오르지 않는다 · HOLD 날은 PASS 가 아니다
 {
-  const w = walk(startRow('d5', 'd50', 'REPROVE'), Array.from({ length: 10 }, () => 'unread' as const))
+  const w = walk(startRow('d5', 'REPROVE'), Array.from({ length: 10 }, () => 'unread' as const))
   check('🔴 🔴 S4 증거 없는 10일 — REPROVE d5 에 머문다(시험 0 · 올라가지 않는다)', w.days.every((d) => tr(d) === 'REPROVE:d5'), w.trace)
-  const h = walk(startRow('d10', 'd10'), Array.from({ length: 5 }, () => 'perfect' as const), { ceiling: 'd10' })
-  check('🔴 S4 천장에 닿은 HOLD d10 — 증명일도 시험도 없다(공정성 불변 · HOLD 날은 PASS 가 아니다)',
-    h.days.every((d) => tr(d) === 'HOLD:d10'), h.trace)
+  const h = walk(startRow('d10', 'HOLD'), ['perfect', 'perfect'])
+  check('🔴 S4 HOLD d10 날은 완벽해도 PASS 가 아니다 → 다음 날 REPROVE d10 → 그 PASS 다음 날 TRIAL d20',
+    h.trace === 'REPROVE:d10 TRIAL:d20' && h.days[0]!.evidence?.codes.includes('DECISION_NOT_TRANSITION') === true, h.trace)
+  check('🔴 S4 REPROVE 는 증거 본체가 증명일로 받는다(HOLD 는 아니다)',
+    PROOF_STATES.includes('REPROVE') && !PROOF_STATES.includes('HOLD') && TRANSITION_STATES.includes('REPROVE'))
 }
 
 // S5 — 사람 물량은 0건
 for (const m of ['human', 'mixed', 'manualRun'] as const) {
-  const w = walk(startRow('d10', 'd50', 'REPROVE'), ['perfect', m])
+  const w = walk(startRow('d10', 'REPROVE'), ['perfect', m])
   check(`🔴 S5 ${m} — TRIAL d20 날 사람/수동 물량 → FAIL PUBLISH_NOT_AUTO_READY → d20 재시험`,
     tr(w.days[0]!) === 'TRIAL:d20' && tr(w.days[1]!) === 'TRIAL:d20' && basisOf(w.days[1]!) === 'RETEST'
     && w.days[1]!.evidence?.codes.includes('PUBLISH_NOT_AUTO_READY') === true, `${w.trace} ${JSON.stringify(w.days[1]!.evidence?.codes)}`)
 }
 
-// S6 — 정체 없음: 천장을 올린 다음 날 증명일 → 그 PASS 다음 날 D20
+// S7 — 한 관문 (preflight · 첫 슬롯) — D3~D100 같은 구조
 {
-  const w = walk(startRow('d10', 'd10'), ['perfect', 'perfect', 'perfect'], (i) => ({ ceiling: i === 0 ? 'd10' : 'd20' }))
-  console.log(`   S6 HOLD d10 · 둘째 날부터 천장 d20: ${w.trace}`)
-  check('🟢 S6 천장 d10 동안 HOLD d10 → 천장 d20 첫날 REPROVE d10 → 그 PASS 다음 날 TRIAL d20',
-    w.trace === 'HOLD:d10 REPROVE:d10 TRIAL:d20' && basisOf(w.days[2]!) === 'PASS' && baseOf(w.days[2]!) === 'd10', w.trace)
-  check('🔴 S6 REPROVE 는 증거 본체가 증명일로 받는다(HOLD 는 아니다)',
-    PROOF_STATES.includes('REPROVE') && !PROOF_STATES.includes('HOLD') && TRANSITION_STATES.includes('REPROVE'))
-}
-
-// S7 — D20 이상 관문 (preflight · 첫 슬롯 · 하루 시뮬레이션)
-{
-  const base = (o: DayOpts): Day => runDay(addDays(D0, 1), startRow('d10', 'd20', 'REPROVE'), 'perfect', { ceiling: 'd20', ...o })
+  const base = (o: DayOpts): Day => runDay(addDays(D0, 1), startRow('d10', 'REPROVE'), 'perfect', o)
   const green = base({})
-  check('S7 기준선 — REPROVE d10 PASS · 천장 d20 · preflight 초록 → TRIAL d20', tr(green) === 'TRIAL:d20' && green.valid !== null)
+  check('S7 기준선 — REPROVE d10 PASS · preflight 초록 → TRIAL d20', tr(green) === 'TRIAL:d20' && green.valid !== null)
   const cases: { name: string; o: DayOpts; code: string }[] = [
-    { name: '재고 모자람', o: { facts: (s) => factsFor(s, { readyAutoStock: 5 }) }, code: 'PREFLIGHT_FAIL' },
-    { name: 'Persona canary 하한 미달', o: { facts: (s) => factsFor(s, { activePersonas: 10 }) }, code: 'PREFLIGHT_FAIL' },
+    { name: 'slot-valid 기회 모자람', o: { facts: (s) => factsFor(s, { slotValidOpportunities: 5 }) }, code: 'PREFLIGHT_FAIL' },
+    { name: '처리량 모자람', o: { facts: (s) => factsFor(s, { readyPerSource: 0.01 }) }, code: 'PREFLIGHT_FAIL' },
+    { name: 'Persona canary 하한 미달', o: { facts: (s) => factsFor(s, { contractValidPersonas: 10 }) }, code: 'PREFLIGHT_FAIL' },
     { name: '댓글 비용 초과', o: { facts: (s) => factsFor(s, { commentUsdPerRequest: 0.05 }) }, code: 'PREFLIGHT_FAIL' },
     { name: '공급 비용 모름', o: { facts: (s) => factsFor(s, { supplyUsdPerReady: null }) }, code: 'PREFLIGHT_UNKNOWN' },
     { name: '08:30 에 늦게 돈 controller', o: { runAt: (d) => new Date(`${d}T08:30:00+09:00`).toISOString() }, code: 'LATE_START' },
   ]
   for (const c of cases) {
     const d = base(c.o)
-    check(`🔴 S7 ${c.name} → d20 을 열지 않는다 · ${c.code} · 기반 d10 증명일`, tr(d) === 'REPROVE:d10' && blocked(d, c.code) && d.valid !== null,
+    check(`🔴 S7 ${c.name} → d20 을 열지 않는다 · ${c.code} · d10 증명일`, tr(d) === 'REPROVE:d10' && blocked(d, c.code) && d.valid !== null,
       `${tr(d)} ${JSON.stringify(d.decision.blocks.map((b) => b.code))}`)
   }
-  const sim = base({ canaryOk: false })
-  check('🔴 S7 하루 시뮬레이션(READY 재고 1일) 미달 → d20 을 열지 않는다(#620 관문 그대로)', tr(sim) === 'REPROVE:d10', tr(sim))
-  check('🔴 S7 preflight 없이(null) D20 시험 → PREFLIGHT_UNKNOWN', extendedTrialBlocks({
+  check('🔴 S7 preflight 없이(null) 시험 → PREFLIGHT_UNKNOWN', trialBlocks({
     target: 'd20', kstDate: D0, runAt: at0700(D0), preflight: null,
   }).some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
-  check('🔴 S7 다른 단계(d30) preflight 초록으로 d20 을 열지 않는다', extendedTrialBlocks({
+  check('🔴 S7 다른 단계(d30) preflight 초록으로 d20 을 열지 않는다', trialBlocks({
     target: 'd20', kstDate: D0, runAt: at0700(D0), preflight: judgeNextPreflight('d30', factsFor('d30'), GRID),
   }).some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
-  // 🔴 d3~d10 시험은 이 관문을 지나지 않는다 — #620 그대로
-  const d5 = runDay(addDays(D0, 1), startRow('d3', 'd10', 'REPROVE'), 'perfect', { ceiling: 'd10', facts: (s) => factsFor(s, {
-    readyAutoStock: null, activePersonas: null, commentUsdPerRequest: null, auditUsdPerCall: null, supplyUsdPerReady: null,
-  }), runAt: (d) => new Date(`${d}T09:00:00+09:00`).toISOString() })
-  check('🔴 S7 d3~d10 시험은 D20 관문을 보지 않는다(사실 전부 모름 · 09:00 실행이어도 TRIAL d5)', tr(d5) === 'TRIAL:d5'
-    && !needsExtendedGate('d10') && needsExtendedGate('d20'), tr(d5))
+  // 🔴 (2026-09-30) d3~d10 도 같은 관문이다 — 사실을 모르면 d5 도 열리지 않는다
+  const d5 = runDay(addDays(D0, 1), startRow('d3', 'REPROVE'), 'perfect', { facts: (s) => factsFor(s, {
+    slotValidOpportunities: null, contractValidPersonas: null, commentUsdPerRequest: null, auditUsdPerCall: null, supplyUsdPerReady: null,
+  }) })
+  check('🔴 🔴 S7 d3~d10 시험도 같은 관문을 지난다(사실 전부 모름 → d5 열지 않음 · REPROVE d3)',
+    tr(d5) === 'REPROVE:d3' && blocked(d5, 'PREFLIGHT_UNKNOWN'), tr(d5))
 }
 
 // S8 — 운영 신호 브레이크는 증명일을 되돌린다
 {
-  const bad = runDay(addDays(D0, 1), startRow('d5', 'd20', 'REPROVE'), 'unread', {
-    ceiling: 'd20', signals: [{ axis: 'quality', health: 'bad', reasons: ['확정 결함 1건'] }, ...OK_SIGNALS.slice(1)],
+  const bad = runDay(addDays(D0, 1), startRow('d5', 'REPROVE'), 'unread', {
+    signals: [{ axis: 'quality', health: 'bad', reasons: ['확정 결함 1건'] }, ...OK_SIGNALS.slice(1)],
   })
   check('🔴 S8 품질 나쁨 → 감속 · 증명일 아님(HOLD/PREPARE)', bad.result.brake === 'slowdown' && !PROOF_STATES.includes(bad.decision.state), tr(bad))
-  const unk = runDay(addDays(D0, 1), startRow('d5', 'd20', 'REPROVE'), 'unread', {
-    ceiling: 'd20', signals: [OK_SIGNALS[0]!, { axis: 'cost', health: 'unknown', reasons: [] }, OK_SIGNALS[2]!],
+  const unk = runDay(addDays(D0, 1), startRow('d5', 'REPROVE'), 'unread', {
+    signals: [OK_SIGNALS[0]!, { axis: 'cost', health: 'unknown', reasons: [] }, OK_SIGNALS[2]!],
   })
   check('🔴 S8 비용 모름 → REPROVE 를 되돌린다(자동 target 을 앞세우지 않는다)', unk.result.brake === 'holdUnknown'
     && unk.decision.release === 'd5' && !PROOF_STATES.includes(unk.decision.state), tr(unk))
 }
 
-// S9 — 승인 천장 d100 · 러너는 d50 까지
+// S9 — 러너 맨 위는 d50 · capacity 도 d50 을 넘지 않는다
 {
-  const w = walk(startRow('d10', 'd50', 'REPROVE'), Array.from({ length: 8 }, () => 'perfect' as const), { ceiling: 'd100' })
-  check('🔴 S9 승인 d100 이어도 d50 위는 열리지 않는다 · 결정 천장은 d50', w.days.every((d) => stageRank(d.decision.release) <= stageRank('d50')
-    && d.decision.capacity === 'd50') && w.allValid, w.trace)
+  const w = walk(startRow('d30', 'REPROVE'), Array.from({ length: 5 }, () => 'perfect' as const))
+  check('🔴 S9 d50 위는 열리지 않는다 · capacity ≤ d50', w.days.every((d) => stageRank(d.decision.release) <= stageRank('d50')
+    && stageRank(d.decision.capacity) <= stageRank('d50')) && w.allValid && tr(w.days[0]!) === 'TRIAL:d50', w.trace)
 }
 
 // S10 — 중복 · 감사 표본
 for (const [m, code] of [['dup', 'DUP_COMMENT'], ['auditShort', 'AUDIT_COVERAGE_SHORT'], ['auditOutside', 'AUDIT_OUTSIDE_TARGET']] as const) {
-  const w = walk(startRow('d10', 'd50', 'REPROVE'), ['perfect', m])
+  const w = walk(startRow('d10', 'REPROVE'), ['perfect', m])
   check(`🔴 S10 ${m} → FAIL ${code} → d20 재시험`, tr(w.days[1]!) === 'TRIAL:d20' && basisOf(w.days[1]!) === 'RETEST'
     && w.days[1]!.evidence?.codes.includes(code) === true, `${w.trace} ${JSON.stringify(w.days[1]!.evidence?.codes)}`)
 }
 
-// S11 — 계약 정렬: D100 용량표도 d20~d50 을 감당한다고 말한다 · 그래도 D20+ 는 SUSTAIN 으로 건너가지 않는다
+// S11 — D100 용량표는 러너 프로필과 같다 · 승격은 TRIAL → 증거 PASS 하나뿐
 {
   check('🔴 S11 D100 용량표 = 러너 프로필 — d20·d30·d50 감당(슬롯 = RUNTIME_PROFILES) · d100 은 schedulerUnsupported',
     (['d20', 'd30', 'd50'] as const).every((s) => {
@@ -467,29 +463,14 @@ for (const [m, code] of [['dup', 'DUP_COMMENT'], ['auditShort', 'AUDIT_COVERAGE_
       return sc.supported && sc.releaseStage === s && sc.scheduledSlotsPerDay === RUNTIME_PROFILES[s].slots.length
         && sc.actualDailyPublishable === d100Plan(s).publicPostsPerDay
     }) && !schedulerSupportOf('d100').supported && schedulerSupportOf('d100').reason === 'schedulerUnsupported')
-  const promo = (current: 'd3' | 'd10', next: 'd5' | 'd20'): ReturnType<typeof judgePromotion> => {
-    const p = d100Plan(next)
-    return judgePromotion({
-      current, next, readyStock: p.readyStock14Days, activePersonas: p.personaCanaryFloor,
-      detailPerDay: p.detailedSourcesRequiredPerDay, readyQualifiedPerDay: p.readyQualifiedRequiredPerDay,
-      readyStockDeltaPerDay: 1, publishedPerDay: dailyTargetOf(current), currentStableStreakDays: stableObservationDaysOf(current),
-      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
-    })
-  }
-  const sustainDay = (release: RuntimeStage, ceiling: string, promotion: ReturnType<typeof judgePromotion>): ControllerResult => decideStage({
-    kstDate: addDays(D0, 1), decidedAt: at0700(addDays(D0, 1)), envRelease: 'd1', authorizedCeiling: resolveCeiling(ceiling).operable,
-    previousDecision: startRow(release, resolveCeiling(ceiling).operable), previousEvidence: null, verdicts: ALL_READY, daily: null,
-    nextPreflight: null, promotion, publishedToday: 0, signals: OK_SIGNALS,
-  })
-  const p20 = promo('d10', 'd20')
-  const up20 = sustainDay('d10', 'd20', p20)
-  check('🔴 🔴 S11 judgePromotion d10→d20 이 ready 여도(천장 d20) SUSTAIN d20 으로 건너가지 않는다 — D20+ 는 TRIAL → 증거 PASS 로만',
-    p20.ready && up20.decision.state === 'REPROVE' && up20.decision.release === 'd10' && up20.decision.transition === null,
-    `${p20.ready} ${up20.decision.state}:${up20.decision.release}`)
-  const p5 = promo('d3', 'd5')
-  const up5 = sustainDay('d3', 'd10', p5)
-  check('S11 대조 — d3→d5 지속 승격은 그대로 열린다(가드는 D20+ 만 막는다)',
-    p5.ready && up5.decision.state === 'SUSTAIN' && up5.decision.release === 'd5', `${p5.ready} ${up5.decision.state}:${up5.decision.release}`)
+  check('🔴 🔴 S11 지속 승격(judgePromotion → SUSTAIN) 경로가 없다 — v5 는 SUSTAIN 을 저장하지 않는다', (() => {
+    const cap = readFileSync('src/lib/d100-capacity.ts', 'utf-8')
+    const v = validateStoredDecision({ row: {
+      kstDate: D0, capacity: 'd5', release: 'd5', state: 'SUSTAIN', reasons: [], blocks: [], dayPinned: false, supply: null,
+      decidedAt: at0700(D0), contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER, transition: { kind: 'SUSTAIN', from: 'd3', to: 'd5' },
+    }, expectKstDate: D0 })
+    return !/export function judgePromotion/.test(cap) && !v.ok
+  })())
 }
 
 // 저장 계약
@@ -517,33 +498,30 @@ for (const [m, code] of [['dup', 'DUP_COMMENT'], ['auditShort', 'AUDIT_COVERAGE_
 // ─────────────────────────────────────────────────────────
 section('⑥ 러너 연결 — consumer env → 러너 설정 · catch-up · 증명일 · 발행 천장')
 {
-  const w = walk(startRow('d10', 'd20', 'REPROVE'), ['perfect'], { ceiling: 'd20' })
+  const w = walk(startRow('d10', 'REPROVE'), ['perfect'])
   const t = w.days[0]!
   const env = t.valid === null ? {} : consumerEnvOf({ ok: true, decision: t.valid })
-  check('consumer — TRIAL d20 → 공개 d10(시험 기반) · canary d20 그날 · 천장 d20 · 증명일 d20',
-    env.SORAN_RELEASE_STAGE === 'd10' && env[CANARY_STAGE_ENV] === 'd20' && env[CANARY_DATE_ENV] === t.decision.kstDate
-    && env.SORAN_CAPACITY_STAGE === 'd20' && env[PROOF_STAGE_ENV] === 'd20', JSON.stringify(env))
+  check('🔴 consumer — TRIAL d20 → 공개 d20 그대로(canary 없음) · capacity d30 · 증명일 d20',
+    env.SORAN_RELEASE_STAGE === 'd20' && env.SORAN_CAPACITY_STAGE === 'd30' && env[PROOF_STAGE_ENV] === 'd20'
+    && !Object.keys(env).some((k) => /CANARY|WINDOW/.test(k)), JSON.stringify(env))
   const now = new Date(`${t.decision.kstDate}T08:00:00+09:00`)
-  const sc = resolveScale(env, { canary: { now, verdict: canary('d20', true) }, readiness: ALL_READY.filter((v) => stageRank(v.stage) <= stageRank('d10')) })
-  check('🟢 러너 — canary 허가 + 그날 판정 ok → 공개 d20 · 하루 20건', sc.releaseStage === 'd20' && sc.releaseProfile.dailyTarget === 20 && sc.canaryStage, JSON.stringify(sc.notes))
+  const sc = resolveScale(env)
+  check('🟢 러너 — 결정 env 그대로 → 공개 d20 · 하루 20건', sc.releaseStage === 'd20' && sc.releaseProfile.dailyTarget === 20, JSON.stringify(sc.notes))
   const cu = judgeCatchUp({ stage: sc.releaseStage, now, trigger: 'local', cron: null, publishedToday: 0 })
   check('러너 — 08:00 heartbeat 가 d20 첫 슬롯을 낸다(1건)', cu.run && cu.allowed === 1)
   const late = judgeCatchUp({ stage: 'd20', now: new Date(`${t.decision.kstDate}T22:10:00+09:00`), trigger: 'local', cron: null, publishedToday: 19 })
   check('🔴 러너 — 22:00 넘은 backlog 는 버린다', !late.run)
   const proof = proofDayOf(env, now)
   check('러너 — 증명일 d20 · 목표 20', proof !== null && proof.stage === 'd20' && proof.target === 20)
-  check('🔴 발행 트랜잭션 천장 — 같은 env 로 d20 · 천장 d10 env 면 d20 요청도 d10 으로 누른다',
+  check('🔴 발행 트랜잭션 천장 — 같은 env 로 d20 · d10 env 면 d20 요청도 d10 으로 누른다(옛 canary 키는 무시)',
     boundedReleaseStage('d20', env, now) === 'd20'
-    && boundedReleaseStage('d20', { [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10', [CANARY_STAGE_ENV]: 'd20', [CANARY_DATE_ENV]: t.decision.kstDate }, now) === 'd10')
-  const noVerdict = resolveScale(env, { canary: { now, verdict: null } })
-  check('🔴 러너 — 그날 판정이 없으면 canary 를 켜지 않는다(d10)', noVerdict.releaseStage === 'd10')
-  const r = walk(startRow('d5', 'd20', 'REPROVE'), ['unread'], { ceiling: 'd20' }).days[0]!
+    && boundedReleaseStage('d20', markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10', SORAN_RELEASE_CANARY_STAGE: 'd20', SORAN_RELEASE_CANARY_DATE: t.decision.kstDate }), now) === 'd10')
+  const r = walk(startRow('d5', 'REPROVE'), ['unread']).days[0]!
   const renv = r.valid === null ? {} : consumerEnvOf({ ok: true, decision: r.valid })
-  check('consumer — REPROVE d5 → 공개 d5 · canary 없음 · 증명일 d5', tr(r) === 'REPROVE:d5' && renv.SORAN_RELEASE_STAGE === 'd5'
-    && renv[CANARY_STAGE_ENV] === '' && renv[PROOF_STAGE_ENV] === 'd5', JSON.stringify(renv))
-  const h = walk(startRow('d10', 'd10'), ['perfect'], { ceiling: 'd10' }).days[0]!
-  const henv = h.valid === null ? {} : consumerEnvOf({ ok: true, decision: h.valid })
-  check('consumer — HOLD d10 → 증명일 아님(빈 값) · 공정성 그대로', tr(h) === 'HOLD:d10' && henv[PROOF_STAGE_ENV] === '')
+  check('consumer — REPROVE d5 → 공개 d5 · 증명일 d5', tr(r) === 'REPROVE:d5' && renv.SORAN_RELEASE_STAGE === 'd5'
+    && renv[PROOF_STAGE_ENV] === 'd5', JSON.stringify(renv))
+  const henv = consumerEnvOf({ ok: true, decision: startRow('d10', 'HOLD') })
+  check('consumer — HOLD d10 → 증명일 아님(빈 값) · 공정성 그대로', henv[PROOF_STAGE_ENV] === '' && henv.SORAN_RELEASE_STAGE === 'd10')
 }
 
 // ─────────────────────────────────────────────────────────
@@ -558,8 +536,10 @@ section('⑦ 롤백 — stage:switch --off')
     const after = readEnvKeys([CONTROLLER_ENV, 'SORAN_CAPACITY_STAGE', 'OTHER'], envFile).values
     check('🔴 stage:switch --off → controller off · 다른 키 그대로', r.status === 0 && !controllerEnabled(after)
       && after.SORAN_CAPACITY_STAGE === 'd20' && after.OTHER === '1', `${r.status} ${r.stderr.slice(-200)}`)
-    check('🔴 off 면 consumer 는 아무것도 넣지 않는다(legacy)',
-      Object.keys(consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'legacy', reason: '' })).length === 0)
+    check('🔴 off 면 consumer 는 d1 을 명시해서 넣는다(env 파일 단계가 이기는 legacy 경로 없음)', (() => {
+      const e = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: 'off' })
+      return e.SORAN_RELEASE_STAGE === 'd1' && e.SORAN_CAPACITY_STAGE === 'd1' && e.SORAN_STAGE_DECISION_DATE === ''
+    })())
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -567,7 +547,7 @@ section('⑦ 롤백 — stage:switch --off')
 section('⑧ 증거 본체 — d1~d10 두 입구 동일 · REPROVE 증명일')
 {
   const row = (release: RuntimeStage, state: StageDecision['state']): StageDecision => ({
-    kstDate: D0, capacity: 'd50', release, state, reasons: [], blocks: [], dayPinned: false, supply: null,
+    kstDate: D0, capacity: preparedStageOf(release), release, state, reasons: [], blocks: [], dayPinned: false, supply: null,
     decidedAt: at0700(D0), contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER, transition: null,
   })
   for (const s of RELEASE_STAGES) {

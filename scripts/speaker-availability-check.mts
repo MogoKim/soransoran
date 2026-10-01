@@ -8,9 +8,10 @@
  *    발행 쪽 최소 간격 때문에 9/23 예측이 `CAPACITY_WAIT` 로 **2/3** 에 멈췄다 —
  *    그날 쓸 수 있는 화자가 20명이었는데도. 글이 아니라 **화자가 겹친 것**이다.
  *
- *    아래는 그 상태를 **실제 발행 예측기**(`forecastPublishing`)로 재현하고,
- *    다른 적격 화자의 글이 하나 들어오면 3/3 이 되는 것을 값으로 보인다.
- *    🔴 자격 없는 화자·간격 위반은 여전히 막히는지도 같은 함수로 확인한다.
+ *    아래는 그 상태를 **정본 슬롯 매칭**(`matchOpportunitiesToSlots` — 공급 러너 · 관제의 JIT 수요와 같은 함수 ·
+ *    기회 모양은 `readyOpportunitiesOf` 와 같다)으로 재현하고, 다른 적격 화자의 글이 하나 들어오면 3/3 이 되는 것을
+ *    값으로 보인다. 🔴 자격 없는 화자 · 간격 위반은 여전히 막히는지도 같은 함수로 확인한다.
+ *    (2026-09-30 · 14일 발행 예측기 `forecastPublishing` 삭제 — 같은 질문을 정본 매칭으로 옮겼다)
  */
 import {
   planSpeakerAvailability, remainingCapacity, planOpenDays,
@@ -19,11 +20,11 @@ import {
   readSpeakerLoad, draftSpeakerOf,
 } from '../src/lib/content-core/speaker-load-file'
 import { readFileSync } from 'node:fs'
-import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 import { PROFILES } from '../src/lib/scale-profile'
-import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
-import type { QueueCandidate } from '../src/lib/supply-candidates'
-import type { PersonaForMatch } from '../src/lib/original-post-persona-match'
+import { availablePersonasAt, type PersonaHistory } from '../src/lib/supply-capacity-forecast'
+import { judgeSlotRelease, matchOpportunitiesToSlots, type SlotOpportunity } from '../src/lib/source-slot-release'
+import { slotTimesOn } from '../src/lib/stage-ladder-generic'
+import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 
 let pass = 0
 let fail = 0
@@ -40,107 +41,74 @@ const d3 = PROFILES.d3
 const CAPS = { postsPerWeek: d3.postsPerWeek, minDaysBetween: d3.minDaysBetween }
 const START = new Date('2026-09-22T15:00:00.000Z') // 2026-09-23 00:00 KST
 
-const personaOf = (code: string): PersonaForMatch => ({
-  code, status: 'active', providerId: null, accountCount: 0,
-  maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
-  parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
-  region: null, noGoTopics: [] as string[], voiceLength: '중간',
-  postsThisWeek: 0, daysSinceLastPost: null,
-} as unknown as PersonaForMatch)
+/** 🔴 9/23 d3 증명일 슬롯 — 정본 슬롯 표(`slotTimesOn`) */
+const SLOTS = slotTimesOn('2026-09-23', d3)
 
 /**
- * 🔴 **화자가 못박힌 기계 글.** 생성된 글은 그 사람의 말투로 쓰였으므로 남에게 넘길 수 없다 —
- *    `voice.personaCode` 가 그 결속이다. 발행기는 이것을 무시하고 재배정하지 않는다.
+ * 🔴 **화자가 못박힌 기계 글 = 기회 하나.** 생성된 글은 그 사람의 말투로 쓰였으므로 남에게 넘길 수 없다 —
+ *    `personaCode` 가 그 결속이다. 기회의 모양은 `readyOpportunitiesOf` 와 같다: 그 슬롯에 화자가 비어 있고
+ *    (`availablePersonasAt` — 주간 상한 · 최소 간격) 정본 공개 판정이 eligible 이어야 그 슬롯에 유효하다.
  */
-const candOf = (id: string, speaker: string, n: number): QueueCandidate => ({
-  queueId: id, title: `국수 이야기 ${n}`,
-  body: '어제 국수를 삶아 먹었습니다. 별것 아닌데 오래 생각났어요.',
-  gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null,
-  capturedAt: new Date('2026-09-20T00:00:00.000Z'),
-  // 🔴 이 글은 그 사람의 말투로 쓰였다 — 발행기가 남의 이름을 붙이지 않는 근거다
-  voice: { personaCode: speaker, comments: 3, bundleDigest: 'x', sourceDigest: 'y' },
-  profile: 'machine' as const,
-})
-
-const forecast = (queue: readonly QueueCandidate[], personas: readonly PersonaForMatch[]) =>
-  forecastPublishing({
-    queue, personas,
-    history: personas.map((p) => ({ code: p.code, matchedAts: [] as Date[] })),
-    startAt: START, days: 1, dailyCap: d3.dailyTarget, caps: CAPS,
-  })
+const oppOf = (id: string, speaker: string, history: readonly PersonaHistory[]): SlotOpportunity => {
+  const gateResults = fakeEvidenceGate(START, { id })
+  return {
+    key: id, personaCode: speaker,
+    validAt: (slotAt) => {
+      const free = availablePersonasAt(history, slotAt, CAPS).includes(speaker)
+      return judgeSlotRelease({
+        gateResults, slotAt, now: START, hardGates: { ok: true, codes: [] },
+        assignment: free ? { ok: true } : { ok: false, route: 'defer', codes: ['PERSONA_NOT_FREE_AT_SLOT'] },
+        tieBreak: id,
+      }).verdict === 'eligible'
+    },
+  }
+}
+const fresh = (codes: readonly string[]): PersonaHistory[] => codes.map((code) => ({ code, matchedAts: [] as Date[] }))
+const keysOf = (bySlot: readonly (string | null)[]): string[] => bySlot.filter((k): k is string => k !== null)
 
 // ─────────────────────────────────────────────────────────
-console.log('① 🔴 🔴 실측 재현 — P01 글 2건 + P06 글 1건은 9/23 에 2/3')
+console.log(`① 🔴 🔴 실측 재현 — P01 글 2건 + P06 글 1건은 9/23 에 2/${SLOTS.length}`)
 // ─────────────────────────────────────────────────────────
 {
-  const queue = [candOf('a', 'P01', 1), candOf('b', 'P01', 2), candOf('c', 'P06', 3)]
-  const personas = ['P01', 'P06', 'P07', 'P10'].map(personaOf)
-  const f = forecast(queue, personas)
-  const day = f.days[0]!
+  const hist = fresh(['P01', 'P06', 'P07', 'P10'])
+  const m = matchOpportunitiesToSlots(SLOTS, [oppOf('a', 'P01', hist), oppOf('b', 'P01', hist), oppOf('c', 'P06', hist)])
+  check('fixture 전제 — d3 증명일 슬롯이 3개다', SLOTS.length === 3, String(SLOTS.length))
   check('🔴 🔴 **같은 화자 2건은 하루에 한 편만 나간다 — 2/3**',
-    day.published.length === 2 && day.date === '2026-09-23',
-    JSON.stringify({ 발행: day.published, 날짜: day.date, 사유: day.blockedReason }))
-  check('🔴 막힌 사유는 `CAPACITY_WAIT` 다 — 후보가 없는 것이 아니다',
-    day.blockedReason === 'CAPACITY_WAIT', String(day.blockedReason))
+    m.filled === 2 && keysOf(m.bySlot).filter((k) => k === 'a' || k === 'b').length === 1, JSON.stringify(m))
   check('🔴 쓸 수 있던 화자는 넉넉했다 — 사람이 모자란 것이 아니다',
-    day.availableCodes.length >= 4, String(day.availableCodes.length))
+    availablePersonasAt(hist, SLOTS[0]!, CAPS).length >= 4)
 }
 
 // ─────────────────────────────────────────────────────────
 console.log('\n② 🔴 🔴 다른 적격 화자의 글이 들어오면 3/3')
 // ─────────────────────────────────────────────────────────
 {
-  const queue = [candOf('a', 'P01', 1), candOf('b', 'P07', 2), candOf('c', 'P06', 3)]
-  const personas = ['P01', 'P06', 'P07', 'P10'].map(personaOf)
-  const day = forecast(queue, personas).days[0]!
-  check('🔴 🔴 **화자가 셋이면 9/23 에 3/3**',
-    day.published.length === 3
-    && new Set(day.published.map((p) => p.persona)).size === 3,
-    JSON.stringify(day.published))
-  check('🔴 한 사람이 두 편을 쓰지 않는다',
-    day.published.every((p, i, arr) => arr.filter((x) => x.persona === p.persona).length === 1))
+  const hist = fresh(['P01', 'P06', 'P07', 'P10'])
+  const m = matchOpportunitiesToSlots(SLOTS, [oppOf('a', 'P01', hist), oppOf('b', 'P07', hist), oppOf('c', 'P06', hist)])
+  check('🔴 🔴 **화자가 셋이면 9/23 에 3/3**', m.filled === 3 && new Set(keysOf(m.bySlot)).size === 3, JSON.stringify(m))
 }
 
 // ─────────────────────────────────────────────────────────
 console.log('\n③ 🔴 🔴 자격 없는 화자·간격 위반은 여전히 막힌다')
 // ─────────────────────────────────────────────────────────
 {
-  /** 🔴 글의 화자가 pool 에 없다 — 발행기가 우회해 다른 이름을 붙이지 않는다 */
-  const orphan = forecastPublishing({
-    queue: [candOf('a', 'P99', 1)],
-    personas: [personaOf('P01')],
-    history: [{ code: 'P01', matchedAts: [] as Date[] }],
-    startAt: START, days: 1, dailyCap: d3.dailyTarget, caps: CAPS,
-  })
-  check('🔴 🔴 **없는 화자의 글은 나가지 않는다 — 다른 사람 이름을 붙이지 않는다**',
-    orphan.days[0]!.published.length === 0,
-    JSON.stringify(orphan.days[0]!.published))
+  /** 🔴 글의 화자가 pool 에 없다 — 매칭이 우회해 다른 이름을 붙이지 않는다 */
+  const orphan = matchOpportunitiesToSlots(SLOTS, [oppOf('a', 'P99', fresh(['P01']))])
+  check('🔴 🔴 **없는 화자의 글은 나가지 않는다 — 다른 사람 이름을 붙이지 않는다**', orphan.filled === 0, JSON.stringify(orphan))
 
-  /** 🔴 어제 쓴 사람은 오늘 못 쓴다 (최소 2일) */
-  const tooSoon = forecastPublishing({
-    queue: [candOf('a', 'P01', 1)],
-    personas: [personaOf('P01')],
-    history: [{ code: 'P01', matchedAts: [new Date('2026-09-22T00:30:00.000Z')] }],
-    startAt: START, days: 1, dailyCap: d3.dailyTarget, caps: CAPS,
-  })
-  check('🔴 🔴 **최소 간격을 어기며 내보내지 않는다**',
-    tooSoon.days[0]!.published.length === 0
-    && tooSoon.days[0]!.blockedReason === 'CAPACITY_WAIT',
-    String(tooSoon.days[0]!.blockedReason))
+  /** 🔴 어제 쓴 사람은 오늘 못 쓴다 (최소 간격) */
+  const tooSoon = matchOpportunitiesToSlots(SLOTS, [oppOf('a', 'P01',
+    [{ code: 'P01', matchedAts: [new Date('2026-09-22T00:30:00.000Z')] }])])
+  check('🔴 🔴 **최소 간격을 어기며 내보내지 않는다**', tooSoon.filled === 0, JSON.stringify(tooSoon))
 
   /** 🔴 주간 상한을 채운 사람도 못 쓴다 */
-  const weekFull = forecastPublishing({
-    queue: [candOf('a', 'P01', 1)],
-    personas: [personaOf('P01')],
-    history: [{ code: 'P01', matchedAts: [
-      new Date('2026-09-17T00:30:00.000Z'),
-      new Date('2026-09-19T00:30:00.000Z'),
-      new Date('2026-09-21T00:30:00.000Z'),
-    ] }],
-    startAt: START, days: 1, dailyCap: d3.dailyTarget, caps: CAPS,
-  })
-  check('🔴 주 상한을 채운 화자도 막힌다',
-    weekFull.days[0]!.published.length === 0)
+  const weekFull = matchOpportunitiesToSlots(SLOTS, [oppOf('a', 'P01', [{ code: 'P01', matchedAts: [
+    new Date('2026-09-17T00:30:00.000Z'), new Date('2026-09-19T00:30:00.000Z'), new Date('2026-09-21T00:30:00.000Z'),
+  ] }])])
+  check('🔴 주 상한을 채운 화자도 막힌다', weekFull.filled === 0)
+
+  /** 🔴 반례의 짝 — 이력이 비면 같은 글이 나간다(막힌 이유가 화자 여력이다) */
+  check('🟢 같은 글 · 빈 이력이면 나간다', matchOpportunitiesToSlots(SLOTS, [oppOf('a', 'P01', fresh(['P01']))]).filled === 1)
 }
 
 // ─────────────────────────────────────────────────────────
