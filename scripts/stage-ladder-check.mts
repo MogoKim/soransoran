@@ -26,9 +26,11 @@ import {
   controllerEnabled, CONTROLLER_ENV, ENSURE_STEPS, DECISION_CONSUMERS,
   STORED_COLUMNS, decisionToRow, rowToDecisionInput, decisionKeyOf,
 } from '../src/lib/stage-decision-store'
-import { RUNTIME_PROFILES as PROFILES, type RuntimeStage } from '../src/lib/scale-profile'
+import { RUNTIME_PROFILES as PROFILES, RELEASE_ENV, CAPACITY_ENV, type RuntimeStage } from '../src/lib/scale-profile'
+import { consumerEnvOf } from '../src/lib/stage-controller'
+import { COMMENT_STAGE_ENV } from '../src/lib/persona-comment-stage'
 import { judgeNextPreflight, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
-import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import { RUNNER_GRID, PREFLIGHT_ENV_KEYS } from './lib/stage-preflight-facts.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { loadPublishableStock, stageStock } from './lib/publishable-stock.mjs'
 import { planPublishBatch, resolvePublishScale } from './lib/publishable-stock.mjs'
@@ -959,12 +961,41 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
     && !controllerEnabled({ [CONTROLLER_ENV]: 'true' })
     && !controllerEnabled({ [CONTROLLER_ENV]: '1' })
     && controllerEnabled({ [CONTROLLER_ENV]: 'on' }))
-  check('🔴 canonical env 에 그 값이 들어 있지 않다 — 운영 변수 0', (() => {
-    const home = process.env.HOME ?? ''
-    const envPath = `${home}/Library/Application Support/soransoran/env.local`
-    if (!existsSync(envPath)) return true
-    return !new RegExp(`^\\s*(export\\s+)?${CONTROLLER_ENV}=`, 'm')
-      .test(readFileSync(envPath, 'utf-8'))
+  /**
+   * 🔴 **kill switch 는 단계 authority 가 아니다** (2026-10-01 마스터 보정).
+   *    앞판은 실제 HOME 의 canonical env 에 이 키가 **없어야** 한다고 봤다 — 2026-09-28 미활성 스냅샷이다.
+   *    지금은 canonical env 에 switch 가 있는 것이 정상이고, 호스트 상태로 코드 검사가 갈리면 안 된다.
+   *    대신 switch 가 무엇을 못 하는지를 본다. 실제 HOME · 실제 env 값을 읽지 않는다(값 출력 0).
+   */
+  check('🔴 🔴 **OFF 인 consumer 는 env 단계로 돌아가지 않고 safest d1 로 간다**', (() => {
+    const off = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: `${CONTROLLER_ENV} off` })
+    // 🔴 env 파일에 손으로 적은 단계가 있어도 overrides 가 뒤에서 덮는다 — 그 순서까지 본다
+    const merged = { [RELEASE_ENV]: 'd10', [CAPACITY_ENV]: 'd10', ...off }
+    const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
+    return off[RELEASE_ENV] === 'd1' && off[CAPACITY_ENV] === 'd1'
+      && merged[RELEASE_ENV] === 'd1' && merged[CAPACITY_ENV] === 'd1'
+      && /if \(!flagOn\) \{[^}]*consumerEnvOf\(\{ ok: false, code: 'NO_DECISION', fallback: 'safest'/.test(exec)
+      && /env: \{ \.\.\.process\.env, \.\.\.overrides \}/.test(exec)
+  })())
+  check('🔴 🔴 **controller 진입점은 단계 결정을 위해 kill switch 하나만 읽는다 — env 단계·canary·window 는 입력원이 아니다**', (() => {
+    const code = readFileSync('scripts/stage-controller.mts', 'utf-8')
+      .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join('\n')
+    // 🔴 실제로 메모리에 올리는 키 전부 — readEnvKeys 의 인자를 그대로 모은다
+    const args = [...code.matchAll(/readEnvKeys\(([^)]*)\)/g)].map((m) => m[1]!.trim())
+    const ARG_KEYS: Record<string, readonly string[]> = {
+      '[CONTROLLER_ENV]': [CONTROLLER_ENV],
+      // 댓글 상한(글당 댓글 수)을 정하는 값이다 — 공개 단계 입력이 아니다
+      '[COMMENT_STAGE_ENV]': [COMMENT_STAGE_ENV],
+      // preflight 의 자동 READY 스위치 · 예산 키
+      PREFLIGHT_ENV_KEYS,
+    }
+    if (args.length === 0 || !args.every((a) => a in ARG_KEYS)) return false
+    const keys = args.flatMap((a) => ARG_KEYS[a]!)
+    const FORBIDDEN = [RELEASE_ENV, CAPACITY_ENV]
+    return keys.includes(CONTROLLER_ENV)
+      && !keys.some((k) => FORBIDDEN.includes(k) || /CANARY|WINDOW/.test(k))
+      && !/process\.env/.test(code)
+      && !FORBIDDEN.some((k) => code.includes(k)) && !/\b(RELEASE_ENV|CAPACITY_ENV)\b/.test(code)
   })())
   /**
    * ── 🔴 **비밀값을 찍지 않는다** (2026-09-25 마스터 지적) ──
