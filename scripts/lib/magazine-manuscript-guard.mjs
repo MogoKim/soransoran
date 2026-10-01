@@ -21,6 +21,7 @@
  *    저 파일이 정본이고 이 관문은 그보다 앞에서 "받을 수 없는 것" 만 본다.
  *    두 곳에 같은 목록을 두면 한쪽만 고쳐지는 날이 온다.
  */
+import { REQUIRED_SECTIONS } from './magazine-brief-policy.mjs'
 
 /** 이보다 짧으면 원고가 아니다. fetchManuscript 의 대기 조건(900자)보다 넉넉히 잡는다. */
 export const MIN_BODY_LENGTH = 1200
@@ -48,6 +49,29 @@ const CONTAMINATION = [
 
 /** frontmatter 에 반드시 있어야 하는 키 — md-to-draft 의 REQUIRED_META 와 같다 */
 const REQUIRED_META = ['title', 'description', 'cluster']
+
+/**
+ * 🔴 **brief(작업지시서)를 원고로 받지 않는다** (2026-10-02 자연 회차 실측).
+ *
+ *    재생성 응답으로 `cold-weather-joint-pain`·`autumn-low-mood` 의 **brief 가 그대로** 돌아왔다.
+ *    frontmatter·`##`·`[CTA]` 를 다 갖췄고 1200자를 넘었으므로 위 검사를 전부 통과해
+ *    draft.md 를 덮었다. 원고에는 brief 의 섹션 소제목(`## 검색 의도` · `## 글 구조` …)이 나올 수 없다.
+ *
+ *    판정 근거는 **정본 하나**다 — `REQUIRED_SECTIONS` (magazine-brief-policy.mjs). 목록을 여기 다시 적지 않는다.
+ *    원고의 `##` 소제목이 그중 하나와 **같으면** brief echo 다.
+ *
+ *    🔴 그 글의 brief `##` 전체와 비교하지 않는다. 최근 brief 는 원고에 쓸 소제목을 `##` 줄로
+ *       그대로 적어 두므로, 정상 원고 5건(contact-old-friend-first 등)이 echo 로 오탐됐다 (운영 52건 실측).
+ *    🔴 본문 문장도 비교하지 않는다 — "반드시 그대로 넣을 문장" 은 원고에 그대로 들어가는 것이 정상이다.
+ */
+const headingsOf = (text) => (String(text ?? '').match(/^##[ \t]+.+$/gm) ?? [])
+  .map((h) => h.replace(/^##[ \t]+/, '').trim())
+
+const BRIEF_OWN_HEADINGS = new Set(REQUIRED_SECTIONS)
+
+export function briefEchoHeadings(body) {
+  return headingsOf(body).filter((h) => BRIEF_OWN_HEADINGS.has(h))
+}
 
 function hangulRatio(text) {
   // 공백·숫자·기호를 뺀 글자 중 한글 비율을 본다. 영어 원고를 받았을 때 잡는 것이 목적이다.
@@ -123,6 +147,11 @@ export function validateManuscript(text) {
   // h2 가 하나도 없으면 문단만 이어진 덩어리다. 매거진 본문 규격이 아니다.
   const h2 = (body.match(/^## /gm) ?? []).length
   if (h2 === 0) fail('NO_SECTION', '## 소제목이 하나도 없다')
+
+  const echo = briefEchoHeadings(body)
+  if (echo.length) {
+    fail('BRIEF_ECHO', `원고가 아니라 brief(작업지시서)다 — brief 섹션 소제목이 있다: ${echo.slice(0, 3).map((h) => `## ${h}`).join(' · ')}`)
+  }
 
   return {
     ok: reasons.length === 0,

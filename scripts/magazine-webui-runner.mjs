@@ -42,7 +42,7 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 /** RFC 4122 형태의 UUID (버전·변형 자리까지 본다) */
@@ -142,7 +142,7 @@ function help() {
   node scripts/magazine-webui-runner.mjs --login             전용 Chrome 을 띄운다 (닫지 말 것)
   node scripts/magazine-webui-runner.mjs --fetch <slug>      한 건 회수
   node scripts/magazine-webui-runner.mjs --fetch <slug> --force
-  node scripts/magazine-webui-runner.mjs --fetch <slug> --force --regen-packet <경로>
+  node scripts/magazine-webui-runner.mjs --fetch <slug> --force --regen-packet <경로> --draft-out <임시 경로>
                                                              🔴 QA 실패 패킷을 같이 보낸다 (자동 재생성)
                                                              이미 있는 draft.md 를 덮어쓴다 (사람이 켠다)
   node scripts/magazine-webui-runner.mjs --fetch-run --dry-run
@@ -511,10 +511,26 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
    *    앞판은 probe 를 먼저 하고 나서 보낼지 말지를 봤다 — HOLD 인 글에도 Chrome 을
    *    깨우고 붙었다. 없으면(일괄 회수) 호출부가 이미 한 번 확인했다는 뜻이다.
    */
-  accessFn = null } = {}) {
+  accessFn = null,
+  /**
+   * 🔴 **재생성 원고는 draft.md 에 직접 쓰지 않는다** (2026-10-02 자연 회차).
+   *    재생성 응답으로 brief 가 그대로 돌아와 draft.md 를 덮었고, 그 회차가 막혀도
+   *    미추적 draft.md 는 되돌려지지 않았다. 이제 재생성은 **부모가 준 임시 경로**에만 쓰고,
+   *    부모가 검증·변환에 성공했을 때만 draft.md 를 원자적으로 바꾼다 (magazine-auto-register.mjs).
+   */
+  draftOut = null } = {}) {
   const dir = join(draftsDir, slug)
   const briefPath = join(dir, 'brief.md')
-  const outPath = join(dir, 'draft.md')
+  const draftPath = join(dir, 'draft.md')
+  if (regenPacket && !draftOut) {
+    return { slug, status: 'failed', reason: 'REGEN_DRAFT_OUT_MISSING', stage: 'args', sent: false,
+      errorDetail: '재생성은 --draft-out 임시 경로가 필요하다 — draft.md 에 직접 쓰지 않는다 (한 글자도 보내지 않았다)' }
+  }
+  if (draftOut && resolve(draftOut) === resolve(draftPath)) {
+    return { slug, status: 'failed', reason: 'REGEN_DRAFT_OUT_IS_DRAFT', stage: 'args', sent: false,
+      errorDetail: '--draft-out 이 draft.md 자체다 — 임시 경로여야 한다 (한 글자도 보내지 않았다)' }
+  }
+  const outPath = draftOut ?? draftPath
 
   // 🔴 기본은 덮어쓰지 않는다. --force 는 사람이 한 건씩 켜는 손잡이다 —
   //    일괄 회수(--fetch-run)에는 넘기지 않는다. 무인 경로가 원고를 갈아엎으면
@@ -699,8 +715,8 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
   }
 }
 /** 저장된 원고를 기계 검사만 한다. 내용을 출력하지 않는다 */
-function describeDraft(slug, draftsDir = DRAFTS_DIR) {
-  const t = readFileSync(join(draftsDir, slug, 'draft.md'), 'utf8')
+function describeDraft(slug, draftsDir = DRAFTS_DIR, path = join(draftsDir, slug, 'draft.md')) {
+  const t = readFileSync(path, 'utf8')
   return {
     length: t.length,
     frontmatter: t.trimStart().startsWith('---'),
@@ -722,7 +738,7 @@ function describeDraft(slug, draftsDir = DRAFTS_DIR) {
  *    `SORAN_MAGAZINE_TEST_MODE=1` 일 때만 채워진다 (`magazine-test-harness.mjs`).
  *    운영에서는 비어 있어 실제 probe·CDP·장부가 돈다.
  */
-export async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null,
+export async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null, draftOut = null,
   quarantinePath = QUARANTINE_PATH, draftsDir = DRAFTS_DIR,
   probeFn = probe, browserDeps = {}, exit = (code) => process.exit(code) } = {}) {
   console.log('')
@@ -785,7 +801,7 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
   const r = await fetchSlug(slug, { force, regenPacket, quarantinePath, dateHint: todayKst(),
-    draftsDir, browserDeps, accessFn })
+    draftsDir, browserDeps, accessFn, draftOut })
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
@@ -812,10 +828,11 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
     return finishOne(r, 1)
   }
 
-  const d = describeDraft(slug, draftsDir)
+  // 🔴 재생성이면 원고는 임시 경로에 있다 — draft.md 는 부모가 검증한 뒤에만 바뀐다
+  const d = describeDraft(slug, draftsDir, draftOut ?? undefined)
   console.log(`     ✅ 저장 · 전송 1건 · 본문 ${d.length}자`)
   console.log('')
-  console.log(`     drafts/magazine/${slug}/draft.md`)
+  console.log(draftOut ? `     ${draftOut} (재생성 임시 원고 — 부모가 검증 뒤 교체한다)` : `     drafts/magazine/${slug}/draft.md`)
   console.log(`     frontmatter ${d.frontmatter ? '✅' : '🔴'} · h2 ${d.h2}개 · CTA ${d.cta}개`)
   console.log(`     금지 표기: 표 ${d.forbidden.table ? '🔴' : '0'} · http ${d.forbidden.http ? '🔴' : '0'}` +
     ` · 굵게 ${d.forbidden.bold ? '🔴' : '0'} · 번호목록 ${d.forbidden.numbered ? '🔴' : '0'}`)
@@ -1117,8 +1134,16 @@ async function main() {
       console.error('')
       process.exit(1)
     }
+    const dout = readPathArg(argv, '--draft-out')
+    if (!dout.ok) {
+      console.error('')
+      console.error(`  ⛔ ${dout.code} — ${dout.why}`)
+      console.error('     한 글자도 보내지 않았다. (전송 0건)')
+      console.error('')
+      process.exit(1)
+    }
     return await fetchOne(slug, {
-      force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path,
+      force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path, draftOut: dout.path,
       ...(T.probe ? { probeFn: T.probe } : {}),
       ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab, ...(T.fetchTiming ?? {}) } } : {}),
       ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),
