@@ -434,6 +434,15 @@ export const READ_QUERIES = {
    *
    * 🔴 읽어 온 본문은 프롬프트에만 쓰고 저장하지 않는다. 호출부의 책임이다.
    */
+  /**
+   * 🔴 작가 해시 v1 사슬 원본 대조 증명(2026-10-01 author-hash v2) — sourceRef(= CafePost.id) 표본의 작가명만 읽는다.
+   *    읽은 작가명은 그 자리에서 해시 대조에만 쓰고 출력 · 저장하지 않는다(`voice-author-hash-legacy-proof`).
+   */
+  authorsByIds: `
+    SELECT id, author
+      FROM "CafePost"
+     WHERE id = ANY($1)
+     ORDER BY id ASC`,
   bodiesBySourceRefs: `
     SELECT id, content, "boardName", "commentCount"
       FROM "CafePost"

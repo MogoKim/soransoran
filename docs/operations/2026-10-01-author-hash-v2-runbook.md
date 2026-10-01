@@ -26,7 +26,7 @@ v2 는 v1 을 감싼다: `hmac-v2:<kid12>:<hex64>` = `HMAC-SHA256(key, v1 의 he
 | # | 결정 | 기본 권고 |
 |---|---|---|
 | A1 | **key 생성.** `openssl rand -hex 32`(64자)로 만들어 정본 env `~/Library/Application Support/soransoran/env.local` 에 `VOICE_AUTHOR_HASH_SALT=<값>` 한 줄을 넣는다. 비밀번호 관리자에도 보관한다. 저장소 · 로그 · 채팅에는 절대 남기지 않는다 | 32자 미만이면 도구가 거부한다 |
-| A2 | **v1 사슬 확인.** 계획이 `v1 사슬 증명 unproven` 이면, 저장값이 공개 사슬로 만들어졌다는 증거가 해시에 없다는 뜻이다. 2026-10-01 probe 는 알려진 이름 40개 중 일치 0이었고, env 백업 16개 어디에도 key 가 없었다. 창업자는 "2026-08-26 적재에 별도 key 를 쓰지 않았다" 를 확인한 경우에만 `--attest-legacy-v1-domain` 을 붙인다 | 확인하지 못하면 적용하지 않는다. 다른 key 로 만든 값을 감싸면 전후가 모두 빗나간다 |
+| A2 | **v1 사슬 원본 대조 증명.** `npm run voice:author-hash-legacy-proof`(read-only)가 **PROVEN** 이어야 한다. 이 도구는 `VoiceSource` 표본 200행의 sourceRef 로 우나어 원본 작가명을 읽어 v1 사슬로 다시 계산해 대조한다. PROVEN 은 대조 100행 이상에 원본 · 정규화 해시가 전부 일치할 때다. `--apply` 도 적용 직전에 같은 대조를 다시 돌린다. 사람 확인으로 대신하는 옵션은 없다. **2026-10-01 실측: UNKNOWN.** 표본 200행 중 대조 0행이다. 우나어 read-only role 에서 `CafePost` 가 0행이다(통계 추정치도 0). 같은 스키마의 `Post` · `Comment` 는 읽힌다. 원본이 비워진 것으로 보이며 원인은 확인하지 못했다 | UNKNOWN 이면 적용하지 않는다. 원본 작가명을 다시 읽을 수 있게 되는 것(우나어 CafePost 복구 또는 다른 원본)이 선결 조건이다 |
 | A3 | **되돌리기 백업 보존 기간.** 백업은 `~/Library/Application Support/soransoran/author-hash-rollback/` 아래 0600 권한 파일로 남는다. 백업에는 **v1 값**이 들어 있어 사전 대입이 가능하다 | 검증 후 7일 보존, 그 뒤 삭제(A4 와 함께) |
 | A4 | **key 보존.** 되돌리기는 적용 때와 **같은 key** 로만 된다. 백업을 지우기 전에는 key 를 바꾸거나 지우지 않는다 | — |
 | A5 | **실행 창.** 22:00~07:00 결정 창을 피하고, voice 적재 도구가 돌지 않는 시간에 한다. 적재 도구는 launchd 에 없다 | 평일 낮 |
@@ -51,19 +51,19 @@ npm run voice:author-hash-migrate
 - `key 있음 (kid 지문만 · 12자)`
 - `voiceSource 행 9674` · `voiceCommentSignal 행 59252` (2026-10-01 기준. 달라졌으면 먼저 원인을 본다)
 - `상태 needs-migration` · `할 일 migrate` · `감쌀 행 N` · `갱신 문장 M`
-- `v1 사슬 증명 proven | unproven`
+- `회원 이름 probe proven | unproven` — 참고값이다. 적용 판정은 A2 원본 대조다
 - `쓰기 시도 0`
 
 다음 경우에는 멈춘다.
 
 - 상태가 `mixed` · `corrupt` · `key-mismatch` · `empty` 이면 적용하지 않고 원인을 본다.
-- `갱신 문장 M` 은 트랜잭션 안의 왕복 수다. 운영 DB 왕복 시간 × M 이 트랜잭션 시한(기본 60분)의 절반을 넘으면 적용하지 않고 보고한다.
+- `갱신 문장 M` 은 트랜잭션 안의 왕복 수다. 운영 DB 왕복 시간 × M 이 트랜잭션 시한(코드 `TX_TIMEOUT_MS` = 90분)의 절반(45분)을 넘으면 적용하지 않고 보고한다.
 
 ### ② 적용 (🔴 승인 뒤에만)
 
 ```bash
-npm run voice:author-hash-migrate -- --apply                              # 사슬 proven
-npm run voice:author-hash-migrate -- --apply --attest-legacy-v1-domain    # unproven + A2 확인
+npm run voice:author-hash-legacy-proof     # A2 — PROVEN(exit 0) 이 아니면 여기서 멈춘다
+npm run voice:author-hash-migrate -- --apply   # 적용 직전 원본 대조를 다시 돌려 PROVEN 일 때만 감싼다
 ```
 
 도구 계약(격리 DB 검사 `npm run voice:author-hash-db-check` 가 잠근다):
@@ -111,6 +111,6 @@ npm run voice:author-hash-migrate -- --rollback=<적용 때 출력된 백업 경
 |---|---|---|
 | `LOCKED` — lock 파일이 있다 | 다른 실행이 돌고 있거나, 앞 실행이 강제 종료됐다 | `pgrep -f voice-author-hash-migrate` 가 비어 있을 때만 `~/Library/Application Support/soransoran/author-hash-migrate.lock` 을 지운다 |
 | `TX_FAILED` | 트랜잭션 전체 롤백. DB 변경 0 | 사유 코드를 본다. 백업 파일은 남았으니 A3 에 따라 지운다 |
-| `LEGACY_DOMAIN_UNPROVEN` | 사슬 증명이 없고 A2 확인도 없다 | A2 결정 |
+| `LEGACY_DOMAIN_UNPROVEN` | 원본 대조가 PROVEN 이 아니다(UNKNOWN 이거나 대조를 끝내지 못함) | 적용하지 않는다. A2 선결 조건부터 푼다 |
 | `REFUSED` + `mixed`/`corrupt`/`key-mismatch` | 저장값이 전환할 수 있는 상태가 아니다 | 적용하지 않는다. 원인(부분 적재 · 다른 key)을 먼저 본다 |
 | 되돌리기 `ROLLBACK_MISMATCH` | 적용 뒤 값이 바뀌었거나 key 가 다르다 | key 를 확인한다. 추측으로 덮지 않는다 |

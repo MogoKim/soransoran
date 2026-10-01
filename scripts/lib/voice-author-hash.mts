@@ -95,6 +95,57 @@ export function legacyDomainProbe(
   return { probeNames, hits }
 }
 
+/** 🔴 원본 대조 증명의 최소 표본 — 이보다 적게 맞으면 증명이 아니다 */
+export const LEGACY_PROOF_MIN_SAMPLE = 100
+
+export type LegacyDomainProof = {
+  status: 'PROVEN' | 'UNKNOWN'
+  /** 뽑은 행 수 */
+  sample: number
+  /** 원본 작가명이 있고 저장값이 v1 이라 대조한 행 수 · 그중 일치 */
+  compared: number
+  matched: number
+  /** authorHashNorm 대조 수 · 일치 */
+  normCompared: number
+  normMatched: number
+  reason: string
+}
+
+/**
+ * 🔴 **v1 사슬 원본 대조 증명 — 수만 돌려준다.** 저장 v1 값 옆에 그 행의 **원본 작가명**(우나어 read-only)을 놓고
+ *    `LEGACY_V1_DOMAIN` 사슬로 다시 계산해 같은지 센다. 알려진 회원 이름 probe 와 달리 "그 행을 만든 바로 그 입력" 이라
+ *    일치하면 증명, 어긋나면 사슬이 다르다는 뜻이다.
+ *    PROVEN = 대조 ≥ `LEGACY_PROOF_MIN_SAMPLE` · 원본 해시 전부 일치 · 정규화 해시 전부 일치. 그 밖은 전부 UNKNOWN(우회 없음).
+ *    🔴 이름 · 해시를 돌려주지 않는다.
+ */
+export function legacyDomainSampleProof(
+  rows: Iterable<{ author: string | null; storedHash: string | null; storedNorm: string | null }>,
+  normalize: (v: string) => string,
+): LegacyDomainProof {
+  let sample = 0, compared = 0, matched = 0, normCompared = 0, normMatched = 0
+  for (const r of rows) {
+    sample += 1
+    const a = (r.author ?? '').trim()
+    if (a === '') continue
+    if (r.storedHash !== null && generationOf(r.storedHash).gen === 'v1') {
+      compared += 1
+      if (r.storedHash === `${V1_PREFIX}${legacyHexOf(a)}`) matched += 1
+    }
+    const z = normalize(a)
+    if (z !== '' && r.storedNorm !== null && generationOf(r.storedNorm).gen === 'v1') {
+      normCompared += 1
+      if (r.storedNorm === `${V1_PREFIX}${legacyHexOf(z)}`) normMatched += 1
+    }
+  }
+  const base = { sample, compared, matched, normCompared, normMatched }
+  if (compared < LEGACY_PROOF_MIN_SAMPLE) {
+    return { ...base, status: 'UNKNOWN', reason: `대조 표본 ${compared} < ${LEGACY_PROOF_MIN_SAMPLE} — 증명할 수 없다` }
+  }
+  if (matched !== compared) return { ...base, status: 'UNKNOWN', reason: `원본 해시 일치 ${matched}/${compared} — 저장값이 이 사슬로 만들어졌다고 말할 수 없다` }
+  if (normMatched !== normCompared) return { ...base, status: 'UNKNOWN', reason: `정규화 해시 일치 ${normMatched}/${normCompared} — 정규화 사슬이 다르다` }
+  return { ...base, status: 'PROVEN', reason: `원본 해시 ${matched}/${compared} · 정규화 해시 ${normMatched}/${normCompared} 일치` }
+}
+
 /** 🔴 저장된 v1 값을 v2 로 감싼다(원문 없이). v1 모양이 아니면 null — 추측으로 감싸지 않는다 */
 export function wrapV1(stored: string, key: AuthorHashKey): string | null {
   if (!stored.startsWith(V1_PREFIX)) return null

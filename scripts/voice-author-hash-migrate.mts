@@ -3,9 +3,9 @@
  * 작가 해시 v1 → v2 전환 CLI — 🔴 **기본은 계획(read-only)이다** (2026-10-01 author-hash v2)
  *
  *   npm run voice:author-hash-migrate                       계획만 — 세대 집계 · 상태 · v1 사슬 증명 · 감쌀 행 수 (DB write 0)
- *   npm run voice:author-hash-migrate -- --apply            적용 — 🔴 창업자 승인 뒤에만
- *   npm run voice:author-hash-migrate -- --apply --attest-legacy-v1-domain
- *                                                           v1 사슬 증명이 없을 때 창업자가 "저장값은 공개 사슬로 만들었다" 를 확인한 경우만
+ *   npm run voice:author-hash-migrate -- --apply            적용 — 🔴 창업자 승인 뒤에만. 적용 직전에 v1 사슬 원본 대조
+ *                                                           (`voice:author-hash-legacy-proof` 와 같은 함수)를 다시 돌려 PROVEN 일 때만 감싼다.
+ *                                                           UNKNOWN 이면 중단 — 사람 확인으로 대신하는 옵션은 없다
  *   npm run voice:author-hash-migrate -- --rollback=<백업 파일>
  *                                                           되돌리기 — 적용 때 남긴 백업으로 v1 복원
  *
@@ -21,11 +21,11 @@ import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import { readAuthorHashKey } from './lib/voice-author-hash.mjs'
-import { applyMigration, describePlan, planMigration, rollbackMigration } from './lib/voice-author-hash-migration.mjs'
+import { applyMigration, describePlan, planMigration, readLegacyDomainProof, rollbackMigration } from './lib/voice-author-hash-migration.mjs'
+import { withUnaoAuthorFetcher } from './lib/voice-author-hash-unao.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
-const ATTEST = argv.includes('--attest-legacy-v1-domain')
 const ROLLBACK = argv.find((a) => a.startsWith('--rollback='))?.slice('--rollback='.length) ?? null
 const APP = join(homedir(), 'Library', 'Application Support', 'soransoran')
 const BACKUP_DIR = join(APP, 'author-hash-rollback')
@@ -59,7 +59,17 @@ async function main(): Promise<number> {
       console.log(`  쓰기 시도 ${writeAttempts}`)
       return 0
     }
-    const r = await applyMigration(base, { keyRead, backupDir: BACKUP_DIR, lockPath: LOCK, attestLegacyDomain: ATTEST, now: new Date() })
+    if (!keyRead.ok) { console.error(`❌ 적용 거절 [REFUSED] ${keyRead.reason} · DB 변경 0`); return 1 }
+    // 🔴 적용 직전 원본 대조 — 접속 실패 · UNKNOWN 이면 감싸지 않는다(applyMigration 이 다시 확인한다)
+    let legacyProof = null
+    try {
+      legacyProof = await withUnaoAuthorFetcher((fetchAuthors) => readLegacyDomainProof(base, fetchAuthors))
+    } catch (e) {
+      console.error(`❌ 적용 거절 [LEGACY_DOMAIN_UNPROVEN] 원본 대조를 끝내지 못했다(${e instanceof Error ? e.name : 'unknown'}) · DB 변경 0`)
+      return 1
+    }
+    console.log(`  원본 대조 ${legacyProof.status} — 대조 ${legacyProof.compared} · 일치 ${legacyProof.matched}`)
+    const r = await applyMigration(base, { keyRead, backupDir: BACKUP_DIR, lockPath: LOCK, legacyProof, now: new Date() })
     if (!r.ok) {
       console.error(`❌ 적용 거절 [${r.code}] ${r.reason} · DB 변경 0`)
       return 1

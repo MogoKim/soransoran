@@ -13,7 +13,8 @@
  *      백업 0600 + checksum
  *   ⑤ 재실행 → noop(이중 HMAC 없음) · 다른 key 로 재실행 → 거절(key-mismatch)
  *   ⑥ 되돌리기 — 다른 key · 변조 백업 → 거절 · DB 변경 0 / 맞는 key → 원래 v1 로 정확히 복원
- *   ⑦ v1 사슬 미증명 → 창업자 확인 없이는 거절 · 확인 있으면 전환
+ *   ⑦ v1 사슬 원본 대조(가짜 우나어 작가명) — 공개 사슬 → PROVEN · 다른 salt · 한 행 어긋남 · 정규화만 어긋남 · 원본 없음 · 표본 99 →
+ *      UNKNOWN · UNKNOWN 이나 대조 없음이면 적용 거절(사람 확인 우회 없음)
  *   ⑧ 서로 다른 lock 의 두 프로세스 동시 적용 → 전환은 정확히 한 번 · 결과 값 = 한 번 감싼 값
  *   ⑨ CLI 기본 실행은 계획만 — 쓰기 시도 0 · 해시 · 이름 · key 출력 0 · `--apply` 도 key 없으면 exit 1 · DB 변경 0
  *
@@ -41,7 +42,8 @@ const URL = process.env.DATABASE_URL ?? ''
 
 const { PrismaClient } = await import('@prisma/client')
 const { authorHashKeyOf, authorGateOf, wrapV1, V1_PREFIX } = await import('./lib/voice-author-hash.mjs')
-const { applyMigration, planMigration, rollbackMigration } = await import('./lib/voice-author-hash-migration.mjs')
+const { applyMigration, planMigration, readLegacyDomainProof, rollbackMigration } = await import('./lib/voice-author-hash-migration.mjs')
+type LegacyDomainProof = import('./lib/voice-author-hash.mjs').LegacyDomainProof
 const { normalizeN2 } = await import('./lib/persona-gate-name-collision.mjs')
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -54,14 +56,6 @@ if (!KEY_A.ok || !KEY_B.ok) throw new Error('test key')
 
 const prisma = new PrismaClient()
 
-// ── ⑧ 자식 프로세스 모드 — 다른 lock 으로 같은 DB 에 동시에 적용한다 ──
-if (process.env.AUTHOR_HASH_DB_CHECK_CHILD !== undefined) {
-  const [lockPath, backupDir] = process.env.AUTHOR_HASH_DB_CHECK_CHILD.split('|') as [string, string]
-  const r = await applyMigration(prisma, { keyRead: KEY_A, backupDir, lockPath, attestLegacyDomain: false, now: new Date() })
-  console.log(`CHILD_RESULT ${r.ok ? r.kind : r.code}`)
-  await prisma.$disconnect()
-  process.exit(0)
-}
 
 let pass = 0
 const failures: string[] = []
@@ -79,6 +73,27 @@ const v1OtherSaltOf = (value: string): string =>
 const MEMBER_A = '봄뜰하나'
 const MEMBER_B = '겨울숲둘'
 const CRAWL_ONLY = '가을바다셋'
+/** 원본 대조 최소 표본(100)을 넘기기 위한 합성 작가 글 수 */
+const BULK = 120
+
+/** 🔴 가짜 우나어 원본 — sourceRef → 작가명. 운영 커넥터 대신 같은 모양의 함수를 준다(SELECT 결과와 같은 Map) */
+const authorOfRef = (ref: string): string | null => {
+  if (ref === 's1' || ref === 's2') return MEMBER_A
+  if (ref === 's3') return CRAWL_ONLY
+  const m = /^b(\d+)$/.exec(ref)
+  return m ? `합성작가${m[1]}` : null
+}
+const fakeUnao = async (refs: string[]): Promise<Map<string, string | null>> => new Map(refs.map((r) => [r, authorOfRef(r)]))
+
+// ── ⑧ 자식 프로세스 모드 — 다른 lock 으로 같은 DB 에 동시에 적용한다 ──
+if (process.env.AUTHOR_HASH_DB_CHECK_CHILD !== undefined) {
+  const [lockPath, backupDir] = process.env.AUTHOR_HASH_DB_CHECK_CHILD.split('|') as [string, string]
+  const legacyProof = await readLegacyDomainProof(prisma, fakeUnao)
+  const r = await applyMigration(prisma, { keyRead: KEY_A, backupDir, lockPath, legacyProof, now: new Date() })
+  console.log(`CHILD_RESULT ${r.ok ? r.kind : r.code}`)
+  await prisma.$disconnect()
+  process.exit(0)
+}
 const SPACED_B = '겨울 숲 둘'
 
 const WRITES = new Set(['create', 'createMany', 'createManyAndReturn', 'update', 'updateMany', 'updateManyAndReturn', 'upsert', 'delete', 'deleteMany', '$executeRaw', '$executeRawUnsafe'])
@@ -105,7 +120,7 @@ async function cleanup(): Promise<void> {
   await prisma.user.deleteMany({ where: { nickname: { in: [MEMBER_A, MEMBER_B] } } })
 }
 
-/** v1 세대 fixture — 글 4(같은 작가 2 · 다른 작가 1 · 작가 없음 1) · 댓글 3(띄어쓴 이름 · 같은 작가 · 작가 없음) */
+/** v1 세대 fixture — 글 4(같은 작가 2 · 다른 작가 1 · 작가 없음 1) + 합성 작가 글 120 · 댓글 3(띄어쓴 이름 · 같은 작가 · 작가 없음) */
 async function seed(hash: (v: string) => string, withMembers: boolean): Promise<void> {
   await cleanup()
   if (withMembers) {
@@ -113,7 +128,7 @@ async function seed(hash: (v: string) => string, withMembers: boolean): Promise<
     await prisma.user.create({ data: { nickname: MEMBER_B } })
   }
   const src = (ref: string, author: string | null) => prisma.voiceSource.create({ data: {
-    origin: 'fixture', sourceRef: `author-hash-db-check-${ref}`, sourceSite: 'navercafe:fixture', sourceUrl: `https://example.invalid/${ref}`,
+    origin: 'unao_cafe', sourceRef: ref, sourceSite: 'navercafe:fixture', sourceUrl: `https://example.invalid/${ref}`,
     capturedAt: new Date(0),
     authorHash: author === null ? null : hash(author), authorHashNorm: author === null ? null : hash(normalizeN2(author)),
   } })
@@ -121,6 +136,12 @@ async function seed(hash: (v: string) => string, withMembers: boolean): Promise<
   await src('s2', MEMBER_A)
   await src('s3', CRAWL_ONLY)
   await src('s4', null)
+  await prisma.voiceSource.createMany({ data: Array.from({ length: BULK }, (_, i) => {
+    const ref = `b${String(i).padStart(3, '0')}`
+    const a = authorOfRef(ref)!
+    return { origin: 'unao_cafe', sourceRef: ref, sourceSite: 'navercafe:fixture', sourceUrl: `https://example.invalid/${ref}`,
+      capturedAt: new Date(0), authorHash: hash(a), authorHashNorm: hash(normalizeN2(a)) }
+  }) })
   let ordinal = 0
   for (const author of [SPACED_B, MEMBER_A, null]) {
     await prisma.voiceCommentSignal.create({ data: {
@@ -129,13 +150,14 @@ async function seed(hash: (v: string) => string, withMembers: boolean): Promise<
     } })
   }
 }
-const NON_NULL_ROWS = 5 // 글 3 + 댓글 2
+const NON_NULL_ROWS = 5 + BULK // 글 3 + 댓글 2 + 합성 글 120
+const SOURCE_ROWS = 4 + BULK
 
 const TMP = mkdtempSync(join(tmpdir(), 'author-hash-db-check-'))
 const BACKUP = join(TMP, 'backup')
 const LOCK = join(TMP, 'migrate.lock')
 const backups = (): string[] => existsSync(BACKUP) ? readdirSync(BACKUP).filter((f) => f.endsWith('.jsonl')) : []
-const base = { backupDir: BACKUP, lockPath: LOCK, attestLegacyDomain: false, now: new Date('2026-10-01T00:00:00Z'), txTimeoutMs: 60_000 }
+const base = { backupDir: BACKUP, lockPath: LOCK, legacyProof: null as LegacyDomainProof | null, now: new Date('2026-10-01T00:00:00Z'), txTimeoutMs: 60_000 }
 
 function runTsx(args: string[], env: Record<string, string>): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
@@ -162,11 +184,21 @@ try {
   check('계획 — 쓰기 시도 0 · 스냅샷 불변', writeAttempts === 0 && original === await snapshot())
   check(`계획 — needs-migration · migrate · 감쌀 행 ${NON_NULL_ROWS} (${plan.state} ${plan.action} ${plan.rowsToWrap})`,
     plan.state === 'needs-migration' && plan.action === 'migrate' && plan.rowsToWrap === NON_NULL_ROWS)
-  check(`계획 — 갱신 문장 = 고유 (hash, norm) 쌍 4 (같은 작가 2행은 1문장) (${plan.updateStatements})`, plan.updateStatements === 4)
+  check(`계획 — 갱신 문장 = 고유 (hash, norm) 쌍 ${4 + BULK} (같은 작가 2행은 1문장) (${plan.updateStatements})`, plan.updateStatements === 4 + BULK)
+
+  // ── ①-b v1 사슬 원본 대조 — 적용 전제 ──
+  const proof = await readLegacyDomainProof(ro, fakeUnao)
+  check(`원본 대조 — 공개 사슬로 만든 저장값 → PROVEN (대조 ${proof.compared} · 일치 ${proof.matched} · 정규화 ${proof.normMatched}/${proof.normCompared})`,
+    proof.status === 'PROVEN' && proof.compared === 3 + BULK && proof.matched === proof.compared && proof.normMatched === proof.normCompared && writeAttempts === 0)
+  check('원본 대조 결과에 이름 · 해시가 없다(수와 사유만)',
+    !/[0-9a-f]{12,}/.test(JSON.stringify(proof)) && ![MEMBER_A, CRAWL_ONLY, '합성작가'].some((n) => JSON.stringify(proof).includes(n)))
+  const noProof = await applyMigration(prisma, { ...base, keyRead: KEY_A })
+  check('원본 대조 없이 적용 → LEGACY_DOMAIN_UNPROVEN · DB 변경 0', !noProof.ok && noProof.code === 'LEGACY_DOMAIN_UNPROVEN' && original === await snapshot())
+  base.legacyProof = proof
   check(`계획 — v1 사슬 증명(알려진 이름 일치 ${plan.legacyDomain.hits})`, plan.legacyDomain.status === 'proven' && plan.legacyDomain.hits === 2)
   const planNoKey = await planMigration(ro, authorHashKeyOf(undefined))
   check('계획 — key 없음 → refuse · 사유 · 세대 집계는 그대로 보인다',
-    planNoKey.action === 'refuse' && planNoKey.refuseReason !== null && planNoKey.state === 'needs-migration' && planNoKey.tables.voiceSource.census.v1 === 6)
+    planNoKey.action === 'refuse' && planNoKey.refuseReason !== null && planNoKey.state === 'needs-migration' && planNoKey.tables.voiceSource.census.v1 === (3 + BULK) * 2)
 
   // ── ② 거절 경로 ──
   const noKey = await applyMigration(prisma, { ...base, keyRead: authorHashKeyOf(undefined) })
@@ -179,7 +211,7 @@ try {
     !locked.ok && locked.code === 'LOCKED' && original === await snapshot() && existsSync(LOCK))
   rmSync(LOCK)
   {
-    const one = await prisma.voiceSource.findFirstOrThrow({ where: { sourceRef: 'author-hash-db-check-s3' } })
+    const one = await prisma.voiceSource.findFirstOrThrow({ where: { sourceRef: 's3' } })
     await prisma.voiceSource.update({ where: { id: one.id }, data: { authorHash: wrapV1(one.authorHash!, KEY_A.key), authorHashNorm: wrapV1(one.authorHashNorm!, KEY_A.key) } })
     const mixedSnap = await snapshot()
     const mixed = await applyMigration(prisma, { ...base, keyRead: KEY_A })
@@ -198,7 +230,7 @@ try {
   // ── ③-b 읽은 뒤 · 트랜잭션 전에 한 행이 다른 작가로 바뀜 → 쌍별 갱신 수가 어긋나 전체 롤백 ──
   //    (바뀐 행도 v1 이라 사후 검증만으로는 못 잡는다 — 백업과 DB 가 달라져 되돌리기가 깨진다)
   {
-    const s2 = await prisma.voiceSource.findFirstOrThrow({ where: { sourceRef: 'author-hash-db-check-s2' } })
+    const s2 = await prisma.voiceSource.findFirstOrThrow({ where: { sourceRef: 's2' } })
     const raced = await applyMigration(prisma, { ...base, keyRead: KEY_A, beforeTx: async () => {
       await prisma.voiceSource.update({ where: { id: s2.id }, data: { authorHash: v1Of(CRAWL_ONLY), authorHashNorm: v1Of(normalizeN2(CRAWL_ONLY)) } })
     } })
@@ -220,7 +252,7 @@ try {
   check('적용 후 — 한 번 감싼 값과 같다(원문 없이 같은 사람)',
     vals.includes(wrapV1(v1Of(MEMBER_A), KEY_A.key)!) && vals.includes(wrapV1(v1Of(normalizeN2(SPACED_B)), KEY_A.key)!))
   check('적용 후 — 행 수 불변 · 작가 없는 행은 null 그대로',
-    await prisma.voiceSource.count() === 4 && await prisma.voiceCommentSignal.count() === 3
+    await prisma.voiceSource.count() === SOURCE_ROWS && await prisma.voiceCommentSignal.count() === 3
       && await prisma.voiceSource.count({ where: { authorHash: null } }) === 1 && await prisma.voiceCommentSignal.count({ where: { authorHash: null } }) === 1)
   check(`적용 후 — B2 충돌 수 전후 같음 (${applied.ok && applied.kind === 'migrated' ? `${applied.b2HitsBefore}=${applied.b2HitsAfter}` : '-'})`,
     applied.ok && applied.kind === 'migrated' && applied.b2HitsBefore === 2 && applied.b2HitsAfter === 2)
@@ -266,18 +298,35 @@ try {
   const rbTwice = await rollbackMigration(prisma, { keyRead: KEY_A, backupFile, lockPath: LOCK, txTimeoutMs: 60_000 })
   check('되돌리기 두 번 → 실패 · 값 불변(v1 을 다시 건드리지 않는다)', !rbTwice.ok && original === await snapshot())
 
-  // ── ⑦ v1 사슬 미증명 ──
-  await seed(v1OtherSaltOf, false)
-  const unprovenSnap = await snapshot()
-  const unproven = await applyMigration(prisma, { ...base, keyRead: KEY_A })
-  check(`미증명 → LEGACY_DOMAIN_UNPROVEN · DB 변경 0 (${unproven.ok ? unproven.kind : unproven.code})`,
-    !unproven.ok && unproven.code === 'LEGACY_DOMAIN_UNPROVEN' && unprovenSnap === await snapshot())
+  // ── ⑦ v1 사슬 원본 대조 UNKNOWN → 중단(우회 없음) ──
   await seed(v1OtherSaltOf, true)
-  const unprovenMembers = await planMigration(prisma, KEY_A)
-  check('회원이 있어도 다른 salt 로 만든 저장값이면 unproven(0 일치) — 증명으로 읽지 않는다',
-    unprovenMembers.legacyDomain.status === 'unproven' && unprovenMembers.legacyDomain.hits === 0 && unprovenMembers.legacyDomain.probeNames >= 2)
-  const attested = await applyMigration(prisma, { ...base, keyRead: KEY_A, attestLegacyDomain: true })
-  check('창업자 확인(attest) → 전환', attested.ok && attested.kind === 'migrated')
+  const otherSnap = await snapshot()
+  const otherProof = await readLegacyDomainProof(prisma, fakeUnao)
+  check(`다른 salt 로 만든 저장값 → UNKNOWN (대조 ${otherProof.compared} · 일치 ${otherProof.matched})`,
+    otherProof.status === 'UNKNOWN' && otherProof.compared === 3 + BULK && otherProof.matched === 0)
+  const otherApply = await applyMigration(prisma, { ...base, keyRead: KEY_A, legacyProof: otherProof })
+  check(`UNKNOWN 증명으로 적용 → LEGACY_DOMAIN_UNPROVEN · DB 변경 0 (${otherApply.ok ? otherApply.kind : otherApply.code})`,
+    !otherApply.ok && otherApply.code === 'LEGACY_DOMAIN_UNPROVEN' && otherSnap === await snapshot())
+  const members = await planMigration(prisma, KEY_A)
+  check('회원 이름 probe 도 unproven(0 일치) — 참고값이지 적용 근거가 아니다',
+    members.legacyDomain.status === 'unproven' && members.legacyDomain.hits === 0 && members.legacyDomain.probeNames >= 2)
+  await seed(v1Of, true)
+  {
+    const one = await prisma.voiceSource.findFirstOrThrow({ where: { sourceRef: 'b007' } })
+    await prisma.voiceSource.update({ where: { id: one.id }, data: { authorHash: v1Of('다른사람') } })
+    const partial = await readLegacyDomainProof(prisma, fakeUnao)
+    check(`한 행만 어긋남 → UNKNOWN (일치 ${partial.matched}/${partial.compared}) — 부분 일치를 증명으로 읽지 않는다`,
+      partial.status === 'UNKNOWN' && partial.matched === partial.compared - 1)
+    const partialNorm = await (async () => {
+      await prisma.voiceSource.update({ where: { id: one.id }, data: { authorHash: v1Of('합성작가007'), authorHashNorm: v1Of('다른사람') } })
+      return readLegacyDomainProof(prisma, fakeUnao)
+    })()
+    check(`정규화 해시만 어긋남 → UNKNOWN (${partialNorm.normMatched}/${partialNorm.normCompared})`, partialNorm.status === 'UNKNOWN' && partialNorm.matched === partialNorm.compared)
+  }
+  const gone = await readLegacyDomainProof(prisma, async () => new Map())
+  check(`원본이 사라짐(작가명 0) → UNKNOWN (대조 ${gone.compared})`, gone.status === 'UNKNOWN' && gone.compared === 0)
+  const thin = await readLegacyDomainProof(prisma, async (refs) => new Map(refs.slice(0, 99).map((r) => [r, authorOfRef(r)])))
+  check(`대조 99 < 100 → UNKNOWN (대조 ${thin.compared} · 일치 ${thin.matched})`, thin.status === 'UNKNOWN' && thin.compared === 99 && thin.matched === 99)
 
   // ── ⑧ 두 프로세스 동시 적용(다른 lock = 다른 호스트) ──
   await seed(v1Of, true)

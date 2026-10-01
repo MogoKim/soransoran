@@ -9,7 +9,7 @@
  *    · 계획(`planMigration`)은 읽기만 한다. 세대 집계 · 상태 · v1 사슬 증명 probe · 행 수만 낸다(해시 · 이름 · key 출력 0).
  *    · 적용(`applyMigration`)은
  *        ① key 필수 · ② 파일 lock(같은 호스트 동시 실행 차단) · ③ 상태가 `needs-migration` 일 때만 — `v2-ready` 면 아무것도 안 한다(재실행 idempotent ·
- *        이중 HMAC 없음), 섞임 · 손상 · 다른 key · 빈 집합이면 거절 · ④ v1 사슬 미증명이면 창업자 확인(`attestLegacyDomain`) 없이는 거절 ·
+ *        이중 HMAC 없음), 섞임 · 손상 · 다른 key · 빈 집합이면 거절 · ④ v1 사슬 원본 대조(`readLegacyDomainProof`)가 PROVEN 이 아니면 거절(우회 없음) ·
  *        ⑤ **되돌리기 백업 먼저**(0600 JSONL + sha256) · ⑥ 단일 트랜잭션 — 행마다 "지금 값 = 읽은 v1" 조건부 갱신(다른 호스트의 동시 실행 ·
  *        그 사이 변경을 잡는다) · ⑦ 트랜잭션 안에서 사후 검증(전부 지금 key 의 v2 · 행 수 불변 · 알려진 이름의 B2 충돌 수 불변) — 하나라도
  *        어긋나면 throw → 전체 롤백(DB 변경 0).
@@ -26,8 +26,8 @@ import { dirname, join } from 'node:path'
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
-  authorHashV2Of, censusOf, legacyDomainProbe, setStateOf, wrapV1,
-  type AuthorHashCensus, type AuthorHashKeyRead, type AuthorHashSetState,
+  authorHashV2Of, censusOf, legacyDomainProbe, legacyDomainSampleProof, setStateOf, wrapV1,
+  type AuthorHashCensus, type AuthorHashKeyRead, type AuthorHashSetState, type LegacyDomainProof,
 } from './voice-author-hash.mjs'
 import { normalizeN2 } from './persona-gate-name-collision.mjs'
 
@@ -52,6 +52,35 @@ async function knownNamesOf(db: Reader): Promise<string[]> {
   const out = new Set<string>()
   for (const u of users) for (const n of [u.nickname, u.name]) if (n !== null && n.trim() !== '') out.add(n.trim())
   return [...out]
+}
+
+/** 표본 크기 — 최소 표본(100)의 두 배. 결측(원본 삭제) 행이 있어도 하한을 넘기 위해서다 */
+export const LEGACY_PROOF_SAMPLE_SIZE = 200
+/** 우나어 원본은 `unao_cafe` 원천만 sourceRef = CafePost.id 다 */
+const LEGACY_PROOF_ORIGIN = 'unao_cafe'
+
+/**
+ * 🔴 **v1 사슬 원본 대조 증명 — read-only.** `VoiceSource`(unao_cafe · authorHash 있음)를 sourceRef 오름차순으로 세우고
+ *    **등간격으로 결정적 표본**을 뽑는다(같은 DB 면 언제 돌려도 같은 표본). 원본 작가명은 `fetchAuthors`(우나어 read-only)로만 받는다.
+ *    🔴 이름 · 해시 · sourceRef 를 돌려주지 않는다. 수와 판정만.
+ */
+export async function readLegacyDomainProof(
+  db: Reader,
+  fetchAuthors: (sourceRefs: string[]) => Promise<Map<string, string | null>>,
+  sampleSize = LEGACY_PROOF_SAMPLE_SIZE,
+): Promise<LegacyDomainProof> {
+  const rows = await db.voiceSource.findMany({
+    where: { origin: LEGACY_PROOF_ORIGIN, authorHash: { not: null } },
+    select: { sourceRef: true, authorHash: true, authorHashNorm: true },
+    orderBy: { sourceRef: 'asc' },
+  })
+  const step = Math.max(1, Math.floor(rows.length / sampleSize))
+  const picked = rows.filter((_, i) => i % step === 0).slice(0, sampleSize)
+  const authors = picked.length === 0 ? new Map<string, string | null>() : await fetchAuthors(picked.map((r) => r.sourceRef))
+  return legacyDomainSampleProof(
+    picked.map((r) => ({ author: authors.get(r.sourceRef) ?? null, storedHash: r.authorHash, storedNorm: r.authorHashNorm })),
+    normalizeN2,
+  )
 }
 
 export type TableCounts = { rows: number; census: AuthorHashCensus }
@@ -169,7 +198,8 @@ export async function applyMigration(prisma: PrismaClient, opts: {
   keyRead: AuthorHashKeyRead
   backupDir: string
   lockPath: string
-  attestLegacyDomain: boolean
+  /** 🔴 원본 대조 증명(`readLegacyDomainProof`) — PROVEN 이 아니면 감싸지 않는다. 사람 확인으로 대신하지 않는다 */
+  legacyProof: LegacyDomainProof | null
   now: Date
   failAfterPairs?: number
   /** 🔴 검사 전용 — 읽은 뒤 트랜잭션 전에 값이 바뀌는 경우를 재현한다(CLI 는 넘기지 않는다) */
@@ -184,10 +214,10 @@ export async function applyMigration(prisma: PrismaClient, opts: {
     if (plan.action === 'refuse' || !opts.keyRead.ok) {
       return { ok: false, code: 'REFUSED', reason: plan.refuseReason ?? 'key 없음', plan, dbChanged: false }
     }
-    if (plan.legacyDomain.status !== 'proven' && !opts.attestLegacyDomain) {
+    if (opts.legacyProof?.status !== 'PROVEN') {
       return {
         ok: false, code: 'LEGACY_DOMAIN_UNPROVEN', plan, dbChanged: false,
-        reason: `저장 v1 이 공개 사슬로 만들어졌다는 증명이 없다(알려진 이름 ${plan.legacyDomain.probeNames}개 · 일치 0) — 창업자 확인 없이는 감싸지 않는다`,
+        reason: `저장 v1 사슬 원본 대조가 PROVEN 이 아니다(${opts.legacyProof === null ? '대조 안 함' : `UNKNOWN — ${opts.legacyProof.reason}`}) — 감싸지 않는다`,
       }
     }
     const keyRead = opts.keyRead
@@ -300,7 +330,7 @@ export function describePlan(p: MigrationPlan): string[] {
     `key            ${p.key.ok ? `있음 (kid 지문만 · ${p.key.kid.length}자)` : `없음 — ${p.key.reason}`}`,
     ...MIGRATION_TABLES.map((t) => `${t.padEnd(18)} 행 ${p.tables[t].rows} · 값 ${c(p.tables[t].census)}`),
     `상태           ${p.state}`,
-    `v1 사슬 증명   ${p.legacyDomain.status} (알려진 이름 ${p.legacyDomain.probeNames}개 · 일치 ${p.legacyDomain.hits})`,
+    `회원 이름 probe ${p.legacyDomain.status} (참고 · 적용 판정은 원본 대조 — 알려진 이름 ${p.legacyDomain.probeNames}개 · 일치 ${p.legacyDomain.hits})`,
     `할 일          ${p.action}${p.refuseReason === null ? '' : ` — ${p.refuseReason}`} · 감쌀 행 ${p.rowsToWrap} · 갱신 문장 ${p.updateStatements}`,
   ]
 }

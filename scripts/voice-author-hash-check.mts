@@ -27,7 +27,8 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  authorGateOf, authorHashKeyOf, authorHashV2Of, censusOf, generationOf, legacyDomainProbe, readAuthorHashKey,
+  authorGateOf, authorHashKeyOf, authorHashV2Of, censusOf, generationOf, legacyDomainProbe, legacyDomainSampleProof, readAuthorHashKey,
+  LEGACY_PROOF_MIN_SAMPLE,
   setStateOf, writableStateOf, wrapV1, V1_PREFIX, V2_PREFIX, type AuthorHashKey,
 } from './lib/voice-author-hash.mjs'
 import { describePlan, type MigrationPlan } from './lib/voice-author-hash-migration.mjs'
@@ -154,6 +155,35 @@ console.log('\n⑤ 알려진 충돌 parity')
     g.ok && AUTHORS.every((a) => wrapped.has(g.hashOf(a))) && !wrapped.has(g.hashOf(OTHER)))
 }
 
+console.log('\n⑤-b v1 사슬 원본 대조 증명 — 그 행을 만든 원본 작가명으로 다시 계산')
+{
+  const names = Array.from({ length: LEGACY_PROOF_MIN_SAMPLE }, (_, i) => `합성 작가 ${i}`)
+  const rowOf = (a: string, hash: (v: string) => string = v1Of) => ({ author: a, storedHash: hash(a), storedNorm: hash(normalizeN2(a)) })
+  const ok = legacyDomainSampleProof(names.map((a) => rowOf(a)), normalizeN2)
+  check(`대조 ${LEGACY_PROOF_MIN_SAMPLE} · 전부 일치 → PROVEN`, ok.status === 'PROVEN' && ok.compared === 100 && ok.matched === 100 && ok.normMatched === 100)
+  const thin = legacyDomainSampleProof(names.slice(1).map((a) => rowOf(a)), normalizeN2)
+  check('대조 99 → UNKNOWN(표본 하한)', thin.status === 'UNKNOWN' && thin.compared === 99)
+  const oneOff = legacyDomainSampleProof([...names.slice(1).map((a) => rowOf(a)), { ...rowOf(names[0]!), storedHash: v1Of('다른 사람') }], normalizeN2)
+  check('한 행 어긋남 → UNKNOWN(부분 일치는 증명이 아니다)', oneOff.status === 'UNKNOWN' && oneOff.matched === 99)
+  const otherSalt = legacyDomainSampleProof(names.map((a) => rowOf(a, (v) => `${V1_PREFIX}${createHash('sha256').update(`other-salt::${v}`).digest('hex')}`)), normalizeN2)
+  check('다른 salt 로 만든 저장값 → UNKNOWN · 일치 0', otherSalt.status === 'UNKNOWN' && otherSalt.matched === 0)
+  const normOff = legacyDomainSampleProof([...names.slice(1).map((a) => rowOf(a)), { ...rowOf(names[0]!), storedNorm: v1Of('다른 사람') }], normalizeN2)
+  check('정규화 해시만 어긋남 → UNKNOWN', normOff.status === 'UNKNOWN' && normOff.matched === 100 && normOff.normMatched === 99)
+  const missing = legacyDomainSampleProof([...names.map((a) => rowOf(a)), { author: null, storedHash: v1Of('x'), storedNorm: null }, { author: '  ', storedHash: v1Of('y'), storedNorm: null }], normalizeN2)
+  check('원본 작가명이 없는 행은 대조하지 않는다(표본에는 센다)', missing.status === 'PROVEN' && missing.sample === 102 && missing.compared === 100)
+  const v2Rows = legacyDomainSampleProof(names.map((a) => ({ author: a, storedHash: authorHashV2Of(a, A), storedNorm: null })), normalizeN2)
+  check('저장값이 v2 면 v1 대조 대상이 아니다 → UNKNOWN', v2Rows.status === 'UNKNOWN' && v2Rows.compared === 0)
+  const empty = legacyDomainSampleProof([], normalizeN2)
+  check('빈 표본 → UNKNOWN', empty.status === 'UNKNOWN' && empty.sample === 0)
+  const dump = JSON.stringify([ok, oneOff, otherSalt])
+  check('증명 결과에 이름 · 해시가 없다', !dump.includes('합성 작가') && !/[0-9a-f]{12,}/.test(dump))
+  const mig = readFileSync(join(ROOT, 'scripts/voice-author-hash-migrate.mts'), 'utf-8')
+  const migLib = readFileSync(join(ROOT, 'scripts/lib/voice-author-hash-migration.mts'), 'utf-8')
+  check('전환 적용은 원본 대조 PROVEN 을 요구한다 · 사람 확인 우회 옵션이 없다',
+    /legacyProof\?\.status !== 'PROVEN'/.test(migLib) && !/attest/i.test(mig.split('\n').filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join('\n')) && !/attest/i.test(migLib)
+      && /readLegacyDomainProof\(/.test(mig))
+}
+
 console.log('\n⑥ 이중 HMAC 없음')
 check('v2 는 감싸지 않는다(null)', v2Set.every((v) => wrapV1(v, A) === null))
 check('손상 값은 감싸지 않는다(null)', CORRUPT.every((v) => wrapV1(v, A) === null))
@@ -237,6 +267,7 @@ console.log('\n⑨ 노출 없음')
     'scripts/voice-unao-batch-live.mts', 'scripts/voice-derive-live.mts', 'scripts/author-hash-norm-backfill.mts',
     'scripts/voice-m3-dry-run.mts', 'scripts/voice-m3-run.mts', 'scripts/persona-cohort-run.mts', 'scripts/persona-seed-apply.mts',
     'scripts/persona-mvp-assign.mts', 'scripts/persona-wave2-assign.mts', 'scripts/persona-autogen.mts',
+    'scripts/voice-author-hash-legacy-proof.mts', 'scripts/lib/voice-author-hash-unao.mts',
   ]
   const leaks = RUNNERS.filter((f) => readFileSync(join(ROOT, f), 'utf-8').split('\n')
     .some((l) => /console\.(log|error|warn|info)\(/.test(l)
