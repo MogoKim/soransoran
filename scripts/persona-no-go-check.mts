@@ -1,0 +1,129 @@
+#!/usr/bin/env tsx
+/**
+ * Persona No-Go 하나 · C8 · C9 — **순수 반례** (DB · 네트워크 · LLM 0) · 2026-10-01 Phase 2B
+ *
+ *   ① 말버릇 열쇠 — 따옴표 · `류` 표기와 상관없이 댓글 Gate ⑦⑧ 가 잡는다
+ *   ② 공통 금지(Pool §7-2) — 개인 목록이 빈 Persona 도 댓글 Gate 에 걸린다
+ *   ③ 댓글 생성 프롬프트 · 카드 검증 · 복구가 같은 helper · 카드 파서 분류와 일치
+ *   🔴 글 쪽(배정 `hardFilter` · 글 생성 프롬프트 · 카드 파서)은 품질 계약 지문 파일이라 이 PR 에서 바꾸지 않았다 —
+ *      바꾸면 `QUALITY_CONTRACT_VERSION` 을 올려 READY 재고가 legacy 가 된다(마스터 결정 사항).
+ *   ④ C8 — 개인 말버릇 빈 칸은 계약 통과 · 소재 경계(noGoTopics)는 그대로 필수
+ *   ⑤ C9 — 활동이 늘어도 지속 자격 유지 · 역할 쏠림은 회차에서 막힘 · 증명일 글쓴이 겹침은 FAIL
+ *   ⑥ 가짜 활동 · 가짜 소재 · 임계 완화 0
+ */
+import { readFileSync } from 'node:fs'
+
+import {
+  anyNoGo, commonNoGoHits, COMMON_NO_GO_PHRASES, isNoGoExpressionItem, noGoExpressionKey, noGoHits, promptNoGoExpressions,
+} from '../src/lib/persona-no-go'
+import { parsePoolDoc } from '../src/lib/persona-pool-card'
+import { contractAxes, type ActivityHistory } from '../src/lib/persona-reserve'
+import { PERSONA_LIFE_AXES, ROLE_SHARE_CAP, ACTIVITY_CAP_PER_DAY, CONSECUTIVE_EXPOSURE_CAP, PAIR_REPEAT_GAP } from '../src/lib/d100-persona-scale'
+import { LIFE_CONTRACT_FIELDS } from '../src/lib/content-core/speaker'
+import { judgeEvidenceForTarget, type EvidenceFactsFor } from '../src/lib/stage-evidence'
+import { checkPersonaConsistency } from './lib/persona-gate-78.mjs'
+
+let pass = 0
+let fail = 0
+const check = (name: string, ok: boolean, detail = ''): void => {
+  if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { fail += 1; console.log(`  🔴 FAIL ${name}${detail ? ` — ${detail}` : ''}`) }
+}
+
+const NEUTRAL = '요즘 밤에 자꾸 깨서 아침이 힘들어요. 다들 어떻게 지내세요?'
+
+console.log('\n① 말버릇 열쇠 — 표기와 상관없이 잡는다')
+{
+  check('열쇠: `"우리 때는"` · `우리 때는` · `"요즘 애들" 류` → 따옴표 · 류 제거',
+    noGoExpressionKey('"우리 때는"') === '우리 때는' && noGoExpressionKey('우리 때는') === '우리 때는'
+    && noGoExpressionKey('"요즘 애들" 류') === '요즘 애들' && noGoExpressionKey('“요즘 애들”류') === '요즘 애들')
+  const text = '우리 때는 그런 거 없었는데 요즘 애들은 다르더라고요'
+  for (const stored of [['"우리 때는"'], ['우리 때는'], ['"요즘 애들" 류'], ['요즘 애들']]) {
+    const c = checkPersonaConsistency(text, { noGoExpressions: stored })
+    check(`🔴 댓글 Gate ⑦⑧ — 저장값 ${JSON.stringify(stored)} → NO_GO`, c.status === 'regenerate' && c.codes.includes('NO_GO'))
+  }
+  check('다른 말이면 걸리지 않는다', !anyNoGo(noGoHits(NEUTRAL, { noGoExpressions: ['"우리 때는"'] })))
+}
+
+console.log('\n② 공통 금지 — 개인 목록이 비어도 걸린다 · 남의 글에는 적용하지 않는다')
+{
+  const empty = { noGoTopics: [], noGoExpressions: [] }
+  check('개인 말버릇 빈 Persona · 평범한 글 → 통과(댓글)', checkPersonaConsistency(NEUTRAL, empty).codes.length === 0)
+  for (const [name, t] of [
+    ['추천드립니다', '이 제품 정말 좋아요. 추천드립니다'],
+    ['도움이 되셨으면 좋겠습니다', '제 경험이 도움이 되셨으면 좋겠습니다'],
+    ['불릿', '이렇게 해 보세요\n- 물 많이 마시기\n- 일찍 자기'],
+    ['번호', '1. 물 마시기\n2. 일찍 자기'],
+    ['마크다운 제목', '## 정리\n잠이 중요해요'],
+    ['굵은 글씨', '**중요** 잠을 자야 해요'],
+    ['먼저/다음으로/마지막으로', '먼저 물을 드시고 다음으로 산책을 하세요'],
+  ] as const) {
+    check(`🔴 공통 금지 ${name} → 댓글 NO_GO`, checkPersonaConsistency(t, empty).codes.includes('NO_GO'))
+  }
+  check('`먼저` 하나는 일상 말 — 걸리지 않는다', commonNoGoHits('제가 먼저 말 걸었어요').length === 0)
+}
+
+console.log('\n③ 생성 프롬프트 · 파서 · 카드 검증이 같은 helper')
+{
+  const pr = promptNoGoExpressions([])
+  check('🔴 개인 목록이 비어도 프롬프트에 공통 금지 문구가 실린다', COMMON_NO_GO_PHRASES.every((x) => pr.includes(x)))
+  check('프롬프트는 열쇠로 싣는다(따옴표 · 류 제거 · 중복 0)', JSON.stringify(promptNoGoExpressions(['"우리 때는"', '우리 때는'])) === JSON.stringify(['우리 때는', ...COMMON_NO_GO_PHRASES]))
+  const src = (f: string): string => readFileSync(f, 'utf-8')
+  check('댓글 프롬프트가 `promptNoGoExpressions` 를 부른다', /promptNoGoExpressions\(persona\.noGoExpressions\)/.test(src('scripts/lib/persona-prompt.ts')))
+  check('카드 검증 · 복구 · 댓글 Gate 가 같은 helper 를 부른다',
+    /from '\.\/persona-no-go'/.test(src('src/lib/persona-card-verify.ts'))
+    && /from '\.\/persona-no-go'/.test(src('src/lib/persona-contract-remediation.ts'))
+    && /noGoHits\(/.test(src('scripts/lib/persona-gate-78.mts')))
+  const doc = parsePoolDoc(src('docs/operations/2026-08-30-persona-pool-design.md'))
+  check('🔴 카드 파서 분류 = helper 분류 (25장 전 항목 · 갈라지면 빨개진다)',
+    doc.cards.every((c) => c.noGoExpressions.every(isNoGoExpressionItem) && c.noGoTopics.every((t) => !isNoGoExpressionItem(t))))
+  check('🔴 다른 곳에서 `includes(v.trim())` 류 말버릇 판정을 따로 하지 않는다',
+    !/noGoExpressions[^\n]*\.some\(\(v\) => text\.includes/.test(src('scripts/lib/persona-gate-78.mts')))
+  check('카드 파서 — 따옴표 항목만 말버릇', isNoGoExpressionItem('"우리 때는"') && !isNoGoExpressionItem('손주 자랑 반복'))
+}
+
+console.log('\n④ C8 — 개인 말버릇은 없어도 되는 칸 · 소재 경계는 필수')
+{
+  const H0: ActivityHistory = { recentEvents: 0, roleCounts: {}, unresolvedRoleEvents: 0, consecutiveExposures: 0, postsSinceLastPairing: 'never', daysSinceActive: null, activityToday: 0 }
+  const QUAL = { seedProblems: [], realMember: { accountCount: 0, providerId: null }, nameGate: 'pass' as const, seedComplete: true }
+  const ALL = [...LIFE_CONTRACT_FIELDS] as string[]
+  const v = (filled: string[], h: ActivityHistory = H0) => contractAxes({ code: 'P', card: { filledAxes: filled, ageBand: '50대 초반', voiceComments: 3 }, qualification: QUAL, history: h })
+  check('🔴 개인 말버릇 빈 칸 → 계약 통과', v(ALL.filter((a) => a !== 'noGoExpressions')).valid)
+  check('🔴 noGoTopics 빈 칸 → 여전히 lifeAxes 막힘', v(ALL.filter((a) => a !== 'noGoTopics')).blocked.lifeAxes !== undefined)
+  check('생성 계약 지문 칸은 14 그대로(개인 말버릇 포함) · 계약 축은 13', LIFE_CONTRACT_FIELDS.length === 14
+    && (LIFE_CONTRACT_FIELDS as readonly string[]).includes('noGoExpressions') && PERSONA_LIFE_AXES.length === 13)
+
+  console.log('\n⑤ C9 — 쓰일수록 빠지지 않는다 · 회차 방어는 남는다')
+  const busy = (n: number, roles: Record<string, number> = {}): ActivityHistory => ({ ...H0, recentEvents: n, roleCounts: roles, daysSinceActive: 0 })
+  check('🔴 활동 0 · 5 · 30 · 200건 → 전부 contract-valid', [0, 5, 30, 200].every((n) => v(ALL, busy(n)).valid))
+  const conc = v(ALL, busy(10, { empathy: 9, question: 1 }))
+  check('🔴 역할 쏠림 0.9 → 계약 유효 · 이번 회차 막힘', conc.valid && conc.roundBlocked.includes('roleShare'))
+  const unk = v(ALL, { ...busy(10, { empathy: 3 }), unresolvedRoleEvents: 2 })
+  check('🔴 역할 모름 → 계약 유효 · 이번 회차 배정 안 함', unk.valid && unk.roundUnknown.includes('roleShare'))
+  const ev = (authors: (string | null)[]): string[] => {
+    const facts: EvidenceFactsFor<string> = {
+      kstDate: '2026-10-02', stage: 'd3', decision: null, commentCapPerPost: 3,
+      posts: authors.map((a, i) => ({ postId: `p${i}`, queueId: `q${i}`, publishedAtMs: 0, unattended: true, queueRows: 1, publishLogs: 1,
+        authorPersonaId: a, decider: 'auto' as const, personaComments: [], release: 'STAMPED_ELIGIBLE' as const })),
+      orphanPublishLogs: 0, unloggedPublishes: 0,
+      audits: { rows: [], globalDefectYes: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+    } as unknown as EvidenceFactsFor<string>
+    return [...judgeEvidenceForTarget('2026-10-02', 'd3', 3, facts, null).codes]
+  }
+  check('🔴 증명일 자동 글 글쓴이 겹침 → PERSONA_REPEAT', ev(['a', 'a', 'b']).includes('PERSONA_REPEAT'))
+  check('🔴 글쓴이를 모르는 자동 글 → PERSONA_REPEAT(fail-closed)', ev(['a', null, 'b']).includes('PERSONA_REPEAT'))
+  check('서로 다른 글쓴이 → PERSONA_REPEAT 없음', !ev(['a', 'b', 'c']).includes('PERSONA_REPEAT'))
+}
+
+console.log('\n⑥ 가짜 활동 · 가짜 소재 · 임계 완화 0')
+{
+  check('🔴 문턱 불변 — 역할 0.5 · 하루 활동 6 · 연속 1 · 짝 간격 5',
+    ROLE_SHARE_CAP === 0.5 && ACTIVITY_CAP_PER_DAY === 6 && CONSECUTIVE_EXPOSURE_CAP === 1 && PAIR_REPEAT_GAP === 5)
+  const files = ['src/lib/persona-no-go.ts', 'src/lib/persona-reserve.ts', 'src/lib/d100-persona-scale.ts', 'src/lib/stage-evidence.ts']
+    .map((f) => readFileSync(f, 'utf-8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*\*)/.test(l)).join('\n')).join('\n')
+  check('🔴 소재 분류표 · 소재 라벨 쓰기 0', !/TOPIC_TAXONOMY|topicTags\s*:|category\s*:\s*['"]/.test(files))
+  check('🔴 활동 행 생성 0', !/\.(post|comment|personaApprovalQueue|personaActivityLog)\.(create|createMany|upsert)/.test(files))
+  check('🔴 옛 소재 축 삭제 — topicShareOf · TOPIC_SHARE_CAP · topicConcentrated 0', !/topicShareOf|TOPIC_SHARE_CAP|topicConcentrated/.test(files))
+}
+
+console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail — DB 0 · 네트워크 0\n`)
+process.exit(fail === 0 ? 0 : 1)

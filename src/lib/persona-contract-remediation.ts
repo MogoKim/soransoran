@@ -16,7 +16,8 @@
  */
 import { createHash } from 'node:crypto'
 
-import { MARITAL_VALUES, noGoExpressionKey } from './persona-card-verify'
+import { MARITAL_VALUES } from './persona-card-verify'
+import { noGoExpressionKey } from './persona-no-go'
 import type { PoolCard } from './persona-pool-card'
 
 export const REMEDIATION_PLAN_VERSION = 'persona-remediation-v1'

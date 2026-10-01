@@ -41,6 +41,8 @@
     "persona:reserve-db-check": "tsx scripts/persona-reserve-db-check.mts",
     "persona:remediation": "tsx scripts/persona-contract-remediation.mts",
     "persona:remediation-check": "tsx scripts/persona-remediation-check.mts",
+    "persona:no-go-check": "tsx scripts/persona-no-go-check.mts",
+    "persona:reserve-check": "tsx scripts/persona-reserve-check.mts",
     "persona:remediation-db-check": "tsx scripts/persona-remediation-db-check.mts",
     "voice:unao-import": "tsx scripts/voice-unao-import-live.mts",
     "voice:unao-import-check": "tsx scripts/voice-unao-import-check.mts",

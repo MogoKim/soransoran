@@ -138,9 +138,9 @@ try {
   })
   const r2 = await read()
   const a14 = r2.res.verdicts.find((v) => v.code === 'P14')!
-  // 🔴 (#640) 소재 표본 하한 = SHARE_MIN_EVENTS(5) — 1건은 비율을 재지 않는다(thin · 0). 이 격리 DB 검사는 CI 목록 밖이라 #640 때 갱신되지 않았다
-  check('active + 공개 글 1 → 소재 thin(1<5) · 모름 아님(#640)',
-    a14.contract?.unknown.topicShare === undefined && a14.contract?.evidence.topicShare === 'thin(1<5)')
+  // 🔴 (2026-10-01 · C9) 라벨 없는 소재 쏠림 축은 지웠다 — 활동이 있어도 계약 유효 · 회차 모름 0
+  check('active + 공개 글 1 → contract-valid · 회차 모름 0',
+    a14.contract?.valid === true && (a14.contract?.roundUnknown ?? []).length === 0)
   const h14 = r2.facts.rows.find((r) => r.code === 'P14')!.history!
   const h01 = r2.facts.rows.find((r) => r.code === 'P01')!.history!
   check('연속 노출 — 맨 끝 글이 P14 → 1', h14.consecutiveExposures === 1)

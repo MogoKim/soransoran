@@ -14,6 +14,7 @@
  *
  * 🔴 DB · 네트워크 · LLM 없음. 정본 말투 자산(로컬 파일)만 읽는다 — `voicePoolFor`.
  */
+import { noGoExpressionKey } from '../../src/lib/persona-no-go'
 import { createHash } from 'node:crypto'
 
 import { cardToPersona, parsePoolDoc, type PoolCard } from '../../src/lib/persona-pool-card'
@@ -142,7 +143,6 @@ export function judgeAutogenCandidate(
   } else {
     if (c.creative.personality.length === 0) add('LIFE_AXIS_MISSING', 'personality')
     if (c.creative.noGoTopics.length === 0) add('LIFE_AXIS_MISSING', 'noGoTopics')
-    if (c.creative.noGoExpressions.length === 0) add('LIFE_AXIS_MISSING', 'noGoExpressions')
   }
 
   // ── ⑦ 카드 → 운영 파서 → seed → 운영 검증기 ──
@@ -193,7 +193,7 @@ export function judgeAutogenCandidate(
   })
   const CODE_OF_AXIS: Readonly<Record<ContractAxis, AutogenBlockCode>> = {
     lifeAxes: 'LIFE_AXIS_MISSING', ageBand: 'NO_AGE_BAND', voiceEvidence: 'VOICE_EVIDENCE_THIN',
-    qualificationConflict: 'QUALIFICATION_CONFLICT', topicShare: 'CONTRACT_INVALID', roleShare: 'CONTRACT_INVALID',
+    qualificationConflict: 'QUALIFICATION_CONFLICT',
     consecutiveExposures: 'CONTRACT_INVALID', postsSinceLastPairing: 'CONTRACT_INVALID',
   }
   for (const [axis, d] of Object.entries(contract.blocked) as [ContractAxis, string][]) add(CODE_OF_AXIS[axis], `계약 ${axis}: ${d}`)
@@ -254,7 +254,8 @@ function roundTripDrift(c: AutogenCandidate, card: PoolCard): string[] {
   if (card.parentCare !== l.parentCare) out.push('parentCare')
   if (!same(card.personality, cr.personality)) out.push('personality')
   if (!same(card.noGoTopics, cr.noGoTopics)) out.push('noGoTopics')
-  if (!same(card.noGoExpressions, cr.noGoExpressions)) out.push('noGoExpressions')
+  // 🔴 말버릇은 표기(따옴표 · `류`)가 아니라 열쇠로 대조한다 — `persona-no-go` 하나
+  if (!same(card.noGoExpressions.map(noGoExpressionKey), cr.noGoExpressions.map(noGoExpressionKey))) out.push('noGoExpressions')
   if (card.variationCount !== cr.variations.length) out.push('variations')
   return out
 }

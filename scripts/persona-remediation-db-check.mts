@@ -12,10 +12,14 @@
  *   ⑤ 두 번째 실행 → 계획 0 · write 0
  *   ⑥ 근거 없는 칸(생활 단계 · 말끝) · 말투 근거 0 · 표시명 충돌은 그대로 막혀 있다(채우지 않는다)
  *
- * 🔴 말투 근거는 운영과 같은 정본 자산(`bundlesForPersonas`)에서 온다 — fixture 가 실제보다 강하지 않다.
- *    자산이 없는 환경에서는 ④ 의 계약 유효 기대가 성립하지 않으므로 멈춘다(exit 3).
+ * 🔴 말투 근거 자산은 **임시 HOME 아래에 운영과 같은 모양**으로 만든다(CI · 로컬 동일) — 실제 정본 파일을 읽지 않는다.
+ *    화자는 운영 실측과 같은 18명이다(기준 3건 이상) — 정렬상 뒤쪽 6명(P20~P25)은 묶음을 받지 못한다.
+ *    fixture 가 실제보다 강하지 않다: 화자 수 · 판정 · digest · 권한 검사를 그대로 지난다.
  */
-import { readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const URL = process.env.DATABASE_URL ?? ''
 {
@@ -30,9 +34,26 @@ const URL = process.env.DATABASE_URL ?? ''
   }
 }
 
+// ── 🔴 임시 HOME — 말투 자산 경로가 HOME 아래다. 모듈을 읽기 **전에** 바꾼다 ──
+const HOME = mkdtempSync(join(tmpdir(), 'soran-remediation-db-'))
+process.env.HOME = HOME
+{
+  const dir = join(HOME, 'Library', 'Application Support', 'soransoran', 'persona-reference')
+  mkdirSync(dir, { recursive: true })
+  const OPEN = ['그러게요', '맞아요', '음', '아이고', '그쵸', '어머', '진짜요', '그러니까요', '하긴', '와', '정말요', '네네', '아휴', '흠', '그렇죠', '오', '아', '참']
+  const TAIL = ['날이 갑자기 추워졌네요', '그 말이 딱 맞네요', '다들 비슷하신가 봐요', '그런 날도 있는 거죠', '천천히 하시면 돼요']
+  const comments = OPEN.flatMap((o, s) => TAIL.slice(0, 4).map((t, k) => ({
+    speakerId: createHash('sha256').update(`spk-${s}`).digest('hex').slice(0, 12), content: `${o} ${t} ${'~'.repeat(k)}`.trim(),
+  })))
+  const raw = JSON.stringify({ version: 1, comments })
+  writeFileSync(join(dir, 'corpus.json'), raw)
+  chmodSync(join(dir, 'corpus.json'), 0o600)
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ sourceDigest: createHash('sha256').update(raw).digest('hex').slice(0, 16) }))
+}
+
 const { PrismaClient } = await import('@prisma/client')
 const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
-const { noGoExpressionKey } = await import('../src/lib/persona-card-verify')
+const { noGoExpressionKey } = await import('../src/lib/persona-no-go')
 const { readRemediation, applyRemediation } = await import('./lib/persona-contract-remediation.mjs')
 const { bundlesForPersonas } = await import('./lib/persona-reference-store.mjs')
 const { PERSONA_POOL_DOC } = await import('./lib/voice-runtime.mjs')
@@ -48,9 +69,9 @@ const now = new Date()
 /** P01 · P14 정본 일치(유효) · P05 금지 역할 drift(카드로 고침) · P17 생활 단계 없음 · P21 말투 근거 없음 · P22 표시명 충돌 */
 const CODES = ['P01', 'P14', 'P05', 'P17', 'P21', 'P22']
 
-const bundles = bundlesForPersonas({ repoRoot: root, personaCodes: ['P01', 'P05', 'P14'] })
-if (bundles.byCode.size < 3) {
-  console.error('🔴 정본 말투 자산이 없다 — 이 검사의 계약 유효 기대가 성립하지 않는다(운영과 같은 자산이 필요). 멈춘다.')
+const bundles = bundlesForPersonas({ repoRoot: root, personaCodes: ['P01', 'P05', 'P14', 'P17', 'P21'] })
+if (bundles.origin !== '정본 자산' || bundles.byCode.size !== 4 || bundles.byCode.has('P21')) {
+  console.error(`🔴 임시 말투 자산이 운영 모양으로 서지 않았다(${bundles.origin} · ${bundles.byCode.size}) — ${bundles.blocks.join(' / ')}`)
   process.exit(3)
 }
 

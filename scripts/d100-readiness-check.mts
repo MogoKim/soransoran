@@ -334,9 +334,10 @@ console.log('\n⑦ 🔴 🔴 Persona 24 → 180~200 — 카드만 채우면 READ
     code: 'P01', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '40대 후반',
     voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
     daysSinceActive: 0, retired: false, qualificationConflict: false,
-    topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+    roleShare: 0, postsSinceLastPairing: 'never',
   }
-  check('🔴 생활사 축은 생성 계약과 같은 14축이다', PERSONA_LIFE_AXES.length === 14)
+  // 🔴 (2026-10-01 · C8) 생성 계약 14칸 중 개인 말버릇만 뺀 13축 — 공통 금지는 `persona-no-go` 가 강제한다
+  check('🔴 생활사 계약 축은 생성 계약 14칸 − 개인 말버릇 = 13축', PERSONA_LIFE_AXES.length === 13 && !PERSONA_LIFE_AXES.includes('noGoExpressions'))
   check('🔴 다 갖추면 쓸 수 있다', personaUsable(FULL))
   check('🔴 🔴 **생활사 한 축만 비어도 못 쓴다**',
     personaBlockers({ ...FULL, filledAxes: PERSONA_LIFE_AXES.slice(1) }).includes('lifeAxisMissing'))
@@ -663,7 +664,7 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     const v = judgePersonaScale({
       stage: 'd3',
@@ -683,14 +684,13 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
-    return personaBlockers({ ...base, topicShare: 0.9 }).includes('topicConcentrated')
-      && personaBlockers({ ...base, roleShare: 0.9 }).includes('roleConcentrated')
+    return personaBlockers({ ...base, roleShare: 0.9 }).includes('roleConcentrated')
       && personaBlockers({ ...base, postsSinceLastPairing: 1 }).includes('pairRepeat')
-      // 🔴 재지 않은 것은 **통과가 아니라 unmeasured** 다
-      && personaUnmeasured({ ...base, topicShare: null }).includes('topicConcentrated')
-      && !personaUsable({ ...base, topicShare: null })
+      // 🔴 재지 않은 것은 **통과가 아니라 unmeasured** 다 — 역할 쏠림은 회차 조건(C9)
+      && personaUnmeasured({ ...base, roleShare: null }).includes('roleConcentrated')
+      && !personaUsable({ ...base, roleShare: null })
   })())
 
   // ⑮ 숨겨진 글을 의도된 takedown 이라 부르지 않는다
@@ -912,7 +912,7 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     const many = Array.from({ length: 24 }, (_, i) => ({ ...FULL, code: `P${i}` }))
     const all = personaTierReadiness({ stage: 'd3', candidates: many })
@@ -921,14 +921,14 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
     const cardBroken = personaTierReadiness({
       stage: 'd3', candidates: many.map((p) => ({ ...p, ageBand: null })),
     })
-    // 🔴 재지 않은 축이 있으면 그 층은 ready 가 아니다 — topic/role 은 **Pool** 층이다
+    // 🔴 재지 않은 축이 있으면 그 층은 ready 가 아니다 — 역할 쏠림은 **회차** 층이다(2026-10-01 · C9)
     const unmeasured = personaTierReadiness({
-      stage: 'd3', candidates: many.map((p) => ({ ...p, topicShare: null })),
+      stage: 'd3', candidates: many.map((p) => ({ ...p, roleShare: null })),
     })
     return wired && ready
       && !personaReadinessOk(cardBroken) && cardBroken[0]!.ready === false
       && !personaReadinessOk(unmeasured)
-      && unmeasured[1]!.tier === 'pool' && unmeasured[1]!.unmeasured.topicConcentrated === 24
+      && unmeasured[2]!.tier === 'assignment' && unmeasured[2]!.unmeasured.roleConcentrated === 24
   })())
 
   // ⑦ 82cook operating 이 canary 20요청 상한을 상속하면 FAIL
@@ -1003,14 +1003,15 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
     const canon = tiers.lifeAxisMissing === 'card' && tiers.noAgeBand === 'card'
       && tiers.voiceEvidenceThin === 'card' && tiers.retired === 'card'
       && tiers.dormant === 'card' && tiers.qualificationConflict === 'card'
-      && tiers.topicConcentrated === 'pool' && tiers.roleConcentrated === 'pool'
+      // 🔴 (2026-10-01 · C9) 역할 쏠림은 회차 층 · 라벨 없는 소재 쏠림 코드는 없다
+      && tiers.topicConcentrated === undefined && tiers.roleConcentrated === 'assignment'
       && tiers.activityOverCap === 'assignment' && tiers.consecutiveExposure === 'assignment'
       && tiers.pairRepeat === 'assignment'
     const FULL: PersonaCandidate = {
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     // 🔴 모르면 통과가 아니다 — 0/false 로 떨어뜨리지 않는다
     const unknownExposure = personaTiers({ ...FULL, consecutiveExposures: null })
@@ -1254,7 +1255,7 @@ console.log('\n⑰ 🔴 🔴 공급 깔때기 재대조 — 이름을 흐리면 
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     // 🔴 전원이 자격 감사만 미측정 — 막힌 데는 없다
     const onlyUnmeasured = personaTierReadiness({
@@ -1583,7 +1584,7 @@ console.log('\n⑳ 🔴 🔴 Persona 두 목표 — canary 하한과 지속 다�
       code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
       voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
       daysSinceActive: 0, retired: false, qualificationConflict: false,
-      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+      roleShare: 0, postsSinceLastPairing: 'never',
     }
     const cards = Array.from({ length: 40 }, (_, i) => ({ ...cand, code: `P${i}` }))
     const card = personaTierReadiness({ stage: 'd20', candidates: cards }).find((t) => t.tier === 'card')!

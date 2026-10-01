@@ -65,7 +65,7 @@ export const STAGE_EVIDENCE_CODES = [
   // ① 결정
   'DECISION_MISSING', 'DECISION_NOT_CONTROLLER', 'DECISION_NOT_TRANSITION', 'DECISION_STAGE_MISMATCH',
   // ② 발행
-  'PUBLISH_NOT_AUTO_READY', 'PUBLISH_OVER',
+  'PUBLISH_NOT_AUTO_READY', 'PUBLISH_OVER', 'PERSONA_REPEAT',
   // ③ 첫 댓글
   'COMMENT_MISSING', 'COMMENT_LATE', 'COMMENT_OVER_CAP', 'COMMENT_SELF', 'COMMENT_CAP_UNKNOWN',
   // ④ 감사
@@ -234,6 +234,13 @@ export function judgeEvidenceForTarget<S extends string>(
     counts.humanApproved = facts.posts.filter((p) => p.decider === 'human').length
     if (autoTargets.length < target) codes.add('PUBLISH_NOT_AUTO_READY')
     if (facts.posts.length > target) codes.add('PUBLISH_OVER')
+    /**
+     * 🔴 **서로 다른 Persona 로 채운다** (canon §6-3 · 2026-10-01 C9). 자동 target 글의 글쓴이가 겹치면 FAIL.
+     *    소재 다양성의 회차 조건이다 — 소재 라벨 없이 **배정 근거**(글쓴이)로 본다. 글쓴이를 모르는 글도 겹침으로 센다.
+     */
+    const authors = autoTargets.map((p) => p.authorPersonaId ?? '(없음)')
+    counts.distinctAuthors = new Set(authors.filter((a) => a !== '(없음)')).size
+    if (authors.includes('(없음)') || new Set(authors).size < authors.length) codes.add('PERSONA_REPEAT')
     // ③ 댓글 · ⑤ 중복
     const cap = facts.commentCapPerPost
     if (cap === null) codes.add('COMMENT_CAP_UNKNOWN')
