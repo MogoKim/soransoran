@@ -9,7 +9,7 @@
  * 🔴 전원 아니면 0 — 한 명이라도 어긋나면 throw → 롤백한다.
  *    · 배치에 `valid` 가 아닌 후보가 하나라도 있으면 시작하지 않는다
  *    · `--limit` 은 적재 인원과 정확히 같아야 한다
- *    · 트랜잭션 **안에서** 코드 부재 · Gate ⑥-B(회원 이름·크롤 author 해시)를 다시 본다
+ *    · 트랜잭션 **안에서** 코드 부재 · Gate ⑥-B(회원 이름 · 다른 Persona · 규칙)를 다시 본다
  *    · 건드리지 않기로 한 표(Post · Comment · Queue · ActivityLog · RawContent)가 그대로인지 본다
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
@@ -61,8 +61,6 @@ async function untouched(db: PrismaClient | Prisma.TransactionClient): Promise<R
 export async function applyAutogenDrafts(prisma: PrismaClient, input: {
   plans: readonly AutogenDraftPlan[]
   limit: number | null
-  /** 🔴 크롤 author 해시 salt 를 쥔 함수 — `persona-cohort-run` 과 같은 계약 */
-  hashOf: (value: string) => string
   reason: string
 }): Promise<ApplyResult> {
   const pre = judgeApplyBatch(input.plans, input.limit)
@@ -78,7 +76,7 @@ export async function applyAutogenDrafts(prisma: PrismaClient, input: {
       // 🔴 Gate ⑥-B 최종 판정은 트랜잭션 **안**이다 — 사전 검사와 커밋 사이에 회원이 같은 이름을 만들 수 있다
       const sets = await loadNameCollisionSets(tx)
       const blocked = input.plans
-        .map((p) => ({ code: p.code, v: checkNameCollision(p.name, sets, { hashOf: input.hashOf }) }))
+        .map((p) => ({ code: p.code, v: checkNameCollision(p.name, sets) }))
         .filter((x) => x.v.status !== 'pass')
       if (blocked.length > 0) {
         throw new Error(`Gate ⑥-B: ${blocked.map((b) => `${b.code}=${b.v.status}`).join(', ')}`)

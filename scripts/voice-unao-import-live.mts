@@ -39,8 +39,6 @@ import {
 // 🔴 소란소란 DB 접속용. Prisma 가 DATABASE_URL 을 읽으려면 .env.local 이 먼저 올라와야 한다.
 //    커넥터 lib 은 이것을 쓰지 않는다 — 우나어 쪽은 자기 URL 만 본다.
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readAuthorHashKey, writableStateOf } from './lib/voice-author-hash.mjs'
-import { storedAuthorHashState } from './lib/persona-name-collision-sets.mjs'
 
 const APPLY = process.argv.includes('--apply')
 const arg = (n: string): string | undefined => {
@@ -63,13 +61,6 @@ function maskUrl(url: string): string {
 
 async function main() {
   await loadEnvLocal()
-  // 🔴 작가 해시 key — 정본 helper 하나(정본 env). 없으면 공개 기본값으로 내려가지 않고 멈춘다(author-hash v2)
-  const keyRead = readAuthorHashKey()
-  if (!keyRead.ok) {
-    console.error(`\n❌ 중단: ${keyRead.reason}\n`)
-    process.exit(1)
-  }
-  const authorKey = keyRead.key
   const unaoUrl = loadUnaoReadonlyUrl()
 
   console.log('\nVoice — 우나어 CafePost → VoiceSource 샘플 적재')
@@ -102,7 +93,7 @@ async function main() {
   }
 
   // ── ② VoiceSource 후보로 변환 — 🔴 본문은 여기서 버려진다 ──
-  const row = toSourceRow(raw, authorKey)
+  const row = toSourceRow(raw)
   const summary = summarize(row, topCommentsCount)
 
   console.log('\n  읽은 원문 (요약만 — 본문 · 댓글 · 닉네임 미출력)')
@@ -118,8 +109,7 @@ async function main() {
   console.log(`     sourceSite       ${row.sourceSite}`)
   console.log(`     sourceUrl        ${maskUrl(row.sourceUrl)}`)
   console.log(`     sourceBoardName  ${row.sourceBoardName ?? '(없음)'}`)
-  // 🔴 작가 해시는 앞자리도 찍지 않는다 — 있는지와 세대만
-  console.log(`     authorHash       ${row.authorHash ? 'v2 (값 비출력)' : '(없음)'}`)
+  console.log('     authorHash       (만들지 않는다 — 작가 식별값 미저장)')
   console.log(`     contentHash      ${row.contentHash ? `${row.contentHash.slice(0, 20)}…` : '(없음)'}`)
   console.log(`     contentLength    ${row.contentLength}`)
   console.log(`     postedAt         ${row.postedAt?.toISOString() ?? 'null'}`)
@@ -130,15 +120,6 @@ async function main() {
 
   // ── ③ 소란소란 원장 — 중복 확인 ──────────────────────
   const prisma = new PrismaClient()
-  // 🔴 옛 세대(v1) · 섞임 · 손상 · 다른 key 위에 v2 를 섞어 쓰지 않는다 — 비었거나 지금 key 의 v2 일 때만 쓴다
-  if (APPLY) {
-    const w = writableStateOf((await storedAuthorHashState(prisma, authorKey)).census)
-    if (!w.ok) {
-      console.error(`\n❌ 중단: ${w.reason}\n`)
-      await prisma.$disconnect()
-      process.exit(1)
-    }
-  }
   try {
     const existing = await prisma.voiceSource.findUnique({
       where: { origin_sourceRef: { origin: row.origin, sourceRef: row.sourceRef } },

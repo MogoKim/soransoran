@@ -47,20 +47,6 @@ import {
 } from './lib/voice-m3-sample.mjs'
 import { keyStatus, callProvider } from './lib/voice-m3-provider.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readAuthorHashKey, type AuthorHashKey } from './lib/voice-author-hash.mjs'
-
-/** 🔴 작가 해시 key — 정본 helper 하나. 없으면 공개 기본값으로 계산하지 않고 멈춘다(author-hash v2) */
-let authorKeyCache: AuthorHashKey | null = null
-function runAuthorKey(): AuthorHashKey {
-  if (authorKeyCache !== null) return authorKeyCache
-  const r = readAuthorHashKey()
-  if (!r.ok) {
-    console.error(`\n❌ 중단: ${r.reason}\n`)
-    process.exit(1)
-  }
-  authorKeyCache = r.key
-  return r.key
-}
 
 const argv = process.argv
 const arg = (n: string): string | undefined => {
@@ -328,7 +314,7 @@ async function main(): Promise<void> {
         },
       })
       const reaction = summarizeCommentSignals(
-        toCommentSignals(raw.topComments, { authorKey: runAuthorKey(), capturedAt: new Date(0) }),
+        toCommentSignals(raw.topComments, { capturedAt: new Date(0) }),
       )
       const { payload, summary } = buildPromptPayload({
         sourceRef: row.sourceRef, body, comments,

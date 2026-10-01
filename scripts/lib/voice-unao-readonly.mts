@@ -26,8 +26,6 @@
  *    터미널 기록과 CI 로그는 우리가 통제하지 못하는 곳으로 남는다.
  */
 import { createHash } from 'node:crypto'
-
-import { authorHashV2Of, type AuthorHashKey } from './voice-author-hash.mjs'
 import { readFileSync, existsSync } from 'node:fs'
 
 /** 🔴 이 커넥터가 쓰는 유일한 환경변수 */
@@ -95,14 +93,6 @@ export function contentHashOf(text: string): string {
 }
 
 /**
- * 닉네임은 단방향 해시로만 다룬다. 우나어 닉네임은 3~7자라 원문을 두면 특정된다.
- * 🔴 (2026-10-01 author-hash v2) 계산은 정본 `authorHashV2Of` 하나다 — 여기서 salt 로 따로 해시하지 않는다.
- */
-export function authorHashOf(author: string, key: AuthorHashKey): string {
-  return authorHashV2Of(author, key)
-}
-
-/**
  * VoiceSource 한 행이 될 값. 🔴 본문 · 댓글 원문이 없다.
  *
  * 원문은 우나어 DB 에 남고 여기에는 참조와 증거만 온다(schema-strategy §1).
@@ -115,7 +105,11 @@ export type UnaoSourceRow = {
   sourceSite: string
   sourceUrl: string
   sourceBoardName: string | null
-  authorHash: string | null
+  /**
+   * 🔴 (2026-10-01 · #641) 작가 식별값을 새로 만들지 않는다. 원본 작가명이 복구 불가(우나어 CafePost 폐기)라
+   *    크롤 작가 대조(B2)를 Gate ⑥-B 에서 뺐고, 그 대조 말고는 쓰는 곳이 없다. 옛 행의 v1 값은 판정에 쓰지 않는 inert 값으로 남는다.
+   */
+  authorHash: null
   postedAt: Date | null
   capturedAt: Date
   contentHash: string | null
@@ -434,15 +428,6 @@ export const READ_QUERIES = {
    *
    * 🔴 읽어 온 본문은 프롬프트에만 쓰고 저장하지 않는다. 호출부의 책임이다.
    */
-  /**
-   * 🔴 작가 해시 v1 사슬 원본 대조 증명(2026-10-01 author-hash v2) — sourceRef(= CafePost.id) 표본의 작가명만 읽는다.
-   *    읽은 작가명은 그 자리에서 해시 대조에만 쓰고 출력 · 저장하지 않는다(`voice-author-hash-legacy-proof`).
-   */
-  authorsByIds: `
-    SELECT id, author
-      FROM "CafePost"
-     WHERE id = ANY($1)
-     ORDER BY id ASC`,
   bodiesBySourceRefs: `
     SELECT id, content, "boardName", "commentCount"
       FROM "CafePost"
@@ -485,9 +470,8 @@ export const MAX_BATCH_SIZE = 500
 export const DEFAULT_BATCH_SIZE = 100
 
 /** CafePost 한 행 → VoiceSource 후보. 🔴 본문을 옮기지 않고 해시만 남긴다 */
-export function toSourceRow(raw: Record<string, unknown>, authorKey: AuthorHashKey): UnaoSourceRow {
+export function toSourceRow(raw: Record<string, unknown>): UnaoSourceRow {
   const content = typeof raw.content === 'string' ? raw.content : ''
-  const author = typeof raw.author === 'string' ? raw.author.trim() : ''
   const labels: Record<string, unknown> = {}
   for (const k of LEGACY_LABEL_KEYS) {
     if (raw[k] !== undefined && raw[k] !== null) labels[k] = raw[k]
@@ -504,7 +488,7 @@ export function toSourceRow(raw: Record<string, unknown>, authorKey: AuthorHashK
     sourceSite: `navercafe:${String(raw.cafeId ?? '')}`,
     sourceUrl: String(raw.postUrl ?? ''),
     sourceBoardName: typeof raw.boardName === 'string' ? raw.boardName : null,
-    authorHash: author ? authorHashOf(author, authorKey) : null,
+    authorHash: null,
     postedAt: raw.postedAt instanceof Date ? raw.postedAt : null,
     capturedAt: raw.crawledAt instanceof Date ? raw.crawledAt : new Date(0),
     contentHash: content ? contentHashOf(content) : null,

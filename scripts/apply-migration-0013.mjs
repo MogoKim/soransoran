@@ -144,5 +144,5 @@ if (after.length !== TARGETS.length) { await client.end(); fail('컬럼이 기�
 if (after.some((r) => r.is_nullable !== 'YES')) { await client.end(); fail('컬럼이 nullable 이 아닙니다.') }
 ok('information_schema 검증 통과')
 
-console.log('\n다음: node scripts/author-hash-norm-backfill.mjs   (dry-run)\n')
+console.log('\n(authorHashNorm backfill 은 2026-10-01 #641 에서 퇴역 — 크롤 작가 대조 제거)\n')
 await client.end()

@@ -31,7 +31,6 @@ import { readFileSync, existsSync } from 'node:fs'
 import { checkNameCollision, type NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { authorGateOf, readAuthorHashKey } from './lib/voice-author-hash.mjs'
 
 const APPLY = process.argv.includes('--apply')
 const CHECK = process.argv.includes('--check')
@@ -43,16 +42,6 @@ const DRAFT: PersonaStatus = 'draft'
 
 
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
-/**
- * 🔴 **Gate ⑥-B B2 해시 — 정본 `authorGateOf`(voice-author-hash) 가 허락할 때만** (2026-10-01 author-hash v2).
- *    key 는 정본 env 에서만 읽는다. key 없음 · 저장 작가 해시가 지금 key 의 v2 가 아님(옛 세대 · 섞임 · 손상 ·
- *    빈 집합 · 다른 key) 이면 **배정하지 않고 멈춘다** — 공개 기본값으로 대조하지 않는다.
- */
-const AUTHOR_KEY = readAuthorHashKey()
-const hashOfFor = (sets: NameCollisionSets): ((v: string) => string) => {
-  const g = authorGateOf(AUTHOR_KEY, sets)
-  return g.ok ? g.hashOf : fail(`표시명 Gate ⑥-B 를 쓸 수 없다 — ${g.reason}`)
-}
 const ok = (m: string) => console.log(`   ✅ ${m}`)
 
 /** 🔴 닉네임을 그대로 출력하지 않는다 — 길이와 마스킹만 */
@@ -142,13 +131,12 @@ ok('선택된 이름 상호 중복 없음')
 
 console.log(`\n══ 배정 직전 Gate ⑥-B 재검사 ══`)
 const sets: NameCollisionSets = await loadNameCollisionSets(prisma)
-const hashOf = hashOfFor(sets)
 console.log(`   대조 집합: ${describeSets(sets)}`)
 
 const verdicts = CODES.map((code) => ({
   code,
   name: selection[code].trim(),
-  verdict: checkNameCollision(selection[code].trim(), sets, { hashOf }),
+  verdict: checkNameCollision(selection[code].trim(), sets),
 }))
 for (const { code, name, verdict } of verdicts) {
   const flag = verdict.status === 'pass' ? '✅' : '🔴'

@@ -8,13 +8,12 @@
  * 보는 것
  *   ① valid 후보 1명 적재 → User(계정 0) · Persona(draft · seed) · 감사 3건 · 운영 preflight(draft) 통과
  *   ② 같은 코드 재적재 → 전원 롤백 · write 0
- *   ③ 표시명이 실회원 이름과 같음 → 트랜잭션 안 Gate ⑥-B 가 막음 · write 0
+ *   ③ 표시명이 실회원 이름(B1) · 기존 Persona(B3)와 같음 → 트랜잭션 안 Gate ⑥-B 가 막음 · write 0
  *   ④ quarantined 섞인 배치 · --limit 불일치 → DB 를 열기 전에 막음 · write 0
- *   ⑤ CLI dry-run(--db) → write 0 · key 없음 / 작가 해시 빈 집합 → 멈춤(author-hash v2)
+ *   ⑤ CLI dry-run(--db) → write 0 · key · salt 없이 돈다 · 옛 크롤 작가 해시(v1)의 유무가 결과를 바꾸지 않는다(2026-10-01 · #641)
  *   ⑥ 건드리지 않기로 한 표(Post · Comment · Queue · ActivityLog · RawContent · Account) 불변
  */
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 
 const URL = process.env.DATABASE_URL ?? ''
 {
@@ -44,7 +43,6 @@ const check = (name: string, ok: boolean): void => {
 }
 
 const prisma = new PrismaClient()
-const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`test-salt::${v}`, 'utf8').digest('hex')}`
 const TAG = `ag${Date.now().toString(36)}`
 const REAL_NAME = '해솔'
 
@@ -117,10 +115,10 @@ try {
   {
     const b = await counts()
     const r1 = await applyAutogenDrafts(prisma, {
-      plans: [plan50, { code: 'P49', status: 'quarantined', name: '보람', seed: v49.seed! }], limit: 2, hashOf, reason: 'check',
+      plans: [plan50, { code: 'P49', status: 'quarantined', name: '보람', seed: v49.seed! }], limit: 2, reason: 'check',
     })
-    const r2 = await applyAutogenDrafts(prisma, { plans: [plan50], limit: 3, hashOf, reason: 'check' })
-    const r3 = await applyAutogenDrafts(prisma, { plans: [], limit: 0, hashOf, reason: 'check' })
+    const r2 = await applyAutogenDrafts(prisma, { plans: [plan50], limit: 3, reason: 'check' })
+    const r3 = await applyAutogenDrafts(prisma, { plans: [], limit: 0, reason: 'check' })
     check('quarantined 섞인 배치 → 거부', !r1.ok)
     check('--limit 불일치 → 거부', !r2.ok)
     check('빈 배치 → 거부', !r3.ok)
@@ -131,7 +129,7 @@ try {
   {
     const b = await counts()
     const r = await applyAutogenDrafts(prisma, {
-      plans: [{ ...plan50, name: REAL_NAME }], limit: 1, hashOf, reason: 'check',
+      plans: [{ ...plan50, name: REAL_NAME }], limit: 1, reason: 'check',
     })
     check('실회원 이름과 같은 표시명 → 거부', !r.ok && /Gate/.test(r.ok ? '' : r.reason))
     check('실회원 충돌 거부 → write 0', same(b, await counts()))
@@ -140,7 +138,7 @@ try {
   // ── ① 정상 적재 ──
   {
     const b = await counts()
-    const r = await applyAutogenDrafts(prisma, { plans: [plan50], limit: 1, hashOf, reason: 'autogen db-check' })
+    const r = await applyAutogenDrafts(prisma, { plans: [plan50], limit: 1, reason: 'autogen db-check' })
     check('valid 1명 적재 성공', r.ok)
     const a = await counts()
     check('User +1 · Persona +1 · 감사 +3', a.users === b.users + 1 && a.personas === b.personas + 1 && a.audits === b.audits + 3)
@@ -181,60 +179,52 @@ try {
   // ── ② 같은 코드 재적재 ──
   {
     const b = await counts()
-    const r = await applyAutogenDrafts(prisma, { plans: [{ ...plan50, name: '보람' }], limit: 1, hashOf, reason: 'check' })
+    const r = await applyAutogenDrafts(prisma, { plans: [{ ...plan50, name: '보람' }], limit: 1, reason: 'check' })
     check('같은 코드 재적재 → 거부', !r.ok)
     // 🔴 unique 제약이 뒤에서 막아 주더라도 **사유가 코드 중복으로 먼저** 나와야 한다 — 쓰기 전에 멈춘 것이다
     check('재적재 거부 사유가 "이미 있는 코드" 다', !r.ok && /이미 있는 코드: P50/.test(r.reason))
     check('재적재 거부 → write 0', same(b, await counts()))
   }
 
-  // ── ⑤ CLI dry-run 은 쓰지 않는다 ──
-  //    🔴 (2026-10-01 author-hash v2) `--db` 는 Gate ⑥-B B2 를 정본 `authorGateOf` 로만 연다 —
-  //       key 없음 · 저장 작가 해시가 v2 가 아님(빈 집합 포함) → 멈춘다. 공개 기본값으로 대조하지 않는다.
+  // ── ②-b 🔴 다른 Persona 와 같은 표시명 → 트랜잭션 안 Gate ⑥-B B3 (2026-10-01 · #641) ──
+  //    Persona 계정은 이제 B1(회원)이 아니라 B3 로만 대조된다 — B3 조회가 비면 여기서 통과해 버린다
   {
-    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const { authorHashKeyOf, authorHashV2Of } = await import('./lib/voice-author-hash.mjs')
-    const home = mkdtempSync(join(tmpdir(), 'autogen-db-check-home-'))
-    const cli = (args: string[]) => spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], {
-      env: { ...process.env, HOME: home }, encoding: 'utf-8',
-    })
-    try {
-      const b = await counts()
-      const noKey = cli(['--db', '--count=3'])
-      check('CLI --db · key 없음 → 멈춤(공개 기본값 대조 0)', noKey.status !== 0 && /Gate ⑥-B 를 쓸 수 없다/.test(`${noKey.stdout}${noKey.stderr}`))
-      check('CLI --db · key 없음 → write 0', same(b, await counts()))
+    const b = await counts()
+    const plan49 = { code: 'P49', status: v49.status, name: '다온', seed: v49.seed! }
+    const r = await applyAutogenDrafts(prisma, { plans: [plan49], limit: 1, reason: 'check' })
+    check('기존 Persona(P50 다온)와 같은 표시명 → Gate ⑥-B 가 거부', !r.ok && /Gate/.test(r.ok ? '' : r.reason))
+    check('Persona 충돌 거부 → write 0', same(b, await counts()))
+  }
 
-      // 시험 전용 key(합성) + 지금 key 의 v2 작가 해시 1행 — Gate 가 열리는 최소 상태
-      const secret = 'autogen-db-check-key-0123456789abcdef0123'
-      const envDir = join(home, 'Library', 'Application Support', 'soransoran')
-      mkdirSync(envDir, { recursive: true })
-      writeFileSync(join(envDir, 'env.local'), `VOICE_AUTHOR_HASH_SALT=${secret}\n`, { mode: 0o600 })
-      const k = authorHashKeyOf(secret)
-      if (!k.ok) throw new Error('test key')
-      const noRows = cli(['--db', '--count=3'])
-      check('CLI --db · key 있음 · 작가 해시 집합 비었음 → 멈춤(빈 집합을 통과로 읽지 않는다)',
-        noRows.status !== 0 && /Gate ⑥-B 를 쓸 수 없다/.test(`${noRows.stdout}${noRows.stderr}`))
-      const vs = await prisma.voiceSource.create({ data: {
-        origin: 'fixture', sourceRef: `${TAG}-author`, sourceSite: 'navercafe:fixture', sourceUrl: 'https://example.invalid/ag',
-        capturedAt: new Date(0), authorHash: authorHashV2Of('크롤작가', k.key), authorHashNorm: authorHashV2Of('크롤작가', k.key),
-      } })
-      try {
-        const b2 = await counts()
-        const run = cli(['--db', '--count=3'])
-        check('CLI dry-run(--db) 종료 코드 0', run.status === 0)
-        check('CLI dry-run 이 dry-run 이라고 말한다', /dry-run — DB write 0/.test(run.stdout))
-        check('CLI dry-run → write 0', same(b2, await counts()))
-        const runApply = cli(['--db', '--count=3', '--apply', '--limit=0', '--reason', 'x'])
-        check('valid 0 인데 --apply → 실패 종료', runApply.status !== 0)
-        check('valid 0 --apply → write 0', same(b2, await counts()))
-      } finally {
-        await prisma.voiceSource.delete({ where: { id: vs.id } })
-      }
+  // ── ⑤ CLI dry-run 은 쓰지 않는다 ──
+  //    🔴 (2026-10-01 · #641) 크롤 작가 대조를 뺐다 — key · salt 없이 돌고, 옛 v1 작가 해시가 있든 없든 결과가 같다
+  {
+    const cli = (args: string[]) => spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], {
+      env: process.env, encoding: 'utf-8',
+    })
+    const b = await counts()
+    const run = cli(['--db', '--count=3'])
+    check('CLI dry-run(--db) 종료 코드 0 — key 없이', run.status === 0)
+    check('CLI dry-run 이 dry-run 이라고 말한다', /dry-run — DB write 0/.test(run.stdout))
+    check('CLI dry-run → write 0', same(b, await counts()))
+    const verdictLines = (o: string): string => o.split('\n').filter((l) => !/^\s*$/.test(l)).join('\n')
+    // 옛 v1 작가 해시 행을 넣어도(합성 hex · 공개 사슬 아님) 같은 출력이어야 한다 — inert
+    const legacy = await prisma.voiceSource.create({ data: {
+      origin: 'fixture', sourceRef: `${TAG}-legacy-author`, sourceSite: 'navercafe:fixture', sourceUrl: 'https://example.invalid/ag',
+      capturedAt: new Date(0), authorHash: `sha256:${'a'.repeat(64)}`, authorHashNorm: `sha256:${'b'.repeat(64)}`,
+    } })
+    try {
+      const withLegacy = cli(['--db', '--count=3'])
+      check('옛 v1 작가 해시가 있어도 dry-run 결과가 같다(inert)',
+        withLegacy.status === 0 && verdictLines(withLegacy.stdout) === verdictLines(run.stdout))
     } finally {
-      rmSync(home, { recursive: true, force: true })
+      await prisma.voiceSource.delete({ where: { id: legacy.id } })
     }
+    const out = `${run.stdout}${run.stderr}`
+    check('CLI 출력에 해시 · 실회원 이름이 없다', !/[0-9a-f]{40,}/.test(out) && !out.includes(REAL_NAME))
+    const runApply = cli(['--db', '--count=3', '--apply', '--limit=0', '--reason', 'x'])
+    check('valid 0 인데 --apply → 실패 종료', runApply.status !== 0)
+    check('valid 0 --apply → write 0', same(b, await counts()))
   }
 } finally {
   await cleanup()

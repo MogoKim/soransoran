@@ -21,14 +21,6 @@ import {
   MAX_BATCH_SIZE, DEFAULT_BATCH_SIZE,
   LEAK_RUN_MIN, LEGACY_LABEL_VERSION, hasLeakingRun, isFreeTextLabelValue,
 } from './lib/voice-unao-readonly.mjs'
-import { authorHashKeyOf, type AuthorHashKey } from './lib/voice-author-hash.mjs'
-
-/** 🔴 (2026-10-01 author-hash v2) 시험 전용 key — 합성 문자열(32자 이상). 운영 key 가 아니다 */
-const testKey = (label: string): AuthorHashKey => {
-  const r = authorHashKeyOf(`test-key-${label}-0123456789abcdef0123456789`)
-  if (!r.ok) throw new Error('test key')
-  return r.key
-}
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const IMPORTER = join(HERE, 'voice-unao-import-live.mts')
@@ -216,7 +208,7 @@ function createDataBlock(): string {
     crawledAt: new Date('2026-08-01T00:00:00Z'), postedAt: new Date('2020-03-01T00:00:00Z'),
     usedAt: new Date('2026-05-14T00:00:00Z'),
     desireCategory: 'HEALTH', ageSignal: '50s', urgencyLevel: 4,
-  }, testKey('x'))
+  })
   const json = JSON.stringify(row)
   const offenders: string[] = []
   if (json.includes('이건 원문 본문입니다')) offenders.push('본문이 남았다')
@@ -367,7 +359,7 @@ function leakRow(labels: Record<string, unknown>, extra: Record<string, unknown>
     author: '아무개', content: LEAK_BODY, commentCount: 7,
     crawledAt: new Date('2026-08-01T00:00:00Z'), postedAt: new Date('2021-01-01T00:00:00Z'),
     ...labels, ...extra,
-  }, testKey('x'))
+  })
 }
 
 // ── ⑮ 본문을 물고 온 자유서술 라벨은 버려진다 ───────────
@@ -392,7 +384,7 @@ function leakRow(labels: Record<string, unknown>, extra: Record<string, unknown>
     crawledAt: new Date('2026-08-01T00:00:00Z'),
     topComments: [{ author: 'x', content: commentQuote }],
     betrayalFactor: commentQuote, qualityScore: 7,
-  }, testKey('x'))
+  })
   const keys = Object.keys(row.legacyLabels ?? {})
   const offenders: string[] = []
   if (keys.includes('betrayalFactor')) offenders.push('댓글 인용이 남았다')
@@ -440,7 +432,7 @@ function leakRow(labels: Record<string, unknown>, extra: Record<string, unknown>
     id: 'n-1', cafeId: 'w', postUrl: 'u', author: 'a',
     content: '숫자 3 이 본문에 있다.'.repeat(20), crawledAt: new Date('2026-08-01T00:00:00Z'),
     commentSplit: 3, urgencyLevel: 4, ageSignal: '50s',
-  }, testKey('s'))
+  })
   const keys = Object.keys(row.legacyLabels ?? {})
   for (const k of ['commentSplit', 'urgencyLevel', 'ageSignal']) {
     if (!keys.includes(k)) offenders.push(`${k} 가 버려졌다`)

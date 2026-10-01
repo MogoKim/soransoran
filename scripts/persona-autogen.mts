@@ -34,7 +34,6 @@ import { judgeAutogenBatch, voicePoolFor, type AutogenVerdict } from './lib/pers
 import { applyAutogenDrafts } from './lib/persona-autogen-apply.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { authorGateOf, readAuthorHashKey } from './lib/voice-author-hash.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (k: string): string | null => {
@@ -68,7 +67,6 @@ const taken = new Set<string>(pool.cards.map((c) => c.code))
 type DbFacts = { codes: string[]; cadences: Cadence[]; isTaken: (n: string) => boolean; gateOf: (n: string) => DisplayNameCheck['gate'] }
 let db: DbFacts | null = null
 let prismaRef: import('@prisma/client').PrismaClient | null = null
-let hashOf: ((v: string) => string) | null = null
 if (USE_DB) {
   await loadEnvLocal()
   const { PrismaClient } = await import('@prisma/client')
@@ -80,11 +78,6 @@ if (USE_DB) {
     select: { code: true, status: true, dailyCap: true, weeklyCap: true, silenceRate: true, activityRhythm: true },
   })
   const sets = await loadNameCollisionSets(prisma)
-  // 🔴 Gate ⑥-B B2 — 정본 `authorGateOf` 가 허락할 때만(key · 저장 해시 v2). 아니면 멈춘다(author-hash v2)
-  const gate = authorGateOf(readAuthorHashKey(), sets)
-  if (!gate.ok) { await prisma.$disconnect(); fail(`표시명 Gate ⑥-B 를 쓸 수 없다 — ${gate.reason}`) }
-  const h = (gate as { ok: true; hashOf: (v: string) => string }).hashOf
-  hashOf = h
   const cadences: Cadence[] = rows
     .filter((r) => r.status === 'active' && r.dailyCap !== null && r.weeklyCap !== null && r.silenceRate !== null
       && r.activityRhythm !== null && typeof r.activityRhythm === 'object')
@@ -95,8 +88,8 @@ if (USE_DB) {
   db = {
     codes: rows.map((r) => r.code),
     cadences,
-    isTaken: (n) => checkNameCollision(n, sets, { hashOf: h }).status !== 'pass',
-    gateOf: (n) => checkNameCollision(n, sets, { hashOf: h }).status,
+    isTaken: (n) => checkNameCollision(n, sets).status !== 'pass',
+    gateOf: (n) => checkNameCollision(n, sets).status,
   }
   for (const c of db.codes) taken.add(c)
   console.log(`  운영 DB read-only — Persona ${rows.length}행 · cadence 표본 ${cadences.length}`)
@@ -208,9 +201,9 @@ if (!APPLY) {
   await prismaRef?.$disconnect()
   process.exit(0)
 }
-if (prismaRef === null || hashOf === null || names === null) fail('--apply 는 DB 읽기가 필요하다')
+if (prismaRef === null || names === null) fail('--apply 는 DB 읽기가 필요하다')
 const plans = valid.map((v) => ({ code: v.code, status: v.status, name: names!.picked.get(v.code) ?? '', seed: v.seed ?? {} }))
-const res = await applyAutogenDrafts(prismaRef!, { plans, limit: LIMIT, hashOf: hashOf!, reason: REASON })
+const res = await applyAutogenDrafts(prismaRef!, { plans, limit: LIMIT, reason: REASON })
 await prismaRef!.$disconnect()
 if (!res.ok) fail(`적재하지 않았다 — ${res.reason}`)
 console.log(`\n✅ draft 적재 ${res.ok ? res.created.join(' · ') : ''} — 🔴 status=draft. 켜는 것은 계획 4) 다\n`)

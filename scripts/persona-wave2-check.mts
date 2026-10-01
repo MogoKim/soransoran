@@ -9,7 +9,6 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createHash } from 'node:crypto'
 
 import {
   WAVE2_CODES, MVP_CODES, ACTIVATABLE_FROM, WAVE2_SEED_PATH, WAVE2_DISPLAYNAME_PATH,
@@ -152,39 +151,21 @@ console.log('\n⑤ 🔴 스크립트 계약 (소스)')
   }
 }
 
-// ── ⑥ 🔴 Gate ⑥-B — hashOf 없이는 크롤 author 대조가 통째로 건너뛰어진다 ──
-console.log('\n⑥ Gate ⑥-B · authorHash 충돌')
+// ── ⑥ 🔴 Gate ⑥-B — 이미 있는 이름(회원 · Persona)은 막는다 · 크롤 작가 대조는 없다(2026-10-01 · #641) ──
+console.log('\n⑥ Gate ⑥-B · 회원 · Persona 충돌')
 {
-  const salt = 'test-salt'
-  const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
   const NAME = '도토리'
-  // 🔴 그 이름이 크롤 author 로 이미 있는 상황
-  const sets = { authorHashes: new Set([hashOf(NAME)]), authorHashNorms: new Set<string>() }
+  check('🔴 회원 이름과 겹치면 pass 가 아니다 (B1)',
+    checkNameCollision(NAME, { memberNames: [NAME], personaNames: [] }).status !== 'pass')
+  check('🔴 다른 Persona 이름과 겹치면 pass 가 아니다 (B3)',
+    checkNameCollision(NAME, { memberNames: [], personaNames: [NAME] }).hits.some((h) => h.kind === 'B3_PERSONA'))
 
-  const withHash = checkNameCollision(NAME, sets, { hashOf })
-  check('🔴 authorHash 가 겹치면 pass 가 아니다', withHash.status !== 'pass')
-  check('🔴 사유가 크롤 author 다', withHash.hits.some((h) => h.kind === 'B2_CRAWL_AUTHOR'))
-
-  // 🔴 **이것이 결함이었다** — hashOf 를 넘기지 않으면 대조가 `return []` 로 빠졌다.
-  //    (2026-10-01 author-hash v2) 이제 hashOf · 작가 해시 집합이 **타입상 필수**다 — 빠뜨린 호출은 컴파일되지 않는다
-  const gateSrc = readFileSync(join(HERE, '..', 'scripts/lib/persona-gate-name-collision.mts'), 'utf-8')
-  check('🔴 hashOf · authorHashes · authorHashNorms 가 필수다 — B2 를 조용히 건너뛰는 길이 없다',
-    /hashOf: \(value: string\) => string/.test(gateSrc) && !/hashOf\?:/.test(gateSrc)
-    && /authorHashes: ReadonlySet<string>/.test(gateSrc) && !/if \(hashOf === undefined\) return \[\]/.test(gateSrc))
-
-  // 🔴 정규화된 해시(N2)도 잡는다
-  const normSets = { authorHashes: new Set<string>(), authorHashNorms: new Set([hashOf(NAME)]) }
-  check('🔴 authorHashNorm 충돌도 잡는다',
-    checkNameCollision(NAME, normSets, { hashOf }).status !== 'pass')
-
-  // 🔴 생산 경로가 실제로 hashOf 를 넘기는가 — 소스가 아니라 **계약**을 본다
+  // 🔴 생산 경로가 정본 조회 계층(B1 · B3)을 쓰고, 작가 해시 · salt 를 다시 들이지 않는가
   const assignSrc = readFileSync(join(HERE, '..', 'scripts/persona-wave2-assign.mts'), 'utf-8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  check('🔴 assign 이 checkNameCollision 에 hashOf 를 넘긴다',
-    /checkNameCollision\([^)]*\{\s*hashOf\s*\}/.test(assignSrc))
-  check('🔴 assign 이 정본 authorGateOf 로만 hashOf 를 받는다 — salt · 공개 기본값을 직접 읽지 않는다',
-    /authorGateOf/.test(assignSrc) && /hashOfFor\(sets\)/.test(assignSrc)
-    && !/soransoran-voice-v1/.test(assignSrc) && !/VOICE_AUTHOR_HASH_SALT/.test(assignSrc) && !/createHash/.test(assignSrc))
+  check('🔴 assign 이 loadNameCollisionSets 로 대조 집합을 받는다', /loadNameCollisionSets\(/.test(assignSrc))
+  check('🔴 assign 이 작가 해시 · salt · 공개 사슬을 쓰지 않는다',
+    !/hashOf|authorHash|soransoran-voice-v1|VOICE_AUTHOR_HASH_SALT|createHash/.test(assignSrc))
 }
 
 // ── ⑦ 🔴 seed 완전성 — 생활사 5축만으로 판정하지 않는다 ──

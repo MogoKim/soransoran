@@ -39,7 +39,6 @@ import { assignCandidates, verifyNamePolicy } from '../src/lib/persona-nickname-
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { authorGateOf, readAuthorHashKey } from './lib/voice-author-hash.mjs'
 import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
@@ -58,16 +57,6 @@ const REASON = REASON_AT >= 0 ? (argv[REASON_AT + 1] ?? null) : null
 const ACTOR = (process.env.ACTOR_USER_ID ?? '').trim() || null
 
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
-/**
- * 🔴 **Gate ⑥-B B2 해시 — 정본 `authorGateOf`(voice-author-hash) 가 허락할 때만** (2026-10-01 author-hash v2).
- *    key 는 정본 env 에서만 읽는다. key 없음 · 저장 작가 해시가 지금 key 의 v2 가 아님(옛 세대 · 섞임 · 손상 ·
- *    빈 집합 · 다른 key) 이면 **배정하지 않고 멈춘다** — 공개 기본값으로 대조하지 않는다.
- */
-const AUTHOR_KEY = readAuthorHashKey()
-const hashOfFor = (sets: NameCollisionSets): ((v: string) => string) => {
-  const g = authorGateOf(AUTHOR_KEY, sets)
-  return g.ok ? g.hashOf : fail(`표시명 Gate ⑥-B 를 쓸 수 없다 — ${g.reason}`)
-}
 const ok = (m: string): void => console.log(`   ✅ ${m}`)
 
 // ── 인자 게이트 — 🔴 DB 를 열기 전에 막는다 ──
@@ -84,13 +73,6 @@ if (!sg.ok) fail(sg.reason)
 const STEP: CohortStep = sg.step!
 
 await loadEnvLocal()
-
-/**
- * 🔴 **salt 는 `loadEnvLocal()` 뒤에 만든다.** 순서가 계약이다 —
- *    앞에서 만들면 `.env.local` 의 값이 아직 `process.env` 에 없어 기본값으로 굳는다.
- *    그 상태로는 후보 해시가 적재 해시와 달라 B2(크롤 author) 대조가 한 건도 걸리지 않고,
- *    Gate ⑥-B 는 "전원 pass" 라고 말한다 — 검사한 적이 없는데도.
- */
 
 const prisma = new PrismaClient()
 
@@ -266,8 +248,7 @@ if (STEP === 'create') {
   } else {
     // 🔴 후보를 만들고 Gate ⑥-B 로 걸러 **자동으로** 고른다
     const sets0 = await loadNameCollisionSets(prisma)
-    const h0 = hashOfFor(sets0)
-    const auto = assignCandidates(M.codes, (n) => checkNameCollision(n, sets0, { hashOf: h0 }).status !== 'pass')
+        const auto = assignCandidates(M.codes, (n) => checkNameCollision(n, sets0).status !== 'pass')
     if (!auto.ok) {
       await prisma.$disconnect()
       fail(`닉네임 후보를 자동으로 고르지 못했습니다:\n     ${auto.problems.join('\n     ')}`)
@@ -297,8 +278,7 @@ if (STEP === 'create') {
    */
   const preSets = await loadNameCollisionSets(prisma)
   console.log(`   대조 대상 — ${describeSets(preSets)}`)
-  const hPre = hashOfFor(preSets)
-  const preVerdicts = creates.map((c) => ({ ...c, v: checkNameCollision(c.name, preSets, { hashOf: hPre }) }))
+    const preVerdicts = creates.map((c) => ({ ...c, v: checkNameCollision(c.name, preSets) }))
 
   /**
    * 🔴 **P 코드 → 예정 닉네임과 그 자리의 Gate ⑥-B 결과를 함께 보여 준다** (2026-09-08).
@@ -308,7 +288,7 @@ if (STEP === 'create') {
    *    적용 전에 눈으로 볼 수 있어야 한다.
    *
    *    🔴 여기 적히는 것은 **우리가 만들 persona 의 이름**이다. 대조 대상(회원 닉네임 ·
-   *    크롤 author)은 한 글자도 나오지 않는다 — 판정부가 원문을 돌려주지 않기 때문이다.
+   *    다른 Persona)은 한 글자도 나오지 않는다 — 판정부가 원문을 돌려주지 않기 때문이다.
    */
   console.log('\n   ── 예정 닉네임 (P 코드 → 이름 · Gate ⑥-B)')
   for (const x of preVerdicts) {
@@ -324,7 +304,7 @@ if (STEP === 'create') {
       + `     🔴 일부만 만들지 않습니다 — 전부 중단합니다.\n`
       + preBlocked.map((x) => `     ${x.code}: ${x.v.status} — ${x.v.reason}`).join('\n'))
   }
-  ok(`Gate ⑥-B 사전 검사 전원 pass (${creates.length}/${creates.length}) · authorHash 대조 포함`)
+  ok(`Gate ⑥-B 사전 검사 전원 pass (${creates.length}/${creates.length}) · B1 회원 · B3 Persona · B4~B6 규칙`)
   console.log('      🔴 최종 판정은 트랜잭션 안에서 다시 한다 — 지금 통과가 보장은 아니다')
 }
 
@@ -428,7 +408,7 @@ try {
        */
       const txSets = await loadNameCollisionSets(tx)
       const txBlocked = creates
-        .map((c) => ({ ...c, v: checkNameCollision(c.name, txSets, { hashOf: hashOfFor(txSets) }) }))
+        .map((c) => ({ ...c, v: checkNameCollision(c.name, txSets) }))
         .filter((x) => x.v.status !== 'pass')
       if (txBlocked.length > 0) {
         throw new Error('트랜잭션 안 Gate ⑥-B 재판정 실패 — '
