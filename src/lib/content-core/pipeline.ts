@@ -22,7 +22,11 @@ export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.1'
  *    🔴 올리지 않으면 **옛 응답으로 만든 artifact 와 캐시가 새 계약으로 재사용된다.**
  */
 export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p5'
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p7'
+/**
+ * 🔴 **v2-draft-p8 (2026-10-01 · quality-v5)** — 생활 계약 줄의 말버릇 금지가 `persona-no-go` 열쇠 + 전원 공통 금지로 바뀌었다
+ *    (개인 목록이 비어도 공통 금지 · 정리된 문서 모양 금지를 싣는다). 옛 프롬프트 artifact 를 재사용하지 않는다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p8'
 export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p7'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const

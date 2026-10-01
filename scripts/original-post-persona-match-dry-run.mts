@@ -83,7 +83,7 @@ console.log('  🔴 발행하지 않습니다 · Post 를 만들지 않습니다
 // ── 페르소나 조달 — 🔴 읽기만 한다 ──
 const personaRows = await prisma.persona.findMany({
   select: {
-    code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
+    code: true, status: true, identity: true, voiceCore: true, noGoTopics: true, noGoExpressions: true,
     user: { select: { providerId: true, _count: { select: { accounts: true } } } },
   },
   orderBy: { code: 'asc' },
@@ -127,6 +127,7 @@ for (const r of personaRows) {
     economicStatus: typeof id.economicStatus === 'string' ? id.economicStatus : null,
     region: null,
     noGoTopics: r.noGoTopics,
+    noGoExpressions: r.noGoExpressions,
     voiceLength: typeof vc.length === 'string' ? vc.length : null,
     postsThisWeek,
     daysSinceLastPost: last === null ? null : Math.floor((Date.now() - last.createdAt.getTime()) / 864e5),

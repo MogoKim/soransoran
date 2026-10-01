@@ -26,6 +26,7 @@
  * 🔴 이 파일은 고객 경로에서 import 되지 않는다. import 가 하나도 없다(fixture 가 강제).
  */
 
+import { noGoHits } from './persona-no-go'
 import { judgeRealMember } from './real-member-gate'
 /**
  * 🔴 **생성 말투와 최종 author 를 잇는다** (2026-09-13).
@@ -652,6 +653,8 @@ export type PersonaForMatch = {
   economicStatus?: string | null
   region?: string | null
   noGoTopics: readonly string[]
+  /** 🔴 개인 말버릇 원값 — 판정은 `persona-no-go` 가 열쇠로 한다. 빈 배열이 정상일 수 있다(공통 금지는 따로 본다) */
+  noGoExpressions: readonly string[]
   /**
    * `voiceCore.length` **원문**. 🔴 밴드가 아니라 자유 문장이다 (`"짧고 툭툭"` · `"중간"`).
    *    readLengthBand 가 밴드로 읽는다 — 여기서 정규화하지 않는다.
@@ -673,6 +676,8 @@ export const BLOCK_CODES = [
   'NO_PARENT_CARE',
   'MENOPAUSE_NOT_YET',
   'NOGO_TOPIC',
+  'NOGO_EXPRESSION',
+  'NOGO_COMMON',
   'WEEKLY_CAP',
   'TOO_SOON',
 ] as const
@@ -689,6 +694,8 @@ export const BLOCK_LABEL: Record<BlockCode, string> = {
   NO_PARENT_CARE: '돌봄 경험이 없는데 돌봄 글이다',
   MENOPAUSE_NOT_YET: '갱년기 전인데 갱년기 글이다',
   NOGO_TOPIC: 'noGo 소재다',
+  NOGO_EXPRESSION: '이 사람이 쓰지 않는 말버릇이다',
+  NOGO_COMMON: '🔴 전원 공통 금지(문구 · 정리된 문서 모양)다',
   WEEKLY_CAP: '이번 주 글 상한을 채웠다',
   TOO_SOON: `직전 글에서 ${MIN_DAYS_BETWEEN_POSTS}일이 지나지 않았다`,
 }
@@ -762,11 +769,10 @@ export function judgeLifeHistory(
   }
 
   // ── noGo ──
-  const all = `${postTitle}\n${postBody}`
-  const hitTopics = p.noGoTopics.filter((topic) => topic.trim() !== '' && all.includes(topic))
-  if (hitTopics.length > 0) {
-    out.push({ code: 'NOGO_TOPIC', detail: `${hitTopics.length}종 일치` })
-  }
+  // 🔴 이 함수는 **이 사람이 다룰 글**(댓글 대상 글 포함)을 본다 — 피하는 소재만 본다(판정은 `persona-no-go`).
+  //    말버릇 · 공통 금지는 **이 사람이 쓴 글**에만 해당한다 → `hardFilter` 가 본다(회원 글의 불릿에 막히지 않게)
+  const hitTopics = noGoHits(`${postTitle}\n${postBody}`, { noGoTopics: p.noGoTopics }).topics
+  if (hitTopics.length > 0) out.push({ code: 'NOGO_TOPIC', detail: `${hitTopics.length}종 일치` })
 
   return out
 }
@@ -803,6 +809,10 @@ export function hardFilter(
     out.push({ code: 'TOO_SOON', detail: `${p.daysSinceLastPost}일 전 · 최소 ${minGap}일` })
   }
 
+  // 🔴 **이 사람이 쓴 글** — 말버릇(열쇠) · 전원 공통 금지(§7-2). 판정은 `persona-no-go` 하나 · 초안 게이트 personaNoGo · 댓글 Gate ⑦⑧ 와 같다
+  const own = noGoHits(`${postTitle}\n${postBody}`, { noGoExpressions: p.noGoExpressions })
+  if (own.expressions.length > 0) out.push({ code: 'NOGO_EXPRESSION', detail: `${own.expressions.length}종 일치` })
+  if (own.common.length > 0) out.push({ code: 'NOGO_COMMON', detail: own.common.map((h) => h.replace(/^phrase:.*/, 'phrase')).join('·') })
   return out
 }
 

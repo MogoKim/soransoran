@@ -59,7 +59,14 @@ import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } 
  *      재생으로** 바꾼다(`QUALITY_EVIDENCE_BASIS`) — 새 30건 사람 검토를 요구하지 않는다. 감사 결함 · 재시도 가능 실패 ·
  *      판정 대기 시한 · 글 유실 · 사람 중대 결함은 그대로 닫는다. 🔴 v3 행을 고치거나 지우지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v4'
+/**
+ * 🔴 `quality-v5` (2026-10-01 · Phase 2C) = **글 No-Go 를 댓글과 같은 판정 하나로**. 초안 확정 게이트 `personaNoGo`
+ *    (`draft-gates-v5`) · 초안 프롬프트 `v2-draft-p8` · 발행 배정 `hardFilter` 의 NOGO_EXPRESSION · NOGO_COMMON 이 전부
+ *    `persona-no-go` 를 부른다(따옴표 · `류` 표기 무관 · 전원 공통 금지 Pool §7-2). 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v4 행을 고치거나 지우거나 v5 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ *    새 READY 는 최근 원천 → 다음 슬롯 → 새 계약 생성(JIT)으로만 생긴다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v5'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

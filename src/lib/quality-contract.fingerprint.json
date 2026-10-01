@@ -1,36 +1,42 @@
 {
-  "version": "quality-v4",
-  "digest": "379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa",
+  "version": "quality-v5",
+  "digest": "61716a4df9e09d5e42d58e9066d4336cd8c733fd63035ef32b93539190a4efc9",
   "files": {
-    "src/lib/quality-contract.ts": "930c0c2e3800e5531972337e98f27c6e987252f368294a4fc363b4bd2260ce25",
+    "src/lib/quality-contract.ts": "59081c3a841c5e5e1c4aaf233e0901069561c35efb644ec69ee78f62a889596b",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "b97fccac9bbc7deef3d03549187d5d6d1091f975146db08ad1f3629a31f13777",
+    "src/lib/content-core/draft-life-gates.ts": "f3e7819de30b98a79a56b8d43b4e365a014fca2cca3825566d047ad6f60b4734",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "a20b40cdb7ca8e2030b3e25ab10d53739435e1f946b7fa10da79beed4a2a90b3",
+    "src/lib/content-core/pipeline.ts": "fa742d81ca4b87783d421ec3636ea999b6a81e27d7e87d4b8b17207511c6f15e",
     "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
     "src/lib/auto-ready-v2.ts": "1fc9e27acc68916eb7802fccfaa0d6abf09eabe68b7b916961d9162b41f27fc2",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
-    "src/lib/original-post-persona-match.ts": "c4fd83b706912022c221b8e0db09fec90f911028782e29a701f97ef544aa6751",
+    "src/lib/original-post-persona-match.ts": "c9e6e130a887cd369cad12ec2bb82ccc031b5e606e3ed5d3640c521ccd1d1343",
     "scripts/lib/content-core-run.mts": "2868e056718645a17140238d7269bc6a0ad8f5a9303e29e04752ac957fec4106",
-    "scripts/lib/content-core-prompts.mts": "b3d2a4a22966d822d114d1162f57b0606c92aec0db1d40e7ae59d5b174112751",
+    "scripts/lib/content-core-prompts.mts": "50b8507eda4b96f3b8322098a971f64ff6a2b2b3cdfc0460f5b05fa66910393d",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "3442679bbd04e2f5b24b64495cb532bd2935ba449f0be919ee18db92c2757a00",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
-    "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d",
+    "src/lib/persona-pool-card.ts": "5feb11b4b5dce65427c9f5569ce29e067765eb40a0bbffb2782d4fa4e1a86b9a",
     "src/lib/persona-cap.ts": "83744d04e42d76a4402d31ff743c0da94db7456efe89091084ec87968cadbf50",
     "src/lib/founder-gold.ts": "92e7ddb5629d29f4fac275333ab029ffadeb7a0da4a77fcc8f2cda95e05b6b74",
-    "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78"
+    "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
+    "src/lib/persona-no-go.ts": "03e50a98ccaf2b17582d14603d89fba9a7f303aed0f6a8ea606c26f07a070b8e"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "sourceSite provenance propagation only; quality gates unchanged",
+    "kind": "bump",
+    "reason": "판 quality-v4 → quality-v5",
     "changedFiles": [
-      "src/lib/micro-seed-auto-draft.ts",
-      "scripts/lib/content-core-run.mts"
+      "src/lib/quality-contract.ts",
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/content-core/pipeline.ts",
+      "src/lib/original-post-persona-match.ts",
+      "scripts/lib/content-core-prompts.mts",
+      "src/lib/persona-pool-card.ts",
+      "src/lib/persona-no-go.ts"
     ]
   }
 }

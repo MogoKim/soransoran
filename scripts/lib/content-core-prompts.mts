@@ -10,6 +10,7 @@
  *    보내면 남의 글이 화자 선택에 섞인다.
  */
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
+import { promptNoGoExpressions } from '../../src/lib/persona-no-go'
 import { type AxisMapping } from '../../src/lib/content-core/speaker-relative-facts'
 import type { LoadBearingRequirement } from '../../src/lib/content-core/load-bearing'
 import { CLAIM_FACT_LABEL } from '../../src/lib/content-core/source-facts'
@@ -297,8 +298,10 @@ export function buildV2DraftSystemPrompt(input: {
       ? [`🔴 이 행동은 하지 않습니다: ${life.noGoTopics.join(' · ')}`,
          '   (비슷한 주제를 통째로 피하라는 뜻이 아닙니다)']
       : []),
-    ...(life.noGoExpressions.length > 0
-      ? [`🔴 이 말버릇은 쓰지 않습니다: ${life.noGoExpressions.join(' · ')}`] : []),
+    // 🔴 (quality-v5) 개인 말버릇(열쇠) + 전원 공통 금지(§7-2) — `persona-no-go` 하나. 개인 목록이 비어도 공통은 싣는다.
+    //    생성 뒤 최종 게이트(`draft-life-gates` personaNoGo)가 같은 판정으로 막는다
+    `🔴 이 말버릇은 쓰지 않습니다: ${promptNoGoExpressions(life.noGoExpressions).join(' · ')}`,
+    '🔴 불릿 · 번호 목록 · 마크다운 제목 · 굵은 글씨 · "먼저/다음으로/마지막으로" 식 정리를 쓰지 않습니다',
     '',
     `## 당신이 서는 자리 — 🔴 ${STANCE_LABEL[plan.stance ?? 'REFLECTION']}`,
     ...(plan.stance !== null && plan.stance !== 'SELF_EXPERIENCE'

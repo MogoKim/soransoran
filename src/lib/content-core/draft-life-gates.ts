@@ -34,6 +34,7 @@ import { RELATION_NAMES } from './source-facts'
 /** 🔴 "다른 사람을 가리키는 말" 의 정본 — 여기서 목록을 다시 만들지 않는다 */
 import { OTHER_MARKERS } from '../persona-self-age'
 import type { PoolCard } from '../persona-pool-card'
+import { noGoHits } from '../persona-no-go'
 import {
   CHILD_AGE_BANDS, judgeLifeHistory, readSelfChildBands, readSelfClaims,
   readClauseFrames, readSelfChildClauses,
@@ -68,6 +69,8 @@ export const DRAFT_GATE_CODES = [
   'thinVentDraft',
   /** 🔴 1인칭 허가(selfBasis) 없이 자기 생활사를 주장한다 */
   'unwarrantedSelfClaim',
+  /** 🔴 (v5) 글쓴이의 말버릇 금지 · 전원 공통 금지(Pool §7-2)를 썼다 — 판정은 `persona-no-go` 하나(댓글 Gate ⑦⑧ 와 같다) */
+  'personaNoGo',
 ] as const
 export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
 
@@ -82,7 +85,11 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  * 🔴 `draft-gates-v3.1` (2026-09-28) — 같은 날 시간 의존 문장도 사람 검토. 운영 v3 행이 0 이라 품질 계약 판 이름
  *    (`quality-v3`)은 그대로 두고 이 값으로 digest 를 바꾼다(`check:quality-contract -- --revise`).
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v4'
+/**
+ * 🔴 `draft-gates-v5` (2026-10-01 · Phase 2C) — `personaNoGo` 확정 게이트. 글 초안도 댓글과 **같은 판정**
+ *    (`persona-no-go`)으로 개인 말버릇(따옴표 · `류` 표기 무관)과 전원 공통 금지를 막는다.
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v5'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -116,6 +123,7 @@ export type DraftLifeReview = { code: DraftLifeReviewCode; detail: string }
 export const DRAFT_GATE_LABEL: Readonly<Record<DraftGateCode, string>> = {
   mediaDependentDraft: '🔴 우리 글에 없는 사진·첨부에 기댄다 — 읽는 사람이 무엇을 보라는지 모른다',
   unwarrantedSelfClaim: '🔴 1인칭 허가 없이 글쓴이 자신의 가족·집안·일을 사실로 말한다',
+  personaNoGo: '🔴 글쓴이가 쓰지 않는 말버릇이거나 전원 공통 금지(문구 · 불릿 · 번호 · 마크다운 · 순서말 구조화)다',
   lifeStageTenseConflict: '🔴 Persona 의 지금 삶(자녀 나이대·집안)을 미래·과거로 말하거나 다르게 말한다',
   maritalStatusConflict: '🔴 Persona 의 혼인·부부 관계와 다른 1인칭 이혼·별거 경험을 말한다',
   careHouseholdConflict: '🔴 Persona 가 늘 돌보거나 함께 사는 부모와 연락이 끊겼다·따로 산다고 말한다',
@@ -148,7 +156,7 @@ export type DraftGatePlan = {
  *    그 축에서 무엇이 걸렸을 때 통과시키지 않고 **사람 검토**로 보낸다(모르는 것 = 모호).
  */
 export type DraftGateCard = Pick<PoolCard, 'childrenCount' | 'childrenAgeBands' | 'maritalStatus'>
-  & Partial<Pick<PoolCard, 'spouseRelationship' | 'parentCare' | 'menopauseStatus' | 'noGoTopics' | 'household' | 'ageBand'>>
+  & Partial<Pick<PoolCard, 'spouseRelationship' | 'parentCare' | 'menopauseStatus' | 'noGoTopics' | 'noGoExpressions' | 'household' | 'ageBand'>>
 
 /**
  * 🔴 자기 주장 축 → 계획이 허가할 수 있는 자격 축(`ClaimFact`).
@@ -255,7 +263,15 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
     ...judgeNoLifeFactClaims(input.title, input.body, input.plan),
     ...judgeThinVent(input.title, input.body, input.plan),
   ]
-  const all = [...failures, ...life.hard, ...ctx.hard]
+  /**
+   * 🔴 (v5) **글쓴이 No-Go** — 판정은 `persona-no-go` 하나. 개인 말버릇(카드 · 열쇠 비교)과 전원 공통 금지.
+   *    카드가 없어도 공통 금지는 본다(누가 쓰든 금지다). 소재(`noGoTopics`)는 배정(`hardFilter`)이 원천 글로 본다 — 여기서 다시 보지 않는다.
+   */
+  const nogo = noGoHits(`${input.title}\n${input.body}`, { noGoExpressions: input.card?.noGoExpressions ?? [] })
+  const nogoHits = [...nogo.expressions.map(() => 'expression'), ...nogo.common]
+  const nogoFail: DraftGateFailure[] = nogoHits.length === 0 ? []
+    : [{ code: 'personaNoGo', detail: [...new Set(nogoHits.map((h) => h.replace(/^phrase:.*/, 'phrase')))].join('·') }]
+  const all = [...failures, ...life.hard, ...ctx.hard, ...nogoFail]
   const rank = (c: DraftGateCode): number => DRAFT_GATE_CODES.indexOf(c)
   const hardCodes = new Set(all.map((f) => f.code))
   return {
@@ -351,7 +367,7 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
       needsParentCare: false, needsMenopauseExperience: false, labels: [],
     }
     const persona: PersonaForMatch = {
-      code: '', status: 'active', providerId: null, accountCount: 0, noGoTopics: [],
+      code: '', status: 'active', providerId: null, accountCount: 0, noGoTopics: [], noGoExpressions: [],
       postsThisWeek: 0, daysSinceLastPost: null,
       childrenCount: card.childrenCount, childrenAgeBands: card.childrenAgeBands,
       maritalStatus: card.maritalStatus,
