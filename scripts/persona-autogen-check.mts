@@ -85,8 +85,11 @@ console.log('① 온전한 후보')
 console.log('② 반례')
 check('축 누락 — 생활사 골격 없음 → LIFE_AXIS_MISSING · quarantined',
   has({ ...base, life: null }, 'LIFE_AXIS_MISSING') && judge({ ...base, life: null }).status === 'quarantined')
-check('축 누락 — noGo 표현 비움 → LIFE_AXIS_MISSING',
-  has({ ...base, creative: { ...CREATIVE, noGoExpressions: [] } }, 'LIFE_AXIS_MISSING'))
+// 🔴 (2026-10-01 · C8) 개인 말버릇은 없어도 되는 칸 — 공통 금지는 `persona-no-go` 가 강제한다. 소재 경계는 그대로 필수
+check('🔴 개인 noGo 표현 비움 → LIFE_AXIS_MISSING 아님 (C8)',
+  !has({ ...base, creative: { ...CREATIVE, noGoExpressions: [] } }, 'LIFE_AXIS_MISSING'))
+check('🔴 noGo 소재 비움 → LIFE_AXIS_MISSING (소재 경계 약화 0)',
+  has({ ...base, creative: { ...CREATIVE, noGoTopics: [] } }, 'LIFE_AXIS_MISSING'))
 check('축 누락 — 성격 비움 → LIFE_AXIS_MISSING',
   has({ ...base, creative: { ...CREATIVE, personality: [] } }, 'LIFE_AXIS_MISSING'))
 check('말투 근거 없음 → NO_VOICE_EVIDENCE · quarantined',

@@ -12,10 +12,14 @@
  *   ⑤ 두 번째 실행 → 계획 0 · write 0
  *   ⑥ 근거 없는 칸(생활 단계 · 말끝) · 말투 근거 0 · 표시명 충돌은 그대로 막혀 있다(채우지 않는다)
  *
- * 🔴 말투 근거는 운영과 같은 정본 자산(`bundlesForPersonas`)에서 온다 — fixture 가 실제보다 강하지 않다.
- *    자산이 없는 환경에서는 ④ 의 계약 유효 기대가 성립하지 않으므로 멈춘다(exit 3).
+ * 🔴 말투 근거 자산은 **임시 HOME 아래에 운영과 같은 모양**으로 만든다(CI · 로컬 동일) — 실제 정본 파일을 읽지 않는다.
+ *    화자는 운영 실측과 같은 18명이다(기준 3건 이상) — 정렬상 뒤쪽 6명(P20~P25)은 묶음을 받지 못한다.
+ *    fixture 가 실제보다 강하지 않다: 화자 수 · 판정 · digest · 권한 검사를 그대로 지난다.
  */
-import { readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const URL = process.env.DATABASE_URL ?? ''
 {
@@ -30,11 +34,31 @@ const URL = process.env.DATABASE_URL ?? ''
   }
 }
 
+// ── 🔴 임시 HOME — 말투 자산 경로가 HOME 아래다. 모듈을 읽기 **전에** 바꾼다 ──
+const HOME = mkdtempSync(join(tmpdir(), 'soran-remediation-db-'))
+process.env.HOME = HOME
+{
+  const dir = join(HOME, 'Library', 'Application Support', 'soransoran', 'persona-reference')
+  mkdirSync(dir, { recursive: true })
+  const OPEN = ['그러게요', '맞아요', '음', '아이고', '그쵸', '어머', '진짜요', '그러니까요', '하긴', '와', '정말요', '네네', '아휴', '흠', '그렇죠', '오', '아', '참']
+  const TAIL = ['날이 갑자기 추워졌네요', '그 말이 딱 맞네요', '다들 비슷하신가 봐요', '그런 날도 있는 거죠', '천천히 하시면 돼요']
+  const comments = OPEN.flatMap((o, s) => TAIL.slice(0, 4).map((t, k) => ({
+    speakerId: createHash('sha256').update(`spk-${s}`).digest('hex').slice(0, 12), content: `${o} ${t} ${'~'.repeat(k)}`.trim(),
+  })))
+  const raw = JSON.stringify({ version: 1, comments })
+  writeFileSync(join(dir, 'corpus.json'), raw)
+  chmodSync(join(dir, 'corpus.json'), 0o600)
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ sourceDigest: createHash('sha256').update(raw).digest('hex').slice(0, 16) }))
+}
+
 const { PrismaClient } = await import('@prisma/client')
 const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
-const { noGoExpressionKey } = await import('../src/lib/persona-card-verify')
+const { noGoExpressionKey } = await import('../src/lib/persona-no-go')
 const { readRemediation, applyRemediation } = await import('./lib/persona-contract-remediation.mjs')
 const { bundlesForPersonas } = await import('./lib/persona-reference-store.mjs')
+const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
+const { roleRoundVerdict } = await import('../src/lib/persona-reserve')
+const { readReserveFacts } = await import('./lib/persona-reserve-facts.mjs')
 const { PERSONA_POOL_DOC } = await import('./lib/voice-runtime.mjs')
 
 let pass = 0
@@ -48,14 +72,19 @@ const now = new Date()
 /** P01 · P14 정본 일치(유효) · P05 금지 역할 drift(카드로 고침) · P17 생활 단계 없음 · P21 말투 근거 없음 · P22 표시명 충돌 */
 const CODES = ['P01', 'P14', 'P05', 'P17', 'P21', 'P22']
 
-const bundles = bundlesForPersonas({ repoRoot: root, personaCodes: ['P01', 'P05', 'P14'] })
-if (bundles.byCode.size < 3) {
-  console.error('🔴 정본 말투 자산이 없다 — 이 검사의 계약 유효 기대가 성립하지 않는다(운영과 같은 자산이 필요). 멈춘다.')
+const bundles = bundlesForPersonas({ repoRoot: root, personaCodes: ['P01', 'P05', 'P14', 'P17', 'P21'] })
+if (bundles.origin !== '정본 자산' || bundles.byCode.size !== 4 || bundles.byCode.has('P21')) {
+  console.error(`🔴 임시 말투 자산이 운영 모양으로 서지 않았다(${bundles.origin} · ${bundles.byCode.size}) — ${bundles.blocks.join(' / ')}`)
   process.exit(3)
 }
 
 async function cleanup(): Promise<void> {
   const mine = await prisma.persona.findMany({ where: { code: { in: CODES } }, select: { id: true, userId: true } })
+  const ids = mine.map((m) => m.id)
+  const posts = await prisma.post.findMany({ where: { OR: [{ personaId: { in: ids } }, { title: { startsWith: 'rmd-role' } }] }, select: { id: true } })
+  await prisma.personaApprovalQueue.deleteMany({ where: { OR: [{ personaId: { in: ids } }, { dedupKey: { startsWith: 'rmd-role' } }] } })
+  await prisma.comment.deleteMany({ where: { OR: [{ personaId: { in: ids } }, { postId: { in: posts.map((p) => p.id) } }] } })
+  await prisma.post.deleteMany({ where: { id: { in: posts.map((p) => p.id) } } })
   await prisma.personaAuditLog.deleteMany({ where: { personaId: { in: mine.map((m) => m.id) } } })
   await prisma.persona.deleteMany({ where: { id: { in: mine.map((m) => m.id) } } })
   await prisma.user.deleteMany({ where: { OR: [{ id: { in: mine.map((m) => m.userId) } }, { nickname: { startsWith: 'rmd-member' } }] } })
@@ -167,6 +196,44 @@ try {
   check('🔴 두 번째 계획 0', r4.plan.personas.length === 0)
   const rAgain = await applyRemediation(prisma, { approvedDigest: r4.plan.digest, reason: 'db-check', now, repoRoot: root })
   check('🔴 두 번째 실행 write 0', rAgain.ok && rAgain.updated.length === 0 && s5 === await snapshot())
+
+  // ── ⑥ 🔴 역할 쏠림은 **실제 댓글 회차 원자료**에서 읽힌다 (2026-10-01 · C9 보정) ──
+  const ids = Object.fromEntries((await prisma.persona.findMany({ where: { code: { in: ['P01', 'P14'] } }, select: { code: true, id: true, userId: true } }))
+    .map((p) => [p.code, p]))
+  const rolePost = await prisma.post.create({
+    data: { boardType: 'FREE', title: 'rmd-role 글', content: '본문', authorId: ids.P14!.userId, personaId: ids.P14!.id, status: 'PUBLISHED' },
+    select: { id: true },
+  })
+  const roles = [...Array(9).fill('empathy'), 'question'] as string[]
+  for (const [i, role] of roles.entries()) {
+    const c = await prisma.comment.create({
+      data: { postId: rolePost.id, content: `댓글 ${i}`, authorId: ids.P01!.userId, personaId: ids.P01!.id, commentOrigin: 'PERSONA' },
+      select: { id: true },
+    })
+    await prisma.personaApprovalQueue.create({ data: {
+      personaId: ids.P01!.id, targetPostId: rolePost.id, candidateText: `댓글 ${i}`, reactionType: role,
+      gateStatus: 'pass', gateResults: {}, dedupKey: `rmd-role-${i}`, status: 'PUBLISHED', publishedCommentId: c.id,
+    } })
+  }
+  const src = makeDbTargetSource({ prisma, windowStart: new Date(now.getTime() - 7 * 86_400_000), now })
+  const sp = await src.personas()
+  const p01 = sp.find((p) => p.code === 'P01')!
+  check(`🔴 DB source → P01 역할 이력 ${JSON.stringify(p01.recentRoles)}`, p01.recentRoles !== null
+    && p01.recentRoles.roleCounts.empathy === 9 && p01.recentRoles.roleCounts.question === 1 && p01.recentRoles.unresolvedRoleEvents === 0)
+  const facts = await readReserveFacts(prisma, { now, repoRoot: root })
+  const h01 = facts.rows.find((r) => r.code === 'P01')!.history!
+  check('🔴 회차 원자료 = 계약 원자료 (같은 정본 `roleHistoryOf`)', JSON.stringify(h01.roleCounts) === JSON.stringify(p01.recentRoles!.roleCounts))
+  const rr = roleRoundVerdict(p01.recentRoles)
+  check('🔴 회차 판정 → P01 empathy 만 막힘', rr.status === 'ok' && rr.blockedRoles.join(',') === 'empathy')
+  const r6 = await readRemediation(prisma, { now, repoRoot: root })
+  check('🔴 P01 contract-valid 유지 — 역할 쏠림은 계약을 깎지 않는다', r6.before.byState['stage-active'].includes('P01'))
+  // 역할을 모르는 댓글(발행 Queue 행 없음) 하나 → 이번 회차 모름
+  await prisma.comment.create({
+    data: { postId: rolePost.id, content: '역할 모름', authorId: ids.P01!.userId, personaId: ids.P01!.id, commentOrigin: 'PERSONA' },
+  })
+  const p01b = (await src.personas()).find((p) => p.code === 'P01')!
+  check('🔴 역할 모르는 댓글 1건 → 회차 모름(fail-closed)', roleRoundVerdict(p01b.recentRoles).status === 'unknown'
+    && (await readRemediation(prisma, { now, repoRoot: root })).before.byState['stage-active'].includes('P01'))
 } finally {
   await cleanup()
   await prisma.$disconnect()

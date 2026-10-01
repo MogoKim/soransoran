@@ -18,9 +18,10 @@ import { verifySeedCard } from '../src/lib/persona-card-verify'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import {
   contractAxes, historyFromEvents, judgePersonaReserve, judgePersonaState, reserveFloorGap, roleShareOf,
-  SHARE_MIN_EVENTS, topicShareOf,
+  SHARE_MIN_EVENTS,
   type ActivityHistory, type PersonaReserveInput, type QualificationEvidence,
 } from '../src/lib/persona-reserve'
+import { ROLE_SHARE_CAP } from '../src/lib/d100-persona-scale'
 import {
   autogenCodeOf, distinctSubjectOfCard, judgeDistinctness,
   type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
@@ -59,9 +60,12 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
 
   console.log('⑦-2 반례 — 한 칸씩')
   {
-    const noGo = state({ card: { filledAxes: ALL.filter((a) => a !== 'noGoExpressions'), ageBand: '50대 초반', voiceComments: 3 } })
-    check('noGo 표현 없음 → qualification-pending · lifeAxes 막힘',
-      noGo.state === 'qualification-pending' && noGo.contract?.blocked.lifeAxes?.includes('noGoExpressions') === true)
+    // 🔴 (2026-10-01 · C8) 개인 말버릇은 없어도 되는 칸 — 전원 공통 금지는 `persona-no-go` 가 강제한다
+    const noExpr = state({ card: { filledAxes: ALL.filter((a) => a !== 'noGoExpressions'), ageBand: '50대 초반', voiceComments: 3 } })
+    check('🔴 개인 noGo 표현 없음 → 계약 통과 (C8)', noExpr.contract?.valid === true && noExpr.contract.blocked.lifeAxes === undefined)
+    const noTopic = state({ card: { filledAxes: ALL.filter((a) => a !== 'noGoTopics'), ageBand: '50대 초반', voiceComments: 3 } })
+    check('🔴 noGo 소재 없음 → 여전히 lifeAxes 막힘 (소재 경계는 약화하지 않는다)',
+      noTopic.state === 'qualification-pending' && noTopic.contract?.blocked.lifeAxes?.includes('noGoTopics') === true)
     const thin = state({ card: { filledAxes: ALL, ageBand: '50대 초반', voiceComments: 2 } })
     check('말투 근거 2건(<3) → qualification-pending · voiceEvidence 막힘',
       thin.state === 'qualification-pending' && thin.contract?.blocked.voiceEvidence !== undefined)
@@ -80,20 +84,18 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
   }
   {
     const h0 = contractAxes(P())
-    check('이력 0 → 소재 0 · 역할 0 · 연속 0 · 짝 never → 통과(근거 none)',
-      h0.valid && h0.evidence.topicShare === 'none' && h0.evidence.roleShare === 'none'
-      && h0.evidence.consecutiveExposures === 'none')
-    // 🔴 (2026-10-01) 소재 표본 하한 = 역할과 같은 SHARE_MIN_EVENTS — 1~4건은 비율을 재지 않는다(thin · 0)
+    check('이력 0 → 역할 0 · 연속 0 · 짝 never → 통과(근거 none)',
+      h0.valid && h0.evidence.roleShare === 'none' && h0.evidence.consecutiveExposures === 'none')
+    // 🔴 (2026-10-01 · C9) 라벨 없는 소재 쏠림 축은 지웠다 — 활동이 쌓여도 지속 자격은 그대로다(P02 반례)
     const at = (n: number) => contractAxes(P({ history: { ...H0, recentEvents: n, daysSinceActive: 1 } }))
-    check('활동 1건 → 소재 thin(1<5) · 0 · 계약 통과(다른 축 정상)',
-      at(1).valid && at(1).unknown.topicShare === undefined && at(1).evidence.topicShare === 'thin(1<5)')
-    check('활동 4건 → 소재 thin(4<5) · 계약 통과',
-      at(4).valid && at(4).evidence.topicShare === 'thin(4<5)')
-    check('🔴 활동 5건 → 소재 모름(분류표 없음 · 라벨 추정 없음) → contract-valid 아님',
-      !at(5).valid && at(5).unknown.topicShare?.includes('소재 정의가 없다') === true && at(5).evidence.topicShare === undefined)
-    check('이력을 못 읽음(null) → 소재·역할·연속·짝 전부 모름',
-      ['topicShare', 'roleShare', 'consecutiveExposures', 'postsSinceLastPairing']
-        .every((a) => contractAxes(P({ history: null })).unknown[a as 'topicShare'] !== undefined))
+    check('🔴 활동 1 · 4 · 5 · 50건 → 전부 contract-valid · 회차 모름 0 (쓰일수록 빠지지 않는다)',
+      [1, 4, 5, 50].every((n) => at(n).valid && at(n).roundUnknown.length === 0))
+    check('🔴 소재 축이 판정에 없다 — 옛 `topicShareOf` · `topicConcentrated` 0',
+      !('topicShare' in at(5).evidence) && !('topicShare' in at(5).unknown) && !('topicShare' in at(5).blocked))
+    check('이력을 못 읽음(null) → 연속·짝 계약 모름 · 역할 회차 모름',
+      ['consecutiveExposures', 'postsSinceLastPairing']
+        .every((a) => contractAxes(P({ history: null })).unknown[a as 'consecutiveExposures'] !== undefined)
+      && contractAxes(P({ history: null })).roundUnknown.includes('roleShare'))
     check('자격 재료 못 읽음(null) → 자격 충돌 모름 → pending',
       state({ qualification: null }).state === 'qualification-pending'
       && state({ qualification: null }).contract?.unknown.qualificationConflict !== undefined)
@@ -111,19 +113,17 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
       const r = roleShareOf(hr({ empathy: 2 }))
       return !('unknown' in r) && r.value === 0 && r.evidence.startsWith('thin')
     })())
-    check('역할 5건 전부 empathy → roleShare 막힘', contractAxes(P({ history: hr({ empathy: 5 }) })).blocked.roleShare !== undefined)
-    check('역할 5건 3:2 → 0.6 > 0.5 막힘 · 5건 2:2:1 → 통과',
-      contractAxes(P({ history: hr({ empathy: 3, question: 2 }) })).blocked.roleShare !== undefined
-      && contractAxes(P({ history: hr({ empathy: 2, question: 2, experience: 1 }) })).blocked.roleShare === undefined)
-    check('역할 모르는 댓글 1건 → 역할 쏠림 모름', contractAxes(P({ history: hr({ empathy: 1 }, 1) })).unknown.roleShare !== undefined)
-    check(`소재: 0 → none · 1·4 → thin(<${SHARE_MIN_EVENTS}) · 5 → 모름 (상한 · 임계값 불변)`, (() => {
-      const v = (n: number) => topicShareOf({ ...H0, recentEvents: n })
-      const z = v(0); const a = v(1); const b = v(4); const c = v(5)
-      return !('unknown' in z) && z.value === 0 && z.evidence === 'none'
-        && !('unknown' in a) && a.value === 0 && a.evidence === 'thin(1<5)'
-        && !('unknown' in b) && b.value === 0 && b.evidence === 'thin(4<5)'
-        && 'unknown' in c && SHARE_MIN_EVENTS === 5
+    // 🔴 (2026-10-01 · C9) 역할 쏠림도 같은 혼동이었다 — 최근 창 비율이 지속 자격을 빼앗았다. 회차에서만 막는다
+    const role5 = contractAxes(P({ history: hr({ empathy: 5 }) }))
+    check('🔴 역할 5건 전부 empathy → 이번 회차 막힘 · contract-valid 유지', role5.valid && role5.roundBlocked.includes('roleShare'))
+    check('역할 5건 3:2 → 0.6 > 0.5 회차 막힘 · 5건 2:2:1 → 회차 통과 (문턱 0.5 · 하한 5 불변)',
+      contractAxes(P({ history: hr({ empathy: 3, question: 2 }) })).roundBlocked.includes('roleShare')
+      && !contractAxes(P({ history: hr({ empathy: 2, question: 2, experience: 1 }) })).roundBlocked.includes('roleShare'))
+    check('역할 모르는 댓글 1건 → 이번 회차 모름 · 계약 유지', (() => {
+      const v = contractAxes(P({ history: hr({ empathy: 1 }, 1) }))
+      return v.valid && v.roundUnknown.includes('roleShare')
     })())
+    check('🔴 역할 표본 하한 5 · 문턱 0.5 불변 (임계 완화 0)', SHARE_MIN_EVENTS === 5 && ROLE_SHARE_CAP === 0.5)
     const streak = contractAxes(P({ history: { ...H0, consecutiveExposures: 2 } }))
     check('연속 노출 2 → 이번 회차만 막힘(roundBlocked) · 계약은 통과',
       streak.valid && streak.roundBlocked.includes('consecutiveExposures'))
@@ -200,14 +200,13 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
   {
     const forty = Array.from({ length: 40 }, (_, i) => P({
       code: `Q${String(i).padStart(2, '0')}`, status: 'active',
-      history: { ...H0, recentEvents: SHARE_MIN_EVENTS, daysSinceActive: 1 }, // 활동 5건 → 소재 모름(1~4건은 thin)
+      history: { ...H0, recentEvents: SHARE_MIN_EVENTS, daysSinceActive: 1 }, // 활동 5건 — 앞판은 소재 모름으로 전원 탈락
     }))
     const r = judgePersonaReserve({ ok: true, personas: forty })
     const g = reserveFloorGap(r.contractValid, 'd20')
-    check('active 40 · 소재 모름 → contract-valid 0', r.activeRows === 40 && r.contractValid === 0)
-    check('D20 canary 40 미충족 · 부족 40 · 지속 60 부족 60',
-      g.canaryMet === false && g.canaryShortfall === 40 && g.sustainedShortfall === 60)
-    check('축별 부족 — topicShare unknown 40', r.gapsByAxis.topicShare.unknown.length === 40)
+    // 🔴 (2026-10-01 · C9) 앞판은 활동 5건인 40명이 소재 모름으로 전원 탈락했다 — 이제 40 이다
+    check('active 40 · 활동 5건 → contract-valid 40', r.activeRows === 40 && r.contractValid === 40)
+    check('D20 canary 40 충족 · 지속 60 부족 20', g.canaryMet === true && g.canaryShortfall === 0 && g.sustainedShortfall === 20)
     const fail = judgePersonaReserve({ ok: false, detail: 'db down' })
     check('읽기 실패 → contractValid null (0 아님) · 하한 판정 null',
       fail.contractValid === null && reserveFloorGap(fail.contractValid, 'd10').canaryMet === null)

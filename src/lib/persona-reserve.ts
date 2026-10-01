@@ -25,7 +25,7 @@
  *    **어느 코드가 계약에 들어가는가**만 정한다.
  */
 import {
-  DORMANT_AFTER_DAYS, PERSONA_LIFE_AXES, personaTiers, type PersonaBlockCode, type PersonaCandidate,
+  DORMANT_AFTER_DAYS, PERSONA_LIFE_AXES, ROLE_SHARE_CAP, personaTiers, type PersonaBlockCode, type PersonaCandidate,
 } from './d100-persona-scale'
 import {
   PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, type D100Stage,
@@ -43,26 +43,33 @@ export type ReserveState = (typeof RESERVE_STATES)[number]
 export type PersonaDbStatus = 'draft' | 'active' | 'paused' | 'retired'
 
 /**
- * 🔴 **계약 축 8개.** 하나라도 막히거나 모르면 contract-valid 가 아니다.
+ * 🔴 **계약 축 6개.** 하나라도 막히거나 모르면 contract-valid 가 아니다.
  *
  *    카드  lifeAxes · ageBand · voiceEvidence · qualificationConflict
- *    Pool  topicShare · roleShare                      — 막히면 계약 실패(오래 가는 성질이다)
- *    회차  consecutiveExposures · postsSinceLastPairing — **모르면** 계약 실패,
+ *    회차  consecutiveExposures · postsSinceLastPairing — **모르면**(이력을 못 읽었으면) 계약 실패,
  *          막힌 것은 "이번 회차만 못 쓴다"(`roundBlocked`) — 용량이 출렁이지 않게
+ *
+ * 🔴 **역할 쏠림은 계약 축이 아니다** (2026-10-01 · C9) — `ROUND_ONLY_AXES`.
+ *    앞판은 소재 · 역할 쏠림을 Pool 축으로 계약에 넣었다. 활동이 쌓이면 소재는 라벨이 없어 모름, 역할은 비율로 막힘이 되어
+ *    **쓰일수록 계약에서 빠지는** 거꾸로 된 자격이 됐다(P02). 역할은 회차에서만 막고(`roundBlocked`),
+ *    모르면 그 회차에 배정하지 않는다(`roundUnknown`). 소재 쏠림 축은 지웠다(아래 설명).
  */
 export const CONTRACT_AXES = [
   'lifeAxes', 'ageBand', 'voiceEvidence', 'qualificationConflict',
-  'topicShare', 'roleShare', 'consecutiveExposures', 'postsSinceLastPairing',
+  'consecutiveExposures', 'postsSinceLastPairing',
 ] as const
 export type ContractAxis = (typeof CONTRACT_AXES)[number]
+export const ROUND_ONLY_AXES = ['roleShare'] as const
+export type RoundOnlyAxis = (typeof ROUND_ONLY_AXES)[number]
+export type JudgedAxis = ContractAxis | RoundOnlyAxis
+const isRoundOnly = (a: JudgedAxis): a is RoundOnlyAxis => (ROUND_ONLY_AXES as readonly string[]).includes(a)
 
-/** 🔴 `personaTiers` 코드 → 계약 축. 여기 없는 코드는 계약이 아니다(아래 이유) */
-const AXIS_OF_CODE: Readonly<Partial<Record<PersonaBlockCode, ContractAxis>>> = {
+/** 🔴 `personaTiers` 코드 → 축. 여기 없는 코드는 판정 대상이 아니다(아래 이유) */
+const AXIS_OF_CODE: Readonly<Partial<Record<PersonaBlockCode, JudgedAxis>>> = {
   lifeAxisMissing: 'lifeAxes',
   noAgeBand: 'ageBand',
   voiceEvidenceThin: 'voiceEvidence',
   qualificationConflict: 'qualificationConflict',
-  topicConcentrated: 'topicShare',
   roleConcentrated: 'roleShare',
   consecutiveExposure: 'consecutiveExposures',
   pairRepeat: 'postsSinceLastPairing',
@@ -85,7 +92,7 @@ export const CONTRACT_EXCLUDED_CODES: Readonly<Partial<Record<PersonaBlockCode, 
   activityOverCap: '오늘 하루의 사실 — 회차 판정이 본다',
 }
 
-const ROUND_AXES: ReadonlySet<ContractAxis> = new Set(['consecutiveExposures', 'postsSinceLastPairing'])
+const ROUND_AXES: ReadonlySet<JudgedAxis> = new Set(['consecutiveExposures', 'postsSinceLastPairing'])
 
 // ─────────────────────────────────────────────────────────
 // 입력
@@ -184,7 +191,10 @@ export const SHARE_MIN_EVENTS = DEFAULT_FINGERPRINT_THRESHOLDS.minSamples
  *    댓글 < SHARE_MIN_EVENTS     → 0 · 근거 얇음(비율을 재지 않는다 — Gate ⑧ 과 같은 규칙)
  *    그 이상                     → 가장 많은 역할의 비율
  */
-export function roleShareOf(h: ActivityHistory): { value: number; evidence: string } | { unknown: string } {
+/** 🔴 역할 판정의 재료 — 최근 창 안 이 사람 댓글의 역할별 수 · 역할을 찾지 못한 수 */
+export type RoleHistory = Pick<ActivityHistory, 'roleCounts' | 'unresolvedRoleEvents'>
+
+export function roleShareOf(h: RoleHistory): { value: number; evidence: string } | { unknown: string } {
   if (h.unresolvedRoleEvents > 0) return { unknown: `역할을 찾지 못한 댓글 ${h.unresolvedRoleEvents}건` }
   const counts = Object.values(h.roleCounts)
   const total = counts.reduce((a, n) => a + n, 0)
@@ -194,24 +204,58 @@ export function roleShareOf(h: ActivityHistory): { value: number; evidence: stri
 }
 
 /**
- * 🔴 **소재 쏠림** — 소재를 담는 칸이 어느 표에도 없다(Persona 글 `Post.category` 전부 null ·
- *    `PersonaApprovalQueue.topicTags` 채워진 행 0 · 수집 원문·후보에 소재 칸 없음).
- *    🔴 **소재 정의 없이 분류표를 지어내지 않는다.**
- *    표본 하한은 역할 쏠림과 **같은 정본 `SHARE_MIN_EVENTS`** 다(Gate ⑧ 과 같은 규칙):
- *      활동 0                    → 0 · none(분류할 것이 없다)
- *      활동 1 ~ SHARE_MIN_EVENTS-1 → 0 · thin(비율 자체를 재지 않는 구간 — 라벨이 있어도 답이 같다)
- *      그 이상                    → 소재 라벨이 없으므로 **모른다**
- *    🔴 앞판은 활동이 한 건이라도 있으면 모른다고 했다 — 라벨이 판정을 바꿀 수 없는 구간까지 모름으로 두었다(2026-10-01 실측 17/18명).
+ * 🔴 **역할 쏠림의 회차 판정 — 정본 하나** (2026-10-01 · C9 보정).
+ *    계약(`contractAxes`)과 댓글 회차(planner `judgePlannerPersona`)가 **이 함수와 같은 재료**를 쓴다.
+ *
+ *    재료를 못 읽었다 · 역할 모르는 댓글이 있다 → unknown → **이 회차에서 이 사람을 빼다**(fail-closed)
+ *    표본 < 5 · 비율 ≤ 0.5                      → 막는 역할 0
+ *    비율 > 0.5                                  → **그 역할만** 이번 회차에 이 사람에게 주지 않는다
+ *    🔴 지속 자격(contract-valid)은 건드리지 않는다. 다른 역할 · 다른 사람으로 회차는 계속된다.
  */
-export const TOPIC_UNKNOWN_REASON =
-  '소재 정의가 없다 — Post.category(Persona 글 전부 null)·Queue.topicTags(0행)·원문 어디에도 소재 칸이 없고, '
-  + '분류표를 새로 지어내지 않는다'
+export type RoleRoundVerdict =
+  | { status: 'unknown'; reason: string }
+  | { status: 'ok'; blockedRoles: string[]; evidence: string }
 
-export function topicShareOf(h: ActivityHistory): { value: number; evidence: string } | { unknown: string } {
-  if (h.recentEvents === 0) return { value: 0, evidence: 'none' }
-  if (h.recentEvents < SHARE_MIN_EVENTS) return { value: 0, evidence: `thin(${h.recentEvents}<${SHARE_MIN_EVENTS})` }
-  return { unknown: TOPIC_UNKNOWN_REASON }
+export function roleRoundVerdict(h: RoleHistory | null): RoleRoundVerdict {
+  if (h === null) return { status: 'unknown', reason: '최근 역할 이력을 읽지 못했다' }
+  const s = roleShareOf(h)
+  if ('unknown' in s) return { status: 'unknown', reason: s.unknown }
+  if (s.value <= ROLE_SHARE_CAP) return { status: 'ok', blockedRoles: [], evidence: s.evidence }
+  const top = Math.max(...Object.values(h.roleCounts))
+  return {
+    status: 'ok', evidence: `${s.evidence} · ${s.value.toFixed(2)} > ${ROLE_SHARE_CAP}`,
+    blockedRoles: Object.entries(h.roleCounts).filter(([, n]) => n === top).map(([r]) => r).sort(),
+  }
 }
+
+/**
+ * 🔴 **역할 이력 만들기 — 정본 하나.** 최근 창(`RECENT_WINDOW_DAYS`) 안 이 사람 댓글을 발행 Queue 역할로 센다.
+ *    `historyFromEvents`(계약)와 댓글 회차 원자료(`makeDbTargetSource`)가 이것을 부른다.
+ */
+export function roleHistoryOf(input: {
+  comments: readonly { id: string; at: Date }[]
+  roleOf: ReadonlyMap<string, string>
+  now: Date
+}): RoleHistory {
+  const since = input.now.getTime() - RECENT_WINDOW_DAYS * DAY_MS
+  const roleCounts: Record<string, number> = {}
+  let unresolvedRoleEvents = 0
+  for (const c of input.comments) {
+    if (c.at.getTime() < since) continue
+    const r = input.roleOf.get(c.id)
+    if (r === undefined || r.trim() === '') unresolvedRoleEvents += 1
+    else roleCounts[r] = (roleCounts[r] ?? 0) + 1
+  }
+  return { roleCounts, unresolvedRoleEvents }
+}
+
+/**
+ * 🔴 **소재 쏠림은 판정하지 않는다** (2026-10-01 · C9 — 옛 `topicShareOf` · `TOPIC_UNKNOWN_REASON` 삭제).
+ *    소재를 담는 칸이 어느 표에도 없다(Persona 글 `Post.category` 전부 null · `Queue.topicTags` 0행 · 원문·후보에 소재 칸 없음).
+ *    라벨 없이 재는 축은 활동이 표본 하한을 넘는 순간 영원히 모름이 되어, 쓰인 사람부터 계약에서 뺐다(P02).
+ *    🔴 분류표를 지어내지 않는다. 소재 다양성은 배정 근거로 본다 — `hardFilter` 의 주간 글 상한 · 최소 간격과
+ *    단계 증거 `PERSONA_REPEAT`(증명일 자동 글의 글쓴이는 서로 다르다 · canon §6-3).
+ */
 
 // ─────────────────────────────────────────────────────────
 // 한 사람
@@ -223,9 +267,11 @@ export type ContractVerdict = {
   blocked: Partial<Record<ContractAxis, string>>
   unknown: Partial<Record<ContractAxis, string>>
   /** 🔴 회차 축이 **이번 회차에** 막혔다 — 계약 실패가 아니다 */
-  roundBlocked: ContractAxis[]
+  roundBlocked: JudgedAxis[]
+  /** 🔴 회차 전용 축(소재 · 역할)을 재지 못했다 — **이번 회차에 배정하지 않는다** · 계약 실패가 아니다 */
+  roundUnknown: RoundOnlyAxis[]
   /** 근거가 얇거나 없는 축 — 통과했지만 관측이 없다는 뜻 */
-  evidence: Partial<Record<ContractAxis, string>>
+  evidence: Partial<Record<JudgedAxis, string>>
 }
 
 /**
@@ -239,7 +285,6 @@ export function contractAxes(p: Pick<PersonaReserveInput, 'code' | 'card' | 'qua
 
   const q = judgeQualification(p.qualification)
   const h = p.history
-  const topic = h === null ? { unknown: '이력을 읽지 못했다' } : topicShareOf(h)
   const role = h === null ? { unknown: '이력을 읽지 못했다' } : roleShareOf(h)
 
   const cand: PersonaCandidate = {
@@ -253,33 +298,29 @@ export function contractAxes(p: Pick<PersonaReserveInput, 'code' | 'card' | 'qua
     daysSinceActive: h?.daysSinceActive ?? Number.MAX_SAFE_INTEGER,
     retired: false,
     qualificationConflict: q.status === 'unknown' ? null : q.status === 'blocked',
-    topicShare: 'unknown' in topic ? null : topic.value,
     roleShare: 'unknown' in role ? null : role.value,
     postsSinceLastPairing: h === null ? null : h.postsSinceLastPairing,
   }
   const t = personaTiers(cand)
-  const roundBlocked: ContractAxis[] = []
+  const roundBlocked: JudgedAxis[] = []
+  const roundUnknown: RoundOnlyAxis[] = []
 
   for (const code of [...t.card.blocked, ...t.pool.blocked, ...t.assignment.blocked]) {
     const axis = AXIS_OF_CODE[code]
     if (axis === undefined) continue // CONTRACT_EXCLUDED_CODES
-    if (ROUND_AXES.has(axis)) { roundBlocked.push(axis); continue }
+    if (isRoundOnly(axis) || ROUND_AXES.has(axis)) { roundBlocked.push(axis); continue }
     blocked[axis] = axis === 'qualificationConflict' && q.status === 'blocked' ? q.detail
       : axis === 'lifeAxes'
         ? `생활사 ${PERSONA_LIFE_AXES.length}축 중 빈 축: ${PERSONA_LIFE_AXES.filter((a) => !p.card.filledAxes.includes(a)).join('·')}`
         : axis === 'voiceEvidence' ? `말투 근거 ${p.card.voiceComments}건`
-          : axis === 'roleShare' && !('unknown' in role) ? `역할 쏠림 ${role.value.toFixed(2)} (${role.evidence})`
-            : code
+          : code
   }
   for (const code of [...t.card.unmeasured, ...t.pool.unmeasured, ...t.assignment.unmeasured]) {
     const axis = AXIS_OF_CODE[code]
     if (axis === undefined) continue
-    unknown[axis] = axis === 'qualificationConflict' && q.status === 'unknown' ? q.reason
-      : axis === 'topicShare' && 'unknown' in topic ? topic.unknown
-        : axis === 'roleShare' && 'unknown' in role ? role.unknown
-          : '이력을 읽지 못했다'
+    if (isRoundOnly(axis)) { roundUnknown.push(axis); continue }
+    unknown[axis] = axis === 'qualificationConflict' && q.status === 'unknown' ? q.reason : '이력을 읽지 못했다'
   }
-  if (!('unknown' in topic)) evidence.topicShare = topic.evidence
   if (!('unknown' in role) && !role.evidence.startsWith('n=')) evidence.roleShare = role.evidence
   if (h !== null && h.recentEvents === 0 && h.daysSinceActive === null) {
     evidence.consecutiveExposures = 'none'
@@ -288,7 +329,7 @@ export function contractAxes(p: Pick<PersonaReserveInput, 'code' | 'card' | 'qua
 
   return {
     valid: Object.keys(blocked).length === 0 && Object.keys(unknown).length === 0,
-    blocked, unknown, roundBlocked, evidence,
+    blocked, unknown, roundBlocked, roundUnknown, evidence,
   }
 }
 
@@ -341,6 +382,8 @@ export type PersonaReserveResult = {
   retired: string[]
   /** 축별로 누가 막혔고(blocked) 누가 모르는가(unknown) — 저장된 사람만 센다 */
   gapsByAxis: Readonly<Record<ContractAxis, { blocked: string[]; unknown: string[] }>>
+  /** 🔴 회차 전용 축 — 이번 회차에 못 쓰는 사람(막힘 · 모름). **계약 유효 수에 영향 없다** */
+  roundOnlyGaps: Readonly<Record<RoundOnlyAxis, { blocked: string[]; unknown: string[] }>>
   /** 🔴 DB active 행 수 — **용량이 아니다.** 비교용으로만 낸다 */
   activeRows: number
   /** active 인데 계약을 통과하지 못한 사람 — "행은 있는데 용량은 없다" */
@@ -354,10 +397,13 @@ export function judgePersonaReserve(read: PersonaReserveRead): PersonaReserveRes
   const gaps = Object.fromEntries(
     CONTRACT_AXES.map((a) => [a, { blocked: [] as string[], unknown: [] as string[] }]),
   ) as Record<ContractAxis, { blocked: string[]; unknown: string[] }>
+  const roundGaps = Object.fromEntries(
+    ROUND_ONLY_AXES.map((a) => [a, { blocked: [] as string[], unknown: [] as string[] }]),
+  ) as Record<RoundOnlyAxis, { blocked: string[]; unknown: string[] }>
   if (!read.ok) {
     // 🔴 fail-closed — 못 읽었으면 0 명이 아니라 모른다
     return {
-      contractValid: null, byState, retired: [], gapsByAxis: gaps, activeRows: 0,
+      contractValid: null, byState, retired: [], gapsByAxis: gaps, roundOnlyGaps: roundGaps, activeRows: 0,
       activeNotContractValid: [], verdicts: [], detail: read.detail,
     }
   }
@@ -371,10 +417,12 @@ export function judgePersonaReserve(read: PersonaReserveRead): PersonaReserveRes
     if (v.contract === null) continue
     for (const a of Object.keys(v.contract.blocked) as ContractAxis[]) gaps[a].blocked.push(v.code)
     for (const a of Object.keys(v.contract.unknown) as ContractAxis[]) gaps[a].unknown.push(v.code)
+    for (const a of v.contract.roundBlocked) if (isRoundOnly(a)) roundGaps[a].blocked.push(v.code)
+    for (const a of v.contract.roundUnknown) roundGaps[a].unknown.push(v.code)
   }
   return {
     contractValid: byState.reserve.length + byState['stage-active'].length,
-    byState, retired, gapsByAxis: gaps,
+    byState, retired, gapsByAxis: gaps, roundOnlyGaps: roundGaps,
     activeRows: verdicts.filter((v) => v.status === 'active').length,
     activeNotContractValid, verdicts, detail: null,
   }
@@ -450,13 +498,7 @@ export function historyFromEvents(input: {
     const myComments = input.comments.filter((c) => c.personaId === id)
     const recentPosts = myPosts.filter((p) => p.at.getTime() >= since)
     const recentComments = myComments.filter((c) => c.at.getTime() >= since)
-    const roleCounts: Record<string, number> = {}
-    let unresolved = 0
-    for (const c of recentComments) {
-      const r = input.roleOf.get(c.id)
-      if (r === undefined || r.trim() === '') unresolved += 1
-      else roleCounts[r] = (roleCounts[r] ?? 0) + 1
-    }
+    const { roleCounts, unresolvedRoleEvents: unresolved } = roleHistoryOf({ comments: myComments, roleOf: input.roleOf, now: input.now })
     let streak = 0
     for (let i = seq.length - 1; i >= 0 && seq[i]!.personaId === id; i -= 1) streak += 1
     let lastPair = -1

@@ -539,7 +539,7 @@ export type DistinctSubject = {
 
 /**
  * 🔴 **겹침 상한** — 성격어(또는 noGo) 집합이 **절반을 넘게** 같으면 같은 성격이다.
- *    쏠림 상한(`TOPIC_SHARE_CAP` 0.5)과 같은 뜻: 절반을 넘으면 "그 사람만의 것" 이 아니다.
+ *    역할 쏠림 상한(`ROLE_SHARE_CAP` 0.5)과 같은 뜻: 절반을 넘으면 "그 사람만의 것" 이 아니다.
  */
 export const DISTINCT_OVERLAP_MAX = 0.5
 /** 🔴 생활사 7칸 중 이 수 이하만 다르면 생활사가 "거의 같다" — 한 칸 차이 */

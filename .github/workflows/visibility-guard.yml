@@ -973,6 +973,9 @@ jobs:
           # 🔴 Persona 자동 확장 적재(2026-09-29 · Track C) — valid 만 · draft 만 · 전원 아니면 0 ·
           #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
           npm run persona:autogen-db-check
+          # 🔴 (2026-10-01) Persona 계약 정본 카드 복구 — stale 계획 · 부분 실패 · 멱등 · 기존 유효 회귀 0 · 가짜 활동 0.
+          #    임시 HOME 말투 자산(운영 모양 · 화자 18명). 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
+          npm run persona:remediation-db-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
@@ -1159,6 +1162,8 @@ jobs:
           npm run persona:source-author-check
           npm run persona:gate6b-check
           npm run persona:remediation-check
+          npm run persona:no-go-check
+          npm run persona:reserve-check
 
       # VoiceSource 적재 경로의 계약.
       #

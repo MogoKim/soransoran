@@ -13,12 +13,13 @@
  */
 import { readFileSync } from 'node:fs'
 
-import { verifySeedCard, noGoExpressionKey } from '../src/lib/persona-card-verify'
+import { verifySeedCard } from '../src/lib/persona-card-verify'
+import { noGoExpressionKey } from '../src/lib/persona-no-go'
 import {
   fingerprintOf, patchedRow, planRemediation, type RemediationRow,
 } from '../src/lib/persona-contract-remediation'
 import { parsePoolDoc, type PoolCard } from '../src/lib/persona-pool-card'
-import { judgePersonaReserve, topicShareOf, roleShareOf, type PersonaReserveResult } from '../src/lib/persona-reserve'
+import { judgePersonaReserve, roleShareOf, type PersonaReserveResult } from '../src/lib/persona-reserve'
 import { regressionOf } from './lib/persona-contract-remediation.mjs'
 import { planBundles } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -150,12 +151,11 @@ console.log('\n⑥ 말투 근거 묶음 — 중복 배정 · 부족')
   check('🔴 기준 미만 화자로 채우지 않는다 — 3명 중 2명만 묶음', plan.bundles.length === 2 && plan.blocks.some((b) => b.includes('화자가 2명뿐')))
 }
 
-console.log('\n⑦ 소재 · 역할 이력 0 → 측정된 0')
+console.log('\n⑦ 역할 이력 0 → 측정된 0')
 {
   const h = { recentEvents: 0, roleCounts: {}, unresolvedRoleEvents: 0, consecutiveExposures: 0, postsSinceLastPairing: 'never' as const, daysSinceActive: null, activityToday: 0 }
-  const t = topicShareOf(h)
   const r = roleShareOf(h)
-  check('이력 0 → 소재 0 · 역할 0 (모름 아님 — 활동을 만들 이유가 없다)', !('unknown' in t) && t.value === 0 && !('unknown' in r) && r.value === 0)
+  check('이력 0 → 역할 0 (모름 아님 — 활동을 만들 이유가 없다)', !('unknown' in r) && r.value === 0)
 }
 
 console.log('\n⑧ 입력 경계 · apply 경계')

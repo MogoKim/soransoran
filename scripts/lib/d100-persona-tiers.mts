@@ -111,7 +111,6 @@ export function candidateOf(r: PersonaRow): PersonaCandidate {
      *    짝 반복은 한 글에 붙은 두 사람의 이력을 회차 단위로 되짚어야 한다.
      *    🔴 `0` 을 넣으면 "쏠리지 않았다" 로 읽힌다 — 재지 않았으므로 `null` 이다.
      */
-    topicShare: null,
     roleShare: null,
     postsSinceLastPairing: null,
   }

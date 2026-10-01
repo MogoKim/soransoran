@@ -14,8 +14,16 @@ import {
   d100Plan, D100_PERSONA_TARGET_MAX, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, type D100Stage,
 } from './d100-capacity'
 
-/** 🔴 생활사 축은 생성 계약과 **같은 목록**이다 — 여기서 다시 적지 않는다 */
-export const PERSONA_LIFE_AXES = LIFE_CONTRACT_FIELDS
+/**
+ * 🔴 **생활사 계약 축** — 생성 계약(`LIFE_CONTRACT_FIELDS`)에서 개인 `noGoExpressions` 하나만 뺀다 (2026-10-01 · C8).
+ *    개인 말버릇은 **없어도 되는 칸**이다 — 정본 카드 25장 중 15장이 비어 있고, 전원 공통 금지(Pool §7-2)는
+ *    `persona-no-go` 가 생성 · 검사에서 언제나 강제한다. 비었다고 막으면 같은 사람을 두 판정이 다르게 본다
+ *    (`verifySeedCard` · 생성 프롬프트는 빈 목록을 정상으로 읽었다).
+ *    🔴 생성 계약 지문(`lifeContractIdentity`)에는 그대로 남는다 — 값이 바뀌면 다른 사람이다.
+ *    🔴 소재 경계(`noGoTopics`)는 그대로 필수다.
+ */
+export const PERSONA_LIFE_AXES: readonly (typeof LIFE_CONTRACT_FIELDS)[number][] =
+  LIFE_CONTRACT_FIELDS.filter((k) => k !== 'noGoExpressions')
 
 /** 🔴 말투 근거 최소치 — 이보다 적으면 그 사람의 말투라고 부를 수 없다 */
 export const VOICE_MIN_COMMENTS = 3
@@ -36,8 +44,8 @@ export const VOICE_MIN_COMMENTS = 3
  * 🔴 **층 배치를 창업자 정본에 맞춘다** (2026-09-21 4차 보정).
  *
  *      카드     생활사 · 나이 · Voice · 퇴역 · 자격 충돌  — 사람 자체가 서는가
- *      Pool     topic / role 분포                        — 풀이 한쪽으로 쏠리지 않는가
- *      회차 배정 활동 상한 · 연속 노출 · pair repeat        — 이번 회차에 쓸 수 있는가
+ *      Pool     (비어 있다 — 2026-10-01 C9: 역할 쏠림은 회차로 옮기고, 라벨 없는 소재 쏠림은 지웠다)
+ *      회차 배정 활동 상한 · 연속 노출 · pair repeat · 역할 쏠림 — 이번 회차에 쓸 수 있는가
  *
  * 🔴 앞판은 말투 근거를 Pool 에 두었다. 그런데 말투가 없으면 **그 사람이 아직 안 만들어진 것**이지
  *    "풀 구성이 문제" 가 아니다 — 할 일이 다르다(자산을 모은다 / 사람을 바꾼다).
@@ -47,9 +55,15 @@ export const VOICE_MIN_COMMENTS = 3
 export const CARD_BLOCK_CODES = [
   'lifeAxisMissing', 'noAgeBand', 'voiceEvidenceThin', 'retired', 'dormant', 'qualificationConflict',
 ] as const
-export const POOL_BLOCK_CODES = ['topicConcentrated', 'roleConcentrated'] as const
+/**
+ * 🔴 **Pool 층은 지금 비어 있다** (2026-10-01 · C9). 역할 쏠림은 회차로 옮겼고, 소재 쏠림은 지웠다 —
+ *    소재 라벨이 어느 표에도 없어 영원히 "모름" 인 축은 판정이 아니라 쓰일수록 막는 함정이었다.
+ *    소재 다양성은 새 분류표 없이 **배정 근거**로 본다: 같은 Persona 의 주간 글 상한 · 최소 간격(`hardFilter`)과
+ *    증명일 자동 글의 글쓴이가 서로 달라야 한다는 단계 증거(`stage-evidence` `PERSONA_REPEAT`, canon §6-3).
+ */
+export const POOL_BLOCK_CODES = [] as const
 export const ASSIGNMENT_BLOCK_CODES = [
-  'activityOverCap', 'consecutiveExposure', 'pairRepeat',
+  'activityOverCap', 'consecutiveExposure', 'pairRepeat', 'roleConcentrated',
 ] as const
 
 export const PERSONA_BLOCK_CODES = [
@@ -64,15 +78,13 @@ export type PersonaTier = (typeof PERSONA_TIERS)[number]
 export const PERSONA_BLOCK_TIER: Readonly<Record<PersonaBlockCode, PersonaTier>> = {
   lifeAxisMissing: 'card', noAgeBand: 'card', voiceEvidenceThin: 'card',
   retired: 'card', dormant: 'card', qualificationConflict: 'card',
-  topicConcentrated: 'pool', roleConcentrated: 'pool',
-  activityOverCap: 'assignment', consecutiveExposure: 'assignment', pairRepeat: 'assignment',
+  activityOverCap: 'assignment', consecutiveExposure: 'assignment', pairRepeat: 'assignment', roleConcentrated: 'assignment',
 }
 
 export const PERSONA_BLOCK_LABEL: Readonly<Record<PersonaBlockCode, string>> = {
   lifeAxisMissing: '생활사 축이 비었다',
   voiceEvidenceThin: '말투 근거가 모자라다',
   noAgeBand: '나이대가 없다 — 글쓴이가 몇 살인지 모른다',
-  topicConcentrated: '한 소재에 쏠렸다',
   roleConcentrated: '한 역할에 쏠렸다',
   activityOverCap: '글·댓글 합산 활동 상한을 넘겼다',
   consecutiveExposure: '연속으로 노출됐다',
@@ -91,7 +103,7 @@ export const PAIR_REPEAT_GAP = 5
 /** 🔴 이 기간 활동이 없으면 휴면 */
 export const DORMANT_AFTER_DAYS = 30
 /**
- * 🔴 **쏠림 상한** — 이 사람의 최근 활동 중 가장 많은 소재(역할) 하나가 차지하는 비율.
+ * 🔴 **역할 쏠림 상한** — 이 사람의 최근 댓글 중 가장 많은 역할 하나가 차지하는 비율. **회차 조건**이다(C9).
  *    절반을 넘으면 "무슨 얘기든 하는 사람" 이 아니라 "그 얘기만 하는 사람" 이고,
  *    그런 사람이 계속 나오면 커뮤니티가 아니라 봇 목록처럼 읽힌다.
  *
@@ -99,7 +111,6 @@ export const DORMANT_AFTER_DAYS = 30
  *    아무 데서도 내보내지 않았다.** 목록에 있으니 막고 있는 것처럼 보였지만 실제로는
  *    한 번도 걸린 적이 없다. 판정하거나 지우거나 둘 중 하나여야 한다 — 판정한다.
  */
-export const TOPIC_SHARE_CAP = 0.5
 export const ROLE_SHARE_CAP = 0.5
 
 export type PersonaCandidate = {
@@ -124,12 +135,7 @@ export type PersonaCandidate = {
    *    확인한 적이 없는 것을 그렇게 적으면 감사 없이 통과시키는 것이 된다.
    */
   qualificationConflict: boolean | null
-  /**
-   * 🔴 이 사람의 최근 활동 중 **가장 많은 소재 하나**가 차지하는 비율(0~1).
-   *    재지 않았으면 `null` 이다 — 0 으로 채우지 않는다.
-   */
-  topicShare: number | null
-  /** 🔴 같은 뜻의 역할 쏠림 비율. 재지 않았으면 `null` */
+  /** 🔴 최근 댓글의 역할 쏠림 비율(0~1) — **회차 조건**. 재지 않았으면 `null` */
   roleShare: number | null
   /**
    * 🔴 같은 상대와 마지막으로 한 글에 붙은 뒤 지나간 글 수.
@@ -167,13 +173,15 @@ export function personaTiers(p: PersonaCandidate): PersonaTierVerdict {
   if (p.qualificationConflict === null) card.unmeasured.push('qualificationConflict')
   else if (p.qualificationConflict) card.blocked.push('qualificationConflict')
 
-  // ── Pool — 풀이 한쪽으로 쏠리지 않는가 ──
-  if (p.topicShare === null) pool.unmeasured.push('topicConcentrated')
-  else if (p.topicShare > TOPIC_SHARE_CAP) pool.blocked.push('topicConcentrated')
-  if (p.roleShare === null) pool.unmeasured.push('roleConcentrated')
-  else if (p.roleShare > ROLE_SHARE_CAP) pool.blocked.push('roleConcentrated')
-
   // ── 회차 배정 — 이번 회차에 쓸 수 있는가 ──
+  /**
+   * 🔴 **역할 쏠림은 회차 조건이다 — 지속 자격(Pool)이 아니다** (2026-10-01 · C9).
+   *    앞판은 Pool 층에 두었다. 그러면 최근 창의 비율이 문턱을 넘는 순간 계약 유효에서 빠졌다 —
+   *    많이 쓰인 사람일수록 용량에서 사라졌다. 쏠림은 "이번에 이 역할을 더 주지 말라" 는 뜻이지
+   *    "이 사람은 화자가 아니다" 가 아니다. 🔴 문턱(0.5)과 표본 하한은 그대로다 — 모르면 이번 회차에 배정하지 않는다.
+   */
+  if (p.roleShare === null) assign.unmeasured.push('roleConcentrated')
+  else if (p.roleShare > ROLE_SHARE_CAP) assign.blocked.push('roleConcentrated')
   if (p.activityToday >= ACTIVITY_CAP_PER_DAY) assign.blocked.push('activityOverCap')
   // 🔴 모르면 통과가 아니다
   if (p.consecutiveExposures === null) assign.unmeasured.push('consecutiveExposure')

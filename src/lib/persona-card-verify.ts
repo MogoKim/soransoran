@@ -10,6 +10,7 @@
 
 import { CHILD_AGE_BANDS, readLengthBand } from './original-post-persona-match'
 import type { PoolCard } from './persona-pool-card'
+import { noGoExpressionKey } from './persona-no-go'
 
 /** 🔴 제어값 — 자유 문장이면 카드마다 말이 달라져 비교가 불가능해진다 */
 export const MARITAL_VALUES = ['기혼', '이혼', '사별', '비혼', '별거'] as const
@@ -51,14 +52,6 @@ const sorted = (xs: readonly unknown[]): string => [...xs].map(String).sort().jo
  *    중복까지 맞대면 자녀 2명인 사람이 언제나 "정본과 다르다" 가 된다(P17 실측).
  */
 const bandSet = (xs: readonly unknown[]): string => [...new Set(xs.map(String))].sort().join('|')
-/**
- * 🔴 **말버릇 표기 정규화** — 카드는 `"우리 때는"` · `"요즘 애들" 류` 처럼 따옴표와 `류` 를 붙여 적는다.
- *    따옴표는 "말버릇이다" 라는 표기이고 `류` 는 "비슷한 말 포함" 이다 — 같은 표현이다.
- *    비교에만 쓴다. 저장값을 바꾸지 않는다.
- */
-export function noGoExpressionKey(e: string): string {
-  return e.trim().replace(/\s*류$/, '').replace(/^["“”']+|["“”']+$/g, '').trim()
-}
 
 /**
  * 카드 한 장 — 🔴 문제 목록을 돌려준다. 비어 있으면 통과다.

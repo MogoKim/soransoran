@@ -24,6 +24,7 @@ import {
   judgeLifeHistory, readPostRequirements, type PersonaForMatch,
 } from './original-post-persona-match'
 import { COMMENT_REACTION_ROLES } from './persona-reaction-roles'
+import { roleRoundVerdict, type RoleHistory } from './persona-reserve'
 import { judgeRealMember, type RealMemberProbe } from './real-member-gate'
 import {
   judgeTargetPost, PERSONA_COMMENTS_PER_POST_MAX, type TargetPostFacts,
@@ -105,6 +106,12 @@ export type PlannerPersona = {
   /** 최근 창에서 이 Persona 가 단 댓글 수 */
   recentComments: number
   /**
+   * 🔴 **이 사람의 최근 역할 이력 — 필수다** (2026-10-01 · C9 보정). 판정은 `roleRoundVerdict` 하나.
+   *    `null` = 읽지 못했다 → 이번 회차에서 이 사람을 뺀다(fail-closed). 이력 0 은 `{ roleCounts: {}, unresolvedRoleEvents: 0 }`.
+   *    선택으로 두면 호출부가 안 넘겨도 조용히 통과한다 — 그래서 타입으로 막는다.
+   */
+  recentRoles: RoleHistory | null
+  /**
    * 🔴 생활사 판정 입력. `judgeLifeHistory` 가 이것으로 판단한다.
    *
    *    글 발행 cadence(`WEEKLY_CAP` · `TOO_SOON`)는 **댓글에 적용하지 않는다** —
@@ -132,6 +139,8 @@ export type PlanBlockCode =
   | 'PERSONA_OWN_POST'
   | 'PERSONA_LIFE_CONFLICT'
   | 'PERSONA_ROLE_FORBIDDEN'
+  | 'PERSONA_ROLE_CONCENTRATED'
+  | 'PERSONA_ROLE_HISTORY_UNKNOWN'
   | 'PERSONA_ALREADY_ON_POST'
   | 'NO_ELIGIBLE_PERSONA'
   | 'LIMIT_EXHAUSTED'
@@ -294,6 +303,17 @@ export function judgePlannerPersona(
   }
   if (persona.forbiddenReactionRoles.includes(reactionRole)) {
     blocks.push({ code: 'PERSONA_ROLE_FORBIDDEN', message: `${persona.code} 는 ${reactionRole} 역할을 맡지 않는다` })
+  }
+  /**
+   * 🔴 **역할 쏠림은 회차 조건이다** (2026-10-01 · C9 보정). 지속 자격(contract-valid)은 그대로 두고,
+   *    최근 창에서 한 역할이 절반을 넘은 사람에게는 **그 역할만** 이번 회차에 주지 않는다.
+   *    역할 이력을 모르면 이번 회차에서 이 사람을 뺀다(fail-closed). 다른 사람 · 다른 역할로 회차는 이어진다.
+   */
+  const rr = roleRoundVerdict(persona.recentRoles)
+  if (rr.status === 'unknown') {
+    blocks.push({ code: 'PERSONA_ROLE_HISTORY_UNKNOWN', message: `${persona.code} — ${rr.reason}` })
+  } else if (rr.blockedRoles.includes(reactionRole)) {
+    blocks.push({ code: 'PERSONA_ROLE_CONCENTRATED', message: `${persona.code} 는 최근 ${reactionRole} 에 쏠렸다 (${rr.evidence})` })
   }
   return blocks
 }

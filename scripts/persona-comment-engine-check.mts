@@ -259,7 +259,7 @@ console.log('③ 댓글 분산 planner')
   })
   const persona = (o: Partial<PlannerPersona> & { code: string }): PlannerPersona => ({
     status: 'active', realMember: { accountCount: 0, providerId: null }, seedComplete: true,
-    forbiddenReactionRoles: [], recentComments: 0,
+    forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     life: { noGoTopics: [] }, ...o,
   })
   // 🔴 정본 어휘를 쓴다. `share` 는 REACTION_TYPES 에 없어 생성기가 거부한다
@@ -1956,7 +1956,7 @@ console.log('⑩ 실회원 정본 — judgeRealMember 하나만')
   })
   const pers = (probe: PlannerPersona['realMember']): PlannerPersona => ({
     code: 'P01', status: 'active', realMember: probe, seedComplete: true,
-    forbiddenReactionRoles: [], recentComments: 0, life: { noGoTopics: [] },
+    forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 }, life: { noGoTopics: [] },
   })
   /** 🔴 조회가 어긋난 모든 모양을 fail-closed 로 막는다 */
   const bad: [string, PlannerPersona['realMember']][] = [
@@ -3832,6 +3832,7 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
     user: { providerId: null, accountCount: 0 },
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     // 🔴 ⑧ 은 후보를 포함해 minSamples 건이 되어야 돈다 — 이전 발화 5건을 준다
     comments: [
       '저도 그런 날이 있었어요', '무릎이 시큰해서 병원에 갔어요', '햇살이 좋더라고요',
@@ -4406,6 +4407,7 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
     user: { providerId: null, accountCount: 0 },
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     comments: [
       '저도 그런 날이 있었어요', '무릎이 시큰해서 병원에 갔어요', '햇살이 좋더라고요',
       '같이 걸으면 더 좋아요', '오늘은 좀 쉬려고요',
@@ -5026,7 +5028,7 @@ console.log('㊻ 글당 1~5 · 댓글 0개 우선 · 같은 Persona 재댓글 �
   })
   const mkPersona = (code: string, o: Partial<PlannerPersona> = {}): PlannerPersona => ({
     code, status: 'active', realMember: { accountCount: 0, providerId: null },
-    seedComplete: true, forbiddenReactionRoles: [], recentComments: 0,
+    seedComplete: true, forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     life: { noGoTopics: [] }, ...o,
   })
   const personas = (n: number): PlannerPersona[] =>

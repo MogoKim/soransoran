@@ -224,7 +224,7 @@ console.log('\n══════ ⑥ 🔴 회귀 — 수동 작성 전후 자�
   })
   const persona = (code: string): PlannerPersona => ({
     code, status: 'active', realMember: { accountCount: 0, providerId: null },
-    seedComplete: true, forbiddenReactionRoles: [], recentComments: 0,
+    seedComplete: true, forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     life: { noGoTopics: [] },
   })
   const personas = [persona('P01'), persona('P02')]
@@ -311,6 +311,7 @@ console.log('\n══════ ⑦ 🔴 대화 맥락은 참고하되, 말투
     ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
     user: { providerId: null, accountCount: 0 },
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     comments: [
       '저도 그런 날이 있었어요', '무릎이 시큰해서 병원에 갔어요', '햇살이 좋더라고요',
       '같이 걸으면 더 좋아요', '오늘은 좀 쉬려고요',

@@ -255,9 +255,11 @@ console.log('\n⑧ deferred 가 증명일 안에 안 풀림 · ⑨ Persona voice
 // ─────────────────────────────────────────────────────────
 console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
 {
+  // 🔴 (2026-10-01 · C9) 증명일 자동 글은 서로 다른 Persona 가 쓴다(canon §6-3 · PERSONA_REPEAT) — 글마다 다른 글쓴이
+  let author = 0
   const post = (release: EvidencePost['release']): EvidencePost => ({
     postId: `p-${release}-${Math.random()}`, queueId: `q-${Math.random()}`, publishedAtMs: NOW.getTime(), unattended: true,
-    queueRows: 1, publishLogs: 1, authorPersonaId: 'A', decider: 'auto',
+    queueRows: 1, publishLogs: 1, authorPersonaId: `A${(author += 1)}`, decider: 'auto',
     personaComments: [{ personaId: 'B', createdAtMs: NOW.getTime() + 10 * 60_000, topLevel: true }], release,
   })
   const facts = (posts: EvidencePost[]): StageEvidenceFacts => ({
