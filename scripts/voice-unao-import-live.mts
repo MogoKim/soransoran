@@ -48,13 +48,6 @@ const arg = (n: string): string | undefined => {
 const LIMIT_RAW = arg('limit')
 const LIMIT = LIMIT_RAW === undefined ? null : Number(LIMIT_RAW)
 
-/**
- * 닉네임 해시 salt.
- * 🔴 salt 가 바뀌면 동일인 추적이 끊긴다. 값을 바꾸려면 기존 authorHash 를 어떻게 할지
- *    먼저 정해야 한다 (schema-strategy §8-3).
- */
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 /** 로그에 URL 전체를 남기지 않는다 — 역추적은 DB 값으로 한다 */
 function maskUrl(url: string): string {
@@ -68,7 +61,6 @@ function maskUrl(url: string): string {
 
 async function main() {
   await loadEnvLocal()
-  const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
   const unaoUrl = loadUnaoReadonlyUrl()
 
   console.log('\nVoice — 우나어 CafePost → VoiceSource 샘플 적재')
@@ -101,7 +93,7 @@ async function main() {
   }
 
   // ── ② VoiceSource 후보로 변환 — 🔴 본문은 여기서 버려진다 ──
-  const row = toSourceRow(raw, salt)
+  const row = toSourceRow(raw)
   const summary = summarize(row, topCommentsCount)
 
   console.log('\n  읽은 원문 (요약만 — 본문 · 댓글 · 닉네임 미출력)')
@@ -117,7 +109,7 @@ async function main() {
   console.log(`     sourceSite       ${row.sourceSite}`)
   console.log(`     sourceUrl        ${maskUrl(row.sourceUrl)}`)
   console.log(`     sourceBoardName  ${row.sourceBoardName ?? '(없음)'}`)
-  console.log(`     authorHash       ${row.authorHash ? `${row.authorHash.slice(0, 20)}…` : '(없음)'}`)
+  console.log('     authorHash       (만들지 않는다 — 작가 식별값 미저장)')
   console.log(`     contentHash      ${row.contentHash ? `${row.contentHash.slice(0, 20)}…` : '(없음)'}`)
   console.log(`     contentLength    ${row.contentLength}`)
   console.log(`     postedAt         ${row.postedAt?.toISOString() ?? 'null'}`)

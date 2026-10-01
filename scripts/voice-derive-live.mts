@@ -44,8 +44,6 @@ const METHOD = 'rule' as const
 const MODEL = ''
 const PROMPT_VERSION = ''
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 const APPLY = process.argv.includes('--apply')
 const arg = (n: string): string | undefined => {
@@ -79,7 +77,6 @@ async function main() {
     )
   }
 
-  const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
   const unaoUrl = loadUnaoReadonlyUrl()
 
   console.log('\nVoice — 규칙 신호 계산 (VE-M2-2)')
@@ -160,7 +157,7 @@ async function main() {
 
         const style = computeStyleSignals(content)
         const comments = toCommentSignals(src.topComments, {
-          authorSalt: salt, capturedAt: item.capturedAt,
+          capturedAt: item.capturedAt,
         })
 
         if (style.artifactFrequency.lowSample) lowSample += 1

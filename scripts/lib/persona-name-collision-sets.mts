@@ -33,9 +33,12 @@ import type { NameCollisionSets } from './persona-gate-name-collision.mjs'
  *   🔴 name 에는 @unique 가 없어 DB 가 막아주지도 않는다.
  */
 export async function loadMemberNames(prisma: Reader): Promise<string[]> {
-  const users = await prisma.user.findMany({ select: { nickname: true, name: true } })
+  // 🔴 (2026-10-01 · #641) Persona 계정은 B1 이 아니라 B3 다 — id 목록으로 뺀다(관계 is:null 필터를 쓰지 않는다)
+  const personaUserIds = new Set((await prisma.persona.findMany({ select: { userId: true } })).map((p) => p.userId))
+  const users = await prisma.user.findMany({ select: { id: true, nickname: true, name: true } })
   const out: string[] = []
   for (const u of users) {
+    if (personaUserIds.has(u.id)) continue
     const nick = u.nickname?.trim()
     const name = u.name?.trim()
     if (nick !== undefined && nick !== '') out.push(nick)
@@ -45,70 +48,32 @@ export async function loadMemberNames(prisma: Reader): Promise<string[]> {
 }
 
 /**
- * 기존 persona displayName.
- *
- * 🔴 TODO — `Persona` 모델이 아직 스키마에 없다(2026-08-31 실측).
- *    모델이 생기면 아래를 구현한다:
- *      · status 와 무관하게 전부 읽는다 — draft · active · paused · **retired**
- *        은퇴를 빼면 같은 이름이 다시 나타나 회원이 혼동한다
- *      · 폐기한 이름도 남긴다 — 지우면 다음 작명에서 다시 나온다 (설계 §10)
- *    지금은 빈 배열을 돌려준다. B3 검사가 조용히 통과하는 것이 아니라
- *    **대조할 대상이 0개**라는 뜻이다.
+ * 기존 persona displayName — 🔴 status 와 무관하게 전부(draft · active · paused · **retired**).
+ *    은퇴를 빼면 같은 이름이 다시 나타나 회원이 혼동한다(설계 §10).
+ *    표시명은 Persona 의 User 행(nickname ∪ name)에 있다 — 화면 표시명과 같은 원천.
+ *    🔴 (2026-10-01 · #641) 앞판은 "Persona 모델이 없다" TODO 로 빈 배열을 돌려 B3 가 운영에서 비어 있었다.
+ *    `except` 는 자기 자신(재seed · 재판정 대상)의 User id 다.
  */
-export async function loadPersonaDisplayNames(_prisma: Reader): Promise<string[]> {
-  return []
-}
-
-/**
- * 크롤 author 해시 — VoiceSource · VoiceCommentSignal 양쪽.
- *
- * 🔴 원문이 없다. salted 단방향 해시라 부분 포함 · 유사도 대조가 불가능하다.
- *    판정부는 이 집합으로 **일치 계열만** 본다 (설계 §4-2).
- */
-export async function loadAuthorHashSets(prisma: Reader): Promise<{
-  authorHashes: Set<string>
-  authorHashNorms: Set<string>
-}> {
-  const [srcHash, srcNorm, sigHash, sigNorm] = await Promise.all([
-    prisma.voiceSource.findMany({
-      where: { authorHash: { not: null } },
-      select: { authorHash: true }, distinct: ['authorHash'],
-    }),
-    prisma.voiceSource.findMany({
-      where: { authorHashNorm: { not: null } },
-      select: { authorHashNorm: true }, distinct: ['authorHashNorm'],
-    }),
-    prisma.voiceCommentSignal.findMany({
-      where: { authorHash: { not: null } },
-      select: { authorHash: true }, distinct: ['authorHash'],
-    }),
-    prisma.voiceCommentSignal.findMany({
-      where: { authorHashNorm: { not: null } },
-      select: { authorHashNorm: true }, distinct: ['authorHashNorm'],
-    }),
-  ])
-  const authorHashes = new Set<string>()
-  const authorHashNorms = new Set<string>()
-  for (const r of srcHash) if (r.authorHash !== null) authorHashes.add(r.authorHash)
-  for (const r of sigHash) if (r.authorHash !== null) authorHashes.add(r.authorHash)
-  for (const r of srcNorm) if (r.authorHashNorm !== null) authorHashNorms.add(r.authorHashNorm)
-  for (const r of sigNorm) if (r.authorHashNorm !== null) authorHashNorms.add(r.authorHashNorm)
-  return { authorHashes, authorHashNorms }
+export async function loadPersonaDisplayNames(prisma: Reader, except: ReadonlySet<string> = new Set()): Promise<string[]> {
+  const rows = await prisma.persona.findMany({ select: { userId: true, user: { select: { nickname: true, name: true } } } })
+  const out: string[] = []
+  for (const r of rows) {
+    if (except.has(r.userId)) continue
+    for (const n of [r.user.nickname, r.user.name]) {
+      const t = n?.trim()
+      if (t !== undefined && t !== '') out.push(t)
+    }
+  }
+  return out
 }
 
 /** 대조 집합 전체를 모은다. 🔴 read-only */
 export async function loadNameCollisionSets(prisma: Reader): Promise<NameCollisionSets> {
-  const [memberNames, personaNames, hashes] = await Promise.all([
+  const [memberNames, personaNames] = await Promise.all([
     loadMemberNames(prisma),
     loadPersonaDisplayNames(prisma),
-    loadAuthorHashSets(prisma),
   ])
-  return {
-    memberNames,
-    personaNames,
-    authorHashes: hashes.authorHashes,
-    authorHashNorms: hashes.authorHashNorms,
-  }
+  return { memberNames, personaNames }
 }
 
 /** 🔴 사람이 보는 요약. 이름 원문이 아니라 개수만 돌려준다 */
@@ -116,7 +81,5 @@ export function describeSets(sets: NameCollisionSets): string {
   return [
     `회원 표시명 ${sets.memberNames?.length ?? 0}`,
     `persona ${sets.personaNames?.length ?? 0}`,
-    `authorHash ${sets.authorHashes?.size ?? 0}`,
-    `authorHashNorm ${sets.authorHashNorms?.size ?? 0}`,
   ].join(' · ')
 }

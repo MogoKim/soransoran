@@ -27,7 +27,6 @@
  *      · status 를 active 로 올리는 것 — draft 로만 만든다
  */
 import { PrismaClient, type PersonaStatus } from '@prisma/client'
-import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 import { checkNameCollision, type NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
@@ -41,8 +40,6 @@ const SELECTION_PATH = 'tmp/persona-displayname-selected.json'
 const CODES = ['P05', 'P07', 'P10', 'P15', 'P17'] as const
 const DRAFT: PersonaStatus = 'draft'
 
-const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
-const DEFAULT_SALT = 'soransoran-voice-v1'
 
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const ok = (m: string) => console.log(`   ✅ ${m}`)
@@ -55,8 +52,6 @@ const mask = (s: string): string => {
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
-const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
-const hashOf = (v: string) => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
 
 // ── --check ──
 if (CHECK) {
@@ -141,7 +136,7 @@ console.log(`   대조 집합: ${describeSets(sets)}`)
 const verdicts = CODES.map((code) => ({
   code,
   name: selection[code].trim(),
-  verdict: checkNameCollision(selection[code].trim(), sets, { hashOf }),
+  verdict: checkNameCollision(selection[code].trim(), sets),
 }))
 for (const { code, name, verdict } of verdicts) {
   const flag = verdict.status === 'pass' ? '✅' : '🔴'

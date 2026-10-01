@@ -8,7 +8,7 @@
  *      ① N3 가 reject 로 새지 않는가 — 실측상 열에 하나가 근거 없이 걸린다
  *      ② N3 가 빈 문자열일 때 비교를 **하지 않는가** — 한글 없는 이름이 전부 같아진다
  *      ③ 짧은 이름에 유사도를 적용하지 않는가 — 2자 이하는 완전 일치만
- *      ④ B2(해시)에서 유사도·부분 포함을 하지 않는가 — 해시로는 불가능하다
+ *      ④ 크롤 작가(옛 B2) 대조가 판정에 다시 들어오지 않는가 — 옛 authorHash 값의 유무 · 섞임이 판정을 바꾸지 않는다(2026-10-01 · #641)
  *      ⑤ 반환값에 **원문 문자열이 없는가** — 이 판정부에서 가장 깨지기 쉬운 원칙
  *      ⑥ DB · LLM 경로가 들어오지 않는가 — 판정부는 순수 함수여야 한다
  *
@@ -18,7 +18,6 @@
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHash } from 'node:crypto'
 import {
   checkNameCollision, summarizeForAdmin,
   normalizeN1, normalizeN2, normalizeN3, editDistance,
@@ -46,9 +45,6 @@ const gateRaw = readFileSync(GATE_LIB, 'utf-8')
 const gateCode = stripComments(gateRaw)
 const setsCode = stripComments(readFileSync(SETS_LIB, 'utf-8'))
 
-// 🔴 fixture 전용 salt. 실제 salt 가 아니다
-const FIXTURE_SALT = 'fixture-salt-not-real'
-const hashOf = (v: string) => `sha256:${createHash('sha256').update(`${FIXTURE_SALT}::${v}`, 'utf8').digest('hex')}`
 
 // 🔴 전부 합성 문자열이다
 const MEMBER = ['봄뜰하나', '겨울숲둘', '가을바다셋']
@@ -158,35 +154,35 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   else ok('reject — 출처 marker', 'case', `B4 · term=${hit.term}`)
 }
 
-// ── ⑫ B2 — 해시 완전 일치는 reject ──────────────────────
+// ── ⑫ 🔴 옛 크롤 작가 해시는 inert — 유무 · 섞임이 판정을 만들지도 막지도 않는다 (2026-10-01 · #641) ──
+//    호출부가 옛 칸을 실어 보내도(타입 밖 값) 판정부는 읽지 않는다. 같은 이름 · 같은 회원 집합이면 결과가 같아야 한다.
 {
-  const sets: NameCollisionSets = { authorHashes: new Set([hashOf('밤바다길')]) }
-  const v = checkNameCollision('밤바다길', sets, { hashOf })
-  const hit = v.hits.find((h) => h.kind === 'B2_CRAWL_AUTHOR')
-  if (v.status !== 'reject') bad('B2 — 해시 완전 일치', 'case', `🔴 ${v.status}`)
-  else if (hit?.refType !== 'authorHash') bad('B2 — 해시 완전 일치', 'case', `🔴 refType=${hit?.refType}`)
-  else ok('B2 — 해시 완전 일치', 'case', 'B2 · N0 · authorHash')
+  const legacyV1 = `sha256:${'a'.repeat(64)}`
+  const legacyV2 = `hmac-v2:${'b'.repeat(12)}:${'c'.repeat(64)}`
+  const variants: Array<[string, Record<string, unknown>]> = [
+    ['없음', {}],
+    ['v1 만', { authorHashes: new Set([legacyV1]), authorHashNorms: new Set([legacyV1]) }],
+    ['v1 · v2 섞임', { authorHashes: new Set([legacyV1, legacyV2]), authorHashNorms: new Set<string>() }],
+    ['빈 집합', { authorHashes: new Set<string>(), authorHashNorms: new Set<string>() }],
+  ]
+  const offenders: string[] = []
+  for (const name of ['민들레섬', '봄뜰하나', '여름길넷', '레테님들모임']) {
+    const want = JSON.stringify(checkNameCollision(name, baseSets))
+    for (const [label, extra] of variants) {
+      const got = JSON.stringify(checkNameCollision(name, { ...baseSets, ...extra } as NameCollisionSets))
+      if (got !== want) offenders.push(`${label} 이 결과를 바꿨다`)
+    }
+  }
+  if (offenders.length) bad('옛 작가 해시 inert', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('옛 작가 해시 inert', 'guard', '없음 · v1 · 섞임 · 빈 집합 — 판정 동일')
 }
 
-// ── ⑬ B2 — authorHashNorm 으로 N2 변형을 잡는다 ─────────
+// ── ⑬ B3 — 다른 Persona 표시명(retired · paused 포함)은 회원과 같은 규칙으로 막는다 ──
 {
-  const sets: NameCollisionSets = { authorHashNorms: new Set([hashOf(normalizeN2('밤바다길'))]) }
-  const v = checkNameCollision('밤 바다.길', sets, { hashOf })
-  const hit = v.hits.find((h) => h.kind === 'B2_CRAWL_AUTHOR')
-  if (hit?.refType !== 'authorHashNorm') bad('B2 — Norm 으로 변형 검출', 'case', `🔴 refType=${hit?.refType}`)
-  else if (v.status !== 'reject') bad('B2 — Norm 으로 변형 검출', 'case', `🔴 ${v.status}`)
-  else ok('B2 — Norm 으로 변형 검출', 'case', 'B2 · N2 · authorHashNorm')
-}
-
-// ── ⑭ 🔴 B2 는 유사도를 하지 않는다 ─────────────────────
-{
-  const sets: NameCollisionSets = { authorHashes: new Set([hashOf('밤바다길')]) }
-  const v = checkNameCollision('밤바다칼', sets, { hashOf })  // 거리 1
-  if (v.hits.some((h) => h.kind === 'B2_CRAWL_AUTHOR')) {
-    bad('B2 유사도 금지', 'guard', '🔴 해시에서 유사 일치가 나왔다 — 불가능한 결과다')
-  } else if (v.status !== 'pass') {
-    bad('B2 유사도 금지', 'guard', `🔴 ${v.status}`)
-  } else ok('B2 유사도 금지', 'guard', '해시는 일치 계열만 — 거리 1 은 잡히지 않는다')
+  const v = checkNameCollision('여름길넷', { memberNames: [], personaNames: PERSONA })
+  const hit = v.hits.find((h) => h.kind === 'B3_PERSONA')
+  if (v.status !== 'reject' || hit?.refType !== 'personaId') bad('B3 — Persona 완전 일치', 'case', `🔴 ${v.status} ${hit?.refType}`)
+  else ok('B3 — Persona 완전 일치', 'case', 'B3 · N0 · personaId')
 }
 
 // ── ⑮ 🔴 반환값에 원문 문자열이 없다 ────────────────────
@@ -256,13 +252,10 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   if (mn === '') offenders.push('matchNames 를 찾을 수 없다')
   if (/charLength\((candidate|name)\)/.test(mn)) offenders.push('🔴 길이 구간이 원본 길이로 되돌아갔다')
   if (!/normalizedLength/.test(mn)) offenders.push('🔴 matchNames 가 N2 길이를 쓰지 않는다')
-  // 🔴 B2 에 편집거리가 들어오지 않았는가
-  const b2 = /function matchAuthorHashes[\s\S]*?\n}/.exec(gateCode)?.[0] ?? ''
-  if (b2 === '') offenders.push('matchAuthorHashes 를 찾을 수 없다')
-  if (/editDistance/.test(b2)) offenders.push('🔴 B2 에 편집거리가 들어왔다 — 해시로는 불가능하다')
-  if (/includes\(/.test(b2)) offenders.push('🔴 B2 에 부분 포함이 들어왔다')
+  // 🔴 (2026-10-01 · #641) 크롤 작가 대조가 다시 들어오지 않았는가 — 복구할 수 없는 축을 권위로 두지 않는다
+  if (/B2_CRAWL_AUTHOR|authorHash|hashOf|matchAuthorHashes/.test(gateCode)) offenders.push('🔴 판정부에 크롤 작가 대조가 돌아왔다')
   if (offenders.length) bad('판정부는 순수 함수', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('판정부는 순수 함수', 'guard', 'DB · 네트워크 · env 없음 · N3/B2 경계 유지')
+  else ok('판정부는 순수 함수', 'guard', 'DB · 네트워크 · env 없음 · N3 경계 유지 · 크롤 작가 대조 없음')
 }
 
 // ── ㉑ 소스 스캔 — 조회 계층이 write 하지 않는가 ─────────
@@ -273,10 +266,11 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   }
   // 🔴 회원 표시명은 nickname 과 name 을 둘 다 읽어야 한다
   if (!/nickname/.test(setsCode) || !/name/.test(setsCode)) offenders.push('nickname ∪ name 중 하나가 빠졌다')
-  if (!/voiceCommentSignal/.test(setsCode)) offenders.push('VoiceCommentSignal 를 읽지 않는다')
-  if (!/authorHashNorm/.test(setsCode)) offenders.push('authorHashNorm 을 읽지 않는다')
+  // 🔴 (2026-10-01 · #641) B3 는 실제 Persona 를 읽는다(앞판은 빈 배열) · 크롤 작가 해시는 읽지 않는다
+  if (!/prisma\.persona\.findMany/.test(setsCode)) offenders.push('B3 가 Persona 를 읽지 않는다')
+  if (/voiceSource|voiceCommentSignal|authorHash/.test(setsCode)) offenders.push('조회 계층이 크롤 작가 해시를 읽는다')
   if (offenders.length) bad('조회 계층은 read-only', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('조회 계층은 read-only', 'guard', 'write 0 · nickname ∪ name · Norm 포함')
+  else ok('조회 계층은 read-only', 'guard', 'write 0 · nickname ∪ name · B3 Persona 실조회 · 작가 해시 0')
 }
 
 // ── ㉒ 🔴 N3 만 걸린 상황에서는 절대 reject 가 아니다 (동작 기반) ─
@@ -349,4 +343,4 @@ if (failures.length) {
   console.error('')
   process.exit(1)
 }
-console.log(`\n✅ fixture ${report.length}건 전부 기대와 일치 — N3 는 review 로만 · B2 는 일치 계열만 · 반환값에 원문 없음\n`)
+console.log(`\n✅ fixture ${report.length}건 전부 기대와 일치 — N3 는 review 로만 · 크롤 작가 대조 없음 · 반환값에 원문 없음\n`)

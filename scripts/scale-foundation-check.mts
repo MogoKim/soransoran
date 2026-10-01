@@ -328,7 +328,8 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   const txBlock = toolSrc.slice(txAt, toolSrc.indexOf("isolationLevel: 'Serializable'"))
   check('F 🔴 Gate ⑥-B 대조를 **트랜잭션 안에서** 다시 한다',
     txBlock.includes('loadNameCollisionSets(tx)') && txBlock.includes('checkNameCollision'))
-  check('F 🔴 그 재판정에 authorHash salt 를 넘긴다', /checkNameCollision\([^)]*\{ hashOf \}\)/.test(txBlock))
+  check('F 🔴 그 재판정은 트랜잭션 안 집합(txSets)으로 한다',
+    /checkNameCollision\([^)]*txSets\)/.test(txBlock))
   check('F 🔴 걸리면 **throw** 한다 — 로그만 남기지 않는다 (전원 롤백)',
     /throw new Error\('트랜잭션 안 Gate ⑥-B 재판정 실패/.test(txBlock))
   check('F 🔴 재판정은 사전 검사와 **같은 판정 함수**를 쓴다 — 두 규칙이 갈리지 않는다',
@@ -998,8 +999,8 @@ console.log('\n⑩ 소스 계약')
   check('🔴 cohort 도구가 Serializable 을 쓴다', /isolationLevel:\s*'Serializable'/.test(tool))
   check('🔴 cohort 도구가 조건부 updateMany 를 쓴다', /updateMany\(\{\s*where:\s*\{\s*code,\s*status:\s*expect\s*\}/.test(tool))
   check('🔴 cohort 도구가 count !== 1 을 막는다', /u\.count\s*!==\s*1/.test(tool))
-  check('🔴 cohort 도구가 authorHash salt 를 넘긴다',
-    /VOICE_AUTHOR_HASH_SALT/.test(tool) && /checkNameCollision\([^)]*hashOf/.test(tool))
+  check('🔴 cohort 도구가 작가 해시 · salt · 공개 사슬을 쓰지 않는다(크롤 작가 대조 제거 · 2026-10-01 #641)',
+    !/hashOf|authorHash|VOICE_AUTHOR_HASH_SALT|soransoran-voice-v1/.test(tool))
   check('🔴 cohort 도구가 실회원 정본을 쓴다', /judgeRealMember/.test(tool))
   check('🔴 cohort 도구가 전체 seed 정합을 본다', /verifyPersonaSeed/.test(tool) && /verifySeedCard/.test(tool))
   check('🔴 cohort 도구가 불변 테이블을 대조한다',

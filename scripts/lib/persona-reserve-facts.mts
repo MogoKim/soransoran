@@ -10,12 +10,11 @@
  *    이력           `Post.personaId`(공개 글 순서) · `Comment.personaId`
  *    말투 근거      `bundlesForPersonas` — 운영 생성이 쓰는 그 묶음
  *
- * 🔴 Gate ⑥-B 의 author 해시 salt 가 없으면 **공개 기본값으로 대조하지 않는다** —
- *    표시명 판정을 모른다(`null`)로 둔다. 모르는 것은 통과가 아니다.
+ * 🔴 Gate ⑥-B 는 B1 실회원(Persona 계정 제외) · B3 다른 Persona(retired · paused 포함) · B4~B6 규칙으로 본다.
+ *    크롤 작가 대조(옛 B2)는 원본 작가명이 복구 불가라 뺐다(2026-10-01 · #641) — 옛 `authorHash` 값은 판정에 쓰지 않는다.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
 
 import type { Prisma, PrismaClient } from '@prisma/client'
 
@@ -26,9 +25,7 @@ import {
 } from '../../src/lib/persona-reserve'
 import type { PersonaReserveFacts, PersonaReserveRepo, PersonaReserveRow } from './d100-persona-tiers.mjs'
 import { readPersonaReserve } from './d100-persona-tiers.mjs'
-import { readEnvKeys } from './ops-signals.mjs'
 import { checkNameCollision, type NameCollisionSets } from './persona-gate-name-collision.mjs'
-import { loadAuthorHashSets } from './persona-name-collision-sets.mjs'
 import { bundlesForPersonas } from './persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './voice-runtime.mjs'
 
@@ -37,11 +34,6 @@ type Reader = PrismaClient | Prisma.TransactionClient
 export type ReserveFactsOptions = {
   now: Date
   repoRoot: string
-  /**
-   * Gate ⑥-B author 해시 salt. 🔴 `null`/빈 값이면 표시명 판정을 `null`(모른다)로 둔다 —
-   *    공개 기본값(`soransoran-voice-v1`)으로 대조하면 사전 대입이 가능한 해시와 비교하는 셈이다.
-   */
-  authorHashSalt: string | null
 }
 
 const nonEmpty = (v: unknown): boolean =>
@@ -105,19 +97,18 @@ export async function readReserveFacts(prisma: Reader, opts: ReserveFactsOptions
     // 🔴 자산을 못 열면 0 이다 — 말투 근거가 **없는** 것이 맞다(운영 어댑터와 같은 규칙)
   }
 
-  // ── Gate ⑥-B — 자기 User 를 뺀 실회원 표시명 · author 해시 ──
-  const salt = (opts.authorHashSalt ?? '').trim()
+  // ── Gate ⑥-B — B1 실회원(Persona 계정 제외) · B3 자기를 뺀 다른 Persona 전부 ──
   const users = await prisma.user.findMany({ select: { id: true, nickname: true, name: true } })
-  const hashSets = salt === '' ? null : await loadAuthorHashSets(prisma)
-  const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
-  const namesExcept = (userId: string): string[] => {
+  const personaUserIds = new Set(personas.map((p) => p.user.id))
+  const namesOf = (pick: (userId: string) => boolean): string[] => {
     const out: string[] = []
     for (const u of users) {
-      if (u.id === userId) continue
+      if (!pick(u.id)) continue
       for (const n of [u.nickname, u.name]) if (n !== null && n.trim() !== '') out.push(n.trim())
     }
     return out
   }
+  const memberNames = namesOf((id) => !personaUserIds.has(id))
 
   // ── 이력 — 공개 글 순서 · Persona 댓글 · 발행된 역할 ──
   const posts = await prisma.post.findMany({
@@ -146,14 +137,12 @@ export async function readReserveFacts(prisma: Reader, opts: ReserveFactsOptions
     const name = ((p.user.nickname ?? p.user.name) ?? '').trim()
     let nameGate: QualificationEvidence['nameGate'] = null
     let nameGateUnknown: string | undefined
-    if (hashSets === null) nameGateUnknown = 'VOICE_AUTHOR_HASH_SALT 없음 — 공개 기본값으로 대조하지 않는다'
-    else if (name === '') nameGateUnknown = '표시명이 없다'
+    if (name === '') nameGateUnknown = '표시명이 없다'
     else {
       const sets: NameCollisionSets = {
-        memberNames: namesExcept(p.user.id), personaNames: [],
-        authorHashes: hashSets.authorHashes, authorHashNorms: hashSets.authorHashNorms,
+        memberNames, personaNames: namesOf((id) => personaUserIds.has(id) && id !== p.user.id),
       }
-      nameGate = checkNameCollision(name, sets, { hashOf }).status
+      nameGate = checkNameCollision(name, sets).status
     }
     const seed = seedOfRow(p)
     const card = cards === null ? null : (cards.find((c) => c.code === p.code) ?? null)
@@ -191,18 +180,13 @@ export function prismaReserveRepo(prisma: Reader, opts: ReserveFactsOptions): Pe
 
 /**
  * 🔴 **계약 유효 Persona 수 — 단계 preflight·D100 계기판이 받는 값은 이것 하나다.**
- *    salt 는 정본 env 에서만 읽는다(없으면 null → 자격 대조 축은 모름 → 계약 유효로 세지 않는다).
  *    읽기 실패는 0 이 아니라 null 이다. 활성 행 수로 대신하지 않는다.
  */
 export async function readContractValidPersonas(
   prisma: Reader, opts: { now: Date; repoRoot: string },
 ): Promise<number | null> {
   try {
-    const env = readEnvKeys(['VOICE_AUTHOR_HASH_SALT'])
-    const salt = env.ok ? (env.values.VOICE_AUTHOR_HASH_SALT ?? '').trim() : ''
-    const r = await readPersonaReserve(prismaReserveRepo(prisma, {
-      now: opts.now, repoRoot: opts.repoRoot, authorHashSalt: salt === '' ? null : salt,
-    }))
+    const r = await readPersonaReserve(prismaReserveRepo(prisma, { now: opts.now, repoRoot: opts.repoRoot }))
     return r.contractValid
   } catch {
     return null

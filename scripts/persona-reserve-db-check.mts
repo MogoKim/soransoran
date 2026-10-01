@@ -7,10 +7,11 @@
  *
  * 보는 것
  *   ① 정본 카드와 같은 seed 의 draft(이력 0) → reserve  — 운영에 draft 가 0행이라 실측으로는 못 보는 경로
- *   ② 같은 사람을 active + 공개 글 1 · 발행 댓글 1 → 소재 모름 → qualification-pending
+ *   ② 같은 사람을 active + 공개 글 1 · 발행 댓글 1 → 소재 thin(1<5 · #640 표본 하한) — 모름이 아니다
  *   ③ retired → 네 상태 밖 · 정본 카드만 있는 코드 → designed
  *   ④ 두 Persona 가 한 글에 붙음 → 짝 간격 · 발행 역할(reactionType) 이 어댑터를 거쳐 읽힌다
- *   ⑤ salt 없음 → Gate ⑥-B 모름(공개 기본값으로 대조하지 않는다)
+ *   ⑤ 옛 크롤 작가 해시(v1)가 없음 · 있음 · v1/v2 섞임 → 표시명 판정이 **측정되고 똑같다**(inert · 2026-10-01 · #641) ·
+ *      B1 실회원 · B3 다른 Persona(retired 포함)와 같은 이름은 reject
  *   ⑥ 어댑터 자체는 write 0 — 전 표 행 수 불변
  */
 import { readFileSync } from 'node:fs'
@@ -52,6 +53,20 @@ async function cleanup(): Promise<void> {
   await prisma.post.deleteMany({ where: { id: { in: posts.map((p) => p.id) } } })
   await prisma.persona.deleteMany({ where: { id: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: mine.map((m) => m.userId) } } })
+  await prisma.voiceSource.deleteMany({ where: { sourceRef: { startsWith: 'reserve-db-check' } } })
+}
+/** 🔴 옛 크롤 작가 해시 fixture — 합성 hex(공개 사슬 아님). 판정에 쓰이지 않아야 한다 */
+async function seedLegacy(kind: 'none' | 'v1' | 'mixed'): Promise<void> {
+  await prisma.voiceSource.deleteMany({ where: { sourceRef: { startsWith: 'reserve-db-check' } } })
+  const rows = kind === 'none' ? [] : kind === 'v1'
+    ? [`sha256:${'a'.repeat(64)}`]
+    : [`sha256:${'a'.repeat(64)}`, `hmac-v2:${'b'.repeat(12)}:${'c'.repeat(64)}`]
+  for (const [i, h] of rows.entries()) {
+    await prisma.voiceSource.create({ data: {
+      origin: 'fixture', sourceRef: `reserve-db-check-${kind}-${i}`, sourceSite: 'navercafe:fixture', sourceUrl: 'https://example.invalid/r',
+      capturedAt: new Date(0), authorHash: h, authorHashNorm: h,
+    } })
+  }
 }
 const counts = async (): Promise<string> => JSON.stringify([
   await prisma.user.count(), await prisma.persona.count(), await prisma.post.count(),
@@ -89,7 +104,7 @@ try {
   await make('P25', 'retired', '누리')
 
   const read = async () => {
-    const facts = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashSalt: 'test-salt' })
+    const facts = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd() })
     return { facts, res: await readPersonaReserve({ reserveFacts: async () => facts }) }
   }
 
@@ -123,8 +138,9 @@ try {
   })
   const r2 = await read()
   const a14 = r2.res.verdicts.find((v) => v.code === 'P14')!
-  check('active + 공개 글 1 → 소재 모름 → qualification-pending', a14.state === 'qualification-pending'
-    && a14.contract?.unknown.topicShare !== undefined)
+  // 🔴 (#640) 소재 표본 하한 = SHARE_MIN_EVENTS(5) — 1건은 비율을 재지 않는다(thin · 0). 이 격리 DB 검사는 CI 목록 밖이라 #640 때 갱신되지 않았다
+  check('active + 공개 글 1 → 소재 thin(1<5) · 모름 아님(#640)',
+    a14.contract?.unknown.topicShare === undefined && a14.contract?.evidence.topicShare === 'thin(1<5)')
   const h14 = r2.facts.rows.find((r) => r.code === 'P14')!.history!
   const h01 = r2.facts.rows.find((r) => r.code === 'P01')!.history!
   check('연속 노출 — 맨 끝 글이 P14 → 1', h14.consecutiveExposures === 1)
@@ -133,10 +149,36 @@ try {
   check('짝 간격 0 은 이번 회차만 막는다(roundBlocked) — 계약 사유가 아니다',
     a14.contract?.roundBlocked.includes('postsSinceLastPairing') === true && a14.contract.blocked.postsSinceLastPairing === undefined)
 
-  // ── ⑤ salt 없음 ──
-  const noSalt = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd(), authorHashSalt: null })
-  check('salt 없음 → Gate ⑥-B 모름(null) · 공개 기본값 대조 없음',
-    noSalt.rows.every((r) => r.qualification?.nameGate === null && (r.qualification.nameGateUnknown ?? '').includes('SALT')))
+  // ── ⑤ 옛 크롤 작가 해시는 inert — 없음 · v1 · 섞임에서 표시명 판정이 측정되고 같다 ──
+  const gates = async (kind: 'none' | 'v1' | 'mixed'): Promise<string> => {
+    await seedLegacy(kind)
+    const f = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd() })
+    return JSON.stringify(f.rows.map((r) => [r.code, r.qualification?.nameGate ?? null, r.qualification?.nameGateUnknown ?? null]))
+  }
+  const gNone = await gates('none')
+  const parsed = JSON.parse(gNone) as Array<[string, string | null, string | null]>
+  check(`옛 작가 해시 없음 → 표시명 판정이 측정된다(모름 0) ${gNone}`,
+    parsed.length === 3 && parsed.every(([, g, u]) => g === 'pass' && u === null))
+  check('옛 v1 작가 해시가 있어도 같다', await gates('v1') === gNone)
+  check('v1 · v2 가 섞여도 같다', await gates('mixed') === gNone)
+  await seedLegacy('none')
+
+  // ── ⑥ B1 실회원 · B3 다른 Persona(retired 포함) 이름은 계속 막는다 ──
+  // nickname 은 유일키라 카카오 이름 칸(name)으로 같은 이름을 만든다 — B1 은 nickname ∪ name 을 본다
+  const member = await prisma.user.create({ data: { name: '가람' }, select: { id: true } })
+  try {
+    const f = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd() })
+    check('B1 — 실회원이 같은 이름(가람) → P01 표시명 reject',
+      f.rows.find((r) => r.code === 'P01')?.qualification?.nameGate === 'reject')
+  } finally {
+    await prisma.user.delete({ where: { id: member.id } })
+  }
+  // nickname 유일키 — 표시명(nickname ?? name)을 name 칸으로 같은 이름으로 만든다
+  await prisma.user.update({ where: { id: p14.userId }, data: { nickname: null, name: '누리' } })
+  const f3 = await readReserveFacts(prisma, { now: new Date(), repoRoot: process.cwd() })
+  check('B3 — retired Persona(P25 누리)와 같은 이름 → P14 표시명 reject',
+    f3.rows.find((r) => r.code === 'P14')?.qualification?.nameGate === 'reject')
+  await prisma.user.update({ where: { id: p14.userId }, data: { nickname: '새봄', name: null } })
 } catch (e) {
   failN += 1
   console.log(`  🔴 FAIL  예외: ${e instanceof Error ? e.message : String(e)}`)

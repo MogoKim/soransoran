@@ -8,11 +8,10 @@
  *   ③ (지움 2026-09-30) freshness TTL — 정본은 `judgeSlotRelease` 다
  *   ④ 수집원 다회      1,147 을 페이지로 쓰지 않는가 · 성공률을 곱하는가 · 보호장치가 있는가
  *   ⑤ d10 dry-run     24명·140건에서 140/140 인가 · 수집 준비도가 **BLOCKED** 인가
- *   ⑥ Gate ⑥-B        salt 를 loadEnvLocal 뒤에 만드는가 · **salt 가 판정을 실제로 바꾸는가**
+ *   ⑥ Gate ⑥-B        세 호출이 같은 판정 · 작가 해시 · salt 없음 · B1/B3 행동 (2026-10-01 · #641)
  *   ⑦ advice/caution  이번 PR 에서 풀지 않았는가 · 다음 작업으로 문서에 남겼는가
  */
 import { existsSync, readFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -686,66 +685,29 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   }
 }
 
-// ── ⑥ Gate ⑥-B — salt 순서와 **행동** ──
-console.log('\n⑥ Gate ⑥-B (salt 를 loadEnvLocal 뒤에 만드는가 · salt 가 판정을 바꾸는가)')
+// ── ⑥ Gate ⑥-B — 세 호출이 같은 판정 · 크롤 작가 대조 없음 (2026-10-01 · #641) ──
+console.log('\n⑥ Gate ⑥-B (세 호출 같은 함수 · 작가 해시 · salt 없음 · B1/B3 행동)')
 {
-  const raw = read('scripts/persona-cohort-run.mts')
   const src = codeOf('scripts/persona-cohort-run.mts')
-  const envAt = src.indexOf('await loadEnvLocal()')
-  const saltAt = src.indexOf('const salt = ')
-  const hashAt = src.indexOf('const hashOf = ')
-  check('🔴 loadEnvLocal 을 부른다', envAt >= 0)
-  check('🔴 salt 를 그 뒤에 만든다', saltAt > envAt)
-  check('🔴 hashOf 도 그 뒤다', hashAt > envAt)
-  check('🔴 형제 도구(persona-wave2-assign)와 같은 순서다', (() => {
-    const w = codeOf('scripts/persona-wave2-assign.mts')
-    return w.indexOf('const salt = ') > w.indexOf('await loadEnvLocal()')
-  })())
-  check('🔴 왜 순서가 중요한지 코드에 적혀 있다',
-    raw.includes('뒤에 만든다') && raw.includes('조용히 전원 pass 로 통과한다'))
-  check('🔴 죽은 변수(salt0)를 남기지 않았다', !/salt0/.test(src))
   /**
-   * 🔴 **세 호출 전부**가 hashOf 를 받아야 한다. 하나만 검사하면 나머지에서 빼도 통과한다 —
-   *    빠진 그 한 곳에서 B2(크롤 author) 갈래가 통째로 건너뛰어진다.
+   * 🔴 앞판은 salt 순서 · key 를 검사했다. 원본 작가명이 복구 불가라 크롤 작가 대조(B2)를 뺐으므로
+   *    이제 지킬 것은 "salt · 작가 해시 · 공개 사슬이 도구로 돌아오지 않는다" 와 "세 호출이 같은 판정을 쓴다" 다.
    */
+  check('🔴 cohort 도구가 작가 해시 · salt · 공개 사슬을 쓰지 않는다',
+    !/hashOf|authorHash|VOICE_AUTHOR_HASH_SALT|soransoran-voice-v1|const salt = /.test(src))
+  check('🔴 형제 도구(persona-wave2-assign)도 같다',
+    !/hashOf|authorHash|VOICE_AUTHOR_HASH_SALT|soransoran-voice-v1|const salt = /.test(codeOf('scripts/persona-wave2-assign.mts')))
+  check('🔴 죽은 변수(salt0)를 남기지 않았다', !/salt0/.test(src))
   const collisionCalls = src.match(/checkNameCollision\([^;]*?\)/g) ?? []
   check('🔴 자동 선정 · 사전 검사 · 트랜잭션 재판정 셋 다 같은 함수다', collisionCalls.length === 3)
-  check('🔴 세 호출 **전부** hashOf 를 넘긴다 — 하나라도 빠지면 그 자리에서 B2 가 사라진다',
-    collisionCalls.length === 3 && collisionCalls.every((c) => c.includes('hashOf')))
-
-  /**
-   * 🔴 **행동 fixture — salt 가 다르면 Gate 결과가 실제로 달라지는가.**
-   *
-   *    순서만 검사하면 "그 줄을 옮겨도 아무 일 없다" 는 반론을 막지 못한다.
-   *    적재 때 쓴 salt 로 만든 authorHash 집합에 대고, **다른 salt** 로 후보를 해시하면
-   *    B2 대조가 한 건도 걸리지 않는다 — 즉 검사한 적이 없는데 pass 가 된다.
-   */
-  const hashWith = (salt: string) => (v: string): string =>
-    `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
-  const REAL_SALT = 'soransoran-real-salt'
-  const WRONG_SALT = 'soransoran-voice-v1'
+  check('🔴 세 호출 전부 정본 대조 집합(loadNameCollisionSets)에서 온 집합을 쓴다',
+    (src.match(/loadNameCollisionSets\(/g) ?? []).length >= 3)
   const CANDIDATE = '수국'
-  const sets = {
-    memberNames: [] as string[],
-    personaNames: [] as string[],
-    // 🔴 적재 때 쓴 salt 로 만든 집합이다 — 크롤 author 중 한 명이 이 이름을 쓴다
-    authorHashes: new Set([hashWith(REAL_SALT)(CANDIDATE)]),
-    authorHashNorms: new Set<string>(),
-  }
-  const right = checkNameCollision(CANDIDATE, sets, { hashOf: hashWith(REAL_SALT) })
-  const wrong = checkNameCollision(CANDIDATE, sets, { hashOf: hashWith(WRONG_SALT) })
-  const none = checkNameCollision(CANDIDATE, sets, {})
-  check('🔴 맞는 salt 로는 크롤 author 충돌이 잡힌다',
-    right.status === 'reject' && right.hits.some((x) => x.kind === 'B2_CRAWL_AUTHOR'))
-  check('🔴 다른 salt 를 주입하면 **같은 이름이 통과한다** — 결과가 실제로 달라진다',
-    wrong.status === 'pass' && !wrong.hits.some((x) => x.kind === 'B2_CRAWL_AUTHOR'))
-  check('🔴 hashOf 를 아예 안 넘겨도 통과한다 — B2 가 통째로 건너뛰어진다', none.status === 'pass')
-  check('🔴 즉 salt 를 늦게 읽으면 Gate 가 조용히 무력화된다 (세 결과가 다르다)',
-    right.status !== wrong.status && wrong.status === none.status)
-  check('🔴 다른 갈래(B1 회원)는 salt 와 무관하게 그대로 잡힌다', (() => {
-    const withMember = { ...sets, memberNames: [CANDIDATE] }
-    return checkNameCollision(CANDIDATE, withMember, { hashOf: hashWith(WRONG_SALT) }).status === 'reject'
-  })())
+  check('🔴 B1 회원 이름은 그대로 잡힌다',
+    checkNameCollision(CANDIDATE, { memberNames: [CANDIDATE], personaNames: [] }).status === 'reject')
+  check('🔴 B3 다른 Persona 이름도 그대로 잡힌다',
+    checkNameCollision(CANDIDATE, { memberNames: [], personaNames: [CANDIDATE] }).status === 'reject')
+  check('🔴 아무와도 겹치지 않으면 pass', checkNameCollision(CANDIDATE, { memberNames: ['다른이름'], personaNames: [] }).status === 'pass')
 }
 
 // ── ⑦ advice · caution — 이번 PR 에서 풀지 않는다 ──

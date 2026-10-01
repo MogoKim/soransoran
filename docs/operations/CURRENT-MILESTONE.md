@@ -36,7 +36,7 @@
 | JIT 공급 · 단일 준비도 | ❌ | ❌ | ❌ | 통합 브랜치는 700 정지선·14일 감속·재고선 화면을 지웠다. main · runtime 에는 아직 남아 있다(옛 경로) |
 | 자동 사다리 (사람 env 0) | 부분 | 부분 | ❌ | controller 는 돈다. 단계 입력원이 여럿이고 사람 천장 env 를 읽는다(옛 경로) |
 | 공급 예산 천장 | 부분 | 부분 | ❌ | 2026-09-28 공급 장부 $1.1925 > 승인 $0.50 (손 실행 env). main 에서 그 경로는 닫혔고 남은 우회 두 개를 비용 레인이 고치는 중 |
-| Persona 4상태 · contract-valid 수 | ❌ | ❌ | ❌ | 4상태 판정은 #639 에 있다(main 미반영 · 미배포). 운영 DB 읽기 전용 실측(2026-10-01 01시 · 쓰기 0): 계약 유효 **0** · active 24 는 용량이 아니다 · 축별 — lifeAxes 막힘 16 · 말투 근거 막힘 6(P20~P25) · 자격 막힘 5(P05·P07·P10·P15·P17 카드↔DB seed 불일치) · 자격 모름 19(`VOICE_AUTHOR_HASH_SALT` 없음) · 소재 모름 18. 소재 표본 하한 정합 PR(`fix/persona-contract-consistency`, #639 위) 적용 시 소재 모름 **18 → 1(P02)** · 계약 유효는 **0 그대로**(salt). 다음 단계 preflight 는 **올라갈 단계의** 하한을 보므로 D3 하한 24 가 먼저 막는다 — **D1→D3 부터 `PERSONA_SHORT`** |
+| Persona 4상태 · contract-valid 수 | ❌ | ❌ | ❌ | 4상태 판정은 #639 에 있다(main 미반영 · 미배포). 운영 DB 읽기 전용 실측(2026-10-01 01시 · 쓰기 0): 계약 유효 **0** · active 24 는 용량이 아니다 · 축별 — lifeAxes 막힘 16 · 말투 근거 막힘 6(P20~P25) · 자격 막힘 5(P05·P07·P10·P15·P17 카드↔DB seed 불일치) · 자격 모름 19(`VOICE_AUTHOR_HASH_SALT` 없음 — #641 이 크롤 작가 대조를 빼 이 축을 없앤다 · 미병합) · 소재 모름 18. 소재 표본 하한 정합 PR(`fix/persona-contract-consistency`, #639 위) 적용 시 소재 모름 **18 → 1(P02)** · 계약 유효는 **0 그대로**(salt). 다음 단계 preflight 는 **올라갈 단계의** 하한을 보므로 D3 하한 24 가 먼저 막는다 — **D1→D3 부터 `PERSONA_SHORT`** |
 | 사람·비회원 다중 댓글 (Conversation Thread R1) | ✅ #642 | ✅ Vercel production 2026-10-01 09:40 KST | 미관측 | 스레드 root·직접 답글 대상 보존. 웹 댓글 경로만 — D100 runtime 과 무관 |
 | Persona 자동 대댓글 (선택적 다중 턴) | ❌ | ❌ | ❌ | **비활성.** Persona 레인은 최상위 첫 댓글만 쓴다(`parentId` null 불변식). 첫 댓글 운영이 먼저다 |
 | 상시 실행 호스트 하나 | 부분 | ❌ | ❌ | 보조 MacBook cutover 미완료 |

@@ -19,7 +19,6 @@
  *
  * 🔴 출력에는 코드·개수·사유 코드만 나온다. 코퍼스 원문 · 화자 식별자 · 회원 이름은 나오지 않는다.
  */
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
@@ -68,15 +67,11 @@ const taken = new Set<string>(pool.cards.map((c) => c.code))
 type DbFacts = { codes: string[]; cadences: Cadence[]; isTaken: (n: string) => boolean; gateOf: (n: string) => DisplayNameCheck['gate'] }
 let db: DbFacts | null = null
 let prismaRef: import('@prisma/client').PrismaClient | null = null
-let hashOf: ((v: string) => string) | null = null
 if (USE_DB) {
   await loadEnvLocal()
   const { PrismaClient } = await import('@prisma/client')
   const { loadNameCollisionSets } = await import('./lib/persona-name-collision-sets.mjs')
   const { checkNameCollision } = await import('./lib/persona-gate-name-collision.mjs')
-  const salt = (process.env.VOICE_AUTHOR_HASH_SALT ?? 'soransoran-voice-v1').trim()
-  const h = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
-  hashOf = h
   const prisma = new PrismaClient()
   prismaRef = prisma
   const rows = await prisma.persona.findMany({
@@ -93,8 +88,8 @@ if (USE_DB) {
   db = {
     codes: rows.map((r) => r.code),
     cadences,
-    isTaken: (n) => checkNameCollision(n, sets, { hashOf: h }).status !== 'pass',
-    gateOf: (n) => checkNameCollision(n, sets, { hashOf: h }).status,
+    isTaken: (n) => checkNameCollision(n, sets).status !== 'pass',
+    gateOf: (n) => checkNameCollision(n, sets).status,
   }
   for (const c of db.codes) taken.add(c)
   console.log(`  운영 DB read-only — Persona ${rows.length}행 · cadence 표본 ${cadences.length}`)
@@ -206,9 +201,9 @@ if (!APPLY) {
   await prismaRef?.$disconnect()
   process.exit(0)
 }
-if (prismaRef === null || hashOf === null || names === null) fail('--apply 는 DB 읽기가 필요하다')
+if (prismaRef === null || names === null) fail('--apply 는 DB 읽기가 필요하다')
 const plans = valid.map((v) => ({ code: v.code, status: v.status, name: names!.picked.get(v.code) ?? '', seed: v.seed ?? {} }))
-const res = await applyAutogenDrafts(prismaRef!, { plans, limit: LIMIT, hashOf: hashOf!, reason: REASON })
+const res = await applyAutogenDrafts(prismaRef!, { plans, limit: LIMIT, reason: REASON })
 await prismaRef!.$disconnect()
 if (!res.ok) fail(`적재하지 않았다 — ${res.reason}`)
 console.log(`\n✅ draft 적재 ${res.ok ? res.created.join(' · ') : ''} — 🔴 status=draft. 켜는 것은 계획 4) 다\n`)

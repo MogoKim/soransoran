@@ -92,14 +92,15 @@ const SAMPLE_BODY = [
   const body = '저도 작년에 똑같이 겪었어요. 병원은 큰 데로 가시는 게 나아요.'
   const rows = toCommentSignals(
     [{ author: '햇살가득', content: body, likeCount: 4, replyCount: 1 }],
-    { authorSalt: 'salt-x', capturedAt: new Date('2026-08-01T00:00:00Z') },
+    { capturedAt: new Date('2026-08-01T00:00:00Z') },
   )
   const json = JSON.stringify(rows)
   const offenders: string[] = []
   if (json.includes('똑같이 겪었')) offenders.push('댓글 본문이 남았다')
   if (json.includes('햇살가득')) offenders.push('닉네임 원문이 남았다')
   if (!rows[0]?.contentHash?.startsWith('sha256:')) offenders.push('contentHash 형식')
-  if (!rows[0]?.authorHash?.startsWith('sha256:')) offenders.push('authorHash 형식')
+  // 🔴 (2026-10-01 · #641) 작가 식별값을 만들지 않는다
+  if (rows[0]?.authorHash !== null) offenders.push('authorHash 가 만들어졌다')
   if (rows[0]?.contentLength !== body.length) offenders.push('길이가 틀리다')
   if (rows[0]?.likeCount !== 4 || rows[0]?.replyCount !== 1) offenders.push('반응 수치 손실')
   if (offenders.length) bad('댓글 본문 · 닉네임 미저장', 'policy', `🔴 ${offenders.join(' / ')}`)
@@ -223,7 +224,7 @@ const SAMPLE_BODY = [
   if (COMMENT_TRUNCATE_AT !== 199) offenders.push(`COMMENT_TRUNCATE_AT 가 ${COMMENT_TRUNCATE_AT} (1차값은 199)`)
   const rows = toCommentSignals(
     [{ content: '가'.repeat(198) }, { content: '가'.repeat(199) }],
-    { authorSalt: 's', capturedAt: new Date(0) },
+    { capturedAt: new Date(0) },
   )
   if (rows[0].truncated) offenders.push('198자가 잘림으로 잡힌다')
   if (!rows[1].truncated) offenders.push('199자가 잘림으로 안 잡힌다')
@@ -326,7 +327,7 @@ const SAMPLE_BODY = [
   // 요약 함수도 본문을 담지 않아야 한다
   const s = summarizeCommentSignals(toCommentSignals(
     [{ author: '홍길동', content: '저도 겪었어요 병원 다녀오세요' }],
-    { authorSalt: 's', capturedAt: new Date(0) },
+    { capturedAt: new Date(0) },
   ))
   const sj = JSON.stringify(s)
   if (sj.includes('겪었어요') || sj.includes('홍길동')) offenders.push('요약에 본문 · 닉네임')
