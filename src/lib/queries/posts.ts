@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { loadPostThreads } from '@/lib/queries/comment-threads'
 import { auth } from '@/lib/auth'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import {
@@ -312,49 +313,15 @@ export async function getPostDetail(postId: string) {
   })
   if (!post) return null
 
-  // 🔴 지워진 댓글도 읽는다. 여기서 빼면 그 아래 남의 답글까지 함께 사라진다.
-  const rows = await prisma.comment.findMany({
-    where: {
-      postId,
-      /**
-       * 🔴 authorId: { notIn } 만 쓰면 비회원 댓글이 통째로 사라진다.
-       *    SQL 의 NOT IN 은 NULL 에 대해 NULL(=거짓)을 돌려주므로
-       *    authorId 가 null 인 댓글은 조건을 통과하지 못한다.
-       *    차단한 사람이 한 명이라도 생기는 순간 조용히 없어지는 종류의 버그다.
-       *    "비회원 댓글은 보이고, 차단한 회원의 댓글만 빠진다" 를 그대로 적는다.
-       */
-      ...(blockedIds.length
-        ? { OR: [{ authorId: null }, { authorId: { notIn: blockedIds } }] }
-        : {}),
-    },
-    select: {
-      id: true,
-      content: true,
-      createdAt: true,
-      // 비회원 댓글은 author 가 null 이고 guestNickname 이 채워진다.
-      author: { select: { id: true, name: true, nickname: true, image: true } },
-      guestNickname: true,
-      likeCount: true,
-      parentId: true,
-      isDeleted: true,
-    },
-    orderBy: { createdAt: 'asc' },
+  const { threads, anomalies } = await loadPostThreads(prisma, {
+    postId,
+    postAuthorId: post.author.id,
+    blockedAuthorIds: blockedIds,
   })
-
-  // 🔴 답글을 부모 안에 묶는다. 나란히 두면 공감순 정렬 때 답글만 위로 올라간다.
-  const replyMap = new Map<string, typeof rows>()
-  for (const row of rows) {
-    if (!row.parentId || row.isDeleted) continue
-    const list = replyMap.get(row.parentId)
-    if (list) list.push(row)
-    else replyMap.set(row.parentId, [row])
+  if (anomalies.length > 0) {
+    // 🔴 화면은 깨뜨리지 않되 조용히 넘기지 않는다 — 관계가 어긋난 댓글은 스레드 시작점으로 섰다
+    console.error('[comment-thread] 관계 이상', { postId, anomalies })
   }
 
-  const comments = rows
-    .filter((row) => row.parentId === null)
-    // 지워진 부모는 살아 있는 답글이 있을 때만 자리를 남긴다
-    .filter((row) => !row.isDeleted || replyMap.has(row.id))
-    .map((row) => ({ ...row, replies: replyMap.get(row.id) ?? [] }))
-
-  return { post, comments }
+  return { post, threads }
 }

@@ -50,6 +50,7 @@ const { judgeCommentCall } = await import('./lib/persona-comment-call.mjs')
 const { appendLedgerLine, ledgerPathOf } = await import('./lib/llm-ledger-store.mjs')
 const { ledgerDateOf } = await import('../src/lib/llm-ledger')
 const { acquireLock, releaseLock } = await import('./lib/collect-lock.mjs')
+const { kstDayStart } = await import('../src/lib/persona-cap')
 type CommentGenerate = import('./lib/persona-comment-loop.mjs').CommentGenerate
 type TargetSource = import('./lib/persona-comment-targets').TargetSource
 
@@ -117,10 +118,17 @@ const TITLE = (n: number) => `요즘 밤마다 잠이 안 와요 ${n}`
 const BODY = (n: number) => `새벽 세 시만 되면 눈이 떠져서 다시 잠들기가 어렵네요. 다들 이런 밤 어떻게 보내세요? (${n})`
 async function post(author: { id: string; userId: string }, minutesAgo: number): Promise<string> {
   seq += 1
+  const now = new Date()
   const p = await prisma.post.create({
     data: {
       boardType: 'FREE', title: TITLE(seq), content: BODY(seq), status: 'PUBLISHED', source: 'SYSTEM',
-      authorId: author.userId, personaId: author.id, publishAt: new Date(Date.now() - minutesAgo * 60_000),
+      authorId: author.userId, personaId: author.id, publishAt: new Date(now.getTime() - minutesAgo * 60_000),
+      // 🔴 createdAt 을 1초 과거로 **명시**한다. 기본값으로 두면 TIMESTAMP(3) 반올림 때문에 방금 만든 글이
+      //    곧이어 도는 루프의 JS 기준 시각보다 최대 1ms 미래가 되어 "오늘의 관리형 글" 집계에서 빠진다
+      //    (열린 자리 0 → ⑧ 간헐 실패 · 2026-10-01 branch·origin/main 양쪽 재현). 글의 나이는 publishAt 이 정한다.
+      // 🔴 단 KST 당일 시작 아래로는 내리지 않는다 — 자정 직후 1초 안에 돌면 1초 전이 **전날**이 되어
+      //    같은 집계에서 빠진다(같은 ⑧ 실패의 반대쪽 경계). 당일 시작은 운영과 같은 kstDayStart 로 잰다.
+      createdAt: new Date(Math.max(kstDayStart(now).getTime(), now.getTime() - 1_000)),
     },
     select: { id: true },
   })

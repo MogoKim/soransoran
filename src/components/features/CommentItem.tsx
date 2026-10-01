@@ -1,44 +1,28 @@
 import { formatRelativeTime } from '@/lib/date'
-import { displayName } from '@/lib/display-name'
 import CommentEditor from '@/components/features/CommentEditor'
 import GuestCommentControls from '@/components/features/GuestCommentControls'
 import ReportButton from '@/components/features/ReportButton'
 import CommentLikeButton from '@/components/features/CommentLikeButton'
 import ReplyForm from '@/components/features/ReplyForm'
-import { GUEST_BADGE } from '@/lib/guest-comment-policy'
-import { DELETED_COMMENT } from '@/lib/comment-policy'
+import ReplyTargetLink from '@/components/features/ReplyTargetLink'
+import CommentBadges from '@/components/features/CommentBadges'
+import CommentIcon from '@/components/icons/CommentIcon'
+import { CommentStateBadge } from '@/components/features/ThreadNavProvider'
+import { BLOCKED_COMMENT, DELETED_COMMENT } from '@/lib/comment-policy'
+import { commentAnchorId, type CommentView } from '@/lib/comment-view'
 
-export type CommentItemData = {
-  id: string
-  content: string
-  createdAt: Date
-  /** 🔴 비회원 댓글은 null 이다. 이 자리를 non-null 로 두면 화면이 터진다. */
-  author: { id: string; name: string | null; nickname: string | null } | null
-  /** author 가 null 일 때 화면에 부를 이름 */
-  guestNickname?: string | null
-  likeCount: number
-  /** 지워진 부모는 자리만 남는다 — 아래 답글을 보여주기 위해서다 */
-  isDeleted?: boolean
-}
-
-export type CommentWithReplies = CommentItemData & { replies: CommentItemData[] }
-
-type CommentItemProps = {
-  comment: CommentItemData
-  boardSlug: string
-  postId: string
-  /** 비로그인이면 undefined */
-  currentUserId?: string
-  isLoggedIn: boolean
-  /** 이 사람이 이 댓글에 이미 공감했는가 */
-  isLiked: boolean
-  /** 부모 아래에 붙는 줄. 답글에는 답글을 달 수 없다 */
-  isReply?: boolean
-  /** 이 댓글에 달린 답글. 답글에는 없다 */
-  replies?: CommentItemData[]
-  /** 답글의 공감 여부를 부모가 함께 넘긴다 */
-  likedCommentIds?: Set<string>
-}
+/**
+ * 댓글 한 개 — 원댓글이든 답글이든 같은 컴포넌트다.
+ *
+ * 🔴 답글이면 맨 위에 "↳ 누구님에게 답글" 한 줄이 있다(직접 대상). 들여쓰기는 스레드가 한 단계로 고정한다.
+ * 🔴 살아 있는 댓글에는 모두 "답글" 이 있다 — 답글의 답글도 된다.
+ * 🔴 지운 · 차단한 회원의 댓글은 자리만 남는다(뒤에 살아 있는 대답이 있을 때만 여기 온다).
+ *    이름 · 본문 · 배지 · 조작을 하나도 내보내지 않는다 — comment-view 가 이미 비웠고, 여기서도 그리지 않는다.
+ *    대상 줄은 남긴다. 그 줄은 **다른** 댓글을 가리키므로 이 댓글의 정보를 되살리지 않는다.
+ * 🔴 수정 · 삭제 · 신고 · 공감 · 비회원 고치기는 기존 컴포넌트를 그대로 쓴다.
+ */
+const ARTICLE =
+  'scroll-mt-24 rounded-lg transition-colors duration-700 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 data-[flash=true]:bg-surface-soft'
 
 export default function CommentItem({
   comment,
@@ -47,46 +31,41 @@ export default function CommentItem({
   currentUserId,
   isLoggedIn,
   isLiked,
-  isReply = false,
-  replies = [],
-  likedCommentIds,
-}: CommentItemProps) {
-  /**
-   * 🔴 본인 판정은 회원 댓글에만 쓴다.
-   *    author 가 null 인 비회원 댓글에서 currentUserId 와 비교하면
-   *    둘 다 undefined 인 비로그인 방문자에게 남의 댓글이 "내 댓글" 로 열린다.
-   */
-  const isOwn = Boolean(comment.author && currentUserId === comment.author.id)
-  const isGuest = comment.author === null
+}: {
+  comment: CommentView
+  boardSlug: string
+  postId: string
+  /** 비로그인이면 undefined */
+  currentUserId?: string
+  isLoggedIn: boolean
+  /** 이 사람이 이 댓글에 이미 공감했는가 */
+  isLiked: boolean
+}) {
+  const replyLine = comment.replyTo ? <ReplyTargetLink fromId={comment.id} target={comment.replyTo} /> : null
 
-  /* 왼쪽 선이 "위 이야기에 딸린 말" 이라고 알려 준다. */
-  const replyList =
-    replies.length > 0 ? (
-      <ul className="m-0 mt-3 flex list-none flex-col gap-3 border-l-2 border-subtle p-0 pl-3">
-        {replies.map((reply) => (
-          <CommentItem
-            key={reply.id}
-            comment={reply}
-            boardSlug={boardSlug}
-            postId={postId}
-            currentUserId={currentUserId}
-            isLoggedIn={isLoggedIn}
-            isLiked={Boolean(likedCommentIds?.has(reply.id))}
-            isReply
-          />
-        ))}
-      </ul>
-    ) : null
-
-  /* 🔴 지워진 부모는 자리만 남는다 — 이름도 본문도 손잡이도 내보내지 않는다. */
-  if (comment.isDeleted) {
+  if (comment.state !== 'live') {
+    const text = comment.state === 'blocked' ? BLOCKED_COMMENT : DELETED_COMMENT
     return (
-      <li className="px-4 py-4">
-        <p className="m-0 text-sm italic text-content-muted">{DELETED_COMMENT}</p>
-        {replyList}
-      </li>
+      <article id={commentAnchorId(comment.id)} tabIndex={-1} aria-label={text} className={`${ARTICLE} py-1`}>
+        {replyLine}
+        <p className="m-0 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm italic text-content-muted">
+          <CommentIcon name={comment.state === 'blocked' ? 'blocked' : 'deleted'} />
+          <span>{text}</span>
+          <span className="text-meta not-italic">
+            <CommentStateBadge commentId={comment.id} />
+          </span>
+        </p>
+      </article>
     )
   }
+
+  /**
+   * 🔴 본인 판정은 회원 댓글에만 쓴다.
+   *    authorId 가 null 인 비회원 댓글에서 currentUserId 와 비교하면
+   *    둘 다 undefined 인 비로그인 방문자에게 남의 댓글이 "내 댓글" 로 열린다.
+   */
+  const isOwn = Boolean(comment.authorId && currentUserId === comment.authorId)
+  const name = comment.name ?? ''
 
   // 🔴 본문은 여기서 한 번만 그린다.
   //    본인 댓글은 이것을 CommentEditor 에 넘겨 읽기 모드로 쓰게 한다 —
@@ -104,33 +83,34 @@ export default function CommentItem({
           isLiked={isLiked}
           isLoggedIn={isLoggedIn}
         />
-        {/* 🔴 답글에는 답글 버튼이 없다 — 1단계까지만. 서버도 같은 규칙을 다시 본다. */}
-        {isReply ? null : (
-          <ReplyForm
-            postId={postId}
-            boardSlug={boardSlug}
-            parentId={comment.id}
-            isLoggedIn={isLoggedIn}
-          />
-        )}
+        <ReplyForm
+          postId={postId}
+          boardSlug={boardSlug}
+          parentId={comment.id}
+          isLoggedIn={isLoggedIn}
+          target={{ name, isPostAuthor: comment.isPostAuthor, isGuest: comment.isGuest, content: comment.content }}
+        />
       </div>
     </>
   )
 
+  const label = comment.replyTo
+    ? `${name}님의 답글. ${comment.replyTo.state === 'live' ? `${comment.replyTo.name}님에게` : comment.replyTo.state === 'blocked' ? '차단한 회원의 댓글에 대한 답글' : '삭제된 댓글에 대한 답글'}`
+    : `${name}님 댓글`
+
   return (
-    /* 면과 구분선은 목록이 진다 — 이 줄은 여백만 갖는다. */
-    <li className={isReply ? 'py-1' : 'px-4 py-4'}>
+    <article id={commentAnchorId(comment.id)} tabIndex={-1} aria-label={label} className={ARTICLE}>
+      {replyLine}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-content-muted">
-        <span className="font-bold text-brand-strong">
-          {comment.author ? displayName(comment.author) : (comment.guestNickname ?? '비회원')}
+        {/* 🔴 작성자 이름은 자르지 않는다. 길면 이름 전체가 줄을 바꾼다 */}
+        <span className="min-w-0 break-keep font-bold text-brand-strong [overflow-wrap:anywhere]">{name}</span>
+        <CommentBadges isPostAuthor={comment.isPostAuthor} isGuest={comment.isGuest} />
+        {/* "· 시간" 은 한 덩어리 — 줄이 바뀌어도 점이 앞줄 끝에 매달리지 않는다 */}
+        <span className="inline-flex gap-2 whitespace-nowrap">
+          <span aria-hidden>·</span>
+          <span>{formatRelativeTime(comment.createdAt)}</span>
         </span>
-        {isGuest ? (
-          <span className="rounded bg-surface-page px-1.5 py-0.5 text-content-muted">
-            {GUEST_BADGE}
-          </span>
-        ) : null}
-        <span aria-hidden>·</span>
-        <span>{formatRelativeTime(comment.createdAt)}</span>
+        <CommentStateBadge commentId={comment.id} />
       </div>
 
       {isOwn ? (
@@ -142,15 +122,11 @@ export default function CommentItem({
         >
           {body}
         </CommentEditor>
-      ) : isGuest ? (
+      ) : comment.isGuest ? (
         <>
           {body}
           {/* 비회원 댓글은 비밀번호로 고치고 지운다. 신고는 1차 범위가 아니다. */}
-          <GuestCommentControls
-            commentId={comment.id}
-            boardSlug={boardSlug}
-            content={comment.content}
-          />
+          <GuestCommentControls commentId={comment.id} boardSlug={boardSlug} content={comment.content} />
         </>
       ) : (
         <>
@@ -163,8 +139,6 @@ export default function CommentItem({
           ) : null}
         </>
       )}
-
-      {replyList}
-    </li>
+    </article>
   )
 }

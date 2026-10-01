@@ -4,7 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
-import { resolveReplyTarget } from '@/lib/reply-target'
+import { writeComment } from '@/lib/comment-write'
+import { toPublishState, type CommentPublishState } from '@/lib/comment-publish'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
 import { requireOnboarded } from '@/lib/onboarding-guard'
@@ -16,7 +17,6 @@ import {
   COMMENT_NOT_FOUND,
 } from '@/lib/comment-policy'
 import { POST_NOT_FOUND } from '@/lib/post-policy'
-import { syncBestEligibility } from '@/lib/best-ranking-db'
 
 /** 댓글: 사용자당 5분에 10건 */
 const COMMENT_LIMIT = 10
@@ -27,7 +27,7 @@ const COMMENT_WINDOW_MS = 5 * 60 * 1000
  *    지금 화면들은 error 만 읽는다. 필수로 두면 기존 반환 경로가 전부 깨진다.
  *    O3-B 에서 화면이 이 값으로 온보딩 안내를 띄울지 정한다.
  */
-export type CommentActionState = { error?: string; ok?: true; needsOnboarding?: true }
+export type CommentActionState = CommentPublishState & { needsOnboarding?: true }
 
 /**
  * 댓글 작성
@@ -64,29 +64,20 @@ export async function createComment(
   const limited = checkActionRateLimit('comment', userId, COMMENT_LIMIT, COMMENT_WINDOW_MS)
   if (!limited.ok) return { error: retryMessage(limited.retryAfterSec) }
 
-  const post = await prisma.post.findFirst({
-    where: { id: postId, status: 'PUBLISHED' },
-    select: { id: true },
+  // 글 상태 · 답글 대상 · 중복 · 저장을 한 트랜잭션에서 — 비회원 경로와 같은 함수다
+  const saved = await writeComment(prisma, {
+    postId,
+    rawParentId: String(formData.get('parentId') ?? ''),
+    content,
+    author: { kind: 'member', userId },
   })
-  if (!post) return { error: POST_NOT_FOUND }
-
-  // 답글이면 상대를 확인한다 — depth 2 와 지워진 댓글은 여기서 끊는다
-  const target = await resolveReplyTarget(String(formData.get('parentId') ?? ''), postId)
-  if (!target.ok) return { error: target.error }
-
-  // /best 자격(W · 최초 입성)을 댓글과 같은 트랜잭션에 둔다 — 댓글만 남고 입성이 빠지는 일이 없다.
-  await prisma.$transaction(async (tx) => {
-    await tx.comment.create({
-      data: { postId, authorId: userId, content, source: 'USER', parentId: target.parentId },
-      select: { id: true },
-    })
-    await syncBestEligibility(tx, postId)
-  })
+  if (!saved.ok) return toPublishState(saved)
 
   const board = getBoardBySlug(boardSlug)
   if (board) revalidatePath(`${board.href}/${postId}`)
 
-  return { ok: true }
+  // 중복이면 duplicate 가 함께 간다 — 화면은 그 댓글로 이동하되 새 등록으로 세지 않는다
+  return toPublishState(saved)
 }
 
 /** 댓글 수정: 사용자당 5분에 20건 */

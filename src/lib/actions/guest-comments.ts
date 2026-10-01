@@ -7,7 +7,9 @@ import { getBoardBySlug } from '@/lib/board-registry'
 import { checkRateLimit, getClientIp, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
 import { verifyTurnstile } from '@/lib/turnstile'
-import { resolveReplyTarget } from '@/lib/reply-target'
+import { writeComment } from '@/lib/comment-write'
+import { toPublishState, type CommentPublishState } from '@/lib/comment-publish'
+import { checkGuestCredential, type VerifiedGuestComment } from '@/lib/guest-credential'
 import {
   MIN_COMMENT_LENGTH,
   MAX_COMMENT_LENGTH,
@@ -20,15 +22,9 @@ import {
   GUEST_NICKNAME_MIN,
   GUEST_NICKNAME_MAX,
   GUEST_PASSWORD_PATTERN,
-  GUEST_PASSWORD_MAX_ATTEMPTS,
-  GUEST_LOCK_MS,
   GUEST_NICKNAME_INVALID,
   GUEST_PASSWORD_INVALID,
   GUEST_NICKNAME_TAKEN,
-  GUEST_PASSWORD_WRONG,
-  GUEST_LOCKED,
-  GUEST_NOT_FOUND,
-  GUEST_ONLY,
 } from '@/lib/guest-comment-policy'
 
 /**
@@ -49,7 +45,8 @@ import {
  *    그래서 회원 경로와 마찬가지로 Post 를 건드리지 않는다.
  */
 
-export type GuestCommentState = { error?: string; ok?: true }
+/** 회원 경로와 같은 결과 모양이다(comment-publish.ts) — 고치기·지우기는 error/ok 만 쓴다 */
+export type GuestCommentState = CommentPublishState
 
 /** 비회원 댓글: IP 당 5분에 5건. 회원(10건)보다 좁게 둔다. */
 const GUEST_COMMENT_LIMIT = 5
@@ -121,55 +118,40 @@ export async function createGuestComment(
   })
   if (taken) return { error: GUEST_NICKNAME_TAKEN }
 
+  // 🔴 해시 전에 한 번 거른다 — 없는 글에 bcrypt 비용을 쓰지 않는다. 최종 확인은 저장 트랜잭션이 다시 한다.
   const post = await prisma.post.findFirst({
     where: { id: postId, status: 'PUBLISHED' },
     select: { id: true },
   })
   if (!post) return { error: POST_NOT_FOUND }
 
-  // 답글이면 상대를 확인한다 — 회원 경로와 같은 함수를 쓴다
-  const target = await resolveReplyTarget(String(formData.get('parentId') ?? ''), postId)
-  if (!target.ok) return { error: target.error }
-
   const guestPasswordHash = await bcrypt.hash(password, 10)
 
-  // /best 자격(W · 최초 입성)을 댓글과 같은 트랜잭션에 둔다. 봇 검증·IP 제한·비밀번호 해시는 모두 이 앞에서 끝났다.
-  await prisma.$transaction(async (tx) => {
-    await tx.comment.create({
-      data: {
-        postId,
-        authorId: null,
-        content,
-        source: 'USER',
-        commentOrigin: 'GUEST',
-        guestNickname: nickname,
-        guestPasswordHash,
-        parentId: target.parentId,
-      },
-      select: { id: true },
-    })
-    await syncBestEligibility(tx, postId)
+  // 글 상태 · 답글 대상 · 중복 · 저장을 한 트랜잭션에서 — 회원 경로와 같은 함수다.
+  // 봇 검증·IP 제한·비밀번호 해시는 모두 이 앞에서 끝났다.
+  const saved = await writeComment(prisma, {
+    postId,
+    rawParentId: String(formData.get('parentId') ?? ''),
+    content,
+    author: { kind: 'guest', nickname, password, passwordHash: guestPasswordHash },
   })
+  if (!saved.ok) return toPublishState(saved)
 
   revalidateBoardPost(boardSlug, postId)
-  return { ok: true }
+  // 중복이면 duplicate 가 함께 간다 — 화면은 그 댓글로 이동하되 새 등록으로 세지 않는다
+  return toPublishState(saved)
 }
 
 /**
  * 비밀번호 확인 — 맞으면 댓글을 돌려준다.
  *
- * 🔴 회원 댓글에는 쓰지 않는다. authorId 가 있으면 거절한다 —
- *    비밀번호가 비어 있는 회원 댓글을 이 경로로 건드릴 수 없게 한다.
- *
- * 🔴 실패 횟수는 댓글 행에 쌓는다. 3회면 1분 잠근다.
- *    잠금 중에는 bcrypt.compare 자체를 하지 않는다 — 연산 비용도 공격 표면이다.
+ * 🔴 IP 속도 제한만 여기서 한다(요청 헤더가 필요하다). 회원 댓글 거절 · 실패 횟수 · 1분 잠금 ·
+ *    번호 대조는 guest-credential.ts 의 checkGuestCredential 이 한다.
  */
-type VerifiedComment = { postId: string; boardType: string }
-
 async function verifyGuestPassword(
   commentId: string,
   password: string,
-): Promise<{ ok: true; comment: VerifiedComment } | { ok: false; error: string }> {
+): Promise<{ ok: true; comment: VerifiedGuestComment } | { ok: false; error: string }> {
   const ip = getClientIp()
   if (ip !== 'unknown') {
     const limited = checkRateLimit(
@@ -179,54 +161,8 @@ async function verifyGuestPassword(
     )
     if (!limited.ok) return { ok: false, error: retryMessage(limited.retryAfterSec) }
   }
-
-  const comment = await prisma.comment.findUnique({
-    where: { id: commentId },
-    select: {
-      id: true,
-      authorId: true,
-      isDeleted: true,
-      postId: true,
-      guestPasswordHash: true,
-      guestPasswordAttempts: true,
-      guestLockedUntil: true,
-      post: { select: { status: true, boardType: true } },
-    },
-  })
-
-  if (!comment || comment.isDeleted) return { ok: false, error: GUEST_NOT_FOUND }
-  if (comment.authorId) return { ok: false, error: GUEST_ONLY }
-  if (!comment.guestPasswordHash) return { ok: false, error: GUEST_ONLY }
-  // 글이 내려간 뒤에는 댓글도 손대지 않는다. 읽을 수 없는 자리에 글자만 바뀐다.
-  if (comment.post.status !== 'PUBLISHED') return { ok: false, error: GUEST_NOT_FOUND }
-
-  if (comment.guestLockedUntil && comment.guestLockedUntil > new Date()) {
-    return { ok: false, error: GUEST_LOCKED }
-  }
-
-  const matched = await bcrypt.compare(password, comment.guestPasswordHash)
-
-  if (!matched) {
-    const attempts = comment.guestPasswordAttempts + 1
-    const locked = attempts >= GUEST_PASSWORD_MAX_ATTEMPTS
-    await prisma.comment.update({
-      where: { id: commentId },
-      data: {
-        guestPasswordAttempts: locked ? 0 : attempts,
-        guestLockedUntil: locked ? new Date(Date.now() + GUEST_LOCK_MS) : null,
-      },
-    })
-    return { ok: false, error: locked ? GUEST_LOCKED : GUEST_PASSWORD_WRONG }
-  }
-
-  if (comment.guestPasswordAttempts > 0 || comment.guestLockedUntil) {
-    await prisma.comment.update({
-      where: { id: commentId },
-      data: { guestPasswordAttempts: 0, guestLockedUntil: null },
-    })
-  }
-
-  return { ok: true, comment: { postId: comment.postId, boardType: comment.post.boardType } }
+  // 번호 대조 · 실패 횟수 · 잠금은 guest-credential.ts 가 한다(격리 DB 검사가 같은 함수를 부른다)
+  return checkGuestCredential(prisma, commentId, password)
 }
 
 export async function updateGuestComment(
