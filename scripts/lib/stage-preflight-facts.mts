@@ -177,6 +177,30 @@ export function latestOpportunities(dataDir: string, nowMs: number): { evidence:
 }
 
 /**
+ * 🔴 **기회 스냅샷 → 슬롯 기회** — 순수. 스냅샷의 증거 기록마다 정본 판정(생성 전 모드 · 참여 동력 · 배정 `pending`)을
+ *    그 슬롯 시각에 부른다. 이미 큐에 있는 원천(증거 해시)은 뺀다. 읽지 못하는 기록은 기회가 아니다.
+ */
+export function sourceOpportunitiesOf(
+  evidence: readonly unknown[], queuedHashes: ReadonlySet<string>, now: Date,
+): SlotOpportunity[] {
+  const out: SlotOpportunity[] = []
+  for (const [k, ev] of evidence.entries()) {
+    const read = readSourceEvidence({ sourceEvidence: ev })
+    if (!read.ok) continue
+    const h = read.record.provenance.articleIdHash
+    if (h !== null && queuedHashes.has(h)) continue
+    out.push({
+      key: `src:${h ?? k}`,
+      validAt: (slotAt) => judgeSlotRelease({
+        evidence: ev, slotAt, now, hardGates: { ok: true, codes: [] },
+        assignment: 'pending', driver: 'pending', tieBreak: String(k),
+      }).verdict === 'eligible',
+    })
+  }
+  return out
+}
+
+/**
  * 🔴 **증명일 기회 수** — 순수. READY 기회를 먼저 짝짓고, 남은 슬롯을 원천 기회로 채운 뒤 **측정 수율로 할인**한다.
  *    원천 기회는 초안 전이라 참여 동력 · 배정이 아직 없다(`pending`) — 같은 정본 판정의 생성 전 모드다.
  *    수율을 모르면 원천 기회는 세지 않는다(READY 만 — 과대평가 금지).
@@ -290,20 +314,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     const ev = readSourceEvidence(r.gateResults)
     return ev.ok ? ev.record.provenance.articleIdHash : null
   }).filter((h): h is string => h !== null))
-  const sourceOpps: SlotOpportunity[] = []
-  for (const [k, ev] of snap.evidence.entries()) {
-    const read = readSourceEvidence({ sourceEvidence: ev })
-    if (!read.ok) continue
-    const h = read.record.provenance.articleIdHash
-    if (h !== null && queuedHashes.has(h)) continue
-    sourceOpps.push({
-      key: `src:${h ?? k}`,
-      validAt: (slotAt) => judgeSlotRelease({
-        evidence: ev, slotAt, now: i.now, hardGates: { ok: true, codes: [] },
-        assignment: 'pending', driver: 'pending', tieBreak: String(k),
-      }).verdict === 'eligible',
-    })
-  }
+  const sourceOpps = sourceOpportunitiesOf(snap.evidence, queuedHashes, i.now)
   const opp = slotValidOpportunitiesOf({ slots: i.proofSlots, ready: readyOpps, sources: sourceOpps, readyPerSource })
 
   // 지연 — 지금 계약 도장으로 나간 글 · 원천 게시 → 공개

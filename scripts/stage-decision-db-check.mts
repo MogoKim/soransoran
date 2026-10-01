@@ -511,6 +511,11 @@ async function main(): Promise<void> {
       check('🔴 🔴 **원천 40 · 수율 0.1 → 기대 READY 4 → d3 슬롯 3 전부 (앞판 floor(3×0.1) = 0)**',
         r40.facts.slotValidOpportunities === 3 && r40.detail.sourceValid === 40 && r40.detail.sourceExpected === 3,
         JSON.stringify(r40.detail))
+      snapshot(30)
+      const r30 = await facts()
+      check('🔴 🔴 **실제 가용 원천 30 · 수율 0.1 → d3 기회 3**',
+        r30.facts.slotValidOpportunities === 3 && r30.detail.sourceValid === 30 && r30.detail.sourceExpected === 3,
+        JSON.stringify(r30.detail))
       snapshot(5)
       const r5 = await facts()
       check('🔴 과대평가 금지 — 원천 5 · 수율 0.1 → floor(0.5) = 0',
