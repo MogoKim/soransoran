@@ -605,7 +605,7 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
     }),
     controllerOn: true, by: 'publish',
   })
-  check('🔴 🔴 **그때 consumer 는 fail-closed 로 간다 (legacy/가장 안전한 단계)**',
+  check('🔴 🔴 **그때 consumer 는 fail-closed 로 간다 (가장 안전한 단계 d1)**',
     !consumed.ok && consumed.code === 'BROKEN' && consumed.fallback === 'safest',
     JSON.stringify(consumed))
   check('🔴 🔴 **제안 모델이 kstDate 를 기본키로 둔다 — DB 가 하루 하나를 강제한다**', (() => {
@@ -996,6 +996,19 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
       && !keys.some((k) => FORBIDDEN.includes(k) || /CANARY|WINDOW/.test(k))
       && !/process\.env/.test(code)
       && !FORBIDDEN.some((k) => code.includes(k)) && !/\b(RELEASE_ENV|CAPACITY_ENV)\b/.test(code)
+  })())
+  /**
+   * 🔴 **OFF 를 옛 경로로 안내하는 운영 문구가 다시 들어오지 않는다** (2026-10-01 마스터 보정).
+   *    controller 로그가 "러너는 롤백 env 경로로 돈다" 고 말했다 — 동작(d1 감속)과 반대다.
+   *    운영 코드 · 롤백 runbook · 스케줄 검사 머리말을 본다. "돌아갔다"(역사)·"돌아가지 않는다"는 걸리지 않는다.
+   */
+  check('🔴 🔴 **OFF 를 옛 env/canary 경로로 안내하는 문구 0 · controller OFF 로그는 d1 감속을 말한다**', (() => {
+    const WRONG = /롤백 env 경로|env\/canary 경로로 (그대로 )?돌아간다|legacy\/가장 안전|consumer legacy\(아무것도/
+    const files = [...PRODUCTION_FILES, 'scripts/stage-scheduler-check.mts', 'prisma/migrations/0028_stage_decision/APPLY.md']
+    const offLog = readFileSync('scripts/stage-controller.mts', 'utf-8')
+      .split('\n').find((l) => l.includes('가 on 이 아니다 — 저장하지 않는다')) ?? ''
+    return files.every((f) => !WRONG.test(readFileSync(f, 'utf-8')))
+      && /가장 안전한 d1 로 감속/.test(offLog) && !/롤백/.test(offLog)
   })())
   /**
    * ── 🔴 **비밀값을 찍지 않는다** (2026-09-25 마스터 지적) ──
