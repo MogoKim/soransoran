@@ -122,7 +122,8 @@ export function judgeAutogenCandidate(
     if (c.voice.seedShareCount === null) add('VOICE_SPEAKER_DUPLICATE', '묶음 공유 수를 세지 못했다')
     else if (c.voice.seedShareCount > 1) add('VOICE_SPEAKER_DUPLICATE', `같은 댓글이 ${c.voice.seedShareCount}개 묶음에 있다`)
     voiceCore = voiceCoreFromBundle(c.voice.bundle)
-    voiceTokens = [voiceCore.length, voiceCore.register, `"${voiceCore.ending}" 기본`, `이모티콘 ${voiceCore.emoji}`]
+    // 🔴 따옴표 말끝 토큰을 만들지 않는다 — 관측에서 고정 말끝을 합성하지 않는다(Phase F 보정)
+    voiceTokens = [voiceCore.length, voiceCore.register, `이모티콘 ${voiceCore.emoji}`]
     if (readLengthBand(voiceCore.length) === null) add('VOICE_LENGTH_UNREADABLE', voiceCore.length)
   }
 

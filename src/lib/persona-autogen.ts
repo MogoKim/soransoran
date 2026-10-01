@@ -389,15 +389,17 @@ export const AUTOGEN_FORBIDDEN_ROLES: readonly string[] = ['advice', 'caution', 
  *    length   묶음 중앙 길이 — ≤25자 `짧은 문장` · ≤70자 `중간 길이` · 그 위 `길게`
  *             (🔴 `readLengthBand` 가 읽는 표현만 쓴다)
  *    register `요` 로 끝나는 비율 ≥ 0.5 → `존댓말`, 아니면 `구어체`
- *    ending   같은 비율로 `~요` / `말끝 짧게`
+ *    ending   🔴 **만들지 않는다**(Phase F 보정) — 고정 말끝은 카드가 따옴표로 명시할 때만 존재한다.
+ *             관측 비율에서 `~요` · `말끝 짧게` 를 합성하던 옛 경로를 지웠다(새 근거 생성 금지)
  *    emoji    자모 웃음·꾸밈 비율 > 0.3 → `가끔`, 아니면 `없음`
  */
 export const VOICE_LENGTH_SHORT_MAX = 25
 export const VOICE_LENGTH_MEDIUM_MAX = 70
 
-export function voiceCoreFromBundle(b: VoiceReferenceBundle): {
-  length: string; register: string; ending: string; emoji: string
-} {
+/** 🔴 seed 의 voiceCore — `ending` 은 **선택형**이다. 카드가 명시한 말끝이 있을 때만 들어간다 */
+export type SeedVoiceCore = { length: string; register: string; ending?: string; emoji: string }
+
+export function voiceCoreFromBundle(b: VoiceReferenceBundle): SeedVoiceCore {
   // 🔴 묶음의 문체 좌표 — style-only 관측까지 반영한 관찰값이다(원문은 안전 댓글뿐)
   const c = b.style
   const med = b.lengths.median
@@ -406,7 +408,6 @@ export function voiceCoreFromBundle(b: VoiceReferenceBundle): {
   return {
     length,
     register: polite ? '존댓말' : '구어체',
-    ending: polite ? '~요' : '말끝 짧게',
     emoji: c.jamo + c.deco > 0.3 ? '가끔' : '없음',
   }
 }
@@ -473,7 +474,7 @@ export function renderPoolCardBlock(input: {
 export function seedFromCard(input: {
   card: PoolCard
   life: LifeSkeleton
-  voiceCore: { length: string; register: string; ending: string; emoji: string }
+  voiceCore: SeedVoiceCore
   variations: readonly string[]
   cadence: Cadence
 }): Record<string, unknown> {

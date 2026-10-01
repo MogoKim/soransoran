@@ -98,8 +98,10 @@ console.log('\n② provider payload — 안전 예시만')
   check('🔴 묶음 타입에 화자 · 원글 자리가 없다(텍스트 · 숫자만)', plan.bundles.every((b) =>
     Object.keys(b).sort().join(',') === 'anchorCount,anchorRatio,comments,lengths,observedCount,personaCode,style,styleOnlyCount,supplementCount'
     && b.comments.every((c) => Object.keys(c).join(',') === 'text')))
-  const allow = planBundles({ rows: ROWS, personaCodes: ['P01', 'P02', 'P03', 'P04', 'P05'], allowExperience: true })
-  check('allowExperience=true 일 때만 경험형 원문이 실린다(기본 false)', allow.bundles.some((b) => b.comments.some((c) => expTexts.includes(c.text))))
+  // 🔴 경험형 원문을 싣는 escape hatch 가 없다 — 옵션 · 분기 자체가 소스에 없다
+  const storeSrc = readFileSync('scripts/lib/persona-reference-store.mts', 'utf-8')
+  check('🔴 escape hatch 0 — reference-store 에 allowExperience 가 없다', !/allowExperience/.test(storeSrc))
+  check('🔴 경험형 분기는 무조건 style-only — `const exp = carriesExperience(r.text)`', /const exp = carriesExperience\(r\.text\)\n/.test(storeSrc))
 }
 
 /** 🔴 옛 판(경험형을 먼저 지우고 안전 3건 이상만 후보) 그대로 — 같은 키로 정렬 */

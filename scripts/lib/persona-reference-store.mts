@@ -325,8 +325,6 @@ export function planBundles(input: {
   rows: readonly LocalComment[]
   personaCodes: readonly string[]
   target?: number
-  /** 🔴 경험형 참고 댓글을 **원문으로** 줘도 되는가. 기본은 `false` — 모르면 주지 않는다 */
-  allowExperience?: boolean
 }): BundlePlan {
   const cap = input.target ?? BUNDLE_MAX
   const blocks: string[] = []
@@ -337,7 +335,8 @@ export function planBundles(input: {
   for (const r of input.rows) {
     if (r.speakerId === '') continue
     const cur = bySpeaker.get(r.speakerId) ?? { send: [], styleOnly: [] }
-    const exp = input.allowExperience !== true && carriesExperience(r.text)
+    // 🔴 경험형은 **언제나** style-only 다 — 원문으로 싣는 옵션 · 분기가 없다(Phase F 보정)
+    const exp = carriesExperience(r.text)
     const into = exp ? cur.styleOnly : cur.send
     if (!cur.send.includes(r.text) && !cur.styleOnly.includes(r.text)) {
       into.push(r.text)
@@ -489,8 +488,6 @@ export function bundlesForPersonas(input: {
   repoRoot: string
   personaCodes: readonly string[]
   target?: number
-  /** 🔴 남겨 둔다 — 경험 근거가 있는 Persona 용 (현재 정본 배정은 안전한 것만 쓴다) */
-  allowExperience?: boolean
 }): {
   byCode: Map<string, VoiceReferenceBundle>
   assets: ReferenceAssetReport[]

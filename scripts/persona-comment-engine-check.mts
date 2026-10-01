@@ -1007,14 +1007,13 @@ console.log('⑤-b 🔴 Wave E — 말투 근거 · 무효 회차 · manifest ·
       ...Array.from({ length: 6 }, (_, i) => ({ speakerId: 'aaaaaaaaaaaa', text: `저도 작년에 그거 겪었어요 ${i}` })),
       ...Array.from({ length: 20 }, (_, i) => ({ speakerId: `cccccccccc${String(i).padStart(2, '0')}`, text: `보완 문장 ${i} 그렇군요` })),
     ]
-    const safe = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: false })
+    const safe = planBundles({ rows, personaCodes: ['P1'], target: 8 })
     const safeTexts = safe.bundles.flatMap((b) => b.comments.map((c) => c.text))
     check(`🔴 경험 근거 없으면 경험형 0건 (${safeTexts.filter(carriesExperience).length}건)`,
       safeTexts.length > 0 && safeTexts.every((t) => !carriesExperience(t)))
     check('🔴 제외했다고 소리 내어 말한다', safe.blocks.some((b) => b.includes('경험형 참고 댓글')))
-    const rich = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: true })
-    check('🟢 근거가 있으면 경험형도 받을 수 있다',
-      rich.bundles.flatMap((b) => b.comments.map((c) => c.text)).some(carriesExperience))
+    check('🔴 경험형은 style-only 관측으로만 센다(원문 0 · 관측에는 들어간다)',
+      safe.bundles.every((b) => b.styleOnlyCount > 0 && b.observedCount === b.comments.length + b.styleOnlyCount))
   }
 
   // ── P0-1 🔴 역할과 무관하게 근거 없는 자기 경험을 막는다 ──
