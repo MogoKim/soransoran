@@ -20,8 +20,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import {
-  judgeReferenceBundle, styleCentroid, styleDistance, styleOf,
-  REFERENCE_MAX_CHARS, REFERENCE_MIN_CHARS,
+  judgeReferenceBundle, judgeVoiceEvidence,
+  REFERENCE_MAX_CHARS, REFERENCE_MIN_CHARS, REFERENCE_MIN_COUNT, REFERENCE_MIN_SAFE_TEXTS,
   type VoiceReferenceBundle,
 } from '../../src/lib/persona-voice-reference'
 import {
@@ -272,8 +272,11 @@ export function loadLocalComments(repoRoot: string): {
   return { rows, assets }
 }
 
-/** 🔴 한 묶음이 "한 사람의 말투" 라고 불리려면 anchor 가 이만큼은 있어야 한다 */
-export const ANCHOR_MIN_COMMENTS = 3
+/**
+ * 🔴 한 묶음이 "한 사람의 말투" 라고 불리려면 **같은 화자의 관측**이 이만큼은 있어야 한다.
+ *    판정은 `judgeVoiceEvidence` 하나다 — 관측 3건 이상 · 그중 안전 원문 2건 이상.
+ */
+export const ANCHOR_MIN_COMMENTS = REFERENCE_MIN_COUNT
 /**
  * 🔴 묶음 **상한**. 목표가 아니다 — 이보다 적어도 된다.
  *
@@ -290,7 +293,12 @@ export type BundlePlan = {
   /** 🔴 사람이 볼 수 있게 남기는 근거 — 🔴 작성자 식별자는 담지 않는다 */
   table: {
     personaCode: string
+    /** 🔴 같은 화자의 **관측 총수**(style-only 포함) — 계약의 말투 근거 수다 */
     anchorComments: number
+    /** provider 로 원문을 싣는 안전 댓글 수 */
+    safeTexts: number
+    /** 경험형이라 원문 없이 문체·길이에만 쓴 관측 수 */
+    styleOnly: number
     supplements: number
     /** 🔴 언제나 1.0 이다 — 한 묶음은 한 화자뿐이다 */
     anchorRatio: number
@@ -301,55 +309,58 @@ export type BundlePlan = {
 }
 
 /**
- * 🔴 **anchor 작성자 + 문체가 가까운 댓글**로 묶는다.
+ * 🔴 **한 화자 = 한 묶음 = 한 Persona.**
  *
- *    ① 작성자별로 묶어 `ANCHOR_MIN_COMMENTS` 이상 가진 사람만 anchor 후보로 둔다.
- *    ② 많이 가진 순으로 Persona 에 하나씩 배정한다(재현되도록 동수는 이름순).
- *    ③ anchor 댓글로 **문체 좌표 중심**을 낸다.
- *    ④ 아직 아무 묶음도 쓰지 않은 댓글 중 그 중심에 **가장 가까운 것**으로
- *       `BUNDLE_TARGET` 까지 채운다. 같은 댓글을 두 묶음이 쓰지 않는다.
- *    ⑤ anchor 비중이 `ANCHOR_MIN_RATIO` 미만이면 **그 묶음을 만들지 않는다.**
+ *    ① 화자별로 **모든 관측**을 모으고, 그중 경험형이 아닌 **안전 댓글**을 따로 센다.
+ *    ② `judgeVoiceEvidence`(관측 ≥ 3 · 안전 원문 ≥ 2)를 통과한 화자만 후보다.
+ *    ③ 안전 원문이 많은 순 · 동수는 화자 id 순으로 Persona 에 하나씩 배정한다 —
+ *       🔴 이 정렬은 옛 판(안전 3건 이상만 후보)과 같은 키다. 그래서 그때 서 있던 18명의 배정은
+ *       **그대로**이고, 새로 서는 화자(안전 2건)는 그 뒤에 붙는다.
+ *    ④ provider 로 나가는 원문(`comments`)은 **안전 댓글뿐**이다. 경험형은 `styleOnlyTexts` 로
+ *       관측 수 · 문체 좌표 · 길이 분포에만 들어간다 — 그 사람의 장면·사실이 실리지 않는다.
  *
- * 🔴 Persona 수만큼 anchor 가 없으면 **억지로 채우지 않고 blocker 를 낸다.**
+ * 🔴 Persona 수만큼 화자가 없으면 **억지로 채우지 않고 blocker 를 낸다.**
  */
 export function planBundles(input: {
   rows: readonly LocalComment[]
   personaCodes: readonly string[]
   target?: number
-  /** 🔴 경험형 참고 댓글을 줘도 되는가. 기본은 `false` — 모르면 주지 않는다 */
+  /** 🔴 경험형 참고 댓글을 **원문으로** 줘도 되는가. 기본은 `false` — 모르면 주지 않는다 */
   allowExperience?: boolean
 }): BundlePlan {
   const cap = input.target ?? BUNDLE_MAX
   const blocks: string[] = []
-  const rowsIn = input.allowExperience === true
-    ? input.rows
-    : input.rows.filter((r) => !carriesExperience(r.text))
-  const excluded = input.rows.length - rowsIn.length
-  if (excluded > 0) {
-    blocks.push(`🟡 경험형 참고 댓글 ${excluded}건 제외 — 경험 근거 없는 Persona 용`)
-  }
 
-  // ── 화자별로 묶는다 ──
-  const bySpeaker = new Map<string, string[]>()
-  for (const r of rowsIn) {
+  // ── 화자별로 묶는다 — 원문 후보(안전)와 style-only(경험형)를 가른다 ──
+  const bySpeaker = new Map<string, { send: string[]; styleOnly: string[] }>()
+  let excluded = 0
+  for (const r of input.rows) {
     if (r.speakerId === '') continue
-    const cur = bySpeaker.get(r.speakerId) ?? []
-    if (!cur.includes(r.text)) cur.push(r.text)
+    const cur = bySpeaker.get(r.speakerId) ?? { send: [], styleOnly: [] }
+    const exp = input.allowExperience !== true && carriesExperience(r.text)
+    const into = exp ? cur.styleOnly : cur.send
+    if (!cur.send.includes(r.text) && !cur.styleOnly.includes(r.text)) {
+      into.push(r.text)
+      if (exp) excluded += 1
+    }
     bySpeaker.set(r.speakerId, cur)
   }
+  if (excluded > 0) {
+    blocks.push(`🟡 경험형 참고 댓글 ${excluded}건은 원문 제외 — 같은 화자의 문체·길이 관측(style-only)으로만 쓴다`)
+  }
   /**
-   * 🔴 많이 가진 순 · 동수는 화자 id 순 — 순서를 고정해야 다시 돌려도 같은 배정이 나온다.
-   * 🔴 `ANCHOR_MIN_COMMENTS` 미만은 아예 후보가 아니다.
+   * 🔴 안전 원문이 많은 순 · 동수는 화자 id 순 — 순서를 고정해야 다시 돌려도 같은 배정이 나온다.
+   * 🔴 `judgeVoiceEvidence` 를 통과하지 못한 화자는 아예 후보가 아니다.
    */
   const speakers = [...bySpeaker.entries()]
-    .filter(([, ts]) => ts.length >= ANCHOR_MIN_COMMENTS)
-    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .filter(([, s]) => judgeVoiceEvidence({ observed: s.send.length + s.styleOnly.length, safeTexts: s.send.length }).ok)
+    .sort((a, b) => b[1].send.length - a[1].send.length || a[0].localeCompare(b[0]))
 
   const codes = [...new Set(input.personaCodes)].sort()
   if (speakers.length < codes.length) {
     blocks.push(
       `화자가 ${speakers.length}명뿐이다 — Persona ${codes.length}종을 채울 수 없다`
-      + ` (기준 ${ANCHOR_MIN_COMMENTS}건 이상)`,
+      + ` (기준 관측 ${REFERENCE_MIN_COUNT}건 · 안전 원문 ${REFERENCE_MIN_SAFE_TEXTS}건 이상)`,
     )
   }
 
@@ -357,22 +368,25 @@ export function planBundles(input: {
   const table: BundlePlan['table'] = []
   for (let i = 0; i < Math.min(codes.length, speakers.length); i += 1) {
     const code = codes[i]!
+    const s = speakers[i]![1]
     /**
-     * 🔴 **이 화자의 댓글만.** 다른 화자에서 가져오지 않는다.
+     * 🔴 **이 화자의 안전 댓글만** 원문으로 싣는다. 다른 화자에서 가져오지 않는다.
      *    길이순으로 세워 고르게 집어 짧은 것만 모이지 않게 한다.
      */
-    const own = speakers[i]![1].slice()
+    const own = s.send.slice()
       .sort((a, b) => [...a].length - [...b].length || a.localeCompare(b))
     const take = own.length <= cap
       ? own
       : Array.from({ length: cap }, (_, k) => own[Math.floor(k * (own.length / cap))]!)
 
-    const v = judgeReferenceBundle({ personaCode: code, texts: take, anchorCount: take.length })
+    const v = judgeReferenceBundle({ personaCode: code, texts: take, anchorCount: take.length, styleOnlyTexts: s.styleOnly })
     if (!v.ok) { blocks.push(...v.blocks.map((b) => b.message)); continue }
     bundles.push(v.bundle)
     table.push({
       personaCode: code,
-      anchorComments: take.length,
+      anchorComments: v.bundle.observedCount,
+      safeTexts: v.bundle.comments.length,
+      styleOnly: v.bundle.styleOnlyCount,
       supplements: 0,
       anchorRatio: 1,
       medianLen: v.bundle.lengths.median,

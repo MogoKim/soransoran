@@ -20,7 +20,7 @@ import { readLengthBand } from '../src/lib/original-post-persona-match'
 import {
   planBatch, POST_CAP_PER_WEEK, type BatchDraft, type PersonaForMatch,
 } from '../src/lib/original-post-persona-match'
-import { duplicateKeys, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
+import { duplicateKeys, explicitEndingsOf, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 
 let pass = 0
@@ -443,8 +443,9 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
         spouseRelationship: pc.spouseRelationship ?? '해당없음',
         personality: [...pc.personality],
       },
-      voiceCore: { emoji: '없음', ending: '~네요', length: pc.voiceLength, register: '존댓말' },
-      voiceVariations: ['a', 'b', 'c', 'd', 'e'],
+      // 🔴 카드가 적은 말끝 · variation 수를 그대로 쓴다(Phase F — verifySeedCard 가 정본과 대조한다)
+      voiceCore: { emoji: '없음', ending: explicitEndingsOf(pc.voiceTokens)[0] ?? '~네요', length: pc.voiceLength, register: '존댓말' },
+      voiceVariations: Array.from({ length: pc.variationCount }, (_, i) => `v${i}`),
       activityRhythm: { burstiness: 0.3, activeHours: [[10, 13]], weekdayBias: 0.5 },
       noGoTopics: [...pc.noGoTopics], noGoExpressions: [...pc.noGoExpressions],
       forbiddenReactionRoles: [...pc.forbiddenReactionRoles],

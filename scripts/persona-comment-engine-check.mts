@@ -1594,11 +1594,16 @@ console.log('⑤-d 🔴 Persona reference 안정 배정 (배치가 바뀌어도 
         check('A-2 🔴 표에 보완 0 으로 남는다',
           [...fwd.byCode.keys()].every((c) =>
             (fwd.table.find((t) => t.personaCode === c)?.supplements ?? -1) === 0))
-        /** 🔴 3~8 가변 길이 — 8 로 맞추려고 채우지 않는다 */
+        /**
+         * 🔴 원문 2~8 가변 길이 · 관측 3건 이상 (2026-10-01 · Phase F) — 8 로 맞추려고 채우지 않는다.
+         *    경험형 댓글은 원문이 아니라 style-only 관측으로만 센다.
+         */
         const sizes = [...fwd.byCode.values()].map((b) => b.comments.length)
-        check(`A-2 🟢 3~8 가변 길이다 (${Math.min(...sizes)}~${Math.max(...sizes)})`,
-          Math.min(...sizes) >= 3 && Math.max(...sizes) <= 8)
-        check('A-2 🔴 3건 미만은 묶음이 되지 않는다', sizes.every((n) => n >= 3))
+        check(`A-2 🟢 원문 2~8 가변 길이다 (${Math.min(...sizes)}~${Math.max(...sizes)})`,
+          Math.min(...sizes) >= 2 && Math.max(...sizes) <= 8)
+        check('A-2 🔴 관측 3건 미만 · 안전 원문 2건 미만은 묶음이 되지 않는다',
+          [...fwd.byCode.values()].every((b) => b.observedCount >= 3 && b.comments.length >= 2))
+        check('A-2 🔴 원문에 경험형 댓글 0', [...fwd.byCode.values()].every((b) => !b.comments.some((c) => carriesExperience(c.text))))
       }
     }
 

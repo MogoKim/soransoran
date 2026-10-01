@@ -21,7 +21,7 @@ import { ANCHOR_BASE_DATE, checkLifeConsistency, exactAgeOn, bandOfAge } from '.
 import { coverageOf, gainOf, THIN_THRESHOLD, type AxisSubject } from './persona-axis-coverage'
 import { MARITAL_VALUES } from './persona-card-verify'
 import type { PoolCard } from './persona-pool-card'
-import { styleCentroid, type VoiceReferenceBundle } from './persona-voice-reference'
+import type { VoiceReferenceBundle } from './persona-voice-reference'
 
 // ─────────────────────────────────────────────────────────
 // 코드 · 판정 코드
@@ -398,7 +398,8 @@ export const VOICE_LENGTH_MEDIUM_MAX = 70
 export function voiceCoreFromBundle(b: VoiceReferenceBundle): {
   length: string; register: string; ending: string; emoji: string
 } {
-  const c = styleCentroid(b.comments.map((x) => x.text))
+  // 🔴 묶음의 문체 좌표 — style-only 관측까지 반영한 관찰값이다(원문은 안전 댓글뿐)
+  const c = b.style
   const med = b.lengths.median
   const length = med <= VOICE_LENGTH_SHORT_MAX ? '짧은 문장' : med <= VOICE_LENGTH_MEDIUM_MAX ? '중간 길이' : '길게'
   const polite = c.yo >= 0.5

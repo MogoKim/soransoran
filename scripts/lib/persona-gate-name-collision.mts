@@ -98,6 +98,42 @@ export function editDistance(a: string, b: string): number {
   return prev[y.length]
 }
 
+/** 한글 음절 → 초성·중성·종성 자모 (호환 자모 문자). 한글이 아니면 그대로 */
+const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'
+const JUNG = 'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ'
+const JONG = ['', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+export function jamoOf(value: string): string {
+  let out = ''
+  for (const ch of value) {
+    const c = ch.codePointAt(0)! - 0xac00
+    if (c < 0 || c > 11171) { out += ch; continue }
+    out += CHO[Math.floor(c / 588)]! + JUNG[Math.floor((c % 588) / 28)]! + JONG[c % 28]!
+  }
+  return out
+}
+
+/**
+ * 🔴 **혼동 판정 — raw 편집 거리 하나를 폐기했다** (2026-10-01 · Phase F).
+ *
+ *    앞판은 N2 음절 거리 `d ≤ 2` 면 길이와 상관없이 review 로 올렸다. 3음절 이름에서 거리 2 는
+ *    **한 음절만 같다**는 뜻이다 — 끝 음절 하나만 같은 서로 다른 3음절 이름이 늘 review 였다(운영 Persona 둘이 실제로 그렇게 막혔다).
+ *    혼동은 **얼마나 남았는가**의 문제다. 그래서 두 신호를 함께 본다(어느 하나면 혼동):
+ *
+ *      음절   d ≤ max(1, ⌊긴 쪽 길이 / 2⌋) — **절반 이상**이 같은 자리에 남는다(3음절 1 · 4~5음절 2 · 6~7음절 3)
+ *      자모   자모 거리 ≤ JAMO_CONFUSION_MAX — 음절은 둘 바뀌어도 소리·모양이 거의 같다(`물봉선`·`물방석`)
+ *
+ *    🔴 코드별 예외가 아니다. 완전 일치 · 정규화 일치 · 반복 축약 일치는 이 판정 **앞에서** 그대로 reject 다.
+ */
+export const JAMO_CONFUSION_MAX = 2
+export function nameConfusion(a: string, b: string): { confusable: boolean; distance: number; jamoDistance: number } {
+  const x = normalizeN2(a)
+  const y = normalizeN2(b)
+  const distance = editDistance(x, y)
+  const jamoDistance = editDistance(jamoOf(x), jamoOf(y))
+  const allowed = Math.max(1, Math.floor(Math.max(charLength(x), charLength(y)) / 2))
+  return { confusable: distance > 0 && (distance <= allowed || jamoDistance <= JAMO_CONFUSION_MAX), distance, jamoDistance }
+}
+
 // ── 판정 대상 · 결과 타입 ────────────────────────────────────
 
 /** 대조 대상 (설계 §3) */
@@ -255,11 +291,11 @@ function matchNames(
       continue
     }
 
-    // ── 유사도 — 🔴 짧은 이름에서는 하지 않는다 (설계 §6-2)
+    // ── 유사도 — 🔴 짧은 이름에서는 하지 않는다 (설계 §6-2) · 판정은 `nameConfusion` 하나
     const nLen = normalizedLength(name)
     if (cLen >= LENGTH_MIN_FOR_SIMILARITY && nLen >= LENGTH_MIN_FOR_SIMILARITY) {
-      const d = editDistance(normalizeN2(candidate), normalizeN2(name))
-      if (d > 0 && d <= 2) hits.push({ kind, stage: 'N2', distance: d, refType })
+      const c = nameConfusion(candidate, name)
+      if (c.confusable) hits.push({ kind, stage: 'N2', distance: c.distance, refType })
     }
 
     // ── N3 — 🔴 reject 키가 아니다. review 참고 신호로만 남긴다
@@ -378,5 +414,7 @@ export function summarizeForAdmin(verdict: NameCollisionVerdict): {
 export const NAME_COLLISION_THRESHOLDS = {
   minLengthForSimilarity: LENGTH_MIN_FOR_SIMILARITY,
   strictRejectFromLength: LENGTH_STRICT_FROM,
-  maxReviewDistance: 2,
+  /** 🔴 음절 거리 상한은 길이 비례다 — `nameConfusion` */
+  syllableDistanceRatio: 1 / 2,
+  jamoConfusionMax: JAMO_CONFUSION_MAX,
 } as const
