@@ -42,6 +42,7 @@
     "persona:remediation": "tsx scripts/persona-contract-remediation.mts",
     "persona:remediation-check": "tsx scripts/persona-remediation-check.mts",
     "persona:reserve24-check": "tsx scripts/persona-reserve24-check.mts",
+    "production:activation-check": "tsx scripts/production-activation-check.mts",
     "persona:no-go-check": "tsx scripts/persona-no-go-check.mts",
     "persona:reserve-check": "tsx scripts/persona-reserve-check.mts",
     "persona:remediation-db-check": "tsx scripts/persona-remediation-db-check.mts",

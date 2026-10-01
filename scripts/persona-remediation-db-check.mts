@@ -275,6 +275,27 @@ try {
   const rReplay = await applyRemediation(prisma, { approvedDigest: r6.plan.digest, expected: EXPECT, reason: 'db-check 재실행', now, repoRoot: root })
   check('🔴 같은 승인 재실행 → no-op 성공 · write 0', rReplay.ok && rReplay.updated.length === 0 && s7 === await snapshot())
 
+  // ── ⑦-b 🔴 운영 플래그(Phase G) — 격리 env · SHA 불일치 · 인자 누락은 DB 에 붙기 전에 거부 ──
+  {
+    const { spawnSync } = await import('node:child_process')
+    const TSX = join(root, 'node_modules/.bin/tsx')
+    const CLI = join(root, 'scripts/persona-contract-remediation.mts')
+    const s7b = await snapshot()
+    const A40 = 'a'.repeat(40)
+    const full = ['--apply', '--production', `--target=${A40}`, `--digest=${r6.plan.digest}`, '--expect=19:24', '--reason=db-check']
+    const run = (args: string[], env: Record<string, string>) => spawnSync(TSX, [CLI, ...args], { cwd: root, env: { ...process.env, ...env }, encoding: 'utf8' })
+    const iso = run(full, {})
+    check('🔴 운영 플래그 + 격리 env → exit 2 · write 0', iso.status === 2 && /SORAN_ISOLATED_DB/.test(iso.stderr) && s7b === await snapshot(), iso.stderr.slice(0, 200))
+    const sha = run(full, { SORAN_ISOLATED_DB: '' })
+    check('🔴 운영 플래그 + SHA 불일치 → exit 2 · write 0', sha.status === 2 && /≠ target|읽지 못했다/.test(sha.stderr) && s7b === await snapshot(), sha.stderr.slice(0, 300))
+    for (const drop of ['--target', '--digest', '--expect', '--reason', '--apply']) {
+      const r = run(full.filter((a) => !a.startsWith(drop)), { SORAN_ISOLATED_DB: '' })
+      check(`🔴 운영 인자 ${drop} 누락 → exit 2 · write 0`, r.status === 2 && s7b === await snapshot(), r.stderr.slice(0, 160))
+    }
+    const plainProd = run(['--apply', '--digest=x', '--expect=19:24', '--reason=x'], { SORAN_ISOLATED_DB: '', DATABASE_URL: 'postgresql://u@db.example.invalid:5432/postgres' })
+    check('🔴 플래그 없는 --apply + 운영 주소 → exit 2(격리 전용 그대로)', plainProd.status === 2 && /격리 DB 에서만/.test(plainProd.stderr), plainProd.stderr.slice(0, 200))
+  }
+
   // ── ⑧ 🔴 역할 쏠림은 **실제 댓글 회차 원자료**에서 읽힌다 (2026-10-01 · C9 보정) ──
   const ids = Object.fromEntries((await prisma.persona.findMany({ where: { code: { in: ['P01', 'P14'] } }, select: { code: true, id: true, userId: true } }))
     .map((p) => [p.code, p]))

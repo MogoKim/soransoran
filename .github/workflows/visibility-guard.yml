@@ -1169,6 +1169,7 @@ jobs:
           npm run persona:gate6b-check
           npm run persona:remediation-check
           npm run persona:reserve24-check
+          npm run production:activation-check
           npm run persona:no-go-check
           npm run persona:reserve-check
 

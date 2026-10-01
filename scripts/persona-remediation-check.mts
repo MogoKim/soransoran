@@ -178,7 +178,9 @@ console.log('\n⑧ 입력 경계 · apply 경계')
   check('🔴 표시명 · User 를 쓰지 않는다', !/user\.(update|create|upsert)|nickname\s*:/.test(src))
   check('🔴 Post · Comment · Queue · 활동 행을 만들지 않는다', !/\.(post|comment|personaApprovalQueue|originalPostApprovalQueue|personaActivityLog)\.(create|createMany|update|upsert|delete)/.test(src))
   const cli = readFileSync('scripts/persona-contract-remediation.mts', 'utf-8')
-  check('🔴 CLI apply 는 격리 DB 판정이 먼저다', /if \(APPLY && !isolatedDb\(process\.env\)\)/.test(cli) && cli.indexOf('isolatedDb(process.env)') < cli.indexOf('new PrismaClient()'))
+  // 🔴 Phase G — 플래그 없는 apply 는 여전히 격리 DB 전용 · 운영은 openActivation 하나. 둘 다 DB 접속보다 먼저
+  check('🔴 CLI apply 는 열림 판정(운영) · 격리 DB 판정이 먼저다', /if \(act\.kind === 'isolated' && !isolatedDb\(process\.env\)\)/.test(cli)
+    && cli.indexOf('openActivation(argv') < cli.indexOf('new PrismaClient()') && cli.indexOf('isolatedDb(process.env)') < cli.indexOf('new PrismaClient()'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail — DB 0 · 네트워크 0\n`)

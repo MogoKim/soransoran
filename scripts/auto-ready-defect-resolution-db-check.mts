@@ -26,6 +26,7 @@ import { applyDefectResolution, planDefectResolution, type ResolutionPlan } from
 import { DEFECT_RESOLUTION_KEY, auditFingerprintOf } from '../src/lib/auto-ready-defect-resolution'
 import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
 import { QUALITY_CONTRACT_KEY, currentQualityContract } from '../src/lib/quality-contract'
+import { applyApprovedDefectResolution } from './lib/defect-resolution-approval.mjs'
 import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
 import { LIFE_FIXTURES } from './lib/life-gate-fixtures.mjs'
 import { FIXTURE_NOW } from './lib/draft-gate-fixtures.mjs'
@@ -266,6 +267,89 @@ async function main(): Promise<void> {
     check('🔴 다시 --apply → already · 기록 1줄', ap2.status === 0 && /RESOLVE_PLAN already/.test(ap2.stdout)
       && resolutionsOf((await queueOf(E.queueId)).editDiff).length === 1, ap2.stdout.slice(0, 300))
     check('🟢 모든 결함이 지금 계약으로 해소됐다 → 열림', (await gate()).open && await unresolvedDefectCount(prisma) === 0)
+  }
+
+  console.log('\n⑩ 운영 승인 결속(Phase G) — digest · expect · reason · 원본 불변 · 재실행 no-op · 동시 1')
+  {
+    const F = await defectRow(f, BLOCKED, { legacy: true })
+    const fullQueue = (id: string) => prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id } })
+    const postOf = (id: string) => prisma.post.findUniqueOrThrow({ where: { id } })
+    const snapAll = async (): Promise<string> => stableJson({ audit: await auditTable(), q: await fullQueue(F.queueId), post: await postOf(F.postId) })
+    const dryOf = () => spawnSync(TSX, [RUNNER, `--queue=${F.queueId}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    const approvalLine = (out: string): { digest: string; expect: string } | null => {
+      const m = /RESOLVE_APPROVAL digest=([0-9a-f]{64}) expect=(\d+:\d+)/.exec(out)
+      return m === null ? null : { digest: m[1]!, expect: m[2]! }
+    }
+    const d1 = approvalLine(dryOf().stdout)
+    const d2 = approvalLine(dryOf().stdout)
+    check('🔴 dry-run 이 결정적 digest · expect 를 낸다(두 번 같다 · 1:0)', d1 !== null && d2 !== null && d1.digest === d2.digest && d1.expect === '1:0', JSON.stringify([d1, d2]))
+    const s0 = await snapAll()
+    const ap = (digest: string, before: number, after: number, reason = 'phase-g db-check') =>
+      applyApprovedDefectResolution(prisma, { queueId: F.queueId, approval: { digest, expected: { before, after }, reason }, contextOf, now: new Date() })
+    const wrongDigest = await ap('0'.repeat(64), 1, 0)
+    check('🔴 다른 digest → PLAN_STALE · write 0', wrongDigest.kind === 'refuse' && wrongDigest.code === 'PLAN_STALE' && await snapAll() === s0)
+    for (const [b, a] of [[1, 1], [0, 0], [2, 1]] as const) {
+      const r = await ap(d1!.digest, b, a)
+      check(`🔴 다른 expect ${b}:${a} → EXPECTATION_MISMATCH · write 0`, r.kind === 'refuse' && r.code === 'EXPECTATION_MISMATCH' && await snapAll() === s0)
+    }
+    const noReason = await ap(d1!.digest, 1, 0, '  ')
+    check('🔴 빈 reason → write 0', noReason.kind === 'refuse' && await snapAll() === s0)
+    // 계획 뒤 큐 행이 바뀌었다 → 승인 digest 가 낡았다
+    await prisma.originalPostApprovalQueue.update({ where: { id: F.queueId }, data: { matchedAt: new Date() } })
+    const s1 = await snapAll()
+    const stale = await ap(d1!.digest, 1, 0)
+    check('🔴 계획 뒤 바뀜 → PLAN_STALE · write 0', stale.kind === 'refuse' && stale.code === 'PLAN_STALE' && await snapAll() === s1)
+    const fresh = approvalLine(dryOf().stdout)!
+    const qPrev = await fullQueue(F.queueId)
+    const auditPrev = await auditTable()
+    const postPrev = stableJson(await postOf(F.postId))
+    const ok = await ap(fresh.digest, 1, 0)
+    check('🟢 fresh digest · 1:0 · reason → written 1 · 미해소 0', ok.kind === 'written' && ok.after === 0 && await unresolvedDefectCount(prisma) === 0, JSON.stringify(ok))
+    const qNow = await fullQueue(F.queueId)
+    const strays = Object.keys(qPrev).filter((k) => k !== 'editDiff' && k !== 'updatedAt'
+      && stableJson((qPrev as Record<string, unknown>)[k]) !== stableJson((qNow as Record<string, unknown>)[k]))
+    const edPrev = rec(qPrev.editDiff)
+    const edNow = rec(qNow.editDiff)
+    const otherKeys = Object.keys({ ...edPrev, ...edNow }).filter((k) => k !== DEFECT_RESOLUTION_KEY
+      && stableJson(edPrev[k]) !== stableJson(edNow[k]))
+    const prevArr = resolutionsOf(qPrev.editDiff)
+    const nowArr = resolutionsOf(qNow.editDiff)
+    check(`🔴 🔴 **원본 불변 — 감사 표 · 글 · 큐의 다른 칸(${strays.length}) · editDiff 다른 키(${otherKeys.length}) 그대로**`,
+      await auditTable() === auditPrev && stableJson(await postOf(F.postId)) === postPrev && strays.length === 0 && otherKeys.length === 0, [...strays, ...otherKeys].join(','))
+    check('🔴 🔴 **해소 기록은 append-only — 앞 기록 그대로 + 정확히 1줄 추가**',
+      nowArr.length === prevArr.length + 1 && stableJson(nowArr.slice(0, prevArr.length)) === stableJson(prevArr))
+    const s2 = await snapAll()
+    const again = await ap(fresh.digest, 1, 0)
+    check('🔴 같은 승인 재실행 → no-op · write 0', again.kind === 'noop' && again.written === 0 && await snapAll() === s2, JSON.stringify(again))
+
+    const G = await defectRow(f, BLOCKED, { legacy: true })
+    const gLine = approvalLine(spawnSync(TSX, [RUNNER, `--queue=${G.queueId}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' }).stdout)!
+    const [ex0, ex1] = gLine.expect.split(':').map(Number)
+    const outs = await Promise.all([0, 1, 2].map(() => applyApprovedDefectResolution(prisma, {
+      queueId: G.queueId, approval: { digest: gLine.digest, expected: { before: ex0!, after: ex1! }, reason: 'phase-g 동시' }, contextOf, now: new Date(),
+    })))
+    check('🔴 🔴 **승인 적용 셋이 동시에 → write 정확히 1 · 기록 1줄**', outs.reduce((n, o) => n + o.written, 0) === 1
+      && resolutionsOf((await queueOf(G.queueId)).editDiff).length === 1, outs.map((o) => o.kind).join(','))
+
+    // 운영 플래그 — 격리 env 가 켜져 있거나 SHA 가 다르면 DB 에 붙기 전에 거부
+    const H = await defectRow(f, BLOCKED, { legacy: true })
+    const hLine = approvalLine(spawnSync(TSX, [RUNNER, `--queue=${H.queueId}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' }).stdout)!
+    const sH = stableJson(await fullQueue(H.queueId))
+    const prodArgs = [RUNNER, `--queue=${H.queueId}`, '--apply', '--production', `--target=${'a'.repeat(40)}`, `--digest=${hLine.digest}`, `--expect=${hLine.expect}`, '--reason=db-check']
+    const p1r = spawnSync(TSX, prodArgs, { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    check('🔴 운영 플래그 + 격리 env → exit 2 · write 0', p1r.status === 2 && /SORAN_ISOLATED_DB/.test(p1r.stderr) && stableJson(await fullQueue(H.queueId)) === sH, p1r.stderr.slice(0, 200))
+    const p2r = spawnSync(TSX, prodArgs, { cwd: ROOT, env: { ...process.env, HOME: home, SORAN_ISOLATED_DB: '' }, encoding: 'utf8' })
+    check('🔴 운영 플래그 + SHA 불일치 → exit 2 · write 0', p2r.status === 2 && /≠ target|읽지 못했다/.test(p2r.stderr) && stableJson(await fullQueue(H.queueId)) === sH, p2r.stderr.slice(0, 300))
+    for (const bad of [
+      [RUNNER, `--queue=${H.queueId}`, '--apply', '--production', `--digest=${hLine.digest}`, `--expect=${hLine.expect}`, '--reason=x'],
+      [RUNNER, `--queue=${H.queueId}`, '--apply', '--production', `--target=${'a'.repeat(40)}`, `--expect=${hLine.expect}`, '--reason=x'],
+      [RUNNER, `--queue=${H.queueId}`, '--apply', '--production', `--target=${'a'.repeat(40)}`, `--digest=${hLine.digest}`, '--reason=x'],
+      [RUNNER, `--queue=${H.queueId}`, '--apply', '--production', `--target=${'a'.repeat(40)}`, `--digest=${hLine.digest}`, `--expect=${hLine.expect}`],
+      [RUNNER, `--queue=${H.queueId}`, '--production', `--target=${'a'.repeat(40)}`],
+    ]) {
+      const r = spawnSync(TSX, bad, { cwd: ROOT, env: { ...process.env, HOME: home, SORAN_ISOLATED_DB: '' }, encoding: 'utf8' })
+      check(`🔴 운영 인자 누락(${bad.slice(2).map((a) => a.split('=')[0]).join(' ')}) → exit 2 · write 0`, r.status === 2 && stableJson(await fullQueue(H.queueId)) === sH, r.stderr.slice(0, 160))
+    }
   }
 
   await wipeAuditFixtures(prisma)

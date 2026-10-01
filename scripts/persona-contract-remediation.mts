@@ -4,9 +4,12 @@
  *
  *   npx tsx scripts/persona-contract-remediation.mts                 # read-only 계획 · 예측 · 남는 막힘
  *   npx tsx scripts/persona-contract-remediation.mts --json
- *   # 🔴 apply 는 이번 Phase 에서 격리 DB 만 연다(운영 apply 는 별도 승인 PR)
+ *   # 격리 DB apply(그대로)
  *   SORAN_ISOLATED_DB=yes-throwaway DATABASE_URL=postgresql://…@localhost:…/soran_test \
  *     npx tsx scripts/persona-contract-remediation.mts --apply --digest=<dry-run 의 digest> --expect=<지금>:<예측> --reason "…"
+ *   # 🔴 운영 apply(Phase G) — 배포된 SHA 에서만 열린다(`production-activation-guard`)
+ *   npx tsx scripts/persona-contract-remediation.mts --apply --production --target=<40자리 SHA> \
+ *     --digest=<fresh dry-run digest> --expect=<지금>:<예측> --reason="…"
  *
  * 🔴 출력은 코드 · 축 · 필드 이름 · 개수다. 표시명 · 값 · 원문 · 해시를 찍지 않는다.
  */
@@ -14,6 +17,7 @@ import { PrismaClient } from '@prisma/client'
 
 import { fillDbConnection } from './lib/ops-signals.mjs'
 import { applyRemediation, readRemediation } from './lib/persona-contract-remediation.mjs'
+import { openActivation } from './lib/production-activation.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -31,23 +35,33 @@ export function isolatedDb(env: NodeJS.ProcessEnv): boolean {
     && /^postgresql:\/\/[^@/]*@(127\.0\.0\.1|localhost):\d+\//.test(url) && /\/soran_test(\?|$)/.test(url)
 }
 
-if (APPLY && !isolatedDb(process.env)) {
-  console.error('🔴 --apply 는 이번 Phase 에서 격리 DB 에서만 연다 — 운영 apply 는 별도 승인 PR 이다. 아무것도 쓰지 않았다.')
+/**
+ * 🔴 **열림 하나** — dry-run · 격리 DB apply(그대로) · 운영 apply(플래그 셋 + 승인 + 같은 SHA + 깨끗한 runtime + writer 0).
+ *    운영이 아니면서 격리 DB 도 아닌 apply 는 열지 않는다. 거부는 DB 에 붙기 **전에** 끝난다(write 0).
+ */
+const act = openActivation(argv, { repoRoot: process.cwd() })
+if (act.kind === 'refuse') {
+  console.error('🔴 열지 않는다 — 아무것도 쓰지 않았다')
+  for (const p of act.problems) console.error(`   · ${p}`)
   process.exit(2)
 }
-if (!APPLY && !fillDbConnection()) { console.error('🔴 DB 주소가 없다'); process.exit(2) }
+if (act.kind === 'isolated' && !isolatedDb(process.env)) {
+  console.error('🔴 --apply(운영 플래그 없음)는 격리 DB 에서만 연다 — 운영은 --apply --production --target=<SHA> 이다. 아무것도 쓰지 않았다.')
+  process.exit(2)
+}
+if (act.kind === 'dry-run' && !fillDbConnection()) { console.error('🔴 DB 주소가 없다'); process.exit(2) }
 
 const prisma = new PrismaClient()
 const now = new Date()
 const repoRoot = process.cwd()
 try {
   if (APPLY) {
-    const digest = arg('--digest')
-    const reason = arg('--reason') ?? ''
+    const digest = act.kind === 'production' ? act.approval.digest : arg('--digest')
+    const reason = act.kind === 'production' ? `${act.approval.reason} · production@${act.target.slice(0, 12)}` : (arg('--reason') ?? '')
     if (digest === null) { console.error('🔴 --digest=<dry-run digest> 가 필요하다 — 본 계획만 적용한다'); process.exit(2) }
     const m = /^(\d+):(\d+)$/.exec(arg('--expect') ?? '')
     if (m === null) { console.error('🔴 --expect=<지금>:<예측> 이 필요하다 — dry-run 이 보고한 계약 유효 수 그대로'); process.exit(2) }
-    const expected = { before: Number(m[1]), after: Number(m[2]) }
+    const expected = act.kind === 'production' ? act.approval.expected : { before: Number(m[1]), after: Number(m[2]) }
     const r = await applyRemediation(prisma, { approvedDigest: digest, expected, reason, now, repoRoot })
     console.log(r.ok ? `✅ 적용 ${r.updated.length}명 [${r.updated.join(',')}] · 계약 유효 ${r.before}→${r.after}` : `🔴 ${r.reason} (write ${r.wrote})`)
     process.exitCode = r.ok ? 0 : 1
