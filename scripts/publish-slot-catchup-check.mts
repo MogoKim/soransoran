@@ -255,7 +255,8 @@ console.log('\n⑨ 배선 — 🔴 판정이 실제 쓰기 경로에 닿는가')
     runner.indexOf('if (!gate.ok)') < runner.indexOf('updateMany('))
 
   const tx = codeOf('src/lib/original-post-publish-tx.ts')
-  check('🔴 트랜잭션이 Serializable 이다', /isolationLevel: 'Serializable'/.test(tx))
+  // 🔴 write 시도는 Serializable 이다 — RepeatableRead 는 충돌 뒤 write 없는 다시 읽기(`recheck`)에만
+  check('🔴 트랜잭션이 Serializable 이다', /isolationLevel: phase === 'recheck' \? 'RepeatableRead' : 'Serializable'/.test(tx))
   check('🔴 트랜잭션 안에서 오늘 발행 수를 다시 센다',
     /publishedTodayInTx = await tx\.personaActivityLog\.count/.test(tx))
   check('🔴 [회귀] 판정이 밖에서 받은 값을 쓰지 않는다',
@@ -266,11 +267,24 @@ console.log('\n⑨ 배선 — 🔴 판정이 실제 쓰기 경로에 닿는가')
    *    두 번째 충돌은 실패다. 시도 횟수를 소스 구조로 고정한다 — 재시도를 없애도 늘려도 빨개진다.
    */
   const outer = tx.slice(tx.indexOf('export async function publishOriginalPostTx'), tx.indexOf('async function publishAttempt'))
-  check('🔴 🔴 **직렬화 충돌은 정확히 한 번 재시도 — 두 번째 충돌은 실패**',
+  /**
+   * 🔴 (2026-10-01 개정) 두 번째 충돌 뒤에는 **write 없는 다시 읽기 한 번**(`'recheck'`)만 있다 — 세 번째 write 시도가 아니다.
+   *    다시 읽기는 소비 증거(SLOT_CONSUMED · TARGET_RACE_LOST)일 때만 정상 무발행이고, 그 밖은 error 다.
+   */
+  check('🔴 🔴 **직렬화 충돌은 정확히 한 번 재시도 — 두 번째 충돌 뒤엔 write 없는 다시 읽기 하나 · 소비 증거 아니면 실패**',
     /if \(isSerializationConflict\(err\)\) return \{ kind: 'conflict' \}/.test(tx)
-    && (outer.match(/await publishAttempt\(prisma, input, deps\)/g) ?? []).length === 2
-    && /const first = await publishAttempt\(prisma, input, deps\)\s*if \(first\.kind === 'conflict'\) \{\s*const second = await publishAttempt\(prisma, input, deps\)\s*if \(second\.kind === 'conflict'\) \{\s*return \{ kind: 'error'/.test(outer)
+    && (outer.match(/await publishAttempt\(prisma, input, deps, (1|2)\)/g) ?? []).length === 2
+    && (outer.match(/await publishAttempt\(/g) ?? []).length === 3
+    && /const first = await publishAttempt\(prisma, input, deps, 1\)\s*if \(first\.kind !== 'conflict'\) return first\s*const second = await publishAttempt\(prisma, input, deps, 2\)\s*if \(second\.kind !== 'conflict'\) return second\s*const recheck = await publishAttempt\(prisma, input, deps, 'recheck'\)/.test(outer)
+    && /const CONSUMED_AFTER_CONFLICT = \['SLOT_CONSUMED', 'TARGET_RACE_LOST'\] as const/.test(tx)
+    && /if \(phase === 'recheck'\) return \{ kind: 'error'/.test(tx)
+    // 🔴 다시 읽기의 멈춤은 첫 write(만료 전환 updateMany) 앞이다
+    && tx.indexOf("if (phase === 'recheck') return") < tx.indexOf('const expired = await tx.originalPostApprovalQueue.updateMany')
     && !/while\s*\(|for\s*\(/.test(outer))
+  // 🔴 결함 주입점은 검사 전용 — 운영 호출자(러너 · 수동 단건)는 넘기지 않는다
+  for (const f of ['scripts/original-post-auto-publish.mts', 'scripts/original-post-publish-live.mts', 'src/lib/original-post-auto-publish.ts', 'src/lib/publish-slot-catchup.ts']) {
+    check(`🔴 운영 호출자 ${f} 는 결함 주입점(fault)을 넘기지 않는다`, !/\bfault\b/.test(codeOf(f)))
+  }
   check('🔴 조건부 UPDATE 가 그대로 있다',
     /status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null/.test(tx))
   check('🔴 cap 정본(ActivityLog) write 가 그대로 있다', /kind: 'post'/.test(tx))
