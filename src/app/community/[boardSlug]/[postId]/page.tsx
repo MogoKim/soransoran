@@ -86,7 +86,7 @@ export default async function PostDetailPage({
   const detail = await getPostDetail(params.postId)
   if (!detail || detail.post.boardType !== board.type) notFound()
 
-  const { post, comments } = detail
+  const { post, threads } = detail
   const session = await auth()
   // 현재 글이 pool 에 섞여 있을 수 있어 넉넉히 받아 NextToRead 가 걸러낸다.
   // 공감 상태는 getPostDetail 을 넓히지 않고 따로 읽는다 — 그 select 는 목록과 함께 쓴다.
@@ -95,9 +95,9 @@ export default async function PostDetailPage({
     getPostLikeState(post.id, session?.user?.id),
     getPostScrapState(post.id, session?.user?.id),
     // 댓글 수와 무관하게 한 번만 묻는다. 비로그인이면 DB 를 두드리지 않는다.
-    // 답글 id 도 함께 넘긴다 — 답글에도 공감 버튼이 있다.
+    // 답글 id 도 함께 넘긴다 — 답글에도 공감 버튼이 있다. 지운·차단 자리에는 공감이 없다.
     getLikedCommentIds(
-      comments.flatMap((comment) => [comment.id, ...comment.replies.map((r) => r.id)]),
+      threads.flatMap((t) => [t.root, ...t.replies]).filter((c) => c.state === 'live').map((c) => c.id),
       session?.user?.id,
     ),
   ])
@@ -167,7 +167,7 @@ export default async function PostDetailPage({
         />
 
         <CommentSection
-          comments={comments}
+          threads={threads}
           boardSlug={board.slug}
           postId={post.id}
           isLoggedIn={Boolean(session?.user)}

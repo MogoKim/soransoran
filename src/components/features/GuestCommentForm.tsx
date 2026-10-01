@@ -10,7 +10,10 @@ import { useAutoResize } from '@/lib/use-auto-resize'
 import { useSubmitGuard } from '@/lib/use-submit-guard'
 import { createGuestComment, type GuestCommentState } from '@/lib/actions/guest-comments'
 import { trackEvent } from '@/lib/analytics/track'
+import { countsAsNewComment } from '@/lib/comment-publish'
 import { useToast } from '@/components/ui/toast'
+import ReplyTargetHeader, { replyTargetGoneOf, type ReplyTargetInfo } from '@/components/features/ReplyTargetHeader'
+import { useThreadNav } from '@/components/features/ThreadNavProvider'
 import {
   canSubmitGuestComment,
   evaluateTokenWait,
@@ -78,11 +81,17 @@ export default function GuestCommentForm({
   postId,
   boardSlug,
   parentId,
+  replyTarget,
+  onPosted,
 }: {
   postId: string
   boardSlug: string
-  /** 답글이면 부모 댓글 id. 새 댓글이면 undefined */
+  /** 답글이면 직접 답하는 댓글 id. 새 댓글이면 undefined */
   parentId?: string
+  /** 답글이면 작성칸 맨 위에 보일 대상 */
+  replyTarget?: ReplyTargetInfo
+  /** 저장된 뒤 — 답글 작성칸은 여기서 닫힌다 */
+  onPosted?: () => void
 }) {
   const pathname = usePathname()
   const toast = useToast()
@@ -104,6 +113,10 @@ export default function GuestCommentForm({
   const [formError, setFormError] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
+  const nav = useThreadNav()
+  /** 🔴 쓰는 도중 대상을 쓸 수 없게 됐다(지움 · 차단) — 이름·원문을 숨기고 등록을 막는다. 쓴 글(content)은 지우지 않는다 */
+  const goneReason = replyTargetGoneOf(state.code)
+  const targetGone = goneReason !== null
 
   /**
    * 🔴 토큰을 state 로 들고 controlled hidden input 으로 낸다.
@@ -183,7 +196,13 @@ export default function GuestCommentForm({
      *    세션을 다시 묻지 않는다 — 물으면 두 곳이 되고 언젠가 어긋난다.
      * 🔴 게스트 닉네임·비밀번호·본문은 보내지 않는다. 답글 여부만 boolean 으로 남긴다.
      */
-    trackEvent('comment_publish', { member_type: 'guest', is_reply: Boolean(parentId) })
+    // 🔴 중복(연타 · 재전송)으로 기존 댓글을 돌려받은 요청은 새 등록으로 세지 않는다(comment-publish.ts)
+    if (countsAsNewComment(state)) {
+      trackEvent('comment_publish', { member_type: 'guest', is_reply: Boolean(parentId) })
+    }
+    // 새로 그려진 그 댓글로 이동·포커스한다(서버가 새 목록을 그릴 때까지 기다린다)
+    if (state.commentId) nav?.focusPosted(state.commentId)
+    onPosted?.()
     // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
@@ -328,7 +347,8 @@ export default function GuestCommentForm({
       <input type="hidden" name="boardSlug" value={boardSlug} />
       {parentId ? <input type="hidden" name="parentId" value={parentId} /> : null}
 
-      {/* 🔴 답글에는 제목을 두지 않는다 — 어느 댓글에 딸린 것인지가 자리로 이미 보인다 */}
+      {/* 🔴 답글에는 제목 대신 대상 머리를 둔다 — 누구의 무슨 말에 답하는지 */}
+      {parentId && replyTarget ? <ReplyTargetHeader target={replyTarget} gone={goneReason} /> : null}
       {parentId ? null : (
         <p className="m-0 mb-1 text-lg font-bold text-content-primary">{GUEST_COMPOSE_TITLE}</p>
       )}
@@ -375,7 +395,7 @@ export default function GuestCommentForm({
           setShowSuccess(false)
           setFormError('')
         }}
-        aria-label="댓글"
+        aria-label={replyTarget && !targetGone ? `${replyTarget.name}님에게 보낼 답글` : parentId ? '답글' : '댓글'}
         className="min-h-[6.5em] resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-page p-3 leading-[1.7]"
         placeholder={GUEST_COMMENT_PLACEHOLDER}
       />
@@ -456,7 +476,7 @@ export default function GuestCommentForm({
         label={parentId ? GUEST_REPLY_SUBMIT_LABEL : GUEST_SUBMIT_LABEL}
         pendingLabel={submitPendingLabel(phase)}
         busy={busy}
-        disabled={!canSubmit}
+        disabled={targetGone || !canSubmit}
         className="mt-1 w-full justify-center disabled:border disabled:border-subtle"
       />
     </form>
