@@ -177,21 +177,58 @@ export function latestOpportunities(dataDir: string, nowMs: number): { evidence:
 }
 
 /**
+ * 🔴 **기회 스냅샷 → 슬롯 기회** — 순수. 스냅샷의 증거 기록마다 정본 판정(생성 전 모드 · 참여 동력 · 배정 `pending`)을
+ *    그 슬롯 시각에 부른다. 이미 큐에 있는 원천(증거 해시)은 뺀다. 읽지 못하는 기록은 기회가 아니다.
+ */
+export function sourceOpportunitiesOf(
+  evidence: readonly unknown[], queuedHashes: ReadonlySet<string>, now: Date,
+): SlotOpportunity[] {
+  const out: SlotOpportunity[] = []
+  for (const [k, ev] of evidence.entries()) {
+    const read = readSourceEvidence({ sourceEvidence: ev })
+    if (!read.ok) continue
+    const h = read.record.provenance.articleIdHash
+    if (h !== null && queuedHashes.has(h)) continue
+    out.push({
+      key: `src:${h ?? k}`,
+      validAt: (slotAt) => judgeSlotRelease({
+        evidence: ev, slotAt, now, hardGates: { ok: true, codes: [] },
+        assignment: 'pending', driver: 'pending', tieBreak: String(k),
+      }).verdict === 'eligible',
+    })
+  }
+  return out
+}
+
+/**
  * 🔴 **증명일 기회 수** — 순수. READY 기회를 먼저 짝짓고, 남은 슬롯을 원천 기회로 채운 뒤 **측정 수율로 할인**한다.
  *    원천 기회는 초안 전이라 참여 동력 · 배정이 아직 없다(`pending`) — 같은 정본 판정의 생성 전 모드다.
  *    수율을 모르면 원천 기회는 세지 않는다(READY 만 — 과대평가 금지).
+ *
+ * 🔴 **수율은 원천 1건당 값이다 — 원천 수에 곱한다, 슬롯 수에 곱하지 않는다** (2026-10-01 Lane B).
+ *    앞판은 원천을 먼저 슬롯에 짝지어(최대 남은 슬롯 수) 그 수에 수율을 곱했다 — `floor(3 × 0.098) = 0`.
+ *    원천이 221건 있어도 3건 있어도 같은 0 이었다: 수율 < 1/슬롯 수 이면 원천 기회는 **언제나 0** (재현).
+ *    이제 기대 READY = `floor(남은 슬롯 중 하나라도 eligible 인 원천 수 × 수율)` 이고,
+ *    그 값은 원천 기회로 실제 덮을 수 있는 슬롯 수(`sourceFilled` — 짝짓기 최대)를 넘지 못한다.
+ *    🔴 새 문턱 · 가중치 없음 — 같은 수율 · 같은 정본 판정 · 같은 짝짓기다.
  */
 export function slotValidOpportunitiesOf(input: {
   slots: readonly Date[]
   ready: readonly SlotOpportunity[]
   sources: readonly SlotOpportunity[]
   readyPerSource: number | null
-}): { total: number; readyFilled: number; sourceFilled: number } {
+}): { total: number; readyFilled: number; sourceFilled: number; sourceValid: number; sourceExpected: number } {
   const r = matchOpportunitiesToSlots(input.slots, input.ready)
   const open = input.slots.filter((_, i) => r.bySlot[i] === null)
   const s = matchOpportunitiesToSlots(open, input.sources)
-  const expected = input.readyPerSource === null ? 0 : Math.floor(s.filled * input.readyPerSource)
-  return { total: Math.min(input.slots.length, r.filled + expected), readyFilled: r.filled, sourceFilled: s.filled }
+  // 🔴 READY 가 이미 덮은 슬롯에만 eligible 인 원천은 증명일 기회가 아니다 — 남은 슬롯 기준으로 센다
+  const sourceValid = input.sources.filter((o) => open.some((d) => o.validAt(d))).length
+  const sourceExpected = input.readyPerSource === null
+    ? 0 : Math.min(s.filled, Math.floor(sourceValid * input.readyPerSource))
+  return {
+    total: Math.min(input.slots.length, r.filled + sourceExpected),
+    readyFilled: r.filled, sourceFilled: s.filled, sourceValid, sourceExpected,
+  }
 }
 
 /**
@@ -277,20 +314,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     const ev = readSourceEvidence(r.gateResults)
     return ev.ok ? ev.record.provenance.articleIdHash : null
   }).filter((h): h is string => h !== null))
-  const sourceOpps: SlotOpportunity[] = []
-  for (const [k, ev] of snap.evidence.entries()) {
-    const read = readSourceEvidence({ sourceEvidence: ev })
-    if (!read.ok) continue
-    const h = read.record.provenance.articleIdHash
-    if (h !== null && queuedHashes.has(h)) continue
-    sourceOpps.push({
-      key: `src:${h ?? k}`,
-      validAt: (slotAt) => judgeSlotRelease({
-        evidence: ev, slotAt, now: i.now, hardGates: { ok: true, codes: [] },
-        assignment: 'pending', driver: 'pending', tieBreak: String(k),
-      }).verdict === 'eligible',
-    })
-  }
+  const sourceOpps = sourceOpportunitiesOf(snap.evidence, queuedHashes, i.now)
   const opp = slotValidOpportunitiesOf({ slots: i.proofSlots, ready: readyOpps, sources: sourceOpps, readyPerSource })
 
   // 지연 — 지금 계약 도장으로 나간 글 · 원천 게시 → 공개
@@ -336,6 +360,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     facts, notes,
     detail: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
+      sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected,
       opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources,
     },
   }

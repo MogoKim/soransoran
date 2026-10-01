@@ -22,8 +22,11 @@ import {
   type RunWindow, type SourceKeySet,
   type PriorArtifactRow, type PriorJudgementRow, type PriorOutcome,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
-  WORKSET_VERSION, worksetFileName, preGenerationRelease, type WorksetRow,
+  WORKSET_VERSION, worksetFileName, preGenerationRelease, worksetEligibility, type WorksetRow,
 } from '../src/lib/supply-workset'
+import { RUNNER_GRID, slotValidOpportunitiesOf, sourceOpportunitiesOf } from './lib/stage-preflight-facts.mjs'
+import { judgeNextPreflight, slotTimesOn, type PreflightFacts } from '../src/lib/stage-ladder-generic'
+import { profileOf } from '../src/lib/scale-profile'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import { attemptsForSource } from './lib/replan-personas.mjs'
 import {
@@ -1565,6 +1568,76 @@ console.log('\n⑮ 🔴 🔴 (P0-B) 원천 = (사이트, id) — 같은 숫자 i
     mergeJudgeRows([{ kind: 'detail', row: { sourceArticleId: '9', title: 't' } }]).length === 0
     && mergeJudgeRows([{ kind: 'detail', row: { sourceSite: C82, sourceArticleId: '9', title: 't' } },
       { kind: 'detail', row: { sourceSite: W, sourceArticleId: '9', title: 'u' } }]).length === 2)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하나(`worksetEligibility`) — 묶음 선택과 같은 원천')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 (2026-10-01 Lane B) 앞판 스냅샷은 슬롯 판정만 거쳐 **끝난 · 큐 · 이월 · 사람 판정** 원천까지 셌다.
+   *    운영 재현 모양: 슬롯 eligible 221 중 220 이 이미 처리된 원천이면 실제 기회 원천은 1 이다.
+   */
+  const ids = Array.from({ length: 221 }, (_, k) => `p${String(k).padStart(3, '0')}`)
+  const rows = ids.map((id, k) => ROW({
+    sourceArticleId: id, commentCount: 50,
+    ...(k >= 200 && k < 210 ? { access: 'blocked' } : k >= 210 && k < 220 ? { safetyVerdict: 'review' } : {}),
+  }))
+  const pick = (a: number, b: number): string[] => ids.slice(a, b)
+  const keysOf = (xs: readonly string[]): SourceKeySet => queuedSourceKeysOf(xs.map((x) => ({ sourceSite: W, sourceArticleId: x })))
+  const input = (o: { allProcessed?: boolean } = {}) => ({
+    rows,
+    concluded: new Set([...pick(0, 50), ...(o.allProcessed === true ? [ids[220]!] : [])].map((x) => KY(x))),
+    queuedSources: keysOf(pick(50, 100)),
+    humanDecided: humanDecisionIndexOf(pick(100, 130).map((x) => ({ sourceSite: W, sourceArticleId: x, decision: 'SEED' }))),
+    queuePending: new Set(pick(130, 160).map((x) => KY(x))),
+    carriedOver: keysOf(pick(160, 200)),
+    releaseOf: (r: WorksetRow) => preGenerationRelease(r, NOW, NOW),
+  })
+  const rawSlotEligible = rows.filter((r) => preGenerationRelease(r, NOW, NOW).verdict === 'eligible').length
+  const e = worksetEligibility(input())
+  check('🔴 🔴 **슬롯 판정만 보면 221 — 생성 가능 판정은 1 (끝난 50 · 큐 50 · 사람 30 · 형제 30 · 이월 40 · 접근/안전 20)**',
+    rawSlotEligible === 221 && e.eligible.length === 1 && e.eligible[0]!.sourceArticleId === 'p220'
+    && e.dropped.terminal === 50 && e.dropped.alreadyQueued === 50 && e.dropped.humanDecided === 30
+    && e.dropped.queueSibling === 30 && e.dropped.carriedOver === 40 && e.dropped.preGated === 20,
+    JSON.stringify({ rawSlotEligible, n: e.eligible.length, dropped: e.dropped }))
+  const plan = selectWorkset({ ...input(), attempted: new Map(), limit: 10, runId: RUN, takenAt: NOW })
+  check('🔴 🔴 **묶음 선택과 같은 원천 — 상한 10 이어도 고른 것은 그 1건 · 버린 수가 같다**',
+    plan.picked.length === 1 && plan.picked[0]!.sourceArticleId === 'p220' && plan.deferred === 0
+    && JSON.stringify(plan.dropped) === JSON.stringify(e.dropped))
+
+  // 스냅샷(생성 가능 원천의 증거) → preflight 기회 — 같은 변환(`sourceOpportunitiesOf`)
+  const slots = slotTimesOn('2026-09-21', profileOf('d3'))
+  const facts = (opps: number): PreflightFacts => ({
+    slotValidOpportunities: opps, readyPerSource: 0.1, latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
+    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
+    supplyUsdPerReady: 0.02, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  })
+  const oppOf = (eligible: readonly WorksetRow[]) => slotValidOpportunitiesOf({
+    slots, ready: [], readyPerSource: 0.1,
+    sources: sourceOpportunitiesOf(eligible.flatMap((r) => (r.evidence === null ? [] : [r.evidence])), new Set(), NOW),
+  })
+  const done = worksetEligibility(input({ allProcessed: true }))
+  const doneOpp = oppOf(done.eligible)
+  const doneVerdict = judgeNextPreflight('d3', facts(doneOpp.total), RUNNER_GRID)
+  check('🔴 🔴 **이미 처리된 원천만 있으면(221 전부) 기회 0 → d3 preflight 가 green 이 아니다(OPPORTUNITY_SHORT)**',
+    done.eligible.length === 0 && doneOpp.total === 0 && doneVerdict.verdict === 'FAIL'
+    && doneVerdict.codes.includes('OPPORTUNITY_SHORT'), JSON.stringify({ opp: doneOpp, codes: doneVerdict.codes }))
+  const fresh30 = worksetEligibility({
+    ...input(), rows: Array.from({ length: 30 }, (_, k) => ROW({ sourceArticleId: `q${k}`, commentCount: 40 })),
+  })
+  const opp30 = oppOf(fresh30.eligible)
+  const v30 = judgeNextPreflight('d3', facts(opp30.total), RUNNER_GRID)
+  check('🔴 🔴 **실제 가용 원천 30 × 수율 0.1 → d3 기회 3 · 기회 축 통과**',
+    fresh30.eligible.length === 30 && opp30.total === 3 && opp30.sourceExpected === 3
+    && !v30.codes.includes('OPPORTUNITY_SHORT'), JSON.stringify({ opp: opp30, codes: v30.codes }))
+
+  // 🔴 배선 — 러너가 스냅샷과 묶음에 같은 입력 · 같은 함수를 쓴다(슬롯 판정만 거르는 두 번째 판정이 없다)
+  const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+  check('🔴 🔴 **러너 스냅샷은 `worksetEligibility(eligibilityInput)` · 묶음은 `...eligibilityInput` — 두 번째 판정 없음**',
+    /const opp = worksetEligibility\(eligibilityInput\)\.eligible/.test(runner)
+    && /selectWorkset\(\{\s*\.\.\.eligibilityInput,/.test(runner)
+    && !/releaseOf\(r\)\.verdict === 'eligible'/.test(runner))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

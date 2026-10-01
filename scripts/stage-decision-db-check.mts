@@ -40,6 +40,16 @@ import {
   type StageDecision, type ValidatedStageDecision,
 } from '../src/lib/stage-decision-contract'
 import { ensureStageDecision, consumeStageDecision } from '../src/lib/stage-decision-store'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { readPreflightFacts } from './lib/stage-preflight-facts.mjs'
+import { loadPublishableStock } from './lib/publishable-stock.mjs'
+import { buildSourceEvidence, SOURCE_STATS_METHOD } from '../src/lib/source-slot-release'
+import { OPPORTUNITY_KIND, OPPORTUNITY_VERSION, WORKSET_KIND, WORKSET_VERSION, opportunitiesFileName, worksetFileName } from '../src/lib/supply-workset'
+import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
+import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
+import { slotTimesOn } from '../src/lib/stage-ladder-generic'
 
 /**
  * 🔴 **격리 DB 가 아니면 여기서 멈춘다 — 그리고 주소를 한 글자도 찍지 않는다.**
@@ -433,6 +443,87 @@ async function main(): Promise<void> {
       raw !== null && validateStoredDecision({
         row: rowToValidatorInput(raw), expectKstDate: DATE,
       }).ok)
+  }
+
+  console.log('\n⑧ 🔴 증명일 기회 — 실제 DB(자동 READY 수) + 공급 산출 파일(묶음 · 기회 스냅샷) → readPreflightFacts')
+  {
+    /**
+     * 🔴 (2026-10-01 Lane B) 운영 반례 모양: 수율 = 자동 READY 3 ÷ 묶음 원천 30 = 0.1 · d3 슬롯 3.
+     *    앞판은 원천을 슬롯에 먼저 짝지어(3) 수율을 곱했다 — floor(3 × 0.1) = 0. 원천이 40건이어도 0 이었다.
+     */
+    const site = 'fixture:preflight'
+    const wipePf = async (): Promise<void> => {
+      await prisma.originalPostApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: 'pf-' } } })
+      await prisma.microSeedRawContent.deleteMany({ where: { sourceSite: site } })
+    }
+    await wipePf()
+    // 자동 READY 3건 — 증거일(09-30 KST) 창 안 결정 시각 · 미발행 · 재고 밖(DECLINED)
+    for (let k = 0; k < 3; k += 1) {
+      const raw = await prisma.microSeedRawContent.create({
+        data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/pf${k}`, sourceArticleId: `pf-${k}`,
+          sourceCapturedAt: new Date('2026-09-30T01:00:00Z'), rawTitle: `원문 ${k}`, rawBody: `원문 본문 ${k}` },
+        select: { id: true },
+      })
+      await prisma.originalPostApprovalQueue.create({
+        data: { sourceRawContentId: raw.id, status: 'DECLINED', draftTitle: `초안 ${k}`, draftBody: `본문 ${k}`,
+          gateVerdict: 'PASS', gateResults: {}, promptVersion: 'pf', model: 'pf',
+          decidedBy: AUTO_DECIDER, decidedAt: new Date('2026-09-30T03:00:00Z'), dedupKey: `pf-${k}` },
+      })
+    }
+    const now = new Date('2026-10-01T07:00:00+09:00')
+    const dir = mkdtempSync(join(tmpdir(), 'pf-opp-'))
+    // 묶음 3개 × 10 원천 = 30 (창 안 회차)
+    for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
+      writeFileSync(join(dir, worksetFileName(runId)), JSON.stringify({
+        kind: WORKSET_KIND, version: WORKSET_VERSION, runId, takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`,
+        limit: 10, sources: Array.from({ length: 10 }, (_, i) => ({ sourceSite: site, sourceArticleId: `${runId}-${i}` })),
+      }))
+    }
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    const evidence = (i: number): unknown => buildSourceEvidence({
+      postedAt: iso(now.getTime() - 2 * 3_600_000), capturedAt: iso(now.getTime() - 3_600_000),
+      sourceSite: site, sourceArticleId: `opp-${i}`, dedupKey: `${site}|opp-${i}`,
+      response: { comments: 3, views: 100, observedAt: iso(now.getTime() - 3_600_000) },
+      sourceStats: { basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: site, bucket: '<3h', n: 5,
+        commentsPct: 0.5, viewsPct: 0.5, windowFrom: iso(now.getTime() - 73 * 3_600_000), windowTo: iso(now.getTime() - 3_600_000) },
+    })
+    const snapshot = (n: number): void => {
+      const runId = '20260930-131500'
+      writeFileSync(join(dir, opportunitiesFileName(runId)), JSON.stringify({
+        kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: '2026-09-30T13:15:00.000Z',
+        slotAt: slotTimesOn('2026-10-01', profileOf('d3'))[0]!.toISOString(), evidence: Array.from({ length: n }, (_, i) => evidence(i)),
+      }))
+    }
+    const facts = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {
+      loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
+      autoOpen: { open: false, reasons: [] }, proofSlots: slotTimesOn('2026-10-01', profileOf('d3')),
+      caps: releaseCapsOf(profileOf('d3')), evidenceDate: '2026-09-30', env: {}, dataDir: dir, now,
+      runnerHealth: 'ok', contractValidPersonas: async () => 30,
+    })
+    try {
+      const none = await facts()
+      check('🔴 기회 스냅샷 파일이 없으면 원천 기회 0 — 운영 2026-10-01 모양(공급 러너가 스냅샷을 쓰지 않는 판)',
+        none.facts.slotValidOpportunities === 0 && none.detail.opportunitySnapshotAt === null, JSON.stringify(none.detail))
+      check('🔴 수율 = 실제 DB 자동 READY 3 ÷ 묶음 원천 30 = 0.1',
+        none.facts.readyPerSource === 0.1, String(none.facts.readyPerSource))
+      snapshot(40)
+      const r40 = await facts()
+      check('🔴 🔴 **원천 40 · 수율 0.1 → 기대 READY 4 → d3 슬롯 3 전부 (앞판 floor(3×0.1) = 0)**',
+        r40.facts.slotValidOpportunities === 3 && r40.detail.sourceValid === 40 && r40.detail.sourceExpected === 3,
+        JSON.stringify(r40.detail))
+      snapshot(30)
+      const r30 = await facts()
+      check('🔴 🔴 **실제 가용 원천 30 · 수율 0.1 → d3 기회 3**',
+        r30.facts.slotValidOpportunities === 3 && r30.detail.sourceValid === 30 && r30.detail.sourceExpected === 3,
+        JSON.stringify(r30.detail))
+      snapshot(5)
+      const r5 = await facts()
+      check('🔴 과대평가 금지 — 원천 5 · 수율 0.1 → floor(0.5) = 0',
+        r5.facts.slotValidOpportunities === 0 && r5.detail.sourceValid === 5, JSON.stringify(r5.detail))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      await wipePf()
+    }
   }
 
   await wipe()
