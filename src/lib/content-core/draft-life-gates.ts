@@ -89,7 +89,12 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  * 🔴 `draft-gates-v5` (2026-10-01 · Phase 2C) — `personaNoGo` 확정 게이트. 글 초안도 댓글과 **같은 판정**
  *    (`persona-no-go`)으로 개인 말버릇(따옴표 · `류` 표기 무관)과 전원 공통 금지를 막는다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v5'
+/**
+ * 🔴 `draft-gates-v6` (2026-10-01 · quality-v6) — 1인칭 만남·대화·들음(`readSelfEncounters`)을 `unwarrantedSelfClaim` 이 센다.
+ * 🔴 `draft-gates-v6.1` (같은 날 · quality-v6 보정 · 운영 v6 행 0) — 자리 · 원천 대조를 없앴다. 모든 자리에서 확정이고
+ *    `lifeFacts` 의 검증된 근거 문장이 그 만남을 직접 담을 때만 통과. 절 머리 주어 판정이 관형어(`아는 사람한테`)를 임자로 읽지 않는다.
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v6.1'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -314,6 +319,17 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
       })
     }
   }
+  /**
+   * 🔴 (v6) **1인칭 만남·대화·들음** — 계획의 1인칭 허가와 무관하게 본다. Persona 근거(검증된 근거 문장)가 그 만남을
+   *    직접 담지 않으면 확정이다(`judgeSelfEncounters`). 같은 코드(`unwarrantedSelfClaim`)로 낸다.
+   */
+  const meets = judgeSelfEncounters(title, body, input.plan)
+  if (meets.length > 0) {
+    const i = out.findIndex((f) => f.code === 'unwarrantedSelfClaim')
+    const d = `encounter — ${[...new Set(meets)].slice(0, 3).join(' / ')}`
+    if (i < 0) out.push({ code: 'unwarrantedSelfClaim', detail: d })
+    else out[i] = { code: 'unwarrantedSelfClaim', detail: `${out[i]!.detail} · ${d}` }
+  }
 
   // ── C. 카드의 지금 삶 vs 초안의 시제 ──
   const card = input.card
@@ -452,12 +468,24 @@ const personIn = (w: string, m: string): boolean => {
 const otherIn = (w: string, counterpart: readonly string[]): boolean =>
   PERSON_WORDS.some((m) => personIn(w, m) && !counterpart.some((c) => c.includes(m) || w.includes(c)))
 
+/**
+ * 🔴 **관형어는 임자가 아니다** (v6 보정 · 2026-10-01). `아는 사람한테 들었는데` 의 `아는` 은 `은/는` 으로 끝나
+ *    주어 꼴로 읽혔고, 정본 표지(`OTHER_MARKERS` 의 `아는`)에 걸려 "남의 일" 이 됐다 — 1인칭 들음이 샜다.
+ *    `은/는` 어절이 **사람 명사가 아니고 바로 뒤 어절이 사람 명사**면 그 사람을 꾸미는 말이다(`아는 사람` · `옆집 사는 언니`).
+ *    🔴 `친구는 언니한테` 의 `친구는` 은 그 자체가 사람이라 여전히 임자다.
+ */
+const TOPIC_END_RE = /(?:은|는)$/
+const isPersonWord = (w: string): boolean => PERSON_NOUN_RE.test(w) || PERSON_WORDS.some((m) => personIn(w, m))
+const isAdnominal = (w: string, next: string | undefined): boolean =>
+  TOPIC_END_RE.test(w) && next !== undefined && isPersonWord(next) && !isPersonWord(w.replace(TOPIC_END_RE, ''))
+
 /** 🔴 절 머리 주어가 누구인가 — 나(1인칭 낱말 · 축의 상대) / 남(`OTHER_MARKERS`) / 모름 */
 const personSubject = (clause: string, counterpart: readonly string[]): 'self' | 'other' | null => {
-  const words = clause.split(/\s+/).filter((w) => w !== '').slice(0, 4)
-  for (const w of words) {
+  const all = clause.split(/\s+/).filter((w) => w !== '')
+  const words = all.slice(0, 4)
+  for (const [k, w] of words.entries()) {
     if (SELF_SUBJECT_RE.test(w)) return 'self'
-    if (!SUBJECT_END_RE.test(w)) continue
+    if (!SUBJECT_END_RE.test(w) || isAdnominal(w, all[k + 1])) continue
     if (counterpart.some((c) => w.includes(c))) return 'self'
     if (otherIn(w, counterpart)) return 'other'
   }
@@ -865,6 +893,89 @@ function judgeThinVent(title: string, body: string, plan: DraftGatePlan | null):
   const asks = `${title}\n${body}`.split(/(?<=[.!?？。])\s+|\n+/).some((x) => /[?？]/.test(x) || QUESTION_END_RE.test(x.trim()))
   if (asks) return []
   return [{ code: 'thinVentDraft', detail: `계획 vent · 역할 ${roles.join('·')} · 묻는 말 없음` }]
+}
+
+/**
+ * 🔴 (v6 · 2026-10-01 운영 감사 결함 yes 1건) **1인칭 만남·대화·들음** — `어제 60대 분과 이야기를 나누다 들었는데요`.
+ *    P04 · 자리 QUESTION · `selfBasis=null` 초안이 원문 글쓴이의 만남을 **자기 만남**으로 옮겼다. 원문에는 있었다
+ *    (`어제 60대 만났는데`) — 🔴 **원문에 있다는 것은 허가가 아니다**(위 생활 일관성 원칙과 같다).
+ *    B 게이트는 축 낱말(배우자 · 자녀 · 부모 · 일 …)이 있어야 세서, 가족 아닌 사람과의 만남은 볼 자리가 없었다.
+ *
+ *    🔴 **문구 목록이 아니다.** 판정은 기존 틀 그대로다:
+ *      · 절 경계 · 세상 이야기 틀 — 정본 `readClauseFrames`
+ *      · 누가 겪었나 — 절 머리 주어(`personSubject`) · 앞 절에서 이어 받은 주어(`carry`) · 주체 높임 꼴은 사건 모양에서 뺀다
+ *      · 전언 · 가정 · 묻는 절은 1인칭 경험이 아니다(`REPORTED_RE` · `CONDITIONAL_RE` · `QUESTION_END_RE`)
+ *      · 가족과의 일은 정본 축(`readSelfClaims`)과 카드가 이미 본다 — 여기서 다시 세지 않는다
+ *    남는 것은 **사건의 모양**(만났다 · 이야기를 나눴다 · 통화했다 · 누구에게 들었다)과 **그 상대가 사람**이라는 것뿐이다.
+ *
+ *    🔴 **남의 이야기는 통과한다.** `친구가 그러는데 …래요` · `60대 분들은 … 싫다고 하시더라고요` 처럼
+ *       제3자가 주어인 이야기(원문이 가진 남의 사연)는 걸리지 않는다 — 걸리는 것은 글쓴이 자신이 만나고 들은 **사건**이다.
+ */
+const ENCOUNTER_RE = new RegExp([
+  // 만남 — 일어난 일(지난 일 · 이어지는 이야기)만. `만나면` · `만나야` 는 사건이 아니다.
+  // 🔴 주체 높임(`만나셨` · `들으셨` · `나누셨`)은 넣지 않는다 — 한국어는 자기를 높이지 않으니 그 임자는 글쓴이가 아니다
+  '만났|만나서|만나고\\s*(?:왔|와서)|만나다가|뵀|뵈었|뵙고\\s*왔|마주쳤|마주친',
+  // 대화 · 통화
+  '(?:이야기|얘기|대화|수다)(?:를|도)?\\s*(?:나눴|나누다|나누는데|나누던|했는데|하다가|떨었|떨다)',
+  '통화(?:를|도)?\\s*(?:했|하다가|하는데)',
+  // 들음 — 누구에게서 · 무슨 말을
+  '(?:이야기|얘기|말|말씀|소리)(?:를|을|도)?\\s*(?:들었|듣다가|들은|들으니)',
+  '(?:한테|에게|께|한테서|에게서)\\s*(?:[가-힣]+\\s+)?(?:들었|들은|들으니|듣다가)',
+].join('|'))
+/** 🔴 사람을 세는 말 — `60대 분과` · `어떤 사람한테`. 정본 `PERSON_WORDS` 에 없는 일반 사람 명사만 */
+const PERSON_NOUN_RE = /(?<![가-힣])(?:분|분들|사람|사람들)(?:과|와|이랑|랑|하고|한테|에게|께|께서|이|은|을|를|도)?(?![가-힣])/
+const hasPerson = (clause: string): boolean =>
+  PERSON_NOUN_RE.test(clause) || clause.split(/\s+/).some((w) => PERSON_WORDS.some((m) => personIn(w, m)))
+
+/** 🔴 글쓴이 자신이 누구를 만나·이야기하고·들은 절 — 계획의 근거 문장에도 같은 함수를 돌린다(같은 판정 하나) */
+function readSelfEncounters(title: string, body: string): string[] {
+  const frames = readClauseFrames(title, body, OWNER_OPTS)
+  // 🔴 가족·일 축은 정본 축이 카드·허가와 견준다 — 여기서 다시 세지 않는다(두 판정 금지)
+  const owned = new Set(readSelfClaims(title, body, OWNER_OPTS).map((c) => c.clause.trim()))
+  const out: string[] = []
+  frames.forEach((f, i) => {
+    const c = f.clause
+    const m = ENCOUNTER_RE.exec(c)
+    if (m === null || owned.has(c) || !hasPerson(c)) return
+    /**
+     * 🔴 **세상 이야기 틀은 만남까지의 말에서만 본다** — 정본 틀(`readClauseFrames` 의 `general`)을 그 말에 그대로 돌린다.
+     *    정본은 문장 단위라 `어제 아는 사람한테 들었는데 그게 맞나요?` 의 물음표 · `… 다들 그렇대요` 의 `다들` 이
+     *    앞의 1인칭 만남까지 세상 이야기로 지운다. 만남은 사건이다 — 뒤에 붙은 물음·일반론이 그것을 지우지 않는다.
+     */
+    if (readClauseFrames('', c.slice(0, m.index + m[0].length), OWNER_OPTS).some((x) => x.general)) return
+    /**
+     * 🔴 전언·물음은 **만남을 말한 어절까지**로 본다 — `친구가 만났대요` 는 들은 말이지만
+     *    `친구 만나서 얘기하다 보니 다들 깬다네요` 의 `-네요` 전언은 만남 뒤의 남의 말이다(만남은 내 사건이다).
+     */
+    const upto = c.slice(0, m.index + m[0].length) + (/^[^\s]*/.exec(c.slice(m.index + m[0].length))?.[0] ?? '')
+    if (REPORTED_RE.test(upto) || QUESTION_END_RE.test(upto)) return
+    if (CONDITIONAL_RE.test(c.slice(m.index).split(/\s+/).slice(0, 3).join(' '))) return
+    if (f.carry === 'other') return
+    let subj = personSubject(c, [])
+    for (let k = i - 1; subj === null && k >= 0 && frames[k]!.sentence === f.sentence; k -= 1) {
+      subj = personSubject(frames[k]!.clause, [])
+    }
+    if (subj === 'other') return
+    out.push(c)
+  })
+  return out
+}
+
+/**
+ * 🔴 **만남 판정 — 자리 · 원천이 아니라 Persona 근거로 가른다** (v6 보정 · 2026-10-01 코디네이터 결정).
+ *    🔴 원문에 만남이 있다는 것은 Persona 의 1인칭 경험을 허가하지 않는다 — 원천의 경험은 제3자 주어(`어떤 분이 그러셨대요`)로만 옮긴다.
+ *    · `selfBasis=null`(QUESTION · REFLECTION · OBSERVATION 모두) → 확정
+ *    · `noLifeFactNeeded` → 확정(보편 감정 글은 생활사 허가가 아니다)
+ *    · `lifeFacts` → 계획이 코드로 확인한 근거 문장(`verifySelfWarrants` 가 원문 · 정본 카드와 대조한 `warrants[].evidenceText`)이
+ *      **그 만남 자체를 담았을 때만** 통과 — 근거 문장에도 같은 함수(`readSelfEncounters`)를 돌린다(같은 판정 하나)
+ */
+function judgeSelfEncounters(title: string, body: string, plan: DraftGatePlan | null): string[] {
+  if (plan === null) return []
+  const mine = readSelfEncounters(title, body)
+  if (mine.length === 0) return []
+  const backed = plan.selfBasis === 'lifeFacts'
+    && plan.warrants.some((w) => (w.evidenceText ?? '').trim() !== '' && readSelfEncounters('', w.evidenceText!).length > 0)
+  return backed ? [] : mine
 }
 
 function judgeNoLifeFactClaims(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {

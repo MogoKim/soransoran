@@ -366,8 +366,15 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
   const V4_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
   check('🔴 🔴 **실제 v4 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
     codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V4_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
-    && QUALITY_CONTRACT_VERSION === 'quality-v5' && currentQualityContract().digest !== V4_MARK.digest)
-  check('🔴 새 계약(v5) 표식 READY 만 대상', codeOf(mk(), true) === 'TARGET')
+    && QUALITY_CONTRACT_VERSION === 'quality-v6' && currentQualityContract().digest !== V4_MARK.digest)
+  /**
+   * 🔴 (quality-v6 · 2026-10-01) **실제 v5 표식**도 같다 — 만남 게이트 전에 도장 찍힌 READY 는 v6 에서 자동 발행되지 않는다(구제 없음).
+   */
+  const V5_MARK = { version: 'quality-v5', digest: '61716a4df9e09d5e42d58e9066d4336cd8c733fd63035ef32b93539190a4efc9' }
+  check('🔴 🔴 **실제 v5 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
+    codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V5_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
+    && currentQualityContract().digest !== V5_MARK.digest)
+  check('🔴 새 계약(v6) 표식 READY 만 대상', codeOf(mk(), true) === 'TARGET')
   check('🔴 🔴 **옛 판 · 표식 없음(legacy)도 같다**',
     codeOf(mk({ gateResults: oldGate('otherVersion') }), true) === 'QUALITY_CONTRACT_MISMATCH'
     && codeOf(mk({ gateResults: oldGate('none') }), true) === 'QUALITY_CONTRACT_MISMATCH')

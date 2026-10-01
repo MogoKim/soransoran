@@ -1,12 +1,12 @@
 {
-  "version": "quality-v5",
-  "digest": "61716a4df9e09d5e42d58e9066d4336cd8c733fd63035ef32b93539190a4efc9",
+  "version": "quality-v6",
+  "digest": "7ac85d137409df93ff680effa98749ed2d95632fe7b04f11a70235883ffbc279",
   "files": {
-    "src/lib/quality-contract.ts": "59081c3a841c5e5e1c4aaf233e0901069561c35efb644ec69ee78f62a889596b",
+    "src/lib/quality-contract.ts": "5c99bda5e2dac7f7f33544e3db7c962a1d9c9d3b4cd5d498f1cf386f93b31d3d",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "f3e7819de30b98a79a56b8d43b4e365a014fca2cca3825566d047ad6f60b4734",
+    "src/lib/content-core/draft-life-gates.ts": "ce3fc45e1fafdbf19b8528a38507deda68487942072679f966f85b907f50117e",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "fa742d81ca4b87783d421ec3636ea999b6a81e27d7e87d4b8b17207511c6f15e",
+    "src/lib/content-core/pipeline.ts": "cdfda8aea0d7f873f515c96d7e9e19853215f8c293bbd730d3733d39d3d2bf47",
     "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
@@ -15,7 +15,7 @@
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "c9e6e130a887cd369cad12ec2bb82ccc031b5e606e3ed5d3640c521ccd1d1343",
     "scripts/lib/content-core-run.mts": "2868e056718645a17140238d7269bc6a0ad8f5a9303e29e04752ac957fec4106",
-    "scripts/lib/content-core-prompts.mts": "50b8507eda4b96f3b8322098a971f64ff6a2b2b3cdfc0460f5b05fa66910393d",
+    "scripts/lib/content-core-prompts.mts": "c746dde7e579474a361a0c523364da61fd6e94c4278f3e3a90ea578999571dac",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "3442679bbd04e2f5b24b64495cb532bd2935ba449f0be919ee18db92c2757a00",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -27,16 +27,14 @@
     "src/lib/persona-no-go.ts": "03e50a98ccaf2b17582d14603d89fba9a7f303aed0f6a8ea606c26f07a070b8e"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v4 → quality-v5",
+    "kind": "revise",
+    "reason": "quality-v6 digest af53f94047df… → 7ac85d137409… · v6 보정: 1인칭 만남·들음은 모든 자리에서 확정 · lifeFacts 의 검증 근거가 그 만남을 담을 때만 통과 · 관형어 임자 오독 수정 · draft-gates-v6.1 · v2-draft-p10 (운영 v6 행 0)",
     "changedFiles": [
       "src/lib/quality-contract.ts",
       "src/lib/content-core/draft-life-gates.ts",
       "src/lib/content-core/pipeline.ts",
-      "src/lib/original-post-persona-match.ts",
       "scripts/lib/content-core-prompts.mts",
-      "src/lib/persona-pool-card.ts",
-      "src/lib/persona-no-go.ts"
+      "src/lib/founder-gold.ts"
     ]
   }
 }

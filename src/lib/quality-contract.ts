@@ -66,7 +66,17 @@ import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } 
  *    🔴 v4 행을 고치거나 지우거나 v5 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  *    새 READY 는 최근 원천 → 다음 슬롯 → 새 계약 생성(JIT)으로만 생긴다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v5'
+/**
+ * 🔴 `quality-v6` (2026-10-01) = **1인칭 만남·대화·들음도 생활사 주장이다**. 운영 자동 READY 감사 결함 yes 1건 —
+ *    P04 · 자리 QUESTION · `selfBasis=null` 초안이 원문 글쓴이의 만남(`어제 60대 만났는데`)을 자기 만남
+ *    (`어제 60대 분과 이야기를 나누다 들었는데요`)으로 옮겼고, 초안 게이트(B 는 가족·일 축만 셌다) · 의미 검수 · 도장이 모두 지나갔다.
+ *    초안 게이트 `draft-gates-v6.1`(`unwarrantedSelfClaim` 의 만남 축 — 원문에 만남이 있어도 Persona 경험이 아니다.
+ *    모든 자리에서 확정이고 `lifeFacts` 의 검증된 근거 문장이 그 만남을 직접 담을 때만 통과 · 관형어를 임자로 읽지 않는다) ·
+ *    초안 프롬프트 `v2-draft-p10`. 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v6 보정(같은 날)은 판 이름을 올리지 않고 digest 만 `--revise` 로 기록했다 — 운영 v6 행 0.
+ *    🔴 v5 이하 행을 고치거나 지우거나 v6 으로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v6'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

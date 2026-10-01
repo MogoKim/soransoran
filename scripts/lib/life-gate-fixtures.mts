@@ -535,7 +535,54 @@ const V3_FIXTURES: readonly LifeFixture[] = [
   },
 ]
 
-export const LIFE_FIXTURES: readonly LifeFixture[] = [...V2_FIXTURES, ...V3_FIXTURES]
+/**
+ * 🔴 (quality-v6 · 2026-10-01) **1인칭 만남** — 운영 자동 READY 감사 결함 yes 1건(P04 · QUESTION · `selfBasis=null`).
+ *    원문에 만남이 **있었다** — 원문 글쓴이의 만남을 우리 화자의 만남으로 옮긴 것이 결함이다. 대조군은 같은 원천의
+ *    제3자 사연을 제3자 주어로 옮긴 글(통과). 원문은 이 실패 모양을 재현하는 만큼만 바꿔 적었다.
+ */
+const SRC_PEER = {
+  title: '나이 들면 동년배를 싫어하나요?',
+  body: '어제 60대 만났는데\n\n티비에 70.80 배우들 나와서 연기하는게 싫대요\n\n젊은사람은 좋아하면서 자기 동년배는 안 좋아하는 거 같아요\n\n왜인가요?',
+}
+const PEER_PLAN = planOf({
+  personaCode: 'P04', stance: 'QUESTION', selfBasis: null,
+  protectedFacts: [{ kind: 'number', text: '60대', evidenceRef: 'head' }, { kind: 'number', text: '70.80', evidenceRef: 'head' }],
+})
+const V6_FIXTURES: readonly LifeFixture[] = [
+  {
+    queueId: 'cmunjakqf00012yu9ddlfar3l', label: '🔴 운영 감사 결함 · P04 QUESTION "어제 60대 분과 이야기를 나누다 들었는데요"',
+    source: { id: 'fx-v6-peer', ...SRC_PEER },
+    draft: {
+      title: '나이 들면 동년배 나오는 걸 더 안 보게 될까요?',
+      body: '어제 60대 분과 이야기를 나누다 들었는데요.\n\nTV에 70.80 배우들이 나와서 연기하는 모습이 보기 싫다고 하시더라고요. '
+        + '주름진 얼굴을 화면으로 보는 게 싫으시대요.\n\n젊은 사람은 좋아하면서 자기 또래나 더 나이 든 분들은 왜 피하게 되는 걸까요?\n'
+        + '나이 들수록 동년배를 더 안 좋아하게 되는 이유가 있는 건지 궁금해요.',
+    },
+    plan: PEER_PLAN, card: realCard('P04'), ...hold(['unwarrantedSelfClaim']),
+  },
+  {
+    queueId: 'counter-v6-peer-observation', label: '🔴 같은 원천 · OBSERVATION 이어도 "어제 60대 분을 만났는데" — 원천의 만남은 Persona 경험이 아니다',
+    source: { id: 'fx-v6-peer-o', ...SRC_PEER },
+    draft: {
+      title: '동년배 배우가 나오면 싫다는 분을 만났어요',
+      body: '어제 60대 분을 만났는데 TV에 70.80 배우들 나와서 연기하는 게 보기 싫으시대요.\n\n왜 나이 들수록 동년배를 덜 좋아하게 되는 걸까요?',
+    },
+    plan: planOf({ ...PEER_PLAN, stance: 'OBSERVATION' }), card: realCard('P04'), ...hold(['unwarrantedSelfClaim']),
+  },
+  {
+    queueId: 'control-v6-peer-third-party', label: '🟢 같은 원천 · 제3자 사연을 제3자 주어로 · P04 QUESTION',
+    source: { id: 'fx-v6-peer-c', ...SRC_PEER },
+    // 🔴 제목은 반례와 다르게 — 적재 검사(`draft-life-gates-db-check`)가 큐 행을 제목으로 찾는다
+    draft: {
+      title: '나이 들수록 동년배를 덜 좋아하게 되는 걸까요?',
+      body: '60대 분들 중에는 TV에 70.80 배우들이 나와서 연기하는 게 보기 싫다는 분들도 계신대요.\n\n'
+        + '젊은 사람은 좋아하면서 자기 또래는 왜 피하게 되는 걸까요?\n나이 들수록 그런 마음이 드는 이유가 궁금해요.',
+    },
+    plan: PEER_PLAN, card: realCard('P04'), ...pass,
+  },
+]
+
+export const LIFE_FIXTURES: readonly LifeFixture[] = [...V2_FIXTURES, ...V3_FIXTURES, ...V6_FIXTURES]
 
 /**
  * 🔴 **원천·시점 문장 대조표** (quality-v3) — 게이트 정본만 돈다. 원천 사실을 줄마다 바꾼다.

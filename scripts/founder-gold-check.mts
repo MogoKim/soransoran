@@ -127,7 +127,7 @@ console.log('\n⑤ 열림 근거 — gold 재현 + 사람 중대 결함 0 일 �
 console.log('\n⑥ 품질 계약 — gold 가 digest 에 들어갔다')
 {
   const c = qualityContractComponents() as Record<string, any>
-  check(`판 = quality-v5 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v5')
+  check(`판 = quality-v6 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v6')
   check('digest 구성에 열림 근거 · gold 판 · 고정 digest · 모양이 있다',
     c.evidenceBasis === 'founderGold' && c.founderGold?.digest === FOUNDER_GOLD_PINNED_DIGEST
     && JSON.stringify(c.founderGold?.shape) === JSON.stringify(FOUNDER_GOLD_SHAPE))
