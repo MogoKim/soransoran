@@ -25,7 +25,7 @@
  *    **어느 코드가 계약에 들어가는가**만 정한다.
  */
 import {
-  DORMANT_AFTER_DAYS, PERSONA_LIFE_AXES, personaTiers, type PersonaBlockCode, type PersonaCandidate,
+  DORMANT_AFTER_DAYS, PERSONA_LIFE_AXES, ROLE_SHARE_CAP, personaTiers, type PersonaBlockCode, type PersonaCandidate,
 } from './d100-persona-scale'
 import {
   PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, type D100Stage,
@@ -191,13 +191,62 @@ export const SHARE_MIN_EVENTS = DEFAULT_FINGERPRINT_THRESHOLDS.minSamples
  *    댓글 < SHARE_MIN_EVENTS     → 0 · 근거 얇음(비율을 재지 않는다 — Gate ⑧ 과 같은 규칙)
  *    그 이상                     → 가장 많은 역할의 비율
  */
-export function roleShareOf(h: ActivityHistory): { value: number; evidence: string } | { unknown: string } {
+/** 🔴 역할 판정의 재료 — 최근 창 안 이 사람 댓글의 역할별 수 · 역할을 찾지 못한 수 */
+export type RoleHistory = Pick<ActivityHistory, 'roleCounts' | 'unresolvedRoleEvents'>
+
+export function roleShareOf(h: RoleHistory): { value: number; evidence: string } | { unknown: string } {
   if (h.unresolvedRoleEvents > 0) return { unknown: `역할을 찾지 못한 댓글 ${h.unresolvedRoleEvents}건` }
   const counts = Object.values(h.roleCounts)
   const total = counts.reduce((a, n) => a + n, 0)
   if (total === 0) return { value: 0, evidence: 'none' }
   if (total < SHARE_MIN_EVENTS) return { value: 0, evidence: `thin(${total}<${SHARE_MIN_EVENTS})` }
   return { value: Math.max(...counts) / total, evidence: `n=${total}` }
+}
+
+/**
+ * 🔴 **역할 쏠림의 회차 판정 — 정본 하나** (2026-10-01 · C9 보정).
+ *    계약(`contractAxes`)과 댓글 회차(planner `judgePlannerPersona`)가 **이 함수와 같은 재료**를 쓴다.
+ *
+ *    재료를 못 읽었다 · 역할 모르는 댓글이 있다 → unknown → **이 회차에서 이 사람을 빼다**(fail-closed)
+ *    표본 < 5 · 비율 ≤ 0.5                      → 막는 역할 0
+ *    비율 > 0.5                                  → **그 역할만** 이번 회차에 이 사람에게 주지 않는다
+ *    🔴 지속 자격(contract-valid)은 건드리지 않는다. 다른 역할 · 다른 사람으로 회차는 계속된다.
+ */
+export type RoleRoundVerdict =
+  | { status: 'unknown'; reason: string }
+  | { status: 'ok'; blockedRoles: string[]; evidence: string }
+
+export function roleRoundVerdict(h: RoleHistory | null): RoleRoundVerdict {
+  if (h === null) return { status: 'unknown', reason: '최근 역할 이력을 읽지 못했다' }
+  const s = roleShareOf(h)
+  if ('unknown' in s) return { status: 'unknown', reason: s.unknown }
+  if (s.value <= ROLE_SHARE_CAP) return { status: 'ok', blockedRoles: [], evidence: s.evidence }
+  const top = Math.max(...Object.values(h.roleCounts))
+  return {
+    status: 'ok', evidence: `${s.evidence} · ${s.value.toFixed(2)} > ${ROLE_SHARE_CAP}`,
+    blockedRoles: Object.entries(h.roleCounts).filter(([, n]) => n === top).map(([r]) => r).sort(),
+  }
+}
+
+/**
+ * 🔴 **역할 이력 만들기 — 정본 하나.** 최근 창(`RECENT_WINDOW_DAYS`) 안 이 사람 댓글을 발행 Queue 역할로 센다.
+ *    `historyFromEvents`(계약)와 댓글 회차 원자료(`makeDbTargetSource`)가 이것을 부른다.
+ */
+export function roleHistoryOf(input: {
+  comments: readonly { id: string; at: Date }[]
+  roleOf: ReadonlyMap<string, string>
+  now: Date
+}): RoleHistory {
+  const since = input.now.getTime() - RECENT_WINDOW_DAYS * DAY_MS
+  const roleCounts: Record<string, number> = {}
+  let unresolvedRoleEvents = 0
+  for (const c of input.comments) {
+    if (c.at.getTime() < since) continue
+    const r = input.roleOf.get(c.id)
+    if (r === undefined || r.trim() === '') unresolvedRoleEvents += 1
+    else roleCounts[r] = (roleCounts[r] ?? 0) + 1
+  }
+  return { roleCounts, unresolvedRoleEvents }
 }
 
 /**
@@ -449,13 +498,7 @@ export function historyFromEvents(input: {
     const myComments = input.comments.filter((c) => c.personaId === id)
     const recentPosts = myPosts.filter((p) => p.at.getTime() >= since)
     const recentComments = myComments.filter((c) => c.at.getTime() >= since)
-    const roleCounts: Record<string, number> = {}
-    let unresolved = 0
-    for (const c of recentComments) {
-      const r = input.roleOf.get(c.id)
-      if (r === undefined || r.trim() === '') unresolved += 1
-      else roleCounts[r] = (roleCounts[r] ?? 0) + 1
-    }
+    const { roleCounts, unresolvedRoleEvents: unresolved } = roleHistoryOf({ comments: myComments, roleOf: input.roleOf, now: input.now })
     let streak = 0
     for (let i = seq.length - 1; i >= 0 && seq[i]!.personaId === id; i -= 1) streak += 1
     let lastPair = -1

@@ -17,7 +17,8 @@ import {
   anyNoGo, commonNoGoHits, COMMON_NO_GO_PHRASES, isNoGoExpressionItem, noGoExpressionKey, noGoHits, promptNoGoExpressions,
 } from '../src/lib/persona-no-go'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
-import { contractAxes, type ActivityHistory } from '../src/lib/persona-reserve'
+import { contractAxes, roleRoundVerdict, type ActivityHistory, type RoleHistory } from '../src/lib/persona-reserve'
+import { planCommentDistribution, type PlannerPersona, type PlannerPost } from '../src/lib/persona-comment-planner'
 import { PERSONA_LIFE_AXES, ROLE_SHARE_CAP, ACTIVITY_CAP_PER_DAY, CONSECUTIVE_EXPOSURE_CAP, PAIR_REPEAT_GAP } from '../src/lib/d100-persona-scale'
 import { LIFE_CONTRACT_FIELDS } from '../src/lib/content-core/speaker'
 import { judgeEvidenceForTarget, type EvidenceFactsFor } from '../src/lib/stage-evidence'
@@ -112,6 +113,51 @@ console.log('\n④ C8 — 개인 말버릇은 없어도 되는 칸 · 소재 경
   check('🔴 증명일 자동 글 글쓴이 겹침 → PERSONA_REPEAT', ev(['a', 'a', 'b']).includes('PERSONA_REPEAT'))
   check('🔴 글쓴이를 모르는 자동 글 → PERSONA_REPEAT(fail-closed)', ev(['a', null, 'b']).includes('PERSONA_REPEAT'))
   check('서로 다른 글쓴이 → PERSONA_REPEAT 없음', !ev(['a', 'b', 'c']).includes('PERSONA_REPEAT'))
+
+  console.log('\n⑤-2 C9 — 역할 쏠림은 **실제 댓글 회차(planner)** 에서 막힌다')
+  const NOW = Date.UTC(2026, 9, 1, 3)
+  const post = (id: string): PlannerPost => ({
+    id, status: 'PUBLISHED', authorPersonaCode: null, memberComments: 0, personaComments: 0,
+    personaCodesOnPost: [], openQueuePersonaCodes: [], publishedAtMs: NOW - 3_600_000,
+    onHold: false, operatorWritten: false, title: '요즘 잠이 안 와요', body: '밤마다 깨요. 다들 어떠세요?',
+  })
+  const who = (code: string, recentRoles: RoleHistory | null): PlannerPersona => ({
+    code, status: 'active', realMember: { accountCount: 0, providerId: null }, seedComplete: true,
+    forbiddenReactionRoles: [], recentComments: 0, recentRoles, life: { noGoTopics: [] },
+  })
+  const plan = (personas: PlannerPersona[], roles = ['empathy']) => planCommentDistribution({
+    posts: [post('x')], personas, reactionRoles: roles, limit: 1, nowMs: NOW, recentRoleCounts: {},
+  })
+  const A = (r: RoleHistory | null) => who('A', r)
+  const B = who('B', { roleCounts: {}, unresolvedRoleEvents: 0 })
+  const concRoles = { roleCounts: { empathy: 9, question: 1 }, unresolvedRoleEvents: 0 }
+  check('🔴 A(empathy 9 · question 1) → contract-valid 유지', v(ALL, { ...busy(10), roleCounts: concRoles.roleCounts }).valid)
+  check('🔴 A 다음 empathy 배정에서 제외 → B 가 대신 선택', plan([A(concRoles), B]).items[0]?.personaCode === 'B')
+  check('A 는 쏠리지 않은 역할(question)은 맡을 수 있다', plan([A(concRoles), B], ['question']).items[0]?.personaCode === 'A')
+  check('🔴 역할 이력 못 읽음(null) → 이번 회차 제외 · B 선택', plan([A(null), B]).items[0]?.personaCode === 'B')
+  check('🔴 역할 모르는 댓글 있음 → 이번 회차 제외 · B 선택', plan([A({ roleCounts: { empathy: 1 }, unresolvedRoleEvents: 1 }), B]).items[0]?.personaCode === 'B')
+  check('표본 5 미만(empathy 4) → 기존대로 허용(A 먼저)', plan([A({ roleCounts: { empathy: 4 }, unresolvedRoleEvents: 0 }), B]).items[0]?.personaCode === 'A')
+  check('비율 0.5 이하(empathy 5 · question 5) → 허용(A 먼저)', plan([A({ roleCounts: { empathy: 5, question: 5 }, unresolvedRoleEvents: 0 }), B]).items[0]?.personaCode === 'A')
+  const none = plan([A(concRoles)])
+  check('🔴 대안 Persona 없음 → 배정 0 · 사유 PERSONA_ROLE_CONCENTRATED (유료 호출 전 skip)',
+    none.items.length === 0 && none.skipped.some((x) => x.blocks.some((b) => b.code === 'PERSONA_ROLE_CONCENTRATED')))
+  const unknownOnly = plan([A(null)])
+  check('🔴 대안 없음 · 이력 모름 → 배정 0 · 사유 PERSONA_ROLE_HISTORY_UNKNOWN',
+    unknownOnly.items.length === 0 && unknownOnly.skipped.some((x) => x.blocks.some((b) => b.code === 'PERSONA_ROLE_HISTORY_UNKNOWN')))
+  check('정본 함수 하나 — 0.9 → empathy 만 막는다 · 0.5 → 0 · 4건 → 0',
+    JSON.stringify(roleRoundVerdict(concRoles)) === JSON.stringify({ status: 'ok', evidence: 'n=10 · 0.90 > 0.5', blockedRoles: ['empathy'] })
+    && (roleRoundVerdict({ roleCounts: { empathy: 5, question: 5 }, unresolvedRoleEvents: 0 }) as { blockedRoles: string[] }).blockedRoles.length === 0
+    && (roleRoundVerdict({ roleCounts: { empathy: 4 }, unresolvedRoleEvents: 0 }) as { blockedRoles: string[] }).blockedRoles.length === 0)
+  const twoPosts = planCommentDistribution({
+    posts: [post('x'), post('y')], personas: [A(concRoles), B], reactionRoles: ['empathy', 'question'], limit: 2, nowMs: NOW, recentRoleCounts: {},
+  })
+  check('한 사람이 막혀도 회차는 계속 — 글 2개 모두 배정 · A 는 empathy 0',
+    twoPosts.items.length === 2 && !twoPosts.items.some((i) => i.personaCode === 'A' && i.reactionRole === 'empathy'))
+  const src = (f: string): string => readFileSync(f, 'utf-8')
+  check('🔴 운영 경로 배선 — DB source 가 roleHistoryOf 로 만들고 · targets 가 planner 로 넘긴다',
+    /roleHistoryOf\(/.test(src('scripts/lib/persona-comment-source-db.ts'))
+    && /recentRoles: pe\.recentRoles/.test(src('scripts/lib/persona-comment-targets.ts'))
+    && /roleRoundVerdict\(persona\.recentRoles\)/.test(src('src/lib/persona-comment-planner.ts')))
 }
 
 console.log('\n⑥ 가짜 활동 · 가짜 소재 · 임계 완화 0')

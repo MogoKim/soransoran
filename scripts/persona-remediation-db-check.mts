@@ -56,6 +56,9 @@ const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
 const { noGoExpressionKey } = await import('../src/lib/persona-no-go')
 const { readRemediation, applyRemediation } = await import('./lib/persona-contract-remediation.mjs')
 const { bundlesForPersonas } = await import('./lib/persona-reference-store.mjs')
+const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
+const { roleRoundVerdict } = await import('../src/lib/persona-reserve')
+const { readReserveFacts } = await import('./lib/persona-reserve-facts.mjs')
 const { PERSONA_POOL_DOC } = await import('./lib/voice-runtime.mjs')
 
 let pass = 0
@@ -77,6 +80,11 @@ if (bundles.origin !== '정본 자산' || bundles.byCode.size !== 4 || bundles.b
 
 async function cleanup(): Promise<void> {
   const mine = await prisma.persona.findMany({ where: { code: { in: CODES } }, select: { id: true, userId: true } })
+  const ids = mine.map((m) => m.id)
+  const posts = await prisma.post.findMany({ where: { OR: [{ personaId: { in: ids } }, { title: { startsWith: 'rmd-role' } }] }, select: { id: true } })
+  await prisma.personaApprovalQueue.deleteMany({ where: { OR: [{ personaId: { in: ids } }, { dedupKey: { startsWith: 'rmd-role' } }] } })
+  await prisma.comment.deleteMany({ where: { OR: [{ personaId: { in: ids } }, { postId: { in: posts.map((p) => p.id) } }] } })
+  await prisma.post.deleteMany({ where: { id: { in: posts.map((p) => p.id) } } })
   await prisma.personaAuditLog.deleteMany({ where: { personaId: { in: mine.map((m) => m.id) } } })
   await prisma.persona.deleteMany({ where: { id: { in: mine.map((m) => m.id) } } })
   await prisma.user.deleteMany({ where: { OR: [{ id: { in: mine.map((m) => m.userId) } }, { nickname: { startsWith: 'rmd-member' } }] } })
@@ -188,6 +196,44 @@ try {
   check('🔴 두 번째 계획 0', r4.plan.personas.length === 0)
   const rAgain = await applyRemediation(prisma, { approvedDigest: r4.plan.digest, reason: 'db-check', now, repoRoot: root })
   check('🔴 두 번째 실행 write 0', rAgain.ok && rAgain.updated.length === 0 && s5 === await snapshot())
+
+  // ── ⑥ 🔴 역할 쏠림은 **실제 댓글 회차 원자료**에서 읽힌다 (2026-10-01 · C9 보정) ──
+  const ids = Object.fromEntries((await prisma.persona.findMany({ where: { code: { in: ['P01', 'P14'] } }, select: { code: true, id: true, userId: true } }))
+    .map((p) => [p.code, p]))
+  const rolePost = await prisma.post.create({
+    data: { boardType: 'FREE', title: 'rmd-role 글', content: '본문', authorId: ids.P14!.userId, personaId: ids.P14!.id, status: 'PUBLISHED' },
+    select: { id: true },
+  })
+  const roles = [...Array(9).fill('empathy'), 'question'] as string[]
+  for (const [i, role] of roles.entries()) {
+    const c = await prisma.comment.create({
+      data: { postId: rolePost.id, content: `댓글 ${i}`, authorId: ids.P01!.userId, personaId: ids.P01!.id, commentOrigin: 'PERSONA' },
+      select: { id: true },
+    })
+    await prisma.personaApprovalQueue.create({ data: {
+      personaId: ids.P01!.id, targetPostId: rolePost.id, candidateText: `댓글 ${i}`, reactionType: role,
+      gateStatus: 'pass', gateResults: {}, dedupKey: `rmd-role-${i}`, status: 'PUBLISHED', publishedCommentId: c.id,
+    } })
+  }
+  const src = makeDbTargetSource({ prisma, windowStart: new Date(now.getTime() - 7 * 86_400_000), now })
+  const sp = await src.personas()
+  const p01 = sp.find((p) => p.code === 'P01')!
+  check(`🔴 DB source → P01 역할 이력 ${JSON.stringify(p01.recentRoles)}`, p01.recentRoles !== null
+    && p01.recentRoles.roleCounts.empathy === 9 && p01.recentRoles.roleCounts.question === 1 && p01.recentRoles.unresolvedRoleEvents === 0)
+  const facts = await readReserveFacts(prisma, { now, repoRoot: root })
+  const h01 = facts.rows.find((r) => r.code === 'P01')!.history!
+  check('🔴 회차 원자료 = 계약 원자료 (같은 정본 `roleHistoryOf`)', JSON.stringify(h01.roleCounts) === JSON.stringify(p01.recentRoles!.roleCounts))
+  const rr = roleRoundVerdict(p01.recentRoles)
+  check('🔴 회차 판정 → P01 empathy 만 막힘', rr.status === 'ok' && rr.blockedRoles.join(',') === 'empathy')
+  const r6 = await readRemediation(prisma, { now, repoRoot: root })
+  check('🔴 P01 contract-valid 유지 — 역할 쏠림은 계약을 깎지 않는다', r6.before.byState['stage-active'].includes('P01'))
+  // 역할을 모르는 댓글(발행 Queue 행 없음) 하나 → 이번 회차 모름
+  await prisma.comment.create({
+    data: { postId: rolePost.id, content: '역할 모름', authorId: ids.P01!.userId, personaId: ids.P01!.id, commentOrigin: 'PERSONA' },
+  })
+  const p01b = (await src.personas()).find((p) => p.code === 'P01')!
+  check('🔴 역할 모르는 댓글 1건 → 회차 모름(fail-closed)', roleRoundVerdict(p01b.recentRoles).status === 'unknown'
+    && (await readRemediation(prisma, { now, repoRoot: root })).before.byState['stage-active'].includes('P01'))
 } finally {
   await cleanup()
   await prisma.$disconnect()

@@ -214,6 +214,8 @@ export function judgeAutogenCandidate(
     seedComplete: seedComplete(seed),
     forbiddenReactionRoles: card.forbiddenReactionRoles,
     recentComments: 0,
+    // 🔴 아직 없는 사람 — 측정한 이력 0 이다(모름이 아니다)
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
     life: {
       ageBand: pm.ageBand, maritalStatus: pm.maritalStatus, childrenCount: pm.childrenCount,
       childrenAgeBands: pm.childrenAgeBands, parentCare: pm.parentCare, menopauseStatus: pm.menopauseStatus,
