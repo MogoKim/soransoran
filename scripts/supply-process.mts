@@ -55,7 +55,7 @@ import { buildQueueSnapshot, pendingSourceKeysOf, queueSnapshotFileName } from '
 import {
   attemptedOutcomes, concludedSourceKeys, humanDecisionIndexOf, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
   sourceIdentityOf, sourceKeyOf, type HumanDecisionIndex,
-  selectWorkset, worksetAxisOf, worksetFileName,
+  selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName,
   WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
   OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease,
 } from '../src/lib/supply-workset'
@@ -958,12 +958,26 @@ async function main(): Promise<number> {
       return 1
     }
     const releaseOf = (r: WorksetRow): SlotReleaseVerdict => preGenerationRelease(r, nextSlotAt, RUN_AT)
+    // 🔴 회차 시각 하나 — 자식(auto-draft)이 env 로 **같은 값**을 받는다
+    const runAt = RUN_AT
+    const prior = priorState(rows, currentContractBase(runAt))
     /**
-     * 🔴 **원천 기회 스냅샷** — 생성 전 판정 eligible 원천의 증거 기록(원문 없음). 다음 단계 preflight 가 읽는다.
+     * 🔴 **생성 가능 판정 입력 — 하나다** (2026-10-01 Lane B). 기회 스냅샷과 묶음 선택이 같은 값 · 같은 함수
+     *    (`worksetEligibility`)를 쓴다. 앞판 스냅샷은 슬롯 판정만 거쳐 끝난 · 큐 · 이월 · 사람 판정 원천까지 셌다.
+     */
+    const eligibilityInput = {
+      rows, humanDecided: humanDecided(), queuePending, queuedSources,
+      // 🔴 이월로 적재될 후보의 원천 — 다시 만들지 않는다(#587 이 적재한다)
+      carriedOver: queuedSourceKeysOf(carry.picked.flatMap((x) => x.sources)),
+      concluded: prior.concluded,
+      releaseOf,
+    }
+    /**
+     * 🔴 **원천 기회 스냅샷** — 지금 실제로 생성 가능한(상한 전) 원천의 증거 기록(원문 없음). 다음 단계 preflight 가 읽는다.
      *    쓰기는 live 회차에서만(dry-run 파일 write 0).
      */
     if (canWrite) {
-      const opp = rows.filter((r) => r.evidence !== null && releaseOf(r).verdict === 'eligible').map((r) => r.evidence!)
+      const opp = worksetEligibility(eligibilityInput).eligible.flatMap((r) => (r.evidence === null ? [] : [r.evidence]))
       writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify({
         kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT.toISOString(),
         slotAt: nextSlotAt.toISOString(), evidence: opp,
@@ -971,15 +985,8 @@ async function main(): Promise<number> {
       console.log(`   🟢 원천 기회 스냅샷 ${opp.length}건 (예정 슬롯 ${nextSlotAt.toISOString()})`)
     }
     if (policy.llm) {
-    // 🔴 회차 시각 하나 — 자식(auto-draft)이 env 로 **같은 값**을 받는다
-    const runAt = RUN_AT
-    const prior = priorState(rows, currentContractBase(runAt))
     const plan = selectWorkset({
-      rows, humanDecided: humanDecided(), queuePending, ...prior,
-      queuedSources,
-      // 🔴 이월로 적재될 후보의 원천 — 다시 만들지 않는다(#587 이 적재한다)
-      carriedOver: queuedSourceKeysOf(carry.picked.flatMap((x) => x.sources)),
-      releaseOf,
+      ...eligibilityInput, attempted: prior.attempted,
       limit: WORKSET_LIMIT, runId, takenAt: runAt,
     })
     if (plan.picked.length === 0) {

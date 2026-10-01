@@ -568,6 +568,30 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
   check('🔴 기회 = READY 짝 + 원천 기회 × 측정 수율(내림) — 1 + floor(2×0.5) = 2', o.total === 2 && o.readyFilled === 1 && o.sourceFilled === 2)
   check('🔴 수율을 모르면 원천 기회를 세지 않는다(과대평가 금지)',
     slotValidOpportunitiesOf({ slots, ready: [always], sources: [src('s1'), src('s2')], readyPerSource: null }).total === 1)
+
+  // 🔴 (2026-10-01 Lane B) 수율은 **원천 1건당** — 원천 수에 곱한다. 슬롯 짝 수(≤ 남은 슬롯)에 곱하면
+  //    수율 < 1/슬롯 수 일 때 원천이 몇 건이든 0 이다(운영 재현: 221 원천 · 수율 30/305 → floor(3×0.098) = 0)
+  const many = (n: number, validAt: (d: Date) => boolean = () => true): SlotOpportunity[] =>
+    Array.from({ length: n }, (_, i) => ({ key: `m${String(i).padStart(3, '0')}`, validAt }))
+  const prod = slotValidOpportunitiesOf({ slots, ready: [], sources: many(221), readyPerSource: 30 / 305 })
+  check('🔴 🔴 **운영 모양 — 원천 221 · 수율 30/305 · d3 슬롯 3 → 기회 3 (앞판 0)**',
+    prod.total === 3 && prod.sourceValid === 221 && prod.sourceExpected === 3, JSON.stringify(prod))
+  check('🔴 원천 100 · 수율 0.1 → floor(10) 이지만 슬롯 짝(3)을 넘지 못한다 → 3',
+    slotValidOpportunitiesOf({ slots, ready: [], sources: many(100), readyPerSource: 0.1 }).total === 3)
+  const few = slotValidOpportunitiesOf({ slots, ready: [], sources: many(5), readyPerSource: 0.1 })
+  check('🔴 과대평가 금지 — 원천 5 · 수율 0.1 → floor(0.5) = 0', few.total === 0 && few.sourceExpected === 0, JSON.stringify(few))
+  const first = slots[0]!.getTime()
+  const onlyFirst = slotValidOpportunitiesOf({
+    slots, ready: [], sources: many(20, (d) => d.getTime() === first), readyPerSource: 0.5,
+  })
+  check('🔴 짝짓기 상한 — 첫 슬롯에만 eligible 인 원천 20 · 수율 0.5 → floor(10) 이어도 덮는 슬롯은 1 → 1',
+    onlyFirst.total === 1 && onlyFirst.sourceFilled === 1, JSON.stringify(onlyFirst))
+  const firstOnlyReady: SlotOpportunity = { key: 'r', validAt: (d) => d.getTime() === first }
+  const taken = slotValidOpportunitiesOf({
+    slots, ready: [firstOnlyReady], sources: many(30, (d) => d.getTime() === first), readyPerSource: 0.5,
+  })
+  check('🔴 READY 가 이미 덮은 슬롯에만 eligible 인 원천은 남은 슬롯 기회가 아니다 → READY 1 + 0',
+    taken.total === 1 && taken.readyFilled === 1 && taken.sourceValid === 0, JSON.stringify(taken))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

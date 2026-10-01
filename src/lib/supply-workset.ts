@@ -871,20 +871,7 @@ export function retryTierOf(o: PriorOutcome | undefined): number {
  */
 export const WORKSET_RETRY_STARVE_MS = 6 * 60 * 60 * 1000
 
-/**
- * 🔴 **묶음을 고른다.** AI 를 부르기 전에 끝난다 — 이 함수는 순수하다.
- *
- * 🔴 자리를 둘로 나눈다: **한 번도 안 본 원천**과 **이미 본 원천(재시도)**.
- *    한쪽이 다른 쪽을 굶기지 않는 것이 이 함수의 계약이다.
- *
- * 🔴 **그 전에 축으로 자리를 나눈다** (2026-09-28, `worksetAxisQuota`).
- *    상한 10 → raw 최대 2 · seed 가 충분하면 seed 8 이상 (상한 5 → 1 · 4). raw 는 빼지 않고,
- *    seed 가 모자란 자리를 raw 로 전부 채우지도 않는다(빈 자리는 비워 둔다).
- *    신규/재시도 나눔과 각 줄의 순서(댓글 수 · 오래 기다린 것부터)는 축 자리 **안에서** 그대로다.
- *
- * 🔴 같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.
- */
-export function selectWorkset(input: {
+export type SelectWorksetInput = {
   /** post-adapt 상세 행 — 🔴 같은 id 가 여러 번 오면 **뒤에 온 것**이 최신이다 */
   rows: readonly WorksetRow[]
   /** 사람이 이미 판정한 원천 — 🔴 `humanDecisionIndexOf` (사이트까지 맞춘다) */
@@ -920,7 +907,29 @@ export function selectWorkset(input: {
   limit: number
   runId: string
   takenAt: Date
-}): WorksetPlan {
+}
+
+/** 🔴 생성 가능 판정에 쓰는 입력 — 묶음 선택과 기회 스냅샷이 **같은 값**을 넘긴다 */
+export type WorksetEligibilityInput = Pick<SelectWorksetInput,
+  'rows' | 'humanDecided' | 'queuePending' | 'queuedSources' | 'carriedOver' | 'concluded' | 'releaseOf'>
+
+export type WorksetEligibility = {
+  /** 🔴 지금 실제로 생성 가능한 원천(상한 적용 전) — 마지막 행 기준 · 사이트 · id 정리됨 */
+  eligible: WorksetRow[]
+  /** 원천 열쇠 → 생성 전 판정(eligible 만) */
+  releaseByKey: Map<string, SlotReleaseVerdict>
+  dropped: Record<WorksetDrop, number>
+  /** 원천 열쇠 — `eligible` 의 행에만 정의된다 */
+  keyOf: (r: WorksetRow) => string
+}
+
+/**
+ * 🔴 **생성 가능 원천 — 정본 판정 하나** (2026-10-01 Lane B). 묶음 선택(`selectWorkset`)과
+ *    원천 기회 스냅샷(공급 러너 → preflight)이 **이 함수 하나**를 부른다. 두 번째 판정을 만들지 않는다.
+ *    빼는 것: 사이트 · id 모름 · 사람 판정 · 큐 형제 · 이미 큐/글 · 이월 · 끝난 원천 · hard block ·
+ *    물어봐도 HOLD · 예정 슬롯 ineligible · unknown. 앞판 스냅샷은 슬롯 판정만 거쳐 끝난 · 큐 원천까지 셌다.
+ */
+export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligibility {
   const dropped: Record<WorksetDrop, number> = {
     identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
     slotIneligible: 0, slotUnknown: 0,
@@ -974,6 +983,25 @@ export function selectWorkset(input: {
     releaseByKey.set(K(r), v)
     eligible.push(r)
   }
+
+  return { eligible, releaseByKey, dropped, keyOf: K }
+}
+
+/**
+ * 🔴 **묶음을 고른다.** AI 를 부르기 전에 끝난다 — 이 함수는 순수하다.
+ *
+ * 🔴 자리를 둘로 나눈다: **한 번도 안 본 원천**과 **이미 본 원천(재시도)**.
+ *    한쪽이 다른 쪽을 굶기지 않는 것이 이 함수의 계약이다.
+ *
+ * 🔴 **그 전에 축으로 자리를 나눈다** (2026-09-28, `worksetAxisQuota`).
+ *    상한 10 → raw 최대 2 · seed 가 충분하면 seed 8 이상 (상한 5 → 1 · 4). raw 는 빼지 않고,
+ *    seed 가 모자란 자리를 raw 로 전부 채우지도 않는다(빈 자리는 비워 둔다).
+ *    신규/재시도 나눔과 각 줄의 순서(댓글 수 · 오래 기다린 것부터)는 축 자리 **안에서** 그대로다.
+ *
+ * 🔴 같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.
+ */
+export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
+  const { eligible, releaseByKey, dropped, keyOf: K } = worksetEligibility(input)
 
   /** 🔴 정본 rank 사전식 비교 — 합산 점수 없음 · 마지막 열쇠는 원천 열쇠다 */
   const byWeight = (a: WorksetRow, b: WorksetRow): number =>
