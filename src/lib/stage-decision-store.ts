@@ -4,10 +4,11 @@
  *   이 파일은 **순서만** 정의한다: 읽고 · 없으면 계산하고 · 넣고 · 충돌이면 다시 읽는다.
  *   Prisma 는 `stage-decision-repo` 가 끼워 넣고, 검증은 `stage-decision-contract` 가 한다.
  *
- * 🔴 **지금 상태** (2026-09-28 read-only 확인) — 운영 DB 에 `StageDecision` 표가 **있고 행은 0** 이다.
- *    controller(`scripts/stage-controller.mts`) · consumer 감싸기(`scripts/stage-consume-exec.mts`)가
- *    이 순서를 부른다. 🔴 `STAGE_CONTROLLER_ENABLED` 는 정본 env 에 없다(꺼짐) — 켜기 전까지
- *    controller 는 저장하지 않고 consumer 는 가장 안전한 단계(d1)로 간다.
+ * 🔴 **단계 authority 는 `StageDecision` 한 행이다.** controller(`scripts/stage-controller.mts`)가 만들고
+ *    consumer 감싸기(`scripts/stage-consume-exec.mts`)가 읽는다. 운영 상태(행 수 · switch 값)는 이 주석에 적지 않는다.
+ *    🔴 canonical env 에 kill switch `STAGE_CONTROLLER_ENABLED` 가 있을 수 있다 — 정확히 `on` 일 때만 이 순서를 쓴다.
+ *    switch 는 단계 값을 정하지 않는다. OFF · 누락이면 controller 는 저장하지 않고 consumer 는 가장 안전한
+ *    단계(d1)로 간다 — 옛 env 단계 · canary 경로로 돌아가지 않는다.
  *
  * 🔴 **왜 저장이 필요한가.** 공급(로컬 launchd)과 발행(GitHub Actions)은 서로 다른
  *    env 원천을 읽는다. 2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.
