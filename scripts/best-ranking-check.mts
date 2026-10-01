@@ -105,8 +105,9 @@ console.log('\n■ 3. 쓰기 경로 — syncBestEligibility(tx) 하나로 W 와 
   /** 사건 → 파일 · 그 파일에서 tx 로 부르는 syncBestEligibility 수 */
   const WRITERS: { file: string; events: string; calls: number }[] = [
     { file: 'src/lib/actions/likes.ts', events: '회원 공감 추가·취소', calls: 1 },
-    { file: 'src/lib/actions/comments.ts', events: '회원 댓글 작성', calls: 1 },
-    { file: 'src/lib/actions/guest-comments.ts', events: '비회원 댓글 작성·삭제', calls: 2 },
+    // 회원·비회원 댓글 작성은 한 저장 함수(comment-write.ts)를 거친다 — 그 안의 한 트랜잭션에서 부른다
+    { file: 'src/lib/comment-write.ts', events: '회원·비회원 댓글 작성', calls: 1 },
+    { file: 'src/lib/actions/guest-comments.ts', events: '비회원 댓글 삭제', calls: 1 },
     { file: 'src/lib/actions/delete.ts', events: '회원 글 삭제 · 회원 댓글 삭제', calls: 2 },
     { file: 'src/lib/actions/admin.ts', events: '어드민 글 숨김·복구 · 댓글 숨김·복구', calls: 2 },
     { file: 'src/lib/operator-compose-tx.ts', events: '운영 글 숨김', calls: 1 },
@@ -116,6 +117,13 @@ console.log('\n■ 3. 쓰기 경로 — syncBestEligibility(tx) 하나로 W 와 
     const viaTx = count(c, /\bsyncBestEligibility\(\s*tx\b/g)
     const any = count(c, /\bsyncBestEligibility\(/g)
     check(`${w.events}: syncBestEligibility(tx, …) ${w.calls}곳 · 트랜잭션 밖 호출 0`, viaTx === w.calls && any === w.calls, `tx ${viaTx} · 전체 ${any}`)
+  }
+  // 🔴 작성 action 이 저장을 직접 하면 /best 갱신이 빠질 수 있다 — 반드시 writeComment 를 거친다
+  for (const f of ['src/lib/actions/comments.ts', 'src/lib/actions/guest-comments.ts']) {
+    const c = code(f)
+    check(`${f}: 댓글 작성은 writeComment 한 번 · comment.create 직접 호출 0`,
+      count(c, /\bwriteComment\(\s*prisma\b/g) === 1 && count(c, /\bcomment\.create\(/g) === 0,
+      `writeComment ${count(c, /\bwriteComment\(/g)} · comment.create ${count(c, /\bcomment\.create\(/g)}`)
   }
   check('회원 차단·해제: applyMemberBlock 을 트랜잭션 안에서 부른다',
     /\$transaction\(\s*\(tx\)\s*=>\s*applyMemberBlock\(\s*tx\b/.test(code('src/lib/actions/admin.ts')))

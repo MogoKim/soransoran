@@ -188,6 +188,8 @@
     "operator:compose-check": "tsx scripts/operator-compose-check.mts",
     "operator:compose-db-check": "tsx scripts/operator-compose-db-check.mts",
     "check:comment-compose": "tsx scripts/comment-compose-check.mts",
+    "check:comment-thread": "tsx scripts/comment-thread-check.mts",
+    "check:comment-thread-db": "tsx --tsconfig tsconfig.ops.json scripts/comment-thread-db-check.mts",
     "persona:birth-anchors": "tsx scripts/persona-birth-anchor-table.mts",
     "stage:db-check": "tsx scripts/stage-decision-db-check.mts",
     "stage:controller": "tsx scripts/stage-controller.mts",

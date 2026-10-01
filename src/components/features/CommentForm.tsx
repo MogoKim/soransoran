@@ -8,8 +8,11 @@ import { useAutoResize } from '@/lib/use-auto-resize'
 import { useSubmitGuard } from '@/lib/use-submit-guard'
 import { createComment, type CommentActionState } from '@/lib/actions/comments'
 import { trackEvent } from '@/lib/analytics/track'
+import { countsAsNewComment } from '@/lib/comment-publish'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import { useToast } from '@/components/ui/toast'
+import ReplyTargetHeader, { replyTargetGoneOf, type ReplyTargetInfo } from '@/components/features/ReplyTargetHeader'
+import { useThreadNav } from '@/components/features/ThreadNavProvider'
 import {
   COMMENT_CREATED,
   REPLY_CREATED,
@@ -25,17 +28,27 @@ export default function CommentForm({
   postId,
   boardSlug,
   parentId,
+  replyTarget,
+  onPosted,
 }: {
   postId: string
   boardSlug: string
-  /** 답글이면 부모 댓글 id. 새 댓글이면 undefined */
+  /** 답글이면 직접 답하는 댓글 id. 새 댓글이면 undefined */
   parentId?: string
+  /** 답글이면 작성칸 맨 위에 보일 대상 */
+  replyTarget?: ReplyTargetInfo
+  /** 저장된 뒤 — 답글 작성칸은 여기서 닫힌다 */
+  onPosted?: () => void
 }) {
   const pathname = usePathname()
   const toast = useToast()
   const [state, formAction] = useFormState<CommentActionState, FormData>(createComment, {})
   const [content, setContent] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const nav = useThreadNav()
+  /** 🔴 쓰는 도중 대상을 쓸 수 없게 됐다(지움 · 차단) — 이름·원문을 숨기고 등록을 막는다. 쓴 글(content)은 지우지 않는다 */
+  const goneReason = replyTargetGoneOf(state.code)
+  const targetGone = goneReason !== null
 
   /**
    * 이미 처리한 서버 응답.
@@ -72,7 +85,13 @@ export default function CommentForm({
      *    글 존재 확인이 있고, 하나라도 걸리면 error 로 돌아와 이 자리에 오지 않는다.
      * 🔴 본문·postId·parentId 를 보내지 않는다. 답글인지 여부만 boolean 으로 남긴다.
      */
-    trackEvent('comment_publish', { member_type: 'member', is_reply: Boolean(parentId) })
+    // 🔴 중복(연타 · 재전송)으로 기존 댓글을 돌려받은 요청은 새 등록으로 세지 않는다(comment-publish.ts)
+    if (countsAsNewComment(state)) {
+      trackEvent('comment_publish', { member_type: 'member', is_reply: Boolean(parentId) })
+    }
+    // 새로 그려진 그 댓글로 이동·포커스한다(서버가 새 목록을 그릴 때까지 기다린다)
+    if (state.commentId) nav?.focusPosted(state.commentId)
+    onPosted?.()
     // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
@@ -90,6 +109,8 @@ export default function CommentForm({
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
       {parentId ? <input type="hidden" name="parentId" value={parentId} /> : null}
+
+      {replyTarget ? <ReplyTargetHeader target={replyTarget} gone={goneReason} /> : null}
 
       {state.error ? (
         state.needsOnboarding ? (
@@ -110,7 +131,7 @@ export default function CommentForm({
           maxLength={MAX_COMMENT_LENGTH}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          aria-label="댓글"
+          aria-label={replyTarget && !targetGone ? `${replyTarget.name}님에게 보낼 답글` : parentId ? '답글' : '댓글'}
           className="min-h-[52px] flex-1 resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-page p-3 leading-[1.7]"
           placeholder={COMMENT_PLACEHOLDER}
         />
@@ -118,7 +139,7 @@ export default function CommentForm({
           tone="primary"
           label="등록"
           pendingLabel="등록 중…"
-          disabled={content.trim().length < MIN_COMMENT_LENGTH}
+          disabled={targetGone || content.trim().length < MIN_COMMENT_LENGTH}
           className="min-w-[76px] shrink-0 whitespace-nowrap"
         />
       </div>

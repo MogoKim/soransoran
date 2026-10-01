@@ -28,7 +28,7 @@ import { GUEST_PASSWORD_LENGTH, GUEST_PASSWORD_PLACEHOLDER } from '@/lib/guest-c
 type Mode = 'edit' | 'delete' | null
 
 const SMALL_BTN =
-  `inline-flex ${TOUCH_MIN} items-center rounded-lg px-2 text-sm text-content-muted hover:text-content-primary`
+  `inline-flex ${TOUCH_MIN} min-w-[52px] items-center justify-center rounded-lg px-2 text-sm text-content-muted hover:text-content-primary`
 
 export default function GuestCommentControls({
   commentId,
