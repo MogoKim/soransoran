@@ -306,7 +306,10 @@ export function buildV2DraftSystemPrompt(input: {
     `## 당신이 서는 자리 — 🔴 ${STANCE_LABEL[plan.stance ?? 'REFLECTION']}`,
     ...(plan.stance !== null && plan.stance !== 'SELF_EXPERIENCE'
       ? ['🔴 **이 글 속 경험은 당신 것이 아닙니다.** 겪었다고 쓰지 않습니다.',
-         '   생각 · 감정 · 궁금함은 1인칭으로 말해도 됩니다.']
+         '   생각 · 감정 · 궁금함은 1인칭으로 말해도 됩니다.',
+         // 🔴 (v2-draft-p9 · quality-v6) 원문 글쓴이의 만남·대화·들음도 경험이다 — 최종 게이트(`draft-life-gates` 만남)가 같은 선으로 막는다
+         '   🔴 원문 글쓴이가 **누구를 만나고 · 이야기를 나누고 · 들은 일**도 그 사람의 경험입니다.',
+         '      당신이 만나고 들은 일로 옮기지 않습니다. 그 사람이 한 말은 남의 이야기로 씁니다.']
       : []),
     '',
     `## 말투 — 🔴 리듬만 빌립니다. 기준: ${voice.voiceStandard}`,

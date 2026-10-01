@@ -446,8 +446,8 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v5 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v5')
-    check(`초안 게이트 판 = draft-gates-v5 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v5')
+    check(`품질 계약 판 = quality-v6 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v6')
+    check(`초안 게이트 판 = draft-gates-v6 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v6')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })
@@ -541,6 +541,65 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     const got = hard.length > 0 ? `hold:${hard.join('+')}` : rev.length > 0 ? `review:${rev.join('+')}` : 'pass'
     check(`${ph.want === 'pass' ? '🟢' : ph.want.startsWith('hold') ? '🔴' : '🟡'} ${ph.card} "${ph.body.slice(0, 30)}" → ${ph.want}`, got === ph.want, got)
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑫ quality-v6 — 1인칭 만남·대화·들음 (2026-10-01 운영 자동 READY 감사 결함 yes 1건 · P04)
+// ─────────────────────────────────────────────────────────
+{
+  const { judgeDraftLife } = await import('../src/lib/content-core/draft-life-gates')
+  const { realCard } = await import('./lib/life-gate-fixtures.mjs')
+  console.log('\n⑫ v6 만남 — 겪지 않는 자리의 1인칭 만남은 원문에 있어도 확정 · 남의 이야기 · 원천이 가진 만남은 통과')
+  type Plan6 = { selfBasis: string | null; warrants: { fact: string; evidenceText?: string }[]; stance?: string | null }
+  const Q6: Plan6 = { selfBasis: null, warrants: [], stance: 'QUESTION' }
+  const R6: Plan6 = { selfBasis: null, warrants: [], stance: 'REFLECTION' }
+  const O6: Plan6 = { selfBasis: null, warrants: [], stance: 'OBSERVATION' }
+  const NOSTANCE: Plan6 = { selfBasis: null, warrants: [] }
+  const S6: Plan6 = { selfBasis: 'noLifeFactNeeded', warrants: [], stance: 'SELF_EXPERIENCE' }
+  /** 🔴 원천 — 만남이 있는 글 · 만남도 전언도 없는 글 · 모름 */
+  const SRC_MEET = { title: '동년배', body: '어제 60대 만났는데\n\n티비에 70.80 배우 나와서 연기하는게 싫대요\n\n왜인가요?' }
+  const SRC_PLAIN = { title: '잠', body: '요즘 새벽에 자꾸 깨요. 다들 어떻게 하세요?' }
+  const P04_TITLE = '나이 들면 동년배 나오는 걸 더 안 보게 될까요?'
+  const P04_BODY = '어제 60대 분과 이야기를 나누다 들었는데요.\n\nTV에 70.80 배우들이 나와서 연기하는 모습이 보기 싫다고 하시더라고요. 주름진 얼굴을 화면으로 보는 게 싫으시대요.\n\n젊은 사람은 좋아하면서 자기 또래나 더 나이 든 분들은 왜 피하게 되는 걸까요?'
+  type Case6 = { why: string; title?: string; body: string; plan: Plan6; src: { title: string; body: string } | null; want: string; card?: string }
+  const CASES: readonly Case6[] = [
+    { why: '🔴 운영 P04 그대로 · QUESTION · 원천에 만남이 있어도', title: P04_TITLE, body: P04_BODY, plan: Q6, src: SRC_MEET, want: 'hold:unwarrantedSelfClaim' },
+    { why: '🔴 같은 글 · 자리 칸을 빠뜨린 호출부(막는 쪽)', title: P04_TITLE, body: P04_BODY, plan: NOSTANCE, src: SRC_MEET, want: 'hold:unwarrantedSelfClaim' },
+    { why: '🔴 REFLECTION · 동네 언니와 수다', body: '어제 동네 언니랑 수다 떨다가 들었는데 요즘 다들 그렇대요.', plan: R6, src: SRC_MEET, want: 'hold:unwarrantedSelfClaim' },
+    { why: '🔴 QUESTION · 동네 언니한테 들음 · 원천 모름 · 물음표 문장', body: '지난주에 동네 언니한테 들었는데 그게 맞는 말인가요? 궁금해서요.', plan: Q6, src: null, want: 'hold:unwarrantedSelfClaim' },
+    { why: '🔴 QUESTION · 만남을 한 문장에 넣고 전언으로 맺어도', body: '어제 60대 분을 만났는데 TV에 나이 든 배우가 나오면 싫으시대요.', plan: Q6, src: SRC_MEET, want: 'hold:unwarrantedSelfClaim' },
+    { why: '🔴 OBSERVATION · 원천에 만남·전언이 없는데 만남을 지어냄', body: '어제 옆집 언니를 만났는데 그 집도 잠을 못 잔대요.', plan: O6, src: SRC_PLAIN, want: 'hold:unwarrantedSelfClaim' },
+    { why: '🟡 OBSERVATION · 원천 모름', body: '어제 옆집 언니를 만났는데 그 집도 잠을 못 잔대요.', plan: O6, src: null, want: 'review:unwarrantedSelfClaim' },
+    { why: '🟡 1인칭 허가 계획 · 원천에 없는 만남', body: '어제 친구 만나서 얘기하다 보니 다들 새벽에 깬다네요. 저만 그런 게 아니었어요.', plan: S6, src: SRC_PLAIN, want: 'review:unwarrantedSelfClaim' },
+    { why: '🟢 남의 이야기 — 원천의 제3자 사연을 제3자 주어로', title: P04_TITLE, body: '60대 분들은 TV에 70.80 배우가 나오면 보기 싫다고 하신대요. 주름진 얼굴이 싫으시대요.\n\n왜 나이 들수록 동년배를 덜 좋아하게 될까요?', plan: Q6, src: SRC_MEET, want: 'pass' },
+    { why: '🟢 남의 이야기 — 친구가 주어인 만남', body: '친구가 동창을 만났는데 다들 많이 변했더라고 하네요. 그런 마음이 드는 게 이상한 걸까요?', plan: Q6, src: SRC_MEET, want: 'pass' },
+    { why: '🟢 주체 높임 — 만나신 분은 글쓴이가 아니다', body: '지난주에 동창분들 만나셨는데 다들 그 얘기만 하셨대요. 왜 그럴까요?', plan: Q6, src: SRC_MEET, want: 'pass' },
+    { why: '🟢 OBSERVATION · 원천이 가진 만남을 곁에서 본 일로', body: '어제 60대 분을 만났는데 TV에 나이 든 배우가 나오면 싫으시대요. 왜 그럴까요?', plan: O6, src: SRC_MEET, want: 'pass' },
+    { why: '🟢 1인칭 허가 계획 · 원천이 가진 만남', body: '어제 60대 분을 만났는데 TV에 나이 든 배우가 나오면 싫으시대요. 저도 궁금해지더라고요.', plan: S6, src: SRC_MEET, want: 'pass' },
+    { why: '🟢 가정 — 만나면', body: '친구 만나면 요즘 무슨 얘기들 하세요? 저는 건강 얘기가 제일 많아요.', plan: Q6, src: SRC_PLAIN, want: 'pass' },
+    { why: '🟢 사람 없는 들음 — 세상 이야기', body: '1년 뒤면 세상이 확 달라질 거라는 이야기를 들었어요. 다들 어떻게 생각하세요?', plan: R6, src: SRC_PLAIN, want: 'pass' },
+    { why: '🟢 전언 — 만남 자체가 들은 말', body: '친구 딸이 선을 봤는데 상대를 또 만났대요. 요즘은 다 그런가요?', plan: Q6, src: SRC_PLAIN, want: 'pass' },
+    { why: '🟢 전언 — 임자 없이 들은 만남', body: '지난주에 동네 언니를 만났대요. 왜 그랬을까요?', plan: Q6, src: SRC_PLAIN, want: 'pass' },
+    { why: '🟢 가정 — 만나서 … 떨면', body: '친구 만나서 수다 떨면 좀 풀리지 않을까 싶어요.', plan: Q6, src: SRC_PLAIN, want: 'pass' },
+    { why: '🟢 사람 없는 들음 — 소문', body: '석류가 몸에 좋다는 얘기를 들었어요. 정말 그런가요?', plan: Q6, src: SRC_PLAIN, want: 'pass' },
+    { why: '🟢 앞 절 주어를 이어 받은 남의 일', body: '그 집 아주머니는 매일 시장 가고 거기서 동네 언니들 만나서 수다 떨다 오세요. 그게 사는 낙인가 봐요.', plan: Q6, src: SRC_PLAIN, want: 'pass' },
+    { why: '🟢 보통 대화 글', body: '요즘 새벽에 자꾸 깨서 하루가 길어요. 다들 어떻게 하세요?', plan: Q6, src: SRC_PLAIN, want: 'pass' },
+  ]
+  for (const c of CASES) {
+    const r = judgeDraftLife({
+      title: c.title ?? '궁금해요', body: c.body, card: realCard(c.card ?? 'P04'), plan: c.plan,
+      context: { at: FIXTURE_NOW, source: c.src === null ? null : { ...NEUTRAL.source!, ...c.src } },
+    })
+    const hard = r.failures.map((f) => f.code as string)
+    const rev = r.reviews.map((f) => f.code as string)
+    const got = hard.length > 0 ? `hold:${hard.join('+')}` : rev.length > 0 ? `review:${rev.join('+')}` : 'pass'
+    check(`${c.why} → ${c.want}`, got === c.want, got)
+  }
+  const gold = readFileSync('src/lib/founder-gold.ts', 'utf-8')
+  check('🔴 창업자 gold 재생이 운영과 같은 계획 칸(자리 stance)을 넘긴다', /stance:\s*r\.plan\.stance/.test(gold))
+  const prompts = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
+  check('🔴 초안 프롬프트(겪지 않는 자리)가 원문 글쓴이의 만남·들음도 경험이라고 말한다',
+    prompts.includes('누구를 만나고 · 이야기를 나누고 · 들은 일'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

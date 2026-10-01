@@ -1204,7 +1204,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.1'
-    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p8'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p9'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**
    * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**

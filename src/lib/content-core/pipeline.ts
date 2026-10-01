@@ -26,7 +26,11 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p5'
  * 🔴 **v2-draft-p8 (2026-10-01 · quality-v5)** — 생활 계약 줄의 말버릇 금지가 `persona-no-go` 열쇠 + 전원 공통 금지로 바뀌었다
  *    (개인 목록이 비어도 공통 금지 · 정리된 문서 모양 금지를 싣는다). 옛 프롬프트 artifact 를 재사용하지 않는다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p8'
+/**
+ * 🔴 **v2-draft-p9 (2026-10-01 · quality-v6)** — 겪었다고 말하지 않는 자리에 "원문 글쓴이의 만남·대화·들음도 경험이다" 를 적었다
+ *    (운영 감사 결함 yes · P04 `어제 60대 분과 이야기를 나누다 들었는데요`). 옛 프롬프트 artifact 를 재사용하지 않는다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p9'
 export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p7'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
