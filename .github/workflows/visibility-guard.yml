@@ -1158,6 +1158,7 @@ jobs:
           npm run voice:unao-readonly-check
           npm run persona:source-author-check
           npm run persona:gate6b-check
+          npm run persona:remediation-check
 
       # VoiceSource 적재 경로의 계약.
       #

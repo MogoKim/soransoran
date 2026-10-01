@@ -45,6 +45,20 @@ const filled = (v: unknown): boolean => {
   return true
 }
 const sorted = (xs: readonly unknown[]): string => [...xs].map(String).sort().join('|')
+/**
+ * 🔴 **자녀 나이대는 고유 밴드 집합끼리 비교한다** (Pool 설계 §4 · 2026-10-01).
+ *    카드 파서는 고유 집합(`['성인']`), DB 는 자녀 한 명당 한 칸(`['성인','성인']`)이다.
+ *    중복까지 맞대면 자녀 2명인 사람이 언제나 "정본과 다르다" 가 된다(P17 실측).
+ */
+const bandSet = (xs: readonly unknown[]): string => [...new Set(xs.map(String))].sort().join('|')
+/**
+ * 🔴 **말버릇 표기 정규화** — 카드는 `"우리 때는"` · `"요즘 애들" 류` 처럼 따옴표와 `류` 를 붙여 적는다.
+ *    따옴표는 "말버릇이다" 라는 표기이고 `류` 는 "비슷한 말 포함" 이다 — 같은 표현이다.
+ *    비교에만 쓴다. 저장값을 바꾸지 않는다.
+ */
+export function noGoExpressionKey(e: string): string {
+  return e.trim().replace(/\s*류$/, '').replace(/^["“”']+|["“”']+$/g, '').trim()
+}
 
 /**
  * 카드 한 장 — 🔴 문제 목록을 돌려준다. 비어 있으면 통과다.
@@ -124,12 +138,13 @@ export function verifySeedCard(code: string, card: SeedCard, poolCard: PoolCard 
     if (sorted(a) !== sorted(b)) problems.push(`${label} 가 정본과 다르다 (정본 ${b.length}개 / seed ${a.length}개)`)
   }
   same(Array.isArray(card.noGoTopics) ? card.noGoTopics : [], poolCard.noGoTopics, 'noGoTopics')
-  same(Array.isArray(card.noGoExpressions) ? card.noGoExpressions : [], poolCard.noGoExpressions, 'noGoExpressions')
+  same((Array.isArray(card.noGoExpressions) ? card.noGoExpressions : []).map((e) => noGoExpressionKey(String(e))),
+    poolCard.noGoExpressions.map(noGoExpressionKey), 'noGoExpressions')
   same(Array.isArray(card.forbiddenReactionRoles) ? card.forbiddenReactionRoles : [], poolCard.forbiddenReactionRoles, 'forbiddenReactionRoles')
   // 🔴 매칭에 쓰이는 축은 정본과 **같아야 한다** — 다르면 시뮬레이션한 사람과 만들 사람이 다르다
   if (idv.maritalStatus !== poolCard.maritalStatus) problems.push(`maritalStatus 가 정본과 다르다 (정본 ${poolCard.maritalStatus})`)
   if (idv.childrenCount !== poolCard.childrenCount) problems.push(`childrenCount 가 정본과 다르다 (정본 ${poolCard.childrenCount})`)
-  if (sorted(bands) !== sorted(poolCard.childrenAgeBands)) problems.push('childrenAgeBands 가 정본과 다르다')
+  if (bandSet(bands) !== bandSet(poolCard.childrenAgeBands)) problems.push('childrenAgeBands 가 정본과 다르다')
   if (idv.parentCare !== poolCard.parentCare) problems.push(`parentCare 가 정본과 다르다 (정본 ${poolCard.parentCare})`)
   if (idv.menopauseStatus !== poolCard.menopauseStatus) problems.push(`menopauseStatus 가 정본과 다르다 (정본 ${poolCard.menopauseStatus})`)
   // 🔴 **길이도 정본과 같아야 한다.** 정본이 미상인데 seed 에 값이 있으면,
