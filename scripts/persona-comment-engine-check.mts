@@ -260,7 +260,7 @@ console.log('③ 댓글 분산 planner')
   const persona = (o: Partial<PlannerPersona> & { code: string }): PlannerPersona => ({
     status: 'active', realMember: { accountCount: 0, providerId: null }, seedComplete: true,
     forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
-    life: { noGoTopics: [] }, ...o,
+    life: { noGoTopics: [], noGoExpressions: [] }, ...o,
   })
   // 🔴 정본 어휘를 쓴다. `share` 는 REACTION_TYPES 에 없어 생성기가 거부한다
   const ROLES = [...COMMENT_REACTION_ROLES]
@@ -321,7 +321,7 @@ console.log('③ 댓글 분산 planner')
       ['seed·voice 가 불완전하면 제외', persona({ code: 'P04', seedComplete: false }), 'PERSONA_SEED_INCOMPLETE'],
       ['자기 글에는 달지 않는다', persona({ code: 'P09' }), 'PERSONA_OWN_POST'],
       // 🔴 실제 본문에서 요구를 읽어 판정한다 — 고정 목록이 아니다
-      ['noGo 주제가 본문에 있으면 제외', persona({ code: 'P05', life: { noGoTopics: ['무릎'] } }), 'PERSONA_LIFE_CONFLICT'],
+      ['noGo 주제가 본문에 있으면 제외', persona({ code: 'P05', life: { noGoTopics: ['무릎'], noGoExpressions: [] } }), 'PERSONA_LIFE_CONFLICT'],
     ]
     for (const [label, pers, code] of cases) {
       check(`🔴 ${label}`, judgePlannerPersona(pers, p, 'empathy').some((b) => b.code === code))
@@ -1909,7 +1909,7 @@ console.log('⑨ 생활사 정본 재사용')
 // ─────────────────────────────────────────────────────────
 {
   const base = {
-    code: 'P01', noGoTopics: [] as string[],
+    code: 'P01', noGoTopics: [] as string[], noGoExpressions: [] as string[],
   }
   const req = readPostRequirements('고3 딸 수능 이야기', '딸이 고3인데 수능이 코앞입니다')
   /** 🔴 글 매칭과 **같은 함수**를 부른다 — 복붙이면 한쪽만 고쳐진다 */
@@ -1956,7 +1956,7 @@ console.log('⑩ 실회원 정본 — judgeRealMember 하나만')
   })
   const pers = (probe: PlannerPersona['realMember']): PlannerPersona => ({
     code: 'P01', status: 'active', realMember: probe, seedComplete: true,
-    forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 }, life: { noGoTopics: [] },
+    forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 }, life: { noGoTopics: [], noGoExpressions: [] },
   })
   /** 🔴 조회가 어긋난 모든 모양을 fail-closed 로 막는다 */
   const bad: [string, PlannerPersona['realMember']][] = [
@@ -5029,7 +5029,7 @@ console.log('㊻ 글당 1~5 · 댓글 0개 우선 · 같은 Persona 재댓글 �
   const mkPersona = (code: string, o: Partial<PlannerPersona> = {}): PlannerPersona => ({
     code, status: 'active', realMember: { accountCount: 0, providerId: null },
     seedComplete: true, forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
-    life: { noGoTopics: [] }, ...o,
+    life: { noGoTopics: [], noGoExpressions: [] }, ...o,
   })
   const personas = (n: number): PlannerPersona[] =>
     Array.from({ length: n }, (_, i) => mkPersona(`P${String(i + 1).padStart(2, '0')}`))

@@ -37,7 +37,7 @@ const base: PersonaForMatch = {
   accountCount: 0,
   maritalStatus: '기혼', childrenCount: 2, childrenAgeBands: ['중고등'],
   parentCare: '상시', menopauseStatus: '진행중', workStatus: '전업',
-  economicStatus: '보통', region: null, noGoTopics: [], voiceLength: '보통',
+  economicStatus: '보통', region: null, noGoTopics: [], noGoExpressions: [], voiceLength: '보통',
   postsThisWeek: 0, daysSinceLastPost: null,
 }
 const P = (o: Partial<PersonaForMatch>): PersonaForMatch => ({ ...base, ...o })
@@ -255,6 +255,8 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
   //    판정을 여기로 복붙하면 두 벌이 되므로 부른다. 아래 검사가 그 파일의 순수성도 본다.
   const ALLOWED_IMPORTS = [
     './real-member-gate', './scale-profile', './scale-runtime', './original-post-voice-match',
+    // 🔴 (quality-v5) No-Go 판정 하나 — 순수 함수(DB · 파일 · 네트워크 0)
+    './persona-no-go',
   ] as const
   // 🔴 부르는 쪽이 순수해도 불린 쪽이 더러우면 의미가 없다
   {

@@ -359,6 +359,15 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
   check('🔴 🔴 **열림 + 유효한 도장이어도 같은 판 다른 digest → QUALITY_CONTRACT_MISMATCH** (자동 발행 0)',
     codeOf(mk({ gateResults: oldGate('otherDigest') }), true) === 'QUALITY_CONTRACT_MISMATCH',
     String(codeOf(mk({ gateResults: oldGate('otherDigest') }), true)))
+  /**
+   * 🔴 (quality-v5 · 2026-10-01) **실제 v4 표식** 그대로 — v4 로 도장 찍힌 운영 READY 는 v5 에서 자동 발행되지 않는다.
+   *    구제 · 일괄 변환 경로가 없다: 표식을 지금 계약으로 바꾸는 코드는 도장(`stampRowInTx`) 하나뿐이고 지금 계약 행에만 찍는다.
+   */
+  const V4_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
+  check('🔴 🔴 **실제 v4 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
+    codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V4_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
+    && QUALITY_CONTRACT_VERSION === 'quality-v5' && currentQualityContract().digest !== V4_MARK.digest)
+  check('🔴 새 계약(v5) 표식 READY 만 대상', codeOf(mk(), true) === 'TARGET')
   check('🔴 🔴 **옛 판 · 표식 없음(legacy)도 같다**',
     codeOf(mk({ gateResults: oldGate('otherVersion') }), true) === 'QUALITY_CONTRACT_MISMATCH'
     && codeOf(mk({ gateResults: oldGate('none') }), true) === 'QUALITY_CONTRACT_MISMATCH')

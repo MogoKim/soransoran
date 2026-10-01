@@ -5,8 +5,8 @@
  *   ① 말버릇 열쇠 — 따옴표 · `류` 표기와 상관없이 댓글 Gate ⑦⑧ 가 잡는다
  *   ② 공통 금지(Pool §7-2) — 개인 목록이 빈 Persona 도 댓글 Gate 에 걸린다
  *   ③ 댓글 생성 프롬프트 · 카드 검증 · 복구가 같은 helper · 카드 파서 분류와 일치
- *   🔴 글 쪽(배정 `hardFilter` · 글 생성 프롬프트 · 카드 파서)은 품질 계약 지문 파일이라 이 PR 에서 바꾸지 않았다 —
- *      바꾸면 `QUALITY_CONTRACT_VERSION` 을 올려 READY 재고가 legacy 가 된다(마스터 결정 사항).
+ *   ⑦ (quality-v5) 글 쪽 — 생성 프롬프트 · 최종 초안 게이트 personaNoGo · 발행 배정 `hardFilter` 가 같은 helper.
+ *      댓글 대상(남의 글)은 소재만 본다 · noGoTopics 회귀 0 · 정상 대화체 통과
  *   ④ C8 — 개인 말버릇 빈 칸은 계약 통과 · 소재 경계(noGoTopics)는 그대로 필수
  *   ⑤ C9 — 활동이 늘어도 지속 자격 유지 · 역할 쏠림은 회차에서 막힘 · 증명일 글쓴이 겹침은 FAIL
  *   ⑥ 가짜 활동 · 가짜 소재 · 임계 완화 0
@@ -17,6 +17,10 @@ import {
   anyNoGo, commonNoGoHits, COMMON_NO_GO_PHRASES, isNoGoExpressionItem, noGoExpressionKey, noGoHits, promptNoGoExpressions,
 } from '../src/lib/persona-no-go'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
+import { hardFilter, judgeLifeHistory, readPostRequirements, type PersonaForMatch } from '../src/lib/original-post-persona-match'
+import { judgeDraftLife, DRAFT_GATE_VERSION } from '../src/lib/content-core/draft-life-gates'
+import { QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
+import { V2_DRAFT_PROMPT_VERSION } from '../src/lib/content-core/pipeline'
 import { contractAxes, roleRoundVerdict, type ActivityHistory, type RoleHistory } from '../src/lib/persona-reserve'
 import { planCommentDistribution, type PlannerPersona, type PlannerPost } from '../src/lib/persona-comment-planner'
 import { PERSONA_LIFE_AXES, ROLE_SHARE_CAP, ACTIVITY_CAP_PER_DAY, CONSECUTIVE_EXPOSURE_CAP, PAIR_REPEAT_GAP } from '../src/lib/d100-persona-scale'
@@ -123,7 +127,7 @@ console.log('\n④ C8 — 개인 말버릇은 없어도 되는 칸 · 소재 경
   })
   const who = (code: string, recentRoles: RoleHistory | null): PlannerPersona => ({
     code, status: 'active', realMember: { accountCount: 0, providerId: null }, seedComplete: true,
-    forbiddenReactionRoles: [], recentComments: 0, recentRoles, life: { noGoTopics: [] },
+    forbiddenReactionRoles: [], recentComments: 0, recentRoles, life: { noGoTopics: [], noGoExpressions: [] },
   })
   const plan = (personas: PlannerPersona[], roles = ['empathy']) => planCommentDistribution({
     posts: [post('x')], personas, reactionRoles: roles, limit: 1, nowMs: NOW, recentRoleCounts: {},
@@ -169,6 +173,44 @@ console.log('\n⑥ 가짜 활동 · 가짜 소재 · 임계 완화 0')
   check('🔴 소재 분류표 · 소재 라벨 쓰기 0', !/TOPIC_TAXONOMY|topicTags\s*:|category\s*:\s*['"]/.test(files))
   check('🔴 활동 행 생성 0', !/\.(post|comment|personaApprovalQueue|personaActivityLog)\.(create|createMany|upsert)/.test(files))
   check('🔴 옛 소재 축 삭제 — topicShareOf · TOPIC_SHARE_CAP · topicConcentrated 0', !/topicShareOf|TOPIC_SHARE_CAP|topicConcentrated/.test(files))
+}
+
+console.log('\n⑦ (quality-v5) 글 쪽 — 프롬프트 · 최종 초안 게이트 · 발행 배정이 같은 helper')
+{
+  const card = (expr: string[]) => ({ childrenCount: 0, childrenAgeBands: [], maritalStatus: '기혼', noGoExpressions: expr })
+  const gate = (body: string, expr: string[] = []) => judgeDraftLife({
+    title: '요즘 잠이 안 와요', body, plan: null, card: card(expr), context: { at: new Date('2026-10-01T03:00:00Z'), source: null },
+  }).failures.filter((f) => f.code === 'personaNoGo')
+  const NORMAL = '요즘 밤에 자꾸 깨서 아침이 힘들어요. 다들 어떻게 지내세요? 저만 이런 건지 궁금하네요.'
+  check('🔴 정상 대화체 글 → personaNoGo 0', gate(NORMAL, ['"우리 때는"']).length === 0)
+  for (const stored of [['"우리 때는"'], ['우리 때는'], ['"우리 때는" 류']]) {
+    check(`🔴 초안 게이트 — 개인 말버릇 저장값 ${JSON.stringify(stored)} → personaNoGo`, gate(`${NORMAL} 우리 때는 안 그랬는데요.`, stored).length === 1)
+  }
+  check('🔴 초안 게이트 — 공통 금지 문구 → personaNoGo (개인 목록 빈 카드)', gate(`${NORMAL} 이 방법 추천드립니다`).length === 1)
+  check('🔴 초안 게이트 — 불릿 → personaNoGo', gate(`${NORMAL}\n- 물 마시기\n- 일찍 자기`).length === 1)
+  check('초안 게이트 — 카드가 없어도 공통 금지는 본다', judgeDraftLife({
+    title: 't', body: '1. 물 마시기\n2. 일찍 자기', plan: null, card: null, context: { at: new Date(), source: null },
+  }).failures.some((f) => f.code === 'personaNoGo'))
+  const P = (expr: string[], topics: string[] = []): PersonaForMatch => ({
+    code: 'P', status: 'active', providerId: null, accountCount: 0, noGoTopics: topics, noGoExpressions: expr,
+    postsThisWeek: 0, daysSinceLastPost: null,
+  })
+  const hf = (p: PersonaForMatch, body: string) => hardFilter(p, readPostRequirements('t', body), 't', body).map((b) => b.code)
+  check('🔴 발행 배정 — 따옴표 · 류 저장값 → NOGO_EXPRESSION', hf(P(['"요즘 애들" 류']), '요즘 애들은 다르더라고요').includes('NOGO_EXPRESSION'))
+  check('🔴 발행 배정 — 공통 금지 → NOGO_COMMON', hf(P([]), '도움이 되셨으면 좋겠습니다').includes('NOGO_COMMON'))
+  check('발행 배정 — 정상 대화체 → NoGo 0', !hf(P(['"우리 때는"']), NORMAL).some((c) => c.startsWith('NOGO')))
+  check('🔴 noGoTopics 회귀 0 — 소재는 그대로 NOGO_TOPIC', hf(P([], ['무릎']), '무릎이 아파요').includes('NOGO_TOPIC'))
+  check('🔴 댓글 대상(남의 글)은 소재만 — 불릿 · 추천드립니다 · 말버릇은 막지 않는다',
+    judgeLifeHistory(P(['"우리 때는"']), readPostRequirements('t', '- 추천드립니다 우리 때는'), 't', '- 추천드립니다 우리 때는').length === 0)
+  const src = (f: string): string => readFileSync(f, 'utf-8')
+  check('🔴 글 생성 프롬프트 · 카드 파서 · 초안 게이트 · 배정 Gate 가 같은 helper',
+    /promptNoGoExpressions\(life\.noGoExpressions\)/.test(src('scripts/lib/content-core-prompts.mts'))
+    && !/life\.noGoExpressions\.length > 0/.test(src('scripts/lib/content-core-prompts.mts'))
+    && /isNoGoExpressionItem\(item\)/.test(src('src/lib/persona-pool-card.ts'))
+    && /noGoHits\(/.test(src('src/lib/content-core/draft-life-gates.ts'))
+    && /noGoHits\(/.test(src('src/lib/original-post-persona-match.ts')))
+  check('품질 계약 v5 · 초안 게이트 v5 · 초안 프롬프트 p8', QUALITY_CONTRACT_VERSION === 'quality-v5'
+    && DRAFT_GATE_VERSION === 'draft-gates-v5' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p8')
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail — DB 0 · 네트워크 0\n`)

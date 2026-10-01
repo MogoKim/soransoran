@@ -220,7 +220,7 @@ export function judgeAutogenCandidate(
       ageBand: pm.ageBand, maritalStatus: pm.maritalStatus, childrenCount: pm.childrenCount,
       childrenAgeBands: pm.childrenAgeBands, parentCare: pm.parentCare, menopauseStatus: pm.menopauseStatus,
       workStatus: pm.workStatus, economicStatus: pm.economicStatus, region: pm.region,
-      noGoTopics: pm.noGoTopics, voiceLength: pm.voiceLength,
+      noGoTopics: pm.noGoTopics, noGoExpressions: pm.noGoExpressions, voiceLength: pm.voiceLength,
     },
   }
   const roleOk = COMMENT_REACTION_ROLES.some((role) => judgePlannerPersona(planner, NEUTRAL_POST, role).length === 0)

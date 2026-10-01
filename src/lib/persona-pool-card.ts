@@ -13,6 +13,7 @@
  */
 
 import { CHILD_AGE_BANDS, readLengthBand, type ChildAgeBand, type PersonaForMatch } from './original-post-persona-match'
+import { isNoGoExpressionItem } from './persona-no-go'
 
 export type PoolCard = {
   /** `P01` ~ `P20` */
@@ -250,7 +251,7 @@ export function parseCard(code: string, title: string, body: string): { card: Po
   else {
     for (const item of parts(noGoLine.replace(/^noGo\s*/, ''))) {
       // 🔴 따옴표가 있으면 말버릇이다 — 본문 substring 매칭에 넣어도 걸리지 않는다
-      if (/["“”]/.test(item)) noGoExpressions.push(item)
+      if (isNoGoExpressionItem(item)) noGoExpressions.push(item)
       else noGoTopics.push(item)
     }
     if (noGoTopics.length === 0 && noGoExpressions.length === 0) problems.push('noGo 줄이 비었다')
@@ -346,6 +347,7 @@ export function cardToPersona(card: PoolCard): PersonaForMatch {
     // 🔴 **카드의 noGo 소재를 그대로 넘긴다.** 빈 배열로 버리면 시뮬레이션 속 그 사람은
     //    아무것도 피하지 않는 사람이 되고, 실제로 켰을 때보다 발행량이 **부풀려진다**.
     noGoTopics: card.noGoTopics,
+    noGoExpressions: card.noGoExpressions,
     voiceLength: card.voiceLength,
     postsThisWeek: 0,
     daysSinceLastPost: null,

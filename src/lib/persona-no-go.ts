@@ -1,10 +1,9 @@
 /**
  * Persona **No-Go 판정 하나** — 🔴 순수 함수 (2026-10-01 · Phase 2B)
  *
- *   지금 부르는 곳: 카드 검증(`verifySeedCard`) · 정본 카드 복구 · autogen 대조 · 댓글 Gate(⑦⑧) · 댓글 생성 프롬프트.
- *   🔴 **글 쪽은 아직 아니다** — 글 배정 Gate(`hardFilter`) · 글 생성 프롬프트 · 카드 파서는 품질 계약 지문 파일이라
- *      연결하려면 `QUALITY_CONTRACT_VERSION` 을 올려야 한다(READY legacy 화). Phase 2C 로 남긴다. 그때까지 글 초안은
- *      개인 말버릇 · 공통 금지를 이 파일로 검사하지 않는다.
+ *   부르는 곳: 카드 파서(`isNoGoExpressionItem`) · 카드 검증 · 정본 카드 복구 · autogen 대조 · 댓글 Gate(⑦⑧) ·
+ *   댓글 생성 프롬프트 · 글 생성 프롬프트(`v2-draft-p8`) · 최종 초안 게이트(`personaNoGo` · draft-gates-v5) ·
+ *   발행 배정(`hardFilter` NOGO_EXPRESSION · NOGO_COMMON). 🔴 같은 결정을 다른 곳에서 다시 하지 않는다 (quality-v5).
  *
  * 🔴 왜 하나인가. 카드는 말버릇을 `"우리 때는"` · `"요즘 애들" 류` 처럼 따옴표와 `류` 를 붙여 적고,
  *    DB 에는 그 표기가 그대로 들어간 사람(7명)과 벗겨진 사람(2명)이 섞여 있다. Gate 는 `text.includes(값)` 로

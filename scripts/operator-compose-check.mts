@@ -225,7 +225,7 @@ console.log('\n══════ ⑥ 🔴 회귀 — 수동 작성 전후 자�
   const persona = (code: string): PlannerPersona => ({
     code, status: 'active', realMember: { accountCount: 0, providerId: null },
     seedComplete: true, forbiddenReactionRoles: [], recentComments: 0, recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
-    life: { noGoTopics: [] },
+    life: { noGoTopics: [], noGoExpressions: [] },
   })
   const personas = [persona('P01'), persona('P02')]
   const planArgs = {

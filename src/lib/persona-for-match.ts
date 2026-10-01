@@ -20,7 +20,7 @@ import {
 import { judgeVoiceMatch, voiceOfGateResults } from './original-post-voice-match'
 
 export const PERSONA_FOR_MATCH_SELECT = {
-  id: true, code: true, status: true, userId: true, identity: true, voiceCore: true, noGoTopics: true,
+  id: true, code: true, status: true, userId: true, identity: true, voiceCore: true, noGoTopics: true, noGoExpressions: true,
   user: { select: { providerId: true, _count: { select: { accounts: true } } } },
 } as const satisfies Prisma.PersonaSelect
 
@@ -58,6 +58,7 @@ export async function personaForMatchOf(
     menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
     workStatus: null, economicStatus: null, region: null,
     noGoTopics: r.noGoTopics,
+    noGoExpressions: r.noGoExpressions,
     voiceLength: typeof vc.length === 'string' ? vc.length : null,
     postsThisWeek,
     daysSinceLastPost: last?.matchedAt == null ? null

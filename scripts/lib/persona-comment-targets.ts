@@ -246,6 +246,8 @@ function lifeOf(identity: unknown): PlannerPersona['life'] {
     economicStatus: str(id.economicStatus),
     region: str(id.region),
     noGoTopics: [],
+    // 🔴 댓글 대상은 남의 글이다 — 말버릇 판정은 댓글 Gate ⑦⑧ 가 **이 사람이 쓴 댓글**에 한다
+    noGoExpressions: [],
     voiceLength: undefined,
   }
 }
