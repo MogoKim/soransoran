@@ -244,7 +244,7 @@ const SLUG = FIXTURE_SLUGS[0]
 
 /** 🔴 실제 큐 행과 같은 모양이다 — fixture 가 실제보다 헐거우면 시험이 결함을 덮는다 */
 const FIXTURE_QUEUE = FIXTURE_SLUGS.map((slug, i) => ({
-  day: i + 1, slug, title: `시험 고정 후보 ${i + 1}`, contentType: 'EVERGREEN', intent: '상황',
+  day: i + 1, slug, title: `시험 고정 후보 ${i + 1}은 왜 그런가요`, contentType: 'EVERGREEN', intent: '상황',
   cluster: 'clinic', target: '50대 전반', riskLevel: 'HIGH', reviewMode: 'FULL_REVIEW',
   imageMode: 'REQUIRED', autoEligible: false, validationProfile: 'MEDICAL',
   ctaBoard: '/community/menopause', internalLinks: [], whyNow: '시험', notes: '시험',
@@ -273,11 +273,35 @@ function asChild(ctx, ledgerPath, outcome) {
   return r
 }
 
+/**
+ * 🔴 **재생성 원고는 임시 경로로 오고, 부모가 검증·변환해 교체한다** (2026-10-02).
+ *    가짜 runner 도 실제 자식처럼 `ctx.draftOut` 에만 쓴다. 원고 파일은 **임시 폴더**에 둔다 —
+ *    fixture slug 는 저장소가 추적하는 실제 draft 이므로 그 경로에 쓰면 안 된다.
+ */
+const fakeManuscript = (tag) => `---\ntitle: 시험 원고는 왜 그런가요\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n시험 표식 ${tag}\n\n[CTA] 이야기 나눠요\n`
+const fakeArticle = (from) => `export const DRAFT = {\n  title: '시험',\n  cluster: 'clinic',\n  // heroImage 는 이미지 회수 후 채운다\n  body: [],\n  // from ${from}\n}\n`
+function tempPaths(root) {
+  return (sl) => {
+    const dir = path.join(root, sl)
+    fs.mkdirSync(dir, { recursive: true })
+    const draftMd = path.join(dir, 'draft.md')
+    if (!fs.existsSync(draftMd)) fs.writeFileSync(draftMd, fakeManuscript('원본'))
+    return { dir, brief: path.join(dir, 'brief.md'), review: path.join(dir, 'review.ts'), draftMd, articleTs: path.join(dir, 'article-draft.ts') }
+  }
+}
+
 function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges = true,
-  packetsSeen = [], runnerThrows = false, runnerFails = false }) {
+  packetsSeen = [], runnerThrows = false, runnerFails = false, realPaths = false }) {
   let qaRuns = 0
   let fpN = 0
+  const root = path.join(path.dirname(ledgerPath), 'drafts')
   return {
+    /**
+     * 🔴 `realPaths` — 저장소 추적 파일의 원복(trackedSnapshot)을 실제 git 으로 보는 시험만 켠다.
+     *    그 시험들은 재생성을 하지 않는다(qaFailsUntil 0) — 재생성 원고가 실제 draft 에 닿을 일이 없다.
+     */
+    ...(realPaths ? {} : { paths: tempPaths(root), heroFilePath: (sl) => path.join(root, sl, 'hero.webp') }),
+    candidateDir: path.join(path.dirname(ledgerPath), 'cand'),
     quarantinePath: ledgerPath,
     /** 🔴 큐는 고정 fixture 다 — 운영 큐가 비어도 이 시험은 그대로 돈다 */
     loadQueue: () => FIXTURE_QUEUE,
@@ -290,7 +314,12 @@ function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges
       const name = path.basename(String(file))
       calls.push(name)
       if (name === 'magazine-webui-runner.mjs') return { code: 0, stdout: '회수', stderr: '', json: null }
-      if (name === 'magazine-md-to-draft.mjs') return { code: 0, stdout: '변환', stderr: '', json: null }
+      if (name === 'magazine-md-to-draft.mjs') {
+        // 🔴 실제 경로 시험에서는 쓰지 않는다 — 성공한 후보는 원복하지 않으므로 추적 파일이 더러워진다
+        const i = args.indexOf('--out')
+        if (i !== -1 && !realPaths) fs.writeFileSync(args[i + 1], fakeArticle(args[args.indexOf('--in') + 1]))
+        return { code: 0, stdout: '변환', stderr: '', json: null }
+      }
       if (name === 'magazine-qa.mjs') {
         qaRuns += 1
         return qaRuns <= qaFailsUntil
@@ -312,7 +341,8 @@ function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges
      *    읽어 증거로 쓰지 않는다 — 그 파일은 `finally` 에서 지워지는 것이 정상이다.
      *    파일이 남아 있어야 PASS 하는 시험은 누수를 요구하는 시험이다.
      */
-    regenRunner({ slug, packet, packetPath }) {
+    regenRunner(ctx) {
+      const { slug, packet, packetPath } = ctx
       calls.push(`REGEN:${slug}`)
       // 🔴 runner 가 읽는 시점에는 **파일이 있어야 한다** — 읽기 전에 지우면 전달이 깨진다
       packetsSeen.push({ packet, existedDuringCall: fs.existsSync(packetPath), packetPath })
@@ -320,6 +350,8 @@ function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges
         if (runnerThrows) throw new Error('재생성 경로 폭발')
         fpN += 1
         if (runnerFails) return { ok: false, why: '재생성 경로 실패(시험)' }
+        fs.mkdirSync(path.dirname(ctx.draftOut), { recursive: true })
+        fs.writeFileSync(ctx.draftOut, fakeManuscript(`재생성 ${fpN}`))
         return { ok: true }
       })
     },
@@ -1173,7 +1205,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       const target = `drafts/magazine/${SLUG}/article-draft.ts`
       const before = fs.readFileSync(target)
       const calls = []
-      const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls })
+      const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls, realPaths: true })
       /** 🔴 변환기가 실제로 하듯 heroImage 를 지운다 — 그 뒤 hero 가 실패한다 */
       const baseRun = deps.run
       deps.run = (f, a, o) => {
@@ -1204,7 +1236,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       const results = []
       for (const [i, sl] of FIXTURE_SLUGS.entries()) {
         const c2 = []
-        const d2 = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls: c2 })
+        const d2 = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls: c2, realPaths: true })
         const b2 = d2.run
         d2.run = (f, a, o) => {
           const name = path.basename(String(f))
@@ -1331,7 +1363,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       const results = []
       for (const [i, sl] of FIXTURE_SLUGS.entries()) {
         const calls = []
-        const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls })
+        const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls, realPaths: true })
         const base = deps.run
         deps.run = (f, a, o) => {
           const name = path.basename(String(f))
@@ -1403,7 +1435,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
        */
       const sl = FIXTURE_SLUGS[0]
       const calls = []
-      const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets2'), calls })
+      const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets2'), calls, realPaths: true })
       const base = deps.run
       deps.run = (f, a, o) => {
         const name = path.basename(String(f))
@@ -1790,7 +1822,7 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
     /** ① 실제 runner 를 그대로 호출한다 — 주입은 `runFn` 하나뿐이다 */
     let sawArgs = null
     const rr = AR2.webuiRegenRunner(
-      { slug: 'x-slug', packetPath: '/tmp/x.json' },
+      { slug: 'x-slug', packetPath: '/tmp/x.json', draftOut: '/tmp/x-cand.md' },
       { runFn: (file, args) => { sawArgs = args; return { code: 1, stdout: '', stderr: CRASH_STDERR, json: null } } },
     )
     check('  반례13 실제 runner 가 --regen-packet 으로 부른다', (sawArgs ?? []).includes('--regen-packet'), (sawArgs ?? []).join(' '))
@@ -2025,7 +2057,7 @@ console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재�
   const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-sent-'))
   try {
     /** ① 보냈는데 응답을 못 받았다 — 자식은 사람글에 "전송" 이라는 말조차 안 쓴다 */
-    const r1 = AR.webuiRegenRunner({ slug: 'a-slug', packetPath: '/tmp/p.json' }, {
+    const r1 = AR.webuiRegenRunner({ slug: 'a-slug', packetPath: '/tmp/p.json', draftOut: '/tmp/cand.md' }, {
       resultDir: T,
       runFn: (_file, args) => {
         const rp = args[args.indexOf('--result-json') + 1]
@@ -2046,7 +2078,7 @@ console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재�
     check('🔴 ⑯ 그래서 횟수를 소비하지 않는다', FK.consumesAttempt(k1.kind) === false, String(FK.consumesAttempt(k1.kind)))
 
     /** ② 🔴 **거짓 성공 금지** — 종료 코드 0 인데 결과 행이 없으면 성공이 아니다 */
-    const r0 = AR.webuiRegenRunner({ slug: 'z-slug', packetPath: '/tmp/p.json' }, {
+    const r0 = AR.webuiRegenRunner({ slug: 'z-slug', packetPath: '/tmp/p.json', draftOut: '/tmp/cand.md' }, {
       resultDir: T, runFn: () => ({ code: 0, stdout: '끝', stderr: '', json: null }),
     })
     check('🔴 ⑯ exit 0 + 결과 행 없음 = 성공이 아니다', r0.ok === false, `ok=${r0.ok}`)
@@ -2055,7 +2087,7 @@ console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재�
     check('🔴 ⑯ 그래서 DELIVERY_UNCERTAIN 이다', k0.kind === 'DELIVERY_UNCERTAIN', k0.kind)
 
     /** ③ exit 0 인데 행이 ok 가 아니면 그 사실을 그대로 올린다 */
-    const rNotOk = AR.webuiRegenRunner({ slug: 'y-slug', packetPath: '/tmp/p.json' }, {
+    const rNotOk = AR.webuiRegenRunner({ slug: 'y-slug', packetPath: '/tmp/p.json', draftOut: '/tmp/cand.md' }, {
       resultDir: T,
       runFn: (_file, args) => {
         const rp = args[args.indexOf('--result-json') + 1]
@@ -2068,7 +2100,7 @@ console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재�
     check('  ⑯ 그 행의 sent(false)를 그대로 올린다', rNotOk.sent === false, String(rNotOk.sent))
 
     /** ④ 실제로 안 보낸 인프라 실패는 INFRA 다 — 모름과 섞이지 않는다 */
-    const r3 = AR.webuiRegenRunner({ slug: 'c-slug', packetPath: '/tmp/p.json' }, {
+    const r3 = AR.webuiRegenRunner({ slug: 'c-slug', packetPath: '/tmp/p.json', draftOut: '/tmp/cand.md' }, {
       resultDir: T,
       runFn: (_file, args) => {
         const rp = args[args.indexOf('--result-json') + 1]
@@ -2287,7 +2319,7 @@ console.log('\n⑱ producer 가 기존 재료를 버리지 않는다')
   const FLOW = await import('./lib/magazine-producer-flow.mjs')
 
   const queue = Array.from({ length: 6 }, (_, i) => ({
-    day: i + 1, slug: `q-${i + 1}`, title: `제목 ${i + 1}`, category: '건강',
+    day: i + 1, slug: `q-${i + 1}`, title: `제목 ${i + 1}은 왜 그런가요`, category: '건강',
     riskLevel: 'LOW', keywords: ['갱년기'],
     // 🔴 프로필이 있어야 자동 레인을 탄다 — 없으면 PROFILE_UNRESOLVED 로 빠진다
     validationProfile: 'STANDARD',
@@ -3494,7 +3526,7 @@ function makePage() {
     }
     const regen = (slug, failures = [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }]) => RG31.attemptRegeneration({
       slug, profile: 'MEDICAL', failures, quarantinePath: LEDGER, packetDir: PK,
-      runner: (ctx) => AR31.webuiRegenRunner(ctx, { runFn, resultDir: T }),
+      runner: (ctx) => AR31.webuiRegenRunner({ ...ctx, draftOut: path.join(T, `cand-${ctx.slug}.md`) }, { runFn, resultDir: T }),
     })
     const row = (slug) => QN31.readQuarantine(LEDGER).store[slug] ?? {}
     const ev = () => ({ probe: countEv(LOG, 'probe'), connect: countEv(LOG, 'connect'), send: countEv(LOG, 'send'), spawn: countEv(LOG, 'spawn') })
@@ -3543,7 +3575,7 @@ function makePage() {
     RG31.packetPathFor('rg-a', path.join(T, 'manual'), MANUAL_ID))
     const RJ = path.join(T, 'one.json')
     const before7 = ev()
-    const c7 = runFn('scripts/magazine-webui-runner.mjs', ['--fetch', 'rg-a', '--force', '--regen-packet', PKT, '--result-json', RJ])
+    const c7 = runFn('scripts/magazine-webui-runner.mjs', ['--fetch', 'rg-a', '--force', '--regen-packet', PKT, '--result-json', RJ, '--draft-out', path.join(T, 'cand-manual.md')])
     const body7 = JSON.parse(fs.readFileSync(RJ, 'utf8'))
     const row7 = body7.results?.[0] ?? {}
     check('🔴 ㉛ fetchOne 결과 — held · 사유 · 지문 · sent=false · 앞선 기록',
@@ -3875,17 +3907,21 @@ export const connect = async () => ({
 `)
     const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
     const url = (f) => JSON.stringify(new URL(`file://${path.resolve(f)}`).href)
-    const DRV = writeFixture(path.join(T, 'driver.mjs'), `import { spawnSync } from 'node:child_process'
+    const DRV = writeFixture(path.join(T, 'driver.mjs'), `import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { attemptRegeneration } from ${url('scripts/lib/magazine-regen.mjs')}
 import { webuiRegenRunner } from ${url('scripts/magazine-auto-register.mjs')}
 const runFn = (file, args) => {
   const r = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', maxBuffer: 1e8, env: process.env })
   return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
 }
+const CAND = ${JSON.stringify(T)} + '/cand-' + process.pid + '.md'
 const r = attemptRegeneration({ slug: ${JSON.stringify(SLUG)}, profile: 'MEDICAL',
   failures: [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }],
   quarantinePath: ${JSON.stringify(L)}, packetDir: ${JSON.stringify(PK)}, draftsDir: ${JSON.stringify(D)},
-  runner: (ctx) => webuiRegenRunner(ctx, { runFn, resultDir: ${JSON.stringify(T)} }) })
+  runner: (ctx) => webuiRegenRunner({ ...ctx, draftOut: CAND }, { runFn, resultDir: ${JSON.stringify(T)} }) })
+// 🔴 자식은 임시 경로에만 쓴다 — 교체는 부모(drive)의 몫이다. 여기서는 그 교체만 흉내 낸다
+if (r.ok && fs.existsSync(CAND)) fs.renameSync(CAND, ${JSON.stringify(path.join(D, SLUG, 'draft.md'))})
 process.stdout.write(JSON.stringify(r))
 `)
     const runDriver = () => {
@@ -4140,10 +4176,13 @@ const runFn = (file, args) => {
   const r = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', maxBuffer: 1e8, env: process.env })
   return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
 }
+const CAND = ${JSON.stringify(T)} + '/cand-' + process.pid + '.md'
 const r = attemptRegeneration({ slug: process.env.RR_SLUG, profile: 'MEDICAL',
   failures: JSON.parse(process.env.RR_FAILURES),
   quarantinePath: ${JSON.stringify(L)}, packetDir: ${JSON.stringify(PK)}, draftsDir: ${JSON.stringify(D)},
-  runner: (ctx) => webuiRegenRunner(ctx, { runFn, resultDir: ${JSON.stringify(T)} }) })
+  runner: (ctx) => webuiRegenRunner({ ...ctx, draftOut: CAND }, { runFn, resultDir: ${JSON.stringify(T)} }) })
+// 🔴 자식은 임시 경로에만 쓴다 — 교체는 부모(drive)의 몫이다. 여기서는 그 교체만 흉내 낸다
+if (r.ok && fs.existsSync(CAND)) fs.renameSync(CAND, ${JSON.stringify(D)} + '/' + process.env.RR_SLUG + '/draft.md')
 fs.writeFileSync(process.env.RR_OUT, JSON.stringify({ ...r, pid: process.pid }))
 `)
   const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
@@ -4450,7 +4489,7 @@ export const connect = async () => { rec('connect'); throw new Error('불려서�
       const f = path.join(PD, file)
       fs.writeFileSync(f, JSON.stringify(body))
       const RJ = path.join(T, `r-${name}.json`)
-      const r = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch', 'ai-a', '--force', '--regen-packet', f, '--result-json', RJ],
+      const r = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch', 'ai-a', '--force', '--regen-packet', f, '--result-json', RJ, '--draft-out', path.join(T, 'cand-ai.md')],
         { encoding: 'utf8', maxBuffer: 1e8,
           env: { ...process.env, HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX } })
       const row = fs.existsSync(RJ) ? JSON.parse(fs.readFileSync(RJ, 'utf8')).results?.[0] ?? {} : {}
@@ -4672,7 +4711,7 @@ console.log('\n㊵ 같은 날 옛 빈 계획 — 인식 가능한 것만 보존 
     fs.writeFileSync(path.join(RD, 'auto-register.json'), JSON.stringify({ processed: 6, done: [], pr: { made: false } }))
     fs.writeFileSync(path.join(RD, 'auto-merge.json'), JSON.stringify({ merged: false, pr: null }))
     if (packages) { fs.mkdirSync(path.join(RD, 'selected', 'pkg-a'), { recursive: true }); fs.writeFileSync(path.join(RD, 'selected', 'pkg-a', 'brief.todo.md'), 'x') }
-    const queue = [...DONE6, ...EXTRA].map((slug, i) => ({ ...FIXTURE_QUEUE[0], day: 100 + i, slug, title: slug }))
+    const queue = [...DONE6, ...EXTRA].map((slug, i) => ({ ...FIXTURE_QUEUE[0], day: 100 + i, slug, title: `${slug} 이야기를 나눌 때` }))
     const deps = {
       today: TODAY, now: NOW, runsDir: RUNS, draftsDir: D, quarantinePath: L,
       loadQueueFn: () => queue,
@@ -5454,6 +5493,291 @@ console.log('\n㊹ 무전송 회수 — 이미 온 응답만 읽는다 · send·
     const src44 = fs.readFileSync('scripts/lib/chatgpt-session.mjs', 'utf8')
     const body44 = src44.slice(src44.indexOf('export async function recoverManuscript'), src44.indexOf('export async function fetchManuscript'))
     check('  ㊹ 회수 함수 본문에 composer·send·keyboard 경로가 없다', !/composerLocator|send-button|keyboard|insertText|\.click\(/.test(body44))
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+// ─────────────────────────────────────────────────────────
+// ㊺ 🔴 재생성 원고 무결성 (2026-10-02 자연 회차)
+// ─────────────────────────────────────────────────────────
+console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복 · hero 연결 · 실제 실패 사유 · 제목 계약')
+{
+  /**
+   * 2026-10-02 01:00 실측 다섯 가지를 그대로 반례로 둔다.
+   *   ① cold·autumn — 재생성 응답이 brief 였는데 frontmatter·##·[CTA] 를 갖춰 관문을 통과, draft.md 를 덮었다
+   *   ② 막힌 뒤에도 미추적 draft.md 는 되돌려지지 않았다
+   *   ③ hardest — hero 를 만든 뒤 batch 재생성이 article 을 다시 써 heroImage 가 사라졌다 (HERO_MISSING 자초)
+   *   ④ dinner — 실제 QA FAIL(제목) 이 REGEN_EXHAUSTED 에 가려졌다
+   *   ⑤ 큐 정본 제목이 제목 규칙에 걸려 재생성으로는 절대 통과할 수 없었다
+   * 🔴 drive 는 **실제 함수**다. 바깥 프로세스(QA·변환·hero·batch·ChatGPT)만 가짜이고, 원고·article·hero 는 실제 파일이다.
+   */
+  const GUARD = await import('./lib/magazine-manuscript-guard.mjs')
+  const POLICY = await import('./lib/magazine-brief-policy.mjs')
+  const SESSION45 = await import('./lib/chatgpt-session.mjs')
+  const EDIT45 = await import('./lib/magazine-editorial.mjs')
+  const HERO45 = await import('./lib/magazine-hero.mjs')
+  const AR45 = await import('./magazine-auto-register.mjs')
+  const WEB45 = await import('./magazine-webui-runner.mjs')
+  const RG45 = await import('./lib/magazine-regen.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-45-'))
+  const CONTENT_FAIL = '  ✗ FAIL  [qa · SCHEDULED ] 독자가 실행할 수 있는 판단 기준이 없다'
+  /** 실제 brief 형식 — frontmatter · 정본 섹션 소제목 · CTA 까지 갖췄다 (cold-weather 실측과 같은 모양) */
+  const ECHO = `---\ntitle: 날씨 쌀쌀해지면 무릎이 시린 이유\ndescription: 기온이 뚝 떨어지는 아침 무릎이 시린 이유를 우리 또래의 몸 변화와 함께 짚어봅니다\ncluster: menopause-symptom\nmedical: true\n---\n\n계단을 내려가려는데 무릎이 뻑뻑한 아침이 있습니다.\n\n${
+    POLICY.REQUIRED_SECTIONS.map((h) => `## ${h}\n\n${'우리 또래가 같은 시기에 이런 말을 검색하고 이야기를 나눕니다. '.repeat(6)}\n`).join('\n')}\n[CTA] /community/menopause | 이야기 남기기 | 남겨 주세요\n`
+  const withHero = (src) => HERO45.injectHeroImage(src, SLUG, '창가에서 쉬는 50대 여성').text
+  try {
+    // ── ① brief echo — 저장 관문에서 막힌다 ──
+    const v = GUARD.validateManuscript(ECHO)
+    check('  ㊺ 반례 원고는 다른 관문을 전부 통과하는 모양이다 (frontmatter·##·CTA·길이)',
+      v.stats.title === '있음' && v.stats.h2 >= 6 && v.stats.cta === 1 && v.stats.bodyLength >= GUARD.MIN_BODY_LENGTH
+        && v.reasons.every((x) => x.code === 'BRIEF_ECHO'), JSON.stringify(v.stats))
+    check('🔴 ㊺ brief echo 는 BRIEF_ECHO 로 저장 금지', !v.ok && v.reasons.some((x) => x.code === 'BRIEF_ECHO'),
+      v.reasons.map((x) => x.code).join(','))
+    const cm = SESSION45.checkManuscript(ECHO, { validate: GUARD.validateManuscript })
+    check('🔴 ㊺ 회수 경로의 저장 판정(checkManuscript)도 같은 관문으로 막는다', cm.ok === false, cm.reason ?? '')
+    check('  ㊺ 정상 원고는 통과한다 (대조군)', GUARD.validateManuscript(fakeManuscript('정상')).ok)
+
+    /** drive 무대 — 원고·article·hero 는 실제 파일, 바깥 프로세스만 가짜 */
+    const stage = (name, { qa, batch = () => ({ slug: SLUG, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [], reasons: [] }),
+      candidate = (n) => fakeManuscript(`재생성 ${n}`), convertFailOnCandidate = false, preHero = false,
+      queue = FIXTURE_QUEUE, restoreSnapshotFn = null } = {}) => {
+      const D = path.join(T, name)
+      const L = path.join(D, 'q.json')
+      const P = tempPaths(path.join(D, 'drafts'))(SLUG)
+      const heroFile = path.join(D, 'drafts', SLUG, 'hero.webp')
+      fs.writeFileSync(P.articleTs, preHero ? withHero(fakeArticle('원본')) : fakeArticle('원본'))
+      if (preHero) fs.writeFileSync(heroFile, 'HERO-원본-바이트')
+      const before = { draft: fs.readFileSync(P.draftMd), article: fs.readFileSync(P.articleTs), hero: preHero ? fs.readFileSync(heroFile) : null }
+      const C = { runner: 0, convert: 0, qa: 0, hero: 0, batch: 0 }
+      const deps = {
+        quarantinePath: L, loadQueue: () => queue, packetDir: path.join(D, 'pk'), candidateDir: path.join(D, 'cand'),
+        paths: () => P, heroFilePath: () => heroFile, verifyHero: () => ({ ok: fs.existsSync(heroFile) }),
+        firstFetchResult: null, progress: () => ({ hasDraftMd: true }),
+        ...(restoreSnapshotFn ? { restoreSnapshot: restoreSnapshotFn } : {}),
+        run(file, args) {
+          const nm = path.basename(String(file))
+          if (nm === 'magazine-md-to-draft.mjs') {
+            C.convert += 1
+            const src = args[args.indexOf('--in') + 1]
+            if (convertFailOnCandidate && src !== P.draftMd) return { code: 1, stdout: '', stderr: '⛔ 변환 실패(시험)', json: null }
+            const o = args.indexOf('--out')
+            // 🔴 실제 변환기처럼 heroImage 를 자리표시자로 되돌린다
+            if (o !== -1) fs.writeFileSync(args[o + 1], fakeArticle(path.basename(src)))
+            return { code: 0, stdout: '변환', stderr: '', json: null }
+          }
+          if (nm === 'magazine-qa.mjs') { C.qa += 1; return qa(C.qa) }
+          if (nm === 'magazine-hero-runner.mjs') {
+            C.hero += 1
+            fs.writeFileSync(heroFile, 'HERO-새로-만든-바이트')
+            fs.writeFileSync(P.articleTs, withHero(fs.readFileSync(P.articleTs, 'utf8')))
+            return { code: 0, stdout: 'hero', stderr: '', json: null }
+          }
+          if (nm === 'magazine-batch-qa.mjs') { C.batch += 1; return { code: 0, stdout: '', stderr: '', json: [batch(C.batch, fs.readFileSync(P.articleTs, 'utf8'))] } }
+          if (nm === 'magazine-register.mjs') return { code: 0, stdout: '', stderr: '', json: { verdict: 'READY', slug: SLUG } }
+          return { code: 0, stdout: '', stderr: '', json: null }
+        },
+        regenRunner: (ctx) => asChild(ctx, L, () => {
+          C.runner += 1
+          fs.mkdirSync(path.dirname(ctx.draftOut), { recursive: true })
+          fs.writeFileSync(ctx.draftOut, candidate(C.runner))
+          return { ok: true }
+        }),
+      }
+      const r = drive(SLUG, { write: true, pr: false, publishAt: '2027-05-01', alt: '창가에서 쉬는 50대 여성', allowOptional: true, autoLane: true }, deps)
+      const same = (a, b) => (a === null ? b === null : b !== null && a.equals(b))
+      const now = { draft: fs.readFileSync(P.draftMd), article: fs.readFileSync(P.articleTs), hero: fs.existsSync(heroFile) ? fs.readFileSync(heroFile) : null }
+      return { r, P, C, before, now, same: (k) => same(before[k], now[k]), candLeft: fs.existsSync(path.join(D, 'cand')) ? fs.readdirSync(path.join(D, 'cand')) : [] }
+    }
+    const QA_CONTENT = () => ({ code: 1, stdout: `  검사 1건\n${CONTENT_FAIL}\n  검사 1건 · FAIL 1 · WARN 3`, stderr: '', json: null })
+
+    // ── ①-b 재생성이 brief 를 돌려주면 원본은 한 바이트도 안 바뀐다 ──
+    const a = stage('echo', { qa: QA_CONTENT, candidate: () => ECHO })
+    check('🔴 ㊺ 재생성 응답이 brief 면 원고로 받지 않는다 (REGEN_CANDIDATE_INVALID · BRIEF_ECHO)',
+      a.r.verdict === 'BLOCKED' && /REGEN_CANDIDATE_INVALID/.test(a.r.blockedBy[0]?.message) && /BRIEF_ECHO/.test(a.r.blockedBy[0]?.message),
+      a.r.blockedBy[0]?.message?.slice(0, 160))
+    check('🔴 ㊺ brief echo 뒤 draft.md 바이트 동일', a.same('draft'))
+    check('🔴 ㊺ brief echo 뒤 article-draft.ts 바이트 동일 (3단계 변환이 쓴 것까지 원복)', a.same('article'))
+    check('  ㊺ 재생성 임시 원고가 남지 않는다', a.candLeft.length === 0, a.candLeft.join(','))
+
+    // ── ② dinner — 재생성 2회 소진 · 실제 QA 실패가 최상위에 · 원본 바이트 동일 ──
+    const b = stage('exhaust', { qa: QA_CONTENT })
+    check('  ㊺ 재생성이 실제로 2회 반영됐다 (죽은 시험 아님)', b.C.runner === 2
+      && (b.r.regenHistory ?? []).filter((h) => h.outcome === 'APPLIED').length === 2,
+      `runner ${b.C.runner} · ${(b.r.regenHistory ?? []).map((h) => h.outcome).join(',')}`)
+    check('🔴 ㊺ 최종 결과에 실제 QA 실패가 남는다 — REGEN_EXHAUSTED 에 가려지지 않는다',
+      b.r.verdict === 'BLOCKED' && /판단 기준이 없다/.test(b.r.qaFailures?.[0] ?? '')
+        && /REGEN_EXHAUSTED/.test(b.r.blockedBy[0]?.message) && /실제 QA FAIL: .*?판단 기준이 없다/.test(b.r.blockedBy[0]?.message),
+      b.r.blockedBy[0]?.message?.slice(0, 200))
+    check('🔴 ㊺ 재생성마다 그때의 실제 실패 코드를 보존한다',
+      (b.r.regenHistory ?? []).length === 3 && b.r.regenHistory.every((h) => /판단 기준이 없다/.test(h.failures.join(' ')))
+        && b.r.regenHistory[2].outcome === 'REGEN_EXHAUSTED',
+      JSON.stringify((b.r.regenHistory ?? []).map((h) => [h.call, h.stage, h.outcome])))
+    check('🔴 ㊺ 실패한 회차 뒤 기존 draft.md 바이트 동일 (재생성이 바꾼 원고를 되돌린다)', b.same('draft'))
+    check('🔴 ㊺ 실패한 회차 뒤 article-draft.ts 바이트 동일', b.same('article'))
+
+    // ── ③ hardest — batch 재생성 뒤 heroImage 유지 · 이미지 호출 0 ──
+    const c = stage('hero', {
+      qa: () => ({ code: 0, stdout: 'PASS', stderr: '', json: null }),
+      batch: (n, art) => {
+        if (n === 1) return { slug: SLUG, verdict: 'BLOCKED', checks: {}, blockedBy: [{ code: 'MED_CARE_LINE', message: '진료·의료진 안내 없음' }], reasons: ['진료·의료진 안내 없음'] }
+        // 🔴 실제 batch-qa 처럼 article 의 heroImage 를 본다
+        return /^\s*heroImage:\s*\{/m.test(art)
+          ? { slug: SLUG, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [], reasons: [] }
+          : { slug: SLUG, verdict: 'BLOCKED', checks: {}, blockedBy: [{ code: 'HERO_MISSING', message: '대표 이미지가 없다' }], reasons: ['대표 이미지가 없다'] }
+      },
+    })
+    check('  ㊺ batch 재생성이 실제로 article 을 다시 썼다 (죽은 시험 아님)', c.C.runner === 1 && c.C.convert >= 2, `runner ${c.C.runner} · convert ${c.C.convert}`)
+    check('🔴 ㊺ batch 재생성 뒤 heroImage 가 유지된다 → DONE', c.r.verdict === 'DONE' && /^\s*heroImage:\s*\{/m.test(c.now.article.toString('utf8')),
+      `${c.r.verdict} · ${c.r.blockedBy.map((x) => x.code).join(',')}`)
+    check('🔴 ㊺ hero 이미지 호출은 처음 1회뿐 (재연결은 호출 0)', c.C.hero === 1, `hero ${c.C.hero}회`)
+
+    // ── ④ 변환 실패 → draft · article · hero 전부 원복 ──
+    const d = stage('convert', { qa: QA_CONTENT, convertFailOnCandidate: true, preHero: true })
+    check('  ㊺ 재생성 원고 변환이 실제로 실패했다 (죽은 시험 아님)', /CONVERT_FAILED/.test(d.r.blockedBy[0]?.message ?? ''), d.r.blockedBy[0]?.message?.slice(0, 120))
+    check('🔴 ㊺ 변환 실패 뒤 draft.md 바이트 동일', d.same('draft'))
+    check('🔴 ㊺ 변환 실패 뒤 article-draft.ts (hero 연결 포함) 바이트 동일', d.same('article') && /heroImage:\s*\{/.test(d.now.article.toString('utf8')))
+    check('🔴 ㊺ 변환 실패 뒤 hero 파일 바이트 동일', d.same('hero'))
+
+    // ── ④-b 교체 함수 자체의 계약 — drive 의 원복 없이도 실패면 원본 0 바이트 변경 ──
+    {
+      const D = path.join(T, 'apply')
+      fs.mkdirSync(D, { recursive: true })
+      const draftMd = path.join(D, 'draft.md')
+      const articleTs = path.join(D, 'article-draft.ts')
+      const cand = path.join(D, 'cand.md')
+      const reset = () => {
+        fs.writeFileSync(draftMd, fakeManuscript('원본'))
+        fs.writeFileSync(articleTs, withHero(fakeArticle('원본')))
+        return { draft: fs.readFileSync(draftMd), article: fs.readFileSync(articleTs) }
+      }
+      const conv = (ok) => (file, args) => {
+        if (!ok) return { code: 1, stdout: '', stderr: '⛔ 변환 실패(시험)', json: null }
+        fs.writeFileSync(args[args.indexOf('--out') + 1], fakeArticle('후보'))
+        return { code: 0, stdout: '', stderr: '', json: null }
+      }
+      const same = (b) => fs.readFileSync(draftMd).equals(b.draft) && fs.readFileSync(articleTs).equals(b.article)
+      let b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      const f1 = AR45.applyRegenCandidate({ slug: SLUG, candidatePath: cand, draftMd, articleTs, runFn: conv(false), verifyHero: () => ({ ok: true }) })
+      check('🔴 ㊺ 교체 함수 — 변환 실패면 draft·article 0 바이트 변경 (원복에 기대지 않는다)', f1.ok === false && f1.code === 'CONVERT_FAILED' && same(b0), f1.code)
+      b0 = reset()
+      fs.writeFileSync(cand, ECHO)
+      const f2 = AR45.applyRegenCandidate({ slug: SLUG, candidatePath: cand, draftMd, articleTs, runFn: conv(true), verifyHero: () => ({ ok: true }) })
+      check('🔴 ㊺ 교체 함수 — brief echo 면 변환조차 하지 않고 0 바이트 변경', f2.ok === false && f2.code === 'REGEN_CANDIDATE_INVALID' && same(b0), f2.code)
+      b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      const f3 = AR45.applyRegenCandidate({ slug: SLUG, candidatePath: cand, draftMd, articleTs, runFn: conv(true), verifyHero: () => ({ ok: true }) })
+      check('🔴 ㊺ 교체 함수 — 성공하면 draft 는 후보 원고 · article 은 hero 연결을 이어받는다',
+        f3.ok && f3.heroCarried && fs.readFileSync(draftMd, 'utf8') === fakeManuscript('후보')
+          && /from 후보/.test(fs.readFileSync(articleTs, 'utf8')) && /^\s*heroImage:\s*\{/m.test(fs.readFileSync(articleTs, 'utf8')))
+      reset()
+      const f4 = AR45.applyRegenCandidate({ slug: SLUG, candidatePath: cand, draftMd, articleTs, runFn: conv(true), verifyHero: () => ({ ok: false }) })
+      check('  ㊺ 교체 함수 — hero 파일이 유효하지 않으면 연결을 잇지 않는다 (batch 가 HERO 로 판정)',
+        f4.ok && !f4.heroCarried && !/^\s*heroImage:\s*\{/m.test(fs.readFileSync(articleTs, 'utf8')))
+      b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      let renameCalls = 0
+      const f5 = AR45.applyRegenCandidate({
+        slug: SLUG, candidatePath: cand, draftMd, articleTs, runFn: conv(true), verifyHero: () => ({ ok: true }),
+        renameFn(from, to) {
+          renameCalls += 1
+          if (renameCalls === 2) throw new Error('둘째 교체 실패(시험)')
+          fs.renameSync(from, to)
+        },
+      })
+      check('🔴 ㊺ 둘째 파일 교체 실패 → draft·article 둘 다 원본 바이트로 원복',
+        f5.ok === false && f5.code === 'REGEN_COMMIT_FAILED' && same(b0), `${f5.code} · rename ${renameCalls}`)
+
+      b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      const moduleUrl = new URL('./magazine-auto-register.mjs', import.meta.url).href
+      const child = `
+        import fs from 'node:fs'
+        const { applyRegenCandidate } = await import(${JSON.stringify(moduleUrl)})
+        applyRegenCandidate({
+          slug: ${JSON.stringify(SLUG)}, candidatePath: ${JSON.stringify(cand)},
+          draftMd: ${JSON.stringify(draftMd)}, articleTs: ${JSON.stringify(articleTs)},
+          runFn(_file, args) {
+            fs.writeFileSync(args[args.indexOf('--out') + 1], ${JSON.stringify(fakeArticle('후보'))})
+            return { code: 0, stdout: '', stderr: '' }
+          },
+          verifyHero: () => ({ ok: false }),
+          phaseHook(phase) { if (phase === 'draft-committed') process.kill(process.pid, 'SIGKILL') },
+        })
+      `
+      const killed = nodeSpawnSync(process.execPath, ['--input-type=module', '-e', child], { encoding: 'utf8' })
+      check('  ㊺ 교체 중 자식을 실제 SIGKILL 했다 (죽은 시험 아님)', killed.signal === 'SIGKILL', `${killed.status}/${killed.signal}`)
+      check('  ㊺ SIGKILL 직후는 첫 파일만 바뀐 중간 상태다', !same(b0))
+      const recovered = AR45.recoverRegenTransaction({ slug: SLUG, draftMd, articleTs })
+      check('🔴 ㊺ 다음 실행의 저널 회복 → draft·article 원본 바이트 일치',
+        recovered.ok && recovered.recovered && same(b0), JSON.stringify(recovered))
+
+      b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      const initChild = child.replace("phase === 'draft-committed'", "phase === 'initializing'")
+      const initKilled = nodeSpawnSync(process.execPath, ['--input-type=module', '-e', initChild], { encoding: 'utf8' })
+      check('  ㊺ 사본 준비 전 자식을 실제 SIGKILL 했다 (죽은 시험 아님)', initKilled.signal === 'SIGKILL', `${initKilled.status}/${initKilled.signal}`)
+      const initRecovered = AR45.recoverRegenTransaction({ slug: SLUG, draftMd, articleTs })
+      check('🔴 ㊺ 저널 직후 급사도 정본 불변 · 고유 파일 정리',
+        initRecovered.ok && initRecovered.recovered && same(b0), JSON.stringify(initRecovered))
+      check('  ㊺ 교체 함수 — 임시 article·저널·사본이 남지 않는다',
+        fs.readdirSync(D).every((f) => !/\.regen-|\.tmp-/.test(f)), fs.readdirSync(D).join(','))
+    }
+
+    // ── ⑤ 제목 계약 — 말미 어미가 아니라 실제 작업 제목인지 본다 ──
+    const accepted = [
+      '저녁 식사를 바꿔 본 2주', '갱년기에 운동을 다시 시작하며', '갱년기에 제일 힘든 건 무엇일까',
+      '자식한테는 말 못 하는 이야기', '연말이 되면 유독 허전한 마음', '몸이 예전 같지 않다고 느낀 순간',
+    ]
+    check('🔴 ㊺ 승인 큐 6건은 말미가 다르더라도 구체적인 작업 제목으로 통과',
+      accepted.every((title) => EDIT45.checkTitleForm(title).level === null
+        && isAutoLaneEligible({ ...FIXTURE_QUEUE[0], title }).ok),
+      accepted.filter((title) => EDIT45.checkTitleForm(title).level).join(' | '))
+    const BAD = { ...FIXTURE_QUEUE[0], title: '오늘의 이야기입니다' }
+    const lane = isAutoLaneEligible(BAD)
+    check('🔴 ㊺ 임시 제목은 자동 레인 QUEUE_TITLE_FORM으로 전송 전 차단', lane.ok === false && lane.code === 'QUEUE_TITLE_FORM', lane.code)
+    const e = stage('title', { qa: QA_CONTENT, queue: [BAD, ...FIXTURE_QUEUE.slice(1)] })
+    check('🔴 ㊺ 임시 제목 후보는 gate 에서 멈춘다 — ChatGPT 재생성 0 · QA 0 · 변환 0',
+      e.r.verdict === 'BLOCKED' && e.r.blockedBy.some((x) => x.code === 'QUEUE_TITLE_FORM') && e.C.runner === 0 && e.C.qa === 0 && e.C.convert === 0,
+      `${e.r.blockedBy.map((x) => x.code).join(',')} · runner ${e.C.runner} · qa ${e.C.qa}`)
+
+    // ── ⑥ 원복 실패는 숨기지 않고 회차를 fail-closed 한다 ──
+    const rollbackFile = path.join(T, 'rollback-write-failure.md')
+    fs.writeFileSync(rollbackFile, 'BEFORE')
+    const rollbackSnapshot = AR45.fileSnapshot([rollbackFile])
+    fs.writeFileSync(rollbackFile, 'AFTER')
+    const directRestore = AR45.restoreSnapshot(rollbackSnapshot, {
+      writeFile() { const error = new Error('쓰기 거부'); error.name = 'EACCES'; throw error },
+    })
+    check('🔴 ㊺ 실제 restoreSnapshot 쓰기 실패가 failures에 남는다 (삼키지 않는다)',
+      directRestore.restored.length === 0 && directRestore.failures.length === 1
+        && directRestore.failures[0].errorName === 'EACCES' && fs.readFileSync(rollbackFile, 'utf8') === 'AFTER',
+      JSON.stringify(directRestore))
+    const rf = stage('rollback-failure', { qa: QA_CONTENT,
+      restoreSnapshotFn: () => ({ restored: [], failures: [{ path: '/tmp/draft.md', errorName: 'EACCES', errorDetail: '쓰기 거부' }] }) })
+    check('🔴 ㊺ 원복 실패는 ROLLBACK_FAILED·failClosed로 최상위에 남는다',
+      rf.r.failClosed === true && rf.r.blockedBy.some((x) => x.code === 'ROLLBACK_FAILED')
+        && rf.r.steps.some((x) => x.stage === 'rollback' && x.status === 'blocked'),
+      JSON.stringify(rf.r.blockedBy))
+
+    // ── ⑦ 재생성은 임시 경로 없이는 시작조차 하지 않는다 ──
+    let spawned = 0
+    const w = AR45.webuiRegenRunner({ slug: SLUG, packetPath: '/tmp/x.json' }, { runFn: () => { spawned += 1; return { code: 0 } }, resultDir: T })
+    check('🔴 ㊺ 임시 경로가 없으면 자식을 띄우지 않는다 (전송 0)', spawned === 0 && w.ok === false && w.sent === false && w.reason === 'REGEN_DRAFT_OUT_MISSING', w.reason)
+    const D6 = path.join(T, 'cli')
+    fs.mkdirSync(path.join(D6, 'rg-x'), { recursive: true })
+    fs.writeFileSync(path.join(D6, 'rg-x', 'brief.md'), '# rg-x\n\n## 반드시 그대로 넣을 문장\n\n1. 시험 문장\n')
+    const ID6 = '0b4f1c2e-7a3d-4e5f-9a1b-2c3d4e5f6a7b'
+    const PK6 = RG45.writePacket(RG45.buildFailurePacket({ slug: 'rg-x', profile: 'STANDARD', failures: [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }], attempt: 1, attemptId: ID6 }),
+      RG45.packetPathFor('rg-x', path.join(D6, 'pk'), ID6))
+    let probes = 0
+    const o6 = await WEB45.fetchOne('rg-x', { regenPacket: PK6, force: true, draftsDir: D6, quarantinePath: path.join(D6, 'q.json'),
+      probeFn: async () => { probes += 1; return { status: 'ok' } }, exit: () => {} })
+    check('🔴 ㊺ 재생성 CLI 도 --draft-out 없이는 브라우저 0 · 전송 0 · draft.md 생성 0',
+      o6.result.reason === 'REGEN_DRAFT_OUT_MISSING' && o6.result.sent === false && probes === 0 && !fs.existsSync(path.join(D6, 'rg-x', 'draft.md')),
+      `${o6.result.reason} · probe ${probes}`)
+    const o7 = await WEB45.fetchOne('rg-x', { regenPacket: PK6, force: true, draftsDir: D6, quarantinePath: path.join(D6, 'q.json'),
+      draftOut: path.join(D6, 'rg-x', 'draft.md'), probeFn: async () => { probes += 1; return { status: 'ok' } }, exit: () => {} })
+    check('🔴 ㊺ --draft-out 이 draft.md 자체면 거부한다 (우회 금지)', o7.result.reason === 'REGEN_DRAFT_OUT_IS_DRAFT' && probes === 0, o7.result.reason)
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 

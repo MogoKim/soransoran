@@ -218,6 +218,21 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   직접 회수는 부모가 `deliveryGate` 로 먼저 보고 HOLD 면 runner 0 · 전송 0, 재생성 HOLD(`REGEN_DELIVERY_HOLD`)도 같다.
 >   HOLD 후보는 시도·등록 상한을 소비하지 않고 장부도 쓰지 않는다 — 후보 목록은 한 번만 훑는다(유한).
 >   brief·재생성 지시가 바뀌어 지문이 달라지면 새 작업이다. HOLD 여부를 판정할 수 없으면(장부 못 읽음) 회차 전체를 멈춘다.
+> - 🔴 **재생성 원고는 임시 경로로 받고, 검증·변환에 성공했을 때만 원본을 바꾼다** (2026-10-02 01:00 실측).
+>   자식은 `--draft-out <임시 경로>` 에만 쓰고(없거나 draft.md 자체면 전송 0), 부모(`applyRegenCandidate`)가 원고 관문 →
+>   임시 article 변환 → 유효한 hero 연결 승계(이미지 호출 0) → draft.md·article-draft.ts 원자 교체 순서로 반영한다.
+>   한 후보가 막히면 draft.md(회수 뒤 시점)·article-draft.ts·hero 를 **추적 여부와 무관하게** 들어오기 전 바이트로 되돌린다
+>   (새로 받은 첫 원고와 새 hero 파일은 지우지 않는다 — 비용을 치른 재사용 자산이다).
+>   brief 정본 섹션(`REQUIRED_SECTIONS`) 소제목이 있는 원고는 `BRIEF_ECHO` 로 저장 금지다. 재생성 상한에 닿아도
+>   결과·장부 사유에 **실제 QA FAIL 문장**과 재생성마다의 실패 목록(`regenHistory`)을 남긴다. 재생성 패킷 내용은 바꾸지 않았다 —
+>   지문이 바뀌면 기존 전송불명 HOLD 가 풀려 같은 요청이 다시 나간다.
+>   (2026-10-02: cold·autumn 은 brief 가 draft.md 를 덮은 채 남았고, hardest 는 batch 재생성이 heroImage 를 지워 HERO_MISSING 을
+>   자초했고, dinner 는 제목 FAIL 이 REGEN_EXHAUSTED 에 가려졌다.)
+> - 🔴 **큐의 작업 제목은 자동 제작에 넣을 최소 형식만 선행 검사한다** — `isAutoLaneEligible` 이
+>   `checkTitleForm` 으로 빈 값·지나치게 짧은 값·임시 제목을 전송 전에 `QUEUE_TITLE_FORM`으로 막는다.
+>   문장 끝 어미는 검색 의도의 증거가 아니다. `무엇일까` 같은 질문과 COMMUNITY·SEASONAL의 자연스러운
+>   주제형 제목을 특정 어미가 없다는 이유로 막지 않는다. 제목과 본문의 의미 일치는 QA `checkTitleBodyMatch`가 본다
+>   (2026-10-04: 말미 정규식이 승인 큐 6행과 dinner → restart-exercise 증명 경로를 영구 차단한 결함 제거).
 > - 🔴 **미해결 자동 작업 판정은 브랜치마다 PR 을 직접 조회한다** (`magazine-outstanding.mjs`). origin·local 자동 브랜치를
 >   먼저 읽고 각각 `gh pr list --state all --head <브랜치>` 로 본다. 최근 N건 전역 목록을 정본으로 쓰지 않는다
 >   (2026-09-30: `--limit 100` 창 밖으로 밀린 MERGED #524 를 PR 없는 브랜치로 오판 → producer·등록이 선정 전 정지).
