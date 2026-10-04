@@ -17,6 +17,7 @@
  *
  * 🔴 신규 M3 항목은 `validationProfile` 을 달고 들어온다. 표를 늘리지 않는다.
  */
+import { checkTitleForm } from './magazine-editorial.mjs'
 
 export const VALIDATION_PROFILES = ['STANDARD', 'MEDICAL', 'FINANCIAL', 'SENSITIVE']
 const VALID = new Set(VALIDATION_PROFILES)
@@ -98,10 +99,20 @@ export function resolveValidationProfile(item) {
 /**
  * 🔴 **자동 진행 여부는 등급이 정하지 않는다.**
  *    프로필이 정해졌다면 자동 레인을 **탄다.** 못 나가는 이유는 결정론적 QA 실패뿐이다.
+ *
+ * 🔴 현재 M3 큐의 작업 제목은 brief frontmatter 로 전달된다.
+ *    전송 전에 `checkTitleForm` 으로 빈 값·임시 제목만 막고, 문장 끝 어미로
+ *    검색 의도를 추정하지 않는다. 제목과 본문이 같은 질문에 답하는지는 QA 의
+ *    `checkTitleBodyMatch` 가 본다 (2026-10-04).
  */
 export function isAutoLaneEligible(item) {
   const r = resolveValidationProfile(item)
   if (!r.profile) return { ok: false, code: 'PROFILE_UNRESOLVED', why: r.why }
+  const t = checkTitleForm(item?.title)
+  if (t.level) {
+    return { ok: false, code: 'QUEUE_TITLE_FORM', profile: r.profile,
+      why: `큐 작업 제목을 자동 제작에 넣을 수 없다 — ${t.reason}. 전송 전에 큐 제목을 구체화해야 한다` }
+  }
   return { ok: true, profile: r.profile, source: r.source, why: r.why }
 }
 
