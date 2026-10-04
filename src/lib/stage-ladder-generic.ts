@@ -26,7 +26,7 @@ import {
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { auditTarget } from './auto-ready-v2'
-import { PERSONA_CANARY_FLOOR, READY_NET_MARGIN } from './d100-capacity'
+import { PERSONA_CANARY_FLOOR } from './d100-capacity'
 import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
 import type { Health } from './ops-status'
 import type { StageBlock } from './stage-decision-contract'
@@ -186,7 +186,7 @@ export function verifyGenericProfile(p: ScaleProfile, grid: RunnerGrid): string[
 export const PREFLIGHT_CODES = [
   'SLOTS_INFEASIBLE', 'PUBLISH_CAPACITY_SHORT',
   'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN',
-  'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN',
+  'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN', 'READY_LOSS_UNKNOWN',
   'LATENCY_UNKNOWN',
   'PERSONA_SHORT', 'PERSONA_UNKNOWN',
   'COMMENT_COST_SHORT', 'COMMENT_COST_UNKNOWN', 'COMMENT_RUNNER_SHORT',
@@ -196,7 +196,7 @@ export const PREFLIGHT_CODES = [
 ] as const
 export type PreflightCode = (typeof PREFLIGHT_CODES)[number]
 const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = [
-  'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_UNKNOWN', 'LATENCY_UNKNOWN', 'PERSONA_UNKNOWN',
+  'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_UNKNOWN', 'READY_LOSS_UNKNOWN', 'LATENCY_UNKNOWN', 'PERSONA_UNKNOWN',
   'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN', 'RUNNER_UNKNOWN',
 ]
 
@@ -212,6 +212,11 @@ export type PreflightFacts = {
   slotValidOpportunities: number | null
   /** 🔴 원천 1건당 자동 READY 수율(최근 3일 공급 회차 실측: 적재 ÷ 묶음 원천) — 모르면 null */
   readyPerSource: number | null
+  /**
+   * 🔴 **자동 READY 손실 실측** — 수율과 같은 창에서 자동 READY 로 도장된 행의 결말. 모르면 `null`(UNKNOWN).
+   *    필요 READY 의 보충분은 이 값 하나에서만 나온다 — 고정 할증(옛 `READY_NET_MARGIN` 1.2)은 없다.
+   */
+  readyLoss: ReadyLossFact | null
   /** 🔴 원천 게시 → 공개 지연(시간) p50 · p90 — 지금 계약 도장으로 나간 글만(최근 3일). 관측이 없으면 null */
   latencyP50H: number | null
   latencyP90H: number | null
@@ -237,6 +242,37 @@ export type PreflightFacts = {
   runnerHealth: Health | null
 }
 
+/**
+ * 🔴 **READY 손실 실측 사실** (2026-10-04 · canon §3.1 실측 보충 계약).
+ *    · `published` 공개로 끝난 자동 READY 수
+ *    · `lost`      공개되지 못하고 끝난 자동 READY 수 — 발행 직전 판정 만료(`EXPIRED`) · 철회(`DECLINED`)
+ *    🔴 아직 결말이 없는 행(대기 중)은 어느 쪽에도 넣지 않는다 — 손실 0 도 성공도 아니다.
+ *    생성 전 탈락(게이트 · 의미 감사 HOLD)은 수율(`readyPerSource`)이 이미 뺀다 — 여기서 다시 세지 않는다.
+ */
+export type ReadyLossFact = { published: number; lost: number }
+
+/**
+ * 🔴 **필요 READY = 증명일 목표 슬롯 + 실측 손실 보충** — 단계 preflight 의 처리량·공급 비용이 같이 쓰는 **한 계산**.
+ *    보충 = `ceil(목표 × lost ÷ published)` — 공개 1건마다 실측으로 잃은 몫만 더한다. 손실 0 이면 보충 0 이다.
+ *    · 사실이 없거나 결말이 난 행이 0 이면 `unknown` — 🔴 0 으로 읽지 않는다
+ *    · 공개 0 · 손실 > 0 이면 `unbounded` — 어떤 생산량으로도 목표를 못 채운다(FAIL)
+ *    🔴 상세 원천 계획값(`PLANNED_DETAIL_PER_PUBLIC_POST`)은 이 계산에 들어오지 않는다.
+ */
+export type ReadyRequirement =
+  | { kind: 'measured'; target: number; lossNeeded: number; readyNeeded: number }
+  | { kind: 'unknown'; target: number }
+  | { kind: 'unbounded'; target: number }
+
+export function readyRequirementOf(target: number, loss: ReadyLossFact | null): ReadyRequirement {
+  if (loss === null) return { kind: 'unknown', target }
+  const { published, lost } = loss
+  if (!Number.isInteger(published) || !Number.isInteger(lost) || published < 0 || lost < 0) return { kind: 'unknown', target }
+  if (published + lost === 0) return { kind: 'unknown', target }
+  if (published === 0) return { kind: 'unbounded', target }
+  const lossNeeded = Math.ceil((target * lost) / published)
+  return { kind: 'measured', target, lossNeeded, readyNeeded: target + lossNeeded }
+}
+
 export type PreflightVerdict = {
   stage: GenericStage
   verdict: EvidenceVerdictKind
@@ -248,7 +284,7 @@ export type PreflightVerdict = {
  * 🔴 **다음 단계 preflight — D3~D100 같은 구조.** FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면 UNKNOWN.
  *    둘 다 시험을 열지 않는다. 숫자는 기존 정본뿐이다:
  *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`)
- *      · READY 여유 `READY_NET_MARGIN` · Persona canary 하한 `PERSONA_CANARY_FLOOR` — `d100-capacity`
+ *      · 필요 READY — `readyRequirementOf`(목표 + 실측 손실 보충 · 고정 할증 없음) · Persona canary 하한 `PERSONA_CANARY_FLOOR`
  *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 하루 회차(`SUPPLY_RUNS_PER_DAY`)
  *      · 비용 상한 — 호출부가 각 레인 정본 판독기로 읽은 값(공급은 승인 천장 $0.50 으로 누른다)
  *    🔴 지연은 **관측됐는가**만 본다 — 행마다의 나이 상한은 `judgeSlotRelease` 가 이미 지킨다(두 번째 문턱을 만들지 않는다).
@@ -265,14 +301,16 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   // 기회 — 증명일 전체 슬롯이 슬롯 시점 가치로 덮이는가
   if (facts.slotValidOpportunities === null) codes.add('OPPORTUNITY_UNKNOWN')
   else { counts.opportunities = facts.slotValidOpportunities; if (facts.slotValidOpportunities < n) codes.add('OPPORTUNITY_SHORT') }
-  // 처리량 — 측정 수율 × 공급 회차 용량이 하루 READY 필요량을 채우는가
-  const readyNeeded = Math.ceil(n * READY_NET_MARGIN)
-  counts.readyNeeded = readyNeeded
+  // 처리량 — 측정 수율 × 공급 회차 용량이 필요 READY(목표 + 실측 손실 보충)를 채우는가
+  const req = readyRequirementOf(n, facts.readyLoss)
+  if (facts.readyLoss !== null) { counts.readyPublished = facts.readyLoss.published; counts.readyLost = facts.readyLoss.lost }
+  if (req.kind === 'measured') { counts.readyLossNeeded = req.lossNeeded; counts.readyNeeded = req.readyNeeded }
+  if (req.kind === 'unknown') codes.add('READY_LOSS_UNKNOWN')
   if (facts.readyPerSource === null || !(facts.readyPerSource >= 0)) codes.add('THROUGHPUT_UNKNOWN')
   else {
     const capacity = Math.floor(facts.readyPerSource * SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY)
     counts.readyCapacity = capacity
-    if (capacity < readyNeeded) codes.add('THROUGHPUT_SHORT')
+    if (req.kind === 'unbounded' || (req.kind === 'measured' && capacity < req.readyNeeded)) codes.add('THROUGHPUT_SHORT')
   }
   // 지연 — 관측됐는가
   if (facts.latencyP50H === null || facts.latencyP90H === null) codes.add('LATENCY_UNKNOWN')
@@ -300,10 +338,13 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   counts.auditExpected = audits
   if (facts.auditUsdPerCall === null || facts.auditDailyUsdCap === null) codes.add('AUDIT_COST_UNKNOWN')
   else if (audits * facts.auditUsdPerCall > facts.auditDailyUsdCap) codes.add('AUDIT_COST_SHORT')
-  // 공급 — 하루 READY 필요량 × 3일 정산 건당 비용 ≤ 공급 하루 상한
-  if (facts.supplyUsdPerReady === null || !(facts.supplyUsdPerReady > 0) || facts.supplyDailyUsdCap === null) {
+  // 공급 — 처리량과 **같은** 필요 READY × 3일 정산 건당 비용 ≤ 공급 하루 상한. 필요량을 모르면 비용도 모른다
+  if (facts.supplyUsdPerReady === null || !(facts.supplyUsdPerReady > 0) || facts.supplyDailyUsdCap === null
+    || req.kind === 'unknown') {
     codes.add('SUPPLY_COST_UNKNOWN')
-  } else if (readyNeeded * facts.supplyUsdPerReady > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
+  } else if (req.kind === 'unbounded' || req.readyNeeded * facts.supplyUsdPerReady > facts.supplyDailyUsdCap) {
+    codes.add('SUPPLY_COST_SHORT')
+  }
   // 러너 건강
   if (facts.runnerHealth === null || facts.runnerHealth === 'unknown') codes.add('RUNNER_UNKNOWN')
   else if (facts.runnerHealth === 'bad') codes.add('RUNNER_BAD')

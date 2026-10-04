@@ -8,6 +8,8 @@
  *   · 기회          다음 증명일 **전체 슬롯**을 정본 `judgeSlotRelease` 로 그 슬롯 시각에 판정해 짝지은 수
  *                   — 자동 READY(러너와 같은 열림 판정) + 아직 초안이 없는 원천 기회(공급 스냅샷 × 측정 수율)
  *   · 처리량 · 수율  최근 3일 자동 READY 수 ÷ 그 3일 공급 묶음 원천 수(회차 파일)
+ *   · READY 손실    같은 3일 창에서 자동 READY 로 도장된 행의 결말 — 공개 · 손실(EXPIRED · DECLINED) · 대기.
+ *                   결말 난 행이 없으면 `null`(UNKNOWN). 🔴 고정 20% 할증으로 대신하지 않는다
  *   · 지연          최근 3일 지금 계약 도장(`source-slot-v1`)으로 나간 글의 원천 게시 → 공개 p50 · p90
  *   · Persona       🔴 **계약 유효 수는 Persona 레인이 제공한다** — 이 파일은 주입 인터페이스(`contractValidPersonas`)만 둔다.
  *                   읽기 실패면 `null`(UNKNOWN). 🔴 활성 행 수로 대체하지 않는다(정본: active rows are not capacity).
@@ -25,7 +27,7 @@ import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
 
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
-import type { PreflightFacts, RunnerGrid } from '../../src/lib/stage-ladder-generic'
+import type { PreflightFacts, ReadyLossFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
 import {
   COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv,
@@ -138,6 +140,27 @@ const runMsOf = (runId: string): number | null => {
 export function yieldOf(input: { readyCount: number; worksetSources: number | null }): number | null {
   if (input.worksetSources === null || input.worksetSources <= 0) return null
   return Math.round((input.readyCount / input.worksetSources) * 1000) / 1000
+}
+
+/**
+ * 🔴 **READY 손실 실측** — 순수. 창 안 자동 READY 행의 상태별 수에서 결말만 센다.
+ *    `PUBLISHED` → 공개 · `EXPIRED`(발행 직전 판정 만료) · `DECLINED`(철회) → 손실 · 그 밖(아직 대기)은 세지 않는다.
+ *    결말 난 행이 0 이면 `null` — 모르는 것을 손실 0 으로 만들지 않는다.
+ */
+export const READY_LOSS_STATUSES: readonly string[] = ['EXPIRED', 'DECLINED']
+
+export function readyLossOf(byStatus: readonly { status: string; count: number }[]): {
+  fact: ReadyLossFact | null; pending: number
+} {
+  let published = 0
+  let lost = 0
+  let pending = 0
+  for (const r of byStatus) {
+    if (r.status === 'PUBLISHED') published += r.count
+    else if (READY_LOSS_STATUSES.includes(r.status)) lost += r.count
+    else pending += r.count
+  }
+  return { fact: published + lost === 0 ? null : { published, lost }, pending }
 }
 
 /** 🔴 창 안 공급 묶음의 원천 수 — 파일을 못 읽으면 그 파일만 건너뛴다 · 하나도 없으면 null */
@@ -305,6 +328,21 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   const readyPerSource = readyCount === null ? null : yieldOf({ readyCount, worksetSources })
   if (readyPerSource === null) notes.push('수율을 모른다 — 창 안 공급 묶음 또는 READY 기록 없음')
 
+  // READY 손실 — 같은 창 자동 READY 행의 결말(공개 · 만료 · 철회). 읽지 못하거나 결말 0 이면 모름
+  let readyLoss: ReadyLossFact | null = null
+  let readyPending: number | null = null
+  try {
+    const byStatus = await prisma.originalPostApprovalQueue.groupBy({
+      by: ['status'],
+      where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: windowFrom, lt: windowTo } },
+      _count: { _all: true },
+    })
+    const r = readyLossOf(byStatus.map((g) => ({ status: g.status, count: g._count._all })))
+    readyLoss = r.fact
+    readyPending = r.pending
+    if (r.fact === null) notes.push('READY 손실을 모른다 — 창 안 자동 READY 중 결말(공개 · 만료 · 철회) 난 행이 없다')
+  } catch (e) { notes.push(`READY 손실을 읽지 못했다 — ${(e as Error).name}`) }
+
   // 기회 — READY(자동 · 열림) + 원천 스냅샷
   const readyOpps = i.autoOpen.open
     ? readyOpportunitiesOf(i.loaded, { caps: i.caps, now: i.now, autoOnly: true }) : []
@@ -346,6 +384,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   const facts: PreflightFacts = {
     slotValidOpportunities: opp.total,
     readyPerSource,
+    readyLoss,
     latencyP50H, latencyP90H,
     contractValidPersonas,
     commentUsdPerRequest,
@@ -361,7 +400,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     detail: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected,
-      opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources,
+      opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources, readyPending,
     },
   }
 }

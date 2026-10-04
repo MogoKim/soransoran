@@ -545,7 +545,8 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
   check('🔴 수요 = 슬롯 − eligible READY', judgeJitDemand({ slots: 4, readyFilled: 1 }).upTo === 3 && judgeJitDemand({ slots: 4, readyFilled: 1 }).llm)
   check('🔴 덮였으면 생성 0 · 모르면 파일 단계만(모델 0)', !judgeJitDemand({ slots: 3, readyFilled: 3 }).llm && !judgeJitDemand(null).llm)
   const facts: PreflightFacts = {
-    slotValidOpportunities: 3, readyPerSource: 0.5, latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
+    slotValidOpportunities: 3, readyPerSource: 0.5, readyLoss: { published: 3, lost: 0 },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyUsdPerReady: 0.02, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   }

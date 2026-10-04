@@ -11,8 +11,10 @@
  */
 
 /**
- * 🔴 **D100 READY 생산 처리량** — canon 단계 표의 D100 행(공개 100 · READY 120/day)과 같은 값이다.
- *    하루 **생산량**이지 쌓아 둘 재고량이 아니다. thin 관측과 단위가 다르다는 것을 보고할 때만 쓴다.
+ * 🔴 **D100 READY 생산 계획 범위 — 비권위 용량 계획값** (2026-10-04 · canon §3.1 · C-01).
+ *    하루 **생산량** 어림이지 쌓아 둘 재고량도, 단계 판정 문턱도 아니다. 120 은 옛 고정 20% 할증에서 온 상단이다 —
+ *    canon 단계 표는 더 이상 READY/day 를 두지 않고, 필요 READY 는 단계 preflight(목표 + 실측 손실)가 정한다.
+ *    thin 관측과 단위가 다르다는 것을 보고할 때만 쓴다(이 파일은 판정 경로가 import 하지 않는다).
  */
 export const APPROVED_PER_DAY_FLOOR = 100
 export const APPROVED_PER_DAY_TARGET = 120

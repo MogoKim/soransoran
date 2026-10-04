@@ -21,7 +21,7 @@ import { homedir } from 'node:os'
 
 import {
   allD100Plans, d100Plan, describePersonaTargets, nextStage as d100NextStage,
-  personaTargetReport, D100_STAGES, READY_NET_MARGIN, type D100Stage,
+  personaTargetReport, D100_STAGES, type D100Stage,
 } from '../src/lib/d100-capacity'
 import { SAFEST_STAGE, profileOf, type RuntimeStage } from '../src/lib/scale-profile'
 import { DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
@@ -131,7 +131,7 @@ const linkSummary = read.ok ? read.links : summarizeLinks([])
 const activePersonas: Measured = read.ok ? read.activePersonas : null
 /** 🔴 관측값이다 — 못 읽었거나 창 안에 아무 것도 없으면 `null`(unmeasured) 이다 */
 const detailPerDay: Measured = read.ok ? read.detailPerDay : null
-/** 🔴 **새로 품질을 통과한 생산량.** 여유율 20% 가 붙는 값이다 */
+/** 🔴 **새로 품질을 통과한 생산량.** 관측값이다 — 필요량 판정은 preflight(목표 + 실측 손실)가 한다 */
 const readyQualifiedPerDay: Measured = read.ok ? read.readyQualifiedPerDay : null
 /** 🔴 **재고 증감.** 생산량과 다른 값이고, 여기에 4/day 를 요구하지 않는다 */
 const readyStockDeltaPerDay: Measured = read.ok ? read.readyStockDeltaPerDay : null
@@ -211,25 +211,19 @@ const commentObs = observeJob(COMMENT_LABEL)
 
 const facts: Readonly<Record<Capability, RunnerFacts>> = {
   /**
-   * 🔴 수집은 job 이 올라와 있는 것으로 끝나지 않는다 —
-   *    **이 단계가 요구하는 상세 건수를 실제로 채우는가**까지 본다.
-   */
-  /**
    * 🔴 **수집은 job 하나가 아니다** (2026-09-21 3차 보정).
    *    앞판은 wgang 하나만 보고 `collect: ready` 라 적었다 — remonterrace 도 82cook 도
    *    같은 능력에 들어가는데 화면에 없었다. 아래 `collectJobs` 가 전부를 따로 보여 주고,
-   *    능력 판정은 **목표 단계의 실측 상세/day** 로 한다.
+   *    능력 판정은 켜진 공급원 전부의 최근 회차로 한다.
+   * 🔴 **고정 상세/day · 고정 READY/day 문턱을 지웠다** (2026-10-04 · canon §3.1 · C-01 · C-02).
+   *    앞판은 `공개 × 3.82` 상세 · `공개 × 1.2` READY 를 능력 문턱으로 썼다. 처리량 판정은 단계 preflight
+   *    (`judgeNextPreflight` — 슬롯 기회 · 목표 + 실측 손실) 하나다. 여기서는 관측값만 보여 준다.
    */
   collect: factsOf('com.soransoran.navercafe-collect-wgang-multi', true,
     // 🔴 켜져 있는 공급원 **전부**의 최근 회차 — 이미 위에서 읽은 값을 능력 판정에도 넘긴다
-    collectCapabilityFailing(collectJobs.map((j) => ({ enabled: j.facts.enabled, failing: j.facts.failing }))), {
-    requiredPerDay: plan.detailedSourcesRequiredPerDay, observedPerDay: detailPerDay,
-  }),
+    collectCapabilityFailing(collectJobs.map((j) => ({ enabled: j.facts.enabled, failing: j.facts.failing })))),
   generate: factsOf(SUPPLY_LABEL, envFlag('SORAN_SUPPLY_PROCESS_ENABLED'),
-    supplyFailing(supplyObs, readProcessRuns().runs), {
-    // 🔴 생성 능력이 답할 질문은 "얼마나 **만드는가**" 다 — 재고가 얼마나 늘었나가 아니다
-    requiredPerDay: plan.readyQualifiedRequiredPerDay, observedPerDay: readyQualifiedPerDay,
-  }),
+    supplyFailing(supplyObs, readProcessRuns().runs)),
   publish: factsOf(PUBLISH_LABEL, true, publishObs.launchdFailing),
   comment: factsOf(COMMENT_LABEL, true, commentObs.launchdFailing),
   /**
@@ -262,7 +256,8 @@ const ladder = judgeLadder({
   incidentFreeDaysInCurrentStep: 0, sawAbortSignal: false,
 })
 const cap82 = capacities82({
-  requiredDetailPerDayAllSources: d100Plan('d100').detailedSourcesRequiredPerDay,
+  // 🔴 82cook 장기 용량 계획 — 비권위 계획 참고값이다(단계 판정 문턱이 아니다)
+  requiredDetailPerDayAllSources: d100Plan('d100').plannedDetailedSourcesPerDay,
   ladder, listPagesPerRun: 1, canaryRunsPerDay: 4,
   observedDetailPerDay: null, observedDetailPerRun: null,
   operatingApprovedBy: null,
@@ -407,9 +402,9 @@ if (JSON_OUT) {
     }
   }
   console.log(`    상세 수집/day 합계  ${showMeasured(detailPerDay)}`)
-  console.log('    🔴 **생산량**과 **재고 증감**은 다른 값이다 — 여유율 20% 는 생산량에 붙는다')
+  console.log('    🔴 **생산량**과 **재고 증감**은 다른 값이다 — 고정 할증은 없다(필요량 = 목표 + 실측 손실 · preflight)')
   console.log(`    READY 생산량/day    ${showMeasured(readyQualifiedPerDay)}`
-    + `   (목표 ${plan.readyQualifiedRequiredPerDay}/day)`)
+    + `   (다음 단계 필요량은 ${nextStage} preflight 가 실측 손실로 계산)`)
   if (read.ok) {
     for (const l of describeProduction(read.readyProduction, read.readyRunFact)) {
       console.log(`      · ${l}`)
@@ -451,11 +446,10 @@ if (JSON_OUT) {
 
   console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 다음 ${nextStage})`)
   console.log('    🔴 공개량 · READY 생산량은 서로 다른 값이다 — 14일치 재고 목표는 지웠다(2026-09-30)')
-  console.log('    단계   공개/day  READY생산/day  상세/day  P.canary  P.지속  댓글/day')
+  console.log('    단계   공개/day  상세계획/day  P.canary  P.지속  댓글/day')
   for (const p of allD100Plans()) {
     console.log(`    ${p.stage.padEnd(6)} ${String(p.publicPostsPerDay).padStart(7)}`
-      + `  ${String(p.readyQualifiedRequiredPerDay).padStart(12)}`
-      + `  ${String(p.detailedSourcesRequiredPerDay).padStart(8)}`
+      + `  ${String(p.plannedDetailedSourcesPerDay).padStart(12)}`
       + `  ${String(p.personaCanaryFloor).padStart(8)}`
       + `  ${`${p.personaSustainedTarget}${p.stage === 'd100' ? '+' : ''}`.padStart(6)}`
       + `  ${`${p.commentMinPerDay}~${p.commentMaxPerDay}`.padStart(8)}`)
@@ -463,10 +457,9 @@ if (JSON_OUT) {
   console.log('    📜 최소 관측 일수(7·14·21일) 칸은 지웠다 — 달력 대기는 승급 조건이 아니다(canon §6)')
   console.log('    🔴 Persona 는 두 값이다 — P.canary = 하루 시험 하한(승격 preflight 가 보는 값)'
     + ' · P.지속 = 계속 운영할 다양성 목표(보고만 · canary 를 막지 않는다)')
-  console.log(`    🔴 READY **생산** 목표 = 공개량 × ${READY_NET_MARGIN} (올림) —`
-    + ' 같게 두면 재고가 영원히 늘지 않는다')
-  console.log('    🔴 이 목표는 **재고 증감**에 요구하지 않는다 —'
-    + ' 4건 만들어 3건 내보내 +1 인 것은 정상이다')
+  console.log('    🔴 필요 READY 는 표에 없다 — 단계 preflight 가 증명일 목표 + 같은 창 실측 손실(만료 · 철회)로 계산한다.'
+    + ' 실측이 없으면 UNKNOWN (고정 20% 할증 없음)')
+  console.log('    🔴 상세계획/day 는 비권위 용량 계획값이다 — 슬롯 기회 부족을 대신 통과시키지 않는다')
 
   console.log('\n③-b 스케줄러가 실제로 감당하는가 — 🔴 계획 슬롯이 아니라 예약된 cron 이다')
   console.log('    단계   release  예약회차/day  회차당  실제발행/day  필요/day  판정')

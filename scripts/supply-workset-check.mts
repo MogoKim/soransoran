@@ -1609,7 +1609,8 @@ console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하�
   // 스냅샷(생성 가능 원천의 증거) → preflight 기회 — 같은 변환(`sourceOpportunitiesOf`)
   const slots = slotTimesOn('2026-09-21', profileOf('d3'))
   const facts = (opps: number): PreflightFacts => ({
-    slotValidOpportunities: opps, readyPerSource: 0.1, latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
+    slotValidOpportunities: opps, readyPerSource: 0.1, readyLoss: { published: 3, lost: 0 },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyUsdPerReady: 0.02, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   })

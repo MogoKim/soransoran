@@ -37,7 +37,7 @@ import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, s
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import {
-  d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf, READY_NET_MARGIN,
+  d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf,
 } from '../src/lib/d100-capacity'
 import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
@@ -164,13 +164,14 @@ check('반례 — 목표 0 · 101 · 소수는 만들지 않는다', !deriveSlot
 // ─────────────────────────────────────────────────────────
 section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 유효 Persona · 비용 상한 · 러너')
 /**
- * 🔴 경계값 fixture — 각 칸이 그 단계를 **딱** 채운다(기회 = 목표 · 수율 = 필요량을 겨우 채움 · Persona = canary 하한).
+ * 🔴 경계값 fixture — 각 칸이 그 단계를 **딱** 채운다(기회 = 목표 · 실측 손실 0 · 수율 = 필요량(= 목표)을 겨우 채움 · Persona = canary 하한).
  *    넉넉한 값으로 PASS 를 만들면 경계 반례가 헛돈다.
  */
 const yieldFor = (s: GenericStage): number =>
-  Math.ceil(genericDailyTarget(s) * READY_NET_MARGIN) / (SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY)
+  genericDailyTarget(s) / (SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY)
 const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFacts => ({
-  slotValidOpportunities: genericDailyTarget(s), readyPerSource: yieldFor(s), latencyP50H: 20, latencyP90H: 60,
+  slotValidOpportunities: genericDailyTarget(s), readyPerSource: yieldFor(s),
+  readyLoss: { published: genericDailyTarget(s), lost: 0 }, latencyP50H: 20, latencyP90H: 60,
   contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
   commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
   auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
@@ -191,7 +192,7 @@ for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
 }
 const pf100 = judgeNextPreflight('d100', factsFor('d100'), GRID)
 console.log(`   d100: ${pf100.verdict} [${pf100.codes.join(',')}] · 댓글 감당 ${pf100.counts.commentAffordable}건/day`)
-check('🔴 [blocker 실측] d100 — 댓글 $0.20 로 첫 댓글 100건 불가 · 발행 용량 부족 · 공급 $0.50 로 READY 120건 불가',
+check('🔴 [blocker 실측] d100 — 댓글 $0.20 로 첫 댓글 100건 불가 · 발행 용량 부족 · 공급 $0.50 로 READY 100건(목표 + 실측 손실 0) 불가',
   pf100.verdict === 'FAIL' && pf100.codes.includes('COMMENT_COST_SHORT') && pf100.codes.includes('PUBLISH_CAPACITY_SHORT')
   && pf100.codes.includes('SLOTS_INFEASIBLE') && pf100.codes.includes('SUPPLY_COST_SHORT'))
 const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want: 'FAIL' | 'UNKNOWN'; code: PreflightCode }[] = [
@@ -211,7 +212,9 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '댓글 단가 $0.011 × 20 > $0.20', s: 'd20', o: { commentUsdPerRequest: 0.011 }, want: 'FAIL', code: 'COMMENT_COST_SHORT' },
   { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
   { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
-  { name: '공급 READY 단가 $0.01 × 60 > $0.50', s: 'd50', o: { supplyUsdPerReady: 0.01 }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
+  { name: '공급 READY 단가 $0.011 × 50(목표 + 실측 손실 0) > $0.50', s: 'd50', o: { supplyUsdPerReady: 0.011 }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
+  { name: '🔴 READY 손실 실측 없음 → UNKNOWN (0 으로 읽지 않는다)', s: 'd5', o: { readyLoss: null }, want: 'UNKNOWN', code: 'READY_LOSS_UNKNOWN' },
+  { name: '🔴 경계 수율에서 실측 손실 1 → 필요 READY +1 → 처리량 부족', s: 'd5', o: { readyLoss: { published: 5, lost: 1 } }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
   { name: '공급 단가 모름', s: 'd20', o: { supplyUsdPerReady: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
   { name: '공급 상한 모름', s: 'd20', o: { supplyDailyUsdCap: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
 ]
