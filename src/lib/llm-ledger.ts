@@ -205,6 +205,11 @@ export type LedgerEntry = {
    *    🔴 판정은 이 칸을 읽지 않는다. 비용 귀속(`costAttributionOf`)만 읽는다.
    */
   sourceKey?: string | null
+  /**
+   * 🔴 **JIT 공급 계약 표식** (2026-10-04 P0-2 보정) — 그 회차 묶음이 `workset-v3` 이고 이 원천이 그 묶음에 있을 때만
+   *    `supply-jit-v1`. 없으면 legacy — 현재 계약 비용 근거로 세지 않는다(`costAttributionOf` 가 UNKNOWN 으로 닫는다).
+   */
+  supplyContract?: string | null
 }
 
 /**

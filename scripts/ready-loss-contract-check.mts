@@ -36,11 +36,10 @@ const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S
 
 /** 🔴 하루 공급 묶음 원천 수 — 원천 수가 이 값이면 raw READY 수가 곧 하루 용량이다 */
 const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
-/** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 예정 0 · 모름 0 · raw 단가 $0.01 */
-const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => {
-  const c = { sources: RUNS, published: 5, lost: 0, scheduled: 0, unknown: 0, supplyUsd: null as number | null, ...o }
-  return { ...c, supplyUsd: 'supplyUsd' in o ? o.supplyUsd ?? null : 0.01 * (c.published + c.lost + c.scheduled + c.unknown) }
-}
+/** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 예정 0 · 모름 0 · 결과당 비용 $0.01(완전 연결) */
+const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
+  sources: RUNS, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.01, ...o,
+})
 /** 🔴 raw READY `raw` 건이 하루 용량 `cap` 이 되는 원천 수 */
 const sourcesFor = (raw: number, cap: number): number => Math.floor((raw * RUNS) / cap)
 
@@ -72,11 +71,12 @@ console.log('\n① 반례 1 · 2 — 손실 0 이면 목표만 · 손실 1 이�
 
 console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불능 · 무조건 FAIL 금지)')
 {
-  const v = d5({ published: 0, lost: 3, sources: sourcesFor(3, 5) })
+  // 🔴 slot-valid 결과 0 이면 결과당 비용도 없다(비용 귀속이 null) — 현실 모양 그대로
+  const v = d5({ published: 0, lost: 3, sources: sourcesFor(3, 5), usdPerSlotValidResult: null })
   check('🔴 반례3 공개 0 · 손실 3 · 용량 5 → UNKNOWN READY_REQUIREMENT_UNKNOWN · FAIL 코드 없음',
     v.verdict === 'UNKNOWN' && v.codes.includes('READY_REQUIREMENT_UNKNOWN')
     && !v.codes.includes('THROUGHPUT_SHORT') && !v.codes.includes('SUPPLY_COST_SHORT'), show(v))
-  check('🔴 반례3 공급 비용도 UNKNOWN', v.codes.includes('SUPPLY_COST_UNKNOWN'), show(v))
+  check('🔴 반례3 공급 비용도 UNKNOWN (결과 0 → 결과당 비용 없음)', v.codes.includes('SUPPLY_COST_UNKNOWN'), show(v))
   const hard = d5({ published: 0, lost: 3, sources: sourcesFor(3, 4) })
   check('🔴 실제 hard failure 는 남는다 — 필요량은 목표 아래로 내려가지 않으므로 용량 4 < 목표 5 → FAIL',
     hard.verdict === 'FAIL' && hard.codes.includes('THROUGHPUT_SHORT'), show(hard))
@@ -127,30 +127,27 @@ console.log('\n④ 반례 6 — 상세 원천은 authority 가 아니다')
     judgePaths.every((p) => !detailAuthority.test(strip(p))), judgePaths.filter((p) => detailAuthority.test(strip(p))).join(','))
 }
 
-console.log('\n⑤ 반례 7 · 8 — 비용: 같은 구간 · 같은 cohort 단가 · raw ≠ 공개')
+console.log('\n⑤ 반례 7 · 8 — 비용: 하루 필요 = 목표 × 완전 연결 결과당 비용 · raw 단가 authority 없음')
 {
-  const pend = d5({ published: 4, lost: 0, unknown: 10, sources: 160, supplyUsd: 0.14 })
-  check('🔴 🔴 반례7 대기가 있으면 raw READY 단가($0.01)만 내고 공개 1건 단가는 내지 않는다',
-    Math.abs((pend.counts.rawReadyUsd ?? 0) - 0.01) < 1e-12 && !('publicPostUsd' in pend.counts), show(pend))
-  const done = d5({ published: 4, lost: 1, unknown: 0, supplyUsd: 0.2, sources: sourcesFor(5, 50) })
-  check('🔴 결말이 전부 나도 판정은 raw 단가($0.04)만 낸다 — 공개 1건 단가는 장부↔원천 비용 귀속만 낸다(P0-2)',
-    Math.abs((done.counts.rawReadyUsd ?? 0) - 0.04) < 1e-12 && !('publicPostUsd' in done.counts), show(done))
-  // 대기 10 · raw 단가 $0.03 → 대기 전부 성공이면 5 × 0.03 = 0.15 · 전부 손실이면 18 × 0.03 = 0.54 > 0.50
-  const costUnknown = d5({ published: 4, lost: 0, unknown: 10, sources: sourcesFor(14, 18), supplyUsd: 0.42 })
-  check('🔴 🔴 반례7 raw 단가가 낮아 보여도 대기 결말에 따라 상한을 넘을 수 있으면 비용 UNKNOWN (GREEN 아님)',
-    costUnknown.codes.includes('SUPPLY_COST_UNKNOWN') && !costUnknown.codes.includes('SUPPLY_COST_SHORT')
-    && costUnknown.verdict === 'UNKNOWN', show(costUnknown))
-  const costShort = d5({ published: 5, lost: 1, sources: sourcesFor(6, 50), supplyUsd: 0.54 })
-  check('🔴 반례8 손실 1 → 필요 6 × raw $0.09 = $0.54 > $0.50 → SUPPLY_COST_SHORT (처리량과 같은 6 · 처리량은 통과)',
-    costShort.codes.includes('SUPPLY_COST_SHORT') && !costShort.codes.includes('THROUGHPUT_SHORT') && costShort.counts.readyNeeded === 6, show(costShort))
-  const costOk = d5({ published: 5, lost: 0, sources: sourcesFor(5, 50), supplyUsd: 0.45 })
-  check('🔴 반례8 손실 0 → 필요 5 × $0.09 = $0.45 ≤ $0.50 → 비용 GREEN (고정 6 이면 $0.54 FAIL 이었다) — 상한은 소비 목표가 아니다',
-    costOk.verdict === 'PASS' && costOk.counts.readyNeeded === 5, show(costOk))
+  const ok = d5({ usdPerSlotValidResult: 0.09 })
+  check('🔴 반례8 결과당 $0.09 × 목표 5 = $0.45 ≤ $0.50 → 비용 GREEN (상한은 소비 목표가 아니다)',
+    ok.verdict === 'PASS' && Math.abs((ok.counts.supplyDailyUsdNeeded ?? 0) - 0.45) < 1e-12, show(ok))
+  const short = d5({ usdPerSlotValidResult: 0.11 })
+  check('🔴 반례8 결과당 $0.11 × 목표 5 = $0.55 > $0.50 → SUPPLY_COST_SHORT', short.codes.includes('SUPPLY_COST_SHORT'), show(short))
+  const lossy = d5({ lost: 1, sources: sourcesFor(6, 50), usdPerSlotValidResult: 0.09 })
+  check('🔴 🔴 결과당 비용에 손실이 이미 들어 있다 — 손실 1 이어도 비용은 목표 5 × $0.09 (필요 READY 6 을 다시 곱하지 않는다)',
+    lossy.counts.readyNeeded === 6 && Math.abs((lossy.counts.supplyDailyUsdNeeded ?? 0) - 0.45) < 1e-12
+    && !lossy.codes.includes('SUPPLY_COST_SHORT'), show(lossy))
+  const unknown = d5({ unknown: 10, published: 4, sources: sourcesFor(14, 18), usdPerSlotValidResult: null })
+  check('🔴 🔴 반례7 결과당 비용 모름(legacy · 미연결 · 미정산 · 결말 모름) → SUPPLY_COST_UNKNOWN — raw 단가로 GREEN/FAIL 하지 않는다',
+    unknown.codes.includes('SUPPLY_COST_UNKNOWN') && !unknown.codes.includes('SUPPLY_COST_SHORT')
+    && !('rawReadyUsd' in unknown.counts) && !('publicPostUsd' in unknown.counts), show(unknown))
   const judge = strip('src/lib/stage-ladder-generic.ts')
-  check('🔴 반례8 처리량 · 비용이 같은 `replenishmentOf` 결과(req)를 `judgeAgainst` 로 판정한다 — 두 번째 필요량 계산 없음',
+  check('🔴 처리량은 replenishmentOf 구간 하나 · 비용은 목표 × 결과당 비용 하나 — raw 단가 계산 없음',
     (judge.match(/[=(]\s*replenishmentOf\(/g) ?? []).length === 1
     && /judgeAgainst\(req, \(need\) => capacity >= need\)/.test(judge)
-    && /judgeAgainst\(req, \(need\) => need \* rawUnit <= cap\)/.test(judge))
+    && /else if \(n \* perResult > facts\.supplyDailyUsdCap\) codes\.add\('SUPPLY_COST_SHORT'\)/.test(judge)
+    && !/rawUnit|supplyUsd\b/.test(judge))
 }
 
 console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 전역 gate')
@@ -168,8 +165,9 @@ console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 
     /findMany\(\{\s*where: \{ decidedBy: AUTO_DECIDER, decidedAt: \{ gte: i\.windowFrom, lt: i\.windowTo \} \}/.test(facts)
     && !/originalPostApprovalQueue\.count\(/.test(facts)
     && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.scheduled \+ fates\.unknown/.test(facts))
-  check('🔴 정산액도 같은 cohort 사실에 담긴다 — 판정 밖에서 건당 단가를 미리 나누지 않는다',
-    /\{ sources: worksetSources, \.\.\.fates, supplyUsd: spent \}/.test(facts) && !/supplyUsdPerReady/.test(facts))
+  check('🔴 비용은 같은 cohort 의 완전 연결 결과당 비용 하나로 사실에 담긴다 — raw 정산 ÷ 행 수 없음',
+    /\{ sources: worksetSources, \.\.\.fates, usdPerSlotValidResult: costAttribution\?\.usdPerSlotValidResult \?\? null \}/.test(facts)
+    && !/supplyUsdPerReady|supplyUsd: spent/.test(facts))
   check('🔴 감사 retry · overdue · 확정 결함은 전역 quality signal 이 막는다',
     qualitySignalOf({ unresolvedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'bad'
     && qualitySignalOf({ unresolvedDefects: 0, missingPosts: 0, retryableFailures: 1, overdueAudits: 0 }).health === 'bad'

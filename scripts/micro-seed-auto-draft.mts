@@ -31,6 +31,7 @@
  */
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
+import { readWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent } from '../src/lib/supply-workset'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -494,6 +495,19 @@ let BUDGET: CallBudget = new CallBudget(Number.MAX_SAFE_INTEGER)
 let LEDGER: SupplyLlmSession | null = null
 /** 🔴 지금 처리 중인 원천의 해시(`articleIdHashOf`) — 장부 줄의 `sourceKey`. 원천 밖이면 null */
 let COST_KEY: string | null = null
+/** 🔴 지금 원천이 이 회차 JIT 묶음(`workset-v3`)에 있으면 그 계약 — 장부 줄의 `supplyContract`. 아니면 null(legacy) */
+let COST_CONTRACT: string | null = null
+let RUN_INTENTS: ReadonlyMap<string, SupplyIntent> | null = null
+/** 🔴 같은 회차 묶음의 원천 → 의도 — 회차 id 로 찾는다. 옛 판 · 없음 · 손상이면 null */
+function runIntents(runId: string | null): ReadonlyMap<string, SupplyIntent> | null {
+  if (runId === null) return null
+  const ws = join(DATA_DIR, worksetFileName(runId))
+  if (!existsSync(ws)) return null
+  try {
+    const r = readWorkset(JSON.parse(readFileSync(ws, 'utf-8')), runId)
+    return r.ok ? r.intents : null
+  } catch { return null }
+}
 
 /**
  * 🔴 이 파일에서 provider 로 나가는 **유일한 문** (2026-09-17).
@@ -520,7 +534,7 @@ async function ask(
   }
   return LEDGER.call({
     stage, model, systemPrompt: system, userPayload: payload,
-    maxOutputTokens: maxOut, timeoutMs: DRAFT_TIMEOUT_MS, sourceKey: COST_KEY,
+    maxOutputTokens: maxOut, timeoutMs: DRAFT_TIMEOUT_MS, sourceKey: COST_KEY, supplyContract: COST_CONTRACT,
   })
 }
 
@@ -856,6 +870,7 @@ async function main(): Promise<void> {
     fail('--run-id 가 없습니다 — 회차 요청 상한을 판정 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
   }
   // 🔴 **장부만 별도 id 를 쓴다** — 파이프라인 id(`RUN_ID`)는 그대로 둔다
+  RUN_INTENTS = runIntents(RUN_ID)
   LEDGER = new SupplyLlmSession({
     runId: LEDGER_RUN_ID ?? RUN_ID, limits: limitsFromEnv(process.env),
   })
@@ -1022,6 +1037,8 @@ async function main(): Promise<void> {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
     BUDGET.enter(keyOfJ(j))
     COST_KEY = S(j.sourceSite) !== '' && j.sourceArticleId !== '' ? articleIdHashOf(S(j.sourceSite), j.sourceArticleId) : null
+    const ik = intentKeyOf(j.sourceSite, j.sourceArticleId)
+    COST_CONTRACT = ik === null ? null : RUN_INTENTS?.get(ik)?.contract ?? null
     const meta = metas.get(keyOfJ(j))
     const holdPick = (o: { personaDeferred?: boolean } = {}): void => {
       picks.push(pickDraft({
@@ -1241,6 +1258,7 @@ async function main(): Promise<void> {
     }
   }
   COST_KEY = null
+  COST_CONTRACT = null
 
   const s = summarizeDrafts(picks)
   /**

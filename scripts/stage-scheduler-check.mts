@@ -170,7 +170,7 @@ section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 �
 const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
 const cohortFor = (s: GenericStage, o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
   sources: RUNS, published: genericDailyTarget(s), lost: 0, scheduled: 0, unknown: 0,
-  supplyUsd: SUPPLY_USD_PER_READY * genericDailyTarget(s), ...o,
+  usdPerSlotValidResult: SUPPLY_USD_PER_READY, ...o,
 })
 const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFacts => ({
   slotValidOpportunities: genericDailyTarget(s), readyCohort: cohortFor(s), latencyP50H: 20, latencyP90H: 60,
@@ -214,10 +214,10 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '댓글 단가 $0.011 × 20 > $0.20', s: 'd20', o: { commentUsdPerRequest: 0.011 }, want: 'FAIL', code: 'COMMENT_COST_SHORT' },
   { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
   { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
-  { name: '공급 raw READY 단가 $0.011 × 50(목표 + 실측 손실 0) > $0.50', s: 'd50', o: { readyCohort: cohortFor('d50', { supplyUsd: 0.011 * 50 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
+  { name: '공급 결과당 비용 $0.011 × 목표 50 > $0.50', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.011 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
   { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → UNKNOWN', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, unknown: 5 }) }, want: 'UNKNOWN', code: 'READY_REQUIREMENT_UNKNOWN' },
   { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
-  { name: '공급 정산액 모름', s: 'd20', o: { readyCohort: cohortFor('d20', { supplyUsd: null }) }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
+  { name: '결과당 공급 비용 모름(미연결 · legacy)', s: 'd20', o: { readyCohort: cohortFor('d20', { usdPerSlotValidResult: null }) }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
   { name: '공급 상한 모름', s: 'd20', o: { supplyDailyUsdCap: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
 ]
 for (const c of pfCases) {
@@ -411,7 +411,7 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
     { name: '처리량 모자람', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { sources: 10_000 }) }) }, code: 'PREFLIGHT_FAIL' },
     { name: 'Persona canary 하한 미달', o: { facts: (s) => factsFor(s, { contractValidPersonas: 10 }) }, code: 'PREFLIGHT_FAIL' },
     { name: '댓글 비용 초과', o: { facts: (s) => factsFor(s, { commentUsdPerRequest: 0.05 }) }, code: 'PREFLIGHT_FAIL' },
-    { name: '공급 비용 모름', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { supplyUsd: null }) }) }, code: 'PREFLIGHT_UNKNOWN' },
+    { name: '공급 비용 모름', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { usdPerSlotValidResult: null }) }) }, code: 'PREFLIGHT_UNKNOWN' },
     { name: '08:30 에 늦게 돈 controller', o: { runAt: (d) => new Date(`${d}T08:30:00+09:00`).toISOString() }, code: 'LATE_START' },
   ]
   for (const c of cases) {

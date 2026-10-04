@@ -32,6 +32,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { dirname } from 'node:path'
+import { readWorkset, worksetFileName, sourceIdentityOf, type SupplyIntent } from '../src/lib/supply-workset'
 import { PrismaClient } from '@prisma/client'
 import {
   planRefill, judgeApply, readStock, verifyAfterRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf,
@@ -99,6 +101,23 @@ function latestOfEach(dir: string): string[] {
 const envMap = new WeakMap<object, Envelope>()
 const ajMap = new WeakMap<object, AutoJudgeProvenance>()
 function envelopeOf(c: Candidate): Envelope { return envMap.get(c as object) ?? {} }
+/**
+ * 🔴 **후보 → JIT 공급 의도** (2026-10-04 P0-2 보정). 후보 파일(`auto-draft-<runId>.candidates.json`)과 **같은 회차** 묶음
+ *    (`supply-workset-<runId>.json` · `workset-v3`)이 그 원천에 배정한 슬롯을 옮긴다. 묶음이 옛 판 · 없음 · 손상이면 없다(legacy).
+ */
+const intentMap = new Map<object, SupplyIntent>()
+function intentOf(c: Candidate): SupplyIntent | null { return intentMap.get(c as object) ?? null }
+const CANDIDATE_RUN_RE = /^auto-draft-(\d{8}-\d{6})\.candidates\.json$/
+export function intentsForFile(path: string): ReadonlyMap<string, SupplyIntent> | null {
+  const m = CANDIDATE_RUN_RE.exec(path.split('/').pop() ?? '')
+  if (m === null) return null
+  const ws = join(dirname(path), worksetFileName(m[1]!))
+  if (!existsSync(ws)) return null
+  try {
+    const r = readWorkset(JSON.parse(readFileSync(ws, 'utf-8')), m[1]!)
+    return r.ok ? r.intents : null
+  } catch { return null }
+}
 /** 후보마다 어느 파일에서 왔는지 — 🔴 보고서가 파일별로 센다 */
 const fileMap = new WeakMap<object, string>()
 
@@ -235,6 +254,7 @@ async function main(): Promise<void> {
   const fileCounts: { name: string; candidates: number }[] = []
   for (const p2 of inputPaths) {
     const { envelope: env, candidates: rows } = readCandidateFile(p2)
+    const intents = intentsForFile(p2)
     const isM = S(env.provenance) === MACHINE_PROFILE.envelopeProvenance
     const fname = p2.split('/').pop() ?? p2
     fileNote.push(`${fname} (${isM ? '기계' : '사람'} ${rows.length}건)`)
@@ -242,6 +262,9 @@ async function main(): Promise<void> {
     for (const r of rows) {
       envMap.set(r as object, env)
       fileMap.set(r as object, fname)
+      const ik = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
+      const intent = ik === null ? undefined : intents?.get(ik)
+      if (intent !== undefined) intentMap.set(r as object, intent)
       // 🔴 후보에 실려 온 판정 출처를 이관한다 — 상수를 찍지 않는다
       const aj = (r as unknown as Record<string, unknown>).autoJudge
       if (aj !== null && typeof aj === 'object') ajMap.set(r as object, aj as AutoJudgeProvenance)
@@ -368,7 +391,7 @@ async function main(): Promise<void> {
   const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, targets.length) : 0
   const preview = targets.slice(0, previewN).map((c) => {
     const pl = buildQueuePayload({
-      envelope: envelopeOf(c), candidate: c,
+      envelope: envelopeOf(c), candidate: c, intent: intentOf(c),
       autoJudge: autoJudgeOf(c), review: reviewOf(c), now: new Date().toISOString(),
     })
     return {
@@ -465,7 +488,7 @@ async function main(): Promise<void> {
     }
     // 🔴 큐에 넣을 값을 순수 함수가 만든다 — 러너가 접두를 붙이다 P0 를 냈다
     const payload = buildQueuePayload({
-      envelope: envelopeOf(c), candidate: c,
+      envelope: envelopeOf(c), candidate: c, intent: intentOf(c),
       autoJudge: autoJudgeOf(c), review: reviewOf(c), evidence: materialOf(c), now: new Date().toISOString(),
     })
     if (payload === null) {

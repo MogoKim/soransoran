@@ -17,6 +17,7 @@
  */
 
 /** 🔴 원문 증거 기록의 정본 — 적재기는 옮길 뿐 판정하지 않는다 */
+import { SUPPLY_INTENT_KEY, type SupplyIntent } from './supply-intent'
 import {
   SOURCE_EVIDENCE_KEY, buildSourceEvidence,
   type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
@@ -706,6 +707,11 @@ export function buildQueuePayload(input: {
   review?: unknown
   /** 🔴 목록 관측에서 모은 증거 재료 — 없으면 null(모른다) */
   evidence?: EvidenceMaterial | null
+  /**
+   * 🔴 **JIT 공급 의도** (2026-10-04 P0-2 보정) — 같은 회차 묶음(`workset-v3`)이 이 원천에 배정한 슬롯 · 계약 · 원천 해시.
+   *    기계 행 `gateResults.supplyIntent` 로 옮긴다. 없으면 싣지 않는다(legacy — JIT 근거로 세지 않는다).
+   */
+  intent?: SupplyIntent | null
   now: string
 }): QueuePayload | null {
   const { envelope: env, candidate: c } = input
@@ -755,6 +761,7 @@ export function buildQueuePayload(input: {
          *    칸에 초안 시각이 들어가 그것이 원문 나이처럼 쓰였다(A1 ⑦).
          */
         [SOURCE_EVIDENCE_KEY]: sourceEvidenceOf(c, input.evidence ?? null),
+        ...(input.intent ? { [SUPPLY_INTENT_KEY]: input.intent } : {}),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
           candidateType: S(c.candidateType),

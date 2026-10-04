@@ -246,14 +246,20 @@ export type PreflightFacts = {
  *    · 아직 결말이 없는 대기 행은 정본 `judgeSlotRelease` 로 나눈다(`ready-fate.pendingFateOf` · P0-2):
  *        `scheduled` 다가오는 예정 슬롯에 정본 짝짓기로 걸렸다 · 손실 확정은 `lost` 에 더한다 ·
  *        `unknown` 그 밖 — 🔴 성공도 손실도 아니다
- *    · `supplyUsd` 같은 창 공급 정산 합계(USD) — 모르면 `null`
+ *    · 🔴 (P0-2 보정) 현재 JIT 계약(`gateResults.supplyIntent` · `workset-v3`) 행 · 묶음만 센다 — legacy 는 세지 않는다
  *    🔴 생산능력은 `published + lost + scheduled + unknown`(raw READY) 에서 나오므로, 모르는 대기는 손실률에서도
  *       같은 무게로 다룬다(`replenishmentOf` — 모르는 대기 전부 성공 / 전부 손실 두 극단).
  *    🔴 `scheduled` 는 공개가 아니다 — 발행 트랜잭션이 그 시각에 다시 판정한다(발행 시점 재검사 유지).
  *    생성 전 탈락(게이트 · 의미 감사 HOLD)은 READY 가 아니므로 raw 에 이미 없다 — 여기서 다시 세지 않는다.
  */
 export type ReadyCohortFact = {
-  sources: number; published: number; lost: number; scheduled: number; unknown: number; supplyUsd: number | null
+  sources: number; published: number; lost: number; scheduled: number; unknown: number
+  /**
+   * 🔴 **slot-valid 결과 1건당 전 비용(USD)** — 현재 JIT 계약 장부가 원천에 **완전히** 연결됐을 때만(`costAttributionOf`).
+   *    손실 · 선별 비용이 이미 들어 있다. legacy · 미연결 · 미정산 · 결말 모름 비용이 하나라도 있으면 `null`(모름).
+   *    🔴 raw READY 단가(정산 ÷ 행 수)를 대신 쓰지 않는다.
+   */
+  usdPerSlotValidResult: number | null
 }
 
 /**
@@ -363,18 +369,15 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   counts.auditExpected = audits
   if (facts.auditUsdPerCall === null || facts.auditDailyUsdCap === null) codes.add('AUDIT_COST_UNKNOWN')
   else if (audits * facts.auditUsdPerCall > facts.auditDailyUsdCap) codes.add('AUDIT_COST_SHORT')
-  // 공급 — 처리량과 **같은** 필요 READY 구간 × 같은 cohort 의 raw READY 단가 ≤ 공급 하루 상한(안전장치 · 소비 목표 아님).
-  //   raw 단가 × raw 필요량 = 공개 1건 비용 × 목표 — 대기 행이 분모를 키우면 상한 쪽 필요량도 같이 커진다
-  const rawUnit = c === null || raw === null || !(raw > 0) || c.supplyUsd === null || !(c.supplyUsd > 0) ? null : c.supplyUsd / raw
-  // 🔴 공개 · slot-valid 결과당 단가는 여기서 내지 않는다 — 장부 요청이 원천에 붙은 비용 귀속(`costAttributionOf`)만 낸다
-  if (rawUnit !== null) counts.rawReadyUsd = rawUnit
-  if (rawUnit === null || facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
-  else {
-    const cap = facts.supplyDailyUsdCap
-    const t = judgeAgainst(req, (need) => need * rawUnit <= cap)
-    if (t === 'short') codes.add('SUPPLY_COST_SHORT')
-    if (t === 'unknown') { codes.add('SUPPLY_COST_UNKNOWN'); requirementUnknown = true }
-  }
+  /**
+   * 공급 — 하루 필요 비용 = 목표 슬롯 수 × slot-valid 결과 1건당 전 비용 ≤ 공급 하루 상한(안전장치 · 소비 목표 아님).
+   *   🔴 결과당 비용에는 손실 비용이 이미 들어 있다 — 손실률(필요 READY 구간)을 다시 곱하지 않는다.
+   *   🔴 완전히 연결된 현재 계약 비용이 없으면 모른다 — raw READY 단가로 대신하지 않는다.
+   */
+  const perResult = c === null ? null : c.usdPerSlotValidResult
+  if (perResult !== null && perResult > 0) { counts.usdPerSlotValidResult = perResult; counts.supplyDailyUsdNeeded = n * perResult }
+  if (perResult === null || !(perResult > 0) || facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
+  else if (n * perResult > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
   if (requirementUnknown) codes.add('READY_REQUIREMENT_UNKNOWN')
   // 러너 건강
   if (facts.runnerHealth === null || facts.runnerHealth === 'unknown') codes.add('RUNNER_UNKNOWN')

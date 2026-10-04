@@ -40,6 +40,9 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 /** 🔴 작업 묶음 정본 — 여기서 모양을 다시 정하지 않는다 */
 import { humanDecisionFor, humanDecisionIndexOf, readWorkset, sourceIdentityOf, type HumanDecisionIndex } from '../src/lib/supply-workset'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
+import type { SupplyIntent } from '../src/lib/supply-intent'
+/** 🔴 이 회차 JIT 묶음(`workset-v3`)의 원천 → 의도. 옛 판 · 묶음 없음이면 null — 장부 줄에 계약 표식을 싣지 않는다 */
+let INTENTS: ReadonlyMap<string, SupplyIntent> | null = null
 import { runClockFrom } from './lib/run-clock.mjs'
 
 const DATA_DIR = '.microseed-data'
@@ -271,7 +274,8 @@ let LEDGER: SupplyLlmSession | null = null
 
 /** 🔴 이 파일에서 provider 로 나가는 **유일한 문**. 장부가 없으면 보내지 않는다 */
 async function ask(
-  stage: 'judge' | 'judgeRetry', systemPrompt: string, userPayload: string, sourceKey: string | null,
+  stage: 'judge' | 'judgeRetry', systemPrompt: string, userPayload: string,
+  cost: { sourceKey: string | null; supplyContract: string | null },
 ): Promise<LlmResponse> {
   if (LEDGER === null) {
     return {
@@ -283,7 +287,7 @@ async function ask(
   }
   return LEDGER.call({
     stage, model: JUDGE_MODEL, systemPrompt, userPayload,
-    maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS, sourceKey,
+    maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS, ...cost,
   })
 }
 
@@ -291,13 +295,15 @@ async function askSemantic(t: JudgeInput): Promise<SemanticOutcome> {
   // 🔴 장부 줄을 원천 해시에 붙인다(비용 귀속) — 원문 · id 평문은 싣지 않는다
   const costKey = (t.sourceSite ?? '') !== '' && (t.sourceArticleId ?? '') !== ''
     ? articleIdHashOf(t.sourceSite!, t.sourceArticleId!) : null
+  const ik = sourceIdentityOf(t.sourceSite, t.sourceArticleId)
+  const cost = { sourceKey: costKey, supplyContract: ik === null ? null : INTENTS?.get(ik)?.contract ?? null }
   let attempt = 0
   let lastStatus: SemanticStatus = 'skipped'
   let lastError: string | null = null
 
   for (; attempt < MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) await sleep(backoffMs(attempt, Math.random()))
-    const res = await ask('judge', SYSTEM_PROMPT, buildPayload(t), costKey)
+    const res = await ask('judge', SYSTEM_PROMPT, buildPayload(t), cost)
     lastError = res.errorCode
     lastStatus = statusOf(res.errorCode, res.maxTokensReached)
     if (lastStatus !== 'ok') {
@@ -316,7 +322,7 @@ async function askSemantic(t: JudgeInput): Promise<SemanticOutcome> {
     const retry = await ask(
       'judgeRetry',
       `${SYSTEM_PROMPT}\n\n🔴 지난 답이 JSON 이 아니었다. 설명 없이 JSON 객체 하나만 답한다.`,
-      buildPayload(t), costKey,
+      buildPayload(t), cost,
     )
     attempt += 1
     const v2 = (retry.ok && !retry.maxTokensReached) ? parseSemantic(retry.rawText) : null
@@ -393,6 +399,7 @@ async function main(): Promise<void> {
     // 🔴 옛 판 묶음(사이트 없음)으로는 판정하지 않는다 — 같은 번호 다른 사이트 글이 묶음을 빌려 탈 수 있다
     if (ws.sourceKeys === null) fail('작업 묶음이 옛 판(workset-v1 · 사이트 없음)이다 — 판정하지 않는다')
     const wsKeys = ws.sourceKeys
+    INTENTS = ws.intents
     // 🔴 묶음은 원천 열쇠(사이트, id) 집합이다 — 같은 번호 다른 사이트 글이 묶음을 빌려 타지 않는다
     all = all0.filter((t) => { const k = sourceIdentityOf(t.sourceSite, t.sourceArticleId); return k !== null && wsKeys.has(k) })
     console.log(`  🔴 작업 묶음 ${wsKeys.size}건만 판정한다 (상한 ${ws.limit}) — ${WORKSET_PATH}`)

@@ -29,12 +29,16 @@ import {
 import { judgeJitDemand, fillUpToOf } from '../src/lib/supply-process'
 import {
   concludedSourceKeys, attemptedOutcomes, CONCLUDED_STATES, worksetFileName, opportunitiesFileName,
-  WORKSET_KIND, WORKSET_VERSION, type PriorOutcome,
+  WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, type PriorOutcome,
 } from '../src/lib/supply-workset'
+import { judgeNextPreflight, type PreflightFacts } from '../src/lib/stage-ladder-generic'
+import { jitCoverageOf, type LoadedStock, type ResolvedScale } from './lib/publishable-stock.mjs'
+import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
+import { profileOf } from '../src/lib/scale-profile'
 import { sourceKeyOf } from '../src/lib/source-identity'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
 import {
-  pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf,
+  pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf, RUNNER_GRID,
 } from './lib/stage-preflight-facts.mjs'
 
 let pass = 0
@@ -79,6 +83,26 @@ console.log('\n① 반례 — 슬롯 5 · slot-valid READY 5 → 수요 0 · 유
   check('🔴 eligible READY 5 가 슬롯 5 를 덮는다 → 모델 단계 없음 · 적재 없음 · 유료 원천 0',
     filled === 5 && !policy.llm && !policy.fill && policy.upTo === 0 && paid.sources === 0 && paid.basis === 'noDemand',
     JSON.stringify({ filled, policy, paid }))
+}
+
+console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는다 (JIT 커버리지 = 자동 READY 만)')
+{
+  // 🔴 23:00 KST — 오늘 슬롯은 지났고 다가오는 슬롯은 내일 d5 증명일 5개다
+  const late = new Date('2026-10-04T23:00:00+09:00')
+  const g = gate(late.getTime() - 2 * H)
+  const row = (id: string, decidedBy: string): Record<string, unknown> => ({ id, decidedBy, gateResults: g, matchedPersonaId: null })
+  const view = (rows: Record<string, unknown>[]): { loaded: LoadedStock; resolved: ResolvedScale } => ({
+    loaded: { targets: rows, history: [], publishedToday: 0, codeOfPersonaId: new Map() } as unknown as LoadedStock,
+    resolved: { scale: { releaseProfile: profileOf('d5'), capacityProfile: profileOf('d5') } } as unknown as ResolvedScale,
+  })
+  const human = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`h${i}`, 'founder'))), late)
+  const auto = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`a${i}`, AUTO_DECIDER))), late)
+  const dh = judgeJitDemand(human)
+  const da = judgeJitDemand(auto)
+  check('🔴 🔴 **사람 READY 5 · 자동 0 → 부족 5 (사람 글이 자동 증명 공급을 줄이지 않는다)**',
+    human.slots === 5 && human.readyFilled === 0 && dh.upTo === 5 && human.unfilled.length === 5, JSON.stringify({ human: { ...human, horizon: undefined }, dh }))
+  check('🔴 🔴 **자동 READY 5 → 부족 0 · 유료 0**',
+    auto.readyFilled === 5 && da.upTo === 0 && !da.llm && auto.unfilled.length === 0, JSON.stringify(da))
 }
 
 console.log('\n② 반례 — 슬롯 5 · 유효 READY 3 → 부족 2 만')
@@ -183,15 +207,26 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     pooledEntries([[], null]) === null && pooledEntries([[], []])?.length === 0 && pooledEntries([]) === null)
   const dir = mkdtempSync(join(tmpdir(), 'jit-'))
   try {
+    const from0 = Date.parse('2026-10-02T15:00:00Z')
+    const to0 = Date.parse('2026-10-03T15:00:00Z')
+    // 🔴 옛 판(v2)만 있으면 손상은 아니지만 JIT 근거가 없다 → null (옵션 칸으로 옛 묶음을 새 증거로 세지 않는다)
+    writeFileSync(join(dir, worksetFileName('20261003-011500')), JSON.stringify({
+      kind: WORKSET_KIND, version: WORKSET_VERSION, runId: '20261003-011500', takenAt: '2026-10-03T01:15:00.000Z', limit: 10,
+      sources: Array.from({ length: 10 }, (_, i) => ({ sourceSite: 'fx', sourceArticleId: `old-${i}`, slotAt: '2026-10-03T03:00:00.000Z', ageAtSlotH: 3 })),
+    }))
+    check('🔴 🔴 legacy(v2) 묶음만 있으면 JIT 원천 수 모름(null) — optional 칸이 있어도 v2 는 근거가 아니다',
+      worksetSourcesIn(dir, from0, to0) === null)
     const w = (runId: string, n: number): void => writeFileSync(join(dir, worksetFileName(runId)), JSON.stringify({
-      kind: WORKSET_KIND, version: WORKSET_VERSION, runId, takenAt: '2026-10-03T03:15:00.000Z', limit: 10,
-      sources: Array.from({ length: n }, (_, i) => ({ sourceSite: 'fx', sourceArticleId: `${runId}-${i}` })),
+      kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, runId, takenAt: '2026-10-03T03:15:00.000Z', limit: 10,
+      sources: Array.from({ length: n }, (_, i) => ({
+        sourceSite: 'fx', sourceArticleId: `${runId}-${i}`, slotAt: '2026-10-03T05:00:00.000Z', ageAtSlotH: 4,
+      })),
     }))
     w('20261003-031500', 10)
     w('20261003-091500', 10)
     const from = Date.parse('2026-10-02T15:00:00Z')
     const to = Date.parse('2026-10-03T15:00:00Z')
-    check('🔴 묶음 2개 정상 → 원천 20', worksetSourcesIn(dir, from, to) === 20)
+    check('🔴 JIT 묶음 2개 + legacy 1개 → JIT 원천 20 만', worksetSourcesIn(dir, from, to) === 20)
     writeFileSync(join(dir, worksetFileName('20261003-121500')), '{ 손상')
     check('🔴 🔴 창 안 묶음 하나 손상 → 원천 수 모름(null) — 손상 파일을 빼고 20 으로 세지 않는다',
       worksetSourcesIn(dir, from, to) === null)
@@ -212,7 +247,10 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     apiModelId: 'm', model: 'm', status, blockCode: null, countedInputTokens: null, maxOutputTokens: 1, reservedUsd: 0.01,
     inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [], settledUsd: usd,
     pricingVersion: null, startedAt: '', endedAt: null, errorCode: null, ...(key === null ? {} : { sourceKey: key }),
+    supplyContract: SUPPLY_JIT_CONTRACT,
   })
+  /** 🔴 계약 표식 없는 옛 장부 줄 */
+  const legacyLine = (usd: number): LedgerEntry => ({ ...e(null, usd), supplyContract: undefined })
   const hp = articleIdHashOf('fx', 'pub')
   const hs = articleIdHashOf('fx', 'sch')
   const hl = articleIdHashOf('fx', 'lost')
@@ -231,6 +269,23 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     && unlinked.wasteUsd === null && unlinked.unlinkedUsd === 0.03, JSON.stringify(unlinked))
   const open = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 } })
   check('🔴 정산 안 된 유료 요청이 있으면 합계를 모른다 → 단가 null', open !== null && open.openRequests === 1 && open.usdPerPublished === null)
+  // 🔴 2026-10-04 운영 모양 — 창 안 공급 장부가 계약 표식 없는 옛 줄 $0.939 뿐
+  const legacyOnly = costAttributionOf({ entries: [legacyLine(0.5), legacyLine(0.439)], fateByKey, counts: { published: 5, scheduled: 0 } })
+  check('🔴 🔴 옛 장부 $0.939 만 → legacy $0.939 · 결과당 비용 모름(null)',
+    legacyOnly !== null && Math.abs(legacyOnly.legacyUsd - 0.939) < 1e-12 && legacyOnly.usdPerSlotValidResult === null, JSON.stringify(legacyOnly))
+  const legacyFacts: PreflightFacts = {
+    slotValidOpportunities: 5,
+    readyCohort: { sources: 160, published: 5, lost: 0, scheduled: 0, unknown: 9, usdPerSlotValidResult: legacyOnly?.usdPerSlotValidResult ?? null },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
+    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
+    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  }
+  const lv = judgeNextPreflight('d5', legacyFacts, RUNNER_GRID)
+  check('🔴 🔴 **옛 장부 $0.939 만 있는 상태 → SUPPLY_COST_UNKNOWN (SUPPLY_COST_SHORT 아님 · raw 단가 authority 없음)**',
+    lv.codes.includes('SUPPLY_COST_UNKNOWN') && !lv.codes.includes('SUPPLY_COST_SHORT') && !('rawReadyUsd' in lv.counts),
+    JSON.stringify(lv.codes))
+  const mixed = costAttributionOf({ entries: [e(hp, 0.02), legacyLine(0.01)], fateByKey, counts: { published: 1, scheduled: 0 } })
+  check('🔴 현재 계약 줄이 있어도 legacy 줄이 하나라도 섞이면 결과당 비용 모름', mixed !== null && mixed.usdPerSlotValidResult === null)
   check('🔴 장부를 못 읽으면 귀속 자체가 null', costAttributionOf({ entries: null, fateByKey, counts: { published: 1, scheduled: 0 } }) === null)
   check('🔴 결말 → 비용 결말: 공개 · 만료 · 대기 결말 그대로',
     costFateOf({ id: 'a', status: 'PUBLISHED', hash: null, fate: null }) === 'published'
@@ -247,21 +302,31 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
   const runner = strip('scripts/supply-process.mts')
   check('🔴 러너 유료 묶음 = paidSourcesFor(부족분 · 결말 수율 상한) — 고정 WORKSET_LIMIT 로 판정 · 생성하지 않는다',
     /const paid = paidSourcesFor\(\{ deficit: policy\.upTo, yieldHigh: before\?\.sourceYield\?\.high \?\? null, cap: WORKSET_LIMIT \}\)/.test(runner)
-    && /judgeStageBudget\(PAID_LIMIT\)/.test(runner) && /limit: PAID_LIMIT, runId, takenAt: runAt, slotAt: nextSlotAt/.test(runner)
+    && /judgeStageBudget\(PAID_LIMIT\)/.test(runner) && /intendedSlotOf,\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
     && !/judgeStageBudget\(WORKSET_LIMIT\)/.test(runner) && !/limit: WORKSET_LIMIT, runId/.test(runner))
   check('🔴 묶음은 수요가 있을 때만 만든다(policy.llm) — 수요 0 이면 판정 · 생성 0',
-    /if \(policy\.llm\) \{\s*const plan = selectWorkset\(/.test(runner))
+    /if \(policy\.llm\) \{\s*const assigned = assignSourceSlots\(\{\s*rows: worksetEligibility\(eligibilityInput\)\.eligible, slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT,/.test(runner)
+    && /const plan = selectWorkset\(/.test(runner))
+  check('🔴 🔴 원천은 부족 슬롯 각각의 시각에 판정 — 배정 슬롯에서 다시 판정 · nextSlotAt 하나로 모두 판정하지 않는다',
+    /: \(before\?\.jit\?\.unfilled \?\? \[\]\)/.test(runner)
+    && /return d === null \? releaseOf\(r\) : preGenerationRelease\(r, d, RUN_AT\)/.test(runner)
+    && !/preGenerationRelease\(r, nextSlotAt, RUN_AT\)/.test(runner))
   check('🔴 러너 수율은 preflight 와 같은 판독(readReadyCohort) · 같은 짝짓기 열쇠(jit.matched)',
     /readReadyCohort\(prisma, \{/.test(runner) && /matched: new Set\(jit\.matched\), horizon: jit\.horizon/.test(runner))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
+  check('🔴 🔴 cohort 는 현재 JIT 계약 행만(gateResults.supplyIntent) — legacy READY 는 수율 · 손실 근거가 아니다',
+    /const current = found\.filter\(\(r\) => readSupplyIntent\(r\.gateResults\) !== null\)/.test(facts)
+    && /rows = current\.map\(/.test(facts) && /if \(r\.intents === null\) continue/.test(facts))
   check('🔴 preflight 도 같은 판독 · 원천 기회 할인은 결말 수율 구간(raw yieldOf 없음)',
     /const cohort = await readReadyCohort\(prisma, \{/.test(facts) && /oppAt\(yieldBounds\?\.low \?\? null\)/.test(facts)
     && !/export function yieldOf/.test(facts))
   const judge = strip('scripts/micro-seed-auto-judge.mts')
   const draft = strip('scripts/micro-seed-auto-draft.mts')
   check('🔴 판정 · 생성 장부 줄이 원천 해시를 싣는다(articleIdHashOf)',
-    /maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS, sourceKey,/.test(judge) && /articleIdHashOf\(t\.sourceSite!/.test(judge)
-    && /timeoutMs: DRAFT_TIMEOUT_MS, sourceKey: COST_KEY,/.test(draft) && /COST_KEY = S\(j\.sourceSite\)/.test(draft))
+    /maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS, \.\.\.cost,/.test(judge) && /articleIdHashOf\(t\.sourceSite!/.test(judge)
+    && /supplyContract: ik === null \? null : INTENTS\?\.get\(ik\)\?\.contract \?\? null/.test(judge)
+    && /timeoutMs: DRAFT_TIMEOUT_MS, sourceKey: COST_KEY, supplyContract: COST_CONTRACT,/.test(draft) && /COST_KEY = S\(j\.sourceSite\)/.test(draft)
+    && /COST_CONTRACT = ik === null \? null : RUN_INTENTS\?\.get\(ik\)\?\.contract \?\? null/.test(draft))
   const tx = strip('src/lib/original-post-publish-tx.ts')
   check('🔴 발행 시점 재검사 유지 — 발행 트랜잭션이 그 시각에 정본 판정 · eligible 아니면 EXPIRED',
     /judgeSlotRelease\(\{\s*gateResults: row\.gateResults, slotAt: txNow, now: txNow,/.test(tx)

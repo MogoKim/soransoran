@@ -45,7 +45,9 @@ import {
   judgeSlotRelease, matchOpportunitiesToSlots, publishEventAtOf, readSourceEvidence, releaseStampStatusOf,
   type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
-import { OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readWorkset } from '../../src/lib/supply-workset'
+import {
+  OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset,
+} from '../../src/lib/supply-workset'
 import type { Health } from '../../src/lib/ops-status'
 import { HEARTBEAT_INTERVAL_MINUTES } from './original-post-runner-template'
 import { COMMENT_RUNNER_SLOTS, FIRST_COMMENT_ATTEMPTS } from './persona-comment-runner-template'
@@ -145,8 +147,9 @@ const runMsOf = (runId: string): number | null => {
 
 
 /**
- * 🔴 **창 안 공급 묶음의 원천 수 — 하나라도 못 읽으면 `null`(모름)** (2026-10-04 P0-2).
- *    앞판은 못 읽는 파일을 표본에서 뺐다 — 분모가 줄어 수율 · 용량이 실제보다 커 보인다. 창 안 파일이 없어도 `null`.
+ * 🔴 **창 안 JIT 계약 묶음(`workset-v3`)의 원천 수 — 하나라도 못 읽으면 `null`(모름)** (2026-10-04 P0-2 · 보정).
+ *    앞판은 못 읽는 파일을 표본에서 뺐다 — 분모가 줄어 수율 · 용량이 실제보다 커 보인다.
+ *    🔴 옛 판(v1 · v2) 묶음은 손상이 아니다 — 읽되 **세지 않는다**(legacy). 창 안 JIT 묶음이 없으면 `null`.
  */
 export function worksetSourcesIn(dataDir: string, fromMs: number, toMs: number): number | null {
   if (!existsSync(dataDir)) return null
@@ -161,6 +164,7 @@ export function worksetSourcesIn(dataDir: string, fromMs: number, toMs: number):
       // 🔴 정본 판독기(`readWorkset`)가 센다 — 옛 판(v1)은 개수만 · 새 판(v2)은 (사이트, id) 쌍. 두 번째 파서를 두지 않는다
       const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
       if (!r.ok) return null
+      if (r.intents === null) continue
       n += r.count; files += 1
     } catch { return null }
   }
@@ -274,21 +278,28 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   horizon: readonly Date[]
   now: Date
 }): Promise<{
-  rows: CohortRow[] | null; fates: FateCounts | null; readyCount: number | null
+  rows: CohortRow[] | null; fates: FateCounts | null; readyCount: number | null; legacyExcluded: number | null
   worksetSources: number | null; yieldBounds: { low: number; high: number } | null; notes: string[]
 }> {
   const notes: string[] = []
   let rows: CohortRow[] | null = null
+  let legacyExcluded: number | null = null
   try {
     const found = await prisma.originalPostApprovalQueue.findMany({
       where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: i.windowFrom, lt: i.windowTo } },
       select: { id: true, status: true, gateResults: true },
     })
-    rows = found.map((r) => {
-      const ev = readSourceEvidence(r.gateResults)
+    /**
+     * 🔴 **현재 JIT 계약 행만** (2026-10-04 P0-2 보정) — `gateResults.supplyIntent`(묶음 → 적재가 옮긴 의도)가 있는 행.
+     *    옛 READY 는 구제하지 않고 새 공급기의 수율 · 손실로도 세지 않는다 — 수만 따로 보고한다.
+     */
+    const current = found.filter((r) => readSupplyIntent(r.gateResults) !== null)
+    legacyExcluded = found.length - current.length
+    rows = current.map((r) => {
+      const intent = readSupplyIntent(r.gateResults)!
       const terminal = r.status === 'PUBLISHED' || READY_LOSS_STATUSES.includes(r.status)
       return {
-        id: r.id, status: r.status, hash: ev.ok ? ev.record.provenance.articleIdHash : null,
+        id: r.id, status: r.status, hash: intent.sourceHash,
         fate: terminal ? null : pendingFateOf({
           gateResults: r.gateResults, matched: i.matched.has(r.id), horizon: i.horizon, now: i.now, tieBreak: r.id,
         }).fate,
@@ -298,9 +309,13 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   const fates: FateCounts | null = rows === null ? null : cohortFatesOf(rows)
   const readyCount = fates === null ? null : fates.published + fates.lost + fates.scheduled + fates.unknown
   const worksetSources = worksetSourcesIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime())
-  if (worksetSources === null) notes.push('공급 묶음 원천 수를 모른다 — 창 안 묶음 파일이 없거나 하나라도 손상')
+  if (worksetSources === null) notes.push('JIT 묶음 원천 수를 모른다 — 창 안 workset-v3 이 없거나 묶음 하나라도 손상')
+  if (legacyExcluded !== null && legacyExcluded > 0) notes.push(`계약 표식 없는 옛 자동 READY ${legacyExcluded}건 — 근거로 세지 않는다(구제 없음)`)
   if (fates !== null && fates.unknown > 0) notes.push(`결말을 모르는 자동 READY ${fates.unknown}건 — 손실률 · 수율은 구간으로만 판정한다`)
-  return { rows, fates, readyCount, worksetSources, yieldBounds: fates === null ? null : terminalYieldOf(fates, worksetSources), notes }
+  return {
+    rows, fates, readyCount, legacyExcluded, worksetSources,
+    yieldBounds: fates === null ? null : terminalYieldOf(fates, worksetSources), notes,
+  }
 }
 
 /**
@@ -416,24 +431,24 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   // 단가
   const commentUsdPerRequest = settledUnitUsd(pooled(commentLoopLedgerDir()))
   const auditUsdPerCall = settledUnitUsd(pooled(auditLedgerDir()))
-  // 🔴 공급 정산액 — cohort 와 같은 창. 단가(raw)는 판정이 cohort 에서 계산한다
-  const supplyEntries = pooled(defaultLedgerDir())
-  const spent = settledTotalUsd(supplyEntries)
-  if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
-  const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
-    : { sources: worksetSources, ...fates, supplyUsd: spent }
   /**
-   * 🔴 **비용 귀속** — 장부 요청(`sourceKey` 원천 해시) → cohort 행 결말. 해시 없는 요청이 있으면 결과당 단가는 모른다.
-   *    판정(`judgeNextPreflight`)은 이 값을 읽지 않는다 — 관측 · 보고다(raw 단가로 대신하지 않는다).
+   * 🔴 **비용 귀속** — 같은 창 공급 장부(하루라도 손상이면 모름) → 현재 계약 요청(`supplyContract` · `sourceKey`)을
+   *    cohort 행 결말에 붙인다. legacy · 미연결 · 미정산 · 결말 모름 비용이 하나라도 있으면 결과당 단가는 `null`.
+   *    판정은 그 단가 하나로 공급 비용을 본다(`목표 × 결과당 비용`) — raw READY 단가는 쓰지 않는다.
    */
+  const supplyEntries = pooled(defaultLedgerDir())
+  if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
   const fateByKey = new Map<string, CostFate>()
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
     : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates })
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
-    notes.push(`slot-valid 결과당 비용을 모른다 — 원천에 붙지 않은 정산 $${costAttribution.unlinkedUsd.toFixed(4)}`
-      + ` · 미정산 요청 ${costAttribution.openRequests}건 · 결말 모름 비용 $${costAttribution.byFate.unknown.toFixed(4)}`)
+    notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
+      + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
+      + ` · 결말 모름 비용 $${costAttribution.byFate.unknown.toFixed(4)}`)
   }
+  const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
+    : { sources: worksetSources, ...fates, usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null }
 
   const facts: PreflightFacts = {
     slotValidOpportunities,
@@ -452,7 +467,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     detail: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected, sourceExpectedHigh: oppHigh.sourceExpected,
-      opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources, yieldBounds, fates, costAttribution,
+      opportunitySnapshotAt: snap.takenAt, readyCount, legacyExcluded: cohort.legacyExcluded, worksetSources, yieldBounds, fates,
+      costAttribution,
     },
   }
 }

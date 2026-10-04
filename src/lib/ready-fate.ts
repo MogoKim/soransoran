@@ -12,6 +12,7 @@
  */
 import type { LedgerEntry } from './llm-ledger'
 import { judgeSlotRelease, type ReleaseReason } from './source-slot-release'
+import { SUPPLY_JIT_CONTRACT } from './supply-intent'
 
 // ─────────────────────────────────────────────────────────
 // 🔴 대기 행 결말
@@ -117,8 +118,10 @@ export type CostFate = PendingFate | 'published' | 'noReady'
 
 export type CostAttribution = {
   totalUsd: number
-  /** 원천 해시가 없는 정산 요청 — 🔴 0 이 아니면 결과당 단가를 내지 않는다 */
+  /** 원천 해시가 없는 현재 계약 정산 요청 — 🔴 0 이 아니면 결과당 단가를 내지 않는다 */
   unlinkedUsd: number
+  /** 🔴 JIT 계약 표식이 없는 정산(옛 장부 · 손 실행) — 구제하지 않는다 · 0 이 아니면 결과당 단가를 내지 않는다 */
+  legacyUsd: number
   /** 예약만 있고 정산이 없는 유료 요청 수 — 🔴 0 이 아니면 합계를 모른다 */
   openRequests: number
   byFate: Record<CostFate, number>
@@ -133,7 +136,8 @@ export type CostAttribution = {
 }
 
 /**
- * 🔴 **장부 요청을 원천 결과에 붙인다.** 요청의 `sourceKey`(원천 해시)로 결과 행의 결말을 찾는다.
+ * 🔴 **장부 요청을 원천 결과에 붙인다.** 현재 JIT 계약 표식(`supplyContract`)이 있는 요청만 `sourceKey`(원천 해시)로
+ *    결과 행의 결말에 붙인다. 표식 없는 요청은 legacy 다 — 하나라도 있으면 결과당 단가는 모른다.
  *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 끝나지 않은 요청이 있으면 결과당 단가는 `null` 이다 —
  *    🔴 raw 단가(정산 ÷ 행 수)로 대신하지 않는다.
  */
@@ -146,21 +150,24 @@ export function costAttributionOf(i: {
   const byFate: Record<CostFate, number> = { published: 0, scheduled: 0, lost: 0, unknown: 0, noReady: 0 }
   let total = 0
   let unlinked = 0
+  let legacy = 0
   let open = 0
   for (const e of i.entries) {
     if (e.stage === 'countTokens' || e.status === 'blocked') continue
     if (e.status !== 'settled' || e.settledUsd === null) { open += 1; continue }
     total += e.settledUsd
+    if (e.supplyContract !== SUPPLY_JIT_CONTRACT) { legacy += e.settledUsd; continue }
     const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
     if (key === null) { unlinked += e.settledUsd; continue }
     byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
   }
-  const complete = unlinked === 0 && open === 0
+  const complete = unlinked === 0 && legacy === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
   return {
-    totalUsd: total, unlinkedUsd: unlinked, openRequests: open, byFate,
-    usdPerSlotValidResult: complete && byFate.unknown === 0 && results > 0 ? total / results : null,
-    usdPerPublished: complete && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
+    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, byFate,
+    // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
+    usdPerSlotValidResult: complete && total > 0 && byFate.unknown === 0 && results > 0 ? total / results : null,
+    usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
       ? total / i.counts.published : null,
     wasteUsd: complete ? byFate.lost : null,
     noReadyUsd: complete ? byFate.noReady : null,

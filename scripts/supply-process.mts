@@ -55,7 +55,7 @@ import { buildQueueSnapshot, pendingSourceKeysOf, queueSnapshotFileName } from '
 import {
   attemptedOutcomes, concludedSourceKeys, humanDecisionIndexOf, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
   sourceIdentityOf, sourceKeyOf, type HumanDecisionIndex,
-  selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName,
+  selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName, assignSourceSlots,
   WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
   OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease,
 } from '../src/lib/supply-workset'
@@ -521,7 +521,7 @@ export type SupplySnapshot = {
    * 🔴 **JIT 수요 재료** — 다가오는 슬롯 수와 그 슬롯에 eligible 로 남을 READY 가 덮은 수(정본 판정 · 슬롯 시각).
    *    분류를 못 읽으면 `null` 이다(모름 → 파일 단계만).
    */
-  jit: { slots: number; readyFilled: number; publishedToday: number; matched: string[]; horizon: Date[] } | null
+  jit: { slots: number; readyFilled: number; publishedToday: number; matched: string[]; horizon: Date[]; unfilled: Date[] } | null
   /**
    * 🔴 **결말 기준 원천 수율 구간** (2026-10-04 P0-2) — preflight 와 같은 판독(`readReadyCohort`)의 최근 3 KST 일.
    *    유료 묶음 크기(`paidSourcesFor`)가 상한을 쓴다. 모르면 `null` — 부족분보다 많이 사지 않는다.
@@ -994,7 +994,19 @@ async function main(): Promise<number> {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
       return 1
     }
-    const releaseOf = (r: WorksetRow): SlotReleaseVerdict => preGenerationRelease(r, nextSlotAt, RUN_AT)
+    /**
+     * 🔴 **부족 슬롯** (2026-10-04 P0-2 보정) — 다가오는 슬롯 중 자동 READY 가 정본 짝짓기로 덮지 못한 슬롯.
+     *    원천은 **그 슬롯들 각각의 시각에** 생성 전 판정을 받는다 — 한 슬롯(`nextSlotAt`)으로 모두 판정하지 않는다.
+     *    모의(`--simulate-stock`)는 DB 를 읽지 않으므로 다가오는 슬롯 전부를 부족 슬롯으로 본다(dry-run 전용).
+     */
+    const unfilledSlots: Date[] = SIM !== null
+      ? upcomingSlots({ now: RUN_AT, publishedToday: 0, release: scale.releaseProfile, capacity: scale.capacityProfile })
+      : (before?.jit?.unfilled ?? [])
+    /** 🔴 생성 가능 선별 — 부족 슬롯 중 하나라도 eligible 이면 그 슬롯의 판정, 아니면 첫 부족 슬롯의 판정(사유 기록) */
+    const releaseOf = (r: WorksetRow): SlotReleaseVerdict => {
+      const at = unfilledSlots.find((d) => preGenerationRelease(r, d, RUN_AT).verdict === 'eligible')
+      return preGenerationRelease(r, at ?? unfilledSlots[0] ?? nextSlotAt, RUN_AT)
+    }
     // 🔴 회차 시각 하나 — 자식(auto-draft)이 env 로 **같은 값**을 받는다
     const runAt = RUN_AT
     const prior = priorState(rows, currentContractBase(runAt))
@@ -1022,10 +1034,25 @@ async function main(): Promise<number> {
       console.log(`   🟢 원천 기회 스냅샷 ${opp.length}건 (예정 슬롯 ${nextSlotAt.toISOString()})`)
     }
     if (policy.llm) {
+    // 🔴 부족 슬롯마다 원천을 짝짓는다 — 배정된 원천만 사고, 그 원천은 **배정 슬롯**에서 다시 판정한다
+    const assigned = assignSourceSlots({
+      rows: worksetEligibility(eligibilityInput).eligible, slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT,
+    })
+    const intendedSlotOf = (r: WorksetRow): Date | null => {
+      const k = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
+      return k === null ? null : assigned.get(k) ?? null
+    }
     const plan = selectWorkset({
       ...eligibilityInput, attempted: prior.attempted,
-      limit: PAID_LIMIT, runId, takenAt: runAt, slotAt: nextSlotAt,
+      releaseOf: (r) => {
+        const d = intendedSlotOf(r)
+        return d === null ? releaseOf(r) : preGenerationRelease(r, d, RUN_AT)
+      },
+      intendedSlotOf,
+      limit: PAID_LIMIT, runId, takenAt: runAt,
     })
+    console.log(`   부족 슬롯 ${unfilledSlots.length}개 · 원천 배정 ${assigned.size}건`
+      + ` (${[...new Set([...assigned.values()].map((d) => d.toISOString()))].length}개 슬롯)`)
     if (plan.picked.length === 0) {
       // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
       worksetEmpty = true
