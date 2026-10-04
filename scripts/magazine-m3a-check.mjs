@@ -3390,8 +3390,9 @@ globalThis.fetch = (u, o) => (/:9344\\//.test(String(u)) ? Promise.reject(new Er
     check('🔴 ㉚ 기동은 주입된 spawn 으로만 — 정확한 폴더 · 9344',
       spawns.length === 1
         && spawns[0].args.includes(`--user-data-dir=${path.dirname(markerIn(T))}`)
+        && spawns[0].args.includes('--profile-directory=Default')
         && spawns[0].args.includes('--remote-debugging-port=9344'),
-      JSON.stringify(spawns.map((s) => s.args.slice(0, 2))))
+      JSON.stringify(spawns.map((s) => s.args.slice(0, 4))))
     check('🔴 ㉚ 로컬 9344 가 실제로 살아 있어도 그 포트를 읽지 않는다 (fixture 판정만)',
       countEv(LOG, 'cdpAvailable') === 1 && r.status === 0, `exit ${r.status}`)
 

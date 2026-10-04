@@ -151,6 +151,12 @@ export const CDP_URL = `http://127.0.0.1:${CDP_PORT}`
 export function chromeArgs(profileDir = PROFILE_DIR) {
   return [
     `--user-data-dir=${profileDir}`,
+    /**
+     * Chrome 154는 전용 user-data-dir의 마지막 사용값이 Guest Profile이면
+     * 시작 URL 대신 profile picker를 열었다. 전용 폴더 안에서도 자동화가
+     * 사용하는 실제 프로필은 Default 하나로 고정한다.
+     */
+    '--profile-directory=Default',
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run',
     '--no-default-browser-check',
