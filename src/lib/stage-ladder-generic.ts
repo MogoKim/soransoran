@@ -243,18 +243,23 @@ export type PreflightFacts = {
  *    같은 창(최근 3일)에서 자동 READY 로 도장된 행 **전부**를 결말로 나눈다 — 원천 · 정산액도 같은 창이다.
  *    · `sources`   창 안 공급 묶음 원천 수
  *    · `published` 공개로 끝난 행 · `lost` 공개되지 못하고 끝난 행(발행 직전 판정 만료 `EXPIRED` · 철회 `DECLINED`)
- *    · `pending`   아직 결말이 없는 행 — 🔴 성공도 손실도 아니다
+ *    · 아직 결말이 없는 대기 행은 정본 `judgeSlotRelease` 로 나눈다(`ready-fate.pendingFateOf` · P0-2):
+ *        `scheduled` 다가오는 예정 슬롯에 정본 짝짓기로 걸렸다 · 손실 확정은 `lost` 에 더한다 ·
+ *        `unknown` 그 밖 — 🔴 성공도 손실도 아니다
  *    · `supplyUsd` 같은 창 공급 정산 합계(USD) — 모르면 `null`
- *    🔴 생산능력은 `published + lost + pending`(raw READY) 에서 나오므로, 대기 행은 손실률에서도 같은 무게로 다룬다
- *       (`replenishmentOf` — 전부 성공 / 전부 손실 두 극단).
+ *    🔴 생산능력은 `published + lost + scheduled + unknown`(raw READY) 에서 나오므로, 모르는 대기는 손실률에서도
+ *       같은 무게로 다룬다(`replenishmentOf` — 모르는 대기 전부 성공 / 전부 손실 두 극단).
+ *    🔴 `scheduled` 는 공개가 아니다 — 발행 트랜잭션이 그 시각에 다시 판정한다(발행 시점 재검사 유지).
  *    생성 전 탈락(게이트 · 의미 감사 HOLD)은 READY 가 아니므로 raw 에 이미 없다 — 여기서 다시 세지 않는다.
  */
-export type ReadyCohortFact = { sources: number; published: number; lost: number; pending: number; supplyUsd: number | null }
+export type ReadyCohortFact = {
+  sources: number; published: number; lost: number; scheduled: number; unknown: number; supplyUsd: number | null
+}
 
 /**
  * 🔴 **필요 READY 구간 = 증명일 목표 슬롯 + 실측 손실 보충** — 처리량 · 공급 비용이 같이 쓰는 **한 계산**.
- *    보충 = `ceil(목표 × 손실 ÷ 공개)`. 대기 행은 결말을 모르므로 두 극단으로 구간을 만든다:
- *      `min` 대기 전부 공개 · `max` 대기 전부 손실. 대기 0 이면 두 값이 같다.
+ *    보충 = `ceil(목표 × 손실 ÷ 성공)` — 성공 = 공개 + 예정 슬롯에 걸린 대기. 모르는 대기는 두 극단으로 구간을 만든다:
+ *      `min` 모르는 대기 전부 성공 · `max` 전부 손실. 모르는 대기 0 이면 두 값이 같다.
  *    공개 관측이 0 인 극단은 비율을 계산할 수 없어 `null`(모름)이다 — 🔴 "영원히 불능" 이 아니다.
  *    🔴 어떤 경우에도 필요량은 목표 아래로 내려가지 않는다 — `low` 는 항상 확정된 하한이다.
  *    🔴 상세 원천 계획값(`PLANNED_DETAIL_PER_PUBLIC_POST`)은 이 계산에 들어오지 않는다.
@@ -267,11 +272,12 @@ const needOf = (target: number, published: number, lost: number): number | null 
 export const isCount = (v: number): boolean => Number.isInteger(v) && v >= 0
 
 export function replenishmentOf(target: number, c: ReadyCohortFact | null): Replenishment {
-  if (c === null || !isCount(c.published) || !isCount(c.lost) || !isCount(c.pending)) {
+  if (c === null || !isCount(c.published) || !isCount(c.lost) || !isCount(c.scheduled) || !isCount(c.unknown)) {
     return { target, min: null, max: null, low: target }
   }
-  const min = needOf(target, c.published + c.pending, c.lost)
-  const max = needOf(target, c.published, c.lost + c.pending)
+  const ok = c.published + c.scheduled
+  const min = needOf(target, ok + c.unknown, c.lost)
+  const max = needOf(target, ok, c.lost + c.unknown)
   return { target, min, max, low: min ?? target }
 }
 
@@ -312,9 +318,12 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   // 처리량 — 같은 cohort 의 raw READY 수율 × 공급 회차 용량이 필요 READY 구간(목표 + 실측 손실 보충)을 채우는가
   const c = facts.readyCohort
   const req = replenishmentOf(n, c)
-  const raw = c === null ? null : c.published + c.lost + c.pending
+  const raw = c === null ? null : c.published + c.lost + c.scheduled + c.unknown
   if (c !== null) {
-    Object.assign(counts, { readyRaw: raw, readyPublished: c.published, readyLost: c.lost, readyPending: c.pending, readySources: c.sources })
+    Object.assign(counts, {
+      readyRaw: raw, readyPublished: c.published, readyLost: c.lost,
+      readyScheduled: c.scheduled, readyUnknown: c.unknown, readySources: c.sources,
+    })
   }
   if (req.min !== null) counts.readyNeededMin = req.min
   if (req.max !== null) counts.readyNeededMax = req.max
@@ -357,11 +366,8 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   // 공급 — 처리량과 **같은** 필요 READY 구간 × 같은 cohort 의 raw READY 단가 ≤ 공급 하루 상한(안전장치 · 소비 목표 아님).
   //   raw 단가 × raw 필요량 = 공개 1건 비용 × 목표 — 대기 행이 분모를 키우면 상한 쪽 필요량도 같이 커진다
   const rawUnit = c === null || raw === null || !(raw > 0) || c.supplyUsd === null || !(c.supplyUsd > 0) ? null : c.supplyUsd / raw
-  if (rawUnit !== null) {
-    counts.rawReadyUsd = rawUnit
-    // 🔴 공개 1건 단가는 결말이 전부 났을 때만 — 대기가 있으면 모른다(raw 단가로 대신하지 않는다)
-    if (c !== null && c.pending === 0 && c.published > 0 && c.supplyUsd !== null) counts.publicPostUsd = c.supplyUsd / c.published
-  }
+  // 🔴 공개 · slot-valid 결과당 단가는 여기서 내지 않는다 — 장부 요청이 원천에 붙은 비용 귀속(`costAttributionOf`)만 낸다
+  if (rawUnit !== null) counts.rawReadyUsd = rawUnit
   if (rawUnit === null || facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
   else {
     const cap = facts.supplyDailyUsdCap

@@ -376,8 +376,9 @@ console.log('\n⑦ 🔴 배선이 실제로 그렇게 돼 있는가')
     const plan = runner.indexOf('planBoundedCommonPhase(after1')
     return adapt > 0 && call > adapt && plan > call
   })())
+  // 🔴 (2026-10-04 P0-2) 예산 거부는 이번 회차 유료 상한(PAID_LIMIT — 부족분 · 천장 WORKSET_LIMIT)에 건다
   check('🔴 🔴 **상한이 잘못되면 실행 전에 멈춘다**',
-    /const budget = judgeStageBudget\(WORKSET_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)[\s\S]{0,120}return 1/.test(runner))
+    /const budget = judgeStageBudget\(PAID_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)[\s\S]{0,120}return 1/.test(runner))
   /**
    * 🔴 회차 시각이 자식 env 에 함께 실리면서 모양이 바뀌었다(2026-09-23) —
    *    지키는 것은 같다: **자식에게만** 실리고, 부모 `process.env` 는 건드리지 않는다.
@@ -1609,7 +1610,7 @@ console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하�
   // 스냅샷(생성 가능 원천의 증거) → preflight 기회 — 같은 변환(`sourceOpportunitiesOf`)
   const slots = slotTimesOn('2026-09-21', profileOf('d3'))
   const facts = (opps: number): PreflightFacts => ({
-    slotValidOpportunities: opps, readyCohort: { sources: 30, published: 3, lost: 0, pending: 0, supplyUsd: 0.06 },
+    slotValidOpportunities: opps, readyCohort: { sources: 30, published: 3, lost: 0, scheduled: 0, unknown: 0, supplyUsd: 0.06 },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyDailyUsdCap: 0.5, runnerHealth: 'ok',

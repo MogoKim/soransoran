@@ -200,7 +200,13 @@ export type Workset = {
    * 🔴 이번 회차가 끝까지 보낼 원천 — 이 목록이 계약이다. **(사이트, id) 쌍**으로 적는다 —
    *    원문 id 만으로는 원천이 아니다(`source-identity`). 파일에는 원래 두 칸을 각각 남긴다.
    */
-  sources: { sourceSite: string; sourceArticleId: string }[]
+  sources: { sourceSite: string; sourceArticleId: string; ageAtSlotH?: number | null }[]
+  /**
+   * 🔴 **예정 슬롯과 그 슬롯까지의 유효 근거** (2026-10-04 P0-2) — 생성 전 정본 판정(`preGenerationRelease`)을 부른 슬롯.
+   *    원천마다 `ageAtSlotH`(그 슬롯에서의 원문 나이 · 판정 rank)가 함께 남는다. 원문 · 작성자 없음.
+   *    없으면 옛 묶음이다(판독기는 이 칸을 요구하지 않는다).
+   */
+  slotAt?: string | null
 }
 
 export type WorksetPlan = {
@@ -907,6 +913,8 @@ export type SelectWorksetInput = {
   limit: number
   runId: string
   takenAt: Date
+  /** 🔴 `releaseOf` 가 판정한 예정 슬롯 — 묶음 파일에 근거로 남긴다. 모르면 비운다 */
+  slotAt?: Date
 }
 
 /** 🔴 생성 가능 판정에 쓰는 입력 — 묶음 선택과 기회 스냅샷이 **같은 값**을 넘긴다 */
@@ -1088,7 +1096,11 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
     workset: {
       kind: WORKSET_KIND, version: WORKSET_VERSION,
       runId: input.runId, takenAt: input.takenAt.toISOString(), limit,
-      sources: picked.map((r) => ({ sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId })),
+      sources: picked.map((r) => ({
+        sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId,
+        ageAtSlotH: releaseByKey.get(K(r))?.rank.ageAtSlotH ?? null,
+      })),
+      slotAt: input.slotAt?.toISOString() ?? null,
     },
     picked,
     dropped,

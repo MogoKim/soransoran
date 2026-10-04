@@ -101,6 +101,8 @@ import { planOpenDays, wipCountsBySpeaker } from '../src/lib/content-core/speake
 /** 🔴 말투 근거가 선 화자 — 생성 러너와 **같은 함수**로 읽는다(파일까지 · DB 0) */
 import { loadVoice } from './lib/voice-runtime.mjs'
 import { kstDateString } from '../src/lib/release-canary'
+import { paidSourcesFor } from '../src/lib/ready-fate'
+import { readReadyCohort, recentDates } from './lib/stage-preflight-facts.mjs'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
 import { horizonStart, nextSlotAnchor, type ScaleProfile } from '../src/lib/scale-profile'
 import type { ResolvedScale } from '../src/lib/scale-runtime'
@@ -519,12 +521,19 @@ export type SupplySnapshot = {
    * 🔴 **JIT 수요 재료** — 다가오는 슬롯 수와 그 슬롯에 eligible 로 남을 READY 가 덮은 수(정본 판정 · 슬롯 시각).
    *    분류를 못 읽으면 `null` 이다(모름 → 파일 단계만).
    */
-  jit: { slots: number; readyFilled: number; publishedToday: number } | null
+  jit: { slots: number; readyFilled: number; publishedToday: number; matched: string[]; horizon: Date[] } | null
+  /**
+   * 🔴 **결말 기준 원천 수율 구간** (2026-10-04 P0-2) — preflight 와 같은 판독(`readReadyCohort`)의 최근 3 KST 일.
+   *    유료 묶음 크기(`paidSourcesFor`)가 상한을 쓴다. 모르면 `null` — 부족분보다 많이 사지 않는다.
+   */
+  sourceYield: { low: number; high: number } | null
+  cohortNotes: string[]
 }
 
 export async function snapshot(
   prisma: PrismaClient,
-  opts: { env: Readonly<Record<string, string | undefined>>; now: Date },
+  /** 🔴 `dataDir` 없으면 결말 수율을 읽지 않는다(`sourceYield: null` — 모름 → 부족분만 산다) */
+  opts: { env: Readonly<Record<string, string | undefined>>; now: Date; dataDir?: string },
 ): Promise<SupplySnapshot> {
   const rows: QueueRow[] = await prisma.originalPostApprovalQueue.findMany({
     select: {
@@ -552,12 +561,25 @@ export async function snapshot(
   } catch (e) {
     classifyError = e instanceof Error ? e.message : String(e)
   }
+  // 🔴 결말 수율 — 다가오는 슬롯 짝짓기(위 `jit`)와 같은 열쇠로 대기 READY 를 나눈다. 수요를 모르면 수율도 보지 않는다
+  let sourceYield: SupplySnapshot['sourceYield'] = null
+  const cohortNotes: string[] = []
+  if (jit !== null && opts.dataDir !== undefined) {
+    const days = recentDates(kstDateString(opts.now))
+    const c = await readReadyCohort(prisma, {
+      windowFrom: new Date(`${days[0]}T00:00:00+09:00`),
+      windowTo: new Date(new Date(`${days[days.length - 1]}T00:00:00+09:00`).getTime() + 864e5),
+      dataDir: opts.dataDir, matched: new Set(jit.matched), horizon: jit.horizon, now: opts.now,
+    })
+    sourceYield = c.yieldBounds
+    cohortNotes.push(...c.notes)
+  }
   return {
     profiled: st.usable, human: st.human, machine: st.machine,
     post: await prisma.post.count(),
     // 🔴 legacy 는 세기만 한다. 후보에도 재고에도 발행 대상에도 넣지 않는다
     legacy: liveRows.length - st.usable,
-    classification, classifyError, jit,
+    classification, classifyError, jit, sourceYield, cohortNotes,
   }
 }
 
@@ -674,7 +696,7 @@ async function main(): Promise<number> {
   let before: Awaited<ReturnType<typeof snapshot>> | null = null
   if (SIM === null) {
     try {
-      before = await snapshot(prisma, { env: process.env, now })
+      before = await snapshot(prisma, { env: process.env, now, dataDir: DATA_DIR })
     } catch (e) {
       console.log(`\n③ 재고  🔴 읽지 못했다 — ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -687,6 +709,13 @@ async function main(): Promise<number> {
     ? { slots: upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile, capacity: scale.capacityProfile }).length, readyFilled: SIM }
     : before?.jit ?? null
   const policy = judgeJitDemand(jitIn)
+  /**
+   * 🔴 **유료 원천 수 = 부족분에서만** (2026-10-04 P0-2). 앞판은 수요가 1 이어도 고정 묶음 상한(`WORKSET_LIMIT`)만큼
+   *    판정 · 생성을 돌렸다(적재만 수요로 묶였다). 이제 `ceil(부족 ÷ 결말 수율 상한)` · 수율을 모르면 부족분만.
+   *    묶음 상한은 안전장치로만 남는다. 수요 0 이면 묶음 · 유료 호출 0 이다(`policy.llm` false).
+   */
+  const paid = paidSourcesFor({ deficit: policy.upTo, yieldHigh: before?.sourceYield?.high ?? null, cap: WORKSET_LIMIT })
+  const PAID_LIMIT = policy.llm && paid.sources > 0 ? paid.sources : WORKSET_LIMIT
   console.log('\n③ 다가오는 슬롯 · READY')
   if (SIM !== null) console.log(`   🟡 모의 — eligible READY ${SIM}건으로 계획만 본다 (DB 를 읽지 않았다)`)
   else if (before !== null) {
@@ -704,6 +733,11 @@ async function main(): Promise<number> {
   }
   if (jitIn !== null) console.log(`   슬롯 ${jitIn.slots}개 · eligible READY 가 덮은 슬롯 ${jitIn.readyFilled}개`)
   console.log(`   수요 ${policy.reason}`)
+  if (policy.llm) {
+    console.log(`   유료 원천 ${paid.sources}건 / 묶음 상한 ${WORKSET_LIMIT} — 근거 ${paid.basis}`
+      + ` (결말 수율 상한 ${before?.sourceYield?.high?.toFixed(3) ?? '모름'})`)
+  }
+  for (const n of before?.cohortNotes ?? []) console.log(`   ⬚ ${n}`)
 
   // ── ④ 판정 ──
   const verdict = judgeProcessRun({ live: LIVE, killOpen, lock: lockView, hasWork: hasWork(pending) })
@@ -752,7 +786,10 @@ async function main(): Promise<number> {
     })(),
     startedAt: now.toISOString(),
     status: 'running', completedAt: null,
-    jit: { slots: jitIn?.slots ?? null, readyFilled: jitIn?.readyFilled ?? null, upTo: policy.upTo, reason: policy.reason },
+    jit: {
+      slots: jitIn?.slots ?? null, readyFilled: jitIn?.readyFilled ?? null, upTo: policy.upTo, reason: policy.reason,
+      paidSources: policy.llm ? paid.sources : 0, paidBasis: paid.basis, sourceYieldHigh: before?.sourceYield?.high ?? null,
+    },
     sources: [], stages: [],
   }
   const save = (): void => { writeAtomic(runPath, `${JSON.stringify(record, null, 2)}\n`) }
@@ -882,7 +919,7 @@ async function main(): Promise<number> {
    *    🔴 이제 N 건만 골라 **그 N 건만** 판정→생성→적재까지 세로로 보낸다.
    *    고르지 않은 것은 지우지도 판정하지도 않는다 — 다음 회차가 집는다.
    */
-  const budget = judgeStageBudget(WORKSET_LIMIT)
+  const budget = judgeStageBudget(PAID_LIMIT)
   if (!budget.ok) {
     console.error(`\n🔴 중단: ${budget.reason}\n`)
     return 1
@@ -987,7 +1024,7 @@ async function main(): Promise<number> {
     if (policy.llm) {
     const plan = selectWorkset({
       ...eligibilityInput, attempted: prior.attempted,
-      limit: WORKSET_LIMIT, runId, takenAt: runAt,
+      limit: PAID_LIMIT, runId, takenAt: runAt, slotAt: nextSlotAt,
     })
     if (plan.picked.length === 0) {
       // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
@@ -996,12 +1033,12 @@ async function main(): Promise<number> {
       writeAtomic(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`)
       workset = {
         manifestPath: wsPath, shadowPath, candidatesPath: candPath,
-        limit: WORKSET_LIMIT, perStage: budget.perStage,
+        limit: PAID_LIMIT, perStage: budget.perStage,
         // 🔴 적재를 끝내지 못한 앞 회차 파일 — 상한(`--up-to`)은 늘지 않는다
         carryOverPaths: carryPaths,
       }
     }
-    console.log(`   🔴 작업 묶음 ${plan.picked.length}건 / 상한 ${WORKSET_LIMIT} — ${wsPath}`)
+    console.log(`   🔴 작업 묶음 ${plan.picked.length}건 / 유료 상한 ${PAID_LIMIT} (묶음 천장 ${WORKSET_LIMIT}) — ${wsPath}`)
     console.log(`      단계 상한  judge ${budget.perStage.judge}회 · draft ${budget.perStage.draft}회`
       + ` · 회차 전체 ${budget.total}회 (🔴 단계마다 따로 — 앞 단계가 뒤 단계를 굶기지 못한다)`)
     const dropNote = (Object.keys(plan.dropped) as (keyof typeof plan.dropped)[])
@@ -1125,7 +1162,7 @@ async function main(): Promise<number> {
 
   let ok = record.status === 'done'
   if (before !== null) {
-    const after = await snapshot(prisma, { env: process.env, now: RUN_AT })
+    const after = await snapshot(prisma, { env: process.env, now: RUN_AT, dataDir: DATA_DIR })
     const queuedMachine = after.machine - before.machine
     const queuedNonMachine = (after.profiled - before.profiled) - queuedMachine
     const v = verifyRun({

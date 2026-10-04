@@ -199,6 +199,12 @@ export type LedgerEntry = {
   budgetCeilingUsd?: number | null
   budgetCapUsd?: number | null
   budgetSource?: BudgetEnvSource | null
+  /**
+   * 🔴 **이 요청이 어느 원천의 것인가** (2026-10-04 P0-2) — 원천 해시(`articleIdHashOf`)만. 원문 · 작성자 · id 평문 없음.
+   *    공급 판정 · 생성이 원천 하나를 처리하는 동안에만 실린다. 없거나 `null` 이면 연결 모름 — 결과당 단가를 내지 않는다.
+   *    🔴 판정은 이 칸을 읽지 않는다. 비용 귀속(`costAttributionOf`)만 읽는다.
+   */
+  sourceKey?: string | null
 }
 
 /**

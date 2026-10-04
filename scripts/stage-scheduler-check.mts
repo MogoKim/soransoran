@@ -169,7 +169,7 @@ section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 �
  */
 const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
 const cohortFor = (s: GenericStage, o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
-  sources: RUNS, published: genericDailyTarget(s), lost: 0, pending: 0,
+  sources: RUNS, published: genericDailyTarget(s), lost: 0, scheduled: 0, unknown: 0,
   supplyUsd: SUPPLY_USD_PER_READY * genericDailyTarget(s), ...o,
 })
 const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFacts => ({
@@ -215,7 +215,7 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
   { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
   { name: '공급 raw READY 단가 $0.011 × 50(목표 + 실측 손실 0) > $0.50', s: 'd50', o: { readyCohort: cohortFor('d50', { supplyUsd: 0.011 * 50 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
-  { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → UNKNOWN', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, pending: 5 }) }, want: 'UNKNOWN', code: 'READY_REQUIREMENT_UNKNOWN' },
+  { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → UNKNOWN', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, unknown: 5 }) }, want: 'UNKNOWN', code: 'READY_REQUIREMENT_UNKNOWN' },
   { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
   { name: '공급 정산액 모름', s: 'd20', o: { readyCohort: cohortFor('d20', { supplyUsd: null }) }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
   { name: '공급 상한 모름', s: 'd20', o: { supplyDailyUsdCap: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },

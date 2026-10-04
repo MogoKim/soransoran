@@ -207,6 +207,8 @@ export type SupplyCallInput = {
   userPayload: string
   maxOutputTokens: number
   timeoutMs: number
+  /** 🔴 원천 해시(`articleIdHashOf`) — 장부 줄의 `sourceKey`. 원천 밖 요청은 비운다 */
+  sourceKey?: string | null
 }
 
 export type SupplySessionConfig = {
@@ -824,6 +826,7 @@ export class SupplyLlmSession {
       pricingVersion: PRICING_VERSION,
       startedAt: startedAt.toISOString(),
       endedAt: null,
+      ...(typeof input.sourceKey === 'string' && input.sourceKey !== '' ? { sourceKey: input.sourceKey } : {}),
       errorCode: null,
     }
   }

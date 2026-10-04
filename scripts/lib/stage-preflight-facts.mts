@@ -7,7 +7,8 @@
  *   · 러너 격자      정본 템플릿 상수(heartbeat 10분 · 회차당 1건 · 댓글 예약표 · 첫 댓글 3회 시도)
  *   · 기회          다음 증명일 **전체 슬롯**을 정본 `judgeSlotRelease` 로 그 슬롯 시각에 판정해 짝지은 수
  *                   — 자동 READY(러너와 같은 열림 판정) + 아직 초안이 없는 원천 기회(공급 스냅샷 × 측정 수율)
- *   · 처리량 · 수율  최근 3일 자동 READY 수 ÷ 그 3일 공급 묶음 원천 수(회차 파일)
+ *   · 처리량        최근 3일 자동 READY cohort 행 수 ÷ 그 3일 공급 묶음 원천 수(회차 파일)
+ *   · 원천 수율      🔴 결말 기준(P0-2) — (공개 + 예정 슬롯에 걸린 대기) ÷ 원천 · 모르는 대기는 구간 상한에만
  *   · READY cohort  같은 3일 창에서 자동 READY 로 도장된 행 **전부**의 결말(공개 · 손실 EXPIRED·DECLINED · 대기)
  *                   + 같은 창 묶음 원천 수 + 같은 창 공급 정산액 — 처리량 · 필요 READY · 공급 단가가 이 한 묶음에서 나온다.
  *                   🔴 대기 행을 성공으로도 손실로도 확정하지 않는다 · 고정 20% 할증으로 대신하지 않는다
@@ -29,6 +30,10 @@ import type { PrismaClient } from '@prisma/client'
 
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
 import type { PreflightFacts, ReadyCohortFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
+import {
+  READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, terminalYieldOf,
+  type CostAttribution, type CostFate, type FateCounts, type PendingFate,
+} from '../../src/lib/ready-fate'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
 import {
   COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv,
@@ -91,7 +96,7 @@ export const cappedBy = (env: number | null, canon: number | null): number | nul
   env === null || canon === null ? null : Math.min(env, canon)
 
 /**
- * 🔴 **단가 · 수율 · 지연을 모으는 날 수** — 증거일 포함 최근 3일(PR3 KEEP). 한 날이 비어도 나머지로 안다.
+ * 🔴 **단가 · 수율 · 지연을 모으는 날 수** — 증거일 포함 최근 3일(PR3 KEEP). 파일이 없는 날은 빈 날이다.
  *    🔴 예약액으로 추정하지 않는다 — 정산된 것만 모은다.
  */
 export const UNIT_COST_DAYS = 3
@@ -102,10 +107,14 @@ export function recentDates(evidenceDate: string, n: number = UNIT_COST_DAYS): s
   return Array.from({ length: n }, (_, i) => new Date(t - (n - 1 - i) * 864e5).toISOString().slice(0, 10))
 }
 
-/** 🔴 여러 날 장부를 한 줄로 — 못 읽은 날은 빼고, 전부 못 읽었으면 `null`(모름) */
+/**
+ * 🔴 **여러 날 장부를 한 줄로 — 하루라도 손상(못 읽음)이면 `null`(모름)** (2026-10-04 P0-2).
+ *    앞판은 손상된 날을 조용히 빼고 남은 날로 평균을 냈다 — 손상된 날의 지출이 사라진 단가는 실제보다 싸다.
+ *    파일이 없는 날은 손상이 아니다(`readLedgerDay` 가 빈 장부로 준다).
+ */
 export function pooledEntries(days: readonly (readonly LedgerEntry[] | null)[]): LedgerEntry[] | null {
-  const read = days.filter((d): d is readonly LedgerEntry[] => d !== null)
-  return read.length === 0 ? null : read.flat()
+  if (days.length === 0 || days.some((d) => d === null)) return null
+  return (days as readonly (readonly LedgerEntry[])[]).flat()
 }
 
 const readDay = (dir: string, date: string): LedgerEntry[] | null => {
@@ -134,37 +143,11 @@ const runMsOf = (runId: string): number | null => {
   return Number.isFinite(ms) ? ms : null
 }
 
-/**
- * 🔴 **수율 — 원천 1건당 자동 READY** = 창 안 자동 READY 도장 수 ÷ 창 안 공급 묶음 원천 수.
- *    묶음 파일이 하나도 없으면 모른다(null). 0 원천이면 모른다.
- */
-export function yieldOf(input: { readyCount: number; worksetSources: number | null }): number | null {
-  if (input.worksetSources === null || input.worksetSources <= 0) return null
-  return Math.round((input.readyCount / input.worksetSources) * 1000) / 1000
-}
 
 /**
- * 🔴 **READY 결말 분류** — 순수. 창 안 자동 READY 행의 상태별 수를 공개 · 손실 · 대기로 나눈다.
- *    `PUBLISHED` → 공개 · `EXPIRED`(발행 직전 판정 만료) · `DECLINED`(철회) → 손실 · 그 밖(`APPROVED` · `EDITED` …) → 대기.
- *    🔴 대기를 어느 쪽에도 접지 않는다 — 판정(`replenishmentOf`)이 두 극단으로 다룬다.
+ * 🔴 **창 안 공급 묶음의 원천 수 — 하나라도 못 읽으면 `null`(모름)** (2026-10-04 P0-2).
+ *    앞판은 못 읽는 파일을 표본에서 뺐다 — 분모가 줄어 수율 · 용량이 실제보다 커 보인다. 창 안 파일이 없어도 `null`.
  */
-export const READY_LOSS_STATUSES: readonly string[] = ['EXPIRED', 'DECLINED']
-
-export function readyFatesOf(byStatus: readonly { status: string; count: number }[]): {
-  published: number; lost: number; pending: number
-} {
-  let published = 0
-  let lost = 0
-  let pending = 0
-  for (const r of byStatus) {
-    if (r.status === 'PUBLISHED') published += r.count
-    else if (READY_LOSS_STATUSES.includes(r.status)) lost += r.count
-    else pending += r.count
-  }
-  return { published, lost, pending }
-}
-
-/** 🔴 창 안 공급 묶음의 원천 수 — 파일을 못 읽으면 그 파일만 건너뛴다 · 하나도 없으면 null */
 export function worksetSourcesIn(dataDir: string, fromMs: number, toMs: number): number | null {
   if (!existsSync(dataDir)) return null
   let n = 0
@@ -177,25 +160,27 @@ export function worksetSourcesIn(dataDir: string, fromMs: number, toMs: number):
     try {
       // 🔴 정본 판독기(`readWorkset`)가 센다 — 옛 판(v1)은 개수만 · 새 판(v2)은 (사이트, id) 쌍. 두 번째 파서를 두지 않는다
       const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
-      if (r.ok) { n += r.count; files += 1 }
-    } catch { /* 못 읽는 파일은 표본에서 뺀다 */ }
+      if (!r.ok) return null
+      n += r.count; files += 1
+    } catch { return null }
   }
   return files === 0 ? null : n
 }
 
 /**
  * 🔴 **가장 최근 공급 기회 스냅샷** — 초안이 아직 없는 slot-valid 원천(생성 전 판정 eligible)의 증거 기록.
- *    없으면 빈 목록(기회 0 — 모름이 아니다: 공급이 아직 안 돌았으면 READY 로만 센다).
+ *    없으면 빈 목록(기회 0 — 모름이 아니다: 공급이 아직 안 돌았으면 READY 로만 센다). 손상이면 `evidence: null`(모름).
  */
-export function latestOpportunities(dataDir: string, nowMs: number): { evidence: unknown[]; takenAt: string | null } {
+export function latestOpportunities(dataDir: string, nowMs: number): { evidence: unknown[] | null; takenAt: string | null } {
   if (!existsSync(dataDir)) return { evidence: [], takenAt: null }
   const files = readdirSync(dataDir).filter((f) => OPPORTUNITY_FILE_RE.test(f)).sort()
   for (const f of files.reverse()) {
-    try {
-      const snap = readOpportunitySnapshot(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')))
-      if (snap === null || Date.parse(snap.takenAt) > nowMs) continue
-      return { evidence: snap.evidence, takenAt: snap.takenAt }
-    } catch { /* 다음 파일 */ }
+    let snap: ReturnType<typeof readOpportunitySnapshot>
+    try { snap = readOpportunitySnapshot(JSON.parse(readFileSync(join(dataDir, f), 'utf-8'))) } catch { snap = null }
+    // 🔴 가장 최근 스냅샷이 손상이면 모른다 — 더 오래된 스냅샷으로 조용히 내려가지 않는다(2026-10-04 P0-2)
+    if (snap === null) return { evidence: null, takenAt: null }
+    if (Date.parse(snap.takenAt) > nowMs) continue
+    return { evidence: snap.evidence, takenAt: snap.takenAt }
   }
   return { evidence: [], takenAt: null }
 }
@@ -226,6 +211,8 @@ export function sourceOpportunitiesOf(
 
 /**
  * 🔴 **증명일 기회 수** — 순수. READY 기회를 먼저 짝짓고, 남은 슬롯을 원천 기회로 채운 뒤 **측정 수율로 할인**한다.
+ *    🔴 (2026-10-04 P0-2) 수율은 결말 기준 원천 수율(`terminalYieldOf`)이다 — 대기 포함 raw 수율이 아니다.
+ *       구간(low · high)은 호출부가 두 번 불러 합친다(`combineOpportunityBounds`).
  *    원천 기회는 초안 전이라 참여 동력 · 배정이 아직 없다(`pending`) — 같은 정본 판정의 생성 전 모드다.
  *    수율을 모르면 원천 기회는 세지 않는다(READY 만 — 과대평가 금지).
  *
@@ -253,6 +240,67 @@ export function slotValidOpportunitiesOf(input: {
     total: Math.min(input.slots.length, r.filled + sourceExpected),
     readyFilled: r.filled, sourceFilled: s.filled, sourceValid, sourceExpected,
   }
+}
+
+/**
+ * 🔴 **수율 구간 → 증명일 기회 수** — 두 끝이 같으면 그 값. 하한이 이미 모든 슬롯을 덮으면 하한(충분).
+ *    상한도 슬롯을 못 덮으면 하한(어느 쪽이든 부족 — FAIL 근거). 그 사이는 `null`(모름 — 모르는 대기의 결말이 가른다).
+ */
+export function combineOpportunityBounds(low: number, high: number, slots: number): number | null {
+  if (low === high || low >= slots) return low
+  if (high < slots) return low
+  return null
+}
+
+/** 🔴 cohort 행 한 줄 — 원천 해시 · 상태 · 대기 결말(대기만) */
+export type CohortRow = { id: string; status: string; hash: string | null; fate: PendingFate | null }
+
+/** 🔴 비용 귀속용 결말 — 상태가 결말이면 그것, 대기면 분류 결과 */
+export function costFateOf(r: CohortRow): CostFate {
+  if (r.status === 'PUBLISHED') return 'published'
+  if (READY_LOSS_STATUSES.includes(r.status)) return 'lost'
+  return r.fate ?? 'unknown'
+}
+
+/**
+ * 🔴 **자동 READY cohort 판독 — preflight 와 공급 러너가 같은 함수를 부른다** (2026-10-04 P0-2).
+ *    창 안 자동 READY 행 전부(한 번의 조회) · 대기 행은 정본 판정으로 예정 · 손실 · 모름(`pendingFateOf`) ·
+ *    같은 창 묶음 원천 수 · 결말 수율 구간. 읽지 못한 칸은 `null`(모름) — 손상 파일을 조용히 빼지 않는다.
+ */
+export async function readReadyCohort(prisma: PrismaClient, i: {
+  windowFrom: Date; windowTo: Date; dataDir: string
+  /** 🔴 다가오는 슬롯에 정본 짝짓기로 걸린 READY 열쇠 — 커버리지와 같은 호출에서 얻는다 */
+  matched: ReadonlySet<string>
+  horizon: readonly Date[]
+  now: Date
+}): Promise<{
+  rows: CohortRow[] | null; fates: FateCounts | null; readyCount: number | null
+  worksetSources: number | null; yieldBounds: { low: number; high: number } | null; notes: string[]
+}> {
+  const notes: string[] = []
+  let rows: CohortRow[] | null = null
+  try {
+    const found = await prisma.originalPostApprovalQueue.findMany({
+      where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: i.windowFrom, lt: i.windowTo } },
+      select: { id: true, status: true, gateResults: true },
+    })
+    rows = found.map((r) => {
+      const ev = readSourceEvidence(r.gateResults)
+      const terminal = r.status === 'PUBLISHED' || READY_LOSS_STATUSES.includes(r.status)
+      return {
+        id: r.id, status: r.status, hash: ev.ok ? ev.record.provenance.articleIdHash : null,
+        fate: terminal ? null : pendingFateOf({
+          gateResults: r.gateResults, matched: i.matched.has(r.id), horizon: i.horizon, now: i.now, tieBreak: r.id,
+        }).fate,
+      }
+    })
+  } catch (e) { notes.push(`자동 READY cohort 를 읽지 못했다 — ${(e as Error).name}`) }
+  const fates: FateCounts | null = rows === null ? null : cohortFatesOf(rows)
+  const readyCount = fates === null ? null : fates.published + fates.lost + fates.scheduled + fates.unknown
+  const worksetSources = worksetSourcesIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime())
+  if (worksetSources === null) notes.push('공급 묶음 원천 수를 모른다 — 창 안 묶음 파일이 없거나 하나라도 손상')
+  if (fates !== null && fates.unknown > 0) notes.push(`결말을 모르는 자동 READY ${fates.unknown}건 — 손실률 · 수율은 구간으로만 판정한다`)
+  return { rows, fates, readyCount, worksetSources, yieldBounds: fates === null ? null : terminalYieldOf(fates, worksetSources), notes }
 }
 
 /**
@@ -318,37 +366,33 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   const windowTo = kstRange(i.evidenceDate).lt
   const pooled = (dir: string): LedgerEntry[] | null => pooledEntries(dates.map((d) => readDay(dir, d)))
 
-  // READY cohort — 같은 창 자동 READY 행 전부(한 번의 조회)를 결말로 나눈다. 수율의 분자도 이 합이다
-  let fates: { published: number; lost: number; pending: number } | null = null
-  try {
-    const byStatus = await prisma.originalPostApprovalQueue.groupBy({
-      by: ['status'],
-      where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: windowFrom, lt: windowTo } },
-      _count: { _all: true },
-    })
-    fates = readyFatesOf(byStatus.map((g) => ({ status: g.status, count: g._count._all })))
-  } catch (e) { notes.push(`자동 READY 결말을 읽지 못했다 — ${(e as Error).name}`) }
-  const readyCount = fates === null ? null : fates.published + fates.lost + fates.pending
-  const worksetSources = worksetSourcesIn(i.dataDir, windowFrom.getTime(), windowTo.getTime())
-  /**
-   * 🔴 raw 수율 — 증명일 원천 기회를 할인하는 데만 쓴다(`slotValidOpportunitiesOf`). 처리량 판정은 cohort 를 본다.
-   *    대기 행이 섞인 raw 수율이라는 한계는 P0-2(source-to-slot 결말 수율)가 푼다.
-   */
-  const readyPerSource = readyCount === null ? null : yieldOf({ readyCount, worksetSources })
-  if (readyPerSource === null) notes.push('수율을 모른다 — 창 안 공급 묶음 또는 READY 기록 없음')
-  if (fates !== null && fates.pending > 0) notes.push(`결말 없는 자동 READY ${fates.pending}건 — 손실률은 두 극단 구간으로만 판정한다`)
-
-  // 기회 — READY(자동 · 열림) + 원천 스냅샷
+  // 기회(READY) — 자동 · 열림. 증명일 슬롯 짝짓기는 커버리지와 대기 결말 분류가 **같은 호출**을 쓴다
   const readyOpps = i.autoOpen.open
     ? readyOpportunitiesOf(i.loaded, { caps: i.caps, now: i.now, autoOnly: true }) : []
-  if (!i.autoOpen.open) notes.push(`자동 READY 닫힘 — ${i.autoOpen.reasons.join(' · ') || '이유 없음'} (READY 기회 0)`)
+  if (!i.autoOpen.open) notes.push(`자동 READY 닫힘 — ${i.autoOpen.reasons.join(' · ') || '이유 없음'} (READY 기회 0 · 대기는 예정 슬롯에 걸리지 않는다)`)
+  const matchedReady = new Set(matchOpportunitiesToSlots(i.proofSlots, readyOpps).bySlot.filter((k): k is string => k !== null))
+
+  // READY cohort — 공급 러너와 같은 판독(`readReadyCohort`)
+  const cohort = await readReadyCohort(prisma, {
+    windowFrom, windowTo, dataDir: i.dataDir, matched: matchedReady, horizon: i.proofSlots, now: i.now,
+  })
+  notes.push(...cohort.notes)
+  const { rows, fates, readyCount, worksetSources, yieldBounds } = cohort
+
+  // 기회 — READY + 원천 스냅샷(결말 수율로 할인 · 구간이면 두 끝을 합친다)
   const snap = latestOpportunities(i.dataDir, i.now.getTime())
+  if (snap.evidence === null) notes.push('가장 최근 원천 기회 스냅샷이 손상됐다 — 증명일 기회를 모른다')
   const queuedHashes = new Set(i.loaded.allRows.map((r) => {
     const ev = readSourceEvidence(r.gateResults)
     return ev.ok ? ev.record.provenance.articleIdHash : null
   }).filter((h): h is string => h !== null))
-  const sourceOpps = sourceOpportunitiesOf(snap.evidence, queuedHashes, i.now)
-  const opp = slotValidOpportunitiesOf({ slots: i.proofSlots, ready: readyOpps, sources: sourceOpps, readyPerSource })
+  const sourceOpps = sourceOpportunitiesOf(snap.evidence ?? [], queuedHashes, i.now)
+  const oppAt = (y: number | null): ReturnType<typeof slotValidOpportunitiesOf> =>
+    slotValidOpportunitiesOf({ slots: i.proofSlots, ready: readyOpps, sources: sourceOpps, readyPerSource: y })
+  const opp = oppAt(yieldBounds?.low ?? null)
+  const oppHigh = oppAt(yieldBounds?.high ?? null)
+  const slotValidOpportunities = snap.evidence === null ? null
+    : combineOpportunityBounds(opp.total, oppHigh.total, i.proofSlots.length)
 
   // 지연 — 지금 계약 도장으로 나간 글 · 원천 게시 → 공개
   let latencyP50H: number | null = null
@@ -372,13 +416,27 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   // 단가
   const commentUsdPerRequest = settledUnitUsd(pooled(commentLoopLedgerDir()))
   const auditUsdPerCall = settledUnitUsd(pooled(auditLedgerDir()))
-  // 🔴 공급 정산액 — cohort 와 같은 창. 단가(raw · 공개)는 판정이 cohort 에서 계산한다
-  const spent = settledTotalUsd(pooled(defaultLedgerDir()))
+  // 🔴 공급 정산액 — cohort 와 같은 창. 단가(raw)는 판정이 cohort 에서 계산한다
+  const supplyEntries = pooled(defaultLedgerDir())
+  const spent = settledTotalUsd(supplyEntries)
+  if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
   const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
     : { sources: worksetSources, ...fates, supplyUsd: spent }
+  /**
+   * 🔴 **비용 귀속** — 장부 요청(`sourceKey` 원천 해시) → cohort 행 결말. 해시 없는 요청이 있으면 결과당 단가는 모른다.
+   *    판정(`judgeNextPreflight`)은 이 값을 읽지 않는다 — 관측 · 보고다(raw 단가로 대신하지 않는다).
+   */
+  const fateByKey = new Map<string, CostFate>()
+  for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
+  const costAttribution: CostAttribution | null = rows === null || fates === null ? null
+    : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates })
+  if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
+    notes.push(`slot-valid 결과당 비용을 모른다 — 원천에 붙지 않은 정산 $${costAttribution.unlinkedUsd.toFixed(4)}`
+      + ` · 미정산 요청 ${costAttribution.openRequests}건 · 결말 모름 비용 $${costAttribution.byFate.unknown.toFixed(4)}`)
+  }
 
   const facts: PreflightFacts = {
-    slotValidOpportunities: opp.total,
+    slotValidOpportunities,
     readyCohort,
     latencyP50H, latencyP90H,
     contractValidPersonas,
@@ -393,8 +451,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     facts, notes,
     detail: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
-      sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected,
-      opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources, readyPerSource,
+      sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected, sourceExpectedHigh: oppHigh.sourceExpected,
+      opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources, yieldBounds, fates, costAttribution,
     },
   }
 }

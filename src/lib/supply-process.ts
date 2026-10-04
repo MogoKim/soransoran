@@ -758,7 +758,14 @@ export type ProcessRun = {
   status: RunStatus
   completedAt: string | null
   /** 🔴 JIT 수요 — 다가오는 슬롯 · eligible READY 가 덮은 슬롯 · 생성 수요(`upTo`) */
-  jit: { slots: number | null; readyFilled: number | null; upTo: number; reason: string }
+  jit: {
+    slots: number | null; readyFilled: number | null; upTo: number; reason: string
+    /**
+     * 🔴 **이번 회차 유료 원천 수와 그 근거** (2026-10-04 P0-2) — `paidSourcesFor`(부족분 · 결말 수율 상한).
+     *    없으면 옛 기록(고정 묶음 상한)이다.
+     */
+    paidSources?: number; paidBasis?: string; sourceYieldHigh?: number | null
+  }
   sources: SourceOutcome[]
   stages: StageOutcome[]
   /**

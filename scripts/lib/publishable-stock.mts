@@ -444,13 +444,15 @@ export function upcomingSlots(input: {
  */
 export function jitCoverageOf(
   view: { loaded: LoadedStock; resolved: ResolvedScale }, now: Date,
-): { slots: number; readyFilled: number } {
+): { slots: number; readyFilled: number; matched: string[]; horizon: Date[] } {
   const scale = view.resolved.scale
   const slots = upcomingSlots({
     now, publishedToday: view.loaded.publishedToday, release: scale.releaseProfile, capacity: scale.capacityProfile,
   })
   const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.capacityProfile), now, autoOnly: false })
-  return { slots: slots.length, readyFilled: matchOpportunitiesToSlots(slots, ready).filled }
+  const m = matchOpportunitiesToSlots(slots, ready)
+  // 🔴 짝지은 READY 열쇠 · 다가오는 슬롯 — 대기 READY 결말 분류(`pendingFateOf`)가 **같은 짝짓기**를 쓴다(P0-2)
+  return { slots: slots.length, readyFilled: m.filled, matched: m.bySlot.filter((k): k is string => k !== null), horizon: slots }
 }
 
 /**

@@ -39,6 +39,7 @@ import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 /** 🔴 작업 묶음 정본 — 여기서 모양을 다시 정하지 않는다 */
 import { humanDecisionFor, humanDecisionIndexOf, readWorkset, sourceIdentityOf, type HumanDecisionIndex } from '../src/lib/supply-workset'
+import { articleIdHashOf } from '../src/lib/source-slot-release'
 import { runClockFrom } from './lib/run-clock.mjs'
 
 const DATA_DIR = '.microseed-data'
@@ -269,7 +270,9 @@ export function isRetryable(st: SemanticStatus): boolean {
 let LEDGER: SupplyLlmSession | null = null
 
 /** 🔴 이 파일에서 provider 로 나가는 **유일한 문**. 장부가 없으면 보내지 않는다 */
-async function ask(stage: 'judge' | 'judgeRetry', systemPrompt: string, userPayload: string): Promise<LlmResponse> {
+async function ask(
+  stage: 'judge' | 'judgeRetry', systemPrompt: string, userPayload: string, sourceKey: string | null,
+): Promise<LlmResponse> {
   if (LEDGER === null) {
     return {
       ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
@@ -280,18 +283,21 @@ async function ask(stage: 'judge' | 'judgeRetry', systemPrompt: string, userPayl
   }
   return LEDGER.call({
     stage, model: JUDGE_MODEL, systemPrompt, userPayload,
-    maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS,
+    maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS, sourceKey,
   })
 }
 
 async function askSemantic(t: JudgeInput): Promise<SemanticOutcome> {
+  // 🔴 장부 줄을 원천 해시에 붙인다(비용 귀속) — 원문 · id 평문은 싣지 않는다
+  const costKey = (t.sourceSite ?? '') !== '' && (t.sourceArticleId ?? '') !== ''
+    ? articleIdHashOf(t.sourceSite!, t.sourceArticleId!) : null
   let attempt = 0
   let lastStatus: SemanticStatus = 'skipped'
   let lastError: string | null = null
 
   for (; attempt < MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) await sleep(backoffMs(attempt, Math.random()))
-    const res = await ask('judge', SYSTEM_PROMPT, buildPayload(t))
+    const res = await ask('judge', SYSTEM_PROMPT, buildPayload(t), costKey)
     lastError = res.errorCode
     lastStatus = statusOf(res.errorCode, res.maxTokensReached)
     if (lastStatus !== 'ok') {
@@ -310,7 +316,7 @@ async function askSemantic(t: JudgeInput): Promise<SemanticOutcome> {
     const retry = await ask(
       'judgeRetry',
       `${SYSTEM_PROMPT}\n\n🔴 지난 답이 JSON 이 아니었다. 설명 없이 JSON 객체 하나만 답한다.`,
-      buildPayload(t),
+      buildPayload(t), costKey,
     )
     attempt += 1
     const v2 = (retry.ok && !retry.maxTokensReached) ? parseSemantic(retry.rawText) : null

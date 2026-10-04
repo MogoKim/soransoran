@@ -291,7 +291,7 @@ const PERSONAS = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')).cards.fil
  */
 const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
   slotValidOpportunities: PROFILES[s].dailyTarget * 2,
-  readyCohort: { sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, pending: 0, supplyUsd: 0.001 * PROFILES[s].dailyTarget },
+  readyCohort: { sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, scheduled: 0, unknown: 0, supplyUsd: 0.001 * PROFILES[s].dailyTarget },
   latencyP50H: 20, latencyP90H: 50,
   contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
   supplyDailyUsdCap: 0.5, runnerHealth: 'ok',

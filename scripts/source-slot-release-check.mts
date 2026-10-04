@@ -547,7 +547,7 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
   const facts: PreflightFacts = {
     slotValidOpportunities: 3,
     // 🔴 cohort — 원천 6 · 공개 3 (수율 0.5) · 정산 $0.06 (raw 단가 $0.02)
-    readyCohort: { sources: 6, published: 3, lost: 0, pending: 0, supplyUsd: 0.06 },
+    readyCohort: { sources: 6, published: 3, lost: 0, scheduled: 0, unknown: 0, supplyUsd: 0.06 },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
@@ -563,7 +563,7 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
     judgeNextPreflight('d3', { ...facts, runnerHealth: 'unknown' }, RUNNER_GRID).codes.includes('RUNNER_UNKNOWN')
     && judgeNextPreflight('d3', { ...facts, runnerHealth: 'bad' }, RUNNER_GRID).verdict === 'FAIL')
   check('🔴 3일 정산 단가 × 필요량이 상한을 넘으면 FAIL SUPPLY_COST_SHORT',
-    judgeNextPreflight('d3', { ...facts, readyCohort: { sources: 6, published: 3, lost: 0, pending: 0, supplyUsd: 0.6 } }, RUNNER_GRID).codes.includes('SUPPLY_COST_SHORT'))
+    judgeNextPreflight('d3', { ...facts, readyCohort: { sources: 6, published: 3, lost: 0, scheduled: 0, unknown: 0, supplyUsd: 0.6 } }, RUNNER_GRID).codes.includes('SUPPLY_COST_SHORT'))
   const slots = slotTimesOn('2026-10-01', profileOf('d3'))
   const always: SlotOpportunity = { key: 'r', validAt: () => true }
   const src = (k: string): SlotOpportunity => ({ key: k, validAt: () => true })

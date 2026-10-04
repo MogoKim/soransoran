@@ -23,7 +23,8 @@ import {
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
 import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 import { qualitySignalOf } from '../src/lib/stage-controller'
-import { RUNNER_GRID, readyFatesOf } from './lib/stage-preflight-facts.mjs'
+import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import { cohortFatesOf } from '../src/lib/ready-fate'
 
 let pass = 0
 let fail = 0
@@ -35,10 +36,10 @@ const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S
 
 /** 🔴 하루 공급 묶음 원천 수 — 원천 수가 이 값이면 raw READY 수가 곧 하루 용량이다 */
 const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
-/** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 대기 0 · raw 단가 $0.01 */
+/** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 예정 0 · 모름 0 · raw 단가 $0.01 */
 const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => {
-  const c = { sources: RUNS, published: 5, lost: 0, pending: 0, supplyUsd: null as number | null, ...o }
-  return { ...c, supplyUsd: 'supplyUsd' in o ? o.supplyUsd ?? null : 0.01 * (c.published + c.lost + c.pending) }
+  const c = { sources: RUNS, published: 5, lost: 0, scheduled: 0, unknown: 0, supplyUsd: null as number | null, ...o }
+  return { ...c, supplyUsd: 'supplyUsd' in o ? o.supplyUsd ?? null : 0.01 * (c.published + c.lost + c.scheduled + c.unknown) }
 }
 /** 🔴 raw READY `raw` 건이 하루 용량 `cap` 이 되는 원천 수 */
 const sourcesFor = (raw: number, cap: number): number => Math.floor((raw * RUNS) / cap)
@@ -83,34 +84,34 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
   check('🔴 cohort 모름 → THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN (0 으로 읽지 않는다)',
     none.verdict === 'UNKNOWN' && none.codes.includes('THROUGHPUT_UNKNOWN') && none.codes.includes('SUPPLY_COST_UNKNOWN')
     && !('readyNeeded' in none.counts), show(none))
-  const empty = d5({ published: 0, lost: 0, pending: 0 })
+  const empty = d5({ published: 0, lost: 0, unknown: 0 })
   check('🔴 결말 0 · 대기 0(READY 0) → 용량 0 < 목표 → FAIL (관측된 0 생산)',
     empty.verdict === 'FAIL' && empty.codes.includes('THROUGHPUT_SHORT'), show(empty))
   check('🔴 손상된 사실(음수 · 소수)은 구간을 만들지 않는다',
-    replenishmentOf(5, cohort({ published: -1 })).max === null && replenishmentOf(5, cohort({ pending: 0.5 })).max === null)
+    replenishmentOf(5, cohort({ published: -1 })).max === null && replenishmentOf(5, cohort({ unknown: 0.5 })).max === null)
 }
 
 console.log('\n③ 반례 4 · 5 — 대기 행은 성공도 손실도 아니다 (운영 10월 4일 모양)')
 {
-  const op = d5({ published: 4, lost: 0, pending: 10, sources: 160 })
+  const op = d5({ published: 4, lost: 0, unknown: 10, sources: 160 })
   check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 용량 5 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
     op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 5
     && op.counts.readyNeededMin === 5 && op.counts.readyNeededMax === 18 && !('readyNeeded' in op.counts), show(op))
-  const base = d5({ published: 4, lost: 0, pending: 0, sources: 160 })
+  const base = d5({ published: 4, lost: 0, unknown: 0, sources: 160 })
   check('🔴 반례5 대기 0 이면 같은 원천에서 용량 1 → FAIL', base.verdict === 'FAIL' && base.codes.includes('THROUGHPUT_SHORT'), show(base))
-  const inflated = [10, 100, 1000].map((pending) => d5({ published: 4, lost: 0, pending, sources: 160 }))
+  const inflated = [10, 100, 1000].map((pending) => d5({ published: 4, lost: 0, unknown: pending, sources: 160 }))
   check('🔴 🔴 반례5 대기만 늘려(10 · 100 · 1000) 용량을 올려도 PASS 가 되지 않는다',
     inflated.every((v) => v.verdict !== 'PASS' && v.codes.includes('READY_REQUIREMENT_UNKNOWN')),
     inflated.map((v) => `${v.verdict}:${v.counts.readyCapacity}`).join(','))
-  const resolved = d5({ published: 14, lost: 0, pending: 0, sources: 160 })
+  const resolved = d5({ published: 14, lost: 0, unknown: 0, sources: 160 })
   check('🔴 같은 행이 전부 공개로 결말 나면(공개 14) PASS — 결말이 판정을 연다', resolved.verdict === 'PASS', show(resolved))
-  const lostAll = d5({ published: 4, lost: 10, pending: 0, sources: 160 })
+  const lostAll = d5({ published: 4, lost: 10, unknown: 0, sources: 160 })
   check('🔴 같은 행이 전부 손실로 결말 나면(손실 10) 필요 18 > 용량 5 → FAIL', lostAll.verdict === 'FAIL'
     && lostAll.counts.readyNeeded === 18, show(lostAll))
-  const covered = d5({ published: 4, lost: 0, pending: 10, sources: sourcesFor(14, 18) })
+  const covered = d5({ published: 4, lost: 0, unknown: 10, sources: sourcesFor(14, 18) })
   check('🔴 대기를 전부 손실로 봐도 용량(18)이 채우면 대기는 결과를 못 바꾼다 → PASS (현재 증명된 것을 손실 처리하지 않는다)',
     covered.verdict === 'PASS' && covered.counts.readyCapacity === 18, show(covered))
-  const opOpp = d5({ published: 4, lost: 0, pending: 10, sources: 160 }, { slotValidOpportunities: 5 })
+  const opOpp = d5({ published: 4, lost: 0, unknown: 10, sources: 160 }, { slotValidOpportunities: 5 })
   check('🔴 현재 슬롯 기회 5 가 충분해도 보충 처리량 UNKNOWN 은 남는다 (기회 ≠ 지속 보충)',
     opOpp.verdict === 'UNKNOWN' && !opOpp.codes.includes('OPPORTUNITY_SHORT'), show(opOpp))
 }
@@ -128,14 +129,14 @@ console.log('\n④ 반례 6 — 상세 원천은 authority 가 아니다')
 
 console.log('\n⑤ 반례 7 · 8 — 비용: 같은 구간 · 같은 cohort 단가 · raw ≠ 공개')
 {
-  const pend = d5({ published: 4, lost: 0, pending: 10, sources: 160, supplyUsd: 0.14 })
+  const pend = d5({ published: 4, lost: 0, unknown: 10, sources: 160, supplyUsd: 0.14 })
   check('🔴 🔴 반례7 대기가 있으면 raw READY 단가($0.01)만 내고 공개 1건 단가는 내지 않는다',
     Math.abs((pend.counts.rawReadyUsd ?? 0) - 0.01) < 1e-12 && !('publicPostUsd' in pend.counts), show(pend))
-  const done = d5({ published: 4, lost: 1, pending: 0, supplyUsd: 0.2, sources: sourcesFor(5, 50) })
-  check('🔴 결말이 전부 나면 공개 1건 단가 = 정산 ÷ 공개($0.05) · raw 단가 = 정산 ÷ raw($0.04) — 서로 다른 값',
-    Math.abs((done.counts.publicPostUsd ?? 0) - 0.05) < 1e-12 && Math.abs((done.counts.rawReadyUsd ?? 0) - 0.04) < 1e-12, show(done))
+  const done = d5({ published: 4, lost: 1, unknown: 0, supplyUsd: 0.2, sources: sourcesFor(5, 50) })
+  check('🔴 결말이 전부 나도 판정은 raw 단가($0.04)만 낸다 — 공개 1건 단가는 장부↔원천 비용 귀속만 낸다(P0-2)',
+    Math.abs((done.counts.rawReadyUsd ?? 0) - 0.04) < 1e-12 && !('publicPostUsd' in done.counts), show(done))
   // 대기 10 · raw 단가 $0.03 → 대기 전부 성공이면 5 × 0.03 = 0.15 · 전부 손실이면 18 × 0.03 = 0.54 > 0.50
-  const costUnknown = d5({ published: 4, lost: 0, pending: 10, sources: sourcesFor(14, 18), supplyUsd: 0.42 })
+  const costUnknown = d5({ published: 4, lost: 0, unknown: 10, sources: sourcesFor(14, 18), supplyUsd: 0.42 })
   check('🔴 🔴 반례7 raw 단가가 낮아 보여도 대기 결말에 따라 상한을 넘을 수 있으면 비용 UNKNOWN (GREEN 아님)',
     costUnknown.codes.includes('SUPPLY_COST_UNKNOWN') && !costUnknown.codes.includes('SUPPLY_COST_SHORT')
     && costUnknown.verdict === 'UNKNOWN', show(costUnknown))
@@ -154,17 +155,19 @@ console.log('\n⑤ 반례 7 · 8 — 비용: 같은 구간 · 같은 cohort 단�
 
 console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 전역 gate')
 {
-  const r = readyFatesOf([
-    { status: 'PUBLISHED', count: 5 }, { status: 'EXPIRED', count: 1 }, { status: 'DECLINED', count: 1 },
-    { status: 'APPROVED', count: 4 }, { status: 'EDITED', count: 1 }, { status: 'PENDING', count: 1 },
+  const r = cohortFatesOf([
+    ...Array.from({ length: 5 }, () => ({ status: 'PUBLISHED', fate: null })),
+    { status: 'EXPIRED', fate: null }, { status: 'DECLINED', fate: null },
+    { status: 'APPROVED', fate: 'scheduled' as const }, { status: 'APPROVED', fate: 'lost' as const },
+    { status: 'EDITED', fate: 'unknown' as const }, { status: 'PENDING', fate: null },
   ])
-  check('🔴 PUBLISHED → 공개 · EXPIRED · DECLINED → 손실 · APPROVED · EDITED · PENDING → 대기',
-    r.published === 5 && r.lost === 2 && r.pending === 6, JSON.stringify(r))
+  check('🔴 PUBLISHED → 공개 · EXPIRED · DECLINED · 손실 확정 대기 → 손실 · 예정 대기 → 예정 · 나머지 대기 → 모름',
+    r.published === 5 && r.lost === 3 && r.scheduled === 1 && r.unknown === 2, JSON.stringify(r))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
   check('🔴 생산능력 · 결말이 한 번의 조회(같은 창 · AUTO_DECIDER) — 별도 count 로 raw 를 따로 세지 않는다',
-    /groupBy\(\{\s*by: \['status'\],\s*where: \{ decidedBy: AUTO_DECIDER, decidedAt: \{ gte: windowFrom, lt: windowTo \} \}/.test(facts)
+    /findMany\(\{\s*where: \{ decidedBy: AUTO_DECIDER, decidedAt: \{ gte: i\.windowFrom, lt: i\.windowTo \} \}/.test(facts)
     && !/originalPostApprovalQueue\.count\(/.test(facts)
-    && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.pending/.test(facts))
+    && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.scheduled \+ fates\.unknown/.test(facts))
   check('🔴 정산액도 같은 cohort 사실에 담긴다 — 판정 밖에서 건당 단가를 미리 나누지 않는다',
     /\{ sources: worksetSources, \.\.\.fates, supplyUsd: spent \}/.test(facts) && !/supplyUsdPerReady/.test(facts))
   check('🔴 감사 retry · overdue · 확정 결함은 전역 quality signal 이 막는다',

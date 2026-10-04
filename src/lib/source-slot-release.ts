@@ -162,6 +162,12 @@ const strOrNull = (v: unknown): string | null => {
 export const sha256Hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex')
 
 /**
+ * 🔴 **원천 열쇠 해시 — 증거 기록의 `provenance.articleIdHash` 와 같은 식 하나** (2026-10-04 P0-2).
+ *    공급 장부가 요청을 원천에 붙일 때도 이 값을 쓴다 — 원문 · 작성자 · id 평문을 장부에 남기지 않는다.
+ */
+export const articleIdHashOf = (site: string, id: string): string => sha256Hex(`${site}::${id}`)
+
+/**
  * 🔴 **적재용 기록을 만든다 — 받은 값을 옮길 뿐 지어내지 않는다.**
  *    게시 시각이 비었다고 수집 · 목록 · 초안 시각을 넣지 않는다. 반응이 비었다고 0 을 넣지 않는다.
  */
@@ -195,7 +201,7 @@ export function buildSourceEvidence(input: {
     observations: distinctObservations(input.observations ?? []),
     sourceStats: input.sourceStats ?? null,
     provenance: {
-      articleIdHash: site === null || id === null ? null : sha256Hex(`${site}::${id}`),
+      articleIdHash: site === null || id === null ? null : articleIdHashOf(site, id),
       artifactId: strOrNull(input.artifactId),
       dedupKeyHash: dk === null ? null : sha256Hex(dk),
     },
