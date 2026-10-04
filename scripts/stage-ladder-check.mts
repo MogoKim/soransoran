@@ -104,10 +104,11 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
 }
 /** 🔴 preflight 는 정본 `judgeNextPreflight` 로만 만든다 — 넉넉한 사실이면 PASS 가 나와야 한다 */
 const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
-  slotValidOpportunities: PROFILES[s].dailyTarget * 2, readyPerSource: 1, readyLoss: { published: PROFILES[s].dailyTarget, lost: 0 },
+  slotValidOpportunities: PROFILES[s].dailyTarget * 2,
+  readyCohort: { sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, pending: 0, supplyUsd: 0.001 * PROFILES[s].dailyTarget },
   latencyP50H: 20, latencyP90H: 50,
   contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
-  supplyUsdPerReady: 0.001, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
 })
 const preflightFor = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): PreflightVerdict =>
   judgeNextPreflight(s, { ...GOOD_FACTS(s), ...o }, RUNNER_GRID)

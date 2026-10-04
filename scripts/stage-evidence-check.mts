@@ -290,10 +290,11 @@ const PERSONAS = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')).cards.fil
  *    넉넉한 사실(기회 · 수율 · 지연 · 계약 유효 Persona · 비용 · 러너)이면 PASS 가 **나와야** 한다.
  */
 const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
-  slotValidOpportunities: PROFILES[s].dailyTarget * 2, readyPerSource: 1, readyLoss: { published: PROFILES[s].dailyTarget, lost: 0 },
+  slotValidOpportunities: PROFILES[s].dailyTarget * 2,
+  readyCohort: { sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, pending: 0, supplyUsd: 0.001 * PROFILES[s].dailyTarget },
   latencyP50H: 20, latencyP90H: 50,
   contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
-  supplyUsdPerReady: 0.001, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
 })
 const preflightFor = (s: RuntimeStage, o: Partial<PreflightFacts> = {}) => judgeNextPreflight(s, { ...GOOD_FACTS(s), ...o }, RUNNER_GRID)
 const OK_SIGNALS: HealthSignal[] = [

@@ -3,24 +3,27 @@
  * 🔴 **실측 보충 계약 검사 — 필요 READY = 증명일 목표 슬롯 + 실측 손실 보충** (2026-10-04 · canon §3.1 · C-01 · C-02)
  *
  *   옛 판정은 `ceil(목표 × 1.2)` 를 필요 READY 로 썼다. D5 에서 목표 5 · 기회 5 · 실측 공급 5 인데
- *   `readyNeeded=6` 으로 영구 FAIL 이었다. 이 검사는 다음을 잠근다.
+ *   `readyNeeded=6` 으로 영구 FAIL 이었다. P0-1 보정(같은 날)은 cohort 를 하나로 묶었다 —
+ *   생산능력 · 손실률 · 공급 단가가 **같은 자동 READY 행 묶음 · 같은 창**(`readyCohort`)에서 나온다.
  *     ① 손실 0 이면 6번째 READY 를 요구하지 않는다 · 손실 1 이면 요구한다
- *     ② 손실 근거가 없으면 UNKNOWN — 0 으로 읽지 않는다
- *     ③ 상세 원천 계획값은 preflight authority 가 아니다 — 슬롯 기회 부족을 대신 통과시키지 않는다
- *     ④ 공급 비용 판정은 처리량과 같은 필요 READY 를 쓴다
- *     ⑤ 생산자(`readyLossOf`)는 결말 난 행만 센다 — 대기 행을 손실 0 으로 만들지 않는다
- *     ⑥ 고정 할증 · 상세 계획값이 판정 경로로 돌아오지 않는다(소스 잠금)
+ *     ② 공개 0 · 손실 > 0 은 UNKNOWN — 영구 불능 FAIL 이 아니다
+ *     ③ 대기 행은 성공도 손실도 아니다 — 두 극단이 갈리면 UNKNOWN · 대기만 늘려 용량을 올릴 수 없다
+ *     ④ 상세 원천 계획값은 preflight authority 가 아니다
+ *     ⑤ 공급 비용은 처리량과 같은 필요 READY 구간 · 같은 cohort 단가를 쓴다 · raw 단가를 공개 단가로 부르지 않는다
+ *     ⑥ 감사 retry · overdue · 확정 결함은 전역 quality gate 가 막는다 — READY 손실에 다시 더하지 않는다
+ *     ⑦ 고정 할증 · 상세 계획값이 판정 경로로 돌아오지 않는다(소스 잠금)
  *
  * 🔴 DB 0 · 네트워크 0 · 파일 write 0 · LLM 0.
  */
 import { readFileSync } from 'node:fs'
 
 import {
-  judgeNextPreflight, readyRequirementOf, type PreflightFacts, type PreflightVerdict,
+  judgeNextPreflight, replenishmentOf, type PreflightFacts, type PreflightVerdict, type ReadyCohortFact,
 } from '../src/lib/stage-ladder-generic'
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
 import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
-import { RUNNER_GRID, readyLossOf } from './lib/stage-preflight-facts.mjs'
+import { qualitySignalOf } from '../src/lib/stage-controller'
+import { RUNNER_GRID, readyFatesOf } from './lib/stage-preflight-facts.mjs'
 
 let pass = 0
 let fail = 0
@@ -28,109 +31,155 @@ function check(name: string, ok: boolean, detail = ''): void {
   if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { fail += 1; console.log(`  🔴 FAIL ${name}${detail ? ` — ${detail}` : ''}`) }
 }
 const show = (v: PreflightVerdict): string => `${v.verdict} [${v.codes.join(',')}] ${JSON.stringify(v.counts)}`
+const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
 
-/** 🔴 공급 용량이 정확히 `ready` 건이 되는 수율 — 경계값(넉넉한 값으로 PASS 를 만들지 않는다) */
-const yieldFor = (ready: number): number => ready / (SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY)
+/** 🔴 하루 공급 묶음 원천 수 — 원천 수가 이 값이면 raw READY 수가 곧 하루 용량이다 */
+const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
+/** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 대기 0 · raw 단가 $0.01 */
+const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => {
+  const c = { sources: RUNS, published: 5, lost: 0, pending: 0, supplyUsd: null as number | null, ...o }
+  return { ...c, supplyUsd: 'supplyUsd' in o ? o.supplyUsd ?? null : 0.01 * (c.published + c.lost + c.pending) }
+}
+/** 🔴 raw READY `raw` 건이 하루 용량 `cap` 이 되는 원천 수 */
+const sourcesFor = (raw: number, cap: number): number => Math.floor((raw * RUNS) / cap)
 
-/**
- * 🔴 **10월 3일 D3 → D5 preflight 모양** — target 5 · opportunities 5 · readyCapacity 5.
- *    나머지 칸은 GREEN(비용 · Persona · 러너 · 지연)이다.
- */
+/** 🔴 D3 → D5 preflight — target 5 · opportunities 5. 나머지 칸(비용 · Persona · 러너 · 지연)은 GREEN */
 const D5_FACTS = (o: Partial<PreflightFacts> = {}): PreflightFacts => ({
-  slotValidOpportunities: 5, readyPerSource: yieldFor(5), readyLoss: { published: 5, lost: 0 },
+  slotValidOpportunities: 5, readyCohort: cohort(),
   latencyP50H: 20, latencyP90H: 40, contractValidPersonas: PERSONA_CANARY_FLOOR.d5,
   commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-  supplyUsdPerReady: 0.01, supplyDailyUsdCap: 0.5, runnerHealth: 'ok', ...o,
+  supplyDailyUsdCap: 0.5, runnerHealth: 'ok', ...o,
 })
-const d5 = (o: Partial<PreflightFacts> = {}): PreflightVerdict => judgeNextPreflight('d5', D5_FACTS(o), RUNNER_GRID)
+const d5 = (c: Partial<ReadyCohortFact> = {}, o: Partial<PreflightFacts> = {}): PreflightVerdict =>
+  judgeNextPreflight('d5', D5_FACTS({ readyCohort: cohort(c), ...o }), RUNNER_GRID)
 
-console.log('\n① 반례 1 · 2 — 손실 0 이면 목표만 · 손실 1 이면 +1')
+console.log('\n① 반례 1 · 2 — 손실 0 이면 목표만 · 손실 1 이면 +1 (대기 0)')
 {
   const v = d5()
-  check('🔴 반례1 target 5 · opportunity 5 · capacity 5 · 실측 손실 0 → PASS (6번째 READY 를 요구하지 않는다)',
-    v.verdict === 'PASS' && v.counts.readyNeeded === 5 && v.counts.readyCapacity === 5 && v.counts.opportunities === 5, show(v))
-  const r = readyRequirementOf(5, { published: 5, lost: 1 })
-  check('🔴 반례2 target 5 · 실측 손실 1(공개 5 · 손실 1) → required 6',
-    r.kind === 'measured' && r.readyNeeded === 6 && r.lossNeeded === 1, JSON.stringify(r))
-  const v2 = d5({ readyLoss: { published: 5, lost: 1 } })
-  check('🔴 반례2 같은 공급 5 로는 손실 1 을 감당하지 못한다 → FAIL THROUGHPUT_SHORT (손실을 무시하지 않는다)',
-    v2.verdict === 'FAIL' && v2.codes.includes('THROUGHPUT_SHORT') && v2.counts.readyNeeded === 6, show(v2))
-  check('🔴 반례2 공급이 6 이면 손실 1 을 감당한다 → PASS',
-    d5({ readyLoss: { published: 5, lost: 1 }, readyPerSource: yieldFor(6) }).verdict === 'PASS')
-  const scaled = readyRequirementOf(5, { published: 3, lost: 1 })
-  check('🔴 손실률은 같은 창 실측 비율로 목표에 맞춘다 — D3 실측(공개 3 · 손실 1) → D5 보충 ceil(5/3)=2',
-    scaled.kind === 'measured' && scaled.lossNeeded === 2 && scaled.readyNeeded === 7, JSON.stringify(scaled))
-  const ok0 = readyRequirementOf(100, { published: 37, lost: 0 })
-  check('🔴 손실 0 이면 어느 단계에서도 보충 0 (d100 → 100)', ok0.kind === 'measured' && ok0.readyNeeded === 100)
+  check('🔴 반례1 공개 5 · 손실 0 · 대기 0 · 같은 cohort 용량 5 → PASS (6번째 READY 를 요구하지 않는다)',
+    v.verdict === 'PASS' && v.counts.readyNeeded === 5 && v.counts.readyCapacity === 5, show(v))
+  const v2 = d5({ lost: 1, sources: sourcesFor(6, 5) })
+  check('🔴 반례2 공개 5 · 손실 1 → 필요 6 · 용량 5 → FAIL THROUGHPUT_SHORT',
+    v2.verdict === 'FAIL' && v2.codes.includes('THROUGHPUT_SHORT') && v2.counts.readyNeeded === 6 && v2.counts.readyCapacity === 5, show(v2))
+  const v3 = d5({ lost: 1, sources: sourcesFor(6, 6) })
+  check('🔴 반례2 같은 손실 1 · 용량 6 → 처리량 PASS',
+    v3.verdict === 'PASS' && v3.counts.readyNeeded === 6 && v3.counts.readyCapacity === 6, show(v3))
+  const r = replenishmentOf(5, cohort({ published: 3, lost: 1 }))
+  check('🔴 손실률은 같은 cohort 비율로 목표에 맞춘다 — 공개 3 · 손실 1 → D5 필요 5 + ceil(5/3) = 7',
+    r.min === 7 && r.max === 7, JSON.stringify(r))
 }
 
-console.log('\n② 반례 3 — 손실 근거 없음 → UNKNOWN (0 으로 읽지 않는다)')
+console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불능 · 무조건 FAIL 금지)')
 {
-  const v = d5({ readyLoss: null })
-  check('🔴 반례3 readyLoss=null → UNKNOWN READY_LOSS_UNKNOWN · readyNeeded 를 만들지 않는다',
-    v.verdict === 'UNKNOWN' && v.codes.includes('READY_LOSS_UNKNOWN') && !('readyNeeded' in v.counts), show(v))
-  check('🔴 반례3 손실을 모르면 공급 비용도 모른다 → SUPPLY_COST_UNKNOWN', v.codes.includes('SUPPLY_COST_UNKNOWN'), show(v))
-  const z = d5({ readyLoss: { published: 0, lost: 0 } })
-  check('🔴 결말 난 행 0(공개 0 · 손실 0) → UNKNOWN (관측 없음 ≠ 손실 0)',
-    z.verdict === 'UNKNOWN' && z.codes.includes('READY_LOSS_UNKNOWN'), show(z))
-  check('🔴 손상된 사실(음수 · 소수)은 UNKNOWN',
-    readyRequirementOf(5, { published: -1, lost: 0 }).kind === 'unknown'
-    && readyRequirementOf(5, { published: 5, lost: 0.5 }).kind === 'unknown')
-  const u = d5({ readyLoss: { published: 0, lost: 3 } })
-  check('🔴 공개 0 · 손실 3 → 어떤 생산으로도 못 채운다 → FAIL (UNKNOWN 으로 숨기지 않는다)',
-    u.verdict === 'FAIL' && u.codes.includes('THROUGHPUT_SHORT') && u.codes.includes('SUPPLY_COST_SHORT'), show(u))
-  check('🔴 손실 UNKNOWN 이어도 다른 FAIL 은 FAIL 로 남는다(기회 4)',
-    d5({ readyLoss: null, slotValidOpportunities: 4 }).verdict === 'FAIL')
+  const v = d5({ published: 0, lost: 3, sources: sourcesFor(3, 5) })
+  check('🔴 반례3 공개 0 · 손실 3 · 용량 5 → UNKNOWN READY_REQUIREMENT_UNKNOWN · FAIL 코드 없음',
+    v.verdict === 'UNKNOWN' && v.codes.includes('READY_REQUIREMENT_UNKNOWN')
+    && !v.codes.includes('THROUGHPUT_SHORT') && !v.codes.includes('SUPPLY_COST_SHORT'), show(v))
+  check('🔴 반례3 공급 비용도 UNKNOWN', v.codes.includes('SUPPLY_COST_UNKNOWN'), show(v))
+  const hard = d5({ published: 0, lost: 3, sources: sourcesFor(3, 4) })
+  check('🔴 실제 hard failure 는 남는다 — 필요량은 목표 아래로 내려가지 않으므로 용량 4 < 목표 5 → FAIL',
+    hard.verdict === 'FAIL' && hard.codes.includes('THROUGHPUT_SHORT'), show(hard))
+  const none = d5({}, { readyCohort: null })
+  check('🔴 cohort 모름 → THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN (0 으로 읽지 않는다)',
+    none.verdict === 'UNKNOWN' && none.codes.includes('THROUGHPUT_UNKNOWN') && none.codes.includes('SUPPLY_COST_UNKNOWN')
+    && !('readyNeeded' in none.counts), show(none))
+  const empty = d5({ published: 0, lost: 0, pending: 0 })
+  check('🔴 결말 0 · 대기 0(READY 0) → 용량 0 < 목표 → FAIL (관측된 0 생산)',
+    empty.verdict === 'FAIL' && empty.codes.includes('THROUGHPUT_SHORT'), show(empty))
+  check('🔴 손상된 사실(음수 · 소수)은 구간을 만들지 않는다',
+    replenishmentOf(5, cohort({ published: -1 })).max === null && replenishmentOf(5, cohort({ pending: 0.5 })).max === null)
 }
 
-console.log('\n③ 반례 4 · 5 — 상세 원천은 authority 가 아니다')
+console.log('\n③ 반례 4 · 5 — 대기 행은 성공도 손실도 아니다 (운영 10월 4일 모양)')
 {
-  const v = d5({ slotValidOpportunities: 4, readyPerSource: yieldFor(50) })
-  check('🔴 반례4 상세·수율이 넉넉해도(공급 50) 슬롯 유효 기회 4 < 5 → FAIL OPPORTUNITY_SHORT',
+  const op = d5({ published: 4, lost: 0, pending: 10, sources: 160 })
+  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 용량 5 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
+    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 5
+    && op.counts.readyNeededMin === 5 && op.counts.readyNeededMax === 18 && !('readyNeeded' in op.counts), show(op))
+  const base = d5({ published: 4, lost: 0, pending: 0, sources: 160 })
+  check('🔴 반례5 대기 0 이면 같은 원천에서 용량 1 → FAIL', base.verdict === 'FAIL' && base.codes.includes('THROUGHPUT_SHORT'), show(base))
+  const inflated = [10, 100, 1000].map((pending) => d5({ published: 4, lost: 0, pending, sources: 160 }))
+  check('🔴 🔴 반례5 대기만 늘려(10 · 100 · 1000) 용량을 올려도 PASS 가 되지 않는다',
+    inflated.every((v) => v.verdict !== 'PASS' && v.codes.includes('READY_REQUIREMENT_UNKNOWN')),
+    inflated.map((v) => `${v.verdict}:${v.counts.readyCapacity}`).join(','))
+  const resolved = d5({ published: 14, lost: 0, pending: 0, sources: 160 })
+  check('🔴 같은 행이 전부 공개로 결말 나면(공개 14) PASS — 결말이 판정을 연다', resolved.verdict === 'PASS', show(resolved))
+  const lostAll = d5({ published: 4, lost: 10, pending: 0, sources: 160 })
+  check('🔴 같은 행이 전부 손실로 결말 나면(손실 10) 필요 18 > 용량 5 → FAIL', lostAll.verdict === 'FAIL'
+    && lostAll.counts.readyNeeded === 18, show(lostAll))
+  const covered = d5({ published: 4, lost: 0, pending: 10, sources: sourcesFor(14, 18) })
+  check('🔴 대기를 전부 손실로 봐도 용량(18)이 채우면 대기는 결과를 못 바꾼다 → PASS (현재 증명된 것을 손실 처리하지 않는다)',
+    covered.verdict === 'PASS' && covered.counts.readyCapacity === 18, show(covered))
+  const opOpp = d5({ published: 4, lost: 0, pending: 10, sources: 160 }, { slotValidOpportunities: 5 })
+  check('🔴 현재 슬롯 기회 5 가 충분해도 보충 처리량 UNKNOWN 은 남는다 (기회 ≠ 지속 보충)',
+    opOpp.verdict === 'UNKNOWN' && !opOpp.codes.includes('OPPORTUNITY_SHORT'), show(opOpp))
+}
+
+console.log('\n④ 반례 6 — 상세 원천은 authority 가 아니다')
+{
+  const v = d5({ sources: sourcesFor(5, 50) }, { slotValidOpportunities: 4 })
+  check('🔴 공급 용량 50 이어도 슬롯 유효 기회 4 < 5 → FAIL OPPORTUNITY_SHORT',
     v.verdict === 'FAIL' && v.codes.includes('OPPORTUNITY_SHORT'), show(v))
-  const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
   const judgePaths = ['src/lib/stage-ladder-generic.ts', 'scripts/lib/stage-preflight-facts.mts']
   const detailAuthority = /PLANNED_DETAIL_PER_PUBLIC_POST|plannedDetailedSourcesPerDay|detailedSourcesRequiredPerDay|d100Plan\b|allD100Plans\b/
-  check('🔴 반례5 preflight 판정·사실 경로가 상세 계획값(`PLANNED_DETAIL_PER_PUBLIC_POST` · `d100Plan`)을 읽지 않는다 — 계획값을 바꿔도 결과 불변',
-    judgePaths.every((p) => !detailAuthority.test(strip(p))),
-    judgePaths.filter((p) => detailAuthority.test(strip(p))).join(','))
-  check('🔴 반례5 d100Plan 은 상세 계획값을 비권위 이름으로만 낸다(`detailedSourcesRequiredPerDay` 없음)',
-    !/detailedSourcesRequiredPerDay\s*:/.test(strip('src/lib/d100-capacity.ts')))
+  check('🔴 반례6 preflight 판정·사실 경로가 상세 계획값을 읽지 않는다 — 계획값을 바꿔도 결과 불변',
+    judgePaths.every((p) => !detailAuthority.test(strip(p))), judgePaths.filter((p) => detailAuthority.test(strip(p))).join(','))
 }
 
-console.log('\n④ 반례 6 — 공급 비용은 처리량과 같은 필요 READY 를 쓴다')
+console.log('\n⑤ 반례 7 · 8 — 비용: 같은 구간 · 같은 cohort 단가 · raw ≠ 공개')
 {
-  const cost = (lost: number): PreflightVerdict => d5({
-    readyLoss: { published: 5, lost }, readyPerSource: yieldFor(50), supplyUsdPerReady: 0.1, supplyDailyUsdCap: 0.55,
-  })
-  const a = cost(0)
-  check('🔴 반례6 손실 0 → 필요 5 × $0.10 = $0.50 ≤ $0.55 → 비용 GREEN (고정 6 × $0.10 = $0.60 이면 FAIL 이었다)',
-    a.verdict === 'PASS' && a.counts.readyNeeded === 5, show(a))
-  const b = cost(1)
-  check('🔴 반례6 손실 1 → 필요 6 × $0.10 = $0.60 > $0.55 → SUPPLY_COST_SHORT (처리량과 같은 6)',
-    b.codes.includes('SUPPLY_COST_SHORT') && !b.codes.includes('THROUGHPUT_SHORT') && b.counts.readyNeeded === 6, show(b))
+  const pend = d5({ published: 4, lost: 0, pending: 10, sources: 160, supplyUsd: 0.14 })
+  check('🔴 🔴 반례7 대기가 있으면 raw READY 단가($0.01)만 내고 공개 1건 단가는 내지 않는다',
+    Math.abs((pend.counts.rawReadyUsd ?? 0) - 0.01) < 1e-12 && !('publicPostUsd' in pend.counts), show(pend))
+  const done = d5({ published: 4, lost: 1, pending: 0, supplyUsd: 0.2, sources: sourcesFor(5, 50) })
+  check('🔴 결말이 전부 나면 공개 1건 단가 = 정산 ÷ 공개($0.05) · raw 단가 = 정산 ÷ raw($0.04) — 서로 다른 값',
+    Math.abs((done.counts.publicPostUsd ?? 0) - 0.05) < 1e-12 && Math.abs((done.counts.rawReadyUsd ?? 0) - 0.04) < 1e-12, show(done))
+  // 대기 10 · raw 단가 $0.03 → 대기 전부 성공이면 5 × 0.03 = 0.15 · 전부 손실이면 18 × 0.03 = 0.54 > 0.50
+  const costUnknown = d5({ published: 4, lost: 0, pending: 10, sources: sourcesFor(14, 18), supplyUsd: 0.42 })
+  check('🔴 🔴 반례7 raw 단가가 낮아 보여도 대기 결말에 따라 상한을 넘을 수 있으면 비용 UNKNOWN (GREEN 아님)',
+    costUnknown.codes.includes('SUPPLY_COST_UNKNOWN') && !costUnknown.codes.includes('SUPPLY_COST_SHORT')
+    && costUnknown.verdict === 'UNKNOWN', show(costUnknown))
+  const costShort = d5({ published: 5, lost: 1, sources: sourcesFor(6, 50), supplyUsd: 0.54 })
+  check('🔴 반례8 손실 1 → 필요 6 × raw $0.09 = $0.54 > $0.50 → SUPPLY_COST_SHORT (처리량과 같은 6 · 처리량은 통과)',
+    costShort.codes.includes('SUPPLY_COST_SHORT') && !costShort.codes.includes('THROUGHPUT_SHORT') && costShort.counts.readyNeeded === 6, show(costShort))
+  const costOk = d5({ published: 5, lost: 0, sources: sourcesFor(5, 50), supplyUsd: 0.45 })
+  check('🔴 반례8 손실 0 → 필요 5 × $0.09 = $0.45 ≤ $0.50 → 비용 GREEN (고정 6 이면 $0.54 FAIL 이었다) — 상한은 소비 목표가 아니다',
+    costOk.verdict === 'PASS' && costOk.counts.readyNeeded === 5, show(costOk))
+  const judge = strip('src/lib/stage-ladder-generic.ts')
+  check('🔴 반례8 처리량 · 비용이 같은 `replenishmentOf` 결과(req)를 `judgeAgainst` 로 판정한다 — 두 번째 필요량 계산 없음',
+    (judge.match(/[=(]\s*replenishmentOf\(/g) ?? []).length === 1
+    && /judgeAgainst\(req, \(need\) => capacity >= need\)/.test(judge)
+    && /judgeAgainst\(req, \(need\) => need \* rawUnit <= cap\)/.test(judge))
 }
 
-console.log('\n⑤ 생산자 — 결말 난 행만 센다')
+console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 전역 gate')
 {
-  const r = readyLossOf([
+  const r = readyFatesOf([
     { status: 'PUBLISHED', count: 5 }, { status: 'EXPIRED', count: 1 }, { status: 'DECLINED', count: 1 },
-    { status: 'APPROVED', count: 4 }, { status: 'EDITED', count: 1 },
+    { status: 'APPROVED', count: 4 }, { status: 'EDITED', count: 1 }, { status: 'PENDING', count: 1 },
   ])
-  check('🔴 PUBLISHED → 공개 · EXPIRED · DECLINED → 손실 · APPROVED · EDITED → 대기(어느 쪽에도 넣지 않는다)',
-    r.fact !== null && r.fact.published === 5 && r.fact.lost === 2 && r.pending === 5, JSON.stringify(r))
-  const p = readyLossOf([{ status: 'APPROVED', count: 7 }])
-  check('🔴 대기 행만 있으면 null(UNKNOWN) — 손실 0 으로 만들지 않는다', p.fact === null && p.pending === 7, JSON.stringify(p))
-  check('🔴 행이 없으면 null(UNKNOWN)', readyLossOf([]).fact === null)
-  const facts = readFileSync('scripts/lib/stage-preflight-facts.mts', 'utf-8')
-  check('🔴 생산자는 수율과 같은 창 · 같은 자동 도장(AUTO_DECIDER)으로 결말을 읽는다',
+  check('🔴 PUBLISHED → 공개 · EXPIRED · DECLINED → 손실 · APPROVED · EDITED · PENDING → 대기',
+    r.published === 5 && r.lost === 2 && r.pending === 6, JSON.stringify(r))
+  const facts = strip('scripts/lib/stage-preflight-facts.mts')
+  check('🔴 생산능력 · 결말이 한 번의 조회(같은 창 · AUTO_DECIDER) — 별도 count 로 raw 를 따로 세지 않는다',
     /groupBy\(\{\s*by: \['status'\],\s*where: \{ decidedBy: AUTO_DECIDER, decidedAt: \{ gte: windowFrom, lt: windowTo \} \}/.test(facts)
-    && /readyLoss,\n/.test(facts))
+    && !/originalPostApprovalQueue\.count\(/.test(facts)
+    && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.pending/.test(facts))
+  check('🔴 정산액도 같은 cohort 사실에 담긴다 — 판정 밖에서 건당 단가를 미리 나누지 않는다',
+    /\{ sources: worksetSources, \.\.\.fates, supplyUsd: spent \}/.test(facts) && !/supplyUsdPerReady/.test(facts))
+  check('🔴 감사 retry · overdue · 확정 결함은 전역 quality signal 이 막는다',
+    qualitySignalOf({ unresolvedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'bad'
+    && qualitySignalOf({ unresolvedDefects: 0, missingPosts: 0, retryableFailures: 1, overdueAudits: 0 }).health === 'bad'
+    && qualitySignalOf({ unresolvedDefects: 0, missingPosts: 0, retryableFailures: 0, overdueAudits: 1 }).health === 'bad')
+  check('🔴 READY cohort 는 감사 표를 읽지 않는다 — 감사 상태를 손실에 다시 더하지 않는다(이중 계산 없음)',
+    !/autoReadyAudit|AutoReadyAudit|retryableFailure|overdueAudit|unresolvedDefect/.test(facts)
+    && !/audit/i.test(strip('src/lib/stage-ladder-generic.ts').slice(
+      strip('src/lib/stage-ladder-generic.ts').indexOf('export function replenishmentOf'),
+      strip('src/lib/stage-ladder-generic.ts').indexOf('export type PreflightVerdict'))))
 }
 
-console.log('\n⑥ 소스 잠금 — 고정 할증이 판정 경로로 돌아오지 않는다')
+console.log('\n⑦ 소스 잠금 — 고정 할증 · 옛 단일 사실이 판정 경로로 돌아오지 않는다')
 {
-  const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
   const paths = [
     'src/lib/stage-ladder-generic.ts', 'src/lib/d100-capacity.ts', 'scripts/lib/stage-preflight-facts.mts',
     'scripts/stage-controller.mts', 'scripts/d100-master-readiness.mts',
@@ -138,10 +187,8 @@ console.log('\n⑥ 소스 잠금 — 고정 할증이 판정 경로로 돌아오
   const margin = /READY_NET_MARGIN|readyQualifiedRequiredPerDay|\*\s*1\.2\b|\b1\.2\s*\*/
   check('🔴 판정·보고 경로 어디에도 READY 고정 할증(1.2 · READY_NET_MARGIN)이 없다',
     paths.every((p) => !margin.test(strip(p))), paths.filter((p) => margin.test(strip(p))).join(','))
-  const judge = strip('src/lib/stage-ladder-generic.ts')
-  check('🔴 처리량과 공급 비용이 같은 `readyRequirementOf` 결과(req)를 쓴다 — 두 번째 필요량 계산 없음',
-    (judge.match(/[=(]\s*readyRequirementOf\(/g) ?? []).length === 1 && /capacity < req\.readyNeeded/.test(judge)
-    && /req\.readyNeeded \* facts\.supplyUsdPerReady/.test(judge))
+  check('🔴 옛 사실(readyPerSource · readyLoss · supplyUsdPerReady) · unbounded 판정이 판정 함수에 없다',
+    !/readyPerSource|readyLoss\b|supplyUsdPerReady|unbounded/.test(strip('src/lib/stage-ladder-generic.ts')))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

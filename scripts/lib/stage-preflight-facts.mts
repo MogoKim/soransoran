@@ -8,8 +8,9 @@
  *   · 기회          다음 증명일 **전체 슬롯**을 정본 `judgeSlotRelease` 로 그 슬롯 시각에 판정해 짝지은 수
  *                   — 자동 READY(러너와 같은 열림 판정) + 아직 초안이 없는 원천 기회(공급 스냅샷 × 측정 수율)
  *   · 처리량 · 수율  최근 3일 자동 READY 수 ÷ 그 3일 공급 묶음 원천 수(회차 파일)
- *   · READY 손실    같은 3일 창에서 자동 READY 로 도장된 행의 결말 — 공개 · 손실(EXPIRED · DECLINED) · 대기.
- *                   결말 난 행이 없으면 `null`(UNKNOWN). 🔴 고정 20% 할증으로 대신하지 않는다
+ *   · READY cohort  같은 3일 창에서 자동 READY 로 도장된 행 **전부**의 결말(공개 · 손실 EXPIRED·DECLINED · 대기)
+ *                   + 같은 창 묶음 원천 수 + 같은 창 공급 정산액 — 처리량 · 필요 READY · 공급 단가가 이 한 묶음에서 나온다.
+ *                   🔴 대기 행을 성공으로도 손실로도 확정하지 않는다 · 고정 20% 할증으로 대신하지 않는다
  *   · 지연          최근 3일 지금 계약 도장(`source-slot-v1`)으로 나간 글의 원천 게시 → 공개 p50 · p90
  *   · Persona       🔴 **계약 유효 수는 Persona 레인이 제공한다** — 이 파일은 주입 인터페이스(`contractValidPersonas`)만 둔다.
  *                   읽기 실패면 `null`(UNKNOWN). 🔴 활성 행 수로 대체하지 않는다(정본: active rows are not capacity).
@@ -27,7 +28,7 @@ import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
 
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
-import type { PreflightFacts, ReadyLossFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
+import type { PreflightFacts, ReadyCohortFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
 import {
   COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv,
@@ -143,14 +144,14 @@ export function yieldOf(input: { readyCount: number; worksetSources: number | nu
 }
 
 /**
- * 🔴 **READY 손실 실측** — 순수. 창 안 자동 READY 행의 상태별 수에서 결말만 센다.
- *    `PUBLISHED` → 공개 · `EXPIRED`(발행 직전 판정 만료) · `DECLINED`(철회) → 손실 · 그 밖(아직 대기)은 세지 않는다.
- *    결말 난 행이 0 이면 `null` — 모르는 것을 손실 0 으로 만들지 않는다.
+ * 🔴 **READY 결말 분류** — 순수. 창 안 자동 READY 행의 상태별 수를 공개 · 손실 · 대기로 나눈다.
+ *    `PUBLISHED` → 공개 · `EXPIRED`(발행 직전 판정 만료) · `DECLINED`(철회) → 손실 · 그 밖(`APPROVED` · `EDITED` …) → 대기.
+ *    🔴 대기를 어느 쪽에도 접지 않는다 — 판정(`replenishmentOf`)이 두 극단으로 다룬다.
  */
 export const READY_LOSS_STATUSES: readonly string[] = ['EXPIRED', 'DECLINED']
 
-export function readyLossOf(byStatus: readonly { status: string; count: number }[]): {
-  fact: ReadyLossFact | null; pending: number
+export function readyFatesOf(byStatus: readonly { status: string; count: number }[]): {
+  published: number; lost: number; pending: number
 } {
   let published = 0
   let lost = 0
@@ -160,7 +161,7 @@ export function readyLossOf(byStatus: readonly { status: string; count: number }
     else if (READY_LOSS_STATUSES.includes(r.status)) lost += r.count
     else pending += r.count
   }
-  return { fact: published + lost === 0 ? null : { published, lost }, pending }
+  return { published, lost, pending }
 }
 
 /** 🔴 창 안 공급 묶음의 원천 수 — 파일을 못 읽으면 그 파일만 건너뛴다 · 하나도 없으면 null */
@@ -317,31 +318,25 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   const windowTo = kstRange(i.evidenceDate).lt
   const pooled = (dir: string): LedgerEntry[] | null => pooledEntries(dates.map((d) => readDay(dir, d)))
 
-  // 수율
-  let readyCount: number | null = null
-  try {
-    readyCount = await prisma.originalPostApprovalQueue.count({
-      where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: windowFrom, lt: windowTo } },
-    })
-  } catch (e) { notes.push(`자동 READY 수를 읽지 못했다 — ${(e as Error).name}`) }
-  const worksetSources = worksetSourcesIn(i.dataDir, windowFrom.getTime(), windowTo.getTime())
-  const readyPerSource = readyCount === null ? null : yieldOf({ readyCount, worksetSources })
-  if (readyPerSource === null) notes.push('수율을 모른다 — 창 안 공급 묶음 또는 READY 기록 없음')
-
-  // READY 손실 — 같은 창 자동 READY 행의 결말(공개 · 만료 · 철회). 읽지 못하거나 결말 0 이면 모름
-  let readyLoss: ReadyLossFact | null = null
-  let readyPending: number | null = null
+  // READY cohort — 같은 창 자동 READY 행 전부(한 번의 조회)를 결말로 나눈다. 수율의 분자도 이 합이다
+  let fates: { published: number; lost: number; pending: number } | null = null
   try {
     const byStatus = await prisma.originalPostApprovalQueue.groupBy({
       by: ['status'],
       where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: windowFrom, lt: windowTo } },
       _count: { _all: true },
     })
-    const r = readyLossOf(byStatus.map((g) => ({ status: g.status, count: g._count._all })))
-    readyLoss = r.fact
-    readyPending = r.pending
-    if (r.fact === null) notes.push('READY 손실을 모른다 — 창 안 자동 READY 중 결말(공개 · 만료 · 철회) 난 행이 없다')
-  } catch (e) { notes.push(`READY 손실을 읽지 못했다 — ${(e as Error).name}`) }
+    fates = readyFatesOf(byStatus.map((g) => ({ status: g.status, count: g._count._all })))
+  } catch (e) { notes.push(`자동 READY 결말을 읽지 못했다 — ${(e as Error).name}`) }
+  const readyCount = fates === null ? null : fates.published + fates.lost + fates.pending
+  const worksetSources = worksetSourcesIn(i.dataDir, windowFrom.getTime(), windowTo.getTime())
+  /**
+   * 🔴 raw 수율 — 증명일 원천 기회를 할인하는 데만 쓴다(`slotValidOpportunitiesOf`). 처리량 판정은 cohort 를 본다.
+   *    대기 행이 섞인 raw 수율이라는 한계는 P0-2(source-to-slot 결말 수율)가 푼다.
+   */
+  const readyPerSource = readyCount === null ? null : yieldOf({ readyCount, worksetSources })
+  if (readyPerSource === null) notes.push('수율을 모른다 — 창 안 공급 묶음 또는 READY 기록 없음')
+  if (fates !== null && fates.pending > 0) notes.push(`결말 없는 자동 READY ${fates.pending}건 — 손실률은 두 극단 구간으로만 판정한다`)
 
   // 기회 — READY(자동 · 열림) + 원천 스냅샷
   const readyOpps = i.autoOpen.open
@@ -377,21 +372,20 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   // 단가
   const commentUsdPerRequest = settledUnitUsd(pooled(commentLoopLedgerDir()))
   const auditUsdPerCall = settledUnitUsd(pooled(auditLedgerDir()))
-  let supplyUsdPerReady: number | null = null
+  // 🔴 공급 정산액 — cohort 와 같은 창. 단가(raw · 공개)는 판정이 cohort 에서 계산한다
   const spent = settledTotalUsd(pooled(defaultLedgerDir()))
-  if (readyCount !== null) supplyUsdPerReady = spent === null || readyCount === 0 || !(spent > 0) ? null : spent / readyCount
+  const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
+    : { sources: worksetSources, ...fates, supplyUsd: spent }
 
   const facts: PreflightFacts = {
     slotValidOpportunities: opp.total,
-    readyPerSource,
-    readyLoss,
+    readyCohort,
     latencyP50H, latencyP90H,
     contractValidPersonas,
     commentUsdPerRequest,
     commentDailyUsdCap: commentLoopLimitsFromEnv(i.env).limits.dailyUsd,
     auditUsdPerCall,
     auditDailyUsdCap: auditLimitsFromEnv(i.env).dailyUsd,
-    supplyUsdPerReady,
     supplyDailyUsdCap: cappedBy(limitsFromEnv(i.env).dailyUsd, SUPPLY_DAILY_USD_APPROVED),
     runnerHealth: i.runnerHealth,
   }
@@ -400,7 +394,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     detail: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected,
-      opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources, readyPending,
+      opportunitySnapshotAt: snap.takenAt, readyCount, worksetSources, readyPerSource,
     },
   }
 }

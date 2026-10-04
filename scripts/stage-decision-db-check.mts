@@ -49,7 +49,8 @@ import { buildSourceEvidence, SOURCE_STATS_METHOD } from '../src/lib/source-slot
 import { OPPORTUNITY_KIND, OPPORTUNITY_VERSION, WORKSET_KIND, WORKSET_VERSION, opportunitiesFileName, worksetFileName } from '../src/lib/supply-workset'
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
-import { slotTimesOn } from '../src/lib/stage-ladder-generic'
+import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
+import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 
 /**
  * 🔴 **격리 DB 가 아니면 여기서 멈춘다 — 그리고 주소를 한 글자도 찍지 않는다.**
@@ -504,8 +505,15 @@ async function main(): Promise<void> {
       const none = await facts()
       check('🔴 기회 스냅샷 파일이 없으면 원천 기회 0 — 운영 2026-10-01 모양(공급 러너가 스냅샷을 쓰지 않는 판)',
         none.facts.slotValidOpportunities === 0 && none.detail.opportunitySnapshotAt === null, JSON.stringify(none.detail))
-      check('🔴 수율 = 실제 DB 자동 READY 3 ÷ 묶음 원천 30 = 0.1',
-        none.facts.readyPerSource === 0.1, String(none.facts.readyPerSource))
+      check('🔴 수율 = 실제 DB 자동 READY 3 ÷ 묶음 원천 30 = 0.1 (원천 기회 할인용 raw 수율)',
+        none.detail.readyPerSource === 0.1, String(none.detail.readyPerSource))
+      const c0 = none.facts.readyCohort
+      check('🔴 같은 행이 cohort 로 — 원천 30 · 공개 0 · 손실(DECLINED) 3 · 대기 0',
+        c0 !== null && c0.sources === 30 && c0.published === 0 && c0.lost === 3 && c0.pending === 0, JSON.stringify(c0))
+      const v0 = judgeNextPreflight('d3', none.facts, RUNNER_GRID)
+      check('🔴 🔴 **공개 0 · 손실 3 → READY_REQUIREMENT_UNKNOWN (영구 불능 FAIL 아님) · 공급 비용 UNKNOWN**',
+        v0.codes.includes('READY_REQUIREMENT_UNKNOWN') && !v0.codes.includes('THROUGHPUT_SHORT')
+        && v0.codes.includes('SUPPLY_COST_UNKNOWN') && !v0.codes.includes('SUPPLY_COST_SHORT'), JSON.stringify(v0))
       snapshot(40)
       const r40 = await facts()
       check('🔴 🔴 **원천 40 · 수율 0.1 → 기대 READY 4 → d3 슬롯 3 전부 (앞판 floor(3×0.1) = 0)**',
@@ -523,6 +531,82 @@ async function main(): Promise<void> {
     } finally {
       rmSync(dir, { recursive: true, force: true })
       await wipePf()
+    }
+  }
+
+  console.log('\n⑨ 🔴 READY cohort — 결말 5종 · 창 경계 · 오래된/최근 대기 · 사람 결정 제외 (실제 DB groupBy)')
+  {
+    const site = 'fixture:cohort'
+    const wipeC = async (): Promise<void> => {
+      await prisma.originalPostApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: 'pfc-' } } })
+      await prisma.microSeedRawContent.deleteMany({ where: { sourceSite: site } })
+    }
+    await wipeC()
+    /**
+     * 증거일 2026-09-30 → 창 = KST 09-28 00:00 ~ 10-01 00:00 = UTC [09-27T15:00Z, 09-30T15:00Z).
+     *    창 안: PUBLISHED 2 · EXPIRED 1 · DECLINED 1 · EDITED 1 · APPROVED(창 시작 정각) 1 · APPROVED(창 끝 1초 전 · 최근) 1
+     *    창 밖: APPROVED 창 시작 1초 전(오래된 대기) · APPROVED 창 끝 정각 · 사람 결정 PUBLISHED
+     */
+    const rows: { k: string; status: 'PUBLISHED' | 'EXPIRED' | 'DECLINED' | 'APPROVED' | 'EDITED'; at: string; by?: string }[] = [
+      { k: 'pub1', status: 'PUBLISHED', at: '2026-09-28T03:00:00Z' },
+      { k: 'pub2', status: 'PUBLISHED', at: '2026-09-29T03:00:00Z' },
+      { k: 'exp', status: 'EXPIRED', at: '2026-09-29T05:00:00Z' },
+      { k: 'dec', status: 'DECLINED', at: '2026-09-30T01:00:00Z' },
+      { k: 'edit', status: 'EDITED', at: '2026-09-30T02:00:00Z' },
+      { k: 'start', status: 'APPROVED', at: '2026-09-27T15:00:00Z' },
+      { k: 'recent', status: 'APPROVED', at: '2026-09-30T14:59:59Z' },
+      { k: 'old', status: 'APPROVED', at: '2026-09-27T14:59:59Z' },
+      { k: 'end', status: 'APPROVED', at: '2026-09-30T15:00:00Z' },
+      { k: 'human', status: 'PUBLISHED', at: '2026-09-29T03:00:00Z', by: 'founder' },
+    ]
+    for (const r of rows) {
+      const raw = await prisma.microSeedRawContent.create({
+        data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/${r.k}`, sourceArticleId: `pfc-${r.k}`,
+          sourceCapturedAt: new Date('2026-09-27T01:00:00Z'), rawTitle: `원문 ${r.k}`, rawBody: `원문 본문 ${r.k}` },
+        select: { id: true },
+      })
+      await prisma.originalPostApprovalQueue.create({
+        data: { sourceRawContentId: raw.id, status: r.status, draftTitle: `초안 ${r.k}`, draftBody: `본문 ${r.k}`,
+          ...(r.status === 'EDITED' ? { editedTitle: `수정 ${r.k}`, editedBody: `수정 본문 ${r.k}` } : {}),
+          gateVerdict: 'PASS', gateResults: {}, promptVersion: 'pfc', model: 'pfc',
+          decidedBy: r.by ?? AUTO_DECIDER, decidedAt: new Date(r.at), dedupKey: `pfc-${r.k}` },
+      })
+    }
+    const now = new Date('2026-10-01T07:00:00+09:00')
+    const dir = mkdtempSync(join(tmpdir(), 'pfc-'))
+    for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
+      writeFileSync(join(dir, worksetFileName(runId)), JSON.stringify({
+        kind: WORKSET_KIND, version: WORKSET_VERSION, runId, takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`,
+        limit: 10, sources: Array.from({ length: 10 }, (_, i) => ({ sourceSite: site, sourceArticleId: `${runId}-${i}` })),
+      }))
+    }
+    try {
+      const r = await readPreflightFacts(prisma, {
+        loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
+        autoOpen: { open: false, reasons: [] }, proofSlots: slotTimesOn('2026-10-01', profileOf('d5')),
+        caps: releaseCapsOf(profileOf('d5')), evidenceDate: '2026-09-30', env: {}, dataDir: dir, now,
+        runnerHealth: 'ok', contractValidPersonas: async () => 30,
+      })
+      const c = r.facts.readyCohort
+      check('🔴 🔴 **cohort = 공개 2 · 손실 2(EXPIRED · DECLINED) · 대기 3(EDITED · 창 시작 정각 · 최근) · 원천 30**',
+        c !== null && c.published === 2 && c.lost === 2 && c.pending === 3 && c.sources === 30, JSON.stringify(c))
+      check('🔴 창 시작 1초 전 오래된 대기 · 창 끝 정각 · 사람 결정 행은 cohort 밖 — raw READY 7',
+        r.detail.readyCount === 7, String(r.detail.readyCount))
+      if (c !== null) {
+        const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, supplyUsd: 0.07 } }, RUNNER_GRID)
+        check('🔴 d3 — 대기를 전부 손실로 봐도(필요 11) 같은 cohort 용량 14 가 채운다 → 처리량 확정',
+          d3.counts.readyNeededMax === 11 && d3.counts.readyCapacity === 14
+          && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
+        const d5 = judgeNextPreflight('d5', { ...r.facts, readyCohort: { ...c, supplyUsd: 0.07 } }, RUNNER_GRID)
+        check('🔴 🔴 **d5 — 대기 3 의 결말에 따라 필요 7~18 · 용량 14 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
+          d5.counts.readyNeededMin === 7 && d5.counts.readyNeededMax === 18
+          && d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict !== 'PASS', JSON.stringify(d5.counts))
+        check('🔴 대기가 있으면 공개 1건 단가를 내지 않는다(raw 단가로 대신하지 않는다)',
+          Math.abs((d5.counts.rawReadyUsd ?? 0) - 0.01) < 1e-12 && !('publicPostUsd' in d5.counts), JSON.stringify(d5.counts))
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      await wipeC()
     }
   }
 
