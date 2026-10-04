@@ -1,5 +1,5 @@
 /**
- * ChatGPT 원고를 변환한 draft — 창업자 검수용.
+ * ChatGPT 원고를 변환한 draft — 결정론적 QA 입력.
  *
  * 원본: drafts/magazine/hormone-therapy-who/draft.md
  * 변환: scripts/magazine-md-to-draft.mjs (형식 변환만. 문장은 손대지 않았다)
@@ -16,7 +16,12 @@ export const DRAFT: MagazineArticleBody = {
   publishedAt: '',
   medical: true,
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/hormone-therapy-who/hero.webp',
+    alt: '창가에서 서류를 들여다보며 생각에 잠긴 50대 한국 여성',
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {
