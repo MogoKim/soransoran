@@ -24,7 +24,10 @@ import { judgeOne, readFlags, SEED_AXIS, type JudgeInput, type SemanticVerdict }
 import { planThinFetch } from '../src/lib/micro-seed-82cook-thin'
 import { findCjkIdeograph, HANJA_LANGUAGE_FIT } from '../src/lib/cjk-ideograph'
 import { recheck } from './micro-seed-supply-autofill.mjs'
-import { POLICY_CONTEXT_TERMS } from './lib/micro-seed-quality.mjs'
+
+/** 🔴 다음 통합 단계의 1회 bounded read-only 의미 판정 replay 입력 — 이 검사가 결정적 축은 실제로 돌린다 */
+type ReplayCase = { text: string; expect: 'PASS' | 'BLOCK'; axis: string; reason?: string }
+const REPLAY = JSON.parse(readFileSync('scripts/__fixtures__/p0-3-semantic-replay.json', 'utf-8')) as { kind: string; cases: ReplayCase[] }
 
 let pass = 0
 let fail = 0
@@ -125,9 +128,38 @@ for (const t of [
   const p = paths(t)
   check(`🟢 C-2 "${t}" → PASS`, passesAll(p) && clearOfPolitics(p), JSON.stringify(p))
 }
-check('🔴 생활 정책 낱말 10개는 창업자 목록에 그대로 있고(새 목록 아님) 단독으로는 정치 근거가 아니다',
-  POLICY_CONTEXT_TERMS.length === 10 && POLICY_CONTEXT_TERMS.every((w) => findPoliticalTopicHit(w) === null)
-  && findPoliticalTopicHit('민주당 최저임금') === '민주당')
+check('🔴 정책 · 법안 낱말은 단독으로 정치가 아니다 — 정치 문맥(공약 · 유세 · 반대 · 법안 · 정당 · 선거 …)이 있을 때만',
+  findPoliticalTopicHit('최저임금') === null && findPoliticalTopicHit('간호법') === null && findPoliticalTopicHit('원전') === null
+  && findPoliticalTopicHit('최저임금 공약') === '최저임금' && findPoliticalTopicHit('민주당 최저임금') === '민주당'
+  && findPoliticalTopicHit('원전 반대 시위') === '원전' && findPoliticalTopicHit('간호법 지지부진') === null)
+
+console.log('\nR 🔴 replay fixture(scripts/__fixtures__/p0-3-semantic-replay.json) — 결정적 축은 실제 경로로 판정')
+{
+  check('fixture 가 읽힌다 · 23건 · 축 5종', REPLAY.kind === 'p0-3-semantic-replay' && REPLAY.cases.length === 23
+    && new Set(REPLAY.cases.map((c) => c.axis)).size === 5)
+  for (const c of REPLAY.cases) {
+    if (c.axis === 'policyLife' || c.axis === 'coarseOpinion') {
+      const p = paths(c.text)
+      check(`🟢 R ${c.axis} "${c.text}" → PASS (정치 · 혐오 · 언어 핏 사유 없음)`,
+        passesAll(p) && !p.safetyCodes.includes('hostility'), JSON.stringify(p))
+    } else if (c.axis === 'politics') {
+      const p = paths(c.text)
+      check(`🔴 R politics "${c.text}" → 정치 차단`, blockedEverywhere(p) && p.judgeCodes.includes('politics'), JSON.stringify(p))
+    } else if (c.axis === 'groupHate') {
+      const p = paths(c.text)
+      check(`🔴 R groupHate "${c.text}" → 결정적 hostility drop · AUTO_DROP(정치 아님)`,
+        p.safety === 'drop' && p.safetyCodes.includes('hostility') && p.judge === 'AUTO_DROP' && !p.politics, JSON.stringify(p))
+    } else if (c.axis === 'semanticHarm') {
+      // 🔴 결정적 필터는 이 문장을 낱말로 흉내 내지 않는다 — 의미 판정 사유가 막는다(아래 downstream 배선)
+      const p = paths(c.text)
+      check(`🔵 R semanticHarm "${c.text}" — 결정적 필터는 낱말로 막지 않는다(의미 판정 몫)`,
+        p.safety !== 'drop' && p.safety !== 'hardExclude', JSON.stringify(p))
+      const w = paths(c.text, '', [c.reason as SemanticVerdict['risks'][number]])
+      check(`🔴 R semanticHarm "${c.text}" → [downstream 배선 검사 — 의미 판정 결과 ${c.reason} 를 fixture 로 주입 · 실제 모델 판정 검증 아님] AUTO_DROP`,
+        w.judge === 'AUTO_DROP' && w.judgeCodes.includes(c.reason!) && !w.judgeCodes.includes('politics'), JSON.stringify(w))
+    }
+  }
+}
 
 console.log('\nH 🔵 연예 · 방송 · 공개 논란에 대한 비판 · 실망 · 호불호 → PASS(부정적 감정 · 연예인 이름은 위해가 아니다)')
 for (const t of [
@@ -170,7 +202,7 @@ check('🔴 J 최종 생성 제목 · 본문 — 적재 직전 관문이 한자 
     && !ok.some((x) => x.includes(HANJA_LANGUAGE_FIT)) && !t.some((x) => /정치/.test(x))
 })())
 
-console.log('\nK 🔴 실제 위해 — 개인정보 · 집단 괴롭힘 동원 · 위협 · 근거 없는 중대 의혹 창작 → 차단(사유 코드가 따로 남는다)')
+console.log('\nK 🔴 [downstream 배선 검사 — 의미 판정 결과를 fixture 로 주입 · 실제 모델 판정 검증 아님] 실제 위해 → 사유 코드가 따로 남아 차단')
 {
   const harm: [string, SemanticVerdict['risks'], string][] = [
     ['주소 알아냈으니 다 같이 찾아가자', ['identifiablePrivatePerson', 'targetedHarassmentOrThreat'], 'targetedHarassmentOrThreat'],
@@ -192,7 +224,7 @@ console.log('\nK 🔴 실제 위해 — 개인정보 · 집단 괴롭힘 동원 
     passesAll(paths('보도된 논란 기사 보고 실망했어요')) && paths('근거는 없지만 그 가수 마약 확실함', '', ['unverifiedDefamation']).judge === 'AUTO_DROP')
 }
 
-console.log('\nD 🔴 연예인 관련 명예훼손 · 사생활 · 괴롭힘 → 별도 hard gate 가 막는다(공인 이름 판정이 아니다)')
+console.log('\nD 🔴 연예인 관련 위해 → 별도 hard gate (의미 판정 사유는 [downstream 배선 검사 — 결과 주입 · 실제 모델 검증 아님] · 집단 비하 · 신상 털기는 결정적)')
 {
   const base = (title: string, risks: SemanticVerdict['risks']): string => {
     const s = safetyFilter({ title })
@@ -257,6 +289,14 @@ console.log('\n⑥ 소스 잠금 — 통합 판정 · 죽은 경로가 돌아오
     && !/String\(x\)\)\.includes/.test(strip('scripts/micro-seed-navercafe-thin.mts')))
   check('🔴 정치 주제 판정은 창업자 승인 목록 하나 그대로다(새 목록 없음)',
     findPoliticalTopicHit('국민의힘 지지율') !== null && findPoliticalFigureHits('이재명').length === 1)
+  check('🔴 정치 authority 하나가 창업자 목록을 구조로 가른다 — 항상 정치 · 정책 문맥형(단어별 예외 배열 없음)',
+    /const ALWAYS_POLITICAL_TERMS = \[/.test(q) && /const POLICY_DEBATE_TERMS = \[/.test(q)
+    && /POLITICAL_TOPIC_TERMS = \[\.\.\.ALWAYS_POLITICAL_TERMS, \.\.\.POLICY_DEBATE_TERMS\]/.test(q)
+    && !/POLICY_CONTEXT_TERMS/.test(q) && (q.match(/export function findPoliticalTopicHit/g) ?? []).length === 1)
+  const sf = strip('scripts/lib/micro-seed-safety-filter.mts')
+  const hostility = sf.slice(sf.indexOf('const HOSTILITY'), sf.indexOf('\n', sf.indexOf('const HOSTILITY') + 20) + 40)
+  check('🔴 결정적 혐오 필터는 보호 대상 집단 비하만 — 일반 욕설 · 거친 감탄 · 위협 · 박제 낱말 없음(의미 판정 몫)',
+    /틀딱/.test(hostility) && !/시발|발\||지랄|미친|꺼져|죽어라|패|박제|찢|쥐박|일베|메갈/.test(hostility), hostility)
   check('🔴 HANJA_NAME(한자 성 한 글자 = 정치인) 판정이 없다 — 한자는 언어 핏 하나가 본다',
     !/HANJA_NAME/.test(q) && findPoliticalFigureHits('朴나래 李효리').length === 0)
   const han = ['scripts/lib/micro-seed-quality.mts', 'scripts/lib/micro-seed-safety-filter.mts', 'src/lib/micro-seed-auto-judge.ts',

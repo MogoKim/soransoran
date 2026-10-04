@@ -165,7 +165,11 @@ const POLITICS =
  * 🟢 제목만으로 판정된다 — 그래서 목록 단계 자동 선별이 쓸 수 있다.
  *    이것이 `medicalOrAdLikely` 와 다른 점이다(§DETAIL_ONLY_FLAGS 주석).
  */
-const POLITICAL_TOPIC_TERMS = [
+/**
+ * 🔴 **항상 정치** — 이 낱말 하나만으로 정치다(정치인 · 정당 · 선거 · 탄핵 · 진영 · 정치 은어 · 국회 절차 · 집회 이념축 …).
+ *    창업자 승인 목록 그대로다 — 아래 `정책·법안` 묶음만 따로 분류했다(2026-10-04 P0-3 구조 보정).
+ */
+const ALWAYS_POLITICAL_TERMS = [
   // 2024.12~2026
   '비상계엄', '계엄령', '계엄', '내란수괴', '내란동조', '내란특검', '내란', '체포조', '포고령',
     // 🔴 `파면` 을 뺐다 — "땅을 파면" · "깊이 파면" 이 걸린다.
@@ -212,11 +216,6 @@ const POLITICAL_TOPIC_TERMS = [
     // 🔴 단독 `정당` 을 뺐다 — "정당한 요구" · "정당방위" 가 걸린다.
     //    개별 정당명이 위에 전부 있고 `정당지지율`·`위성정당` 도 따로 있다.
     '열린우리당', '국민의미래',
-  // 정책·법안
-  '중대재해처벌법', '임대차3법', '양곡관리법', '상법개정', '배임죄', '방송3법', '언론중재법', '최저임금',
-  '주52시간', '전세사기', '재초환', '탈원전', '원전', '4대강', '간호법', '김영란법', '부자감세',
-  '세수결손', '지역화폐', '기본소득', '상속세', '유류세', '전공의', '의료대란', '의협', '추경',
-  '연금개혁', '금투세', '종부세', '의대증원', '노란봉투법',
   // 외교·안보
   '한미연합훈련', '방위비분담금', '9·19 군사합의', '우크라이나 파병', '반도체 관세', '후쿠시마오염수',
   '한미동맹', '전작권', '주한미군', '강제징용', '제3자 변제', '독도', '욱일기', '반일', '친일', '죽창가',
@@ -232,6 +231,21 @@ const POLITICAL_TOPIC_TERMS = [
   '극우', '극좌', '좌파', '우파', '수구', '친일파', '태극기 부대', '진영 논리', '정치 성향', '이념 갈등',
   '정치 글', '정치', '진영', '이념', '선거', '대선', '대통령', '국회', '의원직', '여당', '야당', '공직자', '정치인',
 ] as const
+
+/**
+ * 🔴 **정책 문맥형** — 창업자 목록의 `정책·법안` 묶음 그대로. 생활에도 쓰인다(간호법 · 지역화폐 · 기본소득 · 원전 · 최저임금 …).
+ *    낱말 하나로는 정치가 아니다 — 같은 글에 **정치 문맥**(`POLICY_DEBATE_CONTEXT` · 항상 정치 낱말 · 정치 인물)이 있을 때만 정치다.
+ */
+const POLICY_DEBATE_TERMS = [
+  // 정책·법안
+  '중대재해처벌법', '임대차3법', '양곡관리법', '상법개정', '배임죄', '방송3법', '언론중재법', '최저임금',
+  '주52시간', '전세사기', '재초환', '탈원전', '원전', '4대강', '간호법', '김영란법', '부자감세',
+  '세수결손', '지역화폐', '기본소득', '상속세', '유류세', '전공의', '의료대란', '의협', '추경',
+  '연금개혁', '금투세', '종부세', '의대증원', '노란봉투법',
+] as const
+
+/** 🔴 창업자 정치 주제 목록 전체 — 두 묶음의 합(경계 다듬기 · 근거 기록이 이 합을 쓴다) */
+const POLITICAL_TOPIC_TERMS = [...ALWAYS_POLITICAL_TERMS, ...POLICY_DEBATE_TERMS] as const
 
 const POLITICAL_TOPIC_SPECIAL_SOURCES: Partial<Record<(typeof POLITICAL_TOPIC_TERMS)[number], string>> = {
   // 우나어 실측 회귀: "감사드립니다/사드릴까"의 `사드` 오탐 차단.
@@ -268,26 +282,32 @@ function escapedKeywordSource(term: string): string {
     .replace(/\s+/g, String.raw`\s*`)
 }
 
-const POLITICAL_TOPIC = new RegExp(
-  POLITICAL_TOPIC_TERMS
-    .map((term) => POLITICAL_TOPIC_SPECIAL_SOURCES[term] ?? escapedKeywordSource(term))
-    .join('|'),
-  'g',
-)
+const sourceOf = (term: (typeof POLITICAL_TOPIC_TERMS)[number]): string =>
+  POLITICAL_TOPIC_SPECIAL_SOURCES[term] ?? escapedKeywordSource(term)
+
+/** 🔴 창업자 목록 전체 — 수집기 근거 기록용(판정은 `findPoliticalTopicHit` 하나) */
+const POLITICAL_TOPIC = new RegExp(POLITICAL_TOPIC_TERMS.map(sourceOf).join('|'), 'g')
+const ALWAYS_POLITICAL = new RegExp(ALWAYS_POLITICAL_TERMS.map(sourceOf).join('|'), 'g')
+const POLICY_DEBATE = new RegExp(POLICY_DEBATE_TERMS.map(sourceOf).join('|'), 'g')
 
 /**
- * 🔴 **생활에도 쓰이는 정책 낱말 — 단독으로는 정치 근거가 아니다** (2026-10-04 창업자 확정 · P0-3 최종).
- *    창업자 목록(`POLITICAL_TOPIC_TERMS` 정책·법안 묶음)에 그대로 남는다. 다만 **이 낱말만** 있는 제목 · 본문은
- *    월급 · 전세 · 세금 · 연금 · 병원 이야기다 — 정치인 · 정당 · 후보 · 선거 · 유세 · 캠페인 같은 다른 정치 신호가 함께
- *    있을 때만 정치다(그때는 그 신호가 판정한다). 의미 판정의 `politicalCampaigning` 은 따로 막는다.
+ * 🔴 **정치 문맥** — 정책 낱말을 정치로 만드는 신호(2026-10-04 창업자 확정): 공약 · 유세 · 캠페인 · 집회 · 시위 ·
+ *    지지 · 반대 · 찬성 · 법안 · 후보 — 그리고 항상 정치 낱말(정당 · 선거 · 국회 …) · 정치 인물. 낱말 경계는 앞이 한글이
+ *    아닐 때만 센다(`지지부진` · `반대로` 의 한가운데를 잡지 않는다 — 단어 앞머리만).
  */
-export const POLICY_CONTEXT_TERMS: readonly string[] = [
-  '최저임금', '주52시간', '전세사기', '상속세', '유류세', '연금개혁', '종부세', '의료대란', '전공의', '의대증원',
-]
+const POLICY_DEBATE_CONTEXT = /(?<![가-힣])(공약|유세|캠페인|집회|시위|지지(?!부진)|반대(?!로|편)|찬성|법안|후보)/
 
-/** 🔴 정치 주제 판정 — 창업자 목록 하나. 생활 정책 낱말만 걸리면 `null` */
+/**
+ * 🔴 **정치 판정 authority 하나** — 수집기 · 네이버카페 제목 판정 · 안전 필터가 모두 이 함수를 부른다.
+ *    ① 항상 정치 낱말이 있으면 그 낱말 ② 정책 낱말은 같은 글에 정치 문맥이 있을 때만 ③ 아니면 `null`.
+ */
 export function findPoliticalTopicHit(text: string): string | null {
-  return collect(POLITICAL_TOPIC, text).find((h) => !POLICY_CONTEXT_TERMS.includes(h)) ?? null
+  const t = text ?? ''
+  const always = collect(ALWAYS_POLITICAL, t)[0]
+  if (always !== undefined) return always
+  const policy = collect(POLICY_DEBATE, t)[0]
+  if (policy === undefined) return null
+  return POLICY_DEBATE_CONTEXT.test(t) || findPoliticalFigureHits(t).length > 0 ? policy : null
 }
 
 /**

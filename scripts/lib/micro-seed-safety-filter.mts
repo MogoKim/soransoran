@@ -106,9 +106,16 @@ const MEDICAL_CLAIM =
 const PROMOTION =
   /협찬|공구|공동구매|체험단|서포터즈|할인코드|쿠폰코드|추천인|링크 ?(타고|클릭)|구매 ?링크|카톡 ?문의|디엠 ?문의|DM ?문의|문의 ?주세요|판매합니다|팝니다|분양|입금|계좌/
 
-/** ⑥ 욕설 · 혐오 · 분쟁 유도 */
+/**
+ * ⑥ **보호 대상 집단 혐오 — 문맥 없이도 명백한 것만** (2026-10-04 P0-3 구조 보정).
+ *    나이(틀딱) · 성별/양육(맘충 · 한남 · 김치녀) · 장애(병신) 를 낮잡는 집단 비하어만 결정적으로 버린다.
+ *    🔴 일반 욕설 · 거친 감탄(시발 · 지랄 · 미친 · 꺼져) · 작품 비판은 낱말 하나로 버리지 않는다 — 주관적 의견이다.
+ *    🔴 특정인 공격 동원 · 위협(죽어라 · 패죽) · 신상 박제 · 근거 없는 중대 사실 단정은 **의미 판정 사유**가 막는다
+ *       (`targetedHarassmentOrThreat` · `identifiablePrivatePerson` · `unverifiedDefamation`) — 여기서 낱말로 흉내 내지 않는다.
+ *    🔴 진영 멸칭(찢재명 · 쥐박이 …)은 정치 판정(`findPoliticalTopicHit`)이 막는다 — 혐오로 위장하지 않는다.
+ */
 const HOSTILITY =
-  /[시씨]발|개[새쉐]끼|병신|지랄|미친년|미친놈|꺼져|죽어라|틀딱|맘충|한남|김치녀|일베|메갈|찢[재짜]|쥐박|패[죽]|박제/
+  /틀딱|맘충|한남|김치녀|병신/
 
 /** ⑦ 이미지 의존 — 🔴 이미지를 가져오겠다는 뜻이 아니다. **쓸 수 없다는 표시**다 */
 const VISUAL_DEPENDENT =
@@ -195,9 +202,9 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
   const promo = has(PROMOTION, title, body, cmtText)
   if (promo) add('promotion', `광고·홍보 표현(${promo})`, 'hold')
 
-  // ⑥ 욕설 · 혐오 · 분쟁 유도 — 🔴 커뮤니티 성격을 바꾼다. 쓰지 않는다
+  // ⑥ 보호 대상 집단 혐오 — 🔴 커뮤니티 성격을 바꾼다. 쓰지 않는다(거친 말 · 작품 비판은 여기 아니다)
   const hostile = has(HOSTILITY, title, body, cmtText)
-  if (hostile) add('hostility', '욕설·혐오·분쟁 유도', 'drop')
+  if (hostile) add('hostility', '보호 대상 집단 비하', 'drop')
 
   // ⑦ 이미지 의존 — 🔴 이미지 없이는 재사용이 안 된다 (§4-Q)
   //    본문이 거의 없고 이미지만 있는 경우도 같다

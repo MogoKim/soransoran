@@ -1,0 +1,30 @@
+{
+  "kind": "p0-3-semantic-replay",
+  "version": 1,
+  "note": "P0-3 정치 · 연예 · 위해 경계 — 다음 통합 단계의 1회 bounded read-only 의미 판정 replay 입력. 지금은 provider 를 부르지 않는다. 결정적 판정(정치 · 언어 핏 · 집단 비하)은 check:political-axis 가 실제로 돌리고, 의미 판정 사유(위협 · 동원 · 신상 · 근거 없는 단정)는 replay 전까지 downstream 배선만 검사한다.",
+  "cases": [
+    { "text": "간호법 때문에 병원 일이 달라졌어요", "expect": "PASS", "axis": "policyLife" },
+    { "text": "지역화폐 어디서 쓰세요", "expect": "PASS", "axis": "policyLife" },
+    { "text": "기본소득 받아보신 분", "expect": "PASS", "axis": "policyLife" },
+    { "text": "김영란법 때문에 선물 고르기 어렵네요", "expect": "PASS", "axis": "policyLife" },
+    { "text": "재초환 때문에 아파트 고민이에요", "expect": "PASS", "axis": "policyLife" },
+    { "text": "의협 때문에 예약이 밀렸어요", "expect": "PASS", "axis": "policyLife" },
+    { "text": "추경 나오면 지원금 신청 어떻게 해요", "expect": "PASS", "axis": "policyLife" },
+    { "text": "원전 근처 살아보신 분", "expect": "PASS", "axis": "policyLife" },
+    { "text": "민주당 간호법 통과 지지 캠페인", "expect": "BLOCK", "axis": "politics", "reason": "politics" },
+    { "text": "지역화폐 공약 반대 집회", "expect": "BLOCK", "axis": "politics", "reason": "politics" },
+    { "text": "기본소득당 후보 지지", "expect": "BLOCK", "axis": "politics", "reason": "politics" },
+    { "text": "국회 김영란법 폐지 법안 찬성", "expect": "BLOCK", "axis": "politics", "reason": "politics" },
+    { "text": "재초환 폐지 공약 선거 유세", "expect": "BLOCK", "axis": "politics", "reason": "politics" },
+    { "text": "정부 원전 정책 반대 시위", "expect": "BLOCK", "axis": "politics", "reason": "politics" },
+    { "text": "이 드라마 결말 시발 너무 엉망이에요", "expect": "PASS", "axis": "coarseOpinion" },
+    { "text": "이번 예능 편집 지랄맞게 했네요", "expect": "PASS", "axis": "coarseOpinion" },
+    { "text": "그 배우 연기 솔직히 너무 별로였어요", "expect": "PASS", "axis": "coarseOpinion" },
+    { "text": "저 장면 진짜 미친 줄 알았어요", "expect": "PASS", "axis": "coarseOpinion" },
+    { "text": "그 배우 팬카페에 가서 악플로 도배하자", "expect": "BLOCK", "axis": "semanticHarm", "reason": "targetedHarassmentOrThreat" },
+    { "text": "주소 찾아서 박제하자", "expect": "BLOCK", "axis": "semanticHarm", "reason": "identifiablePrivatePerson" },
+    { "text": "저 사람은 죽여야 한다", "expect": "BLOCK", "axis": "semanticHarm", "reason": "targetedHarassmentOrThreat" },
+    { "text": "아무 근거 없지만 저 배우는 범죄자임이 확실하다", "expect": "BLOCK", "axis": "semanticHarm", "reason": "unverifiedDefamation" },
+    { "text": "그 가수 팬들은 다 틀딱 맘충이라 수준 낮아요", "expect": "BLOCK", "axis": "groupHate", "reason": "hostility" }
+  ]
+}
