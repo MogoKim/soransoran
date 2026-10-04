@@ -1,5 +1,8 @@
 # Persona 2차 확장 runbook — P01 · P02 · P11
 
+> 📜 **역사 runbook — 현재 Persona 확장 정책·상태 정본이 아니다.** 현재 권위와 상태는
+> [`README.md`](./README.md)가 가리키는 네 문서와 main/runtime 실측이 정한다.
+>
 > 선행: [Pool 설계](2026-08-30-persona-pool-design.md) · [DB 모델](2026-08-31-persona-db-model-design.md) ·
 > [MVP 활성화](2026-08-30-persona-mvp-activation-design.md)
 >

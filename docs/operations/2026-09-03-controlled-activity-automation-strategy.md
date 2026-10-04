@@ -5,11 +5,10 @@
 > 사람이 여는 단계 승격은 canon §5 대화·§6 자동 사다리로 대체됐다.
 > 이 문서의 결정·사고·실측은 역사 증거로 남기지만 현재 정책에 투표하지 않는다.
 
-> **전체 현재 상태와 실행 우선순위**: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
-> 이 문서는 속도·안전 전략의 상세 정본이다. 날짜가 붙은 DB 수치와 구현 상태는 역사 스냅샷이며,
-> 현재값은 Master와 main/DB/workflow 실측을 따른다.
+> 현재 목적·정책·상태는 [`README.md`](./README.md)가 가리키는 네 권위 문서만 정한다.
+> 이 문서는 당시 속도·안전 전략과 사고를 보존하는 역사 문서이며 현재값과 우선순위를 정하지 않는다.
 >
-> **이 문서의 역할**: **완전 자동화까지 가는 속도 전략 · 안정성 가드 · cap ladder · PR 마일스톤**의 단일 진실.
+> **이 문서의 역할**: 당시의 속도 전략 · 안정성 가드 · cap ladder · PR 마일스톤 기록.
 > 상위: [헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) · [Persona Network 전략](2026-08-29-persona-network-strategy.md) ·
 > [Persona 아키텍처](2026-08-30-persona-architecture-design.md) · [Original Post 레인 정본](2026-09-02-original-post-lane-strategy.md)
 >
@@ -18,7 +17,7 @@
 > 그 결과 속도 결정이 매번 세션 안에서 즉흥적으로 났고, 실제로 이미 구현된 것을
 > "미착수"로 읽어 다시 만들 뻔한 일이 생겼다.
 >
-> 🔴 **실측이 정본이다.** 이 문서와 코드·DB 가 어긋나면 실측을 믿고 이 문서를 고친다.
+> 🔴 이 문서와 현재 권위 문서가 어긋나면 권위 문서가 이긴다. 실측은 `CURRENT-MILESTONE.md`에만 반영한다.
 
 ---
 

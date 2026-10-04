@@ -1,6 +1,6 @@
 # 발행 스케줄러 — 예약이 늦거나 빠져도 그날이 비지 않게 한다
 
-> 📜 **HISTORICAL — 2026-09-30 정책 대체 표시.** 현재 정책은 [`README.md`](./README.md) 가 가리키는 권위 문서,
+> 📜 **역사 문서 · HISTORICAL — 2026-09-30 정책 대체 표시.** 현재 정책은 [`README.md`](./README.md) 가 가리키는 권위 문서,
 > 특히 [D100 canon](./2026-09-21-d100-goal-canon.md) §6 이 정한다. 이 문서의 "정본 env"(`SORAN_CAPACITY_STAGE` ·
 > `SORAN_RELEASE_STAGE`) · GitHub Actions 예약으로 단계와 발행 회차를 설명하는 부분은 **당시 동작의 기록**이다 —
 > 목표 상태는 `StageDecision` 행 하나가 단계를, launchd 하나가 자동 일정을 소유한다(구현 중 · 미배포).
@@ -9,8 +9,8 @@
 > 🔴 **제목이 "정시" 를 약속하지 않는다.** 이 PR 이 만든 것은 **catch-up** 이고,
 > 정시성은 트리거의 성질이다 — §6-a·§6-b 가 어디까지 되고 어디부터 안 되는지 적는다.
 
-> 🔴 이 문서는 **현재 동작**을 적는다. 숫자는 [`MASTER-OPERATING-SYSTEM.md`](MASTER-OPERATING-SYSTEM.md) §6.2 가 정본이고
-> 여기서 복제하지 않는다.
+> 🔴 이 문서는 **2026-09-14 당시 동작**을 적는다. 현재 구현·배포·운영 상태는
+> [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md)와 runtime 실측이 정하며, 여기서 복제하지 않는다.
 
 ## 1. 무엇이 깨졌나 — 실측
 

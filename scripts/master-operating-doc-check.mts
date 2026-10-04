@@ -19,12 +19,20 @@ const INDEX = 'docs/operations/README.md'
 const NORTH_STAR = 'docs/operations/NORTH-STAR.md'
 const D100_GOAL = 'docs/operations/2026-09-21-d100-goal-canon.md'
 const CURRENT = 'docs/operations/CURRENT-MILESTONE.md'
+const HISTORICAL_ORIGINAL = 'docs/operations/2026-09-02-original-post-lane-strategy.md'
+const HISTORICAL_AUTOMATION = 'docs/operations/2026-09-03-controlled-activity-automation-strategy.md'
+const HISTORICAL_MILESTONES = 'docs/operations/2026-08-26-soransoran-milestones.md'
+const HISTORICAL_SCHEDULER = 'docs/operations/2026-09-14-reliable-publish-scheduler.md'
 
 const master = readFileSync(MASTER, 'utf8')
 const index = readFileSync(INDEX, 'utf8')
 const northStar = readFileSync(NORTH_STAR, 'utf8')
 const d100Goal = readFileSync(D100_GOAL, 'utf8')
 const current = readFileSync(CURRENT, 'utf8')
+const historicalOriginal = readFileSync(HISTORICAL_ORIGINAL, 'utf8')
+const historicalAutomation = readFileSync(HISTORICAL_AUTOMATION, 'utf8')
+const historicalMilestones = readFileSync(HISTORICAL_MILESTONES, 'utf8')
+const historicalScheduler = readFileSync(HISTORICAL_SCHEDULER, 'utf8')
 
 /**
  * 🔴 **역사 표시를 뺀 "지금 이렇다" 는 주장만 남긴다** (2026-09-30).
@@ -170,7 +178,7 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     ['designed', 'qualification-pending', 'contract-valid reserve', 'stage-active',
       '이름이나 active 행은 용량이 아니다'].every((t) => d100Goal.includes(t))])
   // ⑤ 새 정책마다 제거한 옛 경로
-  const legacy = sectionIn(d100Goal, '## 10. 제거·대체한 옛 경로', '\n### ')
+  const legacy = sectionIn(d100Goal, '## 11. 제거·대체한 옛 경로', '\n### ')
   const cells = legacy.split('\n')
     .filter((l) => l.startsWith('| ') && !l.startsWith('| 새 정책') && !l.startsWith('|---'))
     .map((l) => l.split('|').map((c) => c.trim()))
@@ -195,6 +203,20 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['MASTER 30% ratio 기본 상한 문단은 역사 절 안에만 있다',
     master.includes('Persona 댓글은 전체 댓글의 30% 이하를 기본 안전 상한으로 한다')
     && !activeTextOf(master).includes('전체 댓글의 30% 이하를 기본 안전 상한')])
+  // ⑦ 날짜 문서는 현재 권위를 자처하지 않는다
+  out.push(['README 가 날짜 문서를 D100 canon 외에는 역사로 한정한다',
+    index.includes('파일명에 날짜가 붙은 문서는 아래 표에서')
+    && index.includes('D100 canon 하나를 제외하면 제품 정책·현재 상태 기준에서는 전부 역사 자료다')])
+  for (const [file, body] of [
+    [HISTORICAL_ORIGINAL, historicalOriginal],
+    [HISTORICAL_AUTOMATION, historicalAutomation],
+    [HISTORICAL_MILESTONES, historicalMilestones],
+    [HISTORICAL_SCHEDULER, historicalScheduler],
+  ] as const) {
+    out.push([`${file} 가 역사 문서이며 현재 정책에 투표하지 않는다고 밝힌다`,
+      body.slice(0, 1200).includes('역사 문서')
+      && body.slice(0, 1200).includes('현재 정책에 투표하지 않는다')])
+  }
   return out
 }
 
@@ -256,8 +278,26 @@ check('D100 목표가 Persona 다양성과 지속 용량을 단계 계약에 포
   d100Goal.includes('Persona 확장 계약') && d100Goal.includes('계약 유효 화자'))
 check('D100 목표가 canary 운영 하한과 지속 다양성 300명을 구분한다',
   d100Goal.includes('자동 canary를 실행할 **운영 하한**')
-  && /\| D100 \| 100 \| 120 \| 382 \| 180 \| \*\*300\+\*\* \| 100~500 \|/.test(d100Goal)
+  && /\| D100 \| 100 \| 180 \| \*\*300\+\*\* \| 100 \| reply-worthiness 실측 \|/.test(d100Goal)
   && /300명은 상한이\s*아니라 첫 지속 운영 목표/.test(d100Goal))
+check('D100 목표가 고정 20% READY 할증과 상세 원천 고정 환산을 폐기한다',
+  d100Goal.includes('보충량은 고정 할증이 아니라 실측이다')
+  && d100Goal.includes('근거 없는 20%를 영구 gate로 만들지 않는다')
+  && d100Goal.includes('READY 생산량과 상세 원천 필요량은 §3.1의 실측 보충 계약으로 계산한다')
+  && !d100Goal.includes('| 단계 | 공개 글/day | READY/day | 상세 원천/day |'))
+check('D100 목표가 정치 선동과 연예·방송·셀럽을 분리한다',
+  d100Goal.includes('정치와 공개 인물을 한 필터로 묶지 않는다')
+  && d100Goal.includes('연예인·배우·가수·방송인·셀럽')
+  && d100Goal.includes('정치적 조직화·선동과 생활 이야기를 문맥으로 분리한다'))
+check('D100 목표가 첫 댓글 증명과 선택적 실제 대화량을 구분한다',
+  d100Goal.includes('첫 댓글 1건은 증명용 하한')
+  && d100Goal.includes('글마다 대화량을 똑같이 맞추지 않는다'))
+check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
+  d100Goal.includes('홈·베스트는 실회원 반응을 우선한다')
+  && d100Goal.includes('Persona 댓글 수를 실회원 인기처럼 합산해 홈 순위를 올리지 않는다'))
+check('D100 목표가 M0~M7을 날짜가 아니라 완료 증거로 정의한다',
+  d100Goal.includes('마일스톤 — 날짜가 아니라 증거로 이동한다')
+  && Array.from({ length: 8 }, (_, i) => `| M${i} |`).every((t) => d100Goal.includes(t)))
 check('D100 목표가 단계 PASS 직후 다음 자동 canary를 연다',
   d100Goal.includes('같은 날 남은 유효 슬롯')
   && d100Goal.includes('다음 KST 운영일의 첫 유효 슬롯')
@@ -731,7 +771,7 @@ const historicalDocs = [
 
 for (const file of historicalDocs) {
   const body = readFileSync(file, 'utf8').slice(0, 1_200)
-  check(`${file}가 현재 Master를 안내한다`, body.includes('MASTER-OPERATING-SYSTEM.md'))
+  check(`${file}가 현재 권위 인덱스를 안내한다`, body.includes('(./README.md)'))
 }
 
 /**
@@ -1149,7 +1189,7 @@ check('🔴 D100 정책 정본과 현재 구현 보고를 구분한다',
   d100Goal.includes('정책 목표는 이 문서가 정본')
   && d100Goal.includes('현재 구현과 운영이 정본에서 얼마나 떨어졌는지')
   && d100Goal.includes('이 문서는 **현재 상태를 적지 않는다.**')
-  && /\| D100 \| 100 \| 120 \| 382 \| 180 \| \*\*300\+\*\* \| 100~500 \|/.test(d100Goal))
+  && /\| D100 \| 100 \| 180 \| \*\*300\+\*\* \| 100 \| reply-worthiness 실측 \|/.test(d100Goal))
 
 /**
  * ══ 🔴 하나의 루프 — 권위 문서 재정렬 (2026-09-30 창업자 재동기화) ══

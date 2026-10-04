@@ -6,8 +6,8 @@
 > 대체됐다. 재사용할 설계 자산은 그대로 둔다.
 > 이 문서의 결정·사고·실측은 역사 증거로 남기지만 현재 정책에 투표하지 않는다.
 
-> 작성 2026-08-29 · 상태 **방향 확정 · 구현 부분 완료**
-> 현재 구현·운영 상태: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
+> 작성 2026-08-29 · 상태 **역사 문서 · 당시 방향 확정 · 구현 부분 완료**
+> 현재 권위와 상태: [`README.md`](./README.md)가 가리키는 네 문서
 > 이 문서의 인원·DB 숫자·`없음` 표시는 작성 당시 스냅샷이다.
 > 선행: [VE-M3 학습 후보 선별 정책](2026-08-29-voice-m3-learning-policy.md) · [export 설계](2026-08-29-voice-m3-export-design.md)
 > 상위: [Micro Seed Lane 헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) §12 마일스톤 **M4 Persona OS**

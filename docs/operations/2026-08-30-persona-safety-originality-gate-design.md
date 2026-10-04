@@ -1,7 +1,8 @@
 # Persona Safety / Originality Gate 설계
 
-> 작성 2026-08-30 · 상태 **설계 확정 · 주요 Gate 구현 완료**
-> 현재 구현·운영 상태: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
+> 📜 **역사 문서 — 현재 정책에 투표하지 않는다.** 현재 권위와 상태는
+> [`README.md`](./README.md)가 가리키는 네 문서가 정한다.
+> 작성 2026-08-30 · 상태 **당시 설계 확정 · 주요 Gate 구현 완료**
 > 선행: [Persona Architecture 설계](2026-08-30-persona-architecture-design.md) · [Persona Network 전략](2026-08-29-persona-network-strategy.md)
 > 상위: [Micro Seed Lane 헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) §9-7 문장 지문 중복률
 
