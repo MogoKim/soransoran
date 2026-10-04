@@ -86,20 +86,23 @@ export function trackedSnapshot(paths) {
   }))
 }
 
-export function restoreSnapshot(snap) {
+export function restoreSnapshot(snap, { writeFile = writeFileSync, remove = rmSync } = {}) {
   const restored = []
+  const failures = []
   for (const f of snap) {
     try {
       const now = existsSync(f.path) ? readFileSync(f.path) : null
       if (f.existed) {
-        if (!now || !now.equals(f.bytes)) { writeFileSync(f.path, f.bytes); restored.push(f.path) }
+        if (!now || !now.equals(f.bytes)) { writeFile(f.path, f.bytes); restored.push(f.path) }
       } else if (now && !f.keepIfCreated) {
         // 🔴 추적 파일인데 스냅샷 시점에 없었다 = 이 회차가 만들었다. 지운다.
-        rmSync(f.path, { force: true }); restored.push(f.path)
+        remove(f.path, { force: true }); restored.push(f.path)
       }
-    } catch { /* 되돌리기 실패가 회차 판정을 뒤집지 않는다 — 아래에서 보고만 한다 */ }
+    } catch (error) {
+      failures.push({ path: f.path, errorName: error?.name ?? 'Error', errorDetail: error?.message ?? String(error) })
+    }
   }
-  return restored
+  return { restored, failures }
 }
 
 /**
@@ -133,6 +136,150 @@ export function atomicWrite(path, data) {
   }
 }
 
+const REGEN_TRANSACTION_VERSION = 1
+
+function regenTransactionFiles({ slug, draftMd, articleTs, id = randomUUID() }) {
+  const journalPath = join(dirname(draftMd), `.regen-apply-${slug}.json`)
+  return {
+    id,
+    journalPath,
+    draft: {
+      path: draftMd,
+      existed: existsSync(draftMd),
+      backup: `${draftMd}.regen-backup-${id}`,
+      staged: `${draftMd}.regen-staged-${id}`,
+    },
+    article: {
+      path: articleTs,
+      existed: existsSync(articleTs),
+      backup: `${articleTs}.regen-backup-${id}`,
+      staged: `${articleTs}.regen-staged-${id}`,
+    },
+  }
+}
+
+function cleanupTransactionFiles(tx, { keepJournal = false } = {}) {
+  const failures = []
+  for (const path of [tx?.draft?.backup, tx?.article?.backup, tx?.draft?.staged, tx?.article?.staged]) {
+    if (!path) continue
+    try { rmSync(path, { force: true }) } catch (error) { failures.push(`${path}: ${error.message}`) }
+  }
+  if (!keepJournal && failures.length === 0 && tx?.journalPath) {
+    try { rmSync(tx.journalPath, { force: true }) } catch (error) { failures.push(`${tx.journalPath}: ${error.message}`) }
+  }
+  return failures
+}
+
+function writeRegenTransaction(tx) {
+  atomicWrite(tx.journalPath, `${JSON.stringify(tx, null, 2)}\n`)
+}
+
+function prepareRegenTransaction({ slug, draftMd, articleTs, phaseHook = () => {} }) {
+  const tx = { version: REGEN_TRANSACTION_VERSION, slug, phase: 'initializing',
+    ...regenTransactionFiles({ slug, draftMd, articleTs }) }
+  try {
+    // 저널을 가장 먼저 남긴다. 사본 작성 중 급사해도 다음 실행이 고유 파일을 정리할 수 있다.
+    writeRegenTransaction(tx)
+    phaseHook(tx.phase, tx)
+    if (tx.draft.existed) writeFileSync(tx.draft.backup, readFileSync(draftMd), { flag: 'wx' })
+    if (tx.article.existed) writeFileSync(tx.article.backup, readFileSync(articleTs), { flag: 'wx' })
+    tx.phase = 'converting'
+    writeRegenTransaction(tx)
+    phaseHook(tx.phase, tx)
+    return { ok: true, tx }
+  } catch (error) {
+    const cleanupFailures = cleanupTransactionFiles(tx)
+    return { ok: false, code: 'REGEN_TRANSACTION_PREPARE_FAILED',
+      why: `재생성 교체 준비에 실패했다: ${error.message}${cleanupFailures.length ? ` · 정리 실패: ${cleanupFailures.join(' | ')}` : ''}` }
+  }
+}
+
+/**
+ * 재생성 원고·변환본 교체 중 프로세스가 죽었으면 다음 실행이 먼저 둘을 원복한다.
+ * 저널을 읽거나 원복할 수 없으면 자동 진행하지 않는다.
+ */
+export function recoverRegenTransaction({ slug, draftMd, articleTs }) {
+  const { journalPath } = regenTransactionFiles({ slug, draftMd, articleTs, id: 'lookup' })
+  if (!existsSync(journalPath)) return { ok: true, recovered: false }
+
+  let tx
+  try {
+    tx = JSON.parse(readFileSync(journalPath, 'utf8'))
+  } catch (error) {
+    return { ok: false, code: 'REGEN_TRANSACTION_CORRUPT', why: `재생성 교체 저널을 읽지 못했다: ${error.message}` }
+  }
+  if (tx?.version !== REGEN_TRANSACTION_VERSION || tx?.slug !== slug
+    || resolve(tx?.draft?.path ?? '') !== resolve(draftMd)
+    || resolve(tx?.article?.path ?? '') !== resolve(articleTs)) {
+    return { ok: false, code: 'REGEN_TRANSACTION_IDENTITY', why: '재생성 교체 저널의 버전·slug·경로가 현재 작업과 다르다' }
+  }
+  if (!['initializing', 'converting', 'prepared', 'draft-committed', 'committed'].includes(tx.phase)) {
+    return { ok: false, code: 'REGEN_TRANSACTION_PHASE', why: `재생성 교체 저널의 단계를 알 수 없다: ${tx.phase}` }
+  }
+
+  try {
+    // initializing 단계에서는 아직 정본을 바꾸지 않았다. 사본이 덜 만들어졌을 수 있으므로 정리만 한다.
+    if (tx.phase !== 'committed' && tx.phase !== 'initializing') {
+      for (const file of [tx.draft, tx.article]) {
+        if (file.existed) {
+          if (!existsSync(file.backup)) throw new Error(`원복 사본이 없다: ${file.backup}`)
+          const bytes = readFileSync(file.backup)
+          atomicWrite(file.path, bytes)
+          if (!readFileSync(file.path).equals(bytes)) throw new Error(`원복 후 바이트가 다르다: ${file.path}`)
+        } else {
+          rmSync(file.path, { force: true })
+          if (existsSync(file.path)) throw new Error(`새 파일을 지우지 못했다: ${file.path}`)
+        }
+      }
+    }
+    const cleanupFailures = cleanupTransactionFiles(tx)
+    if (cleanupFailures.length) throw new Error(cleanupFailures.join(' | '))
+    return { ok: true, recovered: tx.phase !== 'committed', phase: tx.phase }
+  } catch (error) {
+    return { ok: false, code: 'REGEN_TRANSACTION_RECOVERY_FAILED', why: `재생성 교체 원복에 실패했다: ${error.message}` }
+  }
+}
+
+function commitRegenPair({ tx, draftText, articleText,
+  renameFn = renameSync, phaseHook = () => {} }) {
+  const { slug } = tx
+  const draftMd = tx.draft.path
+  const articleTs = tx.article.path
+
+  try {
+    writeFileSync(tx.draft.staged, draftText, { flag: 'wx' })
+    writeFileSync(tx.article.staged, articleText)
+    tx.phase = 'prepared'
+    writeRegenTransaction(tx)
+
+    renameFn(tx.draft.staged, draftMd)
+    tx.phase = 'draft-committed'
+    writeRegenTransaction(tx)
+    phaseHook(tx.phase, tx)
+
+    renameFn(tx.article.staged, articleTs)
+    tx.phase = 'committed'
+    writeRegenTransaction(tx)
+    phaseHook(tx.phase, tx)
+
+    const cleanupFailures = cleanupTransactionFiles(tx)
+    if (cleanupFailures.length) {
+      return { ok: false, code: 'REGEN_TRANSACTION_CLEANUP_FAILED',
+        why: `교체는 완료했지만 저널·사본을 정리하지 못했다: ${cleanupFailures.join(' | ')}` }
+    }
+    return { ok: true }
+  } catch (error) {
+    const recovered = recoverRegenTransaction({ slug, draftMd, articleTs })
+    if (!existsSync(tx.journalPath)) cleanupTransactionFiles(tx)
+    if (!recovered.ok) {
+      return { ok: false, code: 'REGEN_TRANSACTION_RECOVERY_FAILED',
+        why: `교체 실패(${error.message}) 후 원복도 실패했다: ${recovered.why}` }
+    }
+    return { ok: false, code: 'REGEN_COMMIT_FAILED',
+      why: `재생성 원고·변환본 교체에 실패해 둘 다 원복했다: ${error.message}` }
+  }
+}
+
 /** article-draft.ts 의 heroImage 연결 — 없으면 null */
 export function heroLinkOf(src) {
   const m = /^\s*heroImage:\s*\{[\s\S]*?\balt:\s*'((?:[^'\\]|\\.)*)'/m.exec(String(src ?? ''))
@@ -151,7 +298,9 @@ export function heroLinkOf(src) {
  *    ④ draft.md → article-draft.ts 순서로 각각 원자적으로 바꾼다
  */
 export function applyRegenCandidate({ slug, candidatePath, draftMd, articleTs, runFn = run,
-  verifyHero = () => verifyHeroFile(slug) }) {
+  verifyHero = () => verifyHeroFile(slug), renameFn = renameSync, phaseHook = () => {} }) {
+  const recovery = recoverRegenTransaction({ slug, draftMd, articleTs })
+  if (!recovery.ok) return recovery
   if (!existsSync(candidatePath)) {
     return { ok: false, code: 'REGEN_CANDIDATE_MISSING', why: '재생성 원고 임시 파일이 없다 — 원본을 바꾸지 않는다' }
   }
@@ -161,26 +310,34 @@ export function applyRegenCandidate({ slug, candidatePath, draftMd, articleTs, r
     return { ok: false, code: 'REGEN_CANDIDATE_INVALID', reasons: v.reasons.map((r) => r.code),
       why: `재생성 원고를 받을 수 없다 — ${describeReasons(v.reasons)} (원본 유지)` }
   }
-  const tmpArticle = `${articleTs}.regen-${process.pid}-${randomUUID()}.tmp`
+  const prepared = prepareRegenTransaction({ slug, draftMd, articleTs, phaseHook })
+  if (!prepared.ok) return prepared
+  const { tx } = prepared
+  const abort = (result) => {
+    const recovered = recoverRegenTransaction({ slug, draftMd, articleTs })
+    if (!recovered.ok) return recovered
+    return result
+  }
   try {
-    const c = runFn(MD2DRAFT, ['--in', candidatePath, '--out', tmpArticle])
-    if (c.code !== 0 || !existsSync(tmpArticle)) {
-      return { ok: false, code: 'CONVERT_FAILED', why: `${meaningfulLine(c.stderr || c.stdout)} (재생성 원고 변환 실패 · 원본 유지)` }
+    const c = runFn(MD2DRAFT, ['--in', candidatePath, '--out', tx.article.staged])
+    if (c.code !== 0 || !existsSync(tx.article.staged)) {
+      return abort({ ok: false, code: 'CONVERT_FAILED', why: `${meaningfulLine(c.stderr || c.stdout)} (재생성 원고 변환 실패 · 원본 유지)` })
     }
-    let article = readFileSync(tmpArticle, 'utf8')
+    let article = readFileSync(tx.article.staged, 'utf8')
     const link = existsSync(articleTs) ? heroLinkOf(readFileSync(articleTs, 'utf8')) : null
     let heroCarried = false
     if (link && verifyHero().ok) {
       const inj = injectHeroImage(article, slug, link.alt)
-      if (!inj.ok) return { ok: false, code: 'HERO_RELINK_FAILED', why: `${inj.why} (원본 유지)` }
+      if (!inj.ok) return abort({ ok: false, code: 'HERO_RELINK_FAILED', why: `${inj.why} (원본 유지)` })
       article = inj.text
       heroCarried = true
     }
-    atomicWrite(draftMd, text)
-    atomicWrite(articleTs, article)
-    return { ok: true, heroCarried }
+    const committed = commitRegenPair({ tx, draftText: text, articleText: article,
+      renameFn, phaseHook })
+    if (!committed.ok) return committed
+    return { ok: true, heroCarried, recovered: recovery.recovered }
   } finally {
-    rmSync(tmpArticle, { force: true })
+    rmSync(tx.article.staged, { force: true })
   }
 }
 
@@ -368,10 +525,15 @@ export function drive(slug, opts, deps = {}) {
     ...(lastQaFailures.length ? { qaFailures: lastQaFailures } : {}),
   })
   const rollback = () => {
-    if (!write || (!snapshot.length && !own.length)) return []
-    const r = [...restoreSnapshot(snapshot), ...restoreSnapshot(own)]
-    if (r.length) add('rollback', 'ok', `등록 전 중간 변경 ${r.length}건 원상복구: ${r.map((x) => x.split('/').pop()).join(', ')}`)
-    return r
+    if (!write || (!snapshot.length && !own.length)) return { restored: [], failures: [] }
+    const restore = deps.restoreSnapshot ?? restoreSnapshot
+    const a = restore(snapshot)
+    const b = restore(own)
+    const restored = [...a.restored, ...b.restored]
+    const failures = [...a.failures, ...b.failures]
+    if (restored.length) add('rollback', 'ok', `등록 전 중간 변경 ${restored.length}건 원상복구: ${restored.map((x) => x.split('/').pop()).join(', ')}`)
+    if (failures.length) add('rollback', 'blocked', `원상복구 ${failures.length}건 실패: ${failures.map((x) => `${x.path.split('/').pop()} ${x.errorName}: ${x.errorDetail}`).join(' | ')}`)
+    return { restored, failures }
   }
   /**
    * 🔴 **`sent` 를 장부까지 들고 간다** (2026-09-28 · Codex 재검토 3번).
@@ -390,7 +552,12 @@ export function drive(slug, opts, deps = {}) {
   const stop = (stage, code, message) => {
     blockedBy.push({ code, message })
     add(stage, 'blocked', message)
-    rollback()
+    const rolledBack = rollback()
+    if (rolledBack.failures.length) {
+      failClosed = true
+      blockedBy.push({ code: 'ROLLBACK_FAILED',
+        message: `[인프라] 등록 전 변경을 원상복구하지 못했다: ${rolledBack.failures.map((x) => `${x.path}: ${x.errorName}: ${x.errorDetail}`).join(' | ')}` })
+    }
     return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, ...evidence(),
       ...(lastSent !== undefined ? { sent: lastSent } : {}),
       ...(held ? { held: true } : {}), ...(failClosed ? { failClosed: true } : {}) }
@@ -409,6 +576,14 @@ export function drive(slug, opts, deps = {}) {
   // 🔴 경로도 주입점이다 — 시험이 실제 파일로 원복·교체를 확인하기 위한 자리 (운영은 저장소 경로 그대로)
   const p = (deps.paths ?? paths)(slug)
   const heroFile = (deps.heroFilePath ?? heroFilePath)(slug)
+  if (write) {
+    const recovered = recoverRegenTransaction({ slug, draftMd: p.draftMd, articleTs: p.articleTs })
+    if (!recovered.ok) {
+      failClosed = true
+      return stop('recovery', recovered.code, `[INFRA] ${recovered.why}`)
+    }
+    if (recovered.recovered) add('recovery', 'ok', '급사한 재생성 교체를 원복한 뒤 진행')
+  }
   /**
    * 🔴 **손대기 전에 찍는다.** 이 후보가 바꿀 수 있는 추적 파일을 전부 담는다 —
    *    변환 산출물 · hero 이미지 · 회수된 원고 · **등록 대상 두 파일**.

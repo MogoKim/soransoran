@@ -95,17 +95,15 @@ const unresolved = real.filter((i) => {
 expect('프로필을 못 정한 채 자동 레인을 통과한 행 0건', unresolved.length, 0)
 expect('실제 큐 26행 전부 프로필이 정해진다',
   real.filter((i) => !resolveValidationProfile(i).profile).length, 0)
-/**
- * 🔴 **큐 정본 제목이 제목 규칙에 어긋나면 자동 레인이 전송 전에 막는다** (2026-10-02).
- *    실제 큐를 그대로 돌린다 — 위반 행은 전부 QUEUE_TITLE_FORM, 나머지는 전부 통과다.
- *    위반 행 수에 기대지 않는다 (큐 제목을 고치면 0이 되는 것이 정상이다).
- */
+/** 큐 작업 제목은 말미 어미가 아니라 구체성·길이·임시 값을 본다 (2026-10-04). */
 {
   const bad = real.filter((i) => checkTitleForm(i.title).level)
-  expect('🔴 실제 큐 — 제목 규칙 위반 행은 전부 QUEUE_TITLE_FORM 으로 막힌다',
-    bad.filter((i) => isAutoLaneEligible(i).code !== 'QUEUE_TITLE_FORM').map((i) => i.slug), [])
-  expect('🔴 실제 큐 — 제목이 맞는 행은 제목 때문에 막히지 않는다',
-    real.filter((i) => !checkTitleForm(i.title).level && isAutoLaneEligible(i).code === 'QUEUE_TITLE_FORM').map((i) => i.slug), [])
+  expect('🔴 실제 승인 큐 — 말미가 다른 COMMUNITY·SEASONAL 제목도 영구 차단하지 않는다',
+    bad.map((i) => i.slug), [])
+  expect('🔴 임시 제목은 QUEUE_TITLE_FORM 으로 전송 전 막힌다',
+    isAutoLaneEligible({ ...real[0], title: '오늘의 이야기입니다' }).code, 'QUEUE_TITLE_FORM')
+  expect('자연스러운 질문 `무엇일까`는 질문형으로 통과',
+    checkTitleForm('갱년기에 제일 힘든 건 무엇일까').level, null)
 }
 
 // ─────────────────────────────────────────────────────────

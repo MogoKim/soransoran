@@ -5519,7 +5519,7 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
   const WEB45 = await import('./magazine-webui-runner.mjs')
   const RG45 = await import('./lib/magazine-regen.mjs')
   const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-45-'))
-  const TITLE_FAIL = '  ✗ FAIL  [qa · SCHEDULED ] 제목이 검색 질의 형태가 아니다 — 질문형(~나요·~까요·~한가요) 또는 상황형(~때·~이유·~것) 으로 쓴다. 검색해서 들어오는 글이다'
+  const CONTENT_FAIL = '  ✗ FAIL  [qa · SCHEDULED ] 독자가 실행할 수 있는 판단 기준이 없다'
   /** 실제 brief 형식 — frontmatter · 정본 섹션 소제목 · CTA 까지 갖췄다 (cold-weather 실측과 같은 모양) */
   const ECHO = `---\ntitle: 날씨 쌀쌀해지면 무릎이 시린 이유\ndescription: 기온이 뚝 떨어지는 아침 무릎이 시린 이유를 우리 또래의 몸 변화와 함께 짚어봅니다\ncluster: menopause-symptom\nmedical: true\n---\n\n계단을 내려가려는데 무릎이 뻑뻑한 아침이 있습니다.\n\n${
     POLICY.REQUIRED_SECTIONS.map((h) => `## ${h}\n\n${'우리 또래가 같은 시기에 이런 말을 검색하고 이야기를 나눕니다. '.repeat(6)}\n`).join('\n')}\n[CTA] /community/menopause | 이야기 남기기 | 남겨 주세요\n`
@@ -5538,7 +5538,8 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
 
     /** drive 무대 — 원고·article·hero 는 실제 파일, 바깥 프로세스만 가짜 */
     const stage = (name, { qa, batch = () => ({ slug: SLUG, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [], reasons: [] }),
-      candidate = (n) => fakeManuscript(`재생성 ${n}`), convertFailOnCandidate = false, preHero = false, queue = FIXTURE_QUEUE } = {}) => {
+      candidate = (n) => fakeManuscript(`재생성 ${n}`), convertFailOnCandidate = false, preHero = false,
+      queue = FIXTURE_QUEUE, restoreSnapshotFn = null } = {}) => {
       const D = path.join(T, name)
       const L = path.join(D, 'q.json')
       const P = tempPaths(path.join(D, 'drafts'))(SLUG)
@@ -5551,6 +5552,7 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
         quarantinePath: L, loadQueue: () => queue, packetDir: path.join(D, 'pk'), candidateDir: path.join(D, 'cand'),
         paths: () => P, heroFilePath: () => heroFile, verifyHero: () => ({ ok: fs.existsSync(heroFile) }),
         firstFetchResult: null, progress: () => ({ hasDraftMd: true }),
+        ...(restoreSnapshotFn ? { restoreSnapshot: restoreSnapshotFn } : {}),
         run(file, args) {
           const nm = path.basename(String(file))
           if (nm === 'magazine-md-to-draft.mjs') {
@@ -5585,10 +5587,10 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
       const now = { draft: fs.readFileSync(P.draftMd), article: fs.readFileSync(P.articleTs), hero: fs.existsSync(heroFile) ? fs.readFileSync(heroFile) : null }
       return { r, P, C, before, now, same: (k) => same(before[k], now[k]), candLeft: fs.existsSync(path.join(D, 'cand')) ? fs.readdirSync(path.join(D, 'cand')) : [] }
     }
-    const QA_TITLE = () => ({ code: 1, stdout: `  검사 1건\n${TITLE_FAIL}\n  검사 1건 · FAIL 1 · WARN 3`, stderr: '', json: null })
+    const QA_CONTENT = () => ({ code: 1, stdout: `  검사 1건\n${CONTENT_FAIL}\n  검사 1건 · FAIL 1 · WARN 3`, stderr: '', json: null })
 
     // ── ①-b 재생성이 brief 를 돌려주면 원본은 한 바이트도 안 바뀐다 ──
-    const a = stage('echo', { qa: QA_TITLE, candidate: () => ECHO })
+    const a = stage('echo', { qa: QA_CONTENT, candidate: () => ECHO })
     check('🔴 ㊺ 재생성 응답이 brief 면 원고로 받지 않는다 (REGEN_CANDIDATE_INVALID · BRIEF_ECHO)',
       a.r.verdict === 'BLOCKED' && /REGEN_CANDIDATE_INVALID/.test(a.r.blockedBy[0]?.message) && /BRIEF_ECHO/.test(a.r.blockedBy[0]?.message),
       a.r.blockedBy[0]?.message?.slice(0, 160))
@@ -5597,16 +5599,16 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
     check('  ㊺ 재생성 임시 원고가 남지 않는다', a.candLeft.length === 0, a.candLeft.join(','))
 
     // ── ② dinner — 재생성 2회 소진 · 실제 QA 실패가 최상위에 · 원본 바이트 동일 ──
-    const b = stage('exhaust', { qa: QA_TITLE })
+    const b = stage('exhaust', { qa: QA_CONTENT })
     check('  ㊺ 재생성이 실제로 2회 반영됐다 (죽은 시험 아님)', b.C.runner === 2
       && (b.r.regenHistory ?? []).filter((h) => h.outcome === 'APPLIED').length === 2,
       `runner ${b.C.runner} · ${(b.r.regenHistory ?? []).map((h) => h.outcome).join(',')}`)
-    check('🔴 ㊺ 최종 결과에 실제 QA 실패(제목)가 남는다 — REGEN_EXHAUSTED 에 가려지지 않는다',
-      b.r.verdict === 'BLOCKED' && /제목이 검색 질의 형태가 아니다/.test(b.r.qaFailures?.[0] ?? '')
-        && /REGEN_EXHAUSTED/.test(b.r.blockedBy[0]?.message) && /실제 QA FAIL: 제목이 검색 질의 형태가 아니다/.test(b.r.blockedBy[0]?.message),
+    check('🔴 ㊺ 최종 결과에 실제 QA 실패가 남는다 — REGEN_EXHAUSTED 에 가려지지 않는다',
+      b.r.verdict === 'BLOCKED' && /판단 기준이 없다/.test(b.r.qaFailures?.[0] ?? '')
+        && /REGEN_EXHAUSTED/.test(b.r.blockedBy[0]?.message) && /실제 QA FAIL: .*?판단 기준이 없다/.test(b.r.blockedBy[0]?.message),
       b.r.blockedBy[0]?.message?.slice(0, 200))
     check('🔴 ㊺ 재생성마다 그때의 실제 실패 코드를 보존한다',
-      (b.r.regenHistory ?? []).length === 3 && b.r.regenHistory.every((h) => /제목이 검색 질의 형태가 아니다/.test(h.failures.join(' ')))
+      (b.r.regenHistory ?? []).length === 3 && b.r.regenHistory.every((h) => /판단 기준이 없다/.test(h.failures.join(' ')))
         && b.r.regenHistory[2].outcome === 'REGEN_EXHAUSTED',
       JSON.stringify((b.r.regenHistory ?? []).map((h) => [h.call, h.stage, h.outcome])))
     check('🔴 ㊺ 실패한 회차 뒤 기존 draft.md 바이트 동일 (재생성이 바꾼 원고를 되돌린다)', b.same('draft'))
@@ -5629,7 +5631,7 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
     check('🔴 ㊺ hero 이미지 호출은 처음 1회뿐 (재연결은 호출 0)', c.C.hero === 1, `hero ${c.C.hero}회`)
 
     // ── ④ 변환 실패 → draft · article · hero 전부 원복 ──
-    const d = stage('convert', { qa: QA_TITLE, convertFailOnCandidate: true, preHero: true })
+    const d = stage('convert', { qa: QA_CONTENT, convertFailOnCandidate: true, preHero: true })
     check('  ㊺ 재생성 원고 변환이 실제로 실패했다 (죽은 시험 아님)', /CONVERT_FAILED/.test(d.r.blockedBy[0]?.message ?? ''), d.r.blockedBy[0]?.message?.slice(0, 120))
     check('🔴 ㊺ 변환 실패 뒤 draft.md 바이트 동일', d.same('draft'))
     check('🔴 ㊺ 변환 실패 뒤 article-draft.ts (hero 연결 포함) 바이트 동일', d.same('article') && /heroImage:\s*\{/.test(d.now.article.toString('utf8')))
@@ -5671,21 +5673,93 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
       const f4 = AR45.applyRegenCandidate({ slug: SLUG, candidatePath: cand, draftMd, articleTs, runFn: conv(true), verifyHero: () => ({ ok: false }) })
       check('  ㊺ 교체 함수 — hero 파일이 유효하지 않으면 연결을 잇지 않는다 (batch 가 HERO 로 판정)',
         f4.ok && !f4.heroCarried && !/^\s*heroImage:\s*\{/m.test(fs.readFileSync(articleTs, 'utf8')))
-      check('  ㊺ 교체 함수 — 임시 article 이 남지 않는다', fs.readdirSync(D).every((f) => !/\.regen-.*\.tmp$|\.tmp-/.test(f)), fs.readdirSync(D).join(','))
+      b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      let renameCalls = 0
+      const f5 = AR45.applyRegenCandidate({
+        slug: SLUG, candidatePath: cand, draftMd, articleTs, runFn: conv(true), verifyHero: () => ({ ok: true }),
+        renameFn(from, to) {
+          renameCalls += 1
+          if (renameCalls === 2) throw new Error('둘째 교체 실패(시험)')
+          fs.renameSync(from, to)
+        },
+      })
+      check('🔴 ㊺ 둘째 파일 교체 실패 → draft·article 둘 다 원본 바이트로 원복',
+        f5.ok === false && f5.code === 'REGEN_COMMIT_FAILED' && same(b0), `${f5.code} · rename ${renameCalls}`)
+
+      b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      const moduleUrl = new URL('./magazine-auto-register.mjs', import.meta.url).href
+      const child = `
+        import fs from 'node:fs'
+        const { applyRegenCandidate } = await import(${JSON.stringify(moduleUrl)})
+        applyRegenCandidate({
+          slug: ${JSON.stringify(SLUG)}, candidatePath: ${JSON.stringify(cand)},
+          draftMd: ${JSON.stringify(draftMd)}, articleTs: ${JSON.stringify(articleTs)},
+          runFn(_file, args) {
+            fs.writeFileSync(args[args.indexOf('--out') + 1], ${JSON.stringify(fakeArticle('후보'))})
+            return { code: 0, stdout: '', stderr: '' }
+          },
+          verifyHero: () => ({ ok: false }),
+          phaseHook(phase) { if (phase === 'draft-committed') process.kill(process.pid, 'SIGKILL') },
+        })
+      `
+      const killed = nodeSpawnSync(process.execPath, ['--input-type=module', '-e', child], { encoding: 'utf8' })
+      check('  ㊺ 교체 중 자식을 실제 SIGKILL 했다 (죽은 시험 아님)', killed.signal === 'SIGKILL', `${killed.status}/${killed.signal}`)
+      check('  ㊺ SIGKILL 직후는 첫 파일만 바뀐 중간 상태다', !same(b0))
+      const recovered = AR45.recoverRegenTransaction({ slug: SLUG, draftMd, articleTs })
+      check('🔴 ㊺ 다음 실행의 저널 회복 → draft·article 원본 바이트 일치',
+        recovered.ok && recovered.recovered && same(b0), JSON.stringify(recovered))
+
+      b0 = reset()
+      fs.writeFileSync(cand, fakeManuscript('후보'))
+      const initChild = child.replace("phase === 'draft-committed'", "phase === 'initializing'")
+      const initKilled = nodeSpawnSync(process.execPath, ['--input-type=module', '-e', initChild], { encoding: 'utf8' })
+      check('  ㊺ 사본 준비 전 자식을 실제 SIGKILL 했다 (죽은 시험 아님)', initKilled.signal === 'SIGKILL', `${initKilled.status}/${initKilled.signal}`)
+      const initRecovered = AR45.recoverRegenTransaction({ slug: SLUG, draftMd, articleTs })
+      check('🔴 ㊺ 저널 직후 급사도 정본 불변 · 고유 파일 정리',
+        initRecovered.ok && initRecovered.recovered && same(b0), JSON.stringify(initRecovered))
+      check('  ㊺ 교체 함수 — 임시 article·저널·사본이 남지 않는다',
+        fs.readdirSync(D).every((f) => !/\.regen-|\.tmp-/.test(f)), fs.readdirSync(D).join(','))
     }
 
-    // ── ⑤ 제목 정본 계약 — 큐 제목이 규칙에 어긋나면 전송·재생성 전에 막는다 ──
-    const BAD = { ...FIXTURE_QUEUE[0], title: '저녁 식사를 바꿔 본 2주' }
+    // ── ⑤ 제목 계약 — 말미 어미가 아니라 실제 작업 제목인지 본다 ──
+    const accepted = [
+      '저녁 식사를 바꿔 본 2주', '갱년기에 운동을 다시 시작하며', '갱년기에 제일 힘든 건 무엇일까',
+      '자식한테는 말 못 하는 이야기', '연말이 되면 유독 허전한 마음', '몸이 예전 같지 않다고 느낀 순간',
+    ]
+    check('🔴 ㊺ 승인 큐 6건은 말미가 다르더라도 구체적인 작업 제목으로 통과',
+      accepted.every((title) => EDIT45.checkTitleForm(title).level === null
+        && isAutoLaneEligible({ ...FIXTURE_QUEUE[0], title }).ok),
+      accepted.filter((title) => EDIT45.checkTitleForm(title).level).join(' | '))
+    const BAD = { ...FIXTURE_QUEUE[0], title: '오늘의 이야기입니다' }
     const lane = isAutoLaneEligible(BAD)
-    check('🔴 ㊺ 큐 정본 제목이 제목 규칙 위반이면 자동 레인 QUEUE_TITLE_FORM', lane.ok === false && lane.code === 'QUEUE_TITLE_FORM', lane.code)
-    check('🔴 ㊺ 판정은 완화하지 않는다 — QA 의 같은 제목 FAIL 그대로', EDIT45.checkTitleForm(BAD.title).level === 'FAIL')
-    check('  ㊺ 규칙에 맞는 제목은 통과한다 (대조군)', isAutoLaneEligible({ ...BAD, title: '저녁 식사를 바꿔 본 2주, 무엇이 달라졌을까요' }).ok)
-    const e = stage('title', { qa: QA_TITLE, queue: [BAD, ...FIXTURE_QUEUE.slice(1)] })
-    check('🔴 ㊺ 제목 위반 후보는 gate 에서 멈춘다 — ChatGPT 재생성 0 · QA 0 · 변환 0',
+    check('🔴 ㊺ 임시 제목은 자동 레인 QUEUE_TITLE_FORM으로 전송 전 차단', lane.ok === false && lane.code === 'QUEUE_TITLE_FORM', lane.code)
+    const e = stage('title', { qa: QA_CONTENT, queue: [BAD, ...FIXTURE_QUEUE.slice(1)] })
+    check('🔴 ㊺ 임시 제목 후보는 gate 에서 멈춘다 — ChatGPT 재생성 0 · QA 0 · 변환 0',
       e.r.verdict === 'BLOCKED' && e.r.blockedBy.some((x) => x.code === 'QUEUE_TITLE_FORM') && e.C.runner === 0 && e.C.qa === 0 && e.C.convert === 0,
       `${e.r.blockedBy.map((x) => x.code).join(',')} · runner ${e.C.runner} · qa ${e.C.qa}`)
 
-    // ── ⑥ 재생성은 임시 경로 없이는 시작조차 하지 않는다 ──
+    // ── ⑥ 원복 실패는 숨기지 않고 회차를 fail-closed 한다 ──
+    const rollbackFile = path.join(T, 'rollback-write-failure.md')
+    fs.writeFileSync(rollbackFile, 'BEFORE')
+    const rollbackSnapshot = AR45.fileSnapshot([rollbackFile])
+    fs.writeFileSync(rollbackFile, 'AFTER')
+    const directRestore = AR45.restoreSnapshot(rollbackSnapshot, {
+      writeFile() { const error = new Error('쓰기 거부'); error.name = 'EACCES'; throw error },
+    })
+    check('🔴 ㊺ 실제 restoreSnapshot 쓰기 실패가 failures에 남는다 (삼키지 않는다)',
+      directRestore.restored.length === 0 && directRestore.failures.length === 1
+        && directRestore.failures[0].errorName === 'EACCES' && fs.readFileSync(rollbackFile, 'utf8') === 'AFTER',
+      JSON.stringify(directRestore))
+    const rf = stage('rollback-failure', { qa: QA_CONTENT,
+      restoreSnapshotFn: () => ({ restored: [], failures: [{ path: '/tmp/draft.md', errorName: 'EACCES', errorDetail: '쓰기 거부' }] }) })
+    check('🔴 ㊺ 원복 실패는 ROLLBACK_FAILED·failClosed로 최상위에 남는다',
+      rf.r.failClosed === true && rf.r.blockedBy.some((x) => x.code === 'ROLLBACK_FAILED')
+        && rf.r.steps.some((x) => x.stage === 'rollback' && x.status === 'blocked'),
+      JSON.stringify(rf.r.blockedBy))
+
+    // ── ⑦ 재생성은 임시 경로 없이는 시작조차 하지 않는다 ──
     let spawned = 0
     const w = AR45.webuiRegenRunner({ slug: SLUG, packetPath: '/tmp/x.json' }, { runFn: () => { spawned += 1; return { code: 0 } }, resultDir: T })
     check('🔴 ㊺ 임시 경로가 없으면 자식을 띄우지 않는다 (전송 0)', spawned === 0 && w.ok === false && w.sent === false && w.reason === 'REGEN_DRAFT_OUT_MISSING', w.reason)

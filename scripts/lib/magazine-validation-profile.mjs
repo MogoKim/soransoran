@@ -100,13 +100,10 @@ export function resolveValidationProfile(item) {
  * 🔴 **자동 진행 여부는 등급이 정하지 않는다.**
  *    프로필이 정해졌다면 자동 레인을 **탄다.** 못 나가는 이유는 결정론적 QA 실패뿐이다.
  *
- * 🔴 **제목은 큐가 정본이고, 제목 규칙은 `checkTitleForm` 하나가 정본이다** (2026-10-02 자연 회차).
- *    큐 제목은 producer 가 brief frontmatter 에 그대로 넣는다 — 원고는 그 제목을 바꿀 수 없다.
- *    그런데 같은 제목을 QA 가 `checkTitleForm` 으로 FAIL 했다. `dinner-change-two-weeks` 는
- *    그 FAIL 하나 때문에 재생성 2회(ChatGPT 전송 2건)를 쓰고도 통과할 수 없었다 — 재생성은
- *    큐가 정한 제목을 고칠 권한이 없다.
- *    그래서 **같은 함수를 큐 경계에서 먼저 적용한다.** 판정은 완화하지 않는다 — QA 의 FAIL 은
- *    그대로이고, 다만 고칠 수 없는 실패를 전송·재생성 **전에** 막는다. 고치는 곳은 큐 제목 하나다.
+ * 🔴 현재 M3 큐의 작업 제목은 brief frontmatter 로 전달된다.
+ *    전송 전에 `checkTitleForm` 으로 빈 값·임시 제목만 막고, 문장 끝 어미로
+ *    검색 의도를 추정하지 않는다. 제목과 본문이 같은 질문에 답하는지는 QA 의
+ *    `checkTitleBodyMatch` 가 본다 (2026-10-04).
  */
 export function isAutoLaneEligible(item) {
   const r = resolveValidationProfile(item)
@@ -114,7 +111,7 @@ export function isAutoLaneEligible(item) {
   const t = checkTitleForm(item?.title)
   if (t.level) {
     return { ok: false, code: 'QUEUE_TITLE_FORM', profile: r.profile,
-      why: `큐 정본 제목 "${item?.title ?? ''}" 이 제목 규칙에 맞지 않는다 — ${t.reason}. 재생성으로 고칠 수 없다 (제목은 큐가 정한다) — 큐 제목을 고쳐야 한다` }
+      why: `큐 작업 제목을 자동 제작에 넣을 수 없다 — ${t.reason}. 전송 전에 큐 제목을 구체화해야 한다` }
   }
   return { ok: true, profile: r.profile, source: r.source, why: r.why }
 }

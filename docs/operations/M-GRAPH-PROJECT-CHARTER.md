@@ -228,10 +228,11 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   지문이 바뀌면 기존 전송불명 HOLD 가 풀려 같은 요청이 다시 나간다.
 >   (2026-10-02: cold·autumn 은 brief 가 draft.md 를 덮은 채 남았고, hardest 는 batch 재생성이 heroImage 를 지워 HERO_MISSING 을
 >   자초했고, dinner 는 제목 FAIL 이 REGEN_EXHAUSTED 에 가려졌다.)
-> - 🔴 **큐 정본 제목도 제목 규칙(`checkTitleForm`) 하나를 따른다** — `isAutoLaneEligible` 이 큐 경계에서 같은 함수로 본다.
->   큐 제목은 brief frontmatter 로 그대로 내려가 원고·재생성이 바꿀 수 없으므로, 위반 행은 전송·재생성 전에 `QUEUE_TITLE_FORM`
->   으로 멈춘다(producer 선정·gate·register·batch·merge 모두 같은 판정). QA 의 FAIL 은 완화하지 않았다. 고치는 곳은 큐 제목 하나다.
->   (2026-10-02 실측: 큐 24행 중 6행 위반 — dinner·restart-exercise·hardest·things-not-told·year-end-loneliness·moment-body-changed.)
+> - 🔴 **큐의 작업 제목은 자동 제작에 넣을 최소 형식만 선행 검사한다** — `isAutoLaneEligible` 이
+>   `checkTitleForm` 으로 빈 값·지나치게 짧은 값·임시 제목을 전송 전에 `QUEUE_TITLE_FORM`으로 막는다.
+>   문장 끝 어미는 검색 의도의 증거가 아니다. `무엇일까` 같은 질문과 COMMUNITY·SEASONAL의 자연스러운
+>   주제형 제목을 특정 어미가 없다는 이유로 막지 않는다. 제목과 본문의 의미 일치는 QA `checkTitleBodyMatch`가 본다
+>   (2026-10-04: 말미 정규식이 승인 큐 6행과 dinner → restart-exercise 증명 경로를 영구 차단한 결함 제거).
 > - 🔴 **미해결 자동 작업 판정은 브랜치마다 PR 을 직접 조회한다** (`magazine-outstanding.mjs`). origin·local 자동 브랜치를
 >   먼저 읽고 각각 `gh pr list --state all --head <브랜치>` 로 본다. 최근 N건 전역 목록을 정본으로 쓰지 않는다
 >   (2026-09-30: `--limit 100` 창 밖으로 밀린 MERGED #524 를 PR 없는 브랜치로 오판 → producer·등록이 선정 전 정지).

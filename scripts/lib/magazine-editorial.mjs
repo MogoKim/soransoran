@@ -123,24 +123,18 @@ export function checkFirstPerson(bodyText) {
 // ── D2 · 제목 형태 ─────────────────────────────────────────
 
 /**
- * 제목이 검색 질의를 닮았는가.
+ * 제목이 자동 제작에 넣을 수 있는 구체적인 작업 제목인지 본다.
  *
- * 🔴 brief 의 "검색 의도" 목록과 대조하지 않는다.
- *    그 목록은 제목을 이미 아는 사람이 쓴다 — 자기 참조라 검증력이 없다.
- *    실측에서 반려된 글이 정상 글 9건보다 높은 커버리지를 받았다.
- *    실데이터(Search Console)가 들어오는 M-AUTO-6 이전에는 쓰지 않는다.
+ * 🔴 문장 끝 어미로 검색 의도를 추정하지 않는다 (2026-10-04).
+ *    `무엇일까`는 질문이고 `자식한테는 말 못 하는 이야기`는 COMMUNITY 주제인데,
+ *    예전 규칙은 제한된 어미로 끝나지 않는다는 이유만으로 둘 다 FAIL 했다.
+ *    제목과 본문이 같은 질문에 답하는지는 `checkTitleBodyMatch`가 본다.
  *
- * 대신 **말미 형태**를 본다. 등록 25건이 두 형태로 갈린다.
- *    질문형  ~나요 · ~까요 · ~한가요        9건
- *    상황형  ~때 · ~이유 · ~것 · ~법 · ~점  15건 (+ 조기수령 1건은 한가요)
- * 반려된 `잠자리 습관을 바꿔 본 2주` 만 어느 쪽도 아니다 — 후기 제목이다.
+ * 이 관문은 비어 있거나 지나치게 짧은 제목, TODO·‘오늘의 이야기’ 같은 임시 제목만 막는다.
  */
-const TITLE_FORMS = [
-  // "가요" 로 묶어야 인가요·한가요·유리한가요가 함께 잡힌다.
-  // 하나씩 나열하면 `나이 들면 … 정상인가요` 같은 변형에서 샌다 (실측으로 걸렸다).
-  { name: '질문형', re: /(나요|까요|가요|는가|은가)\s*\??$/ },
-  { name: '상황형', re: /(때|이유|것|법|점|중|뒤|후)\s*\??$/ },
-]
+export const TITLE_MIN_LENGTH = 8
+export const TITLE_MAX_LENGTH = 60
+const PLACEHOLDER_TITLE = /^(?:제목(?:\s*미정)?|미정|tbd|todo|임시\s*제목|새\s*글|(?:오늘의\s*)?(?:이야기|정보|생각|기록|알아보기))(?:입니다)?[.!?]?$/i
 
 /**
  * @param {string} title
@@ -148,15 +142,18 @@ const TITLE_FORMS = [
  */
 export function checkTitleForm(title) {
   const value = String(title ?? '').trim()
-  const hit = TITLE_FORMS.find((f) => f.re.test(value))
-  if (hit) return { level: null, form: hit.name, reason: null }
-  return {
-    level: 'FAIL',
-    form: null,
-    reason:
-      `제목이 검색 질의 형태가 아니다 — 질문형(~나요·~까요·~한가요) 또는 ` +
-      `상황형(~때·~이유·~것) 으로 쓴다. 검색해서 들어오는 글이다`,
+  if (value.length < TITLE_MIN_LENGTH || value.length > TITLE_MAX_LENGTH) {
+    return { level: 'FAIL', form: null, reason: `제목 ${value.length}자 — 허용 ${TITLE_MIN_LENGTH}~${TITLE_MAX_LENGTH}자 밖이다` }
   }
+  if (PLACEHOLDER_TITLE.test(value)) {
+    return { level: 'FAIL', form: null, reason: `구체적인 주제가 없는 임시 제목이다: "${value}"` }
+  }
+  const words = value.replace(/[?!.\u2026,:;'"()[\]{}]/g, ' ').split(/\s+/).filter(Boolean)
+  if (words.length < 2) {
+    return { level: 'FAIL', form: null, reason: `제목에 구체적인 주제가 보이지 않는다: "${value}"` }
+  }
+  const question = /\?$|(나요|까요|가요|는가|은가|일까|을까|를까|어떨까)\s*\??$/.test(value)
+  return { level: null, form: question ? '질문형' : '주제형', reason: null }
 }
 
 /**
