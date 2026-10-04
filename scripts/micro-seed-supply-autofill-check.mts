@@ -289,6 +289,11 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     check('🔴 🔴 **의도(계약 · 회차 · 원천 해시 · intendedSlotAt)가 큐 행 gateResults 에 그대로 실린다**',
       p2 !== null && JSON.stringify(readSupplyIntent(p2.gateResults)) === JSON.stringify(intent))
     check('🔴 의도가 없으면 싣지 않는다 — legacy 행(JIT 근거로 세지 않는다)', p1 !== null && readSupplyIntent(p1.gateResults) === null)
+    const wrong = buildQueuePayload({
+      envelope: mEnv, candidate: mc, autoJudge: aj, intent: { ...intent, sourceHash: articleIdHashOf(site, `${id}-other`) }, now: NOW,
+    })
+    check('🔴 🔴 **D 의도 원천 해시 ≠ 후보 원천 해시 → payload null(적재 0)** — 남의 의도로 현재 계약 표본을 오염시키지 않는다',
+      wrong === null)
     const dir = mkdtempSync(join(tmpdir(), 'intent-'))
     try {
       const cand = join(dir, `auto-draft-${RID}.candidates.json`)

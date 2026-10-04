@@ -53,11 +53,12 @@ import {
 import { articleIdHashOf } from '../src/lib/source-slot-release'
 
 /** 🔴 JIT 계약 묶음(workset-v3) — 원천마다 예정 슬롯 · 슬롯 시점 나이 필수 */
-const wsV3 = (runId: string, site: string, n: number): string => JSON.stringify({
+/** 🔴 JIT 계약 묶음(workset-v3) — 원천마다 예정 슬롯 · 슬롯 시점 나이 필수. `ids` 는 큐 행과 연결되는 원천(앞쪽), 나머지는 채움 */
+const wsV3 = (runId: string, site: string, n: number, ids: readonly string[] = []): string => JSON.stringify({
   kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, runId,
   takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`, limit: 10,
   sources: Array.from({ length: n }, (_, i) => ({
-    sourceSite: site, sourceArticleId: `${runId}-${i}`, slotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+    sourceSite: site, sourceArticleId: ids[i] ?? `${runId}-${i}`, slotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
   })),
 })
 /** 🔴 큐 행 공급 의도 — 적재기가 묶음에서 옮겨 적는 것과 같은 모양 */
@@ -488,7 +489,9 @@ async function main(): Promise<void> {
       })
       await prisma.originalPostApprovalQueue.create({
         data: { sourceRawContentId: raw.id, status: 'PUBLISHED', draftTitle: `초안 ${k}`, draftBody: `본문 ${k}`,
-          gateVerdict: 'PASS', gateResults: withIntent({}, site, `pf-${k}`) as Prisma.InputJsonValue, promptVersion: 'pf', model: 'pf',
+          // 🔴 현재 계약 표본 — 의도 · 원문 증거 해시 · 그 회차 v3 묶음이 정확히 연결된다
+          gateResults: withIntent({ sourceEvidence: buildSourceEvidence({ sourceSite: site, sourceArticleId: `pf-${k}` }) }, site, `pf-${k}`) as Prisma.InputJsonValue,
+          gateVerdict: 'PASS', promptVersion: 'pf', model: 'pf',
           decidedBy: AUTO_DECIDER, decidedAt: new Date('2026-09-30T03:00:00Z'), dedupKey: `pf-${k}` },
       })
     }
@@ -496,7 +499,7 @@ async function main(): Promise<void> {
     const dir = mkdtempSync(join(tmpdir(), 'pf-opp-'))
     // JIT 묶음 3개 × 10 원천 = 30 (창 안 회차 · workset-v3)
     for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
-      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10))
+      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, runId === '20260929-031500' ? ['pf-0', 'pf-1', 'pf-2'] : []))
     }
     const iso = (ms: number): string => new Date(ms).toISOString()
     const evidence = (i: number): unknown => buildSourceEvidence({
@@ -620,10 +623,10 @@ async function main(): Promise<void> {
      *    창 밖: 창 시작 1초 전 대기 · 창 끝 정각 대기 · 사람 결정 PUBLISHED
      */
     const rows: { k: string; status: 'PUBLISHED' | 'EXPIRED' | 'DECLINED' | 'APPROVED' | 'EDITED'; at: string; gate: unknown; by?: string }[] = [
-      { k: 'pub1', status: 'PUBLISHED', at: '2026-09-28T03:00:00Z', gate: {} },
-      { k: 'pub2', status: 'PUBLISHED', at: '2026-09-29T03:00:00Z', gate: {} },
-      { k: 'exp', status: 'EXPIRED', at: '2026-09-29T05:00:00Z', gate: {} },
-      { k: 'dec', status: 'DECLINED', at: '2026-09-30T01:00:00Z', gate: {} },
+      { k: 'pub1', status: 'PUBLISHED', at: '2026-09-28T03:00:00Z', gate: evAt('pub1', fresh) },
+      { k: 'pub2', status: 'PUBLISHED', at: '2026-09-29T03:00:00Z', gate: evAt('pub2', fresh) },
+      { k: 'exp', status: 'EXPIRED', at: '2026-09-29T05:00:00Z', gate: evAt('exp', fresh) },
+      { k: 'dec', status: 'DECLINED', at: '2026-09-30T01:00:00Z', gate: evAt('dec', fresh) },
       { k: 'noev', status: 'EDITED', at: '2026-09-30T02:00:00Z', gate: {} },
       { k: 'stale', status: 'APPROVED', at: '2026-09-29T02:00:00Z', gate: evAt('stale', now.getTime() - 80 * 3_600_000) },
       { k: 'soon', status: 'APPROVED', at: '2026-09-30T03:00:00Z', gate: evAt('soon', first.getTime() - 72 * 3_600_000 - 60_000) },
@@ -645,13 +648,15 @@ async function main(): Promise<void> {
           ...(r.status === 'EDITED' ? { editedTitle: `수정 ${r.k}`, editedBody: `수정 본문 ${r.k}` } : {}),
           gateVerdict: 'PASS', promptVersion: 'pfc', model: 'pfc',
           // 🔴 legacy 행만 공급 의도가 없다 — 근거로 세지 않는다
-          gateResults: (r.k === 'legacy' ? r.gate : withIntent(r.gate, site, `pfc-${r.k}`)) as Prisma.InputJsonValue,
+          // 🔴 legacy · 증거 없는 옛 행만 공급 의도가 없다 — 근거로 세지 않는다(증거 없는 행이 계약을 주장하면 cohort 가 모름이 된다)
+          gateResults: (r.k === 'legacy' || r.k === 'noev' ? r.gate : withIntent(r.gate, site, `pfc-${r.k}`)) as Prisma.InputJsonValue,
           decidedBy: r.by ?? AUTO_DECIDER, decidedAt: new Date(r.at), dedupKey: `pfc-${r.k}` },
       })
     }
     const dir = mkdtempSync(join(tmpdir(), 'pfc-'))
     for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
-      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10))
+      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, runId !== '20260929-031500' ? []
+        : ['pub1', 'pub2', 'exp', 'dec', 'stale', 'soon', 'start', 'recent', 'old', 'end'].map((k) => `pfc-${k}`)))
     }
     // 🔴 같은 창의 옛 판(v2) 묶음 — 손상이 아니라 legacy: 세지 않는다(원천 30 그대로)
     writeFileSync(join(dir, worksetFileName('20260929-091500')), JSON.stringify({
@@ -668,27 +673,53 @@ async function main(): Promise<void> {
         runnerHealth: 'ok', contractValidPersonas: async () => 30,
       })
       const c = r.facts.readyCohort
-      check('🔴 🔴 **cohort = 공개 2 · 손실 5(EXPIRED · DECLINED · 증거 없음 · 80h · 슬롯 전 만료) · 예정 0 · 모름 2 · 원천 30**',
-        c !== null && c.published === 2 && c.lost === 5 && c.scheduled === 0 && c.unknown === 2 && c.sources === 30, JSON.stringify(c))
-      check('🔴 창 시작 1초 전 · 창 끝 정각 · 사람 결정 · 의도 없는 legacy 행은 cohort 밖 — raw READY 9 · legacy 1',
-        r.detail.readyCount === 9 && r.detail.legacyExcluded === 1, JSON.stringify(r.detail))
+      check('🔴 🔴 **F 완전 연결 cohort = 공개 2 · 손실 4(EXPIRED · DECLINED · 80h · 슬롯 전 만료) · 예정 0 · 모름 2 · 원천 30**',
+        c !== null && c.published === 2 && c.lost === 4 && c.scheduled === 0 && c.unknown === 2 && c.sources === 30
+        && (r.detail.intentMismatches as unknown[]).length === 0, JSON.stringify({ c, m: r.detail.intentMismatches }))
+      check('🔴 창 시작 1초 전 · 창 끝 정각 · 사람 결정 · 의도 없는 legacy 2행은 cohort 밖 — raw READY 8 · legacy 2',
+        r.detail.readyCount === 8 && r.detail.legacyExcluded === 2, JSON.stringify(r.detail))
       const y = r.detail.yieldBounds as { low: number; high: number } | null
       check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 2) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 4 / 30, JSON.stringify(y))
       if (c !== null) {
         const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 14) 같은 cohort 용량 18 이 채운다 → 처리량 확정',
-          d3.counts.readyNeededMax === 14 && d3.counts.readyCapacity === 18
+        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 12) 같은 cohort 용량 16 이 채운다 → 처리량 확정',
+          d3.counts.readyNeededMax === 12 && d3.counts.readyCapacity === 16
           && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
         const d5 = judgeNextPreflight('d5', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 🔴 **d5 — 모르는 대기 2 의 결말에 따라 필요 12~23 · 용량 18 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
-          d5.counts.readyNeededMin === 12 && d5.counts.readyNeededMax === 23
+        check('🔴 🔴 **d5 — 모르는 대기 2 의 결말에 따라 필요 10~20 · 용량 16 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
+          d5.counts.readyNeededMin === 10 && d5.counts.readyNeededMax === 20
           && d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict !== 'PASS', JSON.stringify(d5.counts))
         check('🔴 공급 비용 = 목표 5 × 결과당 $0.01 — raw READY 단가 · 공개 단가 칸 없음',
           Math.abs((d5.counts.supplyDailyUsdNeeded ?? 0) - 0.05) < 1e-12
           && !('rawReadyUsd' in d5.counts) && !('publicPostUsd' in d5.counts), JSON.stringify(d5.counts))
-        check('🔴 실제 비용 귀속은 결말 모름 2 · legacy 장부 때문에 결과당 단가 모름(null) → 판정 비용 UNKNOWN',
+        check('🔴 실제 비용 귀속은 현재 계약 정산이 없다(호스트 장부는 legacy 뿐) → 결과당 단가 모름(null) → 판정 비용 UNKNOWN',
           c.usdPerSlotValidResult === null && judgeNextPreflight('d5', r.facts, RUNNER_GRID).codes.includes('SUPPLY_COST_UNKNOWN'))
       }
+      const factsAgain = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {
+        loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
+        autoOpen: { open: false, reasons: [] }, proofSlots,
+        caps: releaseCapsOf(profileOf('d5')), evidenceDate: '2026-09-30', env: {}, dataDir: dir, now,
+        runnerHealth: 'ok', contractValidPersonas: async () => 30,
+      })
+      // 🔴 E — 큐 의도 하나가 그 회차 묶음과 나이 한 칸만 달라도 cohort 전체가 모름(legacy 로 빼지 않는다)
+      const one = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'pfc-start' }, select: { id: true, gateResults: true } })
+      const g = one.gateResults as Record<string, Record<string, unknown>>
+      await prisma.originalPostApprovalQueue.update({
+        where: { id: one.id }, data: { gateResults: { ...g, [SUPPLY_INTENT_KEY]: { ...g[SUPPLY_INTENT_KEY], ageAtSlotH: 6 } } as Prisma.InputJsonValue },
+      })
+      const bad = await factsAgain()
+      const bv = judgeNextPreflight('d5', bad.facts, RUNNER_GRID)
+      check('🔴 🔴 **E 큐 의도 ageAtSlotH ≠ v3 묶음 → AGE_MISMATCH · cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN**',
+        bad.facts.readyCohort === null && JSON.stringify(bad.detail.intentMismatches) === JSON.stringify(['AGE_MISMATCH'])
+        && bv.codes.includes('THROUGHPUT_UNKNOWN') && bv.codes.includes('SUPPLY_COST_UNKNOWN') && bad.detail.legacyExcluded === 2,
+        JSON.stringify({ m: bad.detail.intentMismatches, codes: bv.codes }))
+      await prisma.originalPostApprovalQueue.update({
+        where: { id: one.id },
+        data: { gateResults: { ...g, sourceEvidence: buildSourceEvidence({ sourceSite: site, sourceArticleId: 'pfc-other' }) } as Prisma.InputJsonValue },
+      })
+      const badEv = await factsAgain()
+      check('🔴 E 큐 원문 증거 해시 ≠ 의도 원천 해시 → EVIDENCE_HASH_MISMATCH · cohort 없음',
+        badEv.facts.readyCohort === null && JSON.stringify(badEv.detail.intentMismatches) === JSON.stringify(['EVIDENCE_HASH_MISMATCH']))
     } finally {
       rmSync(dir, { recursive: true, force: true })
       await wipeC()

@@ -41,3 +41,42 @@ export function readSupplyIntent(gateResults: unknown): SupplyIntent | null {
     intendedSlotAt: o.intendedSlotAt, ageAtSlotH: o.ageAtSlotH,
   }
 }
+
+/**
+ * 🔴 **현재 계약을 주장하는가** — 공급 의도 칸이 있고 계약 표식이 `supply-jit-v1` 이면 주장이다(모양은 따지지 않는다).
+ *    주장하지 않는 행만 legacy 다. 주장했는데 모양 · 연결이 틀리면 legacy 로 조용히 빼지 않는다(`intentLinkIssue`).
+ */
+export function claimsJitContract(gateResults: unknown): boolean {
+  if (gateResults === null || typeof gateResults !== 'object' || Array.isArray(gateResults)) return false
+  const v = (gateResults as Record<string, unknown>)[SUPPLY_INTENT_KEY]
+  return v !== null && typeof v === 'object' && !Array.isArray(v) && (v as Record<string, unknown>).contract === SUPPLY_JIT_CONTRACT
+}
+
+export const INTENT_LINK_ISSUES = [
+  'INTENT_MALFORMED', 'EVIDENCE_HASH_MISMATCH', 'WORKSET_NOT_FOUND',
+  'RUN_MISMATCH', 'SOURCE_HASH_MISMATCH', 'SLOT_MISMATCH', 'AGE_MISMATCH',
+] as const
+export type IntentLinkIssue = (typeof INTENT_LINK_ISSUES)[number]
+
+/**
+ * 🔴 **큐 행 의도 ↔ 그 회차 묶음 의도 ↔ 원문 증거 — 정확히 같아야 현재 계약 표본이다** (2026-10-04 P0-2 최종).
+ *    · `intent`        큐 행 `gateResults.supplyIntent` 판독 결과(모양이 틀리면 null)
+ *    · `evidenceHash`  큐 행 `sourceEvidence.provenance.articleIdHash`
+ *    · `workset`       그 회차(`intent.runId`) `workset-v3` 를 정본 판독기(`readWorkset`)로 읽어 같은 원천 해시로 찾은 의도
+ *    🔴 하나라도 다르면 이유 코드 — 호출부는 cohort 전체를 모름(UNKNOWN)으로 닫는다.
+ */
+export function intentLinkIssue(i: {
+  intent: SupplyIntent | null
+  evidenceHash: string | null
+  workset: SupplyIntent | null
+}): IntentLinkIssue | null {
+  if (i.intent === null) return 'INTENT_MALFORMED'
+  if (i.evidenceHash !== i.intent.sourceHash) return 'EVIDENCE_HASH_MISMATCH'
+  const w = i.workset
+  if (w === null) return 'WORKSET_NOT_FOUND'
+  if (w.runId !== i.intent.runId) return 'RUN_MISMATCH'
+  if (w.sourceHash !== i.intent.sourceHash) return 'SOURCE_HASH_MISMATCH'
+  if (w.intendedSlotAt !== i.intent.intendedSlotAt) return 'SLOT_MISMATCH'
+  if (w.ageAtSlotH !== i.intent.ageAtSlotH) return 'AGE_MISMATCH'
+  return null
+}

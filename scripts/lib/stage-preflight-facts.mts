@@ -46,8 +46,10 @@ import {
   type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
 import {
-  OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset,
+  OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset, worksetFileName,
+  type SupplyIntent,
 } from '../../src/lib/supply-workset'
+import { claimsJitContract, intentLinkIssue, type IntentLinkIssue } from '../../src/lib/supply-intent'
 import type { Health } from '../../src/lib/ops-status'
 import { HEARTBEAT_INTERVAL_MINUTES } from './original-post-runner-template'
 import { COMMENT_RUNNER_SLOTS, FIRST_COMMENT_ATTEMPTS } from './persona-comment-runner-template'
@@ -152,23 +154,54 @@ const runMsOf = (runId: string): number | null => {
  *    🔴 옛 판(v1 · v2) 묶음은 손상이 아니다 — 읽되 **세지 않는다**(legacy). 창 안 JIT 묶음이 없으면 `null`.
  */
 export function worksetSourcesIn(dataDir: string, fromMs: number, toMs: number): number | null {
+  return jitWorksetsIn(dataDir, fromMs, toMs)?.sources ?? null
+}
+
+/** 🔴 회차 묶음 의도 — 원천 해시 → 의도(정본 판독기 `readWorkset` 결과에서만 만든다) */
+export type RunIntentIndex = ReadonlyMap<string, ReadonlyMap<string, SupplyIntent>>
+
+const byHash = (m: ReadonlyMap<string, SupplyIntent>): Map<string, SupplyIntent> =>
+  new Map([...m.values()].map((x) => [x.sourceHash, x] as const))
+
+/**
+ * 🔴 **창 안 JIT 묶음 — 원천 수와 회차별 의도 색인** (2026-10-04 P0-2 최종). 하나라도 못 읽으면 `null`.
+ *    옛 판(v1 · v2)은 손상이 아니라 legacy — 읽되 세지 않는다. 창 안 JIT 묶음이 없으면 `null`.
+ */
+export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { sources: number; byRun: RunIntentIndex } | null {
   if (!existsSync(dataDir)) return null
   let n = 0
   let files = 0
+  const byRun = new Map<string, ReadonlyMap<string, SupplyIntent>>()
   for (const f of readdirSync(dataDir)) {
     const m = WORKSET_FILE_RE.exec(f)
     if (m === null) continue
     const at = runMsOf(m[1]!)
     if (at === null || at < fromMs || at >= toMs) continue
     try {
-      // 🔴 정본 판독기(`readWorkset`)가 센다 — 옛 판(v1)은 개수만 · 새 판(v2)은 (사이트, id) 쌍. 두 번째 파서를 두지 않는다
+      // 🔴 정본 판독기(`readWorkset`)가 센다 — 두 번째 파서를 두지 않는다
       const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
       if (!r.ok) return null
       if (r.intents === null) continue
       n += r.count; files += 1
+      byRun.set(m[1]!, byHash(r.intents))
     } catch { return null }
   }
-  return files === 0 ? null : n
+  return files === 0 ? null : { sources: n, byRun }
+}
+
+/**
+ * 🔴 **회차 묶음 하나의 의도** — 창 색인에 없으면(경계: 앞날 늦은 회차가 만든 READY 가 창 안에서 도장) 그 회차 파일을
+ *    같은 정본 판독기로 직접 읽는다. 없음 · 손상 · 옛 판이면 `null`(연결 실패 → cohort 모름).
+ */
+export function runIntentsOf(dataDir: string, runId: string, index: RunIntentIndex | null): ReadonlyMap<string, SupplyIntent> | null {
+  const hit = index?.get(runId)
+  if (hit !== undefined) return hit
+  const path = join(dataDir, worksetFileName(runId))
+  if (!/^\d{8}-\d{6}$/.test(runId) || !existsSync(path)) return null
+  try {
+    const r = readWorkset(JSON.parse(readFileSync(path, 'utf-8')), runId)
+    return r.ok && r.intents !== null ? byHash(r.intents) : null
+  } catch { return null }
 }
 
 /**
@@ -266,6 +299,9 @@ export function costFateOf(r: CohortRow): CostFate {
   return r.fate ?? 'unknown'
 }
 
+/** 🔴 의도 연결 실패 — cohort 판독 안에서만 쓰는 신호 */
+class IntentMismatch extends Error {}
+
 /**
  * 🔴 **자동 READY cohort 판독 — preflight 와 공급 러너가 같은 함수를 부른다** (2026-10-04 P0-2).
  *    창 안 자동 READY 행 전부(한 번의 조회) · 대기 행은 정본 판정으로 예정 · 손실 · 모름(`pendingFateOf`) ·
@@ -280,21 +316,38 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
 }): Promise<{
   rows: CohortRow[] | null; fates: FateCounts | null; readyCount: number | null; legacyExcluded: number | null
   worksetSources: number | null; yieldBounds: { low: number; high: number } | null; notes: string[]
+  /** 🔴 현재 계약을 주장했지만 묶음 · 증거와 맞지 않은 행의 이유 코드 — 하나라도 있으면 cohort 전체가 모름 */
+  intentMismatches: IntentLinkIssue[]
 }> {
   const notes: string[] = []
   let rows: CohortRow[] | null = null
   let legacyExcluded: number | null = null
+  const intentMismatches: IntentLinkIssue[] = []
+  const ws = jitWorksetsIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime())
+  const worksetSources = ws?.sources ?? null
   try {
     const found = await prisma.originalPostApprovalQueue.findMany({
       where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: i.windowFrom, lt: i.windowTo } },
       select: { id: true, status: true, gateResults: true },
     })
     /**
-     * 🔴 **현재 JIT 계약 행만** (2026-10-04 P0-2 보정) — `gateResults.supplyIntent`(묶음 → 적재가 옮긴 의도)가 있는 행.
-     *    옛 READY 는 구제하지 않고 새 공급기의 수율 · 손실로도 세지 않는다 — 수만 따로 보고한다.
+     * 🔴 **현재 JIT 계약 행만** (2026-10-04 P0-2 보정 · 최종) — 계약을 주장한 행은 모양만 보고 인정하지 않는다:
+     *    그 회차 `workset-v3`(정본 판독기) 의 같은 원천 의도 · 원문 증거 해시와 **정확히** 같아야 한다.
+     *    하나라도 다르면 legacy 로 빼지 않고 cohort 전체를 모름으로 닫는다. 주장하지 않는 옛 READY 는 수만 보고한다.
      */
-    const current = found.filter((r) => readSupplyIntent(r.gateResults) !== null)
+    const current = found.filter((r) => claimsJitContract(r.gateResults))
     legacyExcluded = found.length - current.length
+    for (const r of current) {
+      const intent = readSupplyIntent(r.gateResults)
+      const ev = readSourceEvidence(r.gateResults)
+      const run = intent === null ? null : runIntentsOf(i.dataDir, intent.runId, ws?.byRun ?? null)
+      const issue = intentLinkIssue({
+        intent, evidenceHash: ev.ok ? ev.record.provenance.articleIdHash : null,
+        workset: intent === null || run === null ? null : run.get(intent.sourceHash) ?? null,
+      })
+      if (issue !== null) intentMismatches.push(issue)
+    }
+    if (intentMismatches.length > 0) throw new IntentMismatch()
     rows = current.map((r) => {
       const intent = readSupplyIntent(r.gateResults)!
       const terminal = r.status === 'PUBLISHED' || READY_LOSS_STATUSES.includes(r.status)
@@ -305,16 +358,21 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
         }).fate,
       }
     })
-  } catch (e) { notes.push(`자동 READY cohort 를 읽지 못했다 — ${(e as Error).name}`) }
+  } catch (e) {
+    if (e instanceof IntentMismatch) {
+      rows = null
+      notes.push(`현재 계약을 주장한 자동 READY ${intentMismatches.length}건이 묶음 · 증거와 맞지 않는다`
+        + ` [${[...new Set(intentMismatches)].join(',')}] — cohort 전체를 모른다(legacy 로 빼지 않는다)`)
+    } else notes.push(`자동 READY cohort 를 읽지 못했다 — ${(e as Error).name}`)
+  }
   const fates: FateCounts | null = rows === null ? null : cohortFatesOf(rows)
   const readyCount = fates === null ? null : fates.published + fates.lost + fates.scheduled + fates.unknown
-  const worksetSources = worksetSourcesIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime())
   if (worksetSources === null) notes.push('JIT 묶음 원천 수를 모른다 — 창 안 workset-v3 이 없거나 묶음 하나라도 손상')
   if (legacyExcluded !== null && legacyExcluded > 0) notes.push(`계약 표식 없는 옛 자동 READY ${legacyExcluded}건 — 근거로 세지 않는다(구제 없음)`)
   if (fates !== null && fates.unknown > 0) notes.push(`결말을 모르는 자동 READY ${fates.unknown}건 — 손실률 · 수율은 구간으로만 판정한다`)
   return {
     rows, fates, readyCount, legacyExcluded, worksetSources,
-    yieldBounds: fates === null ? null : terminalYieldOf(fates, worksetSources), notes,
+    yieldBounds: fates === null ? null : terminalYieldOf(fates, worksetSources), notes, intentMismatches,
   }
 }
 
@@ -468,6 +526,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected, sourceExpectedHigh: oppHigh.sourceExpected,
       opportunitySnapshotAt: snap.takenAt, readyCount, legacyExcluded: cohort.legacyExcluded, worksetSources, yieldBounds, fates,
+      intentMismatches: cohort.intentMismatches,
       costAttribution,
     },
   }

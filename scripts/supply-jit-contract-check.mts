@@ -36,6 +36,7 @@ import { jitCoverageOf, type LoadedStock, type ResolvedScale } from './lib/publi
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { profileOf } from '../src/lib/scale-profile'
 import { sourceKeyOf } from '../src/lib/source-identity'
+import { claimsJitContract, intentLinkIssue, type SupplyIntent } from '../src/lib/supply-intent'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
 import {
   pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf, RUNNER_GRID,
@@ -284,8 +285,26 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🔴 🔴 **옛 장부 $0.939 만 있는 상태 → SUPPLY_COST_UNKNOWN (SUPPLY_COST_SHORT 아님 · raw 단가 authority 없음)**',
     lv.codes.includes('SUPPLY_COST_UNKNOWN') && !lv.codes.includes('SUPPLY_COST_SHORT') && !('rawReadyUsd' in lv.counts),
     JSON.stringify(lv.codes))
-  const mixed = costAttributionOf({ entries: [e(hp, 0.02), legacyLine(0.01)], fateByKey, counts: { published: 1, scheduled: 0 } })
-  check('🔴 현재 계약 줄이 있어도 legacy 줄이 하나라도 섞이면 결과당 비용 모름', mixed !== null && mixed.usdPerSlotValidResult === null)
+  // 🔴 B — legacy + 완전 연결 현재 계약 → 현재 계약 표본만으로 단가(legacy 는 보고만 · 분자에 없음)
+  const mixed = costAttributionOf({
+    entries: [e(hp, 0.02), e(hs, 0.02), e(hl, 0.02), legacyLine(0.939), { ...legacyLine(0.5), status: 'reserved', settledUsd: null }],
+    fateByKey, counts: { published: 1, scheduled: 1 },
+  })
+  check('🔴 🔴 **B legacy $0.939 + 완전 연결 현재 계약 $0.06 → 결과 2 → $0.03/결과 (legacy 는 분자 · 차단 모두 아님)**',
+    mixed !== null && Math.abs((mixed.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12 && Math.abs(mixed.totalUsd - 0.06) < 1e-12
+    && Math.abs(mixed.legacyUsd - 0.939) < 1e-12 && mixed.legacyOpenRequests === 1 && mixed.openRequests === 0, JSON.stringify(mixed))
+  // 🔴 C — 현재 계약 요청 중 미연결 · 미정산 · 결말 모름이 하나라도 있으면 모름
+  const cUnlinked = costAttributionOf({ entries: [e(hp, 0.02), e(null, 0.01)], fateByKey, counts: { published: 1, scheduled: 0 } })
+  const cOpen = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 } })
+  const hu = articleIdHashOf('fx', 'unk')
+  const cUnknown = costAttributionOf({
+    entries: [e(hp, 0.02), e(hu, 0.01)], fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 0 },
+  })
+  check('🔴 🔴 **C 현재 계약 미연결 · 미정산 · 결말 모름 → 각각 결과당 비용 모름**',
+    cUnlinked?.usdPerSlotValidResult === null && cOpen?.usdPerSlotValidResult === null && cUnknown?.usdPerSlotValidResult === null)
+  check('🔴 현재 계약 정산 0 · slot-valid 결과 0 → 모름',
+    costAttributionOf({ entries: [e(hp, 0)], fateByKey, counts: { published: 1, scheduled: 0 } })?.usdPerSlotValidResult === null
+    && costAttributionOf({ entries: [e(hl, 0.02)], fateByKey, counts: { published: 0, scheduled: 0 } })?.usdPerSlotValidResult === null)
   check('🔴 장부를 못 읽으면 귀속 자체가 null', costAttributionOf({ entries: null, fateByKey, counts: { published: 1, scheduled: 0 } }) === null)
   check('🔴 결말 → 비용 결말: 공개 · 만료 · 대기 결말 그대로',
     costFateOf({ id: 'a', status: 'PUBLISHED', hash: null, fate: null }) === 'published'
@@ -295,6 +314,34 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🔴 장부 원천 열쇠 = 증거 기록 provenance.articleIdHash 와 같은 식 — 원문 · id 평문 아님',
     articleIdHashOf('fx', 'pub') === (buildSourceEvidence({ sourceSite: 'fx', sourceArticleId: 'pub' }).provenance.articleIdHash)
     && /^[0-9a-f]{64}$/.test(hp))
+}
+
+console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 workset-v3 의도 = 원문 증거 해시')
+{
+  const hash = articleIdHashOf('fx', 'k1')
+  const ok: SupplyIntent = { contract: SUPPLY_JIT_CONTRACT, runId: '20261004-031500', sourceHash: hash, intendedSlotAt: '2026-10-04T02:00:00.000Z', ageAtSlotH: 7.5 }
+  check('🔴 F 완전 일치 → 이유 없음', intentLinkIssue({ intent: ok, evidenceHash: hash, workset: ok }) === null)
+  const cases: [string, Parameters<typeof intentLinkIssue>[0], string][] = [
+    ['run', { intent: ok, evidenceHash: hash, workset: { ...ok, runId: '20261004-091500' } }, 'RUN_MISMATCH'],
+    ['hash', { intent: ok, evidenceHash: hash, workset: { ...ok, sourceHash: articleIdHashOf('fx', 'k2') } }, 'SOURCE_HASH_MISMATCH'],
+    ['slot', { intent: ok, evidenceHash: hash, workset: { ...ok, intendedSlotAt: '2026-10-04T04:00:00.000Z' } }, 'SLOT_MISMATCH'],
+    ['age', { intent: ok, evidenceHash: hash, workset: { ...ok, ageAtSlotH: 7.6 } }, 'AGE_MISMATCH'],
+    ['증거 해시', { intent: ok, evidenceHash: articleIdHashOf('fx', 'other'), workset: ok }, 'EVIDENCE_HASH_MISMATCH'],
+    ['묶음 없음', { intent: ok, evidenceHash: hash, workset: null }, 'WORKSET_NOT_FOUND'],
+    ['모양 틀림', { intent: null, evidenceHash: hash, workset: ok }, 'INTENT_MALFORMED'],
+  ]
+  for (const [name, input, want] of cases) {
+    check(`🔴 E ${name} 불일치 → ${want}`, intentLinkIssue(input) === want, String(intentLinkIssue(input)))
+  }
+  check('🔴 계약을 주장한 칸은 모양이 틀려도 주장이다(legacy 로 빠지지 않는다) · 칸 없음 · 다른 계약은 주장 아님',
+    claimsJitContract({ supplyIntent: { contract: SUPPLY_JIT_CONTRACT, runId: 1 } }) && !claimsJitContract({})
+    && !claimsJitContract({ supplyIntent: { contract: 'other' } }) && !claimsJitContract(null))
+  const facts = strip('scripts/lib/stage-preflight-facts.mts')
+  check('🔴 cohort 판독이 계약 주장 행을 그 회차 묶음(readWorkset) · 증거 해시로 대조하고, 하나라도 틀리면 cohort 전체를 모름',
+    /const current = found\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
+    && /intentLinkIssue\(\{/.test(facts) && /if \(intentMismatches\.length > 0\) throw new IntentMismatch\(\)/.test(facts)
+    && /runIntentsOf\(i\.dataDir, intent\.runId, ws\?\.byRun \?\? null\)/.test(facts)
+    && (facts.match(/readWorkset\(/g) ?? []).length === 2 && !/function parseWorkset/.test(facts))
 }
 
 console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
@@ -315,7 +362,7 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /readReadyCohort\(prisma, \{/.test(runner) && /matched: new Set\(jit\.matched\), horizon: jit\.horizon/.test(runner))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
   check('🔴 🔴 cohort 는 현재 JIT 계약 행만(gateResults.supplyIntent) — legacy READY 는 수율 · 손실 근거가 아니다',
-    /const current = found\.filter\(\(r\) => readSupplyIntent\(r\.gateResults\) !== null\)/.test(facts)
+    /const current = found\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
     && /rows = current\.map\(/.test(facts) && /if \(r\.intents === null\) continue/.test(facts))
   check('🔴 preflight 도 같은 판독 · 원천 기회 할인은 결말 수율 구간(raw yieldOf 없음)',
     /const cohort = await readReadyCohort\(prisma, \{/.test(facts) && /oppAt\(yieldBounds\?\.low \?\? null\)/.test(facts)

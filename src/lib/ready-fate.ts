@@ -117,13 +117,19 @@ export function paidSourcesFor(i: { deficit: number; yieldHigh: number | null; c
 export type CostFate = PendingFate | 'published' | 'noReady'
 
 export type CostAttribution = {
+  /** 🔴 현재 JIT 계약(`supply-jit-v1`) 정산 합계 — 결과당 단가의 분자는 이것 하나다 */
   totalUsd: number
-  /** 원천 해시가 없는 현재 계약 정산 요청 — 🔴 0 이 아니면 결과당 단가를 내지 않는다 */
+  /** 원천 해시가 없는 현재 계약 정산 — 🔴 0 이 아니면 결과당 단가를 내지 않는다 */
   unlinkedUsd: number
-  /** 🔴 JIT 계약 표식이 없는 정산(옛 장부 · 손 실행) — 구제하지 않는다 · 0 이 아니면 결과당 단가를 내지 않는다 */
+  /**
+   * 🔴 JIT 계약 표식이 없는 정산(옛 장부 · 손 실행) — 보고만 한다. 구제하지 않고 현재 계약 단가에도 넣지 않는다.
+   *    (2026-10-04 P0-2 최종) 분리 가능한 legacy 는 현재 계약 단가 계산을 막지 않는다 — 3일 창을 인위로 기다리지 않는다.
+   */
   legacyUsd: number
-  /** 예약만 있고 정산이 없는 유료 요청 수 — 🔴 0 이 아니면 합계를 모른다 */
+  /** 예약만 있고 정산이 없는 **현재 계약** 유료 요청 수 — 🔴 0 이 아니면 합계를 모른다 */
   openRequests: number
+  /** 예약만 있는 legacy 요청 수 — 보고만 한다 */
+  legacyOpenRequests: number
   byFate: Record<CostFate, number>
   /** 🔴 slot-valid 결과(공개 + 예정 슬롯 대기) 1건당 전 비용 — 연결이 완전하고 모르는 결말 비용이 0 일 때만 */
   usdPerSlotValidResult: number | null
@@ -137,7 +143,8 @@ export type CostAttribution = {
 
 /**
  * 🔴 **장부 요청을 원천 결과에 붙인다.** 현재 JIT 계약 표식(`supplyContract`)이 있는 요청만 `sourceKey`(원천 해시)로
- *    결과 행의 결말에 붙인다. 표식 없는 요청은 legacy 다 — 하나라도 있으면 결과당 단가는 모른다.
+ *    결과 행의 결말에 붙인다. 표식 없는 요청은 legacy 다 — 따로 보고하고 현재 계약 단가에는 넣지도 막지도 않는다.
+ *    현재 계약 요청 중 미연결 · 미정산 · 결말 모름이 하나라도 있거나, 현재 계약 정산 0 · slot-valid 결과 0 이면 단가는 모른다.
  *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 끝나지 않은 요청이 있으면 결과당 단가는 `null` 이다 —
  *    🔴 raw 단가(정산 ÷ 행 수)로 대신하지 않는다.
  */
@@ -152,19 +159,21 @@ export function costAttributionOf(i: {
   let unlinked = 0
   let legacy = 0
   let open = 0
+  let legacyOpen = 0
   for (const e of i.entries) {
     if (e.stage === 'countTokens' || e.status === 'blocked') continue
-    if (e.status !== 'settled' || e.settledUsd === null) { open += 1; continue }
+    const current = e.supplyContract === SUPPLY_JIT_CONTRACT
+    if (e.status !== 'settled' || e.settledUsd === null) { if (current) open += 1; else legacyOpen += 1; continue }
+    if (!current) { legacy += e.settledUsd; continue }
     total += e.settledUsd
-    if (e.supplyContract !== SUPPLY_JIT_CONTRACT) { legacy += e.settledUsd; continue }
     const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
     if (key === null) { unlinked += e.settledUsd; continue }
     byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
   }
-  const complete = unlinked === 0 && legacy === 0 && open === 0
+  const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
   return {
-    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, byFate,
+    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, legacyOpenRequests: legacyOpen, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && byFate.unknown === 0 && results > 0 ? total / results : null,
     usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
