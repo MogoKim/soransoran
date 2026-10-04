@@ -266,6 +266,18 @@ check('🔴 continue-on-error 가 없다', !/continue-on-error/.test(yml))
  *    fixture 는 한 번도 돌지 않았고, 낡은 계약 1 건이 실패한 채로 서 있었으며
  *    자해·자살 위기 신호 축이 통째로 빠진 것도 드러나지 않았다.
  */
+/**
+ * 🔴 **배선이 말없이 사라지면 안 되는 검사** (2026-10-04 D100 생동감 PR #655) — 경로 조건 뒤여도 된다.
+ *    package.json 에만 있고 CI 에서 한 번도 돌지 않던 상태로 merge 직전까지 갔다. 주석 줄은 배선으로 세지 않는다.
+ */
+const MUST_BE_WIRED: readonly string[] = [
+  'stage:ready-loss-check', 'supply:jit-contract-check', 'check:political-axis',
+]
+for (const cmd of MUST_BE_WIRED) {
+  check(`🔴 ${cmd} 가 워크플로우에 배선되어 있다`,
+    code.some((l) => new RegExp(`(^|\\s)npm run ${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`).test(l)))
+}
+
 const MUST_RUN_ALWAYS: readonly string[] = ['micro-seed:safety-check']
 for (const cmd of MUST_RUN_ALWAYS) {
   const i = lines.findIndex((l) => l.includes(`npm run ${cmd}`))

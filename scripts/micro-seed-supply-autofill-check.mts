@@ -21,7 +21,13 @@ import {
   type Envelope, type QueueProfileRow,
   sourceEvidenceOf,
 } from '../src/lib/micro-seed-supply-autofill'
-import { SOURCE_EVIDENCE_KEY } from '../src/lib/source-slot-release'
+import { SOURCE_EVIDENCE_KEY, articleIdHashOf } from '../src/lib/source-slot-release'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import {
+  readSupplyIntent, SUPPLY_JIT_CONTRACT, WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, worksetFileName, type SupplyIntent,
+} from '../src/lib/supply-workset'
+import { intentsForFile } from './micro-seed-supply-autofill.mjs'
 import { qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
@@ -268,6 +274,46 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
   const p1 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, now: NOW })
   check('🟢 기계 payload 가 만들어진다', p1 !== null && p1.profile === 'machine')
+  /**
+   * 🔴 **JIT 공급 의도가 Queue 까지 간다** (2026-10-04 P0-2 보정) — 같은 회차 묶음(workset-v3) → 적재기 → `gateResults.supplyIntent`.
+   */
+  {
+    const RID = '20261004-031500'
+    const site = String((mc as unknown as Record<string, unknown>).sourceSite)
+    const id = String((mc as unknown as Record<string, unknown>).sourceArticleId)
+    const intent: SupplyIntent = {
+      contract: SUPPLY_JIT_CONTRACT, runId: RID, sourceHash: articleIdHashOf(site, id),
+      intendedSlotAt: '2026-10-04T02:00:00.000Z', ageAtSlotH: 7.5,
+    }
+    const p2 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, intent, now: NOW })
+    check('🔴 🔴 **의도(계약 · 회차 · 원천 해시 · intendedSlotAt)가 큐 행 gateResults 에 그대로 실린다**',
+      p2 !== null && JSON.stringify(readSupplyIntent(p2.gateResults)) === JSON.stringify(intent))
+    check('🔴 의도가 없으면 싣지 않는다 — legacy 행(JIT 근거로 세지 않는다)', p1 !== null && readSupplyIntent(p1.gateResults) === null)
+    const wrong = buildQueuePayload({
+      envelope: mEnv, candidate: mc, autoJudge: aj, intent: { ...intent, sourceHash: articleIdHashOf(site, `${id}-other`) }, now: NOW,
+    })
+    check('🔴 🔴 **D 의도 원천 해시 ≠ 후보 원천 해시 → payload null(적재 0)** — 남의 의도로 현재 계약 표본을 오염시키지 않는다',
+      wrong === null)
+    const dir = mkdtempSync(join(tmpdir(), 'intent-'))
+    try {
+      const cand = join(dir, `auto-draft-${RID}.candidates.json`)
+      writeFileSync(cand, '{}')
+      writeFileSync(join(dir, worksetFileName(RID)), JSON.stringify({
+        kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, runId: RID, takenAt: '2026-10-04T03:15:00.000Z',
+        limit: 10, sources: [{ sourceSite: site, sourceArticleId: id, slotAt: intent.intendedSlotAt, ageAtSlotH: 7.5 }],
+      }))
+      const m = intentsForFile(cand)
+      check('🔴 적재기는 후보 파일과 **같은 회차** v3 묶음에서 의도를 찾는다',
+        m !== null && m.size === 1 && JSON.stringify([...m.values()][0]) === JSON.stringify(intent))
+      writeFileSync(join(dir, worksetFileName(RID)), JSON.stringify({
+        kind: WORKSET_KIND, version: WORKSET_VERSION, runId: RID, takenAt: '2026-10-04T03:15:00.000Z',
+        limit: 10, sources: [{ sourceSite: site, sourceArticleId: id }],
+      }))
+      check('🔴 옛 판(v2) 묶음이면 의도 없음 — 옵션 칸으로 옛 묶음을 새 근거로 인정하지 않는다', intentsForFile(cand) === null)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+    const runner = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
+    check('🔴 실제 적재 호출이 후보의 의도를 넘긴다', (runner.match(/candidate: c, intent: intentOf\(c\),/g) ?? []).length === 2)
+  }
   // 🔴 (P0-B) 원천 identity 가 한 칸이라도 없으면 기계 후보가 아니다 — 접두뿐인 synthetic 사이트를 만들지 않는다
   for (const [label, patch] of [['사이트 빈 값', { sourceSite: '' }], ['id 빈 값', { sourceArticleId: '' }]] as const) {
     const bad = { ...mc, ...patch }

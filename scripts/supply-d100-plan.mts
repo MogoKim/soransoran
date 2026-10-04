@@ -113,7 +113,7 @@ const db = await (async (): Promise<{ usable: number; net7: number | null }> => 
 console.log(`  승인 행 APPROVED 미발행 ${db.usable}건 (보고용 · 🔴 목표선 없음)`
   + (db.net7 === null ? '' : ` · 최근 7일 Queue **생성** ${db.net7}건(= ${(db.net7 / 7).toFixed(1)}/day)`))
 console.log('         🔴 생성 건수는 APPROVED **순증가**가 아니다 — 순증가는 미측정이다')
-console.log(`  D100   READY 생산 ${APPROVED_PER_DAY_FLOOR}~${APPROVED_PER_DAY_TARGET}/day (canon 처리량 · 쌓아 둘 재고가 아니다)`)
+console.log(`  D100   READY 생산 ${APPROVED_PER_DAY_FLOOR}~${APPROVED_PER_DAY_TARGET}/day (비권위 계획 범위 · 단계 판정은 preflight 실측 · 쌓아 둘 재고가 아니다)`)
 console.log('  🔴 공급 수요는 `supply:process` 의 JIT(다가오는 슬롯 − eligible READY) 하나가 정한다 — 이 화면은 정하지 않는다')
 
 // ─────────────────────────────────────────────────────────

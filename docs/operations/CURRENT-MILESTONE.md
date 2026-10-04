@@ -1,106 +1,148 @@
 # 현재 실행 — 자동 D100 커뮤니티
 
-> as-of: 2026-10-01 13:56 KST
-> 마지막 창업자 동기화: 2026-09-30 (opportunity → conversation 하나의 루프)
+> as-of: 2026-10-04 10:41 KST
+> 마지막 창업자 동기화: 2026-10-04 (생동감 · 정치/연예 경계 · 실측 보충 · 레거시 제거)
 >
-> 이 문서는 **검증된 현재 상태와 다음 critical path** 만 적는다. 정책과 숫자는 적지 않는다.
-> 목적은 [`NORTH-STAR.md`](./NORTH-STAR.md), 판정 방식·단계 표·PASS 계약은
-> [`2026-09-21-d100-goal-canon.md`](./2026-09-21-d100-goal-canon.md) 가 이긴다. 권위 지도는
-> [`README.md`](./README.md) 하나다.
-> 아래 값은 as-of 시각의 스냅샷이다. 판단 전 `npm run ops:status -- --json` 과
-> `npm run d100:readiness -- --json`(⓪ 루프 깔때기 포함), `git ls-remote origin main` 으로 다시 읽는다.
-> 모르는 것은 모른다고 적는다. 관측하지 않은 것을 PASS 로 쓰지 않는다.
+> 이 문서는 **검증된 현재 상태와 다음 critical path**만 적는다. 정책은
+> [`NORTH-STAR.md`](./NORTH-STAR.md)와
+> [`2026-09-21-d100-goal-canon.md`](./2026-09-21-d100-goal-canon.md)가 정한다.
+> 권위 지도는 [`README.md`](./README.md) 하나다. 관측하지 않은 것을 PASS 로 쓰지 않는다.
 
-## 1. 기준
+## 0. 창업자용 한 문장
 
-| 항목 | 값 | 근거 |
-|---|---|---|
-| origin/main | `3fd47c0` (#642 Conversation Thread R1) | `git fetch` 2026-10-01 |
-| runtime | `2c88642` (#635 포함) | D100 job 경로 코드는 main 과 같다. 차이는 브랜드 에셋·매거진 파일과 #642 웹 댓글 화면·검사뿐 |
-| 오늘 단계 결정 | **PREPARE d1** (2026-09-30) | 아래 §3 |
-| 다음 증명일 | **새 계약의 D3 증명일 없음** — 2026-10-01 D3 시험은 옛 runtime(`2c88642` · stage-decision-v4)에서만 성립한다 | 새 계약(source-slot-v1)은 D1→D3 부터 다시 증명한다. 계약 유효 Persona 0 이라 D3 preflight 가 `PERSONA_SHORT` 로 열리지 않는다(아래 §2) |
-| 새 루프 구조 (source-to-slot · JIT · 단일 준비도 · Persona 4상태 · 루프 깔때기) | **Draft PR #639 · main `3fd47c0` 까지 merge · main 미반영 · 미배포** (head·CI 는 PR 페이지가 정본) | runtime 은 `2c88642` 그대로 |
-| 단계 authority 하나 · 자동 일정 owner(launchd) 하나 | **#639 에 구현 · 미배포** | GitHub `auto-publish` 예약은 **`disabled_manually`**(2026-09-30) — 지금 운영 발행 주체는 **launchd 하나**다. runtime 은 아직 사람 천장 env 를 읽는다(C4) |
+**10월 3일 D3 증명일 자체는 PASS했다. 그러나 10월 4일 controller는 D5 준비도를
+`THROUGHPUT_SHORT`로 판정해 공개 단계를 d3 `REPROVE`로 유지했다. 원천 부족이 아니라,
+READY 목표에 근거 없는 20%를 고정 가산한 옛 preflight 계약과 수집→생성 45.73시간 지연이 현재 병목이다.**
 
-## 2. 상태 — code / deployed / operating PASS 를 섞지 않는다
+운영은 멈추지 않았다. runtime·pin·main은 같은 SHA이고 supply·publish·comment·audit job은 loaded,
+최근 exit은 모두 0이다. 정책 정본을 먼저 바로잡은 뒤 코드를 한 번의 교체 경로로 수렴시킨다.
 
-`code PASS` = main 에 있고 검사가 지킨다. `deployed PASS` = runtime 에 올라갔다.
-`operating PASS` = 무인 운영에서 실제로 관측됐다. 앞 칸이 PASS 여도 뒤 칸은 따로 증명한다.
+## 1. 검증 기준과 상태
 
-| 축 | code PASS | deployed PASS | operating PASS | 비고 |
-|---|---|---|---|---|
-| 무인 글 루프 (자동 READY → 예약 발행 → 감사) | ✅ | ✅ | ✅ 2026-09-29 이전 관측 | 옛 release 계약 아래의 증명이다. 새 계약의 단계 승급 근거가 아니다 |
-| 무인 첫 댓글 (60분) | ✅ | ✅ | ✅ 관측 | 09-29 자동 글 2건 13.7분·1.6분, 09-30 09:31 글(P19) → P03 14.8분 — 자기 댓글·중복 0 (읽기 전용 DB 대조) |
-| D3 단계 | — | — | ❌ 2026-09-29 증거 FAIL | `PUBLISH_NOT_AUTO_READY` · `AUDIT_COVERAGE_ZERO` · `RUNNER_UNKNOWN` (자동 2 + 사람 승인 1) |
-| source-to-slot 판정 · 원문 증거 보존 | ❌ | ❌ | ❌ | main 은 적재 시각을 신선도로 쓴다(옛 경로). 적재 행 대부분이 `queue.createdAt − sourceCapturedAt ≤ 1h` |
-| JIT 공급 · 단일 준비도 | ❌ | ❌ | ❌ | 통합 브랜치는 700 정지선·14일 감속·재고선 화면을 지웠다. main · runtime 에는 아직 남아 있다(옛 경로) |
-| 자동 사다리 (사람 env 0) | 부분 | 부분 | ❌ | controller 는 돈다. 단계 입력원이 여럿이고 사람 천장 env 를 읽는다(옛 경로) |
-| 공급 예산 천장 | 부분 | 부분 | ❌ | 2026-09-28 공급 장부 $1.1925 > 승인 $0.50 (손 실행 env). main 에서 그 경로는 닫혔고 남은 우회 두 개를 비용 레인이 고치는 중 |
-| Persona 4상태 · contract-valid 수 | ❌ | ❌ | ❌ | 4상태 판정은 #639 · 작가 대조 제거는 #641 · 카드 복구는 #643 · C8·C9 정리는 `feat/persona-contract-c8-c9`(#643 위) — 전부 main 미반영 · 미배포. 운영 DB 읽기 전용 실측(2026-10-01 13시 · 쓰기 0): **현행 판정 7**(P01·P04·P08·P11·P14·P18·P19). C8·C9 판정이면 쓰기 없이 **13**, 카드 복구 dry-run 까지 **14**(P05) — 기존 7 회귀 0 · **미적용**. 남는 막힘 10명 — 말투 근거 6(P20~P25 · 기준 이상 화자 18명뿐) · 근거 필요 4(생활 단계 P07·P10·P15·P17 · 말끝 P15·P17) · 표시명 review 2(P22·P25, 말투와 겹침). **Phase F `fix/persona-reserve-24`(#649 위 · 미반영 · 미배포 · 운영 apply 0)**: 말투 근거 = 같은 화자 관측 3 + 안전 원문 2(경험형은 style-only · 원문 전송 0) · 말끝 필수 칸 삭제(카드 명시만 대조) · 빈 생활 단계는 카드 제목으로만 · 표시명 혼동은 길이 비례 음절 거리 + 자모 거리. 운영 읽기 전용 dry-run(2026-10-01 · 쓰기 0): 코드만으로 **19**(P20~P25) → 카드 복구 계획 적용 시 **24**(P05·P07·P10·P15·P17) · 이탈 0 · 남는 막힘 0. 다음 단계 preflight 는 **올라갈 단계의** 하한을 본다 — **D1→D3 부터 `PERSONA_SHORT`**(하한 24) |
-| 사람·비회원 다중 댓글 (Conversation Thread R1) | ✅ #642 | ✅ Vercel production 2026-10-01 09:40 KST | 미관측 | 스레드 root·직접 답글 대상 보존. 웹 댓글 경로만 — D100 runtime 과 무관 |
-| Persona 자동 대댓글 (선택적 다중 턴) | ❌ | ❌ | ❌ | **비활성.** Persona 레인은 최상위 첫 댓글만 쓴다(`parentId` null 불변식). 첫 댓글 운영이 먼저다 |
-| 상시 실행 호스트 하나 | 부분 | ❌ | ❌ | 보조 MacBook cutover 미완료 |
-| 82cook 수집 | 부분 | ❌ | ❌ | 수집 job 미설치. 마지막 artifact 2026-09-12. 공급원은 네이버 카페 둘 |
-| North Star 계측 | ❌ | ❌ | ❌ | 자동 운영 뒤 연결 |
+| 축 | code PASS | deployed PASS | operating PASS |
+|---|---|---|---|
+| runtime 일치 | ✅ main과 runtime 계약 있음 | ✅ HEAD·pin·main `5551f96` 일치 | ✅ mixed runtime 아님 |
+| 자동 단계 controller | ✅ `StageDecision` 단일 authority | ✅ controller ON·job loaded | ✅ 10-03 D3 증거 PASS, 10-04 d3 REPROVE 기록 |
+| 자동 발행 D3 | ✅ 자동 READY·거래·감사 경로 | ✅ runtime 반영 | ✅ 10-03 자동 3/3·서로 다른 Persona 3명·도장 3/3 |
+| D5 준비도 | ⚠️ 실행되지만 옛 고정 20% 계약 | ✅ runtime 반영 | ❌ `readyNeeded=6`, `readyCapacity=5`로 FAIL |
+| JIT source-to-slot | ⚠️ 증거 도장과 판정 일부 구현, 고정 재고 계산 잔존 | ⚠️ 부분 반영 | ❌ 원문→공개 p50 57.51h, 같은 날 공개 0/5 |
+| Persona 계약 | ✅ contract-valid 판정 | ✅ 24명 | ✅ D3·D5 하한 충족, ❌ D10 하한 30명에 6명 부족 |
+| 첫 댓글 | ✅ 60분 계약·runner | ✅ loaded | ✅ 10-03 3/3, 최근 측정 p50 13.68분 |
+| 다중 댓글 UI | ✅ Conversation Thread R1 | ✅ production | ✅ 사람·비회원 다중 스레드 실확인 |
+| Persona 자동 답글 | ⚠️ 맥락 인터페이스만 있음 | ❌ 비활성 | UNKNOWN — 운영 관측 없음 |
+| 감사 | ✅ 일별 20% 표본·판정 | ✅ loaded | ✅ 10-03 1/1, 최근 7일 결함 1건은 별도 기록 |
+| 실회원 우선 홈 랭킹 | ❌ Persona 댓글 합산 경로 잔존 | ❌ | UNKNOWN — 분리 지표 없음 |
+| North Star | ❌ 재방문 이벤트 없음 | ❌ | UNKNOWN — `session_start`·`engaged_session`·`return_visit` 미측정 |
+| D100 scheduler | ❌ d3~d50만 지원 | ❌ | ❌ d100 profile 없음 |
 
-## 3. 2026-09-29 ~ 10-01 단계 사건
+`code PASS`는 코드와 검사가 있다는 뜻이고, `deployed PASS`는 현재 runtime에 있다는 뜻이며,
+`operating PASS`는 실제 회차 증거가 있다는 뜻이다. 셋을 합쳐서 “완료”라고 쓰지 않는다.
+일반 원칙상 contract-valid가 0명이면 다음 단계 하한 검사 때문에 D1→D3 부터 막힌다.
 
-- **09-29 D3 증거 FAIL.** 사유는 §2 표. 사람 승인 글은 자동 목표 편수에 들어가지 않는다.
-- **09-30 결정 PREPARE d1.** 같은 결정 안에서 증거 판정은 `RETEST d3`, 하루 canary 판정은 OK 였다.
-  그런데 `holdUnknown`(발행 runner 성패를 모름)과 14일 시뮬레이션 감속이 겹쳐 가장 보수적인
-  브레이크가 이겼다. 이것은 하나의 결정을 여러 판정이 나눠 내린다는 증거다(충돌 C2).
-- **10-01 D3 시험은 옛 runtime 관측이다 — as-of 진행 중, PASS 로 선포하지 않는다.** 수동 생산·수동 stage 변경 없이 관측하되, 그 결과는 옛 release 계약
-  아래의 증거라 새 계약의 단계를 열지 못한다(canon §6 계약 경계). 새 계약은 D1→D3 부터 재증명한다.
-- **운영 DB 읽기 전용 실측 (2026-09-30).** 큐 369행 = APPROVED 325 · EDITED 1 · PUBLISHED 36 · DECLINED 7.
-  미발행 326행은 전부 `sourceEvidence` 가 없다 → 새 계약에서 자동 만료 대상 297 · 수동 확인 29(창업자 결정 행) ·
-  역사 보존 43. 레거시 행은 278(214+56+5+3)이다. 최근 7일 공개 12건 중 지금 계약 도장 0건 — 원문 게시 → 공개
-  지연 · 같은 날 공개 비율은 **미관측**이다(`d100:readiness` ⓪).
+## 2. 10월 4일 운영 실측
+
+### 2.1 단계와 러너
+
+- 단계 결정: `2026-10-04 REPROVE · release d3 · capacity d5`.
+- supply·publish·comment·audit 모두 loaded, 마지막 exit 0.
+- 10:40 publish에서 DB 연결 실패 로그가 한 번 있었으나 runner 최종 exit은 0이다. 재발 여부를 관측한다.
+- 비용: supply $0.0524/$0.50, comment $0.0021/$0.20, audit $0.0015/$0.30.
+
+### 2.2 최근 7일 깔때기
+
+```text
+후보 500 → 생성 137 → READY 131(자동 48) → 공개 15(자동 9 · 계약 도장 5)
+```
+
+| 관측 | 값 | 판정 |
+|---|---:|---|
+| 원문 게시→수집 | p50 2.02h · p90 8.85h | 수집 자체는 즉시 병목 아님 |
+| 수집→생성 | p50 45.73h · p90 67.73h | 🔴 가장 큰 지연 |
+| 생성→READY | p50 0.05h · p90 1.07h | 정상 |
+| READY→공개 | p50 6.68h · p90 69.39h | 오래 대기하는 꼬리 존재 |
+| 원문 게시→공개 | p50 57.51h · p90 70.59h | 🔴 현재성 목표 미달 |
+| 같은 KST 운영일 공개 | 0/5 | 🔴 JIT 미달 |
+| 자동 슬롯 채움 | 9/15, 60% | 미달 |
+| 상세 수집 처리량 | 94.5/day | D5 원천량 부족 주장은 사실 아님 |
+| READY 생산 | 2.5/day | 공개 목표보다 느림 |
+| 첫 댓글 | p50 13.68분 · 60분 안 100% | 댓글이 달린 글은 통과, 댓글 없는 공개 5건 별도 |
+
+게시 시각을 모르는 공개 10건에는 capture 시각을 대신 쓰지 않는다. slot-valid coverage는 아직 저장되지 않아
+`UNKNOWN`이며 controller dry-run에서만 본다.
+
+## 3. 정본과 구현의 충돌 장부
+
+| ID | 현재 구현·문서 | 정본 판정 | 처리 원칙 |
+|---|---|---|---|
+| C-01 | 단계별 READY를 공개량의 120%로 고정 | ❌ 근거 없는 고정 할증 | 실측 실패·만료·복구 여유로 교체하고 옛 상수 삭제 |
+| C-02 | 상세 원천/day를 과거 전환율로 고정 | ❌ 관측값을 정책으로 승격 | source-to-slot 기회 coverage와 실측 수율로 계산 |
+| C-03 | 정치와 공개 인물을 한 flag로 선필터 | ❌ 연예·방송·셀럽까지 제거 | 정치 선동만 제외하고 공개 인물은 안전 gate 뒤 정상 경쟁 |
+| C-04 | 자동 댓글 경로가 글당 정확히 1건 | ⚠️ 첫 댓글 증명은 맞지만 제품 대화로는 부족 | 첫 댓글 계약 유지 + reply-worthiness 기반 0/1/복수 답글 |
+| C-05 | 홈 인기에 Persona 댓글이 합산될 수 있음 | ❌ 합성 인기를 실사용자 반응처럼 사용 | 실회원 반응·현재성 우선, Persona 신호 분리 |
+| C-06 | 재방문 참여 이벤트 없음 | ❌ North Star 측정 불가 | 실사용자 이벤트 계측 후 Persona·봇·운영자 제외 |
+| C-07 | d100 scheduler profile 없음 | ❌ D100 미지원 | d20~d50 실측 뒤 같은 계약으로 d100 profile 구현 |
+| C-08 | 82cook policy-disabled | canon상 필수 원천이나 현재 미가동 | 별도 보수 canary. D5 원천 부족의 핑계로 쓰지 않음 |
 
 ## 4. 다음 critical path
 
-관측을 기다리는 동안 겹치지 않는 용량 작업은 멈추지 않는다. 한 파일 묶음에는 writer 하나다.
-
-| 순서 | 할 일 | 끝났다는 증거 |
-|---|---|---|
-| P0-1 | 10-01 옛 runtime 관측 보호 — 관측 창 동안 runtime·env·launchd 를 바꾸지 않는다(새 계약 증명은 아니다) | 결정 행과 증거 판정이 사람 개입 0 으로 기록됨 |
-| P0-2 | 하나의 교체: source-to-slot 판정 · 원문 증거 보존 · JIT 생성 수요 · 발행 직전 재판정·만료 · 단일 준비도 · release 판정 도장 · 계약 경계. 옛 경로를 같은 변경에서 삭제 | code PASS → deployed PASS → 새 계약 아래 D3 operating PASS |
-| P0-3 | 비용 판정 하나 — 장부 정산으로 천장을 지키고 별도 장부로 새 예산을 여는 경로를 닫는다 | 우회 재생 fixture fail-closed · 운영 장부 천장 안 |
-| P0-4 | Persona 4상태 판정과 contract-valid 수 — 자격 공백을 재고 자동 보충 | 준비도가 active 행이 아니라 contract-valid 수를 읽음 · **D3 하한 24 가 먼저** — 계약 유효 24 전에는 D1→D3 이 열리지 않는다 |
-| P0-5 | 자동 D5 → D10 | 같은 루프가 수동 생산·옛 글 구제·정책 분기 없이 5·10편 증명 |
-| P1 | 선택적 답글 레인 — 스레드 root/직접 대상 의미, replay·shadow, 제한된 실회원 우선 답글 | 답글 안전 불변식 위반 0 · 예산 안 |
-| P1 | 상시 실행 호스트 하나로 이전 — 증명일이 아닌 날 리허설과 rollback | reboot·망 복구 뒤 D100 job 증명 |
-| P1 | D20~D100 용량 — 원천 유입·Persona 다양성·댓글·감사 | 단계별 증명일 준비도 green |
-| P2 | 7일 재방문 참여 실사용자 계측과 개선 | Persona 산출 제외 계측 |
-
-## 5. 충돌 장부 — 코드가 정본과 다른 곳
-
-코드 쪽 옛 경로가 사라지면 그 행을 지운다. 정책은 canon 이 이긴다.
-
-| ID | 코드의 옛 경로 | 정본 | 닫는 증거 |
+| 우선순위 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| C1 | 신선도가 적재(초안) 시각을 원문 나이로 쓴다 — 옛 경로 | canon §2 source-to-slot 판정 | 공개 증명 글마다 release 판정 도장 |
-| C2 | 재고·준비도·단계 판정이 경로마다 다른 답을 낸다 — 옛 경로 | canon §2.2 판정 하나 · §3.1 준비도 | 같은 시각 같은 DB 에서 답 하나 |
-| C3 | 700 정지선·14일 감속·2일 버퍼가 공급과 발행 러너를 움직인다 — 옛 경로 | canon §3 JIT | 옛 상수 삭제 · 슬롯 기반 생성 수요 |
-| C4 | 단계 입력원이 여럿이고 사람 천장 env 를 읽는다 — 옛 경로 | canon §6 자동 사다리 | 결정 행 하나가 단계를 정함 |
-| C5 | 준비도가 active 행 수로 Persona 하한을 판정한다 — 옛 경로 | canon §4 contract-valid | contract-valid 수 입력 |
-| C6 | 옛 PASS 가 새 release 계약 뒤에도 승급 근거로 재계산될 수 있다 — 옛 경로 | canon §6 계약 경계 | 계약 전 PASS 로 승급 불가 fixture |
-| C7 | 82cook 수집 job 이 없다 | canon §12 필수 수집원 | 보수적 canary 관측 |
-| C8 | 생활사 축이 `noGoExpressions` 를 **사람마다** 비지 않게 요구한다 — 카드 15/25 장은 개별 말버릇이 없고 `verifySeedCard` · 생성 프롬프트는 빈 목록을 정상으로 읽는다 · 말버릇 비교가 따옴표 표기 때문에 Gate 에서 걸리지 않았다 | canon §4 no-go 경계 · Pool §7-2 | `feat/persona-contract-c8-c9` 에서 **댓글 쪽** 닫힘(미병합): 개인 빈 칸 허용 · 댓글 Gate ⑦⑧ · 댓글 프롬프트가 `persona-no-go` 로 공통 금지 강제. 🔴 **글 쪽(배정 Gate · 글 프롬프트 · 카드 파서)은 품질 계약 지문 파일** — 바꾸려면 판을 올려야 한다(READY legacy 화 · 결정 대기) |
-| C9 | 소재 쏠림은 활동이 표본 하한을 넘는 순간 **모름**, 역할 쏠림은 비율로 **막힘**이 되어 쓰이는 Persona 가 계약에서 빠진다(P02) | canon §4 다양성 · §6-3 | `feat/persona-contract-c8-c9` 에서 닫힘(미병합): 라벨 없는 소재 축 삭제 · 역할 쏠림은 회차 조건 · 증명일 글쓴이 겹침 `PERSONA_REPEAT` |
+| P0-1 | 고정 READY·상세 원천 계약 제거 | preflight가 슬롯별 유효 기회·실측 손실·복구시간으로 필요량 산출, 옛 상수와 중복 판정 삭제 | 하한만 낮추기, D5 수동 승격 |
+| P0-2 | source-to-slot JIT 수렴 | 유료 생성 전·선택·발행 직전·준비도가 같은 판정을 사용, 원문 게시→공개 지연 급감 | 식은 READY 구제, 이벤트별 예외 |
+| P0-3 | 정치/연예 선필터 교체 | 창업자 정치 목록은 유지, 연예·방송·셀럽 정상 수집, 명예훼손·사생활 gate 별도 replay PASS | 공개 인물을 한꺼번에 허용/차단 |
+| P0-4 | 자동 D5 재증명 | 자동 5/5·서로 다른 Persona·첫 댓글·감사·비용·다음 결정 PASS | 사람 승인 글로 편수 채우기 |
+| P0-5 | D10 Persona reserve +6 | contract-valid 30명, 근거 없는 생활사·말투 생성 0 | 단계를 열려고 하한 낮추기 |
+| P1-1 | 선택적 자동 답글 | canon §5의 같은 reply-worthiness 판정, 실회원 우선, loop·중복·자기답글 0 | 모든 댓글에 의무 답글 |
+| P1-2 | 실회원 우선 홈·베스트 | Persona 반응 분리, 현재성·실회원 참여 replay와 실제 화면 검증 | 합성 댓글로 인기 조작 |
+| P1-3 | North Star 계측 | 7일 재방문 참여 고유 실사용자 측정, Persona·봇·운영자 제외 | 게시량을 성공 지표로 대체 |
+| P1-4 | D20~D100 용량 | 같은 계약으로 scheduler·Persona·비용·복구를 단계별 증명 | 단계별 새 정책 fork |
 
-## 6. 대화
+P0-1~P0-3은 서로 같은 판정 파일을 건드릴 가능성이 높아 한 통합 브랜치에서 순차 구현한다.
+Persona reserve와 답글 replay처럼 파일 경계가 다른 일은 병렬로 진행한다. 최종 exact head에서 CI를 한 번 돌린다.
 
-대화 정책은 canon §5 하나다. 실회원 댓글과 Persona 댓글에 같은 reply-worthiness 판정을 쓰고
-실회원 대화를 우선한다. 지금 운영 순서는 첫 댓글 operating PASS 가 먼저이고, 선택적 답글은 병렬로
-설계·replay·shadow 를 진행한다.
+## 5. 확인된 D3 결과와 D5 차단점
 
-## 7. 마스터와 실행 에이전트 계약
+10월 3일 D3 증거는 다음을 모두 통과했다.
 
-- Codex는 목적, 우선순위, 병렬 분해, PASS 판정, 비용·위험 경계를 소유한다.
-- Claude Code는 구현, 검사, PR, 승인된 범위의 merge·배포·운영 관측을 끝까지 수행한다.
-- 서로 다른 파일 집합은 병렬화하고, 같은 파일은 한 writer만 가진다.
-- 창업자에게 PR마다 승인을 요청하지 않는다. exact head, 필수 CI, 통합 트리, rollback이 green이고
-  이미 승인된 계약 안의 가역 변경이면 Codex가 순서를 정하고 Claude가 진행한다.
-- 창업자 결정은 새 비용 상한, credential, 법률·브랜드 정책, DB migration, host 최종 cutover처럼
-  외부 권한·비가역성이 있는 일에 한정한다.
-- 예약 관측을 기다린다는 이유로 다른 구현·검사·Persona·source·host 준비를 멈추지 않는다.
+```text
+target=3 · published=3 · autoTargets=3 · humanApproved=0 · distinctAuthors=3
+firstCommentOk=3 · auditExpected=1 · auditSampled=1 · auditRows=1 · releaseStamped=3
+```
+
+따라서 **D3 증명일 자체는 operating PASS**다. 다만 다음 D5 preflight가 다음 한 이유로 FAIL했다.
+
+```text
+THROUGHPUT_SHORT: target=5 · opportunities=5 · readyNeeded=6 · readyCapacity=5
+```
+
+`opportunities=5`이고 상세 수집은 94.5/day이므로 원천 부족이 아니다. `readyNeeded=6`은 canon에서
+폐기한 고정 20% 할증이고, 실제 문제는 수집→생성 지연과 READY 생산 2.5/day이다. controller가
+10월 4일 d3 REPROVE를 기록한 것은 현재 코드의 보수적 동작이며, 과거 증거를 소급해 D5로 바꾸지 않는다.
+
+## 6. 대화 상태
+
+- Conversation Thread R1은 production에서 다중 답글·직접 답변 대상·한 단계 들여쓰기까지 검증됐다.
+- Persona 자동 댓글은 아직 최상위 첫 댓글만 쓴다.
+- 다음 자동화는 새 UI 구현이 아니라 기존 스레드 계약에 reply planner를 연결하는 일이다.
+- 실회원과 Persona 댓글에 **canon §5의 같은 reply-worthiness 판정**을 쓰되 실회원을 우선한다.
+- 자기 답글·중복·고아·삭제/신고 우회·두 Persona 무한 루프는 영구 0이다.
+
+## 7. 지금 하지 않는 것
+
+- D5를 열기 위한 수동 발행·댓글·승격.
+- 이미 만든 글이 아깝다는 이유의 구제.
+- 명절·연예·날씨별 별도 freshness 정책.
+- 새 콘텐츠 레인 또는 별도 SEO 정보형 레인.
+- 모든 거친 의견·논쟁을 위험으로 보는 광역 필터.
+- 검증 전 운영 DB·env·launchd·예산 변경.
+- 여러 PR을 각각 배포해 runtime을 중간 상태로 만드는 것.
+
+## 8. 다음 갱신 조건
+
+이 문서는 다음 중 하나가 발생하면 즉시 갱신한다.
+
+1. C-01~C-03 교체 PR이 main에 병합되고 runtime에 배포됨.
+2. D5 증명일이 PASS·FAIL·UNKNOWN 중 하나로 끝남.
+3. contract-valid Persona가 30명에 도달함.
+4. 선택적 자동 답글 또는 실회원 우선 랭킹이 production에서 첫 운영 증거를 남김.
+5. runtime·pin·main SHA가 갈라지거나 주요 runner가 반복 실패함.

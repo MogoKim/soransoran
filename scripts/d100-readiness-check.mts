@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import {
   D100_STAGES, allD100Plans, d100Plan, nextStage,
   PLANNED_DETAIL_PER_PUBLIC_POST, D100_PERSONA_TARGET_MAX,
-  READY_NET_MARGIN, POSTS_PER_INVOCATION, schedulerSupportOf,
+  POSTS_PER_INVOCATION, schedulerSupportOf,
   PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, personaTargetReport, describePersonaTargets,
 } from '../src/lib/d100-capacity'
 import { RUNTIME_PROFILES } from '../src/lib/scale-profile'
@@ -93,17 +93,18 @@ console.log('\n① 🔴 🔴 D3→D100 용량 정본 — 숫자는 코드 한 �
 {
   check('🔴 단계는 일곱이다', D100_STAGES.join(',') === 'd3,d5,d10,d20,d30,d50,d100')
   const want: Readonly<Record<string, [number, number, number, number]>> = {
-    // 단계: [공개/day, 상세/day, Persona canary] — 🔴 (2026-09-30) 14일치 완성 글 재고 칸은 지웠다
+    // 단계: [공개/day, 상세 계획 참고값/day, -, Persona canary] — 🔴 (2026-09-30) 14일치 완성 글 재고 칸은 지웠다
     d3: [3, 12, 0, 24], d5: [5, 20, 0, 24], d10: [10, 39, 0, 30],
     d20: [20, 77, 0, 40], d30: [30, 115, 0, 60],
     d50: [50, 191, 0, 100], d100: [100, 382, 0, 180],
   }
   for (const p of allD100Plans()) {
     const w = want[p.stage]!
-    check(`🔴 🔴 **${p.stage} — 공개 ${w[0]} · 상세 ${w[1]} · Persona ${w[3]} · 14일 재고 칸 없음**`,
-      p.publicPostsPerDay === w[0] && p.detailedSourcesRequiredPerDay === w[1]
-      && !('readyStock14Days' in p) && p.personaCanaryFloor === w[3],
-      `${p.publicPostsPerDay}/${p.detailedSourcesRequiredPerDay}/${p.personaCanaryFloor}`)
+    check(`🔴 🔴 **${p.stage} — 공개 ${w[0]} · 상세 계획 ${w[1]} · Persona ${w[3]} · 14일 재고 · 고정 READY 칸 없음**`,
+      p.publicPostsPerDay === w[0] && p.plannedDetailedSourcesPerDay === w[1]
+      && !('readyStock14Days' in p) && !('readyQualifiedRequiredPerDay' in p)
+      && !('detailedSourcesRequiredPerDay' in p) && p.personaCanaryFloor === w[3],
+      `${p.publicPostsPerDay}/${p.plannedDetailedSourcesPerDay}/${p.personaCanaryFloor}`)
   }
   const d100 = d100Plan('d100')
   check('🔴 🔴 **D100 댓글 100~500 · Persona 180~200**',
@@ -114,19 +115,22 @@ console.log('\n① 🔴 🔴 D3→D100 용량 정본 — 숫자는 코드 한 �
     const cap = readFileSync('src/lib/d100-capacity.ts', 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
     return !/export const STOCK_DAYS|export function judgePromotion|readyStock14Days|export function targetStageFor/.test(cap)
   })())
-  check('🔴 상세 필요량은 계획 전환율에서 계산된다',
-    d100.detailedSourcesRequiredPerDay
+  check('🔴 상세 계획 참고값은 계획 전환율에서 계산된다(비권위)',
+    d100.plannedDetailedSourcesPerDay
       === Math.ceil(d100.publicPostsPerDay * PLANNED_DETAIL_PER_PUBLIC_POST))
   check('🔴 다음 단계가 이어진다',
     nextStage('d3') === 'd5' && nextStage('d50') === 'd100' && nextStage('d100') === null)
-  check('🔴 🔴 **문서 단계 표가 코드 정본의 전 행과 같다**', (() => {
+  /**
+   * 🔴 (2026-10-04) canon §4 단계 표는 `공개 · canary · 지속 · 첫 댓글` 이다 — READY/day · 상세/day 칸은
+   *    canon §3.1 이 지웠다(고정 할증 · 고정 상세는 정책 숫자가 아니다). 코드 정본과 전 행을 대조한다.
+   */
+  check('🔴 🔴 **문서 단계 표가 코드 정본의 전 행과 같다 (READY/day · 상세/day 칸 없음)**', (() => {
     const doc = readFileSync('docs/operations/2026-09-21-d100-goal-canon.md', 'utf-8')
       .replaceAll('**', '')
     return allD100Plans().every((p) => doc.includes(
-      `| ${p.stage.toUpperCase()} | ${p.publicPostsPerDay} | ${p.readyQualifiedRequiredPerDay}`
-      + ` | ${p.detailedSourcesRequiredPerDay} | ${p.personaCanaryFloor}`
+      `| ${p.stage.toUpperCase()} | ${p.publicPostsPerDay} | ${p.personaCanaryFloor}`
       + ` | ${p.personaSustainedTarget}${p.stage === 'd100' ? '+' : ''}`
-      + ` | ${p.commentMinPerDay}~${p.commentMaxPerDay} |`,
+      + ` | ${p.commentMinPerDay} |`,
     ))
   })())
 }
@@ -614,17 +618,17 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
     return r.ok && r.funnel.queueTotal === 2 && r.funnel.unpublishedApproved === 1
   })())
 
-  // ⑧ READY **생산** 목표 = ceil(공개 × 1.2)
-  check('🔴 ⑧ **READY 생산 목표는 공개량의 1.2배다 — D3 은 4/day · D100 은 120/day**',
-    Number(READY_NET_MARGIN) === 1.2
-    && allD100Plans().every((p) => p.readyQualifiedRequiredPerDay === Math.ceil(p.publicPostsPerDay * 1.2))
-    && d100Plan('d100').readyQualifiedRequiredPerDay === 120
-    && d100Plan('d3').readyQualifiedRequiredPerDay === 4)
+  // ⑧ 📜 (2026-10-04) READY 생산 목표 = ceil(공개 × 1.2) 를 지웠다 — 필요 READY 는 preflight 실측 계약 하나다
+  check('🔴 ⑧ **고정 READY 할증(1.2)이 용량 정본에 없다 — 필요 READY 는 `readyRequirementOf`(목표 + 실측 손실)**', (() => {
+    const cap = readFileSync('src/lib/d100-capacity.ts', 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
+    return !/READY_NET_MARGIN|readyQualifiedRequiredPerDay|\b1\.2\b/.test(cap)
+      && allD100Plans().every((p) => !('readyQualifiedRequiredPerDay' in p))
+  })())
 
-  // ⑨ 세 값은 서로 다르다
-  check('🔴 ⑨ **공개량·READY 생산은 서로 다른 값이다 · 14일 재고 칸은 없다**', (() => {
+  // ⑨ 공개량과 계획 참고값은 서로 다르다
+  check('🔴 ⑨ **공개량 · 상세 계획 참고값은 서로 다른 값이다 · 14일 재고 칸은 없다**', (() => {
     const p = d100Plan('d100')
-    return p.publicPostsPerDay === 100 && p.readyQualifiedRequiredPerDay === 120
+    return p.publicPostsPerDay === 100 && p.plannedDetailedSourcesPerDay === 382
       && !('readyStock14Days' in p)
   })())
 

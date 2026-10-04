@@ -257,7 +257,7 @@ console.log('\n⑥ 본문을 읽기 전에 후보를 버리지 않는다')
     p.skipped.every((x) => x.reason === 'OVER_MAX'))
   /** 🔴 하드 차단은 그대로다 */
   const hard = planAutoFetch([
-    { sourceArticleId: 'p1', score: 99, flags: ['politicalOrPublicFigure'] },
+    { sourceArticleId: 'p1', score: 99, flags: ['politicalFigure'] },
     { sourceArticleId: 'v1', score: 99, flags: [], alreadyInVault: true },
     { sourceArticleId: 'ok', score: 1, flags: [] },
   ], { max: 10 })

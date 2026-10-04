@@ -93,7 +93,7 @@ export const VERDICT_MEANING: Record<SeedVerdict, string> = {
  *    (이것은 DETAIL 사유의 **일부**일 뿐이다 — 좋은 글도 DETAIL 로 간다)
  */
 export const DETAIL_FLAGS: readonly (readonly [string, string])[] = [
-  ['politicalOrPublicFigure', '정치·공인 언급 가능성'],
+  ['politicalFigure', '정치 인물 언급 가능성'],
   ['medicalOrAdLikely', '의료·광고 가능성'],
   ['quotedOrMediaLikely', '펌글·미디어 인용 가능성'],
   ['titleTruncated', '제목이 잘려 판단 불가'],

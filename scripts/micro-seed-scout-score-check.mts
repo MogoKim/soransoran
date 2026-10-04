@@ -58,13 +58,15 @@ console.log('① 게이트 — 🔴 점수보다 먼저다')
 // ─────────────────────────────────────────────────────────
 check('politics → excluded', gateOf(row({ sourceExcludeReason: 'politics' })).verdict === 'excluded')
 check('pinned → excluded', gateOf(row({ sourceExcludeReason: 'pinned' })).verdict === 'excluded')
-check('publicFigure → excluded', gateOf(row({ sourceExcludeReason: 'publicFigure' })).verdict === 'excluded')
+check('📜 옛 저장 사유 publicFigure(정치 · 연예 혼합) → 정치로 읽는다(fail-closed)',
+  gateOf(row({ sourceExcludeReason: 'publicFigure' })).verdict === 'excluded' && gateOf(row({ sourceExcludeReason: 'publicFigure' })).reason === 'politics')
 check('medicalOrAdLikely → hold', gateOf(row({ qualityFlags: ['medicalOrAdLikely'] })).verdict === 'hold')
-check('publicFigureMention → hold', gateOf(row({ qualityFlags: ['publicFigureMention'] })).verdict === 'hold')
+check('politicalFigureMention(본문 정치 인물) → hold', gateOf(row({ qualityFlags: ['politicalFigureMention'] })).verdict === 'hold')
+check('📜 옛 본문 혼합 플래그 publicFigureMention → hold(가를 수 없음)', gateOf(row({ qualityFlags: ['publicFigureMention'] })).verdict === 'hold')
 check('그 외 → candidate', gateOf(row({ qualityFlags: ['lowEngagement'] })).verdict === 'candidate')
 check('사유가 남는다', gateOf(row({ sourceExcludeReason: 'politics' })).reason === 'politics')
 check('🔴 판정을 다시 만들지 않고 sourceExcludeReason 을 쓴다',
-  /row\.sourceExcludeReason === 'politics'/.test(LIB_CODE) && !/judgePoliticsTitle/.test(LIB_CODE),
+  /isPoliticsExcludeReason\(row\.sourceExcludeReason\)/.test(LIB_CODE) && !/judgePoliticsTitle/.test(LIB_CODE),
   '두 곳에서 판정하면 언젠가 갈라진다 (PR-S2-b-8 이 하나로 합친 이유)')
 check('hold 플래그가 둘이다', HOLD_FLAGS.length === 2)
 
@@ -76,7 +78,7 @@ console.log('\n② 🔴 제외·보류가 상위 후보에 섞이지 않는다')
     // 🔴 공지는 조회수가 압도적이다(실측 중앙 2,111 vs 321). 점수제면 이겼을 값
     row({ sourceArticleId: 'pin', sourceExcludeReason: 'pinned', sourceCommentCount: 500, sourceViewCount: 99999 }),
     row({ sourceArticleId: 'pol', sourceExcludeReason: 'politics', sourceCommentCount: 400, sourceViewCount: 9999 }),
-    row({ sourceArticleId: 'pf', sourceExcludeReason: 'publicFigure', sourceCommentCount: 300, sourceViewCount: 8888 }),
+    row({ sourceArticleId: 'pf', sourceExcludeReason: 'politics', sourceCommentCount: 300, sourceViewCount: 8888 }),
     row({ sourceArticleId: 'med', qualityFlags: ['medicalOrAdLikely'], sourceCommentCount: 200, sourceViewCount: 7777 }),
     row({ sourceArticleId: 'ok1', sourceCommentCount: 10, sourceViewCount: 200 }),
     row({ sourceArticleId: 'ok2', sourceCommentCount: 2, sourceViewCount: 50 }),
@@ -318,18 +320,18 @@ console.log('\n⑪ laneHint — 🔴 "좋은 글인가" 가 아니라 "어느 �
   // ── 게이트가 레인보다 먼저다 ──
   check('🔴 정치 → exclude', lane('정치 얘기 좀', { sourceExcludeReason: 'politics' }).lane === 'exclude')
   check('🔴 공지·필독·추천 → exclude', lane('공지사항', { sourceExcludeReason: 'pinned' }).lane === 'exclude')
-  check('🔴 실명·공인 → exclude', lane('누구누구 소식', { sourceExcludeReason: 'publicFigure' }).lane === 'exclude')
+  check('🔵 연예 · 방송 제목(사유 없음) → exclude 아님 — 공인 이름은 제외 사유가 아니다(P0-3)',
+    lane('배우 근황 드라마 첫방', {}).lane !== 'exclude')
   check('🔴 medical/ad flag → hold',
     lane('영양제 효과 있나요', { qualityFlags: ['medicalOrAdLikely'] }).lane === 'hold')
-  check('publicFigureMention → hold', lane('제목', { qualityFlags: ['publicFigureMention'] }).lane === 'hold')
+  check('politicalFigureMention → hold', lane('제목', { qualityFlags: ['politicalFigureMention'] }).lane === 'hold')
 
   // ── 🔴 정치가 growth 보다 먼저다 ──
   check('🔴 정치 어휘 + 연예가 섞이면 exclude 가 이긴다',
     lane('정치인 드라마 출연 화제', { sourceExcludeReason: 'politics' }).lane === 'exclude',
     '순서를 바꾸면 "정치인 + 방송 출연" 글이 growth 로 새어 나간다')
-  check('🔴 publicFigure 사유에 Growth 여지를 남긴다',
-    /Growth 여지/.test(lane('배우 근황', { sourceExcludeReason: 'publicFigure' }).reason),
-    '사유를 안 남기면 Growth 레인이 열릴 때 무엇을 되살릴지 알 수 없다')
+  check('📜 publicFigure 사유 · Growth 여지 문구는 지웠다 — 옛 저장 사유는 정치로만 읽는다',
+    !/Growth 여지/.test(LIB_CODE) && lane('배우 근황', { sourceExcludeReason: 'publicFigure' }).lane === 'exclude')
   check('🔴 정치 사유는 어디에도 안 간다고 적는다',
     /어디에도 가지 않는다/.test(lane('x', { sourceExcludeReason: 'politics' }).reason))
 

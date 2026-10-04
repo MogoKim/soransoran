@@ -1,7 +1,8 @@
 # Persona DB 모델 설계
 
-> 작성 2026-08-31 · 상태 **설계 기록 · schema/migration 적용 완료**
-> 현재 구현·운영 상태: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
+> 📜 **역사 문서 — 현재 정책에 투표하지 않는다.** 현재 권위와 상태는
+> [`README.md`](./README.md)가 가리키는 네 문서가 정한다.
+> 작성 2026-08-31 · 상태 **당시 설계 기록 · schema/migration 적용 완료**
 > 선행: [Pool 설계](2026-08-30-persona-pool-design.md) · [MVP 활성화](2026-08-30-persona-mvp-activation-design.md) ·
 > [Gate ⑥ 닉네임 충돌](2026-08-31-persona-gate6-nickname-collision-design.md)
 > 정책 정본: [전략 §10](2026-08-29-persona-network-strategy.md) 외부 비공개 / 내부 어드민 명확 구분

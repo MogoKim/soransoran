@@ -23,7 +23,9 @@ import {
   type PriorArtifactRow, type PriorJudgementRow, type PriorOutcome,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
   WORKSET_VERSION, worksetFileName, preGenerationRelease, worksetEligibility, type WorksetRow,
+  assignSourceSlots, WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, sourceIdentityOf,
 } from '../src/lib/supply-workset'
+import { articleIdHashOf } from '../src/lib/source-slot-release'
 import { RUNNER_GRID, slotValidOpportunitiesOf, sourceOpportunitiesOf } from './lib/stage-preflight-facts.mjs'
 import { judgeNextPreflight, slotTimesOn, type PreflightFacts } from '../src/lib/stage-ladder-generic'
 import { profileOf } from '../src/lib/scale-profile'
@@ -376,8 +378,9 @@ console.log('\n⑦ 🔴 배선이 실제로 그렇게 돼 있는가')
     const plan = runner.indexOf('planBoundedCommonPhase(after1')
     return adapt > 0 && call > adapt && plan > call
   })())
+  // 🔴 (2026-10-04 P0-2) 예산 거부는 이번 회차 유료 상한(PAID_LIMIT — 부족분 · 천장 WORKSET_LIMIT)에 건다
   check('🔴 🔴 **상한이 잘못되면 실행 전에 멈춘다**',
-    /const budget = judgeStageBudget\(WORKSET_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)[\s\S]{0,120}return 1/.test(runner))
+    /const budget = judgeStageBudget\(PAID_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)[\s\S]{0,120}return 1/.test(runner))
   /**
    * 🔴 회차 시각이 자식 env 에 함께 실리면서 모양이 바뀌었다(2026-09-23) —
    *    지키는 것은 같다: **자식에게만** 실리고, 부모 `process.env` 는 건드리지 않는다.
@@ -1609,9 +1612,10 @@ console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하�
   // 스냅샷(생성 가능 원천의 증거) → preflight 기회 — 같은 변환(`sourceOpportunitiesOf`)
   const slots = slotTimesOn('2026-09-21', profileOf('d3'))
   const facts = (opps: number): PreflightFacts => ({
-    slotValidOpportunities: opps, readyPerSource: 0.1, latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
+    slotValidOpportunities: opps, readyCohort: { sources: 30, published: 3, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.02 },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyUsdPerReady: 0.02, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   })
   const oppOf = (eligible: readonly WorksetRow[]) => slotValidOpportunitiesOf({
     slots, ready: [], readyPerSource: 0.1,
@@ -1638,6 +1642,61 @@ console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하�
     /const opp = worksetEligibility\(eligibilityInput\)\.eligible/.test(runner)
     && /selectWorkset\(\{\s*\.\.\.eligibilityInput,/.test(runner)
     && !/releaseOf\(r\)\.verdict === 'eligible'/.test(runner))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑳ 🔴 🔴 (2026-10-04 P0-2 보정) 부족 슬롯마다 원천을 따로 짝짓는다 · workset-v3 의도 필수')
+// ─────────────────────────────────────────────────────────
+{
+  const s1 = new Date(NOW.getTime() + 2 * 3_600_000)
+  const s2 = new Date(NOW.getTime() + 20 * 3_600_000)
+  const A = ROW({ sourceArticleId: 'jitA', commentCount: 30 })
+  const B = ROW({ sourceArticleId: 'jitB', commentCount: 20 })
+  // 🔴 첫 슬롯(+2h)에서는 62h — eligible · 두 번째 슬롯(+20h)에서는 80h — 만료
+  const C = ROW({ sourceArticleId: 'jitC', commentCount: 90, sourcePostedAt: new Date(NOW.getTime() - 60 * 3_600_000).toISOString() })
+  const two = assignSourceSlots({ rows: [A, B], slots: [s1, s2], now: NOW, cap: 2 })
+  const at = [...two.values()].map((d) => d.getTime()).sort()
+  check('🔴 🔴 **부족 슬롯 2개 → 원천 2개가 서로 다른 slotAt 으로 배정된다**',
+    two.size === 2 && at[0] === s1.getTime() && at[1] === s2.getTime(), JSON.stringify([...two].map(([k, d]) => [k, d.toISOString()])))
+  check('🔴 🔴 **첫 슬롯에만 유효하고 남은 부족 슬롯(두 번째) 전에 만료되는 원천은 배정 0**',
+    assignSourceSlots({ rows: [C], slots: [s2], now: NOW, cap: 1 }).size === 0
+    && assignSourceSlots({ rows: [C], slots: [s1, s2], now: NOW, cap: 2 }).get(sourceIdentityOf(W, 'jitC')!)?.getTime() === s1.getTime())
+  const mixed = assignSourceSlots({ rows: [A, C], slots: [s1, s2], now: NOW, cap: 2 })
+  check('🔴 🔴 **각 원천은 자기 슬롯 시각에 판정 — 첫 슬롯 전용 C 는 첫 슬롯 · 두 슬롯 다 유효한 A 는 두 번째 슬롯**',
+    mixed.get(sourceIdentityOf(W, 'jitC')!)?.getTime() === s1.getTime()
+    && mixed.get(sourceIdentityOf(W, 'jitA')!)?.getTime() === s2.getTime(),
+    JSON.stringify([...mixed].map(([k, d]) => [k, d.toISOString()])))
+  check('🔴 유료 상한이 1 이면 한 원천만 · 상한 0 이면 0',
+    assignSourceSlots({ rows: [A, B], slots: [s1, s2], now: NOW, cap: 1 }).size === 1
+    && assignSourceSlots({ rows: [A, B], slots: [s1, s2], now: NOW, cap: 0 }).size === 0)
+  const slotOf = (r: WorksetRow): Date | null => two.get(sourceIdentityOf(r.sourceSite, r.sourceArticleId) ?? '') ?? null
+  const plan = selectWorkset({
+    rows: [A, B, C], humanDecided: humanDecisionIndexOf([]), queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS,
+    carriedOver: EMPTY_SOURCE_KEYS, concluded: new Set(), attempted: new Map(),
+    releaseOf: (r) => preGenerationRelease(r, slotOf(r) ?? s1, NOW), intendedSlotOf: slotOf,
+    limit: 5, runId: RUN, takenAt: NOW,
+  })
+  check('🔴 배정 없는 원천(C)은 고르지 않는다 — slotUnassigned',
+    plan.picked.map(sid).sort().join(',') === 'jitA,jitB' && plan.dropped.slotUnassigned === 1, JSON.stringify(plan.dropped))
+  const ws = plan.workset
+  check('🔴 🔴 **workset-v3 — 계약 표식 · 원천마다 slotAt · ageAtSlotH 필수**',
+    ws.version === WORKSET_VERSION_JIT && ws.contract === SUPPLY_JIT_CONTRACT
+    && ws.sources.every((x) => typeof x.slotAt === 'string' && typeof x.ageAtSlotH === 'number')
+    && new Set(ws.sources.map((x) => x.slotAt)).size === 2, JSON.stringify(ws))
+  const back = readWorkset(JSON.parse(JSON.stringify(ws)), RUN)
+  const ia = back.ok ? back.intents?.get(sourceIdentityOf(W, 'jitA')!) : undefined
+  check('🔴 판독기가 의도(계약 · 회차 · 원천 해시 · intendedSlotAt)를 돌려준다 — 판정 · 생성 · 적재가 같은 값을 읽는다',
+    back.ok && back.intents?.size === 2 && ia !== undefined && ia.runId === RUN && ia.contract === SUPPLY_JIT_CONTRACT
+    && ia.sourceHash === articleIdHashOf(W, 'jitA') && ia.intendedSlotAt === two.get(sourceIdentityOf(W, 'jitA')!)!.toISOString())
+  const broken = JSON.parse(JSON.stringify(ws)) as { sources: Record<string, unknown>[] }
+  delete broken.sources[0]!.ageAtSlotH
+  check('🔴 v3 원천 하나라도 ageAtSlotH 가 없으면 묶음 전체를 받지 않는다(SHAPE)', (() => {
+    const r = readWorkset(broken, RUN); return !r.ok && r.code === 'SHAPE'
+  })())
+  const old = sel({ rows: [A, B] })
+  check('🔴 옛 판(v2 · intendedSlotOf 없음)은 의도가 없다(intents null) — JIT 근거로 세지 않는다', (() => {
+    const r = readWorkset(JSON.parse(JSON.stringify(old.workset)), RUN); return r.ok && r.intents === null && old.workset.version === WORKSET_VERSION
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

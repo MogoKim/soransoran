@@ -21,6 +21,8 @@
  *    여기서는 그 결과를 **읽어서 조합만** 한다 — 새 정규식을 만들지 않는다.
  */
 import { sourceIdentityOf } from './source-identity'
+import { isPoliticalFigureTitleFlag } from './political-flags'
+import { HANJA_LANGUAGE_FIT } from './cjk-ideograph'
 
 /** 🔴 사람 값과 절대 겹치지 않는 이름 */
 export const AUTO_DECISIONS = ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const
@@ -56,6 +58,8 @@ export type ReasonCode =
   | 'medicalOrAd' | 'noTitle' | 'noBodyHead' | 'bodyHeadTooLong'
   | 'semanticUnavailable' | 'lowConfidence' | 'semanticDrop' | 'semanticHold' | 'semanticFailed'
   | 'unexplainedModelDrop' | 'axisMismatch'
+  /** 🔴 실제 한자 문자 — 언어 핏(정치 아님 · P0-3 최종) */
+  | 'hanjaLanguageFit'
   | SemanticRisk
 
 export const REASON_LABEL: Record<ReasonCode, string> = {
@@ -95,6 +99,7 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   targetedHarassmentOrThreat: '🔴 특정인을 향한 위협 · 괴롭힘 · 혐오 선동',
   dangerousMedicalInstruction: '🔴 약 · 용량 · 진단 · 치료를 확정적으로 지시한다 (경험담은 해당하지 않는다)',
   politicalCampaigning: '🔴 정치 · 진영 선동 (§4-K)',
+  hanjaLanguageFit: '🔴 실제 한자 문자 — 서비스 언어 핏이 아니다(정치 판정 아님)',
   semanticFailed: '의미 판정 호출이 실패했다',
   unexplainedModelDrop: '🔴 모델이 버리라 했는데 버릴 사유를 대지 못했다 — 사람에게 넘긴다',
   axisMismatch: '모델이 다른 축을 말했다 — 축은 우리가 정한다',
@@ -114,6 +119,7 @@ export const HARD_BLOCK: readonly ReasonCode[] = [
   'semanticDrop',
   'identifiablePrivatePerson', 'unverifiedDefamation',
   'targetedHarassmentOrThreat', 'dangerousMedicalInstruction', 'politicalCampaigning',
+  'hanjaLanguageFit',
 ] as const
 
 /**
@@ -248,6 +254,8 @@ export const KNOWN_SAFETY_CODES: readonly string[] = [
   'promotion', 'hostility', 'visualDependent', 'access', 'volatile',
   // 🔴 2026-09-16 추가 — 여기 없으면 `unknownReason` 으로 잡힌다
   'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
+  // 🔴 2026-10-04 P0-3 최종 — 언어 핏(정치 아님)
+  'hanjaLanguageFit',
 ] as const
 
 export const SEED_AXIS = 'seedOriginality'
@@ -410,7 +418,10 @@ export function readReasons(raw: string): ReasonCode[] {
 export function readFlags(flags: readonly string[]): ReasonCode[] {
   const out: ReasonCode[] = []
   for (const f of flags) {
-    if (f === 'politicalOrPublicFigure') out.push('politics')
+    // 🔴 정치 인물 제목만 정치다(P0-3) — 연예 · 방송 이름은 플래그가 아니다. 옛 혼합 플래그는 가를 수 없어 정치로 읽는다
+    if (isPoliticalFigureTitleFlag(f)) out.push('politics')
+    // 🔴 언어 핏은 언어 핏 사유로 — 정치로 위장하지 않는다
+    else if (f === HANJA_LANGUAGE_FIT) out.push('hanjaLanguageFit')
     // 🔴 `medicalOrAdLikely` 는 이름 그대로 **의료 또는 광고**다. 둘을 가르는 정보가
     //    이 플래그에 없는데 v1 이 `medicalClaim` 으로 단정했다 — 사유를 왜곡한 것이다.
     //    이제 별도 코드로 남기고, 의료인지 광고인지는 semantic judge 가 본다.

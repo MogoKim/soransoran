@@ -445,9 +445,11 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
   {
     const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
     const tplP = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
-    check('🔴 러너가 정본 해석(resolveWorksetLimit)과 예산 거부를 쓴다',
+    // 🔴 (2026-10-04 P0-2) 묶음 천장은 정본 해석(WORKSET_LIMIT) 그대로 · 이번 회차 유료 상한은 부족분에서(paidSourcesFor)
+    check('🔴 러너가 정본 해석(resolveWorksetLimit)을 천장으로 · 부족분 유료 상한(PAID_LIMIT)에 예산 거부를 쓴다',
       /const WORKSET_LIMIT = resolveWorksetLimit\(process\.argv\.slice\(2\)\)/.test(runner)
-      && /const budget = judgeStageBudget\(WORKSET_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)/.test(runner))
+      && /paidSourcesFor\(\{ deficit: policy\.upTo, [^)]*cap: WORKSET_LIMIT \}\)/.test(runner)
+      && /const budget = judgeStageBudget\(PAID_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)/.test(runner))
     check('🔴 🔴 **launchd 템플릿은 --workset-limit 를 덮어쓰지 않는다 — 계약 기본값(10)이 돈다**',
       !tplP.includes('--workset-limit') && /<string>--live<\/string>/.test(tplP))
     check('🔴 설명 문구가 10 · 40 · judge 10 · draft 30 을 말한다',

@@ -13,6 +13,7 @@
  * 🔴 **이 파일은 네트워크도 DB 도 만지지 않는다.** 순수 함수뿐이다 —
  *    그래야 fixture 가 브라우저 없이 전부 검증한다.
  */
+import { isPoliticalFigureBodyFlag, isPoliticsExcludeReason } from '../../src/lib/political-flags'
 
 // ─────────────────────────────────────────────────────────
 // 입력 — scout list JSONL 의 행 (읽기 전용)
@@ -33,7 +34,8 @@ export type ScoutRow = {
   sourceRunId?: string
   sourceBoardKey?: string | null
   sourceMenuId?: string | null
-  sourceExcludeReason?: 'politics' | 'publicFigure' | 'pinned' | null
+  /** 🔴 저장된 행의 값 — 옛 사유(`publicFigure`)는 정치로 읽는다(`isPoliticsExcludeReason`) */
+  sourceExcludeReason?: string | null
   qualityFlags?: string[]
 }
 
@@ -110,7 +112,7 @@ export function toArticles(rows: readonly ScoutRow[]): ArticleObservation[] {
 export type Verdict = 'excluded' | 'hold' | 'candidate'
 
 /** 본문을 봐야 아는 위험 — 목록 단계에서는 **보류**이지 제외가 아니다 */
-export const HOLD_FLAGS = ['medicalOrAdLikely', 'publicFigureMention'] as const
+export const HOLD_FLAGS = ['medicalOrAdLikely', 'politicalFigureMention'] as const
 
 export type Gate = {
   verdict: Verdict
@@ -121,12 +123,12 @@ export type Gate = {
 export function gateOf(row: ScoutRow): Gate {
   // 🔴 sourceExcludeReason 이 단일 판정이다 (PR-S2-b-8). 여기서 다시 만들지 않는다 —
   //    두 곳에서 판정하면 언젠가 갈라진다.
-  if (row.sourceExcludeReason === 'politics') return { verdict: 'excluded', reason: 'politics' }
+  if (isPoliticsExcludeReason(row.sourceExcludeReason)) return { verdict: 'excluded', reason: 'politics' }
   if (row.sourceExcludeReason === 'pinned') return { verdict: 'excluded', reason: 'pinned' }
-  if (row.sourceExcludeReason === 'publicFigure') return { verdict: 'excluded', reason: 'publicFigure' }
 
   const flags = row.qualityFlags ?? []
-  const hit = HOLD_FLAGS.find((f) => flags.includes(f))
+  // 🔴 본문 정치 인물(옛 혼합 플래그는 가를 수 없어 같은 축으로) · 의료/광고 → 보류. 연예 · 방송 이름은 보류 사유가 아니다(P0-3)
+  const hit = flags.find((f) => (HOLD_FLAGS as readonly string[]).includes(f) || isPoliticalFigureBodyFlag(f))
   if (hit) return { verdict: 'hold', reason: hit }
 
   return { verdict: 'candidate', reason: null }
@@ -577,14 +579,9 @@ export function laneHintOf(row: ScoutRow, gate: Gate): LaneHint {
   const short = [...title].length <= SHORT_TITLE_CHARS
 
   if (gate.verdict === 'excluded') {
-    // 🔴 publicFigure 는 생활 Original 에서 빼되 **Growth 여지를 사유에 남긴다** (§4-C).
-    //    사유를 안 남기면 Growth 레인이 열릴 때 무엇을 되살릴지 알 수 없다.
-    const reason =
-      gate.reason === 'publicFigure'
-        ? '실명·공인 언급 — 생활 Original 제외. 🔵 연예·셀럽이면 Growth 여지 있음'
-        : gate.reason === 'politics'
-          ? '정치·진영 — 🔴 public · growth · shadow 어디에도 가지 않는다'
-          : '고정 슬롯(공지·필독·추천) — 자동 상세 대상 아님'
+    const reason = gate.reason === 'politics'
+      ? '정치·진영 — 🔴 public · growth · shadow 어디에도 가지 않는다'
+      : '고정 슬롯(공지·필독·추천) — 자동 상세 대상 아님'
     return { lane: 'exclude', reason, signals }
   }
   if (gate.verdict === 'hold') {

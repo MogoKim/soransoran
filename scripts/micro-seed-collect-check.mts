@@ -564,7 +564,7 @@ const bad = (name: string, kind: string, detail: string) => {
   // 🔴 본문에 이름이 있어도 목록 단계에서는 붙지 않아야 한다 — 본문을 읽지 않았기 때문이다
   const listNoFigure = !assessCandidate({
     originalTitle: '눈썹거상은 얼마정도 할까요?', sourceCommentCount: 7, rawBody: '',
-  }).flags.includes('publicFigureMention')
+  }).flags.includes('politicalFigureMention')
   const stageOk = list.stage === 'list' && detail.stage === 'detail'
   const bodyZero = list.signals.bodyLength === 0
   const detailFlagged = detail.flags.includes('shortBody')
@@ -620,7 +620,7 @@ const bad = (name: string, kind: string, detail: string) => {
   // (1) `전세계` 안의 `전세` 를 생활 어휘로 읽었다
   const a = assessCandidate({ originalTitle: '전세계 슈퍼쳇 1위. 유시민작가의 간곡한부탁', sourceCommentCount: 6, rawBody: '' })
   if (a.flags.includes('targetLikely')) offenders.push('전세계→전세')
-  if (!a.flags.includes('politicalOrPublicFigure')) offenders.push('유시민작가 미탐지')
+  if (!a.flags.includes('politicalFigure')) offenders.push('유시민작가 미탐지')
 
   // (2) 목록 제목 말줄임(`…`)을 낚시성으로 읽었다
   const b = assessCandidate({ originalTitle: '초등 저학년 교육 시간 확대?…', sourceCommentCount: 1, rawBody: '' })
@@ -629,7 +629,7 @@ const bad = (name: string, kind: string, detail: string) => {
 
   // (3) `교회 목사` 의 `교회` 를 사람 이름으로 읽었다
   const c = assessCandidate({ originalTitle: '진짜 교회 목사 자녀들은 유학을 왜그리들 가는지', sourceCommentCount: 0, rawBody: '' })
-  if (c.flags.includes('politicalOrPublicFigure')) offenders.push('교회 목사→실명')
+  if (c.flags.includes('politicalFigure')) offenders.push('교회 목사→실명')
 
   // (4) 실제 발행된 글의 잘린 꼬리(`도와주..`)를 낚시성으로 읽었다
   const d = assessCandidate({
@@ -738,14 +738,14 @@ const bad = (name: string, kind: string, detail: string) => {
     rawBody: '제가 요며칠 증상이 심해서 치과에 다녀왔어요. 목구멍 이물감이 계속됩니다.',
   })
   const hasReason = (x: typeof a, flag: string) => (x.signals.matched[flag]?.length ?? 0) > 0
-  const okA = hasReason(a, 'politicalOrPublicFigure')
+  const okA = hasReason(a, 'politicalFigure')
   const okB = hasReason(b, 'targetLikely') && hasReason(b, 'personalExperienceLikely') && hasReason(b, 'practicalConcernLikely')
   // 근거 없이 붙는 플래그가 없어야 한다 (근거를 남기는 종류에 한해)
-  const reasoned = ['politicalOrPublicFigure', 'clickbaitTitle', 'targetLikely',
+  const reasoned = ['politicalFigure', 'clickbaitTitle', 'targetLikely',
     'personalExperienceLikely', 'practicalConcernLikely', 'titleTruncated']
   const orphan = [a, b].flatMap((x) => x.flags.filter((f) => reasoned.includes(f) && !hasReason(x, f)))
   if (okA && okB && !orphan.length) {
-    ok('플래그마다 근거가 남는다', 'policy', `${JSON.stringify(a.signals.matched.politicalOrPublicFigure)}`)
+    ok('플래그마다 근거가 남는다', 'policy', `${JSON.stringify(a.signals.matched.politicalFigure)}`)
   } else {
     bad('플래그마다 근거가 남는다', 'policy', `a=${okA} b=${okB} orphan=${orphan.join(',')}`)
   }
@@ -790,16 +790,16 @@ const bad = (name: string, kind: string, detail: string) => {
 {
   const a = assessCandidate({ originalTitle: '눈썹거상은 얼마정도 할까요?', sourceCommentCount: 7, rawBody: BODY_4232047 })
   const missing: string[] = []
-  for (const f of ['medicalOrAdLikely', 'publicFigureMention', 'quotedOrMediaLikely']) {
+  for (const f of ['medicalOrAdLikely', 'quotedOrMediaLikely']) {
     if (!a.flags.includes(f as never)) missing.push(f)
   }
-  // 근거가 남아야 사람이 검증할 수 있다
-  const namedReason = a.signals.matched.publicFigureMention?.includes('장영란') ?? false
+  // 🔴 (2026-10-04 P0-3) 본문의 방송인 이름(장영란)은 정치 인물이 아니다 — 플래그 · 감점이 붙지 않는다
+  const namedReason = !a.flags.includes('politicalFigureMention')
   const medReason = (a.signals.matched.medicalOrAdLikely ?? []).some((x) => x === '피부과' || x === '얼마')
-  // 🔴 여전히 후보로 남는다. 점수만 내려간다
-  const kept = a.flags.length > 0 && selectionScore(a) < 40
+  // 🔴 여전히 후보로 남는다 — 의료 · 전언 신호로 순서만 내려간다
+  const kept = a.flags.length > 0
   if (!missing.length && namedReason && medReason && kept) {
-    ok('본문 위험 3종 — 4232047 유형', 'policy', `${selectionScore(a)}점 · ${JSON.stringify(a.signals.matched.publicFigureMention)}`)
+    ok('본문 위험 2종 + 방송인 이름은 플래그 아님 — 4232047 유형', 'policy', `${selectionScore(a)}점`)
   } else {
     bad('본문 위험 3종 — 4232047 유형', 'policy',
       `missing=${missing.join(',')} name=${namedReason} med=${medReason} kept=${kept}`)
@@ -818,7 +818,7 @@ const bad = (name: string, kind: string, detail: string) => {
     originalTitle: '턱관절치과 다녀온후..저 망한 게 맞는것 같아요 82님들 도와주..',
     sourceCommentCount: 5, rawBody: BODY_4231985,
   })
-  const RISKY = ['medicalOrAdLikely', 'publicFigureMention', 'quotedOrMediaLikely']
+  const RISKY = ['medicalOrAdLikely', 'politicalFigureMention', 'quotedOrMediaLikely']
   const goodClean = !good.flags.some((f) => RISKY.includes(f))
   const publishedClean = !published.flags.some((f) => RISKY.includes(f))
   const goodStrong = good.flags.includes('targetLikely') && good.flags.includes('personalExperienceLikely')

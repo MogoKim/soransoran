@@ -15,7 +15,9 @@
  * 🔴 **정치 판정을 여기서 다시 만들지 않는다.**
  *    `findPoliticalTopicHit` 하나를 쓴다 — 두 곳에서 판정하면 언젠가 갈라진다 (§4-K).
  */
-import { findPoliticalTopicHit } from './micro-seed-quality.mjs'
+import { findPoliticalFigureHits, findPoliticalTopicHit } from './micro-seed-quality.mjs'
+import { isPoliticsExcludeReason } from '../../src/lib/political-flags'
+import { findCjkIdeograph } from '../../src/lib/cjk-ideograph'
 // 🔴 위기 신호·의료 판단 요청·건강 효능 주장의 정본은 순수 판정 하나다 —
 //    여기서 정규식을 다시 적으면 semantic 판정과 갈라진다
 import { judgeSafetySignals } from '../../src/lib/micro-seed-safety-signals'
@@ -46,6 +48,8 @@ export type SafetyReasonCode =
   | 'medicalDecisionRequest'
   /** 🔴 ⑪ 건강 효능 주장 — 전언형(*"~라고 한다"*)도 면제하지 않는다 */
   | 'healthEfficacyClaim'
+  /** 🔴 ⑫ 실제 한자 문자 — 언어 핏(정치 아님 · 2026-10-04 P0-3 최종) */
+  | 'hanjaLanguageFit'
 
 export type SafetyReason = { code: SafetyReasonCode; note: string }
 
@@ -69,7 +73,8 @@ export type SafetyInput = {
   sourceRowLabel?: string | null
   sourcePinned?: boolean
   /** 수집기가 이미 내린 단일 제외 판정 (PR-S2-b-8) */
-  sourceExcludeReason?: 'politics' | 'publicFigure' | 'pinned' | null
+  /** 🔴 저장된 행의 값 — 옛 사유(`publicFigure`)는 정치로 읽는다(`isPoliticsExcludeReason`) */
+  sourceExcludeReason?: string | null
   qualityFlags?: readonly string[]
   /** 상세 열람 결과. 못 읽었으면 이유를 준다 */
   accessStatus?: 'ok' | 'deletedOrExpired' | 'permissionDenied' | 'renderFailed' | 'unknown'
@@ -101,9 +106,16 @@ const MEDICAL_CLAIM =
 const PROMOTION =
   /협찬|공구|공동구매|체험단|서포터즈|할인코드|쿠폰코드|추천인|링크 ?(타고|클릭)|구매 ?링크|카톡 ?문의|디엠 ?문의|DM ?문의|문의 ?주세요|판매합니다|팝니다|분양|입금|계좌/
 
-/** ⑥ 욕설 · 혐오 · 분쟁 유도 */
+/**
+ * ⑥ **보호 대상 집단 혐오 — 문맥 없이도 명백한 것만** (2026-10-04 P0-3 구조 보정).
+ *    나이(틀딱) · 성별/양육(맘충 · 한남 · 김치녀) · 장애(병신) 를 낮잡는 집단 비하어만 결정적으로 버린다.
+ *    🔴 일반 욕설 · 거친 감탄(시발 · 지랄 · 미친 · 꺼져) · 작품 비판은 낱말 하나로 버리지 않는다 — 주관적 의견이다.
+ *    🔴 특정인 공격 동원 · 위협(죽어라 · 패죽) · 신상 박제 · 근거 없는 중대 사실 단정은 **의미 판정 사유**가 막는다
+ *       (`targetedHarassmentOrThreat` · `identifiablePrivatePerson` · `unverifiedDefamation`) — 여기서 낱말로 흉내 내지 않는다.
+ *    🔴 진영 멸칭(찢재명 · 쥐박이 …)은 정치 판정(`findPoliticalTopicHit`)이 막는다 — 혐오로 위장하지 않는다.
+ */
 const HOSTILITY =
-  /[시씨]발|개[새쉐]끼|병신|지랄|미친년|미친놈|꺼져|죽어라|틀딱|맘충|한남|김치녀|일베|메갈|찢[재짜]|쥐박|극혐|패[죽]|고소각|박제/
+  /틀딱|맘충|한남|김치녀|병신/
 
 /** ⑦ 이미지 의존 — 🔴 이미지를 가져오겠다는 뜻이 아니다. **쓸 수 없다는 표시**다 */
 const VISUAL_DEPENDENT =
@@ -154,10 +166,15 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
   }
 
   // ① 정치 — 🔴 hardExclude. 어디에도 가지 않는다 (§4-K)
-  const politicsHit = findPoliticalTopicHit(title) ?? findPoliticalTopicHit(body)
-  if (input.sourceExcludeReason === 'politics' || politicsHit) {
+  // 🔴 정치 주제(본문까지) + 제목의 정치 인물(P0-3) — 82cook · 네이버카페가 같은 판정을 지난다. 연예 · 방송 이름은 보지 않는다
+  const politicsHit = findPoliticalTopicHit(title) ?? findPoliticalTopicHit(body) ?? findPoliticalFigureHits(title)[0] ?? null
+  if (isPoliticsExcludeReason(input.sourceExcludeReason) || politicsHit) {
     add('politics', politicsHit ? `정치 키워드(${politicsHit})` : '수집기 정치 판정', 'hardExclude')
   }
+
+  // ⑫ 언어 핏 — 🔴 사용자에게 보이는 제목 · 본문의 실제 한자 문자. 정치가 아니다 — 별도 사유로 버린다
+  const hanja = findCjkIdeograph(title) ?? findCjkIdeograph(body)
+  if (hanja !== null) add('hanjaLanguageFit', `한자 문자(${hanja})`, 'drop')
 
   // ② 공지 · 필독 · 추천 고정 슬롯 — 🔴 조회수가 압도적이라 점수로는 못 막는다
   const label = (input.sourceRowLabel ?? '').trim()
@@ -185,9 +202,9 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
   const promo = has(PROMOTION, title, body, cmtText)
   if (promo) add('promotion', `광고·홍보 표현(${promo})`, 'hold')
 
-  // ⑥ 욕설 · 혐오 · 분쟁 유도 — 🔴 커뮤니티 성격을 바꾼다. 쓰지 않는다
+  // ⑥ 보호 대상 집단 혐오 — 🔴 커뮤니티 성격을 바꾼다. 쓰지 않는다(거친 말 · 작품 비판은 여기 아니다)
   const hostile = has(HOSTILITY, title, body, cmtText)
-  if (hostile) add('hostility', '욕설·혐오·분쟁 유도', 'drop')
+  if (hostile) add('hostility', '보호 대상 집단 비하', 'drop')
 
   // ⑦ 이미지 의존 — 🔴 이미지 없이는 재사용이 안 된다 (§4-Q)
   //    본문이 거의 없고 이미지만 있는 경우도 같다

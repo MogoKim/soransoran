@@ -207,6 +207,10 @@ export type SupplyCallInput = {
   userPayload: string
   maxOutputTokens: number
   timeoutMs: number
+  /** 🔴 원천 해시(`articleIdHashOf`) — 장부 줄의 `sourceKey`. 원천 밖 요청은 비운다 */
+  sourceKey?: string | null
+  /** 🔴 JIT 공급 계약 표식 — 그 회차 `workset-v3` 묶음 안 원천일 때만. 장부 줄의 `supplyContract` */
+  supplyContract?: string | null
 }
 
 export type SupplySessionConfig = {
@@ -824,6 +828,8 @@ export class SupplyLlmSession {
       pricingVersion: PRICING_VERSION,
       startedAt: startedAt.toISOString(),
       endedAt: null,
+      ...(typeof input.sourceKey === 'string' && input.sourceKey !== '' ? { sourceKey: input.sourceKey } : {}),
+      ...(typeof input.supplyContract === 'string' && input.supplyContract !== '' ? { supplyContract: input.supplyContract } : {}),
       errorCode: null,
     }
   }

@@ -1,10 +1,10 @@
 # Original Post 레인 정본 (2026-09-02)
 
-> **전체 현재 상태**: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
-> 이 문서는 Original Post Lane의 상세 계약 정본이다. 날짜가 붙은 DB 수치와 구현 상태표는
-> 역사 스냅샷이며, 현재 상태는 Master와 main/DB 실측을 따른다.
+> 📜 **역사 문서 — 현재 정본이 아니다.** 제목의 `정본`은 2026-09-02 당시 명칭이다.
+> 현재 목적·정책·상태는 [`README.md`](./README.md)가 가리키는 네 권위 문서만 정한다.
+> 이 문서는 Original Post Lane이 만들어진 과정과 당시 계약·실측을 보존하며 현재 정책에 투표하지 않는다.
 >
-> **이 문서의 역할**: Original Post 레인의 **파이프라인 · 현재 위치 · 다음 순서**의 단일 지도.
+> **이 문서의 역할**: Original Post 레인의 과거 파이프라인 · 당시 위치 · 당시 다음 순서의 기록.
 > 상위: [Micro Seed Lane 헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) **§10-5 레인 분기** ·
 > [Persona Network 전략](2026-08-29-persona-network-strategy.md) **§4 ④ 가장 적합한 페르소나가 게시글 발행** ·
 > [Persona 아키텍처](2026-08-30-persona-architecture-design.md) **§9 Persona Matching**

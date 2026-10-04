@@ -839,6 +839,17 @@ jobs:
           # 🔴 D1→D50 한 사다리(2026-09-29 generic scheduler 배선) — 운영 decideStage 를 여러 날 돌린다 ·
           #    PASS 다음 날 한 칸 · 천장 d10 이면 D20 0 · REPROVE 증명일 · D20+ preflight · 슬롯/비용/롤백. 새 step 이 아니다
           npm run stage:scheduler-check
+      # 🔴 D100 생동감 계약 — 순수 fixture (DB 0 · provider 0 · build 0).
+      #    필요 READY = 증명일 목표 + 실측 손실(모르면 UNKNOWN) · JIT 부족분만 유료 · 현재 계약 cohort 만 비용 근거 ·
+      #    정치 판정 authority 하나(연예 분리 · 정책 낱말은 정치 문맥과 함께만 · 한자는 언어 핏 사유).
+      #    🔴 heavy 조건 뒤 — 무조건 step 은 상한(70)에 닿아 있다. 이 검사가 보는 src/lib · scripts 는 ALLOW 밖이라
+      #       그 코드를 건드리는 PR 은 언제나 heavy 다. 매일 main 예약 실행도 heavy 다.
+      - name: D100 생동감 계약 (READY 손실 · JIT 공급 · 정치 축)
+        if: steps.scope.outputs.heavy == 'true'
+        run: |
+          npm run stage:ready-loss-check
+          npm run supply:jit-contract-check
+          npm run check:political-axis
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
       - name: 무인 운영 루프 (readiness 반례 · controller fail-closed · consumer · 템플릿)

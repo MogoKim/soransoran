@@ -8,7 +8,7 @@
  * 🔴 **왜 이 파일이 따로 있나**
  *    "몇 건을 열어도 되는가" 와 "어떤 write 가 일어나는가" 는 규칙이지 절차가 아니다.
  *    스크립트 안에 두면 DB 를 붙이지 않고는 검증할 수 없다 — micro-seed-quality 와 같은 이유로
- *    import 0 개짜리 파일로 떼어 fixture 가 직접 부른다.
+ *    DB · 파일 · 네트워크 없는 파일로 떼어 fixture 가 직접 부른다(import 는 의존 없는 순수 이름 모듈 `political-flags` 하나).
  *
  * 🔴 **두 레인은 상한이 다르다**
  *    Micro Seed 레인은 Sheet 승인 게이트를 통과해야 발행된다. 그 게이트는 사람이 읽는 화면이라
@@ -16,6 +16,7 @@
  *    Original Post 레인은 Raw 를 **재료로만** 쓰고 승인은 별도 대기열에서 받는다 →
  *    Raw 적재는 배치로 연다. **같은 importer 지만 여는 문이 다르다.**
  */
+import { isPoliticalFigureBodyFlag, isPoliticalFigureTitleFlag } from '../../src/lib/political-flags'
 
 // ─────────────────────────────────────────────────────────
 // sourceSite 계약 (PR-S2-b-1)
@@ -200,7 +201,7 @@ export const AUTO_FETCH_MAX = 30
  *    목록 JSONL 에는 전부 남고, 사람이 `--fetch=<id>` 로 지정하면 언제든 열린다.
  *    자동 경로에는 넘길 눈이 없기 때문에 그 경로만 좁힌다.
  */
-export const AUTO_SKIP_LIST_FLAGS = ['politicalOrPublicFigure', 'politicalTopicLikely'] as const
+export const AUTO_SKIP_LIST_FLAGS = ['politicalFigure', 'politicalTopicLikely', 'hanjaLanguageFit'] as const
 
 /**
  * ② 상세 단계 자동 보류 — 본문을 읽은 **뒤**, Raw Vault 자동 적재 **전**에 뺀다.
@@ -212,7 +213,7 @@ export const AUTO_SKIP_LIST_FLAGS = ['politicalOrPublicFigure', 'politicalTopicL
  *    Vault 저장은 발행이 아니다. 다만 **자동 원료 공급**에서는 더 보수적으로 간다 —
  *    자동으로 들어온 원문은 자동으로 생성기의 재료가 되고, 그 경로에 사람이 없다.
  */
-export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely', 'publicFigureMention'] as const
+export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely', 'politicalFigureMention'] as const
 
 /**
  * 🔴 **`AUTO_MIN_SCORE` 는 삭제했다** (2026-09-11).
@@ -259,7 +260,8 @@ export function planAutoFetch(
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'ALREADY_IN_VAULT', detail: '이미 Raw Vault 에 있다' })
       continue
     }
-    const hit = AUTO_SKIP_LIST_FLAGS.filter((f) => r.flags.includes(f))
+    // 🔴 정치 주제 · 정치 인물(옛 혼합 플래그는 정치로 읽는다) — 연예 · 방송 이름은 제외 사유가 아니다(P0-3)
+    const hit = r.flags.filter((f) => (AUTO_SKIP_LIST_FLAGS as readonly string[]).includes(f) || isPoliticalFigureTitleFlag(f))
     if (hit.length > 0) {
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'SKIP_FLAG', detail: `자동 제외 플래그 ${hit.join('·')} — 지정(--fetch)하면 열린다` })
       continue
@@ -316,7 +318,7 @@ export type AutoHoldVerdict =
  */
 export function judgeAutoHold(input: AutoHoldInput): AutoHoldVerdict {
   if (input.humanDesignated === true) return { hold: false }
-  const hit = AUTO_HOLD_DETAIL_FLAGS.filter((f) => input.flags.includes(f))
+  const hit = input.flags.filter((f) => (AUTO_HOLD_DETAIL_FLAGS as readonly string[]).includes(f) || isPoliticalFigureBodyFlag(f))
   if (hit.length === 0) return { hold: false }
   return {
     hold: true,

@@ -27,10 +27,12 @@ export const D100_STAGES = ['d3', 'd5', 'd10', 'd20', 'd30', 'd50', 'd100'] as c
 export type D100Stage = (typeof D100_STAGES)[number]
 
 /**
- * 🔴 **한 편을 공개하려면 원천 몇 건이 필요한가.**
+ * 🔴 **한 편을 공개하려면 원천 몇 건이 드는가 — 비권위 용량 계획값** (2026-10-04 격하 · canon §3.1 · C-02).
  *
- *    실측 전환율이 아직 없다(§ `unmeasured`). 그래서 계획값을 **이 한 곳에** 두고,
- *    측정이 생기면 여기만 고친다. 🔴 보고서가 이 값을 "측정값" 이라고 부르지 않는다.
+ *    과거 전환율에서 온 **계획값**이다. 수집 job 수·회차를 어림할 때만 쓴다.
+ *    🔴 단계 preflight·준비도 판정은 이 값을 읽지 않는다 — 증명일 기회는 `slotValidOpportunities`
+ *       (슬롯 시각 정본 판정) 하나가 본다. 상세가 많아도 슬롯 기회 부족을 대신 통과시키지 않는다.
+ *    🔴 보고서가 이 값을 "측정값" · "필요량" 이라고 부르지 않는다.
  */
 export const PLANNED_DETAIL_PER_PUBLIC_POST = 3.82
 
@@ -41,18 +43,11 @@ export const PLANNED_DETAIL_PER_PUBLIC_POST = 3.82
  */
 
 /**
- * 🔴 **READY 순증가는 공개량보다 많아야 한다** (2026-09-21 보정).
- *
- *    앞판은 `readyNetRequiredPerDay = publicPostsPerDay` 였다. 그러면 하루에 만든 만큼
- *    그날 다 나가야 본전이고, **재고는 영원히 늘지 않는다.** 14일치 재고를 목표로 두면서
- *    순증가를 0 으로 설계한 셈이다.
- *
- *    또 READY 가 전부 나가지도 않는다 — 사람이 보류하거나 내리는 것이 있고,
- *    TTL 이 지나 신선도에서 떨어지는 것이 있다. 20% 는 그 몫이다.
- *
- * 🔴 이 값을 낮추려면 "실제 탈락률이 20% 미만" 을 먼저 측정한다. 추정으로 내리지 않는다.
+ * 📜 **`READY_NET_MARGIN`(1.2 — 공개량에 20% 고정 가산)을 지웠다** (2026-10-04 · canon §3.1 · C-01).
+ *    근거 없는 할증이 D5 preflight 를 영구히 막았다(`readyNeeded=6` vs 실측 공급 5). 이제 필요 READY 는
+ *    `stage-ladder-generic.readyRequirementOf` 하나 — 증명일 목표 슬롯 + 같은 창에서 실측한 손실 보충 — 가 정한다.
+ *    실측이 없으면 UNKNOWN 이다. 🔴 상수를 되살리지 않는다(`ready-loss-contract-check` 가 막는다).
  */
-export const READY_NET_MARGIN = 1.2
 
 /**
  * 🔴 **발행 러너는 회차당 1건만 낸다.** (`scripts/original-post-auto-publish.mts` ③-b
@@ -65,17 +60,15 @@ export type D100Plan = {
   stage: D100Stage
   /** 하루 공개 발행 편수 */
   publicPostsPerDay: number
-  /** 하루 필요한 상세 수집 건수 */
-  detailedSourcesRequiredPerDay: number
   /**
-   * 🔴 하루 필요한 **READY 생산량** — 공개량 × `READY_NET_MARGIN` (올림).
-   *
-   * 🔴 **재고 증감에 이 값을 요구하지 않는다** (2026-09-21 4차 보정).
-   *    앞판은 이 값을 `readyNetPerDay`(재고 차이)와 견줬다. 그러면 D3 에서
-   *    **4건 만들고 3건 내보내 재고가 +1** 인 정상 운영이 "순증가 1 < 필요 4" 로 막힌다.
-   *    여유율 20% 는 *만들어야 할 양*에 붙는 것이지 *쌓여야 할 양*이 아니다.
+   * 🔴 **상세 수집 계획 참고값** — 공개량 × `PLANNED_DETAIL_PER_PUBLIC_POST`(올림). 비권위다.
+   *    용량 어림·보고에만 쓴다. 🔴 preflight·준비도 판정의 문턱이 아니다(옛 이름 `detailedSourcesRequiredPerDay`).
    */
-  readyQualifiedRequiredPerDay: number
+  plannedDetailedSourcesPerDay: number
+  /**
+   * 📜 `readyQualifiedRequiredPerDay`(공개량 × 1.2)를 지웠다 (2026-10-04). 필요 READY 는 단계 preflight 가
+   *    목표 + 실측 손실로 계산한다(`readyRequirementOf`). 계획 표에 고정 READY/day 를 다시 두지 않는다.
+   */
   /**
    * 🔴 **canary 하한** — 이 단계를 **하루 시험**으로 켜 볼 수 있는 최소 **계약 유효** Persona 수(active 행 수가 아니다).
    *    `PERSONA_CANARY_FLOOR` 가 정본이다. 🔴 이 값을 채웠다고 지속 운영 준비라 말하지 않는다
@@ -182,7 +175,7 @@ export const PERSONA_SUSTAINED_TARGET: Readonly<Record<D100Stage, number>> = {
 /**
  * 🔴 **단계별 계획.** 창업자가 확정한 값이다 —
  *    `publicPostsPerDay` · 댓글 범위 · 슬롯 수가 입력이고,
- *    상세 필요량과 재고는 위 상수로 **계산한다**(손으로 적지 않는다).
+ *    상세 계획 참고값은 위 상수로 **계산한다**(손으로 적지 않는다). 필요 READY 는 여기 없다 — preflight 가 실측으로 낸다.
  *    Persona 두 목표는 위 두 표가 정본이다 — 여기 다시 적지 않는다.
  */
 const INPUT: Readonly<Record<D100Stage, {
@@ -211,11 +204,8 @@ export function d100Plan(stage: D100Stage): D100Plan {
   return {
     stage,
     publicPostsPerDay: i.publicPostsPerDay,
-    // 🔴 올림한다 — 모자라면 그 단계가 서지 않는다
-    detailedSourcesRequiredPerDay:
-      Math.ceil(i.publicPostsPerDay * PLANNED_DETAIL_PER_PUBLIC_POST),
-    // 🔴 공개량과 같게 두면 재고가 늘지 않는다 — 여유율을 곱하고 올린다
-    readyQualifiedRequiredPerDay: Math.ceil(i.publicPostsPerDay * READY_NET_MARGIN),
+    // 🔴 계획 참고값 — 판정 문턱이 아니다
+    plannedDetailedSourcesPerDay: Math.ceil(i.publicPostsPerDay * PLANNED_DETAIL_PER_PUBLIC_POST),
     personaCanaryFloor: PERSONA_CANARY_FLOOR[stage],
     personaSustainedTarget: PERSONA_SUSTAINED_TARGET[stage],
     commentMinPerDay: i.commentMinPerDay,

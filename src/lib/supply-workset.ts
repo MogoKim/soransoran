@@ -18,7 +18,7 @@ import { baseIdOf, sourceIdentityOf, sourceKeyOf, sourceOfKey } from './source-i
 export { baseIdOf, sourceIdentityOf, sourceKeyOf, sourceOfKey }
 /** 🔴 원천 기회 판정 정본 — 유료 생성 전에 예정 슬롯 기준으로 같은 함수를 부른다 */
 import {
-  compareReleaseRank, judgeSlotRelease, parseEvidence,
+  articleIdHashOf, compareReleaseRank, judgeSlotRelease, matchOpportunitiesToSlots, parseEvidence,
   type SlotReleaseVerdict, type SourceEvidenceRecord,
 } from './source-slot-release'
 
@@ -59,6 +59,13 @@ export const WORKSET_VERSION_LEGACY = 'workset-v1'
 
 /** 🔴 회차 파일 이름 — 러너와 검사가 **같은 함수**를 쓴다 */
 export const worksetFileName = (runId: string): string => `supply-workset-${runId}.json`
+
+/** 🔴 JIT 공급 계약 · 의도 — 정본은 `supply-intent`(적재 모듈과 순환하지 않게 따로 둔다). 여기서 다시 내보낸다 */
+import {
+  SUPPLY_JIT_CONTRACT, WORKSET_VERSION_JIT, SUPPLY_INTENT_KEY, readSupplyIntent, type SupplyIntent,
+} from './supply-intent'
+export { SUPPLY_JIT_CONTRACT, WORKSET_VERSION_JIT, SUPPLY_INTENT_KEY, readSupplyIntent, type SupplyIntent }
+
 /** 🔴 묶음 파일 이름 모양 — 회차 id 를 꺼낸다(수율 창을 세는 쪽이 쓴다) */
 export const WORKSET_FILE_RE = /^supply-workset-(\d{8}-\d{6})\.json$/
 
@@ -173,7 +180,7 @@ export function preGenerationRelease(r: WorksetRow, slotAt: Date, now: Date): Sl
 
 export const WORKSET_DROPS = [
   'identityMissing', 'humanDecided', 'queueSibling', 'alreadyQueued', 'carriedOver', 'hardBlocked', 'preGated', 'terminal',
-  'slotIneligible', 'slotUnknown',
+  'slotIneligible', 'slotUnknown', 'slotUnassigned',
 ] as const
 export type WorksetDrop = (typeof WORKSET_DROPS)[number]
 
@@ -188,11 +195,12 @@ export const WORKSET_DROP_LABEL: Readonly<Record<WorksetDrop, string>> = {
   terminal: '앞 회차가 이미 끝낸 원천 (HOLD·DROP·생성 hard HOLD)',
   slotIneligible: '🔴 예정 슬롯에서 원천 가치가 없다 (원문 나이 ≥ 72h) — 유료 생성 0',
   slotUnknown: '🔴 원천 증거를 모른다 (게시 시각 · 반응 · 원천 상대 표본 없음) — 유료 생성 0',
+  slotUnassigned: '🔴 부족 슬롯에 짝지어지지 않았다 (이미 덮였거나 · 그 슬롯 전에 만료 · 이번 유료 상한 밖) — 유료 생성 0',
 }
 
 export type Workset = {
   kind: typeof WORKSET_KIND
-  version: typeof WORKSET_VERSION
+  version: typeof WORKSET_VERSION | typeof WORKSET_VERSION_JIT
   runId: string
   takenAt: string
   limit: number
@@ -200,7 +208,12 @@ export type Workset = {
    * 🔴 이번 회차가 끝까지 보낼 원천 — 이 목록이 계약이다. **(사이트, id) 쌍**으로 적는다 —
    *    원문 id 만으로는 원천이 아니다(`source-identity`). 파일에는 원래 두 칸을 각각 남긴다.
    */
-  sources: { sourceSite: string; sourceArticleId: string }[]
+  sources: { sourceSite: string; sourceArticleId: string; slotAt?: string; ageAtSlotH?: number }[]
+  /**
+   * 🔴 **JIT 계약 표식** (2026-10-04 P0-2 보정) — `workset-v3` 에만 있다. 그 판은 원천마다 `slotAt`(배정된 부족 슬롯)과
+   *    `ageAtSlotH`(그 슬롯 시점 원문 나이 · 정본 판정 rank)를 **필수로** 적는다. 원문 · 작성자 없음.
+   */
+  contract?: typeof SUPPLY_JIT_CONTRACT
 }
 
 export type WorksetPlan = {
@@ -907,6 +920,12 @@ export type SelectWorksetInput = {
   limit: number
   runId: string
   takenAt: Date
+  /**
+   * 🔴 **원천마다 배정된 부족 슬롯** (`assignSourceSlots`) — 주면 JIT 계약 묶음(`workset-v3`)을 만든다:
+   *    배정이 없는 원천은 고르지 않고(`slotUnassigned`), `releaseOf` 는 **그 원천의 배정 슬롯**에서 판정해야 한다.
+   *    주지 않으면 옛 판(v2 — 손으로 부르는 경로 · 검사)이다. 🔴 v2 는 JIT 근거로 세지 않는다.
+   */
+  intendedSlotOf?: (r: WorksetRow) => Date | null
 }
 
 /** 🔴 생성 가능 판정에 쓰는 입력 — 묶음 선택과 기회 스냅샷이 **같은 값**을 넘긴다 */
@@ -932,7 +951,7 @@ export type WorksetEligibility = {
 export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligibility {
   const dropped: Record<WorksetDrop, number> = {
     identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
-    slotIneligible: 0, slotUnknown: 0,
+    slotIneligible: 0, slotUnknown: 0, slotUnassigned: 0,
   }
   const releaseByKey = new Map<string, SlotReleaseVerdict>()
   /**
@@ -1001,7 +1020,14 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
  * 🔴 같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.
  */
 export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
-  const { eligible, releaseByKey, dropped, keyOf: K } = worksetEligibility(input)
+  const base = worksetEligibility(input)
+  const { releaseByKey, dropped, keyOf: K } = base
+  const slotOf = input.intendedSlotOf
+  const eligible = slotOf === undefined ? base.eligible : base.eligible.filter((r) => {
+    if (slotOf(r) !== null) return true
+    dropped.slotUnassigned += 1
+    return false
+  })
 
   /** 🔴 정본 rank 사전식 비교 — 합산 점수 없음 · 마지막 열쇠는 원천 열쇠다 */
   const byWeight = (a: WorksetRow, b: WorksetRow): number =>
@@ -1084,11 +1110,16 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
     raw: picked.filter((r) => worksetAxisOf(r) === 'raw').length,
   }
 
+  const jit = slotOf !== undefined
   return {
     workset: {
-      kind: WORKSET_KIND, version: WORKSET_VERSION,
+      kind: WORKSET_KIND, version: jit ? WORKSET_VERSION_JIT : WORKSET_VERSION,
       runId: input.runId, takenAt: input.takenAt.toISOString(), limit,
-      sources: picked.map((r) => ({ sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId })),
+      sources: picked.map((r) => (jit ? {
+        sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId,
+        slotAt: slotOf(r)!.toISOString(), ageAtSlotH: releaseByKey.get(K(r))!.rank.ageAtSlotH ?? 0,
+      } : { sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId })),
+      ...(jit ? { contract: SUPPLY_JIT_CONTRACT } : {}),
     },
     picked,
     dropped,
@@ -1112,6 +1143,10 @@ export type WorksetRead =
       limit: number
       /** 🔴 이 묶음을 집은 시각(ms) — 관제가 단계 상태를 이 값으로 판정한다 */
       takenAtMs: number
+      /**
+       * 🔴 **JIT 계약 의도** — `workset-v3` 에서만 원천 열쇠 → 의도. 옛 판이면 `null`(legacy — 근거로 세지 않는다)
+       */
+      intents: ReadonlyMap<string, SupplyIntent> | null
     }
   | { ok: false; code: WorksetFail; reason: string }
 
@@ -1126,7 +1161,8 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   const o = raw as Record<string, unknown>
   if (o.kind !== WORKSET_KIND) return { ok: false, code: 'KIND', reason: `다른 파일이다 (${String(o.kind)})` }
   const legacy = o.version === WORKSET_VERSION_LEGACY
-  if (o.version !== WORKSET_VERSION && !legacy) {
+  const jit = o.version === WORKSET_VERSION_JIT
+  if (o.version !== WORKSET_VERSION && !legacy && !jit) {
     return { ok: false, code: 'VERSION', reason: `모르는 판이다 (${String(o.version)})` }
   }
   if (S(o.runId) !== expectRunId) {
@@ -1149,6 +1185,26 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
     ids = keys as string[]
     if (new Set(ids).size !== ids.length) return { ok: false, code: 'SHAPE', reason: '같은 원천이 두 번 적혀 있다' }
   }
+  // 🔴 JIT 판 — 계약 표식 · 원천마다 예정 슬롯 · 슬롯 시점 나이가 필수다. 하나라도 비면 묶음 전체를 받지 않는다
+  let intents: Map<string, SupplyIntent> | null = null
+  if (jit) {
+    if (o.contract !== SUPPLY_JIT_CONTRACT) return { ok: false, code: 'SHAPE', reason: `JIT 계약 표식이 다르다 (${String(o.contract)})` }
+    intents = new Map()
+    for (const [k, x] of (o.sources as Record<string, unknown>[]).entries()) {
+      const slotAt = x.slotAt
+      const age = x.ageAtSlotH
+      if (typeof slotAt !== 'string' || parseInstantMs(slotAt) === null) {
+        return { ok: false, code: 'SHAPE', reason: `${k}번째 원천의 slotAt 이 시각이 아니다` }
+      }
+      if (typeof age !== 'number' || !Number.isFinite(age) || age < 0) {
+        return { ok: false, code: 'SHAPE', reason: `${k}번째 원천의 ageAtSlotH 가 없다` }
+      }
+      intents.set(ids[k]!, {
+        contract: SUPPLY_JIT_CONTRACT, runId: expectRunId,
+        sourceHash: articleIdHashOf(S(x.sourceSite), S(x.sourceArticleId)), intendedSlotAt: slotAt, ageAtSlotH: age,
+      })
+    }
+  }
   // 🔴 파일이 상한을 넘겨 적혀 있으면 받지 않는다 — 여기서 새는 것이 가장 위험하다
   if (ids.length > limit) {
     return { ok: false, code: 'OVER_LIMIT', reason: `${ids.length}건 > 상한 ${limit}건` }
@@ -1164,7 +1220,7 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   if (takenAtMs === null) {
     return { ok: false, code: 'SHAPE', reason: `takenAt 을 읽을 수 없다 (${String(o.takenAt)})` }
   }
-  return { ok: true, sourceKeys: legacy ? null : new Set(ids), count: ids.length, limit, takenAtMs }
+  return { ok: true, sourceKeys: legacy ? null : new Set(ids), count: ids.length, limit, takenAtMs, intents }
 }
 
 export type StageBudget = {
@@ -1267,4 +1323,42 @@ export function planReplan(input: {
     }
   }
   return { ok: true, excluded, attempt }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **부족 슬롯마다 원천을 짝짓는다** (2026-10-04 P0-2 보정)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **원천 → 부족 슬롯 배정.** 다가오는 슬롯 중 자동 READY 가 덮지 못한 슬롯(`slots`)에, 원천마다 **그 슬롯 시각에**
+ *    정본 생성 전 판정(`preGenerationRelease`)이 eligible 인 것만 짝짓는다 — `matchOpportunitiesToSlots` 하나.
+ *    한 바퀴에 슬롯마다 원천 하나 · 부족분보다 많이 사는 근거(실측 수율)가 있으면 같은 슬롯들에 다음 바퀴를 돈다.
+ *    🔴 모든 원천을 한 슬롯(`nextSlotAt`)으로 판정하지 않는다 — 첫 슬롯에만 유효하고 남은 부족 슬롯 전에 만료되면 배정 0.
+ *    `cap` 은 이번 회차 유료 원천 상한(`paidSourcesFor`)이다.
+ */
+export function assignSourceSlots(input: {
+  rows: readonly WorksetRow[]
+  slots: readonly Date[]
+  now: Date
+  cap: number
+}): Map<string, Date> {
+  const out = new Map<string, Date>()
+  if (input.slots.length === 0 || !(input.cap > 0)) return out
+  let remaining = input.rows
+    .map((r) => ({ r, key: sourceIdentityOf(r.sourceSite, r.sourceArticleId) }))
+    .filter((x): x is { r: WorksetRow; key: string } => x.key !== null)
+  while (out.size < input.cap && remaining.length > 0) {
+    const m = matchOpportunitiesToSlots(input.slots, remaining.map(({ r, key }) => ({
+      key, validAt: (slotAt: Date) => preGenerationRelease(r, slotAt, input.now).verdict === 'eligible',
+    })))
+    if (m.filled === 0) break
+    const order = input.slots.map((d, i) => ({ d, k: m.bySlot[i] })).filter((x): x is { d: Date; k: string } => x.k !== null)
+      .sort((a, b) => a.d.getTime() - b.d.getTime())
+    for (const { d, k } of order) {
+      if (out.size >= input.cap) break
+      out.set(k, d)
+    }
+    remaining = remaining.filter(({ key }) => !out.has(key))
+  }
+  return out
 }

@@ -44,10 +44,12 @@ console.log('──────────────────────�
 console.log('\n① 정치 — 🔴 hardExclude. 어디에도 가지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  for (const t of ['대선 후보 토론 보셨어요', '이재명 대통령 발언 어떻게 보세요', '의료대란 언제 끝날까요']) {
+  for (const t of ['대선 후보 토론 보셨어요', '이재명 대통령 발언 어떻게 보세요', '민주당 의료대란 책임 공방']) {
     const v = verdict({ title: t })
     check(`🔴 "${t.slice(0, 14)}…" → hardExclude`, v === 'hardExclude', `실제 ${v}`)
   }
+  // 🔵 (2026-10-04 창업자 확정 · P0-3 최종) 생활 정책 낱말은 단독으로 정치 근거가 아니다 — 다른 정치 신호가 있을 때만
+  check('🔵 "의료대란 언제 끝날까요" (생활 정책 낱말 단독) → 정치 아님', verdict({ title: '의료대란 언제 끝날까요' }) !== 'hardExclude')
   check('🔴 수집기 politics 판정도 hardExclude',
     verdict({ title: '평범한 제목', sourceExcludeReason: 'politics' }) === 'hardExclude')
   check('🔴 사유 코드가 politics 다', codes({ title: '대선 후보 토론 보셨어요' }).includes('politics'))
@@ -192,10 +194,13 @@ console.log('\n⑥ 실명 · 개인정보 → hold')
 console.log('\n⑦ 욕설 · 혐오 · 분쟁 유도 → drop')
 // ─────────────────────────────────────────────────────────
 {
-  for (const t of ['진짜 병신같은 상황이에요', '맘충들 때문에 못 살겠어요', '고소각인가요']) {
+  for (const t of ['진짜 병신같은 상황이에요', '맘충들 때문에 못 살겠어요']) {
     const v = verdict({ title: t })
     check(`🔴 "${t.slice(0, 12)}…" → drop`, v === 'drop', `실제 ${v}`)
   }
+  // 🔵 (P0-3 최종) 강한 호불호 · 주관적 의견(고소각 · 극혐)은 위해가 아니다 — 혐오 · 위협 · 동원만 막는다
+  check('🔵 "고소각인가요" · "극혐이었어요" (주관적 의견) → drop 아님',
+    verdict({ title: '고소각인가요' }) !== 'drop' && verdict({ title: '그 장면 극혐이었어요' }) !== 'drop')
   check('🔴 사유 코드가 hostility 다', codes({ title: '진짜 병신같은' }).includes('hostility'))
 }
 
@@ -265,8 +270,12 @@ console.log('\n⑪ 이 필터가 하지 않는 것 — 🔴 발행·fetch·DB·S
   ]
   for (const [re, label] of BANNED) check(`🔴 ${label} 없음`, !re.test(CODE))
   // 🔴 2026-09-16 — 위기 신호 판정부를 정본 순수 모듈 하나에서 가져온다(규칙 복제 금지)
-  check('🟢 import 는 quality lib · 안전 신호 판정부 둘뿐이다',
-    (CODE.match(/^import /gm) ?? []).length === 2, `${(CODE.match(/^import /gm) ?? []).length}개`)
+  // 🔴 (2026-10-04 P0-3) 정치 사유 이름 정본(`political-flags` — 의존 없는 순수 이름 모듈)이 셋째다
+  // 🔴 (P0-3 최종) 한자 언어 핏 shared helper(`cjk-ideograph` — 의존 없는 순수 모듈)가 넷째다
+  check('🟢 import 는 quality lib · 안전 신호 판정부 · 정치 사유 이름 · 한자 helper 넷뿐이다',
+    (CODE.match(/^import /gm) ?? []).length === 4 && /from '\.\.\/\.\.\/src\/lib\/political-flags'/.test(CODE)
+    && /from '\.\.\/\.\.\/src\/lib\/cjk-ideograph'/.test(CODE),
+    `${(CODE.match(/^import /gm) ?? []).length}개`)
   check('🔴 위기·의료 판정 규칙을 필터가 다시 쓰지 않는다',
     !/자살|자해|미레나|무리가 ?없/.test(CODE))
   // 🔴 100자 판정도 레인 배정도 여기서 하지 않는다

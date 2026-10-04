@@ -88,7 +88,8 @@ console.log('\n② 🔴 자동 경로에서 빼는 것 — 사람이 없기 때�
     ['네이버 카페', { sourceSite: 'navercafe:remonterrace' }, 'NOT_82COOK'],
     ['목록 제외됨', { sourceExcludeReason: 'pinned' }, 'EXCLUDED'],
     ['정치 제외', { sourcePoliticsExcluded: true }, 'POLITICS'],
-    ['정치·실명 플래그', { qualityFlags: ['politicalOrPublicFigure'] }, 'FLAG_POLITICS'],
+    ['정치 인물 플래그', { qualityFlags: ['politicalFigure'] }, 'FLAG_POLITICS'],
+    ['📜 옛 혼합 플래그(가를 수 없음 → 정치로 읽는다)', { qualityFlags: ['politicalOrPublicFigure'] }, 'FLAG_POLITICS'],
     ['의료·광고성 플래그', { qualityFlags: ['medicalOrAdLikely'] }, 'FLAG_MEDICAL'],
     [`댓글 ${COMMENT_TIER_LOW} 미만`, { sourceCommentCount: 4 }, 'LOW_COMMENT'],
     ['id 없음', { sourceArticleId: '' }, 'NO_ID'],
@@ -107,7 +108,7 @@ console.log('\n② 🔴 자동 경로에서 빼는 것 — 사람이 없기 때�
   check('플래그가 없으면 빈 배열', flagsOf(ok({ qualityFlags: undefined })).length === 0)
   check('🟢 다른 플래그는 막지 않는다',
     planThinFetch({ ...base, rows: [ok({ qualityFlags: ['clickbaitTitle'] })] }).targets.length === 1)
-  check('제외 사유에 라벨이 있다', Object.keys(SKIP_LABEL).length === 10)
+  check('제외 사유에 라벨이 있다 — 언어 핏(FLAG_LANGUAGE) 포함 11종', Object.keys(SKIP_LABEL).length === 11)
 
   // 🔴 플래그만으로는 모자랐다 — 2026-09-07 실측에서 정치 제목이 대상에 섞였다
   const judge = {

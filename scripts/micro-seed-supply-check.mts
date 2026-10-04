@@ -128,7 +128,7 @@ console.log('\n⑤ 자동 선별 — 자동 경로에는 사람이 없다')
 {
   const rows = [
     { sourceArticleId: 'a1', score: 90, flags: ['targetLikely'] },
-    { sourceArticleId: 'a2', score: 80, flags: ['targetLikely', 'politicalOrPublicFigure'] },
+    { sourceArticleId: 'a2', score: 80, flags: ['targetLikely', 'politicalFigure'] },
     { sourceArticleId: 'a3', score: 70, flags: ['personalExperienceLikely'] },
     { sourceArticleId: 'a4', score: 10, flags: [] },
     { sourceArticleId: 'a5', score: 60, flags: ['politicalTopicLikely'] },
@@ -185,8 +185,8 @@ console.log('\n⑤-B 🔴 구조 가드 — 목록 단계에 없는 플래그에
     assessCandidate({ originalTitle: title, rawBody: '', sourceCommentCount: 3 }).flags as readonly string[]
 
   check(
-    '[구조·증명] politicalOrPublicFigure 는 제목만으로 발화한다',
-    titleOnly('이재명 대통령 발언 어떻게 보세요').includes('politicalOrPublicFigure'),
+    '[구조·증명] politicalFigure 는 제목만으로 발화한다',
+    titleOnly('이재명 대통령 발언 어떻게 보세요').includes('politicalFigure'),
   )
   check(
     '[구조·증명] politicalTopicLikely 는 제목만으로 발화한다',
@@ -213,8 +213,9 @@ console.log('\n⑤-C 자동 보류 — 상세를 연 뒤, 적재 전에 (PR-S2-a
     judgeAutoHold({ sourceArticleId: 'h1', flags: ['medicalOrAdLikely', 'highEngagement'] }).hold,
   )
   check(
-    '🔴 본문 실명도 보류된다',
-    judgeAutoHold({ sourceArticleId: 'h2', flags: ['publicFigureMention'] }).hold,
+    '🔴 본문 정치 인물도 보류된다(옛 혼합 본문 플래그도 가를 수 없어 보류)',
+    judgeAutoHold({ sourceArticleId: 'h2', flags: ['politicalFigureMention'] }).hold
+      && judgeAutoHold({ sourceArticleId: 'h3', flags: ['publicFigureMention'] }).hold,
   )
   check(
     '깨끗한 글은 보류하지 않는다',
@@ -266,8 +267,8 @@ console.log('\n⑤-D 실측 회귀 — 2026-09-03 live 수집 3건')
     JSON.stringify(t3.flags),
   )
   check(
-    '🔴 4234894 — 공인·실명 플래그와 분리돼 있다',
-    !(t3.flags as readonly string[]).includes('politicalOrPublicFigure'),
+    '🔴 4234894 — 정치 인물 플래그와 분리돼 있다',
+    !(t3.flags as readonly string[]).includes('politicalFigure'),
     '실명이 없는데 공인 플래그가 붙으면 두 축이 섞인 것이다',
   )
   check(
@@ -302,7 +303,7 @@ console.log('\n⑤-D 실측 회귀 — 2026-09-03 live 수집 3건')
     '필리버스터 패스트트랙 법사위',
     '지방선거 리얼미터 NBS',
     '더불어민주연합 국민의미래',
-    '방송3법 노란봉투법 의료대란',
+    '방송3법 노란봉투법 의료대란 법안 반대',  // 🔴 (P0-3) 정책 · 법안 낱말은 정치 문맥과 함께일 때만 정치
     '한미동맹 사드 대북전단',
     '선관위 방통위 뉴스공장',
     '광화문집회 단식농성',

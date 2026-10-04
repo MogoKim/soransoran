@@ -26,7 +26,7 @@ import {
   GENERIC_STAGES, genericNextStage, genericDailyTarget, HIGHEST_RUNTIME_STAGE,
   validPublishMinutes, publishCapacityOf, deriveSlots, genericProfileOf, verifyGenericProfile, commentCoverageOf,
   judgeNextPreflight, trialBlocks, firstSlotOn,
-  type PreflightFacts, type GenericStage, type PreflightVerdict, type PreflightCode,
+  type PreflightFacts, type ReadyCohortFact, type GenericStage, type PreflightVerdict, type PreflightCode,
 } from '../src/lib/stage-ladder-generic'
 import {
   PROFILES, RELEASE_STAGES, RUNTIME_STAGES, RUNTIME_PROFILES, resolveRuntimeStage, minuteOfDay, profileOf,
@@ -37,7 +37,7 @@ import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, s
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import {
-  d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf, READY_NET_MARGIN,
+  d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf,
 } from '../src/lib/d100-capacity'
 import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
@@ -164,17 +164,20 @@ check('반례 — 목표 0 · 101 · 소수는 만들지 않는다', !deriveSlot
 // ─────────────────────────────────────────────────────────
 section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 유효 Persona · 비용 상한 · 러너')
 /**
- * 🔴 경계값 fixture — 각 칸이 그 단계를 **딱** 채운다(기회 = 목표 · 수율 = 필요량을 겨우 채움 · Persona = canary 하한).
- *    넉넉한 값으로 PASS 를 만들면 경계 반례가 헛돈다.
+ * 🔴 경계값 fixture — 각 칸이 그 단계를 **딱** 채운다(기회 = 목표 · cohort 공개 = 목표 · 손실 0 · 대기 0 ·
+ *    용량 = 필요량(= 목표)을 겨우 채움 · Persona = canary 하한). 넉넉한 값으로 PASS 를 만들면 경계 반례가 헛돈다.
  */
-const yieldFor = (s: GenericStage): number =>
-  Math.ceil(genericDailyTarget(s) * READY_NET_MARGIN) / (SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY)
+const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
+const cohortFor = (s: GenericStage, o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
+  sources: RUNS, published: genericDailyTarget(s), lost: 0, scheduled: 0, unknown: 0,
+  usdPerSlotValidResult: SUPPLY_USD_PER_READY, ...o,
+})
 const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFacts => ({
-  slotValidOpportunities: genericDailyTarget(s), readyPerSource: yieldFor(s), latencyP50H: 20, latencyP90H: 60,
+  slotValidOpportunities: genericDailyTarget(s), readyCohort: cohortFor(s), latencyP50H: 20, latencyP90H: 60,
   contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
   commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
   auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
-  supplyUsdPerReady: SUPPLY_USD_PER_READY, supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
+  supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
 })
 check('비용 상한 정본 — 공급 $0.50 · 댓글 $0.20', SUPPLY_DAILY_USD_APPROVED === 0.5 && COMMENT_LOOP_DAILY_USD_MAX === 0.2)
 for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
@@ -191,15 +194,15 @@ for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
 }
 const pf100 = judgeNextPreflight('d100', factsFor('d100'), GRID)
 console.log(`   d100: ${pf100.verdict} [${pf100.codes.join(',')}] · 댓글 감당 ${pf100.counts.commentAffordable}건/day`)
-check('🔴 [blocker 실측] d100 — 댓글 $0.20 로 첫 댓글 100건 불가 · 발행 용량 부족 · 공급 $0.50 로 READY 120건 불가',
+check('🔴 [blocker 실측] d100 — 댓글 $0.20 로 첫 댓글 100건 불가 · 발행 용량 부족 · 공급 $0.50 로 READY 100건(목표 + 실측 손실 0) 불가',
   pf100.verdict === 'FAIL' && pf100.codes.includes('COMMENT_COST_SHORT') && pf100.codes.includes('PUBLISH_CAPACITY_SHORT')
   && pf100.codes.includes('SLOTS_INFEASIBLE') && pf100.codes.includes('SUPPLY_COST_SHORT'))
 const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want: 'FAIL' | 'UNKNOWN'; code: PreflightCode }[] = [
   { name: 'slot-valid 기회 19 < 20', s: 'd20', o: { slotValidOpportunities: 19 }, want: 'FAIL', code: 'OPPORTUNITY_SHORT' },
   { name: '기회 모름', s: 'd20', o: { slotValidOpportunities: null }, want: 'UNKNOWN', code: 'OPPORTUNITY_UNKNOWN' },
   { name: 'D3 도 같은 관문 — 기회 2 < 3', s: 'd3', o: { slotValidOpportunities: 2 }, want: 'FAIL', code: 'OPPORTUNITY_SHORT' },
-  { name: '수율이 필요량 아래(처리량 부족)', s: 'd20', o: { readyPerSource: yieldFor('d20') * 0.9 }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
-  { name: '수율 모름', s: 'd20', o: { readyPerSource: null }, want: 'UNKNOWN', code: 'THROUGHPUT_UNKNOWN' },
+  { name: '수율이 필요량 아래(처리량 부족)', s: 'd20', o: { readyCohort: cohortFor('d20', { sources: Math.ceil(RUNS / 0.9) }) }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
+  { name: 'cohort 모름', s: 'd20', o: { readyCohort: null }, want: 'UNKNOWN', code: 'THROUGHPUT_UNKNOWN' },
   { name: '지연 미관측', s: 'd5', o: { latencyP90H: null }, want: 'UNKNOWN', code: 'LATENCY_UNKNOWN' },
   { name: '🔴 계약 유효 Persona 모름(읽기 실패)', s: 'd3', o: { contractValidPersonas: null }, want: 'UNKNOWN', code: 'PERSONA_UNKNOWN' },
   { name: '🔴 계약 유효 Persona 0 < D3 하한 24 (2026-09-30 운영 실측) — D1→D3 부터 막힌다', s: 'd3', o: { contractValidPersonas: 0 }, want: 'FAIL', code: 'PERSONA_SHORT' },
@@ -211,8 +214,10 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '댓글 단가 $0.011 × 20 > $0.20', s: 'd20', o: { commentUsdPerRequest: 0.011 }, want: 'FAIL', code: 'COMMENT_COST_SHORT' },
   { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
   { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
-  { name: '공급 READY 단가 $0.01 × 60 > $0.50', s: 'd50', o: { supplyUsdPerReady: 0.01 }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
-  { name: '공급 단가 모름', s: 'd20', o: { supplyUsdPerReady: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
+  { name: '공급 결과당 비용 $0.011 × 목표 50 > $0.50', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.011 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
+  { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → UNKNOWN', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, unknown: 5 }) }, want: 'UNKNOWN', code: 'READY_REQUIREMENT_UNKNOWN' },
+  { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
+  { name: '결과당 공급 비용 모름(미연결 · legacy)', s: 'd20', o: { readyCohort: cohortFor('d20', { usdPerSlotValidResult: null }) }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
   { name: '공급 상한 모름', s: 'd20', o: { supplyDailyUsdCap: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
 ]
 for (const c of pfCases) {
@@ -403,10 +408,10 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   check('S7 기준선 — REPROVE d10 PASS · preflight 초록 → TRIAL d20', tr(green) === 'TRIAL:d20' && green.valid !== null)
   const cases: { name: string; o: DayOpts; code: string }[] = [
     { name: 'slot-valid 기회 모자람', o: { facts: (s) => factsFor(s, { slotValidOpportunities: 5 }) }, code: 'PREFLIGHT_FAIL' },
-    { name: '처리량 모자람', o: { facts: (s) => factsFor(s, { readyPerSource: 0.01 }) }, code: 'PREFLIGHT_FAIL' },
+    { name: '처리량 모자람', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { sources: 10_000 }) }) }, code: 'PREFLIGHT_FAIL' },
     { name: 'Persona canary 하한 미달', o: { facts: (s) => factsFor(s, { contractValidPersonas: 10 }) }, code: 'PREFLIGHT_FAIL' },
     { name: '댓글 비용 초과', o: { facts: (s) => factsFor(s, { commentUsdPerRequest: 0.05 }) }, code: 'PREFLIGHT_FAIL' },
-    { name: '공급 비용 모름', o: { facts: (s) => factsFor(s, { supplyUsdPerReady: null }) }, code: 'PREFLIGHT_UNKNOWN' },
+    { name: '공급 비용 모름', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { usdPerSlotValidResult: null }) }) }, code: 'PREFLIGHT_UNKNOWN' },
     { name: '08:30 에 늦게 돈 controller', o: { runAt: (d) => new Date(`${d}T08:30:00+09:00`).toISOString() }, code: 'LATE_START' },
   ]
   for (const c of cases) {
@@ -422,7 +427,7 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   }).some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
   // 🔴 (2026-09-30) d3~d10 도 같은 관문이다 — 사실을 모르면 d5 도 열리지 않는다
   const d5 = runDay(addDays(D0, 1), startRow('d3', 'REPROVE'), 'perfect', { facts: (s) => factsFor(s, {
-    slotValidOpportunities: null, contractValidPersonas: null, commentUsdPerRequest: null, auditUsdPerCall: null, supplyUsdPerReady: null,
+    slotValidOpportunities: null, contractValidPersonas: null, commentUsdPerRequest: null, auditUsdPerCall: null, readyCohort: null,
   }) })
   check('🔴 🔴 S7 d3~d10 시험도 같은 관문을 지난다(사실 전부 모름 → d5 열지 않음 · REPROVE d3)',
     tr(d5) === 'REPROVE:d3' && blocked(d5, 'PREFLIGHT_UNKNOWN'), tr(d5))

@@ -16,9 +16,10 @@
  *    그래서 "사람이 이미 판단한 것" 만 통과시킨다 — 판단을 새로 하지 않는다.
  */
 
+import { SUPPLY_INTENT_KEY, type SupplyIntent } from './supply-intent'
 /** 🔴 원문 증거 기록의 정본 — 적재기는 옮길 뿐 판정하지 않는다 */
 import {
-  SOURCE_EVIDENCE_KEY, buildSourceEvidence,
+  SOURCE_EVIDENCE_KEY, buildSourceEvidence, articleIdHashOf,
   type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
 } from './source-slot-release'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
@@ -706,12 +707,22 @@ export function buildQueuePayload(input: {
   review?: unknown
   /** 🔴 목록 관측에서 모은 증거 재료 — 없으면 null(모른다) */
   evidence?: EvidenceMaterial | null
+  /**
+   * 🔴 **JIT 공급 의도** (2026-10-04 P0-2 보정) — 같은 회차 묶음(`workset-v3`)이 이 원천에 배정한 슬롯 · 계약 · 원천 해시.
+   *    기계 행 `gateResults.supplyIntent` 로 옮긴다. 없으면 싣지 않는다(legacy — JIT 근거로 세지 않는다).
+   */
+  intent?: SupplyIntent | null
   now: string
 }): QueuePayload | null {
   const { envelope: env, candidate: c } = input
   const site = S(c.sourceSite)
   // 🔴 (P0-B) 신규 적재 행은 원천 (사이트, id) 가 둘 다 있어야 한다 — 사람 · 기계 모두(접두뿐인 synthetic 사이트를 만들지 않는다)
   if (sourceIdentityOf(site, c.sourceArticleId) === null) return null
+  /**
+   * 🔴 **의도는 이 후보의 원천 것이어야 한다** (2026-10-04 P0-2 최종) — 원천 해시가 다르면 payload 를 만들지 않는다.
+   *    남의 의도를 달고 큐에 들어가면 현재 계약 표본이 오염된다.
+   */
+  if (input.intent && input.intent.sourceHash !== articleIdHashOf(site, S(c.sourceArticleId))) return null
   const machineBad = machineProfileMismatch(env, c)
   const isMachine = machineBad.length === 0
 
@@ -755,6 +766,7 @@ export function buildQueuePayload(input: {
          *    칸에 초안 시각이 들어가 그것이 원문 나이처럼 쓰였다(A1 ⑦).
          */
         [SOURCE_EVIDENCE_KEY]: sourceEvidenceOf(c, input.evidence ?? null),
+        ...(input.intent ? { [SUPPLY_INTENT_KEY]: input.intent } : {}),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
           candidateType: S(c.candidateType),

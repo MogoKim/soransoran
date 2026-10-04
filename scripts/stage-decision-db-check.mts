@@ -46,10 +46,33 @@ import { join } from 'node:path'
 import { readPreflightFacts } from './lib/stage-preflight-facts.mjs'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { buildSourceEvidence, SOURCE_STATS_METHOD } from '../src/lib/source-slot-release'
-import { OPPORTUNITY_KIND, OPPORTUNITY_VERSION, WORKSET_KIND, WORKSET_VERSION, opportunitiesFileName, worksetFileName } from '../src/lib/supply-workset'
+import {
+  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, SUPPLY_INTENT_KEY,
+  opportunitiesFileName, worksetFileName,
+} from '../src/lib/supply-workset'
+import { articleIdHashOf } from '../src/lib/source-slot-release'
+
+/** 🔴 JIT 계약 묶음(workset-v3) — 원천마다 예정 슬롯 · 슬롯 시점 나이 필수 */
+/** 🔴 JIT 계약 묶음(workset-v3) — 원천마다 예정 슬롯 · 슬롯 시점 나이 필수. `ids` 는 큐 행과 연결되는 원천(앞쪽), 나머지는 채움 */
+const wsV3 = (runId: string, site: string, n: number, ids: readonly string[] = []): string => JSON.stringify({
+  kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, runId,
+  takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`, limit: 10,
+  sources: Array.from({ length: n }, (_, i) => ({
+    sourceSite: site, sourceArticleId: ids[i] ?? `${runId}-${i}`, slotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+  })),
+})
+/** 🔴 큐 행 공급 의도 — 적재기가 묶음에서 옮겨 적는 것과 같은 모양 */
+const withIntent = (gate: unknown, site: string, id: string): Record<string, unknown> => ({
+  ...(gate !== null && typeof gate === 'object' ? gate as Record<string, unknown> : {}),
+  [SUPPLY_INTENT_KEY]: {
+    contract: SUPPLY_JIT_CONTRACT, runId: '20260929-031500', sourceHash: articleIdHashOf(site, id),
+    intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+  },
+})
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
-import { slotTimesOn } from '../src/lib/stage-ladder-generic'
+import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
+import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 
 /**
  * 🔴 **격리 DB 가 아니면 여기서 멈춘다 — 그리고 주소를 한 글자도 찍지 않는다.**
@@ -457,7 +480,7 @@ async function main(): Promise<void> {
       await prisma.microSeedRawContent.deleteMany({ where: { sourceSite: site } })
     }
     await wipePf()
-    // 자동 READY 3건 — 증거일(09-30 KST) 창 안 결정 시각 · 미발행 · 재고 밖(DECLINED)
+    // 자동 READY 3건 — 증거일(09-30 KST) 창 안 결정 시각 · 공개로 끝남(PUBLISHED · 재고 밖) → 결말 수율 3 ÷ 30
     for (let k = 0; k < 3; k += 1) {
       const raw = await prisma.microSeedRawContent.create({
         data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/pf${k}`, sourceArticleId: `pf-${k}`,
@@ -465,19 +488,18 @@ async function main(): Promise<void> {
         select: { id: true },
       })
       await prisma.originalPostApprovalQueue.create({
-        data: { sourceRawContentId: raw.id, status: 'DECLINED', draftTitle: `초안 ${k}`, draftBody: `본문 ${k}`,
-          gateVerdict: 'PASS', gateResults: {}, promptVersion: 'pf', model: 'pf',
+        data: { sourceRawContentId: raw.id, status: 'PUBLISHED', draftTitle: `초안 ${k}`, draftBody: `본문 ${k}`,
+          // 🔴 현재 계약 표본 — 의도 · 원문 증거 해시 · 그 회차 v3 묶음이 정확히 연결된다
+          gateResults: withIntent({ sourceEvidence: buildSourceEvidence({ sourceSite: site, sourceArticleId: `pf-${k}` }) }, site, `pf-${k}`) as Prisma.InputJsonValue,
+          gateVerdict: 'PASS', promptVersion: 'pf', model: 'pf',
           decidedBy: AUTO_DECIDER, decidedAt: new Date('2026-09-30T03:00:00Z'), dedupKey: `pf-${k}` },
       })
     }
     const now = new Date('2026-10-01T07:00:00+09:00')
     const dir = mkdtempSync(join(tmpdir(), 'pf-opp-'))
-    // 묶음 3개 × 10 원천 = 30 (창 안 회차)
+    // JIT 묶음 3개 × 10 원천 = 30 (창 안 회차 · workset-v3)
     for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
-      writeFileSync(join(dir, worksetFileName(runId)), JSON.stringify({
-        kind: WORKSET_KIND, version: WORKSET_VERSION, runId, takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`,
-        limit: 10, sources: Array.from({ length: 10 }, (_, i) => ({ sourceSite: site, sourceArticleId: `${runId}-${i}` })),
-      }))
+      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, runId === '20260929-031500' ? ['pf-0', 'pf-1', 'pf-2'] : []))
     }
     const iso = (ms: number): string => new Date(ms).toISOString()
     const evidence = (i: number): unknown => buildSourceEvidence({
@@ -504,8 +526,13 @@ async function main(): Promise<void> {
       const none = await facts()
       check('🔴 기회 스냅샷 파일이 없으면 원천 기회 0 — 운영 2026-10-01 모양(공급 러너가 스냅샷을 쓰지 않는 판)',
         none.facts.slotValidOpportunities === 0 && none.detail.opportunitySnapshotAt === null, JSON.stringify(none.detail))
-      check('🔴 수율 = 실제 DB 자동 READY 3 ÷ 묶음 원천 30 = 0.1',
-        none.facts.readyPerSource === 0.1, String(none.facts.readyPerSource))
+      const y0 = none.detail.yieldBounds as { low: number; high: number } | null
+      check('🔴 결말 수율 = 실제 DB 공개 3 ÷ 묶음 원천 30 = 0.1 (구간 low = high · 대기 0)',
+        y0 !== null && y0.low === 0.1 && y0.high === 0.1, JSON.stringify(y0))
+      const c0 = none.facts.readyCohort
+      check('🔴 같은 행이 cohort 로 — 원천 30 · 공개 3 · 손실 0 · 예정 0 · 모름 0',
+        c0 !== null && c0.sources === 30 && c0.published === 3 && c0.lost === 0 && c0.scheduled === 0 && c0.unknown === 0,
+        JSON.stringify(c0))
       snapshot(40)
       const r40 = await facts()
       check('🔴 🔴 **원천 40 · 수율 0.1 → 기대 READY 4 → d3 슬롯 3 전부 (앞판 floor(3×0.1) = 0)**',
@@ -520,9 +547,209 @@ async function main(): Promise<void> {
       const r5 = await facts()
       check('🔴 과대평가 금지 — 원천 5 · 수율 0.1 → floor(0.5) = 0',
         r5.facts.slotValidOpportunities === 0 && r5.detail.sourceValid === 5, JSON.stringify(r5.detail))
+      // 🔴 같은 READY 3건이 만료로 끝났으면 결말 수율 0 — raw 수율(READY 3 ÷ 30)이었다면 여전히 기회 3 이었다
+      await prisma.originalPostApprovalQueue.updateMany({ where: { dedupKey: { startsWith: 'pf-' } }, data: { status: 'EXPIRED' } })
+      snapshot(30)
+      const rLost = await facts()
+      check('🔴 🔴 **원천 기회 할인은 결말 수율 — 같은 READY 3 이 만료로 끝나면 원천 30 → 기대 0 · 기회 0 (raw 수율이면 3)**',
+        rLost.facts.slotValidOpportunities === 0 && rLost.detail.sourceExpected === 0 && rLost.detail.sourceValid === 30,
+        JSON.stringify(rLost.detail))
+      // 🔴 legacy-only — 같은 행에서 공급 의도를 지우고 옛 판(v2) 묶음만 둔다 → 근거 없음 = UNKNOWN (FAIL 아님)
+      const legacyDir = mkdtempSync(join(tmpdir(), 'pf-legacy-'))
+      try {
+        for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
+          writeFileSync(join(legacyDir, worksetFileName(runId)), JSON.stringify({
+            kind: WORKSET_KIND, version: WORKSET_VERSION, runId, takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`,
+            limit: 10, sources: Array.from({ length: 10 }, (_, i) => ({ sourceSite: site, sourceArticleId: `${runId}-${i}` })),
+          }))
+        }
+        await prisma.originalPostApprovalQueue.updateMany({ where: { dedupKey: { startsWith: 'pf-' } }, data: { gateResults: {} } })
+        const leg = await readPreflightFacts(prisma, {
+          loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
+          autoOpen: { open: false, reasons: [] }, proofSlots: slotTimesOn('2026-10-01', profileOf('d3')),
+          caps: releaseCapsOf(profileOf('d3')), evidenceDate: '2026-09-30', env: {}, dataDir: legacyDir, now,
+          runnerHealth: 'ok', contractValidPersonas: async () => 30,
+        })
+        const lv = judgeNextPreflight('d3', leg.facts, RUNNER_GRID)
+        check('🔴 🔴 **legacy-only(의도 없는 READY 3 · v2 묶음) → cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN (FAIL 아님)**',
+          leg.facts.readyCohort === null && leg.detail.legacyExcluded === 3 && lv.codes.includes('THROUGHPUT_UNKNOWN')
+          && lv.codes.includes('SUPPLY_COST_UNKNOWN') && !lv.codes.includes('THROUGHPUT_SHORT') && !lv.codes.includes('SUPPLY_COST_SHORT'),
+          JSON.stringify({ detail: leg.detail, codes: lv.codes }))
+      } finally { rmSync(legacyDir, { recursive: true, force: true }) }
+      // 🔴 손상된 최신 기회 스냅샷 · 묶음 → 조용히 건너뛰지 않고 모른다
+      writeFileSync(join(dir, opportunitiesFileName('20260930-231500')), '{ 손상')
+      const rBadSnap = await facts()
+      check('🔴 최신 기회 스냅샷 손상 → 증명일 기회 UNKNOWN(null) — 더 오래된 스냅샷으로 내려가지 않는다',
+        rBadSnap.facts.slotValidOpportunities === null, String(rBadSnap.facts.slotValidOpportunities))
+      writeFileSync(join(dir, worksetFileName('20260929-091500')), '{ 손상')
+      const rBadWs = await facts()
+      check('🔴 창 안 묶음 하나 손상 → 원천 수 · cohort UNKNOWN(null) — 손상 파일을 표본에서 빼지 않는다',
+        rBadWs.detail.worksetSources === null && rBadWs.facts.readyCohort === null, JSON.stringify(rBadWs.detail))
     } finally {
       rmSync(dir, { recursive: true, force: true })
       await wipePf()
+    }
+  }
+
+  console.log('\n⑨ 🔴 READY cohort — 결말 5종 · 대기 3분류(정본 판정) · 창 경계 · 사람 결정 제외 (실제 DB)')
+  {
+    const site = 'fixture:cohort'
+    const wipeC = async (): Promise<void> => {
+      await prisma.originalPostApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: 'pfc-' } } })
+      await prisma.microSeedRawContent.deleteMany({ where: { sourceSite: site } })
+    }
+    await wipeC()
+    const now = new Date('2026-10-01T07:00:00+09:00')
+    const proofSlots = slotTimesOn('2026-10-01', profileOf('d5'))
+    const first = proofSlots[0]!
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    /** 🔴 정본 판정이 읽는 증거 기록 — 게시 시각만 바꾼다(반응 · 표본 · 참여 동력은 있다) */
+    const evAt = (k: string, postedMs: number): unknown => ({
+      sourceEvidence: buildSourceEvidence({
+        postedAt: iso(postedMs), capturedAt: iso(postedMs + 30 * 60_000),
+        sourceSite: site, sourceArticleId: `pfc-${k}`, dedupKey: `${site}|pfc-${k}`,
+        response: { comments: 3, views: 100, observedAt: iso(postedMs + 30 * 60_000) },
+        sourceStats: { basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: site, bucket: '<3h', n: 5,
+          commentsPct: 0.5, viewsPct: 0.5, windowFrom: iso(postedMs - 72 * 3_600_000), windowTo: iso(postedMs + 30 * 60_000) },
+        participationDriver: '공감',
+      }),
+    })
+    const fresh = now.getTime() - 2 * 3_600_000
+    /**
+     * 증거일 2026-09-30 → 창 = UTC [09-27T15:00Z, 09-30T15:00Z). 지금 10-01 07:00 KST · d5 첫 슬롯 이후 판정.
+     *    창 안: PUBLISHED 2 · EXPIRED 1 · DECLINED 1 ·
+     *      대기 — 증거 없음(EDITED) → 손실 · 원문 80h(오래됨) → 손실 · 지금은 72h 미만이지만 첫 슬롯에서 72h 초과 → 손실 ·
+     *             신선(창 시작 정각) · 신선(창 끝 1초 전) → 짝 없음 = 모름(자동 READY 닫힘)
+     *    창 밖: 창 시작 1초 전 대기 · 창 끝 정각 대기 · 사람 결정 PUBLISHED
+     */
+    const rows: { k: string; status: 'PUBLISHED' | 'EXPIRED' | 'DECLINED' | 'APPROVED' | 'EDITED'; at: string; gate: unknown; by?: string }[] = [
+      { k: 'pub1', status: 'PUBLISHED', at: '2026-09-28T03:00:00Z', gate: evAt('pub1', fresh) },
+      { k: 'pub2', status: 'PUBLISHED', at: '2026-09-29T03:00:00Z', gate: evAt('pub2', fresh) },
+      { k: 'exp', status: 'EXPIRED', at: '2026-09-29T05:00:00Z', gate: evAt('exp', fresh) },
+      { k: 'dec', status: 'DECLINED', at: '2026-09-30T01:00:00Z', gate: evAt('dec', fresh) },
+      { k: 'noev', status: 'EDITED', at: '2026-09-30T02:00:00Z', gate: {} },
+      { k: 'stale', status: 'APPROVED', at: '2026-09-29T02:00:00Z', gate: evAt('stale', now.getTime() - 80 * 3_600_000) },
+      { k: 'soon', status: 'APPROVED', at: '2026-09-30T03:00:00Z', gate: evAt('soon', first.getTime() - 72 * 3_600_000 - 60_000) },
+      { k: 'start', status: 'APPROVED', at: '2026-09-27T15:00:00Z', gate: evAt('start', fresh) },
+      { k: 'recent', status: 'APPROVED', at: '2026-09-30T14:59:59Z', gate: evAt('recent', fresh) },
+      { k: 'old', status: 'APPROVED', at: '2026-09-27T14:59:59Z', gate: evAt('old', fresh) },
+      { k: 'end', status: 'APPROVED', at: '2026-09-30T15:00:00Z', gate: evAt('end', fresh) },
+      { k: 'human', status: 'PUBLISHED', at: '2026-09-29T03:00:00Z', gate: {}, by: 'founder' },
+      { k: 'legacy', status: 'EXPIRED', at: '2026-09-29T04:00:00Z', gate: {} },
+    ]
+    for (const r of rows) {
+      const raw = await prisma.microSeedRawContent.create({
+        data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/${r.k}`, sourceArticleId: `pfc-${r.k}`,
+          sourceCapturedAt: new Date('2026-09-27T01:00:00Z'), rawTitle: `원문 ${r.k}`, rawBody: `원문 본문 ${r.k}` },
+        select: { id: true },
+      })
+      await prisma.originalPostApprovalQueue.create({
+        data: { sourceRawContentId: raw.id, status: r.status, draftTitle: `초안 ${r.k}`, draftBody: `본문 ${r.k}`,
+          ...(r.status === 'EDITED' ? { editedTitle: `수정 ${r.k}`, editedBody: `수정 본문 ${r.k}` } : {}),
+          gateVerdict: 'PASS', promptVersion: 'pfc', model: 'pfc',
+          // 🔴 legacy 행만 공급 의도가 없다 — 근거로 세지 않는다
+          // 🔴 legacy · 증거 없는 옛 행만 공급 의도가 없다 — 근거로 세지 않는다(증거 없는 행이 계약을 주장하면 cohort 가 모름이 된다)
+          gateResults: (r.k === 'legacy' || r.k === 'noev' ? r.gate : withIntent(r.gate, site, `pfc-${r.k}`)) as Prisma.InputJsonValue,
+          decidedBy: r.by ?? AUTO_DECIDER, decidedAt: new Date(r.at), dedupKey: `pfc-${r.k}` },
+      })
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'pfc-'))
+    for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
+      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, runId !== '20260929-031500' ? []
+        : ['pub1', 'pub2', 'exp', 'dec', 'stale', 'soon', 'start', 'recent', 'old', 'end'].map((k) => `pfc-${k}`)))
+    }
+    // 🔴 같은 창의 옛 판(v2) 묶음 — 손상이 아니라 legacy: 세지 않는다(원천 30 그대로)
+    writeFileSync(join(dir, worksetFileName('20260929-091500')), JSON.stringify({
+      kind: WORKSET_KIND, version: WORKSET_VERSION, runId: '20260929-091500', takenAt: '2026-09-29T09:15:00.000Z',
+      limit: 10, sources: Array.from({ length: 10 }, (_, i) => ({ sourceSite: site, sourceArticleId: `legacy-${i}` })),
+    }))
+    try {
+      check('🔴 fixture 전제 — "곧 만료" 행은 지금은 72h 미만 · d5 첫 슬롯에서는 72h 이상',
+        now.getTime() - (first.getTime() - 72 * 3_600_000 - 60_000) < 72 * 3_600_000 && first.getTime() > now.getTime() + 60_000)
+      const r = await readPreflightFacts(prisma, {
+        loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
+        autoOpen: { open: false, reasons: [] }, proofSlots,
+        caps: releaseCapsOf(profileOf('d5')), evidenceDate: '2026-09-30', env: {}, dataDir: dir, now,
+        runnerHealth: 'ok', contractValidPersonas: async () => 30,
+      })
+      const c = r.facts.readyCohort
+      check('🔴 🔴 **F 완전 연결 cohort = 공개 2 · 손실 4(EXPIRED · DECLINED · 80h · 슬롯 전 만료) · 예정 0 · 모름 2 · 원천 30**',
+        c !== null && c.published === 2 && c.lost === 4 && c.scheduled === 0 && c.unknown === 2 && c.sources === 30
+        && (r.detail.intentMismatches as unknown[]).length === 0, JSON.stringify({ c, m: r.detail.intentMismatches }))
+      check('🔴 창 시작 1초 전 · 창 끝 정각 · 사람 결정 · 의도 없는 legacy 2행은 cohort 밖 — raw READY 8 · legacy 2',
+        r.detail.readyCount === 8 && r.detail.legacyExcluded === 2, JSON.stringify(r.detail))
+      const y = r.detail.yieldBounds as { low: number; high: number } | null
+      check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 2) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 4 / 30, JSON.stringify(y))
+      if (c !== null) {
+        const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
+        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 12) 같은 cohort 용량 16 이 채운다 → 처리량 확정',
+          d3.counts.readyNeededMax === 12 && d3.counts.readyCapacity === 16
+          && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
+        const d5 = judgeNextPreflight('d5', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
+        check('🔴 🔴 **d5 — 모르는 대기 2 의 결말에 따라 필요 10~20 · 용량 16 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
+          d5.counts.readyNeededMin === 10 && d5.counts.readyNeededMax === 20
+          && d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict !== 'PASS', JSON.stringify(d5.counts))
+        check('🔴 공급 비용 = 목표 5 × 결과당 $0.01 — raw READY 단가 · 공개 단가 칸 없음',
+          Math.abs((d5.counts.supplyDailyUsdNeeded ?? 0) - 0.05) < 1e-12
+          && !('rawReadyUsd' in d5.counts) && !('publicPostUsd' in d5.counts), JSON.stringify(d5.counts))
+        check('🔴 실제 비용 귀속은 현재 계약 정산이 없다(호스트 장부는 legacy 뿐) → 결과당 단가 모름(null) → 판정 비용 UNKNOWN',
+          c.usdPerSlotValidResult === null && judgeNextPreflight('d5', r.facts, RUNNER_GRID).codes.includes('SUPPLY_COST_UNKNOWN'))
+      }
+      const factsAgain = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {
+        loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
+        autoOpen: { open: false, reasons: [] }, proofSlots,
+        caps: releaseCapsOf(profileOf('d5')), evidenceDate: '2026-09-30', env: {}, dataDir: dir, now,
+        runnerHealth: 'ok', contractValidPersonas: async () => 30,
+      })
+      /**
+       * 🔴 **cohort 경계 — 창 밖 회차의 묶음은 정상 파일이어도 이 cohort 가 아니다** (2026-10-04 P0-2 최종 보정).
+       *    창 = UTC [09-27T15:00:00Z, 09-30T15:00:00Z). 같은 큐 행(창 안 decidedAt)의 의도를 창 시작 1초 전 회차로 옮기면
+       *    분자에 넣지 않고 cohort 전체를 모름으로 닫는다. 같은 행을 창 시작 정각 회차로 옮기면 정상 계산.
+       */
+      const rec = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'pfc-recent' }, select: { id: true, gateResults: true } })
+      const g0 = rec.gateResults as Record<string, Record<string, unknown>>
+      const moveTo = async (runId: string): Promise<void> => {
+        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 1, ['pfc-recent']))
+        await prisma.originalPostApprovalQueue.update({
+          where: { id: rec.id }, data: { gateResults: { ...g0, [SUPPLY_INTENT_KEY]: { ...g0[SUPPLY_INTENT_KEY], runId } } as Prisma.InputJsonValue },
+        })
+      }
+      await moveTo('20260927-145959')
+      const outside = await factsAgain()
+      const ov = judgeNextPreflight('d5', outside.facts, RUNNER_GRID)
+      check('🔴 🔴 **묶음 runAt 창 시작 1초 전 · 큐 decidedAt 창 안 · 파일 정상 → WORKSET_OUTSIDE_COHORT · cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN**',
+        outside.facts.readyCohort === null && JSON.stringify(outside.detail.intentMismatches) === JSON.stringify(['WORKSET_OUTSIDE_COHORT'])
+        && outside.detail.worksetSources === 30 && ov.codes.includes('THROUGHPUT_UNKNOWN') && ov.codes.includes('SUPPLY_COST_UNKNOWN'),
+        JSON.stringify({ m: outside.detail.intentMismatches, ws: outside.detail.worksetSources, codes: ov.codes }))
+      await moveTo('20260927-150000')
+      const inside = await factsAgain()
+      const ic = inside.facts.readyCohort
+      check('🔴 🔴 **같은 행의 묶음 runAt 이 창 시작 정각(창 안) → 정상 계산 — 공개 2 · 손실 4 · 모름 2 · 원천 31(그 묶음 1 포함)**',
+        ic !== null && ic.published === 2 && ic.lost === 4 && ic.unknown === 2 && ic.sources === 31
+        && (inside.detail.intentMismatches as unknown[]).length === 0, JSON.stringify({ ic, m: inside.detail.intentMismatches }))
+      await prisma.originalPostApprovalQueue.update({ where: { id: rec.id }, data: { gateResults: g0 as Prisma.InputJsonValue } })
+      // 🔴 E — 큐 의도 하나가 그 회차 묶음과 나이 한 칸만 달라도 cohort 전체가 모름(legacy 로 빼지 않는다)
+      const one = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'pfc-start' }, select: { id: true, gateResults: true } })
+      const g = one.gateResults as Record<string, Record<string, unknown>>
+      await prisma.originalPostApprovalQueue.update({
+        where: { id: one.id }, data: { gateResults: { ...g, [SUPPLY_INTENT_KEY]: { ...g[SUPPLY_INTENT_KEY], ageAtSlotH: 6 } } as Prisma.InputJsonValue },
+      })
+      const bad = await factsAgain()
+      const bv = judgeNextPreflight('d5', bad.facts, RUNNER_GRID)
+      check('🔴 🔴 **E 큐 의도 ageAtSlotH ≠ v3 묶음 → AGE_MISMATCH · cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN**',
+        bad.facts.readyCohort === null && JSON.stringify(bad.detail.intentMismatches) === JSON.stringify(['AGE_MISMATCH'])
+        && bv.codes.includes('THROUGHPUT_UNKNOWN') && bv.codes.includes('SUPPLY_COST_UNKNOWN') && bad.detail.legacyExcluded === 2,
+        JSON.stringify({ m: bad.detail.intentMismatches, codes: bv.codes }))
+      await prisma.originalPostApprovalQueue.update({
+        where: { id: one.id },
+        data: { gateResults: { ...g, sourceEvidence: buildSourceEvidence({ sourceSite: site, sourceArticleId: 'pfc-other' }) } as Prisma.InputJsonValue },
+      })
+      const badEv = await factsAgain()
+      check('🔴 E 큐 원문 증거 해시 ≠ 의도 원천 해시 → EVIDENCE_HASH_MISMATCH · cohort 없음',
+        badEv.facts.readyCohort === null && JSON.stringify(badEv.detail.intentMismatches) === JSON.stringify(['EVIDENCE_HASH_MISMATCH']))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      await wipeC()
     }
   }
 

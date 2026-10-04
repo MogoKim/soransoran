@@ -545,9 +545,12 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
   check('🔴 수요 = 슬롯 − eligible READY', judgeJitDemand({ slots: 4, readyFilled: 1 }).upTo === 3 && judgeJitDemand({ slots: 4, readyFilled: 1 }).llm)
   check('🔴 덮였으면 생성 0 · 모르면 파일 단계만(모델 0)', !judgeJitDemand({ slots: 3, readyFilled: 3 }).llm && !judgeJitDemand(null).llm)
   const facts: PreflightFacts = {
-    slotValidOpportunities: 3, readyPerSource: 0.5, latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
+    slotValidOpportunities: 3,
+    // 🔴 cohort — 원천 6 · 공개 3 (수율 0.5) · 결과당 비용 $0.02
+    readyCohort: { sources: 6, published: 3, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.02 },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyUsdPerReady: 0.02, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   }
   check('d3 모든 사실이 있으면 PASS', judgeNextPreflight('d3', facts, RUNNER_GRID).verdict === 'PASS', JSON.stringify(judgeNextPreflight('d3', facts, RUNNER_GRID).codes))
   const noPersona = judgeNextPreflight('d3', { ...facts, contractValidPersonas: null }, RUNNER_GRID)
@@ -560,7 +563,7 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
     judgeNextPreflight('d3', { ...facts, runnerHealth: 'unknown' }, RUNNER_GRID).codes.includes('RUNNER_UNKNOWN')
     && judgeNextPreflight('d3', { ...facts, runnerHealth: 'bad' }, RUNNER_GRID).verdict === 'FAIL')
   check('🔴 3일 정산 단가 × 필요량이 상한을 넘으면 FAIL SUPPLY_COST_SHORT',
-    judgeNextPreflight('d3', { ...facts, supplyUsdPerReady: 0.2 }, RUNNER_GRID).codes.includes('SUPPLY_COST_SHORT'))
+    judgeNextPreflight('d3', { ...facts, readyCohort: { sources: 6, published: 3, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.2 } }, RUNNER_GRID).codes.includes('SUPPLY_COST_SHORT'))
   const slots = slotTimesOn('2026-10-01', profileOf('d3'))
   const always: SlotOpportunity = { key: 'r', validAt: () => true }
   const src = (k: string): SlotOpportunity => ({ key: k, validAt: () => true })

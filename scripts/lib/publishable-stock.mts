@@ -444,13 +444,22 @@ export function upcomingSlots(input: {
  */
 export function jitCoverageOf(
   view: { loaded: LoadedStock; resolved: ResolvedScale }, now: Date,
-): { slots: number; readyFilled: number } {
+): { slots: number; readyFilled: number; matched: string[]; horizon: Date[]; unfilled: Date[] } {
   const scale = view.resolved.scale
   const slots = upcomingSlots({
     now, publishedToday: view.loaded.publishedToday, release: scale.releaseProfile, capacity: scale.capacityProfile,
   })
-  const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.capacityProfile), now, autoOnly: false })
-  return { slots: slots.length, readyFilled: matchOpportunitiesToSlots(slots, ready).filled }
+  /**
+   * 🔴 **자동 READY 만 센다** (2026-10-04 P0-2 보정). 사람 승인 READY 는 발행 러너의 공정성(`preferredLane`)에는 남지만
+   *    자동 단계 증명 물량이 아니다(canon §6) — 사람 글이 슬롯을 덮었다고 자동 공급을 닫지 않는다.
+   */
+  const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.capacityProfile), now, autoOnly: true })
+  const m = matchOpportunitiesToSlots(slots, ready)
+  // 🔴 짝지은 READY 열쇠 · 다가오는 슬롯 · 미충족 슬롯 — 대기 결말 분류와 원천 배정이 **같은 짝짓기**를 쓴다
+  return {
+    slots: slots.length, readyFilled: m.filled, matched: m.bySlot.filter((k): k is string => k !== null), horizon: slots,
+    unfilled: slots.filter((_, i) => m.bySlot[i] === null),
+  }
 }
 
 /**

@@ -378,6 +378,9 @@ async function worksetAxisRunner(
       NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
       // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
       ...LAST_SLOT_SCHEDULED_ENV,
+      // 🔴 JIT(2026-10-04 P0-2) — 유료 원천 수 = 부족 슬롯 수다. 표식 없는 d1 이면 부족 1 → 묶음 1 이라
+      //    축별 자리를 볼 수 없다. 결정이 넣은 모양(표식 포함) d10 → 다음 증명일 슬롯 10 · 부족 10 · 묶음 천장 10
+      ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
       FAKE_PROVIDER_LOG: fakeLog,
     },
   })
