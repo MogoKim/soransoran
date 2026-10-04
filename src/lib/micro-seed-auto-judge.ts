@@ -99,7 +99,7 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   targetedHarassmentOrThreat: '🔴 특정인을 향한 위협 · 괴롭힘 · 혐오 선동',
   dangerousMedicalInstruction: '🔴 약 · 용량 · 진단 · 치료를 확정적으로 지시한다 (경험담은 해당하지 않는다)',
   politicalCampaigning: '🔴 정치 · 진영 선동 (§4-K)',
-  hanjaLanguageFit: '🔴 실제 한자 문자 — 소란소란 언어 핏이 아니다(정치 판정 아님)',
+  hanjaLanguageFit: '🔴 실제 한자 문자 — 서비스 언어 핏이 아니다(정치 판정 아님)',
   semanticFailed: '의미 판정 호출이 실패했다',
   unexplainedModelDrop: '🔴 모델이 버리라 했는데 버릴 사유를 대지 못했다 — 사람에게 넘긴다',
   axisMismatch: '모델이 다른 축을 말했다 — 축은 우리가 정한다',
