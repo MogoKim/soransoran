@@ -144,7 +144,7 @@ const FLAG_LABEL: Record<string, string> = {
   practicalConcernLikely: '🧩생활고민',
   highEngagement: '💬반응많음',
   lowEngagement: '🕓반응없음',
-  politicalOrPublicFigure: '🟠정치·실명',
+  politicalFigure: '🟠정치인물',
   clickbaitTitle: '🎣낚시성',
   shortTitle: '✂️짧은제목',
   titleTruncated: '✂️제목잘림',
@@ -154,7 +154,7 @@ const FLAG_LABEL: Record<string, string> = {
   // Q-1 보강 — 본문 위험 신호. 🔴 표시일 뿐 거부가 아니다
   medicalOrAdLikely: '🏥의료·광고성',
   quotedOrMediaLikely: '📰전언·방송',
-  publicFigureMention: '🟠본문실명',
+  politicalFigureMention: '🟠본문정치인물',
 }
 
 function describeFlags(flags: readonly string[]): string {
@@ -194,9 +194,9 @@ function printSelectionTable(rows: CollectedCandidate[]) {
     console.log(`           ${describeFlags(row.qualityFlags)}`)
   }
 
-  const flagged = rows.filter((r) => r.qualityFlags.includes('politicalOrPublicFigure')).length
+  const flagged = rows.filter((r) => r.qualityFlags.includes('politicalFigure')).length
   const target = rows.filter(
-    (r) => r.qualityFlags.includes('targetLikely') && !r.qualityFlags.includes('politicalOrPublicFigure'),
+    (r) => r.qualityFlags.includes('targetLikely') && !r.qualityFlags.includes('politicalFigure'),
   ).length
   console.log('')
   console.log(`  전체 ${rows.length}건 · 🎯우리또래(정치·실명 제외) ${target}건 · 🟠정치·실명 ${flagged}건`)

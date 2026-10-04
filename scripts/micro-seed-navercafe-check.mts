@@ -37,6 +37,7 @@ import {
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
+import { assessCandidate } from './lib/micro-seed-quality.mjs'
 // 🔴 시각 정본 — fixture 도 손으로 적은 표가 아니라 정본을 본다
 import { planSlots } from '../src/lib/collect-schedule'
 import {
@@ -975,22 +976,26 @@ console.log('\n㉗ 제외 사유 — 🔴 단일 판정. 축을 합치지도 흩
     judgeExcludeReason({ politicsExcluded: false, pinned: false, qualityFlags: [], ...o })
   check('정치 제목 → politics', J({ politicsExcluded: true }) === 'politics')
   check('politicalTopicLikely → politics', J({ qualityFlags: ['politicalTopicLikely'] }) === 'politics')
-  check('🔴 politicalOrPublicFigure → publicFigure (더 이상 후보에 남지 않는다)',
-    J({ qualityFlags: ['politicalOrPublicFigure'] }) === 'publicFigure',
-    '실측에서 이 2건이 sourcePoliticsExcluded=false 라 자동 후보에 남을 수 있었다')
+  check('🔴 politicalFigure(정치 인물) → politics (P0-3 — publicFigure 사유는 지웠다)',
+    J({ qualityFlags: ['politicalFigure'] }) === 'politics',
+    '실측에서 정치 인물 2건이 sourcePoliticsExcluded=false 라 자동 후보에 남을 수 있었다')
+  check('📜 옛 혼합 플래그는 가를 수 없어 politics 로 읽는다(fail-closed · 새로 만들지 않는다)',
+    J({ qualityFlags: ['politicalOrPublicFigure'] }) === 'politics')
+  check('🔵 연예 · 방송 · 드라마 · 예능 제목은 제외 사유가 아니다 — 수집기 플래그 그대로 판정',
+    ['배우 송혜교 새 드라마 첫 방송 봤어요', '가수 임영웅 콘서트 다녀왔어요', '나혼자산다 박나래 편 보셨어요',
+      '예능 런닝맨 유재석 진짜 웃겨요', '드라마 마지막회 결말 어떻게 보셨어요'].every((t) =>
+      J({ qualityFlags: assessCandidate({ originalTitle: t, sourceCommentCount: 5, rawBody: '' }).flags }) === null))
   check('고정 슬롯 → pinned', J({ pinned: true }) === 'pinned')
   check('해당 없으면 null', J({ qualityFlags: ['lowEngagement'] }) === null)
-  check('🔴 정치가 실명보다 먼저다',
-    J({ politicsExcluded: true, qualityFlags: ['politicalOrPublicFigure'] }) === 'politics',
-    '정치이면서 실명인 글을 publicFigure 로 적으면 나중에 Growth 로 되살릴 후보처럼 보인다')
+  check('🔴 정치가 고정 슬롯보다 먼저다 — 정치 인물 + 고정',
+    J({ pinned: true, qualityFlags: ['politicalFigure'] }) === 'politics')
   check('🔴 정치가 고정 슬롯보다 먼저다', J({ politicsExcluded: true, pinned: true }) === 'politics')
 
   // 🔵 연예·방송·셀럽은 정치와 분리된다
   check('🔵 연예 제목은 politics 가 아니다',
     !judgePoliticsTitle('연예인 이혼 소식').excluded && !judgePoliticsTitle('드라마 마지막회').excluded)
-  check('🔴 사유를 남기는 이유 — Growth 가 열리면 publicFigure 를 갈라야 한다',
-    /Growth 레인이 열리면/.test(LIB),
-    '사유를 안 남기면 그때 무엇을 되살릴지 알 수 없다')
+  check('🔴 (P0-3) publicFigure 사유를 지웠다 — 연예 · 방송은 정상 원천 기회 · 정치 인물은 정치 사유 하나',
+    /📜 publicFigure\(제목 실명 · 공인\) 사유는 지웠다/.test(LIB) && /export type ExcludeReason = 'politics' \| 'pinned'/.test(LIB))
   check('collector 가 단일 판정으로 후보를 고른다',
     /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
       && /sourceExcludeReason === null/.test(LIB_CODE)
@@ -1048,12 +1053,12 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
   // 🔴 2026-09-03 유머·연예 1p 실측을 그대로 옮긴 모양:
   //    고정 슬롯은 조회수 중앙이 2,111 로 일반 글(321)의 7배다.
   //    전체에 threshold 를 걸면 **상세를 열 수도 없는 행이 통과율을 끌어올린다.**
-  const row = (reason: 'pinned' | 'politics' | 'publicFigure' | null, c: number, v: number) =>
+  const row = (reason: 'pinned' | 'politics' | null, c: number, v: number) =>
     ({ sourceExcludeReason: reason, sourceCommentCount: c, sourceViewCount: v })
   const rows = [
     ...Array.from({ length: 7 }, () => row('pinned', 50, 2111)),   // 고정 슬롯 — 전부 통과할 값
     row('politics', 30, 900),
-    row('publicFigure', 30, 900),
+    row('politics', 30, 900),
     row(null, 12, 400),                                            // 진짜 후보 중 통과 1건
     ...Array.from({ length: 13 }, () => row(null, 2, 100)),         // 진짜 후보 중 미달
   ]

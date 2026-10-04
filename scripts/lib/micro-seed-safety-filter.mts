@@ -15,7 +15,8 @@
  * 🔴 **정치 판정을 여기서 다시 만들지 않는다.**
  *    `findPoliticalTopicHit` 하나를 쓴다 — 두 곳에서 판정하면 언젠가 갈라진다 (§4-K).
  */
-import { findPoliticalTopicHit } from './micro-seed-quality.mjs'
+import { findPoliticalFigureHits, findPoliticalTopicHit } from './micro-seed-quality.mjs'
+import { isPoliticsExcludeReason } from '../../src/lib/political-flags'
 // 🔴 위기 신호·의료 판단 요청·건강 효능 주장의 정본은 순수 판정 하나다 —
 //    여기서 정규식을 다시 적으면 semantic 판정과 갈라진다
 import { judgeSafetySignals } from '../../src/lib/micro-seed-safety-signals'
@@ -69,7 +70,8 @@ export type SafetyInput = {
   sourceRowLabel?: string | null
   sourcePinned?: boolean
   /** 수집기가 이미 내린 단일 제외 판정 (PR-S2-b-8) */
-  sourceExcludeReason?: 'politics' | 'publicFigure' | 'pinned' | null
+  /** 🔴 저장된 행의 값 — 옛 사유(`publicFigure`)는 정치로 읽는다(`isPoliticsExcludeReason`) */
+  sourceExcludeReason?: string | null
   qualityFlags?: readonly string[]
   /** 상세 열람 결과. 못 읽었으면 이유를 준다 */
   accessStatus?: 'ok' | 'deletedOrExpired' | 'permissionDenied' | 'renderFailed' | 'unknown'
@@ -154,8 +156,9 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
   }
 
   // ① 정치 — 🔴 hardExclude. 어디에도 가지 않는다 (§4-K)
-  const politicsHit = findPoliticalTopicHit(title) ?? findPoliticalTopicHit(body)
-  if (input.sourceExcludeReason === 'politics' || politicsHit) {
+  // 🔴 정치 주제(본문까지) + 제목의 정치 인물(P0-3) — 82cook · 네이버카페가 같은 판정을 지난다. 연예 · 방송 이름은 보지 않는다
+  const politicsHit = findPoliticalTopicHit(title) ?? findPoliticalTopicHit(body) ?? findPoliticalFigureHits(title)[0] ?? null
+  if (isPoliticsExcludeReason(input.sourceExcludeReason) || politicsHit) {
     add('politics', politicsHit ? `정치 키워드(${politicsHit})` : '수집기 정치 판정', 'hardExclude')
   }
 

@@ -15,6 +15,7 @@
  *
  * 🔴 **이 파일은 무엇을 열지만 정한다.** 여는 것도 저장도 러너의 일이다.
  */
+import { isPoliticalFigureTitleFlag } from './political-flags'
 
 /**
  * 🔴 이 레인이 저장할 수 있는 것 — 여기 없는 키는 파일에 나가지 않는다
@@ -158,7 +159,10 @@ export function planThinFetch(input: PlanInput): Plan {
     if (S(r.sourceExcludeReason) !== '') { push(id, 'EXCLUDED'); continue }
     if (r.sourcePoliticsExcluded === true) { push(id, 'POLITICS'); continue }
     const flags = flagsOf(r)
-    if (flags.includes('politicalOrPublicFigure')) { push(id, 'FLAG_POLITICS'); continue }
+    // 🔴 정치 = 정치 주제 + 정치 인물(P0-3) — 네이버카페 `judgeExcludeReason` 과 같은 두 축. 연예 · 방송 이름은 막지 않는다.
+    //    앞판은 정치 주제(`politicalTopicLikely`)를 여기서 보지 않았다 — 제목만 정치 주제인 82cook 글이 상세를 열었다.
+    //    옛 혼합 플래그는 가를 수 없어 정치로 읽는다
+    if (flags.includes('politicalTopicLikely') || flags.some(isPoliticalFigureTitleFlag)) { push(id, 'FLAG_POLITICS'); continue }
     if (flags.includes('medicalOrAdLikely')) { push(id, 'FLAG_MEDICAL'); continue }
     if (N(r.sourceCommentCount) < COMMENT_TIER_LOW) { push(id, 'LOW_COMMENT'); continue }
     // 🔴 플래그만으로는 모자란다. 목록 수집 당시 플래그가 안 붙은 정치 글이 남아 있다

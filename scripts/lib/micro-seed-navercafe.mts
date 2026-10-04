@@ -30,6 +30,7 @@ import {
 } from '../../src/lib/naver-session-canon'
 import { createHash } from 'node:crypto'
 import { assessCandidate, findPoliticalTopicHit, type QualityAssessment } from './micro-seed-quality.mjs'
+import { isPoliticalFigureTitleFlag } from '../../src/lib/political-flags'
 import { NAVERCAFE_PREFIX, isNaverCafeSource, slotQuotaOf } from './micro-seed-supply.mjs'
 
 // ─────────────────────────────────────────────────────────
@@ -435,9 +436,8 @@ export type CollectedCandidate = {
   /**
    * 🔴 자동 상세 fetch 후보에서 **왜** 빠졌는가 (PR-S2-b-8).
    *
-   *    축을 합치지 않는다. `publicFigure` 에는 연예인·방송인이 섞이는데,
-   *    지금은 생활 Original 레인이라 함께 빼지만 **Growth 레인이 열리면 갈라야 한다.**
-   *    사유를 남기지 않으면 그때 무엇을 되살릴지 알 수 없다.
+   *    🔴 (2026-10-04 P0-3) 옛 `publicFigure` 사유를 지웠다 — 연예인 · 방송인 · 대중문화는 정상 원천 기회다.
+   *    정치 인물(`politicalFigure`)은 정치 사유 하나로 간다.
    */
   sourceExcludeReason: ExcludeReason | null
 }
@@ -445,11 +445,11 @@ export type CollectedCandidate = {
 /**
  * ```
  *   politics     정치 · 진영 · 이념 · 정당 · 정치인 · 공직자   → 🔴 어느 레인에도 안 간다
- *   publicFigure 제목의 실명 · 공인 언급                      → 🟡 생활 레인에서만 뺀다
  *   pinned       공지 · 필독 · 추천 고정 슬롯                 → 🟡 자동 경로에서만 뺀다
+ *   📜 publicFigure(제목 실명 · 공인) 사유는 지웠다(P0-3) — 공인 이름은 막을 사유가 아니다
  * ```
  */
-export type ExcludeReason = 'politics' | 'publicFigure' | 'pinned'
+export type ExcludeReason = 'politics' | 'pinned'
 
 // ─────────────────────────────────────────────────────────
 // 목록 메타 정규화 (🔴 순수 함수 · PR-S2-b-4)
@@ -601,16 +601,15 @@ export function buildCollected(
  *    그 2건이 `sourcePoliticsExcluded=false` 라 자동 후보에 남을 수 있었다.
  *    "어느 쪽이 최종 차단인가" 를 코드만 보고 답할 수 없으면 언젠가 새어 나간다.
  *
- * 🔴 순서가 규칙이다. **정치를 먼저** 본다 — 정치이면서 실명인 글을
- *    `publicFigure` 로 기록하면 나중에 Growth 로 되살릴 후보처럼 보인다.
+ * 🔴 순서가 규칙이다. **정치를 먼저** 본다. 정치 인물(`politicalFigure`)도 정치다(P0-3) — 연예 · 방송 이름은 사유가 아니다.
  */
 export function judgeExcludeReason(input: {
   politicsExcluded: boolean
   pinned: boolean
   qualityFlags: readonly string[]
 }): ExcludeReason | null {
-  if (input.politicsExcluded || input.qualityFlags.includes('politicalTopicLikely')) return 'politics'
-  if (input.qualityFlags.includes('politicalOrPublicFigure')) return 'publicFigure'
+  if (input.politicsExcluded || input.qualityFlags.includes('politicalTopicLikely')
+    || input.qualityFlags.some(isPoliticalFigureTitleFlag)) return 'politics'
   if (input.pinned) return 'pinned'
   return null
 }

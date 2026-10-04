@@ -44,7 +44,7 @@ export type QualityFlag =
   // 목록 단계 — 본문 없이 판정한다
   | 'lowEngagement'
   | 'highEngagement'
-  | 'politicalOrPublicFigure'
+  | 'politicalFigure'
   | 'politicalTopicLikely'
   | 'clickbaitTitle'
   | 'shortTitle'
@@ -59,7 +59,7 @@ export type QualityFlag =
   | 'imageLikelyBody'
   | 'personalExperienceLikely'
   | 'practicalConcernLikely'
-  | 'publicFigureMention'
+  | 'politicalFigureMention'
 
 /**
  * 본문을 읽어야만 판정할 수 있는 플래그. 목록 단계에서는 **매기지 않는다**.
@@ -67,11 +67,11 @@ export type QualityFlag =
  * 🔴 `medicalOrAdLikely` · `quotedOrMediaLikely` 는 여기 없다.
  *    둘은 제목에서도 드러나기 때문이다 — `눈썹거상은 얼마정도 할까요?` 는 제목만으로 충분하고
  *    `인간극장에 나왔던…` 도 그렇다. **있는 텍스트만 보는 것**은 억지 계산이 아니다.
- *    반대로 `publicFigureMention` 은 본문 전용이다. 제목 쪽은 politicalOrPublicFigure 가 맡는다.
+ *    반대로 `politicalFigureMention` 은 본문 전용이다. 제목 쪽은 `politicalFigure` 가 맡는다.
  */
 export const DETAIL_ONLY_FLAGS: readonly QualityFlag[] = [
   'shortBody', 'linkHeavyBody', 'imageLikelyBody', 'personalExperienceLikely', 'practicalConcernLikely',
-  'publicFigureMention',
+  'politicalFigureMention',
 ]
 
 export type QualityStage = 'list' | 'detail'
@@ -134,12 +134,12 @@ export function stripTruncationTail(title: string): { truncated: boolean; stem: 
  * 넣는 순간 무관한 글이 딸려 온다.
  */
 const POLITICS =
-  /(대통령|국회의원|장관|여당|야당|민주당|국민의힘|친명|친윤|검찰|공수처|총선|대선|탄핵|관저|청와대|의원|한덕수|김민석|우원식|오세훈|홍준표|김문수|안철수|유승민|이준석|나경원|원희룡|추미애|조국|이낙연|김동연|정청래|박찬대|장동혁|권성동|송언석|김기현|주호영|천하람|이언주|용혜인|황교안|심상정|김남국|최강욱|명태균|김정숙|최서원|최순실|노무현|김대중|전두환|박정희|이승만|김정은|김여정|김용현|노상원|여인형|곽종근|조희대)/g
+  /(대통령|국회의원|장관|여당|야당|민주당|국민의힘|친명|친윤|검찰|공수처|총선|대선|탄핵|관저|청와대|(?<![한과치])의원(?!\s*(원장|진료|예약|추천))|한덕수|김민석|우원식|오세훈|홍준표|김문수|안철수|유승민|이준석|나경원|원희룡|추미애|조국|이낙연|김동연|정청래|박찬대|장동혁|권성동|송언석|김기현|주호영|천하람|이언주|용혜인|황교안|심상정|김남국|최강욱|명태균|김정숙|최서원|최순실|노무현|김대중|전두환|박정희|이승만|김정은|김여정|김용현|노상원|여인형|곽종근|조희대)/g
 
 /**
  * 정치 · 이념 **주제**. 🔴 `POLITICS` 와 목적이 다르다.
  *
- * `politicalOrPublicFigure` 는 **공인 · 실명** 탐지다 — 누가 언급됐는가를 본다.
+ * `politicalFigure` 는 **정치 인물** 탐지다 — 누가 언급됐는가를 본다(2026-10-04 P0-3 — 연예인 · 방송인은 보지 않는다).
  * 그래서 `나라별 극우의 특징`(4234894, 2026-09-03 실측)을 놓쳤다.
  * 사람 이름도 직함도 없고 **주제만 정치**인 글이다.
  *
@@ -285,13 +285,13 @@ const HANJA_NAME = /[李尹文朴安韓黃曺洪崔鄭姜趙張林]/g
  * 🔴 공백을 허용하면 `교회 목사` 의 `교회` 를 이름으로 읽는다(실측 오탐).
  *    붙여쓰기로 좁히고, `목사` 처럼 일반명사와 붙어 다니는 직함은 아예 뺀다.
  */
-const NAME_WITH_TITLE = /[가-힣]{2,4}(작가|의원|장관|대통령|검사|판사|아나운서|기자)/g
+const NAME_WITH_TITLE = /[가-힣]{2,4}(?<![한과치])(의원|장관|대통령)/g
 
 /**
  * 직함이 **앞에** 오는 형태 — `가수 채연` · `배우 아무개`.
  * 이쪽은 직함이 먼저라 일반명사를 이름으로 오인할 여지가 적다.
  */
-const TITLE_THEN_NAME = /(가수|배우|작가|감독|아나운서|의원|장관)\s+[가-힣]{2,4}/g
+const TITLE_THEN_NAME = /((?<![한과치])의원(?!\s*(원장|진료|예약|추천))|장관)\s+[가-힣]{2,4}/g
 
 /**
  * 낚시성 제목. 🔴 말줄임을 벗긴 **stem** 에만 적용한다.
@@ -362,15 +362,33 @@ const QUOTED_MEDIA =
   /(라면서요|다면서요|라던데|다던데|나왔다던데|나왔던|나왔다는|기사에|뉴스에|방송에|인간극장|유튜브에서|카더라|들은\s*얘기|들었는데|가보진\s*않|안\s*가봤|해보진\s*않|본\s*적은\s*없)/g
 
 /**
- * 공인 이름 사전 — 🔴 **불완전하다.**
+ * 정치 인물 이름 사전 — 🔴 **불완전하다.** (2026-10-04 P0-3: 실측 연예 · 방송 이름 `장영란` · `박수홍` · `채연` · `헬마우스` 는 뺐다 —
+ * 공인 이름은 막을 사유가 아니다. 정치 인물만 남긴다)
  *
  * 이름 단독(`장영란` · `박수홍` · `유시민`)은 사전 없이 정규식으로 잡을 수 없다.
  * 실측에서 실제로 나온 이름만 넣는다. 여기 없는 이름은 **못 잡는다** —
  * 그래서 이 플래그가 비어 있다고 "실명이 없다"로 읽으면 안 된다.
  * 근본 해결은 M4(Voice Engine) 영역이고, 여기서는 반복 등장하는 것만 앞당겨 잡는다.
  */
-const KNOWN_PUBLIC_FIGURES =
-  /(장영란|박수홍|유시민|이재명|이준석|김민석|인요한|조성은|채연|헬마우스)/g
+const KNOWN_POLITICAL_FIGURES =
+  /(유시민|이재명|이준석|김민석|인요한|조성은)/g
+
+/**
+ * 🔴 **정치 인물 탐지 — 수집기 · 안전 필터 · 82cook · 네이버카페가 이 함수 하나를 쓴다** (2026-10-04 P0-3).
+ *    정치인 · 정당 · 직함(의원 · 장관 · 대통령) · 언론 한자 약칭 · 실측 정치 인물만 본다.
+ *    🔴 연예인 · 배우 · 가수 · 방송인 · 작가 · 감독 · 아나운서 · 기자는 보지 않는다 — 공인 이름은 위해가 아니라 소재다.
+ *       위해(루머 단정 · 명예훼손 · 사생활 · 가족 공격 · 괴롭힘 · 혐오 · 위협)는 안전 필터 · 의미 판정의 별도 hard gate 가 본다.
+ *    🔴 `한의원` · `피부과의원` · `치과의원` 은 병원이다 — 직함 `의원` 으로 읽지 않는다.
+ */
+export function findPoliticalFigureHits(text: string): string[] {
+  // 🔴 창업자 주제 목록(`POLITICAL_TOPIC_TERMS`)과 겹치는 낱말(친명 · 친윤 · 대선 · 민주당 …)은 **주제 판정이 정본**이다 —
+  //    그 목록은 생활 오탐 경계(`모친명의` · `깍깍대선`)를 이미 다듬었다. 여기서 거친 부분 문자열로 다시 잡지 않는다.
+  const topicTerms = POLITICAL_TOPIC_TERMS as readonly string[]
+  return [...new Set([
+    ...collect(POLITICS, text).filter((h) => !topicTerms.includes(h)), ...collect(HANJA_NAME, text),
+    ...collect(NAME_WITH_TITLE, text), ...collect(TITLE_THEN_NAME, text), ...collect(KNOWN_POLITICAL_FIGURES, text),
+  ])]
+}
 
 /** 정규식 전역 매칭 결과를 중복 없이 모은다 */
 function collect(re: RegExp, text: string): string[] {
@@ -431,15 +449,11 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
     note('titleTruncated', [title.slice(-4)])
   }
 
-  const politics = collect(POLITICS, title)
-  const hanja = collect(HANJA_NAME, title)
-  const nameTitle = collect(NAME_WITH_TITLE, title)
-  const titleName = collect(TITLE_THEN_NAME, title)
-  const knownFigure = collect(KNOWN_PUBLIC_FIGURES, title)
-  const publicFigure = [...politics, ...hanja, ...nameTitle, ...titleName, ...knownFigure]
-  if (publicFigure.length) {
-    flags.push('politicalOrPublicFigure')
-    note('politicalOrPublicFigure', publicFigure)
+  // 🔴 정치 인물만 — 연예인 · 방송인 이름은 플래그가 아니다(P0-3)
+  const politicalFigure = findPoliticalFigureHits(title)
+  if (politicalFigure.length) {
+    flags.push('politicalFigure')
+    note('politicalFigure', politicalFigure)
   }
 
   // 🔴 공인·실명과 **별도 축**이다. 제목만 본다 — 목록 단계 자동 선별이 쓸 수 있어야 한다
@@ -517,15 +531,11 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
     }
 
     // 🔴 제목이 깨끗해도 본문에 사람 이름이 있다 — 4232047 이 그랬다.
-    //    politicalOrPublicFigure 는 제목만 본다. 본문 쪽은 여기서 따로 센다.
-    const bodyFigure = [
-      ...collect(POLITICS, body), ...collect(HANJA_NAME, body),
-      ...collect(NAME_WITH_TITLE, body), ...collect(TITLE_THEN_NAME, body),
-      ...collect(KNOWN_PUBLIC_FIGURES, body),
-    ]
+    //    politicalFigure 는 제목만 본다. 본문 쪽은 여기서 따로 센다 — 정치 인물만(P0-3)
+    const bodyFigure = findPoliticalFigureHits(body)
     if (bodyFigure.length) {
-      flags.push('publicFigureMention')
-      note('publicFigureMention', [...new Set(bodyFigure)].slice(0, 6))
+      flags.push('politicalFigureMention')
+      note('politicalFigureMention', bodyFigure.slice(0, 6))
     }
   }
 
@@ -555,11 +565,11 @@ export function selectionScore(a: QualityAssessment): number {
   if (a.flags.includes('highEngagement')) score += 20
   else if (!a.flags.includes('lowEngagement')) score += 8
 
-  if (a.flags.includes('politicalOrPublicFigure')) score -= 45
+  if (a.flags.includes('politicalFigure')) score -= 45
   // 🔴 실명이 없어도 정치 주제면 우리 커뮤니티 글이 아니다 (4234894 실측)
   if (a.flags.includes('politicalTopicLikely')) score -= 45
   // 🔴 제목이 깨끗해도 본문에 이름이 나오면 성격이 달라진다 (4232047)
-  if (a.flags.includes('publicFigureMention')) score -= 30
+  if (a.flags.includes('politicalFigureMention')) score -= 30
   if (a.flags.includes('medicalOrAdLikely')) score -= 25
   // 남 이야기는 우리 회원의 경험담이 아니다. 버리지는 않되 뒤로 민다
   if (a.flags.includes('quotedOrMediaLikely')) score -= 10

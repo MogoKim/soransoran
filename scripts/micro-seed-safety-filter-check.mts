@@ -265,8 +265,10 @@ console.log('\n⑪ 이 필터가 하지 않는 것 — 🔴 발행·fetch·DB·S
   ]
   for (const [re, label] of BANNED) check(`🔴 ${label} 없음`, !re.test(CODE))
   // 🔴 2026-09-16 — 위기 신호 판정부를 정본 순수 모듈 하나에서 가져온다(규칙 복제 금지)
-  check('🟢 import 는 quality lib · 안전 신호 판정부 둘뿐이다',
-    (CODE.match(/^import /gm) ?? []).length === 2, `${(CODE.match(/^import /gm) ?? []).length}개`)
+  // 🔴 (2026-10-04 P0-3) 정치 사유 이름 정본(`political-flags` — 의존 없는 순수 이름 모듈)이 셋째다
+  check('🟢 import 는 quality lib · 안전 신호 판정부 · 정치 사유 이름 셋뿐이다',
+    (CODE.match(/^import /gm) ?? []).length === 3 && /from '\.\.\/\.\.\/src\/lib\/political-flags'/.test(CODE),
+    `${(CODE.match(/^import /gm) ?? []).length}개`)
   check('🔴 위기·의료 판정 규칙을 필터가 다시 쓰지 않는다',
     !/자살|자해|미레나|무리가 ?없/.test(CODE))
   // 🔴 100자 판정도 레인 배정도 여기서 하지 않는다

@@ -21,6 +21,7 @@
  *    여기서는 그 결과를 **읽어서 조합만** 한다 — 새 정규식을 만들지 않는다.
  */
 import { sourceIdentityOf } from './source-identity'
+import { isPoliticalFigureTitleFlag } from './political-flags'
 
 /** 🔴 사람 값과 절대 겹치지 않는 이름 */
 export const AUTO_DECISIONS = ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const
@@ -410,7 +411,8 @@ export function readReasons(raw: string): ReasonCode[] {
 export function readFlags(flags: readonly string[]): ReasonCode[] {
   const out: ReasonCode[] = []
   for (const f of flags) {
-    if (f === 'politicalOrPublicFigure') out.push('politics')
+    // 🔴 정치 인물 제목만 정치다(P0-3) — 연예 · 방송 이름은 플래그가 아니다. 옛 혼합 플래그는 가를 수 없어 정치로 읽는다
+    if (isPoliticalFigureTitleFlag(f)) out.push('politics')
     // 🔴 `medicalOrAdLikely` 는 이름 그대로 **의료 또는 광고**다. 둘을 가르는 정보가
     //    이 플래그에 없는데 v1 이 `medicalClaim` 으로 단정했다 — 사유를 왜곡한 것이다.
     //    이제 별도 코드로 남기고, 의료인지 광고인지는 semantic judge 가 본다.

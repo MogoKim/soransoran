@@ -130,8 +130,9 @@ async function main(): Promise<void> {
     rows, seen,
     // 🔴 수집 당시 플래그가 안 붙은 정치·안전 소재를 여기서 한 번 더 거른다
     judge: {
-      isPolitics: (title) => safetyFilter({ title }).reasons
-        .map((x) => String(x)).includes('politicalOrPublicFigure'),
+      // 🔴 (P0-3) 앞판은 사유 객체를 문자열로 바꿔 옛 플래그 이름과 견줬다 — 언제나 false 였다(죽은 판정).
+      //    이제 정본 안전 필터의 정치 사유(정치 주제 + 제목 정치 인물) 하나를 본다
+      isPolitics: (title) => safetyFilter({ title }).reasons.some((x) => x.code === 'politics'),
       isBlocked: (title) => {
         const v = safetyFilter({ title }).verdict
         return v === 'hardExclude' || v === 'drop'

@@ -195,6 +195,7 @@
     "stage:ladder-check": "tsx scripts/stage-ladder-check.mts",
     "stage:ready-loss-check": "tsx scripts/ready-loss-contract-check.mts",
     "supply:jit-contract-check": "tsx scripts/supply-jit-contract-check.mts",
+    "check:political-axis": "tsx scripts/political-axis-contract-check.mts",
     "stage:probe": "tsx scripts/stage-decision-probe.mts",
     "publish:machine-review": "tsx scripts/original-post-machine-review.mts",
     "operator:compose-check": "tsx scripts/operator-compose-check.mts",

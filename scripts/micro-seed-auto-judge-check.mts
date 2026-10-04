@@ -335,7 +335,9 @@ console.log('\n③ 🔴 위험 사유는 AUTO_DROP — 통과가 아니다')
     check(`🔴 ${code} → AUTO_DROP`, j({ safetyReasons: code }).decision === 'AUTO_DROP')
     check(`   사유가 남는다`, j({ safetyReasons: code }).reasonCodes.includes(code))
   }
-  check('🔴 목록 플래그 politicalOrPublicFigure 도 막는다',
+  check('🔴 목록 플래그 politicalFigure(정치 인물) 도 막는다',
+    j({ qualityFlags: ['politicalFigure'] }).decision === 'AUTO_DROP')
+  check('📜 옛 혼합 플래그(politicalOrPublicFigure)는 정치 · 연예를 가를 수 없어 정치로 읽는다(fail-closed)',
     j({ qualityFlags: ['politicalOrPublicFigure'] }).decision === 'AUTO_DROP')
   // 🔴 v1 은 이걸 medicalClaim 으로 단정해 사유를 왜곡했다. 이름 그대로 의료 **또는** 광고다
   check('🟡 medicalOrAdLikely → AUTO_HOLD (버리지 않는다)',
@@ -351,8 +353,8 @@ console.log('\n③ 🔴 위험 사유는 AUTO_DROP — 통과가 아니다')
   check('여러 사유를 | 로 읽는다',
     readReasons('politics|promotion').length === 2)
   check('빈 문자열은 사유 0', readReasons('').length === 0)
-  check('플래그 이름을 새로 만들지 않는다 — 옮기기만 한다',
-    readFlags(['politicalOrPublicFigure']).join(',') === 'politics')
+  check('플래그 → 사유는 옮기기만 한다 — 정치 인물만 politics',
+    readFlags(['politicalFigure']).join(',') === 'politics' && readFlags(['politicalFigureMention']).length === 0)
   check('🔴 의료와 광고를 합치지 않는다', readFlags(['medicalOrAdLikely']).join(',') === 'medicalOrAd')
 }
 
