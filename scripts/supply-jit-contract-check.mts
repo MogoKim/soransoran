@@ -23,10 +23,10 @@ import {
   type SlotOpportunity,
 } from '../src/lib/source-slot-release'
 import {
-  pendingFateOf, cohortFatesOf, terminalYieldOf, paidSourcesFor, costAttributionOf, TIME_INVARIANT_LOSS_REASONS,
+  pendingFateOf, cohortFatesOf, terminalYieldOf, paidSourcesFor, costAttributionOf, TIME_INVARIANT_LOSS_REASONS, pipelineRunOfLedger,
   type CostFate,
 } from '../src/lib/ready-fate'
-import { judgeJitDemand, fillUpToOf } from '../src/lib/supply-process'
+import { judgeJitDemand, fillUpToOf, ledgerRunIdOf } from '../src/lib/supply-process'
 import {
   concludedSourceKeys, attemptedOutcomes, CONCLUDED_STATES, worksetFileName, opportunitiesFileName,
   WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, type PriorOutcome,
@@ -244,7 +244,7 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
 console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과당 단가')
 {
   const e = (key: string | null, usd: number | null, status: LedgerEntry['status'] = 'settled'): LedgerEntry => ({
-    runId: 'r', stage: 'judge', attemptId: `${key}-${usd}-${status}-${Math.random()}`, requestNo: 0, provider: 'google',
+    runId: '20261004-031500-j', stage: 'judge', attemptId: `${key}-${usd}-${status}-${Math.random()}`, requestNo: 0, provider: 'google',
     apiModelId: 'm', model: 'm', status, blockCode: null, countedInputTokens: null, maxOutputTokens: 1, reservedUsd: 0.01,
     inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [], settledUsd: usd,
     pricingVersion: null, startedAt: '', endedAt: null, errorCode: null, ...(key === null ? {} : { sourceKey: key }),
@@ -252,26 +252,28 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   })
   /** 🔴 계약 표식 없는 옛 장부 줄 */
   const legacyLine = (usd: number): LedgerEntry => ({ ...e(null, usd), supplyContract: undefined })
+  /** 🔴 이 cohort 의 회차 — 장부 줄 `20261004-031500-j` 의 파이프라인 회차 */
+  const COHORT: ReadonlySet<string> = new Set(['20261004-031500'])
   const hp = articleIdHashOf('fx', 'pub')
   const hs = articleIdHashOf('fx', 'sch')
   const hl = articleIdHashOf('fx', 'lost')
   const fateByKey = new Map<string, CostFate>([[hp, 'published'], [hs, 'scheduled'], [hl, 'lost']])
   const linked = costAttributionOf({
     entries: [e(hp, 0.02), e(hs, 0.02), e(hl, 0.02), e(articleIdHashOf('fx', 'hold'), 0.04)],
-    fateByKey, counts: { published: 1, scheduled: 1 },
+    fateByKey, counts: { published: 1, scheduled: 1 }, cohortRuns: COHORT,
   })
   check('🔴 연결 완전 — slot-valid 결과 2 · 전 비용 $0.10 → $0.05/결과 · 낭비 $0.02 · READY 못 된 원천 $0.04',
     linked !== null && Math.abs((linked.usdPerSlotValidResult ?? 0) - 0.05) < 1e-12
     && Math.abs((linked.wasteUsd ?? 0) - 0.02) < 1e-12 && Math.abs((linked.noReadyUsd ?? 0) - 0.04) < 1e-12
     && linked.usdPerPublished === null, JSON.stringify(linked))
-  const unlinked = costAttributionOf({ entries: [e(hp, 0.02), e(null, 0.03)], fateByKey, counts: { published: 1, scheduled: 0 } })
+  const unlinked = costAttributionOf({ entries: [e(hp, 0.02), e(null, 0.03)], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
   check('🔴 🔴 원천 해시 없는 정산이 있으면 결과당 · 공개당 단가 · 낭비 모름(null) — raw 단가로 대신하지 않는다',
     unlinked !== null && unlinked.usdPerSlotValidResult === null && unlinked.usdPerPublished === null
     && unlinked.wasteUsd === null && unlinked.unlinkedUsd === 0.03, JSON.stringify(unlinked))
-  const open = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 } })
+  const open = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
   check('🔴 정산 안 된 유료 요청이 있으면 합계를 모른다 → 단가 null', open !== null && open.openRequests === 1 && open.usdPerPublished === null)
   // 🔴 2026-10-04 운영 모양 — 창 안 공급 장부가 계약 표식 없는 옛 줄 $0.939 뿐
-  const legacyOnly = costAttributionOf({ entries: [legacyLine(0.5), legacyLine(0.439)], fateByKey, counts: { published: 5, scheduled: 0 } })
+  const legacyOnly = costAttributionOf({ entries: [legacyLine(0.5), legacyLine(0.439)], fateByKey, counts: { published: 5, scheduled: 0 }, cohortRuns: COHORT })
   check('🔴 🔴 옛 장부 $0.939 만 → legacy $0.939 · 결과당 비용 모름(null)',
     legacyOnly !== null && Math.abs(legacyOnly.legacyUsd - 0.939) < 1e-12 && legacyOnly.usdPerSlotValidResult === null, JSON.stringify(legacyOnly))
   const legacyFacts: PreflightFacts = {
@@ -288,24 +290,38 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   // 🔴 B — legacy + 완전 연결 현재 계약 → 현재 계약 표본만으로 단가(legacy 는 보고만 · 분자에 없음)
   const mixed = costAttributionOf({
     entries: [e(hp, 0.02), e(hs, 0.02), e(hl, 0.02), legacyLine(0.939), { ...legacyLine(0.5), status: 'reserved', settledUsd: null }],
-    fateByKey, counts: { published: 1, scheduled: 1 },
+    fateByKey, counts: { published: 1, scheduled: 1 }, cohortRuns: COHORT,
   })
   check('🔴 🔴 **B legacy $0.939 + 완전 연결 현재 계약 $0.06 → 결과 2 → $0.03/결과 (legacy 는 분자 · 차단 모두 아님)**',
     mixed !== null && Math.abs((mixed.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12 && Math.abs(mixed.totalUsd - 0.06) < 1e-12
     && Math.abs(mixed.legacyUsd - 0.939) < 1e-12 && mixed.legacyOpenRequests === 1 && mixed.openRequests === 0, JSON.stringify(mixed))
   // 🔴 C — 현재 계약 요청 중 미연결 · 미정산 · 결말 모름이 하나라도 있으면 모름
-  const cUnlinked = costAttributionOf({ entries: [e(hp, 0.02), e(null, 0.01)], fateByKey, counts: { published: 1, scheduled: 0 } })
-  const cOpen = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 } })
+  const cUnlinked = costAttributionOf({ entries: [e(hp, 0.02), e(null, 0.01)], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  const cOpen = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
   const hu = articleIdHashOf('fx', 'unk')
   const cUnknown = costAttributionOf({
-    entries: [e(hp, 0.02), e(hu, 0.01)], fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 0 },
+    entries: [e(hp, 0.02), e(hu, 0.01)], fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT,
   })
   check('🔴 🔴 **C 현재 계약 미연결 · 미정산 · 결말 모름 → 각각 결과당 비용 모름**',
     cUnlinked?.usdPerSlotValidResult === null && cOpen?.usdPerSlotValidResult === null && cUnknown?.usdPerSlotValidResult === null)
   check('🔴 현재 계약 정산 0 · slot-valid 결과 0 → 모름',
-    costAttributionOf({ entries: [e(hp, 0)], fateByKey, counts: { published: 1, scheduled: 0 } })?.usdPerSlotValidResult === null
-    && costAttributionOf({ entries: [e(hl, 0.02)], fateByKey, counts: { published: 0, scheduled: 0 } })?.usdPerSlotValidResult === null)
-  check('🔴 장부를 못 읽으면 귀속 자체가 null', costAttributionOf({ entries: null, fateByKey, counts: { published: 1, scheduled: 0 } }) === null)
+    costAttributionOf({ entries: [e(hp, 0)], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })?.usdPerSlotValidResult === null
+    && costAttributionOf({ entries: [e(hl, 0.02)], fateByKey, counts: { published: 0, scheduled: 0 }, cohortRuns: COHORT })?.usdPerSlotValidResult === null)
+  // 🔴 cohort 불변식 — 현재 계약이어도 다른 cohort 회차(창 밖 묶음)의 정산은 이 cohort 분자가 아니다
+  const other = costAttributionOf({
+    entries: [e(hp, 0.02), e(hs, 0.02), { ...e(hp, 0.5), runId: '20261001-031500-d' }],
+    fateByKey, counts: { published: 1, scheduled: 1 }, cohortRuns: COHORT,
+  })
+  check('🔴 🔴 **다른 cohort 회차(창 밖 묶음) 현재 계약 정산 $0.50 은 분자에서 빠진다 — $0.04 / 결과 2 = $0.02 · otherCohortUsd 보고**',
+    other !== null && Math.abs((other.usdPerSlotValidResult ?? 0) - 0.02) < 1e-12 && Math.abs(other.otherCohortUsd - 0.5) < 1e-12
+    && Math.abs(other.totalUsd - 0.04) < 1e-12, JSON.stringify(other))
+  check('🔴 회차 id 를 읽을 수 없는 현재 계약 줄 → 미연결 → 결과당 비용 모름',
+    costAttributionOf({ entries: [e(hp, 0.02), { ...e(hp, 0.01), runId: 'manual' }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+      ?.usdPerSlotValidResult === null)
+  check('🔴 장부 회차 → 파이프라인 회차는 ledgerRunIdOf 의 역',
+    pipelineRunOfLedger(ledgerRunIdOf('20261004-031500', 'judge')) === '20261004-031500'
+    && pipelineRunOfLedger(ledgerRunIdOf('20261004-031500', 'draft')) === '20261004-031500' && pipelineRunOfLedger('r') === null)
+  check('🔴 장부를 못 읽으면 귀속 자체가 null', costAttributionOf({ entries: null, fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT }) === null)
   check('🔴 결말 → 비용 결말: 공개 · 만료 · 대기 결말 그대로',
     costFateOf({ id: 'a', status: 'PUBLISHED', hash: null, fate: null }) === 'published'
     && costFateOf({ id: 'b', status: 'DECLINED', hash: null, fate: null }) === 'lost'
@@ -320,15 +336,16 @@ console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 works
 {
   const hash = articleIdHashOf('fx', 'k1')
   const ok: SupplyIntent = { contract: SUPPLY_JIT_CONTRACT, runId: '20261004-031500', sourceHash: hash, intendedSlotAt: '2026-10-04T02:00:00.000Z', ageAtSlotH: 7.5 }
-  check('🔴 F 완전 일치 → 이유 없음', intentLinkIssue({ intent: ok, evidenceHash: hash, workset: ok }) === null)
+  check('🔴 F 완전 일치 → 이유 없음', intentLinkIssue({ intent: ok, evidenceHash: hash, runInCohort: true, workset: ok }) === null)
   const cases: [string, Parameters<typeof intentLinkIssue>[0], string][] = [
-    ['run', { intent: ok, evidenceHash: hash, workset: { ...ok, runId: '20261004-091500' } }, 'RUN_MISMATCH'],
-    ['hash', { intent: ok, evidenceHash: hash, workset: { ...ok, sourceHash: articleIdHashOf('fx', 'k2') } }, 'SOURCE_HASH_MISMATCH'],
-    ['slot', { intent: ok, evidenceHash: hash, workset: { ...ok, intendedSlotAt: '2026-10-04T04:00:00.000Z' } }, 'SLOT_MISMATCH'],
-    ['age', { intent: ok, evidenceHash: hash, workset: { ...ok, ageAtSlotH: 7.6 } }, 'AGE_MISMATCH'],
-    ['증거 해시', { intent: ok, evidenceHash: articleIdHashOf('fx', 'other'), workset: ok }, 'EVIDENCE_HASH_MISMATCH'],
-    ['묶음 없음', { intent: ok, evidenceHash: hash, workset: null }, 'WORKSET_NOT_FOUND'],
-    ['모양 틀림', { intent: null, evidenceHash: hash, workset: ok }, 'INTENT_MALFORMED'],
+    ['run', { intent: ok, evidenceHash: hash, runInCohort: true, workset: { ...ok, runId: '20261004-091500' } }, 'RUN_MISMATCH'],
+    ['hash', { intent: ok, evidenceHash: hash, runInCohort: true, workset: { ...ok, sourceHash: articleIdHashOf('fx', 'k2') } }, 'SOURCE_HASH_MISMATCH'],
+    ['slot', { intent: ok, evidenceHash: hash, runInCohort: true, workset: { ...ok, intendedSlotAt: '2026-10-04T04:00:00.000Z' } }, 'SLOT_MISMATCH'],
+    ['age', { intent: ok, evidenceHash: hash, runInCohort: true, workset: { ...ok, ageAtSlotH: 7.6 } }, 'AGE_MISMATCH'],
+    ['증거 해시', { intent: ok, evidenceHash: articleIdHashOf('fx', 'other'), runInCohort: true, workset: ok }, 'EVIDENCE_HASH_MISMATCH'],
+    ['같은 cohort 회차 묶음에 그 원천 없음', { intent: ok, evidenceHash: hash, runInCohort: true, workset: null }, 'WORKSET_NOT_FOUND'],
+    ['창 밖 회차(파일이 정상이어도)', { intent: ok, evidenceHash: hash, runInCohort: false, workset: ok }, 'WORKSET_OUTSIDE_COHORT'],
+    ['모양 틀림', { intent: null, evidenceHash: hash, runInCohort: true, workset: ok }, 'INTENT_MALFORMED'],
   ]
   for (const [name, input, want] of cases) {
     check(`🔴 E ${name} 불일치 → ${want}`, intentLinkIssue(input) === want, String(intentLinkIssue(input)))
@@ -340,8 +357,13 @@ console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 works
   check('🔴 cohort 판독이 계약 주장 행을 그 회차 묶음(readWorkset) · 증거 해시로 대조하고, 하나라도 틀리면 cohort 전체를 모름',
     /const current = found\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
     && /intentLinkIssue\(\{/.test(facts) && /if \(intentMismatches\.length > 0\) throw new IntentMismatch\(\)/.test(facts)
-    && /runIntentsOf\(i\.dataDir, intent\.runId, ws\?\.byRun \?\? null\)/.test(facts)
-    && (facts.match(/readWorkset\(/g) ?? []).length === 2 && !/function parseWorkset/.test(facts))
+    && /const run = intent === null \? undefined : ws\?\.byRun\.get\(intent\.runId\)/.test(facts)
+    && /runInCohort: run !== undefined,/.test(facts)
+    && (facts.match(/readWorkset\(/g) ?? []).length === 1 && !/function parseWorkset|runIntentsOf/.test(facts))
+  check('🔴 🔴 cohort 불변식 — 큐 결과 · worksetSources · 현재 계약 비용이 같은 창 묶음 회차 집합 하나에서 나온다',
+    /cohortRuns: new Set\(ws\?\.byRun\.keys\(\) \?\? \[\]\)/.test(facts)
+    && /const worksetSources = ws\?\.sources \?\? null/.test(facts)
+    && /costAttributionOf\(\{ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: cohort\.cohortRuns \}\)/.test(facts))
 }
 
 console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')

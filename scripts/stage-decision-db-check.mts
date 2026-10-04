@@ -701,6 +701,33 @@ async function main(): Promise<void> {
         caps: releaseCapsOf(profileOf('d5')), evidenceDate: '2026-09-30', env: {}, dataDir: dir, now,
         runnerHealth: 'ok', contractValidPersonas: async () => 30,
       })
+      /**
+       * 🔴 **cohort 경계 — 창 밖 회차의 묶음은 정상 파일이어도 이 cohort 가 아니다** (2026-10-04 P0-2 최종 보정).
+       *    창 = UTC [09-27T15:00:00Z, 09-30T15:00:00Z). 같은 큐 행(창 안 decidedAt)의 의도를 창 시작 1초 전 회차로 옮기면
+       *    분자에 넣지 않고 cohort 전체를 모름으로 닫는다. 같은 행을 창 시작 정각 회차로 옮기면 정상 계산.
+       */
+      const rec = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'pfc-recent' }, select: { id: true, gateResults: true } })
+      const g0 = rec.gateResults as Record<string, Record<string, unknown>>
+      const moveTo = async (runId: string): Promise<void> => {
+        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 1, ['pfc-recent']))
+        await prisma.originalPostApprovalQueue.update({
+          where: { id: rec.id }, data: { gateResults: { ...g0, [SUPPLY_INTENT_KEY]: { ...g0[SUPPLY_INTENT_KEY], runId } } as Prisma.InputJsonValue },
+        })
+      }
+      await moveTo('20260927-145959')
+      const outside = await factsAgain()
+      const ov = judgeNextPreflight('d5', outside.facts, RUNNER_GRID)
+      check('🔴 🔴 **묶음 runAt 창 시작 1초 전 · 큐 decidedAt 창 안 · 파일 정상 → WORKSET_OUTSIDE_COHORT · cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN**',
+        outside.facts.readyCohort === null && JSON.stringify(outside.detail.intentMismatches) === JSON.stringify(['WORKSET_OUTSIDE_COHORT'])
+        && outside.detail.worksetSources === 30 && ov.codes.includes('THROUGHPUT_UNKNOWN') && ov.codes.includes('SUPPLY_COST_UNKNOWN'),
+        JSON.stringify({ m: outside.detail.intentMismatches, ws: outside.detail.worksetSources, codes: ov.codes }))
+      await moveTo('20260927-150000')
+      const inside = await factsAgain()
+      const ic = inside.facts.readyCohort
+      check('🔴 🔴 **같은 행의 묶음 runAt 이 창 시작 정각(창 안) → 정상 계산 — 공개 2 · 손실 4 · 모름 2 · 원천 31(그 묶음 1 포함)**',
+        ic !== null && ic.published === 2 && ic.lost === 4 && ic.unknown === 2 && ic.sources === 31
+        && (inside.detail.intentMismatches as unknown[]).length === 0, JSON.stringify({ ic, m: inside.detail.intentMismatches }))
+      await prisma.originalPostApprovalQueue.update({ where: { id: rec.id }, data: { gateResults: g0 as Prisma.InputJsonValue } })
       // 🔴 E — 큐 의도 하나가 그 회차 묶음과 나이 한 칸만 달라도 cohort 전체가 모름(legacy 로 빼지 않는다)
       const one = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'pfc-start' }, select: { id: true, gateResults: true } })
       const g = one.gateResults as Record<string, Record<string, unknown>>

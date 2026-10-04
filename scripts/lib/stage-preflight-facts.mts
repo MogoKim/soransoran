@@ -46,7 +46,7 @@ import {
   type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
 import {
-  OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset, worksetFileName,
+  OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset,
   type SupplyIntent,
 } from '../../src/lib/supply-workset'
 import { claimsJitContract, intentLinkIssue, type IntentLinkIssue } from '../../src/lib/supply-intent'
@@ -189,20 +189,6 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
   return files === 0 ? null : { sources: n, byRun }
 }
 
-/**
- * 🔴 **회차 묶음 하나의 의도** — 창 색인에 없으면(경계: 앞날 늦은 회차가 만든 READY 가 창 안에서 도장) 그 회차 파일을
- *    같은 정본 판독기로 직접 읽는다. 없음 · 손상 · 옛 판이면 `null`(연결 실패 → cohort 모름).
- */
-export function runIntentsOf(dataDir: string, runId: string, index: RunIntentIndex | null): ReadonlyMap<string, SupplyIntent> | null {
-  const hit = index?.get(runId)
-  if (hit !== undefined) return hit
-  const path = join(dataDir, worksetFileName(runId))
-  if (!/^\d{8}-\d{6}$/.test(runId) || !existsSync(path)) return null
-  try {
-    const r = readWorkset(JSON.parse(readFileSync(path, 'utf-8')), runId)
-    return r.ok && r.intents !== null ? byHash(r.intents) : null
-  } catch { return null }
-}
 
 /**
  * 🔴 **가장 최근 공급 기회 스냅샷** — 초안이 아직 없는 slot-valid 원천(생성 전 판정 eligible)의 증거 기록.
@@ -318,6 +304,11 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   worksetSources: number | null; yieldBounds: { low: number; high: number } | null; notes: string[]
   /** 🔴 현재 계약을 주장했지만 묶음 · 증거와 맞지 않은 행의 이유 코드 — 하나라도 있으면 cohort 전체가 모름 */
   intentMismatches: IntentLinkIssue[]
+  /**
+   * 🔴 **이 cohort 의 회차 집합** — 같은 창 `workset-v3` 색인의 회차 id. 🔴 불변식: 큐 결과(분자) · `worksetSources`(분모) ·
+   *    현재 계약 비용(`costAttributionOf` 의 `cohortRuns`)이 **이 집합 하나**에서 나온다. 창 밖 회차는 셋 다에서 빠진다.
+   */
+  cohortRuns: ReadonlySet<string>
 }> {
   const notes: string[] = []
   let rows: CohortRow[] | null = null
@@ -340,10 +331,12 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
     for (const r of current) {
       const intent = readSupplyIntent(r.gateResults)
       const ev = readSourceEvidence(r.gateResults)
-      const run = intent === null ? null : runIntentsOf(i.dataDir, intent.runId, ws?.byRun ?? null)
+      // 🔴 같은 cohort 창의 묶음 색인에만 묻는다 — 창 밖 회차 파일을 따로 읽지 않는다(분자 · 분모 · 비용 cohort 를 하나로)
+      const run = intent === null ? undefined : ws?.byRun.get(intent.runId)
       const issue = intentLinkIssue({
         intent, evidenceHash: ev.ok ? ev.record.provenance.articleIdHash : null,
-        workset: intent === null || run === null ? null : run.get(intent.sourceHash) ?? null,
+        runInCohort: run !== undefined,
+        workset: intent === null || run === undefined ? null : run.get(intent.sourceHash) ?? null,
       })
       if (issue !== null) intentMismatches.push(issue)
     }
@@ -373,6 +366,7 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   return {
     rows, fates, readyCount, legacyExcluded, worksetSources,
     yieldBounds: fates === null ? null : terminalYieldOf(fates, worksetSources), notes, intentMismatches,
+    cohortRuns: new Set(ws?.byRun.keys() ?? []),
   }
 }
 
@@ -494,12 +488,18 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
    *    cohort 행 결말에 붙인다. legacy · 미연결 · 미정산 · 결말 모름 비용이 하나라도 있으면 결과당 단가는 `null`.
    *    판정은 그 단가 하나로 공급 비용을 본다(`목표 × 결과당 비용`) — raw READY 단가는 쓰지 않는다.
    */
-  const supplyEntries = pooled(defaultLedgerDir())
+  /**
+   * 🔴 공급 장부 — cohort 창의 KST 날들 + 그 다음 날 파일. 장부 날짜는 요청 시작 시각이라 창 마지막 날 늦은 회차의 요청이
+   *    다음 날 파일에 적힐 수 있다. 줄은 **cohort 회차 것만** 분자에 들어간다(`cohortRuns`) — 다음 날의 다른 회차 줄은 보고만.
+   */
+  const lastDay = dates[dates.length - 1] ?? i.evidenceDate
+  const spillDay = new Date(Date.parse(`${lastDay}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)
+  const supplyEntries = pooledEntries([...dates, spillDay].map((d) => readDay(defaultLedgerDir(), d)))
   if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
   const fateByKey = new Map<string, CostFate>()
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
-    : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates })
+    : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: cohort.cohortRuns })
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`

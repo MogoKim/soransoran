@@ -116,6 +116,15 @@ export function paidSourcesFor(i: { deficit: number; yieldHigh: number | null; c
 
 export type CostFate = PendingFate | 'published' | 'noReady'
 
+/**
+ * 🔴 **장부 회차 id → 파이프라인 회차 id** — `supply-process.ledgerRunIdOf`(`<runId>-j` · `<runId>-d`)의 역.
+ *    모양이 다르면 `null`(어느 cohort 회차인지 모른다).
+ */
+export function pipelineRunOfLedger(ledgerRunId: string): string | null {
+  const m = /^(\d{8}-\d{6})-[jd]$/.exec(ledgerRunId)
+  return m === null ? null : m[1]!
+}
+
 export type CostAttribution = {
   /** 🔴 현재 JIT 계약(`supply-jit-v1`) 정산 합계 — 결과당 단가의 분자는 이것 하나다 */
   totalUsd: number
@@ -130,6 +139,8 @@ export type CostAttribution = {
   openRequests: number
   /** 예약만 있는 legacy 요청 수 — 보고만 한다 */
   legacyOpenRequests: number
+  /** 🔴 현재 계약이지만 **다른 cohort 회차**(창 밖 묶음)의 정산 — 이 cohort 의 분자가 아니다 · 보고만 한다 */
+  otherCohortUsd: number
   byFate: Record<CostFate, number>
   /** 🔴 slot-valid 결과(공개 + 예정 슬롯 대기) 1건당 전 비용 — 연결이 완전하고 모르는 결말 비용이 0 일 때만 */
   usdPerSlotValidResult: number | null
@@ -152,6 +163,11 @@ export function costAttributionOf(i: {
   entries: readonly LedgerEntry[] | null
   fateByKey: ReadonlyMap<string, CostFate>
   counts: { published: number; scheduled: number }
+  /**
+   * 🔴 **이 cohort 의 회차 집합**(같은 창 `workset-v3` 색인) — 큐 결과 · 묶음 원천 수와 **같은 cohort** 의 비용만 분자에 넣는다.
+   *    회차 id 를 읽을 수 없는 현재 계약 줄은 미연결이다(모름).
+   */
+  cohortRuns: ReadonlySet<string>
 }): CostAttribution | null {
   if (i.entries === null) return null
   const byFate: Record<CostFate, number> = { published: 0, scheduled: 0, lost: 0, unknown: 0, noReady: 0 }
@@ -160,11 +176,21 @@ export function costAttributionOf(i: {
   let legacy = 0
   let open = 0
   let legacyOpen = 0
+  let otherCohort = 0
   for (const e of i.entries) {
     if (e.stage === 'countTokens' || e.status === 'blocked') continue
     const current = e.supplyContract === SUPPLY_JIT_CONTRACT
-    if (e.status !== 'settled' || e.settledUsd === null) { if (current) open += 1; else legacyOpen += 1; continue }
+    if (e.status !== 'settled' || e.settledUsd === null) {
+      // 🔴 미정산도 같은 cohort 회차 것만 이 cohort 를 막는다 — 다른 회차 · legacy 는 보고만
+      const run = current ? pipelineRunOfLedger(e.runId) : null
+      if (!current) legacyOpen += 1
+      else if (run === null || i.cohortRuns.has(run)) open += 1
+      continue
+    }
     if (!current) { legacy += e.settledUsd; continue }
+    const run = pipelineRunOfLedger(e.runId)
+    if (run === null) { unlinked += e.settledUsd; continue }
+    if (!i.cohortRuns.has(run)) { otherCohort += e.settledUsd; continue }
     total += e.settledUsd
     const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
     if (key === null) { unlinked += e.settledUsd; continue }
@@ -173,7 +199,7 @@ export function costAttributionOf(i: {
   const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
   return {
-    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, legacyOpenRequests: legacyOpen, byFate,
+    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, legacyOpenRequests: legacyOpen, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && byFate.unknown === 0 && results > 0 ? total / results : null,
     usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
