@@ -20,6 +20,7 @@
  *    부분 문자열 매칭이 오탐을 만든다 — `전세계` 안의 `전세` 가 실측 사례다.
  *    어휘를 넓히는 대신 **좁고 확실한 형태**로 적고, 오탐은 fixture 로 잠근다.
  */
+import { findCjkIdeograph } from '../../src/lib/cjk-ideograph'
 
 // ─────────────────────────────────────────────────────────
 // 임계값 — 🔴 1차값이다
@@ -41,6 +42,8 @@ export const IMAGE_LIKELY_BODY_MAX = 50
 export const IMAGE_LIKELY_LINE_MAX = 2
 
 export type QualityFlag =
+  /** 🔴 실제 한자 문자 — 언어 핏(정치 아님). 제목은 목록 단계, 본문은 상세 단계 */
+  | 'hanjaLanguageFit'
   // 목록 단계 — 본문 없이 판정한다
   | 'lowEngagement'
   | 'highEngagement'
@@ -251,6 +254,9 @@ const POLITICAL_TOPIC_SPECIAL_SOURCES: Partial<Record<(typeof POLITICAL_TOPIC_TE
   //    🔴 차단: 친윤계 · 친윤파 · 친윤 의원 · 친명계 · 친명 후보 (앞이 공백/문두)
   '친윤': String.raw`(?<![가-힣])친윤`,
   '친명': String.raw`(?<![가-힣])친명`,
+  // 🔴 `조국` 은 일반명사다 — "내 조국을 떠나 살면서" · "조국에 돌아가고 싶어요" 는 생활글이다(2026-10-04 창업자 확정).
+  //    사람 문맥(전 장관 · 대표 · 의원 · 후보 …)에서만 정치 인물이다. `조국혁신당` · `조국 자녀 입시` 는 따로 있다.
+  '조국': String.raw`조국(?=\s*(?:전\s*)?(?:장관|대표|의원|후보|교수|일가))`,
   // 🔴 `특검사` 는 검사(檢査) 맥락이다 — "건강검진 특검사" 가 잡혔다.
   //    다만 "특검사건" 은 정치이므로 살린다.
   '특검': String.raw`특검(?!사(?!건))`,
@@ -269,15 +275,25 @@ const POLITICAL_TOPIC = new RegExp(
   'g',
 )
 
+/**
+ * 🔴 **생활에도 쓰이는 정책 낱말 — 단독으로는 정치 근거가 아니다** (2026-10-04 창업자 확정 · P0-3 최종).
+ *    창업자 목록(`POLITICAL_TOPIC_TERMS` 정책·법안 묶음)에 그대로 남는다. 다만 **이 낱말만** 있는 제목 · 본문은
+ *    월급 · 전세 · 세금 · 연금 · 병원 이야기다 — 정치인 · 정당 · 후보 · 선거 · 유세 · 캠페인 같은 다른 정치 신호가 함께
+ *    있을 때만 정치다(그때는 그 신호가 판정한다). 의미 판정의 `politicalCampaigning` 은 따로 막는다.
+ */
+export const POLICY_CONTEXT_TERMS: readonly string[] = [
+  '최저임금', '주52시간', '전세사기', '상속세', '유류세', '연금개혁', '종부세', '의료대란', '전공의', '의대증원',
+]
+
+/** 🔴 정치 주제 판정 — 창업자 목록 하나. 생활 정책 낱말만 걸리면 `null` */
 export function findPoliticalTopicHit(text: string): string | null {
-  return collect(POLITICAL_TOPIC, text)[0] ?? null
+  return collect(POLITICAL_TOPIC, text).find((h) => !POLICY_CONTEXT_TERMS.includes(h)) ?? null
 }
 
 /**
- * 한자 성 약칭. 언론 제목이 쓰는 형태다 — `李대통령` · `유시민 '李 저격'`.
- * 한글 본문에 홀로 서는 일이 거의 없어 신호가 강하다.
+ * 📜 **`HANJA_NAME`(한자 성 한 글자 = 정치인)을 지웠다** (2026-10-04 P0-3 최종). `朴나래` 를 정치인으로 읽었다.
+ *    실제 한자가 든 글은 정치가 아니라 언어 핏으로 막는다(`cjk-ideograph.findCjkIdeograph` · `hanjaLanguageFit`).
  */
-const HANJA_NAME = /[李尹文朴安韓黃曺洪崔鄭姜趙張林]/g
 
 /**
  * 이름 + 직함이 **붙어 있는** 형태 — `유시민작가` · `홍길동의원`.
@@ -375,7 +391,7 @@ const KNOWN_POLITICAL_FIGURES =
 
 /**
  * 🔴 **정치 인물 탐지 — 수집기 · 안전 필터 · 82cook · 네이버카페가 이 함수 하나를 쓴다** (2026-10-04 P0-3).
- *    정치인 · 정당 · 직함(의원 · 장관 · 대통령) · 언론 한자 약칭 · 실측 정치 인물만 본다.
+ *    정치인 · 정당 · 직함(의원 · 장관 · 대통령) · 실측 정치 인물만 본다(한자 약칭은 언어 핏이 막는다).
  *    🔴 연예인 · 배우 · 가수 · 방송인 · 작가 · 감독 · 아나운서 · 기자는 보지 않는다 — 공인 이름은 위해가 아니라 소재다.
  *       위해(루머 단정 · 명예훼손 · 사생활 · 가족 공격 · 괴롭힘 · 혐오 · 위협)는 안전 필터 · 의미 판정의 별도 hard gate 가 본다.
  *    🔴 `한의원` · `피부과의원` · `치과의원` 은 병원이다 — 직함 `의원` 으로 읽지 않는다.
@@ -385,7 +401,7 @@ export function findPoliticalFigureHits(text: string): string[] {
   //    그 목록은 생활 오탐 경계(`모친명의` · `깍깍대선`)를 이미 다듬었다. 여기서 거친 부분 문자열로 다시 잡지 않는다.
   const topicTerms = POLITICAL_TOPIC_TERMS as readonly string[]
   return [...new Set([
-    ...collect(POLITICS, text).filter((h) => !topicTerms.includes(h)), ...collect(HANJA_NAME, text),
+    ...collect(POLITICS, text).filter((h) => !topicTerms.includes(h)),
     ...collect(NAME_WITH_TITLE, text), ...collect(TITLE_THEN_NAME, text), ...collect(KNOWN_POLITICAL_FIGURES, text),
   ])]
 }
@@ -457,7 +473,8 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
   }
 
   // 🔴 공인·실명과 **별도 축**이다. 제목만 본다 — 목록 단계 자동 선별이 쓸 수 있어야 한다
-  const politicalTopic = collect(POLITICAL_TOPIC, title)
+  // 🔴 정치 판정 authority 하나(`findPoliticalTopicHit`) — 생활 정책 낱말만 걸리면 플래그가 아니다. 근거에는 걸린 낱말 전부를 남긴다
+  const politicalTopic = findPoliticalTopicHit(title) === null ? [] : collect(POLITICAL_TOPIC, title)
   if (politicalTopic.length) {
     flags.push('politicalTopicLikely')
     note('politicalTopicLikely', politicalTopic)
@@ -468,6 +485,13 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
   if (clickbait.length) {
     flags.push('clickbaitTitle')
     note('clickbaitTitle', clickbait)
+  }
+
+  // 🔴 언어 핏 — 사용자에게 보이는 제목 · 본문의 실제 한자 문자(정치 판정과 별개 · shared helper 하나)
+  const hanja = findCjkIdeograph(title) ?? findCjkIdeograph(body)
+  if (hanja !== null) {
+    flags.push('hanjaLanguageFit')
+    note('hanjaLanguageFit', [hanja])
   }
 
   if (stem.length < SHORT_TITLE_MAX) flags.push('shortTitle')

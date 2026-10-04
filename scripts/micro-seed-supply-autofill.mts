@@ -34,6 +34,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { dirname } from 'node:path'
 import { readWorkset, worksetFileName, sourceIdentityOf, type SupplyIntent } from '../src/lib/supply-workset'
+import { findCjkIdeograph, HANJA_LANGUAGE_FIT } from '../src/lib/cjk-ideograph'
 import { PrismaClient } from '@prisma/client'
 import {
   planRefill, judgeApply, readStock, verifyAfterRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf,
@@ -209,9 +210,12 @@ const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
  * 파일과 DB 사이에 시간이 흐른다. 그 사이 무엇이 바뀔지 모르므로 여기서 한 번 더 잰다.
  * 두 곳이 다른 기준을 쓰면 어느 쪽이 맞는지 알 수 없게 되므로 **같은 함수**를 쓴다.
  */
-function recheck(title: string, body: string, originality: unknown): string[] {
+export function recheck(title: string, body: string, originality: unknown): string[] {
   const bad: string[] = []
   if (title === '' || body === '') bad.push('제목이나 본문이 비었다')
+  // 🔴 최종 생성 제목 · 본문의 실제 한자 문자 — 언어 핏(정치 아님). shared helper 하나(`findCjkIdeograph`)
+  const hanja = findCjkIdeograph(title) ?? findCjkIdeograph(body)
+  if (hanja !== null) bad.push(`🔴 ${HANJA_LANGUAGE_FIT}: 한자 문자(${hanja})`)
   if (safetyFilter({ title, body }).verdict !== 'pass') bad.push('safety 가 pass 가 아니다')
   if (hasBannedWord(`${title}${body}`)) bad.push('🔴 금지어가 있다')
   // 🔴 생성 · 적재 · 여기가 **같은 함수**를 쓴다. 기준을 여기서 다시 적지 않는다

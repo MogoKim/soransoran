@@ -17,6 +17,7 @@
  */
 import { findPoliticalFigureHits, findPoliticalTopicHit } from './micro-seed-quality.mjs'
 import { isPoliticsExcludeReason } from '../../src/lib/political-flags'
+import { findCjkIdeograph } from '../../src/lib/cjk-ideograph'
 // 🔴 위기 신호·의료 판단 요청·건강 효능 주장의 정본은 순수 판정 하나다 —
 //    여기서 정규식을 다시 적으면 semantic 판정과 갈라진다
 import { judgeSafetySignals } from '../../src/lib/micro-seed-safety-signals'
@@ -47,6 +48,8 @@ export type SafetyReasonCode =
   | 'medicalDecisionRequest'
   /** 🔴 ⑪ 건강 효능 주장 — 전언형(*"~라고 한다"*)도 면제하지 않는다 */
   | 'healthEfficacyClaim'
+  /** 🔴 ⑫ 실제 한자 문자 — 언어 핏(정치 아님 · 2026-10-04 P0-3 최종) */
+  | 'hanjaLanguageFit'
 
 export type SafetyReason = { code: SafetyReasonCode; note: string }
 
@@ -105,7 +108,7 @@ const PROMOTION =
 
 /** ⑥ 욕설 · 혐오 · 분쟁 유도 */
 const HOSTILITY =
-  /[시씨]발|개[새쉐]끼|병신|지랄|미친년|미친놈|꺼져|죽어라|틀딱|맘충|한남|김치녀|일베|메갈|찢[재짜]|쥐박|극혐|패[죽]|고소각|박제/
+  /[시씨]발|개[새쉐]끼|병신|지랄|미친년|미친놈|꺼져|죽어라|틀딱|맘충|한남|김치녀|일베|메갈|찢[재짜]|쥐박|패[죽]|박제/
 
 /** ⑦ 이미지 의존 — 🔴 이미지를 가져오겠다는 뜻이 아니다. **쓸 수 없다는 표시**다 */
 const VISUAL_DEPENDENT =
@@ -161,6 +164,10 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
   if (isPoliticsExcludeReason(input.sourceExcludeReason) || politicsHit) {
     add('politics', politicsHit ? `정치 키워드(${politicsHit})` : '수집기 정치 판정', 'hardExclude')
   }
+
+  // ⑫ 언어 핏 — 🔴 사용자에게 보이는 제목 · 본문의 실제 한자 문자. 정치가 아니다 — 별도 사유로 버린다
+  const hanja = findCjkIdeograph(title) ?? findCjkIdeograph(body)
+  if (hanja !== null) add('hanjaLanguageFit', `한자 문자(${hanja})`, 'drop')
 
   // ② 공지 · 필독 · 추천 고정 슬롯 — 🔴 조회수가 압도적이라 점수로는 못 막는다
   const label = (input.sourceRowLabel ?? '').trim()

@@ -201,7 +201,7 @@ export const AUTO_FETCH_MAX = 30
  *    목록 JSONL 에는 전부 남고, 사람이 `--fetch=<id>` 로 지정하면 언제든 열린다.
  *    자동 경로에는 넘길 눈이 없기 때문에 그 경로만 좁힌다.
  */
-export const AUTO_SKIP_LIST_FLAGS = ['politicalFigure', 'politicalTopicLikely'] as const
+export const AUTO_SKIP_LIST_FLAGS = ['politicalFigure', 'politicalTopicLikely', 'hanjaLanguageFit'] as const
 
 /**
  * ② 상세 단계 자동 보류 — 본문을 읽은 **뒤**, Raw Vault 자동 적재 **전**에 뺀다.

@@ -364,7 +364,7 @@ console.log('\n④ 🔴 모르는 사유는 통과가 아니라 격리다')
   check('🔴 모르는 사유 → AUTO_HOLD', r.decision === 'AUTO_HOLD')
   check('unknownReason 으로 기록된다', r.reasonCodes.includes('unknownReason'))
   check('🔴 규칙이 모르는 위험이 통과하지 않는다', r.decision !== 'AUTO_SEED')
-  check('아는 사유 목록이 12종', KNOWN_SAFETY_CODES.length === 12)
+  check('아는 사유 목록이 13종 — 언어 핏(hanjaLanguageFit) 포함', KNOWN_SAFETY_CODES.length === 13)
   check('🟡 격리 사유는 버리지 않는다 — 사람이 보면 통과할 수도 있다',
     j({ safetyReasons: 'visualDependent' }).decision === 'AUTO_HOLD')
   check('volatile 도 격리 (drop 아님)',
