@@ -3462,6 +3462,47 @@ console.log('㉟ Queue 파이프라인 — 실제 경로 (provider 주입)')
   })
   check('🔴 Gate 가 막으면 create 하지 않는다',
     gateBad.created === 0 && gateBad.outcomes[0]?.step === 'ENQUEUE_BLOCKED')
+
+  /** 🔴 무인 첫 댓글 — 첫 후보가 막히면 같은 회차에서 다음 Persona로 가고, 하나 성공하면 멈춘다 */
+  const first = target()
+  const second = target({
+    input: {
+      ...first.input,
+      personaCode: 'P02',
+      persona: { ...first.input.persona, code: 'P02' },
+    },
+    facts: { ...first.facts, personaCode: 'P02' },
+  })
+  let fallbackCalls = 0
+  const fallback = await runEnqueuePipeline({
+    selection: { status: 'confirmed', winner: 'claude-haiku-4.5' }, canon,
+    targets: [first, second], limit: 1, providerCallLimit: 2, preflightOk: true,
+    oneCreatedPerPost: true,
+    provider: async () => {
+      fallbackCalls += 1
+      return { ok: true, text: `후보 ${fallbackCalls}`, errorCode: null }
+    },
+    gate: ({ input }) => input.personaCode === 'P01'
+      ? { gates: GATE_CODES.map((g) => ({ gate: g, outcome: g === '②' ? 'regenerate' : 'pass' })), gateStatus: 'regenerate', isBootstrap: false }
+      : okGate(),
+    writer: async () => ({ created: true, reason: 'PENDING 적재' }),
+  })
+  check('🔴 첫 후보 Gate 막힘 → 같은 회차의 다음 Persona 후보가 성공한다',
+    fallbackCalls === 2 && fallback.created === 1
+    && fallback.outcomes[0]?.step === 'ENQUEUE_BLOCKED'
+    && fallback.outcomes[1]?.step === 'ENQUEUED')
+
+  let stopCalls = 0
+  const stopAfterSuccess = await runEnqueuePipeline({
+    selection: { status: 'confirmed', winner: 'claude-haiku-4.5' }, canon,
+    targets: [first, second], limit: 2, providerCallLimit: 2, preflightOk: true,
+    oneCreatedPerPost: true,
+    provider: async () => { stopCalls += 1; return { ok: true, text: '성공 후보', errorCode: null } },
+    gate: okGate,
+    writer: async () => ({ created: true, reason: 'PENDING 적재' }),
+  })
+  check('🔴 같은 글에 하나가 적재되면 나머지 후보는 provider 호출 0',
+    stopCalls === 1 && stopAfterSuccess.created === 1 && stopAfterSuccess.outcomes.length === 1)
 }
 
 // ─────────────────────────────────────────────────────────

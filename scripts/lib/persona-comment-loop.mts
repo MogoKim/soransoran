@@ -387,25 +387,26 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
     const material = await materializeTargets({
       source: autoLaneTargetSource(deps.source, nowMs), limit, nowMs, windowMs,
     })
-    // 🔴 글당 1건 — planner 가 둘째 자리를 채웠어도 첫 대상만 쓴다
-    const picked = firstPerPost(material.targets, (t) => t.target.facts.postId)
-    targets = picked.length
-    lines.push(`대상 글 ${picked.length}편 (planner ${material.counts.planned} · 입력 ${material.counts.built})`)
+    // 🔴 같은 글의 후보를 모두 넘긴다. 첫 후보가 Gate 에서 막히면 다음 Persona 로 넘어가고,
+    //    하나가 적재되면 pipeline 이 그 글의 나머지 후보를 부르지 않는다.
+    const candidates = material.targets
+    targets = new Set(candidates.map((t) => t.target.facts.postId)).size
+    lines.push(`대상 글 ${targets}편 · 후보 ${candidates.length}건 (planner ${material.counts.planned} · 입력 ${material.counts.built})`)
     for (const b of material.providerBlockers) lines.push(`유료 호출 차단 사유: ${b}`)
 
-    const ctxByKey = new Map(picked.map((t) => [
+    const ctxByKey = new Map(candidates.map((t) => [
       dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole),
       { gate: t.gate, recentTexts: t.recentTexts },
     ]))
     const ctxOf = (input: CommentInput) => ctxByKey.get(dedupKeyOf(input.post.id, input.personaCode, input.reactionRole))
-    const generate = picked.length === 0
+    const generate = candidates.length === 0
       ? null
-      : deps.makeGenerate(picked.map((t) => t.target.input.personaCode))
+      : deps.makeGenerate(candidates.map((t) => t.target.input.personaCode))
 
     const result = await runEnqueuePipeline({
       selection: deps.canon.selection,
       canon: deps.canon.canon,
-      targets: picked.map((t) => t.target),
+      targets: candidates.map((t) => t.target),
       preflightOk: material.providerAllowed,
       preflightBlockers: material.providerBlockers,
       provider: async ({ model, input }) => {
@@ -420,6 +421,7 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
       writer: makePendingWriter(deps.prisma),
       providerCallLimit: limit,
       limit,
+      oneCreatedPerPost: true,
     })
     providerCalls = result.providerCalls
     enqueued = result.created
