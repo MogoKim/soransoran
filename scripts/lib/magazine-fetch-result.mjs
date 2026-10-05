@@ -55,6 +55,11 @@ export function normalizeFetchResult(r = {}) {
     sent: normalizeSent(r.sent),
     errorName: r.errorName ?? null,
     errorDetail: r.errorDetail ?? null,
+    length: Number.isFinite(r.length) ? r.length : null,
+    missingCount: Number.isFinite(r.missingCount) ? r.missingCount : null,
+    invalid: Array.isArray(r.invalid)
+      ? r.invalid.slice(0, 12).map((x) => ({ code: x?.code ?? null, why: String(x?.why ?? '').slice(0, 300) }))
+      : null,
     /**
      * 🔴 **보낸(보내려던) 글자의 지문과 앞선 전송 기록** (2026-09-28 · 재생성 HOLD).
      *    여기서 버리면 부모는 "왜 멈췄나 · 어느 글자 때문인가" 를 다시 추측해야 한다.

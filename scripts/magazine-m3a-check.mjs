@@ -409,7 +409,11 @@ console.log('\n③-B 패킷 수명주기 — 전달 후 0건')
     const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-pkt-'))
     const packetDir = path.join(T, 'packets')
     const ledgerPath = path.join(T, 'q.json')
+    const draftsDir = path.join(T, 'drafts')
     try {
+      fs.mkdirSync(path.join(draftsDir, 'pkt-slug'), { recursive: true })
+      fs.writeFileSync(path.join(draftsDir, 'pkt-slug', 'brief.md'), '# brief\n')
+      fs.writeFileSync(path.join(draftsDir, 'pkt-slug', 'draft.md'), '---\ntitle: 시험\n---\n\n## 본문\n\n기준 원고입니다.\n')
       let sawFile = null
       let sawPacket = null
       const r = attemptRegeneration({
@@ -420,7 +424,7 @@ console.log('\n③-B 패킷 수명주기 — 전달 후 0건')
           sawPacket = ctx.packet
           return asChild(ctx, ledgerPath, sc.runner)
         },
-        quarantinePath: ledgerPath, packetDir,
+        quarantinePath: ledgerPath, packetDir, draftsDir,
       })
       check(`  [${sc.name}] runner 가 읽을 때 패킷 파일이 있었다`, sawFile === true)
       check(`  [${sc.name}] runner 가 패킷 내용을 받았다`,
@@ -599,6 +603,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
   const { processCandidates } = await import('./magazine-auto-register-ready.mjs')
   const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-ready-'))
   const ledgerPath = path.join(T, 'q.json')
+  const draftsDir = path.join(T, 'drafts')
   try {
     /**
      * 🔴 **drive 를 진짜처럼 흉내 내되, 장부에는 실제로 쓴다.**
@@ -622,6 +627,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
           failures: [{ code: 'QA_FAIL', label: `유형${i}` }],
           runner: (ctx) => asChild(ctx, qp, () => { calls += 1; return { ok: true } }),
           quarantinePath: qp, packetDir: path.join(T, 'packets'),
+          draftsDir,
           previousFingerprint: `fp-${i}`, fingerprintOf: () => `fp-${i + 1}` })
         if (!rr.ok) break
       }
@@ -634,6 +640,9 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
      *    `scan()` 이 돌려주는 모양 그대로다 — fixture 가 실제보다 헐거우면 결함을 덮는다.
      */
     const FIX = 'fixture-candidate'
+    fs.mkdirSync(path.join(draftsDir, FIX), { recursive: true })
+    fs.writeFileSync(path.join(draftsDir, FIX, 'brief.md'), '# brief\n')
+    fs.writeFileSync(path.join(draftsDir, FIX, 'draft.md'), '---\ntitle: 시험\n---\n\n## 본문\n\n기준 원고입니다.\n')
     const fixtureScan = () => ({
       source: 'fixture', pool: 1,
       eligible: [{ slug: FIX, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: true } }],
@@ -657,7 +666,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
       const qp = deps?.quarantinePath
       const rr = attemptRegeneration({ slug: s2, profile: 'MEDICAL', failures: [{ code: 'QA_FAIL' }],
         runner: (ctx) => asChild(ctx, qp, () => { runnerCalls2 += 1; return { ok: true } }),
-        quarantinePath: qp, packetDir: path.join(T, 'packets') })
+        quarantinePath: qp, packetDir: path.join(T, 'packets'), draftsDir })
       return { slug: s2, verdict: 'BLOCKED', steps: [], regenCalls: rr.regenCalls,
         blockedBy: [{ code: 'QA_FAIL', message: `${rr.code}: ${rr.why}` }] }
     }
@@ -3493,6 +3502,7 @@ console.log('\n㉛ 재생성 회수도 같은 지문 HOLD 를 지난다 (실제 
       fs.mkdirSync(path.join(D, slug), { recursive: true })
       fs.writeFileSync(path.join(D, slug, 'brief.md'), `# ${slug}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
       fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
+      fs.writeFileSync(path.join(D, slug, 'draft.md'), `---\ntitle: ${slug}\n---\n\n## 본문\n\n문장 하나가 들어 있는 기준 원고입니다.\n`)
     }
     for (const s of ['rg-a', 'rg-b']) mk(s)
     const FX = writeFixture(path.join(T, 'fx-regen.mjs'), `${fixtureHead(LOG)}
@@ -3526,7 +3536,7 @@ function makePage() {
       return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
     }
     const regen = (slug, failures = [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }]) => RG31.attemptRegeneration({
-      slug, profile: 'MEDICAL', failures, quarantinePath: LEDGER, packetDir: PK,
+      slug, profile: 'MEDICAL', failures, quarantinePath: LEDGER, packetDir: PK, draftsDir: D,
       runner: (ctx) => AR31.webuiRegenRunner({ ...ctx, draftOut: path.join(T, `cand-${ctx.slug}.md`) }, { runFn, resultDir: T }),
     })
     const row = (slug) => QN31.readQuarantine(LEDGER).store[slug] ?? {}
@@ -3880,6 +3890,7 @@ console.log('\n㉞ 재생성 HOLD 경계에서 급사해도 regenCalls 0 · 재�
     fs.mkdirSync(path.join(D, SLUG), { recursive: true })
     fs.writeFileSync(path.join(D, SLUG, 'brief.md'), `# ${SLUG}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
     fs.writeFileSync(path.join(D, SLUG, 'review.ts'), '#\n')
+    fs.writeFileSync(path.join(D, SLUG, 'draft.md'), `---\ntitle: ${SLUG}\n---\n\n## 본문\n\n문장 하나가 들어 있는 기준 원고입니다.\n`)
     const L = path.join(T, 'ledger.json')
     const LOG = path.join(T, 'events.jsonl')
     const PK = path.join(T, 'packets')
@@ -4092,10 +4103,12 @@ console.log('\n㉟ 예약은 주인만 지우고 · 실패한 쪽은 남의 예�
 async function regenStage(T, name, { slug = 'rr-a', slugs = [slug], ledgerSeed = null, probeHook = '' } = {}) {
   const { spawn, spawnSync } = await import('node:child_process')
   const D = path.join(T, `${name}-drafts`)
+  const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
   for (const sl of slugs) {
     fs.mkdirSync(path.join(D, sl), { recursive: true })
     fs.writeFileSync(path.join(D, sl, 'brief.md'), `# ${sl}\n\n본문 지시\n`)
     fs.writeFileSync(path.join(D, sl, 'review.ts'), '#\n')
+    fs.writeFileSync(path.join(D, sl, 'draft.md'), GOOD)
   }
   // 🔴 무대마다 장부 폴더를 따로 둔다 — slug lease 폴더가 장부 옆에 생기므로 무대끼리 섞이지 않게
   fs.mkdirSync(path.join(T, name), { recursive: true })
@@ -4109,7 +4122,6 @@ async function regenStage(T, name, { slug = 'rr-a', slugs = [slug], ledgerSeed =
   /** 🔴 자식 쪽 barrier — 두 자식이 **앞단(잠금 없는) 판정을 모두 지나 예약 직전까지** 오게 한다 */
   const CBAR = path.join(T, `${name}-child-barrier`)
   fs.mkdirSync(CBAR)
-  const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
   const FX = writeFixture(path.join(T, `${name}-fx.mjs`), `${fixtureHead(LOG)}
 export const quarantinePath = ${JSON.stringify(L)}
 // 🔴 이 무대의 승자는 release 파일을 최대 60초 기다린다 — 응답 관찰 한도가 그보다 길어야 한다
@@ -4356,6 +4368,7 @@ console.log('\n㊲ 같은 slug 재생성은 수명주기 전체가 하나 — �
     const [win, lose, winCode, loseCode, winRes, loseRes] = ra.code === 'REGENERATED'
       ? [a, b, 'MED_ALPHA', 'MED_BETA', ra, rb] : [b, a, 'MED_BETA', 'MED_ALPHA', rb, ra]
     const byParent = (pid) => S.sends().filter((e) => e.ppid === pid).flatMap((e) => e.codes)
+      .filter((code) => code === 'MED_ALPHA' || code === 'MED_BETA')
     check('🔴 ㊲ 승자만 REGENERATED · 패자는 REGEN_IN_PROGRESS',
       winRes.code === 'REGENERATED' && loseRes.code === 'REGEN_IN_PROGRESS', `${ra.code} · ${rb.code}`)
     check('🔴 ㊲ 승자만 send 1 · 패자 send 0 · probe 는 승자 1회뿐',
@@ -4434,16 +4447,21 @@ console.log('\n㊳ 늦게 온 옛 실패는 최신 상태를 건드리지 않는
      * 🔴 **A. CAS** (2026-09-28 · Codex P1). 옛 시도가 예약·횟수를 얻고 느려진 사이, 새 시도가 성공하고
      *    등록까지 끝나 재생성 기록이 지워졌다(clearRegen). 그 뒤 옛 시도의 인프라 실패가 늦게 도착한다.
      *    앞판은 attemptId 가 없어도 kind·sent·lastRegenAt 을 덮어썼다 — 이제 장부는 한 바이트도 안 바뀐다.
-     */
+    */
     const L = path.join(T, 'q.json')
     const PK = path.join(T, 'packets')
+    const CAS_D = path.join(T, 'drafts-cas')
+    fs.mkdirSync(path.join(CAS_D, 'cas-a'), { recursive: true })
+    fs.writeFileSync(path.join(CAS_D, 'cas-a', 'brief.md'), '# cas-a\n')
+    fs.writeFileSync(path.join(CAS_D, 'cas-a', 'draft.md'), '---\ntitle: CAS 시험\n---\n\n## 본문\n\n기준 원고입니다.\n')
     let before = null
     let rNew = null
     const rOld = attemptRegeneration({ slug: 'cas-a', profile: 'MEDICAL', failures: [{ code: 'QA_FAIL', label: '옛' }],
-      quarantinePath: L, packetDir: PK,
+      quarantinePath: L, packetDir: PK, draftsDir: CAS_D,
       runner: (ctxOld) => asChild(ctxOld, L, () => {
         rNew = attemptRegeneration({ slug: 'cas-a', profile: 'MEDICAL', failures: [{ code: 'MED_NEW', label: '새' }],
-          quarantinePath: L, packetDir: PK, runner: (ctxNew) => asChild(ctxNew, L, () => ({ ok: true })) })
+          quarantinePath: L, packetDir: PK, draftsDir: CAS_D,
+          runner: (ctxNew) => asChild(ctxNew, L, () => ({ ok: true })) })
         RG38.clearRegen('cas-a', L)
         before = fs.readFileSync(L, 'utf8')
         return { ok: false, reason: 'connect_failed', stage: 'connect', sent: false, resultSource: 'file', why: '옛 인프라 실패(늦게 도착)' }
@@ -4517,7 +4535,7 @@ console.log('\n㊴ 같은 slug 원고 작업은 하나 — 일반+재생성 동�
   try {
     const S = await regenStage(T, 'mix')
     S.release()
-    const normal = S.startCli(['--fetch', 'rr-a'], path.join(T, 'normal.json'))
+    const normal = S.startCli(['--fetch', 'rr-a', '--force'], path.join(T, 'normal.json'))
     const regen = S.start([{ code: 'MED_REGEN', label: '재' }])
     await Promise.all([normal.done, regen.done])
     const nr = normal.row() ?? {}
@@ -4553,7 +4571,7 @@ console.log('\n㊴ 같은 slug 원고 작업은 하나 — 일반+재생성 동�
     // 다른 slug 두 건(일반 + 재생성)은 동시에 된다
     const M = await regenStage(T, 'multi', { slugs: ['rr-a', 'rr-b'] })
     M.release()
-    const mn = M.startCli(['--fetch', 'rr-a'], path.join(T, 'mn.json'))
+    const mn = M.startCli(['--fetch', 'rr-a', '--force'], path.join(T, 'mn.json'))
     const mr = M.start([{ code: 'MED_B', label: '나' }], { slug: 'rr-b' })
     await Promise.all([mn.done, mr.done])
     check('🔴 ㊴ 다른 slug 일반+재생성 — 둘 다 성공 · send 2 · 두 자식 모두 barrier 도착',
@@ -5780,6 +5798,187 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
       draftOut: path.join(D6, 'rg-x', 'draft.md'), probeFn: async () => { probes += 1; return { status: 'ok' } }, exit: () => {} })
     check('🔴 ㊺ --draft-out 이 draft.md 자체면 거부한다 (우회 금지)', o7.result.reason === 'REGEN_DRAFT_OUT_IS_DRAFT' && probes === 0, o7.result.reason)
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊻ 재생성은 현재 원고를 고친다 · 옛 HOLD 호환 · 관문 실패 증거 보존')
+{
+  const DG46 = await import('./lib/magazine-delivery-gate.mjs')
+  const QT46 = await import('./lib/magazine-quarantine.mjs')
+  const RG46 = await import('./lib/magazine-regen.mjs')
+  const FR46 = await import('./lib/magazine-fetch-result.mjs')
+  const WEB46 = await import('./magazine-webui-runner.mjs')
+  const AR46 = await import('./magazine-auto-register.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-context-'))
+  const SLUG = 'regen-context'
+  const D = path.join(T, SLUG)
+  const Q = path.join(T, 'q.json')
+  const ID = '4d61b0e7-e1f4-4af4-b192-0b74cb45a901'
+  const paragraph = '기존 원고의 문단과 주장과 순서를 유지해야 한다는 사실을 확인하는 충분히 긴 한국어 시험 문장입니다. '
+  const manuscript = [
+    '---', 'title: 재생성 문맥 시험', 'description: 자동 검사에서 지적된 설명 한 줄만 고치고 나머지 원고는 그대로 유지하는 시험입니다.',
+    'cluster: life', 'medical: false', '---', '', '## 첫 번째 소제목', '', paragraph.repeat(8), '',
+    '## 두 번째 소제목', '', paragraph.repeat(8), '', '[CTA] /community/free | 이야기 남기기 | 함께 이야기해 주세요.',
+  ].join('\n')
+  const brief = [
+    '---', 'title: 재생성 문맥 시험', 'description: 짧은 설명', 'cluster: life', 'medical: false', '---', '',
+    '## 검색 의도', '시험 검색 의도', '', '## 반드시 그대로 넣을 문장', '1. 기존 원고의 문단과 주장과 순서를 유지해야 합니다.',
+  ].join('\n')
+  try {
+    fs.mkdirSync(D, { recursive: true })
+    fs.writeFileSync(path.join(D, 'brief.md'), brief)
+    fs.writeFileSync(path.join(D, 'draft.md'), manuscript)
+    const packet = RG46.buildFailurePacket({
+      slug: SLUG, profile: 'STANDARD', attempt: 1, attemptId: ID,
+      failures: [{ code: 'QA_FAIL', label: 'description 길이 실패', sentence: 'description 10자' }],
+    })
+    const message = DG46.plannedMessageFor(SLUG, T, packet)
+    const legacy = DG46.legacyPlannedMessageFor(SLUG, T, packet)
+    const expectedLegacyInstruction = [
+      '아래 문장이 STANDARD 규칙에 걸렸다. **그 문장만** 고쳐 다시 써라.',
+      '- [QA_FAIL] description 길이 실패: "description 10자"',
+      '🔴 다른 문단은 그대로 둔다. 새 주장을 추가하지 않는다.',
+      '🔴 수치를 단정하지 말고 "기관마다 다르다 · 확인해 보세요" 처럼 가변성을 밝혀라.',
+    ].join('\n')
+    check('🔴 ㊻ 재생성 메시지는 현재 draft.md 전체를 명시적 경계 안에 포함한다',
+      message.includes(DG46.CURRENT_DRAFT_BEGIN) && message.includes(manuscript)
+        && message.includes(DG46.CURRENT_DRAFT_END) && message.indexOf(manuscript) < message.indexOf('===== BRIEF 시작'),
+      `message ${message.length}자 · draft ${manuscript.length}자`)
+    check('🔴 ㊻ 지시는 실패 항목만 수정하고 나머지 원고를 유지하라는 계약이다',
+      /실패 항목만 고치고/.test(packet.instruction) && /문단·소제목·문장·순서·CTA는 그대로/.test(packet.instruction))
+    check('  ㊻ 새 재생성 메시지는 brief-only 옛 메시지와 실제로 다르다 (죽은 시험 아님)', message !== legacy)
+    check('🔴 ㊻ 옛 HOLD 호환 지시문은 2026-10-05 이전 글자를 정확히 재현한다',
+      DG46.legacyFailureInstruction(packet) === expectedLegacyInstruction,
+      DG46.legacyFailureInstruction(packet))
+
+    const oldFp = QT46.deliveryFingerprintOf(legacy)
+    const newFp = QT46.deliveryFingerprintOf(message)
+    const oldEntry = QT46.recordDelivery(null, {
+      sent: null, messageFingerprint: oldFp, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send',
+      now: 1, date: '2026-09-28', reservationId: 'legacy-reservation',
+    })
+    QT46.saveQuarantine({ [SLUG]: oldEntry }, Q)
+    const oldGate = DG46.deliveryGate({ slug: SLUG, draftsDir: T, packet, quarantinePath: Q })
+    check('🔴 ㊻ 프롬프트 형식이 바뀌어도 옛 지문의 전송불명 HOLD는 runner 0으로 유지된다',
+      oldGate.ok && oldGate.hold && oldGate.messageFingerprint === newFp && oldGate.legacyMessageFingerprint === oldFp)
+    const beforeReserve = fs.readFileSync(Q, 'utf8')
+    const reserved = QT46.reserveDelivery({
+      slug: SLUG, messageFingerprint: newFp, compatibleMessageFingerprints: [oldFp], reservationId: 'new-reservation', path: Q,
+    })
+    check('🔴 ㊻ send 직전 잠금 판정도 옛 지문 HOLD를 지키며 장부를 한 바이트도 바꾸지 않는다',
+      !reserved.ok && reserved.held && fs.readFileSync(Q, 'utf8') === beforeReserve)
+
+    const Q2 = path.join(T, 'q2.json')
+    QT46.saveQuarantine({ [SLUG]: QT46.recordDelivery(null, {
+      sent: null, messageFingerprint: newFp, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send',
+      now: 2, date: '2026-10-05', reservationId: 'new-format-reservation',
+    }) }, Q2)
+    fs.appendFileSync(path.join(D, 'draft.md'), '\n\n원고가 실제로 바뀌었습니다.')
+    const changedGate = DG46.deliveryGate({ slug: SLUG, draftsDir: T, packet, quarantinePath: Q2 })
+    check('  ㊻ 새 형식 전송 뒤 현재 원고가 바뀌면 새 메시지 지문이 되어 다음 작업이 열린다', changedGate.ok && !changedGate.hold)
+
+    fs.rmSync(path.join(D, 'draft.md'))
+    const missing = DG46.deliveryGate({ slug: SLUG, draftsDir: T, packet, quarantinePath: Q2 })
+    check('🔴 ㊻ 기준 draft.md가 없으면 재생성 메시지를 만들거나 보내지 않는다',
+      !missing.ok && missing.code === 'REGEN_SOURCE_DRAFT_MISSING' && missing.messageFingerprint === null)
+    fs.writeFileSync(path.join(D, 'draft.md'), manuscript)
+
+    const invalidRow = {
+      slug: SLUG, status: 'failed', reason: 'invalid_manuscript', stage: 'validate', sent: true, length: 1259,
+      invalid: [{ code: 'TOO_SHORT', why: '본문이 1080자다 — 1200자 미만은 원고로 보지 않는다' }],
+      conversationUrl: 'https://chatgpt.com/c/regen-context-1234567890', assistantMessageId: 'assistant-46', responseForm: 'code-block',
+      messageFingerprint: newFp, attemptId: ID,
+    }
+    const normalized = FR46.normalizeFetchResult(invalidRow)
+    check('🔴 ㊻ 결과 파일은 관문 사유·길이·대화 주소·응답 ID·형태를 보존한다',
+      normalized.invalid?.[0]?.code === 'TOO_SHORT' && normalized.length === 1259
+        && normalized.conversationUrl === invalidRow.conversationUrl
+        && normalized.assistantMessageId === 'assistant-46' && normalized.responseForm === 'code-block')
+
+    const rr = AR46.webuiRegenRunner({ slug: SLUG, packetPath: '/tmp/packet.json', draftOut: path.join(T, 'candidate.md') }, {
+      resultDir: T,
+      runFn(_file, args) {
+        const resultPath = args[args.indexOf('--result-json') + 1]
+        FR46.writeFetchResults(resultPath, { mode: 'fetch-one', results: [invalidRow], sentTotal: 1 })
+        return { code: 1, stdout: '', stderr: '[validate] invalid_manuscript' }
+      },
+    })
+    check('🔴 ㊻ 실제 webuiRegenRunner 경계가 CONTENT 실패 증거를 부모에게 그대로 전달한다',
+      !rr.ok && rr.sent === true && rr.invalid?.[0]?.code === 'TOO_SHORT'
+        && rr.conversationUrl === invalidRow.conversationUrl && rr.assistantMessageId === 'assistant-46',
+      JSON.stringify({ reason: rr.reason, invalid: rr.invalid, url: rr.conversationUrl }))
+
+    const propagated = RG46.attemptRegeneration({
+      slug: SLUG, profile: 'STANDARD', failures: [{ code: 'QA_FAIL', label: 'description 길이 실패' }],
+      runner: (ctx) => ({ ...rr, attemptId: ctx.packet.attemptId }),
+      quarantinePath: path.join(T, 'q3.json'), draftsDir: T, packetDir: path.join(T, 'packets'),
+    })
+    check('🔴 ㊻ attemptRegeneration도 invalid_manuscript를 CONTENT로 분류하고 증거를 버리지 않는다',
+      !propagated.ok && propagated.kind === 'CONTENT' && propagated.sent === true
+        && propagated.reason === 'invalid_manuscript' && propagated.invalid?.[0]?.code === 'TOO_SHORT'
+        && propagated.conversationUrl === invalidRow.conversationUrl,
+      JSON.stringify({ kind: propagated.kind, sent: propagated.sent, reason: propagated.reason }))
+
+    const Q4 = path.join(T, 'q4.json')
+    QT46.saveQuarantine({ [SLUG]: QT46.recordDelivery(null, {
+      sent: null, messageFingerprint: newFp, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send',
+      now: 3, reservationId: 'settle-me',
+    }) }, Q4)
+    const knownInvalid = { ...invalidRow, preRecorded: true }
+    if (WEB46.settlesDeliveryReservation(knownInvalid)) {
+      QT46.releaseDeliveryReservation({ slug: SLUG, reservationId: 'settle-me', path: Q4 })
+    }
+    const settled = QT46.readQuarantine(Q4)
+    check('🔴 ㊻ 응답 ID까지 확인한 관문 실패는 전송불명 예약을 해소한다',
+      WEB46.settlesDeliveryReservation(knownInvalid) && settled.ok && settled.store[SLUG]?.delivery === undefined)
+    check('🔴 ㊻ 응답을 끝까지 읽지 못한 timeout은 전송불명 예약을 해소하지 않는다',
+      !WEB46.settlesDeliveryReservation({ ...knownInvalid, reason: 'response_timeout', stage: 'await-response' }))
+
+    // 실제 fetchOne 배선: send 예약 뒤 원고 관문에서 탈락해도 전송불명 예약은 남지 않는다.
+    const Q5 = path.join(T, 'q5.json')
+    const ID5 = '7b89f154-24b7-49f1-93ac-5349c67fb702'
+    const PK5 = RG46.writePacket(RG46.buildFailurePacket({
+      slug: SLUG, profile: 'STANDARD', attempt: 1, attemptId: ID5,
+      failures: [{ code: 'QA_FAIL', label: 'description 길이 실패' }],
+    }), RG46.packetPathFor(SLUG, path.join(T, 'packets-5'), ID5))
+    const invalidText = [
+      '---', 'title: 재생성 문맥 시험', 'description: 충분히 설명한 시험 설명입니다.',
+      'cluster: life', 'medical: false', '---', '', '## 첫 번째 소제목', '',
+      '기존 원고의 문단과 주장과 순서를 유지해야 합니다.', '', '## 두 번째 소제목', '',
+      '짧아서 원고 관문을 통과하지 못하는 본문입니다.', '',
+      '[CTA] /community/free | 이야기 남기기 | 함께 이야기해 주세요.',
+    ].join('\n')
+    let typed5 = ''
+    const page5 = adaptPage({
+      url: () => 'https://chatgpt.com/c/regen-context-wired',
+      async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+      async waitForFunction() {}, async evaluate() { return invalidText },
+      locator(sel) {
+        const l = { async click() {}, async innerText() { return typed5 } }
+        return { first: () => l, ...l }
+      },
+      keyboard: { async insertText(t) { typed5 += String(t ?? '') }, async press() {} },
+    })
+    const wired = await WEB46.fetchOne(SLUG, {
+      regenPacket: PK5, force: true, draftsDir: T, quarantinePath: Q5,
+      draftOut: path.join(T, 'candidate-5.md'), probeFn: async () => ({ status: 'ok' }),
+      browserDeps: {
+        ...FAST_FETCH,
+        ensureTab: async () => ({ ok: true }),
+        connect: async () => ({ contexts: () => [{ pages: () => [], newPage: async () => page5 }], async close() {} }),
+      },
+      exit: () => {},
+    })
+    const wiredLedger = QT46.readQuarantine(Q5)
+    check('🔴 ㊻ 실제 fetchOne 관문 실패도 CONTENT 증거를 반환하고 send 예약을 해소한다',
+      wired.result.reason === 'invalid_manuscript' && wired.result.sent === true
+        && wired.result.invalid?.some((x) => x.code === 'TOO_SHORT')
+        && wiredLedger.store[SLUG]?.delivery === undefined
+        && wiredLedger.store[SLUG]?.regenCalls === 1,
+      JSON.stringify({ reason: wired.result.reason, invalid: wired.result.invalid,
+        delivery: wiredLedger.store[SLUG]?.delivery, regenCalls: wiredLedger.store[SLUG]?.regenCalls }))
+  } finally {
+    fs.rmSync(T, { recursive: true, force: true })
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)

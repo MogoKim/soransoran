@@ -224,8 +224,15 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   한 후보가 막히면 draft.md(회수 뒤 시점)·article-draft.ts·hero 를 **추적 여부와 무관하게** 들어오기 전 바이트로 되돌린다
 >   (새로 받은 첫 원고와 새 hero 파일은 지우지 않는다 — 비용을 치른 재사용 자산이다).
 >   brief 정본 섹션(`REQUIRED_SECTIONS`) 소제목이 있는 원고는 `BRIEF_ECHO` 로 저장 금지다. 재생성 상한에 닿아도
->   결과·장부 사유에 **실제 QA FAIL 문장**과 재생성마다의 실패 목록(`regenHistory`)을 남긴다. 재생성 패킷 내용은 바꾸지 않았다 —
->   지문이 바뀌면 기존 전송불명 HOLD 가 풀려 같은 요청이 다시 나간다.
+>   결과·장부 사유에 **실제 QA FAIL 문장**과 재생성마다의 실패 목록(`regenHistory`)을 남긴다.
+> - 🔴 **재생성은 brief만 보고 새 글을 쓰지 않는다** (2026-10-05 개정). 실제 현재 `draft.md` 전체를 명시적 경계 안에 넣고,
+>   실패 항목만 고치며 나머지 frontmatter·문단·소제목·문장·순서·CTA를 유지하도록 요청한다. 기준 `draft.md`가 없으면
+>   `REGEN_SOURCE_DRAFT_MISSING`으로 전송 전에 멈춘다. 새 메시지 지문과 함께 2026-10-05 이전 brief-only 메시지의 지문도
+>   재현해 대조하므로, 기존 전송불명 HOLD는 프롬프트 형식 변경만으로 풀리지 않는다.
+> - 🔴 **응답을 식별하고 원문까지 읽은 뒤 원고 관문에서 탈락한 것은 전송불명이 아니다.** `invalid_manuscript`·
+>   `markers_missing`에 대화 URL과 assistant 응답 ID가 있으면 자기 send 예약을 해소하고 CONTENT 실패로 기록한다.
+>   결과 파일과 `regenHistory`에는 실제 관문 사유·응답 길이·대화 URL·응답 ID·응답 형태를 보존한다. 응답을 끝까지 읽지
+>   못한 timeout·ambiguous는 기존처럼 DELIVERY_UNCERTAIN HOLD로 남긴다.
 >   (2026-10-02: cold·autumn 은 brief 가 draft.md 를 덮은 채 남았고, hardest 는 batch 재생성이 heroImage 를 지워 HERO_MISSING 을
 >   자초했고, dinner 는 제목 FAIL 이 REGEN_EXHAUSTED 에 가려졌다.)
 > - 🔴 **큐의 작업 제목은 자동 제작에 넣을 최소 형식만 선행 검사한다** — `isAutoLaneEligible` 이

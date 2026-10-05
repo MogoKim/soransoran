@@ -20,7 +20,15 @@ import {
  *    **실제로 보내는 글자**가 한 글자도 다르면 안 된다. 두 곳에서 따로 만들면
  *    언젠가 갈라지고, 갈라진 날 지문이 달라져 **막아야 할 것을 못 막는다.**
  */
-export function manuscriptPromptText(packet = null) {
+export function manuscriptPromptText(packet = null, currentDraft = null) {
+  return packet ? regenerationPromptText(packet, currentDraft) : legacyManuscriptPromptText(null)
+}
+
+/**
+ * 2026-10-05 이전 재생성 메시지. 새 메시지로 바꿔도 이미 보낸 요청의 HOLD가 풀리면 안 되므로
+ * 전송에는 쓰지 않고, 기존 장부 지문을 대조하는 호환 판정에만 쓴다.
+ */
+export function legacyManuscriptPromptText(packet = null) {
   return [
     // 🔴 brief 는 파일이 아니라 이 메시지 아래에 그대로 들어간다 (첨부 경로 폐지 · 2026-09-28)
     '아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요.',
@@ -34,6 +42,45 @@ export function manuscriptPromptText(packet = null) {
   ].join(' ')
 }
 
+/** 2026-10-05 이전 `buildFailurePacket()`이 만든 지시문을 바이트 단위로 재현한다. */
+export function legacyFailureInstruction(packet) {
+  const rows = packet?.failures ?? []
+  return [
+    `아래 문장이 ${packet?.profile} 규칙에 걸렸다. **그 문장만** 고쳐 다시 써라.`,
+    ...rows.map((f) => `- [${f.code}] ${f.label ?? ''}${f.sentence ? `: "${f.sentence}"` : ''}`),
+    '🔴 다른 문단은 그대로 둔다. 새 주장을 추가하지 않는다.',
+    '🔴 수치를 단정하지 말고 "기관마다 다르다 · 확인해 보세요" 처럼 가변성을 밝혀라.',
+  ].join('\n')
+}
+
+export const CURRENT_DRAFT_BEGIN = '===== 현재 원고 시작 (이 원고를 기준으로 실패 항목만 고친다) ====='
+export const CURRENT_DRAFT_END = '===== 현재 원고 끝 ====='
+
+/**
+ * 재생성은 brief만 보고 원고를 새로 쓰는 작업이 아니다. 기존 원고를 그대로 보존하면서
+ * 자동 검사가 지적한 부분만 고치는 작업이다. 따라서 모델에 실제 현재 원고를 함께 준다.
+ */
+export function regenerationPromptText(packet, currentDraft) {
+  if (!packet) return legacyManuscriptPromptText(null)
+  const draft = String(currentDraft ?? '').trim()
+  if (!draft) throw new TypeError('재생성 프롬프트에 현재 원고가 없다')
+  return [
+    '아래 현재 원고를 기준으로 자동 검사 실패 항목만 수정하세요.',
+    '설명·인사·요약·후기를 붙이지 말고 수정된 원고 전체만 출력합니다.',
+    '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
+    'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+    '실패하지 않은 frontmatter 값·문단·소제목·문장·순서·CTA는 유지하고 새 주장을 추가하지 마세요.',
+    '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
+    '',
+    '--- 현재 원고가 자동 검사에 걸렸습니다 ---',
+    packet.instruction,
+    '',
+    CURRENT_DRAFT_BEGIN,
+    draft,
+    CURRENT_DRAFT_END,
+  ].join('\n')
+}
+
 /**
  * 이 slug 에 **보내게 될 메시지** — 아직 보내지 않는다.
  * 대상 선택이 지문을 계산하려면 이것이 필요하다. brief 가 없으면 `null`.
@@ -41,7 +88,24 @@ export function manuscriptPromptText(packet = null) {
 export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
   const briefPath = join(draftsDir, slug, 'brief.md')
   if (!existsSync(briefPath)) return null
-  return buildManuscriptMessage({ promptText: manuscriptPromptText(packet), briefText: readFileSync(briefPath, 'utf8') })
+  const draftPath = join(draftsDir, slug, 'draft.md')
+  if (packet && !existsSync(draftPath)) return null
+  const currentDraft = packet ? readFileSync(draftPath, 'utf8') : null
+  const promptText = packet
+    ? manuscriptPromptText(packet, currentDraft)
+    : manuscriptPromptText(null)
+  return buildManuscriptMessage({ promptText, briefText: readFileSync(briefPath, 'utf8') })
+}
+
+/** 기존 HOLD 지문 대조 전용. 실제 전송에는 절대 쓰지 않는다. */
+export function legacyPlannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
+  const briefPath = join(draftsDir, slug, 'brief.md')
+  if (!existsSync(briefPath)) return null
+  const legacyPacket = packet ? { ...packet, instruction: legacyFailureInstruction(packet) } : null
+  return buildManuscriptMessage({
+    promptText: legacyManuscriptPromptText(legacyPacket),
+    briefText: readFileSync(briefPath, 'utf8'),
+  })
 }
 
 /**
@@ -66,13 +130,30 @@ export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
  *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
  */
 export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH }) {
+  const draftPath = join(draftsDir, slug, 'draft.md')
+  if (packet && !existsSync(draftPath)) {
+    return {
+      ok: false,
+      code: 'REGEN_SOURCE_DRAFT_MISSING',
+      why: `재생성 기준 원고가 없다: ${draftPath}`,
+      message: null,
+      messageFingerprint: null,
+    }
+  }
   const message = plannedMessageFor(slug, draftsDir, packet)
   const messageFingerprint = deliveryFingerprintOf(message)
+  const legacyMessageFingerprint = packet
+    ? deliveryFingerprintOf(legacyPlannedMessageFor(slug, draftsDir, packet))
+    : null
   const ledger = readQuarantine(quarantinePath)
   if (!ledger.ok) {
     return { ok: false, code: 'QUARANTINE_UNREADABLE', why: ledger.why, message, messageFingerprint }
   }
+  const entry = ledger.store[slug] ?? null
+  const hold = deliveryHoldsFetch(entry, messageFingerprint)
+    ?? (legacyMessageFingerprint && legacyMessageFingerprint !== messageFingerprint
+      ? deliveryHoldsFetch(entry, legacyMessageFingerprint)
+      : null)
   // 🔴 `entry` 는 앞단 확인(불필요한 probe 회피)용이다 — 정본 판정은 send 직전 `reserveDelivery` 가 잠금 안에서 한다
-  return { ok: true, message, messageFingerprint, entry: ledger.store[slug] ?? null,
-    hold: deliveryHoldsFetch(ledger.store[slug], messageFingerprint) }
+  return { ok: true, message, messageFingerprint, legacyMessageFingerprint, entry, hold }
 }

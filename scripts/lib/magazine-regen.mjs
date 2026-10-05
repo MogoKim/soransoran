@@ -61,9 +61,9 @@ export function buildFailurePacket({ slug, profile, failures, attempt, attemptId
     attempt,
     failures: rows,
     instruction: [
-      `아래 문장이 ${profile} 규칙에 걸렸다. **그 문장만** 고쳐 다시 써라.`,
+      `현재 원고가 ${profile} 규칙에 걸렸다. 아래 실패 항목만 고치고 원고 전체를 다시 출력하라.`,
       ...rows.map((f) => `- [${f.code}] ${f.label}${f.sentence ? `: "${f.sentence}"` : ''}`),
-      '🔴 다른 문단은 그대로 둔다. 새 주장을 추가하지 않는다.',
+      '🔴 실패하지 않은 frontmatter 값·문단·소제목·문장·순서·CTA는 그대로 둔다. 새 주장을 추가하지 않는다.',
       '🔴 수치를 단정하지 말고 "기관마다 다르다 · 확인해 보세요" 처럼 가변성을 밝혀라.',
     ].join('\n'),
   }
@@ -151,7 +151,7 @@ export function attemptRegeneration({
    */
   const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath })
   if (!gate.ok) {
-    return { ok: false, code: 'LEDGER_UNREADABLE', why: gate.why, regenCalls: budget.used }
+    return { ok: false, code: gate.code ?? 'LEDGER_UNREADABLE', why: gate.why, regenCalls: budget.used }
   }
   if (gate.hold) {
     return {
@@ -238,6 +238,12 @@ export function attemptRegeneration({
       message: [r?.why, r?.errorName, r?.errorDetail].filter(Boolean).join(' · '),
       sent: sentOf(r),
     }).kind
+    const evidence = {
+      sent: sentOf(r), reason: r?.reason ?? null, stage: r?.stage ?? null,
+      invalid: r?.invalid ?? null, length: r?.length ?? null,
+      conversationUrl: r?.conversationUrl ?? null, assistantMessageId: r?.assistantMessageId ?? null,
+      responseForm: r?.responseForm ?? null,
+    }
     if (!consumesAttempt(kind)) {
       /**
        * 🔴 **인프라·전송불명은 원고 탓이 아니다 — 자식이 올린 횟수를 되돌린다.**
@@ -252,12 +258,13 @@ export function attemptRegeneration({
         ok: false,
         code: kind === 'DELIVERY_UNCERTAIN' ? 'REGEN_DELIVERY_UNCERTAIN' : 'REGEN_INFRA_FAILED',
         kind,
-        sent: sentOf(r),
+        ...evidence,
         why: `${kind === 'DELIVERY_UNCERTAIN' ? '보냈지만 응답을 확인하지 못했다 — 다시 보내지 않는다' : '인프라 실패 — 원고 문제가 아니다'}: ${r?.why ?? ''}`,
         regenCalls: usedNow(),
       }
     }
-    return { ok: false, code: 'REGEN_RUNNER_FAILED', kind, why: r?.why ?? '재생성 경로 실패', regenCalls: usedNow() }
+    return { ok: false, code: 'REGEN_RUNNER_FAILED', kind, ...evidence,
+      why: r?.why ?? '재생성 경로 실패', regenCalls: usedNow() }
   }
 
   /**
