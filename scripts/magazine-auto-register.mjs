@@ -417,7 +417,11 @@ export function webuiRegenRunner({ slug, packetPath, draftOut }, { runFn = run, 
    *    0으로 끝나도 상위는 "재생성 성공" 으로 읽었고, 바뀌지 않은 옛 원고로 QA 를 돌렸다.
    *    **거짓 성공은 실패보다 나쁘다** — 실패는 다시 보지만 거짓 성공은 그냥 지나간다.
    */
-  if (r.code === 0 && row?.status === 'ok') return { ok: true, sent: true, resultSource: 'file', attemptId: row.attemptId ?? null }
+  if (r.code === 0 && row?.status === 'ok') return {
+    ok: true, sent: true, resultSource: 'file', attemptId: row.attemptId ?? null,
+    conversationUrl: row.conversationUrl ?? null, assistantMessageId: row.assistantMessageId ?? null,
+    responseForm: row.responseForm ?? null,
+  }
 
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
   const why = /login_required/i.test(out) ? 'ChatGPT login_required' : '재생성 회수 실패'
@@ -434,6 +438,9 @@ export function webuiRegenRunner({ slug, packetPath, draftOut }, { runFn = run, 
         ok: false, sent: row.sent, resultSource: 'file',
         reason: row.reason ?? 'REGEN_RESULT_NOT_OK', stage: row.stage,
         errorName: row.errorName, errorDetail: row.errorDetail,
+        invalid: row.invalid ?? null, length: row.length ?? null,
+        conversationUrl: row.conversationUrl ?? null, assistantMessageId: row.assistantMessageId ?? null,
+        responseForm: row.responseForm ?? null,
         messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null, attemptId: row.attemptId ?? null,
         why: `${why} — ${describeFetchFailure(row)}`,
       }
@@ -455,6 +462,9 @@ export function webuiRegenRunner({ slug, packetPath, draftOut }, { runFn = run, 
       ok: false, sent: row.sent, resultSource: 'file',
       reason: row.reason, stage: row.stage,
       errorName: row.errorName, errorDetail: row.errorDetail,
+      invalid: row.invalid ?? null, length: row.length ?? null,
+      conversationUrl: row.conversationUrl ?? null, assistantMessageId: row.assistantMessageId ?? null,
+      responseForm: row.responseForm ?? null,
       // 🔴 HOLD 면 어느 글자 때문인지 · 앞선 전송이 무엇이었는지를 같이 올린다
       messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null, attemptId: row.attemptId ?? null,
       why: `${why} — ${describeFetchFailure(row)}`,
@@ -744,6 +754,11 @@ export function drive(slug, opts, deps = {}) {
         ...(packetDir ? { packetDir } : {}),
         ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}) })
       regenCalls = rr.regenCalls ?? regenCalls
+      if (rr.reason) record.reason = rr.reason
+      if (rr.invalid?.length) record.invalid = rr.invalid
+      if (rr.conversationUrl) record.conversationUrl = rr.conversationUrl
+      if (rr.assistantMessageId) record.assistantMessageId = rr.assistantMessageId
+      if (rr.responseForm) record.responseForm = rr.responseForm
       /**
        * 🔴 **HOLD 는 이번 실행이 안 보낸 것일 뿐, 그 글의 전송 사실이 아니다.**
        *    `false` 를 올리면 장부가 앞 회차의 모름을 "안 보냄" 으로 덮는다 — 앞선 값을 올린다.

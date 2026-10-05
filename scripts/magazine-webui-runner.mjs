@@ -360,7 +360,19 @@ export function describeFetchFailure(r) {
     ?? (r?.errorName && r?.errorDetail ? `${r.errorName}: ${r.errorDetail}`
       : r?.errorDetail ?? (r?.errorName ? String(r.errorName) : ''))
   const extra = r?.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''
-  return `${where}${r?.reason ?? 'unknown'}${detail ? ` — ${detail}` : ''}${extra} · 전송 ${r?.sent ? '1건' : '0건'}`
+  const invalid = r?.invalid?.length ? ` — ${describeReasons(r.invalid)}` : ''
+  return `${where}${r?.reason ?? 'unknown'}${detail ? ` — ${detail}` : ''}${extra}${invalid} · 전송 ${r?.sent ? '1건' : '0건'}`
+}
+
+/**
+ * 응답을 특정해 원문까지 읽은 뒤 내용 관문에서 탈락했다면 전송 결말은 더 이상 UNKNOWN이 아니다.
+ * 같은 요청을 다시 보내지 않는 책임은 재생성 예산·CONTENT 장부가 맡고, send 예약은 해소한다.
+ */
+export function settlesDeliveryReservation(r) {
+  if (r?.ok) return true
+  return r?.sent === true && r?.stage === 'validate'
+    && (r?.reason === 'invalid_manuscript' || r?.reason === 'markers_missing')
+    && Boolean(r?.conversationUrl && r?.assistantMessageId)
 }
 
 /** brief 의 "반드시 그대로 넣을 문장" — 회수·무전송 회수가 **같은 대조 기준**을 쓴다 */
@@ -555,7 +567,9 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     if (!quiet) console.log(`     재생성 — 실패 ${packet.failures.length}건을 같이 보낸다`)
   }
 
-  const prompt = manuscriptPromptText(packet)
+  // 실제 전송 문자열은 아래 `deliveryGate()`가 현재 원고까지 포함해 한 번만 만든다.
+  // `promptText`는 `message`가 없는 호출의 fallback일 뿐이므로 재생성에서는 조립하지 않는다.
+  const prompt = packet ? null : manuscriptPromptText(null)
 
   /**
    * 🔴 **보내도 되는가 — 브라우저를 건드리기 전에 본다.** 판정은 `deliveryGate` 하나다.
@@ -619,7 +633,9 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     }
     try {
       const u = reserveDelivery({ slug, messageFingerprint, reservationId, regen,
-        now: Date.now(), runId: runIdHint, date: dateHint, path: quarantinePath })
+        now: Date.now(), runId: runIdHint, date: dateHint, path: quarantinePath,
+        compatibleMessageFingerprints: gate.legacyMessageFingerprint ? [gate.legacyMessageFingerprint] : [],
+      })
       // 🔴 잠금 시간 초과·장부 손상·잠금 판정 불가도 `ok:false` 로 온다 — 전부 전송 금지
       if (u.held) { lateHold = u.held; return { ok: false, why: u.why } }
       if (u.exhausted) { regenExhausted = u.exhausted; return { ok: false, why: u.why } }
@@ -662,7 +678,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
    */
   {
     try {
-      if (r.ok) {
+      if (settlesDeliveryReservation(r)) {
         // 🔴 **내 예약일 때만** 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다
         releaseDeliveryReservation({ slug, reservationId, path: quarantinePath })
       } else if (!r.preRecorded && !reserved) {

@@ -377,11 +377,14 @@ export const REGEN_EXHAUSTED_REASON = 'REGEN_EXHAUSTED'
  */
 export function reserveDelivery({
   slug, messageFingerprint, reservationId, regen = null, now = Date.now(),
-  runId = null, date = null, path = QUARANTINE_PATH,
+  runId = null, date = null, path = QUARANTINE_PATH, compatibleMessageFingerprints = [],
 }) {
   let out = null
   const u = updateQuarantine((cur) => {
-    const held = deliveryHoldsFetch(cur[slug], messageFingerprint)
+    const held = [messageFingerprint, ...compatibleMessageFingerprints]
+      .filter(Boolean)
+      .map((fingerprint) => deliveryHoldsFetch(cur[slug], fingerprint))
+      .find(Boolean) ?? null
     if (held) { out = { ok: false, held, why: held.why }; return cur }
     if (regen) {
       const b = regenBudget({ entry: cur[slug] })
