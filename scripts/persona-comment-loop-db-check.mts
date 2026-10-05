@@ -317,7 +317,31 @@ async function main(): Promise<void> {
       && (await prisma.personaApprovalQueue.count({ where: { targetPostId: p1 } })) === 0, JSON.stringify(steps))
     check('🔴 provider 예외 글 → 그 글만 실패', (await personaComments(p3)).length === 0 && steps.includes('PROVIDER_FAILED'))
     check('🟢 나머지 글은 계속 — 정확히 1건', (await personaComments(p2)).length === 1, JSON.stringify(r.outcomes.map((o) => `${o.step}:${o.reason}`)))
-    check('🔴 세 글 모두 시도했다(한 건 실패로 회차가 끝나지 않았다)', f.calls() === 3)
+    check('🔴 세 글 모두 시도하고 대체 후보를 포함해도 회차 호출 상한을 넘지 않았다',
+      new Set(r.outcomes.map((o) => o.postId)).size === 3
+      && f.calls() === r.providerCalls
+      && f.calls() <= 6,
+    `calls=${f.calls()} posts=${new Set(r.outcomes.map((o) => o.postId)).size}`)
+
+    await wipe()
+    const author = await persona('P01'); await persona('P02'); await persona('P03')
+    const fallbackPost = await post(author, 5)
+    let fallbackCalls = 0
+    const fallbackGen: CommentGenerate = async ({ input }) => {
+      fallbackCalls += 1
+      return {
+        ok: true,
+        text: fallbackCalls === 1 ? input.post.bodyDigest : GOOD,
+        errorCode: null,
+      }
+    }
+    const fallbackRun = await loop(fallbackGen)
+    check('🔴 실제 DB 경로: 첫 후보 Gate 차단 후 다음 Persona가 같은 회차에서 댓글 1건을 만든다',
+      fallbackCalls === 2
+      && fallbackRun.outcomes[0]?.step === 'ENQUEUE_BLOCKED'
+      && fallbackRun.outcomes[1]?.step === 'ENQUEUED'
+      && (await personaComments(fallbackPost)).length === 1,
+    JSON.stringify(fallbackRun.outcomes.map((o) => `${o.personaCode}:${o.step}`)))
   }
 
   console.log('\n⑦ 비용 상한 — 요청 전에 막는다')

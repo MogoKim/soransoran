@@ -107,6 +107,11 @@ export async function runEnqueuePipeline(args: {
    */
   providerCallLimit: number
   /**
+   * 같은 글의 첫 후보가 Gate 에서 막히면 다음 후보를 시도하되, 하나가 적재된 뒤에는
+   * 그 글의 나머지 후보를 부르지 않는다. 무인 첫 댓글 레인만 이 값을 켠다.
+   */
+  oneCreatedPerPost?: boolean
+  /**
    * 🔴 **유료 호출 앞의 마지막 관문.**
    *
    *    Gate 입력을 다 못 읽었거나, 분산 근거를 못 읽었거나,
@@ -142,7 +147,9 @@ export async function runEnqueuePipeline(args: {
 
   let providerCalls = 0
   let created = 0
+  const createdPosts = new Set<string>()
   for (const t of args.targets) {
+    if (args.oneCreatedPerPost === true && createdPosts.has(t.facts.postId)) continue
     // 🔴 두 상한을 각각 본다 — 호출 상한이 0 이면 부르지 않고, write 상한은 writer 가 있을 때만 센다
     if (providerCalls >= args.providerCallLimit) break
     if (args.writer !== undefined && created >= args.limit) break
@@ -196,6 +203,7 @@ export async function runEnqueuePipeline(args: {
     })
     if (!w.created) { at('WRITE_FAILED', w.reason, plan); continue }
     created += 1
+    createdPosts.add(t.facts.postId)
     at('ENQUEUED', `${plan.status} 적재`, plan)
   }
 
