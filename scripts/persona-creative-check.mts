@@ -25,9 +25,10 @@ import {
   CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_MAX_OUTPUT_TOKENS, CREATIVE_BATCH_SYSTEM_PROMPT, STATUS_LABELS,
   behaviorWordsOf, compactPeerOf, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch, sameBehavior,
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
-  creativeBriefOf, creativePeerOf, creativeUserPayload, parseCreative, parseCreativeFile, payloadLeaks, type CreativeBrief,
+  creativeBriefOf, creativePeerOf, creativeUserPayload, parseCreative, parseCreativeFile, parseProviderCreative, payloadLeaks, type CreativeBrief,
 } from '../src/lib/persona-creative'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
+import { noGoExpressionKey } from '../src/lib/persona-no-go'
 import { reserveOf } from '../src/lib/llm-pricing'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
@@ -68,12 +69,17 @@ const GOOD: PersonaCreative = {
   title: '혼자 대학생 아이 뒷바라지하며',
   personality: ['담담함', '말 짧음', '남 얘기 잘 들음'],
   noGoTopics: ['이혼 권유', '금액 언급'],
-  noGoExpressions: ['"그래도 다행이죠" 류'],
+  noGoExpressions: ['"그래도 다행이죠"'],
   variations: ['짧게 툭', '담백한 경험', '되묻기', '무호칭', '한 줄'],
 }
+/**
+ * 🔴 **provider 출력 모양** — 말버릇은 따옴표 없는 글자만(2026-10-06 provider 계약). 정본 creative 를 넘기면
+ *    말버릇을 열쇠로 바꿔 provider 가 내는 모양으로 만든다. 글(string)은 그대로 — 형식 위반 반례용
+ */
+const providerOf = (c: PersonaCreative): Record<string, unknown> => ({ ...c, noGoExpressions: c.noGoExpressions.map(noGoExpressionKey) })
 /** 🔴 Anthropic prefill 을 거친 rawText 모양 그대로(`{` 로 시작하는 JSON) */
 const okResponse = (c: unknown, extra: Partial<LlmResponse> = {}): LlmResponse => ({
-  ok: true, rawText: typeof c === 'string' ? c : JSON.stringify(c), inputTokens: 600, outputTokens: 180,
+  ok: true, rawText: typeof c === 'string' ? c : JSON.stringify(providerOf(c as PersonaCreative)), inputTokens: 600, outputTokens: 180,
   finishReason: 'end_turn', reasoningTokens: null, responseChars: 0, maxTokensReached: false,
   errorCode: null, errorMessage: null, usageKnown: true, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [], ...extra,
 })
@@ -359,7 +365,7 @@ const LIVES = new Map(proposeLifeSkeletons({ existing: POOL.cards, codes: Array.
       }) as CreativeCall,
     }
   }
-  const pick = (m: Record<string, PersonaCreative>) => (codes: string[]) => JSON.stringify(Object.fromEntries(codes.map((c) => [c, m[c]])))
+  const pick = (m: Record<string, PersonaCreative>) => (codes: string[]) => JSON.stringify(Object.fromEntries(codes.map((c) => [c, providerOf(m[c]!)])))
   const run = (f: ReturnType<typeof batchCall>, capUsd?: number) => generateCreativeBatch({
     briefs, avoid, forbiddenTextsOf: () => TEXTS, call: f.call, ...(capUsd === undefined ? {} : { capUsd }),
   })
@@ -397,13 +403,13 @@ const LIVES = new Map(proposeLifeSkeletons({ existing: POOL.cards, codes: Array.
     check(`🔴 ${name} → 전체 batch invalid · creative 0`, f.calls() === 1 && r.ok && r.status === 'invalid'
       && Object.keys(r.creatives).length === 0 && r.problems.some((p) => re.test(p)), r.ok ? r.problems.join(' / ') : r.reason)
   }
-  await structural('코드 1개 누락', (codes) => JSON.stringify(Object.fromEntries(codes.slice(1).map((c) => [c, GOOD6[c]]))), /빠진 코드: P26/)
-  await structural('요청하지 않은 코드 추가', (codes) => JSON.stringify({ ...Object.fromEntries(codes.map((c) => [c, GOOD6[c]])), P31: GOOD6.P26 }), /요청하지 않은 코드: P31/)
+  await structural('코드 1개 누락', (codes) => pick(GOOD6)(codes.slice(1)), /빠진 코드: P26/)
+  await structural('요청하지 않은 코드 추가', (codes) => JSON.stringify({ ...JSON.parse(pick(GOOD6)(codes)), P31: providerOf(GOOD6.P26!) }), /요청하지 않은 코드: P31/)
   await structural('코드 중복(JSON.parse 가 조용히 고르는 키)', (codes) => {
-    const ok = JSON.stringify(Object.fromEntries(codes.map((c) => [c, GOOD6[c]])))
-    return `${ok.slice(0, -1)},"P27":${JSON.stringify(GOOD6.P27)}}`
+    const ok = pick(GOOD6)(codes)
+    return `${ok.slice(0, -1)},"P27":${JSON.stringify(providerOf(GOOD6.P27!))}}`
   }, /중복 코드: P27/)
-  await structural('잘린 출력', (codes) => JSON.stringify(Object.fromEntries(codes.map((c) => [c, GOOD6[c]]))).slice(0, 300), /JSON 이 아니다/)
+  await structural('잘린 출력', (codes) => pick(GOOD6)(codes).slice(0, 300), /JSON 이 아니다/)
   {
     const f = batchCall(pick({ ...GOOD6, P30: { ...GOOD6.P30!, variations: ['하나'] } }))
     const r = await run(f)
@@ -476,6 +482,42 @@ console.log('⑧ creative 묶음 품질 — 단일 판정 judgeCreativeQuality')
   check('🔴 27~29자 대화 행동 → 묶음 품질 PASS', q(long).ok, q(long).problems.join(' / '))
   check('🔴 noGo 소재 1글자 → 여전히 거부(부분 문자열 대조)', !parseCreative(JSON.stringify({ ...GOOD6.P26!, noGoTopics: ['돈'] })).ok)
   check('🔴 말버릇 열쇠 1글자 → 여전히 거부', !parseCreative(JSON.stringify({ ...GOOD6.P26!, noGoExpressions: ['"네"'] })).ok)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('⑦-b provider 말버릇 계약 — 글자만 받고 코드가 정본으로 감싼다')
+// ─────────────────────────────────────────────────────────
+{
+  const prov = (expr: unknown[]) => parseProviderCreative(JSON.stringify({ ...providerOf(GOOD), noGoExpressions: expr }))
+  const ok1 = prov(['그래도 다행이죠', '다 지나가요'])
+  check('🔴 따옴표 없는 말버릇 → 형식 통과 · 정본 `"말버릇"` 으로 감싼다', ok1.ok
+    && JSON.stringify(ok1.creative.noGoExpressions) === JSON.stringify(['"그래도 다행이죠"', '"다 지나가요"']))
+  check('정본으로 감싼 말버릇은 카드 파서가 말버릇으로 가른다(소재로 새지 않는다)',
+    ok1.ok && ok1.creative.noGoExpressions.every((e) => /^"[^"]+"$/.test(e)))
+  const bad = (name: string, expr: unknown[], re: RegExp): void => {
+    const r = prov(expr)
+    check(`🔴 provider 말버릇 ${name} → 거부`, !r.ok && r.problems.some((p) => re.test(p)), r.ok ? '통과했다' : r.problems.join(' / '))
+  }
+  bad('빈 글자', [''], /noGoExpressions\[0\]: 비었다/)
+  bad('1자', ['네'], /2자 미만/)
+  bad('줄바꿈', ['그래도\n다행'], /카드 한 줄을 깨는 글자/)
+  bad('구분자(·)', ['그래도 · 다행'], /카드 한 줄을 깨는 글자/)
+  bad('embedded 큰따옴표(앞판 정본 모양)', ['"그래도 다행이죠"'], /따옴표가 들어 있다/)
+  bad('굽은 따옴표', ['“그래도 다행이죠”'], /따옴표가 들어 있다/)
+  bad('끝의 " 류"', ['그래도 다행이죠 류'], /끝의 " 류"/)
+  bad('중복', ['그래도 다행이죠', '그래도 다행이죠'], /noGoExpressions: 중복/)
+  bad('문자열 아님', [3], /문자열이 아니다/)
+  bad('금지 낱말', [`${BRAND_BANNED_WORDS[0]} 분들`], /브랜드 금지 낱말/)
+  // 🔴 정본(supplement · resume) 파일은 느슨해지지 않는다 — 따옴표 없는 말버릇은 여전히 거부 · 따옴표 + 류 는 그대로 통과
+  check('🔴 정본 파일 — 따옴표 + " 류" 말버릇 그대로 통과', parseCreativeFile(JSON.stringify({ P26: { ...GOOD, noGoExpressions: ['"우리 때는" 류', '"요즘 애들"'] } })).ok)
+  check('🔴 정본 파일 — 따옴표 없는 말버릇은 여전히 거부', !parseCreativeFile(JSON.stringify({ P26: { ...GOOD, noGoExpressions: ['우리 때는'] } })).ok)
+  // 🔴 실측 canary 재현 — 6명이 같은 모양(따옴표 없는 말버릇)으로 냈다. 앞 계약은 6/6 invalid, 지금 계약은 6/6 통과
+  const plainSix = JSON.stringify(Object.fromEntries(SIX.map((c) => [c, providerOf(GOOD6[c]!)])))
+  const nowParse = parseCreativeBatch(plainSix, SIX)
+  check('🔴 6명 전원 따옴표 없는 말버릇 → 6/6 형식 통과 · 정본 모양으로 변환', nowParse.structuralOk && Object.keys(nowParse.creatives).length === 6
+    && SIX.every((c) => JSON.stringify(nowParse.creatives[c]) === JSON.stringify(GOOD6[c])))
+  const oldContract = SIX.filter((c) => parseCreative(JSON.stringify(JSON.parse(plainSix)[c])).ok).length
+  check('같은 응답을 정본 파서(앞 batch 계약)로 읽으면 0/6 — canary 실패 모양 재현', oldContract === 0)
 }
 
 // ─────────────────────────────────────────────────────────

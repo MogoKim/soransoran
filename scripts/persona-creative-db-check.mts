@@ -39,6 +39,7 @@ const URL = process.env.DATABASE_URL ?? ''
 
 const { PrismaClient } = await import('@prisma/client')
 const { writeFakePersonaAsset } = await import('./lib/fake-persona-asset.mjs')
+const { noGoExpressionKey } = await import('../src/lib/persona-no-go')
 type PersonaCreative = import('../src/lib/persona-autogen').PersonaCreative
 
 let pass = 0
@@ -60,6 +61,10 @@ const TITLES = ['혼자 가게 지키며 두 아이', '사별 뒤 직장과 간�
 const PERS = [['꼼꼼함', '말수 적음', '현실적'], ['참을성 있음', '담담함', '정 많음'], ['느긋함', '잘 웃음', '눈치 빠름'],
   ['독립적', '조용함', '책임감 강함'], ['걱정 많음', '다정함', '부지런함'], ['솔직함', '털털함', '계획적'],
   ['차분함', '살가움', '기억력 좋음'], ['씩씩함', '고집 있음', '손이 큼']]
+/** 🔴 provider 가 내는 모양 — 말버릇은 따옴표 없는 글자만(코드가 정본으로 감싼다) */
+const providerOf = (c: PersonaCreative): Record<string, unknown> => ({ ...c, noGoExpressions: c.noGoExpressions.map(noGoExpressionKey) })
+const providerMap = (m: Record<string, PersonaCreative>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(m).map(([k, v]) => [k, providerOf(v)]))
 const creativeOf = (i: number): PersonaCreative => ({
   title: TITLES[i]!,
   personality: PERS[i]!,
@@ -85,7 +90,7 @@ const T = mkdtempSync(join(tmpdir(), 'soran-creative-db-'))
 const asset = writeFakePersonaAsset({ home: T, speakers: 40 })
 const assetTexts = (JSON.parse(readFileSync(asset.corpus, 'utf-8')) as { comments: { speakerId: string; content: string }[] }).comments
 const creativeFile = join(T, 'fake-creative.json')
-writeFileSync(creativeFile, JSON.stringify(Object.fromEntries(CODES.map((c, i) => [c, creativeOf(i)]))))
+writeFileSync(creativeFile, JSON.stringify(providerMap(Object.fromEntries(CODES.map((c, i) => [c, creativeOf(i)])))))
 
 const cli = (args: string[], extraEnv: Record<string, string>) => {
   const log = join(T, `fetch-${Date.now()}-${Math.random().toString(36).slice(2)}.log`)
@@ -241,7 +246,7 @@ try {
     const SIX = ['P26', 'P27', 'P28', 'P29', 'P30', 'P32']
     const good = JSON.parse(readFileSync('scripts/__fixtures__/persona-creative-batch-good.json', 'utf-8')) as Record<string, PersonaCreative>
     const goodFile = join(T, 'batch-good.json')
-    writeFileSync(goodFile, JSON.stringify(good))
+    writeFileSync(goodFile, JSON.stringify(providerMap(good)))
     const b7 = await counts()
 
     const out7 = join(T, 'batch-7.json')
@@ -260,11 +265,17 @@ try {
       (g7.out.split('── 후보 판정')[1] ?? '').split('\n').filter((l) => /^  P\d\d  /.test(l)).join(' | '))
     const f7 = existsSync(out7) ? JSON.parse(readFileSync(out7, 'utf-8')) as Record<string, PersonaCreative> : {}
     check('결과 파일 = 6명 그대로 (--supplement 모양)', SIX.every((c) => JSON.stringify(f7[c]) === JSON.stringify(good[c])) && Object.keys(f7).length === 6)
+    const providerSent = JSON.parse(readFileSync(goodFile, 'utf-8')) as Record<string, { noGoExpressions: string[] }>
+    check('🔴 provider 는 따옴표 없는 말버릇을 냈고(가짜 응답) 결과 파일은 정본 `"말버릇"` 이다',
+      SIX.every((c) => providerSent[c]!.noGoExpressions.every((e) => !/["“”]/.test(e)))
+      && SIX.every((c) => f7[c]!.noGoExpressions.length > 0 && f7[c]!.noGoExpressions.every((e) => /^"[^"]+"$/.test(e))))
+    const sentPayloadOut = g7.sent.length === 1 ? (JSON.parse(g7.sent[0]!) as { body: string }).body : ''
+    check('🔴 PASS batch 는 실패 파일을 남기지 않는다', !existsSync(`${out7}.batch-fail.json`) && sentPayloadOut !== '')
     check('🔴 batch 장부 — 호출 1회 · 최악 예약 ≤ batch 상한 $0.0300', /호출 1회 · 입력 \d+ tok · 출력 \d+ tok · 실제 비용 \$[\d.]+ · 최악 예약 \$[\d.]+ \(판정: 최악 예약 ≤ batch 상한 \$0\.0300 · 호출 1회\)/.test(g7.out))
 
     // 🔴 코드 하나 빠짐 → 전체 invalid · creative 0
     const missFile = join(T, 'batch-miss.json')
-    writeFileSync(missFile, JSON.stringify(Object.fromEntries(SIX.filter((c) => c !== 'P30').map((c) => [c, good[c]]))))
+    writeFileSync(missFile, JSON.stringify(providerMap(Object.fromEntries(SIX.filter((c) => c !== 'P30').map((c) => [c, good[c]!])))))
     const out7b = join(T, 'batch-7b.json')
     const m7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7b}`], { FAKE_PROVIDER_CREATIVE_FILE: missFile })
     check('🔴 코드 누락 → 호출 1 · batch FAIL(형식 invalid) · creative 0 · valid 0', m7.paid === 1 && /batch FAIL — 형식 invalid/.test(m7.out)
@@ -273,8 +284,8 @@ try {
 
     // 🔴 실측 모양 — 3명 형식 통과 · 3명 형식 위반(변주 2개). 품질은 3명만 보고 PASS 라 하면 안 된다
     const partFile = join(T, 'batch-part.json')
-    writeFileSync(partFile, JSON.stringify(Object.fromEntries(SIX.map((c) => [c,
-      ['P26', 'P30', 'P32'].includes(c) ? { ...good[c]!, variations: good[c]!.variations.slice(0, 2) } : good[c]]))))
+    writeFileSync(partFile, JSON.stringify(providerMap(Object.fromEntries(SIX.map((c) => [c,
+      ['P26', 'P30', 'P32'].includes(c) ? { ...good[c]!, variations: good[c]!.variations.slice(0, 2) } : good[c]!])))))
     const out7p = join(T, 'batch-7p.json')
     const p7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7p}`], { FAKE_PROVIDER_CREATIVE_FILE: partFile })
     check('🔴 3/6 형식 통과 → 품질 INCOMPLETE · batch FAIL', p7.paid === 1 && /batch FAIL — 형식 invalid · 품질 INCOMPLETE/.test(p7.out)
@@ -283,12 +294,28 @@ try {
     const pf = existsSync(`${out7p}.batch-fail.json`) ? JSON.parse(readFileSync(`${out7p}.batch-fail.json`, 'utf-8')) as { status: string; quality: string; partialCreatives: Record<string, unknown> } : null
     check('🔴 3/6 → supplement 파일 0 · 실패 파일에 상태 + 부분 결과', !existsSync(out7p) && pf?.status === 'BATCH_FAIL' && pf.quality === 'INCOMPLETE'
       && JSON.stringify(Object.keys(pf.partialCreatives).sort()) === JSON.stringify(['P27', 'P28', 'P29']))
+    const po = (pf as unknown as { providerOutput: Record<string, { variations: string[] }> | null; providerOutputWithheld: string | null } | null)
+    check('🔴 실패 파일에 provider 응답 구조가 남는다(사후 진단) — 6명 코드 · 형식 위반 후보의 변주 2개까지',
+      po !== null && po.providerOutputWithheld === null && po.providerOutput !== null
+      && JSON.stringify(Object.keys(po.providerOutput).sort()) === JSON.stringify(SIX) && po.providerOutput.P30!.variations.length === 2)
+    const pfRaw = existsSync(`${out7p}.batch-fail.json`) ? readFileSync(`${out7p}.batch-fail.json`, 'utf-8') : ''
+    check('🔴 실패 파일 — 합성 자산 댓글 원문 · 화자 id 0', pfRaw !== '' && !assetTexts.some((c) => pfRaw.includes(c.content) || pfRaw.includes(c.speakerId)))
+
+    // 🔴 응답에 댓글 원문이 그대로 섞이면 실패 파일에 응답을 남기지 않는다
+    const leakFile = join(T, 'batch-leak.json')
+    writeFileSync(leakFile, JSON.stringify(providerMap(Object.fromEntries(SIX.map((c) => [c,
+      c === 'P26' ? { ...good[c]!, variations: [assetTexts[0]!.content, '되묻기'] } : good[c]!])))))
+    const out7l = join(T, 'batch-7l.json')
+    const l7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7l}`], { FAKE_PROVIDER_CREATIVE_FILE: leakFile })
+    const lf = existsSync(`${out7l}.batch-fail.json`) ? JSON.parse(readFileSync(`${out7l}.batch-fail.json`, 'utf-8')) as { providerOutput: unknown; providerOutputWithheld: string | null } : null
+    check('🔴 응답에 댓글 원문 → 실패 파일에 응답 0 · 보류 사유', l7.paid === 1 && lf !== null && lf.providerOutput === null
+      && /댓글 원문 \d+건/.test(lf.providerOutputWithheld ?? '') && !readFileSync(`${out7l}.batch-fail.json`, 'utf-8').includes(assetTexts[0]!.content))
     const asSup = cli(['--db', '--count=6', `--supplement=${out7p}.batch-fail.json`], {})
     check('🔴 실패 파일을 --supplement 로 쓰면 엄격 파서가 거부한다', asSup.run.status === 1 && /엄격 검증을 통과하지 못했다/.test(asSup.out))
     // 🔴 중복 키(원문 그대로)
-    const ok = JSON.stringify(Object.fromEntries(SIX.map((c) => [c, good[c]])))
+    const ok = JSON.stringify(providerMap(Object.fromEntries(SIX.map((c) => [c, good[c]!]))))
     const dupFile = join(T, 'batch-dup.json')
-    writeFileSync(dupFile, JSON.stringify({ __raw__: `${ok.slice(1, -1)},"P27":${JSON.stringify(good.P27)}}` }))
+    writeFileSync(dupFile, JSON.stringify({ __raw__: `${ok.slice(1, -1)},"P27":${JSON.stringify(providerOf(good.P27!))}}` }))
     const d7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${join(T, 'batch-7d.json')}`], { FAKE_PROVIDER_CREATIVE_FILE: dupFile })
     check('🔴 코드 중복 → batch FAIL · valid 0', d7.paid === 1 && /중복 코드: P27/.test(d7.out) && validOf(d7.out) === 0, (/batch[^\n]*/.exec(d7.out) ?? [''])[0])
     // 🔴 상한

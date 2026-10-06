@@ -15,7 +15,7 @@
 import { costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
-  CREATIVE_TIMEOUT_MS, creativeKeyOf, creativePeerOf, creativeUserPayload, parseCreative, payloadLeaks,
+  CREATIVE_TIMEOUT_MS, creativeKeyOf, creativePeerOf, creativeUserPayload, parseProviderCreative, payloadLeaks,
   CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_MAX_OUTPUT_TOKENS, CREATIVE_BATCH_SYSTEM_PROMPT, CREATIVE_BATCH_TIMEOUT_MS,
   creativeBatchPayload, parseCreativeBatch,
   type CompactPeer, type CreativeBrief, type CreativePeer,
@@ -139,7 +139,8 @@ export async function generateCreatives(input: {
         problems: [res.maxTokensReached ? '출력 상한에 닿았다(잘림)' : `${res.errorCode ?? 'ERROR'}`] })
       continue
     }
-    const parsed = parseCreative(res.rawText)
+    // 🔴 provider 출력 계약(말버릇 글자만) → 정본 형식 — batch 와 같은 파서
+    const parsed = parseProviderCreative(res.rawText)
     if (!parsed.ok) { outcomes.push({ code: brief.code, status: 'invalid', creative: null, usd, problems: parsed.problems }); continue }
     const key = creativeKeyOf(parsed.creative)
     if (seen.has(key)) {
@@ -173,6 +174,13 @@ export type CreativeBatchRun =
     creatives: Record<string, PersonaCreative>
     problems: string[]
     ledger: CreativeLedger
+    /**
+     * 🔴 **실패 진단용 provider 응답 글** — 형식 · 품질 실패를 사후에 볼 수 있게 남긴다.
+     *    입력에 댓글 원문 · 화자 · 회원 · 표시명 칸이 없으므로 응답에도 없다 — 그래도 이 후보들 묶음의 댓글 원문이
+     *    하나라도 그대로 들어 있으면 남기지 않는다(`null` · `providerTextWithheld`).
+     */
+    providerText: string | null
+    providerTextWithheld: string | null
   }
   | { ok: false; reason: string; ledger: CreativeLedger }
 
@@ -226,13 +234,18 @@ export async function generateCreativeBatch(input: {
     ledger.outputTokens = res.outputTokens
   } else ledger.usd = null
 
+  const leaked = codes.reduce((n, c) => n + payloadLeaks(res.rawText, input.forbiddenTextsOf(c)), 0)
+  const providerText = leaked === 0 ? res.rawText : null
+  const providerTextWithheld = leaked === 0 ? null : `응답에 댓글 원문 ${leaked}건이 그대로 있어 남기지 않았다`
+  const keep = { providerText, providerTextWithheld }
+
   // 🔴 재시도 0 — 실패 · 잘림은 batch 전체가 creative 0 으로 끝난다
   if (!res.ok || res.maxTokensReached) {
-    return { ok: true, status: 'call-failed', creatives: {}, ledger,
+    return { ok: true, status: 'call-failed', creatives: {}, ledger, ...keep,
       problems: [res.maxTokensReached ? '출력 상한에 닿았다(잘림)' : `${res.errorCode ?? 'ERROR'}`] }
   }
   const parsed = parseCreativeBatch(res.rawText, codes)
-  if (!parsed.structuralOk) return { ok: true, status: 'invalid', creatives: {}, ledger, problems: parsed.problems }
+  if (!parsed.structuralOk) return { ok: true, status: 'invalid', creatives: {}, ledger, problems: parsed.problems, ...keep }
   const problems = Object.entries(parsed.invalid).map(([c, ps]) => `${c}: ${ps.join(' / ')}`)
   // 같은 batch 안 글자까지 같은 creative — 뒤 코드를 버린다
   const seen = new Map<string, string>()
@@ -243,7 +256,7 @@ export async function generateCreativeBatch(input: {
     seen.set(k, c)
     creatives[c] = cr
   }
-  return { ok: true, status: problems.length === 0 ? 'parsed' : 'invalid', creatives, problems, ledger }
+  return { ok: true, status: problems.length === 0 ? 'parsed' : 'invalid', creatives, problems, ledger, ...keep }
 }
 
 /**

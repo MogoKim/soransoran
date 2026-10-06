@@ -109,7 +109,7 @@ export const CREATIVE_SYSTEM_PROMPT = [
   '- title: 이 사람의 처지를 한 구절로. 이름 · 실명 · 지명 상호를 넣지 않는다',
   '- personality: 성격 3~6개 (예: "현실적", "말수 적음")',
   '- noGoTopics: 이 사람이 글이나 댓글에서 꺼내지 않을 소재 1~4개. 두 글자 이상 · 따옴표 없이',
-  '- noGoExpressions: 이 사람이 쓰지 않을 말버릇 1~3개. 각각 큰따옴표로 감싼다. 비슷한 말을 포함하면 뒤에 " 류" (예: "\\"그래도 다행이죠\\" 류")',
+  '- noGoExpressions: 이 사람이 쓰지 않을 말버릇 1~3개. **말버릇 글자 그대로만** — 따옴표 · "류" 를 붙이지 않는다 (예: ["그래도 다행이죠", "다 지나가요"])',
   `- variations: 이 사람이 쓰는 글 · 댓글의 변주 ${VARIATION_MIN}~${VARIATION_MAX}개 (예: "짧은 공감", "되묻기")`,
   '',
   '규칙',
@@ -232,6 +232,46 @@ export function parseCreative(raw: string): CreativeParse {
   return { ok: true, creative: { title, personality, noGoTopics, noGoExpressions, variations } }
 }
 
+// ─────────────────────────────────────────────────────────
+// 🔴 provider 출력 계약 — 정본 저장 형식과 분리한다 (2026-10-06)
+// ─────────────────────────────────────────────────────────
+//
+// 정본(카드 · seed · DB · supplement 파일)의 말버릇은 따옴표로 감싼 글이다 — 카드 파서는 noGo 줄에서
+// **따옴표가 있는 항목만** 말버릇으로 가른다(`isNoGoExpressionItem`). 하류 판정은 전부 `noGoExpressionKey` 로
+// 따옴표 · `류` 를 벗긴 열쇠를 본다(`noGoHits` · 프롬프트 · `hardFilter`).
+// 실측(production batch canary 6/6 CREATIVE_INVALID): JSON 문자열 안에 escaped 따옴표 + 선택적 " 류" 를 모델이
+// 쓰게 한 계약이 무너졌다. 그래서 **모델은 말버릇 글자만** 내고, 코드가 정본 모양 `"말버릇"` 으로 감싼다.
+// supplement · resume 파일은 정본이므로 `parseCreative` 그대로 엄격하게 읽는다(느슨하게 만들지 않는다).
+
+/** 🔴 provider 말버릇에 들어오면 안 되는 글자 — 따옴표는 코드가 붙인다 */
+const PROVIDER_QUOTES = /["“”'‘’]/
+
+/**
+ * 🔴 **provider creative 를 읽는다.** noGoExpressions 는 따옴표 없는 말버릇 배열이어야 한다 —
+ *    따옴표 · 끝의 " 류" · 문자열 아님은 거부하고, 통과한 말버릇만 `"말버릇"` 으로 감싼 뒤
+ *    **정본 파서(`parseCreative`)를 그대로** 통과시킨다(2자 · 구분자 · 줄바꿈 · 금지어 · 중복은 거기서 본다).
+ */
+export function parseProviderCreative(raw: string): CreativeParse {
+  let obj: unknown
+  try { obj = JSON.parse(raw) } catch { return { ok: false, problems: ['JSON 이 아니다'] } }
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, problems: ['객체가 아니다'] }
+  const rec = { ...(obj as Record<string, unknown>) }
+  const problems: string[] = []
+  if (Array.isArray(rec.noGoExpressions)) {
+    rec.noGoExpressions = rec.noGoExpressions.map((e, i) => {
+      if (typeof e !== 'string') { problems.push(`noGoExpressions[${i}]: 문자열이 아니다`); return e }
+      const t = e.trim()
+      if (t === '') problems.push(`noGoExpressions[${i}]: 비었다`)
+      if (PROVIDER_QUOTES.test(t)) problems.push(`noGoExpressions[${i}]: 따옴표가 들어 있다 — 말버릇 글자만 낸다`)
+      if (/\s류$/.test(t)) problems.push(`noGoExpressions[${i}]: 끝의 " 류" — 말버릇 글자만 낸다`)
+      return `"${t}"`
+    })
+  }
+  const p = parseCreative(JSON.stringify(rec))
+  if (problems.length > 0) return { ok: false, problems: [...problems, ...(p.ok ? [] : p.problems)] }
+  return p
+}
+
 export type CreativeFileParse =
   | { ok: true; creatives: Record<string, PersonaCreative> }
   | { ok: false; problems: string[] }
@@ -305,7 +345,7 @@ export const CREATIVE_BATCH_SYSTEM_PROMPT = [
   '- title: 이 사람의 처지와 결을 한 구절로',
   '- personality: 성격 3~6개',
   '- noGoTopics: 꺼내지 않을 소재 1~4개. 두 글자 이상 · 따옴표 없이',
-  '- noGoExpressions: 쓰지 않을 말버릇 1~3개. 각각 큰따옴표로 감싼다. 비슷한 말을 포함하면 뒤에 " 류"',
+  '- noGoExpressions: 쓰지 않을 말버릇 1~3개. **말버릇 글자 그대로만** — 따옴표 · "류" 를 붙이지 않는다 (예: ["그래도 다행이죠", "다 지나가요"])',
   `- variations: 글 · 댓글에서 실제로 보이는 **대화 행동** ${VARIATION_MIN}~${VARIATION_MAX}개`,
   '',
   '묶음 규칙 — 여섯 명이 서로 다른 실제 사람처럼 느껴져야 한다',
@@ -364,7 +404,7 @@ export function parseCreativeBatch(raw: string, requested: readonly string[]): C
   const creatives: Record<string, PersonaCreative> = {}
   const invalid: Record<string, string[]> = {}
   for (const k of requested) {
-    const p = parseCreative(JSON.stringify((obj as Record<string, unknown>)[k]))
+    const p = parseProviderCreative(JSON.stringify((obj as Record<string, unknown>)[k]))
     if (p.ok) creatives[k] = p.creative
     else invalid[k] = p.problems
   }

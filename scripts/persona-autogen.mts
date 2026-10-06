@@ -241,7 +241,17 @@ if (GENERATE) {
     return creativeBriefOf({ code: v.code, life: lifeOf.get(v.code)!, voiceCore: voiceCoreFromBundle(ev.bundle), style: ev.bundle.style })
   })
   const { callProvider } = await import('./lib/voice-m3-provider.mjs')
-  const forbiddenTextsOf = (code: string): string[] => voice.byCode.get(code)?.bundle.comments.map((x) => x.text) ?? []
+  /**
+   * 🔴 **원문 · 화자 대조 목록 = 말투 정본 자산 전체** — 나가는 요청과 돌아온 응답(실패 파일 보존) 양쪽에 쓴다.
+   *    후보 묶음 것만 보면 다른 화자의 댓글이 섞여도 못 잡는다. 화자 id 도 넣는다
+   */
+  const { loadCanonAsset } = await import('./lib/persona-reference-store.mjs')
+  const canonRows = loadCanonAsset().rows
+  const forbiddenAll = [...new Set([
+    ...canonRows.flatMap((r) => [r.text, r.speakerId]),
+    ...[...voice.byCode.values()].flatMap((v) => v.bundle.comments.map((x) => x.text)),
+  ])]
+  const forbiddenTextsOf = (_code: string): string[] => forbiddenAll
   if (BATCH) {
     // 🔴 batch — 호출 정확히 1회. 기존 Persona 는 압축(제목 · 핵심 성격)만 보낸다
     batchRun = await generateCreativeBatch({
@@ -304,10 +314,17 @@ if (GENERATE && gen !== null && gen.ok) {
   if (batchRun === null) writeAtomicJson(CREATIVE_OUT!, creative)
   else if (batchPass) writeAtomicJson(CREATIVE_OUT!, creative)
   else {
+    // 🔴 진단 보존 — provider 응답(원문 유출 대조를 통과한 경우만). JSON 이면 구조 그대로, 아니면 글 그대로.
+    //    이 파일은 코드 키가 아니라 `--supplement` · `--resume-creative` 엄격 파서가 거부한다
+    const text = batchRun.ok ? batchRun.providerText : null
+    let providerOutput: unknown = null
+    if (text !== null) { try { providerOutput = JSON.parse(text) } catch { providerOutput = text } }
     writeAtomicJson(`${CREATIVE_OUT!}.batch-fail.json`, {
       status: 'BATCH_FAIL', quality: quality?.status ?? null,
       problems: [...(batchRun.ok ? batchRun.problems : [batchRun.reason]), ...(quality?.problems ?? [])],
       partialCreatives: creative,
+      providerOutput,
+      providerOutputWithheld: batchRun.ok ? batchRun.providerTextWithheld : '부르지 않았다',
     })
   }
 }
