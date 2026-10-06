@@ -106,11 +106,11 @@ export const CREATIVE_SYSTEM_PROMPT = [
   '주어진 생활사 골격과 말투 관찰값에 맞는 Persona 설계값을 만든다. 실존 인물을 만들거나 묘사하지 않는다.',
   '',
   '출력은 JSON 객체 하나다. 키는 정확히 다섯 개: title · personality · noGoTopics · noGoExpressions · variations.',
-  '- title: 이 사람의 처지를 한 구절로 (2~24자). 이름 · 실명 · 지명 상호를 넣지 않는다',
-  '- personality: 성격 3~6개. 각 2~12자 (예: "현실적", "말수 적음")',
-  '- noGoTopics: 이 사람이 글이나 댓글에서 꺼내지 않을 소재 1~4개. 각 2~20자. 따옴표 없이',
+  '- title: 이 사람의 처지를 한 구절로. 이름 · 실명 · 지명 상호를 넣지 않는다',
+  '- personality: 성격 3~6개 (예: "현실적", "말수 적음")',
+  '- noGoTopics: 이 사람이 글이나 댓글에서 꺼내지 않을 소재 1~4개. 두 글자 이상 · 따옴표 없이',
   '- noGoExpressions: 이 사람이 쓰지 않을 말버릇 1~3개. 각각 큰따옴표로 감싼다. 비슷한 말을 포함하면 뒤에 " 류" (예: "\\"그래도 다행이죠\\" 류")',
-  `- variations: 이 사람이 쓰는 글 · 댓글의 변주 ${VARIATION_MIN}~${VARIATION_MAX}개. 각 2~24자 (예: "짧은 공감", "되묻기")`,
+  `- variations: 이 사람이 쓰는 글 · 댓글의 변주 ${VARIATION_MIN}~${VARIATION_MAX}개 (예: "짧은 공감", "되묻기")`,
   '',
   '규칙',
   '- 말투 관찰값과 어긋나지 않게 한다 (짧은 문장인 사람에게 긴 글 변주를 주지 않는다)',
@@ -147,8 +147,16 @@ export type CreativeParse =
 
 const charLen = (s: string): number => [...s].length
 
+/**
+ * 🔴 **항목 글자 수 — 하류 계약이 요구하는 것만** (2026-10-06 보정).
+ *    추적 결과 항목별 **최대** 길이를 요구하는 소비자는 없다 — DB 칸은 `String[]`/`Json`, 카드 머리 정규식은
+ *    `(.+)`, `verifySeedCard` 는 개수만, 프롬프트(`jsonBrief`)는 자르지 않는다. 그래서 최대는 두지 않는다.
+ *    출력 전체 크기는 provider 출력 상한 · 항목 개수 · 줄바꿈/구분자 금지가 묶는다.
+ *    **최소**는 둘이다 — ① 빈 항목은 카드 한 줄에서 사라져 렌더 ≠ 파서가 된다(전 칸 1자 이상)
+ *    ② noGo 소재 · 말버릇 열쇠는 본문 **부분 문자열 포함**으로 걸린다(`noGoHits`) — 한 글자면 거의 모든 글이 걸린다(2자 이상).
+ */
 function stringList(
-  v: unknown, name: string, min: number, max: number, itemMin: number, itemMax: number, problems: string[],
+  v: unknown, name: string, min: number, max: number, itemMin: number, problems: string[],
 ): string[] {
   if (!Array.isArray(v)) { problems.push(`${name}: 배열이 아니다`); return [] }
   if (v.length < min || v.length > max) problems.push(`${name}: ${v.length}개 (${min}~${max}개여야 한다)`)
@@ -157,7 +165,7 @@ function stringList(
     if (typeof x !== 'string') { problems.push(`${name}[${i}]: 문자열이 아니다`); continue }
     const t = x.trim()
     if (t !== x) problems.push(`${name}[${i}]: 앞뒤 공백`)
-    if (charLen(t) < itemMin || charLen(t) > itemMax) problems.push(`${name}[${i}]: ${charLen(t)}자 (${itemMin}~${itemMax}자)`)
+    if (charLen(t) < itemMin) problems.push(`${name}[${i}]: ${charLen(t)}자 < ${itemMin}자`)
     out.push(t)
   }
   return out
@@ -183,13 +191,13 @@ export function parseCreative(raw: string): CreativeParse {
   else {
     title = rec.title.trim()
     if (title !== rec.title) problems.push('title: 앞뒤 공백')
-    if (charLen(title) < 2 || charLen(title) > 24) problems.push(`title: ${charLen(title)}자 (2~24자)`)
+    if (charLen(title) < 1) problems.push('title: 비었다')
     if (/—/.test(title)) problems.push('title: 줄표(—)는 카드 머리 구분자다')
   }
-  const personality = stringList(rec.personality, 'personality', 3, 6, 2, 12, problems)
-  const noGoTopics = stringList(rec.noGoTopics, 'noGoTopics', 1, 4, 2, 20, problems)
-  const noGoExpressions = stringList(rec.noGoExpressions, 'noGoExpressions', 1, 3, 4, 26, problems)
-  const variations = stringList(rec.variations, 'variations', VARIATION_MIN, VARIATION_MAX, 2, 24, problems)
+  const personality = stringList(rec.personality, 'personality', 3, 6, 1, problems)
+  const noGoTopics = stringList(rec.noGoTopics, 'noGoTopics', 1, 4, 2, problems)
+  const noGoExpressions = stringList(rec.noGoExpressions, 'noGoExpressions', 1, 3, 1, problems)
+  const variations = stringList(rec.variations, 'variations', VARIATION_MIN, VARIATION_MAX, 1, problems)
 
   // ── 글자 규칙 · 칸 종류 ──
   const all: [string, string][] = [
@@ -206,7 +214,7 @@ export function parseCreative(raw: string): CreativeParse {
   for (const t of noGoTopics) if (isNoGoExpressionItem(t)) problems.push(`noGoTopics: 따옴표가 든 항목은 말버릇이다 — ${t.length}자`)
   for (const e of noGoExpressions) {
     if (!/^"[^"]+"( 류)?$/.test(e)) problems.push('noGoExpressions: 큰따옴표로 감싼 말버릇(뒤에 " 류" 만 허용)이 아니다')
-    else if (charLen(noGoExpressionKey(e)) < 2) problems.push('noGoExpressions: 따옴표 안이 비었다')
+    else if (charLen(noGoExpressionKey(e)) < 2) problems.push('noGoExpressions: 따옴표 안이 2자 미만 — 부분 문자열 대조라 거의 모든 글에 걸린다')
   }
 
   // ── 중복 — 칸 안 · 칸 사이 ──
@@ -294,11 +302,11 @@ export const CREATIVE_BATCH_SYSTEM_PROMPT = [
   '',
   '출력은 JSON 객체 하나다. 최상위 키는 candidates 의 code 그대로이고 **빠짐 · 추가 · 중복이 없다**.',
   '각 값은 키가 정확히 다섯 개인 객체다: title · personality · noGoTopics · noGoExpressions · variations.',
-  '- title: 이 사람의 처지와 결을 한 구절로 (2~24자)',
-  '- personality: 성격 3~6개. 각 2~12자',
-  '- noGoTopics: 꺼내지 않을 소재 1~4개. 각 2~20자. 따옴표 없이',
+  '- title: 이 사람의 처지와 결을 한 구절로',
+  '- personality: 성격 3~6개',
+  '- noGoTopics: 꺼내지 않을 소재 1~4개. 두 글자 이상 · 따옴표 없이',
   '- noGoExpressions: 쓰지 않을 말버릇 1~3개. 각각 큰따옴표로 감싼다. 비슷한 말을 포함하면 뒤에 " 류"',
-  `- variations: 글 · 댓글에서 실제로 보이는 **대화 행동** ${VARIATION_MIN}~${VARIATION_MAX}개. 각 2~24자`,
+  `- variations: 글 · 댓글에서 실제로 보이는 **대화 행동** ${VARIATION_MIN}~${VARIATION_MAX}개`,
   '',
   '묶음 규칙 — 여섯 명이 서로 다른 실제 사람처럼 느껴져야 한다',
   '- 후보끼리 같은 성격 낱말을 쓰지 않는다. 같은 뜻의 다른 말로 바꾼 것도 같은 성격이다',
@@ -369,25 +377,41 @@ export function parseCreativeBatch(raw: string, requested: readonly string[]): C
 
 /** 사람 전체를 한 상태명으로 부르는 낱말 — 제목에 들어가면 거부 */
 export const STATUS_LABELS: readonly string[] = ['이혼녀', '이혼남', '미망인', '과부', '노처녀', '노총각', '돌싱녀', '독신녀', '홀어미']
-/** 대화 행동 낱말을 비교할 때 빼는 꾸밈말 — 형용사 · 정도만 바꾼 행동을 같은 행동으로 본다 */
-const BEHAVIOR_MODIFIERS: readonly string[] = [
-  '짧은', '짧게', '긴', '길게', '한', '두', '조용', '차분', '담담', '덤덤', '천천', '먼저', '가끔', '자주', '작은',
-  '일상', '남의', '남들', '자신', '자기', '나의', '내', '왜', '그렇', '그리', '중간', '살짝', '뒤끝', '없이', '있는',
-]
-const PARTICLE_TAIL = /(으로|에서|하기|하게|하는|해서|히|한|를|을|이|가|은|는|의|에|로|과|와|도|기)$/
+/**
+ * 🔴 **대화 행동 비교 — 핵심 낱말의 절반 이상이 같으면 같은 행동** (2026-10-06 보정).
+ *    앞판은 낱말 앞 두 글자를 열쇠로 삼고 하나라도 겹치면 같은 행동으로 봤다. 그러면 "사진 묘사로 시작" 과
+ *    "계절 인사로 시작" 이 `시작` 한 낱말로 같은 행동이 됐다(오탐). 이제는
+ *      핵심 낱말 = 띄어쓰기 단위에서 끝의 조사 · 어미 하나를 떼고, 정도 · 꾸밈말을 뺀 것
+ *      같은 행동 = 두 행동의 핵심 낱말 중 **적은 쪽의 절반 이상**이 같다
+ *    🟡 알려진 미탐: 같은 뜻의 다른 낱말("해결책" · "해결법")은 같은 행동으로 보지 않는다 — 뜻 사전을 두지 않는다.
+ */
+const BEHAVIOR_MODIFIERS: ReadonlySet<string> = new Set([
+  '짧은', '짧게', '긴', '길게', '한', '두', '조용한', '조용히', '차분한', '차분히', '담담한', '담담히', '덤덤하게', '천천히',
+  '먼저', '가끔', '자주', '작은', '살짝', '중간중간', '일상', '일상의', '남의', '남들', '자신의', '자기', '내', '왜', '좀',
+])
+const BEHAVIOR_TAILS = ['하기', '하게', '하는', '해서', '으로', '에서', '부터', '처럼', '까지', '기', '히', '를', '을', '이', '가', '은', '는', '의', '에', '로', '과', '와', '도', '만'] as const
 
-/** 대화 행동 → 비교 열쇠 묶음(낱말 앞 두 글자 · 꾸밈말 제외). 같은 열쇠가 하나라도 있으면 같은 행동이다 */
-export function behaviorStemsOf(v: string): string[] {
+/** 대화 행동 → 핵심 낱말 묶음 */
+export function behaviorWordsOf(v: string): string[] {
   const out: string[] = []
   for (const raw of v.split(/\s+/)) {
-    let w = raw.replace(/[^\p{L}\p{N}]/gu, '')
-    if (w.length > 2) w = w.replace(PARTICLE_TAIL, '')
-    if ([...w].length < 2) continue
-    const stem = [...w].slice(0, 2).join('')
-    if (BEHAVIOR_MODIFIERS.some((m) => stem === [...m].slice(0, 2).join(''))) continue
-    out.push(stem)
+    const w0 = raw.replace(/[^\p{L}\p{N}]/gu, '')
+    if (w0 === '' || BEHAVIOR_MODIFIERS.has(w0)) continue
+    const tail = BEHAVIOR_TAILS.find((t) => w0.endsWith(t) && [...w0].length - [...t].length >= 2)
+    const w = tail === undefined ? w0 : w0.slice(0, w0.length - tail.length)
+    if (BEHAVIOR_MODIFIERS.has(w)) continue
+    out.push(w)
   }
   return [...new Set(out)]
+}
+
+/** 🔴 같은 대화 행동인가 — 적은 쪽 핵심 낱말의 절반 이상이 겹친다 */
+export function sameBehavior(a: string, b: string): boolean {
+  const A = behaviorWordsOf(a)
+  const B = new Set(behaviorWordsOf(b))
+  if (A.length === 0 || B.size === 0) return false
+  const shared = A.filter((w) => B.has(w)).length
+  return shared * 2 >= Math.min(A.length, B.size)
 }
 
 const normKey = (s: string): string => s.replace(/\s+/g, '').toLowerCase()
@@ -407,8 +431,15 @@ export type CreativeQualityInput = {
   candidates: readonly { code: string; creative: PersonaCreative; life: LifeSkeleton }[]
   /** 기존 Persona 제목(정본 카드) — 같으면 거부 */
   existingTitles: readonly string[]
+  /**
+   * 🔴 **기대 후보** — 이 묶음이 덮어야 하는 코드 전부. 하나라도 creative 가 없으면 `INCOMPLETE`(PASS 아님).
+   *    앞판은 형식 통과한 3명만 넘겨 받아 6명 묶음을 PASS 로 찍었다. 생략하면 넘겨받은 후보가 곧 기대 후보다.
+   */
+  expected?: readonly string[]
 }
 export type CreativeQuality = {
+  /** 🔴 PASS 만 통과다. INCOMPLETE = 기대 후보 중 creative 가 없는 코드가 있다 */
+  status: 'PASS' | 'FAIL' | 'INCOMPLETE'
   ok: boolean
   /** `${code}: ${rule} — 근거` */
   problems: string[]
@@ -423,7 +454,7 @@ export const UNIQUE_BEHAVIOR_MIN = 2
  *
  *    ① 후보끼리 같은 personality 항목 0 (공백 무시)
  *    ② 후보끼리 같은 variation 항목 0 (공백 무시)
- *    ③ 후보마다 다른 후보에게 없는 대화 행동 ≥ 2 — 행동 열쇠(`behaviorStemsOf`)가 하나라도 겹치면 같은 행동
+ *    ③ 후보마다 다른 후보에게 없는 대화 행동 ≥ 2 — 같은 행동 = 핵심 낱말 절반 이상 겹침(`sameBehavior`)
  *    ④ title — 다른 후보 · 기존 Persona 와 같거나, 사람을 상태명 하나로 부르면(`STATUS_LABELS`) 거부
  *    ⑤ noGo 소재가 그 사람에게 있는 생활사 축을 **전부** 막으면 거부(빈 사람)
  */
@@ -441,11 +472,8 @@ export function judgeCreativeQuality(input: CreativeQualityInput): CreativeQuali
 
   const uniqueBehaviors: Record<string, number> = {}
   for (const c of cs) {
-    const others = new Set(cs.filter((o) => o.code !== c.code).flatMap((o) => o.creative.variations.flatMap(behaviorStemsOf)))
-    const n = c.creative.variations.filter((v) => {
-      const st = behaviorStemsOf(v)
-      return st.length > 0 && st.every((s) => !others.has(s))
-    }).length
+    const others = cs.filter((o) => o.code !== c.code).flatMap((o) => o.creative.variations)
+    const n = c.creative.variations.filter((v) => behaviorWordsOf(v).length > 0 && !others.some((o) => sameBehavior(v, o))).length
     uniqueBehaviors[c.code] = n
     if (n < UNIQUE_BEHAVIOR_MIN) problems.push(`${c.code}: 고유 대화 행동 ${n}개 < ${UNIQUE_BEHAVIOR_MIN}`)
   }
@@ -468,5 +496,11 @@ export function judgeCreativeQuality(input: CreativeQualityInput): CreativeQuali
       problems.push(`${c.code}: noGo 가 생활사 축 전부(${axes.map((a) => a.axis).join('·')})를 막는다 — 빈 사람`)
     }
   }
-  return { ok: problems.length === 0, problems, uniqueBehaviors }
+  const have = new Set(cs.map((c) => c.code))
+  const missing = (input.expected ?? []).filter((c) => !have.has(c))
+  if (missing.length > 0) {
+    problems.unshift(`INCOMPLETE: 기대 ${input.expected!.length}명 중 ${have.size}명 — creative 없음 ${missing.join(',')}`)
+  }
+  const status = missing.length > 0 ? 'INCOMPLETE' : problems.length === 0 ? 'PASS' : 'FAIL'
+  return { status, ok: status === 'PASS', problems, uniqueBehaviors }
 }

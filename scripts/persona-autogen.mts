@@ -215,6 +215,8 @@ const judgeAll = (cr: Readonly<Record<string, PersonaCreative>>) => judgeAutogen
 // ── ④-b creative 생성 — 🔴 `--generate-creative` 일 때만. creative 말고 다른 이유로 막힌 후보는 부르지 않는다 ──
 let gen: CreativeRun | null = null
 let batchRun: CreativeBatchRun | null = null
+/** 🔴 이번 생성이 덮어야 하는 코드(생성 대상 + 보존분) — 묶음 품질의 기대 후보 */
+let expectedCodes: string[] | null = null
 const skippedForGen: string[] = []
 if (GENERATE) {
   /**
@@ -233,6 +235,7 @@ if (GENERATE) {
   for (const v of pre.verdicts) if (!onlyCreative.includes(v)) skippedForGen.push(`${v.code}(${v.blocks.filter((b) => b !== 'NEAR_DUPLICATE_PERSONA').join('·') || '—'})`)
   // 🔴 앞 실행에서 보존한 creative 의 코드는 부르지 않는다 — 없는 후보만
   const targets = onlyCreative.filter((v) => resumed[v.code] === undefined)
+  expectedCodes = [...new Set([...targets.map((v) => v.code), ...Object.keys(resumed)])].sort()
   const briefs = targets.map((v) => {
     const ev = voice.byCode.get(v.code)!
     return creativeBriefOf({ code: v.code, life: lifeOf.get(v.code)!, voiceCore: voiceCoreFromBundle(ev.bundle), style: ev.bundle.style })
@@ -256,15 +259,15 @@ if (GENERATE) {
     call: callProvider,
     capUsd: RUN_CAP,
   })
-  if (gen.ok) {
-    for (const o of gen.outcomes) if (o.creative !== null) creative[o.code] = o.creative
-    // 🔴 보존분 + 새 생성분을 **원자적으로** 쓴다 — 임시 파일을 같은 폴더에 쓰고 rename(반쯤 쓴 파일이 남지 않는다).
-    //    새 생성이 전부 실패해도 보존분은 그대로 남는다. `--supplement` 가 그대로 읽는 모양이다
-    mkdirSync(dirname(CREATIVE_OUT!), { recursive: true })
-    const tmp = `${CREATIVE_OUT!}.tmp-${process.pid}`
-    writeFileSync(tmp, `${JSON.stringify(creative, null, 2)}\n`)
-    renameSync(tmp, CREATIVE_OUT!)
-  }
+  if (gen.ok) for (const o of gen.outcomes) if (o.creative !== null) creative[o.code] = o.creative
+}
+
+/** 🔴 원자적 쓰기 — 같은 폴더 임시 파일 → rename(반쯤 쓴 파일이 남지 않는다) */
+const writeAtomicJson = (path: string, v: unknown): void => {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, `${JSON.stringify(v, null, 2)}\n`)
+  renameSync(tmp, path)
 }
 
 const batch = judgeAll(creative)
@@ -286,10 +289,28 @@ const verdicts: AutogenVerdict[] = batch.verdicts.map((verdict) => {
 
 // ── creative 묶음 품질 — 🔴 단일 판정(`judgeCreativeQuality`). 새 후보에 creative 가 있으면 언제나 본다 ──
 const withCreative = codes.filter((c) => creative[c] !== undefined && lifeOf.has(c))
-const quality = withCreative.length === 0 ? null : judgeCreativeQuality({
+const quality = withCreative.length === 0 && expectedCodes === null ? null : judgeCreativeQuality({
   candidates: withCreative.map((code) => ({ code, creative: creative[code]!, life: lifeOf.get(code)! })),
   existingTitles: pool.cards.map((c) => c.title),
+  ...(expectedCodes === null ? {} : { expected: expectedCodes }),
 })
+
+// ── 결과 파일 — 🔴 batch 는 **완전 PASS(형식 parsed + 품질 PASS)** 일 때만 `--supplement` 모양으로 쓴다 ──
+//    부분 · 품질 FAIL batch 는 `<out>.batch-fail.json` 에 상태와 함께 남긴다(코드 키가 아니라
+//    `--supplement` · `--resume-creative` 엄격 파서가 거부한다 — 최종 성공처럼 쓰이지 않는다).
+//    개별 생성 · 이어 하기는 앞판 그대로(보존분 + 새 생성분을 합친다)
+const batchPass = batchRun !== null && batchRun.ok && batchRun.status === 'parsed' && quality !== null && quality.ok
+if (GENERATE && gen !== null && gen.ok) {
+  if (batchRun === null) writeAtomicJson(CREATIVE_OUT!, creative)
+  else if (batchPass) writeAtomicJson(CREATIVE_OUT!, creative)
+  else {
+    writeAtomicJson(`${CREATIVE_OUT!}.batch-fail.json`, {
+      status: 'BATCH_FAIL', quality: quality?.status ?? null,
+      problems: [...(batchRun.ok ? batchRun.problems : [batchRun.reason]), ...(quality?.problems ?? [])],
+      partialCreatives: creative,
+    })
+  }
+}
 
 // ── 보고 ──
 console.log('\n── 말투 근거 풀 (정본 자산 · 운영 고정 배정 규칙)')
@@ -313,7 +334,8 @@ if (GENERATE && gen !== null) {
       console.log(`  ${o.code}  ${o.status.padEnd(14)} ${c === null ? o.problems.join(' / ')
         : `「${c.title}」 · 성격 ${c.personality.join('/')} · noGo 소재 ${c.noGoTopics.length} · 말버릇 ${c.noGoExpressions.length} · 변주 ${c.variations.length}`}`)
     }
-    console.log(`  creative → ${CREATIVE_OUT}`)
+    console.log(batchRun === null || batchPass ? `  creative → ${CREATIVE_OUT}`
+      : `  🔴 batch 가 완전 PASS 가 아니다 — ${CREATIVE_OUT} 에 쓰지 않았다 · 상태 → ${CREATIVE_OUT}.batch-fail.json`)
   }
   const l = gen.ledger
   console.log(`  호출 ${l.calls}회 · 입력 ${l.inputTokens} tok · 출력 ${l.outputTokens} tok · 실제 비용 ${l.usd === null ? '🔴 모름' : `$${l.usd.toFixed(4)}`}`
@@ -322,15 +344,14 @@ if (GENERATE && gen !== null) {
       : ` · 1회 최악 예약 최대 $${l.maxReserveUsd.toFixed(4)} (판정: 실제 지출 + 다음 1회 최악 예약 ≤ 상한 $${l.capUsd.toFixed(4)})`))
   if (batchRun !== null) {
     const structural = batchRun.ok ? batchRun.status : 'not-called'
-    const pass = batchRun.ok && batchRun.status === 'parsed' && quality !== null && quality.ok
-    console.log(`  🔴 batch ${pass ? 'PASS' : 'FAIL'} — 형식 ${structural} · 품질 ${quality === null ? '판정 대상 없음' : quality.ok ? 'PASS' : 'FAIL'}`)
+    console.log(`  🔴 batch ${batchPass ? 'PASS' : 'FAIL'} — 형식 ${structural} · 품질 ${quality === null ? '판정 대상 없음' : quality.status}`)
     if (batchRun.ok) for (const p of batchRun.problems) console.log(`     · ${p}`)
     else console.log(`     · ${batchRun.reason}`)
   }
 }
 
 if (quality !== null) {
-  console.log(`\n── creative 묶음 품질 (judgeCreativeQuality · ${withCreative.length}명) ${quality.ok ? '✅ PASS' : '🔴 FAIL'}`)
+  console.log(`\n── creative 묶음 품질 (judgeCreativeQuality · ${withCreative.length}명${expectedCodes === null ? '' : ` / 기대 ${expectedCodes.length}명`}) ${quality.ok ? '✅ PASS' : `🔴 ${quality.status}`}`)
   console.log(`  고유 대화 행동 ${Object.entries(quality.uniqueBehaviors).map(([c, n]) => `${c} ${n}`).join(' · ')}`)
   for (const p of quality.problems) console.log(`  · ${p}`)
 }
@@ -385,7 +406,7 @@ if (!APPLY) {
 }
 if (prismaRef === null || names === null) fail('--apply 는 DB 읽기가 필요하다')
 // 🔴 creative 묶음 품질이 FAIL 이면 적재하지 않는다 — 형식만 통과한 비슷한 사람을 넣지 않는다
-if (quality !== null && !quality.ok) fail(`creative 묶음 품질 FAIL ${quality.problems.length}건 — 적재하지 않는다`)
+if (quality !== null && !quality.ok) fail(`creative 묶음 품질 ${quality.status} ${quality.problems.length}건 — 적재하지 않는다`)
 const plans = valid.map((v) => ({ code: v.code, status: v.status, name: names!.picked.get(v.code) ?? '', seed: v.seed ?? {} }))
 const res = await applyAutogenDrafts(prismaRef!, { plans, limit: LIMIT, reason: REASON })
 await prismaRef!.$disconnect()

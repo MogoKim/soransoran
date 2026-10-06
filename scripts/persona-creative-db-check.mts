@@ -268,7 +268,23 @@ try {
     const out7b = join(T, 'batch-7b.json')
     const m7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7b}`], { FAKE_PROVIDER_CREATIVE_FILE: missFile })
     check('🔴 코드 누락 → 호출 1 · batch FAIL(형식 invalid) · creative 0 · valid 0', m7.paid === 1 && /batch FAIL — 형식 invalid/.test(m7.out)
-      && /빠진 코드: P30/.test(m7.out) && validOf(m7.out) === 0 && existsSync(out7b) && readFileSync(out7b, 'utf-8').trim() === '{}')
+      && /빠진 코드: P30/.test(m7.out) && validOf(m7.out) === 0)
+    check('🔴 실패 batch 는 --supplement 결과 파일을 쓰지 않는다 · 상태는 .batch-fail.json', !existsSync(out7b) && existsSync(`${out7b}.batch-fail.json`))
+
+    // 🔴 실측 모양 — 3명 형식 통과 · 3명 형식 위반(변주 2개). 품질은 3명만 보고 PASS 라 하면 안 된다
+    const partFile = join(T, 'batch-part.json')
+    writeFileSync(partFile, JSON.stringify(Object.fromEntries(SIX.map((c) => [c,
+      ['P26', 'P30', 'P32'].includes(c) ? { ...good[c]!, variations: good[c]!.variations.slice(0, 2) } : good[c]]))))
+    const out7p = join(T, 'batch-7p.json')
+    const p7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7p}`], { FAKE_PROVIDER_CREATIVE_FILE: partFile })
+    check('🔴 3/6 형식 통과 → 품질 INCOMPLETE · batch FAIL', p7.paid === 1 && /batch FAIL — 형식 invalid · 품질 INCOMPLETE/.test(p7.out)
+      && /INCOMPLETE: 기대 6명 중 3명 — creative 없음 P26,P30,P32/.test(p7.out), (/batch (PASS|FAIL)[^\n]*/.exec(p7.out) ?? [''])[0])
+    check('🔴 3/6 → 묶음 품질 줄도 PASS 가 아니다', /creative 묶음 품질 \(judgeCreativeQuality · 3명 \/ 기대 6명\) 🔴 INCOMPLETE/.test(p7.out))
+    const pf = existsSync(`${out7p}.batch-fail.json`) ? JSON.parse(readFileSync(`${out7p}.batch-fail.json`, 'utf-8')) as { status: string; quality: string; partialCreatives: Record<string, unknown> } : null
+    check('🔴 3/6 → supplement 파일 0 · 실패 파일에 상태 + 부분 결과', !existsSync(out7p) && pf?.status === 'BATCH_FAIL' && pf.quality === 'INCOMPLETE'
+      && JSON.stringify(Object.keys(pf.partialCreatives).sort()) === JSON.stringify(['P27', 'P28', 'P29']))
+    const asSup = cli(['--db', '--count=6', `--supplement=${out7p}.batch-fail.json`], {})
+    check('🔴 실패 파일을 --supplement 로 쓰면 엄격 파서가 거부한다', asSup.run.status === 1 && /엄격 검증을 통과하지 못했다/.test(asSup.out))
     // 🔴 중복 키(원문 그대로)
     const ok = JSON.stringify(Object.fromEntries(SIX.map((c) => [c, good[c]])))
     const dupFile = join(T, 'batch-dup.json')

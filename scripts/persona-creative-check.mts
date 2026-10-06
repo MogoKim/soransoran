@@ -23,7 +23,7 @@ import {
 } from '../src/lib/persona-autogen'
 import {
   CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_MAX_OUTPUT_TOKENS, CREATIVE_BATCH_SYSTEM_PROMPT, STATUS_LABELS,
-  compactPeerOf, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch,
+  behaviorWordsOf, compactPeerOf, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch, sameBehavior,
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
   creativeBriefOf, creativePeerOf, creativeUserPayload, parseCreative, parseCreativeFile, payloadLeaks, type CreativeBrief,
 } from '../src/lib/persona-creative'
@@ -439,7 +439,7 @@ console.log('⑧ creative 묶음 품질 — 단일 판정 judgeCreativeQuality')
   check('🔴 실측 5명 파일 → FAIL', !act.ok)
   check('실측 — "침착함" · "자족적" personality 반복', has(/P26,P27,P29: 같은 personality — "침착함"/) && has(/P26,P29,P32: 같은 personality — "자족적"/))
   check('실측 — "남의 말을 먼저 받아주기" variation 반복', has(/P26,P28: 같은 variation/))
-  check('실측 — P26 · P27 · P32 고유 대화 행동 < 2', has(/P26: 고유 대화 행동 0개/) && has(/P27: 고유 대화 행동 1개/) && has(/P32: 고유 대화 행동 0개/))
+  check('실측 — P26 · P32 고유 대화 행동 0개 (전부 다른 후보와 같은 행동)', has(/P26: 고유 대화 행동 0개/) && has(/P32: 고유 대화 행동 0개/))
   check('실측 — P28 상태 낙인형 title', has(/P28: 상태 낙인형 title — "이혼녀"/))
 
   const swap = (code: string, patch: Partial<PersonaCreative>) => ({ ...GOOD6, [code]: { ...GOOD6[code]!, ...patch } })
@@ -456,6 +456,45 @@ console.log('⑧ creative 묶음 품질 — 단일 판정 judgeCreativeQuality')
   fails('후보끼리 같은 title', swap('P28', { title: GOOD6.P27!.title }), /P27,P28: 같은 title/)
   fails('noGo 가 생활사 축 전부를 막음(빈 사람)', swap('P29', { noGoTopics: ['직장 이야기', '부모 돌봄', '갱년기 증상'] }), /P29: noGo 가 생활사 축 전부/)
   check('생활사 일부만 피하는 noGo 는 통과(정상 fixture 그대로)', !good.problems.some((p) => /빈 사람/.test(p)))
+
+  // 🔴 미완성 batch — 형식 통과한 3명만 넘어와도 6명 묶음은 PASS 가 아니다
+  const three = Object.fromEntries(['P27', 'P28', 'P29'].map((c) => [c, GOOD6[c]!]))
+  const inc = judgeCreativeQuality({
+    candidates: Object.entries(three).map(([code, creative]) => ({ code, creative, life: LIVES.get(code)! })),
+    existingTitles: POOL.cards.map((c) => c.title), expected: SIX,
+  })
+  check('🔴 기대 6명 중 3명 → INCOMPLETE (PASS 아님)', inc.status === 'INCOMPLETE' && !inc.ok
+    && inc.problems.some((p) => /INCOMPLETE: 기대 6명 중 3명 — creative 없음 P26,P30,P32/.test(p)), inc.problems[0] ?? inc.status)
+  check('같은 3명도 기대 후보를 안 주면 그 3명 기준 PASS(기대 후보가 판정을 가른다)', q(three).status === 'PASS')
+
+  // 🔴 항목 최대 글자 수는 없다 — 27~29자 대화 행동도 다른 계약을 어기지 않으면 통과
+  const long = { ...GOOD6, P30: { ...GOOD6.P30!, variations: [
+    '예전 일을 떠올리며 지금 형편과 천천히 견주어 보기', '자녀 이야기를 꺼내되 자랑보다 걱정을 먼저 말하기',
+    ...GOOD6.P30!.variations.slice(2)] } }
+  check('fixture 가 27~29자다', long.P30.variations.slice(0, 2).every((v) => [...v].length >= 27 && [...v].length <= 29))
+  check('🔴 27~29자 대화 행동 → 형식 통과', parseCreative(JSON.stringify(long.P30)).ok)
+  check('🔴 27~29자 대화 행동 → 묶음 품질 PASS', q(long).ok, q(long).problems.join(' / '))
+  check('🔴 noGo 소재 1글자 → 여전히 거부(부분 문자열 대조)', !parseCreative(JSON.stringify({ ...GOOD6.P26!, noGoTopics: ['돈'] })).ok)
+  check('🔴 말버릇 열쇠 1글자 → 여전히 거부', !parseCreative(JSON.stringify({ ...GOOD6.P26!, noGoExpressions: ['"네"'] })).ok)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('⑧-b 대화 행동 비교 — 핵심 낱말 절반 이상 겹침')
+// ─────────────────────────────────────────────────────────
+{
+  const same = (a: string, b: string, want: boolean, why: string): void =>
+    check(`${want ? '같다' : '다르다'} — "${a}" · "${b}" (${why})`, sameBehavior(a, b) === want, behaviorWordsOf(a).join('/') + ' | ' + behaviorWordsOf(b).join('/'))
+  // 정상 분리 — 앞판(앞 두 글자 · 한 낱말 겹침)이 같은 행동으로 막던 것
+  same('사진 묘사로 시작', '계절 인사로 시작', false, '오탐 방지 — "시작" 한 낱말만 겹친다')
+  same('질문으로 파고들기', '질투 섞인 농담', false, '오탐 방지 — 앞 두 글자 "질" 우연 일치가 아니다')
+  same('결론부터 한 줄', '되묻지 않고 단정', false, '정상 분리')
+  same('숫자와 날짜부터 확인', '쉽게 반박하기', false, '정상 분리')
+  // 같은 행동 — 꾸밈말만 바꿨다
+  same('상황 설명하기', '담담한 상황 설명', true, '꾸밈말 · 어미만 다르다')
+  same('짧은 경험담', '경험담 덤덤하게 풀기', true, '적은 쪽 낱말 전부가 겹친다')
+  same('남의 말을 먼저 받아주기', '남의 말을 먼저 알아주기', true, '핵심 낱말 절반이 같다')
+  // 🟡 알려진 미탐 — 같은 뜻의 다른 낱말은 잡지 않는다(뜻 사전 없음)
+  same('작은 해결책 제시', '실질적인 해결법 찾기', false, '알려진 미탐 — 해결책 ≠ 해결법')
 }
 
 // ─────────────────────────────────────────────────────────
