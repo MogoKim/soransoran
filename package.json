@@ -18,6 +18,8 @@
     "check:visibility": "node scripts/check-post-visibility.mjs",
     "check:pagination": "tsx scripts/list-pagination-check.mts",
     "check:best": "tsx scripts/best-ranking-check.mts",
+    "check:customer-composition": "tsx scripts/customer-composition-check.mts",
+    "check:customer-composition-db": "tsx scripts/customer-composition-db-check.mts",
     "best:db-check": "tsx scripts/best-ranking-db-check.mts",
     "best:backfill": "tsx scripts/best-ranking-backfill.mts",
     "check:home-exposure": "tsx scripts/home-exposure-check.mts",
