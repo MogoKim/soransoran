@@ -23,7 +23,7 @@ import {
 } from '../src/lib/persona-autogen'
 import {
   CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_MAX_OUTPUT_TOKENS, CREATIVE_BATCH_SYSTEM_PROMPT, STATUS_LABELS,
-  behaviorWordsOf, compactPeerOf, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch, sameBehavior,
+  behaviorWordsOf, childConflictOf, compactPeerOf, CREATIVE_SYSTEM_PROMPT as SINGLE_PROMPT, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch, sameBehavior,
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
   creativeBriefOf, creativePeerOf, creativeUserPayload, parseCreative, parseCreativeFile, parseProviderCreative, payloadLeaks, type CreativeBrief,
 } from '../src/lib/persona-creative'
@@ -518,6 +518,53 @@ console.log('⑦-b provider 말버릇 계약 — 글자만 받고 코드가 정�
     && SIX.every((c) => JSON.stringify(nowParse.creatives[c]) === JSON.stringify(GOOD6[c])))
   const oldContract = SIX.filter((c) => parseCreative(JSON.stringify(JSON.parse(plainSix)[c])).ok).length
   check('같은 응답을 정본 파서(앞 batch 계약)로 읽으면 0/6 — canary 실패 모양 재현', oldContract === 0)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('⑧-c 실제 canary v3 응답 — 자기모순 · 생활사 사실 충돌 · 한 글자 noGo')
+// ─────────────────────────────────────────────────────────
+{
+  const CANARY = JSON.parse(readFileSync('scripts/__fixtures__/persona-creative-canary-v3-provider.json', 'utf-8')) as Record<string, Record<string, unknown>>
+  const parsed = parseCreativeBatch(JSON.stringify(CANARY), SIX)
+  check('canary — 구조는 맞다 (6코드 · 중복 0)', parsed.structuralOk)
+  check('🔴 canary P32 한 글자 말버릇 "뭐" → 형식 FAIL', parsed.invalid.P32 !== undefined && parsed.invalid.P32.some((p) => /2자 미만/.test(p)))
+  check('canary — P26 · P27 · P28 · P29 · P30 형식 통과', ['P26', 'P27', 'P28', 'P29', 'P30'].every((c) => parsed.creatives[c] !== undefined))
+  const judge = (m: Record<string, PersonaCreative>, expected?: string[]) => judgeCreativeQuality({
+    candidates: Object.entries(m).map(([code, creative]) => ({ code, creative, life: LIVES.get(code)! })),
+    existingTitles: POOL.cards.map((c) => c.title), ...(expected === undefined ? {} : { expected }),
+  })
+  const cq = judge(parsed.creatives, SIX)
+  const has = (re: RegExp): boolean => cq.problems.some((p) => re.test(p))
+  check('🔴 canary 5/6 → INCOMPLETE', cq.status === 'INCOMPLETE')
+  check('🔴 canary P27 "자녀 셋" vs 골격 2명 → [LIFE_FACT_CONFLICT]', LIVES.get('P27')!.childrenCount === 2
+    && has(/P27: \[LIFE_FACT_CONFLICT\] "사별 후 직장 다니며 자녀 셋 뒷바라지 중" — 자녀 3명 ≠ 골격 2명/))
+  check('🔴 canary P26 "두 아이" · 골격 2명 → 충돌 없음', LIVES.get('P26')!.childrenCount === 2 && !has(/P26: \[LIFE_FACT_CONFLICT\]/))
+  check('canary P30 "어린 자녀 둘" · 골격 2명 → 충돌 없음', !has(/P30: \[LIFE_FACT_CONFLICT\]/))
+  // 🔴 실측 응답 그대로의 P30 — 자기 noGo 는 "남편이 · 혼자서는 · 아이들이 불쌍". "괜찮아요" 는 P29 의 noGo 다
+  check('canary P30 실제 응답 그대로 — 자기 noGo 와 변주 사이 자기모순 없음("괜찮아요" 는 P29 의 noGo)',
+    !has(/P30: \[SELF_CONTRADICTION\]/) && parsed.creatives.P29!.noGoExpressions.includes('"괜찮아요"'))
+  const p30 = parsed.creatives.P30!
+  const selfP30 = judge({ P30: { ...p30, noGoExpressions: ['"괜찮아요"', ...p30.noGoExpressions.slice(1)] } })
+  check('🔴 P30 noGo "괜찮아요" + 변주 "…\'괜찮아요\' 같은 표현으로…" → [SELF_CONTRADICTION]',
+    selfP30.problems.some((p) => /P30: \[SELF_CONTRADICTION\] noGo 말버릇 "괜찮아요"/.test(p)))
+  const topicSelf = judge({ P30: { ...p30, variations: [...p30.variations.slice(0, 4), '재혼 가능성 이야기를 먼저 꺼내기'] } })
+  check('🔴 noGo 소재 "재혼 가능성" 을 변주가 지시 → [SELF_CONTRADICTION]', topicSelf.problems.some((p) => /P30: \[SELF_CONTRADICTION\] noGo 소재 "재혼 가능성"/.test(p)))
+  const titleOnly = judge({ P30: { ...p30, title: `${p30.title} 남편이` } })
+  check('title 에 noGo 표현이 있다는 이유만으로는 막지 않는다', !titleOnly.problems.some((p) => /SELF_CONTRADICTION/.test(p)))
+  // 혼인 상태 — title 이 스스로 밝힌 것만
+  const marital = judge({ P27: { ...parsed.creatives.P27!, title: '이혼 후 직장 다니며 두 아이와' } })
+  check('🔴 골격 사별 · title "이혼 후" → [LIFE_FACT_CONFLICT] 혼인', marital.problems.some((p) => /P27: \[LIFE_FACT_CONFLICT\] title 혼인 "이혼" ≠ 골격 "사별"/.test(p)))
+  check('골격 이혼 · title "이혼 후" (canary P28 · P30) → 충돌 없음', !has(/P28: \[LIFE_FACT_CONFLICT\] title/) && !has(/P30: \[LIFE_FACT_CONFLICT\] title/))
+  // 합산 · 서수 · 명시 없음
+  check('아들 하나 · 딸 하나 vs 2명 → 충돌 없음', childConflictOf('아들 하나 딸 하나 키우는', 2) === null)
+  check('🔴 아들 하나 · 딸 하나 vs 3명 → 충돌', childConflictOf('아들 하나 딸 하나 키우는', 3) !== null)
+  check('🔴 딸 둘 vs 1명 → 충돌 · 딸 둘 vs 3명 → 충돌 아님(아들 수는 적지 않았다)', childConflictOf('딸 둘 엄마', 1) !== null && childConflictOf('딸 둘 엄마', 3) === null)
+  check('"둘째 아이" 는 수가 아니다', childConflictOf('둘째 아이 학교 이야기', 0) === null)
+  check('🔴 사실을 적지 않은 정상 title → 판정하지 않는다(PASS)', childConflictOf('어머니 곁에서 시간 쪼개 일하는', 0) === null
+    && judge(GOOD6).ok)
+  check('🔴 자녀 없는 골격 · "아이 둘" → 충돌', childConflictOf('아이 둘 데리고 출근', 0) !== null)
+  check('🔴 두 프롬프트 모두 말버릇 "두 글자 이상" 을 적는다',
+    /noGoExpressions[^\n]*두 글자 이상/.test(SINGLE_PROMPT) && /noGoExpressions[^\n]*두 글자 이상/.test(CREATIVE_BATCH_SYSTEM_PROMPT))
 }
 
 // ─────────────────────────────────────────────────────────

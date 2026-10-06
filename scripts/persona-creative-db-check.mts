@@ -301,6 +301,17 @@ try {
     const pfRaw = existsSync(`${out7p}.batch-fail.json`) ? readFileSync(`${out7p}.batch-fail.json`, 'utf-8') : ''
     check('🔴 실패 파일 — 합성 자산 댓글 원문 · 화자 id 0', pfRaw !== '' && !assetTexts.some((c) => pfRaw.includes(c.content) || pfRaw.includes(c.speakerId)))
 
+    // 🔴 실제 canary v3 응답 그대로 재생 — P32 한 글자 말버릇 · P27 자녀 수 변조
+    const canaryFile = 'scripts/__fixtures__/persona-creative-canary-v3-provider.json'
+    const out7v = join(T, 'batch-7v.json')
+    const v7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7v}`], { FAKE_PROVIDER_CREATIVE_FILE: canaryFile })
+    check('🔴 canary v3 재생 → 호출 1 · batch FAIL · 품질 INCOMPLETE · supplement 파일 0', v7.paid === 1
+      && /batch FAIL — 형식 invalid · 품질 INCOMPLETE/.test(v7.out) && !existsSync(out7v), (/batch (PASS|FAIL)[^\n]*/.exec(v7.out) ?? [''])[0])
+    check('🔴 canary v3 재생 → P32 "뭐" 형식 FAIL · P27 [LIFE_FACT_CONFLICT] 보고', /P32: noGoExpressions: 따옴표 안이 2자 미만/.test(v7.out)
+      && /P27: \[LIFE_FACT_CONFLICT\] "사별 후 직장 다니며 자녀 셋 뒷바라지 중" — 자녀 3명 ≠ 골격 2명/.test(v7.out))
+    const vf = existsSync(`${out7v}.batch-fail.json`) ? JSON.parse(readFileSync(`${out7v}.batch-fail.json`, 'utf-8')) as { problems: string[]; providerOutput: unknown } : null
+    check('canary v3 실패 파일 — 새 사유 코드 · 응답 구조 보존', vf !== null && vf.problems.some((p) => /\[LIFE_FACT_CONFLICT\]/.test(p)) && vf.providerOutput !== null)
+
     // 🔴 응답에 댓글 원문이 그대로 섞이면 실패 파일에 응답을 남기지 않는다
     const leakFile = join(T, 'batch-leak.json')
     writeFileSync(leakFile, JSON.stringify(providerMap(Object.fromEntries(SIX.map((c) => [c,

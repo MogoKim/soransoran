@@ -109,7 +109,7 @@ export const CREATIVE_SYSTEM_PROMPT = [
   '- title: 이 사람의 처지를 한 구절로. 이름 · 실명 · 지명 상호를 넣지 않는다',
   '- personality: 성격 3~6개 (예: "현실적", "말수 적음")',
   '- noGoTopics: 이 사람이 글이나 댓글에서 꺼내지 않을 소재 1~4개. 두 글자 이상 · 따옴표 없이',
-  '- noGoExpressions: 이 사람이 쓰지 않을 말버릇 1~3개. **말버릇 글자 그대로만** — 따옴표 · "류" 를 붙이지 않는다 (예: ["그래도 다행이죠", "다 지나가요"])',
+  '- noGoExpressions: 이 사람이 쓰지 않을 말버릇 1~3개. **말버릇 글자 그대로만** · 각 항목 두 글자 이상 — 따옴표 · "류" 를 붙이지 않는다 (예: ["그래도 다행이죠", "다 지나가요"])',
   `- variations: 이 사람이 쓰는 글 · 댓글의 변주 ${VARIATION_MIN}~${VARIATION_MAX}개 (예: "짧은 공감", "되묻기")`,
   '',
   '규칙',
@@ -345,7 +345,7 @@ export const CREATIVE_BATCH_SYSTEM_PROMPT = [
   '- title: 이 사람의 처지와 결을 한 구절로',
   '- personality: 성격 3~6개',
   '- noGoTopics: 꺼내지 않을 소재 1~4개. 두 글자 이상 · 따옴표 없이',
-  '- noGoExpressions: 쓰지 않을 말버릇 1~3개. **말버릇 글자 그대로만** — 따옴표 · "류" 를 붙이지 않는다 (예: ["그래도 다행이죠", "다 지나가요"])',
+  '- noGoExpressions: 쓰지 않을 말버릇 1~3개. **말버릇 글자 그대로만** · 각 항목 두 글자 이상 — 따옴표 · "류" 를 붙이지 않는다 (예: ["그래도 다행이죠", "다 지나가요"])',
   `- variations: 글 · 댓글에서 실제로 보이는 **대화 행동** ${VARIATION_MIN}~${VARIATION_MAX}개`,
   '',
   '묶음 규칙 — 여섯 명이 서로 다른 실제 사람처럼 느껴져야 한다',
@@ -355,6 +355,8 @@ export const CREATIVE_BATCH_SYSTEM_PROMPT = [
   '- 각 후보는 다른 후보에게 없는 대화 행동을 두 개 이상 가진다. 생활사와 말투 관찰값에 맞게 배정한다',
   '- 제목은 사람을 혼인 · 주거 상태나 성별 명사 하나로 부르지 않는다 (예: "이혼녀", "미망인", "노처녀" 금지). 생활사를 숨기라는 뜻이 아니다',
   '- noGo 로 그 사람의 생활사 전부를 막지 않는다 — 자기 삶의 이야기를 할 수 있어야 한다',
+  '- 자기 noGo 말버릇 · 소재를 그 사람의 variations 에 쓰지 않는다(쓰지 않을 말을 쓰라고 하지 않는다)',
+  '- 생활사 골격의 사실(자녀 수 · 혼인 상태)을 title · variations 에서 바꾸지 않는다',
   '- avoid 의 기존 Persona 제목 · 성격을 되풀이하지 않는다',
   '',
   '글자 규칙',
@@ -467,6 +469,54 @@ function coreLifeAxes(l: LifeSkeleton): { axis: string; words: readonly string[]
   return out
 }
 
+// ── 🔴 자기모순 · 생활사 사실 충돌 — 결정적인 글자만 본다(뜻 추측 없음) ──
+
+const KO_NUM: Readonly<Record<string, number>> = { 하나: 1, 한: 1, 둘: 2, 두: 2, 셋: 3, 세: 3, 넷: 4, 네: 4, 다섯: 5 }
+const numOf = (w: string): number | null => (/^\d+$/.test(w) ? Number(w) : KO_NUM[w] ?? null)
+const CHILD_TOTAL = '아이|애|자녀'
+const CHILD_GENDER = '아들|딸'
+
+export type ChildClaim = { total: number[]; sons: number[]; daughters: number[] }
+
+/**
+ * 🔴 **글에 적힌 자녀 수** — "두 아이 · 아이 둘 · 자녀 셋 · 2명 · 아들 하나 · 딸 둘 · 외동 · 자녀 없는" 만 읽는다.
+ *    서수("둘째")는 수가 아니다. 숫자가 없으면 아무것도 읽지 않는다(모름 = 판정하지 않음).
+ */
+export function childClaimsOf(text: string): ChildClaim {
+  const out: ChildClaim = { total: [], sons: [], daughters: [] }
+  const put = (noun: string, n: number | null): void => {
+    if (n === null) return
+    if (noun === '아들') out.sons.push(n)
+    else if (noun === '딸') out.daughters.push(n)
+    else out.total.push(n)
+  }
+  const nouns = `${CHILD_TOTAL}|${CHILD_GENDER}`
+  for (const m of text.matchAll(new RegExp(`(?:^|[^\\p{L}\\p{N}])(한|두|세|네|다섯|\\d+)\\s*(?:명의\\s*)?(${nouns})(?!\\p{L}*째)`, 'gu'))) put(m[2]!, numOf(m[1]!))
+  for (const m of text.matchAll(new RegExp(`(${nouns})\\s*(하나|둘|셋|넷|다섯|(?:한|두|세|네|다섯|\\d+)\\s*명)(?!째)`, 'gu'))) {
+    put(m[1]!, numOf(m[2]!.replace(/\s*명$/, '')))
+  }
+  if (/외동/.test(text)) out.total.push(1)
+  if (/무자녀|(?:자녀|아이)\s*(?:없는|없이|없음)/.test(text)) out.total.push(0)
+  return out
+}
+
+/** 🔴 자녀 수 충돌 — 글에 적힌 수가 골격과 다르면 이유를 돌려준다(적지 않았으면 null) */
+export function childConflictOf(text: string, count: number): string | null {
+  const c = childClaimsOf(text)
+  const bad = c.total.find((n) => n !== count)
+  if (bad !== undefined) return `자녀 ${bad}명 ≠ 골격 ${count}명`
+  const s = c.sons.length > 0 ? Math.max(...c.sons) : null
+  const d = c.daughters.length > 0 ? Math.max(...c.daughters) : null
+  if (s !== null && d !== null && s + d !== count) return `아들 ${s} + 딸 ${d} ≠ 골격 ${count}명`
+  if ((s ?? 0) > count || (d ?? 0) > count) return `${s !== null && s > count ? `아들 ${s}` : `딸 ${d}`}명 > 골격 ${count}명`
+  return null
+}
+
+/** 🔴 title 이 스스로 밝힌 혼인 상태 — 골격 값과 같은 낱말만(변주는 남의 이야기일 수 있어 보지 않는다) */
+const MARITAL_CLAIMS: readonly { status: string; re: RegExp }[] = [
+  { status: '사별', re: /사별/ }, { status: '이혼', re: /이혼|돌싱/ }, { status: '별거', re: /별거/ }, { status: '비혼', re: /비혼|미혼/ },
+]
+
 export type CreativeQualityInput = {
   candidates: readonly { code: string; creative: PersonaCreative; life: LifeSkeleton }[]
   /** 기존 Persona 제목(정본 카드) — 같으면 거부 */
@@ -497,6 +547,9 @@ export const UNIQUE_BEHAVIOR_MIN = 2
  *    ③ 후보마다 다른 후보에게 없는 대화 행동 ≥ 2 — 같은 행동 = 핵심 낱말 절반 이상 겹침(`sameBehavior`)
  *    ④ title — 다른 후보 · 기존 Persona 와 같거나, 사람을 상태명 하나로 부르면(`STATUS_LABELS`) 거부
  *    ⑤ noGo 소재가 그 사람에게 있는 생활사 축을 **전부** 막으면 거부(빈 사람)
+ *    ⑥ [SELF_CONTRADICTION] 자기 noGo 말버릇 열쇠 · 소재가 자기 variations 에 그대로 들어 있으면 거부
+ *    ⑦ [LIFE_FACT_CONFLICT] title · variations 에 적힌 자녀 수, title 이 밝힌 혼인 상태가 골격과 다르면 거부
+ *       (적지 않았으면 판정하지 않는다 — 뜻을 추측하지 않는다)
  */
 export function judgeCreativeQuality(input: CreativeQualityInput): CreativeQuality {
   const problems: string[] = []
@@ -536,6 +589,25 @@ export function judgeCreativeQuality(input: CreativeQualityInput): CreativeQuali
       problems.push(`${c.code}: noGo 가 생활사 축 전부(${axes.map((a) => a.axis).join('·')})를 막는다 — 빈 사람`)
     }
   }
+  for (const c of cs) {
+    // [SELF_CONTRADICTION] 쓰지 않을 말버릇 · 소재를 변주가 쓰라고 한다(title 은 보지 않는다)
+    const keys = c.creative.noGoExpressions.map(noGoExpressionKey).filter((k) => [...k].length >= 2)
+    for (const v of c.creative.variations) {
+      for (const k of keys) if (v.includes(k)) problems.push(`${c.code}: [SELF_CONTRADICTION] noGo 말버릇 "${k}" 를 변주 "${v}" 가 쓴다`)
+      for (const t of c.creative.noGoTopics) if (v.includes(t)) problems.push(`${c.code}: [SELF_CONTRADICTION] noGo 소재 "${t}" 를 변주 "${v}" 가 지시한다`)
+    }
+    // [LIFE_FACT_CONFLICT] 골격의 자녀 수 · 혼인 상태를 글이 바꿨다
+    for (const text of [c.creative.title, ...c.creative.variations]) {
+      const why = childConflictOf(text, c.life.childrenCount)
+      if (why !== null) problems.push(`${c.code}: [LIFE_FACT_CONFLICT] "${text}" — ${why}`)
+    }
+    for (const m of MARITAL_CLAIMS) {
+      if (m.re.test(c.creative.title) && m.status !== c.life.maritalStatus) {
+        problems.push(`${c.code}: [LIFE_FACT_CONFLICT] title 혼인 "${m.status}" ≠ 골격 "${c.life.maritalStatus}"`)
+      }
+    }
+  }
+
   const have = new Set(cs.map((c) => c.code))
   const missing = (input.expected ?? []).filter((c) => !have.has(c))
   if (missing.length > 0) {
