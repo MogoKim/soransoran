@@ -15,7 +15,7 @@
 import { costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
-  CREATIVE_TIMEOUT_MS, creativeKeyOf, creativeUserPayload, parseCreative, payloadLeaks,
+  CREATIVE_TIMEOUT_MS, creativeKeyOf, creativePeerOf, creativeUserPayload, parseCreative, payloadLeaks,
   type CreativeBrief, type CreativePeer,
 } from '../../src/lib/persona-creative'
 import type { PersonaCreative } from '../../src/lib/persona-autogen'
@@ -44,8 +44,11 @@ export type CreativeLedger = {
   outputTokens: number
   /** 🔴 실제 비용 합 — 한 건이라도 모르면 null */
   usd: number | null
-  /** 이번 실행이 부르기 전에 잡은 최악 예약액 합(부른 호출만) */
-  reservedUsd: number
+  /**
+   * 🔴 부른 호출 중 **가장 큰 1회 최악 예약액**. 상한 판정은 `지금까지 실제 지출 + 다음 1회 최악 예약 ≤ 상한` 이다 —
+   *    예약액을 더한 합은 상한 판정에 쓰이지 않고 상한보다 크게 보여 오해를 낳아 지웠다
+   */
+  maxReserveUsd: number
   capUsd: number
 }
 
@@ -58,6 +61,7 @@ const utf8Bytes = (s: string): number => Buffer.byteLength(s, 'utf-8')
 /**
  * 🔴 **한 실행.** 브리프는 코드순으로 한 번씩만 부른다. 앞서 생성된 creative 는 뒤 후보의 피할 대상에 더한다.
  *    `forbiddenTextsOf` — 그 후보 말투 묶음의 댓글 원문(나가는 글 대조용 · 밖으로 나가지 않는다).
+ *    `avoid` — 기존 Persona 카드 + 앞 실행에서 보존한 creative(전체 칸). 이번 실행의 생성분은 여기에 이어 붙는다.
  */
 export async function generateCreatives(input: {
   briefs: readonly CreativeBrief[]
@@ -69,7 +73,7 @@ export async function generateCreatives(input: {
 }): Promise<CreativeRun> {
   const cap = input.capUsd ?? CREATIVE_COST_CAP_USD
   const max = input.maxCandidates ?? CREATIVE_MAX_CANDIDATES
-  const ledger: CreativeLedger = { calls: 0, inputTokens: 0, outputTokens: 0, usd: 0, reservedUsd: 0, capUsd: cap }
+  const ledger: CreativeLedger = { calls: 0, inputTokens: 0, outputTokens: 0, usd: 0, maxReserveUsd: 0, capUsd: cap }
   if (input.briefs.length > max) {
     return { ok: false, reason: `후보 ${input.briefs.length}명 > 상한 ${max}명 — 한 번도 부르지 않았다`, ledger }
   }
@@ -106,7 +110,7 @@ export async function generateCreatives(input: {
     }
 
     ledger.calls += 1
-    ledger.reservedUsd += reserve.usd
+    ledger.maxReserveUsd = Math.max(ledger.maxReserveUsd, reserve.usd)
     const res = await input.call({
       model: CREATIVE_MODEL, systemPrompt: CREATIVE_SYSTEM_PROMPT, userPayload,
       maxOutputTokens: CREATIVE_MAX_OUTPUT_TOKENS, timeoutMs: CREATIVE_TIMEOUT_MS,
@@ -141,7 +145,7 @@ export async function generateCreatives(input: {
       continue
     }
     seen.add(key)
-    avoid.push({ code: brief.code, title: parsed.creative.title, personality: parsed.creative.personality })
+    avoid.push(creativePeerOf(brief.code, parsed.creative))
     outcomes.push({ code: brief.code, status: 'generated', creative: parsed.creative, usd, problems: [] })
   }
   return { ok: true, outcomes, ledger }

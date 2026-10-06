@@ -10,6 +10,10 @@
  *   npx tsx scripts/persona-autogen.mts --db --count=8 --generate-creative --creative-out=<creative.json>
  *                                                           # 🔴 유료 — creative 생성(최대 8명 · $0.05 상한 · 재시도 0)
  *                                                           #    적재는 하지 않는다. 결과 파일을 사람이 본 뒤 --supplement 로 쓴다
+ *   npx tsx scripts/persona-autogen.mts --db --count=8 --generate-creative \
+ *     --resume-creative=<앞 결과.json> --prior-usd=<앞 실행 실제 비용> [--cost-cap=<usd>] --creative-out=<합친 결과.json>
+ *                                                           # 🔴 이어 하기 — 앞 결과의 creative 는 엄격 재검증해 **그대로 보존**하고
+ *                                                           #    (그 코드 호출 0) 없는 후보만 부른다. 상한 = min(--cost-cap, $0.05 − 앞 비용)
  *
  * 한 사이클
  *   ① 코드   P26~ 중 카드·DB 에 없는 번호
@@ -25,7 +29,7 @@
  * 🔴 출력에는 코드·개수·사유 코드만 나온다. 코퍼스 원문 · 화자 식별자 · 회원 이름은 나오지 않는다.
  *    (생성한 creative 는 Persona 설계값이라 요약을 찍는다)
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
@@ -40,7 +44,9 @@ import { judgeAutogenBatch, voicePoolFor, type AutogenVerdict } from './lib/pers
 import { applyAutogenDrafts } from './lib/persona-autogen-apply.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MODEL, creativeBriefOf } from '../src/lib/persona-creative'
+import {
+  CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MODEL, creativeBriefOf, creativePeerOf, parseCreativeFile,
+} from '../src/lib/persona-creative'
 import { CREATIVE_BLOCK_OF, generateCreatives, type CreativeRun } from './lib/persona-creative-run.mjs'
 
 const argv = process.argv.slice(2)
@@ -58,6 +64,15 @@ const SUPPLEMENT = arg('supplement')
 const OUT = arg('out')
 const GENERATE = argv.includes('--generate-creative')
 const CREATIVE_OUT = arg('creative-out')
+const RESUME = arg('resume-creative')
+const numArg = (k: string): number | null => {
+  const v = arg(k)
+  if (v === null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : Number.NaN
+}
+const COST_CAP_ARG = numArg('cost-cap')
+const PRIOR_USD = numArg('prior-usd')
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 
 // 🔴 생성은 유료다 — 조건이 하나라도 어긋나면 DB · provider 에 붙기 전에 멈춘다
@@ -67,13 +82,37 @@ if (GENERATE) {
   if (SUPPLEMENT !== null) fail('--generate-creative 와 --supplement 를 함께 쓰지 않는다 — creative 의 출처는 하나다')
   if (CREATIVE_OUT === null) fail('--creative-out=<파일> 이 필요하다 — 생성 결과를 남기지 않으면 같은 돈을 다시 쓴다')
   if (COUNT > CREATIVE_MAX_CANDIDATES) fail(`--generate-creative 는 후보 ${CREATIVE_MAX_CANDIDATES}명까지다 (--count=${COUNT})`)
+  if (COST_CAP_ARG !== null && !(COST_CAP_ARG > 0 && COST_CAP_ARG <= CREATIVE_COST_CAP_USD)) {
+    fail(`--cost-cap 은 0 초과 $${CREATIVE_COST_CAP_USD} 이하 숫자다 (${arg('cost-cap')})`)
+  }
+  if (RESUME !== null) {
+    if (PRIOR_USD === null || !(PRIOR_USD >= 0)) fail('--resume-creative 는 --prior-usd=<앞 실행 실제 비용> 이 필요하다 — 합쳐서 상한을 넘지 않게')
+  }
 }
+if (!GENERATE && (RESUME !== null || COST_CAP_ARG !== null || PRIOR_USD !== null)) {
+  fail('--resume-creative · --cost-cap · --prior-usd 는 --generate-creative 와만 쓴다')
+}
+/** 🔴 이번 실행 상한 = min(--cost-cap, 전체 상한 − 앞 실행 비용). 앞 실행과 합쳐 전체 상한을 넘지 않는다 */
+const RUN_CAP = Math.min(COST_CAP_ARG ?? CREATIVE_COST_CAP_USD, CREATIVE_COST_CAP_USD - (PRIOR_USD ?? 0))
+if (GENERATE && !(RUN_CAP > 0)) fail(`남은 상한이 없다 — 앞 비용 $${PRIOR_USD} · 전체 상한 $${CREATIVE_COST_CAP_USD}`)
+
+/** 🔴 creative 파일은 생성 응답과 같은 엄격한 파서로 읽는다 — 한 칸이라도 틀리면 **부르기 전에** 멈춘다 */
+const readCreativeFile = (path: string, flag: string): Record<string, PersonaCreative> => {
+  if (!existsSync(path)) fail(`${flag} 파일이 없다: ${path}`)
+  const r = parseCreativeFile(readFileSync(path, 'utf-8'))
+  if (!r.ok) fail(`${flag} 파일이 엄격 검증을 통과하지 못했다 — ${r.problems.slice(0, 5).join(' / ')}${r.problems.length > 5 ? ` 외 ${r.problems.length - 5}건` : ''}`)
+  return (r as { ok: true; creatives: Record<string, PersonaCreative> }).creatives
+}
+const resumed: Record<string, PersonaCreative> = RESUME === null ? {} : readCreativeFile(RESUME, '--resume-creative')
+const supplemented: Record<string, PersonaCreative> | null = SUPPLEMENT === null ? null : readCreativeFile(SUPPLEMENT, '--supplement')
 
 if (!Number.isInteger(COUNT) || COUNT < 1 || COUNT > AUTOGEN_CODE_LAST - AUTOGEN_CODE_FIRST + 1) {
   fail(`--count 는 1~${AUTOGEN_CODE_LAST - AUTOGEN_CODE_FIRST + 1} 정수다`)
 }
 
-console.log(`\n══ Persona 자동 확장 — ${APPLY ? '🔴 --apply (draft 적재)' : 'dry-run (DB write 0)'} · LLM 0 ══\n`)
+console.log(`\n══ Persona 자동 확장 — ${APPLY ? '🔴 --apply (draft 적재) · LLM 0'
+  : GENERATE ? `🔴 유료 creative 생성 (${CREATIVE_MODEL} · 이번 상한 $${RUN_CAP.toFixed(4)}) · DB write 0`
+    : 'dry-run (DB write 0) · LLM 0'} ══\n`)
 console.log(`  목표(정본 d100-capacity): canary ${JSON.stringify(PERSONA_CANARY_FLOOR)}`)
 console.log(`                            지속   ${JSON.stringify(PERSONA_SUSTAINED_TARGET)}`)
 
@@ -129,11 +168,12 @@ const thinAfter = thinLifeAxisCount([...pool.cards.map(subjectOfCard), ...skelet
 // ── ③ 말투 풀 ──
 const voice = voicePoolFor({ repoRoot: process.cwd(), newCodes: codes })
 
-// ── ④ creative — 🔴 LLM 단계 없음. 보충 파일만 ──
-let creative: Record<string, PersonaCreative> = {}
-if (SUPPLEMENT !== null) {
-  if (!existsSync(SUPPLEMENT)) fail(`--supplement 파일이 없다: ${SUPPLEMENT}`)
-  creative = JSON.parse(readFileSync(SUPPLEMENT, 'utf-8')) as Record<string, PersonaCreative>
+// ── ④ creative — 보충 파일 · 이어 하기 파일(엄격 재검증) · 아래 ④-b 생성 ──
+const creative: Record<string, PersonaCreative> = supplemented ?? { ...resumed }
+{
+  // 🔴 이번 후보 밖 코드가 든 이어 하기 파일은 다른 실행의 것이다 — 부르기 전에 멈춘다
+  const stray = Object.keys(resumed).filter((c) => !codes.includes(c))
+  if (stray.length > 0) fail(`--resume-creative 에 이번 후보 밖 코드가 있다: ${stray.join(',')} — 다른 실행의 파일이다`)
 }
 
 // ── 표시명 — 정책 + Gate ⑥-B (DB 가 있을 때만) ──
@@ -176,22 +216,32 @@ if (GENERATE) {
   const pre = judgeAll(Object.fromEntries(codes.map((c) => [c, probeOf(c)])))
   const onlyCreative = pre.verdicts.filter((v) => voice.ok && v.blocks.every((b) => b === 'NEAR_DUPLICATE_PERSONA'))
   for (const v of pre.verdicts) if (!onlyCreative.includes(v)) skippedForGen.push(`${v.code}(${v.blocks.filter((b) => b !== 'NEAR_DUPLICATE_PERSONA').join('·') || '—'})`)
-  const briefs = onlyCreative.map((v) => {
+  // 🔴 앞 실행에서 보존한 creative 의 코드는 부르지 않는다 — 없는 후보만
+  const targets = onlyCreative.filter((v) => resumed[v.code] === undefined)
+  const briefs = targets.map((v) => {
     const ev = voice.byCode.get(v.code)!
     return creativeBriefOf({ code: v.code, life: lifeOf.get(v.code)!, voiceCore: voiceCoreFromBundle(ev.bundle), style: ev.bundle.style })
   })
   const { callProvider } = await import('./lib/voice-m3-provider.mjs')
   gen = await generateCreatives({
     briefs,
-    avoid: pool.cards.map((c) => ({ code: c.code, title: c.title, personality: c.personality })),
+    // 🔴 피할 대상 = 기존 Persona 카드(제목 · 성격 · noGo) + 앞 실행에서 보존한 creative 전체
+    avoid: [
+      ...pool.cards.map((c) => ({ code: c.code, title: c.title, personality: c.personality, noGoTopics: c.noGoTopics, noGoExpressions: c.noGoExpressions })),
+      ...Object.entries(resumed).map(([code, c]) => creativePeerOf(code, c)),
+    ],
     forbiddenTextsOf: (code) => voice.byCode.get(code)?.bundle.comments.map((x) => x.text) ?? [],
     call: callProvider,
+    capUsd: RUN_CAP,
   })
   if (gen.ok) {
     for (const o of gen.outcomes) if (o.creative !== null) creative[o.code] = o.creative
+    // 🔴 보존분 + 새 생성분을 **원자적으로** 쓴다 — 임시 파일을 같은 폴더에 쓰고 rename(반쯤 쓴 파일이 남지 않는다).
+    //    새 생성이 전부 실패해도 보존분은 그대로 남는다. `--supplement` 가 그대로 읽는 모양이다
     mkdirSync(dirname(CREATIVE_OUT!), { recursive: true })
-    // 🔴 `--supplement` 가 그대로 읽는 모양 — 형식 검증을 통과한 creative 만
-    writeFileSync(CREATIVE_OUT!, `${JSON.stringify(creative, null, 2)}\n`)
+    const tmp = `${CREATIVE_OUT!}.tmp-${process.pid}`
+    writeFileSync(tmp, `${JSON.stringify(creative, null, 2)}\n`)
+    renameSync(tmp, CREATIVE_OUT!)
   }
 }
 
@@ -222,7 +272,10 @@ console.log(`  문체 분리 기준(운영 묶음 최소 거리) ${batch.voiceBa
 console.log(`\n── 생활사 골격 ${skeletons.length}/${codes.length} · 얇은 생활사 축 ${thinBefore} → ${thinAfter}`)
 
 if (GENERATE && gen !== null) {
-  console.log(`\n── creative 생성 (🔴 유료 · ${CREATIVE_MODEL} · 상한 $${CREATIVE_COST_CAP_USD} · 재시도 0)`)
+  console.log(`\n── creative 생성 (🔴 유료 · ${CREATIVE_MODEL} · 이번 상한 $${RUN_CAP.toFixed(4)}`
+    + `${PRIOR_USD === null ? '' : ` = min(--cost-cap, $${CREATIVE_COST_CAP_USD} − 앞 비용 $${PRIOR_USD})`} · 재시도 0)`)
+  const kept = Object.keys(resumed)
+  if (kept.length > 0) console.log(`  보존(앞 실행 · 엄격 재검증 통과 · 호출 0): ${kept.join(' ')}`)
   if (skippedForGen.length > 0) console.log(`  부르지 않은 후보 — creative 말고 다른 이유로 막혔다: ${skippedForGen.join(' ')}`)
   if (!gen.ok) console.log(`  🔴 ${gen.reason}`)
   else {
@@ -235,7 +288,7 @@ if (GENERATE && gen !== null) {
   }
   const l = gen.ledger
   console.log(`  호출 ${l.calls}회 · 입력 ${l.inputTokens} tok · 출력 ${l.outputTokens} tok · 실제 비용 ${l.usd === null ? '🔴 모름' : `$${l.usd.toFixed(4)}`}`
-    + ` · 부르기 전 최악 예약 합 $${l.reservedUsd.toFixed(4)} · 상한 $${l.capUsd}`)
+    + ` · 1회 최악 예약 최대 $${l.maxReserveUsd.toFixed(4)} (판정: 실제 지출 + 다음 1회 최악 예약 ≤ 상한 $${l.capUsd.toFixed(4)})`)
 }
 
 console.log('\n── 후보 판정 (코드만)')

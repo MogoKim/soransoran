@@ -23,7 +23,7 @@ import {
 } from '../src/lib/persona-autogen'
 import {
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
-  creativeBriefOf, creativeUserPayload, parseCreative, payloadLeaks, type CreativeBrief,
+  creativeBriefOf, creativePeerOf, creativeUserPayload, parseCreative, parseCreativeFile, payloadLeaks, type CreativeBrief,
 } from '../src/lib/persona-creative'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
 import { reserveOf } from '../src/lib/llm-pricing'
@@ -159,6 +159,17 @@ console.log('③ 엄격한 파서 — 일부 누락을 기본값으로 메우지
   bad('제목 줄표', { ...GOOD, title: '혼자 — 뒷바라지' }, /줄표/)
   bad('문자열 아닌 항목', { ...GOOD, personality: ['담담함', 3, '말 짧음'] }, /personality\[1\]: 문자열이 아니다/)
   bad('앞뒤 공백', { ...GOOD, title: ' 혼자 뒷바라지 ' }, /title: 앞뒤 공백/)
+
+  // ── 결과 파일(= --supplement · --resume-creative) — 같은 엄격 파서 ──
+  const file = (o: unknown) => parseCreativeFile(JSON.stringify(o))
+  const okFile = file({ P26: GOOD, P27: variant(27) })
+  check('온전한 결과 파일은 읽힌다', okFile.ok && Object.keys(okFile.creatives).join(',') === 'P26,P27')
+  check('🔴 결과 파일 — JSON 아님 → fail-closed', !parseCreativeFile('{').ok)
+  check('🔴 결과 파일 — 한 코드만 칸 누락이어도 파일 전체 거부', !file({ P26: GOOD, P27: { ...variant(27), variations: [] } }).ok)
+  check('🔴 결과 파일 — 코드 형식 아님 → 거부', !file({ X1: GOOD }).ok)
+  check('🔴 결과 파일 — 두 코드가 글자까지 같은 creative → 거부', !file({ P26: GOOD, P27: GOOD }).ok)
+  check('피할 대상 모양 — creative 전체 칸', JSON.stringify(Object.keys(creativePeerOf('P26', GOOD)))
+    === JSON.stringify(['code', 'title', 'personality', 'noGoTopics', 'noGoExpressions', 'variations']))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -176,6 +187,10 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
     check('토큰 합이 장부에 남는다', r.ledger.inputTokens === 3600 && r.ledger.outputTokens === 1080)
     check('🔴 모델 · 출력 상한이 정본 상수다', f.bodies.length === 6 && CREATIVE_MODEL === 'claude-haiku-4.5')
     check('뒤 후보의 피할 대상에 앞서 생성된 제목이 실린다', f.bodies[5]!.includes(variant(26).title))
+    // 🔴 (보정) 피할 대상 = creative 전체 — 성격 낱말 하나 겹침은 겹침 판정이 못 잡으니 입력에서 먼저 피하게 한다
+    check('🔴 뒤 후보의 피할 대상에 앞선 후보의 noGo · 말버릇 · 변주까지 실린다',
+      f.bodies[5]!.includes(variant(26).noGoTopics[0]!) && f.bodies[5]!.includes('말버릇26') && f.bodies[5]!.includes('변주26'))
+    check('🔴 1회 최악 예약 최대 ≤ 상한 (예약 합이 아니다)', r.ledger.maxReserveUsd > 0 && r.ledger.maxReserveUsd <= r.ledger.capUsd)
   }
   {
     const f = fakeCall(() => okResponse(GOOD))
@@ -290,12 +305,23 @@ console.log('⑥ CLI 가드 — DB · provider 에 붙기 전에 멈춘다')
   const env = { ...process.env, HOME: T, DATABASE_URL: 'postgresql://nobody@127.0.0.1:1/none',
     NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts', 'lib', 'fake-provider-hook.mjs')}`, FAKE_PROVIDER_LOG: log }
   const out = join(T, 'creative.json')
+  const good = join(T, 'good.json')
+  const broken = join(T, 'broken.json')
+  writeFileSync(good, JSON.stringify({ P26: GOOD }))
+  writeFileSync(broken, JSON.stringify({ P26: { ...GOOD, noGoExpressions: ['따옴표 없음'] } }))
   const cases: [string, string[], RegExp][] = [
     ['--db 없음', ['--generate-creative', `--creative-out=${out}`], /--db 가 필요하다/],
     ['--apply 동시', ['--db', '--generate-creative', '--apply', `--creative-out=${out}`], /--apply 를 함께 쓰지 않는다/],
     ['--supplement 동시', ['--db', '--generate-creative', `--supplement=${join(T, 'sup.json')}`, `--creative-out=${out}`], /--supplement 를 함께 쓰지 않는다/],
     ['결과 파일 없음', ['--db', '--generate-creative'], /--creative-out=/],
     ['9명', ['--db', '--generate-creative', `--creative-out=${out}`, '--count=9'], /8명까지다/],
+    ['이어 하기 — 앞 비용 없음', ['--db', '--generate-creative', `--creative-out=${out}`, `--resume-creative=${good}`], /--prior-usd/],
+    ['이어 하기 + --apply', ['--db', '--generate-creative', '--apply', `--creative-out=${out}`, `--resume-creative=${good}`, '--prior-usd=0.02'], /--apply 를 함께 쓰지 않는다/],
+    ['상한 $0.06', ['--db', '--generate-creative', `--creative-out=${out}`, '--cost-cap=0.06'], /--cost-cap 은 0 초과/],
+    ['앞 비용이 전체 상한을 다 썼다', ['--db', '--generate-creative', `--creative-out=${out}`, `--resume-creative=${good}`, '--prior-usd=0.05'], /남은 상한이 없다/],
+    ['--cost-cap 만 (생성 없음)', ['--cost-cap=0.02'], /--generate-creative 와만 쓴다/],
+    ['🔴 망가진 이어 하기 파일', ['--db', '--generate-creative', `--creative-out=${out}`, `--resume-creative=${broken}`, '--prior-usd=0.02'], /엄격 검증을 통과하지 못했다/],
+    ['🔴 망가진 --supplement 파일', ['--db', `--supplement=${broken}`], /엄격 검증을 통과하지 못했다/],
   ]
   for (const [name, args, re] of cases) {
     const run = spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], { env, encoding: 'utf-8' })

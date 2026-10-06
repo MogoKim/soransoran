@@ -12,6 +12,8 @@
  *   ② 🔴 나간 요청 본문 — 합성 말투 자산의 댓글 원문 0 · 표시명 0 · 화자 id 0
  *   ③ 🔴 형식이 깨진 응답 → 전원 CREATIVE_INVALID · valid 0 · 재시도 0
  *   ④ 결과 파일을 --supplement 로 다시 판정 → 같은 valid · provider 0
+ *   ⑥ 🔴 이어 하기 — 앞 결과 3명 보존(호출 0) · 없는 3명만 호출 · 원자적 합치기 · retry 전부 실패여도 보존 ·
+ *      남은 상한 부족 → 호출 0 · 망가진 / 다른 실행의 파일 → 부르기 전에 멈춤
  *   ⑤ 🔴 부르기 전 probe 판정 — 운영 cadence 가 seed 검증을 깨면(렌더 뒤에야 드러난다) provider 0
  *   🔴 모든 회차 DB write 0 (Persona · User · 감사 · Post · Comment · Account)
  */
@@ -162,6 +164,66 @@ try {
   check('🔴 provider 요청 0', sup.paid === 0)
   check('같은 valid 수', validOf(sup.out) === generated.length, String(validOf(sup.out)))
   check('🔴 ④ 회차 DB write 0', same(b4, await counts()))
+
+  // ── ⑥ 이어 하기 — 보존분 호출 0 · 없는 후보만 · 원자적 합치기 ──
+  console.log('⑥ 🔴 이어 하기 — 앞 결과 보존 · 없는 후보만 부른다')
+  {
+    // 실측 모양: 앞 실행이 P26 · P27 · P29 를 만들고 P28 · P30 · P31 은 서지 않았다(6명 실행)
+    const prior = join(T, 'prior.json')
+    const keep = ['P26', 'P27', 'P29']
+    const priorRaw = `${JSON.stringify(Object.fromEntries(keep.map((c) => [c, creativeOf(CODES.indexOf(c))])), null, 2)}\n`
+    writeFileSync(prior, priorRaw)
+    const merged = join(T, 'merged.json')
+    const b6 = await counts()
+    const r = cli(['--db', '--count=6', '--generate-creative', `--resume-creative=${prior}`, '--prior-usd=0.0226', '--cost-cap=0.027',
+      `--creative-out=${merged}`], { FAKE_PROVIDER_CREATIVE_FILE: creativeFile })
+    check('CLI 종료 코드 0', r.run.status === 0, r.out.slice(-500))
+    check('🔴 시작 화면이 유료라고 말한다 — "LLM 0" 아님', /══ Persona 자동 확장 — 🔴 유료 creative 생성/.test(r.out) && !/══[^\n]*LLM 0[^\n]*══/.test(r.out))
+    check('🔴 이번 상한 = min($0.027, $0.05 − $0.0226) = $0.0270', /이번 상한 \$0\.0270/.test(r.out))
+    check('🔴 기존 valid 3 + 없는 3 → provider 정확히 3회', r.paid === 3, `paid ${r.paid}`)
+    const sentCodes = r.sent.map((l) => (JSON.parse(JSON.parse((JSON.parse(l) as { body: string }).body).messages[0].content) as { persona: { code: string } }).persona.code).sort()
+    check('🔴 보존분(P26 · P27 · P29) 호출 0 — 부른 코드는 P28 · P30 · P31', sentCodes.join(',') === 'P28,P30,P31', sentCodes.join(','))
+    const bodies = r.sent.map((l) => (JSON.parse(l) as { body: string }).body).join('\n')
+    check('🔴 피할 대상에 보존분 creative 전체(변주까지)가 실린다', keep.every((c) => bodies.includes(`fixture 변주 ${CODES.indexOf(c)}`)))
+    const m = existsSync(merged) ? JSON.parse(readFileSync(merged, 'utf-8')) as Record<string, PersonaCreative> : {}
+    check('🔴 합친 결과 = 보존 3 + 새 3', JSON.stringify(Object.keys(m).sort()) === JSON.stringify(['P26', 'P27', 'P28', 'P29', 'P30', 'P31']))
+    check('🔴 보존분 내용이 글자까지 그대로다', keep.every((c) => JSON.stringify(m[c]) === JSON.stringify(creativeOf(CODES.indexOf(c)))))
+    check('앞 결과 파일은 건드리지 않는다', readFileSync(prior, 'utf-8') === priorRaw)
+    check('임시 파일이 남지 않는다(원자적 rename)', !readFileSync(merged, 'utf-8').includes('.tmp-') && !existsSync(`${merged}.tmp-${r.run.pid}`))
+    check('운영 판정 그대로 — 6명 valid', validOf(r.out) === 6, String(validOf(r.out)))
+    check('🔴 ⑥ 회차 DB write 0', same(b6, await counts()))
+
+    // 🔴 새 생성이 전부 형식 위반이어도 보존분은 남는다
+    const merged2 = join(T, 'merged-2.json')
+    const r2 = cli(['--db', '--count=6', '--generate-creative', `--resume-creative=${prior}`, '--prior-usd=0.0226', `--creative-out=${merged2}`], {})
+    const m2 = existsSync(merged2) ? JSON.parse(readFileSync(merged2, 'utf-8')) as Record<string, PersonaCreative> : {}
+    check('🔴 retry 가 전부 invalid → 호출 3 · 결과 = 보존 3 그대로', r2.paid === 3
+      && JSON.stringify(Object.keys(m2).sort()) === JSON.stringify(keep)
+      && keep.every((c) => JSON.stringify(m2[c]) === JSON.stringify(creativeOf(CODES.indexOf(c)))), `paid ${r2.paid} · ${Object.keys(m2).join(',')}`)
+    check('그 회차 valid 3 (보존분만)', validOf(r2.out) === 3, String(validOf(r2.out)))
+
+    // 🔴 남은 상한이 1회 최악 예약보다 작으면 한 번도 부르지 않는다 — 보존분은 남는다
+    const merged3 = join(T, 'merged-3.json')
+    const r3 = cli(['--db', '--count=6', '--generate-creative', `--resume-creative=${prior}`, '--prior-usd=0.049', `--creative-out=${merged3}`],
+      { FAKE_PROVIDER_CREATIVE_FILE: creativeFile })
+    check('🔴 남은 상한 $0.001 < 1회 최악 예약 → provider 0 · 전원 budget-blocked', r3.paid === 0
+      && ['P28', 'P30', 'P31'].every((c) => new RegExp(`^  ${c}  budget-blocked`, 'm').test(r3.out)), r3.out.split('── creative 생성')[1]?.slice(0, 500) ?? '')
+    check('그 회차 결과 = 보존 3', existsSync(merged3) && JSON.stringify(Object.keys(JSON.parse(readFileSync(merged3, 'utf-8'))).sort()) === JSON.stringify(keep))
+
+    // 🔴 망가진 앞 결과 → 부르기 전에 멈춘다
+    const broken = join(T, 'broken.json')
+    writeFileSync(broken, JSON.stringify({ P26: { ...creativeOf(0), noGoTopics: [] } }))
+    const merged4 = join(T, 'merged-4.json')
+    const b4b = await counts()
+    const r4 = cli(['--db', '--count=6', '--generate-creative', `--resume-creative=${broken}`, '--prior-usd=0.0226', `--creative-out=${merged4}`], {})
+    check('🔴 망가진 이어 하기 파일 → exit 1 · provider 0 · 결과 파일 0 · DB write 0',
+      r4.run.status === 1 && r4.paid === 0 && !existsSync(merged4) && same(b4b, await counts()), r4.out.slice(-300))
+    // 🔴 다른 실행의 파일(이번 후보 밖 코드)
+    const stray = join(T, 'stray.json')
+    writeFileSync(stray, JSON.stringify({ P40: creativeOf(0) }))
+    const r5 = cli(['--db', '--count=6', '--generate-creative', `--resume-creative=${stray}`, '--prior-usd=0.0226', `--creative-out=${join(T, 'm5.json')}`], {})
+    check('🔴 이번 후보 밖 코드가 든 이어 하기 파일 → exit 1 · provider 0', r5.run.status === 1 && r5.paid === 0 && /후보 밖 코드/.test(r5.out))
+  }
 
   // ── ⑤ probe 판정 — 카드를 렌더해야 드러나는 creative 무관 막힘 ──
   console.log('⑤ 🔴 부르기 전 probe 판정 — 렌더 뒤에야 드러나는 막힘에 돈을 쓰지 않는다')

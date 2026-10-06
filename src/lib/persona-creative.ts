@@ -55,7 +55,25 @@ export type CreativeBrief = {
   }
 }
 
-export type CreativePeer = { code: string; title: string; personality: readonly string[] }
+/**
+ * 🔴 **피할 대상 — 기존 Persona 와 앞선 후보의 creative 전체** (2026-10-06 보정).
+ *    앞판은 제목 · 성격만 넘겨, 실측 6명 중 3명의 성격이 같은 낱말("침착함")로 모였다. 겹침 판정
+ *    (`judgeDistinctness` 성격 · noGo Jaccard > 0.5)은 낱말 하나 겹침을 잡지 않는다 — 규칙을 덧대지 않고
+ *    **생성 입력에서 먼저 피하게** 한다. 정본 카드에는 변주 글자가 없어(개수만) 있는 칸만 넘긴다.
+ */
+export type CreativePeer = {
+  code: string
+  title: string
+  personality: readonly string[]
+  noGoTopics?: readonly string[]
+  noGoExpressions?: readonly string[]
+  variations?: readonly string[]
+}
+
+export const creativePeerOf = (code: string, c: PersonaCreative): CreativePeer => ({
+  code, title: c.title, personality: c.personality,
+  noGoTopics: c.noGoTopics, noGoExpressions: c.noGoExpressions, variations: c.variations,
+})
 
 const r1 = (v: number): number => Math.round(v * 10) / 10
 
@@ -96,7 +114,7 @@ export const CREATIVE_SYSTEM_PROMPT = [
   '',
   '규칙',
   '- 말투 관찰값과 어긋나지 않게 한다 (짧은 문장인 사람에게 긴 글 변주를 주지 않는다)',
-  '- 피할 대상으로 준 기존 Persona 의 제목 · 성격을 되풀이하지 않는다',
+  '- avoid 에 준 기존 Persona 와 앞선 후보의 제목 · 성격 · noGo · 변주 낱말을 되풀이하지 않는다 (같은 뜻의 다른 말로 바꿔 쓰는 것도 피한다)',
   '- 모든 글자에 가운뎃점(·) · 원문자(①~⑧) · 줄바꿈 · 백틱 · 세로막대를 쓰지 않는다',
   `- 이 낱말을 쓰지 않는다: ${BRAND_BANNED_WORDS.join(', ')}`,
   '- 의료 · 재무 조언, 정치, 특정 집단 비하를 성격이나 변주로 만들지 않는다',
@@ -106,7 +124,12 @@ export const CREATIVE_SYSTEM_PROMPT = [
 export function creativeUserPayload(brief: CreativeBrief, avoid: readonly CreativePeer[]): string {
   return JSON.stringify({
     persona: brief,
-    avoid: avoid.map((p) => ({ title: p.title, personality: [...p.personality] })),
+    avoid: avoid.map((p) => ({
+      title: p.title, personality: [...p.personality],
+      ...(p.noGoTopics === undefined ? {} : { noGoTopics: [...p.noGoTopics] }),
+      ...(p.noGoExpressions === undefined ? {} : { noGoExpressions: [...p.noGoExpressions] }),
+      ...(p.variations === undefined ? {} : { variations: [...p.variations] }),
+    })),
   })
 }
 
@@ -199,6 +222,33 @@ export function parseCreative(raw: string): CreativeParse {
 
   if (problems.length > 0) return { ok: false, problems }
   return { ok: true, creative: { title, personality, noGoTopics, noGoExpressions, variations } }
+}
+
+export type CreativeFileParse =
+  | { ok: true; creatives: Record<string, PersonaCreative> }
+  | { ok: false; problems: string[] }
+
+/**
+ * 🔴 **앞 실행의 결과 파일(= `--supplement` 모양)을 다시 읽는다** — 생성 응답과 **같은 엄격한 파서**로.
+ *    한 칸이라도 틀리면 파일 전체를 거부한다(일부만 살려 쓰지 않는다). 코드 형식 · 글자까지 같은 복사본도 거부한다.
+ */
+export function parseCreativeFile(raw: string): CreativeFileParse {
+  let obj: unknown
+  try { obj = JSON.parse(raw) } catch { return { ok: false, problems: ['JSON 이 아니다'] } }
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, problems: ['객체가 아니다'] }
+  const problems: string[] = []
+  const creatives: Record<string, PersonaCreative> = {}
+  const seen = new Set<string>()
+  for (const [code, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (!/^P\d\d$/.test(code)) { problems.push(`${code}: 코드 형식이 아니다`); continue }
+    const p = parseCreative(JSON.stringify(v))
+    if (!p.ok) { problems.push(...p.problems.map((x) => `${code}: ${x}`)); continue }
+    const key = creativeKeyOf(p.creative)
+    if (seen.has(key)) problems.push(`${code}: 앞 코드와 글자까지 같은 creative`)
+    seen.add(key)
+    creatives[code] = p.creative
+  }
+  return problems.length > 0 ? { ok: false, problems } : { ok: true, creatives }
 }
 
 /** 🔴 두 creative 가 글자까지 같은가 — 같은 실행 안에서 복사본을 막는다(겹침 판정과 별개) */
