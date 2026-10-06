@@ -7,17 +7,23 @@
  *   npx tsx scripts/persona-autogen.mts --count=10 --supplement=<creative.json>
  *   npx tsx scripts/persona-autogen.mts --db --supplement=<creative.json> \
  *     --apply --limit=<valid 수> --reason "..."             # 🔴 draft 적재 — 켜지 않는다
+ *   npx tsx scripts/persona-autogen.mts --db --count=8 --generate-creative --creative-out=<creative.json>
+ *                                                           # 🔴 유료 — creative 생성(최대 8명 · $0.05 상한 · 재시도 0)
+ *                                                           #    적재는 하지 않는다. 결과 파일을 사람이 본 뒤 --supplement 로 쓴다
  *
  * 한 사이클
  *   ① 코드   P26~ 중 카드·DB 에 없는 번호
  *   ② 생활사 얇은 축을 메우는 골격 — 결정론 (`proposeLifeSkeletons`)
  *   ③ 말투   아직 배정되지 않은 정본 화자 — 운영과 같은 규칙 (`voicePoolFor`)
- *   ④ creative 🔴 LLM 단계 — **구현하지 않았다.** `--supplement` 로 받은 것만 쓴다
+ *   ④ creative 🔴 LLM 단계 — 기본은 **부르지 않는다.** `--generate-creative` 일 때만 생성하고(`persona-creative`),
+ *            그 밖에는 `--supplement` 로 받은 것만 쓴다. 생성 입력은 생활사 골격 + 말투 관찰값뿐이다
+ *            (댓글 원문 · 화자 · 표시명 · 회원 정보 0)
  *   ⑤ 검증   운영 검증기 그대로 (`judgeAutogenBatch` → `judgeAutogenCandidate` · 겹침 · 문체 거리)
  *            → valid / quarantined / rejected
  *   ⑥ 계획   valid 만 활성화 계획에 올린다 — 문서 카드 · cohort manifest · seed · activate
  *
  * 🔴 출력에는 코드·개수·사유 코드만 나온다. 코퍼스 원문 · 화자 식별자 · 회원 이름은 나오지 않는다.
+ *    (생성한 creative 는 Persona 설계값이라 요약을 찍는다)
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -27,13 +33,15 @@ import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-
 import { assignCandidates } from '../src/lib/persona-nickname-candidates'
 import {
   AUTOGEN_CODE_FIRST, AUTOGEN_CODE_LAST, autogenCodeOf, modeCadence, proposeLifeSkeletons,
-  subjectOfCard, subjectOfLife, thinLifeAxisCount,
+  subjectOfCard, subjectOfLife, thinLifeAxisCount, voiceCoreFromBundle,
   type AutogenCandidate, type Cadence, type DisplayNameCheck, type PersonaCreative,
 } from '../src/lib/persona-autogen'
 import { judgeAutogenBatch, voicePoolFor, type AutogenVerdict } from './lib/persona-autogen.mjs'
 import { applyAutogenDrafts } from './lib/persona-autogen-apply.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MODEL, creativeBriefOf } from '../src/lib/persona-creative'
+import { CREATIVE_BLOCK_OF, generateCreatives, type CreativeRun } from './lib/persona-creative-run.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (k: string): string | null => {
@@ -48,7 +56,18 @@ const REASON_AT = argv.indexOf('--reason')
 const REASON = REASON_AT >= 0 ? (argv[REASON_AT + 1] ?? '') : ''
 const SUPPLEMENT = arg('supplement')
 const OUT = arg('out')
+const GENERATE = argv.includes('--generate-creative')
+const CREATIVE_OUT = arg('creative-out')
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
+
+// 🔴 생성은 유료다 — 조건이 하나라도 어긋나면 DB · provider 에 붙기 전에 멈춘다
+if (GENERATE) {
+  if (!argv.includes('--db')) fail('--generate-creative 는 --db 가 필요하다 — 실회원 · cadence 를 못 재면 valid 가 될 수 없어 돈만 쓴다')
+  if (APPLY) fail('--generate-creative 와 --apply 를 함께 쓰지 않는다 — 생성 결과를 본 뒤 --supplement 로 적재한다')
+  if (SUPPLEMENT !== null) fail('--generate-creative 와 --supplement 를 함께 쓰지 않는다 — creative 의 출처는 하나다')
+  if (CREATIVE_OUT === null) fail('--creative-out=<파일> 이 필요하다 — 생성 결과를 남기지 않으면 같은 돈을 다시 쓴다')
+  if (COUNT > CREATIVE_MAX_CANDIDATES) fail(`--generate-creative 는 후보 ${CREATIVE_MAX_CANDIDATES}명까지다 (--count=${COUNT})`)
+}
 
 if (!Number.isInteger(COUNT) || COUNT < 1 || COUNT > AUTOGEN_CODE_LAST - AUTOGEN_CODE_FIRST + 1) {
   fail(`--count 는 1~${AUTOGEN_CODE_LAST - AUTOGEN_CODE_FIRST + 1} 정수다`)
@@ -122,12 +141,12 @@ const names = db === null ? null : assignCandidates(codes, db.isTaken)
 const cadence = db === null ? null : modeCadence(db.cadences)
 
 // ── ⑤ 검증 — 🔴 한 명씩 + 서로·정본과 겹치는가(성격·관점·noGo·말투) ──
-const cands: AutogenCandidate[] = codes.map((code) => {
+const candsWith = (cr: Readonly<Record<string, PersonaCreative>>): AutogenCandidate[] => codes.map((code) => {
   const name = names?.picked.get(code) ?? null
   return {
     code,
     life: lifeOf.get(code) ?? null,
-    creative: creative[code] ?? null,
+    creative: cr[code] ?? null,
     voice: voice.byCode.get(code) ?? null,
     cadence,
     // 🔴 자동 후보는 언제나 **새 User** 를 만든다 — 계정 0 · providerId 없음이 사실이다
@@ -135,11 +154,49 @@ const cands: AutogenCandidate[] = codes.map((code) => {
     displayName: db === null || name === null ? null : { name, gate: db.gateOf(name) },
   }
 })
-const batch = judgeAutogenBatch(cands, { takenCodes: taken, existingCards: pool.cards, productionBundles: voice.productionBundles })
+const judgeAll = (cr: Readonly<Record<string, PersonaCreative>>) => judgeAutogenBatch(candsWith(cr), {
+  takenCodes: taken, existingCards: pool.cards, productionBundles: voice.productionBundles,
+})
+
+// ── ④-b creative 생성 — 🔴 `--generate-creative` 일 때만. creative 말고 다른 이유로 막힌 후보는 부르지 않는다 ──
+let gen: CreativeRun | null = null
+const skippedForGen: string[] = []
+if (GENERATE) {
+  const pre = judgeAll({})
+  const onlyCreative = pre.verdicts.filter((v) => voice.ok && v.blocks.length > 0 && v.blocks.every((b) => b === 'LLM_STEP_UNIMPLEMENTED'))
+  for (const v of pre.verdicts) if (!onlyCreative.includes(v)) skippedForGen.push(`${v.code}(${v.blocks.filter((b) => b !== 'LLM_STEP_UNIMPLEMENTED').join('·') || '—'})`)
+  const briefs = onlyCreative.map((v) => {
+    const ev = voice.byCode.get(v.code)!
+    return creativeBriefOf({ code: v.code, life: lifeOf.get(v.code)!, voiceCore: voiceCoreFromBundle(ev.bundle), style: ev.bundle.style })
+  })
+  const { callProvider } = await import('./lib/voice-m3-provider.mjs')
+  gen = await generateCreatives({
+    briefs,
+    avoid: pool.cards.map((c) => ({ code: c.code, title: c.title, personality: c.personality })),
+    forbiddenTextsOf: (code) => voice.byCode.get(code)?.bundle.comments.map((x) => x.text) ?? [],
+    call: callProvider,
+  })
+  if (gen.ok) {
+    for (const o of gen.outcomes) if (o.creative !== null) creative[o.code] = o.creative
+    mkdirSync(dirname(CREATIVE_OUT!), { recursive: true })
+    // 🔴 `--supplement` 가 그대로 읽는 모양 — 형식 검증을 통과한 creative 만
+    writeFileSync(CREATIVE_OUT!, `${JSON.stringify(creative, null, 2)}\n`)
+  }
+}
+
+const batch = judgeAll(creative)
 const verdicts: AutogenVerdict[] = batch.verdicts.map((verdict) => {
   if (!voice.ok) {
     verdict.blocks.push('VOICE_ASSIGNMENT_DRIFT')
     verdict.status = verdict.status === 'rejected' ? 'rejected' : 'quarantined'
+  }
+  // 🔴 생성을 돌렸으나 creative 가 서지 않았다 — "단계가 돌지 않았다" 와 가른다
+  const o = gen?.ok === true ? gen.outcomes.find((x) => x.code === verdict.code) : undefined
+  if (o !== undefined && o.status !== 'generated') {
+    verdict.blocks = verdict.blocks.filter((b) => b !== 'LLM_STEP_UNIMPLEMENTED')
+    verdict.blocks.push(CREATIVE_BLOCK_OF[o.status])
+    verdict.details.push(`${CREATIVE_BLOCK_OF[o.status]}: ${o.problems.join(' / ')}`)
+    if (verdict.status === 'valid') verdict.status = 'quarantined'
   }
   return verdict
 })
@@ -152,6 +209,23 @@ console.log(`  운영 active 인데 말투 없음 ${voice.productionWithoutVoice
 console.log(`  새 코드에 돌아간 묶음 ${voice.byCode.size}/${codes.length}${voice.drift.length > 0 ? ` · 🔴 운영 배정 변동 ${voice.drift.join('·')}` : ''}`)
 console.log(`  문체 분리 기준(운영 묶음 최소 거리) ${batch.voiceBaseline === null ? '모름' : batch.voiceBaseline.toFixed(3)}`)
 console.log(`\n── 생활사 골격 ${skeletons.length}/${codes.length} · 얇은 생활사 축 ${thinBefore} → ${thinAfter}`)
+
+if (GENERATE && gen !== null) {
+  console.log(`\n── creative 생성 (🔴 유료 · ${CREATIVE_MODEL} · 상한 $${CREATIVE_COST_CAP_USD} · 재시도 0)`)
+  if (skippedForGen.length > 0) console.log(`  부르지 않은 후보 — creative 말고 다른 이유로 막혔다: ${skippedForGen.join(' ')}`)
+  if (!gen.ok) console.log(`  🔴 ${gen.reason}`)
+  else {
+    for (const o of gen.outcomes) {
+      const c = o.creative
+      console.log(`  ${o.code}  ${o.status.padEnd(14)} ${c === null ? o.problems.join(' / ')
+        : `「${c.title}」 · 성격 ${c.personality.join('/')} · noGo 소재 ${c.noGoTopics.length} · 말버릇 ${c.noGoExpressions.length} · 변주 ${c.variations.length}`}`)
+    }
+    console.log(`  creative → ${CREATIVE_OUT}`)
+  }
+  const l = gen.ledger
+  console.log(`  호출 ${l.calls}회 · 입력 ${l.inputTokens} tok · 출력 ${l.outputTokens} tok · 실제 비용 ${l.usd === null ? '🔴 모름' : `$${l.usd.toFixed(4)}`}`
+    + ` · 부르기 전 최악 예약 합 $${l.reservedUsd.toFixed(4)} · 상한 $${l.capUsd}`)
+}
 
 console.log('\n── 후보 판정 (코드만)')
 const cnt: Record<string, number> = {}

@@ -8,8 +8,9 @@
  *      voice     말투 근거 — **아직 아무에게도 배정되지 않은 정본 코퍼스 화자** 한 명의 묶음
  *                🟢 코퍼스에서 **결정론으로** 꺼낸다(부르는 쪽 `scripts/lib/persona-autogen.mts`)
  *      creative  제목·성격·noGo 소재·noGo 표현·variation — **그 사람을 사람으로 만드는 글자**
- *                🔴 결정론으로 만들 수 없다. LLM(또는 사람) 단계이고 **이 PR 은 구현하지 않는다**
- *                   (`LLM_STEP_UNIMPLEMENTED`). 빈칸을 기본값으로 채우면 그것이 곧 이름만 늘린 사람이다.
+ *                🔴 결정론으로 만들 수 없다. LLM(또는 사람) 단계다 — `--generate-creative`(`persona-creative`)
+ *                   또는 `--supplement`. 둘 다 없으면 `LLM_STEP_UNIMPLEMENTED`. 빈칸을 기본값으로 채우면
+ *                   그것이 곧 이름만 늘린 사람이다.
  *      cadence   활동 상한·리듬 — 운영 중인 Persona 의 **최빈값**을 읽어 온다(없으면 모른다)
  *
  * 🔴 판정은 여기서 만들지 않는다. 카드 파서 · seed 검증 · 3계층 · 배정 판정은
@@ -41,7 +42,8 @@ export const autogenCodeOf = (n: number): string => `P${String(n).padStart(2, '0
  * 🔴 **격리 사유 코드.** 한 후보에 여럿이 붙을 수 있다 — 무엇을 채워야 서는지가 여기서 나온다.
  *
  *    `NAME_ONLY`               코드·이름뿐이다 — 격리가 아니라 **거부**한다
- *    `LLM_STEP_UNIMPLEMENTED`  creative 칸을 만드는 단계가 없다(이 PR 범위 밖 — 명시적 blocker)
+ *    `LLM_STEP_UNIMPLEMENTED`  creative 칸이 없다 — 생성을 돌리지 않았고 보충 파일도 없다
+ *    `CREATIVE_*`              생성을 돌렸으나 creative 가 서지 않았다(형식 위반 · 호출 실패 · 상한 · 원문 유출 차단)
  *    `*_UNMEASURED`            재지 못했다 — 🔴 모르는 것은 통과가 아니다
  */
 export const AUTOGEN_BLOCK_CODES = [
@@ -53,6 +55,8 @@ export const AUTOGEN_BLOCK_CODES = [
   'REAL_MEMBER_COLLISION', 'REAL_MEMBER_UNMEASURED',
   'CADENCE_UNMEASURED',
   'LLM_STEP_UNIMPLEMENTED',
+  // 🔴 creative 생성(2026-10-06 · `persona-creative`) — 돌렸으나 서지 않았다. 기본값으로 메우지 않는다
+  'CREATIVE_INVALID', 'CREATIVE_CALL_FAILED', 'CREATIVE_BUDGET_BLOCKED', 'CREATIVE_LEAK_BLOCKED',
   'CARD_PARSE_FAILED', 'SEED_INVALID',
   'POST_INELIGIBLE', 'COMMENT_INELIGIBLE',
   // 🔴 4상태 계약(`persona-reserve` `contractAxes`) — 운영 계기판과 같은 판정이 막은 것

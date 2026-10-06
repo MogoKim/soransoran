@@ -139,9 +139,9 @@ export function judgeAutogenCandidate(
   // ── ⑤ cadence ──
   if (c.cadence === null) add('CADENCE_UNMEASURED', '운영 cadence 최빈값을 읽지 못했다')
 
-  // ── ⑥ creative — 🔴 LLM 단계. 이 PR 은 구현하지 않는다 ──
+  // ── ⑥ creative — 🔴 LLM(또는 사람) 단계. 없으면 기본값으로 채우지 않는다 ──
   if (c.creative === null) {
-    add('LLM_STEP_UNIMPLEMENTED', '제목·성격·noGo·variation 을 만드는 단계가 없다 — 기본값으로 채우지 않는다')
+    add('LLM_STEP_UNIMPLEMENTED', '제목·성격·noGo·variation 이 없다 — --generate-creative 나 --supplement 가 채운다 · 기본값으로 채우지 않는다')
   } else {
     if (c.creative.personality.length === 0) add('LIFE_AXIS_MISSING', 'personality')
     if (c.creative.noGoTopics.length === 0) add('LIFE_AXIS_MISSING', 'noGoTopics')
