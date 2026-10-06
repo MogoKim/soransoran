@@ -139,7 +139,7 @@ console.log('\n⑤ 반례 7 · 8 — 비용: 하루 필요 = 목표 × 완전 �
     lossy.counts.readyNeeded === 6 && Math.abs((lossy.counts.supplyDailyUsdNeeded ?? 0) - 0.45) < 1e-12
     && !lossy.codes.includes('SUPPLY_COST_SHORT'), show(lossy))
   const unknown = d5({ unknown: 10, published: 4, sources: sourcesFor(14, 18), usdPerSlotValidResult: null })
-  check('🔴 🔴 반례7 결과당 비용 모름(legacy · 미연결 · 미정산 · 결말 모름) → SUPPLY_COST_UNKNOWN — raw 단가로 GREEN/FAIL 하지 않는다',
+  check('🔴 🔴 반례7 결과당 비용 모름(legacy-only · 미연결 · 미정산 · 확인 결과 0) → SUPPLY_COST_UNKNOWN — raw 단가로 GREEN/FAIL 하지 않는다',
     unknown.codes.includes('SUPPLY_COST_UNKNOWN') && !unknown.codes.includes('SUPPLY_COST_SHORT')
     && !('rawReadyUsd' in unknown.counts) && !('publicPostUsd' in unknown.counts), show(unknown))
   const judge = strip('src/lib/stage-ladder-generic.ts')

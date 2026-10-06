@@ -142,7 +142,10 @@ export type CostAttribution = {
   /** 🔴 현재 계약이지만 **다른 cohort 회차**(창 밖 묶음)의 정산 — 이 cohort 의 분자가 아니다 · 보고만 한다 */
   otherCohortUsd: number
   byFate: Record<CostFate, number>
-  /** 🔴 slot-valid 결과(공개 + 예정 슬롯 대기) 1건당 전 비용 — 연결이 완전하고 모르는 결말 비용이 0 일 때만 */
+  /**
+   * 🔴 확인된 slot-valid 결과(공개 + 예정 슬롯 대기) 1건당 전 비용의 보수적 상한.
+   * 현재 계약의 결말 모름 · 손실 · READY 미생성 비용까지 분자에 모두 넣고, 확인된 결과만 분모에 넣는다.
+   */
   usdPerSlotValidResult: number | null
   /** 🔴 공개 1건당 전 비용 — 위 조건 + 대기 결과가 없을 때만 */
   usdPerPublished: number | null
@@ -155,7 +158,9 @@ export type CostAttribution = {
 /**
  * 🔴 **장부 요청을 원천 결과에 붙인다.** 현재 JIT 계약 표식(`supplyContract`)이 있는 요청만 `sourceKey`(원천 해시)로
  *    결과 행의 결말에 붙인다. 표식 없는 요청은 legacy 다 — 따로 보고하고 현재 계약 단가에는 넣지도 막지도 않는다.
- *    현재 계약 요청 중 미연결 · 미정산 · 결말 모름이 하나라도 있거나, 현재 계약 정산 0 · slot-valid 결과 0 이면 단가는 모른다.
+ *    현재 계약 요청 중 미연결 · 미정산이 하나라도 있거나, 현재 계약 정산 0 · slot-valid 결과 0 이면 단가는 모른다.
+ *    결말 모름 비용은 분자에 포함한다. 그 행이 나중에 성공하면 분모만 늘어 단가가 낮아지고, 실패하면 지금 상한이 그대로라
+ *    `전체 정산 ÷ 현재 확인된 결과`는 예산을 과소평가하지 않는다.
  *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 끝나지 않은 요청이 있으면 결과당 단가는 `null` 이다 —
  *    🔴 raw 단가(정산 ÷ 행 수)로 대신하지 않는다.
  */
@@ -201,7 +206,7 @@ export function costAttributionOf(i: {
   return {
     totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, legacyOpenRequests: legacyOpen, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
-    usdPerSlotValidResult: complete && total > 0 && byFate.unknown === 0 && results > 0 ? total / results : null,
+    usdPerSlotValidResult: complete && total > 0 && results > 0 ? total / results : null,
     usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
       ? total / i.counts.published : null,
     wasteUsd: complete ? byFate.lost : null,

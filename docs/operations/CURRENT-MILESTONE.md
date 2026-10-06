@@ -1,7 +1,7 @@
 # 현재 실행 — 자동 D100 커뮤니티
 
-> as-of: 2026-10-04 10:41 KST
-> 마지막 창업자 동기화: 2026-10-04 (생동감 · 정치/연예 경계 · 실측 보충 · 레거시 제거)
+> as-of: 2026-10-06 09:18 KST
+> 마지막 창업자 동기화: 2026-10-06 (D3 재증명 · JIT 비용 상한 · 운영/문서 정합)
 >
 > 이 문서는 **검증된 현재 상태와 다음 critical path**만 적는다. 정책은
 > [`NORTH-STAR.md`](./NORTH-STAR.md)와
@@ -10,22 +10,22 @@
 
 ## 0. 창업자용 한 문장
 
-**10월 3일 D3 증명일 자체는 PASS했다. 그러나 10월 4일 controller는 D5 준비도를
-`THROUGHPUT_SHORT`로 판정해 공개 단계를 d3 `REPROVE`로 유지했다. 원천 부족이 아니라,
-READY 목표에 근거 없는 20%를 고정 가산한 옛 preflight 계약과 수집→생성 45.73시간 지연이 현재 병목이다.**
+**10월 5일 D5 증명은 자동 글 5/5 중 첫 댓글 1건 누락으로 FAIL했고, 10월 6일은 d3 `REPROVE`다.
+오늘 D5로 소급 승격하지 않는다. 내일 D5를 막던 `SUPPLY_COST_UNKNOWN`은 공급 부족이 아니라,
+이미 지출한 결말 모름 비용 때문에 결과당 비용 전체를 UNKNOWN으로 만들던 과잉 차단이며 보수적 비용 상한으로 교체 중이다.**
 
-운영은 멈추지 않았다. runtime·pin·main은 같은 SHA이고 supply·publish·comment·audit job은 loaded,
-최근 exit은 모두 0이다. 정책 정본을 먼저 바로잡은 뒤 코드를 한 번의 교체 경로로 수렴시킨다.
+운영은 멈추지 않았다. 08:40·09:00 publish heartbeat의 DB 연결 실패 뒤 09:10 예약 회차가 자동 회복했고,
+publish runner의 최근 exit은 0이다. runtime은 `38efdd3`, main은 매거진 변경이 추가된 `f7581d1`이다.
 
 ## 1. 검증 기준과 상태
 
 | 축 | code PASS | deployed PASS | operating PASS |
 |---|---|---|---|
-| runtime 일치 | ✅ main과 runtime 계약 있음 | ✅ HEAD·pin·main `5551f96` 일치 | ✅ mixed runtime 아님 |
-| 자동 단계 controller | ✅ `StageDecision` 단일 authority | ✅ controller ON·job loaded | ✅ 10-03 D3 증거 PASS, 10-04 d3 REPROVE 기록 |
+| runtime 일치 | ✅ runtime pin 계약 있음 | ✅ runtime `38efdd3` · main `f7581d1` | ✅ D100 runtime은 단일 SHA, main 차이는 매거진 변경 |
+| 자동 단계 controller | ✅ `StageDecision` 단일 authority | ✅ controller ON·job loaded | ✅ 10-06 d3 REPROVE 기록 |
 | 자동 발행 D3 | ✅ 자동 READY·거래·감사 경로 | ✅ runtime 반영 | ✅ 10-03 자동 3/3·서로 다른 Persona 3명·도장 3/3 |
-| D5 준비도 | ⚠️ 실행되지만 옛 고정 20% 계약 | ✅ runtime 반영 | ❌ `readyNeeded=6`, `readyCapacity=5`로 FAIL |
-| JIT source-to-slot | ⚠️ 증거 도장과 판정 일부 구현, 고정 재고 계산 잔존 | ⚠️ 부분 반영 | ❌ 원문→공개 p50 57.51h, 같은 날 공개 0/5 |
+| D5 준비도 | ✅ 고정 20% 제거 · 실측 cohort 판정 | ⚠️ 비용 상한 보정 PR 전 | ⚠️ 현재 `SUPPLY_COST_UNKNOWN`, 보정식으로는 D5 비용 $0.2752/$0.50 |
+| JIT source-to-slot | ✅ 수요 기반 유료 호출·slot intent·발행 재검사 | ✅ runtime 반영 | ⚠️ 현재 계약 표본 9건, 장기 지연은 계속 관측 |
 | Persona 계약 | ✅ contract-valid 판정 | ✅ 24명 | ✅ D3·D5 하한 충족, ❌ D10 하한 30명에 6명 부족 |
 | 첫 댓글 | ✅ 60분 계약·runner | ✅ loaded | ✅ 10-03 3/3, 최근 측정 p50 13.68분 |
 | 다중 댓글 UI | ✅ Conversation Thread R1 | ✅ production | ✅ 사람·비회원 다중 스레드 실확인 |
@@ -74,9 +74,10 @@ READY 목표에 근거 없는 20%를 고정 가산한 옛 preflight 계약과 �
 
 | ID | 현재 구현·문서 | 정본 판정 | 처리 원칙 |
 |---|---|---|---|
-| C-01 | 단계별 READY를 공개량의 120%로 고정 | ❌ 근거 없는 고정 할증 | 실측 실패·만료·복구 여유로 교체하고 옛 상수 삭제 |
-| C-02 | 상세 원천/day를 과거 전환율로 고정 | ❌ 관측값을 정책으로 승격 | source-to-slot 기회 coverage와 실측 수율로 계산 |
-| C-03 | 정치와 공개 인물을 한 flag로 선필터 | ❌ 연예·방송·셀럽까지 제거 | 정치 선동만 제외하고 공개 인물은 안전 gate 뒤 정상 경쟁 |
+| C-01 | 고정 20% READY 할증 | ✅ 삭제됨 | 같은 cohort의 공개·손실·예정·모름으로 필요량 범위 계산 |
+| C-02 | 고정 상세 원천/day와 고정 유료 묶음 | ✅ 삭제됨 | source-to-slot 부족분과 현재 계약 실측 수율로만 호출 |
+| C-03 | 정치와 공개 인물을 한 flag로 선필터 | ✅ 교체됨 | 정치 문맥만 제외, 연예·방송·셀럽은 위해 gate 뒤 정상 경쟁 |
+| C-09 | 결말 모름 비용이 있으면 결과당 비용 전체 UNKNOWN | ❌ 이미 쓴 비용을 숨기지 않아도 안전한 판정 가능 | 전체 현재계약 비용 ÷ 확인된 slot-valid 결과를 보수적 상한으로 사용 |
 | C-04 | 자동 댓글 경로가 글당 정확히 1건 | ⚠️ 첫 댓글 증명은 맞지만 제품 대화로는 부족 | 첫 댓글 계약 유지 + reply-worthiness 기반 0/1/복수 답글 |
 | C-05 | 홈 인기에 Persona 댓글이 합산될 수 있음 | ❌ 합성 인기를 실사용자 반응처럼 사용 | 실회원 반응·현재성 우선, Persona 신호 분리 |
 | C-06 | 재방문 참여 이벤트 없음 | ❌ North Star 측정 불가 | 실사용자 이벤트 계측 후 Persona·봇·운영자 제외 |
@@ -87,18 +88,18 @@ READY 목표에 근거 없는 20%를 고정 가산한 옛 preflight 계약과 �
 
 | 우선순위 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| P0-1 | 고정 READY·상세 원천 계약 제거 | preflight가 슬롯별 유효 기회·실측 손실·복구시간으로 필요량 산출, 옛 상수와 중복 판정 삭제 | 하한만 낮추기, D5 수동 승격 |
-| P0-2 | source-to-slot JIT 수렴 | 유료 생성 전·선택·발행 직전·준비도가 같은 판정을 사용, 원문 게시→공개 지연 급감 | 식은 READY 구제, 이벤트별 예외 |
-| P0-3 | 정치/연예 선필터 교체 | 창업자 정치 목록은 유지, 연예·방송·셀럽 정상 수집, 명예훼손·사생활 gate 별도 replay PASS | 공개 인물을 한꺼번에 허용/차단 |
-| P0-4 | 자동 D5 재증명 | 자동 5/5·서로 다른 Persona·첫 댓글·감사·비용·다음 결정 PASS | 사람 승인 글로 편수 채우기 |
+| P0-1 | ✅ 고정 READY·상세 원천 계약 제거 | 배포·현재계약 표본 생성 완료 | 하한만 낮추기, D5 수동 승격 |
+| P0-2 | ⚠️ source-to-slot JIT 운영 수렴 | 비용 상한 보정 배포 뒤 동일 cohort로 처리량·비용 판정 | 식은 READY 구제, 이벤트별 예외 |
+| P0-3 | ✅ 정치/연예 선필터 교체 | 실제 모델 replay와 CI 통과, runtime 반영 | 공개 인물을 한꺼번에 허용/차단 |
+| P0-4 | 진행 중 — 자동 D3 재증명 후 D5 | 10-06 자동 3/3·서로 다른 Persona·첫 댓글·감사·비용·다음 결정 PASS | 사람 승인 글로 편수 채우기 |
 | P0-5 | D10 Persona reserve +6 | contract-valid 30명, 근거 없는 생활사·말투 생성 0 | 단계를 열려고 하한 낮추기 |
 | P1-1 | 선택적 자동 답글 | canon §5의 같은 reply-worthiness 판정, 실회원 우선, loop·중복·자기답글 0 | 모든 댓글에 의무 답글 |
 | P1-2 | 실회원 우선 홈·베스트 | Persona 반응 분리, 현재성·실회원 참여 replay와 실제 화면 검증 | 합성 댓글로 인기 조작 |
 | P1-3 | North Star 계측 | 7일 재방문 참여 고유 실사용자 측정, Persona·봇·운영자 제외 | 게시량을 성공 지표로 대체 |
 | P1-4 | D20~D100 용량 | 같은 계약으로 scheduler·Persona·비용·복구를 단계별 증명 | 단계별 새 정책 fork |
 
-P0-1~P0-3은 서로 같은 판정 파일을 건드릴 가능성이 높아 한 통합 브랜치에서 순차 구현한다.
-Persona reserve와 답글 replay처럼 파일 경계가 다른 일은 병렬로 진행한다. 최종 exact head에서 CI를 한 번 돌린다.
+P0-1~P0-3 통합은 #655로 main에 병합됐고 runtime에 배포됐다. 이후 보정도 중간 상태를 운영에 섞지 않고
+exact head의 CI가 끝난 뒤 한 번의 runtime 배포로 적용한다.
 
 ## 5. 확인된 D3 결과와 D5 차단점
 

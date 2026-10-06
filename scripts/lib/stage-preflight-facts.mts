@@ -503,7 +503,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
-      + ` · 결말 모름 비용 $${costAttribution.byFate.unknown.toFixed(4)}`)
+      + ` · 현재 정산 $${costAttribution.totalUsd.toFixed(4)}`)
   }
   const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
     : { sources: worksetSources, ...fates, usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null }
