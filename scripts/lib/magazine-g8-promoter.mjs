@@ -31,6 +31,7 @@ import { checkTitleForm } from './magazine-editorial.mjs'
 import { BANNED_WORDS } from './magazine-brief-policy.mjs'
 import { VALIDATION_PROFILES } from './magazine-validation-profile.mjs'
 import { withQuarantineLock } from './magazine-quarantine.mjs'
+import { withQueueWriteLock } from './magazine-queue-lock.mjs'
 
 export const G8_SCHEMA = 'g8-promotion/1'
 export const PRIMARY_COUNT = 5
@@ -715,12 +716,41 @@ const shaOrAbsent = (text) => (text === null ? 'ABSENT' : sha256(text))
  *    단, 파일이 그 apply 의 「전」 또는 「후」 바이트일 때만 — 그 사이 다른 writer(M-AUTO 등록)가 바꿨다면
  *    덮어쓰지 않고 RECOVERY_CONFLICT 로 멈춘다.
  */
-function recoverJournal(journalPath) {
+export const JOURNAL_SCHEMA = 'g8-journal/1'
+
+/**
+ * 🔴 **journal 신원 검증** — 되돌리기 전에 「이 journal 이 지금 이 루트의 그 세 파일만 가리키는가」를 본다.
+ *    schema · 정확히 3개 · 중복 0 · 현재 queueRoot/admissionRoot 에서 계산한 절대 경로와 정확히 일치.
+ *    하나라도 어긋나면 어떤 파일도 쓰거나 지우지 않는다 — journal 자체도 남긴다.
+ *    (앞판은 외부 경로를 가리킨 위조 journal 로 저장소 밖 파일을 **실제로 지웠다** — schema 가 틀려도.)
+ */
+export function checkJournalIdentity(j, expectedPaths) {
+  const fail = (why) => ({ ok: false, code: 'RECOVERY_IDENTITY', why })
+  if (!j || typeof j !== 'object') return fail('journal 이 객체가 아니다')
+  if (j.schema !== JOURNAL_SCHEMA) return fail(`schema 가 ${JOURNAL_SCHEMA} 가 아니다 (${String(j.schema)})`)
+  if (!Array.isArray(j.files)) return fail('files 가 배열이 아니다')
+  const want = [...expectedPaths].sort()
+  if (j.files.length !== want.length) return fail(`파일 수가 ${want.length} 이 아니다 (${j.files.length})`)
+  const got = j.files.map((f) => f?.path)
+  if (got.some((p) => typeof p !== 'string' || !path.isAbsolute(p))) return fail('절대 경로가 아닌 항목이 있다')
+  if (new Set(got).size !== got.length) return fail('같은 경로가 두 번 있다')
+  const sorted = [...got].sort()
+  if (sorted.some((p, i) => p !== want[i])) return fail(`경로가 현재 루트의 세 파일과 다르다 (${sorted.join(', ')})`)
+  for (const f of j.files) {
+    if (!(f.before === null || typeof f.before === 'string')) return fail(`${f.path} 의 before 가 원문 또는 null 이 아니다`)
+    if (typeof f.afterSha !== 'string') return fail(`${f.path} 의 afterSha 가 없다`)
+  }
+  return { ok: true }
+}
+
+function recoverJournal(journalPath, expectedPaths) {
   let j
   try { j = JSON.parse(fs.readFileSync(journalPath, 'utf8')) } catch (e) {
-    return { ok: false, code: 'RECOVERY_FAILED', why: `journal 을 읽지 못했다: ${e.message}` }
+    return { ok: false, code: 'RECOVERY_IDENTITY', why: `journal 을 읽지 못했다: ${e.message}` }
   }
-  const files = j?.files ?? []
+  const id = checkJournalIdentity(j, expectedPaths)
+  if (!id.ok) return id
+  const files = j.files
   for (const f of files) {
     const cur = shaOrAbsent(readOptional(f.path))
     if (cur !== shaOrAbsent(f.before) && cur !== f.afterSha) {
@@ -794,17 +824,31 @@ export function testPauseHook(env = process.env) {
 export async function applyManifest({ manifest, queueRoot, admissionRoot, faultHook = testPauseHook() }) {
   if (manifest?.schema !== G8_SCHEMA) return { ok: false, code: 'SCHEMA', why: `manifest schema 가 ${G8_SCHEMA} 가 아니다` }
   if (hashManifest(manifest) !== manifest.hash) return { ok: false, code: 'HASH_MISMATCH', why: 'manifest 본문과 해시가 다르다' }
-  if (!manifest.queueRows.length) return { ok: true, code: 'NOTHING_TO_APPLY', written: [] }
-  const pipelinePath = path.join(admissionRoot, RESEARCH_FILES.pipelineModule)
-  if (!fs.existsSync(pipelinePath)) return { ok: false, code: 'PIPELINE_MISSING', why: pipelinePath }
-  const pipeline = await import(pathToFileURL(pipelinePath).href)
-  if (typeof pipeline.recordAdmission !== 'function' || typeof pipeline.validateLedger !== 'function') {
-    return { ok: false, code: 'PIPELINE_MISSING', why: 'm3-pipeline.mjs 에 recordAdmission · validateLedger 가 없다' }
+  /**
+   * 🔴 **후보 0건이어도 여기서 돌아가지 않는다.** 앞선 급사의 journal 은 잠금 안에서만 되돌릴 수 있고,
+   *    빈 manifest 가 그것을 건너뛰면 반쪽 상태가 남는다. pipeline 은 실제로 쓸 행이 있을 때만 읽는다.
+   */
+  let pipeline = null
+  if (manifest.queueRows.length) {
+    const pipelinePath = path.join(admissionRoot, RESEARCH_FILES.pipelineModule)
+    if (!fs.existsSync(pipelinePath)) return { ok: false, code: 'PIPELINE_MISSING', why: pipelinePath }
+    pipeline = await import(pathToFileURL(pipelinePath).href)
+    if (typeof pipeline.recordAdmission !== 'function' || typeof pipeline.validateLedger !== 'function') {
+      return { ok: false, code: 'PIPELINE_MISSING', why: 'm3-pipeline.mjs 에 recordAdmission · validateLedger 가 없다' }
+    }
   }
   const ctx = { manifest, queueRoot, admissionRoot, faultHook, pipeline }
-  const lockPath = path.join(admissionRoot, ADMISSION_FILES.ledger)
-  const locked = withQuarantineLock(lockPath, () => applyLocked(ctx), { waitMs: 0 })
-  if (!locked.ok) return { ok: false, code: 'LOCKED', why: locked.why }
+  /**
+   * 🔴 **잠금 순서는 queue → admission 으로 고정이다** (`QUEUE_LOCK_ORDER`).
+   *    queue 잠금은 M-AUTO 등록과 공유한다 — 큐를 읽기 전에 쥐고 쓴 뒤에 놓는다.
+   */
+  const queueFile = path.join(queueRoot, PRODUCT_FILES.queue)
+  const ledgerPath = path.join(admissionRoot, ADMISSION_FILES.ledger)
+  const locked = withQueueWriteLock(queueFile, () => {
+    const inner = withQuarantineLock(ledgerPath, () => applyLocked(ctx), { waitMs: 0 })
+    return inner.ok ? inner.value : { ok: false, code: 'LOCKED', why: `편입 장부 잠금: ${inner.why}` }
+  }, { waitMs: 0 })
+  if (!locked.ok) return { ok: false, code: 'LOCKED', why: `큐 writer 잠금: ${locked.why}` }
   return locked.value
 }
 
@@ -812,17 +856,18 @@ export async function applyManifest({ manifest, queueRoot, admissionRoot, faultH
 function applyLocked({ manifest, queueRoot, admissionRoot, faultHook, pipeline }) {
   faultHook('locked:enter')
   const journalPath = path.join(admissionRoot, JOURNAL_FILE)
-  let recovered = null
-  if (fs.existsSync(journalPath)) {
-    recovered = recoverJournal(journalPath)
-    if (!recovered.ok) return recovered
-  }
-
   const files = {
     queue: path.join(queueRoot, PRODUCT_FILES.queue),
     slugManifest: path.join(admissionRoot, ADMISSION_FILES.slugManifest),
     ledger: path.join(admissionRoot, ADMISSION_FILES.ledger),
   }
+  let recovered = null
+  if (fs.existsSync(journalPath)) {
+    recovered = recoverJournal(journalPath, Object.values(files))
+    if (!recovered.ok) return recovered
+  }
+  if (!manifest.queueRows.length) return { ok: true, code: 'NOTHING_TO_APPLY', written: [], recovered }
+
   const before = Object.fromEntries(Object.entries(files).map(([k, f]) => [k, readOptional(f)]))
   if (before.queue === null) return { ok: false, code: 'QUEUE_MISSING', why: files.queue, recovered }
   const articlesSource = readOptional(path.join(queueRoot, PRODUCT_FILES.articles))

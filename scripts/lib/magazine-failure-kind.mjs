@@ -73,6 +73,11 @@ const INFRA_CODES = new Set([
   'composer_markers_missing',
   'composer_short',
   'composer_dirty',
+  /**
+   * 🔴 topic-queue.ts 공용 writer 잠금을 다른 writer(G8 편입기 apply)가 쥐고 있었다.
+   *    원고와 무관하다 — 횟수에 넣으면 멀쩡한 글이 격리된다 (`magazine-queue-lock.mjs`).
+   */
+  'queue_writer_locked',
   'send_button_missing',
   // 🔴 전송 전 기준선을 못 읽었다 — 보내지 않았다
   'response_baseline_unreadable',

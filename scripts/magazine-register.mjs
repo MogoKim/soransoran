@@ -26,6 +26,13 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadArticles, loadQueue, sliceLiteral, evalLiteral, ROOT, ARTICLES_TS, QUEUE_TS, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+import { withQueueWriteLock, removeQueueDay, queueTestPause, QUEUE_LOCKED_CODE } from './lib/magazine-queue-lock.mjs'
+
+/**
+ * 🔴 큐 writer 잠금을 기다리는 최대 시간. G8 편입기 apply 의 임계구역은 짧다(ms) —
+ *    그보다 오래 쥐고 있으면 기다리지 않고 이번 등록을 INFRA 실패(`queue_writer_locked`)로 넘긴다.
+ */
+export const REGISTER_QUEUE_LOCK_WAIT_MS = 2000
 
 /** 운영 전략서 §4. 공개 시각은 하나로 고정한다 */
 const KST_TIME = 'T10:30:00+09:00'
@@ -238,39 +245,47 @@ export function applyWrite(p, {
   const nextArticles = articlesSrc.replace(ANCHOR, rec.text + ANCHOR)
   if (nextArticles === articlesSrc) return { ok: false, why: 'articles.ts 삽입에 실패했다' }
 
-  const queueSrc = readFileSync(queuePath, 'utf8')
-  const re = new RegExp(`  \\{\\n    day: ${item.day},[\\s\\S]*?\\n  \\},\\n`, 'm')
-  const hits = queueSrc.match(re)
-  if (!hits) return { ok: false, why: `topic-queue.ts 에서 day ${item.day} 블록을 찾지 못했다` }
-  const nextQueue = queueSrc.replace(re, '')
-  if (nextQueue === queueSrc) return { ok: false, why: 'topic-queue.ts 제거에 실패했다' }
+  /**
+   * 🔴 **큐 읽기부터 두 파일 쓰기까지 공용 큐 writer 잠금 안에서 한다** (G8 편입기와 같은 잠금).
+   *    잠금 밖에서 읽고 안에서 쓰면, 그 사이 G8 이 넣은 행을 옛 바이트로 덮는다.
+   */
+  const locked = withQueueWriteLock(queuePath, () => writeLocked(), { waitMs: REGISTER_QUEUE_LOCK_WAIT_MS })
+  if (!locked.ok) return { ok: false, code: QUEUE_LOCKED_CODE, why: `${QUEUE_LOCKED_CODE} — topic-queue.ts 쓰기 잠금을 얻지 못했다 (${locked.why})` }
+  return locked.value
 
-  // 여기까지 오면 계산은 둘 다 성공. 이제 쓴다 — **되돌릴 수 있는 상태로**.
-  const before = [
-    { path: articlesPath, bytes: existsSync(articlesPath) ? readFileSync(articlesPath) : null },
-    { path: queuePath, bytes: existsSync(queuePath) ? readFileSync(queuePath) : null },
-  ]
-  const rollback = () => {
-    const failed = []
-    for (const f of before) {
-      try {
-        if (f.bytes === null) rmSync(f.path, { force: true })
-        else writeFileSync(f.path, f.bytes)
-      } catch (e) { failed.push(`${f.path}: ${e.message}`) }
+  function writeLocked() {
+    queueTestPause('register:locked')
+    const queueSrc = readFileSync(queuePath, 'utf8')
+    const nextQueue = removeQueueDay(queueSrc, item.day)
+    if (nextQueue === null) return { ok: false, why: `topic-queue.ts 에서 day ${item.day} 블록을 찾지 못했다` }
+
+    // 여기까지 오면 계산은 둘 다 성공. 이제 쓴다 — **되돌릴 수 있는 상태로**.
+    const before = [
+      { path: articlesPath, bytes: existsSync(articlesPath) ? readFileSync(articlesPath) : null },
+      { path: queuePath, bytes: existsSync(queuePath) ? readFileSync(queuePath) : null },
+    ]
+    const rollback = () => {
+      const failed = []
+      for (const f of before) {
+        try {
+          if (f.bytes === null) rmSync(f.path, { force: true })
+          else writeFileSync(f.path, f.bytes)
+        } catch (e) { failed.push(`${f.path}: ${e.message}`) }
+      }
+      return failed
     }
-    return failed
+    try {
+      write(articlesPath, nextArticles)
+      write(queuePath, nextQueue)
+    } catch (e) {
+      const failed = rollback()
+      return { ok: false, rolledBack: true,
+        why: failed.length
+          ? `🔴 쓰기 실패 후 원복도 실패했다 — ${e.message} · 원복 실패: ${failed.join(' / ')}`
+          : `쓰기 실패 — ${e.message} (두 파일을 바이트 단위로 되돌렸다)` }
+    }
+    return { ok: true }
   }
-  try {
-    write(articlesPath, nextArticles)
-    write(queuePath, nextQueue)
-  } catch (e) {
-    const failed = rollback()
-    return { ok: false, rolledBack: true,
-      why: failed.length
-        ? `🔴 쓰기 실패 후 원복도 실패했다 — ${e.message} · 원복 실패: ${failed.join(' / ')}`
-        : `쓰기 실패 — ${e.message} (두 파일을 바이트 단위로 되돌렸다)` }
-  }
-  return { ok: true }
 }
 
 // ── CLI ────────────────────────────────────────────────────

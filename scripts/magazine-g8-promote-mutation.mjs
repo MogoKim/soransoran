@@ -54,12 +54,12 @@ const MUTATIONS = [
   { name: 'apply 재해시를 큐 하나로 축소',
     find: '  const stale = diffHashes(manifest.inputs, current.hashes)',
     replace: '  const stale = diffHashes({ product: { queue: manifest.inputs.product.queue } }, { product: { queue: current.hashes.product.queue } })' },
-  { name: '단일 writer 잠금 제거',
-    find: '  const locked = withQuarantineLock(lockPath, () => applyLocked(ctx), { waitMs: 0 })',
-    replace: '  const locked = { ok: true, value: applyLocked(ctx) }' },
+  { name: '단일 writer 잠금 제거 (편입 장부 잠금)',
+    find: '    const inner = withQuarantineLock(ledgerPath, () => applyLocked(ctx), { waitMs: 0 })',
+    replace: '    const inner = { ok: true, value: applyLocked(ctx) }' },
   { name: '급사 journal 복구 제거',
-    find: '  if (fs.existsSync(journalPath)) {\n    recovered = recoverJournal(journalPath)',
-    replace: '  if (false) {\n    recovered = recoverJournal(journalPath)' },
+    find: '  if (fs.existsSync(journalPath)) {\n    recovered = recoverJournal(journalPath, Object.values(files))',
+    replace: '  if (false) {\n    recovered = recoverJournal(journalPath, Object.values(files))' },
   { name: '정본 recordAdmission 대신 장부 직접 append',
     find: '  const staged = stageAdmissions(pipeline, before.ledger, manifest.admissionRows, manifest.at)',
     replace: "  const staged = { ok: true, text: (before.ledger ?? '') + manifest.admissionRows.map((r) => `${JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', ...r, at: manifest.at })}\\n`).join('') }" },
@@ -69,28 +69,50 @@ const MUTATIONS = [
   { name: '판정 시각을 그날 23:59:59 로 해석',
     find: '  const nowMs = time.ms\n',
     replace: '  const nowMs = new Date(`${time.asOf}T23:59:59+09:00`).getTime()\n' },
+  // ── 3차 (e213d7a NO-GO 결함) ──
+  { name: '빈 manifest 를 잠금·복구 전에 반환',
+    find: '  let pipeline = null\n',
+    replace: "  if (!manifest.queueRows.length) return { ok: true, code: 'NOTHING_TO_APPLY', written: [] }\n  let pipeline = null\n" },
+  { name: 'G8 apply 의 큐 writer 잠금 제거',
+    find: '  const locked = withQueueWriteLock(queueFile, () => {',
+    replace: '  const locked = ((_, fn) => ({ ok: true, value: fn() }))(queueFile, () => {' },
+  { name: 'M-AUTO 등록의 큐 writer 잠금 제거', file: 'magazine-register.mjs',
+    find: '  const locked = withQueueWriteLock(queuePath, () => writeLocked(), { waitMs: REGISTER_QUEUE_LOCK_WAIT_MS })',
+    replace: '  const locked = { ok: true, value: writeLocked() }' },
+  { name: '스냅샷 원복 CAS 제거', file: 'lib/magazine-queue-lock.mjs',
+    find: '    if (foreign.length) return conflict(',
+    replace: '    if (false) return conflict(' },
+  { name: 'journal 신원 검증 제거',
+    find: '  const id = checkJournalIdentity(j, expectedPaths)\n',
+    replace: '  const id = { ok: true }\n' },
 ]
 
 const occurrences = (s, sub) => s.split(sub).length - 1
-const original = fs.readFileSync(path.join(HERE, 'lib', LIB_NAME), 'utf8')
+/** 변이할 수 있는 파일 — scripts/ 기준. 사본 안에서 같은 상대 경로로 서로를 import 한다 */
+const DEFAULT_FILE = `lib/${LIB_NAME}`
+const FILES = [...new Set([DEFAULT_FILE, ...MUTATIONS.map((m) => m.file ?? DEFAULT_FILE)])]
+const originals = Object.fromEntries(FILES.map((f) => [f, fs.readFileSync(path.join(HERE, f), 'utf8')]))
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-mutation-'))
-const libDir = path.join(tmp, 'lib')
-fs.cpSync(path.join(HERE, 'lib'), libDir, { recursive: true })
-const target = path.join(libDir, LIB_NAME)
+fs.cpSync(path.join(HERE, 'lib'), path.join(tmp, 'lib'), { recursive: true })
+const target = path.join(tmp, 'lib', LIB_NAME)
+/** 변이마다 모든 사본을 원본으로 되돌린 뒤 하나만 바꾼다 — 변이가 쌓이지 않는다 */
+const resetAll = () => { for (const f of FILES) fs.writeFileSync(path.join(tmp, f), originals[f]) }
 const runCheck = () => spawnSync('node', [CHECK], { encoding: 'utf8', env: { ...process.env, G8_PROMOTER_LIB: target } })
 
 let bad = 0
 let caught = 0
 console.log('\nG8 편입기 변이 시험\n')
-fs.writeFileSync(target, original)
+resetAll()
 const base = runCheck()
 const baseLine = (base.stdout.match(/G8 편입기 검사 \d+\/\d+/) ?? ['?'])[0]
 if (base.status !== 0) { bad++; console.log(`  ❌ 변이 없는 사본에서 검사가 FAIL 이다 — 기준선이 깨졌다 (${baseLine})`) } else console.log(`  기준선 (변이 없음) — PASS · ${baseLine}`)
 
 for (const mu of MUTATIONS) {
-  const n = occurrences(original, mu.find)
-  if (n !== 1) { bad++; console.log(`  ❌ ${mu.name} — 바꿀 문장이 ${n}번 있다 (정확히 1번이어야 한다)`); continue }
-  fs.writeFileSync(target, original.replace(mu.find, mu.replace))
+  const file = mu.file ?? DEFAULT_FILE
+  const n = occurrences(originals[file], mu.find)
+  if (n !== 1) { bad++; console.log(`  ❌ ${mu.name} — ${file} 에 바꿀 문장이 ${n}번 있다 (정확히 1번이어야 한다)`); continue }
+  resetAll()
+  fs.writeFileSync(path.join(tmp, file), originals[file].replace(mu.find, mu.replace))
   const r = runCheck()
   const failed = (r.stdout.match(/❌ [^\n]+/g) ?? []).length
   const line = (r.stdout.match(/G8 편입기 검사 \d+\/\d+/) ?? [r.stderr.split('\n').find(Boolean) ?? '출력 없음'])[0]

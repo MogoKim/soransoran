@@ -14,6 +14,9 @@
  *   ⑨ 판정 시각은 정확한 KST 시각 — 같은 날 10:29:59 / 10:30:00 경계
  *   ⑩ **실제 자식 프로세스** — 동시 apply 는 하나만 쓰고, SIGKILL 급사는 다음 apply 가 되돌린다
  *   ⑪ (연구 디렉터리가 있을 때만) 실제 I-T6-09 · I-T1-26 · 정본 pipeline 사본 대조
+ *   ⑫ 후보 0건 manifest 도 잠금 안에서 앞선 급사를 먼저 되돌린다 (실제 SIGKILL)
+ *   ⑬ G8 apply 대 M-AUTO 등록 — topic-queue 공용 writer 잠금 · 스냅샷 원복 CAS (실제 자식 프로세스)
+ *   ⑭ journal 신원 — 경로·개수·중복·schema 가 어긋나면 쓰기·삭제 0
  *
  * 🔴 `G8_PROMOTER_LIB` 는 변이 시험(`magazine-g8-promote-mutation.mjs`)이 바꾼 lib 를 넣는 자리다.
  *    그때는 CLI 자식 프로세스도 변이된 lib 옆의 CLI 사본을 쓴다 — 운영 CLI 는 이 변수를 읽지 않는다.
@@ -536,6 +539,216 @@ for (const stage of ['after:queue', 'after:slugManifest']) {
   fs.cpSync(f.repo, runtimeDir, { recursive: true })
   const toRuntime = spawnSync('node', applyArgs(mPath, { repo: runtimeDir, research: f.research }, mf.hash), { encoding: 'utf8' })
   expect('운영 runtime 경로 apply 거부', [toRuntime.status, fs.readFileSync(path.join(runtimeDir, 'drafts/magazine/topic-queue.ts'), 'utf8') === fs.readFileSync(path.join(f.repo, 'drafts/magazine/topic-queue.ts'), 'utf8')], [2, true])
+}
+
+// ── ⑫ 빈 manifest 급사 복구 ─────────────────────────────────
+console.log('⑫ 후보 0건 manifest 도 잠금 안에서 앞선 급사를 먼저 되돌린다')
+const emptyOf = (mm) => {
+  const e = { ...mm, queueRows: [], admissionRows: [], fallbackRows: [], selection: { primary: [], fallback: [], excluded: [] } }
+  e.hash = lib.hashManifest(e)
+  return e
+}
+{
+  const f = fresh()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const pre = bytesOf(f)
+  const gate = path.join(f.dir, 'gate-empty')
+  const child = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'after:queue'), stdio: ['ignore', 'pipe', 'pipe'] })
+  const exited = exitOf(child)
+  const reached = await waitFor(`${gate}.reached`)
+  child.kill('SIGKILL')
+  const ex = await exited
+  const mid = bytesOf(f)
+  expect('빈 manifest 반례 — 실제 SIGKILL 로 반쪽 상태가 생겼다', [reached, ex.signal, mid.queue !== pre.queue, mid.ledger === pre.ledger,
+    fs.existsSync(path.join(f.research, lib.JOURNAL_FILE))], [true, 'SIGKILL', true, true, true])
+  const e = emptyOf(mf)
+  const ePath = saveManifest(f, e, 'empty.json')
+  const r = spawnSync('node', applyArgs(ePath, f, e.hash), { encoding: 'utf8' })
+  let j = {}
+  try { j = JSON.parse(r.stdout) } catch { j = { code: `출력 없음 ${r.stderr.slice(0, 120)}` } }
+  expect('queueRows=[] apply — NOTHING_TO_APPLY 이면서 recovered.ok=true', [r.status, j.code, j.recovered?.ok ?? null], [0, 'NOTHING_TO_APPLY', true])
+  expect('queueRows=[] apply 뒤 — 세 파일 원본 바이트 · journal 0', [JSON.stringify(bytesOf(f)) === JSON.stringify(pre), fs.existsSync(path.join(f.research, lib.JOURNAL_FILE))], [true, false])
+  const again = await apply(e, f)
+  expect('journal 이 없으면 빈 manifest 는 아무것도 하지 않는다', [again.code, again.recovered], ['NOTHING_TO_APPLY', null])
+}
+
+// ── ⑬ topic-queue 공용 writer 잠금 ──────────────────────────
+console.log('⑬ G8 apply 대 M-AUTO 등록 — 같은 큐 writer 잠금 (실제 자식 프로세스)')
+const qlock = await import(pathToFileURL(path.join(path.dirname(LIB), 'magazine-queue-lock.mjs')).href)
+const { classifyFailure } = await import(pathToFileURL(path.join(HERE, 'lib/magazine-failure-kind.mjs')).href)
+const REG = (() => {
+  if (!process.env.G8_PROMOTER_LIB) return path.join(HERE, 'magazine-register.mjs')
+  const copy = path.join(path.dirname(path.dirname(LIB)), 'magazine-register.mjs')
+  if (!fs.existsSync(copy)) fs.copyFileSync(path.join(HERE, 'magazine-register.mjs'), copy)
+  return copy
+})()
+/** M-AUTO 등록과 같은 함수(`applyWrite`) — queued-one(day 10)을 등록하고 큐에서 지운다 */
+const regArgs = (f, arts) => ['--input-type=module', '-e', `const { applyWrite } = await import(${JSON.stringify(REG)}); const fs = await import('node:fs');
+const r = applyWrite({ slug: 'queued-one', _internal: { draft: { literal: "{\\n  title: '등록 글',\\n  publishedAt: '',\\n}" }, norm: { date: '2026-10-08', publishAt: '2026-10-08T10:30:00+09:00' }, item: { day: 10 }, articlesSrc: fs.readFileSync(${JSON.stringify(arts)}, 'utf8') } },
+  { articlesPath: ${JSON.stringify(arts)}, queuePath: ${JSON.stringify(path.join(f.repo, 'drafts/magazine/topic-queue.ts'))} })
+console.log(JSON.stringify(r))`]
+const regArticles = (f) => { const p = path.join(f.dir, 'register-articles.ts'); fs.writeFileSync(p, 'export const R = {\n} satisfies Record<string, MagazineArticleBody>\n'); return p }
+const hasQueued = (text) => parseQueueSource(text).some((r) => r.slug === 'queued-one')
+const parsesOk = (text) => { try { return Array.isArray(parseQueueSource(text)) } catch { return false } }
+
+{
+  // A: G8 이 큐 잠금을 쥔 채 멈춘 사이 등록이 시도한다
+  const f = fresh()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const arts = regArticles(f)
+  const artsPre = fs.readFileSync(arts, 'utf8')
+  const pre = bytesOf(f)
+  const gate = path.join(f.dir, 'gate-g8-holds')
+  const g8 = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
+  const outG8 = stdoutOf(g8)
+  const exitG8 = exitOf(g8)
+  const reached = await waitFor(`${gate}.reached`)
+  const queueFile = filesOf(f).queue
+  const restoreWhileHeld = qlock.restoreQueueSnapshot({ path: queueFile, existed: true, bytes: Buffer.from(pre.queue), queueCas: { day: 10 } }, { waitMs: 0 })
+  const reg = spawnSync('node', regArgs(f, arts), { encoding: 'utf8', timeout: 20000 })
+  let jReg = {}
+  try { jReg = JSON.parse(reg.stdout) } catch { jReg = { ok: null, code: `출력 없음 ${reg.stderr.slice(0, 120)}` } }
+  const mid = bytesOf(f)
+  fs.writeFileSync(`${gate}.go`, '')
+  const exG8 = await exitG8
+  let jG8 = {}
+  try { jG8 = JSON.parse(outG8()) } catch { jG8 = { code: '출력 없음' } }
+  const fin = bytesOf(f)
+  expect('G8 이 큐 잠금을 쥔 동안 등록은 queue_writer_locked · 쓰기 0', [reached, jReg.ok, jReg.code, mid.queue === pre.queue, fs.readFileSync(arts, 'utf8') === artsPre],
+    [true, false, qlock.QUEUE_LOCKED_CODE, true, true])
+  expect('G8 이 큐 잠금을 쥔 동안 스냅샷 원복도 덮지 않는다 (queue_writer_locked)', [restoreWhileHeld.restored, restoreWhileHeld.failure?.errorName], [false, qlock.QUEUE_LOCKED_CODE])
+  expect('그 뒤 G8 은 완주 (교착 0)', [exG8.code, jG8.code], [0, 'APPLIED'])
+  expect('lost update 0 — 등록이 실패라 했으니 queued-one 이 남고 G8 행 5 가 있다', [hasQueued(fin.queue), parseQueueSource(fin.queue).filter((r) => r.g8ManifestHash === mf.hash).length], [true, 5])
+  expect('최종 큐 파싱 PASS (7행)', [parsesOk(fin.queue), parseQueueSource(fin.queue).length], [true, 7])
+  expect('잠금 파일이 남지 않는다', fs.existsSync(qlock.queueLockFile(queueFile)), false)
+  expect('등록의 잠금 실패는 INFRA — 원고 실패 횟수에 넣지 않는다', classifyFailure({ message: `REGISTER_BLOCKED: ${jReg.why ?? ''}`, sent: false }).kind, 'INFRA')
+}
+{
+  // B: 등록이 큐 잠금을 쥔 채(큐를 읽기 직전) 멈춘 사이 G8 apply 가 시도한다
+  const f = fresh()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const arts = regArticles(f)
+  const pre = bytesOf(f)
+  const gate = path.join(f.dir, 'gate-reg-holds')
+  const reg = spawn('node', regArgs(f, arts), { env: { ...process.env, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_QUEUE_TEST_GATE: gate, SORAN_QUEUE_TEST_PAUSE_AT: 'register:locked' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const outReg = stdoutOf(reg)
+  const exitReg = exitOf(reg)
+  const reached = await waitFor(`${gate}.reached`)
+  const g8 = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8', timeout: 20000 })
+  let jG8 = {}
+  try { jG8 = JSON.parse(g8.stdout) } catch { jG8 = { code: `출력 없음 ${g8.stderr.slice(0, 120)}` } }
+  const mid = bytesOf(f)
+  fs.writeFileSync(`${gate}.go`, '')
+  const exReg = await exitReg
+  let jReg = {}
+  try { jReg = JSON.parse(outReg()) } catch { jReg = { ok: null } }
+  const fin = bytesOf(f)
+  expect('등록이 큐 잠금을 쥔 동안 G8 apply 는 LOCKED · 세 파일 쓰기 0', [reached, g8.status, jG8.code, JSON.stringify(mid) === JSON.stringify(pre)], [true, 1, 'LOCKED', true])
+  expect('그 뒤 등록은 완주 (교착 0)', [exReg.code, jReg.ok], [0, true])
+  expect('lost update 0 — 등록이 지운 queued-one 은 없고 G8 행도 없다', [hasQueued(fin.queue), parseQueueSource(fin.queue).some((r) => r.g8ManifestHash)], [false, false])
+  expect('최종 큐 파싱 PASS (1행) · 편입 장부 무변경', [parsesOk(fin.queue), parseQueueSource(fin.queue).length, fin.slugs === pre.slugs, fin.ledger === pre.ledger], [true, 1, true, true])
+}
+{
+  // C: auto-register 스냅샷 원복 — 이 회차 등록의 결과일 때만 되돌린다
+  const f = fresh()
+  const queueFile = filesOf(f).queue
+  const S = fs.readFileSync(queueFile)
+  const entry = { path: queueFile, existed: true, bytes: S, queueCas: { day: 10 } }
+  expect('원복 — 큐가 스냅샷 그대로면 할 일 없음', qlock.restoreQueueSnapshot(entry), { restored: false, failure: null })
+  fs.writeFileSync(queueFile, qlock.removeQueueDay(S.toString('utf8'), 10))
+  expect('원복 — 이 회차 등록이 지운 것이면 스냅샷으로 되돌린다', [qlock.restoreQueueSnapshot(entry).restored, fs.readFileSync(queueFile).equals(S)], [true, true])
+  fs.writeFileSync(queueFile, String(S).replace(/\n$/, '\n// 부분 쓰기 잔여 (시험)\n'))
+  expect('원복 — register 원복 실패 잔여(새 행 없음)도 되돌린다 (m3a 반례9-C 와 같은 상황)', [qlock.restoreQueueSnapshot(entry).restored, fs.readFileSync(queueFile).equals(S)], [true, true])
+  fs.writeFileSync(queueFile, String(S).slice(0, 200))
+  const broken = fs.readFileSync(queueFile, 'utf8')
+  const rb = qlock.restoreQueueSnapshot(entry)
+  expect('원복 — 지금 큐를 읽을 수 없으면 덮지 않는다', [rb.restored, rb.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === broken], [false, qlock.QUEUE_CHANGED_CODE, true])
+  fs.writeFileSync(queueFile, S)
+  const mf = await build(f)
+  expect('원복 대조용 G8 apply', (await apply(mf, f)).code, 'APPLIED')
+  const withG8 = fs.readFileSync(queueFile, 'utf8')
+  const r1 = qlock.restoreQueueSnapshot(entry)
+  expect('원복 — 회차 뒤 G8 이 넣은 행을 옛 바이트로 덮지 않는다', [r1.restored, r1.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === withG8], [false, qlock.QUEUE_CHANGED_CODE, true])
+  const both = qlock.removeQueueDay(withG8, 10)
+  fs.writeFileSync(queueFile, both)
+  const r2 = qlock.restoreQueueSnapshot(entry)
+  expect('원복 — 등록 + G8 이 섞였으면 덮지 않는다', [r2.restored, r2.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === both], [false, qlock.QUEUE_CHANGED_CODE, true])
+}
+
+{
+  // D: 서로 다른 큐(worktree 두 개)가 같은 편입 장부를 쓴다 — 큐 잠금은 달라도 편입 장부 잠금이 막는다
+  const f = fresh()
+  const repo2 = path.join(f.dir, 'repo2')
+  fs.cpSync(f.repo, repo2, { recursive: true })
+  const f2 = { ...f, repo: repo2 }
+  const mA = await build(f, '2026-10-06T09:00:00+09:00')
+  const mB = await build(f2, '2026-10-06T09:01:00+09:00')
+  const pA = saveManifest(f, mA, 'a.json')
+  const pB = saveManifest(f, mB, 'b.json')
+  const pre2 = bytesOf(f2)
+  const gate = path.join(f.dir, 'gate-shared-admission')
+  const a = spawn('node', applyArgs(pA, f, mA.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
+  const outA = stdoutOf(a)
+  const exitA = exitOf(a)
+  const reached = await waitFor(`${gate}.reached`)
+  const b = spawnSync('node', applyArgs(pB, f2, mB.hash), { encoding: 'utf8', timeout: 20000 })
+  let jB = {}
+  try { jB = JSON.parse(b.stdout) } catch { jB = { code: `출력 없음 ${b.stderr.slice(0, 120)}` } }
+  const mid2 = bytesOf(f2)
+  fs.writeFileSync(`${gate}.go`, '')
+  const exA = await exitA
+  let jA = {}
+  try { jA = JSON.parse(outA()) } catch { jA = { code: '출력 없음' } }
+  const finLedger = ledgerRows(fs.readFileSync(filesOf(f).ledger, 'utf8'))
+  expect('같은 편입 장부 · 다른 큐 — A 가 쥔 동안 B 는 LOCKED · 쓰기 0', [reached, b.status, jB.code, JSON.stringify(mid2) === JSON.stringify(pre2)], [true, 1, 'LOCKED', true])
+  expect('같은 편입 장부 · 다른 큐 — A 완주 · 장부는 A 의 사건 5 (lost update 0)', [exA.code, jA.code, finLedger.length, [...new Set(finLedger.map((r) => r.at))]], [0, 'APPLIED', 5, [mA.at]])
+}
+
+// ── ⑭ journal 신원 ──────────────────────────────────────────
+console.log('⑭ journal 신원이 어긋나면 어떤 파일도 쓰거나 지우지 않는다')
+const identityCase = async (name, makeFiles, schema = lib.JOURNAL_SCHEMA) => {
+  const f = fresh()
+  const mf = await build(f)
+  const victim = path.join(f.dir, 'victim.txt')
+  fs.writeFileSync(victim, '저장소 밖 파일 — 지우면 안 된다')
+  const fl = filesOf(f)
+  const real = { queue: fl.queue, slugs: fl.slugs, ledger: fl.ledger }
+  const journal = { schema, manifestHash: mf.hash, pid: 1, files: makeFiles(real, victim) }
+  const jPath = path.join(f.research, lib.JOURNAL_FILE)
+  fs.writeFileSync(jPath, JSON.stringify(journal))
+  const pre = { research: snapshot(f.research), repo: snapshot(f.repo), victim: fs.readFileSync(victim, 'utf8') }
+  const r = await apply(mf, f).catch((e) => ({ code: `THREW ${e.message}` }))
+  const post = { research: snapshot(f.research), repo: snapshot(f.repo), victim: fs.existsSync(victim) ? fs.readFileSync(victim, 'utf8') : null }
+  expect(`${name} → RECOVERY_IDENTITY · 쓰기·삭제 0 (journal 포함)`, [r.code, JSON.stringify(post) === JSON.stringify(pre)], ['RECOVERY_IDENTITY', true])
+}
+const sha = (p) => lib.sha256(fs.readFileSync(p, 'utf8'))
+/**
+ * 🔴 실제 세 파일 항목은 **CAS 를 통과하도록** 만든다(before = 지금 바이트 · afterSha = 지금 해시).
+ *    그래야 신원 검증이 없을 때 위조 항목(외부 파일 삭제 등)이 실제로 실행된다 — 시험이 CAS 뒤에 숨지 않는다.
+ */
+const ok3 = (real) => [real.queue, real.slugs, real.ledger].map((p) => {
+  const cur = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null
+  return { path: p, before: cur, afterSha: cur === null ? 'ABSENT' : lib.sha256(cur) }
+})
+await identityCase('외부 경로 (afterSha 까지 맞춘 위조)', (real, v) => [{ path: v, before: null, afterSha: sha(v) }, ...ok3(real).slice(1)])
+await identityCase('상대 경로', (real) => [{ path: 'contract/m3-state.jsonl', before: null, afterSha: 'ABSENT' }, ...ok3(real).slice(0, 2)])
+await identityCase('누락 (2개)', (real) => ok3(real).slice(0, 2))
+await identityCase('추가 (4개)', (real, v) => [...ok3(real), { path: v, before: null, afterSha: sha(v) }])
+await identityCase('중복 경로', (real) => [ok3(real)[0], ok3(real)[0], ok3(real)[2]])
+await identityCase('잘못된 schema', (real) => ok3(real), 'g8-journal/0')
+await identityCase('before 가 원문도 null 도 아니다', (real) => ok3(real).map((x, i) => (i ? x : { ...x, before: 7 })))
+{
+  const f = fresh()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  fs.writeFileSync(path.join(f.research, lib.JOURNAL_FILE), JSON.stringify({ schema: 'nope', files: [] }))
+  const r = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8' })
+  let j = {}
+  try { j = JSON.parse(r.stdout) } catch { j = { code: '출력 없음' } }
+  expect('CLI 도 RECOVERY_IDENTITY 로 멈춘다 (exit 1)', [r.status, j.code], [1, 'RECOVERY_IDENTITY'])
 }
 
 // ── ⑪ 실제 연구 정본 ────────────────────────────────────────
