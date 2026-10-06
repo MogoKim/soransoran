@@ -50,7 +50,7 @@ import { fingerprintOf } from './lib/magazine-quarantine.mjs'
 import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath, injectHeroImage, verifyHeroFile } from './lib/magazine-hero.mjs'
 import { validateManuscript, describeReasons } from './lib/magazine-manuscript-guard.mjs'
-import { restoreQueueSnapshot } from './lib/magazine-queue-lock.mjs'
+import { restoreQueueSnapshot, restoreRegisterPair } from './lib/magazine-queue-lock.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -90,7 +90,19 @@ export function trackedSnapshot(paths) {
 export function restoreSnapshot(snap, { writeFile = writeFileSync, remove = rmSync } = {}) {
   const restored = []
   const failures = []
+  /**
+   * 🔴 **등록 쌍은 함께 판정·원복한다** (G8 3차 · 2026-10-06). articles.ts 를 먼저 혼자 되돌리고 큐가 거부되면
+   *    글이 양쪽에서 사라진다. 큐 writer 잠금 안에서 둘 다 되돌릴 수 있을 때만 둘 다 되돌린다.
+   */
+  const pairQueue = snap.find((f) => f.queueCas)
+  const pairArticles = snap.find((f) => f.pairWithQueue)
+  if (pairQueue && pairArticles) {
+    const r = restoreRegisterPair({ articles: pairArticles, queue: pairQueue, slug: pairQueue.queueCas.slug }, { writeFile })
+    restored.push(...r.restored)
+    failures.push(...r.failures)
+  }
   for (const f of snap) {
+    if (pairQueue && pairArticles && (f === pairQueue || f === pairArticles)) continue
     /**
      * 🔴 **큐는 바이트로 덮지 않는다** (G8 편입기 공용 잠금 · 2026-10-06).
      *    회차 시작 뒤 G8 이 넣은 행이 있으면 옛 바이트가 그 행을 지운다(lost update).
@@ -618,7 +630,8 @@ export function drive(slug, opts, deps = {}) {
    */
   if (write) {
     snapshot = trackedSnapshot([p.articleTs, heroFile, p.draftMd, ARTICLES_TS, QUEUE_TS])
-      .map((f) => (f.path === QUEUE_TS ? { ...f, queueCas: { day: item.day } } : f))
+      .map((f) => (f.path === QUEUE_TS ? { ...f, queueCas: { day: item.day, slug } }
+        : f.path === ARTICLES_TS ? { ...f, pairWithQueue: true } : f))
     own = [...fileSnapshot([p.articleTs]), ...fileSnapshot([heroFile], { keepIfCreated: true })]
   }
 

@@ -85,6 +85,26 @@ function takenDates(articles) {
   return m
 }
 
+/**
+ * 삽입 위치(`ANCHOR`)가 닫는 레코드 리터럴을 읽는다 — 변수 이름이 아니라 **실제로 글이 들어갈 그 객체**다.
+ * 🔴 읽지 못하면 추정하지 않는다 — 호출부가 쓰기 0 으로 멈춘다.
+ */
+function recordAtAnchor(src) {
+  const at = src.lastIndexOf(ANCHOR)
+  if (at === -1) return { ok: false, why: '삽입 위치가 없다' }
+  // 🔴 실제 articles.ts 는 `const MAGAZINE_ARTICLE_RECORD = {` (export 없음)다 — 선언 모양을 가정하지 않고,
+  //    삽입 위치 앞의 `const X = {` 후보 중 리터럴이 정확히 ANCHOR 에서 닫히는 것을 고른다
+  const decls = [...src.slice(0, at).matchAll(/\bconst\s+[A-Za-z_$][\w$]*\s*(?::[^=\n]+)?=\s*\{/g)].reverse()
+  for (const d of decls) {
+    const literal = sliceLiteral(src, d.index + d[0].length - 1, '{', '}')
+    if (!literal || d.index + d[0].length - 1 + literal.length !== at + 1) continue
+    try {
+      return { ok: true, articles: Object.entries(evalLiteral(literal, 'articles.ts')).map(([slug, a]) => ({ slug, ...a })) }
+    } catch (e) { return { ok: false, why: e.message } }
+  }
+  return { ok: false, why: '삽입 위치에서 닫히는 레코드 리터럴을 찾지 못했다' }
+}
+
 // ── draft ──────────────────────────────────────────────────
 
 function loadDraftLiteral(dir) {
@@ -237,24 +257,37 @@ export function applyWrite(p, {
   articlesPath = ARTICLES_TS,
   queuePath = QUEUE_TS,
 } = {}) {
+  /**
+   * 🔴 `articlesSrc` 는 **계획 시점의 사본**이다 — 쓰기에 쓰지 않는다 (G8 3차 · 2026-10-06).
+   *    다른 worktree 의 등록이 그 사이 articles.ts 에 글을 넣었으면, 옛 사본 위에 쓰는 순간 그 글이 사라진다.
+   *    아래 잠금 안에서 현재 바이트를 다시 읽고 중복·슬롯·삽입 위치를 다시 본 뒤에 만든다.
+   */
   const { draft, norm, item, articlesSrc } = p._internal
+  void articlesSrc
 
   const rec = buildRecord(p.slug, draft.literal, norm.date, norm.publishAt)
   if (!rec.ok) return { ok: false, why: rec.why }
-
-  const nextArticles = articlesSrc.replace(ANCHOR, rec.text + ANCHOR)
-  if (nextArticles === articlesSrc) return { ok: false, why: 'articles.ts 삽입에 실패했다' }
 
   /**
    * 🔴 **큐 읽기부터 두 파일 쓰기까지 공용 큐 writer 잠금 안에서 한다** (G8 편입기와 같은 잠금).
    *    잠금 밖에서 읽고 안에서 쓰면, 그 사이 G8 이 넣은 행을 옛 바이트로 덮는다.
    */
   const locked = withQueueWriteLock(queuePath, () => writeLocked(), { waitMs: REGISTER_QUEUE_LOCK_WAIT_MS })
-  if (!locked.ok) return { ok: false, code: QUEUE_LOCKED_CODE, why: `${QUEUE_LOCKED_CODE} — topic-queue.ts 쓰기 잠금을 얻지 못했다 (${locked.why})` }
+  if (!locked.ok) return { ok: false, code: locked.code ?? QUEUE_LOCKED_CODE, why: `${locked.code ?? QUEUE_LOCKED_CODE} — topic-queue.ts 쓰기 잠금을 얻지 못했다 (${locked.why})` }
   return locked.value
 
   function writeLocked() {
     queueTestPause('register:locked')
+    const articlesNow = existsSync(articlesPath) ? readFileSync(articlesPath, 'utf8') : ''
+    if (!articlesNow.includes(ANCHOR)) return { ok: false, why: '잠금 안 재검사 — articles.ts 에서 삽입 위치를 찾지 못했다' }
+    const current = recordAtAnchor(articlesNow)
+    if (!current.ok) return { ok: false, why: `잠금 안 재검사 — articles.ts 를 읽지 못했다: ${current.why}` }
+    if (current.articles.some((a) => a.slug === p.slug)) return { ok: false, why: '잠금 안 재검사 — 이미 articles.ts 에 있다 (다른 등록이 먼저 넣었다)' }
+    const taken = takenDates(current.articles)
+    if (taken.has(norm.date)) return { ok: false, why: `잠금 안 재검사 — ${norm.date} 슬롯이 이미 차 있다 (${taken.get(norm.date)}) — 하루 1건` }
+    const nextArticles = articlesNow.replace(ANCHOR, rec.text + ANCHOR)
+    if (nextArticles === articlesNow) return { ok: false, why: 'articles.ts 삽입에 실패했다' }
+
     const queueSrc = readFileSync(queuePath, 'utf8')
     const nextQueue = removeQueueDay(queueSrc, item.day)
     if (nextQueue === null) return { ok: false, why: `topic-queue.ts 에서 day ${item.day} 블록을 찾지 못했다` }

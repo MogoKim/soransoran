@@ -78,6 +78,8 @@ const INFRA_CODES = new Set([
    *    원고와 무관하다 — 횟수에 넣으면 멀쩡한 글이 격리된다 (`magazine-queue-lock.mjs`).
    */
   'queue_writer_locked',
+  /** 운영에 시험 잠금 scope 가 주입돼 잠금을 거부했다 — 설정 문제다. 원고 탓이 아니다 */
+  'queue_lock_scope_blocked',
   'send_button_missing',
   // 🔴 전송 전 기준선을 못 읽었다 — 보내지 않았다
   'response_baseline_unreadable',

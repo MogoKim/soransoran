@@ -17,6 +17,9 @@
  *   ⑫ 후보 0건 manifest 도 잠금 안에서 앞선 급사를 먼저 되돌린다 (실제 SIGKILL)
  *   ⑬ G8 apply 대 M-AUTO 등록 — topic-queue 공용 writer 잠금 · 스냅샷 원복 CAS (실제 자식 프로세스)
  *   ⑭ journal 신원 — 경로·개수·중복·schema 가 어긋나면 쓰기·삭제 0
+ *   ⑮ 큐 writer 잠금은 논리 큐 하나 — 서로 다른 repo 경로의 G8 · 등록이 서로를 막는다
+ *   ⑯ 등록 쌍(articles · queue) 원복은 같은 임계구역에서 함께 판정 · 함께 쓴다
+ *   ⑰ 등록 대 등록 — 잠금 안에서 articles.ts 를 다시 읽어 중복·슬롯·삽입을 재검사
  *
  * 🔴 `G8_PROMOTER_LIB` 는 변이 시험(`magazine-g8-promote-mutation.mjs`)이 바꾼 lib 를 넣는 자리다.
  *    그때는 CLI 자식 프로세스도 변이된 lib 옆의 CLI 사본을 쓴다 — 운영 CLI 는 이 변수를 읽지 않는다.
@@ -28,8 +31,16 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { parseQueueSource } from './lib/magazine-load.mjs'
+import { parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+
+/**
+ * 🔴 큐 writer 잠금은 논리 scope 하나다. 이 검사는 **자기만의 시험 scope** 를 쓴다 —
+ *    운영 scope 잠금과 절대 겹치지 않고, 자식 프로세스도 같은 값을 물려받는다.
+ */
+process.env.SORAN_MAGAZINE_TEST_MODE = '1'
+process.env.SORAN_MAGAZINE_QUEUE_LOCK_SCOPE = `test-g8-check-${process.pid}`
+const TEST_SCOPE = process.env.SORAN_MAGAZINE_QUEUE_LOCK_SCOPE
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
@@ -588,7 +599,7 @@ const regArgs = (f, arts) => ['--input-type=module', '-e', `const { applyWrite }
 const r = applyWrite({ slug: 'queued-one', _internal: { draft: { literal: "{\\n  title: '등록 글',\\n  publishedAt: '',\\n}" }, norm: { date: '2026-10-08', publishAt: '2026-10-08T10:30:00+09:00' }, item: { day: 10 }, articlesSrc: fs.readFileSync(${JSON.stringify(arts)}, 'utf8') } },
   { articlesPath: ${JSON.stringify(arts)}, queuePath: ${JSON.stringify(path.join(f.repo, 'drafts/magazine/topic-queue.ts'))} })
 console.log(JSON.stringify(r))`]
-const regArticles = (f) => { const p = path.join(f.dir, 'register-articles.ts'); fs.writeFileSync(p, 'export const R = {\n} satisfies Record<string, MagazineArticleBody>\n'); return p }
+const regArticles = (f, name = 'register-articles.ts') => { const p = path.join(f.dir, name); fs.writeFileSync(p, 'export const MAGAZINE_ARTICLE_RECORD = {\n} satisfies Record<string, MagazineArticleBody>\n'); return p }
 const hasQueued = (text) => parseQueueSource(text).some((r) => r.slug === 'queued-one')
 const parsesOk = (text) => { try { return Array.isArray(parseQueueSource(text)) } catch { return false } }
 
@@ -690,11 +701,12 @@ const parsesOk = (text) => { try { return Array.isArray(parseQueueSource(text)) 
   const pB = saveManifest(f, mB, 'b.json')
   const pre2 = bytesOf(f2)
   const gate = path.join(f.dir, 'gate-shared-admission')
-  const a = spawn('node', applyArgs(pA, f, mA.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
+  // 🔴 큐 잠금은 논리 scope 하나다 — 「서로 다른 큐」는 서로 다른 시험 scope 로 만든다(편입 장부 잠금만 남긴다)
+  const a = spawn('node', applyArgs(pA, f, mA.hash), { env: { ...testEnv(gate, 'locked:ready'), SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: `${TEST_SCOPE}-qa` }, stdio: ['ignore', 'pipe', 'pipe'] })
   const outA = stdoutOf(a)
   const exitA = exitOf(a)
   const reached = await waitFor(`${gate}.reached`)
-  const b = spawnSync('node', applyArgs(pB, f2, mB.hash), { encoding: 'utf8', timeout: 20000 })
+  const b = spawnSync('node', applyArgs(pB, f2, mB.hash), { encoding: 'utf8', timeout: 20000, env: { ...process.env, SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: `${TEST_SCOPE}-qb` } })
   let jB = {}
   try { jB = JSON.parse(b.stdout) } catch { jB = { code: `출력 없음 ${b.stderr.slice(0, 120)}` } }
   const mid2 = bytesOf(f2)
@@ -751,6 +763,215 @@ await identityCase('before 가 원문도 null 도 아니다', (real) => ok3(real
   expect('CLI 도 RECOVERY_IDENTITY 로 멈춘다 (exit 1)', [r.status, j.code], [1, 'RECOVERY_IDENTITY'])
 }
 
+// ── ⑮ worktree 독립 논리 잠금 ───────────────────────────────
+console.log('⑮ 큐 writer 잠금은 경로가 아니라 논리 큐 하나다 — 서로 다른 repo 경로 (실제 자식 프로세스)')
+/** 등록 자식 — 큐 경로·등록 파일·slug·day·날짜를 고른다 (applyWrite 는 M-AUTO 등록과 같은 함수) */
+const regArgsFor = ({ queuePath, arts, slug = 'queued-one', day = 10, date = '2026-10-08' }) => ['--input-type=module', '-e', `const { applyWrite } = await import(${JSON.stringify(REG)}); const fs = await import('node:fs');
+const r = applyWrite({ slug: ${JSON.stringify(slug)}, _internal: { draft: { literal: "{\\n  title: '등록 글',\\n  publishedAt: '',\\n}" }, norm: { date: ${JSON.stringify(date)}, publishAt: ${JSON.stringify(`${date}T10:30:00+09:00`)} }, item: { day: ${day} }, articlesSrc: fs.readFileSync(${JSON.stringify(arts)}, 'utf8') } },
+  { articlesPath: ${JSON.stringify(arts)}, queuePath: ${JSON.stringify(queuePath)} })
+console.log(JSON.stringify(r))`]
+const parseJson = (text, fallback) => { try { return JSON.parse(text) } catch { return fallback } }
+const slugsIn = (arts) => lib.sha256 && (() => { try { return Object.keys(Function(`return (${fs.readFileSync(arts, 'utf8').replace(/^[^=]*=/, '').replace(/} satisfies[\s\S]*$/, '}')})`)()) } catch { return null } })()
+{
+  expect('운영 scope 는 경로와 무관하게 하나다', [qlock.queueLockBase('/a/topic-queue.ts', {}) === qlock.queueLockBase('/b/other/topic-queue.ts', {}),
+    qlock.queueLockBase('/a/topic-queue.ts', {}).endsWith(`${qlock.QUEUE_LOCK_SCOPE}.queue`)], [true, true])
+  let called = 0
+  const blocked = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x' } })
+  expect('시험 모드 밖 scope 주입은 잠금 거부 · 임계구역 실행 0', [blocked.ok, blocked.code, called], [false, qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE, 0])
+  const badName = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'prod' } })
+  expect('시험 scope 이름은 test- 로 시작해야 한다', [badName.ok, called], [false, 0])
+  const f = fresh()
+  const arts = regArticles(f)
+  const pre = { q: fs.readFileSync(filesOf(f).queue, 'utf8'), a: fs.readFileSync(arts, 'utf8') }
+  const r = spawnSync('node', regArgsFor({ queuePath: filesOf(f).queue, arts }), { encoding: 'utf8', env: { ...process.env, SORAN_MAGAZINE_TEST_MODE: '' } })
+  const j = parseJson(r.stdout, { ok: null })
+  expect('운영 등록 자식이 scope 주입을 보면 쓰기 0', [j.ok, j.code, fs.readFileSync(filesOf(f).queue, 'utf8') === pre.q, fs.readFileSync(arts, 'utf8') === pre.a],
+    [false, qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE, true, true])
+}
+const twoWorktrees = () => {
+  const f = fresh()
+  const repoB = path.join(f.dir, 'other-worktree', 'repo')
+  fs.mkdirSync(path.dirname(repoB), { recursive: true })
+  fs.cpSync(f.repo, repoB, { recursive: true })
+  return { f, repoB, queueB: path.join(repoB, 'drafts/magazine/topic-queue.ts'), artsB: regArticles(f, 'register-articles-b.ts') }
+}
+{
+  // A 경로 G8 apply 가 잠금을 쥔 동안 B 경로 register
+  const { f, repoB, queueB, artsB } = twoWorktrees()
+  expect('두 repo 의 큐 파일 실제 경로가 다르다', fs.realpathSync(filesOf(f).queue) !== fs.realpathSync(queueB), true)
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const preB = { q: fs.readFileSync(queueB, 'utf8'), a: fs.readFileSync(artsB, 'utf8') }
+  const gate = path.join(f.dir, 'gate-ab')
+  const g8 = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
+  const outG8 = stdoutOf(g8)
+  const exitG8 = exitOf(g8)
+  const reached = await waitFor(`${gate}.reached`)
+  const reg = spawnSync('node', regArgsFor({ queuePath: queueB, arts: artsB }), { encoding: 'utf8', timeout: 20000 })
+  const jReg = parseJson(reg.stdout, { ok: null, code: `출력 없음 ${reg.stderr.slice(0, 120)}` })
+  const midB = { q: fs.readFileSync(queueB, 'utf8'), a: fs.readFileSync(artsB, 'utf8') }
+  fs.writeFileSync(`${gate}.go`, '')
+  const exG8 = await exitG8
+  const jG8 = parseJson(outG8(), { code: '출력 없음' })
+  expect('A 경로 G8 이 쥔 동안 B 경로 등록은 queue_writer_locked · B 쓰기 0', [reached, jReg.ok, jReg.code, JSON.stringify(midB) === JSON.stringify(preB)], [true, false, qlock.QUEUE_LOCKED_CODE, true])
+  expect('A 경로 G8 은 완주', [exG8.code, jG8.code], [0, 'APPLIED'])
+  void repoB
+}
+{
+  // B 경로 register 가 잠금을 쥔 동안 A 경로 G8 apply
+  const { f, queueB, artsB } = twoWorktrees()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const preA = bytesOf(f)
+  const gate = path.join(f.dir, 'gate-ba')
+  const reg = spawn('node', regArgsFor({ queuePath: queueB, arts: artsB }), { env: { ...process.env, SORAN_QUEUE_TEST_GATE: gate, SORAN_QUEUE_TEST_PAUSE_AT: 'register:locked' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const outReg = stdoutOf(reg)
+  const exitReg = exitOf(reg)
+  const reached = await waitFor(`${gate}.reached`)
+  const g8 = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8', timeout: 20000 })
+  const jG8 = parseJson(g8.stdout, { code: `출력 없음 ${g8.stderr.slice(0, 120)}` })
+  const midA = bytesOf(f)
+  fs.writeFileSync(`${gate}.go`, '')
+  const exReg = await exitReg
+  const jReg = parseJson(outReg(), { ok: null })
+  expect('B 경로 등록이 쥔 동안 A 경로 G8 apply 는 LOCKED · A 세 파일 쓰기 0', [reached, g8.status, jG8.code, JSON.stringify(midA) === JSON.stringify(preA)], [true, 1, 'LOCKED', true])
+  expect('B 경로 등록은 완주 · B 큐에서 queued-one 제거', [exReg.code, jReg.ok, hasQueued(fs.readFileSync(queueB, 'utf8'))], [0, true, false])
+}
+
+// ── ⑯ 등록 쌍 원복 원자성 ───────────────────────────────────
+console.log('⑯ articles.ts · topic-queue.ts 원복은 같은 임계구역에서 함께 판정한다')
+/** 실제 등록 자식이 두 파일을 쓴 뒤 「실패」를 보고하고, 내부 원복까지 실패한다 (두 파일을 읽기 전용으로 만든 뒤 던진다) */
+const residueArgs = ({ queuePath, arts }) => ['--input-type=module', '-e', `const { applyWrite } = await import(${JSON.stringify(REG)}); const fs = await import('node:fs');
+const write = (p, d) => { fs.writeFileSync(p, d); if (p === ${JSON.stringify(queuePath)}) { fs.chmodSync(p, 0o444); fs.chmodSync(${JSON.stringify(arts)}, 0o444); throw new Error('EIO 시험 주입 — 쓴 뒤 실패') } }
+const r = applyWrite({ slug: 'queued-one', _internal: { draft: { literal: "{\\n  title: '등록 글',\\n  publishedAt: '',\\n}" }, norm: { date: '2026-10-08', publishAt: '2026-10-08T10:30:00+09:00' }, item: { day: 10 }, articlesSrc: fs.readFileSync(${JSON.stringify(arts)}, 'utf8') } },
+  { articlesPath: ${JSON.stringify(arts)}, queuePath: ${JSON.stringify(queuePath)}, write })
+console.log(JSON.stringify(r))`]
+const otherWorktreeCli = (f) => {
+  // 🔴 다른 worktree 의 G8 — 같은 코드를 다른 경로에 두고 거기서 실행한다
+  const root = path.join(f.dir, 'g8-worktree', 'scripts')
+  fs.mkdirSync(root, { recursive: true })
+  fs.cpSync(path.dirname(LIB), path.join(root, 'lib'), { recursive: true })
+  fs.copyFileSync(CLI, path.join(root, 'magazine-g8-promote.mjs'))
+  return path.join(root, 'magazine-g8-promote.mjs')
+}
+{
+  const f = fresh()
+  const arts = regArticles(f)
+  const queuePath = filesOf(f).queue
+  const snapA = fs.readFileSync(arts)
+  const snapQ = fs.readFileSync(queuePath)
+  const pair = { articles: { path: arts, existed: true, bytes: snapA, pairWithQueue: true },
+    queue: { path: queuePath, existed: true, bytes: snapQ, queueCas: { day: 10, slug: 'queued-one' } }, slug: 'queued-one' }
+  const res = spawnSync('node', residueArgs({ queuePath, arts }), { encoding: 'utf8' })
+  for (const p of [arts, queuePath]) fs.chmodSync(p, 0o644)
+  const jr = parseJson(res.stdout, { ok: null })
+  const aTxt = () => fs.readFileSync(arts, 'utf8')
+  expect('반례 준비 — 등록이 두 파일을 쓴 뒤 실패하고 내부 원복도 실패했다 (실제 자식)',
+    [jr.ok, jr.rolledBack, /원복도 실패/.test(jr.why ?? ''), aTxt().includes("'queued-one'"), hasQueued(fs.readFileSync(queuePath, 'utf8'))], [false, true, true, true, false])
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const g8 = spawnSync('node', [otherWorktreeCli(f), '--apply', '--manifest', mPath, '--confirm-hash', mf.hash, '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8', timeout: 20000 })
+  expect('그 직후 다른 worktree 의 G8 이 같은 큐에 행을 더한다 (실제 자식)', [g8.status, parseJson(g8.stdout, {}).code], [0, 'APPLIED'])
+  const before = { a: aTxt(), q: fs.readFileSync(queuePath, 'utf8') }
+  const r = qlock.restoreRegisterPair(pair)
+  const after = { a: aTxt(), q: fs.readFileSync(queuePath, 'utf8') }
+  expect('쌍 원복 — 큐에 다른 writer 행이 있으면 둘 다 되돌리지 않는다', [r.restored, r.failures[0]?.errorName, JSON.stringify(after) === JSON.stringify(before)], [[], qlock.PAIR_REFUSED_CODE, true])
+  expect('정합성 — 글은 articles 에 남고 큐 행은 빠진 「등록됨」 상태 · G8 행 5 보존',
+    [after.a.includes("'queued-one'"), hasQueued(after.q), parseQueueSource(after.q).filter((x) => x.g8ManifestHash === mf.hash).length], [true, false, 5])
+  const { restoreSnapshot } = await import(pathToFileURL(path.join(HERE, 'magazine-auto-register.mjs')).href)
+  const wired = restoreSnapshot([pair.articles, pair.queue])
+  expect('auto-register restoreSnapshot 도 같은 쌍 판정을 쓴다 (둘 다 그대로)', [wired.restored, wired.failures[0]?.errorName, aTxt() === before.a], [[], qlock.PAIR_REFUSED_CODE, true])
+}
+{
+  // 다른 writer 가 없으면 둘 다 한 임계구역에서 되돌린다
+  const f = fresh()
+  const arts = regArticles(f)
+  const queuePath = filesOf(f).queue
+  const pair = { articles: { path: arts, existed: true, bytes: fs.readFileSync(arts), pairWithQueue: true },
+    queue: { path: queuePath, existed: true, bytes: fs.readFileSync(queuePath), queueCas: { day: 10, slug: 'queued-one' } }, slug: 'queued-one' }
+  const reg = spawnSync('node', regArgsFor({ queuePath, arts }), { encoding: 'utf8' })
+  expect('등록 (실제 자식)', parseJson(reg.stdout, {}).ok, true)
+  const r = qlock.restoreRegisterPair(pair)
+  expect('쌍 원복 — 다른 writer 가 없으면 두 파일 모두 스냅샷 바이트', [r.failures, fs.readFileSync(arts).equals(pair.articles.bytes), fs.readFileSync(queuePath).equals(pair.queue.bytes)], [[], true, true])
+  // 쓰는 도중 실패 — 이미 쓴 파일을 원복 직전 바이트로 되돌리고 증거를 남긴다
+  spawnSync('node', regArgsFor({ queuePath, arts }), { encoding: 'utf8' })
+  const mid = { a: fs.readFileSync(arts, 'utf8'), q: fs.readFileSync(queuePath, 'utf8') }
+  const failing = qlock.restoreRegisterPair(pair, { writeFile: (p, d) => { if (p === queuePath) throw new Error('EIO 주입'); fs.writeFileSync(p, d) } })
+  expect('쌍 원복 중 실패 — queue_pair_restore_failed · 두 파일 원복 직전 바이트', [failing.restored, failing.failures[0]?.errorName,
+    /원복 직전으로 되돌림/.test(failing.failures[0]?.errorDetail ?? ''), fs.readFileSync(arts, 'utf8') === mid.a, fs.readFileSync(queuePath, 'utf8') === mid.q],
+  [[], qlock.PAIR_FAILED_CODE, true, true, true])
+  // 큐 writer 잠금을 다른 프로세스가 쥐고 있으면 아무것도 하지 않는다
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const gate = path.join(f.dir, 'gate-pair')
+  const g8 = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
+  const exitG8 = exitOf(g8)
+  await waitFor(`${gate}.reached`)
+  const held = qlock.restoreRegisterPair(pair, { waitMs: 0 })
+  const heldState = { a: fs.readFileSync(arts, 'utf8'), q: fs.readFileSync(queuePath, 'utf8') }
+  fs.writeFileSync(`${gate}.go`, '')
+  await exitG8
+  expect('잠금을 남이 쥐면 쌍 원복 0 (queue_writer_locked)', [held.restored, held.failures[0]?.errorName, heldState.a === mid.a, heldState.q === mid.q], [[], qlock.QUEUE_LOCKED_CODE, true, true])
+}
+
+// ── ⑰ register 대 register ──────────────────────────────────
+console.log('⑰ 서로 다른 slug·날짜 등록 두 개 동시 실행 — 잠금 안 재검사 (실제 자식 프로세스)')
+{
+  const f = fresh()
+  const arts = regArticles(f)
+  const queuePath = filesOf(f).queue
+  const gate = path.join(f.dir, 'gate-rr')
+  const r1 = spawn('node', regArgsFor({ queuePath, arts, slug: 'queued-one', day: 10, date: '2026-10-08' }),
+    { env: { ...process.env, SORAN_QUEUE_TEST_GATE: gate, SORAN_QUEUE_TEST_PAUSE_AT: 'register:locked' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const out1 = stdoutOf(r1)
+  const exit1 = exitOf(r1)
+  const reached = await waitFor(`${gate}.reached`)
+  const r2 = spawn('node', regArgsFor({ queuePath, arts, slug: 'queued-two', day: 12, date: '2026-10-09' }), { stdio: ['ignore', 'pipe', 'pipe'] })
+  const out2 = stdoutOf(r2)
+  const exit2 = exitOf(r2)
+  await sleep(300)
+  fs.writeFileSync(`${gate}.go`, '')
+  const [e1, e2] = [await exit1, await exit2]
+  const j1 = parseJson(out1(), { ok: null })
+  const j2 = parseJson(out2(), { ok: null })
+  const finalSlugs = slugsIn(arts)
+  const finalQueue = fs.readFileSync(queuePath, 'utf8')
+  expect('등록 두 개 모두 완주', [reached, e1.code, e2.code, j1.ok, j2.ok], [true, 0, 0, true, true])
+  expect('lost update 0 — 등록 글 2개 모두 보존', (finalSlugs ?? []).sort(), ['queued-one', 'queued-two'])
+  expect('큐 두 행 모두 정확히 제거 · 큐 파싱 PASS', [parsesOk(finalQueue), parseQueueSource(finalQueue).map((x) => x.slug)], [true, []])
+}
+{
+  const { applyWrite } = await import(pathToFileURL(REG).href)
+  const mk = (f, arts, slug, day, date) => applyWrite({ slug, _internal: { draft: { literal: "{\n  title: '등록 글',\n  publishedAt: '',\n}" },
+    norm: { date, publishAt: `${date}T10:30:00+09:00` }, item: { day }, articlesSrc: fs.readFileSync(arts, 'utf8') } }, { articlesPath: arts, queuePath: filesOf(f).queue })
+  const f = fresh()
+  const arts = regArticles(f)
+  expect('재검사 준비 — queued-two 등록', mk(f, arts, 'queued-two', 12, '2026-10-09').ok, true)
+  const pre = { a: fs.readFileSync(arts, 'utf8'), q: fs.readFileSync(filesOf(f).queue, 'utf8') }
+  const slot = mk(f, arts, 'queued-one', 10, '2026-10-09')
+  expect('잠금 안 재검사 — 같은 날짜 슬롯이면 쓰기 0', [slot.ok, /슬롯이 이미 차 있다/.test(slot.why ?? ''), fs.readFileSync(arts, 'utf8') === pre.a, fs.readFileSync(filesOf(f).queue, 'utf8') === pre.q], [false, true, true, true])
+  const f2 = fresh()
+  const arts2 = regArticles(f2)
+  fs.writeFileSync(arts2, fs.readFileSync(arts2, 'utf8').replace('} satisfies', "  'queued-one': { title: '먼저 들어온 글', publishedAt: '2026-10-01' },\n} satisfies"))
+  const pre2 = { a: fs.readFileSync(arts2, 'utf8'), q: fs.readFileSync(filesOf(f2).queue, 'utf8') }
+  const dup = mk(f2, arts2, 'queued-one', 10, '2026-10-08')
+  expect('잠금 안 재검사 — 이미 있는 slug 면 쓰기 0', [dup.ok, /이미 articles\.ts 에 있다/.test(dup.why ?? ''), fs.readFileSync(arts2, 'utf8') === pre2.a, fs.readFileSync(filesOf(f2).queue, 'utf8') === pre2.q], [false, true, true, true])
+  // 🔴 실제 articles.ts 사본 — fixture 모양만으로 통과시키지 않는다 (실제 파일은 `const MAGAZINE_ARTICLE_RECORD` · export 없음)
+  const fr = fresh()
+  const realCopy = path.join(fr.dir, 'real-articles.ts')
+  fs.copyFileSync(path.join(REPO, 'src/content/magazine/articles.ts'), realCopy)
+  const realBefore = parseArticlesSource(fs.readFileSync(realCopy, 'utf8')).length
+  const real = mk(fr, realCopy, 'queued-one', 10, '2099-01-15')
+  const realAfter = parseArticlesSource(fs.readFileSync(realCopy, 'utf8'))
+  expect('실제 articles.ts 사본에도 잠금 안 재검사 뒤 등록된다 (+1 · 큐 행 제거)', [real.ok, real.why ?? null, realAfter.length - realBefore, realAfter.some((a) => a.slug === 'queued-one'),
+    hasQueued(fs.readFileSync(filesOf(fr).queue, 'utf8'))], [true, null, 1, true, false])
+  const f3 = fresh()
+  const arts3 = path.join(f3.dir, 'no-anchor.ts')
+  fs.writeFileSync(arts3, 'export const MAGAZINE_ARTICLE_RECORD = {\n}\n')
+  const anchor = mk(f3, arts3, 'queued-one', 10, '2026-10-08')
+  expect('잠금 안 재검사 — 삽입 위치가 없으면 쓰기 0', [anchor.ok, /삽입 위치/.test(anchor.why ?? ''), hasQueued(fs.readFileSync(filesOf(f3).queue, 'utf8'))], [false, true, true])
+}
+
 // ── ⑪ 실제 연구 정본 ────────────────────────────────────────
 const REAL_RESEARCH = path.resolve(REPO, '..', 'soransoran-mgraph-research')
 if (fs.existsSync(path.join(REAL_RESEARCH, lib.RESEARCH_FILES.canonical))) {
@@ -766,6 +987,21 @@ if (fs.existsSync(path.join(REAL_RESEARCH, lib.RESEARCH_FILES.canonical))) {
   console.log('⑪ 실제 연구 정본 — SKIP (연구 디렉터리가 없다 · fixture ①이 같은 반례를 본다)')
 }
 
+{
+  // 🔴 이 검사가 만든 시험 scope 잠금만 치운다 — 주인이 죽은 것만. 산 주인이 남아 있으면 그것이 결함이다
+  const leftovers = fs.existsSync(qlock.QUEUE_LOCK_DIR) ? fs.readdirSync(qlock.QUEUE_LOCK_DIR).filter((n) => n.startsWith(TEST_SCOPE)) : []
+  let live = 0
+  for (const n of leftovers) {
+    const file = path.join(qlock.QUEUE_LOCK_DIR, n)
+    let pid = null
+    try { pid = JSON.parse(fs.readFileSync(file, 'utf8')).pid } catch { /* 깨진 잠금 — 아래에서 지운다 */ }
+    let alive = false
+    try { if (pid) { process.kill(pid, 0); alive = true } } catch { alive = false }
+    if (alive) live++
+    else fs.rmSync(file, { force: true })
+  }
+  expect('시험 scope 잠금을 쥔 산 프로세스 0', live, 0)
+}
 for (const d of fixtures) fs.rmSync(d.dir, { recursive: true, force: true })
 finish()
 process.exitCode = fail ? 1 : 0
