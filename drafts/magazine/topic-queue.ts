@@ -97,6 +97,13 @@ export type TopicQueueItem = {
   internalLinks: string[]
   whyNow: string
   notes: string
+  /**
+   * M-GRAPH 의도 식별자. G8 편입기(`scripts/magazine-g8-promote.mjs`)가 넣은 행에만 있다.
+   * intentId ↔ slug 는 영구 1:1 이다 (연구 contract/m3-slug-manifest.json).
+   */
+  intentId?: string
+  /** 이 행을 만든 G8 manifest 해시. 그래프 장부(m3-state.jsonl) ADMITTED 행과 같은 값이어야 한다 */
+  g8ManifestHash?: string
 }
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [
