@@ -176,7 +176,11 @@ export function judgeAutogenCandidate(
     ageBand: card.ageBand, region: card.region,
     noGoTopics: card.noGoTopics, noGoExpressions: card.noGoExpressions,
     activityToday: 0, daysSinceActive: null,
-    voiceComments: c.voice?.bundle.comments.length ?? 0,
+    // 🔴 계약의 말투 근거 수는 **관측 총수**(style-only 포함)다 — 운영 4상태가 넣는 값과 같다
+    //    (`readReserveFacts` ← `bundlesForPersonas.anchorComments = observedCount`, 2026-10-01 `6e9803c`).
+    //    앞판은 원문 수(`comments.length`)를 넣어, 운영이 통과시키는 "관측 3 · 안전 원문 2" 화자를 여기서만 막았다.
+    //    하한(`VOICE_MIN_COMMENTS`)은 그대로다 — 안전 원문 하한은 위 ③ `judgeVoiceEvidence` 가 따로 본다
+    voiceComments: c.voice?.bundle.observedCount ?? 0,
   })
   const contract = contractAxes({
     code: c.code,
