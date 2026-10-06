@@ -113,6 +113,22 @@ const MUTATIONS = [
   { name: '등록 — 재검사 파서가 export const 만 본다 (실제 articles.ts 는 export 없음)', file: 'magazine-register.mjs',
     find: '/\\bconst\\s+[A-Za-z_$][\\w$]*\\s*(?::[^=\\n]+)?=\\s*\\{/g',
     replace: '/\\bexport const\\s+[A-Za-z_$][\\w$]*\\s*(?::[^=\\n]+)?=\\s*\\{/g' },
+  // ── 5차 (3c057cb · Codex P0 — register durable transaction) ──
+  { name: '등록 transaction — journal 기록 제거', file: 'magazine-register.mjs',
+    find: '    try { atomicWrite(jp, JSON.stringify(journal), dirname(jp)) } catch (e) {',
+    replace: '    try { void journal } catch (e) {' },
+  { name: '등록 transaction — 미완료 journal 복구 제거', file: 'magazine-register.mjs',
+    find: "  if (!existsSync(jp)) return { ok: true, action: 'NONE' }",
+    replace: "  return { ok: true, action: 'NONE' }" },
+  { name: '등록 transaction — journal 신원 검증 제거', file: 'magazine-register.mjs',
+    find: '  const id = checkRegisterJournalIdentity(j, { articlesPath, queuePath })',
+    replace: '  const id = { ok: true }' },
+  { name: '등록 transaction — 완주 인식 제거', file: 'magazine-register.mjs',
+    find: "  if (sa === 'after' && sq === 'after') {",
+    replace: '  if (false) {' },
+  { name: '등록 transaction — 다른 writer 변경(CONFLICT) 판정 제거', file: 'magazine-register.mjs',
+    find: "    return cur === f.afterSha ? 'after' : cur === sha(f.before) ? 'before' : 'other'",
+    replace: "    return cur === f.afterSha ? 'after' : 'before'" },
 ]
 
 const occurrences = (s, sub) => s.split(sub).length - 1

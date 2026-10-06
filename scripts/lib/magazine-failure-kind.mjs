@@ -80,6 +80,12 @@ const INFRA_CODES = new Set([
   'queue_writer_locked',
   /** 운영에 시험 잠금 scope 가 주입돼 잠금을 거부했다 — 설정 문제다. 원고 탓이 아니다 */
   'queue_lock_scope_blocked',
+  /**
+   * 등록 transaction journal 을 복구하지 못했다 — 급사 뒤 다른 writer 가 바꿨거나(CONFLICT) journal 이 이 등록의 것이
+   * 아니다(IDENTITY). 원고 탓이 아니다. journal 이 남아 있으니 다음 회차도 같은 판정으로 멈춘다(fail-closed).
+   */
+  'RECOVERY_CONFLICT',
+  'RECOVERY_IDENTITY',
   'send_button_missing',
   // 🔴 전송 전 기준선을 못 읽었다 — 보내지 않았다
   'response_baseline_unreadable',

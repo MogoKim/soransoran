@@ -20,6 +20,7 @@
  *   ⑮ 큐 writer 잠금은 논리 큐 하나 — 서로 다른 repo 경로의 G8 · 등록이 서로를 막는다
  *   ⑯ 등록 쌍(articles · queue) 원복은 같은 임계구역에서 함께 판정 · 함께 쓴다
  *   ⑰ 등록 대 등록 — 잠금 안에서 articles.ts 를 다시 읽어 중복·슬롯·삽입을 재검사
+ *   ⑱ register durable transaction — 실제 register CLI 를 SIGKILL 해도 다음 실행이 복구 · 위조 journal 거부
  *
  * 🔴 `G8_PROMOTER_LIB` 는 변이 시험(`magazine-g8-promote-mutation.mjs`)이 바꾼 lib 를 넣는 자리다.
  *    그때는 CLI 자식 프로세스도 변이된 lib 옆의 CLI 사본을 쓴다 — 운영 CLI 는 이 변수를 읽지 않는다.
@@ -970,6 +971,121 @@ console.log('⑰ 서로 다른 slug·날짜 등록 두 개 동시 실행 — 잠
   fs.writeFileSync(arts3, 'export const MAGAZINE_ARTICLE_RECORD = {\n}\n')
   const anchor = mk(f3, arts3, 'queued-one', 10, '2026-10-08')
   expect('잠금 안 재검사 — 삽입 위치가 없으면 쓰기 0', [anchor.ok, /삽입 위치/.test(anchor.why ?? ''), hasQueued(fs.readFileSync(filesOf(f3).queue, 'utf8'))], [false, true, true])
+}
+
+// ── ⑱ register durable transaction ──────────────────────────
+console.log('⑱ register — articles·queue 쓰기는 durable transaction (실제 register CLI · 실제 SIGKILL)')
+/** 실제 register CLI 가 도는 미니 저장소 — 검사 대상 lib·register 사본 + articles · queue · draft */
+function makeMiniRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-check-reg-'))
+  fixtures.push({ dir: root })
+  fs.cpSync(path.dirname(LIB), path.join(root, 'scripts/lib'), { recursive: true })
+  fs.copyFileSync(REG, path.join(root, 'scripts/magazine-register.mjs'))
+  const w = (rel, t) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t) }
+  // 🔴 실제 articles.ts 와 같은 모양 — `const MAGAZINE_ARTICLE_RECORD` (export 없음)
+  w('src/content/magazine/articles.ts', "import type { MagazineArticleBody } from './types'\n\nconst MAGAZINE_ARTICLE_RECORD = {\n  'old-article': { title: '기존 글', publishedAt: '2026-09-01' },\n} satisfies Record<string, MagazineArticleBody>\n\nexport const ALL = MAGAZINE_ARTICLE_RECORD\n")
+  const real = fs.readFileSync(path.join(REPO, 'drafts/magazine/topic-queue.ts'), 'utf8')
+  const header = real.slice(0, real.indexOf('export const TOPIC_QUEUE'))
+  const row = (day, slug) => lib.renderQueueRow({ day, slug, title: `등록 시험 주제 ${slug}`, contentType: 'EVERGREEN', intent: '질문', cluster: 'daily',
+    target: '50대', validationProfile: 'STANDARD', riskLevel: 'LOW', reviewMode: 'SUMMARY_ONLY', imageMode: 'OPTIONAL', autoEligible: true,
+    ctaBoard: '/community/free', internalLinks: [], whyNow: '시험', notes: '시험' })
+  w('drafts/magazine/topic-queue.ts', `${header}export const TOPIC_QUEUE: TopicQueueItem[] = [\n${row(10, 'reg-one')}${row(12, 'reg-two')}]\n`)
+  for (const slug of ['reg-one', 'reg-two']) {
+    w(`drafts/magazine/${slug}/article-draft.ts`, `export const DRAFT = {\n  title: '등록 시험 ${slug}',\n  description: '설명',\n  cluster: 'daily',\n  publishedAt: '',\n  body: [],\n}\n`)
+    w(`drafts/magazine/${slug}/review.ts`, 'export const REVIEW = {}\n')
+  }
+  fs.mkdirSync(path.join(root, 'drafts/magazine/_runs'), { recursive: true })
+  return {
+    root, cli: path.join(root, 'scripts/magazine-register.mjs'),
+    articles: path.join(root, 'src/content/magazine/articles.ts'), queue: path.join(root, 'drafts/magazine/topic-queue.ts'),
+    journal: path.join(root, 'drafts/magazine/_runs/.register-journal.json'),
+  }
+}
+const regCli = (m, extraEnv = {}) => [m.cli, '--slug', 'reg-one', '--publish-at', '2026-10-20', '--write', '--json']
+const occurrences = (text, slug) => (text.match(new RegExp(`'${slug}':`, 'g')) ?? []).length
+const miniState = (m) => ({ articles: fs.readFileSync(m.articles, 'utf8'), queue: fs.readFileSync(m.queue, 'utf8'), journal: fs.existsSync(m.journal) ? fs.readFileSync(m.journal, 'utf8') : null })
+const testLockLeft = () => fs.existsSync(path.join(qlock.QUEUE_LOCK_DIR, `${TEST_SCOPE}.queue.lock`))
+async function killRegisterAt(m, stage) {
+  const gate = path.join(m.root, `gate-${stage.replace(/:/g, '-')}`)
+  const child = spawn('node', regCli(m), { env: { ...process.env, SORAN_QUEUE_TEST_GATE: gate, SORAN_QUEUE_TEST_PAUSE_AT: stage }, cwd: m.root, stdio: ['ignore', 'pipe', 'pipe'] })
+  const exited = exitOf(child)
+  const reached = await waitFor(`${gate}.reached`)
+  child.kill('SIGKILL')
+  const ex = await exited
+  return { reached, signal: ex.signal }
+}
+const runRegister = (m) => { const r = spawnSync('node', regCli(m), { encoding: 'utf8', cwd: m.root }); return { status: r.status, j: parseJson(r.stdout, { verdict: `출력 없음 ${r.stderr.slice(0, 160)}` }) } }
+{
+  // A. articles 쓰기 직후 SIGKILL
+  const m = makeMiniRepo()
+  const k = await killRegisterAt(m, 'register:after-articles')
+  const mid = miniState(m)
+  expect('A 급사 — 실제 SIGKILL · articles 에 글 1 · 큐에 행이 남음 · journal 있음', [k.reached, k.signal, occurrences(mid.articles, 'reg-one'), hasQueued(mid.queue.replace(/reg-one/g, 'queued-one')), mid.journal !== null],
+    [true, 'SIGKILL', 1, true, true])
+  const n = runRegister(m)
+  const fin = miniState(m)
+  expect('A 다음 실제 register CLI — 복구(ROLLED_BACK) 뒤 정확히 한 번 등록', [n.status, n.j.verdict, n.j.applied, n.j.recovered?.action], [0, 'READY', true, 'ROLLED_BACK'])
+  expect('A 결과 — articles 에 reg-one 1 · 기존 글 보존 · 큐 reg-one 0 · journal 0 · 잠금 0',
+    [occurrences(fin.articles, 'reg-one'), occurrences(fin.articles, 'old-article'), parseQueueSource(fin.queue).some((r) => r.slug === 'reg-one'), fin.journal, testLockLeft()], [1, 1, false, null, false])
+}
+{
+  // B. queue 쓰기 직후 · journal 삭제 전 SIGKILL
+  const m = makeMiniRepo()
+  const k = await killRegisterAt(m, 'register:after-queue')
+  const mid = miniState(m)
+  expect('B 급사 — 실제 SIGKILL · 두 파일 다 썼고 journal 만 남음', [k.reached, k.signal, occurrences(mid.articles, 'reg-one'), parseQueueSource(mid.queue).some((r) => r.slug === 'reg-one'), mid.journal !== null],
+    [true, 'SIGKILL', 1, false, true])
+  const n = runRegister(m)
+  const fin = miniState(m)
+  expect('B 다음 실행 — 이미 완주한 transaction 을 인식(COMPLETED) · 다시 쓰지 않는다', [n.status, n.j.verdict, n.j.recovered?.action, fin.articles === mid.articles, fin.queue === mid.queue], [0, 'READY', 'COMPLETED', true, true])
+  expect('B 결과 — 중복 글 0 · 큐 행 0 · journal 0 · 잠금 0', [occurrences(fin.articles, 'reg-one'), parseQueueSource(fin.queue).some((r) => r.slug === 'reg-one'), fin.journal, testLockLeft()], [1, false, null, false])
+  const again = runRegister(m)
+  expect('B 한 번 더 실행해도 두 번 등록되지 않는다', [again.status, again.j.verdict, occurrences(fs.readFileSync(m.articles, 'utf8'), 'reg-one')], [1, 'BLOCKED', 1])
+}
+{
+  // C. 급사 뒤 다른 writer 가 대상 파일을 바꿨다
+  for (const [name, mutate] of [
+    ['articles', (m) => fs.writeFileSync(m.articles, fs.readFileSync(m.articles, 'utf8').replace('} satisfies', "  'other-writer': { title: '다른 writer 의 글', publishedAt: '2026-10-25' },\n} satisfies"))],
+    ['queue', (m) => fs.writeFileSync(m.queue, lib.insertQueueRows(fs.readFileSync(m.queue, 'utf8'), [{ day: 99, slug: 'g8-added', title: 'G8 이 더한 주제입니다', contentType: 'EVERGREEN', intent: '질문', cluster: 'daily',
+      target: '50대', validationProfile: 'STANDARD', riskLevel: 'LOW', reviewMode: 'SUMMARY_ONLY', imageMode: 'REQUIRED', autoEligible: true, ctaBoard: '/community/free', internalLinks: [], whyNow: 'w', notes: 'n' }]))],
+  ]) {
+    const m = makeMiniRepo()
+    await killRegisterAt(m, 'register:after-articles')
+    mutate(m)
+    const pre = miniState(m)
+    const n = runRegister(m)
+    const post = miniState(m)
+    expect(`C 급사 뒤 다른 writer 가 ${name} 를 바꿨다 → RECOVERY_CONFLICT · 쓰기 0 · journal 유지`,
+      [n.status, n.j.verdict, /RECOVERY_CONFLICT/.test((n.j.reasons ?? []).join(' ')), JSON.stringify(post) === JSON.stringify(pre), post.journal !== null], [1, 'BLOCKED', true, true, true])
+  }
+}
+{
+  // D. 위조 journal — 저장소 밖 경로 · 상대 · 중복 · 누락 · 추가 · schema
+  const reg = await import(pathToFileURL(REG).href)
+  const forged = async (name, makeFiles, extra = {}) => {
+    const m = makeMiniRepo()
+    const victim = path.join(path.dirname(m.root), `victim-${path.basename(m.root)}.txt`)
+    fs.writeFileSync(victim, '저장소 밖 파일 — 바뀌거나 지워지면 안 된다')
+    fixtures.push({ dir: victim })
+    const canon = (f) => path.join(fs.realpathSync(path.dirname(f)), path.basename(f))
+    const queueNow = fs.readFileSync(m.queue, 'utf8')
+    const files = makeFiles({ victim, articles: canon(m.articles), queue: canon(m.queue), queueNow })
+    fs.writeFileSync(m.journal, JSON.stringify({ schema: reg.REGISTER_JOURNAL_SCHEMA, txId: 'forged', slug: 'reg-one', files, ...extra }))
+    const pre = { ...miniState(m), victim: fs.readFileSync(victim, 'utf8') }
+    const n = runRegister(m)
+    const post = { ...miniState(m), victim: fs.existsSync(victim) ? fs.readFileSync(victim, 'utf8') : null }
+    expect(`D 위조 journal(${name}) → RECOVERY_IDENTITY · 외부 파일·대상 파일·journal 변경 0`,
+      [n.status, /RECOVERY_IDENTITY/.test((n.j.reasons ?? []).join(' ')), JSON.stringify(post) === JSON.stringify(pre)], [1, true, true])
+  }
+  // 🔴 위조 항목이 CAS 를 통과하도록 만든다 — 신원 검증이 없으면 외부 파일이 실제로 바뀐다
+  const victimAfter = ({ victim }) => ({ role: 'articles', path: victim, before: '덮어쓴 내용', afterSha: lib.sha256(fs.readFileSync(victim, 'utf8')) })
+  const queueBefore = ({ queue, queueNow }) => ({ role: 'queue', path: queue, before: queueNow, afterSha: 'not-this' })
+  await forged('저장소 밖 경로', (x) => [victimAfter(x), queueBefore(x)])
+  await forged('상대 경로', (x) => [{ ...victimAfter(x), path: 'src/content/magazine/articles.ts' }, queueBefore(x)])
+  await forged('중복 경로', (x) => [{ ...queueBefore(x), role: 'articles' }, queueBefore(x)])
+  await forged('누락', (x) => [queueBefore(x)])
+  await forged('추가', (x) => [{ ...victimAfter(x), path: x.articles }, queueBefore(x), victimAfter(x)])
+  await forged('schema', (x) => [{ ...victimAfter(x), path: x.articles }, queueBefore(x)], { schema: 'register-journal/0' })
 }
 
 // ── ⑪ 실제 연구 정본 ────────────────────────────────────────
