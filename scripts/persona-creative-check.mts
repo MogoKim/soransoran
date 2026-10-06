@@ -18,10 +18,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  AUTOGEN_BLOCK_CODES, autogenCodeOf, AUTOGEN_CODE_FIRST, voiceCoreFromBundle,
+  AUTOGEN_BLOCK_CODES, autogenCodeOf, AUTOGEN_CODE_FIRST, proposeLifeSkeletons, voiceCoreFromBundle,
   type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
 } from '../src/lib/persona-autogen'
 import {
+  CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_MAX_OUTPUT_TOKENS, CREATIVE_BATCH_SYSTEM_PROMPT, STATUS_LABELS,
+  compactPeerOf, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch,
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
   creativeBriefOf, creativePeerOf, creativeUserPayload, parseCreative, parseCreativeFile, payloadLeaks, type CreativeBrief,
 } from '../src/lib/persona-creative'
@@ -30,7 +32,7 @@ import { reserveOf } from '../src/lib/llm-pricing'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import { judgeAutogenBatch } from './lib/persona-autogen.mjs'
-import { CREATIVE_BLOCK_OF, generateCreatives, type CreativeCall } from './lib/persona-creative-run.mjs'
+import { CREATIVE_BLOCK_OF, generateCreativeBatch, generateCreatives, outcomesOfBatch, type CreativeCall } from './lib/persona-creative-run.mjs'
 import type { LlmResponse } from './lib/voice-m3-provider.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 
@@ -329,6 +331,155 @@ console.log('⑥ CLI 가드 — DB · provider 에 붙기 전에 멈춘다')
   }
   check('🔴 가드 회차 전부 provider 요청 0', readFileSync(log, 'utf-8').trim() === '')
   check('🔴 가드 회차 전부 결과 파일 write 0', !existsSync(out))
+  rmSync(T, { recursive: true, force: true })
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('⑦ batch — 호출 1회 · 구조 fail-closed')
+// ─────────────────────────────────────────────────────────
+const SIX = ['P26', 'P27', 'P28', 'P29', 'P30', 'P32']
+const GOOD6 = JSON.parse(readFileSync('scripts/__fixtures__/persona-creative-batch-good.json', 'utf-8')) as Record<string, PersonaCreative>
+const ACTUAL = JSON.parse(readFileSync('scripts/__fixtures__/persona-creative-actual-20261006.json', 'utf-8')) as Record<string, PersonaCreative>
+const POOL = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
+const LIVES = new Map(proposeLifeSkeletons({ existing: POOL.cards, codes: Array.from({ length: 8 }, (_, i) => autogenCodeOf(26 + i)) })
+  .map((x) => [x.code, x.life]))
+{
+  const briefs = SIX.map((c) => creativeBriefOf({ code: c, life: LIVES.get(c)!, voiceCore: voiceCoreFromBundle(bundle), style: bundle.style }))
+  const avoid = POOL.cards.map(compactPeerOf)
+  const batchCall = (raw: (codes: string[]) => string, extra: Partial<LlmResponse> = {}) => {
+    let n = 0
+    const bodies: string[] = []
+    return {
+      calls: () => n, bodies,
+      call: (async (req) => {
+        n += 1
+        bodies.push(req.userPayload)
+        const codes = (JSON.parse(req.userPayload) as { candidates: { code: string }[] }).candidates.map((x) => x.code)
+        return okResponse(raw(codes), { inputTokens: 4000, outputTokens: 2000, ...extra })
+      }) as CreativeCall,
+    }
+  }
+  const pick = (m: Record<string, PersonaCreative>) => (codes: string[]) => JSON.stringify(Object.fromEntries(codes.map((c) => [c, m[c]])))
+  const run = (f: ReturnType<typeof batchCall>, capUsd?: number) => generateCreativeBatch({
+    briefs, avoid, forbiddenTextsOf: () => TEXTS, call: f.call, ...(capUsd === undefined ? {} : { capUsd }),
+  })
+
+  const f1 = batchCall(pick(GOOD6))
+  const r1 = await run(f1)
+  check('🔴 6명 batch → provider 정확히 1회', f1.calls() === 1)
+  check('6명 전부 형식 통과 (status parsed)', r1.ok && r1.status === 'parsed' && Object.keys(r1.creatives).length === 6)
+  check('실제 비용 = 사용량 × 정본 단가', r1.ledger.usd !== null && Math.abs(r1.ledger.usd - (4000 * 1 + 2000 * 5) / 1e6) < 1e-12)
+  const body = f1.bodies[0] ?? ''
+  const sent = JSON.parse(body) as { candidates: { code: string; life: Record<string, unknown> }[]; avoid: Record<string, unknown>[] }
+  check('🔴 payload 에 후보 6명', JSON.stringify(sent.candidates.map((x) => x.code)) === JSON.stringify(SIX))
+  check('🔴 payload — 댓글 원문 0 · 생일 0 · 화자 · 회원 · 표시명 · 원작자 칸 0',
+    payloadLeaks(body, bundle.comments.map((x) => x.text)) === 0 && !/birthDate|\d{4}-\d{2}-\d{2}/.test(body)
+    && !/speaker|anchor|userId|displayName|nickname|author/i.test(body))
+  check('🔴 기존 Persona 는 압축 — 제목 · 핵심 성격(≤5)만 · noGo · 변주 칸 0',
+    sent.avoid.length === POOL.cards.length && sent.avoid.every((a) => JSON.stringify(Object.keys(a)) === '["title","personality"]'
+      && (a.personality as string[]).length <= 5))
+  const reserveSix = reserveOf({ model: CREATIVE_MODEL,
+    countedInputTokens: Buffer.byteLength(CREATIVE_BATCH_SYSTEM_PROMPT) + Buffer.byteLength(creativeBatchPayload(briefs, avoid)),
+    maxOutputTokens: CREATIVE_BATCH_MAX_OUTPUT_TOKENS, headroomMultiplier: 1 })
+  check(`정본 batch 6명 최악 예약 < $${CREATIVE_BATCH_COST_CAP_USD} (부를 수 있는 크기)`, reserveSix.known && reserveSix.usd < CREATIVE_BATCH_COST_CAP_USD,
+    reserveSix.known ? `$${reserveSix.usd.toFixed(4)}` : '')
+
+  const f2 = batchCall(pick(GOOD6))
+  const r2 = await run(f2, reserveSix.known ? reserveSix.usd / 2 : 0)
+  check('🔴 최악 예약 > 상한 → 호출 0', f2.calls() === 0 && !r2.ok)
+  const fBig = batchCall(pick(GOOD6))
+  const rBig = await run(fBig, 1)
+  check('🔴 상한 인자를 크게 줘도 batch hard cap 을 넘지 못한다', rBig.ledger.capUsd === CREATIVE_BATCH_COST_CAP_USD)
+
+  const structural = async (name: string, raw: (codes: string[]) => string, re: RegExp): Promise<void> => {
+    const f = batchCall(raw)
+    const r = await run(f)
+    check(`🔴 ${name} → 전체 batch invalid · creative 0`, f.calls() === 1 && r.ok && r.status === 'invalid'
+      && Object.keys(r.creatives).length === 0 && r.problems.some((p) => re.test(p)), r.ok ? r.problems.join(' / ') : r.reason)
+  }
+  await structural('코드 1개 누락', (codes) => JSON.stringify(Object.fromEntries(codes.slice(1).map((c) => [c, GOOD6[c]]))), /빠진 코드: P26/)
+  await structural('요청하지 않은 코드 추가', (codes) => JSON.stringify({ ...Object.fromEntries(codes.map((c) => [c, GOOD6[c]])), P31: GOOD6.P26 }), /요청하지 않은 코드: P31/)
+  await structural('코드 중복(JSON.parse 가 조용히 고르는 키)', (codes) => {
+    const ok = JSON.stringify(Object.fromEntries(codes.map((c) => [c, GOOD6[c]])))
+    return `${ok.slice(0, -1)},"P27":${JSON.stringify(GOOD6.P27)}}`
+  }, /중복 코드: P27/)
+  await structural('잘린 출력', (codes) => JSON.stringify(Object.fromEntries(codes.map((c) => [c, GOOD6[c]]))).slice(0, 300), /JSON 이 아니다/)
+  {
+    const f = batchCall(pick({ ...GOOD6, P30: { ...GOOD6.P30!, variations: ['하나'] } }))
+    const r = await run(f)
+    check('🔴 한 후보 형식 위반 → batch invalid · 그 후보만 creative 없음(나머지는 결과 파일용으로만 남는다)',
+      r.ok && r.status === 'invalid' && r.creatives.P30 === undefined && Object.keys(r.creatives).length === 5
+      && outcomesOfBatch(r, SIX).find((o) => o.code === 'P30')?.status === 'invalid')
+  }
+  {
+    const f = batchCall(pick(GOOD6), { maxTokensReached: true })
+    const r = await run(f)
+    check('🔴 출력 상한 닿음 → call-failed · creative 0 · 재시도 0', f.calls() === 1 && r.ok && r.status === 'call-failed' && Object.keys(r.creatives).length === 0)
+  }
+  {
+    const f = batchCall(pick(GOOD6))
+    const r = await generateCreativeBatch({ briefs, avoid: [{ title: TEXTS[1]!, personality: [] }], forbiddenTextsOf: () => TEXTS, call: f.call })
+    check('🔴 나가는 글에 원문 → 호출 0 · 전원 leak-blocked', f.calls() === 0 && !r.ok && outcomesOfBatch(r, SIX).every((o) => o.status === 'leak-blocked'))
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('⑧ creative 묶음 품질 — 단일 판정 judgeCreativeQuality')
+// ─────────────────────────────────────────────────────────
+{
+  const q = (m: Record<string, PersonaCreative>) => judgeCreativeQuality({
+    candidates: Object.entries(m).map(([code, creative]) => ({ code, creative, life: LIVES.get(code)! })),
+    existingTitles: POOL.cards.map((c) => c.title),
+  })
+  const good = q(GOOD6)
+  check('🔴 정상적으로 다른 6명 → PASS', good.ok, good.problems.join(' / '))
+  check('정상 6명 — 후보마다 고유 대화 행동 ≥ 2', Object.values(good.uniqueBehaviors).every((n) => n >= 2) && Object.keys(good.uniqueBehaviors).length === 6)
+  const act = q(ACTUAL)
+  const has = (re: RegExp): boolean => act.problems.some((p) => re.test(p))
+  check('🔴 실측 5명 파일 → FAIL', !act.ok)
+  check('실측 — "침착함" · "자족적" personality 반복', has(/P26,P27,P29: 같은 personality — "침착함"/) && has(/P26,P29,P32: 같은 personality — "자족적"/))
+  check('실측 — "남의 말을 먼저 받아주기" variation 반복', has(/P26,P28: 같은 variation/))
+  check('실측 — P26 · P27 · P32 고유 대화 행동 < 2', has(/P26: 고유 대화 행동 0개/) && has(/P27: 고유 대화 행동 1개/) && has(/P32: 고유 대화 행동 0개/))
+  check('실측 — P28 상태 낙인형 title', has(/P28: 상태 낙인형 title — "이혼녀"/))
+
+  const swap = (code: string, patch: Partial<PersonaCreative>) => ({ ...GOOD6, [code]: { ...GOOD6[code]!, ...patch } })
+  const fails = (name: string, m: Record<string, PersonaCreative>, re: RegExp): void => {
+    const r = q(m)
+    check(`🔴 ${name} → FAIL`, !r.ok && r.problems.some((p) => re.test(p)), r.problems.join(' / ') || 'PASS')
+  }
+  fails('같은 personality (공백 무시)', swap('P32', { personality: ['논리적', '셈이빠름', '계획적'] }), /P26,P32: 같은 personality/)
+  fails('같은 variation', swap('P32', { variations: ['쉽게 반박하기', '근거 묻기', '장단점 나눠 보기', '기사 링크 요약', '결론부터 한 줄'] }), /P26,P32: 같은 variation/)
+  fails('형용사만 바꾼 대화 행동 — 고유 행동 < 2', swap('P32', {
+    variations: ['쉽게 반박하기', '가격 비교 먼저', '손님 이야기로 비유', '날짜 확인부터', '질문으로 파고듦'] }), /P32: 고유 대화 행동 1개 < 2/)
+  for (const label of STATUS_LABELS.slice(0, 3)) fails(`상태 낙인형 title "${label}"`, swap('P28', { title: `새 동네 ${label}` }), /상태 낙인형 title/)
+  fails('기존 Persona 와 같은 title', swap('P28', { title: POOL.cards[0]!.title }), /기존 Persona 와 같은 title/)
+  fails('후보끼리 같은 title', swap('P28', { title: GOOD6.P27!.title }), /P27,P28: 같은 title/)
+  fails('noGo 가 생활사 축 전부를 막음(빈 사람)', swap('P29', { noGoTopics: ['직장 이야기', '부모 돌봄', '갱년기 증상'] }), /P29: noGo 가 생활사 축 전부/)
+  check('생활사 일부만 피하는 noGo 는 통과(정상 fixture 그대로)', !good.problems.some((p) => /빈 사람/.test(p)))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('⑨ CLI 가드 — batch')
+// ─────────────────────────────────────────────────────────
+{
+  const T = mkdtempSync(join(tmpdir(), 'soran-creative-batch-guard-'))
+  const log = join(T, 'fake.log')
+  writeFileSync(log, '')
+  const env = { ...process.env, HOME: T, DATABASE_URL: 'postgresql://nobody@127.0.0.1:1/none',
+    NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts', 'lib', 'fake-provider-hook.mjs')}`, FAKE_PROVIDER_LOG: log }
+  const out = join(T, 'c.json')
+  writeFileSync(join(T, 'g.json'), JSON.stringify({ P26: GOOD6.P26 }))
+  const cases: [string, string[], RegExp][] = [
+    ['--creative-batch 만', ['--db', '--creative-batch', `--creative-out=${out}`], /--generate-creative 와만 쓴다/],
+    ['batch + 이어 하기', ['--db', '--generate-creative', '--creative-batch', `--creative-out=${out}`, `--resume-creative=${join(T, 'g.json')}`, '--prior-usd=0.01'], /--resume-creative · --prior-usd 와 쓰지 않는다/],
+    ['batch + --cost-cap 0.04', ['--db', '--generate-creative', '--creative-batch', `--creative-out=${out}`, '--cost-cap=0.04'], /batch 상한 \$0\.03 이하/],
+    ['batch + --apply', ['--db', '--generate-creative', '--creative-batch', '--apply', `--creative-out=${out}`], /--apply 를 함께 쓰지 않는다/],
+  ]
+  for (const [name, args, re] of cases) {
+    const r = spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], { env, encoding: 'utf-8' })
+    check(`${name} → exit 1 · 사유`, r.status === 1 && re.test(r.stderr), (r.stderr ?? '').slice(-200))
+  }
+  check('🔴 batch 가드 회차 provider 0 · 결과 파일 0', readFileSync(log, 'utf-8').trim() === '' && !existsSync(out))
   rmSync(T, { recursive: true, force: true })
 }
 

@@ -16,7 +16,9 @@ import { costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
   CREATIVE_TIMEOUT_MS, creativeKeyOf, creativePeerOf, creativeUserPayload, parseCreative, payloadLeaks,
-  type CreativeBrief, type CreativePeer,
+  CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_MAX_OUTPUT_TOKENS, CREATIVE_BATCH_SYSTEM_PROMPT, CREATIVE_BATCH_TIMEOUT_MS,
+  creativeBatchPayload, parseCreativeBatch,
+  type CompactPeer, type CreativeBrief, type CreativePeer,
 } from '../../src/lib/persona-creative'
 import type { PersonaCreative } from '../../src/lib/persona-autogen'
 import type { LlmRequest, LlmResponse } from './voice-m3-provider.mjs'
@@ -158,3 +160,106 @@ export const CREATIVE_BLOCK_OF = {
   'budget-blocked': 'CREATIVE_BUDGET_BLOCKED',
   'leak-blocked': 'CREATIVE_LEAK_BLOCKED',
 } as const
+
+// ─────────────────────────────────────────────────────────
+// 🔴 batch — 후보 전원을 **provider 호출 정확히 1회**로 함께 설계한다 (2026-10-06)
+// ─────────────────────────────────────────────────────────
+
+export type CreativeBatchRun =
+  | {
+    ok: true
+    /** 구조 · 후보 형식이 전부 맞았는가 — 아니면 batch invalid(통과한 후보만 결과 파일에 남는다) */
+    status: 'parsed' | 'invalid' | 'call-failed'
+    creatives: Record<string, PersonaCreative>
+    problems: string[]
+    ledger: CreativeLedger
+  }
+  | { ok: false; reason: string; ledger: CreativeLedger }
+
+export async function generateCreativeBatch(input: {
+  briefs: readonly CreativeBrief[]
+  avoid: readonly CompactPeer[]
+  forbiddenTextsOf: (code: string) => readonly string[]
+  call: CreativeCall
+  capUsd?: number
+  maxCandidates?: number
+}): Promise<CreativeBatchRun> {
+  const cap = Math.min(input.capUsd ?? CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_COST_CAP_USD)
+  const max = input.maxCandidates ?? CREATIVE_MAX_CANDIDATES
+  const ledger: CreativeLedger = { calls: 0, inputTokens: 0, outputTokens: 0, usd: 0, maxReserveUsd: 0, capUsd: cap }
+  const codes = input.briefs.map((b) => b.code).sort()
+  if (codes.length === 0) return { ok: false, reason: '후보가 없다 — 부르지 않았다', ledger }
+  if (codes.length > max) return { ok: false, reason: `후보 ${codes.length}명 > 상한 ${max}명 — 부르지 않았다`, ledger }
+  if (new Set(codes).size !== codes.length) return { ok: false, reason: '같은 코드가 두 번 있다 — 부르지 않았다', ledger }
+
+  const briefs = [...input.briefs].sort((a, b) => a.code.localeCompare(b.code))
+  const userPayload = creativeBatchPayload(briefs, input.avoid)
+  const leaks = codes.reduce((n, c) => n + payloadLeaks(userPayload, input.forbiddenTextsOf(c)), 0)
+  if (leaks > 0) return { ok: false, reason: `나가는 글에 댓글 원문 ${leaks}건 — 부르지 않았다`, ledger }
+
+  // 🔴 호출 전 최악 예약 — 입력 UTF-8 바이트(토큰 수 이상) + 출력 상한. 상한을 넘으면 호출 0
+  const reserve = reserveOf({
+    model: CREATIVE_MODEL,
+    countedInputTokens: Buffer.byteLength(CREATIVE_BATCH_SYSTEM_PROMPT, 'utf-8') + Buffer.byteLength(userPayload, 'utf-8'),
+    maxOutputTokens: CREATIVE_BATCH_MAX_OUTPUT_TOKENS, headroomMultiplier: 1,
+  })
+  if (!reserve.known) return { ok: false, reason: `예약액을 계산하지 못했다 — ${reserve.reason}`, ledger }
+  if (reserve.usd > cap) {
+    return { ok: false, reason: `최악 예약 $${reserve.usd.toFixed(4)} > batch 상한 $${cap.toFixed(4)} — 부르지 않았다`, ledger }
+  }
+
+  ledger.calls = 1
+  ledger.maxReserveUsd = reserve.usd
+  const res = await input.call({
+    model: CREATIVE_MODEL, systemPrompt: CREATIVE_BATCH_SYSTEM_PROMPT, userPayload,
+    maxOutputTokens: CREATIVE_BATCH_MAX_OUTPUT_TOKENS, timeoutMs: CREATIVE_BATCH_TIMEOUT_MS,
+  })
+  const cost = res.usageKnown
+    ? costOf({ model: CREATIVE_MODEL, usage: {
+      inputTokens: res.inputTokens, outputTokens: res.outputTokens,
+      cacheWriteTokens: res.cacheWriteTokens, cacheReadTokens: res.cacheReadTokens,
+    } })
+    : null
+  if (cost !== null && cost.known) {
+    ledger.usd = cost.usd
+    ledger.inputTokens = res.inputTokens
+    ledger.outputTokens = res.outputTokens
+  } else ledger.usd = null
+
+  // 🔴 재시도 0 — 실패 · 잘림은 batch 전체가 creative 0 으로 끝난다
+  if (!res.ok || res.maxTokensReached) {
+    return { ok: true, status: 'call-failed', creatives: {}, ledger,
+      problems: [res.maxTokensReached ? '출력 상한에 닿았다(잘림)' : `${res.errorCode ?? 'ERROR'}`] }
+  }
+  const parsed = parseCreativeBatch(res.rawText, codes)
+  if (!parsed.structuralOk) return { ok: true, status: 'invalid', creatives: {}, ledger, problems: parsed.problems }
+  const problems = Object.entries(parsed.invalid).map(([c, ps]) => `${c}: ${ps.join(' / ')}`)
+  // 같은 batch 안 글자까지 같은 creative — 뒤 코드를 버린다
+  const seen = new Map<string, string>()
+  const creatives: Record<string, PersonaCreative> = {}
+  for (const [c, cr] of Object.entries(parsed.creatives).sort(([a], [b]) => a.localeCompare(b))) {
+    const k = creativeKeyOf(cr)
+    if (seen.has(k)) { problems.push(`${c}: ${seen.get(k)} 와 글자까지 같은 creative`); continue }
+    seen.set(k, c)
+    creatives[c] = cr
+  }
+  return { ok: true, status: problems.length === 0 ? 'parsed' : 'invalid', creatives, problems, ledger }
+}
+
+/**
+ * 🔴 batch 결과 → 후보별 결과(`CreativeOutcome`) — 판정 매핑 · 보고 · 결과 파일이 개별 경로와 **같은 코드**를 쓰게.
+ *    부르지 못한 batch(상한 · 유출 · 후보 수)는 전원 그 사유로 막힌다.
+ */
+export function outcomesOfBatch(run: CreativeBatchRun, codes: readonly string[]): CreativeOutcome[] {
+  if (!run.ok) {
+    const status: CreativeOutcome['status'] = /원문/.test(run.reason) ? 'leak-blocked' : 'budget-blocked'
+    return codes.map((code) => ({ code, status, problems: [run.reason], creative: null, usd: null }))
+  }
+  return codes.map((code) => {
+    const c = run.creatives[code]
+    if (c !== undefined) return { code, status: 'generated', problems: [], creative: c, usd: null }
+    const mine = run.problems.filter((p) => p.startsWith(`${code}:`))
+    return { code, status: run.status === 'call-failed' ? 'call-failed' : 'invalid', creative: null, usd: null,
+      problems: mine.length > 0 ? mine : run.problems }
+  })
+}

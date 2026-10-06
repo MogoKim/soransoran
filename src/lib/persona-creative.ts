@@ -265,3 +265,208 @@ export const creativeKeyOf = (c: PersonaCreative): string => JSON.stringify([
 export function payloadLeaks(payload: string, forbidden: readonly string[]): number {
   return forbidden.filter((t) => charLen(t.trim()) >= 4 && payload.includes(t.trim())).length
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 batch — 여섯 후보를 **한 번의 호출에서 함께 비교하며** 설계한다 (2026-10-06)
+// ─────────────────────────────────────────────────────────
+//
+// 왜: 개별 호출은 서로를 모른다. 실측(production model · 6+3 호출)에서 성격 "침착함 · 자족적 · 속 깊음"과
+//    변주 "상황을 담담히 설명 · 남의 말을 먼저 받아주기"가 후보마다 되풀이됐고, 제목 하나는 사람을
+//    혼인 · 주거 상태명 하나로 불렀다. 겹침 판정(Jaccard > 0.5)은 낱말 하나 겹침을 통과시킨다.
+//    그래서 ① 한 번에 함께 설계하게 하고 ② 결과를 **하나의 품질 판정**(`judgeCreativeQuality`)으로 본다.
+
+/** 🔴 batch 한 번의 hard cap (USD) — 호출 전 최악 예약(입력 바이트 + 출력 상한)이 넘으면 호출 0 */
+export const CREATIVE_BATCH_COST_CAP_USD = 0.03
+/** 여섯 명 JSON — 한 명 ≈ 300~450 tok. 넘치면 잘림 → 전체 fail-closed */
+export const CREATIVE_BATCH_MAX_OUTPUT_TOKENS = 3200
+export const CREATIVE_BATCH_TIMEOUT_MS = 120_000
+
+/** 🔴 기존 Persona 의 **압축** 피할 대상 — 제목 · 핵심 성격만(카드 전체 · noGo 전문을 매번 보내지 않는다) */
+export type CompactPeer = { title: string; personality: readonly string[] }
+export const COMPACT_PERSONALITY_MAX = 5
+export const compactPeerOf = (p: { title: string; personality: readonly string[] }): CompactPeer => ({
+  title: p.title, personality: p.personality.slice(0, COMPACT_PERSONALITY_MAX),
+})
+
+export const CREATIVE_BATCH_SYSTEM_PROMPT = [
+  '당신은 40대 중반~60대 중반 여성 커뮤니티의 **가상 Persona 설계자**다.',
+  'candidates 에 준 여러 후보를 **한 묶음으로 함께 비교하며** 설계한다. 실존 인물을 만들거나 묘사하지 않는다.',
+  '',
+  '출력은 JSON 객체 하나다. 최상위 키는 candidates 의 code 그대로이고 **빠짐 · 추가 · 중복이 없다**.',
+  '각 값은 키가 정확히 다섯 개인 객체다: title · personality · noGoTopics · noGoExpressions · variations.',
+  '- title: 이 사람의 처지와 결을 한 구절로 (2~24자)',
+  '- personality: 성격 3~6개. 각 2~12자',
+  '- noGoTopics: 꺼내지 않을 소재 1~4개. 각 2~20자. 따옴표 없이',
+  '- noGoExpressions: 쓰지 않을 말버릇 1~3개. 각각 큰따옴표로 감싼다. 비슷한 말을 포함하면 뒤에 " 류"',
+  `- variations: 글 · 댓글에서 실제로 보이는 **대화 행동** ${VARIATION_MIN}~${VARIATION_MAX}개. 각 2~24자`,
+  '',
+  '묶음 규칙 — 여섯 명이 서로 다른 실제 사람처럼 느껴져야 한다',
+  '- 후보끼리 같은 성격 낱말을 쓰지 않는다. 같은 뜻의 다른 말로 바꾼 것도 같은 성격이다',
+  '- 후보끼리 같은 대화 행동을 쓰지 않는다. 형용사만 바꾸지 말고 **관찰 가능한 행동**이 달라야 한다',
+  '  (예시일 뿐 고정 역할이 아니다: 결론부터 말함 · 질문으로 파고듦 · 자기 경험부터 꺼냄 · 짧은 농담을 섞음 · 쉽게 반박함 · 숫자와 상황을 먼저 확인함)',
+  '- 각 후보는 다른 후보에게 없는 대화 행동을 두 개 이상 가진다. 생활사와 말투 관찰값에 맞게 배정한다',
+  '- 제목은 사람을 혼인 · 주거 상태나 성별 명사 하나로 부르지 않는다 (예: "이혼녀", "미망인", "노처녀" 금지). 생활사를 숨기라는 뜻이 아니다',
+  '- noGo 로 그 사람의 생활사 전부를 막지 않는다 — 자기 삶의 이야기를 할 수 있어야 한다',
+  '- avoid 의 기존 Persona 제목 · 성격을 되풀이하지 않는다',
+  '',
+  '글자 규칙',
+  '- 모든 글자에 가운뎃점(·) · 원문자(①~⑧) · 줄바꿈 · 백틱 · 세로막대를 쓰지 않는다',
+  `- 이 낱말을 쓰지 않는다: ${BRAND_BANNED_WORDS.join(', ')}`,
+  '- 의료 · 재무 조언, 정치, 특정 집단 비하를 성격이나 변주로 만들지 않는다',
+].join('\n')
+
+/** 🔴 batch user 턴 — 후보 브리프(골격 + 말투 관찰값)와 압축 피할 대상뿐 */
+export function creativeBatchPayload(briefs: readonly CreativeBrief[], avoid: readonly CompactPeer[]): string {
+  return JSON.stringify({
+    candidates: briefs,
+    avoid: avoid.map((p) => ({ title: p.title, personality: [...p.personality] })),
+  })
+}
+
+export type CreativeBatchParse = {
+  /** 🔴 구조(JSON · 최상위 코드 집합 · 중복 키)가 맞는가 — 아니면 전체 batch invalid, creative 0 */
+  structuralOk: boolean
+  problems: string[]
+  /** 구조가 맞을 때만 — 엄격 파서를 통과한 후보 */
+  creatives: Record<string, PersonaCreative>
+  /** 구조가 맞을 때 엄격 파서에서 떨어진 후보 */
+  invalid: Record<string, string[]>
+}
+
+/**
+ * 🔴 **batch 응답을 읽는다.** 요청하지 않은 코드 · 빠진 코드 · 중복 키(JSON.parse 는 뒤 값을 조용히 고른다 —
+ *    원문에서 센다) · JSON 아님 → **전체 invalid**(creative 0). 구조가 맞으면 후보마다 `parseCreative` 그대로.
+ */
+export function parseCreativeBatch(raw: string, requested: readonly string[]): CreativeBatchParse {
+  const fail = (problems: string[]): CreativeBatchParse => ({ structuralOk: false, problems, creatives: {}, invalid: {} })
+  let obj: unknown
+  try { obj = JSON.parse(raw) } catch { return fail(['JSON 이 아니다 (잘림 포함)']) }
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return fail(['객체가 아니다'])
+  const keys = Object.keys(obj as Record<string, unknown>)
+  const problems: string[] = []
+  const extra = keys.filter((k) => !requested.includes(k))
+  const missing = requested.filter((k) => !keys.includes(k))
+  if (extra.length > 0) problems.push(`요청하지 않은 코드: ${extra.join(',')}`)
+  if (missing.length > 0) problems.push(`빠진 코드: ${missing.join(',')}`)
+  for (const k of requested) {
+    const n = raw.match(new RegExp(`"${k}"\\s*:`, 'g'))?.length ?? 0
+    if (n > 1) problems.push(`중복 코드: ${k} ×${n}`)
+  }
+  if (problems.length > 0) return fail(problems)
+  const creatives: Record<string, PersonaCreative> = {}
+  const invalid: Record<string, string[]> = {}
+  for (const k of requested) {
+    const p = parseCreative(JSON.stringify((obj as Record<string, unknown>)[k]))
+    if (p.ok) creatives[k] = p.creative
+    else invalid[k] = p.problems
+  }
+  return { structuralOk: true, problems: [], creatives, invalid }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **품질 판정 — 이 함수 하나다.** 비슷한 판정을 다른 파일에 두지 않는다
+// ─────────────────────────────────────────────────────────
+
+/** 사람 전체를 한 상태명으로 부르는 낱말 — 제목에 들어가면 거부 */
+export const STATUS_LABELS: readonly string[] = ['이혼녀', '이혼남', '미망인', '과부', '노처녀', '노총각', '돌싱녀', '독신녀', '홀어미']
+/** 대화 행동 낱말을 비교할 때 빼는 꾸밈말 — 형용사 · 정도만 바꾼 행동을 같은 행동으로 본다 */
+const BEHAVIOR_MODIFIERS: readonly string[] = [
+  '짧은', '짧게', '긴', '길게', '한', '두', '조용', '차분', '담담', '덤덤', '천천', '먼저', '가끔', '자주', '작은',
+  '일상', '남의', '남들', '자신', '자기', '나의', '내', '왜', '그렇', '그리', '중간', '살짝', '뒤끝', '없이', '있는',
+]
+const PARTICLE_TAIL = /(으로|에서|하기|하게|하는|해서|히|한|를|을|이|가|은|는|의|에|로|과|와|도|기)$/
+
+/** 대화 행동 → 비교 열쇠 묶음(낱말 앞 두 글자 · 꾸밈말 제외). 같은 열쇠가 하나라도 있으면 같은 행동이다 */
+export function behaviorStemsOf(v: string): string[] {
+  const out: string[] = []
+  for (const raw of v.split(/\s+/)) {
+    let w = raw.replace(/[^\p{L}\p{N}]/gu, '')
+    if (w.length > 2) w = w.replace(PARTICLE_TAIL, '')
+    if ([...w].length < 2) continue
+    const stem = [...w].slice(0, 2).join('')
+    if (BEHAVIOR_MODIFIERS.some((m) => stem === [...m].slice(0, 2).join(''))) continue
+    out.push(stem)
+  }
+  return [...new Set(out)]
+}
+
+const normKey = (s: string): string => s.replace(/\s+/g, '').toLowerCase()
+
+/** 🔴 생활사 축 → 그 축을 막는 noGo 낱말. 있는 축이 **전부** 막히면 그 사람은 자기 이야기를 못 한다 */
+function coreLifeAxes(l: LifeSkeleton): { axis: string; words: readonly string[] }[] {
+  const out: { axis: string; words: readonly string[] }[] = []
+  if (l.childrenCount > 0) out.push({ axis: '자녀', words: ['자녀', '아이', '아들', '딸', '애들'] })
+  if (!['전업', '무직'].includes(l.workStatus)) out.push({ axis: '일', words: ['일', '직장', '회사', '가게', '업무', '장사', l.workStatus] })
+  if (l.parentCare !== '없음' && l.parentCare !== '돌봄없음') out.push({ axis: '돌봄', words: ['돌봄', '간병', '부모', '친정', '시댁', '어머니', '아버지'] })
+  if (['사별', '이혼', '별거'].includes(l.maritalStatus)) out.push({ axis: '혼인', words: ['남편', '전 남편', '이혼', '사별', '별거', l.maritalStatus] })
+  out.push({ axis: '갱년기', words: ['갱년기', '몸', '건강'] })
+  return out
+}
+
+export type CreativeQualityInput = {
+  candidates: readonly { code: string; creative: PersonaCreative; life: LifeSkeleton }[]
+  /** 기존 Persona 제목(정본 카드) — 같으면 거부 */
+  existingTitles: readonly string[]
+}
+export type CreativeQuality = {
+  ok: boolean
+  /** `${code}: ${rule} — 근거` */
+  problems: string[]
+  /** 후보별 — 다른 후보에게 없는 대화 행동 수 */
+  uniqueBehaviors: Record<string, number>
+}
+/** 후보별 고유 대화 행동 하한 */
+export const UNIQUE_BEHAVIOR_MIN = 2
+
+/**
+ * 🔴 **creative 묶음 품질 계약 — 단일 판정.** Persona 계약(`judgeAutogenBatch`)을 대신하지 않고 그 위에 얹힌다.
+ *
+ *    ① 후보끼리 같은 personality 항목 0 (공백 무시)
+ *    ② 후보끼리 같은 variation 항목 0 (공백 무시)
+ *    ③ 후보마다 다른 후보에게 없는 대화 행동 ≥ 2 — 행동 열쇠(`behaviorStemsOf`)가 하나라도 겹치면 같은 행동
+ *    ④ title — 다른 후보 · 기존 Persona 와 같거나, 사람을 상태명 하나로 부르면(`STATUS_LABELS`) 거부
+ *    ⑤ noGo 소재가 그 사람에게 있는 생활사 축을 **전부** 막으면 거부(빈 사람)
+ */
+export function judgeCreativeQuality(input: CreativeQualityInput): CreativeQuality {
+  const problems: string[] = []
+  const cs = [...input.candidates].sort((a, b) => a.code.localeCompare(b.code))
+
+  const repeated = (pick: (c: PersonaCreative) => readonly string[], rule: string): void => {
+    const owners = new Map<string, string[]>()
+    for (const c of cs) for (const x of new Set(pick(c.creative).map(normKey))) owners.set(x, [...(owners.get(x) ?? []), c.code])
+    for (const [x, codes] of owners) if (codes.length > 1) problems.push(`${codes.join(',')}: ${rule} — "${x}" 반복`)
+  }
+  repeated((c) => c.personality, '같은 personality')
+  repeated((c) => c.variations, '같은 variation')
+
+  const uniqueBehaviors: Record<string, number> = {}
+  for (const c of cs) {
+    const others = new Set(cs.filter((o) => o.code !== c.code).flatMap((o) => o.creative.variations.flatMap(behaviorStemsOf)))
+    const n = c.creative.variations.filter((v) => {
+      const st = behaviorStemsOf(v)
+      return st.length > 0 && st.every((s) => !others.has(s))
+    }).length
+    uniqueBehaviors[c.code] = n
+    if (n < UNIQUE_BEHAVIOR_MIN) problems.push(`${c.code}: 고유 대화 행동 ${n}개 < ${UNIQUE_BEHAVIOR_MIN}`)
+  }
+
+  const existing = new Set(input.existingTitles.map(normKey))
+  const titleOwners = new Map<string, string[]>()
+  for (const c of cs) {
+    const t = normKey(c.creative.title)
+    titleOwners.set(t, [...(titleOwners.get(t) ?? []), c.code])
+    if (existing.has(t)) problems.push(`${c.code}: 기존 Persona 와 같은 title`)
+    const label = STATUS_LABELS.find((w) => c.creative.title.includes(w))
+    if (label !== undefined) problems.push(`${c.code}: 상태 낙인형 title — "${label}"`)
+  }
+  for (const [, codes] of titleOwners) if (codes.length > 1) problems.push(`${codes.join(',')}: 같은 title`)
+
+  for (const c of cs) {
+    const axes = coreLifeAxes(c.life)
+    const blocked = axes.filter((a) => c.creative.noGoTopics.some((t) => a.words.some((w) => w !== '' && t.includes(w))))
+    if (axes.length > 0 && blocked.length === axes.length) {
+      problems.push(`${c.code}: noGo 가 생활사 축 전부(${axes.map((a) => a.axis).join('·')})를 막는다 — 빈 사람`)
+    }
+  }
+  return { ok: problems.length === 0, problems, uniqueBehaviors }
+}

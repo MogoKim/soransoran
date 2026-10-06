@@ -14,6 +14,8 @@
  *   ④ 결과 파일을 --supplement 로 다시 판정 → 같은 valid · provider 0
  *   ⑥ 🔴 이어 하기 — 앞 결과 3명 보존(호출 0) · 없는 3명만 호출 · 원자적 합치기 · retry 전부 실패여도 보존 ·
  *      남은 상한 부족 → 호출 0 · 망가진 / 다른 실행의 파일 → 부르기 전에 멈춤
+ *   ⑦ 🔴 batch — 6명 호출 1회 · 원문/식별자 0 · 압축 avoid · 누락 · 중복 · 상한 → fail-closed ·
+ *      정상 6명 canonical valid · 실측 5명 파일 품질 FAIL → --apply 거부
  *   ⑤ 🔴 부르기 전 probe 판정 — 운영 cadence 가 seed 검증을 깨면(렌더 뒤에야 드러난다) provider 0
  *   🔴 모든 회차 DB write 0 (Persona · User · 감사 · Post · Comment · Account)
  */
@@ -69,9 +71,14 @@ const CODES = ['P26', 'P27', 'P28', 'P29', 'P30', 'P31', 'P32', 'P33']
 const CADENCE_CODE = 'P47'
 const NAME_PREFIX = 'creative-check-'
 async function cleanup(): Promise<void> {
-  const mine = await prisma.persona.findMany({ where: { code: CADENCE_CODE, user: { name: { startsWith: NAME_PREFIX } } }, select: { id: true, userId: true } })
-  await prisma.persona.deleteMany({ where: { id: { in: mine.map((m) => m.id) } } })
-  await prisma.user.deleteMany({ where: { id: { in: mine.map((m) => m.userId) } } })
+  const mine = await prisma.persona.findMany({ where: { code: { in: [CADENCE_CODE, 'P31'] }, user: { name: { startsWith: NAME_PREFIX } } }, select: { id: true, userId: true } })
+  // 🔴 이 검사의 후보 코드(P26~P33) draft — 정상이면 0 행이다. 적재 게이트를 없앤 변이가 남긴 행까지 치운다
+  //    (그대로 두면 다음 회차의 후보 코드가 밀려 엉뚱한 이유로 실패한다)
+  const drafts = await prisma.persona.findMany({ where: { code: { in: CODES }, status: 'draft' }, select: { id: true, userId: true } })
+  const all = [...mine, ...drafts]
+  await prisma.personaAuditLog.deleteMany({ where: { personaId: { in: all.map((m) => m.id) } } })
+  await prisma.persona.deleteMany({ where: { id: { in: all.map((m) => m.id) } } })
+  await prisma.user.deleteMany({ where: { id: { in: all.map((m) => m.userId) }, accounts: { none: {} } } })
 }
 
 const T = mkdtempSync(join(tmpdir(), 'soran-creative-db-'))
@@ -223,6 +230,65 @@ try {
     writeFileSync(stray, JSON.stringify({ P40: creativeOf(0) }))
     const r5 = cli(['--db', '--count=6', '--generate-creative', `--resume-creative=${stray}`, '--prior-usd=0.0226', `--creative-out=${join(T, 'm5.json')}`], {})
     check('🔴 이번 후보 밖 코드가 든 이어 하기 파일 → exit 1 · provider 0', r5.run.status === 1 && r5.paid === 0 && /후보 밖 코드/.test(r5.out))
+  }
+
+  // ── ⑦ batch — 여섯 명을 호출 1회로 함께 설계 · 묶음 품질 ──
+  console.log('⑦ 🔴 batch — 6명 · 호출 1회 · 형식 fail-closed · 묶음 품질')
+  {
+    // 🔴 P31 을 격리 DB 의 draft 행으로 잡아 둔다 — 후보가 실측과 같은 P26~P30 · P32 가 된다(P31 · P33 제외 상태)
+    const u31 = await prisma.user.create({ data: { name: `${NAME_PREFIX}p31-${Date.now().toString(36)}` }, select: { id: true } })
+    await prisma.persona.create({ data: { code: 'P31', userId: u31.id, status: 'draft' } })
+    const SIX = ['P26', 'P27', 'P28', 'P29', 'P30', 'P32']
+    const good = JSON.parse(readFileSync('scripts/__fixtures__/persona-creative-batch-good.json', 'utf-8')) as Record<string, PersonaCreative>
+    const goodFile = join(T, 'batch-good.json')
+    writeFileSync(goodFile, JSON.stringify(good))
+    const b7 = await counts()
+
+    const out7 = join(T, 'batch-7.json')
+    const g7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7}`], { FAKE_PROVIDER_CREATIVE_FILE: goodFile })
+    check('CLI 종료 코드 0', g7.run.status === 0, g7.out.slice(-500))
+    check('🔴 6명 batch → provider 정확히 1회', g7.paid === 1, `paid ${g7.paid}`)
+    const req = g7.sent.length === 1 ? JSON.parse((JSON.parse(g7.sent[0]!) as { body: string }).body) as { messages: { content: string }[] } : null
+    const payload = req === null ? null : JSON.parse(req.messages[0]!.content) as { candidates: { code: string }[]; avoid: Record<string, unknown>[] }
+    check('🔴 payload 후보 = P26 · P27 · P28 · P29 · P30 · P32 (P31 · P33 없음)', JSON.stringify(payload?.candidates.map((c) => c.code)) === JSON.stringify(SIX))
+    const body7 = g7.sent.join('\n')
+    check('🔴 payload — 합성 자산 댓글 원문 0 · 화자 id 0 · 표시명 · 회원 칸 0',
+      !assetTexts.some((c) => body7.includes(c.content) || body7.includes(c.speakerId)) && !/displayName|nickname|userId|\\"name\\"/.test(body7))
+    check('🔴 기존 Persona 는 압축(제목 · 성격)만', payload !== null && payload.avoid.every((a) => JSON.stringify(Object.keys(a)) === '["title","personality"]'))
+    check('🔴 batch PASS — 형식 parsed · 품질 PASS', /🔴 batch PASS — 형식 parsed · 품질 PASS/.test(g7.out), (/batch (PASS|FAIL)[^\n]*/.exec(g7.out) ?? [''])[0])
+    check('🔴 정상 6명 → 전원 canonical valid', validOf(g7.out) === 6 && SIX.every((c) => statusOf(g7.out, c) === 'valid'),
+      (g7.out.split('── 후보 판정')[1] ?? '').split('\n').filter((l) => /^  P\d\d  /.test(l)).join(' | '))
+    const f7 = existsSync(out7) ? JSON.parse(readFileSync(out7, 'utf-8')) as Record<string, PersonaCreative> : {}
+    check('결과 파일 = 6명 그대로 (--supplement 모양)', SIX.every((c) => JSON.stringify(f7[c]) === JSON.stringify(good[c])) && Object.keys(f7).length === 6)
+    check('🔴 batch 장부 — 호출 1회 · 최악 예약 ≤ batch 상한 $0.0300', /호출 1회 · 입력 \d+ tok · 출력 \d+ tok · 실제 비용 \$[\d.]+ · 최악 예약 \$[\d.]+ \(판정: 최악 예약 ≤ batch 상한 \$0\.0300 · 호출 1회\)/.test(g7.out))
+
+    // 🔴 코드 하나 빠짐 → 전체 invalid · creative 0
+    const missFile = join(T, 'batch-miss.json')
+    writeFileSync(missFile, JSON.stringify(Object.fromEntries(SIX.filter((c) => c !== 'P30').map((c) => [c, good[c]]))))
+    const out7b = join(T, 'batch-7b.json')
+    const m7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${out7b}`], { FAKE_PROVIDER_CREATIVE_FILE: missFile })
+    check('🔴 코드 누락 → 호출 1 · batch FAIL(형식 invalid) · creative 0 · valid 0', m7.paid === 1 && /batch FAIL — 형식 invalid/.test(m7.out)
+      && /빠진 코드: P30/.test(m7.out) && validOf(m7.out) === 0 && existsSync(out7b) && readFileSync(out7b, 'utf-8').trim() === '{}')
+    // 🔴 중복 키(원문 그대로)
+    const ok = JSON.stringify(Object.fromEntries(SIX.map((c) => [c, good[c]])))
+    const dupFile = join(T, 'batch-dup.json')
+    writeFileSync(dupFile, JSON.stringify({ __raw__: `${ok.slice(1, -1)},"P27":${JSON.stringify(good.P27)}}` }))
+    const d7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', `--creative-out=${join(T, 'batch-7d.json')}`], { FAKE_PROVIDER_CREATIVE_FILE: dupFile })
+    check('🔴 코드 중복 → batch FAIL · valid 0', d7.paid === 1 && /중복 코드: P27/.test(d7.out) && validOf(d7.out) === 0, (/batch[^\n]*/.exec(d7.out) ?? [''])[0])
+    // 🔴 상한
+    const c7 = cli(['--db', '--count=6', '--generate-creative', '--creative-batch', '--cost-cap=0.001', `--creative-out=${join(T, 'batch-7c.json')}`], { FAKE_PROVIDER_CREATIVE_FILE: goodFile })
+    check('🔴 최악 예약 > 상한 → provider 0 · batch FAIL', c7.paid === 0 && /batch FAIL — 형식 not-called/.test(c7.out) && /부르지 않았다/.test(c7.out))
+
+    // 🔴 실측 5명 파일 → 품질 FAIL · 적재 거부(write 0)
+    const actual = 'scripts/__fixtures__/persona-creative-actual-20261006.json'
+    const a7 = cli(['--db', '--count=6', `--supplement=${actual}`], {})
+    check('🔴 실측 5명 파일 → 묶음 품질 FAIL', /creative 묶음 품질 \(judgeCreativeQuality · 5명\) 🔴 FAIL/.test(a7.out) && a7.paid === 0)
+    const b7a = await counts()
+    const ap = cli(['--db', '--count=6', `--supplement=${actual}`, '--apply', '--limit=5', '--reason', 'fixture'], {})
+    check('🔴 품질 FAIL 묶음 --apply → exit 1 · 적재 0', ap.run.status === 1 && /creative 묶음 품질 FAIL/.test(ap.out) && same(b7a, await counts()), ap.out.slice(-300))
+    check('🔴 ⑦ 회차 DB write 0 (P31 준비 행 제외)', same({ ...b7 }, await counts()))
+    await prisma.persona.deleteMany({ where: { code: 'P31', userId: u31.id } })
+    await prisma.user.deleteMany({ where: { id: u31.id } })
   }
 
   // ── ⑤ probe 판정 — 카드를 렌더해야 드러나는 creative 무관 막힘 ──

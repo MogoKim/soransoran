@@ -14,6 +14,9 @@
  *     --resume-creative=<앞 결과.json> --prior-usd=<앞 실행 실제 비용> [--cost-cap=<usd>] --creative-out=<합친 결과.json>
  *                                                           # 🔴 이어 하기 — 앞 결과의 creative 는 엄격 재검증해 **그대로 보존**하고
  *                                                           #    (그 코드 호출 0) 없는 후보만 부른다. 상한 = min(--cost-cap, $0.05 − 앞 비용)
+ *   npx tsx scripts/persona-autogen.mts --db --count=8 --generate-creative --creative-batch [--cost-cap=<≤0.03>] \
+ *     --creative-out=<결과.json>                           # 🔴 batch — 후보 전원을 **호출 1회**에서 함께 설계 · hard cap $0.03 ·
+ *                                                           #    결과는 creative 묶음 품질 판정(`judgeCreativeQuality`)까지 본다
  *
  * 한 사이클
  *   ① 코드   P26~ 중 카드·DB 에 없는 번호
@@ -45,9 +48,12 @@ import { applyAutogenDrafts } from './lib/persona-autogen-apply.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
-  CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MODEL, creativeBriefOf, creativePeerOf, parseCreativeFile,
+  CREATIVE_BATCH_COST_CAP_USD, CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MODEL, compactPeerOf, creativeBriefOf,
+  creativePeerOf, judgeCreativeQuality, parseCreativeFile,
 } from '../src/lib/persona-creative'
-import { CREATIVE_BLOCK_OF, generateCreatives, type CreativeRun } from './lib/persona-creative-run.mjs'
+import {
+  CREATIVE_BLOCK_OF, generateCreativeBatch, generateCreatives, outcomesOfBatch, type CreativeBatchRun, type CreativeRun,
+} from './lib/persona-creative-run.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (k: string): string | null => {
@@ -65,6 +71,7 @@ const OUT = arg('out')
 const GENERATE = argv.includes('--generate-creative')
 const CREATIVE_OUT = arg('creative-out')
 const RESUME = arg('resume-creative')
+const BATCH = argv.includes('--creative-batch')
 const numArg = (k: string): number | null => {
   const v = arg(k)
   if (v === null) return null
@@ -88,12 +95,19 @@ if (GENERATE) {
   if (RESUME !== null) {
     if (PRIOR_USD === null || !(PRIOR_USD >= 0)) fail('--resume-creative 는 --prior-usd=<앞 실행 실제 비용> 이 필요하다 — 합쳐서 상한을 넘지 않게')
   }
+  if (BATCH && (RESUME !== null || PRIOR_USD !== null)) fail('--creative-batch 는 후보 전원을 함께 설계한다 — --resume-creative · --prior-usd 와 쓰지 않는다')
+  if (BATCH && COST_CAP_ARG !== null && COST_CAP_ARG > CREATIVE_BATCH_COST_CAP_USD) {
+    fail(`--creative-batch 의 --cost-cap 은 batch 상한 $${CREATIVE_BATCH_COST_CAP_USD} 이하다 (${arg('cost-cap')})`)
+  }
 }
+if (BATCH && !GENERATE) fail('--creative-batch 는 --generate-creative 와만 쓴다')
 if (!GENERATE && (RESUME !== null || COST_CAP_ARG !== null || PRIOR_USD !== null)) {
   fail('--resume-creative · --cost-cap · --prior-usd 는 --generate-creative 와만 쓴다')
 }
 /** 🔴 이번 실행 상한 = min(--cost-cap, 전체 상한 − 앞 실행 비용). 앞 실행과 합쳐 전체 상한을 넘지 않는다 */
-const RUN_CAP = Math.min(COST_CAP_ARG ?? CREATIVE_COST_CAP_USD, CREATIVE_COST_CAP_USD - (PRIOR_USD ?? 0))
+const RUN_CAP = BATCH
+  ? Math.min(COST_CAP_ARG ?? CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_COST_CAP_USD)
+  : Math.min(COST_CAP_ARG ?? CREATIVE_COST_CAP_USD, CREATIVE_COST_CAP_USD - (PRIOR_USD ?? 0))
 if (GENERATE && !(RUN_CAP > 0)) fail(`남은 상한이 없다 — 앞 비용 $${PRIOR_USD} · 전체 상한 $${CREATIVE_COST_CAP_USD}`)
 
 /** 🔴 creative 파일은 생성 응답과 같은 엄격한 파서로 읽는다 — 한 칸이라도 틀리면 **부르기 전에** 멈춘다 */
@@ -200,6 +214,7 @@ const judgeAll = (cr: Readonly<Record<string, PersonaCreative>>) => judgeAutogen
 
 // ── ④-b creative 생성 — 🔴 `--generate-creative` 일 때만. creative 말고 다른 이유로 막힌 후보는 부르지 않는다 ──
 let gen: CreativeRun | null = null
+let batchRun: CreativeBatchRun | null = null
 const skippedForGen: string[] = []
 if (GENERATE) {
   /**
@@ -223,14 +238,21 @@ if (GENERATE) {
     return creativeBriefOf({ code: v.code, life: lifeOf.get(v.code)!, voiceCore: voiceCoreFromBundle(ev.bundle), style: ev.bundle.style })
   })
   const { callProvider } = await import('./lib/voice-m3-provider.mjs')
-  gen = await generateCreatives({
+  const forbiddenTextsOf = (code: string): string[] => voice.byCode.get(code)?.bundle.comments.map((x) => x.text) ?? []
+  if (BATCH) {
+    // 🔴 batch — 호출 정확히 1회. 기존 Persona 는 압축(제목 · 핵심 성격)만 보낸다
+    batchRun = await generateCreativeBatch({
+      briefs, avoid: pool.cards.map(compactPeerOf), forbiddenTextsOf, call: callProvider, capUsd: RUN_CAP,
+    })
+    gen = { ok: true, outcomes: outcomesOfBatch(batchRun, briefs.map((b) => b.code)), ledger: batchRun.ledger }
+  } else gen = await generateCreatives({
     briefs,
     // 🔴 피할 대상 = 기존 Persona 카드(제목 · 성격 · noGo) + 앞 실행에서 보존한 creative 전체
     avoid: [
       ...pool.cards.map((c) => ({ code: c.code, title: c.title, personality: c.personality, noGoTopics: c.noGoTopics, noGoExpressions: c.noGoExpressions })),
       ...Object.entries(resumed).map(([code, c]) => creativePeerOf(code, c)),
     ],
-    forbiddenTextsOf: (code) => voice.byCode.get(code)?.bundle.comments.map((x) => x.text) ?? [],
+    forbiddenTextsOf,
     call: callProvider,
     capUsd: RUN_CAP,
   })
@@ -262,6 +284,13 @@ const verdicts: AutogenVerdict[] = batch.verdicts.map((verdict) => {
   return verdict
 })
 
+// ── creative 묶음 품질 — 🔴 단일 판정(`judgeCreativeQuality`). 새 후보에 creative 가 있으면 언제나 본다 ──
+const withCreative = codes.filter((c) => creative[c] !== undefined && lifeOf.has(c))
+const quality = withCreative.length === 0 ? null : judgeCreativeQuality({
+  candidates: withCreative.map((code) => ({ code, creative: creative[code]!, life: lifeOf.get(code)! })),
+  existingTitles: pool.cards.map((c) => c.title),
+})
+
 // ── 보고 ──
 console.log('\n── 말투 근거 풀 (정본 자산 · 운영 고정 배정 규칙)')
 console.log(`  자산 ${voice.code} · 3건↑ 안전 화자 ${voice.eligibleSpeakers} · 운영 배정 ${voice.assignedSpeakers}`
@@ -288,7 +317,22 @@ if (GENERATE && gen !== null) {
   }
   const l = gen.ledger
   console.log(`  호출 ${l.calls}회 · 입력 ${l.inputTokens} tok · 출력 ${l.outputTokens} tok · 실제 비용 ${l.usd === null ? '🔴 모름' : `$${l.usd.toFixed(4)}`}`
-    + ` · 1회 최악 예약 최대 $${l.maxReserveUsd.toFixed(4)} (판정: 실제 지출 + 다음 1회 최악 예약 ≤ 상한 $${l.capUsd.toFixed(4)})`)
+    + (BATCH
+      ? ` · 최악 예약 $${l.maxReserveUsd.toFixed(4)} (판정: 최악 예약 ≤ batch 상한 $${l.capUsd.toFixed(4)} · 호출 1회)`
+      : ` · 1회 최악 예약 최대 $${l.maxReserveUsd.toFixed(4)} (판정: 실제 지출 + 다음 1회 최악 예약 ≤ 상한 $${l.capUsd.toFixed(4)})`))
+  if (batchRun !== null) {
+    const structural = batchRun.ok ? batchRun.status : 'not-called'
+    const pass = batchRun.ok && batchRun.status === 'parsed' && quality !== null && quality.ok
+    console.log(`  🔴 batch ${pass ? 'PASS' : 'FAIL'} — 형식 ${structural} · 품질 ${quality === null ? '판정 대상 없음' : quality.ok ? 'PASS' : 'FAIL'}`)
+    if (batchRun.ok) for (const p of batchRun.problems) console.log(`     · ${p}`)
+    else console.log(`     · ${batchRun.reason}`)
+  }
+}
+
+if (quality !== null) {
+  console.log(`\n── creative 묶음 품질 (judgeCreativeQuality · ${withCreative.length}명) ${quality.ok ? '✅ PASS' : '🔴 FAIL'}`)
+  console.log(`  고유 대화 행동 ${Object.entries(quality.uniqueBehaviors).map(([c, n]) => `${c} ${n}`).join(' · ')}`)
+  for (const p of quality.problems) console.log(`  · ${p}`)
 }
 
 console.log('\n── 후보 판정 (코드만)')
@@ -340,6 +384,8 @@ if (!APPLY) {
   process.exit(0)
 }
 if (prismaRef === null || names === null) fail('--apply 는 DB 읽기가 필요하다')
+// 🔴 creative 묶음 품질이 FAIL 이면 적재하지 않는다 — 형식만 통과한 비슷한 사람을 넣지 않는다
+if (quality !== null && !quality.ok) fail(`creative 묶음 품질 FAIL ${quality.problems.length}건 — 적재하지 않는다`)
 const plans = valid.map((v) => ({ code: v.code, status: v.status, name: names!.picked.get(v.code) ?? '', seed: v.seed ?? {} }))
 const res = await applyAutogenDrafts(prismaRef!, { plans, limit: LIMIT, reason: REASON })
 await prismaRef!.$disconnect()
