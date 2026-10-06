@@ -2,8 +2,10 @@
  * 60일 주제 캘린더 (v2)
  *
  * 이 파일은 drafts 전용이다. 런타임에서 import 하지 않는다.
- * 큐는 사람이 만들고 사람이 고친다. AI 가 주제를 스스로 정하지 않는다
- * (제작 전략 §9.1 — 우나어의 "트렌드 제안 기반 자동 생성"으로 돌아가는 경로).
+ * 행이 들어오는 길은 둘이다 — 기존 행(사람이 만들었다)과 G8 편입기
+ * (`scripts/magazine-g8-promote.mjs`)가 M-GRAPH 연구 정본에서 옮긴 행(`intentId`·`g8ManifestHash` 를 단다).
+ * 어느 쪽도 AI 가 주제를 새로 지어내지 않는다 — 편입기는 조사·판정이 끝난 의도만 옮기고
+ * 필수 필드가 정본에 없으면 넣지 않는다. 행마다 사람이 승인하는 단계는 없다 (M-GRAPH 헌장 §3-B).
  *
  * 🔴 매거진은 SEO 글 생산기가 아니라 커뮤니티 성장 엔진이다.
  *    North Star 는 4050/5060 여성이 소란소란에서 자기 이야기를 남긴 횟수다.
@@ -97,6 +99,13 @@ export type TopicQueueItem = {
   internalLinks: string[]
   whyNow: string
   notes: string
+  /**
+   * M-GRAPH 의도 식별자. G8 편입기(`scripts/magazine-g8-promote.mjs`)가 넣은 행에만 있다.
+   * intentId ↔ slug 는 영구 1:1 이다 (연구 contract/m3-slug-manifest.json).
+   */
+  intentId?: string
+  /** 이 행을 만든 G8 manifest 해시. 그래프 장부(m3-state.jsonl) ADMITTED 행과 같은 값이어야 한다 */
+  g8ManifestHash?: string
 }
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [
