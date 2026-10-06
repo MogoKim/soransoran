@@ -162,9 +162,20 @@ const judgeAll = (cr: Readonly<Record<string, PersonaCreative>>) => judgeAutogen
 let gen: CreativeRun | null = null
 const skippedForGen: string[] = []
 if (GENERATE) {
-  const pre = judgeAll({})
-  const onlyCreative = pre.verdicts.filter((v) => voice.ok && v.blocks.length > 0 && v.blocks.every((b) => b === 'LLM_STEP_UNIMPLEMENTED'))
-  for (const v of pre.verdicts) if (!onlyCreative.includes(v)) skippedForGen.push(`${v.code}(${v.blocks.filter((b) => b !== 'LLM_STEP_UNIMPLEMENTED').join('·') || '—'})`)
+  /**
+   * 🔴 **부르기 전 판정 — 형식만 맞춘 probe creative 로 운영 판정을 한 번 돌린다.**
+   *    creative 가 없으면 판정이 카드 렌더 전에 멈춰, 계약 축(말투 근거 수 등)처럼 **creative 와 무관한 막힘**이
+   *    생성 뒤에야 드러난다 — 그러면 서지 못할 후보에 돈을 쓴다. probe 는 이 게이트에만 쓰고
+   *    출력 · 결과 파일 · 적재 어디에도 나가지 않는다. probe 글자에 따라 달라지는 겹침(`NEAR_DUPLICATE_PERSONA`)만 무시한다.
+   */
+  const probeOf = (code: string): PersonaCreative => ({
+    title: `probe ${code}`, personality: [`probe ${code} 가`, `probe ${code} 나`, `probe ${code} 다`],
+    noGoTopics: [`probe ${code} 소재`], noGoExpressions: [`"probe ${code}"`],
+    variations: ['probe 1', 'probe 2', 'probe 3', 'probe 4', 'probe 5'],
+  })
+  const pre = judgeAll(Object.fromEntries(codes.map((c) => [c, probeOf(c)])))
+  const onlyCreative = pre.verdicts.filter((v) => voice.ok && v.blocks.every((b) => b === 'NEAR_DUPLICATE_PERSONA'))
+  for (const v of pre.verdicts) if (!onlyCreative.includes(v)) skippedForGen.push(`${v.code}(${v.blocks.filter((b) => b !== 'NEAR_DUPLICATE_PERSONA').join('·') || '—'})`)
   const briefs = onlyCreative.map((v) => {
     const ev = voice.byCode.get(v.code)!
     return creativeBriefOf({ code: v.code, life: lifeOf.get(v.code)!, voiceCore: voiceCoreFromBundle(ev.bundle), style: ev.bundle.style })

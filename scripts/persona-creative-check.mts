@@ -13,7 +13,7 @@
  *   ⑥ CLI 가드 — 유료 조건이 어긋나면 DB · provider 에 붙기 전에 멈춘다
  */
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -211,7 +211,8 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
     const f = fakeCall(() => ({ ...okResponse(GOOD), ok: false, errorCode: 'HTTP_500', usageKnown: false }))
     const r = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call })
     check('🔴 호출 실패 → 재시도 0 · 사용량 모름 → 뒤 후보 0회 (호출 1)', r.ok && f.calls() === 1
-      && r.outcomes[0]!.status === 'call-failed' && r.outcomes.slice(1).every((o) => o.status === 'budget-blocked')
+      && r.outcomes[0]!.status === 'call-failed' && r.outcomes.slice(1).every((o) => o.status === 'budget-blocked'
+        && /사용량 · 비용을 읽지 못했다/.test(o.problems.join('')))
       && r.ledger.usd === null)
   }
   {
@@ -288,18 +289,20 @@ console.log('⑥ CLI 가드 — DB · provider 에 붙기 전에 멈춘다')
   writeFileSync(log, '')
   const env = { ...process.env, HOME: T, DATABASE_URL: 'postgresql://nobody@127.0.0.1:1/none',
     NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts', 'lib', 'fake-provider-hook.mjs')}`, FAKE_PROVIDER_LOG: log }
+  const out = join(T, 'creative.json')
   const cases: [string, string[], RegExp][] = [
-    ['--db 없음', ['--generate-creative', '--creative-out=x.json'], /--db 가 필요하다/],
-    ['--apply 동시', ['--db', '--generate-creative', '--apply', '--creative-out=x.json'], /--apply 를 함께 쓰지 않는다/],
-    ['--supplement 동시', ['--db', '--generate-creative', '--supplement=x.json', '--creative-out=x.json'], /--supplement 를 함께 쓰지 않는다/],
+    ['--db 없음', ['--generate-creative', `--creative-out=${out}`], /--db 가 필요하다/],
+    ['--apply 동시', ['--db', '--generate-creative', '--apply', `--creative-out=${out}`], /--apply 를 함께 쓰지 않는다/],
+    ['--supplement 동시', ['--db', '--generate-creative', `--supplement=${join(T, 'sup.json')}`, `--creative-out=${out}`], /--supplement 를 함께 쓰지 않는다/],
     ['결과 파일 없음', ['--db', '--generate-creative'], /--creative-out=/],
-    ['9명', ['--db', '--generate-creative', '--creative-out=x.json', '--count=9'], /8명까지다/],
+    ['9명', ['--db', '--generate-creative', `--creative-out=${out}`, '--count=9'], /8명까지다/],
   ]
   for (const [name, args, re] of cases) {
     const run = spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], { env, encoding: 'utf-8' })
     check(`${name} → exit 1 · 사유`, run.status === 1 && re.test(run.stderr), (run.stderr ?? '').slice(-200))
   }
   check('🔴 가드 회차 전부 provider 요청 0', readFileSync(log, 'utf-8').trim() === '')
+  check('🔴 가드 회차 전부 결과 파일 write 0', !existsSync(out))
   rmSync(T, { recursive: true, force: true })
 }
 

@@ -325,6 +325,26 @@ const semanticVerdictOf = (body) => {
   return out
 }
 
+/**
+ * 🔴 **Persona creative 생성 응답** (2026-10-06 · `persona-creative`). `FAKE_PROVIDER_CREATIVE_FILE` 에
+ *    `{ "<코드>": PersonaCreative }` JSON 파일을 주면, creative 요청(user 턴에 `persona.code` 가 있다)에
+ *    **그 코드의 값**을 돌려준다. 파일에 없는 코드면 형식이 깨진 글을 돌려준다(fail-closed 경로).
+ *    설정하지 않으면 앞판 응답 그대로다.
+ */
+const CREATIVE_FILE = process.env.FAKE_PROVIDER_CREATIVE_FILE ?? ''
+const creativeTextOf = async (body) => {
+  if (CREATIVE_FILE === '') return null
+  let code = null
+  try {
+    const req = JSON.parse(String(body ?? '{}'))
+    code = JSON.parse(String(req?.messages?.[0]?.content ?? '{}'))?.persona?.code ?? null
+  } catch { code = null }
+  if (typeof code !== 'string') return null
+  const { readFileSync } = await import('node:fs')
+  const map = JSON.parse(readFileSync(CREATIVE_FILE, 'utf-8'))
+  return map[code] === undefined ? '"이건 creative 가 아니다"' : JSON.stringify(map[code])
+}
+
 globalThis.fetch = async (url, init) => {
   await armSettleFail()
   await armProtectClock()
@@ -385,8 +405,10 @@ globalThis.fetch = async (url, init) => {
       usageMetadata: usage,
     })
   }
+  const creativeText = await creativeTextOf(init?.body)
   return json({
-    content: [{ text }],
+    // 🔴 Anthropic prefill `{` 뒤를 이어 쓴 모양 — 여는 중괄호를 뺀다
+    content: [{ text: creativeText === null ? text : (creativeText.startsWith('{') ? creativeText.slice(1) : creativeText) }],
     usage: { input_tokens: 11, output_tokens: outTokens },
     stop_reason: 'end_turn',
   })
