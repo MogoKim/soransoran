@@ -3,18 +3,26 @@
  *
  * 🔴 **새 주제를 만들지 않는다.** 이미 조사·판정된 의도만 옮긴다.
  *    입력은 연구 정본(의도·판정·그래프 빌드)과 제품의 articles·queue·graph 번들이고,
- *    출력은 manifest 하나다. 큐 행과 그래프 장부 행은 **같은 manifest 에서** 나오고
- *    같은 해시를 단다 — 둘이 따로 갈라질 길을 만들지 않는다 (헌장 §15 전환 규칙 9).
+ *    출력은 manifest 하나다. 큐 행과 **편입 장부** 행은 같은 manifest 에서 나온다
+ *    — 둘이 따로 갈라질 길을 만들지 않는다 (헌장 §15 전환 규칙 9).
+ *
+ * 🔴 **용어를 섞지 않는다.**
+ *    · 편입 장부(admission ledger) — 연구 `contract/m3-state.jsonl`(ADMITTED 사건) +
+ *      `contract/m3-slug-manifest.json`(intentId ↔ slug). 이 도구가 쓰는 것은 여기까지다.
+ *    · 제품 graph bundle — `src/content/magazine/graph/*`. 이 도구는 **읽기만** 한다.
+ *      편입 장부가 제품 그래프에 반영되려면 연구 build-graph 재빌드 → export → 배포가 따로 돌아야 한다.
  *
  * 🔴 **필수 필드를 추측하지 않는다.** 연구 정본에 값이 없으면 그 의도는 INCOMPLETE 다.
  *    STANDARD·EVERGREEN 같은 값으로 조용히 채우지 않는다.
  *    예외는 정본 문서가 이미 값을 정한 세 가지뿐이고, 행마다 출처를 적는다 (`DERIVED`).
  *
  * 🔴 **기본은 dry-run 이다.** 쓰기는 `applyManifest` 하나뿐이고, 그것도 호출자가
- *    큐 루트·그래프 루트·manifest 해시를 명시해야 돈다.
+ *    큐 루트·편입 장부 루트·manifest 해시를 명시해야 돈다.
+ *    apply 는 단일 writer 잠금 안에서만 쓰고, 급사하면 다음 apply 가 journal 로 되돌린다.
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { parseArticlesSource, parseQueueSource, sliceLiteral } from './magazine-load.mjs'
@@ -22,6 +30,7 @@ import { isPublic } from './magazine-gate.mjs'
 import { checkTitleForm } from './magazine-editorial.mjs'
 import { BANNED_WORDS } from './magazine-brief-policy.mjs'
 import { VALIDATION_PROFILES } from './magazine-validation-profile.mjs'
+import { withQuarantineLock } from './magazine-quarantine.mjs'
 
 export const G8_SCHEMA = 'g8-promotion/1'
 export const PRIMARY_COUNT = 5
@@ -43,26 +52,34 @@ export const RESEARCH_FILES = {
   buildMappings: 'contract/build/current/mappings.jsonl',
   buildManifest: 'contract/build/current/manifest.json',
   slugModule: 'contract/m3-slug.mjs',
+  /** 🔴 장부 사건은 이 정본 계약(validateLedger · recordAdmission)으로만 적는다 */
+  pipelineModule: 'contract/m3-pipeline.mjs',
+  productModule: 'contract/m3-product.mjs',
 }
-/** 그래프 쪽 기록 대상. 없으면 빈 것으로 본다 — 해시에는 `ABSENT` 로 남는다 */
-export const GRAPH_STATE_FILES = {
+/** 편입 장부 — 이 도구가 쓰는 연구 쪽 파일. 없으면 빈 것으로 본다 (해시 `ABSENT`) */
+export const ADMISSION_FILES = {
   slugManifest: 'contract/m3-slug-manifest.json',
   ledger: 'contract/m3-state.jsonl',
 }
+/** 급사 복구 journal — apply 가 쓰기 전에 원본 바이트를 적는다. 정상 종료면 남지 않는다 */
+export const JOURNAL_FILE = 'contract/.g8-apply.journal.json'
 export const PRODUCT_FILES = {
   articles: 'src/content/magazine/articles.ts',
   queue: 'drafts/magazine/topic-queue.ts',
   types: 'src/content/magazine/types.ts',
   graphCurrent: 'src/content/magazine/graph/current.ts',
 }
-const LEDGER_SCHEMA = 'm3ledger/2'
 
 /**
  * 의도가 기존 글로 **이미 답해졌다**고 보는 대응. PARTIAL·ADJACENT 는 답이 아니다 —
  * 그 의도는 연구 판정(EXTEND_EXISTING 또는 AUTO_READY)으로 간다.
  */
+/**
+ * 🔴 `ANSWERS_PARTIAL` · `ANSWERS_WITH_SCOPE_EXPANSION` 은 **완료 답변이 아니다** — 기존 글이 일부만 답하거나
+ *    범위를 넓혀야 답한다. 그 의도는 연구 판정(EXTEND_EXISTING)을 따른다 (I-T6-09 · I-T1-26).
+ */
 const ANSWER_COVERAGE = new Set([
-  'ANSWERS', 'ANSWERS_WITH_DEFECT', 'ANSWERS_PARTIAL', 'ANSWERS_WITH_SCOPE_EXPANSION',
+  'ANSWERS', 'ANSWERS_WITH_DEFECT',
   'QUEUED_NOT_PUBLIC', 'SCHEDULED_NOT_YET_PUBLIC', 'PRIMARY',
 ])
 
@@ -142,28 +159,27 @@ function loadGraphBundle(repoDir) {
 /**
  * 입력 전부를 읽고 해시를 단다. 🔴 같은 바이트면 같은 해시 — manifest 가 입력을 고정한다.
  */
-export async function loadInputs({ researchDir, repoDir }) {
+/**
+ * 입력 전부의 원문과 해시. 🔴 manifest 생성과 apply 직전 재검사가 **같은 함수**를 쓴다 —
+ *    apply 가 일부 파일만 다시 보면, 나머지가 바뀐 채로 옛 판정이 쓰인다.
+ */
+export function readInputs({ researchDir, repoDir }) {
   const research = {}
   for (const [k, rel] of Object.entries(RESEARCH_FILES)) {
     research[k] = readRequired(path.join(researchDir, rel), `연구 ${rel}`)
   }
-  const graphState = {}
-  for (const [k, rel] of Object.entries(GRAPH_STATE_FILES)) graphState[k] = readOptional(path.join(researchDir, rel))
+  const admission = {}
+  for (const [k, rel] of Object.entries(ADMISSION_FILES)) admission[k] = readOptional(path.join(researchDir, rel))
   const product = {}
   for (const k of ['articles', 'queue', 'types']) product[k] = readRequired(path.join(repoDir, PRODUCT_FILES[k]), PRODUCT_FILES[k])
   const bundle = loadGraphBundle(repoDir)
-
-  const slugModule = await import(pathToFileURL(path.join(researchDir, RESEARCH_FILES.slugModule)).href)
-  if (typeof slugModule.proposeSlug !== 'function') throw new Error('m3-slug.mjs 에 proposeSlug 가 없다')
-
   const draftsDir = path.join(repoDir, 'drafts/magazine')
   const draftDirs = fs.existsSync(draftsDir)
     ? fs.readdirSync(draftsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()
     : []
-
   const hashes = {
-    research: Object.fromEntries(Object.entries(RESEARCH_FILES).map(([k]) => [k, sha256(research[k])])),
-    graphState: Object.fromEntries(Object.entries(GRAPH_STATE_FILES).map(([k]) => [k, graphState[k] === null ? 'ABSENT' : sha256(graphState[k])])),
+    research: Object.fromEntries(Object.keys(RESEARCH_FILES).map((k) => [k, sha256(research[k])])),
+    admission: Object.fromEntries(Object.keys(ADMISSION_FILES).map((k) => [k, admission[k] === null ? 'ABSENT' : sha256(admission[k])])),
     product: {
       articles: sha256(product.articles),
       queue: sha256(product.queue),
@@ -172,6 +188,27 @@ export async function loadInputs({ researchDir, repoDir }) {
       draftDirs: sha256(draftDirs.join('\n')),
     },
   }
+  return { research, admission, product, bundle, draftDirs, hashes }
+}
+
+/** 두 해시 묶음에서 다른 입력의 이름 — 한쪽에만 있는 키도 다른 것으로 센다 */
+export function diffHashes(want, got) {
+  const out = []
+  for (const group of new Set([...Object.keys(want ?? {}), ...Object.keys(got ?? {})])) {
+    const a = want?.[group] ?? {}
+    const b = got?.[group] ?? {}
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (a[k] !== b[k]) out.push(`${group}.${k}`)
+  }
+  return out.sort()
+}
+
+/**
+ * 입력 전부를 읽고 해시를 단다. 🔴 같은 바이트면 같은 해시 — manifest 가 입력을 고정한다.
+ */
+export async function loadInputs({ researchDir, repoDir }) {
+  const { research, admission, product, bundle, draftDirs, hashes } = readInputs({ researchDir, repoDir })
+  const slugModule = await import(pathToFileURL(path.join(researchDir, RESEARCH_FILES.slugModule)).href)
+  if (typeof slugModule.proposeSlug !== 'function') throw new Error('m3-slug.mjs 에 proposeSlug 가 없다')
 
   return {
     hashes,
@@ -183,8 +220,8 @@ export async function loadInputs({ researchDir, repoDir }) {
     buildEdges: parseJsonl(research.buildEdges, RESEARCH_FILES.buildEdges),
     buildMappings: parseJsonl(research.buildMappings, RESEARCH_FILES.buildMappings),
     buildManifest: JSON.parse(research.buildManifest),
-    slugManifest: graphState.slugManifest === null ? { slugs: {} } : JSON.parse(graphState.slugManifest),
-    ledger: parseJsonl(graphState.ledger, GRAPH_STATE_FILES.ledger),
+    slugManifest: admission.slugManifest === null ? { slugs: {} } : JSON.parse(admission.slugManifest),
+    ledger: parseJsonl(admission.ledger, ADMISSION_FILES.ledger),
     articles: parseArticlesSource(product.articles),
     queue: parseQueueSource(product.queue),
     unions: {
@@ -198,6 +235,19 @@ export async function loadInputs({ researchDir, repoDir }) {
     graphFile: bundle.file,
     draftDirs,
   }
+}
+
+/**
+ * 🔴 **판정 시각은 정확한 KST 시각 하나다.** 날짜만 받아 하루 끝으로 해석하지 않는다 —
+ *    10:30 공개 글은 같은 날 10:29 에는 예약이고 10:30 에는 공개다.
+ */
+export function parseAt(at) {
+  if (typeof at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+09:00$/.test(at)) {
+    throw new Error(`판정 시각은 YYYY-MM-DDTHH:MM:SS+09:00 이어야 한다: ${at}`)
+  }
+  const ms = new Date(at).getTime()
+  if (Number.isNaN(ms)) throw new Error(`판정 시각이 날짜가 아니다: ${at}`)
+  return { at, asOf: at.slice(0, 10), ms }
 }
 
 // ── 판정 ─────────────────────────────────────────────────────
@@ -278,9 +328,9 @@ function productStateOf(slug, artBySlug, queueBySlug, nowMs) {
  *   ③ REJECT → HOLD → EXTEND_EXISTING → AUTO_READY 가 아닌 판정(INCOMPLETE)
  *   ④ 영토 판단 대기 → 중복 → 필수 필드·제목 → ELIGIBLE_NEW
  */
-export function classifyIntents(inputs, { asOf }) {
-  if (!isDate(asOf)) throw new Error(`asOf 형식이 YYYY-MM-DD 가 아니다: ${asOf}`)
-  const nowMs = new Date(`${asOf}T23:59:59+09:00`).getTime()
+export function classifyIntents(inputs, { at }) {
+  const time = parseAt(at)
+  const nowMs = time.ms
   const canonById = new Map(inputs.canonical.map((x) => [x.intentId, x]))
   const autoById = new Map(inputs.automation.map((x) => [x.intentId, x]))
   const rebById = new Map(inputs.rebaseline.map((x) => [x.intentId, x]))
@@ -469,7 +519,8 @@ function selectionBlock(d, { asOf, seriesNext }) {
   return null
 }
 
-export function selectCandidates(inputs, classified, { asOf }) {
+export function selectCandidates(inputs, classified, { at }) {
+  const { asOf } = parseAt(at)
   const clusterCount = new Map()
   for (const x of [...inputs.articles, ...inputs.queue]) clusterCount.set(x.cluster, (clusterCount.get(x.cluster) ?? 0) + 1)
   const liveSlugsOf = (intentId) => (classified.answered.get(intentId) ?? [])
@@ -507,9 +558,8 @@ export function selectCandidates(inputs, classified, { asOf }) {
       tier: r.tier,
       score: r.score,
       queueRow: queueRowOf(r.d, { day, internalLinks }),
-      graphRow: {
-        schemaVersion: LEDGER_SCHEMA,
-        event: 'ADMITTED',
+      /** 편입 장부 사건의 재료 — 실제 행은 정본 recordAdmission 이 만든다 */
+      admissionRow: {
         intentId: r.intentId,
         slug: r.d.slug,
         title: r.d.build.primaryQuery,
@@ -520,7 +570,6 @@ export function selectCandidates(inputs, classified, { asOf }) {
               anchorLabel: r.d.relations.discovery.anchorLabel, readerReason: r.d.relations.discovery.readerReason }
           : null,
         internalLinks,
-        at: `${asOf}T00:00:00+09:00`,
       },
       evidence: {
         territoryId: r.d.build.territoryId,
@@ -561,18 +610,22 @@ export const hashManifest = (m) => sha256(JSON.stringify(manifestBody(m)))
  * 🔴 **같은 입력 → 바이트 단위 같은 manifest.** 시각·난수·파일 순서가 들어가지 않는다.
  *    큐 행과 그래프 행이 이 한 객체에서 나오고, 이 객체의 해시를 함께 단다.
  */
-export function buildManifest(inputs, { asOf }) {
+export function buildManifest(inputs, { at }) {
+  const { asOf } = parseAt(at)
   const bm = inputs.buildManifest
   if (bm.graphVersion !== inputs.graph.graphVersion || bm.contentHash?.combined !== inputs.graph.contentHash?.combined) {
     throw new Error(`GRAPH_BUNDLE_MISMATCH — 연구 build ${bm.graphVersion}/${bm.contentHash?.combined} ≠ 제품 번들 ${inputs.graph.graphVersion}/${inputs.graph.contentHash?.combined}`)
   }
-  const classified = classifyIntents(inputs, { asOf })
-  const selection = selectCandidates(inputs, classified, { asOf })
+  const classified = classifyIntents(inputs, { at })
+  const selection = selectCandidates(inputs, classified, { at })
   const m = {
     schema: G8_SCHEMA,
+    at,
     asOf,
     inputs: inputs.hashes,
-    graph: { graphVersion: inputs.graph.graphVersion, combined: inputs.graph.contentHash.combined, bundle: inputs.graphFile },
+    /** 🔴 읽기만 한 제품 graph bundle. 이 도구는 이것을 갱신하지 않는다 — 편입 장부만 쓴다 */
+    productGraphBundle: { graphVersion: inputs.graph.graphVersion, combined: inputs.graph.contentHash.combined,
+      file: inputs.graphFile, updatedByThisTool: false },
     derived: DERIVED,
     counts: { intents: classified.rows.length, ...classified.counts,
       autoReadyTopic: inputs.buildIntents.filter((x) => x.topicVerdict === 'AUTO_READY_TOPIC').length,
@@ -585,7 +638,7 @@ export function buildManifest(inputs, { asOf }) {
     },
     queueRows: selection.primary.map((p) => p.queueRow),
     fallbackRows: selection.fallback.map((p) => p.queueRow),
-    graphRows: selection.primary.map((p) => p.graphRow),
+    admissionRows: selection.primary.map((p) => p.admissionRow),
     drift: driftOf(inputs, classified),
   }
   m.hash = hashManifest(m)
@@ -617,24 +670,28 @@ export function insertQueueRows(src, rows) {
 }
 
 /**
- * 🔴 **큐와 그래프가 같은 manifest 에서 왔는가.** 해시마다 (intentId, slug) 집합이 양쪽에서 같아야 하고,
- *    영구 slug 표가 그 짝을 묶고 있어야 한다. 큐에서 빠진 행은 **등록된 글**일 때만 정상이다.
+ * 🔴 **큐와 편입 장부가 같은 편입에서 왔는가.** G8 큐 행(intentId·g8ManifestHash)마다 장부 ADMITTED 사건이 있고,
+ *    장부 사건마다 큐 행이 있거나 **등록된 글**이어야 한다. 영구 slug 표가 그 짝을 묶고 있어야 한다.
+ *    급사 journal 이 남아 있으면 반쪽 상태일 수 있다 — 그것도 어긋남이다.
+ *    🔴 제품 graph bundle 은 보지 않는다. 그것은 이 도구가 쓰지 않는다.
  */
-export function verifyConsistency({ queueSource, articlesSource = null, ledgerSource, slugManifestSource }) {
+export function verifyConsistency({ queueSource, articlesSource = null, ledgerSource, slugManifestSource, journalPresent = false }) {
   const problems = []
   const queue = parseQueueSource(queueSource)
   const articles = articlesSource ? new Set(parseArticlesSource(articlesSource).map((a) => a.slug)) : new Set()
   const ledger = parseJsonl(ledgerSource ?? '', 'ledger')
   const slugs = slugManifestSource ? JSON.parse(slugManifestSource).slugs ?? {} : {}
-  const key = (r) => `${r.g8ManifestHash}|${r.intentId}|${r.slug}`
-  const qKeys = new Set(queue.filter((r) => r.g8ManifestHash).map(key))
-  const lRows = ledger.filter((r) => r.event === 'ADMITTED' && r.g8ManifestHash)
+  const key = (r) => `${r.intentId}|${r.slug}`
+  const qRows = queue.filter((r) => r.g8ManifestHash)
+  const qKeys = new Set(qRows.map(key))
+  const lRows = ledger.filter((r) => r.event === 'ADMITTED')
   const lKeys = new Set(lRows.map(key))
-  for (const k of qKeys) if (!lKeys.has(k)) problems.push(`QUEUE_WITHOUT_GRAPH — ${k}`)
+  if (journalPresent) problems.push('PENDING_JOURNAL — 끝나지 않은 apply 가 있다 (다음 apply 가 되돌린다)')
+  for (const r of qRows) if (!lKeys.has(key(r))) problems.push(`QUEUE_WITHOUT_ADMISSION — ${r.g8ManifestHash}|${key(r)}`)
   for (const r of lRows) {
-    if (!qKeys.has(key(r)) && !articles.has(r.slug)) problems.push(`GRAPH_WITHOUT_QUEUE — ${key(r)}`)
+    if (!qKeys.has(key(r)) && !articles.has(r.slug)) problems.push(`ADMISSION_WITHOUT_QUEUE — ${key(r)}`)
   }
-  for (const r of [...queue.filter((x) => x.g8ManifestHash), ...lRows]) {
+  for (const r of [...qRows, ...lRows]) {
     if (slugs[r.intentId] !== r.slug) problems.push(`SLUG_UNBOUND — ${r.intentId} → ${r.slug} (표: ${slugs[r.intentId] ?? '없음'})`)
   }
   return { ok: problems.length === 0, problems: [...new Set(problems)] }
@@ -643,76 +700,159 @@ export function verifyConsistency({ queueSource, articlesSource = null, ledgerSo
 function writeAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.g8tmp-${process.pid}`
-  fs.writeFileSync(tmp, text)
+  const fd = fs.openSync(tmp, 'w')
+  try { fs.writeSync(fd, text); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   fs.renameSync(tmp, file)
 }
 function restore(file, original) {
   if (original === null) { if (fs.existsSync(file)) fs.unlinkSync(file) } else writeAtomic(file, original)
 }
+const shaOrAbsent = (text) => (text === null ? 'ABSENT' : sha256(text))
 
 /**
- * 🔴 **명시적 apply.** 큐 1파일 + 그래프 2파일을 한 묶음으로 쓴다.
+ * 🔴 **급사 복구.** journal 이 있다는 것은 앞선 apply 가 쓰는 도중 죽었다는 뜻이다(잠금을 지금 내가 쥐었으므로
+ *    주인은 살아 있지 않다). 세 파일을 들어오기 전 바이트로 되돌린다.
+ *    단, 파일이 그 apply 의 「전」 또는 「후」 바이트일 때만 — 그 사이 다른 writer(M-AUTO 등록)가 바꿨다면
+ *    덮어쓰지 않고 RECOVERY_CONFLICT 로 멈춘다.
+ */
+function recoverJournal(journalPath) {
+  let j
+  try { j = JSON.parse(fs.readFileSync(journalPath, 'utf8')) } catch (e) {
+    return { ok: false, code: 'RECOVERY_FAILED', why: `journal 을 읽지 못했다: ${e.message}` }
+  }
+  const files = j?.files ?? []
+  for (const f of files) {
+    const cur = shaOrAbsent(readOptional(f.path))
+    if (cur !== shaOrAbsent(f.before) && cur !== f.afterSha) {
+      return { ok: false, code: 'RECOVERY_CONFLICT', why: `${f.path} 가 급사 뒤 다른 writer 에 의해 바뀌었다 — 되돌리지 않는다` }
+    }
+  }
+  for (const f of files) restore(f.path, f.before)
+  const intact = files.every((f) => readOptional(f.path) === f.before)
+  if (!intact) return { ok: false, code: 'RECOVERY_FAILED', why: '되돌린 뒤 바이트가 원본과 다르다' }
+  fs.unlinkSync(journalPath)
+  return { ok: true, manifestHash: j.manifestHash ?? null, files: files.map((f) => f.path) }
+}
+
+/**
+ * 🔴 편입 장부 행은 **정본 m3-pipeline 의 recordAdmission 이 만든다.** 직접 append 하지 않는다.
+ *    임시 사본에 차례로 적어 다음 장부 바이트를 얻고, 정본 validateLedger 로 다시 확인한다.
+ *    한 건이라도 거부되면 null — 실제 장부에는 한 바이트도 쓰지 않는다.
+ */
+function stageAdmissions(pipeline, beforeLedger, rows, at) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-ledger-'))
+  const stateFile = path.join(dir, 'm3-state.jsonl')
+  try {
+    fs.writeFileSync(stateFile, beforeLedger ?? '')
+    for (const item of rows) {
+      const r = pipeline.recordAdmission({ stateFile, item, at })
+      if (!r.ok) return { ok: false, why: `${item.intentId}: ${r.why}` }
+      if (!r.appended) return { ok: false, why: `${item.intentId}: 장부에 이미 있다 (idempotent) — 일부만 반영된 상태다` }
+    }
+    const text = fs.readFileSync(stateFile, 'utf8')
+    const v = pipeline.validateLedger(parseJsonl(text, 'ledger'))
+    return v.ok ? { ok: true, text } : { ok: false, why: v.problems[0] }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
+
+/**
+ * 🔴 **시험 전용 정지점** — 실제 자식 프로세스로 동시 apply·SIGKILL 을 재현하려고 둔다.
+ *    `SORAN_MAGAZINE_TEST_MODE=1` 이 없으면 열리지 않고, 변수만 있으면 apply 를 거부한다.
+ */
+export function testPauseHook(env = process.env) {
+  const stage = env.G8_TEST_PAUSE_AT
+  const gate = env.G8_TEST_GATE
+  if (!stage && !gate) return () => {}
+  if (env.SORAN_MAGAZINE_TEST_MODE !== '1') throw new Error('G8_TEST_PAUSE_AT · G8_TEST_GATE 는 SORAN_MAGAZINE_TEST_MODE=1 에서만 쓴다 — 운영에서는 금지다')
+  return (s) => {
+    if (s !== stage) return
+    fs.writeFileSync(`${gate}.reached`, String(process.pid))
+    while (!fs.existsSync(`${gate}.go`)) sleepSync(20)
+  }
+}
+
+/**
+ * 🔴 **명시적 apply.** 큐 1파일 + 편입 장부 2파일을 한 묶음으로 쓴다. 제품 graph bundle 은 쓰지 않는다.
+ *    · 단일 writer 잠금(`m3-state.jsonl.lock` — 격리 장부와 같은 잠금 구현) 안에서만 읽고 쓴다
+ *    · 잠금을 쥐면 먼저 앞선 급사의 journal 을 되돌린다
  *    · manifest 해시가 본문과 다르면 쓰지 않는다
  *    · 이미 전부 반영됐으면 아무것도 쓰지 않는다 (ALREADY_APPLIED)
- *    · 일부만 있거나 입력이 manifest 이후 바뀌었으면 쓰지 않는다
- *    · 쓰는 도중 어느 단계든 실패하면 세 파일을 들어오기 전 바이트로 되돌린다
+ *    · manifest 에 기록된 **모든 입력**을 다시 해시해 하나라도 다르면 쓰지 않는다 (STALE_INPUT)
+ *    · 장부가 정본 계약을 어기면 쓰지 않는다 (LEDGER_INVALID · ADMISSION_REJECTED)
+ *    · 쓰기 전에 원본 바이트를 journal 에 적고, 실패하면 세 파일을 되돌린다
  *
  * @param {object} p
  * @param {object} p.manifest
- * @param {string} p.queueRoot   drafts/magazine/topic-queue.ts 를 가진 저장소 루트
- * @param {string} p.graphRoot   contract/m3-slug-manifest.json · m3-state.jsonl 을 가진 연구 루트
+ * @param {string} p.queueRoot      drafts/magazine/topic-queue.ts 를 가진 저장소 루트
+ * @param {string} p.admissionRoot  편입 장부(contract/m3-slug-manifest.json · m3-state.jsonl)를 가진 연구 루트
  * @param {(stage:string)=>void} [p.faultHook]  시험 전용 — 단계마다 불린다
  */
-export function applyManifest({ manifest, queueRoot, graphRoot, faultHook = () => {} }) {
+export async function applyManifest({ manifest, queueRoot, admissionRoot, faultHook = testPauseHook() }) {
   if (manifest?.schema !== G8_SCHEMA) return { ok: false, code: 'SCHEMA', why: `manifest schema 가 ${G8_SCHEMA} 가 아니다` }
   if (hashManifest(manifest) !== manifest.hash) return { ok: false, code: 'HASH_MISMATCH', why: 'manifest 본문과 해시가 다르다' }
   if (!manifest.queueRows.length) return { ok: true, code: 'NOTHING_TO_APPLY', written: [] }
+  const pipelinePath = path.join(admissionRoot, RESEARCH_FILES.pipelineModule)
+  if (!fs.existsSync(pipelinePath)) return { ok: false, code: 'PIPELINE_MISSING', why: pipelinePath }
+  const pipeline = await import(pathToFileURL(pipelinePath).href)
+  if (typeof pipeline.recordAdmission !== 'function' || typeof pipeline.validateLedger !== 'function') {
+    return { ok: false, code: 'PIPELINE_MISSING', why: 'm3-pipeline.mjs 에 recordAdmission · validateLedger 가 없다' }
+  }
+  const ctx = { manifest, queueRoot, admissionRoot, faultHook, pipeline }
+  const lockPath = path.join(admissionRoot, ADMISSION_FILES.ledger)
+  const locked = withQuarantineLock(lockPath, () => applyLocked(ctx), { waitMs: 0 })
+  if (!locked.ok) return { ok: false, code: 'LOCKED', why: locked.why }
+  return locked.value
+}
+
+/** 잠금 안에서만 불린다. 🔴 동기다 — 잠금은 이 함수가 돌아오는 순간 풀린다 */
+function applyLocked({ manifest, queueRoot, admissionRoot, faultHook, pipeline }) {
+  faultHook('locked:enter')
+  const journalPath = path.join(admissionRoot, JOURNAL_FILE)
+  let recovered = null
+  if (fs.existsSync(journalPath)) {
+    recovered = recoverJournal(journalPath)
+    if (!recovered.ok) return recovered
+  }
 
   const files = {
     queue: path.join(queueRoot, PRODUCT_FILES.queue),
-    slugManifest: path.join(graphRoot, GRAPH_STATE_FILES.slugManifest),
-    ledger: path.join(graphRoot, GRAPH_STATE_FILES.ledger),
+    slugManifest: path.join(admissionRoot, ADMISSION_FILES.slugManifest),
+    ledger: path.join(admissionRoot, ADMISSION_FILES.ledger),
   }
   const before = Object.fromEntries(Object.entries(files).map(([k, f]) => [k, readOptional(f)]))
-  if (before.queue === null) return { ok: false, code: 'QUEUE_MISSING', why: files.queue }
-  const articlesFile = path.join(queueRoot, PRODUCT_FILES.articles)
-  const articlesSource = readOptional(articlesFile)
-
+  if (before.queue === null) return { ok: false, code: 'QUEUE_MISSING', why: files.queue, recovered }
+  const articlesSource = readOptional(path.join(queueRoot, PRODUCT_FILES.articles))
   const stamped = manifest.queueRows.map((r) => ({ ...r, g8ManifestHash: manifest.hash }))
-  const graphRows = manifest.graphRows.map((r) => ({ ...r, g8ManifestHash: manifest.hash }))
 
-  // 이미 반영됐는가 — 전부/전무만 허용한다
+  // 이미 전부 반영됐는가 — 큐에서 빠진 행은 M-AUTO 가 등록한 것이다(장부·slug 표가 함께 있을 때만)
   const queue = parseQueueSource(before.queue)
   const ledger = parseJsonl(before.ledger ?? '', 'ledger')
   const slugs = before.slugManifest ? JSON.parse(before.slugManifest).slugs ?? {} : {}
   const registered = articlesSource ? new Set(parseArticlesSource(articlesSource).map((a) => a.slug)) : new Set()
-  /** 큐에서 빠진 행은 M-AUTO 가 등록한 것이다 — 그 글이 articles.ts 에 있으면 반영된 것으로 본다 */
-  const presence = stamped.map((r) => ({
-    queue: registered.has(r.slug)
-      || queue.some((x) => x.slug === r.slug && x.intentId === r.intentId && x.g8ManifestHash === manifest.hash),
-    graph: ledger.some((x) => x.event === 'ADMITTED' && x.slug === r.slug && x.intentId === r.intentId && x.g8ManifestHash === manifest.hash),
-    bound: slugs[r.intentId] === r.slug,
-  }))
-  const flags = presence.flatMap((p) => [p.queue, p.graph, p.bound])
-  if (flags.every(Boolean)) return { ok: true, code: 'ALREADY_APPLIED', written: [] }
-  if (flags.some(Boolean)) return { ok: false, code: 'PARTIAL_STATE', why: '일부만 반영된 상태다 — 쓰지 않는다', presence }
+  const complete = stamped.every((r) =>
+    (registered.has(r.slug) || queue.some((x) => x.slug === r.slug && x.intentId === r.intentId && x.g8ManifestHash === manifest.hash))
+    && ledger.some((x) => x.event === 'ADMITTED' && x.slug === r.slug && x.intentId === r.intentId)
+    && slugs[r.intentId] === r.slug)
+  if (complete) return { ok: true, code: 'ALREADY_APPLIED', written: [], recovered }
 
-  // 입력이 manifest 이후 바뀌었으면 쓰지 않는다
-  const now = {
-    queue: sha256(before.queue),
-    slugManifest: before.slugManifest === null ? 'ABSENT' : sha256(before.slugManifest),
-    ledger: before.ledger === null ? 'ABSENT' : sha256(before.ledger),
+  // 🔴 manifest 가 읽은 입력 전부를 다시 해시한다 — 큐 하나만 보지 않는다
+  let current
+  try { current = readInputs({ researchDir: admissionRoot, repoDir: queueRoot }) } catch (e) {
+    return { ok: false, code: 'STALE_INPUT', why: `입력을 다시 읽지 못했다: ${e.message}`, recovered }
   }
-  const stale = []
-  if (now.queue !== manifest.inputs.product.queue) stale.push('topic-queue.ts')
-  if (now.slugManifest !== manifest.inputs.graphState.slugManifest) stale.push('m3-slug-manifest.json')
-  if (now.ledger !== manifest.inputs.graphState.ledger) stale.push('m3-state.jsonl')
-  if (stale.length) return { ok: false, code: 'STALE_INPUT', why: `manifest 이후 바뀌었다: ${stale.join(', ')}` }
+  const stale = diffHashes(manifest.inputs, current.hashes)
+  if (stale.length) return { ok: false, code: 'STALE_INPUT', why: `manifest 이후 바뀌었다: ${stale.join(', ')}`, stale, recovered }
 
+  const ledgerCheck = pipeline.validateLedger(ledger)
+  if (!ledgerCheck.ok) return { ok: false, code: 'LEDGER_INVALID', why: ledgerCheck.problems[0], recovered }
   for (const r of stamped) {
-    if (queue.some((x) => x.slug === r.slug)) return { ok: false, code: 'SLUG_IN_QUEUE', why: r.slug }
-    if (slugs[r.intentId] && slugs[r.intentId] !== r.slug) return { ok: false, code: 'INTENT_BOUND_ELSEWHERE', why: `${r.intentId} → ${slugs[r.intentId]}` }
-    if (Object.entries(slugs).some(([id, s]) => s === r.slug && id !== r.intentId)) return { ok: false, code: 'SLUG_BOUND_ELSEWHERE', why: r.slug }
+    if (queue.some((x) => x.slug === r.slug)) return { ok: false, code: 'SLUG_IN_QUEUE', why: r.slug, recovered }
+    if (slugs[r.intentId] && slugs[r.intentId] !== r.slug) return { ok: false, code: 'INTENT_BOUND_ELSEWHERE', why: `${r.intentId} → ${slugs[r.intentId]}`, recovered }
+    if (Object.entries(slugs).some(([id, sl]) => sl === r.slug && id !== r.intentId)) return { ok: false, code: 'SLUG_BOUND_ELSEWHERE', why: r.slug, recovered }
   }
 
   const next = {}
@@ -721,17 +861,23 @@ export function applyManifest({ manifest, queueRoot, graphRoot, faultHook = () =
   const nextSlugs = { ...(sm.slugs ?? {}) }
   for (const r of stamped) nextSlugs[r.intentId] = r.slug
   next.slugManifest = `${JSON.stringify({ ...sm, asOf: manifest.asOf, slugs: nextSlugs }, null, 2)}\n`
-  const ledgerPrefix = before.ledger && !before.ledger.endsWith('\n') ? `${before.ledger}\n` : (before.ledger ?? '')
-  next.ledger = ledgerPrefix + graphRows.map((r) => `${JSON.stringify(r)}\n`).join('')
+  const staged = stageAdmissions(pipeline, before.ledger, manifest.admissionRows, manifest.at)
+  if (!staged.ok) return { ok: false, code: 'ADMISSION_REJECTED', why: staged.why, recovered }
+  next.ledger = staged.text
 
   // 쓰기 전 검증 — M-AUTO 가 읽는 같은 파서로 읽힌다
   const parsed = parseQueueSource(next.queue)
-  if (parsed.length !== queue.length + stamped.length) return { ok: false, code: 'RENDER_INVALID', why: '큐 행 수가 맞지 않는다' }
+  if (parsed.length !== queue.length + stamped.length) return { ok: false, code: 'RENDER_INVALID', why: '큐 행 수가 맞지 않는다', recovered }
   for (const r of stamped) {
     const got = parsed.find((x) => x.slug === r.slug)
-    if (JSON.stringify(got) !== JSON.stringify(r)) return { ok: false, code: 'RENDER_INVALID', why: `${r.slug} 가 그대로 읽히지 않는다` }
+    if (JSON.stringify(got) !== JSON.stringify(r)) return { ok: false, code: 'RENDER_INVALID', why: `${r.slug} 가 그대로 읽히지 않는다`, recovered }
   }
 
+  faultHook('locked:ready')
+  writeAtomic(journalPath, JSON.stringify({
+    schema: 'g8-journal/1', manifestHash: manifest.hash, pid: process.pid,
+    files: Object.keys(files).map((k) => ({ path: files[k], before: before[k], afterSha: sha256(next[k]) })),
+  }))
   const written = []
   try {
     for (const k of ['queue', 'slugManifest', 'ledger']) {
@@ -745,11 +891,13 @@ export function applyManifest({ manifest, queueRoot, graphRoot, faultHook = () =
     })
     faultHook('after:verify')
     if (!check.ok) throw new Error(`쓰기 뒤 대조 실패: ${check.problems.join(' / ')}`)
-    return { ok: true, code: 'APPLIED', written, rows: stamped.length, hash: manifest.hash }
+    fs.unlinkSync(journalPath)
+    return { ok: true, code: 'APPLIED', written, rows: stamped.length, hash: manifest.hash, recovered }
   } catch (e) {
     for (const k of Object.keys(files)) restore(files[k], before[k])
     const intact = Object.keys(files).every((k) => readOptional(files[k]) === before[k])
-    return { ok: false, code: 'ROLLED_BACK', why: e.message, written, restored: intact }
+    if (intact && fs.existsSync(journalPath)) fs.unlinkSync(journalPath)
+    return { ok: false, code: 'ROLLED_BACK', why: e.message, written, restored: intact, recovered }
   }
 }
 
@@ -758,4 +906,3 @@ export function readManifestFile(file) {
   const m = JSON.parse(fs.readFileSync(file, 'utf8'))
   return { manifest: m, valid: m?.schema === G8_SCHEMA && hashManifest(m) === m.hash }
 }
-

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * G8 편입기 검사 — 임시 fixture 에서만 돈다. 운영 파일·연구 정본을 읽지도 쓰지도 않는다.
+ * G8 편입기 검사 — 임시 fixture 에서만 쓴다. 운영 파일·연구 정본에는 쓰지 않는다.
  *
  * 무엇을 보나
  *   ① 모든 의도가 정확히 한 상태로 분류된다 (fixture 의도마다 기대 상태가 있다)
@@ -8,17 +8,22 @@
  *   ③ 필수 필드·제목·시리즈 선행·publishWindow 계약
  *   ④ primary 5 + fallback 3 의 결정적 순서 · 입력 순서를 뒤집어도 같은 manifest
  *   ⑤ CLI dry-run 이 입력을 한 바이트도 바꾸지 않는다 · 두 번 돌려도 같은 출력
- *   ⑥ apply — 두 번 실행해도 중복 0 · 중간 실패는 세 파일 원복 · 큐/그래프 어긋남 탐지
+ *   ⑥ apply — 두 번 실행해도 중복 0 · 중간 실패는 세 파일 원복 · 큐/편입 장부 어긋남 탐지
+ *   ⑦ manifest 가 읽은 입력 **하나하나**가 바뀌면 STALE_INPUT
+ *   ⑧ 편입 장부는 정본 m3-pipeline 계약으로만 — 깨진 장부·1:1 위반이면 쓰기 0
+ *   ⑨ 판정 시각은 정확한 KST 시각 — 같은 날 10:29:59 / 10:30:00 경계
+ *   ⑩ **실제 자식 프로세스** — 동시 apply 는 하나만 쓰고, SIGKILL 급사는 다음 apply 가 되돌린다
+ *   ⑪ (연구 디렉터리가 있을 때만) 실제 I-T6-09 · I-T1-26 · 정본 pipeline 사본 대조
  *
  * 🔴 `G8_PROMOTER_LIB` 는 변이 시험(`magazine-g8-promote-mutation.mjs`)이 바꾼 lib 를 넣는 자리다.
- *    CLI 는 이 변수를 읽지 않는다.
+ *    그때는 CLI 자식 프로세스도 변이된 lib 옆의 CLI 사본을 쓴다 — 운영 CLI 는 이 변수를 읽지 않는다.
  *
  * 사용: node scripts/magazine-g8-promote-check.mjs
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseQueueSource } from './lib/magazine-load.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
@@ -27,8 +32,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
 const LIB = process.env.G8_PROMOTER_LIB ?? path.join(HERE, 'lib/magazine-g8-promoter.mjs')
 const lib = await import(pathToFileURL(LIB).href)
-const CLI = path.join(HERE, 'magazine-g8-promote.mjs')
-const ASOF = '2026-10-06'
+const CLI_REAL = path.join(HERE, 'magazine-g8-promote.mjs')
+const PIPELINE_FIXTURE = path.join(HERE, '__fixtures__/magazine-g8')
+const AT = '2026-10-06T09:00:00+09:00'
 
 let pass = 0
 let fail = 0
@@ -37,9 +43,21 @@ function expect(name, got, want) {
   if (ok) pass++
   else { fail++; console.log(`  ❌ ${name}\n     기대 ${JSON.stringify(want)}\n     실제 ${JSON.stringify(got)}`) }
 }
-function attempt(name, fn) {
-  try { fn() } catch (e) { fail++; console.log(`  ❌ ${name} — 예외: ${e.message}`) }
+const finish = () => { console.log(`\n${fail ? '🔴' : '✅'} G8 편입기 검사 ${pass}/${pass + fail}\n`) }
+process.on('uncaughtException', (e) => { fail++; console.log(`  ❌ 예외로 중단 — ${e.message}`); finish(); process.exit(1) })
+process.on('unhandledRejection', (e) => { fail++; console.log(`  ❌ 예외로 중단 — ${e?.message ?? e}`); finish(); process.exit(1) })
+
+/**
+ * 🔴 변이 시험에서는 CLI 도 변이된 lib 를 써야 한다 — 그렇지 않으면 자식 프로세스 시험이 원본 lib 를 검사한다.
+ *    변이 lib 폴더(…/lib) 옆에 CLI 사본을 둔다 — 같은 상대 경로 import 를 그대로 쓴다.
+ */
+function cliPath() {
+  if (!process.env.G8_PROMOTER_LIB) return CLI_REAL
+  const copy = path.join(path.dirname(path.dirname(LIB)), 'magazine-g8-promote.mjs')
+  if (!fs.existsSync(copy)) fs.copyFileSync(CLI_REAL, copy)
+  return copy
 }
+const CLI = cliPath()
 
 // ── fixture ─────────────────────────────────────────────────
 
@@ -78,6 +96,11 @@ const INTENTS = [
   { id: 'I-F-21', q: '사전이 가르지 못한 첫째 질문', expectClass: 'INCOMPLETE', slug: 'same-dictionary-slug', evidence: ev(10, 3) },
   { id: 'I-F-22', q: '사전이 가르지 못한 둘째 질문', expectClass: 'INCOMPLETE', slug: 'same-dictionary-slug', evidence: ev(10, 3) },
   { id: 'I-F-23', q: '클러스터 정본이 서로 다를 때', expectClass: 'INCOMPLETE', canonCluster: 'sleep', evidence: ev(10, 3) },
+  // ── 실제 반례를 옮긴 것 — 부분 답변 · 범위 확장은 완료 답변이 아니다 ──
+  { id: 'I-T6-09', q: '50대 여자가 할 수 있는 일에 뭐가 있나', expectClass: 'EXTEND_EXISTING', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'rehire-where-to-start', coverage: 'ANSWERS_PARTIAL' }] },
+  { id: 'I-T1-26', q: '호르몬 치료 범위를 넓혀 묻는 질문', expectClass: 'EXTEND_EXISTING', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'hormone-therapy-who', coverage: 'ANSWERS_WITH_SCOPE_EXPANSION' }] },
+  // ── 같은 날 10:30 공개 글 — 판정 시각 경계 ──
+  { id: 'I-F-52', q: '내일 아침 공개될 글의 질문', expectClass: 'SCHEDULED', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'boundary-article', coverage: 'ANSWERS' }] },
   // ── 판정은 ELIGIBLE_NEW · 이번 구간에서 빠지는 것 ──
   { id: 'I-F-30', q: '철 지난 계절 주제 질문', expectClass: 'ELIGIBLE_NEW', contentTypeHint: 'SEASONAL', publishWindow: { after: '2026-08-01', before: '2026-09-30' }, evidence: ev(10, 3) },
   { id: 'I-F-31', q: '아직 이른 계절 주제 질문', expectClass: 'ELIGIBLE_NEW', contentTypeHint: 'SEASONAL', publishWindow: { after: '2026-11-01', before: '2026-12-31' }, evidence: ev(10, 3) },
@@ -142,6 +165,8 @@ function makeFixture({ reverse = false, bundleCombined = 'fixturecombined', drop
   const table = Object.fromEntries(INTENTS.map((x) => [x.q, slugOf(x)]))
   write(research, 'contract/m3-slug.mjs', `const T = ${JSON.stringify(table)}\nexport function proposeSlug(q) { return T[q] ?? '' }\n`)
   write(research, 'contract/m3-slug-manifest.json', `${JSON.stringify({ _note: 'fixture', asOf: '2026-09-24', slugs: {} }, null, 2)}\n`)
+  // 🔴 장부 계약은 정본 사본이다 (⑪ 이 연구 디렉터리의 원본과 바이트 대조한다)
+  for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) fs.copyFileSync(path.join(PIPELINE_FIXTURE, f), path.join(research, 'contract', f))
 
   write(repo, 'src/content/magazine/types.ts', fs.readFileSync(path.join(REPO, 'src/content/magazine/types.ts'), 'utf8'))
   const realQueue = fs.readFileSync(path.join(REPO, 'drafts/magazine/topic-queue.ts'), 'utf8')
@@ -154,6 +179,9 @@ function makeFixture({ reverse = false, bundleCombined = 'fixturecombined', drop
   write(repo, 'src/content/magazine/articles.ts', `export const MAGAZINE_ARTICLE_RECORD = ${JSON.stringify({
     'live-article': art('살이 잘 안 빠질 때', 'daily', { seriesId: 'walk-series', seriesOrder: 1 }),
     'sched-article': art('예약된 글 제목입니다', 'sleep', { status: 'SCHEDULED', publishedAt: '2026-10-20', publishAt: '2026-10-20T10:30:00+09:00' }),
+    'rehire-where-to-start': art('재취업 어디서부터 시작할까', 'money-work'),
+    'hormone-therapy-who': art('호르몬 치료는 누가 받나', 'clinic'),
+    'boundary-article': art('내일 아침 공개될 글', 'sleep', { status: 'SCHEDULED', publishedAt: '2026-10-07', publishAt: '2026-10-07T10:30:00+09:00' }),
   }, null, 2)}\n`)
   write(repo, 'src/content/magazine/graph/current.ts', "export { GRAPH, EXPORT_HASH } from './g-fixture-000000'\n")
   write(repo, 'src/content/magazine/graph/g-fixture-000000.ts', `export const GRAPH = ${JSON.stringify({
@@ -177,18 +205,25 @@ function snapshot(root) {
   return out
 }
 
-process.on('uncaughtException', (e) => { fail++; console.log(`  ❌ 예외로 중단 — ${e.message}`); console.log(`\n🔴 G8 편입기 검사 ${pass}/${pass + fail}\n`); process.exit(1) })
-process.on('unhandledRejection', (e) => { fail++; console.log(`  ❌ 예외로 중단 — ${e?.message ?? e}`); console.log(`\n🔴 G8 편입기 검사 ${pass}/${pass + fail}\n`); process.exit(1) })
-
-const build = async (fx, asOf = ASOF) => lib.buildManifest(await lib.loadInputs({ researchDir: fx.research, repoDir: fx.repo }), { asOf })
+const build = async (fx, at = AT) => lib.buildManifest(await lib.loadInputs({ researchDir: fx.research, repoDir: fx.repo }), { at })
+const filesOf = (fx) => ({
+  queue: path.join(fx.repo, 'drafts/magazine/topic-queue.ts'),
+  slugs: path.join(fx.research, 'contract/m3-slug-manifest.json'),
+  ledger: path.join(fx.research, 'contract/m3-state.jsonl'),
+})
+const bytesOf = (fx) => Object.fromEntries(Object.entries(filesOf(fx)).map(([k, f]) => [k, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null]))
+const apply = (m, fx, faultHook = () => {}) => lib.applyManifest({ manifest: m, queueRoot: fx.repo, admissionRoot: fx.research, faultHook })
+const ledgerRows = (text) => (text ?? '').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+const fixtures = []
+const fresh = (o) => { const f = makeFixture(o); fixtures.push(f); return f }
 
 // ── ① 분류 ──────────────────────────────────────────────────
 console.log('\n① 의도마다 정확히 한 상태')
-const fx = makeFixture()
+const fx = fresh()
 const m = await build(fx)
 const byId = Object.fromEntries(m.classification.map((r) => [r.intentId, r]))
 for (const x of INTENTS) expect(`${x.id} ${x.q} → ${x.expectClass}`, byId[x.id]?.class, x.expectClass)
-expect('분류 합계 = 의도 수', Object.values(lib.CLASSES.map((c) => m.counts[c])).reduce((a, b) => a + b, 0), INTENTS.length)
+expect('분류 합계 = 의도 수', lib.CLASSES.map((c) => m.counts[c]).reduce((a, b) => a + b, 0), INTENTS.length)
 expect('모든 의도가 알려진 상태 하나', m.classification.every((r) => lib.CLASSES.includes(r.class)), true)
 expect('의도 중복 행 0', new Set(m.classification.map((r) => r.intentId)).size, INTENTS.length)
 
@@ -229,10 +264,11 @@ expect('imageMode 는 레인 계약값 REQUIRED', [...new Set(m.queueRows.map((r
 expect('validationProfile 을 STANDARD 로 낮추지 않는다', rowOf('I-F-45')?.validationProfile, 'MEDICAL')
 expect('primary 행은 자동 레인 판정을 통과한다', m.queueRows.map((r) => isAutoLaneEligible(r).ok), m.queueRows.map(() => true))
 expect('기존 공개 글 연결이 internalLinks 로 간다', rowOf('I-F-41')?.internalLinks, ['live-article'])
-expect('graph 행 = primary (intentId·slug 짝)', m.graphRows.map((r) => [r.intentId, r.slug]), m.queueRows.map((r) => [r.intentId, r.slug]))
-expect('COMMUNITY 관계는 추천 관계에 넣지 않는다', m.graphRows.every((r) => r.directRelations.every((d) => d.slot !== null)), true)
+expect('편입 장부 행 = primary (intentId·slug 짝)', m.admissionRows.map((r) => [r.intentId, r.slug]), m.queueRows.map((r) => [r.intentId, r.slug]))
+expect('COMMUNITY 관계는 추천 관계에 넣지 않는다', m.admissionRows.every((r) => r.directRelations.every((d) => d.slot !== null)), true)
 expect('primary day 는 기존 큐 최대 뒤', m.queueRows.map((r) => r.day), [13, 14, 15, 16, 17])
 expect('fallback 은 day 를 받지 않는다', m.fallbackRows.map((r) => r.day), [null, null, null])
+expect('제품 graph bundle 은 읽기만 한다고 manifest 가 말한다', m.productGraphBundle?.updatedByThisTool, false)
 
 // ── ④ 결정적 순서 ───────────────────────────────────────────
 console.log('④ primary 5 + fallback 3 의 결정적 순서')
@@ -240,130 +276,283 @@ expect('primary 순서', m.selection.primary.map((s) => s.intentId), WANT_PRIMAR
 expect('fallback 순서', m.selection.fallback.map((s) => s.intentId), WANT_FALLBACK)
 const m2 = await build(fx)
 expect('두 번 계산 — 바이트 동일', JSON.stringify(m2), JSON.stringify(m))
-const fxRev = makeFixture({ reverse: true })
-const mRev = await build(fxRev)
+const mRev = await build(fresh({ reverse: true }))
 expect('입력 순서를 뒤집어도 같은 선정', [mRev.selection.primary, mRev.selection.fallback].map((l) => l.map((s) => s.intentId)), [WANT_PRIMARY, WANT_FALLBACK])
 expect('입력 순서를 뒤집어도 같은 큐 행', JSON.stringify(mRev.queueRows), JSON.stringify(m.queueRows))
 let threw = null
-try { await build(makeFixture({ bundleCombined: 'other' })) } catch (e) { threw = e.message.split(' — ')[0] }
+try { await build(fresh({ bundleCombined: 'other' })) } catch (e) { threw = e.message.split(' — ')[0] }
 expect('연구 build 와 제품 번들이 다르면 만들지 않는다', threw, 'GRAPH_BUNDLE_MISMATCH')
 threw = null
-try { await build(makeFixture({ dropCanonical: true })) } catch (e) { threw = e.message.slice(0, 20) }
+try { await build(fresh({ dropCanonical: true })) } catch (e) { threw = e.message.slice(0, 20) }
 expect('연구 정본 의도 집합이 다르면 만들지 않는다', threw, '연구 정본의 의도 집합이 서로 다르다'.slice(0, 20))
 
 // ── ⑤ CLI dry-run ───────────────────────────────────────────
 console.log('⑤ CLI dry-run 은 아무것도 쓰지 않는다')
 const before = { research: snapshot(fx.research), repo: snapshot(fx.repo) }
-const run = () => execFileSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--asof', ASOF, '--json'], { encoding: 'utf8', maxBuffer: 1e8 })
+const run = () => execFileSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--at', AT, '--json'], { encoding: 'utf8', maxBuffer: 1e8 })
 const out1 = run()
 const out2 = run()
 expect('CLI 두 번 — 출력 바이트 동일', out1 === out2, true)
 expect('CLI 출력 = 라이브러리 manifest', JSON.parse(out1).hash, m.hash)
-execFileSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--asof', ASOF], { encoding: 'utf8' })
+const human = execFileSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--at', AT], { encoding: 'utf8' })
+expect('CLI 보고가 제품 graph bundle 을 갱신하지 않는다고 말한다', human.includes('제품 graph bundle 갱신은 별도 단계'), true)
 expect('dry-run 뒤 연구 입력 바이트·파일 목록 동일', snapshot(fx.research), before.research)
 expect('dry-run 뒤 제품 입력 바이트·파일 목록 동일', snapshot(fx.repo), before.repo)
-const outInside = spawnSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--asof', ASOF, '--out', path.join(fx.repo, 'm.json')], { encoding: 'utf8' })
+const outInside = spawnSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--at', AT, '--out', path.join(fx.repo, 'm.json')], { encoding: 'utf8' })
 expect('--out 은 저장소 안을 거부한다', [outInside.status, fs.existsSync(path.join(fx.repo, 'm.json'))], [2, false])
 
 // ── ⑥ apply ────────────────────────────────────────────────
-console.log('⑥ apply — 멱등 · 원복 · 큐/그래프 동일 manifest')
-const apRoot = { queueRoot: fx.repo, graphRoot: fx.research }
-const files = {
-  queue: path.join(fx.repo, 'drafts/magazine/topic-queue.ts'),
-  slugs: path.join(fx.research, 'contract/m3-slug-manifest.json'),
-  ledger: path.join(fx.research, 'contract/m3-state.jsonl'),
-}
-const bytes = () => Object.fromEntries(Object.entries(files).map(([k, f]) => [k, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null]))
-const pristine = bytes()
-
+console.log('⑥ apply — 멱등 · 원복 · 큐/편입 장부 짝')
+const files = filesOf(fx)
+const pristine = bytesOf(fx)
 for (const stage of ['after:queue', 'after:slugManifest', 'after:ledger']) {
-  const r = lib.applyManifest({ manifest: m, ...apRoot, faultHook: (s) => { if (s === stage) throw new Error(`주입 실패 ${s}`) } })
-  expect(`${stage} 에서 실패 → 세 파일 원복`, [r.code, r.restored, JSON.stringify(bytes()) === JSON.stringify(pristine)], ['ROLLED_BACK', true, true])
+  const r = await apply(m, fx, (s) => { if (s === stage) throw new Error(`주입 실패 ${s}`) })
+  expect(`${stage} 에서 실패 → 세 파일 원복`, [r.code, r.restored, JSON.stringify(bytesOf(fx)) === JSON.stringify(pristine)], ['ROLLED_BACK', true, true])
 }
-const corrupt = lib.applyManifest({ manifest: m, ...apRoot, faultHook: (s) => {
+const corrupt = await apply(m, fx, (s) => {
   if (s === 'after:ledger') fs.writeFileSync(files.ledger, fs.readFileSync(files.ledger, 'utf8').split('\n').slice(1).join('\n'))
-} })
-expect('그래프 장부가 반쪽이면 쓰기 뒤 대조가 잡고 원복한다', [corrupt.code, JSON.stringify(bytes()) === JSON.stringify(pristine)], ['ROLLED_BACK', true])
-
+})
+expect('편입 장부가 반쪽이면 쓰기 뒤 대조가 잡고 원복한다', [corrupt.code, JSON.stringify(bytesOf(fx)) === JSON.stringify(pristine)], ['ROLLED_BACK', true])
 const tampered = { ...m, queueRows: m.queueRows.map((r, i) => (i ? r : { ...r, title: `${r.title}!` })) }
-expect('본문이 해시와 다르면 쓰지 않는다', lib.applyManifest({ manifest: tampered, ...apRoot }).code, 'HASH_MISMATCH')
+expect('본문이 해시와 다르면 쓰지 않는다', (await apply(tampered, fx)).code, 'HASH_MISMATCH')
 
-const first = lib.applyManifest({ manifest: m, ...apRoot })
+const first = await apply(m, fx)
 expect('첫 apply', [first.ok, first.code, first.rows], [true, 'APPLIED', 5])
-const afterFirst = bytes()
-const second = lib.applyManifest({ manifest: m, ...apRoot })
+const afterFirst = bytesOf(fx)
+const second = await apply(m, fx)
 expect('둘째 apply — 아무것도 쓰지 않는다', [second.ok, second.code], [true, 'ALREADY_APPLIED'])
-expect('둘째 apply 뒤 세 파일 바이트 동일', JSON.stringify(bytes()), JSON.stringify(afterFirst))
+expect('둘째 apply 뒤 세 파일 바이트 동일', JSON.stringify(bytesOf(fx)), JSON.stringify(afterFirst))
 const queueAfter = parseQueueSource(afterFirst.queue)
 expect('큐 행 수 = 기존 2 + primary 5 (중복 0)', [queueAfter.length, new Set(queueAfter.map((r) => r.slug)).size], [7, 7])
-expect('장부 ADMITTED = 5 (중복 0)', afterFirst.ledger.trim().split('\n').length, 5)
+expect('장부 ADMITTED = 5 (중복 0)', ledgerRows(afterFirst.ledger).length, 5)
+expect('장부 행은 정본 recordAdmission 모양 (m3ledger/2 · at = 판정 시각)', ledgerRows(afterFirst.ledger).map((r) => [r.schemaVersion, r.event, r.at]), m.queueRows.map(() => ['m3ledger/2', 'ADMITTED', AT]))
 expect('기존 큐 행은 바이트 그대로', afterFirst.queue.includes(lib.renderQueueRow(parseQueueSource(pristine.queue)[0])), true)
 const added = queueAfter.filter((r) => r.g8ManifestHash)
 expect('새 큐 행이 manifest 해시를 단다', [...new Set(added.map((r) => r.g8ManifestHash))], [m.hash])
 expect('새 큐 행은 M-AUTO 자동 레인 판정 통과', added.map((r) => isAutoLaneEligible(r).ok), added.map(() => true))
 expect('영구 slug 표가 짝을 묶는다', Object.entries(JSON.parse(afterFirst.slugs).slugs).sort(), m.queueRows.map((r) => [r.intentId, r.slug]).sort())
-attempt('apply 결과가 실제 TopicQueueItem 타입을 통과한다', () => {
+expect('정상 종료 뒤 journal 이 남지 않는다', fs.existsSync(path.join(fx.research, lib.JOURNAL_FILE)), false)
+{
   // 🔴 fixture 큐는 실제 topic-queue.ts 의 타입 머리를 그대로 쓴다 — 새 행이 tsc 를 통과해야 운영 apply 가 빌드를 깨지 않는다
   const tsconfig = path.join(fx.dir, 'tsconfig.json')
   fs.writeFileSync(tsconfig, JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: 'es2020',
     module: 'esnext', moduleResolution: 'bundler', baseUrl: REPO, paths: { '@/*': ['src/*'] } }, files: [files.queue] }))
   const tsc = spawnSync(path.join(REPO, 'node_modules/.bin/tsc'), ['-p', tsconfig], { encoding: 'utf8' })
   expect('tsc --noEmit (apply 된 fixture 큐)', [tsc.status, (tsc.stdout + tsc.stderr).trim().split('\n')[0] ?? ''], [0, ''])
-})
+}
 const consistent = () => lib.verifyConsistency({ queueSource: fs.readFileSync(files.queue, 'utf8'), ledgerSource: fs.readFileSync(files.ledger, 'utf8'), slugManifestSource: fs.readFileSync(files.slugs, 'utf8') })
-expect('apply 뒤 큐/그래프 대조 PASS', consistent().ok, true)
-const verifyCli = spawnSync('node', [CLI, '--verify', '--queue-root', fx.repo, '--graph-root', fx.research], { encoding: 'utf8' })
+expect('apply 뒤 큐/편입 장부 대조 PASS', consistent().ok, true)
+const verifyCli = spawnSync('node', [CLI, '--verify', '--queue-root', fx.repo, '--admission-root', fx.research], { encoding: 'utf8' })
 expect('--verify CLI PASS', verifyCli.status, 0)
 
-attempt('그래프만 남은 상태를 잡는다', () => {
-  fs.writeFileSync(files.queue, pristine.queue)
-  expect('큐 행을 지우면 GRAPH_WITHOUT_QUEUE', consistent().problems.some((p) => p.startsWith('GRAPH_WITHOUT_QUEUE')), true)
-  expect('그 상태에서 apply 는 PARTIAL_STATE', lib.applyManifest({ manifest: m, ...apRoot }).code, 'PARTIAL_STATE')
-  fs.writeFileSync(files.queue, afterFirst.queue)
-})
-attempt('큐만 남은 상태를 잡는다', () => {
-  fs.writeFileSync(files.ledger, '')
-  expect('장부 행을 지우면 QUEUE_WITHOUT_GRAPH', consistent().problems.some((p) => p.startsWith('QUEUE_WITHOUT_GRAPH')), true)
-  fs.writeFileSync(files.ledger, afterFirst.ledger)
-})
-attempt('등록돼 큐에서 빠진 행은 정상이다', () => {
+fs.writeFileSync(files.queue, pristine.queue)
+expect('큐 행을 지우면 ADMISSION_WITHOUT_QUEUE', consistent().problems.some((p) => p.startsWith('ADMISSION_WITHOUT_QUEUE')), true)
+expect('그 상태에서 apply 는 쓰지 않는다 (STALE_INPUT)', (await apply(m, fx)).code, 'STALE_INPUT')
+fs.writeFileSync(files.queue, afterFirst.queue)
+fs.writeFileSync(files.ledger, '')
+expect('장부 행을 지우면 QUEUE_WITHOUT_ADMISSION', consistent().problems.some((p) => p.startsWith('QUEUE_WITHOUT_ADMISSION')), true)
+fs.writeFileSync(files.ledger, afterFirst.ledger)
+{
   const registeredSlug = m.queueRows[0].slug
   const rows = parseQueueSource(afterFirst.queue).filter((r) => r.slug !== registeredSlug)
   const header = afterFirst.queue.slice(0, afterFirst.queue.indexOf('export const TOPIC_QUEUE'))
   fs.writeFileSync(files.queue, `${header}export const TOPIC_QUEUE: TopicQueueItem[] = [\n${rows.map(lib.renderQueueRow).join('')}]\n`)
-  const articles = fs.readFileSync(path.join(fx.repo, 'src/content/magazine/articles.ts'), 'utf8')
+  const artFile = path.join(fx.repo, 'src/content/magazine/articles.ts')
+  const articles = fs.readFileSync(artFile, 'utf8')
   const withReg = articles.replace('"live-article":', `"${registeredSlug}": { "title": "등록됨", "cluster": "daily", "publishedAt": "2026-10-10", "body": [] },\n  "live-article":`)
-  fs.writeFileSync(path.join(fx.repo, 'src/content/magazine/articles.ts'), withReg)
-  expect('등록된 글은 GRAPH_WITHOUT_QUEUE 가 아니다', lib.verifyConsistency({ queueSource: fs.readFileSync(files.queue, 'utf8'), articlesSource: withReg,
+  fs.writeFileSync(artFile, withReg)
+  expect('등록된 글은 ADMISSION_WITHOUT_QUEUE 가 아니다', lib.verifyConsistency({ queueSource: fs.readFileSync(files.queue, 'utf8'), articlesSource: withReg,
     ledgerSource: afterFirst.ledger, slugManifestSource: afterFirst.slugs }).ok, true)
-  expect('등록 뒤 apply 재실행도 ALREADY_APPLIED', lib.applyManifest({ manifest: m, ...apRoot }).code, 'ALREADY_APPLIED')
-  fs.writeFileSync(path.join(fx.repo, 'src/content/magazine/articles.ts'), articles)
+  expect('등록 뒤 apply 재실행도 ALREADY_APPLIED', (await apply(m, fx)).code, 'ALREADY_APPLIED')
+  fs.writeFileSync(artFile, articles)
   fs.writeFileSync(files.queue, afterFirst.queue)
-})
-
+}
 const m4 = await build(fx)
 expect('apply 뒤 재계산 — 편입분 ALREADY_QUEUED', WANT_PRIMARY.map((id) => m4.classification.find((r) => r.intentId === id).class), WANT_PRIMARY.map(() => 'ALREADY_QUEUED'))
 expect('apply 뒤 재계산 — 다음 primary 는 fallback 부터', m4.selection.primary.map((s) => s.intentId).slice(0, 3), WANT_FALLBACK)
 
-const fxStale = makeFixture()
-const mStale = await build(fxStale)
-fs.appendFileSync(path.join(fxStale.repo, 'drafts/magazine/topic-queue.ts'), '\n')
-expect('manifest 뒤 큐가 바뀌면 쓰지 않는다', lib.applyManifest({ manifest: mStale, queueRoot: fxStale.repo, graphRoot: fxStale.research }).code, 'STALE_INPUT')
+// ── ⑦ 입력 하나하나 ─────────────────────────────────────────
+console.log('⑦ manifest 가 읽은 입력이 하나라도 바뀌면 STALE_INPUT')
+{
+  const fxA = fresh()
+  const mA = await build(fxA)
+  const slug = mA.queueRows[0].slug
+  const artFile = path.join(fxA.repo, 'src/content/magazine/articles.ts')
+  fs.writeFileSync(artFile, fs.readFileSync(artFile, 'utf8').replace('"live-article":', `"${slug}": { "title": "등록됨", "cluster": "daily", "publishedAt": "2026-10-07", "body": [] },\n  "live-article":`))
+  const pre = bytesOf(fxA)
+  const r = await apply(mA, fxA)
+  expect('manifest 뒤 같은 slug 가 articles.ts 에 등록 → STALE_INPUT(product.articles)', [r.code, r.stale], ['STALE_INPUT', ['product.articles']])
+  expect('그때 쓰기 0', JSON.stringify(bytesOf(fxA)), JSON.stringify(pre))
+}
+const touch = {
+  'research.canonical': (f) => fs.appendFileSync(path.join(f.research, 'g4-intents-canonical.jsonl'), '\n'),
+  'research.automation': (f) => fs.appendFileSync(path.join(f.research, 'g4-automation-2026-09-23.jsonl'), '\n'),
+  'research.rebaseline': (f) => fs.appendFileSync(path.join(f.research, 'g4-rebaseline-2026-09-23.jsonl'), '\n'),
+  'research.buildIntents': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/intents.jsonl'), '\n'),
+  'research.buildEdges': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/edges.jsonl'), '\n'),
+  'research.buildMappings': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/mappings.jsonl'), '\n'),
+  'research.buildManifest': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/manifest.json'), '\n'),
+  'research.slugModule': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-slug.mjs'), '\n'),
+  'research.pipelineModule': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-pipeline.mjs'), '\n'),
+  'research.productModule': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-product.mjs'), '\n'),
+  'admission.slugManifest': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-slug-manifest.json'), '\n'),
+  'admission.ledger': (f) => fs.writeFileSync(path.join(f.research, 'contract/m3-state.jsonl'), ''),
+  'product.articles': (f) => fs.appendFileSync(path.join(f.repo, 'src/content/magazine/articles.ts'), '\n'),
+  'product.queue': (f) => fs.appendFileSync(path.join(f.repo, 'drafts/magazine/topic-queue.ts'), '\n'),
+  'product.types': (f) => fs.appendFileSync(path.join(f.repo, 'src/content/magazine/types.ts'), '\n'),
+  'product.graphBundle': (f) => fs.appendFileSync(path.join(f.repo, 'src/content/magazine/graph/g-fixture-000000.ts'), '\n'),
+  'product.draftDirs': (f) => fs.mkdirSync(path.join(f.repo, 'drafts/magazine/new-draft-dir')),
+}
+const recorded = Object.entries(m.inputs).flatMap(([g, o]) => Object.keys(o).map((k) => `${g}.${k}`)).sort()
+expect('시험이 manifest 입력 전부를 덮는다', Object.keys(touch).sort(), recorded)
+for (const [key, mutate] of Object.entries(touch)) {
+  const f = fresh()
+  const mf = await build(f)
+  mutate(f)
+  const pre = bytesOf(f)
+  const r = await apply(mf, f)
+  expect(`${key} 변경 → STALE_INPUT · 쓰기 0`, [r.code, r.stale, JSON.stringify(bytesOf(f)) === JSON.stringify(pre)], ['STALE_INPUT', [key], true])
+}
 
-const fxCli = makeFixture()
-const mCli = await build(fxCli)
-const mFile = path.join(fxCli.dir, 'manifest.json')
-fs.writeFileSync(mFile, JSON.stringify(mCli))
-const noHash = spawnSync('node', [CLI, '--apply', '--manifest', mFile, '--queue-root', fxCli.repo, '--graph-root', fxCli.research], { encoding: 'utf8' })
-expect('--confirm-hash 없이 apply 거부', noHash.status, 2)
-const runtimeDir = path.join(fxCli.dir, 'soransoran-magazine-runtime')
-fs.cpSync(fxCli.repo, runtimeDir, { recursive: true })
-const toRuntime = spawnSync('node', [CLI, '--apply', '--manifest', mFile, '--confirm-hash', mCli.hash, '--queue-root', runtimeDir, '--graph-root', fxCli.research], { encoding: 'utf8' })
-expect('운영 runtime 경로 apply 거부', [toRuntime.status, fs.readFileSync(path.join(runtimeDir, 'drafts/magazine/topic-queue.ts'), 'utf8') === fs.readFileSync(path.join(fxCli.repo, 'drafts/magazine/topic-queue.ts'), 'utf8')], [2, true])
-const okCli = spawnSync('node', [CLI, '--apply', '--manifest', mFile, '--confirm-hash', mCli.hash, '--queue-root', fxCli.repo, '--graph-root', fxCli.research], { encoding: 'utf8' })
-expect('CLI apply (fixture)', [okCli.status, JSON.parse(okCli.stdout).code], [0, 'APPLIED'])
+// ── ⑧ 정본 장부 계약 ────────────────────────────────────────
+console.log('⑧ 편입 장부는 정본 m3-pipeline 계약으로만 쓴다')
+const ledgerCase = async (name, rowsText, wantCode) => {
+  const f = fresh()
+  fs.writeFileSync(path.join(f.research, 'contract/m3-state.jsonl'), rowsText)
+  const mf = await build(f)
+  const pre = bytesOf(f)
+  const r = await apply(mf, f)
+  expect(`${name} → ${wantCode} · 쓰기 0`, [r.code, JSON.stringify(bytesOf(f)) === JSON.stringify(pre)], [wantCode, true])
+}
+const lrow = (o) => `${JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', intentId: 'I-X-01', slug: 'x-slug', at: '2026-10-01T00:00:00+09:00', ...o })}\n`
+await ledgerCase('같은 사건이 두 줄인 장부', lrow({}) + lrow({}), 'LEDGER_INVALID')
+await ledgerCase('ADMITTED 없이 REGISTERED 가 먼저 온 장부', lrow({ event: 'REGISTERED' }), 'LEDGER_INVALID')
+await ledgerCase('같은 slug 에 다른 intent 가 묶인 장부', lrow({}) + lrow({ intentId: 'I-X-02', event: 'DRAFT_PASSED' }), 'LEDGER_INVALID')
+await ledgerCase('편입할 intent 가 장부에서 다른 slug 에 묶여 있다 (1:1)', lrow({ intentId: 'I-F-41', slug: 'other-slug' }), 'ADMISSION_REJECTED')
 
-for (const d of [fx, fxRev, fxStale, fxCli]) fs.rmSync(d.dir, { recursive: true, force: true })
+// ── ⑨ 판정 시각 ─────────────────────────────────────────────
+console.log('⑨ 판정 시각은 정확한 KST 시각')
+{
+  const f = fresh()
+  const cls = async (at) => (await build(f, at)).classification.find((r) => r.intentId === 'I-F-52').class
+  expect('10:30 공개 글 — 같은 날 10:29:59 는 SCHEDULED', await cls('2026-10-07T10:29:59+09:00'), 'SCHEDULED')
+  expect('10:30 공개 글 — 같은 날 10:30:00 은 LIVE', await cls('2026-10-07T10:30:00+09:00'), 'LIVE')
+  let e1 = null
+  try { await build(f, '2026-10-07') } catch (e) { e1 = e.message.slice(0, 9) }
+  expect('날짜만 주면 판정하지 않는다', e1, '판정 시각은 YY'.slice(0, 9))
+  const asof = spawnSync('node', [CLI, '--research', f.research, '--repo', f.repo, '--asof', '2026-10-07'], { encoding: 'utf8' })
+  expect('CLI --asof 거부', asof.status, 2)
+}
 
-console.log(`\n${fail ? '🔴' : '✅'} G8 편입기 검사 ${pass}/${pass + fail}\n`)
+// ── ⑩ 실제 자식 프로세스 ────────────────────────────────────
+console.log('⑩ 동시 apply · SIGKILL 급사 — 실제 자식 프로세스')
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+async function waitFor(file, ms = 15000) {
+  const until = Date.now() + ms
+  while (!fs.existsSync(file)) { if (Date.now() > until) return false; await sleep(20) }
+  return true
+}
+const testEnv = (gate, stage) => ({ ...process.env, SORAN_MAGAZINE_TEST_MODE: '1', G8_TEST_GATE: gate, G8_TEST_PAUSE_AT: stage })
+const applyArgs = (mf, f, hash) => [CLI, '--apply', '--manifest', mf, '--confirm-hash', hash, '--queue-root', f.repo, '--admission-root', f.research]
+const exitOf = (child) => new Promise((r) => child.on('exit', (code, signal) => r({ code, signal })))
+const saveManifest = (f, mm, name = 'manifest.json') => { const p = path.join(f.dir, name); fs.writeFileSync(p, JSON.stringify(mm)); return p }
+const stdoutOf = (child) => { let s = ''; child.stdout.on('data', (d) => { s += d }); return () => s }
+
+for (const stage of ['after:queue', 'after:slugManifest']) {
+  const f = fresh()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const pre = bytesOf(f)
+  const gate = path.join(f.dir, `gate-${stage.replace(':', '-')}`)
+  const child = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, stage), stdio: ['ignore', 'pipe', 'pipe'] })
+  const exited = exitOf(child)
+  const reached = await waitFor(`${gate}.reached`)
+  child.kill('SIGKILL')
+  const ex = await exited
+  const mid = bytesOf(f)
+  const changed = Object.keys(pre).filter((k) => pre[k] !== mid[k])
+  expect(`SIGKILL(${stage}) — 실제로 반쪽 상태가 생겼다 (죽은 시험 아님)`, [reached, ex.signal, changed.length > 0 && changed.length < 3], [true, 'SIGKILL', true])
+  const v1 = spawnSync('node', [CLI, '--verify', '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8' })
+  expect(`SIGKILL(${stage}) — --verify 가 반쪽 상태를 잡는다`, [v1.status, v1.stdout.includes('PENDING_JOURNAL')], [1, true])
+  const re = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8' })
+  let rj = {}
+  try { rj = JSON.parse(re.stdout) } catch { rj = { code: `출력 없음 ${re.stderr.slice(0, 120)}` } }
+  expect(`SIGKILL(${stage}) 뒤 다음 apply — journal 로 되돌리고 완주`, [re.status, rj.code, rj.recovered?.ok ?? null], [0, 'APPLIED', true])
+  const fin = bytesOf(f)
+  expect(`SIGKILL(${stage}) 뒤 — 큐 7 · 장부 5 · slug 5 (중복·반쪽 0)`,
+    [parseQueueSource(fin.queue).length, ledgerRows(fin.ledger).length, Object.keys(JSON.parse(fin.slugs).slugs).length], [7, 5, 5])
+  const v2 = spawnSync('node', [CLI, '--verify', '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8' })
+  expect(`SIGKILL(${stage}) 뒤 — --verify PASS · journal 0`, [v2.status, fs.existsSync(path.join(f.research, lib.JOURNAL_FILE))], [0, false])
+}
+
+{
+  const f = fresh()
+  const mA = await build(f, '2026-10-06T09:00:00+09:00')
+  const mB = await build(f, '2026-10-06T09:01:00+09:00')
+  expect('두 manifest 는 서로 다르다', mA.hash !== mB.hash, true)
+  const pA = saveManifest(f, mA, 'a.json')
+  const pB = saveManifest(f, mB, 'b.json')
+  const pre = bytesOf(f)
+  const gate = path.join(f.dir, 'gate-race')
+  const childA = spawn('node', applyArgs(pA, f, mA.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
+  const outA = stdoutOf(childA)
+  const exitA = exitOf(childA)
+  const reachedA = await waitFor(`${gate}.reached`)
+  const resB = spawnSync('node', applyArgs(pB, f, mB.hash), { encoding: 'utf8' })
+  let jB = {}
+  try { jB = JSON.parse(resB.stdout) } catch { jB = { code: `출력 없음 ${resB.stderr.slice(0, 120)}` } }
+  const midB = bytesOf(f)
+  fs.writeFileSync(`${gate}.go`, '')
+  const exA = await exitA
+  let jA = {}
+  try { jA = JSON.parse(outA()) } catch { jA = { code: '출력 없음' } }
+  const fin = bytesOf(f)
+  const finalHashes = [...new Set(parseQueueSource(fin.queue).filter((r) => r.g8ManifestHash).map((r) => r.g8ManifestHash))]
+  expect('동시 apply — A 가 잠금을 쥔 동안 B 는 LOCKED · 쓰기 0', [reachedA, resB.status, jB.code, JSON.stringify(midB) === JSON.stringify(pre)], [true, 1, 'LOCKED', true])
+  expect('동시 apply — A 는 완주', [exA.code, jA.code], [0, 'APPLIED'])
+  const appliedHashes = [jA, jB].filter((j) => j.code === 'APPLIED').map((j) => j.hash)
+  expect('lost update 0 — APPLIED 라고 말한 쪽의 행이 전부 남는다', finalHashes.sort(), appliedHashes.sort())
+  expect('동시 apply 뒤 — 큐 7 · 장부 5 · 대조 PASS', [parseQueueSource(fin.queue).length, ledgerRows(fin.ledger).length,
+    lib.verifyConsistency({ queueSource: fin.queue, ledgerSource: fin.ledger, slugManifestSource: fin.slugs }).ok], [7, 5, true])
+}
+{
+  const f = fresh()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const r = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8', env: { ...process.env, SORAN_MAGAZINE_TEST_MODE: '', G8_TEST_PAUSE_AT: 'locked:ready', G8_TEST_GATE: path.join(f.dir, 'g') } })
+  expect('시험 정지점은 시험 모드 밖에서 apply 를 거부한다', [r.status, fs.existsSync(path.join(f.research, 'contract/m3-state.jsonl'))], [2, false])
+}
+
+// ── CLI 거부 경로 ───────────────────────────────────────────
+{
+  const f = fresh()
+  const mf = await build(f)
+  const mPath = saveManifest(f, mf)
+  const noHash = spawnSync('node', [CLI, '--apply', '--manifest', mPath, '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8' })
+  expect('--confirm-hash 없이 apply 거부', noHash.status, 2)
+  const oldFlag = spawnSync('node', [CLI, '--apply', '--manifest', mPath, '--confirm-hash', mf.hash, '--queue-root', f.repo, '--graph-root', f.research], { encoding: 'utf8' })
+  expect('옛 --graph-root 거부 (편입 장부 루트와 제품 graph 를 섞지 않는다)', oldFlag.status, 2)
+  const runtimeDir = path.join(f.dir, 'soransoran-magazine-runtime')
+  fs.cpSync(f.repo, runtimeDir, { recursive: true })
+  const toRuntime = spawnSync('node', applyArgs(mPath, { repo: runtimeDir, research: f.research }, mf.hash), { encoding: 'utf8' })
+  expect('운영 runtime 경로 apply 거부', [toRuntime.status, fs.readFileSync(path.join(runtimeDir, 'drafts/magazine/topic-queue.ts'), 'utf8') === fs.readFileSync(path.join(f.repo, 'drafts/magazine/topic-queue.ts'), 'utf8')], [2, true])
+}
+
+// ── ⑪ 실제 연구 정본 ────────────────────────────────────────
+const REAL_RESEARCH = path.resolve(REPO, '..', 'soransoran-mgraph-research')
+if (fs.existsSync(path.join(REAL_RESEARCH, lib.RESEARCH_FILES.canonical))) {
+  console.log('⑪ 실제 연구 정본 (읽기만)')
+  for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) {
+    expect(`fixture ${f} = 연구 정본 바이트`, lib.sha256(fs.readFileSync(path.join(PIPELINE_FIXTURE, f), 'utf8')), lib.sha256(fs.readFileSync(path.join(REAL_RESEARCH, 'contract', f), 'utf8')))
+  }
+  const real = lib.classifyIntents(await lib.loadInputs({ researchDir: REAL_RESEARCH, repoDir: REPO }), { at: '2026-10-06T09:00:00+09:00' })
+  const cls = Object.fromEntries(real.rows.map((r) => [r.intentId, r.class]))
+  expect('실제 I-T6-09 (ANSWERS_PARTIAL) → EXTEND_EXISTING', cls['I-T6-09'], 'EXTEND_EXISTING')
+  expect('실제 I-T1-26 (ANSWERS_WITH_SCOPE_EXPANSION) → EXTEND_EXISTING', cls['I-T1-26'], 'EXTEND_EXISTING')
+} else {
+  console.log('⑪ 실제 연구 정본 — SKIP (연구 디렉터리가 없다 · fixture ①이 같은 반례를 본다)')
+}
+
+for (const d of fixtures) fs.rmSync(d.dir, { recursive: true, force: true })
+finish()
 process.exitCode = fail ? 1 : 0

@@ -48,8 +48,27 @@ const MUTATIONS = [
     find: '  return { ok: problems.length === 0, problems: [...new Set(problems)] }',
     replace: '  return { ok: true, problems: [] }' },
   { name: 'apply idempotence 제거',
-    find: "  if (flags.every(Boolean)) return { ok: true, code: 'ALREADY_APPLIED', written: [] }\n",
+    find: "  if (complete) return { ok: true, code: 'ALREADY_APPLIED', written: [], recovered }\n",
     replace: '' },
+  // ── 2차 (c27fb23 NO-GO 결함) ──
+  { name: 'apply 재해시를 큐 하나로 축소',
+    find: '  const stale = diffHashes(manifest.inputs, current.hashes)',
+    replace: '  const stale = diffHashes({ product: { queue: manifest.inputs.product.queue } }, { product: { queue: current.hashes.product.queue } })' },
+  { name: '단일 writer 잠금 제거',
+    find: '  const locked = withQuarantineLock(lockPath, () => applyLocked(ctx), { waitMs: 0 })',
+    replace: '  const locked = { ok: true, value: applyLocked(ctx) }' },
+  { name: '급사 journal 복구 제거',
+    find: '  if (fs.existsSync(journalPath)) {\n    recovered = recoverJournal(journalPath)',
+    replace: '  if (false) {\n    recovered = recoverJournal(journalPath)' },
+  { name: '정본 recordAdmission 대신 장부 직접 append',
+    find: '  const staged = stageAdmissions(pipeline, before.ledger, manifest.admissionRows, manifest.at)',
+    replace: "  const staged = { ok: true, text: (before.ledger ?? '') + manifest.admissionRows.map((r) => `${JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', ...r, at: manifest.at })}\\n`).join('') }" },
+  { name: '부분 답변·범위 확장을 완료 답변으로 되돌림',
+    find: "  'ANSWERS', 'ANSWERS_WITH_DEFECT',\n",
+    replace: "  'ANSWERS', 'ANSWERS_WITH_DEFECT', 'ANSWERS_PARTIAL', 'ANSWERS_WITH_SCOPE_EXPANSION',\n" },
+  { name: '판정 시각을 그날 23:59:59 로 해석',
+    find: '  const nowMs = time.ms\n',
+    replace: '  const nowMs = new Date(`${time.asOf}T23:59:59+09:00`).getTime()\n' },
 ]
 
 const occurrences = (s, sub) => s.split(sub).length - 1
