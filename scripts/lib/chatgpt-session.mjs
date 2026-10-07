@@ -578,6 +578,41 @@ export async function listCdpTargets({ timeoutMs = 4000 } = {}) {
 /** CDP target id 모양 — 비었거나 이상한 값이면 닫기를 시도하지 않는다 (추측 금지) */
 const TARGET_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 
+/**
+ * 🔴 **page 0건 복구가 연 target 하나를 정리하는 단 하나의 자리** — 공통 bootstrap 과
+ *    ensureChrome(hero) post 실패 경로가 같은 계약으로 쓴다 (Codex 재검토 P1).
+ *    - 닫는 것은 `targetId` 하나뿐이다. 목록을 훑어 다른 target 을 고르지 않는다
+ *    - id 가 없거나 모양이 이상하면 아무것도 닫지 않는다 (추측 금지)
+ *    - `closeRequestOk` 는 `/json/close` 요청 결과일 뿐이다.
+ *      **`closed: true` 는 목록에서 그 id 가 사라진 것을 읽어서 확인했을 때만**이다
+ *    - residue: none(사라짐 확인) · present(남아 있음/닫기 요청 실패) · unknown(못 읽음/id 불명)
+ *
+ * @returns {Promise<{targetId:string|null, closeAttempted:boolean, closeRequestOk:boolean|null, closed:boolean, residue:'none'|'present'|'unknown', why?:string}>}
+ */
+export async function cleanupZeroPageTarget(targetId, {
+  closeTargetFn = closeChatgptTarget, listTargetsFn = listCdpTargets, settleTries = 10, settleMs = 300,
+} = {}) {
+  if (typeof targetId !== 'string' || !TARGET_ID_RE.test(targetId)) {
+    return { targetId: targetId ?? null, closeAttempted: false, closeRequestOk: null, closed: false, residue: 'unknown', why: 'target id 가 없거나 불명확하다 — 다른 target 을 추측해 닫지 않는다' }
+  }
+  const c = await closeTargetFn(targetId)
+  if (!c?.ok) return { targetId, closeAttempted: true, closeRequestOk: false, closed: false, residue: 'present', why: `닫기 요청 실패 (${c?.why ?? '사유 없음'})` }
+  for (let i = 0; i <= settleTries; i++) {
+    const listed = await listTargetsFn()
+    if (!listed?.readOk || !Array.isArray(listed.targets)) {
+      return { targetId, closeAttempted: true, closeRequestOk: true, closed: false, residue: 'unknown', why: '닫은 뒤 목록을 읽지 못해 사라졌는지 모른다' }
+    }
+    if (!listed.targets.some((t) => t?.id === targetId)) return { targetId, closeAttempted: true, closeRequestOk: true, closed: true, residue: 'none' }
+    if (i < settleTries) await new Promise((r) => setTimeout(r, settleMs))
+  }
+  return { targetId, closeAttempted: true, closeRequestOk: true, closed: false, residue: 'present', why: '닫기 요청 뒤에도 목록에 남아 있다' }
+}
+
+/** 실패 사유 뒤에 붙는 정리 결과 — 잔존·실패를 숨기지 않는다 */
+export const describeZeroPageCleanup = (cl) => (cl.closed && cl.residue === 'none'
+  ? `연 탭(${cl.targetId})은 닫혔다`
+  : `연 탭 정리 실패 — residue ${cl.residue} · ${cl.why ?? '사유 없음'}`)
+
 const isChatgptTarget = (t) => {
   try { return t?.type === 'page' && new URL(String(t?.url ?? '')).hostname.replace(/^www\./, '') === 'chatgpt.com' }
   catch { return false }
@@ -613,28 +648,14 @@ export async function verifyWithZeroPageBootstrap(verifyProfileFn, args, {
   const opened = await openTargetFn()
   if (!opened.ok) {
     // 열렸는지조차 모른다 — 닫을 id 가 없으니 추측해서 닫지 않는다
-    return { ...first, zeroPage: false, why: `page 0건 복구 실패 — ChatGPT 탭을 열지 못했다 (${opened.why ?? '사유 없음'})`, bootstrap: { attempted: true, opened: false, closeAttempted: false } }
+    return { ...first, zeroPage: false, why: `page 0건 복구 실패 — ChatGPT 탭을 열지 못했다 (${opened.why ?? '사유 없음'})`, bootstrap: { attempted: true, opened: false, cleanup: null } }
   }
   const targetId = opened.target?.id ?? null
-  /** 🔴 이번 호출이 연 target 하나만 닫고, 정말 사라졌는지 목록으로 확인한다 */
-  const cleanup = async () => {
-    if (typeof targetId !== 'string' || !TARGET_ID_RE.test(targetId)) {
-      return { closeAttempted: false, closed: false, residue: 'unknown', closeWhy: 'target id 가 없거나 불명확하다 — 다른 target 을 추측해 닫지 않는다' }
-    }
-    const c = await closeTargetFn(targetId)
-    if (!c?.ok) return { closeAttempted: true, closed: false, residue: 'present', closeWhy: c?.why ?? '사유 없음' }
-    for (let i = 0; i <= settleTries; i++) {
-      const listed = await listTargetsFn()
-      if (!listed?.readOk) return { closeAttempted: true, closed: true, residue: 'unknown', closeWhy: '닫은 뒤 목록을 읽지 못했다' }
-      if (!listed.targets.some((t) => t?.id === targetId)) return { closeAttempted: true, closed: true, residue: 'none' }
-      if (i < settleTries) await sleep(settleMs)
-    }
-    return { closeAttempted: true, closed: true, residue: 'present', closeWhy: '닫은 뒤에도 목록에 남아 있다' }
-  }
+  /** 🔴 실패하면 이번 호출이 연 target 하나만 공통 helper 로 정리한다 — 정리 결과와 무관하게 실패다 */
   const failWith = async (base, why, extra = {}) => {
-    const cl = await cleanup()
-    const tail = cl.residue === 'none' ? '연 탭은 닫았다' : `연 탭이 남았을 수 있다 (${cl.closeWhy})`
-    return { ...base, ok: false, zeroPage: false, why: `${why} — ${tail}`, bootstrap: { attempted: true, opened: true, targetId, ...extra, ...cl } }
+    const cleanup = await cleanupZeroPageTarget(targetId, { closeTargetFn, listTargetsFn, settleTries, settleMs })
+    return { ...base, ok: false, zeroPage: false, why: `${why} — ${describeZeroPageCleanup(cleanup)}`,
+      bootstrap: { attempted: true, opened: true, targetId, ...extra, cleanup } }
   }
   if (!isChatgptTarget(opened.target)) {
     return failWith(first, `page 0건 복구 실패 — 열린 target 이 ChatGPT page 가 아니다 (${String(opened.target?.url ?? '').slice(0, 60)})`,
@@ -646,7 +667,7 @@ export async function verifyWithZeroPageBootstrap(verifyProfileFn, args, {
     again = await verifyProfileFn(args)
   }
   if (!again.ok) return failWith(again, `page 0건 복구 뒤 신원 재검사 실패 — ${again.why}`)
-  return { ...again, bootstrap: { attempted: true, opened: true, targetId, closeAttempted: false } }
+  return { ...again, bootstrap: { attempted: true, opened: true, targetId, cleanup: null } }
 }
 
 /**
@@ -706,10 +727,13 @@ export async function ensureChrome({
   /** 🔴 복구가 실패했을 때 자기가 연 탭을 닫는 자리 · 닫혔는지 보는 목록 — 시험은 가짜를 넣는다 */
   closeTargetFn = closeChatgptTarget,
   listTargetsFn = listCdpTargets,
+  /** page 0건 복구의 목록 반영·잔존 확인 대기 */
+  settleTries = 10,
+  settleMs = 300,
 } = {}) {
   const port = CDP_PORT
   /** 🔴 모든 신원 검사가 같은 page 0건 복구 계약을 지난다 — hero 경로도 여기를 지난다 */
-  const verify = (a) => verifyWithZeroPageBootstrap(verifyProfileFn, a, { openTargetFn, closeTargetFn, listTargetsFn })
+  const verify = (a) => verifyWithZeroPageBootstrap(verifyProfileFn, a, { openTargetFn, closeTargetFn, listTargetsFn, settleTries, settleMs })
   /**
    * ① 🔴 **띄우기 전에 본다.** 폴더·표식·권한·포트 주인이 맞아야 spawn 한다.
    *    표식이 없으면 **여기서 만들지 않는다** — 표식 생성은 `--login` 만 한다.
@@ -732,13 +756,13 @@ export async function ensureChrome({
        * 🔴 앞 검사(pre)에서 **이 호출이 연** 탭이 있으면 그 id 하나만 닫는다.
        *    pre 가 탭을 열지 않았으면(기존 page 였으면) 아무것도 닫지 않는다.
        */
-      const own = pre.bootstrap?.opened === true && pre.bootstrap.closeAttempted === false ? pre.bootstrap.targetId : null
-      let zeroPageCleanup
-      if (own && TARGET_ID_RE.test(own)) {
-        const c = await closeTargetFn(own)
-        zeroPageCleanup = { targetId: own, closeAttempted: true, closed: c?.ok === true, ...(c?.ok ? {} : { closeWhy: c?.why ?? '사유 없음' }) }
+      if (!(pre.bootstrap?.opened === true && pre.bootstrap.cleanup === null)) {
+        return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post }
       }
-      return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post, ...(zeroPageCleanup ? { zeroPageBootstrap: { ...pre.bootstrap, cleanup: zeroPageCleanup } } : {}) }
+      // 공통 bootstrap 과 같은 helper · 같은 잔존 확인 — 정리 결과와 무관하게 실패다
+      const cleanup = await cleanupZeroPageTarget(pre.bootstrap.targetId, { closeTargetFn, listTargetsFn, settleTries, settleMs })
+      return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: `${post.why} — ${describeZeroPageCleanup(cleanup)}`,
+        identity: post, zeroPageBootstrap: { ...pre.bootstrap, cleanup } }
     }
     // 🔴 page 0건 복구는 앞 검사(pre)에서 일어났을 수 있다 — 기록을 잃지 않는다
     const zeroPageBootstrap = pre.bootstrap ?? post.bootstrap

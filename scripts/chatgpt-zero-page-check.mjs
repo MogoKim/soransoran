@@ -256,68 +256,90 @@ for (const [name, openedTarget] of [
   check('⑨ 남의 페이지 판정에는 zeroPage 가 붙지 않는다', foreign.ok === false && foreign.zeroPage !== true, JSON.stringify(foreign))
 }
 
-// ⑩ 실패하면 이번 호출이 연 target 하나만 닫는다 (Codex 재검토 P1)
+// ⑩ 실패하면 이번 호출이 연 target 하나만 공통 helper 로 정리한다 (Codex 재검토 P1 · 2회)
+//    🔴 closed=true 는 목록에서 사라진 것을 읽어 확인했을 때만이다. close 요청 성공은 closeRequestOk 다
 console.log('\npage 0건 복구 — 실패 정리')
 const OLD_CHATGPT = { id: 'P-old', type: 'page', url: 'https://chatgpt.com/c/old' }
 const LATE_FOREIGN = { id: 'P-late', type: 'page', url: 'https://www.youtube.com/' }
 const LATE_CHATGPT = { id: 'P-late-gpt', type: 'page', url: 'https://chatgpt.com/' }
-{
-  const w = world({ openedTarget: { id: 'T-blank', type: 'page', url: 'about:blank' } })
+const cleanupIs = (cl, want) => !!cl && Object.entries(want).every(([k, v]) => cl[k] === v)
+/** 정리 계약 4종 — 같은 단언을 공통 bootstrap · probe · hero 에 똑같이 건다 */
+const CLEANUP_CASES = [
+  ['close 성공 · 실제 제거', {}, { closeAttempted: true, closeRequestOk: true, closed: true, residue: 'none' }, /연 탭\(T-new\)은 닫혔다/],
+  ['close 200 · target 잔존', { closeLingers: true }, { closeAttempted: true, closeRequestOk: true, closed: false, residue: 'present' }, /정리 실패 — residue present · 닫기 요청 뒤에도 목록에 남아 있다/],
+  ['close 뒤 목록 읽기 실패', { listAfterCloseFails: true }, { closeAttempted: true, closeRequestOk: true, closed: false, residue: 'unknown' }, /정리 실패 — residue unknown · 닫은 뒤 목록을 읽지 못해/],
+  ['close 요청 실패', { closeFails: true }, { closeAttempted: true, closeRequestOk: false, closed: false, residue: 'present' }, /정리 실패 — residue present · 닫기 요청 실패/],
+]
+for (const [name, over, want, whyRe] of CLEANUP_CASES) {
+  // 공통 bootstrap — 탭을 연 뒤 외부 page 가 나타나 재검사가 실패한다
+  const w = world({ afterOpenExtra: [LATE_FOREIGN], ...over })
   const r = await bootIn(w)
-  check('⑩ 잘못된 target 생성 → 자기 target 을 정확히 1번 닫는다', r.ok === false && w.state.closes.length === 1 && w.state.closes[0] === 'T-blank',
+  check(`⑩ bootstrap · ${name} → ${JSON.stringify(want)}`, r.ok === false && cleanupIs(r.bootstrap?.cleanup, want) && whyRe.test(r.why ?? '') && /재검사 실패/.test(r.why ?? ''),
+    `${JSON.stringify(r.bootstrap?.cleanup)} · ${r.why}`)
+  check(`⑩ bootstrap · ${name} → 자기 target 만 close 요청 · 외부 page 보존`, JSON.stringify(w.state.closes) === '["T-new"]' && w.state.pages.some((t) => t.id === 'P-late'),
     `closes ${JSON.stringify(w.state.closes)}`)
-  check('⑩ 잘못된 target — 닫힌 것이 목록으로 확인되고 기록에 남는다', r.bootstrap?.closed === true && r.bootstrap?.residue === 'none' && !w.state.pages.some((t) => t.id === 'T-blank'),
-    JSON.stringify(r.bootstrap))
+  // probe — 같은 결과 계약
+  const wp = world({ afterOpenExtra: [LATE_FOREIGN], ...over })
+  const p = await probeIn(wp)
+  check(`⑩ probe · ${name} → 같은 계약 · MISMATCH 유지`, p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && cleanupIs(p.identity?.bootstrap?.cleanup, want) && whyRe.test(p.errorDetail ?? ''),
+    `${p.status} · ${JSON.stringify(p.identity?.bootstrap?.cleanup)} · ${p.errorDetail}`)
+  // hero(ensureChrome) — 떠 있는 Chrome 에서 pre 가 탭을 열고, post 재확인 직전에 외부 page 가 나타난다
+  const wh = world(over)
+  let calls = 0
+  const vf = async (a) => { calls += 1; if (calls === 3) wh.state.pages = [...wh.state.pages, LATE_FOREIGN]; return wh.verifyProfileFn(a) }
+  const e = await ensureIn({ ...wh, verifyProfileFn: vf }, { settleTries: 3, settleMs: 5 })
+  check(`⑩ hero · ${name} → 같은 helper 계약 · ok=false 유지`, e.r.ok === false && e.r.reason === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && cleanupIs(e.r.zeroPageBootstrap?.cleanup, want) && whyRe.test(e.r.why ?? ''),
+    `${JSON.stringify(e.r.zeroPageBootstrap?.cleanup)} · ${e.r.why}`)
+  // 가짜 브라우저의 실제 목록과 기록이 맞아야 한다 — 닫혔다고 적었으면 정말 없어야 하고, 잔존이면 정말 있어야 한다
+  const stillThere = wh.state.pages.some((t) => t.id === 'T-new')
+  const recordMatches = want.residue === 'none' ? !stillThere : want.residue === 'present' ? stillThere : true
+  check(`⑩ hero · ${name} → 자기 target 만 close 요청 · 외부 page 보존 · 기록이 실제 목록과 일치`,
+    JSON.stringify(wh.state.closes) === '["T-new"]' && wh.state.pages.some((t) => t.id === 'P-late') && recordMatches,
+    `closes ${JSON.stringify(wh.state.closes)} · pages ${wh.state.pages.map((t) => t.id).join(',')}`)
 }
 {
-  // 잘못된 target 이 열리는 사이 다른 ChatGPT 탭도 나타났다 — 그 탭은 우리 것이 아니다
   const w = world({ openedTarget: { id: 'T-blank', type: 'page', url: 'about:blank' }, afterOpenExtra: [LATE_CHATGPT] })
-  await bootIn(w)
-  check('⑩ 잘못된 target — 나중에 나타난 ChatGPT page 는 닫지 않는다', w.foreignCloses().length === 0 && w.state.pages.some((t) => t.id === 'P-late-gpt'),
-    `closes ${JSON.stringify(w.state.closes)}`)
-}
-{
-  const w = world({ afterOpenExtra: [LATE_FOREIGN] })
   const r = await bootIn(w)
-  check('⑩ 생성 후 외부 page 가 나타나 재검사 실패 → 자기 target 만 닫는다', r.ok === false && JSON.stringify(w.state.closes) === '["T-new"]' && w.state.pages.some((t) => t.id === 'P-late'),
+  check('⑩ 잘못된 target 생성 → 자기 target 1번 close · 실제 제거 확인', r.ok === false && JSON.stringify(w.state.closes) === '["T-blank"]'
+    && cleanupIs(r.bootstrap?.cleanup, { closed: true, residue: 'none' }) && !w.state.pages.some((t) => t.id === 'T-blank'), JSON.stringify(r.bootstrap))
+  check('⑩ 잘못된 target — 그 사이 나타난 ChatGPT page 는 닫지 않는다', w.foreignCloses().length === 0 && w.state.pages.some((t) => t.id === 'P-late-gpt'),
     `closes ${JSON.stringify(w.state.closes)}`)
-  const p = await probeIn(world({ afterOpenExtra: [LATE_FOREIGN] }))
-  check('⑩ probe 경로도 재검사 실패면 자기 target 을 닫는다', p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && p.identity?.bootstrap?.closed === true,
-    JSON.stringify(p.identity?.bootstrap))
 }
 {
-  // 탭을 열었는데 목록에는 끝내 page 0 으로 보인다 (lag 이 대기보다 길다)
   const w = world({ lagReads: 99 })
   const r = await bootIn(w)
-  check('⑩ 재검사가 계속 page 0 → 자기 target 을 닫고 실패', r.ok === false && JSON.stringify(w.state.closes) === '["T-new"]' && /재검사 실패/.test(r.why ?? ''),
+  check('⑩ 재검사가 계속 page 0 → 자기 target close · 실패', r.ok === false && JSON.stringify(w.state.closes) === '["T-new"]' && /재검사 실패/.test(r.why ?? ''),
     `closes ${JSON.stringify(w.state.closes)} · ${r.why}`)
-}
-{
-  const w = world({ afterOpenExtra: [LATE_FOREIGN], closeFails: true })
-  const r = await bootIn(w)
-  check('⑩ close 실패 → 실패 상태 유지 · residue 증거가 남는다', r.ok === false && r.bootstrap?.closeAttempted === true && r.bootstrap?.closed === false
-    && r.bootstrap?.residue === 'present' && /남았을 수 있다/.test(r.why ?? ''), JSON.stringify(r.bootstrap))
-  const w2 = world({ afterOpenExtra: [LATE_FOREIGN], closeLingers: true })
-  const r2 = await bootIn(w2)
-  check('⑩ close 200 인데 목록에 남아 있다 → residue present · 실패 유지', r2.ok === false && r2.bootstrap?.residue === 'present', JSON.stringify(r2.bootstrap))
-  const w3 = world({ afterOpenExtra: [LATE_FOREIGN], listAfterCloseFails: true })
-  const r3 = await bootIn(w3)
-  check('⑩ 닫은 뒤 목록을 못 읽는다 → residue unknown · 실패 유지', r3.ok === false && r3.bootstrap?.residue === 'unknown', JSON.stringify(r3.bootstrap))
 }
 {
   const w = world({ openedTarget: { type: 'page', url: 'about:blank' } })
   const r = await bootIn(w)
-  check('⑩ target id 가 없다 → 아무것도 닫지 않는다 (추측 금지) · 실패 유지', r.ok === false && w.state.closes.length === 0 && r.bootstrap?.closeAttempted === false && r.bootstrap?.residue === 'unknown',
+  check('⑩ target id 가 없다 → close 0 (추측 금지) · residue unknown · 실패 유지', r.ok === false && w.state.closes.length === 0
+    && cleanupIs(r.bootstrap?.cleanup, { closeAttempted: false, closed: false, residue: 'unknown' }) && /추측해 닫지 않는다/.test(r.why ?? ''),
     `closes ${JSON.stringify(w.state.closes)} · ${JSON.stringify(r.bootstrap)}`)
+  check('⑩ 공통 정리 helper(cleanupZeroPageTarget)가 있다', typeof SESS.cleanupZeroPageTarget === 'function')
+  for (const bad of typeof SESS.cleanupZeroPageTarget === 'function' ? ['', '../json/version', 'a b'] : []) {
+    const cl = await SESS.cleanupZeroPageTarget(bad, { closeTargetFn: w.closeTargetFn, listTargetsFn: w.listTargetsFn })
+    check(`⑩ helper — 잘못된 id ${JSON.stringify(bad)} 는 close 0`, cl.closeAttempted === false && cl.closed === false && w.state.closes.length === 0, JSON.stringify(cl))
+  }
 }
 {
   const w = world()
   const r = await bootIn(w)
-  check('⑩ 성공 → close 0 · 새 ChatGPT target 유지', r.ok === true && w.state.closes.length === 0 && w.state.pages.some((t) => t.id === 'T-new'),
+  check('⑩ 성공 → close 0 · 새 ChatGPT target 유지 · cleanup 없음', r.ok === true && w.state.closes.length === 0 && w.state.pages.some((t) => t.id === 'T-new') && r.bootstrap?.cleanup === null,
     `ok ${r.ok} · closes ${JSON.stringify(w.state.closes)}`)
   const w2 = world({ pages: [OLD_CHATGPT] })
   const r2 = await bootIn(w2)
   check('⑩ 이미 있던 ChatGPT page → open 0 · close 0', r2.ok === true && w2.state.opens === 0 && w2.state.closes.length === 0, `opens ${w2.state.opens} · closes ${w2.state.closes.length}`)
+}
+{
+  // hero — pre 가 탭을 열지 않았다(기존 page 로 통과) → post 실패에도 close 0
+  const w = world({ pages: [OLD_CHATGPT] })
+  let calls = 0
+  const vf = async (a) => { calls += 1; if (calls === 2) w.state.pages = [...w.state.pages, LATE_FOREIGN]; return w.verifyProfileFn(a) }
+  const e = await ensureIn({ ...w, verifyProfileFn: vf })
+  check('⑩ hero — pre 가 탭을 열지 않았으면 post 실패에도 close 0 · 기존 page 보존', e.r.ok === false && w.state.closes.length === 0 && e.r.zeroPageBootstrap === undefined
+    && w.state.pages.some((t) => t.id === 'P-old'), `closes ${JSON.stringify(w.state.closes)}`)
 }
 {
   // 어떤 실패에서도 기존·외부 page 는 닫지 않는다
@@ -328,25 +350,12 @@ const LATE_CHATGPT = { id: 'P-late-gpt', type: 'page', url: 'https://chatgpt.com
     world({ openedTarget: { id: 'T-sw', type: 'service_worker', url: 'https://chatgpt.com/sw.js' }, afterOpenExtra: [LATE_FOREIGN] }),
     world({ afterOpenExtra: [LATE_FOREIGN, LATE_CHATGPT] }),
     world({ afterOpenExtra: [LATE_FOREIGN], closeFails: true }),
+    world({ afterOpenExtra: [LATE_FOREIGN], closeLingers: true }),
     world({ marker: null }),
   ]
-  for (const w of cases) { await bootIn(w); await probeIn(w) }
+  for (const w of cases) { await bootIn(w); await probeIn(w); await ensureIn(w, { settleTries: 2, settleMs: 5 }) }
   const foreign = cases.flatMap((w) => w.foreignCloses())
-  check('⑩ 다른 기존 page 는 어떤 실패에서도 close 0', foreign.length === 0, JSON.stringify(foreign))
-}
-{
-  // hero 경로 — 떠 있는 Chrome 에서 pre 가 탭을 연 뒤 post 가 실패하면 그 탭만 닫는다
-  const w = world()
-  let calls = 0
-  const verifyProfileFn = async (a) => { calls += 1; if (calls === 3) w.state.pages = [...w.state.pages, LATE_FOREIGN]; return w.verifyProfileFn(a) }
-  const e = await ensureIn({ ...w, verifyProfileFn })
-  check('⑩ hero 경로 — 복구 뒤 재확인이 실패하면 자기 탭만 닫는다', e.r.ok === false && JSON.stringify(w.state.closes) === '["T-new"]' && w.foreignCloses().length === 0,
-    `ok ${e.r.ok} · closes ${JSON.stringify(w.state.closes)} · ${e.r.why}`)
-  const w2 = world({ pages: [OLD_CHATGPT] })
-  let calls2 = 0
-  const vf2 = async (a) => { calls2 += 1; if (calls2 === 2) w2.state.pages = [...w2.state.pages, LATE_FOREIGN]; return w2.verifyProfileFn(a) }
-  const e2 = await ensureIn({ ...w2, verifyProfileFn: vf2 })
-  check('⑩ hero 경로 — 기존 page 로 통과했다면 post 실패에도 close 0', e2.r.ok === false && w2.state.closes.length === 0, `closes ${JSON.stringify(w2.state.closes)}`)
+  check('⑩ 다른 기존·외부 page 는 어떤 실패에서도 close 0 (bootstrap · probe · hero)', foreign.length === 0, JSON.stringify(foreign))
 }
 
 check('실제 CDP 포트 요청 0 (운영 Chrome 에 닿지 않았다)', realCdpAttempts.length === 0, realCdpAttempts.join(' · '))
