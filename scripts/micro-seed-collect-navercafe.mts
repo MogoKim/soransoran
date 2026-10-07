@@ -71,8 +71,12 @@ import {
 } from '../src/lib/collect-run-record'
 import {
   appendDetailLedger, appendRunRecord, readDetailLedger, readSeenArticleIds,
-  BODY_RETRY_MAX,
+  BODY_RETRY_MAX, RUN_RECORD_DIR,
 } from './lib/collect-run-store.mjs'
+import {
+  alertDueToday, isMemberGateText, judgeSessionExpiry, SESSION_EXPIRY_WARN_DAYS, SESSION_REISSUE_COMMAND,
+} from '../src/lib/naver-member-gate'
+import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
@@ -196,6 +200,35 @@ const fail = (msg: string, code: CollectFailureCode = 'OTHER'): never => {
   console.error(`\n🛑 ${msg}\n`)
   process.exit(1)
 }
+
+/**
+ * 🔴 **세션 알림 — 같은 알림은 하루 한 번** (2026-10-07).
+ *    10/4~10/7 가입 안내 사고는 3일 넘게 아무도 몰랐다. 회차가 전부 ok 로 끝났고 알림이 없었다.
+ *    · 하루 기록은 회차 기록 디렉터리 안에 둔다 — 상시 호스트 이관 묶음이 그대로 옮긴다.
+ *    · 🔴 Slack 실패가 수집을 죽이지 않는다(`send` 는 throw 하지 않는다). 기록을 못 읽으면 보낸다.
+ */
+const ALERT_STATE = join(RUN_RECORD_DIR, 'session-alerts.json')
+async function notifySessionAlert(
+  key: string,
+  msg: { severity: 'WARN' | 'BLOCKED'; title: string; reason: string },
+): Promise<void> {
+  const today = kstString(new Date()).slice(0, 10)
+  let sent: Record<string, string> = {}
+  try { sent = JSON.parse(readFileSync(ALERT_STATE, 'utf-8')) as Record<string, string> } catch { /* 처음이거나 못 읽음 — 보낸다 */ }
+  if (!alertDueToday(sent, key, today)) {
+    console.log(`  🔕 오늘 이미 보낸 알림이다 — ${key}`)
+    return
+  }
+  const r = await send(buildMessage({ ...msg, next: SESSION_REISSUE_COMMAND, logPath: undefined }), { dryRun: false })
+  console.log(`  📣 Slack ${r.sent ? '보냄' : `못 보냄(${r.reason})`} — ${key}`)
+  if (!r.sent) return
+  try {
+    mkdirSync(RUN_RECORD_DIR, { recursive: true })
+    writeFileSync(ALERT_STATE, `${JSON.stringify({ ...sent, [key]: today }, null, 2)}\n`, 'utf-8')
+  } catch { /* 다음 회차가 한 번 더 보낼 뿐이다 */ }
+}
+/** 가입 안내를 만난 글 — 🔴 원장에 남기지 않는다. 회원 세션으로 바뀐 뒤 다음 회차가 다시 연다 */
+let memberGateId: string | null = null
 
 const cafe = findCafe(CAFE_ID)
 if (cafe === null) {
@@ -423,18 +456,37 @@ async function main() {
    * 🔴 **인증 쿠키를 브라우저 열기 전에 본다.** 이름과 만료 시각만 본다 —
    *    값은 어디에도 담지 않는다. 만료됐으면 자동 로그인하지 않고 멈춘다.
    */
+  let authCookies: { name: string; expires?: number }[] = []
   const auth = ((): ReturnType<typeof judgeAuthCookies> => {
     try {
       const j = JSON.parse(readFileSync(sessionPath!, 'utf-8')) as {
         cookies?: { name: string; expires?: number }[]
       }
-      return judgeAuthCookies(j.cookies ?? [], Date.now())
+      // 🔴 이름과 만료 시각만 남긴다 — 값은 담지 않는다
+      authCookies = (j.cookies ?? []).map((c) => ({ name: c.name, expires: c.expires }))
+      return judgeAuthCookies(authCookies, Date.now())
     } catch { return { ok: false, code: 'AUTH_MISSING', reason: '세션을 읽지 못했다' } }
   })()
   console.log(`  인증   ${auth.ok ? '🟢' : '🔴'} ${auth.reason}`)
   if (!auth.ok) {
-    fail(`${auth.code} — ${auth.reason}\n   🔴 사람이 headed 로 재발급한다: npm run navercafe:session-setup`,
+    // 🔴 멈추기 전에 알린다 — 10/3 오후 만료 4회 실패도 아무도 몰랐다
+    await notifySessionAlert(auth.code, {
+      severity: 'BLOCKED',
+      title: '네이버 카페 수집 중단 — 로그인 세션 만료',
+      reason: `${auth.reason} · ${cafe!.label} 회차부터 수집이 멈췄다`,
+    })
+    fail(`${auth.code} — ${auth.reason}\n   🔴 사람이 headed 로 재발급한다: ${SESSION_REISSUE_COMMAND}`,
       auth.code)
+  }
+  // 🔴 만료 예고 — 만료 전에 다시 발급하면 회차를 잃지 않는다
+  const expiry = judgeSessionExpiry(authCookies, Date.now())
+  if (expiry.warn && expiry.soonest !== null) {
+    console.log(`  ⏳ 인증 쿠키 ${expiry.soonest.name} 가 ${expiry.soonest.daysLeft}일 뒤 만료된다 (${SESSION_EXPIRY_WARN_DAYS}일 안)`)
+    await notifySessionAlert('SESSION_EXPIRY_SOON', {
+      severity: 'WARN',
+      title: `네이버 세션 만료 ${expiry.soonest.daysLeft}일 전`,
+      reason: `${expiry.soonest.name} 만료 ${kstString(new Date(expiry.soonest.expiresAt))} KST — 만료되면 두 카페 수집이 멈춘다`,
+    })
   }
 
   /**
@@ -634,6 +686,17 @@ async function main() {
         )
         continue
       }
+      /**
+       * 🔴 **가입 안내는 본문이 아니다** (2026-10-04~07 실측).
+       *    회원 세션이면 회원 전용 글도 열린다 — 하나라도 안내가 나오면 세션이 회원이 아니다.
+       *    다음 글도 같으니 요청을 더 쓰지 않고 멈춘다. 원장에는 남기지 않는다 —
+       *    회원 세션으로 바뀐 뒤 다음 회차가 이 글을 다시 연다.
+       */
+      if (isMemberGateText(body)) {
+        memberGateId = id
+        console.log(`  🛑 ${id} — 본문 대신 카페 가입 안내가 나왔다. 이 세션은 ${cafe!.label} 회원이 아니다 — 상세 요청을 멈춘다`)
+        break
+      }
       const row = buildCollected(cafe!.cafeId, known.get(id)!, body, new Date().toISOString(), listedAtIso)
       assertNaverCandidate(row)
       bodyRows += 1
@@ -765,6 +828,22 @@ async function main() {
   console.log(`\n  🔴 Raw Vault 에 적재하지 않았다. 적재는 importer 가 한다:`)
   console.log(`     npx tsx scripts/micro-seed-import-82cook-live.mts --raw-only --batch=10 --input=${OUT}`)
   console.log(`     (--apply 를 붙여야 실제로 적재된다 · ${kstString(now)} KST)\n`)
+
+  /**
+   * 🔴 **가입 안내를 만난 회차는 성공이 아니다.** 안내 앞에서 읽은 본문은 위에서 그대로 남겼다.
+   *    앞판은 이 회차를 ok 로 끝냈고, 관제도 사람도 3일 넘게 몰랐다.
+   */
+  if (memberGateId !== null) {
+    await notifySessionAlert(`MEMBER_GATE:${cafe!.cafeId}`, {
+      severity: 'BLOCKED',
+      title: `네이버 카페 본문 접근 실패 — ${cafe!.label} 회원으로 인정되지 않음`,
+      reason: `글 ${memberGateId} 에서 본문 대신 가입 안내가 나왔다. 로그인 쿠키는 유효하지만 이 계정이 카페 회원이 아니다 — 이 카페 공급이 멈춘다`,
+    })
+    finishRun('failed', 'MEMBER_GATE')
+    releaseOwnLock()
+    console.error(`\n🛑 MEMBER_GATE — 본문 대신 가입 안내 (${memberGateId}). 카페 회원 계정으로 재발급: ${SESSION_REISSUE_COMMAND}\n`)
+    process.exit(1)
+  }
 }
 
 // ─────────────────────────────────────────────────────────

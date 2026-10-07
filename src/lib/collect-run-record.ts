@@ -26,6 +26,11 @@ export type CollectFailureCode =
   | 'AUTH_MISSING'
   /** 인증 쿠키가 있는데 만료됐다 — 사람이 다시 로그인한다 */
   | 'AUTH_EXPIRED'
+  /**
+   * 🔴 **로그인은 됐는데 카페가 회원으로 인정하지 않는다** (2026-10-04~07 실측).
+   *    본문 자리에 가입 안내가 나온다. 쿠키 검사는 통과한다 — 회원 계정으로 다시 발급한다.
+   */
+  | 'MEMBER_GATE'
   /** 목록·본문 셀렉터가 맞지 않는다 */
   | 'SELECTOR'
   /** 다른 실행이 락을 쥐고 있다 — 일시적이다. 다음 회차에 저절로 풀린다 */
@@ -262,6 +267,11 @@ export function judgeRunHealth(
     },
     AUTH_MISSING: { level: 'CRITICAL', reason: '세션에 인증 쿠키가 없다 — 사람이 headed 로 재발급한다' },
     AUTH_EXPIRED: { level: 'CRITICAL', reason: '인증 쿠키가 만료됐다 — 사람이 headed 로 재발급한다' },
+    MEMBER_GATE: {
+      level: 'CRITICAL',
+      // 🔴 쿠키는 유효하다. 만료가 아니라 "이 계정이 카페 회원이 아니다" 다
+      reason: '본문 대신 카페 가입 안내가 나왔다 — 카페 회원 계정으로 세션을 재발급한다(쿠키는 유효해도 회원이 아니다)',
+    },
     LOCK_BUSY: { level: 'WARNING', reason: '다른 실행이 락을 쥐고 있어 건너뛰었다 — 겹침 방지가 동작했다(일시적)' },
     LOCK_STALE: {
       level: 'CRITICAL',

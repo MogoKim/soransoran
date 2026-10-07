@@ -22,7 +22,12 @@
  *    저장하고 나서 확인하면 이미 워킹트리에 쿠키가 놓인 뒤다. 저장 **전에** 본다.
  *
  * 🔴 **DB · Sheet · Candidate · Post 를 건드리지 않는다.** prisma 를 import 하지 않는다.
- *    네이버 카페 글도 읽지 않는다 — 로그인 페이지만 연다.
+ *    네이버 카페 글도 읽지 않는다 — 로그인 페이지와, 저장 직전 **카페 홈**(회원 확인)만 연다.
+ *
+ * 🔴 **로그인과 카페 회원은 다르다** (2026-10-04~07 실측).
+ *    10/3 밤 재발급 세션은 인증 쿠키 2종이 유효했지만 두 카페가 회원으로 인정하지 않았고,
+ *    수집기는 3일 넘게 본문 대신 가입 안내를 저장했다. 그래서 저장 **전에** 활성 카페마다
+ *    홈을 열어 회원인지 본다(회원 = "카페 글쓰기" · 비회원 = "카페 가입하기", 2026-10-07 실측).
  *
  * 사용법
  *   npx tsx scripts/navercafe-session-setup.mts            계획만 (브라우저를 열지 않는다)
@@ -35,9 +40,10 @@ import { createInterface } from 'node:readline'
 import {
   DEFAULT_SESSION_PATH, SESSION_PATH_ENV, KILL_SWITCH_ENV,
   PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions,
-  isUnaoSessionPath, isSessionPathIgnored, summarizeCookies,
+  isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, activeCafes,
   type CookieMeta,
 } from './lib/micro-seed-navercafe.mjs'
+import { judgeCafeMembership } from '../src/lib/naver-member-gate'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 import {
   judgeSessionLocation, judgeStorageStateShape, SESSION_DIR_MODE, SESSION_FILE_MODE,
@@ -56,13 +62,20 @@ const fail = (m: string): never => {
   process.exit(1)
 }
 
-/** 🔴 로그인 페이지만 연다. 카페 글은 이 스크립트가 읽지 않는다 */
+/** 🔴 로그인 페이지와 카페 홈만 연다. 카페 글은 이 스크립트가 읽지 않는다 */
 const LOGIN_URL = 'https://nid.naver.com/nidlogin.login'
+const CAFE_HOME_URL = (cafeId: string) => `https://cafe.naver.com/${cafeId}`
 
 // 브라우저 타입 — 동적 import 라 최소 형태만 선언한다
 type SessionCookieDump = { cookies: CookieMeta[] }
+type SessionPage = {
+  goto: (url: string, o: object) => Promise<unknown>
+  waitForTimeout: (ms: number) => Promise<void>
+  frames: () => { evaluate: (fn: () => string) => Promise<string> }[]
+  close: () => Promise<void>
+}
 type SessionContext = {
-  newPage: () => Promise<{ goto: (url: string, o: object) => Promise<unknown> }>
+  newPage: () => Promise<SessionPage>
   storageState: (o: { path: string }) => Promise<SessionCookieDump>
 }
 type SessionBrowser = { close: () => Promise<void>; newContext: (o: object) => Promise<SessionContext> }
@@ -207,6 +220,34 @@ async function main(): Promise<void> {
       console.log(`     기존 정본은 그대로다${existsSync(target) ? ' (덮어쓰지 않았다)' : ' (아직 없다)'}.`)
       console.log('     다시 실행해 로그인을 끝낸 뒤 Enter 를 누른다.')
       fail('🔴 인증이 확인되지 않아 정본을 갱신하지 않았다')
+    }
+    /**
+     * 🔴 **카페 회원인지 저장 전에 본다** — 인증 쿠키가 유효해도 회원이 아닐 수 있다.
+     *    같은 창(같은 로그인)으로 활성 카페의 홈만 연다. 못 읽었으면(unknown) 회원으로 치지 않는다.
+     */
+    console.log('\n  카페 회원 확인 (카페 홈만 연다 · 글은 열지 않는다)')
+    const notMember: string[] = []
+    for (const c of activeCafes()) {
+      const p = await context.newPage()
+      let text = ''
+      try {
+        await p.goto(CAFE_HOME_URL(c.cafeId), { waitUntil: 'domcontentloaded', timeout: 30_000 })
+        await p.waitForTimeout(4_000)
+        for (const f of p.frames()) {
+          try { text += `\n${await f.evaluate(() => document.body?.innerText ?? '')}` } catch { /* 다른 출처 프레임 */ }
+        }
+      } catch { /* 못 열었다 — 아래에서 unknown 으로 본다 */ }
+      await p.close().catch(() => {})
+      const m = judgeCafeMembership(text)
+      console.log(`     ${m === 'member' ? '🟢' : '🔴'} ${c.label} — ${m === 'member' ? '회원' : m === 'nonMember' ? '회원 아님(카페 가입하기 버튼)' : '확인 불가'}`)
+      if (m !== 'member') notMember.push(c.label)
+    }
+    if (notMember.length > 0) {
+      rmSync(staging, { force: true })
+      console.log(`\n  🔴 저장하지 않았다 — ${notMember.join(' · ')} 회원으로 확인되지 않았다`)
+      console.log(`     기존 정본은 그대로다${existsSync(target) ? ' (덮어쓰지 않았다)' : ' (아직 없다)'}.`)
+      console.log('     두 카페에 가입된 계정으로 다시 로그인하거나, 창에서 카페에 가입한 뒤 다시 실행한다.')
+      fail('🔴 카페 회원으로 확인되지 않아 정본을 갱신하지 않았다')
     }
     // 🔴 여기까지 왔으면 유효하다. 한 번의 rename 으로 들여놓는다
     renameSync(staging, target)

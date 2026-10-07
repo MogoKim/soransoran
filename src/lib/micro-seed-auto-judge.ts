@@ -23,6 +23,7 @@
 import { sourceIdentityOf } from './source-identity'
 import { isPoliticalFigureTitleFlag } from './political-flags'
 import { HANJA_LANGUAGE_FIT } from './cjk-ideograph'
+import { isMemberGateText } from './naver-member-gate'
 
 /** 🔴 사람 값과 절대 겹치지 않는 이름 */
 export const AUTO_DECISIONS = ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const
@@ -310,12 +311,18 @@ export function normalizeJudgeRow(
 ): JudgeInput | null {
   const id = S(raw.sourceArticleId)
   if (id === '') return null
+  // 🔴 키 이름이 화면마다 다르다. 여기서 맞춘다
+  const access = kind === 'detail' ? S(raw.access) : S(raw.accessStatus)
   return {
     sourceSite: S(raw.sourceSite),
     sourceArticleId: id,
     axis: S(raw.axis),
-    // 🔴 키 이름이 화면마다 다르다. 여기서 맞춘다
-    access: kind === 'detail' ? S(raw.access) : S(raw.accessStatus),
+    /**
+     * 🔴 **카페 가입 안내는 읽은 것이 아니다** (2026-10-04~07 실측 235건).
+     *    그 행의 사본에는 `access: ok` 가 적혀 있다 — 사본을 고치지 않고 정규화 하나가 본다.
+     *    판정기와 작업 묶음이 모두 이 함수를 지나므로 묶음 자리도 유료 호출도 쓰지 않는다.
+     */
+    access: isMemberGateText(S(raw.bodyHead)) ? 'memberGate' : access,
     title: S(raw.title), bodyHead: S(raw.bodyHead),
     commentCount: Number(raw.commentCount ?? 0),
     lane: S(raw.lane), assetAxes: S(raw.assetAxes),

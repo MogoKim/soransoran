@@ -28,6 +28,8 @@ export type FindingCode =
   | 'RUN_SESSION_FILE_MISSING'
   | 'RUN_AUTH_MISSING'
   | 'RUN_AUTH_EXPIRED'
+  /** 🔴 쿠키는 유효한데 카페가 회원으로 인정하지 않는다 — 회원 계정으로 재발급 */
+  | 'RUN_MEMBER_GATE'
   | 'RUN_SELECTOR'
   | 'RUN_NETWORK'
   | 'RUN_OTHER'
