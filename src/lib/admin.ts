@@ -29,6 +29,16 @@ export async function requireAdmin(): Promise<AdminCheck> {
   const userId = session?.user?.id
   if (!userId) return { ok: false }
 
+  return checkAdminForUser(userId)
+}
+
+/**
+ * 이미 세션을 읽은 화면용 — 같은 요청에서 auth() 를 다시 부르지 않고 회원 id 로만 판정한다.
+ *
+ * 🔴 권한을 지키는 자리(server action · 어드민 페이지)는 여전히 requireAdmin 을 쓴다.
+ *    이 함수는 판정 규칙을 나누지 않는다 — requireAdmin 도 같은 함수를 지난다.
+ */
+export async function checkAdminForUser(userId: string): Promise<AdminCheck> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { isAdmin: true, email: true },

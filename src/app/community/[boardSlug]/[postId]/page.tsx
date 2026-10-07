@@ -11,8 +11,9 @@ import { getPostScrapState } from '@/lib/queries/post-scrap'
 import { getLikedCommentIds } from '@/lib/queries/comment-like'
 import PostActionBar from '@/components/features/PostActionBar'
 import PostViewBeacon from '@/components/features/PostViewBeacon'
+import LoggedOutViewTracker from '@/components/features/signup-funnel/LoggedOutViewTracker'
 import WriteCta from '@/components/features/WriteCta'
-import { auth } from '@/lib/auth'
+import { getRequestSession } from '@/lib/request-session'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail, getRecentDiscoveryPosts } from '@/lib/queries/posts'
@@ -87,7 +88,7 @@ export default async function PostDetailPage({
   if (!detail || detail.post.boardType !== board.type) notFound()
 
   const { post, threads } = detail
-  const session = await auth()
+  const session = await getRequestSession()
   // 현재 글이 pool 에 섞여 있을 수 있어 넉넉히 받아 NextToRead 가 걸러낸다.
   // 공감 상태는 getPostDetail 을 넓히지 않고 따로 읽는다 — 그 select 는 목록과 함께 쓴다.
   const [nextPosts, likeState, isScrapped, likedCommentIds] = await Promise.all([
@@ -106,6 +107,8 @@ export default async function PostDetailPage({
     <PageShell>
       {/* 화면이 실제로 열린 뒤에만 조회를 알린다. 아무것도 그리지 않는다. */}
       <PostViewBeacon postId={post.id} />
+      {/* 회원가입 전환 ① — 수집 gate 가 열리고 로그인되지 않은 방문에서만 그려진다. 아무것도 그리지 않는다. */}
+      <LoggedOutViewTracker contentType="community" />
 
       <main className="mx-auto max-w-3xl px-4 pb-16">
         {/* 🔴 글 맨 위를 가리키는 표시. 하단 댓글 바가 "여기서 얼마나 내려왔는지" 를 잰다.

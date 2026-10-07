@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import MagazineBody from '@/components/features/MagazineBody'
 import RelatedMagazineList from '@/components/features/RelatedMagazineList'
+import LoggedOutViewTracker from '@/components/features/signup-funnel/LoggedOutViewTracker'
 import { getMagazineArticleBySlug } from '@/lib/magazine'
 import { resolveRelatedMagazine } from '@/lib/magazine-graph'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
@@ -119,6 +120,9 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
 
   return (
     <PageShell>
+      {/* 회원가입 전환 ① — 수집 gate 가 열리고 로그인되지 않은 방문에서만 그려진다. 아무것도 그리지 않는다. */}
+      <LoggedOutViewTracker contentType="magazine" />
+
       {/* 값은 전부 TS 데이터 파일(articles.ts)에서 온다. 사용자 입력이 들어오는 경로가 없다. */}
       {structuredData.map((data) => (
         <script

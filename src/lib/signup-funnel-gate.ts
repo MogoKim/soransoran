@@ -46,3 +46,24 @@ export function signupFunnelGate(env: SignupFunnelEnv, now: Date): SignupFunnelG
 
   return { active: true, startDay, today }
 }
+
+/**
+ * 이 상세 화면에 로그인되지 않은 방문 tracker 를 그릴 것인가.
+ *
+ * 🔴 gate 가 먼저다. 닫혀 있으면 세션을 묻지 않는다 — 수집 전에는 판정 비용이 0 이다.
+ * 🔴 세션은 같은 요청의 공유 판정을 받는다(getRequestSession). 이 함수가 auth() 를 부르지 않는다.
+ * 🔴 세션 판정이 실패하면 로그아웃으로 단정하지 않는다 — 그리지 않는다.
+ */
+export async function shouldTrackLoggedOutView(
+  env: SignupFunnelEnv,
+  now: Date,
+  getSession: () => Promise<{ user?: unknown } | null>,
+): Promise<boolean> {
+  if (!signupFunnelGate(env, now).active) return false
+  try {
+    const session = await getSession()
+    return !session?.user
+  } catch {
+    return false
+  }
+}

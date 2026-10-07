@@ -292,11 +292,14 @@ check('endpoint 에 timer·scroll 0', !/setTimeout|setInterval|addEventListener/
 const srcFiles = (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[])
   .map((f) => f.split('\\').join('/'))
   .filter((f) => /\.(ts|tsx)$/.test(f))
-const apiCallers = srcFiles.filter((f) => !/signup-funnel/.test(f) && read(join('src', f)).includes('/api/signup-funnel'))
-check('새 API 를 부르는 화면·tracker·온보딩·컴포넌트 0', apiCallers.length === 0, apiCallers.join(', '))
+// 🔴 API 경로 문자열은 전송 모듈 하나에만 있다(endpoint 는 주석). 화면·온보딩·어드민이 직접 부르지 않는다.
+const apiCallers = srcFiles.filter((f) => read(join('src', f)).includes('/api/signup-funnel')).sort()
+check('API 경로 문자열은 전송 모듈 하나(+ endpoint 주석)에만 있다', JSON.stringify(apiCallers) === JSON.stringify([
+  'lib/signup-funnel-endpoint.ts', 'lib/signup-funnel-send.ts',
+]), apiCallers.join(', '))
 const endpointImporters = srcFiles.filter((f) => /from '@\/lib\/signup-funnel-(endpoint|gate)'/.test(read(join('src', f)))).sort()
-check('gate·endpoint 를 부르는 곳은 endpoint·route 뿐', JSON.stringify(endpointImporters) === JSON.stringify([
-  'app/api/signup-funnel/route.ts', 'lib/signup-funnel-endpoint.ts',
+check('gate·endpoint 를 부르는 곳은 route · endpoint · ① 서버 tracker 뿐', JSON.stringify(endpointImporters) === JSON.stringify([
+  'app/api/signup-funnel/route.ts', 'components/features/signup-funnel/LoggedOutViewTracker.tsx', 'lib/signup-funnel-endpoint.ts',
 ]), endpointImporters.join(', '))
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패`)

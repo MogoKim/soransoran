@@ -228,15 +228,21 @@ check('저장 모듈 import 는 server-only · Prisma 타입 · 순수 계약뿐
   "import { isSignupFunnelKey, type SignupFunnelKey } from '@/lib/signup-funnel'",
 ]))
 
-// 🔴 두 모듈을 부르는 곳은 회원가입 전환 익명 기록 경로 셋뿐이다. 화면·인증·온보딩·어드민은 아직 0 이다.
+// 🔴 두 모듈을 부르는 곳은 회원가입 전환 영역 파일뿐이다 — 익명 기록 경로(gate · endpoint · route)와
+//    ① logged_out_view 경로(send · tracker · beacon). 인증·온보딩·어드민은 아직 0 이다.
 const importers = (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[])
   .map((f) => f.split('\\').join('/'))
   .filter((f) => /\.(ts|tsx)$/.test(f))
   .filter((f) => !['lib/signup-funnel.ts', 'lib/signup-funnel-store.ts'].includes(f))
   .filter((f) => /from '@\/lib\/signup-funnel(-store)?'|from '\.{1,2}\/[^']*signup-funnel/.test(read(join('src', f))))
   .sort()
-check('두 모듈을 부르는 곳은 익명 기록 경로(gate · endpoint · route) 셋뿐이다', JSON.stringify(importers) === JSON.stringify([
-  'app/api/signup-funnel/route.ts', 'lib/signup-funnel-endpoint.ts', 'lib/signup-funnel-gate.ts',
+check('두 모듈을 부르는 곳은 회원가입 전환 영역 파일 여섯뿐이다', JSON.stringify(importers) === JSON.stringify([
+  'app/api/signup-funnel/route.ts',
+  'components/features/signup-funnel/LoggedOutViewBeacon.tsx',
+  'components/features/signup-funnel/LoggedOutViewTracker.tsx',
+  'lib/signup-funnel-endpoint.ts',
+  'lib/signup-funnel-gate.ts',
+  'lib/signup-funnel-send.ts',
 ]), importers.join(', '))
 
 // ─────────── 8. 변이 증명 ───────────
