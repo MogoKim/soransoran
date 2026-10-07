@@ -1,12 +1,14 @@
 'use client'
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import SignupPromptDialog from '@/components/features/signup-funnel/SignupPromptDialog'
 import type { SignupFunnelContentType } from '@/lib/signup-funnel'
 import { createReachMachine, hasDomConflict, type ReachMachine } from '@/lib/signup-funnel-reach'
 import { sendOncePerMount } from '@/lib/signup-funnel-send'
+import { claimPromptExposure, writeAuthMarker, type PromptStorage } from '@/lib/signup-prompt-storage'
 
 /**
- * 회원가입 전환 tracker — 상세 화면 mount 하나의 ① logged_out_view 와 ② prompt_reach.
+ * 회원가입 전환 tracker — 상세 화면 mount 하나의 ① logged_out_view · ② prompt_reach · 가입 제안(③ · ④).
  * 정책: 회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §5 · §6-3 · §8-1 · §8-2 · §8-11.
  *
  * 🔴 서버가 수집 gate 가 열리고 로그인되지 않은 방문일 때만 이 컴포넌트를 그린다. 그 밖에는 client 조각 0.
@@ -15,6 +17,8 @@ import { sendOncePerMount } from '@/lib/signup-funnel-send'
  * 🔴 도달 감지는 IntersectionObserver 하나다. scroll listener · interval 을 두지 않는다.
  *    DOM 변화(MutationObserver)와 초점 변화(focusin)는 1초 대기 중에만 지켜보고 대기가 끝나면 바로 뗀다.
  * 🔴 IntersectionObserver 가 없으면 ② 를 세지 않는다. 읽기는 그대로다.
+ * 🔴 ② 는 24시간 제한과 무관하게 보낸다. 그다음 24시간 제한을 통과하고 노출 기록을 쓰고 다시 읽어
+ *    확인했을 때만 dialog 를 연다(정본 §7). 한 mount 에서 dialog 는 최대 한 번이다.
  */
 
 export type SignupFunnelMarkerKind = 'body-end' | 'content-end'
@@ -34,6 +38,15 @@ export function useSignupFunnelTracker(): TrackerApi | null {
 /** 대기 중 충돌이 생길 수 있는 DOM 변화 — 열림·닫힘을 나타내는 공개 속성만 본다 */
 const WATCHED_ATTRIBUTES = ['aria-expanded', 'aria-modal', 'role', 'open']
 
+/** localStorage 를 쓸 수 없는 브라우저(접근 자체가 막힌 경우 포함)는 null — 노출하지 않는다 */
+function browserStorage(): PromptStorage | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
 export default function SignupFunnelTracker({
   contentType,
   children,
@@ -43,6 +56,10 @@ export default function SignupFunnelTracker({
 }) {
   const viewGuard = useRef({ sent: false })
   const reachGuard = useRef({ sent: false })
+  const impressionGuard = useRef({ sent: false })
+  const authGuard = useRef({ sent: false })
+  const promptTried = useRef(false)
+  const [promptOpen, setPromptOpen] = useState(false)
   const markers = useRef<Partial<Record<SignupFunnelMarkerKind, Element>>>({})
   const observerRef = useRef<IntersectionObserver | null>(null)
   const machineRef = useRef<ReachMachine | null>(null)
@@ -62,8 +79,12 @@ export default function SignupFunnelTracker({
     const machine = createReachMachine({
       requireBodyEnd: contentType === 'community',
       domConflict: () => hasDomConflict(document),
-      onReach: () =>
-        sendOncePerMount(reachGuard.current, { step: 'prompt_reach', contentType, entryPoint: 'content_end' }),
+      onReach: () => {
+        sendOncePerMount(reachGuard.current, { step: 'prompt_reach', contentType, entryPoint: 'content_end' })
+        if (promptTried.current) return
+        promptTried.current = true
+        if (claimPromptExposure(browserStorage(), Date.now())) setPromptOpen(true)
+      },
       onPendingChange: (pending) => {
         if (pending) {
           watcher = new MutationObserver(() => machine.domChanged())
@@ -124,5 +145,21 @@ export default function SignupFunnelTracker({
 
   const api = useMemo(() => ({ register, composeConflict }), [register, composeConflict])
 
-  return <TrackerContext.Provider value={api}>{children}</TrackerContext.Provider>
+  return (
+    <TrackerContext.Provider value={api}>
+      {children}
+      {promptOpen ? (
+        <SignupPromptDialog
+          onImpression={() =>
+            sendOncePerMount(impressionGuard.current, { step: 'prompt_impression', contentType, entryPoint: 'content_end' })
+          }
+          onAuthStart={() => {
+            writeAuthMarker(browserStorage(), contentType, Date.now())
+            sendOncePerMount(authGuard.current, { step: 'auth_start', contentType, entryPoint: 'content_end' })
+          }}
+          onClosed={() => setPromptOpen(false)}
+        />
+      ) : null}
+    </TrackerContext.Provider>
+  )
 }

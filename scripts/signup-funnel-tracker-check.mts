@@ -468,8 +468,9 @@ check('tracker: MutationObserver·focusin 은 대기 중에만 붙이고 떼어 
   && (trackerCode.match(/removeEventListener\('focusin', onFocusChange, true\)/g) ?? []).length === 1
   && /if \(pending\) \{[\s\S]*?watcher\.observe[\s\S]*?\} else \{[\s\S]*?watcher\?\.disconnect\(\)/.test(tracker))
 for (const [name, p] of [['tracker', P.tracker], ['감지 지점', P.marker], ['댓글 끝', P.commentsEnd], ['도달 기계', P.reach], ['경계', P.boundary], ['전송', P.send]] as const) {
-  const s = code(read(p))
-  check(`${name}: scroll listener·interval·storage·cookie 0`, !/addEventListener\('scroll'|onscroll|setInterval|localStorage|sessionStorage|document\.cookie/.test(s))
+  // 🔴 tracker 의 localStorage 는 가입 제안 저장 모듈에 넘길 손잡이 하나(browserStorage)뿐이다 — 직접 읽고 쓰지 않는다
+  const s = code(read(p)).replace('return window.localStorage\n', '')
+  check(`${name}: scroll listener·interval·storage·cookie 0`, !/addEventListener\('scroll'|onscroll|setInterval|localStorage|sessionStorage|document\.cookie|getItem|setItem/.test(s))
   check(`${name}: 콘텐츠 경로·ID·slug·사용자 값 0`, !/postId|slug|pathname|location\.|userId|session\.user|email|nickname/.test(s))
 }
 check('도달 기계는 window·document·setTimeout 을 직접 부르지 않는다', !/\bwindow\.|\bdocument\.|setTimeout\(/.test(code(read(P.reach))))
@@ -481,8 +482,9 @@ check('댓글 끝: otherComposerOpen 을 읽기만 · 새 상태·이벤트 0',
   /const \{ otherComposerOpen \} = useComposeMode\(\)/.test(commentsEnd) && /composeConflict\?\.\(otherComposerOpen\)/.test(commentsEnd)
   && !/setOpenParentId|registerComposer|useComposeLock|useState|dispatchEvent/.test(commentsEnd))
 const allSrc = srcFiles.map((f) => read(join('src', f))).join('\n')
-check('prompt_impression·dialog 구현 0(단계 정의 외)', srcFiles.filter((f) => !f.endsWith('lib/signup-funnel.ts')).every((f) => !read(join('src', f)).includes('prompt_impression'))
-  && !/role="dialog"/.test([P.tracker, P.marker, P.commentsEnd, P.boundary].map(read).join('\n')))
+check('prompt_impression 은 단계 정의와 tracker 의 ③ 전송 자리에만 있다', JSON.stringify(srcFiles.filter((f) => read(join('src', f)).includes('prompt_impression')).sort())
+  === JSON.stringify(['components/features/signup-funnel/SignupFunnelTracker.tsx', 'lib/signup-funnel.ts']))
+check('dialog 마크업은 가입 제안 dialog 파일 하나에만 있다(tracker·감지 지점·경계 0)', !/role="dialog"/.test([P.tracker, P.marker, P.commentsEnd, P.boundary].map(read).join('\n')))
 const legacy = srcFiles.filter((f) => read(join('src', f)).includes('LoggedOutView'))
   .concat((readdirSync(join(ROOT, 'scripts')) as string[]).filter((f) => f !== 'signup-funnel-tracker-check.mts' && f.startsWith('signup-funnel') && read(join('scripts', f)).includes('LoggedOutView')))
 check('대체된 LoggedOutView 파일·import·주석 0', legacy.length === 0 && !allSrc.includes('shouldTrackLoggedOutView'), legacy.join(', '))
