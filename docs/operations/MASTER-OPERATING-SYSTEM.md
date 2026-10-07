@@ -14,7 +14,7 @@
 > | 이 문서의 절 | 대체한 canon 정책 |
 > |---|---|
 > | §4.0 `sourceCapturedAt` 을 신선도 기준으로 쓰던 계약 · §8.2 주제 성격별 TTL | §2 source-to-slot 판정 |
-> | §6.2 사람이 stage env 를 올리던 절차 · §8 앞머리 단계별 재고 목표 | §6 자동 사다리 |
+> | §6.2 사람이 stage env 를 올리던 절차·GitHub/launchd 이중 owner · §8 앞머리 단계별 재고 목표 | §6 자동 사다리·상시 launchd owner 하나 |
 > | §8.0-D100 완성 글 고정 재고선 | §3 JIT 공급 · §3.2 증명일/지속 준비도 |
 > | §9.0 Persona 댓글 비율 상한 · §9.4 답글 범위 제외 (옛 경로) | §5 대화 |
 > | 단계별 `READY +20%` · 상세 원천 고정 환산표 | canon §3.1 실측 보충 계약 |
@@ -382,6 +382,9 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 
 > **역사 스냅샷:** 이 절의 "현재"는 2026-09-08~14 당시를 뜻한다. 지금 운영값으로 인용하지
 > 않는다. 최신 상태는 `CURRENT-MILESTONE.md`와 runtime/DB/workflow read-only 실측에서 읽는다.
+> 🔴 **아래 수동 env 전환과 GitHub 예약 절차는 실행하지 않는다.** 현재 단계 authority는
+> `StageDecision` 하나이고, 자동 일정 owner는 상시 호스트의 launchd 하나다. 실행 절차는
+> `ALWAYS-ON-HOST.md`, 현재 병목은 `CURRENT-MILESTONE.md`만 사용한다.
 
 🔴 **두 축을 나눠 읽는다** — ① 코드가 무엇을 할 수 있는가 ② 지금 운영이 무엇을 하고 있는가.
 저장소의 코드와 운영 설정은 다른 것이고, 둘을 한 칸에 적으면 반드시 한쪽이 낡는다.
@@ -414,26 +417,12 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 공개량이 올라간다 — release 만 올리면 capacity 가 그것을 눌러 d1 로 되돌린다(`resolveScale`).
 현재 운영 숫자는 §6.3.
 
-#### d3 로 올리는 절차 — 🔴 **고칠 곳은 두 군데 × 값 두 개다**
+#### d3 로 올리는 절차 — 📜 폐기된 수동 절차, 실행 금지
 
-🔴 **"GitHub Variables 만 바꾸면 된다" 가 아니다.** local 트리거(launchd)를 등록했거나
-등록할 예정이면 runtime `env.local` 도 같이 올려야 한다 — 두 트리거가 같은 단계를 봐야 한다(§6.2-d).
-
-1. **PR #504 merge** — 안 하면 예약 슬롯이 하나뿐이라 변수를 바꿔도 1건/day 다
-2. 재고와 준비도 확인 — d3 는 재고 목표 **42건** (현재 재고는 §6.3)
-3. **GitHub Variables** ← Settings → Secrets and variables → Actions → Variables
-   - `SORAN_CAPACITY_STAGE=d3`
-   - `SORAN_RELEASE_STAGE=d3` — **같이 올린다.** 하나만 올리면 낮은 쪽이 이긴다
-4. 🔴 **runtime `env.local`** ← `~/Library/Application Support/soransoran/env.local`
-   - `SORAN_CAPACITY_STAGE=d3` · `SORAN_RELEASE_STAGE=d3` — **같은 값으로 맞춘다**
-   - 🟡 **현재 실측은 `capacity=d3 · release=d1` 로 GitHub 과 어긋나 있다**(§6.2-d)
-5. `npm run publish:trigger-preflight` — **exit 0 이어야 한다.** 1이면 두 트리거가
-   서로 다른 하루 상한을 보는 상태이고, 그대로 두면 local runner 를 등록하지 않는다
-   - 🔴 등록 순서: **runtime 배포·SHA 확인 → preflight → exit 0 일 때만 plist 설치**
-6. 첫 세 슬롯(`09:30` · `13:30` · `19:00` KST) 실행 결과 확인
-   - 🔴 GitHub 예약만 있으면 d3 는 실측 지연에서도 **3/3 을 채운다**(§6.2-c). d5·d10 은 다르다
-
-   🔴 실측(`resolveScale`): `{RELEASE=d3}` 만 → release **d1** · `{CAPACITY=d3, RELEASE=d3}` → release **d3**
+당시는 GitHub와 local 두 설정을 맞추려고 `SORAN_CAPACITY_STAGE=d3`와
+`SORAN_RELEASE_STAGE=d3`를 사람이 함께 바꾸었다. 이 방식은 2026-09-30 폐기됐다.
+현재는 `StageDecision`이 증거로 단계를 정하고 사람이 env·stage를 올리지 않는다. 당시의 상세 명령과
+화면 순서는 오작동을 유도하므로 삭제했다.
 
 ### 6.2-b 예약 실행은 개발 작업트리가 아니라 **runtime worktree** 가 한다
 
@@ -470,6 +459,9 @@ job 이 내려가 있는 동안에는 loaded 를 요구하는 검사를 돌리�
 읽지 못하면 NOT_READY 다. 자세한 것은 d10 운영 문서 §17~§18.
 
 ### 6.2-c GitHub Actions 예약은 정시를 약속하지 않는다
+
+> 📜 **원인 증거만 보존한다. 실행 절차가 아니다.** 현재 D100 job은 GitHub 예약과 겹치지 않고,
+> 상시 호스트의 launchd 하나만 일정 owner로 쓴다. 아래 수치는 이 결정을 만든 과거 실측이다.
 
 🔴 **추정이 아니라 실측이다.**
 
@@ -527,6 +519,9 @@ launchd 는 **이 맥이 깨어 있을 때만** 동작한다. 최종 운영 스�
 GitHub 예약은 **끄지 않는다** — 맥이 꺼져 있으면 남는 것이 그것뿐이다.
 
 ### 6.2-d 🔴 두 트리거는 **서로 다른 설정 원천**을 읽는다
+
+> 📜 **폐기된 이중 owner 구조다.** 아래 두 설정을 맞추는 절차를 실행하지 않는다. 현재 단계는
+> `StageDecision`, 일정은 상시 호스트 launchd 하나가 정한다.
 
 | 트리거 | 설정 원천 |
 |---|---|
@@ -645,9 +640,8 @@ npm run publish:trigger-preflight   # 다르면 exit 1 → local runner 등록�
 1. 재고가 모자란다 — 현재 재고는 §6.3, d10 목표는 140이다.
 2. ~~Persona 인원~~ → **2026-09-09 Wave A 로 해소.** 현재 active 인원은 §6.3.
    이제 병목은 인원이 아니라 재고다.
-3. ~~공개 workflow가 1/10 슬롯이다~~ → **PR #504 에서 해소.** 워크플로우가 네 단계 슬롯의
-   합집합 10개를 예약하고 러너가 지금 stage 의 슬롯만 고른다. 남은 것은 코드가 아니라
-   **운영 전환**이다 — `SORAN_CAPACITY_STAGE` 와 `SORAN_RELEASE_STAGE` 를 **둘 다** 올려야 한다(§6.2).
+3. ~~공개 workflow가 1/10 슬롯이다~~ → **당시 PR #504에서 해소.** 이후 수동 env 전환과
+   GitHub 예약 owner도 폐기됐다. 현재 단계는 `StageDecision`, 일정은 상시 launchd owner 하나가 정한다.
 4. 수집 능력과 yield가 증명되지 않았고 82cook 접근도 불안정하다.
 
 ### 7.x Scale Activation Wave A — Persona 24명 (2026-09-09 실행 완료) — 📜 역사
@@ -2276,6 +2270,10 @@ TCP 실패는 연결 자체가 안 된 것이다. 전자는 재시도가 상황�
 
 ### 10.2 안전한 확인과 금지
 
+🔴 **2026-10-07 현재 경계:** 첫 live canary는 D100 단일 owner로 정한 집 Mac의 안정된 네트워크에서만 한다.
+스타벅스·도서관 등 공용 Wi-Fi는 과거 비교 관측으로만 남기고 신규 live 실험에 쓰지 않는다. 정직한 기본
+요청 식별을 유지하고, 작은 page/max 상한·간격·budget·backoff·breaker를 먼저 확인한다.
+
 🔴 **이미 같은 Mac에서 두 개의 정상 망(스타벅스·집)을 확인했다.** 그것으로
 "기기·계정·전역 차단" 은 사실상 배제됐다. 따라서 **핫스팟 확인은 필수 다음 단계가 아니다** —
 같은 종류의 관측을 한 번 더 얻을 뿐이다. 하고 싶으면 해도 되지만, 이것을 못 해서
@@ -2285,7 +2283,7 @@ TCP 실패는 연결 자체가 안 된 것이다. 전자는 재시도가 상황�
 경로 추적). 그것 없이는 정확한 원인이 확정되지 않는다.
 
 🔴 금지: VPN · 프록시 · UA 위장 · IP 회전으로 우회하지 않는다.
-🔴 금지: **도서관 Wi-Fi에서는 82cook live 수집을 하지 않는다.**
+🔴 금지: **도서관·스타벅스 등 공용 Wi-Fi에서는 82cook live 수집을 하지 않는다.**
 🔴 원인 확인 전에는 82cook 10슬롯 job을 활성화하지 않는다.
 
 ### 10.3 활성화 선행 조건

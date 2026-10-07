@@ -50,6 +50,7 @@
 | 첫 댓글 · 답글 · 대화 계속/멈춤 | canon §5 |
 | 단계 PASS · 승격 · 재시험 | canon §6 |
 | 오늘 단계는 누가 정하나 · 자동 일정 owner | canon §6 (`StageDecision` 하나 · launchd 하나) — 구현·배포 상태는 `CURRENT-MILESTONE.md` |
+| D100 운영 Mac 이전·되돌리기 | `ALWAYS-ON-HOST.md` — 정책을 정하지 않는 현재 실행 runbook |
 | 정치와 연예·방송·셀럽의 경계 | canon §7.1 — 정치 선동은 제외, 공개 인물 소재는 안전 gate 뒤 정상 경쟁 |
 | 홈·베스트에서 실회원과 Persona 반응을 어떻게 보나 | canon §7.2 — 실회원 우선, 합성 활동 별도 관측 |
 | 현재 마일스톤과 완료 증거 | canon §8 |
@@ -66,6 +67,15 @@
 - 코드·DB·workflow 가 문서와 다르면 직접 확인한다. 추측으로 문서를 맞추지 않는다.
 - 전략이 바뀌면 권위 문서와 문서 검사(`npm run master:doc-check`)를 같은 변경에서 갱신한다.
 
+## 현재 실행 runbook — 정책 투표권 없음
+
+| 문서 | 역할 |
+|---|---|
+| `ALWAYS-ON-HOST.md` | 상시 실행 호스트의 사전 점검·rehearsal·quiesce·cutover·rollback. 단계·콘텐츠·Persona 정책은 정하지 않고 위 권위 문서를 실행한다 |
+
+runbook의 명령은 현재 정본 정책과 현재 상태를 먼저 확인한 뒤 실행한다. 역사 문서에 남은 수동 stage env,
+GitHub 예약, 완성 글 재고 절차를 runbook처럼 사용하지 않는다.
+
 ## 상세·역사 문서 — 정책 투표권 없음
 
 아래 문서는 설계 근거·사고·과거 실측을 보존한다. 내용이 유용해도 현재 정책 문장으로 복사하지 않고,
@@ -75,7 +85,6 @@
 | 문서 | 역할 |
 |---|---|
 | `../constitution/MICRO_SEED_LANE_CONSTITUTION.md` | Micro Seed 안전 헌법 |
-| `ALWAYS-ON-HOST.md` | 상시 실행 호스트 — 노트북 의존성 목록(측정/추정) · D100 레인 job 을 상시 켜 둘 Mac(기종 무관 · AC 필수)으로 옮기는 묶음(`npm run host:migrate`) · 매거진 제외 · D100 두 호스트 동시 실행 방지 · 전환/되돌리기 |
 | `M-GRAPH-PROJECT-CHARTER.md` | 매거진 검색 영토·주제망·시리즈·내부 연결·장기 발행 계획의 전략 정본 (매거진 영역 한정) |
 | `magazine-automation-runbook.md` | 매거진 M-AUTO 설치·가동·병합·공개 감시 |
 | `2026-09-03-controlled-activity-automation-strategy.md` | 자동화 속도·안전 전략의 역사 |

@@ -133,7 +133,14 @@ export function hostPathsOf(home: string): HostPaths {
 // ─────────────────────────────────────────────────────────
 
 export type EntryKind = 'state' | 'secret' | 'exclude' | 'unclassified'
-export type EntryRule = { kind: EntryKind; reason: string }
+/**
+ * 🔴 `contents` — 이름만으로는 안에 무엇이 쌓일지 보장할 수 없는 항목에 붙인다. 안의 모든 것이
+ *    `allow` 에 맞는 **바로 아래 일반 파일**이어야 이 규칙을 쓴다. 하나라도 어긋나면 `unclassified` 로
+ *    떨어져 export 가 멈춘다 — exclude 항목에 영구 데이터가 생겨도 조용히 빠지지 않고, state 항목에
+ *    모르는 것이 생겨도 조용히 퍼지지 않는다.
+ */
+export type EntryContents = { allow: RegExp; what: string }
+export type EntryRule = { kind: EntryKind; reason: string; contents?: EntryContents }
 
 /**
  * 🔴 **이름으로 분류한다. 모르는 항목은 `unclassified` — export 가 거부한다.**
@@ -150,6 +157,26 @@ const EXACT_RULES: Readonly<Record<string, EntryRule>> = {
   'persona-comment-model.json': { kind: 'state', reason: '댓글 모델 확정 기록' },
   'persona-comment-eval': { kind: 'state', reason: '댓글 평가 기록' },
   'persona-reference': { kind: 'state', reason: '화자 reference 고정 배정' },
+  /**
+   * 🔴 Persona creative 결과(`persona-autogen --generate-creative --creative-out=<파일>`) — 유료 호출로 만들고
+   *    사람이 검토한 결과다. 옮기지 않으면 대상에서 같은 돈을 다시 쓰거나 검토하지 않은 creative 로 적재하게 된다.
+   *    2026-10-07 실측: `persona30-creative-20261006.json` 하나(0600). creative JSON 밖의 것이 생기면 다시 본다.
+   */
+  'persona-autogen': {
+    kind: 'state',
+    reason: 'Persona creative 결과(--creative-out) — 검토한 유료 생성물 · 대상에서 --supplement 적재 입력',
+    contents: { allow: /^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/, what: 'creative JSON 파일' },
+  },
+  /**
+   * 🔴 **매거진** 큐 writer 잠금 디렉터리(`scripts/lib/magazine-queue-lock.mjs` 의 `QUEUE_LOCK_DIR`) — D100 레인은 쓰지 않는다.
+   *    쥔 잠금을 옮기면 대상에서 영영 풀리지 않고, 매거진은 원 호스트에 남는다. 그 코드가 만드는 것은
+   *    `<scope>.queue.lock` 과 회수용 `.reclaim` 뿐이다 — 그 밖의 것이 있으면 조용히 빼지 않고 export 를 멈춘다.
+   */
+  'queue-locks': {
+    kind: 'exclude',
+    reason: '매거진 큐 writer 잠금 — 매거진 레인 · 쥔 잠금은 옮기지 않는다(원 호스트에 남는다)',
+    contents: { allow: /^[a-z0-9-]+\.queue\.lock(?:\.reclaim)?$/, what: '매거진 큐 잠금 파일' },
+  },
   'publish-heartbeat': { kind: 'state', reason: '발행 heartbeat 틱 기록' },
   /**
    * 🔴 **싣지 않는다.** 원 호스트 launchd 회차의 기록이다. 옮기면 대상에서 한 번도 안 돈 러너가
@@ -194,6 +221,27 @@ export function classifyCanonEntry(name: string): EntryRule {
   if (exact !== undefined) return exact
   for (const p of PREFIX_RULES) if (name.startsWith(p.prefix)) return p.rule
   return { kind: 'unclassified', reason: '분류 규칙 없음 — scripts/lib/host-migrate.mts 에 이름을 적고 다시 돌린다' }
+}
+
+/** 항목 안의 모양 — 🔴 이름과 종류만. 내용은 읽지 않는다. 링크는 따라가지 않는다(lstat) */
+export type ChildEntry = { rel: string; type: 'file' | 'dir' | 'symlink' | 'other' }
+export type EntryTree = { rootType: ChildEntry['type']; children: readonly ChildEntry[] }
+
+/**
+ * 🔴 **이름 판정 + 내용 규칙.** `contents` 가 붙은 항목은 디렉터리여야 하고, 안의 모든 것이 허용 모양의
+ *    바로 아래 일반 파일이어야 한다. 어긋나면 `unclassified` — export 가 멈춘다.
+ */
+export function classifyCanonEntryIn(name: string, tree: EntryTree): EntryRule {
+  const rule = classifyCanonEntry(name)
+  if (rule.contents === undefined) return rule
+  const allow = rule.contents.allow
+  const bad = tree.rootType !== 'dir' ? [`(${name} 자체가 ${tree.rootType})`]
+    : tree.children.filter((c) => c.type !== 'file' || c.rel.includes('/') || !allow.test(c.rel)).map((c) => `${c.rel}(${c.type})`)
+  if (bad.length === 0) return rule
+  return {
+    kind: 'unclassified',
+    reason: `${rule.contents.what}만 있어야 하는데 예상 밖 항목 ${bad.length}개: ${bad.slice(0, 5).join(' ')}${bad.length > 5 ? ' …' : ''} — 무엇인지 보고 분류를 고친다`,
+  }
 }
 
 /**

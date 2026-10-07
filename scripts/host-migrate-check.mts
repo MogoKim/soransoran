@@ -25,12 +25,13 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { PUBLISH_RUN_DIR, PUBLISH_RUN_DIR_NAME } from './lib/publish-run-record.mjs'
+import { QUEUE_LOCK_DIR, queueLockFile } from './lib/magazine-queue-lock.mjs'
 
 import {
   BUNDLE_MANIFEST, classifyCanonEntry, foreignHomePaths, homePathKeys, isTransientFile, judgeBundleOut,
   judgeCutoverExport, judgeManifest, judgeTargetInstall, judgeUnquiesce, nodeBinsIn, parseLaunchctlList,
   busyLabels, redact, renderAndJudge, rewriteEnvHome, runInstall, scanForSecrets, secretValuesOf,
-  templatizePlist, type BundleManifest, type InstallEffects,
+  templatizePlist, type BundleManifest, type ChildEntry, type EntryTree, type InstallEffects, classifyCanonEntryIn,
   D100_LANE_LABELS, HANDOFF_FILE, LANE, OWNER_FILE, isLaneLabel, isLaneLog, judgeAutorestart, judgePower,
   lanePlistFiles, parsePmsetBatt, planQuiesce, runQuiesce, runUnquiesce, targetRollbackLabels,
 } from './lib/host-migrate.mjs'
@@ -74,6 +75,53 @@ check('🔴 발행 회차 기록(publish-runs)은 분류돼 있고 싣지 않는
   classifyCanonEntry(PUBLISH_RUN_DIR_NAME).kind === 'exclude' && PUBLISH_RUN_DIR_NAME === basename(PUBLISH_RUN_DIR))
 check('heartbeat 지난 틱 표식은 싣는다', !isTransientFile('tick-2026-09-28T08-00.lock', 'publish-heartbeat'))
 check('🔴 heartbeat 디렉터리라도 틱 이름이 아니면 뺀다', isTransientFile('other.lock', 'publish-heartbeat'))
+check('🔴 D100 allowlist 는 정확히 9개 — plist 템플릿 대상은 이것뿐', D100_LANE_LABELS.length === 9
+  && JSON.stringify([...D100_LANE_LABELS].sort()) === JSON.stringify([
+    'com.soransoran.auto-ready-audit', 'com.soransoran.keep-awake', 'com.soransoran.navercafe-collect-remonterrace-multi',
+    'com.soransoran.navercafe-collect-wgang-multi', 'com.soransoran.original-post-runner', 'com.soransoran.persona-comment-runner',
+    'com.soransoran.runner-recover', 'com.soransoran.stage-controller', 'com.soransoran.supply-process',
+  ]) && !D100_LANE_LABELS.some((l) => l.includes('magazine') || l.includes('82cook')))
+
+// 🔴 2026-10-07 plan 의 미분류 2건 — 이름은 정확히 하나씩만 등록한다
+const tree = (rootType: ChildEntry['type'], ...children: ChildEntry[]): EntryTree => ({ rootType, children })
+const file = (rel: string): ChildEntry => ({ rel, type: 'file' })
+const CREATIVE = file('persona30-creative-20261006.json')
+check('persona-autogen 은 state (Persona creative 결과 — 다시 만들면 같은 유료 호출)', classifyCanonEntry('persona-autogen').kind === 'state')
+check('🔴 queue-locks 는 exclude (매거진 큐 writer 잠금)', classifyCanonEntry('queue-locks').kind === 'exclude')
+check('🔴 queue-locks 이름은 매거진 잠금 코드의 실제 디렉터리와 같다', basename(QUEUE_LOCK_DIR) === 'queue-locks')
+const SIMILAR = ['persona-autogen-old', 'persona-autogen.bak', 'persona-autogen2', 'Persona-autogen', 'persona-autogen ',
+  'queue-locks.bak', 'queue-locks-old', 'queue-lock', 'queuelocks', 'queue-locks2']
+check('🔴 이름이 비슷하지만 등록되지 않은 경로는 unclassified', SIMILAR.every((n) => classifyCanonEntry(n).kind === 'unclassified'),
+  SIMILAR.filter((n) => classifyCanonEntry(n).kind !== 'unclassified').join(' '))
+check('persona-autogen — creative JSON 하나 → state 그대로',
+  classifyCanonEntryIn('persona-autogen', tree('dir', CREATIVE)).kind === 'state')
+check('persona-autogen — 비어 있어도 state', classifyCanonEntryIn('persona-autogen', tree('dir')).kind === 'state')
+for (const [why, t] of [
+  ['하위 디렉터리', tree('dir', CREATIVE, { rel: 'sub', type: 'dir' }, file('sub/x.json'))],
+  ['JSON 이 아닌 파일', tree('dir', CREATIVE, file('notes.txt'))],
+  ['심볼릭 링크', tree('dir', { rel: 'link.json', type: 'symlink' })],
+  ['디렉터리가 아니라 파일', tree('file')],
+  ['디렉터리가 아니라 링크', tree('symlink')],
+] as const) {
+  const v = classifyCanonEntryIn('persona-autogen', t)
+  check(`🔴 persona-autogen 안에 예상 밖 항목(${why}) → unclassified`, v.kind === 'unclassified' && v.reason.includes('예상 밖'), v.kind)
+}
+const HELD = basename(queueLockFile('ignored', {}))
+const TEST_HELD = basename(queueLockFile('ignored', { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-abc' }))
+check('🔴 queue-locks — 실행 중 잠금(운영 scope)·reclaim·시험 scope 잠금 → exclude 그대로',
+  classifyCanonEntryIn('queue-locks', tree('dir', file(HELD), file(`${HELD}.reclaim`), file(TEST_HELD))).kind === 'exclude', HELD)
+check('queue-locks — 비어 있으면 exclude', classifyCanonEntryIn('queue-locks', tree('dir')).kind === 'exclude')
+for (const [why, t] of [
+  ['잠금이 아닌 영구 데이터', tree('dir', file(HELD), file('topic-queue-backup.json'))],
+  ['큐 잠금 모양이 아닌 잠금', tree('dir', file('other.lock'))],
+  ['하위 디렉터리', tree('dir', { rel: 'archive', type: 'dir' }, file(`archive/${HELD}`))],
+  ['디렉터리가 아니라 파일', tree('file')],
+] as const) {
+  const v = classifyCanonEntryIn('queue-locks', t)
+  check(`🔴 queue-locks 안에 예상 밖 항목(${why}) → unclassified (조용히 빼지 않는다)`, v.kind === 'unclassified' && v.reason.includes('예상 밖'), v.kind)
+}
+check('내용 규칙이 없는 항목은 내용으로 판정을 바꾸지 않는다', classifyCanonEntryIn('llm-ledger', tree('dir', file('anything.bin'))).kind === 'state')
+check('🔴 모르는 항목은 내용과 무관하게 unclassified', classifyCanonEntryIn('brand-new-thing', tree('dir')).kind === 'unclassified')
 
 // ─────────────────────────────────────────────────────────
 console.log('\n② env')
@@ -423,6 +471,10 @@ w(join(canon, 'publish-heartbeat/tick-2026-09-28T08-00.lock'), '')
 w(join(canon, 'auto-ready-audit/audit.lock'), 'held')
 w(join(canon, 'runtime-pinned-sha'), 'a'.repeat(40))
 w(join(canon, 'env.local.bak-1'), `GEMINI_API_KEY=${GKEY}`, 0o600)
+// 🔴 2026-10-07 실측 모양 — creative 결과 하나(0600) · 쥐고 있는 매거진 큐 잠금(주인 pid 가 적힌 파일)
+const CREATIVE_TEXT = `${JSON.stringify({ P26: { title: '가짜 creative', personality: ['a'], noGoTopics: [], noGoExpressions: [], variations: [] } })}\n`
+w(join(canon, 'persona-autogen/persona30-creative-20261006.json'), CREATIVE_TEXT, 0o600)
+w(join(canon, 'queue-locks', HELD), JSON.stringify({ token: 't', pid: process.pid, host: 'alice-mac', at: new Date().toISOString() }), 0o600)
 w(join(H, '.config/soransoran/slack.env'), `SLACK_WEBHOOK_URL=${HOOK}`, 0o600)
 w(join(H, 'Library/Logs/soransoran/supply-process.log'), '회차 끝\n')
 w(join(H, 'Library/LaunchAgents/com.soransoran.supply-process.plist'), srcPlist
@@ -467,6 +519,17 @@ check('🔴 쥔 감사 잠금은 싣지 않았다', !existsSync(join(out, 'state
 check('heartbeat 틱 표식은 실었다', existsSync(join(out, 'state/publish-heartbeat/tick-2026-09-28T08-00.lock')))
 check('🔴 옛 env 사본은 싣지 않았다', !existsSync(join(out, 'state/env.local.bak-1')))
 check('slack.env 를 비밀로 실었다', existsSync(join(out, 'home/.config/soransoran/slack.env')))
+const creativeIn = join(out, 'state/persona-autogen/persona30-creative-20261006.json')
+check('persona-autogen creative 결과를 state 로 실었다 · 바이트 그대로 · 0600 유지', existsSync(creativeIn)
+  && readFileSync(creativeIn, 'utf-8') === CREATIVE_TEXT && (statSync(creativeIn).mode & 0o777) === 0o600)
+const man1 = manText === '' ? null : JSON.parse(manText) as BundleManifest
+check('manifest — persona-autogen 은 state 항목', man1 !== null
+  && man1.entries.some((e) => e.path === 'state/persona-autogen/persona30-creative-20261006.json' && e.kind === 'state'))
+check('🔴 실행 중 매거진 큐 잠금은 묶음 0 · manifest 제외 목록에 사유와 함께 적힌다', man1 !== null
+  && !existsSync(join(out, 'state/queue-locks')) && !man1.entries.some((e) => e.path.includes('queue-locks'))
+  && man1.excluded.some((x) => x.name === 'queue-locks' && x.reason.includes('매거진')))
+check('🔴 원 호스트의 잠금·creative 파일은 그대로(export 는 읽기만 한다)', existsSync(join(canon, 'queue-locks', HELD))
+  && readFileSync(join(canon, 'persona-autogen/persona30-creative-20261006.json'), 'utf-8') === CREATIVE_TEXT)
 const tplFile = join(out, 'launchd/com.soransoran.supply-process.plist.template')
 check('🔴 plist 템플릿에 원 홈 경로 0', existsSync(tplFile) && !readFileSync(tplFile, 'utf-8').includes(H))
 
@@ -525,6 +588,22 @@ check('🔴 반례 — 손상된 D100 plist 는 verify 가 PLIST 로 잡는다',
 rmSync(join(AG, 'com.soransoran.stage-controller.plist'))
 const ins3 = keep(cli('install', `--bundle=${out3}`, `--target-home=${tHome}`, '--skip-network'))
 check('🔴 설치 순서에 매거진 runtime 을 만들지 않는다', ins3.code === 0 && !ins3.out.includes('soransoran-magazine-runtime ') && ins3.out.includes('매거진 runtime 은 만들지 않는다'))
+
+// 🔴 미분류·예상 밖 내용은 export 를 멈춘다 — 디렉터리도 만들지 않는다
+for (const [why, add, remove] of [
+  ['queue-locks 안 잠금이 아닌 영구 데이터', join(canon, 'queue-locks/topic-queue-backup.json'), join(canon, 'queue-locks/topic-queue-backup.json')],
+  ['persona-autogen 안 하위 디렉터리', join(canon, 'persona-autogen/run-2/x.json'), join(canon, 'persona-autogen/run-2')],
+  ['이름이 비슷한 미등록 경로', join(canon, 'persona-autogen-old/x.json'), join(canon, 'persona-autogen-old')],
+  ['새로운 미지 경로', join(canon, 'brand-new-dir/x.json'), join(canon, 'brand-new-dir')],
+] as const) {
+  w(add, '{}')
+  const dst = join(sandbox, `refused-${all.length}`)
+  const r = keep(cli('export', `--out=${dst}`))
+  check(`🔴 ${why} → export 거부 · 묶음 디렉터리 0`, r.code !== 0 && r.out.includes('미분류') && !existsSync(dst), r.out.slice(-300))
+  const p = keep(cli('plan'))
+  check(`🔴 ${why} → plan 이 미분류로 보여 준다`, p.code === 0 && p.out.includes('미분류 1건'), p.out.slice(-200))
+  rmSync(remove, { recursive: true, force: true })
+}
 
 // 🔴 변조 — 같은 길이로 바꾼다(크기만 보는 검사는 여기서 뚫린다)
 const ledgerFile = join(out, 'state/llm-ledger/2026-09-28.jsonl')

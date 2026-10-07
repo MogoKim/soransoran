@@ -538,6 +538,139 @@ export function classifyPage({ httpStatus, title, signals = {} }) {
 }
 
 /**
+ * ChatGPT 탭 하나를 CDP HTTP 엔드포인트로 연다 — **열기만** 한다. 입력·전송은 없다.
+ * 🔴 Playwright 로 열지 않는다 (프로필 주인이 바뀌어 세션 쿠키가 지워진다 · ensurePageTarget 주석).
+ * @returns {Promise<{ok:boolean, target?:object, why?:string}>}
+ */
+export async function openChatgptTarget({ timeoutMs = 10000 } = {}) {
+  try {
+    const res = await fetch(`${CDP_URL}/json/new?${CHATGPT_URL}`, { method: 'PUT', signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return { ok: false, why: `/json/new 가 ${res.status} 를 돌려줬다` }
+    return { ok: true, target: await res.json() }
+  } catch (e) {
+    return { ok: false, why: `/json/new 실패: ${e?.message ?? e}` }
+  }
+}
+
+/**
+ * 🔴 **id 하나만 닫는다** (`/json/close/{id}`). 목록을 훑어 "비슷한 탭" 을 고르지 않는다 —
+ *    무엇을 닫을지는 부르는 쪽이 자기가 연 target id 로만 정한다.
+ */
+export async function closeChatgptTarget(targetId, { timeoutMs = 5000 } = {}) {
+  try {
+    const res = await fetch(`${CDP_URL}/json/close/${encodeURIComponent(targetId)}`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return { ok: false, why: `/json/close 가 ${res.status} 를 돌려줬다` }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, why: `/json/close 실패: ${e?.message ?? e}` }
+  }
+}
+
+/** 닫은 뒤 정말 사라졌는지 보는 목록 — 읽기 실패와 0건을 구분한다 */
+export async function listCdpTargets({ timeoutMs = 4000 } = {}) {
+  try {
+    const r = await fetch(`${CDP_URL}/json/list`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!r.ok) return { readOk: false, targets: null }
+    return { readOk: true, targets: await r.json() }
+  } catch { return { readOk: false, targets: null } }
+}
+
+/** CDP target id 모양 — 비었거나 이상한 값이면 닫기를 시도하지 않는다 (추측 금지) */
+const TARGET_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
+
+/**
+ * 🔴 **page 0건 복구가 연 target 하나를 정리하는 단 하나의 자리** — 공통 bootstrap 과
+ *    ensureChrome(hero) post 실패 경로가 같은 계약으로 쓴다 (Codex 재검토 P1).
+ *    - 닫는 것은 `targetId` 하나뿐이다. 목록을 훑어 다른 target 을 고르지 않는다
+ *    - id 가 없거나 모양이 이상하면 아무것도 닫지 않는다 (추측 금지)
+ *    - `closeRequestOk` 는 `/json/close` 요청 결과일 뿐이다.
+ *      **`closed: true` 는 목록에서 그 id 가 사라진 것을 읽어서 확인했을 때만**이다
+ *    - residue: none(사라짐 확인) · present(남아 있음/닫기 요청 실패) · unknown(못 읽음/id 불명)
+ *
+ * @returns {Promise<{targetId:string|null, closeAttempted:boolean, closeRequestOk:boolean|null, closed:boolean, residue:'none'|'present'|'unknown', why?:string}>}
+ */
+export async function cleanupZeroPageTarget(targetId, {
+  closeTargetFn = closeChatgptTarget, listTargetsFn = listCdpTargets, settleTries = 10, settleMs = 300,
+} = {}) {
+  if (typeof targetId !== 'string' || !TARGET_ID_RE.test(targetId)) {
+    return { targetId: targetId ?? null, closeAttempted: false, closeRequestOk: null, closed: false, residue: 'unknown', why: 'target id 가 없거나 불명확하다 — 다른 target 을 추측해 닫지 않는다' }
+  }
+  const c = await closeTargetFn(targetId)
+  if (!c?.ok) return { targetId, closeAttempted: true, closeRequestOk: false, closed: false, residue: 'present', why: `닫기 요청 실패 (${c?.why ?? '사유 없음'})` }
+  for (let i = 0; i <= settleTries; i++) {
+    const listed = await listTargetsFn()
+    if (!listed?.readOk || !Array.isArray(listed.targets)) {
+      return { targetId, closeAttempted: true, closeRequestOk: true, closed: false, residue: 'unknown', why: '닫은 뒤 목록을 읽지 못해 사라졌는지 모른다' }
+    }
+    if (!listed.targets.some((t) => t?.id === targetId)) return { targetId, closeAttempted: true, closeRequestOk: true, closed: true, residue: 'none' }
+    if (i < settleTries) await new Promise((r) => setTimeout(r, settleMs))
+  }
+  return { targetId, closeAttempted: true, closeRequestOk: true, closed: false, residue: 'present', why: '닫기 요청 뒤에도 목록에 남아 있다' }
+}
+
+/** 실패 사유 뒤에 붙는 정리 결과 — 잔존·실패를 숨기지 않는다 */
+export const describeZeroPageCleanup = (cl) => (cl.closed && cl.residue === 'none'
+  ? `연 탭(${cl.targetId})은 닫혔다`
+  : `연 탭 정리 실패 — residue ${cl.residue} · ${cl.why ?? '사유 없음'}`)
+
+const isChatgptTarget = (t) => {
+  try { return t?.type === 'page' && new URL(String(t?.url ?? '')).hostname.replace(/^www\./, '') === 'chatgpt.com' }
+  catch { return false }
+}
+
+/**
+ * 🔴 **page 0건 복구** (2026-10-07 자연 회차 · Codex 판정).
+ *    전용 프로필·표식·권한·포트 주인이 모두 맞고 페이지 목록도 정상적으로 읽었는데 **page 만 0건**이면,
+ *    신원 관문이 그 자리에서 MISMATCH 로 끝나 `ensurePageTarget` 에 영영 닿지 못했다.
+ *    그날 producer·auto-register 가 같은 이유로 둘 다 멈췄다 (전송 0 · draft 0).
+ *
+ *    이제 판정이 `zeroPage` 를 달고 왔을 때만 — 그 외 어떤 불일치도 아닐 때만 —
+ *      ① ChatGPT 탭 하나를 연다 (`/json/new`) → 실패면 안전 중단
+ *      ② 돌아온 target 이 chatgpt.com page 가 아니면 안전 중단
+ *      ③ **전체 신원을 처음부터 다시 본다.** 목록 반영이 늦으면 page 0 만 잠깐 더 기다린다
+ *    읽기 실패·남의 페이지·잘못된 프로필·표식·권한·포트 주인이면 탭을 열지 않는다.
+ *
+ *    🔴 **실패하면 이번 호출이 연 target 하나만 닫는다** (Codex 재검토 P1).
+ *       ②·③ 에서 멈추면 우리가 연 탭이 남아, 다음 회차가 그 탭 덕에 page 0 관문을 통과해 버린다.
+ *       닫는 대상은 `/json/new` 가 돌려준 id 하나뿐이다 — 기존 page·나중에 나타난 page 는 닫지 않고,
+ *       id 가 없으면 아무것도 닫지 않는다. 닫기 실패·잔존은 `bootstrap` 에 남기고 실패로 돌려준다.
+ *       성공하면 연 탭을 그대로 둔다 (그 탭이 붙을 창이다).
+ *
+ * @returns {Promise<object>} verifyProfileFn 과 같은 모양 + `bootstrap` 기록
+ */
+export async function verifyWithZeroPageBootstrap(verifyProfileFn, args, {
+  openTargetFn = openChatgptTarget, closeTargetFn = closeChatgptTarget, listTargetsFn = listCdpTargets,
+  settleTries = 10, settleMs = 300,
+} = {}) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const first = await verifyProfileFn(args)
+  if (first.ok || first.zeroPage !== true) return first
+  const opened = await openTargetFn()
+  if (!opened.ok) {
+    // 열렸는지조차 모른다 — 닫을 id 가 없으니 추측해서 닫지 않는다
+    return { ...first, zeroPage: false, why: `page 0건 복구 실패 — ChatGPT 탭을 열지 못했다 (${opened.why ?? '사유 없음'})`, bootstrap: { attempted: true, opened: false, cleanup: null } }
+  }
+  const targetId = opened.target?.id ?? null
+  /** 🔴 실패하면 이번 호출이 연 target 하나만 공통 helper 로 정리한다 — 정리 결과와 무관하게 실패다 */
+  const failWith = async (base, why, extra = {}) => {
+    const cleanup = await cleanupZeroPageTarget(targetId, { closeTargetFn, listTargetsFn, settleTries, settleMs })
+    return { ...base, ok: false, zeroPage: false, why: `${why} — ${describeZeroPageCleanup(cleanup)}`,
+      bootstrap: { attempted: true, opened: true, targetId, ...extra, cleanup } }
+  }
+  if (!isChatgptTarget(opened.target)) {
+    return failWith(first, `page 0건 복구 실패 — 열린 target 이 ChatGPT page 가 아니다 (${String(opened.target?.url ?? '').slice(0, 60)})`,
+      { targetUrl: opened.target?.url ?? null })
+  }
+  let again = await verifyProfileFn(args)
+  for (let i = 0; i < settleTries && !again.ok && again.zeroPage === true; i++) {
+    await sleep(settleMs)
+    again = await verifyProfileFn(args)
+  }
+  if (!again.ok) return failWith(again, `page 0건 복구 뒤 신원 재검사 실패 — ${again.why}`)
+  return { ...again, bootstrap: { attempted: true, opened: true, targetId, cleanup: null } }
+}
+
+/**
  * 브라우저를 띄워 ChatGPT 접근 상태만 본다. 메시지를 보내지 않는다.
  *
  * @param {{ headless?: boolean, timeoutMs?: number }} opts
@@ -589,14 +722,24 @@ export async function ensureChrome({
   verifyProfileFn = verifyAutomationProfile,
   /** 'operate' 는 무인 실행 · 'login' 은 사람이 처음 로그인하는 중 */
   mode = 'operate',
+  /** 🔴 page 0건 복구가 탭을 여는 자리 — 시험은 가짜를 넣는다. 운영은 실제 `/json/new` */
+  openTargetFn = openChatgptTarget,
+  /** 🔴 복구가 실패했을 때 자기가 연 탭을 닫는 자리 · 닫혔는지 보는 목록 — 시험은 가짜를 넣는다 */
+  closeTargetFn = closeChatgptTarget,
+  listTargetsFn = listCdpTargets,
+  /** page 0건 복구의 목록 반영·잔존 확인 대기 */
+  settleTries = 10,
+  settleMs = 300,
 } = {}) {
   const port = CDP_PORT
+  /** 🔴 모든 신원 검사가 같은 page 0건 복구 계약을 지난다 — hero 경로도 여기를 지난다 */
+  const verify = (a) => verifyWithZeroPageBootstrap(verifyProfileFn, a, { openTargetFn, closeTargetFn, listTargetsFn, settleTries, settleMs })
   /**
    * ① 🔴 **띄우기 전에 본다.** 폴더·표식·권한·포트 주인이 맞아야 spawn 한다.
    *    표식이 없으면 **여기서 만들지 않는다** — 표식 생성은 `--login` 만 한다.
    *    자동 실행이 표식을 만들어 주면 "확인했다" 가 아니라 "덮어썼다" 가 된다.
    */
-  const pre = await verifyProfileFn({ profileDir, port, mode, requireRunning: false })
+  const pre = await verify({ profileDir, port, mode, requireRunning: false })
   if (!pre.ok) {
     return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: pre.why, identity: pre }
   }
@@ -607,11 +750,23 @@ export async function ensureChrome({
      * ② 🔴 **떠 있어도 그냥 통과시키지 않는다.** 살아 있는 포트가 우리 창이라는 보장은 없다.
      *    떠 있는 상태 그대로 **전체 신원**을 다시 본다 (열린 페이지 포함).
      */
-    const post = await verifyProfileFn({ profileDir, port, mode, requireRunning: true })
+    const post = await verify({ profileDir, port, mode, requireRunning: true })
     if (!post.ok) {
-      return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post }
+      /**
+       * 🔴 앞 검사(pre)에서 **이 호출이 연** 탭이 있으면 그 id 하나만 닫는다.
+       *    pre 가 탭을 열지 않았으면(기존 page 였으면) 아무것도 닫지 않는다.
+       */
+      if (!(pre.bootstrap?.opened === true && pre.bootstrap.cleanup === null)) {
+        return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post }
+      }
+      // 공통 bootstrap 과 같은 helper · 같은 잔존 확인 — 정리 결과와 무관하게 실패다
+      const cleanup = await cleanupZeroPageTarget(pre.bootstrap.targetId, { closeTargetFn, listTargetsFn, settleTries, settleMs })
+      return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: `${post.why} — ${describeZeroPageCleanup(cleanup)}`,
+        identity: post, zeroPageBootstrap: { ...pre.bootstrap, cleanup } }
     }
-    return { ok: true, started: false, identity: post }
+    // 🔴 page 0건 복구는 앞 검사(pre)에서 일어났을 수 있다 — 기록을 잃지 않는다
+    const zeroPageBootstrap = pre.bootstrap ?? post.bootstrap
+    return { ok: true, started: false, identity: post, ...(zeroPageBootstrap ? { zeroPageBootstrap } : {}) }
   }
   if (!browserCheck()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
 
@@ -641,11 +796,11 @@ export async function ensureChrome({
      * ③ 🔴 **띄운 뒤에도 다시 본다.** 우리가 spawn 했다고 해서 붙는 창이 우리 창이라는
      *    보장은 없다 — 같은 포트를 다른 프로세스가 먼저 잡았을 수 있다.
      */
-    const post = await verifyProfileFn({ profileDir, port, mode, requireRunning: true })
+    const post = await verify({ profileDir, port, mode, requireRunning: true })
     if (!post.ok) {
       return { ok: false, started: true, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post, startedOverStaleLock, lock }
     }
-    return { ok: true, started: true, startedOverStaleLock, lock, identity: post }
+    return { ok: true, started: true, startedOverStaleLock, lock, identity: post, ...(post.bootstrap ? { zeroPageBootstrap: post.bootstrap } : {}) }
   }
   return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING, startedOverStaleLock, lock }
 }
@@ -697,6 +852,12 @@ export async function probe({
   connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
   /** 🔴 시험이 신원 판정을 갈아끼우는 자리. 운영은 실제 검증이다 */
   verifyProfileFn = verifyAutomationProfile,
+  /** 🔴 page 0건 복구가 탭을 여는 자리 — 시험은 가짜를 넣는다 */
+  openTargetFn = openChatgptTarget,
+  closeTargetFn = closeChatgptTarget,
+  listTargetsFn = listCdpTargets,
+  /** 🔴 브라우저 존재 판정 — 시험이 신원 관문 다음 단계에서 멈추게 하는 자리 (실제 Chrome 에 닿지 않게) */
+  browserCheck = browserAvailable,
 } = {}) {
   // launched 가 아니라 connected 다 — 이 코드는 브라우저를 띄우지 않는다
   const out = { connected: false, httpStatus: null, profileExists: profileExists(), via: 'cdp' }
@@ -706,12 +867,13 @@ export async function probe({
    *    한 글자도 보내지도 않는다. 2026-09-28 에 자동화가 **다른 계정 프로필**로
    *    돌고 있던 것을 아무도 몰랐다 — 로그만 보면 정상이었기 때문이다.
    */
-  const identity = await verifyProfileFn({ requireRunning: false })
+  const identity = await verifyWithZeroPageBootstrap(verifyProfileFn, { requireRunning: false }, { openTargetFn, closeTargetFn, listTargetsFn })
   if (!identity.ok) {
     return { ...out, status: STATUS.AUTOMATION_PROFILE_MISMATCH, errorDetail: identity.why, identity }
   }
+  if (identity.bootstrap) out.zeroPageBootstrap = identity.bootstrap
 
-  if (!browserAvailable()) {
+  if (!browserCheck()) {
     return { ...out, status: STATUS.BROWSER_MISSING }
   }
   // 🔴 Playwright 로 띄우지 않는다. 띄우면 프로필의 주인이 되고 세션 쿠키가 지워진다.
@@ -720,7 +882,7 @@ export async function probe({
     if (!autoStart) {
       return { ...out, status: STATUS.CHROME_NOT_RUNNING, profileInUse: profileInUse() }
     }
-    const r = await ensureChrome()
+    const r = await ensureChrome({ verifyProfileFn, openTargetFn, closeTargetFn, listTargetsFn })
     out.chromeStarted = r.started
     if (!r.ok) {
       return { ...out, status: r.reason ?? STATUS.CHROME_NOT_RUNNING, profileInUse: profileInUse() }
