@@ -58,7 +58,7 @@
 | 어디까지 왔고 다음에 무엇을 하나 | `CURRENT-MILESTONE.md` |
 | 전체 구조 · 어떤 AI 를 쓰고 비용이 드나 · 과거 사고 | `MASTER-OPERATING-SYSTEM.md` |
 | 매거진 (D100 과 별도 영역) | `M-GRAPH-PROJECT-CHARTER.md`(검색 주제망 전략) · `magazine-automation-runbook.md`(M-AUTO 실행·안전) |
-| 콘텐츠 끝에 도달한 로그인되지 않은 방문자가 가입·첫 참여로 이어지는 흐름 (D100 과 별도 영역) | `MEMBER-CONVERSION-CANON.md` — 현재 `MC-M3` 최소 측정·회원 어드민 설계 단계이며 제품 구현 전. 고객 구성(`/admin/members/composition`)은 완료된 보조 측정 축 |
+| 콘텐츠 끝에 도달한 로그인되지 않은 방문자가 가입·첫 참여로 이어지는 흐름 (D100 과 별도 영역) | `MEMBER-CONVERSION-CANON.md` — 전환 목적·정책·디자인·MC 단계·회원 어드민 구조·고객 구성 기준선. 현재 상태와 다음 과제는 해당 정본 §14·§18 |
 
 ## 보고 규칙
 
