@@ -87,3 +87,76 @@ export function alertDueToday(sent: Readonly<Record<string, string>>, key: strin
 
 /** 알림이 사람에게 시키는 일 — 🔴 회원 여부까지 setup 이 확인한다 */
 export const SESSION_REISSUE_COMMAND = 'npm run navercafe:session-setup -- --open'
+
+/**
+ * 카페 홈 주소 — 🔴 회원 확인(세션 발급 · 수집 회차 시작)이 같은 주소를 쓴다. 글·목록 주소가 아니다.
+ */
+export const CAFE_HOME_URL = (cafeId: string): string => `https://cafe.naver.com/${cafeId}`
+
+// ─────────────────────────────────────────────────────────
+// 수집 회차 종료 판정 — 🔴 2026-10-07 15:30 실측
+//    비밀번호 변경으로 로그아웃된 세션은 쿠키 만료일 검사를 통과했다. 회차는 상세 16건을 열고
+//    본문 0건을 얻었는데 `status:ok` 로 끝났다(가입 안내 문구도 없어 MEMBER_GATE 도 못 잡았다).
+// ─────────────────────────────────────────────────────────
+
+export type SessionFailureCode = 'MEMBER_GATE' | 'MEMBER_STATUS_UNKNOWN' | 'BODY_EMPTY'
+
+/**
+ * 회차 시작 전 카페 홈 판정 → 실패 코드. 🔴 회원이 아니면 상세를 열지 않는다.
+ *    unknown 은 회원이 아니다 — 성공으로 진행하지 않고 따로 부른다(원인이 다를 수 있다).
+ */
+export function membershipFailureCode(m: CafeMembership): SessionFailureCode | null {
+  if (m === 'member') return null
+  return m === 'nonMember' ? 'MEMBER_GATE' : 'MEMBER_STATUS_UNKNOWN'
+}
+
+/**
+ * 상세 루프가 끝난 뒤 이 회차가 성공인가 — 🔴 **연 것과 읽은 것은 다르다.**
+ *    · 본문 자리에 가입 안내 → MEMBER_GATE
+ *    · 상세를 1건 이상 열었는데 본문 0건 → BODY_EMPTY (인증이라고 단정하지 않는다 — 셀렉터·로그아웃·차단 모두 가능)
+ *    · 본문이 1건이라도 있으면 부분 성공이다 — 막지 않는다
+ *    · 상세를 열지 않은 회차(새 글 없음)는 정상 무작업이다
+ */
+export function judgeCollectTerminal(input: {
+  memberGateId: string | null
+  detailRequests: number
+  bodyRows: number
+}): SessionFailureCode | null {
+  if (input.memberGateId !== null) return 'MEMBER_GATE'
+  if (input.detailRequests > 0 && input.bodyRows === 0) return 'BODY_EMPTY'
+  return null
+}
+
+/** 🔴 사람이 구분할 수 있는 알림 — 사유마다 제목과 할 일이 다르다 */
+export const SESSION_ALERT: Readonly<Record<SessionFailureCode, { severity: 'BLOCKED'; title: string; why: string }>> = {
+  MEMBER_GATE: {
+    severity: 'BLOCKED',
+    title: '네이버 카페 수집 중단 — 카페 회원으로 인정되지 않음',
+    why: '로그인은 됐지만 카페가 이 계정을 회원으로 보지 않는다(가입 안내 · 카페 가입하기)',
+  },
+  MEMBER_STATUS_UNKNOWN: {
+    severity: 'BLOCKED',
+    title: '네이버 카페 수집 중단 — 회원 상태 확인 불가',
+    why: '카페 홈에서 회원·비회원 신호를 모두 찾지 못했다(로그아웃 · 화면 변경 · 차단 가능)',
+  },
+  BODY_EMPTY: {
+    severity: 'BLOCKED',
+    title: '네이버 카페 수집 실패 — 상세를 열었지만 본문 0건',
+    why: '글은 열었지만 본문을 하나도 읽지 못했다(로그아웃 · 셀렉터 변경 · 접근 제한 가능)',
+  },
+}
+
+/**
+ * 🔴 **실패 기록이 먼저, 알림은 그 뒤.** 알림 설정이 없거나 전송이 실패해도(던져도)
+ *    회차는 이미 failed 로 남아 있고 exit 는 0 이 아니다. 앞판은 알림을 먼저 보냈다.
+ */
+export async function concludeFailedRun(
+  code: SessionFailureCode,
+  fx: { finish: (code: SessionFailureCode) => boolean; notify: (code: SessionFailureCode) => Promise<void>; exit: (n: number) => void },
+): Promise<{ recorded: boolean; notified: boolean }> {
+  const recorded = fx.finish(code)
+  let notified = false
+  try { await fx.notify(code); notified = true } catch { /* 알림 실패는 회차 결과를 바꾸지 않는다 */ }
+  fx.exit(1)
+  return { recorded, notified }
+}

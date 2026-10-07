@@ -43,7 +43,7 @@ import {
   isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, activeCafes,
   type CookieMeta,
 } from './lib/micro-seed-navercafe.mjs'
-import { judgeCafeMembership } from '../src/lib/naver-member-gate'
+import { CAFE_HOME_URL, judgeCafeMembership } from '../src/lib/naver-member-gate'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 import {
   judgeSessionLocation, judgeStorageStateShape, SESSION_DIR_MODE, SESSION_FILE_MODE,
@@ -64,7 +64,6 @@ const fail = (m: string): never => {
 
 /** 🔴 로그인 페이지와 카페 홈만 연다. 카페 글은 이 스크립트가 읽지 않는다 */
 const LOGIN_URL = 'https://nid.naver.com/nidlogin.login'
-const CAFE_HOME_URL = (cafeId: string) => `https://cafe.naver.com/${cafeId}`
 
 // 브라우저 타입 — 동적 import 라 최소 형태만 선언한다
 type SessionCookieDump = { cookies: CookieMeta[] }

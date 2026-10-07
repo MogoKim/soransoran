@@ -41,6 +41,11 @@ export type CafeRunPlan = {
   detailPerRun: number
   /** 하루 총 요청 (목록 + 상세) */
   requestsPerDay: number
+  /**
+   * 🔴 회차 시작 전 카페 홈 회원 확인 — 게시판 프로세스마다 1회 (2026-10-07).
+   *    목록·상세와 같은 보호장치·예산을 쓴다. `requestsPerDay` 와 따로 두고 상한 판정에 더한다.
+   */
+  memberCheckPerDay: number
   /** 이 source 의 하루 요청 상한 */
   limitPerDay: number
   /** 🔴 상한 안에 드는가 — `false` 면 실행하지 않는다 */
@@ -71,7 +76,7 @@ export function planCafeRun(input: { cafeId: string; phase?: Phase }): CafeRunPl
   if (targets.length === 0 || limitPerDay === undefined || runsPerDay === 0) {
     return {
       cafeId: input.cafeId, source, phase, runsPerDay, boards: [],
-      listPerRun: 0, detailPerRun: 0, requestsPerDay: 0,
+      listPerRun: 0, detailPerRun: 0, requestsPerDay: 0, memberCheckPerDay: 0,
       limitPerDay: limitPerDay ?? 0, withinLimit: false,
       reason: `🔴 계획을 세울 수 없다 — 게시판 ${targets.length}개 · 회차 ${runsPerDay} · 상한 ${String(limitPerDay)}`,
     }
@@ -80,8 +85,10 @@ export function planCafeRun(input: { cafeId: string; phase?: Phase }): CafeRunPl
   const pageCounts = targets.map((t) => pagesOf(t).length)
   const listPerRun = pageCounts.reduce((a, b) => a + b, 0)
   const listPerDay = listPerRun * runsPerDay
-  /** 🔴 남은 몫이 상세다. 목록이 상한을 이미 먹었으면 상세는 0 이다 */
-  const detailBudgetPerRun = Math.max(0, Math.floor((limitPerDay - listPerDay) / runsPerDay))
+  /** 🔴 게시판마다 수집기 프로세스가 따로 돌고, 각자 카페 홈을 한 번 확인한다 */
+  const memberCheckPerDay = targets.length * runsPerDay
+  /** 🔴 남은 몫이 상세다. 목록·회원 확인이 상한을 이미 먹었으면 상세는 0 이다 */
+  const detailBudgetPerRun = Math.max(0, Math.floor((limitPerDay - listPerDay - memberCheckPerDay) / runsPerDay))
   const ceiling = perBoardCeiling(input.cafeId)
 
   let left = detailBudgetPerRun
@@ -97,14 +104,14 @@ export function planCafeRun(input: { cafeId: string; phase?: Phase }): CafeRunPl
 
   const detailPerRun = boards.reduce((a, b) => a + b.detailMax, 0)
   const requestsPerDay = (listPerRun + detailPerRun) * runsPerDay
-  const withinLimit = requestsPerDay <= limitPerDay && detailPerRun > 0
+  const withinLimit = requestsPerDay + memberCheckPerDay <= limitPerDay && detailPerRun > 0
   return {
     cafeId: input.cafeId, source, phase, runsPerDay, boards,
-    listPerRun, detailPerRun, requestsPerDay, limitPerDay, withinLimit,
+    listPerRun, detailPerRun, requestsPerDay, memberCheckPerDay, limitPerDay, withinLimit,
     reason: detailPerRun === 0
       ? `🔴 상세 몫이 0 이다 — 목록 ${listPerDay}건이 상한 ${limitPerDay}건을 거의 다 먹었다`
       : `목록 ${listPerRun}×${runsPerDay}=${listPerDay} + 상세 ${detailPerRun}×${runsPerDay}=${detailPerRun * runsPerDay}`
-        + ` = ${requestsPerDay}건/day ≤ 상한 ${limitPerDay}건`,
+        + ` + 회원 확인 ${memberCheckPerDay} = ${requestsPerDay + memberCheckPerDay}건/day ≤ 상한 ${limitPerDay}건`,
   }
 }
 
