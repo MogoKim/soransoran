@@ -2,7 +2,7 @@
 
 > 문서 상태: **v4.2 · MC-M4 구현 계약 확정 정본**
 > 마지막 창업자 싱크: **2026-10-07 KST**
-> 현재 단계: **MC-M4 구현 전 계약 확정 · migration 적용·제품 구현 전 (각각 별도 승인)**
+> 현재 단계: **MC-M4 제품 구현 시작 · 0031 Production 적용 완료 · 수집 env·실제 수집 전**
 > 기획·검증 책임: **Codex [2] 회원가입 전환 마스터**
 > 실행 책임: **Claude Code — 승인된 한 단계씩**
 
@@ -444,7 +444,7 @@ writer는 다음 세 조건을 **모두** 만족할 때만 활성화한다.
 
 ### 8-8. 저장과 보관 `확정`
 
-`SignupFunnelDaily` 한 테이블이다. schema 설계는 승인됐고 migration 생성·적용은 별도 승인이다.
+`SignupFunnelDaily` 한 테이블이다. 0031 migration으로 Production DB에 빈 표가 생성됐다(§18 상태).
 
 ```text
 SignupFunnelDaily
@@ -747,7 +747,7 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 | **MC-M2 ✅** | 가입 제안 정책·디자인 | 도달·24시간·B안·문구·상호작용 승인 | 디자인 승인 없이 구현 |
 | **MC-M3 ✅** | 최소 측정·저장·어드민 설계 승인 | 2026-10-07 창업자 승인 — §8 계약·§10 어드민·`SignupFunnelDaily` schema 설계 | 범용 이벤트 원장·개인 추적 |
 | **MC-M3P** | 기존 GA4 정합성 판단 (전환 구현과 별도 작업) | page title·location 정책과 보정 범위 승인 | 신규 퍼널과 무관한 분석 확장·전환 PR에 혼합 |
-| **MC-M4 현재** | 2026-10-07 구현 계약 확정. 0031 migration만 담은 PR-M → 별도 승인 적용 → 구현 → 두 콘텐츠 유형 Preview 검증 | §8-13 정적·성능·유지보수·Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
+| **MC-M4 현재** | 2026-10-07 구현 계약 확정 · 0031 PR-M merge·Production 적용 완료 → 제품 구현 → 두 콘텐츠 유형 Preview 검증 | §8-13 정적·성능·유지보수·Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
 | **MC-M5** | 제한적 Production 적용 | 별도 창업자 승인 후 실제 수집 시작 | 승인 없는 merge·배포 |
 | **MC-M6** | 실제 숫자로 순차 개선 | 한 번에 한 질문·한 변경 | 저유입 표본으로 A/B 승자 주장 |
 | **MC-M7** | North Star 연결 | 회원 방문일 근거와 7일 재방문 참여 연결 | 7일 내 참여를 재방문으로 간주 |
@@ -858,19 +858,21 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - MC-M4: 2026-10-07 구현 계약 확정 (이 v4.2)
 - 가입 제안 제품 코드: 미구현
 - 가입 전환 어드민: 미구현
-- 0031 migration: 로컬 migration-only checkpoint까지만. 적용 미승인
-- 정본 작업 branch: `feat/member-conversion-m4` (main `e6d8b3c` 기준)
-- migration 작업 branch: `feat/member-conversion-m4-migration` (main `e6d8b3c` 기준, 파일 두 개만)
+- 0031 migration: PR #669로 main squash `3f9d11d9fcafbe79504e9084e48a9a2a9e93f819`에 merge, 2026-10-07
+  Production `prisma migrate deploy` 1회로 적용 완료. Production DB에는 빈 `SignupFunnelDaily` 표만 생성됨
+- 0031 S2 PASS: 열 6개 · 복합 PK `SignupFunnelDaily_pkey`(day, step, contentType, entryPoint) · 행 0 · FK 0 ·
+  PK 외 별도 index 0 · 장부 미완료 0 · 롤백 0. 기존 테이블 구조 변경 0(적용 전후 구조 fingerprint 동일)
+- 수집 env(`SIGNUP_FUNNEL_COLLECTION_START`)·실제 수집: 미구현 (MC-M5)
+- 정본·구현 작업 branch: `feat/member-conversion-m4` (main `e6d8b3c` 기준)
 
 ### 다음 과제
 
 다음은 각각 별도 승인 대상이다.
 
-1. 정본 v4.2와 0031 PR-M의 push·PR·merge
-2. 0031 운영 적용 (`APPLY.md` 순서)
-3. §8 계약에 따른 구현과 §8-13 PASS 검증 (MC-M4)
-4. 새 검사의 CI 편입 (D100 공용 파일 merge 순서 조율 뒤)
-5. Production env 추가와 수집 시작 (MC-M5)
+1. §8 계약에 따른 구현과 §8-13 PASS 검증 (MC-M4)
+2. 정본·구현 branch의 push·PR·merge
+3. 새 검사의 CI 편입 (D100 공용 파일 merge 순서 조율 뒤)
+4. Production env 추가와 수집 시작 (MC-M5)
 
 GA4 `page_title`·query 전송 문제는 `MC-M3P` 별도 작업으로 다룬다.
 
@@ -881,8 +883,7 @@ MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§
 
 | 결정·확인 | 현재 상태 |
 |---|---|
-| 0031 migration PR-M merge·운영 적용 | 각각 별도 승인. 적용 순서는 `prisma/migrations/0031_signup_funnel_daily/APPLY.md` |
-| Production·Preview가 연결된 DB | 과거 기록을 현재 사실로 쓰지 않고 적용 직전에 재확인한다. §8-7 gate는 이 값과 무관하게 Production 카운터를 막는다 |
+| Preview가 연결된 DB | 과거 기록을 현재 사실로 쓰지 않는다. §8-7 gate는 이 값과 무관하게 Production 카운터를 막는다 |
 | 새 검사의 CI 편입 | MC-M4 범위 밖. D100 공용 파일 merge 순서 조율 뒤 별도 단계 |
 | `SIGNUP_FUNNEL_COLLECTION_START` 추가·시작일 | MC-M5 별도 승인 |
 | GA4 보정 | MC-M3P 별도 작업 |
@@ -911,6 +912,7 @@ MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§
 | 2026-10-07 | v4.0 | 프로젝트명을 콘텐츠 끝 도달로 보정하고 D100 경계·MC 단계·회원 하위 탭·최소 측정 권고·새 Codex 인수인계를 통합 |
 | 2026-10-07 | v4.1 | Codex [2] 보정안을 포함한 MC-M3 최소 측정 계약 승인 — 방문 정의·원자적 최초 전환·A안 표식·단일 env gate·24개월 보존·성능 불변식·유지보수 기준·PASS 기준 |
 | 2026-10-07 | v4.2 | MC-M4 구현 계약 확정 — 요청 단위 세션 공유(D1)·취소·실패 복귀 (a)안과 Toast 문구(D2)·가입 완료 집계 await(D3)·CI 편입 제외(D4)·카카오 버튼 시각 variant·레이어 시작값·도달 타이머 취소·KST server-only 경계·same-origin 검증 |
+| 2026-10-07 | v4.2 상태 | 0031 PR #669 merge(`3f9d11d`)·Production 적용·S2 PASS 기록, MC-M4 제품 구현 시작. 정책 변경 없음 |
 
 v3.2까지의 세부 결정·검사 횟수·Preview 시행착오·commit·deployment 기록은 Git 역사에 보존한다. 현재 정책과
 충돌할 때는 이 v4.2 현행 절이 이긴다.
