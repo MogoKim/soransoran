@@ -25,7 +25,7 @@
 | 자동 단계 controller | ✅ `StageDecision` 단일 authority | ✅ controller ON·job loaded | ✅ 10-07 `TRIAL · release d5 · ceiling d10` 기록 |
 | 자동 D3 | ✅ 자동 READY·발행·댓글·감사 경로 | ✅ runtime 반영 | ✅ 10-06 자동 3/3·서로 다른 Persona·첫 댓글 3/3·감사·도장 PASS |
 | 자동 D5 | ✅ 동일 루프와 5개 슬롯 | ✅ runtime 반영 | ❌ 10-07 첫 글 댓글 마감 누락으로 당일 증명 FAIL |
-| 상시 실행 owner | ✅ 9개 job 이관·소유권·rollback 도구 | ❌ 회사 Mac에서만 가동 | ❌ 통근 중 clamshell sleep으로 운영 창 단절 실증 |
+| 상시 실행 owner | ✅ 9개 job 이관·소유권·rollback 도구 · 미분류 0 · rehearsal PASS(브랜치) | ❌ 회사 Mac에서만 가동 | ❌ 통근 중 clamshell sleep으로 운영 창 단절 실증 |
 | JIT source-to-slot | ✅ 부족 슬롯 기반 호출·slot intent·발행 재검사 | ✅ runtime 반영 | ⚠️ 최근 7일 같은 날 공개 0%, 지연 계속 관측 |
 | Persona 계약 | ✅ contract-valid 판정 | ✅ 24명 | ✅ D5 하한 충족, ❌ D10 하한 30명에 6명 부족 |
 | Persona 30 준비 | ✅ creative batch·형식·품질·사실 충돌 검사 | ❌ PR #661 Draft | UNKNOWN — 실제 batch 재호출·적재·활성화 0 |
@@ -95,16 +95,26 @@
 
 ### 3.2 현재 이관 도구의 상태
 
-`npm run host:migrate` read-only plan은 D100 job 9개, runtime pin, env 키 이름, 로그와 상태를 확인했다.
-현재 bundle 예상 크기는 76.2MB이고 **미분류 2건 때문에 export는 아직 거부된다.**
+> as-of 2026-10-07 10:08 KST · 브랜치 `fix/d100-host-cutover-prep` (Draft PR, 미merge)
 
-| 경로 | 판정 | 필요한 수정 |
+09:51 plan의 **미분류 2건을 분류해 미분류 2 → 0**이 됐다. 이름은 정확히 하나씩만 등록했고, 두 항목은 안의 모양까지
+검사한다(어긋나면 다시 미분류로 export가 멈춘다).
+
+| 경로 | 실측 구조 | 처리 |
 |---|---|---|
-| `persona-autogen` | D10 Persona creative 결과가 있는 운영 상태 | `state`로 분류해 이관 |
-| `queue-locks` | 현재 host의 일시 잠금 | bundle에서 제외하고 대상에서 새로 생성 |
+| `persona-autogen` | Persona creative 결과 JSON 1개(5.6KB, 0600) | `state`로 이관 · creative JSON만 허용 |
+| `queue-locks` | 빈 디렉터리 · **매거진** 큐 writer 잠금 | `exclude` · 매거진 큐 잠금 파일만 허용. D100 대상에는 생기지 않는 것이 정상 |
 
-대상 Mac에서는 GitHub 로그인과 gcloud ADC 로그인을 새로 해야 한다. 네이버 storage state는 bundle에 포함하되,
-설치 뒤 로그인 유지와 첫 수집 dry-run을 확인한다. 82cook job은 첫 cutover 범위 밖이며 계속 OFF다.
+**rehearsal PASS** (회사 Mac, `--cutover` 없음): export 2,474 파일 · 86.0MB(state 76.2MB · 비밀 3 · plist 템플릿 9 ·
+D100 로그 9.7MB) → verify 통과 → 가짜 대상 홈 install dry-run·plist 9개 render 통과(원 Mac 경로 0 · placeholder 0).
+D100 job 9개 · 매거진 0 · pin `38efdd3`. 묶음·render는 삭제했고 launchd·runtime·env 메타데이터 전후가 같다.
+상세는 `ALWAYS-ON-HOST.md` §6.4.
+
+🔴 **아직 하지 않았다**: 실제 `quiesce --apply` · cutover bundle · 대상 `install --apply`. D100 owner는 여전히 회사 Mac이다.
+
+집 Mac에서 사람이 할 일: AC 상시 연결 · `sudo pmset -a sleep 0 womp 1` · 자동 로그인 = 운영 사용자(FileVault 끔) ·
+nvm node `v24.14.0` · 저장소 clone + `npm ci` · `gh auth login` · `gcloud auth application-default login` ·
+설치 뒤 네이버 로그인 유지와 첫 수집 확인. 82cook job은 첫 cutover 범위 밖이며 계속 OFF다.
 
 ## 4. 정본과 구현의 충돌 장부
 
@@ -124,7 +134,7 @@
 
 | 우선순위 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| P0-1 | 집 Mac 이관 도구 보정·rehearsal | 미분류 0 · verify PASS · 대상 install dry-run PASS | 운영 중 quiesce, 두 host 동시 owner |
+| P0-1 | 집 Mac 이관 도구 보정·rehearsal | 미분류 0 · verify PASS · 대상 install dry-run PASS — ✅ 10-07 브랜치에서 충족(Draft PR · 미merge, §3.2) | 운영 중 quiesce, 두 host 동시 owner |
 | P0-2 | 오늘 밤 cutover | 원 Mac D100 0 · 대상 9 job loaded · owner/pin/로그/DB 연결 PASS · rollback 준비 | 매거진 이동, 비밀을 메신저·클라우드로 전송 |
 | P0-3 | 다음 전체 운영일 D5 재증명 | 자동 5/5 · 서로 다른 Persona · 첫 댓글 5/5 · 감사·비용·다음 결정 PASS | 수동 글·댓글·stage 변경 |
 | P1-1 | PR #661 Persona 30 마무리 | actual batch 6명 전원 품질·계약 valid, CI, 적재·활성화 별도 검증 | 하한 낮추기, 비슷한 Persona 양산 |
@@ -181,7 +191,7 @@ Persona 활성화, merge·deploy는 아직 0이다. 현재 contract-valid는 24�
 
 이 문서는 다음 중 하나가 발생하면 즉시 갱신한다.
 
-1. host migration 미분류 2건이 해소되고 rehearsal이 PASS함.
+1. ~~host migration 미분류 2건이 해소되고 rehearsal이 PASS함~~ — 2026-10-07 10:08 브랜치에서 충족(§3.2).
 2. 집 Mac cutover가 성공하거나 rollback함.
 3. 다음 D5 증명일이 PASS·FAIL·UNKNOWN 중 하나로 끝남.
 4. contract-valid Persona가 30명에 도달함.

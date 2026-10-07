@@ -1,6 +1,7 @@
 # 상시 실행 호스트 — 의존성 목록 · 이전 묶음 · 전환/되돌리기
 
-> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-10-07 — 집 Mac 단일 owner 확정 · 기종 무관(AC 필수)
+> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-10-07 — 집 Mac 단일 owner 확정 · 기종 무관(AC 필수) ·
+> 미분류 2→0 · rehearsal PASS(§6.4)
 > 코드 정본: `scripts/host-migrate.mts` (CLI) · `scripts/lib/host-migrate.mts` (판정) · `scripts/host-migrate-check.mts` (검사)
 > 🔴 §2와 §6.1~6.2의 숫자는 **작성 당시 측정 스냅샷**이다. 최신 plan은 §6.3과
 > `npm run host:migrate`가 정한다. 단계·콘텐츠 정책은 D100 canon이 정한다.
@@ -146,6 +147,11 @@ npm run host:migrate-check                                                      
 | `host-bundle.json` | manifest — `lane: "d100"` · `formatVersion 2`, 파일마다 sha256 · 크기 · 권한 · 종류, env **키 이름만**, plist 별 내보낼 때 loaded 여부, allowlist 에 있지만 설치 plist 가 없던 label(`laneMissing`) |
 
 - 🔴 **모르는 항목은 싣지 않고 export 를 멈춘다**(`unclassified`). 분류는 `scripts/lib/host-migrate.mts` 의 규칙 표에 적는다.
+  이름은 정확히 하나씩만 등록한다 — `persona-autogen-old` · `queue-locks.bak` 같은 비슷한 이름은 여전히 `unclassified` 다.
+- 🔴 **내용 규칙** — 이름만으로 안에 무엇이 쌓일지 보장할 수 없는 항목은 안의 모양까지 본다. `persona-autogen` 은
+  creative JSON 파일만, `queue-locks` 는 매거진 큐 잠금 파일(`<scope>.queue.lock` · `.reclaim`)만 있어야 한다.
+  하위 디렉터리 · 링크 · 다른 이름의 파일이 하나라도 있으면 그 항목은 `unclassified` 로 떨어져 export 가 멈춘다
+  (제외 항목 안의 영구 데이터가 조용히 빠지지 않고, state 항목 안의 모르는 것이 조용히 퍼지지 않는다).
 - 🔴 쥔 잠금(`*.lock` · 매거진 임대 · 배포 잠금)은 싣지 않는다 — 대상에서 영영 풀리지 않는다. 예외: heartbeat `tick-<시각>.lock` 은 지난 틱 표식이라 싣는다.
 - 🔴 묶음은 git 작업트리·운영 경로 안에 만들지 않는다. 묶음 디렉터리 0700 · 비밀 파일 0600.
 - 🔴 화면에 나가는 모든 줄은 비밀 값·비밀 모양 패턴을 가린다. verify 는 비밀이 아닌 파일·manifest 에 비밀이 있으면 `LEAK` 으로 실패한다(파일·키 이름만 적는다).
@@ -233,12 +239,15 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
 - runtime HEAD=pin `38efdd3ee5cb69fc5142d065825ce3d25f764a39`, Node `v24.14.0`.
 - D100 allowlist 9개는 모두 설치돼 있고 loaded다. 매거진 4개 job은 범위 밖이다.
 - state·secret·D100 로그의 예상 bundle은 76.2MB다.
-- **미분류 2건 때문에 export는 fail-closed다.** 코드 분류를 고치기 전에는 quiesce하지 않는다.
+- 이 plan 시점에는 **미분류 2건 때문에 export가 fail-closed였다.** 아래 분류를 코드에 적은 뒤 미분류는 0이다(§6.4).
 
-| 경로 | 의미 | 확정 처리 |
+| 경로 | 실측 구조 (2026-10-07) | 처리 |
 |---|---|---|
-| `persona-autogen` | PR #661의 Persona 30 creative 결과를 포함한 운영 상태 | `state`로 이관 |
-| `queue-locks` | 원 host의 일시 잠금 디렉터리 | bundle에서 제외, 대상에서 필요 시 새로 생성 |
+| `persona-autogen` | 0700 디렉터리 · `persona30-creative-20261006.json` 1개(5.6KB · 0600) — `persona-autogen --creative-out=` 결과, Persona 6명의 creative | `state`로 이관 · 내용은 creative JSON만 허용 |
+| `queue-locks` | 0755 빈 디렉터리 — **매거진** 큐 writer 잠금(`scripts/lib/magazine-queue-lock.mjs`의 `QUEUE_LOCK_DIR`) | `exclude` · 내용은 `<scope>.queue.lock` · `.reclaim`만 허용 |
+
+- `queue-locks`는 D100 코드가 쓰지 않는다. 매거진이 원 호스트에 남으므로 대상에는 생기지 않는 것이 정상이다
+  (2026-10-07 plan 문서의 "대상에서 새로 생성"은 실제 코드 확인 뒤 이렇게 고쳤다).
 
 - 대상에서 `gh auth login`, `gcloud auth application-default login`을 새로 한다.
 - Naver storage state는 secret으로 옮긴 뒤 대상에서 로그인 유지 여부를 확인한다.
@@ -246,6 +255,22 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
 - 낮에는 분류 보정·검사·rehearsal·대상 install dry-run까지만 한다. 실제 quiesce는 창업자가 퇴근 직전
   "나 퇴근한다. 원본 Mac quiesce하고 최종 이관 bundle 만들자"라고 알린 뒤 시작한다.
 - 집에서는 "집 도착했다. 집 Mac에 설치하고 운영권 넘기자"라고 알린 뒤 verify·install·운영 확인을 이어간다.
+
+### 6.4 분류 보정 뒤 rehearsal (2026-10-07 10:07 KST · 회사 Mac · 브랜치 `fix/d100-host-cutover-prep`)
+
+- `plan` — 운영 디렉터리 45항목 = state 17 · secret 2 · exclude 26 · **미분류 0**. D100 9개 loaded · 매거진 4개 범위 밖.
+- `export --out=/private/tmp/…` (**rehearsal**, `--cutover` 없음) — **2,474 파일 · 86.0MB**
+  (state 2,444 · 76.2MB / 비밀 3 · 11KB / plist 템플릿 9 · 41KB / D100 로그 18 · 9.7MB). 내장 verify 통과.
+- 별도 `verify` 통과 — 해시 · 권한(비밀 3개 0600) · 누출 0 · 템플릿.
+- 묶음 내용: plist 9개 = D100 allowlist 9개 · `laneMissing` 0 · pin `38efdd3` · `persona-autogen` creative 1개 실림 ·
+  `queue-locks` 0개(제외 목록에 사유) · 매거진 상태·plist·로그 0 · 82cook job·로그 0(과거 수집 원본만 `microseed-data` state) ·
+  `.lock` 은 heartbeat 지난 틱 표식 10개뿐.
+- `install --target-home=/private/tmp/…` dry-run + `--render-to` — 다시 찍은 plist 9개 전부 🟢 · `plutil -lint` 통과 ·
+  원 Mac 절대경로(`/Users/yanadoo`) 0 · 치환 안 된 placeholder 0. `--apply` 는 rehearsal 묶음 · 다른 홈 셸 · 사전 점검 미충족으로 거부 표시
+  (네트워크 점검은 `--skip-network` 로 생략 — 외부 연결 0). 가짜 대상 홈은 만들어지지 않았다.
+- 묶음·render 결과는 검사 뒤 삭제했다. 전후 비교: launchctl loaded 13개(D100 9 · 매거진 4) · LaunchAgents plist mtime/크기 ·
+  runtime HEAD=pin `38efdd3` · env.local/slack.env mtime·크기·권한 · runtime `.env.local` 링크 · handoff/owner 표식 없음 — **전부 같다**.
+- **하지 않은 것**: `quiesce --apply` · `export --cutover` · `install --apply` · rollback/unquiesce 적용. 실제 owner는 아직 회사 Mac이다.
 
 ## 7. 확정 결정과 남은 사람 작업
 
@@ -259,5 +284,8 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
 - 공통 설정(설치 전 사람이 한다): `sudo pmset -a sleep 0 womp 1` · 가능하면 유선 LAN ·
   시스템 설정에서 자동 로그인 = 운영 사용자(→ FileVault 끔이 조건) · nvm node `v24.14.0` · gh/gcloud 로그인.
 - FileVault를 유지하면 재부팅 뒤 사람이 비밀번호를 칠 때까지 job 0개라는 제한을 받아들여야 한다.
+- 대상에서 `verify`·`install`을 돌릴 코드: `~/Documents/soransoran`에 저장소를 clone하고 `npm ci`를 먼저 한다
+  (`install`은 그 `.git`이 있으면 clone을 건너뛰고 pin SHA로 runtime만 만든다). 대상 쪽 코드는 main의 것으로 충분하다 —
+  이번 분류 보정은 원 Mac의 export에만 필요하다.
 - 창업자가 직접 해야 하는 것은 대상 Mac의 로그인·전원/수면 설정·gh/gcloud/Naver 인증뿐이다. 코드 분류,
   bundle, quiesce, install 검증과 rollback 판단은 운영 마스터가 지휘한다.
