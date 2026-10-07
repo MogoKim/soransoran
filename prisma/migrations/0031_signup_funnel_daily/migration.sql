@@ -1,7 +1,9 @@
 -- 0031 — 회원가입 전환 일별 집계 (SignupFunnelDaily)
 --
--- 🔴 적용 순서·확인·복구는 같은 폴더의 APPLY.md 가 정본이다. 이 파일은 적용 뒤 수정하지 않는다.
--- 🔴 정책 정본: docs/operations/MEMBER-CONVERSION-CANON.md §8 (MC-M3 최소 측정 계약).
+-- 🔴 0031 의 적용 순서·확인·복구는 같은 폴더의 APPLY.md 를 단일 실행 절차로 따른다.
+--    APPLY.md 는 제품 정책·D100 운영 정책·회원가입 전환 정책을 새로 정하지 않는다.
+-- 🔴 회원가입 전환 영역 정책 기준은 docs/operations/MEMBER-CONVERSION-CANON.md §8 (MC-M3 최소 측정 계약)이다.
+-- 🔴 이 파일은 적용 뒤 수정하지 않는다.
 --
 -- 무엇을 만드는가
 --   SignupFunnelDaily — 회원가입 전환 **전용** 익명 일별 발생 횟수. 사람 단위 퍼널이 아니다.

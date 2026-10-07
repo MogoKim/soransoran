@@ -1,7 +1,9 @@
 # 0031 SignupFunnelDaily — 적용·확인·복구 절차
 
-> 🔴 이 순서를 지킨다. 정책 정본은 `docs/operations/MEMBER-CONVERSION-CANON.md` §8(측정 계약) · §8-7(gate) ·
-> §8-8(저장과 보관)이다.
+> 🔴 이 순서를 지킨다. 이 문서는 0031 적용·확인·복구의 단일 실행 절차다.
+> 제품 정책, D100 운영 정책, 회원가입 전환 정책을 새로 결정하지 않는다.
+> 회원가입 전환 영역 정책은 `docs/operations/MEMBER-CONVERSION-CANON.md`가 정한다 — 회원가입 전환 영역 정본
+> §8(측정 계약) · §8-7(gate) · §8-8(저장과 보관).
 >
 > 🔴 이 문서는 적용 절차다. 운영 DB 상태를 적지 않는다 — 상태는 적용 직전 S0 에서 다시 읽는다.
 > Production·Preview 가 어떤 DB 에 연결돼 있는지도 과거 기록을 현재 사실로 쓰지 않고 S0 에서 재확인한다.
@@ -14,7 +16,7 @@
 | 기본키 | 복합 PK `("day","step","contentType","entryPoint")` — 이름 `SignupFunnelDaily_pkey` |
 | 그 밖 | 없음. 다른 표 변경 · FK · 별도 인덱스 · enum · seed · backfill 0 |
 
-개인정보 열과 콘텐츠 식별 열은 없다(정본 §8-9).
+개인정보 열과 콘텐츠 식별 열은 없다(회원가입 전환 영역 정본 §8-9).
 
 ## 1. PR 구성 — 앱 동작 변경 0
 
@@ -70,7 +72,7 @@ ROLLBACK;
 npx prisma migrate deploy
 ```
 
-🔴 금지 — 장부와 정본 순서를 우회한다:
+🔴 금지 — migration 장부와 승인된 적용 순서를 우회한다:
 
 - `prisma db push`
 - `prisma migrate dev`
@@ -95,7 +97,7 @@ npx prisma migrate deploy
 |---|---|
 | PR-M 만 merge, S1 전 | 앱 변경 0. 필요하면 PR-M 을 revert 한다 |
 | S1 뒤, PR-A 전 | 그대로 둔다. 기존 코드는 새 표를 쓰지 않는다 |
-| PR-A 를 되돌린다 | PR-A revert 만. 표와 행은 그대로 둔다(익명 집계 · 최소 24개월 보존, 정본 §8-8) |
+| PR-A 를 되돌린다 | PR-A revert 만. 표와 행은 그대로 둔다(익명 집계 · 최소 24개월 보존, 회원가입 전환 영역 정본 §8-8) |
 | 표를 없애야 한다 | 새 migration 으로 처리한다. `_prisma_migrations` 를 SQL 로 건드리지 않는다 |
 
 🔴 **적용 뒤 `migration.sql` 을 수정하지 않는다.** 장부의 checksum 과 어긋난다. 바꿀 것이 있으면 새 migration 이다.
@@ -103,7 +105,7 @@ npx prisma migrate deploy
 ## 4. 알아 둘 것
 
 - 행 수 상한은 하루 최대 10행(5단계 × 2유형 × 1출입구)이다. 별도 인덱스가 필요 없다.
-- 이 표를 읽고 쓰는 코드는 정본 §8-7 gate(`VERCEL_ENV === 'production'` · 유효한 `SIGNUP_FUNNEL_COLLECTION_START` ·
+- 이 표를 읽고 쓰는 코드는 회원가입 전환 영역 정본 §8-7 gate(`VERCEL_ENV === 'production'` · 유효한 `SIGNUP_FUNNEL_COLLECTION_START` ·
   오늘 ≥ 시작일)가 활성일 때만 DB 에 접근한다. 표가 생겨도 gate 가 꺼져 있으면 쓰기·읽기 0 이다.
 - `SIGNUP_FUNNEL_COLLECTION_START` 추가는 MC-M5 별도 승인이다. 이 migration 과 같은 단계가 아니다.
-- 자동 삭제 job 은 만들지 않는다(정본 §8-8).
+- 자동 삭제 job 은 만들지 않는다(회원가입 전환 영역 정본 §8-8).
