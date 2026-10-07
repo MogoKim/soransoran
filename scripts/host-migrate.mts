@@ -31,12 +31,12 @@ import {
   BUNDLE_FORMAT_VERSION, BUNDLE_MANIFEST, CUTOVER_ORDER, D100_LANE_LABELS, HANDOFF_FILE, LABEL_PREFIX, LANE,
   MANUAL_REAUTH, OUT_OF_LANE_LABELS, OUT_OF_LANE_PATHS, OWNER_FILE, QUIESCE_DIR_NAME, ROLLBACK_ORDER,
   TARGET_ROLLBACK_DIR_NAME,
-  classifyCanonEntry, foreignHomePaths, homePathKeys, hostPathsOf, isLaneLabel, isLaneLog, isTransientFile,
+  classifyCanonEntry, classifyCanonEntryIn, foreignHomePaths, homePathKeys, hostPathsOf, isLaneLabel, isLaneLog, isTransientFile,
   judgeAutorestart, judgeBundleOut, judgeCutoverExport, judgeManifest, judgePower, judgeTargetInstall,
   judgeUnquiesce, lanePlistFiles, nodeBinsIn, parseEnv, parseLaunchctlList, parsePmsetBatt, planQuiesce,
   redact, renderAndJudge, rewriteEnvHome, runInstall, runQuiesce, runUnquiesce, scanForSecrets,
   secretValuesOf, targetRollbackLabels, templatizePlist,
-  type BundleEntry, type BundleEntryKind, type BundleManifest, type HostVars, type InstallEffects,
+  type BundleEntry, type BundleEntryKind, type BundleManifest, type ChildEntry, type EntryTree, type HostVars, type InstallEffects,
   type LeakHit, type RenderedPlist,
 } from './lib/host-migrate.mjs'
 import { plistFileOf, writeInstalled } from './lib/launchd-install.mjs'
@@ -100,6 +100,25 @@ function walk(root: string, base = root, skipped: string[] = [], dropTransient =
   }
   return out
 }
+/** 🔴 내용 규칙 판정용 — 이름과 종류만 본다(내용은 읽지 않는다 · 잠금도 빼지 않고 전부 센다) */
+function entryTree(root: string): EntryTree {
+  const typeOf = (p: string): ChildEntry['type'] => {
+    const st = lstatSync(p)
+    return st.isSymbolicLink() ? 'symlink' : st.isFile() ? 'file' : st.isDirectory() ? 'dir' : 'other'
+  }
+  const children: ChildEntry[] = []
+  const visit = (dir: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const p = join(dir, name)
+      const type = typeOf(p)
+      children.push({ rel: relative(root, p), type })
+      if (type === 'dir') visit(p)
+    }
+  }
+  const rootType = typeOf(root)
+  if (rootType === 'dir') visit(root)
+  return { rootType, children }
+}
 const sha256 = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
 const isText = (buf: Buffer): boolean => !buf.subarray(0, 8192).includes(0)
 
@@ -160,7 +179,9 @@ function surveySource(fromQuiesced: boolean): SourceSurvey {
   if (!existsSync(SRC.canonDir)) die(`운영 디렉터리가 없다 — ${SRC.canonDir}`)
   const skipped: string[] = []
   const entries = readdirSync(SRC.canonDir).sort().map((name) => {
-    const rule = classifyCanonEntry(name)
+    const byName = classifyCanonEntry(name)
+    // 🔴 내용 규칙이 붙은 항목은 안을 보고 다시 판정한다 — 어긋나면 unclassified 로 export 가 멈춘다
+    const rule = byName.contents === undefined ? byName : classifyCanonEntryIn(name, entryTree(join(SRC.canonDir, name)))
     const files = rule.kind === 'state' || rule.kind === 'secret' ? walk(join(SRC.canonDir, name), SRC.canonDir, skipped) : []
     return { name, kind: rule.kind, reason: rule.reason, files }
   })
