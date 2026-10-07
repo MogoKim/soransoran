@@ -538,6 +538,63 @@ export function classifyPage({ httpStatus, title, signals = {} }) {
 }
 
 /**
+ * ChatGPT 탭 하나를 CDP HTTP 엔드포인트로 연다 — **열기만** 한다. 입력·전송은 없다.
+ * 🔴 Playwright 로 열지 않는다 (프로필 주인이 바뀌어 세션 쿠키가 지워진다 · ensurePageTarget 주석).
+ * @returns {Promise<{ok:boolean, target?:object, why?:string}>}
+ */
+export async function openChatgptTarget({ timeoutMs = 10000 } = {}) {
+  try {
+    const res = await fetch(`${CDP_URL}/json/new?${CHATGPT_URL}`, { method: 'PUT', signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return { ok: false, why: `/json/new 가 ${res.status} 를 돌려줬다` }
+    return { ok: true, target: await res.json() }
+  } catch (e) {
+    return { ok: false, why: `/json/new 실패: ${e?.message ?? e}` }
+  }
+}
+
+const isChatgptTarget = (t) => {
+  try { return t?.type === 'page' && new URL(String(t?.url ?? '')).hostname.replace(/^www\./, '') === 'chatgpt.com' }
+  catch { return false }
+}
+
+/**
+ * 🔴 **page 0건 복구** (2026-10-07 자연 회차 · Codex 판정).
+ *    전용 프로필·표식·권한·포트 주인이 모두 맞고 페이지 목록도 정상적으로 읽었는데 **page 만 0건**이면,
+ *    신원 관문이 그 자리에서 MISMATCH 로 끝나 `ensurePageTarget` 에 영영 닿지 못했다.
+ *    그날 producer·auto-register 가 같은 이유로 둘 다 멈췄다 (전송 0 · draft 0).
+ *
+ *    이제 판정이 `zeroPage` 를 달고 왔을 때만 — 그 외 어떤 불일치도 아닐 때만 —
+ *      ① ChatGPT 탭 하나를 연다 (`/json/new`) → 실패면 안전 중단
+ *      ② 돌아온 target 이 chatgpt.com page 가 아니면 안전 중단
+ *      ③ **전체 신원을 처음부터 다시 본다.** 목록 반영이 늦으면 page 0 만 잠깐 더 기다린다
+ *    읽기 실패·남의 페이지·잘못된 프로필·표식·권한·포트 주인이면 탭을 열지 않는다.
+ *
+ * @returns {Promise<object>} verifyProfileFn 과 같은 모양 + `bootstrap` 기록
+ */
+export async function verifyWithZeroPageBootstrap(verifyProfileFn, args, {
+  openTargetFn = openChatgptTarget, settleTries = 10, settleMs = 300,
+} = {}) {
+  const first = await verifyProfileFn(args)
+  if (first.ok || first.zeroPage !== true) return first
+  const opened = await openTargetFn()
+  if (!opened.ok) {
+    return { ...first, zeroPage: false, why: `page 0건 복구 실패 — ChatGPT 탭을 열지 못했다 (${opened.why ?? '사유 없음'})`, bootstrap: { attempted: true, opened: false } }
+  }
+  if (!isChatgptTarget(opened.target)) {
+    return { ...first, zeroPage: false, why: `page 0건 복구 실패 — 열린 target 이 ChatGPT page 가 아니다 (${String(opened.target?.url ?? '').slice(0, 60)})`,
+      bootstrap: { attempted: true, opened: true, targetUrl: opened.target?.url ?? null } }
+  }
+  let again = await verifyProfileFn(args)
+  for (let i = 0; i < settleTries && !again.ok && again.zeroPage === true; i++) {
+    await new Promise((r) => setTimeout(r, settleMs))
+    again = await verifyProfileFn(args)
+  }
+  const bootstrap = { attempted: true, opened: true, targetId: opened.target?.id ?? null }
+  if (!again.ok) return { ...again, zeroPage: false, why: `page 0건 복구 뒤 신원 재검사 실패 — ${again.why}`, bootstrap }
+  return { ...again, bootstrap }
+}
+
+/**
  * 브라우저를 띄워 ChatGPT 접근 상태만 본다. 메시지를 보내지 않는다.
  *
  * @param {{ headless?: boolean, timeoutMs?: number }} opts
@@ -589,14 +646,18 @@ export async function ensureChrome({
   verifyProfileFn = verifyAutomationProfile,
   /** 'operate' 는 무인 실행 · 'login' 은 사람이 처음 로그인하는 중 */
   mode = 'operate',
+  /** 🔴 page 0건 복구가 탭을 여는 자리 — 시험은 가짜를 넣는다. 운영은 실제 `/json/new` */
+  openTargetFn = openChatgptTarget,
 } = {}) {
   const port = CDP_PORT
+  /** 🔴 모든 신원 검사가 같은 page 0건 복구 계약을 지난다 — hero 경로도 여기를 지난다 */
+  const verify = (a) => verifyWithZeroPageBootstrap(verifyProfileFn, a, { openTargetFn })
   /**
    * ① 🔴 **띄우기 전에 본다.** 폴더·표식·권한·포트 주인이 맞아야 spawn 한다.
    *    표식이 없으면 **여기서 만들지 않는다** — 표식 생성은 `--login` 만 한다.
    *    자동 실행이 표식을 만들어 주면 "확인했다" 가 아니라 "덮어썼다" 가 된다.
    */
-  const pre = await verifyProfileFn({ profileDir, port, mode, requireRunning: false })
+  const pre = await verify({ profileDir, port, mode, requireRunning: false })
   if (!pre.ok) {
     return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: pre.why, identity: pre }
   }
@@ -607,11 +668,13 @@ export async function ensureChrome({
      * ② 🔴 **떠 있어도 그냥 통과시키지 않는다.** 살아 있는 포트가 우리 창이라는 보장은 없다.
      *    떠 있는 상태 그대로 **전체 신원**을 다시 본다 (열린 페이지 포함).
      */
-    const post = await verifyProfileFn({ profileDir, port, mode, requireRunning: true })
+    const post = await verify({ profileDir, port, mode, requireRunning: true })
     if (!post.ok) {
       return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post }
     }
-    return { ok: true, started: false, identity: post }
+    // 🔴 page 0건 복구는 앞 검사(pre)에서 일어났을 수 있다 — 기록을 잃지 않는다
+    const zeroPageBootstrap = pre.bootstrap ?? post.bootstrap
+    return { ok: true, started: false, identity: post, ...(zeroPageBootstrap ? { zeroPageBootstrap } : {}) }
   }
   if (!browserCheck()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
 
@@ -641,11 +704,11 @@ export async function ensureChrome({
      * ③ 🔴 **띄운 뒤에도 다시 본다.** 우리가 spawn 했다고 해서 붙는 창이 우리 창이라는
      *    보장은 없다 — 같은 포트를 다른 프로세스가 먼저 잡았을 수 있다.
      */
-    const post = await verifyProfileFn({ profileDir, port, mode, requireRunning: true })
+    const post = await verify({ profileDir, port, mode, requireRunning: true })
     if (!post.ok) {
       return { ok: false, started: true, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post, startedOverStaleLock, lock }
     }
-    return { ok: true, started: true, startedOverStaleLock, lock, identity: post }
+    return { ok: true, started: true, startedOverStaleLock, lock, identity: post, ...(post.bootstrap ? { zeroPageBootstrap: post.bootstrap } : {}) }
   }
   return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING, startedOverStaleLock, lock }
 }
@@ -697,6 +760,10 @@ export async function probe({
   connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
   /** 🔴 시험이 신원 판정을 갈아끼우는 자리. 운영은 실제 검증이다 */
   verifyProfileFn = verifyAutomationProfile,
+  /** 🔴 page 0건 복구가 탭을 여는 자리 — 시험은 가짜를 넣는다 */
+  openTargetFn = openChatgptTarget,
+  /** 🔴 브라우저 존재 판정 — 시험이 신원 관문 다음 단계에서 멈추게 하는 자리 (실제 Chrome 에 닿지 않게) */
+  browserCheck = browserAvailable,
 } = {}) {
   // launched 가 아니라 connected 다 — 이 코드는 브라우저를 띄우지 않는다
   const out = { connected: false, httpStatus: null, profileExists: profileExists(), via: 'cdp' }
@@ -706,12 +773,13 @@ export async function probe({
    *    한 글자도 보내지도 않는다. 2026-09-28 에 자동화가 **다른 계정 프로필**로
    *    돌고 있던 것을 아무도 몰랐다 — 로그만 보면 정상이었기 때문이다.
    */
-  const identity = await verifyProfileFn({ requireRunning: false })
+  const identity = await verifyWithZeroPageBootstrap(verifyProfileFn, { requireRunning: false }, { openTargetFn })
   if (!identity.ok) {
     return { ...out, status: STATUS.AUTOMATION_PROFILE_MISMATCH, errorDetail: identity.why, identity }
   }
+  if (identity.bootstrap) out.zeroPageBootstrap = identity.bootstrap
 
-  if (!browserAvailable()) {
+  if (!browserCheck()) {
     return { ...out, status: STATUS.BROWSER_MISSING }
   }
   // 🔴 Playwright 로 띄우지 않는다. 띄우면 프로필의 주인이 되고 세션 쿠키가 지워진다.
@@ -720,7 +788,7 @@ export async function probe({
     if (!autoStart) {
       return { ...out, status: STATUS.CHROME_NOT_RUNNING, profileInUse: profileInUse() }
     }
-    const r = await ensureChrome()
+    const r = await ensureChrome({ verifyProfileFn, openTargetFn })
     out.chromeStarted = r.started
     if (!r.ok) {
       return { ...out, status: r.reason ?? STATUS.CHROME_NOT_RUNNING, profileInUse: profileInUse() }

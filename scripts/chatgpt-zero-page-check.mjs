@@ -1,0 +1,245 @@
+#!/usr/bin/env node
+/**
+ * page 0건 복구 검사 — 신원 관문이 「정확한 프로필 · 실행 중 · page 0」 에서만 ChatGPT 탭 하나를 열고
+ * 전체 신원을 다시 보는지, 그 밖의 불일치에서는 탭을 하나도 열지 않는지 본다 (2026-10-07 자연 회차 결함).
+ *
+ * 🔴 **실제 Chrome · ChatGPT 에 닿지 않는다.** 신원 판정은 실제 `verifyAutomationProfile` →
+ *    `judgeAutomationProfile` 을 쓰고, 주입하는 것은 입력(표식 · 명령줄 · 포트 · 페이지 목록)과
+ *    탭을 여는 함수뿐이다. probe 는 신원 다음 단계(`browserCheck`)에서 멈춘다 — 메시지 입력·send 0.
+ *
+ * 🔴 `CHATGPT_ZERO_PAGE_LIB_DIR` 는 변이 시험(`chatgpt-zero-page-mutation.mjs`)이 바꾼 lib 폴더를 넣는 자리다.
+ *
+ * 사용: node scripts/chatgpt-zero-page-check.mjs
+ */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+/**
+ * 🔴 **실제 CDP 포트로 가는 요청을 전부 막는다** (2026-10-07 사고).
+ *    수정 뒤 코드로 주입 없는 재현 스크립트를 돌렸다가, 기본값 `/json/new` 가 이 기기의 **운영 자동화
+ *    Chrome 에 실제 ChatGPT 탭 2개**를 열었다. 시험이 주입을 빠뜨려도 실제 브라우저에 닿지 않게,
+ *    127.0.0.1·localhost 의 9333/9344 요청은 던지고 시도 자체를 실패로 센다.
+ */
+const realCdpAttempts = []
+const realFetch = globalThis.fetch
+globalThis.fetch = async (input, init) => {
+  const url = String(input?.url ?? input)
+  if (/^https?:\/\/(127\.0\.0\.1|localhost):(9333|9344)\b/.test(url)) {
+    realCdpAttempts.push(url)
+    throw new Error(`시험이 실제 CDP 에 닿으려 했다: ${url}`)
+  }
+  return realFetch(input, init)
+}
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const LIB = process.env.CHATGPT_ZERO_PAGE_LIB_DIR ?? path.join(HERE, 'lib')
+const SESS = await import(pathToFileURL(path.join(LIB, 'chatgpt-session.mjs')).href)
+const AP = await import(pathToFileURL(path.join(LIB, 'chatgpt-automation-profile.mjs')).href)
+
+let pass = 0
+let fail = 0
+function check(name, ok, detail = '') {
+  if (ok) pass++
+  else { fail++; console.log(`  ❌ ${name}${detail ? ` — ${detail}` : ''}`) }
+}
+const finish = () => console.log(`\n${fail ? '🔴' : '✅'} page 0건 복구 검사 ${pass}/${pass + fail}\n`)
+process.on('uncaughtException', (e) => { fail++; console.log(`  ❌ 예외로 중단 — ${e.message}`); finish(); process.exit(1) })
+process.on('unhandledRejection', (e) => { fail++; console.log(`  ❌ 예외로 중단 — ${e?.message ?? e}`); finish(); process.exit(1) })
+
+const CHATGPT_PAGE = { id: 'T-new', type: 'page', url: 'https://chatgpt.com/' }
+const GOOD_MARKER = { schemaVersion: 1, purpose: AP.MARKER_PURPOSE, cdpPort: AP.AUTOMATION_CDP_PORT }
+const OUR_CMD = `Chrome --user-data-dir=${AP.AUTOMATION_PROFILE_DIR} --remote-debugging-port=${AP.AUTOMATION_CDP_PORT}`
+
+/**
+ * 가짜 세계 — 실제 판정 함수에 넣을 입력과, 탭을 열면 목록에 page 가 생기는 브라우저.
+ * `over` 로 표식·권한·명령줄·포트·목록 읽기를 바꾼다.
+ */
+function world(over = {}) {
+  const state = {
+    pages: over.pages ?? [],
+    readOk: over.readOk ?? true,
+    portInUse: over.portInUse ?? true,
+    opens: 0,
+    lagReads: over.lagReads ?? 0,
+  }
+  const verifyProfileFn = (args = {}) => SESS.verifyAutomationProfile({
+    ...args,
+    // 🔴 신원 계약은 실제 자동화 폴더 경로다. 잠금 판정용 임시 폴더(아래)와 섞지 않는다
+    profileDir: AP.AUTOMATION_PROFILE_DIR,
+    // 🔴 `marker: null` 은 「표식 없음」 이다 — `??` 로 정상 표식이 되지 않게 키 존재로 가른다
+    readMarkerFn: () => ('marker' in over && !over.marker
+      ? { ok: false, why: '용도 표식이 없다' }
+      : { ok: true, marker: over.marker ?? GOOD_MARKER, mode: over.markerMode ?? 0o600, dirMode: over.dirMode ?? 0o700 }),
+    commandLinesFn: () => over.commandLines ?? [OUR_CMD],
+    portInUseFn: async () => state.portInUse,
+    listTargets: async () => {
+      if (!state.readOk) return { readOk: false, pages: null }
+      // 목록 반영이 늦는 상황 — 연 직후 몇 번은 아직 0건으로 보인다
+      if (state.lagReads > 0 && state.opens > 0) { state.lagReads -= 1; return { readOk: true, pages: [] } }
+      return { readOk: true, pages: state.pages }
+    },
+  })
+  const openTargetFn = async () => {
+    state.opens += 1
+    if (over.openFails) return { ok: false, why: '시험: /json/new 거부' }
+    const target = over.openedTarget ?? CHATGPT_PAGE
+    state.pages = [...state.pages, target, ...(over.afterOpenExtra ?? [])]
+    return { ok: true, target }
+  }
+  return { state, verifyProfileFn, openTargetFn }
+}
+
+/** probe 를 신원 관문 다음 단계에서 멈춘다 — browserCheck=false 면 BROWSER_MISSING 으로 끝난다(실제 CDP 0) */
+const probeIn = (w) => SESS.probe({ verifyProfileFn: w.verifyProfileFn, openTargetFn: w.openTargetFn, browserCheck: () => false })
+/**
+ * 🔴 **환경을 읽지 않는다.** 잠금 판정은 임시 폴더로 고정한다 — 실제 자동화 프로필은 지금
+ *    운영 Chrome 이 쓰고 있어 LIVE 로 판정된다 (첫 실행에서 실제로 그렇게 걸렸다).
+ */
+const LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'zero-page-lock-'))
+process.on('exit', () => fs.rmSync(LOCK_DIR, { recursive: true, force: true }))
+const ensureIn = (w, over = {}) => {
+  let spawned = 0
+  return SESS.ensureChrome({
+    waitMs: 200, pollMs: 20, browserCheck: () => true, processes: () => '', profileDir: LOCK_DIR,
+    cdpCheck: async () => w.state.portInUse,
+    spawnFn: () => { spawned += 1; return { unref() {} } },
+    verifyProfileFn: w.verifyProfileFn, openTargetFn: w.openTargetFn, ...over,
+  }).then((r) => ({ r, spawned }))
+}
+
+console.log('\npage 0건 복구 — 신원 관문')
+
+// ① 정확한 프로필 + 실행 중 + page 0 → 탭 1개 → 재검사 통과 → probe 진행
+{
+  const w = world()
+  const p = await probeIn(w)
+  check('① probe — 정확한 프로필 · 실행 중 · page 0 이면 ChatGPT 탭을 정확히 1개 연다', w.state.opens === 1, `opens ${w.state.opens}`)
+  check('① probe — 탭을 연 뒤 전체 신원 재검사를 통과해 다음 단계로 진행한다', p.status === SESS.STATUS.BROWSER_MISSING && p.zeroPageBootstrap?.opened === true,
+    `${p.status} · ${JSON.stringify(p.zeroPageBootstrap)}`)
+  check('① probe — 메시지 입력·send 경로에 닿지 않았다 (CDP 연결 0)', p.connected === false, `connected ${p.connected}`)
+  const w2 = world()
+  const e = await ensureIn(w2)
+  check('① ensureChrome(hero 경로) — page 0 이면 탭 1개를 열고 ok', e.r.ok === true && w2.state.opens === 1 && e.spawned === 0,
+    `ok ${e.r.ok} · opens ${w2.state.opens} · spawn ${e.spawned} · ${e.r.why ?? ''}`)
+  check('① ensureChrome — 기록에 복구가 남는다', e.r.zeroPageBootstrap?.opened === true, JSON.stringify(e.r.zeroPageBootstrap))
+  const w3 = world({ lagReads: 2 })
+  const e3 = await ensureIn(w3)
+  check('① 목록 반영이 늦어도 탭은 1개만 열고 기다린 뒤 통과한다', e3.r.ok === true && w3.state.opens === 1, `ok ${e3.r.ok} · opens ${w3.state.opens} · ${e3.r.why ?? ''}`)
+  const w4 = world({ pages: [CHATGPT_PAGE] })
+  const e4 = await ensureIn(w4)
+  check('① ChatGPT page 가 이미 있으면 탭을 열지 않는다', e4.r.ok === true && w4.state.opens === 0, `opens ${w4.state.opens}`)
+}
+
+// ② 목록 읽기 실패 → 탭 0
+{
+  const w = world({ readOk: false })
+  const p = await probeIn(w)
+  const e = await ensureIn(world({ readOk: false }))
+  check('② 페이지 목록을 못 읽으면 탭 생성 0 · MISMATCH (probe)', w.state.opens === 0 && p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && /읽지 못했다/.test(p.errorDetail ?? ''),
+    `opens ${w.state.opens} · ${p.status} · ${p.errorDetail}`)
+  check('② 목록 읽기 실패는 ensureChrome 에서도 ok 가 아니다', e.r.ok === false && /읽지 못했다/.test(e.r.why ?? ''), e.r.why)
+}
+
+// ③ 다른 호스트 page → 탭 0
+for (const [name, pages] of [
+  ['다른 호스트 page 만', [{ type: 'page', url: 'https://www.google.com/' }]],
+  ['ChatGPT + 다른 호스트 page', [CHATGPT_PAGE, { type: 'page', url: 'https://mail.google.com/' }]],
+  ['운영 중 auth.openai.com', [{ type: 'page', url: 'https://auth.openai.com/log-in' }]],
+]) {
+  const w = world({ pages })
+  const p = await probeIn(w)
+  check(`③ ${name} → 탭 생성 0 · MISMATCH`, w.state.opens === 0 && p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH, `opens ${w.state.opens} · ${p.status}`)
+}
+
+// ④ 표식 · 폴더 권한 · 포트 주인 · 명령줄 불일치 → 탭 0
+for (const [name, over] of [
+  ['표식 용도가 다르다', { marker: { ...GOOD_MARKER, purpose: 'someone-else' } }],
+  ['표식 포트가 다르다', { marker: { ...GOOD_MARKER, cdpPort: 9333 } }],
+  ['표식 권한 0644', { markerMode: 0o644 }],
+  ['폴더 권한 0755', { dirMode: 0o755 }],
+  ['포트 주인이 다른 프로세스', { commandLines: ['Chrome --user-data-dir=/tmp/other --remote-debugging-port=9344'] }],
+  ['같은 폴더 · 다른 포트', { commandLines: [`Chrome --user-data-dir=${AP.AUTOMATION_PROFILE_DIR} --remote-debugging-port=9222`] }],
+]) {
+  const w = world(over)
+  const p = await probeIn(w)
+  const w2 = world(over)
+  const e = await ensureIn(w2)
+  check(`④ ${name} → 탭 생성 0 (probe · ensureChrome)`, w.state.opens === 0 && w2.state.opens === 0 && p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && e.r.ok === false,
+    `opens ${w.state.opens}/${w2.state.opens} · ${p.status} · ${p.errorDetail}`)
+}
+
+// ⑤ target 생성 실패 → 안전 중단
+{
+  const w = world({ openFails: true })
+  const p = await probeIn(w)
+  check('⑤ /json/new 실패 → 안전 중단 (MISMATCH · 진행 0)', p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && /열지 못했다/.test(p.errorDetail ?? '') && w.state.opens === 1,
+    `${p.status} · ${p.errorDetail}`)
+  const e = await ensureIn(world({ openFails: true }))
+  check('⑤ ensureChrome 도 ok 가 아니다', e.r.ok === false && /열지 못했다/.test(e.r.why ?? ''), e.r.why)
+}
+
+// ⑥ 생성된 target 이 ChatGPT 가 아니다 → 안전 중단
+for (const [name, openedTarget] of [
+  ['about:blank', { id: 'T-x', type: 'page', url: 'about:blank' }],
+  ['다른 호스트', { id: 'T-y', type: 'page', url: 'https://example.com/' }],
+  ['page 가 아닌 target', { id: 'T-z', type: 'service_worker', url: 'https://chatgpt.com/sw.js' }],
+]) {
+  const w = world({ openedTarget })
+  const p = await probeIn(w)
+  check(`⑥ 열린 target 이 ChatGPT page 가 아니다(${name}) → 안전 중단`, p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && /ChatGPT page 가 아니다/.test(p.errorDetail ?? ''),
+    `${p.status} · ${p.errorDetail}`)
+}
+{
+  // ChatGPT 탭은 열렸지만 그 사이 남의 페이지가 나타났다 — 재검사가 잡아야 한다
+  const w = world({ afterOpenExtra: [{ type: 'page', url: 'https://www.youtube.com/' }] })
+  const p = await probeIn(w)
+  check('⑥ 탭을 연 뒤 전체 신원 재검사가 실패하면 진행하지 않는다', p.status === SESS.STATUS.AUTOMATION_PROFILE_MISMATCH && /재검사 실패/.test(p.errorDetail ?? ''),
+    `${p.status} · ${p.errorDetail}`)
+}
+
+// ⑦ Chrome 이 꺼진 상태의 auto-start 회귀
+{
+  // 꺼져 있다 → spawn → Chrome 이 chatgpt.com 으로 뜬다 → 탭 생성 0
+  const w = world({ portInUse: false })
+  let polls = 0
+  const e = await ensureIn(w, {
+    cdpCheck: async () => { polls += 1; if (polls > 1) { w.state.portInUse = true; w.state.pages = [CHATGPT_PAGE] } return w.state.portInUse },
+  })
+  check('⑦ Chrome 이 꺼져 있으면 띄우고 통과한다 (탭 생성 0)', e.r.ok === true && e.r.started === true && e.spawned === 1 && w.state.opens === 0,
+    `ok ${e.r.ok} · started ${e.r.started} · spawn ${e.spawned} · opens ${w.state.opens}`)
+  // 띄웠는데 아직 page 0 → 복구 1회
+  const w2 = world({ portInUse: false })
+  let polls2 = 0
+  const e2 = await ensureIn(w2, { cdpCheck: async () => { polls2 += 1; if (polls2 > 1) w2.state.portInUse = true; return w2.state.portInUse } })
+  check('⑦ 띄운 직후 page 0 이면 탭 1개를 열고 통과한다', e2.r.ok === true && e2.r.started === true && w2.state.opens === 1, `ok ${e2.r.ok} · opens ${w2.state.opens} · ${e2.r.why ?? ''}`)
+  // 꺼진 상태에서 표식이 틀리면 띄우지도 않는다
+  const w3 = world({ portInUse: false, marker: null })
+  const e3 = await ensureIn(w3)
+  check('⑦ 꺼진 상태에서 표식이 틀리면 spawn 0 · 탭 0', e3.r.ok === false && e3.spawned === 0 && w3.state.opens === 0, `spawn ${e3.spawned} · ${e3.r.why}`)
+}
+
+// ⑧ hero 경로 — hero runner 는 ensureChrome 하나에 달려 있다
+{
+  const HERO_SRC = (await import('node:fs')).readFileSync(path.join(HERE, 'magazine-hero-runner.mjs'), 'utf8')
+  check('⑧ hero runner 는 ensureChrome 을 거친 뒤에 탭을 연다', /const boot = await ensureChrome\(\)[\s\S]{0,400}ensurePageTarget\(\)/.test(HERO_SRC), 'ensureChrome → ensurePageTarget 순서')
+  const w = world()
+  const e = await ensureIn(w)
+  check('⑧ hero 경로(ensureChrome) page 0 → 탭 1개 · ok', e.r.ok === true && w.state.opens === 1, `ok ${e.r.ok} · opens ${w.state.opens}`)
+}
+
+// ⑨ 로그인 모드는 page 0 을 원래대로 허용한다 — 복구가 끼어들지 않는다
+{
+  const w = world()
+  const r = await SESS.verifyWithZeroPageBootstrap(w.verifyProfileFn, { mode: 'login', requireRunning: true }, { openTargetFn: w.openTargetFn })
+  check('⑨ 로그인 모드 page 0 은 그대로 ok · 탭 생성 0', r.ok === true && w.state.opens === 0, `ok ${r.ok} · opens ${w.state.opens}`)
+  const judged = AP.judgePages(null, { readOk: false })
+  check('⑨ 읽기 실패 판정에는 zeroPage 가 붙지 않는다', judged.ok === false && judged.zeroPage !== true, JSON.stringify(judged))
+  const foreign = AP.judgePages([{ type: 'page', url: 'https://www.google.com/' }])
+  check('⑨ 남의 페이지 판정에는 zeroPage 가 붙지 않는다', foreign.ok === false && foreign.zeroPage !== true, JSON.stringify(foreign))
+}
+
+check('실제 CDP 포트 요청 0 (운영 Chrome 에 닿지 않았다)', realCdpAttempts.length === 0, realCdpAttempts.join(' · '))
+finish()
+process.exitCode = fail ? 1 : 0
