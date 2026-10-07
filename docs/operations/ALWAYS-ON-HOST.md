@@ -1,8 +1,9 @@
 # 상시 실행 호스트 — 의존성 목록 · 이전 묶음 · 전환/되돌리기
 
-> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-09-29 — 범위를 D100 레인 하나로 좁힘 · 기종 무관(AC 필수)
+> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-10-07 — 집 Mac 단일 owner 확정 · 기종 무관(AC 필수)
 > 코드 정본: `scripts/host-migrate.mts` (CLI) · `scripts/lib/host-migrate.mts` (판정) · `scripts/host-migrate-check.mts` (검사)
-> 🔴 이 문서의 숫자는 **2026-09-29 측정 스냅샷**이다. 현재값은 `npm run host:migrate` 로 다시 잰다.
+> 🔴 §2와 §6.1~6.2의 숫자는 **작성 당시 측정 스냅샷**이다. 최신 plan은 §6.3과
+> `npm run host:migrate`가 정한다. 단계·콘텐츠 정책은 D100 canon이 정한다.
 
 ## 1. 왜 필요한가 · 이번 범위
 
@@ -13,6 +14,15 @@ D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에�
 **대상은 상시 켜 둘 Mac 한 대다 — 기종은 묻지 않는다.** 배터리 있는 MacBook 도 된다.
 단 **D100 운영 조건은 AC 전원**이다: 사전 점검은 `pmset -g batt`(못 읽으면 `pmset -g ps`)를 읽어
 "AC 에 꽂혀 있음(charging · charged · AC attached)" 이면 통과, "배터리로 돌고 있음(discharging · Battery Power)" 이면 실패로 본다.
+
+### 1.0 2026-10-07 확정한 owner
+
+- **집 Mac 한 대를 D100 9개 job의 유일한 owner로 쓴다.** 회사 Mac에는 매거진 job만 남긴다.
+- 회사 Mac은 창업자의 통근 시간 08:15~09:40, 18:10~20:30에 덮개가 닫히므로 D100 owner 조건을 만족하지 못한다.
+- 10월 7일 08:19:56 clamshell sleep → 09:12:50 wake가 실제로 관측됐고, 그 사이 09:10:27 첫 댓글
+  마감을 놓쳐 D5 증명이 실패했다. `caffeinate`는 clamshell sleep을 막는 해결책이 아니다.
+- 정상 운영은 창업자가 새벽에 일어나거나 통근 중 노트북을 열어 주는 것에 의존하지 않는다.
+- owner 변경은 아래 cutover 절차로만 한다. 두 Mac에서 D100을 동시에 실행하지 않는다.
 
 ### 1.1 첫 이전 범위 = D100 레인 하나 (단일 정본 `D100_LANE_LABELS`)
 
@@ -218,15 +228,36 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
   전원: 🟢 `AC 연결 · 배터리 charging` (이 MacBook 이 당시 AC 에 꽂혀 있었다). `--apply` 는 rehearsal · 가짜 홈 node 없음 · 자동 로그인 없음으로 거부.
 - 묶음·렌더 결과는 곧바로 삭제했다. 실제 LaunchAgents · env.local · runtime · launchctl 은 건드리지 않았다.
 
-## 7. 창업자 결정 하나
+### 6.3 최신 plan (2026-10-07 09:51 KST)
 
-**D100 을 돌릴 Mac 한 대를 정하고, 그 기계를 "AC 상시 연결 + 자동 로그인(FileVault 끔)" 으로 둘 것인가.**
+- runtime HEAD=pin `38efdd3ee5cb69fc5142d065825ce3d25f764a39`, Node `v24.14.0`.
+- D100 allowlist 9개는 모두 설치돼 있고 loaded다. 매거진 4개 job은 범위 밖이다.
+- state·secret·D100 로그의 예상 bundle은 76.2MB다.
+- **미분류 2건 때문에 export는 fail-closed다.** 코드 분류를 고치기 전에는 quiesce하지 않는다.
 
-- 기종은 묻지 않는다. 쓰지 않는 MacBook 도, 데스크톱 Mac 도 된다. 조건은 사전 점검이 잰다.
+| 경로 | 의미 | 확정 처리 |
+|---|---|---|
+| `persona-autogen` | PR #661의 Persona 30 creative 결과를 포함한 운영 상태 | `state`로 이관 |
+| `queue-locks` | 원 host의 일시 잠금 디렉터리 | bundle에서 제외, 대상에서 필요 시 새로 생성 |
+
+- 대상에서 `gh auth login`, `gcloud auth application-default login`을 새로 한다.
+- Naver storage state는 secret으로 옮긴 뒤 대상에서 로그인 유지 여부를 확인한다.
+- 82cook job은 첫 cutover allowlist 밖이며 계속 OFF다. D100 기본 운영이 안정된 뒤 별도 canary와 등록을 한다.
+- 낮에는 분류 보정·검사·rehearsal·대상 install dry-run까지만 한다. 실제 quiesce는 창업자가 퇴근 직전
+  "나 퇴근한다. 원본 Mac quiesce하고 최종 이관 bundle 만들자"라고 알린 뒤 시작한다.
+- 집에서는 "집 도착했다. 집 Mac에 설치하고 운영권 넘기자"라고 알린 뒤 verify·install·운영 확인을 이어간다.
+
+## 7. 확정 결정과 남은 사람 작업
+
+**owner 선택은 끝났다. 집 Mac을 "AC 상시 연결 + 로그인 세션 유지" 상태로 두고 오늘 밤 cutover한다.**
+
+- 기종은 묻지 않는다. 조건은 install 사전 점검이 잰다.
 - **MacBook 이면**: 어댑터를 늘 꽂아 둔다(배터리로 돌기 시작하면 사전 점검이 실패로 본다 — 운영 중에는 `ops:status` 로 본다).
   [추정] 덮개를 닫으면 외부 모니터 없이 잠든다 — 덮개를 열어 두거나, 외부 모니터·전원을 연결한 clamshell 로 둔다.
   배터리가 짧은 정전을 버티므로 `autorestart` 는 요구하지 않는다.
 - **배터리 없는 Mac 이면**: `sudo pmset -a autorestart 1` 이 필요하다(정전 뒤 자동으로 켜짐). 선택: 소형 UPS.
 - 공통 설정(설치 전 사람이 한다): `sudo pmset -a sleep 0 womp 1` · 가능하면 유선 LAN ·
   시스템 설정에서 자동 로그인 = 운영 사용자(→ FileVault 끔이 조건) · nvm node `v24.14.0` · gh/gcloud 로그인.
-- FileVault 를 끄지 않으면: 재부팅(업데이트·정전) 뒤 사람이 비밀번호를 칠 때까지 job 0개다. 이 교환을 받아들일지가 결정의 핵심이다.
+- FileVault를 유지하면 재부팅 뒤 사람이 비밀번호를 칠 때까지 job 0개라는 제한을 받아들여야 한다.
+- 창업자가 직접 해야 하는 것은 대상 Mac의 로그인·전원/수면 설정·gh/gcloud/Naver 인증뿐이다. 코드 분류,
+  bundle, quiesce, install 검증과 rollback 판단은 운영 마스터가 지휘한다.
