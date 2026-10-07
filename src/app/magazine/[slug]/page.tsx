@@ -6,7 +6,9 @@ import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import MagazineBody from '@/components/features/MagazineBody'
 import RelatedMagazineList from '@/components/features/RelatedMagazineList'
-import LoggedOutViewTracker from '@/components/features/signup-funnel/LoggedOutViewTracker'
+import SignupFunnelBoundary from '@/components/features/signup-funnel/SignupFunnelBoundary'
+import SignupFunnelMarker from '@/components/features/signup-funnel/SignupFunnelMarker'
+import { isSignupFunnelTracking } from '@/lib/signup-funnel-tracking'
 import { getMagazineArticleBySlug } from '@/lib/magazine'
 import { resolveRelatedMagazine } from '@/lib/magazine-graph'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
@@ -107,7 +109,7 @@ export function generateMetadata({ params }: { params: { slug: string } }): Meta
   }
 }
 
-export default function MagazineArticlePage({ params }: { params: { slug: string } }) {
+export default async function MagazineArticlePage({ params }: { params: { slug: string } }) {
   const article = getMagazineArticleBySlug(params.slug)
   if (!article) notFound()
 
@@ -117,12 +119,11 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
    */
   const related = resolveRelatedMagazine(article)
   const structuredData = buildStructuredData(article)
+  // 회원가입 전환 — 수집 gate 가 열리고 로그인되지 않은 방문일 때만 tracker 와 감지 지점을 그린다.
+  const tracking = await isSignupFunnelTracking()
 
   return (
     <PageShell>
-      {/* 회원가입 전환 ① — 수집 gate 가 열리고 로그인되지 않은 방문에서만 그려진다. 아무것도 그리지 않는다. */}
-      <LoggedOutViewTracker contentType="magazine" />
-
       {/* 값은 전부 TS 데이터 파일(articles.ts)에서 온다. 사용자 입력이 들어오는 경로가 없다. */}
       {structuredData.map((data) => (
         <script
@@ -132,46 +133,50 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
         />
       ))}
 
-      <main className="mx-auto max-w-3xl px-4 pb-16">
-        <nav className="py-2">
-          <Link href="/magazine" className={`inline-flex ${TOUCH_MIN} items-center text-sm text-link`}>
-            ← 매거진
-          </Link>
-        </nav>
+      <SignupFunnelBoundary active={tracking} contentType="magazine">
+        <main className="mx-auto max-w-3xl px-4 pb-16">
+          <nav className="py-2">
+            <Link href="/magazine" className={`inline-flex ${TOUCH_MIN} items-center text-sm text-link`}>
+              ← 매거진
+            </Link>
+          </nav>
 
-        {/* 커뮤니티 상세와 같은 면 규칙이다 — 오래 읽는 화면은 흰 면 위에 둔다 */}
-        <article className="rounded-2xl border border-subtle bg-surface-card px-4 py-5 sm:px-6 sm:py-6">
-          <h1 className="text-2xl font-bold leading-snug text-content-primary">{article.title}</h1>
+          {/* 커뮤니티 상세와 같은 면 규칙이다 — 오래 읽는 화면은 흰 면 위에 둔다 */}
+          <article className="rounded-2xl border border-subtle bg-surface-card px-4 py-5 sm:px-6 sm:py-6">
+            <h1 className="text-2xl font-bold leading-snug text-content-primary">{article.title}</h1>
 
-          <p className="mt-3 flex flex-wrap items-center gap-x-2 text-meta text-content-muted">
-            <span className="font-bold text-brand-strong">
-              {MAGAZINE_CLUSTER_LABELS[article.cluster]}
-            </span>
-            <span aria-hidden>·</span>
-            <span>{`${BRAND_NAME} 편집팀`}</span>
-            <span aria-hidden>·</span>
-            <span>{formatMagazinePublishedDate(article.publishedAt)}</span>
-          </p>
+            <p className="mt-3 flex flex-wrap items-center gap-x-2 text-meta text-content-muted">
+              <span className="font-bold text-brand-strong">
+                {MAGAZINE_CLUSTER_LABELS[article.cluster]}
+              </span>
+              <span aria-hidden>·</span>
+              <span>{`${BRAND_NAME} 편집팀`}</span>
+              <span aria-hidden>·</span>
+              <span>{formatMagazinePublishedDate(article.publishedAt)}</span>
+            </p>
 
-          {article.heroImage ? (
-            <Image
-              src={article.heroImage.src}
-              alt={article.heroImage.alt}
-              width={article.heroImage.width}
-              height={article.heroImage.height}
-              className="mt-5 h-auto w-full rounded-lg"
-              priority
-            />
-          ) : null}
+            {article.heroImage ? (
+              <Image
+                src={article.heroImage.src}
+                alt={article.heroImage.alt}
+                width={article.heroImage.width}
+                height={article.heroImage.height}
+                className="mt-5 h-auto w-full rounded-lg"
+                priority
+              />
+            ) : null}
 
-          <div className="mt-5">
-            <MagazineBody article={article} />
-          </div>
-        </article>
+            <div className="mt-5">
+              <MagazineBody article={article} />
+            </div>
+            {/* 회원가입 전환 — 본문 카드 끝 감지 지점. 아래 연관 글은 기준이 아니다. 높이 0. */}
+            {tracking ? <SignupFunnelMarker kind="content-end" /> : null}
+          </article>
 
-        {/* 🔴 graphVersion 은 넘기지 않는다 — 항목마다 다르다 (보충은 'none') */}
-        <RelatedMagazineList items={related.items} fromSlug={article.slug} />
-      </main>
+          {/* 🔴 graphVersion 은 넘기지 않는다 — 항목마다 다르다 (보충은 'none') */}
+          <RelatedMagazineList items={related.items} fromSlug={article.slug} />
+        </main>
+      </SignupFunnelBoundary>
     </PageShell>
   )
 }
