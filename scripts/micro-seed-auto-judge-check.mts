@@ -9,7 +9,7 @@ import {
   judgeOne, summarize, checkRegression, violatesProvenance, readReasons, readFlags,
   AUTO_DECISIONS, HUMAN_DECISIONS, HUMAN_PROVENANCE, AUTO_PROVENANCE, RULE_VERSION,
   HARD_BLOCK, HOLD_REASONS, KNOWN_SAFETY_CODES, REASON_LABEL, SEED_AXIS, RAW_AXIS,
-  PROVEN_LANES, HOLD_ASSET_AXES, parseSemantic, hardGate, preSemanticGate,
+  PROVEN_LANES, HOLD_ASSET_AXES, parseSemantic, hardGate, preSemanticGate, normalizeJudgeRow, holdBeforeAsking,
   SEMANTIC_RISKS, SEMANTIC_DROP, SEMANTIC_HOLD, MIN_CONFIDENCE, BODY_HEAD_MAX,
   SEMANTIC_STATUSES, PROMPT_VERSION, inputHashOf, SKIPPED,
   type JudgeInput, type SemanticVerdict, type SemanticOutcome,
@@ -126,6 +126,21 @@ console.log('\n②-b 🔴 v1 오진 회귀 방지 — title · bodyHead 가 판�
     return !/export const ALLOW_AUTO_PASS/.test(lib) && !/'passDisabled'/.test(lib)
   })())
   check('🟢 정상 후보는 실제로 AUTO_SEED 가 된다', j().decision === 'AUTO_SEED')
+  /**
+   * 🔴 **이미 쌓인 가입 안내 행도 묻기 전에 막는다** (2026-10-04~07 실측 235건).
+   *    그 행은 사본에 `access: ok` 로 적혀 있다 — 정규화 하나가 bodyHead 를 보고 고친다.
+   */
+  {
+    const gateHead = '이 글은 검색 비허용 게시물입니다. 게시물을 확인하기 위해서는 가입이 필요합니다. 이 카페의 멤버가 되어보세요. 카페에 가입하면 바로 글을 볼 수 있어요!'
+    const row = { sourceSite: 'navercafe:remonterrace', sourceArticleId: '35074946', axis: SEED_AXIS, access: 'ok',
+      title: '학원등록할때 집주소까지 다 기록하나요?', bodyHead: gateHead, safetyVerdict: 'pass', bodyLength: 249 }
+    const d = normalizeJudgeRow(row, 'detail')
+    const r = normalizeJudgeRow({ ...row, access: undefined, accessStatus: 'ok' }, 'raw-detail')
+    check('🔴 사본이 ok 라고 적었어도 가입 안내면 access 가 ok 가 아니다', d !== null && d.access !== 'ok' && r !== null && r.access !== 'ok')
+    check('🔴 그 행은 묻기 전에 HOLD — 묶음 자리도 유료 호출도 쓰지 않는다',
+      d !== null && holdBeforeAsking(d).includes('accessNotOk'))
+    check('🟢 실제 본문 행은 그대로 ok', normalizeJudgeRow({ ...row, bodyHead: '화장실 청소요 오늘 할건데 미루다 미루다' }, 'detail')?.access === 'ok')
+  }
   check('🟢 raw 축이면 AUTO_RAW',
     j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_RAW' })).decision === 'AUTO_RAW')
 }
