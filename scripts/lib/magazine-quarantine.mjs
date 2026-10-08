@@ -30,14 +30,49 @@ import {
   closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync,
   writeFileSync, writeSync,
 } from 'node:fs'
-import { homedir, hostname } from 'node:os'
+import { homedir, hostname, userInfo } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+
+const QUARANTINE_REL = ['Library', 'Application Support', 'soransoran', 'magazine-quarantine.json']
 
 /** 🔴 저장소 밖이다. runtime 을 더럽히지 않는다 */
-export const QUARANTINE_PATH = join(
-  homedir(), 'Library', 'Application Support', 'soransoran', 'magazine-quarantine.json',
-)
+export const QUARANTINE_PATH = join(homedir(), ...QUARANTINE_REL)
+
+/**
+ * 🔴 **시험은 운영 장부에 닿지 않는다** (2026-10-08 실제 사고 · Codex 재검토).
+ *    시험 래퍼가 장부 경로를 빠뜨려 drive·재생성이 운영 장부를 기본값으로 다시 썼다.
+ *    `SORAN_MAGAZINE_TEST_MODE=1` 인데 쓰려는 장부가 **운영 장부 위치**면 잠금·읽기·쓰기 전에 멈춘다.
+ *
+ *    운영 위치는 `HOME` 환경변수가 아니라 **계정 정보(passwd)** 로 정한다 — 시험이 HOME 을 임시 폴더로
+ *    바꿔도 진짜 운영 위치는 그대로 안다. 계정 정보를 못 읽으면 위치를 모르는 것이므로 시험 모드 쓰기를 막는다.
+ *    `SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME` 은 **막을 위치를 하나 더 보탤 뿐** 가드를 끄지 못한다
+ *    (시험이 가짜 운영 위치로 가드를 확인하는 자리).
+ *    운영 실행(TEST_MODE 아님)은 이 가드를 지나지 않는다 — 기존 동작 그대로다.
+ */
+export const TEST_OPERATION_PATH_BLOCKED = 'TEST_OPERATION_PATH_BLOCKED'
+export function operationalQuarantinePaths(env = process.env) {
+  const homes = []
+  try { homes.push(userInfo().homedir) } catch { homes.push(null) }
+  if (env.SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME) homes.push(env.SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME)
+  return homes.map((h) => (h ? resolve(join(h, ...QUARANTINE_REL)) : null))
+}
+export function testOperationPathBlocked(path = QUARANTINE_PATH, env = process.env) {
+  if (env.SORAN_MAGAZINE_TEST_MODE !== '1') return null
+  const ops = operationalQuarantinePaths(env)
+  if (ops.includes(null)) {
+    return { ok: false, code: TEST_OPERATION_PATH_BLOCKED, why: '시험 모드인데 운영 장부 위치를 확인할 수 없다 — 잠금·읽기·쓰기 0' }
+  }
+  if (!ops.includes(resolve(String(path)))) return null
+  return { ok: false, code: TEST_OPERATION_PATH_BLOCKED, why: `시험 모드에서 운영 장부 경로에 닿으려 했다 — 잠금·읽기·쓰기 0: ${path}` }
+}
+const throwIfTestOperationPath = (path) => {
+  const b = testOperationPathBlocked(path)
+  if (!b) return
+  const err = new Error(b.why)
+  err.code = b.code
+  throw err
+}
 
 /**
  * 몇 번 막히면 빼 두는가.
@@ -285,6 +320,9 @@ export function recordFailure({ entry, fingerprint = null, now, reasons = [], ki
  *    **전부 HOLD** 로 두고 다음 회차를 기다린다 — 새 글을 태우지도, 옛 실패를 지우지도 않는다.
  */
 export function readQuarantine(path = QUARANTINE_PATH) {
+  // 🔴 시험 모드 + 운영 장부 → 존재 확인조차 하지 않는다 (읽기 0)
+  const blocked = testOperationPathBlocked(path)
+  if (blocked) return { ok: false, code: blocked.code, store: {}, why: blocked.why }
   if (!existsSync(path)) return { ok: true, store: {}, why: '장부 없음 — 처음이다' }
   let raw
   try { raw = readFileSync(path, 'utf8') }
@@ -312,6 +350,7 @@ export function loadQuarantine(path = QUARANTINE_PATH) {
 }
 
 export function saveQuarantine(store, path = QUARANTINE_PATH) {
+  throwIfTestOperationPath(path)
   mkdirSync(dirname(path), { recursive: true })
   const text = `${JSON.stringify(store, null, 2)}\n`
   const tmp = `${path}.tmp-${process.pid}`
@@ -455,6 +494,9 @@ export function revertRegenAttempt({ slug, attemptId, extra = {}, path = QUARANT
  *    그래서 **매 변경마다 최신 장부를 다시 읽는다.** 들고 있던 사본을 쓰지 않는다.
  */
 export function updateQuarantine(mutate, path = QUARANTINE_PATH) {
+  // 🔴 시험 모드 + 운영 장부 → 잠금 생성 전에 멈춘다 (잠금·읽기·쓰기 0)
+  const blocked = testOperationPathBlocked(path)
+  if (blocked) return { ok: false, code: blocked.code, why: blocked.why }
   /**
    * 🔴 **읽기·판정·쓰기 전체가 하나의 프로세스 간 임계구역이다** (2026-09-28 · Codex P0).
    *    앞판은 read → mutate → save 였을 뿐 잠금이 없었다. 두 프로세스가 같은 slug·같은 지문을
@@ -619,6 +661,8 @@ function reclaimDeadLock(lock, seenToken, inspectOpts = {}) {
  *   `fn` 이 던지면 잠금을 푼 뒤 그대로 던진다.
  */
 export function withQuarantineLock(path, fn, { waitMs = QUARANTINE_LOCK_WAIT_MS } = {}) {
+  const blocked = testOperationPathBlocked(path)
+  if (blocked) return { ok: false, code: blocked.code, why: blocked.why }
   const lock = quarantineLockPath(path)
   try { mkdirSync(dirname(path), { recursive: true }) }
   catch (e) { return { ok: false, code: 'QUARANTINE_LOCK_ERROR', why: `장부 폴더를 만들지 못했다: ${e.message}` } }
@@ -694,6 +738,8 @@ export function manuscriptLeasePath(slug, path = QUARANTINE_PATH) {
  *          |{ok:false, code:'MANUSCRIPT_IN_PROGRESS'|'MANUSCRIPT_LEASE_ERROR', why:string, owner?:object}}
  */
 export function acquireManuscriptLease({ slug, work, attemptId = null, path = QUARANTINE_PATH, identityOf = processIdentity }) {
+  const blocked = testOperationPathBlocked(path)
+  if (blocked) return { ok: false, code: blocked.code, why: blocked.why }
   let lease
   try {
     lease = manuscriptLeasePath(slug, path)

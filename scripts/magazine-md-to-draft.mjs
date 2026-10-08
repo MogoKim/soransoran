@@ -28,180 +28,15 @@
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, resolve, isAbsolute, relative } from 'node:path'
+import { parseFrontmatter, parseBody, describeFormatViolation } from './lib/magazine-manuscript-format.mjs'
 
 const ROOT = process.cwd()
 const DRAFTS_DIR = join(ROOT, 'drafts')
 
-/** frontmatter 에서 받는 값. 그 외 키가 오면 FAIL */
-const ALLOWED_META = new Set([
-  'title',
-  'description',
-  'cluster',
-  'medical',
-  'seriesId',
-  'seriesOrder',
-])
-const REQUIRED_META = ['title', 'description', 'cluster']
-
-/** 규칙 밖 요소 — 발견 즉시 FAIL 한다 */
-const FORBIDDEN = [
-  { re: /^\s*\|.*\|\s*$/, why: '표는 허용하지 않는다' },
-  { re: /^\s*```/, why: '코드블록은 허용하지 않는다' },
-  { re: /^#\s/, why: 'h1 은 페이지가 렌더한다. 본문에 두지 않는다' },
-  { re: /^#{4,}\s/, why: 'h4 이하는 허용하지 않는다 (h2 · h3 만)' },
-  { re: /!\[[^\]]*\]\([^)]*\)/, why: '마크다운 이미지는 허용하지 않는다' },
-  { re: /https?:\/\//, why: '외부 링크는 허용하지 않는다' },
-  { re: /<\/?[a-zA-Z][^>]*>/, why: 'HTML 태그는 허용하지 않는다' },
-  { re: /^\s*\d+\.\s/, why: '번호 목록은 허용하지 않는다 (- 만 쓴다)' },
-]
-
-// ── frontmatter ────────────────────────────────────────────
-
-function parseFrontmatter(lines, errors) {
-  if (lines[0]?.trim() !== '---') {
-    errors.push({ line: 1, why: 'YAML frontmatter 가 없다. --- 로 시작해야 한다' })
-    return { meta: {}, bodyStart: 0 }
-  }
-
-  const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---')
-  if (end === -1) {
-    errors.push({ line: 1, why: 'frontmatter 가 닫히지 않았다' })
-    return { meta: {}, bodyStart: 0 }
-  }
-
-  const meta = {}
-  for (let i = 1; i < end; i += 1) {
-    const raw = lines[i]
-    if (!raw.trim()) continue
-
-    const sep = raw.indexOf(':')
-    if (sep === -1) {
-      errors.push({ line: i + 1, why: `frontmatter 형식이 아니다: ${raw.trim()}` })
-      continue
-    }
-
-    const key = raw.slice(0, sep).trim()
-    const value = raw.slice(sep + 1).trim().replace(/^["']|["']$/g, '')
-
-    if (!ALLOWED_META.has(key)) {
-      errors.push({ line: i + 1, why: `허용되지 않은 frontmatter 키: ${key}` })
-      continue
-    }
-    if (key === 'medical') meta[key] = value === 'true'
-    else if (key === 'seriesOrder') meta[key] = Number(value)
-    else meta[key] = value
-  }
-
-  for (const key of REQUIRED_META) {
-    if (!meta[key]) errors.push({ line: 1, why: `frontmatter 에 ${key} 가 없다` })
-  }
-  if (meta.seriesId && meta.seriesOrder === undefined) {
-    errors.push({ line: 1, why: 'seriesId 가 있으면 seriesOrder 도 필요하다' })
-  }
-  if (meta.seriesOrder !== undefined && Number.isNaN(meta.seriesOrder)) {
-    errors.push({ line: 1, why: 'seriesOrder 가 숫자가 아니다' })
-  }
-
-  return { meta, bodyStart: end + 1 }
-}
-
-// ── 본문 ───────────────────────────────────────────────────
-
 /**
- * 줄 단위로 읽어 블록을 만든다.
- * 판단이 갈리는 자리를 만들지 않는 것이 이 함수의 목표다 — 규칙에 없으면 FAIL.
+ * 🔴 판정(frontmatter · 본문 · 금지 표기 · CTA 1개)은 `lib/magazine-manuscript-format.mjs` 가 정본이다.
+ *    원고 관문과 auto-register 도 같은 함수를 쓴다 — 여기서 규칙을 다시 적지 않는다 (2026-10-08).
  */
-function parseBody(lines, bodyStart, errors) {
-  const blocks = []
-  let paragraph = []
-  let listItems = []
-  let quoteLines = []
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return
-    blocks.push({ type: 'p', text: paragraph.join(' ') })
-    paragraph = []
-  }
-  const flushList = () => {
-    if (listItems.length === 0) return
-    blocks.push({ type: 'list', items: [...listItems] })
-    listItems = []
-  }
-  const flushQuote = () => {
-    if (quoteLines.length === 0) return
-    blocks.push({ type: 'callout', text: quoteLines.join(' ') })
-    quoteLines = []
-  }
-  const flushAll = () => {
-    flushParagraph()
-    flushList()
-    flushQuote()
-  }
-
-  for (let i = bodyStart; i < lines.length; i += 1) {
-    const raw = lines[i]
-    const lineNo = i + 1
-    const text = raw.trim()
-
-    // CTA 는 대괄호 표기라 링크 검사보다 먼저 본다
-    if (text.startsWith('[CTA]')) {
-      flushAll()
-      const parts = text.slice(5).split('|').map((s) => s.trim())
-      if (parts.length < 2) {
-        errors.push({ line: lineNo, why: '[CTA] 형식은 "href | label | text" 다' })
-        continue
-      }
-      const [href, label, ctaText] = parts
-      if (!href.startsWith('/community/')) {
-        errors.push({ line: lineNo, why: `CTA href 는 /community/ 로 시작해야 한다: ${href}` })
-        continue
-      }
-      const block = { type: 'cta', href, label }
-      if (ctaText) block.text = ctaText
-      blocks.push(block)
-      continue
-    }
-
-    for (const rule of FORBIDDEN) {
-      if (rule.re.test(raw)) {
-        errors.push({ line: lineNo, why: `${rule.why} — "${text.slice(0, 40)}"` })
-      }
-    }
-
-    if (!text) {
-      flushAll()
-      continue
-    }
-
-    if (text.startsWith('### ')) {
-      flushAll()
-      blocks.push({ type: 'h3', text: text.slice(4).trim() })
-    } else if (text.startsWith('## ')) {
-      flushAll()
-      blocks.push({ type: 'h2', text: text.slice(3).trim() })
-    } else if (text.startsWith('> ')) {
-      flushParagraph()
-      flushList()
-      quoteLines.push(text.slice(2).trim())
-    } else if (text.startsWith('- ')) {
-      flushParagraph()
-      flushQuote()
-      listItems.push(text.slice(2).trim())
-    } else {
-      flushList()
-      flushQuote()
-      paragraph.push(text)
-    }
-  }
-  flushAll()
-
-  const ctaCount = blocks.filter((b) => b.type === 'cta').length
-  if (ctaCount !== 1) {
-    errors.push({ line: lines.length, why: `[CTA] 는 정확히 1개여야 한다 (현재 ${ctaCount}개)` })
-  }
-
-  return blocks
-}
 
 // ── 출력 ───────────────────────────────────────────────────
 
@@ -321,7 +156,7 @@ function main() {
     console.error('')
     console.error(`변환하지 않았다 — 규칙 밖 요소 ${errors.length}건`)
     console.error('')
-    for (const e of errors) console.error(`  ✗ ${e.line}행: ${e.why}`)
+    for (const e of errors) console.error(`  ✗ ${describeFormatViolation(e)}`)
     console.error('')
     console.error('  ChatGPT 에게 brief 의 마크다운 규칙을 다시 지켜 달라고 요청한다.')
     console.error('  여기서 추측해서 고치지 않는다 — 그건 원고에 개입하는 것이다.')

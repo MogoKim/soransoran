@@ -324,6 +324,8 @@ export function processCandidates({
    *    후보 목록은 **한 번만** 훑는다(유한) — 실제 작업한 후보만 `attempted` 를 올린다.
    */
   const heldResults = []
+  /** 🔴 입력 수리 필요(brief 계약 위반 · brief echo draft) — 보내지 않았다. 시도·장부·격리 0 으로 보고만 한다 */
+  const repairResults = []
   let attempted = 0
 
   // 🔴 등록 예산과 시도 상한을 따로 센다 — 막힌 후보가 정상 후보를 굶기지 않는다
@@ -362,6 +364,17 @@ export function processCandidates({
       blocked.push(r)
       continue
     }
+    /**
+     * 🔴 **입력 수리 필요는 시도가 아니다** (2026-10-08 · Codex 재검토).
+     *    drive 가 구조화된 값(`repairRequired`)으로 알린다 — 문장을 파싱하지 않는다.
+     *    `attempted` 0 · `recordFailure` 0 · 장부 쓰기 0 · 회차는 다음 후보로 계속 간다.
+     *    장부에 아무것도 남기지 않으므로 brief·draft 가 고쳐지면 다음 회차가 바로 다시 본다.
+     */
+    if (r.repairRequired) {
+      repairResults.push(r)
+      blocked.push(r)
+      continue // repair-required: 다음 후보
+    }
     attempted += 1
 
     if (r.verdict === 'BLOCKED') {
@@ -387,6 +400,12 @@ export function processCandidates({
             // 🔴 drive 가 센 재생성 횟수를 보존한다
             ...(cur[r.slug]?.regenCalls !== undefined ? { regenCalls: cur[r.slug].regenCalls } : {}),
             ...(cur[r.slug]?.lastPacketHash !== undefined ? { lastPacketHash: cur[r.slug].lastPacketHash } : {}),
+            /**
+             * 🔴 **실제 위반을 구조화된 값으로 남긴다** (2026-10-08). 앞판 장부에는 변환기의 사람용
+             *    마지막 안내문만 남아, 무엇이 틀렸는지 장부로는 알 수 없었다. 없으면 지운다 — 옛 위반을 끌고 가지 않는다.
+             */
+            formatViolations: formatViolationsOf(r),
+            contractViolations: contractViolationsOf(r),
           },
         }))
         if (!u.ok) report.blocked.push({ slug: r.slug, blockedBy: [{ code: 'QUARANTINE_UNREADABLE', message: u.why }] })
@@ -397,7 +416,17 @@ export function processCandidates({
       if (write) upd((cur) => { const n = { ...cur }; delete n[r.slug]; return n })
     }
   }
-  return { ledger, scanned, done, blocked, results, registered, ceiling, budgetStop, attempted, held: heldResults }
+  return { ledger, scanned, done, blocked, results, registered, ceiling, budgetStop, attempted, held: heldResults, repair: repairResults }
+}
+
+/** drive 결과의 형식 위반 — 결과 최상위 · blockedBy 어디에 있든 하나로 (최대 8건) */
+export function formatViolationsOf(r) {
+  const v = r?.formatViolations ?? (r?.blockedBy ?? []).find((b) => b.formatViolations)?.formatViolations ?? null
+  return Array.isArray(v) && v.length ? v.slice(0, 8).map((x) => ({ line: x.line, why: x.why })) : undefined
+}
+export function contractViolationsOf(r) {
+  const v = (r?.blockedBy ?? []).find((b) => b.contractViolations)?.contractViolations ?? null
+  return Array.isArray(v) && v.length ? v.map((x) => ({ code: x.code, why: x.why })) : undefined
 }
 
 // ── PR ─────────────────────────────────────────────────────
@@ -725,7 +754,7 @@ async function main() {
    */
   try {
   // ── 처리 ─────────────────────────────────────────────────
-  const { scanned, done, blocked, results, registered, ceiling, budgetStop, attempted, held } =
+  const { scanned, done, blocked, results, registered, ceiling, budgetStop, attempted, held, repair } =
     processCandidates({ write, wantPr, limit, runDate: arg('--run'), report })
   Object.assign(report, {
     source: scanned.source,
@@ -734,6 +763,9 @@ async function main() {
     processed: results.length,
     attempted,
     held: held.map((r) => ({ slug: r.slug, code: r.blockedBy?.[0]?.code ?? null })),
+    /** 🔴 입력 수리 필요 — slug · code · 구조화된 위반 (brief 계약 위반 또는 brief echo draft) */
+    repairRequired: repair.map((r) => ({ slug: r.slug, code: r.blockedBy?.[0]?.code ?? null,
+      violations: r.blockedBy?.[0]?.contractViolations ?? r.blockedBy?.[0]?.formatViolations ?? [] })),
     budget: { limit, ceiling, registered, stoppedBy: budgetStop?.code ?? 'EXHAUSTED', stopMessage: budgetStop?.message ?? '후보를 전부 보았다' },
     done: done.map((r) => ({ slug: r.slug, publishAt: r.publishAt })),
     /**
@@ -800,6 +832,9 @@ function printHuman(report, { write }) {
       console.log(`  예산: 등록 ${report.budget.registered}/${report.budget.limit} · 시도 ${report.attempted ?? report.processed}/${report.budget.ceiling} — ${report.budget.stopMessage}`)
     }
     // 🔴 HOLD 는 자리를 쓰지 않았다는 것을 로그에 남긴다 — "왜 다 봤는데 0건인가" 를 여기서 읽는다
+    if (report.repairRequired?.length) {
+      console.log(`  입력 수리 필요 ${report.repairRequired.length}건 — 보내지 않았다 (시도·등록 자리 · 장부 · 격리 0 · brief/draft 를 고치면 다음 회차가 다시 본다): ${report.repairRequired.map((h) => `${h.slug}(${h.code})`).join(' · ')}`)
+    }
     if (report.held?.length) {
       console.log(`  HOLD ${report.held.length}건 — 이미 보낸 같은 요청이라 다시 보내지 않는다 (시도·등록 자리 소비 0 · 전송 0): ${report.held.map((h) => `${h.slug}(${h.code})`).join(' · ')}`)
     }
