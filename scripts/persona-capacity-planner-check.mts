@@ -96,10 +96,11 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
 {
   const doc = readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')
   const { cards, problems } = parsePoolDoc(doc)
-  check('🔴 카드 25장을 전부 읽는다', cards.length === 25)
+  check('🔴 카드 31장을 전부 읽는다', cards.length === 31)
   check('🔴 파싱 문제 0건', problems.length === 0)
-  check('코드가 P01~P25 이다',
-    cards.map((c) => c.code).join(',') === Array.from({ length: 25 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`).join(','))
+  // 🔴 P31 · P33 은 VOICE_TOO_CLOSE 로 카드가 없다(2026-10-08 wave5)
+  check('코드가 P01~P30 · P32 이다',
+    cards.map((c) => c.code).join(',') === [...Array.from({ length: 30 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`), 'P32'].join(','))
   check('🔴 카드마다 제목이 있다', cards.every((c) => c.title.trim() !== ''))
   check('🔴 카드마다 성격이 있다', cards.every((c) => c.personality.length >= 3))
   check('🔴 나이대가 전부 매칭이 아는 밴드다', cards.every((c) => c.childrenAgeBands.every(isKnownChildBand)))
@@ -111,8 +112,9 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
     cards.find((c) => c.code === 'P25')?.variationCount === 6)
   check('혼인 상태를 전부 읽었다', cards.every((c) => c.maritalStatus !== ''))
   // 🔴 얇은 축이 실재함을 문서로 확인한다 — 중고등 자녀는 소수다
-  check('🔴 중고등 자녀 카드가 소수다 — 얇은 축이 실재한다',
-    cards.filter((c) => c.childrenAgeBands.includes('중고등')).length <= 5)
+  // 🔴 측정 기록 — wave4 시점(P01~P25) 에 얇은 축이 실재했다. wave5(2026-10-08) 가 더해져 두터워진 것은 기록을 바꾸지 않는다
+  check('🔴 측정 당시(P01~P25) 중고등 자녀 카드가 소수였다 — 얇은 축이 실재했다',
+    cards.filter((c) => Number(c.code.slice(1)) <= 25 && c.childrenAgeBands.includes('중고등')).length <= 5)
 }
 
 // ── ③ planner 가 쓰는 규칙 — synthetic 큐로 고정 ──

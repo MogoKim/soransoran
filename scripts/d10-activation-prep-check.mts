@@ -21,7 +21,8 @@ import {
 } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import {
-  COHORTS, RUNNABLE_COHORTS, CLOSED_COHORTS, TARGET_PERSONA_COUNT, verifyAllCohorts, EXCLUDED_CODES,
+  COHORTS, RUNNABLE_COHORTS, CLOSED_COHORTS, TARGET_PERSONA_COUNT, verifyAllCohorts, EXCLUDED_CODES, type CohortId,
+  PRODUCTION_PERSONA_CODES, judgeArgs, judgeCohortArg,
 } from '../src/lib/persona-cohort'
 import { parsePoolDoc, cardToPersona, type PoolCard } from '../src/lib/persona-pool-card'
 import { thinAxes, gainOf, coverageOf, THIN_THRESHOLD, type AxisSubject } from '../src/lib/persona-axis-coverage'
@@ -117,10 +118,15 @@ const q = (n: number): QueueCandidate[] => Array.from({ length: n }, (_, i) => (
 // ── ② persona 24명 · 닉네임 ──
 console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 글자')
 {
-  const pool = parsePoolDoc(read(POOL_DOC))
-  check('정본 Pool 파싱 문제 0', pool.problems.length === 0)
-  check('🔴 Pool 25장', pool.cards.length === 25)
-  check('🔴 길이를 읽을 수 있는 카드 24장 (P09 제외)',
+  const full = parsePoolDoc(read(POOL_DOC))
+  check('정본 Pool 파싱 문제 0', full.problems.length === 0)
+  /**
+   * 🔴 이 절은 wave4(P21~P25) **얇은 축 측정 기록**이다 — 측정 당시 Pool(P01~P25) 스냅샷에서 다시 잰다.
+   *    wave5(P26~P32, 2026-10-08) 가 더해져도 그때의 측정 결과를 바꿔 쓰지 않는다.
+   */
+  const pool = { ...full, cards: full.cards.filter((c) => Number(c.code.slice(1)) <= 25) }
+  check('🔴 측정 당시 Pool 25장', pool.cards.length === 25)
+  check('🔴 측정 당시 길이를 읽을 수 있는 카드 24장 (P09 제외)',
     pool.cards.filter((c) => c.voiceLength !== null).length === 24)
   const sub = (c: PoolCard): AxisSubject => ({
     code: c.code, childrenAgeBands: c.childrenAgeBands, childrenCount: c.childrenCount,
@@ -160,20 +166,19 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   check('🔴 §5-0 이 측정 결과를 표로 남긴다', doc.includes('§5-0') && doc.includes('persona-axis-coverage'))
   const voice = coverageOf(after).filter((c) => c.kind === 'voice')
   check('🔴 문체 세 밴드가 모두 2명 이상', voice.every((c) => c.holders.length >= THIN_THRESHOLD))
-  check('🔴 문체 합이 24명 (P09 제외)', voice.reduce((n, c) => n + c.holders.length, 0) === 24)
+  check('🔴 측정 당시 문체 합이 24명 (P09 제외)', voice.reduce((n, c) => n + c.holders.length, 0) === 24)
 
-  // 🔴 cohort — 총 24명
+  // 🔴 cohort — 현재 정본: 다섯 회차 30명 (wave5-d10 · 2026-10-08)
   check('🔴 manifest 전체가 성립한다', verifyAllCohorts().length === 0)
   check('🔴 wave4-depth 가 P21~P25 다', COHORTS['wave4-depth'].codes.join() === NEW.join())
   check('🔴 wave4 는 wave3 를 선행으로 요구한다', COHORTS['wave4-depth'].requires.includes('wave3-scale'))
   const total = Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0)
-  check('🔴 네 회차 합이 24명', total === 24 && TARGET_PERSONA_COUNT === 24)
-  check('🔴 그 수가 Pool 유효 카드 수와 같다', total === pool.cards.length - Object.keys(EXCLUDED_CODES).length)
-  check('🔴 wave3 · wave4 둘 다 열려 있다',
-    RUNNABLE_COHORTS.includes('wave3-scale') && RUNNABLE_COHORTS.includes('wave4-depth'))
-  check('🔴 끝난 회차는 여전히 닫혀 있다',
-    CLOSED_COHORTS.includes('wave1-mvp') && CLOSED_COHORTS.includes('wave2'))
-  const codes = new Set(pool.cards.map((c) => c.code))
+  check('🔴 다섯 회차 합이 30명 = 목표 인원', total === 30 && TARGET_PERSONA_COUNT === 30)
+  check('🔴 그 수가 현재 Pool 유효 카드 수(31 − P09)와 같다', total === full.cards.length - Object.keys(EXCLUDED_CODES).length && full.cards.length === 31)
+  check('🔴 열린 회차는 wave5-d10 하나뿐이다', RUNNABLE_COHORTS.join() === 'wave5-d10')
+  check('🔴 wave1~wave4 는 끝난 회차다(운영 active)',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'].every((c) => CLOSED_COHORTS.includes(c as CohortId)))
+  const codes = new Set(full.cards.map((c) => c.code))
   check('🔴 manifest 코드가 전부 Pool 카드에 있다',
     Object.values(COHORTS).every((m) => m.codes.every((c) => codes.has(c))))
 
@@ -500,7 +505,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
 {
   const pool = parsePoolDoc(read(POOL_DOC))
   const personas = pool.cards.filter((c) => c.voiceLength !== null).map(cardToPersona)
-  check('🔴 시뮬레이션에 쓸 카드가 24장', personas.length === 24)
+  check(`🔴 시뮬레이션에 쓸 카드가 목표 인원과 같다 (${personas.length})`, personas.length === TARGET_PERSONA_COUNT)
   const AXIS = { now: new Date('2026-09-09T00:05:00+09:00'), publishedToday: 0 }
   const q140 = q(140)
   check('🔴 queue id 140개가 전부 다르다', new Set(q140.map((x) => x.queueId)).size === 140)
@@ -1472,6 +1477,34 @@ console.log('\n⑰ 문서 정합 — 낡은 숫자·낡은 절차를 남기지 �
       && /회수 잠금\(reaper\) 남음/.test(c)
       && /reaperAnomalyMessage\(anomaly\)/.test(c)
   })())
+}
+
+// ── ⑧ wave5-d10 — Persona 30 준비 (2026-10-08) ──
+console.log('\n⑧ wave5-d10 — 카드 31 · production 30 · 새 cohort 6')
+{
+  const { cards, problems } = parsePoolDoc(read(POOL_DOC))
+  const WAVE5 = ['P26', 'P27', 'P28', 'P29', 'P30', 'P32']
+  check('🔴 카드 31장 · 파싱 문제 0', cards.length === 31 && problems.length === 0)
+  check('🔴 production universe 30명 = 카드 31 − P09', PRODUCTION_PERSONA_CODES.length === 30
+    && PRODUCTION_PERSONA_CODES.length === cards.length - Object.keys(EXCLUDED_CODES).length)
+  check('🔴 P09 는 카드에 있지만 어느 cohort 에도 없다', cards.some((c) => c.code === 'P09')
+    && Object.values(COHORTS).every((m) => !m.codes.includes('P09')) && !PRODUCTION_PERSONA_CODES.includes('P09'))
+  check('🔴 P31 · P33 은 카드에도 cohort 에도 없다(VOICE_TOO_CLOSE — 구제하지 않는다)',
+    ['P31', 'P33'].every((x) => !cards.some((c) => c.code === x) && Object.values(COHORTS).every((m) => !m.codes.includes(x))))
+  check('🔴 wave5-d10 은 정확히 승인 6명이다(일부·추가 0)', COHORTS['wave5-d10'].codes.join() === WAVE5.join())
+  check('🔴 wave5 의 선행은 앞 네 회차 전부다',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'].every((r) => COHORTS['wave5-d10'].requires.includes(r as CohortId))
+    && COHORTS['wave5-d10'].requires.length === 4)
+  check('🔴 끝난 옛 회차는 CLI 가 다시 열지 못한다',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'].every((c) => !judgeCohortArg(c).ok) && judgeCohortArg('wave5-d10').ok)
+  const args = (limit: number | null) => judgeArgs({ apply: true, limit, actorUserId: 'u', reason: 'r', cohortSize: COHORTS['wave5-d10'].codes.length, requireActor: false })
+  check('🔴 --limit=6 이 아니면 적용 거부', args(6).ok && !args(5).ok && !args(7).ok && !args(null).ok)
+  check('🔴 manifest 전체가 성립한다(중복 코드 · 선행 누락 0)', verifyAllCohorts().length === 0)
+  // 🔴 카드 → 매칭 Persona 변환이 6장 모두 선다(파서 round-trip 의 소비자 쪽)
+  const six = cards.filter((c) => WAVE5.includes(c.code))
+  check('🔴 새 카드 6장이 코드순으로 있고 길이 · 생일 · 생활사를 읽는다', six.map((c) => c.code).join() === WAVE5.join()
+    && six.every((c) => c.voiceLength !== null && c.birthDate !== null && c.maritalStatus !== '' && c.personality.length >= 3))
+  check('🔴 새 카드 6장이 매칭 Persona 로 변환된다', six.every((c) => { try { return cardToPersona(c).code === c.code } catch { return false } }))
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

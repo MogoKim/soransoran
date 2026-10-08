@@ -935,6 +935,8 @@ const num = (label: string): number | null => {
   return m === null ? null : Number(m[1])
 }
 const universe = num('production 정본 universe')
+/** 🔴 측정값(bundle · 입력 · shadow)은 측정 당시 universe 와 더한다 — 현재 universe 가 커져도 옛 측정을 지어내지 않는다 */
+const measuredUniverse = num('측정 기준 universe')
 const bundleOk = num('reference bundle 성립')
 const bundleNo = num('bundle 미성립')
 const inputOk = num('production 입력 성립')
@@ -944,13 +946,15 @@ const fullPass = num('9관문 완주')
 
 check('🔴 Persona 준비 상태 정본 표(§9.5-f)가 있다',
   master.includes('### 9.5-f Persona reference 준비 상태')
-  && [universe, bundleOk, bundleNo, inputOk, inputNo, shadowRan, fullPass]
+  && [universe, measuredUniverse, bundleOk, bundleNo, inputOk, inputNo, shadowRan, fullPass]
     .every((v) => v !== null))
 check('🔴 문서의 정본 universe 가 코드의 정본 universe 와 같다',
   universe === PRODUCTION_PERSONA_CODES.length)
-check('🔴 bundle 성립 + 미성립 = universe',
-  universe !== null && bundleOk !== null && bundleNo !== null
-  && bundleOk + bundleNo === universe)
+check('🔴 bundle 성립 + 미성립 = 측정 기준 universe',
+  measuredUniverse !== null && bundleOk !== null && bundleNo !== null
+  && bundleOk + bundleNo === measuredUniverse)
+check('🔴 측정 기준 universe 는 현재 universe 보다 클 수 없다',
+  measuredUniverse !== null && universe !== null && measuredUniverse <= universe)
 check('🔴 입력 성립 + 입력 실패 = bundle 성립',
   bundleOk !== null && inputOk !== null && inputNo !== null
   && inputOk + inputNo === bundleOk)
