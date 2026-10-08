@@ -771,6 +771,11 @@ variation  ① 짧게 툭 ② 살림·먹거리 얘기 ③ 짧은 공감 ④ 되
 noGo 자녀 자랑 · 비교 · 훈계 · 금액 언급
 ```
 
+> 🔴 **코드 발급 원칙 (2026-10-08).** Persona 코드는 감사 가능한 식별자이므로 한 번 발급된 코드는 탈락해도 재사용하지 않고, 신규 코드는 기존 high-water mark 뒤에서만 발급한다.
+> P31 · P33 은 2026-10-08 실제 생성에서 `VOICE_TOO_CLOSE` 로 탈락한 코드라 카드가 없고 영구히 다시 쓰지 않는다 —
+> `persona-autogen.RETIRED_AUTOGEN_CODES` 가 단일 authority 다. P09(`persona-cohort.EXCLUDED_CODES` · 카드는 있으나 cohort 제외)와 다른 뜻이다.
+> 빈 번호를 다시 채우면 그 코드가 운영 코드 사이에 끼어 코드순 말투 배정이 기존 production Persona 의 묶음을 바꾼다. 다음 자동 후보는 P34 부터다.
+
 ### P26 — 읍면에서 가게 하며 두 아이 키우는 중
 
 ```

@@ -30,13 +30,62 @@ import type { VoiceReferenceBundle } from './persona-voice-reference'
 
 /**
  * 🔴 **자동 후보가 쓰는 코드 범위** — P26 ~ P50.
- *    P01~P25 는 정본 카드가 이미 있다(P09 는 이유와 함께 제외). 겹치면 문서와 DB 가 갈린다.
+ *    실제 발급은 이 범위 안에서 **high-water mark 뒤에서만** 한다(`nextAutogenCodes` · append-only) —
+ *    정본 카드 · 운영 DB 행 · 폐기 코드(`RETIRED_AUTOGEN_CODES`) 중 가장 큰 번호 아래 빈 번호는 다시 쓰지 않는다.
  *    상한 P50 은 `isPoolCode` · `verifyManifest` 의 정규식과 같은 값이다.
  */
 export const AUTOGEN_CODE_FIRST = 26
 export const AUTOGEN_CODE_LAST = 50
 
 export const autogenCodeOf = (n: number): string => `P${String(n).padStart(2, '0')}`
+
+/**
+ * 🔴 **폐기 코드 — 영구 재사용 금지** (2026-10-08).
+ *
+ *    Persona 코드는 감사 가능한 식별자이므로 한 번 발급된 코드는 탈락해도 재사용하지 않고,
+ *    신규 코드는 기존 high-water mark 뒤에서만 발급한다.
+ *
+ *    🔴 `persona-cohort.EXCLUDED_CODES`(P09) 와 다른 뜻이다. P09 는 **카드가 있는** Persona 를
+ *       cohort 에서 뺀 것이고, 여기는 **발급됐다가 탈락해 카드가 없는** 코드다. 섞지 않는다.
+ *    🔴 빈 번호를 다시 채우면 그 코드가 운영 코드 사이에 끼어 코드순 말투 배정(`voicePoolFor`)이
+ *       기존 production Persona 의 묶음을 바꾼다(2026-10-08 실측: P31 후보 → P32 배정 변동).
+ */
+export const RETIRED_AUTOGEN_CODES: Readonly<Record<string, string>> = {
+  P31: '2026-10-08 실제 생성(persona30 original batch)에서 VOICE_TOO_CLOSE 로 탈락 — 발급된 코드',
+  P33: '2026-10-08 실제 생성(persona30 original batch)에서 VOICE_TOO_CLOSE 로 탈락 — 발급된 코드',
+}
+
+/** `P34` → 34 · Persona 코드 모양이 아니면 null — 🔴 문자열 사전순이 아니라 숫자로 비교한다 */
+export const personaCodeNumber = (code: string): number | null => {
+  const m = /^P(\d+)$/.exec(code)
+  return m === null ? null : Number(m[1])
+}
+
+export type NextAutogenCodes = {
+  codes: string[]
+  /** 이미 쓰인 가장 큰 번호 — 카드 · 운영 DB · 폐기 코드 전부 */
+  highWater: number
+  /** 🔴 null 이 아니면 후보 0 — 부르는 쪽은 provider 호출 전에 멈춘다 */
+  problem: string | null
+}
+
+/**
+ * 🔴 **다음 자동 후보 코드 — append-only.** high-water mark(카드 · 운영 DB · 폐기 코드의 최대 번호)
+ *    **뒤에서만** 발급한다. 그 아래 빈 번호는 채우지 않는다. 상한(P50)까지 자리가 없으면 후보 0.
+ */
+export function nextAutogenCodes(input: { usedCodes: Iterable<string>; count: number }): NextAutogenCodes {
+  const nums = [...input.usedCodes, ...Object.keys(RETIRED_AUTOGEN_CODES)]
+    .map(personaCodeNumber).filter((n): n is number => n !== null)
+  const highWater = Math.max(AUTOGEN_CODE_FIRST - 1, ...nums)
+  const codes: string[] = []
+  for (let n = highWater + 1; n <= AUTOGEN_CODE_LAST && codes.length < input.count; n += 1) codes.push(autogenCodeOf(n))
+  return {
+    codes,
+    highWater,
+    problem: codes.length > 0 ? null
+      : `발급할 코드가 없다 — high-water ${autogenCodeOf(highWater)} · 상한 ${autogenCodeOf(AUTOGEN_CODE_LAST)}`,
+  }
+}
 
 /**
  * 🔴 **격리 사유 코드.** 한 후보에 여럿이 붙을 수 있다 — 무엇을 채워야 서는지가 여기서 나온다.
