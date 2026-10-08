@@ -200,10 +200,17 @@ check('공통 UI 그대로', read('src/components/admin/AdminUi.tsx') === gitSho
 
 // ─────────── 5. 경계 ───────────
 console.log('\n■ 5. 경계 — 공개 화면·인증·온보딩 변경 0 · import 고정')
+// 이 단계 뒤 승인된 후속 보정 — 그 파일만 보정 commit 을 기준으로 고정하고 나머지는 BASE 그대로 본다
+const APPROVED_FOLLOW_UPS: Record<string, string> = {
+  'src/components/features/signup-funnel/SignupFunnelTracker.tsx': 'c9b0c8e0ed01b4d23275ea3b1016732320fd90fa', // dialog 비동기 로드
+}
+const isAncestor = (rev: string) => { try { execFileSync('git', ['merge-base', '--is-ancestor', rev, 'HEAD']); return true } catch { return false } }
+check('승인된 후속 보정 기준은 현재 HEAD 의 조상 commit', Object.values(APPROVED_FOLLOW_UPS).every(isAncestor))
+const pinned = (p: string) => execFileSync('git', ['show', `${APPROVED_FOLLOW_UPS[p] ?? BASE}:${p}`], { encoding: 'utf8' })
 const publicUnchanged = ['src/app/community/[boardSlug]/[postId]/page.tsx', 'src/app/magazine/[slug]/page.tsx', 'src/app/login/page.tsx',
   'src/lib/actions/onboarding.ts', 'src/components/features/onboarding/onboarding-form.tsx', 'src/components/features/CommentSection.tsx',
   'src/components/features/KakaoSignInButton.tsx', 'src/components/features/signup-funnel/SignupFunnelTracker.tsx', 'prisma/schema.prisma',
-].filter((p) => read(p) !== gitShow(p))
+].filter((p) => read(p) !== pinned(p))
 check('공개 화면·팝업·인증·온보딩·schema 변경 0', publicUnchanged.length === 0, publicUnchanged.join(', '))
 const imports = (p: string) => [...read(p).matchAll(/^import .*$/gm)].map((m) => m[0])
 check('reader import 고정(D100 0)', JSON.stringify(imports(P.reader)) === JSON.stringify([

@@ -254,10 +254,18 @@ check('helper import 고정(D100 0)', JSON.stringify(imports('src/lib/signup-com
   "import { signupFunnelGate, type SignupFunnelEnv } from '@/lib/signup-funnel-gate'",
   "import { parseAuthMarker } from '@/lib/signup-prompt-storage'",
 ]))
+// 이 단계 뒤 승인된 후속 보정 — 그 파일만 보정 commit 을 기준으로 고정하고 나머지는 BASE 그대로 본다
+const APPROVED_FOLLOW_UPS: Record<string, string> = {
+  'src/components/features/signup-funnel/SignupPromptDialog.tsx': '0e2269a5dd59a575b5b54f0b507626101e851839', // 접근성 색상
+  'src/components/features/signup-funnel/SignupFunnelTracker.tsx': 'c9b0c8e0ed01b4d23275ea3b1016732320fd90fa', // dialog 비동기 로드
+}
+const isAncestor = (rev: string) => { try { execFileSync('git', ['merge-base', '--is-ancestor', rev, 'HEAD']); return true } catch { return false } }
+check('승인된 후속 보정 기준은 현재 HEAD 의 조상 commit', Object.values(APPROVED_FOLLOW_UPS).every(isAncestor))
+const pinned = (p: string) => execFileSync('git', ['show', `${APPROVED_FOLLOW_UPS[p] ?? BASE}:${p}`], { encoding: 'utf8' })
 const unchanged = ['src/lib/auth.ts', 'src/lib/auth.config.ts', 'src/lib/admin.ts', 'src/lib/signup-policy.ts', 'prisma/schema.prisma',
   'src/components/features/CommentSection.tsx', 'src/components/features/KakaoSignInButton.tsx', 'src/lib/signup-funnel-store.ts', 'src/lib/signup-funnel.ts',
   'src/components/features/signup-funnel/SignupPromptDialog.tsx', 'src/components/features/signup-funnel/SignupFunnelTracker.tsx', 'src/app/login/page.tsx',
-].filter((p) => read(p) !== gitShow(p))
+].filter((p) => read(p) !== pinned(p))
 check('변경 금지 파일(인증·관리자·정책·schema·댓글·카카오·저장·팝업·복귀) 그대로', unchanged.length === 0, unchanged.join(', '))
 
 // ─────────── 7. 격리 Postgres 동시성 ───────────
