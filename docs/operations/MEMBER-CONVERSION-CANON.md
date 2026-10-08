@@ -1,8 +1,8 @@
 # 소란소란 콘텐츠 끝 도달 → 회원가입 전환 정본
 
-> 문서 상태: **v4.3 · MC-M4 구현 checkpoint 정본**
-> 마지막 창업자 싱크: **2026-10-07 KST**
-> 현재 단계: **MC-M4 기능 구현 완료 · 최신 main 통합·build·성능·Preview 검증 전 · push·PR·배포·실제 수집 전**
+> 문서 상태: **v4.4 · MC-M4 통합·성능 PASS checkpoint 정본**
+> 마지막 창업자 싱크: **2026-10-08 KST**
+> 현재 단계: **MC-M4 최신 main 통합·D100 경계·build·First Load JS·Brotli Lighthouse PASS · 로컬 활성 흐름·Vercel Preview·실기기·실제 카카오 왕복 검증 전 · push·Draft PR 직전 · merge·배포·실제 수집 전**
 > 기획·검증 책임: **Codex [2] 회원가입 전환 마스터**
 > 실행 책임: **Claude Code — 승인된 한 단계씩**
 
@@ -543,14 +543,37 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 
 **성능 PASS**
 
-- baseline은 MC-M4 구현 직전, 최신 main이 통합된 **정확한 commit SHA**다. 보고에 SHA를 적는다
+- baseline은 feature에 통합된 **exact main commit SHA**다. 보고에 baseline·feature SHA를 함께 적는다
 - baseline과 변경본은 같은 production build 방식, 같은 모바일 device profile, 같은 network profile을 쓴다
-- 측정 경로는 커뮤니티 상세 · 매거진 상세 · 온보딩 사용자 경로 세 가지이며 각각 따로 측정한다
+- 측정 경로는 커뮤니티 상세 · 매거진 상세 · 인증된 실제 온보딩 form 세 가지이며 각각 따로 측정한다.
+  로그인 화면으로 redirect된 결과는 온보딩 측정값이 아니다
 - First Load JS는 같은 baseline SHA와 production build로 비교한다. 설명되지 않는 5KB gzip 초과 증가는 FAIL
-- Lighthouse는 경로마다 3회씩 실행하고 원시 결과 3개와 중앙값을 함께 보고한다. 중앙값끼리 비교한다
+- Lighthouse는 경로마다 warm-up 1회를 제외하고 3회 실행하며, 원시 결과 3개와 중앙값을 함께 보고한다.
+  중앙값끼리 비교한다
   - LCP·TBT 5% 이상 악화 FAIL
   - CLS 0.01 이상 악화 FAIL
+  - baseline·feature가 모두 0ms인 TBT는 절대 악화가 0이므로 PASS다. baseline 0ms에서 feature가 0ms보다
+    커지면 비율을 계산할 수 없어도 PASS가 아니며, 수치와 함께 FAIL 또는 별도 판정 대상으로 보고한다
+- 기준 완화와 예외 승인으로 PASS를 만들지 않는다
 - blocking fetch · 새 long task · 지속 scroll handler가 생기면 FAIL
+
+**성능 측정의 전송 조건**
+
+- 최종 성능 비교는 실제 Production 응답과 같은 Brotli 전송으로 한다(2026-10-08 Production HTML 응답
+  `content-encoding: br` 관측)
+- 로컬 `next start`의 streaming gzip 측정은 진단 자료로만 쓰고 최종 판정에 쓰지 않는다
+- 압축 proxy는 upstream을 identity로 받고 chunk 단위 streaming으로 압축한다. 같은 요청에서 압축을 푼 body가
+  upstream body와 byte 단위로 같고 응답 전체를 버퍼링하지 않음을 측정 전에 증명한다
+- 수치를 좋게 만들기 위한 일괄 압축·전체 buffering·환경별 조건 차이는 허용하지 않는다. baseline과 변경본은 같은
+  proxy·설정을 쓴다
+
+**통합 기준 — D100 moving-main**
+
+- D100 main은 회원가입 전환 때문에 멈추지 않는다. main 이동 자체는 진행 중인 구현·측정의 중단 조건이 아니다
+- 구현·성능·Preview는 각각 exact checkpoint SHA를 고정하고 그 SHA로 판정한다
+- Draft PR 직전과 최종 merge 직전에 최신 main을 다시 통합한다
+- 새 main 변경이 측정 화면·공용 코드·dependency·schema·build 설정에 닿을 때만 관련 검사를 다시 실행한다.
+  D100·매거진 전용 script·fixture·문서처럼 runtime과 무관한 변경 때문에 build·Lighthouse를 반복하지 않는다
 - 계측 endpoint가 500을 돌려줘도 읽기·인증·가입이 정상이어야 한다
 - 실제 Production INP 판정은 MC-M5 이후로 분리한다
 
@@ -561,7 +584,10 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - 주석 처리된 코드·임시 호환 경로 0건
 - 수정 범위 밖 파일의 무관한 리팩터링 0건
 
-**Preview PASS (MC-M4)**
+**로컬 활성 흐름 PASS (MC-M4)**
+
+Vercel Preview는 `VERCEL_ENV=preview`라 §8-7 gate가 닫혀 tracker가 렌더되지 않는다. 활성화된 흐름은 같은
+production build를 격리 로컬 DB와 `VERCEL_ENV=production`·과거 유효 수집 시작일로 실행해 확인한다.
 
 - 커뮤니티(댓글 있음·없음·답글 펼침)와 매거진에서 ①→②→③→④가 방문마다 각 1회
 - 같은 mount의 rerender와 bfcache 복원에서 ①② 재전송 0, 새로고침·새 탭은 새 방문
@@ -570,9 +596,19 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - localStorage를 쓸 수 없으면 ③ 0
 - CTA 연타에도 ④ 1회
 - payload와 브라우저 표식에 콘텐츠 경로·ID 0건
-- Playwright의 계측 요청 가로채기는 클라이언트 payload·순서·횟수 증명에만 쓴다. 서버 gate 안전 증거로
-  쓰지 않는다
+- 집계 write는 격리 로컬 DB에만 생긴다
+- 별도 QA env·gate 우회·숨은 query override를 만들지 않는다
+- Playwright의 계측 요청 가로채기는 클라이언트 payload·순서·횟수 증거일 뿐 서버 gate 증거가 아니다
 - 서버 gate 안전은 위 정적·계약 시험의 test double 결과(gate 비활성 시 DB 접근 0건)로 증명한다
+
+**Vercel Preview PASS (MC-M4)**
+
+- 수집 gate 비활성: 집계 DB read·write 0, tracker·가입 제안 미렌더
+- 커뮤니티·매거진·온보딩·로그인의 일반 렌더와 인증 진입이 기존과 같다
+- 복귀 URL 안전성: 허용된 커뮤니티·매거진 상세 경로와 고정 fragment로만 돌아가고, 그 밖의 값은 로그인 화면에 남는다
+- 실제 카카오 성공·취소·실패·창 닫기 왕복은 허용된 callback 환경에서 별도로 검증하며, 확인 전까지 `UNKNOWN`이다
+
+로컬 활성 흐름 PASS와 Vercel Preview PASS는 서로 대신하지 않으며 따로 기록한다.
 
 ## 9. 기존 데이터와 계측의 역할
 
@@ -730,10 +766,13 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 
 ## 13. Preview와 Production
 
-- MC-M4 Preview는 커뮤니티와 매거진 두 유형을 함께 검증한다.
-- 디자인·접근성·도달 판정·24시간 제한·레이어 충돌·인증 복귀·계측 계약·성능을 검증한다.
-- Preview는 §8-7 gate로 Production 집계 카운터를 쓰지도 읽지도 않는다.
-- 집계 계약은 in-memory 기록 대상·격리된 DB·가로챈 계측 요청으로 확인한다. PASS 기준은 §8-13이다.
+- Vercel Preview는 `VERCEL_ENV=preview`라 §8-7 gate가 닫힌다. 집계 카운터를 쓰지도 읽지도 않고 tracker·가입
+  제안도 렌더하지 않는다. Preview에서는 집계 DB read·write 0, 일반 렌더·인증 진입, 복귀 URL 안전성을 확인한다.
+- 디자인·접근성·도달 판정·24시간 제한·레이어 충돌·계측 payload의 순서·횟수는 같은 production build를 격리
+  로컬 DB와 `VERCEL_ENV=production`으로 실행해 커뮤니티·매거진 두 유형에서 확인한다(로컬 활성 흐름).
+- 성능은 §8-13의 같은 production build·Brotli 전송 조건으로 비교한다.
+- 실제 카카오 성공·취소·실패·창 닫기 왕복은 허용된 callback 환경에서 별도로 확인한다.
+- PASS 기준은 §8-13이며, 로컬 활성 흐름 PASS와 Vercel Preview PASS를 따로 기록한다.
 - 실제 전환 수집 시작일은 별도 승인된 MC-M5에서 `SIGNUP_FUNNEL_COLLECTION_START`로 정한다.
 - 수집 시작일 이전은 `UNKNOWN`이다.
 - 코드 PASS, 배포 PASS, 운영 PASS를 구분한다.
@@ -747,7 +786,7 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 | **MC-M2 ✅** | 가입 제안 정책·디자인 | 도달·24시간·B안·문구·상호작용 승인 | 디자인 승인 없이 구현 |
 | **MC-M3 ✅** | 최소 측정·저장·어드민 설계 승인 | 2026-10-07 창업자 승인 — §8 계약·§10 어드민·`SignupFunnelDaily` schema 설계 | 범용 이벤트 원장·개인 추적 |
 | **MC-M3P** | 기존 GA4 정합성 판단 (전환 구현과 별도 작업) | page title·location 정책과 보정 범위 승인 | 신규 퍼널과 무관한 분석 확장·전환 PR에 혼합 |
-| **MC-M4 현재 — 기능 구현 완료 · 통합/운영 검증 대기** | 완료: 0031 Production 적용 · 데이터 계약과 Prisma 모델 · 익명 ①~④ endpoint · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker · 도달 판정 · B안 가입 제안 · 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ `signup_complete` · 가입 전환 어드민과 회원 공통 하위 탭 · 격리 PostgreSQL 동시성·롤백 검증. 남음: 최신 main 통합 · 공유 파일 D100 마스터 읽기 전용 검토 · production build · 성능 baseline 비교 · Preview·실기기 검증 · push·PR·merge · 실제 수집 env와 MC-M5 | §8-13 정적·성능·유지보수·Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
+| **MC-M4 현재 — 통합·성능 PASS · 활성 흐름/Preview 검증 대기** | 완료: 0031 Production 적용 · 데이터 계약과 Prisma 모델 · 익명 ①~④ endpoint · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker · 도달 판정 · B안 가입 제안 · 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ `signup_complete` · 가입 전환 어드민과 회원 공통 하위 탭 · 격리 PostgreSQL 동시성·롤백 검증 · 최신 main 통합 · D100 공용 경계 검토 · production build · First Load JS · Brotli Lighthouse. 남음: 로컬 활성 흐름 · Vercel Preview · 실기기 · 실제 카카오 왕복 · merge · 실제 수집 env와 MC-M5 | §8-13 정적·성능·유지보수·로컬 활성 흐름·Vercel Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
 | **MC-M5** | 제한적 Production 적용 | 별도 창업자 승인 후 실제 수집 시작 | 승인 없는 merge·배포 |
 | **MC-M6** | 실제 숫자로 순차 개선 | 한 번에 한 질문·한 변경 | 저유입 표본으로 A/B 승자 주장 |
 | **MC-M7** | North Star 연결 | 회원 방문일 근거와 7일 재방문 참여 연결 | 7일 내 참여를 재방문으로 간주 |
@@ -855,7 +894,8 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - MC-M2: 정책·디자인 승인 완료
 - MC-M3: 2026-10-07 최소 측정 설계·`SignupFunnelDaily` schema 설계 승인 (§8). v4.1은 PR #665로 main
   `e6d8b3c`에 merge됨
-- MC-M4: 2026-10-07 구현 계약 확정(v4.2) → 로컬 기능 구현 완료(이 v4.3). 통합·운영 검증 대기
+- MC-M4: 2026-10-07 구현 계약 확정(v4.2) → 로컬 기능 구현 완료(v4.3) → 통합·성능 PASS checkpoint(이 v4.4).
+  로컬 활성 흐름·Vercel Preview·실기기·실제 카카오 왕복 검증 대기
 - MC-M4 구현 완료 범위: ①~④ 익명 기록과 수집 gate · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker와 도달 판정 ·
   B안 가입 제안과 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ · 가입 전환 어드민과
   회원 공통 하위 탭. 격리 PostgreSQL 에서 동시 온보딩 1건만 최초 전환·롤백 검증. 세부 검사는 Git 역사에 둔다
@@ -864,22 +904,29 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - 0031 S2 PASS: 열 6개 · 복합 PK `SignupFunnelDaily_pkey`(day, step, contentType, entryPoint) · 행 0 · FK 0 ·
   PK 외 별도 index 0 · 장부 미완료 0 · 롤백 0. 기존 테이블 구조 변경 0(적용 전후 구조 fingerprint 동일)
 - 수집 env(`SIGNUP_FUNNEL_COLLECTION_START`)·실제 수집: 아직 없음 (MC-M5)
-- 구현 checkpoint: branch `feat/member-conversion-m4` · HEAD `104c2d1ede1d1cfc70880768ee0dd6173144c1ce` ·
-  원격 branch 없음 · worktree clean. 최신 main 은 아직 fetch·merge·rebase 하지 않았다
-- 원격 main 관측값(2026-10-07): `d98baa4ef7af426cb767ecef68f84082dbd56608`. 그때 `e6d8b3c..d98baa4` main 변경 파일과
-  현재 구현 변경 파일의 교집합은 0 이었다. 🔴 이 SHA 는 관측 사실이지 정책이 아니다 — 통합 직전에 다시 확인한다
+- D100 공용 경계: Codex [3] 읽기 전용 검토 PASS(세션·관리자 판정, CommentSection, 상세 page, 카카오 버튼, 온보딩,
+  로그인, 회원 어드민, schema, gate 비활성 불변식)
+- 성능 checkpoint: baseline exact main `992366dc95e5db1392faba0bb5a14684df7ae9b9` · feature 제품 코드
+  `bed9093c39de4b6ad65642f5b16462ac04026c2c`, 같은 production build
+  - First Load JS gzip: 커뮤니티 +3.30KB · 매거진 +3.22KB · 온보딩 +0.70KB · 공용 +59B. 세 경로 모두 5KB 이하.
+    가입 제안 dialog와 `next-auth/react`는 콘텐츠 끝 도달 뒤 async로 받는다
+  - Lighthouse(streaming Brotli, 중앙값): 커뮤니티 LCP 2256→2256ms · 매거진 2256→2256ms · 온보딩 2105→2105ms,
+    세 경로 TBT 0→0ms · CLS 0→0. 기준 완화·예외 승인 0
+- Draft PR 통합 cutoff: exact main `efd0954ccd78f1f2a648c7de48ca16562f984c83` 로컬 merge 완료. `992366d..efd0954`
+  는 package script·매거진 운영 script·fixture뿐이라 build·성능을 다시 재지 않았다(§8-13 통합 기준)
+- push·Draft PR: 이 v4.4 기록 직후 진행. merge·Production 배포·실제 수집은 하지 않았다
 
 ### 다음 과제
 
 다음 순서로 진행하며, 각 단계는 별도 승인 대상이다.
 
-1. 원격 main SHA 를 다시 확인한 뒤 그 exact main 을 이 feature branch 에 로컬 merge
-2. 충돌이나 공유 파일의 의미 변화가 있으면 임의로 해결하지 않고 중단
-3. 통합 결과에서 D100·main 변경이 그대로 보존됐는지 확인
-4. D100 마스터가 공유 파일을 읽기 전용으로 검토
-5. build · 성능 baseline · Preview · 실기기 검증 (§8-13)
-6. 정적·성능·Preview PASS 뒤 push · PR
-7. merge · Production 배포 · 수집 env(MC-M5)는 각각 별도 단계
+1. Draft PR 자동 checks와 Vercel Preview 관측
+2. 로컬 활성 흐름 검증 — 같은 production build · 격리 로컬 DB · `VERCEL_ENV=production` (§8-13)
+3. Vercel Preview 검증 — gate 비활성 · 일반 렌더·인증 진입 · 복귀 URL 안전성 (§8-13)
+4. 실기기와 허용된 callback 환경의 실제 카카오 성공·취소·실패·창 닫기 왕복
+5. 최종 merge 직전 최신 main 재통합. 새 main이 측정 화면·공용 코드·dependency·schema·build 설정에 닿을 때만
+   관련 검사를 다시 실행한다
+6. merge · Production 배포 · 수집 env(MC-M5)는 각각 별도 단계
 
 새 검사의 CI 편입은 D100 공용 파일 merge 순서를 조율한 뒤 별도 단계로 한다.
 
@@ -887,17 +934,21 @@ GA4 `page_title`·query 전송 문제는 `MC-M3P` 별도 작업으로 다룬다.
 
 ## 19. 현재 남은 결정과 확인
 
-MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§8-5·§8-11·§8-13에서 확정됐고 로컬 구현은 끝났다.
-남은 것은 실제 환경에서만 확인할 수 있는 UNKNOWN 과 별도 승인 항목이다.
+MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§8-5·§8-11·§8-13에서 확정됐고 로컬 구현·최신 main
+통합·D100 경계 검토·성능 PASS는 끝났다. 남은 것은 활성 흐름·실제 환경에서만 확인할 수 있는 UNKNOWN 과 별도 승인
+항목이다.
 
 | 결정·확인 | 현재 상태 |
 |---|---|
-| Vercel 실제 request origin 과 Auth.js callback origin 일치 | `UNKNOWN` — Preview 실측 |
-| 실제 카카오 성공·취소·실패·창 닫기 복귀 | `UNKNOWN` — Preview·실기기 |
+| 활성 흐름 ①→④·24시간 제한·payload 순서·횟수 | `UNKNOWN` — 로컬 활성 흐름(같은 production build · 격리 DB · `VERCEL_ENV=production`) |
+| Preview gate 비활성·집계 DB read·write 0·복귀 URL 안전성 | `UNKNOWN` — Vercel Preview |
+| Vercel 실제 request origin 과 Auth.js callback origin 일치 | `UNKNOWN` — Vercel Preview 실측 |
+| 실제 카카오 성공·취소·실패·창 닫기 복귀 | `UNKNOWN` — 허용된 callback 환경·실기기 |
 | bfcache 와 모바일 뒤로가기 history 체감 | `UNKNOWN` — 실기기 |
 | IntersectionObserver 와 충돌 UI 판정 | `UNKNOWN` — 실기기 |
 | 모바일 키보드 · focus trap · scroll lock | `UNKNOWN` — 실기기 |
-| client chunk 와 First Load JS 증가 | `UNKNOWN` — build · 성능 baseline 비교(§8-13) |
+| client chunk 와 First Load JS 증가 | **PASS** — 세 경로 5KB 이하, dialog·`next-auth/react` async(§18) |
+| Lighthouse LCP·TBT·CLS | **PASS** — streaming Brotli 조건, 세 경로 중앙값 악화 0(§18) |
 | 온보딩 interactive transaction 의 실제 Production pooler 경로 | `UNKNOWN` — 같은 방식이 이미 다른 운영 경로에 쓰이나 이 action 으로는 미실측 |
 | Preview 가 연결된 DB | `UNKNOWN` — 과거 기록을 현재 사실로 쓰지 않는다. §8-7 gate 로 Preview read·write 0 이어야 한다 |
 | 실제 수집 시작일 env(`SIGNUP_FUNNEL_COLLECTION_START`) | MC-M5 별도 승인 |
@@ -930,6 +981,7 @@ MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§
 | 2026-10-07 | v4.2 | MC-M4 구현 계약 확정 — 요청 단위 세션 공유(D1)·취소·실패 복귀 (a)안과 Toast 문구(D2)·가입 완료 집계 await(D3)·CI 편입 제외(D4)·카카오 버튼 시각 variant·레이어 시작값·도달 타이머 취소·KST server-only 경계·same-origin 검증 |
 | 2026-10-07 | v4.2 상태 | 0031 PR #669 merge(`3f9d11d`)·Production 적용·S2 PASS 기록, MC-M4 제품 구현 시작. 정책 변경 없음 |
 | 2026-10-08 | v4.3 | MC-M4 로컬 기능 구현 checkpoint — ①~⑤, B안 가입 제안, 인증 복귀, 원자적 온보딩, 가입 전환 어드민 완료. 최신 main 통합·build·성능·Preview·배포·수집은 미완료 |
+| 2026-10-08 | v4.4 | MC-M4 통합·성능 PASS checkpoint — 최신 main 통합·D100 공용 경계 PASS·production build·First Load JS·streaming Brotli Lighthouse PASS. 성능 전송 조건·TBT 0→0 판정·D100 moving-main 통합 기준을 §8-13에, 로컬 활성 흐름과 Vercel Preview 검증 분리를 §8-13·§13에 명시. 새 제품 정책 없음 |
 
 v3.2까지의 세부 결정·검사 횟수·Preview 시행착오·commit·deployment 기록은 Git 역사에 보존한다. 현재 정책과
-충돌할 때는 이 v4.3 현행 절이 이긴다.
+충돌할 때는 이 v4.4 현행 절이 이긴다.
