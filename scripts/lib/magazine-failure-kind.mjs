@@ -119,6 +119,8 @@ const CONTENT_PREFIXES = [
   'QA_FAIL', 'FORBIDDEN_PATTERN', 'MED_', 'FIN_', 'SEN_', 'AGE_WORDING', 'BRAND_LEAK',
   'DUPLICATE_SENTENCE', 'UNSUPPORTED_NUMERIC_CLAIM', 'RISK_SENTENCE', 'markers_missing',
   'invalid_manuscript', 'REGEN_NO_CHANGE',
+  // 🔴 원고·brief 표기 형식 위반 (2026-10-08) — 브라우저·연결 탓이 아니다
+  'MANUSCRIPT_FORMAT', 'FORMAT_VIOLATION', 'BRIEF_FORMAT_CONTRACT', 'DRAFT_INVALID',
 ]
 
 /**

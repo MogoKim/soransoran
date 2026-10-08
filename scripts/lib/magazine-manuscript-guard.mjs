@@ -17,11 +17,13 @@
  *    자동으로 지워 주면 "무엇이 잘못됐는지" 를 아무도 보지 않게 된다.
  *    막고, 이유를 말하고, 사람이 brief 를 고치게 한다.
  *
- * 🔴 md-to-draft 의 규칙을 여기에 복사하지 않는다.
- *    저 파일이 정본이고 이 관문은 그보다 앞에서 "받을 수 없는 것" 만 본다.
- *    두 곳에 같은 목록을 두면 한쪽만 고쳐지는 날이 온다.
+ * 🔴 md-to-draft 의 규칙을 여기에 복사하지 않는다 — **같은 함수를 부른다** (2026-10-08).
+ *    판정 정본은 `magazine-manuscript-format.mjs` 다. md-to-draft CLI 도 그 함수를 쓴다.
+ *    앞판은 `[CTA]` 를 세기만 했다. `clinic-booking-app` 은 CTA 0개로 저장됐고, 다음 단계가
+ *    CONVERT_FAILED 로 멈췄다. 변환할 수 없는 원고는 **저장 전에** 막는다.
  */
 import { REQUIRED_SECTIONS } from './magazine-brief-policy.mjs'
+import { judgeManuscriptFormat, describeFormatViolation } from './magazine-manuscript-format.mjs'
 
 /** 이보다 짧으면 원고가 아니다. fetchManuscript 의 대기 조건(900자)보다 넉넉히 잡는다. */
 export const MIN_BODY_LENGTH = 1200
@@ -153,15 +155,24 @@ export function validateManuscript(text) {
     fail('BRIEF_ECHO', `원고가 아니라 brief(작업지시서)다 — brief 섹션 소제목이 있다: ${echo.slice(0, 3).map((h) => `## ${h}`).join(' · ')}`)
   }
 
+  // ── 변환 가능한 형식인가 — md-to-draft 와 같은 판정 ──
+  // 🔴 frontmatter 가 아예 없거나 닫히지 않았으면 위에서 이미 막았다. 같은 사유를 두 번 적지 않는다.
+  const format = judgeManuscriptFormat(raw)
+  if (hasOpen && !reasons.some((r) => r.code === 'FRONTMATTER_UNCLOSED')) {
+    for (const v of format.violations) fail('FORMAT_VIOLATION', describeFormatViolation(v))
+  }
+
   return {
     ok: reasons.length === 0,
     reasons,
+    /** 🔴 구조화된 형식 위반 — 사람용 문장을 다시 파싱하지 않게 그대로 싣는다 */
+    formatViolations: format.violations,
     stats: {
       length: raw.length,
       bodyLength,
       hangulRatio: Number(ratio.toFixed(3)),
       h2,
-      cta: (raw.match(/\[CTA\]/g) ?? []).length,
+      cta: format.blocks.filter((b) => b.type === 'cta').length,
       title: meta.title ? '있음' : '없음',
       cluster: meta.cluster ?? null,
     },

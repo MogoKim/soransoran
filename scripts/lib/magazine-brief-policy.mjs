@@ -15,6 +15,7 @@
  */
 
 import { HOMOGRAPH_PATTERNS, judgeForbidden } from './magazine-forbidden.mjs'
+import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT } from './magazine-load.mjs'
@@ -286,6 +287,11 @@ export function verifyBrief({ briefText, review, queueItem }) {
         ? `TODO 가 남아 있다: ${leftoverTodos.join(', ')}`
         : `섹션 ${REQUIRED_SECTIONS.length}개 · TODO 0`,
   )
+
+  // ── GF 원고 표기 형식 계약 — 전송 직전(deliveryGate)과 같은 함수 (2026-10-08) ──
+  //    섹션 6개만 보면 `[CTA]` 지시·허용 표기·금지 규칙이 빠진 brief 가 통과한다 (clinic-booking-app).
+  const contract = judgeBriefFormatContract(text)
+  add('GF', contract.ok, contract.ok ? '[CTA] 지시 1 · 허용 표기 · 금지 규칙' : describeBriefViolations(contract.violations))
 
   // ── G2 brief 5문장 == review.riskSentences ──
   const needSentences = needsRiskSentences(queueItem)

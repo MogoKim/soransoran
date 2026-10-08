@@ -1285,7 +1285,13 @@ export async function fetchManuscript({
      *    그날 5건이 전부 이 한 단어로 끝났다. 실제 원인은 composer 선택자였는데
      *    로그만 보고는 알 수 없었다. 이제 **어느 단계**에서 **무슨 오류**였는지 남긴다.
      *    원문은 첫 줄만, 200자까지 — URL·계정·쿠키가 실리지 않는 구간이다.
+     *
+     * 🔴 **첫 줄만으로는 고칠 수 없었다** (2026-10-08 · clinic-booking-app compose 30초 타임아웃).
+     *    Playwright 는 원인을 둘째 줄 아래 Call log 에 적는다 — 덮개가 가로챘는지, 안 보였는지.
+     *    그 줄에는 DOM 태그가 실리므로 **그대로 옮기지 않고** 정해진 분류 하나만 남긴다.
      */
+    const errorCause = playwrightActionCause(err?.message)
+    const firstLine = String(err?.message ?? '').split('\n')[0]
     return {
       ok: false,
       reason: 'connect_failed',
@@ -1293,7 +1299,8 @@ export async function fetchManuscript({
       messageFingerprint,
       preRecorded,
       errorName: err?.name ?? 'Error',
-      errorDetail: String(err?.message ?? '').split('\n')[0].slice(0, 200),
+      errorDetail: (errorCause ? `${firstLine.slice(0, 160)} · 원인: ${errorCause}` : firstLine).slice(0, 200),
+      ...(errorCause ? { errorCause } : {}),
       sent,
     }
   } finally {
@@ -1301,6 +1308,28 @@ export async function fetchManuscript({
     try { await page?.close() } catch { /* 이미 닫혔으면 그만 */ }
     try { await browser?.close() } catch { /* 연결만 끊는다 */ }
   }
+}
+
+/**
+ * 🔴 **Playwright 동작 실패의 원인 분류** — 정해진 어휘 하나만 돌려준다 (2026-10-08).
+ *    Call log 의 원인 줄에는 `<div id=… class=…>` 같은 DOM 조각이 실린다. 그 줄을 옮기지 않는다 —
+ *    URL·계정·쿠키·DOM 은 결과에 남기지 않는다. 분류만 남긴다.
+ *    마지막(가장 최근 재시도) 원인을 고른다. 모르면 null.
+ */
+export const PLAYWRIGHT_ACTION_CAUSES = [
+  { cause: 'intercepts pointer events', re: /intercepts pointer events/ },
+  { cause: 'not visible', re: /element is not visible/ },
+  { cause: 'not stable', re: /element is not stable/ },
+  { cause: 'detached', re: /element (?:is|was) detached from the DOM|not attached to the DOM/ },
+  { cause: 'disabled', re: /element is not enabled|element is disabled/ },
+  { cause: 'outside viewport', re: /outside of the viewport/ },
+]
+export function playwrightActionCause(message) {
+  let found = null
+  for (const line of String(message ?? '').split('\n').slice(1)) {
+    for (const c of PLAYWRIGHT_ACTION_CAUSES) if (c.re.test(line)) found = c.cause
+  }
+  return found
 }
 
 /**

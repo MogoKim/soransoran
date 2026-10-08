@@ -387,6 +387,12 @@ export function processCandidates({
             // 🔴 drive 가 센 재생성 횟수를 보존한다
             ...(cur[r.slug]?.regenCalls !== undefined ? { regenCalls: cur[r.slug].regenCalls } : {}),
             ...(cur[r.slug]?.lastPacketHash !== undefined ? { lastPacketHash: cur[r.slug].lastPacketHash } : {}),
+            /**
+             * 🔴 **실제 위반을 구조화된 값으로 남긴다** (2026-10-08). 앞판 장부에는 변환기의 사람용
+             *    마지막 안내문만 남아, 무엇이 틀렸는지 장부로는 알 수 없었다. 없으면 지운다 — 옛 위반을 끌고 가지 않는다.
+             */
+            formatViolations: formatViolationsOf(r),
+            contractViolations: contractViolationsOf(r),
           },
         }))
         if (!u.ok) report.blocked.push({ slug: r.slug, blockedBy: [{ code: 'QUARANTINE_UNREADABLE', message: u.why }] })
@@ -398,6 +404,16 @@ export function processCandidates({
     }
   }
   return { ledger, scanned, done, blocked, results, registered, ceiling, budgetStop, attempted, held: heldResults }
+}
+
+/** drive 결과의 형식 위반 — 결과 최상위 · blockedBy 어디에 있든 하나로 (최대 8건) */
+export function formatViolationsOf(r) {
+  const v = r?.formatViolations ?? (r?.blockedBy ?? []).find((b) => b.formatViolations)?.formatViolations ?? null
+  return Array.isArray(v) && v.length ? v.slice(0, 8).map((x) => ({ line: x.line, why: x.why })) : undefined
+}
+export function contractViolationsOf(r) {
+  const v = (r?.blockedBy ?? []).find((b) => b.contractViolations)?.contractViolations ?? null
+  return Array.isArray(v) && v.length ? v.map((x) => ({ code: x.code, why: x.why })) : undefined
 }
 
 // ── PR ─────────────────────────────────────────────────────
