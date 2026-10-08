@@ -418,11 +418,16 @@ export { subjectOfLife }
 // 파생 칸 — 🟢 결정론 (규칙표는 운영 seed 에서 읽은 값이다)
 // ─────────────────────────────────────────────────────────
 
+/** 🔴 lifeStage 가 읽는 생활사 축 — 이 셋뿐이다. 정본 카드(`PoolCard`)도 그대로 넘길 수 있다 */
+export type LifeStageAxes = Pick<LifeSkeleton, 'childrenCount' | 'childrenAgeBands' | 'parentCare'>
+
 /**
  * 🔴 **lifeStage — 운영 seed 24명이 쓰는 어휘 그대로.**
  *    (무자녀 · 양육기 · 자녀 독립 준비 · 자녀 독립기 · 부모 돌봄기) — 2026-09-29 실측
+ *    🔴 신규 Persona seed 의 **단일 authority** 다(autogen · cohort seed materializer). 카드 제목을 쓰지 않는다 —
+ *       카드 제목 fallback 은 기존 행 복구(`persona-contract-remediation`) 전용이다.
  */
-export function lifeStageOf(l: LifeSkeleton): string {
+export function lifeStageOf(l: LifeStageAxes): string {
   if (l.childrenCount === 0) return '무자녀'
   if (l.childrenAgeBands.some((b) => b === '영유아' || b === '초등' || b === '중고등')) return '양육기'
   if (l.childrenAgeBands.includes('대학·취준')) return '자녀 독립 준비'
@@ -526,7 +531,8 @@ export function renderPoolCardBlock(input: {
  */
 export function seedFromCard(input: {
   card: PoolCard
-  life: LifeSkeleton
+  /** lifeStage 축 — 생활사 골격 또는 정본 카드 */
+  life: LifeStageAxes
   voiceCore: SeedVoiceCore
   variations: readonly string[]
   cadence: Cadence
