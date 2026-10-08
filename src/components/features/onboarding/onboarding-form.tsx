@@ -12,6 +12,7 @@ import { checkNickname, completeOnboarding } from '@/lib/actions/onboarding'
 import { trackEvent } from '@/lib/analytics/track'
 import { NICKNAME_AVAILABLE, NICKNAME_TAKEN, validateNicknameFormat } from '@/lib/nickname'
 import { BRAND_NAME } from '@/lib/brand-name'
+import { clearAuthMarker, readAuthMarker } from '@/lib/signup-prompt-storage'
 import { cn } from '@/lib/utils'
 
 /** 손을 멈춘 뒤에 물어본다. 글자마다 부르면 1분 30건 제한에 금방 닿는다 */
@@ -64,6 +65,15 @@ const BACK_CLASS =
  *
  * 🔴 destination 은 page 가 거른 값을 그대로 쓴다. 여기서 다시 정하지 않는다.
  */
+/** 회원가입 전환 귀속 표식을 읽고 지울 저장소. 접근 자체가 막힌 브라우저는 null — 가입을 막지 않는다 */
+function signupMarkerStorage(): Storage | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
 export default function OnboardingForm({ destination }: { destination: string }) {
   const router = useRouter()
   const [step, setStep] = useState<1 | 2>(1)
@@ -257,15 +267,20 @@ export default function OnboardingForm({ destination }: { destination: string })
     submitStartedRef.current = true
     setSubmitError('')
 
+    // 회원가입 전환 귀속 표식(가입 제안에서 시작한 인증이면 있다). 없거나 깨졌으면 undefined — 가입은 그대로다.
+    const attribution = readAuthMarker(signupMarkerStorage(), Date.now()) ?? undefined
+
     startTransition(async () => {
       let succeeded = false
       try {
-        const result = await completeOnboarding(nickname, agreed)
+        const result = await completeOnboarding(nickname, agreed, attribution)
         if (result.error) {
           setSubmitError(result.error)
           return
         }
         succeeded = true
+        // 🔴 표식은 가입 성공 뒤에만 지운다. 실패·예외 때는 남겨 다시 시도해도 귀속이 이어진다.
+        clearAuthMarker(signupMarkerStorage())
         /**
          * 🔴 가입은 여기서 확정된다. completeOnboarding 이 isOnboarded 를 false→true 로
          *    바꾸는 트랜잭션을 마쳤고, 다시 부르면 ALREADY_ONBOARDED 로 막힌다 —

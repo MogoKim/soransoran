@@ -292,11 +292,11 @@ for (const [name, p] of [['복귀 상수', P.ret], ['복귀 검증', P.authRet],
   check(`${name}: storage·cookie 쓰기·이벤트 전송 0`, !/localStorage|sessionStorage|document\.cookie|sendAnonymousFunnelEvent|sendBeacon|fetch\(/.test(code(read(p))))
 const unchanged = [
   'src/components/features/CommentSection.tsx', 'src/components/features/KakaoSignInButton.tsx',
-  'src/lib/signup-funnel-send.ts', 'src/lib/signup-prompt-storage.ts', 'src/lib/signup-funnel.ts',
-  'src/lib/auth.ts', 'src/lib/auth.config.ts', 'src/lib/callback-url.ts', 'src/lib/actions/onboarding.ts',
-  'src/components/features/onboarding/onboarding-form.tsx', 'src/app/onboarding/page.tsx', 'src/components/ui/toast/toast-context.tsx',
+  'src/lib/signup-funnel-send.ts', 'src/lib/signup-funnel.ts',
+  'src/lib/auth.ts', 'src/lib/auth.config.ts', 'src/lib/callback-url.ts',
+  'src/app/onboarding/page.tsx', 'src/components/ui/toast/toast-context.tsx',
 ].filter((p) => read(p) !== gitShow(p))
-check('변경 금지 파일(댓글·카카오 버튼·전송·저장·인증·온보딩·Toast) 그대로', unchanged.length === 0, unchanged.join(', '))
+check('변경 금지 파일(댓글·카카오 버튼·전송·인증·온보딩 화면·Toast) 그대로 — 표식 저장·가입 완료는 ⑤ 검사가 본다', unchanged.length === 0, unchanged.join(', '))
 const imports = (p: string) => [...read(p).matchAll(/^import .*$/gm)].map((m) => m[0])
 check('복귀 상수 import 는 타입 하나', JSON.stringify(imports(P.ret)) === JSON.stringify(["import type { SignupFunnelContentType } from '@/lib/signup-funnel'"]))
 check('복귀 검증 import 고정(D100 0)', JSON.stringify(imports(P.authRet)) === JSON.stringify([

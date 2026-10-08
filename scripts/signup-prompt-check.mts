@@ -206,10 +206,13 @@ check('④ 는 CTA 승인 콜백에서 표식 다음 authGuard 로 한 번',
 check('닫히면 같은 mount 에서 다시 열지 않는다', /onClosed=\{\(\) => setPromptOpen\(false\)\}/.test(tracker) && /if \(promptTried\.current\) return/.test(tracker))
 check('localStorage 접근 실패는 null(노출 0)', /function browserStorage\(\): PromptStorage \| null \{\s*try \{\s*return window\.localStorage\s*\} catch \{\s*return null/.test(tracker))
 const srcFiles = (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[]).map((f) => f.split('\\').join('/')).filter((f) => /\.(ts|tsx)$/.test(f))
+// 🔴 ⑤ signup_complete 는 서버 가입 완료(signup-completion.ts, server-only)만 쓴다. 클라이언트 쪽은 ①~④ 뿐이다.
 const sentSteps = new Set<string>()
-for (const f of srcFiles) for (const m of read(join('src', f)).matchAll(/step: '([a-z_]+)'/g)) sentSteps.add(m[1])
+for (const f of srcFiles.filter((f) => f !== 'lib/signup-completion.ts')) for (const m of read(join('src', f)).matchAll(/step: '([a-z_]+)'/g)) sentSteps.add(m[1])
 check('클라이언트가 보내는 단계는 ①~④ 뿐 — 새 이벤트 0 · signup_complete 0',
   JSON.stringify([...sentSteps].sort()) === JSON.stringify(['auth_start', 'logged_out_view', 'prompt_impression', 'prompt_reach']), [...sentSteps].join(','))
+check('signup_complete 를 쓰는 곳은 server-only 가입 완료 helper 하나', srcFiles.filter((f) => /step: 'signup_complete'/.test(read(join('src', f)))).join() === 'lib/signup-completion.ts'
+  && /^import 'server-only'/m.test(read('src/lib/signup-completion.ts')))
 
 // ─────────── 6. 카카오 버튼 ───────────
 console.log('\n■ 6. 기존 카카오 버튼 재사용')
@@ -243,12 +246,11 @@ const sharedUnchanged = [
   'src/components/features/GuestCommentControls.tsx', 'src/components/features/CommentComposeAnchor.tsx',
   'src/components/ui/toast/toast-tokens.ts', 'src/components/ui/BottomSheet.tsx',
   'src/components/features/WriteLoginPrompt.tsx', 'src/lib/callback-url.ts', 'src/lib/auth.ts', 'src/lib/auth.config.ts',
-  'src/lib/actions/onboarding.ts', 'src/components/features/onboarding/onboarding-form.tsx',
 ].filter((p) => read(p) !== gitShow(p))
-check('공유 파일(댓글·Toast·시트·인증·온보딩) 변경 0 — 로그인 화면 복귀는 D2 검사가 따로 본다', sharedUnchanged.length === 0, sharedUnchanged.join(', '))
+check('공유 파일(댓글·Toast·시트·인증) 변경 0 — 로그인 복귀는 D2 검사, 온보딩은 ⑤ 검사가 따로 본다', sharedUnchanged.length === 0, sharedUnchanged.join(', '))
 check('Toast 레이어는 이미 70 — dialog 60 보다 위', /export const TOAST_Z = 70/.test(read('src/components/ui/toast/toast-tokens.ts')))
 const imports = (p: string) => [...read(p).matchAll(/^import .*$/gm)].map((m) => m[0])
-check('저장 모듈 import 는 타입 하나', JSON.stringify(imports(P.storage)) === JSON.stringify(["import type { SignupFunnelContentType } from '@/lib/signup-funnel'"]))
+check('저장 모듈 import 는 순수 계약 하나(허용값 · 타입)', JSON.stringify(imports(P.storage)) === JSON.stringify(["import { SIGNUP_FUNNEL_CONTENT_TYPES, type SignupFunnelContentType } from '@/lib/signup-funnel'"]))
 check('flow 모듈 import 0', imports(P.flow).length === 0)
 check('dialog import 고정(D100 0 · 인증 모듈 직접 0)', JSON.stringify(imports(P.dialog)) === JSON.stringify([
   "import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'",

@@ -298,8 +298,8 @@ check('API 경로 문자열은 전송 모듈 하나(+ endpoint 주석)에만 있
   'lib/signup-funnel-endpoint.ts', 'lib/signup-funnel-send.ts',
 ]), apiCallers.join(', '))
 const endpointImporters = srcFiles.filter((f) => /from '@\/lib\/signup-funnel-(endpoint|gate)'/.test(read(join('src', f)))).sort()
-check('gate·endpoint 를 부르는 곳은 route · endpoint · 요청 단위 tracking 판정뿐', JSON.stringify(endpointImporters) === JSON.stringify([
-  'app/api/signup-funnel/route.ts', 'lib/signup-funnel-endpoint.ts', 'lib/signup-funnel-tracking.ts',
+check('gate·endpoint 를 부르는 곳은 route · endpoint · 요청 단위 tracking 판정 · ⑤ 가입 완료뿐', JSON.stringify(endpointImporters) === JSON.stringify([
+  'app/api/signup-funnel/route.ts', 'lib/signup-completion.ts', 'lib/signup-funnel-endpoint.ts', 'lib/signup-funnel-tracking.ts',
 ]), endpointImporters.join(', '))
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패`)

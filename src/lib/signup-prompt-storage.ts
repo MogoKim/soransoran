@@ -1,4 +1,4 @@
-import type { SignupFunnelContentType } from '@/lib/signup-funnel'
+import { SIGNUP_FUNNEL_CONTENT_TYPES, type SignupFunnelContentType } from '@/lib/signup-funnel'
 
 /**
  * 가입 제안 브라우저 저장 — 24시간 노출 제한과 인증 왕복 귀속 표식. 순수 함수 · storage·시계 주입.
@@ -71,7 +71,7 @@ export type AuthMarker = {
 
 /**
  * 인증을 시작하는 순간 귀속 표식을 남긴다(§8-4 A안). 실패해도 인증은 그대로 시작한다 — false 만 돌려준다.
- * 🔴 지우는 일은 가입 완료(⑤) 쪽이 한다. 여기서는 쓰기만 한다.
+ * 🔴 지우는 일은 가입 완료(⑤) 쪽이 성공 응답 뒤에 한다(clearAuthMarker).
  */
 export function writeAuthMarker(storage: PromptStorage | null, contentType: SignupFunnelContentType, now: number): boolean {
   if (!storage) return false
@@ -81,5 +81,57 @@ export function writeAuthMarker(storage: PromptStorage | null, contentType: Sign
     return true
   } catch {
     return false
+  }
+}
+
+const AUTH_MARKER_KEYS = ['contentType', 'entryPoint', 'expiresAt'] as const
+
+/**
+ * 귀속 표식 검증 — 브라우저와 서버가 각자 부른다. 서버는 브라우저의 판정을 믿지 않고 다시 부른다(§8-4).
+ *
+ * 🔴 일반 객체 · 자기 키 정확히 셋 · 셋 다 데이터 속성이어야 한다. 추가·누락·symbol·숨은 키·getter·배열·
+ *    클래스 객체는 거부한다. 입력을 고치지도, getter 를 부르지도 않는다.
+ * 🔴 now 기준 만료(expiresAt ≤ now)와 30분을 넘는 미래 만료는 거부한다 — 브라우저가 늘린 만료를 믿지 않는다.
+ */
+export function parseAuthMarker(value: unknown, now: number): AuthMarker | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const proto: unknown = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return null
+
+  const keys = Reflect.ownKeys(value)
+  if (keys.length !== AUTH_MARKER_KEYS.length) return null
+  const values: Partial<Record<(typeof AUTH_MARKER_KEYS)[number], unknown>> = {}
+  for (const key of AUTH_MARKER_KEYS) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !('value' in descriptor)) return null
+    values[key] = descriptor.value
+  }
+
+  const { contentType, entryPoint, expiresAt } = values
+  if (typeof contentType !== 'string' || !(SIGNUP_FUNNEL_CONTENT_TYPES as readonly string[]).includes(contentType)) return null
+  if (entryPoint !== 'content_end') return null
+  if (typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt)) return null
+  if (expiresAt <= now || expiresAt - now > AUTH_MARKER_TTL_MS) return null
+
+  return { contentType: contentType as SignupFunnelContentType, entryPoint, expiresAt }
+}
+
+/** 저장된 표식을 읽어 검증한다. 읽기·파싱 실패와 무효 값은 null — 가입을 막지 않는다 */
+export function readAuthMarker(storage: PromptStorage | null, now: number): AuthMarker | null {
+  if (!storage) return null
+  try {
+    const raw = storage.getItem(AUTH_MARKER_KEY)
+    return raw === null ? null : parseAuthMarker(JSON.parse(raw), now)
+  } catch {
+    return null
+  }
+}
+
+/** 가입 성공 뒤에만 부른다. 지우지 못해도 가입과 화면 이동을 막지 않는다 — 어차피 30분 뒤 만료다 */
+export function clearAuthMarker(storage: { removeItem(key: string): void } | null): void {
+  try {
+    storage?.removeItem(AUTH_MARKER_KEY)
+  } catch {
+    // 삼킨다
   }
 }
