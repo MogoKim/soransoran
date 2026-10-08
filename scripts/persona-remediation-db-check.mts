@@ -5,6 +5,8 @@
  *   DATABASE_URL=postgresql://soran@localhost:<port>/soran_test SORAN_ISOLATED_DB=yes-throwaway \
  *     npx tsx scripts/persona-remediation-db-check.mts
  *
+ *   🔴 2026-10-01 당시 운영 active 24명의 **역사적 복구 반례**다 — 대상은 wave1-mvp · wave2 · wave3-scale · wave4-depth
+ *      cohort 에서 파생한다(wave5-d10 은 넣지 않는다 · 숫자 authority 를 새로 두지 않는다)
  *   🔴 운영과 같은 모양 24명 — 정본 카드 seed + 운영에서 관측한 drift(P05 금지 역할 · P07/P10/P15/P17 생활 단계 없음 ·
  *      noGo 소재 없음 · P15/P17 카드가 적지 않은 말끝 없음) · 한 음절만 같은 표시명 한 쌍 · 실회원 1명
  *   ① 계획: 지금 19(말투·이름은 코드로 선다) → 예측 24 · 기존 유효 이탈 0 · 근거 필요 0
@@ -72,7 +74,7 @@ const { PrismaClient } = await import('@prisma/client')
 const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
 const { noGoExpressionKey } = await import('../src/lib/persona-no-go')
 const { explicitEndingsOf } = await import('../src/lib/persona-card-verify')
-const { PRODUCTION_PERSONA_CODES } = await import('../src/lib/persona-cohort')
+const { COHORTS, PRODUCTION_PERSONA_CODES } = await import('../src/lib/persona-cohort')
 const { readRemediation, applyRemediation } = await import('./lib/persona-contract-remediation.mjs')
 const { bundlesForPersonas, carriesExperience } = await import('./lib/persona-reference-store.mjs')
 const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
@@ -96,11 +98,25 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 const prisma = new PrismaClient()
 const root = process.cwd()
 const now = new Date()
-const CODES = [...PRODUCTION_PERSONA_CODES]
+// 🔴 2026-10-01 복구 당시의 운영 active — 그때까지의 cohort 에서 파생한다(wave5-d10 은 그 뒤에 생겼다)
+const MEASURED_COHORTS = ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'] as const
+const measuredCodes = MEASURED_COHORTS.flatMap((id) => COHORTS[id].codes)
+const measured = new Set(measuredCodes)
+const CODES = PRODUCTION_PERSONA_CODES.filter((c) => measured.has(c))
 const DRIFT = ['P05', 'P07', 'P10', 'P15', 'P17']
+/** 복구 기대값 — fixture 에서 파생한다: drift 만 빠졌다가 전원 선다 */
+const EXPECT = { before: CODES.length - DRIFT.length, after: CODES.length }
+{
+  const problems: string[] = []
+  if (measuredCodes.length !== 24 || measured.size !== 24) problems.push(`측정 cohort 코드 ${measuredCodes.length}개 · 고유 ${measured.size}개 ≠ 24`)
+  if (CODES.length !== measured.size) problems.push(`측정 코드 중 production universe 밖: ${measuredCodes.filter((c) => !PRODUCTION_PERSONA_CODES.includes(c)).join(',')}`)
+  if (COHORTS['wave5-d10'].codes.some((c) => CODES.includes(c))) problems.push('wave5-d10 코드가 역사적 fixture 에 섞였다')
+  if (!DRIFT.every((c) => CODES.includes(c))) problems.push('drift 5명이 측정 코드 밖이다')
+  if (problems.length > 0) { console.error(`🔴 역사적 측정 universe 가 서지 않는다 — ${problems.join(' / ')}`); process.exit(3) }
+}
 
 const bundles = bundlesForPersonas({ repoRoot: root, personaCodes: CODES })
-if (bundles.origin !== '정본 자산' || bundles.byCode.size !== 24) {
+if (bundles.origin !== '정본 자산' || bundles.byCode.size !== CODES.length) {
   console.error(`🔴 임시 말투 자산이 운영 모양으로 서지 않았다(${bundles.origin} · ${bundles.byCode.size}) — ${bundles.blocks.join(' / ')}`)
   process.exit(3)
 }
@@ -179,7 +195,7 @@ const actCounts = async (): Promise<string> => JSON.stringify([await prisma.post
   await prisma.microSeedRawContent.count(), await prisma.account.count()])
 const valid = (r: { byState: Record<string, string[]> }): string[] => [...r.byState.reserve!, ...r.byState['stage-active']!].sort()
 
-console.log('\n══ Persona 계약 복구 — 격리 DB (운영 모양 24명) ══\n')
+console.log(`\n══ Persona 계약 복구 — 격리 DB (2026-10-01 운영 모양 ${CODES.length}명) ══\n`)
 try {
   await cleanup()
   for (const c of CODES) await make(c)
@@ -195,10 +211,9 @@ try {
   check('근거 필요 칸 0', r0.plan.evidenceRequired.length === 0, JSON.stringify(r0.plan.evidenceRequired))
   const validBefore = valid(r0.before)
   const validPred = valid(r0.predicted)
-  check(`지금 ${r0.before.contractValid} — drift 5명만 빠진다 · P20~P25 는 말투·이름으로 선다`, r0.before.contractValid === 19
+  check(`지금 ${r0.before.contractValid} — drift 5명만 빠진다 · P20~P25 는 말투·이름으로 선다`, r0.before.contractValid === EXPECT.before
     && CODES.filter((c) => !DRIFT.includes(c)).join(',') === validBefore.join(','), validBefore.join(','))
-  check(`🔴 예측 정확히 24 · 이탈 0`, r0.predicted.contractValid === 24 && validBefore.every((c) => validPred.includes(c)))
-  const EXPECT = { before: 19, after: 24 }
+  check(`🔴 예측 정확히 ${EXPECT.after} · 이탈 0`, r0.predicted.contractValid === EXPECT.after && validBefore.every((c) => validPred.includes(c)))
 
   // ── ② 계획 뒤 DB 가 바뀜 ──
   const stale = r0.plan.digest
@@ -216,7 +231,7 @@ try {
   // ── ③ 기대값 쌍이 다름 ──
   const r3 = await readRemediation(prisma, { now, repoRoot: root })
   const s3 = await snapshot()
-  for (const bad of [{ before: 13, after: 24 }, { before: 19, after: 23 }]) {
+  for (const bad of [{ before: EXPECT.before - 6, after: EXPECT.after }, { before: EXPECT.before, after: EXPECT.after - 1 }]) {
     const rBad = await applyRemediation(prisma, { approvedDigest: r3.plan.digest, expected: bad, reason: 'db-check', now, repoRoot: root })
     check(`🔴 기대 ${bad.before}→${bad.after} ≠ 실제 → 중단 · write 0`, !rBad.ok && rBad.reason.includes('EXPECTATION_MISMATCH') && s3 === await snapshot())
   }
@@ -244,9 +259,9 @@ try {
 
   // ── ⑥ 적용 결과 ──
   const ok = oks[0]
-  check(`적용 ${ok?.ok ? `${ok.updated.join(',')} · ${ok.before}→${ok.after}` : '실패'}`, ok?.ok === true && ok.updated.join(',') === DRIFT.join(',') && ok.before === 19 && ok.after === 24)
+  check(`적용 ${ok?.ok ? `${ok.updated.join(',')} · ${ok.before}→${ok.after}` : '실패'}`, ok?.ok === true && ok.updated.join(',') === DRIFT.join(',') && ok.before === EXPECT.before && ok.after === EXPECT.after)
   const r6 = await readRemediation(prisma, { now, repoRoot: root })
-  check(`🔴 적용 뒤 계약 유효 24 = 예측 · 기존 유효 이탈 0`, r6.before.contractValid === 24 && valid(r6.before).join(',') === validPred.join(','))
+  check(`🔴 적용 뒤 계약 유효 ${EXPECT.after} = 예측 · 기존 유효 이탈 0`, r6.before.contractValid === EXPECT.after && valid(r6.before).join(',') === validPred.join(','))
   check('🔴 가짜 활동 0 — Post · Comment · 두 Queue · 활동 · 원문 · 계정 행 불변', acts === await actCounts())
   check('🔴 User 불변 — 표시명 자동 변경 0', users === JSON.stringify(await prisma.user.findMany({ orderBy: { id: 'asc' }, select: { id: true, nickname: true, name: true, updatedAt: true } })))
   const afterRows = await prisma.persona.findMany({ where: { code: { in: CODES } }, orderBy: { code: 'asc' }, select: FIELDS })
@@ -269,7 +284,7 @@ try {
   // ── ⑦ 두 번째 실행 ──
   const s7 = await snapshot()
   check('🔴 두 번째 계획 0', r6.plan.personas.length === 0)
-  const rAgain = await applyRemediation(prisma, { approvedDigest: r6.plan.digest, expected: { before: 24, after: 24 }, reason: 'db-check', now, repoRoot: root })
+  const rAgain = await applyRemediation(prisma, { approvedDigest: r6.plan.digest, expected: { before: EXPECT.after, after: EXPECT.after }, reason: 'db-check', now, repoRoot: root })
   check('🔴 두 번째 실행 write 0', rAgain.ok && rAgain.updated.length === 0 && s7 === await snapshot())
   // 🔴 같은 승인(19→24)을 그대로 다시 보내도 계획이 비었으면 쓸 것이 없다 — 실패가 아니라 no-op 이다
   const rReplay = await applyRemediation(prisma, { approvedDigest: r6.plan.digest, expected: EXPECT, reason: 'db-check 재실행', now, repoRoot: root })
@@ -282,7 +297,7 @@ try {
     const CLI = join(root, 'scripts/persona-contract-remediation.mts')
     const s7b = await snapshot()
     const A40 = 'a'.repeat(40)
-    const full = ['--apply', '--production', `--target=${A40}`, `--digest=${r6.plan.digest}`, '--expect=19:24', '--reason=db-check']
+    const full = ['--apply', '--production', `--target=${A40}`, `--digest=${r6.plan.digest}`, `--expect=${EXPECT.before}:${EXPECT.after}`, '--reason=db-check']
     const run = (args: string[], env: Record<string, string>) => spawnSync(TSX, [CLI, ...args], { cwd: root, env: { ...process.env, ...env }, encoding: 'utf8' })
     const iso = run(full, {})
     check('🔴 운영 플래그 + 격리 env → exit 2 · write 0', iso.status === 2 && /SORAN_ISOLATED_DB/.test(iso.stderr) && s7b === await snapshot(), iso.stderr.slice(0, 200))
@@ -292,7 +307,7 @@ try {
       const r = run(full.filter((a) => !a.startsWith(drop)), { SORAN_ISOLATED_DB: '' })
       check(`🔴 운영 인자 ${drop} 누락 → exit 2 · write 0`, r.status === 2 && s7b === await snapshot(), r.stderr.slice(0, 160))
     }
-    const plainProd = run(['--apply', '--digest=x', '--expect=19:24', '--reason=x'], { SORAN_ISOLATED_DB: '', DATABASE_URL: 'postgresql://u@db.example.invalid:5432/postgres' })
+    const plainProd = run(['--apply', '--digest=x', `--expect=${EXPECT.before}:${EXPECT.after}`, '--reason=x'], { SORAN_ISOLATED_DB: '', DATABASE_URL: 'postgresql://u@db.example.invalid:5432/postgres' })
     check('🔴 플래그 없는 --apply + 운영 주소 → exit 2(격리 전용 그대로)', plainProd.status === 2 && /격리 DB 에서만/.test(plainProd.stderr), plainProd.stderr.slice(0, 200))
   }
 

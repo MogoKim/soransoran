@@ -281,7 +281,8 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
 console.log('⑤ 판정 연결 — 운영 판정 그대로')
 // ─────────────────────────────────────────────────────────
 {
-  const pool = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
+  // 🔴 생성 당시 Pool(P01~P25) — 이 fixture 의 코드(AUTOGEN_CODE_FIRST=P26)는 wave5 카드에 이미 쓰였다
+  const pool = (() => { const f = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')); return { ...f, cards: f.cards.filter((c) => Number(c.code.slice(1)) <= 25) } })()
   const base: AutogenCandidate = {
     code: CODE, life: LIFE, creative: null, voice: { bundle, seedShareCount: 1 }, cadence: CADENCE,
     binding: { accountCount: 0, providerId: null }, displayName: { name: '해솔', gate: 'pass' },
@@ -346,7 +347,14 @@ console.log('⑦ batch — 호출 1회 · 구조 fail-closed')
 const SIX = ['P26', 'P27', 'P28', 'P29', 'P30', 'P32']
 const GOOD6 = JSON.parse(readFileSync('scripts/__fixtures__/persona-creative-batch-good.json', 'utf-8')) as Record<string, PersonaCreative>
 const ACTUAL = JSON.parse(readFileSync('scripts/__fixtures__/persona-creative-actual-20261006.json', 'utf-8')) as Record<string, PersonaCreative>
-const POOL = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
+/**
+ * 🔴 **생성 당시 Pool(P01~P25)** — 이 검사의 canary · 실측 fixture 는 wave5 카드가 들어가기 전 Pool 로 만든 생활사 골격 위에 서 있다.
+ *    wave5(P26~P32, 2026-10-08) 카드가 정본에 들어간 뒤에도 같은 골격으로 다시 잰다(재현성).
+ */
+const POOL = (() => {
+  const full = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
+  return { ...full, cards: full.cards.filter((c) => Number(c.code.slice(1)) <= 25) }
+})()
 const LIVES = new Map(proposeLifeSkeletons({ existing: POOL.cards, codes: Array.from({ length: 8 }, (_, i) => autogenCodeOf(26 + i)) })
   .map((x) => [x.code, x.life]))
 {

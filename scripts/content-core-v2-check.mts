@@ -1750,7 +1750,7 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
     const far = exactAgeOf({ ...p02, onKstDate: '2036-09-23' })
     return !far.ok && far.code === 'OUT_OF_BAND'
   })())
-  check('🔴 🔴 **25명 전원이 전 축 검사를 통과한다 (ageBand·자녀·갱년기·간병·혼인·직업)**', (() => {
+  check('🔴 🔴 **카드 31명 전원이 전 축 검사를 통과한다 (ageBand·자녀·갱년기·간병·혼인·직업)**', (() => {
     for (const c of POOL.cards) {
       const v = exactAgeOf({ birthDate: c.birthDate, ageBand: c.ageBand, onKstDate: '2026-09-23' })
       if (!v.ok) return false
@@ -1761,7 +1761,7 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
       })
       if (probs.length > 0) return false
     }
-    return POOL.cards.length === 25
+    return POOL.cards.length === 31
   })())
   check('🔴 자녀 연령대 문자열을 제대로 읽는다 — `중3` 은 3세가 아니다',
     childAgeFrom('중3') === 15 && childAgeFrom('초등 고학년') === 11 && childAgeFrom('20대') === 25)

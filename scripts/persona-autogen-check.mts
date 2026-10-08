@@ -14,14 +14,15 @@ import { explicitEndingsOf, verifySeedCard } from '../src/lib/persona-card-verif
 import { readLengthBand } from '../src/lib/original-post-persona-match'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import {
-  AUTOGEN_CODE_FIRST, autogenCodeOf, lifeProblems, proposeLifeSkeletons, subjectOfCard, subjectOfLife,
-  thinLifeAxisCount, voiceCoreFromBundle, isNameOnly,
+  AUTOGEN_CODE_FIRST, AUTOGEN_CODE_LAST, autogenCodeOf, lifeProblems, nextAutogenCodes, personaCodeNumber, proposeLifeSkeletons,
+  RETIRED_AUTOGEN_CODES, subjectOfCard, subjectOfLife, thinLifeAxisCount, voiceCoreFromBundle, isNameOnly,
   type AutogenBlockCode, type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
 } from '../src/lib/persona-autogen'
 import { assignmentDrift, judgeAutogenCandidate } from './lib/persona-autogen.mjs'
 import { judgeApplyBatch } from './lib/persona-autogen-apply.mjs'
 import { referenceSeedShareCount } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
+import { COHORTS, EXCLUDED_CODES, PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 import { runPersonaReserveChecks } from './persona-reserve-check.mjs'
 
 let pass = 0
@@ -143,6 +144,48 @@ check('생활사 모순 — 60대 초반 갱년기 전 → LIFE_INCONSISTENT',
 check('생활사 모순 — 생일이 나이대 밖 → LIFE_INCONSISTENT',
   has({ ...base, life: { ...LIFE, birthDate: '1960-03-08' } }, 'LIFE_INCONSISTENT'))
 
+// ── ①-b 코드 발급 — append-only (2026-10-08) ──
+console.log('①-b 🔴 코드 발급 — append-only · 폐기 코드 재사용 0')
+{
+  const pool = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
+  const cards = pool.cards.map((c) => c.code)
+  const range = (a: number, b: number): string[] => Array.from({ length: b - a + 1 }, (_, i) => autogenCodeOf(a + i))
+  // 반례 1 — 지금 Pool(P26~P30 · P32 카드) + 폐기 P31 · P33 → P34~P41
+  check('정본 Pool 에 P26~P30 · P32 카드가 있고 P31 · P33 카드는 없다',
+    ['P26', 'P27', 'P28', 'P29', 'P30', 'P32'].every((c) => cards.includes(c)) && !cards.includes('P31') && !cards.includes('P33'))
+  const now = nextAutogenCodes({ usedCodes: cards, count: 8 })
+  check('🔴 반례 1 — 지금 Pool · count=8 → P34~P41', JSON.stringify(now.codes) === JSON.stringify(range(34, 41)) && now.problem === null, now.codes.join(' '))
+  // 반례 2 — P31 · P33 은 어떤 경우에도 후보가 아니다
+  const scenarios: string[][] = [[], cards, ['P01'], ['P30'], ['P26', 'P27'], range(1, 30), cards.filter((c) => c !== 'P32')]
+  check('🔴 반례 2 — 어떤 사용 코드 조합에서도 P31 · P33 은 후보가 아니다 · 최소 P34',
+    scenarios.every((u) => nextAutogenCodes({ usedCodes: u, count: 25 }).codes.every((c) => !['P31', 'P33'].includes(c) && personaCodeNumber(c)! >= 34)))
+  check('폐기 코드 authority 는 P31 · P33 이고 이유가 적혀 있다', JSON.stringify(Object.keys(RETIRED_AUTOGEN_CODES).sort()) === '["P31","P33"]'
+    && Object.values(RETIRED_AUTOGEN_CODES).every((why) => /VOICE_TOO_CLOSE/.test(why)))
+  // 반례 3 — DB 최대 코드가 P40 이면 P34~P39 빈칸을 채우지 않는다
+  const hw40 = nextAutogenCodes({ usedCodes: [...cards, 'P40'], count: 3 })
+  check('🔴 반례 3 — DB 에 P40 → P41 부터 · P34~P39 재사용 0', JSON.stringify(hw40.codes) === '["P41","P42","P43"]' && hw40.highWater === 40, hw40.codes.join(' '))
+  // 숫자 비교 — 문자열 사전순이 아니다
+  check('🔴 숫자로 비교한다 — "P9" < "P40" < "P100"(사전순이면 P9 가 최대)',
+    nextAutogenCodes({ usedCodes: ['P40', 'P9'], count: 1 }).codes[0] === 'P41'
+    && nextAutogenCodes({ usedCodes: ['P100', 'P9'], count: 1 }).codes.length === 0)
+  check('Persona 코드 모양이 아닌 값은 high-water 에 넣지 않는다', nextAutogenCodes({ usedCodes: ['X999', 'P4x', ''], count: 1 }).codes[0] === 'P34')
+  // 반례 5 — 상한까지 쓰였으면 후보 0 · 사유
+  const top = nextAutogenCodes({ usedCodes: [...cards, autogenCodeOf(AUTOGEN_CODE_LAST)], count: 8 })
+  check(`🔴 반례 5 — ${autogenCodeOf(AUTOGEN_CODE_LAST)} 까지 쓰였으면 후보 0 · problem`, top.codes.length === 0 && /발급할 코드가 없다/.test(top.problem ?? ''))
+  const tail = nextAutogenCodes({ usedCodes: ['P48'], count: 8 })
+  check('상한 앞 자리만큼만 — P48 → P49 · P50', JSON.stringify(tail.codes) === '["P49","P50"]' && tail.problem === null)
+  check('결정론 — 같은 입력 같은 출력', JSON.stringify(nextAutogenCodes({ usedCodes: cards, count: 8 })) === JSON.stringify(now))
+  // 반례 7 — P09 제외 의미와 섞이지 않는다
+  check('🔴 반례 7 — P09 제외(EXCLUDED_CODES)와 폐기 코드가 겹치지 않는다',
+    Object.keys(EXCLUDED_CODES).every((c) => RETIRED_AUTOGEN_CODES[c] === undefined)
+    && Object.keys(RETIRED_AUTOGEN_CODES).every((c) => EXCLUDED_CODES[c] === undefined))
+  check('P09 는 카드가 있는 제외 · 폐기 코드는 카드도 production 도 아니다', cards.includes('P09')
+    && Object.keys(RETIRED_AUTOGEN_CODES).every((c) => !cards.includes(c) && !PRODUCTION_PERSONA_CODES.includes(c)))
+  // 반례 8 — PR #672 계약 불변
+  check('🔴 반례 8 — 카드 31장 · production 30명 · wave5-d10 6명 그대로', cards.length === 31 && PRODUCTION_PERSONA_CODES.length === 30
+    && JSON.stringify(COHORTS['wave5-d10'].codes) === JSON.stringify(['P26', 'P27', 'P28', 'P29', 'P30', 'P32']))
+}
+
 // ── ③ 생활사 골격 — 결정론 · 모순 0 · 정본과 겹치지 않음 ──
 console.log('③ 생활사 골격')
 {
@@ -226,6 +269,9 @@ console.log('⑥ CLI 연결')
   // 🔴 (2026-10-06) 판정은 `judgeAll` 하나를 거친다 — 최종 판정은 실제 creative 로, 생성 전 게이트는 probe 로
   check('CLI 가 judgeAutogenBatch 로 판정한다', /judgeAutogenBatch\(candsWith\(cr\), \{\s*takenCodes: taken,/.test(cli)
     && /const batch = judgeAll\(creative\)/.test(cli))
+  check('🔴 CLI 가 코드를 nextAutogenCodes(폐기 코드는 함수 안에서 더한다)로만 발급하고 자리 없으면 멈춘다',
+    /const issued = nextAutogenCodes\(\{ usedCodes: taken, count: COUNT \}\)/.test(cli)
+    && /if \(issued\.problem !== null\) fail\(/.test(cli) && !/for \(let n = AUTOGEN_CODE_FIRST;/.test(cli))
   check('CLI 가 운영 규칙 말투 풀(voicePoolFor)을 쓴다', /voicePoolFor\(\{ repoRoot: process\.cwd\(\), newCodes: codes \}\)/.test(cli))
   const gate = cli.indexOf('if (!APPLY) {')
   const call = cli.indexOf('await applyAutogenDrafts(')

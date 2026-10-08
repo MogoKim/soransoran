@@ -858,8 +858,8 @@ console.log('\n⑦ cohort manifest')
   check('wave3 는 11명이다', COHORTS['wave3-scale'].codes.length === 11)
   check('🔴 P09 가 어느 cohort 에도 없다', Object.values(COHORTS).every((m) => !m.codes.includes('P09')))
   check('🔴 P09 제외 이유가 코드에 적혀 있다', (EXCLUDED_CODES.P09 ?? '').includes('readLengthBand'))
-  check('🔴 네 cohort 합이 24명 (Pool 25 - P09)',
-    Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0) === 24)
+  check('🔴 다섯 cohort 합이 30명 (Pool 31 - P09)',
+    Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0) === 30)
   check('wave3 는 선행 두 개를 요구한다', COHORTS['wave3-scale'].requires.length === 2)
   check('알 수 없는 id 는 null', cohortOf('nope') === null)
   check('🔴 제외 대상이 들어가면 잡는다',
@@ -946,8 +946,9 @@ console.log('\n⑨ 실행 게이트 (--cohort · --step · --apply · --limit)')
   check('생성·seed 는 actor 를 요구하지 않는다', judgeArgs({ ...base, actorUserId: null, reason: null, requireActor: false }).ok)
 
   // 🔴 --cohort allowlist
-  check('🟢 wave3-scale 은 열려 있다', judgeCohortArg('wave3-scale').ok)
-  check('🔴 끝난 회차는 거부', !judgeCohortArg('wave2').ok && !judgeCohortArg('wave1-mvp').ok)
+  check('🟢 wave5-d10 은 열려 있다', judgeCohortArg('wave5-d10').ok)
+  check('🔴 끝난 회차는 거부(wave1~wave4)',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'].every((c) => !judgeCohortArg(c).ok && /이미 끝난 회차/.test(judgeCohortArg(c).reason)))
   check('🔴 없는 id 는 거부', !judgeCohortArg('wave9').ok)
   check('🔴 비면 거부 (fail-closed)', !judgeCohortArg(null).ok && !judgeCohortArg('  ').ok)
   check('🔴 allowlist 와 끝난 회차가 겹치지 않는다', RUNNABLE_COHORTS.every((c) => !CLOSED_COHORTS.includes(c)))

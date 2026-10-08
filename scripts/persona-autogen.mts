@@ -39,7 +39,7 @@ import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
 import { assignCandidates } from '../src/lib/persona-nickname-candidates'
 import {
-  AUTOGEN_CODE_FIRST, AUTOGEN_CODE_LAST, autogenCodeOf, modeCadence, proposeLifeSkeletons,
+  AUTOGEN_CODE_FIRST, AUTOGEN_CODE_LAST, autogenCodeOf, modeCadence, nextAutogenCodes, proposeLifeSkeletons, RETIRED_AUTOGEN_CODES,
   subjectOfCard, subjectOfLife, thinLifeAxisCount, voiceCoreFromBundle,
   type AutogenCandidate, type Cadence, type DisplayNameCheck, type PersonaCreative,
 } from '../src/lib/persona-autogen'
@@ -167,11 +167,12 @@ if (USE_DB) {
   console.log(`  운영 DB read-only — Persona ${rows.length}행 · cadence 표본 ${cadences.length}`)
 }
 
-// ── ① 코드 ──
-const codes: string[] = []
-for (let n = AUTOGEN_CODE_FIRST; n <= AUTOGEN_CODE_LAST && codes.length < COUNT; n += 1) {
-  if (!taken.has(autogenCodeOf(n))) codes.push(autogenCodeOf(n))
-}
+// ── ① 코드 — 🔴 append-only. 카드 · 운영 DB · 폐기 코드의 최대 번호 뒤에서만 발급한다(빈 번호 재사용 0) ──
+const issued = nextAutogenCodes({ usedCodes: taken, count: COUNT })
+if (issued.problem !== null) fail(`${issued.problem} — provider 호출 전에 멈춘다`)
+const codes: string[] = issued.codes
+console.log(`  코드 발급  high-water ${autogenCodeOf(issued.highWater)} → ${codes.join(' ')}`
+  + `   (폐기 ${Object.keys(RETIRED_AUTOGEN_CODES).join(' · ')} 재사용 0)`)
 
 // ── ② 생활사 골격 ──
 const skeletons = proposeLifeSkeletons({ existing: pool.cards, codes })

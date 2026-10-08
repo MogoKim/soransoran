@@ -1492,7 +1492,8 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 
 | 축 | 수 | 뜻 |
 |---|---|---|
-| production 정본 universe | **24명** | `PRODUCTION_PERSONA_CODES` (P09 정본 제외) |
+| production 정본 universe | **30명** | `PRODUCTION_PERSONA_CODES` (P09 정본 제외) — 2026-10-08 wave5-d10(P26~P30·P32) 준비 포함 · 운영 active 는 적재·활성화 전까지 24명 |
+| 측정 기준 universe | **24명** | 아래 bundle · 입력 · shadow 수는 2026-09-10 회차 당시 24명 기준 측정이다 — wave5 6명은 아직 재지 않았다 |
 | **reference bundle 성립** | **18명** | P01~P08 P10~P19 · 한 화자 3~8건 |
 | bundle 미성립 | **6명** | P20 P21 P22 P23 P24 P25 — 화자 부족 |
 | **production 입력 성립** | **14명** | Queue 와 같은 경로로 입력이 서는 수 |
