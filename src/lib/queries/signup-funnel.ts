@@ -1,7 +1,7 @@
 import 'server-only'
 
 import type { PrismaClient } from '@prisma/client'
-import { SIGNUP_FUNNEL_CONTENT_TYPES, SIGNUP_FUNNEL_STEPS } from '@/lib/signup-funnel'
+import { SIGNUP_FUNNEL_CONTENT_TYPES, SIGNUP_FUNNEL_STEPS, isSignupFunnelDay } from '@/lib/signup-funnel'
 import { buildConversionCounts, type ConversionCounts } from '@/lib/signup-funnel-admin'
 import { signupFunnelGate, type SignupFunnelEnv, type SignupFunnelGate } from '@/lib/signup-funnel-gate'
 
@@ -12,8 +12,13 @@ import { signupFunnelGate, type SignupFunnelEnv, type SignupFunnelGate } from '@
  * 🔴 writer 와 같은 gate 를 본다. gate 가 닫혀 있으면 SignupFunnelDaily 를 읽지 않는다(Preview·개발·수집 전).
  * 🔴 열려 있으면 groupBy 한 번이다. 허용된 다섯 단계 · 두 유형 · content_end 만 묻는다.
  * 🔴 숫자만 돌려준다. 회원·콘텐츠 값은 이 표에 없다.
+ * 🔴 설정된 수집 시작일은 gate 가 닫혀 있어도 보인다(시작 전 · Preview). 유효한 날짜가 아니면 null 이다.
  */
-export type SignupConversionReport = { gate: SignupFunnelGate; counts: ConversionCounts | null }
+export type SignupConversionReport = {
+  gate: SignupFunnelGate
+  configuredStartDay: string | null
+  counts: ConversionCounts | null
+}
 
 export async function loadSignupConversion(
   db: Pick<PrismaClient, 'signupFunnelDaily'>,
@@ -21,7 +26,9 @@ export async function loadSignupConversion(
   now: Date,
 ): Promise<SignupConversionReport> {
   const gate = signupFunnelGate(env, now)
-  if (!gate.active) return { gate, counts: null }
+  const start = env.SIGNUP_FUNNEL_COLLECTION_START
+  const configuredStartDay = isSignupFunnelDay(start) ? start : null
+  if (!gate.active) return { gate, configuredStartDay, counts: null }
 
   const groups = await db.signupFunnelDaily.groupBy({
     by: ['step', 'contentType'],
@@ -36,6 +43,7 @@ export async function loadSignupConversion(
 
   return {
     gate,
+    configuredStartDay,
     counts: buildConversionCounts(groups.map((g) => ({ step: g.step, contentType: g.contentType, count: g._sum.count ?? 0 }))),
   }
 }

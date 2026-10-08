@@ -18,7 +18,7 @@ import {
 } from '@/lib/customer-composition'
 
 /**
- * 고객 구성 — 대상 조건과 집계. 정본: MEMBER-CONVERSION-CANON.md v2.1.
+ * 고객 구성 — 대상 조건과 집계. 정책: 회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11.
  *
  * 🔴 공용 REAL_MEMBER_WHERE 를 고치지 않는다. 그 조각은 회원 관리(미완료·남성 계정의 차단 관리 포함)·
  *    /best·회원 상세가 같이 쓴다. 고객 구성의 대상은 그 위에 조건을 **합성** 해서 만든다.

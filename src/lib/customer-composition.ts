@@ -1,7 +1,7 @@
 /**
  * 고객 구성 — 순수 판정. 🔴 Prisma 도 auth 도 부르지 않는다.
  *
- * 정본: docs/operations/MEMBER-CONVERSION-CANON.md v2.1 §4~§7.
+ * 정책: 회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11.
  * 대상 조건과 DB 집계는 src/lib/queries/customer-composition.ts 가 한다 — 이 파일은 그 결과를
  * "몇 세 구간인가 · 7일 관측이 끝났는가 · 그 창 안의 활동인가" 로 나누기만 한다.
  *

@@ -60,7 +60,7 @@ export default async function AdminSignupConversionPage() {
     now,
   )
   const notice = conversionGateNotice(report.gate)
-  const { gate, counts } = report
+  const { gate, configuredStartDay, counts } = report
 
   return (
     <main className="pt-2 lg:pt-0">
@@ -75,7 +75,7 @@ export default async function AdminSignupConversionPage() {
           </div>
           <div className="rounded-lg border border-subtle bg-surface-card p-3">
             <dt className="text-sm text-content-muted">수집 시작일</dt>
-            <dd className="m-0 mt-1 text-lg font-bold tabular-nums text-content-primary">{gate.active ? gate.startDay : '—'}</dd>
+            <dd className="m-0 mt-1 text-lg font-bold tabular-nums text-content-primary">{configuredStartDay ?? '—'}</dd>
           </div>
           <div className="rounded-lg border border-subtle bg-surface-card p-3">
             <dt className="text-sm text-content-muted">누계 기준 종료일(KST)</dt>

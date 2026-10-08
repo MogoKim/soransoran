@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * 고객 구성 — 순수 판정 · 대상 조건 모양 · 화면 계약 가드. 정본: MEMBER-CONVERSION-CANON.md v2.1.
+ * 고객 구성 — 순수 판정 · 대상 조건 모양 · 화면 계약 가드. 정책: 회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11.
  *
  * 🔴 DB 가 필요한 계약(Persona·운영 계정이 실제로 빠지는가 · email=null 회원이 남는가 · 상태별 글·댓글 ·
  *    한 회원 여러 글 = 1명 · 7일 창의 실제 경계)은 이 스크립트가 증명하지 못한다. 여기서는 where 의

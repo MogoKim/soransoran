@@ -88,7 +88,7 @@ for (const env of [{}, { VERCEL_ENV: 'preview', SIGNUP_FUNNEL_COLLECTION_START: 
   const c = r.counts
   check('누락 조합 0 채움 · null 합은 0', c !== null && c.auth_start.community === 0 && c.auth_start.magazine === 0 && c.prompt_impression.magazine === 0)
   check('전체 = 커뮤니티 + 매거진', c !== null && c.logged_out_view.all === 40 && c.prompt_reach.all === 12 && c.signup_complete.all === 2)
-  check('반환은 gate 와 숫자뿐', JSON.stringify(Object.keys(r).sort()) === JSON.stringify(['counts', 'gate'])
+  check('반환은 gate · 설정 시작일 · 숫자뿐', JSON.stringify(Object.keys(r).sort()) === JSON.stringify(['configuredStartDay', 'counts', 'gate'])
     && Object.values(c ?? {}).every((v) => Object.values(v).every((n) => typeof n === 'number')))
 }
 {
@@ -98,6 +98,29 @@ for (const env of [{}, { VERCEL_ENV: 'preview', SIGNUP_FUNNEL_COLLECTION_START: 
   ])
   check('허용값 밖 줄은 버리고 같은 칸은 더한다', counts.prompt_reach.community === 5 && counts.prompt_reach.all === 5 && counts.prompt_reach.magazine === 0)
 }
+
+// ─────────── 1-1. 설정된 수집 시작일 ───────────
+console.log('\n■ 1-1. 설정된 수집 시작일 — gate 와 무관하게 보이고 read 는 그대로')
+for (const [name, env, status, start] of [
+  ['미래 시작일 + Production', { VERCEL_ENV: 'production', SIGNUP_FUNNEL_COLLECTION_START: '2026-10-08' }, '수집 전', '2026-10-08'],
+  ['미래 시작일 + Preview', { VERCEL_ENV: 'preview', SIGNUP_FUNNEL_COLLECTION_START: '2026-10-08' }, '비활성', '2026-10-08'],
+  ['지난 시작일 + Preview', { VERCEL_ENV: 'preview', SIGNUP_FUNNEL_COLLECTION_START: '2026-10-01' }, '비활성', '2026-10-01'],
+  ['시작일 없음 + Production', { VERCEL_ENV: 'production' }, '수집 전', null],
+  ['손상 시작일 + Production', { VERCEL_ENV: 'production', SIGNUP_FUNNEL_COLLECTION_START: '2026-02-30' }, '수집 전', null],
+  ['모양만 날짜인 값 + Production', { VERCEL_ENV: 'production', SIGNUP_FUNNEL_COLLECTION_START: ' 2026-10-01' }, '수집 전', null],
+] as const) {
+  const f = fakeDb([])
+  const r = await loadSignupConversion(f.db, env, NOW)
+  check(`${name}: 상태 ${status} · 시작일 ${start ?? '—'} · read 0 · 표 없음`,
+    conversionGateNotice(r.gate).status === status && r.configuredStartDay === start && f.calls.length === 0 && r.counts === null)
+}
+{
+  const f = fakeDb([])
+  const r = await loadSignupConversion(f.db, { VERCEL_ENV: 'production', SIGNUP_FUNNEL_COLLECTION_START: '2026-10-01' }, NOW)
+  check('활성: 설정 시작일 = gate 시작일 · groupBy 1회', r.gate.active && r.configuredStartDay === r.gate.startDay && f.calls.length === 1)
+}
+check('시작일 판정은 기존 isSignupFunnelDay 재사용 · 새 정규식 0', /const configuredStartDay = isSignupFunnelDay\(start\) \? start : null/.test(read(P.reader))
+  && !/\\d\{4\}|new Date\(/.test(code(read(P.reader))))
 
 // ─────────── 2. 비율 ───────────
 console.log('\n■ 2. 비율 — 정의 재사용 · 분자/분모 · 산정 불가 · 자르지 않음')
@@ -127,7 +150,7 @@ check('requireAdmin 확인 뒤에만 reader', page.indexOf('if (!ok) return null
   && page.indexOf('await requireAdmin()') < page.indexOf('if (!ok) return null'))
 check('force-dynamic · env 는 gate 두 값만', page.includes("export const dynamic = 'force-dynamic'")
   && (pageCode.match(/process\.env\.[A-Z_]+/g) ?? []).sort().join() === 'process.env.SIGNUP_FUNNEL_COLLECTION_START,process.env.VERCEL_ENV')
-check('수집 상태 · 시작일 · 종료일 · 측정 시각', /notice\.status/.test(page) && /gate\.active \? gate\.startDay : '—'/.test(page)
+check('수집 상태 · 설정 시작일 · 종료일 · 측정 시각', /notice\.status/.test(page) && /\{configuredStartDay \?\? '—'\}/.test(page)
   && /gate\.active \? gate\.today : '—'/.test(page) && /측정 시각 \$\{formatKst\(now\)\}/.test(page))
 check('gate 닫힘이면 표 없음(시작 전을 0 으로 보이지 않음)', /\{counts \? \(/.test(page))
 check('다섯 단계 이름', JSON.stringify(Object.values(SIGNUP_FUNNEL_STEP_LABELS)) === JSON.stringify(['콘텐츠 열람', '가입 제안 기준 도달', '가입 제안 노출', '카카오 시작', '확인된 가입 완료']))
@@ -146,7 +169,7 @@ check('client 조각 0', !/^'use client'/m.test(page) && !/^'use client'/m.test(
 const reader = read(P.reader)
 check('reader: server-only · signupFunnelDaily groupBy 하나 · raw SQL 0 · 회원 값 0', /^import 'server-only'/m.test(reader)
   && (code(reader).match(/db\.signupFunnelDaily\.groupBy\(/g) ?? []).length === 1 && !/\$queryRaw|\$executeRaw|findMany|user|email/.test(code(reader)))
-check('reader: writer 와 같은 gate 를 먼저', /const gate = signupFunnelGate\(env, now\)\s*if \(!gate\.active\) return \{ gate, counts: null \}/.test(reader))
+check('reader: writer 와 같은 gate 를 먼저 · 닫히면 read 전에 끝', /const gate = signupFunnelGate\(env, now\)[\s\S]{0,200}?if \(!gate\.active\) return \{ gate, configuredStartDay, counts: null \}\n\n\s*const groups = await db\.signupFunnelDaily\.groupBy/.test(reader))
 
 // ─────────── 4. 공통 하위 탭 ───────────
 console.log('\n■ 4. 회원 공통 하위 탭 · 레거시 링크 제거')
@@ -186,12 +209,25 @@ const imports = (p: string) => [...read(p).matchAll(/^import .*$/gm)].map((m) =>
 check('reader import 고정(D100 0)', JSON.stringify(imports(P.reader)) === JSON.stringify([
   "import 'server-only'",
   "import type { PrismaClient } from '@prisma/client'",
-  "import { SIGNUP_FUNNEL_CONTENT_TYPES, SIGNUP_FUNNEL_STEPS } from '@/lib/signup-funnel'",
+  "import { SIGNUP_FUNNEL_CONTENT_TYPES, SIGNUP_FUNNEL_STEPS, isSignupFunnelDay } from '@/lib/signup-funnel'",
   "import { buildConversionCounts, type ConversionCounts } from '@/lib/signup-funnel-admin'",
   "import { signupFunnelGate, type SignupFunnelEnv, type SignupFunnelGate } from '@/lib/signup-funnel-gate'",
 ]))
 check('계산 모듈 import 고정(D100 0)', JSON.stringify(imports(P.admin)) === JSON.stringify(['import {', "import type { SignupFunnelGate } from '@/lib/signup-funnel-gate'"]))
 check('탭 import 는 Link 하나', JSON.stringify(imports(P.tabs)) === JSON.stringify(["import Link from 'next/link'"]))
+
+// ─────────── 6. 정본 참조 ───────────
+console.log('\n■ 6. 고객 구성 정본 참조 — 현재 절(§11) · 동작 diff 0')
+const BEFORE_FIX = '8d2129e5c2bfed293fa12f71b706fbdd2330c4dc'
+const COMPOSITION_FILES = ['scripts/customer-composition-db-check.mts', 'scripts/customer-composition-check.mts', 'src/lib/customer-composition.ts', 'src/lib/queries/customer-composition.ts']
+const allText = (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[]).map((f) => f.split('\\').join('/')).filter((f) => /\.(ts|tsx)$/.test(f)).map((f) => read(join('src', f)))
+  .concat((readdirSync(join(ROOT, 'scripts')) as string[]).filter((f) => /\.(mts|ts|mjs)$/.test(f)).map((f) => read(join('scripts', f))))
+check('낡은 정본 버전 번호 참조(v2.1 · v2.3 형태) 0', allText.every((s) => !/MEMBER-CONVERSION-CANON\.md v\d/.test(s)))
+for (const p of COMPOSITION_FILES) {
+  const now2 = read(p)
+  const before = execFileSync('git', ['show', `${BEFORE_FIX}:${p}`], { encoding: 'utf8' })
+  check(`${p}: §11 참조 · 주석 밖 코드 diff 0`, now2.includes('회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11') && code(now2) === code(before))
+}
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패`)
 process.exit(fail === 0 ? 0 : 1)
