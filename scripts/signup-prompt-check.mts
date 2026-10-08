@@ -7,7 +7,7 @@
  *   tsx --tsconfig tsconfig.ops.json scripts/signup-prompt-check.mts
  *
  * 🔴 브라우저 · 인증 서버 · DB 에 연결하지 않는다. storage · 시계는 대역이다.
- * 🔴 DOM 시험 도구가 없다. 판정은 순수 모듈(storage · flow)로 시험하고, 컴포넌트는 그 모듈만 부르는지와
+ * 🔴 DOM 시험 도구가 없다. 판정은 순수 모듈(storage · flow · tracker 의 dialog 로드 순서 함수)로 시험하고, 컴포넌트는 그 모듈만 부르는지와
  *    정본 문구·접근성·레이어 계약을 소스로 고정한다.
  */
 import { execFileSync } from 'node:child_process'
@@ -26,6 +26,9 @@ import {
   type PromptStorage,
 } from '../src/lib/signup-prompt-storage'
 import { createPromptFlow, nextFocusIndex, scrollbarCompensation, type PromptCloseSource } from '../src/lib/signup-prompt-flow'
+import * as TrackerModule from '../src/components/features/signup-funnel/SignupFunnelTracker'
+
+type OpenPrompt = typeof TrackerModule.openPromptAfterLoad
 
 const ROOT = process.cwd()
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
@@ -196,14 +199,91 @@ check('callbackUrl 은 카카오 버튼에만 · 지금 경로 + 고정 성공 f
 // ─────────── 5. tracker 연결 ───────────
 console.log('\n■ 5. tracker — ② 다음 24시간 · ③ · ④ 순서와 한 번')
 const tracker = read(P.tracker)
-check('② 는 24시간과 무관하게 먼저 · 그다음 한 번만 노출 시도',
-  /onReach: \(\) => \{\s*sendOncePerMount\(reachGuard\.current, \{ step: 'prompt_reach'[^\n]*\n\s*if \(promptTried\.current\) return\s*promptTried\.current = true\s*if \(claimPromptExposure\(browserStorage\(\), Date\.now\(\)\)\) setPromptOpen\(true\)/.test(tracker))
-check('dialog 는 claim 성공일 때만 그려진다', /\{promptOpen \? \(\s*<SignupPromptDialog/.test(tracker))
+const trackerCode = code(tracker)
+const DIALOG_IMPORT = "import('@/components/features/signup-funnel/SignupPromptDialog')"
+check('② 는 24시간·dialog 로드와 무관하게 먼저 · 그다음 한 번만 로드 시도 · 로드 뒤 claim',
+  /onReach: \(\) => \{\s*sendOncePerMount\(reachGuard\.current, \{ step: 'prompt_reach'[^\n]*\n\s*if \(promptTried\.current\) return\s*promptTried\.current = true\s*(\/\/[^\n]*\n\s*)?void openPromptAfterLoad\(\{\s*load: \(\) => import\('@\/components\/features\/signup-funnel\/SignupPromptDialog'\)\.then\(\(mod\) => mod\.default\),\s*isMounted: \(\) => mounted\.current,\s*claim: \(\) => claimPromptExposure\(browserStorage\(\), Date\.now\(\)\),\s*show: \(dialog\) => setShownDialog\(\(\) => dialog\),\s*\}\)/.test(tracker))
+// 🔴 초기 번들에서 dialog(카카오 버튼 · 인증 client)를 빼는 것이 이 구조의 목적이다 — 정적 import 가 하나라도 돌아오면 무너진다
+check('dialog 정적 import 0 — import 문 어디에도 SignupPromptDialog 없음',
+  ![...tracker.matchAll(/^import .*$/gm)].some((m) => m[0].includes('SignupPromptDialog')))
+const valueImports = [...trackerCode.matchAll(/(typeof\s+)?import\('@\/components\/features\/signup-funnel\/SignupPromptDialog'\)/g)].filter((m) => !m[1])
+const dynAt = trackerCode.indexOf(`load: () => ${DIALOG_IMPORT}`)
+check('dialog 동적 import() 는 정확히 하나 · onReach 의 시도 표시 뒤 · 대기 감시 설정 앞',
+  valueImports.length === 1 && dynAt > trackerCode.indexOf('promptTried.current = true')
+  && trackerCode.indexOf('promptTried.current = true') > trackerCode.indexOf('onReach: () => {') && dynAt < trackerCode.indexOf('onPendingChange:'))
+check('claimPromptExposure 호출은 로드 뒤 claim 콜백 한 곳뿐', (trackerCode.match(/claimPromptExposure\(/g) ?? []).length === 1
+  && /claim: \(\) => claimPromptExposure\(browserStorage\(\), Date\.now\(\)\)/.test(trackerCode))
+check('unmount 표시는 effect cleanup 에서 false', /useEffect\(\(\) => \{\s*mounted\.current = true\s*return \(\) => \{\s*mounted\.current = false\s*\}\s*\}, \[\]\)/.test(tracker))
+check('dialog 는 claim 성공으로 저장된 컴포넌트가 있을 때만 그려진다', /\{ShownDialog \? \(\s*<ShownDialog/.test(tracker))
+check('dialog 컴포넌트는 updater 로 오인되지 않게 () => dialog 로 저장 · setter 는 표시·닫기 두 곳뿐',
+  /setShownDialog\(\(\) => dialog\)/.test(trackerCode) && (trackerCode.match(/setShownDialog\(/g) ?? []).length === 2)
+check('새 timer·interval·scroll listener 0 — 1초 대기 timer 와 focusin 하나 그대로',
+  (trackerCode.match(/setTimeout\(/g) ?? []).length === 1 && !/setInterval|requestAnimationFrame|'scroll'/.test(trackerCode)
+  && (trackerCode.match(/addEventListener\(/g) ?? []).length === 1)
+
+// 로드 순서 함수 — 실제로 돌린다
+const trackerExports = TrackerModule as unknown as { openPromptAfterLoad?: OpenPrompt; default?: { openPromptAfterLoad?: OpenPrompt } }
+const openPromptAfterLoad = (trackerExports.openPromptAfterLoad ?? trackerExports.default?.openPromptAfterLoad) as OpenPrompt
+let unhandled = 0
+const onUnhandled = () => { unhandled++ }
+process.on('unhandledRejection', onUnhandled)
+const DIALOG = { name: 'dialog' }
+async function runOpen(opts: { load: 'ok' | 'fail'; mounted?: boolean; claim?: () => boolean }) {
+  const log: string[] = []
+  const shown: unknown[] = []
+  const settled = openPromptAfterLoad({
+    load: () => {
+      log.push('load')
+      return opts.load === 'ok'
+        ? Promise.resolve().then(() => { log.push('loaded'); return DIALOG })
+        : Promise.reject(new Error('ChunkLoadError'))
+    },
+    isMounted: () => opts.mounted ?? true,
+    claim: () => { log.push('claim'); return (opts.claim ?? (() => true))() },
+    show: (d) => { log.push('show'); shown.push(d) },
+  })
+  let rejected = false
+  await settled.catch(() => { rejected = true })
+  return { log, shown, rejected }
+}
+{
+  const r = await runOpen({ load: 'ok' })
+  check('로드 성공: load → loaded → claim → show 순서 · claim 은 로드 뒤에만', r.log.join() === 'load,loaded,claim,show' && r.shown.length === 1 && r.shown[0] === DIALOG)
+}
+{
+  const r = await runOpen({ load: 'fail' })
+  check('로드 실패: claim·dialog 0 · Promise 거절 0', r.log.join() === 'load' && r.shown.length === 0 && !r.rejected)
+}
+{
+  const r = await runOpen({ load: 'ok', mounted: false })
+  check('로드 중 unmount: claim·state 갱신 0', r.log.join() === 'load,loaded' && r.shown.length === 0)
+}
+{
+  const r = await runOpen({ load: 'ok', claim: () => false })
+  check('claim 거절(24시간 안 · storage 불가): dialog 0 → ③·④ 0', r.log.join() === 'load,loaded,claim' && r.shown.length === 0)
+}
+{
+  const r = await runOpen({ load: 'ok', claim: () => { throw new Error('storage') } })
+  check('claim 예외: 삼킨다 · dialog 0 · 거절 0', r.shown.length === 0 && !r.rejected)
+}
+{
+  // 실제 24시간 저장과 묶어 본다 — 로드 실패면 표식 쓰기 0, 성공이면 1
+  const failed = memoryStorage()
+  await runOpen({ load: 'fail', claim: () => claimPromptExposure(failed.storage, NOW) })
+  const ok = memoryStorage()
+  const r = await runOpen({ load: 'ok', claim: () => claimPromptExposure(ok.storage, NOW) })
+  check('로드 실패면 24시간 노출 표식 쓰기 0 · 성공이면 1회 뒤 dialog', failed.writes.length === 0 && ok.writes.length === 1 && r.shown.length === 1)
+  const blocked = await runOpen({ load: 'ok', claim: () => claimPromptExposure(null, NOW) })
+  check('storage 를 쓸 수 없으면 dialog 0', blocked.shown.length === 0)
+}
+await new Promise((resolve) => setImmediate(resolve))
+process.off('unhandledRejection', onUnhandled)
+check('unhandled rejection 0', unhandled === 0)
 check('③ 은 dialog mount 콜백에서 impressionGuard 로 한 번',
   /onImpression=\{\(\) =>\s*sendOncePerMount\(impressionGuard\.current, \{ step: 'prompt_impression', contentType, entryPoint: 'content_end' \}\)/.test(tracker))
 check('④ 는 CTA 승인 콜백에서 표식 다음 authGuard 로 한 번',
   /onAuthStart=\{\(\) => \{\s*writeAuthMarker\(browserStorage\(\), contentType, Date\.now\(\)\)\s*sendOncePerMount\(authGuard\.current, \{ step: 'auth_start', contentType, entryPoint: 'content_end' \}\)/.test(tracker))
-check('닫히면 같은 mount 에서 다시 열지 않는다', /onClosed=\{\(\) => setPromptOpen\(false\)\}/.test(tracker) && /if \(promptTried\.current\) return/.test(tracker))
+check('닫히면 dialog state 를 비우고 같은 mount 에서 다시 열지 않는다', /onClosed=\{\(\) => setShownDialog\(null\)\}/.test(tracker) && /if \(promptTried\.current\) return/.test(tracker))
 check('localStorage 접근 실패는 null(노출 0)', /function browserStorage\(\): PromptStorage \| null \{\s*try \{\s*return window\.localStorage\s*\} catch \{\s*return null/.test(tracker))
 const srcFiles = (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[]).map((f) => f.split('\\').join('/')).filter((f) => /\.(ts|tsx)$/.test(f))
 // 🔴 ⑤ signup_complete 는 서버 가입 완료(signup-completion.ts, server-only)만 쓴다. 클라이언트 쪽은 ①~④ 뿐이다.
