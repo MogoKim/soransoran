@@ -42,17 +42,27 @@ const D = path.join(T, 'drafts', 'magazine')
 fs.mkdirSync(D, { recursive: true })
 process.env.SORAN_MAGAZINE_DRAFTS_DIR = D
 process.env.SORAN_MAGAZINE_TEST_MODE = '1'
+/**
+ * 🔴 **HOME 을 임시 폴더로 고정한다 — magazine 모듈을 하나라도 읽기 전에** (2026-10-08 사고 · Codex 재검토).
+ *    장부·패킷·잠금·lease 의 기본 경로는 전부 HOME 아래다. 주입을 하나 빠뜨려도 기본값이 임시 폴더를 가리키게 한다.
+ *    운영 장부는 읽지도 쓰지도 않는다 — 상태를 재러 열어 보는 것도 하지 않는다.
+ */
+process.env.HOME = T
 process.on('exit', () => fs.rmSync(T, { recursive: true, force: true }))
 
+const Q = await import('./lib/magazine-quarantine.mjs')
+/**
+ * 🔴 **파일에 닿기 전에 확인한다** — 기본 장부 경로가 임시 HOME 아래가 아니면 여기서 끝낸다.
+ *    (HOME 격리가 빠지면 이 줄이 먼저 실패한다. 그래도 지나가면 장부 lib 의 시험 모드 가드가 막는다)
+ */
+if (!path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep)) {
+  console.log(`  ❌ 장부 기본 경로가 격리 HOME 밖이다 — 파일 접근 전에 멈춘다: ${Q.QUARANTINE_PATH}`)
+  console.log('\n🔴 격리 실패 — 검사 0건 실행\n')
+  process.exit(1)
+}
 const FMT = await import('./lib/magazine-manuscript-format.mjs')
 const MG = await import('./lib/magazine-manuscript-guard.mjs')
 const DG = await import('./lib/magazine-delivery-gate.mjs')
-const Q = await import('./lib/magazine-quarantine.mjs')
-/** 🔴 운영 장부는 읽지도 쓰지도 않는다 — 시작·끝의 수정 시각·해시가 같아야 한다 (없으면 「없음」 그대로) */
-const opsLedgerState = () => (fs.existsSync(Q.QUARANTINE_PATH)
-  ? `${fs.statSync(Q.QUARANTINE_PATH).mtimeMs}:${createHash('sha256').update(fs.readFileSync(Q.QUARANTINE_PATH)).digest('hex')}`
-  : 'absent')
-const OPS_LEDGER_AT_START = opsLedgerState()
 const RG = await import('./lib/magazine-regen.mjs')
 const SESS = await import('./lib/chatgpt-session.mjs')
 const POLICY = await import('./lib/magazine-brief-policy.mjs')
@@ -438,7 +448,7 @@ console.log('\n⑥ 불변 — 일반 전송 메시지 · 기존 지문 · QA 재
   check('⑥ QA 재생성 지시문 바이트 불변 (기존 재생성 HOLD 지문 보존)', h(pk.instruction) === 'aeea1a85dce887b0', h(pk.instruction))
 }
 
-check('운영 장부 파일 불변 (수정 시각 · 해시 · 없음 그대로)', opsLedgerState() === OPS_LEDGER_AT_START, `${OPS_LEDGER_AT_START} → ${opsLedgerState()}`)
+check('장부 기본 경로는 끝까지 격리 HOME 아래다', path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep), Q.QUARANTINE_PATH)
 check('실제 CDP 포트 요청 0 (운영 Chrome 에 닿지 않았다)', realCdpAttempts.length === 0, realCdpAttempts.join(' · '))
 finish()
 process.exitCode = fail ? 1 : 0

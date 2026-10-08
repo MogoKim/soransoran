@@ -14,7 +14,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const realCdpAttempts = []
@@ -39,19 +38,24 @@ const D = path.join(T, 'drafts', 'magazine')
 fs.mkdirSync(D, { recursive: true })
 process.env.SORAN_MAGAZINE_DRAFTS_DIR = D
 process.env.SORAN_MAGAZINE_TEST_MODE = '1'
+/**
+ * 🔴 **HOME 을 임시 폴더로 고정한다 — magazine 모듈을 하나라도 읽기 전에** (2026-10-08 사고 · Codex 재검토).
+ *    장부·패킷·잠금·lease 의 기본 경로는 전부 HOME 아래다. 주입을 하나 빠뜨려도 기본값이 임시 폴더를 가리키게 한다.
+ *    운영 장부는 읽지도 쓰지도 않는다 — 상태를 재러 열어 보는 것도 하지 않는다.
+ */
+process.env.HOME = T
 process.on('exit', () => fs.rmSync(T, { recursive: true, force: true }))
 
 const Q = await import('./lib/magazine-quarantine.mjs')
 /**
- * 🔴 **운영 장부는 읽지도 쓰지도 않는다** (2026-10-08 실제 사고).
- *    이 검사의 첫 판은 driveFn 에서 장부 경로를 버려, 재생성 실패 경로가 운영 장부 파일을 다시 썼다(수정 시각 변경).
- *    시작·끝의 수정 시각과 해시가 같아야 PASS 다. 운영 장부가 없는 환경(CI)에서는 「없음」 이 그대로여야 한다.
+ * 🔴 **파일에 닿기 전에 확인한다** — 기본 장부 경로가 임시 HOME 아래가 아니면 여기서 끝낸다.
+ *    (HOME 격리가 빠지면 이 줄이 먼저 실패한다. 그래도 지나가면 장부 lib 의 시험 모드 가드가 막는다)
  */
-const OPS_LEDGER = Q.QUARANTINE_PATH
-const opsLedgerState = () => (fs.existsSync(OPS_LEDGER)
-  ? `${fs.statSync(OPS_LEDGER).mtimeMs}:${createHash('sha256').update(fs.readFileSync(OPS_LEDGER)).digest('hex')}`
-  : 'absent')
-const OPS_LEDGER_AT_START = opsLedgerState()
+if (!path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep)) {
+  console.log(`  ❌ 장부 기본 경로가 격리 HOME 밖이다 — 파일 접근 전에 멈춘다: ${Q.QUARANTINE_PATH}`)
+  console.log('\n🔴 격리 실패 — 검사 0건 실행\n')
+  process.exit(1)
+}
 const FK = await import('./lib/magazine-failure-kind.mjs')
 const AR = await import('./magazine-auto-register.mjs')
 const READY = await import('./magazine-auto-register-ready.mjs')
@@ -274,7 +278,67 @@ console.log('\nF. 기존 회귀 — 실제 원고 형식 위반은 재생성 · 
     fh.out.held.length === 1 && fh.out.repair.length === 0 && fh.calls.webui === 0 && ledgerBytes(LH).equals(beforeH), `held ${fh.out.held.length} · repair ${fh.out.repair.length}`)
 }
 
-check('운영 장부 파일 불변 (수정 시각 · 해시 · 없음 그대로)', opsLedgerState() === OPS_LEDGER_AT_START, `${OPS_LEDGER_AT_START} → ${opsLedgerState()}`)
+// ── G. 시험 모드 운영 장부 가드 ─────────────────────────────
+console.log('\nG. 시험 모드 + 운영 장부 경로 → 잠금·읽기·쓰기 전에 TEST_OPERATION_PATH_BLOCKED')
+{
+  // 🔴 진짜 운영 장부는 열지 않는다 — 경로 판정만 본다 (순수 함수 · 파일 접근 0)
+  const realOps = Q.operationalQuarantinePaths({})
+  check('G. 진짜 운영 장부 경로는 시험 모드에서 막힌다 (경로 판정만 · 파일 접근 0)',
+    realOps.length > 0 && realOps.every((p) => p && Q.testOperationPathBlocked(p)?.code === 'TEST_OPERATION_PATH_BLOCKED'), realOps.join(' · '))
+  check('G. 운영 실행(TEST_MODE 아님)은 같은 경로도 막지 않는다', realOps.every((p) => Q.testOperationPathBlocked(p, {}) === null))
+
+  // 가짜 운영 위치 — 막을 위치를 하나 더 보탠다(가드를 끄지 못한다). 여기에 지켜볼 장부를 둔다
+  const FAKE_OP_HOME = path.join(T, 'fake-operational-home')
+  process.env.SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME = FAKE_OP_HOME
+  const OP = path.join(FAKE_OP_HOME, 'Library', 'Application Support', 'soransoran', 'magazine-quarantine.json')
+  fs.mkdirSync(path.dirname(OP), { recursive: true })
+  const SENTINEL = `${JSON.stringify({ sentinel: { attempts: 1 } }, null, 2)}\n`
+  fs.writeFileSync(OP, SENTINEL)
+  const past = new Date(Date.now() - 3600_000)
+  fs.utimesSync(OP, past, past)
+  const mtime0 = fs.statSync(OP).mtimeMs
+  const dirBefore = fs.readdirSync(path.dirname(OP)).sort().join(',')
+  let mutateCalls = 0
+  let lockFnCalls = 0
+  const u = Q.updateQuarantine((cur) => { mutateCalls += 1; return { ...cur, x: 1 } }, OP)
+  const rd = Q.readQuarantine(OP)
+  let saveErr = null
+  try { Q.saveQuarantine({ x: 1 }, OP) } catch (e) { saveErr = e }
+  const lk = Q.withQuarantineLock(OP, () => { lockFnCalls += 1; return 1 })
+  const ls = Q.acquireManuscriptLease({ slug: 'g-slug', work: 'fetch', path: OP })
+  const rs = Q.reserveDelivery({ slug: 'g-slug', messageFingerprint: 'sha256:g', reservationId: 'r-g', path: OP })
+  check('G. updateQuarantine → TEST_OPERATION_PATH_BLOCKED · 갱신 함수 0회', u.ok === false && u.code === 'TEST_OPERATION_PATH_BLOCKED' && mutateCalls === 0, JSON.stringify(u))
+  check('G. readQuarantine → TEST_OPERATION_PATH_BLOCKED · 내용을 돌려주지 않는다 (읽기 0)', rd.ok === false && rd.code === 'TEST_OPERATION_PATH_BLOCKED' && !rd.store.sentinel)
+  check('G. saveQuarantine → TEST_OPERATION_PATH_BLOCKED 로 던진다', saveErr?.code === 'TEST_OPERATION_PATH_BLOCKED', saveErr?.message)
+  check('G. withQuarantineLock → TEST_OPERATION_PATH_BLOCKED · 임계구역 0회', lk.ok === false && lk.code === 'TEST_OPERATION_PATH_BLOCKED' && lockFnCalls === 0)
+  check('G. 원고 lease · 전송 예약도 막힌다', ls.ok === false && ls.code === 'TEST_OPERATION_PATH_BLOCKED' && rs.ok === false, `${ls.code} · ${rs.code ?? rs.why}`)
+  check('G. 가짜 운영 장부 바이트·수정 시각 불변 · 잠금·tmp·lease 생성 0',
+    fs.readFileSync(OP, 'utf8') === SENTINEL && fs.statSync(OP).mtimeMs === mtime0 && fs.readdirSync(path.dirname(OP)).sort().join(',') === dirBefore,
+    fs.readdirSync(path.dirname(OP)).join(','))
+
+  // 시험 모드 + 임시 HOME 기본 경로 → 정상 쓰기
+  const d = Q.updateQuarantine((cur) => ({ ...cur, 'g-default': { attempts: 0 } }))
+  check('G. 시험 모드 + 임시 HOME 기본 경로 → 정상 쓰기', d.ok === true && Q.readQuarantine().store['g-default']?.attempts === 0 && Q.QUARANTINE_PATH.startsWith(T + path.sep), JSON.stringify(d).slice(0, 80))
+  // 시험 모드 + 명시적 임시 장부 → 정상 쓰기
+  const EX = path.join(T, 'explicit-ledger.json')
+  const e = Q.updateQuarantine((cur) => ({ ...cur, 'g-explicit': { attempts: 0 } }), EX)
+  check('G. 시험 모드 + 명시적 임시 장부 → 정상 쓰기', e.ok === true && Q.readQuarantine(EX).store['g-explicit']?.attempts === 0)
+
+  // 운영 실행 + 운영 기본 경로 → 기존 계약 (자식 프로세스 · HOME = 가짜 운영 위치 · TEST_MODE 없음)
+  const QLIB = path.join(HERE, 'lib', 'magazine-quarantine.mjs')
+  const childEnv = { PATH: process.env.PATH, HOME: FAKE_OP_HOME, SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME: FAKE_OP_HOME }
+  const prod = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `const Q = await import(${JSON.stringify(QLIB)}); const u = Q.updateQuarantine((c) => ({ ...c, prod: { attempts: 0 } })); console.log(JSON.stringify({ ok: u.ok, path: Q.QUARANTINE_PATH, has: Q.readQuarantine().store.prod !== undefined }))`],
+  { encoding: 'utf8', env: childEnv })
+  const pj = (() => { try { return JSON.parse(prod.stdout.trim()) } catch { return null } })()
+  check('G. 운영 실행 + 운영 기본 경로 → 기존대로 쓴다 (가드 없음)', pj?.ok === true && pj.has === true && path.resolve(pj.path) === path.resolve(OP), prod.stdout + prod.stderr)
+  const tm = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `const Q = await import(${JSON.stringify(QLIB)}); const u = Q.updateQuarantine((c) => c); console.log(JSON.stringify({ ok: u.ok, code: u.code }))`],
+  { encoding: 'utf8', env: { ...childEnv, SORAN_MAGAZINE_TEST_MODE: '1' } })
+  check('G. 같은 자식이 시험 모드면 막힌다', /TEST_OPERATION_PATH_BLOCKED/.test(tm.stdout), tm.stdout + tm.stderr)
+  delete process.env.SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME
+}
+
 check('실제 CDP 포트 요청 0 (운영 Chrome 에 닿지 않았다)', realCdpAttempts.length === 0, realCdpAttempts.join(' · '))
 finish()
 process.exitCode = fail ? 1 : 0

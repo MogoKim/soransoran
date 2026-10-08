@@ -20,6 +20,8 @@ const F = {
   kind: path.join(HERE, 'lib', 'magazine-failure-kind.mjs'),
   ready: path.join(HERE, 'magazine-auto-register-ready.mjs'),
   register: path.join(HERE, 'magazine-auto-register.mjs'),
+  quarantine: path.join(HERE, 'lib', 'magazine-quarantine.mjs'),
+  check: CHECK,
 }
 
 const MUTATIONS = [
@@ -47,6 +49,17 @@ const MUTATIONS = [
   { name: 'drive 가 brief echo draft 를 repair-required 로 표시하지 않음', file: F.register,
     find: '      if (echo.length) {\n        repairRequired = true\n',
     replace: '      if (echo.length) {\n' },
+  /**
+   * 🔴 HOME 격리 제거 — 검사가 **실제 경로에 닿기 전에** 스스로 멈춰야 한다 (mustSay 로 그 문장을 확인한다).
+   *    이 변이는 검사 파일 자체를 바꾼다. 장부 lib 의 시험 모드 가드가 두 번째 방어선으로 남아 있다.
+   */
+  { name: '검사의 HOME 격리 제거', file: F.check,
+    find: 'process.env.HOME = T\n',
+    replace: '',
+    mustSay: '격리 실패 — 검사 0건 실행' },
+  { name: '시험 모드 운영 장부 가드 제거', file: F.quarantine,
+    find: "  if (env.SORAN_MAGAZINE_TEST_MODE !== '1') return null\n",
+    replace: '  return null\n' },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -75,9 +88,11 @@ try {
     try { r = spawnSync(process.execPath, [CHECK], { encoding: 'utf8' }) } finally { fs.writeFileSync(mu.file, originals[mu.file]) }
     if (sha(mu.file) !== startHashes[mu.file]) { bad++; console.log(`  ❌ ${mu.name} — 원복 후 해시가 다르다`); break }
     const failed = (r.stdout.match(/❌ [^\n]+/g) ?? [])
-    if (r.status === 0) { bad++; console.log(`  ❌ ${mu.name} — 검사가 여전히 PASS 다 (죽은 방어)`) } else {
+    if (r.status === 0) { bad++; console.log(`  ❌ ${mu.name} — 검사가 여전히 PASS 다 (죽은 방어)`) } else if (mu.mustSay && !r.stdout.includes(mu.mustSay)) {
+      bad++; console.log(`  ❌ ${mu.name} — FAIL 이지만 「${mu.mustSay}」 가 없다 (파일 접근 전에 멈췄는지 모른다)`)
+    } else {
       caught++
-      console.log(`  ✅ ${mu.name} — 검사 FAIL (${lineOf(r.stdout)} · 실패 항목 ${failed.length})`)
+      console.log(`  ✅ ${mu.name} — 검사 FAIL (${mu.mustSay ? `파일 접근 전 정지 · 「${mu.mustSay}」` : `${lineOf(r.stdout)} · 실패 항목 ${failed.length}`})`)
     }
   }
 } finally {
