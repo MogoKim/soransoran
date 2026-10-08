@@ -139,9 +139,9 @@ export function judgeAutogenCandidate(
   // ── ⑤ cadence ──
   if (c.cadence === null) add('CADENCE_UNMEASURED', '운영 cadence 최빈값을 읽지 못했다')
 
-  // ── ⑥ creative — 🔴 LLM 단계. 이 PR 은 구현하지 않는다 ──
+  // ── ⑥ creative — 🔴 LLM(또는 사람) 단계. 없으면 기본값으로 채우지 않는다 ──
   if (c.creative === null) {
-    add('LLM_STEP_UNIMPLEMENTED', '제목·성격·noGo·variation 을 만드는 단계가 없다 — 기본값으로 채우지 않는다')
+    add('LLM_STEP_UNIMPLEMENTED', '제목·성격·noGo·variation 이 없다 — --generate-creative 나 --supplement 가 채운다 · 기본값으로 채우지 않는다')
   } else {
     if (c.creative.personality.length === 0) add('LIFE_AXIS_MISSING', 'personality')
     if (c.creative.noGoTopics.length === 0) add('LIFE_AXIS_MISSING', 'noGoTopics')
@@ -176,7 +176,11 @@ export function judgeAutogenCandidate(
     ageBand: card.ageBand, region: card.region,
     noGoTopics: card.noGoTopics, noGoExpressions: card.noGoExpressions,
     activityToday: 0, daysSinceActive: null,
-    voiceComments: c.voice?.bundle.comments.length ?? 0,
+    // 🔴 계약의 말투 근거 수는 **관측 총수**(style-only 포함)다 — 운영 4상태가 넣는 값과 같다
+    //    (`readReserveFacts` ← `bundlesForPersonas.anchorComments = observedCount`, 2026-10-01 `6e9803c`).
+    //    앞판은 원문 수(`comments.length`)를 넣어, 운영이 통과시키는 "관측 3 · 안전 원문 2" 화자를 여기서만 막았다.
+    //    하한(`VOICE_MIN_COMMENTS`)은 그대로다 — 안전 원문 하한은 위 ③ `judgeVoiceEvidence` 가 따로 본다
+    voiceComments: c.voice?.bundle.observedCount ?? 0,
   })
   const contract = contractAxes({
     code: c.code,

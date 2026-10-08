@@ -990,6 +990,8 @@ jobs:
           # 🔴 Persona 자동 확장 적재(2026-09-29 · Track C) — valid 만 · draft 만 · 전원 아니면 0 ·
           #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
           npm run persona:autogen-db-check
+          # 🔴 creative 생성 실제 CLI(--db --generate-creative) — 격리 DB · 합성 말투 자산 · 가짜 fetch · write 0. 새 step 이 아니다
+          npm run persona:creative-db-check
           # 🔴 (2026-10-01) Persona 계약 정본 카드 복구 — stale 계획 · 부분 실패 · 멱등 · 기존 유효 회귀 0 · 가짜 활동 0.
           #    임시 HOME 말투 자산(운영 모양 · 화자 18명). 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
           npm run persona:remediation-db-check
@@ -1120,6 +1122,9 @@ jobs:
           # 🔴 Persona 자동 확장(2026-09-29 · Track C) — 운영 검증기 그대로 · 반례(축 누락·말투 없음·중복 화자·
           #    실회원·이름만) · 골격 결정론. DB · 네트워크 · LLM 0. 새 step 이 아니다
           npm run persona:autogen-check
+          # 🔴 Persona creative 생성(2026-10-06) — 기본 provider 0 · 상한 사전 차단 · 엄격 파서 fail-closed ·
+          #    원문 유출 차단 · 기존 Persona 근접 격리. 주입한 가짜 provider · 가짜 fetch. DB · 네트워크 0. 새 step 이 아니다
+          npm run persona:creative-check
 
       - name: Original Post ↔ Persona 매칭 회귀
         run: npm run original-post:persona-match-check

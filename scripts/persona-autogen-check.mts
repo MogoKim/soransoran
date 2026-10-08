@@ -26,8 +26,8 @@ import { runPersonaReserveChecks } from './persona-reserve-check.mjs'
 
 let pass = 0
 let failN = 0
-const check = (name: string, ok: boolean): void => {
-  if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { failN += 1; console.log(`  🔴 FAIL  ${name}`) }
+const check = (name: string, ok: boolean, detail = ''): void => {
+  if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { failN += 1; console.log(`  🔴 FAIL  ${name}${detail === '' ? '' : ` — ${detail}`}`) }
 }
 
 console.log('\n══ Persona 자동 확장 fixture ══\n')
@@ -112,7 +112,8 @@ check('말투 근거 없음 → 글·댓글 자격 둘 다 거짓',
   check('공유 수를 못 셌으면(null) 막는다', has({ ...base, voice: { bundle: mine, seedShareCount: null } }, 'VOICE_SPEAKER_DUPLICATE'))
 }
 {
-  const thin = { ...bA, comments: bA.comments.slice(0, 2) }
+  // 🔴 (2026-10-06) 관측 총수도 2 로 — 앞판은 원문만 잘라 관측 4 · 원문 2 라는 **있을 수 없는 묶음**이었다
+  const thin = { ...bA, comments: bA.comments.slice(0, 2), observedCount: 2, styleOnlyCount: 0 }
   check('말투 근거 2건 → VOICE_EVIDENCE_THIN', has({ ...base, voice: { bundle: thin, seedShareCount: 1 } }, 'VOICE_EVIDENCE_THIN'))
 }
 check('실회원 충돌 — 계정 붙은 User → REAL_MEMBER_COLLISION',
@@ -198,11 +199,33 @@ console.log('⑤ 적재 배치 게이트')
 }
 
 // ── ⑥ 연결 — CLI 가 이 판정·적재를 실제로 부른다 ──
+// ── ⑤-b 말투 근거 수 = 관측 총수 — 운영 4상태와 같은 값 (2026-10-06) ──
+console.log('⑤-b 말투 근거 수 — 운영 4상태와 같은 값')
+{
+  // 🔴 실측 모양(2026-10-06 운영 자산 · 남은 화자 8명 전부): 안전 원문 2 + style-only 1 = 관측 3
+  const mk = (safe: string[], styleOnly: string[]) => {
+    const v = judgeReferenceBundle({ personaCode: code, texts: safe, anchorCount: safe.length, styleOnlyTexts: styleOnly })
+    if (!v.ok) throw new Error(`fixture 묶음이 서지 않는다: ${v.blocks.map((b) => b.code).join(',')}`)
+    return v.bundle
+  }
+  const obs3 = mk(TEXTS_A.slice(0, 2), ['저도 예전에 그런 적이 있었어요'])
+  check('fixture 가 실측 모양이다 — 안전 원문 2 · 관측 3', obs3.comments.length === 2 && obs3.observedCount === 3)
+  const v3 = judge({ ...base, voice: { bundle: obs3, seedShareCount: 1 } })
+  check('🔴 관측 3 · 안전 원문 2 → 계약 말투 축 통과(운영 `bundlesForPersonas.anchorComments` 와 같은 값)',
+    !v3.blocks.includes('VOICE_EVIDENCE_THIN') && v3.status === 'valid', v3.blocks.join(','))
+  let obs2: VoiceReferenceBundle | null = null
+  try { obs2 = mk(TEXTS_A.slice(0, 2), []) } catch { obs2 = null }
+  check('🔴 하한은 그대로 — 관측 2 는 묶음부터 서지 않거나 VOICE_EVIDENCE_THIN',
+    obs2 === null || has({ ...base, voice: { bundle: obs2, seedShareCount: 1 } }, 'VOICE_EVIDENCE_THIN'))
+}
+
 console.log('⑥ CLI 연결')
 {
   const cli = readFileSync('scripts/persona-autogen.mts', 'utf-8')
   // 🔴 한 명씩(judgeAutogenCandidate) + 겹침·문체 거리를 배치로 본다(2026-09-30)
-  check('CLI 가 judgeAutogenBatch 로 판정한다', /judgeAutogenBatch\(cands, \{ takenCodes: taken,/.test(cli))
+  // 🔴 (2026-10-06) 판정은 `judgeAll` 하나를 거친다 — 최종 판정은 실제 creative 로, 생성 전 게이트는 probe 로
+  check('CLI 가 judgeAutogenBatch 로 판정한다', /judgeAutogenBatch\(candsWith\(cr\), \{\s*takenCodes: taken,/.test(cli)
+    && /const batch = judgeAll\(creative\)/.test(cli))
   check('CLI 가 운영 규칙 말투 풀(voicePoolFor)을 쓴다', /voicePoolFor\(\{ repoRoot: process\.cwd\(\), newCodes: codes \}\)/.test(cli))
   const gate = cli.indexOf('if (!APPLY) {')
   const call = cli.indexOf('await applyAutogenDrafts(')
