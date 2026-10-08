@@ -129,10 +129,8 @@ for (const s of SOURCES) {
   check('처음 open 만 true', f.open() && !f.open())
   check('CTA 첫 시도만 받아들인다(연타 → ④·signIn 1회)', f.startSignIn() && !f.startSignIn() && !f.startSignIn())
   check('진행 중에는 다섯 닫기 모두 거절', SOURCES.every((s) => !f.close(s)) && f.phase() === 'pending')
-  f.restoreFromCache()
-  check('bfcache 복원: 진행 중 → 열린 상태(버튼·닫기 다시 사용)', f.phase() === 'open' && f.close('close-button'))
-  f.restoreFromCache()
-  check('bfcache 복원: 닫힌 dialog 를 다시 열지 않는다', f.phase() === 'closed' && !f.open())
+  check('bfcache 복원: 인증 왕복이 일어난 dialog 는 닫힌다(같은 dialog 재시도 0)', f.restoreFromCache() && f.phase() === 'closed' && !f.startSignIn())
+  check('bfcache 복원: 닫힌 dialog 를 다시 열지 않는다 · 두 번째 복원은 아무 일 없음', !f.restoreFromCache() && f.phase() === 'closed' && !f.open())
 }
 {
   const f = createPromptFlow()
@@ -179,8 +177,9 @@ check('뒤로가기 외 닫기는 우리가 넣은 한 칸만 되돌린다',
 check('popstate·pageshow 는 열린 동안만 · cleanup 에서 뗀다',
   /addEventListener\('popstate', onPopState\)/.test(dialog) && /removeEventListener\('popstate', onPopState\)/.test(dialog)
   && /addEventListener\('pageshow', onPageShow\)/.test(dialog) && /removeEventListener\('pageshow', onPageShow\)/.test(dialog))
-check('bfcache: persisted 일 때 진행 중만 되돌림 · 이벤트 재전송 0',
-  /if \(!event\.persisted\) return\s*flow\.restoreFromCache\(\)\s*setPending\(false\)\s*\}/.test(dialog))
+check('bfcache: persisted 이고 진행 중이었을 때만 닫는다 · history.back·이벤트·표식 0',
+  /const onPageShow = \(event: PageTransitionEvent\) => \{\s*if \(event\.persisted && flow\.restoreFromCache\(\)\) finish\(\)\s*\}/.test(dialog)
+  && !/(history\.back|onAuthStart|onImpression|setPending|pushState)/.test(dialog.match(/const onPageShow = \(event: PageTransitionEvent\) => \{([\s\S]*?)\n {4}\}/)?.[1] ?? 'missing history.back'))
 check('스크롤 잠금은 열린 동안만 · cleanup 원복 · 스크롤바 자리 유지(본문 밀림 0)',
   /body\.style\.overflow = 'hidden'/.test(dialog) && /body\.style\.overflow = previous\.overflow/.test(dialog)
   && /if \(scrollbarCompensation\(window\.innerWidth, html\.clientWidth\) > 0\) html\.style\.scrollbarGutter = 'stable'/.test(dialog)
@@ -192,7 +191,7 @@ check('③ 은 mount effect 에서 부른다', /panelRef\.current\?\.focus\(\{ p
 check('CTA 시작: flow 승인 → 진행 표시 → 표식·④(실패 삼킴) → true',
   /if \(!flow\.startSignIn\(\)\) return false\s*setPending\(true\)\s*try \{\s*onAuthStart\(\)\s*\} catch \{[\s\S]*?\}\s*return true/.test(dialog))
 check('dialog 는 인증 호출을 직접 하지 않는다', !/signIn\(|onboardingHref|next-auth/.test(dialogCode))
-check('callbackUrl 은 카카오 버튼에만 · 경로 외 값 0', /callbackUrl=\{pathname\}/.test(dialog) && (dialog.match(/pathname/g) ?? []).length === 2)
+check('callbackUrl 은 카카오 버튼에만 · 지금 경로 + 고정 성공 fragment', /callbackUrl=\{signupCallbackPath\(pathname, contentType\)\}/.test(dialog) && (dialog.match(/pathname/g) ?? []).length === 2)
 
 // ─────────── 5. tracker 연결 ───────────
 console.log('\n■ 5. tracker — ② 다음 24시간 · ③ · ④ 순서와 한 번')
@@ -244,9 +243,9 @@ const sharedUnchanged = [
   'src/components/features/GuestCommentControls.tsx', 'src/components/features/CommentComposeAnchor.tsx',
   'src/components/ui/toast/toast-tokens.ts', 'src/components/ui/BottomSheet.tsx',
   'src/components/features/WriteLoginPrompt.tsx', 'src/lib/callback-url.ts', 'src/lib/auth.ts', 'src/lib/auth.config.ts',
-  'src/app/login/page.tsx', 'src/lib/actions/onboarding.ts', 'src/components/features/onboarding/onboarding-form.tsx',
+  'src/lib/actions/onboarding.ts', 'src/components/features/onboarding/onboarding-form.tsx',
 ].filter((p) => read(p) !== gitShow(p))
-check('공유 파일(댓글·Toast·시트·로그인·인증·온보딩) 변경 0 — 카카오 버튼만 시각 variant 추가', sharedUnchanged.length === 0, sharedUnchanged.join(', '))
+check('공유 파일(댓글·Toast·시트·인증·온보딩) 변경 0 — 로그인 화면 복귀는 D2 검사가 따로 본다', sharedUnchanged.length === 0, sharedUnchanged.join(', '))
 check('Toast 레이어는 이미 70 — dialog 60 보다 위', /export const TOAST_Z = 70/.test(read('src/components/ui/toast/toast-tokens.ts')))
 const imports = (p: string) => [...read(p).matchAll(/^import .*$/gm)].map((m) => m[0])
 check('저장 모듈 import 는 타입 하나', JSON.stringify(imports(P.storage)) === JSON.stringify(["import type { SignupFunnelContentType } from '@/lib/signup-funnel'"]))
@@ -255,8 +254,10 @@ check('dialog import 고정(D100 0 · 인증 모듈 직접 0)', JSON.stringify(i
   "import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'",
   "import { usePathname } from 'next/navigation'",
   "import KakaoSignInButton from '@/components/features/KakaoSignInButton'",
+  "import type { SignupFunnelContentType } from '@/lib/signup-funnel'",
   "import { TOUCH_MIN } from '@/lib/spacing'",
   "import {",
+  "import { signupCallbackPath } from '@/lib/signup-return'",
 ]))
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패`)

@@ -5,7 +5,8 @@
  * 🔴 한 mount 에서 dialog 는 최대 한 번 열린다. 닫힌 뒤 다시 열지 않는다.
  * 🔴 CTA 는 첫 시도만 받아들인다. 연타는 거절한다 — 인증 호출과 ④ 가 한 번이 된다.
  * 🔴 진행 중에는 X · dim · ESC · 보조 버튼 · 뒤로가기 닫기를 받지 않는다.
- * 🔴 bfcache 복원은 진행 중 상태만 되돌린다. 닫힌 dialog 를 다시 열거나 이벤트를 다시 보내지 않는다.
+ * 🔴 인증 왕복이 일어난 dialog 가 bfcache 로 돌아오면 닫는다. 같은 dialog 안에서 바로 다시 시도하게 하지 않고,
+ *    이벤트·표식을 다시 만들지 않는다. 다시 시도는 이후의 정상 흐름에서 시작한다.
  */
 
 export type PromptCloseSource = 'close-button' | 'dim' | 'escape' | 'secondary' | 'back'
@@ -19,8 +20,8 @@ export type PromptFlow = {
   close(source: PromptCloseSource): boolean
   /** CTA 시도. 첫 시도만 true */
   startSignIn(): boolean
-  /** bfcache 복원 — 진행 중이면 다시 열린 상태로 */
-  restoreFromCache(): void
+  /** bfcache 복원 — 진행 중이었으면 닫고 true. 그 밖에는 그대로 false */
+  restoreFromCache(): boolean
 }
 
 export function createPromptFlow(): PromptFlow {
@@ -43,7 +44,9 @@ export function createPromptFlow(): PromptFlow {
       return true
     },
     restoreFromCache() {
-      if (phase === 'pending') phase = 'open'
+      if (phase !== 'pending') return false
+      phase = 'closed'
+      return true
     },
   }
 }

@@ -14,9 +14,11 @@ import PostViewBeacon from '@/components/features/PostViewBeacon'
 import SignupFunnelBoundary from '@/components/features/signup-funnel/SignupFunnelBoundary'
 import SignupFunnelCommentsEnd from '@/components/features/signup-funnel/SignupFunnelCommentsEnd'
 import SignupFunnelMarker from '@/components/features/signup-funnel/SignupFunnelMarker'
+import SignupReturnHandler from '@/components/features/signup-funnel/SignupReturnHandler'
 import WriteCta from '@/components/features/WriteCta'
 import { getRequestSession } from '@/lib/request-session'
 import { isSignupFunnelTracking } from '@/lib/signup-funnel-tracking'
+import { SIGNUP_RETURN_ANCHORS } from '@/lib/signup-return'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail, getRecentDiscoveryPosts } from '@/lib/queries/posts'
@@ -112,6 +114,8 @@ export default async function PostDetailPage({
     <PageShell>
       {/* 화면이 실제로 열린 뒤에만 조회를 알린다. 아무것도 그리지 않는다. */}
       <PostViewBeacon postId={post.id} />
+      {/* 가입 제안 인증 왕복에서 돌아온 순간만 일한다. gate · 로그인과 무관하게 늘 있다. 아무것도 그리지 않는다. */}
+      <SignupReturnHandler contentType="community" />
 
       <SignupFunnelBoundary active={tracking} contentType="community">
         <main className="mx-auto max-w-3xl px-4 pb-16">
@@ -175,6 +179,8 @@ export default async function PostDetailPage({
             isScrapped={isScrapped}
           />
 
+          {/* 가입 제안 복귀 위치(댓글 영역) — 로그인한 사람에게도 늘 있다. 높이 0 · 고정 헤더 아래로 멈춘다. */}
+          <div id={SIGNUP_RETURN_ANCHORS.community} aria-hidden className="scroll-mt-40" />
           <CommentSection
             threads={threads}
             boardSlug={board.slug}

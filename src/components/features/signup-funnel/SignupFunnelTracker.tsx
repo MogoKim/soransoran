@@ -150,6 +150,7 @@ export default function SignupFunnelTracker({
       {children}
       {promptOpen ? (
         <SignupPromptDialog
+          contentType={contentType}
           onImpression={() =>
             sendOncePerMount(impressionGuard.current, { step: 'prompt_impression', contentType, entryPoint: 'content_end' })
           }

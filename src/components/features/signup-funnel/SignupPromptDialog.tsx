@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { usePathname } from 'next/navigation'
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
+import type { SignupFunnelContentType } from '@/lib/signup-funnel'
 import { TOUCH_MIN } from '@/lib/spacing'
 import {
   createPromptFlow,
@@ -10,6 +11,7 @@ import {
   scrollbarCompensation,
   type PromptCloseSource,
 } from '@/lib/signup-prompt-flow'
+import { signupCallbackPath } from '@/lib/signup-return'
 
 /**
  * 가입 제안 dialog — B안 「이야기를 이어가는 자리」.
@@ -22,17 +24,20 @@ import {
  *    history 에는 고정 boolean 하나만 넣는다(URL·콘텐츠 값 없음).
  * 🔴 CTA 는 기존 카카오 버튼 하나를 지난다. 인증 호출을 여기서 다시 쓰지 않는다.
  *    첫 시도만 받아들이고 그 순간 「카카오로 이동 중…」, 나머지 버튼은 비활성이다.
- * 🔴 bfcache 로 돌아오면 진행 중 표시만 되돌린다. 이벤트를 다시 보내지 않는다.
+ * 🔴 인증 왕복 뒤 bfcache 로 돌아오면 dialog 를 닫는다. 이벤트·표식을 다시 만들지 않고 history 를 되돌리지 않는다.
+ * 🔴 callbackUrl 은 지금 상세 경로 + 콘텐츠 유형의 고정 성공 fragment 다(signup-return.ts). 인증 목적에만 쓴다.
  */
 
 const HISTORY_MARKER = 'signupPrompt'
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
 
 export default function SignupPromptDialog({
+  contentType,
   onImpression,
   onAuthStart,
   onClosed,
 }: {
+  contentType: SignupFunnelContentType
   /** dialog 가 실제로 mount 된 뒤 부른다 — ③ 의 한 번은 부르는 쪽 guard 가 보장한다 */
   onImpression: () => void
   /** CTA 가 받아들여진 순간 — 표식·④. 실패해도 인증은 시작한다 */
@@ -70,9 +75,7 @@ export default function SignupPromptDialog({
       if (flow.close('back')) finish()
     }
     const onPageShow = (event: PageTransitionEvent) => {
-      if (!event.persisted) return
-      flow.restoreFromCache()
-      setPending(false)
+      if (event.persisted && flow.restoreFromCache()) finish()
     }
     window.addEventListener('popstate', onPopState)
     window.addEventListener('pageshow', onPageShow)
@@ -177,7 +180,7 @@ export default function SignupPromptDialog({
             variant="prompt"
             label={pending ? '카카오로 이동 중…' : '카카오로 시작하기'}
             disabled={pending}
-            callbackUrl={pathname}
+            callbackUrl={signupCallbackPath(pathname, contentType)}
             onSignInStart={handleSignInStart}
           />
           <button

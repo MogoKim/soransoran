@@ -8,7 +8,9 @@ import MagazineBody from '@/components/features/MagazineBody'
 import RelatedMagazineList from '@/components/features/RelatedMagazineList'
 import SignupFunnelBoundary from '@/components/features/signup-funnel/SignupFunnelBoundary'
 import SignupFunnelMarker from '@/components/features/signup-funnel/SignupFunnelMarker'
+import SignupReturnHandler from '@/components/features/signup-funnel/SignupReturnHandler'
 import { isSignupFunnelTracking } from '@/lib/signup-funnel-tracking'
+import { SIGNUP_RETURN_ANCHORS } from '@/lib/signup-return'
 import { getMagazineArticleBySlug } from '@/lib/magazine'
 import { resolveRelatedMagazine } from '@/lib/magazine-graph'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
@@ -124,6 +126,9 @@ export default async function MagazineArticlePage({ params }: { params: { slug: 
 
   return (
     <PageShell>
+      {/* 가입 제안 인증 왕복에서 돌아온 순간만 일한다. gate · 로그인과 무관하게 늘 있다. 아무것도 그리지 않는다. */}
+      <SignupReturnHandler contentType="magazine" />
+
       {/* 값은 전부 TS 데이터 파일(articles.ts)에서 온다. 사용자 입력이 들어오는 경로가 없다. */}
       {structuredData.map((data) => (
         <script
@@ -169,6 +174,8 @@ export default async function MagazineArticlePage({ params }: { params: { slug: 
             <div className="mt-5">
               <MagazineBody article={article} />
             </div>
+            {/* 가입 제안 복귀 위치(본문 끝) — 로그인한 사람에게도 늘 있다. 높이 0 · 고정 헤더 아래로 멈춘다. */}
+            <div id={SIGNUP_RETURN_ANCHORS.magazine} aria-hidden className="scroll-mt-40" />
             {/* 회원가입 전환 — 본문 카드 끝 감지 지점. 아래 연관 글은 기준이 아니다. 높이 0. */}
             {tracking ? <SignupFunnelMarker kind="content-end" /> : null}
           </article>
