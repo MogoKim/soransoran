@@ -295,15 +295,36 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🔴 🔴 **B legacy $0.939 + 완전 연결 현재 계약 $0.06 → 결과 2 → $0.03/결과 (legacy 는 분자 · 차단 모두 아님)**',
     mixed !== null && Math.abs((mixed.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12 && Math.abs(mixed.totalUsd - 0.06) < 1e-12
     && Math.abs(mixed.legacyUsd - 0.939) < 1e-12 && mixed.legacyOpenRequests === 1 && mixed.openRequests === 0, JSON.stringify(mixed))
-  // 🔴 C — 현재 계약 요청 중 미연결 · 미정산 · 결말 모름이 하나라도 있으면 모름
+  // 🔴 C — 미연결 · 미정산은 모름. 결말 모름 비용은 확인된 결과만 분모에 둔 보수적 상한에 포함한다.
   const cUnlinked = costAttributionOf({ entries: [e(hp, 0.02), e(null, 0.01)], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
   const cOpen = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
   const hu = articleIdHashOf('fx', 'unk')
   const cUnknown = costAttributionOf({
     entries: [e(hp, 0.02), e(hu, 0.01)], fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT,
   })
-  check('🔴 🔴 **C 현재 계약 미연결 · 미정산 · 결말 모름 → 각각 결과당 비용 모름**',
-    cUnlinked?.usdPerSlotValidResult === null && cOpen?.usdPerSlotValidResult === null && cUnknown?.usdPerSlotValidResult === null)
+  check('🔴 🔴 **C 현재 계약 미연결 · 미정산 → 결과당 비용 모름**',
+    cUnlinked?.usdPerSlotValidResult === null && cOpen?.usdPerSlotValidResult === null)
+  check('🟢 결말 모름 $0.01도 분자에 포함 — 전체 $0.03 ÷ 확인 결과 1 = 보수적 상한 $0.03',
+    cUnknown !== null && Math.abs((cUnknown.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12
+    && Math.abs(cUnknown.byFate.unknown - 0.01) < 1e-12, JSON.stringify(cUnknown))
+  const currentShapeCost = costAttributionOf({
+    entries: [e(hp, 0.0147585), e(hs, 0.030907), e(hl, 0.010834), e(hu, 0.0500965), e(articleIdHashOf('fx', 'no-ready'), 0.113595)],
+    fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 3 }, cohortRuns: COHORT,
+  })
+  const currentShape = judgeNextPreflight('d5', {
+    slotValidOpportunities: 5,
+    readyCohort: {
+      sources: 42, published: 1, lost: 1, scheduled: 3, unknown: 4,
+      usdPerSlotValidResult: currentShapeCost?.usdPerSlotValidResult ?? null,
+    },
+    latencyP50H: 57.14, latencyP90H: 70.59, contractValidPersonas: 24,
+    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
+    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  }, RUNNER_GRID)
+  check('🟢 운영 모양 — 전체 $0.220191 ÷ 확인 결과 4 × D5 = $0.27523875, 비용 UNKNOWN·SHORT 아님',
+    currentShapeCost !== null && Math.abs((currentShapeCost.usdPerSlotValidResult ?? 0) - 0.05504775) < 1e-12
+    && !currentShape.codes.includes('SUPPLY_COST_UNKNOWN') && !currentShape.codes.includes('SUPPLY_COST_SHORT'),
+    JSON.stringify({ cost: currentShapeCost, verdict: currentShape }))
   check('🔴 현재 계약 정산 0 · slot-valid 결과 0 → 모름',
     costAttributionOf({ entries: [e(hp, 0)], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })?.usdPerSlotValidResult === null
     && costAttributionOf({ entries: [e(hl, 0.02)], fateByKey, counts: { published: 0, scheduled: 0 }, cohortRuns: COHORT })?.usdPerSlotValidResult === null)

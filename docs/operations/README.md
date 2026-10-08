@@ -1,10 +1,13 @@
 # 운영 문서 지도
 
-🔴 **이 README 가 권위 인덱스 하나다.** 현재 정책이나 실행을 말할 수 있는 문서는 아래 넷뿐이다.
-새 에이전트는 이 README 와 네 문서만 읽고 목적·North Star·현재 단계·D3~D100 PASS·신선도·
-Persona 용량·답글·다음 실행에 답할 수 있어야 한다.
+🔴 **이 README 가 권위 인덱스 하나다.** 전사 공통으로 현재 정책이나 실행을 말할 수 있는 문서는 아래
+「전사 공통 권위 문서」 넷뿐이다. 별도 영역의 프로젝트 정본은 「영역 프로젝트 정본」 절에 두며, 자기 영역
+안에서만 권위를 갖고 공통 네 문서를 덮지 못한다.
+새 에이전트는 이 README 와 공통 네 문서, 그리고 자신이 담당하는 영역의 프로젝트 정본을 함께 읽는다.
+공통 네 문서만으로도 목적·North Star·현재 단계·D3~D100 PASS·신선도·Persona 용량·답글·다음 실행에
+답할 수 있어야 한다.
 
-## 권위 문서
+## 권위 문서 — 전사 공통
 
 | 순서 | 문서 | 정하는 것 | 정하지 않는 것 |
 |---|---|---|---|
@@ -12,6 +15,16 @@ Persona 용량·답글·다음 실행에 답할 수 있어야 한다.
 | 2 | `2026-09-21-d100-goal-canon.md` | D3~D100 정책 — source-to-slot 판정 · JIT 공급 · Persona 4상태 · 대화 · 단계 PASS · 마일스톤 | 현재 상태 · 실측 보충량 |
 | 3 | `CURRENT-MILESTONE.md` | as-of 시각이 붙은 검증 상태 · code/deployed/operating PASS · 다음 critical path · 코드와 정본의 충돌 | 정책과 정책 숫자 |
 | 4 | `MASTER-OPERATING-SYSTEM.md` | 기술 지도 · 모델과 비용 구조 · 역사 증거 | 현재 운영 상태 · 현재 정책 |
+
+## 영역 프로젝트 정본 — 자기 영역 안에서만 권위
+
+| 영역 | 문서 | 정하는 것 | 정하지 않는 것 |
+|---|---|---|---|
+| 회원가입 전환 | `MEMBER-CONVERSION-CANON.md` | 콘텐츠 끝 도달 → 가입 완료 → 첫 참여의 목적·정책·디자인·최소 측정·회원 어드민 구조·전환 단계(`MC-M0`~`MC-M7`) · 고객 구성 기준선(`CB-*`) | North Star 정의와 D100 공급·Persona·대화·발행 정책 |
+
+- 영역 정본은 공통 네 문서를 덮지 못한다. 충돌하면 공통 문서가 이기고, 영역 정본을 고친다.
+- 회원가입 전환 단계는 `MC-*`, 완료된 고객 구성 하위 단계는 `CB-*`를 사용하며 D100 단계와 별개다.
+- 그 영역을 담당하는 에이전트는 공통 네 문서와 함께 이 표의 정본을 읽는다.
 
 ## 충돌이 나면
 
@@ -37,6 +50,7 @@ Persona 용량·답글·다음 실행에 답할 수 있어야 한다.
 | 첫 댓글 · 답글 · 대화 계속/멈춤 | canon §5 |
 | 단계 PASS · 승격 · 재시험 | canon §6 |
 | 오늘 단계는 누가 정하나 · 자동 일정 owner | canon §6 (`StageDecision` 하나 · launchd 하나) — 구현·배포 상태는 `CURRENT-MILESTONE.md` |
+| D100 운영 Mac 이전·되돌리기 | `ALWAYS-ON-HOST.md` — 정책을 정하지 않는 현재 실행 runbook |
 | 정치와 연예·방송·셀럽의 경계 | canon §7.1 — 정치 선동은 제외, 공개 인물 소재는 안전 gate 뒤 정상 경쟁 |
 | 홈·베스트에서 실회원과 Persona 반응을 어떻게 보나 | canon §7.2 — 실회원 우선, 합성 활동 별도 관측 |
 | 현재 마일스톤과 완료 증거 | canon §8 |
@@ -44,6 +58,7 @@ Persona 용량·답글·다음 실행에 답할 수 있어야 한다.
 | 어디까지 왔고 다음에 무엇을 하나 | `CURRENT-MILESTONE.md` |
 | 전체 구조 · 어떤 AI 를 쓰고 비용이 드나 · 과거 사고 | `MASTER-OPERATING-SYSTEM.md` |
 | 매거진 (D100 과 별도 영역) | `M-GRAPH-PROJECT-CHARTER.md`(검색 주제망 전략) · `magazine-automation-runbook.md`(M-AUTO 실행·안전) |
+| 콘텐츠 끝에 도달한 로그인되지 않은 방문자가 가입·첫 참여로 이어지는 흐름 (D100 과 별도 영역) | `MEMBER-CONVERSION-CANON.md` — 전환 목적·정책·디자인·MC 단계·회원 어드민 구조·고객 구성 기준선. 현재 상태와 다음 과제는 해당 정본 §14·§18 |
 
 ## 보고 규칙
 
@@ -51,6 +66,15 @@ Persona 용량·답글·다음 실행에 답할 수 있어야 한다.
   `operating PASS` 로 나눠 쓴다.
 - 코드·DB·workflow 가 문서와 다르면 직접 확인한다. 추측으로 문서를 맞추지 않는다.
 - 전략이 바뀌면 권위 문서와 문서 검사(`npm run master:doc-check`)를 같은 변경에서 갱신한다.
+
+## 현재 실행 runbook — 정책 투표권 없음
+
+| 문서 | 역할 |
+|---|---|
+| `ALWAYS-ON-HOST.md` | 상시 실행 호스트의 사전 점검·rehearsal·quiesce·cutover·rollback. 단계·콘텐츠·Persona 정책은 정하지 않고 위 권위 문서를 실행한다 |
+
+runbook의 명령은 현재 정본 정책과 현재 상태를 먼저 확인한 뒤 실행한다. 역사 문서에 남은 수동 stage env,
+GitHub 예약, 완성 글 재고 절차를 runbook처럼 사용하지 않는다.
 
 ## 상세·역사 문서 — 정책 투표권 없음
 
@@ -61,7 +85,6 @@ Persona 용량·답글·다음 실행에 답할 수 있어야 한다.
 | 문서 | 역할 |
 |---|---|
 | `../constitution/MICRO_SEED_LANE_CONSTITUTION.md` | Micro Seed 안전 헌법 |
-| `ALWAYS-ON-HOST.md` | 상시 실행 호스트 — 노트북 의존성 목록(측정/추정) · D100 레인 job 을 상시 켜 둘 Mac(기종 무관 · AC 필수)으로 옮기는 묶음(`npm run host:migrate`) · 매거진 제외 · D100 두 호스트 동시 실행 방지 · 전환/되돌리기 |
 | `M-GRAPH-PROJECT-CHARTER.md` | 매거진 검색 영토·주제망·시리즈·내부 연결·장기 발행 계획의 전략 정본 (매거진 영역 한정) |
 | `magazine-automation-runbook.md` | 매거진 M-AUTO 설치·가동·병합·공개 감시 |
 | `2026-09-03-controlled-activity-automation-strategy.md` | 자동화 속도·안전 전략의 역사 |

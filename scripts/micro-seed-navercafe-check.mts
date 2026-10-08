@@ -50,7 +50,8 @@ import {
 import {
   judgeOperationalReadiness, judgeSourceOperations,
 } from '../src/lib/collect-operations'
-import { readLedgerAt } from './lib/collect-run-store.mjs'
+import { readLedgerAt, BODY_RETRY_MAX } from './lib/collect-run-store.mjs'
+import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import {
   collapseByRunId, isDetailSuccess, isNoNewRun, isScheduledAlive, isYieldSuccess,
   judgeAuthCookies, judgeDetailHealth, judgeRunHealth, judgeTrigger, latestTerminal,
@@ -58,6 +59,10 @@ import {
   type CollectRunRecord,
 } from '../src/lib/collect-run-record'
 import { judgeSource, staleAfterFromSlots, STALE_CEILING_MS } from '../src/lib/supply-health'
+import {
+  alertDueToday, isMemberGateText, judgeCafeMembership, judgeSessionExpiry,
+  CAFE_HOME_URL, SESSION_ALERT, concludeFailedRun, judgeCollectTerminal, membershipFailureCode, type SessionFailureCode,
+} from '../src/lib/naver-member-gate'
 
 let failed = 0
 const ok = (l: string) => console.log(`  ✅ ${l}`)
@@ -341,8 +346,16 @@ check('🔴 헬퍼가 자동 로그인(타이핑)을 하지 않는다',
   '로그인은 사람이 한다')
 check('🔴 헬퍼가 DB · Sheet 를 건드리지 않는다',
   !/(prisma|PrismaClient|googleapis|sheets|Candidate|MicroSeedRawContent)/.test(SETUP_CODE))
-check('🔴 헬퍼가 카페 글을 읽지 않는다 (로그인 페이지만 연다)',
-  !/(cafe\.naver\.com|ARTICLE_URL|LIST_URL)/.test(SETUP_CODE))
+/**
+ * 🔴 **헬퍼는 카페 글·목록을 읽지 않는다** (2026-10-07 개정).
+ *    저장 직전 회원 확인을 위해 **카페 홈만** 연다 — 주소는 한 곳(`CAFE_HOME_URL`)에서만 만든다.
+ */
+check('🔴 헬퍼가 카페 글·목록을 읽지 않는다 (로그인 페이지 · 카페 홈만 연다)',
+  !/(ARTICLE_URL|LIST_URL|\/articles\/|ArticleList|iframe_url|menuid)/i.test(SETUP_CODE)
+  // 🔴 카페 주소는 setup 이 직접 만들지 않는다 — 정본 `CAFE_HOME_URL`(naver-member-gate) 하나
+  && (SETUP_CODE.match(/cafe\.naver\.com/g) ?? []).length === 0
+  && /import \{[^}]*\bCAFE_HOME_URL\b[^}]*\} from '\.\.\/src\/lib\/naver-member-gate'/.test(SETUP_CODE)
+  && CAFE_HOME_URL('wgang') === 'https://cafe.naver.com/wgang')
 check('headed 로 연다 (headless: false)',
   /headless:\s*false/.test(SETUP_CODE),
   'headless 로는 2단계 인증을 사람이 통과할 수 없다')
@@ -1977,6 +1990,213 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
   check('🔴 thin 저장 실패면 kept 를 확정하지 않는다',
     COLLECTOR_CODE.includes('THIN_WRITE_FAILED')
     && COLLECTOR_CODE.includes('다음 회차가 그 글을 다시 연다'))
+}
+
+// ─────────────────────────────────────────────────────────
+// 카페 회원 가입 화면 · 세션 만료 예고 — 🔴 2026-10-04~07 실측 사고
+//    10/3 23:56 재발급 세션은 로그인 쿠키 2종이 유효했지만 두 카페가 회원으로 인정하지 않았다.
+//    본문 대신 가입 안내가 저장됐고, 회차는 전부 ok 였다(우아한 갱년기 12회 연속 공급 0).
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 실측 원문 그대로 — 우아한 갱년기형("가입이 필요" 없이 시작) · 레몬테라스형
+  const GATE_WGANG = '카페에 가입하면 바로 글을 볼 수 있어요! 6.9만명의 멤버와 함께하는 [우갱] 우아한 갱년기(40대 50대 여성 커뮤니티/성형/패션/뷰티) 에 가입해 보세요. '
+    + '자존감과 젊음을 유지하고 싶은 40대 50대 여성 카페 성형,피부,헤어,패션,뷰티,화장품,다이어트,체험단 최근 일주일 동안 483명이 가입했어요 가입하면 30.2만개의 글을 볼 수 있어요 10초 만에 가입하기'
+  const GATE_REMON = '이 글은 검색 비허용 게시물입니다. 게시물을 확인하기 위해서는 가입이 필요합니다. 이 카페의 멤버가 되어보세요. 카페에 가입하면 바로 글을 볼 수 있어요! '
+    + '300.9만명의 멤버와 함께하는 레몬테라스 [인테리어,리폼,DIY,요리,결혼,육아,커뮤니티] 에 가입해 보세요.'
+  const REAL_BODY = '화장실 청소요 오늘 할건데 미루다 미루다 이 시간이에요 이제 식구들 다 나가고 조용하네요'
+  // 🔴 실제 글이 "가입" 을 말해도 가입 화면이 아니다 — 문구 하나로 단정하지 않는다
+  const TALKS_ABOUT_JOINING = '동네 헬스장 가입하면 바로 할인된다길래 카페에 가입하면 바로 글을 볼 수 있어요 라는 문구처럼 쉽게 생각했는데 아니더라고요'
+  check('🔴 가입 화면(우아한 갱년기형) → 가입 화면', isMemberGateText(GATE_WGANG))
+  check('🔴 가입 화면(레몬테라스형) → 가입 화면', isMemberGateText(GATE_REMON))
+  // 🔴 저장은 마스킹 뒤 **앞** 300자다 — 실측 사본 길이(186~275자)보다 짧게 잘라도 잡는다
+  check('🔴 앞부분만 남은 가입 화면도 잡는다', isMemberGateText(GATE_REMON.slice(0, 120)) && isMemberGateText(GATE_WGANG.slice(0, 180)))
+  check('🟢 실제 본문은 가입 화면이 아니다', !isMemberGateText(REAL_BODY))
+  check('🟢 가입 문구 하나를 인용한 실제 글은 가입 화면이 아니다', !isMemberGateText(TALKS_ABOUT_JOINING))
+  check('🟢 빈 문자열은 가입 화면이 아니다(본문 없음은 따로 잡는다)', !isMemberGateText(''))
+
+  // 🔴 회원 판정 — 2026-10-07 실측: 회원은 "카페 글쓰기" · 비회원(로그아웃 포함)은 "카페 가입하기"
+  check('🟢 카페 글쓰기만 보이면 회원', judgeCafeMembership('카페정보 나의활동 카페 글쓰기 카페 채팅') === 'member')
+  check('🔴 카페 가입하기가 보이면 비회원', judgeCafeMembership('카페정보 나의활동 카페 가입하기 로그인') === 'nonMember')
+  check('🔴 둘 다 보이면 비회원으로 본다(가입 버튼이 있는 한 회원이 아니다)',
+    judgeCafeMembership('카페 글쓰기 카페 가입하기') === 'nonMember')
+  check('🔴 아무 신호도 없으면 unknown — 회원으로 치지 않는다', judgeCafeMembership('네이버 카페') === 'unknown')
+
+  // 🔴 만료 예고 — 7일 안이면 알린다. 이름·시각만 본다
+  const now = Date.parse('2026-10-30T00:00:00.000Z')
+  const day = 86_400
+  const exp = (aut: number, ses: number) => [{ name: 'NID_AUT', expires: now / 1000 + aut }, { name: 'NID_SES', expires: now / 1000 + ses }]
+  check('🟢 둘 다 7일 넘게 남으면 알리지 않는다', !judgeSessionExpiry(exp(400 * day, 8 * day), now).warn)
+  check('🔴 하나라도 7일 안이면 알린다 · 가장 빠른 쿠키를 말한다', (() => {
+    const v = judgeSessionExpiry(exp(400 * day, 6.5 * day), now)
+    return v.warn && v.soonest?.name === 'NID_SES' && v.soonest.daysLeft === 6
+  })())
+  check('🔴 정확히 7일이면 알린다(경계 포함)', judgeSessionExpiry(exp(400 * day, 7 * day), now).warn)
+  check('🟢 세션 쿠키(만료 없음)는 예고 대상이 아니다',
+    !judgeSessionExpiry([{ name: 'NID_AUT', expires: -1 }, { name: 'NID_SES' }], now).warn)
+  check('🟢 인증 쿠키가 아닌 쿠키는 보지 않는다',
+    !judgeSessionExpiry([...exp(400 * day, 400 * day), { name: 'SRT5', expires: now / 1000 + 60 }], now).warn)
+  check('🔴 예고 판정에 쿠키 값이 없다', !JSON.stringify(judgeSessionExpiry(exp(1, 1), now)).includes('value'))
+
+  // 🔴 같은 알림은 하루 한 번 — 회차마다 울리면 소음이 되어 아무도 안 본다
+  check('🟢 처음 보는 알림은 보낸다', alertDueToday({}, 'MEMBER_GATE:wgang', '2026-10-07'))
+  check('🔴 같은 날 같은 알림은 다시 보내지 않는다', !alertDueToday({ 'MEMBER_GATE:wgang': '2026-10-07' }, 'MEMBER_GATE:wgang', '2026-10-07'))
+  check('🟢 다음 날에는 다시 보낸다', alertDueToday({ 'MEMBER_GATE:wgang': '2026-10-06' }, 'MEMBER_GATE:wgang', '2026-10-07'))
+  check('🟢 다른 카페 알림은 따로 센다', alertDueToday({ 'MEMBER_GATE:wgang': '2026-10-07' }, 'MEMBER_GATE:remonterrace', '2026-10-07'))
+
+  // 🔴 관제 — 가입 화면 실패는 사람이 손대야 한다
+  const gateHealth = judgeRunHealth([{
+    runId: 'g', source: 'navercafe:wgang', trigger: 'schedule', mode: 'detail', status: 'failed', code: 'MEMBER_GATE',
+    startedAt: '2026-10-04T00:30:00.000Z', endedAt: '2026-10-04T00:32:00.000Z',
+    listRows: 86, detailRequests: 1, bodyRows: 0, thinRows: 0, skippedSeen: 0, repeatedRows: 0, newUniqueThinRows: 0,
+  }])
+  check('🔴 MEMBER_GATE 회차는 CRITICAL', gateHealth.level === 'CRITICAL' && gateHealth.code === 'RUN_MEMBER_GATE')
+  check('🔴 MEMBER_GATE 사유가 재발급을 말한다', gateHealth.reason.includes('재발급'))
+
+  // 🔴 collector 배선 — 순서와 분기를 본다
+  const gateAt = COLLECTOR_CODE.indexOf('isMemberGateText(body)')
+  const bodyAt = COLLECTOR_CODE.indexOf('bodyRows += 1')
+  check('🔴 collector 가 본문을 세기 전에 가입 화면을 거른다', gateAt > 0 && bodyAt > gateAt)
+  check('🔴 가입 화면을 만나면 그 회차의 상세 요청을 멈춘다', (() => {
+    const seg = COLLECTOR_CODE.slice(gateAt, bodyAt)
+    return /\bbreak\b/.test(seg) && !seg.includes('recordDetail(')
+  })())
+  check('🔴 가입 화면이면 회차를 MEMBER_GATE 실패로 남긴다 — 종료 판정 하나를 지난다',
+    judgeCollectTerminal({ memberGateId: '1', detailRequests: 3, bodyRows: 2 }) === 'MEMBER_GATE'
+    && /const terminal = judgeCollectTerminal\(\{\s*memberGateId,/.test(COLLECTOR_CODE)
+    && /if \(terminal !== null\) \{\s*await endWithSessionFailure\(terminal/.test(COLLECTOR_CODE))
+  check('🔴 인증 실패·가입 화면·만료 예고를 Slack 으로 보낸다(dry-run 아님)',
+    COLLECTOR_CODE.includes('notifySessionAlert(') && /dryRun:\s*false/.test(COLLECTOR_CODE))
+  check('🔴 인증 실패 알림이 fail() 보다 먼저다', (() => {
+    const authFail = COLLECTOR_CODE.indexOf('if (!auth.ok) {')
+    const seg = COLLECTOR_CODE.slice(authFail, COLLECTOR_CODE.indexOf('fail(`${auth.code}', authFail))
+    return authFail > 0 && seg.includes('notifySessionAlert(')
+  })())
+  check('🔴 알림 문구가 재발급 명령을 말한다', COLLECTOR_CODE.includes('SESSION_REISSUE_COMMAND'))
+
+  // 🔴 세션 발급 — 저장 전에 두 카페 회원인지 본다
+  const memAt = SETUP_CODE.indexOf('judgeCafeMembership(')
+  const renameAt = SETUP_CODE.indexOf('renameSync(staging, target)')
+  check('🔴 setup 이 저장 전에 카페 회원인지 본다', memAt > 0 && renameAt > memAt)
+  check('🔴 회원이 아니면 staging 을 버리고 정본을 갱신하지 않는다', (() => {
+    const seg = SETUP_CODE.slice(memAt, renameAt)
+    return seg.includes('rmSync(staging') && seg.includes('정본을 갱신하지 않았다')
+  })())
+  check('🔴 setup 이 활성 카페 전부를 본다(제외 카페는 보지 않는다)', SETUP_CODE.includes('activeCafes()'))
+  // 🔴 순서만 보면 분기를 지워도 통과한다 — 실제 조건을 본다
+  check('🔴 회원이 아닌(unknown 포함) 카페를 실제로 모은다', /if \(m !== 'member'\) notMember\.push\(/.test(SETUP_CODE))
+  check('🔴 하나라도 있으면 실제로 멈춘다', /if \(notMember\.length > 0\) \{/.test(SETUP_CODE))
+}
+
+// ─────────────────────────────────────────────────────────
+// 로그아웃·본문 0 거짓 GREEN — 🔴 2026-10-07 15:30 실측
+//    비밀번호 변경으로 로그아웃된 세션이 쿠키 만료일 검사를 통과했고,
+//    wgang 회차가 목록 84 · 상세 16 · 본문 0 인데 status ok · code null 로 끝났다.
+// ─────────────────────────────────────────────────────────
+{
+  const T = (detailRequests: number, bodyRows: number, memberGateId: string | null = null) =>
+    judgeCollectTerminal({ memberGateId, detailRequests, bodyRows })
+
+  // ① 홈 member + 정상 본문 → ok
+  check('① 홈 member → 진행(실패 코드 없음)', membershipFailureCode('member') === null)
+  check('① 회원 회차 정상 본문 → ok', T(16, 16) === null)
+  // ② 홈 nonMember → MEMBER_GATE
+  check('🔴 ② 홈 nonMember → MEMBER_GATE', membershipFailureCode('nonMember') === 'MEMBER_GATE')
+  // ③ 홈 unknown → 성공 아님 · 별도 코드
+  check('🔴 ③ 홈 unknown → MEMBER_STATUS_UNKNOWN (회원으로 치지 않는다)', membershipFailureCode('unknown') === 'MEMBER_STATUS_UNKNOWN')
+  check('🔴 ③ 로그아웃 홈 글자(로그인 · 카페 가입하기) → nonMember → MEMBER_GATE',
+    membershipFailureCode(judgeCafeMembership('카페정보 나의활동 카페 가입하기 로그인')) === 'MEMBER_GATE')
+  check('🔴 ③ 아무것도 못 읽은 홈 → unknown → 진행하지 않는다', membershipFailureCode(judgeCafeMembership('')) !== null)
+  // ④ member 였지만 상세 16 / 본문 0 → BODY_EMPTY
+  check('🔴 ④ 상세 16 · 본문 0 → BODY_EMPTY', T(16, 0) === 'BODY_EMPTY')
+  // ⑤ 부분 성공은 막지 않는다
+  check('⑤ 상세 16 · 본문 1 → BODY_EMPTY 아님', T(16, 1) === null)
+  // ⑥ 정상 무작업
+  check('⑥ 상세 0(새 글 없음) → BODY_EMPTY 아님', T(0, 0) === null)
+  // ⑧ 본문 가입 안내 → 기존 MEMBER_GATE 유지(본문이 있어도, 없어도)
+  check('🔴 ⑧ 본문 가입 안내 → MEMBER_GATE 유지', T(5, 4, '455846') === 'MEMBER_GATE' && T(1, 0, '455846') === 'MEMBER_GATE')
+  // ⑩ 15:30 실측 fixture
+  const r1530 = {
+    runId: '20261007-153006', source: 'navercafe:wgang', trigger: 'schedule' as const, mode: 'detail' as const,
+    startedAt: '2026-10-07T06:30:06.010Z', endedAt: '2026-10-07T06:32:51.821Z',
+    listRows: 84, detailRequests: 16, bodyRows: 0, thinRows: 0, skippedSeen: 1, repeatedRows: 0, newUniqueThinRows: 0,
+  }
+  const code1530 = T(r1530.detailRequests, r1530.bodyRows)
+  check('🔴 ⑩ 15:30 실측(84 · 16 · 0)은 더 이상 ok 가 아니다', code1530 === 'BODY_EMPTY')
+  const h1530 = judgeRunHealth([{ ...r1530, status: 'failed', code: code1530 ?? 'OTHER' }])
+  check('🔴 ⑩ 그 회차 관제는 CRITICAL · RUN_BODY_EMPTY', h1530.level === 'CRITICAL' && h1530.code === 'RUN_BODY_EMPTY')
+  const hUnknown = judgeRunHealth([{ ...r1530, detailRequests: 0, status: 'failed', code: 'MEMBER_STATUS_UNKNOWN' }])
+  check('🔴 MEMBER_STATUS_UNKNOWN 관제는 CRITICAL', hUnknown.level === 'CRITICAL' && hUnknown.code === 'RUN_MEMBER_STATUS_UNKNOWN')
+  // ⑪ 오늘 정상 회원 회차 모양 회귀 없음
+  check('⑪ 정상 회원 회차 16→16 · 10→9 · 1→1 은 ok', T(16, 16) === null && T(10, 9) === null && T(1, 1) === null)
+
+  // C. 알림 — 세 사유를 사람이 구분한다
+  const codes: SessionFailureCode[] = ['MEMBER_GATE', 'MEMBER_STATUS_UNKNOWN', 'BODY_EMPTY']
+  check('🔴 세 사유의 알림 제목이 서로 다르다', new Set(codes.map((c) => SESSION_ALERT[c].title)).size === 3)
+  check('🔴 알림 문구에 쿠키·세션 값 자리가 없다', !codes.some((c) => /NID_|cookie|쿠키 값|=/.test(`${SESSION_ALERT[c].title}${SESSION_ALERT[c].why}`)))
+  check('🔴 알림 열쇠가 사유 · 카페 단위(하루 1회 계약 재사용)',
+    /notifySessionAlert\(`\$\{c\}:\$\{cafe!\.cafeId\}`/.test(COLLECTOR_CODE)
+    && alertDueToday({ 'BODY_EMPTY:wgang': '2026-10-07' }, 'MEMBER_GATE:wgang', '2026-10-07'))
+
+  // ⑦ Slack 미설정·전송 실패·던짐 → run 은 failed 유지, exit 0 아님
+  for (const [why, notify] of [
+    ['알림 미설정(조용히 반환)', async (): Promise<void> => undefined],
+    ['알림이 던짐', async (): Promise<void> => { throw new Error('webhook down') }],
+  ] as const) {
+    const calls: string[] = []
+    const r = await concludeFailedRun('BODY_EMPTY', {
+      finish: (c) => { calls.push(`finish:${c}`); return true },
+      notify: async (c) => { calls.push(`notify:${c}`); await notify() },
+      exit: (n) => { calls.push(`exit:${n}`) },
+    })
+    check(`🔴 ⑦ ${why} → 기록은 failed 로 먼저 · exit 1`,
+      calls[0] === 'finish:BODY_EMPTY' && r.recorded && calls.at(-1) === 'exit:1', calls.join(' '))
+  }
+
+  // collector 배선 — 🔴 실제 경로가 위 판정을 부르는가
+  const homeAt = COLLECTOR_CODE.indexOf('url: CAFE_HOME_URL(cafe!.cafeId)')
+  // 🔴 COLLECTOR_CODE 는 주석을 지운 코드다 — 목록 단계의 첫 실제 줄을 기준점으로 쓴다
+  const listAt = COLLECTOR_CODE.indexOf('const allProbes: FrameProbe[] = []')
+  const firstDetailAt = COLLECTOR_CODE.indexOf('detailRequests += 1')
+  check('🔴 ② 회원 확인이 목록·상세보다 먼저다 → 실패하면 상세 요청 0',
+    homeAt > 0 && listAt > homeAt && firstDetailAt > listAt
+    && /if \(stop !== null\) throw new MembershipStop\(stop, seen\)/.test(COLLECTOR_CODE.slice(homeAt, listAt))
+    && /const stop = membershipFailureCode\(seen\)/.test(COLLECTOR_CODE.slice(homeAt, listAt)))
+  // ⑨ 홈 확인도 보호장치를 지난다 — raw goto 금지
+  check('🔴 ⑨ 카페 홈 요청이 guardedNavigate 안에 있다',
+    /await guardedNavigate\(\{\s*url: CAFE_HOME_URL\(cafe!\.cafeId\), source: GUARD_SOURCE/.test(COLLECTOR_CODE))
+  check('🔴 ⑨ 수집기의 page.goto 는 전부 guardedNavigate 의 goto 콜백 안에만 있다', (() => {
+    const at = [...COLLECTOR_CODE.matchAll(/page\.goto\(/g)].map((m) => m.index!)
+    return at.length >= 3 && at.every((i) => COLLECTOR_CODE.slice(Math.max(0, i - 40), i).includes('goto: async (u) => (await '))
+  })())
+  check('🔴 ⑨ 회원 확인 요청도 하루 계획 상한에 들어간다(상세 배분은 그대로)', (() => {
+    const ok = ['remonterrace', 'wgang'].every((c) => {
+      const p = planCafeRun({ cafeId: c, phase: 'start' })
+      return p.memberCheckPerDay === p.boards.length * p.runsPerDay && p.withinLimit
+        && p.requestsPerDay + p.memberCheckPerDay <= p.limitPerDay
+    })
+    return ok && planCafeRun({ cafeId: 'remonterrace', phase: 'start' }).detailPerRun === 11
+      && planCafeRun({ cafeId: 'wgang', phase: 'start' }).detailPerRun === 16
+  })())
+  check('🔴 scout(목록만) 은 회원 확인 요청을 쓰지 않는다', /if \(!SCOUT\) \{\s*await guardedNavigate\(\{\s*url: CAFE_HOME_URL/.test(COLLECTOR_CODE))
+  check('🔴 회원 확인 실패는 브라우저를 닫은 직후 끝낸다',
+    /if \(membershipStop !== null\) \{\s*await endWithSessionFailure\(membershipStop\.code/.test(COLLECTOR_CODE))
+  check('🔴 MembershipStop 외 예외는 다시 던진다(삼키지 않는다)',
+    /if \(!\(e instanceof MembershipStop\)\) throw e/.test(COLLECTOR_CODE))
+  check('🔴 ④ 종료 판정 입력이 회차 기록의 실제 상세·본문 수다',
+    /detailRequests: runRecord\?\.detailRequests \?\? 0,\s*bodyRows: runRecord\?\.bodyRows \?\? 0/.test(COLLECTOR_CODE))
+  check('🔴 실패 종료가 기록 → 알림 → exit 순서 하나로 간다',
+    /await concludeFailedRun\(code, \{\s*finish: \(c\) => finishRun\('failed', c\)/.test(COLLECTOR_CODE))
+  check('🔴 알림 처리 전체가 던지지 않는다', /\} catch \{\s*console\.log\(`  📣 Slack 알림 처리 중 오류/.test(COLLECTOR_CODE))
+  // ⑫ body_failed 는 다음 회차가 다시 연다
+  check('🔴 ⑫ 본문 실패 글은 body_failed 로 남고 재시도 한도 안에서 다시 열린다',
+    COLLECTOR_CODE.includes("outcome: 'body_failed'")
+    && /if \(e\.outcome === 'body_failed' && e\.attempts < BODY_RETRY_MAX\) continue/.test(COLLECTOR_CODE)
+    && BODY_RETRY_MAX > 1)
+  check('🔴 ⑫ 종료 판정 블록은 원장에 kept 를 쓰지 않는다', (() => {
+    const at = COLLECTOR_CODE.indexOf('const terminal = judgeCollectTerminal(')
+    const seg = COLLECTOR_CODE.slice(at, COLLECTOR_CODE.indexOf('\n}\n', at))
+    return at > 0 && !seg.includes('recordDetail(')
+  })())
 }
 
 // ─────────────────────────────────────────────────────────

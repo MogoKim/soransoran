@@ -68,6 +68,10 @@ console.log('\n② 🔴 읽지 못한 글을 ok 로 적지 않는다')
   check('본문이 있으면 ok', accessOf(ok({ bodyLength: 100 })) === 'ok')
   check('🔴 404 로 0자면 failed — 판단 대상이 아니다', accessOf(ok({ bodyLength: 0 })) === 'failed')
   check('길이가 없으면 failed', accessOf({}) === 'failed')
+  // 🔴 2026-10-04~07 실측: 가입 안내 화면이 244~275자 "본문" 으로 ok 가 됐다
+  const gateHead = '이 글은 검색 비허용 게시물입니다. 게시물을 확인하기 위해서는 가입이 필요합니다. 이 카페의 멤버가 되어보세요. 카페에 가입하면 바로 글을 볼 수 있어요!'
+  check('🔴 카페 가입 안내 화면은 길이가 있어도 failed', accessOf(ok({ bodyLength: 249, bodyHead: gateHead })) === 'failed')
+  check('🟢 실제 본문은 그대로 ok', accessOf(ok({ bodyLength: 40, bodyHead: '화장실 청소요 오늘 할건데 미루다 미루다' })) === 'ok')
   check('detail 사본이 access 를 그대로 옮긴다',
     toDetailRecord(ok({ bodyLength: 0 })).access === 'failed')
   check('🔴 raw 사본은 키 이름이 accessStatus 다 — 화면이 그걸 본다',

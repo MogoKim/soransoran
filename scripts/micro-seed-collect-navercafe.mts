@@ -71,8 +71,14 @@ import {
 } from '../src/lib/collect-run-record'
 import {
   appendDetailLedger, appendRunRecord, readDetailLedger, readSeenArticleIds,
-  BODY_RETRY_MAX,
+  BODY_RETRY_MAX, RUN_RECORD_DIR,
 } from './lib/collect-run-store.mjs'
+import {
+  alertDueToday, isMemberGateText, judgeSessionExpiry, SESSION_EXPIRY_WARN_DAYS, SESSION_REISSUE_COMMAND,
+  CAFE_HOME_URL, SESSION_ALERT, concludeFailedRun, judgeCafeMembership, judgeCollectTerminal, membershipFailureCode,
+  type CafeMembership, type SessionFailureCode,
+} from '../src/lib/naver-member-gate'
+import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
@@ -195,6 +201,65 @@ const fail = (msg: string, code: CollectFailureCode = 'OTHER'): never => {
   releaseOwnLock()
   console.error(`\n🛑 ${msg}\n`)
   process.exit(1)
+}
+
+/**
+ * 🔴 **세션 알림 — 같은 알림은 하루 한 번** (2026-10-07).
+ *    10/4~10/7 가입 안내 사고는 3일 넘게 아무도 몰랐다. 회차가 전부 ok 로 끝났고 알림이 없었다.
+ *    · 하루 기록은 회차 기록 디렉터리 안에 둔다 — 상시 호스트 이관 묶음이 그대로 옮긴다.
+ *    · 🔴 Slack 실패가 수집을 죽이지 않는다(`send` 는 throw 하지 않는다). 기록을 못 읽으면 보낸다.
+ */
+const ALERT_STATE = join(RUN_RECORD_DIR, 'session-alerts.json')
+async function notifySessionAlert(
+  key: string,
+  msg: { severity: 'WARN' | 'BLOCKED'; title: string; reason: string },
+): Promise<void> {
+  // 🔴 어떤 경우에도 던지지 않는다 — 알림 하나 때문에 실패 기록·종료가 흔들리면 안 된다
+  try {
+    const today = kstString(new Date()).slice(0, 10)
+    let sent: Record<string, string> = {}
+    try { sent = JSON.parse(readFileSync(ALERT_STATE, 'utf-8')) as Record<string, string> } catch { /* 처음이거나 못 읽음 — 보낸다 */ }
+    if (!alertDueToday(sent, key, today)) {
+      console.log(`  🔕 오늘 이미 보낸 알림이다 — ${key}`)
+      return
+    }
+    const r = await send(buildMessage({ ...msg, next: SESSION_REISSUE_COMMAND, logPath: undefined }), { dryRun: false })
+    console.log(`  📣 Slack ${r.sent ? '보냄' : `못 보냄(${r.reason})`} — ${key}`)
+    if (!r.sent) return
+    try {
+      mkdirSync(RUN_RECORD_DIR, { recursive: true })
+      writeFileSync(ALERT_STATE, `${JSON.stringify({ ...sent, [key]: today }, null, 2)}\n`, 'utf-8')
+    } catch { /* 다음 회차가 한 번 더 보낼 뿐이다 */ }
+  } catch {
+    console.log(`  📣 Slack 알림 처리 중 오류 — ${key} (회차 결과는 바뀌지 않는다)`)
+  }
+}
+/** 가입 안내를 만난 글 — 🔴 원장에 남기지 않는다. 회원 세션으로 바뀐 뒤 다음 회차가 다시 연다 */
+let memberGateId: string | null = null
+/** 🔴 회차 시작 전 카페 홈 판정이 실패하면 목록·상세를 열지 않고 이 코드로 끝낸다 */
+class MembershipStop extends Error {
+  constructor(readonly code: SessionFailureCode, readonly seen: CafeMembership) { super(code) }
+}
+/**
+ * 🔴 **실패 종료 하나** — 기록(failed) → 알림 → exit 1. 순서와 보장은 `concludeFailedRun` 이 정한다.
+ *    회원 확인 실패 · 가입 안내 · 본문 0 이 모두 이 길로 끝난다.
+ */
+async function endWithSessionFailure(code: SessionFailureCode, detail: string): Promise<never> {
+  await concludeFailedRun(code, {
+    finish: (c) => finishRun('failed', c),
+    notify: (c) => notifySessionAlert(`${c}:${cafe!.cafeId}`, {
+      severity: SESSION_ALERT[c].severity,
+      title: `${SESSION_ALERT[c].title} · ${cafe!.label}`,
+      reason: `${SESSION_ALERT[c].why} — ${detail}`,
+    }),
+    exit: () => {
+      releaseOwnLock()
+      console.error(`\n🛑 ${code} — ${detail}\n   다시 발급: ${SESSION_REISSUE_COMMAND}\n`)
+      process.exit(1)
+    },
+  })
+  // concludeFailedRun 이 exit 를 부른다 — 여기 닿지 않는다
+  return process.exit(1)
 }
 
 const cafe = findCafe(CAFE_ID)
@@ -423,18 +488,37 @@ async function main() {
    * 🔴 **인증 쿠키를 브라우저 열기 전에 본다.** 이름과 만료 시각만 본다 —
    *    값은 어디에도 담지 않는다. 만료됐으면 자동 로그인하지 않고 멈춘다.
    */
+  let authCookies: { name: string; expires?: number }[] = []
   const auth = ((): ReturnType<typeof judgeAuthCookies> => {
     try {
       const j = JSON.parse(readFileSync(sessionPath!, 'utf-8')) as {
         cookies?: { name: string; expires?: number }[]
       }
-      return judgeAuthCookies(j.cookies ?? [], Date.now())
+      // 🔴 이름과 만료 시각만 남긴다 — 값은 담지 않는다
+      authCookies = (j.cookies ?? []).map((c) => ({ name: c.name, expires: c.expires }))
+      return judgeAuthCookies(authCookies, Date.now())
     } catch { return { ok: false, code: 'AUTH_MISSING', reason: '세션을 읽지 못했다' } }
   })()
   console.log(`  인증   ${auth.ok ? '🟢' : '🔴'} ${auth.reason}`)
   if (!auth.ok) {
-    fail(`${auth.code} — ${auth.reason}\n   🔴 사람이 headed 로 재발급한다: npm run navercafe:session-setup`,
+    // 🔴 멈추기 전에 알린다 — 10/3 오후 만료 4회 실패도 아무도 몰랐다
+    await notifySessionAlert(auth.code, {
+      severity: 'BLOCKED',
+      title: '네이버 카페 수집 중단 — 로그인 세션 만료',
+      reason: `${auth.reason} · ${cafe!.label} 회차부터 수집이 멈췄다`,
+    })
+    fail(`${auth.code} — ${auth.reason}\n   🔴 사람이 headed 로 재발급한다: ${SESSION_REISSUE_COMMAND}`,
       auth.code)
+  }
+  // 🔴 만료 예고 — 만료 전에 다시 발급하면 회차를 잃지 않는다
+  const expiry = judgeSessionExpiry(authCookies, Date.now())
+  if (expiry.warn && expiry.soonest !== null) {
+    console.log(`  ⏳ 인증 쿠키 ${expiry.soonest.name} 가 ${expiry.soonest.daysLeft}일 뒤 만료된다 (${SESSION_EXPIRY_WARN_DAYS}일 안)`)
+    await notifySessionAlert('SESSION_EXPIRY_SOON', {
+      severity: 'WARN',
+      title: `네이버 세션 만료 ${expiry.soonest.daysLeft}일 전`,
+      reason: `${expiry.soonest.name} 만료 ${kstString(new Date(expiry.soonest.expiresAt))} KST — 만료되면 두 카페 수집이 멈춘다`,
+    })
   }
 
   /**
@@ -479,6 +563,7 @@ async function main() {
   const started = Date.now()
   const collected: CollectedCandidate[] = []
   let browser: NaverBrowser | null = null
+  let membershipStop: MembershipStop | null = null
 
   try {
     // 🔴 기본은 설치된 Chrome. 번들 chromium(rev 1234)이 로컬에 없어도 뜬다
@@ -487,6 +572,24 @@ async function main() {
     browser = await chromium.launch(launchOpts)
     const context = await browser.newContext({ storageState: sessionPath!, locale: 'ko-KR' })
     const page = await context.newPage()
+
+    /**
+     * ── ⓪ 카페 회원 확인 (2026-10-07) ──
+     * 🔴 쿠키 만료일은 로그인 상태를 말해 주지 않는다 — 비밀번호 변경·회원 상태 변경은 만료일 전에도 세션을 끊는다.
+     *    카페 홈을 **보호장치를 지나** 정확히 1회 연다(요청 예산·차단기·간격에 들어간다).
+     *    회원이 아니거나 확인할 수 없으면 목록·상세를 열지 않는다 — 요청을 쓰지 않고 실패로 끝낸다.
+     */
+    if (!SCOUT) {
+      await guardedNavigate({
+        url: CAFE_HOME_URL(cafe!.cafeId), source: GUARD_SOURCE, now: () => new Date(),
+        goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
+      })
+      await sleep(randomDelay(DELAY_LIST_MS))
+      const seen = judgeCafeMembership(await readPageText(page))
+      const stop = membershipFailureCode(seen)
+      console.log(`  회원   ${stop === null ? '🟢 카페 회원' : `🔴 ${seen === 'nonMember' ? '회원 아님(카페 가입하기)' : '확인 불가'}`}`)
+      if (stop !== null) throw new MembershipStop(stop, seen)
+    }
 
     // ── ① 목록 ──
     const items: NaverListItem[] = []
@@ -634,6 +737,17 @@ async function main() {
         )
         continue
       }
+      /**
+       * 🔴 **가입 안내는 본문이 아니다** (2026-10-04~07 실측).
+       *    회원 세션이면 회원 전용 글도 열린다 — 하나라도 안내가 나오면 세션이 회원이 아니다.
+       *    다음 글도 같으니 요청을 더 쓰지 않고 멈춘다. 원장에는 남기지 않는다 —
+       *    회원 세션으로 바뀐 뒤 다음 회차가 이 글을 다시 연다.
+       */
+      if (isMemberGateText(body)) {
+        memberGateId = id
+        console.log(`  🛑 ${id} — 본문 대신 카페 가입 안내가 나왔다. 이 세션은 ${cafe!.label} 회원이 아니다 — 상세 요청을 멈춘다`)
+        break
+      }
       const row = buildCollected(cafe!.cafeId, known.get(id)!, body, new Date().toISOString(), listedAtIso)
       assertNaverCandidate(row)
       bodyRows += 1
@@ -651,6 +765,10 @@ async function main() {
       collected.push(row)
       console.log(`  ✅ ${id} · ${[...body].length}자 · 댓글 ${row.sourceCommentCount}`)
     }
+  } catch (e) {
+    // 🔴 회원 확인 실패만 여기서 잡는다 — 나머지 예외는 그대로 바깥(main().catch)으로 간다
+    if (!(e instanceof MembershipStop)) throw e
+    membershipStop = e
   } finally {
     /**
      * 🔴 **브라우저만 닫는다. 락은 여기서 풀지 않는다** (2026-09-10 정정).
@@ -664,6 +782,11 @@ async function main() {
      *    정확히 한 번 풀린다(`releaseOwnLock` 이 `lockHandle` 을 먼저 비운다).
      */
     if (browser) await browser.close().catch(() => {})
+  }
+
+  // 🔴 회원이 아니거나 확인할 수 없었다 — 목록·상세를 열지 않았다(상세 요청 0)
+  if (membershipStop !== null) {
+    await endWithSessionFailure(membershipStop.code, `카페 홈 판정 ${membershipStop.seen} · 상세 요청 0`)
   }
 
   if (collected.length && THIN) {
@@ -765,6 +888,23 @@ async function main() {
   console.log(`\n  🔴 Raw Vault 에 적재하지 않았다. 적재는 importer 가 한다:`)
   console.log(`     npx tsx scripts/micro-seed-import-82cook-live.mts --raw-only --batch=10 --input=${OUT}`)
   console.log(`     (--apply 를 붙여야 실제로 적재된다 · ${kstString(now)} KST)\n`)
+
+  /**
+   * 🔴 **연 것과 읽은 것은 다르다 — 종료 판정 하나** (`judgeCollectTerminal`).
+   *    · 가입 안내를 만났으면 MEMBER_GATE (10/4~10/7 실측 — 3일 넘게 ok 였다)
+   *    · 상세를 열었는데 본문 0건이면 BODY_EMPTY (10/7 15:30 실측 — 로그아웃 세션, 상세 16 · 본문 0 이 ok 였다)
+   *    안내 앞에서 읽은 본문은 위에서 그대로 남겼다. 본문 실패 글은 `body_failed` 로 남아 다음 회차가 다시 연다.
+   */
+  const terminal = judgeCollectTerminal({
+    memberGateId,
+    detailRequests: runRecord?.detailRequests ?? 0,
+    bodyRows: runRecord?.bodyRows ?? 0,
+  })
+  if (terminal !== null) {
+    await endWithSessionFailure(terminal, terminal === 'MEMBER_GATE'
+      ? `글 ${memberGateId} 에서 본문 대신 가입 안내`
+      : `상세 ${runRecord?.detailRequests ?? 0}건 · 본문 0건`)
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -945,6 +1085,22 @@ async function readList(
  *    콜백이 터져도 "본문을 읽지 못했다" 한 줄만 나와서, 셀렉터가 안 맞는 것인지
  *    코드가 터진 것인지 구분할 수 없었다.
  */
+/**
+ * 카페 홈 화면 글자 — 🔴 회원 판정(`judgeCafeMembership`) 입력으로만 쓴다. 저장·출력하지 않는다.
+ *    프레임 하나가 터져도 나머지를 읽는다. 하나도 못 읽으면 빈 문자열 → unknown → 진행하지 않는다.
+ */
+async function readPageText(page: NaverPage): Promise<string> {
+  const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
+  let text = ''
+  for (const f of [page, ...frames]) {
+    try {
+      const parts = await f.$$eval<string[]>('body', (els) => els.map((el) => (el as HTMLElement).innerText ?? ''))
+      text += `\n${parts.join('\n')}`
+    } catch { /* 다른 출처·사라진 프레임 — 다음 프레임을 본다 */ }
+  }
+  return text
+}
+
 async function readArticleBody(page: NaverPage): Promise<{ body: string | null; errors: string[] }> {
   const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
   const errors: string[] = []

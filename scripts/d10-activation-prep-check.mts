@@ -1258,8 +1258,9 @@ console.log('\n⑮ Naver 수집기도 같은 보호장치를 지난다')
 {
   const nav = codeOf('scripts/micro-seed-collect-navercafe.mts')
   const store = codeOf('scripts/lib/collect-guard-store.mts')
-  check('🔴 목록·상세 이동이 guardedNavigate 를 지난다',
-    (nav.match(/guardedNavigate\(\{/g) ?? []).length === 2)
+  // 🔴 보호 지점 3곳 — 카페 홈 회원 확인(2026-10-07) · 목록 · 상세. 늘면 여기서 드러난다
+  check('🔴 회원 확인·목록·상세 이동이 guardedNavigate 를 지난다',
+    (nav.match(/guardedNavigate\(\{/g) ?? []).length === 3)
   /**
    * 🔴 **모든 `page.goto` 가 `guardedNavigate` 의 콜백 안에 있어야 한다.**
    *    하나라도 밖에 있으면 그 요청만 보호장치를 우회한다 — 그 상태로 "구현 완료" 라고 적으면
@@ -1267,7 +1268,7 @@ console.log('\n⑮ Naver 수집기도 같은 보호장치를 지난다')
    */
   check('🔴 맨몸 page.goto 가 없다 — 전부 guardedNavigate 콜백 안이다', (() => {
     const gotos = [...nav.matchAll(/page\.goto\(/g)].map((m) => m.index ?? 0)
-    if (gotos.length !== 2) return false
+    if (gotos.length !== 3) return false
     return gotos.every((idx) => /goto: async \(u\) => \(await $/.test(nav.slice(Math.max(0, idx - 30), idx)))
   })())
   check('🔴 source 는 그 카페의 sourceSite 다 — 82cook 것을 쓰지 않는다',
@@ -1318,7 +1319,7 @@ console.log('\n⑮ Naver 수집기도 같은 보호장치를 지난다')
   // 🔴 문서가 "구현 완료" 라고 적으려면 세 소스가 전부 연결돼 있어야 한다
   check('🔴 세 수집원이 모두 보호장치를 지난다',
     /guardedGet\(\{/.test(codeOf('scripts/micro-seed-collect-82cook.mts'))
-    && (nav.match(/guardedNavigate\(\{/g) ?? []).length === 2)
+    && (nav.match(/guardedNavigate\(\{/g) ?? []).length === 3)
   check('🔴 NAVER_GUARD_NOT_IMPLEMENTED 를 남겨 두지 않았다 — 실제로 연결했다',
     !/NAVER_GUARD_NOT_IMPLEMENTED/.test(codeOf('src/lib/scale-supply-plan.ts'))
     && !read(RUNBOOK).includes('NAVER_GUARD_NOT_IMPLEMENTED'))

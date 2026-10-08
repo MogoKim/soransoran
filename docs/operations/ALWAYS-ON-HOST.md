@@ -1,8 +1,10 @@
 # 상시 실행 호스트 — 의존성 목록 · 이전 묶음 · 전환/되돌리기
 
-> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-09-29 — 범위를 D100 레인 하나로 좁힘 · 기종 무관(AC 필수)
+> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-10-07 — 집 Mac 단일 owner 확정 · 기종 무관(AC 필수) ·
+> 미분류 2→0 · rehearsal PASS(§6.4)
 > 코드 정본: `scripts/host-migrate.mts` (CLI) · `scripts/lib/host-migrate.mts` (판정) · `scripts/host-migrate-check.mts` (검사)
-> 🔴 이 문서의 숫자는 **2026-09-29 측정 스냅샷**이다. 현재값은 `npm run host:migrate` 로 다시 잰다.
+> 🔴 §2와 §6.1~6.2의 숫자는 **작성 당시 측정 스냅샷**이다. 최신 plan은 §6.3과
+> `npm run host:migrate`가 정한다. 단계·콘텐츠 정책은 D100 canon이 정한다.
 
 ## 1. 왜 필요한가 · 이번 범위
 
@@ -13,6 +15,15 @@ D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에�
 **대상은 상시 켜 둘 Mac 한 대다 — 기종은 묻지 않는다.** 배터리 있는 MacBook 도 된다.
 단 **D100 운영 조건은 AC 전원**이다: 사전 점검은 `pmset -g batt`(못 읽으면 `pmset -g ps`)를 읽어
 "AC 에 꽂혀 있음(charging · charged · AC attached)" 이면 통과, "배터리로 돌고 있음(discharging · Battery Power)" 이면 실패로 본다.
+
+### 1.0 2026-10-07 확정한 owner
+
+- **집 Mac 한 대를 D100 9개 job의 유일한 owner로 쓴다.** 회사 Mac에는 매거진 job만 남긴다.
+- 회사 Mac은 창업자의 통근 시간 08:15~09:40, 18:10~20:30에 덮개가 닫히므로 D100 owner 조건을 만족하지 못한다.
+- 10월 7일 08:19:56 clamshell sleep → 09:12:50 wake가 실제로 관측됐고, 그 사이 09:10:27 첫 댓글
+  마감을 놓쳐 D5 증명이 실패했다. `caffeinate`는 clamshell sleep을 막는 해결책이 아니다.
+- 정상 운영은 창업자가 새벽에 일어나거나 통근 중 노트북을 열어 주는 것에 의존하지 않는다.
+- owner 변경은 아래 cutover 절차로만 한다. 두 Mac에서 D100을 동시에 실행하지 않는다.
 
 ### 1.1 첫 이전 범위 = D100 레인 하나 (단일 정본 `D100_LANE_LABELS`)
 
@@ -88,6 +99,19 @@ D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에�
 | ChatGPT 프로필 · claude CLI | [측정] `~/Library/Application Support/soransoran-chatgpt*` · `~/.local/bin/claude` | ⚪ 매거진 전용 — 이번 범위 밖, 싣지 않는다 |
 | 옛 env 사본 9개 · `env-backup` | [측정] 운영 디렉터리 | ⚪ 싣지 않는다 — 비밀을 더 퍼뜨리지 않는다 |
 
+#### 2.4.1 네이버 수집 세션 — 바꾸면 바로 다시 발급한다
+
+- 🔴 **수집 계정의 아이디·비밀번호·보안 설정을 바꾸면 쿠키 만료일과 무관하게 세션이 즉시 끊길 수 있다.**
+  [측정] 2026-10-07 15:2x 비밀번호 변경 → 15:30 회차가 로그아웃 상태로 상세 16 · 본문 0. 쿠키 만료일 검사는 통과했다.
+  [측정] 2026-10-03 재발급 세션은 로그인됐지만 두 카페가 회원으로 인정하지 않아 10/4~10/7 본문 대신 가입 안내가 저장됐다.
+- 변경 직후 운영 호스트에서 `npm run navercafe:session-setup -- --open` 으로 headed 재발급한다.
+  저장 전에 활성 카페 둘 다 **회원**(카페 홈에 "카페 글쓰기")인지 setup 이 확인하고, 아니면 저장하지 않는다.
+  사람은 같은 창에서 두 카페의 회원 전용 글 본문이 실제로 열리는지 한 번 본다.
+- 가능하면 예약 수집 회차 사이에 한다(레몬테라스 07:30·10:30·13:30·16:30·21:30 · 우아한 갱년기 09:30·11:30·15:30·20:30).
+- 수집 회차는 시작할 때 카페 홈으로 회원 상태를 확인하고, 회원이 아니거나 확인할 수 없으면 상세를 열지 않고
+  `MEMBER_GATE` / `MEMBER_STATUS_UNKNOWN` 실패로 끝낸다. 상세를 열고 본문 0건이면 `BODY_EMPTY` 실패다. 셋 다 Slack 알림(같은 카페·같은 사유 하루 1회).
+- 실제 비밀번호·쿠키 값은 어디에도 기록하지 않는다. 세션 파일은 0600, 열어 보거나 공유하지 않는다.
+
 ### 2.5 절대경로 · nvm
 
 - [측정] 설치 plist 13개 전부가 `/Users/yanadoo/...` 를 박고 있다 — runtime 경로, 로그 경로, `HOME`, `PATH`(매거진 4개는 매거진 runtime 도).
@@ -136,6 +160,11 @@ npm run host:migrate-check                                                      
 | `host-bundle.json` | manifest — `lane: "d100"` · `formatVersion 2`, 파일마다 sha256 · 크기 · 권한 · 종류, env **키 이름만**, plist 별 내보낼 때 loaded 여부, allowlist 에 있지만 설치 plist 가 없던 label(`laneMissing`) |
 
 - 🔴 **모르는 항목은 싣지 않고 export 를 멈춘다**(`unclassified`). 분류는 `scripts/lib/host-migrate.mts` 의 규칙 표에 적는다.
+  이름은 정확히 하나씩만 등록한다 — `persona-autogen-old` · `queue-locks.bak` 같은 비슷한 이름은 여전히 `unclassified` 다.
+- 🔴 **내용 규칙** — 이름만으로 안에 무엇이 쌓일지 보장할 수 없는 항목은 안의 모양까지 본다. `persona-autogen` 은
+  creative JSON 파일만, `queue-locks` 는 매거진 큐 잠금 파일(`<scope>.queue.lock` · `.reclaim`)만 있어야 한다.
+  하위 디렉터리 · 링크 · 다른 이름의 파일이 하나라도 있으면 그 항목은 `unclassified` 로 떨어져 export 가 멈춘다
+  (제외 항목 안의 영구 데이터가 조용히 빠지지 않고, state 항목 안의 모르는 것이 조용히 퍼지지 않는다).
 - 🔴 쥔 잠금(`*.lock` · 매거진 임대 · 배포 잠금)은 싣지 않는다 — 대상에서 영영 풀리지 않는다. 예외: heartbeat `tick-<시각>.lock` 은 지난 틱 표식이라 싣는다.
 - 🔴 묶음은 git 작업트리·운영 경로 안에 만들지 않는다. 묶음 디렉터리 0700 · 비밀 파일 0600.
 - 🔴 화면에 나가는 모든 줄은 비밀 값·비밀 모양 패턴을 가린다. verify 는 비밀이 아닌 파일·manifest 에 비밀이 있으면 `LEAK` 으로 실패한다(파일·키 이름만 적는다).
@@ -218,15 +247,58 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
   전원: 🟢 `AC 연결 · 배터리 charging` (이 MacBook 이 당시 AC 에 꽂혀 있었다). `--apply` 는 rehearsal · 가짜 홈 node 없음 · 자동 로그인 없음으로 거부.
 - 묶음·렌더 결과는 곧바로 삭제했다. 실제 LaunchAgents · env.local · runtime · launchctl 은 건드리지 않았다.
 
-## 7. 창업자 결정 하나
+### 6.3 최신 plan (2026-10-07 09:51 KST)
 
-**D100 을 돌릴 Mac 한 대를 정하고, 그 기계를 "AC 상시 연결 + 자동 로그인(FileVault 끔)" 으로 둘 것인가.**
+- runtime HEAD=pin `38efdd3ee5cb69fc5142d065825ce3d25f764a39`, Node `v24.14.0`.
+- D100 allowlist 9개는 모두 설치돼 있고 loaded다. 매거진 4개 job은 범위 밖이다.
+- state·secret·D100 로그의 예상 bundle은 76.2MB다.
+- 이 plan 시점에는 **미분류 2건 때문에 export가 fail-closed였다.** 아래 분류를 코드에 적은 뒤 미분류는 0이다(§6.4).
 
-- 기종은 묻지 않는다. 쓰지 않는 MacBook 도, 데스크톱 Mac 도 된다. 조건은 사전 점검이 잰다.
+| 경로 | 실측 구조 (2026-10-07) | 처리 |
+|---|---|---|
+| `persona-autogen` | 0700 디렉터리 · `persona30-creative-20261006.json` 1개(5.6KB · 0600) — `persona-autogen --creative-out=` 결과, Persona 6명의 creative | `state`로 이관 · 내용은 creative JSON만 허용 |
+| `queue-locks` | 0755 빈 디렉터리 — **매거진** 큐 writer 잠금(`scripts/lib/magazine-queue-lock.mjs`의 `QUEUE_LOCK_DIR`) | `exclude` · 내용은 `<scope>.queue.lock` · `.reclaim`만 허용 |
+
+- `queue-locks`는 D100 코드가 쓰지 않는다. 매거진이 원 호스트에 남으므로 대상에는 생기지 않는 것이 정상이다
+  (2026-10-07 plan 문서의 "대상에서 새로 생성"은 실제 코드 확인 뒤 이렇게 고쳤다).
+
+- 대상에서 `gh auth login`, `gcloud auth application-default login`을 새로 한다.
+- Naver storage state는 secret으로 옮긴 뒤 대상에서 로그인 유지 여부를 확인한다.
+- 82cook job은 첫 cutover allowlist 밖이며 계속 OFF다. D100 기본 운영이 안정된 뒤 별도 canary와 등록을 한다.
+- 낮에는 분류 보정·검사·rehearsal·대상 install dry-run까지만 한다. 실제 quiesce는 창업자가 퇴근 직전
+  "나 퇴근한다. 원본 Mac quiesce하고 최종 이관 bundle 만들자"라고 알린 뒤 시작한다.
+- 집에서는 "집 도착했다. 집 Mac에 설치하고 운영권 넘기자"라고 알린 뒤 verify·install·운영 확인을 이어간다.
+
+### 6.4 분류 보정 뒤 rehearsal (2026-10-07 10:07 KST · 회사 Mac · 브랜치 `fix/d100-host-cutover-prep`)
+
+- `plan` — 운영 디렉터리 45항목 = state 17 · secret 2 · exclude 26 · **미분류 0**. D100 9개 loaded · 매거진 4개 범위 밖.
+- `export --out=/private/tmp/…` (**rehearsal**, `--cutover` 없음) — **2,474 파일 · 86.0MB**
+  (state 2,444 · 76.2MB / 비밀 3 · 11KB / plist 템플릿 9 · 41KB / D100 로그 18 · 9.7MB). 내장 verify 통과.
+- 별도 `verify` 통과 — 해시 · 권한(비밀 3개 0600) · 누출 0 · 템플릿.
+- 묶음 내용: plist 9개 = D100 allowlist 9개 · `laneMissing` 0 · pin `38efdd3` · `persona-autogen` creative 1개 실림 ·
+  `queue-locks` 0개(제외 목록에 사유) · 매거진 상태·plist·로그 0 · 82cook job·로그 0(과거 수집 원본만 `microseed-data` state) ·
+  `.lock` 은 heartbeat 지난 틱 표식 10개뿐.
+- `install --target-home=/private/tmp/…` dry-run + `--render-to` — 다시 찍은 plist 9개 전부 🟢 · `plutil -lint` 통과 ·
+  원 Mac 절대경로(`/Users/yanadoo`) 0 · 치환 안 된 placeholder 0. `--apply` 는 rehearsal 묶음 · 다른 홈 셸 · 사전 점검 미충족으로 거부 표시
+  (네트워크 점검은 `--skip-network` 로 생략 — 외부 연결 0). 가짜 대상 홈은 만들어지지 않았다.
+- 묶음·render 결과는 검사 뒤 삭제했다. 전후 비교: launchctl loaded 13개(D100 9 · 매거진 4) · LaunchAgents plist mtime/크기 ·
+  runtime HEAD=pin `38efdd3` · env.local/slack.env mtime·크기·권한 · runtime `.env.local` 링크 · handoff/owner 표식 없음 — **전부 같다**.
+- **하지 않은 것**: `quiesce --apply` · `export --cutover` · `install --apply` · rollback/unquiesce 적용. 실제 owner는 아직 회사 Mac이다.
+
+## 7. 확정 결정과 남은 사람 작업
+
+**owner 선택은 끝났다. 집 Mac을 "AC 상시 연결 + 로그인 세션 유지" 상태로 두고 오늘 밤 cutover한다.**
+
+- 기종은 묻지 않는다. 조건은 install 사전 점검이 잰다.
 - **MacBook 이면**: 어댑터를 늘 꽂아 둔다(배터리로 돌기 시작하면 사전 점검이 실패로 본다 — 운영 중에는 `ops:status` 로 본다).
   [추정] 덮개를 닫으면 외부 모니터 없이 잠든다 — 덮개를 열어 두거나, 외부 모니터·전원을 연결한 clamshell 로 둔다.
   배터리가 짧은 정전을 버티므로 `autorestart` 는 요구하지 않는다.
 - **배터리 없는 Mac 이면**: `sudo pmset -a autorestart 1` 이 필요하다(정전 뒤 자동으로 켜짐). 선택: 소형 UPS.
 - 공통 설정(설치 전 사람이 한다): `sudo pmset -a sleep 0 womp 1` · 가능하면 유선 LAN ·
   시스템 설정에서 자동 로그인 = 운영 사용자(→ FileVault 끔이 조건) · nvm node `v24.14.0` · gh/gcloud 로그인.
-- FileVault 를 끄지 않으면: 재부팅(업데이트·정전) 뒤 사람이 비밀번호를 칠 때까지 job 0개다. 이 교환을 받아들일지가 결정의 핵심이다.
+- FileVault를 유지하면 재부팅 뒤 사람이 비밀번호를 칠 때까지 job 0개라는 제한을 받아들여야 한다.
+- 대상에서 `verify`·`install`을 돌릴 코드: `~/Documents/soransoran`에 저장소를 clone하고 `npm ci`를 먼저 한다
+  (`install`은 그 `.git`이 있으면 clone을 건너뛰고 pin SHA로 runtime만 만든다). 대상 쪽 코드는 main의 것으로 충분하다 —
+  이번 분류 보정은 원 Mac의 export에만 필요하다.
+- 창업자가 직접 해야 하는 것은 대상 Mac의 로그인·전원/수면 설정·gh/gcloud/Naver 인증뿐이다. 코드 분류,
+  bundle, quiesce, install 검증과 rollback 판단은 운영 마스터가 지휘한다.

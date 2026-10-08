@@ -256,7 +256,8 @@ export type ReadyCohortFact = {
   sources: number; published: number; lost: number; scheduled: number; unknown: number
   /**
    * 🔴 **slot-valid 결과 1건당 전 비용(USD)** — 현재 JIT 계약 장부가 원천에 **완전히** 연결됐을 때만(`costAttributionOf`).
-   *    손실 · 선별 비용이 이미 들어 있다. legacy · 미연결 · 미정산 · 결말 모름 비용이 하나라도 있으면 `null`(모름).
+   *    손실 · 선별 · 결말 모름 비용이 이미 들어 있다. legacy-only · 미연결 · 미정산이거나 확인된 결과가 0이면 `null`(모름).
+   *    결말 모름은 전체 비용을 분자에 넣은 보수적 상한으로 판정한다.
    *    🔴 raw READY 단가(정산 ÷ 행 수)를 대신 쓰지 않는다.
    */
   usdPerSlotValidResult: number | null

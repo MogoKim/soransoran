@@ -157,7 +157,13 @@ export function judgePages(pages, { mode = 'operate', readOk = true } = {}) {
     }
   }
   if (mode !== 'login' && list.length === 0) {
-    return { ok: false, why: 'ChatGPT page 가 0건이다 — 붙을 창이 없다' }
+    /**
+     * 🔴 판정은 여전히 실패다. 다만 **이 경우만** `zeroPage` 를 단다 — 목록을 정상적으로 읽었고
+     *    남의 페이지도 없는데 붙을 창만 없는 상태다. 호출부는 이 표시가 있을 때만
+     *    ChatGPT 탭 하나를 열고 전체 신원을 다시 본다 (`verifyWithZeroPageBootstrap`).
+     *    읽기 실패·남의 페이지·로그인 모드에는 절대 달지 않는다.
+     */
+    return { ok: false, zeroPage: true, why: 'ChatGPT page 가 0건이다 — 붙을 창이 없다' }
   }
   return { ok: true, pages: list.length }
 }
@@ -213,7 +219,8 @@ export function judgeAutomationProfile({
    */
   if (portInUse) {
     const pg = judgePages(pages, { mode, readOk: pagesReadOk })
-    if (!pg.ok) return { ok: false, code: MISMATCH, why: pg.why, checked }
+    // 🔴 `zeroPage` 는 위의 폴더·표식·권한·포트 주인·명령줄 검사를 **전부 통과한 뒤에만** 여기 닿는다
+    if (!pg.ok) return { ok: false, code: MISMATCH, why: pg.why, ...(pg.zeroPage ? { zeroPage: true } : {}), checked }
     return { ok: true, checked: { ...checked, mode, pages: pg.pages, running: cmd.running } }
   }
   if (requireRunning) {
