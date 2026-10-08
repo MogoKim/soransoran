@@ -82,6 +82,8 @@
     "persona:autogen": "tsx scripts/persona-autogen.mts",
     "persona:autogen-check": "tsx scripts/persona-autogen-check.mts",
     "persona:autogen-db-check": "tsx scripts/persona-autogen-db-check.mts",
+    "persona:creative-check": "tsx scripts/persona-creative-check.mts",
+    "persona:creative-db-check": "tsx scripts/persona-creative-db-check.mts",
     "original-post:persona-match-check": "tsx scripts/original-post-persona-match-check.mts",
     "voice:m3-plan": "tsx scripts/voice-m3-plan.mts",
     "voice:m3-export": "tsx scripts/voice-m3-export.mts",

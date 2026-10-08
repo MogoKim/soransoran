@@ -318,7 +318,7 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
     check('autogen 은 status: \'active\' · daysSinceActive: 0 거짓 입력을 쓰지 않는다',
       !/status: 'active', identity: idn/.test(lib) && !/daysSinceActive: 0/.test(lib))
     check('계기판 readPersonaReserve 는 judgePersonaReserve 를 부른다', /judgePersonaReserve\(/.test(tiers))
-    check('CLI 는 judgeAutogenBatch(겹침·문체 거리)로 판정한다', /judgeAutogenBatch\(cands,/.test(cli))
+    check('CLI 는 judgeAutogenBatch(겹침·문체 거리)로 판정한다', /judgeAutogenBatch\(candsWith\(cr\),/.test(cli) && /const batch = judgeAll\(creative\)/.test(cli))
     check('autogen 은 judgeVoiceSeparation 을 실제로 부른다', /judgeVoiceSeparation\(/.test(lib))
   }
 }
