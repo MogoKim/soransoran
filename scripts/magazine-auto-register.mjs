@@ -47,9 +47,10 @@ import { readFetchResults, fetchResultFor, removeFetchResults, todayKst, readRun
 import { classifyFailure } from './lib/magazine-failure-kind.mjs'
 import { describeFetchFailure } from './magazine-webui-runner.mjs'
 import { fingerprintOf } from './lib/magazine-quarantine.mjs'
-import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
+import { deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath, injectHeroImage, verifyHeroFile } from './lib/magazine-hero.mjs'
-import { validateManuscript, describeReasons } from './lib/magazine-manuscript-guard.mjs'
+import { validateManuscript, describeReasons, briefEchoHeadings } from './lib/magazine-manuscript-guard.mjs'
+import { judgeManuscriptFormat, describeFormatViolation } from './lib/magazine-manuscript-format.mjs'
 import { restoreQueueSnapshot, restoreRegisterPair } from './lib/magazine-queue-lock.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -304,6 +305,28 @@ function commitRegenPair({ tx, draftText, articleText,
   }
 }
 
+/** 형식 위반 요약 — 결과·장부가 같은 문장을 쓴다 (사람용 안내문이 아니라 실제 위반) */
+export function formatViolationSummary(violations, max = 5) {
+  const rows = (violations ?? []).slice(0, max).map(describeFormatViolation)
+  const more = (violations?.length ?? 0) > max ? ` 외 ${violations.length - max}건` : ''
+  return `원고 형식 위반 ${violations?.length ?? 0}건 — ${rows.join(' / ')}${more}`
+}
+
+/** 형식 재생성 패킷에 같이 싣는 표기 규칙 — brief 에 규칙이 빠졌던 글도 무엇이 맞는지 알게 한다 */
+export const FORMAT_RULE_LABEL = '허용 표기는 ## · ### · > · - · 문단 · 마지막 줄 `[CTA] /community/게시판 | 문구 | 앞 문장` 정확히 1개다. 마크다운 링크·번호 목록·표·코드블록·이미지·HTML·h1·h4 는 쓰지 않는다'
+
+/**
+ * 🔴 **형식 위반 → 재생성 실패 목록** (2026-10-08 `clinic-booking-app`).
+ *    위반 줄을 그대로 싣고(최대 8건), 마지막에 표기 규칙 한 줄을 붙인다.
+ *    QA 재생성 패킷(`QA_FAIL`)과 코드가 달라 기존 재생성 HOLD 의 지문을 건드리지 않는다.
+ */
+export function formatRegenFailures(violations) {
+  return [
+    ...(violations ?? []).slice(0, 8).map((v) => ({ code: 'MANUSCRIPT_FORMAT', label: describeFormatViolation(v) })),
+    { code: 'MANUSCRIPT_FORMAT_RULE', label: FORMAT_RULE_LABEL },
+  ]
+}
+
 /** article-draft.ts 의 heroImage 연결 — 없으면 null */
 export function heroLinkOf(src) {
   const m = /^\s*heroImage:\s*\{[\s\S]*?\balt:\s*'((?:[^'\\]|\\.)*)'/m.exec(String(src ?? ''))
@@ -345,7 +368,10 @@ export function applyRegenCandidate({ slug, candidatePath, draftMd, articleTs, r
   try {
     const c = runFn(MD2DRAFT, ['--in', candidatePath, '--out', tx.article.staged])
     if (c.code !== 0 || !existsSync(tx.article.staged)) {
-      return abort({ ok: false, code: 'CONVERT_FAILED', why: `${meaningfulLine(c.stderr || c.stdout)} (재생성 원고 변환 실패 · 원본 유지)` })
+      // 🔴 사람용 출력 대신 같은 판정 함수의 구조화된 위반을 남긴다 (2026-10-08)
+      const fv = judgeManuscriptFormat(text).violations
+      return abort({ ok: false, code: 'CONVERT_FAILED', formatViolations: fv,
+        why: `${fv.length ? formatViolationSummary(fv) : meaningfulLine(c.stderr || c.stdout)} (재생성 원고 변환 실패 · 원본 유지)` })
     }
     let article = readFileSync(tx.article.staged, 'utf8')
     const link = existsSync(articleTs) ? heroLinkOf(readFileSync(articleTs, 'utf8')) : null
@@ -554,9 +580,12 @@ export function drive(slug, opts, deps = {}) {
    */
   const regenHistory = []
   let lastQaFailures = []
+  /** 🔴 원고 형식 위반 — 구조화된 값 그대로 (사람용 안내문을 파싱하지 않는다) */
+  let lastFormatViolations = []
   const evidence = () => ({
     ...(regenHistory.length ? { regenHistory } : {}),
     ...(lastQaFailures.length ? { qaFailures: lastQaFailures } : {}),
+    ...(lastFormatViolations.length ? { formatViolations: lastFormatViolations } : {}),
   })
   const rollback = () => {
     if (!write || (!snapshot.length && !own.length)) return { restored: [], failures: [] }
@@ -583,8 +612,14 @@ export function drive(slug, opts, deps = {}) {
    */
   let held = false
   let failClosed = false
-  const stop = (stage, code, message) => {
-    blockedBy.push({ code, message })
+  /**
+   * 🔴 **입력 수리 필요 — 이 후보는 시도하지 않았다** (2026-10-08 · Codex 재검토).
+   *    brief 형식 계약 위반 · brief echo draft. runner·probe·전송·재생성 0 으로 멈춘 경우만 켠다.
+   *    호출부(processCandidates)는 이 값을 읽어 `attempted`·장부를 건드리지 않고 다음 후보로 간다.
+   */
+  let repairRequired = false
+  const stop = (stage, code, message, extra = {}) => {
+    blockedBy.push({ code, message, ...extra })
     add(stage, 'blocked', message)
     const rolledBack = rollback()
     if (rolledBack.failures.length) {
@@ -594,7 +629,8 @@ export function drive(slug, opts, deps = {}) {
     }
     return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, ...evidence(),
       ...(lastSent !== undefined ? { sent: lastSent } : {}),
-      ...(held ? { held: true } : {}), ...(failClosed ? { failClosed: true } : {}) }
+      ...(held ? { held: true } : {}), ...(failClosed ? { failClosed: true } : {}),
+      ...(repairRequired ? { repairRequired: true } : {}) }
   }
 
   // ── ① gate — 등급·큐·brief ────────────────────────────────
@@ -655,6 +691,16 @@ export function drive(slug, opts, deps = {}) {
      *    brief 가 바뀌어 지문이 달라지면 새 작업으로 연다. 정본 판정은 여전히 자식의 send 직전 예약이다.
      */
     const g0 = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
+    /**
+     * 🔴 **brief 형식 계약 위반은 장부 문제가 아니다** (2026-10-08). 이 글만 막고 회차는 이어 간다.
+     *    runner 0 · probe·Chrome 0 · 전송 0 — 보내지 않았으므로 `sent=false` 다.
+     */
+    if (!g0.ok && g0.code === BRIEF_FORMAT_CONTRACT_REASON) {
+      repairRequired = true
+      lastSent = false
+      return stop('draft', BRIEF_FORMAT_CONTRACT_REASON, `${g0.why} (runner 0 · 전송 0건)`,
+        { contractViolations: g0.contractViolations })
+    }
     if (!g0.ok) {
       failClosed = true
       lastSent = null
@@ -695,26 +741,6 @@ export function drive(slug, opts, deps = {}) {
    */
   if (write) own.push(...fileSnapshot([p.draftMd], { keepIfCreated: true }))
 
-  // ── ③ article-draft.ts ────────────────────────────────────
-  if (!existsSync(p.draftMd)) {
-    return stop('article', 'DRAFT_MD_MISSING', 'draft.md 가 없어 변환할 수 없다')
-  }
-  {
-    // --out 없이 부르면 검사만 한다. dry-run 은 그 모드를 쓴다.
-    const args = write ? ['--in', p.draftMd, '--out', p.articleTs] : ['--in', p.draftMd]
-    const r = runStep(MD2DRAFT, args)
-    if (r.code !== 0) {
-      return stop('article', 'CONVERT_FAILED', meaningfulLine(r.stderr || r.stdout))
-    }
-    add('article', write ? 'ok' : 'skip', write ? 'article-draft.ts 생성' : 'dry-run — 변환 검사만 통과')
-  }
-
-  if (!existsSync(p.articleTs)) {
-    // dry-run 인데 아직 article-draft.ts 가 없으면 이후 단계는 판정할 수 없다.
-    add('qa', 'skip', 'article-draft.ts 없음 — dry-run 에서는 여기까지')
-    return { slug, verdict: 'DRY_RUN_INCOMPLETE', steps, blockedBy, write, dryRun: !write, item }
-  }
-
   /**
    * 🔴 **QA 실패는 끝이 아니라 재생성 신호다** (M3-A).
    *    실패 패킷을 만들어 **기존 ChatGPT 웹 UI 경로**에 넘기고, 회수된 원고를
@@ -732,7 +758,16 @@ export function drive(slug, opts, deps = {}) {
    *    그래서 재생성 **전에** 그날 회수 결과를 읽고, 전송불명이면 시도 자체를 0으로 둔다.
    *    이것은 횟수를 쓰지 않는다 — 원고가 틀린 것이 아니기 때문이다.
    */
-  const firstFetch = (() => {
+  /**
+   * 🔴 **재생성이 실제로 필요할 때만 읽는다** (2026-10-08). 형식 재생성 때문에 이 준비가 article 단계 앞으로
+   *    왔지만, 재생성이 없는 회차가 회수 결과 파일을 새로 읽게 만들지 않는다 — 한 번만 읽고 기억한다.
+   */
+  let firstFetchMemo
+  const firstFetchOf = () => {
+    if (firstFetchMemo === undefined) firstFetchMemo = { value: readFirstFetch() }
+    return firstFetchMemo.value
+  }
+  const readFirstFetch = () => {
     if (deps.firstFetchResult !== undefined) return deps.firstFetchResult
     /**
      * 🔴 회수 경로와 **같은 진입점**으로 읽는다. 각자 읽으면 신원 검사가 한쪽에만 붙고,
@@ -744,17 +779,18 @@ export function drive(slug, opts, deps = {}) {
       ...(deps.fetchResultPath ? { resultPath: deps.fetchResultPath } : {}),
     })
     return st.prior.ok ? fetchResultFor(st.prior.body, slug) : null
-  })()
-  const alreadySent = firstFetch
-    ? classifyFailure({
-      code: firstFetch.reason, stage: firstFetch.stage,
-      message: [firstFetch.errorName, firstFetch.errorDetail].filter(Boolean).join(' · '),
-      sent: firstFetch.sent,
-    })
-    : null
+  }
 
   const regenOnce = (stage, failures, actual = []) => {
     if (!write) return { ok: false, code: 'DRY_RUN', why: 'dry-run — 재생성하지 않는다' }
+    const firstFetch = firstFetchOf()
+    const alreadySent = firstFetch
+      ? classifyFailure({
+        code: firstFetch.reason, stage: firstFetch.stage,
+        message: [firstFetch.errorName, firstFetch.errorDetail].filter(Boolean).join(' · '),
+        sent: firstFetch.sent,
+      })
+      : null
     if (firstFetch && firstFetch.status !== 'ok' && alreadySent?.kind === 'DELIVERY_UNCERTAIN') {
       const why = `첫 회수에서 이미 전송됐다 (${firstFetch.stage ?? '-'} ${firstFetch.reason ?? '-'}) — 다시 보내지 않는다`
       lastSent = firstFetch.sent
@@ -816,6 +852,66 @@ export function drive(slug, opts, deps = {}) {
     } finally {
       rmSync(candidate, { force: true })
     }
+  }
+
+  // ── ③ article-draft.ts ────────────────────────────────────
+  if (!existsSync(p.draftMd)) {
+    return stop('article', 'DRAFT_MD_MISSING', 'draft.md 가 없어 변환할 수 없다')
+  }
+  /**
+   * 🔴 **이미 저장된 draft.md 도 변환기와 같은 판정을 받는다** (2026-10-08 `clinic-booking-app`).
+   *    앞판은 변환기를 그냥 돌렸고, 막히면 사람용 안내문만 남긴 채 멈췄다. 원고는 이미 있으니
+   *    다음 회차도 다시 보내지 않고 같은 자리에서 멈췄다 — 스스로 회복하지 못했다.
+   *
+   *    이제 위반을 **구조화된 실패 패킷**으로 만들어 QA 와 같은 재생성(`regenOnce`)에 넘긴다.
+   *    현재 원고 + 정확한 위반을 보낸다 — 원래 brief 요청을 다시 보내지 않는다.
+   *    예산·예약·attemptId·임시 원고 원자 교체는 QA 재생성과 같은 계약이다.
+   *
+   *    🔴 원고가 brief 를 그대로 되돌려 받은 것(brief echo)이면 재생성하지 않는다.
+   *       "현재 원고" 가 원고가 아니므로 고칠 기준이 없다 — 막고 사유를 남긴다.
+   */
+  {
+    let fmt = judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8'))
+    while (!fmt.ok) {
+      lastFormatViolations = fmt.violations
+      const draftText = readFileSync(p.draftMd, 'utf8')
+      const echo = briefEchoHeadings(draftText)
+      if (echo.length) {
+        repairRequired = true
+        return stop('article', 'DRAFT_INVALID',
+          `저장된 draft.md 가 원고가 아니라 brief 다 (## ${echo.slice(0, 2).join(' · ## ')}) — 형식 재생성 대상이 아니다 · ${formatViolationSummary(fmt.violations, 3)}`,
+          { formatViolations: fmt.violations })
+      }
+      const rr = regenOnce('article', formatRegenFailures(fmt.violations), fmt.violations.map(describeFormatViolation))
+      if (!rr.ok) {
+        if (rr.code === 'REGEN_DELIVERY_HOLD') held = true
+        if (rr.code === 'LEDGER_UNREADABLE') failClosed = true
+        const kindTag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
+        return stop('article', 'CONVERT_FAILED',
+          `${kindTag}${formatViolationSummary(fmt.violations)} · 재생성 ${rr.code}: ${rr.why}`,
+          { formatViolations: fmt.violations })
+      }
+      fmt = judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8'))
+    }
+  }
+  {
+    // --out 없이 부르면 검사만 한다. dry-run 은 그 모드를 쓴다.
+    const args = write ? ['--in', p.draftMd, '--out', p.articleTs] : ['--in', p.draftMd]
+    const r = runStep(MD2DRAFT, args)
+    if (r.code !== 0) {
+      // 🔴 위 판정을 통과했는데 변환기가 막았다 — 판정이 갈라졌다는 뜻이다. 사람용 출력은 보조로만 싣는다
+      const fv = judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8')).violations
+      return stop('article', 'CONVERT_FAILED',
+        fv.length ? formatViolationSummary(fv) : `변환기 실패 — ${meaningfulLine(r.stderr || r.stdout)}`,
+        fv.length ? { formatViolations: fv } : {})
+    }
+    add('article', write ? 'ok' : 'skip', write ? 'article-draft.ts 생성' : 'dry-run — 변환 검사만 통과')
+  }
+
+  if (!existsSync(p.articleTs)) {
+    // dry-run 인데 아직 article-draft.ts 가 없으면 이후 단계는 판정할 수 없다.
+    add('qa', 'skip', 'article-draft.ts 없음 — dry-run 에서는 여기까지')
+    return { slug, verdict: 'DRY_RUN_INCOMPLETE', steps, blockedBy, write, dryRun: !write, item }
   }
 
   // ── ④ magazine QA ─────────────────────────────────────────
