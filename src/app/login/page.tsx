@@ -3,7 +3,11 @@ import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import LoginOnboarding from '@/components/features/login/LoginOnboarding'
 import SignupBlockedNotice from '@/components/features/login/SignupBlockedNotice'
-import { AUTH_CALLBACK_COOKIE_NAMES, resolveSignupFailureReturn } from '@/lib/signup-auth-return'
+import {
+  AUTH_CALLBACK_COOKIE_NAMES,
+  originFromRequestHeaders,
+  resolveSignupFailureReturn,
+} from '@/lib/signup-auth-return'
 
 export const metadata: Metadata = {
   title: '로그인',
@@ -21,14 +25,6 @@ const SIGNUP_BLOCKED = 'female_only'
  * 🔴 이 값 하나만 가입 제안 복귀를 시도한다. 다른 Auth.js 오류는 지금처럼 평소 로그인 화면이다.
  */
 const OAUTH_CALLBACK_ERROR = 'OAuthCallbackError'
-
-/** 이 요청의 origin — Auth.js 가 callback 쿠키에 담는 절대 URL 과 비교한다 */
-function requestOrigin(): string {
-  const h = headers()
-  const host = (h.get('x-forwarded-host') ?? h.get('host') ?? '').split(',')[0].trim()
-  const proto = (h.get('x-forwarded-proto') ?? 'https').split(',')[0].trim()
-  return `${proto}://${host}`
-}
 
 /**
  * 🔴 주소의 callbackUrl 은 이 화면에서 거르지 않는다. 받은 값을 그대로 쓰고 없을 때만 홈으로 둔다.
@@ -49,10 +45,11 @@ export default function LoginPage({
   searchParams: { callbackUrl?: string; error?: string }
 }) {
   if (searchParams.error === OAUTH_CALLBACK_ERROR) {
+    // 🔴 origin 을 정하지 못하면(헤더 누락·손상) 복귀하지 않고 이 화면에 남는다.
     const jar = cookies()
     const target = resolveSignupFailureReturn(
       AUTH_CALLBACK_COOKIE_NAMES.map((name) => jar.get(name)?.value),
-      requestOrigin(),
+      originFromRequestHeaders(headers()),
     )
     if (target) redirect(target)
   }

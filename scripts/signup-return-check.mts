@@ -13,7 +13,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { AUTH_CALLBACK_COOKIE_NAMES, resolveSignupFailureReturn } from '../src/lib/signup-auth-return'
+import { AUTH_CALLBACK_COOKIE_NAMES, originFromRequestHeaders, resolveSignupFailureReturn } from '../src/lib/signup-auth-return'
 import {
   SIGNUP_AUTH_FAILED_TOAST,
   SIGNUP_RETURN_ANCHORS,
@@ -122,6 +122,66 @@ for (const [name, cookies] of badCases) {
   check(`거부(로그인 화면 유지): ${name}`, got === null, String(got))
 }
 
+// ─────────── 2-1. 요청 origin — fail-closed ───────────
+console.log('\n■ 2-1. 요청 origin — 정할 수 없으면 null')
+const H = (o: Record<string, string>) => ({ get: (n: string) => (Object.prototype.hasOwnProperty.call(o, n) ? o[n] : null) })
+const originOk: Array<[string, Record<string, string>, string]> = [
+  ['Production host + https', { host: 'soransoran.com', 'x-forwarded-proto': 'https' }, 'https://soransoran.com'],
+  ['x-forwarded-host 우선', { 'x-forwarded-host': 'soransoran.com', host: 'internal:3000', 'x-forwarded-proto': 'https' }, 'https://soransoran.com'],
+  ['Preview host + https', { 'x-forwarded-host': 'soransoran-git-feat-member-conversion-m4-team.vercel.app', 'x-forwarded-proto': 'https' }, 'https://soransoran-git-feat-member-conversion-m4-team.vercel.app'],
+  ['proto 없는 정상 host 는 https', { host: 'soransoran.com' }, 'https://soransoran.com'],
+  ['localhost + port · proto 없음 → http', { host: 'localhost:3000' }, 'http://localhost:3000'],
+  ['127.0.0.1 → http', { host: '127.0.0.1:3000' }, 'http://127.0.0.1:3000'],
+  ['[::1] → http', { host: '[::1]:3000' }, 'http://[::1]:3000'],
+  ['대문자 localhost 정규화', { host: 'LOCALHOST:3000' }, 'http://localhost:3000'],
+  ['여러 값이면 첫 값', { 'x-forwarded-host': 'soransoran.com, evil.com', 'x-forwarded-proto': 'https,http' }, 'https://soransoran.com'],
+  ['기본 port 는 정규화', { host: 'soransoran.com:443', 'x-forwarded-proto': 'https' }, 'https://soransoran.com'],
+  ['로컬 forwarded http 허용', { host: 'localhost:3000', 'x-forwarded-proto': 'http' }, 'http://localhost:3000'],
+]
+for (const [name, h, expected] of originOk) {
+  const got = originFromRequestHeaders(H(h))
+  check(`origin 허용: ${name}`, got === expected, String(got))
+}
+const originBad: Array<[string, Record<string, string>]> = [
+  ['host 누락', {}], ['빈 host', { host: '' }], ['공백 host', { host: '   ' }], ['빈 forwarded host · 빈 host', { 'x-forwarded-host': '', host: '' }],
+  ['잘못된 proto ftp', { host: 'soransoran.com', 'x-forwarded-proto': 'ftp' }],
+  ['대문자 proto', { host: 'soransoran.com', 'x-forwarded-proto': 'HTTPS' }],
+  ['빈 proto', { host: 'soransoran.com', 'x-forwarded-proto': '' }],
+  ['javascript proto', { host: 'soransoran.com', 'x-forwarded-proto': 'javascript' }],
+  ['userinfo', { host: 'user@soransoran.com' }], ['경로', { host: 'soransoran.com/path' }],
+  ['query', { host: 'soransoran.com?x=1' }], ['fragment', { host: 'soransoran.com#x' }],
+  ['백슬래시', { host: 'soransoran.com\\evil.com' }], ['제어문자', { host: 'soran\u0000soran.com' }],
+  ['공백 포함', { host: 'soran soran.com' }], ['퍼센트 인코딩', { host: '%73oransoran.com' }],
+  ['port 범위 밖', { host: 'soransoran.com:99999' }], ['port 숫자 아님', { host: 'soransoran.com:abc' }],
+  ['콜론 여러 개', { host: 'a:b:c' }], ['닫히지 않은 IPv6', { host: '[::1' }],
+]
+for (const [name, h] of originBad) {
+  let got: string | null | 'threw'
+  try { got = originFromRequestHeaders(H(h)) } catch { got = 'threw' }
+  check(`origin 거부: ${name}`, got === null, String(got))
+}
+{
+  const callbacks = [
+    `https://soransoran.com/onboarding?callbackUrl=${encodeURIComponent('/community/free/abc')}`,
+    `/onboarding?callbackUrl=${encodeURIComponent('/magazine/x')}`, '/community/free/abc', 'https://', '%', '\u0000', '//x', 'x'.repeat(5000),
+  ]
+  const origins: Array<string | null> = [null, '', 'null', 'garbage', 'https://', ':', '\u0000', '//x', 'https://a b', 'http://[::1', 'soransoran.com']
+  let threw = 0
+  let redirected = 0
+  for (const origin of origins) for (const cb of callbacks) {
+    try { if (resolveSignupFailureReturn([cb], origin) !== null) redirected++ } catch { threw++ }
+    try { if (resolveSignupFailureReturn([cb, cb], origin) !== null) redirected++ } catch { threw++ }
+  }
+  check(`손상된 origin × callback ${origins.length * callbacks.length * 2}조합: throw 0 · 복귀 0(로그인 화면 유지)`, threw === 0 && redirected === 0, `threw=${threw} redirected=${redirected}`)
+  let threwOk = 0
+  for (const cb of [...callbacks, undefined]) {
+    try { resolveSignupFailureReturn([cb, '%E0%A4%A'], 'https://soransoran.com') } catch { threwOk++ }
+  }
+  check('정상 origin 에 이상한 callback: throw 0', threwOk === 0)
+}
+check('origin 을 못 정하면 정상 쿠키여도 복귀 0',
+  resolveSignupFailureReturn([`https://soransoran.com/onboarding?callbackUrl=${encodeURIComponent('/community/free/abc')}`], originFromRequestHeaders(H({}))) === null)
+
 // ─────────── 3. 로그인 화면 ───────────
 console.log('\n■ 3. 로그인 화면 — OAuthCallbackError 만 · 실패면 그대로')
 const login = read(P.login)
@@ -138,7 +198,8 @@ check('낡은 주석 정리: 「붙이는 쪽이 없다」 0 · 실제 출처(SI
   !login.includes('지금은 붙이는 쪽이 없다') && login.includes('SIGNUP_BLOCKED_PATH'))
 check('callbackUrl 주석이 쿠키 복귀를 설명한다', login.includes('callback\n *    쿠키에만 둔다') || login.includes('callback 쿠키에만 둔다'))
 check('로그인 화면은 인증 설정·Auth.js 내부를 들이지 않는다', !/from '@\/lib\/auth(\.config)?'|@auth\/core|next-auth/.test(login))
-check('origin 은 요청 헤더에서 · 비밀값 0', /function requestOrigin\(\): string/.test(login) && !/process\.env/.test(loginCode))
+check('origin 은 요청 헤더의 순수 판정 하나 · 비밀값 0', /originFromRequestHeaders\(headers\(\)\),/.test(login)
+  && !/requestOrigin|x-forwarded/.test(loginCode) && !/process\.env/.test(loginCode))
 
 // ─────────── 4. 돌아온 화면 ───────────
 console.log('\n■ 4. 돌아온 화면 — 한 번 소비 · Toast 한 번 · fragment 제거')
