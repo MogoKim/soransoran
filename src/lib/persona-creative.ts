@@ -15,7 +15,7 @@
  *    판정(카드 파서 · seed · 계약 · 겹침 · 문체 거리)은 여기서 하지 않는다 — `judgeAutogenBatch` 그대로다.
  */
 import { BRAND_BANNED_WORDS } from './content-guard'
-import type { LifeSkeleton, PersonaCreative, SeedVoiceCore } from './persona-autogen'
+import { judgeDistinctness, type LifeSkeleton, type PersonaCreative, type SeedVoiceCore } from './persona-autogen'
 import { VARIATION_MAX, VARIATION_MIN } from './persona-card-verify'
 import { isNoGoExpressionItem, noGoExpressionKey } from './persona-no-go'
 import type { StyleVector } from './persona-voice-reference'
@@ -101,6 +101,32 @@ export function creativeBriefOf(input: {
   }
 }
 
+/**
+ * 🔴 **생활사 일치 규칙 — 단일·묶음 프롬프트가 같은 문장을 쓴다** (2026-10-08 P30 실측).
+ *    전업 50대 후반 · 늦은 자녀 양육 · 부모 상시 돌봄 골격에 "일과 양육의 균형" 변주가 나왔고
+ *    돌봄 축은 빠진 채 평범한 젊은 양육 Persona 처럼 읽혔다.
+ *    🔴 이 충돌은 코드로 판정하지 않는다 — "남편의 일과 양육 부담" · "직장 다니는 딸 이야기" 처럼
+ *       남의 일을 말하는 변주와 글자로 구별되지 않아 키워드 규칙은 오탐·누락이 함께 난다(7개 반례 실측).
+ *       대신 프롬프트로 막는다. 영구 사람 검토 단계는 두지 않는다(D20~D100 병목이 된다 — 2026-10-08 마스터 결정).
+ */
+export const CREATIVE_LIFE_RULES: readonly string[] = [
+  '- variations 는 그 사람 자신의 현재 생활에서 반복되는 대화 행동이다',
+  '- 생활사 골격에 없는 직장 · 출퇴근 · 유급 노동을 그 사람의 생활로 만들지 않는다 (workStatus 그대로 — 가족 · 지인의 일 이야기는 괜찮다)',
+  '- 자녀 연령대 · 부모 돌봄 상태를 바꾸지 않는다',
+  '- 모든 생활사 축을 문구에 억지로 나열하지 않아도 된다',
+  '- 드문 생활사 조합을 거부하거나 평균적인 모습으로 바꾸지 않는다 — 그 조합 그대로 일관된 한 사람으로 만든다',
+]
+
+/**
+ * 🔴 **성격 규칙 — 단일·묶음 프롬프트 공통** (2026-10-08). 흔한 성격 한두 항목은 겹칠 수 있다.
+ *    같은 사람인지는 성격 전체 구성 · 관점 · 대화 행동이 정하고, 판정은 `judgeDistinctness` 가 한다.
+ */
+export const CREATIVE_PERSONALITY_RULES: readonly string[] = [
+  '- 흔한 성격 한두 항목은 다른 Persona 와 겹쳐도 된다',
+  '- 성격 전체 구성과 관점 · 대화 행동은 다른 사람이어야 한다',
+  '- 겹침을 피하려고 억지 동의어를 만들지 않는다',
+]
+
 export const CREATIVE_SYSTEM_PROMPT = [
   '당신은 40대 중반~60대 중반 여성 커뮤니티의 **가상 Persona 설계자**다.',
   '주어진 생활사 골격과 말투 관찰값에 맞는 Persona 설계값을 만든다. 실존 인물을 만들거나 묘사하지 않는다.',
@@ -114,10 +140,12 @@ export const CREATIVE_SYSTEM_PROMPT = [
   '',
   '규칙',
   '- 말투 관찰값과 어긋나지 않게 한다 (짧은 문장인 사람에게 긴 글 변주를 주지 않는다)',
-  '- avoid 에 준 기존 Persona 와 앞선 후보의 제목 · 성격 · noGo · 변주 낱말을 되풀이하지 않는다 (같은 뜻의 다른 말로 바꿔 쓰는 것도 피한다)',
+  '- avoid 에 준 기존 Persona 와 앞선 후보의 제목 · 변주를 되풀이하지 않는다 (같은 뜻의 다른 말로 바꿔 쓰는 것도 피한다)',
+  ...CREATIVE_PERSONALITY_RULES,
   '- 모든 글자에 가운뎃점(·) · 원문자(①~⑧) · 줄바꿈 · 백틱 · 세로막대를 쓰지 않는다',
   `- 이 낱말을 쓰지 않는다: ${BRAND_BANNED_WORDS.join(', ')}`,
   '- 의료 · 재무 조언, 정치, 특정 집단 비하를 성격이나 변주로 만들지 않는다',
+  ...CREATIVE_LIFE_RULES,
 ].join('\n')
 
 /** 🔴 user 턴 — 브리프와 피할 대상만. 문자열 조립은 여기 하나다 */
@@ -349,7 +377,7 @@ export const CREATIVE_BATCH_SYSTEM_PROMPT = [
   `- variations: 글 · 댓글에서 실제로 보이는 **대화 행동** ${VARIATION_MIN}~${VARIATION_MAX}개`,
   '',
   '묶음 규칙 — 여섯 명이 서로 다른 실제 사람처럼 느껴져야 한다',
-  '- 후보끼리 같은 성격 낱말을 쓰지 않는다. 같은 뜻의 다른 말로 바꾼 것도 같은 성격이다',
+  ...CREATIVE_PERSONALITY_RULES,
   '- 후보끼리 같은 대화 행동을 쓰지 않는다. 형용사만 바꾸지 말고 **관찰 가능한 행동**이 달라야 한다',
   '  (예시일 뿐 고정 역할이 아니다: 결론부터 말함 · 질문으로 파고듦 · 자기 경험부터 꺼냄 · 짧은 농담을 섞음 · 쉽게 반박함 · 숫자와 상황을 먼저 확인함)',
   '- 각 후보는 다른 후보에게 없는 대화 행동을 두 개 이상 가진다. 생활사와 말투 관찰값에 맞게 배정한다',
@@ -363,6 +391,9 @@ export const CREATIVE_BATCH_SYSTEM_PROMPT = [
   '- 모든 글자에 가운뎃점(·) · 원문자(①~⑧) · 줄바꿈 · 백틱 · 세로막대를 쓰지 않는다',
   `- 이 낱말을 쓰지 않는다: ${BRAND_BANNED_WORDS.join(', ')}`,
   '- 의료 · 재무 조언, 정치, 특정 집단 비하를 성격이나 변주로 만들지 않는다',
+  '',
+  '생활사 규칙',
+  ...CREATIVE_LIFE_RULES,
 ].join('\n')
 
 /** 🔴 batch user 턴 — 후보 브리프(골격 + 말투 관찰값)와 압축 피할 대상뿐 */
@@ -542,7 +573,8 @@ export const UNIQUE_BEHAVIOR_MIN = 2
 /**
  * 🔴 **creative 묶음 품질 계약 — 단일 판정.** Persona 계약(`judgeAutogenBatch`)을 대신하지 않고 그 위에 얹힌다.
  *
- *    ① 후보끼리 같은 personality 항목 0 (공백 무시)
+ *    ① [NEAR_DUPLICATE_PERSONA] 후보끼리 Persona 전체가 겹치면 거부 — 🔴 정본 `judgeDistinctness` 를 그대로 부른다
+ *       (전체 성격 · noGo 겹침 · 생활사 거리 · 제목). personality **한 항목** 같음은 실패가 아니다(2026-10-08)
  *    ② 후보끼리 같은 variation 항목 0 (공백 무시)
  *    ③ 후보마다 다른 후보에게 없는 대화 행동 ≥ 2 — 같은 행동 = 핵심 낱말 절반 이상 겹침(`sameBehavior`)
  *    ④ title — 다른 후보 · 기존 Persona 와 같거나, 사람을 상태명 하나로 부르면(`STATUS_LABELS`) 거부
@@ -560,7 +592,16 @@ export function judgeCreativeQuality(input: CreativeQualityInput): CreativeQuali
     for (const c of cs) for (const x of new Set(pick(c.creative).map(normKey))) owners.set(x, [...(owners.get(x) ?? []), c.code])
     for (const [x, codes] of owners) if (codes.length > 1) problems.push(`${codes.join(',')}: ${rule} — "${x}" 반복`)
   }
-  repeated((c) => c.personality, '같은 personality')
+  // 🔴 Persona 중복의 authority 는 `judgeDistinctness` 하나다 — 임계값을 여기서 새로 만들지 않는다.
+  //    앞판은 "personality 항목 하나라도 같으면 FAIL" 이었다. 흔한 성격 한 낱말(예: 책임감 강함)까지 막아
+  //    판정 통과용 억지 동의어를 만들게 했다(2026-10-08 P27 · P30). 그것은 Persona 중복이 아니다.
+  for (const c of cs) {
+    const subject = { code: c.code, title: c.creative.title, personality: c.creative.personality,
+      noGoTopics: c.creative.noGoTopics, noGoExpressions: c.creative.noGoExpressions, life: c.life }
+    const peers = cs.filter((o) => o.code !== c.code).map((o) => ({ code: o.code, title: o.creative.title,
+      personality: o.creative.personality, noGoTopics: o.creative.noGoTopics, noGoExpressions: o.creative.noGoExpressions, life: o.life }))
+    for (const hit of judgeDistinctness(subject, peers)) problems.push(`${c.code}: [NEAR_DUPLICATE_PERSONA] ${hit}`)
+  }
   repeated((c) => c.variations, '같은 variation')
 
   const uniqueBehaviors: Record<string, number> = {}

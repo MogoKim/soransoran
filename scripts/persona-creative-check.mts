@@ -23,7 +23,7 @@ import {
 } from '../src/lib/persona-autogen'
 import {
   CREATIVE_BATCH_COST_CAP_USD, CREATIVE_BATCH_MAX_OUTPUT_TOKENS, CREATIVE_BATCH_SYSTEM_PROMPT, STATUS_LABELS,
-  behaviorWordsOf, childConflictOf, compactPeerOf, CREATIVE_SYSTEM_PROMPT as SINGLE_PROMPT, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch, sameBehavior,
+  behaviorWordsOf, childConflictOf, compactPeerOf, CREATIVE_SYSTEM_PROMPT as SINGLE_PROMPT, CREATIVE_LIFE_RULES, CREATIVE_PERSONALITY_RULES, creativeBatchPayload, judgeCreativeQuality, parseCreativeBatch, sameBehavior,
   CREATIVE_COST_CAP_USD, CREATIVE_MAX_CANDIDATES, CREATIVE_MAX_OUTPUT_TOKENS, CREATIVE_MODEL, CREATIVE_SYSTEM_PROMPT,
   creativeBriefOf, creativePeerOf, creativeUserPayload, parseCreative, parseCreativeFile, parseProviderCreative, payloadLeaks, type CreativeBrief,
 } from '../src/lib/persona-creative'
@@ -443,7 +443,8 @@ console.log('⑧ creative 묶음 품질 — 단일 판정 judgeCreativeQuality')
   const act = q(ACTUAL)
   const has = (re: RegExp): boolean => act.problems.some((p) => re.test(p))
   check('🔴 실측 5명 파일 → FAIL', !act.ok)
-  check('실측 — "침착함" · "자족적" personality 반복', has(/P26,P27,P29: 같은 personality — "침착함"/) && has(/P26,P29,P32: 같은 personality — "자족적"/))
+  // 🔴 (2026-10-08) personality 한 항목 반복은 더 이상 실패 사유가 아니다 — 실측 5명은 아래 실제 결함으로 계속 FAIL
+  check('실측 — "침착함" · "자족적" 한 항목 반복만으로는 실패 사유가 아니다', !has(/같은 personality/) && !has(/NEAR_DUPLICATE_PERSONA/))
   check('실측 — "남의 말을 먼저 받아주기" variation 반복', has(/P26,P28: 같은 variation/))
   check('실측 — P26 · P32 고유 대화 행동 0개 (전부 다른 후보와 같은 행동)', has(/P26: 고유 대화 행동 0개/) && has(/P32: 고유 대화 행동 0개/))
   check('실측 — P28 상태 낙인형 title', has(/P28: 상태 낙인형 title — "이혼녀"/))
@@ -453,7 +454,44 @@ console.log('⑧ creative 묶음 품질 — 단일 판정 judgeCreativeQuality')
     const r = q(m)
     check(`🔴 ${name} → FAIL`, !r.ok && r.problems.some((p) => re.test(p)), r.problems.join(' / ') || 'PASS')
   }
-  fails('같은 personality (공백 무시)', swap('P32', { personality: ['논리적', '셈이빠름', '계획적'] }), /P26,P32: 같은 personality/)
+  // 🔴 Persona 중복 authority = 정본 judgeDistinctness (임계값 DISTINCT_OVERLAP_MAX · LIFE_NEAR_DIFF_MAX 그대로)
+  {
+    const oneShared = q(swap('P32', { personality: [GOOD6.P26!.personality[0]!, '수다 적음', '규칙 중시'] }))
+    check('🟢 personality 한 항목만 같고 전체 구성이 다르면 PASS', oneShared.ok, oneShared.problems.join(' / '))
+  }
+  fails('personality 전체 · noGo 가 크게 겹침 → 정본 NEAR_DUPLICATE_PERSONA',
+    swap('P32', { personality: [...GOOD6.P26!.personality], noGoTopics: [...GOOD6.P26!.noGoTopics], noGoExpressions: [...GOOD6.P26!.noGoExpressions] }),
+    /P32: \[NEAR_DUPLICATE_PERSONA\] P26: 성격 1\.00 · noGo 1\.00/)
+  {
+    // 생활사가 거의 같고(0칸 차이) personality 과반이 같다 → 정본 세 번째 갈래가 막는다
+    const twin = judgeCreativeQuality({
+      candidates: [
+        { code: 'P26', creative: GOOD6.P26!, life: LIVES.get('P26')! },
+        { code: 'P32', creative: { ...GOOD6.P32!, personality: [...GOOD6.P26!.personality] }, life: LIVES.get('P26')! },
+      ],
+      existingTitles: [],
+    })
+    check('🔴 생활사가 거의 같고 personality 가 크게 겹침 → 정본 판정이 막는다',
+      twin.problems.some((p) => /P32: \[NEAR_DUPLICATE_PERSONA\] P26: 생활사 0칸 차이/.test(p)), twin.problems.join(' / '))
+  }
+  check('🔴 품질 판정이 정본 judgeDistinctness 를 부른다(임계값을 새로 만들지 않는다)', (() => {
+    const lib = readFileSync('src/lib/persona-creative.ts', 'utf-8')
+    return /judgeDistinctness\(subject, peers\)/.test(lib) && !/repeated\(\(c\) => c\.personality/.test(lib) && !/DISTINCT_OVERLAP_MAX|LIFE_NEAR_DIFF_MAX|0\.5/.test(lib.slice(lib.indexOf('export function judgeCreativeQuality')))
+  })())
+  {
+    // 🔴 2026-10-08 실측 P27 · P30 — "책임감 강함" 한 항목만 같다
+    const P27R: PersonaCreative = { title: '혼자 두 아이 양육하며 직장 다니는', personality: ['책임감 강함', '절약 지향', '불안정함', '성실함', '다그치는 편'],
+      noGoTopics: ['남편', '경제 여유'], noGoExpressions: ['"정말 너무 힘들어요"', '"뭐 하는 거예요"'],
+      variations: ['문제의 해결책부터 바로 물어봄', '자기 상황을 빠르게 설명하고 조언을 재촉함', '일과 육아의 스케줄을 자주 언급함'] }
+    const P30R: PersonaCreative = { title: '이혼 후 두 자녀와 읍면에서 사는 여성', personality: ['현실적', '차분함', '책임감 강함', '말이 길되 정돈됨', '남의 처지를 살핌'],
+      noGoTopics: ['전 배우자', '금액', '자녀 자랑', '훈계'], noGoExpressions: ['"그래도 어떻게든"', '"이게 운명이라고 생각해요"', '"우리 애들이 착해서 다행이죠"'],
+      variations: ['상황을 먼저 설명한 뒤 자신의 대처 방식을 말함', '아이들 학교나 일상 이야기를 세밀하게 풀어냄', '읍면 생활에서 느끼는 장점과 불편함을 함께 언급함'] }
+    const pair = judgeCreativeQuality({
+      candidates: [{ code: 'P27', creative: P27R, life: LIVES.get('P27')! }, { code: 'P30', creative: P30R, life: LIVES.get('P30')! }],
+      existingTitles: [],
+    })
+    check('🟢 실측 P27 · P30 — personality 한 항목("책임감 강함")만 같다 → PASS', pair.ok, pair.problems.join(' / '))
+  }
   fails('같은 variation', swap('P32', { variations: ['쉽게 반박하기', '근거 묻기', '장단점 나눠 보기', '기사 링크 요약', '결론부터 한 줄'] }), /P26,P32: 같은 variation/)
   fails('형용사만 바꾼 대화 행동 — 고유 행동 < 2', swap('P32', {
     variations: ['쉽게 반박하기', '가격 비교 먼저', '손님 이야기로 비유', '날짜 확인부터', '질문으로 파고듦'] }), /P32: 고유 대화 행동 1개 < 2/)
@@ -609,6 +647,49 @@ console.log('⑨ CLI 가드 — batch')
   }
   check('🔴 batch 가드 회차 provider 0 · 결과 파일 0', readFileSync(log, 'utf-8').trim() === '' && !existsSync(out))
   rmSync(T, { recursive: true, force: true })
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('⑩ 생활사 일치 — 프롬프트 계약 (2026-10-08 P30 실측)')
+// ─────────────────────────────────────────────────────────
+{
+  check('🔴 단일·묶음 프롬프트가 같은 성격 규칙을 싣고 "같은 성격 낱말 금지" 문구는 없다',
+    CREATIVE_PERSONALITY_RULES.every((r) => SINGLE_PROMPT.includes(r) && CREATIVE_BATCH_SYSTEM_PROMPT.includes(r))
+    && !/같은 성격 낱말을 쓰지 않는다/.test(SINGLE_PROMPT + CREATIVE_BATCH_SYSTEM_PROMPT)
+    && [/한두 항목은 .*겹쳐도/, /전체 구성과 관점 · 대화 행동/, /억지 동의어/].every((re) => CREATIVE_PERSONALITY_RULES.some((r) => re.test(r))))
+  check('🔴 단일·묶음 프롬프트가 같은 생활사 규칙을 모두 싣는다',
+    CREATIVE_LIFE_RULES.length >= 5 && CREATIVE_LIFE_RULES.every((r) => SINGLE_PROMPT.includes(r) && CREATIVE_BATCH_SYSTEM_PROMPT.includes(r)))
+  check('🔴 규칙: 자기 생활 · 골격에 없는 유급 노동 금지 · 자녀 연령대·부모 돌봄 유지 · 축 나열 불필요 · 드문 조합 평탄화 금지',
+    [/자신의 현재 생활/, /직장 · 출퇴근 · 유급 노동/, /자녀 연령대 · 부모 돌봄/, /나열하지 않아도/, /평균적인 모습으로 바꾸지/]
+      .every((re) => CREATIVE_LIFE_RULES.some((r) => re.test(r))))
+  check('🔴 영구 사람 검토 단계를 두지 않는다(D20~D100 병목 금지 — 2026-10-08)',
+    !/CREATIVE_HUMAN_REVIEW|1-b\)/.test(readFileSync('scripts/persona-autogen.mts', 'utf-8'))
+    && !/CREATIVE_HUMAN_REVIEW/.test(readFileSync('src/lib/persona-creative.ts', 'utf-8')))
+
+  // 🔴 코드 판정은 늘리지 않는다 — 아래 정상 사례가 막히지 않음을 잠근다(나이·누락만으로 막지 않는다)
+  const LATE: LifeSkeleton = {
+    ageBand: '50대 후반', birthDate: '1968-05-02', region: '광역시', maritalStatus: '이혼', spouseRelationship: '해당없음',
+    childrenCount: 2, childrenAgeBands: ['중고등', '초등'], childrenLiving: '동거', workStatus: '전업',
+    economicStatus: '여유', housing: '자가', menopauseStatus: '이후', parentCare: '상시',
+  }
+  const one = (variations: string[], title = '늦둥이 둘 키우며 친정어머니 모시는'): string[] => judgeCreativeQuality({
+    candidates: [{ code: 'P30', life: LATE, creative: {
+      title, personality: ['꼼꼼함', '느긋함', '잘 웃음'], noGoTopics: ['재혼 권유'], noGoExpressions: ['다 팔자죠'], variations,
+    } }],
+    existingTitles: [],
+  }).problems.filter((p) => !/고유 대화 행동/.test(p))
+  check('50대 후반 + 초등·중고등 자녀 → 나이만으로 막지 않는다',
+    one(['초등 아이 숙제 봐 준 얘기를 꺼냄', '중학생 아이 학원 고민을 물어봄']).length === 0)
+  check('부모 돌봄을 creative 에 쓰지 않아도 막지 않는다',
+    one(['아이 반찬 고민을 먼저 꺼냄', '살림 요령을 묻고 답함']).length === 0)
+  check('전업 + "집안일과 양육을 병행" → 막지 않는다', one(['집안일과 양육을 병행하는 하루를 얘기함', '살림 요령을 묻고 답함']).length === 0)
+  check('전업 + "직장 다니는 딸 이야기를 함"(남의 일) → 막지 않는다', one(['직장 다니는 딸 이야기를 함', '살림 요령을 묻고 답함']).length === 0)
+  check('직장 Persona + 자기 직장·업무 이야기 → 막지 않는다', judgeCreativeQuality({
+    candidates: [{ code: 'P32', life: { ...LATE, ageBand: '50대 초반', childrenCount: 0, childrenAgeBands: [], childrenLiving: null, workStatus: '직장', maritalStatus: '비혼' },
+      creative: { title: '회사 다니며 부모 챙기는', personality: ['효율적'], noGoTopics: ['혼인 상태'], noGoExpressions: ['저는 혼자라서'],
+        variations: ['회사 업무 요령을 먼저 말함', '퇴근 후 장보기 얘기를 함'] } }],
+    existingTitles: [],
+  }).problems.filter((p) => !/고유 대화 행동/.test(p)).length === 0)
 }
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail`)
