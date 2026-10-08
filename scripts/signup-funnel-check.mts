@@ -230,22 +230,25 @@ check('저장 모듈 import 는 server-only · Prisma 타입 · 순수 계약뿐
 
 // 🔴 두 모듈을 부르는 곳은 회원가입 전환 영역 파일뿐이다 — 익명 기록 경로(gate · endpoint · route)와
 //    ①~④ tracker 경로(send · boundary · tracker · 가입 제안 dialog·저장)와 인증 복귀(복귀 상수·검증·handler).
-//    ⑤ 는 가입 action 이 server-only 가입 완료 helper 와 저장 모듈을 잇는다. 어드민은 아직 0 이다.
+//    ⑤ 는 가입 action 이 server-only 가입 완료 helper 와 저장 모듈을 잇는다. 어드민은 가입 전환 화면 · reader · 계산 모듈이다.
 const importers = (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[])
   .map((f) => f.split('\\').join('/'))
   .filter((f) => /\.(ts|tsx)$/.test(f))
   .filter((f) => !['lib/signup-funnel.ts', 'lib/signup-funnel-store.ts'].includes(f))
   .filter((f) => /from '@\/lib\/signup-funnel(-store)?'|from '\.{1,2}\/[^']*signup-funnel/.test(read(join('src', f))))
   .sort()
-check('두 모듈을 부르는 곳은 회원가입 전환 영역 파일과 가입 action 열셋뿐이다', JSON.stringify(importers) === JSON.stringify([
+check('두 모듈을 부르는 곳은 회원가입 전환 영역 파일 · 가입 action · 가입 전환 어드민 열여섯뿐이다', JSON.stringify(importers) === JSON.stringify([
+  'app/admin/(ops)/members/conversion/page.tsx',
   'app/api/signup-funnel/route.ts',
   'components/features/signup-funnel/SignupFunnelBoundary.tsx',
   'components/features/signup-funnel/SignupFunnelTracker.tsx',
   'components/features/signup-funnel/SignupPromptDialog.tsx',
   'components/features/signup-funnel/SignupReturnHandler.tsx',
   'lib/actions/onboarding.ts',
+  'lib/queries/signup-funnel.ts',
   'lib/signup-auth-return.ts',
   'lib/signup-completion.ts',
+  'lib/signup-funnel-admin.ts',
   'lib/signup-funnel-endpoint.ts',
   'lib/signup-funnel-gate.ts',
   'lib/signup-funnel-send.ts',

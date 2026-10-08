@@ -1,8 +1,8 @@
 import type { Metadata } from 'next'
-import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
 import { formatKst, REAL_MEMBER_WHERE } from '@/lib/admin-format'
+import MemberAdminTabs from '@/components/admin/MemberAdminTabs'
 import {
   AdminPageHeader,
   AdminBadge,
@@ -97,7 +97,7 @@ export default async function AdminMembersPage() {
   return (
     <main className="pt-2 lg:pt-0">
       <AdminPageHeader
-        title="회원"
+        title="회원 관리"
         description={
           total > members.length
             ? `카카오로 가입한 ${total}명 · 최근 가입순 ${members.length}명 표시`
@@ -105,15 +105,8 @@ export default async function AdminMembersPage() {
         }
       />
 
-      {/* 🔴 이 목록의 total 은 가입 미완료·남성·관리자까지 센 수다. 고객 수·연령 구성은 별도 화면이 센다 */}
-      <p className="m-0 mt-1">
-        <Link
-          href="/admin/members/composition"
-          className="inline-flex min-h-[52px] items-center text-sm text-link"
-        >
-          고객 구성 보기 →
-        </Link>
-      </p>
+      {/* 🔴 이 목록의 total 은 가입 미완료·남성·관리자까지 센 수다. 고객 수·연령 구성은 「고객 구성」 탭이 센다 */}
+      <MemberAdminTabs current="members" />
 
       {members.length === 0 ? (
         <AdminEmptyState>
