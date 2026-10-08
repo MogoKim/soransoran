@@ -1,8 +1,8 @@
 # 소란소란 콘텐츠 끝 도달 → 회원가입 전환 정본
 
-> 문서 상태: **v4.2 · MC-M4 구현 계약 확정 정본**
+> 문서 상태: **v4.3 · MC-M4 구현 checkpoint 정본**
 > 마지막 창업자 싱크: **2026-10-07 KST**
-> 현재 단계: **MC-M4 제품 구현 시작 · 0031 Production 적용 완료 · 수집 env·실제 수집 전**
+> 현재 단계: **MC-M4 기능 구현 완료 · 최신 main 통합·build·성능·Preview 검증 전 · push·PR·배포·실제 수집 전**
 > 기획·검증 책임: **Codex [2] 회원가입 전환 마스터**
 > 실행 책임: **Claude Code — 승인된 한 단계씩**
 
@@ -99,7 +99,7 @@ NORTH-STAR
 
 | 축 | 질문 | 현재 상태 |
 |---|---|---|
-| A. 가입 전환 | 로그인되지 않은 방문자가 콘텐츠 끝에서 가입 행동으로 움직였는가 | MC-M3 설계 승인 · 미구현 |
+| A. 가입 전환 | 로그인되지 않은 방문자가 콘텐츠 끝에서 가입 행동으로 움직였는가 | 로컬 기능 구현 완료 · 운영 미적용 · Preview·성능 검증 전 |
 | B. 고객 구성 | 실제 가입자가 목표 여성·연령대와 맞는가 | 고객 구성 어드민 Production PASS |
 | C. 가입 후 가치 | 가입 후 글·댓글·재방문 참여로 이어지는가 | 글·댓글·7일 내 참여 일부 측정, 재방문은 미측정 |
 
@@ -747,7 +747,7 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 | **MC-M2 ✅** | 가입 제안 정책·디자인 | 도달·24시간·B안·문구·상호작용 승인 | 디자인 승인 없이 구현 |
 | **MC-M3 ✅** | 최소 측정·저장·어드민 설계 승인 | 2026-10-07 창업자 승인 — §8 계약·§10 어드민·`SignupFunnelDaily` schema 설계 | 범용 이벤트 원장·개인 추적 |
 | **MC-M3P** | 기존 GA4 정합성 판단 (전환 구현과 별도 작업) | page title·location 정책과 보정 범위 승인 | 신규 퍼널과 무관한 분석 확장·전환 PR에 혼합 |
-| **MC-M4 현재** | 2026-10-07 구현 계약 확정 · 0031 PR-M merge·Production 적용 완료 → 제품 구현 → 두 콘텐츠 유형 Preview 검증 | §8-13 정적·성능·유지보수·Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
+| **MC-M4 현재 — 기능 구현 완료 · 통합/운영 검증 대기** | 완료: 0031 Production 적용 · 데이터 계약과 Prisma 모델 · 익명 ①~④ endpoint · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker · 도달 판정 · B안 가입 제안 · 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ `signup_complete` · 가입 전환 어드민과 회원 공통 하위 탭 · 격리 PostgreSQL 동시성·롤백 검증. 남음: 최신 main 통합 · 공유 파일 D100 마스터 읽기 전용 검토 · production build · 성능 baseline 비교 · Preview·실기기 검증 · push·PR·merge · 실제 수집 env와 MC-M5 | §8-13 정적·성능·유지보수·Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
 | **MC-M5** | 제한적 Production 적용 | 별도 창업자 승인 후 실제 수집 시작 | 승인 없는 merge·배포 |
 | **MC-M6** | 실제 숫자로 순차 개선 | 한 번에 한 질문·한 변경 | 저유입 표본으로 A/B 승자 주장 |
 | **MC-M7** | North Star 연결 | 회원 방문일 근거와 7일 재방문 참여 연결 | 7일 내 참여를 재방문으로 간주 |
@@ -855,37 +855,53 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - MC-M2: 정책·디자인 승인 완료
 - MC-M3: 2026-10-07 최소 측정 설계·`SignupFunnelDaily` schema 설계 승인 (§8). v4.1은 PR #665로 main
   `e6d8b3c`에 merge됨
-- MC-M4: 2026-10-07 구현 계약 확정 (이 v4.2)
-- 가입 제안 제품 코드: 미구현
-- 가입 전환 어드민: 미구현
+- MC-M4: 2026-10-07 구현 계약 확정(v4.2) → 로컬 기능 구현 완료(이 v4.3). 통합·운영 검증 대기
+- MC-M4 구현 완료 범위: ①~④ 익명 기록과 수집 gate · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker와 도달 판정 ·
+  B안 가입 제안과 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ · 가입 전환 어드민과
+  회원 공통 하위 탭. 격리 PostgreSQL 에서 동시 온보딩 1건만 최초 전환·롤백 검증. 세부 검사는 Git 역사에 둔다
 - 0031 migration: PR #669로 main squash `3f9d11d9fcafbe79504e9084e48a9a2a9e93f819`에 merge, 2026-10-07
   Production `prisma migrate deploy` 1회로 적용 완료. Production DB에는 빈 `SignupFunnelDaily` 표만 생성됨
 - 0031 S2 PASS: 열 6개 · 복합 PK `SignupFunnelDaily_pkey`(day, step, contentType, entryPoint) · 행 0 · FK 0 ·
   PK 외 별도 index 0 · 장부 미완료 0 · 롤백 0. 기존 테이블 구조 변경 0(적용 전후 구조 fingerprint 동일)
-- 수집 env(`SIGNUP_FUNNEL_COLLECTION_START`)·실제 수집: 미구현 (MC-M5)
-- 정본·구현 작업 branch: `feat/member-conversion-m4` (main `e6d8b3c` 기준)
+- 수집 env(`SIGNUP_FUNNEL_COLLECTION_START`)·실제 수집: 아직 없음 (MC-M5)
+- 구현 checkpoint: branch `feat/member-conversion-m4` · HEAD `104c2d1ede1d1cfc70880768ee0dd6173144c1ce` ·
+  원격 branch 없음 · worktree clean. 최신 main 은 아직 fetch·merge·rebase 하지 않았다
+- 원격 main 관측값(2026-10-07): `d98baa4ef7af426cb767ecef68f84082dbd56608`. 그때 `e6d8b3c..d98baa4` main 변경 파일과
+  현재 구현 변경 파일의 교집합은 0 이었다. 🔴 이 SHA 는 관측 사실이지 정책이 아니다 — 통합 직전에 다시 확인한다
 
 ### 다음 과제
 
-다음은 각각 별도 승인 대상이다.
+다음 순서로 진행하며, 각 단계는 별도 승인 대상이다.
 
-1. §8 계약에 따른 구현과 §8-13 PASS 검증 (MC-M4)
-2. 정본·구현 branch의 push·PR·merge
-3. 새 검사의 CI 편입 (D100 공용 파일 merge 순서 조율 뒤)
-4. Production env 추가와 수집 시작 (MC-M5)
+1. 원격 main SHA 를 다시 확인한 뒤 그 exact main 을 이 feature branch 에 로컬 merge
+2. 충돌이나 공유 파일의 의미 변화가 있으면 임의로 해결하지 않고 중단
+3. 통합 결과에서 D100·main 변경이 그대로 보존됐는지 확인
+4. D100 마스터가 공유 파일을 읽기 전용으로 검토
+5. build · 성능 baseline · Preview · 실기기 검증 (§8-13)
+6. 정적·성능·Preview PASS 뒤 push · PR
+7. merge · Production 배포 · 수집 env(MC-M5)는 각각 별도 단계
+
+새 검사의 CI 편입은 D100 공용 파일 merge 순서를 조율한 뒤 별도 단계로 한다.
 
 GA4 `page_title`·query 전송 문제는 `MC-M3P` 별도 작업으로 다룬다.
 
-## 19. 현재 남은 결정
+## 19. 현재 남은 결정과 확인
 
-MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§8-5·§8-11·§8-13에서 확정됐다.
-남은 승인과 확인은 다음과 같다.
+MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§8-5·§8-11·§8-13에서 확정됐고 로컬 구현은 끝났다.
+남은 것은 실제 환경에서만 확인할 수 있는 UNKNOWN 과 별도 승인 항목이다.
 
 | 결정·확인 | 현재 상태 |
 |---|---|
-| Preview가 연결된 DB | 과거 기록을 현재 사실로 쓰지 않는다. §8-7 gate는 이 값과 무관하게 Production 카운터를 막는다 |
-| 새 검사의 CI 편입 | MC-M4 범위 밖. D100 공용 파일 merge 순서 조율 뒤 별도 단계 |
-| `SIGNUP_FUNNEL_COLLECTION_START` 추가·시작일 | MC-M5 별도 승인 |
+| Vercel 실제 request origin 과 Auth.js callback origin 일치 | `UNKNOWN` — Preview 실측 |
+| 실제 카카오 성공·취소·실패·창 닫기 복귀 | `UNKNOWN` — Preview·실기기 |
+| bfcache 와 모바일 뒤로가기 history 체감 | `UNKNOWN` — 실기기 |
+| IntersectionObserver 와 충돌 UI 판정 | `UNKNOWN` — 실기기 |
+| 모바일 키보드 · focus trap · scroll lock | `UNKNOWN` — 실기기 |
+| client chunk 와 First Load JS 증가 | `UNKNOWN` — build · 성능 baseline 비교(§8-13) |
+| 온보딩 interactive transaction 의 실제 Production pooler 경로 | `UNKNOWN` — 같은 방식이 이미 다른 운영 경로에 쓰이나 이 action 으로는 미실측 |
+| Preview 가 연결된 DB | `UNKNOWN` — 과거 기록을 현재 사실로 쓰지 않는다. §8-7 gate 로 Preview read·write 0 이어야 한다 |
+| 실제 수집 시작일 env(`SIGNUP_FUNNEL_COLLECTION_START`) | MC-M5 별도 승인 |
+| 새 검사의 CI 편입 | D100 공용 파일 merge 순서 조율 뒤 별도 단계 |
 | GA4 보정 | MC-M3P 별도 작업 |
 
 ## 20. 영구 안전장치
@@ -913,6 +929,7 @@ MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§
 | 2026-10-07 | v4.1 | Codex [2] 보정안을 포함한 MC-M3 최소 측정 계약 승인 — 방문 정의·원자적 최초 전환·A안 표식·단일 env gate·24개월 보존·성능 불변식·유지보수 기준·PASS 기준 |
 | 2026-10-07 | v4.2 | MC-M4 구현 계약 확정 — 요청 단위 세션 공유(D1)·취소·실패 복귀 (a)안과 Toast 문구(D2)·가입 완료 집계 await(D3)·CI 편입 제외(D4)·카카오 버튼 시각 variant·레이어 시작값·도달 타이머 취소·KST server-only 경계·same-origin 검증 |
 | 2026-10-07 | v4.2 상태 | 0031 PR #669 merge(`3f9d11d`)·Production 적용·S2 PASS 기록, MC-M4 제품 구현 시작. 정책 변경 없음 |
+| 2026-10-08 | v4.3 | MC-M4 로컬 기능 구현 checkpoint — ①~⑤, B안 가입 제안, 인증 복귀, 원자적 온보딩, 가입 전환 어드민 완료. 최신 main 통합·build·성능·Preview·배포·수집은 미완료 |
 
 v3.2까지의 세부 결정·검사 횟수·Preview 시행착오·commit·deployment 기록은 Git 역사에 보존한다. 현재 정책과
-충돌할 때는 이 v4.2 현행 절이 이긴다.
+충돌할 때는 이 v4.3 현행 절이 이긴다.
