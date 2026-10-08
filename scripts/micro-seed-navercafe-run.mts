@@ -49,7 +49,7 @@ for (const b of plan.boards) {
     + ` · 상세 최대 ${b.detailMax}건`)
 }
 console.log(`\n  회차당   목록 ${plan.listPerRun}건 · 상세 ${plan.detailPerRun}건`)
-console.log(`  하루     ${plan.requestsPerDay}건 / 상한 ${plan.limitPerDay}건`)
+console.log(`  하루     ${plan.requestsPerDay + plan.memberCheckPerDay}건 (회원 확인 ${plan.memberCheckPerDay} 포함) / 상한 ${plan.limitPerDay}건`)
 console.log(`  판정     ${plan.withinLimit ? '🟢' : '🔴'} ${plan.reason}`)
 
 if (!plan.withinLimit) {

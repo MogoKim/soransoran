@@ -28,6 +28,11 @@ export type FindingCode =
   | 'RUN_SESSION_FILE_MISSING'
   | 'RUN_AUTH_MISSING'
   | 'RUN_AUTH_EXPIRED'
+  /** 🔴 쿠키는 유효한데 카페가 회원으로 인정하지 않는다 — 회원 계정으로 재발급 */
+  | 'RUN_MEMBER_GATE'
+  | 'RUN_MEMBER_STATUS_UNKNOWN'
+  /** 🔴 상세를 열었지만 본문 0건 — `DETAIL_BODY_EMPTY`(최신 회차 산출 관측)와 달리 회차 자체가 실패로 끝났다 */
+  | 'RUN_BODY_EMPTY'
   | 'RUN_SELECTOR'
   | 'RUN_NETWORK'
   | 'RUN_OTHER'

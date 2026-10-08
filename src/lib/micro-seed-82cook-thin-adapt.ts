@@ -24,6 +24,7 @@
  *    소스·SRN 검수는 `access`, raw-review 는 `accessStatus` 를 본다.
  *    한 파일로는 둘 다 만족시킬 수 없어 **두 벌**을 낸다.
  */
+import { isMemberGateText } from './naver-member-gate'
 
 /**
  * 🔴 **정본 데이터 디렉터리** — 한 곳에서만 정의한다.
@@ -223,6 +224,8 @@ const N = (v: unknown): number => {
  * 그래서 길이로부터 유도한다 — 0 이면 읽지 못한 것이다.
  */
 export function accessOf(r: ThinRow): 'ok' | 'failed' {
+  // 🔴 카페 가입 안내는 길이가 있어도 읽은 것이 아니다 (2026-10-04~07 실측 — 244~275자 안내가 ok 로 적혔다)
+  if (isMemberGateText(S(r.bodyHead))) return 'failed'
   return N(r.bodyLength) > 0 ? 'ok' : 'failed'
 }
 
