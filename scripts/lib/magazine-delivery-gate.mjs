@@ -13,6 +13,10 @@ import { buildManuscriptMessage } from './chatgpt-session.mjs'
 import {
   readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH,
 } from './magazine-quarantine.mjs'
+import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
+
+/** 일반 전송 직전 brief 형식 계약 실패 — probe·Chrome·예약·전송 모두 0 */
+export const BRIEF_FORMAT_CONTRACT_REASON = 'BRIEF_FORMAT_CONTRACT'
 
 /**
  * 🔴 **프롬프트 조립을 한 자리에 둔다** (2026-09-28 · P0-1).
@@ -126,6 +130,13 @@ export function legacyPlannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = n
  *
  * 🔴 장부를 못 읽으면 **보내지 않는다** — 모름은 "보낸 적 없음" 이 아니다.
  *
+ * 🔴 **일반 원고 전송은 brief 형식 계약을 통과해야 한다** (2026-10-08 · `BRIEF_FORMAT_CONTRACT`).
+ *    표기 규칙이 빠진 brief 를 보내면 원고가 규칙을 어기는 것이 정상이다 — 전송 1건이 그대로 낭비된다.
+ *    이미 디스크에 있는 brief(gray-hair-leave-as-is 등)는 생성 검사를 다시 지나지 않으므로 **여기서** 본다.
+ *    - HOLD 판정이 먼저다. 이미 보낸 글은 지금처럼 HOLD 로 남는다 (분류·자리 소비 불변).
+ *    - 재생성(packet)은 보지 않는다. 재생성은 현재 원고와 정확한 위반을 함께 보내므로 표기 규칙이 패킷에 있다.
+ *    - 메시지·지문 계산은 바꾸지 않는다. 판정만 더한다.
+ *
  * @returns {{ok:true, message:string|null, messageFingerprint:string|null, hold:object|null}
  *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
  */
@@ -154,6 +165,14 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
     ?? (legacyMessageFingerprint && legacyMessageFingerprint !== messageFingerprint
       ? deliveryHoldsFetch(entry, legacyMessageFingerprint)
       : null)
+  if (!packet && !hold && message !== null) {
+    const contract = judgeBriefFormatContract(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8'))
+    if (!contract.ok) {
+      return { ok: false, code: BRIEF_FORMAT_CONTRACT_REASON, contractViolations: contract.violations,
+        why: `brief 형식 계약 위반 — 보내지 않는다: ${describeBriefViolations(contract.violations)}`,
+        message, messageFingerprint }
+    }
+  }
   // 🔴 `entry` 는 앞단 확인(불필요한 probe 회피)용이다 — 정본 판정은 send 직전 `reserveDelivery` 가 잠금 안에서 한다
   return { ok: true, message, messageFingerprint, legacyMessageFingerprint, entry, hold }
 }

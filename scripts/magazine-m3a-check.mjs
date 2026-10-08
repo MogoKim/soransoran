@@ -27,6 +27,30 @@ import { gate } from './lib/magazine-auto-lane.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
 import { spawnSync as nodeSpawnSync } from 'node:child_process'
 
+/**
+ * 🔴 **시험 brief 도 실제 brief 의 형식 계약을 지닌다** (2026-10-08 · `judgeBriefFormatContract`).
+ *    일반 전송 직전 계약이 생겼다 — 규칙 블록 없는 '# brief' 는 이제 실제로도 보내지 않는다.
+ *    fixture 가 실제보다 느슨하면 계약을 시험하지 못한다. 블록은 **앞에** 붙인다 — 마커 섹션과 섞이지 않게.
+ */
+const BRIEF_FORMAT_FIXTURE = [
+  '[CTA] /community/free | 자유게시판에 이야기 남기기 | CTA 앞에 붙일 한 문장',
+  '',
+  '### 쓸 수 있는 표기가 전부다',
+  '',
+  '| 표기 | 쓰임 |',
+  '|---|---|',
+  '| `## ` | h2 |',
+  '| `### ` | h3 |',
+  '| `> ` | 인용 |',
+  '| `- ` | 목록 |',
+  '| `[CTA] href \\| 문구 \\| 앞 문장` | 마지막에 정확히 1개 |',
+  '',
+  '### 공통 금지',
+  '',
+  '🚫 표 · 코드블록 · 외부 링크 · 마크다운 이미지 · h1 · h4 이하 · HTML · 번호 목록',
+].join('\n')
+const withBriefFormat = (text) => `${BRIEF_FORMAT_FIXTURE}\n\n${text}`
+
 /** 🔴 저장소가 **추적하는** 파일 목록을 읽는다 — 환경에 따라 달라지지 않는 유일한 기준 */
 function spawnSyncTop(cmd, args) {
   const r = nodeSpawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1e8 })
@@ -278,7 +302,7 @@ function asChild(ctx, ledgerPath, outcome) {
  *    가짜 runner 도 실제 자식처럼 `ctx.draftOut` 에만 쓴다. 원고 파일은 **임시 폴더**에 둔다 —
  *    fixture slug 는 저장소가 추적하는 실제 draft 이므로 그 경로에 쓰면 안 된다.
  */
-const fakeManuscript = (tag) => `---\ntitle: 시험 원고는 왜 그런가요\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n시험 표식 ${tag}\n\n[CTA] 이야기 나눠요\n`
+const fakeManuscript = (tag) => `---\ntitle: 시험 원고는 왜 그런가요\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n시험 표식 ${tag}\n\n[CTA] /community/free | 이야기 나눠요 | 함께 나눠요\n`
 const fakeArticle = (from) => `export const DRAFT = {\n  title: '시험',\n  cluster: 'clinic',\n  // heroImage 는 이미지 회수 후 채운다\n  body: [],\n  // from ${from}\n}\n`
 function tempPaths(root) {
   return (sl) => {
@@ -412,7 +436,7 @@ console.log('\n③-B 패킷 수명주기 — 전달 후 0건')
     const draftsDir = path.join(T, 'drafts')
     try {
       fs.mkdirSync(path.join(draftsDir, 'pkt-slug'), { recursive: true })
-      fs.writeFileSync(path.join(draftsDir, 'pkt-slug', 'brief.md'), '# brief\n')
+      fs.writeFileSync(path.join(draftsDir, 'pkt-slug', 'brief.md'), withBriefFormat('# brief\n'))
       fs.writeFileSync(path.join(draftsDir, 'pkt-slug', 'draft.md'), '---\ntitle: 시험\n---\n\n## 본문\n\n기준 원고입니다.\n')
       let sawFile = null
       let sawPacket = null
@@ -641,7 +665,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
      */
     const FIX = 'fixture-candidate'
     fs.mkdirSync(path.join(draftsDir, FIX), { recursive: true })
-    fs.writeFileSync(path.join(draftsDir, FIX, 'brief.md'), '# brief\n')
+    fs.writeFileSync(path.join(draftsDir, FIX, 'brief.md'), withBriefFormat('# brief\n'))
     fs.writeFileSync(path.join(draftsDir, FIX, 'draft.md'), '---\ntitle: 시험\n---\n\n## 본문\n\n기준 원고입니다.\n')
     const fixtureScan = () => ({
       source: 'fixture', pool: 1,
@@ -1615,7 +1639,7 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
     const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-fetch-'))
     try {
       const briefPath = path.join(TMP, 'brief.md')
-      fs.writeFileSync(briefPath, '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+      fs.writeFileSync(briefPath, withBriefFormat('# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n'))
       const outPath = path.join(TMP, 'draft.md')
 
       /** 기존 탭 — 이 탭은 **절대** 닫히면 안 된다 */
@@ -1961,7 +1985,7 @@ console.log('\n⑮ 대상 계약 — selected + reusable')
   const DATE = '2026-09-28'
   const mk = (slug, { brief = 1, review = 1, draft = 0, article = 0 } = {}) => {
     fs.mkdirSync(path.join(D, slug), { recursive: true })
-    if (brief) fs.writeFileSync(path.join(D, slug, 'brief.md'), 'b')
+    if (brief) fs.writeFileSync(path.join(D, slug, 'brief.md'), withBriefFormat('b'))
     if (review) fs.writeFileSync(path.join(D, slug, 'review.ts'), 'r')
     if (draft) fs.writeFileSync(path.join(D, slug, 'draft.md'), 'd')
     if (article) fs.writeFileSync(path.join(D, slug, 'article-draft.ts'), 'a')
@@ -2280,7 +2304,7 @@ console.log('\n⑰ 긴 brief 를 본문으로 보낸다 — 첨부 없음')
 
     for (const [label, bytes] of [['실제 최대', REAL_MAX], ['경계(2배)', REAL_MAX * 2]]) {
       const briefPath = path.join(T, `brief-${bytes}.md`)
-      fs.writeFileSync(briefPath, makeBrief(bytes))
+      fs.writeFileSync(briefPath, withBriefFormat(makeBrief(bytes)))
       const real = fs.statSync(briefPath).size
       const w = makeWorld()
       const r = await SESSION3.fetchManuscript({ ...FAST_FETCH,
@@ -2465,7 +2489,7 @@ console.log('\n⑳ 통합 — producer 선정 0 · 재사용 있음에서 끝까
     /** 재료가 이미 있는 17건 — 단계는 실측 분포 그대로다 */
     const mk = (slug, files) => {
       fs.mkdirSync(path.join(D, slug), { recursive: true })
-      for (const f of files) fs.writeFileSync(path.join(D, slug, f), '#\n')
+      for (const f of files) fs.writeFileSync(path.join(D, slug, f), f === 'brief.md' ? withBriefFormat('#\n') : '#\n')
     }
     const reusable = []
     for (let i = 1; i <= 5; i++) { mk(`e-need-${i}`, ['brief.md', 'review.ts']); reusable.push({ slug: `e-need-${i}` }) }
@@ -2546,7 +2570,7 @@ console.log('\n㉑ 이미 보낸 글은 slug+지문으로 영구히 막힌다')
     }
     const mk = (slug, files, brief = '# brief\n본문\n') => {
       fs.mkdirSync(path.join(D, slug), { recursive: true })
-      for (const f of files) fs.writeFileSync(path.join(D, slug, f), f === 'brief.md' ? brief : '#\n')
+      for (const f of files) fs.writeFileSync(path.join(D, slug, f), f === 'brief.md' ? withBriefFormat(brief) : '#\n')
     }
     for (const s of ['h-a', 'h-b', 'h-c']) mk(s, ['brief.md', 'review.ts'])
     writeRun(DATE, [{ slug: 'h-a' }, { slug: 'h-b' }, { slug: 'h-c' }])
@@ -2598,14 +2622,14 @@ console.log('\n㉑ 이미 보낸 글은 slug+지문으로 영구히 막힌다')
       act(p3, 'h-b') === 'hold:delivery_uncertain', String(act(p3, 'h-b')))
 
     /** 반례 4 — brief 가 바뀌면 지문이 달라져 다시 보낼 수 있다 */
-    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), '# brief\n고친 본문\n')
+    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), withBriefFormat('# brief\n고친 본문\n'))
     const fpB2 = QN5.deliveryFingerprintOf(WEBUI5.plannedMessageFor('h-b', D))
     check('  ㉑[4] brief 가 바뀌면 지문도 바뀐다', fpB2 !== fpB, `${String(fpB).slice(7, 19)} → ${String(fpB2).slice(7, 19)}`)
     const p4 = await plan(DATE2)
     check('🔴 ㉑[4] 지문이 달라지면 재시도 가능', act(p4, 'h-b') === 'fetch', String(act(p4, 'h-b')))
 
     /** 반례 5 — draft.md 가 생기면 회수에서 빠지고 등록 경로로 간다 */
-    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), '# brief\n본문\n')   // 지문 원복 → 다시 HOLD 대상
+    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), withBriefFormat('# brief\n본문\n'))   // 지문 원복 → 다시 HOLD 대상
     fs.writeFileSync(path.join(D, 'h-b', 'draft.md'), '---\n원고\n[CTA]\n')
     const p5 = await plan(DATE2)
     check('🔴 ㉑[5] draft.md 가 생기면 회수 대상이 아니다',
@@ -2938,7 +2962,7 @@ console.log('\n㉖ 전송 직전에 먼저 적는다 — 급사해도 다시 보
     const DATE = '2026-09-28'
     const mk = (slug) => {
       fs.mkdirSync(path.join(D, slug), { recursive: true })
-      fs.writeFileSync(path.join(D, slug, 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+      fs.writeFileSync(path.join(D, slug, 'brief.md'), withBriefFormat('# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n'))
       fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
     }
     for (const s of ['k-a', 'k-b']) mk(s)
@@ -2986,7 +3010,7 @@ console.log('\n㉖ 전송 직전에 먼저 적는다 — 급사해도 다시 보
     check('🔴 ㉖ 다른 후보 k-b 는 계속 진행', act(p2, 'k-b') === 'fetch', String(act(p2, 'k-b')))
 
     /** 🔴 brief 를 고치면 지문이 달라져 다시 보낼 수 있다 */
-    fs.writeFileSync(path.join(D, 'k-a', 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 고친 문장\n')
+    fs.writeFileSync(path.join(D, 'k-a', 'brief.md'), withBriefFormat('# brief\n\n## 반드시 그대로 넣을 문장\n1. 고친 문장\n'))
     check('🔴 ㉖ brief 를 고치면 재시도 가능', act(await plan(), 'k-a') === 'fetch', String(act(await plan(), 'k-a')))
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
@@ -3001,7 +3025,7 @@ console.log('\n㉗ 선기록에 실패하면 한 글자도 보내지 않는다')
   const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-pre-'))
   try {
     const briefPath = path.join(T, 'brief.md')
-    fs.writeFileSync(briefPath, '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+    fs.writeFileSync(briefPath, withBriefFormat('# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n'))
 
     const makeWorld = () => {
       const w = { sendClicks: 0, setInputFiles: 0, typed: '' }
@@ -3167,7 +3191,7 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
     const DATE = '2026-09-28'
     const mk = (slug) => {
       fs.mkdirSync(path.join(D, slug), { recursive: true })
-      fs.writeFileSync(path.join(D, slug, 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+      fs.writeFileSync(path.join(D, slug, 'brief.md'), withBriefFormat('# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n'))
       fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
     }
     for (const s of ['b-a', 'b-b']) mk(s)
@@ -3500,7 +3524,7 @@ console.log('\n㉛ 재생성 회수도 같은 지문 HOLD 를 지난다 (실제 
     const PK = path.join(T, 'packets')
     const mk = (slug) => {
       fs.mkdirSync(path.join(D, slug), { recursive: true })
-      fs.writeFileSync(path.join(D, slug, 'brief.md'), `# ${slug}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
+      fs.writeFileSync(path.join(D, slug, 'brief.md'), withBriefFormat(`# ${slug}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`))
       fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
       fs.writeFileSync(path.join(D, slug, 'draft.md'), `---\ntitle: ${slug}\n---\n\n## 본문\n\n문장 하나가 들어 있는 기준 원고입니다.\n`)
     }
@@ -3624,7 +3648,7 @@ console.log('\n㉜ 전송 직전 재판정 — 다른 프로세스가 먼저 보
     const D = path.join(T, 'drafts', 'magazine')
     const DATE = '2026-09-28'
     fs.mkdirSync(path.join(D, 'lh-a'), { recursive: true })
-    fs.writeFileSync(path.join(D, 'lh-a', 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+    fs.writeFileSync(path.join(D, 'lh-a', 'brief.md'), withBriefFormat('# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n'))
     fs.writeFileSync(path.join(D, 'lh-a', 'review.ts'), '#\n')
     fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
     fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
@@ -3698,7 +3722,7 @@ console.log('\n㉝ 동시 2프로세스 — 같은 slug·같은 지문은 정확
     const D = path.join(T, 'drafts', 'magazine')
     for (const s of ['cc-a', 'cc-b']) {
       fs.mkdirSync(path.join(D, s), { recursive: true })
-      fs.writeFileSync(path.join(D, s, 'brief.md'), `# ${s}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
+      fs.writeFileSync(path.join(D, s, 'brief.md'), withBriefFormat(`# ${s}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`))
       fs.writeFileSync(path.join(D, s, 'review.ts'), '#\n')
     }
     /** 시나리오마다 새 장부·새 barrier */
@@ -3888,7 +3912,7 @@ console.log('\n㉞ 재생성 HOLD 경계에서 급사해도 regenCalls 0 · 재�
     const D = path.join(T, 'drafts', 'magazine')
     const SLUG = 'ck-a'
     fs.mkdirSync(path.join(D, SLUG), { recursive: true })
-    fs.writeFileSync(path.join(D, SLUG, 'brief.md'), `# ${SLUG}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
+    fs.writeFileSync(path.join(D, SLUG, 'brief.md'), withBriefFormat(`# ${SLUG}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`))
     fs.writeFileSync(path.join(D, SLUG, 'review.ts'), '#\n')
     fs.writeFileSync(path.join(D, SLUG, 'draft.md'), `---\ntitle: ${SLUG}\n---\n\n## 본문\n\n문장 하나가 들어 있는 기준 원고입니다.\n`)
     const L = path.join(T, 'ledger.json')
@@ -4017,12 +4041,12 @@ console.log('\n㉟ 예약은 주인만 지우고 · 실패한 쪽은 남의 예�
     const D = path.join(T, 'drafts', 'magazine')
     const DATE = '2026-09-28'
     fs.mkdirSync(path.join(D, 'rs-a'), { recursive: true })
-    fs.writeFileSync(path.join(D, 'rs-a', 'brief.md'), '# brief\n\n본문 지시\n')
+    fs.writeFileSync(path.join(D, 'rs-a', 'brief.md'), withBriefFormat('# brief\n\n본문 지시\n'))
     fs.writeFileSync(path.join(D, 'rs-a', 'review.ts'), '#\n')
     fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
     fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
       JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'rs-a' }] }))
-    const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
+    const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] /community/free | 이야기 나눠요 | 함께 나눠요\n`
     check('  ㉟ 합성 원고가 실제 관문을 통과한다 (전제)', MG35.validateManuscript(GOOD).ok, JSON.stringify(MG35.validateManuscript(GOOD).reasons ?? []))
     const deps = ({ onTyped = () => {}, onAwait = () => {}, ok }, world) => ({ ...FAST_FETCH,
       ensureTab: async () => ({ ok: true }),
@@ -4103,10 +4127,10 @@ console.log('\n㉟ 예약은 주인만 지우고 · 실패한 쪽은 남의 예�
 async function regenStage(T, name, { slug = 'rr-a', slugs = [slug], ledgerSeed = null, probeHook = '' } = {}) {
   const { spawn, spawnSync } = await import('node:child_process')
   const D = path.join(T, `${name}-drafts`)
-  const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
+  const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] /community/free | 이야기 나눠요 | 함께 나눠요\n`
   for (const sl of slugs) {
     fs.mkdirSync(path.join(D, sl), { recursive: true })
-    fs.writeFileSync(path.join(D, sl, 'brief.md'), `# ${sl}\n\n본문 지시\n`)
+    fs.writeFileSync(path.join(D, sl, 'brief.md'), withBriefFormat(`# ${sl}\n\n본문 지시\n`))
     fs.writeFileSync(path.join(D, sl, 'review.ts'), '#\n')
     fs.writeFileSync(path.join(D, sl, 'draft.md'), GOOD)
   }
@@ -4150,7 +4174,7 @@ export const connect = async () => ({
       // 🔴 원고에 **이 자식이 보낸 지시의 코드**를 식별 문장으로 박는다 — 최종 draft 가 누구 것인지 가린다
       async evaluate() {
         rec('evaluate')
-        return ${JSON.stringify(GOOD)}.replace('[CTA]', '식별 ' + ([...typed.matchAll(/\\[([A-Z_]+)\\]/g)].map((m) => m[1]).join(',') || 'NORMAL') + '\\n\\n[CTA]')
+        return ${JSON.stringify(GOOD)}.replace('[CTA]', '식별 ' + ([...typed.matchAll(/\\[([A-Z_]+)\\]/g)].map((m) => m[1]).filter((t) => t !== 'CTA').join(',') || 'NORMAL') + '\\n\\n[CTA]')
       },
       locator(sel) {
         const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
@@ -4452,7 +4476,7 @@ console.log('\n㊳ 늦게 온 옛 실패는 최신 상태를 건드리지 않는
     const PK = path.join(T, 'packets')
     const CAS_D = path.join(T, 'drafts-cas')
     fs.mkdirSync(path.join(CAS_D, 'cas-a'), { recursive: true })
-    fs.writeFileSync(path.join(CAS_D, 'cas-a', 'brief.md'), '# cas-a\n')
+    fs.writeFileSync(path.join(CAS_D, 'cas-a', 'brief.md'), withBriefFormat('# cas-a\n'))
     fs.writeFileSync(path.join(CAS_D, 'cas-a', 'draft.md'), '---\ntitle: CAS 시험\n---\n\n## 본문\n\n기준 원고입니다.\n')
     let before = null
     let rNew = null
@@ -4480,7 +4504,7 @@ console.log('\n㊳ 늦게 온 옛 실패는 최신 상태를 건드리지 않는
     const QB = await import('./lib/magazine-quarantine.mjs')
     const D = path.join(T, 'drafts')
     fs.mkdirSync(path.join(D, 'ai-a'), { recursive: true })
-    fs.writeFileSync(path.join(D, 'ai-a', 'brief.md'), '# ai-a\n\n본문 지시\n')
+    fs.writeFileSync(path.join(D, 'ai-a', 'brief.md'), withBriefFormat('# ai-a\n\n본문 지시\n'))
     fs.writeFileSync(path.join(D, 'ai-a', 'review.ts'), '#\n')
     const LB = path.join(T, 'qb.json')
     QB.saveQuarantine({ 'ai-a': { attempts: 0, regenCalls: 1, note: '불변이어야 한다' } }, LB)
@@ -4698,7 +4722,7 @@ console.log('\n㊵ 같은 날 옛 빈 계획 — 인식 가능한 것만 보존 
     const L = path.join(T, 'ledger.json')
     const brief = (sl) => {
       fs.mkdirSync(path.join(D, sl), { recursive: true })
-      fs.writeFileSync(path.join(D, sl, 'brief.md'), `# ${sl}\n\n본문 지시\n`)
+      fs.writeFileSync(path.join(D, sl, 'brief.md'), withBriefFormat(`# ${sl}\n\n본문 지시\n`))
       fs.writeFileSync(path.join(D, sl, 'review.ts'), '#\n')
     }
     for (const sl of [...DONE6, ...EXTRA]) brief(sl)
@@ -4975,7 +4999,7 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
     return node
   }
   const docOf = (...turns) => ({ body: el('body', {}, el('main', {}, ...turns)) })
-  const MS = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
+  const MS = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] /community/free | 이야기 나눠요 | 함께 나눠요\n`
   check('  ㊶ 시험 원고가 실제 관문을 통과한다 (전제)', MG41.validateManuscript(MS).ok, JSON.stringify(MG41.validateManuscript(MS).reasons ?? []))
 
   /** 새 DOM 한 턴 (실측 골격): 사용자 단위 + assistant 단위 + 턴 액션 버튼 */
@@ -4990,7 +5014,7 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
     el('h2', {}, 'title: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body'),
     el('h2', {}, '첫 문단'),
     el('p', {}, '갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40).trim()),
-    el('p', {}, '[CTA] 이야기 나눠요'))
+    el('p', {}, '[CTA] /community/free | 이야기 나눠요 | 함께 나눠요'))
   /**
    * 🔴 **2026-09-30 실측 rich-block 의 축소 골격.** 원문은 `data-markdown-copy-text` 에 ```markdown 으로 감싸져 있고,
    *    블록 안에는 제목 머리표(header)와 같은 원문을 담은 편집기(contenteditable 속 pre code)가 있다.
@@ -5108,7 +5132,7 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
   const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-capture-'))
   try {
     const briefPath = path.join(T, 'brief.md')
-    fs.writeFileSync(briefPath, '# brief\n\n본문 지시\n')
+    fs.writeFileSync(briefPath, withBriefFormat('# brief\n\n본문 지시\n'))
     const pageWith = (frames) => {
       let typed = ''
       let sent = false
@@ -5148,6 +5172,24 @@ console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · �
       f1.ok && f1.via === 'rich-block' && fs.existsSync(out1) && fs.readFileSync(out1, 'utf8').startsWith('---\ntitle: 시험 원고') && W1.sends === 1,
       `${f1.reason ?? 'ok'} · via ${f1.via} · send ${W1.sends}`)
     check('  ㊶ [통합] 성공 결과에 응답 식별자·형태를 남긴다', f1.assistantMessageId === 'm1' && f1.responseForm === 'rich-block', `${f1.assistantMessageId} · ${f1.responseForm}`)
+    /**
+     * 🔴 **변환할 수 없는 원고는 저장 전에 막는다** (2026-10-08 · md-to-draft 와 같은 판정 함수).
+     *    clinic-booking-app 은 CTA 를 마크다운 링크로 끝내 CTA 0개였고, cold·autumn 은 번호 목록이었다.
+     *    앞판 관문은 `[CTA]` 를 세기만 해 둘 다 draft.md 로 저장됐다.
+     */
+    for (const [name, bad] of [
+      ['CTA 0 (마크다운 링크로 끝남)', MS.replace('[CTA] /community/free | 이야기 나눠요 | 함께 나눠요', '[이야기 나눠요](/community/free)')],
+      ['번호 목록', MS.replace('## 첫 문단\n', '## 첫 문단\n\n1. 첫째 항목입니다\n2. 둘째 항목입니다\n\n')],
+    ]) {
+      const frames = { before: baseDoc, after: [docOf(turn('u1', userUnit('u1'), asstUnit('m1', richContent(richBlock(fenced(bad), { title: '제목 머리표' }))), actions()))] }
+      const Wb = pageWith(frames)
+      const outB = path.join(T, `out-format-${name.length}.md`)
+      const fb = await SESS41.fetchManuscript({ briefPath, outPath: outB, promptText: '시험', validate: MG41.validateManuscript,
+        pollMs: 1, stablePolls: 2, timeoutMs: 2000, ...Wb.deps })
+      const fv = (fb.invalid ?? []).filter((r) => r.code === 'FORMAT_VIOLATION')
+      check(`🔴 ㊶ [통합] ${name} 원고 → draft.md 저장 0 · 형식 위반이 구조화돼 남는다`,
+        !fb.ok && !fs.existsSync(outB) && fv.length > 0, `${fb.reason} · 저장 ${fs.existsSync(outB)} · ${fv.map((r) => r.why).join(' / ').slice(0, 120)}`)
+    }
     // 🔴 모르는 형태 → 전송불명 중단 · 저장 0 · 추가 send 0 · 실패해도 대화 주소·식별자·형태 보존
     const W5 = pageWith({ before: baseDoc, after: [docOf(turn('u1', userUnit('u1'), asstUnit('m5', renderedContent()), actions()))] })
     const out5 = path.join(T, 'out5.md')
@@ -5413,7 +5455,7 @@ console.log('\n㊹ 무전송 회수 — 이미 온 응답만 읽는다 · send·
   try {
     const drafts = path.join(T, 'drafts')
     fs.mkdirSync(path.join(drafts, SLUG44), { recursive: true })
-    fs.writeFileSync(path.join(drafts, SLUG44, 'brief.md'), '# 시험 brief\n\n본문 지시 `코드` 표시가 있다\n')
+    fs.writeFileSync(path.join(drafts, SLUG44, 'brief.md'), withBriefFormat('# 시험 brief\n\n본문 지시 `코드` 표시가 있다\n'))
     const planned = DG44.plannedMessageFor(SLUG44, drafts)
     const fp = DG44.deliveryGate({ slug: SLUG44, draftsDir: drafts, quarantinePath: path.join(T, 'none.json') }).messageFingerprint
     const deliveryRow = { sent: null, messageFingerprint: fp, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', at: 1, runId: 'r1', date: DATE44, reservationId: 'res-44' }
@@ -5784,7 +5826,7 @@ console.log('\n㊺ 재생성 원고 무결성 — brief echo · 바이트 원복
     check('🔴 ㊺ 임시 경로가 없으면 자식을 띄우지 않는다 (전송 0)', spawned === 0 && w.ok === false && w.sent === false && w.reason === 'REGEN_DRAFT_OUT_MISSING', w.reason)
     const D6 = path.join(T, 'cli')
     fs.mkdirSync(path.join(D6, 'rg-x'), { recursive: true })
-    fs.writeFileSync(path.join(D6, 'rg-x', 'brief.md'), '# rg-x\n\n## 반드시 그대로 넣을 문장\n\n1. 시험 문장\n')
+    fs.writeFileSync(path.join(D6, 'rg-x', 'brief.md'), withBriefFormat('# rg-x\n\n## 반드시 그대로 넣을 문장\n\n1. 시험 문장\n'))
     const ID6 = '0b4f1c2e-7a3d-4e5f-9a1b-2c3d4e5f6a7b'
     const PK6 = RG45.writePacket(RG45.buildFailurePacket({ slug: 'rg-x', profile: 'STANDARD', failures: [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }], attempt: 1, attemptId: ID6 }),
       RG45.packetPathFor('rg-x', path.join(D6, 'pk'), ID6))
@@ -5825,7 +5867,7 @@ console.log('\n㊻ 재생성은 현재 원고를 고친다 · 옛 HOLD 호환 ·
   ].join('\n')
   try {
     fs.mkdirSync(D, { recursive: true })
-    fs.writeFileSync(path.join(D, 'brief.md'), brief)
+    fs.writeFileSync(path.join(D, 'brief.md'), withBriefFormat(brief))
     fs.writeFileSync(path.join(D, 'draft.md'), manuscript)
     const packet = RG46.buildFailurePacket({
       slug: SLUG, profile: 'STANDARD', attempt: 1, attemptId: ID,

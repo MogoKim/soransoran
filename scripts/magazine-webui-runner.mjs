@@ -67,7 +67,7 @@ import {
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
-import { manuscriptPromptText, plannedMessageFor, deliveryGate } from './lib/magazine-delivery-gate.mjs'
+import { manuscriptPromptText, plannedMessageFor, deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
 
 /** 🔴 정본은 `lib/magazine-delivery-gate.mjs` 다 — 기존 호출부·시험을 위해 그대로 내보낸다 */
@@ -578,7 +578,8 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
   const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath })
   if (!gate.ok) {
     return { slug, status: 'failed', reason: gate.code, stage: 'ledger', sent: false,
-      messageFingerprint: gate.messageFingerprint, errorDetail: `${gate.why} (한 글자도 보내지 않았다)` }
+      messageFingerprint: gate.messageFingerprint, errorDetail: `${gate.why} (한 글자도 보내지 않았다)`,
+      ...(gate.contractViolations ? { contractViolations: gate.contractViolations } : {}) }
   }
   if (gate.hold) {
     if (!quiet) console.log(`     ⏸ HOLD — ${gate.hold.why}`)
@@ -945,9 +946,12 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
    *    이 계획표는 "몇 건이 HOLD 인가" 를 보여 주고 불필요한 probe 를 피하는 용도다.
    */
   const hold = new Map()
+  /** 🔴 brief 형식 계약 위반 — 보낼 수 없는 글이다. 이것만 남았으면 접근 확인(probe)·Chrome 도 0 이다 */
+  const contractBlocked = new Map()
   for (const slug of fetchSet) {
     const g = deliveryGate({ slug, draftsDir, quarantinePath })
     if (g.ok && g.hold) hold.set(slug, g.hold)
+    if (!g.ok && g.code === BRIEF_FORMAT_CONTRACT_REASON) contractBlocked.set(slug, g)
   }
   if (hold.size) console.log(`  🔴 전송불명 ${hold.size}건은 다시 보내지 않는다 (장부 지문 일치)`)
 
@@ -955,6 +959,11 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     const held = hold.get(t.slug)
     if (fetchSet.has(t.slug) && held) {
       return { slug: t.slug, stage: t.stage, action: 'hold:delivery_uncertain', why: held.why, prior: held.delivery }
+    }
+    const blocked = contractBlocked.get(t.slug)
+    if (fetchSet.has(t.slug) && blocked) {
+      return { slug: t.slug, stage: t.stage, action: 'blocked:brief_format_contract', why: blocked.why,
+        contractViolations: blocked.contractViolations, messageFingerprint: blocked.messageFingerprint }
     }
     return {
       slug: t.slug,
@@ -965,13 +974,15 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   for (const p of planned) {
     const mark = p.action === 'fetch' ? '→ 전송'
       : p.action === 'hold:delivery_uncertain' ? `⏸ HOLD (${p.why})`
-        : `– 건너뜀 (${p.action.split(':')[1]})`
+        : p.action === 'blocked:brief_format_contract' ? `⛔ 보내지 않음 (${p.why})`
+          : `– 건너뜀 (${p.action.split(':')[1]})`
     console.log(`    ${p.slug.padEnd(34)}${mark}`)
   }
   const toFetch = planned.filter((p) => p.action === 'fetch')
   const heldPlans = planned.filter((p) => p.action === 'hold:delivery_uncertain')
+  const contractPlans = planned.filter((p) => p.action === 'blocked:brief_format_contract')
   console.log('')
-  console.log(`  전송 예정 ${toFetch.length}건 · HOLD ${heldPlans.length}건 · 건너뜀 ${planned.length - toFetch.length - heldPlans.length}건`)
+  console.log(`  전송 예정 ${toFetch.length}건 · HOLD ${heldPlans.length}건 · brief 계약 위반 ${contractPlans.length}건 · 건너뜀 ${planned.length - toFetch.length - heldPlans.length - contractPlans.length}건`)
   if (dryRun) {
     console.log('')
     console.log('  🔴 dry-run — 한 글자도 보내지 않았다.')
@@ -984,7 +995,13 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
    *    다음 실행은 "기록 없음" 으로 읽고 **그 글을 다시 보낸다.**
    *    앞 회차가 적어 둔 행을 그대로 이어 붙인다 — 새로 지어내지 않는다.
    */
-  const results = heldPlans.map((p) => ({ ...p.prior, slug: p.slug, status: 'held' }))
+  const results = [
+    ...heldPlans.map((p) => ({ ...p.prior, slug: p.slug, status: 'held' })),
+    // 🔴 계약 위반은 구조화된 위반 목록을 그대로 남긴다 — 사람용 문장을 다시 파싱하지 않게
+    ...contractPlans.map((p) => ({ slug: p.slug, status: 'failed', reason: BRIEF_FORMAT_CONTRACT_REASON, stage: 'ledger',
+      sent: false, messageFingerprint: p.messageFingerprint, contractViolations: p.contractViolations,
+      errorDetail: `${p.why} (한 글자도 보내지 않았다)` })),
+  ]
   let sentTotal = 0
 
   if (toFetch.length) {
