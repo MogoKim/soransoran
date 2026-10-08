@@ -166,7 +166,7 @@ export default function SignupPromptDialog({
         <h2 id={titleId} className="m-0 pr-12 text-xl font-bold leading-[1.35] text-content-primary">
           마음에 남은 이야기를
           <br />
-          <span className="text-brand-ink">계속 이어가세요</span>
+          <span className="text-brand-strong">계속 이어가세요</span>
         </h2>
 
         <ul className="m-0 mt-[14px] flex list-disc flex-col gap-[10px] pl-5 text-content-primary">

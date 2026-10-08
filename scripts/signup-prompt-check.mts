@@ -146,7 +146,7 @@ console.log('\n■ 4. B안 문구 · 접근성 · 레이어 · 닫기 배선')
 const dialog = read(P.dialog)
 const dialogCode = code(dialog)
 check('제목 두 줄 · 둘째 줄만 브랜드색',
-  /마음에 남은 이야기를\n\s*<br \/>\n\s*<span className="text-brand-ink">계속 이어가세요<\/span>/.test(dialog)
+  /마음에 남은 이야기를\n\s*<br \/>\n\s*<span className="text-brand-strong">계속 이어가세요<\/span>/.test(dialog)
   && (dialogCode.match(/text-brand/g) ?? []).length === 1)
 check('불렛 정확히 셋 · 문구 그대로', JSON.stringify([...dialog.matchAll(/<li>(.*?)<\/li>/g)].map((m) => m[1])) === JSON.stringify([
   '내 이야기를 글로 남기기', '마음에 닿은 글에 공감하기', '댓글로 편하게 이야기 나누기',
