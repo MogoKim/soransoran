@@ -119,9 +119,18 @@ const CONTENT_PREFIXES = [
   'QA_FAIL', 'FORBIDDEN_PATTERN', 'MED_', 'FIN_', 'SEN_', 'AGE_WORDING', 'BRAND_LEAK',
   'DUPLICATE_SENTENCE', 'UNSUPPORTED_NUMERIC_CLAIM', 'RISK_SENTENCE', 'markers_missing',
   'invalid_manuscript', 'REGEN_NO_CHANGE',
-  // 🔴 원고·brief 표기 형식 위반 (2026-10-08) — 브라우저·연결 탓이 아니다
-  'MANUSCRIPT_FORMAT', 'FORMAT_VIOLATION', 'BRIEF_FORMAT_CONTRACT', 'DRAFT_INVALID',
+  // 🔴 원고 표기 형식 위반 (2026-10-08) — 받은 원고가 틀렸다. 재생성 계약을 탄다
+  'MANUSCRIPT_FORMAT', 'FORMAT_VIOLATION',
 ]
+
+/**
+ * 🔴 **입력 수리 필요 — 시도가 아니다** (2026-10-08 · Codex 재검토).
+ *    brief 에 표기 규칙이 없다(`BRIEF_FORMAT_CONTRACT`) · 저장된 draft 가 원고가 아니라 brief 다(`DRAFT_INVALID`).
+ *    둘 다 ChatGPT 에 보내기 **전에** 막힌다 — 보낸 원고가 틀린 것이 아니다. CONTENT 로 세면 보내지도 않은 글이
+ *    attempts +1 · 7일 격리에 들어가고, brief·draft 를 고쳐도 격리가 풀릴 때까지 다시 볼 수 없다.
+ *    재생성 횟수도 격리 기록도 쓰지 않는다. 입력(brief·draft)이 고쳐지면 다음 자연 회차가 바로 다시 본다.
+ */
+export const REPAIR_REQUIRED_CODES = ['BRIEF_FORMAT_CONTRACT', 'DRAFT_INVALID']
 
 /**
  * 🔴 **문자열 안에 섞여 온 신호도 본다.** 호출부는 자주 `"QA_FAIL: … — ⛔ [attach]
@@ -149,6 +158,10 @@ export function classifyFailure({ code = null, message = '', stage = null, sent 
   if (/DELIVERY_UNCERTAIN/.test(text)) {
     return { kind: 'DELIVERY_UNCERTAIN', why: '이미 전송된 회차다' }
   }
+
+  // ①-b 입력 수리 필요 — 보내기 전에 멈췄다. 원고 실패로도, 인프라로도 세지 않는다
+  const repairHit = REPAIR_REQUIRED_CODES.find((c) => text.includes(c))
+  if (repairHit) return { kind: 'REPAIR_REQUIRED', why: `입력 수리 필요 (${repairHit}) — 보내지 않았다 · 시도로 세지 않는다` }
 
   // ② 인프라 신호가 **하나라도** 있으면 인프라다. 원고를 탓하지 않는다.
   const infraHit = [...INFRA_CODES].find((c) => text.includes(c))

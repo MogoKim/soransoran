@@ -612,6 +612,12 @@ export function drive(slug, opts, deps = {}) {
    */
   let held = false
   let failClosed = false
+  /**
+   * 🔴 **입력 수리 필요 — 이 후보는 시도하지 않았다** (2026-10-08 · Codex 재검토).
+   *    brief 형식 계약 위반 · brief echo draft. runner·probe·전송·재생성 0 으로 멈춘 경우만 켠다.
+   *    호출부(processCandidates)는 이 값을 읽어 `attempted`·장부를 건드리지 않고 다음 후보로 간다.
+   */
+  let repairRequired = false
   const stop = (stage, code, message, extra = {}) => {
     blockedBy.push({ code, message, ...extra })
     add(stage, 'blocked', message)
@@ -623,7 +629,8 @@ export function drive(slug, opts, deps = {}) {
     }
     return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, ...evidence(),
       ...(lastSent !== undefined ? { sent: lastSent } : {}),
-      ...(held ? { held: true } : {}), ...(failClosed ? { failClosed: true } : {}) }
+      ...(held ? { held: true } : {}), ...(failClosed ? { failClosed: true } : {}),
+      ...(repairRequired ? { repairRequired: true } : {}) }
   }
 
   // ── ① gate — 등급·큐·brief ────────────────────────────────
@@ -689,6 +696,7 @@ export function drive(slug, opts, deps = {}) {
      *    runner 0 · probe·Chrome 0 · 전송 0 — 보내지 않았으므로 `sent=false` 다.
      */
     if (!g0.ok && g0.code === BRIEF_FORMAT_CONTRACT_REASON) {
+      repairRequired = true
       lastSent = false
       return stop('draft', BRIEF_FORMAT_CONTRACT_REASON, `${g0.why} (runner 0 · 전송 0건)`,
         { contractViolations: g0.contractViolations })
@@ -869,6 +877,7 @@ export function drive(slug, opts, deps = {}) {
       const draftText = readFileSync(p.draftMd, 'utf8')
       const echo = briefEchoHeadings(draftText)
       if (echo.length) {
+        repairRequired = true
         return stop('article', 'DRAFT_INVALID',
           `저장된 draft.md 가 원고가 아니라 brief 다 (## ${echo.slice(0, 2).join(' · ## ')}) — 형식 재생성 대상이 아니다 · ${formatViolationSummary(fmt.violations, 3)}`,
           { formatViolations: fmt.violations })

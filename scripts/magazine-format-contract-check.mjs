@@ -48,6 +48,11 @@ const FMT = await import('./lib/magazine-manuscript-format.mjs')
 const MG = await import('./lib/magazine-manuscript-guard.mjs')
 const DG = await import('./lib/magazine-delivery-gate.mjs')
 const Q = await import('./lib/magazine-quarantine.mjs')
+/** 🔴 운영 장부는 읽지도 쓰지도 않는다 — 시작·끝의 수정 시각·해시가 같아야 한다 (없으면 「없음」 그대로) */
+const opsLedgerState = () => (fs.existsSync(Q.QUARANTINE_PATH)
+  ? `${fs.statSync(Q.QUARANTINE_PATH).mtimeMs}:${createHash('sha256').update(fs.readFileSync(Q.QUARANTINE_PATH)).digest('hex')}`
+  : 'absent')
+const OPS_LEDGER_AT_START = opsLedgerState()
 const RG = await import('./lib/magazine-regen.mjs')
 const SESS = await import('./lib/chatgpt-session.mjs')
 const POLICY = await import('./lib/magazine-brief-policy.mjs')
@@ -433,6 +438,7 @@ console.log('\n⑥ 불변 — 일반 전송 메시지 · 기존 지문 · QA 재
   check('⑥ QA 재생성 지시문 바이트 불변 (기존 재생성 HOLD 지문 보존)', h(pk.instruction) === 'aeea1a85dce887b0', h(pk.instruction))
 }
 
+check('운영 장부 파일 불변 (수정 시각 · 해시 · 없음 그대로)', opsLedgerState() === OPS_LEDGER_AT_START, `${OPS_LEDGER_AT_START} → ${opsLedgerState()}`)
 check('실제 CDP 포트 요청 0 (운영 Chrome 에 닿지 않았다)', realCdpAttempts.length === 0, realCdpAttempts.join(' · '))
 finish()
 process.exitCode = fail ? 1 : 0
