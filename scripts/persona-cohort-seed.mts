@@ -16,7 +16,7 @@
  *      · 일부만 쓰는 것 — 하나라도 어긋나면 파일 0
  *      · 다른 내용의 기존 seed 파일 덮어쓰기
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { cohortOf, judgeCohortArg, PRODUCTION_PERSONA_CODES, seedPathOf, verifyAllCohorts } from '../src/lib/persona-cohort'
@@ -24,7 +24,7 @@ import { parsePoolDoc, type PoolCard } from '../src/lib/persona-pool-card'
 import { lifeStageOf, modeCadence, voiceCoreFromBundle, type Cadence } from '../src/lib/persona-autogen'
 import {
   buildCohortSeeds, judgeCohortVoice, judgeCreativeAgainstCards, judgeExistingOutput, readApprovedCreative,
-  seedPrivacyProblems, serializeSeeds, sha256Hex,
+  SEED_FILE_MODE, seedPrivacyProblems, serializeSeeds, sha256Hex,
 } from './lib/persona-cohort-seed.mjs'
 import { planBundles, stableAssignment } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -125,8 +125,21 @@ console.log(`\n  seed ${CODES.length}명 · digest ${digest} · 원문 · 화자
 
 // ── ⑥ 출력 ──
 const path = seedPathOf(COHORT)
-const decision = judgeExistingOutput(existsSync(path) ? readFileSync(path, 'utf-8') : null, text)
+const modeOf = (p: string): number => statSync(p).mode & 0o777
+const octal = (m: number): string => m.toString(8).padStart(3, '0')
+const decision = judgeExistingOutput(existsSync(path) ? { text: readFileSync(path, 'utf-8'), mode: modeOf(path) } : null, text, WRITE)
 if (decision === 'conflict') fail(`[OUTPUT_CONFLICT] ${path} 이 이미 있고 내용이 다르다 — 덮지 않는다(digest ${sha256Hex(readFileSync(path, 'utf-8'))})`)
+if (decision === 'bad-mode') fail(`[OUTPUT_PERMISSION] ${path} 내용은 같지만 권한 ${octal(modeOf(path))} ≠ ${octal(SEED_FILE_MODE)} — --write 로 권한만 고친다`)
+if (decision === 'fix-mode') {
+  // 🔴 내용은 다시 쓰지 않는다 — 권한만 고치고 내용 · 권한을 다시 확인한다
+  const before = modeOf(path)
+  chmodSync(path, SEED_FILE_MODE)
+  if (sha256Hex(readFileSync(path, 'utf-8')) !== digest || modeOf(path) !== SEED_FILE_MODE) {
+    fail(`[OUTPUT_VERIFY] 권한을 고친 뒤 digest · 권한이 맞지 않는다: ${path}`)
+  }
+  console.log(`  ✅ ${path} — 내용은 같아 다시 쓰지 않았다 · 권한 ${octal(before)} → ${octal(SEED_FILE_MODE)}\n`)
+  process.exit(0)
+}
 if (decision === 'same') {
   console.log(`  ✅ ${path} 이 이미 같은 내용이다 — 쓰지 않는다\n`)
   process.exit(0)
@@ -137,8 +150,8 @@ if (!WRITE) {
 }
 mkdirSync(dirname(path), { recursive: true })
 const tmp = `${path}.tmp-${process.pid}`
-writeFileSync(tmp, text, { mode: 0o600 })
-chmodSync(tmp, 0o600)
+writeFileSync(tmp, text, { mode: SEED_FILE_MODE })
+chmodSync(tmp, SEED_FILE_MODE)
 renameSync(tmp, path)
-if (sha256Hex(readFileSync(path, 'utf-8')) !== digest) fail(`[OUTPUT_VERIFY] 쓴 파일 digest 가 다르다: ${path}`)
+if (sha256Hex(readFileSync(path, 'utf-8')) !== digest || modeOf(path) !== SEED_FILE_MODE) fail(`[OUTPUT_VERIFY] 쓴 파일 digest · 권한이 맞지 않는다: ${path}`)
 console.log(`  ✅ ${path} — 원자적 rename · 권한 600 · ${CODES.length}키 · digest ${digest}\n`)

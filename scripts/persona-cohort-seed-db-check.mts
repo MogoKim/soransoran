@@ -14,11 +14,13 @@
  *
  *   ① dry-run → 6명 seed · lifeStage · 파일 0
  *   ② --write → 원자적 파일 · 권한 600 · 정확히 6키 · privacy · 같은 내용 재실행 no-op · 다른 내용 기존 파일 → 거부
+ *   ②-b 🔴 기존 파일 권한 경계 — 같은 내용 0600 no-op · 같은 내용 0644 dry-run 거부 · --write 는 권한만 고침 ·
+ *       다른 내용 0644 → 내용 · 권한 모두 그대로
  *   ③ 잘못된 SHA · creative 누락 · 추가 · 중복 · 카드 불일치 · variation 개수 · 말투 묶음 누락 · cadence 없음 → 파일 0
  *   🔴 모든 회차 DB write 0 · provider 요청 0
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -154,13 +156,29 @@ try {
   check('seed lifeStage = lifeStageOf(카드) · 카드 제목 아님', CODES.every((c) => seeds[c]?.lifeStage === lifeStageOf(card(c)) && seeds[c]?.lifeStage !== card(c).title))
   check('variations = 승인 creative 그대로', CODES.every((c) => JSON.stringify(seeds[c]?.voiceVariations) === JSON.stringify(GOOD[c]!.variations)))
   check('🔴 privacy — 합성 자산 댓글 원문 · 화자 id 0', raw !== '' && !assetRows.some((r) => raw.includes(r.content) || raw.includes(r.speakerId)))
+  // ── ②-b 기존 파일 권한 경계 ──
+  console.log('②-b 🔴 기존 파일 권한 경계')
+  const modeOf = (): number => statSync(OUT).mode & 0o777
   const mtime = existsSync(OUT) ? statSync(OUT).mtimeMs : 0
   const again = cli(args(good, ['--write']))
-  check('같은 내용 재실행 → 쓰지 않는다(멱등)', again.status === 0 && /이미 같은 내용이다/.test(again.out) && statSync(OUT).mtimeMs === mtime && readFileSync(OUT, 'utf-8') === raw)
+  check('🔴 권한 반례 1 — 같은 내용 + 0600 → 성공 · no-op · 내용 · mtime 불변', again.status === 0 && /이미 같은 내용이다/.test(again.out)
+    && statSync(OUT).mtimeMs === mtime && readFileSync(OUT, 'utf-8') === raw && modeOf() === 0o600)
+  chmodSync(OUT, 0o644)
+  const mtime644 = statSync(OUT).mtimeMs
+  const permDry = cli(args(good))
+  check('🔴 권한 반례 2 — 같은 내용 + 0644 + dry-run → exit 1 · [OUTPUT_PERMISSION] · 내용 · 권한 · mtime 불변',
+    permDry.status === 1 && /\[OUTPUT_PERMISSION\]/.test(permDry.out) && readFileSync(OUT, 'utf-8') === raw && modeOf() === 0o644
+    && statSync(OUT).mtimeMs === mtime644, `${modeOf().toString(8)} · ${permDry.out.split('\n').find((l) => l.includes('[')) ?? ''}`)
+  const permFix = cli(args(good, ['--write']))
+  check('🔴 권한 반례 3 — 같은 내용 + 0644 + --write → 내용 다시 쓰지 않음(mtime 불변) · 권한 0600 · 임시 파일 0',
+    permFix.status === 0 && /권한 644 → 600/.test(permFix.out) && readFileSync(OUT, 'utf-8') === raw && modeOf() === 0o600
+    && statSync(OUT).mtimeMs === mtime644 && tmpLeft().length === 0, `${modeOf().toString(8)} · ${permFix.out.slice(-200)}`)
   const other = `${raw.trimEnd().slice(0, -1)},"note":"다른 실행"}\n`
-  writeFileSync(OUT, other, { mode: 0o600 })
+  writeFileSync(OUT, other)
+  chmodSync(OUT, 0o644)
   const conflict = cli(args(good, ['--write']))
-  check('🔴 다른 내용의 기존 파일 → exit 1 · 덮지 않는다', conflict.status === 1 && /\[OUTPUT_CONFLICT\]/.test(conflict.out) && readFileSync(OUT, 'utf-8') === other)
+  check('🔴 권한 반례 4 — 다른 내용 + 0644 + --write → exit 1 · [OUTPUT_CONFLICT] · 내용 · 권한 모두 불변',
+    conflict.status === 1 && /\[OUTPUT_CONFLICT\]/.test(conflict.out) && readFileSync(OUT, 'utf-8') === other && modeOf() === 0o644 && tmpLeft().length === 0)
   rmSync(join(CWD, 'tmp'), { recursive: true, force: true })
 
   // ── ③ fail-closed — 전부 파일 0 ──
@@ -185,7 +203,7 @@ try {
 
   // ── 전 회차 ──
   console.log('④ 🔴 전 회차')
-  const all = [d, w, again, conflict]
+  const all = [d, w, again, permDry, permFix, conflict]
   check('🔴 반례 14 — 모든 회차 provider 요청 0', all.every((r) => r.requests === 0))
   check('🔴 반례 14 — 모든 회차 DB write 0 (Persona · User · 감사 · Post · Comment · Account · 활동)', same(b0, await counts()))
 } finally {

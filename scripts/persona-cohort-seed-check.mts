@@ -145,8 +145,12 @@ console.log('⑤ 🔴 privacy · 기존 출력 파일')
   check('🔴 URL · 이메일 → SEED_PRIVACY', has(seedPrivacyProblems('{"x":"https://example.invalid"}', { texts: [], speakerIds: [] }), 'SEED_PRIVACY')
     && has(seedPrivacyProblems('{"x":"a.b@example.invalid"}', { texts: [], speakerIds: [] }), 'SEED_PRIVACY'))
   check('짧은 맞장구가 겹치는 것은 유출로 세지 않는다(10자 미만)', seedPrivacyProblems('{"x":"맞아요"}', { texts: ['맞아요'], speakerIds: [] }).length === 0)
-  check('기존 파일 없음 → write · 같은 내용 → same · 다름 → conflict',
-    judgeExistingOutput(null, 'a') === 'write' && judgeExistingOutput('a', 'a') === 'same' && judgeExistingOutput('a', 'b') === 'conflict')
+  const at = (text: string, mode: number) => ({ text, mode })
+  check('기존 파일 없음 → write', judgeExistingOutput(null, 'a', false) === 'write' && judgeExistingOutput(null, 'a', true) === 'write')
+  check('🔴 같은 내용 + 0600 → same(no-op)', judgeExistingOutput(at('a', 0o100600), 'a', false) === 'same' && judgeExistingOutput(at('a', 0o600), 'a', true) === 'same')
+  check('🔴 같은 내용 + 0644 + dry-run → bad-mode(실패)', judgeExistingOutput(at('a', 0o644), 'a', false) === 'bad-mode')
+  check('🔴 같은 내용 + 0644 + --write → fix-mode(권한만)', judgeExistingOutput(at('a', 0o644), 'a', true) === 'fix-mode' && judgeExistingOutput(at('a', 0o400), 'a', true) === 'fix-mode')
+  check('🔴 다른 내용 → 권한과 무관하게 conflict', judgeExistingOutput(at('a', 0o644), 'b', true) === 'conflict' && judgeExistingOutput(at('a', 0o600), 'b', false) === 'conflict')
 }
 
 // ── ⑥ 기존 의미 불변 ──
@@ -174,7 +178,10 @@ console.log('⑦ CLI 연결')
   check('🔴 CLI 는 DB 를 읽기만 한다(create · update · delete · upsert · $transaction 0)', !/\.(create|update|updateMany|delete|deleteMany|upsert|createMany)\(|\$transaction|\$executeRaw/.test(cli))
   check('🔴 CLI 는 provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(/i.test(cli))
   check('🔴 --write 일 때만 쓴다 · 임시 파일 → rename · 600', /if \(!WRITE\) \{/.test(cli) && cli.indexOf('if (!WRITE) {') < cli.indexOf('writeFileSync(tmp')
-    && /writeFileSync\(tmp, text, \{ mode: 0o600 \}\)/.test(cli) && /renameSync\(tmp, path\)/.test(cli))
+    && /writeFileSync\(tmp, text, \{ mode: SEED_FILE_MODE \}\)/.test(cli) && /chmodSync\(tmp, SEED_FILE_MODE\)/.test(cli) && /renameSync\(tmp, path\)/.test(cli))
+  check('🔴 CLI 가 기존 파일 권한을 판정에 넘기고 bad-mode · fix-mode 를 처리한다',
+    /judgeExistingOutput\(existsSync\(path\) \? \{ text: readFileSync\(path, 'utf-8'\), mode: modeOf\(path\) \} : null, text, WRITE\)/.test(cli)
+    && /\[OUTPUT_PERMISSION\]/.test(cli) && /chmodSync\(path, SEED_FILE_MODE\)/.test(cli))
 }
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

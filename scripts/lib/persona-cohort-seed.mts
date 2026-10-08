@@ -152,11 +152,26 @@ export function seedPrivacyProblems(text: string, asset: { texts: readonly strin
   ]
 }
 
+/** seed 파일 권한 — 소유자 읽기·쓰기만 */
+export const SEED_FILE_MODE = 0o600
+
+export type ExistingOutputDecision = 'write' | 'same' | 'conflict' | 'fix-mode' | 'bad-mode'
+
 /**
- * 🔴 **기존 출력 파일** — 없으면 쓴다 · 같은 digest 면 그대로 둔다(멱등) · 다르면 **덮지 않는다**.
- *    다른 실행 · 다른 승인으로 만든 seed 를 조용히 바꾸지 않는다.
+ * 🔴 **기존 출력 파일** — 내용이 먼저, 권한이 그다음이다.
+ *    · 없음                         → write
+ *    · 내용 다름                     → conflict — **덮지 않는다**(내용 · 권한 모두 그대로). 다른 실행 · 다른 승인의 seed 다
+ *    · 내용 같음 · 0600              → same — no-op(내용 · mtime 불변)
+ *    · 내용 같음 · 0600 아님 · dry-run → bad-mode — 실패, 파일 불변
+ *    · 내용 같음 · 0600 아님 · --write → fix-mode — 내용은 다시 쓰지 않고 권한만 0600
  */
-export function judgeExistingOutput(existing: string | null, next: string): 'write' | 'same' | 'conflict' {
+export function judgeExistingOutput(
+  existing: { text: string; mode: number } | null,
+  next: string,
+  write: boolean,
+): ExistingOutputDecision {
   if (existing === null) return 'write'
-  return sha256Hex(existing) === sha256Hex(next) ? 'same' : 'conflict'
+  if (sha256Hex(existing.text) !== sha256Hex(next)) return 'conflict'
+  if ((existing.mode & 0o777) === SEED_FILE_MODE) return 'same'
+  return write ? 'fix-mode' : 'bad-mode'
 }
