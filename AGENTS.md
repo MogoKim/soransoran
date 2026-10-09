@@ -3,6 +3,14 @@
 > 이 저장소는 **소란소란(soransoran.com)** 전용이다.
 > 우나어(age-doesnt-matter) 저장소의 지침을 그대로 적용하지 않는다.
 
+## 🔴 0순위 — 저장소 정체성을 먼저 확인한다
+
+소란소란 작업을 계획·진단·수정하기 전에 `git rev-parse --show-toplevel`, `git remote get-url origin`,
+`node -p "require('./package.json').name"`을 확인한다. 의도한 `soransoran*` worktree가 아니거나 package name이
+`soransoran`이 아니면 중단한다. 특히 `unao-main`·`age-doesnt-matter`에서 소란소란 명령·DB/env 접근·문서 수정을
+하지 않는다. 문서별 권한과 역사 분류는
+[`docs/operations/D100-DOCUMENT-INVENTORY.md`](docs/operations/D100-DOCUMENT-INVENTORY.md)를 따른다.
+
 ## 🔴 작업 시작 전 반드시 읽는다 — 운영 정본
 
 [`docs/operations/README.md`](docs/operations/README.md) 가 **권위 인덱스 하나**다. 현재 정책이나 실행을 말할 수
@@ -23,8 +31,9 @@
 - **단계**: 그날의 단계는 `StageDecision` 행 하나가 정한다. GitHub stage Variables · env 의 단계 값 ·
   canary 창은 단계를 정하는 근거가 아니다. 사람이 단계를 올리는 routine 절차는 없다.
 - **자동 일정 owner**: D100 레인 job 의 자동 일정 owner 는 상시 호스트의 launchd 하나다. GitHub Actions 예약과 겹치지 않는다.
-- 🔴 위 둘은 **목표 상태이며 구현 중 · 미배포**다. 지금 runtime 이 무엇을 읽는지는
-  [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 충돌 장부가 적는다 — 문서 문장을 운영 사실로 읽지 않는다.
+- 위 둘은 main과 보조 Mac runtime에 배포됐다. 실제 오늘 값은 문서나 env 기본값이 아니라 `StageDecision`,
+  `launchctl`, runtime pin을 읽어 확인한다. 배포·운영 상태는
+  [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md)가 적는다.
 - 완성 글을 쌓아 둔 편수 · 며칠치는 성공 기준이 아니다 — 준비도는 canon 의 증명일/지속 준비도 하나이고, 폐기한 옛 목표는 canon §10 이 적는다.
 
 🔴 **매거진의 검색 키워드·주제 선정·시리즈·관련 글·SEO 성장 작업은 반드시**
@@ -76,12 +85,14 @@ cutover처럼 외부 권한이나 비가역성이 있는 변경은 창업자 결
 ### 우나어와의 분리
 
 ```
-🔴 분리한다   repo · DB · 계정 · 도메인 · 인프라 · 콘텐츠
+🔴 분리한다   실행 repo · 운영 DB · 계정 · 도메인 · 인프라 · 콘텐츠
               로고 · OG · favicon · manifest · public asset
               verification · AdSense · Kakao 앱 · localStorage 키
 
 ✅ 참고한다   Next.js/Prisma/Auth/UI 패턴 · 디자인 시스템 뼈대
               메인 브랜드 컬러 #FF6F61 (임시 채택 · 교체 가능 구조)
+🟡 역사 자료  초기 Voice 자산을 만들 때 사용한 UnaEO read-only 설계·connector 이름
+              — 현재 D100 runtime 경계로 해석하지 않고, active import·credential은 별도 감사한다
 ```
 
 ⚠️ **"컬러를 재사용한다"와 "자산을 재사용한다"는 다르다.**

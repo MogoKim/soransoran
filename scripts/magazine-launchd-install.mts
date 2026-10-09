@@ -81,6 +81,11 @@ export const MAGAZINE_JOBS = [
    *    공개가 끝난 뒤라야 뒤의 질문이 참이 된다.
    */
   'com.soransoran.magazine-graph-watch',
+  /**
+   * 🔴 02:00 — 01:00 자동 병합이 CI 시간 초과 등으로 못 끝낸 자동 PR 1건을 **같은 관문**으로 다시 본다
+   *    (2026-10-09 #675). 할 일이 없으면 쓰기 0. 11:00 watch 는 계속 공개 확인 전용이다.
+   */
+  'com.soransoran.magazine-auto-merge-recovery',
 ] as const
 
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')

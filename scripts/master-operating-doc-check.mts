@@ -20,6 +20,8 @@ const NORTH_STAR = 'docs/operations/NORTH-STAR.md'
 const D100_GOAL = 'docs/operations/2026-09-21-d100-goal-canon.md'
 const CURRENT = 'docs/operations/CURRENT-MILESTONE.md'
 const ALWAYS_ON = 'docs/operations/ALWAYS-ON-HOST.md'
+const INVENTORY = 'docs/operations/D100-DOCUMENT-INVENTORY.md'
+const PERSONA_POOL = 'docs/operations/2026-08-30-persona-pool-design.md'
 const HISTORICAL_ORIGINAL = 'docs/operations/2026-09-02-original-post-lane-strategy.md'
 const HISTORICAL_AUTOMATION = 'docs/operations/2026-09-03-controlled-activity-automation-strategy.md'
 const HISTORICAL_MILESTONES = 'docs/operations/2026-08-26-soransoran-milestones.md'
@@ -31,6 +33,8 @@ const northStar = readFileSync(NORTH_STAR, 'utf8')
 const d100Goal = readFileSync(D100_GOAL, 'utf8')
 const current = readFileSync(CURRENT, 'utf8')
 const alwaysOn = readFileSync(ALWAYS_ON, 'utf8')
+const inventory = readFileSync(INVENTORY, 'utf8')
+const personaPool = readFileSync(PERSONA_POOL, 'utf8')
 const historicalOriginal = readFileSync(HISTORICAL_ORIGINAL, 'utf8')
 const historicalAutomation = readFileSync(HISTORICAL_AUTOMATION, 'utf8')
 const historicalMilestones = readFileSync(HISTORICAL_MILESTONES, 'utf8')
@@ -207,7 +211,8 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && !activeTextOf(master).includes('전체 댓글의 30% 이하를 기본 안전 상한')])
   out.push(['README 가 상시 호스트 문서를 현재 실행 runbook으로 분리한다',
     index.includes('## 현재 실행 runbook — 정책 투표권 없음')
-    && sectionIn(index, '## 현재 실행 runbook', '\n## ').includes('`ALWAYS-ON-HOST.md`')])
+    && sectionIn(index, '## 현재 실행 runbook', '\n## ').includes('`ALWAYS-ON-HOST.md`')
+    && sectionIn(index, '## 현재 실행 runbook', '\n## ').includes('`launchd/README.md`')])
   out.push(['D100 canon 이 상시 호스트를 모든 증명일의 선행조건으로 둔다',
     d100Goal.includes('상시 호스트는 D100의 마지막 마일스톤이 아니라 모든 증명일의 선행조건이다')
     && d100Goal.includes('운영 창에 잠들거나')])
@@ -218,12 +223,31 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     alwaysOn.includes('clamshell sleep')
     && alwaysOn.includes('`persona-autogen`')
     && alwaysOn.includes('`queue-locks`')])
+  out.push(['상시 호스트 runbook 이 완료된 보조 Mac owner와 AC 계약 차이를 기록한다',
+    alwaysOn.includes('cutover는 완료됐다')
+    && alwaysOn.includes('D100 9개 job loaded')
+    && alwaysOn.includes('AC 상시 연결')
+    && alwaysOn.includes('배터리 임계값 Slack 알림')])
   out.push(['82cook live canary를 공용 Wi-Fi에서 금지한다',
     master.includes('도서관·스타벅스 등 공용 Wi-Fi에서는 82cook live 수집을 하지 않는다')])
-  // ⑦ 날짜 문서는 현재 권위를 자처하지 않는다
-  out.push(['README 가 날짜 문서를 D100 canon 외에는 역사로 한정한다',
-    index.includes('파일명에 날짜가 붙은 문서는 아래 표에서')
-    && index.includes('D100 canon 하나를 제외하면 제품 정책·현재 상태 기준에서는 전부 역사 자료다')])
+  // ⑦ 문서 분류는 파일 날짜가 아니라 역할로 고정한다
+  out.push(['README 가 날짜가 아니라 authority·실행 입력·역사 역할로 문서를 분류한다',
+    index.includes('D100-DOCUMENT-INVENTORY.md')
+    && index.includes('날짜가 붙은 문서라도 runtime이 구조화해 직접 읽는')
+    && index.includes('EXECUTABLE_INPUT')])
+  out.push(['D100 문서 목록이 다섯 분류와 네 authority를 고정한다',
+    ['AUTHORITY', 'EXECUTABLE_INPUT', 'RUNBOOK', 'HISTORY', 'ADJACENT'].every((t) => inventory.includes(`\`${t}\``))
+    && ['NORTH-STAR.md', '2026-09-21-d100-goal-canon.md', 'CURRENT-MILESTONE.md',
+      'MASTER-OPERATING-SYSTEM.md'].every((t) => inventory.includes(`\`${t}\``))])
+  const operationDocs = readdirSync('docs/operations')
+    .filter((name) => name.endsWith('.md'))
+  out.push(['D100 문서 목록이 operations 최상위 Markdown을 정확한 파일명으로 전부 분류한다',
+    operationDocs.every((name) => inventory.includes(`\`${name}\``))])
+  out.push(['Persona Pool 문서가 §5 좁은 실행 입력이고 현재 상태 authority가 아니라고 밝힌다',
+    personaPool.slice(0, 1_500).includes('좁은 실행 입력')
+    && personaPool.slice(0, 1_500).includes('EXECUTABLE_INPUT')
+    && personaPool.slice(0, 1_500).includes('단계별 인원 목표·현재 active 수·D100 정책은 정하지 않는다')
+    && !personaPool.slice(0, 500).includes('구현 미착수')])
   for (const [file, body] of [
     [HISTORICAL_ORIGINAL, historicalOriginal],
     [HISTORICAL_AUTOMATION, historicalAutomation],
@@ -339,14 +363,20 @@ check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
   current.includes('## 5. 다음 critical path') && /^\| P0-1 \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
-  current.includes('같은 reply-worthiness 판정') && current.includes('canon §5'))
-check('현재 실행이 D3 PASS와 D5 host 실패를 분리한다',
-  current.includes('10월 6일 D3는 자동 3/3')
-  && current.includes('clamshell sleep')
-  && current.includes('오늘을 D5 PASS로 바꾸지 않는다'))
-check('현재 실행이 집 Mac cutover를 첫 critical path로 둔다',
-  current.includes('| P0-1 | 집 Mac 이관 도구 보정·rehearsal |')
-  && current.includes('| P0-2 | 오늘 밤 cutover |'))
+  current.includes('댓글 증거·복구 정직화') && current.includes('automatic provenance'))
+check('현재 실행이 D5 PASS와 진행 중인 오늘 증명을 분리한다',
+  current.includes('10월 8일 자동 5/5')
+  && current.includes('10-09 재증명 진행 중')
+  && current.includes('오늘 결과를 PASS나 FAIL로 확정하지 않는다'))
+check('현재 실행이 보조 Mac 단일 owner와 Persona 30을 현재 상태로 적는다',
+  current.includes('보조 Mac 9개 · 회사 Mac D100 0')
+  && current.includes('contract-valid 30 · active 30 · draft 0'))
+check('현재 실행이 D10 공급 blocker와 PR #677을 첫 critical path로 둔다',
+  current.includes('공급 능력 11 · 필요 하한 12')
+  && current.includes('| P0-1 | PR #677 최신 main 통합·배포 |'))
+check('현재 실행이 단계 PASS와 제품 건강을 분리한다',
+  current.includes('단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다')
+  && current.includes('같은 KST 운영일 공개'))
 check('Master의 수동 d3 절차가 실행 금지 역사로 축약됐다',
   master.includes('#### d3 로 올리는 절차 — 📜 폐기된 수동 절차, 실행 금지')
   && master.includes('당시의 상세 명령과')
