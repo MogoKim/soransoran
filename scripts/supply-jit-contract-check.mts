@@ -198,9 +198,11 @@ console.log('\n⑥ 같은 원천 중복 유료 생성 0 · retryable 과 termina
     && /if \(!isRetryable\(lastStatus\)\) break/.test(judge))
   const ws = strip('src/lib/supply-workset.ts')
   check('🔴 묶음 선택이 큐 · 글 · 이월 · 결론 원천을 뺀다 — 같은 원문으로 두 번째 유료 생성 없음',
-    /hasSource\(input\.queuedSources, r\.sourceSite, r\.sourceArticleId\)\) \{ dropped\.alreadyQueued/.test(ws)
-    && /hasSource\(input\.carriedOver, r\.sourceSite, r\.sourceArticleId\)\) \{ dropped\.carriedOver/.test(ws)
-    && /input\.concluded\.has\(K\(r\)\)\) \{ dropped\.terminal/.test(ws))
+    // 🔴 (2026-10-10 P0-B0) 빼는 자리는 `drop()` 하나 — 수를 세고(`dropped[d] += 1`) 관측 기록기에 같은 사유를 적는다
+    /const drop = \([^)]*\): void => \{\s*dropped\[d\] \+= 1/.test(ws)
+    && /hasSource\(input\.queuedSources, r\.sourceSite, r\.sourceArticleId\)\) \{ drop\(r, K\(r\), 'alreadyQueued'\)/.test(ws)
+    && /hasSource\(input\.carriedOver, r\.sourceSite, r\.sourceArticleId\)\) \{ drop\(r, K\(r\), 'carriedOver'\)/.test(ws)
+    && /input\.concluded\.has\(K\(r\)\)\) \{ drop\(r, K\(r\), 'terminal'\)/.test(ws))
 }
 
 console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')

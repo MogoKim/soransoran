@@ -101,6 +101,11 @@ const CARE_ACT_RE = /병간호|간병|모시고|돌보/g
 /** 🔴 이 문장의 행위자가 화자인가 */
 const FIRST_PERSON_ACTOR_RE = /제가|내가|저는|나는|나도|저도/
 const MENOPAUSE_RE = /갱년기|폐경|호르몬|열이 확|안면홍조/g
+/**
+ * 🔴 **갱년기 코어 언급인가 — 정본 `MENOPAUSE_RE` 그대로**(새 낱말 0 · 2026-10-10 P0-B0 공급 관측).
+ *    `search` 는 전역 정규식의 `lastIndex` 를 바꾸지 않는다 — 부를 때마다 같은 답이다.
+ */
+export const mentionsMenopause = (text: string): boolean => text.search(MENOPAUSE_RE) >= 0
 
 /** 글에 나온 말 → 자녀 나이대 밴드 */
 /**

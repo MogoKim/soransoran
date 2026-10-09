@@ -926,11 +926,48 @@ export type SelectWorksetInput = {
    *    주지 않으면 옛 판(v2 — 손으로 부르는 경로 · 검사)이다. 🔴 v2 는 JIT 근거로 세지 않는다.
    */
   intendedSlotOf?: (r: WorksetRow) => Date | null
+  /**
+   * 🔴 **선택 관측 기록기** (2026-10-10 P0-B0) — 주면 단계별 결과를 적기만 한다. 주지 않으면 기록 0.
+   *    선택 결과(슬롯 · 묶음 · 순서 · 축 · 재시도)는 주든 안 주든 같다 — 검사가 digest 로 대조한다.
+   */
+  trace?: WorksetTraceSink
+}
+
+/**
+ * 🔴 **`selectWorkset` 안에서 원천이 멈춘 자리** (2026-10-10 P0-B0). 원인이 다르면 값도 다르다 — 합치지 않는다.
+ *    `SLOT_UNASSIGNED`                   부족 슬롯에 짝지어지지 않았다(왜인지는 trace 가 짝짓기 기록으로 더 나눈다)
+ *    `AXIS_QUOTA_ZERO`                   그 축의 이번 자리가 0 이다
+ *    `AXIS_QUOTA_FULL`                   차례가 왔지만 그 축의 자리가 이미 찼다
+ *    `RETRY_RESERVED`                    재시도 예약석으로 골랐다
+ *    `RETRY_FILLED`                      신규가 남긴 칸을 재시도가 채웠다
+ *    `RETRY_LIMIT_CUT`                   재시도인데 예약석 · 남은 칸 밖이다
+ *    `FRESH_PICKED`                      신규로 골랐다
+ *    `FRESH_DISPLACED_BY_RETRY_RESERVE`  예약석이 없었다면 같은 순서로 상한 안이었다(🔴 축 자리는 다시 계산하지 않는다)
+ *    `FRESH_RANK_CUT`                    예약석과 무관하게 상한 밖이다
+ */
+export const WORKSET_SELECT_STEPS = [
+  'SLOT_UNASSIGNED', 'AXIS_QUOTA_ZERO', 'AXIS_QUOTA_FULL',
+  'RETRY_RESERVED', 'RETRY_FILLED', 'RETRY_LIMIT_CUT',
+  'FRESH_PICKED', 'FRESH_DISPLACED_BY_RETRY_RESERVE', 'FRESH_RANK_CUT',
+] as const
+export type WorksetSelectStep = (typeof WORKSET_SELECT_STEPS)[number]
+
+/**
+ * 🔴 **선택 관측 기록기** — 반환값이 없다. 선택 변수(자리 · 집합 · 순서)를 읽기만 하고 바꾸지 않는다.
+ *    `key` 는 원천 열쇠(`sourceIdentityOf`) — 파일로 나갈 때는 해시만 남는다(`supply-selection-trace`).
+ */
+export type WorksetTraceSink = {
+  /** 생성 가능 판정 한 줄 — `drop` 이 null 이면 통과 · `verdict` 는 슬롯 판정까지 갔을 때만 */
+  eligibility(e: { row: WorksetRow; key: string | null; drop: WorksetDrop | null; verdict: SlotReleaseVerdict | null }): void
+  /** 슬롯 짝짓기 한 줄 — `kept=false` 는 짝지어졌지만 유료 상한(cap)에 잘렸다 */
+  assignment(e: { key: string; slotAt: Date; round: number; kept: boolean }): void
+  /** 묶음 선택 단계 결과 한 줄 */
+  selection(e: { key: string; step: WorksetSelectStep }): void
 }
 
 /** 🔴 생성 가능 판정에 쓰는 입력 — 묶음 선택과 기회 스냅샷이 **같은 값**을 넘긴다 */
 export type WorksetEligibilityInput = Pick<SelectWorksetInput,
-  'rows' | 'humanDecided' | 'queuePending' | 'queuedSources' | 'carriedOver' | 'concluded' | 'releaseOf'>
+  'rows' | 'humanDecided' | 'queuePending' | 'queuedSources' | 'carriedOver' | 'concluded' | 'releaseOf' | 'trace'>
 
 export type WorksetEligibility = {
   /** 🔴 지금 실제로 생성 가능한 원천(상한 적용 전) — 마지막 행 기준 · 사이트 · id 정리됨 */
@@ -960,9 +997,14 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
    */
   const byKey = new Map<string, WorksetRow>()
   const keyOf = new Map<WorksetRow, string>()
+  /** 🔴 빼는 자리 하나 — 수를 세고, 기록기가 있으면 같은 사유를 적는다(선택에는 영향 없음) */
+  const drop = (r: WorksetRow, key: string | null, d: WorksetDrop, v: SlotReleaseVerdict | null = null): void => {
+    dropped[d] += 1
+    input.trace?.eligibility({ row: r, key, drop: d, verdict: v })
+  }
   for (const r of input.rows) {
     const key = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
-    if (key === null) { dropped.identityMissing += 1; continue }
+    if (key === null) { drop(r, null, 'identityMissing'); continue }
     byKey.set(key, { ...r, sourceArticleId: S(r.sourceArticleId), sourceSite: S(r.sourceSite) })
   }
   for (const [key, r] of byKey) keyOf.set(r, key)
@@ -970,37 +1012,37 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
 
   const eligible: WorksetRow[] = []
   for (const r of byKey.values()) {
-    if (humanDecisionFor(input.humanDecided, r.sourceSite, r.sourceArticleId) !== null) { dropped.humanDecided += 1; continue }
-    if (input.queuePending.has(K(r))) { dropped.queueSibling += 1; continue }
+    if (humanDecisionFor(input.humanDecided, r.sourceSite, r.sourceArticleId) !== null) { drop(r, K(r), 'humanDecided'); continue }
+    if (input.queuePending.has(K(r))) { drop(r, K(r), 'queueSibling'); continue }
     // 🔴 발행된 형제까지 — 같은 원문으로 두 번째 글을 만들지 않는다
-    if (hasSource(input.queuedSources, r.sourceSite, r.sourceArticleId)) { dropped.alreadyQueued += 1; continue }
+    if (hasSource(input.queuedSources, r.sourceSite, r.sourceArticleId)) { drop(r, K(r), 'alreadyQueued'); continue }
     // 🔴 적재 실패 후보는 이월이 적재한다 — 다시 만들지 않는다
-    if (hasSource(input.carriedOver, r.sourceSite, r.sourceArticleId)) { dropped.carriedOver += 1; continue }
-    if (input.concluded.has(K(r))) { dropped.terminal += 1; continue }
+    if (hasSource(input.carriedOver, r.sourceSite, r.sourceArticleId)) { drop(r, K(r), 'carriedOver'); continue }
+    if (input.concluded.has(K(r))) { drop(r, K(r), 'terminal'); continue }
     /**
      * 🔴 **판정기 정본 게이트를 그대로 부른다** — 여기서 규칙을 새로 만들지 않는다.
      *    `access`·`safety` 를 손으로 비교하던 앞판은 판정기와 어긋날 수 있었다.
      */
     if (hardGate(r.input).some((c) => (HARD_BLOCK as readonly string[]).includes(c))) {
-      dropped.hardBlocked += 1; continue
+      drop(r, K(r), 'hardBlocked'); continue
     }
     /**
      * 🔴 **물어봐도 HOLD 인 것은 묶음에 넣지 않는다.** 판정기가 모델 답을 받고
      *    나서 보던 사유를 `holdBeforeAsking` 하나로 모았다 — 같은 함수를 부른다.
      */
-    if (holdBeforeAsking(r.input).length > 0) { dropped.preGated += 1; continue }
+    if (holdBeforeAsking(r.input).length > 0) { drop(r, K(r), 'preGated'); continue }
     /**
      * 🔴 **예정 슬롯에서 eligible 인가 — 정본 판정 하나** (2026-09-30). 오래된 원문을 오늘 수집했어도,
      *    반응 증거가 없어도, 원천 상대 표본이 없어도 유료 생성에 들어가지 않는다.
      */
     const v = input.releaseOf(r)
     if (v.verdict !== 'eligible') {
-      if (v.verdict === 'unknown') dropped.slotUnknown += 1
-      else dropped.slotIneligible += 1
+      drop(r, K(r), v.verdict === 'unknown' ? 'slotUnknown' : 'slotIneligible', v)
       continue
     }
     releaseByKey.set(K(r), v)
     eligible.push(r)
+    input.trace?.eligibility({ row: r, key: K(r), drop: null, verdict: v })
   }
 
   return { eligible, releaseByKey, dropped, keyOf: K }
@@ -1026,6 +1068,7 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
   const eligible = slotOf === undefined ? base.eligible : base.eligible.filter((r) => {
     if (slotOf(r) !== null) return true
     dropped.slotUnassigned += 1
+    input.trace?.selection({ key: K(r), step: 'SLOT_UNASSIGNED' })
     return false
   })
 
@@ -1058,8 +1101,13 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
   const quota = worksetAxisQuota(limit, eligibleByAxis)
   const used: Record<WorksetAxis, number> = { seed: 0, raw: 0 }
   const hasRoom = (r: WorksetRow): boolean => used[worksetAxisOf(r)] < quota[worksetAxisOf(r)]
+  /** 🔴 관측 전용 — 차례가 왔는데 축 자리가 찼던 원천. 선택은 이 집합을 읽지 않는다 */
+  const axisFull = new Set<string>()
   const take = (r: WorksetRow): boolean => {
-    if (!hasRoom(r)) return false
+    if (!hasRoom(r)) {
+      if (input.trace !== undefined) axisFull.add(K(r))
+      return false
+    }
     used[worksetAxisOf(r)] += 1
     return true
   }
@@ -1108,6 +1156,34 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
   const pickedByAxis: Record<WorksetAxis, number> = {
     seed: picked.filter((r) => worksetAxisOf(r) === 'seed').length,
     raw: picked.filter((r) => worksetAxisOf(r) === 'raw').length,
+  }
+
+  /**
+   * 🔴 **관측 기록** (2026-10-10 P0-B0) — 선택이 끝난 **뒤에** 읽기만 한다. 위 변수는 하나도 바꾸지 않는다.
+   *    예약석 때문에 밀린 신규: 예약석이 없었다면 같은 신규 순서로 상한 안이었던 것(축 자리 재계산 없음).
+   */
+  if (input.trace !== undefined) {
+    const sink = input.trace
+    const freshOpenKeys = new Set(freshOpen.map(K))
+    const retryOpenKeys = new Set(retryOpen.map(K))
+    for (const r of fresh) if (!freshOpenKeys.has(K(r))) sink.selection({ key: K(r), step: 'AXIS_QUOTA_ZERO' })
+    for (const r of retry) if (!retryOpenKeys.has(K(r))) sink.selection({ key: K(r), step: 'AXIS_QUOTA_ZERO' })
+    const freshPickedKeys = new Set(freshPicked.map(K))
+    let line = freshPicked.length
+    for (const r of freshOpen) {
+      const k = K(r)
+      if (freshPickedKeys.has(k)) sink.selection({ key: k, step: 'FRESH_PICKED' })
+      else if (axisFull.has(k)) sink.selection({ key: k, step: 'AXIS_QUOTA_FULL' })
+      else if (reserved.size > 0 && line < limit) { line += 1; sink.selection({ key: k, step: 'FRESH_DISPLACED_BY_RETRY_RESERVE' }) }
+      else sink.selection({ key: k, step: 'FRESH_RANK_CUT' })
+    }
+    for (const r of retryOpen) {
+      const k = K(r)
+      if (reserved.has(k)) sink.selection({ key: k, step: 'RETRY_RESERVED' })
+      else if (retryIds.has(k)) sink.selection({ key: k, step: 'RETRY_FILLED' })
+      else if (axisFull.has(k)) sink.selection({ key: k, step: 'AXIS_QUOTA_FULL' })
+      else sink.selection({ key: k, step: 'RETRY_LIMIT_CUT' })
+    }
   }
 
   const jit = slotOf !== undefined
@@ -1341,22 +1417,31 @@ export function assignSourceSlots(input: {
   slots: readonly Date[]
   now: Date
   cap: number
+  /** 🔴 관측 기록기(P0-B0) — 바퀴마다 짝과 cap 에 잘린 짝을 적기만 한다. 배정 결과는 주든 안 주든 같다 */
+  trace?: Pick<WorksetTraceSink, 'assignment'>
 }): Map<string, Date> {
   const out = new Map<string, Date>()
   if (input.slots.length === 0 || !(input.cap > 0)) return out
   let remaining = input.rows
     .map((r) => ({ r, key: sourceIdentityOf(r.sourceSite, r.sourceArticleId) }))
     .filter((x): x is { r: WorksetRow; key: string } => x.key !== null)
+  let round = 0
   while (out.size < input.cap && remaining.length > 0) {
+    round += 1
     const m = matchOpportunitiesToSlots(input.slots, remaining.map(({ r, key }) => ({
       key, validAt: (slotAt: Date) => preGenerationRelease(r, slotAt, input.now).verdict === 'eligible',
     })))
     if (m.filled === 0) break
     const order = input.slots.map((d, i) => ({ d, k: m.bySlot[i] })).filter((x): x is { d: Date; k: string } => x.k !== null)
       .sort((a, b) => a.d.getTime() - b.d.getTime())
-    for (const { d, k } of order) {
-      if (out.size >= input.cap) break
+    for (const [i, { d, k }] of order.entries()) {
+      if (out.size >= input.cap) {
+        // 🔴 관측 전용 — 이 바퀴에 짝지어졌지만 유료 상한에 잘린 원천
+        if (input.trace !== undefined) for (const x of order.slice(i)) input.trace.assignment({ key: x.k, slotAt: x.d, round, kept: false })
+        break
+      }
       out.set(k, d)
+      input.trace?.assignment({ key: k, slotAt: d, round, kept: true })
     }
     remaining = remaining.filter(({ key }) => !out.has(key))
   }
