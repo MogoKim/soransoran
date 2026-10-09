@@ -1,5 +1,13 @@
 # 소란소란 — Claude Code 지시사항
 
+## 🔴 0순위 — 저장소 정체성을 먼저 확인한다
+
+작업 전에 `git rev-parse --show-toplevel`, `git remote get-url origin`,
+`node -p "require('./package.json').name"`을 확인한다. 의도한 `soransoran*` worktree가 아니거나 package name이
+`soransoran`이 아니면 중단한다. `unao-main`·`age-doesnt-matter`에서 소란소란 명령·DB/env 접근·문서 수정을
+하지 않는다. D100 문서 분류는
+[`docs/operations/D100-DOCUMENT-INVENTORY.md`](docs/operations/D100-DOCUMENT-INVENTORY.md)를 따른다.
+
 ## 프로젝트 개요
 
 - 서비스: **소란소란** | 도메인: soransoran.com
@@ -30,8 +38,9 @@
 - **단계**: 그날의 단계는 `StageDecision` 행 하나가 정한다. GitHub stage Variables · env 의 단계 값 ·
   canary 창은 단계를 정하는 근거가 아니다. 사람이 단계를 올리는 routine 절차는 없다.
 - **자동 일정 owner**: D100 레인 job 의 자동 일정 owner 는 상시 호스트의 launchd 하나다. GitHub Actions 예약과 겹치지 않는다.
-- 🔴 위 둘은 **목표 상태이며 구현 중 · 미배포**다. 지금 runtime 이 무엇을 읽는지는
-  [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 충돌 장부가 적는다 — 문서 문장을 운영 사실로 읽지 않는다.
+- 위 둘은 main과 보조 Mac runtime에 배포됐다. 실제 오늘 값은 문서나 env 기본값이 아니라 `StageDecision`,
+  `launchctl`, runtime pin을 읽어 확인한다. 배포·운영 상태는
+  [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md)가 적는다.
 - 완성 글을 쌓아 둔 편수 · 며칠치는 성공 기준이 아니다 — 준비도는 canon 의 증명일/지속 준비도 하나이고, 폐기한 옛 목표는 canon §10 이 적는다.
 
 ## 운영 실행 역할
@@ -54,8 +63,10 @@ M-GRAPH 목적과 M-AUTO 실행 계약을 섞거나, 검색 노출을 일일 발
 ## 🔴 이 저장소는 우나어가 아니다
 
 - **우나어(age-doesnt-matter) repo 를 fork 하지 않았다.** 구조와 패턴만 선별 참고했다.
-- 우나어의 **자산·인프라·도메인·계정은 완전히 분리**되어 있다.
+- 우나어의 **실행 repo·운영 DB·자산·인프라·도메인·계정은 분리**한다.
 - 우나어 repo 파일을 이 저장소로 복사할 때는 **반드시 브랜드 문자열을 제거**하고 이식한다.
+- 초기 Voice 자산의 read-only 역사 문서·connector 이름은 남아 있다. 이것을 현재 D100 운영 권한으로
+  해석하지 않으며, active runtime import나 credential 사용은 별도 경계 감사 없이 허용하지 않는다.
 
 ### 절대 가져오지 않는 것
 

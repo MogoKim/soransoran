@@ -1,7 +1,7 @@
 # launchd 템플릿
 
-> 정본: [Raw 공급망 설계 §5](../2026-09-03-raw-supply-chain-design.md) ·
-> [헌법 §6-9-F](../../constitution/MICRO_SEED_LANE_CONSTITUTION.md)
+> 역사 설계 근거: [Raw 공급망 설계 §5](../2026-09-03-raw-supply-chain-design.md) ·
+> 좁은 안전 계약: [헌법 §6-9-F](../../constitution/MICRO_SEED_LANE_CONSTITUTION.md)
 
 이 디렉터리에는 `.plist.template` 만 있다. **템플릿이 있다는 것과 job 이 돌고 있다는 것은
 다른 사실이다** — 템플릿은 "무엇을 · 언제 · 어떤 인자로 돌릴 것인가" 를 확정한 것이고,
@@ -13,7 +13,9 @@
 
 ```bash
 npx tsx -e "import {observeJobs} from './scripts/lib/launchd-observe.mjs'; console.log(observeJobs())"
-npm run supply:health          # ④-b 에 current · prepared · required 가 나온다
+npm run d100:readiness -- --json
+# 🔴 direct supply:health 는 stage env 기본값을 읽는 결함이 있다. 고칠 때까지 wrapper 로만 본다.
+npx tsx scripts/stage-consume-exec.mts --by=supply -- npx tsx scripts/supply-health.mts --json
 ```
 
 수집 능력은 **세 값을 절대 합치지 않는다**(MASTER §8.0).
@@ -28,10 +30,10 @@ required  그 capacity 단계가 요구하는 상세 요청 수
 올라와 있을 때만 늘어난다 — 다회 Label 이어도 슬롯이 2개면 그것은 2회 job 이다.
 
 
-🔴 **등록은 창업자 승인 후 별도 절차다.** 등록하는 순간 되돌리는 주체가 사람이 된다 —
-이 PR 은 "무엇을 등록할 것인가" 까지만 정한다.
+첫 등록은 승인된 cutover 절차가 필요하고, 이후 변경은 `runtime:deploy`가 rollback과 함께 수행한다.
+현재 등록 여부는 이 문장이 아니라 `launchctl`로만 판정한다.
 
-## 🔴 목표 상태 — 자동 일정 owner 는 launchd 하나 · 단계는 StageDecision 하나 (구현 중 · 미배포)
+## 🔴 현재 구조 — 자동 일정 owner 는 launchd 하나 · 단계는 StageDecision 하나
 
 정책은 [D100 canon](../2026-09-21-d100-goal-canon.md) §6 자동 사다리가 정하고, 이 문서는 그 **실행 설명**이다.
 
@@ -39,9 +41,11 @@ required  그 capacity 단계가 요구하는 상세 요청 수
   소유한다. 같은 일을 GitHub Actions schedule 이 따로 돌리면 owner 가 둘이다 — 결함이다.
 - 오늘 단계는 **`StageDecision` 행 하나**가 정한다. GitHub stage Variables · `.env` 의 단계 값 · canary 창은
   단계를 정하는 근거가 아니다. 사람이 단계를 올리는 routine 절차는 없다.
-- 🔴 **지금은 목표 상태가 아니다.** 단계 입력원 단일화와 GitHub 발행 예약 퇴역은 코드 레인(Lane A)이 구현 중이고
-  main · runtime 에 배포되지 않았다. 배포 전까지 runtime 은 옛 경로를 읽는다 —
-  [`CURRENT-MILESTONE.md`](../CURRENT-MILESTONE.md) 충돌 장부 C4 가 그 상태를 적는다.
+- 이 구조는 main과 보조 Mac runtime에 배포됐다. 2026-10-09 현재 보조 Mac이 D100 9개 job의 유일한 owner이고,
+  회사 Mac의 D100 job은 0개다. exact runtime·오늘 단계·loaded 상태는
+  [`CURRENT-MILESTONE.md`](../CURRENT-MILESTONE.md)와 실제 관측이 정한다.
+- 🔴 `supply:health` 같은 하위 명령이 wrapper 없이 env 기본값을 읽어 d1을 보고하는 결함은 아직 남아 있다.
+  운영 판정은 `stage-consume-exec` wrapper 또는 `d100:readiness`를 쓰며, direct 명령은 authority 보정 전까지 금지한다.
 
 ## 🔴 손으로 치지 않는다 — `runtime:deploy` 가 cutover 를 한다 (2026-09-11)
 
@@ -70,7 +74,7 @@ npm run runtime:deploy -- --apply --target=<full sha>   # 🔴 실제 cutover
 옛 `micro-seed-collect-navercafe.mts --pages=1 --max=10` 을 계속 돌았고
 `BOARD_TARGETS` 의 2~16p 는 한 번도 열리지 않았다.
 
-## 왜 템플릿까지만 두는가
+## 📜 왜 템플릿까지만 두었는가 — 첫 등록 당시 기록
 
 ```
 🟢 이 PR      무엇을 · 언제 · 어떤 인자로 돌릴지 확정
@@ -154,12 +158,16 @@ rm ~/Library/LaunchAgents/com.soransoran.supply-collect-82cook-thin.plist
 또는 **더 빠르게**: `.env.local` 에서 그 job 의 스위치를 `false` 로.
 plist 는 계속 돌지만 수집이 일어나지 않는다.
 
-## 확정 수집원은 셋뿐이고, 수집 job 은 서로 독립이다
+## 지원 수집원은 셋이고, 현재 active 수집원은 둘이다
 
 🔴 **한 source 의 실패가 다른 source 의 공급을 세우지 않는다.** 그래서 수집은 job 으로 나뉘어 있다 —
 세 source 를 한 회차에 묶어 돌리던 옛 구조에서는 82cook 하나가 `ECONNREFUSED` 이면
 이미 받아 둔 네이버 수집물까지 처리되지 못했다(2026-09-10 실측: 이틀간 신규 공급 0).
 그 구조의 폐기 경위는 [Raw 공급망 설계 §4-AU](../2026-09-03-raw-supply-chain-design.md) 에 있다.
+
+2026-10-09 현재 `navercafe:remonterrace`와 `navercafe:wgang`만 installed·loaded·enabled다.
+82cook 두 템플릿은 prepared 상태지만 job은 installed 0·loaded 0·policy-disabled이며 clean canary도 0회다.
+아래 82cook 시각과 요청량은 **등록할 경우의 준비 계약**이지 현재 처리량이 아니다.
 
 | 수집원 | Label / 템플릿 파일명 | 시각 (KST) | 명령 |
 |---|---|---|---|
@@ -190,7 +198,7 @@ npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
 수집기가 아는 카페일 뿐 확정 수집원도 현재 스케줄도 아니며, **실행 템플릿을 두지 않는다.**
 늘리려면 그때 승인을 받고 템플릿을 새로 만든다 — fixture 가 이 넷의 템플릿이 없는지 검사한다.
 
-## 🔴 확정 운영 일정 (2026-09-11 · 전부 KST)
+## 🔴 일정 계약 (전부 KST · 82cook은 prepared/off)
 
 ```
 82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
@@ -211,10 +219,14 @@ supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 �
 `SLOTS` · `THIN_82COOK_SLOTS` · `SUPPLY_PROCESS_SLOTS` 다.
 이 문서의 표는 그것을 옮겨 적은 것이고, fixture 가 **render 한 실제 plist** 와 대조한다.
 
-## 🔴 운영 예약 job 은 다섯이다
+## 🔴 공급 수집·처리 템플릿은 다섯이고, 현재 loaded 공급 job은 셋이다
 
 정본은 [`src/lib/runtime-isolation.ts`](../../../src/lib/runtime-isolation.ts) 의 `RUNTIME_JOBS` 다.
 격리 검사와 배포가 **이 목록과 실제 loaded 를 정확히 대조**한다.
+
+현재 loaded 공급 job은 네이버 수집 2개와 `supply-process` 1개다. 82cook 2개는 아래 준비 목록에는 있지만
+loaded가 아니며 current capacity에 합치지 않는다. D100 전체 allowlist는 발행·댓글·감사·controller·recovery·
+keep-awake를 포함한 9개이고 `ALWAYS-ON-HOST.md`가 싣는다.
 
 ```
 ① com.soransoran.navercafe-collect-remonterrace-multi   수집
@@ -233,9 +245,9 @@ supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 �
 | 템플릿 | 무엇을 | 환경 |
 |---|---|---|
 | `com.soransoran.raw-collect-82cook.plist.template` | 82cook Raw Vault 수집 (**5회/day** 07:00·10:00·13:00·16:00·19:00 KST) | 로컬 (GHA `supply-collect` 는 수동 dispatch 전용 — 자동 owner 가 아니다) |
-| `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (4슬롯) | 로컬 (위와 같다 — owner 는 한쪽뿐) |
+| `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (5슬롯 · 현재 OFF) | 로컬 (위와 같다 — owner 는 한쪽뿐) |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
-| `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
+| `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (5슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
 | `com.soransoran.navercafe-collect-wgang-multi.plist.template` | 우아한 갱년기 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
 | `com.soransoran.supply-process.plist.template` | 공급 처리(drain) — 미처리 입력을 변환→판정→초안→적재 (6슬롯) | 🔴 **로컬 전용** (§4-AU) |
 

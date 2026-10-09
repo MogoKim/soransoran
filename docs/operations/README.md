@@ -7,6 +7,10 @@
 공통 네 문서만으로도 목적·North Star·현재 단계·D3~D100 PASS·신선도·Persona 용량·답글·다음 실행에
 답할 수 있어야 한다.
 
+전체 D100 문서의 `AUTHORITY`·`EXECUTABLE_INPUT`·`RUNBOOK`·`HISTORY`·`ADJACENT` 분류는
+[`D100-DOCUMENT-INVENTORY.md`](./D100-DOCUMENT-INVENTORY.md)에 있다. 그 파일은 목록이지 다섯 번째
+권위 문서가 아니다.
+
 ## 권위 문서 — 전사 공통
 
 | 순서 | 문서 | 정하는 것 | 정하지 않는 것 |
@@ -33,10 +37,10 @@
 - **가변 상태 충돌**: runtime·DB·로그 실측이 낡은 상태 스냅샷을 이긴다. 실측은 제품 목표를 이기지 못한다.
 - **새 정책**은 자기가 대체한 옛 경로를 canon 의 "제거·대체한 옛 경로" 표에 같은 변경으로 적는다.
   같은 결정을 내리는 정본이 둘이면 결함이다.
-- 아래 상세·역사 문서는 현재 정책에 투표하지 않는다. **파일명에 날짜가 붙은 문서는 아래 표에서
-  명시적으로 권위를 받은 D100 canon 하나를 제외하면 제품 정책·현재 상태 기준에서는 전부 역사 자료다.**
-  과거 숫자를 현재값으로 인용하거나 제목의 `정본`·`단일 진실` 표현을 현재 권위로 해석하지 않는다.
-  현재 코드가 직접 참조하는 좁은 기술 계약·runbook은 절차 자료로 쓸 수 있지만 상위 제품 정책을 바꾸지 못한다.
+- 아래 상세·역사 문서는 현재 정책에 투표하지 않는다. **날짜가 붙은 문서라도 runtime이 구조화해 직접 읽는
+  좁은 입력은 `D100-DOCUMENT-INVENTORY.md`의 `EXECUTABLE_INPUT`으로 명시한다.** 그 입력은 카드·필드 같은
+  기술 범위에서만 유효하고 제품 정책·단계·현재 상태를 정하지 못한다. 목록에 없는 날짜 문서의 과거 숫자나
+  제목의 `정본`·`단일 진실` 표현은 현재 권위로 해석하지 않는다.
 - runbook은 승인된 현재 정책을 실행하는 절차만 정한다. 제품 목적·단계·콘텐츠 정책을 새로 정하지 않는다.
 
 ## 어디서 찾나
@@ -57,6 +61,7 @@
 | 루프가 어디서 막히나(원문 게시 → 공개 지연 · 슬롯 채움 · 첫 댓글 · Persona 공백) | canon §9 측정 — 관측 화면 `npm run d100:readiness` ⓪ · `npm run ops:status` |
 | 어디까지 왔고 다음에 무엇을 하나 | `CURRENT-MILESTONE.md` |
 | 전체 구조 · 어떤 AI 를 쓰고 비용이 드나 · 과거 사고 | `MASTER-OPERATING-SYSTEM.md` |
+| D100 문서 하나가 현재 권위인지·실행 입력인지·역사인지 | `D100-DOCUMENT-INVENTORY.md` |
 | 매거진 (D100 과 별도 영역) | `M-GRAPH-PROJECT-CHARTER.md`(검색 주제망 전략) · `magazine-automation-runbook.md`(M-AUTO 실행·안전) |
 | 콘텐츠 끝에 도달한 로그인되지 않은 방문자가 가입·첫 참여로 이어지는 흐름 (D100 과 별도 영역) | `MEMBER-CONVERSION-CANON.md` — 전환 목적·정책·디자인·MC 단계·회원 어드민 구조·고객 구성 기준선. 현재 상태와 다음 과제는 해당 정본 §14·§18 |
 
@@ -72,6 +77,7 @@
 | 문서 | 역할 |
 |---|---|
 | `ALWAYS-ON-HOST.md` | 상시 실행 호스트의 사전 점검·rehearsal·quiesce·cutover·rollback. 단계·콘텐츠·Persona 정책은 정하지 않고 위 권위 문서를 실행한다 |
+| `launchd/README.md` | 보조 Mac의 템플릿·runtime 배포·스케줄 관측·진단 절차. 실제 loaded 상태는 `launchctl`이 정한다 |
 
 runbook의 명령은 현재 정본 정책과 현재 상태를 먼저 확인한 뒤 실행한다. 역사 문서에 남은 수동 stage env,
 GitHub 예약, 완성 글 재고 절차를 runbook처럼 사용하지 않는다.
@@ -82,8 +88,12 @@ GitHub 예약, 완성 글 재고 절차를 runbook처럼 사용하지 않는다.
 필요한 결론만 권위 문서에 반영한다. 역사 문서를 현재화하려면 그 문서를 다시 정본으로 만들지 말고
 권위 문서와 `master:doc-check`를 같은 변경에서 고친다.
 
+아래 표는 자주 쓰는 대표 문서만 싣는다. 전수 목록과 좁은 실행 입력 예외는
+`D100-DOCUMENT-INVENTORY.md`가 관리한다.
+
 | 문서 | 역할 |
 |---|---|
+| `D100-DOCUMENT-INVENTORY.md` | D100 문서 전수 분류표. 정책·현재 상태 authority는 아님 |
 | `../constitution/MICRO_SEED_LANE_CONSTITUTION.md` | Micro Seed 안전 헌법 |
 | `M-GRAPH-PROJECT-CHARTER.md` | 매거진 검색 영토·주제망·시리즈·내부 연결·장기 발행 계획의 전략 정본 (매거진 영역 한정) |
 | `magazine-automation-runbook.md` | 매거진 M-AUTO 설치·가동·병합·공개 감시 |
