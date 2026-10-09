@@ -38,7 +38,7 @@ import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
 import {
   COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv,
 } from '../../src/lib/persona-comment-auto-lane'
-import { AUTO_DECIDER, AUTO_READY_ENV } from '../../src/lib/auto-ready-v2'
+import { AUTO_DECIDER, AUTO_READY_ENV, eligibilityOf } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
 import { SUPPLY_DAILY_USD_APPROVED } from '../../src/lib/supply-schedule-contract'
 import {
@@ -301,6 +301,12 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   now: Date
 }): Promise<{
   rows: CohortRow[] | null; fates: FateCounts | null; readyCount: number | null; legacyExcluded: number | null
+  /**
+   * 🔴 **자동 전환 실패로 분자에서 뺀 미도장 기계 행 수** (2026-10-09 P0-a) — 정본 `eligibilityOf` 가 자동 부적격으로 본 행
+   *    (gate FAIL · 의미 경고 · 금지 문구 등 → 사람 검토 경로). 그 원천은 분모(`worksetSources`)에 그대로 남는다 —
+   *    자동 전환 실패가 수율에 반영된다. legacy 가 아니다. 읽지 못했으면 null.
+   */
+  autoIneligibleExcluded: number | null
   worksetSources: number | null; yieldBounds: { low: number; high: number } | null; notes: string[]
   /** 🔴 현재 계약을 주장했지만 묶음 · 증거와 맞지 않은 행의 이유 코드 — 하나라도 있으면 cohort 전체가 모름 */
   intentMismatches: IntentLinkIssue[]
@@ -313,6 +319,7 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   const notes: string[] = []
   let rows: CohortRow[] | null = null
   let legacyExcluded: number | null = null
+  let autoIneligibleExcluded: number | null = null
   const intentMismatches: IntentLinkIssue[] = []
   const ws = jitWorksetsIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime())
   const worksetSources = ws?.sources ?? null
@@ -327,12 +334,16 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
      */
     const found = await prisma.originalPostApprovalQueue.findMany({
       where: { createdAt: { gte: i.windowFrom } },
-      select: { id: true, status: true, gateResults: true, decidedBy: true, createdPostId: true },
+      select: {
+        id: true, status: true, gateResults: true, decidedBy: true, createdPostId: true,
+        // 🔴 미도장 기계 행의 자동 적격 판정(`eligibilityOf`) 입력 — 출력하지 않는다
+        gateVerdict: true, draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+      },
     })
     /**
      * 🔴 **자동 READY 경로 행만** — 자동 도장(`AUTO_DECIDER`) 행, 그리고 **자동 도장 전 기계 적재 행**
-     *    (`machine:` · APPROVED · 미발행). 도장 전 행은 성공으로 확정하지 않는다 — 결말 모름(unknown)이다.
-     *    사람이 결정한 행은 자동 READY 가 아니다(세지 않는다).
+     *    (`machine:` · APPROVED · 미발행). 도장 전 행은 아래에서 정본 `eligibilityOf` 로 나눈다 — 적격만 결말 모름(unknown)이고
+     *    부적격은 분자에서 뺀다. 사람이 결정한 행은 자동 READY 가 아니다(세지 않는다).
      */
     const autoPath = found.filter((r) => r.decidedBy === AUTO_DECIDER
       || ((r.decidedBy ?? '').startsWith('machine:') && r.status === 'APPROVED' && r.createdPostId === null))
@@ -361,7 +372,22 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
       if (issue !== null) intentMismatches.push(issue)
     }
     if (intentMismatches.length > 0) throw new IntentMismatch()
-    rows = current.map((r) => {
+    /**
+     * 🔴 **미도장 기계 행 — 정본 자동 적격 판정으로 나눈다** (2026-10-09 P0-a · #676 회귀 보정).
+     *    #676 은 미도장 행을 전부 결말 모름으로 셌다. 운영 실측(10-09): 그런 행 12건이 **전부 자동 부적격**(의미 경고 →
+     *    사람 검토 경로 · 나이 p50 24h)이었다 — 도장을 기다리는 행이 아니다. 분자에 넣으면 수율 0.198 → 0.287 ·
+     *    공급 능력 11 → 17 로 부풀고, 영원히 결말 모름으로 남아 필요 READY 구간을 열어 둔다.
+     *    · 자동 적격(`auto`) — 다음 발행 러너 회차가 도장한다 → 결말 모름(성공으로 확정하지 않는다)
+     *    · 자동 부적격 — 자동 READY 가 되지 않는다 → **분자에서 뺀다.** 원천은 분모에 남긴다(자동 전환 실패 = 수율 손실)
+     *    판정은 자동 도장(`auto-ready-repo`)이 쓰는 그 함수 하나다 — 여기서 기준을 새로 만들지 않는다.
+     */
+    const autoEligible = (r: (typeof current)[number]): boolean => eligibilityOf({
+      gateVerdict: r.gateVerdict, gateResults: r.gateResults,
+      title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
+    }).auto
+    const counted = current.filter((r) => r.decidedBy === AUTO_DECIDER || autoEligible(r))
+    autoIneligibleExcluded = current.length - counted.length
+    rows = counted.map((r) => {
       const intent = readSupplyIntent(r.gateResults)!
       const terminal = r.status === 'PUBLISHED' || READY_LOSS_STATUSES.includes(r.status)
       const stamped = r.decidedBy === AUTO_DECIDER
@@ -384,9 +410,12 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   const readyCount = fates === null ? null : fates.published + fates.lost + fates.scheduled + fates.unknown
   if (worksetSources === null) notes.push('JIT 묶음 원천 수를 모른다 — 창 안 workset-v3 이 없거나 묶음 하나라도 손상')
   if (legacyExcluded !== null && legacyExcluded > 0) notes.push(`계약 표식 없는 옛 자동 READY ${legacyExcluded}건 — 근거로 세지 않는다(구제 없음)`)
+  if (autoIneligibleExcluded !== null && autoIneligibleExcluded > 0) {
+    notes.push(`자동 부적격 미도장 기계 행 ${autoIneligibleExcluded}건 — 자동 READY 분자에서 뺐다(사람 검토 경로) · 원천은 분모에 남는다`)
+  }
   if (fates !== null && fates.unknown > 0) notes.push(`결말을 모르는 자동 READY ${fates.unknown}건 — 손실률 · 수율은 구간으로만 판정한다`)
   return {
-    rows, fates, readyCount, legacyExcluded, worksetSources,
+    rows, fates, readyCount, legacyExcluded, autoIneligibleExcluded, worksetSources,
     yieldBounds: fates === null ? null : terminalYieldOf(fates, worksetSources), notes, intentMismatches,
     cohortRuns: new Set(ws?.byRun.keys() ?? []),
   }
@@ -547,7 +576,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     detail: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected, sourceExpectedHigh: oppHigh.sourceExpected,
-      opportunitySnapshotAt: snap.takenAt, readyCount, legacyExcluded: cohort.legacyExcluded, worksetSources, yieldBounds, fates,
+      opportunitySnapshotAt: snap.takenAt, readyCount, legacyExcluded: cohort.legacyExcluded,
+      autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,
       intentMismatches: cohort.intentMismatches,
       costAttribution,
     },
