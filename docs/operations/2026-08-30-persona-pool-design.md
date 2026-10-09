@@ -1,8 +1,11 @@
-# Persona Pool 설계 — 20~30명
+# Persona Pool 카드 원본 — production universe 30명
 
-> 작성 2026-08-30 · 상태 **설계 초안 · 구현 미착수**
+> 작성 2026-08-30 · 갱신 2026-10-09 · 상태 **좁은 실행 입력 — §5 카드 31장**
 > 선행: [Persona Architecture 설계](2026-08-30-persona-architecture-design.md) · [M3 반응 지도](2026-08-30-m3-reaction-map-design.md) · [Safety / Originality Gate](2026-08-30-persona-safety-originality-gate-design.md)
 > 상위: [Micro Seed Lane 헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) §9 페르소나 원칙 · §12 M4 Persona OS
+> 권한 경계: runtime과 검사는 §5 카드를 `PERSONA_POOL_DOC`로 직접 읽는다. 이 파일은 Persona 정체성 카드의
+> `EXECUTABLE_INPUT`일 뿐, 단계별 인원 목표·현재 active 수·D100 정책은 정하지 않는다. §1~§4와 §6 이후의
+> 규모·절차·결정 표는 작성 당시 설계 근거다. 분류는 [`D100-DOCUMENT-INVENTORY.md`](./D100-DOCUMENT-INVENTORY.md)를 따른다.
 
 ---
 
@@ -228,7 +231,7 @@ menopause       전 4 · 진행중 8 · 후 8
 | 정본 | 무엇 | 코드 근거 | 누가 읽나 |
 |---|---|---|---|
 | **이 문서 §5 카드** | Persona **정체성 원본** — 결혼·자녀·돌봄·갱년기·말투 | `persona-pool-card.parsePoolDoc` → `cardToPersona` | **생성 전** 선택 (`voice-persona-plan.planVoicePersonas`) |
-| **production cohort** | 실제로 쓰는 **code universe** (30명 — 운영 active 는 wave5 적재·활성화 전까지 24명) | `src/lib/persona-cohort.ts` `PRODUCTION_PERSONA_CODES` | 말투 자산 배정 (`planBundles`) |
+| **production cohort** | 실제로 쓰는 **code universe** 30명 | `src/lib/persona-cohort.ts` `PRODUCTION_PERSONA_CODES` | 말투 자산 배정 (`planBundles`) |
 | **운영 DB `Persona.identity`** | 발행 시점의 **집행 정본** — 여기에 없으면 발행되지 않는다 | `scripts/original-post-auto-publish.mts` `identity.childrenCount` 등 **top-level** | **발행 직전** `hardFilter` |
 
 ### 🔴 한 줄 원칙
@@ -1088,7 +1091,7 @@ Pool 차원에서 거는 장치다. [M3 §4-7](2026-08-30-m3-reaction-map-design
 
 ---
 
-## §10 남은 창업자 결정사항
+## §10 📜 작성 당시 남은 창업자 결정사항
 
 | # | 결정 | 상태 |
 |---|---|---|
@@ -1096,13 +1099,13 @@ Pool 차원에서 거는 장치다. [M3 §4-7](2026-08-30-m3-reaction-map-design
 | ② | 🔴 **초기 활성 3~5명을 누구로 할 것인가** | 🟡 **5명 선정안 제시됨** → [MVP 활성화 설계](2026-08-30-persona-mvp-activation-design.md) |
 | ③ | `silenceRate` · `dailyCap` · `weeklyCap` 기본값 | 🔴 구현 시 결정 |
 | ④ | `displayName` 작명 실행 | §3-2 정책 승인 후 배정 |
-| ⑤ | Pool 을 20명으로 시작할 것인가 30명까지 채울 것인가 | 이 문서는 20명 초안 |
+| ⑤ | Pool 을 20명으로 시작할 것인가 30명까지 채울 것인가 | 2026-10-08 production 30명으로 완료 |
 | ⑥ | Relationship Memory 보존 기간 6/12개월이 적정한가 | §8-3 |
 | ⑦ | ✅ **공개 · 신뢰 정책** | ✅ **확정 — 외부 비공개 / 내부 어드민 명확 구분** (§9) |
 
 ---
 
-## §11 현 시점 금지
+## §11 📜 작성 당시 현 시점 금지
 
 ```
 🔴 Prisma schema 작성 · migration · seed 파일 생성
