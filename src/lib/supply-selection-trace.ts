@@ -96,8 +96,11 @@ export type TraceCandidate = {
   edfRound: number | null
   edf: TraceEdfStage
   selectStep: WorksetSelectStep | null
+  /** 🔴 지금 비교기가 받은 값 그대로 — `ageAtSlotH` 는 정본 판정이 0.001h 로 반올림한 값이다(기존 동작) */
   rank: TraceRank | null
-  /** 정본 관측 나이 구간(`observationBucketOf`) — 나이를 모르면 null */
+  /** 🔴 판정 슬롯에서의 **원래** 원문 나이(h · 반올림 없음) — 신선도 구간 · EDF 나이 비교는 이 값으로 한다 */
+  sourceAgeH: number | null
+  /** 정본 관측 나이 구간(`observationBucketOf(sourceAgeH)`) — 나이를 모르면 null */
   freshnessBand: string | null
   selected: boolean
   /** 최종 묶음 안 순서(0부터) — 고르지 않았으면 null */
@@ -207,7 +210,16 @@ const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').dig
 /** 🔴 묶음 digest — 같은 묶음이면 같은 값(관측 전후 · on/off 대조에 쓴다) */
 export const worksetDigestOf = (w: Workset): string => sha256(JSON.stringify(w))
 
-const round3 = (x: number | null): number | null => (x === null ? null : Math.round(x * 1000) / 1000)
+/**
+ * 🔴 **원래 원문 나이(h) — 반올림 없음.** 정본 판정과 같은 식(`max(0, 슬롯 − 게시)`)을 증거 기록의 게시 시각으로 잰다.
+ *    정본 `rank.ageAtSlotH` 는 비교기용으로 0.001h 에 반올림돼 있다 — 그 값으로 구간 · EDF 나이를 재면
+ *    2.9996h 가 3h 구간으로 넘어가고 0.001h 미만 차이가 동률이 된다. 판정용으로는 이 값을 쓴다.
+ *    🔴 eligible 판정을 받은 행에만 부른다(게시 시각이 이미 정본 검증을 지났다). 못 읽으면 null.
+ */
+const rawAgeH = (r: WorksetRow, slotAt: Date): number | null => {
+  const posted = Date.parse(r.evidence?.postedAt ?? '')
+  return Number.isFinite(posted) ? Math.max(0, slotAt.getTime() - posted) / HOUR_MS : null
+}
 
 export function buildSupplySelectionTrace(input: {
   runId: string
@@ -239,7 +251,7 @@ export function buildSupplySelectionTrace(input: {
     const slotAgesH = reachedSlot
       ? input.slots.map((d) => {
         const v = input.slotVerdict(r, d)
-        return v.verdict === 'eligible' ? round3(v.rank.ageAtSlotH) : null
+        return v.verdict === 'eligible' ? rawAgeH(r, d) : null
       })
       : null
     const lastValid = slotAgesH === null ? -1 : slotAgesH.reduce<number>((m, a, i) => (a !== null ? i : m), -1)
@@ -273,24 +285,27 @@ export function buildSupplySelectionTrace(input: {
     if (asg?.kept === true && assignedIdx === undefined) reason = 'TRACE_MISMATCH'
 
     const rk = e.verdict?.rank ?? null
-    const ageAtSlotH = rk === null ? null : round3(rk.ageAtSlotH)
+    // 🔴 판정 슬롯에서의 원래 나이 — 정본 판정이 나이를 쟀을 때(rank.ageAtSlotH 있음)만
+    const sourceAgeH = e.verdict === null || rk === null || rk.ageAtSlotH === null ? null : rawAgeH(r, new Date(e.verdict.slotAt))
     candidates.push({
       sourceHash: articleIdHashOf(r.sourceSite, r.sourceArticleId),
       source: r.sourceSite,
       axis: worksetAxisOf(r),
       retry: prior !== undefined,
       retryTier: prior === undefined ? null : retryTierOf(prior),
-      retryWaitedH: prior === undefined ? null : round3((input.takenAt.getTime() - runClockOf(prior)) / HOUR_MS),
+      retryWaitedH: prior === undefined ? null : (input.takenAt.getTime() - runClockOf(prior)) / HOUR_MS,
       slotAgesH,
       lastValidSlot: lastValid < 0 ? null : lastValid,
       assignedSlot: assignedIdx ?? null,
       edfRound: asg === undefined ? null : asg.round,
       edf,
       selectStep: step,
+      // 🔴 지금 비교기가 받은 값 그대로(trace 가 다시 반올림하지 않는다)
       rank: rk === null ? null : {
-        commentsPct: round3(rk.commentsPct), viewsPct: round3(rk.viewsPct), ageAtSlotH, velocity: round3(rk.velocity),
+        commentsPct: rk.commentsPct, viewsPct: rk.viewsPct, ageAtSlotH: rk.ageAtSlotH, velocity: rk.velocity,
       },
-      freshnessBand: observationBucketOf(ageAtSlotH),
+      sourceAgeH,
+      freshnessBand: observationBucketOf(sourceAgeH),
       selected: pos !== null,
       position: pos,
       reason,
@@ -407,7 +422,7 @@ export function shadowOf(cs: readonly TraceCandidate[]): TraceShadow {
 const TOP_KEYS = ['kind', 'version', 'runId', 'takenAt', 'limit', 'cap', 'jit', 'slots', 'worksetDigest', 'candidates', 'summary', 'shadow']
 const CANDIDATE_KEYS = [
   'sourceHash', 'source', 'axis', 'retry', 'retryTier', 'retryWaitedH', 'slotAgesH', 'lastValidSlot', 'assignedSlot',
-  'edfRound', 'edf', 'selectStep', 'rank', 'freshnessBand', 'selected', 'position', 'reason', 'menopauseCore', 'wgangSource',
+  'edfRound', 'edf', 'selectStep', 'rank', 'sourceAgeH', 'freshnessBand', 'selected', 'position', 'reason', 'menopauseCore', 'wgangSource',
 ]
 const RANK_KEYS = ['commentsPct', 'viewsPct', 'ageAtSlotH', 'velocity']
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -454,7 +469,9 @@ export function readSupplySelectionTrace(raw: unknown): SelectionTraceRead {
     if (c.rank !== null && (!isObj(c.rank) || !sameKeys(c.rank, RANK_KEYS) || !RANK_KEYS.every((k) => numOrNull((c.rank as Record<string, unknown>)[k])))) {
       p.push(`${at}:RANK`)
     }
-    if (c.freshnessBand !== null && (typeof c.freshnessBand !== 'string' || !/^(<\d+h|\d+-\d+h)$/.test(c.freshnessBand))) p.push(`${at}:BAND`)
+    if (!numOrNull(c.sourceAgeH)) p.push(`${at}:SOURCE_AGE`)
+    // 🔴 구간은 원래 나이에서만 나온다 — 따로 적힌 구간이 나이와 어긋나면 손상이다
+    else if (c.freshnessBand !== observationBucketOf(c.sourceAgeH as number | null)) p.push(`${at}:BAND`)
     const sel = typeof c.reason === 'string' && c.reason.startsWith('SELECTED_')
     if (c.selected !== (c.position !== null) || (c.reason !== 'TRACE_MISMATCH' && c.selected !== sel)) p.push(`${at}:SELECTED`)
     if ((c.edf === 'ASSIGNED') !== (c.assignedSlot !== null)) p.push(`${at}:ASSIGNED`)

@@ -50,6 +50,8 @@ const S3 = new Date(NOW.getTime() + 30 * H)
 /** 🔴 정본 정규화(`mergeJudgeRows`) · 정본 증거 모양(`fakeSourceEvidence`)을 지난 행 — 손으로 조립하지 않는다 */
 const ROW = (o: {
   id: string; site?: string; ageH: number; cp: number; axis?: 'seed' | 'raw'; title?: string; body?: string; viewsNull?: boolean
+  /** 🔴 원천 상대 조회 백분위(기본 0.6) — 반올림 경계 반례에만 준다 */
+  vp?: number
 }): WorksetRow => {
   const site = o.site ?? RT
   const [input] = mergeJudgeRows([{
@@ -63,6 +65,7 @@ const ROW = (o: {
   }])
   let ev = fakeSourceEvidence(NOW, { site, id: o.id, ageH: o.ageH, commentsPct: o.cp })
   if (o.viewsNull === true) ev = { ...ev, sourceStats: { ...ev.sourceStats!, viewsPct: null } }
+  if (o.vp !== undefined) ev = { ...ev, sourceStats: { ...ev.sourceStats!, viewsPct: o.vp } }
   return {
     sourceArticleId: o.id, sourceSite: site, commentCount: 10, sourcePostedAt: '', sourceListedAt: '',
     input: input!, evidence: ev,
@@ -381,6 +384,60 @@ console.log('\n══ 공급 선택 관측 trace (P0-B0) — 선택 불변 · �
     && src.split('recordSelectionTraceSafely(').length === 2)
   check('⑭ 러너 — trace 블록 안에 DB · 자식 실행 · provider · 묶음 재할당 없음',
     block.length > 0 && !/prisma|run\(|fetch\(|plan\s*=|assigned\s*=|workset\s*=/.test(block), block.slice(0, 80))
+}
+
+// ── ⑮ 반올림 없는 판정 (2026-10-10 마스터 보정) — 판정에는 원래 값 · 새 허용 오차 0 ──
+{
+  const r3 = (x: number): number => Math.round(x * 1000) / 1000
+  const A = ROW({ id: 'rd-cp-a', ageH: 4, cp: 0.8004 })
+  const B = ROW({ id: 'rd-cp-b', ageH: 4, cp: 0.8005 })
+  const cpRun = sameRun({ rows: [A, B], slots: [S1], cap: 2 })
+  check('⑮ commentsPct 0.8004 · 0.8005 는 엄격 동률이 아니다 — 값이 반올림 없이 그대로 남는다',
+    cpRun.on.trace!.shadow.strictTieGroups === 0 && cpRun.on.trace!.shadow.noStrictTie === 2
+    && byId(cpRun.on.trace!, RT, 'rd-cp-a')!.rank!.commentsPct === 0.8004
+    && byId(cpRun.on.trace!, RT, 'rd-cp-b')!.rank!.commentsPct === 0.8005, JSON.stringify(cpRun.on.trace!.shadow))
+  const C1 = ROW({ id: 'rd-cp-c', ageH: 4, cp: 0.8001 })
+  const C2 = ROW({ id: 'rd-cp-d', ageH: 4, cp: 0.8004 })
+  const mergeRun = sameRun({ rows: [C1, C2], slots: [S1], cap: 2 })
+  check('⑮ commentsPct 0.8001 · 0.8004(0.001 반올림이면 둘 다 0.8 로 합쳐지는 쌍)도 엄격 동률이 아니다',
+    r3(0.8001) === r3(0.8004) && mergeRun.on.trace!.shadow.strictTieGroups === 0, JSON.stringify(mergeRun.on.trace!.shadow))
+  const V1 = ROW({ id: 'rd-vp-a', ageH: 4, cp: 0.8, vp: 0.6001 })
+  const V2 = ROW({ id: 'rd-vp-b', ageH: 4, cp: 0.8, vp: 0.6004 })
+  const vpRun = sameRun({ rows: [V1, V2], slots: [S1], cap: 2 })
+  check('⑮ viewsPct 가 반올림 뒤에만 같아지는 두 후보(0.6001 · 0.6004)는 엄격 동률이 아니다',
+    r3(0.6001) === r3(0.6004) && vpRun.on.trace!.shadow.strictTieGroups === 0 && vpRun.on.trace!.shadow.noStrictTie === 2,
+    JSON.stringify(vpRun.on.trace!.shadow))
+
+  // 슬롯 S0(NOW+0.5h) 기준 나이 2.9996h · 3.0004h
+  const S0 = new Date(NOW.getTime() + 0.5 * H)
+  const Y = ROW({ id: 'rd-age-y', ageH: 2.4996, cp: 0.8 })
+  const O = ROW({ id: 'rd-age-o', ageH: 2.5004, cp: 0.8 })
+  const ageRun = sameRun({ rows: [Y, O], slots: [S0], cap: 2 })
+  const y = byId(ageRun.on.trace!, RT, 'rd-age-y')!
+  const o = byId(ageRun.on.trace!, RT, 'rd-age-o')!
+  check('⑮ 나이 2.9996h → <3h · 3.0004h → 3-6h (정본 구간을 원래 나이로) — 정본 rank 는 둘 다 3.000 으로 반올림돼 있다',
+    y.freshnessBand === '<3h' && o.freshnessBand === '3-6h' && y.rank!.ageAtSlotH === 3 && o.rank!.ageAtSlotH === 3
+    && Math.abs(y.sourceAgeH! - 2.9996) < 1e-9 && ageRun.on.trace!.shadow.strictTieGroups === 0,
+    `${y.freshnessBand}/${y.sourceAgeH} · ${o.freshnessBand}/${o.sourceAgeH}`)
+
+  // S3(NOW+30h)에서 72h 경계를 0.0006h 차이로 가른다 → S1 에서의 나이 차도 0.0006h
+  const OLD = ROW({ id: 'rd-edf-old', ageH: 42.0004, cp: 0.5 })
+  const FRESH = ROW({ id: 'rd-edf-fresh', ageH: 41.9998, cp: 0.9 })
+  const edfRun = sameRun({ rows: [OLD, FRESH], slots: [S1, S3], cap: 1 })
+  const eo = byId(edfRun.on.trace!, RT, 'rd-edf-old')!
+  const ef = byId(edfRun.on.trace!, RT, 'rd-edf-fresh')!
+  check('⑮ 나이 차 0.001h 미만(0.0006h)이어도 EDF 가 더 오래된 원천을 먼저 골랐으면 edfOlderOverFresher 에 잡힌다',
+    eo.edf === 'ASSIGNED' && ef.edf === 'CAP_CUT' && edfRun.on.trace!.summary.edfOlderOverFresher === 1
+    && r3(eo.slotAgesH![0]!) === r3(ef.slotAgesH![0]!), `${eo.slotAgesH?.join()} · ${ef.slotAgesH?.join()}`)
+
+  const all = [cpRun, mergeRun, vpRun, ageRun, edfRun]
+  check('⑮ 보정 반례 5벌 — 실제 슬롯 · 묶음 · 순서 · digest 가 trace 없는 실행과 같다',
+    all.every(({ off, on }) => selectionOf(off) === selectionOf(on) && worksetDigestOf(off.plan.workset) === on.trace!.worksetDigest))
+  const t = ageRun.on.trace!
+  const bad = JSON.parse(serializeSelectionTrace(t)) as { candidates: Record<string, unknown>[] }
+  bad.candidates.find((c) => c.sourceHash === y.sourceHash)!.freshnessBand = '3-6h'
+  check('⑮ 원래 나이와 어긋나는 구간이 적힌 trace 는 손상으로 읽힌다',
+    !readSupplySelectionTrace(bad).ok && readSupplySelectionTrace(JSON.parse(serializeSelectionTrace(t))).ok)
 }
 
 // ── 사유 · 단계 이름이 서로 겹치지 않는다 ──

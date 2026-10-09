@@ -13,7 +13,7 @@
     "src/lib/auto-ready-v2.ts": "3b678eecbc10f0cc87eff300a3fecfec9b57204d735c35d558b7f28c24922b43",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
-    "src/lib/original-post-persona-match.ts": "c9e6e130a887cd369cad12ec2bb82ccc031b5e606e3ed5d3640c521ccd1d1343",
+    "src/lib/original-post-persona-match.ts": "8f32caf5d6c45cffa858e5088e6fc250ca16d56983c992112a74d98c0a392aa8",
     "scripts/lib/content-core-run.mts": "2868e056718645a17140238d7269bc6a0ad8f5a9303e29e04752ac957fec4106",
     "scripts/lib/content-core-prompts.mts": "c746dde7e579474a361a0c523364da61fd6e94c4278f3e3a90ea578999571dac",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
@@ -29,14 +29,10 @@
     "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209"
   },
   "acknowledgement": {
-    "kind": "revise",
-    "reason": "quality-v6 digest 7ac85d137409… → 26b2a32b8a4e… · 결함 축 정본 교체 — 전 기간 defect=yes 카운트(confirmedDefectCount)를 지우고 지금 계약에서 해소되지 않은 확정 결함(unresolvedDefectCount · judgeDefectResolution)으로. 해소 기록 판 defect-resolution-v1 을 digest 구성에 넣음 · 해소 판정·쓰기 파일 지문 추가 (운영 v6 행 0)",
+    "kind": "behaviorUnchanged",
+    "reason": "P0-B0 관측 전용 mentionsMenopause export 추가; MENOPAUSE_RE 및 기존 품질 게이트·판정·digest 불변",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
-      "src/lib/auto-ready-v2.ts",
-      "src/lib/auto-ready-repo.ts",
-      "src/lib/auto-ready-defect-resolution.ts",
-      "src/lib/auto-ready-defect-resolution-store.ts"
+      "src/lib/original-post-persona-match.ts"
     ]
   }
 }
