@@ -21,10 +21,12 @@ const F = {
   merge: path.join(HERE, 'magazine-auto-merge.mjs'),
   gate: path.join(HERE, 'lib', 'magazine-merge-gate.mjs'),
   install: path.join(HERE, 'magazine-launchd-install.mts'),
+  lock: path.join(HERE, 'lib', 'magazine-auto-lock.mjs'),
 }
 const CHECKS = [
   ['복구 검사', process.execPath, [path.join(HERE, 'magazine-auto-merge-recovery-check.mjs')]],
   ['launchd 검사', path.join(ROOT, 'node_modules', '.bin', 'tsx'), [path.join(HERE, 'magazine-launchd-check.mts')]],
+  ['잠금 다중 프로세스 검사', process.execPath, [path.join(HERE, 'magazine-auto-lock-race-check.mjs')]],
 ]
 
 const MUTATIONS = [
@@ -49,7 +51,27 @@ const MUTATIONS = [
   { name: 'no-op 멱등성 제거 — 이미 병합된 PR 도 대상으로 (--state all)', edits: [{ file: F.merge,
     find: "    const r = exec('gh', ['pr', 'list', '--state', 'open',", replace: "    const r = exec('gh', ['pr', 'list', '--state', 'all'," }] },
   { name: '01:00 병합과 동시 실행 차단(잠금) 제거', edits: [{ file: F.merge,
-    find: '  if (!lock.ok) {\n    return { ...base, outcome: \'DEFERRED\'', replace: '  if (false) {\n    return { ...base, outcome: \'DEFERRED\'' }] },
+    find: '  if (!lock.ok) {\n    const timedOut', replace: '  if (false) {\n    const timedOut' }] },
+  // ── 잠금 원자성 · owner token · 회수 재대조 (Codex 재검토 P1) ──
+  { name: '잠금 원자 생성 제거 (wx → w)', edits: [{ file: F.lock,
+    find: "  const fd = openSync(path, 'wx', 0o600)", replace: "  const fd = openSync(path, 'w', 0o600)" }] },
+  { name: 'owner token 대조 제거 (pid 만 본다)', edits: [{ file: F.lock,
+    find: "  if (!token || cur?.token !== token) return 'NOT_MINE'", replace: "  if (cur?.pid !== process.pid) return 'NOT_MINE'" }] },
+  { name: '죽은 잠금 회수의 재대조 제거 (원문 비교 + 재판정)', edits: [
+    { file: F.lock, find: '    if (nowRaw !== seenRaw) return', replace: '    if (false) return' },
+    { file: F.lock, find: '    if (!again.ok || !again.takeover) return', replace: '    if (false) return' }] },
+  // ── 복구의 유한 대기 · 실패 분류 · 시도별 결과 (Codex 재검토 P1) ──
+  { name: '잠금 대기 제거 (한 번 보고 끝)', edits: [{ file: F.merge,
+    find: '  while (!lock.ok && WAITABLE_LOCK_CODES.includes(lock.code) && now() - started < waitMs) {', replace: '  while (false) {' }] },
+  { name: '잠금 대기 시간 초과를 성공(종료 0)으로', edits: [{ file: F.merge,
+    find: 'export const exitCodeFor = (report) => (report.blockedBy.length > 0 ? 1 : 0)',
+    replace: "export const exitCodeFor = (report) => (report.outcome === 'LOCK_WAIT_TIMEOUT' ? 0 : report.blockedBy.length > 0 ? 1 : 0)" }] },
+  { name: '잠금 대기 시간 초과 알림 제거', edits: [{ file: F.merge,
+    find: "    if (report.outcome === 'LOCK_WAIT_TIMEOUT') return", replace: "    if (report.outcome === 'LOCK_WAIT_TIMEOUT') return null; if (false) return" }] },
+  { name: '시도별 결과 보존 제거 (같은 파일 덮어쓰기)', edits: [{ file: F.merge,
+    find: "  const file = join(dir, `auto-merge-recovery-${hms}-${process.pid}-${randomUUID().slice(0, 8)}.json`)",
+    replace: "  const file = join(dir, 'auto-merge-recovery.json'); void hms; void randomUUID" },
+    { file: F.merge, find: "{ encoding: 'utf8', flag: 'wx' })", replace: "{ encoding: 'utf8', flag: 'w' })" }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -63,7 +85,7 @@ process.on('uncaughtException', (e) => { restoreAll(); console.error(e); process
 const occurrences = (s, sub) => s.split(sub).length - 1
 const runAll = () => CHECKS.map(([label, cmd, args]) => {
   const r = spawnSync(cmd, args, { encoding: 'utf8', cwd: ROOT })
-  const summary = (r.stdout.match(/자동 병합 복구 검사 \d+\/\d+|\d+ PASS · \d+ FAIL/g) ?? ['출력 없음']).pop()
+  const summary = (r.stdout.match(/자동 병합 복구 검사 \d+\/\d+|잠금 다중 프로세스 검사 \d+\/\d+|\d+ PASS · \d+ FAIL/g) ?? ['출력 없음']).pop()
   return { label, status: r.status, summary }
 })
 

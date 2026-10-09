@@ -27,6 +27,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DRAFTS_DIR, parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
@@ -445,6 +446,15 @@ async function observeDeploy({ sha, deps, now, sleep, log }) {
  */
 export const MERGE_LOCK_PATH = join(DRAFTS_DIR, '_runs', '.auto-merge.lock')
 
+/**
+ * 🔴 02:00 복구가 01:00 병합 잠금을 기다리는 상한. 01:00 회차 최악(producer 대기 40분 + 등록 + CI 30분 +
+ *    mergeable 3분 + 배포 10분)이 02:00 을 넘을 수 있다 — 03:30 까지 본다. 무한 대기 없음 · KeepAlive 없음.
+ */
+export const RECOVERY_LOCK_WAIT_MS = 90 * 60 * 1000
+export const RECOVERY_LOCK_POLL_MS = 60 * 1000
+/** 기다리면 풀릴 수 있는 잠금 — 손상·LOCK_STUCK 은 여기 없다 (기다려도 안 풀린다 · fail-closed) */
+export const WAITABLE_LOCK_CODES = ['LOCK_HELD', 'LOCK_RECLAIM_BUSY']
+
 /** 01:00 결과 파일의 요약 — 복구 결과에 "최초 회차가 왜 못 끝냈나" 를 따로 남긴다 */
 export function summarizeInitial(json) {
   if (!json || typeof json !== 'object') return { found: false }
@@ -469,30 +479,64 @@ export function summarizeInitial(json) {
  *
  *    - 자동 PR 0건(이미 병합됐거나 애초에 없음) → `NOOP` (쓰기 0 · 성공)
  *    - 2건 이상 → `MULTIPLE_AUTO_PRS` 로 고르지 않고 멈춘다
- *    - 다른 병합 회차가 잠금을 쥐고 있으면 → `DEFERRED` (아무것도 하지 않는다)
+ *    - 01:00 병합이 잠금을 쥐고 있으면 → **유한하게 기다린다**(`RECOVERY_LOCK_WAIT_MS`). 풀리면 같은 관문으로 진행.
+ *      끝까지 잠겨 있으면 `LOCK_WAIT_TIMEOUT` — 🔴 성공도 NOOP 도 아니다. non-zero · 알림.
+ *      (2026-10-09 Codex 재검토 P1: 앞판은 한 번 보고 DEFERRED · exit 0 · 알림 0 으로 끝나 그날 다시 돌지 않았다)
+ *    - 손상·LOCK_STUCK 은 기다려도 풀리지 않는다 — 기다리지 않고 `LOCK_BLOCKED` (non-zero · 알림)
  *
  * @param {object} p
  * @param {object} p.deps      runAutoMerge 와 같은 주입
  * @param {object|null} p.initial  같은 날 01:00 `auto-merge.json` 내용 (없으면 null)
  * @param {() => {ok:boolean, code:string, message:string, release:()=>void}} p.acquire  병합 잠금
  */
-export async function runRecovery({ deps, initial = null, acquire }) {
-  const lock = acquire()
+export async function runRecovery({ deps, initial = null, acquire,
+  waitMs = RECOVERY_LOCK_WAIT_MS, pollMs = RECOVERY_LOCK_POLL_MS }) {
+  const now = deps.now ?? (() => Date.now())
+  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
   const base = { mode: 'recovery', initial: summarizeInitial(initial) }
+  const started = now()
+  let lock = acquire()
+  let tries = 1
+  // 🔴 기다릴 이유가 있는 것만 기다린다 — 살아 있는 주인(01:00 병합)·회수 중. 유한하게.
+  while (!lock.ok && WAITABLE_LOCK_CODES.includes(lock.code) && now() - started < waitMs) {
+    await sleep(pollMs)
+    lock = acquire()
+    tries += 1
+  }
+  const lockWait = { waitedMs: now() - started, tries, lastCode: lock.ok ? null : lock.code }
   if (!lock.ok) {
-    return { ...base, outcome: 'DEFERRED', pr: null, merged: false, blockedBy: [], checked: [],
-      deferred: { code: lock.code, message: lock.message } }
+    const timedOut = WAITABLE_LOCK_CODES.includes(lock.code)
+    return { ...base, outcome: timedOut ? 'LOCK_WAIT_TIMEOUT' : 'LOCK_BLOCKED', pr: null, merged: false, checked: [], lockWait,
+      blockedBy: [{ code: timedOut ? 'RECOVERY_LOCK_TIMEOUT' : lock.code,
+        message: timedOut
+          ? `병합 잠금이 ${Math.round(waitMs / 60000)}분 안에 풀리지 않았다 (${lock.code}: ${lock.message}) — merge 0`
+          : `병합 잠금을 판정할 수 없다 (${lock.code}: ${lock.message}) — 기다려도 풀리지 않는다 · merge 0` }] }
   }
   try {
     const report = await runAutoMerge({ apply: true, deps })
     const outcome = report.merged
       ? (report.blockedBy.length === 0 ? 'RECOVERED' : 'MERGED_UNVERIFIED')
       : (report.blockedBy.length === 0 && !report.pr ? 'NOOP' : 'BLOCKED')
-    return { ...report, ...base, outcome }
+    return { ...report, ...base, outcome, lockWait }
   } finally {
     lock.release()
   }
 }
+
+/**
+ * 🔴 **복구 결과는 시도마다 따로 남긴다** — 같은 날 복구가 두 번 돌아도 뒤의 NOOP 가 앞의 RECOVERED 를 덮지 않는다.
+ *    이름에 시각·pid·무작위 꼬리를 넣고 `wx` 로 쓴다(덮어쓰기 불가).
+ */
+export function writeRecoveryResult({ dir, report, runId = null, nowMs = Date.now() }) {
+  mkdirSync(dir, { recursive: true })
+  const hms = new Date(nowMs + 9 * 3600 * 1000).toISOString().slice(11, 19).replace(/:/g, '')
+  const file = join(dir, `auto-merge-recovery-${hms}-${process.pid}-${randomUUID().slice(0, 8)}.json`)
+  writeFileSync(file, `${JSON.stringify({ ...report, runId, writtenAt: new Date(nowMs).toISOString() }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+  return file
+}
+
+/** 종료 코드 — 🔴 막힌 것이 하나라도 있으면 1. 잠금 대기 시간 초과도 막힌 것이다 */
+export const exitCodeFor = (report) => (report.blockedBy.length > 0 ? 1 : 0)
 
 /**
  * Slack 제목 — 🔴 최초 회차의 시간 초과와 복구 결과를 **다른 문장**으로 남긴다.
@@ -505,7 +549,9 @@ export function slackTitleFor(report) {
     if (report.outcome === 'RECOVERED') return `매거진 자동 병합 복구 — #${n} merge 완료 (최초 회차: ${(report.initial?.codes ?? []).join(', ') || '기록 없음'})`
     if (report.outcome === 'MERGED_UNVERIFIED') return `매거진 자동 병합 복구 — #${n} merge (확인 실패)`
     if (report.outcome === 'BLOCKED') return `매거진 자동 병합 복구 중단${n ? ` — #${n}` : ''}`
-    return null // NOOP · DEFERRED 는 알리지 않는다 — 할 일이 없었다
+    if (report.outcome === 'LOCK_WAIT_TIMEOUT') return `매거진 자동 병합 복구 실패 — 병합 잠금이 ${Math.round((report.lockWait?.waitedMs ?? 0) / 60000)}분 동안 풀리지 않았다 · merge 0`
+    if (report.outcome === 'LOCK_BLOCKED') return `매거진 자동 병합 복구 실패 — 병합 잠금을 판정할 수 없다 (${report.lockWait?.lastCode}) · merge 0`
+    return null // NOOP 만 알리지 않는다 — 할 일이 없었다
   }
   if (report.merged) return `매거진 자동 병합 — #${n} merge${code ? ' (확인 실패)' : ' 완료'}`
   if (report.blockedBy.some((b) => b.code === 'CI_OBSERVE_TIMEOUT')) {
@@ -718,7 +764,8 @@ async function main() {
 
   /**
    * 🔴 **02:00 복구** — `--watch` 와 섞지 않는다. 11:00 watch 는 공개 확인 전용이다.
-   *    결과는 `auto-merge-recovery.json` 에 따로 쓴다 — 01:00 의 `auto-merge.json` 을 덮지 않는다.
+   *    결과는 시도마다 `auto-merge-recovery-<시각>-<pid>-<꼬리>.json` 으로 따로 쓴다 —
+   *    01:00 의 `auto-merge.json` 도, 앞선 복구 결과도 덮지 않는다.
    */
   if (argv.includes('--recover')) {
     line('자동 병합 복구 (🔴 실제 merge · 01:00 과 같은 관문)')
@@ -726,7 +773,7 @@ async function main() {
     try { initial = JSON.parse(readFileSync(join(runDir, 'auto-merge.json'), 'utf8')) } catch { initial = null }
     const report = await runRecovery({ deps: realDeps, initial,
       acquire: () => acquireLock({ path: MERGE_LOCK_PATH, label: 'auto-merge-recovery' }) })
-    line(`복구 결과: ${report.outcome}${report.deferred ? ` — ${report.deferred.code}: ${report.deferred.message}` : ''}`)
+    line(`복구 결과: ${report.outcome}${report.lockWait ? ` · 잠금 대기 ${Math.round(report.lockWait.waitedMs / 1000)}초 · ${report.lockWait.tries}회` : ''}`)
     const title = slackTitleFor(report)
     if (title) {
       const r = await send(buildMessage({
@@ -738,12 +785,11 @@ async function main() {
       line(`Slack: ${r.sent ? '발송' : `미발송 — ${r.reason}`}`)
     }
     try {
-      mkdirSync(runDir, { recursive: true })
-      writeFileSync(join(runDir, 'auto-merge-recovery.json'), `${JSON.stringify({ ...report, runId, writtenAt: new Date().toISOString() }, null, 2)}\n`, 'utf8')
+      line(`복구 결과: ${writeRecoveryResult({ dir: runDir, report, runId })}`)
     } catch (e) {
       line(`복구 결과 파일을 남기지 못했다 (${e?.message ?? e}) — 판정은 그대로다`)
     }
-    const rcode = report.blockedBy.length > 0 ? 1 : 0
+    const rcode = exitCodeFor(report)
     if (asJson) console.log(JSON.stringify(report, null, 2))
     line(`종료 (코드 ${rcode})`)
     process.exit(rcode)

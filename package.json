@@ -157,7 +157,7 @@
     "runtime:deploy": "tsx scripts/runtime-deploy.mts",
     "runtime:isolation-check": "tsx scripts/runtime-isolation-check.mts",
     "launchd:template-check": "tsx scripts/launchd-template-check.mts",
-    "magazine:auto-check": "node scripts/magazine-auto-register-check.mjs && node scripts/magazine-g8-promote-check.mjs && node scripts/magazine-format-contract-check.mjs && node scripts/magazine-repair-required-check.mjs && node scripts/magazine-auto-merge-recovery-check.mjs",
+    "magazine:auto-check": "node scripts/magazine-auto-register-check.mjs && node scripts/magazine-g8-promote-check.mjs && node scripts/magazine-format-contract-check.mjs && node scripts/magazine-repair-required-check.mjs && node scripts/magazine-auto-merge-recovery-check.mjs && node scripts/magazine-auto-lock-race-check.mjs",
     "check:magazine-format-contract-mutation": "node scripts/magazine-format-contract-mutation.mjs",
     "check:magazine-repair-required-mutation": "node scripts/magazine-repair-required-mutation.mjs",
     "chatgpt:session-check": "node scripts/chatgpt-session-check.mjs && node scripts/chatgpt-zero-page-check.mjs",

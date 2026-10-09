@@ -205,8 +205,11 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
                            ⑥ merge SHA 의 Production 배포 확인 → 예약 글이 **아직 안 나왔는지**(404)
                            필수 CI 는 최대 30분 기다린다 · 명시적 실패는 즉시 중단 (병합 잠금 안에서)
 02:00 KST  auto-merge-recovery  01:00 이 CI 시간 초과 등으로 못 끝낸 자동 PR 1건을 **같은 관문**으로
-                           다시 본다(`--recover`) · 0건 no-op · 2건 이상 멈춤 · 01:00 이 아직 돌면 미룬다
-                           결과는 _runs/{date}/auto-merge-recovery.json (01:00 의 auto-merge.json 을 덮지 않는다)
+                           다시 본다(`--recover`) · 0건 no-op · 2건 이상 멈춤
+                           01:00 병합이 아직 잠금을 쥐고 있으면 최대 90분 기다린다 → 풀리면 진행 ·
+                           끝까지 잠겨 있으면 merge 0 · non-zero · Slack (성공·no-op 로 세지 않는다)
+                           결과는 시도마다 _runs/{date}/auto-merge-recovery-<시각>-<pid>-<꼬리>.json
+                           (01:00 의 auto-merge.json 도, 앞선 복구 결과도 덮지 않는다)
 10:30 KST  (해당일)        publishAt 도달 → 예약 글이 공개된다
 11:00 KST  magazine-watch  본문·대표 이미지·/magazine 목록 노출 확인 → 실패면 Slack
 ```

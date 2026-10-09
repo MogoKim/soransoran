@@ -173,17 +173,68 @@ console.log('\n③ 자동 PR 0건 no-op · 2건 이상 fail-closed · 01:00 병�
   const d2 = deps({ prs: () => [{ ...PR675 }, { ...PR675, number: 676, headRefName: `${MG.AUTO_BRANCH_PREFIX}2026-10-09-020000` }] })
   const r2 = await AM.runRecovery({ deps: d2, initial: initialTimeout, acquire: freeLock })
   check('③ 자동 PR 2건 → MULTIPLE_AUTO_PRS · 고르지 않는다 · merge 0', r2.outcome === 'BLOCKED' && codes(r2).includes('MULTIPLE_AUTO_PRS') && merges(d2) === 0, codes(r2).join(','))
-  // 실제 잠금 — 01:00 병합이 아직 쥐고 있다
+  // 실제 잠금 — 01:00 병합이 아직 쥐고 있다 (살아 있는 주인 · 방금 잡음)
   const lockPath = path.join(T, '.auto-merge.lock')
-  fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: Date.now(), label: 'auto-merge' })}\n`)
+  const hold = () => fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: Date.now(), label: 'auto-merge', token: 'tok-0100' })}\n`)
+  const realAcquire = () => LOCK.acquireLock({ path: lockPath, label: 'auto-merge-recovery' })
+
+  // ① 02:00 에 잠겼다가 제한 안에 풀린다 → 기다렸다 자동 RECOVERED
+  hold()
+  const du = deps({ startAt: Date.parse('2026-10-09T02:00:00+09:00') })
+  const baseSleep = du.sleep
+  let slept = 0
+  du.sleep = async (ms) => { slept += ms; if (slept >= 25 * MIN && fs.existsSync(lockPath)) fs.rmSync(lockPath); return baseSleep(ms) }
+  const ru = await AM.runRecovery({ deps: du, initial: initialTimeout, acquire: realAcquire })
+  check('③ 02:00 에 잠겼다가 25분 뒤 풀림 → 기다렸다 자동 RECOVERED · merge 1',
+    ru.outcome === 'RECOVERED' && merges(du) === 1 && ru.lockWait.waitedMs >= 25 * MIN && ru.lockWait.waitedMs < AM.RECOVERY_LOCK_WAIT_MS,
+    `${ru.outcome} · merge ${merges(du)} · ${JSON.stringify(ru.lockWait)}`)
+  check('③ 잠금을 다 쓰고 놓는다 (잔여 0)', !fs.existsSync(lockPath))
+
+  // ② 끝까지 잠김 → merge 0 · non-zero · 알림 1 · 성공·NOOP 아님
+  hold()
   const dl = deps()
-  const rl = await AM.runRecovery({ deps: dl, initial: initialTimeout, acquire: () => LOCK.acquireLock({ path: lockPath, label: 'auto-merge-recovery' }) })
-  check('③ 01:00 병합이 잠금을 쥐고 있으면 DEFERRED · 조회·merge 0 · 알림 0',
-    rl.outcome === 'DEFERRED' && rl.deferred?.code === 'LOCK_HELD' && dl.calls.length === 0 && AM.slackTitleFor(rl) === null, `${rl.outcome} · ${dl.calls.join(',')}`)
+  const rl = await AM.runRecovery({ deps: dl, initial: initialTimeout, acquire: realAcquire })
+  check('③ 끝까지 잠김 → LOCK_WAIT_TIMEOUT · 조회·merge 0 · 유한하게 끝난다',
+    rl.outcome === 'LOCK_WAIT_TIMEOUT' && dl.calls.length === 0 && rl.lockWait.waitedMs >= AM.RECOVERY_LOCK_WAIT_MS && rl.lockWait.waitedMs < AM.RECOVERY_LOCK_WAIT_MS + 2 * MIN,
+    `${rl.outcome} · ${JSON.stringify(rl.lockWait)}`)
+  check('③ 끝까지 잠김 → 종료 코드 1 (성공도 NOOP 도 아니다)', AM.exitCodeFor(rl) === 1 && codes(rl).includes('RECOVERY_LOCK_TIMEOUT'), codes(rl).join(','))
+  check('③ 끝까지 잠김 → 알림 1 (제목이 있다)', /복구 실패 — 병합 잠금이 \d+분 동안 풀리지 않았다 · merge 0/.test(AM.slackTitleFor(rl) ?? ''), AM.slackTitleFor(rl))
   fs.rmSync(lockPath)
-  const dr = deps()
-  const rr = await AM.runRecovery({ deps: dr, initial: initialTimeout, acquire: () => LOCK.acquireLock({ path: lockPath, label: 'auto-merge-recovery' }) })
-  check('③ 잠금이 풀려 있으면 잡고 진행 · 끝나면 놓는다', rr.outcome === 'RECOVERED' && !fs.existsSync(lockPath), `${rr.outcome} · lock ${fs.existsSync(lockPath)}`)
+
+  // ③ 기다려도 안 풀리는 잠금(LOCK_STUCK · 손상)은 기다리지 않고 막는다
+  fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: Date.now() - 3 * 3600 * 1000, label: 'auto-merge', token: 'tok-old' })}\n`)
+  const ds = deps()
+  const rs = await AM.runRecovery({ deps: ds, initial: initialTimeout, acquire: realAcquire })
+  check('③ LOCK_STUCK → 기다리지 않고 LOCK_BLOCKED · merge 0 · 종료 1 · 알림', rs.outcome === 'LOCK_BLOCKED' && rs.lockWait.tries === 1 && merges(ds) === 0
+    && AM.exitCodeFor(rs) === 1 && AM.slackTitleFor(rs) !== null, `${rs.outcome} · ${JSON.stringify(rs.lockWait)}`)
+  fs.writeFileSync(lockPath, '{ 깨진')
+  const rc = await AM.runRecovery({ deps: deps(), initial: initialTimeout, acquire: realAcquire })
+  check('③ 손상된 잠금 → LOCK_BLOCKED (LOCK_CORRUPT) · 지우지 않는다', rc.outcome === 'LOCK_BLOCKED' && rc.lockWait.lastCode === 'LOCK_CORRUPT' && fs.existsSync(lockPath), rc.outcome)
+  fs.rmSync(lockPath)
+
+  // ④ 동시 복구 2개 → merge 최대 1 (실제 잠금 · 공유 PR 상태)
+  let mergedOnce = false
+  const shared = () => deps({ prs: () => (mergedOnce ? [] : [{ ...PR675 }]), over: {
+    mergePr: (n, sha) => { if (mergedOnce) return { ok: false, reason: '이미 병합됨' }; mergedOnce = true; return { ok: true, mergeCommit: MERGED } } } })
+  const dA = shared(); const dB = shared()
+  for (const d of [dA, dB]) { const s0 = d.sleep; d.sleep = async (ms) => { await new Promise((r) => setImmediate(r)); return s0(ms) } }
+  let mergeCalls = 0
+  for (const d of [dA, dB]) { const m0 = d.mergePr; d.mergePr = (n, sha) => { mergeCalls += 1; return m0(n, sha) } }
+  const [rA, rB] = await Promise.all([
+    AM.runRecovery({ deps: dA, initial: initialTimeout, acquire: realAcquire }),
+    AM.runRecovery({ deps: dB, initial: initialTimeout, acquire: realAcquire }),
+  ])
+  const outs = [rA.outcome, rB.outcome].sort().join(',')
+  check('③ 동시 복구 2개 → merge 호출 최대 1 · 하나는 RECOVERED, 다른 하나는 기다렸다 NOOP', mergeCalls === 1 && outs === 'NOOP,RECOVERED', `merge ${mergeCalls} · ${outs}`)
+  check('③ 동시 복구 뒤 잠금 잔여 0', !fs.existsSync(lockPath))
+
+  // ⑤ 복구 성공 증거가 뒤의 NOOP 로 사라지지 않는다 — 시도별 파일
+  const RD = path.join(T, 'runs')
+  const f1 = AM.writeRecoveryResult({ dir: RD, report: { ...rA.outcome === 'RECOVERED' ? rA : rB }, runId: 'r1' })
+  const f2 = AM.writeRecoveryResult({ dir: RD, report: { outcome: 'NOOP', blockedBy: [], merged: false }, runId: 'r2' })
+  const first = JSON.parse(fs.readFileSync(f1, 'utf8'))
+  check('③ 복구 결과는 시도마다 다른 파일 · 앞의 RECOVERED 가 그대로 남는다',
+    f1 !== f2 && fs.readdirSync(RD).length === 2 && first.outcome === 'RECOVERED' && first.merged === true, `${path.basename(f1)} · ${path.basename(f2)}`)
 }
 
 // ── ④ 실제 명령 조립 — 열린 PR 만 본다 ──────────────────────
@@ -208,8 +259,9 @@ console.log('\n⑤ 배선 — 11:00 watch 는 merge 하지 않는다 · 복구 �
   check('⑤ --watch 경로에 merge·복구·runAutoMerge 가 없다', watchBlock.length > 0 && !/runAutoMerge|runRecovery|mergePr|--apply/.test(watchBlock))
   const recoverBlock = main.slice(main.indexOf("if (argv.includes('--recover'))"), main.indexOf("line(`자동 병합 ${apply"))
   check('⑤ 복구는 runRecovery 하나로 · 병합 잠금(MERGE_LOCK_PATH) 안에서', /runRecovery\(/.test(recoverBlock) && /MERGE_LOCK_PATH/.test(recoverBlock))
-  check('⑤ 복구 결과는 auto-merge-recovery.json — 01:00 의 auto-merge.json 을 덮지 않는다',
-    /'auto-merge-recovery\.json'/.test(recoverBlock) && !/'auto-merge\.json'\), `\$\{JSON/.test(recoverBlock))
+  check('⑤ 복구 결과는 시도별 파일(writeRecoveryResult · wx) — 01:00 의 auto-merge.json 을 덮지 않는다',
+    /writeRecoveryResult\(\{ dir: runDir/.test(recoverBlock) && !/'auto-merge\.json'\), `\$\{JSON/.test(recoverBlock) && /flag: 'wx'/.test(src))
+  check('⑤ 복구 종료 코드는 exitCodeFor — 잠금 대기 시간 초과도 1', /const rcode = exitCodeFor\(report\)/.test(recoverBlock))
   check('⑤ 01:00 --apply 도 같은 병합 잠금을 쓴다', /apply \? acquireLock\(\{ path: MERGE_LOCK_PATH/.test(main))
   check('⑤ 병합기는 원고·등록·재생성을 부르지 않는다 (재전송·재생성·재등록 0)', !/magazine-webui-runner|magazine-auto-register\b|magazine-regen|attemptRegeneration/.test(src))
 }
