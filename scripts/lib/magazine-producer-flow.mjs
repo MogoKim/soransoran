@@ -166,6 +166,20 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     else log('brief 게이트에 막힌 건이 있다 — 회차 자체는 계속한다')
   }
 
+  /**
+   * ── 2-b) 입력 수리 (2026-10-10) ──────────────────────────
+   *    잠금·미해결 작업 검사를 통과한 뒤, 일반 원고 회수 **전에** REPAIR_REQUIRED 를 고친다.
+   *    🔴 수리 실패는 회차 실패가 아니다 — 원고 회수는 계속 간다. 판정(verdict)에 넣지 않는다.
+   */
+  let repairStage = null
+  if (!dryRun && planOk && deps.runRepair) {
+    ran.push('repair')
+    const r = deps.runRepair()
+    repairStage = { spawnError: r.spawnError ?? null, status: r.status ?? null }
+    if (repairStage.spawnError) log(`🔴 입력 수리를 실행하지 못했다 (${repairStage.spawnError}) — 원고 회수는 계속한다`)
+    else log(`입력 수리 종료 코드 ${repairStage.status} — 원고 회수는 계속한다`)
+  }
+
   // ── 3) 원고 회수 ────────────────────────────────────────
   let fetchStage = stage('fetch', { skipped: true })
   if (dryRun) log('dry-run — 원고 회수를 실행하지 않는다')

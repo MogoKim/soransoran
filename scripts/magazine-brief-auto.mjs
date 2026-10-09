@@ -69,7 +69,7 @@ function siblingArticles(cluster, articles) {
     .map((a) => `- \`${a.slug}\` — ${a.title}`)
 }
 
-function buildPrompt({ slug, todoText, queueItem, articles }) {
+export function buildPrompt({ slug, todoText, queueItem, articles }) {
   // preparedAt 은 모델이 지어내면 틀린다. 실행 시각(KST)을 프롬프트에 박아 넣는다
   const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const cluster = queueItem?.cluster ?? '-'
@@ -233,7 +233,7 @@ function splitOutput(text) {
 }
 
 /** 생성된 review.ts 문자열에서 REVIEW 객체를 꺼낸다 (파일로 쓰지 않는다) */
-function parseReview(reviewText) {
+export function parseReview(reviewText) {
   const anchor = reviewText.indexOf('export const REVIEW')
   if (anchor === -1) return null
   const start = reviewText.indexOf('{', anchor)
@@ -288,6 +288,55 @@ function writeArtifacts({ dir, briefText, reviewText, queueItem }) {
 }
 
 // ─────────────────────────────────────────────────────────
+// 생성 — 🔴 brief-auto 회차와 입력 수리 단계가 **같은 함수**를 쓴다 (2026-10-10)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 한 번 더 시도한다.
+ *    실측 성공률이 회차마다 1/3 ~ 3/3 으로 흔들린다. 형식 이탈·섹션 누락이
+ *    대부분이고 같은 프롬프트로 다시 받으면 붙는다. 무인 실행에서 한 번 흔들렸다고
+ *    그날 그 slug 의 brief 가 통째로 없어지면 안 된다.
+ *    2회로 묶는다 — 더 늘리면 실패를 성공할 때까지 갈아 넣는 구조가 된다.
+ */
+export const BRIEF_MAX_ATTEMPTS = 2
+
+/**
+ * brief.md · review.ts 후보를 **만들기만** 한다 — 파일을 쓰지 않는다. 판정은 `verifyBrief`(G1~G7 · GF) 하나다.
+ * @param {{prompt:string, queueItem:object|null, model?:string|null, callClaudeFn?:Function}} p
+ * @returns {{split:object|null, review:object|null, verdict:object|null, attempts:number, lastReason:string}}
+ */
+export function generateBriefCandidate({ prompt, queueItem, model = null, callClaudeFn = callClaude }) {
+  let attempt = 0
+  let split = null
+  let review = null
+  let verdict = null
+  let lastReason = ''
+  while (attempt < BRIEF_MAX_ATTEMPTS) {
+    attempt++
+    const called = callClaudeFn(prompt, { model })
+    if (!called.ok) {
+      lastReason = called.reason
+      continue
+    }
+    const parts = splitOutput(called.text)
+    if (!parts.ok) {
+      lastReason = parts.reason
+      continue
+    }
+    const rv = parseReview(parts.reviewText)
+    if (!rv) {
+      lastReason = 'review.ts 에서 REVIEW 객체를 읽지 못했다'
+      continue
+    }
+    const v = verifyBrief({ briefText: parts.briefText, review: rv, queueItem })
+    split = parts
+    review = rv
+    verdict = v
+    if (v.ok) break
+    lastReason = v.results.filter((r) => !r.ok).map((r) => `${r.gate} ${r.detail}`).join(' · ')
+  }
+  return { split, review, verdict, attempts: attempt, lastReason }
+}
 
 function help() {
   console.log(`auto-brief (dry-run 전용 — 파일을 쓰지 않는다)
@@ -376,47 +425,13 @@ async function main() {
       continue
     }
 
-    // 🔴 한 번 더 시도한다.
-    //    실측 성공률이 회차마다 1/3 ~ 3/3 으로 흔들린다. 형식 이탈·섹션 누락이
-    //    대부분이고 같은 프롬프트로 다시 받으면 붙는다. 무인 실행에서 한 번 흔들렸다고
-    //    그날 그 slug 의 brief 가 통째로 없어지면 안 된다.
-    //    2회로 묶는다 — 더 늘리면 실패를 성공할 때까지 갈아 넣는 구조가 된다.
-    const MAX_ATTEMPTS = 2
-    let attempt = 0
-    let split = null
-    let review = null
-    let verdict = null
-    let lastReason = ''
-
-    while (attempt < MAX_ATTEMPTS) {
-      attempt++
-      const called = callClaude(prompt, { model })
-      if (!called.ok) {
-        lastReason = called.reason
-        continue
-      }
-      const parts = splitOutput(called.text)
-      if (!parts.ok) {
-        lastReason = parts.reason
-        continue
-      }
-      const rv = parseReview(parts.reviewText)
-      if (!rv) {
-        lastReason = 'review.ts 에서 REVIEW 객체를 읽지 못했다'
-        continue
-      }
-      const v = verifyBrief({ briefText: parts.briefText, review: rv, queueItem })
-      split = parts
-      review = rv
-      verdict = v
-      if (v.ok) break
-      lastReason = v.results.filter((r) => !r.ok).map((r) => `${r.gate} ${r.detail}`).join(' · ')
-    }
-
-    if (!split || !review || !verdict) {
-      reports.push({ slug, status: 'GEN_FAILED', detail: `${MAX_ATTEMPTS}회 시도 실패 — ${lastReason}`, attempts: attempt })
+    const gen = generateBriefCandidate({ prompt, queueItem, model })
+    if (!gen.split || !gen.review || !gen.verdict) {
+      reports.push({ slug, status: 'GEN_FAILED', detail: `${BRIEF_MAX_ATTEMPTS}회 시도 실패 — ${gen.lastReason}`, attempts: gen.attempts })
       continue
     }
+    const { split, verdict } = gen
+    const attempt = gen.attempts
 
     const { ok, results } = verdict
 

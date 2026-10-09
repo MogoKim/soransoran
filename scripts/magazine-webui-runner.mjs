@@ -67,7 +67,7 @@ import {
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
-import { manuscriptPromptText, plannedMessageFor, deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
+import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
 
 /** 🔴 정본은 `lib/magazine-delivery-gate.mjs` 다 — 기존 호출부·시험을 위해 그대로 내보낸다 */
@@ -487,7 +487,7 @@ async function fetchSlug(slug, opts = {}) {
     if (!pr.ok) return fetchSlugUnderLease(slug, opts)
     attemptId = pr.packet.attemptId
   }
-  const lease = acquireManuscriptLease({ slug, work: opts.regenPacket ? 'regen' : 'fetch', attemptId, path: quarantinePath })
+  const lease = acquireManuscriptLease({ slug, work: opts.inputRepair ? 'input-repair' : opts.regenPacket ? 'regen' : 'fetch', attemptId, path: quarantinePath })
   if (!lease.ok) {
     return {
       slug, status: lease.code === MANUSCRIPT_IN_PROGRESS_REASON ? 'held' : 'failed', reason: lease.code, stage: 'lease',
@@ -530,10 +530,27 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
    *    미추적 draft.md 는 되돌려지지 않았다. 이제 재생성은 **부모가 준 임시 경로**에만 쓰고,
    *    부모가 검증·변환에 성공했을 때만 draft.md 를 원자적으로 바꾼다 (magazine-auto-register.mjs).
    */
-  draftOut = null } = {}) {
+  draftOut = null,
+  /**
+   * 🔴 **입력 수리(brief echo → 원고)** — `{ type: 'BRIEF_ECHO' }`. 전용 메시지·지문으로 보내고
+   *    응답은 **임시 경로(draftOut)에만** 쓴다. draft.md 는 부모(입력 수리 단계)가 검증한 뒤에만 바뀐다.
+   */
+  inputRepair = null } = {}) {
   const dir = join(draftsDir, slug)
   const briefPath = join(dir, 'brief.md')
   const draftPath = join(dir, 'draft.md')
+  if (inputRepair && inputRepair.type !== 'BRIEF_ECHO') {
+    return { slug, status: 'failed', reason: 'INPUT_REPAIR_TYPE_UNKNOWN', stage: 'args', sent: false,
+      errorDetail: `모르는 입력 수리 종류다: ${inputRepair.type} (한 글자도 보내지 않았다)` }
+  }
+  if (inputRepair && regenPacket) {
+    return { slug, status: 'failed', reason: 'INPUT_REPAIR_WITH_REGEN', stage: 'args', sent: false,
+      errorDetail: '입력 수리와 재생성은 함께 보낼 수 없다 (한 글자도 보내지 않았다)' }
+  }
+  if (inputRepair && !draftOut) {
+    return { slug, status: 'failed', reason: 'INPUT_REPAIR_DRAFT_OUT_MISSING', stage: 'args', sent: false,
+      errorDetail: '입력 수리는 --draft-out 임시 경로가 필요하다 — draft.md 에 직접 쓰지 않는다 (한 글자도 보내지 않았다)' }
+  }
   if (regenPacket && !draftOut) {
     return { slug, status: 'failed', reason: 'REGEN_DRAFT_OUT_MISSING', stage: 'args', sent: false,
       errorDetail: '재생성은 --draft-out 임시 경로가 필요하다 — draft.md 에 직접 쓰지 않는다 (한 글자도 보내지 않았다)' }
@@ -569,13 +586,13 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
 
   // 실제 전송 문자열은 아래 `deliveryGate()`가 현재 원고까지 포함해 한 번만 만든다.
   // `promptText`는 `message`가 없는 호출의 fallback일 뿐이므로 재생성에서는 조립하지 않는다.
-  const prompt = packet ? null : manuscriptPromptText(null)
+  const prompt = packet || inputRepair ? null : manuscriptPromptText(null)
 
   /**
    * 🔴 **보내도 되는가 — 브라우저를 건드리기 전에 본다.** 판정은 `deliveryGate` 하나다.
    *    HOLD 면 접근 확인도, Chrome 기동도, send 클릭도 0이다.
    */
-  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath })
+  const gate = inputRepair ? inputRepairGate({ slug, draftsDir, quarantinePath }) : deliveryGate({ slug, draftsDir, packet, quarantinePath })
   if (!gate.ok) {
     return { slug, status: 'failed', reason: gate.code, stage: 'ledger', sent: false,
       messageFingerprint: gate.messageFingerprint, errorDetail: `${gate.why} (한 글자도 보내지 않았다)`,
@@ -634,6 +651,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     }
     try {
       const u = reserveDelivery({ slug, messageFingerprint, reservationId, regen,
+        inputRepair: inputRepair ? { fingerprint: gate.messageFingerprint } : null,
         now: Date.now(), runId: runIdHint, date: dateHint, path: quarantinePath,
         compatibleMessageFingerprints: gate.legacyMessageFingerprint ? [gate.legacyMessageFingerprint] : [],
       })
@@ -755,7 +773,7 @@ function describeDraft(slug, draftsDir = DRAFTS_DIR, path = join(draftsDir, slug
  *    `SORAN_MAGAZINE_TEST_MODE=1` 일 때만 채워진다 (`magazine-test-harness.mjs`).
  *    운영에서는 비어 있어 실제 probe·CDP·장부가 돈다.
  */
-export async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null, draftOut = null,
+export async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null, draftOut = null, inputRepair = null,
   quarantinePath = QUARANTINE_PATH, draftsDir = DRAFTS_DIR,
   probeFn = probe, browserDeps = {}, exit = (code) => process.exit(code) } = {}) {
   console.log('')
@@ -818,7 +836,7 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
   const r = await fetchSlug(slug, { force, regenPacket, quarantinePath, dateHint: todayKst(),
-    draftsDir, browserDeps, accessFn, draftOut })
+    draftsDir, browserDeps, accessFn, draftOut, inputRepair })
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
@@ -1175,8 +1193,23 @@ async function main() {
       console.error('')
       process.exit(1)
     }
+    /**
+     * 🔴 `--input-repair brief-echo` — 값이 없거나 모르는 값이면 멈춘다 (일반 요청으로 새지 않게).
+     */
+    let inputRepair = null
+    if (argv.includes('--input-repair')) {
+      const v = argv[argv.indexOf('--input-repair') + 1]
+      if (v !== 'brief-echo') {
+        console.error('')
+        console.error(`  ⛔ INPUT_REPAIR_ARG — --input-repair 값은 brief-echo 하나다 (받은 값: ${v ?? '없음'})`)
+        console.error('     한 글자도 보내지 않았다. (전송 0건)')
+        console.error('')
+        process.exit(1)
+      }
+      inputRepair = { type: 'BRIEF_ECHO' }
+    }
     return await fetchOne(slug, {
-      force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path, draftOut: dout.path,
+      force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path, draftOut: dout.path, inputRepair,
       ...(T.probe ? { probeFn: T.probe } : {}),
       ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab, ...(T.fetchTiming ?? {}) } } : {}),
       ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),

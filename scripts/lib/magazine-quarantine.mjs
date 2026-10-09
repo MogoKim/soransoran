@@ -417,6 +417,13 @@ export const REGEN_EXHAUSTED_REASON = 'REGEN_EXHAUSTED'
 export function reserveDelivery({
   slug, messageFingerprint, reservationId, regen = null, now = Date.now(),
   runId = null, date = null, path = QUARANTINE_PATH, compatibleMessageFingerprints = [],
+  /**
+   * 🔴 **입력 수리 전송** (2026-10-10 · brief echo 를 원고로 다시 쓰게 하는 전용 요청).
+   *    같은 임계구역 안에서 ① 이미 보낸 수리 지문이면 막고 ② 처음이면 지문을 **영구 기록**하고
+   *    `inputRepairCalls` 를 올린다. 예약이 정산돼 delivery 가 지워져도 이 기록은 남는다 — 같은 수리 지문 전송 최대 1회.
+   *    regenCalls · CONTENT attempts 는 건드리지 않는다.
+   */
+  inputRepair = null,
 }) {
   let out = null
   const u = updateQuarantine((cur) => {
@@ -425,6 +432,11 @@ export function reserveDelivery({
       .map((fingerprint) => deliveryHoldsFetch(cur[slug], fingerprint))
       .find(Boolean) ?? null
     if (held) { out = { ok: false, held, why: held.why }; return cur }
+    if (inputRepair && inputRepairAlreadySent(cur[slug], inputRepair.fingerprint)) {
+      const why = '이미 보낸 입력 수리 요청이다 — 같은 수리 지문은 다시 보내지 않는다'
+      out = { ok: false, held: { why, delivery: cur[slug]?.delivery ?? null }, why }
+      return cur
+    }
     if (regen) {
       const b = regenBudget({ entry: cur[slug] })
       if (b.exhausted) {
@@ -438,12 +450,29 @@ export function reserveDelivery({
       reason: 'sending', stage: 'send', now, runId, date, reservationId,
     })
     if (regen) entry = recordRegenCall({ entry, now, packetHash: regen.packetHash ?? null, attemptId: regen.attemptId ?? null })
+    if (inputRepair) entry = recordInputRepairCall({ entry, now, fingerprint: inputRepair.fingerprint })
     out = { ok: true }
     return { ...cur, [slug]: entry }
   }, path)
   // 🔴 잠금 시간 초과·장부 손상·판정 불가 — 전부 전송 금지
   if (!u?.ok) return { ok: false, code: u?.code ?? 'QUARANTINE_UNREADABLE', why: u?.why ?? '알 수 없음' }
   return out
+}
+
+/** 입력 수리 지문을 이미 보냈는가 — 장부 행에 영구 기록된 목록으로 본다 */
+export function inputRepairAlreadySent(entry, fingerprint) {
+  return Boolean(fingerprint) && Array.isArray(entry?.inputRepairFingerprints) && entry.inputRepairFingerprints.includes(fingerprint)
+}
+
+/** 입력 수리 전송 1회를 센다 — regenCalls · attempts 와 다른 칸이다 */
+export function recordInputRepairCall({ entry, now, fingerprint }) {
+  const prev = entry ?? {}
+  return {
+    ...prev,
+    inputRepairCalls: (Number.isFinite(prev.inputRepairCalls) ? prev.inputRepairCalls : 0) + 1,
+    inputRepairFingerprints: [...(Array.isArray(prev.inputRepairFingerprints) ? prev.inputRepairFingerprints : []), fingerprint],
+    lastInputRepairAt: now,
+  }
 }
 
 /** 🔴 **내 예약일 때만** 전송 기록을 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다 */

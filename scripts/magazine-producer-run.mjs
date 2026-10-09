@@ -64,6 +64,7 @@ const NODE = process.execPath // 지금 이 프로세스를 띄운 node. plist �
 
 const WEBUI = join(ROOT, 'scripts/magazine-webui-runner.mjs')
 const BRIEF_AUTO = join(ROOT, 'scripts/magazine-brief-auto.mjs')
+const INPUT_REPAIR = join(ROOT, 'scripts/magazine-input-repair.mjs')
 const PLAN = join(ROOT, 'scripts/magazine-producer-plan.mjs')
 const NOTIFY = join(ROOT, 'scripts/magazine-producer-notify.mjs')
 
@@ -164,6 +165,8 @@ const result = await runProducerFlow({
       } catch { return { selected: null, reusable: 0 } }   // 🔴 모르면 옛 경로 그대로 간다
     },
     runBrief: () => spawnStage([BRIEF_AUTO, '--run', kstDate(), '--write']),
+    // 🔴 입력 수리 — 잠금·미해결 검사 뒤 · 원고 회수 전 (2026-10-10)
+    runRepair: () => spawnStage([INPUT_REPAIR, '--run', kstDate(), '--write']),
     runFetch: () => spawnStage([WEBUI, '--fetch-run']),
     notify: notifyOnce,
   },
