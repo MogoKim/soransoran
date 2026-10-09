@@ -317,17 +317,37 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   const ws = jitWorksetsIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime())
   const worksetSources = ws?.sources ?? null
   try {
+    /**
+     * 🔴 **cohort 시계는 공급 회차 하나다** (2026-10-09 P0). 분모(묶음 원천) · 분자(READY) · 비용(장부)이 **같은 회차 집합**
+     *    (`cohortRuns` = 창 안 `workset-v3` 회차)을 쓴다. 앞판은 분자만 자동 도장 시각(`decidedAt`) 창으로 잘랐다 —
+     *    발행 러너는 22:00 뒤 08:00 까지 돌지 않아 **22:15 회차 결과가 매일 분모에만 들고 분자에서 빠졌다**
+     *    (2026-10-09 07:00 실측: 원천 101 · READY 16 → 공급 능력 9. 회차 기준이면 READY 20 → 11).
+     *    🔴 행은 적재 시각이 창 시작 이후인 것만 후보로 읽는다 — 회차 시작 ≥ 창 시작이고 적재는 회차 뒤다(이월 적재 포함).
+     *    소속은 시각이 아니라 `supplyIntent.runId ∈ cohortRuns` 가 정한다. 창 밖 회차 행은 **제외**다(불일치가 아니다).
+     */
     const found = await prisma.originalPostApprovalQueue.findMany({
-      where: { decidedBy: AUTO_DECIDER, decidedAt: { gte: i.windowFrom, lt: i.windowTo } },
-      select: { id: true, status: true, gateResults: true },
+      where: { createdAt: { gte: i.windowFrom } },
+      select: { id: true, status: true, gateResults: true, decidedBy: true, createdPostId: true },
     })
+    /**
+     * 🔴 **자동 READY 경로 행만** — 자동 도장(`AUTO_DECIDER`) 행, 그리고 **자동 도장 전 기계 적재 행**
+     *    (`machine:` · APPROVED · 미발행). 도장 전 행은 성공으로 확정하지 않는다 — 결말 모름(unknown)이다.
+     *    사람이 결정한 행은 자동 READY 가 아니다(세지 않는다).
+     */
+    const autoPath = found.filter((r) => r.decidedBy === AUTO_DECIDER
+      || ((r.decidedBy ?? '').startsWith('machine:') && r.status === 'APPROVED' && r.createdPostId === null))
     /**
      * 🔴 **현재 JIT 계약 행만** (2026-10-04 P0-2 보정 · 최종) — 계약을 주장한 행은 모양만 보고 인정하지 않는다:
      *    그 회차 `workset-v3`(정본 판독기) 의 같은 원천 의도 · 원문 증거 해시와 **정확히** 같아야 한다.
      *    하나라도 다르면 legacy 로 빼지 않고 cohort 전체를 모름으로 닫는다. 주장하지 않는 옛 READY 는 수만 보고한다.
      */
-    const current = found.filter((r) => claimsJitContract(r.gateResults))
-    legacyExcluded = found.length - current.length
+    const claimed = autoPath.filter((r) => claimsJitContract(r.gateResults))
+    legacyExcluded = autoPath.length - claimed.length
+    // 🔴 창 밖 회차 행은 이 cohort 가 아니다 — 의도를 읽을 수 없는 행은 소속을 모르므로 불일치로 닫는다
+    const current = claimed.filter((r) => {
+      const intent = readSupplyIntent(r.gateResults)
+      return intent === null || ws?.byRun.has(intent.runId) === true
+    })
     for (const r of current) {
       const intent = readSupplyIntent(r.gateResults)
       const ev = readSourceEvidence(r.gateResults)
@@ -344,9 +364,11 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
     rows = current.map((r) => {
       const intent = readSupplyIntent(r.gateResults)!
       const terminal = r.status === 'PUBLISHED' || READY_LOSS_STATUSES.includes(r.status)
+      const stamped = r.decidedBy === AUTO_DECIDER
       return {
         id: r.id, status: r.status, hash: intent.sourceHash,
-        fate: terminal ? null : pendingFateOf({
+        // 🔴 도장 전 적재 행 — 아직 자동 READY 가 아니다. 예정 슬롯에 걸려도 성공으로 세지 않는다
+        fate: terminal ? null : !stamped ? 'unknown' : pendingFateOf({
           gateResults: r.gateResults, matched: i.matched.has(r.id), horizon: i.horizon, now: i.now, tieBreak: r.id,
         }).fate,
       }
@@ -503,7 +525,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
-      + ` · 현재 정산 $${costAttribution.totalUsd.toFixed(4)}`)
+      + ` (추정 예약액 $${costAttribution.openReservedUsd.toFixed(4)} — 실제 비용 아님) · 현재 정산 $${costAttribution.totalUsd.toFixed(4)}`)
   }
   const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
     : { sources: worksetSources, ...fates, usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null }

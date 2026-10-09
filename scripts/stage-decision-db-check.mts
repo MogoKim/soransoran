@@ -40,10 +40,10 @@ import {
   type StageDecision, type ValidatedStageDecision,
 } from '../src/lib/stage-decision-contract'
 import { ensureStageDecision, consumeStageDecision } from '../src/lib/stage-decision-store'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readPreflightFacts } from './lib/stage-preflight-facts.mjs'
+import { readPreflightFacts, readReadyCohort } from './lib/stage-preflight-facts.mjs'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { buildSourceEvidence, SOURCE_STATS_METHOD } from '../src/lib/source-slot-release'
 import {
@@ -73,6 +73,8 @@ import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import { ledgerDirForHome } from './lib/llm-ledger-store.mjs'
+import type { LedgerEntry } from '../src/lib/llm-ledger'
 
 /**
  * 🔴 **격리 DB 가 아니면 여기서 멈춘다 — 그리고 주소를 한 글자도 찍지 않는다.**
@@ -673,21 +675,22 @@ async function main(): Promise<void> {
         runnerHealth: 'ok', contractValidPersonas: async () => 30,
       })
       const c = r.facts.readyCohort
-      check('🔴 🔴 **F 완전 연결 cohort = 공개 2 · 손실 4(EXPIRED · DECLINED · 80h · 슬롯 전 만료) · 예정 0 · 모름 2 · 원천 30**',
-        c !== null && c.published === 2 && c.lost === 4 && c.scheduled === 0 && c.unknown === 2 && c.sources === 30
+      // 🔴 (2026-10-09 P0) cohort 소속은 회차다 — decidedAt 이 창 시작 1초 전(old) · 창 끝 정각(end) 이어도 회차가 창 안이면 포함
+      check('🔴 🔴 **F 완전 연결 cohort = 공개 2 · 손실 4(EXPIRED · DECLINED · 80h · 슬롯 전 만료) · 예정 0 · 모름 4(start · recent · old · end) · 원천 30**',
+        c !== null && c.published === 2 && c.lost === 4 && c.scheduled === 0 && c.unknown === 4 && c.sources === 30
         && (r.detail.intentMismatches as unknown[]).length === 0, JSON.stringify({ c, m: r.detail.intentMismatches }))
-      check('🔴 창 시작 1초 전 · 창 끝 정각 · 사람 결정 · 의도 없는 legacy 2행은 cohort 밖 — raw READY 8 · legacy 2',
-        r.detail.readyCount === 8 && r.detail.legacyExcluded === 2, JSON.stringify(r.detail))
+      check('🔴 🔴 **decidedAt 이 아니라 회차가 소속을 정한다 — 창 밖 decidedAt(old · end)도 회차가 창 안이라 포함 · 사람 결정 · 의도 없는 legacy 2행은 밖 — raw READY 10 · legacy 2**',
+        r.detail.readyCount === 10 && r.detail.legacyExcluded === 2, JSON.stringify(r.detail))
       const y = r.detail.yieldBounds as { low: number; high: number } | null
-      check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 2) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 4 / 30, JSON.stringify(y))
+      check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 4) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 6 / 30, JSON.stringify(y))
       if (c !== null) {
         const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 12) 같은 cohort 용량 16 이 채운다 → 처리량 확정',
-          d3.counts.readyNeededMax === 12 && d3.counts.readyCapacity === 16
+        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) 같은 cohort 용량 20 이 채운다 → 처리량 확정',
+          d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 20
           && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
         const d5 = judgeNextPreflight('d5', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 🔴 **d5 — 모르는 대기 2 의 결말에 따라 필요 10~20 · 용량 16 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
-          d5.counts.readyNeededMin === 10 && d5.counts.readyNeededMax === 20
+        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 20 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
+          d5.counts.readyNeededMin === 9 && d5.counts.readyNeededMax === 25
           && d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict !== 'PASS', JSON.stringify(d5.counts))
         check('🔴 공급 비용 = 목표 5 × 결과당 $0.01 — raw READY 단가 · 공개 단가 칸 없음',
           Math.abs((d5.counts.supplyDailyUsdNeeded ?? 0) - 0.05) < 1e-12
@@ -702,9 +705,10 @@ async function main(): Promise<void> {
         runnerHealth: 'ok', contractValidPersonas: async () => 30,
       })
       /**
-       * 🔴 **cohort 경계 — 창 밖 회차의 묶음은 정상 파일이어도 이 cohort 가 아니다** (2026-10-04 P0-2 최종 보정).
+       * 🔴 **cohort 경계 — 창 밖 회차의 행은 이 cohort 가 아니다** (2026-10-04 P0-2 · 2026-10-09 P0 회차 시계).
        *    창 = UTC [09-27T15:00:00Z, 09-30T15:00:00Z). 같은 큐 행(창 안 decidedAt)의 의도를 창 시작 1초 전 회차로 옮기면
-       *    분자에 넣지 않고 cohort 전체를 모름으로 닫는다. 같은 행을 창 시작 정각 회차로 옮기면 정상 계산.
+       *    분자 · 분모 · 비용 어디에도 넣지 않는다(제외) — 앞판처럼 cohort 전체를 모름으로 닫지 않는다.
+       *    같은 행을 창 시작 정각 회차로 옮기면 그 묶음 원천 1 과 함께 들어온다.
        */
       const rec = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'pfc-recent' }, select: { id: true, gateResults: true } })
       const g0 = rec.gateResults as Record<string, Record<string, unknown>>
@@ -717,15 +721,16 @@ async function main(): Promise<void> {
       await moveTo('20260927-145959')
       const outside = await factsAgain()
       const ov = judgeNextPreflight('d5', outside.facts, RUNNER_GRID)
-      check('🔴 🔴 **묶음 runAt 창 시작 1초 전 · 큐 decidedAt 창 안 · 파일 정상 → WORKSET_OUTSIDE_COHORT · cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN**',
-        outside.facts.readyCohort === null && JSON.stringify(outside.detail.intentMismatches) === JSON.stringify(['WORKSET_OUTSIDE_COHORT'])
-        && outside.detail.worksetSources === 30 && ov.codes.includes('THROUGHPUT_UNKNOWN') && ov.codes.includes('SUPPLY_COST_UNKNOWN'),
-        JSON.stringify({ m: outside.detail.intentMismatches, ws: outside.detail.worksetSources, codes: ov.codes }))
+      const oc = outside.facts.readyCohort
+      check('🔴 🔴 **창 밖 회차 — 묶음 runAt 창 시작 1초 전 · 큐 decidedAt 창 안 → 그 행은 cohort 밖(제외) · 불일치 0 · 모름 3 · 원천 30 그대로 · 처리량 판정 가능**',
+        oc !== null && oc.unknown === 3 && oc.published === 2 && oc.lost === 4 && oc.sources === 30
+        && (outside.detail.intentMismatches as unknown[]).length === 0 && outside.detail.readyCount === 9 && !ov.codes.includes('THROUGHPUT_UNKNOWN'),
+        JSON.stringify({ oc, m: outside.detail.intentMismatches, codes: ov.codes }))
       await moveTo('20260927-150000')
       const inside = await factsAgain()
       const ic = inside.facts.readyCohort
-      check('🔴 🔴 **같은 행의 묶음 runAt 이 창 시작 정각(창 안) → 정상 계산 — 공개 2 · 손실 4 · 모름 2 · 원천 31(그 묶음 1 포함)**',
-        ic !== null && ic.published === 2 && ic.lost === 4 && ic.unknown === 2 && ic.sources === 31
+      check('🔴 🔴 **같은 행의 묶음 runAt 이 창 시작 정각(창 안) → 정상 계산 — 공개 2 · 손실 4 · 모름 4 · 원천 31(그 묶음 1 포함)**',
+        ic !== null && ic.published === 2 && ic.lost === 4 && ic.unknown === 4 && ic.sources === 31
         && (inside.detail.intentMismatches as unknown[]).length === 0, JSON.stringify({ ic, m: inside.detail.intentMismatches }))
       await prisma.originalPostApprovalQueue.update({ where: { id: rec.id }, data: { gateResults: g0 as Prisma.InputJsonValue } })
       // 🔴 E — 큐 의도 하나가 그 회차 묶음과 나이 한 칸만 달라도 cohort 전체가 모름(legacy 로 빼지 않는다)
@@ -750,6 +755,197 @@ async function main(): Promise<void> {
     } finally {
       rmSync(dir, { recursive: true, force: true })
       await wipeC()
+    }
+  }
+
+  console.log('\n⑩ 🔴 2026-10-08 22:15 사건 재생 — 회차 시계 · 도장 전 행 · 미상 비용 UNKNOWN · D10 은 여전히 BLOCK (2026-10-09 P0)')
+  {
+    /**
+     * 🔴 운영 실측 모양(보조 맥북 · 정본 판독기로 재계산한 값) — 증거일 2026-10-08 · 창 KST 10-06~08 · 판정 10-09 07:00.
+     *    창 안 workset 회차 11개(UTC id) · 원천 101 · 그 회차들이 만든 READY 20 —
+     *      도장된 16(공개 8 · 만료 2 · 대기 6) + **22:15 회차(20261008-131506) 4건은 22:16 적재 · 08:00 자동 도장**(07:00 엔 도장 전).
+     *    앞판(분자 = decidedAt 창)은 16 ÷ 101 → 공급 능력 9. 회차 시계면 20 ÷ 101 → 11. 필요 12 → 여전히 THROUGHPUT_SHORT.
+     *    장부 — 사용량 미상 2건(추정 예약 $0.008652 · $0.0085926 · 운영 실측값) → 결과당 비용 확정 불가(SUPPLY_COST_UNKNOWN).
+     */
+    const site = 'fixture:p0-2215'
+    const RUNS: readonly [string, number, number][] = [
+      ['20261006-231506', 10, 2], ['20261007-031505', 10, 1], ['20261007-051506', 10, 2], ['20261007-121506', 7, 0],
+      ['20261007-131506', 8, 1], ['20261007-231502', 7, 0], ['20261008-031505', 9, 2], ['20261008-051506', 10, 4],
+      ['20261008-081504', 10, 3], ['20261008-121502', 10, 1], ['20261008-131506', 10, 4],
+    ]
+    const LATE = '20261008-131506'
+    const OUT_BEFORE = '20261005-131505'
+    const OUT_AFTER = '20261008-231504'
+    const now = new Date('2026-10-09T07:00:00+09:00')
+    const windowFrom = new Date('2026-10-05T15:00:00Z')
+    const windowTo = new Date('2026-10-08T15:00:00Z')
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    const fresh = now.getTime() - 2 * 3_600_000
+    const evOf = (k: string): Record<string, unknown> => ({
+      sourceEvidence: buildSourceEvidence({
+        postedAt: iso(fresh), capturedAt: iso(fresh + 30 * 60_000), sourceSite: site, sourceArticleId: k, dedupKey: `${site}|${k}`,
+        response: { comments: 3, views: 100, observedAt: iso(fresh + 30 * 60_000) },
+        sourceStats: { basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: site, bucket: '<3h', n: 5,
+          commentsPct: 0.5, viewsPct: 0.5, windowFrom: iso(fresh - 72 * 3_600_000), windowTo: iso(fresh + 30 * 60_000) },
+        participationDriver: '공감',
+      }),
+    })
+    const intentOf = (k: string, runId: string): Record<string, unknown> => ({
+      contract: SUPPLY_JIT_CONTRACT, runId, sourceHash: articleIdHashOf(site, k), intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+    })
+    const runAt = (runId: string): Date => new Date(Date.UTC(+runId.slice(0, 4), +runId.slice(4, 6) - 1, +runId.slice(6, 8), +runId.slice(9, 11), +runId.slice(11, 13)))
+    const wipeP = async (): Promise<void> => {
+      await prisma.originalPostApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: 'p0r-' } } })
+      await prisma.microSeedRawContent.deleteMany({ where: { sourceSite: site } })
+    }
+    await wipeP()
+    const dir = mkdtempSync(join(tmpdir(), 'p0-2215-'))
+    const home = mkdtempSync(join(tmpdir(), 'p0-2215-home-'))
+    const prevHome = process.env.HOME
+    // 결말 배분 — 도장된 16: 공개 8 · 만료 2 · 대기(APPROVED) 6 / 22:15 회차 4: 도장 전 기계 적재
+    const fates = ['PUBLISHED', 'PUBLISHED', 'PUBLISHED', 'PUBLISHED', 'PUBLISHED', 'PUBLISHED', 'PUBLISHED', 'PUBLISHED',
+      'EXPIRED', 'EXPIRED', 'APPROVED', 'APPROVED', 'APPROVED', 'APPROVED', 'APPROVED', 'APPROVED'] as const
+    const ledgerLines = new Map<string, LedgerEntry[]>()
+    const ledger = (runId: string, k: string, status: LedgerEntry['status'], settledUsd: number | null, reservedUsd: number | null): void => {
+      const at = runAt(runId)
+      const day = new Date(at.getTime() + 9 * 3_600_000).toISOString().slice(0, 10)
+      const e: LedgerEntry = {
+        runId: `${runId}-d`, stage: 'draftGen', attemptId: `p0r-${runId}-${k}-${status}`, requestNo: 0, provider: 'google',
+        apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash', status, blockCode: null, countedInputTokens: 100, maxOutputTokens: 1200,
+        reservedUsd, inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+        settledUsd, pricingVersion: 'p0', startedAt: at.toISOString(), endedAt: at.toISOString(), errorCode: null,
+        sourceKey: articleIdHashOf(site, k), supplyContract: SUPPLY_JIT_CONTRACT,
+      }
+      ledgerLines.set(day, [...(ledgerLines.get(day) ?? []), e])
+    }
+    try {
+      let n = 0
+      let stampedIdx = 0
+      const mk = async (k: string, runId: string, status: string, by: string, decidedAt: Date): Promise<void> => {
+        const raw = await prisma.microSeedRawContent.create({
+          data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/${k}`, sourceArticleId: k,
+            sourceCapturedAt: new Date(fresh), rawTitle: `원문 ${k}`, rawBody: `원문 본문 ${k}` }, select: { id: true },
+        })
+        await prisma.originalPostApprovalQueue.create({
+          data: { sourceRawContentId: raw.id, status: status as never, draftTitle: `초안 ${k}`, draftBody: `본문 ${k}`, gateVerdict: 'PASS',
+            promptVersion: 'p0r', model: 'p0r', gateResults: { ...evOf(k), [SUPPLY_INTENT_KEY]: intentOf(k, runId) } as Prisma.InputJsonValue,
+            decidedBy: by, decidedAt, dedupKey: `p0r-${k}` },
+        })
+      }
+      for (const [runId, sources, ready] of RUNS) {
+        const ids = Array.from({ length: ready }, (_, i) => `${runId}-r${i}`)
+        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, sources, ids))
+        for (const k of ids) {
+          if (runId === LATE) await mk(k, runId, 'APPROVED', 'machine:content-core-v2', new Date(runAt(runId).getTime() + 60_000))
+          else { await mk(k, runId, fates[stampedIdx]!, AUTO_DECIDER, new Date(runAt(runId).getTime() + 5 * 60_000)); stampedIdx += 1 }
+          ledger(runId, k, 'settled', 0.01, 0.02)
+          n += 1
+        }
+      }
+      // 🔴 사용량 미상 2건 — 08:15 회차(READY 0 · 원천 하나) · 22:15 회차(READY 하나)
+      ledger('20261007-231502', '20261007-231502-x0', 'usageUnknown', null, 0.008652)
+      ledger(LATE, `${LATE}-r0`, 'usageUnknown', null, 0.0085926)
+      // 🔴 창 밖 회차 행 — 앞(창 전 회차 · decidedAt 은 창 안) · 뒤(10-09 08:15 회차) — 둘 다 제외여야 한다
+      for (const runId of [OUT_BEFORE, OUT_AFTER]) {
+        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 8, [`${runId}-r0`]))
+        await mk(`${runId}-r0`, runId, 'APPROVED', AUTO_DECIDER, runId === OUT_BEFORE ? new Date('2026-10-05T23:00:00Z') : new Date('2026-10-08T23:00:00Z'))
+      }
+      const ldir = ledgerDirForHome(home)
+      mkdirSync(ldir, { recursive: true })
+      for (const [day, es] of ledgerLines) writeFileSync(join(ldir, `${day}.jsonl`), `${es.map((e) => JSON.stringify(e)).join('\n')}\n`)
+      check('fixture 전제 — 창 안 회차 11 · 원천 101 · READY 20(도장 16 + 22:15 도장 전 4) · 창 밖 회차 행 2',
+        RUNS.length === 11 && RUNS.reduce((a, r) => a + r[1], 0) === 101 && n === 20 && stampedIdx === 16)
+      // 🔴 앞판 분자 — 같은 DB 에서 decidedAt 창 + 자동 도장만 세면 16 (22:15 4건 · 창 밖 회차 행은 시각상 빠지거나 끼어든다)
+      const oldNumerator = (await prisma.originalPostApprovalQueue.findMany({
+        where: { dedupKey: { startsWith: 'p0r-' }, decidedBy: AUTO_DECIDER, decidedAt: { gte: windowFrom, lt: windowTo } },
+        select: { gateResults: true },
+      })).filter((r) => RUNS.some(([id]) => ((r.gateResults as Record<string, Record<string, unknown>>)[SUPPLY_INTENT_KEY]?.runId) === id)).length
+      check('🔴 앞판 분자(decidedAt 창 · 창 안 회차) = 16 → floor(16 × 60 ÷ 101) = 9 (07:00 기록과 같다)',
+        oldNumerator === 16 && Math.floor((16 * 60) / 101) === 9, String(oldNumerator))
+      // 🔴 07:00 운영 기록 그대로의 cohort 로 앞판 판정을 재현한다 — 공급 능력 9 · 필요 12
+      const old0700 = judgeNextPreflight('d10', {
+        slotValidOpportunities: 10, readyCohort: { sources: 101, published: 8, lost: 2, scheduled: 6, unknown: 0, usdPerSlotValidResult: null },
+        latencyP50H: 46.99, latencyP90H: 68.81, contractValidPersonas: 30, commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
+        auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+      }, RUNNER_GRID)
+      check('🔴 앞판 07:00 재현 — readyCapacity 9 · readyNeeded 12 · THROUGHPUT_SHORT · SUPPLY_COST_UNKNOWN',
+        old0700.counts.readyCapacity === 9 && old0700.counts.readyNeeded === 12
+        && old0700.codes.includes('THROUGHPUT_SHORT') && old0700.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(old0700.counts))
+      process.env.HOME = home
+      const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.5', SORAN_LLM_RUN_REQUEST_CAP: '40', SORAN_LLM_RESERVE_HEADROOM: '1.2' }
+      const factsNow = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {
+        loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
+        autoOpen: { open: false, reasons: [] }, proofSlots: slotTimesOn('2026-10-09', profileOf('d10')),
+        caps: releaseCapsOf(profileOf('d10')), evidenceDate: '2026-10-08', env, dataDir: dir, now,
+        runnerHealth: 'ok', contractValidPersonas: async () => 30,
+      })
+      const r = await factsNow()
+      const c = r.facts.readyCohort
+      check('🔴 🔴 **회차 시계 — 창 안 회차 행 20 전부 · 창 밖 회차 행 2 제외 · 원천 101 · 불일치 0**',
+        c !== null && c.sources === 101 && r.detail.readyCount === 20 && (r.detail.intentMismatches as unknown[]).length === 0,
+        JSON.stringify({ c, n: r.detail.readyCount, m: r.detail.intentMismatches }))
+      check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
+        c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
+      const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
+      check('🔴 🔴 **보정 후 공급 능력 11 (앞판 9) · 필요 하한 12 → 여전히 THROUGHPUT_SHORT (11 < 12) · D10 FAIL**',
+        v.counts.readyCapacity === 11 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
+        && v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
+        JSON.stringify({ counts: v.counts, codes: v.codes }))
+      // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
+      const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-` } }, select: { id: true } })).map((x) => x.id)
+      const stampedPending = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: 'p0r-' }, status: 'APPROVED', decidedBy: AUTO_DECIDER }, select: { id: true } })).map((x) => x.id)
+      const direct = await readReadyCohort(prisma, {
+        windowFrom, windowTo, dataDir: dir, matched: new Set([...lateIds, ...stampedPending]), horizon: slotTimesOn('2026-10-09', profileOf('d10')), now,
+      })
+      check('🔴 🔴 **도장 전 4건은 슬롯에 짝지어져도 모름 — 도장된 대기 6만 예정 · 모름 4 (창 밖 회차 행은 제외)**',
+        lateIds.length === 4 && direct.fates !== null && direct.fates.unknown === 4 && direct.fates.scheduled === 6, JSON.stringify(direct.fates))
+      // 🔴 비용 — 미상 2건이 cohort 에 있으므로 결과당 단가를 확정하지 않는다(추정 예약액은 실제 비용도 그 한계도 아니다)
+      check('🔴 🔴 **사용량 미상 2건 → 결과당 비용 null · 추정 예약액 $0.0172446 은 보고만 · SUPPLY_COST_UNKNOWN 유지**',
+        c !== null && c.usdPerSlotValidResult === null && v.codes.includes('SUPPLY_COST_UNKNOWN') && !v.codes.includes('SUPPLY_COST_SHORT'),
+        JSON.stringify({ usd: c?.usdPerSlotValidResult, codes: v.codes }))
+      check('🔴 🔴 **최종 판정 — THROUGHPUT_SHORT + SUPPLY_COST_UNKNOWN · D10 BLOCK (FAIL)**',
+        v.verdict === 'FAIL' && v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
+      check('preflight 메모 — 미정산 2건 · 추정 예약액 $0.0172 · 실제 비용 아님',
+        (r.notes as string[]).some((x) => /미정산 2건 \(추정 예약액 \$0\.0172 — 실제 비용 아님\)/.test(x)), JSON.stringify(r.notes))
+      // 🔴 예약이 없는 미상이어도 같다 — SUPPLY_COST_UNKNOWN
+      const d22 = ledgerLines.get('2026-10-08')!
+      const noRes = d22.map((e) => (e.status === 'usageUnknown' ? { ...e, reservedUsd: null } : e))
+      writeFileSync(join(ldir, '2026-10-08.jsonl'), `${noRes.map((e) => JSON.stringify(e)).join('\n')}\n`)
+      const rNo = await factsNow()
+      const vNo = judgeNextPreflight('d10', rNo.facts, RUNNER_GRID)
+      check('🔴 🔴 **예약 없는 사용량 미상 → 결과당 비용 null · SUPPLY_COST_UNKNOWN 유지**',
+        rNo.facts.readyCohort?.usdPerSlotValidResult === null && vNo.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(vNo.codes))
+      // 🔴 대조 — 미상이 정산됐다면(같은 장부 · 미상 줄을 정산 줄로) 그때만 결과당 비용이 선다
+      const allSettled = d22.map((e) => (e.status === 'usageUnknown' ? { ...e, status: 'settled' as const, settledUsd: 0.009 } : e))
+      writeFileSync(join(ldir, '2026-10-08.jsonl'), `${allSettled.map((e) => JSON.stringify(e)).join('\n')}\n`)
+      const rAll = await factsNow()
+      check('🟢 대조 — cohort 요청이 전부 정산 · 연결 완전일 때만 결과당 비용 확정(이 fixture 재생 안에서만 · 운영 장부 조작 아님)',
+        rAll.facts.readyCohort?.usdPerSlotValidResult !== null && rAll.facts.readyCohort !== null
+        && Math.abs((rAll.facts.readyCohort.usdPerSlotValidResult ?? 0) - (20 * 0.01 + 2 * 0.009) / 8) < 1e-9, JSON.stringify(rAll.facts.readyCohort))
+      writeFileSync(join(ldir, '2026-10-08.jsonl'), `${d22.map((e) => JSON.stringify(e)).join('\n')}\n`)
+      // 🔴 runId 불일치 — 창 안 행의 의도를 다른 창 안 회차로 옮긴다(그 회차 묶음엔 이 원천이 없다) → 불일치 · cohort 모름
+      const one = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'p0r-20261008-051506-r0' }, select: { id: true, gateResults: true } })
+      const g = one.gateResults as Record<string, Record<string, unknown>>
+      await prisma.originalPostApprovalQueue.update({ where: { id: one.id }, data: { gateResults: { ...g, [SUPPLY_INTENT_KEY]: { ...g[SUPPLY_INTENT_KEY], runId: '20261008-081504' } } as Prisma.InputJsonValue } })
+      const rRun = await factsNow()
+      check('🔴 🔴 **runId 불일치(창 안 다른 회차 · 그 묶음에 원천 없음) → WORKSET_NOT_FOUND · cohort 없음(모름)**',
+        rRun.facts.readyCohort === null && JSON.stringify(rRun.detail.intentMismatches) === JSON.stringify(['WORKSET_NOT_FOUND']), JSON.stringify(rRun.detail.intentMismatches))
+      // 🔴 sourceHash 불일치 — 의도 해시를 바꾼다(증거 해시와 다르다)
+      await prisma.originalPostApprovalQueue.update({ where: { id: one.id }, data: { gateResults: { ...g, [SUPPLY_INTENT_KEY]: { ...g[SUPPLY_INTENT_KEY], sourceHash: articleIdHashOf(site, 'other') } } as Prisma.InputJsonValue } })
+      const rHash = await factsNow()
+      check('🔴 🔴 **sourceHash 불일치 → EVIDENCE_HASH_MISMATCH · cohort 없음(모름)**',
+        rHash.facts.readyCohort === null && JSON.stringify(rHash.detail.intentMismatches) === JSON.stringify(['EVIDENCE_HASH_MISMATCH']))
+      await prisma.originalPostApprovalQueue.update({ where: { id: one.id }, data: { gateResults: g as Prisma.InputJsonValue } })
+      // 🔴 사람이 결정한 기계 행(도장 전에 사람 경로로 간 행)은 자동 READY 가 아니다
+      await prisma.originalPostApprovalQueue.updateMany({ where: { dedupKey: `p0r-${LATE}-r1` }, data: { decidedBy: 'founder' } })
+      const rHuman = await factsNow()
+      check('사람 결정 행은 cohort 밖 — READY 19', rHuman.detail.readyCount === 19, String(rHuman.detail.readyCount))
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME
+      else process.env.HOME = prevHome
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(home, { recursive: true, force: true })
+      await wipeP()
     }
   }
 

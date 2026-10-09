@@ -39,6 +39,7 @@ import {
   callProvider, countInputTokens, type LlmResponse, type ProviderModel,
 } from './voice-m3-provider.mjs'
 import { writeSettleHold } from './llm-ledger-store.mjs'
+import { buildMessage, send } from './slack-notify.mjs'
 import { apiModelIdFor } from './voice-m3-contract.mjs'
 import { runClockFrom } from './run-clock.mjs'
 
@@ -234,7 +235,44 @@ export type SupplySessionConfig = {
   protectAt?: (now: Date, ctx: ProtectContext) => ProtectDecision
   /** 예산 출처를 가를 `.env.local` — 없으면 `cwd/.env.local`(`loadEnvLocal` 과 같은 자리). 🔴 시험 전용 */
   envLocalPath?: string
+  /**
+   * 🔴 **사용량 미상 알림** (2026-10-09 P0) — 없으면 공급 장부는 D100 운영 알림(`slack-notify`)으로 보내고,
+   *    다른 장부(댓글 루프 · 사후 감사 · 시험)는 보내지 않는다. 🔴 시험은 여기에 가짜를 준다.
+   */
+  notify?: UsageUnknownNotify
 }
+
+/**
+ * 🔴 **사용량 미상 알림 내용 — 회차 · 단계 · 건수 · 추정 예약액만** (2026-10-09 P0).
+ *    payload · 원문 · 원천 해시 · 비밀 · 사용자 식별자 칸이 없다.
+ *    앞판은 회차 로그의 개수 한 줄뿐이었다 — 2026-10-08 미상 2건이 아무 알림 없이 다음 날 D10 판정을 막았다.
+ */
+export type UsageUnknownAlert = {
+  runId: string
+  stage: LedgerStage
+  /** 이 회차에서 지금까지 생긴 사용량 미상 건수 */
+  count: number
+  /** 이번 건의 추정 예약액(USD) — 실제 비용이 아니다 · 모르면 null */
+  reservedUsd: number | null
+  /** 이 회차 미상 건 추정 예약액 합(USD) — 실제 비용이 아니다 */
+  reservedTotalUsd: number
+}
+export type UsageUnknownNotify = (a: UsageUnknownAlert) => Promise<unknown>
+
+export function usageUnknownAlertMessage(a: UsageUnknownAlert): { severity: 'WARN'; title: string; reason: string; next: string } {
+  const usd = (v: number | null): string => (v === null ? '모름' : `$${v.toFixed(4)}`)
+  return {
+    severity: 'WARN',
+    title: '공급 장부 — 제공사 사용량 미상(미정산)',
+    reason: `회차 ${a.runId} · 단계 ${a.stage} · 이 회차 미상 ${a.count}건 · 이번 추정 예약액 ${usd(a.reservedUsd)}`
+      + ` · 회차 추정 예약액 합 ${usd(a.reservedTotalUsd)} (실제 비용 아님) — 이 회차가 든 cohort 의 승급 공급 비용은 UNKNOWN 이다`,
+    next: '실제 금액을 확인해 `npm run supply:ledger-resolve` 로 마감하거나, 이 회차가 3일 cohort 창을 벗어나야 공급 비용 판정이 풀린다',
+  }
+}
+
+/** 🔴 운영 알림 경로 — `slack-notify.send` 는 어떤 경우에도 throw 하지 않는다 */
+export const SLACK_USAGE_UNKNOWN_NOTIFY: UsageUnknownNotify = (a) =>
+  send(buildMessage({ ...usageUnknownAlertMessage(a), logPath: undefined }), { dryRun: false })
 
 /**
  * 보호 판정 한 건. `protect` 가 `null` 이면 보호 없음(공급 장부 밖의 시험·다른 장부 전용).
@@ -355,6 +393,9 @@ export class SupplyLlmSession {
   readonly limits: BudgetLimits
   private readonly now: () => Date
   private readonly io: LedgerIo
+  private readonly notify: UsageUnknownNotify | null
+  /** 🔴 이 세션의 사용량 미상 추정 예약액 합 — 알림에만 쓴다(실제 비용 아님) */
+  private unknownReservedUsd = 0
   /**
    * 🔴 **공급 장부인가** — 정본 자리(계정 홈) 또는 이 프로세스 `$HOME` 의 공급 장부 자리와 **실경로로** 같으면 참.
    *    참이면 ① 호출부 보호 설정을 보지 않고 ② 자리가 정본인지 요청마다 확인하고 ③ 오늘 파일 없음을 판정하고
@@ -409,6 +450,8 @@ export class SupplyLlmSession {
     this.supply = cfg.dir === undefined
       || sameRealDir(this.dir, defaultLedgerDir())
       || (canonical !== null && sameRealDir(this.dir, canonical))
+    // 🔴 알림 — 주입이 이긴다. 없으면 공급 장부만 운영 알림으로 보낸다(시험 · 다른 장부는 보내지 않는다)
+    this.notify = cfg.notify ?? (this.supply ? SLACK_USAGE_UNKNOWN_NOTIFY : null)
     this.protectAt = this.supply
       ? supplyProtectFromEnv(process.env)
       : cfg.protectAt ?? null
@@ -714,6 +757,8 @@ export class SupplyLlmSession {
     const settled = judgeSettle({ reservedUsd: verdict.reservedUsd, cost })
     /** 🔴 정산 **줄을 실제로 적었는가.** 적지 못하면 이 단계는 완주가 아니다 */
     let settlementRecorded = true
+    /** 🔴 사용량 미상 — 장부 처리가 끝난 **뒤** 알린다(알림이 기록을 막지 않는다) */
+    const unknownUsage = settled.status === 'usageUnknown'
     /**
      * 🔴 **집계는 기록이 끝난 뒤에 한다** (2026-09-20 보정).
      *
@@ -738,6 +783,7 @@ export class SupplyLlmSession {
           cacheWriteTokens: res.cacheWriteTokens,
           cacheReadTokens: res.cacheReadTokens,
           usageKeys: res.usageKeys,
+          usageNumbers: res.usageNumbers ?? null,
           settledUsd: settled.settledUsd,
           endedAt: this.now().toISOString(),
           errorCode: res.errorCode,
@@ -791,6 +837,7 @@ export class SupplyLlmSession {
         this.t.holdWriteFailed += 1
       }
     }
+    if (unknownUsage) await this.alertUsageUnknown(input.stage, verdict.reservedUsd)
     /**
      * 🔴 **정산 줄을 적지 못했으면 금액을 주지 않고 완주로도 세지 않는다.**
      *    요청은 이미 나갔으니 사용량은 그대로 싣되, 이 단계는 **실패**다.
@@ -799,6 +846,18 @@ export class SupplyLlmSession {
       ? { ...res, settledUsd: settled.settledUsd, settlementRecorded: true }
       : { ...res, ok: false, errorCode: res.errorCode ?? SETTLE_NOT_RECORDED,
         settledUsd: null, settlementRecorded: false }
+  }
+
+  /**
+   * 🔴 **사용량 미상 알림 — 실패는 삼킨다.** 장부 줄 · 열린 예약 처리는 이미 끝났다. 알림이 던지거나 늦어도
+   *    정산 결과 · 회차 진행은 바뀌지 않는다.
+   */
+  private async alertUsageUnknown(stage: LedgerStage, reservedUsd: number | null): Promise<void> {
+    if (reservedUsd !== null && Number.isFinite(reservedUsd)) this.unknownReservedUsd += reservedUsd
+    if (this.notify === null) return
+    try {
+      await this.notify({ runId: this.runId, stage, count: this.t.usageUnknown, reservedUsd, reservedTotalUsd: this.unknownReservedUsd })
+    } catch { /* 알림 실패는 장부 · 회차 결과를 바꾸지 않는다 */ }
   }
 
   /** 장부 한 줄의 고정 칸 — 🔴 본문이 들어갈 자리가 없다 */
