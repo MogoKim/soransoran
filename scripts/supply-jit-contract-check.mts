@@ -271,7 +271,7 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     unlinked !== null && unlinked.usdPerSlotValidResult === null && unlinked.usdPerPublished === null
     && unlinked.wasteUsd === null && unlinked.unlinkedUsd === 0.03, JSON.stringify(unlinked))
   const open = costAttributionOf({ entries: [e(hp, 0.02), e(hp, null, 'reserved')], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
-  check('🔴 정산 안 된 유료 요청이 있으면 합계를 모른다 → 단가 null', open !== null && open.openRequests === 1 && open.usdPerPublished === null)
+  check('🔴 정산 안 된 유료 요청이 있으면 공개당 단가(정확값)는 모른다 · 미정산 1건으로 센다', open !== null && open.openRequests === 1 && open.usdPerPublished === null)
   // 🔴 2026-10-04 운영 모양 — 창 안 공급 장부가 계약 표식 없는 옛 줄 $0.939 뿐
   const legacyOnly = costAttributionOf({ entries: [legacyLine(0.5), legacyLine(0.439)], fateByKey, counts: { published: 5, scheduled: 0 }, cohortRuns: COHORT })
   check('🔴 🔴 옛 장부 $0.939 만 → legacy $0.939 · 결과당 비용 모름(null)',
@@ -302,8 +302,35 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const cUnknown = costAttributionOf({
     entries: [e(hp, 0.02), e(hu, 0.01)], fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT,
   })
-  check('🔴 🔴 **C 현재 계약 미연결 · 미정산 → 결과당 비용 모름**',
-    cUnlinked?.usdPerSlotValidResult === null && cOpen?.usdPerSlotValidResult === null)
+  check('🔴 🔴 **C 현재 계약 미연결 → 결과당 비용 모름**', cUnlinked?.usdPerSlotValidResult === null)
+  // ── 🔴 (2026-10-09 P0) 미정산은 예약 상한으로 — 장부 상태는 그대로 ──
+  check('🔴 🔴 **C\' 예약 있는 미정산(reserved) → 예약 $0.01 을 상한으로 분자에 · 결과 1 → $0.03 · 미정산 1건 · 상한 합 $0.01**',
+    cOpen !== null && Math.abs((cOpen.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12 && cOpen.openRequests === 1
+    && Math.abs(cOpen.openReservedUsd - 0.01) < 1e-12 && cOpen.openUnbounded === 0, JSON.stringify(cOpen))
+  const uu = { ...e(hl, null, 'usageUnknown'), reservedUsd: 0.0086 }
+  const cUu = costAttributionOf({ entries: [e(hp, 0.02), uu], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  check('🔴 🔴 **예약 있는 usageUnknown(2026-10-08 모양) → 상한 $0.0086 포함 · 손실 원천이면 낭비에도 상한으로 · 장부 줄 상태는 usageUnknown 그대로**',
+    cUu !== null && Math.abs((cUu.usdPerSlotValidResult ?? 0) - 0.0286) < 1e-12 && Math.abs((cUu.wasteUsd ?? 0) - 0.0086) < 1e-12
+    && uu.status === 'usageUnknown' && uu.settledUsd === null, JSON.stringify(cUu))
+  const noRes = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hl, null, 'usageUnknown'), reservedUsd: null }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  check('🔴 🔴 **예약 없는 usageUnknown → 상한도 모른다 → 결과당 비용 null · 상한 없음 1건**',
+    noRes !== null && noRes.usdPerSlotValidResult === null && noRes.openUnbounded === 1, JSON.stringify(noRes))
+  const noKey = costAttributionOf({ entries: [e(hp, 0.02), { ...e(null, null, 'usageUnknown'), reservedUsd: 0.01 }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  check('🔴 원천 해시 없는 미정산 → 연결 불완전 → null', noKey !== null && noKey.usdPerSlotValidResult === null && noKey.openUnbounded === 1)
+  const badRun = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hp, null, 'usageUnknown'), runId: 'manual-x' }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  check('🔴 회차 id 를 읽을 수 없는 현재 계약 미정산 → 연결 불완전 → null', badRun !== null && badRun.usdPerSlotValidResult === null && badRun.openUnbounded === 1)
+  const otherRun = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hp, null, 'usageUnknown'), runId: '20261001-031500-d' }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  check('🔴 다른 cohort 회차의 미정산은 이 cohort 를 막지도 · 분자에 들지도 않는다', otherRun !== null && otherRun.openRequests === 0
+    && Math.abs((otherRun.usdPerSlotValidResult ?? 0) - 0.02) < 1e-12)
+  // 🔴 예약 상한을 넣은 비용이 천장을 넘으면 반드시 SHORT
+  const bigRes = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hl, null, 'usageUnknown'), reservedUsd: 0.2 }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  const shortV = judgeNextPreflight('d5', {
+    slotValidOpportunities: 5, readyCohort: { sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: bigRes?.usdPerSlotValidResult ?? null },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
+    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  }, RUNNER_GRID)
+  check('🔴 🔴 **예약 상한 $0.2 포함 → $0.22/결과 × D5 = $1.10 > 천장 $0.50 → SUPPLY_COST_SHORT (UNKNOWN 아님)**',
+    shortV.codes.includes('SUPPLY_COST_SHORT') && !shortV.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(shortV.codes))
   check('🟢 결말 모름 $0.01도 분자에 포함 — 전체 $0.03 ÷ 확인 결과 1 = 보수적 상한 $0.03',
     cUnknown !== null && Math.abs((cUnknown.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12
     && Math.abs(cUnknown.byFate.unknown - 0.01) < 1e-12, JSON.stringify(cUnknown))
@@ -376,7 +403,7 @@ console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 works
     && !claimsJitContract({ supplyIntent: { contract: 'other' } }) && !claimsJitContract(null))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
   check('🔴 cohort 판독이 계약 주장 행을 그 회차 묶음(readWorkset) · 증거 해시로 대조하고, 하나라도 틀리면 cohort 전체를 모름',
-    /const current = found\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
+    /const claimed = autoPath\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
     && /intentLinkIssue\(\{/.test(facts) && /if \(intentMismatches\.length > 0\) throw new IntentMismatch\(\)/.test(facts)
     && /const run = intent === null \? undefined : ws\?\.byRun\.get\(intent\.runId\)/.test(facts)
     && /runInCohort: run !== undefined,/.test(facts)
@@ -405,8 +432,12 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /readReadyCohort\(prisma, \{/.test(runner) && /matched: new Set\(jit\.matched\), horizon: jit\.horizon/.test(runner))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
   check('🔴 🔴 cohort 는 현재 JIT 계약 행만(gateResults.supplyIntent) — legacy READY 는 수율 · 손실 근거가 아니다',
-    /const current = found\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
+    /const claimed = autoPath\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
     && /rows = current\.map\(/.test(facts) && /if \(r\.intents === null\) continue/.test(facts))
+  check('🔴 🔴 cohort 시계는 회차 하나 — 분자를 decidedAt 창으로 자르지 않고 의도 runId ∈ 창 안 묶음 회차로 고른다 (2026-10-09 P0)',
+    /where: \{ createdAt: \{ gte: i\.windowFrom \} \}/.test(facts) && !/decidedAt: \{ gte: i\.windowFrom/.test(facts)
+    && /return intent === null \|\| ws\?\.byRun\.has\(intent\.runId\) === true/.test(facts)
+    && /fate: terminal \? null : !stamped \? 'unknown' : pendingFateOf\(\{/.test(facts))
   check('🔴 preflight 도 같은 판독 · 원천 기회 할인은 결말 수율 구간(raw yieldOf 없음)',
     /const cohort = await readReadyCohort\(prisma, \{/.test(facts) && /oppAt\(yieldBounds\?\.low \?\? null\)/.test(facts)
     && !/export function yieldOf/.test(facts))

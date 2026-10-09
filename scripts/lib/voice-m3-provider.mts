@@ -149,6 +149,11 @@ export type LlmResponse = {
    *    우리가 읽지 않는 과금 항목이 응답에 나타나면 그 사실이 드러나야 한다.
    */
   usageKeys: string[]
+  /**
+   * 🔴 **제공사 usage 의 숫자 칸 원값** (2026-10-09 P0) — 최상위의 유한한 숫자만(토큰 수). 문자열 · 중첩 객체 · 본문 없음.
+   *    사용량을 해석하지 못한 건도 이 원값이 장부에 남아야 사후에 근거로 대조할 수 있다(앞판은 키 이름만 남겼다).
+   */
+  usageNumbers?: Record<string, number>
 }
 
 /** 실패 응답을 만든다. 🔴 진단 필드를 빠뜨리지 않기 위한 한 자리 */
@@ -156,7 +161,7 @@ function failure(
   errorCode: string, errorMessage: string,
   partial?: Partial<Pick<LlmResponse, 'inputTokens' | 'outputTokens' | 'finishReason'
     | 'reasoningTokens' | 'responseChars' | 'maxTokensReached'
-    | 'usageKnown' | 'cacheWriteTokens' | 'cacheReadTokens' | 'usageKeys'>>,
+    | 'usageKnown' | 'cacheWriteTokens' | 'cacheReadTokens' | 'usageKeys' | 'usageNumbers'>>,
 ): LlmResponse {
   return {
     ok: false, rawText: '',
@@ -167,6 +172,13 @@ function failure(
     ...partial,
     errorCode, errorMessage,
   }
+}
+
+/** 🔴 usage 객체의 최상위 **유한한 숫자 칸만** — 장부 근거용(문자열 · 중첩 객체는 담지 않는다) */
+export function usageNumbersOf(u: Record<string, unknown>): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(u)) if (typeof v === 'number' && Number.isFinite(v)) out[k] = v
+  return out
 }
 
 /** usage 에서 숫자만 안전하게 꺼낸다 */
@@ -354,12 +366,13 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
      */
     const usageObj = isGemini ? gUsage : usage
     const usageKeys = Object.keys(usageObj)
+    const usageNumbers = usageNumbersOf(usageObj)
     const isNum = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
     /**
      * 🔴 **thinking 토큰을 못 읽으면 `usageUnknown` 이다** (2026-09-19).
      *    싸게 추정하지 않는다 — 모르면 미정산으로 남기는 것이 장부의 계약이다.
-     *    `thoughtsTokenCount` 는 thinking 을 쓰지 않은 응답에서 **아예 없을 수** 있어
-     *    "없음" 과 "0" 을 가른다: 숫자 0 은 통과, 칸 자체가 없으면 미상이다.
+     *    `thoughtsTokenCount` 는 thinking 을 쓰지 않은 응답에서 **아예 없을 수** 있다 —
+     *    그때는 `readGeminiUsage` 가 공식 합계(`total − prompt − candidates`)로 계산한다(2026-10-09). total 도 없으면 미상이다.
      */
     const usageKnown = gRead !== null
       ? gRead.usageKnown
@@ -395,7 +408,7 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
         responseChars: text.length, maxTokensReached,
         // 🔴 종료 사유가 없어도 **토큰은 이미 청구됐다.** 사용량을 그대로 실어 보낸다 —
         //    정산에서 빠지면 장부가 실제보다 적게 남는다
-        usageKnown, cacheWriteTokens, cacheReadTokens, usageKeys,
+        usageKnown, cacheWriteTokens, cacheReadTokens, usageKeys, usageNumbers,
       })
     }
 
@@ -408,7 +421,7 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
       maxTokensReached,
       errorCode: null,
       errorMessage: null,
-      usageKnown, cacheWriteTokens, cacheReadTokens, usageKeys,
+      usageKnown, cacheWriteTokens, cacheReadTokens, usageKeys, usageNumbers,
     }
   } catch (e: unknown) {
     const aborted = e instanceof Error && e.name === 'AbortError'
@@ -473,6 +486,11 @@ export type GeminiUsageRead = {
   /** 🔴 과금 기준 출력 = candidates + thoughts */
   outputTokens: number
   thoughtsTokens: number | null
+  /**
+   * 🔴 thinking 토큰을 어디서 얻었나 — `reported` 칸이 있었다 · `derived` 칸이 없어 `total − prompt − candidates` 로 계산 ·
+   *    `null` 얻지 못했다(미상)
+   */
+  thoughtsSource: 'reported' | 'derived' | null
   usageKnown: boolean
   cacheWriteTokens: number | null
   cacheReadTokens: number | null
@@ -483,15 +501,27 @@ export function readGeminiUsage(g: Record<string, unknown>): GeminiUsageRead {
   const isNum = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
   const n = (v: unknown): number => (isNum(v) ? (v as number) : 0)
   /**
-   * 🔴 **thinking 토큰을 못 읽으면 미상이다.** 싸게 추정하지 않는다 —
-   *    `thoughtsTokenCount: 0` 은 "안 썼다" 로 통과하고, 칸이 **없으면** 미상이다.
+   * 🔴 **thinking 토큰 — 보고된 칸이 먼저, 없으면 공식 합계 관계로 결정적으로 계산한다** (2026-10-09 P0).
+   *    `thoughtsTokenCount: 0` 은 "안 썼다" 로 통과한다. 칸이 **없을 때**는 공식 계약
+   *    `totalTokenCount = prompt + thoughts + candidates` 로 `thoughts = total − prompt − candidates` 다 —
+   *    prompt · candidates · total 이 모두 유한한 숫자이고 차이가 0 이상일 때만. total 이 없거나 모순(음수)이면 미상이다.
+   *    🔴 싸게 추정하지 않는다 — 차이에 다른 과금 항목이 섞여 있어도 출력 단가(더 비싼 쪽)로 세므로 과소 계상이 없다.
+   *    (2026-10-08 운영 실측: 칸이 빠진 응답 2건이 미정산으로 남아 D10 공급 비용 판정을 막았다)
    */
-  const usageKnown = isNum(g.promptTokenCount) && isNum(g.candidatesTokenCount)
-    && isNum(g.thoughtsTokenCount)
+  const baseKnown = isNum(g.promptTokenCount) && isNum(g.candidatesTokenCount)
+  let thoughts: number | null = null
+  let thoughtsSource: GeminiUsageRead['thoughtsSource'] = null
+  if (isNum(g.thoughtsTokenCount)) { thoughts = n(g.thoughtsTokenCount); thoughtsSource = 'reported' }
+  else if (baseKnown && isNum(g.totalTokenCount)) {
+    const d = n(g.totalTokenCount) - n(g.promptTokenCount) - n(g.candidatesTokenCount)
+    if (d >= 0) { thoughts = d; thoughtsSource = 'derived' }
+  }
+  const usageKnown = baseKnown && thoughts !== null
   return {
     inputTokens: n(g.promptTokenCount),
-    outputTokens: n(g.candidatesTokenCount) + n(g.thoughtsTokenCount),
-    thoughtsTokens: isNum(g.thoughtsTokenCount) ? n(g.thoughtsTokenCount) : null,
+    outputTokens: n(g.candidatesTokenCount) + (thoughts ?? 0),
+    thoughtsTokens: thoughts,
+    thoughtsSource,
     usageKnown,
     // 🔴 우리는 `cachedContent` 를 보내지 않는다 — 쓰기는 일어날 수 없다
     cacheWriteTokens: usageKnown ? 0 : null,

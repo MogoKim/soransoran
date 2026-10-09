@@ -232,7 +232,7 @@ console.log('\n③ 🔴 🔴 **실제 세션을 부른다** — fetch 만 가짜
   let countCalls = 0
   let genCalls = 0
   let lastBody: unknown = null
-  const fakeFetch = (outTokens: number, inTokens: number, omitThoughts = false): typeof globalThis.fetch =>
+  const fakeFetch = (outTokens: number, inTokens: number, omitThoughts = false, omitTotal = false): typeof globalThis.fetch =>
     (async (url: string | URL | Request, init?: RequestInit) => {
       const u = String(url)
       const isCount = u.includes(':countTokens') || u.includes('/count_tokens')
@@ -247,14 +247,13 @@ console.log('\n③ 🔴 🔴 **실제 세션을 부른다** — fetch 만 가짜
       return new Response(JSON.stringify({
         candidates: [{ content: { parts: [{ text: '{"text":"시험 댓글"}' }] }, finishReason: 'STOP' }],
         /**
-         * 🔴 **`thoughtsTokenCount` 를 반드시 넣는다.** 빼면 정본이
-         *    `usageUnknown` 으로 본다 — thinking 비용을 모르는 채 정산할 수 없어서다.
-         *    (이 검사를 쓰다 실제로 그 길로 빠졌고, 정본이 옳게 막았다)
+         * 🔴 **`thoughtsTokenCount` 를 넣는다.** 빼면 정본은 `totalTokenCount` 로 결정적으로 계산하고(2026-10-09 P0),
+         *    total 까지 없으면 `usageUnknown` 이다 — thinking 비용을 모르는 채 정산할 수 없어서다.
          */
         usageMetadata: {
           promptTokenCount: inTokens, candidatesTokenCount: outTokens,
           ...(omitThoughts ? {} : { thoughtsTokenCount: 7 }),
-          totalTokenCount: inTokens + outTokens + (omitThoughts ? 0 : 7),
+          ...(omitTotal ? {} : { totalTokenCount: inTokens + outTokens + (omitThoughts ? 0 : 7) }),
         },
       }), { status: 200, headers: { 'content-type': 'application/json' } })
     }) as typeof globalThis.fetch
@@ -271,6 +270,7 @@ console.log('\n③ 🔴 🔴 **실제 세션을 부른다** — fetch 만 가짜
   const callOnce = async (opts: {
     dailyUsd: string; runCap?: string; outTokens: number; inTokens: number
     omitThoughts?: boolean
+    omitTotal?: boolean
   }) => {
     countCalls = 0; genCalls = 0; lastBody = null
     const dir = mkdtempSync(join(tmpdir(), 'soran-comment-ledger-'))
@@ -286,7 +286,7 @@ console.log('\n③ 🔴 🔴 **실제 세션을 부른다** — fetch 만 가짜
       now: () => day,
     })
     process.env.GEMINI_API_KEY = 'test-key-not-real'
-    globalThis.fetch = fakeFetch(opts.outTokens, opts.inTokens, opts.omitThoughts === true)
+    globalThis.fetch = fakeFetch(opts.outTokens, opts.inTokens, opts.omitThoughts === true, opts.omitTotal === true)
     try {
       const res = await session.call({
         stage: 'commentGen', model: 'gemini-3.7-flash',
@@ -316,16 +316,24 @@ console.log('\n③ 🔴 🔴 **실제 세션을 부른다** — fetch 만 가짜
           reserved: e.reservedUsd, settled: e.settledUsd })) }))
 
     /**
-     * 🔴 **thinking 토큰이 없으면 정산하지 않는다.** Gemini 는 thinking 도 출력으로
-     *    과금하므로, 그 수를 모르면 얼마 썼는지 알 수 없다.
+     * 🔴 **thinking 칸이 없으면 공식 합계로 계산한다** (2026-10-09 P0) — Gemini 는 thinking 도 출력으로 과금한다.
+     *    `thoughts = total − prompt − candidates` (여기선 0). total 까지 없으면 얼마 썼는지 모른다 — 정산하지 않는다.
      */
     const noThoughts = await callOnce({
       dailyUsd: '0.02', outTokens: 300, inTokens: 900, omitThoughts: true,
     })
     const nt = noThoughts.entries.filter((e) => e.stage === 'commentGen')
-    check('🔴 🔴 **thinking 토큰이 없으면 정산하지 않는다 — 예약이 열린 채 남는다**',
-      nt.length === 1 && nt[0]!.status === 'usageUnknown' && nt[0]!.settledUsd === null,
+    check('🔴 🔴 **thinking 칸 없음 + total 일치 → 결정적으로 정산(thinking 0) · 장부에 usage 원값이 남는다**',
+      nt.length === 1 && nt[0]!.status === 'settled' && nt[0]!.settledUsd !== null && nt[0]!.outputTokens === 300
+      && nt[0]!.usageNumbers?.totalTokenCount === 1200 && nt[0]!.usageNumbers?.promptTokenCount === 900 && !('thoughtsTokenCount' in (nt[0]!.usageNumbers ?? {})),
       JSON.stringify(nt))
+    const noTotal = await callOnce({
+      dailyUsd: '0.02', outTokens: 300, inTokens: 900, omitThoughts: true, omitTotal: true,
+    })
+    const nn = noTotal.entries.filter((e) => e.stage === 'commentGen')
+    check('🔴 🔴 **thinking · total 모두 없음 → 정산하지 않는다 — 예약이 열린 채 남는다**',
+      nn.length === 1 && nn[0]!.status === 'usageUnknown' && nn[0]!.settledUsd === null,
+      JSON.stringify(nn))
 
     // 🔴 요청 인자가 운영 경로 그대로인가 — 출력 상한이 실려 나갔다
     const cfg = (r.lastBody as { generationConfig?: { maxOutputTokens?: number } })?.generationConfig
