@@ -25,12 +25,16 @@ import { onboardingHref } from '@/lib/callback-url'
  *    가입을 마치지 않은 채 서비스에 남는다.
  */
 
-/** default = 화면 안에 놓이는 기본형 · onboarding = 로그인 화면 하단 고정 CTA */
-type Variant = 'default' | 'onboarding'
+/**
+ * default = 화면 안에 놓이는 기본형 · onboarding = 로그인 화면 하단 고정 CTA
+ * prompt = 회원가입 전환 가입 제안 dialog 의 CTA(B안 · 높이 56px · 진행 중 비활성 표시)
+ */
+type Variant = 'default' | 'onboarding' | 'prompt'
 
 const SHAPE: Record<Variant, string> = {
   default: `${TOUCH_MIN} max-w-xs rounded-lg px-6`,
   onboarding: 'min-h-[60px] rounded-xl px-4 py-2 shadow-kakao',
+  prompt: 'min-h-[56px] rounded-xl px-4 py-2 disabled:cursor-default disabled:opacity-70',
 }
 
 /** 시작 CTA는 같은 라벨을 쓴다. */
@@ -41,6 +45,7 @@ export default function KakaoSignInButton({
   variant = 'default',
   label = LABEL,
   onSignInStart,
+  disabled,
 }: {
   callbackUrl?: string
   variant?: Variant
@@ -61,14 +66,19 @@ export default function KakaoSignInButton({
    *    이 버튼은 외부 브랜드 자산이라(brand-assets.ts) 계측 규칙을 안에 들이지 않는다.
    * 🔴 signIn 앞에 둔다. signIn 은 화면을 떠나므로 뒤에 두면 실행되지 않는다.
    *    await 를 걸지 않는다 — 기다리는 사이 iOS 가 사용자 조작으로 보지 않을 수 있다.
+   * 🔴 false 를 돌려주면 이번 누름은 인증을 시작하지 않는다(연타 거절). 아무것도 돌려주지 않는
+   *    기존 호출부는 지금처럼 인증을 시작한다.
    */
-  onSignInStart?: () => void
+  onSignInStart?: () => boolean | void
+  /** 진행 중 표시 — 넘기지 않으면 기존 화면의 버튼 마크업은 그대로다 */
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => {
-        onSignInStart?.()
+        if (onSignInStart?.() === false) return
         signIn('kakao', { callbackUrl: onboardingHref(callbackUrl) })
       }}
       className={`inline-flex w-full flex-wrap items-center justify-center gap-2 break-keep bg-kakao text-center font-bold leading-tight text-kakao-text transition duration-150 hover:brightness-95 active:scale-95 ${SHAPE[variant]}`}

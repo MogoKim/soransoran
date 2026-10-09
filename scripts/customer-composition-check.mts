@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * 고객 구성 — 순수 판정 · 대상 조건 모양 · 화면 계약 가드. 정본: MEMBER-CONVERSION-CANON.md v2.1.
+ * 고객 구성 — 순수 판정 · 대상 조건 모양 · 화면 계약 가드. 정책: 회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11.
  *
  * 🔴 DB 가 필요한 계약(Persona·운영 계정이 실제로 빠지는가 · email=null 회원이 남는가 · 상태별 글·댓글 ·
  *    한 회원 여러 글 = 1명 · 7일 창의 실제 경계)은 이 스크립트가 증명하지 못한다. 여기서는 where 의
@@ -182,7 +182,9 @@ check('🔴 만 나이라고 부르지 않는다(부정문만 허용)', (page.ma
 check('🔴 색 리터럴 없음', !/#[0-9a-fA-F]{3,8}\b/.test(page))
 check('운영 메뉴는 7개 그대로', (nav.match(/\{ href: '\/admin/g) ?? []).length === 7 && !nav.includes('composition'))
 check('「회원」 메뉴가 하위 경로에서 켜진다', nav.includes('pathname.startsWith(`${href}/`)'))
-check('회원 목록에 고객 구성 링크', read('src/app/admin/(ops)/members/page.tsx').includes('href="/admin/members/composition"'))
+check('회원 목록·고객 구성이 공통 하위 탭으로 이어진다', read('src/app/admin/(ops)/members/page.tsx').includes('<MemberAdminTabs current="members" />')
+  && page.includes('<MemberAdminTabs current="composition" />')
+  && read('src/components/admin/MemberAdminTabs.tsx').includes("href: '/admin/members/composition'"))
 check('REAL_MEMBER_WHERE 파일은 고객 구성 조건을 모른다', !read('src/lib/admin-format.ts').includes('isOnboarded'))
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패`)

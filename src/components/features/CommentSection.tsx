@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import CommentForm from '@/components/features/CommentForm'
 import GuestCommentForm from '@/components/features/GuestCommentForm'
 import CommentThread from '@/components/features/CommentThread'
@@ -24,6 +25,7 @@ export default function CommentSection({
   isLoggedIn,
   currentUserId,
   likedCommentIds,
+  afterComments,
 }: {
   /** 대화 스레드 — 원댓글 + 시간순 후속 답변(getPostDetail · comment-thread) */
   threads: ThreadView[]
@@ -34,6 +36,11 @@ export default function CommentSection({
   currentUserId?: string
   /** 이 사람이 공감한 댓글 id. 비로그인이면 비어 있다 */
   likedCommentIds: Set<string>
+  /**
+   * 공개 댓글·답글 목록 바로 뒤, 입력창 앞에 놓는 선택 슬롯. 감싸는 DOM 을 더하지 않는다.
+   * 🔴 작성 모드 provider 안에 있다 — 넣은 쪽이 useComposeMode 를 읽을 수 있다. 없으면 아무것도 그리지 않는다.
+   */
+  afterComments?: ReactNode
 }) {
   /* 답글도 사람이 남긴 말이라 함께 센다. 지운 댓글 · 차단한 회원의 댓글은 세지 않는다(예전과 같은 기준). */
   const totalCount = countLiveComments(threads)
@@ -117,6 +124,8 @@ export default function CommentSection({
               }))}
             />
           )}
+
+          {afterComments}
 
           {/* 입력은 만들지 않고 있는 것을 부른다 — 확인 절차·비밀번호·글자수는 각 폼의 규칙이다.
                 🔴 key 로 글마다 새로 만든다. 같은 경로 모양(/[boardSlug]/[postId])을 오갈 때

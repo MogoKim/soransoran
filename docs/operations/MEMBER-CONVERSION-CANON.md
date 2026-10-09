@@ -1,8 +1,8 @@
 # 소란소란 콘텐츠 끝 도달 → 회원가입 전환 정본
 
-> 문서 상태: **v4.1 · MC-M3 최소 측정 설계 승인 반영 정본**
-> 마지막 창업자 싱크: **2026-10-07 KST**
-> 현재 단계: **MC-M3 설계 승인 완료 · migration·제품 구현 전 (각각 별도 승인)**
+> 문서 상태: **v4.7 · MC-M4 Ready checkpoint 정본**
+> 마지막 창업자 싱크: **2026-10-09 KST**
+> 현재 단계: **MC-M4 Draft PR #673 · final main `a19beb2` 통합·D100 경계 재검토·최종 checks PASS · 로컬 구현·성능·Preview gate·실기기·로컬 Kakao 웹 OAuth 검증 PASS · 창업자 Ready·merge 승인 대기 · 모바일 카카오톡 앱 전환·Production 확인·배포·실제 수집 전**
 > 기획·검증 책임: **Codex [2] 회원가입 전환 마스터**
 > 실행 책임: **Claude Code — 승인된 한 단계씩**
 
@@ -99,7 +99,7 @@ NORTH-STAR
 
 | 축 | 질문 | 현재 상태 |
 |---|---|---|
-| A. 가입 전환 | 로그인되지 않은 방문자가 콘텐츠 끝에서 가입 행동으로 움직였는가 | MC-M3 설계 승인 · 미구현 |
+| A. 가입 전환 | 로그인되지 않은 방문자가 콘텐츠 끝에서 가입 행동으로 움직였는가 | 로컬 기능 구현 완료 · 운영 미적용 · Preview·성능 검증 전 |
 | B. 고객 구성 | 실제 가입자가 목표 여성·연령대와 맞는가 | 고객 구성 어드민 Production PASS |
 | C. 가입 후 가치 | 가입 후 글·댓글·재방문 참여로 이어지는가 | 글·댓글·7일 내 참여 일부 측정, 재방문은 미측정 |
 
@@ -254,8 +254,11 @@ Preview에서는 두 유형을 함께 검증한다.
 
 - 가입 제안 기준 도달 뒤에만 연다.
 - 다른 팝업·시트·댓글 작성창·답글 작성창·키보드가 열려 있으면 열지 않는다.
+- 도달 1초 타이머가 도는 중에 충돌 UI가 열리면 타이머를 취소한다. 충돌 UI가 닫힌 뒤 감지 지점이 다시
+  연속 1초 보여야 연다(§5-2).
 - 레이어 의미 순서는 `Toast > 가입 팝업 > dim > Header·댓글 작성 독·스레드 이동 버튼`이다.
-- 실제 z-index 숫자와 기기별 충돌은 MC-M4 Preview에서 검증한다.
+- 구현 시작값은 `Toast z-70 > 가입 팝업 z-60 > dim > Header z-50`이다. 기기별 충돌은 MC-M4 Preview에서
+  실측하고 실측 결과로만 조정한다.
 
 ### 6-4. 닫기 `확정`
 
@@ -270,14 +273,36 @@ Preview에서는 두 유형을 함께 검증한다.
 ### 6-5. CTA와 복귀 `확정`
 
 - CTA는 중간 로그인 안내 화면 없이 카카오 인증을 시작한다.
+- CTA는 기존 `KakaoSignInButton`을 그대로 지나며 인증 호출을 복제하지 않는다. 가입 팝업 전용 시각
+  variant만 추가해 B안 모양과 높이 56px를 맞춘다.
 - 누르는 즉시 `카카오로 이동 중…`으로 바꾸고 재클릭을 막는다.
 - X와 보조 버튼도 진행 중에는 비활성 상태로 보인다.
+- bfcache로 글이 복원되면 진행 중 상태를 반드시 초기화한다.
 - 기존 필수 온보딩과 약관 동의를 생략하지 않는다.
 - 가입 완료 후 커뮤니티는 댓글 영역, 매거진은 본문 끝으로 돌아온다.
 - 인증 취소·실패 시 원래 글로 돌아와 Toast로 알린다.
 - 성공·취소·실패 직후 팝업을 바로 다시 띄우지 않는다.
 
-Toast 최종 문구는 MC-M4 Preview 전에 결정한다.
+Toast 문구 `확정`:
+
+```text
+카카오 로그인을 완료하지 못했어요. 읽던 글에서 다시 시도할 수 있어요.
+```
+
+#### 취소·실패 복귀 경로 `확정`
+
+현재 Auth.js는 카카오 취소·실패(`OAuthCallbackError`)를 callback 정보 없이 `/login?error=…`으로 보낸다.
+원래 글 복귀는 다음 방식 하나로 구현한다.
+
+- `OAuthCallbackError`일 때만 `/login` 서버 경로가 Auth.js callback URL 쿠키를 제한적으로 읽는다.
+- 설치된 Auth.js 버전이 실제로 쓰는 secure·non-secure callback 쿠키 이름만 허용하고, 이 의존성은 계약 시험으로
+  고정한다.
+- callback 값은 기존 `toInternalPath`로 검증하고, `/onboarding?callbackUrl=…`은 정확히 한 단계만 벗긴다.
+- 외부 URL·프로토콜 상대 URL·잘못된 값으로는 절대 redirect하지 않는다. 정상적으로 복구할 수 없으면 `/login`의
+  안전한 오류 화면에 남긴다.
+- 원래 글로 돌아올 때는 고정 fragment만 쓰고, 처리한 뒤 `history.replaceState`로 제거한다. 성공 복귀 위치
+  (댓글 영역·본문 끝)도 같은 고정 fragment 규칙을 따른다.
+- 브라우저 표식과 이벤트에는 콘텐츠 경로·ID·slug를 넣지 않는다(§8-2).
 
 ### 6-6. 접근성과 움직임 `확정`
 
@@ -339,8 +364,8 @@ CTA 클릭과 인증 시작은 현재 한 동작이므로 별도 단계로 쪼�
 
 | 값 | 결정 주체 |
 |---|---|
-| 집계 날짜 `day` | 서버. 요청 처리 시각의 KST 날짜이며 클라이언트 날짜를 받지 않는다 |
-| 로그인 상태 | 서버. ①~④는 화면 렌더 때와 기록 요청을 받을 때 모두 세션이 없어야 기록한다 |
+| 집계 날짜 `day` | 서버. 요청 처리 시각의 KST 날짜이며 클라이언트 날짜를 받지 않는다. KST helper를 클라이언트 번들로 끌고 오지 않는다 — 공용 함수를 재사용하면 server-only 경계를 증명하고, 경계가 흐려지면 중복 구현 없이 중립적인 작은 KST 모듈로 추출한다 |
+| 로그인 상태 | 서버. ①~④는 화면 렌더 때와 기록 요청을 받을 때 모두 세션이 없어야 기록한다. 화면 렌더의 판정은 같은 요청의 기존 세션 판정을 공유한다(§8-11) |
 | 실제 가입 완료 | 서버 (§8-5) |
 | 수집 활성 여부 | 서버 gate 하나 (§8-7) |
 | `step`·`contentType`·`entryPoint` | 클라이언트가 보낼 수 있는 유일한 값. 서버가 허용값으로 검증한다 |
@@ -351,6 +376,8 @@ CTA 클릭과 인증 시작은 현재 한 동작이므로 별도 단계로 쪼�
 - 요청에 `step`·`contentType`·`entryPoint` 외 필드가 하나라도 있으면 그 요청 전체를 집계하지 않는다.
 - 세 값 중 하나라도 허용값이 아니면 그 요청을 집계하지 않는다.
 - 집계하지 않는 경우에도 응답 방식은 사용자 읽기·인증·가입 흐름에 영향을 주지 않는다.
+- 서버 안전은 정확한 same-origin 검증과 엄격 payload 검증을 함께 쓴다. `Sec-Fetch-Site` 하나를 유일한 근거로
+  삼지 않는다.
 
 ### 8-4. 인증 왕복 표식 `확정` — A안
 
@@ -372,8 +399,10 @@ CTA 클릭과 인증 시작은 현재 한 동작이므로 별도 단계로 쪼�
   보장된다고 보지 않는다. 구현은 `isOnboarded=false`를 조건으로 한 **원자적 최초 전환**을 쓰고, 그 전환이
   실제로 일어난 요청만 기록 자격을 갖는다.
 - 필수 Agreement 동의 행은 지금처럼 같은 가입 트랜잭션 안에서 저장한다.
-- 계측은 가입 트랜잭션이 커밋된 뒤 실행한다. 계측 실패는 가입 트랜잭션을 롤백하지 않고 가입 응답도 바꾸지
-  않는다.
+- 계측은 가입 트랜잭션이 커밋된 뒤, 유효한 귀속이 있고 제외 계정이 아닐 때만 집계 upsert 1회를 `await`한다.
+  계측 실패는 가입 트랜잭션을 롤백하지 않고 가입 응답도 실패로 바꾸지 않는다.
+- 이를 위해 `after()` 도입·Next 업그레이드·새 dependency 추가를 하지 않는다. 온보딩 경로 성능 비교가 §8-13 기준을
+  넘으면 MC-M4 FAIL이다.
 - 관리자와 allowlist 계정은 기록하지 않는다.
 - 서버가 보장하는 것은 **실제 최초 온보딩 완료 여부**뿐이다. `content_end` 귀속은 서버가 검증한 클라이언트
   값이지 서버가 발생 출처를 증명한 값이 아니다(§8-4).
@@ -415,7 +444,7 @@ writer는 다음 세 조건을 **모두** 만족할 때만 활성화한다.
 
 ### 8-8. 저장과 보관 `확정`
 
-`SignupFunnelDaily` 한 테이블이다. schema 설계는 승인됐고 migration 생성·적용은 별도 승인이다.
+`SignupFunnelDaily` 한 테이블이다. 0031 migration으로 Production DB에 빈 표가 생성됐다(§18 상태).
 
 ```text
 SignupFunnelDaily
@@ -477,7 +506,9 @@ SignupFunnelDaily
 - 도달 감지는 IntersectionObserver를 쓴다. 지속적인 scroll listener를 두지 않는다.
 - 가입 제안 팝업은 본문 layout shift를 만들지 않는다.
 - 공개 콘텐츠 최초 렌더에서 신규 집계 DB를 읽지 않는다.
-- 매거진 상세에 이미 수행되는 인증 판정과 중복되는 판정을 무심코 추가하지 않는다.
+- 같은 요청 안의 세션 판정은 `src/lib/request-session.ts`의 요청 단위 캐시(`cache(() => auth())`) 하나를
+  `HeaderAuth`·커뮤니티 상세·매거진 상세가 공유한다. 매거진은 판정 1회를 유지하고 커뮤니티는 2회에서 1회로
+  줄인다. 새 인증 DB 조회와 공개 페이지 critical path의 새 DB 조회는 0이다.
 - 집계 조회는 가입 전환 어드민에서만 한다.
 - Preview·수집 비활성 상태에서는 집계 테이블 query를 하지 않는다.
 
@@ -500,6 +531,8 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 **정적·계약 시험**
 
 - `typecheck` · `lint` · `build` · `check:tokens` 통과
+- 새 검사는 기존 tsx 실행기로 직접 실행한다. MC-M4에서는 `.github/workflows/visibility-guard.yml`과
+  `package.json`을 수정하지 않으며, CI 편입은 D100 공용 파일의 merge 순서를 조율한 뒤 별도 단계로 한다
 - 허용값 밖 요청과 추가 필드가 있는 요청에서 count 증가가 0임을 시험한다
 - KST 날짜 경계·gate 조건 조합·방문 정의·표식 검증과 성공 후 제거를 시험하고, 각 판정을 일부러 망가뜨리면
   시험이 실패하는지 확인한다
@@ -510,14 +543,37 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 
 **성능 PASS**
 
-- baseline은 MC-M4 구현 직전, 최신 main이 통합된 **정확한 commit SHA**다. 보고에 SHA를 적는다
+- baseline은 feature에 통합된 **exact main commit SHA**다. 보고에 baseline·feature SHA를 함께 적는다
 - baseline과 변경본은 같은 production build 방식, 같은 모바일 device profile, 같은 network profile을 쓴다
-- 측정 경로는 커뮤니티 상세 · 매거진 상세 · 온보딩 사용자 경로 세 가지이며 각각 따로 측정한다
+- 측정 경로는 커뮤니티 상세 · 매거진 상세 · 인증된 실제 온보딩 form 세 가지이며 각각 따로 측정한다.
+  로그인 화면으로 redirect된 결과는 온보딩 측정값이 아니다
 - First Load JS는 같은 baseline SHA와 production build로 비교한다. 설명되지 않는 5KB gzip 초과 증가는 FAIL
-- Lighthouse는 경로마다 3회씩 실행하고 원시 결과 3개와 중앙값을 함께 보고한다. 중앙값끼리 비교한다
+- Lighthouse는 경로마다 warm-up 1회를 제외하고 3회 실행하며, 원시 결과 3개와 중앙값을 함께 보고한다.
+  중앙값끼리 비교한다
   - LCP·TBT 5% 이상 악화 FAIL
   - CLS 0.01 이상 악화 FAIL
+  - baseline·feature가 모두 0ms인 TBT는 절대 악화가 0이므로 PASS다. baseline 0ms에서 feature가 0ms보다
+    커지면 비율을 계산할 수 없어도 PASS가 아니며, 수치와 함께 FAIL 또는 별도 판정 대상으로 보고한다
+- 기준 완화와 예외 승인으로 PASS를 만들지 않는다
 - blocking fetch · 새 long task · 지속 scroll handler가 생기면 FAIL
+
+**성능 측정의 전송 조건**
+
+- 최종 성능 비교는 실제 Production 응답과 같은 Brotli 전송으로 한다(2026-10-08 Production HTML 응답
+  `content-encoding: br` 관측)
+- 로컬 `next start`의 streaming gzip 측정은 진단 자료로만 쓰고 최종 판정에 쓰지 않는다
+- 압축 proxy는 upstream을 identity로 받고 chunk 단위 streaming으로 압축한다. 같은 요청에서 압축을 푼 body가
+  upstream body와 byte 단위로 같고 응답 전체를 버퍼링하지 않음을 측정 전에 증명한다
+- 수치를 좋게 만들기 위한 일괄 압축·전체 buffering·환경별 조건 차이는 허용하지 않는다. baseline과 변경본은 같은
+  proxy·설정을 쓴다
+
+**통합 기준 — D100 moving-main**
+
+- D100 main은 회원가입 전환 때문에 멈추지 않는다. main 이동 자체는 진행 중인 구현·측정의 중단 조건이 아니다
+- 구현·성능·Preview는 각각 exact checkpoint SHA를 고정하고 그 SHA로 판정한다
+- Draft PR 직전과 최종 merge 직전에 최신 main을 다시 통합한다
+- 새 main 변경이 측정 화면·공용 코드·dependency·schema·build 설정에 닿을 때만 관련 검사를 다시 실행한다.
+  D100·매거진 전용 script·fixture·문서처럼 runtime과 무관한 변경 때문에 build·Lighthouse를 반복하지 않는다
 - 계측 endpoint가 500을 돌려줘도 읽기·인증·가입이 정상이어야 한다
 - 실제 Production INP 판정은 MC-M5 이후로 분리한다
 
@@ -528,7 +584,10 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - 주석 처리된 코드·임시 호환 경로 0건
 - 수정 범위 밖 파일의 무관한 리팩터링 0건
 
-**Preview PASS (MC-M4)**
+**로컬 활성 흐름 PASS (MC-M4)**
+
+Vercel Preview는 `VERCEL_ENV=preview`라 §8-7 gate가 닫혀 tracker가 렌더되지 않는다. 활성화된 흐름은 같은
+production build를 격리 로컬 DB와 `VERCEL_ENV=production`·과거 유효 수집 시작일로 실행해 확인한다.
 
 - 커뮤니티(댓글 있음·없음·답글 펼침)와 매거진에서 ①→②→③→④가 방문마다 각 1회
 - 같은 mount의 rerender와 bfcache 복원에서 ①② 재전송 0, 새로고침·새 탭은 새 방문
@@ -537,9 +596,19 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - localStorage를 쓸 수 없으면 ③ 0
 - CTA 연타에도 ④ 1회
 - payload와 브라우저 표식에 콘텐츠 경로·ID 0건
-- Playwright의 계측 요청 가로채기는 클라이언트 payload·순서·횟수 증명에만 쓴다. 서버 gate 안전 증거로
-  쓰지 않는다
+- 집계 write는 격리 로컬 DB에만 생긴다
+- 별도 QA env·gate 우회·숨은 query override를 만들지 않는다
+- Playwright의 계측 요청 가로채기는 클라이언트 payload·순서·횟수 증거일 뿐 서버 gate 증거가 아니다
 - 서버 gate 안전은 위 정적·계약 시험의 test double 결과(gate 비활성 시 DB 접근 0건)로 증명한다
+
+**Vercel Preview PASS (MC-M4)**
+
+- 수집 gate 비활성: 집계 DB read·write 0, tracker·가입 제안 미렌더
+- 커뮤니티·매거진·온보딩·로그인의 일반 렌더와 인증 진입이 기존과 같다
+- 복귀 URL 안전성: 허용된 커뮤니티·매거진 상세 경로와 고정 fragment로만 돌아가고, 그 밖의 값은 로그인 화면에 남는다
+- 실제 카카오 성공·취소·실패·창 닫기 왕복은 허용된 callback 환경에서 별도로 검증하며, 확인 전까지 `UNKNOWN`이다
+
+로컬 활성 흐름 PASS와 Vercel Preview PASS는 서로 대신하지 않으며 따로 기록한다.
 
 ## 9. 기존 데이터와 계측의 역할
 
@@ -550,7 +619,7 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 | 고객 구성 쿼리·어드민 | 그대로 유지, 복제하지 않음 |
 | GA4 | 보조 분석. 어드민 숫자의 정본으로 사용하지 않음 |
 | `Post.viewCount` | 전체·누적·커뮤니티 중심이라 전환 분모로 사용하지 않음 |
-| `KakaoSignInButton` | 단일 카카오 시작 경로로 그대로 사용. `auth_start`는 기존 시작 훅에서 기록하고 인증 호출을 복사하지 않음 |
+| `KakaoSignInButton` | 단일 카카오 시작 경로로 그대로 사용. `auth_start`는 기존 시작 훅에서 기록하고 인증 호출을 복사하지 않음. 가입 팝업 전용 시각 variant만 추가 (§6-5) |
 | 가입 서버 액션 | 실제 가입 완료의 유일한 서버 근거. §8-5의 원자적 최초 전환으로 보강하고 온보딩 로직을 복사하지 않음 |
 | 글쓰기 인증 marker·view beacon | 구현 패턴으로 참고. 키·쿠키·엔드포인트를 공유하지 않고 변경하지 않음 |
 
@@ -697,10 +766,13 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 
 ## 13. Preview와 Production
 
-- MC-M4 Preview는 커뮤니티와 매거진 두 유형을 함께 검증한다.
-- 디자인·접근성·도달 판정·24시간 제한·레이어 충돌·인증 복귀·계측 계약·성능을 검증한다.
-- Preview는 §8-7 gate로 Production 집계 카운터를 쓰지도 읽지도 않는다.
-- 집계 계약은 in-memory 기록 대상·격리된 DB·가로챈 계측 요청으로 확인한다. PASS 기준은 §8-13이다.
+- Vercel Preview는 `VERCEL_ENV=preview`라 §8-7 gate가 닫힌다. 집계 카운터를 쓰지도 읽지도 않고 tracker·가입
+  제안도 렌더하지 않는다. Preview에서는 집계 DB read·write 0, 일반 렌더·인증 진입, 복귀 URL 안전성을 확인한다.
+- 디자인·접근성·도달 판정·24시간 제한·레이어 충돌·계측 payload의 순서·횟수는 같은 production build를 격리
+  로컬 DB와 `VERCEL_ENV=production`으로 실행해 커뮤니티·매거진 두 유형에서 확인한다(로컬 활성 흐름).
+- 성능은 §8-13의 같은 production build·Brotli 전송 조건으로 비교한다.
+- 실제 카카오 성공·취소·실패·창 닫기 왕복은 허용된 callback 환경에서 별도로 확인한다.
+- PASS 기준은 §8-13이며, 로컬 활성 흐름 PASS와 Vercel Preview PASS를 따로 기록한다.
 - 실제 전환 수집 시작일은 별도 승인된 MC-M5에서 `SIGNUP_FUNNEL_COLLECTION_START`로 정한다.
 - 수집 시작일 이전은 `UNKNOWN`이다.
 - 코드 PASS, 배포 PASS, 운영 PASS를 구분한다.
@@ -714,7 +786,7 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 | **MC-M2 ✅** | 가입 제안 정책·디자인 | 도달·24시간·B안·문구·상호작용 승인 | 디자인 승인 없이 구현 |
 | **MC-M3 ✅** | 최소 측정·저장·어드민 설계 승인 | 2026-10-07 창업자 승인 — §8 계약·§10 어드민·`SignupFunnelDaily` schema 설계 | 범용 이벤트 원장·개인 추적 |
 | **MC-M3P** | 기존 GA4 정합성 판단 (전환 구현과 별도 작업) | page title·location 정책과 보정 범위 승인 | 신규 퍼널과 무관한 분석 확장·전환 PR에 혼합 |
-| **MC-M4 다음** | migration 생성·구현·두 콘텐츠 유형 Preview 검증 | §8-13 정적·성능·유지보수·Preview PASS | Production 집계 오염·승인 전 migration 생성 |
+| **MC-M4 현재 — Draft PR #673 · Ready checkpoint · 창업자 Ready·merge 승인 대기** | 완료: 0031 Production 적용 · 데이터 계약과 Prisma 모델 · 익명 ①~④ endpoint · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker · 도달 판정 · B안 가입 제안 · 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ `signup_complete` · 가입 전환 어드민과 회원 공통 하위 탭 · 격리 PostgreSQL 동시성·롤백 검증 · 최신 main 통합 · D100 공용 경계 검토 · production build · First Load JS · Brotli Lighthouse · 로컬 활성 흐름 · Preview gate 비활성 동작 · 실기기(iPhone Safari·Galaxy Samsung Internet) · 로컬 Kakao 웹 OAuth · Ready 직전 final main `a19beb2` 통합·D100 경계 재검토·최종 checks. 남음: 창업자 Ready·merge 승인 · 모바일 카카오톡 앱 전환 · Production origin·실제 수집(MC-M5) | §8-13 정적·성능·유지보수·로컬 활성 흐름·Vercel Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
 | **MC-M5** | 제한적 Production 적용 | 별도 창업자 승인 후 실제 수집 시작 | 승인 없는 merge·배포 |
 | **MC-M6** | 실제 숫자로 순차 개선 | 한 번에 한 질문·한 변경 | 저유입 표본으로 A/B 승자 주장 |
 | **MC-M7** | North Star 연결 | 회원 방문일 근거와 7일 재방문 참여 연결 | 7일 내 참여를 재방문으로 간주 |
@@ -755,6 +827,8 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 | Preview에서 카운터를 쓰지 않는다는 원칙만 있음 | `VERCEL_ENV`·시작일 env 하나로 writer와 reader를 함께 여는 gate로 대체 (§8-7) |
 | 집계 보관기간 미정 | 최소 24개월 보존, 자동 삭제 job 없음 (§8-8) |
 | MC-M3 `권고` 측정 설계 | 2026-10-07 승인된 §8 계약으로 대체 |
+| 카카오 취소·실패 시 callback 없이 `/login` 일반 화면 도착 | 제한적 callback 쿠키 복귀와 고정 Toast로 대체 (§6-5) |
+| 커뮤니티 상세가 `HeaderAuth`와 별도로 세션 판정 | 요청 단위 세션 공유 하나로 대체 (§8-11) |
 | D100과 전환 모두 접두어 없는 M0~M7 | 전환은 `MC-*`, 고객 구성은 `CB-*` 사용 |
 | 현행 정본 안의 장문 시행착오·검사 횟수 | Git 역사에 보존하고 현재 판단에서 제거 |
 
@@ -810,8 +884,7 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 그 뒤 다음을 읽기 전용으로 확인한다.
 
 - 작업 worktree·branch·HEAD·status
-- PR #665의 원격 head와 로컬 branch 차이
-- 현재 `origin/main`
+- 현재 `origin/main`과 각 작업 branch의 차이
 - 다른 에이전트가 같은 worktree나 파일을 쓰고 있는지
 
 ### 인수인계 시점의 상태
@@ -819,42 +892,119 @@ code PASS · deployed PASS · operating PASS를 구분한다. 아래는 MC-M4 Pr
 - 고객 구성 어드민: Production PASS
 - MC-M1: PASS
 - MC-M2: 정책·디자인 승인 완료
-- MC-M3-D0: 기존 계측·어드민·저장 구조 읽기 전용 진단 PASS
-- MC-M3: 2026-10-07 최소 측정 설계·`SignupFunnelDaily` schema 설계 승인 (§8)
-- 가입 제안 제품 코드: 미구현
-- 가입 전환 어드민: 미구현
-- migration 생성·적용: 미승인
-- 현재 작업 브랜치: `docs/member-conversion-canon-v3`
-- v4.x 작성 기준 부모 commit: `6b6c1100824d84a53a4678dda5c718af2c1ce778` (미커밋 상태로 작성)
-- PR #665는 이 부모보다도 앞선 원격 head를 가리킬 수 있으므로 반드시 재확인한다.
-- 이 branch는 최신 `origin/main`의 운영 문서 변경(README 현재 실행 runbook 절 등)을 아직 포함하지 않는다.
-  통합은 merge로 하며 README를 한쪽 버전으로 덮어쓰지 않는다.
+- MC-M3: 2026-10-07 최소 측정 설계·`SignupFunnelDaily` schema 설계 승인 (§8). v4.1은 PR #665로 main
+  `e6d8b3c`에 merge됨
+- MC-M4: 2026-10-07 구현 계약 확정(v4.2) → 로컬 기능 구현 완료(v4.3) → 통합·성능 PASS(v4.4) → Preview gate
+  checkpoint(v4.5) → 실기기·로컬 카카오 checkpoint(v4.6) → Ready checkpoint(이 v4.7). 창업자 Ready·merge 승인 대기
+- MC-M4 구현 완료 범위: ①~④ 익명 기록과 수집 gate · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker와 도달 판정 ·
+  B안 가입 제안과 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ · 가입 전환 어드민과
+  회원 공통 하위 탭. 격리 PostgreSQL 에서 동시 온보딩 1건만 최초 전환·롤백 검증. 세부 검사는 Git 역사에 둔다
+- 0031 migration: PR #669로 main squash `3f9d11d9fcafbe79504e9084e48a9a2a9e93f819`에 merge, 2026-10-07
+  Production `prisma migrate deploy` 1회로 적용 완료. Production DB에는 빈 `SignupFunnelDaily` 표만 생성됨
+- 0031 S2 PASS: 열 6개 · 복합 PK `SignupFunnelDaily_pkey`(day, step, contentType, entryPoint) · 행 0 · FK 0 ·
+  PK 외 별도 index 0 · 장부 미완료 0 · 롤백 0. 기존 테이블 구조 변경 0(적용 전후 구조 fingerprint 동일)
+- 수집 env(`SIGNUP_FUNNEL_COLLECTION_START`)·실제 수집: 아직 없음 (MC-M5)
+- D100 공용 경계: Codex [3] 읽기 전용 검토 PASS(세션·관리자 판정, CommentSection, 상세 page, 카카오 버튼, 온보딩,
+  로그인, 회원 어드민, schema, gate 비활성 불변식)
+- 성능 checkpoint: baseline exact main `992366dc95e5db1392faba0bb5a14684df7ae9b9` · feature 제품 코드
+  `bed9093c39de4b6ad65642f5b16462ac04026c2c`, 같은 production build
+  - First Load JS gzip: 커뮤니티 +3.30KB · 매거진 +3.22KB · 온보딩 +0.70KB · 공용 +59B. 세 경로 모두 5KB 이하.
+    가입 제안 dialog와 `next-auth/react`는 콘텐츠 끝 도달 뒤 async로 받는다
+  - Lighthouse(streaming Brotli, 중앙값): 커뮤니티 LCP 2256→2256ms · 매거진 2256→2256ms · 온보딩 2105→2105ms,
+    세 경로 TBT 0→0ms · CLS 0→0. 기준 완화·예외 승인 0
+- Draft PR 통합 cutoff: exact main `efd0954ccd78f1f2a648c7de48ca16562f984c83` 로컬 merge 완료. `992366d..efd0954`
+  는 package script·매거진 운영 script·fixture뿐이라 build·성능을 다시 재지 않았다(§8-13 통합 기준)
+- Draft PR: #673 · head `acd516363d8a1df7fb0d0b1245679e5ab5cfa869` 기준 자동 checks 3개 PASS · Vercel Preview
+  deployment Ready. Draft 유지, merge·Production 배포·실제 수집은 하지 않았다
+- 로컬 활성 흐름(§8-13): 같은 production build(`bed9093`) · 격리 로컬 PostgreSQL · `VERCEL_ENV=production`에서
+  커뮤니티(댓글 있음·없음·답글 펼침)·매거진 ①→②→③→④ 각 1회 · rerender·새로고침·새 탭 · 24시간 제한 ③ 0 ·
+  localStorage 실패 ③ 0 · 로그인 사용자 ①~④·집계 0 · payload 세 키뿐 · 관측 payload와 격리 DB count 일치 PASS.
+  bfcache 복원은 headless Chrome에서 재현되지 않아 실기기 `UNKNOWN`
+- Vercel Preview gate 비활성 동작(§8-13): 창업자의 Vercel SSO 브라우저에서 `/api/view/*`·`/api/signup-funnel`·
+  `/api/auth/*`·Production 공개 도메인 요청 차단 장치를 먼저 설치한 뒤, 공개 커뮤니티 상세 1개와 매거진 상세 1개를 끝까지
+  내려가 2초 이상 머물렀다. 가입 제안 dialog 0 · `/api/signup-funnel` 시도 0 · 전환 브라우저 표식 0 · 전환 관련 runtime
+  오류 0. 매거진 본문에는 늘 있는 복귀 anchor만 있고 gate 활성 시 추가되는 끝 감지 지점은 없어 tracker가 렌더되지 않았다.
+  이것은 Preview gate 비활성 동작 PASS이며 Vercel Preview 전체 PASS가 아니다. DB는 직접 조회하지 않았다 — gate 비활성 시
+  DB reader·writer 0은 정적·계약 시험의 test double 결과에 기댄다
+- 실기기(2026-10-09): 같은 production build(`bed9093`, PR head `a3d8faa`와 runtime 동일) · 격리 로컬 PostgreSQL ·
+  `VERCEL_ENV=production`. 기기 식별값은 기록하지 않았다
+  - iPhone 13 Pro · iOS Safari: A 1초 도달·dialog 1회·재관측 중복 0 · B 댓글 작성·키보드 중 dialog 0, 닫은 뒤 노출 ·
+    C focus trap·배경 scroll lock·닫은 뒤 초점·스크롤 복구 · D 글자 크기 3단계 잘림·가로 스크롤 0 · E bfcache·뒤로가기·
+    새로고침·새 탭 · F dialog chunk 지연 중 이탈 시 dialog·③·표식 0 · G 매거진 도달·CTA 연타 시 ④·signin 시도 각 1회 —
+    A~G 전체 PASS, 제품 결함 0. bfcache 는 `pageshow.persisted=true` · window 메모리 변수 생존 · 복원 시 document GET 0 ·
+    ①② 추가 0 으로 판정했다(`timeOrigin` 2ms 차는 이 직접 증거를 무효화하지 않음)
+  - Galaxy Note10 5G · Samsung Internet 핵심 6항목: 끝 도달·dialog 1회 · scroll lock·복구 · 입력·키보드 중 0·닫은 뒤
+    노출 · 글자 크기 3단계 · CTA 연타 ④ 1·signin 1 · 콘솔·외부 요청·중복 — PASS, 제품 결함 0. React #418·#423 은
+    harness 가 만든 차단용 404 화면에서만 관측된 비제품 사항이다
+- 로컬 Kakao 웹 OAuth(2026-10-09): 같은 production build · `127.0.0.1` 에만 bind 한 Next·격리 PostgreSQL · 시험 전용
+  Chrome profile · 운영과 분리된 Kakao 테스트 앱과 localhost callback. 운영 Kakao 앱·운영 env·Preview·Production DB 접근 0
+  - 실제 Kakao(창업자 직접 조작): 신규 가입 → 온보딩 → 원래 글 성공 복귀, User·Account 각 +1·약관 동의 기록·⑤ 1 PASS ·
+    재로그인은 온보딩 생략·성공 복귀·User·Account·약관·⑤ 추가 0 PASS · Kakao 화면에서 뒤로가기·창 닫기는 dialog·Toast 0·
+    ④ 중복 0·DB 변화 0 PASS
+  - 합성 provider 응답 — **실제 Kakao UI 증거가 아니다**: Kakao 웹 동의 화면에 취소 버튼이 없어, 실제 인가 요청을 연 뒤
+    callback 에 `access_denied` 와 `server_error` 를 각 1회 합성했다. 둘 다 `/login?error=OAuthCallbackError` → 원래 글
+    실패 fragment → 확정 Toast 1회 → fragment 제거, User·Account·약관·⑤ 증가 0 PASS. Kakao provider 는 PKCE 만 쓰므로
+    실제 인가 요청·응답에 state 가 없었고, 실제 요청이 만든 PKCE cookie 를 그대로 썼다. 검증 약화 0
+  - 잘못된 client secret 으로 띄운 서버의 Auth.js `Configuration` 500 은 의도적으로 만든 서버 설정 장애다. 사용자 OAuth
+    실패가 아니므로 제품 결함·§6-5 범위 밖이다
+  - 관찰: 기존 회원 재로그인과 인증 실패 뒤에는 귀속 표식이 30분 TTL 까지 남는다. ⑤ 영향 0 · 개인정보·경로 0 · TTL 제한
+  - 정리: 테스트 계정의 테스트 앱 연결 없음 · 테스트 앱 Kakao Login OFF(앱은 보존) · 로컬 DB·secret 파일·시험 profile
+    삭제 · port·잔여 프로세스 0
+- Ready checkpoint 통합(2026-10-09): `efd0954` 뒤 exact main `e2389f288116c8468afc236aeef1d8101a4e2ad1` 을 merge
+  `438babd40dcb2ab09807487c51394613a1a488cd` 로, 이어 final main cutoff
+  `a19beb2d67420113c9882c7babba5a6ac110a5d1` 을 merge `2ca54e35eb817e1f2e7915c4bae83608c120cbd4` 로 통합했다. 두 번 모두
+  main 변경과 feature 변경의 파일 교집합 0 · 가상 merge 충돌 0 · main 변경 파일은 exact main blob · feature 파일은 merge 전
+  feature blob 과 동일 · 제3의 blob 0. `e2389f2..a19beb2` 는 D100 운영 문서·문서 authority·문서 검사뿐이고, `efd0954..e2389f2`
+  는 D100 Persona·supply·stage·magazine 운영 script·문서와 웹 runtime 이 import 하지 않는 D100 `src/lib` 4개, 예약 매거진 글
+  1건 추가였다. 제품 runtime·auth·schema·migration·workflow·dependency 변경 0. exact main 대비 feature diff 는 전환 파일
+  48개뿐이고 D100·운영 파일 0
+- D100 경계 재검토(`e2389f2` 기준, Codex [2]): PASS — 전환 모듈과 D100 모듈 신규 import 결합 0 · 관리자 판정·댓글·답글·
+  온보딩·상세 조회 의미 유지 · Prisma 기존 모델·관계·enum 변경 0 · visibility·comment-compose·operator-compose·
+  stage-ladder·persona-autogen·supply-automation·original-post-persona-match 검사 PASS. `a19beb2` 의 추가 변경은 D100
+  비runtime 문서·검사뿐이다
+- 최종 local checks(merge `2ca54e3` 상태): 전환·고객 구성 검사 8개 PASS — signup-funnel 39 · endpoint 72 · tracker 90 ·
+  prompt 112 · return 109 · complete 68 · admin 70 · customer-composition 90, 모두 실패 0. typecheck · typecheck:ops ·
+  lint · check:contrast · check:tokens · check:brand · master:doc-check(415 pass) PASS. `customer-composition-db-check` 는 DB
+  연결이 필요해 실행하지 않았다. 검사는 각 script 머리말대로 `tsx --tsconfig tsconfig.ops.json` 으로 돌린다 — 저장소의
+  `server-only` shim 은 이 tsconfig 로만 연결된다. runtime blob 이 바뀌지 않아 local build·Lighthouse 는 다시 재지 않았고,
+  exact head build 는 Vercel check 로 확인한다
+- PR CI: head `438babd` 에서 Micro Seed 3축 게이트 · Vercel · Vercel Preview Comments 3개 PASS. 이 v4.7 commit 을 포함한
+  최종 head 의 결과는 PR #673 에서 확인한다
 
 ### 다음 과제
 
-제품 구현은 아직 시작하지 않는다. 다음은 각각 별도 승인 대상이다.
+다음 순서로 진행하며, 각 단계는 별도 승인 대상이다.
 
-1. 이 정본의 commit과 최신 main 통합
-2. `SignupFunnelDaily` migration 생성
-3. §8 계약에 따른 구현과 §8-13 PASS 검증 (MC-M4)
-4. Production env 추가와 수집 시작 (MC-M5)
+1. 창업자 Ready·merge 승인. Ready 전환 직전 원격 main 을 한 번 더 확인하고, 측정 화면·공용 runtime·auth·schema·
+   migration·dependency·workflow·build 설정에 닿는 변경이 있을 때만 재통합·관련 검사를 다시 한다
+2. MC-M5 운영 수집 검증 — Production 배포 · 수집 env · Production request origin · 실제 수집. 각각 별도 단계
+
+새 검사의 CI 편입은 D100 공용 파일 merge 순서를 조율한 뒤 별도 단계로 한다.
 
 GA4 `page_title`·query 전송 문제는 `MC-M3P` 별도 작업으로 다룬다.
 
-## 19. 현재 남은 결정
+## 19. 현재 남은 결정과 확인
 
-MC-M3 측정 설계 결정은 §8에서 확정됐다. 남은 결정과 확인은 다음과 같다.
+MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§8-5·§8-11·§8-13에서 확정됐고 로컬 구현·최신 main
+통합·D100 경계 검토·성능·로컬 활성 흐름·Preview gate 비활성 동작·실기기·로컬 Kakao 웹 OAuth·Ready 직전 final main
+`a19beb2` 통합과 최종 checks PASS는 끝났다. 아직
+Production 배포·실제 수집 전이다. 남은 것은 모바일 앱 전환·실제 운영 환경에서만 확인할 수 있는 UNKNOWN 과 별도 승인
+항목이다.
 
 | 결정·확인 | 현재 상태 |
 |---|---|
-| migration 생성·적용 | 다음 단계에서 별도 승인 |
-| `SIGNUP_FUNNEL_COLLECTION_START` 추가·시작일 | MC-M5 별도 승인 |
-| Toast 최종 문구 | MC-M4 Preview 전 결정 |
-| 팝업 CTA가 기존 카카오 버튼을 지날 때 B안 CTA 모양과 양립하는 방식 | MC-M4 구현 전 확인 |
-| 카카오 인증 취소·실패 시 실제 도착 화면 | `UNKNOWN`. 원래 글 복귀(§6-5)에 인증 흐름 변경이 필요한지 MC-M4 전 확인 |
-| Preview가 연결된 DB | `UNKNOWN`. §8-7 gate는 이 값과 무관하게 Production 카운터를 막는다 |
-| 매거진 가입 제안 대상 판정을 기존 `HeaderAuth` 인증 판정과 중복 작업 없이 잇는 방식 (§8-3 렌더 시 판정 · §8-11 중복 금지) | MC-M4 구현 전 확인 |
-| 새 인증 DB 조회와 공개 페이지 critical path 지연이 0임을 구현 계획과 §8-13 성능 비교로 증명 | MC-M4 구현 전 확인 |
+| 활성 흐름 ①→④·24시간 제한·payload 순서·횟수 | **PASS** — 로컬 활성 흐름, 격리 DB count 일치(§18) |
+| Preview gate 비활성 동작 | **PASS** — dialog·전환 endpoint 시도·전환 표식 0, 끝 감지 지점 미렌더(§18). Preview 전체 PASS 아님 |
+| 실기기 bfcache·키보드·focus trap·scroll lock·글자 크기 | **PASS** — iPhone Safari A~G · Galaxy Samsung Internet 핵심 6항목, 제품 결함 0(§18) |
+| 실제 Kakao 웹 성공·재로그인·뒤로가기·창 닫기 복귀 | **PASS** — 로컬 callback, 실제 Kakao(§18) |
+| Kakao 취소·provider 오류 복귀 | **PASS(합성 provider 응답)** — 실제 Kakao UI 증거 아님, PKCE-only 실제 cookie 사용(§18) |
+| 모바일 카카오톡 앱 전환 | `UNKNOWN` — 웹 OAuth 만 검증했다 |
+| Preview 가 연결된 DB 의 정체 | `UNKNOWN` — DB 를 직접 조회하지 않았다. 과거 기록을 현재 사실로 쓰지 않는다. §8-7 gate 로 Preview read·write 0 이어야 한다 |
+| Production `request.url` origin 과 실제 수집 (온보딩 interactive transaction 의 실제 Production pooler 경로 포함) | `UNKNOWN` — MC-M5. 로컬 `next start` 에서는 route handler `request.url` origin 이 Host 와 달라 실기기 시험에 같은 출처 번역이 필요했다. Production 에서 계측 요청이 같은 출처로 판정되는지 첫날 확인한다 |
+| client chunk 와 First Load JS 증가 | **PASS** — 세 경로 5KB 이하, dialog·`next-auth/react` async(§18) |
+| Lighthouse LCP·TBT·CLS | **PASS** — streaming Brotli 조건, 세 경로 중앙값 악화 0(§18) |
+| 실제 수집 시작일 env(`SIGNUP_FUNNEL_COLLECTION_START`) | MC-M5 별도 승인 |
+| 새 검사의 CI 편입 | D100 공용 파일 merge 순서 조율 뒤 별도 단계 |
 | GA4 보정 | MC-M3P 별도 작업 |
 
 ## 20. 영구 안전장치
@@ -880,6 +1030,13 @@ MC-M3 측정 설계 결정은 §8에서 확정됐다. 남은 결정과 확인은
 | 2026-10-06 | v3.2 | B안 디자인·문구·dim 48%·S2·상호작용 계약 승인 |
 | 2026-10-07 | v4.0 | 프로젝트명을 콘텐츠 끝 도달로 보정하고 D100 경계·MC 단계·회원 하위 탭·최소 측정 권고·새 Codex 인수인계를 통합 |
 | 2026-10-07 | v4.1 | Codex [2] 보정안을 포함한 MC-M3 최소 측정 계약 승인 — 방문 정의·원자적 최초 전환·A안 표식·단일 env gate·24개월 보존·성능 불변식·유지보수 기준·PASS 기준 |
+| 2026-10-07 | v4.2 | MC-M4 구현 계약 확정 — 요청 단위 세션 공유(D1)·취소·실패 복귀 (a)안과 Toast 문구(D2)·가입 완료 집계 await(D3)·CI 편입 제외(D4)·카카오 버튼 시각 variant·레이어 시작값·도달 타이머 취소·KST server-only 경계·same-origin 검증 |
+| 2026-10-07 | v4.2 상태 | 0031 PR #669 merge(`3f9d11d`)·Production 적용·S2 PASS 기록, MC-M4 제품 구현 시작. 정책 변경 없음 |
+| 2026-10-08 | v4.3 | MC-M4 로컬 기능 구현 checkpoint — ①~⑤, B안 가입 제안, 인증 복귀, 원자적 온보딩, 가입 전환 어드민 완료. 최신 main 통합·build·성능·Preview·배포·수집은 미완료 |
+| 2026-10-08 | v4.4 | MC-M4 통합·성능 PASS checkpoint — 최신 main 통합·D100 공용 경계 PASS·production build·First Load JS·streaming Brotli Lighthouse PASS. 성능 전송 조건·TBT 0→0 판정·D100 moving-main 통합 기준을 §8-13에, 로컬 활성 흐름과 Vercel Preview 검증 분리를 §8-13·§13에 명시. 새 제품 정책 없음 |
+| 2026-10-08 | v4.5 | MC-M4 Preview gate checkpoint — Draft PR #673 checks PASS·Preview Ready, 로컬 활성 흐름 PASS(bfcache 실기기 UNKNOWN), Vercel Preview gate 비활성 동작 PASS. Preview DB 정체·실기기·실제 카카오·Production 수집은 UNKNOWN 유지. 새 제품 정책 없음 |
+| 2026-10-09 | v4.6 | MC-M4 실기기·로컬 카카오 checkpoint — iPhone Safari A~G·Galaxy Samsung Internet 핵심 6항목 PASS, 실제 Kakao 신규 가입·재로그인·뒤로가기/창 닫기 PASS, 합성 access_denied·server_error callback PASS(합성 증거 명시), 잘못된 secret 500 범위 밖, marker 30분 잔존 관찰. 모바일 카카오톡 앱 전환·Preview DB 정체·Production origin·실제 수집은 UNKNOWN 유지. 새 제품 정책 없음 |
+| 2026-10-09 | v4.7 | MC-M4 Ready checkpoint — exact main `e2389f2`(merge `438babd`)와 final main cutoff `a19beb2`(merge `2ca54e3`) 통합, 교집합·충돌·제3의 blob 0, D100 경계 재검토 PASS, 최종 local checks·head `438babd` PR CI PASS. 실기기·로컬 Kakao PASS와 합성 callback 증거 표시 유지, 모바일 카카오톡 앱 전환·Preview DB 정체·Production origin·실제 수집은 UNKNOWN 유지. 새 제품 정책 없음 |
 
 v3.2까지의 세부 결정·검사 횟수·Preview 시행착오·commit·deployment 기록은 Git 역사에 보존한다. 현재 정책과
-충돌할 때는 이 v4.1 현행 절이 이긴다.
+충돌할 때는 이 v4.7 현행 절이 이긴다.

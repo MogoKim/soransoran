@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * 고객 구성 — 운영 DB **읽기 전용** 정합성·성능 검사. 정본: MEMBER-CONVERSION-CANON.md v2.3 §14 (M4).
+ * 고객 구성 — 운영 DB **읽기 전용** 정합성·성능 검사(CB-M4). 정책: 회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11.
  *
  *   npm run check:customer-composition-db                    자기검사만. 🔴 DB 에 연결하지 않는다
  *   npm run check:customer-composition-db -- --live-readonly 운영 조회 — 한 번, read-only 트랜잭션 안에서만
