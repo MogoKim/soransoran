@@ -59,6 +59,10 @@ import {
   WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
   OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease,
 } from '../src/lib/supply-workset'
+/** 🔴 공급 선택 관측(P0-B0) — 선택이 끝난 뒤 기록만 읽는다. 선택 · 유료 단계 · DB 에 영향 0 */
+import {
+  buildSupplySelectionTrace, createSelectionRecorder, recordSelectionTraceSafely, selectionTraceFileName,
+} from '../src/lib/supply-selection-trace'
 /** 🔴 원천 기회 판정 정본 — 유료 생성 전 · 예정 슬롯 기준 */
 import {
   buildSourceEvidence, judgeSlotRelease,
@@ -1033,10 +1037,13 @@ async function main(): Promise<number> {
       }, null, 2)}\n`)
       console.log(`   🟢 원천 기회 스냅샷 ${opp.length}건 (예정 슬롯 ${nextSlotAt.toISOString()})`)
     }
+    // 🔴 선택 관측 기록기(P0-B0) — 짝짓기 · 묶음 선택에 넘겨 단계 결과를 적기만 한다
+    const recorder = createSelectionRecorder()
     if (policy.llm) {
     // 🔴 부족 슬롯마다 원천을 짝짓는다 — 배정된 원천만 사고, 그 원천은 **배정 슬롯**에서 다시 판정한다
     const assigned = assignSourceSlots({
       rows: worksetEligibility(eligibilityInput).eligible, slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT,
+      trace: recorder.sink,
     })
     const intendedSlotOf = (r: WorksetRow): Date | null => {
       const k = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
@@ -1050,6 +1057,7 @@ async function main(): Promise<number> {
       },
       intendedSlotOf,
       limit: PAID_LIMIT, runId, takenAt: runAt,
+      trace: recorder.sink,
     })
     console.log(`   부족 슬롯 ${unfilledSlots.length}개 · 원천 배정 ${assigned.size}건`
       + ` (${[...new Set([...assigned.values()].map((d) => d.toISOString()))].length}개 슬롯)`)
@@ -1064,6 +1072,28 @@ async function main(): Promise<number> {
         // 🔴 적재를 끝내지 못한 앞 회차 파일 — 상한(`--up-to`)은 늘지 않는다
         carryOverPaths: carryPaths,
       }
+    }
+    /**
+     * 🔴 **선택 관측 trace** (2026-10-10 P0-B0) — 묶음이 정해지고 파일까지 쓴 **뒤**다. 원천 해시 · 숫자 · enum 만 남긴다.
+     *    실패해도 던지지 않고 한 번만 시도한다 — 묶음 · judge · draft · 적재는 trace 결과를 읽지 않는다.
+     */
+    const traced = recordSelectionTraceSafely({
+      build: () => buildSupplySelectionTrace({
+        runId, takenAt: runAt, limit: PAID_LIMIT, cap: PAID_LIMIT, slots: unfilledSlots, record: recorder.record,
+        attempted: prior.attempted, picked: plan.picked, workset: plan.workset,
+        slotVerdict: (r, d) => preGenerationRelease(r, d, RUN_AT),
+      }),
+      write: canWrite ? (body) => writeAtomic(join(DATA_DIR, selectionTraceFileName(runId)), body) : null,
+    })
+    if (traced.ok) {
+      const s = traced.trace.summary
+      console.log(`   🔎 선택 관측 후보 ${s.candidates} · 선택 ${s.selected} · 재시도 ${s.retry.candidates}/${s.retry.selected}`
+        + ` · 갱년기 ${s.menopauseCore.candidates}/${s.menopauseCore.selected} · wgang ${s.wgang.candidates}/${s.wgang.selected}`
+        + ` · EDF 오래된 쪽 우선 ${s.edfOlderOverFresher} · 예약석 밀림 ${s.freshDisplacedByRetryReserve}`
+        + ` · 축 자리 제외 ${s.axisQuotaDropped} · shadow 갱년기 ${traced.trace.shadow.menopause}`
+        + `${s.mismatches > 0 ? ` · 🔴 기록 불일치 ${s.mismatches}` : ''}${traced.written ? '' : ' (dry-run · 파일 0)'}`)
+    } else {
+      console.log(`   🟡 선택 관측 trace 실패(${traced.stage}: ${traced.error}) — 묶음 · 유료 단계에는 영향 없음`)
     }
     console.log(`   🔴 작업 묶음 ${plan.picked.length}건 / 유료 상한 ${PAID_LIMIT} (묶음 천장 ${WORKSET_LIMIT}) — ${wsPath}`)
     console.log(`      단계 상한  judge ${budget.perStage.judge}회 · draft ${budget.perStage.draft}회`
