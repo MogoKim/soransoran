@@ -161,8 +161,9 @@ console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 
   check('🔴 PUBLISHED → 공개 · EXPIRED · DECLINED · 손실 확정 대기 → 손실 · 예정 대기 → 예정 · 나머지 대기 → 모름',
     r.published === 5 && r.lost === 3 && r.scheduled === 1 && r.unknown === 2, JSON.stringify(r))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
-  check('🔴 생산능력 · 결말이 한 번의 조회(같은 창 · AUTO_DECIDER) — 별도 count 로 raw 를 따로 세지 않는다',
-    /findMany\(\{\s*where: \{ decidedBy: AUTO_DECIDER, decidedAt: \{ gte: i\.windowFrom, lt: i\.windowTo \} \}/.test(facts)
+  check('🔴 생산능력 · 결말이 한 번의 조회(창 시작 이후 적재 · 자동 READY 경로 · 회차 소속) — 별도 count 로 raw 를 따로 세지 않는다',
+    /findMany\(\{\s*where: \{ createdAt: \{ gte: i\.windowFrom \} \}/.test(facts)
+    && /r\.decidedBy === AUTO_DECIDER\s*\|\| \(\(r\.decidedBy \?\? ''\)\.startsWith\('machine:'\)/.test(facts)
     && !/originalPostApprovalQueue\.count\(/.test(facts)
     && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.scheduled \+ fates\.unknown/.test(facts))
   check('🔴 비용은 같은 cohort 의 완전 연결 결과당 비용 하나로 사실에 담긴다 — raw 정산 ÷ 행 수 없음',

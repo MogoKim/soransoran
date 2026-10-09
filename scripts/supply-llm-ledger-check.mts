@@ -42,7 +42,7 @@ import {
 } from './lib/llm-ledger-store.mjs'
 import {
   BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SUPPLY_LEDGER_ISOLATION_MARK, SupplyLlmSession, limitsFromEnv,
-  type LedgerIo,
+  usageUnknownAlertMessage, type LedgerIo, type UsageUnknownAlert,
 } from './lib/supply-llm-call.mjs'
 import { STAGE_MODEL, STAGE_MAX_OUTPUT_TOKENS } from '../src/lib/content-core/pipeline'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
@@ -1475,6 +1475,91 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
   globalThis.fetch = realFetch
   if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
   else process.env.ANTHROPIC_API_KEY = prevKey
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑩-b 🔴 사용량 미상 알림 — 장부 기록 뒤 · 회차 · 단계 · 건수 · 추정 예약액만 · 실패는 기록을 막지 않는다 (2026-10-09 P0)')
+// ─────────────────────────────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-unknown-alert-'))
+  const realFetch = globalThis.fetch
+  const prevKey = process.env.ANTHROPIC_API_KEY
+  process.env.ANTHROPIC_API_KEY = 'fixture-fake-key'
+  const SECRET_PAYLOAD = 'fixture-payload-원문-비밀-문장'
+  // 🔴 provider 는 답했지만 사용량 칸이 없다 — 장부는 usageUnknown 이다(네트워크에 나가지 않는다)
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    if (String(url).includes('/count_tokens')) {
+      return new Response(JSON.stringify({ input_tokens: 100 }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({ content: [{ text: '"ok":true}' }], usage: {}, stop_reason: 'end_turn' }),
+      { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof globalThis.fetch
+  const ASK = {
+    stage: 'draftGen' as const, model: 'claude-haiku-4.5' as const,
+    systemPrompt: 'sys', userPayload: JSON.stringify({ text: SECRET_PAYLOAD }), maxOutputTokens: 1200, timeoutMs: 5_000,
+    sourceKey: 'sha256:fixture-source-hash',
+  }
+  const LIM = { dailyUsd: 1000, runRequestCap: 10_000, headroomMultiplier: 1.5 }
+  const day = (): LedgerEntry[] => {
+    const r = readLedgerDay(ledgerPathOf(dir, ledgerDateOf(new Date())))
+    return r.ok ? r.entries : []
+  }
+  try {
+    const got: UsageUnknownAlert[] = []
+    const order: string[] = []
+    const sOk = new SupplyLlmSession({
+      runId: 'RU1', dir, limits: LIM,
+      notify: async (a) => { order.push(`notify:${day().filter((e) => e.runId === 'RU1' && e.status === 'usageUnknown').length}`); got.push(a) },
+    })
+    const r1 = await sOk.call(ASK)
+    const line = day().find((e) => e.runId === 'RU1' && e.stage === 'draftGen')
+    check('🔴 fixture 전제 — 사용량 없는 응답은 usageUnknown 으로 기록 · 정산액 null', line?.status === 'usageUnknown' && line.settledUsd === null && r1.settlementRecorded === true)
+    check('🔴 🔴 **알림 성공 — 정확히 1건 · 회차 RU1 · 단계 draftGen · 건수 1 · 추정 예약액 = 장부 예약액**',
+      got.length === 1 && got[0]!.runId === 'RU1' && got[0]!.stage === 'draftGen' && got[0]!.count === 1
+      && line !== undefined && got[0]!.reservedUsd === line.reservedUsd && got[0]!.reservedTotalUsd === line.reservedUsd, JSON.stringify(got))
+    check('🔴 🔴 **알림은 장부 줄을 적은 뒤에 간다** (알림 시점에 usageUnknown 줄 1개가 이미 있다)', order.join(',') === 'notify:1', order.join(','))
+    const msg = usageUnknownAlertMessage(got[0]!)
+    const msgText = JSON.stringify(msg) + JSON.stringify(got[0])
+    check('🔴 🔴 **알림에 payload · 원문 · 원천 해시 · 키가 없다**', !msgText.includes(SECRET_PAYLOAD) && !msgText.includes('fixture-source-hash')
+      && !msgText.includes('fixture-fake-key') && JSON.stringify(Object.keys(got[0]!).sort()) === JSON.stringify(['count', 'reservedTotalUsd', 'reservedUsd', 'runId', 'stage']))
+    check('알림 등급 WARN · 다음 할 일(실제 금액 확인 후 마감 또는 창 이탈) 안내', msg.severity === 'WARN' && msg.next.includes('supply:ledger-resolve') && msg.next.includes('창을 벗어나'))
+    check('🔴 🔴 **알림은 승급 공급 비용이 UNKNOWN 이라고 말한다 — "예약 상한" · "계속된다" 문구 없음 · 추정 예약액은 실제 비용 아님**',
+      /UNKNOWN/.test(msg.reason) && /추정 예약액/.test(msg.reason) && /실제 비용 아님/.test(msg.reason)
+      && !/예약 상한|상한으로|계속된다/.test(JSON.stringify(msg)), JSON.stringify(msg))
+    await sOk.call(ASK)
+    check('같은 회차 두 번째 미상 → 건수 2 · 추정 예약액 합 누적', got.length === 2 && got[1]!.count === 2
+      && Math.abs(got[1]!.reservedTotalUsd - ((got[0]!.reservedUsd ?? 0) + (got[1]!.reservedUsd ?? 0))) < 1e-12)
+    // 🔴 알림 실패 — 던져도 기록 · 결과 · 다음 요청이 그대로다
+    let threw = 0
+    const sFail = new SupplyLlmSession({ runId: 'RU2', dir, limits: LIM, notify: async () => { threw += 1; throw new Error('fixture: 알림 실패') } })
+    const r2 = await sFail.call(ASK)
+    const r3 = await sFail.call(ASK)
+    const lines2 = day().filter((e) => e.runId === 'RU2' && e.stage === 'draftGen')
+    check('🔴 🔴 **알림 실패(throw) → 장부 줄 그대로 · 정산 기록됨 · 회차 계속(두 번째 요청도 나감)**',
+      threw === 2 && r2.settlementRecorded === true && r3.settlementRecorded === true
+      && lines2.length === 2 && lines2.every((e) => e.status === 'usageUnknown') && sFail.tally.usageUnknown === 2, JSON.stringify({ threw, n: lines2.length }))
+    const openAfter = readOpenReservations(dir)
+    check('알림 실패여도 열린 예약 목록은 정상 정리 — 끝난 요청의 열린 예약 0', openAfter.ok && openAfter.list.length === 0, JSON.stringify(openAfter))
+    // 🔴 정상 정산은 알리지 않는다
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      if (String(url).includes('/count_tokens')) {
+        return new Response(JSON.stringify({ input_tokens: 100 }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ content: [{ text: '"ok":true}' }], usage: { input_tokens: 11, output_tokens: 22 }, stop_reason: 'end_turn' }),
+        { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof globalThis.fetch
+    const quiet: UsageUnknownAlert[] = []
+    await new SupplyLlmSession({ runId: 'RU3', dir, limits: LIM, notify: async (a) => { quiet.push(a) } }).call(ASK)
+    check('정산된 요청은 알림 0', quiet.length === 0 && day().some((e) => e.runId === 'RU3' && e.status === 'settled'))
+    const src = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
+    check('🔴 기본 알림은 공급 장부만 — 시험 · 다른 장부 자리는 보내지 않는다',
+      /this\.notify = cfg\.notify \?\? \(this\.supply \? SLACK_USAGE_UNKNOWN_NOTIFY : null\)/.test(src))
+  } finally {
+    globalThis.fetch = realFetch
+    if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = prevKey
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 // ─────────────────────────────────────────────────────────

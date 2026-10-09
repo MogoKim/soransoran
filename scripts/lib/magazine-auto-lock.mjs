@@ -21,7 +21,8 @@
  * 🔴 **판정은 순수 함수다.** `judgeLock` 은 파일을 읽지 않는다 —
  *    stale·경합·손상된 lock 을 실제 프로세스 없이 시험할 수 있어야 한다.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 
@@ -124,36 +125,114 @@ export function judgeLock({ existing, now, pidAlive, staleAfterMs = STALE_AFTER_
   }
 }
 
+/** 디스크의 lock 원문. 없으면 null — 🔴 회수 직전 "본 것과 같은가" 를 바이트로 대조하는 데 쓴다 */
+function readRaw(path) {
+  try { return readFileSync(path, 'utf8') } catch (e) { return e?.code === 'ENOENT' ? null : '' }
+}
+const parseRaw = (raw) => {
+  if (raw === null) return null
+  try { return JSON.parse(raw) } catch { return {} }
+}
+
 /** 디스크의 lock 을 읽는다. 없으면 null · 깨졌으면 `{}` (판정이 LOCK_CORRUPT 를 낸다) */
 export function readLock(path = LOCK_PATH) {
-  if (!existsSync(path)) return null
+  return parseRaw(readRaw(path))
+}
+
+/**
+ * 🔴 **잠금 파일은 `wx` 로만 만든다** (2026-10-09 Codex 재검토 P1).
+ *    앞판은 `readLock` 으로 "없다" 를 본 뒤 일반 `writeFileSync` 로 썼다. 두 실제 프로세스가 동시에
+ *    "없다" 를 보면 **둘 다** 쓰고 둘 다 진입했다. `wx` 는 이미 있으면 EEXIST 로 실패한다 — 한쪽만 이긴다.
+ */
+function createExclusive(path, body) {
+  const fd = openSync(path, 'wx', 0o600)
+  try { writeSync(fd, `${JSON.stringify(body, null, 2)}\n`) } finally { closeSync(fd) }
+}
+
+/** 🔴 시험 전용 — 판정과 생성 사이를 벌려 실제 경합을 재현한다 (SORAN_MAGAZINE_TEST_MODE=1 일 때만) */
+function racePause() {
+  if (process.env.SORAN_MAGAZINE_TEST_MODE !== '1') return
+  const ms = Number(process.env.SORAN_LOCK_RACE_PAUSE_MS || 0)
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * 🔴 **owner token 이 내 것일 때만 지운다.** pid 만 보면 같은 pid 를 재사용한 남의 잠금을 지운다.
+ * @returns {'RELEASED'|'NOT_MINE'|'ABSENT'}
+ */
+export function releaseIfMine(path, token) {
+  const cur = parseRaw(readRaw(path))
+  if (cur === null) return 'ABSENT'
+  if (!token || cur?.token !== token) return 'NOT_MINE'
+  rmSync(path, { force: true })
+  return 'RELEASED'
+}
+
+/**
+ * 🔴 **죽은 잠금 회수는 별도의 원자적 소유권 아래에서만** (2026-10-09 Codex 재검토 P1).
+ *    `${path}.reclaim` 을 `wx` 로 잡은 쪽만 회수한다. 잡은 뒤 **잠금 원문을 다시 읽어** 판정 때 본 것과
+ *    바이트까지 같고 여전히 죽은 잠금일 때만 지운다. 그 사이 누가 새 잠금을 잡았으면 손대지 않는다.
+ *    회수 소유권을 못 잡으면(다른 회차가 회수 중) 막는다 — fail-closed.
+ */
+function reclaimDeadLock(path, seenRaw, { now, pidAlive }) {
+  const reclaim = `${path}.reclaim`
+  try { createExclusive(reclaim, { pid: process.pid, startedAt: now, token: randomUUID() }) } catch (e) {
+    if (e?.code === 'EEXIST') {
+      return { ok: false, code: 'LOCK_RECLAIM_BUSY', message: `다른 회차가 죽은 잠금을 회수하는 중이다 — 이번 회차는 건너뛴다 (${reclaim})` }
+    }
+    return { ok: false, code: 'LOCK_ERROR', message: `회수 소유권을 만들지 못했다: ${e?.message ?? e}` }
+  }
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch {
-    return {}
+    const nowRaw = readRaw(path)
+    if (nowRaw !== seenRaw) return { ok: false, code: 'LOCK_HELD', message: '회수하려던 사이 잠금이 바뀌었다 — 이번 회차는 건너뛴다' }
+    const again = judgeLock({ existing: parseRaw(nowRaw), now, pidAlive })
+    if (!again.ok || !again.takeover) return { ok: false, code: again.code, message: again.message }
+    rmSync(path, { force: true })
+    return { ok: true }
+  } finally {
+    rmSync(reclaim, { force: true })
   }
 }
 
 /**
  * lock 을 잡는다.
- * @returns {{ok: boolean, code: string, message: string, release: (() => void)}}
+ *
+ * 🔴 판정(`judgeLock`)은 그대로다 — 살아 있는 주인·손상·LOCK_STUCK 은 계속 막는다.
+ *    바뀐 것은 **생성이 원자적**이고, **owner token** 을 남기고, 해제·회수가 그 token·원문을 대조한다는 것이다.
+ * @returns {{ok: boolean, code: string, message: string, token?: string, release: (() => void)}}
  */
 export function acquireLock({ path = LOCK_PATH, now = Date.now(), pidAlive = defaultPidAlive, label = 'auto-register' } = {}) {
-  const verdict = judgeLock({ existing: readLock(path), now, pidAlive })
-  if (!verdict.ok) return { ...verdict, release: () => {} }
-
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, `${JSON.stringify({ pid: process.pid, startedAt: now, label }, null, 2)}\n`, 'utf8')
+  const none = () => {}
+  try { mkdirSync(dirname(path), { recursive: true }) } catch (e) {
+    return { ok: false, code: 'LOCK_ERROR', message: `잠금 폴더를 만들지 못했다: ${e?.message ?? e}`, takeover: false, release: none }
+  }
+  const seenRaw = readRaw(path)
+  const verdict = judgeLock({ existing: parseRaw(seenRaw), now, pidAlive })
+  if (!verdict.ok) return { ...verdict, release: none }
+  racePause()
+  if (verdict.takeover) {
+    const r = reclaimDeadLock(path, seenRaw, { now, pidAlive })
+    if (!r.ok) return { ok: false, code: r.code, message: r.message, takeover: false, release: none }
+  }
+  const token = randomUUID()
+  try {
+    createExclusive(path, { pid: process.pid, startedAt: now, label, token })
+  } catch (e) {
+    if (e?.code === 'EEXIST') {
+      return { ok: false, code: 'LOCK_HELD', message: '다른 회차가 방금 잠금을 잡았다 — 이번 회차는 건너뛴다', takeover: false, release: none }
+    }
+    return { ok: false, code: 'LOCK_ERROR', message: `잠금을 만들지 못했다: ${e?.message ?? e}`, takeover: false, release: none }
+  }
 
   let released = false
   return {
     ...verdict,
+    token,
     release: () => {
       if (released) return
       released = true
-      // 🔴 내 것일 때만 지운다. 뺏긴 lock 을 지우면 남의 회차를 무방비로 만든다.
-      const current = readLock(path)
-      if (current?.pid === process.pid) rmSync(path, { force: true })
+      // 🔴 내 token 일 때만 지운다. 뺏긴 lock 을 지우면 남의 회차를 무방비로 만든다.
+      releaseIfMine(path, token)
     },
   }
 }

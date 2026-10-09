@@ -135,8 +135,14 @@ export type CostAttribution = {
    *    (2026-10-04 P0-2 최종) 분리 가능한 legacy 는 현재 계약 단가 계산을 막지 않는다 — 3일 창을 인위로 기다리지 않는다.
    */
   legacyUsd: number
-  /** 예약만 있고 정산이 없는 **현재 계약** 유료 요청 수 — 🔴 0 이 아니면 합계를 모른다 */
+  /** 예약만 있고 정산이 없는 **현재 계약** 유료 요청 수(이 cohort) — 🔴 0 이 아니면 합계를 모른다(단가 `null`) */
   openRequests: number
+  /**
+   * 🔴 **미정산 요청의 추정 예약액 합(USD) — 보고용** (2026-10-09). 실제 비용이 아니고 비용의 한계도 아니다 —
+   *    예약은 count_tokens 추정 위에 잡은 값이라 실제 정산이 넘을 수 있다(`judgeSettle.overran` · `llm-pricing.reserveOf`).
+   *    `totalUsd` 에 넣지 않는다. 판정에 쓰지 않는다.
+   */
+  openReservedUsd: number
   /** 예약만 있는 legacy 요청 수 — 보고만 한다 */
   legacyOpenRequests: number
   /** 🔴 현재 계약이지만 **다른 cohort 회차**(창 밖 묶음)의 정산 — 이 cohort 의 분자가 아니다 · 보고만 한다 */
@@ -159,6 +165,7 @@ export type CostAttribution = {
  * 🔴 **장부 요청을 원천 결과에 붙인다.** 현재 JIT 계약 표식(`supplyContract`)이 있는 요청만 `sourceKey`(원천 해시)로
  *    결과 행의 결말에 붙인다. 표식 없는 요청은 legacy 다 — 따로 보고하고 현재 계약 단가에는 넣지도 막지도 않는다.
  *    현재 계약 요청 중 미연결 · 미정산이 하나라도 있거나, 현재 계약 정산 0 · slot-valid 결과 0 이면 단가는 모른다.
+ *    🔴 미정산 요청의 예약액은 실제 비용도 그 한계도 아니다 — 예약이 있어도 단가를 확정하지 않는다(보고용 합계만).
  *    결말 모름 비용은 분자에 포함한다. 그 행이 나중에 성공하면 분모만 늘어 단가가 낮아지고, 실패하면 지금 상한이 그대로라
  *    `전체 정산 ÷ 현재 확인된 결과`는 예산을 과소평가하지 않는다.
  *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 끝나지 않은 요청이 있으면 결과당 단가는 `null` 이다 —
@@ -180,16 +187,21 @@ export function costAttributionOf(i: {
   let unlinked = 0
   let legacy = 0
   let open = 0
+  let openReserved = 0
   let legacyOpen = 0
   let otherCohort = 0
   for (const e of i.entries) {
     if (e.stage === 'countTokens' || e.status === 'blocked') continue
     const current = e.supplyContract === SUPPLY_JIT_CONTRACT
+    const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
     if (e.status !== 'settled' || e.settledUsd === null) {
       // 🔴 미정산도 같은 cohort 회차 것만 이 cohort 를 막는다 — 다른 회차 · legacy 는 보고만
       const run = current ? pipelineRunOfLedger(e.runId) : null
-      if (!current) legacyOpen += 1
-      else if (run === null || i.cohortRuns.has(run)) open += 1
+      if (!current) { legacyOpen += 1; continue }
+      if (run !== null && !i.cohortRuns.has(run)) continue
+      open += 1
+      // 🔴 추정 예약액은 보고만 한다 — 실제 비용도 그 한계도 아니다(정산이 예약을 넘을 수 있다). 분자에 넣지 않는다
+      if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd >= 0) openReserved += e.reservedUsd
       continue
     }
     if (!current) { legacy += e.settledUsd; continue }
@@ -197,14 +209,14 @@ export function costAttributionOf(i: {
     if (run === null) { unlinked += e.settledUsd; continue }
     if (!i.cohortRuns.has(run)) { otherCohort += e.settledUsd; continue }
     total += e.settledUsd
-    const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
     if (key === null) { unlinked += e.settledUsd; continue }
     byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
   }
   const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
   return {
-    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, legacyOpenRequests: legacyOpen, otherCohortUsd: otherCohort, byFate,
+    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, openReservedUsd: openReserved,
+    legacyOpenRequests: legacyOpen, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && results > 0 ? total / results : null,
     usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0

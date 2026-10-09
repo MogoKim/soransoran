@@ -901,8 +901,25 @@ console.log('\n⑪ 🔴 혼합 모델 — 단계별 모델과 thinking 과금')
     promptTokenCount: 1000, candidatesTokenCount: 100, thoughtsTokenCount: 500, ...o })
   check('🔴 🔴 **Gemini 출력 과금 = candidates + thoughts**',
     readGeminiUsage(gemUsage({})).outputTokens === 600)
-  check('🔴 🔴 **thoughtsTokenCount 가 없으면 usageUnknown — 싸게 추정하지 않는다**',
-    readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined })).usageKnown === false)
+  check('🔴 🔴 **thoughts · total 이 모두 없으면 usageUnknown — 싸게 추정하지 않는다**',
+    readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined })).usageKnown === false
+    && readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined })).thoughtsSource === null)
+  // 🔴 (2026-10-09 P0) 칸이 빠진 응답 — 공식 합계 관계로 결정적으로 계산한다(2026-10-08 운영 실측 모양)
+  const derived = readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, totalTokenCount: 1600 }))
+  check('🔴 정상 — thoughts 칸이 있으면 보고값(reported) · total 과 무관',
+    readGeminiUsage(gemUsage({ totalTokenCount: 9999 })).thoughtsSource === 'reported'
+    && readGeminiUsage(gemUsage({ totalTokenCount: 9999 })).outputTokens === 600)
+  check('🔴 🔴 **thoughts 없음 + total 일치 → thoughts = total − prompt − candidates (derived) · 출력 600 · 정산 가능**',
+    derived.usageKnown && derived.thoughtsSource === 'derived' && derived.thoughtsTokens === 500 && derived.outputTokens === 600)
+  check('🔴 thoughts 없음 + total 이 prompt + candidates 와 같다 → thinking 0 (derived)',
+    readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, totalTokenCount: 1100 })).thoughtsTokens === 0
+    && readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, totalTokenCount: 1100 })).usageKnown)
+  check('🔴 🔴 **total 모순(합계가 prompt + candidates 보다 작다) → usageUnknown**',
+    !readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, totalTokenCount: 1099 })).usageKnown
+    && readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, totalTokenCount: 1099 })).thoughtsSource === null)
+  check('🔴 total 이 숫자가 아니면 usageUnknown', !readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, totalTokenCount: '1600' })).usageKnown
+    && !readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, totalTokenCount: Number.NaN })).usageKnown)
+  check('🔴 prompt 가 없으면 total 이 있어도 usageUnknown', !readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined, promptTokenCount: undefined, totalTokenCount: 1600 })).usageKnown)
   check('🟢 thinking 을 안 쓴 응답(0)은 정상 통과',
     readGeminiUsage(gemUsage({ thoughtsTokenCount: 0 })).usageKnown === true
     && readGeminiUsage(gemUsage({ thoughtsTokenCount: 0 })).outputTokens === 100)
@@ -1750,7 +1767,7 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
     const far = exactAgeOf({ ...p02, onKstDate: '2036-09-23' })
     return !far.ok && far.code === 'OUT_OF_BAND'
   })())
-  check('🔴 🔴 **25명 전원이 전 축 검사를 통과한다 (ageBand·자녀·갱년기·간병·혼인·직업)**', (() => {
+  check('🔴 🔴 **카드 31명 전원이 전 축 검사를 통과한다 (ageBand·자녀·갱년기·간병·혼인·직업)**', (() => {
     for (const c of POOL.cards) {
       const v = exactAgeOf({ birthDate: c.birthDate, ageBand: c.ageBand, onKstDate: '2026-09-23' })
       if (!v.ok) return false
@@ -1761,7 +1778,7 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
       })
       if (probs.length > 0) return false
     }
-    return POOL.cards.length === 25
+    return POOL.cards.length === 31
   })())
   check('🔴 자녀 연령대 문자열을 제대로 읽는다 — `중3` 은 3세가 아니다',
     childAgeFrom('중3') === 15 && childAgeFrom('초등 고학년') === 11 && childAgeFrom('20대') === 25)

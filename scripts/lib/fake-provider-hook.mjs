@@ -405,8 +405,8 @@ globalThis.fetch = async (url, init) => {
   const outTokens = MODE === 'over-reserve' ? OUT_TOKENS * 1000 : OUT_TOKENS
   if (isGemini) {
     /**
-     * 🔴 **thinking 토큰을 함께 신고한다** — 없으면 `usageKnown=false` 여야 한다.
-     *    `no-thoughts` 모드가 그 경로를 시험한다.
+     * 🔴 **thinking 토큰을 함께 신고한다.** `no-thoughts` 모드는 그 칸을 뺀다 — total 이 prompt + candidates 와 같으므로
+     *    정본(`readGeminiUsage`)은 thinking 0 으로 결정적으로 계산한다(2026-10-09 P0). total 까지 없으면 미상이다.
      */
     const usage = { promptTokenCount: 11, candidatesTokenCount: outTokens, totalTokenCount: 11 + outTokens }
     if (MODE !== 'no-thoughts') usage.thoughtsTokenCount = Number(process.env.FAKE_PROVIDER_THOUGHTS ?? '7')

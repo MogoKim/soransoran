@@ -403,7 +403,7 @@ export function planBundles(input: {
  *    실측: `P10` 이 단독 · 둘 · 24명 안에서 각각 다른 8건을 받았다(digest 3종).
  *    말투가 배치마다 달라지면 그 Persona 의 말투라고 부를 수 없다.
  *
- *    이제 **정본 24명 전체로 한 번 계산하고, 실행 대상은 거기서 꺼내 쓴다.**
+ *    이제 **현재 production 정본 universe 전체로 한 번 계산하고, 실행 대상은 거기서 꺼내 쓴다.**
  *    배치 인원·순서·다른 Persona 포함 여부가 바뀌어도 결과가 같다.
  *
  * 🔴 정본 밖 코드는 **임의로 재배정하지 않는다.** 묶음을 주지 않으면
@@ -436,7 +436,7 @@ export function stableAssignment(input: {
       origin, rows: [], sourceDigest: canon.sourceDigest,
     }
   }
-  /** 🔴 **언제나 정본 24명 전체**로 나눈다. 부르는 쪽의 목록을 보지 않는다 */
+  /** 🔴 **언제나 현재 production 정본 universe 전체**로 나눈다. 부르는 쪽의 목록을 보지 않는다 */
   const plan = planBundles({
     rows, personaCodes: PRODUCTION_PERSONA_CODES, target: input.target,
   })

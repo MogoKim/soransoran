@@ -162,6 +162,11 @@ export type LedgerEntry = {
   cacheReadTokens: number | null
   /** 🔴 제공사가 준 usage 의 **키 이름만**. 값은 담지 않는다 */
   usageKeys: string[]
+  /**
+   * 🔴 **제공사 usage 의 최상위 숫자 칸 원값** (2026-10-09 P0) — 토큰 수만(문자열 · 중첩 · 본문 없음).
+   *    정산하지 못한 건도 이 근거가 남아야 사후 대조가 된다. 없으면 옛 줄이다. 🔴 판정은 이 칸을 읽지 않는다.
+   */
+  usageNumbers?: Record<string, number> | null
   /** 정산액. 🔴 모르면 null — 0 과 다르다 */
   settledUsd: number | null
   pricingVersion: string | null

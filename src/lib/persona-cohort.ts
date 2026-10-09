@@ -12,7 +12,7 @@
  * 🔴 순수 함수·상수만. DB 도 파일도 읽지 않는다.
  */
 
-export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth'
+export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth' | 'wave5-d10'
 
 export type CohortManifest = {
   id: CohortId
@@ -63,6 +63,18 @@ export const COHORTS: Readonly<Record<CohortId, CohortManifest>> = {
     codes: ['P21', 'P22', 'P23', 'P24', 'P25'],
     requires: ['wave1-mvp', 'wave2', 'wave3-scale'],
   },
+  /**
+   * 🔴 **D10 최소 contract-valid 30명 회차** (2026-10-08).
+   *    `persona-autogen` 이 결정론 생활사 · 말투 근거와 승인 creative(`persona30-creative-20261008-final.json`,
+   *    sha256 273bd6b7…7fde83fa)로 만든 카드 6장 — quality PASS · canonical valid 6/6.
+   *    🔴 P31 · P33 은 `VOICE_TOO_CLOSE` 로 카드도 cohort 도 없다. 구제하지 않는다.
+   */
+  'wave5-d10': {
+    id: 'wave5-d10',
+    purpose: 'D10 최소 contract-valid 30명 확보 — autogen 카드 6장 (P31·P33 VOICE_TOO_CLOSE 제외)',
+    codes: ['P26', 'P27', 'P28', 'P29', 'P30', 'P32'],
+    requires: ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'],
+  },
 }
 
 /** 🔴 P09 를 뺀 이유 — 코드에 적어 둔다. 다음 사람이 "왜 없지" 하고 채우지 않게 */
@@ -73,8 +85,8 @@ export const EXCLUDED_CODES: Readonly<Record<string, string>> = {
 /**
  * 🔴 **production Persona 정본 universe** (2026-09-10).
  *
- *    cohort 넷의 codes 를 합친 것이다. **여기서 파생시킨다** —
- *    24명 목록을 어딘가에 다시 적으면 한쪽만 고쳐지는 날이 온다.
+ *    cohort 의 codes 를 합친 것이다. **여기서 파생시킨다** —
+ *    30명 목록을 어딘가에 다시 적으면 한쪽만 고쳐지는 날이 온다.
  *    `P09` 는 `EXCLUDED_CODES` 에 이유와 함께 빠져 있다.
  *
  * 🔴 순서를 **코드순으로 고정**한다. reference 배정이 이 순서에 의존하므로
@@ -251,16 +263,20 @@ export function judgeArgs(input: {
  *    이미 켜진 wave1·wave2 를 대상으로 `--apply` 를 돌리는 실수를 막으려면
  *    "지금 열려 있는 회차" 를 코드로 좁혀야 한다. 다음 회차는 여기에 추가한다 — 커밋으로 남는다.
  */
-export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave3-scale', 'wave4-depth']
-
-/** 🔴 이미 끝난 회차 — 도구가 다시 만지지 않는다 */
-export const CLOSED_COHORTS: readonly CohortId[] = ['wave1-mvp', 'wave2']
+export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave5-d10']
 
 /**
- * 🔴 **최종 목표 인원** — wave1 5 + wave2 3 + wave3 11 + wave4 5 = 24.
- *    Pool 25장에서 P09(길이 미상)를 뺀 수와 같아야 한다. fixture 가 대조한다.
+ * 🔴 이미 끝난 회차 — 도구가 다시 만지지 않는다.
+ *    wave1~wave4 24명은 운영 active 다(2026-10-08 운영 DB read-only: Persona 24행 · active cadence 24).
  */
-export const TARGET_PERSONA_COUNT = 24
+export const CLOSED_COHORTS: readonly CohortId[] = ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth']
+
+/**
+ * 🔴 **목표 인원** — wave1 5 + wave2 3 + wave3 11 + wave4 5 + wave5 6 = 30 (D10 최소 contract-valid).
+ *    Pool 31장에서 P09(길이 미상)를 뺀 수와 같아야 한다. fixture 가 대조한다.
+ *    🔴 코드상 준비 인원이다 — 운영 active 는 wave5 적재 · 활성화 전까지 24명이다.
+ */
+export const TARGET_PERSONA_COUNT = 30
 
 /** 🔴 회차 전용 입력 파일. gitignored 이며 다른 회차 파일을 덮어쓰지 않는다 */
 export function displayNamePathOf(id: CohortId): string { return `tmp/persona-${id}-displayname.json` }

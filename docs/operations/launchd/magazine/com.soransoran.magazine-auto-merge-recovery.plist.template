@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  매거진 자동 병합 복구 — 매일 02:00 KST · 🔴 템플릿이다. 이 파일 자체는 등록되지 않는다.
+
+  설치: npm run magazine:launchd-install -- --apply
+  정본: docs/operations/magazine-automation-runbook.md
+
+  ─────────────────────────────────────────────────────────────
+  🔴 **왜 이 job 이 필요한가** (2026-10-09 #675).
+
+     01:00 자동 병합은 필수 CI 를 유한하게(30분) 기다린다. #675 는 CI 가 21분 7초 걸려
+     옛 상한 20분에서 CI_OBSERVE_TIMEOUT 으로 끝났고, CI 는 61초 뒤 성공했지만
+     PR 은 OPEN 으로 남았다. 11:00 watch 는 공개 확인 전용이라 그 PR 을 아무도 병합하지 않았다.
+
+  🔴 **새 관문을 만들지 않는다.** `magazine-auto-merge.mjs --recover` 는 01:00 `--apply` 와
+     **같은** 관문을 처음부터 다시 돈다 — OPEN · non-draft · 자동 브랜치 · exact head ·
+     필수 CI completed+success · MERGEABLE · 허용 파일 · 등록 slug · 기존 글 불변 · 큐·날짜 계약 ·
+     지금 origin/main 기준 재검증 · merge 직전 재조회. 재전송·재생성·재등록은 없다.
+
+  🔴 **할 일이 없으면 아무것도 안 한다.** 자동 PR 0건(이미 병합됨) → 쓰기 0 · 성공.
+     2건 이상 → 고르지 않고 멈춘다.
+  🔴 **01:00 병합이 아직 돌면(병합 잠금) 최대 90분 기다린다** — 풀리면 같은 관문으로 진행하고,
+     끝까지 잠겨 있으면 merge 0 · non-zero · Slack. 무한 대기 없음 · 재예약 없음.
+
+  🔴 **11:00 magazine-watch 와 섞지 않는다.** watch 는 `--watch` 만이고 merge 하지 않는다.
+
+  🔴 **KeepAlive 를 넣지 않는다.** non-zero 는 기록이지 재시도 신호가 아니다.
+
+  회귀: node scripts/magazine-auto-merge-recovery-check.mjs · npm run magazine:launchd-check
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.magazine-auto-merge-recovery</string>
+
+  <!-- 🔴 --recover 만이다. --watch 는 이 경로에 없다 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/scripts/magazine-auto-merge.mjs</string>
+    <string>--recover</string>
+    <string>--notify-send</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- 🔴 로그는 Documents 밖이어야 한다 (TCC) -->
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/magazine-auto-merge-recovery.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/magazine-auto-merge-recovery.log</string>
+</dict>
+</plist>

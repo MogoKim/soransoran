@@ -1164,7 +1164,10 @@ expect('🔴 --merge 가 켜져 있다', /<string>--merge<\/string>/.test(regTpl
 expect('자동 공개가 아님을 명시한다', /merge 해도 공개는 아니다|publishAt.*전까지 안 나간다/.test(regTpl), true)
 const runbook = readFileSync(join('docs', 'operations', 'magazine-automation-runbook.md'), 'utf8')
 expect('runbook 도 01:00 이다', /01:00/.test(runbook), true)
-expect('runbook 에 02:00 이 남아 있지 않다', /02:00/.test(runbook), false)
+// 🔴 등록 시각이 옛 02:00 으로 남지 않는가 — 2026-10-09 부터 02:00 은 **다른 job**(자동 병합 복구)의 정상 시각이다.
+//    그래서 "02:00 이라는 글자" 가 아니라 "02:00 에 등록한다" 는 줄을 본다.
+expect('runbook 에 등록 02:00 이 남아 있지 않다', /02:00 KST\s+auto-register\b/.test(runbook), false)
+expect('runbook 의 02:00 은 자동 병합 복구 job 이다', /02:00 KST\s+auto-merge-recovery\b/.test(runbook), true)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ 운영연결 ① 등록 후 삭제된 큐 — 등급은 등록 전 main 에서 본다')
@@ -1745,10 +1748,10 @@ expect('🔴 merge 하지 않는다', timeoutDeps.calls.some((c) => c.startsWith
 /**
  * 🔴 **2026-09-28 운영 실측 — 필수 CI 가 관찰 한도보다 길었다.**
  *    한도 12분 · 필수 검사 `Micro Seed 3축 게이트` 실측 13분 남짓 → #603 이 모든 관문을 통과하고도 병합 0.
- *    가짜 시계로 실제 `runAutoMerge` 를 돌린다 (한도 20분).
+ *    가짜 시계로 실제 `runAutoMerge` 를 돌린다 (한도 30분 — 2026-10-09 #675 실측 21분 7초로 20분에서 올렸다).
  */
-expect('🔴 CI 관찰 한도는 필수 CI(실측 13분)보다 길고 20분을 넘지 않는다',
-  AM.CI_OBSERVE_MS > 13 * 60 * 1000 && AM.CI_OBSERVE_MS <= 20 * 60 * 1000, true)
+expect('🔴 CI 관찰 한도는 필수 CI(실측 21분 7초)보다 길고 30분을 넘지 않는다',
+  AM.CI_OBSERVE_MS > (21 * 60 + 7) * 1000 && AM.CI_OBSERVE_MS <= 30 * 60 * 1000, true)
 {
   const PENDING = [{ name: 'Micro Seed 3축 게이트', status: 'in_progress', conclusion: null }]
   const at = (ms) => (deps) => deps.now() - NOW8 >= ms
@@ -1773,11 +1776,11 @@ expect('🔴 CI 관찰 한도는 필수 CI(실측 13분)보다 길고 20분을 �
   const r5 = await AM.runAutoMerge({ apply: true, deps: d5 })
   expect('🔴 명시적 CI 실패 → 즉시 FAILED (20분을 기다리지 않는다)', `${r5.ci.outcome}·${r5.ci.waitedMs < 6 * 60 * 1000}`, 'FAILED·true')
   expect('  실패면 병합하지 않는다', d5.calls.some((c) => c.startsWith('merge:')), false)
-  // 20분 넘게 진행 중 → TIMEOUT
+  // 30분 넘게 진행 중 → TIMEOUT
   const d20 = clocked(() => ({ ok: true, ciState: 'pending', checks: [...FAST_CHECK, ...PENDING] }))
   const r20 = await AM.runAutoMerge({ apply: true, deps: d20 })
-  expect('🔴 20분까지 진행 중이면 CI_OBSERVE_TIMEOUT (무한 대기 없음)',
-    `${r20.ci.outcome}·${r20.ci.waitedMs >= 20 * 60 * 1000 && r20.ci.waitedMs < 21 * 60 * 1000}·${codes8(r20).includes('CI_OBSERVE_TIMEOUT')}`, 'TIMEOUT·true·true')
+  expect('🔴 30분까지 진행 중이면 CI_OBSERVE_TIMEOUT (무한 대기 없음)',
+    `${r20.ci.outcome}·${r20.ci.waitedMs >= 30 * 60 * 1000 && r20.ci.waitedMs < 31 * 60 * 1000}·${codes8(r20).includes('CI_OBSERVE_TIMEOUT')}`, 'TIMEOUT·true·true')
   // 다른 SHA 의 성공은 이 PR 의 성공이 아니다
   const seenShas = new Set()
   const dSha = clocked((_d, sha) => { seenShas.add(sha); return sha === HEAD

@@ -202,6 +202,13 @@ try {
     const cli = (args: string[]) => spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], {
       env: process.env, encoding: 'utf-8',
     })
+    // 🔴 (2026-10-08) 코드 발급은 append-only — 앞 단계가 적재한 P50 이 high-water 면 자리가 없다
+    const full = await counts()
+    const top = cli(['--db', '--count=3'])
+    check('🔴 DB 에 P50(상한) 행 → 후보 0 · exit 1 · write 0', await prisma.persona.count({ where: { code: 'P50' } }) === 1
+      && top.status === 1 && /발급할 코드가 없다/.test(`${top.stdout}${top.stderr}`) && same(full, await counts()))
+    // 이 검사가 만든 P49 · P50 만 치우고 나머지 dry-run 반례를 본다
+    await cleanup()
     const b = await counts()
     const run = cli(['--db', '--count=3'])
     check('CLI dry-run(--db) 종료 코드 0 — key 없이', run.status === 0)
