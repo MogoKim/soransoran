@@ -81,13 +81,24 @@ export function authorityRequired(): ReadonlyArray<readonly [string, boolean]> {
       /목표 수치[^\n]{0,60}2026-09-21-d100-goal-canon\.md/.test(t)])
     out.push([`${f} 가 StageDecision 단일 단계 authority 를 적는다`, /`StageDecision` 행 하나/.test(t)])
     out.push([`${f} 가 자동 일정 owner(launchd) 하나를 적는다`, /자동 일정 owner[^\n]{0,30}launchd[^\n]{0,10}하나/.test(t)])
-    out.push([`${f} 가 그 목표 상태를 "구현 중 · 미배포" 로 정직하게 적는다`, /구현 중 · 미배포/.test(t)])
+    out.push([`${f} 가 단일 authority의 main·보조 Mac runtime 배포를 적는다`,
+      t.includes('main과 보조 Mac runtime에 배포됐다')])
+    out.push([`${f} 가 소란소란 repo identity 사전 확인을 요구한다`,
+      t.includes('git rev-parse --show-toplevel')
+      && t.includes("require('./package.json').name")
+      && t.includes('unao-main')
+      && t.includes('D100-DOCUMENT-INVENTORY.md')])
   }
   const launchd = read('docs/operations/launchd/README.md')
   out.push(['launchd README 가 자동 일정 owner 는 launchd 하나라고 적는다',
-    launchd.includes('자동 일정 owner 는 launchd 하나') && launchd.includes('구현 중 · 미배포')])
+    launchd.includes('자동 일정 owner 는 launchd 하나')
+    && launchd.includes('main과 보조 Mac runtime에 배포됐다')
+    && launchd.includes('direct supply:health')])
   const current = read('docs/operations/CURRENT-MILESTONE.md')
-  out.push(['CURRENT-MILESTONE 이 계약 유효 Persona 부족을 D1→D3 부터로 적는다', /D1→D3 부터/.test(current)])
+  out.push(['CURRENT-MILESTONE 이 D5 PASS·Persona 30·D10 공급 blocker를 분리한다',
+    current.includes('10월 8일 자동 5/5')
+    && current.includes('contract-valid 30')
+    && current.includes('공급 능력 11 · 필요 하한 12')])
   return out
 }
 

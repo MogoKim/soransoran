@@ -1,10 +1,10 @@
 # 상시 실행 호스트 — 의존성 목록 · 이전 묶음 · 전환/되돌리기
 
-> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-10-07 — 집 Mac 단일 owner 확정 · 기종 무관(AC 필수) ·
-> 미분류 2→0 · rehearsal PASS(§6.4)
+> 작성 2026-09-29 · Track C (M3 상시 실행) · 개정 2026-10-09 — 보조 Mac cutover·단일 owner 운영 PASS ·
+> 기종 무관(AC 필수) · 미분류 0 · rollback 보존
 > 코드 정본: `scripts/host-migrate.mts` (CLI) · `scripts/lib/host-migrate.mts` (판정) · `scripts/host-migrate-check.mts` (검사)
-> 🔴 §2와 §6.1~6.2의 숫자는 **작성 당시 측정 스냅샷**이다. 최신 plan은 §6.3과
-> `npm run host:migrate`가 정한다. 단계·콘텐츠 정책은 D100 canon이 정한다.
+> 🔴 §2와 §6 전체의 숫자는 **작성 당시 측정 스냅샷**이다. 현재 owner·runtime·loaded 상태는
+> `CURRENT-MILESTONE.md`, `launchctl`, runtime pin이 정한다. 단계·콘텐츠 정책은 D100 canon이 정한다.
 
 ## 1. 왜 필요한가 · 이번 범위
 
@@ -16,7 +16,7 @@ D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에�
 단 **D100 운영 조건은 AC 전원**이다: 사전 점검은 `pmset -g batt`(못 읽으면 `pmset -g ps`)를 읽어
 "AC 에 꽂혀 있음(charging · charged · AC attached)" 이면 통과, "배터리로 돌고 있음(discharging · Battery Power)" 이면 실패로 본다.
 
-### 1.0 2026-10-07 확정한 owner
+### 1.0 확정 owner와 2026-10-09 운영 결과
 
 - **집 Mac 한 대를 D100 9개 job의 유일한 owner로 쓴다.** 회사 Mac에는 매거진 job만 남긴다.
 - 회사 Mac은 창업자의 통근 시간 08:15~09:40, 18:10~20:30에 덮개가 닫히므로 D100 owner 조건을 만족하지 못한다.
@@ -24,6 +24,27 @@ D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에�
   마감을 놓쳐 D5 증명이 실패했다. `caffeinate`는 clamshell sleep을 막는 해결책이 아니다.
 - 정상 운영은 창업자가 새벽에 일어나거나 통근 중 노트북을 열어 주는 것에 의존하지 않는다.
 - owner 변경은 아래 cutover 절차로만 한다. 두 Mac에서 D100을 동시에 실행하지 않는다.
+
+**cutover는 완료됐다.** 2026-10-09 14:45 KST 읽기 전용 확인 기준:
+
+- 보조 Mac `soransoran-d100-host`: D100 9개 job loaded, runtime HEAD=pin `b819413`.
+- 회사 Mac: D100 job 0개, 매거진 job 4개 loaded.
+- 운영 DB Persona 30명은 전원 active이고 보조 Mac runtime이 production universe 30명을 안다.
+- 이관 묶음 재사용이나 회사 Mac unquiesce는 하지 않는다. owner를 되돌릴 때만 §5 rollback을 쓴다.
+
+이 완료 상태가 아래 rehearsal·cutover 준비 기록보다 우선한다. §6의 “아직 하지 않았다”류 문장은 당시
+시점의 역사다.
+
+### 1.0-A 전원 계약과 실제 사용의 차이
+
+이 runbook의 현재 계약은 여전히 **AC 상시 연결**이다. 창업자가 야간에 충전기를 빼는 운영은 기기가 켜져
+있는 동안 동작할 수는 있어도 이 계약을 만족하지 않는다. `caffeinate -i -s`에서 `-s`는 AC에서만 유효하고,
+방전·덮개·전원 상실 뒤 자동 복구를 증명하지 않는다.
+
+둘 중 하나를 택하기 전까지 AC 연결을 정상 운영으로 본다.
+
+1. AC 상시 연결을 지킨다.
+2. 배터리 임계값 Slack 알림·안전 중지·충전 복귀·재부팅/로그인 복구를 설계하고 검증한 뒤 계약을 바꾼다.
 
 ### 1.1 첫 이전 범위 = D100 레인 하나 (단일 정본 `D100_LANE_LABELS`)
 
@@ -232,7 +253,10 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
 - `quiesce --apply` 까지만 했다면: `unquiesce --apply`(export 전이라 bundle-id 없이 허용).
 - cutover 묶음을 만든 뒤라면: 대상에 올리지 않았다는 것을 사람이 확인하고 묶음을 지운 뒤 `unquiesce --bundle-id=<그 id> --apply`.
 
-## 6. 이 기계에서 한 dry-run
+## 6. 📜 이관 전 회사 Mac에서 한 dry-run — 역사 증거
+
+> 이 절 전체는 2026-09-29~10-07 cutover 전 증거다. 아래의 “오늘”·“아직”·“회사 Mac owner”는
+> 당시 시점을 가리키며 현재 실행 지시가 아니다. 현재 owner와 runtime은 §1.0과 `CURRENT-MILESTONE.md`를 본다.
 
 ### 6.1 첫 판 (2026-09-29 07:4x KST · 호스트 전체 묶음 — 지금은 쓰지 않는다)
 
@@ -285,20 +309,19 @@ CLI 가 같은 목록을 찍는다(`CUTOVER_ORDER` · `ROLLBACK_ORDER`).
   runtime HEAD=pin `38efdd3` · env.local/slack.env mtime·크기·권한 · runtime `.env.local` 링크 · handoff/owner 표식 없음 — **전부 같다**.
 - **하지 않은 것**: `quiesce --apply` · `export --cutover` · `install --apply` · rollback/unquiesce 적용. 실제 owner는 아직 회사 Mac이다.
 
-## 7. 확정 결정과 남은 사람 작업
+## 7. cutover 완료 뒤 운영자 계약
 
-**owner 선택은 끝났다. 집 Mac을 "AC 상시 연결 + 로그인 세션 유지" 상태로 두고 오늘 밤 cutover한다.**
+**보조 Mac이 D100의 유일한 owner다. 평소에는 다시 cutover하지 않는다.**
 
-- 기종은 묻지 않는다. 조건은 install 사전 점검이 잰다.
-- **MacBook 이면**: 어댑터를 늘 꽂아 둔다(배터리로 돌기 시작하면 사전 점검이 실패로 본다 — 운영 중에는 `ops:status` 로 본다).
-  [추정] 덮개를 닫으면 외부 모니터 없이 잠든다 — 덮개를 열어 두거나, 외부 모니터·전원을 연결한 clamshell 로 둔다.
-  배터리가 짧은 정전을 버티므로 `autorestart` 는 요구하지 않는다.
-- **배터리 없는 Mac 이면**: `sudo pmset -a autorestart 1` 이 필요하다(정전 뒤 자동으로 켜짐). 선택: 소형 UPS.
-- 공통 설정(설치 전 사람이 한다): `sudo pmset -a sleep 0 womp 1` · 가능하면 유선 LAN ·
-  시스템 설정에서 자동 로그인 = 운영 사용자(→ FileVault 끔이 조건) · nvm node `v24.14.0` · gh/gcloud 로그인.
-- FileVault를 유지하면 재부팅 뒤 사람이 비밀번호를 칠 때까지 job 0개라는 제한을 받아들여야 한다.
-- 대상에서 `verify`·`install`을 돌릴 코드: `~/Documents/soransoran`에 저장소를 clone하고 `npm ci`를 먼저 한다
-  (`install`은 그 `.git`이 있으면 clone을 건너뛰고 pin SHA로 runtime만 만든다). 대상 쪽 코드는 main의 것으로 충분하다 —
-  이번 분류 보정은 원 Mac의 export에만 필요하다.
-- 창업자가 직접 해야 하는 것은 대상 Mac의 로그인·전원/수면 설정·gh/gcloud/Naver 인증뿐이다. 코드 분류,
-  bundle, quiesce, install 검증과 rollback 판단은 운영 마스터가 지휘한다.
+- 창업자는 보조 Mac의 로그인 세션·전원·네트워크와 Naver 인증을 유지한다. 정상 전원 계약은 §1.0-A의
+  AC 상시 연결이다.
+- 메인 Mac에서는 코드·문서·PR을 관리할 수 있지만 D100 launchd job을 올리지 않는다. 보조 Mac 변경은
+  승인된 원격 명령과 `runtime:deploy`로만 한다.
+- 배포 전에는 실행 중 회차 0, target SHA, 설치 템플릿, 현재 loaded 9개를 확인한다. 배포 뒤에는
+  HEAD=pin=manifest, loaded 9개, ProgramArguments/WorkingDirectory, isolation gate를 확인한다.
+- Naver 비밀번호·세션을 바꾼 경우 보조 Mac의 세션을 재발급하고 두 카페 회원 본문을 확인한다. 메인 Mac의
+  브라우저 로그인만 바꿔서는 보조 Mac 수집 세션이 갱신되지 않는다.
+- 회사 Mac으로 되돌려야 할 장애가 생긴 때만 §5 rollback을 사용한다. 같은 bundle을 둘 이상의 대상에 설치하거나
+  두 Mac의 D100 job을 동시에 올리지 않는다.
+- FileVault를 유지하면 재부팅 뒤 사람이 로그인할 때까지 gui launchd job이 0개일 수 있다. 이 위험은
+  `CURRENT-MILESTONE.md`의 상시 호스트 과제로 관리한다.
