@@ -21,16 +21,18 @@
  *   node scripts/magazine-auto-merge.mjs              검증만 (변경 0)
  *   node scripts/magazine-auto-merge.mjs --apply      🔴 실제 merge
  *   node scripts/magazine-auto-merge.mjs --watch      publishAt 이후 공개 확인만
+ *   node scripts/magazine-auto-merge.mjs --recover    🔴 02:00 복구 — 01:00 이 못 끝낸 자동 PR 1건을 같은 관문으로 merge
  *
  * 종료 코드: 성공했거나 할 것이 없으면 0 · 막혔으면 1
  */
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DRAFTS_DIR, parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
 import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, PR_FIELDS_ARG, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
+import { acquireLock } from './lib/magazine-auto-lock.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -44,12 +46,15 @@ export const SITE = 'https://soransoran.com'
 // 제한 시간 — 🔴 전부 유한하다. 무한 대기 없음
 // ─────────────────────────────────────────────────────────
 /**
- * 🔴 **필수 CI 보다 길어야 한다** (2026-09-28 운영 실측).
+ * 🔴 **필수 CI 보다 길어야 한다** (2026-09-28 · 2026-10-09 운영 실측).
  *    12분이었는데 필수 검사 `Micro Seed 3축 게이트` 가 실제로 13분 남짓 걸렸다 — #603 은 모든 관문을 통과하고도
- *    `CI_OBSERVE_TIMEOUT` 으로 병합 0 이 됐다. 상한 20분 · 명시적 실패는 즉시 중단 · 무한 대기 없음.
+ *    `CI_OBSERVE_TIMEOUT` 으로 병합 0 이 됐다. 20분으로 올렸다.
+ *    2026-10-09 #675 는 필수 CI 가 **21분 7초** 걸렸다 — 20분 14초에 시간 초과로 끝났고, CI 는 61초 뒤 성공했다.
+ *    검사 수가 늘며 CI 가 길어진다. 상한 30분 · 명시적 실패는 즉시 중단 · 무한 대기 없음.
+ *    그래도 넘기면 02:00 복구(`--recover`)가 같은 관문으로 다시 본다.
  *    검사는 언제나 **PR head SHA 의** check-run 으로만 본다 — 다른 SHA 의 성공을 이 PR 의 성공으로 세지 않는다.
  */
-export const CI_OBSERVE_MS = 20 * 60 * 1000
+export const CI_OBSERVE_MS = 30 * 60 * 1000
 export const CI_POLL_MS = 30 * 1000
 export const DEPLOY_OBSERVE_MS = 10 * 60 * 1000
 export const DEPLOY_POLL_MS = 20 * 1000
@@ -434,6 +439,81 @@ async function observeDeploy({ sha, deps, now, sleep, log }) {
   }
 }
 
+/**
+ * 🔴 **자동 병합 잠금** — 01:00 `--apply` 와 02:00 `--recover` 가 같은 PR 을 동시에 다루지 않게 한다.
+ *    등록 잠금(`.auto-register.lock`)은 병합 전에 풀린다. 병합은 따로 잠근다.
+ */
+export const MERGE_LOCK_PATH = join(DRAFTS_DIR, '_runs', '.auto-merge.lock')
+
+/** 01:00 결과 파일의 요약 — 복구 결과에 "최초 회차가 왜 못 끝냈나" 를 따로 남긴다 */
+export function summarizeInitial(json) {
+  if (!json || typeof json !== 'object') return { found: false }
+  return {
+    found: true,
+    runId: json.runId ?? null,
+    pr: json.pr?.number ?? null,
+    head: json.pr?.head ?? null,
+    merged: json.merged === true,
+    ciOutcome: json.ci?.outcome ?? null,
+    codes: (json.blockedBy ?? []).map((b) => b.code),
+  }
+}
+
+/**
+ * 🔴 **02:00 복구 — 01:00 이 시간 초과 등으로 못 끝낸 자동 PR 을 같은 관문으로 다시 본다** (2026-10-09 #675).
+ *
+ *    새 관문을 만들지 않는다. `runAutoMerge({ apply: true })` **그대로**다 —
+ *    OPEN · non-draft · 자동 브랜치 · exact head · 필수 CI(completed + success) · MERGEABLE ·
+ *    허용 파일 · 이번 등록 slug · 기존 글 불변 · 큐·날짜 계약 · **지금 origin/main 기준** 재검증 · merge 직전 재조회.
+ *    재전송·재생성·재등록은 하지 않는다 — 이 함수는 원고·큐·브리프를 만들지 않는다.
+ *
+ *    - 자동 PR 0건(이미 병합됐거나 애초에 없음) → `NOOP` (쓰기 0 · 성공)
+ *    - 2건 이상 → `MULTIPLE_AUTO_PRS` 로 고르지 않고 멈춘다
+ *    - 다른 병합 회차가 잠금을 쥐고 있으면 → `DEFERRED` (아무것도 하지 않는다)
+ *
+ * @param {object} p
+ * @param {object} p.deps      runAutoMerge 와 같은 주입
+ * @param {object|null} p.initial  같은 날 01:00 `auto-merge.json` 내용 (없으면 null)
+ * @param {() => {ok:boolean, code:string, message:string, release:()=>void}} p.acquire  병합 잠금
+ */
+export async function runRecovery({ deps, initial = null, acquire }) {
+  const lock = acquire()
+  const base = { mode: 'recovery', initial: summarizeInitial(initial) }
+  if (!lock.ok) {
+    return { ...base, outcome: 'DEFERRED', pr: null, merged: false, blockedBy: [], checked: [],
+      deferred: { code: lock.code, message: lock.message } }
+  }
+  try {
+    const report = await runAutoMerge({ apply: true, deps })
+    const outcome = report.merged
+      ? (report.blockedBy.length === 0 ? 'RECOVERED' : 'MERGED_UNVERIFIED')
+      : (report.blockedBy.length === 0 && !report.pr ? 'NOOP' : 'BLOCKED')
+    return { ...report, ...base, outcome }
+  } finally {
+    lock.release()
+  }
+}
+
+/**
+ * Slack 제목 — 🔴 최초 회차의 시간 초과와 복구 결과를 **다른 문장**으로 남긴다.
+ *    둘을 같은 "자동 병합 중단" 으로 쓰면 사람이 01:00 실패인지 02:00 실패인지 가릴 수 없다.
+ */
+export function slackTitleFor(report) {
+  const code = report.blockedBy.length > 0
+  const n = report.pr?.number
+  if (report.mode === 'recovery') {
+    if (report.outcome === 'RECOVERED') return `매거진 자동 병합 복구 — #${n} merge 완료 (최초 회차: ${(report.initial?.codes ?? []).join(', ') || '기록 없음'})`
+    if (report.outcome === 'MERGED_UNVERIFIED') return `매거진 자동 병합 복구 — #${n} merge (확인 실패)`
+    if (report.outcome === 'BLOCKED') return `매거진 자동 병합 복구 중단${n ? ` — #${n}` : ''}`
+    return null // NOOP · DEFERRED 는 알리지 않는다 — 할 일이 없었다
+  }
+  if (report.merged) return `매거진 자동 병합 — #${n} merge${code ? ' (확인 실패)' : ' 완료'}`
+  if (report.blockedBy.some((b) => b.code === 'CI_OBSERVE_TIMEOUT')) {
+    return `매거진 자동 병합 보류 — CI 관찰 ${Math.round(CI_OBSERVE_MS / 60000)}분 초과${n ? ` (#${n})` : ''} · 02:00 복구가 같은 관문으로 다시 본다`
+  }
+  return code ? '매거진 자동 병합 중단' : '매거진 자동 병합 — 할 것이 없다'
+}
+
 /** publishAt 이 지난 글이 본문·이미지·목록에 다 나왔는가 */
 export async function runWatch({ deps }) {
   const now = deps.now ?? (() => Date.now())
@@ -632,16 +712,59 @@ async function main() {
     process.exit(v.ok ? 0 : 1)
   }
 
+  const date = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+  const runDir = join(DRAFTS_DIR, '_runs', date)
+  const runId = argv.includes('--run-id') ? argv[argv.indexOf('--run-id') + 1] ?? null : null
+
+  /**
+   * 🔴 **02:00 복구** — `--watch` 와 섞지 않는다. 11:00 watch 는 공개 확인 전용이다.
+   *    결과는 `auto-merge-recovery.json` 에 따로 쓴다 — 01:00 의 `auto-merge.json` 을 덮지 않는다.
+   */
+  if (argv.includes('--recover')) {
+    line('자동 병합 복구 (🔴 실제 merge · 01:00 과 같은 관문)')
+    let initial = null
+    try { initial = JSON.parse(readFileSync(join(runDir, 'auto-merge.json'), 'utf8')) } catch { initial = null }
+    const report = await runRecovery({ deps: realDeps, initial,
+      acquire: () => acquireLock({ path: MERGE_LOCK_PATH, label: 'auto-merge-recovery' }) })
+    line(`복구 결과: ${report.outcome}${report.deferred ? ` — ${report.deferred.code}: ${report.deferred.message}` : ''}`)
+    const title = slackTitleFor(report)
+    if (title) {
+      const r = await send(buildMessage({
+        severity: report.outcome === 'RECOVERED' ? 'INFO' : 'ERROR',
+        title,
+        reason: report.blockedBy.map((b) => `${b.code}: ${b.message}`).join(' / ') || null,
+        next: report.pr?.url ?? null,
+      }), { dryRun: !notifySend })
+      line(`Slack: ${r.sent ? '발송' : `미발송 — ${r.reason}`}`)
+    }
+    try {
+      mkdirSync(runDir, { recursive: true })
+      writeFileSync(join(runDir, 'auto-merge-recovery.json'), `${JSON.stringify({ ...report, runId, writtenAt: new Date().toISOString() }, null, 2)}\n`, 'utf8')
+    } catch (e) {
+      line(`복구 결과 파일을 남기지 못했다 (${e?.message ?? e}) — 판정은 그대로다`)
+    }
+    const rcode = report.blockedBy.length > 0 ? 1 : 0
+    if (asJson) console.log(JSON.stringify(report, null, 2))
+    line(`종료 (코드 ${rcode})`)
+    process.exit(rcode)
+  }
+
   line(`자동 병합 ${apply ? '(🔴 실제 merge)' : '(검증만)'}`)
-  const report = await runAutoMerge({ apply, deps: realDeps })
+  // 🔴 실제 merge 는 병합 잠금 안에서만 — 02:00 복구와 같은 PR 을 동시에 다루지 않는다
+  const lock = apply ? acquireLock({ path: MERGE_LOCK_PATH, label: 'auto-merge' }) : null
+  let report
+  if (lock && !lock.ok) {
+    report = { mode: 'apply', pr: null, baseSha: null, merged: false, checked: [],
+      blockedBy: [{ code: 'MERGE_LOCK_HELD', message: `${lock.code}: ${lock.message}` }] }
+  } else {
+    try { report = await runAutoMerge({ apply, deps: realDeps }) } finally { lock?.release() }
+  }
   const code = report.blockedBy.length > 0 ? 1 : 0
 
   if (apply) {
     const msg = buildMessage({
       severity: code ? 'ERROR' : 'INFO',
-      title: report.merged
-        ? `매거진 자동 병합 — #${report.pr?.number} merge${code ? ' (확인 실패)' : ' 완료'}`
-        : code ? '매거진 자동 병합 중단' : '매거진 자동 병합 — 할 것이 없다',
+      title: slackTitleFor(report),
       reason: report.blockedBy.map((b) => `${b.code}: ${b.message}`).join(' / ') || null,
       next: report.pr?.url ?? null,
     })
@@ -654,12 +777,10 @@ async function main() {
    *    종료 코드 0 은 "할 일이 없었다" 도 포함한다 — 그것은 공급 성공이 아니다.
    */
   try {
-    const date = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
-    const dir = join(DRAFTS_DIR, '_runs', date)
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(runDir, { recursive: true })
     // 🔴 회차 식별자를 함께 남긴다. 없으면 부른 쪽이 **앞 회차 파일**을 이번 실적으로 읽는다.
     const stamped = { ...report, runId: argv.includes('--run-id') ? argv[argv.indexOf('--run-id') + 1] ?? null : null, writtenAt: new Date().toISOString() }
-    writeFileSync(join(dir, 'auto-merge.json'), `${JSON.stringify(stamped, null, 2)}\n`, 'utf8')
+    writeFileSync(join(runDir, 'auto-merge.json'), `${JSON.stringify(stamped, null, 2)}\n`, 'utf8')
   } catch (e) {
     line(`결과 파일을 남기지 못했다 (${e?.message ?? e}) — 판정은 그대로다`)
   }

@@ -1,6 +1,6 @@
 # 매거진 자동화 운영 runbook
 
-작성 2026-09-15 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch`
+작성 2026-09-15 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09)
 
 이 문서가 **설치·가동·롤백의 정본**이다. 다른 곳에 절차를 다시 적지 않는다.
 
@@ -203,9 +203,17 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
                            ② 미해결 자동 PR 확인 → ③ 변환·QA·hero·batch-qa·register
                            ④ PR 생성 → ⑤ 자동 병합(--merge) → main
                            ⑥ merge SHA 의 Production 배포 확인 → 예약 글이 **아직 안 나왔는지**(404)
+                           필수 CI 는 최대 30분 기다린다 · 명시적 실패는 즉시 중단 (병합 잠금 안에서)
+02:00 KST  auto-merge-recovery  01:00 이 CI 시간 초과 등으로 못 끝낸 자동 PR 1건을 **같은 관문**으로
+                           다시 본다(`--recover`) · 0건 no-op · 2건 이상 멈춤 · 01:00 이 아직 돌면 미룬다
+                           결과는 _runs/{date}/auto-merge-recovery.json (01:00 의 auto-merge.json 을 덮지 않는다)
 10:30 KST  (해당일)        publishAt 도달 → 예약 글이 공개된다
 11:00 KST  magazine-watch  본문·대표 이미지·/magazine 목록 노출 확인 → 실패면 Slack
 ```
+
+🔴 **02:00 복구는 새 관문이 아니다** (2026-10-09 #675 — 필수 CI 21분 7초 · 옛 상한 20분에서 시간 초과 ·
+   CI 는 61초 뒤 성공했으나 PR 이 OPEN 으로 남았다). `runAutoMerge({ apply: true })` 를 그대로 다시 돈다 —
+   재전송·재생성·재등록은 없다. 11:00 watch 는 계속 공개 확인 전용이고 merge 하지 않는다.
 
 🔴 **01:00 의 확인과 11:00 의 확인은 서로 다른 것을 본다.**
    01:00 은 "**아직 안 나왔는가**"(404) — 예약이 지켜졌는지.

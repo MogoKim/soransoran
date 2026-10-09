@@ -82,5 +82,23 @@ for (const label of MAGAZINE_JOBS) {
   expect(`${label}: WorkingDirectory 가 매거진 runtime 이다`, xml.includes(`<string>${MAGAZINE_RUNTIME}</string>`), true)
 }
 
+console.log('\n══════ 02:00 자동 병합 복구 job — 01:00 이 못 끝낸 자동 PR 을 같은 관문으로 (2026-10-09 #675)')
+{
+  const RECOVERY = 'com.soransoran.magazine-auto-merge-recovery'
+  expect('복구 job 이 설치 목록에 있다', (MAGAZINE_JOBS as readonly string[]).includes(RECOVERY), true)
+  const rtpl = templatePathOf(RECOVERY, MAGAZINE_TEMPLATE_DIR)
+  const rxml = existsSync(rtpl) ? readFileSync(rtpl, 'utf-8').replace(/<!--[\s\S]*?-->/g, '') : ''
+  const args = [...(rxml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1])
+  expect('복구 job 은 auto-merge 를 --recover 로 부른다', args.slice(1), ['__REPO__/scripts/magazine-auto-merge.mjs', '--recover', '--notify-send'])
+  expect('🔴 복구 job 에 --watch · --apply 가 없다 (같은 관문은 --recover 안에서 재사용)', args.some((a) => a === '--watch' || a === '--apply'), false)
+  expect('복구 job 은 02:00 KST 다', /<key>Hour<\/key><integer>2<\/integer><key>Minute<\/key><integer>0<\/integer>/.test(rxml), true)
+  expect('🔴 복구 job 에 KeepAlive 가 없다 (재시도 신호가 아니다)', /KeepAlive/.test(rxml), false)
+  expect('복구 job 은 로드 시 바로 돌지 않는다', /<key>RunAtLoad<\/key>\s*<false\/>/.test(rxml), true)
+  const wxml = readFileSync(templatePathOf('com.soransoran.magazine-watch', MAGAZINE_TEMPLATE_DIR), 'utf-8').replace(/<!--[\s\S]*?-->/g, '')
+  const wargs = [...(wxml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1])
+  expect('🔴 11:00 watch 는 공개 확인 전용 — --watch 만 · --apply/--recover 없음', `${wargs.includes('--watch')}·${wargs.some((a) => a === '--apply' || a === '--recover')}`, 'true·false')
+  expect('11:00 watch 시각 불변', /<key>Hour<\/key><integer>11<\/integer><key>Minute<\/key><integer>0<\/integer>/.test(wxml), true)
+}
+
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 process.exit(fail === 0 ? 0 : 1)
