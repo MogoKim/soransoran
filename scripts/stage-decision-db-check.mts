@@ -69,7 +69,10 @@ const withIntent = (gate: unknown, site: string, id: string): Record<string, unk
     intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
   },
 })
-import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
+import { AUTO_DECIDER, SEMANTIC_RECORD_KEY, eligibilityOf } from '../src/lib/auto-ready-v2'
+/** 🔴 운영 자동 적격 행이 가진 온전한 의미 검수 요약(경고 0) — 없으면 정본이 SEMANTIC_REVIEW_MISSING 으로 부적격이라 본다 */
+const CLEAN_SEMANTIC = { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 }
+const SEMANTIC_WARN_GATE = { [SEMANTIC_RECORD_KEY]: { ...CLEAN_SEMANTIC, unsupportedAdditions: 1 }, holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'] }
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
@@ -789,6 +792,7 @@ async function main(): Promise<void> {
           commentsPct: 0.5, viewsPct: 0.5, windowFrom: iso(fresh - 72 * 3_600_000), windowTo: iso(fresh + 30 * 60_000) },
         participationDriver: '공감',
       }),
+      [SEMANTIC_RECORD_KEY]: CLEAN_SEMANTIC,
     })
     const intentOf = (k: string, runId: string): Record<string, unknown> => ({
       contract: SUPPLY_JIT_CONTRACT, runId, sourceHash: articleIdHashOf(site, k), intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
@@ -821,20 +825,38 @@ async function main(): Promise<void> {
     try {
       let n = 0
       let stampedIdx = 0
-      const mk = async (k: string, runId: string, status: string, by: string, decidedAt: Date): Promise<void> => {
+      const mk = async (k: string, runId: string, status: string, by: string, decidedAt: Date,
+        o: { verdict?: string; gate?: Record<string, unknown>; body?: string } = {}): Promise<void> => {
         const raw = await prisma.microSeedRawContent.create({
           data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/${k}`, sourceArticleId: k,
             sourceCapturedAt: new Date(fresh), rawTitle: `원문 ${k}`, rawBody: `원문 본문 ${k}` }, select: { id: true },
         })
         await prisma.originalPostApprovalQueue.create({
-          data: { sourceRawContentId: raw.id, status: status as never, draftTitle: `초안 ${k}`, draftBody: `본문 ${k}`, gateVerdict: 'PASS',
-            promptVersion: 'p0r', model: 'p0r', gateResults: { ...evOf(k), [SUPPLY_INTENT_KEY]: intentOf(k, runId) } as Prisma.InputJsonValue,
+          data: { sourceRawContentId: raw.id, status: status as never, draftTitle: `초안 ${k}`, draftBody: o.body ?? `본문 ${k}`, gateVerdict: o.verdict ?? 'PASS',
+            promptVersion: 'p0r', model: 'p0r', gateResults: { ...evOf(k), ...(o.gate ?? {}), [SUPPLY_INTENT_KEY]: intentOf(k, runId) } as Prisma.InputJsonValue,
             decidedBy: by, decidedAt, dedupKey: `p0r-${k}` },
         })
       }
-      for (const [runId, sources, ready] of RUNS) {
+      /**
+       * 🔴 (2026-10-09 P0-a) 운영 실측 모양 — 창 안 회차에 섞인 **자동 부적격 미도장 기계 행 12건**
+       *    (gate FAIL 4 · 의미 경고 4 · 금지 문구 4). 같은 회차 묶음 원천이다 — 원천 수 101 은 그대로다(분모 불변).
+       */
+      const INEL_KINDS = ['gateFail', 'semantic', 'forbidden'] as const
+      const inelOf = (i: number): { kind: (typeof INEL_KINDS)[number]; o: { verdict?: string; gate?: Record<string, unknown>; body?: string } } => {
+        const kind = INEL_KINDS[i % 3]!
+        return { kind, o: kind === 'gateFail' ? { verdict: 'FAIL' } : kind === 'semantic' ? { gate: SEMANTIC_WARN_GATE } : { body: '방금 들은 얘기예요' } }
+      }
+      const INEL_PER_RUN = [1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1]
+      let inel = 0
+      for (const [idx, [runId, sources, ready]] of RUNS.entries()) {
         const ids = Array.from({ length: ready }, (_, i) => `${runId}-r${i}`)
-        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, sources, ids))
+        const inelIds = Array.from({ length: INEL_PER_RUN[idx]! }, (_, i) => `${runId}-x${i}`)
+        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, sources, [...ids, ...inelIds]))
+        for (const k of inelIds) {
+          const { o } = inelOf(inel)
+          await mk(k, runId, 'APPROVED', 'machine:content-core-v2', new Date(runAt(runId).getTime() + 60_000), o)
+          inel += 1
+        }
         for (const k of ids) {
           if (runId === LATE) await mk(k, runId, 'APPROVED', 'machine:content-core-v2', new Date(runAt(runId).getTime() + 60_000))
           else { await mk(k, runId, fates[stampedIdx]!, AUTO_DECIDER, new Date(runAt(runId).getTime() + 5 * 60_000)); stampedIdx += 1 }
@@ -853,8 +875,21 @@ async function main(): Promise<void> {
       const ldir = ledgerDirForHome(home)
       mkdirSync(ldir, { recursive: true })
       for (const [day, es] of ledgerLines) writeFileSync(join(ldir, `${day}.jsonl`), `${es.map((e) => JSON.stringify(e)).join('\n')}\n`)
-      check('fixture 전제 — 창 안 회차 11 · 원천 101 · READY 20(도장 16 + 22:15 도장 전 4) · 창 밖 회차 행 2',
-        RUNS.length === 11 && RUNS.reduce((a, r) => a + r[1], 0) === 101 && n === 20 && stampedIdx === 16)
+      check('fixture 전제 — 창 안 회차 11 · 원천 101 · READY 20(도장 16 + 22:15 도장 전 적격 4) · 부적격 미도장 12 · 창 밖 회차 행 2',
+        RUNS.length === 11 && RUNS.reduce((a, r) => a + r[1], 0) === 101 && n === 20 && stampedIdx === 16 && inel === 12)
+      // 🔴 fixture 가 정본 판정과 맞는가 — 22:15 도장 전 4건은 적격 · 부적격 12건은 정본이 부적격으로 본다(사유 3종)
+      const machineRows = await prisma.originalPostApprovalQueue.findMany({
+        where: { dedupKey: { startsWith: 'p0r-' }, decidedBy: 'machine:content-core-v2' },
+        select: { dedupKey: true, gateVerdict: true, gateResults: true, draftTitle: true, draftBody: true, editedTitle: true, editedBody: true },
+      })
+      const verdictOf = (m: (typeof machineRows)[number]) => eligibilityOf({ gateVerdict: m.gateVerdict, gateResults: m.gateResults, title: m.editedTitle ?? m.draftTitle, body: m.editedBody ?? m.draftBody })
+      const inelRows = machineRows.filter((m) => /-x\d+$/.test(m.dedupKey ?? ''))
+      const reasons = inelRows.map((m) => verdictOf(m).reasons.join(','))
+      check('fixture 전제 — 정본 eligibilityOf: 22:15 도장 전 4건 적격 · 부적격 12건(gate FAIL 4 · 의미 경고 4 · 금지 문구 4)',
+        machineRows.filter((m) => !/-x\d+$/.test(m.dedupKey ?? '')).every((m) => verdictOf(m).auto) && inelRows.length === 12
+        && inelRows.every((m) => !verdictOf(m).auto) && reasons.filter((x) => x.includes('gate=FAIL')).length === 4
+        && reasons.filter((x) => x.includes('SEMANTIC_UNSUPPORTED_ADDITION')).length === 4 && reasons.filter((x) => x.includes('timeDrift')).length === 4,
+        JSON.stringify(reasons))
       // 🔴 앞판 분자 — 같은 DB 에서 decidedAt 창 + 자동 도장만 세면 16 (22:15 4건 · 창 밖 회차 행은 시각상 빠지거나 끼어든다)
       const oldNumerator = (await prisma.originalPostApprovalQueue.findMany({
         where: { dedupKey: { startsWith: 'p0r-' }, decidedBy: AUTO_DECIDER, decidedAt: { gte: windowFrom, lt: windowTo } },
@@ -884,15 +919,19 @@ async function main(): Promise<void> {
       check('🔴 🔴 **회차 시계 — 창 안 회차 행 20 전부 · 창 밖 회차 행 2 제외 · 원천 101 · 불일치 0**',
         c !== null && c.sources === 101 && r.detail.readyCount === 20 && (r.detail.intentMismatches as unknown[]).length === 0,
         JSON.stringify({ c, n: r.detail.readyCount, m: r.detail.intentMismatches }))
+      check('🔴 🔴 **P0-a — 자동 부적격 미도장 12건은 raw 에 들지 않는다 (raw 20 · 32 아님) · 제외 12 를 사실로 보고 · legacy 0 · 분모 101 그대로**',
+        r.detail.readyCount === 20 && r.detail.autoIneligibleExcluded === 12 && r.detail.legacyExcluded === 0 && c?.sources === 101
+        && (r.notes as string[]).some((x) => /자동 부적격 미도장 기계 행 12건 — 자동 READY 분자에서 뺐다/.test(x)),
+        JSON.stringify({ raw: r.detail.readyCount, ex: r.detail.autoIneligibleExcluded, legacy: r.detail.legacyExcluded, src: c?.sources }))
       check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
       const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
-      check('🔴 🔴 **보정 후 공급 능력 11 (앞판 9) · 필요 하한 12 → 여전히 THROUGHPUT_SHORT (11 < 12) · D10 FAIL**',
+      check('🔴 🔴 **보정 후 공급 능력 11 (앞판 9 · 부적격을 셌다면 floor(32 × 60 ÷ 101) = 19) · 필요 하한 12 → 여전히 THROUGHPUT_SHORT (11 < 12) · D10 FAIL**',
         v.counts.readyCapacity === 11 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
         && v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
         JSON.stringify({ counts: v.counts, codes: v.codes }))
       // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
-      const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-` } }, select: { id: true } })).map((x) => x.id)
+      const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-r` } }, select: { id: true } })).map((x) => x.id)
       const stampedPending = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: 'p0r-' }, status: 'APPROVED', decidedBy: AUTO_DECIDER }, select: { id: true } })).map((x) => x.id)
       const direct = await readReadyCohort(prisma, {
         windowFrom, windowTo, dataDir: dir, matched: new Set([...lateIds, ...stampedPending]), horizon: slotTimesOn('2026-10-09', profileOf('d10')), now,
@@ -946,6 +985,91 @@ async function main(): Promise<void> {
       rmSync(dir, { recursive: true, force: true })
       rmSync(home, { recursive: true, force: true })
       await wipeP()
+    }
+  }
+
+  console.log('\n⑪ 🔴 P0-a — 미도장 기계 행은 정본 자동 적격으로 나눈다 · 부적격만 있으면 모름으로 부풀지 않는다 (2026-10-09)')
+  {
+    /**
+     * 창 = 증거일 2026-10-08 · 회차 6개 × 원천 10 = 60. 자동 도장 공개 2건 + 미도장 기계 행:
+     *   적격 1(→ 모름) · gate FAIL 1 · 의미 경고 1 · 금지 문구 1 · 부적격 셋은 분자에서 빠진다.
+     *   🔴 앞판(#676)은 부적격까지 모름으로 셌다 — raw 6 → 공급 능력 6 · 필요 3~12 → READY_REQUIREMENT_UNKNOWN 으로 부풀었다.
+     */
+    const site = 'fixture:p0a'
+    const now = new Date('2026-10-09T07:00:00+09:00')
+    const windowFrom = new Date('2026-10-05T15:00:00Z')
+    const windowTo = new Date('2026-10-08T15:00:00Z')
+    const runs = ['20261007-031500', '20261007-051500', '20261007-081500', '20261008-031500', '20261008-051500', '20261008-081500']
+    const fresh = now.getTime() - 2 * 3_600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    const evOf = (k: string): Record<string, unknown> => ({
+      sourceEvidence: buildSourceEvidence({
+        postedAt: iso(fresh), capturedAt: iso(fresh + 30 * 60_000), sourceSite: site, sourceArticleId: k, dedupKey: `${site}|${k}`,
+        response: { comments: 3, views: 100, observedAt: iso(fresh + 30 * 60_000) },
+        sourceStats: { basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: site, bucket: '<3h', n: 5,
+          commentsPct: 0.5, viewsPct: 0.5, windowFrom: iso(fresh - 72 * 3_600_000), windowTo: iso(fresh + 30 * 60_000) },
+        participationDriver: '공감',
+      }),
+      [SEMANTIC_RECORD_KEY]: CLEAN_SEMANTIC,
+    })
+    const wipeA = async (): Promise<void> => {
+      await prisma.originalPostApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: 'p0a-' } } })
+      await prisma.microSeedRawContent.deleteMany({ where: { sourceSite: site } })
+    }
+    await wipeA()
+    const dir = mkdtempSync(join(tmpdir(), 'p0a-'))
+    const plan: { k: string; run: string; status: string; by: string; verdict?: string; gate?: Record<string, unknown>; body?: string }[] = [
+      { k: 'pub1', run: runs[0]!, status: 'PUBLISHED', by: AUTO_DECIDER },
+      { k: 'pub2', run: runs[3]!, status: 'PUBLISHED', by: AUTO_DECIDER },
+      { k: 'elig', run: runs[5]!, status: 'APPROVED', by: 'machine:content-core-v2' },
+      { k: 'gfail', run: runs[1]!, status: 'APPROVED', by: 'machine:content-core-v2', verdict: 'FAIL' },
+      { k: 'sem', run: runs[2]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: SEMANTIC_WARN_GATE },
+      { k: 'forbid', run: runs[4]!, status: 'APPROVED', by: 'machine:content-core-v2', body: '방금 들은 얘기예요' },
+    ]
+    const intentOf = (k: string, runId: string): Record<string, unknown> => ({
+      contract: SUPPLY_JIT_CONTRACT, runId, sourceHash: articleIdHashOf(site, k), intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+    })
+    try {
+      for (const runId of runs) writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, plan.filter((x) => x.run === runId).map((x) => `p0a-${x.k}`)))
+      for (const x of plan) {
+        const raw = await prisma.microSeedRawContent.create({
+          data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/${x.k}`, sourceArticleId: `p0a-${x.k}`,
+            sourceCapturedAt: new Date(fresh), rawTitle: `원문 ${x.k}`, rawBody: `원문 본문 ${x.k}` }, select: { id: true },
+        })
+        await prisma.originalPostApprovalQueue.create({
+          data: { sourceRawContentId: raw.id, status: x.status as never, draftTitle: `초안 ${x.k}`, draftBody: x.body ?? `본문 ${x.k}`,
+            gateVerdict: x.verdict ?? 'PASS', promptVersion: 'p0a', model: 'p0a',
+            gateResults: { ...evOf(`p0a-${x.k}`), ...(x.gate ?? {}), [SUPPLY_INTENT_KEY]: intentOf(`p0a-${x.k}`, x.run) } as Prisma.InputJsonValue,
+            decidedBy: x.by, decidedAt: new Date('2026-10-07T04:00:00Z'), dedupKey: `p0a-${x.k}` },
+        })
+      }
+      const cohort = await readReadyCohort(prisma, { windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now })
+      const f = cohort.fates
+      check('🔴 🔴 **미도장 + 자동 적격 → 모름 1 · 미도장 + gate FAIL · 의미 경고 · 금지 문구 → 분자 제외 3**',
+        f !== null && f.published === 2 && f.unknown === 1 && f.lost === 0 && f.scheduled === 0 && cohort.readyCount === 3 && cohort.autoIneligibleExcluded === 3,
+        JSON.stringify({ f, n: cohort.readyCount, ex: cohort.autoIneligibleExcluded }))
+      check('🔴 🔴 **제외돼도 분모(원천) 60 그대로 · 부적격은 legacy 가 아니다(legacy 0) · 불일치 0**',
+        cohort.worksetSources === 60 && cohort.legacyExcluded === 0 && cohort.intentMismatches.length === 0,
+        JSON.stringify({ src: cohort.worksetSources, legacy: cohort.legacyExcluded }))
+      check('제외 사실이 메모로 남는다 — 조용히 사라지지 않는다',
+        cohort.notes.some((x) => /자동 부적격 미도장 기계 행 3건/.test(x)), JSON.stringify(cohort.notes))
+      // 🔴 부적격만 있으면 모름으로 부풀지 않는다 — 적격 미도장 행을 사람 결정으로 옮겨 부적격 3건만 남긴다
+      await prisma.originalPostApprovalQueue.updateMany({ where: { dedupKey: 'p0a-elig' }, data: { decidedBy: 'founder' } })
+      const only = await readReadyCohort(prisma, { windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now })
+      const facts = {
+        slotValidOpportunities: 3, latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30, commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
+        auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok' as const,
+      }
+      const vNow = judgeNextPreflight('d3', { ...facts, readyCohort: only.fates === null ? null : { sources: only.worksetSources ?? 0, ...only.fates, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
+      const vOld = judgeNextPreflight('d3', { ...facts, readyCohort: { sources: 60, published: 2, lost: 0, scheduled: 0, unknown: 3, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
+      check('🔴 🔴 **부적격만 남은 미도장 → 모름 0 · raw 2 · 공급 능력 2 · 필요 3 → THROUGHPUT_SHORT 로 확정 (앞판처럼 READY_REQUIREMENT_UNKNOWN 으로 부풀지 않는다)**',
+        only.fates?.unknown === 0 && only.readyCount === 2 && vNow.counts.readyCapacity === 2 && vNow.codes.includes('THROUGHPUT_SHORT')
+        && !vNow.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify({ counts: vNow.counts, codes: vNow.codes }))
+      check('대조 — 같은 행을 앞판처럼 모름 3 으로 세면 공급 능력 5 · 필요 3~8 → READY_REQUIREMENT_UNKNOWN (부풀음)',
+        vOld.counts.readyCapacity === 5 && vOld.codes.includes('READY_REQUIREMENT_UNKNOWN') && !vOld.codes.includes('THROUGHPUT_SHORT'), JSON.stringify(vOld.counts))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      await wipeA()
     }
   }
 
