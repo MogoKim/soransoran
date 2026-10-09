@@ -1,8 +1,8 @@
 # 소란소란 콘텐츠 끝 도달 → 회원가입 전환 정본
 
-> 문서 상태: **v4.5 · MC-M4 Preview gate checkpoint 정본**
-> 마지막 창업자 싱크: **2026-10-08 KST**
-> 현재 단계: **MC-M4 Draft PR #673 · 통합·성능·로컬 활성 흐름(bfcache 제외)·Preview gate 비활성 동작 PASS · 실기기·실제 카카오 왕복 검증 전 · Ready·merge·배포·실제 수집 전**
+> 문서 상태: **v4.6 · MC-M4 실기기·로컬 카카오 checkpoint 정본**
+> 마지막 창업자 싱크: **2026-10-09 KST**
+> 현재 단계: **MC-M4 Draft PR #673 · 로컬 구현·성능·Preview gate·실기기·로컬 Kakao 웹 OAuth 검증 PASS · 모바일 카카오톡 앱 전환·Production 확인 전 · Ready·merge·배포·실제 수집 전**
 > 기획·검증 책임: **Codex [2] 회원가입 전환 마스터**
 > 실행 책임: **Claude Code — 승인된 한 단계씩**
 
@@ -786,7 +786,7 @@ production build를 격리 로컬 DB와 `VERCEL_ENV=production`·과거 유효 �
 | **MC-M2 ✅** | 가입 제안 정책·디자인 | 도달·24시간·B안·문구·상호작용 승인 | 디자인 승인 없이 구현 |
 | **MC-M3 ✅** | 최소 측정·저장·어드민 설계 승인 | 2026-10-07 창업자 승인 — §8 계약·§10 어드민·`SignupFunnelDaily` schema 설계 | 범용 이벤트 원장·개인 추적 |
 | **MC-M3P** | 기존 GA4 정합성 판단 (전환 구현과 별도 작업) | page title·location 정책과 보정 범위 승인 | 신규 퍼널과 무관한 분석 확장·전환 PR에 혼합 |
-| **MC-M4 현재 — Draft PR #673 · Preview gate PASS · 실기기/카카오 검증 대기** | 완료: 0031 Production 적용 · 데이터 계약과 Prisma 모델 · 익명 ①~④ endpoint · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker · 도달 판정 · B안 가입 제안 · 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ `signup_complete` · 가입 전환 어드민과 회원 공통 하위 탭 · 격리 PostgreSQL 동시성·롤백 검증 · 최신 main 통합 · D100 공용 경계 검토 · production build · First Load JS · Brotli Lighthouse · 로컬 활성 흐름(bfcache 제외) · Preview gate 비활성 동작. 남음: 실기기(bfcache·키보드·focus trap·scroll lock) · 실제 카카오 왕복 · Ready 직전 최신 main 재통합·D100 경계 재검토 · merge · 실제 수집 env와 MC-M5 | §8-13 정적·성능·유지보수·로컬 활성 흐름·Vercel Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
+| **MC-M4 현재 — Draft PR #673 · 실기기·로컬 Kakao 웹 OAuth PASS · Ready 전** | 완료: 0031 Production 적용 · 데이터 계약과 Prisma 모델 · 익명 ①~④ endpoint · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker · 도달 판정 · B안 가입 제안 · 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ `signup_complete` · 가입 전환 어드민과 회원 공통 하위 탭 · 격리 PostgreSQL 동시성·롤백 검증 · 최신 main 통합 · D100 공용 경계 검토 · production build · First Load JS · Brotli Lighthouse · 로컬 활성 흐름 · Preview gate 비활성 동작 · 실기기(iPhone Safari·Galaxy Samsung Internet) · 로컬 Kakao 웹 OAuth. 남음: Ready 직전 exact main 통합·D100 경계 재검토·최종 checks · 창업자 Ready·merge 승인 · 모바일 카카오톡 앱 전환 · Production origin·실제 수집(MC-M5) | §8-13 정적·성능·유지보수·로컬 활성 흐름·Vercel Preview PASS | Production 집계 오염·승인 전 migration 적용·제품 구현과 migration 혼합 |
 | **MC-M5** | 제한적 Production 적용 | 별도 창업자 승인 후 실제 수집 시작 | 승인 없는 merge·배포 |
 | **MC-M6** | 실제 숫자로 순차 개선 | 한 번에 한 질문·한 변경 | 저유입 표본으로 A/B 승자 주장 |
 | **MC-M7** | North Star 연결 | 회원 방문일 근거와 7일 재방문 참여 연결 | 7일 내 참여를 재방문으로 간주 |
@@ -895,7 +895,7 @@ production build를 격리 로컬 DB와 `VERCEL_ENV=production`·과거 유효 �
 - MC-M3: 2026-10-07 최소 측정 설계·`SignupFunnelDaily` schema 설계 승인 (§8). v4.1은 PR #665로 main
   `e6d8b3c`에 merge됨
 - MC-M4: 2026-10-07 구현 계약 확정(v4.2) → 로컬 기능 구현 완료(v4.3) → 통합·성능 PASS(v4.4) → Preview gate
-  checkpoint(이 v4.5). 실기기·실제 카카오 왕복 검증 대기
+  checkpoint(v4.5) → 실기기·로컬 카카오 checkpoint(이 v4.6). Ready 직전 통합·검토 대기
 - MC-M4 구현 완료 범위: ①~④ 익명 기록과 수집 gate · 요청 단위 세션 공유 · 커뮤니티·매거진 tracker와 도달 판정 ·
   B안 가입 제안과 24시간 노출 제한 · 인증 성공·취소·실패 복귀 · 원자적 최초 온보딩과 ⑤ · 가입 전환 어드민과
   회원 공통 하위 탭. 격리 PostgreSQL 에서 동시 온보딩 1건만 최초 전환·롤백 검증. 세부 검사는 Git 역사에 둔다
@@ -926,16 +926,41 @@ production build를 격리 로컬 DB와 `VERCEL_ENV=production`·과거 유효 �
   오류 0. 매거진 본문에는 늘 있는 복귀 anchor만 있고 gate 활성 시 추가되는 끝 감지 지점은 없어 tracker가 렌더되지 않았다.
   이것은 Preview gate 비활성 동작 PASS이며 Vercel Preview 전체 PASS가 아니다. DB는 직접 조회하지 않았다 — gate 비활성 시
   DB reader·writer 0은 정적·계약 시험의 test double 결과에 기댄다
+- 실기기(2026-10-09): 같은 production build(`bed9093`, PR head `a3d8faa`와 runtime 동일) · 격리 로컬 PostgreSQL ·
+  `VERCEL_ENV=production`. 기기 식별값은 기록하지 않았다
+  - iPhone 13 Pro · iOS Safari: A 1초 도달·dialog 1회·재관측 중복 0 · B 댓글 작성·키보드 중 dialog 0, 닫은 뒤 노출 ·
+    C focus trap·배경 scroll lock·닫은 뒤 초점·스크롤 복구 · D 글자 크기 3단계 잘림·가로 스크롤 0 · E bfcache·뒤로가기·
+    새로고침·새 탭 · F dialog chunk 지연 중 이탈 시 dialog·③·표식 0 · G 매거진 도달·CTA 연타 시 ④·signin 시도 각 1회 —
+    A~G 전체 PASS, 제품 결함 0. bfcache 는 `pageshow.persisted=true` · window 메모리 변수 생존 · 복원 시 document GET 0 ·
+    ①② 추가 0 으로 판정했다(`timeOrigin` 2ms 차는 이 직접 증거를 무효화하지 않음)
+  - Galaxy Note10 5G · Samsung Internet 핵심 6항목: 끝 도달·dialog 1회 · scroll lock·복구 · 입력·키보드 중 0·닫은 뒤
+    노출 · 글자 크기 3단계 · CTA 연타 ④ 1·signin 1 · 콘솔·외부 요청·중복 — PASS, 제품 결함 0. React #418·#423 은
+    harness 가 만든 차단용 404 화면에서만 관측된 비제품 사항이다
+- 로컬 Kakao 웹 OAuth(2026-10-09): 같은 production build · `127.0.0.1` 에만 bind 한 Next·격리 PostgreSQL · 시험 전용
+  Chrome profile · 운영과 분리된 Kakao 테스트 앱과 localhost callback. 운영 Kakao 앱·운영 env·Preview·Production DB 접근 0
+  - 실제 Kakao(창업자 직접 조작): 신규 가입 → 온보딩 → 원래 글 성공 복귀, User·Account 각 +1·약관 동의 기록·⑤ 1 PASS ·
+    재로그인은 온보딩 생략·성공 복귀·User·Account·약관·⑤ 추가 0 PASS · Kakao 화면에서 뒤로가기·창 닫기는 dialog·Toast 0·
+    ④ 중복 0·DB 변화 0 PASS
+  - 합성 provider 응답 — **실제 Kakao UI 증거가 아니다**: Kakao 웹 동의 화면에 취소 버튼이 없어, 실제 인가 요청을 연 뒤
+    callback 에 `access_denied` 와 `server_error` 를 각 1회 합성했다. 둘 다 `/login?error=OAuthCallbackError` → 원래 글
+    실패 fragment → 확정 Toast 1회 → fragment 제거, User·Account·약관·⑤ 증가 0 PASS. Kakao provider 는 PKCE 만 쓰므로
+    실제 인가 요청·응답에 state 가 없었고, 실제 요청이 만든 PKCE cookie 를 그대로 썼다. 검증 약화 0
+  - 잘못된 client secret 으로 띄운 서버의 Auth.js `Configuration` 500 은 의도적으로 만든 서버 설정 장애다. 사용자 OAuth
+    실패가 아니므로 제품 결함·§6-5 범위 밖이다
+  - 관찰: 기존 회원 재로그인과 인증 실패 뒤에는 귀속 표식이 30분 TTL 까지 남는다. ⑤ 영향 0 · 개인정보·경로 0 · TTL 제한
+  - 정리: 테스트 계정의 테스트 앱 연결 없음 · 테스트 앱 Kakao Login OFF(앱은 보존) · 로컬 DB·secret 파일·시험 profile
+    삭제 · port·잔여 프로세스 0
 
 ### 다음 과제
 
 다음 순서로 진행하며, 각 단계는 별도 승인 대상이다.
 
-1. 실기기 검증 — bfcache 복원 · 모바일 키보드 · focus trap · scroll lock
-2. 허용된 callback 환경의 실제 카카오 성공·취소·실패·창 닫기 왕복
-3. Ready·merge 직전 exact main 재통합과 D100 공용 경계 재검토. 새 main이 측정 화면·공용 코드·dependency·schema·build
-   설정에 닿을 때만 관련 검사를 다시 실행한다
-4. merge · Production 배포 · 수집 env(MC-M5)는 각각 별도 단계
+1. Ready 직전 exact main 통합. 새 main이 측정 화면·공용 코드·dependency·schema·build 설정에 닿을 때만 관련 검사를
+   다시 실행한다
+2. D100 공용 경계 재검토
+3. 최종 checks
+4. 창업자 Ready·merge 승인
+5. MC-M5 운영 수집 검증 — Production 배포 · 수집 env · Production request origin · 실제 수집. 각각 별도 단계
 
 새 검사의 CI 편입은 D100 공용 파일 merge 순서를 조율한 뒤 별도 단계로 한다.
 
@@ -944,18 +969,20 @@ GA4 `page_title`·query 전송 문제는 `MC-M3P` 별도 작업으로 다룬다.
 ## 19. 현재 남은 결정과 확인
 
 MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§8-5·§8-11·§8-13에서 확정됐고 로컬 구현·최신 main
-통합·D100 경계 검토·성능·로컬 활성 흐름(bfcache 제외)·Preview gate 비활성 동작 PASS는 끝났다. 남은 것은 실제 기기·
-실제 인증·실제 운영 환경에서만 확인할 수 있는 UNKNOWN 과 별도 승인 항목이다.
+통합·D100 경계 검토·성능·로컬 활성 흐름·Preview gate 비활성 동작·실기기·로컬 Kakao 웹 OAuth PASS는 끝났다. 아직
+Production 배포·실제 수집 전이다. 남은 것은 모바일 앱 전환·실제 운영 환경에서만 확인할 수 있는 UNKNOWN 과 별도 승인
+항목이다.
 
 | 결정·확인 | 현재 상태 |
 |---|---|
 | 활성 흐름 ①→④·24시간 제한·payload 순서·횟수 | **PASS** — 로컬 활성 흐름, 격리 DB count 일치(§18) |
 | Preview gate 비활성 동작 | **PASS** — dialog·전환 endpoint 시도·전환 표식 0, 끝 감지 지점 미렌더(§18). Preview 전체 PASS 아님 |
-| 실기기 bfcache 복원 | `UNKNOWN` — headless Chrome에서 복원 재현 불가. 실기기 |
-| 모바일 키보드 · focus trap · scroll lock (IntersectionObserver·충돌 UI 실기기 체감 포함) | `UNKNOWN` — 실기기 |
-| 실제 카카오 성공·취소·실패·창 닫기 복귀 (Vercel request origin 과 Auth.js callback origin 일치 포함) | `UNKNOWN` — 허용된 callback 환경·실기기 |
+| 실기기 bfcache·키보드·focus trap·scroll lock·글자 크기 | **PASS** — iPhone Safari A~G · Galaxy Samsung Internet 핵심 6항목, 제품 결함 0(§18) |
+| 실제 Kakao 웹 성공·재로그인·뒤로가기·창 닫기 복귀 | **PASS** — 로컬 callback, 실제 Kakao(§18) |
+| Kakao 취소·provider 오류 복귀 | **PASS(합성 provider 응답)** — 실제 Kakao UI 증거 아님, PKCE-only 실제 cookie 사용(§18) |
+| 모바일 카카오톡 앱 전환 | `UNKNOWN` — 웹 OAuth 만 검증했다 |
 | Preview 가 연결된 DB 의 정체 | `UNKNOWN` — DB 를 직접 조회하지 않았다. 과거 기록을 현재 사실로 쓰지 않는다. §8-7 gate 로 Preview read·write 0 이어야 한다 |
-| Production 실제 수집 (온보딩 interactive transaction 의 실제 Production pooler 경로 포함) | `UNKNOWN` — MC-M5 이후. 같은 transaction 방식이 다른 운영 경로에 쓰이나 이 action 으로는 미실측 |
+| Production `request.url` origin 과 실제 수집 (온보딩 interactive transaction 의 실제 Production pooler 경로 포함) | `UNKNOWN` — MC-M5. 로컬 `next start` 에서는 route handler `request.url` origin 이 Host 와 달라 실기기 시험에 같은 출처 번역이 필요했다. Production 에서 계측 요청이 같은 출처로 판정되는지 첫날 확인한다 |
 | client chunk 와 First Load JS 증가 | **PASS** — 세 경로 5KB 이하, dialog·`next-auth/react` async(§18) |
 | Lighthouse LCP·TBT·CLS | **PASS** — streaming Brotli 조건, 세 경로 중앙값 악화 0(§18) |
 | 실제 수집 시작일 env(`SIGNUP_FUNNEL_COLLECTION_START`) | MC-M5 별도 승인 |
@@ -990,6 +1017,7 @@ MC-M3 측정 설계는 §8에서, MC-M4 구현 계약은 §6-3·§6-5·§8-3·§
 | 2026-10-08 | v4.3 | MC-M4 로컬 기능 구현 checkpoint — ①~⑤, B안 가입 제안, 인증 복귀, 원자적 온보딩, 가입 전환 어드민 완료. 최신 main 통합·build·성능·Preview·배포·수집은 미완료 |
 | 2026-10-08 | v4.4 | MC-M4 통합·성능 PASS checkpoint — 최신 main 통합·D100 공용 경계 PASS·production build·First Load JS·streaming Brotli Lighthouse PASS. 성능 전송 조건·TBT 0→0 판정·D100 moving-main 통합 기준을 §8-13에, 로컬 활성 흐름과 Vercel Preview 검증 분리를 §8-13·§13에 명시. 새 제품 정책 없음 |
 | 2026-10-08 | v4.5 | MC-M4 Preview gate checkpoint — Draft PR #673 checks PASS·Preview Ready, 로컬 활성 흐름 PASS(bfcache 실기기 UNKNOWN), Vercel Preview gate 비활성 동작 PASS. Preview DB 정체·실기기·실제 카카오·Production 수집은 UNKNOWN 유지. 새 제품 정책 없음 |
+| 2026-10-09 | v4.6 | MC-M4 실기기·로컬 카카오 checkpoint — iPhone Safari A~G·Galaxy Samsung Internet 핵심 6항목 PASS, 실제 Kakao 신규 가입·재로그인·뒤로가기/창 닫기 PASS, 합성 access_denied·server_error callback PASS(합성 증거 명시), 잘못된 secret 500 범위 밖, marker 30분 잔존 관찰. 모바일 카카오톡 앱 전환·Preview DB 정체·Production origin·실제 수집은 UNKNOWN 유지. 새 제품 정책 없음 |
 
 v3.2까지의 세부 결정·검사 횟수·Preview 시행착오·commit·deployment 기록은 Git 역사에 보존한다. 현재 정책과
-충돌할 때는 이 v4.5 현행 절이 이긴다.
+충돌할 때는 이 v4.6 현행 절이 이긴다.
