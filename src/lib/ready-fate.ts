@@ -135,15 +135,14 @@ export type CostAttribution = {
    *    (2026-10-04 P0-2 최종) 분리 가능한 legacy 는 현재 계약 단가 계산을 막지 않는다 — 3일 창을 인위로 기다리지 않는다.
    */
   legacyUsd: number
-  /** 예약만 있고 정산이 없는 **현재 계약** 유료 요청 수(이 cohort) — 사용량 미상 · 진행 중 · 기록 실패 */
+  /** 예약만 있고 정산이 없는 **현재 계약** 유료 요청 수(이 cohort) — 🔴 0 이 아니면 합계를 모른다(단가 `null`) */
   openRequests: number
   /**
-   * 🔴 **미정산 요청의 예약 상한 합(USD)** (2026-10-09 P0) — `totalUsd` 에 **이미 들어 있다**(보수적 상한).
-   *    장부 상태를 바꾸지 않는다 — 그 줄은 여전히 `usageUnknown` · `reserved` 다. 예약은 그 요청이 쓸 수 있었던 최대치다.
+   * 🔴 **미정산 요청의 추정 예약액 합(USD) — 보고용** (2026-10-09). 실제 비용이 아니고 비용의 한계도 아니다 —
+   *    예약은 count_tokens 추정 위에 잡은 값이라 실제 정산이 넘을 수 있다(`judgeSettle.overran` · `llm-pricing.reserveOf`).
+   *    `totalUsd` 에 넣지 않는다. 판정에 쓰지 않는다.
    */
   openReservedUsd: number
-  /** 🔴 예약액이 없는 미정산 요청 수 — 0 이 아니면 상한도 모른다(단가 `null`) */
-  openUnbounded: number
   /** 예약만 있는 legacy 요청 수 — 보고만 한다 */
   legacyOpenRequests: number
   /** 🔴 현재 계약이지만 **다른 cohort 회차**(창 밖 묶음)의 정산 — 이 cohort 의 분자가 아니다 · 보고만 한다 */
@@ -165,12 +164,11 @@ export type CostAttribution = {
 /**
  * 🔴 **장부 요청을 원천 결과에 붙인다.** 현재 JIT 계약 표식(`supplyContract`)이 있는 요청만 `sourceKey`(원천 해시)로
  *    결과 행의 결말에 붙인다. 표식 없는 요청은 legacy 다 — 따로 보고하고 현재 계약 단가에는 넣지도 막지도 않는다.
- *    현재 계약 요청 중 미연결이 하나라도 있거나, 현재 계약 정산 0 · slot-valid 결과 0 이면 단가는 모른다.
- *    🔴 미정산 요청(사용량 미상 · 진행 중)은 **예약액을 상한 비용으로** 분자에 넣는다(2026-10-09 P0) — 장부 상태는 그대로다.
- *       예약이 없거나 회차 · 원천을 모르는 미정산이 하나라도 있으면 단가는 모른다.
+ *    현재 계약 요청 중 미연결 · 미정산이 하나라도 있거나, 현재 계약 정산 0 · slot-valid 결과 0 이면 단가는 모른다.
+ *    🔴 미정산 요청의 예약액은 실제 비용도 그 한계도 아니다 — 예약이 있어도 단가를 확정하지 않는다(보고용 합계만).
  *    결말 모름 비용은 분자에 포함한다. 그 행이 나중에 성공하면 분모만 늘어 단가가 낮아지고, 실패하면 지금 상한이 그대로라
  *    `전체 정산 ÷ 현재 확인된 결과`는 예산을 과소평가하지 않는다.
- *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 상한 없는 미정산이 있으면 결과당 단가는 `null` 이다 —
+ *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 끝나지 않은 요청이 있으면 결과당 단가는 `null` 이다 —
  *    🔴 raw 단가(정산 ÷ 행 수)로 대신하지 않는다.
  */
 export function costAttributionOf(i: {
@@ -190,7 +188,6 @@ export function costAttributionOf(i: {
   let legacy = 0
   let open = 0
   let openReserved = 0
-  let openUnbounded = 0
   let legacyOpen = 0
   let otherCohort = 0
   for (const e of i.entries) {
@@ -203,17 +200,8 @@ export function costAttributionOf(i: {
       if (!current) { legacyOpen += 1; continue }
       if (run !== null && !i.cohortRuns.has(run)) continue
       open += 1
-      /**
-       * 🔴 **예약 상한으로 보수적으로 센다** (2026-10-09 P0). 앞판은 미정산 1건이면 단가를 통째로 몰랐다 —
-       *    2026-10-08 사용량 미상 2건이 3일 창 동안 D10 공급 비용 판정을 막았다(사람 마감 외 경로 없음).
-       *    예약액은 그 요청의 최대 비용이므로 분자에 넣으면 단가를 과소평가하지 않는다. 예약이 없거나 ·
-       *    회차 · 원천을 모르면 상한도 모른다(단가 `null`).
-       */
-      const r = e.reservedUsd
-      if (run === null || key === null || r === null || !Number.isFinite(r) || r < 0) { openUnbounded += 1; continue }
-      openReserved += r
-      total += r
-      byFate[i.fateByKey.get(key) ?? 'noReady'] += r
+      // 🔴 추정 예약액은 보고만 한다 — 실제 비용도 그 한계도 아니다(정산이 예약을 넘을 수 있다). 분자에 넣지 않는다
+      if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd >= 0) openReserved += e.reservedUsd
       continue
     }
     if (!current) { legacy += e.settledUsd; continue }
@@ -224,14 +212,14 @@ export function costAttributionOf(i: {
     if (key === null) { unlinked += e.settledUsd; continue }
     byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
   }
-  const complete = unlinked === 0 && openUnbounded === 0
+  const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
   return {
-    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, openReservedUsd: openReserved, openUnbounded,
+    totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, openReservedUsd: openReserved,
     legacyOpenRequests: legacyOpen, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && results > 0 ? total / results : null,
-    usdPerPublished: complete && open === 0 && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
+    usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
       ? total / i.counts.published : null,
     wasteUsd: complete ? byFate.lost : null,
     noReadyUsd: complete ? byFate.noReady : null,

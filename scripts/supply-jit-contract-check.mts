@@ -27,6 +27,7 @@ import {
   type CostFate,
 } from '../src/lib/ready-fate'
 import { judgeJitDemand, fillUpToOf, ledgerRunIdOf } from '../src/lib/supply-process'
+import { judgeSettle } from '../src/lib/llm-ledger'
 import {
   concludedSourceKeys, attemptedOutcomes, CONCLUDED_STATES, worksetFileName, opportunitiesFileName,
   WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, type PriorOutcome,
@@ -302,35 +303,37 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const cUnknown = costAttributionOf({
     entries: [e(hp, 0.02), e(hu, 0.01)], fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT,
   })
-  check('🔴 🔴 **C 현재 계약 미연결 → 결과당 비용 모름**', cUnlinked?.usdPerSlotValidResult === null)
-  // ── 🔴 (2026-10-09 P0) 미정산은 예약 상한으로 — 장부 상태는 그대로 ──
-  check('🔴 🔴 **C\' 예약 있는 미정산(reserved) → 예약 $0.01 을 상한으로 분자에 · 결과 1 → $0.03 · 미정산 1건 · 상한 합 $0.01**',
-    cOpen !== null && Math.abs((cOpen.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12 && cOpen.openRequests === 1
-    && Math.abs(cOpen.openReservedUsd - 0.01) < 1e-12 && cOpen.openUnbounded === 0, JSON.stringify(cOpen))
+  check('🔴 🔴 **C 현재 계약 미연결 · 미정산 → 결과당 비용 모름**',
+    cUnlinked?.usdPerSlotValidResult === null && cOpen?.usdPerSlotValidResult === null)
+  // ── 🔴 (2026-10-09) 추정 예약액은 실제 비용도 그 한계도 아니다 — 미정산이 하나라도 있으면 단가를 확정하지 않는다 ──
+  check('🔴 🔴 **예약 있는 미정산(reserved) → 단가 null · 미정산 1건 · 추정 예약액 $0.01 은 보고만(분자 $0.02 그대로)**',
+    cOpen !== null && cOpen.usdPerSlotValidResult === null && cOpen.openRequests === 1
+    && Math.abs(cOpen.openReservedUsd - 0.01) < 1e-12 && Math.abs(cOpen.totalUsd - 0.02) < 1e-12, JSON.stringify(cOpen))
   const uu = { ...e(hl, null, 'usageUnknown'), reservedUsd: 0.0086 }
   const cUu = costAttributionOf({ entries: [e(hp, 0.02), uu], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
-  check('🔴 🔴 **예약 있는 usageUnknown(2026-10-08 모양) → 상한 $0.0086 포함 · 손실 원천이면 낭비에도 상한으로 · 장부 줄 상태는 usageUnknown 그대로**',
-    cUu !== null && Math.abs((cUu.usdPerSlotValidResult ?? 0) - 0.0286) < 1e-12 && Math.abs((cUu.wasteUsd ?? 0) - 0.0086) < 1e-12
+  check('🔴 🔴 **예약 있는 usageUnknown(2026-10-08 모양) → 단가 null · 낭비 모름 · 장부 줄 상태는 usageUnknown 그대로**',
+    cUu !== null && cUu.usdPerSlotValidResult === null && cUu.wasteUsd === null && Math.abs(cUu.openReservedUsd - 0.0086) < 1e-12
     && uu.status === 'usageUnknown' && uu.settledUsd === null, JSON.stringify(cUu))
   const noRes = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hl, null, 'usageUnknown'), reservedUsd: null }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
-  check('🔴 🔴 **예약 없는 usageUnknown → 상한도 모른다 → 결과당 비용 null · 상한 없음 1건**',
-    noRes !== null && noRes.usdPerSlotValidResult === null && noRes.openUnbounded === 1, JSON.stringify(noRes))
-  const noKey = costAttributionOf({ entries: [e(hp, 0.02), { ...e(null, null, 'usageUnknown'), reservedUsd: 0.01 }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
-  check('🔴 원천 해시 없는 미정산 → 연결 불완전 → null', noKey !== null && noKey.usdPerSlotValidResult === null && noKey.openUnbounded === 1)
+  check('🔴 🔴 **예약 없는 usageUnknown → 단가 null · 추정 예약액 0**', noRes !== null && noRes.usdPerSlotValidResult === null
+    && noRes.openRequests === 1 && noRes.openReservedUsd === 0, JSON.stringify(noRes))
   const badRun = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hp, null, 'usageUnknown'), runId: 'manual-x' }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
-  check('🔴 회차 id 를 읽을 수 없는 현재 계약 미정산 → 연결 불완전 → null', badRun !== null && badRun.usdPerSlotValidResult === null && badRun.openUnbounded === 1)
+  check('🔴 회차 id 를 읽을 수 없는 현재 계약 미정산 → 이 cohort 를 막는다 → null', badRun !== null && badRun.usdPerSlotValidResult === null && badRun.openRequests === 1)
   const otherRun = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hp, null, 'usageUnknown'), runId: '20261001-031500-d' }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
-  check('🔴 다른 cohort 회차의 미정산은 이 cohort 를 막지도 · 분자에 들지도 않는다', otherRun !== null && otherRun.openRequests === 0
+  check('🔴 다른 cohort 회차의 미정산은 이 cohort 를 막지 않는다', otherRun !== null && otherRun.openRequests === 0
     && Math.abs((otherRun.usdPerSlotValidResult ?? 0) - 0.02) < 1e-12)
-  // 🔴 예약 상한을 넣은 비용이 천장을 넘으면 반드시 SHORT
-  const bigRes = costAttributionOf({ entries: [e(hp, 0.02), { ...e(hl, null, 'usageUnknown'), reservedUsd: 0.2 }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
-  const shortV = judgeNextPreflight('d5', {
-    slotValidOpportunities: 5, readyCohort: { sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: bigRes?.usdPerSlotValidResult ?? null },
+  // 🔴 실제 정산이 예약을 넘을 수 있다(overran) — 분자는 실제 정산액이다. 예약을 한계로 쓰면 과소평가한다
+  const over = judgeSettle({ reservedUsd: 0.01, cost: { known: true, usd: 0.03 } as never })
+  const cOver = costAttributionOf({ entries: [{ ...e(hp, over.settledUsd), reservedUsd: 0.01 }], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })
+  check('🔴 🔴 **실제 정산 $0.03 > 추정 예약 $0.01 (overran) — 정산 계약 그대로 · 분자는 실제 $0.03**',
+    over.status === 'settled' && over.overran && over.settledUsd === 0.03 && cOver !== null && Math.abs((cOver.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12)
+  const unkV = judgeNextPreflight('d5', {
+    slotValidOpportunities: 5, readyCohort: { sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: cUu?.usdPerSlotValidResult ?? null },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   }, RUNNER_GRID)
-  check('🔴 🔴 **예약 상한 $0.2 포함 → $0.22/결과 × D5 = $1.10 > 천장 $0.50 → SUPPLY_COST_SHORT (UNKNOWN 아님)**',
-    shortV.codes.includes('SUPPLY_COST_SHORT') && !shortV.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(shortV.codes))
+  check('🔴 🔴 **예약 있는 usageUnknown 이 cohort 에 있으면 preflight 는 SUPPLY_COST_UNKNOWN (SHORT · PASS 아님)**',
+    unkV.codes.includes('SUPPLY_COST_UNKNOWN') && !unkV.codes.includes('SUPPLY_COST_SHORT'), JSON.stringify(unkV.codes))
   check('🟢 결말 모름 $0.01도 분자에 포함 — 전체 $0.03 ÷ 확인 결과 1 = 보수적 상한 $0.03',
     cUnknown !== null && Math.abs((cUnknown.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12
     && Math.abs(cUnknown.byFate.unknown - 0.01) < 1e-12, JSON.stringify(cUnknown))

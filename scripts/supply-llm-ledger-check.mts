@@ -1478,7 +1478,7 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑩-b 🔴 사용량 미상 알림 — 장부 기록 뒤 · 회차 · 단계 · 건수 · 예약 상한만 · 실패는 기록을 막지 않는다 (2026-10-09 P0)')
+console.log('\n⑩-b 🔴 사용량 미상 알림 — 장부 기록 뒤 · 회차 · 단계 · 건수 · 추정 예약액만 · 실패는 기록을 막지 않는다 (2026-10-09 P0)')
 // ─────────────────────────────────────────────────────────
 {
   const dir = mkdtempSync(join(tmpdir(), 'ledger-unknown-alert-'))
@@ -1514,7 +1514,7 @@ console.log('\n⑩-b 🔴 사용량 미상 알림 — 장부 기록 뒤 · 회�
     const r1 = await sOk.call(ASK)
     const line = day().find((e) => e.runId === 'RU1' && e.stage === 'draftGen')
     check('🔴 fixture 전제 — 사용량 없는 응답은 usageUnknown 으로 기록 · 정산액 null', line?.status === 'usageUnknown' && line.settledUsd === null && r1.settlementRecorded === true)
-    check('🔴 🔴 **알림 성공 — 정확히 1건 · 회차 RU1 · 단계 draftGen · 건수 1 · 예약 상한 = 장부 예약액**',
+    check('🔴 🔴 **알림 성공 — 정확히 1건 · 회차 RU1 · 단계 draftGen · 건수 1 · 추정 예약액 = 장부 예약액**',
       got.length === 1 && got[0]!.runId === 'RU1' && got[0]!.stage === 'draftGen' && got[0]!.count === 1
       && line !== undefined && got[0]!.reservedUsd === line.reservedUsd && got[0]!.reservedTotalUsd === line.reservedUsd, JSON.stringify(got))
     check('🔴 🔴 **알림은 장부 줄을 적은 뒤에 간다** (알림 시점에 usageUnknown 줄 1개가 이미 있다)', order.join(',') === 'notify:1', order.join(','))
@@ -1522,9 +1522,12 @@ console.log('\n⑩-b 🔴 사용량 미상 알림 — 장부 기록 뒤 · 회�
     const msgText = JSON.stringify(msg) + JSON.stringify(got[0])
     check('🔴 🔴 **알림에 payload · 원문 · 원천 해시 · 키가 없다**', !msgText.includes(SECRET_PAYLOAD) && !msgText.includes('fixture-source-hash')
       && !msgText.includes('fixture-fake-key') && JSON.stringify(Object.keys(got[0]!).sort()) === JSON.stringify(['count', 'reservedTotalUsd', 'reservedUsd', 'runId', 'stage']))
-    check('알림 등급 WARN · 다음 할 일(사람 마감) 안내', msg.severity === 'WARN' && msg.next.includes('supply:ledger-resolve'))
+    check('알림 등급 WARN · 다음 할 일(실제 금액 확인 후 마감 또는 창 이탈) 안내', msg.severity === 'WARN' && msg.next.includes('supply:ledger-resolve') && msg.next.includes('창을 벗어나'))
+    check('🔴 🔴 **알림은 승급 공급 비용이 UNKNOWN 이라고 말한다 — "예약 상한" · "계속된다" 문구 없음 · 추정 예약액은 실제 비용 아님**',
+      /UNKNOWN/.test(msg.reason) && /추정 예약액/.test(msg.reason) && /실제 비용 아님/.test(msg.reason)
+      && !/예약 상한|상한으로|계속된다/.test(JSON.stringify(msg)), JSON.stringify(msg))
     await sOk.call(ASK)
-    check('같은 회차 두 번째 미상 → 건수 2 · 상한 합 누적', got.length === 2 && got[1]!.count === 2
+    check('같은 회차 두 번째 미상 → 건수 2 · 추정 예약액 합 누적', got.length === 2 && got[1]!.count === 2
       && Math.abs(got[1]!.reservedTotalUsd - ((got[0]!.reservedUsd ?? 0) + (got[1]!.reservedUsd ?? 0))) < 1e-12)
     // 🔴 알림 실패 — 던져도 기록 · 결과 · 다음 요청이 그대로다
     let threw = 0

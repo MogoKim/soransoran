@@ -243,7 +243,7 @@ export type SupplySessionConfig = {
 }
 
 /**
- * 🔴 **사용량 미상 알림 내용 — 회차 · 단계 · 건수 · 예약 상한만** (2026-10-09 P0).
+ * 🔴 **사용량 미상 알림 내용 — 회차 · 단계 · 건수 · 추정 예약액만** (2026-10-09 P0).
  *    payload · 원문 · 원천 해시 · 비밀 · 사용자 식별자 칸이 없다.
  *    앞판은 회차 로그의 개수 한 줄뿐이었다 — 2026-10-08 미상 2건이 아무 알림 없이 다음 날 D10 판정을 막았다.
  */
@@ -252,9 +252,9 @@ export type UsageUnknownAlert = {
   stage: LedgerStage
   /** 이 회차에서 지금까지 생긴 사용량 미상 건수 */
   count: number
-  /** 이번 건의 예약 상한(USD) — 모르면 null */
+  /** 이번 건의 추정 예약액(USD) — 실제 비용이 아니다 · 모르면 null */
   reservedUsd: number | null
-  /** 이 회차 미상 건 예약 상한 합(USD) */
+  /** 이 회차 미상 건 추정 예약액 합(USD) — 실제 비용이 아니다 */
   reservedTotalUsd: number
 }
 export type UsageUnknownNotify = (a: UsageUnknownAlert) => Promise<unknown>
@@ -264,9 +264,9 @@ export function usageUnknownAlertMessage(a: UsageUnknownAlert): { severity: 'WAR
   return {
     severity: 'WARN',
     title: '공급 장부 — 제공사 사용량 미상(미정산)',
-    reason: `회차 ${a.runId} · 단계 ${a.stage} · 이 회차 미상 ${a.count}건 · 이번 예약 상한 ${usd(a.reservedUsd)}`
-      + ` · 회차 미상 상한 합 ${usd(a.reservedTotalUsd)} — 승급 비용 판정은 예약 상한으로 센다`,
-    next: '실제 금액을 확인하면 `npm run supply:ledger-resolve` 로 마감한다(판정은 상한으로 이미 계속된다)',
+    reason: `회차 ${a.runId} · 단계 ${a.stage} · 이 회차 미상 ${a.count}건 · 이번 추정 예약액 ${usd(a.reservedUsd)}`
+      + ` · 회차 추정 예약액 합 ${usd(a.reservedTotalUsd)} (실제 비용 아님) — 이 회차가 든 cohort 의 승급 공급 비용은 UNKNOWN 이다`,
+    next: '실제 금액을 확인해 `npm run supply:ledger-resolve` 로 마감하거나, 이 회차가 3일 cohort 창을 벗어나야 공급 비용 판정이 풀린다',
   }
 }
 
@@ -394,7 +394,7 @@ export class SupplyLlmSession {
   private readonly now: () => Date
   private readonly io: LedgerIo
   private readonly notify: UsageUnknownNotify | null
-  /** 🔴 이 세션의 사용량 미상 예약 상한 합 — 알림에만 쓴다 */
+  /** 🔴 이 세션의 사용량 미상 추정 예약액 합 — 알림에만 쓴다(실제 비용 아님) */
   private unknownReservedUsd = 0
   /**
    * 🔴 **공급 장부인가** — 정본 자리(계정 홈) 또는 이 프로세스 `$HOME` 의 공급 장부 자리와 **실경로로** 같으면 참.

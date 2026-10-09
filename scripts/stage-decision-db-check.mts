@@ -758,14 +758,14 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n⑩ 🔴 2026-10-08 22:15 사건 재생 — 회차 시계 · 도장 전 행 · 예약 상한 비용 · D10 은 여전히 BLOCK (2026-10-09 P0)')
+  console.log('\n⑩ 🔴 2026-10-08 22:15 사건 재생 — 회차 시계 · 도장 전 행 · 미상 비용 UNKNOWN · D10 은 여전히 BLOCK (2026-10-09 P0)')
   {
     /**
      * 🔴 운영 실측 모양(보조 맥북 · 정본 판독기로 재계산한 값) — 증거일 2026-10-08 · 창 KST 10-06~08 · 판정 10-09 07:00.
      *    창 안 workset 회차 11개(UTC id) · 원천 101 · 그 회차들이 만든 READY 20 —
      *      도장된 16(공개 8 · 만료 2 · 대기 6) + **22:15 회차(20261008-131506) 4건은 22:16 적재 · 08:00 자동 도장**(07:00 엔 도장 전).
      *    앞판(분자 = decidedAt 창)은 16 ÷ 101 → 공급 능력 9. 회차 시계면 20 ÷ 101 → 11. 필요 12 → 여전히 THROUGHPUT_SHORT.
-     *    장부 — 사용량 미상 2건(예약 $0.008652 · $0.0085926 · 운영 실측값) → 예약 상한으로 센다.
+     *    장부 — 사용량 미상 2건(추정 예약 $0.008652 · $0.0085926 · 운영 실측값) → 결과당 비용 확정 불가(SUPPLY_COST_UNKNOWN).
      */
     const site = 'fixture:p0-2215'
     const RUNS: readonly [string, number, number][] = [
@@ -888,7 +888,8 @@ async function main(): Promise<void> {
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
       const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
       check('🔴 🔴 **보정 후 공급 능력 11 (앞판 9) · 필요 하한 12 → 여전히 THROUGHPUT_SHORT (11 < 12) · D10 FAIL**',
-        v.counts.readyCapacity === 11 && v.counts.readyNeededMin === 12 && v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
+        v.counts.readyCapacity === 11 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
+        && v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
         JSON.stringify({ counts: v.counts, codes: v.codes }))
       // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
       const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-` } }, select: { id: true } })).map((x) => x.id)
@@ -898,15 +899,15 @@ async function main(): Promise<void> {
       })
       check('🔴 🔴 **도장 전 4건은 슬롯에 짝지어져도 모름 — 도장된 대기 6만 예정 · 모름 4 (창 밖 회차 행은 제외)**',
         lateIds.length === 4 && direct.fates !== null && direct.fates.unknown === 4 && direct.fates.scheduled === 6, JSON.stringify(direct.fates))
-      // 🔴 비용 — 정산 $0.20 + 예약 상한 $0.0172446 → ÷ 확인 결과 8
-      const perResult = (20 * 0.01 + 0.008652 + 0.0085926) / 8
-      check('🔴 🔴 **사용량 미상 2건 → 예약 상한으로 분자에 · 결과당 = (정산 $0.20 + 상한 $0.0172446) ÷ 8 · SUPPLY_COST_UNKNOWN 없음**',
-        c !== null && c.usdPerSlotValidResult !== null && Math.abs(c.usdPerSlotValidResult - perResult) < 1e-9
-        && !v.codes.includes('SUPPLY_COST_UNKNOWN') && !v.codes.includes('SUPPLY_COST_SHORT'),
-        JSON.stringify({ usd: c?.usdPerSlotValidResult, perResult, codes: v.codes }))
-      check('preflight 메모가 "상한" 임을 말한다 — 미정산 2건 · 상한 $0.0172',
-        (r.notes as string[]).some((x) => /공급 비용은 상한이다 — 미정산 2건을 예약 상한 \$0\.0172/.test(x)), JSON.stringify(r.notes))
-      // 🔴 예약이 없는 미상 하나 → 상한도 모른다 → SUPPLY_COST_UNKNOWN 그대로
+      // 🔴 비용 — 미상 2건이 cohort 에 있으므로 결과당 단가를 확정하지 않는다(추정 예약액은 실제 비용도 그 한계도 아니다)
+      check('🔴 🔴 **사용량 미상 2건 → 결과당 비용 null · 추정 예약액 $0.0172446 은 보고만 · SUPPLY_COST_UNKNOWN 유지**',
+        c !== null && c.usdPerSlotValidResult === null && v.codes.includes('SUPPLY_COST_UNKNOWN') && !v.codes.includes('SUPPLY_COST_SHORT'),
+        JSON.stringify({ usd: c?.usdPerSlotValidResult, codes: v.codes }))
+      check('🔴 🔴 **최종 판정 — THROUGHPUT_SHORT + SUPPLY_COST_UNKNOWN · D10 BLOCK (FAIL)**',
+        v.verdict === 'FAIL' && v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
+      check('preflight 메모 — 미정산 2건 · 추정 예약액 $0.0172 · 실제 비용 아님',
+        (r.notes as string[]).some((x) => /미정산 2건 \(추정 예약액 \$0\.0172 — 실제 비용 아님\)/.test(x)), JSON.stringify(r.notes))
+      // 🔴 예약이 없는 미상이어도 같다 — SUPPLY_COST_UNKNOWN
       const d22 = ledgerLines.get('2026-10-08')!
       const noRes = d22.map((e) => (e.status === 'usageUnknown' ? { ...e, reservedUsd: null } : e))
       writeFileSync(join(ldir, '2026-10-08.jsonl'), `${noRes.map((e) => JSON.stringify(e)).join('\n')}\n`)
@@ -914,6 +915,13 @@ async function main(): Promise<void> {
       const vNo = judgeNextPreflight('d10', rNo.facts, RUNNER_GRID)
       check('🔴 🔴 **예약 없는 사용량 미상 → 결과당 비용 null · SUPPLY_COST_UNKNOWN 유지**',
         rNo.facts.readyCohort?.usdPerSlotValidResult === null && vNo.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(vNo.codes))
+      // 🔴 대조 — 미상이 정산됐다면(같은 장부 · 미상 줄을 정산 줄로) 그때만 결과당 비용이 선다
+      const allSettled = d22.map((e) => (e.status === 'usageUnknown' ? { ...e, status: 'settled' as const, settledUsd: 0.009 } : e))
+      writeFileSync(join(ldir, '2026-10-08.jsonl'), `${allSettled.map((e) => JSON.stringify(e)).join('\n')}\n`)
+      const rAll = await factsNow()
+      check('🟢 대조 — cohort 요청이 전부 정산 · 연결 완전일 때만 결과당 비용 확정(이 fixture 재생 안에서만 · 운영 장부 조작 아님)',
+        rAll.facts.readyCohort?.usdPerSlotValidResult !== null && rAll.facts.readyCohort !== null
+        && Math.abs((rAll.facts.readyCohort.usdPerSlotValidResult ?? 0) - (20 * 0.01 + 2 * 0.009) / 8) < 1e-9, JSON.stringify(rAll.facts.readyCohort))
       writeFileSync(join(ldir, '2026-10-08.jsonl'), `${d22.map((e) => JSON.stringify(e)).join('\n')}\n`)
       // 🔴 runId 불일치 — 창 안 행의 의도를 다른 창 안 회차로 옮긴다(그 회차 묶음엔 이 원천이 없다) → 불일치 · cohort 모름
       const one = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'p0r-20261008-051506-r0' }, select: { id: true, gateResults: true } })

@@ -525,10 +525,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
-      + ` (상한 없음 ${costAttribution.openUnbounded}건) · 현재 정산 $${costAttribution.totalUsd.toFixed(4)}`)
-  } else if (costAttribution !== null && costAttribution.openRequests > 0) {
-    notes.push(`🔴 공급 비용은 상한이다 — 미정산 ${costAttribution.openRequests}건을 예약 상한 $${costAttribution.openReservedUsd.toFixed(4)} 로 넣었다`
-      + ' (장부 상태는 그대로 · 사람 마감은 별도)')
+      + ` (추정 예약액 $${costAttribution.openReservedUsd.toFixed(4)} — 실제 비용 아님) · 현재 정산 $${costAttribution.totalUsd.toFixed(4)}`)
   }
   const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
     : { sources: worksetSources, ...fates, usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null }
