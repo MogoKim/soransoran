@@ -2054,3 +2054,19 @@ model AutoReadyAudit {
 
   @@index([defect])
 }
+
+/// 회원가입 전환 일별 집계 — 0031 migration. 정책: 회원가입 전환 영역 정본(MEMBER-CONVERSION-CANON.md) §8.
+///
+/// 🔴 회원가입 전환 **전용** 익명 발생 횟수다. 사람 단위 퍼널이 아니고 범용 이벤트 저장소가 아니다.
+/// 🔴 개인정보·회원 식별·콘텐츠 식별 열을 두지 않는다. 허용값은 `src/lib/signup-funnel.ts` 한 곳이 검증한다.
+/// 🔴 쓰기는 `src/lib/signup-funnel-store.ts` 의 upsert(+1) 하나뿐이다.
+model SignupFunnelDaily {
+  day         String
+  step        String
+  contentType String
+  entryPoint  String
+  count       Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@id([day, step, contentType, entryPoint])
+}

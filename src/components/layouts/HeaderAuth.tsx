@@ -1,13 +1,16 @@
 import Link from 'next/link'
 import { TOUCH_MIN } from '@/lib/spacing'
-import { auth } from '@/lib/auth'
-import { requireAdmin } from '@/lib/admin'
+import { checkAdminForUser } from '@/lib/admin'
+import { getRequestSession } from '@/lib/request-session'
 
 /**
  * 헤더 우측 인증 영역 — 서버 컴포넌트
  *
- * SessionProvider 를 두지 않고 서버에서 auth() 로 세션을 읽는다.
+ * SessionProvider 를 두지 않고 서버에서 세션을 읽는다.
  * 클라이언트 세션 훅을 쓰지 않는 현재 구조와 일관된다.
+ *
+ * 🔴 세션은 getRequestSession 으로 읽는다. 같은 요청의 콘텐츠 상세와 판정 한 번을 나눠 쓴다.
+ *    관리자 판정도 이미 읽은 세션의 id 로 한다 — auth() 를 다시 부르지 않는다.
  *
  * 비로그인   [로그인]
  * 로그인     (사람아이콘)
@@ -22,7 +25,7 @@ import { requireAdmin } from '@/lib/admin'
  *    세션의 이름은 로그인 시점 값이라, 닉네임을 바꿔도 다음 로그인까지 옛 이름이 남는다.
  */
 export default async function HeaderAuth() {
-  const session = await auth()
+  const session = await getRequestSession()
 
   if (!session?.user) {
     return (
@@ -35,7 +38,7 @@ export default async function HeaderAuth() {
     )
   }
 
-  const { ok: isAdmin } = await requireAdmin()
+  const { ok: isAdmin } = session.user.id ? await checkAdminForUser(session.user.id) : { ok: false }
 
   return (
     <div className="flex items-center gap-1">

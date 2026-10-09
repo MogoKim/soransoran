@@ -18,9 +18,10 @@ import {
   AdminSection,
   AdminTable,
 } from '@/components/admin/AdminUi'
+import MemberAdminTabs from '@/components/admin/MemberAdminTabs'
 
 /**
- * 고객 구성 — 실제 여성 가입 완료 고객의 연령 구성과 참여. 정본: MEMBER-CONVERSION-CANON.md v2.1 §7.
+ * 고객 구성 — 실제 여성 가입 완료 고객의 연령 구성과 참여. 정책: 회원가입 전환 영역 정본(MEMBER-CONVERSION-CANON.md) §11.
  *
  * 🔴 집계만 보여 준다. 이름·닉네임·이메일·전화번호·출생연도·회원 id·활동 목록이 이 화면에 없다 —
  *    loadCustomerComposition 이 숫자만 돌려준다.
@@ -31,7 +32,7 @@ import {
  * 🔴 "7일 내 참여" 는 재방문이 아니다. 같은 가입 세션에서 바로 쓴 것일 수 있다 — 방문 지표 이름으로
  *    부르지 않는다(금지 문구는 scripts/customer-composition-check.mts 가 본다).
  *
- * 🔴 운영 메뉴를 늘리지 않는다. /admin/members 아래라 「회원」 메뉴가 켜진다(AdminOpsNav isCurrent).
+ * 🔴 운영 메뉴를 늘리지 않는다. /admin/members 아래라 「회원」 메뉴가 켜지고, 회원 공통 하위 탭으로 오간다.
  */
 export const metadata: Metadata = { title: '고객 구성' }
 export const dynamic = 'force-dynamic'
@@ -95,10 +96,9 @@ export default async function AdminCustomerCompositionPage() {
     <main className="pt-2 lg:pt-0">
       <AdminPageHeader
         title="고객 구성"
-        backHref="/admin/members"
-        backLabel="← 회원"
         description={`집계 기준 ${formatKst(data.measuredAt)} · 분석연령 기준연도 ${data.baseYear}년(KST)`}
       />
+      <MemberAdminTabs current="composition" />
 
       <AdminSection
         title="실제 여성 가입 완료 고객"
