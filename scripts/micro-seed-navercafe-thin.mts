@@ -25,7 +25,7 @@ import { pathToFileURL } from 'node:url'
 
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
 import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
-import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
+import { safetyFilter, safetyReasonCodes } from './lib/micro-seed-safety-filter.mjs'
 import { violatesStorage } from '../src/lib/micro-seed-82cook-thin'
 import {
   SKIP_LABEL, CAFE_BODY_HEAD_CHARS, planCafeThin, keepAfterClassify, outPathOf,
@@ -187,7 +187,8 @@ async function main(): Promise<void> {
       collected: { ...r, originalTitle: title },
       maskedBody: masked, bodyHeadChars: BODY_HEAD_CHARS,
       axis, safetyVerdict,
-      safetyReasons: v.safety.reasons.map((x) => String(x)),
+      // 🔴 정본 code 만 — `String(사유 객체)` 는 "[object Object]" 였다(2026-10-10)
+      safetyReasons: safetyReasonCodes(v.safety.reasons),
       reason: String(v.reason), runId, fetchedAt: new Date().toISOString(),
     })
     // 🔴 저장 직전 마지막 관문 — 전문 컬럼이 섞였으면 통째로 멈춘다

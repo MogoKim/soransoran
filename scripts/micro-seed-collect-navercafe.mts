@@ -45,6 +45,7 @@ import {
 } from 'node:fs'
 
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
+import { safetyReasonCodes } from './lib/micro-seed-safety-filter.mjs'
 import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import { violatesStorage } from '../src/lib/micro-seed-82cook-thin'
 import { keepAfterClassify, outPathOf, thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
@@ -832,7 +833,8 @@ async function main() {
       const row = thinRowFromCollected({
         collected: r,
         maskedBody: masked, bodyHeadChars: BODY_HEAD_CHARS,
-        axis, safetyVerdict, safetyReasons: v.safety.reasons.map((x) => String(x)),
+        // 🔴 정본 code 만 — `String(사유 객체)` 는 "[object Object]" 였다(2026-10-10)
+        axis, safetyVerdict, safetyReasons: safetyReasonCodes(v.safety.reasons),
         reason: String(v.reason), runId: RUN_ID, fetchedAt: new Date().toISOString(),
       }) as unknown as Record<string, unknown>
       const bad = violatesStorage(row, BODY_HEAD_CHARS)
