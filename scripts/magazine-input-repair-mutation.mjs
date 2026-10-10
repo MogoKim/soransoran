@@ -62,6 +62,12 @@ const MUTATIONS = [
     find: '  if (!TX_PHASES[j.kind].includes(j.phase)) return fail(', replace: '  if (false) return fail(' }] },
   { name: 'P0 복구 실패 slug 를 막지 않음', edits: [{ file: F.lane,
     find: '  const targets = scan.targets.filter((t) => !blocked.has(t.slug))', replace: '  const targets = scan.targets' }] },
+  // ── ENOTDIR (2026-10-10 rehearsal 실측) ──
+  { name: 'ENOTDIR 디렉터리 필터 제거 (일반 파일·symlink 도 journal 후보)', edits: [{ file: F.lane,
+    find: '    if (!ent.isDirectory()) continue\n', replace: '' }] },
+  { name: 'ENOTDIR 순회 경계 처리 제거', edits: [{ file: F.lane,
+    find: "  try { return lstatSync(p) } catch (e) { if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return null; throw e }",
+    replace: "  try { return lstatSync(p) } catch (e) { if (e?.code === 'ENOENT') return null; throw e }" }] },
   // ── P1 brief 수리 실행권 ──
   { name: 'P1 같은 지문 영구 예약 무시 (회차 안에서만 기억)', edits: [{ file: F.quarantine,
     find: '    const prior = briefRepairRecord(e, fingerprint)', replace: '    const prior = null' }] },

@@ -252,12 +252,31 @@ export function recoverJournal({ draftsDir, slug }) {
   return { recovered: true, ok: true, phase: j.phase, rolledBack: !committed }
 }
 
-/** 원고 폴더 전체에서 남은 journal 을 처리한다 */
-export function recoverAllJournals(draftsDir) {
+/**
+ * 순회 경계에서만 쓰는 "이 자리에 journal 이 있는가".
+ * 🔴 ENOTDIR 은 "그 아래 journal 없음" 이다 — readdir 와 lstat 사이에 항목이 일반 파일로 바뀐 경우.
+ *    `lstatOrNull` 의 뜻은 넓히지 않는다 (필수 경로의 손상을 조용히 없음으로 만들지 않게).
+ */
+function journalAt(p) {
+  try { return lstatSync(p) } catch (e) { if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return null; throw e }
+}
+
+/**
+ * 원고 폴더 전체에서 남은 journal 을 처리한다.
+ *
+ * 🔴 **실제 디렉터리만 본다** (2026-10-10 rehearsal 실측).
+ *    앞판은 모든 항목을 디렉터리로 가정했다. runtime 원고 폴더에는 `topic-queue.ts` 일반 파일이 있어서
+ *    `topic-queue.ts/.input-repair-journal.json` 조회가 ENOTDIR 로 던졌고, 입력 수리 단계가 **매 회차**
+ *    대상 판정 전에 REPAIR_STAGE_FAILED 로 끝났다. 일반 파일 · 숨김 파일 · symlink 는 journal 후보가 아니다.
+ *    `list` 는 시험이 readdir 와 lstat 사이의 경합을 만드는 자리다.
+ */
+export function recoverAllJournals(draftsDir, { list = (d) => readdirSync(d, { withFileTypes: true }) } = {}) {
   const out = []
   if (!existsSync(draftsDir)) return out
-  for (const slug of readdirSync(draftsDir)) {
-    if (lstatOrNull(join(draftsDir, slug, JOURNAL_FILE))) out.push({ slug, ...recoverJournal({ draftsDir, slug }) })
+  for (const ent of list(draftsDir)) {
+    if (!ent.isDirectory()) continue
+    const slug = ent.name
+    if (journalAt(join(draftsDir, slug, JOURNAL_FILE))) out.push({ slug, ...recoverJournal({ draftsDir, slug }) })
   }
   return out
 }
