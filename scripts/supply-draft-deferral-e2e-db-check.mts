@@ -11,8 +11,10 @@
  *        자식이 제 시계로 여력 파일을 검증하면 "미래 기록" 으로 멈춘다.
  *   ② 화자 여력이 **전원 0** 인 회차 — AUTO_SEED 3건
  *      → provider 호출 0(장부 0줄) · picks 3건 전부 `personaCapacityDeferred` · `noDraft` 0 · artifact 0.
- *   ⑤ 부모 러너 `main --live` 를 **실제로** 돌린다 (2026-09-28 축별 자리) — seed 6 · raw 4(댓글이 더 많다) ·
- *      격리 DB 큐에 형제 1건 → 러너가 적은 묶음이 raw 2 · seed 5 (묶음 10) 이고 판정이 그 묶음만 봤는지 대조한다.
+ *   ⑤ 부모 러너 `main --live` 를 **실제로** 돌린다 (2026-10-10 P0-B1 JIT 선택) — seed 6 · raw 4(댓글이 더 많다) ·
+ *      격리 DB 큐에 형제 1건 → 러너가 적은 묶음이 seed 5(형제 뺀 전부) · raw 0(자동 소비자 없음 · 4건 제외 사유 기록)
+ *      이고 판정이 그 묶음만 봤는지 · 기회 스냅샷(opportunities-v2)이 자동 seed 5건만 적어 preflight 가 raw 를 증명일 기회로
+ *      세지 않는지 대조한다.
  *   ⑥ 부모 러너를 **두 회차** 돌린다 (2026-09-28 공급 가속 P0) — 발행된 형제 · 거절된 형제 · 옛 글의 원천은
  *      묶음에 들지 않고, 1회차가 적재한 원천은 2회차에 다시 뽑히지 않으며(중복 Queue 0 · Post 불변),
  *      장부의 judge ≤ 10 · draft ≤ 30 을 센다.
@@ -305,19 +307,20 @@ async function main(): Promise<void> {
 }
 
 /**
- * ⑤ 🔴 🔴 **부모 러너 `main --live` 를 실제로 돌려 묶음을 본다** (2026-09-28 축별 자리).
+ * ⑤ 🔴 🔴 **부모 러너 `main --live` 를 실제로 돌려 묶음을 본다** (2026-10-10 P0-B1 JIT 선택).
  *
- *    순수 검사(`supply:workset-check` ⑩)는 `selectWorkset` 이 옳다는 것만 증명한다.
+ *    순수 검사(`supply:jit-selection-check`)는 `selectWorkset({ jit })` 이 옳다는 것만 증명한다.
  *    러너가 **그 함수의 결과로** 묶음 파일을 쓰는지는 러너를 돌려야 안다 — 그래서 여기서 돈다.
  *    · 큐 스냅샷은 **이 격리 DB** 에서 러너가 직접 읽는다 (같은 원문의 미발행 형제 1건을 넣어 둔다)
- *    · fixture 는 raw 의 댓글 수가 더 크다 — 옛 규칙이면 raw 4 · seed 1 이다
+ *    · fixture 는 raw 의 댓글 수가 더 크다 — 순위로만 고르면 raw 가 앞선다. raw 는 자동 소비자가 없어
+ *      자동 유료 묶음에서 빠지고(마스터 결정 2026-10-10), 그 사유가 선택 trace 에 원천마다 남아야 한다
  *    · provider 는 가짜다(`fake-provider-hook`) — 네트워크 0 · 운영 장부 0
  *    🔴 임시 cwd 는 ①~④ 와 **따로** 만든다 — 앞 절의 파일이 이 회차 입력에 섞이지 않게.
  */
 async function worksetAxisRunner(
   prisma: InstanceType<typeof import('@prisma/client').PrismaClient>, codes: readonly string[],
 ): Promise<void> {
-  console.log('\n⑤ 🔴 🔴 부모 러너(main --live)가 축별 자리로 묶음을 고른다 — 격리 DB 큐 · 가짜 provider')
+  console.log('\n⑤ 🔴 🔴 부모 러너(main --live)가 JIT 선택으로 묶음을 고른다 — raw 0 · 형제 제외 · 격리 DB 큐 · 가짜 provider')
   const { PROVEN_LANES, SEED_AXIS, RAW_AXIS } = await import('../src/lib/micro-seed-auto-judge')
   const T2 = realpathSync(mkdtempSync(join(tmpdir(), 'soran-wsaxis-cwd-')))
   for (const x of ['scripts', 'src', 'package.json', 'tsconfig.json']) cpSync(join(REPO, x), join(T2, x), { recursive: true })
@@ -379,7 +382,7 @@ async function worksetAxisRunner(
       // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
       ...LAST_SLOT_SCHEDULED_ENV,
       // 🔴 JIT(2026-10-04 P0-2) — 유료 원천 수 = 부족 슬롯 수다. 표식 없는 d1 이면 부족 1 → 묶음 1 이라
-      //    축별 자리를 볼 수 없다. 결정이 넣은 모양(표식 포함) d10 → 다음 증명일 슬롯 10 · 부족 10 · 묶음 천장 10
+      //    묶음 선택을 볼 수 없다. 결정이 넣은 모양(표식 포함) d10 → 다음 증명일 슬롯 10 · 부족 10 · 묶음 천장 10
       ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
       FAKE_PROVIDER_LOG: fakeLog,
     },
@@ -390,20 +393,51 @@ async function worksetAxisRunner(
     : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] }
   check('🔴 러너가 실제로 돌아 묶음 파일을 적었다', ws !== null, `출력 끝: ${out.slice(-600)}`)
   const got = ws?.sources.map((s) => s.sourceArticleId).join(',') ?? ''
-  // 🔴 묶음 10 (2026-09-28) — raw 자리 2 · seed 는 형제를 뺀 5건 전부. 옛 규칙(댓글 순)이면 raw 4 가 먼저 든다
-  check('🔴 🔴 **러너가 적은 묶음 = raw 2 (댓글 상위) + seed 5 (형제 뺀 전부)** — raw 는 최대 2 · 빈 자리를 raw 로 채우지 않는다',
-    got === 'wsxw1,wsxw2,wsxs2,wsxs3,wsxs4,wsxs5,wsxs6', got)
+  // 🔴 묶음 상한 10 · 부족 슬롯 10 — seed 는 형제를 뺀 5건 전부(정본 순위 순) · raw 는 0. 댓글 순이면 raw 4 가 먼저 든다
+  check('🔴 🔴 **러너가 적은 묶음 = seed 5 (형제 뺀 전부 · 정본 순위 순) 정확히** — wsxs2~wsxs6',
+    got === 'wsxs2,wsxs3,wsxs4,wsxs5,wsxs6', got)
+  check('🔴 🔴 **raw 선택 정확히 0** — 댓글이 더 많은 raw 4건이 하나도 묶음에 들지 않는다',
+    ws !== null && ws.sources.filter((s) => s.sourceArticleId.startsWith('wsxw')).length === 0, got)
   check('🔴 🔴 **러너가 격리 DB 큐를 읽어 형제를 뺐다** — wsxs1 없음 · 제외 사유 1건',
     ws !== null && !ws.sources.some((s) => s.sourceArticleId === 'wsxs1') && /같은 원문의 미발행 형제가 큐에 있다 1/.test(out))
-  check('🔴 러너 로그가 축별 자리를 적는다 (정본 plan.axis)',
-    /축 {2}seed 적격 5 · 자리 5 · 고름 5 {2}\| {2}raw 적격 4 · 자리 2 · 고름 2/.test(out),
-    (/축 .*/.exec(out) ?? [''])[0])
+  // 🔴 raw 4건 — 러너가 쓴 선택 trace(v2)에 원천마다 RAW_NOT_AUTO_CONSUMED 로 남는다(원천 해시로 대조) · 로그에도 같은 수
+  const { articleIdHashOf } = await import('../src/lib/source-slot-release')
+  const { readSupplySelectionTrace, selectionTraceFileName } = await import('../src/lib/supply-selection-trace')
+  const traceFile = ws === null ? '' : join(D2, selectionTraceFileName(ws.runId))
+  const traced = traceFile !== '' && existsSync(traceFile) ? readSupplySelectionTrace(JSON.parse(readFileSync(traceFile, 'utf-8'))) : null
+  const rawHashes = ['wsxw1', 'wsxw2', 'wsxw3', 'wsxw4'].map((id) => articleIdHashOf('navercafe:wgang', id)).sort()
+  const rawReasoned = traced?.ok === true && traced.version === 'v2'
+    ? traced.trace.candidates.filter((c) => c.reason === 'RAW_NOT_AUTO_CONSUMED').map((c) => c.sourceHash).sort() : []
+  check('🔴 🔴 **raw 후보 4건이 정확히 RAW_NOT_AUTO_CONSUMED 사유로 제외됐다** — 러너가 쓴 선택 trace v2 · 원천 해시 대조 · 불일치 0',
+    traced?.ok === true && traced.version === 'v2' && JSON.stringify(rawReasoned) === JSON.stringify(rawHashes)
+    && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 5,
+    traced === null ? 'trace 없음' : traced.ok ? `제외 ${rawReasoned.length}` : traced.problems.join(','))
+  // 🔴 (P0-B1 정합) 기회 스냅샷 = 자동 seed 전용(opportunities-v2) — preflight 의 실제 함수로 세어도 raw 는 증명일 기회가 아니다
+  const { latestOpportunities, sourceOpportunitiesOf } = await import('./lib/stage-preflight-facts.mjs')
+  const { OPPORTUNITY_VERSION } = await import('../src/lib/supply-workset')
+  const oppFile = readdirSync(D2).find((f) => /^supply-opportunities-.*\.json$/.test(f))
+  const opp = oppFile === undefined ? null
+    : JSON.parse(readFileSync(join(D2, oppFile), 'utf-8')) as { version: string; takenAt: string; evidence: { provenance: { articleIdHash: string | null } }[] }
+  const seedHashes = ['wsxs2', 'wsxs3', 'wsxs4', 'wsxs5', 'wsxs6'].map((id) => articleIdHashOf('navercafe:wgang', id)).sort()
+  const oppHashes = (opp?.evidence ?? []).map((e) => e.provenance.articleIdHash ?? '').sort()
+  check('🔴 🔴 **기회 스냅샷 = opportunities-v2 · 자동 seed 5건 정확히(형제 wsxs1 제외) · raw 4건 미포함**',
+    opp !== null && opp.version === OPPORTUNITY_VERSION && JSON.stringify(oppHashes) === JSON.stringify(seedHashes)
+    && !oppHashes.some((h) => rawHashes.includes(h)), opp === null ? '스냅샷 없음' : `${opp.version} · ${oppHashes.length}건`)
+  const latest = opp === null ? null : latestOpportunities(D2, Date.parse(opp.takenAt) + 1000)
+  const sourceOpps = latest?.evidence == null ? [] : sourceOpportunitiesOf(latest.evidence, new Set(), new Date(opp!.takenAt))
+  const oppKeys = sourceOpps.map((o) => o.key.replace(/^src:/, '')).sort()
+  check('🔴 🔴 **preflight 가 raw 를 증명일 기회로 세지 않는다** — 정본 판독(latestOpportunities → sourceOpportunitiesOf) 기회 = seed 5 · raw 0',
+    latest?.evidence != null && JSON.stringify(oppKeys) === JSON.stringify(seedHashes) && !oppKeys.some((h) => rawHashes.includes(h)),
+    `기회 ${oppKeys.length}`)
+  check('🔴 러너 로그가 JIT 선택 사실과 raw 제외 사유를 적는다',
+    /연결 가능 seed 5 · raw 제외 4 · 재시도 예약 0\/0/.test(out) && /원문 그대로\(raw\) 축 — 자동 소비자가 없다[^\n]* 4/.test(out),
+    (/부족 슬롯 .*/.exec(out) ?? [''])[0])
   const shadowFile = ws === null ? '' : join(D2, `auto-judge-${ws.runId}.shadow.jsonl`)
   const judged = shadowFile !== '' && existsSync(shadowFile)
     ? readFileSync(shadowFile, 'utf-8').split('\n').filter((l) => l.trim() !== '')
       .map((l) => (JSON.parse(l) as { sourceArticleId: string }).sourceArticleId)
     : []
-  check('🔴 🔴 **판정 단계가 그 묶음만 판정했다** — 묶음 밖 raw 2건 · 형제 0건',
+  check('🔴 🔴 **판정 단계가 그 묶음만 판정했다** — raw 4건 · 형제 0건 판정 없음',
     ws !== null && same(judged, ws.sources.map((s) => s.sourceArticleId)), `판정 ${judged.join(',')}`)
   rmSync(T2, { recursive: true, force: true })
 }

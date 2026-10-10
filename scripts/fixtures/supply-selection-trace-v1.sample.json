@@ -1,0 +1,215 @@
+{
+  "kind": "supply-selection-trace",
+  "version": "selection-trace-v1",
+  "runId": "20261008-000000",
+  "takenAt": "2026-10-08T00:00:00.000Z",
+  "limit": 2,
+  "cap": 2,
+  "jit": true,
+  "slots": [
+    "2026-10-08T01:00:00.000Z",
+    "2026-10-09T06:00:00.000Z"
+  ],
+  "worksetDigest": "67b4a4a64d0254ab646ab99df7f5e11ef3e2d35c33ac59fb36c13de30e01cf85",
+  "candidates": [
+    {
+      "sourceHash": "2adc5bfbead840bfbdafb927e36411ff0757fde29f64409600aa7bc57cbe8a0d",
+      "source": "navercafe:remonterrace",
+      "axis": "raw",
+      "retry": false,
+      "retryTier": null,
+      "retryWaitedH": null,
+      "slotAgesH": [
+        6,
+        35
+      ],
+      "lastValidSlot": 1,
+      "assignedSlot": 1,
+      "edfRound": 1,
+      "edf": "ASSIGNED",
+      "selectStep": "FRESH_PICKED",
+      "rank": {
+        "commentsPct": 0.9,
+        "viewsPct": 0.6,
+        "ageAtSlotH": 35,
+        "velocity": null
+      },
+      "sourceAgeH": 35,
+      "freshnessBand": "24-72h",
+      "selected": true,
+      "position": 0,
+      "reason": "SELECTED_FRESH",
+      "menopauseCore": false,
+      "wgangSource": false
+    },
+    {
+      "sourceHash": "780352013d80b9a2f24cd13e5911e3275a4d7d4278da96228a9b8c1ae96d1db6",
+      "source": "navercafe:remonterrace",
+      "axis": "seed",
+      "retry": false,
+      "retryTier": null,
+      "retryWaitedH": null,
+      "slotAgesH": [
+        61,
+        null
+      ],
+      "lastValidSlot": 0,
+      "assignedSlot": 0,
+      "edfRound": 1,
+      "edf": "ASSIGNED",
+      "selectStep": "FRESH_PICKED",
+      "rank": {
+        "commentsPct": 0.4,
+        "viewsPct": 0.6,
+        "ageAtSlotH": 61,
+        "velocity": null
+      },
+      "sourceAgeH": 61,
+      "freshnessBand": "24-72h",
+      "selected": true,
+      "position": 1,
+      "reason": "SELECTED_FRESH",
+      "menopauseCore": false,
+      "wgangSource": false
+    },
+    {
+      "sourceHash": "965af814654ff8deee951c0ac4c092a149f621650a81594f6ceff15c02edc86a",
+      "source": "navercafe:wgang",
+      "axis": "seed",
+      "retry": false,
+      "retryTier": null,
+      "retryWaitedH": null,
+      "slotAgesH": [
+        4,
+        33
+      ],
+      "lastValidSlot": 1,
+      "assignedSlot": null,
+      "edfRound": null,
+      "edf": "NOT_MATCHED",
+      "selectStep": "SLOT_UNASSIGNED",
+      "rank": {
+        "commentsPct": 0.95,
+        "viewsPct": 0.6,
+        "ageAtSlotH": 4,
+        "velocity": null
+      },
+      "sourceAgeH": 4,
+      "freshnessBand": "3-6h",
+      "selected": false,
+      "position": null,
+      "reason": "EDF_NOT_MATCHED",
+      "menopauseCore": true,
+      "wgangSource": true
+    }
+  ],
+  "summary": {
+    "identityMissing": 0,
+    "candidates": 3,
+    "selected": 2,
+    "fresh": {
+      "candidates": 3,
+      "selected": 2
+    },
+    "retry": {
+      "candidates": 0,
+      "selected": 0
+    },
+    "menopauseCore": {
+      "candidates": 1,
+      "selected": 0
+    },
+    "wgang": {
+      "candidates": 1,
+      "selected": 0
+    },
+    "menopauseWgang": {
+      "candidates": 1,
+      "selected": 0
+    },
+    "byReason": {
+      "HUMAN_DECIDED": 0,
+      "QUEUE_SIBLING": 0,
+      "ALREADY_QUEUED": 0,
+      "CARRIED_OVER": 0,
+      "TERMINAL": 0,
+      "HARD_BLOCKED": 0,
+      "PRE_GATED": 0,
+      "SLOT_INELIGIBLE": 0,
+      "EVIDENCE_UNKNOWN": 0,
+      "SLOT_UNLINKABLE": 0,
+      "EDF_NOT_MATCHED": 1,
+      "EDF_CAP_CUT": 0,
+      "AXIS_QUOTA_ZERO": 0,
+      "AXIS_QUOTA_FULL": 0,
+      "FRESH_DISPLACED_BY_RETRY_RESERVE": 0,
+      "FRESH_RANK_CUT": 0,
+      "RETRY_LIMIT_CUT": 0,
+      "SELECTED_FRESH": 2,
+      "SELECTED_RETRY_RESERVED": 0,
+      "SELECTED_RETRY_FILLED": 0,
+      "TRACE_MISMATCH": 0
+    },
+    "menopauseByReason": {
+      "HUMAN_DECIDED": 0,
+      "QUEUE_SIBLING": 0,
+      "ALREADY_QUEUED": 0,
+      "CARRIED_OVER": 0,
+      "TERMINAL": 0,
+      "HARD_BLOCKED": 0,
+      "PRE_GATED": 0,
+      "SLOT_INELIGIBLE": 0,
+      "EVIDENCE_UNKNOWN": 0,
+      "SLOT_UNLINKABLE": 0,
+      "EDF_NOT_MATCHED": 1,
+      "EDF_CAP_CUT": 0,
+      "AXIS_QUOTA_ZERO": 0,
+      "AXIS_QUOTA_FULL": 0,
+      "FRESH_DISPLACED_BY_RETRY_RESERVE": 0,
+      "FRESH_RANK_CUT": 0,
+      "RETRY_LIMIT_CUT": 0,
+      "SELECTED_FRESH": 0,
+      "SELECTED_RETRY_RESERVED": 0,
+      "SELECTED_RETRY_FILLED": 0,
+      "TRACE_MISMATCH": 0
+    },
+    "wgangByReason": {
+      "HUMAN_DECIDED": 0,
+      "QUEUE_SIBLING": 0,
+      "ALREADY_QUEUED": 0,
+      "CARRIED_OVER": 0,
+      "TERMINAL": 0,
+      "HARD_BLOCKED": 0,
+      "PRE_GATED": 0,
+      "SLOT_INELIGIBLE": 0,
+      "EVIDENCE_UNKNOWN": 0,
+      "SLOT_UNLINKABLE": 0,
+      "EDF_NOT_MATCHED": 1,
+      "EDF_CAP_CUT": 0,
+      "AXIS_QUOTA_ZERO": 0,
+      "AXIS_QUOTA_FULL": 0,
+      "FRESH_DISPLACED_BY_RETRY_RESERVE": 0,
+      "FRESH_RANK_CUT": 0,
+      "RETRY_LIMIT_CUT": 0,
+      "SELECTED_FRESH": 0,
+      "SELECTED_RETRY_RESERVED": 0,
+      "SELECTED_RETRY_FILLED": 0,
+      "TRACE_MISMATCH": 0
+    },
+    "edfOlderOverFresher": 2,
+    "freshDisplacedByRetryReserve": 0,
+    "axisQuotaDropped": 0,
+    "mismatches": 0
+  },
+  "shadow": {
+    "population": 3,
+    "qualityUnknown": 0,
+    "noStrictTie": 3,
+    "strictTieGroups": 0,
+    "strictTieCandidates": 0,
+    "menopauseCouldReorder": 0,
+    "wgangCouldReorder": 0,
+    "menopause": "NO_STRICT_TIE",
+    "wgang": "NO_STRICT_TIE"
+  }
+}

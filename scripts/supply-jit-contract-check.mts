@@ -235,12 +235,22 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     check('🔴 🔴 창 안 묶음 하나 손상 → 원천 수 모름(null) — 손상 파일을 빼고 20 으로 세지 않는다',
       worksetSourcesIn(dir, from, to) === null)
     const snap = (runId: string, body: string): void => writeFileSync(join(dir, opportunitiesFileName(runId)), body)
-    snap('20261003-031500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v1', runId: '20261003-031500',
+    // 🔴 (2026-10-10 P0-B1) 스냅샷은 opportunities-v2(자동 seed 전용)만 증거다
+    snap('20261003-031500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v2', runId: '20261003-031500',
       takenAt: '2026-10-03T03:15:00.000Z', slotAt: '2026-10-03T03:00:00.000Z', evidence: [] }))
-    check('🔴 기회 스냅샷 정상 → 읽힌다', latestOpportunities(dir, NOW.getTime()).evidence?.length === 0)
+    check('🔴 기회 스냅샷 정상(v2) → 읽힌다', latestOpportunities(dir, NOW.getTime()).evidence?.length === 0)
+    snap('20261003-091500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v1', runId: '20261003-091500',
+      takenAt: '2026-10-03T09:15:00.000Z', slotAt: '2026-10-03T09:00:00.000Z', evidence: [] }))
+    const legacy = latestOpportunities(dir, NOW.getTime())
+    check('🔴 🔴 가장 최근 스냅샷이 옛 판(v1 · raw 포함)이면 모름(null · LEGACY_CONTRACT) — 더 오래된 v2 로도 내려가지 않는다',
+      legacy.evidence === null && legacy.issue === 'LEGACY_CONTRACT', JSON.stringify(legacy))
+    snap('20261003-111500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v2', runId: '20261003-111500',
+      takenAt: '2026-10-03T11:15:00.000Z', slotAt: '2026-10-03T11:00:00.000Z', evidence: [] }))
+    check('🔴 v1 뒤에 새 회차가 v2 를 쓰면 정상 복구', latestOpportunities(dir, NOW.getTime()).evidence?.length === 0)
     snap('20261003-131500', '{ 손상')
-    check('🔴 🔴 가장 최근 기회 스냅샷 손상 → 모름(null) — 더 오래된 스냅샷으로 내려가지 않는다',
-      latestOpportunities(dir, NOW.getTime()).evidence === null)
+    const corrupt = latestOpportunities(dir, NOW.getTime())
+    check('🔴 🔴 가장 최근 기회 스냅샷 손상 → 모름(null · CORRUPT) — 더 오래된 스냅샷으로 내려가지 않는다',
+      corrupt.evidence === null && corrupt.issue === 'CORRUPT')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -424,15 +434,29 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
   const runner = strip('scripts/supply-process.mts')
   check('🔴 러너 유료 묶음 = paidSourcesFor(부족분 · 결말 수율 상한) — 고정 WORKSET_LIMIT 로 판정 · 생성하지 않는다',
     /const paid = paidSourcesFor\(\{ deficit: policy\.upTo, yieldHigh: before\?\.sourceYield\?\.high \?\? null, cap: WORKSET_LIMIT \}\)/.test(runner)
-    && /judgeStageBudget\(PAID_LIMIT\)/.test(runner) && /intendedSlotOf,\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
+    && /judgeStageBudget\(PAID_LIMIT\)/.test(runner)
+    // 🔴 (2026-10-10 P0-B1) 배정 · 선택은 `selectWorkset({ jit })` 하나 — 상한은 같은 PAID_LIMIT
+    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
     && !/judgeStageBudget\(WORKSET_LIMIT\)/.test(runner) && !/limit: WORKSET_LIMIT, runId/.test(runner))
   check('🔴 묶음은 수요가 있을 때만 만든다(policy.llm) — 수요 0 이면 판정 · 생성 0',
-    /if \(policy\.llm\) \{\s*const assigned = assignSourceSlots\(\{\s*rows: worksetEligibility\(eligibilityInput\)\.eligible, slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT,/.test(runner)
-    && /const plan = selectWorkset\(/.test(runner))
+    /if \(policy\.llm\) \{\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
+    && !/assignSourceSlots|intendedSlotOf/.test(runner))
   check('🔴 🔴 원천은 부족 슬롯 각각의 시각에 판정 — 배정 슬롯에서 다시 판정 · nextSlotAt 하나로 모두 판정하지 않는다',
     /: \(before\?\.jit\?\.unfilled \?\? \[\]\)/.test(runner)
-    && /return d === null \? releaseOf\(r\) : preGenerationRelease\(r, d, RUN_AT\)/.test(runner)
+    // 🔴 (2026-10-10 P0-B1) 슬롯별 판정 · 배정 슬롯 재판정은 JIT 선택 안에 있다(정본 `preGenerationRelease`)
+    && /const valid = slots\.map\(\(d\) => preGenerationRelease\(r, d, jit\.now\)\.verdict === 'eligible'\)/.test(strip('src/lib/supply-workset.ts'))
+    && /ageAtSlotH: preGenerationRelease\(c\.r, d, jit\.now\)\.rank\.ageAtSlotH \?\? 0/.test(strip('src/lib/supply-workset.ts'))
     && !/preGenerationRelease\(r, nextSlotAt, RUN_AT\)/.test(runner))
+  {
+    const wsrc = strip('src/lib/supply-workset.ts')
+    const jitBody = wsrc.slice(wsrc.indexOf('function selectJitWorkset'), wsrc.indexOf('function selectJitWorkset') + 4000)
+    check('🔴 🔴 (2026-10-10 P0-B1) 자동 공급 가능 판정은 정본 하나 — 지금 계약은 seed 만 · JIT 선택과 기회 스냅샷이 같은 함수를 부른다',
+      /export const isAutoSupplyConsumable = \(r: WorksetRow\): boolean => worksetAxisOf\(r\) === 'seed'/.test(wsrc)
+      && /if \(!isAutoSupplyConsumable\(r\)\) \{ rawExcluded \+= 1;/.test(jitBody) && !/worksetAxisOf\(r\) === 'raw'|RAW_AXIS/.test(jitBody)
+      && /const opp = worksetEligibility\(eligibilityInput\)\.eligible\.filter\(isAutoSupplyConsumable\)\.flatMap/.test(runner)
+      && /version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT\.toISOString\(\)/.test(runner)
+      && /export const OPPORTUNITY_VERSION = 'opportunities-v2'/.test(wsrc))
+  }
   check('🔴 러너 수율은 preflight 와 같은 판독(readReadyCohort) · 같은 짝짓기 열쇠(jit.matched)',
     /readReadyCohort\(prisma, \{/.test(runner) && /matched: new Set\(jit\.matched\), horizon: jit\.horizon/.test(runner))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')

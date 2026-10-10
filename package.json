@@ -210,6 +210,7 @@
     "stage:ready-loss-check": "tsx scripts/ready-loss-contract-check.mts",
     "supply:jit-contract-check": "tsx scripts/supply-jit-contract-check.mts",
     "supply:selection-trace-check": "tsx scripts/supply-selection-trace-check.mts",
+    "supply:jit-selection-check": "tsx scripts/supply-jit-selection-check.mts",
     "check:political-axis": "tsx scripts/political-axis-contract-check.mts",
     "stage:probe": "tsx scripts/stage-decision-probe.mts",
     "publish:machine-review": "tsx scripts/original-post-machine-review.mts",
