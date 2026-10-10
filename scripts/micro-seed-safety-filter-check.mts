@@ -15,9 +15,13 @@
  */
 import { readFileSync } from 'node:fs'
 import {
-  safetyFilter, passesSafety, isVolatile, NOTICE_LABELS,
+  safetyFilter, passesSafety, isVolatile, NOTICE_LABELS, safetyReasonCodes, INVALID_SAFETY_REASON_CODE,
   type SafetyInput, type SafetyReasonCode, type SafetyVerdict,
 } from './lib/micro-seed-safety-filter.mjs'
+import { toThinRow } from '../src/lib/micro-seed-82cook-thin'
+import { thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
+import { toDetailRecord } from '../src/lib/micro-seed-82cook-thin-adapt'
+import { KNOWN_SAFETY_CODES, mergeJudgeRows, readReasons } from '../src/lib/micro-seed-auto-judge'
 import { ROW_LABELS } from './lib/micro-seed-navercafe.mjs'
 import { findPoliticalTopicHit } from './lib/micro-seed-quality.mjs'
 
@@ -383,6 +387,73 @@ console.log('\n⑪ 이 필터가 하지 않는 것 — 🔴 발행·fetch·DB·S
     const c = codes('인공관절 수술 받았어요', '작년에 수술 받고 재활 중이에요. 요즘 걷기 좋네요.')
     return !c.includes('medicalDecisionRequest') && !c.includes('healthEfficacyClaim')
   })())
+}
+
+/**
+ * ─────────────────────────────────────────────────────────
+ * 🔴 ⑬ 저장 사유는 정본 `code` 만 (2026-10-10 P0)
+ *
+ *    세 생산 경로가 `String(사유 객체)` 로 "[object Object]" 를 저장했다(2026-09-07 부터 362행).
+ *    판정기는 그 글자를 모르는 사유로 읽어 안전 pass 원천 20건까지 HOLD 했고, 실제 사유는 지워졌다.
+ * ─────────────────────────────────────────────────────────
+ */
+{
+  console.log('\n🔴 ⑬ 저장 사유 직렬화 — code 만 · 왕복 · 세 생산 경로 같은 계약')
+  const NOTE = '노트원문표식XYZ http://example.com me@example.com'
+  check('🟢 사유 1개 {code, note} → code 1개만',
+    JSON.stringify(safetyReasonCodes([{ code: 'promotion', note: NOTE }])) === '["promotion"]')
+  check('🟢 사유 여러 개 → 순서와 code 보존',
+    JSON.stringify(safetyReasonCodes([{ code: 'volatile', note: 'a' }, { code: 'hostility', note: 'b' }, { code: 'access', note: 'c' }]))
+      === '["volatile","hostility","access"]')
+  check('🟢 빈 사유 → 빈 결과', safetyReasonCodes([]).length === 0)
+  const weird: unknown[] = [{ code: '' }, { note: 'only' }, null, 7, 'promotion', { code: 'a|b' }, { code: 'x:y' }, { code: ['nested'] }, {}]
+  const weirdOut = safetyReasonCodes(weird)
+  check('🔴 빈 code · 문자열 아님 · 객체 아님 · 하류 구분자(| :)를 담은 code → 지어내지 않고 무효 표식(fail-closed)',
+    weirdOut.length === weird.length && weirdOut.every((c) => c === INVALID_SAFETY_REASON_CODE))
+  check('🔴 무효 표식은 판정기가 아는 코드가 아니다 → unknownReason(HOLD) 으로 읽힌다',
+    !KNOWN_SAFETY_CODES.includes(INVALID_SAFETY_REASON_CODE)
+    && JSON.stringify(readReasons(INVALID_SAFETY_REASON_CODE)) === '["unknownReason"]')
+  const all = JSON.stringify([...safetyReasonCodes([{ code: 'promotion', note: NOTE }]), ...weirdOut])
+  check('🔴 출력에 "[object Object]" · note · 원문 · URL · 이메일 없음',
+    !all.includes('[object Object]') && !all.includes('노트원문표식') && !all.includes('http') && !all.includes('@'))
+
+  // 🔴 실제 필터가 낸 사유 — 안전 pass 이면서 비차단 사유(volatile)가 붙는 입력도 code 를 잃지 않는다
+  const real = safetyFilter({ title: '펑 할게요 남편이랑 오늘 크게 다퉜어요', body: '저녁 먹다가 말다툼이 시작됐어요. 다들 이럴 때 어떻게 하세요?' })
+  const realCodes = safetyReasonCodes(real.reasons)
+  check('🟢 안전 pass + 비차단 사유(volatile) → code 를 그대로 저장',
+    real.verdict === 'pass' && realCodes.includes('volatile') && realCodes.length === real.reasons.length,
+    `${real.verdict} ${JSON.stringify(realCodes)}`)
+
+  // 🔴 왕복 — 생산 경로가 쓰는 thin 조립(82cook · 네이버) → adapt 상세 행 → 판정기 입력 → readReasons
+  const codesIn = safetyReasonCodes([{ code: 'volatile', note: NOTE }, { code: 'hostility', note: NOTE }, { code: 'access', note: NOTE }])
+  const base = {
+    maskedBody: '본문 머리입니다. 사람들이 반응한 이야기예요.', bodyHeadChars: 300, axis: 'seedOriginality', safetyVerdict: 'pass',
+    safetyReasons: codesIn, reason: 'ok', runId: '20261010-000000', fetchedAt: '2026-10-10T00:00:00.000Z',
+  }
+  const cookThin = toThinRow({ ...base, id: 'rt-1', url: '', title: '제목입니다', commentCount: 3, score: 0 })
+  const cafeThin = thinRowFromCollected({
+    ...base, collected: { sourceArticleId: 'rt-2', sourceSite: 'navercafe:wgang', sourceUrl: '', originalTitle: '제목입니다', sourceCommentCount: 3 },
+  })
+  const back = (thin: unknown): string[] => {
+    const [inp] = mergeJudgeRows([{ kind: 'detail', row: toDetailRecord(thin as Parameters<typeof toDetailRecord>[0]) }])
+    return readReasons(String(inp?.safetyReasons ?? ''))
+  }
+  const want = '["volatile","hostility","accessNotOk"]'
+  check('🟢 왕복 — 82cook · 네이버 thin 이 같은 글자로 저장하고 판정기가 code 를 정확히 다시 읽는다(access → accessNotOk 는 기존 판독 규칙)',
+    cookThin.safetyReasons === 'volatile|hostility|access' && cafeThin.safetyReasons === cookThin.safetyReasons
+    && JSON.stringify(back(cookThin)) === want && JSON.stringify(back(cafeThin)) === want,
+    `${cookThin.safetyReasons} · ${JSON.stringify(back(cookThin))}`)
+
+  // 🔴 세 생산 경로가 같은 helper 를 부른다 — 사유 객체를 문자열로 바꾸는 다른 길이 없다
+  const PRODUCERS = ['scripts/micro-seed-82cook-thin-detail.mts', 'scripts/micro-seed-collect-navercafe.mts', 'scripts/micro-seed-navercafe-thin.mts']
+  const srcs = PRODUCERS.map((f) => codeOf(readFileSync(f, 'utf-8')))
+  check('🔴 82cook · remonterrace/wgang 수집기 · 네이버 thin — 셋 다 safetyReasonCodes(v.safety.reasons)',
+    srcs.every((s) => (s.match(/safetyReasons: safetyReasonCodes\(v\.safety\.reasons\)/g) ?? []).length === 1))
+  check('🔴 셋 다 사유 객체를 String 으로 바꾸는 길이 없다',
+    srcs.every((s) => !/reasons\.map\(\s*(\(x\)\s*=>\s*String\(x\)|String)\s*\)/.test(s)))
+  const at = CODE.indexOf('export function safetyReasonCodes')
+  check('🔴 helper 자체도 String(사유) 를 쓰지 않는다',
+    at >= 0 && !/String\(r\)|map\(String\)/.test(CODE.slice(at, at + 600)))
 }
 
 /**

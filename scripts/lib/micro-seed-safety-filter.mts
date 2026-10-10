@@ -61,6 +61,28 @@ export type SafetyResult = {
 }
 
 /**
+ * 🔴 **저장할 수 없는 사유의 자리 표시** — 판정기(`readReasons`)가 모르는 코드라 `unknownReason`(HOLD)으로 읽는다.
+ *    잘못된 사유를 지우면 조용히 통과하고, 지어내면 거짓 근거가 된다 — 둘 다 하지 않는다(fail-closed).
+ */
+export const INVALID_SAFETY_REASON_CODE = 'invalidSafetyReason'
+
+/**
+ * 🔴 **thin 행에 저장하는 안전 사유 — 정본 식별자 `code` 만** (2026-10-10 P0).
+ *    앞판 세 생산 경로(82cook thin · 네이버 collector · 네이버 thin)는 `String(reason)` 으로 객체를
+ *    `"[object Object]"` 로 저장했다 — 2026-09-07 부터 362행. 판정기가 그 글자를 모르는 사유로 읽어
+ *    안전 pass 원천까지 HOLD 됐고, 실제 사유는 지워졌다.
+ *    · `note` · 원문 · URL · 작성자는 싣지 않는다
+ *    · 순서를 지킨다(사람이 읽는 순서 = 판정 순서)
+ *    · code 가 비었거나 문자열이 아니거나 하류 구분자(`|` `:` 공백)를 담으면 `INVALID_SAFETY_REASON_CODE`
+ */
+export function safetyReasonCodes(reasons: readonly unknown[]): string[] {
+  return reasons.map((r) => {
+    const code = r !== null && typeof r === 'object' ? (r as { code?: unknown }).code : undefined
+    return typeof code === 'string' && /^[A-Za-z][A-Za-z0-9]*$/.test(code) ? code : INVALID_SAFETY_REASON_CODE
+  })
+}
+
+/**
  * 🔴 **입력은 전부 옵션이다.** 목록 단계에서는 본문이 없다.
  *    없는 것을 근거로 판정하지 않는다 — "모르면 0 이 아니라 없음" 이다.
  */

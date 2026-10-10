@@ -36,7 +36,7 @@ import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
 // 🔴 정치·안전 판정의 정본은 기존 lib 이다. 규칙을 여기서 새로 쓰지 않는다
 import { judgePoliticsTitle } from './lib/micro-seed-navercafe.mjs'
-import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
+import { safetyFilter, safetyReasonCodes } from './lib/micro-seed-safety-filter.mjs'
 import { runIdOf } from './micro-seed-detail-fetch.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 // 🔴 raw 목록 job 과 **같은 차단기 정본**을 쓴다 — 두 번째 guard 를 만들지 않는다
@@ -262,7 +262,8 @@ async function main(): Promise<void> {
       bodyHeadChars: BODY_HEAD_CHARS,
       axis: String(v.axis),
       safetyVerdict: String(v.safety.verdict),
-      safetyReasons: v.safety.reasons.map((x) => String(x)),
+      // 🔴 정본 code 만 — `String(사유 객체)` 는 "[object Object]" 였다(2026-10-10)
+      safetyReasons: safetyReasonCodes(v.safety.reasons),
       // 🔴 읽기 실패가 있으면 그것을, 없으면 판정 근거를 남긴다
       reason: reason === '' ? v.reason : reason,
       runId,
