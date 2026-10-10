@@ -11,7 +11,8 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rm
 import { join, relative } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { readCalls, readGuard, sandboxGit, stageEnv } from './magazine-rehearsal-sandbox.mjs'
+import { REAL_GIT, readCalls, readGuard, sandboxGit, stageEnv } from './magazine-rehearsal-sandbox.mjs'
+import { createHash } from 'node:crypto'
 import { stripFormatContract } from './magazine-rehearsal-content.mjs'
 
 export const SPEED = 120
@@ -152,7 +153,12 @@ export async function collect(sb, { date }) {
   const originArticles = (sha) => L.parseArticlesSource(sandboxGit(['--git-dir', sb.origin, 'show', `${sha}:src/content/magazine/articles.ts`], sb.root))
   const mainSha = sandboxGit(['--git-dir', sb.origin, 'rev-parse', 'refs/heads/main'], sb.root)
   const before = new Set(originArticles(sb.baseline).map((a) => a.slug))
-  const added = originArticles(mainSha).filter((a) => !before.has(a.slug)).map((a) => ({ slug: a.slug, publishAt: a.publishAt ?? null, heroSrc: a.heroImage?.src ?? null }))
+  const blob = (rev) => { const r = spawnSync(REAL_GIT, ['--git-dir', sb.origin, 'cat-file', 'blob', rev]); return r.status === 0 ? r.stdout : null }
+  const added = originArticles(mainSha).filter((a) => !before.has(a.slug)).map((a) => {
+    const hero = a.heroImage?.src ? blob(`${mainSha}:public${a.heroImage.src}`) : null
+    return { slug: a.slug, publishAt: a.publishAt ?? null, medical: a.medical ?? null, heroSrc: a.heroImage?.src ?? null, heroImage: a.heroImage ?? null,
+      heroFile: hero ? { sha256: createHash('sha256').update(hero).digest('hex'), bytes: hero.length, riff: hero.subarray(0, 4).toString('latin1'), webp: hero.subarray(8, 12).toString('latin1') } : null }
+  })
   const ledger = readJson(join(sb.root, 'home', 'Library', 'Application Support', 'soransoran', 'magazine-quarantine.json'))
   const runFiles = {}
   for (const d of [date, ...(sb.extraDates ?? [])]) {
@@ -165,9 +171,12 @@ export async function collect(sb, { date }) {
       initial: count((c) => c.tool === 'chatgpt' && c.kind === 'initial'),
       regen: count((c) => c.tool === 'chatgpt' && c.kind === 'regen'),
       repair: count((c) => c.tool === 'chatgpt' && c.kind === 'repair'),
-      bySlug: calls.filter((c) => c.tool === 'chatgpt' && c.slug).reduce((m, c) => ({ ...m, [`${c.slug}:${c.kind}`]: (m[`${c.slug}:${c.kind}`] ?? 0) + 1 }), {}),
+      bySlug: calls.filter((c) => c.tool === 'chatgpt' && c.slug && c.kind).reduce((m, c) => ({ ...m, [`${c.slug}:${c.kind}`]: (m[`${c.slug}:${c.kind}`] ?? 0) + 1 }), {}),
     },
     claude: calls.filter((c) => c.tool === 'claude' && c.slug).map((c) => ({ slug: c.slug, mode: c.mode })),
+    // generate·convert·reuse = hero runner 가 실제로 지난 단계 (trace) · image = 가짜 ChatGPT 이미지 호출
+    hero: { generate: count((c) => c.op === 'hero-trace-generate'), convert: count((c) => c.op === 'hero-trace-convert'), reuse: count((c) => c.op === 'hero-trace-reuse'), image: count((c) => c.op === 'hero-image') },
+    regenTyped: calls.filter((c) => c.tool === 'chatgpt' && c.kind === 'regen').map((c) => ({ slug: c.slug, typed: c.typed ?? '' })),
     prs: (gh?.prs ?? []).map((p) => ({ number: p.number, head: p.headRefName, state: p.state, merge: p.mergeCommit?.oid ?? null })),
     mergeCalls: calls.filter((c) => c.tool === 'gh' && c.args?.[0] === 'pr' && c.args?.[1] === 'merge').map((c) => ({ args: c.args, merged: c.merged ?? null, error: c.error ?? null })),
     deployments: (gh?.deployments ?? []).map((d) => ({ sha: d.sha, state: d.state })),

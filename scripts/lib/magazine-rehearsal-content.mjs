@@ -8,6 +8,11 @@
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import sharp from 'sharp'
+
+/** 가짜 ChatGPT 이미지 — 결정적 PNG (같은 sharp 로 같은 바이트). rehearsal 검사가 기대 변환 결과를 독립 계산할 때도 쓴다 */
+export const FIXTURE_HERO_SPEC = Object.freeze({ width: 1536, height: 1024, channels: 3, background: { r: 214, g: 180, b: 150 } })
+export const fixtureHeroPng = () => sharp({ create: FIXTURE_HERO_SPEC }).png().toBuffer()
 
 /** 뼈대 — 저장소에 추적된 합격본 (rehearsal 루트의 저장소 사본에서 읽는다) */
 export const SKELETON = Object.freeze({
@@ -65,7 +70,8 @@ export function ctaOf(briefText) {
 /**
  * 가짜 ChatGPT 원고 — brief 뼈대와 짝인 합격 원고(avoiding-gatherings) + 이 글의 제목·클러스터·의료 여부·반드시 넣을 문장·CTA.
  *    medical 은 실제 QA 정본(`MEDICAL_REQUIRED`)으로 정한다 — fixture 가 규칙을 따로 갖지 않는다.
- * @param {{repo:string, draftsDir:string, slug:string, item:object, mode?:'good'|'too-short'|'brief-echo', medicalRequired?:Set<string>}} p
+ * @param {{repo:string, draftsDir:string, slug:string, item:object, mode?:'good'|'too-short'|'brief-echo'|'qa-fail', medicalRequired?:Set<string>}} p
+ *   qa-fail  형식 관문은 통과하지만 실제 QA 가 결정적으로 막는 원고 — medical: true 인데 진료 권고 문장이 없다
  */
 export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medicalRequired = new Set() }) {
   const briefPath = join(draftsDir, slug, 'brief.md')
@@ -77,7 +83,7 @@ export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medi
   let body = skeleton.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/\n\[CTA\][^\n]*\n?$/, '\n').trimEnd()
   const title = item?.title ?? fm.title ?? slug
   const cluster = item?.cluster ?? fm.cluster ?? 'relationship'
-  const medical = medicalRequired.has(cluster) || String(fm.medical) === 'true'
+  const medical = mode === 'qa-fail' || medicalRequired.has(cluster) || String(fm.medical) === 'true'
   const cta = ctaOf(brief)
   if (mode === 'too-short') {
     return ['---', `title: ${title}`, `description: ${title}`, `cluster: ${cluster}`, `medical: ${medical}`, '---', '', '## 짧은 이야기', '', '짧습니다.', '', `[CTA] ${cta.href} | ${cta.label} | 남겨 주세요.`, ''].join('\n')

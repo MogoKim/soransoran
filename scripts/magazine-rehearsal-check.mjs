@@ -6,7 +6,7 @@
  *    PR/merge/배포 · 경계 합계 · 반복성 · runtime 불변을 여기서 다시 센다. 그래서 "실패 단계를 성공으로 적는"
  *    결함이나 "래퍼 대신 가짜 성공값" 결함은 orchestrator 가 초록이라고 해도 여기서 FAIL 이다.
  *
- *   node scripts/magazine-rehearsal-check.mjs                     전체 (S1~S6 + S1 반복)
+ *   node scripts/magazine-rehearsal-check.mjs                     전체 (S1~S7 + S1 반복)
  *   node scripts/magazine-rehearsal-check.mjs --scenario S1,S4    고른 시나리오만 (변이 시험이 쓴다)
  */
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
@@ -14,11 +14,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
+import sharp from 'sharp'
+import { FIXTURE_HERO_SPEC } from './lib/magazine-rehearsal-content.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
 const pick = argv.includes('--scenario') ? argv[argv.indexOf('--scenario') + 1] : null
-const ids = (pick ?? 'S1,S2,S3,S4,S5,S6').split(',')
+const ids = (pick ?? 'S1,S2,S3,S4,S5,S6,S7').split(',')
 const repeat = !pick || argv.includes('--repeat')
 
 let pass = 0
@@ -87,6 +90,12 @@ if (S.S1) {
   check('S1 PR 1 · merge 1 · --match-head-commit · 배포 1', e.prs.length === 1 && e.prs[0].state === 'MERGED' && e.mergeCalls.length === 1 && e.mergeCalls[0].args.includes('--match-head-commit') && e.deployments.length === 1, { prs: e.prs, merges: e.mergeCalls })
   check('S1 등록 = 대상 1건', e.registered.length === 1 && e.registered[0].slug === t, e.registered)
   check('S1 병합 직후 judgeDeploy 가 예약 404 를 확인했다', (S.S1.extras.apply?.deploy?.checked ?? []).some((c) => String(c).includes('404') && String(c).includes(t)) && S.S1.extras.apply?.deploy?.state === 'success', S.S1.extras.apply?.deploy)
+  // 🔴 기대 hero 바이트를 여기서 따로 계산한다 — fixture PNG 를 운영 계약(1200×675 · fill · 품질 82)으로 sharp 변환. 운영 변환 모듈을 부르지 않는다
+  const png = await sharp({ create: FIXTURE_HERO_SPEC }).png().toBuffer()
+  const want = createHash('sha256').update(await sharp(png).resize(1200, 675, { fit: 'fill' }).webp({ quality: 82 }).toBuffer()).digest('hex')
+  check('S1 hero 신규 생성 — 생성 경로 1 · 이미지 fixture 1 · 변환 1 · 재사용 0', e.hero.generate === 1 && e.hero.image === 1 && e.hero.convert === 1 && e.hero.reuse === 0, e.hero)
+  check('S1 병합된 hero.webp = fixture PNG 의 실제 sharp 변환 바이트 (1200×675 · fill · q82)', e.registered[0]?.heroFile?.sha256 === want, { got: e.registered[0]?.heroFile?.sha256, want })
+  check('S1 heroImage 4필드', e.registered[0]?.heroImage?.src === `/magazine/${t}/hero.webp` && e.registered[0]?.heroImage?.width === 1200 && e.registered[0]?.heroImage?.height === 675 && /여성$/.test(e.registered[0]?.heroImage?.alt ?? ''), e.registered[0]?.heroImage)
   check('S1 publishAt 뒤 watch 가 이 글을 확인했다', /✅/.test(logText(S.S1, 'watch-after-publish')) && logText(S.S1, 'watch-after-publish').includes(t))
 }
 if (S.S2) {
@@ -111,6 +120,15 @@ if (S.S4) {
 if (S.S5) {
   const e = ev('S5')
   check('S5 merge 0 · 배포 0 · 01:00 회차 non-zero · CI 실패 이유', e.mergeCalls.length === 0 && e.deployments.length === 0 && stage(S.S5, 'register')?.exit !== 0 && /FAIL|failure/.test(JSON.stringify(S.S5.extras.apply?.blockedBy ?? '')), { merges: e.mergeCalls, exit: stage(S.S5, 'register')?.exit, why: S.S5.extras.apply?.blockedBy })
+}
+if (S.S7) {
+  const e = ev('S7')
+  const t = S.S7.prepared.target
+  const typed = e.regenTyped.find((r) => r.slug === t)?.typed ?? ''
+  const reg = logText(S.S7, 'register')
+  check('S7 최초 1 · 재생성 1 · 최초 재전송 0', e.sends.bySlug[`${t}:initial`] === 1 && e.sends.bySlug[`${t}:regen`] === 1 && e.sends.initial === 1 && e.sends.regen === 1, e.sends.bySlug)
+  check('S7 재생성 요청에 최초 QA 실패 사유 (medical 진료 권고) 가 실렸다', /\[QA_FAIL\][^\n]*진료 권고 문장/.test(typed), typed.split('\n').find((l) => l.includes('QA_FAIL')))
+  check('S7 원자 교체 뒤 최종 QA PASS · 등록·PR·merge·배포 1', reg.includes('검증·변환 통과 뒤 원고 교체') && reg.includes('QA FAIL 0 (재생성 1회 뒤)') && e.registered.length === 1 && e.prs.length === 1 && e.prs[0].state === 'MERGED' && e.mergeCalls.length === 1 && e.deployments.length === 1, { prs: e.prs })
 }
 if (S.S6) {
   const x = S.S6.extras

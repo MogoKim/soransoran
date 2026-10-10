@@ -54,7 +54,8 @@ function replyFor(text) {
   renameSync(tmp, file)
   const plan = st.chatgpt?.[key] ?? []
   const mode = plan[calls[key] - 1] ?? 'good'
-  log({ slug: item.slug, kind, call: calls[key], mode })
+  // 🔴 재생성 요청은 보낸 글자를 남긴다 — 실패 패킷에 실제 QA 사유가 실렸는지 rehearsal 이 본다
+  log({ slug: item.slug, kind, call: calls[key], mode, ...(kind === 'regen' ? { typed: text } : {}) })
   return C.manuscriptFor({ repo: REPO, draftsDir: L.DRAFTS_DIR, slug: item.slug, item, mode, medicalRequired: MEDICAL_REQUIRED })
 }
 
@@ -93,5 +94,8 @@ const fixture = {
   ensureTab: async () => ({ ok: true }),
   connect: async () => ({ contexts: () => [{ pages: () => [], newPage: async () => makePage() }], async close() {} }),
   fetchTiming: { pollMs: 5, stablePolls: 2, timeoutMs: 5000 },
+  /** 🔴 hero runner 의 ChatGPT 이미지 결과만 대신한다 — 변환·저장·검증·주입은 실제 코드 */
+  generateImage: async (prompt) => { log({ op: 'hero-image', promptHead: String(prompt).slice(0, 60) }); return { ok: true, buffer: await C.fixtureHeroPng() } },
+  heroTrace: (e) => log({ op: `hero-trace-${e.stage}`, slug: e.slug }),
 }
 export default fixture

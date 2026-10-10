@@ -2,7 +2,7 @@
 /**
  * 🔴 **매거진 M-AUTO rehearsal — 실제 엔트리포인트 전체를 격리된 임시 사본에서 같은 날 반복 실행한다** (2026-10-10).
  *
- *   npm run magazine:rehearsal                          시나리오 S1~S6 + S1 반복성
+ *   npm run magazine:rehearsal                          시나리오 S1~S7 + S1 반복성
  *   node scripts/magazine-rehearsal.mjs --scenario S1,S4 고른 시나리오만
  *   node scripts/magazine-rehearsal.mjs --date 2026-10-11 --keep --out <report.json>
  *
@@ -114,7 +114,20 @@ function siteProbe(ctx, { kst, paths }) {
   return out
 }
 
-/** S1·S4·S5·S6 공통 준비 — 의료 필수가 아닌 자동 레인 대상 1건 · hero 재사용 자리 */
+/**
+ * 운영 모드 차단 — 시험 모드 표식 없이 fixture 설정만 보이는 hero runner 는 큐·파일·Chrome 전에 멈춰야 한다.
+ *    (guard 는 그대로 — 차단이 빠지면 실제 Chrome 경로로 가서 위반이 기록된다)
+ */
+function heroProdBlock(ctx) {
+  const env = { ...stageEnv({ root: ctx.sb.root, clock: { fakeMs: Date.parse(`${ctx.date}T04:00:00+09:00`), realMs: Date.now(), speed: SPEED } }) }
+  delete env.SORAN_MAGAZINE_TEST_MODE
+  const r = spawnSync(process.execPath, [join(ctx.sb.repo, 'scripts', 'magazine-hero-runner.mjs'), '--slug', ctx.prepared.target, '--alt', '창가에서 차를 마시는 50대 한국 여성', '--write', '--allow-optional'],
+    { cwd: ctx.sb.repo, env, encoding: 'utf8' })
+  const calls = readFileSync(join(ctx.sb.root, 'fixture', 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  return { exit: r.status, stderr: String(r.stderr).slice(0, 300), generateAfter: calls.filter((c) => c.op === 'hero-image').length }
+}
+
+/** S4·S5·S6·S7 공통 준비 — 의료 필수가 아닌 자동 레인 대상 1건 · 검증된 hero 재사용 (그 시나리오의 주제를 격리) */
 async function oneTarget(repo, date) {
   const [t] = await pickTargets({ repo, date, selectable: 1 })
   await curate({ repo, keep: [t.slug] })
@@ -124,8 +137,13 @@ async function oneTarget(repo, date) {
 
 export const SCENARIOS = {
   S1: {
-    title: '정상 전체 완주 — 대상 1건 · 최초 전송 1 · QA·hero·등록 · PR 1 · exact head 병합 · 배포 · 예약 404 → 공개 200 · watch',
-    prepare: oneTarget,
+    title: '정상 전체 완주 — 대상 1건 · 최초 전송 1 · QA · hero 신규 생성(sharp 변환) · 등록 · PR 1 · exact head 병합 · 배포 · 예약 404 → 공개 200 · watch',
+    // 🔴 hero 를 미리 두지 않는다 — 실제 hero runner 가 신규 생성 경로(생성 fixture 1 · sharp 변환 · 검증 · 주입)를 돈다
+    async prepare(repo, date) {
+      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      await curate({ repo, keep: [t.slug] })
+      return { target: t.slug }
+    },
     scenario: { ci: {}, deploy: {} },
     async run(ctx) {
       await normalDay(ctx)
@@ -137,6 +155,7 @@ export const SCENARIOS = {
       // 🔴 성공 뒤 재실행 — 중복 전송·PR·등록 0
       ctx.stages.push(runStage(ctx.sb, { name: 'rerun-producer', entry: 'producer', kst: KST(ctx.date, '03:00') }))
       ctx.stages.push(runStage(ctx.sb, { name: 'rerun-register', entry: 'register', kst: KST(ctx.date, '03:30') }))
+      ctx.heroProdBlock = heroProdBlock(ctx)
     },
     expect(ev, ctx) {
       const t = ctx.prepared.target
@@ -153,7 +172,11 @@ export const SCENARIOS = {
         exp('S1 Production fixture 배포 1 · merge SHA', ev.deployments.length === 1 && ev.deployments[0].sha === ev.prs[0]?.merge && ev.deployments[0].state === 'success', ev.deployments),
         exp('S1 병합 직후 예약 글은 404 (실제 judgeDeploy)', (merge?.deploy?.checked ?? []).some((c) => String(c).includes(t) && String(c).includes('404')) && merge?.deploy?.state === 'success', merge?.deploy ?? merge),
         exp('S1 publishAt 뒤 watch — 대상 본문·이미지·목록 확인', watchLog.includes(t) && /✅/.test(watchLog) && !/⛔/.test(watchLog), watchLog.split('\n').filter((l) => l.includes(t)).slice(0, 3)),
-        exp('S1 성공 뒤 재실행 — 추가 전송·PR·등록·merge 0', stageOk(s, 'rerun-producer') && ev.sends.initial === 1 && ev.prs.length === 1 && ev.registered.length === 1 && ev.mergeCalls.length === 1, s.filter((x) => x.name.startsWith('rerun')).map((x) => `${x.name}:${x.exit}`)),
+        exp('S1 hero 신규 생성 — 생성 경로 1 · 이미지 fixture 1 · 변환 1 · 재사용 0', ev.hero.generate === 1 && ev.hero.image === 1 && ev.hero.convert === 1 && ev.hero.reuse === 0, ev.hero),
+        exp('S1 hero.webp 가 병합 tree 에 있다 — RIFF/WEBP', ev.registered[0]?.heroFile?.riff === 'RIFF' && ev.registered[0]?.heroFile?.webp === 'WEBP', ev.registered[0]?.heroFile),
+        exp('S1 heroImage 4필드 — src · alt(…여성) · 1200 · 675', ev.registered[0]?.heroImage?.src === `/magazine/${t}/hero.webp` && /여성$/.test(ev.registered[0]?.heroImage?.alt ?? '') && ev.registered[0]?.heroImage?.width === 1200 && ev.registered[0]?.heroImage?.height === 675, ev.registered[0]?.heroImage),
+        exp('S1 운영 모드 + fixture 설정 → hero runner 종료 2 · TEST_INJECTION_BLOCKED · 추가 생성 0', ctx.heroProdBlock?.exit === 2 && /TEST_INJECTION_BLOCKED/.test(ctx.heroProdBlock?.stderr ?? '') && ctx.heroProdBlock?.generateAfter === ev.hero.image, ctx.heroProdBlock),
+        exp('S1 성공 뒤 재실행 — 추가 전송·PR·등록·merge·이미지 생성 0', ev.hero.image === 1 && ev.hero.generate === 1 && stageOk(s, 'rerun-producer') && ev.sends.initial === 1 && ev.prs.length === 1 && ev.registered.length === 1 && ev.mergeCalls.length === 1, s.filter((x) => x.name.startsWith('rerun')).map((x) => `${x.name}:${x.exit}`)),
       ]
     },
   },
@@ -341,6 +364,30 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
         exp('S6 공개 전 watch 는 이 글을 보지 않는다 (공개된 글만 확인)', stageOk(ctx.stages, 'watch-before-publish') && !wb.includes(t), wb.split('\n').filter((l) => /✅|⛔/.test(l)).slice(0, 4)),
         exp('S6 공개 뒤 watch — 이 글 본문·이미지·목록 확인 · 종료 0', stageOk(ctx.stages, 'watch-after-publish') && wa.split('\n').some((l) => l.includes(t) && l.includes('✅')), wa.split('\n').filter((l) => l.includes(t)).slice(0, 2)),
         exp('S6 예약 공개 확인을 공급 성공·OPERATING_PASS 로 적지 않는다', !/OPERATING_PASS|완전 자동화/.test(wa + wb), ''),
+      ]
+    },
+  },
+
+  S7: {
+    title: 'QA 실패 → 재생성 — 첫 원고는 형식 관문 통과 · 실제 QA 결정적 실패 → 실제 실패 패킷으로 재생성 → QA 통과 · 등록·PR·병합·배포',
+    // 🔴 QA 재생성만 격리한다 — 검증된 hero 재사용을 허용한다 (hero 신규 생성은 S1 이 본다)
+    prepare: oneTarget,
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['qa-fail'] } }),
+    async run(ctx) { await normalDay(ctx) },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const reg = logOf(ctx, 'register')
+      const typed = ev.regenTyped.find((r) => r.slug === t)?.typed ?? ''
+      const led = ev.ledger?.[t] ?? null
+      const QA_REASON = '진료 권고 문장'
+      return [
+        exp('S7 최초 전송 1 · 재생성 1 · 최초 요청 재전송 0', ev.sends.bySlug[`${t}:initial`] === 1 && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 1 && ev.sends.regen === 1, ev.sends.bySlug),
+        exp('S7 첫 원고는 형식 관문을 지나 실제 QA 에서 막혔다 (medical 진료 권고 없음)', /QA FAIL|qa/.test(reg) && reg.includes('재생성 1/2'), reg.split('\n').filter((l) => /qa|QA/.test(l)).slice(0, 4)),
+        exp('S7 실패 패킷(보낸 재생성 요청)에 최초 QA 실패 사유가 실려 있다', typed.includes('[QA_FAIL]') && typed.includes(QA_REASON), typed.split('\n').filter((l) => /QA_FAIL|진료/.test(l)).slice(0, 3)),
+        exp('S7 재생성 원고가 검증·변환 뒤 원자 교체됐고 최종 QA PASS', reg.includes('검증·변환 통과 뒤 원고 교체') && reg.includes('QA FAIL 0 (재생성 1회 뒤)'), reg.split('\n').filter((l) => /재생성|QA FAIL 0/.test(l)).slice(0, 4)),
+        exp('S7 장부 — 등록 성공 뒤 그 글의 격리 행이 지워졌다 (재생성 표식 잔여 0)', led === null, led),
+        exp('S7 등록 = 재생성 원고 (medical 아님) · PR 1 MERGED · merge 1 · 배포 1', ev.registered.length === 1 && ev.registered[0].slug === t && ev.registered[0].medical !== true &&
+          ev.prs.length === 1 && ev.prs[0].state === 'MERGED' && ev.mergeCalls.length === 1 && ev.mergeCalls[0].args.includes('--match-head-commit') && ev.deployments.length === 1, { registered: ev.registered, prs: ev.prs }),
       ]
     },
   },

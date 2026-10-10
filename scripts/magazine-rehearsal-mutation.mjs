@@ -27,6 +27,10 @@ const F = {
   orch: path.join(HERE, 'magazine-rehearsal.mjs'),
   merge: path.join(HERE, 'magazine-auto-merge.mjs'),
   quarantine: path.join(HERE, 'lib', 'magazine-quarantine.mjs'),
+  hero: path.join(HERE, 'magazine-hero-runner.mjs'),
+  webp: path.join(HERE, 'lib', 'magazine-hero-webp.mjs'),
+  register: path.join(HERE, 'magazine-auto-register.mjs'),
+  regen: path.join(HERE, 'lib', 'magazine-regen.mjs'),
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -54,6 +58,25 @@ const MUTATIONS = [
     find: 'kst, exit: r.status, signal', replace: 'kst, exit: 0, signal' }] },
   { name: '⑫ 고정 시각 대신 실제 시각', scenarios: 'S1', edits: [{ file: F.sandbox,
     find: '    SORAN_REHEARSAL_CLOCK: `${clock.fakeMs}:${clock.realMs}:${clock.speed}`,\n', replace: '' }] },
+  // ── hero 신규 생성 (2026-10-10 · 선택지 B) ──
+  { name: '⑬ S1 에 placeHero 사전 복사를 되살림 (재사용 우회)', scenarios: 'S1', edits: [{ file: F.orch,
+    find: '      await curate({ repo, keep: [t.slug] })\n      return { target: t.slug }\n',
+    replace: '      await curate({ repo, keep: [t.slug] })\n      placeHero({ repo, slug: t.slug })\n      return { target: t.slug }\n' }] },
+  { name: '⑭ 신규 이미지 생성 호출 생략 (기존 hero 를 생성 결과로)', scenarios: 'S1', edits: [{ file: F.hero,
+    find: '  const gen = await generate(prompt)\n',
+    replace: "  const gen = { ok: true, buffer: readFileSync(new URL('../public/magazine/avoiding-gatherings/hero.webp', import.meta.url)) }\n" }] },
+  { name: '⑮ sharp 변환을 가짜 WebP 복사로', scenarios: 'S1', edits: [{ file: F.webp,
+    find: "    const buffer = await sharp(input)\n      .resize(HERO_WIDTH, HERO_HEIGHT, { fit: 'fill' })\n      .webp({ quality: WEBP_QUALITY })\n      .toBuffer()\n",
+    replace: "    const buffer = (await import('node:fs')).readFileSync(new URL('../../public/magazine/avoiding-gatherings/hero.webp', import.meta.url))\n" }] },
+  { name: '⑯ 운영 모드 fixture 차단 제거', scenarios: 'S1', edits: [{ file: F.hero,
+    find: '  if (!harness.ok) {\n', replace: '  if (false) {\n' }] },
+  // ── S7 QA 재생성 ──
+  { name: '⑰ QA 재생성 경로 제거', scenarios: 'S7', edits: [{ file: F.register,
+    find: "      const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL',",
+    replace: "      const rr = { ok: false, code: 'MUTATED' } || regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL'," }] },
+  { name: '⑱ 실패 패킷에서 실제 QA 사유 제거', scenarios: 'S7', edits: [{ file: F.regen,
+    find: "    code: f.code, label: f.label ?? f.message ?? '', sentence: String(f.sentence ?? '').slice(0, 160),",
+    replace: "    code: f.code, label: f.label ?? f.message ?? '', sentence: ''," }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -69,7 +92,15 @@ const summary = (out) => (out.match(/리허설 검사 \d+\/\d+/g) ?? [null]).pop
 let bad = 0
 let caught = 0
 console.log('\n매거진 rehearsal 변이 시험\n')
-const base = spawnSync(process.execPath, [CHECK, '--scenario', 'S1,S3,S4,S5,S6'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+const base = spawnSync(process.execPath, [CHECK, '--scenario', 'S1,S3,S4,S5,S6,S7'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+/** 🔴 변이 시험이 만든 rehearsal 산출물(임시 루트·보고서)은 남기지 않는다 */
+const cleanup = (stdout) => {
+  for (const m of stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {
+    const p = path.dirname(m[1])
+    if (p.startsWith(path.resolve(os.tmpdir())) || p.startsWith('/private/var/folders/') || p.startsWith('/var/folders/')) fs.rmSync(p, { recursive: true, force: true })
+  }
+}
+cleanup(base.stdout)
 if (base.status !== 0) { bad++; console.log(`  ❌ 변이 없는 코드에서 검사가 FAIL 이다 (${summary(base.stdout) ?? '요약 없음'})`) } else console.log(`  기준선 (변이 없음) — PASS · ${summary(base.stdout)}`)
 try {
   for (const mu of MUTATIONS) {
@@ -84,10 +115,7 @@ try {
     } finally { restoreAll() }
     if (files.some((f) => sha(f) !== startHashes[f])) { bad++; console.log(`  ❌ ${mu.name} — 원복 후 해시가 다르다`); break }
     // 🔴 변이 회차가 남긴 실패 증거(임시 루트·보고서)는 변이 시험의 산출물이 아니다 — 지운다
-    for (const m of r.stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {
-      const p = path.dirname(m[1])
-      if (p.startsWith(path.resolve(os.tmpdir())) || p.startsWith('/private/var/folders/') || p.startsWith('/var/folders/')) fs.rmSync(p, { recursive: true, force: true })
-    }
+    cleanup(r.stdout)
     const s = summary(r.stdout)
     const failed = (r.stdout.match(/❌ [^\n]+/g) ?? []).filter((l) => !/│/.test(l))
     if (!s) { bad++; console.log(`  ❌ ${mu.name} — 검사가 끝까지 돌지 않았다 (예외로만 멈춤 · 종료 ${r.status} ${r.signal ?? ''})`) }
