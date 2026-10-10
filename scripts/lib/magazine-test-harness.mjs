@@ -19,6 +19,7 @@
  * 🔴 fixture 는 **파일 경로 하나**로 넘긴다. 그 모듈이 내보내는 값만 쓴다:
  *      browserAvailable · cdpAvailable · profileInUse · spawn · verifyProfileFn
  *      probe · connect · ensureTab · quarantinePath
+ *      generateImage (hero runner 의 ChatGPT 이미지 결과) · heroTrace (hero 단계 관찰 — 주지 않으면 아무 일도 안 한다)
  */
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
@@ -29,7 +30,7 @@ export const TEST_FIXTURE_ENV = 'SORAN_MAGAZINE_TEST_FIXTURE'
 /** fixture 가 채울 수 있는 자리 — 이 밖의 이름은 받지 않는다 */
 export const INJECTABLE = Object.freeze([
   'browserAvailable', 'cdpAvailable', 'profileInUse', 'spawn', 'verifyProfileFn',
-  'probe', 'connect', 'ensureTab', 'quarantinePath', 'fetchTiming',
+  'probe', 'connect', 'ensureTab', 'quarantinePath', 'fetchTiming', 'generateImage', 'heroTrace',
 ])
 
 /**
@@ -48,7 +49,7 @@ const refused = (name) => () => {
  *    그럴듯한 운영 결과가 나와서 fixture 를 빠뜨린 시험이 초록으로 보인다.
  */
 const REFUSE = Object.freeze(Object.fromEntries(
-  INJECTABLE.filter((k) => k !== 'quarantinePath' && k !== 'fetchTiming').map((k) => [k, refused(k)]),
+  INJECTABLE.filter((k) => !['quarantinePath', 'fetchTiming', 'heroTrace'].includes(k)).map((k) => [k, refused(k)]),
 ))
 
 /**

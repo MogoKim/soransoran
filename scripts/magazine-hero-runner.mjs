@@ -16,14 +16,16 @@
  *    큐 35건 중 REQUIRED 는 3건뿐이다. 나머지를 자동으로 만들면 매일 32장을
  *    쌓아 두고 아무도 보지 않는다.
  *
- * 🔴 headed Chrome 으로만 돈다. headless 는 Cloudflare 가 막는다.
+ * 🔴 이미지 생성은 headed Chrome 으로만 돈다. headless 는 Cloudflare 가 막는다.
  *    `magazine-webui-runner.mjs --login` 으로 띄운 창을 재사용한다.
  *
- * 왜 Chrome 으로 webp 를 만드는가
- *    이 환경에는 cwebp · ImageMagick · sharp · vips · PIL 이 없고 ffmpeg 에는
- *    libwebp 인코더가 빠져 있다. sips 는 webp 출력을 못 한다. 실측으로 확인했다.
- *    **webp 를 만들 수 있는 수단이 Chrome 뿐이다** — 어차피 CDP 로 붙어 있으니
- *    canvas.toDataURL('image/webp') 로 리사이즈와 인코딩을 한 번에 한다.
+ * webp 변환은 Chrome 이 아니라 Node 의 sharp 다 (2026-10-10 · `lib/magazine-hero-webp.mjs`)
+ *    앞판은 "이 환경에 sharp 가 없다" 며 같은 Chrome 의 canvas 로 변환했다. 지금 sharp 는 저장소 직접 의존성이고
+ *    (src/lib/image-optimize.ts 도 쓴다) 1200×675 · fill · 품질 82 계약을 그대로 옮겼다. Chrome 이 필요한 것은 생성뿐이다.
+ *
+ * 🔴 시험 주입 — `SORAN_MAGAZINE_TEST_MODE=1` 일 때만 `generateImage`(ChatGPT 이미지 결과)와 `heroTrace`(관찰)를 받는다
+ *    (`lib/magazine-test-harness.mjs`). 운영 모드에서 fixture 설정이 보이면 큐·파일·Chrome 에 닿기 전에 멈춘다.
+ *    프롬프트 · 변환 · 저장 · 검증 · 원복 · heroImage 주입은 시험에서도 이 파일의 실제 코드다.
  *
  * 사용법
  *   node scripts/magazine-hero-runner.mjs --slug <slug> --alt "…여성"
@@ -39,6 +41,8 @@
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { loadQueue } from './lib/magazine-load.mjs'
+import { loadTestHarness } from './lib/magazine-test-harness.mjs'
+import { toHeroWebp } from './lib/magazine-hero-webp.mjs'
 import {
   CDP_URL, ensureChrome, ensurePageTarget, CDP_CONNECT_TIMEOUT_MS,
   COMPOSER_SELECTOR, composerLocator,
@@ -50,7 +54,6 @@ import {
 
 const CHATGPT_URL = 'https://chatgpt.com/'
 const GENERATE_TIMEOUT_MS = 360000
-const WEBP_QUALITY = 0.82
 
 /** playwright-core 는 repo 의 것을 쓴다 */
 async function chromium() {
@@ -131,43 +134,6 @@ async function generateImage(prompt) {
   }
 }
 
-/** PNG 버퍼 → 1200×675 webp 버퍼. Chrome 내장 인코더를 쓴다 */
-async function toHeroWebp(pngBuffer) {
-  let browser = null
-  let page = null
-  try {
-    browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: CDP_CONNECT_TIMEOUT_MS })
-    const ctx = browser.contexts()[0]
-    if (!ctx) return { ok: false, stage: 'webp', why: 'no_context' }
-    page = await ctx.newPage()
-    await page.goto('about:blank')
-    const out = await page.evaluate(
-      async ({ b64, w, h, q }) => {
-        const img = new Image()
-        img.src = 'data:image/png;base64,' + b64
-        await img.decode()
-        const canvas = document.createElement('canvas')
-        canvas.width = w
-        canvas.height = h
-        const g = canvas.getContext('2d')
-        g.imageSmoothingEnabled = true
-        g.imageSmoothingQuality = 'high'
-        g.drawImage(img, 0, 0, w, h)
-        const url = canvas.toDataURL('image/webp', q)
-        return { type: url.slice(5, url.indexOf(';')), data: url.split(',')[1] }
-      },
-      { b64: pngBuffer.toString('base64'), w: HERO_WIDTH, h: HERO_HEIGHT, q: WEBP_QUALITY },
-    )
-    if (out.type !== 'image/webp') return { ok: false, stage: 'webp', why: `webp 인코딩 미지원 — ${out.type}` }
-    return { ok: true, buffer: Buffer.from(out.data, 'base64') }
-  } catch (err) {
-    return { ok: false, stage: 'webp', why: `webp: ${err?.name ?? 'Error'} — ${String(err?.message ?? '').split('\n')[0].slice(0, 200)}` }
-  } finally {
-    await page?.close().catch(() => {})
-    await browser?.close().catch(() => {})
-  }
-}
-
 function help() {
   console.log(`hero 생성 — ChatGPT 이미지 → 1200×675 webp → article-draft.ts 주입
 
@@ -198,6 +164,15 @@ Chrome
 async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--help') || argv.length === 0) return help()
+  /**
+   * 🔴 **시험 주입은 큐·파일·Chrome 을 건드리기 전에 판정한다.** 운영 모드에서 fixture 가 보이면 여기서 끝난다.
+   */
+  const harness = await loadTestHarness()
+  if (!harness.ok) {
+    console.error(`⛔ ${harness.code} — ${harness.why} (파일 변경 0 · Chrome 접근 0)`)
+    process.exit(2)
+  }
+  const deps = harness.test ? { generate: harness.deps.generateImage, trace: harness.deps.heroTrace ?? (() => {}) } : {}
 
   const arg = (k) => {
     const i = argv.indexOf(k)
@@ -217,7 +192,7 @@ async function main() {
 
   let applied = null
   if (write && p.verdict === 'READY') {
-    const r = await apply(p, prompt, alt)
+    const r = await apply(p, prompt, alt, deps)
     applied = r.ok
     if (!r.ok) {
       p.verdict = 'BLOCKED'
@@ -247,8 +222,9 @@ async function main() {
 /**
  * 생성 → 변환 → 저장 → 검증 → 주입.
  * **검증에 실패하면 파일을 지운다.** 반쯤 남기면 magazine-qa 가 FAIL 을 낸다.
+ * `deps` 는 시험만 넘긴다 — generate(ChatGPT 이미지) · convert(시험의 원복 반례) · trace(관찰). 기본값이 운영 경로다.
  */
-async function apply(p, prompt, alt) {
+export async function apply(p, prompt, alt, { generate = generateImage, convert = toHeroWebp, trace = () => {} } = {}) {
   const file = heroFilePath(p.slug)
 
   /**
@@ -257,6 +233,7 @@ async function apply(p, prompt, alt) {
    *    할 일은 "다시 검증하고 heroImage 4필드를 다시 주입" 뿐이다.
    */
   if (p.checks.reuseExisting) {
+    trace({ stage: 'reuse', slug: p.slug })
     const check = verifyHeroFile(p.slug)
     if (!check.ok) return { ok: false, why: `기존 hero 가 검증을 통과하지 못했다 — ${check.why}` }
     if (p.checks.willInject) {
@@ -267,10 +244,12 @@ async function apply(p, prompt, alt) {
     return { ok: true, reused: true }
   }
 
-  const gen = await generateImage(prompt)
+  trace({ stage: 'generate', slug: p.slug })
+  const gen = await generate(prompt)
   if (!gen.ok) return gen
 
-  const webp = await toHeroWebp(gen.buffer)
+  trace({ stage: 'convert', slug: p.slug })
+  const webp = await convert(gen.buffer)
   if (!webp.ok) return webp
 
   const hadFile = existsSync(file)
