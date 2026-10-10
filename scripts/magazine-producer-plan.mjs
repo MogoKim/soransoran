@@ -247,7 +247,8 @@ function fullReviewBanner() {
  * ChatGPT 에 바로 넣을 수 있는 완성 brief 가 아니다.
  * 고정 규칙과 큐에서 나온 사실만 채우고, 해석이 필요한 자리는 TODO 로 비운다.
  */
-function briefTodo(item) {
+/** 🔴 입력 수리 단계도 같은 todo 를 쓴다 — 큐 항목으로 brief.todo 후보를 다시 구성한다 (2026-10-10) */
+export function briefTodo(item) {
   const label = BOARD_LABEL[item.ctaBoard] ?? '이야기 남기기'
   return `# [작업 패키지] 원고 지시서 초안 — ${item.title}
 

@@ -698,7 +698,8 @@ export function verifyConsistency({ queueSource, articlesSource = null, ledgerSo
   return { ok: problems.length === 0, problems: [...new Set(problems)] }
 }
 
-function writeAtomic(file, text) {
+/** 🔴 임시 파일 → fsync → rename. 입력 수리 journal 도 이것을 쓴다 (약한 사본을 따로 두지 않는다) */
+export function writeAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.g8tmp-${process.pid}`
   const fd = fs.openSync(tmp, 'w')
@@ -708,7 +709,7 @@ function writeAtomic(file, text) {
 function restore(file, original) {
   if (original === null) { if (fs.existsSync(file)) fs.unlinkSync(file) } else writeAtomic(file, original)
 }
-const shaOrAbsent = (text) => (text === null ? 'ABSENT' : sha256(text))
+export const shaOrAbsent = (text) => (text === null ? 'ABSENT' : sha256(text))
 
 /**
  * 🔴 **급사 복구.** journal 이 있다는 것은 앞선 apply 가 쓰는 도중 죽었다는 뜻이다(잠금을 지금 내가 쥐었으므로
@@ -724,10 +725,10 @@ export const JOURNAL_SCHEMA = 'g8-journal/1'
  *    하나라도 어긋나면 어떤 파일도 쓰거나 지우지 않는다 — journal 자체도 남긴다.
  *    (앞판은 외부 경로를 가리킨 위조 journal 로 저장소 밖 파일을 **실제로 지웠다** — schema 가 틀려도.)
  */
-export function checkJournalIdentity(j, expectedPaths) {
+export function checkJournalIdentity(j, expectedPaths, schema = JOURNAL_SCHEMA) {
   const fail = (why) => ({ ok: false, code: 'RECOVERY_IDENTITY', why })
   if (!j || typeof j !== 'object') return fail('journal 이 객체가 아니다')
-  if (j.schema !== JOURNAL_SCHEMA) return fail(`schema 가 ${JOURNAL_SCHEMA} 가 아니다 (${String(j.schema)})`)
+  if (j.schema !== schema) return fail(`schema 가 ${schema} 가 아니다 (${String(j.schema)})`)
   if (!Array.isArray(j.files)) return fail('files 가 배열이 아니다')
   const want = [...expectedPaths].sort()
   if (j.files.length !== want.length) return fail(`파일 수가 ${want.length} 이 아니다 (${j.files.length})`)

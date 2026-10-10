@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { buildManuscriptMessage } from './chatgpt-session.mjs'
 import {
-  readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH,
+  readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH, inputRepairAlreadySent,
 } from './magazine-quarantine.mjs'
 import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
 
@@ -110,6 +110,51 @@ export function legacyPlannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = n
     promptText: legacyManuscriptPromptText(legacyPacket),
     briefText: readFileSync(briefPath, 'utf8'),
   })
+}
+
+/**
+ * 🔴 **입력 수리 — brief echo 를 원고로 다시 쓰게 하는 전용 요청** (2026-10-10).
+ *    `cold-weather-joint-pain` · `autumn-low-mood` 는 원고 자리에 brief 가 그대로 저장돼 있다.
+ *    일반 최초 요청(`legacyManuscriptPromptText`)을 다시 보내면 같은 지문이라 HOLD/중복 계약과 섞이고,
+ *    QA 재생성(`regenerationPromptText`)은 "현재 원고를 고쳐라" 라서 brief 를 다듬은 brief 가 돌아온다.
+ *    그래서 **다른 문장 · 다른 지문**의 전용 요청을 쓴다. 기존 두 프롬프트는 한 글자도 바꾸지 않는다.
+ *    이 brief 들은 표기 규칙 블록이 빠진 옛 판이라, 원고 표기 규칙을 여기서 함께 말한다.
+ */
+export const BRIEF_ECHO_REPAIR_PROMPT = [
+  '[입력 수리 요청] 직전 응답은 원고가 아니라 아래 BRIEF(작업지시서) 자체를 그대로 다시 출력한 것이었습니다.',
+  'BRIEF 를 다시 출력하지 말고, BRIEF 시작/끝 사이의 지시를 따라 독자가 읽을 최종 원고를 새로 작성하세요.',
+  "원고에는 BRIEF 의 지시 섹션 제목(검색 의도 · 대상 독자 · 도입에서 해야 할 것 · 글 구조 · 반드시 그대로 넣을 문장 · 절대 쓰지 말 것)을 소제목으로 쓰지 않습니다.",
+  '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
+  '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
+  'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+  '쓸 수 있는 표기는 ## 소제목 · ### 소제목 · > 인용 · - 목록 · 문단, 그리고 마지막 줄 [CTA] /community/게시판 | 문구 | 앞 문장 정확히 1개입니다.',
+  '표 · 코드블록(출력 감싸기 제외) · 외부 링크 · 마크다운 링크 · 이미지 · h1 · h4 이하 · HTML · 번호 목록 · 굵게·기울임은 쓰지 않습니다.',
+  '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
+].join(' ')
+
+/** 입력 수리로 보낼 메시지 — brief 가 없으면 null */
+export function plannedInputRepairMessageFor(slug, draftsDir = DRAFTS_DIR) {
+  const briefPath = join(draftsDir, slug, 'brief.md')
+  if (!existsSync(briefPath)) return null
+  return buildManuscriptMessage({ promptText: BRIEF_ECHO_REPAIR_PROMPT, briefText: readFileSync(briefPath, 'utf8') })
+}
+
+/**
+ * 🔴 **입력 수리를 보내도 되는가** — `deliveryGate` 와 같은 모양으로 돌려준다.
+ *    HOLD: ① 같은 지문의 전송불명(DELIVERY_UNCERTAIN) ② 이미 보낸 수리 지문(영구 기록). 장부를 못 읽으면 보내지 않는다.
+ */
+export function inputRepairGate({ slug, draftsDir = DRAFTS_DIR, quarantinePath = QUARANTINE_PATH }) {
+  const message = plannedInputRepairMessageFor(slug, draftsDir)
+  const messageFingerprint = deliveryFingerprintOf(message)
+  if (!message) return { ok: false, code: 'BRIEF_MISSING', why: 'brief.md 가 없다', message, messageFingerprint }
+  const ledger = readQuarantine(quarantinePath)
+  if (!ledger.ok) return { ok: false, code: ledger.code ?? 'QUARANTINE_UNREADABLE', why: ledger.why, message, messageFingerprint }
+  const entry = ledger.store[slug] ?? null
+  const hold = deliveryHoldsFetch(entry, messageFingerprint)
+    ?? (inputRepairAlreadySent(entry, messageFingerprint)
+      ? { why: '이미 보낸 입력 수리 요청이다 — 같은 수리 지문은 다시 보내지 않는다', delivery: entry?.delivery ?? null }
+      : null)
+  return { ok: true, message, messageFingerprint, legacyMessageFingerprint: null, entry, hold }
 }
 
 /**

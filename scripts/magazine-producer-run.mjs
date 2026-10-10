@@ -40,6 +40,7 @@
  *      0  정상 — 일부 slug 가 게이트에 막힌 것은 정상이다(CONTENT)
  *      0  HOLD — 미해결 자동 PR 을 기다리는 중. 실패가 아니다
  *      1  SYSTEM — 프로세스를 못 띄움 · 사용법 오류 · 회수기 전역 실패(ChatGPT·브라우저)
+ *      3  PARTIAL — 회수까지 돌았지만 입력 수리가 미해결로 남았다 (실패·REJECTED·전송불명·소진 · 2026-10-10)
  *
  * 🔴 **미해결 자동 PR 이 있으면 아무것도 시작하지 않는다** (P0-1).
  *    PR 이 merge 되기 전에 다음 회차가 돌면 같은 slug 를 다시 선정하고
@@ -53,7 +54,8 @@ import { fileURLToPath } from 'node:url'
 import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
 import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { writeHandoff } from './lib/magazine-handoff.mjs'
 import { acquireLock, PRODUCER_LOCK_PATH } from './lib/magazine-auto-lock.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
@@ -64,8 +66,11 @@ const NODE = process.execPath // 지금 이 프로세스를 띄운 node. plist �
 
 const WEBUI = join(ROOT, 'scripts/magazine-webui-runner.mjs')
 const BRIEF_AUTO = join(ROOT, 'scripts/magazine-brief-auto.mjs')
+const INPUT_REPAIR = join(ROOT, 'scripts/magazine-input-repair.mjs')
 const PLAN = join(ROOT, 'scripts/magazine-producer-plan.mjs')
 const NOTIFY = join(ROOT, 'scripts/magazine-producer-notify.mjs')
+/** 🔴 저장소 밖 — 입력 수리 CLI 의 TMP_DIR 과 같은 곳 */
+const REPAIR_TMP_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran', 'input-repair')
 
 function stamp() {
   return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' KST'
@@ -105,11 +110,15 @@ const spawnStage = (args) => {
  *    🔴 중단 회차를 notify 자식에게 맡기면 "run.json 이 없다" 만 말하게 된다.
  *       창업자가 알아야 하는 것은 **어느 PR 을 merge 해야 하는가** 다.
  */
-async function notifyOnce({ verdict, outstanding, preflight: pf, dryRun: isDry }) {
+async function notifyOnce({ verdict, outstanding, preflight: pf, dryRun: isDry, repair = null }) {
   const interrupted = Boolean((outstanding && !outstanding.ok) || (pf && !pf.ok))
 
   if (!interrupted) {
-    const r = spawnSync(NODE, [NOTIFY, isDry ? '--dry-run' : '--send'], { cwd: ROOT, stdio: 'inherit' })
+    // 🔴 입력 수리 미해결은 같은 notify 한 번에 실어 보낸다 — slug · 결과 코드 · 결과 파일
+    const repairArgs = repair?.failures?.length
+      ? ['--input-repair-summary', JSON.stringify({ resultFile: repair.resultFile, failures: repair.failures.map(({ slug, type, outcome }) => ({ slug, type, outcome })) })]
+      : []
+    const r = spawnSync(NODE, [NOTIFY, isDry ? '--dry-run' : '--send', ...repairArgs], { cwd: ROOT, stdio: 'inherit' })
     if (r.error) return { ok: false, reason: `notify 실행 실패 (${r.error.code ?? r.error.name})` }
     line(r.status === 1 ? '알릴 것이 있었다' : '알릴 것 없음')
     return { ok: true }
@@ -164,6 +173,16 @@ const result = await runProducerFlow({
       } catch { return { selected: null, reusable: 0 } }   // 🔴 모르면 옛 경로 그대로 간다
     },
     runBrief: () => spawnStage([BRIEF_AUTO, '--run', kstDate(), '--write']),
+    // 🔴 입력 수리 — 잠금·미해결 검사 뒤 · 원고 회수 전 (2026-10-10)
+    //    사람용 출력이 아니라 자식이 적은 구조화 결과(--result-json)를 읽어 판정·알림·handoff 로 넘긴다
+    runRepair: () => {
+      const rj = join(REPAIR_TMP_DIR, `producer-input-repair-${process.pid}-${Date.now()}.json`)
+      const r = spawnStage([INPUT_REPAIR, '--run', kstDate(), '--write', '--result-json', rj])
+      let report = null
+      try { report = JSON.parse(readFileSync(rj, 'utf8')) } catch { report = null }
+      rmSync(rj, { force: true })
+      return { ...r, report }
+    },
     runFetch: () => spawnStage([WEBUI, '--fetch-run']),
     notify: notifyOnce,
   },
@@ -173,7 +192,7 @@ const result = await runProducerFlow({
 //    실패한 회차도 남긴다. "안 돌았다" 와 "돌았는데 실패했다" 는 대응이 다르다.
 if (!dryRun) {
   try {
-    const path = writeHandoff({ date: kstDate(), verdict: result.verdict, code: result.code, ran: result.ran ?? [] })
+    const path = writeHandoff({ date: kstDate(), verdict: result.verdict, code: result.code, ran: result.ran ?? [], repair: result.repair ?? null })
     line(`인계 신호: ${path}`)
   } catch (e) {
     // 🔴 신호를 못 써도 회차 판정은 바꾸지 않는다. 등록은 제한 대기 후 진행한다.

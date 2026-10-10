@@ -42,14 +42,16 @@ export const POLL_MS = 60 * 1000
 /**
  * producer 가 회차 끝에 이것을 남긴다. **판정이 아니라 사실만 적는다.**
  *
- * @param {{date:string, verdict:string, code:number, ran:string[], finishedAt?:string}} p
+ * 🔴 `repair` — 입력 수리 요약 (slug · 결과 코드 · 결과 파일). PARTIAL 회차의 이유가 신호에도 남는다.
+ * @param {{date:string, verdict:string, code:number, ran:string[], repair?:object|null, finishedAt?:string}} p
  */
-export function writeHandoff({ date, verdict, code, ran = [], finishedAt = new Date().toISOString() }) {
+export function writeHandoff({ date, verdict, code, ran = [], repair = null, finishedAt = new Date().toISOString() }) {
   const path = handoffPath(date)
   mkdirSync(dirname(path), { recursive: true })
   // 🔴 임시 파일 후 rename — 반쯤 쓰인 신호를 등록이 읽지 않게
   const tmp = `${path}.tmp-${process.pid}`
-  writeFileSync(tmp, `${JSON.stringify({ date, verdict, code, ran, finishedAt }, null, 2)}\n`, 'utf8')
+  const repairFacts = repair ? { resultFile: repair.resultFile ?? null, applied: repair.applied ?? [], failures: (repair.failures ?? []).map(({ slug, type, outcome }) => ({ slug, type, outcome })) } : null
+  writeFileSync(tmp, `${JSON.stringify({ date, verdict, code, ran, repair: repairFacts, finishedAt }, null, 2)}\n`, 'utf8')
   renameSync(tmp, path)
   return path
 }

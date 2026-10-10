@@ -25,7 +25,7 @@
  * 🔴 **알림을 보내려고 파일을 쓰거나 AI 를 부르지 않는다.**
  *    중단 경로에서는 plan·brief·fetch 를 **한 번도 호출하지 않는다.**
  */
-import { judgeProducerRun, stage } from './magazine-producer-exit.mjs'
+import { judgeProducerRun, stage, summarizeRepairStage } from './magazine-producer-exit.mjs'
 import { SEVERITY } from './magazine-outstanding.mjs'
 
 /**
@@ -53,18 +53,20 @@ export async function runProducerFlow({ dryRun = false, deps }) {
   /**
    * 🔴 **단 하나의 종료 자리.** 알림은 여기에만 있고, 여기서만 한 번 돈다.
    */
-  const finalize = async ({ preflight = null, outstanding = null, plan, brief, fetch }) => {
+  const finalize = async ({ preflight = null, outstanding = null, plan, brief, fetch, repair = null }) => {
     const verdict = judgeProducerRun({
       preflight,
       outstanding,
       plan: plan ?? stage('plan', { skipped: true }),
       brief: brief ?? stage('brief', { skipped: true }),
       fetch: fetch ?? stage('fetch', { skipped: true }),
+      repair,
     })
 
     if (notified === null) {
       try {
-        notified = (await deps.notify({ verdict, outstanding, preflight, dryRun })) ?? { ok: true }
+        // 🔴 수리 미해결도 같은 한 번의 알림에 실린다 — slug · 결과 코드 · 결과 파일
+        notified = (await deps.notify({ verdict, outstanding, preflight, dryRun, repair })) ?? { ok: true }
       } catch (e) {
         // 🔴 알림이 던져도 삼킨다. 알림 때문에 회차 판정이 바뀌면 안 된다.
         notified = { ok: false, reason: String(e?.message ?? e) }
@@ -73,7 +75,7 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     }
 
     // 🔴 notified 를 본 뒤에도 code 는 verdict 것 그대로다. 덮어쓰지 않는다.
-    return { code: verdict.code, verdict: verdict.verdict, reason: verdict.reason, failures: verdict.failures, notify: notified, ran }
+    return { code: verdict.code, verdict: verdict.verdict, reason: verdict.reason, failures: verdict.failures, notify: notified, ran, repair }
   }
 
   // ── 시작 전 검사 — 🔴 **파일도 AI 도 건드리기 전에** ──────
@@ -166,6 +168,22 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     else log('brief 게이트에 막힌 건이 있다 — 회차 자체는 계속한다')
   }
 
+  /**
+   * ── 2-b) 입력 수리 (2026-10-10) ──────────────────────────
+   *    잠금·미해결 작업 검사를 통과한 뒤, 일반 원고 회수 **전에** REPAIR_REQUIRED 를 고친다.
+   *    🔴 수리가 미해결이어도 원고 회수는 계속 간다 — 다만 **판정은 성공과 다르다** (PARTIAL · 2026-10-10 Codex P1).
+   *       구조화 결과(report)를 요약해 finalize → judgeProducerRun · 알림 · handoff 로 넘긴다.
+   */
+  let repairStage = null
+  if (!dryRun && planOk && deps.runRepair) {
+    ran.push('repair')
+    const r = deps.runRepair() ?? {}
+    repairStage = summarizeRepairStage({ spawnError: r.spawnError ?? null, status: r.status ?? null, report: r.report ?? null })
+    if (repairStage.spawnError) log(`🔴 입력 수리를 실행하지 못했다 (${repairStage.spawnError}) — 원고 회수는 계속한다`)
+    else log(`입력 수리 종료 코드 ${repairStage.status} · 적용 ${repairStage.applied.length}건 · 미해결 ${repairStage.failures.length}건 — 원고 회수는 계속한다`)
+    for (const f of repairStage.failures) log(`  ⛔ 입력 수리 ${f.slug ?? '(단계)'} — ${f.outcome}${f.reason ? ` · ${f.reason}` : ''}`)
+  }
+
   // ── 3) 원고 회수 ────────────────────────────────────────
   let fetchStage = stage('fetch', { skipped: true })
   if (dryRun) log('dry-run — 원고 회수를 실행하지 않는다')
@@ -179,7 +197,7 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     else log('🔴 원고 회수 전역 실패 — ChatGPT 접근 또는 브라우저 시작에 실패했다')
   }
 
-  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage })
+  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage, repair: repairStage })
 }
 
 /**
@@ -230,5 +248,21 @@ export function composeProducerMessage({ verdict, outstanding, preflight }) {
     title: '매거진 producer 실패',
     reason: verdict.reason,
     next: '로그 확인: ~/Library/Logs/soransoran/magazine-producer.log',
+  }
+}
+
+/**
+ * 입력 수리 미해결 알림 문구 — **발송하지 않는다.** 미해결이 없으면 null.
+ * 🔴 slug · 결과 코드 · 결과 파일 위치가 반드시 들어간다 — 사람이 어느 글의 무엇을 봐야 하는지 알게.
+ */
+export function composeRepairAlert(repair) {
+  const failures = repair?.failures ?? []
+  if (!failures.length) return null
+  const shown = failures.slice(0, 6).map((f) => `${f.slug ?? '입력 수리 단계'} ${f.outcome}`).join(' · ')
+  return {
+    severity: 'ERROR',
+    title: `매거진 입력 수리 미해결 ${failures.length}건 — 회차 PARTIAL (원고 회수는 계속됐다)`,
+    reason: `${shown}${failures.length > 6 ? ` 외 ${failures.length - 6}건` : ''}`,
+    next: `결과 파일: ${repair.resultFile ?? '없음 (구조화 결과를 읽지 못했다)'} · 같은 지문은 다시 부르지 않는다 — brief·큐 행을 고치면 새 수리가 열린다`,
   }
 }
