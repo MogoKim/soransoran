@@ -1604,14 +1604,32 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
       /finally \{[\s\S]{0,240}await page\?\.close\(\)/.test(sessSrc))
     check('🔴 반례11 중간 page.close() 가 남아 있지 않다',
       !/^\s*await page\.close\(\)\s*$/m.test(sessSrc))
-    check('🔴 반례11 hero 경로도 finally 에서 자기 탭을 닫는다',
-      (heroSrc.match(/await page\?\.close\(\)\.catch/g) ?? []).length >= 2)
+    /**
+     * 🔴 hero 에서 탭을 여는 곳은 **이미지 생성 하나뿐**이다 (2026-10-10 · webp 변환은 브라우저 없는 sharp).
+     *    생성 경로의 finally 가 자기 탭을 닫는지 정확히 보고, 변환 모듈은 page·CDP 에 아예 닿지 않는지 본다.
+     *    브라우저가 없는 변환에 가짜 cleanup 을 요구하지 않는다. (주석은 빼고 코드만 본다)
+     */
+    const codeOnly = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const heroCode = codeOnly(heroSrc)
+    const webpCode = codeOnly(fs.readFileSync('scripts/lib/magazine-hero-webp.mjs', 'utf8'))
+    const genStart = heroCode.indexOf('async function generateImage(')
+    const genBody = genStart === -1 ? '' : heroCode.slice(genStart, heroCode.indexOf('\n}\n', genStart) + 2)
+    check('🔴 반례11 hero 이미지 생성 경로가 finally 에서 자기 탭을 정확히 한 번 닫는다',
+      /finally \{[\s\S]{0,240}await page\?\.close\(\)\.catch/.test(genBody) && (heroCode.match(/await page\?\.close\(\)\.catch/g) ?? []).length === 1 && (heroCode.match(/newPage\(\)/g) ?? []).length === 1)
+    check('🔴 반례11 webp 변환 모듈은 page·CDP 에 닿지 않는다 (닫을 탭이 없다)',
+      !/\bpage\b|newPage|connectOverCDP|CDP_URL|chromium/.test(webpCode))
     check('🔴 반례11 전용 Chrome 자체는 닫지 않는다 (연결만 끊는다)', /연결만 끊는다/.test(sessSrc))
 
     check('🔴 반례11 회수 실패가 stage 를 싣는다', /reason: 'connect_failed',\n\s*stage,/.test(sessSrc))
     check('🔴 반례11 회수 실패가 원문 첫 줄을 싣는다', /errorDetail: String\(err\?\.message/.test(sessSrc))
-    check('🔴 반례11 hero 실패도 stage 를 싣는다',
-      /stage: 'webp'/.test(heroSrc) && /\$\{stage\}: \$\{err\?\.name/.test(heroSrc))
+    /**
+     * 🔴 hero 실패 진단은 두 곳에 나뉜다 — 생성(hero-runner)은 `${stage}: ${err?.name…}`,
+     *    변환(magazine-hero-webp)은 `stage: 'webp'` + `webp: ${err?.name…}`.
+     *    실제 잘못된 이미지 동작 반례(stage=webp · 파일·article 불변)는 `magazine-hero-check.mjs` 가 담당한다.
+     */
+    check('🔴 반례11 hero 생성 실패가 stage 를 싣는다', /\$\{stage\}: \$\{err\?\.name/.test(heroCode))
+    check('🔴 반례11 hero webp 변환 실패가 stage=webp 와 원문 진단을 싣는다',
+      /stage: 'webp'/.test(webpCode) && /`webp: \$\{err\?\.name/.test(webpCode))
 
     /** 🔴 `Node.js v…` 만 남기던 문제 — 실제 문자열로 확인한다 */
     const AR = await import('./magazine-auto-register.mjs')

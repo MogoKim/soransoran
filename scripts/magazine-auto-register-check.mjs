@@ -1372,7 +1372,22 @@ console.log('\n══════ 운영연결 ⑥ 이미지 생성의 CDP 제�
 const heroSrc = readFileSync(join('scripts', 'magazine-hero-runner.mjs'), 'utf8')
 expect('🔴 15초 제한이 남아 있지 않다', /timeout: 15000/.test(heroSrc), false)
 expect('공통 정책 상수를 쓴다', /timeout: CDP_CONNECT_TIMEOUT_MS/.test(heroSrc), true)
-expect('두 곳 모두 바뀌었다', (heroSrc.match(/timeout: CDP_CONNECT_TIMEOUT_MS/g) ?? []).length, 2)
+/**
+ * 🔴 **CDP 는 이미지 생성 한 곳뿐이다** (2026-10-10 · webp 변환을 sharp 로 옮겼다).
+ *    앞판은 "두 곳(생성·변환) 모두 공통 상수" 를 셌다. 지금 변환은 `lib/magazine-hero-webp.mjs` 의 sharp 다 —
+ *    Chrome canvas 변환이 hero-runner 로 되돌아오거나, 변환 모듈이 Chrome 에 붙으면 여기서 막는다.
+ *    (주석은 빼고 코드만 본다 — 왜 옮겼는지 적은 설명이 판정을 흔들지 않게)
+ */
+const codeOnly = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+const heroCode = codeOnly(heroSrc)
+const genStart = heroCode.indexOf('async function generateImage(')
+const genBody = genStart === -1 ? '' : heroCode.slice(genStart, heroCode.indexOf('\n}\n', genStart) + 2)
+const webpCode = codeOnly(readFileSync(join('scripts', 'lib', 'magazine-hero-webp.mjs'), 'utf8'))
+expect('🔴 hero-runner 의 connectOverCDP 는 정확히 1곳', (heroCode.match(/connectOverCDP\(/g) ?? []).length, 1)
+expect('🔴 그 1곳은 이미지 생성 경로이고 공통 상수를 쓴다', /connectOverCDP\(CDP_URL, \{ timeout: CDP_CONNECT_TIMEOUT_MS \}\)/.test(genBody), true)
+expect('🔴 hero-runner 에 Chrome canvas 변환 코드가 없다 (toDataURL · canvas · drawImage)', /toDataURL\(|createElement\('canvas'\)|getContext\('2d'\)|drawImage\(/.test(heroCode), false)
+expect('🔴 webp 변환 모듈은 Chrome 에 붙지 않는다 (connectOverCDP · CDP_URL · page.evaluate · canvas 0)', /connectOverCDP|CDP_URL|page\.evaluate|canvas/.test(webpCode), false)
+expect('🔴 webp 변환은 sharp 다', /from 'sharp'/.test(webpCode) && /\.webp\(\{ quality: WEBP_QUALITY \}\)/.test(webpCode), true)
 const sessSrc = readFileSync(join('scripts', 'lib', 'chatgpt-session.mjs'), 'utf8')
 expect('저장소 전체에 15초 CDP 제한이 없다', /connectOverCDP\([^)]*timeout: 15000/.test(sessSrc + heroSrc), false)
 
