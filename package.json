@@ -166,6 +166,8 @@
     "magazine:launchd-check": "tsx scripts/magazine-launchd-check.mts",
     "magazine:auto-merge": "node scripts/magazine-auto-merge.mjs",
     "check:magazine-input-repair-mutation": "node scripts/magazine-input-repair-mutation.mjs",
+    "magazine:rehearsal": "node scripts/magazine-rehearsal-check.mjs",
+    "check:magazine-rehearsal-mutation": "node scripts/magazine-rehearsal-mutation.mjs",
     "check:magazine-auto-merge-recovery-mutation": "node scripts/magazine-auto-merge-recovery-mutation.mjs",
     "supply:health": "tsx scripts/supply-health.mts",
     "supply:health-check": "tsx scripts/supply-health-check.mts",
