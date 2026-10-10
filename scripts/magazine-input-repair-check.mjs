@@ -53,6 +53,9 @@ const BA = await import('./magazine-brief-auto.mjs')
 const PF = await import('./lib/magazine-producer-flow.mjs')
 const WEBUI = await import('./magazine-webui-runner.mjs')
 const SESS = await import('./lib/chatgpt-session.mjs')
+const PX = await import('./lib/magazine-producer-exit.mjs')
+const HO = await import('./lib/magazine-handoff.mjs')
+const PN = await import('./magazine-producer-notify.mjs')
 
 let pass = 0
 let fail = 0
@@ -126,7 +129,17 @@ function fakeDeps({ ledger, brief = () => ({ ok: true, briefText: GOOD_PAIR.brie
     },
   }
 }
-const run = (q, ledger, f, max) => IR.runInputRepair({ draftsDir: D, queue: q, ledger: Q.readQuarantine(ledger), deps: f.deps, tmpDir: path.join(T, 'tmp'), ...(max ? { max } : {}) })
+const run = (q, ledger, f, max) => IR.runInputRepair({ draftsDir: D, queue: q, ledger: Q.readQuarantine(ledger), quarantinePath: ledger, deps: f.deps, tmpDir: path.join(T, 'tmp'), ...(max ? { max } : {}) })
+const LIB = pathToFileURL(path.join(HERE, 'lib', 'magazine-input-repair.mjs')).href
+/** 실제 자식 프로세스가 commitFiles 도중 SIGKILL 된다 — 진짜 journal 을 남긴다 */
+function killAt({ draftsDir, slug, kind, files, phase }) {
+  const child = path.join(T, `kill-${slug}-${phase}-${Math.random().toString(16).slice(2, 8)}.mjs`)
+  fs.writeFileSync(child, `const IR = await import(${JSON.stringify(LIB)})
+IR.commitFiles({ draftsDir: ${JSON.stringify(draftsDir)}, slug: ${JSON.stringify(slug)}, kind: ${JSON.stringify(kind)}, files: ${JSON.stringify(files)},
+  phaseHook: (ph) => { if (ph === ${JSON.stringify(phase)}) process.kill(process.pid, 'SIGKILL') } })
+`)
+  return spawnSync(process.execPath, [child], { encoding: 'utf8', env: { ...process.env } })
+}
 const byslug = (rep, slug) => rep.results.find((r) => r.slug === slug)
 
 // ── ④ 판정 — 실제 cold draft 는 brief echo ────────────────
@@ -169,33 +182,31 @@ console.log('\n① ② gray brief 수리 — 임시 후보 검증 뒤 brief·rev
   // ② 후보가 계약 위반 (실제 GF 위반 쌍) → 원본 두 파일 바이트 불변
   writeSlug(GRAY, { brief: GRAY_BRIEF })
   const before = [sha(read(p(GRAY, 'brief.md'))), sha(read(p(GRAY, 'review.ts')))]
-  const f2 = fakeDeps({ ledger: L1, brief: () => ({ ok: true, briefText: GF_BAD_PAIR.brief, reviewText: GF_BAD_PAIR.review, calls: 1 }) })
-  const r2 = byslug(await run([item(GRAY)], L1, f2), GRAY)
+  // 🔴 같은 지문은 장부에 영구 예약된다 — 다른 시나리오는 새 장부로 본다
+  const L2 = seedLedger('b2')
+  const f2 = fakeDeps({ ledger: L2, brief: () => ({ ok: true, briefText: GF_BAD_PAIR.brief, reviewText: GF_BAD_PAIR.review, calls: 1 }) })
+  const r2 = byslug(await run([item(GRAY)], L2, f2), GRAY)
   check('② 후보가 형식 계약 위반(실제 GF 위반 쌍) → REJECTED · 두 파일 바이트 불변',
     r2?.outcome === 'REJECTED' && sha(read(p(GRAY, 'brief.md'))) === before[0] && sha(read(p(GRAY, 'review.ts'))) === before[1], `${r2?.outcome} · ${r2?.candidateViolations?.join(' / ')}`)
-  const f3 = fakeDeps({ ledger: L1, brief: () => ({ ok: false, why: '시험: 생성 실패', calls: 2 }) })
-  const r3 = byslug(await run([item(GRAY)], L1, f3), GRAY)
+  const L2b = seedLedger('b2b')
+  const f3 = fakeDeps({ ledger: L2b, brief: () => ({ ok: false, why: '시험: 생성 실패', calls: 2 }) })
+  const r3 = byslug(await run([item(GRAY)], L2b, f3), GRAY)
   check('② 생성 실패 → FAILED · 바이트 불변', r3?.outcome === 'FAILED' && sha(read(p(GRAY, 'brief.md'))) === before[0])
 }
 
 // ── ③ ⑬ 쌍 교체 중 급사 → 다음 실행이 원복 ─────────────────
 console.log('\n③ ⑬ 쌍 교체 중 SIGKILL · 쓰기 실패 → 다음 실행이 원복 · 잔여 0')
 {
-  const LIB = pathToFileURL(path.join(HERE, 'lib', 'magazine-input-repair.mjs')).href
   for (const phase of ['prepared', 'committing-1']) {
-    const dir = path.join(T, `kill-${phase}`)
+    const slug = `kill-${phase}`
+    const dir = path.join(T, slug)
     fs.mkdirSync(dir)
     fs.writeFileSync(path.join(dir, 'brief.md'), 'OLD BRIEF\n')
     fs.writeFileSync(path.join(dir, 'review.ts'), 'OLD REVIEW\n')
-    const child = path.join(T, `kill-${phase}.mjs`)
-    fs.writeFileSync(child, `const IR = await import(${JSON.stringify(LIB)})
-IR.commitFiles({ dir: ${JSON.stringify(dir)}, files: [{ path: ${JSON.stringify(path.join(dir, 'brief.md'))}, text: 'NEW BRIEF\\n' }, { path: ${JSON.stringify(path.join(dir, 'review.ts'))}, text: 'NEW REVIEW\\n' }],
-  phaseHook: (ph) => { if (ph === ${JSON.stringify(phase)}) process.kill(process.pid, 'SIGKILL') } })
-`)
-    const k = spawnSync(process.execPath, [child], { encoding: 'utf8' })
+    const k = killAt({ draftsDir: T, slug, kind: 'BRIEF', files: { brief: 'NEW BRIEF\n', review: 'NEW REVIEW\n' }, phase })
     const mid = [read(path.join(dir, 'brief.md')), read(path.join(dir, 'review.ts'))]
-    check(`③ ${phase} 에서 실제 SIGKILL 됐다 (죽은 시험 아님)`, k.signal === 'SIGKILL' && fs.existsSync(path.join(dir, IR.JOURNAL_FILE)), `${k.signal} · ${mid.join('|')}`)
-    const rec = IR.recoverJournal(dir)
+    check(`③ ${phase} 에서 실제 SIGKILL 됐다 (죽은 시험 아님)`, k.signal === 'SIGKILL' && fs.existsSync(path.join(dir, IR.JOURNAL_FILE)), `${k.signal} · ${mid.join('|')} · ${k.stderr.slice(0, 200)}`)
+    const rec = IR.recoverJournal({ draftsDir: T, slug })
     check(`③ ${phase} 급사 → 다음 실행이 두 파일을 원본 바이트로 되돌린다`, rec.recovered && read(path.join(dir, 'brief.md')) === 'OLD BRIEF\n' && read(path.join(dir, 'review.ts')) === 'OLD REVIEW\n',
       `${JSON.stringify(rec)} · ${read(path.join(dir, 'brief.md'))}`)
     check(`⑬ ${phase} 원복 뒤 journal · 사본 · staged 잔여 0`, fs.readdirSync(dir).sort().join(',') === 'brief.md,review.ts', fs.readdirSync(dir).join(','))
@@ -207,20 +218,215 @@ IR.commitFiles({ dir: ${JSON.stringify(dir)}, files: [{ path: ${JSON.stringify(p
   fs.writeFileSync(path.join(dir, 'review.ts'), 'OLD REVIEW\n')
   let threw = false
   try {
-    IR.commitFiles({ dir, files: [{ path: path.join(dir, 'brief.md'), text: 'NEW\n' }, { path: path.join(dir, 'review.ts'), text: 'NEW\n' }],
+    IR.commitFiles({ draftsDir: T, slug: 'write-fail', kind: 'BRIEF', files: { brief: 'NEW\n', review: 'NEW\n' },
       phaseHook: (ph) => { if (ph === 'committing-1') throw new Error('시험: 두 번째 파일 쓰기 실패') } })
   } catch { threw = true }
-  const rec = IR.recoverJournal(dir)
+  const rec = IR.recoverJournal({ draftsDir: T, slug: 'write-fail' })
   check('③ 두 번째 파일 쓰기 실패 → 다음 실행이 원복 (brief 도 원본)', threw && rec.recovered && read(path.join(dir, 'brief.md')) === 'OLD BRIEF\n' && fs.readdirSync(dir).length === 2)
-  // runInputRepair 가 시작할 때 남은 journal 을 먼저 처리한다
+  // runInputRepair 가 시작할 때 남은 journal 을 먼저 처리한다 — 실제 급사가 남긴 journal
   writeSlug(GRAY, { brief: GRAY_BRIEF })
-  fs.writeFileSync(path.join(D, GRAY, IR.JOURNAL_FILE), JSON.stringify({ version: 'input-repair-journal/1', phase: 'committing-1',
-    files: [{ path: p(GRAY, 'brief.md'), existed: true, backup: `${p(GRAY, 'brief.md')}.bk`, staged: `${p(GRAY, 'brief.md')}.st` }] }))
-  fs.writeFileSync(`${p(GRAY, 'brief.md')}.bk`, GRAY_BRIEF)
-  fs.writeFileSync(p(GRAY, 'brief.md'), 'HALF-WRITTEN\n')
+  killAt({ draftsDir: D, slug: GRAY, kind: 'BRIEF', files: { brief: 'HALF-WRITTEN\n', review: 'HALF REVIEW\n' }, phase: 'committing-1' })
   const L3 = seedLedger('b3')
   const rep = await run([item(GRAY)], L3, fakeDeps({ ledger: L3, brief: () => ({ ok: false, why: 'x' }) }))
   check('⑬ 회차 시작 시 남은 journal 을 원복하고 나서 수리한다', rep.recovered.some((x) => x.slug === GRAY && x.recovered) && read(p(GRAY, 'brief.md')) === GRAY_BRIEF && !fs.existsSync(path.join(D, GRAY, IR.JOURNAL_FILE)))
+}
+
+// ── P0 위조·손상 journal · 급사 뒤 다른 writer ─────────────────
+console.log('\nP0 journal 신원·충돌 — 위조 journal 은 아무것도 쓰거나 지우지 않는다')
+{
+  const FD = path.join(T, 'forge', 'drafts')
+  const OUT = path.join(T, 'forge', 'outside')
+  fs.mkdirSync(FD, { recursive: true })
+  fs.mkdirSync(OUT, { recursive: true })
+  /** 폴더 아래 모든 파일·symlink 의 바이트 지도 (symlink 는 링크 자체) */
+  const snap = (root) => {
+    const m = {}
+    const walk = (d) => { for (const n of fs.readdirSync(d)) { const f = path.join(d, n); const st = fs.lstatSync(f)
+      if (st.isSymbolicLink()) m[f] = `link:${fs.readlinkSync(f)}`; else if (st.isDirectory()) walk(f); else m[f] = sha(fs.readFileSync(f)) } }
+    walk(root)
+    return JSON.stringify(m)
+  }
+  const forgeRoot = path.join(T, 'forge')
+  let n = 0
+  /** 실제 급사가 남긴 BRIEF journal 을 만들고, 그 JSON 을 고친다 */
+  const forged = (tamper, { phase = 'committing-1' } = {}) => {
+    const slug = `forge-${++n}`
+    const dir = path.join(FD, slug)
+    fs.mkdirSync(dir)
+    fs.writeFileSync(path.join(dir, 'brief.md'), 'OLD BRIEF\n')
+    fs.writeFileSync(path.join(dir, 'review.ts'), 'OLD REVIEW\n')
+    fs.writeFileSync(path.join(OUT, `victim-${slug}.md`), `OUTSIDE ${slug}\n`)
+    const k = killAt({ draftsDir: FD, slug, kind: 'BRIEF', files: { brief: 'NEW BRIEF\n', review: 'NEW REVIEW\n' }, phase })
+    const jp = path.join(dir, IR.JOURNAL_FILE)
+    const j = JSON.parse(fs.readFileSync(jp, 'utf8'))
+    const t = tamper(j, { slug, dir, victim: path.join(OUT, `victim-${slug}.md`) })
+    if (t !== undefined) fs.writeFileSync(jp, typeof t === 'string' ? t : JSON.stringify(t))
+    return { slug, dir, jp, killed: k.signal === 'SIGKILL' }
+  }
+  const victimFile = ({ victim }) => victim
+  const CASES = [
+    ['외부 경로', (j, c) => { j.files[0].path = victimFile(c); return j }],
+    ['상대 경로', (j) => { j.files[0].path = 'brief.md'; return j }],
+    ['중복', (j) => { j.files[1] = { ...j.files[0] }; return j }],
+    ['누락', (j) => { j.files = [j.files[0]]; return j }],
+    ['추가', (j, c) => { j.files.push({ ...j.files[0], role: 'draft', path: path.join(c.dir, 'draft.md') }); return j }],
+    ['잘못된 schema', (j) => { j.schema = 'input-repair-journal/1'; return j }],
+    ['잘못된 kind', (j) => { j.kind = 'HERO'; return j }],
+    ['DRAFT kind 에 brief·review', (j) => { j.kind = 'DRAFT'; return j }],
+    ['잘못된 phase', (j) => { j.phase = 'committing-9'; return j }],
+    ['잘못된 역할', (j) => { j.files[0].role = 'review'; j.files[1].role = 'brief'; return j }],
+    ['다른 slug', (j) => { j.slug = 'gray-hair-leave-as-is'; return j }],
+    ['backup 외부 경로', (j, c) => { j.files[0].backup = victimFile(c); return j }],
+    ['staged 외부 경로', (j, c) => { j.files[1].staged = victimFile(c); return j }],
+    ['before 원문과 beforeSha 불일치', (j) => { j.files[0].before = 'FORGED BEFORE\n'; return j }],
+    ['JSON 아님', () => '{ not json'],
+  ]
+  for (const [name, tamper] of CASES) {
+    const f = forged(tamper)
+    const before = snap(forgeRoot)
+    let rec
+    try { rec = IR.recoverJournal({ draftsDir: FD, slug: f.slug }) } catch (e) { rec = { threw: String(e?.message ?? e) } }
+    const after = snap(forgeRoot)
+    check(`P0 ${name} → RECOVERY_IDENTITY · 대상·외부·backup·staged·journal 바이트 불변`,
+      f.killed && rec.recovered === false && rec.code === 'RECOVERY_IDENTITY' && before === after && fs.existsSync(f.jp), `${JSON.stringify(rec)} · 변화 ${before !== after}`)
+  }
+  // symlink 탈출 — slug 폴더 자체가 바깥을 가리킨다
+  {
+    const realOut = path.join(OUT, 'escape-dir')
+    fs.mkdirSync(realOut)
+    fs.writeFileSync(path.join(realOut, 'brief.md'), 'OUTSIDE BRIEF\n')
+    fs.writeFileSync(path.join(realOut, 'review.ts'), 'OUTSIDE REVIEW\n')
+    fs.symlinkSync(realOut, path.join(FD, 'escape-link'))
+    const j = { schema: IR.JOURNAL_SCHEMA, txId: 'a'.repeat(16), kind: 'BRIEF', slug: 'escape-link', phase: 'committing-1',
+      files: [['brief', 'brief.md'], ['review', 'review.ts']].map(([role, nm]) => { const fp = path.join(FD, 'escape-link', nm)
+        return { role, path: fp, before: 'X\n', beforeSha: sha('X\n'), afterSha: sha(`OUTSIDE ${nm === 'brief.md' ? 'BRIEF' : 'REVIEW'}\n`), backup: `${fp}.input-repair-backup-${'a'.repeat(16)}`, staged: `${fp}.input-repair-staged-${'a'.repeat(16)}` } }) }
+    fs.writeFileSync(path.join(realOut, IR.JOURNAL_FILE), JSON.stringify(j))
+    const before = snap(forgeRoot)
+    const rec = IR.recoverJournal({ draftsDir: FD, slug: 'escape-link' })
+    check('P0 symlink 탈출(slug 폴더가 바깥) → RECOVERY_IDENTITY · 바깥 파일 불변', rec.code === 'RECOVERY_IDENTITY' && snap(forgeRoot) === before && read(path.join(realOut, 'brief.md')) === 'OUTSIDE BRIEF\n', JSON.stringify(rec))
+    // 대상 파일이 바깥을 가리키는 symlink
+    const f = forged((jj) => jj)
+    fs.rmSync(path.join(f.dir, 'review.ts'))
+    fs.symlinkSync(path.join(OUT, `victim-${f.slug}.md`), path.join(f.dir, 'review.ts'))
+    const b2 = snap(forgeRoot)
+    const r2 = IR.recoverJournal({ draftsDir: FD, slug: f.slug })
+    check('P0 대상 파일이 바깥 symlink → RECOVERY_IDENTITY · 바깥 파일 불변', r2.code === 'RECOVERY_IDENTITY' && snap(forgeRoot) === b2, JSON.stringify(r2))
+  }
+  // 급사 뒤 다른 writer 가 대상 파일을 바꿨다
+  for (const [phase, victimRole] of [['committing-1', 'review'], ['committing-1', 'brief'], ['committed', 'brief'], ['prepared', 'brief']]) {
+    const f = forged(() => undefined, { phase })
+    const target = path.join(f.dir, victimRole === 'brief' ? 'brief.md' : 'review.ts')
+    fs.writeFileSync(target, 'OTHER WRITER\n')
+    const before = snap(forgeRoot)
+    const rec = IR.recoverJournal({ draftsDir: FD, slug: f.slug })
+    check(`P0 ${phase} 급사 뒤 다른 writer 가 ${victimRole} 변경 → RECOVERY_CONFLICT · 아무것도 덮지 않는다 · journal 유지`,
+      f.killed && rec.code === 'RECOVERY_CONFLICT' && snap(forgeRoot) === before && read(target) === 'OTHER WRITER\n' && fs.existsSync(f.jp), JSON.stringify(rec))
+  }
+  // 정상 복구는 계속 통과한다 — initializing · prepared · committing-1 · committing-2 · committed
+  for (const phase of ['initializing', 'prepared', 'committing-1', 'committing-2', 'committed']) {
+    const f = forged(() => undefined, { phase })
+    const rec = IR.recoverJournal({ draftsDir: FD, slug: f.slug })
+    const want = phase === 'committed' ? ['NEW BRIEF\n', 'NEW REVIEW\n'] : ['OLD BRIEF\n', 'OLD REVIEW\n']
+    check(`P0 정상 ${phase} 급사 → ${phase === 'committed' ? '새 쌍 유지·정리' : '원본 쌍으로 복구'} · 잔여 0`,
+      f.killed && rec.recovered === true && read(path.join(f.dir, 'brief.md')) === want[0] && read(path.join(f.dir, 'review.ts')) === want[1] && fs.readdirSync(f.dir).sort().join(',') === 'brief.md,review.ts',
+      `${JSON.stringify(rec)} · ${fs.readdirSync(f.dir).join(',')}`)
+  }
+  // 교체 함수도 정해진 역할 밖은 받지 않는다
+  let refused = 0
+  for (const files of [{ brief: 'x' }, { brief: 'x', review: 'y', draft: 'z' }, { draft: 'x', review: 'y' }]) {
+    try { IR.commitFiles({ draftsDir: FD, slug: 'forge-1', kind: 'BRIEF', files }) } catch { refused++ }
+  }
+  try { IR.commitFiles({ draftsDir: FD, slug: '../outside', kind: 'DRAFT', files: { draft: 'x' } }) } catch { refused++ }
+  check('P0 commitFiles — BRIEF 는 brief·review 정확히 2개 · 바깥 slug 거부', refused === 4, `거부 ${refused}/4`)
+  // runInputRepair — 위조 journal 이 있는 slug 는 건드리지 않고 다른 후보는 계속한다
+  writeSlug(GRAY, { brief: GRAY_BRIEF })
+  writeSlug(COLD, { brief: GOOD_BRIEF, draft: COLD_DRAFT })
+  const victim = path.join(OUT, 'run-victim.md')
+  fs.writeFileSync(victim, 'RUN VICTIM\n')
+  const fp = p(GRAY, 'brief.md')
+  fs.writeFileSync(path.join(D, GRAY, IR.JOURNAL_FILE), JSON.stringify({ schema: IR.JOURNAL_SCHEMA, txId: 'b'.repeat(16), kind: 'DRAFT', slug: GRAY, phase: 'prepared',
+    files: [{ role: 'draft', path: victim, before: null, beforeSha: 'ABSENT', afterSha: sha('RUN VICTIM\n'), backup: `${fp}.input-repair-backup-${'b'.repeat(16)}`, staged: `${fp}.input-repair-staged-${'b'.repeat(16)}` }] }))
+  const LJ = seedLedger('journal-run')
+  const fj = fakeDeps({ ledger: LJ })
+  const repJ = await run([item(GRAY), item(COLD)], LJ, fj)
+  check('P0 회차 — 위조 journal(외부 파일 삭제 시도) → 외부 파일 보존 · RECOVERY_IDENTITY 기록 · 그 slug 는 RECOVERY_BLOCKED · provider 0',
+    read(victim) === 'RUN VICTIM\n' && repJ.recovered.some((r) => r.slug === GRAY && r.code === 'RECOVERY_IDENTITY') && repJ.skipped.some((x) => x.slug === GRAY && x.reason === 'RECOVERY_BLOCKED') &&
+    !fj.calls.generateBrief.includes(GRAY) && read(p(GRAY, 'brief.md')) === GRAY_BRIEF && fs.existsSync(path.join(D, GRAY, IR.JOURNAL_FILE)),
+    `${JSON.stringify(repJ.recovered)} · ${JSON.stringify(repJ.skipped)} · ${read(victim)}`)
+  check('P0 회차 — 다른 후보(cold)는 계속 APPLIED', byslug(repJ, COLD)?.outcome === 'APPLIED')
+  check('P0 회차 — producer 요약에 RECOVERY_IDENTITY 미해결로 잡힌다', PX.summarizeRepairStage({ status: 0, report: repJ }).failures.some((f) => f.slug === GRAY && f.outcome === 'RECOVERY_IDENTITY'))
+  fs.rmSync(path.join(D, GRAY, IR.JOURNAL_FILE))
+}
+
+// ── P1 brief 수리 실행권 — 같은 지문은 회차를 넘어 provider 0 ───────
+console.log('\nP1 brief 수리 지문 — 운영 장부에 호출 전 영구 예약 · 다음 회차 provider 0')
+{
+  const entryOf = (L) => Q.readQuarantine(L).store[GRAY]
+  // REJECTED 다음 회차
+  writeSlug(GRAY, { brief: GRAY_BRIEF })
+  const LB = seedLedger('brief-persist', { [GRAY]: { attempts: 1, regenCalls: 1, kind: 'CONTENT', lastAt: 5 } })
+  const f1 = fakeDeps({ ledger: LB, brief: () => ({ ok: true, briefText: GF_BAD_PAIR.brief, reviewText: GF_BAD_PAIR.review, calls: 2 }) })
+  const r1 = byslug(await run([item(GRAY)], LB, f1), GRAY)
+  const e1 = entryOf(LB)
+  check('P1 1회차 REJECTED — 실행권 기록(지문·REJECTED·providerCalls 2) · briefRepairCalls 2', r1?.outcome === 'REJECTED' && f1.calls.generateBrief.length === 1 &&
+    e1.briefRepairs?.length === 1 && e1.briefRepairs[0].fingerprint === r1.repairFingerprint && e1.briefRepairs[0].outcome === 'REJECTED' && e1.briefRepairs[0].providerCalls === 2 && e1.briefRepairCalls === 2, JSON.stringify(e1))
+  check('P1 호출 수는 CONTENT attempts · QA regenCalls 에 들어가지 않는다', e1.attempts === 1 && e1.regenCalls === 1 && e1.kind === 'CONTENT' && e1.lastAt === 5, JSON.stringify(e1))
+  const ledgerBytes = fs.readFileSync(LB)
+  const f2 = fakeDeps({ ledger: LB })
+  const r2 = byslug(await run([item(GRAY)], LB, f2), GRAY)
+  check('P1 다음 회차 같은 지문 → REPAIR_EXHAUSTED · provider 호출 0 · brief 불변 · 장부 바이트 불변',
+    r2?.outcome === 'REPAIR_EXHAUSTED' && f2.calls.generateBrief.length === 0 && r2.providerCalls === 0 && read(p(GRAY, 'brief.md')) === GRAY_BRIEF && fs.readFileSync(LB).equals(ledgerBytes),
+    `${r2?.outcome} · provider ${f2.calls.generateBrief.length} · ${r2?.reason}`)
+  // 생성 실패(FAILED) 다음 회차
+  const LF2 = seedLedger('brief-failed')
+  await run([item(GRAY)], LF2, fakeDeps({ ledger: LF2, brief: () => ({ ok: false, why: '시험', calls: 2 }) }))
+  const f3 = fakeDeps({ ledger: LF2 })
+  const r3 = byslug(await run([item(GRAY)], LF2, f3), GRAY)
+  check('P1 생성 실패 다음 회차 → REPAIR_EXHAUSTED · provider 0', r3?.outcome === 'REPAIR_EXHAUSTED' && f3.calls.generateBrief.length === 0 && entryOf(LF2).briefRepairs[0].outcome === 'FAILED')
+  // provider 예외(호출 여부 불명) 다음 회차
+  const LE = seedLedger('brief-throw')
+  await run([item(GRAY)], LE, fakeDeps({ ledger: LE, brief: () => { throw new Error('시험: 호출 중 예외') } }))
+  const fe = fakeDeps({ ledger: LE })
+  check('P1 provider 예외(호출 수 모름) 다음 회차 → REPAIR_EXHAUSTED · provider 0', byslug(await run([item(GRAY)], LE, fe), GRAY)?.outcome === 'REPAIR_EXHAUSTED' && fe.calls.generateBrief.length === 0 && entryOf(LE).briefRepairs[0].providerCalls === null)
+  // 급사 — provider 호출 중 SIGKILL → RESERVED 가 남는다
+  const LK = seedLedger('brief-kill')
+  const QLIB = pathToFileURL(path.join(HERE, 'lib', 'magazine-quarantine.mjs')).href
+  const child = path.join(T, 'brief-kill.mjs')
+  fs.writeFileSync(child, `const IR = await import(${JSON.stringify(LIB)})
+const Q = await import(${JSON.stringify(QLIB)})
+await IR.runInputRepair({ draftsDir: ${JSON.stringify(D)}, queue: [${JSON.stringify(item(GRAY))}], ledger: Q.readQuarantine(${JSON.stringify(LK)}), quarantinePath: ${JSON.stringify(LK)}, tmpDir: ${JSON.stringify(path.join(T, 'tmp'))},
+  deps: { log: () => {}, parseReview: () => ({}), generateBrief: async () => { process.kill(process.pid, 'SIGKILL') } } })
+`)
+  const kk = spawnSync(process.execPath, [child], { encoding: 'utf8', env: { ...process.env } })
+  const ek = entryOf(LK)
+  check('P1 provider 호출 중 SIGKILL → 장부에 RESERVED 가 남는다 (호출 여부 불명)', kk.signal === 'SIGKILL' && ek?.briefRepairs?.[0]?.outcome === 'RESERVED', `${kk.signal} · ${JSON.stringify(ek)} · ${kk.stderr.slice(0, 200)}`)
+  const fk = fakeDeps({ ledger: LK })
+  const rk = byslug(await run([item(GRAY)], LK, fk), GRAY)
+  check('P1 급사 다음 회차 → 보수적으로 재호출 0 · REPAIR_EXHAUSTED (이전 RESERVED)', rk?.outcome === 'REPAIR_EXHAUSTED' && rk.priorOutcome === 'RESERVED' && fk.calls.generateBrief.length === 0, `${rk?.outcome} · ${rk?.priorOutcome}`)
+  // 지문이 달라질 때만 새 실행권 — 원본 brief 변경 · 큐 행 변경
+  writeSlug(GRAY, { brief: `${GRAY_BRIEF}\n<!-- 사람이 고쳤다 -->\n` })
+  const fb = fakeDeps({ ledger: LB })
+  const rb = byslug(await run([item(GRAY)], LB, fb), GRAY)
+  check('P1 원본 brief 가 바뀌면 지문이 달라져 새 수리 1회 (provider 1)', rb?.outcome === 'APPLIED' && fb.calls.generateBrief.length === 1 && rb.repairFingerprint !== r1.repairFingerprint, `${rb?.outcome} · ${fb.calls.generateBrief.length}`)
+  writeSlug(GRAY, { brief: GRAY_BRIEF })
+  const fq = fakeDeps({ ledger: LB })
+  const rq = byslug(await run([{ ...item(GRAY), title: `${item(GRAY).title} ` }], LB, fq), GRAY)
+  check('P1 큐 행이 바뀌면 새 수리 1회 · 같은 brief·같은 큐는 여전히 0', rq?.outcome === 'APPLIED' && fq.calls.generateBrief.length === 1, `${rq?.outcome}`)
+  writeSlug(GRAY, { brief: GRAY_BRIEF })
+  const fz = fakeDeps({ ledger: LB })
+  check('P1 원래 지문으로 돌아오면 다시 0', byslug(await run([item(GRAY)], LB, fz), GRAY)?.outcome === 'REPAIR_EXHAUSTED' && fz.calls.generateBrief.length === 0)
+  // 장부를 못 쓰면 예약 실패 → provider 0
+  writeSlug(GRAY, { brief: GRAY_BRIEF })
+  const LX = path.join(T, 'brief-bad-ledger.json')
+  fs.writeFileSync(LX, '{ broken')
+  const fx2 = fakeDeps({ ledger: LX })
+  const rx = await IR.runInputRepair({ draftsDir: D, queue: [item(GRAY)], ledger: { ok: true, store: {} }, quarantinePath: LX, deps: fx2.deps, tmpDir: path.join(T, 'tmp') })
+  check('P1 장부 예약 실패(손상) → FAILED · provider 0 (fail-closed)', byslug(rx, GRAY)?.outcome === 'FAILED' && fx2.calls.generateBrief.length === 0, JSON.stringify(byslug(rx, GRAY)))
+  // HOLD 행에 직접 예약을 시도해도 바이트 불변
+  const LHh = seedLedger('brief-hold', { [GRAY]: holdRow() })
+  const hb = fs.readFileSync(LHh)
+  const rh = Q.reserveBriefRepair({ slug: GRAY, fingerprint: 'sha256:x', path: LHh })
+  check('P1 전송불명 HOLD 행 예약 → DELIVERY_UNCERTAIN_HOLD · 장부 바이트 불변', !rh.ok && rh.code === 'DELIVERY_UNCERTAIN_HOLD' && fs.readFileSync(LHh).equals(hb))
 }
 
 // ── ⑤ ⑥ draft echo 수리 ──────────────────────────────────
@@ -339,23 +545,65 @@ console.log('\n⑪ ⑫ 한 후보 실패 뒤 계속 · 회차 최대 3건')
   check('⑫ 같은 대상은 한 번만 (무한 반복 0)', new Set(repM.results.map((r) => r.slug)).size === repM.results.length)
 }
 
-// ── producer 흐름 — 잠금·미해결 뒤 · 회수 전 · 실패해도 회수 계속 ──
-console.log('\n흐름 — producer 안에서 잠금·미해결 검사 뒤 · 원고 회수 전 · 실패는 회차를 막지 않는다')
+// ── producer 흐름 — 잠금·미해결 뒤 · 회수 전 · 미해결은 PARTIAL ──
+console.log('\n흐름 — producer 안에서 잠금·미해결 검사 뒤 · 원고 회수 전 · 수리 미해결은 성공과 다른 판정')
+const RESULT_FILE = path.join(D, '_runs', '2026-10-11', 'input-repair-001000-1-abcd1234.json')
+const repReport = (results, extra = {}) => ({ ok: true, results, skipped: [], recovered: [], resultFile: RESULT_FILE, ...extra })
 {
   const order = []
-  const flow = (repairStatus) => PF.runProducerFlow({ dryRun: false, deps: {
+  const notes = []
+  const flow = (repair) => PF.runProducerFlow({ dryRun: false, deps: {
     log: () => {}, checkLock: () => { order.push('lock'); return { ok: true } }, checkTools: () => ({ ok: true }), checkGit: () => ({ ok: true }),
     checkOutstanding: () => { order.push('outstanding'); return { ok: true, message: '0건' } },
     runPlan: () => { order.push('plan'); return { status: 0 } }, readSupply: () => ({ selected: 0, reusable: 3 }),
     runBrief: () => { order.push('brief'); return { status: 0 } },
-    runRepair: () => { order.push('repair'); return { status: repairStatus } },
+    runRepair: () => { order.push('repair'); return repair },
     runFetch: () => { order.push('fetch'); return { status: 0 } },
-    notify: async () => ({ ok: true }) } })
-  const ok = await flow(0)
+    notify: async (ctx) => { notes.push(ctx); return { ok: true } } } })
+  const ok = await flow({ status: 0, report: repReport([{ slug: COLD, type: IR.REPAIR.DRAFT_ECHO, outcome: 'APPLIED' }]) })
   check('흐름 — 잠금 → 미해결 → 선정 → 수리 → 회수 순서', order.join(',') === 'lock,outstanding,plan,repair,fetch', order.join(','))
-  order.length = 0
-  const bad = await flow(1)
-  check('흐름 — 수리 실패(종료 1)여도 회수는 돌고 회차 판정은 같다', order.includes('fetch') && bad.verdict === ok.verdict && bad.code === ok.code, `${order.join(',')} · ${bad.verdict}`)
+  check('흐름 — 수리가 전부 적용되면 성공 회차 (OK · 0)', ok.verdict === 'OK' && ok.code === 0, `${ok.verdict} · ${ok.code} · ${ok.reason}`)
+  // 🔴 앞판 시험("수리 실패여도 판정이 같다")을 뒤집는다 — 회수는 돌되 판정은 성공과 달라야 한다
+  const cases = [
+    ['REJECTED', { status: 0, report: repReport([{ slug: GRAY, type: IR.REPAIR.BRIEF, outcome: 'REJECTED', reason: '계약 위반' }]) }, GRAY],
+    ['DELIVERY_UNCERTAIN', { status: 0, report: repReport([{ slug: AUTUMN, type: IR.REPAIR.DRAFT_ECHO, outcome: 'DELIVERY_UNCERTAIN' }]) }, AUTUMN],
+    ['REPAIR_EXHAUSTED', { status: 0, report: repReport([{ slug: GRAY, type: IR.REPAIR.BRIEF, outcome: 'REPAIR_EXHAUSTED' }]) }, GRAY],
+    ['FAILED', { status: 0, report: repReport([{ slug: COLD, type: IR.REPAIR.DRAFT_ECHO, outcome: 'FAILED' }]) }, COLD],
+    ['QUARANTINE_UNREADABLE', { status: 1, report: { ok: false, code: 'QUARANTINE_UNREADABLE', why: '장부 손상', results: [], skipped: [], recovered: [], resultFile: RESULT_FILE } }, null],
+    ['RECOVERY_IDENTITY', { status: 0, report: repReport([], { recovered: [{ slug: GRAY, recovered: false, code: 'RECOVERY_IDENTITY', why: '외부 경로' }] }) }, GRAY],
+    ['REPAIR_RESULT_MISSING', { status: 1 }, null],
+    ['REPAIR_STAGE_FAILED', { spawnError: 'ENOENT', status: null }, null],
+  ]
+  for (const [code, repair, slug] of cases) {
+    order.length = 0
+    notes.length = 0
+    const bad = await flow(repair)
+    const note = notes[0]
+    check(`흐름 — 수리 ${code} → 회수는 돈다 · 판정은 PARTIAL(3) 로 성공과 다르다 · 이유에 slug·코드`,
+      order.includes('fetch') && bad.verdict === 'PARTIAL' && bad.code === PX.PARTIAL_EXIT && bad.code !== ok.code && bad.reason.includes(code) && (!slug || bad.reason.includes(slug)),
+      `${order.join(',')} · ${bad.verdict} · ${bad.code} · ${bad.reason}`)
+    check(`흐름 — 수리 ${code} → 알림 정확히 1회 · 구조화된 수리 결과가 실린다`,
+      notes.length === 1 && note.repair?.failures?.some((f) => f.outcome === code && (!slug || f.slug === slug)), JSON.stringify(note?.repair))
+  }
+  // 시스템 실패가 겹치면 SYSTEM 이 먼저 — 다만 수리 미해결도 이유에 남는다
+  const both = PX.judgeProducerRun({ plan: PX.stage('plan', { status: 0 }), brief: PX.stage('brief', { status: 0 }), fetch: PX.stage('fetch', { status: 1 }),
+    repair: PX.summarizeRepairStage({ status: 0, report: repReport([{ slug: GRAY, outcome: 'REJECTED' }]) }) })
+  check('흐름 — 회수 전역 실패 + 수리 미해결 → SYSTEM(1) · 이유에 수리 미해결도 남는다', both.verdict === 'SYSTEM' && both.code === 1 && both.reason.includes(`${GRAY}(REJECTED)`), both.reason)
+  // 알림 문구 — slug · 결과 코드 · 결과 파일 (notify 자식의 실제 judge)
+  const sum = PX.summarizeRepairStage({ status: 0, report: repReport([{ slug: GRAY, type: IR.REPAIR.BRIEF, outcome: 'REPAIR_EXHAUSTED' }, { slug: AUTUMN, type: IR.REPAIR.DRAFT_ECHO, outcome: 'DELIVERY_UNCERTAIN' }]) })
+  const alerts = PN.judge({ date: '2026-10-11', run: { status: 'COMPLETED', selected: [], inventoryDays: 30 }, runExists: true, repair: sum })
+  const a = alerts.find((x) => /입력 수리/.test(x.title))
+  check('알림 — notify 판정에 수리 미해결 알림 1건 · slug · 결과 코드 · 결과 파일 위치',
+    alerts.length === 1 && a && `${a.reason} ${a.next}`.includes(GRAY) && a.reason.includes('REPAIR_EXHAUSTED') && a.reason.includes(AUTUMN) && a.reason.includes('DELIVERY_UNCERTAIN') && a.next.includes(RESULT_FILE),
+    JSON.stringify(alerts))
+  check('알림 — 미해결이 없으면 수리 알림 0 (정상 회차는 조용하다)', PN.judge({ date: '2026-10-11', run: { status: 'COMPLETED', selected: [], inventoryDays: 30 }, runExists: true, repair: PX.summarizeRepairStage({ status: 0, report: repReport([]) }) }).length === 0)
+  // handoff — PARTIAL 과 수리 사실이 남고, 등록은 기존 정책대로 진행한다
+  const hp = HO.writeHandoff({ date: '2026-10-11', verdict: 'PARTIAL', code: PX.PARTIAL_EXIT, ran: ['plan', 'repair', 'fetch'], repair: sum })
+  const h = HO.readHandoff('2026-10-11')
+  const hj = HO.judgeHandoff({ handoff: h, producerLockHeld: false, waitedMs: 0 })
+  check('handoff — 격리 원고 폴더에 PARTIAL · 수리 slug·코드·결과 파일이 남는다', hp.startsWith(T + path.sep) && h.verdict === 'PARTIAL' && h.code === 3 && h.repair?.resultFile === RESULT_FILE &&
+    h.repair.failures.some((f) => f.slug === GRAY && f.outcome === 'REPAIR_EXHAUSTED'), JSON.stringify(h))
+  check('handoff — PARTIAL 이어도 auto-register 는 기존 정책대로 진행한다 (ready · SYSTEM 아님)', hj.ready === true && hj.code === 'HANDOFF_OK', JSON.stringify(hj))
   const holdOrder = []
   await PF.runProducerFlow({ dryRun: false, deps: { log: () => {}, checkLock: () => ({ ok: true }), checkTools: () => ({ ok: true }), checkGit: () => ({ ok: true }),
     checkOutstanding: () => ({ ok: false, code: 'OUTSTANDING', message: '미해결', severity: 'HOLD' }),

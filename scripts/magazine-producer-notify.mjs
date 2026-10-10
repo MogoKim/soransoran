@@ -40,6 +40,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { buildMessage, send, webhookStatus, kstNow } from './lib/slack-notify.mjs'
+import { composeRepairAlert } from './lib/magazine-producer-flow.mjs'
 
 // repo 는 이 파일 위치로 잡는다 — cwd 를 쓰면 다른 worktree 를 읽는다
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -60,8 +61,11 @@ function kstDate(ms = Date.now()) {
  * 알릴 것을 고른다. 여러 개면 전부 돌려준다 — 재고 경고와 ABORTED 는 함께 날 수 있다.
  * 🔴 메시지에 큐 전문·원고·개인정보를 넣지 않는다. 숫자와 상태만 넣는다.
  */
-export function judge({ date, run, runExists }) {
+export function judge({ date, run, runExists, repair = null }) {
   const alerts = []
+  // 🔴 입력 수리 미해결 — run.json 과 무관하게 같은 알림 회차에 싣는다 (producer 가 넘긴 요약)
+  const repairAlert = composeRepairAlert(repair)
+  if (repairAlert) alerts.push(repairAlert)
 
   if (!runExists) {
     alerts.push({
@@ -203,7 +207,13 @@ async function main() {
   const di = argv.indexOf('--date')
   const date = di !== -1 && argv[di + 1] ? argv[di + 1] : kstDate()
   const { run, runExists, path, broken } = loadRun(date)
-  const alerts = judge({ date, run, runExists })
+  // 🔴 producer 가 넘긴 입력 수리 요약 (JSON). 깨졌으면 그 자체가 알릴 거리다
+  const ri = argv.indexOf('--input-repair-summary')
+  let repair = null
+  if (ri !== -1) {
+    try { repair = JSON.parse(argv[ri + 1] ?? '') } catch { repair = { failures: [{ slug: null, outcome: 'REPAIR_SUMMARY_UNREADABLE' }], resultFile: null } }
+  }
+  const alerts = judge({ date, run, runExists, repair })
 
   const messages = alerts.map((a) => buildMessage(a))
 

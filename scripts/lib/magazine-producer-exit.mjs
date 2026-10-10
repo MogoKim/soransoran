@@ -32,6 +32,45 @@
  * 🔴 Slack 은 이 판정을 바꾸지 않는다. 알림이 실패해도 원래 실패는 실패다.
  */
 
+/**
+ * 🔴 **입력 수리 미해결은 성공 회차가 아니다** (2026-10-10 Codex P1).
+ *    앞판은 수리 단계의 종료 코드만 로그에 남기고 판정에 넣지 않았다. 수리가 실패·REJECTED·전송불명이어도
+ *    회차는 OK · exit 0 이었고, Slack 도 handoff 도 그 사실을 몰랐다.
+ *    이제 수리 결과 파일을 구조화해 받아 **PARTIAL(종료 코드 3)** 로 남긴다.
+ *    원고 회수는 그대로 돌고(판정만 다르다), handoff 는 SYSTEM 이 아니므로 등록은 기존 정책대로 진행한다.
+ */
+export const PARTIAL_EXIT = 3
+/** 고쳐지지 않은 채 남은 결과 — 사람이 봐야 한다 */
+export const REPAIR_UNRESOLVED = Object.freeze(['FAILED', 'REJECTED', 'DELIVERY_UNCERTAIN', 'REPAIR_EXHAUSTED', 'HELD'])
+
+/**
+ * 수리 단계의 실행 결과 + 구조화 결과(report) → 판정·알림·handoff 가 쓰는 요약. **순수 함수다.**
+ * 🔴 결과를 못 읽으면 "문제없음" 이 아니라 REPAIR_RESULT_MISSING 이다.
+ */
+export function summarizeRepairStage({ spawnError = null, status = null, report = null }) {
+  const failures = []
+  if (spawnError) failures.push({ slug: null, type: null, outcome: 'REPAIR_STAGE_FAILED', reason: `실행하지 못했다 (${spawnError})` })
+  else if (!report || typeof report !== 'object') failures.push({ slug: null, type: null, outcome: 'REPAIR_RESULT_MISSING', reason: `구조화 결과를 읽지 못했다 (종료 코드 ${status})` })
+  else {
+    if (report.ok === false) failures.push({ slug: null, type: null, outcome: report.code ?? 'REPAIR_STAGE_FAILED', reason: report.why ?? '' })
+    for (const r of report.recovered ?? []) {
+      if (r && r.recovered === false && r.code) failures.push({ slug: r.slug ?? null, type: 'JOURNAL', outcome: r.code, reason: r.why ?? '' })
+    }
+    for (const r of report.results ?? []) {
+      if (REPAIR_UNRESOLVED.includes(r?.outcome)) failures.push({ slug: r.slug ?? null, type: r.type ?? null, outcome: r.outcome, reason: r.reason ?? '' })
+    }
+    if (status !== 0 && failures.length === 0) failures.push({ slug: null, type: null, outcome: 'REPAIR_STAGE_FAILED', reason: `종료 코드 ${status}` })
+  }
+  return {
+    ran: true, spawnError, status,
+    resultFile: report?.resultFile ?? null,
+    applied: (report?.results ?? []).filter((r) => r?.outcome === 'APPLIED').map((r) => r.slug),
+    failures,
+  }
+}
+
+const repairList = (repair) => (repair?.failures ?? []).map((f) => `${f.slug ?? '입력 수리'}(${f.outcome})`).join(' · ')
+
 /** 한 단계의 결과 — 자식을 띄우지 못한 경우와 종료 코드를 구분한다 */
 export const stage = (name, { spawnError = null, status = null, skipped = false, note = null } = {}) => ({
   name, spawnError, status, skipped, note,
@@ -45,9 +84,10 @@ export const stage = (name, { spawnError = null, status = null, skipped = false,
  * @param {ReturnType<typeof stage>} p.brief
  * @param {ReturnType<typeof stage>} p.fetch
  * @param {{code:string, severity:string}|null} [p.outstanding]  HOLD/FAILURE 판정 (있으면 그것이 먼저다)
- * @returns {{code:number, verdict:'OK'|'HOLD'|'CONTENT'|'SYSTEM', reason:string, failures:string[]}}
+ * @param {ReturnType<typeof summarizeRepairStage>|null} [p.repair]  입력 수리 요약 (돌지 않았으면 null)
+ * @returns {{code:number, verdict:'OK'|'HOLD'|'CONTENT'|'PARTIAL'|'SYSTEM', reason:string, failures:string[]}}
  */
-export function judgeProducerRun({ plan, brief, fetch, outstanding = null, preflight = null }) {
+export function judgeProducerRun({ plan, brief, fetch, outstanding = null, preflight = null, repair = null }) {
   // ── 시작 전 검사가 막혔으면 그것이 먼저다 ────────────────
   //
   // 🔴 도구 부재(claude·gh)와 git 상태(NOT_ON_MAIN·DIRTY_TREE)는 **시스템 실패**다.
@@ -103,12 +143,24 @@ export function judgeProducerRun({ plan, brief, fetch, outstanding = null, prefl
     }
   }
 
+  const unresolved = repair?.failures ?? []
   if (failures.length > 0) {
-    return { code: 1, verdict: 'SYSTEM', reason: failures.join(' / '), failures }
+    // 🔴 시스템 실패가 먼저다 — 다만 수리 미해결도 이유에서 지우지 않는다
+    const note = unresolved.length ? ` / 입력 수리 미해결: ${repairList(repair)}` : ''
+    return { code: 1, verdict: 'SYSTEM', reason: `${failures.join(' / ')}${note}`, failures }
+  }
+
+  const blocked = brief.status === 1
+  if (unresolved.length > 0) {
+    return {
+      code: PARTIAL_EXIT,
+      verdict: 'PARTIAL',
+      reason: `입력 수리 미해결 ${unresolved.length}건 — ${repairList(repair)}${repair.resultFile ? ` · 결과 ${repair.resultFile}` : ''}${blocked ? ' · 일부 건이 brief 게이트에 막혔다' : ''}`,
+      failures: unresolved.map((f) => `repair: ${f.slug ?? '입력 수리'} ${f.outcome}${f.reason ? ` — ${f.reason}` : ''}`),
+    }
   }
 
   // 🔴 여기부터는 전부 정상 종료다. 게이트에 막힌 건이 있어도 회차는 성공이다.
-  const blocked = brief.status === 1
   return {
     code: 0,
     verdict: blocked ? 'CONTENT' : 'OK',

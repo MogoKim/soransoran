@@ -4,6 +4,7 @@
  *
  *   node scripts/magazine-input-repair.mjs --run YYYY-MM-DD            대상만 본다 (호출 0 · 쓰기 0)
  *   node scripts/magazine-input-repair.mjs --run YYYY-MM-DD --write    🔴 실제 수리 (Claude · ChatGPT 호출)
+ *     [--result-json <file>]   producer 가 판정에 쓸 구조화 결과 (결과 파일 위치 resultFile 포함)
  *
  * 🔴 실제 바깥 호출은 **여기서만** 붙인다. 판정·교체는 `lib/magazine-input-repair.mjs` 가 한다.
  *    - brief 후보: brief-auto 와 같은 생성기(`generateBriefCandidate`) · 같은 todo(`briefTodo`)
@@ -18,6 +19,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DRAFTS_DIR, loadArticles, loadQueue } from './lib/magazine-load.mjs'
 import { QUARANTINE_PATH, readQuarantine } from './lib/magazine-quarantine.mjs'
+import { writeAtomic } from './lib/magazine-g8-promoter.mjs'
 import { inputRepairGate } from './lib/magazine-delivery-gate.mjs'
 import { fetchResultFor, readFetchResults, removeFetchResults } from './lib/magazine-fetch-result.mjs'
 import { MAX_REPAIRS_PER_RUN, runInputRepair, scanRepairTargets, writeInputRepairResult } from './lib/magazine-input-repair.mjs'
@@ -82,13 +84,24 @@ async function main() {
     line(`대상 ${targets.length}건 (이번 회차 최대 ${MAX_REPAIRS_PER_RUN}) · 건너뜀 ${skipped.length}건`)
     process.exit(0)
   }
-  const report = await runInputRepair({ draftsDir: DRAFTS_DIR, queue, ledger, deps: makeRealRepairDeps(), tmpDir: TMP_DIR })
+  let report
+  try {
+    report = await runInputRepair({ draftsDir: DRAFTS_DIR, queue, ledger, quarantinePath: QUARANTINE_PATH, deps: makeRealRepairDeps(), tmpDir: TMP_DIR })
+  } catch (e) {
+    report = { ok: false, code: 'REPAIR_STAGE_FAILED', why: `예외: ${e?.message ?? e}`, results: [], skipped: [], recovered: [] }
+  }
   for (const r of report.results ?? []) line(`  ${r.outcome === 'APPLIED' ? '✅' : r.outcome === 'HELD' ? '⏸' : '⛔'} ${r.slug} — ${r.type} · ${r.outcome} · ${r.reason ?? ''}`)
   for (const s of report.skipped ?? []) line(`  ⏸ ${s.slug} — ${s.type} · ${s.reason}`)
-  try { line(`결과: ${writeInputRepairResult({ dir: join(DRAFTS_DIR, '_runs', date), report: { date, ...report } })}`) } catch (e) {
+  let resultFile = null
+  try { resultFile = writeInputRepairResult({ dir: join(DRAFTS_DIR, '_runs', date), report: { date, ...report } }); line(`결과: ${resultFile}`) } catch (e) {
     line(`결과 파일을 남기지 못했다 (${e?.message ?? e}) — 판정은 그대로다`)
   }
-  // 🔴 수리 실패는 회차 실패가 아니다 — 원고 회수는 계속 간다. 장부를 못 읽은 것만 1
+  // 🔴 producer 는 이 구조화 결과로 판정한다 (사람용 출력을 파싱하지 않는다). 못 쓰면 producer 가 REPAIR_RESULT_MISSING 으로 본다
+  const rj = arg('--result-json')
+  if (rj) {
+    try { writeAtomic(rj, `${JSON.stringify({ date, ...report, resultFile }, null, 2)}\n`) } catch (e) { line(`구조화 결과를 남기지 못했다 (${e?.message ?? e})`) }
+  }
+  // 🔴 수리 미해결은 종료 코드가 아니라 구조화 결과로 producer 에 전한다 — 장부를 못 읽은 것만 1
   process.exit(report.ok ? 0 : 1)
 }
 
