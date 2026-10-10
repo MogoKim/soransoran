@@ -46,7 +46,7 @@ import {
   type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
 import {
-  OPPORTUNITY_FILE_RE, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset,
+  OPPORTUNITY_FILE_RE, OPPORTUNITY_VERSION_LEGACY, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset,
   type SupplyIntent,
 } from '../../src/lib/supply-workset'
 import { claimsJitContract, intentLinkIssue, type IntentLinkIssue } from '../../src/lib/supply-intent'
@@ -194,14 +194,24 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
  * 🔴 **가장 최근 공급 기회 스냅샷** — 초안이 아직 없는 slot-valid 원천(생성 전 판정 eligible)의 증거 기록.
  *    없으면 빈 목록(기회 0 — 모름이 아니다: 공급이 아직 안 돌았으면 READY 로만 센다). 손상이면 `evidence: null`(모름).
  */
-export function latestOpportunities(dataDir: string, nowMs: number): { evidence: unknown[] | null; takenAt: string | null } {
+export function latestOpportunities(dataDir: string, nowMs: number): {
+  evidence: unknown[] | null; takenAt: string | null
+  /** 🔴 기회를 모르는 이유 — 옛 판(v1 · 자동 seed 전용이 아님)인지 손상인지 */
+  issue?: 'LEGACY_CONTRACT' | 'CORRUPT'
+} {
   if (!existsSync(dataDir)) return { evidence: [], takenAt: null }
   const files = readdirSync(dataDir).filter((f) => OPPORTUNITY_FILE_RE.test(f)).sort()
   for (const f of files.reverse()) {
     let snap: ReturnType<typeof readOpportunitySnapshot>
-    try { snap = readOpportunitySnapshot(JSON.parse(readFileSync(join(dataDir, f), 'utf-8'))) } catch { snap = null }
-    // 🔴 가장 최근 스냅샷이 손상이면 모른다 — 더 오래된 스냅샷으로 조용히 내려가지 않는다(2026-10-04 P0-2)
-    if (snap === null) return { evidence: null, takenAt: null }
+    let legacy = false
+    try {
+      const raw = JSON.parse(readFileSync(join(dataDir, f), 'utf-8')) as { version?: unknown }
+      legacy = raw?.version === OPPORTUNITY_VERSION_LEGACY
+      snap = readOpportunitySnapshot(raw)
+    } catch { snap = null }
+    // 🔴 가장 최근 스냅샷이 손상 · 옛 판이면 모른다 — 더 오래된 스냅샷으로 조용히 내려가지 않는다(2026-10-04 P0-2)
+    //    v1 은 raw 까지 적었다 — 자동 seed 전용(v2)이 아니면 D10 증거로 받지 않는다(2026-10-10 P0-B1)
+    if (snap === null) return { evidence: null, takenAt: null, issue: legacy ? 'LEGACY_CONTRACT' : 'CORRUPT' }
     if (Date.parse(snap.takenAt) > nowMs) continue
     return { evidence: snap.evidence, takenAt: snap.takenAt }
   }
@@ -499,7 +509,11 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
 
   // 기회 — READY + 원천 스냅샷(결말 수율로 할인 · 구간이면 두 끝을 합친다)
   const snap = latestOpportunities(i.dataDir, i.now.getTime())
-  if (snap.evidence === null) notes.push('가장 최근 원천 기회 스냅샷이 손상됐다 — 증명일 기회를 모른다')
+  if (snap.evidence === null) {
+    notes.push(snap.issue === 'LEGACY_CONTRACT'
+      ? '가장 최근 원천 기회 스냅샷이 옛 판(opportunities-v1 · raw 포함)이다 — 자동 seed 전용(v2)이 아니라 증명일 기회를 모른다 · 다음 공급 회차가 v2 를 쓰면 복구된다'
+      : '가장 최근 원천 기회 스냅샷이 손상됐다 — 증명일 기회를 모른다')
+  }
   const queuedHashes = new Set(i.loaded.allRows.map((r) => {
     const ev = readSourceEvidence(r.gateResults)
     return ev.ok ? ev.record.provenance.articleIdHash : null

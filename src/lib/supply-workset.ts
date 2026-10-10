@@ -76,12 +76,20 @@ export const WORKSET_FILE_RE = /^supply-workset-(\d{8}-\d{6})\.json$/
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 공급 러너가 회차마다 적는다 — **생성 전 판정(예정 슬롯 · 참여 동력 · 배정 대기)이 eligible 인 원천의 증거 기록**.
+ * 🔴 공급 러너가 회차마다 적는다 — **생성 전 판정(예정 슬롯 · 참여 동력 · 배정 대기)이 eligible 이고
+ *    자동 유료 공급이 소비할 수 있는(`isAutoSupplyConsumable` — 지금은 seed 만) 원천의 증거 기록**.
  *    다음 단계 preflight 가 "증명일 슬롯을 채울 기회가 있는가" 를 이 파일과 READY 로 센다.
  *    🔴 원문 제목 · 본문 · URL 없음 — `source-evidence-v1` 기록뿐이다(해시 · 시각 · 수).
+ *
+ * 🔴 **opportunities-v2 = 자동 seed 전용** (2026-10-10 P0-B1). v1 은 생성 가능 원천 **전체**(raw 포함)를 적었다 —
+ *    자동 공급이 raw 를 사지 않는데 preflight 가 raw 를 증명일 기회로 세면 D10 용량이 부푼다.
+ *    v1 은 읽지 않는다(`readOpportunitySnapshot` → null · preflight 는 가장 최근 파일이 v1 이면 기회를 모른다).
+ *    새 자연 공급 회차가 v2 를 쓰면 그대로 복구된다. 옛 파일을 고쳐 쓰지 않는다.
  */
 export const OPPORTUNITY_KIND = 'supply-opportunities'
-export const OPPORTUNITY_VERSION = 'opportunities-v1'
+export const OPPORTUNITY_VERSION = 'opportunities-v2'
+/** 🔴 옛 판 — 읽지 않는다. preflight 가 "손상" 과 "옛 판" 을 구분해 적으려고만 이름을 둔다 */
+export const OPPORTUNITY_VERSION_LEGACY = 'opportunities-v1'
 export const opportunitiesFileName = (runId: string): string => `supply-opportunities-${runId}.json`
 export const OPPORTUNITY_FILE_RE = /^supply-opportunities-\d{8}-\d{6}\.json$/
 
@@ -273,6 +281,14 @@ export const WORKSET_RAW_SLOT_EVERY = 5
  */
 export const worksetAxisOf = (r: WorksetRow): WorksetAxis =>
   S(r.input.axis) === RAW_AXIS ? 'raw' : 'seed'
+
+/**
+ * 🔴 **자동 유료 공급이 소비할 수 있는 원천인가 — 정본 하나** (2026-10-10 P0-B1 · 마스터 결정).
+ *    지금 계약: seed 축만 true. raw 축은 판정이 AUTO_RAW 로 보내도 사람 검토 레인으로만 가서 자동 초안 · 자동 READY 가 없다.
+ *    🔴 JIT 선택(`selectJitWorkset`)과 원천 기회 스냅샷(→ preflight 증명일 기회)이 **이 함수 하나**를 부른다 —
+ *       축 비교를 두 곳에 다시 적지 않는다. raw 자료 · 수집 · 사람 검토 경로는 그대로다.
+ */
+export const isAutoSupplyConsumable = (r: WorksetRow): boolean => worksetAxisOf(r) === 'seed'
 
 export type WorksetAxisCaps = {
   /** raw 가 가질 수 있는 최대 자리 */
@@ -1249,7 +1265,7 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
   let unlinkable = 0
   for (const r of base.eligible) {
     const key = K(r)
-    if (worksetAxisOf(r) === 'raw') { rawExcluded += 1; dropped.rawNotAutoConsumed += 1; note(key, 'RAW_EXCLUDED'); continue }
+    if (!isAutoSupplyConsumable(r)) { rawExcluded += 1; dropped.rawNotAutoConsumed += 1; note(key, 'RAW_EXCLUDED'); continue }
     const valid = slots.map((d) => preGenerationRelease(r, d, jit.now).verdict === 'eligible')
     const first = valid.indexOf(true)
     if (first < 0) { unlinkable += 1; dropped.slotUnassigned += 1; note(key, 'SLOT_UNLINKABLE'); continue }

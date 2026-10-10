@@ -13,7 +13,8 @@
  *      → provider 호출 0(장부 0줄) · picks 3건 전부 `personaCapacityDeferred` · `noDraft` 0 · artifact 0.
  *   ⑤ 부모 러너 `main --live` 를 **실제로** 돌린다 (2026-10-10 P0-B1 JIT 선택) — seed 6 · raw 4(댓글이 더 많다) ·
  *      격리 DB 큐에 형제 1건 → 러너가 적은 묶음이 seed 5(형제 뺀 전부) · raw 0(자동 소비자 없음 · 4건 제외 사유 기록)
- *      이고 판정이 그 묶음만 봤는지 대조한다.
+ *      이고 판정이 그 묶음만 봤는지 · 기회 스냅샷(opportunities-v2)이 자동 seed 5건만 적어 preflight 가 raw 를 증명일 기회로
+ *      세지 않는지 대조한다.
  *   ⑥ 부모 러너를 **두 회차** 돌린다 (2026-09-28 공급 가속 P0) — 발행된 형제 · 거절된 형제 · 옛 글의 원천은
  *      묶음에 들지 않고, 1회차가 적재한 원천은 2회차에 다시 뽑히지 않으며(중복 Queue 0 · Post 불변),
  *      장부의 judge ≤ 10 · draft ≤ 30 을 센다.
@@ -411,6 +412,23 @@ async function worksetAxisRunner(
     traced?.ok === true && traced.version === 'v2' && JSON.stringify(rawReasoned) === JSON.stringify(rawHashes)
     && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 5,
     traced === null ? 'trace 없음' : traced.ok ? `제외 ${rawReasoned.length}` : traced.problems.join(','))
+  // 🔴 (P0-B1 정합) 기회 스냅샷 = 자동 seed 전용(opportunities-v2) — preflight 의 실제 함수로 세어도 raw 는 증명일 기회가 아니다
+  const { latestOpportunities, sourceOpportunitiesOf } = await import('./lib/stage-preflight-facts.mjs')
+  const { OPPORTUNITY_VERSION } = await import('../src/lib/supply-workset')
+  const oppFile = readdirSync(D2).find((f) => /^supply-opportunities-.*\.json$/.test(f))
+  const opp = oppFile === undefined ? null
+    : JSON.parse(readFileSync(join(D2, oppFile), 'utf-8')) as { version: string; takenAt: string; evidence: { provenance: { articleIdHash: string | null } }[] }
+  const seedHashes = ['wsxs2', 'wsxs3', 'wsxs4', 'wsxs5', 'wsxs6'].map((id) => articleIdHashOf('navercafe:wgang', id)).sort()
+  const oppHashes = (opp?.evidence ?? []).map((e) => e.provenance.articleIdHash ?? '').sort()
+  check('🔴 🔴 **기회 스냅샷 = opportunities-v2 · 자동 seed 5건 정확히(형제 wsxs1 제외) · raw 4건 미포함**',
+    opp !== null && opp.version === OPPORTUNITY_VERSION && JSON.stringify(oppHashes) === JSON.stringify(seedHashes)
+    && !oppHashes.some((h) => rawHashes.includes(h)), opp === null ? '스냅샷 없음' : `${opp.version} · ${oppHashes.length}건`)
+  const latest = opp === null ? null : latestOpportunities(D2, Date.parse(opp.takenAt) + 1000)
+  const sourceOpps = latest?.evidence == null ? [] : sourceOpportunitiesOf(latest.evidence, new Set(), new Date(opp!.takenAt))
+  const oppKeys = sourceOpps.map((o) => o.key.replace(/^src:/, '')).sort()
+  check('🔴 🔴 **preflight 가 raw 를 증명일 기회로 세지 않는다** — 정본 판독(latestOpportunities → sourceOpportunitiesOf) 기회 = seed 5 · raw 0',
+    latest?.evidence != null && JSON.stringify(oppKeys) === JSON.stringify(seedHashes) && !oppKeys.some((h) => rawHashes.includes(h)),
+    `기회 ${oppKeys.length}`)
   check('🔴 러너 로그가 JIT 선택 사실과 raw 제외 사유를 적는다',
     /연결 가능 seed 5 · raw 제외 4 · 재시도 예약 0\/0/.test(out) && /원문 그대로\(raw\) 축 — 자동 소비자가 없다[^\n]* 4/.test(out),
     (/부족 슬롯 .*/.exec(out) ?? [''])[0])

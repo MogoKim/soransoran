@@ -57,7 +57,7 @@ import {
   sourceIdentityOf, sourceKeyOf, type HumanDecisionIndex,
   selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName,
   WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
-  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease,
+  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease, isAutoSupplyConsumable,
 } from '../src/lib/supply-workset'
 /** 🔴 공급 선택 관측(P0-B0) — 선택이 끝난 뒤 기록만 읽는다. 선택 · 유료 단계 · DB 에 영향 0 */
 import {
@@ -1030,7 +1030,8 @@ async function main(): Promise<number> {
      *    쓰기는 live 회차에서만(dry-run 파일 write 0).
      */
     if (canWrite) {
-      const opp = worksetEligibility(eligibilityInput).eligible.flatMap((r) => (r.evidence === null ? [] : [r.evidence]))
+      // 🔴 opportunities-v2 = 자동 seed 전용 — JIT 선택과 같은 정본(`isAutoSupplyConsumable`) 하나로 거른다
+      const opp = worksetEligibility(eligibilityInput).eligible.filter(isAutoSupplyConsumable).flatMap((r) => (r.evidence === null ? [] : [r.evidence]))
       writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify({
         kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT.toISOString(),
         slotAt: nextSlotAt.toISOString(), evidence: opp,

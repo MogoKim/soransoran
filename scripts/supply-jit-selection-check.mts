@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 
 import {
-  compareSupplyRank, EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, preGenerationRelease, retryReserveFor, selectWorkset,
+  compareSupplyRank, isAutoSupplyConsumable, EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, preGenerationRelease, retryReserveFor, selectWorkset,
   sourceIdentityOf, WGANG_SOURCE_SITE,
   type PriorOutcome, type SupplyRankKey, type WorksetRow,
 } from '../src/lib/supply-workset'
@@ -223,6 +223,8 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 최대 슬롯 보존 → 정
 
 // ── ④ raw ──
 {
+  check('④ 자동 공급 가능 판정(정본 하나) — seed true · raw false',
+    isAutoSupplyConsumable(ROW({ id: 'au-s', cp: 0.5 })) && !isAutoSupplyConsumable(ROW({ id: 'au-r', cp: 0.5, axis: 'raw' })))
   const raws = Array.from({ length: 6 }, (_, i) => ROW({ id: `raw${i}`, ageH: 4, cp: 0.99 - i * 0.01, axis: 'raw' }))
   const p = run({ rows: raws, slots: [at(1), at(5)], cap: 10 })
   check('④ raw 만 많아도 자동 유료 묶음 0(판정 · 생성 호출 대상 0) · 사유 rawNotAutoConsumed',
