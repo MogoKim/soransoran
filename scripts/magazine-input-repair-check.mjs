@@ -612,6 +612,159 @@ const repReport = (results, extra = {}) => ({ ok: true, results, skipped: [], re
   check('흐름 — 미해결 작업이 있으면 수리도 돌지 않는다', holdOrder.length === 0, holdOrder.join(','))
 }
 
+// ── ENOTDIR — runtime 원고 폴더 모양 (topic-queue.ts 일반 파일) ─────────
+console.log('\nENOTDIR — 원고 폴더의 일반 파일·숨김 파일·symlink 는 journal 후보가 아니다 · 대상 판정까지 실제로 간다')
+{
+  const OUTSIDE = path.join(T, 'enotdir-outside')
+  fs.mkdirSync(OUTSIDE, { recursive: true })
+  const extras = []
+  const put = (rel, text) => { const f = path.join(D, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); extras.push(f) }
+  // runtime 과 같은 모양: 큐 파일 · 숨김 파일 · _runs/_template 디렉터리(journal 없음) · 바깥을 가리키는 symlink 디렉터리
+  put('topic-queue.ts', fs.readFileSync(path.join(REPO, 'drafts', 'magazine', 'topic-queue.ts'), 'utf8'))
+  put('.DS_Store', 'binary-ish\n')
+  put(path.join('_runs', '2026-10-10', 'run.json'), '{}\n')
+  put(path.join('_template', 'review.ts'), 'export {}\n')
+  fs.writeFileSync(path.join(OUTSIDE, 'brief.md'), 'OUTSIDE BRIEF\n')
+  fs.writeFileSync(path.join(OUTSIDE, IR.JOURNAL_FILE), JSON.stringify({ schema: IR.JOURNAL_SCHEMA, txId: 'c'.repeat(16), kind: 'DRAFT', slug: 'linked-slug', phase: 'prepared',
+    files: [{ role: 'draft', path: path.join(OUTSIDE, 'brief.md'), before: null, beforeSha: 'ABSENT', afterSha: sha('OUTSIDE BRIEF\n'), backup: 'x', staged: 'y' }] }))
+  const link = path.join(D, 'linked-slug')
+  fs.symlinkSync(OUTSIDE, link)
+  extras.push(link)
+  const outsideBefore = fs.readdirSync(OUTSIDE).sort().join(',') + sha(fs.readFileSync(path.join(OUTSIDE, 'brief.md')))
+  // 정상 slug 의 유효 journal (실제 급사) · 위조 journal · 충돌 journal
+  writeSlug(GRAY, { brief: GRAY_BRIEF })
+  writeSlug(COLD, { brief: GOOD_BRIEF, draft: COLD_DRAFT })
+  writeSlug(AUTUMN, { brief: GOOD_BRIEF, draft: AUTUMN_ECHO })
+  const k1 = killAt({ draftsDir: D, slug: GRAY, kind: 'BRIEF', files: { brief: 'HALF\n', review: 'HALF\n' }, phase: 'committing-1' })
+  const FORGED = 'enotdir-forged'
+  writeSlug(FORGED, { brief: 'F\n' })
+  fs.writeFileSync(path.join(D, FORGED, IR.JOURNAL_FILE), JSON.stringify({ schema: 'input-repair-journal/1', files: [] }))
+  const CONFLICT = 'enotdir-conflict'
+  writeSlug(CONFLICT, { brief: 'OLD\n', review: 'OLD R\n' })
+  killAt({ draftsDir: D, slug: CONFLICT, kind: 'BRIEF', files: { brief: 'NEW\n', review: 'NEW R\n' }, phase: 'committing-1' })
+  fs.writeFileSync(p(CONFLICT, 'review.ts'), 'OTHER WRITER\n')
+
+  let rec
+  let threw = null
+  try { rec = IR.recoverAllJournals(D) } catch (e) { threw = e }
+  const bySlug = Object.fromEntries((rec ?? []).map((r) => [r.slug, r]))
+  check('ENOTDIR ① topic-queue.ts 일반 파일이 있어도 journal 스캔 예외 0', !threw, String(threw?.message ?? ''))
+  check('ENOTDIR ② 일반 파일·숨김 파일·_runs·_template 는 후보가 아니다 (기록 0)', rec && !['topic-queue.ts', '.DS_Store', '_runs', '_template'].some((s) => bySlug[s]), JSON.stringify(Object.keys(bySlug)))
+  check('ENOTDIR ③ symlink 디렉터리를 따라가지 않는다 — 기록 0 · 바깥 파일·journal 불변',
+    rec && !bySlug['linked-slug'] && fs.readdirSync(OUTSIDE).sort().join(',') + sha(fs.readFileSync(path.join(OUTSIDE, 'brief.md'))) === outsideBefore, JSON.stringify(bySlug['linked-slug'] ?? null))
+  check('ENOTDIR ④ 정상 slug 의 유효 journal(실제 SIGKILL)은 계속 원본으로 복구한다',
+    k1.signal === 'SIGKILL' && bySlug[GRAY]?.recovered === true && read(p(GRAY, 'brief.md')) === GRAY_BRIEF && !fs.existsSync(path.join(D, GRAY, IR.JOURNAL_FILE)), JSON.stringify(bySlug[GRAY]))
+  check('ENOTDIR ⑤ 손상·위조 journal 은 기존처럼 RECOVERY_IDENTITY · journal 유지', bySlug[FORGED]?.code === 'RECOVERY_IDENTITY' && fs.existsSync(path.join(D, FORGED, IR.JOURNAL_FILE)), JSON.stringify(bySlug[FORGED]))
+  check('ENOTDIR ⑤ 다른 writer 충돌 journal 은 기존처럼 RECOVERY_CONFLICT · 덮지 않는다',
+    bySlug[CONFLICT]?.code === 'RECOVERY_CONFLICT' && read(p(CONFLICT, 'review.ts')) === 'OTHER WRITER\n', JSON.stringify(bySlug[CONFLICT]))
+  // readdir 와 lstat 사이에 디렉터리가 일반 파일로 바뀐 경합 — ENOTDIR 은 "journal 없음"
+  let raced = null
+  let racedOut = null
+  try { racedOut = IR.recoverAllJournals(D, { list: () => [{ name: 'topic-queue.ts', isDirectory: () => true }] }) } catch (e) { raced = e }
+  check('ENOTDIR ⑥ 순회 경계 경합(디렉터리였던 항목이 일반 파일) → 예외 0 · journal 없음', !raced && Array.isArray(racedOut) && racedOut.length === 0, String(raced?.message ?? JSON.stringify(racedOut)))
+  // 회차 — journal 스캔 뒤 gray/cold/autumn 대상 판정까지 실제로 간다
+  fs.rmSync(path.join(D, FORGED), { recursive: true, force: true })
+  fs.rmSync(path.join(D, CONFLICT), { recursive: true, force: true })
+  const LE = seedLedger('enotdir-run')
+  const fe = fakeDeps({ ledger: LE, brief: () => ({ ok: false, why: '시험: 생성 안 함', calls: 1 }), rowFor: () => ({ status: 'failed', sent: false, reason: 'login_required' }) })
+  let repE = null
+  let thrownE = null
+  try { repE = await run([item(GRAY), item(COLD), item(AUTUMN)], LE, fe) } catch (e) { thrownE = e }
+  check('ENOTDIR ⑧ 회차가 예외 없이 gray(BRIEF)·cold·autumn(DRAFT_ECHO) 대상 판정과 수리 시도까지 간다',
+    !thrownE && repE?.ok === true && [GRAY, COLD, AUTUMN].every((s) => byslug(repE, s)) && fe.calls.generateBrief.includes(GRAY) && fe.calls.runner.includes(COLD) && fe.calls.runner.includes(AUTUMN),
+    thrownE ? String(thrownE.message) : JSON.stringify(repE?.results?.map((r) => `${r.slug}:${r.outcome}`)))
+  for (const f of extras) fs.rmSync(f, { recursive: true, force: true })
+}
+
+// ── ENOTDIR 실제 CLI · producer wrapper — runtime 모양 임시 루트 ─────────
+console.log('\nENOTDIR — runtime 모양 임시 루트에서 실제 input-repair CLI · producer wrapper (운영 HOME·runtime·Chrome·네트워크 0)')
+{
+  const M = path.join(T, 'mini')
+  const R = path.join(M, 'repo')
+  const sh = (cmd, args, cwd) => {
+    const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: path.join(M, 'home'), GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' } })
+    if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')}: ${r.stderr}`)
+    return r.stdout.trim()
+  }
+  for (const d of ['home', 'bin', 'tmp']) fs.mkdirSync(path.join(M, d), { recursive: true })
+  for (const rel of ['scripts', 'drafts/magazine', 'src/content/magazine', '.gitignore', 'package.json']) {
+    fs.mkdirSync(path.dirname(path.join(R, rel)), { recursive: true })
+    fs.cpSync(path.join(REPO, rel), path.join(R, rel), { recursive: true, filter: (src) => !src.includes(`${path.sep}_runs${path.sep}`) })
+  }
+  fs.symlinkSync(path.join(REPO, 'node_modules'), path.join(R, 'node_modules'))
+  sh('git', ['init', '-q', '-b', 'main'], R)
+  sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', '-c', 'commit.gpgsign=false', 'add', '-A'], R)
+  sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'mini runtime'], R)
+  sh('git', ['clone', '-q', '--bare', R, path.join(M, 'origin.git')], M)
+  sh('git', ['remote', 'add', 'origin', path.join(M, 'origin.git')], R)
+  sh('git', ['fetch', '-q', 'origin'], R)
+  sh('git', ['branch', '-q', '--set-upstream-to', 'origin/main', 'main'], R)
+  // runtime 처럼 미추적 원고 — gray(형식 계약 위반 brief) · cold·autumn(brief echo)
+  const md = (slug, f, t) => { fs.mkdirSync(path.join(R, 'drafts', 'magazine', slug), { recursive: true }); fs.writeFileSync(path.join(R, 'drafts', 'magazine', slug, f), t) }
+  md(GRAY, 'brief.md', GRAY_BRIEF); md(GRAY, 'review.ts', 'export const REVIEW = { old: true }\n')
+  md(COLD, 'brief.md', GOOD_BRIEF); md(COLD, 'review.ts', 'export const REVIEW = { old: true }\n'); md(COLD, 'draft.md', COLD_DRAFT)
+  md(AUTUMN, 'brief.md', GOOD_BRIEF); md(AUTUMN, 'review.ts', 'export const REVIEW = { old: true }\n'); md(AUTUMN, 'draft.md', AUTUMN_ECHO)
+  check('mini ⓪ runtime 모양 — drafts/magazine/topic-queue.ts 가 일반 파일이다', fs.statSync(path.join(R, 'drafts', 'magazine', 'topic-queue.ts')).isFile())
+  // 바깥 세계: claude 는 부르면 기록하고 실패 · gh 는 읽기만 · 네트워크·TCP·DNS 는 전부 기록 후 거부
+  const NET_LOG = path.join(M, 'net.jsonl')
+  const CLAUDE_LOG = path.join(M, 'claude.jsonl')
+  fs.writeFileSync(NET_LOG, '')
+  fs.writeFileSync(CLAUDE_LOG, '')
+  const netGuard = path.join(M, 'net-guard.mjs')
+  fs.writeFileSync(netGuard, `import fs from 'node:fs'; import net from 'node:net'; import dns from 'node:dns'
+const rec = (e) => fs.appendFileSync(${JSON.stringify(NET_LOG)}, JSON.stringify({ pid: process.pid, script: process.argv[1], ...e }) + '\\n')
+const oc = net.Socket.prototype.connect
+net.Socket.prototype.connect = function (...a) { rec({ connect: String(a[0]?.port ?? a[0]?.path ?? a[0]) }); throw new Error('NETWORK_BLOCKED') }
+for (const n of ['lookup', 'resolve']) dns[n] = (h) => { rec({ dns: h }); throw new Error('NETWORK_BLOCKED') }
+globalThis.fetch = async (u) => { rec({ fetch: String(u?.url ?? u) }); throw new Error('NETWORK_BLOCKED') }
+void oc
+`)
+  const nodeShim = (name, body) => { const f = path.join(M, 'bin', name); fs.writeFileSync(f, `#!${process.execPath}\n${body}\n`); fs.chmodSync(f, 0o755) }
+  nodeShim('claude', `const fs = require('node:fs'); const a = process.argv.slice(2)
+if (a.includes('--version')) { console.log('mini-claude'); process.exit(0) }
+fs.appendFileSync(${JSON.stringify(CLAUDE_LOG)}, JSON.stringify({ args: a }) + '\\n'); console.error('mini claude: 생성하지 않는다'); process.exit(1)`)
+  nodeShim('gh', `const a = process.argv.slice(2)
+if (a[0] === '--version' || (a[0] === 'auth' && a[1] === 'status')) { console.log('mini-gh'); process.exit(0) }
+if (a[0] === 'pr' && a[1] === 'list') { console.log('[]'); process.exit(0) }
+console.error('mini gh: 지원하지 않는다 ' + a.join(' ')); process.exit(1)`)
+  const fixture = path.join(M, 'chatgpt-fixture.mjs')
+  fs.writeFileSync(fixture, `export default { probe: async () => ({ status: 'login_required' }) }\n`)
+  const env = {
+    PATH: `${path.join(M, 'bin')}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: path.join(M, 'home'), TMPDIR: path.join(M, 'tmp'),
+    NODE_OPTIONS: `--import=${pathToFileURL(netGuard).href}`, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_TEST_FIXTURE: fixture,
+    GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@invalid',
+  }
+  const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+  const rj = path.join(M, 'tmp', 'cli-result.json')
+  const cli = spawnSync(process.execPath, [path.join(R, 'scripts', 'magazine-input-repair.mjs'), '--run', today, '--write', '--result-json', rj], { cwd: R, env, encoding: 'utf8', timeout: 240000 })
+  let cliRep = null
+  try { cliRep = JSON.parse(fs.readFileSync(rj, 'utf8')) } catch { cliRep = null }
+  const cliSlugs = (cliRep?.results ?? []).map((r) => `${r.slug}:${r.outcome}`)
+  check('mini ⑥ 실제 input-repair CLI(--write) — 종료 0 · 단계 예외 0 · ENOTDIR 0',
+    cli.status === 0 && cliRep?.ok === true && !/ENOTDIR|REPAIR_STAGE_FAILED/.test(`${cli.stdout}${cli.stderr}`), `exit ${cli.status} · ${(cli.stdout + cli.stderr).split('\n').filter((l) => /⛔|예외|ENOTDIR/.test(l)).slice(0, 3).join(' / ')}`)
+  check('mini ⑧ 실제 CLI 가 journal 스캔 뒤 gray·cold·autumn 대상 판정과 수리 시도까지 간다',
+    [GRAY, COLD, AUTUMN].every((s) => cliSlugs.some((x) => x.startsWith(`${s}:`))) && fs.readFileSync(CLAUDE_LOG, 'utf8').trim().length > 0, cliSlugs.join(' '))
+  // 같은 임시 루트에서 producer wrapper
+  const prod = spawnSync(process.execPath, [path.join(R, 'scripts', 'magazine-producer-run.mjs')], { cwd: R, env, encoding: 'utf8', timeout: 480000 })
+  let ho = null
+  try { ho = JSON.parse(fs.readFileSync(path.join(R, 'drafts', 'magazine', '_runs', today, 'producer-handoff.json'), 'utf8')) } catch { ho = null }
+  const failures = ho?.repair?.failures ?? null
+  let prodRep = null
+  try { prodRep = JSON.parse(fs.readFileSync(ho?.repair?.resultFile ?? '', 'utf8')) } catch { prodRep = null }
+  check('mini ⑦ 실제 producer wrapper — 입력 수리 단계가 돌았고 REPAIR_STAGE_FAILED·ENOTDIR 0',
+    Array.isArray(ho?.ran) && ho.ran.includes('repair') && Array.isArray(failures) && !failures.some((f) => f.outcome === 'REPAIR_STAGE_FAILED') && !/ENOTDIR/.test(`${prod.stdout}${prod.stderr}`),
+    `exit ${prod.status} · ${ho?.verdict} · ${JSON.stringify(failures)} · ${(prod.stdout + prod.stderr).split('\n').filter((l) => /ENOTDIR|REPAIR_STAGE/.test(l)).slice(0, 2).join(' / ')}`)
+  check('mini ⑧ producer 의 입력 수리 결과 파일에 gray·cold·autumn 이 실제로 판정돼 있다',
+    [GRAY, COLD, AUTUMN].every((s) => (prodRep?.results ?? []).some((r) => r.slug === s)), JSON.stringify((prodRep?.results ?? []).map((r) => `${r.slug}:${r.outcome}`)))
+  const netEvents = fs.readFileSync(NET_LOG, 'utf8').split('\n').filter(Boolean)
+  check('mini ⑨ 네트워크·TCP(9333/9344 포함)·DNS 시도 0', netEvents.length === 0, netEvents.slice(0, 3).join(' · '))
+  const homeFiles = []
+  const walk = (d) => { for (const n of fs.readdirSync(d)) { const f = path.join(d, n); if (fs.lstatSync(f).isDirectory()) walk(f); else homeFiles.push(f) } }
+  walk(path.join(M, 'home'))
+  check('mini ⑨ 장부·잠금·로그는 임시 HOME 안에만 · 실제 Chrome 대신 시험 fixture(접근 확인 거부)',
+    homeFiles.every((f) => f.startsWith(path.join(M, 'home') + path.sep)) && /login_required|로그인/.test(`${cli.stdout}${prod.stdout}`), `HOME 파일 ${homeFiles.length}`)
+}
+
 // ── 불변 — 일반 요청 · QA 재생성 지문 ─────────────────────────
 console.log('\n불변 — 일반 원고 요청 · QA 재생성 프롬프트와 지문은 그대로')
 {
