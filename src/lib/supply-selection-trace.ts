@@ -1,80 +1,65 @@
 /**
- * 🔴 **공급 선택 관측 trace** (2026-10-10 P0-B0) — 순수 함수 · DB · 네트워크 · provider 0
+ * 🔴 **공급 선택 관측 trace v2** (2026-10-10 P0-B1 · v1 은 P0-B0) — 순수 함수 · DB · 네트워크 · provider 0
  *
  *   공급 한 회차에서 원천 하나하나가 **어느 단계에서 왜** 골라지거나 빠졌는지를 남긴다.
- *     생성 가능 판정(`worksetEligibility`) → 슬롯 짝짓기(`assignSourceSlots` · EDF) → 묶음 선택(`selectWorkset`:
- *     축 자리 · 재시도 예약석 · 순위) → 최종 묶음
- *   기록은 각 함수에 넘긴 기록기(`WorksetTraceSink`)가 모은다. 이 파일은 모은 것을 **읽기만** 해서 조립한다.
+ *     생성 가능 판정(`worksetEligibility`) → JIT 선택(`selectJitWorkset`: raw 제외 · 슬롯 연결 · 최대 슬롯 보존
+ *     · 재시도 예약 · 정본 순위 · EDF 배정) → 최종 묶음
+ *   기록은 선택 함수에 넘긴 기록기(`WorksetTraceSink`)가 모은다. 이 파일은 모은 것을 **읽기만** 해서 조립한다.
  *
- * 🔴 **선택을 바꾸지 않는다.** 이 파일은 `assignSourceSlots` · `selectWorkset` 의 반환값을 받지 않고 고치지 않는다.
- *    shadow(정본 순위의 갱년기 · wgang 동률 선호)는 **세기만** 한다 — 실제 선택에 적용하지 않는다.
+ * 🔴 **선택을 바꾸지 않는다.** 묶음 · 순서 · 배정은 trace 를 주든 안 주든 같다(검사가 digest 로 대조한다).
  * 🔴 **원문 없음.** 제목 · 본문 · 작성자 · URL · 원문 id 평문을 싣지 않는다 — `sha256(site::id)`(`articleIdHashOf`)와
  *    정본 원천 이름 · 숫자 · enum 만 남는다. 읽는 쪽(`readSupplySelectionTrace`)은 정해진 칸 밖의 칸을 거부한다.
- * 🔴 **동등 품질을 새로 정의하지 않는다.** 공급 품질은 지금 공급 코드가 쓰는 값(`commentsPct` · `viewsPct`) 그대로,
- *    신선도 구간은 정본 `observationBucketOf` 그대로다. 둘 중 하나라도 없으면 그 후보의 shadow 는 UNKNOWN 이다.
+ * 🔴 **판정은 원래 값으로.** 나이는 게시 시각에서 직접 잰 원래 값(반올림 없음) · 순위는 정본 rank 그대로.
+ * 🔴 v1 기록은 `supply-selection-trace-v1.ts` 가 계속 읽는다(만드는 함수는 없다).
  */
 import { createHash } from 'node:crypto'
 
-import type { SourceId } from './collect-schedule'
 import { mentionsMenopause } from './original-post-persona-match'
 import {
   articleIdHashOf, compareReleaseRank, observationBucketOf, type SlotReleaseVerdict,
 } from './source-slot-release'
 import {
-  retryTierOf, runClockOf, sourceIdentityOf, worksetAxisOf, WORKSET_SELECT_STEPS, WORKSET_VERSION_JIT,
-  type PriorOutcome, type Workset, type WorksetDrop, type WorksetRow, type WorksetSelectStep, type WorksetTraceSink,
+  JIT_SELECT_STEPS, maxSlotMatching, retryTierOf, runClockOf, sourceIdentityOf, worksetAxisOf, WGANG_SOURCE_SITE,
+  type JitSelectionFacts, type JitSelectStep, type PriorOutcome, type Workset, type WorksetDrop, type WorksetRow,
+  type WorksetTraceSink,
 } from './supply-workset'
+import {
+  readSupplySelectionTraceV1, SELECTION_TRACE_VERSION_V1, type SupplySelectionTraceV1,
+} from './supply-selection-trace-v1'
 
 export const SELECTION_TRACE_KIND = 'supply-selection-trace'
-export const SELECTION_TRACE_VERSION = 'selection-trace-v1'
+export const SELECTION_TRACE_VERSION = 'selection-trace-v2'
 /** 🔴 회차 파일 이름 — `supply-workset-` · `supply-opportunities-` 를 집는 다른 읽기 경로와 겹치지 않는다 */
 export const selectionTraceFileName = (runId: string): string => `supply-selection-trace-${runId}.json`
 
-/** 🔴 정본 원천 이름 — 수집 일정(`SourceId`)과 같은 글자다. 새 원천 판정을 만들지 않는다 */
-const WGANG_SOURCE: SourceId = 'navercafe:wgang'
 const HOUR_MS = 3_600_000
+const KST_MS = 9 * HOUR_MS
 
-/**
- * 🔴 **슬롯 짝짓기 단계 결과.**
- *    `NOT_REACHED`     생성 가능 판정에서 이미 빠졌다
- *    `NOT_APPLICABLE`  JIT 묶음이 아니다(배정 없이 고른 옛 판)
- *    `ASSIGNED`        부족 슬롯 하나에 배정됐다
- *    `UNLINKABLE`      부족 슬롯 어디에서도 eligible 이 아니다
- *    `NOT_MATCHED`     연결 가능한 슬롯이 있었지만 짝(EDF)에 들지 못했다
- *    `CAP_CUT`         짝에 들었지만 유료 상한(cap)에 잘렸다
- */
-export const TRACE_EDF_STAGES = ['NOT_REACHED', 'NOT_APPLICABLE', 'ASSIGNED', 'UNLINKABLE', 'NOT_MATCHED', 'CAP_CUT'] as const
-export type TraceEdfStage = (typeof TRACE_EDF_STAGES)[number]
+/** 🔴 원천이 멈춘(또는 들어간) 단계 — 생성 가능 판정에서 빠지면 `NOT_REACHED` · 그 밖은 JIT 선택 단계 그대로 */
+export const TRACE_STAGES = ['NOT_REACHED', ...JIT_SELECT_STEPS] as const
+export type TraceStage = (typeof TRACE_STAGES)[number]
 
 /** 🔴 **최종 사유 하나** — 처음 멈춘 단계의 원인. 다른 원인을 한 값으로 합치지 않는다 */
 export const TRACE_REASONS = [
   'HUMAN_DECIDED', 'QUEUE_SIBLING', 'ALREADY_QUEUED', 'CARRIED_OVER', 'TERMINAL', 'HARD_BLOCKED', 'PRE_GATED',
   'SLOT_INELIGIBLE', 'EVIDENCE_UNKNOWN',
-  'SLOT_UNLINKABLE', 'EDF_NOT_MATCHED', 'EDF_CAP_CUT',
-  'AXIS_QUOTA_ZERO', 'AXIS_QUOTA_FULL',
-  'FRESH_DISPLACED_BY_RETRY_RESERVE', 'FRESH_RANK_CUT', 'RETRY_LIMIT_CUT',
-  'SELECTED_FRESH', 'SELECTED_RETRY_RESERVED', 'SELECTED_RETRY_FILLED',
-  /** 🔴 기록끼리 맞지 않는다(배정 없이 골랐다 · 단계 기록 없음 · 같은 원천 두 번) — 정상 결과로 세지 않는다 */
+  'RAW_NOT_AUTO_CONSUMED', 'SLOT_UNLINKABLE', 'CAP_REACHED', 'SELECTED_COVER', 'SELECTED_EXTRA',
+  /** 🔴 기록끼리 맞지 않는다(단계 기록 없음 · 같은 원천 두 번 · 배정 슬롯에서 무효) — 정상 결과로 세지 않는다 */
   'TRACE_MISMATCH',
 ] as const
 export type TraceReason = (typeof TRACE_REASONS)[number]
 
-const DROP_REASON: Readonly<Record<Exclude<WorksetDrop, 'identityMissing' | 'slotUnassigned'>, TraceReason>> = {
+const DROP_REASON: Readonly<Record<Exclude<WorksetDrop, 'identityMissing' | 'slotUnassigned' | 'rawNotAutoConsumed'>, TraceReason>> = {
   humanDecided: 'HUMAN_DECIDED', queueSibling: 'QUEUE_SIBLING', alreadyQueued: 'ALREADY_QUEUED',
   carriedOver: 'CARRIED_OVER', terminal: 'TERMINAL', hardBlocked: 'HARD_BLOCKED', preGated: 'PRE_GATED',
   slotIneligible: 'SLOT_INELIGIBLE', slotUnknown: 'EVIDENCE_UNKNOWN',
 }
-const STEP_REASON: Readonly<Record<Exclude<WorksetSelectStep, 'SLOT_UNASSIGNED'>, TraceReason>> = {
-  AXIS_QUOTA_ZERO: 'AXIS_QUOTA_ZERO', AXIS_QUOTA_FULL: 'AXIS_QUOTA_FULL',
-  RETRY_RESERVED: 'SELECTED_RETRY_RESERVED', RETRY_FILLED: 'SELECTED_RETRY_FILLED', RETRY_LIMIT_CUT: 'RETRY_LIMIT_CUT',
-  FRESH_PICKED: 'SELECTED_FRESH', FRESH_DISPLACED_BY_RETRY_RESERVE: 'FRESH_DISPLACED_BY_RETRY_RESERVE',
-  FRESH_RANK_CUT: 'FRESH_RANK_CUT',
-}
-const EDF_REASON: Readonly<Record<'UNLINKABLE' | 'NOT_MATCHED' | 'CAP_CUT', TraceReason>> = {
-  UNLINKABLE: 'SLOT_UNLINKABLE', NOT_MATCHED: 'EDF_NOT_MATCHED', CAP_CUT: 'EDF_CAP_CUT',
+const STEP_REASON: Readonly<Record<JitSelectStep, TraceReason>> = {
+  RAW_EXCLUDED: 'RAW_NOT_AUTO_CONSUMED', SLOT_UNLINKABLE: 'SLOT_UNLINKABLE', CAP_REACHED: 'CAP_REACHED',
+  SELECTED_COVER: 'SELECTED_COVER', SELECTED_EXTRA: 'SELECTED_EXTRA',
 }
 
-/** 🔴 지금 공급 순위(`compareReleaseRank`)가 실제로 쓰는 성분 그대로 — 새 점수가 아니다 */
+/** 🔴 지금 공급 순위(`compareReleaseRank`)가 실제로 쓰는 성분 그대로 — 기준 슬롯(가장 이른 부족 슬롯)의 정본 rank */
 export type TraceRank = { commentsPct: number | null; viewsPct: number | null; ageAtSlotH: number | null; velocity: number | null }
 
 export type TraceCandidate = {
@@ -84,26 +69,21 @@ export type TraceCandidate = {
   source: string
   axis: 'seed' | 'raw'
   retry: boolean
-  /** `retryTierOf` — 재시도가 아니면 null */
   retryTier: number | null
-  /** 마지막 결과 회차 시각(`runClockOf`)부터 이번 회차까지 — 재시도가 아니면 null */
   retryWaitedH: number | null
-  /** 🔴 부족 슬롯마다 그 슬롯에서 eligible 이면 그 시점 원문 나이(h), 아니면 null. 슬롯 판정까지 안 갔으면 null */
+  /** 🔴 재시도 예약으로 들어갔는가 */
+  retryReserved: boolean
+  /** 🔴 부족 슬롯(시각순)마다 그 슬롯에서 eligible 이면 원래 원문 나이(h · 반올림 없음), 아니면 null · 슬롯 판정까지 안 갔으면 null */
   slotAgesH: (number | null)[] | null
-  /** 마지막으로 eligible 인 부족 슬롯 번호(EDF 마감) — 없으면 null */
   lastValidSlot: number | null
   assignedSlot: number | null
-  edfRound: number | null
-  edf: TraceEdfStage
-  selectStep: WorksetSelectStep | null
-  /** 🔴 지금 비교기가 받은 값 그대로 — `ageAtSlotH` 는 정본 판정이 0.001h 로 반올림한 값이다(기존 동작) */
+  stage: TraceStage
   rank: TraceRank | null
-  /** 🔴 판정 슬롯에서의 **원래** 원문 나이(h · 반올림 없음) — 신선도 구간 · EDF 나이 비교는 이 값으로 한다 */
+  /** 🔴 기준 슬롯에서의 원래 원문 나이 */
   sourceAgeH: number | null
-  /** 정본 관측 나이 구간(`observationBucketOf(sourceAgeH)`) — 나이를 모르면 null */
+  /** 정본 관측 나이 구간(`observationBucketOf(sourceAgeH)`) */
   freshnessBand: string | null
   selected: boolean
-  /** 최종 묶음 안 순서(0부터) — 고르지 않았으면 null */
   position: number | null
   reason: TraceReason
   menopauseCore: boolean
@@ -112,41 +92,38 @@ export type TraceCandidate = {
 
 type Count = { candidates: number; selected: number }
 export type TraceSummary = {
-  /** 사이트나 id 를 몰라 열쇠가 없는 행 — 후보 기록에 들어가지 못한다 */
   identityMissing: number
   candidates: number
   selected: number
+  slots: number
+  cap: number
+  /** 🔴 원천마다 서로 다른 슬롯 하나로 덮을 수 있는 최대 슬롯 수(연결 가능한 자동 seed 원천 기준) */
+  maxFillableSlots: number
+  coverTarget: number
+  coveredSlots: number
   fresh: Count
   retry: Count
+  retryReserved: number
+  rawExcluded: number
+  unlinkable: number
   menopauseCore: Count
   wgang: Count
   menopauseWgang: Count
   byReason: Record<TraceReason, number>
   menopauseByReason: Record<TraceReason, number>
   wgangByReason: Record<TraceReason, number>
-  /** 🔴 배정된 원천 중, 같은 슬롯에 연결 가능했는데 짝에 못 든 **더 어린** 원천이 있는 수 */
-  edfOlderOverFresher: number
-  freshDisplacedByRetryReserve: number
-  axisQuotaDropped: number
+  /** 🔴 선택 원천의 배정 슬롯 시점 원래 나이 */
+  selectedAgeH: { p50: number | null; p90: number | null }
+  /** 🔴 선택 원천 중 게시 KST 날짜가 회차 KST 날짜와 같은 수 */
+  selectedSameKstDay: number
+  /**
+   * 🔴 **순위 역전** — 고른 원천 s(재시도 예약 제외)보다 정본 순위가 엄격히 앞서는 미선택 원천 u 가 있고,
+   *    s 를 u 로 바꿔도 덮는 슬롯 수가 줄지 않는 쌍의 수. 새 선택에서는 0 이어야 한다.
+   */
+  rankInversions: number
+  /** 🔴 순위가 정본 rank 동률이라 갱년기 · wgang 이 순서를 정한 인접 비교 수(실측 0 이어도 그대로 적는다) */
+  preferenceDecided: { menopause: number; wgang: number }
   mismatches: number
-}
-
-export type ShadowVerdict = 'COMPUTED' | 'NO_STRICT_TIE' | 'UNKNOWN' | 'NO_CANDIDATE'
-/**
- * 🔴 **정본 순위 shadow — 세기만 한다.** 모집단은 슬롯 판정까지 eligible 인 후보.
- *    같은 `(commentsPct, viewsPct)` · 같은 신선도 구간끼리만 동률이다(새 허용 오차 · 구간 없음).
- *    `qualityUnknown` 은 0 이나 "효과 없음" 으로 바꾸지 않는다.
- */
-export type TraceShadow = {
-  population: number
-  qualityUnknown: number
-  noStrictTie: number
-  strictTieGroups: number
-  strictTieCandidates: number
-  menopauseCouldReorder: number
-  wgangCouldReorder: number
-  menopause: ShadowVerdict
-  wgang: ShadowVerdict
 }
 
 export type SupplySelectionTrace = {
@@ -156,13 +133,13 @@ export type SupplySelectionTrace = {
   takenAt: string
   limit: number
   cap: number
-  jit: boolean
+  /** 부족 슬롯 — 시각순 */
   slots: string[]
-  /** 🔴 최종 묶음 파일 내용의 digest — 이 trace 가 어느 묶음을 설명하는지 */
   worksetDigest: string
+  /** 🔴 선택 함수가 보고한 사실 — 요약 재계산과 같아야 한다(다르면 손상) */
+  facts: JitSelectionFacts
   candidates: TraceCandidate[]
   summary: TraceSummary
-  shadow: TraceShadow
 }
 
 // ─────────────────────────────────────────────────────────
@@ -172,31 +149,23 @@ export type SupplySelectionTrace = {
 export type SelectionRecord = {
   eligibility: Map<string, { row: WorksetRow; drop: WorksetDrop | null; verdict: SlotReleaseVerdict | null }>
   identityMissing: number
-  assignment: Map<string, { slotAt: Date; round: number; kept: boolean }>
-  selection: Map<string, WorksetSelectStep>
+  jit: Map<string, { step: JitSelectStep; slotAt: Date | null; position: number | null; retryReserved: boolean }>
   /** 🔴 같은 원천이 같은 단계에 두 번 적혔다 — 그 원천은 TRACE_MISMATCH 다 */
   duplicated: Set<string>
 }
 
 /** 🔴 기록기 하나 — 공급 회차마다 새로 만든다. 선택 함수에 넘기는 것은 `sink` 뿐이다 */
 export function createSelectionRecorder(): { sink: WorksetTraceSink; record: SelectionRecord } {
-  const record: SelectionRecord = {
-    eligibility: new Map(), identityMissing: 0, assignment: new Map(), selection: new Map(), duplicated: new Set(),
-  }
+  const record: SelectionRecord = { eligibility: new Map(), identityMissing: 0, jit: new Map(), duplicated: new Set() }
   const sink: WorksetTraceSink = {
     eligibility: ({ row, key, drop, verdict }) => {
       if (key === null) { record.identityMissing += 1; return }
       if (record.eligibility.has(key)) record.duplicated.add(key)
       record.eligibility.set(key, { row, drop, verdict })
     },
-    assignment: ({ key, slotAt, round, kept }) => {
-      const prev = record.assignment.get(key)
-      if (prev !== undefined && prev.kept && kept) record.duplicated.add(key)
-      if (prev === undefined || kept) record.assignment.set(key, { slotAt, round, kept })
-    },
-    selection: ({ key, step }) => {
-      if (record.selection.has(key)) record.duplicated.add(key)
-      record.selection.set(key, step)
+    jit: ({ key, step, slotAt, position, retryReserved }) => {
+      if (record.jit.has(key)) record.duplicated.add(key)
+      record.jit.set(key, { step, slotAt, position, retryReserved })
     },
   }
   return { sink, record }
@@ -212,9 +181,7 @@ export const worksetDigestOf = (w: Workset): string => sha256(JSON.stringify(w))
 
 /**
  * 🔴 **원래 원문 나이(h) — 반올림 없음.** 정본 판정과 같은 식(`max(0, 슬롯 − 게시)`)을 증거 기록의 게시 시각으로 잰다.
- *    정본 `rank.ageAtSlotH` 는 비교기용으로 0.001h 에 반올림돼 있다 — 그 값으로 구간 · EDF 나이를 재면
- *    2.9996h 가 3h 구간으로 넘어가고 0.001h 미만 차이가 동률이 된다. 판정용으로는 이 값을 쓴다.
- *    🔴 eligible 판정을 받은 행에만 부른다(게시 시각이 이미 정본 검증을 지났다). 못 읽으면 null.
+ *    eligible 판정을 받은 행에만 부른다(게시 시각이 이미 정본 검증을 지났다). 못 읽으면 null — 지어내지 않는다.
  */
 const rawAgeH = (r: WorksetRow, slotAt: Date): number | null => {
   const posted = Date.parse(r.evidence?.postedAt ?? '')
@@ -226,17 +193,19 @@ export function buildSupplySelectionTrace(input: {
   takenAt: Date
   limit: number
   cap: number
-  /** 이번 회차 부족 슬롯 — `assignSourceSlots` 에 넘긴 것과 같은 목록 */
+  /** 이번 회차 부족 슬롯 — 선택 함수에 넘긴 것과 같은 목록(순서는 여기서 시각순으로 맞춘다) */
   slots: readonly Date[]
   record: SelectionRecord
   attempted: ReadonlyMap<string, PriorOutcome>
   picked: readonly WorksetRow[]
   workset: Workset
-  /** 🔴 짝짓기와 같은 판정 — `preGenerationRelease(row, slotAt, now)` */
+  facts: JitSelectionFacts
+  /** 🔴 선택과 같은 판정 — `preGenerationRelease(row, slotAt, now)` */
   slotVerdict: (r: WorksetRow, slotAt: Date) => SlotReleaseVerdict
 }): SupplySelectionTrace {
-  const jit = input.workset.version === WORKSET_VERSION_JIT
-  const slotIndex = new Map(input.slots.map((d, i) => [d.getTime(), i]))
+  // 🔴 선택과 같은 슬롯 목록 — 시각으로 하나 · 시각순
+  const slots = [...new Map(input.slots.map((d) => [d.getTime(), d])).values()].sort((a, b) => a.getTime() - b.getTime())
+  const slotIndex = new Map(slots.map((d, i) => [d.getTime(), i]))
   const position = new Map<string, number>()
   input.picked.forEach((r, i) => {
     const k = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
@@ -247,46 +216,40 @@ export function buildSupplySelectionTrace(input: {
   for (const [key, e] of input.record.eligibility) {
     const r = e.row
     const prior = input.attempted.get(key)
+    const j = input.record.jit.get(key)
     const reachedSlot = e.drop === null || e.drop === 'slotIneligible' || e.drop === 'slotUnknown'
     const slotAgesH = reachedSlot
-      ? input.slots.map((d) => {
-        const v = input.slotVerdict(r, d)
-        return v.verdict === 'eligible' ? rawAgeH(r, d) : null
-      })
+      ? slots.map((d) => (input.slotVerdict(r, d).verdict === 'eligible' ? rawAgeH(r, d) : null))
       : null
     const lastValid = slotAgesH === null ? -1 : slotAgesH.reduce<number>((m, a, i) => (a !== null ? i : m), -1)
-    const asg = input.record.assignment.get(key)
-    const step = input.record.selection.get(key) ?? null
-    const linkable = slotAgesH !== null && slotAgesH.some((a) => a !== null)
 
-    let edf: TraceEdfStage
-    if (e.drop !== null) edf = 'NOT_REACHED'
-    else if (!jit) edf = 'NOT_APPLICABLE'
-    else if (asg?.kept === true) edf = 'ASSIGNED'
-    else if (!linkable) edf = 'UNLINKABLE'
-    else if (asg !== undefined) edf = 'CAP_CUT'
-    else edf = 'NOT_MATCHED'
-
+    let stage: TraceStage
     let reason: TraceReason
     if (e.drop !== null) {
-      reason = e.drop === 'identityMissing' || e.drop === 'slotUnassigned' ? 'TRACE_MISMATCH' : DROP_REASON[e.drop]
-      if (step !== null) reason = 'TRACE_MISMATCH'
-    } else if (edf === 'UNLINKABLE' || edf === 'NOT_MATCHED' || edf === 'CAP_CUT') {
-      reason = step === 'SLOT_UNASSIGNED' ? EDF_REASON[edf] : 'TRACE_MISMATCH'
-    } else if (step === null || step === 'SLOT_UNASSIGNED') {
-      reason = 'TRACE_MISMATCH'
+      stage = 'NOT_REACHED'
+      reason = e.drop === 'identityMissing' || e.drop === 'slotUnassigned' || e.drop === 'rawNotAutoConsumed'
+        ? 'TRACE_MISMATCH' : DROP_REASON[e.drop]
+      if (j !== undefined) reason = 'TRACE_MISMATCH'
+    } else if (j === undefined) {
+      stage = 'NOT_REACHED'; reason = 'TRACE_MISMATCH'
     } else {
-      reason = STEP_REASON[step]
+      stage = j.step; reason = STEP_REASON[j.step]
     }
     const pos = position.get(key) ?? null
-    if ((pos !== null) !== reason.startsWith('SELECTED_')) reason = 'TRACE_MISMATCH'
+    const selected = pos !== null
+    if (selected !== (reason === 'SELECTED_COVER' || reason === 'SELECTED_EXTRA')) reason = 'TRACE_MISMATCH'
+    if (j !== undefined && j.position !== pos) reason = 'TRACE_MISMATCH'
     if (input.record.duplicated.has(key)) reason = 'TRACE_MISMATCH'
-    const assignedIdx = asg?.kept === true ? slotIndex.get(asg.slotAt.getTime()) : undefined
-    if (asg?.kept === true && assignedIdx === undefined) reason = 'TRACE_MISMATCH'
+    const assignedIdx = j?.slotAt == null ? null : (slotIndex.get(j.slotAt.getTime()) ?? -1)
+    if (assignedIdx === -1 || (selected && (assignedIdx === null || slotAgesH?.[assignedIdx] == null))) reason = 'TRACE_MISMATCH'
 
-    const rk = e.verdict?.rank ?? null
-    // 🔴 판정 슬롯에서의 원래 나이 — 정본 판정이 나이를 쟀을 때(rank.ageAtSlotH 있음)만
-    const sourceAgeH = e.verdict === null || rk === null || rk.ageAtSlotH === null ? null : rawAgeH(r, new Date(e.verdict.slotAt))
+    // 🔴 순위는 선택과 같은 기준 슬롯(가장 이른 부족 슬롯)의 정본 rank
+    //    (그 슬롯에서 eligible 이 아니면 생성 가능 판정이 쓴 판정 그대로 — 순위 값과 그 시각은 같은 판정에서 꺼낸다)
+    const atRef = reachedSlot && slots.length > 0 ? input.slotVerdict(r, slots[0]!) : null
+    const ref = atRef !== null && (atRef.verdict === 'eligible' || e.verdict === null) ? atRef : e.verdict
+    const rk = ref === null ? null : ref.rank
+    const refSlot = ref === null ? null : new Date(ref.slotAt)
+    const sourceAgeH = rk === null || rk.ageAtSlotH === null || refSlot === null ? null : rawAgeH(r, refSlot)
     candidates.push({
       sourceHash: articleIdHashOf(r.sourceSite, r.sourceArticleId),
       source: r.sourceSite,
@@ -294,46 +257,63 @@ export function buildSupplySelectionTrace(input: {
       retry: prior !== undefined,
       retryTier: prior === undefined ? null : retryTierOf(prior),
       retryWaitedH: prior === undefined ? null : (input.takenAt.getTime() - runClockOf(prior)) / HOUR_MS,
+      retryReserved: j?.retryReserved === true,
       slotAgesH,
       lastValidSlot: lastValid < 0 ? null : lastValid,
-      assignedSlot: assignedIdx ?? null,
-      edfRound: asg === undefined ? null : asg.round,
-      edf,
-      selectStep: step,
-      // 🔴 지금 비교기가 받은 값 그대로(trace 가 다시 반올림하지 않는다)
-      rank: rk === null ? null : {
-        commentsPct: rk.commentsPct, viewsPct: rk.viewsPct, ageAtSlotH: rk.ageAtSlotH, velocity: rk.velocity,
-      },
+      assignedSlot: assignedIdx === null || assignedIdx < 0 ? null : assignedIdx,
+      stage,
+      rank: rk === null ? null : { commentsPct: rk.commentsPct, viewsPct: rk.viewsPct, ageAtSlotH: rk.ageAtSlotH, velocity: rk.velocity },
       sourceAgeH,
       freshnessBand: observationBucketOf(sourceAgeH),
-      selected: pos !== null,
+      selected,
       position: pos,
       reason,
       menopauseCore: mentionsMenopause(`${r.input.title ?? ''}\n${r.input.bodyHead ?? ''}`),
-      wgangSource: r.sourceSite === WGANG_SOURCE,
+      wgangSource: r.sourceSite === WGANG_SOURCE_SITE,
     })
   }
   candidates.sort((a, b) => (a.sourceHash < b.sourceHash ? -1 : a.sourceHash > b.sourceHash ? 1 : 0))
-
+  const slotsIso = slots.map((d) => d.toISOString())
   return {
     kind: SELECTION_TRACE_KIND, version: SELECTION_TRACE_VERSION,
-    runId: input.runId, takenAt: input.takenAt.toISOString(), limit: input.limit, cap: input.cap, jit,
-    slots: input.slots.map((d) => d.toISOString()),
+    runId: input.runId, takenAt: input.takenAt.toISOString(), limit: input.limit, cap: input.cap,
+    slots: slotsIso,
     worksetDigest: worksetDigestOf(input.workset),
+    facts: { ...input.facts },
     candidates,
-    summary: summarizeTrace(candidates, input.record.identityMissing),
-    shadow: shadowOf(candidates),
+    summary: summarizeTrace(candidates, input.record.identityMissing, { takenAt: input.takenAt.toISOString(), slots: slotsIso, cap: input.cap }),
   }
 }
 
 // ─────────────────────────────────────────────────────────
-// 요약 · shadow — 🔴 후보 기록만으로 다시 계산된다(읽는 쪽이 대조한다)
+// 요약 — 🔴 후보 기록만으로 다시 계산된다(읽는 쪽이 대조한다)
 // ─────────────────────────────────────────────────────────
 
 const zeroReasons = (): Record<TraceReason, number> =>
   Object.fromEntries(TRACE_REASONS.map((r) => [r, 0])) as Record<TraceReason, number>
 
-export function summarizeTrace(cs: readonly TraceCandidate[], identityMissing: number): TraceSummary {
+const pctl = (xs: readonly number[], q: number): number | null => {
+  const v = [...xs].sort((a, b) => a - b)
+  if (v.length === 0) return null
+  const k = (v.length - 1) * q
+  const f = Math.floor(k)
+  const c = Math.min(f + 1, v.length - 1)
+  return v[f]! + (v[c]! - v[f]!) * (k - f)
+}
+
+/** 🔴 정본 rank 부분만(동률이면 0) — 선호 · 열쇠 없음 */
+const rankPart = (a: TraceCandidate, b: TraceCandidate): number =>
+  compareReleaseRank({ ...a.rank!, tieBreak: '' }, { ...b.rank!, tieBreak: '' })
+/** 🔴 선택과 같은 순위에서 열쇠만 뺀 엄격 비교 — 음수면 a 가 앞선다 */
+const strictBefore = (a: TraceCandidate, b: TraceCandidate): number =>
+  rankPart(a, b) || Number(b.menopauseCore) - Number(a.menopauseCore) || Number(b.wgangSource) - Number(a.wgangSource)
+
+const matchable = (cs: readonly TraceCandidate[], nSlots: number): number =>
+  maxSlotMatching(cs.map((c) => (c.slotAgesH ?? []).map((a) => a !== null)), nSlots)
+
+export function summarizeTrace(
+  cs: readonly TraceCandidate[], identityMissing: number, run: { takenAt: string; slots: readonly string[]; cap: number },
+): TraceSummary {
   const count = (f: (c: TraceCandidate) => boolean): Count => ({
     candidates: cs.filter(f).length, selected: cs.filter((c) => f(c) && c.selected).length,
   })
@@ -345,84 +325,74 @@ export function summarizeTrace(cs: readonly TraceCandidate[], identityMissing: n
     if (c.menopauseCore) menopauseByReason[c.reason] += 1
     if (c.wgangSource) wgangByReason[c.reason] += 1
   }
-  const notPaired = cs.filter((c) => c.edf === 'NOT_MATCHED' || c.edf === 'CAP_CUT')
-  const edfOlderOverFresher = cs.filter((c) => {
-    if (c.edf !== 'ASSIGNED' || c.assignedSlot === null || c.slotAgesH === null) return false
-    const mine = c.slotAgesH[c.assignedSlot]
-    if (mine === null || mine === undefined) return false
-    return notPaired.some((o) => {
-      const a = o.slotAgesH?.[c.assignedSlot!]
-      return a !== null && a !== undefined && a < mine
-    })
+  const n = run.slots.length
+  const linkable = cs.filter((c) => c.stage === 'SELECTED_COVER' || c.stage === 'SELECTED_EXTRA' || c.stage === 'CAP_REACHED')
+  const maxFillableSlots = matchable(linkable, n)
+  const coverTarget = Math.min(run.cap, maxFillableSlots)
+  const sel = cs.filter((c) => c.selected)
+  const cover = sel.filter((c) => c.stage === 'SELECTED_COVER')
+  const extra = sel.filter((c) => c.stage === 'SELECTED_EXTRA')
+  const unselected = linkable.filter((c) => !c.selected)
+  let rankInversions = 0
+  for (const s of [...cover, ...extra]) {
+    if (s.retryReserved || s.rank === null) continue
+    for (const u of unselected) {
+      if (u.rank === null || !(strictBefore(u, s) < 0)) continue
+      if (s.stage === 'SELECTED_EXTRA' || matchable([...cover.filter((c) => c !== s), u], n) >= cover.length) rankInversions += 1
+    }
+  }
+  const ordered = linkable.filter((c) => c.rank !== null).sort((a, b) => strictBefore(a, b) || (a.sourceHash < b.sourceHash ? -1 : 1))
+  let menopause = 0
+  let wgang = 0
+  for (let i = 1; i < ordered.length; i += 1) {
+    const a = ordered[i - 1]!, b = ordered[i]!
+    if (rankPart(a, b) !== 0) continue
+    if (a.menopauseCore !== b.menopauseCore) menopause += 1
+    else if (a.wgangSource !== b.wgangSource) wgang += 1
+  }
+  const ages = sel.flatMap((c) => (c.assignedSlot === null ? [] : [c.slotAgesH?.[c.assignedSlot] ?? null])).filter((x): x is number => x !== null)
+  const dayOf = (ms: number): string => new Date(ms + KST_MS).toISOString().slice(0, 10)
+  const runDay = dayOf(Date.parse(run.takenAt))
+  const selectedSameKstDay = sel.filter((c) => {
+    if (c.assignedSlot === null) return false
+    const age = c.slotAgesH?.[c.assignedSlot]
+    return age != null && dayOf(Date.parse(run.slots[c.assignedSlot]!) - age * HOUR_MS) === runDay
   }).length
   return {
     identityMissing,
     candidates: cs.length,
-    selected: cs.filter((c) => c.selected).length,
+    selected: sel.length,
+    slots: n,
+    cap: run.cap,
+    maxFillableSlots,
+    coverTarget,
+    coveredSlots: new Set(sel.flatMap((c) => (c.assignedSlot === null ? [] : [c.assignedSlot]))).size,
     fresh: count((c) => !c.retry),
     retry: count((c) => c.retry),
+    retryReserved: sel.filter((c) => c.retryReserved).length,
+    rawExcluded: byReason.RAW_NOT_AUTO_CONSUMED,
+    unlinkable: byReason.SLOT_UNLINKABLE,
     menopauseCore: count((c) => c.menopauseCore),
     wgang: count((c) => c.wgangSource),
     menopauseWgang: count((c) => c.menopauseCore && c.wgangSource),
     byReason, menopauseByReason, wgangByReason,
-    edfOlderOverFresher,
-    freshDisplacedByRetryReserve: byReason.FRESH_DISPLACED_BY_RETRY_RESERVE,
-    axisQuotaDropped: byReason.AXIS_QUOTA_ZERO + byReason.AXIS_QUOTA_FULL,
+    selectedAgeH: { p50: pctl(ages, 0.5), p90: pctl(ages, 0.9) },
+    selectedSameKstDay,
+    rankInversions,
+    preferenceDecided: { menopause, wgang },
     mismatches: byReason.TRACE_MISMATCH,
   }
 }
 
-/** 🔴 지금 공급 순위 그대로 — `compareReleaseRank`(마지막 열쇠만 해시) */
-const currentOrder = (a: TraceCandidate, b: TraceCandidate): number =>
-  compareReleaseRank({ ...a.rank!, tieBreak: '' }, { ...b.rank!, tieBreak: '' })
-  || (a.sourceHash < b.sourceHash ? -1 : a.sourceHash > b.sourceHash ? 1 : 0)
-
-export function shadowOf(cs: readonly TraceCandidate[]): TraceShadow {
-  const pop = cs.filter((c) => c.edf !== 'NOT_REACHED' && c.rank !== null)
-  const known = pop.filter((c) => c.rank!.commentsPct !== null && c.rank!.viewsPct !== null && c.freshnessBand !== null)
-  const groups = new Map<string, TraceCandidate[]>()
-  for (const c of known) {
-    const k = `${c.rank!.commentsPct}|${c.rank!.viewsPct}|${c.freshnessBand}`
-    groups.set(k, [...(groups.get(k) ?? []), c])
-  }
-  let strictTieGroups = 0
-  let strictTieCandidates = 0
-  let menopauseCouldReorder = 0
-  let wgangCouldReorder = 0
-  for (const g of groups.values()) {
-    if (g.length < 2) continue
-    strictTieGroups += 1
-    strictTieCandidates += g.length
-    const cur = [...g].sort(currentOrder)
-    // 🔴 stable sort — 같은 선호 값끼리는 지금 순서 그대로
-    const byMeno = [...cur].sort((a, b) => Number(b.menopauseCore) - Number(a.menopauseCore))
-    const byMenoWgang = [...byMeno].sort((a, b) =>
-      Number(b.menopauseCore) - Number(a.menopauseCore) || Number(b.wgangSource) - Number(a.wgangSource))
-    menopauseCouldReorder += byMeno.filter((c, i) => c.menopauseCore && i < cur.indexOf(c)).length
-    wgangCouldReorder += byMenoWgang.filter((c, i) => c.wgangSource && i < byMeno.indexOf(c)).length
-  }
-  const verdict = (): ShadowVerdict => {
-    if (pop.length === 0) return 'NO_CANDIDATE'
-    if (strictTieCandidates > 0) return 'COMPUTED'
-    return known.length < pop.length ? 'UNKNOWN' : 'NO_STRICT_TIE'
-  }
-  return {
-    population: pop.length,
-    qualityUnknown: pop.length - known.length,
-    noStrictTie: known.length - strictTieCandidates,
-    strictTieGroups, strictTieCandidates, menopauseCouldReorder, wgangCouldReorder,
-    menopause: verdict(), wgang: verdict(),
-  }
-}
-
 // ─────────────────────────────────────────────────────────
-// 읽기 · 검증 — 🔴 손상이나 빠진 칸을 정상으로 조용히 넘기지 않는다
+// 읽기 · 검증 — 🔴 손상이나 빠진 칸을 정상으로 조용히 넘기지 않는다 · v1 은 v1 판독기가 읽는다
 // ─────────────────────────────────────────────────────────
 
-const TOP_KEYS = ['kind', 'version', 'runId', 'takenAt', 'limit', 'cap', 'jit', 'slots', 'worksetDigest', 'candidates', 'summary', 'shadow']
+const TOP_KEYS = ['kind', 'version', 'runId', 'takenAt', 'limit', 'cap', 'slots', 'worksetDigest', 'facts', 'candidates', 'summary']
+const FACT_KEYS = ['slots', 'cap', 'linkable', 'rawExcluded', 'unlinkable', 'maxFillableSlots', 'coverTarget', 'coveredSlots', 'retryReserve', 'retryReserved']
 const CANDIDATE_KEYS = [
-  'sourceHash', 'source', 'axis', 'retry', 'retryTier', 'retryWaitedH', 'slotAgesH', 'lastValidSlot', 'assignedSlot',
-  'edfRound', 'edf', 'selectStep', 'rank', 'sourceAgeH', 'freshnessBand', 'selected', 'position', 'reason', 'menopauseCore', 'wgangSource',
+  'sourceHash', 'source', 'axis', 'retry', 'retryTier', 'retryWaitedH', 'retryReserved', 'slotAgesH', 'lastValidSlot',
+  'assignedSlot', 'stage', 'rank', 'sourceAgeH', 'freshnessBand', 'selected', 'position', 'reason', 'menopauseCore', 'wgangSource',
 ]
 const RANK_KEYS = ['commentsPct', 'viewsPct', 'ageAtSlotH', 'velocity']
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -430,11 +400,19 @@ const sameKeys = (o: Record<string, unknown>, keys: readonly string[]): boolean 
   Object.keys(o).length === keys.length && keys.every((k) => k in o)
 const numOrNull = (v: unknown): boolean => v === null || (typeof v === 'number' && Number.isFinite(v))
 const intOrNull = (v: unknown): boolean => v === null || (typeof v === 'number' && Number.isInteger(v) && v >= 0)
+const isInt = (v: unknown): boolean => typeof v === 'number' && Number.isInteger(v) && v >= 0
 const strictIso = (v: unknown): boolean => typeof v === 'string' && !Number.isNaN(Date.parse(v)) && new Date(v).toISOString() === v
 
-export type SelectionTraceRead = { ok: true; trace: SupplySelectionTrace } | { ok: false; problems: string[] }
+export type SelectionTraceRead =
+  | { ok: true; version: 'v2'; trace: SupplySelectionTrace }
+  | { ok: true; version: 'v1'; trace: SupplySelectionTraceV1 }
+  | { ok: false; problems: string[] }
 
 export function readSupplySelectionTrace(raw: unknown): SelectionTraceRead {
+  if (isObj(raw) && raw.version === SELECTION_TRACE_VERSION_V1) {
+    const v1 = readSupplySelectionTraceV1(raw)
+    return v1.ok ? { ok: true, version: 'v1', trace: v1.trace } : { ok: false, problems: v1.problems.map((p) => `v1:${p}`) }
+  }
   const p: string[] = []
   if (!isObj(raw)) return { ok: false, problems: ['NOT_OBJECT'] }
   if (!sameKeys(raw, TOP_KEYS)) p.push('TOP_KEYS')
@@ -442,11 +420,11 @@ export function readSupplySelectionTrace(raw: unknown): SelectionTraceRead {
   if (raw.version !== SELECTION_TRACE_VERSION) p.push('VERSION')
   if (typeof raw.runId !== 'string' || !/^\d{8}-\d{6}$/.test(raw.runId)) p.push('RUN_ID')
   if (!strictIso(raw.takenAt)) p.push('TAKEN_AT')
-  if (!intOrNull(raw.limit) || raw.limit === null || !intOrNull(raw.cap) || raw.cap === null) p.push('LIMIT')
-  if (typeof raw.jit !== 'boolean') p.push('JIT')
+  if (!isInt(raw.limit) || !isInt(raw.cap)) p.push('LIMIT')
   const slots = Array.isArray(raw.slots) && raw.slots.every(strictIso) ? raw.slots as string[] : null
-  if (slots === null) p.push('SLOTS')
+  if (slots === null || slots.some((s, i) => i > 0 && Date.parse(slots[i - 1]!) > Date.parse(s))) p.push('SLOTS')
   if (typeof raw.worksetDigest !== 'string' || !/^[0-9a-f]{64}$/.test(raw.worksetDigest)) p.push('WORKSET_DIGEST')
+  if (!isObj(raw.facts) || !sameKeys(raw.facts, FACT_KEYS) || !FACT_KEYS.every((k) => isInt((raw.facts as Record<string, unknown>)[k]))) p.push('FACTS')
   if (!Array.isArray(raw.candidates)) return { ok: false, problems: [...p, 'CANDIDATES'] }
   const n = slots?.length ?? 0
   raw.candidates.forEach((c: unknown, i: number) => {
@@ -455,26 +433,25 @@ export function readSupplySelectionTrace(raw: unknown): SelectionTraceRead {
     if (typeof c.sourceHash !== 'string' || !/^[0-9a-f]{64}$/.test(c.sourceHash)) p.push(`${at}:SOURCE_HASH`)
     if (typeof c.source !== 'string' || !/^[a-z0-9]+(:[a-z0-9-]+)?$/.test(c.source)) p.push(`${at}:SOURCE`)
     if (c.axis !== 'seed' && c.axis !== 'raw') p.push(`${at}:AXIS`)
-    if (typeof c.retry !== 'boolean' || typeof c.selected !== 'boolean'
+    if (typeof c.retry !== 'boolean' || typeof c.selected !== 'boolean' || typeof c.retryReserved !== 'boolean'
       || typeof c.menopauseCore !== 'boolean' || typeof c.wgangSource !== 'boolean') p.push(`${at}:BOOL`)
-    if (!intOrNull(c.retryTier) || !numOrNull(c.retryWaitedH) || (c.retry === false) !== (c.retryTier === null)) p.push(`${at}:RETRY`)
+    if (!intOrNull(c.retryTier) || !numOrNull(c.retryWaitedH) || (c.retry === false) !== (c.retryTier === null)
+      || (c.retryReserved === true && c.retry !== true)) p.push(`${at}:RETRY`)
     if (c.slotAgesH !== null && (!Array.isArray(c.slotAgesH) || c.slotAgesH.length !== n || !c.slotAgesH.every(numOrNull))) p.push(`${at}:SLOT_AGES`)
     for (const k of ['lastValidSlot', 'assignedSlot'] as const) {
       if (!intOrNull(c[k]) || (typeof c[k] === 'number' && (c[k] as number) >= n)) p.push(`${at}:${k}`)
     }
-    if (!intOrNull(c.edfRound) || !intOrNull(c.position)) p.push(`${at}:INT`)
-    if (!(TRACE_EDF_STAGES as readonly unknown[]).includes(c.edf)) p.push(`${at}:EDF`)
-    if (c.selectStep !== null && !(WORKSET_SELECT_STEPS as readonly unknown[]).includes(c.selectStep)) p.push(`${at}:STEP`)
+    if (!intOrNull(c.position)) p.push(`${at}:INT`)
+    if (!(TRACE_STAGES as readonly unknown[]).includes(c.stage)) p.push(`${at}:STAGE`)
     if (!(TRACE_REASONS as readonly unknown[]).includes(c.reason)) p.push(`${at}:REASON`)
     if (c.rank !== null && (!isObj(c.rank) || !sameKeys(c.rank, RANK_KEYS) || !RANK_KEYS.every((k) => numOrNull((c.rank as Record<string, unknown>)[k])))) {
       p.push(`${at}:RANK`)
     }
     if (!numOrNull(c.sourceAgeH)) p.push(`${at}:SOURCE_AGE`)
-    // 🔴 구간은 원래 나이에서만 나온다 — 따로 적힌 구간이 나이와 어긋나면 손상이다
     else if (c.freshnessBand !== observationBucketOf(c.sourceAgeH as number | null)) p.push(`${at}:BAND`)
-    const sel = typeof c.reason === 'string' && c.reason.startsWith('SELECTED_')
+    const sel = c.reason === 'SELECTED_COVER' || c.reason === 'SELECTED_EXTRA'
     if (c.selected !== (c.position !== null) || (c.reason !== 'TRACE_MISMATCH' && c.selected !== sel)) p.push(`${at}:SELECTED`)
-    if ((c.edf === 'ASSIGNED') !== (c.assignedSlot !== null)) p.push(`${at}:ASSIGNED`)
+    if (c.selected === true && c.reason !== 'TRACE_MISMATCH' && c.assignedSlot === null) p.push(`${at}:ASSIGNED`)
   })
   if (p.length > 0) return { ok: false, problems: p }
   const cs = raw.candidates as TraceCandidate[]
@@ -482,9 +459,15 @@ export function readSupplySelectionTrace(raw: unknown): SelectionTraceRead {
   if (new Set(hashes).size !== hashes.length) p.push('DUPLICATE_SOURCE')
   if (hashes.some((h, i) => i > 0 && hashes[i - 1]! >= h)) p.push('ORDER')
   if (!isObj(raw.summary) || typeof raw.summary.identityMissing !== 'number') p.push('SUMMARY')
-  else if (JSON.stringify(raw.summary) !== JSON.stringify(summarizeTrace(cs, raw.summary.identityMissing))) p.push('SUMMARY_MISMATCH')
-  if (JSON.stringify(raw.shadow) !== JSON.stringify(shadowOf(cs))) p.push('SHADOW_MISMATCH')
-  return p.length > 0 ? { ok: false, problems: p } : { ok: true, trace: raw as unknown as SupplySelectionTrace }
+  else {
+    const again = summarizeTrace(cs, raw.summary.identityMissing, { takenAt: raw.takenAt as string, slots: slots!, cap: raw.cap as number })
+    if (JSON.stringify(raw.summary) !== JSON.stringify(again)) p.push('SUMMARY_MISMATCH')
+    const f = raw.facts as JitSelectionFacts
+    if (f.maxFillableSlots !== again.maxFillableSlots || f.coverTarget !== again.coverTarget
+      || f.coveredSlots !== again.coveredSlots || f.retryReserved !== again.retryReserved
+      || f.rawExcluded !== again.rawExcluded || f.slots !== n) p.push('FACTS_MISMATCH')
+  }
+  return p.length > 0 ? { ok: false, problems: p } : { ok: true, version: 'v2', trace: raw as unknown as SupplySelectionTrace }
 }
 
 export const serializeSelectionTrace = (t: SupplySelectionTrace): string => `${JSON.stringify(t, null, 2)}\n`
@@ -514,7 +497,7 @@ export function recordSelectionTraceSafely(input: {
   const body = serializeSelectionTrace(trace)
   try {
     const back = readSupplySelectionTrace(JSON.parse(body))
-    if (!back.ok) return { ok: false, stage: 'verify', error: back.problems.slice(0, 5).join(',') }
+    if (!back.ok || back.version !== 'v2') return { ok: false, stage: 'verify', error: back.ok ? 'VERSION' : back.problems.slice(0, 5).join(',') }
   } catch (e) {
     return { ok: false, stage: 'verify', error: e instanceof Error ? e.name : 'unknown' }
   }

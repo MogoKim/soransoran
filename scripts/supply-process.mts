@@ -55,9 +55,9 @@ import { buildQueueSnapshot, pendingSourceKeysOf, queueSnapshotFileName } from '
 import {
   attemptedOutcomes, concludedSourceKeys, humanDecisionIndexOf, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
   sourceIdentityOf, sourceKeyOf, type HumanDecisionIndex,
-  selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName, assignSourceSlots,
+  selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName,
   WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
-  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease,
+  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease, isAutoSupplyConsumable,
 } from '../src/lib/supply-workset'
 /** 🔴 공급 선택 관측(P0-B0) — 선택이 끝난 뒤 기록만 읽는다. 선택 · 유료 단계 · DB 에 영향 0 */
 import {
@@ -1030,37 +1030,30 @@ async function main(): Promise<number> {
      *    쓰기는 live 회차에서만(dry-run 파일 write 0).
      */
     if (canWrite) {
-      const opp = worksetEligibility(eligibilityInput).eligible.flatMap((r) => (r.evidence === null ? [] : [r.evidence]))
+      // 🔴 opportunities-v2 = 자동 seed 전용 — JIT 선택과 같은 정본(`isAutoSupplyConsumable`) 하나로 거른다
+      const opp = worksetEligibility(eligibilityInput).eligible.filter(isAutoSupplyConsumable).flatMap((r) => (r.evidence === null ? [] : [r.evidence]))
       writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify({
         kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT.toISOString(),
         slotAt: nextSlotAt.toISOString(), evidence: opp,
       }, null, 2)}\n`)
       console.log(`   🟢 원천 기회 스냅샷 ${opp.length}건 (예정 슬롯 ${nextSlotAt.toISOString()})`)
     }
-    // 🔴 선택 관측 기록기(P0-B0) — 짝짓기 · 묶음 선택에 넘겨 단계 결과를 적기만 한다
+    // 🔴 선택 관측 기록기(P0-B0) — 선택 함수에 넘겨 단계 결과를 적기만 한다
     const recorder = createSelectionRecorder()
     if (policy.llm) {
-    // 🔴 부족 슬롯마다 원천을 짝짓는다 — 배정된 원천만 사고, 그 원천은 **배정 슬롯**에서 다시 판정한다
-    const assigned = assignSourceSlots({
-      rows: worksetEligibility(eligibilityInput).eligible, slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT,
-      trace: recorder.sink,
-    })
-    const intendedSlotOf = (r: WorksetRow): Date | null => {
-      const k = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
-      return k === null ? null : assigned.get(k) ?? null
-    }
+    /**
+     * 🔴 **JIT 선택 하나** (2026-10-10 P0-B1) — raw 제외 → 부족 슬롯 연결 → 최대 슬롯 보존 → 재시도 예약 → 정본 순위 →
+     *    고른 집합에만 EDF 배정. 고른 원천은 **배정 슬롯**에서 다시 판정해 묶음에 나이를 적는다.
+     */
     const plan = selectWorkset({
       ...eligibilityInput, attempted: prior.attempted,
-      releaseOf: (r) => {
-        const d = intendedSlotOf(r)
-        return d === null ? releaseOf(r) : preGenerationRelease(r, d, RUN_AT)
-      },
-      intendedSlotOf,
+      jit: { slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT },
       limit: PAID_LIMIT, runId, takenAt: runAt,
       trace: recorder.sink,
     })
-    console.log(`   부족 슬롯 ${unfilledSlots.length}개 · 원천 배정 ${assigned.size}건`
-      + ` (${[...new Set([...assigned.values()].map((d) => d.toISOString()))].length}개 슬롯)`)
+    const jf = plan.jit!
+    console.log(`   부족 슬롯 ${jf.slots}개 · 채울 수 있는 최대 ${jf.maxFillableSlots} · 덮음 ${jf.coveredSlots}`
+      + ` · 연결 가능 seed ${jf.linkable} · raw 제외 ${jf.rawExcluded} · 재시도 예약 ${jf.retryReserved}/${jf.retryReserve}`)
     if (plan.picked.length === 0) {
       // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
       worksetEmpty = true
@@ -1080,7 +1073,7 @@ async function main(): Promise<number> {
     const traced = recordSelectionTraceSafely({
       build: () => buildSupplySelectionTrace({
         runId, takenAt: runAt, limit: PAID_LIMIT, cap: PAID_LIMIT, slots: unfilledSlots, record: recorder.record,
-        attempted: prior.attempted, picked: plan.picked, workset: plan.workset,
+        attempted: prior.attempted, picked: plan.picked, workset: plan.workset, facts: jf,
         slotVerdict: (r, d) => preGenerationRelease(r, d, RUN_AT),
       }),
       write: canWrite ? (body) => writeAtomic(join(DATA_DIR, selectionTraceFileName(runId)), body) : null,
@@ -1089,8 +1082,8 @@ async function main(): Promise<number> {
       const s = traced.trace.summary
       console.log(`   🔎 선택 관측 후보 ${s.candidates} · 선택 ${s.selected} · 재시도 ${s.retry.candidates}/${s.retry.selected}`
         + ` · 갱년기 ${s.menopauseCore.candidates}/${s.menopauseCore.selected} · wgang ${s.wgang.candidates}/${s.wgang.selected}`
-        + ` · EDF 오래된 쪽 우선 ${s.edfOlderOverFresher} · 예약석 밀림 ${s.freshDisplacedByRetryReserve}`
-        + ` · 축 자리 제외 ${s.axisQuotaDropped} · shadow 갱년기 ${traced.trace.shadow.menopause}`
+        + ` · 나이 p50 ${s.selectedAgeH.p50 === null ? '—' : s.selectedAgeH.p50.toFixed(1)}h · 당일 ${s.selectedSameKstDay}`
+        + ` · 순위 역전 ${s.rankInversions} · 동률 선호 갱년기 ${s.preferenceDecided.menopause}/wgang ${s.preferenceDecided.wgang}`
         + `${s.mismatches > 0 ? ` · 🔴 기록 불일치 ${s.mismatches}` : ''}${traced.written ? '' : ' (dry-run · 파일 0)'}`)
     } else {
       console.log(`   🟡 선택 관측 trace 실패(${traced.stage}: ${traced.error}) — 묶음 · 유료 단계에는 영향 없음`)
