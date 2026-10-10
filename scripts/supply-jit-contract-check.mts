@@ -424,14 +424,18 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
   const runner = strip('scripts/supply-process.mts')
   check('🔴 러너 유료 묶음 = paidSourcesFor(부족분 · 결말 수율 상한) — 고정 WORKSET_LIMIT 로 판정 · 생성하지 않는다',
     /const paid = paidSourcesFor\(\{ deficit: policy\.upTo, yieldHigh: before\?\.sourceYield\?\.high \?\? null, cap: WORKSET_LIMIT \}\)/.test(runner)
-    && /judgeStageBudget\(PAID_LIMIT\)/.test(runner) && /intendedSlotOf,\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
+    && /judgeStageBudget\(PAID_LIMIT\)/.test(runner)
+    // 🔴 (2026-10-10 P0-B1) 배정 · 선택은 `selectWorkset({ jit })` 하나 — 상한은 같은 PAID_LIMIT
+    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
     && !/judgeStageBudget\(WORKSET_LIMIT\)/.test(runner) && !/limit: WORKSET_LIMIT, runId/.test(runner))
   check('🔴 묶음은 수요가 있을 때만 만든다(policy.llm) — 수요 0 이면 판정 · 생성 0',
-    /if \(policy\.llm\) \{\s*const assigned = assignSourceSlots\(\{\s*rows: worksetEligibility\(eligibilityInput\)\.eligible, slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT,/.test(runner)
-    && /const plan = selectWorkset\(/.test(runner))
+    /if \(policy\.llm\) \{\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
+    && !/assignSourceSlots|intendedSlotOf/.test(runner))
   check('🔴 🔴 원천은 부족 슬롯 각각의 시각에 판정 — 배정 슬롯에서 다시 판정 · nextSlotAt 하나로 모두 판정하지 않는다',
     /: \(before\?\.jit\?\.unfilled \?\? \[\]\)/.test(runner)
-    && /return d === null \? releaseOf\(r\) : preGenerationRelease\(r, d, RUN_AT\)/.test(runner)
+    // 🔴 (2026-10-10 P0-B1) 슬롯별 판정 · 배정 슬롯 재판정은 JIT 선택 안에 있다(정본 `preGenerationRelease`)
+    && /const valid = slots\.map\(\(d\) => preGenerationRelease\(r, d, jit\.now\)\.verdict === 'eligible'\)/.test(strip('src/lib/supply-workset.ts'))
+    && /ageAtSlotH: preGenerationRelease\(c\.r, d, jit\.now\)\.rank\.ageAtSlotH \?\? 0/.test(strip('src/lib/supply-workset.ts'))
     && !/preGenerationRelease\(r, nextSlotAt, RUN_AT\)/.test(runner))
   check('🔴 러너 수율은 preflight 와 같은 판독(readReadyCohort) · 같은 짝짓기 열쇠(jit.matched)',
     /readReadyCohort\(prisma, \{/.test(runner) && /matched: new Set\(jit\.matched\), horizon: jit\.horizon/.test(runner))

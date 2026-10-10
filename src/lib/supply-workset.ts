@@ -19,8 +19,10 @@ export { baseIdOf, sourceIdentityOf, sourceKeyOf, sourceOfKey }
 /** 🔴 원천 기회 판정 정본 — 유료 생성 전에 예정 슬롯 기준으로 같은 함수를 부른다 */
 import {
   articleIdHashOf, compareReleaseRank, judgeSlotRelease, matchOpportunitiesToSlots, parseEvidence,
-  type SlotReleaseVerdict, type SourceEvidenceRecord,
+  type ReleaseRank, type SlotReleaseVerdict, type SourceEvidenceRecord,
 } from './source-slot-release'
+/** 🔴 갱년기 코어 언급 — 정본 `MENOPAUSE_RE` 하나(동률에서만 쓰는 선호 · 새 낱말 0) */
+import { mentionsMenopause } from './original-post-persona-match'
 
 /**
  * 공급 회차의 **작업 묶음** — 🔴 AI 를 부르기 전에 **코드가** 정한다 (2026-09-20)
@@ -180,7 +182,7 @@ export function preGenerationRelease(r: WorksetRow, slotAt: Date, now: Date): Sl
 
 export const WORKSET_DROPS = [
   'identityMissing', 'humanDecided', 'queueSibling', 'alreadyQueued', 'carriedOver', 'hardBlocked', 'preGated', 'terminal',
-  'slotIneligible', 'slotUnknown', 'slotUnassigned',
+  'slotIneligible', 'slotUnknown', 'slotUnassigned', 'rawNotAutoConsumed',
 ] as const
 export type WorksetDrop = (typeof WORKSET_DROPS)[number]
 
@@ -195,7 +197,8 @@ export const WORKSET_DROP_LABEL: Readonly<Record<WorksetDrop, string>> = {
   terminal: '앞 회차가 이미 끝낸 원천 (HOLD·DROP·생성 hard HOLD)',
   slotIneligible: '🔴 예정 슬롯에서 원천 가치가 없다 (원문 나이 ≥ 72h) — 유료 생성 0',
   slotUnknown: '🔴 원천 증거를 모른다 (게시 시각 · 반응 · 원천 상대 표본 없음) — 유료 생성 0',
-  slotUnassigned: '🔴 부족 슬롯에 짝지어지지 않았다 (이미 덮였거나 · 그 슬롯 전에 만료 · 이번 유료 상한 밖) — 유료 생성 0',
+  slotUnassigned: '🔴 부족 슬롯에 연결되지 않거나 이번 유료 상한 밖이다 — 유료 생성 0',
+  rawNotAutoConsumed: '🔴 원문 그대로(raw) 축 — 자동 소비자가 없다(AUTO_RAW 는 사람 검토 레인으로만 간다) · 자동 유료 묶음 0',
 }
 
 export type Workset = {
@@ -223,6 +226,8 @@ export type WorksetPlan = {
   dropped: Record<WorksetDrop, number>
   /** 조건은 맞지만 이번 묶음에 못 들어간 것 — 🔴 **그대로 남는다** */
   deferred: number
+  /** 🔴 JIT 선택 사실(`input.jit` 일 때만) — 채울 수 있는 최대 슬롯 · 실제로 덮은 슬롯 · 재시도 예약 */
+  jit?: JitSelectionFacts
   /**
    * 🔴 **축별 수** (2026-09-28) — 적격 · 이번 자리(quota) · 실제로 고른 수.
    *    사람이 "왜 raw 가 1건뿐인가 · 왜 자리가 비었나" 를 로그에서 바로 본다.
@@ -921,36 +926,17 @@ export type SelectWorksetInput = {
   runId: string
   takenAt: Date
   /**
-   * 🔴 **원천마다 배정된 부족 슬롯** (`assignSourceSlots`) — 주면 JIT 계약 묶음(`workset-v3`)을 만든다:
-   *    배정이 없는 원천은 고르지 않고(`slotUnassigned`), `releaseOf` 는 **그 원천의 배정 슬롯**에서 판정해야 한다.
-   *    주지 않으면 옛 판(v2 — 손으로 부르는 경로 · 검사)이다. 🔴 v2 는 JIT 근거로 세지 않는다.
+   * 🔴 **JIT 공급 회차** (2026-10-10 P0-B1) — 주면 `selectJitWorkset` 하나가 고르고 배정한다(`workset-v3`).
+   *    `slots` 는 자동 READY 가 덮지 못한 부족 슬롯, `cap` 은 이번 회차 유료 원천 상한(`paidSourcesFor`)이다.
+   *    주지 않으면 옛 판(v2 — 슬롯 없이 손으로 부르는 경로 · 검사)이다. 🔴 v2 는 JIT 근거로 세지 않는다.
    */
-  intendedSlotOf?: (r: WorksetRow) => Date | null
+  jit?: JitSelectionInput
   /**
    * 🔴 **선택 관측 기록기** (2026-10-10 P0-B0) — 주면 단계별 결과를 적기만 한다. 주지 않으면 기록 0.
-   *    선택 결과(슬롯 · 묶음 · 순서 · 축 · 재시도)는 주든 안 주든 같다 — 검사가 digest 로 대조한다.
+   *    선택 결과(슬롯 · 묶음 · 순서 · 재시도)는 주든 안 주든 같다 — 검사가 digest 로 대조한다.
    */
   trace?: WorksetTraceSink
 }
-
-/**
- * 🔴 **`selectWorkset` 안에서 원천이 멈춘 자리** (2026-10-10 P0-B0). 원인이 다르면 값도 다르다 — 합치지 않는다.
- *    `SLOT_UNASSIGNED`                   부족 슬롯에 짝지어지지 않았다(왜인지는 trace 가 짝짓기 기록으로 더 나눈다)
- *    `AXIS_QUOTA_ZERO`                   그 축의 이번 자리가 0 이다
- *    `AXIS_QUOTA_FULL`                   차례가 왔지만 그 축의 자리가 이미 찼다
- *    `RETRY_RESERVED`                    재시도 예약석으로 골랐다
- *    `RETRY_FILLED`                      신규가 남긴 칸을 재시도가 채웠다
- *    `RETRY_LIMIT_CUT`                   재시도인데 예약석 · 남은 칸 밖이다
- *    `FRESH_PICKED`                      신규로 골랐다
- *    `FRESH_DISPLACED_BY_RETRY_RESERVE`  예약석이 없었다면 같은 순서로 상한 안이었다(🔴 축 자리는 다시 계산하지 않는다)
- *    `FRESH_RANK_CUT`                    예약석과 무관하게 상한 밖이다
- */
-export const WORKSET_SELECT_STEPS = [
-  'SLOT_UNASSIGNED', 'AXIS_QUOTA_ZERO', 'AXIS_QUOTA_FULL',
-  'RETRY_RESERVED', 'RETRY_FILLED', 'RETRY_LIMIT_CUT',
-  'FRESH_PICKED', 'FRESH_DISPLACED_BY_RETRY_RESERVE', 'FRESH_RANK_CUT',
-] as const
-export type WorksetSelectStep = (typeof WORKSET_SELECT_STEPS)[number]
 
 /**
  * 🔴 **선택 관측 기록기** — 반환값이 없다. 선택 변수(자리 · 집합 · 순서)를 읽기만 하고 바꾸지 않는다.
@@ -959,10 +945,8 @@ export type WorksetSelectStep = (typeof WORKSET_SELECT_STEPS)[number]
 export type WorksetTraceSink = {
   /** 생성 가능 판정 한 줄 — `drop` 이 null 이면 통과 · `verdict` 는 슬롯 판정까지 갔을 때만 */
   eligibility(e: { row: WorksetRow; key: string | null; drop: WorksetDrop | null; verdict: SlotReleaseVerdict | null }): void
-  /** 슬롯 짝짓기 한 줄 — `kept=false` 는 짝지어졌지만 유료 상한(cap)에 잘렸다 */
-  assignment(e: { key: string; slotAt: Date; round: number; kept: boolean }): void
-  /** 묶음 선택 단계 결과 한 줄 */
-  selection(e: { key: string; step: WorksetSelectStep }): void
+  /** JIT 선택 한 줄 — 고른 원천은 배정 슬롯과 묶음 안 순서를 함께 적는다 */
+  jit(e: { key: string; step: JitSelectStep; slotAt: Date | null; position: number | null; retryReserved: boolean }): void
 }
 
 /** 🔴 생성 가능 판정에 쓰는 입력 — 묶음 선택과 기회 스냅샷이 **같은 값**을 넘긴다 */
@@ -988,7 +972,7 @@ export type WorksetEligibility = {
 export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligibility {
   const dropped: Record<WorksetDrop, number> = {
     identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
-    slotIneligible: 0, slotUnknown: 0, slotUnassigned: 0,
+    slotIneligible: 0, slotUnknown: 0, slotUnassigned: 0, rawNotAutoConsumed: 0,
   }
   const releaseByKey = new Map<string, SlotReleaseVerdict>()
   /**
@@ -1049,28 +1033,36 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
 }
 
 /**
+ * 🔴 **재시도에 남길 자리 수 — 옛 판 · JIT 판이 같은 함수를 쓴다.**
+ *    상한 2 이상이면 `worksetRetryReserve`(상한 10 → 2), 상한 1 이면 가장 오래 기다린 재시도가
+ *    `WORKSET_RETRY_STARVE_MS` 를 넘었을 때만 1 이다. 재시도가 없으면 0.
+ */
+export function retryReserveFor(limit: number, retryClocksMs: readonly number[], takenAt: Date): number {
+  if (retryClocksMs.length === 0 || !(limit > 0)) return 0
+  if (limit >= 2) return worksetRetryReserve(limit)
+  const oldest = Math.min(...retryClocksMs)
+  return takenAt.getTime() - oldest >= WORKSET_RETRY_STARVE_MS ? limit : 0
+}
+
+/**
  * 🔴 **묶음을 고른다.** AI 를 부르기 전에 끝난다 — 이 함수는 순수하다.
  *
+ * 🔴 **JIT 공급 회차(`input.jit`)는 `selectJitWorkset` 하나가 고른다** (2026-10-10 P0-B1).
+ *    아래 옛 판의 축 자리 · 재시도 예약석 · 순위 자르기를 JIT 하류에서 **다시 하지 않는다**.
+ *
+ * 옛 판(v2 — 슬롯 없이 손으로 부르는 경로 · 검사)은 그대로다:
  * 🔴 자리를 둘로 나눈다: **한 번도 안 본 원천**과 **이미 본 원천(재시도)**.
  *    한쪽이 다른 쪽을 굶기지 않는 것이 이 함수의 계약이다.
- *
  * 🔴 **그 전에 축으로 자리를 나눈다** (2026-09-28, `worksetAxisQuota`).
- *    상한 10 → raw 최대 2 · seed 가 충분하면 seed 8 이상 (상한 5 → 1 · 4). raw 는 빼지 않고,
- *    seed 가 모자란 자리를 raw 로 전부 채우지도 않는다(빈 자리는 비워 둔다).
- *    신규/재시도 나눔과 각 줄의 순서(댓글 수 · 오래 기다린 것부터)는 축 자리 **안에서** 그대로다.
+ *    상한 10 → raw 최대 2 · seed 가 충분하면 seed 8 이상 (상한 5 → 1 · 4).
  *
  * 🔴 같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.
  */
 export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
+  if (input.jit !== undefined) return selectJitWorkset(input, input.jit)
   const base = worksetEligibility(input)
   const { releaseByKey, dropped, keyOf: K } = base
-  const slotOf = input.intendedSlotOf
-  const eligible = slotOf === undefined ? base.eligible : base.eligible.filter((r) => {
-    if (slotOf(r) !== null) return true
-    dropped.slotUnassigned += 1
-    input.trace?.selection({ key: K(r), step: 'SLOT_UNASSIGNED' })
-    return false
-  })
+  const eligible = base.eligible
 
   /** 🔴 정본 rank 사전식 비교 — 합산 점수 없음 · 마지막 열쇠는 원천 열쇠다 */
   const byWeight = (a: WorksetRow, b: WorksetRow): number =>
@@ -1092,22 +1084,13 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
 
   const limit = Number.isInteger(input.limit) && input.limit > 0 ? input.limit : 0
 
-  /**
-   * 🔴 **축별 자리를 먼저 정한다** (2026-09-28). 신규/재시도 자리 나눔은 그 **안에서** 그대로 돈다.
-   *    원천이 전부 seed 이면 quota 가 `{ seed: limit, raw: 0 }` 이 되어 앞판과 **같은 결과**다.
-   */
   const count = (axis: WorksetAxis): number => eligible.filter((r) => worksetAxisOf(r) === axis).length
   const eligibleByAxis: Record<WorksetAxis, number> = { seed: count('seed'), raw: count('raw') }
   const quota = worksetAxisQuota(limit, eligibleByAxis)
   const used: Record<WorksetAxis, number> = { seed: 0, raw: 0 }
   const hasRoom = (r: WorksetRow): boolean => used[worksetAxisOf(r)] < quota[worksetAxisOf(r)]
-  /** 🔴 관측 전용 — 차례가 왔는데 축 자리가 찼던 원천. 선택은 이 집합을 읽지 않는다 */
-  const axisFull = new Set<string>()
   const take = (r: WorksetRow): boolean => {
-    if (!hasRoom(r)) {
-      if (input.trace !== undefined) axisFull.add(K(r))
-      return false
-    }
+    if (!hasRoom(r)) return false
     used[worksetAxisOf(r)] += 1
     return true
   }
@@ -1115,29 +1098,15 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
   const freshOpen = fresh.filter(hasRoom)
   const retryOpen = retry.filter(hasRoom)
 
-  /**
-   * 🔴 **재시도에 남길 자리.** 상한이 2 이상이면 한 자리를 늘 남기고,
-   *    상한이 1 이면 **가장 오래 기다린 재시도**가 기준을 넘었을 때만 그 자리를 가져간다.
-   *    🔴 기준은 **자리가 있는 축의** 재시도 가운데 가장 오래 기다린 것이다.
-   */
-  /** 🔴 상한 1 의 굶김 기준은 **차례와 무관하게** 가장 오래 기다린 재시도다 */
-  const oldestMs = retryOpen.reduce((m, r) => Math.min(m, prior(r) === undefined ? 0 : runClockOf(prior(r)!)),
-    Number.POSITIVE_INFINITY)
-  const waitedMs = retryOpen.length === 0 ? 0 : input.takenAt.getTime() - oldestMs
-  const reserve = retryOpen.length === 0 ? 0
-    : limit >= 2 ? worksetRetryReserve(limit)
-      : waitedMs >= WORKSET_RETRY_STARVE_MS ? limit : 0
+  const reserve = retryReserveFor(limit, retryOpen.map((r) => (prior(r) === undefined ? 0 : runClockOf(prior(r)!))), input.takenAt)
 
-  /**
-   * 🔴 ① 재시도 자리를 **먼저** 잡는다 — 오래 기다린 순서 그대로, 축 자리가 남은 것만.
-   *    신규가 먼저 축 자리를 다 채워 버리면 남긴 재시도 자리가 비어 버린다(재시도 굶김).
-   */
+  // 🔴 ① 재시도 자리를 **먼저** 잡는다 — 오래 기다린 순서 그대로, 축 자리가 남은 것만
   const reserved = new Set<string>()
   for (const r of retryOpen) {
     if (reserved.size >= reserve) break
     if (take(r)) reserved.add(K(r))
   }
-  // 🔴 ② 신규 — 댓글 수 순서 그대로, 남긴 재시도 자리를 빼고 축 자리 안에서
+  // 🔴 ② 신규 — 순위 그대로, 남긴 재시도 자리를 빼고 축 자리 안에서
   const freshPicked: WorksetRow[] = []
   for (const r of freshOpen) {
     if (freshPicked.length >= limit - reserved.size) break
@@ -1158,50 +1127,234 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
     raw: picked.filter((r) => worksetAxisOf(r) === 'raw').length,
   }
 
-  /**
-   * 🔴 **관측 기록** (2026-10-10 P0-B0) — 선택이 끝난 **뒤에** 읽기만 한다. 위 변수는 하나도 바꾸지 않는다.
-   *    예약석 때문에 밀린 신규: 예약석이 없었다면 같은 신규 순서로 상한 안이었던 것(축 자리 재계산 없음).
-   */
-  if (input.trace !== undefined) {
-    const sink = input.trace
-    const freshOpenKeys = new Set(freshOpen.map(K))
-    const retryOpenKeys = new Set(retryOpen.map(K))
-    for (const r of fresh) if (!freshOpenKeys.has(K(r))) sink.selection({ key: K(r), step: 'AXIS_QUOTA_ZERO' })
-    for (const r of retry) if (!retryOpenKeys.has(K(r))) sink.selection({ key: K(r), step: 'AXIS_QUOTA_ZERO' })
-    const freshPickedKeys = new Set(freshPicked.map(K))
-    let line = freshPicked.length
-    for (const r of freshOpen) {
-      const k = K(r)
-      if (freshPickedKeys.has(k)) sink.selection({ key: k, step: 'FRESH_PICKED' })
-      else if (axisFull.has(k)) sink.selection({ key: k, step: 'AXIS_QUOTA_FULL' })
-      else if (reserved.size > 0 && line < limit) { line += 1; sink.selection({ key: k, step: 'FRESH_DISPLACED_BY_RETRY_RESERVE' }) }
-      else sink.selection({ key: k, step: 'FRESH_RANK_CUT' })
-    }
-    for (const r of retryOpen) {
-      const k = K(r)
-      if (reserved.has(k)) sink.selection({ key: k, step: 'RETRY_RESERVED' })
-      else if (retryIds.has(k)) sink.selection({ key: k, step: 'RETRY_FILLED' })
-      else if (axisFull.has(k)) sink.selection({ key: k, step: 'AXIS_QUOTA_FULL' })
-      else sink.selection({ key: k, step: 'RETRY_LIMIT_CUT' })
-    }
-  }
-
-  const jit = slotOf !== undefined
   return {
     workset: {
-      kind: WORKSET_KIND, version: jit ? WORKSET_VERSION_JIT : WORKSET_VERSION,
+      kind: WORKSET_KIND, version: WORKSET_VERSION,
       runId: input.runId, takenAt: input.takenAt.toISOString(), limit,
-      sources: picked.map((r) => (jit ? {
-        sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId,
-        slotAt: slotOf(r)!.toISOString(), ageAtSlotH: releaseByKey.get(K(r))!.rank.ageAtSlotH ?? 0,
-      } : { sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId })),
-      ...(jit ? { contract: SUPPLY_JIT_CONTRACT } : {}),
+      sources: picked.map((r) => ({ sourceSite: r.sourceSite, sourceArticleId: r.sourceArticleId })),
     },
     picked,
     dropped,
     // 🔴 조건은 맞는데 이번에 못 들어간 것 — 다음 회차가 집는다
     deferred: Math.max(0, eligible.length - picked.length),
     axis: { eligible: eligibleByAxis, quota, picked: pickedByAxis },
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **JIT 공급 선택 — 최대 슬롯 보존 → 정본 순위 → 결정적 동률** (2026-10-10 P0-B1)
+//
+//   앞판은 `assignSourceSlots` 가 마감 임박 순(EDF)으로 **먼저 골라** 잘랐고, 순위 · 축 자리 · 재시도 예약석은
+//   그 뒤에서 거의 작동하지 않았다. 08:15 · 12:15 실측: 더 어린 미선택 후보를 두고 오래된 후보를 배정한 사례 10 ·
+//   배정한 raw 를 축 자리가 버려 선택 8 · 9 / 상한 10. 72시간 공급 원천 나이 p50 41.4h · 당일 0%.
+//
+//   이제 한 함수가 고르고 배정한다:
+//     ① 생성 가능 판정(그대로) → raw 축은 자동 소비자가 없어 뺀다(마스터 결정 · 자료는 그대로 남는다)
+//     ② 부족 슬롯 어디에도 연결되지 않는 원천은 뺀다
+//     ③ 채울 수 있는 최대 슬롯 수 M — 원천마다 서로 다른 슬롯 하나(증대 경로) · 목표 = min(상한, M)
+//     ④ 재시도(기존 차례 → 오래 기다린 것 → 순위)를 예약 수만큼 먼저, 그다음 정본 순위대로 —
+//        **넣어도 서로 다른 슬롯 짝이 유지될 때만** 넣는다. 짝 가능 집합은 matroid 라 어떤 순서로 넣어도
+//        멈출 때 크기는 목표와 같다(최대 슬롯 보존). 같은 순서 안에서는 가장 좋은 집합이다(교환 역전 0)
+//     ⑤ 상한이 남으면 같은 순서로 더 산다(재고 수율 대비 — 앞판의 다음 바퀴와 같은 자리)
+//     ⑥ 고른 집합에만 EDF 로 실제 슬롯을 배정한다 — **EDF 는 더 이상 무엇을 살지 정하지 않는다**
+//   🔴 합산 점수 · 가중치 · 품질 구간 · 할당량 없음.
+// ─────────────────────────────────────────────────────────
+
+export type JitSelectionInput = { slots: readonly Date[]; now: Date; cap: number }
+
+/** 🔴 JIT 선택에서 원천이 들어가거나 멈춘 자리 — 원인이 다르면 값도 다르다 */
+export const JIT_SELECT_STEPS = [
+  'RAW_EXCLUDED', 'SLOT_UNLINKABLE', 'SELECTED_COVER', 'SELECTED_EXTRA', 'CAP_REACHED',
+] as const
+export type JitSelectStep = (typeof JIT_SELECT_STEPS)[number]
+
+export type JitSelectionFacts = {
+  slots: number
+  cap: number
+  /** 부족 슬롯 하나 이상에 연결되는 자동 seed 원천 */
+  linkable: number
+  rawExcluded: number
+  unlinkable: number
+  /** 🔴 원천마다 서로 다른 슬롯 하나로 덮을 수 있는 최대 슬롯 수 */
+  maxFillableSlots: number
+  /** min(상한, 최대 슬롯) — 선택이 반드시 덮어야 하는 슬롯 수 */
+  coverTarget: number
+  coveredSlots: number
+  retryReserve: number
+  retryReserved: number
+}
+
+/** 🔴 순위 비교 입력 — 정본 rank(같은 기준 슬롯) · 동률에서만 쓰는 선호 두 개 · 결정적 열쇠 */
+export type SupplyRankKey = { rank: ReleaseRank; menopause: boolean; wgang: boolean; key: string }
+
+/** 🔴 정본 원천 이름 — 동률에서만 쓰는 출처 선호 */
+export const WGANG_SOURCE_SITE = 'navercafe:wgang'
+
+/**
+ * 🔴 **공급 순위 — 정본 `compareReleaseRank` 그대로**(댓글 백분위 → 조회 백분위 → 슬롯 나이 → velocity),
+ *    그것이 동률일 때만 갱년기 → wgang → 원천 열쇠(코드 포인트 순). 정본 함수는 바꾸지 않는다(발행 선택도 쓴다).
+ */
+export function compareSupplyRank(a: SupplyRankKey, b: SupplyRankKey): number {
+  return compareReleaseRank({ ...a.rank, tieBreak: '' }, { ...b.rank, tieBreak: '' })
+    || Number(b.menopause) - Number(a.menopause)
+    || Number(b.wgang) - Number(a.wgang)
+    || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+}
+
+/**
+ * 🔴 **원천마다 서로 다른 슬롯 하나 — 증대 경로.** `valid[i][j]`: 원천 i 가 슬롯 j 에서 eligible.
+ *    `tryAdd(i)` 는 원천 i 를 넣을 수 있으면 짝을 고쳐 넣고 true, 아니면 **아무것도 바꾸지 않고** false.
+ */
+export function slotMatcher(valid: readonly (readonly boolean[])[], nSlots: number): {
+  tryAdd: (i: number) => boolean
+  slotOf: (i: number) => number | null
+} {
+  const owner: number[] = Array.from({ length: nSlots }, () => -1)
+  const augment = (i: number, seen: boolean[]): boolean => {
+    for (let j = 0; j < nSlots; j += 1) {
+      if (valid[i]?.[j] !== true || seen[j]) continue
+      seen[j] = true
+      if (owner[j] === -1 || augment(owner[j]!, seen)) { owner[j] = i; return true }
+    }
+    return false
+  }
+  return {
+    tryAdd: (i) => augment(i, Array.from({ length: nSlots }, () => false)),
+    slotOf: (i) => { const j = owner.indexOf(i); return j < 0 ? null : j },
+  }
+}
+
+/** 🔴 채울 수 있는 최대 슬롯 수 — 넣는 순서와 무관하다 */
+export function maxSlotMatching(valid: readonly (readonly boolean[])[], nSlots: number): number {
+  const m = slotMatcher(valid, nSlots)
+  let n = 0
+  for (let i = 0; i < valid.length; i += 1) if (m.tryAdd(i)) n += 1
+  return n
+}
+
+function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): WorksetPlan {
+  const base = worksetEligibility(input)
+  const { dropped, keyOf: K } = base
+  const limit = Number.isInteger(input.limit) && input.limit > 0 ? input.limit : 0
+  const cap = Math.min(limit, Number.isInteger(jit.cap) && jit.cap > 0 ? jit.cap : 0)
+  // 🔴 슬롯은 시각이 정체성이다 — 같은 시각이 두 번 오면 한 슬롯이다(시각순)
+  const slots = [...new Map(jit.slots.map((d) => [d.getTime(), d])).values()].sort((a, b) => a.getTime() - b.getTime())
+  const n = slots.length
+  const note = (key: string, step: JitSelectStep, slotAt: Date | null = null, position: number | null = null, retryReserved = false): void =>
+    input.trace?.jit({ key, step, slotAt, position, retryReserved })
+
+  type Cand = { r: WorksetRow; key: string; valid: boolean[]; sk: SupplyRankKey; prior: PriorOutcome | undefined }
+  const pool: Cand[] = []
+  let rawExcluded = 0
+  let unlinkable = 0
+  for (const r of base.eligible) {
+    const key = K(r)
+    if (worksetAxisOf(r) === 'raw') { rawExcluded += 1; dropped.rawNotAutoConsumed += 1; note(key, 'RAW_EXCLUDED'); continue }
+    const valid = slots.map((d) => preGenerationRelease(r, d, jit.now).verdict === 'eligible')
+    const first = valid.indexOf(true)
+    if (first < 0) { unlinkable += 1; dropped.slotUnassigned += 1; note(key, 'SLOT_UNLINKABLE'); continue }
+    // 🔴 순위는 모든 후보가 **같은 기준 슬롯**(가장 이른 부족 슬롯)에서 잰 정본 rank — 나이를 서로 비교할 수 있다
+    const atFirst = preGenerationRelease(r, slots[0]!, jit.now)
+    const rank = atFirst.verdict === 'eligible' ? atFirst.rank : preGenerationRelease(r, slots[first]!, jit.now).rank
+    pool.push({
+      r, key, valid, prior: input.attempted.get(key),
+      sk: {
+        rank, key,
+        menopause: mentionsMenopause(`${r.input.title ?? ''}\n${r.input.bodyHead ?? ''}`),
+        wgang: r.sourceSite === WGANG_SOURCE_SITE,
+      },
+    })
+  }
+
+  const byRank = [...pool].sort((a, b) => compareSupplyRank(a.sk, b.sk))
+  const retries = pool.filter((c) => c.prior !== undefined).sort((a, b) =>
+    retryTierOf(a.prior) - retryTierOf(b.prior) || runClockOf(a.prior!) - runClockOf(b.prior!) || compareSupplyRank(a.sk, b.sk))
+  const reserve = Math.min(cap, retryReserveFor(cap, retries.map((c) => runClockOf(c.prior!)), input.takenAt))
+  const idx = new Map(pool.map((c, i) => [c, i]))
+  const valid = pool.map((c) => c.valid)
+  const maxFillable = maxSlotMatching(valid, n)
+  const coverTarget = Math.min(cap, maxFillable)
+
+  // ④ 덮기 — 재시도 예약 먼저, 그다음 순위. 짝이 유지될 때만 넣는다
+  const m = slotMatcher(valid, n)
+  const cover: Cand[] = []
+  const reserved = new Set<Cand>()
+  for (const c of retries) {
+    if (reserved.size >= reserve || cover.length >= coverTarget) break
+    if (m.tryAdd(idx.get(c)!)) { cover.push(c); reserved.add(c) }
+  }
+  for (const c of byRank) {
+    if (cover.length >= coverTarget) break
+    if (reserved.has(c)) continue
+    if (m.tryAdd(idx.get(c)!)) cover.push(c)
+  }
+  // ⑤ 남는 상한 — 재시도 예약을 마저 채우고 순위 순
+  const taken = new Set<Cand>(cover)
+  const extra: Cand[] = []
+  const seats = cap - cover.length
+  for (const c of retries) {
+    if (reserved.size >= reserve || extra.length >= seats) break
+    if (taken.has(c)) continue
+    extra.push(c); reserved.add(c); taken.add(c)
+  }
+  for (const c of byRank) {
+    if (extra.length >= seats) break
+    if (taken.has(c)) continue
+    extra.push(c); taken.add(c)
+  }
+
+  // ⑥ 배정 — 고른 집합에만 EDF(마감이 이른 것이 이른 슬롯). 덮기 집합은 한 바퀴에 전부 짝지어진다
+  const slotIndex = new Map(slots.map((d, j) => [d.getTime(), j]))
+  const edfRounds = (set: readonly Cand[]): Map<Cand, Date> => {
+    const out = new Map<Cand, Date>()
+    let left = [...set]
+    while (left.length > 0) {
+      const byKey = new Map(left.map((c) => [c.key, c]))
+      const r = matchOpportunitiesToSlots(slots, left.map((c) => ({ key: c.key, validAt: (d: Date) => c.valid[slotIndex.get(d.getTime())!] === true })))
+      if (r.filled === 0) break
+      r.bySlot.forEach((k, j) => { if (k !== null) out.set(byKey.get(k)!, slots[j]!) })
+      left = left.filter((c) => !out.has(c))
+    }
+    return out
+  }
+  const coverSlots = edfRounds(cover)
+  // 🔴 EDF 가 덮기 집합을 한 바퀴에 다 짝짓지 못하면(나이 외 슬롯 의존 판정이 생긴 경우) 증대 경로의 짝을 쓴다
+  const coverFirstRound = new Set([...coverSlots.values()].map((d) => d.getTime())).size === cover.length
+  const assigned = new Map<Cand, Date>(coverFirstRound ? coverSlots : cover.map((c) => [c, slots[m.slotOf(idx.get(c)!)!]!]))
+  for (const [c, d] of edfRounds(extra)) assigned.set(c, d)
+
+  const picked = [...cover, ...extra]
+  picked.forEach((c, i) => {
+    note(c.key, i < cover.length ? 'SELECTED_COVER' : 'SELECTED_EXTRA', assigned.get(c) ?? null, i, reserved.has(c))
+  })
+  for (const c of pool) if (!taken.has(c)) { dropped.slotUnassigned += 1; note(c.key, 'CAP_REACHED') }
+
+  const eligibleByAxis: Record<WorksetAxis, number> = {
+    seed: base.eligible.length - rawExcluded, raw: rawExcluded,
+  }
+  return {
+    workset: {
+      kind: WORKSET_KIND, version: WORKSET_VERSION_JIT,
+      runId: input.runId, takenAt: input.takenAt.toISOString(), limit,
+      sources: picked.map((c) => {
+        const d = assigned.get(c)!
+        return {
+          sourceSite: c.r.sourceSite, sourceArticleId: c.r.sourceArticleId,
+          slotAt: d.toISOString(), ageAtSlotH: preGenerationRelease(c.r, d, jit.now).rank.ageAtSlotH ?? 0,
+        }
+      }),
+      contract: SUPPLY_JIT_CONTRACT,
+    },
+    picked: picked.map((c) => c.r),
+    dropped,
+    deferred: Math.max(0, pool.length - picked.length),
+    axis: { eligible: eligibleByAxis, quota: { seed: cap, raw: 0 }, picked: { seed: picked.length, raw: 0 } },
+    jit: {
+      slots: n, cap, linkable: pool.length, rawExcluded, unlinkable,
+      maxFillableSlots: maxFillable, coverTarget,
+      coveredSlots: new Set(cover.map((c) => assigned.get(c)!.getTime())).size,
+      retryReserve: reserve, retryReserved: reserved.size,
+    },
   }
 }
 
@@ -1399,51 +1552,4 @@ export function planReplan(input: {
     }
   }
   return { ok: true, excluded, attempt }
-}
-
-// ─────────────────────────────────────────────────────────
-// 🔴 **부족 슬롯마다 원천을 짝짓는다** (2026-10-04 P0-2 보정)
-// ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 **원천 → 부족 슬롯 배정.** 다가오는 슬롯 중 자동 READY 가 덮지 못한 슬롯(`slots`)에, 원천마다 **그 슬롯 시각에**
- *    정본 생성 전 판정(`preGenerationRelease`)이 eligible 인 것만 짝짓는다 — `matchOpportunitiesToSlots` 하나.
- *    한 바퀴에 슬롯마다 원천 하나 · 부족분보다 많이 사는 근거(실측 수율)가 있으면 같은 슬롯들에 다음 바퀴를 돈다.
- *    🔴 모든 원천을 한 슬롯(`nextSlotAt`)으로 판정하지 않는다 — 첫 슬롯에만 유효하고 남은 부족 슬롯 전에 만료되면 배정 0.
- *    `cap` 은 이번 회차 유료 원천 상한(`paidSourcesFor`)이다.
- */
-export function assignSourceSlots(input: {
-  rows: readonly WorksetRow[]
-  slots: readonly Date[]
-  now: Date
-  cap: number
-  /** 🔴 관측 기록기(P0-B0) — 바퀴마다 짝과 cap 에 잘린 짝을 적기만 한다. 배정 결과는 주든 안 주든 같다 */
-  trace?: Pick<WorksetTraceSink, 'assignment'>
-}): Map<string, Date> {
-  const out = new Map<string, Date>()
-  if (input.slots.length === 0 || !(input.cap > 0)) return out
-  let remaining = input.rows
-    .map((r) => ({ r, key: sourceIdentityOf(r.sourceSite, r.sourceArticleId) }))
-    .filter((x): x is { r: WorksetRow; key: string } => x.key !== null)
-  let round = 0
-  while (out.size < input.cap && remaining.length > 0) {
-    round += 1
-    const m = matchOpportunitiesToSlots(input.slots, remaining.map(({ r, key }) => ({
-      key, validAt: (slotAt: Date) => preGenerationRelease(r, slotAt, input.now).verdict === 'eligible',
-    })))
-    if (m.filled === 0) break
-    const order = input.slots.map((d, i) => ({ d, k: m.bySlot[i] })).filter((x): x is { d: Date; k: string } => x.k !== null)
-      .sort((a, b) => a.d.getTime() - b.d.getTime())
-    for (const [i, { d, k }] of order.entries()) {
-      if (out.size >= input.cap) {
-        // 🔴 관측 전용 — 이 바퀴에 짝지어졌지만 유료 상한에 잘린 원천
-        if (input.trace !== undefined) for (const x of order.slice(i)) input.trace.assignment({ key: x.k, slotAt: x.d, round, kept: false })
-        break
-      }
-      out.set(k, d)
-      input.trace?.assignment({ key: k, slotAt: d, round, kept: true })
-    }
-    remaining = remaining.filter(({ key }) => !out.has(key))
-  }
-  return out
 }
