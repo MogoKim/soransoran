@@ -20,7 +20,7 @@ import {
   classifyStock, STOCK_BUCKETS, STOCK_BUCKET_META,
   type LoadedStock, type PublishPlan, type StockBucket, type RecoveryOwner,
 } from './lib/publishable-stock.mjs'
-import { supplyPlanningProfile } from './supply-process.mjs'
+import { upcomingSlots } from './lib/publishable-stock.mjs'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { PROFILES, RUNTIME_PROFILES, CAPACITY_ENV, RELEASE_ENV, RELEASE_STAGES } from '../src/lib/scale-profile'
 import { pickDraft, DRAFT_REASON_LABEL } from '../src/lib/micro-seed-auto-draft'
@@ -220,22 +220,40 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   check('제목 복제는 gateBlocked', same(auto.ids.gateBlocked, ['t']))
 }
 
-console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽기만 한다')
+console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 release 슬롯 + 다음 첫 기회 (2026-10-11 Batch A2)')
 {
-  for (const rel of RELEASE_STAGES) {
-    for (const cap of RELEASE_STAGES) {
-      const scale = resolveScale(markedStageEnv({ [RELEASE_ENV]: rel, [CAPACITY_ENV]: cap }))
-      const p = supplyPlanningProfile(scale)
-      if (!(p.stage === scale.capacityStage && sameProfile(p.profile, scale.capacityProfile)
-        && sameProfile(p.profile, RUNTIME_PROFILES[scale.capacityStage]))) {
-        check(`release ${rel} · capacity ${cap}`, false, `${p.stage}`)
-      }
-    }
-  }
-  check('🔴 모든 release × capacity 조합에서 공급 눈금 = capacity (새 단계 없음)', true)
-  const s15 = resolveScale(markedStageEnv({ [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd5' }))
-  check('🔴 🔴 **release d1 · capacity d5 → 공급 d5 · 발행 d1**',
-    supplyPlanningProfile(s15).stage === 'd5' && s15.releaseStage === 'd1' && sameProfile(s15.releaseProfile, PROFILES.d1))
+  const at = (hm: string): Date => new Date(`2026-10-12T${hm}:00+09:00`)
+  const tomorrowFirst = (p: (typeof PROFILES)[keyof typeof PROFILES]): string =>
+    new Date(`2026-10-13T${String(p.slots[0]!.hour).padStart(2, '0')}:${String(p.slots[0]!.minute).padStart(2, '0')}:00+09:00`).toISOString()
+  // 반례④ d5 공개 · d10 준비 — 07:00 오늘 d5 5칸 + 다음 첫 기회 1 = 6 (옛: 오늘 5 + 내일 d10 10 = 15)
+  const morning = upcomingSlots({ now: at('07:00'), publishedToday: 0, release: PROFILES.d5 })
+  check('🔴 🔴 반례④ d5 공개 · d10 준비 07:00 — 지평 6(오늘 d5 5 + 다음 첫 기회 1) · 내일 d10 10칸을 끌어오지 않는다',
+    morning.length === 6 && morning.filter((d) => d.getTime() >= at('23:59').getTime()).length === 1
+    && morning[5]!.toISOString() === tomorrowFirst(PROFILES.d5), `${morning.length}`)
+  const afternoon = upcomingSlots({ now: at('14:00'), publishedToday: 3, release: PROFILES.d5 })
+  check('반례④ 14:00 · 3편 낸 뒤 — 지평 3(남은 d5 2 + 다음 첫 기회 1) · 옛 12', afternoon.length === 3, `${afternoon.length}`)
+  // 반례⑤ 오늘 슬롯이 끝났으면 다음 첫 기회 하나만
+  const night = upcomingSlots({ now: at('21:15'), publishedToday: 5, release: PROFILES.d5 })
+  check('🔴 🔴 반례⑤ 오늘 d5 슬롯 끝(21:15 · 5편) — 지평 1(다음 첫 기회만) · 옛 10',
+    night.length === 1 && night[0]!.toISOString() === tomorrowFirst(PROFILES.d5), `${night.length}`)
+  const shortDay = upcomingSlots({ now: at('21:15'), publishedToday: 2, release: PROFILES.d5 })
+  check('🔴 반례③ 평상일 부족분(2/5)을 지난 슬롯으로 되살리지 않는다 — 지평 1', shortDay.length === 1, `${shortDay.length}`)
+  // 반례⑥ 열린 d10 증명일 — 그날 남은 d10 슬롯이 든다
+  const proof = upcomingSlots({ now: at('12:00'), publishedToday: 3, release: PROFILES.d10 })
+  check('🔴 🔴 반례⑥ 열린 d10 증명일 12:00 · 3편 — 지평 8(남은 d10 7 + 다음 첫 기회 1) · 옛 7 + 내일 d20 20 = 27',
+    proof.length === 8 && proof.slice(0, 7).every((d) => d.getTime() >= at('12:00').getTime() && d.getTime() < at('23:59').getTime()), `${proof.length}`)
+  const lib = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
+  const body = lib.slice(lib.indexOf('export function upcomingSlots'), lib.indexOf('export type PublishPlan'))
+  check('🔴 🔴 수요 지평 · JIT 짝짓기 · Persona 여력 cap 에 capacity 눈금이 없다(옛 길 제거)',
+    !/capacity/.test(body.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n'))
+    && /caps: releaseCapsOf\(scale\.releaseProfile\)/.test(body))
+  check('🔴 release d1 · capacity d5 정본 읽기는 그대로다(발행 상한 d1 · 다음 증명 d5)', (() => {
+    const s15 = resolveScale(markedStageEnv({ [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd5' }))
+    return s15.capacityStage === 'd5' && s15.releaseStage === 'd1' && sameProfile(s15.releaseProfile, PROFILES.d1)
+      && sameProfile(s15.capacityProfile, RUNTIME_PROFILES.d5)
+  })())
+  check('모든 release 단계 — 지평 = 오늘 남은 슬롯 + 1 (07:00 · 0편)', RELEASE_STAGES.every((st) =>
+    upcomingSlots({ now: at('07:00'), publishedToday: 0, release: PROFILES[st] }).length === PROFILES[st].dailyTarget + 1))
 }
 
 console.log('\n③ Persona 여력 대기 — 초안 실패가 아니다')
@@ -271,9 +289,12 @@ console.log('\n④ 소비자 연결 — 공용 분류를 실제로 부른다 · 
   const code = (t: string): string => t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*\*)/.test(l)).join('\n')
   check('🔴 공급 러너 snapshot 이 공용 분류를 부른다',
     /const view = await loadStockClassification\(prisma, opts\.env, opts\.now\)\s*\n\s*classification = view\.classification/.test(proc))
-  check('🔴 공급 러너 화자 여력이 공용 분류와 capacity 눈금을 쓴다',
-    /const planning = supplyPlanningProfile\(opts\.scale\)/.test(proc) && /classification\.personaWipIds/.test(proc)
-    && /profileOf: \(\) => \(\{\s*dailyTarget: planning\.profile\.dailyTarget/.test(proc))
+  check('🔴 🔴 반례⑦ 공급 러너 화자 여력이 공용 분류와 **JIT 수요와 같은 지평**(upcomingSlots · release)을 쓴다',
+    /const horizon = upcomingSlots\(\{ now: opts\.now, publishedToday: loaded\.publishedToday, release \}\)/.test(proc)
+    && /classification\.personaWipIds/.test(proc)
+    && /dailyTarget: seatsByDate\.get\(kstDateString\(at\)\)\?\.seats \?\? 0/.test(proc))
+  check('🔴 🔴 반례⑦ 고정 7일 지평 · capacity 공급 눈금이 돌아오지 않았다',
+    !/SPEAKER_LOAD_HORIZON_DAYS|supplyPlanningProfile|horizonStart\(/.test(code(proc)))
   check('🔴 공급 러너가 main 의 scale 을 넘긴다', /writeSpeakerLoad\(prisma, runId, scale\)/.test(proc))
   check('🔴 🔴 **공급 러너 main 의 회차 id 가 RUN_AT 에서 나온다** (다시 new Date() 를 만들지 않는다)',
     /const now = RUN_AT\n\s*const runId = runIdOf\(now\)/.test(proc))

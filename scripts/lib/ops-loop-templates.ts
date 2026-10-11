@@ -16,6 +16,8 @@
 import { AUDIT_RUNNER_LABEL } from './auto-ready-audit-template'
 import { PUBLISH_RUNNER_LABEL, runnerPathValue, type RunnerPlistInput } from './original-post-runner-template'
 import { PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
+import { COMMENT_RUNNER_LABEL } from './persona-comment-runner-template'
+import type { RecoveryPolicy } from '../../src/lib/runner-recovery'
 
 export const STAGE_CONTROLLER_LABEL = 'com.soransoran.stage-controller'
 export const STAGE_CONTROLLER_SCRIPT = 'scripts/stage-controller.mts'
@@ -131,6 +133,9 @@ ${args}
 
 /**
  * 🔴 **복구 대상 — 같은 회차를 한 번 더 돌려도 안전한 job 만.**
+ *    · 댓글 러너 (2026-10-11 Batch A4): 공통 진입점 하나 · 같은 lease(자동 회수 없음) · 같은 하루 장부 ·
+ *      PENDING 먼저 내기 · 글당 1건 · 조건부 UPDATE — 같은 회차가 다시 돌아도 커밋된 댓글을 다시 만들지 않는다.
+ *      🔴 판정 정책은 `slot`(지난 예약 슬롯 누락 · 슬롯 창마다 최대 1회) — `RECOVERY_POLICY_OF`
  *    · 발행: 트랜잭션이 `도래 슬롯 − 오늘 발행 수` 로 정한다(중복 0 · heartbeat 틱 잠금)
  *    · 공급 처리: 회차 잠금 · 적재 멱등
  *    · 감사: 전용 잠금 · 같은 글 두 번 고르지 않음(기본키)
@@ -143,7 +148,13 @@ export const RECOVERABLE_LABELS: readonly string[] = [
   'com.soransoran.supply-process',
   AUDIT_RUNNER_LABEL,
   STAGE_CONTROLLER_LABEL,
+  COMMENT_RUNNER_LABEL,
 ]
+
+/** 🔴 label → 복구 판정 정책. 없으면 `stale`(기존 판정 그대로) */
+export const RECOVERY_POLICY_OF: Readonly<Record<string, RecoveryPolicy>> = {
+  [COMMENT_RUNNER_LABEL]: 'slot',
+}
 
 /** 설치 절차 — 공식 설치기 한 명령으로 적용하고 같은 설치기로 되돌린다. */
 export const OPS_LOOP_INSTALL_STEPS: readonly string[] = [

@@ -46,7 +46,7 @@ import {
   loadPublishableStock, resolvePublishScale, planPublishBatch, classifyStock, loadStockClassification,
   STOCK_BUCKETS, STOCK_BUCKET_META,
 } from './lib/publishable-stock.mjs'
-import { snapshot, buildSpeakerLoad, supplyPlanningProfile } from './supply-process.mjs'
+import { snapshot, buildSpeakerLoad } from './supply-process.mjs'
 import { remainingCapacity } from '../src/lib/content-core/speaker-availability'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
@@ -368,12 +368,13 @@ async function main(): Promise<void> {
       loadAfter.byCode.P17!.readyCount >= 1 && loadAfter.byCode.P18!.readyCount >= 1)
   }
 
-  console.log('\n⑧ 공급 눈금 capacity · 발행 눈금 release — 섞이지 않는다')
+  console.log('\n⑧ 공급 지평 = 가까운 수요 지평(release) · 발행 눈금 release — 다음 단계 capacity 를 섞지 않는다 (2026-10-11 Batch A2)')
   {
-    check('🔴 공급 계획 눈금 = capacity d10 · 파일에 release 눈금 d1 따로',
-      loadAfter.planningStage === 'd10' && loadAfter.releaseStage === 'd1' && supplyPlanningProfile(scale).stage === 'd10')
+    check('🔴 공급 지평 눈금 = release d1 (capacity d10 이어도) · 파일에 둘 다 d1',
+      loadAfter.planningStage === 'd1' && loadAfter.releaseStage === 'd1' && scale.capacityStage === 'd10')
     const open = Object.values(loadAfter.byCode).reduce((n, r) => n + r.openDays, 0)
-    check('🔴 공급 지평 자리는 capacity 로 잰다 (≤ d10 × 7)', open > 0 && open <= PROFILES.d10.dailyTarget * 7, `열린 자리 ${open}`)
+    check('🔴 🔴 반례⑦ 공급 지평 자리 ≤ 오늘 남은 d1 + 다음 첫 기회 (옛 capacity d10 × 7 = 70)',
+      open > 0 && open <= PROFILES.d1.dailyTarget + 1 && loadAfter.horizonDays <= 2, `열린 자리 ${open} · ${loadAfter.horizonDays}일`)
     check('🔴 🔴 **발행 상한은 release 그대로 — 공급 눈금이 발행으로 새지 않는다**',
       pub.resolved.dailyCap === pub.resolved.scale.releaseProfile.dailyTarget
       && RUNTIME_PROFILES[pub.resolved.scale.releaseStage].dailyTarget <= PROFILES.d1.dailyTarget,

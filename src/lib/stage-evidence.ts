@@ -20,6 +20,10 @@
  *      ③ 댓글 — 두 판정으로 나눈다 (2026-09-29 마스터 보정).
  *         (a) **첫 댓글 보장** — **자동 target 글마다** Persona 최상위 댓글(글쓴 Persona 아님)이 발행 후
  *             `AUTO_FIRST_COMMENT_WINDOW_MINUTES` 안에 **1건 이상**.
+ *             🔴 **자동 출처가 연결된 댓글만 센다** (2026-10-11 Batch A3) — `commentProvenanceOf` 가 `auto` 인 것.
+ *                `commentOrigin=PERSONA` 만으로는 증거가 아니다(사람이 어드민에서 낸 Persona 댓글도 PERSONA 다).
+ *                연결이 깨진 댓글(로그 없음 · 대상 불일치 · 표식 불일치 · 중복 · 시각 불일치)이 하나라도 있으면
+ *                `COMMENT_PROVENANCE_BROKEN` FAIL 이다.
  *         (b) **추가 댓글 계약** — 글당 Persona 댓글 수 ≤ 그 댓글 단계의 상한(`personaCommentCapFor`) ·
  *             같은 Persona 두 번 0 · 자기 글 0. 🔴 "60분 안 2건" 자체는 실패가 아니다 — 상한을 넘을 때만이다.
  *             (bootstrap-auto 의 상한 1 이 "글당 정확히 1건" 을 지금 그대로 지킨다. 장기 1~5 는 상한 5 로 같은 판정이 받는다)
@@ -54,7 +58,9 @@
  */
 import { SAFEST_STAGE, profileOf, type RuntimeStage } from './scale-profile'
 import { DECISION_WRITER, isLegacyDecision, nextStage, type TrialBasis, type ValidatedStageDecision } from './stage-decision-contract'
-import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
+import {
+  AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY,
+} from './persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
 import type { CommentStage } from './persona-comment-stage'
 import { auditTarget } from './auto-ready-v2'
@@ -67,7 +73,7 @@ export const STAGE_EVIDENCE_CODES = [
   // ② 발행
   'PUBLISH_NOT_AUTO_READY', 'PUBLISH_OVER', 'PERSONA_REPEAT',
   // ③ 첫 댓글
-  'COMMENT_MISSING', 'COMMENT_LATE', 'COMMENT_OVER_CAP', 'COMMENT_SELF', 'COMMENT_CAP_UNKNOWN',
+  'COMMENT_MISSING', 'COMMENT_LATE', 'COMMENT_OVER_CAP', 'COMMENT_SELF', 'COMMENT_CAP_UNKNOWN', 'COMMENT_PROVENANCE_BROKEN',
   // ④ 감사
   'AUDIT_TARGET_UNKNOWN', 'AUDIT_COVERAGE_ZERO', 'AUDIT_COVERAGE_SHORT', 'AUDIT_OUTSIDE_TARGET',
   'AUDIT_UNJUDGED', 'AUDIT_DEFECT', 'AUDIT_OVERDUE', 'AUDIT_RETRYABLE', 'AUDIT_MISSING_POST',
@@ -112,6 +118,53 @@ export function personaCommentCapFor(stage: CommentStage): number {
   return PERSONA_COMMENTS_PER_POST_MAX
 }
 
+/**
+ * 🔴 **자동 첫 댓글 출처** (2026-10-11 Batch A3 · 스키마 변경 0).
+ *    · `auto`   Comment ↔ PersonaApprovalQueue(`publishedCommentId`) ↔ PersonaActivityLog(`kind=comment` · `targetId=Comment.id`)
+ *               세 행이 **한 줄씩** 있고 무인 레인 표식 · 대상 글 · Persona · 시각이 모두 맞는다
+ *    · `none`   자동 표식이 어디에도 없다 — 사람(운영자) 발행이거나 연결 행이 없다. 🔴 증거 0건(실패는 아니다)
+ *    · `broken` 자동 표식이 한 곳이라도 있는데 나머지가 빠졌거나 · 겹치거나 · 어긋난다 — 🔴 FAIL
+ */
+export type CommentProvenance = 'auto' | 'none' | 'broken'
+
+/**
+ * 🔴 **시각 일치의 허용 폭.** 무인 레인 트랜잭션은 Queue `decidedAt` 과 ActivityLog `publishedAt` 에 **같은 값**(`now`)을 쓴다 —
+ *    둘은 정확히 같아야 한다. Comment `createdAt` 은 DB 기본값이라 그 값과 다를 수 있다:
+ *    회차 시각(`now`)은 회차 시작에 한 번 정해지고 적재 뒤 sweep 이 같은 값으로 발행한다 — 그래서 댓글이 `now` 보다
+ *    늦을 수는 있어도 첫 댓글 창(60분)을 넘을 수는 없다. 앞쪽은 앱·DB 시계 차이만큼만 허용한다.
+ */
+export const AUTO_COMMENT_CLOCK_SKEW_MS = 60_000
+
+export type CommentLinkFacts = {
+  comment: { postId: string; personaId: string | null; createdAtMs: number; topLevel: boolean }
+  /** `publishedCommentId = Comment.id` 인 Queue 행 전부 */
+  queues: readonly { targetPostId: string | null; personaId: string; status: string; decidedBy: string | null; decidedAtMs: number | null }[]
+  /** `kind=comment · targetId = Comment.id` 인 ActivityLog 행 전부 */
+  logs: readonly { personaId: string; decidedBy: string | null; publishedAtMs: number | null }[]
+}
+
+/** 🔴 순수 — 세 행이 같은 사건을 말하는가 */
+export function commentProvenanceOf(f: CommentLinkFacts): CommentProvenance {
+  const autoMarked = f.queues.some((q) => (q.decidedBy ?? '').trim() === AUTO_LANE_DECIDED_BY)
+    || f.logs.some((l) => (l.decidedBy ?? '').trim() === AUTO_LANE_ACTIVITY_DECIDED_BY)
+  // 🔴 겹침은 표식과 무관하게 깨짐이다 — 한 댓글에 두 결정 · 두 기록은 같은 사건일 수 없다
+  if (f.queues.length > 1 || f.logs.length > 1) return 'broken'
+  if (!autoMarked) return 'none'
+  const q = f.queues[0]
+  const l = f.logs[0]
+  if (q === undefined || l === undefined) return 'broken'
+  if (q.status !== 'PUBLISHED' || (q.decidedBy ?? '').trim() !== AUTO_LANE_DECIDED_BY) return 'broken'
+  if ((l.decidedBy ?? '').trim() !== AUTO_LANE_ACTIVITY_DECIDED_BY) return 'broken'
+  const c = f.comment
+  if (c.personaId === null || q.personaId !== c.personaId || l.personaId !== c.personaId) return 'broken'
+  if (q.targetPostId !== c.postId) return 'broken'
+  if (!c.topLevel) return 'broken'
+  if (q.decidedAtMs === null || l.publishedAtMs === null || q.decidedAtMs !== l.publishedAtMs) return 'broken'
+  const lag = c.createdAtMs - q.decidedAtMs
+  if (lag < -AUTO_COMMENT_CLOCK_SKEW_MS || lag > AUTO_FIRST_COMMENT_WINDOW_MS) return 'broken'
+  return 'auto'
+}
+
 /** 🔴 누가 발행을 결정했나 — 사후 감사 대상인지를 가른다 */
 export type PostDecider = 'auto' | 'human' | 'unknown'
 
@@ -133,8 +186,8 @@ export type EvidencePost = {
   authorPersonaId: string | null
   /** 🔴 Queue 결정자 — 자동 READY(`auto`)만 사후 감사 대상이다 */
   decider: PostDecider
-  /** 이 글의 살아 있는 Persona 댓글 전부 */
-  personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean }[]
+  /** 이 글의 살아 있는 Persona 댓글 전부 — 🔴 `provenance` 는 `commentProvenanceOf` 결과다(첫 댓글 보장은 `auto` 만 센다) */
+  personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean; provenance: CommentProvenance }[]
   /**
    * 🔴 **발행 트랜잭션이 남긴 release 도장 상태**(`releaseStampStatusOf`) — 조항 ⑦.
    *    Queue 가 없으면 `MISSING` 이다(도장을 확인할 곳이 없다).
@@ -197,7 +250,8 @@ export function judgeStageEvidence(
 
 /**
  * 🔴 **증명일 상태** — 그날 자동 target 이 목표 슬롯을 먼저 채운 날이다(`consumerEnvOf` 의 증명일 env).
- *    TRIAL(재시험 포함) · SUSTAIN · REPROVE. HOLD·PREPARE 는 증명일이 아니다 — 공정성이 섞여 자동 물량을 증명하지 못한다.
+ *    TRIAL(재시험 포함) · REPROVE(원인이 풀린 날의 재증명). HOLD·PREPARE 는 **평상일**이다 — 공개 0..Dn ·
+ *    exact N 판정을 받지 않는다(그날 증거는 `DECISION_NOT_TRANSITION` 로 PASS 가 아닐 뿐 · 빚을 남기지 않는다).
  */
 export const PROOF_STATES: readonly string[] = ['TRIAL', 'REPROVE']
 
@@ -246,6 +300,8 @@ export function judgeEvidenceForTarget<S extends string>(
     if (cap === null) codes.add('COMMENT_CAP_UNKNOWN')
     else counts.commentCap = cap
     let firstOk = 0
+    let brokenProv = 0
+    let manualPersona = 0
     for (const p of facts.posts) {
       if (p.queueRows !== 1) codes.add('DUP_QUEUE')
       if (p.publishLogs !== 1) codes.add('DUP_PUBLISH_LOG')
@@ -259,10 +315,15 @@ export function judgeEvidenceForTarget<S extends string>(
       const own = p.personaComments.filter((c) => p.authorPersonaId !== null && c.personaId === p.authorPersonaId)
       if (own.length > 0) codes.add('COMMENT_SELF')
       if (cap !== null && p.personaComments.length > cap) codes.add('COMMENT_OVER_CAP')
-      // (a) 첫 댓글 보장 — 🔴 자동 target 글만 · 60분 안 최상위 · 다른 Persona **1건 이상**
+      // 🔴 출처가 깨진 댓글 — 어느 글이든 FAIL(자동 표식을 흉내 낸 행 · 반쯤 남은 행)
+      for (const c of p.personaComments) {
+        if (c.provenance === 'broken') brokenProv += 1
+        else if (c.provenance === 'none') manualPersona += 1
+      }
+      // (a) 첫 댓글 보장 — 🔴 자동 target 글만 · 60분 안 최상위 · 다른 Persona · **자동 출처 연결** **1건 이상**
       if (!(p.decider === 'auto' && p.unattended)) continue
       const eligible = p.personaComments.filter((c) =>
-        c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId)
+        c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId && c.provenance === 'auto')
       const inWindow = eligible.filter((c) =>
         c.createdAtMs >= p.publishedAtMs && c.createdAtMs - p.publishedAtMs <= AUTO_FIRST_COMMENT_WINDOW_MS)
       if (inWindow.length >= 1) firstOk += 1
@@ -270,6 +331,9 @@ export function judgeEvidenceForTarget<S extends string>(
       else codes.add('COMMENT_MISSING')
     }
     counts.firstCommentOk = firstOk
+    counts.commentProvenanceBroken = brokenProv
+    counts.manualPersonaComments = manualPersona
+    if (brokenProv > 0) codes.add('COMMENT_PROVENANCE_BROKEN')
     if (facts.orphanPublishLogs > 0) codes.add('PUBLISH_LOG_ORPHAN')
     if (facts.unloggedPublishes > 0) codes.add('UNLOGGED_PUBLISH')
     // ④ 감사 — 🔴 정본 표본 계약: expected = auditTarget(자동 target N) · 표본은 그 집합 안 · 표본 전부 판정·결함 0
@@ -331,8 +395,8 @@ export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: Trial
  *      (전날이 TRIAL · SUSTAIN · REPROVE 증명일이어야 PASS 가 난다 — 판정 본체 ①)
  *    · 전날이 TRIAL 인데 PASS 가 아니다     → **같은 단계를 다시** 시험한다 (`RETEST` · 기반은 전날 시험 기반)
  *    · 전날 공개가 바닥(d1)이다             → 바닥의 다음 칸을 시험한다 (`FLOOR` · 증명할 아래 칸이 없다)
- *    · 그 밖(증거 없는 d3 이상 유지 날)      → 시험하지 않는다 — 지금 단계를 지킨다
- *      (사다리가 그날을 REPROVE 증명일로 둘지 정한다 — 다음 칸이 승인 천장 안일 때)
+ *    · 그 밖(증거 없는 d3 이상 유지 날)      → 시험하지 않는다 — 지금 단계를 지킨다(평상일 0..Dn)
+ *      (사다리는 다음 칸 preflight 가 PASS 인 날에만 그날을 REPROVE 증명일로 둔다 — 막힌 날은 평상일)
  *
  *    🔴 PASS 는 `kstDate`·`stage` 가 전날 결정과 **정확히** 같은 증거만 받는다 — 다른 날의 PASS 로 올리지 않는다.
  */

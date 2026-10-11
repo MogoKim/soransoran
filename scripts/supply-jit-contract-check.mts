@@ -89,7 +89,7 @@ console.log('\n① 반례 — 슬롯 5 · slot-valid READY 5 → 수요 0 · 유
 
 console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는다 (JIT 커버리지 = 자동 READY 만)')
 {
-  // 🔴 23:00 KST — 오늘 슬롯은 지났고 다가오는 슬롯은 내일 d5 증명일 5개다
+  // 🔴 23:00 KST — 오늘 슬롯은 지났다. 가까운 지평은 다음 첫 기회 1칸이다(2026-10-11 Batch A2 · 옛: 내일 capacity 5칸)
   const late = new Date('2026-10-04T23:00:00+09:00')
   const g = gate(late.getTime() - 2 * H)
   const row = (id: string, decidedBy: string): Record<string, unknown> => ({ id, decidedBy, gateResults: g, matchedPersonaId: null })
@@ -101,10 +101,10 @@ console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는
   const auto = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`a${i}`, AUTO_DECIDER))), late)
   const dh = judgeJitDemand(human)
   const da = judgeJitDemand(auto)
-  check('🔴 🔴 **사람 READY 5 · 자동 0 → 부족 5 (사람 글이 자동 증명 공급을 줄이지 않는다)**',
-    human.slots === 5 && human.readyFilled === 0 && dh.upTo === 5 && human.unfilled.length === 5, JSON.stringify({ human: { ...human, horizon: undefined }, dh }))
-  check('🔴 🔴 **자동 READY 5 → 부족 0 · 유료 0**',
-    auto.readyFilled === 5 && da.upTo === 0 && !da.llm && auto.unfilled.length === 0, JSON.stringify(da))
+  check('🔴 🔴 **사람 READY 5 · 자동 0 → 부족 1(다음 첫 기회) — 사람 글이 자동 공급을 줄이지 않는다**',
+    human.slots === 1 && human.readyFilled === 0 && dh.upTo === 1 && human.unfilled.length === 1, JSON.stringify({ human: { ...human, horizon: undefined }, dh }))
+  check('🔴 🔴 **자동 READY 5 → 다음 첫 기회를 덮는다 · 부족 0 · 유료 0 (남는 READY 로 수요를 부풀리지 않는다)**',
+    auto.slots === 1 && auto.readyFilled === 1 && da.upTo === 0 && !da.llm && auto.unfilled.length === 0, JSON.stringify(da))
 }
 
 console.log('\n② 반례 — 슬롯 5 · 유효 READY 3 → 부족 2 만')

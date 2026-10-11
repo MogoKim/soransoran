@@ -27,16 +27,17 @@ import { PROFILES, RUNTIME_PROFILES, releaseCapsOf, CAPACITY_ENV, RELEASE_ENV, t
 import { resolveScale } from '../src/lib/scale-runtime'
 import { authoritativeGate } from '../src/lib/auto-ready-repo'
 import {
-  loadPublishableStock, resolvePublishScale, planPublishBatch, classifyStock, loadStockClassification,
+  loadPublishableStock, resolvePublishScale, planPublishBatch, classifyStock, loadStockClassification, upcomingSlots,
   STOCK_BUCKETS,
 } from './lib/publishable-stock.mjs'
-import { snapshot, buildSpeakerLoad, supplyPlanningProfile } from './supply-process.mjs'
+import { snapshot, buildSpeakerLoad } from './supply-process.mjs'
 import { planSpeakerAvailability, remainingCapacity } from '../src/lib/content-core/speaker-availability'
 import { MACHINE_REVIEWED_BY } from '../src/lib/original-post-auto-publish'
 import { readPostRequirements } from '../src/lib/original-post-persona-match'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
+import { kstDateString } from '../src/lib/release-canary'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -242,19 +243,21 @@ async function main(): Promise<void> {
     check('공용 로더도 같은 답이다', STOCK_BUCKETS.every((b) => same(shared.classification.ids[b], pub.classification.ids[b])))
   }
 
-  console.log('\n② 🔴 반례 ① — release d1 · capacity d5 · 검토 대기 8건 → 공급 여력은 capacity, 발행 상한은 d1')
+  console.log('\n② 🔴 반례 ① — release d1 · capacity d5 · 검토 대기 8건 → 공급 여력은 수요와 같은 가까운 지평(release), 발행 상한은 d1')
   {
     const scale = resolveScale(E15)
     check('정본이 release d1 · capacity d5 로 읽는다', scale.releaseStage === 'd1' && scale.capacityStage === 'd5')
-    check('🔴 공급 계획 눈금은 capacity 다', supplyPlanningProfile(scale).stage === 'd5'
-      // 🔴 값으로 비교한다 — Node 20 의 tsx 는 같은 모듈을 두 인스턴스로 적재할 수 있다
-      && JSON.stringify(supplyPlanningProfile(scale).profile) === JSON.stringify(PROFILES.d5))
     const load = await buildSpeakerLoad(prisma, 'parity-run', { env: E15, now: NOW, scale })
     const totalOpen = Object.values(load.byCode).reduce((n, r) => n + r.openDays, 0)
-    check('🔴 🔴 **지평 7일의 자리 = capacity d5 × 7 = 35** (앞판 release d1: 7)',
-      totalOpen === PROFILES.d5.dailyTarget * 7, `열린 자리 ${totalOpen}`)
-    check('지평의 모든 날이 d5 로 적힌다', load.stageByDate.length === 7 && load.stageByDate.every((d) => d.stage === 'd5'))
-    check('파일에 release 눈금도 따로 적힌다 (d1)', load.releaseStage === 'd1' && load.planningStage === 'd5')
+    // 🔴 (2026-10-11 Batch A2) 화자 지평 = JIT 수요 지평 — release 의 오늘 남은 슬롯 + 다음 첫 기회. 고정 7일 · capacity 눈금 없음
+    const shared15 = await loadStockClassification(prisma, E15, NOW)
+    const horizon = upcomingSlots({ now: NOW, publishedToday: shared15.loaded.publishedToday, release: scale.releaseProfile })
+    check('🔴 🔴 **반례⑦ 화자 지평의 자리 ≤ JIT 수요 지평 칸 수** (옛 capacity d5 × 7 = 35) — d1 cap(주 1 · 최소 5일)으로 그 칸에 풀리는 화자만',
+      totalOpen <= horizon.length && totalOpen <= PROFILES.d1.dailyTarget + 1 && horizon.length >= 1, `열린 자리 ${totalOpen} · 지평 ${horizon.length}`)
+    check('지평 날 수 = 수요 지평의 KST 날짜 수 · 전부 release d1 로 적힌다',
+      load.horizonDays === new Set(horizon.map((d) => kstDateString(d))).size && load.stageByDate.every((d) => d.stage === 'd1'),
+      `${load.horizonDays} ${JSON.stringify(load.stageByDate)}`)
+    check('파일 눈금 — 공급 지평도 발행도 release(d1)', load.releaseStage === 'd1' && load.planningStage === 'd1')
     /** 🔴 검토 대기는 WIP 에 **남는다** — 같은 화자로 또 만들지 않는다 */
     check('🔴 🔴 **검토 대기 8건은 화자 WIP 에 남는다** (P01 · P02 · P04 · P07 · P12 · P13 · P14 · P15 각 1)',
       REVIEW_SPEAKERS.every((code) => load.byCode[code]?.readyCount === 1)
@@ -262,11 +265,18 @@ async function main(): Promise<void> {
       REVIEW_SPEAKERS.map((c) => `${c}:${load.byCode[c]?.readyCount}`).join(' '))
     const caps = Object.entries(load.byCode).map(([code, r]) => ({ code, ...r }))
     const eligible = caps.filter((c) => remainingCapacity(c) > 0)
-    check('🔴 🔴 **여력 있는 화자가 1명이 아니다** — 원천 5건이 서로 다른 화자를 받는다',
-      eligible.length >= 5, `${eligible.length}명`)
+    /**
+     * 🔴 (2026-10-11 Batch A2) 옛 판(09-26)은 "SEED 6건이 전부 화자를 받는다" 를 지켰다 — 공급을 capacity d5 × 7일로
+     *    준비해 발행 d1 이 못 내는 날의 자리까지 미리 썼다. 이제 화자 여력은 JIT 수요와 **같은 지평**이다 —
+     *    지평 칸보다 많은 원천에 화자를 주지 않는다(남는 원천은 여력 대기 · 초안 실패가 아니다).
+     *    다음 단계를 감당하는가는 controller preflight(증명일 전체 슬롯 · 실측 cohort)가 따로 본다.
+     */
+    check('🔴 🔴 **반례⑦ 여력 있는 화자 수 ≤ 지평 칸 수** — 수요 밖 자리로 화자를 앞당겨 쓰지 않는다',
+      eligible.length <= horizon.length, `${eligible.length}명 · 지평 ${horizon.length}`)
     const plan = planSpeakerAvailability({ sourceKeys: ['s1', 's2', 's3', 's4', 's5', 's6'], capacities: caps })
-    check('SEED 6건이 전부 화자를 받는다 (앞판: 2건 · 보류 4건)', plan.slots.every((s) => s.codes.length > 0),
-      plan.slots.map((s) => `${s.sourceKey}:${s.codes.join(',')}`).join(' '))
+    check('반례⑦ SEED 6건 중 화자를 받는 원천 ≤ 지평 칸 수 · 나머지는 여력 대기(과잉 생산 0)',
+      plan.slots.filter((x) => x.codes.length > 0).length <= horizon.length,
+      plan.slots.map((x) => `${x.sourceKey}:${x.codes.length}`).join(' '))
 
     /** 🔴 발행은 여전히 d1 이다 — 공급 눈금이 발행 상한으로 새지 않는다 */
     const pub = await publisherView(prisma, E15)
@@ -301,7 +311,7 @@ async function main(): Promise<void> {
     check('🔴 legacy · gate 탈락은 WIP 가 아니다', !sup5.personaWipIds.includes(legacyId) && !sup5.personaWipIds.includes(gateId))
   }
 
-  console.log('\n④ 기존 d1 · d3 · d5 — 공급은 capacity · 발행은 release (회귀)')
+  console.log('\n④ 기존 d1 · d3 · d5 — 공급 지평도 발행도 release (2026-10-11 Batch A2 · capacity 는 다음 증명 눈금일 뿐)')
   {
     const combos: [ReleaseStage, ReleaseStage][] = [['d1', 'd1'], ['d1', 'd3'], ['d3', 'd3'], ['d3', 'd5'], ['d5', 'd5']]
     for (const [rel, cap] of combos) {
@@ -312,12 +322,12 @@ async function main(): Promise<void> {
       const open = Object.values(load.byCode).reduce((n, r) => n + r.openDays, 0)
       /** 🔴 발행은 결정된 release 그대로다 — 공급 눈금으로 올라가지 않는다(준비도 감속 · canary 는 지웠다) */
       check(`release ${rel} · capacity ${cap} — 공급 ${load.planningStage} · 발행 ${pub.resolved.scale.releaseStage}`,
-        load.planningStage === cap
+        load.planningStage === pub.resolved.scale.releaseStage
         && pub.resolved.caps.minDaysBetween === releaseCapsOf(pub.resolved.scale.releaseProfile).minDaysBetween
         && pub.resolved.dailyCap === pub.resolved.scale.releaseProfile.dailyTarget
         && pub.resolved.scale.releaseStage === (PROFILES[rel].dailyTarget <= PROFILES[cap].dailyTarget ? rel : cap)
         && RUNTIME_PROFILES[pub.resolved.scale.releaseStage].dailyTarget <= PROFILES[rel].dailyTarget
-        && open <= PROFILES[cap].dailyTarget * 7,
+        && open <= pub.resolved.scale.releaseProfile.dailyTarget + 1,
         `열린 자리 ${open} · 발행 일 ${pub.resolved.dailyCap}`)
     }
   }

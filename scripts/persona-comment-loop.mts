@@ -7,8 +7,13 @@
  *    그 값은 창업자가 올리는 것이다. 이 스크립트는 env 를 바꾸지 않는다.
  *
  * 🔴 **--live 가 없으면** provider 0 · DB write 0. 무엇을 할지만 찍는다.
- * 🔴 **동시 실행** — 같은 기계에서는 잠금(`wx`)이, 기계 사이에서는 발행 트랜잭션(Serializable ·
- *    글당 1건 재검사)이 막는다. 잠금을 쥔 채 죽으면 자동으로 뺏지 않는다(다음 회차는 물러난다).
+ * 🔴 **공통 진입점** (2026-10-11 Batch A4) — 정기(launchd 슬롯) · 복구(`runner-recover` kickstart) · (다음) 사건 깨움이
+ *    **이 진입점 하나**를 지난다. 같은 lease(`runner-lease` = `collect-lock` 의 `wx` · 자동 회수 없음) ·
+ *    같은 하루 예산(댓글 장부 하나) · 같은 멱등(PENDING 먼저 내기 · 글당 1건 · 조건부 UPDATE)이다.
+ *    · lease 를 못 잡은 깨움은 follow-up 표식 하나로 합쳐 물러난다 — 주인이 끝낸 뒤 **한 번만** 더 돈다
+ *    · lease 를 쥔 채 죽으면 자동으로 뺏지 않는다(다음 회차는 물러난다 · 사람이 치운다)
+ *    · lease · 예산은 provider 호출 · DB write **전에** 본다 — lease 가 먼저, 유료 생성 전에 예산
+ *    기계 사이는 발행 트랜잭션(Serializable · 글당 1건 재검사)이 막는다.
  * 🔴 **비용** — 댓글 전용 장부(`persona-comment-ledger`) · 하루 상한 ≤ $0.20
  *    (`SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`, 코드 기본값 0.20 · 그 위로는 못 올린다).
  *
@@ -18,13 +23,16 @@
  *   npx tsx scripts/persona-comment-loop.mts --live     # 🔴 예약 실행과 같다
  */
 import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
 
 import { PrismaClient } from '@prisma/client'
 
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
-import { acquireLock, releaseLock } from './lib/collect-lock.mjs'
+import {
+  acquireRunnerLease, releaseRunnerLease, requestFollowUp, takeFollowUp, shouldRunFollowUp, MAX_FOLLOW_UPS,
+} from './lib/runner-lease.mjs'
+import { readCostSignals } from './lib/ops-signals.mjs'
+import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
 import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
@@ -34,11 +42,10 @@ import { SupplyLlmSession, missingBudgetEnvNames } from './lib/supply-llm-call.m
 import { type ProviderModel } from './lib/voice-m3-provider.mjs'
 import {
   COMMENT_LOOP_LOCK_FILE, COMMENT_LOOP_LOCK_TTL_MS, commentLoopLedgerDir, commentLoopLockDir,
-  runCommentLoop, type CommentGenerate, type SweepResult,
+  runCommentLoop, generationGateOf, type CommentGenerate, type SweepResult,
 } from './lib/persona-comment-loop.mjs'
 
 const LIVE = process.argv.includes('--live')
-const NOW = new Date()
 
 function sweepLine(label: string, s: SweepResult | null): string {
   return s === null ? `${label} —` : `${label} 본 ${s.seen} · 발행 ${s.published} · 닫음 ${s.expired} · 오류 ${s.errors}`
@@ -46,6 +53,7 @@ function sweepLine(label: string, s: SweepResult | null): string {
 
 async function main(): Promise<number> {
   await loadEnvLocal()
+  const startedAt = new Date()
   console.log(`\n══ 무인 Persona 댓글 루프 ${LIVE ? '(--live)' : '(dry-run)'} ══\n`)
 
   const lockDir = commentLoopLockDir()
@@ -53,20 +61,62 @@ async function main(): Promise<number> {
     console.error(`🔴 잠금 디렉터리를 만들지 못했다 — ${(e as { code?: string }).code ?? 'UNKNOWN'}`)
     return 1
   }
-  const lock = acquireLock(join(lockDir, COMMENT_LOOP_LOCK_FILE), NOW.getTime(), COMMENT_LOOP_LOCK_TTL_MS)
+  // 🔴 lease 가 먼저다 — provider 호출 · DB write 전에
+  const lock = acquireRunnerLease(lockDir, COMMENT_LOOP_LOCK_FILE, startedAt.getTime(), COMMENT_LOOP_LOCK_TTL_MS)
   if (!lock.ok) {
-    if (lock.kind === 'HELD') { console.log(`⏭️  LOCK_HELD — 다른 회차가 돌고 있다 · ${lock.reason} · 물러난다`); return 0 }
+    if (lock.kind === 'HELD') {
+      // 🔴 겹친 깨움은 합친다 — 주인이 끝낸 뒤 한 번만 더 돈다(여기서 또 돌지 않는다)
+      // 표식의 trigger 칸은 진단용이다 — 몫 · 잠금 · 예산은 회차 종류로 갈리지 않는다(launchd 정기 · 복구 kickstart 는 같은 label 이라 구별하지 않는다)
+      const f = requestFollowUp(lockDir, startedAt.getTime(), process.env.XPC_SERVICE_NAME === COMMENT_RUNNER_LABEL ? 'scheduled' : 'manual')
+      console.log(`⏭️  LOCK_HELD — 다른 회차가 돌고 있다 · ${lock.reason} · follow-up ${f} · 물러난다`)
+      return f === 'ERROR' ? 1 : 0
+    }
     console.error(`🔴 잠금 — ${lock.kind} · ${lock.reason}`)
     return 1
   }
 
   const prisma = new PrismaClient()
+  let worst = 0
+  try {
+    // 🔴 시작할 때 이미 있던 깨움은 이번 회차가 받는다
+    const atStart = takeFollowUp(lock.handle, lockDir)
+    if (atStart === 'TAKEN') console.log('  follow-up 표식을 거뒀다 — 이번 회차가 그 깨움을 받는다')
+    for (let pass = 0; ; pass += 1) {
+      const code = await runPass(prisma, new Date(), pass)
+      worst = Math.max(worst, code)
+      if (code === 1) break
+      // 🔴 상한에 닿았으면 표식을 거두지 않는다 — 남은 깨움은 다음 회차가 시작할 때 받는다(지우고 버리지 않는다)
+      if (pass >= MAX_FOLLOW_UPS) break
+      const take = takeFollowUp(lock.handle, lockDir)
+      if (!shouldRunFollowUp(pass, take)) break
+      console.log(`\n  ── follow-up 회차 (${pass + 1}/${MAX_FOLLOW_UPS}) — 겹친 깨움을 합친 한 번 ──`)
+    }
+    return worst
+  } catch (e) {
+    console.error(`🔴 회차 예외 — ${e instanceof Error ? e.name : 'unknown'}`)
+    return 1
+  } finally {
+    await prisma.$disconnect().catch(() => undefined)
+    releaseRunnerLease(lock.handle)
+  }
+}
+
+/** 🔴 한 회차 — lease 를 쥔 채로만 부른다. 0 정상 · 1 예외 · 2 발행 오류가 남았다 */
+async function runPass(prisma: PrismaClient, now: Date, pass: number): Promise<number> {
   try {
     const budget = commentLoopLimitsFromEnv(process.env)
     const missing = missingBudgetEnvNames(budget.limits)
     for (const n of budget.notes) console.log(`  예산  ${n}`)
+    /**
+     * 🔴 **예산 — 유료 생성 전에 본다**(정기 · 사건 · 복구가 같은 장부 · 같은 상한). 소진 · 보류 · 못 읽음이면
+     *    provider 0(사전 계산 포함). 발행 sweep 은 돈다 — 이미 쓴 돈으로 만든 후보를 내는 데는 유료 호출이 없다.
+     */
+    const ledger = ((): Parameters<typeof generationGateOf>[0]['ledger'] => {
+      try { return readCostSignals(now, process.env as Record<string, string>).commentLedger } catch { return null }
+    })()
+    const gate = generationGateOf({ missingEnv: missing, ledger })
     const session = new SupplyLlmSession({
-      runId: `comment-loop-${NOW.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`,
+      runId: `comment-loop-${now.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}${pass === 0 ? '' : `-f${pass}`}`,
       limits: budget.limits,
       dir: commentLoopLedgerDir(),
     })
@@ -93,13 +143,11 @@ async function main(): Promise<number> {
 
     const canon = readConfirmedSelection()
     const report = await runCommentLoop({
-      prisma, now: NOW, env: process.env, live: LIVE,
-      source: makeDbTargetSource({ prisma, windowStart: new Date(NOW.getTime() - 7 * 86_400_000) }),
+      prisma, now, env: process.env, live: LIVE,
+      source: makeDbTargetSource({ prisma, windowStart: new Date(now.getTime() - 7 * 86_400_000) }),
       canon,
       makeGenerate,
-      generation: missing.length > 0
-        ? { ok: false, reason: `예산 env 를 읽지 못했다 — ${missing.join(' · ')}` }
-        : { ok: true, reason: '' },
+      generation: gate,
       runRequestCap: budget.limits.runRequestCap ?? 0,
     })
 
@@ -112,16 +160,13 @@ async function main(): Promise<number> {
     console.log(`  비용  유료 ${t.paid}회 · 막힘 ${t.blocked}회 · 예약 $${t.reservedUsd.toFixed(6)} · 정산 $${t.settledUsd.toFixed(6)}`
       + `${t.usageUnknown > 0 ? ` · 🔴 사용량 미상 ${t.usageUnknown}` : ''}${t.settleHeld > 0 ? ` · 🔴 정산 보류 ${t.settleHeld}` : ''}`)
     // 🔴 한 줄 요약 — launchd 로그를 grep 하는 자리
-    console.log(`COMMENT_LOOP outcome=${report.outcome} targets=${report.targets} providerCalls=${report.providerCalls}`
+    console.log(`COMMENT_LOOP pass=${pass} outcome=${report.outcome} targets=${report.targets} providerCalls=${report.providerCalls}`
       + ` enqueued=${report.enqueued} | ${sweepLine('sweep①', report.sweepBefore)} | ${sweepLine('sweep②', report.sweepAfter)}\n`)
     const errors = (report.sweepBefore?.errors ?? 0) + (report.sweepAfter?.errors ?? 0)
     return errors > 0 || t.settleHeld > 0 ? 2 : 0
   } catch (e) {
     console.error(`🔴 회차 예외 — ${e instanceof Error ? e.name : 'unknown'}`)
     return 1
-  } finally {
-    await prisma.$disconnect().catch(() => undefined)
-    releaseLock(lock.handle)
   }
 }
 

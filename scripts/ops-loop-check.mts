@@ -33,13 +33,15 @@ import { STAGE_DECISION_VERSION, validateStoredDecision, type ValidatedStageDeci
 import { type RuntimeStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
-import { judgeRecovery } from '../src/lib/runner-recovery'
+import { judgeRecovery, latestSlotAtOrBefore, RECOVERY_SLOT_GRACE_MS } from '../src/lib/runner-recovery'
+import { staleAfterFromSlots } from '../src/lib/supply-health'
+import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS } from './lib/persona-comment-runner-template'
 import { publishFailing, supplyFailing, type JobObservation } from './lib/runner-health.mjs'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from './lib/publish-run-record.mjs'
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
-  RECOVERABLE_LABELS, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
+  RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
 } from './lib/ops-loop-templates'
 import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
@@ -254,7 +256,12 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
   const floor = decideStage(inputs({ signals: withSignal('cost', 'bad') }))
   check('감속은 d1 아래로 가지 않는다', floor.decision.release === 'd1' && validateForToday(floor.decision).ok)
 
-  const unk = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), signals: withSignal('errors', 'unknown') }))
+  // 🔴 d5 preflight 초록 — 사다리는 REPROVE d3(원인 해소 날)를 낸다. 모르는 신호가 그것을 되돌리는지 본다
+  const greenD5 = { stage: 'd5' as const, verdict: 'PASS' as const, codes: [], counts: {} }
+  const unkPlanned = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), nextPreflight: greenD5 }))
+  check('기준선 — 신호가 정상이면 같은 입력은 REPROVE d3', unkPlanned.decision.state === 'REPROVE' && unkPlanned.decision.release === 'd3',
+    `${unkPlanned.decision.state} ${unkPlanned.decision.release}`)
+  const unk = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), nextPreflight: greenD5, signals: withSignal('errors', 'unknown') }))
   check('🔴 신호를 모르면 증명일(REPROVE)도 되돌리고 지금 단계 d3 를 지킨다(내리지도 않는다)',
     unk.brake === 'holdUnknown' && unk.decision.release === 'd3' && unk.decision.state !== 'REPROVE' && validateForToday(unk.decision).ok,
     `${unk.decision.state} ${unk.decision.release}`)
@@ -443,6 +450,47 @@ console.log('\n⑥ 복구 판정')
     /모른다/.test(judgeRecovery({ ...base, lastExitCode: 1, state: 'unknown' }).reason)
     && /load 되어 있지 않다/.test(judgeRecovery({ ...base, lastExitCode: 1, state: 'unloaded' }).reason))
   check('🔴 복구 대상이 아니면(수집) 실패여도 깨우지 않는다', judgeRecovery({ ...base, recoverable: false, lastExitCode: 1 }).action === 'skip')
+
+  // ── 🔴 댓글 러너 — 슬롯 정책 (2026-10-11 Batch A4 · 반례⑬) ──
+  const cslots = COMMENT_RUNNER_SLOTS.map((x) => [x.hour, x.minute] as const)
+  const kst = (iso: string): Date => new Date(`${iso}+09:00`)
+  const at = kst('2026-10-12T10:45:00')
+  const due = latestSlotAtOrBefore(cslots, new Date(at.getTime() - RECOVERY_SLOT_GRACE_MS))!
+  const cbase = {
+    label: COMMENT_RUNNER_LABEL, recoverable: true, state: 'loaded' as const, running: false, lastExitCode: 0,
+    lastRunAt: new Date(due.getTime() + 30_000).toISOString(), slots: cslots, lastRecoveryAt: null, now: at, policy: 'slot' as const,
+  }
+  check('🔴 댓글 러너가 복구 대상이다 · 정책 slot · 기존 넷은 stale 그대로',
+    RECOVERABLE_LABELS.includes(COMMENT_RUNNER_LABEL) && RECOVERY_POLICY_OF[COMMENT_RUNNER_LABEL] === 'slot'
+    && RECOVERABLE_LABELS.filter((l) => l !== COMMENT_RUNNER_LABEL).every((l) => RECOVERY_POLICY_OF[l] === undefined))
+  check('🔴 왜 slot 인가 — stale 판정은 댓글 러너에 밤 공백 × 2 = 20시간 이상이라 60분 계약에 늦다',
+    staleAfterFromSlots(cslots) >= 20 * 3_600_000, `${staleAfterFromSlots(cslots)}`)
+  check('정상 — 지난 슬롯 뒤 회차가 있었다 → 건드리지 않는다', judgeRecovery(cbase).action === 'skip', judgeRecovery(cbase).reason)
+  const missed = { ...cbase, lastRunAt: new Date(due.getTime() - 20 * 60_000).toISOString() }
+  check('🔴 실제 누락 — 지난 예약 슬롯 뒤 회차가 없다 → 한 번 깨운다', judgeRecovery(missed).action === 'kickstart', judgeRecovery(missed).reason)
+  const again = { ...missed, now: new Date(at.getTime() + 5 * 60_000), lastRecoveryAt: at.toISOString() }
+  check('🔴 🔴 반례⑬ 같은 슬롯 창 안에서 다시 감지 → 깨우지 않는다(창마다 최대 1회)', judgeRecovery(again).action === 'skip', judgeRecovery(again).reason)
+  const thrice = [0, 1, 2].map((k) => judgeRecovery({ ...missed, now: new Date(at.getTime() + k * 4 * 60_000),
+    lastRecoveryAt: k === 0 ? null : at.toISOString() }).action)
+  check('🔴 🔴 반례⑬ 한 창에서 감지 3번 → kickstart 정확히 1번', thrice.filter((x) => x === 'kickstart').length === 1, thrice.join(','))
+  const nextDue = latestSlotAtOrBefore(cslots, new Date(at.getTime() + 60 * 60_000 - RECOVERY_SLOT_GRACE_MS))!
+  check('다음 슬롯 창 — 그 뒤에도 회차가 없으면 그 창에서 다시 한 번 깨울 수 있다',
+    nextDue.getTime() > due.getTime()
+    && judgeRecovery({ ...missed, now: new Date(at.getTime() + 60 * 60_000), lastRecoveryAt: at.toISOString() }).action === 'kickstart')
+  check('🔴 실패 관측(exit 2) → 한 번 · 표식 뒤 같은 창은 skip',
+    judgeRecovery({ ...cbase, lastExitCode: 2 }).action === 'kickstart'
+    && judgeRecovery({ ...cbase, lastExitCode: 2, lastRecoveryAt: new Date(at.getTime() - 60_000).toISOString() }).action === 'skip')
+  check('🔴 슬롯 정책도 모르면 건드리지 않는다 — unknown · unloaded · running · 근거 시각 없음 · 표식 못 읽음',
+    judgeRecovery({ ...missed, state: 'unknown' }).action === 'skip' && judgeRecovery({ ...missed, state: 'unloaded' }).action === 'skip'
+    && judgeRecovery({ ...missed, running: true }).action === 'skip' && judgeRecovery({ ...cbase, lastRunAt: null }).action === 'skip'
+    && judgeRecovery({ ...missed, lastRecoveryAt: 'unreadable' }).action === 'skip')
+  const morning = kst('2026-10-12T07:30:00')
+  const lastNight = latestSlotAtOrBefore(cslots, morning)!
+  check('🔴 밤 공백은 누락이 아니다 — 07:30 · 어제 마지막 슬롯 뒤 회차 있음 → skip',
+    judgeRecovery({ ...cbase, now: morning, lastRunAt: new Date(lastNight.getTime() + 5_000).toISOString() }).action === 'skip'
+    && lastNight.getTime() < kst('2026-10-12T00:00:00').getTime())
+  const rr0 = readFileSync('scripts/runner-recover.mts', 'utf-8')
+  check('🔴 복구 실행기가 label 의 정책을 판정에 넘긴다', /policy: RECOVERY_POLICY_OF\[label\] \?\? 'stale'/.test(rr0))
 }
 
 // ─────────────────────────────────────────────────────────

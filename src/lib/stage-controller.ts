@@ -2,7 +2,7 @@
  * 🔴 **단계 controller — 사다리(`planStageDecision`) 위에 운영 신호 브레이크를 얹는다** (2026-09-28 · 2026-09-30 단순화)
  *
  * 🔴 **새 문턱값을 만들지 않는다.** 판정은 전부 정본이 한다:
- *    · 시험 대상    `trialPlanOf`(전날 결정 + 전날 운영 증거 + 이어진 계획) → TRIAL / RETEST / REPROVE
+ *    · 시험 대상    `trialPlanOf`(전날 결정 + 전날 운영 증거 + 이어진 계획) → TRIAL / RETEST · 계획 없음 = 평상일(원인 해소 날만 REPROVE)
  *    · 다음 칸      `judgeNextPreflight`(D3~D100 한 함수) — 기회 · 처리량 · 지연 · Persona · 비용 · 러너
  *    · 운영 증거    `judgeStageEvidence`(조항 ⑦ source-slot-v1 도장 포함)
  *    · 품질        자동 READY 감사 정본 — 확정 결함 · 글 유실 · 재시도 가능 실패 · 판정 시한 초과(6h)
@@ -184,7 +184,8 @@ export function validateForToday(d: StageDecision): ReturnType<typeof validateSt
 /**
  * 🔴 **결정을 러너 env 로 옮긴다** — 결정이 유일한 단계 입력이다(2026-09-30).
  *    · 결정 OK      → 공개 = 결정의 `release`(TRIAL 이면 시험 단계 그대로) · 준비 눈금 = `capacity`
- *                     · 증명일(TRIAL · REPROVE)이면 증명일 두 칸(`stage-proof-day`), 아니면 빈 값
+ *                     · 증명일(TRIAL · REPROVE)이면 증명일 두 칸(`stage-proof-day`), 🔴 평상일(HOLD · PREPARE)은 빈 값
+ *                       (빈 값 = 0..Dn · 자동 target 앞세움 없음 · exact N 강제 없음)
  *    · safest      → 결정이 없거나 깨졌다 · controller flag OFF(kill switch) → d1
  * 🔴 **legacy(아무것도 넣지 않아 env 파일의 단계가 이기던 경로)는 지웠다** (2026-09-30 · Lane A).
  *    그 경로에서는 `.env.local` · GitHub Variables 의 손으로 적은 단계가 결정을 대신했다 — 두 번째 권위다.

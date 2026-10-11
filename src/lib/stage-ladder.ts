@@ -3,9 +3,15 @@
  *
  *   정본 계약(Sep 30): `D1 → D3 → D5 → D10 → D20 → D30 → D50 (→ D100)` 자동 사다리.
  *   · PASS + 다음 칸 preflight 초록 → 다음 증명일에 그 칸을 시험한다(TRIAL)
- *   · FAIL · UNKNOWN → 같은 단계를 다시 시험한다(RETEST) — 날짜로 기다리지 않는다
- *   · 시험이 열리지 않은 날은 지금 단계를 **증명일로 다시 돈다**(REPROVE) — 바닥(d1) 제외
+ *   · FAIL · UNKNOWN → 같은 단계를 다시 시험한다(RETEST) — 그 대상 preflight 가 초록일 때만(원인 해소 뒤)
+ *   · 🔴 **Dn 은 인증된 상한이다** (2026-10-11 Batch A1). 시험이 열리지 않은 날은 **평상일**이다 —
+ *     공개 0..Dn · 증명일 env 없음 · exact N 강제 없음 · 모자란 편수는 다음 날 빚이 아니다.
+ *   · 평상일에 다음 칸을 막던 원인이 풀렸는데(그 칸 preflight PASS) 이어 갈 계획이 없으면(증거가 낡았다)
+ *     그날 하루만 지금 단계를 증명일로 다시 돈다(REPROVE) — 다음 날 그 PASS 로 시험한다. 바닥(d1) 제외
  *   · 단계가 바꾸는 것은 처리량과 필요 용량뿐이다 — 콘텐츠 선택 철학(`judgeSlotRelease`)은 같다
+ *
+ * 🔴 **지운 길 (2026-10-11 Batch A1)** — "다음 칸 preflight 가 막혀 시험이 안 열린 날마다 REPROVE"
+ *   (매일 exact N 증명일). 그 길은 막힌 날마다 자동 target 이 슬롯을 먼저 채우게 해, 상한을 매일 강제 목표로 만들었다.
  *
  * 🔴 **이 파일이 지운 옛 권위 (2026-09-30)**
  *   · `judgePromotion`(d100-capacity) → SUSTAIN — 7/14일 **연속 달력 일수** + 14일 완성 재고로 오르던 두 번째 승격 길
@@ -32,7 +38,7 @@ import {
   type ValidatedStageDecision, type ValidateResult,
 } from './stage-decision-contract'
 import { trialPlanOf, evidenceReasonOf, type StageEvidenceVerdict, type TrialPlan } from './stage-evidence'
-import { trialBlocks, type PreflightVerdict } from './stage-ladder-generic'
+import { trialBlocks, lateStartBlocks, type PreflightVerdict } from './stage-ladder-generic'
 
 /**
  * 🔴 **계약 정의는 `stage-decision-contract` 하나다** (2026-09-24 7차) — 호출부 호환을 위해 그대로 재수출한다.
@@ -62,6 +68,7 @@ export type StageInputs = {
   carriedPlan?: TrialPlan | null
   /**
    * 🔴 **시험 대상의 preflight** — `judgeNextPreflight`(D3~D100 한 함수). 시험 대상이 있을 때 반드시 그 단계 것이어야 한다.
+   *    계획이 없으면 **지금 단계의 다음 칸** 것이다 — 원인이 풀렸는지(REPROVE 여부)를 이것 하나로 본다.
    */
   nextPreflight: PreflightVerdict | null
   publishedToday: number
@@ -98,14 +105,15 @@ function authoritativeTrialPlan(input: StageInputs, out: StageBlock[]): TrialPla
   if (plan === null) {
     out.push({
       code: 'PROVENANCE_PREVIOUS',
-      reason: `${want} ${prev.release} 는 운영 PASS 가 아니다 — 🔴 증거 없이 올라갈 칸이 없다(지금 단계를 다시 증명한다)`,
+      reason: `${want} ${prev.release} 는 운영 PASS 가 아니다 — 🔴 증거 없이 올라갈 칸이 없다(평상일 — 다음 칸 원인이 풀릴 때만 재증명)`,
     })
   }
   return plan
 }
 
 /**
- * 🔴 **한 결정.** 시험(TRIAL) 은 계획 + 그 대상 preflight PASS + 첫 슬롯 전일 때만 · 아니면 지금 단계 REPROVE/HOLD.
+ * 🔴 **한 결정.** 시험(TRIAL) 은 계획 + 그 대상 preflight PASS + 첫 슬롯 전일 때만 ·
+ *    아니면 평상일(HOLD/PREPARE · 0..Dn) — 원인이 풀린 날만 REPROVE.
  */
 export function planStageDecision(input: StageInputs): StageDecision {
   const base = {
@@ -157,16 +165,34 @@ export function planStageDecision(input: StageInputs): StageDecision {
   }
 
   /**
-   * ── 시험이 열리지 않은 날 ──
-   * 🔴 지금 단계를 **증명일로 다시 돈다**(REPROVE) — 전날 결정이 바로 전날 것이고 바닥 위일 때.
-   *    공개는 올라가지 않는다. 그날 자동 target 이 슬롯을 먼저 채워 내일 판정할 증거를 만든다.
+   * ── 시험이 열리지 않은 날 = 평상일 (2026-10-11 Batch A1) ──
+   * 🔴 공개 단계 Dn 은 **상한**이다 — 0..Dn 을 낸다. 증명일 env 도 exact N 도 없다(HOLD/PREPARE).
+   * 🔴 단 하나의 예외 — **원인이 풀린 날의 재증명**(REPROVE). 아래가 전부 참일 때만이다:
+   *    · 이어 갈 시험 계획이 없다(`plan === null` — 지금 단계의 PASS 가 낡아 다음 칸 근거가 없다)
+   *    · 전날 결정이 바로 전날 것이고 · 지금 단계가 바닥 위이고 · 다음 칸이 있다
+   *    · 🔴 **다음 칸 preflight 가 오늘 PASS** 다(`trialBlocks` 의 preflight 관문 그대로 — 막던 원인이 풀렸다)
+   *    · 지금 단계의 오늘 첫 슬롯이 결정 시각 뒤다(`lateStartBlocks` — 조각 하루로 증명하지 않는다)
+   *    다음 칸이 막혀 있으면 REPROVE 하지 않는다 — 막힌 날 exact N 을 매일 강제하던 길을 지웠다.
    */
   let dayPinned = false
   if (state !== 'TRIAL') {
     const prev = input.previousDecision
-    if (prev !== null && prev.kstDate === previousKstDate(input.kstDate) && release !== SAFEST_STAGE) {
-      state = 'REPROVE'
-      reasons.push(`🟢 REPROVE — 공개 ${release} 를 증명일로 다시 돈다(자동 target 먼저)`)
+    const up = nextStage(release)
+    if (plan === null && prev !== null && prev.kstDate === previousKstDate(input.kstDate)
+      && release !== SAFEST_STAGE && up !== null) {
+      const gate = [
+        ...trialBlocks({ target: up, kstDate: input.kstDate, runAt: input.decidedAt, preflight: input.nextPreflight })
+          .filter((b) => b.code !== 'LATE_START'),
+        ...lateStartBlocks({ target: release, kstDate: input.kstDate, runAt: input.decidedAt }),
+      ]
+      if (gate.length === 0) {
+        state = 'REPROVE'
+        reasons.push(`🟢 REPROVE — 다음 칸 ${up} 를 막던 원인이 풀렸다(preflight PASS) · 공개 ${release} 를 오늘 하루 증명일로 다시 돈다`)
+      } else {
+        blocks.push(...gate)
+        reasons.push(`🟢 평상일 — 공개 ${release} 는 상한(0..${profileOf(release).dailyTarget}) · 다음 칸 ${up} 이 막혀 재증명하지 않는다`)
+        reasons.push(...gate.map((b) => `🔴 ${b.code}: ${b.reason}`))
+      }
     }
     /** 🔴 오늘 이미 그 단계 목표보다 많이 냈으면 그 단계를 낮추지 않는다 — 이미 낸 것이 상한 초과가 된다 */
     if (input.publishedToday > profileOf(release).dailyTarget) dayPinned = true

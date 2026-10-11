@@ -12,7 +12,7 @@
  *
  *   npm run persona:comment-loop-check
  */
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
@@ -28,8 +28,12 @@ import { appendLedgerLine, defaultLedgerDir, ledgerPathOf } from './lib/llm-ledg
 import { SupplyLlmSession, LEDGER_BLOCKED } from './lib/supply-llm-call.mjs'
 import { MAX_OUTPUT_TOKENS } from './lib/persona-prompt'
 import {
-  commentLoopLedgerDir, makeCanonGate, runCommentLoop, type CommentGenerate,
+  commentLoopLedgerDir, makeCanonGate, runCommentLoop, generationGateOf, type CommentGenerate,
 } from './lib/persona-comment-loop.mjs'
+import {
+  acquireRunnerLease, releaseRunnerLease, requestFollowUp, takeFollowUp, shouldRunFollowUp, MAX_FOLLOW_UPS, FOLLOW_UP_FILE,
+} from './lib/runner-lease.mjs'
+import { currentLockToken } from './lib/collect-lock.mjs'
 import type { TargetSource, GateContext } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
 import {
@@ -263,6 +267,70 @@ console.log('\n⑦ schedule 템플릿 · 배포 quiesce')
   check(`🔴 한 글이 시한 안에 ${FIRST_COMMENT_ATTEMPTS}번 시도를 받는다 — 간격 ${maxGap}분 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,
     maxGap <= COMMENT_RUNNER_MAX_GAP_MINUTES)
   check('🔴 배포 동안 멈출 job 에 댓글 루프가 있다', DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 🔴 공통 lease · 겹친 깨움 합치기 · 예산 선검사 (2026-10-11 Batch A4)')
+// ─────────────────────────────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'comment-lease-check-'))
+  try {
+    const NOWMS = Date.parse('2026-10-12T09:00:00+09:00')
+    const TTL = 30 * 60_000
+    const a = acquireRunnerLease(dir, 'loop.lock', NOWMS, TTL)
+    const b = acquireRunnerLease(dir, 'loop.lock', NOWMS + 1_000, TTL)
+    check('🔴 반례⑫ 겹친 두 깨움 — 동시에 도는 회차는 하나(두 번째는 HELD)', a.ok && !b.ok && b.kind === 'HELD')
+    const r1 = requestFollowUp(dir, NOWMS + 1_000, 'event')
+    const r2 = requestFollowUp(dir, NOWMS + 2_000, 'recovery')
+    const r3 = requestFollowUp(dir, NOWMS + 3_000, 'scheduled')
+    check('🔴 🔴 반례⑫ 진 깨움 셋 → follow-up 표식 하나(REQUESTED · COALESCED · COALESCED)',
+      r1 === 'REQUESTED' && r2 === 'COALESCED' && r3 === 'COALESCED' && readdirSync(dir).filter((f) => f === FOLLOW_UP_FILE).length === 1)
+    if (a.ok) {
+      const forged = { path: a.handle.path, token: 'not-mine' }
+      check('🔴 lease 주인이 아니면 표식을 지우지 못한다(fencing · NOT_HOLDER) · 표식 그대로',
+        takeFollowUp(forged, dir) === 'NOT_HOLDER' && existsSync(join(dir, FOLLOW_UP_FILE)))
+      // 주인의 순서 — 첫 회차 뒤 거둔다 → 한 번 더 · 그 뒤 생긴 표식은 거두지 않고 남긴다
+      const t0 = takeFollowUp(a.handle, dir)
+      check('🔴 반례⑫ 주인이 첫 회차 뒤 거둔다 → follow-up 1회', t0 === 'TAKEN' && shouldRunFollowUp(0, t0))
+      requestFollowUp(dir, NOWMS + 60_000, 'event')
+      check('🔴 🔴 반례⑫ follow-up 회차 뒤에는 더 돌지 않는다(상한 1) — 표식은 다음 회차 몫으로 남는다',
+        MAX_FOLLOW_UPS === 1 && !shouldRunFollowUp(1, 'TAKEN') && existsSync(join(dir, FOLLOW_UP_FILE)))
+      check('표식이 없으면 더 돌지 않는다', !shouldRunFollowUp(0, 'NONE') && !shouldRunFollowUp(0, 'NOT_HOLDER'))
+      releaseRunnerLease(a.handle)
+    }
+    // 반례⑭ 살아 있는 lease · 시효 지난 lease — 둘 다 뺏지 않는다
+    writeFileSync(join(dir, 'active.lock'), JSON.stringify({ token: 'held-token', pid: 1, at: new Date(NOWMS - 5 * 60_000).toISOString() }), { mode: 0o600 })
+    const act = acquireRunnerLease(dir, 'active.lock', NOWMS, TTL)
+    writeFileSync(join(dir, 'stale.lock'), JSON.stringify({ token: 'old-token', pid: 1, at: new Date(NOWMS - 6 * 3_600_000).toISOString() }), { mode: 0o600 })
+    const old = acquireRunnerLease(dir, 'stale.lock', NOWMS, TTL)
+    check('🔴 🔴 반례⑭ 살아 있는 lease 는 뺏지 않는다(HELD · token 그대로)',
+      !act.ok && act.kind === 'HELD' && currentLockToken(join(dir, 'active.lock')) === 'held-token')
+    check('🔴 🔴 반례⑭ 나이가 TTL 을 넘어도 뺏지 않는다(STALE_HELD · token 그대로 · 사람이 치운다)',
+      !old.ok && old.kind === 'STALE_HELD' && currentLockToken(join(dir, 'stale.lock')) === 'old-token')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+
+  const lease = readFileSync('scripts/lib/runner-lease.mts', 'utf-8')
+  const leaseCode = lease.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  check('🔴 lease 모듈에 rename · 시효 회수 · pid 판정이 없다 — unlink 는 token 대조 뒤 표식 하나뿐',
+    !/rename|kill\(|process\.kill|STALE_TAKEOVER/.test(leaseCode)
+    && (leaseCode.match(/unlinkSync\(/g) ?? []).length === 1
+    && leaseCode.indexOf('currentLockToken(handle.path) !== handle.token') < leaseCode.indexOf('unlinkSync('))
+  const entry = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
+  check('🔴 🔴 진입점 — lease 를 잡은 뒤에야 DB 클라이언트를 만든다(provider · DB write 전에 lease)',
+    entry.indexOf('acquireRunnerLease(') > 0 && entry.indexOf('acquireRunnerLease(') < entry.indexOf('new PrismaClient()'))
+  check('🔴 진입점 — 진 깨움은 follow-up 을 남기고 물러난다 · 상한에 닿으면 표식을 거두지 않는다',
+    /requestFollowUp\(lockDir/.test(entry) && /if \(pass >= MAX_FOLLOW_UPS\) break\n\s*const take = takeFollowUp/.test(entry))
+  check('🔴 🔴 진입점 — 유료 생성 문은 장부 판정(generationGateOf) 하나 · 정기/복구/사건 몫이 없다',
+    /const gate = generationGateOf\(\{ missingEnv: missing, ledger \}\)/.test(entry) && /generation: gate,/.test(entry)
+    && !/XPC_SERVICE_NAME[^\n]*(budget|limits|dailyUsd)/.test(entry))
+  // 반례⑮ 예산 — 생성 문
+  const bad = { health: 'bad' as const, codes: ['DAILY_EXHAUSTED'], reasons: ['x'] }
+  check('🔴 반례⑮ 하루 상한 소진 → 생성 문 닫힘', !generationGateOf({ missingEnv: [], ledger: bad }).ok)
+  check('🔴 장부 못 읽음 · 상태 모름 · env 없음 → 닫힘(fail-closed)',
+    !generationGateOf({ missingEnv: [], ledger: null }).ok
+    && !generationGateOf({ missingEnv: [], ledger: { health: 'unknown', codes: ['NO_BUDGET'], reasons: [] } }).ok
+    && !generationGateOf({ missingEnv: ['X'], ledger: { health: 'ok', codes: [], reasons: [] } }).ok)
+  check('기준선 — 장부 ok · env 있음 → 열림', generationGateOf({ missingEnv: [], ledger: { health: 'ok', codes: [], reasons: [] } }).ok)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

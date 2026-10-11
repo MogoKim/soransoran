@@ -18,6 +18,7 @@
  * 🔴 **한 사다리 · 한 관문** (2026-09-30 · source-slot-v1).
  *    · 시험 대상 = `trialPlanOf(전날 결정, 전날 운영 증거[조항 ⑦ 포함], 브레이크 날을 건넌 계획)`
  *    · 그 대상의 다음 증명일(오늘) 전체 슬롯 기준 preflight(`judgeNextPreflight` · D3~D100 한 함수) PASS 여야 연다
+ *    · 🔴 계획이 없는 날은 평상일(0..Dn · 증명일 env 없음)이다 — 지금 단계 다음 칸 preflight 가 PASS 일 때만 REPROVE(2026-10-11)
  *    · 🔴 **지운 입력** — 14일 준비도(`stageVerdicts`) · 하루 시뮬레이션(`judgeOneDayCanary`) · 지속 승격
  *      (`d100:readiness` 자식 프로세스 · `judgePromotion`) · env 공개 단계(`SORAN_RELEASE_STAGE`) · env 천장
  *      (`SORAN_CAPACITY_STAGE` · `resolveCeiling`). 현재 단계의 입력원은 StageDecision 하나다.
@@ -28,7 +29,7 @@ import { PrismaClient } from '@prisma/client'
 
 import { profileOf, releaseCapsOf, resolveRuntimeStage, type RuntimeStage } from '../src/lib/scale-profile'
 import { kstDateString } from '../src/lib/release-canary'
-import { previousKstDate, isCalendarDate, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
+import { previousKstDate, isCalendarDate, nextStage, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
 import { ensureStageDecision, controllerEnabled, CONTROLLER_ENV } from '../src/lib/stage-decision-store'
 import { readStageDecision, stageDecisionIo } from '../src/lib/stage-decision-repo'
 import {
@@ -143,7 +144,7 @@ async function evidenceOnly(date: string): Promise<number> {
       log(`   ${evidenceReasonOf(v)}`)
       if (decision !== null) {
         const plan = trialPlanOf(decision, v)
-        log(`   ▸ 다음 날 시험  ${plan === null ? '없음 — 지금 단계를 다시 증명한다' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}\n`)
+        log(`   ▸ 다음 날 시험  ${plan === null ? '없음 — 평상일(0..Dn) · 다음 칸 원인이 풀렸을 때만 재증명' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}\n`)
       }
     }
     return 0
@@ -200,7 +201,7 @@ async function main(): Promise<number> {
     }
     const sustained = sustainedReleaseOf(previous, evidence)
     const plan = previous === null ? null : trialPlanOf(previous, evidence, carriedPlan)
-    log(`   지속 단계 ${sustained} · 시험 계획  ${plan === null ? '없음 — 지금 단계를 다시 증명한다' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}`)
+    log(`   지속 단계 ${sustained} · 시험 계획  ${plan === null ? '없음 — 평상일(0..Dn) · 다음 칸 원인이 풀렸을 때만 재증명' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}`)
 
     // ② 시험 대상 preflight — 오늘(증명일) 전체 슬롯 기준
     let nextPreflight: PreflightVerdict | null = null
@@ -210,8 +211,14 @@ async function main(): Promise<number> {
       const autoOpen = await auditAwareGate(prisma, readEnvKeys(PREFLIGHT_ENV_KEYS).values, NOW)
       const s = await loadPublishableStock(prisma, NOW, { autoReadyOpen: autoOpen.open })
       publishedToday = s.publishedToday
-      if (plan !== null && previous !== null && plan.base === sustained) {
-        const target = plan.target
+      /**
+       * 🔴 preflight 대상 — 계획이 있으면 그 시험 대상, 없으면 **지금 단계의 다음 칸**(2026-10-11 Batch A1).
+       *    계획이 없는 날은 평상일이 기본이다. 다음 칸을 막던 원인이 풀렸는지(재증명 여부)를 같은 관문으로 본다.
+       */
+      const target: RuntimeStage | null = previous === null ? null
+        : plan !== null ? (plan.base === sustained ? plan.target : null)
+          : nextStage(sustained)
+      if (target !== null && previous !== null) {
         const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
         const r = await readPreflightFacts(prisma, {
           loaded: s, autoOpen, proofSlots: slotTimesOn(TODAY, profileOf(target)),

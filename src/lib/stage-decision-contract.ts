@@ -41,10 +41,10 @@ export const DECISION_WRITER = 'controller' as const
 export type DecisionWriter = typeof DECISION_WRITER
 
 /**
- * 🔴 **`REPROVE` — 지금 단계를 증명일로 다시 돈다** (2026-09-29 generic scheduler 배선).
- *    다음 칸이 승인 천장 안인데 오늘 시험이 열리지 않은 날(전날 증거가 없거나 PASS 가 아니다 ·
- *    다음 칸 preflight 가 막았다)에 쓴다. 공개 단계는 **올라가지 않는다** — 그날 자동 target 이
- *    목표 슬롯을 먼저 채워(`stage-proof-day`) 내일 판정할 운영 증거를 만든다.
+ * 🔴 **`REPROVE` — 원인이 풀린 날 지금 단계를 하루 증명일로 다시 돈다** (2026-09-29 · 2026-10-11 Batch A1 좁힘).
+ *    이어 갈 시험 계획이 없는데(지금 단계 PASS 가 낡았다) **다음 칸 preflight 가 오늘 PASS** 인 날에만 쓴다.
+ *    공개 단계는 **올라가지 않는다** — 그날 자동 target 이 목표 슬롯을 먼저 채워(`stage-proof-day`) 내일 판정할
+ *    운영 증거를 만든다. 🔴 다음 칸이 막힌 날은 REPROVE 가 아니라 평상일(HOLD/PREPARE · 0..Dn)이다.
  *    🔴 앞판에는 이 상태가 없어 PASS 뒤 하루라도 HOLD 가 끼면 그 뒤 증거가 전부
  *       `DECISION_NOT_TRANSITION` 이 되어 **다시는 올라가지 못했다**(지속 승격 밖 영구 정체).
  *    🔴 판(contractVersion)을 올리지 않는다 — 옛 행은 이 상태를 쓰지 않았을 뿐 전부 그대로 유효하다.

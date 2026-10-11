@@ -5,7 +5,7 @@
  *   npm run ops:recover              dry-run — 무엇을 깨울지 보여만 준다 (launchctl 변경 0)
  *   npm run ops:recover -- --apply   `launchctl kickstart`(실행 중이면 죽이지 않는다 · `-k` 없음) + 표식 기록
  *
- * 🔴 대상은 `RECOVERABLE_LABELS` 뿐이다 — 발행 · 공급 처리 · 감사 · 단계 controller.
+ * 🔴 대상은 `RECOVERABLE_LABELS` 뿐이다 — 발행 · 공급 처리 · 감사 · 단계 controller · 댓글 러너(2026-10-11 · 슬롯 정책).
  *    수집 job 은 넣지 않는다(외부 source 요청 간격·일 상한은 영구 안전장치다).
  * 🔴 판정은 `judgeRecovery`(순수)가 한다 — 누락 기준은 관제 정본 `staleAfterFromSlots`.
  */
@@ -15,7 +15,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { judgeRecovery } from '../src/lib/runner-recovery'
-import { RECOVERABLE_LABELS } from './lib/ops-loop-templates'
+import { RECOVERABLE_LABELS, RECOVERY_POLICY_OF } from './lib/ops-loop-templates'
 import { observeJob, readProcessRuns } from './lib/runner-health.mjs'
 import { AGENT_DIR, slotsOfPlist } from './lib/launchd-observe.mjs'
 import { LOG_DIR, tailFile } from './lib/ops-signals.mjs'
@@ -58,7 +58,7 @@ for (const label of RECOVERABLE_LABELS) {
   const v = judgeRecovery({
     label, recoverable: true, state: o.state, running: o.run.running,
     lastExitCode: o.run.lastExitCode, lastRunAt: lastRunAtOf(label), slots,
-    lastRecoveryAt: readMark(label), now: NOW,
+    lastRecoveryAt: readMark(label), now: NOW, policy: RECOVERY_POLICY_OF[label] ?? 'stale',
   })
   console.log(`   ${v.action === 'kickstart' ? '🔁' : '·'} ${label.padEnd(40)} ${v.reason}`)
   if (v.action !== 'kickstart' || !APPLY) continue

@@ -70,6 +70,25 @@ export function commentLoopLockDir(home: string = homedir()): string {
 export const COMMENT_LOOP_LOCK_FILE = 'loop.lock'
 /** 🔴 잠금 나이 경고 기준 — 뺏지는 않는다(쥔 채 죽으면 사람이 치운다) */
 export const COMMENT_LOOP_LOCK_TTL_MS = 30 * 60_000
+
+/**
+ * 🔴 **유료 생성 문 — provider(사전 계산 포함)를 부르기 전에 본다** (2026-10-11 Batch A4).
+ *    정기 · 사건 · 복구 회차가 **같은 장부 · 같은 하루 상한**을 쓴다(`commentLoopLedgerDir` 하나 — 회차 종류별 몫이 없다).
+ *    · 예산 env 를 못 읽었다 → 닫는다
+ *    · 오늘 장부 판정(`judgeCost`)이 ok 가 아니다(상한 소진 · 정산 보류 · 초과 · 못 읽음 · 상한 없음) → 닫는다
+ *    🔴 닫혀도 발행 sweep 은 돈다 — 이미 돈을 쓰고 적재된 후보를 내는 데는 유료 호출이 없다.
+ */
+export function generationGateOf(i: {
+  missingEnv: readonly string[]
+  ledger: { health: 'ok' | 'bad' | 'unknown'; codes: readonly string[]; reasons: readonly string[] } | null
+}): { ok: boolean; reason: string } {
+  if (i.missingEnv.length > 0) return { ok: false, reason: `예산 env 를 읽지 못했다 — ${i.missingEnv.join(' · ')}` }
+  if (i.ledger === null) return { ok: false, reason: '댓글 장부를 읽지 못했다 — 유료 호출 0' }
+  if (i.ledger.health !== 'ok') {
+    return { ok: false, reason: `댓글 장부 ${i.ledger.health} [${i.ledger.codes.join(',')}] — 유료 호출 0` }
+  }
+  return { ok: true, reason: '' }
+}
 /** 🔴 한 회차가 만들 수 있는 후보 상한 — Queue CLI(`QUEUE_RUN_MAX`) · 발행 배치(`BATCH_MAX`)와 같다 */
 export const COMMENT_LOOP_RUN_MAX = 25
 /** 🔴 발행 sweep 이 다시 보는 PENDING 의 나이 — 창(60분)보다 넉넉히, 하루를 넘지 않게 */
