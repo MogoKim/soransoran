@@ -1,92 +1,21 @@
 # 소란소란 — Claude Code 지시사항
 
-## 🔴 0순위 — 저장소 정체성을 먼저 확인한다
+공통 지침(저장소 정체성 · 권위 문서 · 역할 · 위험 경계 · 기본 검증)은 아래 파일 하나에 있다. 여기 복제하지 않는다.
 
-작업 전에 `git rev-parse --show-toplevel`, `git remote get-url origin`,
-`node -p "require('./package.json').name"`을 확인한다. 의도한 `soransoran*` worktree가 아니거나 package name이
-`soransoran`이 아니면 중단한다. `unao-main`·`age-doesnt-matter`에서 소란소란 명령·DB/env 접근·문서 수정을
-하지 않는다. D100 문서 분류는
-[`docs/operations/D100-DOCUMENT-INVENTORY.md`](docs/operations/D100-DOCUMENT-INVENTORY.md)를 따른다.
+@AGENTS.md
+
+정본은 [`docs/operations/NORTH-STAR.md`](docs/operations/NORTH-STAR.md) ·
+[`docs/operations/2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) ·
+[`docs/operations/CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 셋이다(순서·역할은 위 공통 지침).
+아래는 **Claude Code 실행에만 필요한 차이**다.
 
 ## 프로젝트 개요
 
-- 서비스: **소란소란** | 도메인: soransoran.com
-- 본질: **40대 중반~60대 중반 여성 커뮤니티** (핵심 타겟 50대). 시작점은 갱년기
 - Next.js 14 App Router + TypeScript strict
 - Supabase + Prisma (**Raw SQL 절대 금지**)
 - NextAuth v5 카카오 전용
 - Tailwind + CSS Variables semantic token / Pretendard Variable
 - `cn()` = clsx + tailwind-merge / 컴포넌트 PascalCase · 파일 kebab-case
-
-## 🔴 작업 시작 전 반드시 읽는다 — 운영 정본
-
-[`docs/operations/README.md`](docs/operations/README.md) 가 **권위 인덱스 하나**다. 현재 정책이나 실행을 말할 수
-있는 문서는 그 인덱스가 싣는 넷뿐이고, 정책이 충돌하면 아래 순서의 앞 문서가 이긴다.
-
-| 순서 | 문서 | 무엇 |
-|---|---|---|
-| 1 | [`docs/operations/NORTH-STAR.md`](docs/operations/NORTH-STAR.md) | 고객 · 본질 · 장기 North Star · 판단 우선순위 · 영구 안전장치 |
-| 2 | [`docs/operations/2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) | D100 정책과 **목표 수치의 정본** — source-to-slot 판정 · JIT 공급 · Persona 4상태 · 대화 · 단계 PASS · 단계 표 |
-| 3 | [`docs/operations/CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) | as-of 가 붙은 검증 상태 · code/deployed/operating PASS · 다음 critical path · 코드와 정본의 충돌 |
-| 4 | [`docs/operations/MASTER-OPERATING-SYSTEM.md`](docs/operations/MASTER-OPERATING-SYSTEM.md) | 기술 지도 · 모델과 비용 구조 · 역사 증거 (현재 상태 · 정책이 아니다) |
-
-🔴 **이 문서들의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
-낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다. 목표 수치는 [`2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) 하나에 있다.
-
-### 실행 authority — 하나씩만 있다
-
-- **단계**: 그날의 단계는 `StageDecision` 행 하나가 정한다. GitHub stage Variables · env 의 단계 값 ·
-  canary 창은 단계를 정하는 근거가 아니다. 사람이 단계를 올리는 routine 절차는 없다.
-- **자동 일정 owner**: D100 레인 job 의 자동 일정 owner 는 상시 호스트의 launchd 하나다. GitHub Actions 예약과 겹치지 않는다.
-- 위 둘은 main과 보조 Mac runtime에 배포됐다. 실제 오늘 값은 문서나 env 기본값이 아니라 `StageDecision`,
-  `launchctl`, runtime pin을 읽어 확인한다. 배포·운영 상태는
-  [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md)가 적는다.
-- 완성 글을 쌓아 둔 편수 · 며칠치는 성공 기준이 아니다 — 준비도는 canon 의 증명일/지속 준비도 하나이고, 폐기한 옛 목표는 canon §10 이 적는다.
-
-## 운영 실행 역할
-
-- 창업자는 목적·브랜드·예산·credential·법률·하드웨어·비가역 정책을 결정한다.
-- Codex는 운영 마스터로 우선순위, 병렬 트랙, PASS 기준과 완료를 판정한다.
-- Claude Code는 실행자로 진단, 구현, 검사, PR, 허용된 merge·배포, 운영 관측과 rollback 준비를
-  끝까지 수행한다.
-- latest canon 안의 가역 변경은 exact head, 필수 CI, 통합 트리, preflight, rollback이 green이면
-  PR마다 창업자 승인을 다시 기다리지 않는다.
-- 새 비용 상한, credential, DB migration, 법률·브랜드 정책, host 최종 cutover는 창업자 결정
-  없이는 실행하지 않는다.
-- 같은 파일은 한 agent만 쓰고, 겹치지 않는 파일·fixture·관측 트랙은 병렬화한다. 예약 회차를
-  기다린다는 이유로 다음 단계 구현을 멈추지 않는다.
-
-🔴 **매거진의 검색 키워드·주제 선정·시리즈·관련 글·SEO 성장 작업은 반드시**
-[`docs/operations/M-GRAPH-PROJECT-CHARTER.md`](docs/operations/M-GRAPH-PROJECT-CHARTER.md)를 먼저 읽는다.
-M-GRAPH 목적과 M-AUTO 실행 계약을 섞거나, 검색 노출을 일일 발행 게이트로 만들지 않는다.
-
-## 🔴 이 저장소는 우나어가 아니다
-
-- **우나어(age-doesnt-matter) repo 를 fork 하지 않았다.** 구조와 패턴만 선별 참고했다.
-- 우나어의 **실행 repo·운영 DB·자산·인프라·도메인·계정은 분리**한다.
-- 우나어 repo 파일을 이 저장소로 복사할 때는 **반드시 브랜드 문자열을 제거**하고 이식한다.
-- 초기 Voice 자산의 read-only 역사 문서·connector 이름은 남아 있다. 이것을 현재 D100 운영 권한으로
-  해석하지 않으며, active runtime import나 credential 사용은 별도 경계 감사 없이 허용하지 않는다.
-
-### 절대 가져오지 않는 것
-
-```
-로고 · OG · favicon · manifest · public asset · 3원 심볼
-.env 값 · token · DATABASE_URL · Kakao client id/secret/callback
-naver-site-verification · GSC · AdSense ID
-sitemap/robots/canonical 을 그대로 복사하는 행위
-agents/ · .github/workflows/ · prisma/migrations/ · seed.ts
-우나어 게시글·매거진 콘텐츠
-unao-* localStorage 키
-"시니어·어르신·노인·실버" 표현 (코드 주석 포함)
-```
-
-## 판단 기준
-
-- **North Star**: 주간 재방문 참여 유저 수 (재방문 + 글/댓글 1회 이상 고유 사용자)
-- **본질은 커뮤니티다.** 병원 정보 사이트도, 일자리 플랫폼도 아니다
-- **"실제 유저 참여는 열고, 봇이 활발한 척하는 것은 막는다"**
-- 헷갈리면 묻는다: *"이 작업이 회원이 댓글을 쓰게 만드는 데 기여하는가?"*
 
 ## 제품/브랜드 규칙
 
@@ -189,40 +118,13 @@ unao-* localStorage 키
 - 🔴 토큰 **이름과 역할**은 고객면과 같다. 값만 다르다 — 새 이름을 만들지 않는다
 - 이 크기는 고객면 최소 크기 규칙의 **밖**이다. 위반이 아니다 (정본 §12-2)
 
-## 🚫 활발한 척 금지
-
-```
-❌ 접속자 수 / "지금 N명이 보고 있어요"
-❌ 실시간 활동 배지 · 총 게시글 수 · 회원 수
-❌ 붉은 알림 도트 남발
-❌ 실제 회원 원문을 건드리는 자동화
-```
-
-초기에는 숫자가 작다. 숫자는 **실제로 커진 뒤에** 넣는다.
-
-🟢 **관리형 공개 글과 Persona 댓글은 여기 해당하지 않는다** — 승인된 단기 목표다.
-막는 것은 *없는 활동을 있는 것처럼 보이는 지표*이지, 읽을 글과 사람 같은 반응이 아니다.
-목표 수치는 [`2026-09-21-d100-goal-canon.md`](docs/operations/2026-09-21-d100-goal-canon.md) 하나에 있다.
-지금 상태는 [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 가 적는다.
-
 ## 코딩 원칙
 
 - TypeScript `any` 금지 / 서버 컴포넌트 기본, `'use client'` 최소화
 - 이미지는 `next/image` 필수
-- **DB 스키마 변경**: `prisma migrate` · `db push` · `db seed` **금지**
 - 목록·상세 쿼리에 **`UserBlock` 필터를 반드시 적용**한다
   (차단 UI 를 숨기더라도 필터는 넣는다. 저장만 하고 필터가 없으면 미구현보다 나쁘다)
-
-## 검증 명령 (코드 변경 후 반드시)
-
-```bash
-npm run typecheck     # tsc --noEmit
-npm run lint
-npm run build
-npm run check:tokens  # 색상 리터럴 가드
-```
-
-배포 전: 모바일 767px 반응형 · 터치 타겟 52px · 글자 크기 3단계 확인
+- 활동 숫자(접속자 수 · 실시간 배지 · 총 게시글/회원 수)는 **실제로 커진 뒤에** 넣는다
 
 ## 작업 방식
 

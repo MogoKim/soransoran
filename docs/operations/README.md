@@ -1,14 +1,14 @@
 # 운영 문서 지도
 
-🔴 **이 README 가 권위 인덱스 하나다.** 전사 공통으로 현재 정책이나 실행을 말할 수 있는 문서는 아래
-「전사 공통 권위 문서」 넷뿐이다. 별도 영역의 프로젝트 정본은 「영역 프로젝트 정본」 절에 두며, 자기 영역
-안에서만 권위를 갖고 공통 네 문서를 덮지 못한다.
-새 에이전트는 이 README 와 공통 네 문서, 그리고 자신이 담당하는 영역의 프로젝트 정본을 함께 읽는다.
-공통 네 문서만으로도 목적·North Star·현재 단계·D3~D100 PASS·신선도·Persona 용량·답글·다음 실행에
-답할 수 있어야 한다.
+🔴 **이 README 가 권위 인덱스 하나다.** 전사 공통으로 현재 정책이나 현재 상태를 말할 수 있는 문서는 아래
+「전사 공통 권위 문서」 셋뿐이다. 별도 영역의 프로젝트 정본은 「영역 프로젝트 정본」 절에 두며, 자기 영역
+안에서만 권위를 갖고 공통 세 문서를 덮지 못한다.
+새 에이전트는 이 README 와 공통 세 문서, 그리고 자신이 담당하는 영역의 프로젝트 정본을 함께 읽는다.
+공통 세 문서만으로도 목적·North Star·Dn 의미·현재 단계·D3~D100 PASS·신선도·Persona 용량·답글·다음 실행에
+답할 수 있어야 한다. 기술 지도와 역사는 필요할 때만 연다 — 기본 필독이 아니다.
 
-전체 D100 문서의 `AUTHORITY`·`EXECUTABLE_INPUT`·`RUNBOOK`·`HISTORY`·`ADJACENT` 분류는
-[`D100-DOCUMENT-INVENTORY.md`](./D100-DOCUMENT-INVENTORY.md)에 있다. 그 파일은 목록이지 다섯 번째
+전체 D100 문서의 `AUTHORITY`·`REFERENCE`·`EXECUTABLE_INPUT`·`RUNBOOK`·`HISTORY`·`ADJACENT` 분류는
+[`D100-DOCUMENT-INVENTORY.md`](./D100-DOCUMENT-INVENTORY.md)에 있다. 그 파일은 목록이지 네 번째
 권위 문서가 아니다.
 
 ## 권위 문서 — 전사 공통
@@ -16,9 +16,18 @@
 | 순서 | 문서 | 정하는 것 | 정하지 않는 것 |
 |---|---|---|---|
 | 1 | `NORTH-STAR.md` | 고객 · 제품 본질 · 장기 North Star · 영구 안전장치 | 단계 숫자 · 현재 상태 |
-| 2 | `2026-09-21-d100-goal-canon.md` | D3~D100 정책 — source-to-slot 판정 · JIT 공급 · Persona 4상태 · 대화 · 단계 PASS · 마일스톤 | 현재 상태 · 실측 보충량 |
-| 3 | `CURRENT-MILESTONE.md` | as-of 시각이 붙은 검증 상태 · code/deployed/operating PASS · 다음 critical path · 코드와 정본의 충돌 | 정책과 정책 숫자 |
-| 4 | `MASTER-OPERATING-SYSTEM.md` | 기술 지도 · 모델과 비용 구조 · 역사 증거 | 현재 운영 상태 · 현재 정책 |
+| 2 | `2026-09-21-d100-goal-canon.md` | D3~D100 정책 — Dn 의미 · source-to-slot 판정 · 원천 순위 · JIT 공급 · 실행 구조 · Persona · 대화 · 단계 PASS · 마일스톤 | 현재 상태 · 실측 보충량 |
+| 3 | `CURRENT-MILESTONE.md` | as-of 시각이 붙은 main/runtime/stage/blocker · code/deployed/operating PASS · 다음 critical path · 코드와 정본의 충돌 | 정책과 정책 숫자 |
+
+## 기술 지도와 역사 — 필요할 때만 연다 (정책·현재 상태 권위 아님)
+
+| 문서 | 여는 때 | 정하지 않는 것 |
+|---|---|---|
+| `MASTER-OPERATING-SYSTEM.md` | 전체 기술 구조 · 어떤 AI 를 쓰는가 · 과거 사고 근거가 필요할 때 | 현재 운영 상태 · 현재 정책 · 기본 필독 |
+
+- 저장소 밖 handoff · 감사 보고서 · 외부 agent memory 는 정본이 아니다. 근거와 입력일 뿐이며, 채택된 결론만
+  위 세 문서와 `master:doc-check` 를 같은 변경에서 고쳐 반영한다.
+- `AGENTS.md` · `CLAUDE.md` 는 이 README 로 안내하는 얇은 진입점이다. 정책·상태를 복제하지 않는다.
 
 ## 영역 프로젝트 정본 — 자기 영역 안에서만 권위
 
@@ -26,9 +35,9 @@
 |---|---|---|---|
 | 회원가입 전환 | `MEMBER-CONVERSION-CANON.md` | 콘텐츠 끝 도달 → 가입 완료 → 첫 참여의 목적·정책·디자인·최소 측정·회원 어드민 구조·전환 단계(`MC-M0`~`MC-M7`) · 고객 구성 기준선(`CB-*`) | North Star 정의와 D100 공급·Persona·대화·발행 정책 |
 
-- 영역 정본은 공통 네 문서를 덮지 못한다. 충돌하면 공통 문서가 이기고, 영역 정본을 고친다.
+- 영역 정본은 공통 세 문서를 덮지 못한다. 충돌하면 공통 문서가 이기고, 영역 정본을 고친다.
 - 회원가입 전환 단계는 `MC-*`, 완료된 고객 구성 하위 단계는 `CB-*`를 사용하며 D100 단계와 별개다.
-- 그 영역을 담당하는 에이전트는 공통 네 문서와 함께 이 표의 정본을 읽는다.
+- 그 영역을 담당하는 에이전트는 공통 세 문서와 함께 이 표의 정본을 읽는다.
 
 ## 충돌이 나면
 
@@ -48,10 +57,11 @@
 | 질문 | 문서 |
 |---|---|
 | 왜 하는가, 어떤 글이어야 하는가 | `NORTH-STAR.md` |
-| 원문이 슬롯 시점에도 지금의 이야기인가(신선도) | canon §2 source-to-slot 판정 |
-| 무엇을 미리 준비하고 무엇을 그 시점에 만드나 · 준비도 | canon §3 |
-| Persona 용량은 무엇으로 세나 | canon §4 |
-| 첫 댓글 · 답글 · 대화 계속/멈춤 | canon §5 |
+| Dn 은 매일 채우는 수인가 · 평상시와 증명일 | canon §1.1 |
+| 원문이 슬롯 시점에도 지금의 이야기인가(신선도) · 원천 순위 | canon §2 source-to-slot 판정 · §2.3 |
+| 무엇을 미리 준비하고 무엇을 그 시점에 만드나 · 준비도 · 실행 구조 | canon §3 · §3.3 |
+| Persona 용량은 무엇으로 세나 · Persona 는 누가 정하나 | canon §4 · §4.1 |
+| 첫 댓글 · 자동 댓글 증거 · 답글 · 대화 계속/멈춤 | canon §5 |
 | 단계 PASS · 승격 · 재시험 | canon §6 |
 | 오늘 단계는 누가 정하나 · 자동 일정 owner | canon §6 (`StageDecision` 하나 · launchd 하나) — 구현·배포 상태는 `CURRENT-MILESTONE.md` |
 | D100 운영 Mac 이전·되돌리기 | `ALWAYS-ON-HOST.md` — 정책을 정하지 않는 현재 실행 runbook |
@@ -60,7 +70,7 @@
 | 현재 마일스톤과 완료 증거 | canon §8 |
 | 루프가 어디서 막히나(원문 게시 → 공개 지연 · 슬롯 채움 · 첫 댓글 · Persona 공백) | canon §9 측정 — 관측 화면 `npm run d100:readiness` ⓪ · `npm run ops:status` |
 | 어디까지 왔고 다음에 무엇을 하나 | `CURRENT-MILESTONE.md` |
-| 전체 구조 · 어떤 AI 를 쓰고 비용이 드나 · 과거 사고 | `MASTER-OPERATING-SYSTEM.md` |
+| 전체 구조 · 어떤 AI 를 쓰고 비용이 드나 · 과거 사고 | `MASTER-OPERATING-SYSTEM.md` (필요할 때만 · 권위 아님) |
 | D100 문서 하나가 현재 권위인지·실행 입력인지·역사인지 | `D100-DOCUMENT-INVENTORY.md` |
 | 매거진 (D100 과 별도 영역) | `M-GRAPH-PROJECT-CHARTER.md`(검색 주제망 전략) · `magazine-automation-runbook.md`(M-AUTO 실행·안전) |
 | 콘텐츠 끝에 도달한 로그인되지 않은 방문자가 가입·첫 참여로 이어지는 흐름 (D100 과 별도 영역) | `MEMBER-CONVERSION-CANON.md` — 전환 목적·정책·디자인·MC 단계·회원 어드민 구조·고객 구성 기준선. 현재 상태와 다음 과제는 해당 정본 §14·§18 |
