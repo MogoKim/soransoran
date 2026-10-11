@@ -108,18 +108,13 @@ import { kstDateString } from '../src/lib/release-canary'
 import { paidSourcesFor } from '../src/lib/ready-fate'
 import { readReadyCohort, recentDates } from './lib/stage-preflight-facts.mjs'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
-import { horizonStart, nextSlotAnchor, type ScaleProfile } from '../src/lib/scale-profile'
+import { nextSlotAnchor } from '../src/lib/scale-profile'
 import type { ResolvedScale } from '../src/lib/scale-runtime'
 /** 🔴 재고 분류 정본 — 발행 러너와 **같은 조립 · 같은 판정**을 나눠 읽는다 */
 import {
   loadStockClassification, describeStockClassification, jitCoverageOf, upcomingSlots, type StockClassification,
 } from './lib/publishable-stock.mjs'
 
-/**
- * 🔴 **화자 여력을 며칠 앞까지 보는가.** 발행 쪽 최소 간격(d3 은 2일)보다 넉넉해야
- *    "이 화자는 이 지평에서 몇 편까지 받을 수 있나" 가 성립한다.
- */
-const SPEAKER_LOAD_HORIZON_DAYS = 7
 import type { ContractBase } from '../src/lib/content-core/pipeline'
 /** 🔴 판정 모델 이름 — 판정 러너가 쓰는 그 값이다 */
 import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
@@ -288,7 +283,11 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *    적는 함수 안에만 있으면 read-only 로 확인할 방법이 없다 — 값을 돌려주는 함수를 따로 둔다.
  */
 /**
- * 🔴 **공급은 capacity 로 준비하고, 발행은 release 로 제한한다** (2026-09-26).
+ * 🔴 **화자 여력 지평 = JIT 수요 지평 하나** (2026-10-11 Batch A2). 고정 7일 · capacity 눈금을 지웠다.
+ *    지평의 날과 그날 자리 수는 `upcomingSlots`(오늘 남은 release 슬롯 + 다음 첫 기회)에서 그대로 나온다 —
+ *    수요가 보지 않는 날의 자리로 화자를 앞당겨 쓰지 않는다. cap 은 같은 눈금(release)이다.
+ *
+ * 🕘 (옛 판 · 2026-09-26) **공급은 capacity 로 준비하고, 발행은 release 로 제한한다**.
  *
  *    앞판은 지평의 하루하루를 **release** 프로필로 채웠다. release=d1 이면 7일에 자리가 7개뿐이고,
  *    사람 검토를 기다리는 기계 초안 8건이 그중 6자리를 차지해 **여력 있는 화자 1명** 이 남았다 —
@@ -325,7 +324,15 @@ export async function buildSpeakerLoad(
   slots: { releasedExpired: number; unattributed: number; voiceFiltered: boolean; slotEligibleCount: number | null }
 }> {
   const { loaded, classification } = await loadStockClassification(prisma, opts.env, opts.now)
-  const planning = supplyPlanningProfile(opts.scale)
+  const release = opts.scale.releaseProfile
+  /** 🔴 JIT 수요와 같은 지평 — 날짜별 자리 수. 그날 첫 슬롯 시각으로 화자 여력을 판정한다 */
+  const horizon = upcomingSlots({ now: opts.now, publishedToday: loaded.publishedToday, release })
+  const seatsByDate = new Map<string, { at: Date; seats: number }>()
+  for (const at of horizon) {
+    const k = kstDateString(at)
+    const cur = seatsByDate.get(k)
+    seatsByDate.set(k, cur === undefined ? { at, seats: 1 } : { at: cur.at, seats: cur.seats + 1 })
+  }
   const wip = new Set(classification.personaWipIds)
   const byId = new Map(loaded.allRows.map((r) => [r.id, r]))
   const speakerOf = (id: string): string | null => {
@@ -361,16 +368,15 @@ export async function buildSpeakerLoad(
     matchedAts: logs.filter((l) => l.matchedPersona?.code === p.code && l.matchedAt !== null)
       .map((l) => l.matchedAt as Date),
   }))
-  const horizonDays = SPEAKER_LOAD_HORIZON_DAYS
-  const start = horizonStart(opts.now)
-  const days = Array.from({ length: horizonDays }, (_, i) => new Date(start.getTime() + i * 86_400_000))
+  const days = [...seatsByDate.values()].map((d) => d.at)
+  const horizonDays = days.length
   /** 🔴 **정본 하나가 하루하루를 채워 본다.** 고른 날을 이력에 쌓아 다음 날 판정이 그 사람을 뺀다 */
   const plan = planOpenDays({
     days,
-    profileOf: () => ({
-      dailyTarget: planning.profile.dailyTarget,
-      postsPerWeek: planning.profile.postsPerWeek,
-      minDaysBetween: planning.profile.minDaysBetween,
+    profileOf: (at) => ({
+      dailyTarget: seatsByDate.get(kstDateString(at))?.seats ?? 0,
+      postsPerWeek: release.postsPerWeek,
+      minDaysBetween: release.minDaysBetween,
     }),
     history,
     availableAt: (h, at, caps) => availablePersonasAt(
@@ -391,9 +397,9 @@ export async function buildSpeakerLoad(
     // 🔴 회차 시각으로 적는다 — 자식이 같은 시각으로 검증한다
     writtenAt: opts.now.toISOString(), runId, horizonDays, byCode,
     byDate: plan.byDate,
-    /** 🔴 어느 눈금으로 셌는지 남긴다 — 사람이 "이 계획은 capacity d5 기준이다" 를 알 수 있게 */
-    stageByDate: days.map((at) => ({ date: kstDateString(at), stage: planning.stage })),
-    planningStage: planning.stage,
+    /** 🔴 어느 눈금으로 셌는지 남긴다 — 지평은 지금 공개 단계(release)의 가까운 슬롯이다 */
+    stageByDate: days.map((at) => ({ date: kstDateString(at), stage: opts.scale.releaseStage })),
+    planningStage: opts.scale.releaseStage,
     releaseStage: opts.scale.releaseStage,
     wip: {
       total: wip.size,
@@ -407,14 +413,6 @@ export async function buildSpeakerLoad(
       voiceFiltered: eligible !== null, slotEligibleCount: eligible === null ? null : eligible.size,
     },
   }
-}
-
-/**
- * 🔴 **공급 계획의 눈금은 capacity 다** — 이 한 곳에서 정한다. release 는 발행 쪽 눈금이다.
- *    새 단계·새 숫자를 만들지 않는다 — scale 정본(`resolveScale`)이 낸 값을 그대로 읽는다.
- */
-export function supplyPlanningProfile(scale: ResolvedScale): { stage: string; profile: ScaleProfile } {
-  return { stage: scale.capacityStage, profile: scale.capacityProfile }
 }
 
 /** 🔴 값을 만들어 파일로 적는다 — 만드는 것은 위 함수 하나다 */
@@ -710,7 +708,7 @@ async function main(): Promise<number> {
    *    (dry-run 전용 · 슬롯 수는 지금 결정의 단계에서 센다).
    */
   const jitIn = SIM !== null
-    ? { slots: upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile, capacity: scale.capacityProfile }).length, readyFilled: SIM }
+    ? { slots: upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile }).length, readyFilled: SIM }
     : before?.jit ?? null
   const policy = judgeJitDemand(jitIn)
   /**
@@ -825,7 +823,7 @@ async function main(): Promise<number> {
     if (plan.stage === 'draft') {
       try {
         const load = await writeSpeakerLoad(prisma, runId, scale)
-        console.log(`   🟢 화자 여력 — 공급 눈금 ${load.planningStage}(capacity) · 발행 눈금 ${load.releaseStage}(release)`
+        console.log(`   🟢 화자 여력 — 가까운 수요 지평 ${load.horizonDays}일(${load.planningStage} release 슬롯 · 오늘 남은 + 다음 첫 기회)`
           + ` · WIP ${load.wip.total}건 (사람 검토 대기 ${load.wip.humanReviewPending} · 발행 가능 ${load.wip.publishableNow})`
           + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`
           + ` · 원천 가치 없음으로 칸 해제 ${load.slots.releasedExpired}건 · 화자 미상 ${load.slots.unattributed}건`
@@ -1004,7 +1002,7 @@ async function main(): Promise<number> {
      *    모의(`--simulate-stock`)는 DB 를 읽지 않으므로 다가오는 슬롯 전부를 부족 슬롯으로 본다(dry-run 전용).
      */
     const unfilledSlots: Date[] = SIM !== null
-      ? upcomingSlots({ now: RUN_AT, publishedToday: 0, release: scale.releaseProfile, capacity: scale.capacityProfile })
+      ? upcomingSlots({ now: RUN_AT, publishedToday: 0, release: scale.releaseProfile })
       : (before?.jit?.unfilled ?? [])
     /** 🔴 생성 가능 선별 — 부족 슬롯 중 하나라도 eligible 이면 그 슬롯의 판정, 아니면 첫 부족 슬롯의 판정(사유 기록) */
     const releaseOf = (r: WorksetRow): SlotReleaseVerdict => {

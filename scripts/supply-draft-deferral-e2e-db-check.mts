@@ -381,8 +381,9 @@ async function worksetAxisRunner(
       NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
       // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
       ...LAST_SLOT_SCHEDULED_ENV,
-      // 🔴 JIT(2026-10-04 P0-2) — 유료 원천 수 = 부족 슬롯 수다. 표식 없는 d1 이면 부족 1 → 묶음 1 이라
-      //    묶음 선택을 볼 수 없다. 결정이 넣은 모양(표식 포함) d10 → 다음 증명일 슬롯 10 · 부족 10 · 묶음 천장 10
+      // 🔴 JIT(2026-10-04 P0-2) — 유료 원천 수 = 부족 슬롯 수다. 결정이 넣은 모양(표식 포함) d10.
+      //    🔴 (2026-10-11 Batch A2) 가까운 지평 — 회차 시각이 23:59 KST 라 오늘 슬롯은 끝났다 → 다음 첫 기회 1칸 · 부족 1 · 묶음 1
+      //       (옛: 내일 capacity 전체 10칸 · 부족 10). 선택 순서 전체는 `supply:jit-selection-check` 가 순수로 본다
       ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
       FAKE_PROVIDER_LOG: fakeLog,
     },
@@ -393,9 +394,9 @@ async function worksetAxisRunner(
     : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] }
   check('🔴 러너가 실제로 돌아 묶음 파일을 적었다', ws !== null, `출력 끝: ${out.slice(-600)}`)
   const got = ws?.sources.map((s) => s.sourceArticleId).join(',') ?? ''
-  // 🔴 묶음 상한 10 · 부족 슬롯 10 — seed 는 형제를 뺀 5건 전부(정본 순위 순) · raw 는 0. 댓글 순이면 raw 4 가 먼저 든다
-  check('🔴 🔴 **러너가 적은 묶음 = seed 5 (형제 뺀 전부 · 정본 순위 순) 정확히** — wsxs2~wsxs6',
-    got === 'wsxs2,wsxs3,wsxs4,wsxs5,wsxs6', got)
+  // 🔴 부족 슬롯 1(다음 첫 기회) — seed 중 형제를 뺀 정본 순위 1등 하나 · raw 는 0. 댓글 순이면 raw 가 먼저 든다
+  check('🔴 🔴 **러너가 적은 묶음 = 가까운 지평 부족 1칸만큼 · 형제 뺀 정본 순위 1등 seed(wsxs2) 정확히** (옛 지평: seed 5)',
+    got === 'wsxs2', got)
   check('🔴 🔴 **raw 선택 정확히 0** — 댓글이 더 많은 raw 4건이 하나도 묶음에 들지 않는다',
     ws !== null && ws.sources.filter((s) => s.sourceArticleId.startsWith('wsxw')).length === 0, got)
   check('🔴 🔴 **러너가 격리 DB 큐를 읽어 형제를 뺐다** — wsxs1 없음 · 제외 사유 1건',
@@ -410,7 +411,7 @@ async function worksetAxisRunner(
     ? traced.trace.candidates.filter((c) => c.reason === 'RAW_NOT_AUTO_CONSUMED').map((c) => c.sourceHash).sort() : []
   check('🔴 🔴 **raw 후보 4건이 정확히 RAW_NOT_AUTO_CONSUMED 사유로 제외됐다** — 러너가 쓴 선택 trace v2 · 원천 해시 대조 · 불일치 0',
     traced?.ok === true && traced.version === 'v2' && JSON.stringify(rawReasoned) === JSON.stringify(rawHashes)
-    && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 5,
+    && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 1,
     traced === null ? 'trace 없음' : traced.ok ? `제외 ${rawReasoned.length}` : traced.problems.join(','))
   // 🔴 (P0-B1 정합) 기회 스냅샷 = 자동 seed 전용(opportunities-v2) — preflight 의 실제 함수로 세어도 raw 는 증명일 기회가 아니다
   const { latestOpportunities, sourceOpportunitiesOf } = await import('./lib/stage-preflight-facts.mjs')

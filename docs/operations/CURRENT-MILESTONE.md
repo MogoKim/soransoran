@@ -23,15 +23,15 @@
 | 자동 단계 controller | ✅ `StageDecision` 단일 authority | ✅ controller loaded | ✅ 10-11 `REPROVE · 공개 d5 · 준비 d10` |
 | 자동 D5 | ✅ 같은 루프와 5개 슬롯 | ✅ | ✅ 10-10 증거 PASS (자동 5/5 · 첫 댓글 5/5 · 감사 1/1 · 도장 5/5) |
 | 자동 D10 | ✅ 10개 슬롯·Persona 하한·preflight | ✅ scheduler 지원 | ❌ preflight FAIL `THROUGHPUT_SHORT` · `SUPPLY_COST_UNKNOWN` |
-| 평상시 `0..Dn` / 증명일 정확 N (canon §1.1) | ❌ 코드는 매일 정확한 목표를 요구 | ❌ | ❌ 막힌 날마다 같은 단계 재증명 |
-| 가까운 수요 지평 (canon §3) | ❌ 오늘 남은 공개 + 준비 단계 내일 전체 | ❌ | ❌ 72h 자동 READY 30 중 공개 14 · 대기 26 중 24 낡음 |
+| 평상시 `0..Dn` / 증명일 정확 N (canon §1.1) | ❌ main · 🟡 Batch A PR-head ✅(미병합 · 막힌 날 REPROVE 제거 · REPROVE = 증명 기반 없음 + 다음 단계 preflight PASS + 첫 슬롯 전의 현재 단계 재인증) | ❌ | ❌ 막힌 날마다 같은 단계 재증명 |
+| 가까운 수요 지평 (canon §3) | ❌ main · 🟡 Batch A PR-head ✅(미병합 · 오늘 남은 release + 다음 첫 기회 · Persona 여력 같은 지평) | ❌ | ❌ 72h 자동 READY 30 중 공개 14 · 대기 26 중 24 낡음 |
 | event-assisted 실행 (canon §3.3) | ❌ 고정 시간표만 · 예산이 벽시계 슬롯 창으로만 정기 실행 인정 | ❌ | ❌ 수집 → 공급 선택 p50 30.7h |
 | 원천 순위 하나 (canon §2.3) | ❌ 연속 참여 백분위 우선 | ❌ | ❌ P0-B1 뒤 4회차 갱년기·우아한갱년기 선호 결정 0회 |
 | 날짜 정밀도 (canon §2.1) | ❌ 날짜만 아는 시각을 00:00 으로 변환 | ❌ | ❌ 72h 수집분 약 29% 가 정확히 자정 |
 | Persona 결정 분리 (canon §4.1) | ❌ 화자 계획 모델이 Persona 선택 | ❌ | ⚠️ 생성 89회 중 기술 실패 35 · Persona 사유 탈락 약 14 |
 | Persona 계약 | ✅ production universe 30 | ✅ runtime 30 인식 | ✅ contract-valid 30 · active 30 · draft 0 |
 | 첫 댓글 | ✅ 60분 계약 | ✅ runner loaded | ⚠️ 72h 자동 공개 14/14 60분 안 · 7일 누락 2 (08:10 슬롯) |
-| 자동 댓글 provenance · 복구 (canon §5) | ❌ 증거가 Persona 댓글 전부를 셈 · runner recovery 대상 밖 | ❌ | ❌ 10-07 절전 중 회차 미실행 · 복구 없음 |
+| 자동 댓글 provenance · 복구 (canon §5) | ❌ main · 🟡 Batch A PR-head ✅(미병합 · 세 행 provenance · slot recovery · 공통 커널 lease `lockf` — holder 종료·SIGKILL 시 자동 해제) | ❌ | ❌ 10-07 절전 중 회차 미실행 · 복구 없음 |
 | 감사 | ✅ 자동 공개의 `ceil(N×20%)` | ✅ loaded | ⚠️ 7일 표본 7건 판정 · 결함 0 — 결함 탐지력은 UNKNOWN |
 | 82cook | ✅ bounded canary 계약 | ❌ policy-disabled · job 0 | UNKNOWN — clean canary 0회 |
 | 실회원 우선 홈 랭킹 | ❌ Persona 댓글 합산 경로 잔존 | ❌ | UNKNOWN — 분리 지표 없음 |

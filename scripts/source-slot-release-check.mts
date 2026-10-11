@@ -260,7 +260,7 @@ console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
   const post = (release: EvidencePost['release']): EvidencePost => ({
     postId: `p-${release}-${Math.random()}`, queueId: `q-${Math.random()}`, publishedAtMs: NOW.getTime(), unattended: true,
     queueRows: 1, publishLogs: 1, authorPersonaId: `A${(author += 1)}`, decider: 'auto',
-    personaComments: [{ personaId: 'B', createdAtMs: NOW.getTime() + 10 * 60_000, topLevel: true }], release,
+    personaComments: [{ personaId: 'B', createdAtMs: NOW.getTime() + 10 * 60_000, topLevel: true, provenance: 'auto' as const }], release,
   })
   const facts = (posts: EvidencePost[]): StageEvidenceFacts => ({
     kstDate: '2026-09-30', stage: 'd3',

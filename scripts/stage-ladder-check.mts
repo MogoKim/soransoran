@@ -4,7 +4,8 @@
  *
  *   정본(Sep 30): D1 → D3 → D5 → D10 → D20 → D30 → D50. 시험(TRIAL)은
  *     전날 결정 + 전날 운영 증거(PASS → 다음 칸 · 아니면 RETEST) + 그 대상 preflight PASS + 첫 슬롯 전
- *   일 때만 열린다. 열리지 않은 날은 지금 단계를 증명일로 다시 돈다(REPROVE · 바닥 제외).
+ *   일 때만 열린다. 열리지 않은 날은 **평상일**(HOLD/PREPARE · 0..Dn)이다 — 다음 칸 preflight 가 PASS 인데
+ *   이어 갈 계획이 없는 날만 지금 단계를 증명일로 다시 돈다(REPROVE · 바닥 제외 · 2026-10-11 Batch A1).
  *
  * 🔴 지운 권위(이 파일이 더 이상 검사하지 않는 옛 경로): 승인 천장 env(`authorizedCapacityCeiling` · CEILING) ·
  *    14일 준비도(`stageVerdicts`) · 하루 canary(`judgeOneDayCanary` · STALE_DAILY) · 지속 승격(`judgePromotion` → SUSTAIN) ·
@@ -91,7 +92,7 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
       postId: `pp-${i}`, queueId: `pq-${i}`,
       publishedAtMs: at + i * 3600_000, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `pa-${i}`,
       decider: 'auto' as const, release: 'STAMPED_ELIGIBLE' as const,
-      personaComments: [{ personaId: `pc-${i}`, createdAtMs: at + i * 3600_000 + 600_000, topLevel: true }],
+      personaComments: [{ personaId: `pc-${i}`, createdAtMs: at + i * 3600_000 + 600_000, topLevel: true, provenance: 'auto' as const }],
     })),
     orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
     audits: {
@@ -174,8 +175,8 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
   check('그 결정은 정본 validator 를 통과한다', validateStoredDecision({ row: ok, expectKstDate: DATE }).ok)
 
   const noPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: null })
-  check('🔴 preflight 가 없으면 열리지 않는다 (PREFLIGHT_UNKNOWN · REPROVE d3)',
-    noPf.state === 'REPROVE' && noPf.release === 'd3' && noPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'), noPf.state)
+  check('🔴 preflight 가 없으면 열리지 않는다 (PREFLIGHT_UNKNOWN · 평상일 PREPARE d3 — 막힌 날 REPROVE 없음)',
+    noPf.state === 'PREPARE' && noPf.release === 'd3' && noPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'), noPf.state)
   const wrongPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d10') })
   check('🔴 🔴 **다른 단계의 초록 preflight 로 열지 않는다**',
     wrongPf.state !== 'TRIAL' && wrongPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
@@ -209,8 +210,22 @@ console.log('\n③ 🔴 🔴 PASS 가 아니면 같은 단계를 다시 · 바�
     mismatch.state !== 'TRIAL' && mismatch.release === 'd1' && mismatch.blocks.some((b) => b.code === 'PROVENANCE_STAGE'),
     `${mismatch.state} ${mismatch.release}`)
   const hold3 = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5') })
-  check('🔴 증거 없는 d3 유지 날 → 시험 없이 REPROVE d3 (d5 preflight 가 초록이어도)',
-    hold3.state === 'REPROVE' && hold3.release === 'd3')
+  check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS · 첫 슬롯 전 → REPROVE d3 = 현재 단계 재인증(오르지 않는다)',
+    hold3.state === 'REPROVE' && hold3.release === 'd3' && hold3.transition === null)
+  const hold3Blocked = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
+  check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (REPROVE 아님 · 0..3)',
+    hold3Blocked.state === 'PREPARE' && hold3Blocked.release === 'd3' && hold3Blocked.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
+    `${hold3Blocked.state} ${hold3Blocked.release}`)
+  const hold3Unk = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) })
+  check('🔴 🔴 증명 기반 없는 d3 유지 날 · d5 preflight UNKNOWN → 평상일 PREPARE d3 (REPROVE 아님)',
+    hold3Unk.state === 'PREPARE' && hold3Unk.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'), hold3Unk.state)
+  const hold3NoPf = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: null })
+  check('🔴 증거 없는 d3 유지 날 · preflight 모름 → 평상일 PREPARE d3 (PREFLIGHT_UNKNOWN)',
+    hold3NoPf.state === 'PREPARE' && hold3NoPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
+  const hold3Late = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5'),
+    decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() })
+  check('🔴 d5 preflight PASS 여도 d3 첫 슬롯 뒤에 결정하면 재인증하지 않는다 (LATE_START · 평상일)',
+    hold3Late.state === 'PREPARE' && hold3Late.blocks.some((b) => b.code === 'LATE_START'))
   const first = plan({ sustained: 'd1', prev: null, preflight: preflightFor('d3') })
   check('🔴 전날 결정이 없으면 시험 없음 (첫 controller 실행일 · fail-closed)',
     first.state !== 'TRIAL' && first.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS'))
@@ -821,8 +836,9 @@ console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 vali
     { label: 'TRIAL (전날 d3 PASS → 오늘 d5)', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }) },
     { label: 'TRIAL RETEST (d3)', d: plan({ sustained: 'd1', prev: prevTrial('d1', 'd3'), preflight: preflightFor('d3') }) },
     { label: 'TRIAL FLOOR (d1 → d3)', d: plan({ sustained: 'd1', prev: prevDecision('d1'), preflight: preflightFor('d3') }) },
-    { label: 'REPROVE (preflight UNKNOWN)', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) }) },
-    { label: 'REPROVE (증거 없는 d5 유지 날)', d: plan({ sustained: 'd5', prev: prevDecision('d5') }) },
+    { label: '평상일 PREPARE (preflight UNKNOWN)', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) }) },
+    { label: '평상일 PREPARE (증거 없는 d5 유지 날 · preflight 없음)', d: plan({ sustained: 'd5', prev: prevDecision('d5') }) },
+    { label: 'REPROVE (증명 기반 없는 d5 유지 날 · d10 preflight PASS · 현재 단계 재인증)', d: plan({ sustained: 'd5', prev: prevDecision('d5'), preflight: preflightFor('d10') }) },
     { label: 'PREPARE (전날 결정 없음)', d: plan({ sustained: 'd1', prev: null }) },
     { label: 'PROVENANCE_STAGE (기반 ≠ 지속)', d: plan({ sustained: 'd1', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }) },
     { label: 'LATE_START', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'), decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() }) },

@@ -424,36 +424,43 @@ export function readyOpportunitiesOf(loaded: LoadedStock, opts: {
 }
 
 /**
- * 🔴 **다가오는 슬롯** — 오늘 남은 공개 슬롯(release) + 다음 운영일 증명일 전체 슬롯(capacity = 다음에 증명할 단계).
- *    오늘 이미 낸 편수만큼 앞 슬롯은 소비됐다 — 남은 슬롯은 지금 뒤의 슬롯 중 목표 − 낸 수만큼이다.
+ * 🔴 **가까운 수요 지평** (2026-10-11 Batch A2) — 지금 공개 단계(release)의 **오늘 남은 안전 슬롯** +
+ *    **다음 실제 발행 기회 하나**(다음 운영일 release 첫 슬롯).
+ *    · 오늘 이미 낸 편수만큼 앞 슬롯은 소비됐다 — 남은 슬롯은 지금 뒤의 슬롯 중 목표 − 낸 수만큼이다.
+ *    · 열린 d10 증명일이면 release 가 d10 이다 — 그날 남은 d10 슬롯이 그대로 든다.
+ *    · 오늘 슬롯이 끝났으면 다음 첫 기회 하나만 남는다.
+ * 🔴 **지운 길** — "오늘 남은 release 슬롯 + 내일 capacity(다음에 증명할 단계) 전체 슬롯".
+ *    d5 를 내며 d10 을 준비하는 날, 오늘 d5 슬롯이 내일 d10 10칸을 끌어와 수요를 15 로 부풀렸다.
+ *    다음 단계 증명일 전체를 감당하는가는 controller preflight(`judgeNextPreflight` · 증명일 전체 슬롯)가 따로 본다 —
+ *    증명 준비도와 오늘 생산량을 섞지 않는다.
  */
 export function upcomingSlots(input: {
-  now: Date; publishedToday: number; release: ScaleProfile; capacity: ScaleProfile
+  now: Date; publishedToday: number; release: ScaleProfile
 }): Date[] {
   const today = kstDateString(input.now)
   const tomorrow = kstDateString(new Date(kstMidnight(input.now).getTime() + 86_400_000))
   const remain = Math.max(0, input.release.dailyTarget - input.publishedToday)
   const todayLeft = slotTimesOn(today, input.release).filter((d) => d.getTime() >= input.now.getTime())
-  return [...todayLeft.slice(Math.max(0, todayLeft.length - remain)), ...slotTimesOn(tomorrow, input.capacity)]
+  const next = slotTimesOn(tomorrow, input.release).slice(0, 1)
+  return [...todayLeft.slice(Math.max(0, todayLeft.length - remain)), ...next]
 }
 
 /**
  * 🔴 **JIT 수요 재료 — 공급 러너 · 관제가 같은 함수를 부른다** (2026-09-30).
  *    다가오는 슬롯마다 READY 가 **그 슬롯 시각에** eligible 인지 정본으로 판정해 짝짓는다.
- *    Persona 여력은 준비 단계(capacity) 상한으로 본다 — 다가오는 슬롯 대부분이 다음 증명일이다.
+ *    🔴 Persona 여력은 **같은 지평 · 같은 눈금(release)** 상한으로 본다 (2026-10-11 Batch A2) —
+ *       지평이 지금 공개 단계의 슬롯이므로 준비 단계(capacity) 상한을 섞지 않는다.
  */
 export function jitCoverageOf(
   view: { loaded: LoadedStock; resolved: ResolvedScale }, now: Date,
 ): { slots: number; readyFilled: number; matched: string[]; horizon: Date[]; unfilled: Date[] } {
   const scale = view.resolved.scale
-  const slots = upcomingSlots({
-    now, publishedToday: view.loaded.publishedToday, release: scale.releaseProfile, capacity: scale.capacityProfile,
-  })
+  const slots = upcomingSlots({ now, publishedToday: view.loaded.publishedToday, release: scale.releaseProfile })
   /**
    * 🔴 **자동 READY 만 센다** (2026-10-04 P0-2 보정). 사람 승인 READY 는 발행 러너의 공정성(`preferredLane`)에는 남지만
    *    자동 단계 증명 물량이 아니다(canon §6) — 사람 글이 슬롯을 덮었다고 자동 공급을 닫지 않는다.
    */
-  const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.capacityProfile), now, autoOnly: true })
+  const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.releaseProfile), now, autoOnly: true })
   const m = matchOpportunitiesToSlots(slots, ready)
   // 🔴 짝지은 READY 열쇠 · 다가오는 슬롯 · 미충족 슬롯 — 대기 결말 분류와 원천 배정이 **같은 짝짓기**를 쓴다
   return {

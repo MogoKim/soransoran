@@ -14,11 +14,14 @@ import { readFileSync } from 'node:fs'
 
 import {
   judgeStageEvidence, trialPlanOf, evidenceReasonOf, STAGE_EVIDENCE_CODES, personaCommentCapFor,
+  commentProvenanceOf, AUTO_COMMENT_CLOCK_SKEW_MS, type CommentLinkFacts,
   type StageEvidenceFacts, type EvidencePost, type EvidenceSideSignals, type StageEvidenceVerdict,
 } from '../src/lib/stage-evidence'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
-import { decideStage, consumerEnvOf, validateForToday, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
+import { AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
+import { decideStage, consumerEnvOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
+import { nextStage } from '../src/lib/stage-decision-contract'
 import {
   validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, previousKstDate,
   type ValidatedStageDecision,
@@ -59,7 +62,7 @@ const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
   postId: `p-${i}`, queueId: `q-${i}`,
   publishedAtMs: T0 + i * 4 * HOUR, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `author-${i}`,
   decider: 'auto', release: 'STAMPED_ELIGIBLE',
-  personaComments: [{ personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN, topLevel: true }],
+  personaComments: [{ personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN, topLevel: true, provenance: 'auto' as const }],
   ...o,
 })
 /** 🔴 감사 표본 한 행 — 그날 자동 target(postId·queueId)에 속해야 표본으로 센다 */
@@ -122,15 +125,31 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 혼합(자동 2 · 사람 1) — 사람 글은 세지 않는다 → FAIL', mixed, 'PUBLISH_NOT_AUTO_READY')
   const d5mixed = judgeStageEvidence(D, 'd5', facts('d5', { posts: [post(0), post(1), post(2), post(3, { decider: 'human' }), post(4, { decider: 'human' })] }), side())
   failWith('🔴 D5 혼합(자동 3 · 사람 2) → FAIL', d5mixed, 'PUBLISH_NOT_AUTO_READY')
+  /**
+   * 🔴 **반례 ② — d10 증명일(TRIAL · RETEST)은 자동 정확히 10편** (2026-10-11 Batch A1).
+   *    9 · 11 · 사람 섞임은 FAIL. 평상일(HOLD/PREPARE)은 이 판정 대상이 아니다(`DECISION_NOT_TRANSITION`).
+   */
+  const d10Audits = { ...CLEAN_AUDITS, rows: [sample(0), sample(1)] }
+  const d10Of = (posts: EvidencePost[]) => judgeStageEvidence(D, 'd10', facts('d10', { posts, audits: d10Audits }), side())
+  const ten = Array.from({ length: 10 }, (_, i) => post(i))
+  check('🟢 반례② D10 증명일 자동 정확히 10 → PASS', d10Of(ten).verdict === 'PASS', d10Of(ten).codes.join(','))
+  failWith('🔴 반례② D10 증명일 자동 9 → FAIL', d10Of(ten.slice(0, 9)), 'PUBLISH_NOT_AUTO_READY')
+  failWith('🔴 반례② D10 증명일 자동 11 → FAIL', d10Of([...ten, post(10)]), 'PUBLISH_OVER')
+  failWith('🔴 반례② D10 증명일 자동 9 + 사람 1 → FAIL', d10Of([...ten.slice(0, 9), post(9, { decider: 'human' })]), 'PUBLISH_NOT_AUTO_READY')
+  const retest10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
+    decision: { kstDate: D, state: 'TRIAL', release: 'd10', decidedBy: DECISION_WRITER } }), side())
+  check('🟢 반례② RETEST 도 TRIAL 상태다 — 같은 exact 10 판정', retest10.verdict === 'PASS')
+  failWith('🔴 반례② 평상일 PREPARE d10 은 exact N 판정을 받지 않는다(PASS 아님 · 빚 아님)', judgeStageEvidence(D, 'd10', facts('d10', { posts: ten.slice(0, 4), audits: d10Audits,
+    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'DECISION_NOT_TRANSITION')
 
   // ③ 첫 댓글
   failWith('🔴 09:30 글 Persona 댓글 없음 → FAIL (09-29 반례)', judge(facts('d3', {
     posts: [post(0, { personaComments: [] }), post(1), post(2)] })), 'COMMENT_MISSING')
   const late = judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS + MIN, topLevel: true }] }), post(1), post(2)] }))
+    personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS + MIN, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] }))
   failWith('🔴 60분 넘어 붙은 댓글(61분) → FAIL (LATE)', late, 'COMMENT_LATE')
   check('경계 — 정확히 60분은 시한 안이다', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS, topLevel: true }] }), post(1), post(2)] })).verdict === 'PASS')
+    personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })).verdict === 'PASS')
   // (b) 추가 댓글 계약 — 상한은 댓글 단계의 정본 상수다
   check('상한 — bootstrap-auto 1 · review/organic 5 · shadow 0 (정본 상수 그대로)',
     personaCommentCapFor('bootstrap-auto') === AUTO_PERSONA_COMMENTS_PER_POST_MAX && AUTO_PERSONA_COMMENTS_PER_POST_MAX === 1
@@ -139,7 +158,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   const withComments = (n: number, o: { same?: boolean; self?: boolean } = {}): EvidencePost => post(0, {
     personaComments: Array.from({ length: n }, (_, k) => ({
       personaId: o.self === true && k === n - 1 ? 'author-0' : o.same === true ? 'c-same' : `c${k}`,
-      createdAtMs: T0 + (5 + k) * MIN, topLevel: true,
+      createdAtMs: T0 + (5 + k) * MIN, topLevel: true, provenance: 'auto' as const,
     })),
   })
   const capFacts = (p0: EvidencePost, cap: number | null) => facts('d3', { posts: [p0, post(1), post(2)], commentCapPerPost: cap })
@@ -158,17 +177,17 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   const capUnknown = judge(capFacts(withComments(1), null))
   check('⬚ 댓글 단계(상한)를 모른다 → UNKNOWN', capUnknown.verdict === 'UNKNOWN' && has(capUnknown, 'COMMENT_CAP_UNKNOWN'), capUnknown.codes.join(','))
   failWith('🔴 글쓴 Persona 가 자기 글에 단 댓글은 세지 않고 FAIL', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'author-0', createdAtMs: T0 + 5 * MIN, topLevel: true }] }), post(1), post(2)] })), 'COMMENT_SELF')
+    personaComments: [{ personaId: 'author-0', createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })), 'COMMENT_SELF')
   failWith('🔴 대댓글만 있다 → 최상위 첫 댓글이 없다', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 + 5 * MIN, topLevel: false }] }), post(1), post(2)] })), 'COMMENT_MISSING')
+    personaComments: [{ personaId: 'c0', createdAtMs: T0 + 5 * MIN, topLevel: false, provenance: 'auto' as const }] }), post(1), post(2)] })), 'COMMENT_MISSING')
   failWith('🔴 발행 전 시각의 댓글은 시한 안이 아니다', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 - MIN, topLevel: true }] }), post(1), post(2)] })), 'COMMENT_LATE')
+    personaComments: [{ personaId: 'c0', createdAtMs: T0 - MIN, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })), 'COMMENT_LATE')
   const humanNoComment = judge(facts('d3', { posts: [post(0), post(1), post(2), post(3, { decider: 'human', personaComments: [] })] }))
   check('첫 댓글 보장은 자동 target 글만 본다 — 사람 승인 글의 댓글 0 은 COMMENT_MISSING 이 아니다(그 날은 편수 초과로 FAIL)',
     !has(humanNoComment, 'COMMENT_MISSING') && has(humanNoComment, 'PUBLISH_OVER'), humanNoComment.codes.join(','))
   failWith('🔴 추가 댓글 계약은 사람 승인 글에도 든다 — 같은 Persona 2건 → FAIL', judge(facts('d3', {
     posts: [post(0), post(1), post(2), post(3, { decider: 'human', personaComments: [
-      { personaId: 'c9', createdAtMs: T0 + 5 * MIN, topLevel: true }, { personaId: 'c9', createdAtMs: T0 + 9 * MIN, topLevel: true }] })] })), 'DUP_COMMENT')
+      { personaId: 'c9', createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: 'auto' as const }, { personaId: 'c9', createdAtMs: T0 + 9 * MIN, topLevel: true, provenance: 'auto' as const }] })] })), 'DUP_COMMENT')
 
   // ④ 감사 — 🔴 정본 표본 계약: expected = auditTarget(자동 target N) = ceil(N×20%) · 전수 감사 아님
   const zero = judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [] } }))
@@ -189,7 +208,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     && humanOnly.counts.auditExpected === 0)
   check('🟢 🔴 **전수 감사가 아니다 — D5 자동 5건 · 표본 1 → PASS**', judgeStageEvidence(D, 'd5', facts('d5'), side()).verdict === 'PASS')
   const d10Posts = Array.from({ length: 10 }, (_, i) => post(i, { publishedAtMs: T0 + i * HOUR,
-    personaComments: [{ personaId: `c${i}`, createdAtMs: T0 + i * HOUR + 5 * MIN, topLevel: true }] }))
+    personaComments: [{ personaId: `c${i}`, createdAtMs: T0 + i * HOUR + 5 * MIN, topLevel: true, provenance: 'auto' as const }] }))
   const d10 = (rows: ReturnType<typeof sample>[]) => judgeStageEvidence(D, 'd10', { ...facts('d10'), posts: d10Posts, audits: { ...CLEAN_AUDITS, rows } }, side())
   failWith('🔴 D10 자동 10 · 기대 2 · 표본 1 → COVERAGE_SHORT FAIL', d10([sample(0)]), 'AUDIT_COVERAGE_SHORT')
   failWith('🔴 같은 글의 감사 행 2개는 표본 1개다(중복 없이 센다) → SHORT', d10([sample(0), sample(0)]), 'AUDIT_COVERAGE_SHORT')
@@ -213,8 +232,8 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 글·Queue 없는 발행 기록 → FAIL', judge(facts('d3', { orphanPublishLogs: 1 })), 'PUBLISH_LOG_ORPHAN')
   failWith('🔴 같은 Persona 가 한 글에 두 번 → FAIL', judge(facts('d3', { posts: [post(0, {
     personaComments: [
-      { personaId: 'c0', createdAtMs: T0 + 5 * MIN, topLevel: true },
-      { personaId: 'c0', createdAtMs: T0 + 3 * HOUR, topLevel: true }] }), post(1), post(2)] })), 'DUP_COMMENT')
+      { personaId: 'c0', createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: 'auto' as const },
+      { personaId: 'c0', createdAtMs: T0 + 3 * HOUR, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })), 'DUP_COMMENT')
 
   // ⑥ 비용 · 러너
   const over = judgeCost({ uses: true, tally: tally(0.05, 1), ledgerError: null, settleHold: null, capUsd: 1 })
@@ -265,6 +284,56 @@ const PASS3 = judge(facts('d3'))
 const PASS5 = judgeStageEvidence(D, 'd5', facts('d5'), side())
 const FAIL3 = judge(facts('d3', { posts: [post(0, { personaComments: [] }), post(1), post(2)] }))
 
+console.log('\n①-c 🔴 자동 첫 댓글 출처 — Comment ↔ Queue(무인 표식) ↔ ActivityLog 세 행이 한 사건이어야 센다 (2026-10-11 Batch A3)')
+{
+  const DEC = T0 + 10 * MIN
+  const link = (o: { queue?: Partial<CommentLinkFacts['queues'][number]> | null; log?: Partial<CommentLinkFacts['logs'][number]> | null;
+    extraLog?: boolean; comment?: Partial<CommentLinkFacts['comment']> } = {}): CommentLinkFacts => ({
+    comment: { postId: 'p-0', personaId: 'commenter-0', createdAtMs: DEC + 200, topLevel: true, ...o.comment },
+    queues: o.queue === null ? [] : [{ targetPostId: 'p-0', personaId: 'commenter-0', status: 'PUBLISHED',
+      decidedBy: AUTO_LANE_DECIDED_BY, decidedAtMs: DEC, ...o.queue }],
+    logs: o.log === null ? [] : [
+      { personaId: 'commenter-0', decidedBy: AUTO_LANE_ACTIVITY_DECIDED_BY, publishedAtMs: DEC, ...o.log },
+      ...(o.extraLog === true ? [{ personaId: 'commenter-0', decidedBy: AUTO_LANE_ACTIVITY_DECIDED_BY, publishedAtMs: DEC }] : []),
+    ],
+  })
+  check('🟢 반례⑨ 세 행이 맞물린 무인 댓글 → auto', commentProvenanceOf(link()) === 'auto')
+  check('🔴 반례⑧ 사람이 어드민에서 낸 Persona 댓글(Queue operator · 로그 operator) → none(증거 0)',
+    commentProvenanceOf(link({ queue: { decidedBy: 'admin:founder' }, log: { decidedBy: 'operator' } })) === 'none')
+  check('🔴 반례⑧ 연결 행이 하나도 없는 Persona 댓글 → none', commentProvenanceOf(link({ queue: null, log: null })) === 'none')
+  const broken: [string, CommentLinkFacts][] = [
+    ['ActivityLog 없음', link({ log: null })],
+    ['Queue 없음(로그만 auto)', link({ queue: null })],
+    ['로그 targetId 가 다른 댓글을 가리킴(= 이 댓글 로그 없음)', link({ log: null })],
+    ['Queue 대상 글 ≠ 댓글 글', link({ queue: { targetPostId: 'p-9' } })],
+    ['Queue 무인 표식 · 로그 operator(표식 불일치)', link({ log: { decidedBy: 'operator' } })],
+    ['로그 auto · Queue 사람 표식(표식 불일치)', link({ queue: { decidedBy: 'admin:founder' } })],
+    ['로그 중복(같은 댓글 두 줄)', link({ extraLog: true })],
+    ['Queue Persona ≠ 댓글 Persona', link({ queue: { personaId: 'other' } })],
+    ['로그 Persona ≠ 댓글 Persona', link({ log: { personaId: 'other' } })],
+    ['Queue 상태가 PUBLISHED 아님', link({ queue: { status: 'EXPIRED' } })],
+    ['결정 시각 ≠ 로그 발행 시각', link({ log: { publishedAtMs: DEC + 1 } })],
+    ['결정 시각 없음', link({ queue: { decidedAtMs: null } })],
+    ['댓글이 결정보다 시계 차이 넘게 앞섬', link({ comment: { createdAtMs: DEC - AUTO_COMMENT_CLOCK_SKEW_MS - 1 } })],
+    ['댓글이 결정 뒤 60분 넘어', link({ comment: { createdAtMs: DEC + AUTO_FIRST_COMMENT_WINDOW_MS + 1 } })],
+    ['답글(최상위 아님)', link({ comment: { topLevel: false } })],
+  ]
+  for (const [name, f] of broken) check(`🔴 반례⑩ ${name} → broken`, commentProvenanceOf(f) === 'broken', commentProvenanceOf(f))
+  // 판정 본체 — 증거 칸
+  const withProv = (prov: 'auto' | 'none' | 'broken') => judge(facts('d3', { posts: [post(0, {
+    personaComments: [{ personaId: 'commenter-0', createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: prov }] }), post(1), post(2)] }))
+  const viaAuto = withProv('auto')
+  check('🟢 반례⑨ 60분 안 연결된 자동 댓글 → 첫 댓글 1건으로 센다 · PASS', viaAuto.verdict === 'PASS' && viaAuto.counts.firstCommentOk === 3)
+  const viaManual = withProv('none')
+  failWith('🔴 반례⑧ 수동 Persona 댓글만 있는 자동 target 글 → 증거 0 · COMMENT_MISSING', viaManual, 'COMMENT_MISSING')
+  check('그때 counts — 첫 댓글 2(나머지 두 글) · 수동 Persona 1', viaManual.counts.firstCommentOk === 2 && viaManual.counts.manualPersonaComments === 1,
+    JSON.stringify(viaManual.counts))
+  failWith('🔴 반례⑩ 출처가 깨진 댓글 → COMMENT_PROVENANCE_BROKEN FAIL', withProv('broken'), 'COMMENT_PROVENANCE_BROKEN')
+  const brokenOnHuman = judge(facts('d3', { posts: [post(0), post(1), post(2), ] .map((p, i) => i === 0 ? { ...p, personaComments: [...p.personaComments,
+    { personaId: 'x', createdAtMs: T0 + 30 * MIN, topLevel: true, provenance: 'broken' as const }] } : p) }))
+  failWith('🔴 반례⑩ 첫 댓글이 따로 있어도 깨진 출처가 하나라도 있으면 FAIL', brokenOnHuman, 'COMMENT_PROVENANCE_BROKEN')
+}
+
 console.log('\n② 시험 계획 — 날짜가 아니라 증거로')
 {
   const p = (prev: ValidatedStageDecision, ev: StageEvidenceVerdict | null) => {
@@ -301,11 +370,14 @@ const OK_SIGNALS: HealthSignal[] = [
   { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'ok', reasons: [] }, { axis: 'errors', health: 'ok', reasons: [] },
 ]
 /** 🔴 controller 스크립트와 같은 조립 — 시험 대상은 `trialPlanOf` 가 정하고, 그 대상의 preflight 를 넘긴다 */
+/** 🔴 controller 와 같다 — 계획이 있으면 그 대상, 없으면 지속 단계의 다음 칸 preflight(현재 단계 재인증 여부 · 2026-10-11 Batch A1) */
 const run = (prev: ValidatedStageDecision, ev: StageEvidenceVerdict | null, o: Partial<ControllerInputs> = {}) => {
   const plan = trialPlanOf(prev, ev)
+  const up = nextStage(sustainedReleaseOf(prev, ev))
+  const target = plan !== null ? plan.target : up
   return decideStage({
     kstDate: TODAY, decidedAt: AT, previousDecision: prev, previousEvidence: ev,
-    nextPreflight: plan === null ? null : preflightFor(plan.target), publishedToday: 0, signals: OK_SIGNALS, ...o,
+    nextPreflight: target === null ? null : preflightFor(target), publishedToday: 0, signals: OK_SIGNALS, ...o,
   })
 }
 
@@ -360,8 +432,12 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   check('🟢 D5 PASS → TRIAL d10', d10.state === 'TRIAL' && d10.release === 'd10' && validateForToday(d10).ok, `${d10.state} ${d10.release}`)
 
   const hold3 = run(PREV_HOLD_D3, null)
-  check('🔴 증거 없는 d3 유지 날 → 시험 없이 d3 를 증명일로 다시 돈다(REPROVE · 내리지 않는다)',
+  check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS → d3 재인증(REPROVE = 현재 단계 RETEST · 내리지 않는다)',
     hold3.decision.release === 'd3' && hold3.decision.state === 'REPROVE', `${hold3.decision.state} ${hold3.decision.release}`)
+  const hold3Blocked = run(PREV_HOLD_D3, null, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
+  check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (매일 REPROVE 없음 · 0..3)',
+    hold3Blocked.decision.release === 'd3' && hold3Blocked.decision.state === 'PREPARE',
+    `${hold3Blocked.decision.state} ${hold3Blocked.decision.release}`)
 
   const braked = run(PREV_TRIAL_D3, FAIL3, { signals: [{ axis: 'quality', health: 'bad', reasons: ['확정 결함 1건'] }, OK_SIGNALS[1]!, OK_SIGNALS[2]!] })
   check('기존 브레이크는 그대로 — 나쁜 신호면 재시험도 없다(감속)', braked.brake === 'slowdown' && braked.decision.state !== 'TRIAL')

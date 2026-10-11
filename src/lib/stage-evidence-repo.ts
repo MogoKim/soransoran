@@ -6,7 +6,9 @@
  *    · 표식   `decidedBy = UNATTENDED_PUBLISH_DECIDED_BY` 만 무인 러너 발행이다
  *    · 1:1    Queue(`createdPostId`) · 발행 기록 · Post 를 id 로 대조한다
  *             (🔴 관계 `is:null` 필터를 쓰지 않는다 — FK 쪽 null 검사로 바뀌어 유실을 0 으로 센다)
- *    · 댓글   `commentOrigin=PERSONA` · 지워지지 않은 것
+ *    · 댓글   `commentOrigin=PERSONA` · 지워지지 않은 것 — 상한·중복·자기 글 계약은 전부 센다
+ *             🔴 첫 댓글 증거는 **출처 연결**(`commentProvenanceOf`)이 `auto` 인 것만 (2026-10-11 Batch A3):
+ *                Queue(`publishedCommentId`) · ActivityLog(`kind=comment` · `targetId`)를 Comment id 로 대조한다
  *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조) · 표 전체의 정본 카운트(결함 yes · 시한 초과 · 재시도 가능 · 글 유실)
  *    · 도장   Queue `gateResults.release` — 발행 트랜잭션이 같은 트랜잭션에서 남긴 source-slot-v1 도장(조항 ⑦).
  *             🔴 도장 시각이 **그 글의 발행 기록 시각과 정확히 같아야** 증명이다(`publishEventAtOf` · `releaseStampCheck`)
@@ -26,7 +28,7 @@ import { unresolvedDefectCount, missingAutoPostCount } from './auto-ready-repo'
 import { overdueAuditCount, retryableFailureCount, RETRYABLE_NOTE_PREFIX, AUDIT_OVERDUE_MS } from './auto-ready-audit-store'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { machineReviewedByHuman } from './original-post-auto-publish'
-import type { EvidencePost, PostDecider, StageEvidenceFacts } from './stage-evidence'
+import { commentProvenanceOf, type EvidencePost, type PostDecider, type StageEvidenceFacts } from './stage-evidence'
 import { publishEventAtOf, releaseStampStatusOf } from './source-slot-release'
 
 /**
@@ -106,7 +108,27 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
 
   const comments = posts.length === 0 ? [] : await db.comment.findMany({
     where: { postId: { in: posts.map((p) => p.id) }, commentOrigin: 'PERSONA', isDeleted: false },
-    select: { postId: true, personaId: true, parentId: true, createdAt: true },
+    select: { id: true, postId: true, personaId: true, parentId: true, createdAt: true },
+  })
+  /** 🔴 출처 연결 — 같은 Comment id 를 가리키는 Queue · ActivityLog 를 **전부** 읽는다(겹침을 숨기지 않는다) */
+  const commentIds = comments.map((c) => c.id)
+  const linkQueues = commentIds.length === 0 ? [] : await db.personaApprovalQueue.findMany({
+    where: { publishedCommentId: { in: commentIds } },
+    select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
+  })
+  const linkLogs = commentIds.length === 0 ? [] : await db.personaActivityLog.findMany({
+    where: { kind: 'comment', targetId: { in: commentIds } },
+    select: { targetId: true, personaId: true, decidedBy: true, publishedAt: true },
+  })
+  const provenanceOf = (c: (typeof comments)[number]) => commentProvenanceOf({
+    comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
+    queues: linkQueues.filter((q) => q.publishedCommentId === c.id).map((q) => ({
+      targetPostId: q.targetPostId, personaId: q.personaId, status: q.status, decidedBy: q.decidedBy,
+      decidedAtMs: q.decidedAt === null ? null : q.decidedAt.getTime(),
+    })),
+    logs: linkLogs.filter((l) => l.targetId === c.id).map((l) => ({
+      personaId: l.personaId, decidedBy: l.decidedBy, publishedAtMs: l.publishedAt === null ? null : l.publishedAt.getTime(),
+    })),
   })
 
   const audits = await db.autoReadyAudit.findMany({
@@ -129,6 +151,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
       decider: deciderOfPost.get(p.id) ?? 'unknown',
       personaComments: comments.filter((c) => c.postId === p.id).map((c) => ({
         personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null,
+        provenance: provenanceOf(c),
       })),
       release: releaseOfPost.get(p.id) ?? 'MISSING',
     }

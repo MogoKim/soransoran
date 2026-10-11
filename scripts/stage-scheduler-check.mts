@@ -51,7 +51,7 @@ import {
   type ValidatedStageDecision, type StageDecision,
 } from '../src/lib/stage-decision-contract'
 import {
-  decideStage, consumerEnvOf, validateForToday, type HealthSignal, type ControllerResult,
+  decideStage, consumerEnvOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerResult,
 } from '../src/lib/stage-controller'
 import { preparedStageOf } from '../src/lib/stage-ladder'
 import { resolveScale, boundedReleaseStage } from '../src/lib/scale-runtime'
@@ -260,8 +260,8 @@ function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null 
       unattended: mode !== 'manualRun', queueRows: 1, publishLogs: 1, authorPersonaId: `a-${i}`,
       decider: human ? 'human' : 'auto', release: 'STAMPED_ELIGIBLE' as const,
       personaComments: [
-        { personaId: `c-${i}`, createdAtMs: t + (mode === 'late' && i === 0 ? (AUTO_FIRST_COMMENT_WINDOW_MINUTES + 1) : wait) * 60_000, topLevel: true },
-        ...(mode === 'dup' && i === 0 ? [{ personaId: `c-${i}`, createdAtMs: t + 90 * 60_000, topLevel: false }] : []),
+        { personaId: `c-${i}`, createdAtMs: t + (mode === 'late' && i === 0 ? (AUTO_FIRST_COMMENT_WINDOW_MINUTES + 1) : wait) * 60_000, topLevel: true, provenance: 'auto' as const },
+        ...(mode === 'dup' && i === 0 ? [{ personaId: `c-${i}`, createdAtMs: t + 90 * 60_000, topLevel: false, provenance: 'auto' as const }] : []),
       ],
     }
   })
@@ -293,8 +293,11 @@ function runDay(kstDate: string, prev: ValidatedStageDecision | null, prevMode: 
   const runAt = (o.runAt ?? at0700)(kstDate)
   const evidence = prev === null || prevMode === null ? null : evidenceOfDay(prev, prevMode)
   const plan = prev === null ? null : trialPlanOf(prev, evidence)
-  const nextPreflight: PreflightVerdict | null = plan === null ? null
-    : judgeNextPreflight(plan.target, (o.facts ?? ((s) => factsFor(s)))(plan.target), GRID)
+  // 🔴 controller 와 같다 — 계획이 있으면 그 대상, 없으면 지속 단계의 다음 칸(현재 단계 재인증 여부 · 2026-10-11 Batch A1)
+  const sustained = sustainedReleaseOf(prev, evidence)
+  const target = prev === null ? null : plan !== null ? (plan.base === sustained ? plan.target : null) : nextStage(sustained)
+  const nextPreflight: PreflightVerdict | null = target === null ? null
+    : judgeNextPreflight(target, (o.facts ?? ((s) => factsFor(s)))(target), GRID)
   const result = decideStage({
     kstDate, decidedAt: runAt, previousDecision: prev, previousEvidence: evidence,
     nextPreflight, publishedToday: 0, signals: o.signals ?? OK_SIGNALS,
@@ -343,8 +346,8 @@ const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) =>
     && w.days.slice(1, 6).every((d) => basisOf(d) === 'PASS')
     && w.days.slice(1, 6).every((d, i) => baseOf(d) === w.days[i]!.decision.release))
   check('S1 모든 결정이 저장 계약을 통과한다', w.allValid, w.days.map((d) => d.reason).filter((x) => x !== '').join(' / '))
-  check('🔴 S1 d50 PASS 뒤 — 지속 d50(증명됐다) · 위 칸 없음 → REPROVE d50 · 러너 밖(d100)으로 가지 않는다',
-    tr(w.days[6]!) === 'REPROVE:d50' && w.days.every((d) => stageRank(d.decision.release) <= stageRank('d50')), w.trace)
+  check('🔴 S1 d50 PASS 뒤 — 지속 d50(증명됐다) · 위 칸 없음 → 평상일 HOLD d50(재증명할 다음 칸이 없다) · 러너 밖(d100)으로 가지 않는다',
+    tr(w.days[6]!) === 'HOLD:d50' && w.days.every((d) => stageRank(d.decision.release) <= stageRank('d50')), w.trace)
   check('S1 d20 시험은 07:00 에 열려 08:00 첫 슬롯부터 20건 — 결정의 capacity 는 다음 증명 d30',
     w.days[3]!.decision.capacity === 'd30' && firstSlotOn(w.days[3]!.decision.kstDate, profileOf('d20'))!.toISOString()
       === new Date(`${w.days[3]!.decision.kstDate}T08:00:00+09:00`).toISOString())
@@ -385,7 +388,7 @@ const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) =>
 // S4 — 날짜만으로는 오르지 않는다 · HOLD 날은 PASS 가 아니다
 {
   const w = walk(startRow('d5', 'REPROVE'), Array.from({ length: 10 }, () => 'unread' as const))
-  check('🔴 🔴 S4 증거 없는 10일 — REPROVE d5 에 머문다(시험 0 · 올라가지 않는다)', w.days.every((d) => tr(d) === 'REPROVE:d5'), w.trace)
+  check('🔴 🔴 S4 증거 없는 10일(d10 preflight 초록) — REPROVE d5 에 머문다(시험 0 · 올라가지 않는다)', w.days.every((d) => tr(d) === 'REPROVE:d5'), w.trace)
   const h = walk(startRow('d10', 'HOLD'), ['perfect', 'perfect'])
   check('🔴 S4 HOLD d10 날은 완벽해도 PASS 가 아니다 → 다음 날 REPROVE d10 → 그 PASS 다음 날 TRIAL d20',
     h.trace === 'REPROVE:d10 TRIAL:d20' && h.days[0]!.evidence?.codes.includes('DECISION_NOT_TRANSITION') === true, h.trace)
@@ -416,7 +419,7 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   ]
   for (const c of cases) {
     const d = base(c.o)
-    check(`🔴 S7 ${c.name} → d20 을 열지 않는다 · ${c.code} · d10 증명일`, tr(d) === 'REPROVE:d10' && blocked(d, c.code) && d.valid !== null,
+    check(`🔴 S7 ${c.name} → d20 을 열지 않는다 · ${c.code} · d10 평상일(증명일 아님 · 0..10)`, tr(d) === 'PREPARE:d10' && blocked(d, c.code) && d.valid !== null,
       `${tr(d)} ${JSON.stringify(d.decision.blocks.map((b) => b.code))}`)
   }
   check('🔴 S7 preflight 없이(null) 시험 → PREFLIGHT_UNKNOWN', trialBlocks({
@@ -429,8 +432,34 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   const d5 = runDay(addDays(D0, 1), startRow('d3', 'REPROVE'), 'perfect', { facts: (s) => factsFor(s, {
     slotValidOpportunities: null, contractValidPersonas: null, commentUsdPerRequest: null, auditUsdPerCall: null, readyCohort: null,
   }) })
-  check('🔴 🔴 S7 d3~d10 시험도 같은 관문을 지난다(사실 전부 모름 → d5 열지 않음 · REPROVE d3)',
-    tr(d5) === 'REPROVE:d3' && blocked(d5, 'PREFLIGHT_UNKNOWN'), tr(d5))
+  check('🔴 🔴 S7 d3~d10 시험도 같은 관문을 지난다(사실 전부 모름 → d5 열지 않음 · 평상일 PREPARE d3)',
+    tr(d5) === 'PREPARE:d3' && blocked(d5, 'PREFLIGHT_UNKNOWN'), tr(d5))
+}
+
+// S12 — 🔴 평상일 0..Dn vs 증명일 exact N (2026-10-11 Batch A1 반례 ①③ · 증명 기반 없음 + 다음 단계 PASS → 현재 단계 재인증)
+{
+  const blockedD10 = (s: GenericStage): PreflightFacts => factsFor(s, s === 'd10' ? { readyCohort: cohortFor(s, { sources: 10_000 }) } : {})
+  // 반례 ① d5 지속 · d10 막힘 — 날마다 평상일. 증명일 env 없음(자동 5편 강제 없음)
+  const w = walk(startRow('d5', 'HOLD'), Array.from({ length: 5 }, () => 'perfect' as const), { facts: blockedD10 })
+  check('🔴 🔴 S12 반례① d5 지속 · d10 preflight 막힘 5일 → 날마다 PREPARE d5(평상일) · REPROVE 0',
+    w.days.every((d) => tr(d) === 'PREPARE:d5' && blocked(d, 'PREFLIGHT_FAIL')), w.trace)
+  check('🔴 🔴 S12 반례① 평상일 consumer env — 증명일 두 칸이 비었다(0..5 · 자동 target 앞세움 없음)',
+    w.days.every((d) => d.valid !== null && consumerEnvOf({ ok: true, decision: d.valid })[PROOF_STAGE_ENV] === ''
+      && proofDayOf(consumerEnvOf({ ok: true, decision: d.valid }), new Date(`${d.decision.kstDate}T09:00:00+09:00`)) === null))
+  // 반례 ③ 평상일 부족분은 빚이 아니다 — 평상일에 0편이든 2편이든 다음 날 결정은 같다
+  const short = runDay(addDays(D0, 2), w.days[0]!.valid, 'unread', { facts: blockedD10 })
+  const full = runDay(addDays(D0, 2), w.days[0]!.valid, 'perfect', { facts: blockedD10 })
+  check('🔴 🔴 S12 반례③ 평상일 부족(0편 · 못 읽음)과 완벽한 날의 다음 결정이 같다 — 이월 빚 0',
+    tr(short) === tr(full) && tr(short) === 'PREPARE:d5' && short.decision.release === 'd5', `${tr(short)} vs ${tr(full)}`)
+  // 증명 기반 없음 + d10 preflight PASS 인 날 — 현재 단계 재인증 REPROVE d5 → 그 PASS 다음 날 TRIAL d10
+  const healed = walk(startRow('d5', 'HOLD'), ['perfect', 'perfect', 'perfect'], (i) => (i === 0 ? { facts: blockedD10 } : {}))
+  check('🟢 S12 재인증 — 막힌 날 PREPARE d5 → d10 preflight PASS 날 REPROVE d5(현재 단계 RETEST) → 그 PASS 다음 날 TRIAL d10',
+    healed.trace === 'PREPARE:d5 REPROVE:d5 TRIAL:d10' && basisOf(healed.days[2]!) === 'PASS', healed.trace)
+  check('S12 REPROVE 는 증명일 env 를 받는다(그날만 exact 5)', healed.days[1]!.valid !== null
+    && consumerEnvOf({ ok: true, decision: healed.days[1]!.valid })[PROOF_STAGE_ENV] === 'd5')
+  check('S12 모든 결정이 저장 계약을 통과한다', w.allValid && healed.allValid)
+}
+{
 }
 
 // S8 — 운영 신호 브레이크는 증명일을 되돌린다
@@ -521,7 +550,7 @@ section('⑥ 러너 연결 — consumer env → 러너 설정 · catch-up · 증
   check('🔴 발행 트랜잭션 천장 — 같은 env 로 d20 · d10 env 면 d20 요청도 d10 으로 누른다(옛 canary 키는 무시)',
     boundedReleaseStage('d20', env, now) === 'd20'
     && boundedReleaseStage('d20', markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10', SORAN_RELEASE_CANARY_STAGE: 'd20', SORAN_RELEASE_CANARY_DATE: t.decision.kstDate }), now) === 'd10')
-  const r = walk(startRow('d5', 'REPROVE'), ['unread']).days[0]!
+  const r = walk(startRow('d5', 'REPROVE'), ['unread']).days[0]! // d10 preflight 초록 · 증명 기반 없음 — 현재 단계 재인증(RETEST)
   const renv = r.valid === null ? {} : consumerEnvOf({ ok: true, decision: r.valid })
   check('consumer — REPROVE d5 → 공개 d5 · 증명일 d5', tr(r) === 'REPROVE:d5' && renv.SORAN_RELEASE_STAGE === 'd5'
     && renv[PROOF_STAGE_ENV] === 'd5', JSON.stringify(renv))

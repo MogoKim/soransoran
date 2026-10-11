@@ -431,14 +431,23 @@ export function trialBlocks(i: {
       reason: `${i.target} preflight ${pf.verdict} [${pf.codes.join(',')}]`,
     })
   }
+  out.push(...lateStartBlocks(i))
+  return out
+}
+
+/**
+ * 🔴 **그 단계 오늘 첫 슬롯이 결정 시각보다 앞이면 막는다**(`LATE_START`) — 조각 하루로 증명하지 않는다.
+ *    시험(`trialBlocks`)과 현재 단계 재인증(사다리 REPROVE)이 같은 함수를 쓴다.
+ */
+export function lateStartBlocks(i: { target: RuntimeStage; kstDate: string; runAt: string }): StageBlock[] {
   const opens = firstSlotOn(i.kstDate, profileOf(i.target))
   const runMs = Date.parse(i.runAt)
   if (opens === null || !Number.isFinite(runMs) || runMs > opens.getTime()) {
-    out.push({
+    return [{
       code: 'LATE_START',
       reason: `${i.target} 의 ${i.kstDate} 첫 슬롯(${opens === null ? '없음' : opens.toISOString()})이 결정 시각보다 앞이다`
-        + ' — 조각 하루로 시험하지 않는다',
-    })
+        + ' — 조각 하루로 증명하지 않는다',
+    }]
   }
-  return out
+  return []
 }

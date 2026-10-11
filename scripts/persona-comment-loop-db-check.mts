@@ -44,12 +44,13 @@ const { publishCandidateTx } = await import('../src/lib/persona-publish-tx')
 const { AUTO_LANE_DECIDED_BY, AUTO_LANE_EXPIRE_REASON, commentLoopLimitsFromEnv } = await import('../src/lib/persona-comment-auto-lane')
 const { dedupKeyOf } = await import('../src/lib/persona-comment-queue')
 const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
-const { runCommentLoop, sweepAutoLane } = await import('./lib/persona-comment-loop.mjs')
+const { runCommentLoop, sweepAutoLane, generationGateOf } = await import('./lib/persona-comment-loop.mjs')
+const { readCostSignals } = await import('./lib/ops-signals.mjs')
+const { commentProvenanceOf } = await import('../src/lib/stage-evidence')
 const { SupplyLlmSession } = await import('./lib/supply-llm-call.mjs')
 const { judgeCommentCall } = await import('./lib/persona-comment-call.mjs')
 const { appendLedgerLine, ledgerPathOf } = await import('./lib/llm-ledger-store.mjs')
 const { ledgerDateOf } = await import('../src/lib/llm-ledger')
-const { acquireLock, releaseLock } = await import('./lib/collect-lock.mjs')
 const { kstDayStart } = await import('../src/lib/persona-cap')
 type CommentGenerate = import('./lib/persona-comment-loop.mjs').CommentGenerate
 type TargetSource = import('./lib/persona-comment-targets').TargetSource
@@ -409,11 +410,7 @@ async function main(): Promise<void> {
     await auditReplies()
     check('🔴 🔴 **다른 Persona 후보 둘을 동시에 발행 → Serializable 이 1건만 남긴다**',
       (await personaComments(pid2)).length === 1 && res.filter((z) => z.kind === 'published').length === 1, JSON.stringify(res.map((z) => z.kind)))
-    const lockPath = join(HOME, 'lock-probe.lock')
-    const l1 = acquireLock(lockPath, Date.now(), 60_000)
-    const l2 = acquireLock(lockPath, Date.now(), 60_000)
-    check('🔴 같은 기계의 두 번째 회차는 잠금에서 물러난다', l1.ok && !l2.ok && l2.kind === 'HELD')
-    if (l1.ok) releaseLock(l1.handle)
+    // 🔴 같은 기계의 두 번째 회차 — 커널 lease(lockf) 반례는 `persona:comment-loop-check` ⑧ 이 실제 subprocess 로 본다
   }
 
   console.log('\n⑨ 단계가 bootstrap-auto 가 아니면 — provider 0 · write 0 · 트랜잭션도 막는다')
@@ -431,6 +428,73 @@ async function main(): Promise<void> {
       r.outcome === 'NOT_AUTO_STAGE' && f.calls() === 0 && row.status === 'PENDING')
     check('🔴 트랜잭션을 직접 불러도 무인 레인은 막힌다', direct.kind === 'blocked' && (await personaComments(pid)).length === 0)
     process.env.SORAN_PERSONA_COMMENT_STAGE = 'bootstrap-auto'
+  }
+
+  console.log('\n⑩ 🔴 반례⑪ 커밋 뒤 죽고 복구 회차가 돌아도 — 중복 행 0 · provider 재호출 0 (2026-10-11 Batch A4)')
+  {
+    await wipe()
+    const a = await persona('P01'); const b = await persona('P02'); await persona('P03')
+    const pid = await post(a, 5)
+    // (가) 적재(유료 생성 끝)까지 커밋되고 발행 전에 죽었다 — PENDING 1행이 남았다
+    const qid = await pending(b, pid)
+    const f = fakeGenerate()
+    const r = await loop(f.gen)
+    const cs = await personaComments(pid)
+    check('🔴 복구 회차 — 남은 PENDING 을 먼저 낸다 · provider 0 · 댓글 1', f.calls() === 0 && r.providerCalls === 0 && cs.length === 1
+      && r.sweepBefore?.published === 1, `${f.calls()} ${cs.length} ${JSON.stringify(r.sweepBefore?.lines)}`)
+    // (나) 발행까지 커밋된 뒤 죽었다 — 다시 돌아도 같은 글에 다시 만들지 않는다
+    const f2 = fakeGenerate()
+    const r2 = await loop(f2.gen)
+    const q = await prisma.personaApprovalQueue.findMany({ where: { targetPostId: pid }, select: { id: true, status: true } })
+    const logs = await prisma.personaActivityLog.count({ where: { kind: 'comment', targetId: { in: cs.map((c) => c.id) } } })
+    check('🔴 🔴 커밋된 댓글 뒤 재실행 — provider 0 · 댓글 1 · Queue 1 · ActivityLog 1(중복 행 0)',
+      f2.calls() === 0 && r2.providerCalls === 0 && (await personaComments(pid)).length === 1
+      && q.length === 1 && q[0]!.id === qid && q[0]!.status === 'PUBLISHED' && logs === 1, `${f2.calls()} q=${q.length} logs=${logs}`)
+    // 🔴 반례⑨ 실제 행으로 — 무인 레인이 남긴 세 행은 출처 판정에서 auto 다
+    const c = cs[0]!
+    const qs = await prisma.personaApprovalQueue.findMany({ where: { publishedCommentId: c.id },
+      select: { targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true } })
+    const ls = await prisma.personaActivityLog.findMany({ where: { kind: 'comment', targetId: c.id },
+      select: { personaId: true, decidedBy: true, publishedAt: true } })
+    const prov = commentProvenanceOf({
+      comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
+      queues: qs.map((x) => ({ ...x, decidedAtMs: x.decidedAt?.getTime() ?? null })),
+      logs: ls.map((x) => ({ ...x, publishedAtMs: x.publishedAt?.getTime() ?? null })),
+    })
+    check('🟢 반례⑨ 실제 무인 발행 세 행(Comment · Queue · ActivityLog) → 출처 auto', prov === 'auto', prov)
+  }
+
+  console.log('\n⑪ 🔴 반례⑮ 예산 소진 상태의 복구 회차 — provider 0(사전 계산 포함) · 이미 만든 후보 발행은 돈다')
+  {
+    await wipe()
+    const a = await persona('P01'); const b = await persona('P02'); await persona('P03')
+    const fresh = await post(a, 5)
+    const left = await post(a, 6)
+    await pending(b, left)
+    const dir = join(HOME, 'ledger-exhausted')
+    mkdirSync(dir, { recursive: true })
+    const day = new Date()
+    appendLedgerLine(ledgerPathOf(dir, ledgerDateOf(day)), {
+      runId: 'earlier', stage: 'commentGen', attemptId: 'seed-x', requestNo: 0, provider: 'google', apiModelId: 'gemini-3.7-flash',
+      model: 'gemini-3.7-flash', status: 'settled', blockCode: null, countedInputTokens: 1805, maxOutputTokens: 800,
+      reservedUsd: 0.2, inputTokens: 1805, outputTokens: 231, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
+      settledUsd: 0.2, pricingVersion: 'x', startedAt: day.toISOString(), endedAt: day.toISOString(), errorCode: null,
+    })
+    const ledger = readCostSignals(day, {}, { comment: dir }).commentLedger
+    const gate = generationGateOf({ missingEnv: [], ledger })
+    check('🔴 소진 장부 → 생성 문 닫힘(DAILY_EXHAUSTED)', !gate.ok && ledger.codes.includes('DAILY_EXHAUSTED'), `${gate.reason}`)
+    let anyFetch = 0
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async () => { anyFetch += 1; return new Response('{}', { status: 500 }) }) as typeof globalThis.fetch
+    try {
+      const f = fakeGenerate()
+      const r = await loop(f.gen, { generation: gate })
+      check('🔴 🔴 반례⑮ 소진 상태 복구 회차 → provider 0 · 네트워크 0 · 새 글 댓글 0',
+        f.calls() === 0 && r.providerCalls === 0 && anyFetch === 0 && (await personaComments(fresh)).length === 0, `${f.calls()} ${anyFetch}`)
+      check('🟢 이미 돈을 쓴 PENDING 은 발행된다(유료 호출 없음)', (await personaComments(left)).length === 1 && r.sweepBefore?.published === 1)
+    } finally { globalThis.fetch = realFetch }
+    const okGate = generationGateOf({ missingEnv: [], ledger: readCostSignals(day, {}, { comment: join(HOME, 'ledger-empty') }).commentLedger })
+    check('기준선 — 빈 장부(오늘 0원)는 생성 문이 열린다', okGate.ok, okGate.reason)
   }
 
   await auditReplies()
