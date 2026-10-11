@@ -24,6 +24,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute, basename, dirname } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { isPublic, statusLabel, assertGateInSync } from './lib/magazine-gate.mjs'
+import { HARD_BODY, measureBody } from './lib/magazine-body-length.mjs'
 import {
   checkFirstPerson,
   checkTitleForm,
@@ -99,8 +100,7 @@ const DESC_SOFT_MAX = 120
 
 const H2_MIN = 4
 const H2_MAX = 6
-const BODY_MIN = 1200
-const BODY_MAX = 2500
+// 본문 길이 기준은 lib/magazine-body-length.mjs 하나가 정본이다 (hard 800~3000 FAIL · soft 1200~2500 WARN)
 
 export const HERO_WIDTH = 1200
 export const HERO_HEIGHT = 675
@@ -350,11 +350,12 @@ function checkArticle(article, context, report) {
     }
   }
 
-  // 15 · 분량
-  const bodyLen = fullText.replace(/\s/g, '').length
-  if (bodyLen < BODY_MIN || bodyLen > BODY_MAX) {
-    report.warn(id, `본문 ${bodyLen}자 — 권장 ${BODY_MIN}~${BODY_MAX}자`)
-  }
+  // 15 · 분량 — 🔴 정본은 lib/magazine-body-length.mjs (batch-qa 와 같은 계산)
+  //    hard(발행 차단 800~3000 · 공백·줄바꿈 포함)는 여기서 FAIL — hero 를 만들기 전에 재생성으로 보낸다 (2026-10-11 autumn)
+  //    soft(권장 1200~2500)는 WARN — 앞판과 같은 값·같은 문장이다 (QA 출력 꼬리가 재생성 HOLD 지문의 일부다)
+  const body = measureBody(article)
+  if (!body.hard.ok) report.fail(id, `${body.hard.code}: ${body.hard.message} (발행 기준 ${HARD_BODY.min}~${HARD_BODY.max}자 · 공백·줄바꿈 포함)`)
+  if (!body.soft.ok) report.warn(id, body.soft.message)
 
   // 16 · block type
   for (const block of article.body ?? []) {

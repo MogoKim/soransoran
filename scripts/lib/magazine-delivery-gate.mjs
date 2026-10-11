@@ -6,14 +6,16 @@
  *    재생성이 자기 판정을 따로 만들면 언젠가 갈라지고, 갈라진 날 이미 보낸 글을 다시 보낸다.
  *    그래서 둘 다 이 파일을 부른다. 조건을 다른 곳에 다시 쓰지 않는다.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { buildManuscriptMessage } from './chatgpt-session.mjs'
 import {
-  readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH, inputRepairAlreadySent,
+  readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH, inputRepairAlreadySent, firstResponseInvalidFor,
 } from './magazine-quarantine.mjs'
 import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
+import { judgeLegacyInvalid } from './magazine-lineage-reconcile.mjs'
 
 /** 일반 전송 직전 brief 형식 계약 실패 — probe·Chrome·예약·전송 모두 0 */
 export const BRIEF_FORMAT_CONTRACT_REASON = 'BRIEF_FORMAT_CONTRACT'
@@ -89,9 +91,31 @@ export function regenerationPromptText(packet, currentDraft) {
  * 이 slug 에 **보내게 될 메시지** — 아직 보내지 않는다.
  * 대상 선택이 지문을 계산하려면 이것이 필요하다. brief 가 없으면 `null`.
  */
+/**
+ * 🔴 **최초 응답 교정 요청** (2026-10-11 gray-hair · Codex A).
+ *    일반 최초 요청에 응답이 왔지만 원고 관문에서 탈락했다 — 저장된 원고가 없으니 "현재 원고를 고쳐라" 를 쓸 수 없다.
+ *    같은 일반 요청을 다시 보내는 대신, **정확한 위반**과 함께 BRIEF 로 원고 전체를 다시 쓰게 한다.
+ *    일반 최초·QA 재생성·입력 수리 프롬프트와 다른 문장이다 (기존 지문·HOLD 불변).
+ */
+export const FIRST_RESPONSE_CORRECTION_PROMPT = [
+  '[교정 요청] 직전 응답은 자동 원고 관문에서 탈락해 저장되지 않았습니다.',
+  '아래 BRIEF 시작/끝 사이의 지시를 따라 최종 원고 전체를 처음부터 다시 출력하세요.',
+  '첫 줄은 반드시 --- 로 시작하는 frontmatter 이고, 그 앞에 설명·인사·머리말을 붙이지 않습니다.',
+  '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
+  'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+  '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
+]
+export function firstResponseCorrectionPromptText(packet) {
+  return [...FIRST_RESPONSE_CORRECTION_PROMPT, '', '--- 직전 응답이 걸린 항목 ---', packet.instruction].join('\n')
+}
+export const isFirstResponseCorrection = (packet) => packet?.source === 'FIRST_RESPONSE'
+
 export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
   const briefPath = join(draftsDir, slug, 'brief.md')
   if (!existsSync(briefPath)) return null
+  if (isFirstResponseCorrection(packet)) {
+    return buildManuscriptMessage({ promptText: firstResponseCorrectionPromptText(packet), briefText: readFileSync(briefPath, 'utf8') })
+  }
   const draftPath = join(draftsDir, slug, 'draft.md')
   if (packet && !existsSync(draftPath)) return null
   const currentDraft = packet ? readFileSync(draftPath, 'utf8') : null
@@ -187,7 +211,8 @@ export function inputRepairGate({ slug, draftsDir = DRAFTS_DIR, quarantinePath =
  */
 export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH }) {
   const draftPath = join(draftsDir, slug, 'draft.md')
-  if (packet && !existsSync(draftPath)) {
+  // 🔴 최초 응답 교정은 저장된 원고 없이 BRIEF 로 다시 쓰게 한다 — 그 밖의 재생성은 현재 원고가 반드시 있어야 한다
+  if (packet && !isFirstResponseCorrection(packet) && !existsSync(draftPath)) {
     return {
       ok: false,
       code: 'REGEN_SOURCE_DRAFT_MISSING',
@@ -210,6 +235,22 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
     ?? (legacyMessageFingerprint && legacyMessageFingerprint !== messageFingerprint
       ? deliveryHoldsFetch(entry, legacyMessageFingerprint)
       : null)
+  /**
+   * 🔴 **이 일반 요청은 이미 응답을 받았다 — 다시 보내지 않는다** (2026-10-11 재검토 · gray-hair).
+   *    같은 지문으로 식별된 invalid 응답 기록이 있거나(이번 판 runner 정산), 옛 판 장부 사유가 같은 사실을 말하면
+   *    (`judgeLegacyInvalid` — 판정만 · 쓰기 0) 일반 전송은 0 이다. 교정 재생성은 auto-register 가 그 기록으로 한다.
+   *    00:10 producer 회수도 이 관문을 지난다 — 01:00 교정보다 먼저 같은 요청을 다시 보내지 않게.
+   */
+  if (!packet && !hold && message !== null) {
+    const recorded = firstResponseInvalidFor(entry, messageFingerprint)
+    const legacy = recorded ? null : judgeLegacyInvalid({ entry, slug, hasDraft: existsSync(draftPath), hasBrief: true, messageFingerprint,
+      briefSha256: createHash('sha256').update(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')).digest('hex') })
+    if (recorded || legacy?.ok) {
+      return { ok: true, message, messageFingerprint, legacyMessageFingerprint, entry, hold: null,
+        correctionPending: { source: recorded ? 'ledger' : 'legacy-ledger-reason',
+          why: '이 일반 요청은 이미 식별된 invalid 응답을 받았다 — 다시 보내지 않는다 (교정 재생성은 auto-register 가 한다)' } }
+    }
+  }
   if (!packet && !hold && message !== null) {
     const contract = judgeBriefFormatContract(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8'))
     if (!contract.ok) {

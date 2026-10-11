@@ -46,7 +46,8 @@ import { PACKET_DIR } from './lib/magazine-regen.mjs'
 import { readFetchResults, fetchResultFor, removeFetchResults, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { classifyFailure } from './lib/magazine-failure-kind.mjs'
 import { describeFetchFailure } from './magazine-webui-runner.mjs'
-import { fingerprintOf } from './lib/magazine-quarantine.mjs'
+import { fingerprintOf, firstResponseInvalidFor, invalidEvidenceSha, openRegenLineage, violationsOfResponse } from './lib/magazine-quarantine.mjs'
+import { completePendingLineage, reconcileLegacyInputRepair, reconcileLegacyInvalid } from './lib/magazine-lineage-reconcile.mjs'
 import { deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath, injectHeroImage, verifyHeroFile } from './lib/magazine-hero.mjs'
 import { validateManuscript, describeReasons, briefEchoHeadings } from './lib/magazine-manuscript-guard.mjs'
@@ -534,6 +535,47 @@ export function webuiRegenRunner({ slug, packetPath, draftOut }, { runFn = run, 
 }
 
 /**
+ * 🔴 **교정할 수 있는 최초 응답** — 보낸 것이 확실하고(sent=true), 응답을 특정했고(대화·메시지·sha),
+ *    원고 관문(stage=validate)에서 invalid_manuscript · markers_missing 으로 탈락한 경우만.
+ *    하나라도 모자라면 교정하지 않는다 (fail-closed · 전송 0).
+ */
+/**
+ * 🔴 batch 막힘 중 **원고 문장**이 원인이라 재생성으로 고칠 수 있는 코드. 재료(hero·큐)는 재생성해도 같다.
+ *    BODY_TOO_* 도 원고 문장이다 — QA 가 hero 전에 먼저 막지만, batch 에서 걸려도 재생성으로 보낸다 (2026-10-11)
+ */
+export const BATCH_REGEN_CODES = /^(MED_|FIN_|SEN_|AGE_WORDING|BRAND_LEAK|DUPLICATE_SENTENCE|UNSUPPORTED_NUMERIC_CLAIM|BODY_TOO_SHORT$|BODY_TOO_LONG$)/
+
+export function correctableFirstResponse(row) {
+  return row?.sent === true && row?.stage === 'validate'
+    && (row?.reason === 'invalid_manuscript' || row?.reason === 'markers_missing')
+    && Boolean(row?.conversationUrl && row?.assistantMessageId)
+    && /^[0-9a-f]{64}$/.test(row?.responseSha256 ?? '')
+    // 🔴 runner 가 예약 해제와 invalid 증거를 **한 번에** commit 했을 때만 (재검토 2) — 아니면 예약이 남아 있다
+    && row?.settled === true
+    // 🔴 실제 위반 문장이 있어야 교정할 수 있다 — 코드명만으로 이유를 지어내지 않는다 (재검토 4)
+    && violationsOfResponse(row).length > 0
+}
+
+/** 결과에 남길 최초 응답 증거 — 원문 전체 없이 (앞부분은 정제된 최대 200자만, 회차 결과에만) */
+export function firstResponseEvidence(row) {
+  return {
+    reason: row?.reason ?? null, stage: row?.stage ?? null, sent: row?.sent ?? null,
+    invalid: row?.violations ?? violationsOfResponse(row),
+    responseForm: row?.responseForm ?? null, conversationUrl: row?.conversationUrl ?? null, assistantMessageId: row?.assistantMessageId ?? null,
+    responseSha256: row?.responseSha256 ?? null, length: row?.length ?? null,
+    responseExcerpt: typeof row?.responseExcerpt === 'string' ? row.responseExcerpt.slice(0, 200) : null,
+  }
+}
+
+/** 최초 응답 위반 → 교정 재생성 실패 목록 (실제 위반 그대로 + 표기 규칙 한 줄) */
+export function firstResponseRegenFailures(row) {
+  // 🔴 장부 기록(violations) · 이번 회수 행(invalid) 모두 같은 정제를 지난 `{code, why}` 다 — why 없는 위반은 없다
+  const violations = Array.isArray(row?.violations) ? row.violations : violationsOfResponse(row)
+  const rows = violations.slice(0, 8).map((x) => ({ code: 'FIRST_RESPONSE_INVALID', label: `${x.code}: ${x.why}` }))
+  return [...rows, { code: 'MANUSCRIPT_FORMAT_RULE', label: `원고는 첫 줄부터 --- 로 시작하는 frontmatter(title·description·cluster·medical)로 연다. ${FORMAT_RULE_LABEL}` }]
+}
+
+/**
  * 한 slug 를 끝까지 몰고 간다.
  *
  * @param {object} [deps] 🔴 시험이 실제 orchestration 을 돌리기 위한 주입 지점.
@@ -582,7 +624,13 @@ export function drive(slug, opts, deps = {}) {
   let lastQaFailures = []
   /** 🔴 원고 형식 위반 — 구조화된 값 그대로 (사람용 안내문을 파싱하지 않는다) */
   let lastFormatViolations = []
+  /** 🔴 최초 응답 증거 — 회수 결과 파일을 지우기 전에 구조화 결과로 옮긴다 (원문 전체는 없다 · 2026-10-11) */
+  let firstResponse = null
+  /** 계보 대조 결과 (영수증 · 옛 입력 수리) — 회차 결과에 남긴다 */
+  let lineageReconcile = null
   const evidence = () => ({
+    ...(firstResponse ? { firstResponse } : {}),
+    ...(lineageReconcile ? { lineageReconcile } : {}),
     ...(regenHistory.length ? { regenHistory } : {}),
     ...(lastQaFailures.length ? { qaFailures: lastQaFailures } : {}),
     ...(lastFormatViolations.length ? { formatViolations: lastFormatViolations } : {}),
@@ -653,6 +701,24 @@ export function drive(slug, opts, deps = {}) {
       return stop('recovery', recovered.code, `[INFRA] ${recovered.why}`)
     }
     if (recovered.recovered) add('recovery', 'ok', '급사한 재생성 교체를 원복한 뒤 진행')
+    /**
+     * 🔴 **재생성 계보 대조 — provider·ChatGPT 호출 0** (2026-10-11 Codex 재검토 1·3 · `magazine-lineage-reconcile.mjs`).
+     *    ① 입력 수리가 남긴 계보 영수증(교체 뒤 장부 기록 전에 죽었거나 실패) → 지금 draft 가 교체 후 원고면 계보를 연다
+     *    ② 옛 판 입력 수리 APPLIED (cold · autumn) → 결과 행 · 수리 지문 · 지금 draft 검증이 모두 맞으면 한 번만 연다
+     *    애매하면 아무것도 바꾸지 않는다 — 예산은 옛 계보 그대로(fail-closed). 실패해도 회차는 이어 간다.
+     */
+    const dd = deps.draftsDir ?? dirname(dirname(p.draftMd))
+    const qp = quarantinePath ? { path: quarantinePath } : {}
+    try {
+      const pend = completePendingLineage({ draftsDir: dd, slug, ...qp })
+      const legacy = pend.status === 'NONE' ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp }) : null
+      const shown = [pend.status !== 'NONE' ? `영수증 ${pend.status}${pend.why ? ` (${pend.why})` : ''}` : null,
+        legacy && legacy.status !== 'NOT_APPLICABLE' ? `옛 입력 수리 대조 ${legacy.status}${legacy.why ? ` (${legacy.why})` : ''}` : null].filter(Boolean)
+      if (shown.length) add('lineage', pend.ok && (legacy?.ok ?? true) ? 'ok' : 'blocked', shown.join(' · '))
+      lineageReconcile = { pending: pend.status, legacyInputRepair: legacy?.status ?? null }
+    } catch (e) {
+      add('lineage', 'blocked', `계보 대조를 하지 못했다 — 예산은 옛 계보 그대로: ${e?.message ?? e}`)
+    }
   }
   /**
    * 🔴 **손대기 전에 찍는다.** 이 후보가 바꿀 수 있는 추적 파일을 전부 담는다 —
@@ -670,76 +736,6 @@ export function drive(slug, opts, deps = {}) {
         : f.path === ARTICLES_TS ? { ...f, pairWithQueue: true } : f))
     own = [...fileSnapshot([p.articleTs]), ...fileSnapshot([heroFile], { keepIfCreated: true })]
   }
-
-  // ── ② draft.md 회수 ───────────────────────────────────────
-  // 🔴 원고 존재 판정도 주입점이다 — 시험이 "원고 없음" 후보로 실제 회수 경로를 태우기 위한 자리 (운영은 실제 판정)
-  if ((deps.progress ?? progress)(slug).hasDraftMd) {
-    add('draft', 'skip', 'draft.md 가 이미 있다 — 덮어쓰지 않는다')
-  } else if (!write) {
-    add('draft', 'skip', 'dry-run — 회수하지 않는다 (draft.md 없음)')
-  } else {
-    /**
-     * 🔴 **사람용 출력을 파싱하지 않는다 — 자식이 적은 구조화 결과가 정본이다** (2026-09-28 운영 실측).
-     *    앞판은 stdout 한 줄("⏸ HOLD — 이미 보낸 글이다")을 사유로 넘겼다. 그 문장에 전송불명 표식이 없어
-     *    분류기가 CONTENT 로 추정했고, 원고 잘못이 아닌 4건이 attempts +1 · 7일 격리에 걸렸다.
-     *    이제 `--result-json` 의 행(`reason`·`sent`·`stage`)으로 분류한다. 파일이 없거나 깨졌으면
-     *    **보냈는지 모른다** — CONTENT 로 추정하지 않고 전송불명으로 멈춘다(재전송 0).
-     */
-    /**
-     * 🔴 **보낼 수 없는 글이면 runner 를 띄우지 않는다** (앞단 확인 · 2026-09-29).
-     *    판정은 전송 경계와 **같은 함수**(`deliveryGate`)다 — 같은 brief → 같은 지문일 때만 HOLD 다.
-     *    brief 가 바뀌어 지문이 달라지면 새 작업으로 연다. 정본 판정은 여전히 자식의 send 직전 예약이다.
-     */
-    const g0 = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
-    /**
-     * 🔴 **brief 형식 계약 위반은 장부 문제가 아니다** (2026-10-08). 이 글만 막고 회차는 이어 간다.
-     *    runner 0 · probe·Chrome 0 · 전송 0 — 보내지 않았으므로 `sent=false` 다.
-     */
-    if (!g0.ok && g0.code === BRIEF_FORMAT_CONTRACT_REASON) {
-      repairRequired = true
-      lastSent = false
-      return stop('draft', BRIEF_FORMAT_CONTRACT_REASON, `${g0.why} (runner 0 · 전송 0건)`,
-        { contractViolations: g0.contractViolations })
-    }
-    if (!g0.ok) {
-      failClosed = true
-      lastSent = null
-      return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 읽지 못해 HOLD 여부를 모른다 — 보내지 않는다 (runner 0): ${g0.why}`)
-    }
-    if (g0.hold) {
-      held = true
-      lastSent = g0.hold.delivery?.sent ?? null
-      return stop('draft', 'DELIVERY_UNCERTAIN_HOLD', `[DELIVERY_UNCERTAIN] ${g0.hold.why} (runner 0 · 전송 0건)`)
-    }
-    const resultPath = join(deps.fetchResultDir ?? PACKET_DIR, `fetch-result-${slug}-${process.pid}-${Date.now()}.json`)
-    const r = runStep(WEBUI, ['--fetch', slug, '--result-json', resultPath])
-    const structured = readFetchResults(resultPath)
-    const row = structured.ok ? fetchResultFor(structured.body, slug) : null
-    removeFetchResults(resultPath)
-    if (!(r.code === 0 && row?.status === 'ok')) {
-      if (!row) {
-        lastSent = null
-        return stop('draft', 'FETCH_RESULT_MISSING',
-          `[DELIVERY_UNCERTAIN] 회수 결과를 읽지 못했다 (${structured.why ?? '행 없음'}) — 보냈는지 모른다 · 다시 보내지 않는다`)
-      }
-      const kind = classifyFailure({
-        code: row.reason, stage: row.stage,
-        message: [row.errorName, row.errorDetail].filter(Boolean).join(' · '),
-        sent: row.sent,
-      }).kind
-      lastSent = row.sent
-      // 🔴 앞단 확인과 자식 사이에 다른 회차가 예약했으면 자식이 HOLD 로 멈춘다 — 같은 HOLD 다
-      if (row.reason === 'DELIVERY_UNCERTAIN_HOLD') held = true
-      const tag = kind !== 'CONTENT' ? `[${kind}] ` : ''
-      return stop('draft', 'FETCH_FAILED', `${tag}회수 실패 — ${describeFetchFailure(row)}`)
-    }
-    add('draft', 'ok', 'draft.md 회수')
-  }
-  /**
-   * 🔴 draft.md 는 **회수 뒤** 찍는다. 이번 회차가 받은 첫 원고는 전송 비용을 치른 자산이다 —
-   *    뒤에서 막혀도 지우지 않는다. 되돌리는 것은 **재생성이 바꾼 내용**이다.
-   */
-  if (write) own.push(...fileSnapshot([p.draftMd], { keepIfCreated: true }))
 
   /**
    * 🔴 **QA 실패는 끝이 아니라 재생성 신호다** (M3-A).
@@ -781,7 +777,7 @@ export function drive(slug, opts, deps = {}) {
     return st.prior.ok ? fetchResultFor(st.prior.body, slug) : null
   }
 
-  const regenOnce = (stage, failures, actual = []) => {
+  const regenOnce = (stage, failures, actual = [], { source = null } = {}) => {
     if (!write) return { ok: false, code: 'DRY_RUN', why: 'dry-run — 재생성하지 않는다' }
     const firstFetch = firstFetchOf()
     const alreadySent = firstFetch
@@ -809,7 +805,7 @@ export function drive(slug, opts, deps = {}) {
     const before = draftFingerprint ?? fpOfFile(p.draftMd)
     const after = draftFingerprint ?? fpOfFile(candidate)
     try {
-      const rr = regen({ slug, profile: laneProfile, failures,
+      const rr = regen({ slug, profile: laneProfile, failures, ...(source ? { source } : {}),
         runner: (ctx) => regenRunner({ ...ctx, draftOut: candidate }),
         previousFingerprint: before(), fingerprintOf: after,
         ...(quarantinePath ? { quarantinePath } : {}),
@@ -853,6 +849,143 @@ export function drive(slug, opts, deps = {}) {
       rmSync(candidate, { force: true })
     }
   }
+
+  // ── ② draft.md 회수 ───────────────────────────────────────
+  // 🔴 원고 존재 판정도 주입점이다 — 시험이 "원고 없음" 후보로 실제 회수 경로를 태우기 위한 자리 (운영은 실제 판정)
+  if ((deps.progress ?? progress)(slug).hasDraftMd) {
+    add('draft', 'skip', 'draft.md 가 이미 있다 — 덮어쓰지 않는다')
+  } else if (!write) {
+    add('draft', 'skip', 'dry-run — 회수하지 않는다 (draft.md 없음)')
+  } else {
+    /**
+     * 🔴 **사람용 출력을 파싱하지 않는다 — 자식이 적은 구조화 결과가 정본이다** (2026-09-28 운영 실측).
+     *    앞판은 stdout 한 줄("⏸ HOLD — 이미 보낸 글이다")을 사유로 넘겼다. 그 문장에 전송불명 표식이 없어
+     *    분류기가 CONTENT 로 추정했고, 원고 잘못이 아닌 4건이 attempts +1 · 7일 격리에 걸렸다.
+     *    이제 `--result-json` 의 행(`reason`·`sent`·`stage`)으로 분류한다. 파일이 없거나 깨졌으면
+     *    **보냈는지 모른다** — CONTENT 로 추정하지 않고 전송불명으로 멈춘다(재전송 0).
+     */
+    /**
+     * 🔴 **보낼 수 없는 글이면 runner 를 띄우지 않는다** (앞단 확인 · 2026-09-29).
+     *    판정은 전송 경계와 **같은 함수**(`deliveryGate`)다 — 같은 brief → 같은 지문일 때만 HOLD 다.
+     *    brief 가 바뀌어 지문이 달라지면 새 작업으로 연다. 정본 판정은 여전히 자식의 send 직전 예약이다.
+     */
+    const g0 = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
+    /**
+     * 🔴 **brief 형식 계약 위반은 장부 문제가 아니다** (2026-10-08). 이 글만 막고 회차는 이어 간다.
+     *    runner 0 · probe·Chrome 0 · 전송 0 — 보내지 않았으므로 `sent=false` 다.
+     */
+    if (!g0.ok && g0.code === BRIEF_FORMAT_CONTRACT_REASON) {
+      repairRequired = true
+      lastSent = false
+      return stop('draft', BRIEF_FORMAT_CONTRACT_REASON, `${g0.why} (runner 0 · 전송 0건)`,
+        { contractViolations: g0.contractViolations })
+    }
+    if (!g0.ok) {
+      failClosed = true
+      lastSent = null
+      return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 읽지 못해 HOLD 여부를 모른다 — 보내지 않는다 (runner 0): ${g0.why}`)
+    }
+    if (g0.hold) {
+      held = true
+      lastSent = g0.hold.delivery?.sent ?? null
+      return stop('draft', 'DELIVERY_UNCERTAIN_HOLD', `[DELIVERY_UNCERTAIN] ${g0.hold.why} (runner 0 · 전송 0건)`)
+    }
+    /**
+     * 🔴 **식별된 최초 invalid 응답을 받은 그 일반 요청은 다시 보내지 않는다** (2026-10-11 gray-hair · Codex A).
+     *    앞 회차(또는 00:10 producer)가 같은 지문의 요청으로 응답을 특정했고 원고 관문에서 탈락했다면,
+     *    같은 brief 를 또 보내지 않고 정확한 위반으로 교정 재생성(bounded regenOnce)에 들어간다.
+     */
+    /**
+     * 🔴 **옛 판 장부의 최초 invalid 사실 대조** (2026-10-11 gray-hair · 재검토) — 신원·위반이 장부에 없던 판이다.
+     *    사유 문장 · sent=true · 예약 없음 · 원고 없음이 모두 맞을 때만 정제한 위반을 지금 지문에 묶어 한 번 남긴다.
+     *    맞지 않으면 아무것도 바꾸지 않는다 (아래 일반 경로 그대로).
+     */
+    let entryNow = g0.entry
+    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {
+      const lr = reconcileLegacyInvalid({ draftsDir: deps.draftsDir ?? dirname(dirname(p.draftMd)), slug, messageFingerprint: g0.messageFingerprint, ...(quarantinePath ? { path: quarantinePath } : {}) })
+      if (lr.status === 'RECORDED') {
+        add('lineage', 'ok', `옛 장부의 최초 invalid 응답 대조 (${lr.migrationId}) → 위반 ${lr.violations.length}건 기록 (일반 요청 재전송 0)`)
+        lineageReconcile = { ...(lineageReconcile ?? {}), legacyInvalid: 'RECORDED', legacyInvalidMigration: lr.migrationId }
+        const again = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
+        if (!again.ok) { failClosed = true; return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 다시 읽지 못했다 — 보내지 않는다: ${again.why}`) }
+        entryNow = again.entry
+      } else if (!lr.ok) {
+        failClosed = true
+        lastSent = null
+        return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 옛 장부 대조 중 장부를 읽지 못했다 — 보내지 않는다 (runner 0): ${lr.why}`)
+      }
+    }
+    const priorInvalid = firstResponseInvalidFor(entryNow, g0.messageFingerprint)
+    // 🔴 장부 기록의 위반은 이미 정제된 `{code, why}` 다 — 코드명을 why 로 지어내지 않는다 (재검토 4)
+    let correctFrom = priorInvalid ? { ...priorInvalid, sent: true, source: 'ledger' } : null
+    if (!correctFrom) {
+      const resultPath = join(deps.fetchResultDir ?? PACKET_DIR, `fetch-result-${slug}-${process.pid}-${Date.now()}.json`)
+      const r = runStep(WEBUI, ['--fetch', slug, '--result-json', resultPath])
+      const structured = readFetchResults(resultPath)
+      const row = structured.ok ? fetchResultFor(structured.body, slug) : null
+      // 🔴 증거를 구조화 결과로 옮긴 **뒤에만** 지운다
+      if (row) firstResponse = firstResponseEvidence(row)
+      removeFetchResults(resultPath)
+      if (!(r.code === 0 && row?.status === 'ok')) {
+        if (!row) {
+          lastSent = null
+          return stop('draft', 'FETCH_RESULT_MISSING',
+            `[DELIVERY_UNCERTAIN] 회수 결과를 읽지 못했다 (${structured.why ?? '행 없음'}) — 보냈는지 모른다 · 다시 보내지 않는다`)
+        }
+        lastSent = row.sent
+        if (correctableFirstResponse(row)) {
+          correctFrom = { ...row, source: 'fetch' }
+        } else {
+          const kind = classifyFailure({
+            code: row.reason, stage: row.stage,
+            message: [row.errorName, row.errorDetail].filter(Boolean).join(' · '),
+            sent: row.sent,
+          }).kind
+          // 🔴 앞단 확인과 자식 사이에 다른 회차가 예약했으면 자식이 HOLD 로 멈춘다 — 같은 HOLD 다
+          if (row.reason === 'DELIVERY_UNCERTAIN_HOLD') held = true
+          /**
+           * 🔴 관문에서 탈락했는데 응답 신원(대화·메시지·sha)이 모자라면 교정하지 않는다 — fail-closed.
+           *    자식은 이 경우 전송 예약을 풀지 않는다(DELIVERY_UNCERTAIN 유지) → 다음 회차도 재전송 0.
+           */
+          const unidentified = row.stage === 'validate' && (row.reason === 'invalid_manuscript' || row.reason === 'markers_missing')
+          const tag = unidentified ? '[DELIVERY_UNCERTAIN] ' : kind !== 'CONTENT' ? `[${kind}] ` : ''
+          return stop('draft', unidentified ? 'FIRST_RESPONSE_UNIDENTIFIED' : 'FETCH_FAILED',
+            `${tag}회수 실패 — ${describeFetchFailure(row)}${unidentified ? ' · 응답 신원·정산·위반 문장이 모자라 교정·재전송 0' : ''}`)
+        }
+      }
+    }
+    if (correctFrom) {
+      /**
+       * 🔴 **교정 계보** — 식별된 최초 invalid 응답에서 시작한다 (같은 응답 sha 로는 두 번 열지 않는다).
+       *    일반 요청 재전송 0 · 재생성 패킷은 실제 위반 그대로 · 후보는 임시 경로 → 원고 관문 → 변환 → 원자 교체.
+       */
+      if (!firstResponse) firstResponse = firstResponseEvidence(correctFrom)
+      const lineage = openRegenLineage({ slug, origin: 'INVALID_FIRST_RESPONSE', evidence: { sha256: invalidEvidenceSha(correctFrom) },
+        ...(quarantinePath ? { path: quarantinePath } : {}) })
+      if (!lineage.ok) {
+        failClosed = true
+        return stop('draft', 'LEDGER_UNREADABLE', `[INFRA] 교정 계보를 열지 못했다 — 보내지 않는다: ${lineage.why}`)
+      }
+      const failures = firstResponseRegenFailures(correctFrom)
+      const rr = regenOnce('draft', failures, failures.map((f) => f.label), { source: 'FIRST_RESPONSE' })
+      if (!rr.ok) {
+        if (rr.code === 'REGEN_DELIVERY_HOLD') held = true
+        if (rr.code === 'LEDGER_UNREADABLE') failClosed = true
+        const kindTag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
+        return stop('draft', 'FIRST_RESPONSE_CORRECTION_FAILED',
+          `${kindTag}최초 응답 형식 실패 교정 — ${rr.code}: ${rr.why} · 최초 위반: ${failures.map((f) => f.label).join(' / ').slice(0, 300)}`)
+      }
+      add('draft', 'ok', `최초 응답 형식 실패(${correctFrom.reason}) → 교정 재생성으로 원고 확보 · 일반 요청 재전송 0`)
+    } else {
+      add('draft', 'ok', 'draft.md 회수')
+    }
+  }
+  /**
+   * 🔴 draft.md 는 **회수 뒤** 찍는다. 이번 회차가 받은 첫 원고는 전송 비용을 치른 자산이다 —
+   *    뒤에서 막혀도 지우지 않는다. 되돌리는 것은 **재생성이 바꾼 내용**이다.
+   */
+  if (write) own.push(...fileSnapshot([p.draftMd], { keepIfCreated: true }))
+
 
   // ── ③ article-draft.ts ────────────────────────────────────
   if (!existsSync(p.draftMd)) {
@@ -920,8 +1053,13 @@ export function drive(slug, opts, deps = {}) {
     while (r.code !== 0) {
       lastQaFailures = qaFailLines(r.stdout || r.stderr)
       // 🔴 패킷 내용은 바꾸지 않는다 — 전송 지문이 바뀌면 기존 HOLD 가 풀려 같은 요청이 다시 나간다
+      /**
+       * 🔴 발행 길이(hard) 위반은 실제 길이와 기준을 **따로 한 줄** 싣는다 (2026-10-11 autumn).
+       *    첫 줄(QA_FAIL)은 그대로 둔다 — 그 문장이 기존 재생성 HOLD 지문의 일부다. 길이 위반이 없으면 패킷은 앞판과 같다.
+       */
+      const bodyRows = lastQaFailures.filter((x) => /^BODY_TOO_(LONG|SHORT):/.test(x)).map((x) => ({ code: 'BODY_LENGTH', label: x }))
       const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL',
-        sentence: (r.stdout || r.stderr).trim().split('\n').slice(-3).join(' ') }], lastQaFailures)
+        sentence: (r.stdout || r.stderr).trim().split('\n').slice(-3).join(' ') }, ...bodyRows], lastQaFailures)
       /**
        * 🔴 **종류를 최종 사유에 싣는다.** 장부는 이 문장을 읽어 종류를 파생한다
        *    (`entryKind`). 여기서 떨어뜨리면 인프라·전송불명 실패가 **내용 실패로 기록되어**
@@ -985,7 +1123,7 @@ export function drive(slug, opts, deps = {}) {
     let row = runBatch()
     if (!row) return stop('batch', 'BATCH_QA_UNREADABLE', 'batch-qa 결과를 읽지 못했다')
     /** 🔴 원고 문장이 문제면 재생성한다. 재료(hero·큐)가 문제면 재생성해도 같다 */
-    const CONTENT_CODES = /^(MED_|FIN_|SEN_|AGE_WORDING|BRAND_LEAK|DUPLICATE_SENTENCE|UNSUPPORTED_NUMERIC_CLAIM)/
+    const CONTENT_CODES = BATCH_REGEN_CODES
     while (row.verdict !== 'READY_TO_SCHEDULE') {
       const content = (row.blockedBy ?? []).filter((b) => CONTENT_CODES.test(b.code))
       if (!content.length) break
@@ -1037,7 +1175,8 @@ export function drive(slug, opts, deps = {}) {
 
   // 🔴 등록까지 갔으면 재생성 기록을 지운다 — 옛 실패를 다음 회차가 이어받지 않는다
   if (write) { try { clearRegen(slug, quarantinePath) } catch { /* 장부 문제로 성공을 되돌리지 않는다 */ } }
-  return { slug, verdict: write ? 'DONE' : 'DRY_RUN_OK', steps, blockedBy, write, dryRun: !write, item, regenCalls }
+  // 🔴 성공에도 최초 응답 증거·재생성 기록을 남긴다 — 교정으로 회복한 글이 무엇을 거쳤는지 회차 결과로 안다
+  return { slug, verdict: write ? 'DONE' : 'DRY_RUN_OK', steps, blockedBy, write, dryRun: !write, item, regenCalls, ...evidence() }
 }
 
 // ── CLI ────────────────────────────────────────────────────

@@ -107,7 +107,8 @@ for (const [why, t] of [
   check(`🔴 persona-autogen 안에 예상 밖 항목(${why}) → unclassified`, v.kind === 'unclassified' && v.reason.includes('예상 밖'), v.kind)
 }
 const HELD = basename(queueLockFile('ignored', {}))
-const TEST_HELD = basename(queueLockFile('ignored', { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-abc' }))
+// 🔴 시험 scope 잠금은 임시 폴더에만 있을 수 있다 (2026-10-11 queue-locks 격리) — 이름만 본다 · 파일 접근 0
+const TEST_HELD = basename(queueLockFile('ignored', { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-abc', SORAN_MAGAZINE_QUEUE_LOCK_DIR: join(tmpdir(), 'host-migrate-check-locks') }))
 check('🔴 queue-locks — 실행 중 잠금(운영 scope)·reclaim·시험 scope 잠금 → exclude 그대로',
   classifyCanonEntryIn('queue-locks', tree('dir', file(HELD), file(`${HELD}.reclaim`), file(TEST_HELD))).kind === 'exclude', HELD)
 check('queue-locks — 비어 있으면 exclude', classifyCanonEntryIn('queue-locks', tree('dir')).kind === 'exclude')

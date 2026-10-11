@@ -46,6 +46,7 @@
  * 종료 코드: BLOCKED 가 하나라도 있으면 1
  */
 import { judgeForbidden } from './lib/magazine-forbidden.mjs'
+import { measureBody, publishText } from './lib/magazine-body-length.mjs'
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join, isAbsolute, basename } from 'node:path'
 import { runInNewContext } from 'node:vm'
@@ -61,8 +62,7 @@ import { runProfileQA } from './lib/magazine-profile-qa.mjs'
  * 하한을 실측 최소에 붙이면 정상 글이 걸린다. 800 은 "명백히 잘렸다"만 잡는 자리다.
  * (magazine-qa 의 1200~2500 은 WARN 이고 그대로 둔다. 여기 것은 BLOCKED 다)
  */
-const AUTO_BODY_MIN = 800
-const AUTO_BODY_MAX = 3000
+// 🔴 800~3000 은 lib/magazine-body-length.mjs 의 HARD_BODY 다 — QA 도 같은 계산으로 FAIL 한다 (2026-10-11)
 
 /** 한국어 비율 — 실측 89.2~95.0%. 60% 면 29%p 여유이고 영어 답변(5~10%)과는 확실히 갈린다 */
 const AUTO_KO_RATIO_MIN = 0.6
@@ -113,17 +113,8 @@ function loadReview(dir) {
 }
 
 /** 본문 블록을 한 덩어리 텍스트로. 대조는 여기에 한다. */
-function bodyText(article) {
-  const out = []
-  for (const b of article.body ?? []) {
-    if (typeof b.text === 'string') out.push(b.text)
-    if (Array.isArray(b.items)) out.push(...b.items)
-    if (typeof b.label === 'string') out.push(b.label)
-  }
-  if (typeof article.title === 'string') out.push(article.title)
-  if (typeof article.description === 'string') out.push(article.description)
-  return out.join('\n')
-}
+/** 발행 텍스트 — 정본은 lib/magazine-body-length.mjs (QA 의 길이 판정과 같은 텍스트) */
+const bodyText = publishText
 
 // ── 판정 ───────────────────────────────────────────────────
 
@@ -262,11 +253,8 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
 
   if (strictAuto) {
     // ⑦ 길이 — 목차만 왔거나 중간에 잘린 응답
-    if (text.length < AUTO_BODY_MIN) {
-      block('BODY_TOO_SHORT', `본문 ${text.length}자 — ${AUTO_BODY_MIN}자 미만이면 잘린 응답으로 본다`)
-    } else if (text.length > AUTO_BODY_MAX) {
-      block('BODY_TOO_LONG', `본문 ${text.length}자 — ${AUTO_BODY_MAX}자를 넘었다`)
-    }
+    const body = measureBody(article)
+    if (!body.hard.ok) block(body.hard.code, body.hard.message)
 
     // ⑧ 거절문이 그대로 원고가 된 경우
     for (const r of refusalHits) block('REFUSAL_TEXT', `거절문/정형구가 원고에 있다: "${r}"`)

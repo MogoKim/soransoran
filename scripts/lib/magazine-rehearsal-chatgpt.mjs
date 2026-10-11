@@ -29,7 +29,7 @@ const log = (e) => appendFileSync(join(FIX, 'calls.jsonl'), `${JSON.stringify({ 
 
 function kindOf(text) {
   if (text.startsWith('[입력 수리 요청]')) return 'repair'
-  if (/재생성|다시 써|고쳐 써|QA_FAIL|이전 원고/.test(text)) return 'regen'
+  if (/재생성|다시 써|고쳐 써|QA_FAIL|이전 원고|\[교정 요청\]|현재 원고/.test(text)) return 'regen'
   return 'initial'
 }
 
@@ -40,6 +40,8 @@ function itemOf(text) {
     ?? queue.find((q) => text.includes(q.slug)) ?? null
 }
 
+/** 마지막 응답의 모드 — page 가 대화 주소를 줄지 정한다 (no-identity) */
+let lastMode = null
 function replyFor(text) {
   const item = itemOf(text)
   const kind = kindOf(text)
@@ -56,7 +58,8 @@ function replyFor(text) {
   const mode = plan[calls[key] - 1] ?? 'good'
   // 🔴 재생성 요청은 보낸 글자를 남긴다 — 실패 패킷에 실제 QA 사유가 실렸는지 rehearsal 이 본다
   log({ slug: item.slug, kind, call: calls[key], mode, ...(kind === 'regen' ? { typed: text } : {}) })
-  return C.manuscriptFor({ repo: REPO, draftsDir: L.DRAFTS_DIR, slug: item.slug, item, mode, medicalRequired: MEDICAL_REQUIRED })
+  lastMode = mode
+  return C.manuscriptFor({ repo: REPO, draftsDir: L.DRAFTS_DIR, slug: item.slug, item, mode: mode === 'no-identity' ? 'no-frontmatter' : mode, medicalRequired: MEDICAL_REQUIRED })
 }
 
 function makePage() {
@@ -69,7 +72,8 @@ function makePage() {
     async click() {
       sent = true
       reply = replyFor(typed)
-      url = `https://chatgpt.com/c/rehearsal-${Date.now().toString(36)}`
+      // 🔴 no-identity — 응답은 오지만 어느 대화인지 특정할 수 없다 (신원 부족 반례)
+      url = lastMode === 'no-identity' ? '' : `https://chatgpt.com/c/rehearsal-${Date.now().toString(36)}`
     },
   }
   return {

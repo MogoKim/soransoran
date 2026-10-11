@@ -26,6 +26,20 @@ import { drive } from './magazine-auto-register.mjs'
 import { gate } from './lib/magazine-auto-lane.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
 import { spawnSync as nodeSpawnSync } from 'node:child_process'
+import { operationalQueueLockDirs, queueLockDir, setQueueLockDirForTest } from './lib/magazine-queue-lock.mjs'
+
+/**
+ * 🔴 **이 검사는 운영 큐 writer 잠금을 쥐지 않는다** (2026-10-11 실측 · Codex 재검토).
+ *    앞판은 시험 모드 없이 `applyWrite` · `drive` 원복을 불러 **운영 scope 잠금 파일**
+ *    (`~/Library/Application Support/soransoran/queue-locks/soransoran-magazine-topic-queue-v1.queue.lock`)을
+ *    실제로 만들고 지웠다. 그 순간 운영 G8·등록이 돌면 시험이 운영 큐를 막는다.
+ *    이제 같은 프로세스 안의 시험 전용 주입(`setQueueLockDirForTest`)으로 임시 잠금 폴더를 쓴다.
+ *    운영 모드 자식·함수를 함께 시험하므로 TEST_MODE 는 켜지 않고, 운영 모드 env 주입(거부된다)에도 기대지 않는다.
+ *    큐 잠금은 전부 이 프로세스 안에서 일어난다 (2026-10-11 계측: 35건 모두 m3a 프로세스).
+ */
+const M3A_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-check-locks-'))
+setQueueLockDirForTest(M3A_LOCK_DIR)
+process.on('exit', () => { try { fs.rmSync(M3A_LOCK_DIR, { recursive: true, force: true }) } catch { /* 임시 폴더 */ } })
 
 /**
  * 🔴 **시험 brief 도 실제 brief 의 형식 계약을 지닌다** (2026-10-08 · `judgeBriefFormatContract`).
@@ -6041,6 +6055,9 @@ console.log('\n㊻ 재생성은 현재 원고를 고친다 · 옛 HOLD 호환 ·
   }
 }
 
+// 🔴 운영 queue-locks 접근 0 — 이 검사의 모든 큐 잠금 경로는 임시 폴더였다 (가드는 파일 접근 전에 거부한다)
+check('🔴 큐 writer 잠금 폴더 = 시험 임시 폴더 (운영 queue-locks 아님)',
+  queueLockDir() === M3A_LOCK_DIR && !operationalQueueLockDirs().includes(queueLockDir()), queueLockDir())
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)
 if (fail) for (const f of fails) console.log(`  🔴 ${f}`)
 process.exit(fail === 0 ? 0 : 1)

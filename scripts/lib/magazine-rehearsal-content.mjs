@@ -71,7 +71,11 @@ export function ctaOf(briefText) {
  * 가짜 ChatGPT 원고 — brief 뼈대와 짝인 합격 원고(avoiding-gatherings) + 이 글의 제목·클러스터·의료 여부·반드시 넣을 문장·CTA.
  *    medical 은 실제 QA 정본(`MEDICAL_REQUIRED`)으로 정한다 — fixture 가 규칙을 따로 갖지 않는다.
  * @param {{repo:string, draftsDir:string, slug:string, item:object, mode?:'good'|'too-short'|'brief-echo'|'qa-fail', medicalRequired?:Set<string>}} p
- *   qa-fail  형식 관문은 통과하지만 실제 QA 가 결정적으로 막는 원고 — medical: true 인데 진료 권고 문장이 없다
+ *   qa-fail        형식 관문은 통과하지만 실제 QA 가 결정적으로 막는 원고 — medical: true 인데 진료 권고 문장이 없다
+ *   no-frontmatter 첫 줄에 머리말이 붙어 frontmatter 로 시작하지 않는 원고 (2026-10-11 gray-hair 모양)
+ *   too-long       형식·QA 다른 규칙은 통과하지만 발행 길이 3000자를 넘는 원고 (2026-10-11 autumn 모양)
+ *   short-description 형식·관문은 통과하지만 description 57자로 QA FAIL (2026-10-11 cold-weather 모양)
+ *   no-identity    정상 원고 — 다만 가짜 ChatGPT 가 대화 주소를 주지 않는다 (응답 신원 부족)
  */
 export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medicalRequired = new Set() }) {
   const briefPath = join(draftsDir, slug, 'brief.md')
@@ -95,5 +99,17 @@ export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medi
   if (missing.length) body += `\n\n## 기억해 둘 문장\n\n${missing.map((x) => `> ${x}`).join('\n\n')}`
   const description = `${title} — 우리 또래가 비슷한 순간에 겪는 마음과 지금 해 볼 수 있는 작은 일을 차분히 정리해 봅니다. 서두르지 않고 한 걸음씩 살펴봅니다.`
   const head = ['---', `title: ${title}`, `description: ${description}`, `cluster: ${cluster}`, `medical: ${medical}`, '---', ''].join('\n')
-  return `${head}\n${body}\n\n[CTA] ${cta.href} | ${cta.label} | 비슷한 순간이 있었다면 편하게 이야기를 남겨 주세요.\n`
+  const full = `${head}\n${body}\n\n[CTA] ${cta.href} | ${cta.label} | 비슷한 순간이 있었다면 편하게 이야기를 남겨 주세요.\n`
+  if (mode === 'no-frontmatter') return `요청하신 원고를 아래에 정리했습니다.\n\n${full}`
+  if (mode === 'short-description') {
+    // 형식·관문은 통과하지만 QA 가 description 길이(60~160자)로 FAIL — 2026-10-11 cold-weather 의 실제 사유 모양
+    const d57 = `${title} — 우리 또래 이야기`.padEnd(57, ' 이야기').slice(0, 57)
+    return full.replace(/^description: .*$/m, `description: ${d57}`)
+  }
+  if (mode === 'too-long') {
+    // 뼈대 본문 문단을 한 번 더 이어 붙여 발행 길이(공백·줄바꿈 포함 3000자)를 넘긴다 — 다른 규칙은 그대로
+    const extra = body.split('\n').filter((l) => l && !l.startsWith('#') && !l.startsWith('>') && !l.startsWith('-')).join('\n\n')
+    return `${head}\n${body}\n\n## 조금 더 이야기해 보면\n\n${extra}\n\n[CTA] ${cta.href} | ${cta.label} | 비슷한 순간이 있었다면 편하게 이야기를 남겨 주세요.\n`
+  }
+  return full
 }

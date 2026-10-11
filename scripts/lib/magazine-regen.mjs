@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, updateQuarantine,
+  MAX_REGEN_CALLS, MAX_REGEN_TOTAL, QUARANTINE_PATH, readQuarantine, updateQuarantine, exhaustRegenLineage,
   regenBudget, DELIVERY_HOLD_REASON, REGEN_EXHAUSTED_REASON, MANUSCRIPT_IN_PROGRESS_REASON, revertRegenAttempt,
 } from './magazine-quarantine.mjs'
 import { deliveryGate } from './magazine-delivery-gate.mjs'
@@ -48,13 +48,15 @@ export const packetsLeftFor = (slug, dir = PACKET_DIR) =>
  * 🔴 **기계가 읽는 실패 패킷.** 사람이 읽는 설명이 아니라
  *    "어느 코드가 어느 문장에서 터졌나" 를 그대로 담아 재생성 지시에 넣는다.
  */
-export function buildFailurePacket({ slug, profile, failures, attempt, attemptId = null }) {
+export function buildFailurePacket({ slug, profile, failures, attempt, attemptId = null, source = null }) {
   const rows = (failures ?? []).map((f) => ({
     code: f.code, label: f.label ?? f.message ?? '', sentence: String(f.sentence ?? '').slice(0, 160),
   }))
   return {
     schemaVersion: 'regen-packet/3',
     slug,
+    // 🔴 최초 응답 교정이면 'FIRST_RESPONSE' — 저장된 원고 없이 BRIEF 로 다시 쓰는 다른 문장의 요청이다
+    ...(source ? { source } : {}),
     // 🔴 이 시도의 표식 — 패킷 파일 이름과 자식이 올린 regenCalls 를 잇는다 (지시문에는 들어가지 않는다)
     attemptId,
     profile,
@@ -126,6 +128,8 @@ export function attemptRegeneration({
   previousFingerprint = null, fingerprintOf: fpOf = null, packetDir = PACKET_DIR,
   /** 🔴 전송 경계와 **같은 brief** 로 지문을 만들기 위한 폴더. 운영은 저장소 폴더 그대로다 */
   draftsDir = DRAFTS_DIR,
+  /** 🔴 'FIRST_RESPONSE' — 최초 응답 교정 (저장된 원고 없음 · 다른 문장의 요청) */
+  source = null,
 }) {
   const read = readQuarantine(quarantinePath)
   if (!read.ok) {
@@ -135,13 +139,15 @@ export function attemptRegeneration({
   const entry = read.store[slug]
   const budget = regenBudget({ entry })
   if (budget.exhausted) {
-    return { ok: false, code: 'REGEN_EXHAUSTED',
-      why: `🔴 재생성 ${budget.used}회를 이미 썼다 (상한 ${MAX_REGEN_CALLS}) — 이 글만 HOLD`,
+    return { ok: false, code: 'REGEN_EXHAUSTED', exhaustedBy: budget.exhaustedBy,
+      why: budget.exhaustedBy === 'TOTAL'
+        ? `🔴 등록 전 전체 재생성 ${budget.total}회를 이미 썼다 (상한 ${MAX_REGEN_TOTAL}) — 이 글만 HOLD`
+        : `🔴 재생성 ${budget.used}회를 이미 썼다 (상한 ${MAX_REGEN_CALLS}) — 이 글만 HOLD`,
       regenCalls: budget.used }
   }
 
   const attemptId = randomUUID()
-  const packet = buildFailurePacket({ slug, profile, failures, attempt: budget.used + 1, attemptId })
+  const packet = buildFailurePacket({ slug, profile, failures, attempt: budget.used + 1, attemptId, source })
   const hash = packetHashOf(packet)
 
   /**
@@ -275,7 +281,8 @@ export function attemptRegeneration({
     const after = fpOf()
     if (after && after === previousFingerprint) {
       // 🔴 들고 있던 사본으로 덮지 않는다 — 자식이 방금 적은 전송 기록이 사라진다
-      updateQuarantine((cur) => ({ ...cur, [slug]: { ...(cur[slug] ?? {}), regenCalls: MAX_REGEN_CALLS } }), quarantinePath)
+      // 🔴 이 **계보**만 닫는다 — 전체 횟수(regenCalls)를 2로 덮으면 이미 3회 쓴 글이 되살아난다
+      exhaustRegenLineage({ slug, path: quarantinePath })
       return { ok: false, code: 'REGEN_NO_CHANGE',
         why: '🔴 재생성했는데 원고가 그대로다 — 다시 보내도 같다. 이 글만 HOLD', regenCalls: MAX_REGEN_CALLS }
     }
@@ -294,7 +301,10 @@ export function attemptRegeneration({
 export function clearRegen(slug, quarantinePath = QUARANTINE_PATH) {
   const u = updateQuarantine((cur) => {
     const next = { ...cur }
-    if (next[slug]) { const { regenCalls, lastPacketHash, lastRegenAt, regenAttemptIds, ...rest } = next[slug]; next[slug] = rest }
+    if (next[slug]) {
+      const { regenCalls, lastPacketHash, lastRegenAt, regenAttemptIds, regenLineage, regenLineageKeys, firstResponseInvalid, ...rest } = next[slug]
+      next[slug] = rest
+    }
     return next
   }, quarantinePath)
   return u.ok ? { ok: true } : { ok: false, why: u.why }

@@ -29,6 +29,7 @@ import { verifyBrief } from './magazine-brief-policy.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { checkJournalIdentity, shaOrAbsent, writeAtomic } from './magazine-g8-promoter.mjs'
 import { reserveBriefRepair, settleBriefRepair } from './magazine-quarantine.mjs'
+import { completeAllPendingLineages, completePendingLineage, writeLineagePending } from './magazine-lineage-reconcile.mjs'
 
 export const MAX_REPAIRS_PER_RUN = 3
 export const REPAIR = { BRIEF: 'BRIEF_FORMAT_CONTRACT', DRAFT_ECHO: 'DRAFT_INVALID_BRIEF_ECHO' }
@@ -306,6 +307,12 @@ export async function runInputRepair({ draftsDir, queue, ledger, quarantinePath,
     return { ok: false, code: 'QUARANTINE_UNREADABLE', why: ledger?.why ?? '장부를 읽지 못했다', results: [], skipped: [], recovered }
   }
   if (!quarantinePath) throw new Error('quarantinePath 가 필요하다 — brief 수리 실행권은 운영 장부 잠금 안에서 예약한다')
+  /**
+   * 🔴 **앞 회차가 남긴 계보 영수증을 먼저 완성한다** (2026-10-11 재검토 3) — provider·ChatGPT 호출 0.
+   *    draft 교체 뒤 계보 기록 전에 죽었거나 장부 쓰기가 실패한 경우다. 완성하지 못한 영수증은 결과의 실패로 남는다.
+   */
+  const lineagePending = completeAllPendingLineages({ draftsDir, path: quarantinePath })
+  for (const r of lineagePending) log(`  ↺ ${r.slug} — 계보 영수증 ${r.status}${r.why ? ` (${r.why})` : ''}`)
   const scan = scanRepairTargets({ queue, draftsDir, store: ledger.store })
   // 🔴 처리하지 못한 journal 이 남은 slug 는 이번 회차에 손대지 않는다 — 사람이 본다
   const blocked = new Set(recovered.filter((r) => !r.recovered).map((r) => r.slug))
@@ -321,13 +328,13 @@ export async function runInputRepair({ draftsDir, queue, ledger, quarantinePath,
     try {
       results.push(t.type === REPAIR.BRIEF
         ? await repairBrief({ t, base, draftsDir, deps, quarantinePath })
-        : await repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir }))
+        : await repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir, quarantinePath }))
     } catch (e) {
       // 🔴 한 후보의 예외는 다른 후보를 막지 않는다 — 원본은 교체 전이거나 journal 이 지킨다
       results.push({ ...base, outcome: 'FAILED', reason: `예외: ${e?.message ?? e}` })
     }
   }
-  return { ok: true, results, skipped: [...skipped, ...deferred], recovered, limit: max }
+  return { ok: true, results, skipped: [...skipped, ...deferred], recovered, lineagePending, limit: max }
 }
 
 /**
@@ -375,7 +382,7 @@ async function repairBrief({ t, base, draftsDir, deps, quarantinePath }) {
   }
 }
 
-async function repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir }) {
+async function repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir, quarantinePath }) {
   const g = deps.repairGate({ slug: t.slug })
   const out = { ...base, repairFingerprint: g?.gate?.messageFingerprint ?? null }
   if (!g?.gate?.ok) return { ...out, outcome: 'FAILED', reason: `수리 관문을 판정하지 못했다 — ${g?.gate?.why ?? '사유 없음'} (전송 0)` }
@@ -408,7 +415,30 @@ async function repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir }) {
       return { ...out, outcome: 'REJECTED', reason: '수리 응답이 원고 계약을 통과하지 못했다 — 원본 draft 그대로',
         candidateViolations: [...v.reasons.map((r) => `${r.code}: ${r.why}`), ...(c?.ok ? [] : [`CONVERT: ${c?.why ?? '변환 실패'}`])] }
     }
-    commitFiles({ draftsDir, slug: t.slug, kind: 'DRAFT', files: { draft: text }, phaseHook: deps.phaseHook })
+    /**
+     * 🔴 **입력 수리 원고의 원자 교체 성공은 신뢰된 새 원고 사건이다** (2026-10-11 cold · autumn · Codex C).
+     *    새 재생성 계보(INPUT_REPAIR)를 연다 — 옛 원고에 쓴 재생성은 전체(regenCalls)로만 남는다.
+     * 🔴 **교체와 계보 기록 사이를 영수증이 잇는다** (재검토 3). 교체 **전에** 영수증(교체 전/후 sha)을 남기고,
+     *    장부에 계보가 적힌 뒤에만 지운다. 그 사이에 죽거나 장부 쓰기가 실패해도 다음 회차가 provider 재호출 없이 완성한다.
+     *    🔴 계보를 적지 못했으면 APPLIED 가 아니다 — LINEAGE_PENDING (producer 판정 PARTIAL).
+     */
+    const draftPath = join(draftsDir, t.slug, 'draft.md')
+    writeLineagePending({ draftsDir, slug: t.slug, beforeSha: existsSync(draftPath) ? sha(readFileSync(draftPath, 'utf8')) : 'absent',
+      afterSha: sha(text), repairFingerprint: out.repairFingerprint })
+    try {
+      commitFiles({ draftsDir, slug: t.slug, kind: 'DRAFT', files: { draft: text }, phaseHook: deps.phaseHook })
+    } catch (e) {
+      // 교체 전에 실패했다 — 원본 그대로면 영수증을 거둔다 (DISCARDED). 원본이 아니면 영수증이 남아 다음 회차가 본다
+      completePendingLineage({ draftsDir, slug: t.slug, path: quarantinePath })
+      throw e
+    }
+    deps.phaseHook?.('draft-committed')
+    const lineage = completePendingLineage({ draftsDir, slug: t.slug, path: quarantinePath })
+    out.regenLineage = lineage.status
+    if (!lineage.ok || !['OPENED', 'SAME_EVIDENCE'].includes(lineage.status)) {
+      return { ...out, outcome: 'LINEAGE_PENDING', candidateApplied: true,
+        reason: `draft.md 는 교체됐지만 재생성 계보를 적지 못했다 (${lineage.status}${lineage.why ? ` — ${lineage.why}` : ''}) — 영수증을 남긴다 · 다음 회차가 provider 호출 없이 완성한다` }
+    }
     return { ...out, outcome: 'APPLIED', candidateApplied: true, reason: 'draft.md 원자 교체 — QA·hero·등록은 01:00 auto-register 가 기존 경로로' }
   } finally {
     rmSync(candidate, { force: true })
