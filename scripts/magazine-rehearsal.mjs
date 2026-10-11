@@ -598,7 +598,7 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       if (!item) throw new Error(`큐에 ${slug} 가 없다`)
       await curate({ repo, keep: [slug] })
       const fx = (n) => readFileSync(join(repo, 'scripts', 'fixtures', 'magazine-format-contract', `gray-hair-leave-as-is.repaired-2026-10-11.${n}`), 'utf8')
-      writeSlugFiles({ repo, slug, files: { 'brief.md': fx('brief.md'), 'review.ts': fx('review.ts') } })
+      writeSlugFiles({ repo, slug, files: { 'brief.md': fx('brief.md'), 'review.ts': fx('review.ts.txt') } })
       placeHero({ repo, slug })
       return { target: slug }
     },
