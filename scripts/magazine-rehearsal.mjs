@@ -2,7 +2,7 @@
 /**
  * 🔴 **매거진 M-AUTO rehearsal — 실제 엔트리포인트 전체를 격리된 임시 사본에서 같은 날 반복 실행한다** (2026-10-10).
  *
- *   npm run magazine:rehearsal                          시나리오 S1~S7 + S1 반복성
+ *   npm run magazine:rehearsal                          시나리오 S1~S10 · S8B + S1 반복성
  *   node scripts/magazine-rehearsal.mjs --scenario S1,S4 고른 시나리오만
  *   node scripts/magazine-rehearsal.mjs --date 2026-10-11 --keep --out <report.json>
  *
@@ -232,6 +232,7 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
           out[p.gray] === 'APPLIED' && out[p.cold] === 'APPLIED' && out[p.autumn] === 'FAILED' && /invalid_manuscript/.test((ctx.repairResult?.results ?? []).find((r) => r.slug === p.autumn)?.reason ?? ''), ctx.repairResult?.results?.map((r) => `${r.slug}:${r.outcome}:${String(r.reason).slice(0, 40)}`)),
         exp('S2 provider 실행권 — gray Claude 호출 1~2회(정책 상한) · 실행권 기록 1', ev.claude.filter((c) => c.slug === p.gray).length >= 1 && ev.claude.filter((c) => c.slug === p.gray).length <= 2 && (led[p.gray]?.briefRepairs ?? []).length === 1, { claude: ev.claude, briefRepairs: led[p.gray]?.briefRepairs }),
         exp('S2 수리 전송 — cold·autumn 각 1회 (같은 지문 최대 1) · attempts·regenCalls 불변', ev.sends.bySlug[`${p.cold}:repair`] === 1 && ev.sends.bySlug[`${p.autumn}:repair`] === 1 && led[p.cold]?.inputRepairCalls === 1 && led[p.autumn]?.inputRepairCalls === 1 && !led[p.autumn]?.regenCalls && !(led[p.autumn]?.attempts > 0), ev.sends.bySlug),
+        exp('S2 입력 수리 원자 교체 성공이 새 재생성 계보(INPUT_REPAIR)를 열었다 · 전체 regenCalls 보존', led[p.cold]?.regenLineage?.origin === 'INPUT_REPAIR' && led[p.cold].regenLineage.calls === 0 && !led[p.autumn]?.regenLineage?.origin?.startsWith('INPUT'), { cold: led[p.cold]?.regenLineage, autumn: led[p.autumn]?.regenLineage }),
         exp('S2 수리 실패가 있어도 다른 회수 후보(normal)는 최초 전송까지 간다', ev.sends.bySlug[`${p.normal}:initial`] === 1, ev.sends.bySlug),
         exp('S2 producer 종료 3 · handoff PARTIAL · 실패 = autumn FAILED 하나', stageOk(ctx.stages, 'producer', 3) && ctx.handoff?.verdict === 'PARTIAL' && ctx.handoff?.code === 3 && fails.length === 1 && fails[0].slug === p.autumn && fails[0].outcome === 'FAILED', { exit: ctx.stages[0]?.exit, handoff: ctx.handoff }),
         exp('S2 구조화 알림 1건 — slug · 결과 코드 · 결과 파일 (handoff 와 같은 파일)', ev.slack.filter((m) => m.text.includes('입력 수리 미해결')).length === 1 && slack.text.includes(p.autumn) && slack.text.includes('FAILED') && slack.text.includes(String(ctx.handoff?.repair?.resultFile ?? '@@')), slack?.text),
@@ -388,6 +389,130 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
         exp('S7 장부 — 등록 성공 뒤 그 글의 격리 행이 지워졌다 (재생성 표식 잔여 0)', led === null, led),
         exp('S7 등록 = 재생성 원고 (medical 아님) · PR 1 MERGED · merge 1 · 배포 1', ev.registered.length === 1 && ev.registered[0].slug === t && ev.registered[0].medical !== true &&
           ev.prs.length === 1 && ev.prs[0].state === 'MERGED' && ev.mergeCalls.length === 1 && ev.mergeCalls[0].args.includes('--match-head-commit') && ev.deployments.length === 1, { registered: ev.registered, prs: ev.prs }),
+      ]
+    },
+  },
+
+  S8: {
+    title: '최초 응답 형식 실패 → 교정 재생성 — 입력 수리로 고친 brief · 01:00 일반 요청 1회가 frontmatter 없는 응답 → 같은 요청 재전송 0 · 교정 1 → 등록·PR·병합·배포 (2026-10-11 gray-hair 모양)',
+    async prepare(repo, date) {
+      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      await curate({ repo, keep: [t.slug] })
+      const pr = await templatePair({ repo, item: t, broken: true })
+      writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
+      placeHero({ repo, slug: t.slug })
+      return { target: t.slug }
+    },
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['no-frontmatter'] } }),
+    async run(ctx) {
+      await normalDay(ctx)
+      ctx.stages.push(runStage(ctx.sb, { name: 'rerun-register', entry: 'register', kst: KST(ctx.date, '03:30') }))
+    },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const reg = logOf(ctx, 'register')
+      const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
+      const fr = row?.firstResponse ?? null
+      const typed = ev.regenTyped.find((r) => r.slug === t)?.typed ?? ''
+      return [
+        exp('S8 입력 수리가 brief 를 고쳤고 producer 는 이 글을 보내지 않았다', ev.claude.some((c) => c.slug === t) && !reg.includes('입력 수리 필요'), ev.claude),
+        exp('S8 일반 요청 1회 · 교정 재생성 1회 · 일반 요청 재전송 0 (재실행 포함)', ev.sends.bySlug[`${t}:initial`] === 1 && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 1, ev.sends.bySlug),
+        exp('S8 교정 요청에 실제 최초 위반(frontmatter 없음)이 실렸다', typed.includes('FIRST_RESPONSE_INVALID') && /frontmatter|---/.test(typed), typed.split('\n').filter((l) => /FIRST_RESPONSE|frontmatter/.test(l)).slice(0, 3)),
+        exp('S8 최초 응답 증거가 회차 결과에 남는다 — reason·stage·sent·invalid·responseForm·대화·메시지·sha256·길이', fr && fr.reason === 'invalid_manuscript' && fr.stage === 'validate' && fr.sent === true && fr.invalid?.length > 0 &&
+          fr.responseForm && /^https:\/\/chatgpt\.com\/c\//.test(fr.conversationUrl ?? '') && fr.assistantMessageId && /^[0-9a-f]{64}$/.test(fr.responseSha256 ?? '') && fr.length > 0, fr),
+        exp('S8 원문 전체는 남지 않는다 — 앞부분은 정제된 200자 이하 · 모든 문자열 칸이 응답보다 짧다 · 장부에 앞부분 없음',
+          fr && typeof fr.responseExcerpt === 'string' && fr.responseExcerpt.length <= 200 && fr.length > fr.responseExcerpt.length &&
+          JSON.stringify(fr).length < fr.length && !JSON.stringify(ev.ledger ?? {}).includes(fr.responseExcerpt.slice(0, 40)), { excerpt: fr?.responseExcerpt?.length, length: fr?.length, json: JSON.stringify(fr ?? {}).length }),
+        exp('S8 로그 — 최초 응답 형식 실패 → 교정 재생성으로 원고 확보', reg.includes('교정 재생성으로 원고 확보 · 일반 요청 재전송 0'), reg.split('\n').filter((l) => /draft|교정/.test(l)).slice(0, 3)),
+        exp('S8 등록 1 · PR 1 MERGED · merge 1 · 배포 1', ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs.length === 1 && ev.prs[0].state === 'MERGED' && ev.mergeCalls.length === 1 && ev.deployments.length === 1, { registered: ev.registered, prs: ev.prs }),
+        exp('S8 장부 — 등록 성공 뒤 행이 지워졌다 (교정 계보·최초 응답 기록 잔여 0)', !ev.ledger?.[t], ev.ledger?.[t] ?? null),
+      ]
+    },
+  },
+
+  S8B: {
+    title: '신원 없는 최초 invalid 응답 → fail-closed — 대화 주소를 특정할 수 없는 응답은 교정·재전송 0 · 같은 날 재실행도 HOLD',
+    async prepare(repo, date) {
+      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      await curate({ repo, keep: [t.slug] })
+      const pr = await templatePair({ repo, item: t, broken: true })
+      writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
+      placeHero({ repo, slug: t.slug })
+      return { target: t.slug }
+    },
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['no-identity'] } }),
+    async run(ctx) {
+      await normalDay(ctx)
+      ctx.stages.push(runStage(ctx.sb, { name: 'rerun-register', entry: 'register', kst: KST(ctx.date, '03:30') }))
+    },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const reg = logOf(ctx, 'register')
+      const rerun = logOf(ctx, 'rerun-register')
+      const led = ev.ledger?.[t] ?? null
+      return [
+        exp('S8B 일반 요청 1회 뒤 교정 0 · 재전송 0 (재실행 포함)', ev.sends.bySlug[`${t}:initial`] === 1 && !ev.sends.bySlug[`${t}:regen`] && ev.sends.initial === 1 && ev.sends.regen === 0, ev.sends.bySlug),
+        exp('S8B FIRST_RESPONSE_UNIDENTIFIED — 신원 부족으로 교정·재전송 0', reg.includes('FIRST_RESPONSE_UNIDENTIFIED') || reg.includes('응답 신원이 모자라'), reg.split('\n').filter((l) => /draft|신원/.test(l)).slice(0, 3)),
+        exp('S8B 전송 예약이 풀리지 않았다 (DELIVERY_UNCERTAIN HOLD) · 최초 응답 기록 없음', led?.delivery?.kind === 'DELIVERY_UNCERTAIN' && !led?.firstResponseInvalid, led),
+        exp('S8B 같은 날 재실행은 HOLD — runner 0', /DELIVERY_UNCERTAIN|HOLD/.test(rerun), rerun.split('\n').filter((l) => l.includes(t)).slice(0, 2)),
+        exp('S8B 등록·PR·병합 0', ev.registered.length === 0 && ev.prs.length === 0 && ev.mergeCalls.length === 0, { prs: ev.prs }),
+      ]
+    },
+  },
+
+  S10: {
+    title: '00:10 producer 회수가 받은 invalid 응답 → 01:00 같은 일반 요청 재전송 0 · 장부의 최초 응답 기록으로 교정 1 → 등록',
+    async prepare(repo, date) {
+      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      await curate({ repo, keep: [t.slug] })
+      placeHero({ repo, slug: t.slug })
+      return { target: t.slug }
+    },
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['no-frontmatter'] } }),
+    async run(ctx) {
+      ctx.stages.push(runStage(ctx.sb, { name: 'producer', entry: 'producer', kst: KST(ctx.date, '00:10') }))
+      ctx.afterProducerLedger = readJson(ledgerPath(ctx.sb))?.[ctx.prepared.target] ?? null
+      ctx.stages.push(runStage(ctx.sb, { name: 'register', entry: 'register', kst: KST(ctx.date, '01:00') }))
+      ctx.applyResult = readJson(runFile(ctx.sb, ctx.date, /^auto-merge\.json$/)[0] ?? '')
+      ctx.registerResult = readJson(runFile(ctx.sb, ctx.date, /^auto-register\.json$/)[0] ?? '')
+    },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const fri = ctx.afterProducerLedger?.firstResponseInvalid ?? null
+      const reg = logOf(ctx, 'register')
+      return [
+        exp('S10 producer 가 응답을 특정했고 장부에 최초 응답 기록(지문·대화·메시지·sha · 앞부분 없음)을 남겼다', fri && /^sha256:/.test(fri.messageFingerprint ?? '') && fri.conversationUrl && fri.assistantMessageId && /^[0-9a-f]{64}$/.test(fri.responseSha256 ?? '') && !('responseExcerpt' in fri), fri),
+        exp('S10 01:00 일반 요청 재전송 0 · 교정 1 (하루 일반 요청 1회)', ev.sends.bySlug[`${t}:initial`] === 1 && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 1, ev.sends.bySlug),
+        exp('S10 등록 · PR MERGED · 배포', reg.includes('교정 재생성으로 원고 확보') && ev.registered.length === 1 && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1, { registered: ev.registered }),
+      ]
+    },
+  },
+
+  S9: {
+    title: '과장 원고 → hero 전에 길이 실패 → 재생성 — 3000자 넘는 최초 원고가 QA 에서 BODY_TOO_LONG · hero 0 · 실제 길이를 실은 재생성 → 3000자 이하 등록·배포 (2026-10-11 autumn 모양)',
+    async prepare(repo, date) {
+      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      await curate({ repo, keep: [t.slug] })
+      return { target: t.slug }
+    },
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['too-long'] } }),
+    async run(ctx) { await normalDay(ctx) },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const reg = logOf(ctx, 'register')
+      const typed = ev.regenTyped.find((r) => r.slug === t)?.typed ?? ''
+      const calls = readFileSync(join(ctx.sb.root, 'fixture', 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      const iRegen = calls.findIndex((c) => c.tool === 'chatgpt' && c.kind === 'regen' && c.slug === t)
+      const iHero = calls.findIndex((c) => c.op === 'hero-trace-generate' || c.op === 'hero-trace-reuse')
+      const m = /BODY_TOO_LONG: 본문 (\d+)자/.exec(typed)
+      const qaIdx = reg.indexOf('재생성 1/2')
+      const heroIdx = reg.indexOf('hero 생성')
+      return [
+        exp('S9 최초 원고 1 · 재생성 1 · 최초 요청 재전송 0', ev.sends.bySlug[`${t}:initial`] === 1 && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 1 && ev.sends.regen === 1, ev.sends.bySlug),
+        exp('S9 재생성 요청에 실제 길이와 기준이 실렸다 (BODY_TOO_LONG · 3000 초과 · 800~3000)', Boolean(m) && Number(m[1]) > 3000 && typed.includes('800~3000'), typed.split('\n').filter((l) => /BODY_TOO/.test(l)).slice(0, 2)),
+        exp('S9 길이 실패는 hero 전에 막혔다 — 재생성 뒤에 hero (호출 순서 · 로그 순서)', iRegen !== -1 && iHero !== -1 && iRegen < iHero && qaIdx !== -1 && heroIdx !== -1 && qaIdx < heroIdx, { iRegen, iHero, qaIdx, heroIdx }),
+        exp('S9 hero 는 한 번만 (생성 1 · 재사용 0)', ev.hero.generate === 1 && ev.hero.reuse === 0, ev.hero),
+        exp('S9 batch 통과 · 등록 1 · PR 1 MERGED · 배포 1', reg.includes('READY') && ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs.length === 1 && ev.prs[0].state === 'MERGED' && ev.deployments.length === 1, { registered: ev.registered }),
       ]
     },
   },

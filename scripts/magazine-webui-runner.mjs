@@ -43,7 +43,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 /** RFC 4122 형태의 UUID (버전·변형 자리까지 본다) */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -63,7 +63,7 @@ import {
   readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
   recordDelivery, QUARANTINE_PATH, DELIVERY_HOLD_REASON,
   reserveDelivery, releaseDeliveryReservation, regenBudget, REGEN_EXHAUSTED_REASON,
-  acquireManuscriptLease, MANUSCRIPT_IN_PROGRESS_REASON,
+  acquireManuscriptLease, MANUSCRIPT_IN_PROGRESS_REASON, openRegenLineage, recordFirstResponseInvalid,
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
@@ -700,6 +700,24 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
       if (settlesDeliveryReservation(r)) {
         // 🔴 **내 예약일 때만** 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다
         releaseDeliveryReservation({ slug, reservationId, path: quarantinePath })
+        /**
+         * 🔴 **일반 최초 요청**의 결말을 장부에 남긴다 (2026-10-11 gray-hair · Codex A·C).
+         *    ① 원고를 받았다 → 신뢰된 새 원고 사건 — 재생성 계보(FIRST_FETCH)를 연다
+         *    ② 응답을 특정했는데 원고 관문에서 탈락했다 → 같은 일반 요청을 다시 보내지 않도록 증거를 적는다
+         *       (원문·앞부분은 싣지 않는다 — sha256·길이·위반 코드·대화·메시지만)
+         *    재생성·입력 수리 요청은 여기서 계보를 열지 않는다 — 재생성 결과물은 새 계보가 아니다.
+         */
+        if (!regenPacket && !inputRepair) {
+          if (r.ok) {
+            const saved = readFileSync(draftPath)
+            openRegenLineage({ slug, origin: 'FIRST_FETCH', evidence: { sha256: createHash('sha256').update(saved).digest('hex') }, path: quarantinePath })
+          } else {
+            recordFirstResponseInvalid({ slug, path: quarantinePath, evidence: {
+              messageFingerprint: r.messageFingerprint ?? null, conversationUrl: r.conversationUrl, assistantMessageId: r.assistantMessageId,
+              responseSha256: r.responseSha256 ?? null, length: r.length ?? null, reason: r.reason,
+              invalidCodes: (r.invalid ?? []).map((x) => x.code ?? String(x)).slice(0, 12) } })
+          }
+        }
       } else if (!r.preRecorded && !reserved) {
         const kind = classifyFailure({
           code: r.reason, stage: r.stage,
@@ -747,6 +765,10 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     conversationUrl: r.conversationUrl ?? null,
     assistantMessageId: r.assistantMessageId ?? null,
     responseForm: r.responseForm ?? null,
+    // 🔴 관문 탈락 응답의 증거 — sha256 · 길이 · 정제한 앞부분(최대 200자). 원문 전체는 없다 (2026-10-11)
+    length: r.length ?? null,
+    responseSha256: r.responseSha256 ?? null,
+    responseExcerpt: r.responseExcerpt ?? null,
   }
 }
 /** 저장된 원고를 기계 검사만 한다. 내용을 출력하지 않는다 */

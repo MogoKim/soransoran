@@ -31,6 +31,8 @@ const F = {
   webp: path.join(HERE, 'lib', 'magazine-hero-webp.mjs'),
   register: path.join(HERE, 'magazine-auto-register.mjs'),
   regen: path.join(HERE, 'lib', 'magazine-regen.mjs'),
+  qa: path.join(HERE, 'magazine-qa.mjs'),
+  repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -60,8 +62,9 @@ const MUTATIONS = [
     find: '    SORAN_REHEARSAL_CLOCK: `${clock.fakeMs}:${clock.realMs}:${clock.speed}`,\n', replace: '' }] },
   // ── hero 신규 생성 (2026-10-10 · 선택지 B) ──
   { name: '⑬ S1 에 placeHero 사전 복사를 되살림 (재사용 우회)', scenarios: 'S1', edits: [{ file: F.orch,
-    find: '      await curate({ repo, keep: [t.slug] })\n      return { target: t.slug }\n',
-    replace: '      await curate({ repo, keep: [t.slug] })\n      placeHero({ repo, slug: t.slug })\n      return { target: t.slug }\n' }] },
+    // S9 prepare 도 같은 세 줄이다 — S1 의 scenario 줄까지 묶어 S1 하나만 고른다
+    find: '      await curate({ repo, keep: [t.slug] })\n      return { target: t.slug }\n    },\n    scenario: { ci: {}, deploy: {} },\n',
+    replace: '      await curate({ repo, keep: [t.slug] })\n      placeHero({ repo, slug: t.slug })\n      return { target: t.slug }\n    },\n    scenario: { ci: {}, deploy: {} },\n' }] },
   { name: '⑭ 신규 이미지 생성 호출 생략 (기존 hero 를 생성 결과로)', scenarios: 'S1', edits: [{ file: F.hero,
     find: '  const gen = await generate(prompt)\n',
     replace: "  const gen = { ok: true, buffer: readFileSync(new URL('../public/magazine/avoiding-gatherings/hero.webp', import.meta.url)) }\n" }] },
@@ -77,6 +80,17 @@ const MUTATIONS = [
   { name: '⑱ 실패 패킷에서 실제 QA 사유 제거', scenarios: 'S7', edits: [{ file: F.regen,
     find: "    code: f.code, label: f.label ?? f.message ?? '', sentence: String(f.sentence ?? '').slice(0, 160),",
     replace: "    code: f.code, label: f.label ?? f.message ?? '', sentence: ''," }] },
+  // ── 2026-10-11 자연 회차 결함 (A·B·C) ──
+  { name: '⑲ 최초 응답 교정 경로 제거 (gray — 형식 실패에서 멈춤)', scenarios: 'S8', edits: [{ file: F.register,
+    find: "          correctFrom = { ...row, source: 'fetch' }", replace: "          correctFrom = null" }] },
+  { name: '⑳ 장부의 최초 응답 기록 무시 (같은 일반 요청 재전송)', scenarios: 'S10', edits: [{ file: F.register,
+    find: '    const priorInvalid = firstResponseInvalidFor(g0.entry, g0.messageFingerprint)', replace: '    const priorInvalid = null' }] },
+  { name: '㉑ QA 의 발행 길이 FAIL 제거 (autumn — hero 뒤 batch 에서 막힘)', scenarios: 'S9', edits: [{ file: F.qa,
+    find: '  if (!body.hard.ok) report.fail(', replace: '  if (false) report.fail(' }] },
+  { name: '㉒ 입력 수리 교체가 새 계보를 열지 않음 (cold — 옛 예산을 이어받음)', scenarios: 'S2', edits: [{ file: F.repair,
+    find: "    const lineage = openRegenLineage({ slug: t.slug, origin: 'INPUT_REPAIR'", replace: "    const lineage = { ok: true, opened: false, reason: 'MUTATED' } || openRegenLineage({ slug: t.slug, origin: 'INPUT_REPAIR'" }] },
+  { name: '㉓ 신원 없는 응답도 교정 (fail-closed 제거)', scenarios: 'S8B', edits: [{ file: F.register,
+    find: '    && Boolean(row?.conversationUrl && row?.assistantMessageId)\n', replace: '' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -92,7 +106,7 @@ const summary = (out) => (out.match(/리허설 검사 \d+\/\d+/g) ?? [null]).pop
 let bad = 0
 let caught = 0
 console.log('\n매거진 rehearsal 변이 시험\n')
-const base = spawnSync(process.execPath, [CHECK, '--scenario', 'S1,S3,S4,S5,S6,S7'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+const base = spawnSync(process.execPath, [CHECK, '--scenario', 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
 /** 🔴 변이 시험이 만든 rehearsal 산출물(임시 루트·보고서)은 남기지 않는다 */
 const cleanup = (stdout) => {
   for (const m of stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {

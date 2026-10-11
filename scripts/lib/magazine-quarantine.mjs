@@ -369,27 +369,116 @@ export function saveQuarantine(store, path = QUARANTINE_PATH) {
  */
 export const MAX_REGEN_CALLS = MAX_ATTEMPTS
 
-/** 이 slug 를 이번 회차에 몇 번 더 재생성할 수 있나 */
-export function regenBudget({ entry, maxCalls = MAX_REGEN_CALLS }) {
+/**
+ * 🔴 **재생성 예산은 원고 계보 단위다** (2026-10-11 자연 회차 · Codex).
+ *
+ *    앞판은 slug 의 평생 누적 `regenCalls` 하나만 봤다. 10/02 옛 원고에 쓴 1회가 10/10 입력 수리로 새로 받은
+ *    원고의 몫을 깎아, 새 원고는 재생성 1회 만에 REGEN_EXHAUSTED 가 됐다 (cold-weather · autumn-low-mood).
+ *
+ *    이제 둘을 함께 본다.
+ *      계보(`regenLineage.calls`)  — 신뢰된 새 원고 사건이 연 원고 줄기 하나의 재생성. 최대 `MAX_REGEN_CALLS`(2)
+ *      전체(`regenCalls`)          — 등록 전까지 모든 계보의 합. 최대 `MAX_REGEN_TOTAL`(= MAX_ATTEMPTS × MAX_REGEN_CALLS = 4)
+ *    🔴 새 계보는 **신뢰된 사건만** 연다 — 정상 최초 회수 성공 · 입력 수리 원자 교체 성공 · 식별된 최초 invalid 응답의 교정.
+ *       재생성 결과물 · 손으로 고친 draft · 파일 지문 변화는 계보를 열지 않는다. 같은 증거로는 두 번 열지 않는다.
+ *    🔴 `regenCalls` 는 지우지 않는다(전체로 남는다) · attempts 도 건드리지 않는다 · 등록 성공 때만 `clearRegen` 이 지운다.
+ *    🔴 옛 행(계보 없음)은 지금까지의 `regenCalls` 전부를 한 계보(LEGACY)의 몫으로 본다 — 결정적이고 보수적이다.
+ *       첫 장부 변경에서 그 값이 그대로 `regenLineage` 로 굳는다 (한 번만 이관).
+ */
+export const MAX_REGEN_TOTAL = MAX_ATTEMPTS * MAX_REGEN_CALLS
+export const REGEN_LINEAGE_ORIGINS = Object.freeze(['FIRST_FETCH', 'INPUT_REPAIR', 'INVALID_FIRST_RESPONSE'])
+
+/** 지금 계보 — 없으면 옛 행 이관값(LEGACY: 지금까지 쓴 횟수 전부) */
+export function regenLineageOf(entry) {
+  const l = entry?.regenLineage
+  if (l && typeof l === 'object' && Number.isFinite(l.calls)) return l
   const used = Number.isFinite(entry?.regenCalls) ? entry.regenCalls : 0
-  return { used, left: Math.max(0, maxCalls - used), exhausted: used >= maxCalls }
+  return { id: 'legacy', origin: 'LEGACY', evidenceKey: null, calls: used,
+    attemptIds: Array.isArray(entry?.regenAttemptIds) ? [...entry.regenAttemptIds] : [], legacy: true }
 }
 
+/** 이 slug 를 지금 계보에서 몇 번 더 재생성할 수 있나 — 계보 2회 · 전체 4회 중 먼저 닿는 쪽 */
+export function regenBudget({ entry, maxCalls = MAX_REGEN_CALLS, maxTotal = MAX_REGEN_TOTAL }) {
+  const lineage = regenLineageOf(entry)
+  const total = Number.isFinite(entry?.regenCalls) ? entry.regenCalls : 0
+  const used = lineage.calls
+  const left = Math.max(0, Math.min(maxCalls - used, maxTotal - total))
+  const exhaustedBy = total >= maxTotal ? 'TOTAL' : used >= maxCalls ? 'LINEAGE' : null
+  return { used, total, left, exhausted: exhaustedBy !== null, exhaustedBy, lineage: { id: lineage.id, origin: lineage.origin } }
+}
+
+/** 옛 행을 계보가 있는 행으로 굳힌다 (값을 바꾸지 않는다 — 지금 보이는 예산 그대로) */
+const withLineage = (prev) => (prev?.regenLineage && Number.isFinite(prev.regenLineage.calls)
+  ? prev : { ...prev, regenLineage: (({ legacy, ...l }) => l)(regenLineageOf(prev)) })
+
 /**
- * 재생성 호출 1회를 기록한 새 entry.
+ * 재생성 호출 1회를 기록한 새 entry — 전체와 지금 계보를 함께 올린다.
  * 🔴 `attemptId` 는 "이 횟수를 누가 올렸나" 의 표식이다 — 되돌릴 때 **자기 몫만** 되돌리기 위해 쓴다.
  */
 export function recordRegenCall({ entry, now, packetHash = null, attemptId = null }) {
-  const prev = entry && typeof entry === 'object' ? entry : {}
+  const prev = withLineage(entry && typeof entry === 'object' ? entry : {})
   const ids = Array.isArray(prev.regenAttemptIds) ? prev.regenAttemptIds : []
+  const l = prev.regenLineage
   return {
     ...prev,
     attempts: Number.isFinite(prev.attempts) ? prev.attempts : 0,
     regenCalls: (Number.isFinite(prev.regenCalls) ? prev.regenCalls : 0) + 1,
+    regenLineage: { ...l, calls: l.calls + 1, attemptIds: attemptId ? [...(l.attemptIds ?? []), attemptId].slice(-MAX_REGEN_CALLS * 4) : (l.attemptIds ?? []) },
     lastRegenAt: now,
     lastPacketHash: packetHash,
     ...(attemptId ? { regenAttemptIds: [...ids, attemptId].slice(-MAX_REGEN_CALLS * 4) } : {}),
   }
+}
+
+/**
+ * 🔴 **신뢰된 새 원고 사건만 새 계보를 연다** — 장부 잠금 안에서.
+ *    `evidence.sha256` 은 그 사건의 원고·응답 지문이다. 같은 증거(origin + sha256)로 연 적이 있으면 **다시 열지 않는다**
+ *    (같은 사건을 재처리해 예산을 되살리는 길을 막는다). 전체 `regenCalls` · attempts 는 그대로다.
+ * @returns {{ok:boolean, opened:boolean, reason?:string, why?:string}}
+ */
+export function openRegenLineage({ slug, origin, evidence, now = Date.now(), path = QUARANTINE_PATH }) {
+  if (!REGEN_LINEAGE_ORIGINS.includes(origin)) return { ok: false, opened: false, why: `모르는 계보 사건: ${origin}` }
+  const sha = evidence?.sha256
+  if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) return { ok: false, opened: false, why: '계보 증거 sha256 이 없다' }
+  const key = `${origin}:${sha}`
+  let opened = false
+  let reason = null
+  const u = updateQuarantine((cur) => {
+    const prev = cur[slug] ?? {}
+    const seen = Array.isArray(prev.regenLineageKeys) ? prev.regenLineageKeys : []
+    if (prev.regenLineage?.evidenceKey === key || seen.includes(key)) { reason = 'SAME_EVIDENCE'; return cur }
+    opened = true
+    const base = withLineage(prev)
+    return { ...cur, [slug]: { ...base,
+      regenLineage: { id: randomUUID(), origin, evidenceKey: key, openedAt: now, calls: 0, attemptIds: [] },
+      regenLineageKeys: [...seen, key].slice(-16) } }
+  }, path)
+  if (!u?.ok) return { ok: false, opened: false, why: u?.why ?? '장부 갱신 실패' }
+  return { ok: true, opened, ...(reason ? { reason } : {}) }
+}
+
+/** 재생성했는데 원고가 그대로다 — 이 계보만 닫는다 (전체 횟수를 부풀리거나 줄이지 않는다) */
+export function exhaustRegenLineage({ slug, path = QUARANTINE_PATH }) {
+  return updateQuarantine((cur) => {
+    const prev = withLineage(cur[slug] ?? {})
+    return { ...cur, [slug]: { ...prev, regenLineage: { ...prev.regenLineage, calls: Math.max(prev.regenLineage.calls, MAX_REGEN_CALLS) } } }
+  }, path)
+}
+
+/**
+ * 🔴 **식별된 최초 invalid 응답** — 같은 일반 요청을 다시 보내지 않기 위한 장부 사실 (원고 본문·앞부분은 싣지 않는다).
+ *    전송 지문 · 대화 · 메시지 · 응답 sha256 · 길이 · 위반 코드만.
+ */
+export function recordFirstResponseInvalid({ slug, evidence, now = Date.now(), path = QUARANTINE_PATH }) {
+  const keep = (({ messageFingerprint, conversationUrl, assistantMessageId, responseSha256, length, invalidCodes, reason }) =>
+    ({ messageFingerprint, conversationUrl, assistantMessageId, responseSha256, length, invalidCodes, reason }))(evidence ?? {})
+  return updateQuarantine((cur) => ({ ...cur, [slug]: { ...(cur[slug] ?? {}), firstResponseInvalid: { ...keep, at: now } } }), path)
+}
+
+/** 지금 보낼 일반 요청이 이미 식별된 invalid 응답을 받은 그 요청인가 */
+export function firstResponseInvalidFor(entry, messageFingerprint) {
+  const f = entry?.firstResponseInvalid
+  return f && messageFingerprint && f.messageFingerprint === messageFingerprint
+    && f.conversationUrl && f.assistantMessageId && /^[0-9a-f]{64}$/.test(f.responseSha256 ?? '') ? f : null
 }
 
 /** 전송 경계가 재생성 예산 소진으로 멈췄다는 사유 코드 — 정본은 여기 하나다 */
@@ -554,6 +643,9 @@ export function revertRegenAttempt({ slug, attemptId, extra = {}, path = QUARANT
     const mine = Boolean(attemptId) && ids.includes(attemptId)
     if (!mine) return cur
     reverted = true
+    // 🔴 계보 몫도 **그 계보가 올린 경우에만** 되돌린다 (옛 계보의 시도면 지금 계보는 그대로)
+    const l = e.regenLineage
+    const inLineage = l && Array.isArray(l.attemptIds) && l.attemptIds.includes(attemptId)
     return {
       ...cur,
       [slug]: {
@@ -561,6 +653,7 @@ export function revertRegenAttempt({ slug, attemptId, extra = {}, path = QUARANT
         ...extra,
         regenCalls: Math.max(0, (Number.isFinite(e.regenCalls) ? e.regenCalls : 0) - 1),
         regenAttemptIds: ids.filter((x) => x !== attemptId),
+        ...(inLineage ? { regenLineage: { ...l, calls: Math.max(0, l.calls - 1), attemptIds: l.attemptIds.filter((x) => x !== attemptId) } } : {}),
       },
     }
   }, path)

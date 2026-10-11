@@ -89,9 +89,31 @@ export function regenerationPromptText(packet, currentDraft) {
  * 이 slug 에 **보내게 될 메시지** — 아직 보내지 않는다.
  * 대상 선택이 지문을 계산하려면 이것이 필요하다. brief 가 없으면 `null`.
  */
+/**
+ * 🔴 **최초 응답 교정 요청** (2026-10-11 gray-hair · Codex A).
+ *    일반 최초 요청에 응답이 왔지만 원고 관문에서 탈락했다 — 저장된 원고가 없으니 "현재 원고를 고쳐라" 를 쓸 수 없다.
+ *    같은 일반 요청을 다시 보내는 대신, **정확한 위반**과 함께 BRIEF 로 원고 전체를 다시 쓰게 한다.
+ *    일반 최초·QA 재생성·입력 수리 프롬프트와 다른 문장이다 (기존 지문·HOLD 불변).
+ */
+export const FIRST_RESPONSE_CORRECTION_PROMPT = [
+  '[교정 요청] 직전 응답은 자동 원고 관문에서 탈락해 저장되지 않았습니다.',
+  '아래 BRIEF 시작/끝 사이의 지시를 따라 최종 원고 전체를 처음부터 다시 출력하세요.',
+  '첫 줄은 반드시 --- 로 시작하는 frontmatter 이고, 그 앞에 설명·인사·머리말을 붙이지 않습니다.',
+  '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
+  'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+  '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
+]
+export function firstResponseCorrectionPromptText(packet) {
+  return [...FIRST_RESPONSE_CORRECTION_PROMPT, '', '--- 직전 응답이 걸린 항목 ---', packet.instruction].join('\n')
+}
+export const isFirstResponseCorrection = (packet) => packet?.source === 'FIRST_RESPONSE'
+
 export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
   const briefPath = join(draftsDir, slug, 'brief.md')
   if (!existsSync(briefPath)) return null
+  if (isFirstResponseCorrection(packet)) {
+    return buildManuscriptMessage({ promptText: firstResponseCorrectionPromptText(packet), briefText: readFileSync(briefPath, 'utf8') })
+  }
   const draftPath = join(draftsDir, slug, 'draft.md')
   if (packet && !existsSync(draftPath)) return null
   const currentDraft = packet ? readFileSync(draftPath, 'utf8') : null
@@ -187,7 +209,8 @@ export function inputRepairGate({ slug, draftsDir = DRAFTS_DIR, quarantinePath =
  */
 export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH }) {
   const draftPath = join(draftsDir, slug, 'draft.md')
-  if (packet && !existsSync(draftPath)) {
+  // 🔴 최초 응답 교정은 저장된 원고 없이 BRIEF 로 다시 쓰게 한다 — 그 밖의 재생성은 현재 원고가 반드시 있어야 한다
+  if (packet && !isFirstResponseCorrection(packet) && !existsSync(draftPath)) {
     return {
       ok: false,
       code: 'REGEN_SOURCE_DRAFT_MISSING',

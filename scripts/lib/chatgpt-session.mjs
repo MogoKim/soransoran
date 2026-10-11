@@ -28,7 +28,21 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readlinkSync, mkdirSync, chmodSync, writeFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { deliveryFingerprintOf } from './magazine-quarantine.mjs'
+
+/**
+ * 🔴 **관문에서 탈락한 응답의 증거** (2026-10-11 gray-hair) — 원문 전체를 남기지 않는다.
+ *    sha256 · 길이 · 정제한 앞부분 최대 200자(URL·메일·제어문자 제거, 공백 접기)만. 장부에는 앞부분도 싣지 않는다.
+ */
+export const RESPONSE_EXCERPT_MAX = 200
+export function responseEvidence(text) {
+  const t = String(text ?? '')
+  const excerpt = t.replace(/https?:\/\/\S+/g, '[URL]').replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '[MAIL]')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, RESPONSE_EXCERPT_MAX)
+  return { responseSha256: createHash('sha256').update(t).digest('hex'), length: t.length, responseExcerpt: excerpt }
+}
 import { readConversationDom, createResponseWatch, extractManuscript } from './chatgpt-response.mjs'
 
 /** 🔴 응답 관찰 — 간격 2초 · 연속 3번 같으면 안정 (전체 한도는 `timeoutMs` 그대로) */
@@ -1274,7 +1288,7 @@ export async function fetchManuscript({
      */
     const where = { conversationUrl: safeUrl(page), assistantMessageId: seen?.messageId ?? null, responseForm: seen?.via ?? 'unknown' }
     const g = checkManuscript(text, { requiredMarkers, validate })
-    if (!g.ok) return { ...g, stage: 'validate', length: text.length, sent, messageFingerprint, preRecorded, ...where }
+    if (!g.ok) return { ...g, stage: 'validate', ...responseEvidence(text), sent, messageFingerprint, preRecorded, ...where }
 
     // 🔴 여기서 처음이자 마지막으로 원고가 디스크에 닿는다. 문자열을 손대지 않는다
     writeFileSync(outPath, text)

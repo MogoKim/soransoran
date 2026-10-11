@@ -28,7 +28,7 @@ import { briefEchoHeadings, validateManuscript } from './magazine-manuscript-gua
 import { verifyBrief } from './magazine-brief-policy.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { checkJournalIdentity, shaOrAbsent, writeAtomic } from './magazine-g8-promoter.mjs'
-import { reserveBriefRepair, settleBriefRepair } from './magazine-quarantine.mjs'
+import { openRegenLineage, reserveBriefRepair, settleBriefRepair } from './magazine-quarantine.mjs'
 
 export const MAX_REPAIRS_PER_RUN = 3
 export const REPAIR = { BRIEF: 'BRIEF_FORMAT_CONTRACT', DRAFT_ECHO: 'DRAFT_INVALID_BRIEF_ECHO' }
@@ -321,7 +321,7 @@ export async function runInputRepair({ draftsDir, queue, ledger, quarantinePath,
     try {
       results.push(t.type === REPAIR.BRIEF
         ? await repairBrief({ t, base, draftsDir, deps, quarantinePath })
-        : await repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir }))
+        : await repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir, quarantinePath }))
     } catch (e) {
       // 🔴 한 후보의 예외는 다른 후보를 막지 않는다 — 원본은 교체 전이거나 journal 이 지킨다
       results.push({ ...base, outcome: 'FAILED', reason: `예외: ${e?.message ?? e}` })
@@ -375,7 +375,7 @@ async function repairBrief({ t, base, draftsDir, deps, quarantinePath }) {
   }
 }
 
-async function repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir }) {
+async function repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir, quarantinePath }) {
   const g = deps.repairGate({ slug: t.slug })
   const out = { ...base, repairFingerprint: g?.gate?.messageFingerprint ?? null }
   if (!g?.gate?.ok) return { ...out, outcome: 'FAILED', reason: `수리 관문을 판정하지 못했다 — ${g?.gate?.why ?? '사유 없음'} (전송 0)` }
@@ -409,6 +409,13 @@ async function repairDraftEcho({ t, base, draftsDir, deps, seen, tmpDir }) {
         candidateViolations: [...v.reasons.map((r) => `${r.code}: ${r.why}`), ...(c?.ok ? [] : [`CONVERT: ${c?.why ?? '변환 실패'}`])] }
     }
     commitFiles({ draftsDir, slug: t.slug, kind: 'DRAFT', files: { draft: text }, phaseHook: deps.phaseHook })
+    /**
+     * 🔴 **입력 수리 원고의 원자 교체 성공은 신뢰된 새 원고 사건이다** (2026-10-11 cold · autumn · Codex C).
+     *    새 재생성 계보를 연다 — 옛 원고에 쓴 재생성은 전체(regenCalls)로만 남는다. 같은 원고로는 두 번 열지 않는다.
+     *    계보를 못 열어도 교체는 이미 끝났다 — 결과에 남기고 예산은 보수적으로 옛 계보 그대로다.
+     */
+    const lineage = openRegenLineage({ slug: t.slug, origin: 'INPUT_REPAIR', evidence: { sha256: sha(text) }, path: quarantinePath })
+    out.regenLineage = lineage.ok ? (lineage.opened ? 'OPENED' : lineage.reason ?? 'UNCHANGED') : `FAILED: ${lineage.why}`
     return { ...out, outcome: 'APPLIED', candidateApplied: true, reason: 'draft.md 원자 교체 — QA·hero·등록은 01:00 auto-register 가 기존 경로로' }
   } finally {
     rmSync(candidate, { force: true })
