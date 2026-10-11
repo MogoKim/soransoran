@@ -30,7 +30,7 @@ import { PrismaClient } from '@prisma/client'
 
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
-import { leaseEntry, stillInKernelLease, type LeaseProof } from './lib/runner-lease.mjs'
+import { leaseEntry, type LeaseProof } from './lib/runner-lease.mjs'
 import { readCostSignals } from './lib/ops-signals.mjs'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -59,7 +59,7 @@ async function main(): Promise<number> {
     return 1
   }
   /**
-   * 🔴 **공통 진입 — 커널 lease 가 먼저다.** 바깥은 lockf 아래로 같은 스크립트를 다시 띄우기만 한다(DB · provider 0).
+   * 🔴 **공통 진입 — 커널 lease 가 먼저다.** 바깥은 wrapper(fd 9 커널 잠금 → exec)로 같은 스크립트를 다시 띄우기만 한다(DB · provider 0).
    *    안쪽은 커널 잠금 증명 뒤에만 DB 클라이언트를 만든다. 정기 · 복구 kickstart · (다음) 사건 · 수동이 같은 길이다.
    *    trigger 칸은 진단용이다 — 잠금 · 장부 · 상한은 회차 종류로 갈리지 않는다.
    */
@@ -84,7 +84,8 @@ async function main(): Promise<number> {
 }
 
 /** 🔴 한 회차 — lease 를 쥔 채로만 부른다. 0 정상 · 1 예외 · 2 발행 오류가 남았다 */
-async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: LeaseProof): Promise<number> {
+/** 🔴 `_proof` — 커널 잠금 fd 증명을 받은 쪽만 회차를 돈다(타입이 요구한다) */
+async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: LeaseProof): Promise<number> {
   try {
     const budget = commentLoopLimitsFromEnv(process.env)
     const missing = missingBudgetEnvNames(budget.limits)
@@ -110,8 +111,6 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: Lea
         const prompt = buildPromptFromInput(input, recentTexts, reference.byCode.get(input.personaCode),
           { requireReference: reference.byCode.size > 0 })
         if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
-        // 🔴 유료 호출 직전 — 커널 잠금 증명을 다시 본다(lockf 가 죽었으면 잠금이 풀렸다 · 부르지 않는다)
-        if (!stillInKernelLease(proof, process.env)) return { ok: false, text: null, errorCode: 'LEASE_LOST' }
         // 🔴 장부를 지나서만 부른다 — 계산 → 예약 → 요청 → 정산
         const res = await session.call({
           stage: 'commentGen',

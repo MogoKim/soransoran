@@ -12,7 +12,7 @@
  *
  *   npm run persona:comment-loop-check
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
@@ -30,7 +30,7 @@ import { MAX_OUTPUT_TOKENS } from './lib/persona-prompt'
 import {
   commentLoopLedgerDir, makeCanonGate, runCommentLoop, generationGateOf, COMMENT_LOOP_LOCK_FILE, type CommentGenerate,
 } from './lib/persona-comment-loop.mjs'
-import { requestFollowUp, lockfUsable, shouldRunFollowUp, MAX_FOLLOW_UPS, LOCKF_PATH, LEASE_INNER_ENV, FOLLOW_UP_FILE } from './lib/runner-lease.mjs'
+import { lockfUsable, shouldRunFollowUp, MAX_FOLLOW_UPS, LOCKF_PATH, LEASE_INNER_ENV, LEASE_FD_ENV, FOLLOW_UP_FILE } from './lib/runner-lease.mjs'
 import { spawn } from 'node:child_process'
 import type { TargetSource, GateContext } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
@@ -297,114 +297,186 @@ console.log('\n⑧ 🔴 공통 lease · 겹친 깨움 합치기 · 예산 선검
   const childEnv = (): NodeJS.ProcessEnv => {
     const e = { ...process.env }
     delete e[LEASE_INNER_ENV]
+    delete e[LEASE_FD_ENV]
     return e
   }
-  const run = (holdMs: number, o: { lockf?: string; env?: NodeJS.ProcessEnv } = {}) => spawn(process.execPath,
-    [...process.execArgv, HARNESS, LOCKD, LOG, String(holdMs), o.lockf ?? '-'], { env: o.env ?? childEnv(), stdio: 'ignore' })
-  const exitOf = (c: ReturnType<typeof run>): Promise<number | null> => new Promise((r) => c.on('exit', (code) => r(code)))
-  const lines = (): { kind: string; pid: number; ppid: number; pass: number; at: number }[] => (existsSync(LOG) ? readFileSync(LOG, 'utf-8') : '')
+  type Opt = { lockf?: string; env?: NodeJS.ProcessEnv; fd9?: number }
+  const run = (holdMs: number, o: Opt = {}) => spawn(process.execPath,
+    [...process.execArgv, HARNESS, LOCKD, LOG, String(holdMs), o.lockf ?? '-'], {
+      env: o.env ?? childEnv(),
+      stdio: o.fd9 === undefined ? 'ignore' : ['ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', o.fd9],
+    })
+  const exitOf = (c: ReturnType<typeof spawn>): Promise<number | null> => new Promise((r) => {
+    if (c.exitCode !== null) r(c.exitCode); else c.on('exit', (code) => r(code))
+  })
+  type Line = { kind: string; pid: number; ppid: number; pass: number; at: number }
+  const lines = (): Line[] => (existsSync(LOG) ? readFileSync(LOG, 'utf-8') : '')
     .split('\n').filter((l) => l !== '').map((l) => { const [kind, pid, ppid, pass, at] = l.split(' '); return { kind: kind!, pid: Number(pid), ppid: Number(ppid), pass: Number(pass), at: Number(at) } })
+  const starts = (): Line[] => lines().filter((l) => l.kind === 'start')
   const waitFor = async (pred: () => boolean, ms = 20_000): Promise<boolean> => {
     const until = Date.now() + ms
     while (Date.now() < until) { if (pred()) return true; await new Promise((r) => setTimeout(r, 50)) }
     return pred()
   }
-  /** 🔴 동시에 돈 본체 수의 최대 — start/end 구간 겹침으로 센다 */
+  /** 🔴 동시에 돈 본체 수의 최대 — start/end 구간 겹침으로 센다. 끝나지 않은 본체는 끝까지 열린 것으로 본다 */
   const maxConcurrent = (): number => {
     const ev = lines().map((l) => ({ at: l.at, d: l.kind === 'start' ? 1 : -1 })).sort((x, y) => x.at - y.at || x.d - y.d)
     let cur = 0; let max = 0
     for (const e of ev) { cur += e.d; max = Math.max(max, cur) }
     return max
   }
+  /** 🔴 테스트가 직접 받은 PID 만 죽인다 — 이름으로 찾지 않는다 */
+  const killOwn = (pid: number | undefined): boolean => {
+    if (pid === undefined || !Number.isInteger(pid) || pid <= 1) return false
+    try { process.kill(pid, 'SIGKILL'); return true } catch { return false }
+  }
+  const REAL = process.platform === 'darwin' && lockfUsable(LOCKF_PATH)
+  const skip = (name: string): void => console.log(`  ⏭️  SKIP(macOS + /usr/bin/lockf 전용 · PASS 로 세지 않는다) ${name}`)
+  const REAL_CASES = [
+    '옛 lockf 부모 구조의 겹침 재현(전)', 'holder 1 + contender 3 · follow-up 1 · 최대 동시 1', '상한 뒤 깨움은 남는다',
+    '바깥(부모) 강제 종료 뒤 contender — 겹침 0(후)', '별도 lockf 부모 없음', '본체 SIGKILL → 파일 삭제 없이 즉시 재획득',
+    '남은 잠금 파일 + 커널 holder 없음 → 획득', 'holder 가 도는 동안 같은 파일 fd 위조 → 거절', 'holder 가 도는 동안 다른 파일 fd 위조 → 거절',
+  ]
   try {
-    check('🔴 /usr/bin/lockf 가 있고 실행할 수 있다(이 기계)', lockfUsable(LOCKF_PATH))
-    // 반례 — holder 1 + contender 3
-    const holder = run(2_500)
-    const holderExit = exitOf(holder)
-    check('holder 가 본체에 들어갔다', await waitFor(() => lines().some((l) => l.kind === 'start')))
-    const contenders = [run(0), run(0), run(0)]
-    const cExits = await Promise.all(contenders.map(exitOf))
-    check('🔴 🔴 반례 holder 1 + 동시 contender 3 → contender 셋 다 본체에 들어가지 않고 0 으로 물러난다',
-      cExits.every((c) => c === 0) && lines().filter((l) => l.kind === 'start').length === 1, JSON.stringify(cExits))
-    check('🔴 🔴 반례 진 깨움 셋 → follow-up 표식 정확히 1개', readdirSync(LOCKD).filter((f) => f === FOLLOW_UP_FILE).length === 1)
-    // 🔴 pass 1(마지막 follow-up) 도중 또 진 깨움 — 상한이라 더 돌지 않고, 표식은 지우지 않고 다음 holder 몫으로 남긴다
-    await waitFor(() => lines().some((l) => l.kind === 'start' && l.pass === 1))
-    const late = await exitOf(run(0))
-    const hc = await holderExit
-    check('🔴 🔴 반례 상한 뒤 생긴 깨움 — 더 돌지 않고 표식은 남는다(다음 holder 가 받는다 · 지워서 버리지 않는다)',
-      late === 0 && existsSync(join(LOCKD, FOLLOW_UP_FILE)))
-    rmSync(join(LOCKD, FOLLOW_UP_FILE), { force: true })
-    const passes = lines().filter((l) => l.kind === 'start')
-    check('🔴 🔴 반례 follow-up 은 최대 1회 — holder 가 같은 프로세스로 pass 0 · 1 만 돌았다',
-      hc === 0 && passes.length === 2 && passes.every((p) => p.pid === passes[0]!.pid) && passes.map((p) => p.pass).join(',') === '0,1',
-      JSON.stringify(passes.map((p) => p.pass)))
-    check('🔴 🔴 본체 동시 실행 최대 1', maxConcurrent() === 1, String(maxConcurrent()))
-    check('잠금 파일은 남는다(-k) — 남은 파일은 잠금이 아니다(바로 아래 반례가 그것을 증명한다)', existsSync(LOCKP))
-    check('🔴 follow-up 상한 함수 — pass 0 뒤에만 한 번 · pass 1 뒤에는 표식이 있어도 더 돌지 않는다',
-      shouldRunFollowUp(0, 'TAKEN') && !shouldRunFollowUp(1, 'TAKEN') && !shouldRunFollowUp(0, 'NONE') && MAX_FOLLOW_UPS === 1)
-    // 반례 — 남은 잠금 파일 + 커널 holder 없음 → 바로 얻는다
-    writeFileSync(LOG, '')
-    const t0 = Date.now()
-    const again = await exitOf(run(0))
-    check('🔴 🔴 반례 잠금 파일만 남고 커널 holder 없음 → 바로 획득', again === 0 && lines().filter((l) => l.kind === 'start').length === 1 && Date.now() - t0 < 10_000)
-    // 반례 — holder 강제 종료(SIGKILL) → 사람 손 없이 즉시 재획득
-    writeFileSync(LOG, '')
-    const victim = run(60_000)
-    const victimExit = exitOf(victim)
-    await waitFor(() => lines().some((l) => l.kind === 'start'))
-    const body = lines().find((l) => l.kind === 'start')!
-    const busy = await exitOf(run(0))
-    check('🔴 반례 살아 있는 holder → 두 번째 실행은 획득 실패(본체 0)', busy === 0 && lines().filter((l) => l.kind === 'start').length === 1)
-    process.kill(body.pid, 'SIGKILL')
-    await victimExit
-    rmSync(join(LOCKD, FOLLOW_UP_FILE), { force: true })
-    writeFileSync(LOG, '')
-    const t1 = Date.now()
-    const re = await exitOf(run(0))
-    check('🔴 🔴 반례 holder SIGKILL → 파일을 지우지 않아도 다음 실행이 즉시 획득', re === 0 && lines().filter((l) => l.kind === 'start').length === 1
-      && existsSync(LOCKP) && Date.now() - t1 < 10_000, `${re} ${Date.now() - t1}ms`)
-    // 반례 — lockf 만 죽고 본체가 살아 있으면: 잠금은 풀린다(실측) → 본체는 다음 회차 전에 증명이 깨져 멈춘다
-    writeFileSync(LOG, '')
-    const orphan = run(1_500)
-    await waitFor(() => lines().some((l) => l.kind === 'start'))
-    requestFollowUp(LOCKD, Date.now(), 'event')
-    const ob = lines().find((l) => l.kind === 'start')!
-    process.kill(ob.ppid, 'SIGKILL')
-    await exitOf(orphan)
-    await waitFor(() => lines().some((l) => l.kind === 'end'), 10_000)
-    await new Promise((r) => setTimeout(r, 1_500))
-    check('🔴 🔴 반례 lockf 가 죽으면 본체는 follow-up 회차를 돌지 않는다(증명 재확인 · 겹침 0)',
-      lines().filter((l) => l.kind === 'start').length === 1, JSON.stringify(lines().map((l) => `${l.kind}${l.pass}`)))
-    rmSync(join(LOCKD, FOLLOW_UP_FILE), { force: true })
-    // 반례 — lockf 부재 · 실행 불가 → 본체 0(provider 0 · DB 0)
-    writeFileSync(LOG, '')
+    // ── Linux 에서도 도는 것: fail-closed · 위조 거부 ──
     const missing = await exitOf(run(0, { lockf: join(dir, 'no-such-lockf') }))
     const noexec = join(dir, 'not-exec'); writeFileSync(noexec, '#!/bin/sh\n', { mode: 0o600 })
     const cannot = await exitOf(run(0, { lockf: noexec }))
-    check('🔴 🔴 반례 lockf 없음 · 실행 불가 → exit 1 · 본체 0', missing === 1 && cannot === 1 && lines().length === 0, `${missing} ${cannot}`)
-    // 반례 — 안쪽 표식만 손으로 넣어 우회 → 증명 실패 · 본체 0 (holder 가 있을 때도)
-    const forgedEnv = { ...childEnv(), [LEASE_INNER_ENV]: LOCKP }
-    const forged = await exitOf(run(0, { env: forgedEnv }))
-    const h2 = run(3_000)
-    await waitFor(() => lines().some((l) => l.kind === 'start'))
-    const forged2 = await exitOf(run(0, { env: forgedEnv }))
-    await exitOf(h2)
-    check('🔴 🔴 반례 안쪽 표식 env 위조 → 증명 실패(exit 1) · holder 가 있어도 본체에 못 들어간다',
-      forged === 1 && forged2 === 1 && lines().filter((l) => l.kind === 'start').length === 1)
+    check('🔴 🔴 반례 lockf 없음 · 실행 불가 → exit 1 · 본체 0(provider 0 · DB 0)', missing === 1 && cannot === 1 && starts().length === 0, `${missing} ${cannot}`)
+    const forgedNoFd = await exitOf(run(0, { env: { ...childEnv(), [LEASE_INNER_ENV]: LOCKP, [LEASE_FD_ENV]: '9' } }))
+    check('🔴 🔴 반례 표식 env 만 위조 · fd 없음 → 증명 실패(exit 1) · 본체 0', forgedNoFd === 1 && starts().length === 0, String(forgedNoFd))
+    writeFileSync(LOCKP, '')
+    const otherFile = join(dir, 'other.file'); writeFileSync(otherFile, '')
+    const ofd = openSync(otherFile, 'a')
+    const forgedOther = await exitOf(run(0, { env: { ...childEnv(), [LEASE_INNER_ENV]: LOCKP, [LEASE_FD_ENV]: '9' }, fd9: ofd }))
+    closeSync(ofd)
+    check('🔴 🔴 반례 fd 9 가 다른 파일 → 증명 실패(exit 1) · 본체 0', forgedOther === 1 && starts().length === 0, String(forgedOther))
+
+    if (!REAL) { for (const c of REAL_CASES) skip(c) } else {
+      check('🔴 /usr/bin/lockf 가 있고 실행할 수 있다(이 기계 · macOS)', true)
+      // ── 전: 옛 `lockf <파일> <명령>` 구조 — lockf 부모만 죽이면 잠금이 풀려 두 본체가 겹친다 ──
+      const SLEEPER = join(dir, 'sleeper.mjs')
+      writeFileSync(SLEEPER, [
+        "import { appendFileSync } from 'node:fs'",
+        'const [log, ms] = process.argv.slice(2)',
+        'appendFileSync(log, `start ${process.pid} ${process.ppid} 0 ${Date.now()}\\n`)',
+        'setTimeout(() => { appendFileSync(log, `end ${process.pid} ${process.ppid} 0 ${Date.now()}\\n`) }, Number(ms))',
+      ].join('\n'))
+      const OLDL = join(dir, 'old.lock')
+      const oldA = spawn(LOCKF_PATH, ['-k', '-t', '0', OLDL, process.execPath, SLEEPER, LOG, '2500'], { stdio: 'ignore' })
+      await waitFor(() => starts().length === 1)
+      killOwn(oldA.pid)
+      await exitOf(oldA)
+      const oldB = spawn(LOCKF_PATH, ['-k', '-t', '0', OLDL, process.execPath, SLEEPER, LOG, '200'], { stdio: 'ignore' })
+      const oldBExit = await exitOf(oldB)
+      await waitFor(() => lines().filter((l) => l.kind === 'end').length === 2, 10_000)
+      check('🔴 🔴 (전) 옛 lockf 부모 구조 — lockf 만 죽이면 새 실행이 즉시 잠금을 얻어 본체 2개가 겹친다(P0 재현)',
+        oldBExit === 0 && starts().length === 2 && maxConcurrent() === 2, `exit ${oldBExit} · 동시 ${maxConcurrent()}`)
+      writeFileSync(LOG, '')
+
+      // ── 후: holder 1 + contender 3 ──
+      const holder = run(2_500)
+      const holderExit = exitOf(holder)
+      check('holder 가 본체에 들어갔다', await waitFor(() => starts().length >= 1))
+      const contenders = [run(0), run(0), run(0)]
+      const cExits = await Promise.all(contenders.map(exitOf))
+      check('🔴 🔴 반례 holder 1 + 동시 contender 3 → 셋 다 본체에 들어가지 않고 0 으로 물러난다',
+        cExits.every((c) => c === 0) && starts().length === 1, JSON.stringify(cExits))
+      check('🔴 🔴 반례 진 깨움 셋 → follow-up 표식 정확히 1개', readdirSync(LOCKD).filter((f) => f === FOLLOW_UP_FILE).length === 1)
+      const h0 = starts()[0]
+      check('🔴 🔴 별도의 lockf 부모 없음 — 본체의 부모는 테스트가 띄운 바깥 Node 자신이다(wrapper 는 exec 로 사라졌다)',
+        h0 !== undefined && h0.ppid === holder.pid, `${h0?.ppid} vs ${holder.pid}`)
+      await waitFor(() => starts().some((l) => l.pass === 1))
+      const late = await exitOf(run(0))
+      const hc = await holderExit
+      const passes = starts()
+      check('🔴 🔴 반례 follow-up 은 최대 1회 — holder 가 같은 프로세스로 pass 0 · 1 만 돌았다',
+        hc === 0 && passes.length === 2 && passes.every((p) => p.pid === passes[0]!.pid) && passes.map((p) => p.pass).join(',') === '0,1',
+        JSON.stringify(passes.map((p) => p.pass)))
+      check('🔴 🔴 반례 상한 뒤 생긴 깨움 — 더 돌지 않고 표식은 남는다(다음 holder 가 받는다)', late === 0 && existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+      check('🔴 🔴 subprocess 실측 — 본체 동시 실행 최대 1', maxConcurrent() === 1, String(maxConcurrent()))
+      rmSync(join(LOCKD, FOLLOW_UP_FILE), { force: true })
+
+      // ── 후: 바깥(부모) 을 죽여도 본체가 잠금을 쥔다 → contender 는 못 들어간다 ──
+      writeFileSync(LOG, '')
+      const keep = run(3_000)
+      const keepExit = exitOf(keep)
+      await waitFor(() => starts().length === 1)
+      killOwn(keep.pid)
+      await keepExit
+      const afterParentKill = await exitOf(run(0))
+      // 🔴 contender 가 남긴 깨움을 바로 치운다 — 남기면 그 본체가 follow-up 회차를 더 돌아 다음 시나리오와 섞인다
+      rmSync(join(LOCKD, FOLLOW_UP_FILE), { force: true })
+      check('🔴 🔴 (후) 바깥 Node 를 SIGKILL 해도 본체가 커널 잠금을 쥔다 — contender 본체 0 · 겹침 0',
+        afterParentKill === 0 && starts().length === 1, `${afterParentKill} ${starts().length}`)
+      const orphanBody = starts()[0]
+      await waitFor(() => lines().some((l) => l.kind === 'end'), 10_000)
+      await new Promise((r) => setTimeout(r, 500))
+      check('(후) 그 본체는 자기 회차를 끝까지 혼자 돌았다 · follow-up 없이 끝났다', orphanBody !== undefined && maxConcurrent() === 1 && starts().length === 1)
+
+      // ── 본체 SIGKILL → 파일을 지우지 않아도 즉시 재획득 ──
+      writeFileSync(LOG, '')
+      const victim = run(60_000)
+      const victimExit = exitOf(victim)
+      await waitFor(() => starts().length === 1)
+      const busy = await exitOf(run(0))
+      check('🔴 반례 살아 있는 holder → 두 번째 실행은 획득 실패(본체 0)', busy === 0 && starts().length === 1)
+      rmSync(join(LOCKD, FOLLOW_UP_FILE), { force: true })
+      const vb = starts()[0]
+      check('본체 PID 를 테스트가 직접 받았다(그 본체의 부모 = 테스트가 띄운 victim)', vb !== undefined && vb.ppid === victim.pid && killOwn(vb.pid),
+        `${vb?.ppid} vs ${victim.pid}`)
+      await victimExit
+      const t1 = Date.now()
+      const re = await exitOf(run(0))
+      check('🔴 🔴 반례 본체 SIGKILL → 파일 삭제 없이 즉시 재획득', re === 0 && starts().length === 2 && existsSync(LOCKP) && Date.now() - t1 < 10_000,
+        `${re} ${Date.now() - t1}ms`)
+      writeFileSync(LOG, '')
+      const again = await exitOf(run(0))
+      check('🔴 🔴 반례 잠금 파일만 남고 커널 holder 없음 → 바로 획득', again === 0 && starts().length === 1)
+
+      // ── holder 가 도는 동안 같은 잠금 파일을 fd 9 로 열기만 한 위조 → 내 fd 잠금이 아니므로 거절 ──
+      writeFileSync(LOG, '')
+      const h2 = run(3_000)
+      const h2Exit = exitOf(h2)
+      await waitFor(() => starts().length === 1)
+      const lfd = openSync(LOCKP, 'a')
+      const forgedSame = await exitOf(run(0, { env: { ...childEnv(), [LEASE_INNER_ENV]: LOCKP, [LEASE_FD_ENV]: '9' }, fd9: lfd }))
+      closeSync(lfd)
+      await h2Exit
+      check('🔴 🔴 반례 holder 실행 중 같은 파일 fd 위조 → 증명 실패(exit 1) · 본체 0', forgedSame === 1 && starts().length === 1, String(forgedSame))
+      // holder 실행 중 fd 9 가 다른 파일 — 그 파일 잠금은 얻을 수 있으므로 dev·ino 대조만이 막는다
+      writeFileSync(LOG, '')
+      const h3 = run(3_000)
+      const h3Exit = exitOf(h3)
+      await waitFor(() => starts().length === 1)
+      const ofd2 = openSync(otherFile, 'a')
+      const forgedOther2 = await exitOf(run(0, { env: { ...childEnv(), [LEASE_INNER_ENV]: LOCKP, [LEASE_FD_ENV]: '9' }, fd9: ofd2 }))
+      closeSync(ofd2)
+      await h3Exit
+      check('🔴 🔴 반례 holder 실행 중 fd 9 가 다른 파일 → dev·ino 불일치로 거절(exit 1) · 본체 0', forgedOther2 === 1 && starts().length === 1, String(forgedOther2))
+      rmSync(join(LOCKD, FOLLOW_UP_FILE), { force: true })
+    }
   } finally { rmSync(dir, { recursive: true, force: true }) }
 
+  check('🔴 follow-up 상한 함수 — pass 0 뒤에만 한 번 · pass 1 뒤에는 표식이 있어도 더 돌지 않는다',
+    shouldRunFollowUp(0, 'TAKEN') && !shouldRunFollowUp(1, 'TAKEN') && !shouldRunFollowUp(0, 'NONE') && MAX_FOLLOW_UPS === 1)
+  const wrapper = readFileSync('scripts/lib/runner-lease.sh', 'utf-8')
+  const wcode = wrapper.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+  check('🔴 🔴 wrapper 계약 — fd 9 열기 → `lockf -s -t 0 9` → 표식 → `exec "$@"` · eval · 셸 조립 · kill · 시각 0',
+    /exec 9>>"\$lock"/.test(wcode) && /"\$lockf" -s -t 0 9/.test(wcode) && /exec "\$@"/.test(wcode)
+    && !/eval|\$\(|`|kill|date|sleep|pgrep|sh -c/.test(wcode)
+    && wcode.indexOf('-s -t 0 9') < wcode.indexOf('exec "$@"'))
   const lease = readFileSync('scripts/lib/runner-lease.mts', 'utf-8')
   const leaseCode = lease.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
-  check('🔴 lease 모듈 — 셸 문자열 0(spawnSync 인자 배열) · rename · kill · 시효 탈취 0 · wx 잠금(collect-lock) 0',
-    !/rename|process\.kill|exec\(|execSync\(|shell: true|collect-lock|acquireLock/.test(leaseCode)
-    && /spawnSync\(lockf, \[\.\.\.lockfArgs\(i\.lockPath\), i\.command, \.\.\.i\.args\]/.test(leaseCode))
+  check('🔴 🔴 lease 모듈 — wrapper 를 인자 배열로만 띄운다 · 부모 명령줄 · ppid · rename · kill · wx 잠금(collect-lock) 0',
+    !/rename|process\.kill|ppid|\/bin\/ps|exec\(|execSync\(|shell: true|collect-lock|acquireLock/.test(leaseCode)
+    && /spawnSync\('\/bin\/sh', \[LEASE_WRAPPER, i\.lockPath, lockf, i\.command, \.\.\.i\.args\]/.test(leaseCode)
+    && /fstatSync\(LEASE_FD\)/.test(leaseCode) && /a\.dev === b\.dev && a\.ino === b\.ino/.test(leaseCode))
   const entry = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
   const entryCode = entry.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
   check('🔴 🔴 진입점 — 공통 진입(leaseEntry) 하나 · DB 클라이언트는 커널 잠금 증명 뒤 회차 안에서만',
     (entryCode.match(/leaseEntry\(/g) ?? []).length === 1 && (entryCode.match(/new PrismaClient\(\)/g) ?? []).length === 1
     && entryCode.indexOf('pass: async (pass, proof)') < entryCode.indexOf('new PrismaClient()'))
-  check('🔴 진입점 — 유료 호출 직전마다 잠금 증명을 다시 본다', /if \(!stillInKernelLease\(proof, process\.env\)\) return \{ ok: false, text: null, errorCode: 'LEASE_LOST' \}/.test(entryCode)
-    && entryCode.indexOf('stillInKernelLease(proof') < entryCode.indexOf('await session.call('))
   check('🔴 🔴 정상 · 복구 회차가 같은 잠금 파일 · 같은 장부 — 회차 종류로 갈리는 경로가 없다',
     /lockFile: COMMENT_LOOP_LOCK_FILE/.test(entryCode) && /dir: commentLoopLedgerDir\(\)/.test(entryCode)
     && !/XPC_SERVICE_NAME[^\n]*(budget|limits|dailyUsd|lockFile|Ledger)/.test(entryCode))
