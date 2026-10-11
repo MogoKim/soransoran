@@ -8,7 +8,8 @@
 
 | 분류 | 의미 | 현재값을 말할 수 있는가 |
 |---|---|---|
-| `AUTHORITY` | 목적·정책·현재 상태·기술 지도의 상위 문서 | 자기 역할 안에서만 가능 |
+| `AUTHORITY` | 목적·정책·현재 상태의 상위 문서 | 자기 역할 안에서만 가능 |
+| `REFERENCE` | 필요할 때만 여는 기술 지도와 역사 증거 — 기본 필독이 아니다 | 불가. 현재 정책·현재 상태에 투표하지 않음 |
 | `EXECUTABLE_INPUT` | runtime이나 검사가 구조화해 직접 읽는 좁은 입력 | 입력 필드만 가능. 제품 정책·운영 상태는 불가 |
 | `RUNBOOK` | 승인된 정책을 실행·복구하는 절차 | 관측 명령만 가능. 정책·현재 상태를 새로 정하지 못함 |
 | `HISTORY` | 설계 근거·사고·과거 실측·폐기된 절차 | 불가. 현재 정책에 투표하지 않음 |
@@ -20,16 +21,24 @@
 분류를 관리하는 메타 파일은 둘이다. `README.md`는 권위 순서를 찾는 인덱스이고,
 `D100-DOCUMENT-INVENTORY.md`는 이 분류표 자체다. 둘 다 제품 정책이나 현재 상태를 새로 정하지 않는다.
 
-## 2. AUTHORITY — 네 문서만
+## 2. AUTHORITY — 세 문서만
 
 | 문서 | 역할 |
 |---|---|
 | `NORTH-STAR.md` | 고객·제품 본질·장기 North Star·영구 안전장치 |
-| `2026-09-21-d100-goal-canon.md` | D3~D100 정책·단계 숫자·PASS·Persona·대화 계약 |
+| `2026-09-21-d100-goal-canon.md` | D3~D100 정책·Dn 의미·단계 숫자·PASS·Persona·대화 계약 |
 | `CURRENT-MILESTONE.md` | as-of가 붙은 검증 상태·충돌 장부·다음 critical path |
-| `MASTER-OPERATING-SYSTEM.md` | 기술 지도·모델/비용 구조·역사 증거. 현재 상태·정책은 말하지 않음 |
 
-이 넷의 충돌 순서는 README 표를 따른다. 이 분류표를 다섯 번째 권위 문서로 해석하지 않는다.
+이 셋의 충돌 순서는 README 표를 따른다. 이 분류표를 네 번째 권위 문서로 해석하지 않는다.
+
+### 2.1 REFERENCE — 필요할 때만 연다
+
+| 문서 | 역할 |
+|---|---|
+| `MASTER-OPERATING-SYSTEM.md` | 기술 지도·모델/비용 구조·과거 사고 근거. 현재 상태·정책을 말하지 않고 기본 필독이 아니다 |
+
+저장소 밖 handoff·감사 보고서·외부 agent memory 는 이 목록의 어느 분류에도 들지 않는다. 정본이 아니며,
+채택된 결론만 AUTHORITY 문서와 `master:doc-check` 를 같은 변경에서 고쳐 반영한다.
 
 ## 3. EXECUTABLE_INPUT — 현재 코드가 직접 읽는 좁은 입력
 
@@ -39,7 +48,7 @@
 | `../constitution/MICRO_SEED_LANE_CONSTITUTION.md` | Micro Seed 안전·DB write·승인 경계 | D100 단계와 현재 운영 상태는 정하지 않음 |
 
 코드 주석이 아래 역사 문서를 “정본”이라고 부르는 곳이 남아 있다. 그 표현은 구현 당시 출처를 뜻할 뿐
-제품 정책 authority가 아니다. 현재 동작은 코드·fixture, 상위 정책은 네 권위 문서로 판정한다. 주석을
+제품 정책 authority가 아니다. 현재 동작은 코드·fixture, 상위 정책은 세 권위 문서로 판정한다. 주석을
 일괄 삭제하거나 역사 문서를 현재화하지 않고, 해당 코드를 수정할 때 `역사 설계 근거`로 순차 교정한다.
 
 ## 4. RUNBOOK — 현재 실행 절차
@@ -109,7 +118,7 @@ Voice 역사 문서와 `voice-unao-*` 이름이 남아 있다는 사실은 소�
 |---|---|---|
 | 회원가입 전환 | `MEMBER-CONVERSION-CANON.md` | `MC-*`·`CB-*` 단계. D100 단계·공급·Persona를 변경하지 않음 |
 | 매거진 검색 전략 | `M-GRAPH-PROJECT-CHARTER.md` | 검색 주제망 영역 한정 |
-| 매거진 자동화 | `magazine-automation-runbook.md` | 회사 Mac 매거진 4개 job. 보조 Mac D100 owner와 분리 |
+| 매거진 자동화 | `magazine-automation-runbook.md` | 회사 Mac 매거진 job(현재 구성은 `CURRENT-MILESTONE.md`). 보조 Mac D100 owner와 분리 |
 | 브랜드·UI | `soransoran-brand-design-spec.md` | 화면·색·타이포 정본. D100 운영 상태를 정하지 않음 |
 | 공개 launch 인계 | `2026-08-22-soransoran-public-launch-handoff.md` | 공개 전환 당시 기록. D100 현재 상태가 아님 |
 | 매거진 SEO 생산 전략 | `2026-08-23-soransoran-magazine-seo-production-strategy.md` | 매거진 영역의 과거 생산 전략 |
