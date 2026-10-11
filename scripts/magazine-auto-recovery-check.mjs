@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import crypto from 'node:crypto'
 
@@ -36,6 +36,7 @@ const L = await import('./lib/magazine-load.mjs')
 const IR = await import('./lib/magazine-input-repair.mjs')
 const LR = await import('./lib/magazine-lineage-reconcile.mjs')
 const PX = await import('./lib/magazine-producer-exit.mjs')
+const QLm = await import('./lib/magazine-queue-lock.mjs')
 
 let pass = 0
 let fail = 0
@@ -393,34 +394,95 @@ console.log('\nG 옛 행 대조 — cold·autumn 수리 영수증 · gray 장부
   ]) {
     check(`G cold 대조 거부 — ${k}`, !LR.judgeLegacyInputRepair({ entry, receipts: [rec()], draft: ok, ...args }).ok)
   }
+  // gray — 2026-10-11 운영 행 그대로 · 수리 후 실제 brief(읽기 전용 복사 fixture) · 버전 있는 migration identity 한 건
+  const GRAY = 'gray-hair-leave-as-is'
   const gray = { kind: 'CONTENT', sent: true, attempts: 1, lastAt: 1791648177801, fingerprint: null,
     reasons: ['FETCH_FAILED: 회수 실패 — [validate] invalid_manuscript — FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다 · 전송 1건'] }
-  const g = LR.judgeLegacyInvalid({ entry: gray, hasDraft: false, hasBrief: true, messageFingerprint: FP })
-  check('G gray 운영 모양 — 실제 위반 문장 그대로 대조 가능', g.ok && g.violations.length === 1 && g.violations[0].code === 'FORMAT_VIOLATION' && g.violations[0].why === '1행: YAML frontmatter 가 없다. --- 로 시작해야 한다' && /^[0-9a-f]{64}$/.test(g.legacyLedgerKey), g)
+  const GRAY_BRIEF = fs.readFileSync(path.join(HERE, 'fixtures', 'magazine-format-contract', 'gray-hair-leave-as-is.repaired-2026-10-11.brief.md'), 'utf8')
+  const sha = (t) => crypto.createHash('sha256').update(t).digest('hex')
+  const [MIG] = LR.LEGACY_INVALID_MIGRATIONS
+  check('G migration identity — 한 건 · 버전 있는 id · gray slug · fixture brief SHA 와 장부 키가 상수와 같다', LR.LEGACY_INVALID_MIGRATIONS.length === 1 && /\/v1$/.test(MIG.id) && MIG.slug === GRAY &&
+    MIG.briefSha256 === sha(GRAY_BRIEF) && MIG.legacyLedgerKey === sha(JSON.stringify([gray.lastAt, gray.reasons[0]])), MIG)
+  const base = { entry: gray, slug: GRAY, hasDraft: false, hasBrief: true, briefSha256: sha(GRAY_BRIEF) }
+  const fpA = `sha256:${'a1'.repeat(32)}`
+  const fpB = `sha256:${'b2'.repeat(32)}`
+  const judged = [fpA, fpB, MIG.messageFingerprint].map((fp) => LR.judgeLegacyInvalid({ ...base, messageFingerprint: fp }).ok)
+  check('🔴 G 임의 지문 A/B 는 거부 · 기대 지문 하나만 통과', judged.join(',') === 'false,false,true', judged)
+  const g = LR.judgeLegacyInvalid({ ...base, messageFingerprint: MIG.messageFingerprint })
+  check('G gray 운영 사건 — 실제 위반 문장 그대로 · migration id', g.ok && g.violations[0].code === 'FORMAT_VIOLATION' && g.violations[0].why === '1행: YAML frontmatter 가 없다. --- 로 시작해야 한다' && g.migrationId === MIG.id, g)
   for (const [k, e2, f2] of [
+    ['brief 한 글자 변경', {}, { briefSha256: sha(`${GRAY_BRIEF} `) }], ['다른 slug (같은 행·brief·지문)', {}, { slug: 'autumn-low-mood' }],
+    ['다른 과거 CONTENT 행 (다른 시각)', { lastAt: gray.lastAt + 1 }], ['다른 과거 CONTENT 행 (다른 사유 문장)', { reasons: [gray.reasons[0].replace('1행', '2행')] }],
     ['markers_missing (위반 문장 없음)', { reasons: ['FETCH_FAILED: 회수 실패 — [validate] markers_missing (지정 문장 2개 누락) · 전송 1건'] }],
     ['전송 예약 남음 (신원 미확인)', { delivery: { kind: 'DELIVERY_UNCERTAIN' } }], ['보냈는지 모름', { sent: null }], ['2회 실패', { attempts: 2 }],
-    ['재생성 기록', { regenCalls: 1 }], ['사유 2개', { reasons: [gray.reasons[0], 'x'] }], ['이미 기록', { firstResponseInvalid: { x: 1 } }],
-    ['위반 조각 모양이 다름', { reasons: ['FETCH_FAILED: 회수 실패 — [validate] invalid_manuscript — 아무 말 · 전송 1건'] }],
+    ['재생성 기록', { regenCalls: 1 }], ['사유 2개', { reasons: [gray.reasons[0], 'x'] }], ['이미 기록 (migration 한 번)', { firstResponseInvalid: { x: 1 } }],
     ['원고 있음', {}, { hasDraft: true }], ['지문 모름', {}, { messageFingerprint: null }],
   ]) {
-    check(`G gray 대조 거부 — ${k}`, !LR.judgeLegacyInvalid({ entry: { ...gray, ...e2 }, hasDraft: false, hasBrief: true, messageFingerprint: FP, ...(f2 ?? {}) }).ok)
+    check(`G gray 대조 거부 — ${k}`, !LR.judgeLegacyInvalid({ ...base, messageFingerprint: MIG.messageFingerprint, entry: { ...gray, ...e2 }, ...(f2 ?? {}) }).ok)
   }
-  // 대조 기록은 일반 요청 관문을 닫는다 — 같은 지문 일반 전송 0 (producer 회수도 같은 관문)
+  // 실제 관문 · 실제 대조 — 같은 brief 바이트로 같은 일반 요청 지문이 나온다
   const GD = path.join(T, 'g-gate', 'drafts', 'magazine')
-  fs.mkdirSync(path.join(GD, 'g1'), { recursive: true })
-  fs.writeFileSync(path.join(GD, 'g1', 'brief.md'), fs.readFileSync(path.join(HERE, 'fixtures', 'magazine-format-contract', 'job-credentials.brief.md'), 'utf8'))
-  const LG = ledger('g-gate', {})
-  const fp = DG.deliveryGate({ slug: 'g1', draftsDir: GD, quarantinePath: LG }).messageFingerprint
-  Q.saveQuarantine({ g1: gray }, LG)
-  const before = fs.readFileSync(LG)
-  const gate = DG.deliveryGate({ slug: 'g1', draftsDir: GD, quarantinePath: LG })
-  check('🔴 G 옛 gray 행 — 일반 전송 관문이 교정 대기로 닫힌다 (판정만 · 장부 쓰기 0)', gate.ok && !gate.hold && gate.correctionPending?.source === 'legacy-ledger-reason' && fs.readFileSync(LG).equals(before) && gate.messageFingerprint === fp, gate.correctionPending)
-  const r1 = LR.reconcileLegacyInvalid({ draftsDir: GD, slug: 'g1', messageFingerprint: fp, path: LG })
-  const r2 = LR.reconcileLegacyInvalid({ draftsDir: GD, slug: 'g1', messageFingerprint: fp, path: LG })
-  const fr = row(LG, 'g1').firstResponseInvalid
-  check('G gray 대조는 한 번만 기록 — 위반 {code, why} · 지금 지문 · 원문 없음 · 두 번째는 NOT_RECONCILED', r1.status === 'RECORDED' && r2.status === 'NOT_RECONCILED' &&
-    fr.messageFingerprint === fp && fr.violations[0].why.includes('YAML frontmatter') && fr.source === 'LEGACY_LEDGER_REASON' && Q.identifiedInvalidRecord(fr) && DG.deliveryGate({ slug: 'g1', draftsDir: GD, quarantinePath: LG }).correctionPending?.source === 'ledger', { r1, r2, fr })
+  fs.mkdirSync(path.join(GD, GRAY), { recursive: true })
+  fs.writeFileSync(path.join(GD, GRAY, 'brief.md'), GRAY_BRIEF)
+  const LG = ledger('g-gate', { [GRAY]: gray })
+  const gate = DG.deliveryGate({ slug: GRAY, draftsDir: GD, quarantinePath: LG })
+  check('🔴 G 실제 일반 요청 지문 = migration 의 기대 지문 · 관문이 교정 대기로 닫힌다 (판정만 · 쓰기 0)',
+    gate.messageFingerprint === MIG.messageFingerprint && gate.correctionPending?.source === 'legacy-ledger-reason' && !gate.hold, { fp: gate.messageFingerprint, cp: gate.correctionPending })
+  // brief 한 글자 → 새 요청 — 대조 0 · 관문 열림(일반 요청은 새 메시지)
+  const GD2 = path.join(T, 'g-gate2', 'drafts', 'magazine')
+  fs.mkdirSync(path.join(GD2, GRAY), { recursive: true })
+  fs.writeFileSync(path.join(GD2, GRAY, 'brief.md'), GRAY_BRIEF.replace('흰머리', '흰 머리'))
+  const LG2 = ledger('g-gate2', { [GRAY]: gray })
+  const b2 = fs.readFileSync(LG2)
+  const gate2 = DG.deliveryGate({ slug: GRAY, draftsDir: GD2, quarantinePath: LG2 })
+  const r0 = LR.reconcileLegacyInvalid({ draftsDir: GD2, slug: GRAY, messageFingerprint: gate2.messageFingerprint, path: LG2 })
+  check('🔴 G brief 한 글자 변경 → 지문 다름 · 교정 대기 0 · NOT_RECONCILED · 장부 쓰기 0', GRAY_BRIEF.includes('흰머리') && gate2.messageFingerprint !== MIG.messageFingerprint && !gate2.correctionPending &&
+    r0.status === 'NOT_RECONCILED' && fs.readFileSync(LG2).equals(b2), { r0 })
+  // 다른 slug 에 같은 행 — 대조하지 않는다 (장부도 읽지 않는다)
+  const LG3 = ledger('g-other', { 'autumn-low-mood': gray })
+  const b3 = fs.readFileSync(LG3)
+  const r3 = LR.reconcileLegacyInvalid({ draftsDir: GD, slug: 'autumn-low-mood', messageFingerprint: MIG.messageFingerprint, path: LG3 })
+  check('G 다른 slug 의 같은 모양 행 → NOT_RECONCILED · 쓰기 0', r3.status === 'NOT_RECONCILED' && fs.readFileSync(LG3).equals(b3), r3)
+  // 성공은 정확히 한 번 · 재실행은 쓰기 0
+  const r1 = LR.reconcileLegacyInvalid({ draftsDir: GD, slug: GRAY, messageFingerprint: gate.messageFingerprint, path: LG })
+  const after1 = fs.readFileSync(LG)
+  const r2 = LR.reconcileLegacyInvalid({ draftsDir: GD, slug: GRAY, messageFingerprint: gate.messageFingerprint, path: LG })
+  const fr = row(LG, GRAY).firstResponseInvalid
+  check('🔴 G migration 은 한 번만 기록 — 위반 {code, why} · 기대 지문 · migration id · 재실행 NOT_RECONCILED · 장부 바이트 그대로', r1.status === 'RECORDED' && r2.status === 'NOT_RECONCILED' &&
+    fs.readFileSync(LG).equals(after1) && fr.messageFingerprint === MIG.messageFingerprint && fr.migrationId === MIG.id && fr.violations[0].why.includes('YAML frontmatter') &&
+    fr.source === 'LEGACY_LEDGER_REASON' && Q.identifiedInvalidRecord(fr) && DG.deliveryGate({ slug: GRAY, draftsDir: GD, quarantinePath: LG }).correctionPending?.source === 'ledger', { r1, r2, fr })
+  check('G migration id 없는 옛 대조 기록은 교정 근거가 아니다', !Q.identifiedInvalidRecord({ ...fr, migrationId: undefined }))
+}
+
+// ── H 운영 writer 의 큐 잠금 위치 — 고정 하나 ─────────────────────────
+console.log('\nH 운영 큐 잠금 — 운영 writer 두 개가 서로 다른 임시 위치를 주입해도 분리된 잠금을 얻지 못한다 (실제 자식 프로세스)')
+{
+  const QLURL = pathToFileURL(path.join(HERE, 'lib', 'magazine-queue-lock.mjs')).href
+  const writer = (name, dir) => {
+    const child = path.join(T, `h-${name}.mjs`)
+    fs.writeFileSync(child, `const QL = await import(${JSON.stringify(QLURL)})
+let ran = 0
+const r = QL.withQueueWriteLock('/x/topic-queue.ts', () => { ran++; const t = Date.now() + 300; while (Date.now() < t) {} }, { waitMs: 0 })
+console.log(JSON.stringify({ ok: r.ok, code: r.code ?? null, ran }))
+`)
+    // 🔴 운영 모드 (TEST_MODE 없음) · HOME 은 임시 — 가드를 지운 변이에서도 운영 queue-locks 에 닿지 않는다
+    return spawn(process.execPath, [child], { env: { PATH: process.env.PATH, HOME: path.join(T, 'h-home'), SORAN_MAGAZINE_QUEUE_LOCK_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+  const dA = fs.mkdtempSync(path.join(os.tmpdir(), 'h-lock-a-'))
+  const dB = fs.mkdtempSync(path.join(os.tmpdir(), 'h-lock-b-'))
+  fs.mkdirSync(path.join(T, 'h-home'), { recursive: true })
+  const outOf = (c) => new Promise((res) => { let o = ''; c.stdout.on('data', (d) => { o += d }); c.on('close', () => { try { res(JSON.parse(o.trim().split('\n').pop())) } catch { res({ parseError: o }) } }) })
+  const [a, b] = await Promise.all([outOf(writer('a', dA)), outOf(writer('b', dB))])
+  const files = [...fs.readdirSync(dA), ...fs.readdirSync(dB)]
+  check('🔴 H 운영 writer 두 개 — 각자 다른 임시 잠금 위치 주입 → 둘 다 파일 접근 전 거부 · 임계구역 0 · 주입 위치에 잠금 파일 0',
+    a.ok === false && b.ok === false && a.code === 'queue_lock_scope_blocked' && b.code === 'queue_lock_scope_blocked' && a.ran === 0 && b.ran === 0 && files.length === 0, { a, b, files })
+  const dirOf = (env) => { try { return QLm.queueLockDir(env) } catch (e) { return e.code } }
+  check('H 운영 모드 잠금 위치는 고정 하나 — 주입 없으면 QUEUE_LOCK_DIR', dirOf({}) === QLm.QUEUE_LOCK_DIR)
+  let seamBlocked = null
+  try { QLm.setQueueLockDirForTest(path.join(REPO, '.not-tmp')) } catch (e) { seamBlocked = e.code }
+  check('H 같은 프로세스 시험 주입도 임시 폴더만 받는다', seamBlocked === 'queue_lock_scope_blocked')
+  fs.rmSync(dA, { recursive: true, force: true })
+  fs.rmSync(dB, { recursive: true, force: true })
 }
 
 check('운영 장부 기본 경로는 격리 HOME 아래', path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep))

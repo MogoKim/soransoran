@@ -6,6 +6,7 @@
  *    재생성이 자기 판정을 따로 만들면 언젠가 갈라지고, 갈라진 날 이미 보낸 글을 다시 보낸다.
  *    그래서 둘 다 이 파일을 부른다. 조건을 다른 곳에 다시 쓰지 않는다.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
@@ -242,7 +243,8 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
    */
   if (!packet && !hold && message !== null) {
     const recorded = firstResponseInvalidFor(entry, messageFingerprint)
-    const legacy = recorded ? null : judgeLegacyInvalid({ entry, hasDraft: existsSync(draftPath), hasBrief: true, messageFingerprint })
+    const legacy = recorded ? null : judgeLegacyInvalid({ entry, slug, hasDraft: existsSync(draftPath), hasBrief: true, messageFingerprint,
+      briefSha256: createHash('sha256').update(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')).digest('hex') })
     if (recorded || legacy?.ok) {
       return { ok: true, message, messageFingerprint, legacyMessageFingerprint, entry, hold: null,
         correctionPending: { source: recorded ? 'ledger' : 'legacy-ledger-reason',

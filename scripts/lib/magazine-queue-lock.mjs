@@ -62,7 +62,8 @@ export function resolveQueueLockScope(env = process.env) {
  *    그 순간 운영 G8·등록이 돌면 시험이 운영 큐 writer 를 막는다.
  *
  *    운영 위치는 장부 가드와 같이 `HOME` 이 아니라 **계정 정보(passwd)** 로 정한다.
- *      운영 실행(TEST_MODE 아님) → `QUEUE_LOCK_DIR` 그대로 · `SORAN_MAGAZINE_QUEUE_LOCK_DIR` 는 OS 임시 폴더 아래만 받는다
+ *      운영 실행(TEST_MODE 아님) → `QUEUE_LOCK_DIR` 하나뿐 · `SORAN_MAGAZINE_QUEUE_LOCK_DIR` 가 보이면 거부 (임시 폴더여도)
+ *        (같은 프로세스의 시험 전용 주입 `setQueueLockDirForTest` 만 예외 — 환경변수로는 열 수 없다)
  *      시험 모드 → `SORAN_MAGAZINE_QUEUE_LOCK_DIR`(임시 폴더), 없으면 지금 HOME 기준 — 그것이 운영 위치면 거부
  *    거부는 파일 접근 **전에** 던진다 — 운영 디렉터리에 stat·mkdir·open 0.
  *    `SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME` 은 막을 위치를 하나 더 보탤 뿐이다 (장부 가드와 같은 자리).
@@ -79,19 +80,32 @@ function underTmp(dir) {
   try { roots.add(realpathSync(tmpdir())) } catch { /* 없으면 하나만 */ }
   return [...roots].some((r) => dir.startsWith(r + sep))
 }
+
+/**
+ * 🔴 **시험 전용 주입 — 같은 프로세스 안에서만** (2026-10-11 Codex 재검토 P1).
+ *    운영 모드 프로세스(m3a 처럼 운영 모드 자식·함수를 함께 시험하는 검사)가 잠금만 임시 폴더로 돌릴 자리다.
+ *    환경변수로는 켤 수 없다 — 운영 writer 가 서로 다른 위치를 쓰게 만드는 길이 없다. 임시 폴더만 받는다.
+ * @returns {() => void} 되돌리기
+ */
+let testDirOverride = null
+export function setQueueLockDirForTest(dir) {
+  const d = resolve(String(dir))
+  if (!underTmp(d) || operationalQueueLockDirs().includes(d)) throw Object.assign(new Error(`시험 잠금 폴더는 OS 임시 폴더만 받는다: ${d}`), { code: QUEUE_LOCK_SCOPE_BLOCKED_CODE })
+  testDirOverride = d
+  return () => { testDirOverride = null }
+}
+
 export function queueLockDir(env = process.env) {
   const injected = env.SORAN_MAGAZINE_QUEUE_LOCK_DIR
   const blocked = (why) => Object.assign(new Error(why), { code: QUEUE_LOCK_SCOPE_BLOCKED_CODE })
-  const ops = operationalQueueLockDirs(env)
   if (env.SORAN_MAGAZINE_TEST_MODE !== '1') {
-    if (!injected) return QUEUE_LOCK_DIR
-    // 🔴 운영 모드의 주입은 OS 임시 폴더 아래만 받는다 — 운영 상호배제를 엉뚱한 곳으로 흩지 않는다
-    const dir = resolve(String(injected))
-    if (!underTmp(dir) || ops.includes(dir)) throw blocked(`SORAN_MAGAZINE_QUEUE_LOCK_DIR 는 임시 폴더만 받는다 — 거부: ${dir}`)
-    return dir
+    // 🔴 운영 모드의 잠금 위치는 고정 운영 경로 하나뿐이다 — 주입이 보이면 (임시 폴더여도) 파일 접근 전에 거부한다
+    if (injected) throw blocked('SORAN_MAGAZINE_QUEUE_LOCK_DIR 는 SORAN_MAGAZINE_TEST_MODE=1 에서만 쓴다 — 운영 writer 는 고정 잠금 위치 하나만 쓴다')
+    return testDirOverride ?? QUEUE_LOCK_DIR
   }
   // 시험 모드: 지정한 임시 폴더, 없으면 지금 HOME 기준 (시험이 HOME 을 임시로 바꾼 경우) — 어느 쪽이든 운영 위치면 거부
-  const dir = resolve(String(injected || join(homedir(), ...QUEUE_LOCK_REL)))
+  const dir = resolve(String(injected || testDirOverride || join(homedir(), ...QUEUE_LOCK_REL)))
+  const ops = operationalQueueLockDirs(env)
   if (ops.includes(null)) throw blocked('시험 모드인데 운영 queue-locks 위치를 확인할 수 없다 — 잠금 0')
   if (ops.includes(dir)) throw blocked(`시험 모드에서 운영 queue-locks 에 닿으려 했다 — 잠금 0: ${dir}`)
   return dir

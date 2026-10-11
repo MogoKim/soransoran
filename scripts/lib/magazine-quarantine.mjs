@@ -518,7 +518,7 @@ export function firstResponseInvalidRecord(evidence, now) {
 export function identifiedInvalidRecord(f) {
   const violations = Boolean(f && Array.isArray(f.violations) && f.violations.length > 0 && f.violations.every((v) => v?.code && v?.why && v.why !== v.code))
   const identified = Boolean(f && ((f.conversationUrl && f.assistantMessageId && HEX64.test(f.responseSha256 ?? ''))
-    || (f.source === 'LEGACY_LEDGER_REASON' && HEX64.test(f.legacyLedgerKey ?? ''))))
+    || (f.source === 'LEGACY_LEDGER_REASON' && HEX64.test(f.legacyLedgerKey ?? '') && typeof f.migrationId === 'string' && f.migrationId.length > 0)))
   return violations && identified
 }
 /** 교정 계보의 증거 sha — 응답 sha, 옛 대조 기록이면 그 키 */

@@ -589,21 +589,26 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
   },
 
   S12: {
-    title: '10/11 운영 후 상태 → 다음 회차 — gray(식별 응답 invalid · 신원·위반이 장부에 없던 옛 판) 는 00:10 producer 도 01:00 도 같은 일반 요청을 다시 보내지 않고, 장부 사유 대조로 교정 1 → 등록',
-    async prepare(repo, date) {
-      const [t] = await pickTargets({ repo, date, selectable: 1 })
-      await curate({ repo, keep: [t.slug] })
-      const pr = await templatePair({ repo, item: t })
-      writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
-      placeHero({ repo, slug: t.slug })
-      return { target: t.slug }
+    title: '10/11 운영 후 상태 → 다음 회차 — gray(실제 slug · 수리 후 실제 brief · migration v1 한 사건) 는 00:10 producer 도 01:00 도 같은 일반 요청을 다시 보내지 않고, 장부 사유 대조로 교정 1 → 등록',
+    async prepare(repo) {
+      // 🔴 migration identity 는 정확히 한 사건이다 — 실제 slug · 수리 후 실제 brief 바이트(읽기 전용 복사 fixture) 그대로
+      const L = await imp(repo, 'scripts/lib/magazine-load.mjs')
+      const slug = 'gray-hair-leave-as-is'
+      const item = L.parseQueueSource(readFileSync(join(repo, 'drafts', 'magazine', 'topic-queue.ts'), 'utf8')).find((q) => q.slug === slug)
+      if (!item) throw new Error(`큐에 ${slug} 가 없다`)
+      await curate({ repo, keep: [slug] })
+      const fx = (n) => readFileSync(join(repo, 'scripts', 'fixtures', 'magazine-format-contract', `gray-hair-leave-as-is.repaired-2026-10-11.${n}`), 'utf8')
+      writeSlugFiles({ repo, slug, files: { 'brief.md': fx('brief.md'), 'review.ts': fx('review.ts') } })
+      placeHero({ repo, slug })
+      return { target: slug }
     },
     scenarioFor: () => ({ ci: {}, deploy: {} }),
     async afterBuild(sb, p, date) {
+      // 🔴 운영 장부의 lastAt 그대로 — legacyLedgerKey 가 migration identity 와 정확히 같아야 한다 (시각을 회차 날짜에 맞추지 않는다)
       const prev = addDays(date, -1)
       const at = (hms) => Date.parse(`${prev}T${hms}+09:00`)
       // 🔴 운영 장부 gray 행 그대로 (2026-10-11 읽기 전용 진단 값)
-      const store = { [p.target]: { kind: 'CONTENT', sent: true, attempts: 1, lastAt: at('01:02:57'), fingerprint: null,
+      const store = { [p.target]: { kind: 'CONTENT', sent: true, attempts: 1, lastAt: 1791648177801, fingerprint: null,
         reasons: ['FETCH_FAILED: 회수 실패 — [validate] invalid_manuscript — FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다 · 전송 1건'],
         briefRepairs: [{ fingerprint: `sha256:${'9c3f20e6'.repeat(8)}`, outcome: 'APPLIED', providerCalls: 2, reservedAt: at('00:12:31'), settledAt: at('00:15:43') }], briefRepairCalls: 2 } }
       mkdirSync(dirname(ledgerPath(sb)), { recursive: true })
@@ -626,7 +631,8 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       return [
         exp('S12 00:10 producer — 일괄 계획이 교정 대기로 건너뛰었다 (전송·접근 확인 0 · 장부 쓰기 0)', !ev.sends.bySlug[`${t}:initial`] && prod.includes('건너뜀 (correction_pending)') &&
           JSON.stringify(ctx.afterProducerLedger) === JSON.stringify(ctx.prepared.seeded[t]), prod.split('\n').filter((l) => l.includes(t) || /교정 대기/.test(l)).slice(0, 3)),
-        exp('S12 01:00 — 옛 장부 사유 대조 RECORDED → 교정 1 · 일반 요청 0 (하루 전체)', row?.lineageReconcile?.legacyInvalid === 'RECORDED' && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0, { lr: row?.lineageReconcile, bySlug: ev.sends.bySlug }),
+        exp('S12 01:00 — 옛 장부 사유 대조 RECORDED(migration v1) → 교정 1 · 일반 요청 0 (하루 전체)', row?.lineageReconcile?.legacyInvalid === 'RECORDED' && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0 &&
+          row?.lineageReconcile?.legacyInvalidMigration === 'legacy-invalid-first-response/gray-hair-leave-as-is/2026-10-11/v1' && reg.includes('legacy-invalid-first-response/gray-hair-leave-as-is/2026-10-11/v1'), { lr: row?.lineageReconcile, bySlug: ev.sends.bySlug }),
         exp('S12 교정 요청에 실제 위반 문장 그대로 (YAML frontmatter 가 없다 …)', typed.includes('[교정 요청]') && typed.includes('FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다'), typed.split('\n').filter((l) => /FIRST_RESPONSE|frontmatter/.test(l)).slice(0, 3)),
         exp('S12 등록 1 · PR MERGED · 배포 · 장부 행 정리', reg.includes('교정 재생성으로 원고 확보') && ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
       ]

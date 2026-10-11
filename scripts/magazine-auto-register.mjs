@@ -904,8 +904,8 @@ export function drive(slug, opts, deps = {}) {
     if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {
       const lr = reconcileLegacyInvalid({ draftsDir: deps.draftsDir ?? dirname(dirname(p.draftMd)), slug, messageFingerprint: g0.messageFingerprint, ...(quarantinePath ? { path: quarantinePath } : {}) })
       if (lr.status === 'RECORDED') {
-        add('lineage', 'ok', `옛 장부의 최초 invalid 응답 대조 → 위반 ${lr.violations.length}건 기록 (일반 요청 재전송 0)`)
-        lineageReconcile = { ...(lineageReconcile ?? {}), legacyInvalid: 'RECORDED' }
+        add('lineage', 'ok', `옛 장부의 최초 invalid 응답 대조 (${lr.migrationId}) → 위반 ${lr.violations.length}건 기록 (일반 요청 재전송 0)`)
+        lineageReconcile = { ...(lineageReconcile ?? {}), legacyInvalid: 'RECORDED', legacyInvalidMigration: lr.migrationId }
         const again = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
         if (!again.ok) { failClosed = true; return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 다시 읽지 못했다 — 보내지 않는다: ${again.why}`) }
         entryNow = again.entry

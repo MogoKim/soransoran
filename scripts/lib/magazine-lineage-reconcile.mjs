@@ -15,7 +15,7 @@
  *       결과 파일(`_runs/<날짜>/input-repair-*.json`)의 APPLIED 행과 장부의 수리 지문 · 지금 draft 검증을
  *       **모두** 대조해 맞을 때만 INPUT_REPAIR 계보를 **한 번** 연다. 하나라도 애매하면 열지 않는다.
  *
- *    ③ 옛 최초 invalid 응답 대조 (gray-hair-leave-as-is — 2026-10-11 운영 후 상태)
+ *    ③ 옛 최초 invalid 응답 대조 (gray-hair-leave-as-is — 2026-10-11 운영 후 상태 · `LEGACY_INVALID_MIGRATIONS` 한 사건만)
  *       10/11 01:00 일반 요청은 응답을 특정해(대화·메시지) 원고 관문에서 탈락했고, runner 는 그 신원이 있을 때만
  *       예약을 풀었다(`settlesDeliveryReservation`). 그러나 옛 판은 신원·위반을 장부에 적지 않았다 — 같은 일반 요청을
  *       다시 보내면 중복 전송이다. 장부의 사유 문장(`[validate] invalid_manuscript — 코드: 이유 · 전송 1건`) ·
@@ -217,29 +217,58 @@ export function parseLegacyViolations(text) {
   return clean.length === out.length && clean.length > 0 ? clean : null
 }
 
-/** 순수 판정 — 장부 행 · 원고 존재 · 지금 일반 요청 지문 */
-export function judgeLegacyInvalid({ entry, hasDraft, hasBrief, messageFingerprint }) {
+/**
+ * 🔴 **옛 invalid 대조는 정확히 한 사건만 — 버전이 있는 migration identity** (2026-10-11 Codex 재검토 P1).
+ *    앞판은 옛 장부 사유를 **지금의 아무 요청 지문**에나 묶었다 — brief 가 바뀌어 새 요청이 되어도 교정으로 돌렸다.
+ *    이제 아래 목록의 사건만, 다음이 **모두 정확히** 같을 때만 대조한다:
+ *      slug · 장부 행의 legacyLedgerKey (lastAt + 사유 문장의 sha256) · 지금 brief SHA-256 · 지금 일반 요청 지문
+ *    brief 나 보낼 메시지가 한 글자라도 바뀌면 NOT_RECONCILED (그때 일반 요청은 새 메시지다 — 중복이 아니다).
+ *    값은 2026-10-11 운영 장부·runtime brief 의 **읽기 전용 복사본**에서 계산했다
+ *    (brief 는 10/11 00:15:43 수리 뒤 그대로 · 일반 프롬프트 바이트 불변 → 10/11 01:00 에 실제로 보낸 요청의 지문).
+ */
+export const LEGACY_INVALID_MIGRATIONS = Object.freeze([Object.freeze({
+  id: 'legacy-invalid-first-response/gray-hair-leave-as-is/2026-10-11/v1',
+  slug: 'gray-hair-leave-as-is',
+  legacyLedgerKey: '2efc6e90ba4ee9efdfa10099e91d5b574b4cf56c617c273413490320571af153',
+  briefSha256: 'f010034d271a4e71dca84e4063f6e4c773d73678d67edf5196e90324e5fcd4ed',
+  messageFingerprint: 'sha256:8052446296d79945af0a727924b025f803d730074fc23dc9108f2cece736e7cf',
+})])
+
+/** 순수 판정 — migration identity · 장부 행 · 원고 존재 · 지금 brief · 지금 일반 요청 지문 */
+export function judgeLegacyInvalid({ entry, slug, hasDraft, hasBrief, briefSha256, messageFingerprint, migrations = LEGACY_INVALID_MIGRATIONS }) {
   const no = (why) => ({ ok: false, why })
+  const mig = migrations.find((x) => x.slug === slug)
+  if (!mig) return no('옛 invalid 대조 migration 대상 slug 가 아니다')
   if (!entry || typeof entry !== 'object') return no('장부 행이 없다')
-  if (entry.firstResponseInvalid) return no('이미 최초 응답 기록이 있다')
+  if (entry.firstResponseInvalid) return no('이미 최초 응답 기록이 있다 (migration 은 한 번만)')
   if (entry.regenLineage || (Number.isFinite(entry.regenCalls) && entry.regenCalls > 0)) return no('재생성 기록이 있다 — 옛 최초 실패 행이 아니다')
   if (entry.delivery) return no('전송 예약·전송불명 기록이 있다 — 응답을 특정하지 못한 것일 수 있다')
   if (!(entry.kind === 'CONTENT' && entry.sent === true && entry.attempts === 1)) return no('보낸 1회의 내용 실패 행이 아니다')
   if (hasDraft) return no('원고가 이미 있다')
   if (!hasBrief) return no('brief 가 없다')
-  if (!/^sha256:[0-9a-f]{64}$/.test(messageFingerprint ?? '')) return no('지금 일반 요청 지문을 모른다')
   const reasons = Array.isArray(entry.reasons) ? entry.reasons : []
   if (reasons.length !== 1) return no(`사유가 ${reasons.length}개다 — 정확히 1개여야 한다`)
   const m = LEGACY_INVALID_RE.exec(reasons[0])
   if (!m) return no('사유가 [validate] invalid_manuscript · 전송 1건 모양이 아니다')
   const violations = parseLegacyViolations(m[1])
   if (!violations) return no('위반 목록을 정확히 읽지 못했다')
-  return { ok: true, violations, legacyLedgerKey: sha(JSON.stringify([entry.lastAt ?? null, reasons[0]])) }
+  const legacyLedgerKey = sha(JSON.stringify([entry.lastAt ?? null, reasons[0]]))
+  if (legacyLedgerKey !== mig.legacyLedgerKey) return no('장부 행이 migration 의 그 사건이 아니다 (legacyLedgerKey 불일치)')
+  if (briefSha256 !== mig.briefSha256) return no('brief 가 그 사건 때와 다르다 (brief SHA-256 불일치) — 새 요청이다')
+  if (messageFingerprint !== mig.messageFingerprint) return no('지금 일반 요청이 그 사건 때 보낸 요청이 아니다 (지문 불일치)')
+  return { ok: true, violations, legacyLedgerKey, migrationId: mig.id }
 }
 
-/** gray 대조 — 맞으면 잠금 안에서 다시 보고 기록을 **한 번** 남긴다 (계보는 교정 단계가 그 키로 연다) */
-export function reconcileLegacyInvalid({ draftsDir, slug, messageFingerprint, path = QUARANTINE_PATH, now = Date.now() }) {
-  const facts = () => ({ hasDraft: existsSync(join(draftsDir, slug, 'draft.md')), hasBrief: existsSync(join(draftsDir, slug, 'brief.md')), messageFingerprint })
+/** gray 대조 — 맞으면 잠금 안에서 다시 보고 기록을 **한 번** 남긴다 (계보는 교정 단계가 그 키로 연다) · 재실행은 쓰기 0 */
+export function reconcileLegacyInvalid({ draftsDir, slug, messageFingerprint, path = QUARANTINE_PATH, now = Date.now(), migrations = LEGACY_INVALID_MIGRATIONS }) {
+  const facts = () => {
+    const briefPath = join(draftsDir, slug, 'brief.md')
+    const hasBrief = existsSync(briefPath)
+    return { slug, migrations, hasDraft: existsSync(join(draftsDir, slug, 'draft.md')), hasBrief,
+      briefSha256: hasBrief ? sha(readFileSync(briefPath, 'utf8')) : null, messageFingerprint }
+  }
+  // 대상 slug 가 아니면 장부도 읽지 않는다
+  if (!migrations.some((x) => x.slug === slug)) return { ok: true, status: 'NOT_RECONCILED', why: '옛 invalid 대조 migration 대상 slug 가 아니다' }
   const ledger = readQuarantine(path)
   if (!ledger.ok) return { ok: false, status: 'LEDGER_FAILED', why: ledger.why }
   const j = judgeLegacyInvalid({ entry: ledger.store[slug], ...facts() })
@@ -249,10 +278,10 @@ export function reconcileLegacyInvalid({ draftsDir, slug, messageFingerprint, pa
     const again = judgeLegacyInvalid({ entry: store[slug], ...facts() })
     if (!again.ok) { raced = again.why; return store }
     const record = { ...firstResponseInvalidRecord({ messageFingerprint, reason: 'invalid_manuscript', violations: again.violations }, now),
-      legacyLedgerKey: again.legacyLedgerKey, source: 'LEGACY_LEDGER_REASON' }
+      legacyLedgerKey: again.legacyLedgerKey, migrationId: again.migrationId, source: 'LEGACY_LEDGER_REASON' }
     return { ...store, [slug]: { ...store[slug], firstResponseInvalid: record } }
   }, path)
   if (!u?.ok) return { ok: false, status: 'LEDGER_FAILED', why: u?.why ?? '장부 갱신 실패' }
   if (raced) return { ok: true, status: 'NOT_RECONCILED', why: raced }
-  return { ok: true, status: 'RECORDED', violations: j.violations }
+  return { ok: true, status: 'RECORDED', violations: j.violations, migrationId: j.migrationId }
 }

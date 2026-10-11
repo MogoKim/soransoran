@@ -799,6 +799,7 @@ const slugsIn = (arts) => lib.sha256 && (() => { try { return Object.keys(Functi
   const extra = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x',
     SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME: fakeHome, SORAN_MAGAZINE_QUEUE_LOCK_DIR: path.join(fakeHome, 'Library', 'Application Support', 'soransoran', 'queue-locks') } })
   expect('🔴 가짜 운영 위치로도 같은 가드가 막는다 (파일 0)', [extra.ok, called, fs.existsSync(fakeHome)], [false, 0, false])
+  expect('🔴 운영 실행에 임시 폴더 잠금 위치 주입도 거부 (운영 writer 는 고정 위치 하나)', dirOf({ SORAN_MAGAZINE_QUEUE_LOCK_DIR: TEST_LOCK_DIR }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)
   expect('운영 실행에 임시 폴더 밖 잠금 폴더 주입은 거부 (운영 상호배제를 흩지 않는다)', dirOf({ SORAN_MAGAZINE_QUEUE_LOCK_DIR: path.join(REPO, '.not-tmp-locks') }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)
   expect('시험 모드 · HOME 이 운영 위치면(주입 없음) 경로 단계에서 거부', dirOf({ SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME: os.homedir() }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)
   expect('운영 실행이 운영 위치를 주입으로 가리켜도 거부 (주입 경로로는 운영 잠금 0)', dirOf({ SORAN_MAGAZINE_QUEUE_LOCK_DIR: opDir }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)

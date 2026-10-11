@@ -84,7 +84,18 @@ const MUTATIONS = [
   // ── 격리 — 운영 queue-locks ──
   { name: '격리 G8 검사가 임시 잠금 폴더를 쓰지 않음', check: 'g8', edits: [{ file: F.g8check, find: 'process.env.SORAN_MAGAZINE_QUEUE_LOCK_DIR = TEST_LOCK_DIR\n', replace: '' }] },
   { name: '격리 잠금 모듈의 시험 모드 운영 위치 거부 제거', check: 'g8', edits: [{ file: F.qlock, find: "  if (ops.includes(dir)) throw blocked(`시험 모드에서 운영 queue-locks 에 닿으려 했다 — 잠금 0: ${dir}`)\n", replace: '' }] },
-  { name: '격리 m3a 검사가 임시 잠금 폴더를 쓰지 않음', check: 'm3a', edits: [{ file: F.m3acheck, find: 'process.env.SORAN_MAGAZINE_QUEUE_LOCK_DIR = M3A_LOCK_DIR\n', replace: '' }] },
+  { name: '격리 m3a 검사가 임시 잠금 폴더를 쓰지 않음', check: 'm3a', edits: [{ file: F.m3acheck, find: 'setQueueLockDirForTest(M3A_LOCK_DIR)\n', replace: '' }] },
+  // ── 재검토 P1 — 운영 큐 잠금 위치는 고정 하나 ──
+  { name: 'P1 운영 모드 임시 폴더 주입 허용 (8a85f18 판 — writer 마다 다른 잠금)', edits: [{ file: F.qlock,
+    find: "    if (injected) throw blocked('SORAN_MAGAZINE_QUEUE_LOCK_DIR 는 SORAN_MAGAZINE_TEST_MODE=1 에서만 쓴다 — 운영 writer 는 고정 잠금 위치 하나만 쓴다')",
+    replace: '    if (injected) return resolve(String(injected))' }] },
+  // ── 재검토 P1 — gray 대조는 migration 한 사건만 ──
+  { name: 'P1 gray — 지금 요청 지문 대조 제거 (임의 지문 승인 · 8a85f18 판)', edits: [{ file: F.reconcile, find: "  if (messageFingerprint !== mig.messageFingerprint) return no(", replace: "  if (false) return no(" }] },
+  { name: 'P1 gray — brief SHA-256 대조 제거', edits: [{ file: F.reconcile, find: "  if (briefSha256 !== mig.briefSha256) return no(", replace: "  if (false) return no(" }] },
+  { name: 'P1 gray — 장부 사건 키 대조 제거 (다른 과거 CONTENT 행 승인)', edits: [{ file: F.reconcile, find: "  if (legacyLedgerKey !== mig.legacyLedgerKey) return no(", replace: "  if (false) return no(" }] },
+  { name: 'P1 gray — slug 무관하게 migration 적용', edits: [{ file: F.reconcile, find: '  const mig = migrations.find((x) => x.slug === slug)\n', replace: '  const mig = migrations[0]\n' },
+    { file: F.reconcile, find: "  if (!migrations.some((x) => x.slug === slug)) return { ok: true, status: 'NOT_RECONCILED'", replace: "  if (false) return { ok: true, status: 'NOT_RECONCILED'" }] },
+  { name: 'P1 gray — 한 번 기록 뒤에도 다시 기록 (재실행 쓰기)', edits: [{ file: F.reconcile, find: "  if (entry.firstResponseInvalid) return no('이미 최초 응답 기록이 있다 (migration 은 한 번만)')\n", replace: '' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
