@@ -370,7 +370,7 @@ const OK_SIGNALS: HealthSignal[] = [
   { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'ok', reasons: [] }, { axis: 'errors', health: 'ok', reasons: [] },
 ]
 /** 🔴 controller 스크립트와 같은 조립 — 시험 대상은 `trialPlanOf` 가 정하고, 그 대상의 preflight 를 넘긴다 */
-/** 🔴 controller 와 같다 — 계획이 있으면 그 대상, 없으면 지속 단계의 다음 칸 preflight(원인 해소 여부 · 2026-10-11 Batch A1) */
+/** 🔴 controller 와 같다 — 계획이 있으면 그 대상, 없으면 지속 단계의 다음 칸 preflight(현재 단계 재인증 여부 · 2026-10-11 Batch A1) */
 const run = (prev: ValidatedStageDecision, ev: StageEvidenceVerdict | null, o: Partial<ControllerInputs> = {}) => {
   const plan = trialPlanOf(prev, ev)
   const up = nextStage(sustainedReleaseOf(prev, ev))
@@ -432,7 +432,7 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   check('🟢 D5 PASS → TRIAL d10', d10.state === 'TRIAL' && d10.release === 'd10' && validateForToday(d10).ok, `${d10.state} ${d10.release}`)
 
   const hold3 = run(PREV_HOLD_D3, null)
-  check('🔴 증거 없는 d3 유지 날 · d5 preflight 초록(원인 해소) → d3 를 하루 증명일로 다시 돈다(REPROVE · 내리지 않는다)',
+  check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS → d3 재인증(REPROVE = 현재 단계 RETEST · 내리지 않는다)',
     hold3.decision.release === 'd3' && hold3.decision.state === 'REPROVE', `${hold3.decision.state} ${hold3.decision.release}`)
   const hold3Blocked = run(PREV_HOLD_D3, null, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
   check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (매일 REPROVE 없음 · 0..3)',

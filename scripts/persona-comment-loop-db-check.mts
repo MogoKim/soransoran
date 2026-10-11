@@ -51,7 +51,6 @@ const { SupplyLlmSession } = await import('./lib/supply-llm-call.mjs')
 const { judgeCommentCall } = await import('./lib/persona-comment-call.mjs')
 const { appendLedgerLine, ledgerPathOf } = await import('./lib/llm-ledger-store.mjs')
 const { ledgerDateOf } = await import('../src/lib/llm-ledger')
-const { acquireLock, releaseLock } = await import('./lib/collect-lock.mjs')
 const { kstDayStart } = await import('../src/lib/persona-cap')
 type CommentGenerate = import('./lib/persona-comment-loop.mjs').CommentGenerate
 type TargetSource = import('./lib/persona-comment-targets').TargetSource
@@ -411,11 +410,7 @@ async function main(): Promise<void> {
     await auditReplies()
     check('🔴 🔴 **다른 Persona 후보 둘을 동시에 발행 → Serializable 이 1건만 남긴다**',
       (await personaComments(pid2)).length === 1 && res.filter((z) => z.kind === 'published').length === 1, JSON.stringify(res.map((z) => z.kind)))
-    const lockPath = join(HOME, 'lock-probe.lock')
-    const l1 = acquireLock(lockPath, Date.now(), 60_000)
-    const l2 = acquireLock(lockPath, Date.now(), 60_000)
-    check('🔴 같은 기계의 두 번째 회차는 잠금에서 물러난다', l1.ok && !l2.ok && l2.kind === 'HELD')
-    if (l1.ok) releaseLock(l1.handle)
+    // 🔴 같은 기계의 두 번째 회차 — 커널 lease(lockf) 반례는 `persona:comment-loop-check` ⑧ 이 실제 subprocess 로 본다
   }
 
   console.log('\n⑨ 단계가 bootstrap-auto 가 아니면 — provider 0 · write 0 · 트랜잭션도 막는다')

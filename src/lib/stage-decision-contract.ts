@@ -41,8 +41,9 @@ export const DECISION_WRITER = 'controller' as const
 export type DecisionWriter = typeof DECISION_WRITER
 
 /**
- * 🔴 **`REPROVE` — 원인이 풀린 날 지금 단계를 하루 증명일로 다시 돈다** (2026-09-29 · 2026-10-11 Batch A1 좁힘).
- *    이어 갈 시험 계획이 없는데(지금 단계 PASS 가 낡았다) **다음 칸 preflight 가 오늘 PASS** 인 날에만 쓴다.
+ * 🔴 **`REPROVE` — 현재 단계 재인증(RETEST)** (2026-09-29 · 2026-10-11 Batch A1 좁힘). 새 증명일 유형이 아니다.
+ *    유효한 현재 단계 증명 기반이 없어 이어 갈 authoritative trial plan 이 없고 · **다음 단계 preflight 가 오늘 PASS** 이고 ·
+ *    현재 단계 첫 슬롯 전인 날에만 쓴다.
  *    공개 단계는 **올라가지 않는다** — 그날 자동 target 이 목표 슬롯을 먼저 채워(`stage-proof-day`) 내일 판정할
  *    운영 증거를 만든다. 🔴 다음 칸이 막힌 날은 REPROVE 가 아니라 평상일(HOLD/PREPARE · 0..Dn)이다.
  *    🔴 앞판에는 이 상태가 없어 PASS 뒤 하루라도 HOLD 가 끼면 그 뒤 증거가 전부

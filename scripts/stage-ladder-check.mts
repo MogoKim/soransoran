@@ -210,18 +210,21 @@ console.log('\n③ 🔴 🔴 PASS 가 아니면 같은 단계를 다시 · 바�
     mismatch.state !== 'TRIAL' && mismatch.release === 'd1' && mismatch.blocks.some((b) => b.code === 'PROVENANCE_STAGE'),
     `${mismatch.state} ${mismatch.release}`)
   const hold3 = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5') })
-  check('🔴 증거 없는 d3 유지 날 · d5 preflight 초록(원인 해소) → 시험 없이 REPROVE d3 (오르지 않는다)',
+  check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS · 첫 슬롯 전 → REPROVE d3 = 현재 단계 재인증(오르지 않는다)',
     hold3.state === 'REPROVE' && hold3.release === 'd3' && hold3.transition === null)
   const hold3Blocked = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
   check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (REPROVE 아님 · 0..3)',
     hold3Blocked.state === 'PREPARE' && hold3Blocked.release === 'd3' && hold3Blocked.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
     `${hold3Blocked.state} ${hold3Blocked.release}`)
+  const hold3Unk = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) })
+  check('🔴 🔴 증명 기반 없는 d3 유지 날 · d5 preflight UNKNOWN → 평상일 PREPARE d3 (REPROVE 아님)',
+    hold3Unk.state === 'PREPARE' && hold3Unk.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'), hold3Unk.state)
   const hold3NoPf = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: null })
   check('🔴 증거 없는 d3 유지 날 · preflight 모름 → 평상일 PREPARE d3 (PREFLIGHT_UNKNOWN)',
     hold3NoPf.state === 'PREPARE' && hold3NoPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
   const hold3Late = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5'),
     decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() })
-  check('🔴 원인이 풀렸어도 d3 첫 슬롯 뒤에 결정하면 재증명하지 않는다 (LATE_START · 평상일)',
+  check('🔴 d5 preflight PASS 여도 d3 첫 슬롯 뒤에 결정하면 재인증하지 않는다 (LATE_START · 평상일)',
     hold3Late.state === 'PREPARE' && hold3Late.blocks.some((b) => b.code === 'LATE_START'))
   const first = plan({ sustained: 'd1', prev: null, preflight: preflightFor('d3') })
   check('🔴 전날 결정이 없으면 시험 없음 (첫 controller 실행일 · fail-closed)',
@@ -835,7 +838,7 @@ console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 vali
     { label: 'TRIAL FLOOR (d1 → d3)', d: plan({ sustained: 'd1', prev: prevDecision('d1'), preflight: preflightFor('d3') }) },
     { label: '평상일 PREPARE (preflight UNKNOWN)', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) }) },
     { label: '평상일 PREPARE (증거 없는 d5 유지 날 · preflight 없음)', d: plan({ sustained: 'd5', prev: prevDecision('d5') }) },
-    { label: 'REPROVE (증거 없는 d5 유지 날 · d10 원인 해소)', d: plan({ sustained: 'd5', prev: prevDecision('d5'), preflight: preflightFor('d10') }) },
+    { label: 'REPROVE (증명 기반 없는 d5 유지 날 · d10 preflight PASS · 현재 단계 재인증)', d: plan({ sustained: 'd5', prev: prevDecision('d5'), preflight: preflightFor('d10') }) },
     { label: 'PREPARE (전날 결정 없음)', d: plan({ sustained: 'd1', prev: null }) },
     { label: 'PROVENANCE_STAGE (기반 ≠ 지속)', d: plan({ sustained: 'd1', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }) },
     { label: 'LATE_START', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'), decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() }) },

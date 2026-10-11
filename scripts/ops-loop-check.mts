@@ -256,7 +256,7 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
   const floor = decideStage(inputs({ signals: withSignal('cost', 'bad') }))
   check('감속은 d1 아래로 가지 않는다', floor.decision.release === 'd1' && validateForToday(floor.decision).ok)
 
-  // 🔴 d5 preflight 초록 — 사다리는 REPROVE d3(원인 해소 날)를 낸다. 모르는 신호가 그것을 되돌리는지 본다
+  // 🔴 d5 preflight 초록 — 사다리는 REPROVE d3(현재 단계 재인증)를 낸다. 모르는 신호가 그것을 되돌리는지 본다
   const greenD5 = { stage: 'd5' as const, verdict: 'PASS' as const, codes: [], counts: {} }
   const unkPlanned = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), nextPreflight: greenD5 }))
   check('기준선 — 신호가 정상이면 같은 입력은 REPROVE d3', unkPlanned.decision.state === 'REPROVE' && unkPlanned.decision.release === 'd3',

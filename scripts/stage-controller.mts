@@ -144,7 +144,7 @@ async function evidenceOnly(date: string): Promise<number> {
       log(`   ${evidenceReasonOf(v)}`)
       if (decision !== null) {
         const plan = trialPlanOf(decision, v)
-        log(`   ▸ 다음 날 시험  ${plan === null ? '없음 — 평상일(0..Dn) · 다음 칸 원인이 풀렸을 때만 재증명' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}\n`)
+        log(`   ▸ 다음 날 시험  ${plan === null ? '없음 — 평상일(0..Dn) · 증명 기반이 없고 다음 단계 preflight PASS 인 날만 현재 단계 재인증' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}\n`)
       }
     }
     return 0
@@ -201,7 +201,7 @@ async function main(): Promise<number> {
     }
     const sustained = sustainedReleaseOf(previous, evidence)
     const plan = previous === null ? null : trialPlanOf(previous, evidence, carriedPlan)
-    log(`   지속 단계 ${sustained} · 시험 계획  ${plan === null ? '없음 — 평상일(0..Dn) · 다음 칸 원인이 풀렸을 때만 재증명' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}`)
+    log(`   지속 단계 ${sustained} · 시험 계획  ${plan === null ? '없음 — 평상일(0..Dn) · 증명 기반이 없고 다음 단계 preflight PASS 인 날만 현재 단계 재인증' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}`)
 
     // ② 시험 대상 preflight — 오늘(증명일) 전체 슬롯 기준
     let nextPreflight: PreflightVerdict | null = null
@@ -213,7 +213,7 @@ async function main(): Promise<number> {
       publishedToday = s.publishedToday
       /**
        * 🔴 preflight 대상 — 계획이 있으면 그 시험 대상, 없으면 **지금 단계의 다음 칸**(2026-10-11 Batch A1).
-       *    계획이 없는 날은 평상일이 기본이다. 다음 칸을 막던 원인이 풀렸는지(재증명 여부)를 같은 관문으로 본다.
+       *    계획이 없는 날은 평상일이 기본이다. 다음 단계 preflight 가 PASS 인지(현재 단계 재인증 여부)를 같은 관문으로 본다.
        */
       const target: RuntimeStage | null = previous === null ? null
         : plan !== null ? (plan.base === sustained ? plan.target : null)

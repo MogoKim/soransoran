@@ -250,7 +250,7 @@ export function judgeStageEvidence(
 
 /**
  * 🔴 **증명일 상태** — 그날 자동 target 이 목표 슬롯을 먼저 채운 날이다(`consumerEnvOf` 의 증명일 env).
- *    TRIAL(재시험 포함) · REPROVE(원인이 풀린 날의 재증명). HOLD·PREPARE 는 **평상일**이다 — 공개 0..Dn ·
+ *    TRIAL(재시험 포함) · REPROVE(현재 단계 재인증 = 현재 단계 RETEST). HOLD·PREPARE 는 **평상일**이다 — 공개 0..Dn ·
  *    exact N 판정을 받지 않는다(그날 증거는 `DECISION_NOT_TRANSITION` 로 PASS 가 아닐 뿐 · 빚을 남기지 않는다).
  */
 export const PROOF_STATES: readonly string[] = ['TRIAL', 'REPROVE']

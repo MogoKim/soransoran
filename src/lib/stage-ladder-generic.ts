@@ -437,7 +437,7 @@ export function trialBlocks(i: {
 
 /**
  * 🔴 **그 단계 오늘 첫 슬롯이 결정 시각보다 앞이면 막는다**(`LATE_START`) — 조각 하루로 증명하지 않는다.
- *    시험(`trialBlocks`)과 원인 해소 뒤 재증명(사다리 REPROVE)이 같은 함수를 쓴다.
+ *    시험(`trialBlocks`)과 현재 단계 재인증(사다리 REPROVE)이 같은 함수를 쓴다.
  */
 export function lateStartBlocks(i: { target: RuntimeStage; kstDate: string; runAt: string }): StageBlock[] {
   const opens = firstSlotOn(i.kstDate, profileOf(i.target))

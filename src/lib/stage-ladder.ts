@@ -6,8 +6,9 @@
  *   · FAIL · UNKNOWN → 같은 단계를 다시 시험한다(RETEST) — 그 대상 preflight 가 초록일 때만(원인 해소 뒤)
  *   · 🔴 **Dn 은 인증된 상한이다** (2026-10-11 Batch A1). 시험이 열리지 않은 날은 **평상일**이다 —
  *     공개 0..Dn · 증명일 env 없음 · exact N 강제 없음 · 모자란 편수는 다음 날 빚이 아니다.
- *   · 평상일에 다음 칸을 막던 원인이 풀렸는데(그 칸 preflight PASS) 이어 갈 계획이 없으면(증거가 낡았다)
- *     그날 하루만 지금 단계를 증명일로 다시 돈다(REPROVE) — 다음 날 그 PASS 로 시험한다. 바닥(d1) 제외
+ *   · **REPROVE = 현재 단계의 재인증(RETEST)** — 새 증명일 유형이 아니다. 유효한 현재 단계 증명 기반이 없어
+ *     이어 갈 authoritative trial plan 이 없고(`trialPlanOf` null) · 다음 단계 preflight 가 PASS 이고 ·
+ *     현재 단계 첫 슬롯 전일 때만 현재 단계를 다시 증명한다(같은 exact N 판정). 그 PASS 다음 날 다음 단계를 시험한다. 바닥(d1) 제외
  *   · 단계가 바꾸는 것은 처리량과 필요 용량뿐이다 — 콘텐츠 선택 철학(`judgeSlotRelease`)은 같다
  *
  * 🔴 **지운 길 (2026-10-11 Batch A1)** — "다음 칸 preflight 가 막혀 시험이 안 열린 날마다 REPROVE"
@@ -68,7 +69,7 @@ export type StageInputs = {
   carriedPlan?: TrialPlan | null
   /**
    * 🔴 **시험 대상의 preflight** — `judgeNextPreflight`(D3~D100 한 함수). 시험 대상이 있을 때 반드시 그 단계 것이어야 한다.
-   *    계획이 없으면 **지금 단계의 다음 칸** 것이다 — 원인이 풀렸는지(REPROVE 여부)를 이것 하나로 본다.
+   *    계획이 없으면 **지금 단계의 다음 칸** 것이다 — 현재 단계 재인증(REPROVE) 여부를 이것 하나로 본다.
    */
   nextPreflight: PreflightVerdict | null
   publishedToday: number
@@ -105,7 +106,7 @@ function authoritativeTrialPlan(input: StageInputs, out: StageBlock[]): TrialPla
   if (plan === null) {
     out.push({
       code: 'PROVENANCE_PREVIOUS',
-      reason: `${want} ${prev.release} 는 운영 PASS 가 아니다 — 🔴 증거 없이 올라갈 칸이 없다(평상일 — 다음 칸 원인이 풀릴 때만 재증명)`,
+      reason: `${want} ${prev.release} 는 운영 PASS 가 아니다 — 🔴 증거 없이 올라갈 칸이 없다(평상일 — 다음 단계 preflight PASS 인 날만 현재 단계 재인증)`,
     })
   }
   return plan
@@ -113,7 +114,7 @@ function authoritativeTrialPlan(input: StageInputs, out: StageBlock[]): TrialPla
 
 /**
  * 🔴 **한 결정.** 시험(TRIAL) 은 계획 + 그 대상 preflight PASS + 첫 슬롯 전일 때만 ·
- *    아니면 평상일(HOLD/PREPARE · 0..Dn) — 원인이 풀린 날만 REPROVE.
+ *    아니면 평상일(HOLD/PREPARE · 0..Dn) — 증명 기반이 없고 다음 단계가 준비된 날만 현재 단계 재인증(REPROVE).
  */
 export function planStageDecision(input: StageInputs): StageDecision {
   const base = {
@@ -167,10 +168,11 @@ export function planStageDecision(input: StageInputs): StageDecision {
   /**
    * ── 시험이 열리지 않은 날 = 평상일 (2026-10-11 Batch A1) ──
    * 🔴 공개 단계 Dn 은 **상한**이다 — 0..Dn 을 낸다. 증명일 env 도 exact N 도 없다(HOLD/PREPARE).
-   * 🔴 단 하나의 예외 — **원인이 풀린 날의 재증명**(REPROVE). 아래가 전부 참일 때만이다:
-   *    · 이어 갈 시험 계획이 없다(`plan === null` — 지금 단계의 PASS 가 낡아 다음 칸 근거가 없다)
+   * 🔴 단 하나의 예외 — **현재 단계 재인증**(REPROVE · 현재 단계 RETEST). 아래가 전부 참일 때만이다:
+   *    · 유효한 현재 단계 증명 기반이 없어 이어 갈 authoritative trial plan 이 없다(`plan === null` —
+   *      전날 PASS 없음 · 전날이 TRIAL 아님 · 이어 온 계획 없음/만료 · 바닥 아님을 `trialPlanOf` 가 정한다)
    *    · 전날 결정이 바로 전날 것이고 · 지금 단계가 바닥 위이고 · 다음 칸이 있다
-   *    · 🔴 **다음 칸 preflight 가 오늘 PASS** 다(`trialBlocks` 의 preflight 관문 그대로 — 막던 원인이 풀렸다)
+   *    · 🔴 **다음 칸 preflight 가 오늘 PASS** 다(`trialBlocks` 의 preflight 관문 그대로 · FAIL/UNKNOWN 이면 평상일)
    *    · 지금 단계의 오늘 첫 슬롯이 결정 시각 뒤다(`lateStartBlocks` — 조각 하루로 증명하지 않는다)
    *    다음 칸이 막혀 있으면 REPROVE 하지 않는다 — 막힌 날 exact N 을 매일 강제하던 길을 지웠다.
    */
@@ -187,7 +189,7 @@ export function planStageDecision(input: StageInputs): StageDecision {
       ]
       if (gate.length === 0) {
         state = 'REPROVE'
-        reasons.push(`🟢 REPROVE — 다음 칸 ${up} 를 막던 원인이 풀렸다(preflight PASS) · 공개 ${release} 를 오늘 하루 증명일로 다시 돈다`)
+        reasons.push(`🟢 REPROVE — 현재 단계 ${release} 재인증(RETEST) · 유효한 증명 기반 없음 · 다음 단계 ${up} preflight PASS · 첫 슬롯 전`)
       } else {
         blocks.push(...gate)
         reasons.push(`🟢 평상일 — 공개 ${release} 는 상한(0..${profileOf(release).dailyTarget}) · 다음 칸 ${up} 이 막혀 재증명하지 않는다`)

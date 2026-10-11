@@ -8,10 +8,11 @@
  *
  * 🔴 **--live 가 없으면** provider 0 · DB write 0. 무엇을 할지만 찍는다.
  * 🔴 **공통 진입점** (2026-10-11 Batch A4) — 정기(launchd 슬롯) · 복구(`runner-recover` kickstart) · (다음) 사건 깨움이
- *    **이 진입점 하나**를 지난다. 같은 lease(`runner-lease` = `collect-lock` 의 `wx` · 자동 회수 없음) ·
+ *    **이 진입점 하나**를 지난다. 같은 lease(`runner-lease` = `/usr/bin/lockf` 커널 잠금 · 죽으면 저절로 풀린다) ·
  *    같은 하루 예산(댓글 장부 하나) · 같은 멱등(PENDING 먼저 내기 · 글당 1건 · 조건부 UPDATE)이다.
  *    · lease 를 못 잡은 깨움은 follow-up 표식 하나로 합쳐 물러난다 — 주인이 끝낸 뒤 **한 번만** 더 돈다
- *    · lease 를 쥔 채 죽으면 자동으로 뺏지 않는다(다음 회차는 물러난다 · 사람이 치운다)
+ *    · holder 가 죽거나(SIGKILL · 전원 · 재부팅) 끝나면 커널이 잠금을 푼다 — 사람이 파일을 지울 일이 없다
+ *    · 살아 있는 holder 는 시각 · PID · rename 으로 뺏지 않는다
  *    · lease · 예산은 provider 호출 · DB write **전에** 본다 — lease 가 먼저, 유료 생성 전에 예산
  *    기계 사이는 발행 트랜잭션(Serializable · 글당 1건 재검사)이 막는다.
  * 🔴 **비용** — 댓글 전용 장부(`persona-comment-ledger`) · 하루 상한 ≤ $0.20
@@ -23,14 +24,13 @@
  *   npx tsx scripts/persona-comment-loop.mts --live     # 🔴 예약 실행과 같다
  */
 import { mkdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import { PrismaClient } from '@prisma/client'
 
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
-import {
-  acquireRunnerLease, releaseRunnerLease, requestFollowUp, takeFollowUp, shouldRunFollowUp, MAX_FOLLOW_UPS,
-} from './lib/runner-lease.mjs'
+import { leaseEntry, stillInKernelLease, type LeaseProof } from './lib/runner-lease.mjs'
 import { readCostSignals } from './lib/ops-signals.mjs'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -41,7 +41,7 @@ import { judgeCommentCall } from './lib/persona-comment-call.mjs'
 import { SupplyLlmSession, missingBudgetEnvNames } from './lib/supply-llm-call.mjs'
 import { type ProviderModel } from './lib/voice-m3-provider.mjs'
 import {
-  COMMENT_LOOP_LOCK_FILE, COMMENT_LOOP_LOCK_TTL_MS, commentLoopLedgerDir, commentLoopLockDir,
+  COMMENT_LOOP_LOCK_FILE, commentLoopLedgerDir, commentLoopLockDir,
   runCommentLoop, generationGateOf, type CommentGenerate, type SweepResult,
 } from './lib/persona-comment-loop.mjs'
 
@@ -53,56 +53,38 @@ function sweepLine(label: string, s: SweepResult | null): string {
 
 async function main(): Promise<number> {
   await loadEnvLocal()
-  const startedAt = new Date()
-  console.log(`\n══ 무인 Persona 댓글 루프 ${LIVE ? '(--live)' : '(dry-run)'} ══\n`)
-
   const lockDir = commentLoopLockDir()
   try { mkdirSync(lockDir, { recursive: true, mode: 0o700 }) } catch (e) {
     console.error(`🔴 잠금 디렉터리를 만들지 못했다 — ${(e as { code?: string }).code ?? 'UNKNOWN'}`)
     return 1
   }
-  // 🔴 lease 가 먼저다 — provider 호출 · DB write 전에
-  const lock = acquireRunnerLease(lockDir, COMMENT_LOOP_LOCK_FILE, startedAt.getTime(), COMMENT_LOOP_LOCK_TTL_MS)
-  if (!lock.ok) {
-    if (lock.kind === 'HELD') {
-      // 🔴 겹친 깨움은 합친다 — 주인이 끝낸 뒤 한 번만 더 돈다(여기서 또 돌지 않는다)
-      // 표식의 trigger 칸은 진단용이다 — 몫 · 잠금 · 예산은 회차 종류로 갈리지 않는다(launchd 정기 · 복구 kickstart 는 같은 label 이라 구별하지 않는다)
-      const f = requestFollowUp(lockDir, startedAt.getTime(), process.env.XPC_SERVICE_NAME === COMMENT_RUNNER_LABEL ? 'scheduled' : 'manual')
-      console.log(`⏭️  LOCK_HELD — 다른 회차가 돌고 있다 · ${lock.reason} · follow-up ${f} · 물러난다`)
-      return f === 'ERROR' ? 1 : 0
-    }
-    console.error(`🔴 잠금 — ${lock.kind} · ${lock.reason}`)
-    return 1
-  }
-
-  const prisma = new PrismaClient()
-  let worst = 0
+  /**
+   * 🔴 **공통 진입 — 커널 lease 가 먼저다.** 바깥은 lockf 아래로 같은 스크립트를 다시 띄우기만 한다(DB · provider 0).
+   *    안쪽은 커널 잠금 증명 뒤에만 DB 클라이언트를 만든다. 정기 · 복구 kickstart · (다음) 사건 · 수동이 같은 길이다.
+   *    trigger 칸은 진단용이다 — 잠금 · 장부 · 상한은 회차 종류로 갈리지 않는다.
+   */
+  let prisma: PrismaClient | null = null
   try {
-    // 🔴 시작할 때 이미 있던 깨움은 이번 회차가 받는다
-    const atStart = takeFollowUp(lock.handle, lockDir)
-    if (atStart === 'TAKEN') console.log('  follow-up 표식을 거뒀다 — 이번 회차가 그 깨움을 받는다')
-    for (let pass = 0; ; pass += 1) {
-      const code = await runPass(prisma, new Date(), pass)
-      worst = Math.max(worst, code)
-      if (code === 1) break
-      // 🔴 상한에 닿았으면 표식을 거두지 않는다 — 남은 깨움은 다음 회차가 시작할 때 받는다(지우고 버리지 않는다)
-      if (pass >= MAX_FOLLOW_UPS) break
-      const take = takeFollowUp(lock.handle, lockDir)
-      if (!shouldRunFollowUp(pass, take)) break
-      console.log(`\n  ── follow-up 회차 (${pass + 1}/${MAX_FOLLOW_UPS}) — 겹친 깨움을 합친 한 번 ──`)
-    }
-    return worst
+    return await leaseEntry({
+      lockDir, lockFile: COMMENT_LOOP_LOCK_FILE, scriptPath: fileURLToPath(import.meta.url), argv: process.argv.slice(2),
+      env: process.env, trigger: process.env.XPC_SERVICE_NAME === COMMENT_RUNNER_LABEL ? 'scheduled' : 'manual',
+      log: (l) => console.log(l),
+      pass: async (pass, proof) => {
+        if (pass === 0) console.log(`\n══ 무인 Persona 댓글 루프 ${LIVE ? '(--live)' : '(dry-run)'} · 커널 lease 안 ══\n`)
+        prisma ??= new PrismaClient()
+        return runPass(prisma, new Date(), pass, proof)
+      },
+    })
   } catch (e) {
     console.error(`🔴 회차 예외 — ${e instanceof Error ? e.name : 'unknown'}`)
     return 1
   } finally {
-    await prisma.$disconnect().catch(() => undefined)
-    releaseRunnerLease(lock.handle)
+    if (prisma !== null) await (prisma as PrismaClient).$disconnect().catch(() => undefined)
   }
 }
 
 /** 🔴 한 회차 — lease 를 쥔 채로만 부른다. 0 정상 · 1 예외 · 2 발행 오류가 남았다 */
-async function runPass(prisma: PrismaClient, now: Date, pass: number): Promise<number> {
+async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: LeaseProof): Promise<number> {
   try {
     const budget = commentLoopLimitsFromEnv(process.env)
     const missing = missingBudgetEnvNames(budget.limits)
@@ -128,6 +110,8 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number): Promise<n
         const prompt = buildPromptFromInput(input, recentTexts, reference.byCode.get(input.personaCode),
           { requireReference: reference.byCode.size > 0 })
         if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
+        // 🔴 유료 호출 직전 — 커널 잠금 증명을 다시 본다(lockf 가 죽었으면 잠금이 풀렸다 · 부르지 않는다)
+        if (!stillInKernelLease(proof, process.env)) return { ok: false, text: null, errorCode: 'LEASE_LOST' }
         // 🔴 장부를 지나서만 부른다 — 계산 → 예약 → 요청 → 정산
         const res = await session.call({
           stage: 'commentGen',

@@ -2,7 +2,7 @@
  * 🔴 **단계 controller — 사다리(`planStageDecision`) 위에 운영 신호 브레이크를 얹는다** (2026-09-28 · 2026-09-30 단순화)
  *
  * 🔴 **새 문턱값을 만들지 않는다.** 판정은 전부 정본이 한다:
- *    · 시험 대상    `trialPlanOf`(전날 결정 + 전날 운영 증거 + 이어진 계획) → TRIAL / RETEST · 계획 없음 = 평상일(원인 해소 날만 REPROVE)
+ *    · 시험 대상    `trialPlanOf`(전날 결정 + 전날 운영 증거 + 이어진 계획) → TRIAL / RETEST · 계획 없음 = 평상일(다음 단계 preflight PASS 인 날만 현재 단계 재인증 REPROVE)
  *    · 다음 칸      `judgeNextPreflight`(D3~D100 한 함수) — 기회 · 처리량 · 지연 · Persona · 비용 · 러너
  *    · 운영 증거    `judgeStageEvidence`(조항 ⑦ source-slot-v1 도장 포함)
  *    · 품질        자동 READY 감사 정본 — 확정 결함 · 글 유실 · 재시도 가능 실패 · 판정 시한 초과(6h)
