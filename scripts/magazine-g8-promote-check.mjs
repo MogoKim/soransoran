@@ -42,6 +42,12 @@ import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 process.env.SORAN_MAGAZINE_TEST_MODE = '1'
 process.env.SORAN_MAGAZINE_QUEUE_LOCK_SCOPE = `test-g8-check-${process.pid}`
 const TEST_SCOPE = process.env.SORAN_MAGAZINE_QUEUE_LOCK_SCOPE
+/**
+ * 🔴 잠금 **파일**도 운영 queue-locks 밖에 둔다 — 자식도 물려받는다 (2026-10-11 실측).
+ *    앞판은 시험 scope 이름만 달랐을 뿐 `~/Library/Application Support/soransoran/queue-locks/` 안에 만들고 지웠다.
+ */
+const TEST_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-check-locks-'))
+process.env.SORAN_MAGAZINE_QUEUE_LOCK_DIR = TEST_LOCK_DIR
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
@@ -777,10 +783,25 @@ const slugsIn = (arts) => lib.sha256 && (() => { try { return Object.keys(Functi
   expect('운영 scope 는 경로와 무관하게 하나다', [qlock.queueLockBase('/a/topic-queue.ts', {}) === qlock.queueLockBase('/b/other/topic-queue.ts', {}),
     qlock.queueLockBase('/a/topic-queue.ts', {}).endsWith(`${qlock.QUEUE_LOCK_SCOPE}.queue`)], [true, true])
   let called = 0
-  const blocked = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x' } })
+  // 🔴 잠금 폴더를 함께 준다 — scope 판정을 지운 변이에서도 잠금은 임시 폴더로만 간다 (운영 queue-locks 접근 0)
+  const blocked = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x', SORAN_MAGAZINE_QUEUE_LOCK_DIR: TEST_LOCK_DIR } })
   expect('시험 모드 밖 scope 주입은 잠금 거부 · 임계구역 실행 0', [blocked.ok, blocked.code, called], [false, qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE, 0])
-  const badName = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'prod' } })
+  const badName = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'prod', SORAN_MAGAZINE_QUEUE_LOCK_DIR: TEST_LOCK_DIR } })
   expect('시험 scope 이름은 test- 로 시작해야 한다', [badName.ok, called], [false, 0])
+  // 🔴 운영 queue-locks 격리 (2026-10-11) — 거부는 파일 접근 전에 일어난다
+  expect('시험 잠금 폴더는 임시 폴더다 (운영 queue-locks 아님)',
+    [qlock.queueLockDir() === TEST_LOCK_DIR, qlock.operationalQueueLockDirs().includes(qlock.queueLockDir())], [true, false])
+  // 🔴 운영 위치 판정은 **경로 계산만**으로 본다 (`queueLockDir` 은 파일을 건드리지 않는다) — 가드를 지운 변이에서도 운영 queue-locks 접근 0
+  const opDir = qlock.operationalQueueLockDirs()[0]
+  const dirOf = (env) => { try { return qlock.queueLockDir(env) } catch (e) { return e.code } }
+  expect('🔴 시험 모드가 운영 queue-locks 를 가리키면 경로 단계에서 거부', dirOf({ SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_DIR: opDir }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)
+  const fakeHome = path.join(os.tmpdir(), `g8-fake-op-home-${process.pid}`)
+  const extra = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x',
+    SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME: fakeHome, SORAN_MAGAZINE_QUEUE_LOCK_DIR: path.join(fakeHome, 'Library', 'Application Support', 'soransoran', 'queue-locks') } })
+  expect('🔴 가짜 운영 위치로도 같은 가드가 막는다 (파일 0)', [extra.ok, called, fs.existsSync(fakeHome)], [false, 0, false])
+  expect('운영 실행에 임시 폴더 밖 잠금 폴더 주입은 거부 (운영 상호배제를 흩지 않는다)', dirOf({ SORAN_MAGAZINE_QUEUE_LOCK_DIR: path.join(REPO, '.not-tmp-locks') }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)
+  expect('시험 모드 · HOME 이 운영 위치면(주입 없음) 경로 단계에서 거부', dirOf({ SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_GUARD_EXTRA_OPERATIONAL_HOME: os.homedir() }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)
+  expect('운영 실행이 운영 위치를 주입으로 가리켜도 거부 (주입 경로로는 운영 잠금 0)', dirOf({ SORAN_MAGAZINE_QUEUE_LOCK_DIR: opDir }), qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE)
   const f = fresh()
   const arts = regArticles(f)
   const pre = { q: fs.readFileSync(filesOf(f).queue, 'utf8'), a: fs.readFileSync(arts, 'utf8') }
@@ -1004,7 +1025,7 @@ function makeMiniRepo() {
 const regCli = (m, extraEnv = {}) => [m.cli, '--slug', 'reg-one', '--publish-at', '2026-10-20', '--write', '--json']
 const occurrences = (text, slug) => (text.match(new RegExp(`'${slug}':`, 'g')) ?? []).length
 const miniState = (m) => ({ articles: fs.readFileSync(m.articles, 'utf8'), queue: fs.readFileSync(m.queue, 'utf8'), journal: fs.existsSync(m.journal) ? fs.readFileSync(m.journal, 'utf8') : null })
-const testLockLeft = () => fs.existsSync(path.join(qlock.QUEUE_LOCK_DIR, `${TEST_SCOPE}.queue.lock`))
+const testLockLeft = () => fs.existsSync(path.join(qlock.queueLockDir(), `${TEST_SCOPE}.queue.lock`))
 async function killRegisterAt(m, stage) {
   const gate = path.join(m.root, `gate-${stage.replace(/:/g, '-')}`)
   const child = spawn('node', regCli(m), { env: { ...process.env, SORAN_QUEUE_TEST_GATE: gate, SORAN_QUEUE_TEST_PAUSE_AT: stage }, cwd: m.root, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -1105,10 +1126,11 @@ if (fs.existsSync(path.join(REAL_RESEARCH, lib.RESEARCH_FILES.canonical))) {
 
 {
   // 🔴 이 검사가 만든 시험 scope 잠금만 치운다 — 주인이 죽은 것만. 산 주인이 남아 있으면 그것이 결함이다
-  const leftovers = fs.existsSync(qlock.QUEUE_LOCK_DIR) ? fs.readdirSync(qlock.QUEUE_LOCK_DIR).filter((n) => n.startsWith(TEST_SCOPE)) : []
+  const lockDir = qlock.queueLockDir()
+  const leftovers = fs.existsSync(lockDir) ? fs.readdirSync(lockDir).filter((n) => n.startsWith(TEST_SCOPE)) : []
   let live = 0
   for (const n of leftovers) {
-    const file = path.join(qlock.QUEUE_LOCK_DIR, n)
+    const file = path.join(lockDir, n)
     let pid = null
     try { pid = JSON.parse(fs.readFileSync(file, 'utf8')).pid } catch { /* 깨진 잠금 — 아래에서 지운다 */ }
     let alive = false
@@ -1117,7 +1139,10 @@ if (fs.existsSync(path.join(REAL_RESEARCH, lib.RESEARCH_FILES.canonical))) {
     else fs.rmSync(file, { force: true })
   }
   expect('시험 scope 잠금을 쥔 산 프로세스 0', live, 0)
+  // 🔴 이 검사의 모든 잠금은 임시 폴더에서 일어났다 — 운영 queue-locks 접근 0 (파일 접근 전 거부 가드가 함께 지킨다)
+  expect('끝까지 잠금 폴더 = 시험 임시 폴더 (운영 queue-locks 아님)', [lockDir === TEST_LOCK_DIR, qlock.operationalQueueLockDirs().includes(lockDir)], [true, false])
 }
 for (const d of fixtures) fs.rmSync(d.dir, { recursive: true, force: true })
+fs.rmSync(TEST_LOCK_DIR, { recursive: true, force: true })
 finish()
 process.exitCode = fail ? 1 : 0

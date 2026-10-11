@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import crypto from 'node:crypto'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -33,6 +33,9 @@ const S = await import('./lib/chatgpt-session.mjs')
 const RG = await import('./lib/magazine-regen.mjs')
 const DG = await import('./lib/magazine-delivery-gate.mjs')
 const L = await import('./lib/magazine-load.mjs')
+const IR = await import('./lib/magazine-input-repair.mjs')
+const LR = await import('./lib/magazine-lineage-reconcile.mjs')
+const PX = await import('./lib/magazine-producer-exit.mjs')
 
 let pass = 0
 let fail = 0
@@ -45,39 +48,51 @@ const ledger = (name, store = {}) => { const f = path.join(T, `${name}.json`); Q
 const row = (f, slug = 's') => Q.readQuarantine(f).store[slug]
 
 // ── A 최초 응답 ─────────────────────────────────────────────
-console.log('\nA 최초 응답 형식 실패 — 교정 판정 · 증거 · 실패 목록')
+console.log('\nA 최초 응답 형식 실패 — 교정 판정 · 증거 · 위반 {code, why} · 실패 목록')
 {
-  const good = { sent: true, stage: 'validate', reason: 'invalid_manuscript', conversationUrl: 'https://chatgpt.com/c/x', assistantMessageId: 'm1', responseSha256: SHA,
-    invalid: [{ code: 'NO_FRONTMATTER', why: 'YAML frontmatter 가 없다' }], length: 3100, responseExcerpt: '머리말 '.repeat(80), responseForm: 'code-block' }
-  check('A 식별된 invalid_manuscript (sent·validate·대화·메시지·sha) → 교정 가능', AR.correctableFirstResponse(good))
-  check('A markers_missing 도 교정 가능', AR.correctableFirstResponse({ ...good, reason: 'markers_missing' }))
+  const good = { sent: true, stage: 'validate', reason: 'invalid_manuscript', conversationUrl: 'https://chatgpt.com/c/x', assistantMessageId: 'm1', responseSha256: SHA, settled: true,
+    invalid: [{ code: 'FORMAT_VIOLATION', why: '1행: YAML frontmatter 가 없다. --- 로 시작해야 한다' }], length: 3100, responseExcerpt: '머리말 '.repeat(80), responseForm: 'code-block' }
+  check('A 식별·정산된 invalid_manuscript (sent·validate·대화·메시지·sha·settled·위반 문장) → 교정 가능', AR.correctableFirstResponse(good))
+  check('A markers_missing 도 교정 가능 (누락 문장 수가 위반 문장이 된다)', AR.correctableFirstResponse({ ...good, reason: 'markers_missing', invalid: null, missingCount: 2 }))
   for (const [k, v] of [['sent=null', { sent: null }], ['sent=false', { sent: false }], ['대화 없음', { conversationUrl: null }], ['메시지 없음', { assistantMessageId: null }],
-    ['sha 없음', { responseSha256: null }], ['stage≠validate', { stage: 'await-response' }], ['다른 사유', { reason: 'response_timeout' }]]) {
+    ['sha 없음', { responseSha256: null }], ['stage≠validate', { stage: 'await-response' }], ['다른 사유', { reason: 'response_timeout' }],
+    ['정산 안 됨 (예약 남음)', { settled: false }], ['위반이 코드명뿐', { invalid: [{ code: 'FORMAT_VIOLATION', why: 'FORMAT_VIOLATION' }] }], ['위반 이유 없음', { invalid: [{ code: 'FORMAT_VIOLATION' }] }]]) {
     check(`A ${k} → 교정 0 (fail-closed)`, !AR.correctableFirstResponse({ ...good, ...v }))
   }
   const ev = AR.firstResponseEvidence(good)
-  check('A 증거 — reason·stage·sent·invalid·responseForm·대화·메시지·sha256·길이', ev.reason === 'invalid_manuscript' && ev.stage === 'validate' && ev.sent === true && ev.invalid[0].code === 'NO_FRONTMATTER' &&
-    ev.responseForm === 'code-block' && ev.conversationUrl && ev.assistantMessageId === 'm1' && ev.responseSha256 === SHA && ev.length === 3100)
+  check('A 증거 — reason·stage·sent·invalid{code,why}·responseForm·대화·메시지·sha256·길이', ev.reason === 'invalid_manuscript' && ev.stage === 'validate' && ev.sent === true &&
+    ev.invalid[0].code === 'FORMAT_VIOLATION' && ev.invalid[0].why.includes('YAML frontmatter') && ev.responseForm === 'code-block' && ev.conversationUrl && ev.assistantMessageId === 'm1' && ev.responseSha256 === SHA && ev.length === 3100)
   check('A 증거 — 앞부분은 200자 이하 · 원문 칸 없음', ev.responseExcerpt.length <= 200 && !('text' in ev) && !('body' in ev))
   const re = S.responseEvidence(`머리말 https://x.example/a 와 me@x.com 은 지운다\u0007\n\n---\ntitle: 제목\n${'가'.repeat(500)}`)
   check('A 응답 증거 — sha256 · 길이 · URL·메일·제어문자 제거 · 200자', /^[0-9a-f]{64}$/.test(re.responseSha256) && re.length > 500 && re.responseExcerpt.length <= 200 &&
     !/https?:|@x\.com|\u0007/.test(re.responseExcerpt) && re.responseExcerpt.includes('[URL]'), re.responseExcerpt.slice(0, 80))
+  // 위반 정제 — 장부에 남는 유일한 모양
+  const sv = Q.sanitizeViolations([{ code: 'FORMAT_VIOLATION', why: `${'가'.repeat(300)} https://x.example/q me@x.com\u0007` }, { code: 'NO_WHY' }, { code: 'SAME', why: 'SAME' }, { code: 'BAD CODE!', why: '이유' }])
+  check('A 위반 정제 — why 160자 상한 · URL·메일·제어문자 제거 · why 없는/코드명뿐 위반은 버린다', sv.length === 2 && sv[0].why.length === Q.VIOLATION_WHY_MAX && Q.VIOLATION_WHY_MAX === 160 &&
+    !/https?:|@x\.com|\u0007/.test(JSON.stringify(sv)) && sv[1].code === 'BADCODE', sv)
   const f = AR.firstResponseRegenFailures(good)
-  check('A 교정 실패 목록 — 실제 위반 + frontmatter 규칙', f.some((x) => x.code === 'FIRST_RESPONSE_INVALID' && x.label.includes('NO_FRONTMATTER')) && f.some((x) => x.code === 'MANUSCRIPT_FORMAT_RULE' && x.label.includes('---')))
+  check('A 교정 실패 목록 — 실제 위반 문장 그대로(코드: 이유) + frontmatter 규칙', f.some((x) => x.code === 'FIRST_RESPONSE_INVALID' && x.label === 'FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다') && f.some((x) => x.code === 'MANUSCRIPT_FORMAT_RULE' && x.label.includes('---')), f)
   // 교정 요청 문장 — 다른 지문 · 일반·QA 재생성 프롬프트 불변
   const pk = RG.buildFailurePacket({ slug: 'x', profile: 'STANDARD', failures: f, attempt: 1, attemptId: '00000000-0000-4000-8000-000000000000', source: 'FIRST_RESPONSE' })
-  check('A 교정 패킷 source=FIRST_RESPONSE · 교정 문장은 [교정 요청] 으로 시작', pk.source === 'FIRST_RESPONSE' && DG.firstResponseCorrectionPromptText(pk).startsWith('[교정 요청]'))
+  const corr = DG.firstResponseCorrectionPromptText(pk)
+  check('A 교정 패킷 source=FIRST_RESPONSE · [교정 요청] 으로 시작 · 실제 위반 문장(YAML frontmatter …)이 실린다', pk.source === 'FIRST_RESPONSE' && corr.startsWith('[교정 요청]') && corr.includes('YAML frontmatter 가 없다. --- 로 시작해야 한다'), corr.split('\n').slice(-4).join(' / '))
   const h = (t) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 16)
   check('불변 — 일반 최초 요청 프롬프트 바이트', h(DG.legacyManuscriptPromptText(null)) === '5bb6e6ccb4bb9d3f', h(DG.legacyManuscriptPromptText(null)))
   const qaPk = RG.buildFailurePacket({ slug: 'x', profile: 'STANDARD', failures: [{ code: 'QA_FAIL', label: 'magazine QA FAIL', sentence: 's' }], attempt: 1, attemptId: 'a' })
   check('불변 — QA 재생성 지시문 바이트 · source 없음', h(qaPk.instruction) === 'aeea1a85dce887b0' && !('source' in qaPk), h(qaPk.instruction))
-  // 증거 기록 — 장부에는 앞부분을 싣지 않는다
+  // 정산 — 예약 해제 + invalid 증거를 한 번에 (장부에는 앞부분·원문 없음 · 위반 {code, why})
   const LF = ledger('a-first')
-  Q.recordFirstResponseInvalid({ slug: 's', path: LF, evidence: { ...good, messageFingerprint: 'sha256:m', invalidCodes: ['NO_FRONTMATTER'] } })
+  const u = Q.reserveDelivery({ slug: 's', messageFingerprint: 'sha256:m', reservationId: 'rv-a', path: LF })
+  const st = Q.settleDeliveryReservation({ slug: 's', reservationId: 'rv-a', path: LF,
+    outcome: { kind: 'FIRST_RESPONSE_INVALID', evidence: { ...good, messageFingerprint: 'sha256:m', violations: Q.violationsOfResponse(good) } } })
   const e = row(LF)
-  check('A 장부 — 최초 응답 기록에 지문·대화·메시지·sha·길이·코드만 (앞부분 없음)', e.firstResponseInvalid.responseSha256 === SHA && !('responseExcerpt' in e.firstResponseInvalid) && !JSON.stringify(e).includes('머리말'))
+  check('A 정산 — 예약 해제와 기록이 함께 (delivery 없음 · 기록 있음)', u.ok && st.ok && st.settled && e.delivery === undefined && Boolean(e.firstResponseInvalid), { st, e })
+  check('A 장부 — 기록은 지문·대화·메시지·sha·길이·위반{code,why} 뿐 (앞부분·원문 없음)', e.firstResponseInvalid.responseSha256 === SHA && !('responseExcerpt' in e.firstResponseInvalid) && !JSON.stringify(e).includes('머리말') &&
+    e.firstResponseInvalid.violations[0].why === '1행: YAML frontmatter 가 없다. --- 로 시작해야 한다' && !('invalidCodes' in e.firstResponseInvalid), e.firstResponseInvalid)
   check('A 같은 일반 요청 지문 → 교정 대상으로 찾는다 · 다른 지문(brief 변경)이면 아니다',
     Boolean(Q.firstResponseInvalidFor(e, 'sha256:m')) && !Q.firstResponseInvalidFor(e, 'sha256:other'))
+  const ledgerFailures = AR.firstResponseRegenFailures(e.firstResponseInvalid)
+  check('A 장부 기록에서 만든 교정 목록도 실제 위반 문장 그대로 — 코드명을 why 로 지어내지 않는다', ledgerFailures[0].label === 'FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다', ledgerFailures)
 }
 
 // ── B 길이 정본 ─────────────────────────────────────────────
@@ -138,7 +153,7 @@ console.log('\nC 재생성 예산 — 계보 2 · 전체 4 · 신뢰된 사건�
   const o1 = Q.openRegenLineage({ slug: 's', origin: 'INPUT_REPAIR', evidence: { sha256: SHA }, path: LC })
   const e1 = row(LC)
   const b1 = Q.regenBudget({ entry: e1 })
-  check('C 입력 수리 원자 교체 → 새 계보 · 계보 2회 남음 · 전체 2 보존 · attempts 불변', o1.opened && e1.regenLineage.origin === 'INPUT_REPAIR' && b1.left === 2 && e1.regenCalls === 2 && e1.attempts === 1 && e1.inputRepairCalls === 1, { e1, b1 })
+  check('C 계보 함수 계약 — 새 계보 · 계보 2회 남음 · 전체 2 보존 · attempts 불변 (실제 입력 수리 경로는 F · rehearsal S2·S11)', o1.opened && e1.regenLineage.origin === 'INPUT_REPAIR' && b1.left === 2 && e1.regenCalls === 2 && e1.attempts === 1 && e1.inputRepairCalls === 1, { e1, b1 })
   const again = Q.openRegenLineage({ slug: 's', origin: 'INPUT_REPAIR', evidence: { sha256: SHA }, path: LC })
   check('C 같은 증거로는 다시 열지 않는다 (SAME_EVIDENCE · 바이트 불변)', again.ok && !again.opened && again.reason === 'SAME_EVIDENCE')
   // 같은 계보 안에서 재생성 2회 — reserveDelivery 의 실제 임계구역으로
@@ -182,6 +197,230 @@ console.log('\nC 재생성 예산 — 계보 2 · 전체 4 · 신뢰된 사건�
   RG.clearRegen('s', LS)
   const es = row(LS)
   check('C 등록 성공 → 재생성·계보·최초 응답 기록 정리 (attempts 등 나머지는 기존 계약대로)', !('regenCalls' in es) && !('regenLineage' in es) && !('regenLineageKeys' in es) && !('firstResponseInvalid' in es) && es.attempts === 1)
+}
+
+// ── E 전송 예약 정산 원자성 — 실제 자식 프로세스 SIGKILL ────────────────
+console.log('\nE 전송 예약 정산 — 해제 + 결말 기록 한 번에 · commit 전 급사 = 예약 그대로')
+const QURL = pathToFileURL(path.join(HERE, 'lib', 'magazine-quarantine.mjs')).href
+const childEnv = { PATH: process.env.PATH, HOME: T, SORAN_MAGAZINE_TEST_MODE: '1' }
+const lockOf = (f) => `${f}.lock`
+function killSettle({ name, outcome, killAt }) {
+  const LF = ledger(name)
+  const u = Q.reserveDelivery({ slug: 's', messageFingerprint: 'sha256:m', reservationId: 'rv-k', path: LF })
+  const before = fs.readFileSync(LF)
+  const child = path.join(T, `${name}.mjs`)
+  fs.writeFileSync(child, `const Q = await import(${JSON.stringify(QURL)})
+Q.settleDeliveryReservation({ slug: 's', reservationId: 'rv-k', path: ${JSON.stringify(LF)}, outcome: ${JSON.stringify(outcome)},
+  phaseHook: (ph) => { if (ph === ${JSON.stringify(killAt)}) process.kill(process.pid, 'SIGKILL') } })
+console.log('SURVIVED')
+`)
+  const r = spawnSync(process.execPath, [child], { env: childEnv, encoding: 'utf8' })
+  return { LF, reserved: u.ok, before, signal: r.signal, survived: r.stdout.includes('SURVIVED') }
+}
+{
+  const evidence = { messageFingerprint: 'sha256:m', conversationUrl: 'https://chatgpt.com/c/k', assistantMessageId: 'mk', responseSha256: SHA, length: 900, reason: 'invalid_manuscript',
+    violations: [{ code: 'FORMAT_VIOLATION', why: '1행: YAML frontmatter 가 없다. --- 로 시작해야 한다' }] }
+  for (const [label, outcome] of [['invalid 증거', { kind: 'FIRST_RESPONSE_INVALID', evidence }], ['FIRST_FETCH 계보', { kind: 'FIRST_FETCH', sha256: SHA2 }]]) {
+    const k = killSettle({ name: `e-before-${outcome.kind}`, outcome, killAt: 'before-commit' })
+    const after = fs.readFileSync(k.LF)
+    const e = row(k.LF)
+    check(`🔴 E ${label} — commit 전 실제 SIGKILL → 장부 바이트 그대로 · 예약 남음 · 결말 기록 없음 (예약만 풀린 중간 상태 0)`,
+      k.reserved && k.signal === 'SIGKILL' && !k.survived && after.equals(k.before) && e.delivery?.reservationId === 'rv-k' && !e.firstResponseInvalid && !e.regenLineage, { signal: k.signal, e })
+    const stale = fs.existsSync(lockOf(k.LF))
+    const next = Q.updateQuarantine((cur) => cur, k.LF)
+    check(`E ${label} — 죽은 주인의 잠금은 다음 변경이 거둔다 · 잔여 lock 0`, stale && next.ok && !fs.existsSync(lockOf(k.LF)) && !fs.existsSync(`${lockOf(k.LF)}.reclaim`), { stale, next })
+    const k2 = killSettle({ name: `e-after-${outcome.kind}`, outcome, killAt: 'after-commit' })
+    const e2 = row(k2.LF)
+    const done = outcome.kind === 'FIRST_FETCH' ? e2.regenLineage?.origin === 'FIRST_FETCH' && e2.regenLineage.calls === 0 : e2.firstResponseInvalid?.violations?.[0]?.why === evidence.violations[0].why
+    check(`E ${label} — commit 뒤 SIGKILL → 예약 해제와 기록이 둘 다 있다`, k2.signal === 'SIGKILL' && e2.delivery === undefined && done && !fs.existsSync(lockOf(k2.LF)), e2)
+  }
+  const LC = ledger('e-cas')
+  Q.reserveDelivery({ slug: 's', messageFingerprint: 'sha256:m', reservationId: 'rv-mine', path: LC })
+  const b = fs.readFileSync(LC)
+  const other = Q.settleDeliveryReservation({ slug: 's', reservationId: 'rv-other', path: LC, outcome: { kind: 'FIRST_FETCH', sha256: SHA } })
+  check('E CAS — 남의 예약 ID 로는 아무것도 바꾸지 않는다', other.ok && !other.settled && fs.readFileSync(LC).equals(b))
+  const thin = Q.settleDeliveryReservation({ slug: 's', reservationId: 'rv-mine', path: LC, outcome: { kind: 'FIRST_RESPONSE_INVALID', evidence: { ...evidence, assistantMessageId: null } } })
+  const noWhy = Q.settleDeliveryReservation({ slug: 's', reservationId: 'rv-mine', path: LC, outcome: { kind: 'FIRST_RESPONSE_INVALID', evidence: { ...evidence, violations: [{ code: 'FORMAT_VIOLATION' }] } } })
+  check('E 증거가 모자라면(메시지 없음 · 위반 이유 없음) 정산 0 · 예약 유지 (fail-closed)', !thin.ok && !noWhy.ok && fs.readFileSync(LC).equals(b) && row(LC).delivery?.reservationId === 'rv-mine')
+}
+
+// ── F 입력 수리 계보 영수증 — 실제 SIGKILL · 장부 쓰기 실패 · 다음 회차 복구 ──────────
+console.log('\nF 입력 수리 → 계보 영수증 — draft 교체 직후 급사 · 교체 중 급사 · 장부 실패 → 다음 회차가 provider 호출 0 으로 완성')
+{
+  const FXD = path.join(HERE, 'fixtures', 'magazine-format-contract')
+  const COLD = 'cold-weather-joint-pain'
+  const coldItem = L.loadQueue().find((q) => q.slug === COLD)
+  const ECHO = fs.readFileSync(path.join(FXD, 'cold-weather-joint-pain.draft.md'), 'utf8')
+  const GOOD = fs.readFileSync(path.join(REPO, 'drafts', 'magazine', 'job-credentials', 'draft.md'), 'utf8')
+  const BRIEF = fs.readFileSync(path.join(FXD, 'job-credentials.brief.md'), 'utf8')
+  const sha = (t) => crypto.createHash('sha256').update(t).digest('hex')
+  const setup = (name) => {
+    const DD = path.join(T, `f-${name}`, 'drafts', 'magazine')
+    fs.mkdirSync(path.join(DD, COLD), { recursive: true })
+    fs.writeFileSync(path.join(DD, COLD, 'brief.md'), BRIEF)
+    fs.writeFileSync(path.join(DD, COLD, 'review.ts'), 'export const REVIEW = {}\n')
+    fs.writeFileSync(path.join(DD, COLD, 'draft.md'), ECHO)
+    // cold 의 운영 모양 — 계보 없는 옛 행 (regenCalls 2 · attempts 1)
+    const LF = ledger(`f-${name}`, { [COLD]: { attempts: 1, kind: 'CONTENT', regenCalls: 2, regenAttemptIds: ['p1', 'p2'], sent: false } })
+    return { DD, LF, tmp: path.join(T, `f-${name}`, 'tmp') }
+  }
+  // 실제 자식과 같은 계약의 가짜 바깥 — 실제 수리 관문 · 실제 장부 예약 · 실제 정산
+  const depsSrc = (DD, LF, killAt, corruptAfter = false) => `
+const IR = await import(${JSON.stringify(pathToFileURL(path.join(HERE, 'lib', 'magazine-input-repair.mjs')).href)})
+const Q = await import(${JSON.stringify(QURL)})
+const DG = await import(${JSON.stringify(pathToFileURL(path.join(HERE, 'lib', 'magazine-delivery-gate.mjs')).href)})
+const fs = await import('node:fs')
+const calls = { runner: 0, brief: 0 }
+const deps = {
+  log: () => {}, parseReview: () => ({}),
+  generateBrief: async () => { calls.brief++; return { ok: false, why: 'x' } },
+  repairGate: ({ slug }) => ({ gate: DG.inputRepairGate({ slug, draftsDir: ${JSON.stringify(DD)}, quarantinePath: ${JSON.stringify(LF)} }) }),
+  runRepairFetch: async ({ slug, draftOut }) => {
+    calls.runner++
+    const g = DG.inputRepairGate({ slug, draftsDir: ${JSON.stringify(DD)}, quarantinePath: ${JSON.stringify(LF)} })
+    const u = Q.reserveDelivery({ slug, messageFingerprint: g.messageFingerprint, reservationId: 'rv-ir', inputRepair: { fingerprint: g.messageFingerprint }, path: ${JSON.stringify(LF)} })
+    if (!u.ok) return { slug, status: 'held', sent: false, errorDetail: u.why }
+    fs.writeFileSync(draftOut, ${JSON.stringify(GOOD)})
+    Q.settleDeliveryReservation({ slug, reservationId: 'rv-ir', path: ${JSON.stringify(LF)} })
+    ${corruptAfter ? `fs.writeFileSync(${JSON.stringify(LF)}, '{ 깨진 장부')` : ''}
+    return { slug, status: 'ok', sent: true, conversationUrl: 'https://chatgpt.com/c/fake-ir' }
+  },
+  convertCheck: () => ({ ok: true }),
+  phaseHook: (ph) => { if (ph === ${JSON.stringify(killAt)}) process.kill(process.pid, 'SIGKILL') },
+}
+`
+  const runIn = async (DD, LF, tmp) => {
+    const calls = { runner: 0, brief: 0 }
+    const deps = {
+      log: () => {}, parseReview: () => ({}),
+      generateBrief: async () => { calls.brief++; return { ok: false } },
+      repairGate: ({ slug }) => ({ gate: DG.inputRepairGate({ slug, draftsDir: DD, quarantinePath: LF }) }),
+      runRepairFetch: async () => { calls.runner++; return null },
+      convertCheck: () => ({ ok: true }),
+    }
+    const report = await IR.runInputRepair({ draftsDir: DD, queue: [coldItem], ledger: Q.readQuarantine(LF), quarantinePath: LF, deps, tmpDir: tmp })
+    return { report, calls }
+  }
+  const pending = (DD) => path.join(DD, COLD, LR.PENDING_FILE)
+  check('F 준비 — cold 실제 큐 행 · 자동 레인 · brief echo 원고', Boolean(coldItem) && IR.scanRepairTargets({ queue: [coldItem], draftsDir: setup('probe').DD, store: {} }).targets.length === 1)
+
+  // ① draft 교체 직후 · 장부 기록 전 실제 SIGKILL
+  {
+    const { DD, LF, tmp } = setup('kill-committed')
+    const child = path.join(T, 'f-kill-committed.mjs')
+    fs.writeFileSync(child, `${depsSrc(DD, LF, 'draft-committed')}
+await IR.runInputRepair({ draftsDir: ${JSON.stringify(DD)}, queue: [${JSON.stringify(coldItem)}], ledger: Q.readQuarantine(${JSON.stringify(LF)}), quarantinePath: ${JSON.stringify(LF)}, deps, tmpDir: ${JSON.stringify(tmp)} })
+console.log('SURVIVED')
+`)
+    const k = spawnSync(process.execPath, [child], { env: childEnv, encoding: 'utf8' })
+    const e0 = row(LF, COLD)
+    check('🔴 F① 교체 직후 SIGKILL — draft 는 새 원고 · 영수증 남음 · 장부에 계보 없음 (APPLIED 로 숨지 않았다)',
+      k.signal === 'SIGKILL' && fs.readFileSync(path.join(DD, COLD, 'draft.md'), 'utf8') === GOOD && fs.existsSync(pending(DD)) && !e0.regenLineage && e0.inputRepairCalls === 1, { signal: k.signal, e0, out: k.stdout.slice(0, 80) })
+    const { report, calls } = await runIn(DD, LF, tmp)
+    const e1 = row(LF, COLD)
+    check('🔴 F① 다음 회차 — 영수증으로 INPUT_REPAIR 계보를 연다 · provider·ChatGPT 호출 0 · 영수증 삭제',
+      report.lineagePending?.[0]?.status === 'OPENED' && calls.runner === 0 && calls.brief === 0 && e1.regenLineage?.origin === 'INPUT_REPAIR' && e1.regenLineage.calls === 0 &&
+      e1.regenLineage.evidenceKey === `INPUT_REPAIR:${sha(GOOD)}` && !fs.existsSync(pending(DD)), { lp: report.lineagePending, calls, lineage: e1.regenLineage })
+    check('F① 예산 — 새 계보 2 · 전체 regenCalls 2 보존 · attempts 불변 · producer 실패 0', Q.regenBudget({ entry: e1 }).left === 2 && e1.regenCalls === 2 && e1.attempts === 1 &&
+      PX.summarizeRepairStage({ status: 0, report }).failures.length === 0)
+    const again = await runIn(DD, LF, tmp)
+    check('F① 그다음 회차 — 영수증 없음 · 계보 그대로 (두 번 열지 않는다)', again.report.lineagePending.length === 0 && Boolean(e1.regenLineage?.id) && row(LF, COLD).regenLineage?.id === e1.regenLineage?.id && again.calls.runner === 0)
+  }
+  // ② 교체 중(prepared) 실제 SIGKILL — journal 이 원복하고 영수증은 계보 없이 거둔다
+  {
+    const { DD, LF, tmp } = setup('kill-prepared')
+    const child = path.join(T, 'f-kill-prepared.mjs')
+    fs.writeFileSync(child, `${depsSrc(DD, LF, 'prepared')}
+await IR.runInputRepair({ draftsDir: ${JSON.stringify(DD)}, queue: [${JSON.stringify(coldItem)}], ledger: Q.readQuarantine(${JSON.stringify(LF)}), quarantinePath: ${JSON.stringify(LF)}, deps, tmpDir: ${JSON.stringify(tmp)} })
+`)
+    const k = spawnSync(process.execPath, [child], { env: childEnv, encoding: 'utf8' })
+    check('F② 교체 중 SIGKILL — journal · 영수증 남음', k.signal === 'SIGKILL' && fs.existsSync(path.join(DD, COLD, IR.JOURNAL_FILE)) && fs.existsSync(pending(DD)))
+    const { report, calls } = await runIn(DD, LF, tmp)
+    const e = row(LF, COLD)
+    check('F② 다음 회차 — journal 원복 → 영수증 DISCARDED · 계보 0 · 같은 수리 지문 재전송 0 (HELD)',
+      report.recovered?.[0]?.rolledBack === true && report.lineagePending?.[0]?.status === 'DISCARDED' && !e.regenLineage && fs.readFileSync(path.join(DD, COLD, 'draft.md'), 'utf8') === ECHO &&
+      calls.runner === 0 && report.results?.[0]?.outcome === 'HELD' && !fs.existsSync(pending(DD)), { rec: report.recovered, lp: report.lineagePending, res: report.results?.map((r) => r.outcome), calls })
+  }
+  // ③ 장부 쓰기 실패 — 교체는 끝났고 계보는 못 적었다 → LINEAGE_PENDING · producer PARTIAL → 장부 회복 뒤 완성
+  {
+    const { DD, LF, tmp } = setup('ledger-fail')
+    const good = fs.readFileSync(LF)
+    const child = path.join(T, 'f-ledger-fail.mjs')
+    fs.writeFileSync(child, `${depsSrc(DD, LF, '__never__', true)}
+const report = await IR.runInputRepair({ draftsDir: ${JSON.stringify(DD)}, queue: [${JSON.stringify(coldItem)}], ledger: Q.readQuarantine(${JSON.stringify(LF)}), quarantinePath: ${JSON.stringify(LF)}, deps, tmpDir: ${JSON.stringify(tmp)} })
+console.log(JSON.stringify(report))
+`)
+    const r = spawnSync(process.execPath, [child], { env: childEnv, encoding: 'utf8' })
+    let report = null
+    try { report = JSON.parse(r.stdout.trim().split('\n').pop()) } catch { report = null }
+    const res = report?.results?.[0]
+    const sum = PX.summarizeRepairStage({ status: 0, report })
+    const verdict = PX.judgeProducerRun({ plan: PX.stage('plan', { status: 0 }), brief: PX.stage('brief', { status: 0 }), fetch: PX.stage('fetch', { status: 0 }), repair: sum })
+    check('🔴 F③ 장부 쓰기 실패 — APPLIED 아님 → LINEAGE_PENDING · candidateApplied · 영수증 남음', res?.outcome === 'LINEAGE_PENDING' && res.candidateApplied === true && res.regenLineage === 'LEDGER_FAILED' && fs.existsSync(pending(DD)), res)
+    check('🔴 F③ producer 결과는 PARTIAL (수리 실패 LINEAGE_PENDING 1)', sum.failures.length === 1 && sum.failures[0].outcome === 'LINEAGE_PENDING' && verdict.verdict === 'PARTIAL', { failures: sum.failures, verdict })
+    // 장부가 회복된다 (손상 직전 바이트 + 그 사이 실제로 적힌 수리 지문) — 다음 회차가 provider 호출 0 으로 완성
+    Q.saveQuarantine({ ...JSON.parse(good.toString('utf8')), [COLD]: { ...JSON.parse(good.toString('utf8'))[COLD], inputRepairCalls: 1, inputRepairFingerprints: ['sha256:' + 'd'.repeat(64)] } }, LF)
+    const { report: r2, calls } = await runIn(DD, LF, tmp)
+    const e = row(LF, COLD)
+    check('🔴 F③ 다음 회차 — 영수증 완성(OPENED) · provider·ChatGPT 0 · producer 실패 0', r2.lineagePending?.[0]?.status === 'OPENED' && calls.runner === 0 && calls.brief === 0 &&
+      e.regenLineage?.origin === 'INPUT_REPAIR' && PX.summarizeRepairStage({ status: 0, report: r2 }).failures.length === 0 && !fs.existsSync(pending(DD)), { lp: r2.lineagePending, calls })
+  }
+  // ④ 영수증과 맞지 않는 draft (수동 편집) — 계보를 열지 않는다
+  {
+    const { DD, LF } = setup('conflict')
+    LR.writeLineagePending({ draftsDir: DD, slug: COLD, beforeSha: sha(ECHO), afterSha: sha(GOOD), repairFingerprint: null })
+    fs.writeFileSync(path.join(DD, COLD, 'draft.md'), `${GOOD}\n손으로 고친 줄\n`)
+    const c = LR.completePendingLineage({ draftsDir: DD, slug: COLD, path: LF })
+    check('F④ 수동 편집 draft — CONFLICT · 계보 0 · 영수증 보존 (예산은 옛 계보 그대로)', !c.ok && c.status === 'CONFLICT' && !row(LF, COLD).regenLineage && fs.existsSync(pending(DD)), c)
+  }
+}
+
+// ── G 옛 행 대조 판정 — 애매하면 열지 않는다 ─────────────────────────
+console.log('\nG 옛 행 대조 — cold·autumn 수리 영수증 · gray 장부 사유 — 하나라도 어긋나면 fail-closed')
+{
+  const FP = `sha256:${'e'.repeat(64)}`
+  const at = Date.parse('2026-10-11T00:10:17+09:00')
+  const entry = { attempts: 1, kind: 'CONTENT', regenCalls: 2, inputRepairCalls: 1, inputRepairFingerprints: [FP], lastInputRepairAt: at, sent: false }
+  const rec = (o = {}) => ({ row: { slug: 'c', type: 'DRAFT_INVALID_BRIEF_ECHO', outcome: 'APPLIED', candidateApplied: true, sent: true, repairFingerprint: FP, ...o }, date: '2026-10-11', dir: '2026-10-11', file: 'input-repair-001543.json' })
+  const ok = { ok: true, sha: SHA }
+  check('G cold 모양 — 영수증 1 · 지문 · 날짜 · 유효 draft 모두 맞으면 대조 가능', LR.judgeLegacyInputRepair({ entry, receipts: [rec()], draft: ok }).ok)
+  for (const [k, args] of [
+    ['영수증 0', { receipts: [] }], ['영수증 2 (애매)', { receipts: [rec(), rec()] }], ['결과 FAILED', { receipts: [rec({ outcome: 'FAILED' })] }],
+    ['brief 수리 행', { receipts: [rec({ type: 'BRIEF_FORMAT_CONTRACT' })] }], ['보내지 않은 수리', { receipts: [rec({ sent: false })] }],
+    ['다른 날 영수증', { receipts: [{ ...rec(), date: '2026-10-10' }] }], ['draft 무효', { draft: { ok: false, why: 'echo' } }],
+    ['이미 계보 있음', { entry: { ...entry, regenLineage: { calls: 0 } } }], ['전송 예약 있음', { entry: { ...entry, delivery: { kind: 'DELIVERY_UNCERTAIN' } } }],
+    ['호출 수·지문 수 불일치', { entry: { ...entry, inputRepairCalls: 2 } }], ['전체 상한 4', { entry: { ...entry, regenCalls: 4 } }],
+  ]) {
+    check(`G cold 대조 거부 — ${k}`, !LR.judgeLegacyInputRepair({ entry, receipts: [rec()], draft: ok, ...args }).ok)
+  }
+  const gray = { kind: 'CONTENT', sent: true, attempts: 1, lastAt: 1791648177801, fingerprint: null,
+    reasons: ['FETCH_FAILED: 회수 실패 — [validate] invalid_manuscript — FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다 · 전송 1건'] }
+  const g = LR.judgeLegacyInvalid({ entry: gray, hasDraft: false, hasBrief: true, messageFingerprint: FP })
+  check('G gray 운영 모양 — 실제 위반 문장 그대로 대조 가능', g.ok && g.violations.length === 1 && g.violations[0].code === 'FORMAT_VIOLATION' && g.violations[0].why === '1행: YAML frontmatter 가 없다. --- 로 시작해야 한다' && /^[0-9a-f]{64}$/.test(g.legacyLedgerKey), g)
+  for (const [k, e2, f2] of [
+    ['markers_missing (위반 문장 없음)', { reasons: ['FETCH_FAILED: 회수 실패 — [validate] markers_missing (지정 문장 2개 누락) · 전송 1건'] }],
+    ['전송 예약 남음 (신원 미확인)', { delivery: { kind: 'DELIVERY_UNCERTAIN' } }], ['보냈는지 모름', { sent: null }], ['2회 실패', { attempts: 2 }],
+    ['재생성 기록', { regenCalls: 1 }], ['사유 2개', { reasons: [gray.reasons[0], 'x'] }], ['이미 기록', { firstResponseInvalid: { x: 1 } }],
+    ['위반 조각 모양이 다름', { reasons: ['FETCH_FAILED: 회수 실패 — [validate] invalid_manuscript — 아무 말 · 전송 1건'] }],
+    ['원고 있음', {}, { hasDraft: true }], ['지문 모름', {}, { messageFingerprint: null }],
+  ]) {
+    check(`G gray 대조 거부 — ${k}`, !LR.judgeLegacyInvalid({ entry: { ...gray, ...e2 }, hasDraft: false, hasBrief: true, messageFingerprint: FP, ...(f2 ?? {}) }).ok)
+  }
+  // 대조 기록은 일반 요청 관문을 닫는다 — 같은 지문 일반 전송 0 (producer 회수도 같은 관문)
+  const GD = path.join(T, 'g-gate', 'drafts', 'magazine')
+  fs.mkdirSync(path.join(GD, 'g1'), { recursive: true })
+  fs.writeFileSync(path.join(GD, 'g1', 'brief.md'), fs.readFileSync(path.join(HERE, 'fixtures', 'magazine-format-contract', 'job-credentials.brief.md'), 'utf8'))
+  const LG = ledger('g-gate', {})
+  const fp = DG.deliveryGate({ slug: 'g1', draftsDir: GD, quarantinePath: LG }).messageFingerprint
+  Q.saveQuarantine({ g1: gray }, LG)
+  const before = fs.readFileSync(LG)
+  const gate = DG.deliveryGate({ slug: 'g1', draftsDir: GD, quarantinePath: LG })
+  check('🔴 G 옛 gray 행 — 일반 전송 관문이 교정 대기로 닫힌다 (판정만 · 장부 쓰기 0)', gate.ok && !gate.hold && gate.correctionPending?.source === 'legacy-ledger-reason' && fs.readFileSync(LG).equals(before) && gate.messageFingerprint === fp, gate.correctionPending)
+  const r1 = LR.reconcileLegacyInvalid({ draftsDir: GD, slug: 'g1', messageFingerprint: fp, path: LG })
+  const r2 = LR.reconcileLegacyInvalid({ draftsDir: GD, slug: 'g1', messageFingerprint: fp, path: LG })
+  const fr = row(LG, 'g1').firstResponseInvalid
+  check('G gray 대조는 한 번만 기록 — 위반 {code, why} · 지금 지문 · 원문 없음 · 두 번째는 NOT_RECONCILED', r1.status === 'RECORDED' && r2.status === 'NOT_RECONCILED' &&
+    fr.messageFingerprint === fp && fr.violations[0].why.includes('YAML frontmatter') && fr.source === 'LEGACY_LEDGER_REASON' && Q.identifiedInvalidRecord(fr) && DG.deliveryGate({ slug: 'g1', draftsDir: GD, quarantinePath: LG }).correctionPending?.source === 'ledger', { r1, r2, fr })
 }
 
 check('운영 장부 기본 경로는 격리 HOME 아래', path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep))

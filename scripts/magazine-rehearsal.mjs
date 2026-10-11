@@ -2,7 +2,7 @@
 /**
  * 🔴 **매거진 M-AUTO rehearsal — 실제 엔트리포인트 전체를 격리된 임시 사본에서 같은 날 반복 실행한다** (2026-10-10).
  *
- *   npm run magazine:rehearsal                          시나리오 S1~S10 · S8B + S1 반복성
+ *   npm run magazine:rehearsal                          시나리오 S1~S12 · S8B + S1 반복성
  *   node scripts/magazine-rehearsal.mjs --scenario S1,S4 고른 시나리오만
  *   node scripts/magazine-rehearsal.mjs --date 2026-10-11 --keep --out <report.json>
  *
@@ -513,6 +513,122 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
         exp('S9 길이 실패는 hero 전에 막혔다 — 재생성 뒤에 hero (호출 순서 · 로그 순서)', iRegen !== -1 && iHero !== -1 && iRegen < iHero && qaIdx !== -1 && heroIdx !== -1 && qaIdx < heroIdx, { iRegen, iHero, qaIdx, heroIdx }),
         exp('S9 hero 는 한 번만 (생성 1 · 재사용 0)', ev.hero.generate === 1 && ev.hero.reuse === 0, ev.hero),
         exp('S9 batch 통과 · 등록 1 · PR 1 MERGED · 배포 1', reg.includes('READY') && ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs.length === 1 && ev.prs[0].state === 'MERGED' && ev.deployments.length === 1, { registered: ev.registered }),
+      ]
+    },
+  },
+
+  S11: {
+    title: '10/11 운영 후 상태 → 다음 회차 — cold·autumn(입력 수리 APPLIED · regenCalls 2 · 계보 없음) 은 영수증 대조로 계보가 한 번 열려 재생성 1 → 등록 · 무관한 옛 행은 그대로 소진 · provider·일반 전송 0',
+    async prepare(repo, date) {
+      const [a, b, c] = await pickTargets({ repo, date, selectable: 1, others: 2 })
+      await curate({ repo, keep: [a.slug, b.slug, c.slug] })
+      const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
+      const draftsDir = join(repo, 'drafts', 'magazine')
+      // a = cold 모양(description 57자 QA FAIL) · b = autumn 모양(3000자 초과) · c = 무관한 옛 행(cold 와 같은 원고 결함 · 수리 영수증 없음)
+      for (const [it, mode] of [[a, 'short-description'], [b, 'too-long'], [c, 'short-description']]) {
+        const pr = await templatePair({ repo, item: it })
+        writeSlugFiles({ repo, slug: it.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
+        writeSlugFiles({ repo, slug: it.slug, files: { 'draft.md': C.manuscriptFor({ repo, draftsDir, slug: it.slug, item: it, mode }) } })
+        placeHero({ repo, slug: it.slug })
+      }
+      return { cold: a.slug, autumn: b.slug, unrelated: c.slug }
+    },
+    scenarioFor: () => ({ ci: {}, deploy: {} }),
+    async afterBuild(sb, p, date) {
+      // 🔴 운영 장부·결과 파일 모양 그대로 (2026-10-11 읽기 전용 진단 값) — 계보는 시험이 만들지 않는다
+      const DG = await imp(sb.repo, 'scripts/lib/magazine-delivery-gate.mjs')
+      const Q = await imp(sb.repo, 'scripts/lib/magazine-quarantine.mjs')
+      const draftsDir = join(sb.repo, 'drafts', 'magazine')
+      const prev = addDays(date, -1)
+      const fpOf = (slug) => Q.deliveryFingerprintOf(DG.plannedInputRepairMessageFor(slug, draftsDir))
+      const at = (hms) => Date.parse(`${prev}T${hms}+09:00`)
+      const repaired = (slug, hms, ids, reason) => ({ attempts: 1, lastAt: at('01:01:00'), fingerprint: 'sha256:dce6d087af6def7be9ee45c59fbff539', reasons: [reason],
+        regenCalls: 2, lastRegenAt: at('01:00:16'), lastPacketHash: 'b1a0c2b8041cfe75', regenAttemptIds: ids, kind: 'CONTENT', sent: false,
+        inputRepairCalls: 1, inputRepairFingerprints: [fpOf(slug)], lastInputRepairAt: at(hms) })
+      const store = {
+        [p.cold]: repaired(p.cold, '00:10:17', ['deca3155-ef16-46a3-bfec-a98ba39cdd38', '2b6af026-9829-4a0a-8bb0-c2128ad700b2'],
+          'QA_FAIL: magazine QA FAIL — REGEN_EXHAUSTED: 🔴 재생성 2회를 이미 썼다 (상한 2) — 이 글만 HOLD · 실제 QA FAIL: description 57자 — 허용 60~160자 밖'),
+        [p.autumn]: repaired(p.autumn, '00:11:28', ['d987cc88-0977-4f27-b2a8-ec7963af78b4', 'd4038785-7fb0-49a3-86bd-aea6084e5ac6'], 'BODY_TOO_LONG: 본문 3252자 — 3000자를 넘었다'),
+        [p.unrelated]: { attempts: 1, lastAt: at('01:03:00'), fingerprint: 'sha256:0123456789abcdef0123456789abcdef', kind: 'CONTENT', sent: false,
+          reasons: ['QA_FAIL: magazine QA FAIL — REGEN_EXHAUSTED: 🔴 재생성 2회를 이미 썼다 (상한 2)'], regenCalls: 2, regenAttemptIds: ['u1', 'u2'], lastRegenAt: at('01:02:00') },
+      }
+      mkdirSync(dirname(ledgerPath(sb)), { recursive: true })
+      writeFileSync(ledgerPath(sb), `${JSON.stringify(store, null, 2)}\n`)
+      const runs = join(draftsDir, '_runs', prev)
+      mkdirSync(runs, { recursive: true })
+      const echo = (slug) => ({ slug, type: 'DRAFT_INVALID_BRIEF_ECHO', violations: [{ code: 'BRIEF_ECHO', why: '## 검색 의도' }], sent: true, candidateApplied: true,
+        conversationUrl: `https://chatgpt.com/c/receipt-${slug}`, repairFingerprint: fpOf(slug), outcome: 'APPLIED', reason: 'draft.md 원자 교체 — QA·hero·등록은 01:00 auto-register 가 기존 경로로' })
+      writeFileSync(join(runs, 'input-repair-001543-1890-772d6aa2.json'), `${JSON.stringify({ date: prev, ok: true, results: [echo(p.cold), echo(p.autumn)], skipped: [], recovered: [], limit: 3, writtenAt: `${prev}T15:15:43.000Z` }, null, 2)}\n`)
+      return { seeded: store }
+    },
+    async run(ctx) {
+      await normalDay(ctx)
+      ctx.afterFirstLedger = readJson(ledgerPath(ctx.sb))
+      ctx.stages.push(runStage(ctx.sb, { name: 'rerun-register', entry: 'register', kst: KST(ctx.date, '03:30') }))
+    },
+    expect(ev, ctx) {
+      const p = ctx.prepared
+      const rows = Object.fromEntries((ctx.registerResult?.results ?? []).map((r) => [r.slug, r]))
+      const typed = (slug) => ev.regenTyped.filter((r) => r.slug === slug).map((r) => r.typed).join('\n')
+      const led = ev.ledger ?? {}
+      const reg = logOf(ctx, 'register')
+      const lenM = /BODY_TOO_LONG: 본문 (\d+)자/.exec(typed(p.autumn))
+      return [
+        exp('S11 준비 — 운영 모양 그대로 (attempts 1 · regenCalls 2 · inputRepairCalls 1 · 계보 없음 · APPLIED 결과 파일)', [p.cold, p.autumn].every((s) => p.seeded[s].attempts === 1 && p.seeded[s].regenCalls === 2 && p.seeded[s].inputRepairCalls === 1 && !p.seeded[s].regenLineage), p.seeded),
+        exp('S11 입력 수리 재호출 0 · Claude 0 · 일반 요청 0 (producer · register · 재실행 전부)', ev.claude.length === 0 && ev.sends.initial === 0 && ![p.cold, p.autumn, p.unrelated].some((s) => ev.sends.bySlug[`${s}:repair`] || ev.sends.bySlug[`${s}:initial`]), { claude: ev.claude, bySlug: ev.sends.bySlug }),
+        exp('S11 cold·autumn — 신뢰 증거(APPLIED 영수증 · 수리 지문 · 유효 draft)로 계보가 한 번 열렸다', rows[p.cold]?.lineageReconcile?.legacyInputRepair === 'OPENED' && rows[p.autumn]?.lineageReconcile?.legacyInputRepair === 'OPENED' &&
+          (reg.match(/옛 입력 수리 대조 OPENED/g) ?? []).length === 2, { cold: rows[p.cold]?.lineageReconcile, autumn: rows[p.autumn]?.lineageReconcile }),
+        exp('S11 재생성 — cold 1 (description) · autumn 1 (실제 길이 3000 초과 · 기준) · 무관한 행 0', ev.sends.bySlug[`${p.cold}:regen`] === 1 && ev.sends.bySlug[`${p.autumn}:regen`] === 1 && !ev.sends.bySlug[`${p.unrelated}:regen`] &&
+          /description/.test(typed(p.cold)) && Boolean(lenM) && Number(lenM?.[1]) > 3000 && typed(p.autumn).includes('800~3000'), ev.sends.bySlug),
+        exp('S11 cold·autumn 등록 2 · PR MERGED · 배포 · 장부 행 정리 (등록 성공 clearEntry)', ev.registered.length === 2 && ev.registered.every((r) => [p.cold, p.autumn].includes(r.slug)) && ev.prs.length >= 1 && ev.prs.every((x) => x.state === 'MERGED') && ev.deployments.length >= 1 && !led[p.cold] && !led[p.autumn], { registered: ev.registered, prs: ev.prs }),
+        exp('S11 무관한 옛 행 — 대조 대상 아님 · REGEN_EXHAUSTED 로 멈춤 · 전송 0 · regenCalls 2 · 계보는 LEGACY 그대로', rows[p.unrelated]?.verdict === 'BLOCKED' && JSON.stringify(rows[p.unrelated]?.blockedBy ?? []).includes('REGEN_EXHAUSTED') &&
+          led[p.unrelated]?.regenCalls === 2 && (!led[p.unrelated]?.regenLineage || led[p.unrelated].regenLineage.origin === 'LEGACY'), { row: rows[p.unrelated]?.blockedBy, led: led[p.unrelated] }),
+        exp('S11 재실행 — 무관한 행은 여전히 소진 · 재생성 합계 그대로 2 (cold 1 · autumn 1)', ev.sends.regen === 2 && (ctx.afterFirstLedger?.[p.unrelated]?.regenCalls === 2) && led[p.unrelated]?.regenCalls === 2, { regen: ev.sends.regen }),
+      ]
+    },
+  },
+
+  S12: {
+    title: '10/11 운영 후 상태 → 다음 회차 — gray(식별 응답 invalid · 신원·위반이 장부에 없던 옛 판) 는 00:10 producer 도 01:00 도 같은 일반 요청을 다시 보내지 않고, 장부 사유 대조로 교정 1 → 등록',
+    async prepare(repo, date) {
+      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      await curate({ repo, keep: [t.slug] })
+      const pr = await templatePair({ repo, item: t })
+      writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
+      placeHero({ repo, slug: t.slug })
+      return { target: t.slug }
+    },
+    scenarioFor: () => ({ ci: {}, deploy: {} }),
+    async afterBuild(sb, p, date) {
+      const prev = addDays(date, -1)
+      const at = (hms) => Date.parse(`${prev}T${hms}+09:00`)
+      // 🔴 운영 장부 gray 행 그대로 (2026-10-11 읽기 전용 진단 값)
+      const store = { [p.target]: { kind: 'CONTENT', sent: true, attempts: 1, lastAt: at('01:02:57'), fingerprint: null,
+        reasons: ['FETCH_FAILED: 회수 실패 — [validate] invalid_manuscript — FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다 · 전송 1건'],
+        briefRepairs: [{ fingerprint: `sha256:${'9c3f20e6'.repeat(8)}`, outcome: 'APPLIED', providerCalls: 2, reservedAt: at('00:12:31'), settledAt: at('00:15:43') }], briefRepairCalls: 2 } }
+      mkdirSync(dirname(ledgerPath(sb)), { recursive: true })
+      writeFileSync(ledgerPath(sb), `${JSON.stringify(store, null, 2)}\n`)
+      return { seeded: store }
+    },
+    async run(ctx) {
+      ctx.stages.push(runStage(ctx.sb, { name: 'producer', entry: 'producer', kst: KST(ctx.date, '00:10') }))
+      ctx.afterProducerLedger = readJson(ledgerPath(ctx.sb))?.[ctx.prepared.target] ?? null
+      ctx.stages.push(runStage(ctx.sb, { name: 'register', entry: 'register', kst: KST(ctx.date, '01:00') }))
+      ctx.applyResult = readJson(runFile(ctx.sb, ctx.date, /^auto-merge\.json$/)[0] ?? '')
+      ctx.registerResult = readJson(runFile(ctx.sb, ctx.date, /^auto-register\.json$/)[0] ?? '')
+    },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const prod = logOf(ctx, 'producer')
+      const reg = logOf(ctx, 'register')
+      const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
+      const typed = ev.regenTyped.find((r) => r.slug === t)?.typed ?? ''
+      return [
+        exp('S12 00:10 producer — 일괄 계획이 교정 대기로 건너뛰었다 (전송·접근 확인 0 · 장부 쓰기 0)', !ev.sends.bySlug[`${t}:initial`] && prod.includes('건너뜀 (correction_pending)') &&
+          JSON.stringify(ctx.afterProducerLedger) === JSON.stringify(ctx.prepared.seeded[t]), prod.split('\n').filter((l) => l.includes(t) || /교정 대기/.test(l)).slice(0, 3)),
+        exp('S12 01:00 — 옛 장부 사유 대조 RECORDED → 교정 1 · 일반 요청 0 (하루 전체)', row?.lineageReconcile?.legacyInvalid === 'RECORDED' && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0, { lr: row?.lineageReconcile, bySlug: ev.sends.bySlug }),
+        exp('S12 교정 요청에 실제 위반 문장 그대로 (YAML frontmatter 가 없다 …)', typed.includes('[교정 요청]') && typed.includes('FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다'), typed.split('\n').filter((l) => /FIRST_RESPONSE|frontmatter/.test(l)).slice(0, 3)),
+        exp('S12 등록 1 · PR MERGED · 배포 · 장부 행 정리', reg.includes('교정 재생성으로 원고 확보') && ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
       ]
     },
   },

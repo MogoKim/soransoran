@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * 자동 회복 계약 변이 시험 — 방어를 지운 코드로 `magazine-auto-recovery-check.mjs` 를 다시 돌려 **FAIL 로 바뀌는지** 본다.
+ * 자동 회복 계약 변이 시험 — 방어를 지운 코드로 `magazine-auto-recovery-check.mjs` (격리 변이는 G8·m3a 검사)를 다시 돌려 **FAIL 로 바뀌는지** 본다.
  * 바꿀 문장이 파일에 정확히 한 번 있어야 한다 (없거나 여럿이면 변이 무효 = FAIL).
  * 🔴 제자리에서 바꾸고 매 변이 뒤 원본 바이트로 되돌린 것을 해시로 확인한다. 중간에 끊겨도 되돌린다.
  *
  * 사용: node scripts/magazine-auto-recovery-mutation.mjs
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
@@ -23,12 +24,25 @@ const F = {
   batch: path.join(HERE, 'magazine-batch-qa.mjs'),
   register: path.join(HERE, 'magazine-auto-register.mjs'),
   session: path.join(HERE, 'lib', 'chatgpt-session.mjs'),
+  reconcile: path.join(HERE, 'lib', 'magazine-lineage-reconcile.mjs'),
+  repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
+  pexit: path.join(HERE, 'lib', 'magazine-producer-exit.mjs'),
+  gate: path.join(HERE, 'lib', 'magazine-delivery-gate.mjs'),
+  qlock: path.join(HERE, 'lib', 'magazine-queue-lock.mjs'),
+  g8check: path.join(HERE, 'magazine-g8-promote-check.mjs'),
+  m3acheck: path.join(HERE, 'magazine-m3a-check.mjs'),
+}
+/** 변이마다 돌릴 검사 — 기본은 자동 회복 계약 검사. 🔴 격리 변이는 운영 HOME 이 아닌 임시 HOME 으로 띄운다 (변이가 운영 queue-locks 에 닿지 않게) */
+const CHECKS = {
+  recovery: { file: CHECK, line: /자동 회복 계약 검사 \d+\/\d+/g, fail: /❌ [^\n]+/g },
+  g8: { file: F.g8check, line: /G8 편입기 검사 \d+\/\d+/g, fail: /❌ [^\n]+/g },
+  m3a: { file: F.m3acheck, line: /\d+ PASS · \d+ FAIL/g, fail: /^ {2}FAIL [^\n]+/gm, tmpHome: true },
 }
 const MUTATIONS = [
   // ── C 예산 계보 ──
   { name: 'C 계보 무시 — 전체 횟수로만 판정 (앞판)', edits: [{ file: F.quarantine, find: '  const used = lineage.calls\n', replace: '  const used = total\n' }] },
   { name: 'C 전체 상한 4 제거', edits: [{ file: F.quarantine, find: "  const exhaustedBy = total >= maxTotal ? 'TOTAL'", replace: "  const exhaustedBy = false ? 'TOTAL'" }] },
-  { name: 'C 같은 증거로 계보 재개방 허용', edits: [{ file: F.quarantine, find: '    if (prev.regenLineage?.evidenceKey === key || seen.includes(key)) {', replace: '    if (false) {' }] },
+  { name: 'C 같은 증거로 계보 재개방 허용', edits: [{ file: F.quarantine, find: "  if (p.regenLineage?.evidenceKey === key || seen.includes(key)) return { entry: p, opened: false, reason: 'SAME_EVIDENCE' }", replace: "  if (false) return { entry: p, opened: false, reason: 'SAME_EVIDENCE' }" }] },
   { name: 'C 옛 행 이관을 0회로 (예산 되살림)', edits: [{ file: F.quarantine, find: "  return { id: 'legacy', origin: 'LEGACY', evidenceKey: null, calls: used,", replace: "  return { id: 'legacy', origin: 'LEGACY', evidenceKey: null, calls: 0 * used," }] },
   { name: 'C 자기 시도 원복이 계보를 되돌리지 않음', edits: [{ file: F.quarantine, find: '        ...(inLineage ? {', replace: '        ...(false ? {' }] },
   { name: 'C 원고 그대로일 때 전체 횟수를 2로 덮음 (앞판)', edits: [{ file: F.quarantine,
@@ -44,7 +58,33 @@ const MUTATIONS = [
   { name: 'A 교정 판정이 응답 신원을 보지 않음', edits: [{ file: F.register, find: '    && Boolean(row?.conversationUrl && row?.assistantMessageId)\n', replace: '' }] },
   { name: 'A 응답 앞부분 200자 제한 제거', edits: [{ file: F.session, find: ".replace(/\\s+/g, ' ').trim().slice(0, RESPONSE_EXCERPT_MAX)", replace: ".replace(/\\s+/g, ' ').trim()" }] },
   { name: 'A 증거에서 응답 sha256 누락', edits: [{ file: F.register, find: '    responseSha256: row?.responseSha256 ?? null, length: row?.length ?? null,\n    responseExcerpt:', replace: '    length: row?.length ?? null,\n    responseExcerpt:' }] },
-  { name: 'A 장부에 응답 앞부분까지 저장', edits: [{ file: F.quarantine, find: 'firstResponseInvalid: { ...keep, at: now } }', replace: 'firstResponseInvalid: { ...evidence, ...keep, at: now } }' }] },
+  { name: 'A 장부에 원고 앞부분까지 저장', edits: [{ file: F.quarantine, find: "    violations: sanitizeViolations(e.violations ?? e.invalid), at: now }", replace: "    violations: sanitizeViolations(e.violations ?? e.invalid), responseExcerpt: e.responseExcerpt ?? null, at: now }" }] },
+  { name: 'A 위반 why 160자 상한 제거', edits: [{ file: F.quarantine, find: ".replace(/[\\u0000-\\u001f\\u007f]/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, VIOLATION_WHY_MAX)", replace: ".replace(/[\\u0000-\\u001f\\u007f]/g, ' ').replace(/\\s+/g, ' ').trim()" }] },
+  { name: 'A 코드명을 why 로 지어내는 경로 (앞판)', edits: [{ file: F.quarantine, find: "    if (!code || !why || why === code) continue\n", replace: "    if (!code) continue\n    if (!why) { out.push({ code, why: code }); continue }\n" }] },
+  { name: 'A 정산 안 된 응답도 교정', edits: [{ file: F.register, find: '    && row?.settled === true\n', replace: '' }] },
+  // ── E 정산 원자성 ──
+  { name: 'E 예약 해제와 결말 기록을 두 번에 (앞판 release → 기록)', edits: [{ file: F.quarantine,
+    find: "    phaseHook('before-commit')\n    settled = true\n    return { ...cur, [slug]: next }\n  }, path)\n",
+    replace: "    settled = true\n    return { ...cur, [slug]: clearDelivery(e) }\n  }, path)\n  phaseHook('before-commit')\n  updateQuarantine((cur) => ({ ...cur, [slug]: { ...cur[slug], ...(lineage || outcome ? { ...(outcome?.kind === 'FIRST_RESPONSE_INVALID' ? { firstResponseInvalid: firstResponseInvalidRecord(outcome.evidence, now) } : {}) } : {}) } }), path)\n" }] },
+  { name: 'E 예약 ID CAS 제거', edits: [{ file: F.quarantine, find: "    if (!e || e.delivery?.reservationId !== reservationId) return cur\n    let next = clearDelivery(e)", replace: "    if (!e) return cur\n    let next = clearDelivery(e)" }] },
+  { name: 'E 증거 부족 정산 허용', edits: [{ file: F.quarantine, find: "  if (outcome && outcome.kind === 'FIRST_RESPONSE_INVALID' && !identifiedInvalidRecord(firstResponseInvalidRecord(outcome.evidence, now))) {", replace: "  if (false) {" }] },
+  // ── F 입력 수리 계보 영수증 ──
+  { name: 'F 교체 전 영수증을 남기지 않음', edits: [{ file: F.repair, find: "    writeLineagePending({ draftsDir, slug: t.slug, beforeSha:", replace: "    void ({ draftsDir, slug: t.slug, beforeSha:" }] },
+  { name: 'F 계보 기록 실패를 APPLIED 로 숨김', edits: [{ file: F.repair, find: "    if (!lineage.ok || !['OPENED', 'SAME_EVIDENCE'].includes(lineage.status)) {", replace: "    if (false) {" }] },
+  { name: 'F 다음 회차가 영수증을 완성하지 않음', edits: [{ file: F.repair, find: "  const lineagePending = completeAllPendingLineages({ draftsDir, path: quarantinePath })", replace: "  const lineagePending = []" }] },
+  { name: 'F 원복된 교체(교체 전 sha)도 계보를 연다', edits: [{ file: F.reconcile, find: "  if (cur === j.beforeSha) {", replace: "  if (false) {" }] },
+  { name: 'F 수동 편집 draft 도 계보를 연다 (CONFLICT 제거)', edits: [{ file: F.reconcile, find: "  if (cur !== j.afterSha) return { ok: false, status: 'CONFLICT'", replace: "  if (false) return { ok: false, status: 'CONFLICT'" }] },
+  { name: 'F producer 가 LINEAGE_PENDING 을 성공으로 봄', edits: [{ file: F.pexit, find: "  'LINEAGE_PENDING'])", replace: "  ])" }] },
+  // ── G 옛 행 대조 ──
+  { name: 'G 영수증 여러 개도 대조 (애매 허용)', edits: [{ file: F.reconcile, find: '  if (receipts.length !== 1) return no(', replace: '  if (receipts.length < 1) return no(' }] },
+  { name: 'G 지금 draft 검증 생략', edits: [{ file: F.reconcile, find: '  if (!draft.ok) return no(draft.why)\n', replace: '' }] },
+  { name: 'G 결과 행 APPLIED 확인 생략', edits: [{ file: F.reconcile, find: "  if (!(row.type === 'DRAFT_INVALID_BRIEF_ECHO' && row.outcome === 'APPLIED' && row.candidateApplied === true && row.sent === true)) {", replace: "  if (false) {" }] },
+  { name: 'G gray — 전송 예약 남은 행도 대조 (신원 미확인 허용)', edits: [{ file: F.reconcile, find: "  if (entry.delivery) return no('전송 예약·전송불명 기록이 있다 — 응답을 특정하지 못한 것일 수 있다')\n", replace: '' }] },
+  { name: 'G 일반 전송 관문이 교정 대기를 보지 않음', edits: [{ file: F.gate, find: '    if (recorded || legacy?.ok) {', replace: '    if (false) {' }] },
+  // ── 격리 — 운영 queue-locks ──
+  { name: '격리 G8 검사가 임시 잠금 폴더를 쓰지 않음', check: 'g8', edits: [{ file: F.g8check, find: 'process.env.SORAN_MAGAZINE_QUEUE_LOCK_DIR = TEST_LOCK_DIR\n', replace: '' }] },
+  { name: '격리 잠금 모듈의 시험 모드 운영 위치 거부 제거', check: 'g8', edits: [{ file: F.qlock, find: "  if (ops.includes(dir)) throw blocked(`시험 모드에서 운영 queue-locks 에 닿으려 했다 — 잠금 0: ${dir}`)\n", replace: '' }] },
+  { name: '격리 m3a 검사가 임시 잠금 폴더를 쓰지 않음', check: 'm3a', edits: [{ file: F.m3acheck, find: 'process.env.SORAN_MAGAZINE_QUEUE_LOCK_DIR = M3A_LOCK_DIR\n', replace: '' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -55,13 +95,22 @@ const restoreAll = () => { for (const f of files) fs.writeFileSync(f, originals[
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { restoreAll(); process.exit(130) })
 process.on('uncaughtException', (e) => { restoreAll(); console.error(e); process.exit(1) })
 const occurrences = (s, sub) => s.split(sub).length - 1
-const lineOf = (out) => (out.match(/자동 회복 계약 검사 \d+\/\d+/g) ?? ['출력 없음']).pop()
+const lineOf = (out, re = CHECKS.recovery.line) => (out.match(re) ?? ['출력 없음']).pop()
+/** 🔴 임시 HOME 으로 띄우는 검사 — 변이가 격리를 지워도 잠금은 임시 HOME 아래로만 간다 (운영 queue-locks 접근 0) */
+const runCheck = (key) => {
+  const c = CHECKS[key]
+  if (!c.tmpHome) return spawnSync(process.execPath, [c.file], { encoding: 'utf8', cwd: ROOT, maxBuffer: 1e8 })
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-recovery-mut-home-'))
+  try { return spawnSync(process.execPath, [c.file], { encoding: 'utf8', cwd: ROOT, maxBuffer: 1e8, env: { ...process.env, HOME: home } }) } finally { fs.rmSync(home, { recursive: true, force: true }) }
+}
 
 let bad = 0
 let caught = 0
 console.log('\n자동 회복 계약 변이 시험\n')
-const base = spawnSync(process.execPath, [CHECK], { encoding: 'utf8', cwd: ROOT })
-if (base.status !== 0) { bad++; console.log(`  ❌ 변이 없는 코드에서 검사가 FAIL 이다 (${lineOf(base.stdout)})`) } else console.log(`  기준선 (변이 없음) — PASS · ${lineOf(base.stdout)}`)
+for (const key of [...new Set(['recovery', ...MUTATIONS.map((m) => m.check ?? 'recovery')])]) {
+  const base = runCheck(key)
+  if (base.status !== 0) { bad++; console.log(`  ❌ 변이 없는 코드에서 ${key} 검사가 FAIL 이다 (${lineOf(base.stdout, CHECKS[key].line)})`) } else console.log(`  기준선 (변이 없음 · ${key}) — PASS · ${lineOf(base.stdout, CHECKS[key].line)}`)
+}
 try {
   for (const mu of MUTATIONS) {
     const invalid = mu.edits.find((e) => occurrences(originals[e.file].toString('utf8'), e.find) !== 1)
@@ -71,14 +120,14 @@ try {
     let r
     try {
       for (const [f, text] of Object.entries(mutated)) fs.writeFileSync(f, text)
-      r = spawnSync(process.execPath, [CHECK], { encoding: 'utf8', cwd: ROOT })
+      r = runCheck(mu.check ?? 'recovery')
     } finally { restoreAll() }
     if (files.some((f) => sha(f) !== startHashes[f])) { bad++; console.log(`  ❌ ${mu.name} — 원복 후 해시가 다르다`); break }
-    const failed = (r.stdout.match(/❌ [^\n]+/g) ?? [])
+    const failed = (r.stdout.match(CHECKS[mu.check ?? 'recovery'].fail) ?? [])
     const crashed = /예외로 중단/.test(r.stdout)
     if (r.status === 0) { bad++; console.log(`  ❌ ${mu.name} — 검사가 여전히 PASS 다 (죽은 방어)`) }
     else if (crashed && failed.length <= 1) { bad++; console.log(`  ❌ ${mu.name} — 단언이 아니라 예외로만 멈췄다 (${lineOf(r.stdout)})`) }
-    else { caught++; console.log(`  ✅ ${mu.name} — FAIL (${lineOf(r.stdout)} · 실패 단언 ${failed.length - (crashed ? 1 : 0)}${crashed ? ' · 예외 포함' : ''})`) }
+    else { caught++; console.log(`  ✅ ${mu.name} — FAIL (${lineOf(r.stdout, CHECKS[mu.check ?? 'recovery'].line)} · 실패 단언 ${failed.length - (crashed ? 1 : 0)}${crashed ? ' · 예외 포함' : ''} · 예: ${(failed.find((x) => !/예외로 중단/.test(x)) ?? failed[0] ?? '').replace(/^\s*(❌|FAIL)\s*/, '').slice(0, 110)})`) }
   }
 } finally { restoreAll() }
 const drift = files.filter((f) => sha(f) !== startHashes[f])

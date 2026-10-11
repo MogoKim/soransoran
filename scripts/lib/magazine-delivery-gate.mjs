@@ -11,9 +11,10 @@ import { join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { buildManuscriptMessage } from './chatgpt-session.mjs'
 import {
-  readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH, inputRepairAlreadySent,
+  readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH, inputRepairAlreadySent, firstResponseInvalidFor,
 } from './magazine-quarantine.mjs'
 import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
+import { judgeLegacyInvalid } from './magazine-lineage-reconcile.mjs'
 
 /** 일반 전송 직전 brief 형식 계약 실패 — probe·Chrome·예약·전송 모두 0 */
 export const BRIEF_FORMAT_CONTRACT_REASON = 'BRIEF_FORMAT_CONTRACT'
@@ -233,6 +234,21 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
     ?? (legacyMessageFingerprint && legacyMessageFingerprint !== messageFingerprint
       ? deliveryHoldsFetch(entry, legacyMessageFingerprint)
       : null)
+  /**
+   * 🔴 **이 일반 요청은 이미 응답을 받았다 — 다시 보내지 않는다** (2026-10-11 재검토 · gray-hair).
+   *    같은 지문으로 식별된 invalid 응답 기록이 있거나(이번 판 runner 정산), 옛 판 장부 사유가 같은 사실을 말하면
+   *    (`judgeLegacyInvalid` — 판정만 · 쓰기 0) 일반 전송은 0 이다. 교정 재생성은 auto-register 가 그 기록으로 한다.
+   *    00:10 producer 회수도 이 관문을 지난다 — 01:00 교정보다 먼저 같은 요청을 다시 보내지 않게.
+   */
+  if (!packet && !hold && message !== null) {
+    const recorded = firstResponseInvalidFor(entry, messageFingerprint)
+    const legacy = recorded ? null : judgeLegacyInvalid({ entry, hasDraft: existsSync(draftPath), hasBrief: true, messageFingerprint })
+    if (recorded || legacy?.ok) {
+      return { ok: true, message, messageFingerprint, legacyMessageFingerprint, entry, hold: null,
+        correctionPending: { source: recorded ? 'ledger' : 'legacy-ledger-reason',
+          why: '이 일반 요청은 이미 식별된 invalid 응답을 받았다 — 다시 보내지 않는다 (교정 재생성은 auto-register 가 한다)' } }
+    }
+  }
   if (!packet && !hold && message !== null) {
     const contract = judgeBriefFormatContract(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8'))
     if (!contract.ok) {

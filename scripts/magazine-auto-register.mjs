@@ -46,7 +46,8 @@ import { PACKET_DIR } from './lib/magazine-regen.mjs'
 import { readFetchResults, fetchResultFor, removeFetchResults, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { classifyFailure } from './lib/magazine-failure-kind.mjs'
 import { describeFetchFailure } from './magazine-webui-runner.mjs'
-import { fingerprintOf, firstResponseInvalidFor, openRegenLineage } from './lib/magazine-quarantine.mjs'
+import { fingerprintOf, firstResponseInvalidFor, invalidEvidenceSha, openRegenLineage, violationsOfResponse } from './lib/magazine-quarantine.mjs'
+import { completePendingLineage, reconcileLegacyInputRepair, reconcileLegacyInvalid } from './lib/magazine-lineage-reconcile.mjs'
 import { deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath, injectHeroImage, verifyHeroFile } from './lib/magazine-hero.mjs'
 import { validateManuscript, describeReasons, briefEchoHeadings } from './lib/magazine-manuscript-guard.mjs'
@@ -549,13 +550,17 @@ export function correctableFirstResponse(row) {
     && (row?.reason === 'invalid_manuscript' || row?.reason === 'markers_missing')
     && Boolean(row?.conversationUrl && row?.assistantMessageId)
     && /^[0-9a-f]{64}$/.test(row?.responseSha256 ?? '')
+    // 🔴 runner 가 예약 해제와 invalid 증거를 **한 번에** commit 했을 때만 (재검토 2) — 아니면 예약이 남아 있다
+    && row?.settled === true
+    // 🔴 실제 위반 문장이 있어야 교정할 수 있다 — 코드명만으로 이유를 지어내지 않는다 (재검토 4)
+    && violationsOfResponse(row).length > 0
 }
 
 /** 결과에 남길 최초 응답 증거 — 원문 전체 없이 (앞부분은 정제된 최대 200자만, 회차 결과에만) */
 export function firstResponseEvidence(row) {
   return {
     reason: row?.reason ?? null, stage: row?.stage ?? null, sent: row?.sent ?? null,
-    invalid: (row?.invalid ?? []).slice(0, 12).map((x) => ({ code: x.code ?? String(x), why: String(x.why ?? '').slice(0, 160) })),
+    invalid: row?.violations ?? violationsOfResponse(row),
     responseForm: row?.responseForm ?? null, conversationUrl: row?.conversationUrl ?? null, assistantMessageId: row?.assistantMessageId ?? null,
     responseSha256: row?.responseSha256 ?? null, length: row?.length ?? null,
     responseExcerpt: typeof row?.responseExcerpt === 'string' ? row.responseExcerpt.slice(0, 200) : null,
@@ -564,9 +569,9 @@ export function firstResponseEvidence(row) {
 
 /** 최초 응답 위반 → 교정 재생성 실패 목록 (실제 위반 그대로 + 표기 규칙 한 줄) */
 export function firstResponseRegenFailures(row) {
-  const rows = row?.reason === 'markers_missing'
-    ? [{ code: 'FIRST_RESPONSE_INVALID', label: `brief 의 "반드시 그대로 넣을 문장"이 원고에 없다${row?.missingCount ? ` (${row.missingCount}개)` : ''}` }]
-    : (row?.invalid ?? []).slice(0, 8).map((x) => ({ code: 'FIRST_RESPONSE_INVALID', label: `${x.code ?? x}${x.why && x.why !== x.code ? `: ${x.why}` : ''}` }))
+  // 🔴 장부 기록(violations) · 이번 회수 행(invalid) 모두 같은 정제를 지난 `{code, why}` 다 — why 없는 위반은 없다
+  const violations = Array.isArray(row?.violations) ? row.violations : violationsOfResponse(row)
+  const rows = violations.slice(0, 8).map((x) => ({ code: 'FIRST_RESPONSE_INVALID', label: `${x.code}: ${x.why}` }))
   return [...rows, { code: 'MANUSCRIPT_FORMAT_RULE', label: `원고는 첫 줄부터 --- 로 시작하는 frontmatter(title·description·cluster·medical)로 연다. ${FORMAT_RULE_LABEL}` }]
 }
 
@@ -621,8 +626,11 @@ export function drive(slug, opts, deps = {}) {
   let lastFormatViolations = []
   /** 🔴 최초 응답 증거 — 회수 결과 파일을 지우기 전에 구조화 결과로 옮긴다 (원문 전체는 없다 · 2026-10-11) */
   let firstResponse = null
+  /** 계보 대조 결과 (영수증 · 옛 입력 수리) — 회차 결과에 남긴다 */
+  let lineageReconcile = null
   const evidence = () => ({
     ...(firstResponse ? { firstResponse } : {}),
+    ...(lineageReconcile ? { lineageReconcile } : {}),
     ...(regenHistory.length ? { regenHistory } : {}),
     ...(lastQaFailures.length ? { qaFailures: lastQaFailures } : {}),
     ...(lastFormatViolations.length ? { formatViolations: lastFormatViolations } : {}),
@@ -693,6 +701,24 @@ export function drive(slug, opts, deps = {}) {
       return stop('recovery', recovered.code, `[INFRA] ${recovered.why}`)
     }
     if (recovered.recovered) add('recovery', 'ok', '급사한 재생성 교체를 원복한 뒤 진행')
+    /**
+     * 🔴 **재생성 계보 대조 — provider·ChatGPT 호출 0** (2026-10-11 Codex 재검토 1·3 · `magazine-lineage-reconcile.mjs`).
+     *    ① 입력 수리가 남긴 계보 영수증(교체 뒤 장부 기록 전에 죽었거나 실패) → 지금 draft 가 교체 후 원고면 계보를 연다
+     *    ② 옛 판 입력 수리 APPLIED (cold · autumn) → 결과 행 · 수리 지문 · 지금 draft 검증이 모두 맞으면 한 번만 연다
+     *    애매하면 아무것도 바꾸지 않는다 — 예산은 옛 계보 그대로(fail-closed). 실패해도 회차는 이어 간다.
+     */
+    const dd = deps.draftsDir ?? dirname(dirname(p.draftMd))
+    const qp = quarantinePath ? { path: quarantinePath } : {}
+    try {
+      const pend = completePendingLineage({ draftsDir: dd, slug, ...qp })
+      const legacy = pend.status === 'NONE' ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp }) : null
+      const shown = [pend.status !== 'NONE' ? `영수증 ${pend.status}${pend.why ? ` (${pend.why})` : ''}` : null,
+        legacy && legacy.status !== 'NOT_APPLICABLE' ? `옛 입력 수리 대조 ${legacy.status}${legacy.why ? ` (${legacy.why})` : ''}` : null].filter(Boolean)
+      if (shown.length) add('lineage', pend.ok && (legacy?.ok ?? true) ? 'ok' : 'blocked', shown.join(' · '))
+      lineageReconcile = { pending: pend.status, legacyInputRepair: legacy?.status ?? null }
+    } catch (e) {
+      add('lineage', 'blocked', `계보 대조를 하지 못했다 — 예산은 옛 계보 그대로: ${e?.message ?? e}`)
+    }
   }
   /**
    * 🔴 **손대기 전에 찍는다.** 이 후보가 바꿀 수 있는 추적 파일을 전부 담는다 —
@@ -869,8 +895,29 @@ export function drive(slug, opts, deps = {}) {
      *    앞 회차(또는 00:10 producer)가 같은 지문의 요청으로 응답을 특정했고 원고 관문에서 탈락했다면,
      *    같은 brief 를 또 보내지 않고 정확한 위반으로 교정 재생성(bounded regenOnce)에 들어간다.
      */
-    const priorInvalid = firstResponseInvalidFor(g0.entry, g0.messageFingerprint)
-    let correctFrom = priorInvalid ? { ...priorInvalid, invalid: (priorInvalid.invalidCodes ?? []).map((code) => ({ code, why: code })), source: 'ledger' } : null
+    /**
+     * 🔴 **옛 판 장부의 최초 invalid 사실 대조** (2026-10-11 gray-hair · 재검토) — 신원·위반이 장부에 없던 판이다.
+     *    사유 문장 · sent=true · 예약 없음 · 원고 없음이 모두 맞을 때만 정제한 위반을 지금 지문에 묶어 한 번 남긴다.
+     *    맞지 않으면 아무것도 바꾸지 않는다 (아래 일반 경로 그대로).
+     */
+    let entryNow = g0.entry
+    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {
+      const lr = reconcileLegacyInvalid({ draftsDir: deps.draftsDir ?? dirname(dirname(p.draftMd)), slug, messageFingerprint: g0.messageFingerprint, ...(quarantinePath ? { path: quarantinePath } : {}) })
+      if (lr.status === 'RECORDED') {
+        add('lineage', 'ok', `옛 장부의 최초 invalid 응답 대조 → 위반 ${lr.violations.length}건 기록 (일반 요청 재전송 0)`)
+        lineageReconcile = { ...(lineageReconcile ?? {}), legacyInvalid: 'RECORDED' }
+        const again = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
+        if (!again.ok) { failClosed = true; return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 다시 읽지 못했다 — 보내지 않는다: ${again.why}`) }
+        entryNow = again.entry
+      } else if (!lr.ok) {
+        failClosed = true
+        lastSent = null
+        return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 옛 장부 대조 중 장부를 읽지 못했다 — 보내지 않는다 (runner 0): ${lr.why}`)
+      }
+    }
+    const priorInvalid = firstResponseInvalidFor(entryNow, g0.messageFingerprint)
+    // 🔴 장부 기록의 위반은 이미 정제된 `{code, why}` 다 — 코드명을 why 로 지어내지 않는다 (재검토 4)
+    let correctFrom = priorInvalid ? { ...priorInvalid, sent: true, source: 'ledger' } : null
     if (!correctFrom) {
       const resultPath = join(deps.fetchResultDir ?? PACKET_DIR, `fetch-result-${slug}-${process.pid}-${Date.now()}.json`)
       const r = runStep(WEBUI, ['--fetch', slug, '--result-json', resultPath])
@@ -903,7 +950,7 @@ export function drive(slug, opts, deps = {}) {
           const unidentified = row.stage === 'validate' && (row.reason === 'invalid_manuscript' || row.reason === 'markers_missing')
           const tag = unidentified ? '[DELIVERY_UNCERTAIN] ' : kind !== 'CONTENT' ? `[${kind}] ` : ''
           return stop('draft', unidentified ? 'FIRST_RESPONSE_UNIDENTIFIED' : 'FETCH_FAILED',
-            `${tag}회수 실패 — ${describeFetchFailure(row)}${unidentified ? ' · 응답 신원이 모자라 교정·재전송 0' : ''}`)
+            `${tag}회수 실패 — ${describeFetchFailure(row)}${unidentified ? ' · 응답 신원·정산·위반 문장이 모자라 교정·재전송 0' : ''}`)
         }
       }
     }
@@ -913,7 +960,7 @@ export function drive(slug, opts, deps = {}) {
        *    일반 요청 재전송 0 · 재생성 패킷은 실제 위반 그대로 · 후보는 임시 경로 → 원고 관문 → 변환 → 원자 교체.
        */
       if (!firstResponse) firstResponse = firstResponseEvidence(correctFrom)
-      const lineage = openRegenLineage({ slug, origin: 'INVALID_FIRST_RESPONSE', evidence: { sha256: correctFrom.responseSha256 },
+      const lineage = openRegenLineage({ slug, origin: 'INVALID_FIRST_RESPONSE', evidence: { sha256: invalidEvidenceSha(correctFrom) },
         ...(quarantinePath ? { path: quarantinePath } : {}) })
       if (!lineage.ok) {
         failClosed = true

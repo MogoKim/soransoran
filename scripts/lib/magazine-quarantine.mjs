@@ -430,6 +430,23 @@ export function recordRegenCall({ entry, now, packetHash = null, attemptId = nul
 }
 
 /**
+ * 계보를 여는 **순수 변환** — 장부 변경 함수들(`openRegenLineage` · `settleDeliveryReservation` ·
+ * 입력 수리 정산 · 옛 행 대조)이 **같은 규칙**을 쓴다. 같은 증거 키로 연 적이 있으면 그대로 돌려준다.
+ * @returns {{entry:object, opened:boolean, reason?:'SAME_EVIDENCE'}}
+ */
+export function openLineageIn(prev, { origin, key, now, extra = {} }) {
+  const p = prev && typeof prev === 'object' ? prev : {}
+  const seen = Array.isArray(p.regenLineageKeys) ? p.regenLineageKeys : []
+  if (p.regenLineage?.evidenceKey === key || seen.includes(key)) return { entry: p, opened: false, reason: 'SAME_EVIDENCE' }
+  const base = withLineage(p)
+  return { opened: true, entry: { ...base,
+    regenLineage: { id: randomUUID(), origin, evidenceKey: key, openedAt: now, calls: 0, attemptIds: [], ...extra },
+    regenLineageKeys: [...seen, key].slice(-16) } }
+}
+const HEX64 = /^[0-9a-f]{64}$/
+export const lineageKeyOf = (origin, sha) => `${origin}:${sha}`
+
+/**
  * 🔴 **신뢰된 새 원고 사건만 새 계보를 연다** — 장부 잠금 안에서.
  *    `evidence.sha256` 은 그 사건의 원고·응답 지문이다. 같은 증거(origin + sha256)로 연 적이 있으면 **다시 열지 않는다**
  *    (같은 사건을 재처리해 예산을 되살리는 길을 막는다). 전체 `regenCalls` · attempts 는 그대로다.
@@ -438,22 +455,14 @@ export function recordRegenCall({ entry, now, packetHash = null, attemptId = nul
 export function openRegenLineage({ slug, origin, evidence, now = Date.now(), path = QUARANTINE_PATH }) {
   if (!REGEN_LINEAGE_ORIGINS.includes(origin)) return { ok: false, opened: false, why: `모르는 계보 사건: ${origin}` }
   const sha = evidence?.sha256
-  if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) return { ok: false, opened: false, why: '계보 증거 sha256 이 없다' }
-  const key = `${origin}:${sha}`
-  let opened = false
-  let reason = null
+  if (typeof sha !== 'string' || !HEX64.test(sha)) return { ok: false, opened: false, why: '계보 증거 sha256 이 없다' }
+  let r = null
   const u = updateQuarantine((cur) => {
-    const prev = cur[slug] ?? {}
-    const seen = Array.isArray(prev.regenLineageKeys) ? prev.regenLineageKeys : []
-    if (prev.regenLineage?.evidenceKey === key || seen.includes(key)) { reason = 'SAME_EVIDENCE'; return cur }
-    opened = true
-    const base = withLineage(prev)
-    return { ...cur, [slug]: { ...base,
-      regenLineage: { id: randomUUID(), origin, evidenceKey: key, openedAt: now, calls: 0, attemptIds: [] },
-      regenLineageKeys: [...seen, key].slice(-16) } }
+    r = openLineageIn(cur[slug], { origin, key: lineageKeyOf(origin, sha), now })
+    return r.opened ? { ...cur, [slug]: r.entry } : cur
   }, path)
   if (!u?.ok) return { ok: false, opened: false, why: u?.why ?? '장부 갱신 실패' }
-  return { ok: true, opened, ...(reason ? { reason } : {}) }
+  return { ok: true, opened: r.opened, ...(r.reason ? { reason: r.reason } : {}) }
 }
 
 /** 재생성했는데 원고가 그대로다 — 이 계보만 닫는다 (전체 횟수를 부풀리거나 줄이지 않는다) */
@@ -465,20 +474,60 @@ export function exhaustRegenLineage({ slug, path = QUARANTINE_PATH }) {
 }
 
 /**
- * 🔴 **식별된 최초 invalid 응답** — 같은 일반 요청을 다시 보내지 않기 위한 장부 사실 (원고 본문·앞부분은 싣지 않는다).
- *    전송 지문 · 대화 · 메시지 · 응답 sha256 · 길이 · 위반 코드만.
+ * 🔴 **위반 내용 정제 — 장부에 남기는 유일한 모양** `{code, why}` (2026-10-11 Codex 재검토 4).
+ *    원고 전문·응답 앞부분은 싣지 않는다. why 는 주소·메일을 가리고 제어문자·연속 공백을 지운 뒤 **최대 160자**.
+ *    why 가 비면 그 위반은 버린다 — 🔴 코드명을 why 로 지어내지 않는다 (교정 프롬프트가 실제 위반 문장을 받아야 한다).
  */
-export function recordFirstResponseInvalid({ slug, evidence, now = Date.now(), path = QUARANTINE_PATH }) {
-  const keep = (({ messageFingerprint, conversationUrl, assistantMessageId, responseSha256, length, invalidCodes, reason }) =>
-    ({ messageFingerprint, conversationUrl, assistantMessageId, responseSha256, length, invalidCodes, reason }))(evidence ?? {})
-  return updateQuarantine((cur) => ({ ...cur, [slug]: { ...(cur[slug] ?? {}), firstResponseInvalid: { ...keep, at: now } } }), path)
+export const VIOLATION_WHY_MAX = 160
+export function sanitizeViolations(list, { max = 12 } = {}) {
+  const out = []
+  for (const x of Array.isArray(list) ? list : []) {
+    const code = typeof x?.code === 'string' ? x.code.replace(/[^A-Z0-9_]/g, '').slice(0, 64) : ''
+    const why = String(x?.why ?? '').replace(/https?:\/\/\S+/g, '[URL]').replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '[MAIL]')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, VIOLATION_WHY_MAX)
+    if (!code || !why || why === code) continue
+    out.push({ code, why })
+    if (out.length >= max) break
+  }
+  return out
 }
+
+/** 원고 관문 탈락 응답의 위반 — invalid_manuscript 는 관문의 `{code, why}` 그대로, markers_missing 은 누락 문장 수 */
+export function violationsOfResponse(r) {
+  if (r?.reason === 'markers_missing') {
+    return sanitizeViolations([{ code: 'MARKERS_MISSING', why: `brief 의 "반드시 그대로 넣을 문장"${Number.isFinite(r?.missingCount) ? ` ${r.missingCount}개` : ''}가 원고에 없다 — 그 문장을 그대로 넣는다` }])
+  }
+  return sanitizeViolations(r?.invalid ?? r?.violations)
+}
+
+/** 장부에 남길 최초 invalid 응답 사실 — 전송 지문 · 대화 · 메시지 · 응답 sha256 · 길이 · 정제된 위반 */
+export function firstResponseInvalidRecord(evidence, now) {
+  const e = evidence ?? {}
+  return { messageFingerprint: e.messageFingerprint ?? null, conversationUrl: e.conversationUrl ?? null,
+    assistantMessageId: e.assistantMessageId ?? null, responseSha256: e.responseSha256 ?? null,
+    length: Number.isFinite(e.length) ? e.length : null, reason: e.reason ?? null,
+    violations: sanitizeViolations(e.violations ?? e.invalid), at: now }
+}
+
+/**
+ * 교정에 쓸 수 있는 식별 기록인가 — 위반 문장 1개 이상 + 응답 신원:
+ *   대화·메시지·응답 sha  (이번 판 runner 의 정산 기록)
+ *   또는 `legacyLedgerKey` (옛 판 장부 사유에서 한 번 대조한 기록 — `magazine-lineage-reconcile.mjs` ③)
+ */
+export function identifiedInvalidRecord(f) {
+  const violations = Boolean(f && Array.isArray(f.violations) && f.violations.length > 0 && f.violations.every((v) => v?.code && v?.why && v.why !== v.code))
+  const identified = Boolean(f && ((f.conversationUrl && f.assistantMessageId && HEX64.test(f.responseSha256 ?? ''))
+    || (f.source === 'LEGACY_LEDGER_REASON' && HEX64.test(f.legacyLedgerKey ?? ''))))
+  return violations && identified
+}
+/** 교정 계보의 증거 sha — 응답 sha, 옛 대조 기록이면 그 키 */
+export const invalidEvidenceSha = (f) => (HEX64.test(f?.responseSha256 ?? '') ? f.responseSha256 : HEX64.test(f?.legacyLedgerKey ?? '') ? f.legacyLedgerKey : null)
 
 /** 지금 보낼 일반 요청이 이미 식별된 invalid 응답을 받은 그 요청인가 */
 export function firstResponseInvalidFor(entry, messageFingerprint) {
   const f = entry?.firstResponseInvalid
-  return f && messageFingerprint && f.messageFingerprint === messageFingerprint
-    && f.conversationUrl && f.assistantMessageId && /^[0-9a-f]{64}$/.test(f.responseSha256 ?? '') ? f : null
+  return f && messageFingerprint && f.messageFingerprint === messageFingerprint && identifiedInvalidRecord(f) ? f : null
 }
 
 /** 전송 경계가 재생성 예산 소진으로 멈췄다는 사유 코드 — 정본은 여기 하나다 */
@@ -616,6 +665,53 @@ export function settleBriefRepair({ slug, fingerprint, outcome, providerCalls = 
     const total = (Number.isFinite(e.briefRepairCalls) ? e.briefRepairCalls : 0) + (calls ?? 0)
     return { ...cur, [slug]: { ...e, briefRepairs: next, briefRepairCalls: total } }
   }, path)
+}
+
+/**
+ * 🔴 **전송 예약 정산 — 해제와 결말 기록이 한 번의 장부 변경이다** (2026-10-11 Codex 재검토 2).
+ *
+ *    앞판 runner 는 `releaseDeliveryReservation` 으로 예약을 지운 **뒤** 따로 계보·invalid 기록을 적었다.
+ *    둘 사이에서 죽거나 두 번째 쓰기가 실패하면 "예약은 풀렸는데 결말은 없는" 행이 남았다 —
+ *    다음 회차는 HOLD 도, 교정 근거도 없이 **같은 일반 요청을 다시 보낸다.**
+ *
+ *    이제 한 `updateQuarantine` 안에서, 최신 장부의 예약 ID 가 **내 것일 때만**(CAS):
+ *      outcome=null                       → 예약 해제만 (재생성·입력 수리 요청)
+ *      outcome={kind:'FIRST_FETCH',sha256} → 예약 해제 + FIRST_FETCH 계보
+ *      outcome={kind:'FIRST_RESPONSE_INVALID',evidence} → 예약 해제 + 정제된 invalid 증거
+ *    commit 전에 죽거나 실패하면 장부는 **한 바이트도 바뀌지 않는다** — 예약이 그대로 남아 재전송 0.
+ *    증거가 모자라면 잠금도 잡지 않고 실패한다 (예약 유지 = fail-closed).
+ *    `phaseHook(phase)` 는 시험이 급사 지점(before-commit · after-commit)을 고르는 자리다.
+ * @returns {{ok:boolean, settled:boolean, lineage?:{opened:boolean, reason?:string}, why?:string}}
+ */
+export function settleDeliveryReservation({ slug, reservationId, outcome = null, now = Date.now(), path = QUARANTINE_PATH, phaseHook = () => {} }) {
+  if (!slug || !reservationId) return { ok: false, settled: false, why: 'slug · 예약 ID 가 없다' }
+  if (outcome && outcome.kind === 'FIRST_FETCH' && !HEX64.test(outcome.sha256 ?? '')) {
+    return { ok: false, settled: false, why: 'FIRST_FETCH 정산에 원고 sha256 이 없다 — 예약 유지' }
+  }
+  if (outcome && outcome.kind === 'FIRST_RESPONSE_INVALID' && !identifiedInvalidRecord(firstResponseInvalidRecord(outcome.evidence, now))) {
+    return { ok: false, settled: false, why: 'invalid 응답 증거가 모자라다 (대화·메시지·sha·위반 문장) — 예약 유지' }
+  }
+  if (outcome && !['FIRST_FETCH', 'FIRST_RESPONSE_INVALID'].includes(outcome.kind)) return { ok: false, settled: false, why: `모르는 정산: ${outcome.kind}` }
+  let settled = false
+  let lineage = null
+  const u = updateQuarantine((cur) => {
+    const e = cur[slug]
+    if (!e || e.delivery?.reservationId !== reservationId) return cur
+    let next = clearDelivery(e)
+    if (outcome?.kind === 'FIRST_FETCH') {
+      const r = openLineageIn(next, { origin: 'FIRST_FETCH', key: lineageKeyOf('FIRST_FETCH', outcome.sha256), now })
+      next = r.entry
+      lineage = { opened: r.opened, ...(r.reason ? { reason: r.reason } : {}) }
+    } else if (outcome?.kind === 'FIRST_RESPONSE_INVALID') {
+      next = { ...next, firstResponseInvalid: firstResponseInvalidRecord(outcome.evidence, now) }
+    }
+    phaseHook('before-commit')
+    settled = true
+    return { ...cur, [slug]: next }
+  }, path)
+  if (!u?.ok) return { ok: false, settled: false, why: u?.why ?? '장부 갱신 실패 — 예약 유지' }
+  phaseHook('after-commit')
+  return { ok: true, settled, ...(lineage ? { lineage } : {}) }
 }
 
 /** 🔴 **내 예약일 때만** 전송 기록을 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다 */

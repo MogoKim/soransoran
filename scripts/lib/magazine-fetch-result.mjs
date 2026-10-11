@@ -76,6 +76,8 @@ export function normalizeFetchResult(r = {}) {
     // 🔴 관문 탈락 응답의 증거 — sha256 · 정제한 앞부분(최대 200자). 원문 전체는 싣지 않는다 (2026-10-11 gray-hair)
     responseSha256: /^[0-9a-f]{64}$/.test(r.responseSha256 ?? '') ? r.responseSha256 : null,
     responseExcerpt: typeof r.responseExcerpt === 'string' ? r.responseExcerpt.slice(0, 200) : null,
+    // 🔴 전송 예약 정산(해제 + 결말 기록)이 한 번에 commit 됐는가 — true 일 때만 교정한다 (2026-10-11 재검토 2)
+    settled: r.settled === true,
     prior: r.prior
       ? {
         sent: normalizeSent(r.prior.sent), kind: r.prior.kind ?? null, reason: r.prior.reason ?? null,

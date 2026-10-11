@@ -41,7 +41,9 @@
  */
 export const PARTIAL_EXIT = 3
 /** 고쳐지지 않은 채 남은 결과 — 사람이 봐야 한다 */
-export const REPAIR_UNRESOLVED = Object.freeze(['FAILED', 'REJECTED', 'DELIVERY_UNCERTAIN', 'REPAIR_EXHAUSTED', 'HELD'])
+export const REPAIR_UNRESOLVED = Object.freeze(['FAILED', 'REJECTED', 'DELIVERY_UNCERTAIN', 'REPAIR_EXHAUSTED', 'HELD',
+  // 🔴 draft 는 교체됐지만 재생성 계보 기록이 끝나지 않았다 — 영수증이 남아 다음 회차가 완성한다 (2026-10-11 재검토 3)
+  'LINEAGE_PENDING'])
 
 /**
  * 수리 단계의 실행 결과 + 구조화 결과(report) → 판정·알림·handoff 가 쓰는 요약. **순수 함수다.**
@@ -58,6 +60,10 @@ export function summarizeRepairStage({ spawnError = null, status = null, report 
     }
     for (const r of report.results ?? []) {
       if (REPAIR_UNRESOLVED.includes(r?.outcome)) failures.push({ slug: r.slug ?? null, type: r.type ?? null, outcome: r.outcome, reason: r.reason ?? '' })
+    }
+    // 🔴 앞 회차 계보 영수증을 완성하지 못했다 — 원고는 바뀌었는데 예산 기록이 없다 (사람·다음 회차가 본다)
+    for (const r of report.lineagePending ?? []) {
+      if (r && r.ok === false) failures.push({ slug: r.slug ?? null, type: 'LINEAGE_PENDING', outcome: r.status ?? 'LINEAGE_PENDING', reason: r.why ?? '' })
     }
     if (status !== 0 && failures.length === 0) failures.push({ slug: null, type: null, outcome: 'REPAIR_STAGE_FAILED', reason: `종료 코드 ${status}` })
   }

@@ -87,8 +87,8 @@ const MUTATIONS = [
     replace: '  const id = { ok: true }\n' },
   // ── 4차 (0c3df1b NO-GO 결함) ──
   { name: '잠금 키를 큐 파일 경로로 되돌림', file: 'lib/magazine-queue-lock.mjs',
-    find: '  return join(QUEUE_LOCK_DIR, `${scope.scope}.queue`)',
-    replace: "  return join(QUEUE_LOCK_DIR, `${scope.scope}-${String(queuePath).replace(/[^a-z0-9]/gi, '_').slice(-80)}.queue`)" },
+    find: '  return join(queueLockDir(env), `${scope.scope}.queue`)',
+    replace: "  return join(queueLockDir(env), `${scope.scope}-${String(queuePath).replace(/[^a-z0-9]/gi, '_').slice(-80)}.queue`)" },
   { name: '시험 scope 주입의 운영 차단 제거', file: 'lib/magazine-queue-lock.mjs',
     find: "  if (env.SORAN_MAGAZINE_TEST_MODE !== '1') {\n    return { ok: false, why: 'SORAN_MAGAZINE_QUEUE_LOCK_SCOPE",
     replace: "  if (false) {\n    return { ok: false, why: 'SORAN_MAGAZINE_QUEUE_LOCK_SCOPE" },

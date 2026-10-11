@@ -33,6 +33,7 @@ const F = {
   regen: path.join(HERE, 'lib', 'magazine-regen.mjs'),
   qa: path.join(HERE, 'magazine-qa.mjs'),
   repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
+  webui: path.join(HERE, 'magazine-webui-runner.mjs'),
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -84,13 +85,25 @@ const MUTATIONS = [
   { name: '⑲ 최초 응답 교정 경로 제거 (gray — 형식 실패에서 멈춤)', scenarios: 'S8', edits: [{ file: F.register,
     find: "          correctFrom = { ...row, source: 'fetch' }", replace: "          correctFrom = null" }] },
   { name: '⑳ 장부의 최초 응답 기록 무시 (같은 일반 요청 재전송)', scenarios: 'S10', edits: [{ file: F.register,
-    find: '    const priorInvalid = firstResponseInvalidFor(g0.entry, g0.messageFingerprint)', replace: '    const priorInvalid = null' }] },
+    find: '    const priorInvalid = firstResponseInvalidFor(entryNow, g0.messageFingerprint)', replace: '    const priorInvalid = null' }] },
   { name: '㉑ QA 의 발행 길이 FAIL 제거 (autumn — hero 뒤 batch 에서 막힘)', scenarios: 'S9', edits: [{ file: F.qa,
     find: '  if (!body.hard.ok) report.fail(', replace: '  if (false) report.fail(' }] },
   { name: '㉒ 입력 수리 교체가 새 계보를 열지 않음 (cold — 옛 예산을 이어받음)', scenarios: 'S2', edits: [{ file: F.repair,
-    find: "    const lineage = openRegenLineage({ slug: t.slug, origin: 'INPUT_REPAIR'", replace: "    const lineage = { ok: true, opened: false, reason: 'MUTATED' } || openRegenLineage({ slug: t.slug, origin: 'INPUT_REPAIR'" }] },
-  { name: '㉓ 신원 없는 응답도 교정 (fail-closed 제거)', scenarios: 'S8B', edits: [{ file: F.register,
-    find: '    && Boolean(row?.conversationUrl && row?.assistantMessageId)\n', replace: '' }] },
+    find: '    const lineage = completePendingLineage({ draftsDir, slug: t.slug, path: quarantinePath })', replace: "    const lineage = { ok: true, status: 'OPENED' }" }] },
+  { name: '㉓ 신원·정산 없는 응답도 교정 (fail-closed 제거 — 신원 확인과 정산 확인 둘 다)', scenarios: 'S8B', edits: [{ file: F.register,
+    find: '    && Boolean(row?.conversationUrl && row?.assistantMessageId)\n', replace: '' }, { file: F.register, find: '    && row?.settled === true\n', replace: '' }] },
+  // ── 2026-10-11 재검토 — 정산 원자화 · 운영 후 상태 대조 · producer 재전송 0 ──
+  { name: '㉔ runner 가 결말 없이 예약만 푼다 (앞판 release — 장부에 교정 근거 없음)', scenarios: 'S10', edits: [{ file: F.webui,
+    find: '        const st = settleDeliveryReservation({ slug, reservationId, outcome, path: quarantinePath })', replace: '        const st = settleDeliveryReservation({ slug, reservationId, outcome: null, path: quarantinePath })' }] },
+  { name: '㉕ producer 일괄 계획이 교정 대기를 보지 않음 (00:10 gray 가 fetch 로 잡혀 접근 확인을 깨운다)', scenarios: 'S12', edits: [{ file: F.webui,
+    find: '    if (fetchSet.has(t.slug) && correctionPending.has(t.slug)) {', replace: '    if (false) {' }] },
+  { name: '㉖ auto-register 가 옛 장부 사유를 대조하지 않음 (gray — 교정 근거 없음)', scenarios: 'S12', edits: [{ file: F.register,
+    find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
+  { name: '㉗ auto-register 가 옛 입력 수리 영수증을 대조하지 않음 (cold·autumn — REGEN_EXHAUSTED)', scenarios: 'S11', edits: [{ file: F.register,
+    find: "      const legacy = pend.status === 'NONE' ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp }) : null", replace: '      const legacy = null' }] },
+  { name: '㉘ 단건 회수 관문이 교정 대기를 보지 않음 (01:00 일반 재전송)', scenarios: 'S12', edits: [
+    { file: F.webui, find: '  if (gate.correctionPending) {\n    if (!quiet)', replace: '  if (false) {\n    if (!quiet)' },
+    { file: F.register, find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -105,8 +118,11 @@ const summary = (out) => (out.match(/리허설 검사 \d+\/\d+/g) ?? [null]).pop
 
 let bad = 0
 let caught = 0
-console.log('\n매거진 rehearsal 변이 시험\n')
-const base = spawnSync(process.execPath, [CHECK, '--scenario', 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+/** `--only ㉓,㉕` — 고친 변이만 다시 본다 (개발용 · 🔴 판정은 언제나 전체 실행으로) */
+const only = process.argv.includes('--only') ? String(process.argv[process.argv.indexOf('--only') + 1] ?? '').split(',').filter(Boolean) : null
+const RUN = only ? MUTATIONS.filter((m) => only.some((o) => m.name.startsWith(o))) : MUTATIONS
+console.log(`\n매거진 rehearsal 변이 시험${only ? ` (일부만: ${only.join(',')} — 판정용 아님)` : ''}\n`)
+const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
 /** 🔴 변이 시험이 만든 rehearsal 산출물(임시 루트·보고서)은 남기지 않는다 */
 const cleanup = (stdout) => {
   for (const m of stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {
@@ -117,7 +133,7 @@ const cleanup = (stdout) => {
 cleanup(base.stdout)
 if (base.status !== 0) { bad++; console.log(`  ❌ 변이 없는 코드에서 검사가 FAIL 이다 (${summary(base.stdout) ?? '요약 없음'})`) } else console.log(`  기준선 (변이 없음) — PASS · ${summary(base.stdout)}`)
 try {
-  for (const mu of MUTATIONS) {
+  for (const mu of RUN) {
     const invalid = mu.edits.find((e) => occurrences(originals[e.file].toString('utf8'), e.find) !== 1)
     if (invalid) { bad++; console.log(`  ❌ ${mu.name} — ${path.basename(invalid.file)} 에 바꿀 문장이 ${occurrences(originals[invalid.file].toString('utf8'), invalid.find)}번 있다 (변이 무효)`); continue }
     const mutated = {}
@@ -140,5 +156,5 @@ try {
 } finally { restoreAll() }
 const drift = files.filter((f) => sha(f) !== startHashes[f])
 if (drift.length) { bad++; console.log(`  ❌ 끝난 뒤 원본과 다른 파일: ${drift.map((f) => path.basename(f)).join(', ')}`) } else console.log('\n  원복 확인 — 변이 대상 파일 전부 시작 해시와 같다')
-console.log(`\n${bad ? '🔴' : '✅'} 변이 ${MUTATIONS.length}건 중 검사가 잡은 것 ${caught}건\n`)
+console.log(`\n${bad ? '🔴' : '✅'} 변이 ${RUN.length}건 중 검사가 잡은 것 ${caught}건\n`)
 process.exitCode = bad ? 1 : 0

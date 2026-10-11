@@ -26,6 +26,19 @@ import { drive } from './magazine-auto-register.mjs'
 import { gate } from './lib/magazine-auto-lane.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
 import { spawnSync as nodeSpawnSync } from 'node:child_process'
+import { operationalQueueLockDirs, queueLockDir } from './lib/magazine-queue-lock.mjs'
+
+/**
+ * 🔴 **이 검사는 운영 큐 writer 잠금을 쥐지 않는다** (2026-10-11 실측 · Codex 재검토).
+ *    앞판은 시험 모드 없이 `applyWrite` · `drive` 원복을 불러 **운영 scope 잠금 파일**
+ *    (`~/Library/Application Support/soransoran/queue-locks/soransoran-magazine-topic-queue-v1.queue.lock`)을
+ *    실제로 만들고 지웠다. 그 순간 운영 G8·등록이 돌면 시험이 운영 큐를 막는다.
+ *    이제 임시 잠금 폴더다(운영 모드 자식 시험이 있어 시험 모드는 켜지 않는다) — 자식도 물려받는다.
+ *    잠금 모듈은 운영 위치·임시 폴더 밖 주입을 파일 접근 전에 거부한다.
+ */
+const M3A_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-check-locks-'))
+process.env.SORAN_MAGAZINE_QUEUE_LOCK_DIR = M3A_LOCK_DIR
+process.on('exit', () => { try { fs.rmSync(M3A_LOCK_DIR, { recursive: true, force: true }) } catch { /* 임시 폴더 */ } })
 
 /**
  * 🔴 **시험 brief 도 실제 brief 의 형식 계약을 지닌다** (2026-10-08 · `judgeBriefFormatContract`).
@@ -6041,6 +6054,9 @@ console.log('\n㊻ 재생성은 현재 원고를 고친다 · 옛 HOLD 호환 ·
   }
 }
 
+// 🔴 운영 queue-locks 접근 0 — 이 검사의 모든 큐 잠금 경로는 임시 폴더였다 (가드는 파일 접근 전에 거부한다)
+check('🔴 큐 writer 잠금 폴더 = 시험 임시 폴더 (운영 queue-locks 아님)',
+  queueLockDir() === M3A_LOCK_DIR && !operationalQueueLockDirs().includes(queueLockDir()), queueLockDir())
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)
 if (fail) for (const f of fails) console.log(`  🔴 ${f}`)
 process.exit(fail === 0 ? 0 : 1)

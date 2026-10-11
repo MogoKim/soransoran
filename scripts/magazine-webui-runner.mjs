@@ -63,7 +63,7 @@ import {
   readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
   recordDelivery, QUARANTINE_PATH, DELIVERY_HOLD_REASON,
   reserveDelivery, releaseDeliveryReservation, regenBudget, REGEN_EXHAUSTED_REASON,
-  acquireManuscriptLease, MANUSCRIPT_IN_PROGRESS_REASON, openRegenLineage, recordFirstResponseInvalid,
+  acquireManuscriptLease, MANUSCRIPT_IN_PROGRESS_REASON, settleDeliveryReservation, violationsOfResponse,
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
@@ -455,6 +455,9 @@ export async function recoverSlug(slug, { conversationUrl, checkOnly = false, da
   }
 }
 
+/** 최초 응답 교정 대기 — 일반 요청 재전송 0 (교정은 auto-register 가 한다) */
+export const FIRST_RESPONSE_CORRECTION_PENDING = 'FIRST_RESPONSE_CORRECTION_PENDING'
+
 /** HOLD 로 멈춘 한 건의 결과 — 🔴 이전 전송 사실을 그대로 싣는다. 새로 지어내지 않는다 */
 function heldResult(slug, gate, stage) {
   return {
@@ -602,6 +605,12 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     if (!quiet) console.log(`     ⏸ HOLD — ${gate.hold.why}`)
     return heldResult(slug, gate, 'gate')
   }
+  // 🔴 이미 식별된 invalid 응답을 받은 일반 요청 — 다시 보내지 않는다 (교정은 auto-register · 2026-10-11 재검토)
+  if (gate.correctionPending) {
+    if (!quiet) console.log(`     ⏸ HOLD — ${gate.correctionPending.why}`)
+    return { slug, status: 'held', reason: FIRST_RESPONSE_CORRECTION_PENDING, stage: 'gate', sent: false,
+      messageFingerprint: gate.messageFingerprint, errorDetail: gate.correctionPending.why }
+  }
   /**
    * 🔴 재생성인데 예산이 이미 소진됐으면 브라우저를 깨우지 않는다. (정본 판정은 아래 예약 임계구역이다 —
    *    이것은 그 전에 불필요한 probe 를 피하는 앞단 확인일 뿐이다)
@@ -695,29 +704,27 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
    *    ② 선기록 뒤 실패  → 그대로 둔다 (DELIVERY_UNCERTAIN 유지)
    *    ③ 선기록 전 실패  → 그 실패의 성격대로 적는다 (보내지 않은 것이 확실하다)
    */
+  let settled = false
   {
     try {
       if (settlesDeliveryReservation(r)) {
-        // 🔴 **내 예약일 때만** 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다
-        releaseDeliveryReservation({ slug, reservationId, path: quarantinePath })
         /**
-         * 🔴 **일반 최초 요청**의 결말을 장부에 남긴다 (2026-10-11 gray-hair · Codex A·C).
-         *    ① 원고를 받았다 → 신뢰된 새 원고 사건 — 재생성 계보(FIRST_FETCH)를 연다
-         *    ② 응답을 특정했는데 원고 관문에서 탈락했다 → 같은 일반 요청을 다시 보내지 않도록 증거를 적는다
-         *       (원문·앞부분은 싣지 않는다 — sha256·길이·위반 코드·대화·메시지만)
-         *    재생성·입력 수리 요청은 여기서 계보를 열지 않는다 — 재생성 결과물은 새 계보가 아니다.
+         * 🔴 **예약 해제와 결말 기록은 한 번의 장부 변경이다** (2026-10-11 Codex 재검토 2 · `settleDeliveryReservation`).
+         *    최신 장부의 예약 ID 가 **내 것일 때만** 바꾼다(CAS). 일반 최초 요청이면 같은 변경 안에서:
+         *      ① 원고를 받았다 → 신뢰된 새 원고 사건 — FIRST_FETCH 계보
+         *      ② 응답을 특정했는데 원고 관문에서 탈락했다 → 정제된 invalid 증거(위반 {code, why} · 원문·앞부분 없음)
+         *    재생성·입력 수리 요청은 해제만 한다 — 재생성 결과물은 새 계보가 아니다.
+         *    commit 전에 죽거나 실패하면 예약이 그대로 남는다 (DELIVERY_UNCERTAIN → 재전송 0 · 교정 0).
          */
-        if (!regenPacket && !inputRepair) {
-          if (r.ok) {
-            const saved = readFileSync(draftPath)
-            openRegenLineage({ slug, origin: 'FIRST_FETCH', evidence: { sha256: createHash('sha256').update(saved).digest('hex') }, path: quarantinePath })
-          } else {
-            recordFirstResponseInvalid({ slug, path: quarantinePath, evidence: {
-              messageFingerprint: r.messageFingerprint ?? null, conversationUrl: r.conversationUrl, assistantMessageId: r.assistantMessageId,
-              responseSha256: r.responseSha256 ?? null, length: r.length ?? null, reason: r.reason,
-              invalidCodes: (r.invalid ?? []).map((x) => x.code ?? String(x)).slice(0, 12) } })
-          }
-        }
+        const normal = !regenPacket && !inputRepair
+        const outcome = !normal ? null
+          : r.ok ? { kind: 'FIRST_FETCH', sha256: createHash('sha256').update(readFileSync(outPath)).digest('hex') }
+            : { kind: 'FIRST_RESPONSE_INVALID', evidence: { messageFingerprint: r.messageFingerprint ?? null,
+              conversationUrl: r.conversationUrl, assistantMessageId: r.assistantMessageId,
+              responseSha256: r.responseSha256 ?? null, length: r.length ?? null, reason: r.reason, violations: violationsOfResponse(r) } }
+        const st = settleDeliveryReservation({ slug, reservationId, outcome, path: quarantinePath })
+        settled = st.ok && st.settled
+        if (!settled) console.error(`     🔴 전송 예약을 정산하지 못했다 — 예약을 그대로 둔다 (재전송 0): ${st.why ?? '내 예약이 아니다'}`)
       } else if (!r.preRecorded && !reserved) {
         const kind = classifyFailure({
           code: r.reason, stage: r.stage,
@@ -766,6 +773,8 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     assistantMessageId: r.assistantMessageId ?? null,
     responseForm: r.responseForm ?? null,
     // 🔴 관문 탈락 응답의 증거 — sha256 · 길이 · 정제한 앞부분(최대 200자). 원문 전체는 없다 (2026-10-11)
+    // 🔴 settled — 예약 해제와 결말 기록이 함께 commit 됐는가. 아니면 교정하지 않는다 (fail-closed)
+    settled,
     length: r.length ?? null,
     responseSha256: r.responseSha256 ?? null,
     responseExcerpt: r.responseExcerpt ?? null,
@@ -988,11 +997,14 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   const hold = new Map()
   /** 🔴 brief 형식 계약 위반 — 보낼 수 없는 글이다. 이것만 남았으면 접근 확인(probe)·Chrome 도 0 이다 */
   const contractBlocked = new Map()
+  const correctionPending = new Map()
   for (const slug of fetchSet) {
     const g = deliveryGate({ slug, draftsDir, quarantinePath })
     if (g.ok && g.hold) hold.set(slug, g.hold)
     if (!g.ok && g.code === BRIEF_FORMAT_CONTRACT_REASON) contractBlocked.set(slug, g)
+    if (g.ok && g.correctionPending) correctionPending.set(slug, g.correctionPending)
   }
+  if (correctionPending.size) console.log(`  🔴 최초 응답 교정 대기 ${correctionPending.size}건은 일반 요청을 다시 보내지 않는다 (교정은 01:00 auto-register)`)
   if (hold.size) console.log(`  🔴 전송불명 ${hold.size}건은 다시 보내지 않는다 (장부 지문 일치)`)
 
   const planned = targets.map((t) => {
@@ -1004,6 +1016,9 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     if (fetchSet.has(t.slug) && blocked) {
       return { slug: t.slug, stage: t.stage, action: 'blocked:brief_format_contract', why: blocked.why,
         contractViolations: blocked.contractViolations, messageFingerprint: blocked.messageFingerprint }
+    }
+    if (fetchSet.has(t.slug) && correctionPending.has(t.slug)) {
+      return { slug: t.slug, stage: t.stage, action: 'skip:correction_pending', why: correctionPending.get(t.slug).why }
     }
     return {
       slug: t.slug,
