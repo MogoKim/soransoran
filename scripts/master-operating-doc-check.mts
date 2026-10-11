@@ -13,6 +13,7 @@ import {
 import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
 import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
 import { PUBLISH_RUNNER_ARGS } from './lib/original-post-runner-template'
+import { AUTHORITY_TREE, brokenLinksOf, guideTextOf } from './lib/active-doc-authority.mjs'
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
@@ -144,20 +145,55 @@ const FORBIDDEN: readonly ForbiddenRule[] = [
     label: 'D100 canon 밖에 단계 표를 두지 않는다',
     only: [NORTH_STAR, CURRENT, MASTER, INDEX],
     re: /^\|\s*\*{0,2}[Dd](1|3|5|10|20|30|50|100)\*{0,2}\s*\|\s*\*{0,2}\d/,
+  },  // ── 🔴 2026-10-11 P0-0 창업자 결정 — 옛 계약이 현재 문장으로 돌아오면 실패한다 ──
+  {
+    label: '평상시 매일 정확한 Dn 편수 · 매일 자동 재증명을 현재 계약으로 주장하지 않는다 (canon §1.1)',
+    re: /(평상시|매일|하루마다)[^\n|]{0,25}정확히\s*(N|n|Dn|\d+)\s*편?[^\n|]{0,15}(공개한다|발행한다|채운다|낸다|강제한다)(?![^\n]{0,6}(않|아니))|매일[^\n|]{0,15}(자동 )?(REPROVE|재증명)(한다|으로 쓴다|로 쓴다|을 연다|를 연다)/,
+  },
+  {
+    label: '며칠치 완성 글 재고 · 준비 단계 내일 전체 선생산을 현재 정책으로 쓰지 않는다 (canon §3)',
+    re: /(7일치|일주일치|며칠치)[^\n|]{0,15}(완성 글|재고)[^\n|]{0,20}(만든다|준비한다|유지한다|쌓는다|쌓아 둔다)(?![^\n]{0,6}(않|아니))|내일[^\n|]{0,15}(준비 단계|capacity|D10)[^\n|]{0,15}(슬롯 )?전체[^\n|]{0,25}(만든다|구매한다|산다|생산한다|미리 준비한다)(?![^\n]{0,6}(않|아니))/,
+  },
+  {
+    label: '회사 Mac 매거진 job 수를 낡은 4개로 고정하지 않는다 (현재 구성은 CURRENT 실측)',
+    // 표 칸 경계(`| 회사 Mac 매거진 job | 4개 loaded |`)를 넘어서도 잡는다 · `14개` 같은 다른 수는 잡지 않는다
+    re: /(매거진|magazine)[^\n]{0,16}?(?<!\d)4\s*개|(?<!\d)4\s*개[^\n|]{0,6}(매거진|magazine)/,
+  },
+  {
+    label: 'MASTER 를 현재 권위 · 기본 필독으로 올리지 않는다 (REFERENCE)',
+    re: /MASTER-OPERATING-SYSTEM\.md`?[^\n|]{0,60}(권위 문서다|정본이다|반드시 읽는다|기본 필독이다|현재 정책을 정한다)/,
+  },
+  {
+    label: '저장소 밖 handoff · agent memory 를 정본으로 선언하지 않는다',
+    re: /(soransoran-handoff|\.codex\/memories)[^\n|]{0,80}(정본이다|권위 문서다|정본으로 삼는다)|(외부|저장소 밖)[^\n|]{0,20}(handoff|memory|감사 보고서)[^\n|]{0,20}(정본이다|권위다|권위 문서다)/,
+  },
+  {
+    label: 'North Star 에 Persona · 봇 · 운영자 활동을 넣지 않는다',
+    only: [NORTH_STAR],
+    re: /(Persona|봇|운영자)[^\n|]{0,30}(포함한다|North Star 에 넣는다|North Star 로 센다)/,
   },
 ]
 
 /** 🔴 새 정책의 뼈대 — 빠지면 실패한다 (reconciliation 2026-09-30 §10 "Checks should also require") */
 function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   const out: Array<readonly [string, boolean]> = []
-  const AUTHORITY = [
-    'NORTH-STAR.md', '2026-09-21-d100-goal-canon.md', 'CURRENT-MILESTONE.md', 'MASTER-OPERATING-SYSTEM.md',
-  ]
+  /** 🔴 2026-10-11 P0-0: 권위는 세 문서다. MASTER 는 필요할 때만 여는 기술 지도·역사(REFERENCE) */
+  const AUTHORITY: readonly string[] = AUTHORITY_TREE
   // ① 권위 인덱스는 하나
   const table = sectionIn(index, '## 권위 문서', '\n## ')
   const listed = [...table.matchAll(/^\|\s*\d+\s*\|\s*`([^`]+\.md)`/gm)].map((m) => m[1])
-  out.push(['README 권위 표가 정확히 네 문서를 이 순서로 싣는다',
+  out.push(['README 권위 표가 정확히 세 문서를 이 순서로 싣는다 (MASTER 제외)',
     JSON.stringify(listed) === JSON.stringify(AUTHORITY)])
+  const reference = sectionIn(index, '## 기술 지도와 역사', '\n## ')
+  out.push(['README 가 MASTER 를 필요할 때만 여는 비권위 문서로 따로 둔다',
+    reference.includes('`MASTER-OPERATING-SYSTEM.md`')
+    && reference.includes('필요할 때만')
+    && reference.includes('기본 필독')
+    && !table.includes('MASTER-OPERATING-SYSTEM.md')])
+  out.push(['README 가 저장소 밖 handoff · 감사 보고서 · 외부 memory 를 정본이 아니라고 밝힌다',
+    /handoff[^\n]{0,40}감사 보고서[^\n]{0,40}memory[^\n]{0,10}정본이 아니다/.test(index)])
+  out.push(['README 가 AGENTS · CLAUDE 를 얇은 진입점으로 한정한다',
+    /`AGENTS\.md`[^\n]{0,20}`CLAUDE\.md`[^\n]{0,40}얇은 진입점/.test(index)])
   out.push(['README 가 자기를 권위 인덱스 하나라고 밝힌다', index.includes('이 README 가 권위 인덱스 하나다')])
   for (const [file, body] of [[NORTH_STAR, northStar], [D100_GOAL, d100Goal], [CURRENT, current], [MASTER, master]] as const) {
     out.push([`${file} 가 README 권위 지도를 가리킨다`, body.includes('(./README.md)')])
@@ -191,9 +227,45 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['제거한 옛 경로 표가 10행 이상이고 모든 행이 옛 경로를 적는다',
     cells.length >= 10 && cells.every((c) => (c[2] ?? '').length >= 8)])
   for (const p of ['source-to-slot 판정', '발행 직전 재판정', '판정 함수 하나', 'JIT 공급', '증명일 준비도',
-    '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계']) {
+    '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계',
+    // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
+    'Dn 최대 용량', '가까운 수요 지평', 'event-assisted 실행', '원천 순위 하나', '날짜 정밀도 보존',
+    'Persona 결정 분리', '자동 댓글 provenance']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
+  }
+  // ⑤-b 🔴 2026-10-11 창업자 결정의 뼈대 — 빠지면 실패한다
+  out.push(['canon §1.1 이 Dn 을 인증된 최대 용량 · 평상시 0..Dn · 증명일 정확 N 으로 정의한다',
+    ['### 1.1 Dn 은 인증된 최대 용량이다', '증명된 최대 용량', '`0..Dn`', '증명일에만',
+      '평상시의 부족분은 다음 날의 실패 증거가 아니다'].every((t) => d100Goal.includes(t))])
+  out.push(['canon §6 이 PASS 조건을 증명일에만 정확 N 으로 적용한다',
+    d100Goal.includes('아래 PASS 조건은 증명일에만 적용한다')
+    && d100Goal.includes('`N-1` 은 FAIL, `N` 은 PASS, `N+1` 은 상한 위반이다')
+    && d100Goal.includes('재시험은 증명일로만 하고')])
+  out.push(['canon §3 이 생성 수요를 가장 가까운 실제 공개 기회로 정한다',
+    d100Goal.includes('가장 가까운 실제 공개 기회')
+    && d100Goal.includes('Persona 여력도 같은')])
+  out.push(['canon §3.3 이 event-assisted · 시간표 fallback · 공통 lease · exactly-once 금지를 적는다',
+    ['수집 완료가 공급을 깨운다', '공개 commit 이 첫 댓글을 깨운다', 'fallback', '실행 lease/token',
+      'coalescing', 'exactly-once 시스템을 새로 만들지 않는다'].every((t) => d100Goal.includes(t))])
+  out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
+    d100Goal.includes('hard safety/truth -> 대화 가치·품질 -> 신선도 -> 갱년기 적합성 -> 우아한갱년기 출처 -> 결정적 tie')
+    && d100Goal.includes('`jjong 10 + humor 1`')])
+  out.push(['canon §2.1 이 날짜만 아는 게시 시각을 00:00 으로 지어내지 않는다',
+    d100Goal.includes('날짜만 아는 게시 시각을 그날 00:00 으로 지어내지 않는다')])
+  out.push(['canon §4.1 이 유료 생성 전 코드의 Persona 확정을 적는다',
+    d100Goal.includes('유료 초안 생성 전에 코드가')
+    && d100Goal.includes('생성기가 Persona 후보를 임의로 다시 고르지 않는다')])
+  out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
+    d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
+    && d100Goal.includes('bounded recovery')])
+  out.push(['NORTH-STAR 가 Persona · 봇 · 운영자 활동을 North Star 에서 제외한다',
+    northStar.includes('Persona · 봇 · 운영자 활동은 제외한다')])
+  // ⑤-c 🔴 상대 링크 무결성 — 권위 문서 · 인덱스 · 목록
+  for (const f of [NORTH_STAR, D100_GOAL, CURRENT, INDEX, INVENTORY]) {
+    const broken = brokenLinksOf(f)
+    out.push([`${f} 의 상대 링크가 모두 실제 파일을 가리킨다${broken.length > 0 ? ` (깨짐: ${broken.slice(0, 3).join(', ')})` : ''}`,
+      broken.length === 0])
   }
   // ⑥ 문서별 역할
   out.push(['NORTH-STAR 가 현재성과 이어지는 대화를 다시 올 이유로 적는다',
@@ -235,10 +307,20 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     index.includes('D100-DOCUMENT-INVENTORY.md')
     && index.includes('날짜가 붙은 문서라도 runtime이 구조화해 직접 읽는')
     && index.includes('EXECUTABLE_INPUT')])
-  out.push(['D100 문서 목록이 다섯 분류와 네 authority를 고정한다',
-    ['AUTHORITY', 'EXECUTABLE_INPUT', 'RUNBOOK', 'HISTORY', 'ADJACENT'].every((t) => inventory.includes(`\`${t}\``))
-    && ['NORTH-STAR.md', '2026-09-21-d100-goal-canon.md', 'CURRENT-MILESTONE.md',
-      'MASTER-OPERATING-SYSTEM.md'].every((t) => inventory.includes(`\`${t}\``))])
+  const invAuthority = sectionIn(inventory, '## 2. AUTHORITY', '\n### ')
+  const invReference = sectionIn(inventory, '### 2.1 REFERENCE', '\n## ')
+  const invListed = [...invAuthority.matchAll(/^\|\s*`([^`]+\.md)`\s*\|/gm)].map((m) => m[1])
+  out.push(['D100 문서 목록이 여섯 분류를 고정하고 AUTHORITY 를 README 와 같은 세 문서로 싣는다',
+    ['AUTHORITY', 'REFERENCE', 'EXECUTABLE_INPUT', 'RUNBOOK', 'HISTORY', 'ADJACENT'].every((t) => inventory.includes(`\`${t}\``))
+    && JSON.stringify(invListed) === JSON.stringify(AUTHORITY)])
+  out.push(['D100 문서 목록이 MASTER 를 REFERENCE(기본 필독 아님)로만 분류한다',
+    invReference.includes('`MASTER-OPERATING-SYSTEM.md`')
+    && invReference.includes('기본 필독이 아니다')
+    && !invAuthority.includes('MASTER-OPERATING-SYSTEM.md')])
+  out.push(['D100 문서 목록이 저장소 밖 handoff · memory 를 분류 밖 비정본으로 적는다',
+    /저장소 밖 handoff[^\n]{0,60}memory[^\n]{0,40}분류에도 들지 않는다/.test(inventory)])
+  out.push(['MASTER 가 기본 필독이 아니라고 머리말에 밝힌다',
+    master.slice(0, 1_500).includes('기본 필독 문서가 아니다')])
   const operationDocs = readdirSync('docs/operations')
     .filter((name) => name.endsWith('.md'))
   out.push(['D100 문서 목록이 operations 최상위 Markdown을 정확한 파일명으로 전부 분류한다',
@@ -361,19 +443,52 @@ check('현재 실행이 code / deployed / operating PASS 를 한 표의 세 칸�
 check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있다',
   current.includes('UNKNOWN') && /관측하지 않은 것을 PASS\s*로 쓰지 않는다/.test(current))
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
-  current.includes('## 5. 다음 critical path') && /^\| P0-1 \|/m.test(current))
+  current.includes('## 5. 다음 critical path') && /^\| P0-0 \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
   current.includes('댓글 증거·복구 정직화') && current.includes('automatic provenance'))
-check('현재 실행이 D5 PASS와 진행 중인 오늘 증명을 분리한다',
-  current.includes('10월 8일 자동 5/5')
-  && current.includes('10-09 재증명 진행 중')
-  && current.includes('오늘 결과를 PASS나 FAIL로 확정하지 않는다'))
-check('현재 실행이 보조 Mac 단일 owner와 Persona 30을 현재 상태로 적는다',
-  current.includes('보조 Mac 9개 · 회사 Mac D100 0')
-  && current.includes('contract-valid 30 · active 30 · draft 0'))
-check('현재 실행이 D10 공급 blocker와 PR #677을 첫 critical path로 둔다',
-  current.includes('공급 능력 11 · 필요 하한 12')
-  && current.includes('| P0-1 | PR #677 최신 main 통합·배포 |'))
+/**
+ * 🔴 2026-10-11 P0-0: 옛 판은 "10월 8일 자동 5/5 · PR #677 · 공급 11/12" 같은 **그날의 문자열**을 요구했다.
+ *    상태가 바뀌어 문서를 사실대로 고치면 검사가 깨지는 구조였다 — 검사가 낡은 사실의 편에 섰다.
+ *    지금은 어느 시점에도 성립해야 하는 **구조**를 본다: 최신 결정을 코드 모양으로 적는가, 증거 날짜가 있는가,
+ *    blocker 를 preflight 코드로 적는가, main 과 runtime 을 따로 적는가, 완료된 PR 이 다시 활성 목록에 오지 않는가.
+ */
+const currentLive = activeTextOf(current)
+check('현재 실행이 최신 자연 controller 결정을 결정 모양(상태 · 공개 · 준비)으로 적는다',
+  /`(REPROVE|TRIAL|HOLD|PREPARE|PROMOTE) · 공개 d\d+ · 준비 d\d+`/.test(currentLive))
+check('현재 실행이 최신 d 단계 증거를 날짜와 판정으로 적는다',
+  /\d\d-\d\d d\d+ 증거[^\n]{0,8}(PASS|FAIL|UNKNOWN)/.test(currentLive))
+check('현재 실행이 D10 blocker 를 preflight 코드로 적는다',
+  /## 3\. D10의 정확한 blocker/.test(current)
+  && /^\| `[A-Z_]+` \|/m.test(sectionIn(current, '## 3. D10의 정확한 blocker', '\n## ')))
+check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona contract-valid 를 현재 상태로 적는다',
+  /보조 Mac D100 job \| \d+개 loaded/.test(currentLive)
+  && /회사 Mac D100 job \| 0/.test(currentLive)
+  && /contract-valid \d+ · active \d+/.test(currentLive))
+{
+  /** 🔴 main 과 D100 runtime 을 별도 칸으로 — runtime SHA 는 문서 전체에서 하나여야 한다 */
+  const mainRow = /^\| 원격 main \| `([0-9a-f]{40})` \|/m.exec(currentLive)
+  const runtimeRow = /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `([0-9a-f]{40})`/m.exec(currentLive)
+  check('현재 실행이 원격 main 과 D100 runtime(HEAD = pin = manifest)을 별도 칸에 40자 SHA 로 적는다',
+    mainRow !== null && runtimeRow !== null)
+  const runtimeSha = runtimeRow?.[1] ?? ''
+  const otherRuntime = currentLive.split('\n').filter((l) =>
+    /(runtime|pin|manifest)/.test(l)
+    && [...l.matchAll(/`([0-9a-f]{7,40})`/g)].some((m) => !runtimeSha.startsWith(m[1]!) && m[1] !== mainRow?.[1]))
+  check('🔴 현재 실행에 다른 runtime SHA 가 섞여 있지 않다 (낡은 runtime 값 금지)', otherRuntime.length === 0)
+  for (const l of otherRuntime.slice(0, 2)) console.log(`     🔴 ${l.trim().slice(0, 120)}`)
+}
+{
+  /** 🔴 완료로 기록한 PR 은 다음 critical path 표에 다시 나오지 않는다 */
+  const done = new Set([...(/📜 완료되어 활성 목록에서 뺀 작업:[^\n]*/.exec(current)?.[0] ?? '')
+    .matchAll(/#(\d{3,4})/g)].map((m) => m[1]!))
+  const path = activeTextOf(sectionIn(current, '## 5. 다음 critical path', '\n## '))
+  const revived = path.split('\n').filter((l) => [...l.matchAll(/#(\d{3,4})/g)].some((m) => done.has(m[1]!)))
+  check('현재 실행이 완료된 PR 목록을 역사 표시로 적는다', done.size > 0)
+  check('🔴 완료된 PR 이 다음 critical path 에 활성 작업으로 다시 나오지 않는다', revived.length === 0)
+  for (const l of revived.slice(0, 2)) console.log(`     🔴 ${l.trim().slice(0, 120)}`)
+  const rows = [...path.matchAll(/^\| ([^|]+?) \|/gm)].map((m) => m[1]!.trim()).filter((c) => c !== '순서' && !/^-+$/.test(c))
+  check('현재 실행의 다음 critical path 첫 두 항목이 P0-0 → Batch A 다', rows[0] === 'P0-0' && rows[1] === 'A')
+}
 check('현재 실행이 단계 PASS와 제품 건강을 분리한다',
   current.includes('단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다')
   && current.includes('같은 KST 운영일 공개'))
@@ -1209,7 +1324,8 @@ check('🔴 역사 절이 당시 runner 미등록을 기록한다',
  *    한쪽만 가리키면 그 도구로 들어온 세션은 목적을 모른 채 일한다.
  */
 for (const f of ['AGENTS.md', 'CLAUDE.md']) {
-  const g = readFileSync(f, 'utf-8')
+  // 🔴 2026-10-11: CLAUDE.md 는 `@AGENTS.md` 로 공통 지침을 가져온다 — 에이전트가 실제로 읽는 본문으로 본다
+  const g = guideTextOf(f)
   check(`🔴 ${f} 가 NORTH-STAR 를 가리킨다`, g.includes('docs/operations/NORTH-STAR.md'))
   check(`🔴 ${f} 가 D100 목표 정본을 가리킨다`, g.includes('docs/operations/2026-09-21-d100-goal-canon.md'))
   check(`🔴 ${f} 가 CURRENT-MILESTONE 을 가리킨다`, g.includes('docs/operations/CURRENT-MILESTONE.md'))
@@ -1221,7 +1337,7 @@ for (const f of ['AGENTS.md', 'CLAUDE.md']) {
 /** 🔴 정본을 복제하지 않는다 — 복제하면 한쪽이 낡고 낡은 쪽이 먼저 읽힌다 */
 check('🔴 North Star 문장을 지침에 복제하지 않았다',
   ['AGENTS.md', 'CLAUDE.md'].every((f) =>
-    !readFileSync(f, 'utf-8').includes('7일 안에 다시 방문해')))
+    !guideTextOf(f).includes('7일 안에 다시 방문해')))
 
 /**
  * 🔴 **두 지침이 CURRENT-MILESTONE 과 반대말을 하지 않는다** (2026-09-11).
@@ -1235,7 +1351,7 @@ check('🔴 North Star 문장을 지침에 복제하지 않았다',
  * 🔴 막아야 할 것은 **없는 활동을 있는 것처럼 보이는 지표**이지 글과 댓글 자체가 아니다.
  */
 for (const f of ['AGENTS.md', 'CLAUDE.md']) {
-  const g = readFileSync(f, 'utf-8')
+  const g = guideTextOf(f)
   check(`🔴 ${f} 에 "봇 글·댓글 0건" 류의 반대말이 없다`,
     !g.includes('봇 글·댓글 0건')
     && !g.includes('봇 글·댓글로 채우기')
@@ -1271,6 +1387,7 @@ check('🔴 D100 정책 정본과 현재 구현 보고를 구분한다',
   console.log('\n── 하나의 루프 — 권위 문서 (2026-09-30)')
   const ACTIVE: ReadonlyArray<readonly [string, string]> = [
     [NORTH_STAR, northStar], [D100_GOAL, d100Goal], [CURRENT, current], [MASTER, master], [INDEX, index],
+    [INVENTORY, inventory],
   ]
   for (const [file, body] of ACTIVE) {
     const live = activeTextOf(body)
