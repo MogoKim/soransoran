@@ -466,7 +466,7 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
   && /contract-valid \d+ · active \d+/.test(currentLive))
 {
   /** 🔴 main 과 D100 runtime 을 별도 칸으로 — runtime SHA 는 문서 전체에서 하나여야 한다 */
-  const mainRow = /^\| 원격 main \| `([0-9a-f]{40})` \|/m.exec(currentLive)
+  const mainRow = /^\| 원격 main[^|\n]*\| `([0-9a-f]{40})` \|/m.exec(currentLive)
   const runtimeRow = /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `([0-9a-f]{40})`/m.exec(currentLive)
   check('현재 실행이 원격 main 과 D100 runtime(HEAD = pin = manifest)을 별도 칸에 40자 SHA 로 적는다',
     mainRow !== null && runtimeRow !== null)
@@ -488,7 +488,17 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
   for (const l of revived.slice(0, 2)) console.log(`     🔴 ${l.trim().slice(0, 120)}`)
   const rows = [...path.matchAll(/^\| ([^|]+?) \|/gm)].map((m) => m[1]!.trim()).filter((c) => c !== '순서' && !/^-+$/.test(c))
   check('현재 실행의 다음 critical path 첫 두 항목이 P0-0 → Batch A 다', rows[0] === 'P0-0' && rows[1] === 'A')
+  check('현재 실행이 P0-0 을 이 PR 병합으로 완료하고 병합 뒤 첫 실행을 Batch A 로 적는다',
+    /^\| P0-0 \|[^\n]*이 PR 병합으로 완료[^\n]*병합 뒤 첫 실행 작업은 Batch A/m.test(path))
 }
+check('현재 실행이 main SHA 를 관측 당시 origin/main · P0-0 base 로 적어 병합 뒤 현재 main 으로 읽히지 않게 한다',
+  /^\| 원격 main \([^|\n]*관측 당시 origin\/main[^|\n]*base[^|\n]*\) \|/m.test(currentLive))
+check('🔴 현재 실행의 활성 충돌 장부에 배터리 알림 · AC 설계 과제가 없다 (절전 누락은 C-02 근거로만)',
+  !/^\| H-01 \|/m.test(currentLive)
+  && /^\| C-02 \|[^\n]*10-07[^\n]*절전/m.test(currentLive))
+check('🔴 canon 이 Persona 300+ 를 주간 게시 편수 산식으로 정당화하지 않는다',
+  !/주\s*\d+\s*(건|편)씩 맡으면/.test(d100Goal)
+  && d100Goal.includes('주간 게시 상한은 집중을 막는 안전 상한이지 고정 생산 목표가 아니다'))
 check('현재 실행이 단계 PASS와 제품 건강을 분리한다',
   current.includes('단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다')
   && current.includes('같은 KST 운영일 공개'))

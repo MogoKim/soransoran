@@ -47,7 +47,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 원격 main | `48572809694ed3527aeca4e0b19067f71c8e9b36` |
+| 원격 main (2026-10-11 16:12 관측 당시 origin/main · 이 P0-0 PR 의 base — 병합 뒤 현재 main 이 아니다) | `48572809694ed3527aeca4e0b19067f71c8e9b36` |
 | 보조 Mac D100 runtime HEAD = pin = manifest | `c50016da59cbb67ae6abfbc8f57b135192f21df0` · tracked 변경 0 |
 | 보조 Mac D100 job | 9개 loaded · as-of 시점 D100 실행 프로세스 0 · 전원 AC |
 | 회사 Mac D100 job | 0 |
@@ -105,12 +105,11 @@ HEAD = pin = manifest 일치와 설치 경로다. main과의 차이는 매거진
 | K-05 | canon §2.1 날짜 정밀도와 코드의 00:00 변환 | 이른 만료 | Batch D |
 | K-06 | canon §4.1 과 화자 계획 모델의 Persona 선택 · 장부 단계 라벨 혼동 | 유료 후 탈락 · 원인 불명확 | Batch B |
 | C-01 | 수동 Persona 댓글도 `commentOrigin=PERSONA`면 자동 증거가 될 수 있음 | 거짓 댓글 증명 | Batch A — automatic provenance |
-| C-02 | 댓글 runner는 recovery 대상 밖이고 stale lock 자동 회수가 없음 | 첫 댓글 누락 | Batch A — bounded recovery |
+| C-02 | 댓글 runner는 recovery 대상 밖이고 stale lock 자동 회수가 없음 (근거: 10-07 08:10 글 — 호스트 절전 중 60분 안 댓글 회차 3회 미실행 · 복구 없음) | 첫 댓글 누락 | Batch A — bounded recovery |
 | C-03 | Persona 댓글이 홈 인기 점수에 합산됨 | 합성 인기 | Batch F |
 | M-01 | North Star 이벤트와 measure job 없음 | 사업 성과 측정 불가 | Batch F |
 | T-01 | 직접 `supply:health`는 env 기본값으로 단계를 읽고 stage wrapper는 `StageDecision`을 읽음 | 운영자 오판 | 직접 명령도 `StageDecision`을 읽거나 wrapper 밖 실행을 거부 |
 | T-03 | UnaEO 이름의 역사 import·connector 잔존 | 서비스 혼동 | active import 0 증명 뒤 분류 (Batch G) |
-| H-01 | runbook은 AC 상시를 요구하나 10-10~10-11 배터리 운영이 관측됨(as-of 시점 AC) | sleep 중 회차 누락 | AC 계약 준수 또는 별도 승인된 임계 알림 |
 | S-01 | 82cook off·미측정 | D30부터 원천 부족 가능 | bounded canary 뒤 관측값으로만 확대 |
 | S-02 | d100 scheduler/runtime profile 없음 | D100 코드상 실행 불가 | D20~D50 실측 뒤 동일 계약으로 구현 |
 
@@ -120,7 +119,7 @@ HEAD = pin = manifest 일치와 설치 경로다. main과의 차이는 매거진
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| P0-0 | 정본·현재 상태 동기화 | NORTH-STAR · canon · CURRENT · README 가 같은 목적·Dn 의미·우선순위를 말하고 문서 CI 가 옛 계약 복귀를 막는다 | 다른 agent 의 미커밋 문서 덮어쓰기 · 오래된 문서 branch 통째 병합 |
+| P0-0 | 정본·현재 상태 동기화 — **이 PR 병합으로 완료** | NORTH-STAR · canon · CURRENT · README 가 같은 목적·Dn 의미·우선순위를 말하고 문서 CI 가 옛 계약 복귀를 막는다. 병합 뒤 첫 실행 작업은 Batch A 다 | 다른 agent 의 미커밋 문서 덮어쓰기 · 오래된 문서 branch 통째 병합 |
 | A | 계약·수요·증거·복구 정직화 | 평상시 `0..Dn` / 증명일 정확 N · 가까운 수요 지평 · 댓글 증거·복구 정직화(automatic provenance · bounded recovery · stale lock) · 실행 lease 계약 · 자연 공급 2회 + controller 1회 관측 | D10 기준 완화 · 수동 증명 |
 | B | 생성 손실과 Persona 결정 분리 | 기술 실패 원인 분리 · 제한 재시도 · 장부 단계 라벨 · 원천 요구 → 코드 Persona 결정 shadow 동등 이상 | 안전 gate 완화 |
 | C | event-assisted 최소 루프 | 수집 완료 → 공급 · 공개 commit → 첫 댓글 · 시간표 fallback · 중복 0 · kill switch | 새 큐 · exactly-once 시스템 |
