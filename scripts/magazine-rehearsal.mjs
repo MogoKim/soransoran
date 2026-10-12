@@ -593,9 +593,20 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
     async prepare(repo) {
       // 🔴 migration identity 는 정확히 한 사건이다 — 실제 slug · 수리 후 실제 brief 바이트(읽기 전용 복사 fixture) 그대로
       const L = await imp(repo, 'scripts/lib/magazine-load.mjs')
+      const QL = await imp(repo, 'scripts/lib/magazine-queue-lock.mjs')
+      const RQ = await imp(repo, 'scripts/fixtures/magazine-format-contract/repair-queue-rows.mjs')
       const slug = 'gray-hair-leave-as-is'
-      const item = L.parseQueueSource(readFileSync(join(repo, 'drafts', 'magazine', 'topic-queue.ts'), 'utf8')).find((q) => q.slug === slug)
-      if (!item) throw new Error(`큐에 ${slug} 가 없다`)
+      /**
+       * 🔴 큐 행은 고정 fixture 원문 — runtime 큐에서 gray 가 등록돼 빠져도(10/12 PR #690) 같은 시나리오다 (2026-10-12).
+       *    sandbox 사본 큐에서만 그 행을 빼고 fixture 원문을 넣는다 — 실제 runtime 큐는 읽기만.
+       */
+      const qPath = join(repo, 'drafts', 'magazine', 'topic-queue.ts')
+      let qsrc = readFileSync(qPath, 'utf8')
+      const old = L.parseQueueSource(qsrc).find((q) => q.slug === slug)
+      if (old) qsrc = QL.removeQueueDay(qsrc, old.day) ?? (() => { throw new Error(`sandbox 큐에서 ${slug} 행을 빼지 못했다`) })()
+      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)
+      const item = L.parseQueueSource(readFileSync(qPath, 'utf8')).find((q) => q.slug === slug)
+      if (JSON.stringify(item) !== JSON.stringify(RQ.fixtureQueue([slug])[0])) throw new Error(`sandbox 큐의 ${slug} 행이 fixture 와 다르다`)
       await curate({ repo, keep: [slug] })
       const fx = (n) => readFileSync(join(repo, 'scripts', 'fixtures', 'magazine-format-contract', `gray-hair-leave-as-is.repaired-2026-10-11.${n}`), 'utf8')
       writeSlugFiles({ repo, slug, files: { 'brief.md': fx('brief.md'), 'review.ts': fx('review.ts.txt') } })

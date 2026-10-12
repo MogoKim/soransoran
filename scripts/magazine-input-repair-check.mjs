@@ -78,8 +78,25 @@ const GOOD_PAIR = { brief: tracked('avoiding-gatherings', 'brief.md'), review: t
 const GF_BAD_PAIR = { brief: tracked('belly-fat-menopause', 'brief.md'), review: tracked('belly-fat-menopause', 'review.ts') }
 const GOOD_DRAFT = tracked('job-credentials', 'draft.md')
 const CLINIC_DRAFT = fx('clinic-booking-app.draft.md')
-const QUEUE = L.loadQueue()
-const item = (slug) => QUEUE.find((q) => q.slug === slug)
+/**
+ * 🔴 **반례의 큐 행은 고정 fixture 다 — 실제 큐에 기대지 않는다** (2026-10-12 · PR #690 CI 실패).
+ *    실제 topic-queue.ts 는 등록마다 행이 빠진다. 그 큐에서 행을 찾으면 정상 등록 PR 의 CI 가 이 검사에서 깨진다.
+ *    `item()` 은 fixture 에 없는 slug 면 **던진다** — undefined 를 제품 함수에 넘기지 않는다.
+ */
+const RQ = await import('./fixtures/magazine-format-contract/repair-queue-rows.mjs')
+const QUEUE = RQ.fixtureQueue()
+// 🔴 반례가 쓰는 행이 큐 소스에 모두 있어야 시작한다 — 없으면 undefined 를 만들기 전에 **단언으로** 멈춘다
+{
+  const need = ['gray-hair-leave-as-is', 'cold-weather-joint-pain', 'autumn-low-mood', ...RQ.HOLD_SLUGS, ...RQ.EXTRA_SLUGS, RQ.NORMAL_BRIEF_SLUG, RQ.NORMAL_DRAFT_SLUG]
+  const missing = need.filter((s) => !QUEUE.some((q) => q.slug === s))
+  check('반례 큐 행이 큐 소스(고정 fixture)에 모두 있다 — 실제 큐 상태와 무관', missing.length === 0, missing.join(','))
+  if (missing.length) { finish(); process.exit(1) }
+}
+const item = (slug) => {
+  const it = QUEUE.find((q) => q.slug === slug)
+  if (!it) throw new Error(`고정 큐 fixture 에 ${slug} 행이 없다 — 반례를 실제 큐에 기대지 않는다`)
+  return it
+}
 const GRAY = 'gray-hair-leave-as-is'
 const COLD = 'cold-weather-joint-pain'
 const AUTUMN = 'autumn-low-mood'
@@ -89,6 +106,9 @@ const sha = (t) => createHash('sha256').update(t).digest('hex')
 const read = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null)
 const p = (slug, f) => path.join(D, slug, f)
 const HOLD_SLUGS = ['palpitations-menopause', 'dizziness-menopause', 'breast-exam-interval', 'clinic-or-wait', 'how-much-talk-with-husband', 'retirement-prep-status']
+const NORMAL_DRAFT = RQ.NORMAL_DRAFT_SLUG
+const { isAutoLaneEligible } = await import('./lib/magazine-validation-profile.mjs')
+const isAuto = (it) => isAutoLaneEligible(it).ok
 
 function writeSlug(slug, { brief, review = 'export const REVIEW = { old: true }\n', draft = null }) {
   fs.rmSync(path.join(D, slug), { recursive: true, force: true })
@@ -143,23 +163,35 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(draftsDir)}, slug: ${JSON.stringify
 const byslug = (rep, slug) => rep.results.find((r) => r.slug === slug)
 
 // ── ④ 판정 — 실제 cold draft 는 brief echo ────────────────
-console.log('\n④ 대상 판정 — 실제 fixture · 실제 큐 행')
+console.log('\n④ 대상 판정 — 실제 fixture · 고정 큐 행 (실제 큐와 분리)')
 {
-  check('④ 실제 큐에 세 글이 있고 자동 레인 대상이다', [GRAY, COLD, AUTUMN].every((s) => item(s)), [GRAY, COLD, AUTUMN].filter((s) => !item(s)).join(','))
+  const has = (s) => QUEUE.some((q) => q.slug === s)
+  check('④ 고정 큐 fixture 에 세 글이 있고 자동 레인 대상이다', [GRAY, COLD, AUTUMN].every((s) => has(s) && isAuto(item(s))), [GRAY, COLD, AUTUMN].filter((s) => !has(s)).join(','))
+  check('④ fixture 의 HOLD·상한·정상 행 목록이 검사와 같다', JSON.stringify(RQ.REPAIR_SLUGS) === JSON.stringify([GRAY, COLD, AUTUMN]) && JSON.stringify(RQ.HOLD_SLUGS) === JSON.stringify(HOLD_SLUGS) &&
+    RQ.EXTRA_SLUGS.length === 2 && [...RQ.HOLD_SLUGS, ...RQ.EXTRA_SLUGS, RQ.NORMAL_BRIEF_SLUG, NORMAL_DRAFT].every(has))
+  // 🔴 실제 큐와의 정합 — 비파괴 · 남아 있는 행만 본다 (등록돼 빠진 행은 판정 대상이 아니다)
+  const real = L.loadQueue()
+  const drift = Object.keys(RQ.REPAIR_QUEUE_BLOCKS).filter((s) => real.some((r) => r.slug === s) && JSON.stringify(real.find((r) => r.slug === s)) !== JSON.stringify(item(s)))
+  check('④ 실제 큐에 남아 있는 행은 fixture 와 같다 (실제 큐는 읽기만)', drift.length === 0, drift.join(','))
+  let thrown = null
+  try { item('no-such-slug') } catch (e) { thrown = e.message }
+  check('④ fixture 에 없는 slug 는 던진다 — undefined 큐 행이 제품 함수로 가지 않는다', /고정 큐 fixture/.test(thrown ?? ''), thrown)
   check('④ 실제 cold draft → brief echo 로 정확히 판정 (## 검색 의도 등)', MG.briefEchoHeadings(COLD_DRAFT).length > 0, MG.briefEchoHeadings(COLD_DRAFT).join(','))
   check('④ autumn 같은 모양 → brief echo', MG.briefEchoHeadings(AUTUMN_ECHO).length > 0)
   writeSlug(GRAY, { brief: GRAY_BRIEF })
   writeSlug(COLD, { brief: GOOD_BRIEF, draft: COLD_DRAFT })
   writeSlug(AUTUMN, { brief: GOOD_BRIEF, draft: AUTUMN_ECHO })
   writeSlug('job-credentials', { brief: GOOD_BRIEF })
-  writeSlug('avoiding-gatherings', { brief: GOOD_BRIEF, draft: GOOD_DRAFT })
+  writeSlug(NORMAL_DRAFT, { brief: GOOD_BRIEF, draft: GOOD_DRAFT })
   for (const s of HOLD_SLUGS) writeSlug(s, { brief: GRAY_BRIEF })
   const store = Object.fromEntries(HOLD_SLUGS.map((s) => [s, holdRow()]))
   const { targets, skipped } = IR.scanRepairTargets({ queue: QUEUE, draftsDir: D, store })
   const types = Object.fromEntries(targets.map((t) => [t.slug, t.type]))
   check('④ 대상 = gray(BRIEF) · cold · autumn(DRAFT_ECHO) 정확히 3건', targets.length === 3 && types[GRAY] === IR.REPAIR.BRIEF && types[COLD] === IR.REPAIR.DRAFT_ECHO && types[AUTUMN] === IR.REPAIR.DRAFT_ECHO,
     JSON.stringify(types))
-  check('⑩ 정상 brief(job-credentials) · 정상 draft(avoiding-gatherings)는 대상이 아니다', !types['job-credentials'] && !types['avoiding-gatherings'])
+  // 🔴 두 행 모두 자동 레인 대상이다 — "대상이 아니다" 는 brief·draft 판정의 결과여야 한다 (앞판은 행이 큐에 없어 저절로 참이었다)
+  check('⑩ 정상 brief(job-credentials) · 정상 draft(fixture 행 + avoiding-gatherings 원고)는 자동 레인 대상인데 수리 대상이 아니다',
+    isAuto(item('job-credentials')) && isAuto(item(NORMAL_DRAFT)) && !types['job-credentials'] && !types[NORMAL_DRAFT] && !skipped.some((x) => ['job-credentials', NORMAL_DRAFT].includes(x.slug)))
   check('⑨ HOLD 6건은 대상이 아니라 DELIVERY_UNCERTAIN_HOLD 로 비켜 둔다', HOLD_SLUGS.every((s) => skipped.some((x) => x.slug === s && x.reason === 'DELIVERY_UNCERTAIN_HOLD')) && HOLD_SLUGS.every((s) => !types[s]),
     skipped.map((x) => x.slug).join(','))
   check('④ 순서는 큐 day → slug (결정적)', targets.map((t) => t.slug).join(',') === [...targets].sort((a, b) => a.item.day - b.item.day || a.slug.localeCompare(b.slug)).map((t) => t.slug).join(','))
@@ -532,7 +564,7 @@ console.log('\n⑪ ⑫ 한 후보 실패 뒤 계속 · 회차 최대 3건')
     byslug(rep, GRAY)?.outcome === 'FAILED' && read(p(GRAY, 'brief.md')) === GRAY_BRIEF && byslug(rep, COLD)?.outcome === 'APPLIED' && byslug(rep, AUTUMN)?.outcome === 'APPLIED',
     rep.results.map((r) => `${r.slug}:${r.outcome}`).join(' '))
   // 상한 — 대상 5건
-  const extra = QUEUE.filter((q) => ![GRAY, COLD, AUTUMN, ...HOLD_SLUGS].includes(q.slug) && fs.existsSync(path.join(REPO, 'drafts', 'magazine', q.slug)) === false).slice(0, 2)
+  const extra = RQ.EXTRA_SLUGS.map(item)
   for (const q of extra) writeSlug(q.slug, { brief: GRAY_BRIEF })
   writeSlug(GRAY, { brief: GRAY_BRIEF })
   writeSlug(COLD, { brief: GOOD_BRIEF, draft: COLD_DRAFT })
@@ -687,11 +719,24 @@ console.log('\nENOTDIR — runtime 모양 임시 루트에서 실제 input-repai
     return r.stdout.trim()
   }
   for (const d of ['home', 'bin', 'tmp']) fs.mkdirSync(path.join(M, d), { recursive: true })
+  /**
+   * 🔴 **시험 대상 세 글의 폴더는 저장소에서 복사하지 않는다** (2026-10-12 · PR #690 결합 트리).
+   *    gray·autumn 이 정상 등록되면 그 draft.md·article-draft.ts 가 저장소의 **추적 파일**이 된다. 통째로 복사해 기준 커밋을 만들면
+   *    아래에서 시험 원고를 덮어쓸 때 추적 파일이 바뀌어 producer 가 DIRTY_TREE(SYSTEM)로 멈추고, gray 는 정상 draft 가 있어
+   *    수리 대상에서 빠진다 — 운영 상태가 시험 결과를 바꾼다. 세 폴더는 기준 커밋 **뒤에** 시험 자료로만(미추적) 만든다.
+   *    제품의 DIRTY_TREE 판정은 그대로다 — 시험이 runtime 과 같은 모양(미추적 원고)을 만들 뿐이다.
+   */
+  const MINI_EXCLUDED = [GRAY, COLD, AUTUMN].map((sl) => path.join(REPO, 'drafts', 'magazine', sl))
+  const excluded = (src) => MINI_EXCLUDED.some((d) => src === d || src.startsWith(d + path.sep))
   for (const rel of ['scripts', 'drafts/magazine', 'src/content/magazine', '.gitignore', 'package.json']) {
     fs.mkdirSync(path.dirname(path.join(R, rel)), { recursive: true })
-    fs.cpSync(path.join(REPO, rel), path.join(R, rel), { recursive: true, filter: (src) => !src.includes(`${path.sep}_runs${path.sep}`) })
+    fs.cpSync(path.join(REPO, rel), path.join(R, rel), { recursive: true, filter: (src) => !src.includes(`${path.sep}_runs${path.sep}`) && !excluded(src) })
   }
   fs.symlinkSync(path.join(REPO, 'node_modules'), path.join(R, 'node_modules'))
+  // 🔴 mini 사본 큐에만 수리 대상 세 행을 보장한다 — 실제 큐에서 등록돼 빠져도 반례는 그대로 (실제 큐 파일은 읽기만)
+  const miniQueue = path.join(R, 'drafts', 'magazine', 'topic-queue.ts')
+  fs.writeFileSync(miniQueue, RQ.withFixtureRows(fs.readFileSync(miniQueue, 'utf8'), [GRAY, COLD, AUTUMN]).src)
+  check('mini 사본 큐에 세 행이 fixture 와 같은 값으로 있다', [GRAY, COLD, AUTUMN].every((s) => JSON.stringify(L.parseQueueSource(fs.readFileSync(miniQueue, 'utf8'), 'mini').find((q) => q.slug === s)) === JSON.stringify(item(s))))
   sh('git', ['init', '-q', '-b', 'main'], R)
   sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', '-c', 'commit.gpgsign=false', 'add', '-A'], R)
   sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'mini runtime'], R)
@@ -699,11 +744,19 @@ console.log('\nENOTDIR — runtime 모양 임시 루트에서 실제 input-repai
   sh('git', ['remote', 'add', 'origin', path.join(M, 'origin.git')], R)
   sh('git', ['fetch', '-q', 'origin'], R)
   sh('git', ['branch', '-q', '--set-upstream-to', 'origin/main', 'main'], R)
+  const statusOf = () => sh('git', ['status', '--porcelain', '--untracked-files=all'], R).split('\n').filter(Boolean)
+  check('mini 기준 커밋 직후 clean (추적·미추적 변경 0)', statusOf().length === 0, statusOf().slice(0, 5).join(' · '))
+  check('mini 기준 커밋에 시험 대상 세 글의 파일이 없다 (저장소에서 추적 파일이 돼도 복사하지 않는다)',
+    [GRAY, COLD, AUTUMN].every((sl) => sh('git', ['ls-files', `drafts/magazine/${sl}`], R) === ''), [GRAY, COLD, AUTUMN].map((sl) => sh('git', ['ls-files', `drafts/magazine/${sl}`], R)).join(' '))
   // runtime 처럼 미추적 원고 — gray(형식 계약 위반 brief) · cold·autumn(brief echo)
   const md = (slug, f, t) => { fs.mkdirSync(path.join(R, 'drafts', 'magazine', slug), { recursive: true }); fs.writeFileSync(path.join(R, 'drafts', 'magazine', slug, f), t) }
   md(GRAY, 'brief.md', GRAY_BRIEF); md(GRAY, 'review.ts', 'export const REVIEW = { old: true }\n')
   md(COLD, 'brief.md', GOOD_BRIEF); md(COLD, 'review.ts', 'export const REVIEW = { old: true }\n'); md(COLD, 'draft.md', COLD_DRAFT)
   md(AUTUMN, 'brief.md', GOOD_BRIEF); md(AUTUMN, 'review.ts', 'export const REVIEW = { old: true }\n'); md(AUTUMN, 'draft.md', AUTUMN_ECHO)
+  const expectUntracked = [`?? drafts/magazine/${GRAY}/brief.md`, `?? drafts/magazine/${GRAY}/review.ts`,
+    ...[COLD, AUTUMN].flatMap((sl) => ['brief.md', 'review.ts', 'draft.md'].map((f) => `?? drafts/magazine/${sl}/${f}`))].sort()
+  check('🔴 mini 시험 원고 생성 뒤 — 예상한 미추적 파일 8개만 · 추적 파일 변경 0 (runtime 모양)',
+    JSON.stringify([...statusOf()].sort()) === JSON.stringify(expectUntracked), statusOf().join(' · '))
   check('mini ⓪ runtime 모양 — drafts/magazine/topic-queue.ts 가 일반 파일이다', fs.statSync(path.join(R, 'drafts', 'magazine', 'topic-queue.ts')).isFile())
   // 바깥 세계: claude 는 부르면 기록하고 실패 · gh 는 읽기만 · 네트워크·TCP·DNS 는 전부 기록 후 거부
   const NET_LOG = path.join(M, 'net.jsonl')
@@ -751,6 +804,9 @@ console.error('mini gh: 지원하지 않는다 ' + a.join(' ')); process.exit(1)
   const failures = ho?.repair?.failures ?? null
   let prodRep = null
   try { prodRep = JSON.parse(fs.readFileSync(ho?.repair?.resultFile ?? '', 'utf8')) } catch { prodRep = null }
+  check('🔴 mini ⑦ 실제 producer wrapper — DIRTY_TREE(SYSTEM) 가 아니라 정상 입력 수리 경로까지 갔다',
+    ho?.verdict !== 'SYSTEM' && !/DIRTY_TREE/.test(`${prod.stdout}${prod.stderr}${JSON.stringify(ho ?? {})}`) && Array.isArray(ho?.ran) && ho.ran.includes('repair'),
+    `exit ${prod.status} · ${ho?.verdict} · ${(prod.stdout + prod.stderr).split('\n').filter((l) => /DIRTY_TREE|SYSTEM/.test(l)).slice(0, 2).join(' / ')}`)
   check('mini ⑦ 실제 producer wrapper — 입력 수리 단계가 돌았고 REPAIR_STAGE_FAILED·ENOTDIR 0',
     Array.isArray(ho?.ran) && ho.ran.includes('repair') && Array.isArray(failures) && !failures.some((f) => f.outcome === 'REPAIR_STAGE_FAILED') && !/ENOTDIR/.test(`${prod.stdout}${prod.stderr}`),
     `exit ${prod.status} · ${ho?.verdict} · ${JSON.stringify(failures)} · ${(prod.stdout + prod.stderr).split('\n').filter((l) => /ENOTDIR|REPAIR_STAGE/.test(l)).slice(0, 2).join(' / ')}`)
