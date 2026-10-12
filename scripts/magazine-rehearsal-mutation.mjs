@@ -113,6 +113,11 @@ const MUTATIONS = [
     replace: "      const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL', sentence: (r.stdout || r.stderr).trim().split('\\n').slice(-3).join(' ') }, ...lastQaFailures.filter((x) => /^BODY_TOO_(LONG|SHORT):/.test(x)).map((x) => ({ code: 'BODY_LENGTH', label: x }))], lastQaFailures)" }] },
   { name: '㉛ 발행 길이 줄에서 목표치·계산법 제거', scenarios: 'S13', edits: [{ file: F.register,
     find: "  if (!m) return line\n", replace: "  if (!m || true) return line\n" }] },
+  // ── 2026-10-12 #690 뒤 — 등록돼 추적된 원고·articles 항목이 있어도 시나리오는 같다 (sandbox 사본에서만) ──
+  { name: '㉜ S2 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2', edits: [{ file: F.sandbox,
+    find: "  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })\n", replace: '' }] },
+  { name: '㉝ S12 가 sandbox articles.ts 에서 이미 등록된 gray 항목을 빼지 않는다 (producer 가 등록 글로 건너뜀)', scenarios: 'S12', edits: [{ file: F.orch,
+    find: "      if (at >= 0) {\n        const end = asrc.indexOf", replace: "      if (false) {\n        const end = asrc.indexOf" }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')

@@ -194,7 +194,8 @@ export const SCENARIOS = {
       }
       // runtime 과 같은 모양: topic-queue.ts(일반 파일) · _runs · _template 은 이미 있다 + 숨김 일반 파일
       writeFileSync(join(repo, 'drafts', 'magazine', '.DS_Store'), 'rehearsal\n')
-      return { gray: a.slug, cold: b.slug, autumn: c.slug, normal: d.slug }
+      // 🔴 역할 글의 원고는 runtime 처럼 미추적 — 날짜로 고른 글이 저장소에서 추적 원고를 가져도 같은 시나리오 (2026-10-12)
+      return { gray: a.slug, cold: b.slug, autumn: c.slug, normal: d.slug, untrack: [a, b, c, d].map((it) => `drafts/magazine/${it.slug}`) }
     },
     scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.autumn}:repair`]: ['brief-echo'] } }),
     async afterBuild(sb, p, date) {
@@ -605,6 +606,19 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const old = L.parseQueueSource(qsrc).find((q) => q.slug === slug)
       if (old) qsrc = QL.removeQueueDay(qsrc, old.day) ?? (() => { throw new Error(`sandbox 큐에서 ${slug} 행을 빼지 못했다`) })()
       writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)
+      // 🔴 gray 가 이미 등록된 runtime(10/12 #690 뒤)에서도 같은 시나리오 — sandbox 사본 articles.ts 에서만 그 항목을 뺀다
+      const aPath = join(repo, 'src', 'content', 'magazine', 'articles.ts')
+      const asrc = readFileSync(aPath, 'utf8')
+      const at = asrc.indexOf(`\n  '${slug}': {\n`)
+      if (at >= 0) {
+        const end = asrc.indexOf('\n  },\n', at + 1)
+        if (end < 0) throw new Error(`sandbox articles.ts 에서 ${slug} 항목 끝을 찾지 못했다`)
+        const next = asrc.slice(0, at) + asrc.slice(end + 5)
+        const before = L.parseArticlesSource(asrc).filter((a) => a.slug !== slug)
+        const after = L.parseArticlesSource(next)
+        if (after.some((a) => a.slug === slug) || JSON.stringify(after) !== JSON.stringify(before)) throw new Error(`sandbox articles.ts 에서 ${slug} 만 빼지 못했다`)
+        writeFileSync(aPath, next)
+      }
       const item = L.parseQueueSource(readFileSync(qPath, 'utf8')).find((q) => q.slug === slug)
       if (JSON.stringify(item) !== JSON.stringify(RQ.fixtureQueue([slug])[0])) throw new Error(`sandbox 큐의 ${slug} 행이 fixture 와 다르다`)
       await curate({ repo, keep: [slug] })
