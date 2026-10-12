@@ -107,7 +107,8 @@ const MUTATIONS = [
     { file: F.register, find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
   // ── 2026-10-12 — 반례 큐 행은 고정 fixture (runtime 큐에서 gray 가 등록돼 빠져도 같은 시나리오) ──
   { name: '㉙ S12 가 fixture 큐 행을 넣지 않는다 (runtime 큐 상태에 묶임)', scenarios: 'S12', edits: [{ file: F.orch,
-    find: "      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)\n", replace: '      writeFileSync(qPath, qsrc)\n' }] },
+    // S14 공통 준비에도 같은 줄이 있다 — S12 의 다음 줄(등록된 gray 처리)까지 묶어 S12 하나만 고른다
+    find: "      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)\n      // 🔴 gray 가 이미 등록된 runtime", replace: '      writeFileSync(qPath, qsrc)\n      // 🔴 gray 가 이미 등록된 runtime' }] },
   // ── 2026-10-12 cold — QA 재생성 패킷이 검사가 본 위반을 빠짐없이 · 길이 목표 ──
   { name: '㉚ QA 재생성 패킷을 앞판 구성으로 (꼬리 3줄 + 목표 없는 길이 줄 — description 위반 누락)', scenarios: 'S13', edits: [{ file: F.register,
     find: "      const rr = regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)",
