@@ -93,6 +93,17 @@ export function wakeRunner(i: {
   }
 }
 
+/**
+ * 🔴 **발행 러너의 깨움 문 — 최종 정합을 모두 통과했을 때만 열린다** (2026-10-12 C2 보정).
+ *    commit 뒤라도 Queue/Post/ActivityLog 정합(`verifyOk`)이나 자동 발행 감사 무결성(`auditIntegrityOk`)이 실패한 회차는
+ *    댓글을 재촉하지 않는다 — 사람이 볼 이상이 있는 회차다. 정기 회차는 원래 계약대로 따로 돈다.
+ */
+export function publishWakeGate(i: { verifyOk: boolean; auditIntegrityOk: boolean }): { ok: true } | { ok: false; why: string } {
+  if (!i.verifyOk) return { ok: false, why: '발행 정합(Queue · Post · ActivityLog) 실패 — 깨우지 않는다' }
+  if (!i.auditIntegrityOk) return { ok: false, why: '자동 발행 감사 무결성 실패 — 깨우지 않는다' }
+  return { ok: true }
+}
+
 /** 🔴 사람이 읽는 한 줄 — 발행 결과와 섞이지 않게 "깨움" 이라고 먼저 적는다 */
 export function describeWake(target: WakeTarget, o: WakeOutcome): string {
   switch (o.kind) {

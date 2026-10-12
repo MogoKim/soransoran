@@ -19,12 +19,12 @@ import { join } from 'node:path'
 
 import {
   EVENT_WAKE_ENV, FAKE_LAUNCHCTL_MARK, KICKSTART_TIMEOUT_MS, LAUNCHCTL_PATH, WAKE_TARGETS,
-  describeWake, eventWakeModeOf, launchctlPath, wakeAllowed, wakeRunner,
+  describeWake, eventWakeModeOf, launchctlPath, publishWakeGate, wakeAllowed, wakeRunner,
 } from './lib/runner-wake.mjs'
 import { FOLLOW_UP_FILE, LOCKF_PATH, MAX_FOLLOW_UPS, followUpTriggerOf, lockfUsable } from './lib/runner-lease.mjs'
 import { COMMENT_RUNNER_LABEL, commentLoopLockDir } from './lib/persona-comment-runner-template'
 import { commentLoopLockDir as loopReExport, COMMENT_LOOP_LOCK_FILE } from './lib/persona-comment-loop.mjs'
-import { ORPHAN_WAKE_GRACE_MS, judgeOrphanWake, type OrphanWakeInput } from '../src/lib/runner-recovery'
+import { ORPHAN_WAKE_GRACE_MS, judgeOrphanWake, parseHandledWake, type OrphanWakeInput } from '../src/lib/runner-recovery'
 
 let pass = 0
 let fail = 0
@@ -52,11 +52,20 @@ try {
 
   const now = new Date('2026-10-12T03:00:00.000Z')
   const at = new Date(now.getTime() - ORPHAN_WAKE_GRACE_MS).toISOString()
-  const base: OrphanWakeInput = { enabled: true, state: 'loaded', running: false, marker: { trigger: 'event', at }, handledWakeAt: null, now }
+  const base: OrphanWakeInput = { enabled: true, state: 'loaded', running: false, marker: { trigger: 'event', at }, handled: { kind: 'missing' }, now }
   const act = (o: Partial<OrphanWakeInput>): string => judgeOrphanWake({ ...base, ...o }).action
   check('고아 사건 표식(유예 지남 · 처음) → 한 번 깨운다', act({}) === 'kickstart')
-  check('🔴 고아 복구 상한 — 같은 표식(같은 시각)을 이미 깨웠으면 다시 깨우지 않는다(kickstart 실패여도)', act({ handledWakeAt: at }) === 'skip')
-  check('새 표식(다른 시각)은 그 표식으로 다시 한 번', act({ handledWakeAt: new Date(now.getTime() - 3_600_000).toISOString() }) === 'kickstart')
+  check('🔴 고아 복구 상한 — 같은 표식(같은 시각)을 이미 깨웠으면 다시 깨우지 않는다(kickstart 실패여도)', act({ handled: { kind: 'valid', wakeAt: at } }) === 'skip')
+  check('새 표식(다른 시각)은 그 표식으로 다시 한 번', act({ handled: { kind: 'valid', wakeAt: new Date(now.getTime() - 3_600_000).toISOString() } }) === 'kickstart')
+  check('🔴 🔴 반례 처리 기록을 읽지 못함(unreadable) → 이미 깨웠는지 모르므로 깨우지 않는다(fail-closed · 반복 kickstart 0)',
+    act({ handled: { kind: 'unreadable' } }) === 'skip' && /fail-closed/.test(judgeOrphanWake({ ...base, handled: { kind: 'unreadable' } }).reason))
+  const ph = (raw: string): string => { const h = parseHandledWake(raw); return h.kind === 'valid' ? `valid:${h.wakeAt}` : h.kind }
+  check('🔴 🔴 반례 처리 기록 손상 — JSON 아님 · wakeAt 없음 · 숫자 · null · 빈 문자열 · 배열 · JSON null → 전부 unreadable',
+    ['{oops', '{}', '{"wakeAt":123}', '{"wakeAt":null}', '{"wakeAt":""}', '[]', 'null', '"x"'].every((r) => ph(r) === 'unreadable'),
+    ['{oops', '{}', '{"wakeAt":123}'].map(ph).join(','))
+  check('처리 기록 정상 — wakeAt 문자열이면 valid', ph(JSON.stringify({ wakeAt: at, at: now.toISOString() })) === `valid:${at}`)
+  check('🔴 손상 기록 + 같은 고아 표식 — 몇 번을 판정해도 kickstart 0',
+    [0, 1, 2, 3].every((k) => judgeOrphanWake({ ...base, handled: parseHandledWake('{"wakeAt":42}'), now: new Date(now.getTime() + k * 1_800_000) }).action === 'skip'))
   check('🔴 깨움 꺼짐 · 표식 없음 · 사건 아닌 표식(scheduled · manual · unknown) → 건드리지 않는다',
     act({ enabled: false }) === 'skip' && act({ marker: null }) === 'skip'
     && ['scheduled', 'manual', 'unknown', null].every((t) => act({ marker: { trigger: t, at } }) === 'skip'))
@@ -131,17 +140,31 @@ try {
   const iWake = pub.indexOf("wakeRunner({ target: 'comment'")
   const iGuard = pub.indexOf("if (res.kind !== 'published') {")
   const iTx = pub.indexOf('res = await publishOriginalPostTx(')
+  const iPersona = pub.indexOf('if (announced !== null && res.personaCode !== announced) {')
   const iVerify = pub.indexOf('const v = verifyAfterPublish(')
-  check('🔴 🔴 깨움은 발행 트랜잭션 결과가 published 로 확인된 뒤에만 — 막힘 · 만료 · 오류 · 무발행 경로는 그 위에서 끝난다',
-    iWake > iGuard && iGuard > iTx && iWake < iVerify && (pub.match(/wakeRunner\(/g) ?? []).length === 1)
-  check('🔴 깨움 결과가 종료 코드 · 정합 · 감사에 들어가지 않는다(값을 담지 않고 한 줄로만 찍는다)',
-    /console\.log\(`   \$\{describeWake\('comment', wakeRunner\(\{ target: 'comment', env: process\.env, nowMs: Date\.now\(\) \}\)\)\}`\)/.test(pub)
+  const iAudit = pub.indexOf('auditIntegrityOk = false')
+  const iGate = pub.indexOf('const wakeGate = publishWakeGate({ verifyOk: v.ok, auditIntegrityOk })')
+  const iExit = pub.indexOf('process.exit(v.ok && auditIntegrityOk ? 0 : 1)')
+  check('🔴 🔴 깨움은 commit(published) · 예고 Persona 일치 · 정합(verifyAfterPublish) · 감사 무결성 판정을 모두 지난 뒤 단 한 곳',
+    iTx > 0 && iTx < iGuard && iGuard < iPersona && iPersona < iVerify && iVerify < iAudit && iAudit < iGate && iGate < iWake && iWake < iExit
+    && (pub.match(/wakeRunner\(/g) ?? []).length === 1, JSON.stringify({ iTx, iGuard, iPersona, iVerify, iAudit, iGate, iWake, iExit }))
+  check('🔴 🔴 깨움 문이 닫히면 wakeRunner 를 부르지 않는다 · 결과가 종료 코드에 들어가지 않는다',
+    /console\.log\(`   \$\{wakeGate\.ok \? describeWake\('comment', wakeRunner\(\{ target: 'comment', env: process\.env, nowMs: Date\.now\(\) \}\)\) : `깨움\(comment\) 0 — \$\{wakeGate\.why\}`\}`\)/.test(pub)
     && /process\.exit\(v\.ok && auditIntegrityOk \? 0 : 1\)/.test(pub))
+  check('🔴 🔴 반례 깨움 문 — 정합 PASS + 감사 무결성 PASS 만 열린다(정합 실패 · 감사 무결성 실패 · 둘 다 실패 → 닫힘)',
+    publishWakeGate({ verifyOk: true, auditIntegrityOk: true }).ok && !publishWakeGate({ verifyOk: false, auditIntegrityOk: true }).ok
+    && !publishWakeGate({ verifyOk: true, auditIntegrityOk: false }).ok && !publishWakeGate({ verifyOk: false, auditIntegrityOk: false }).ok)
+  check('🔴 예고 Persona 불일치는 깨움 앞에서 회차를 끝낸다(fail → exit 1 · 깨움 0)',
+    /if \(announced !== null && res\.personaCode !== announced\) \{\s*\n\s*await prisma\.\$disconnect\(\)\s*\n\s*fail\(/.test(pub))
   const users = ['scripts/original-post-auto-publish.mts', 'scripts/runner-recover.mts', 'scripts/persona-comment-loop.mts', 'scripts/supply-process.mts',
     'scripts/micro-seed-navercafe-run.mts', 'scripts/lib/supply-lease.mts']
     .filter((f) => /wakeRunner\(/.test(strip(f)))
   check('🔴 깨움을 부르는 곳은 발행 러너 하나 — 수집 → 공급 깨움 0(C3)', JSON.stringify(users) === JSON.stringify(['scripts/original-post-auto-publish.mts']), users.join(','))
   const rec = strip('scripts/runner-recover.mts')
+  check('🔴 처리 기록 읽기 — 없음 · 읽음 · 못 읽음을 구조로 가른다(읽기 실패도 unreadable · 문자열 표식 0)',
+    /if \(!existsSync\(p\)\) return \{ kind: 'missing' \}/.test(rec) && /try \{ return parseHandledWake\(readFileSync\(p, 'utf-8'\)\) \} catch \{ return \{ kind: 'unreadable' \} \}/.test(rec)
+    && /handled: readHandledWake\(label\)/.test(rec)
+    && (() => { const body = rec.slice(rec.indexOf('function readHandledWake('), rec.indexOf('function writeHandledWake(')); return body.length > 0 && !/return 'unreadable'|: string \| null/.test(body) })())
   check('🔴 고아 복구 — 표식 시각을 kickstart 전에 따로 적는다(슬롯 복구 표식과 섞지 않는다) · -k 없음',
     rec.indexOf('writeHandledWake(label, marker.at)') > 0 && rec.indexOf('writeHandledWake(label, marker.at)') < rec.indexOf("execFileSync('launchctl', ['kickstart', `gui/${process.getuid?.() ?? 0}/${label}`]", rec.indexOf('writeHandledWake(label, marker.at)'))
     && /`\$\{label\}\.wake\.json`/.test(rec) && !/'-k'/.test(rec))
@@ -218,8 +241,8 @@ try {
     const raw = readFileSync(join(LD, FOLLOW_UP_FILE), 'utf-8')
     const mk = followUpTriggerOf(raw)
     const later = new Date(Date.parse(mk.at!) + ORPHAN_WAKE_GRACE_MS + 1)
-    const first = judgeOrphanWake({ enabled: true, state: 'loaded', running: false, marker: mk, handledWakeAt: null, now: later })
-    const again = judgeOrphanWake({ enabled: true, state: 'loaded', running: false, marker: mk, handledWakeAt: mk.at, now: new Date(later.getTime() + 3_600_000) })
+    const first = judgeOrphanWake({ enabled: true, state: 'loaded', running: false, marker: mk, handled: { kind: 'missing' }, now: later })
+    const again = judgeOrphanWake({ enabled: true, state: 'loaded', running: false, marker: mk, handled: { kind: 'valid', wakeAt: mk.at! }, now: new Date(later.getTime() + 3_600_000) })
     check('🔴 🔴 반례 고아 표식 — 복구는 1회 · 그 표식으로 다시 깨우지 않는다(무한 반복 0)', first.action === 'kickstart' && again.action === 'skip')
     writeFileSync(PLOG, '')
     await exitOf(run(100))

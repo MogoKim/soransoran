@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { judgeOrphanWake, judgeRecovery } from '../src/lib/runner-recovery'
+import { judgeOrphanWake, judgeRecovery, parseHandledWake, type HandledWake } from '../src/lib/runner-recovery'
 import { FOLLOW_UP_FILE, followUpTriggerOf } from './lib/runner-lease.mjs'
 import { EVENT_WAKE_ENV, WAKE_TARGETS, eventWakeModeOf, wakeAllowed } from './lib/runner-wake.mjs'
 import { readEnvKeys } from './lib/ops-signals.mjs'
@@ -67,10 +67,11 @@ function readWakeMarker(dir: string): { trigger: string | null; at: string | nul
   try { return followUpTriggerOf(readFileSync(p, 'utf-8')) } catch { return { trigger: null, at: null } }
 }
 
-function readHandledWake(label: string): string | null {
+/** 🔴 처리 기록 — 없음 · 읽음 · 못 읽음을 구조로 가른다(못 읽으면 판정이 깨우지 않는다 · fail-closed) */
+function readHandledWake(label: string): HandledWake {
   const p = join(MARK_DIR, `${label}.wake.json`)
-  if (!existsSync(p)) return null
-  try { const v = (JSON.parse(readFileSync(p, 'utf-8')) as { wakeAt?: unknown }).wakeAt; return typeof v === 'string' ? v : 'unreadable' } catch { return 'unreadable' }
+  if (!existsSync(p)) return { kind: 'missing' }
+  try { return parseHandledWake(readFileSync(p, 'utf-8')) } catch { return { kind: 'unreadable' } }
 }
 
 function writeHandledWake(label: string, wakeAt: string): void {
@@ -97,7 +98,7 @@ for (const label of RECOVERABLE_LABELS) {
   const wakeDir = WAKE_DIR_OF[label]
   if (v.action !== 'kickstart' && wakeDir !== undefined) {
     const marker = readWakeMarker(wakeDir)
-    const ow = judgeOrphanWake({ enabled: WAKE_ENABLED, state: o.state, running: o.run.running, marker, handledWakeAt: readHandledWake(label), now: NOW })
+    const ow = judgeOrphanWake({ enabled: WAKE_ENABLED, state: o.state, running: o.run.running, marker, handled: readHandledWake(label), now: NOW })
     console.log(`   ${ow.action === 'kickstart' ? '🔔' : '·'} ${`${label} (사건 깨움)`.padEnd(40)} ${ow.reason}`)
     if (ow.action === 'kickstart' && APPLY && marker?.at != null) {
       try {
