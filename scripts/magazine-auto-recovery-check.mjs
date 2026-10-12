@@ -632,13 +632,37 @@ console.log('\nJ 1회성 복구 — 신원이 전부 맞을 때만 · 장부 잠
     const r = LR.openOneTimeRecoveries({ draftsDir: w.DD, path: w.LF })
     check('🔴 J 다른 slug 의 같은 행·같은 원고 — 열리지 않는다 · 장부 바이트 그대로', r[0]?.status === 'NOT_APPLICABLE' && fs.readFileSync(w.LF).equals(b) && !row(w.LF, 'autumn-low-mood').oneTimeRecoveries, r[0])
   }
-  // 수동 장부 편집으로는 예산이 생기지 않는다 — 허용은 코드 상수와 계보(id·evidenceKey·slug)가 맞을 때만
+  // 공식 개방 함수가 남기는 완전한 기록 없이는 인정하지 않는다 (부분 기록·손으로 넣은 id/key 만으로는 예산·격리가 열리지 않는다)
   {
+    const KEY = `ONE_TIME_RECOVERY:${REC.id}`
+    const genuine = e1 // openOneTimeRecoveries 가 실제로 남긴 행 (calls 0)
+    const opens = (e, slug = COLD) => !Q.regenBudget({ entry: e, slug }).exhausted || Q.judgeQuarantine({ entry: e, slug, fingerprint: e.fingerprint, now }).skip === false
+    check('J 공식 개방 기록 — 예산·격리가 그 slug 에 열린다 (기준)', opens(genuine) && Q.oneTimeRecoveryOf(COLD, genuine)?.id === REC.id)
     const forged = (l) => ({ ...prodRow(), regenLineage: { id: 'x', origin: 'ONE_TIME_RECOVERY', calls: 0, attemptIds: [], ...l } })
-    const cases = [forged({ recoveryId: 'one-time-recovery/fake', evidenceKey: 'ONE_TIME_RECOVERY:one-time-recovery/fake' }), forged({ recoveryId: REC.id, evidenceKey: 'ONE_TIME_RECOVERY:other' })]
-    check('🔴 J 손으로 만든 복구 계보(모르는 id · 키 불일치)는 예산·격리를 열지 않는다', cases.every((e) => Q.regenBudget({ entry: e, slug: COLD }).exhausted && Q.judgeQuarantine({ entry: e, slug: COLD, fingerprint: e.fingerprint, now }).skip === true))
-    const real = forged({ recoveryId: REC.id, evidenceKey: `ONE_TIME_RECOVERY:${REC.id}` })
-    check('J 같은 계보라도 다른 slug 에서는 열리지 않는다', Q.regenBudget({ entry: real, slug: 'autumn-low-mood' }).exhausted && !Q.regenBudget({ entry: real, slug: COLD }).exhausted)
+    const withL = (patch) => ({ ...genuine, regenLineage: { ...genuine.regenLineage, ...patch } })
+    const cases = [
+      ['모르는 id', forged({ recoveryId: 'one-time-recovery/fake', evidenceKey: 'ONE_TIME_RECOVERY:one-time-recovery/fake' })],
+      ['틀린 key', forged({ recoveryId: REC.id, evidenceKey: 'ONE_TIME_RECOVERY:other' })],
+      ['정확한 id·key 만 손으로 넣은 행 (키·기록·이전 계보 없음)', forged({ recoveryId: REC.id, evidenceKey: KEY })],
+      ['정확한 id·key·이전 계보까지 넣었지만 키·기록 없음', forged({ recoveryId: REC.id, evidenceKey: KEY, previousLineageId: REC.identity.lineageId })],
+      ['공식 기록에서 계보 evidenceKey 만 다름 (키·기록은 정상)', withL({ evidenceKey: 'ONE_TIME_RECOVERY:other' })],
+      ['공식 기록에서 계보 evidenceKey 와 키 목록을 같은 틀린 키로 맞춤', { ...withL({ evidenceKey: 'ONE_TIME_RECOVERY:other' }), regenLineageKeys: genuine.regenLineageKeys.map((k) => (k === KEY ? 'ONE_TIME_RECOVERY:other' : k)) }],
+      ['regenLineageKeys 누락',{ ...genuine, regenLineageKeys: genuine.regenLineageKeys.filter((k) => k !== KEY) }],
+      ['regenLineageKeys 중복', { ...genuine, regenLineageKeys: [...genuine.regenLineageKeys, KEY] }],
+      ['oneTimeRecoveries 누락', { ...genuine, oneTimeRecoveries: [] }],
+      ['oneTimeRecoveries 필드 없음', (({ oneTimeRecoveries, ...r }) => { void oneTimeRecoveries; return r })(genuine)],
+      ['oneTimeRecoveries 중복', { ...genuine, oneTimeRecoveries: [...genuine.oneTimeRecoveries, { id: REC.id, openedAt: 1 }] }],
+      ['previousLineageId 불일치', withL({ previousLineageId: 'other-lineage' })],
+      ['previousLineageId 없음', withL({ previousLineageId: undefined })],
+      ['calls -1', withL({ calls: -1 })],
+      ['calls 2 (extraCalls 초과)', withL({ calls: 2 })],
+      ['calls 0.5', withL({ calls: 0.5 })],
+      ['calls 문자열', withL({ calls: '0' })],
+    ]
+    for (const [label, e] of cases) {
+      check(`🔴 J 불완전·위조 복구 기록 — ${label} → 예산·격리 열지 않음`, !opens(e) && Q.oneTimeRecoveryOf(COLD, e) === null)
+    }
+    check('J 같은 공식 기록이라도 다른 slug 에서는 열리지 않는다', Q.regenBudget({ entry: genuine, slug: 'autumn-low-mood' }).exhausted && !opens(genuine, 'autumn-low-mood'))
   }
   // 실제 자식 프로세스 — 동시 개방 · 동시 재생성 예약 · 예약 직후 급사
   const LRURL = pathToFileURL(path.join(HERE, 'lib', 'magazine-lineage-reconcile.mjs')).href
@@ -688,6 +712,41 @@ console.log('\nJ 1회성 복구 — 신원이 전부 맞을 때만 · 장부 잠
     const b = Q.reserveDelivery({ slug: COLD, messageFingerprint: fp(9), reservationId: 'rv-o2', regen: { attemptId: 'o2', packetHash: 'h' }, path: w.LF })
     check('J 개방 직후 SIGKILL — 권리는 남고(calls 0) 다음 회차가 정확히 1회 쓴다', k.signal === 'SIGKILL' && a.ok && !b.ok && row(w.LF, COLD).regenCalls === 5)
   }
+}
+
+// ── K dry-run 은 복구를 열지 않는다 (2026-10-12 Codex 재검토 P0) ─────────────
+console.log('\nK dry-run — 1회성 복구 개방 0 · 장부 바이트·SHA·mtime 그대로 (운영 모양 원고 4파일 · cold 장부)')
+{
+  const READY = await import('./magazine-auto-register-ready.mjs')
+  const FXD = path.join(HERE, 'fixtures', 'magazine-format-contract')
+  const COLD = 'cold-weather-joint-pain'
+  // 검사 시작 때 고정한 원고 폴더(SORAN_MAGAZINE_DRAFTS_DIR = D)에 운영 모양 원고 4파일 — ready 의 DRAFTS_DIR 과 같다
+  const SD = path.join(D, COLD)
+  fs.mkdirSync(SD, { recursive: true })
+  for (const [to, from] of [['brief.md', 'cold-weather-joint-pain.recovery-2026-10-12.brief.md'], ['review.ts', 'cold-weather-joint-pain.recovery-2026-10-12.review.ts.txt'],
+    ['draft.md', 'cold-weather-joint-pain.regen-source-2026-10-12.draft.md'], ['article-draft.ts', 'cold-weather-joint-pain.recovery-2026-10-12.article-draft.ts.txt']]) fs.copyFileSync(path.join(FXD, from), path.join(SD, to))
+  // 운영 장부 cold 행의 신원 칸 (attempts 2 · regenCalls 4 · 지문 · 계보 b542d44b · 전송 기록 없음)
+  const prodRowK = { attempts: 2, lastAt: 1791734502311, fingerprint: 'sha256:dce6d087af6def7be9ee45c59fbff539', kind: 'CONTENT', sent: false,
+    regenCalls: 4, regenAttemptIds: ['a', 'b', 'c', 'd'], regenLineage: { id: 'b542d44b-b6d2-4b8b-8a9b-e96f21768c23', origin: 'INPUT_REPAIR', evidenceKey: 'INPUT_REPAIR:x', calls: 2, attemptIds: ['c', 'd'] },
+    regenLineageKeys: ['INPUT_REPAIR:x'] }
+  const noScan = () => ({ source: 'fixture', pool: 0, eligible: [], skipped: [], quarantined: [] })
+  const stat = (f) => ({ sha: crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex'), mtime: fs.statSync(f).mtimeMs, bytes: fs.readFileSync(f) })
+  const LD = ledger('k-dry', { [COLD]: prodRowK })
+  const b0 = stat(LD)
+  const repDry = { blocked: [], done: [] }
+  READY.processCandidates({ write: false, wantPr: false, limit: 1, report: repDry, quarantinePath: LD, scanFn: noScan, driveFn: () => { throw new Error('drive 0') } })
+  const b1 = stat(LD)
+  const e = row(LD, COLD)
+  check('🔴 K write=false — 장부 SHA·mtime·바이트 그대로 · 복구 계보·키·기록 0', b1.sha === b0.sha && b1.mtime === b0.mtime && b1.bytes.equals(b0.bytes) &&
+    e.regenLineage.origin === 'INPUT_REPAIR' && !e.oneTimeRecoveries && !(e.regenLineageKeys ?? []).some((k) => k.startsWith('ONE_TIME_RECOVERY')), { b0: b0.sha.slice(0, 12), b1: b1.sha.slice(0, 12) })
+  check('K write=false — 결과에 실행하지 않았음을 구조적으로 남긴다 (DRY_RUN_SKIPPED · executed:false)', Array.isArray(repDry.oneTimeRecoveries) && repDry.oneTimeRecoveries.length === 1 &&
+    repDry.oneTimeRecoveries[0].status === 'DRY_RUN_SKIPPED' && repDry.oneTimeRecoveries[0].executed === false, repDry.oneTimeRecoveries)
+  // 같은 세계에서 write=true 는 실제로 연다 — dry-run 반례가 죽은 시험이 아님
+  const LW = ledger('k-write', { [COLD]: prodRowK })
+  const repW = { blocked: [], done: [] }
+  READY.processCandidates({ write: true, wantPr: false, limit: 1, report: repW, quarantinePath: LW, scanFn: noScan, driveFn: () => { throw new Error('drive 0') } })
+  check('K 같은 세계 write=true — 복구 OPENED (dry-run 반례가 열릴 수 있는 세계에서 확인됐다)', repW.oneTimeRecoveries?.[0]?.status === 'OPENED' && row(LW, COLD).regenLineage.origin === 'ONE_TIME_RECOVERY', repW.oneTimeRecoveries)
+  fs.rmSync(SD, { recursive: true, force: true })
 }
 
 check('운영 장부 기본 경로는 격리 HOME 아래', path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep))

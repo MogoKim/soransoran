@@ -430,12 +430,27 @@ export const ONE_TIME_RECOVERIES = Object.freeze([Object.freeze({
   }),
 })])
 export const recoveryKeyOf = (rec) => `${RECOVERY_ORIGIN}:${rec.id}`
-/** 이 slug 의 지금 계보가 코드 상수의 1회성 복구인가 — 아니면 null */
+/**
+ * 이 slug 의 지금 계보가 코드 상수의 1회성 복구인가 — 아니면 null.
+ * 🔴 **공식 개방 함수(`openOneTimeRecoveries`)가 원자적으로 남기는 완전한 기록 없이는 인정하지 않는다** (2026-10-12 Codex 재검토 P1):
+ *    slug · 코드 상수의 recovery id · evidenceKey · regenLineageKeys 에 그 키 **정확히 1개** · oneTimeRecoveries 에 그 id **정확히 1개** ·
+ *    previousLineageId = 사건 identity.lineageId · calls 는 0 이상 extraCalls 이하 정수. 하나라도 없거나 중복이면 예산·격리를 열지 않는다.
+ *    (장부 전체를 의도적으로 위조하는 행위까지 막는다는 뜻은 아니다 — 부분 기록·손으로 넣은 id/key 만으로는 열리지 않는다는 뜻이다.)
+ */
 export function oneTimeRecoveryOf(slug, entry, recoveries = ONE_TIME_RECOVERIES) {
   const l = entry?.regenLineage
   if (!slug || !l || l.origin !== RECOVERY_ORIGIN) return null
   const rec = recoveries.find((r) => r.id === l.recoveryId && r.slug === slug)
-  return rec && l.evidenceKey === recoveryKeyOf(rec) ? rec : null
+  if (!rec) return null
+  const key = recoveryKeyOf(rec)
+  if (l.evidenceKey !== key) return null
+  const keys = Array.isArray(entry.regenLineageKeys) ? entry.regenLineageKeys : []
+  if (keys.filter((k) => k === key).length !== 1) return null
+  const recs = Array.isArray(entry.oneTimeRecoveries) ? entry.oneTimeRecoveries : []
+  if (recs.filter((r) => r?.id === rec.id).length !== 1) return null
+  if (l.previousLineageId !== rec.identity.lineageId) return null
+  if (!Number.isInteger(l.calls) || l.calls < 0 || l.calls > rec.extraCalls) return null
+  return rec
 }
 
 /** 이 slug 를 지금 계보에서 몇 번 더 재생성할 수 있나 — 계보 2회 · 전체 4회 중 먼저 닿는 쪽 (1회성 복구 계보면 그 사건의 extraCalls 만큼) */

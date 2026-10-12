@@ -122,7 +122,7 @@ const MUTATIONS = [
     find: "      if (at >= 0) {\n        const end = asrc.indexOf", replace: "      if (false) {\n        const end = asrc.indexOf" }] },
   // ── 2026-10-12 cold 1회성 복구 — 운영 경로 연결 ──
   { name: '㉞ ready 가 후보 판정 전에 1회성 복구를 열지 않는다 (cold 그대로 격리)', scenarios: 'S14', edits: [{ file: F.ready,
-    find: "  report.oneTimeRecoveries = openOneTimeRecoveries({ draftsDir: DRAFTS_DIR, ...(quarantinePath ? { path: quarantinePath } : {}) })", replace: '  report.oneTimeRecoveries = []' }] },
+    find: "    ? openOneTimeRecoveries({ draftsDir: DRAFTS_DIR, ...(quarantinePath ? { path: quarantinePath } : {}) })", replace: '    ? []' }] },
   { name: '㉟ 재생성이 예산을 slug 없이 판정 (복구 계보를 못 보고 소진)', scenarios: 'S14', edits: [{ file: F.regen,
     find: '  const budget = regenBudget({ entry, slug })', replace: '  const budget = regenBudget({ entry })' }] },
 ]
