@@ -37,7 +37,7 @@ Fetching deployment "soransoran.com" in soransoran
     ╶ https://www.soransoran.com
     ╶ https://soransoran-soransoran.vercel.app
     ╶ https://soransoran-git-main-soransoran.vercel.app
-    
+
 
   Builds
 
@@ -48,5 +48,3 @@ Fetching deployment "soransoran.com" in soransoran
     ├── λ admin (9.68MB) [icn1]
     ├── λ admin.rsc (9.68MB) [icn1]
     └── 108 output items hidden
-    
-
