@@ -76,8 +76,8 @@ const MUTATIONS = [
     find: '  if (!harness.ok) {\n', replace: '  if (false) {\n' }] },
   // ── S7 QA 재생성 ──
   { name: '⑰ QA 재생성 경로 제거', scenarios: 'S7', edits: [{ file: F.register,
-    find: "      const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL',",
-    replace: "      const rr = { ok: false, code: 'MUTATED' } || regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL'," }] },
+    find: "      const rr = regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)",
+    replace: "      const rr = { ok: false, code: 'MUTATED' } || regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)" }] },
   { name: '⑱ 실패 패킷에서 실제 QA 사유 제거', scenarios: 'S7', edits: [{ file: F.regen,
     find: "    code: f.code, label: f.label ?? f.message ?? '', sentence: String(f.sentence ?? '').slice(0, 160),",
     replace: "    code: f.code, label: f.label ?? f.message ?? '', sentence: ''," }] },
@@ -107,6 +107,17 @@ const MUTATIONS = [
   // ── 2026-10-12 — 반례 큐 행은 고정 fixture (runtime 큐에서 gray 가 등록돼 빠져도 같은 시나리오) ──
   { name: '㉙ S12 가 fixture 큐 행을 넣지 않는다 (runtime 큐 상태에 묶임)', scenarios: 'S12', edits: [{ file: F.orch,
     find: "      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)\n", replace: '      writeFileSync(qPath, qsrc)\n' }] },
+  // ── 2026-10-12 cold — QA 재생성 패킷이 검사가 본 위반을 빠짐없이 · 길이 목표 ──
+  { name: '㉚ QA 재생성 패킷을 앞판 구성으로 (꼬리 3줄 + 목표 없는 길이 줄 — description 위반 누락)', scenarios: 'S13', edits: [{ file: F.register,
+    find: "      const rr = regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)",
+    replace: "      const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL', sentence: (r.stdout || r.stderr).trim().split('\\n').slice(-3).join(' ') }, ...lastQaFailures.filter((x) => /^BODY_TOO_(LONG|SHORT):/.test(x)).map((x) => ({ code: 'BODY_LENGTH', label: x }))], lastQaFailures)" }] },
+  { name: '㉛ 발행 길이 줄에서 목표치·계산법 제거', scenarios: 'S13', edits: [{ file: F.register,
+    find: "  if (!m) return line\n", replace: "  if (!m || true) return line\n" }] },
+  // ── 2026-10-12 #690 뒤 — 등록돼 추적된 원고·articles 항목이 있어도 시나리오는 같다 (sandbox 사본에서만) ──
+  { name: '㉜ S2 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2', edits: [{ file: F.sandbox,
+    find: "  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })\n", replace: '' }] },
+  { name: '㉝ S12 가 sandbox articles.ts 에서 이미 등록된 gray 항목을 빼지 않는다 (producer 가 등록 글로 건너뜀)', scenarios: 'S12', edits: [{ file: F.orch,
+    find: "      if (at >= 0) {\n        const end = asrc.indexOf", replace: "      if (false) {\n        const end = asrc.indexOf" }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -125,7 +136,7 @@ let caught = 0
 const only = process.argv.includes('--only') ? String(process.argv[process.argv.indexOf('--only') + 1] ?? '').split(',').filter(Boolean) : null
 const RUN = only ? MUTATIONS.filter((m) => only.some((o) => m.name.startsWith(o))) : MUTATIONS
 console.log(`\n매거진 rehearsal 변이 시험${only ? ` (일부만: ${only.join(',')} — 판정용 아님)` : ''}\n`)
-const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
 /** 🔴 변이 시험이 만든 rehearsal 산출물(임시 루트·보고서)은 남기지 않는다 */
 const cleanup = (stdout) => {
   for (const m of stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {

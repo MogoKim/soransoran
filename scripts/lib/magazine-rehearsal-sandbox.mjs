@@ -73,6 +73,12 @@ export async function buildSandbox({ source, runtime, label, base = tmpdir(), pr
   git(['config', 'commit.gpgsign', 'false'], repo)
   git(['add', '-A'], repo)
   for (const f of untracked) git(['rm', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })
+  /**
+   * 🔴 시나리오가 runtime 모양(미추적 원고)을 가정하는 경로 — 저장소에서 추적 파일이 됐어도 sandbox 기준 커밋에선 미추적 (2026-10-12).
+   *    등록된 글의 원고는 저장소에 추적된다. 시나리오가 그 글을 대상으로 고르면 원고를 고칠 때 DIRTY_TREE 로 멈췄다 (S2 · #690 뒤).
+   *    sandbox 사본에만 적용한다 — 제품의 DIRTY_TREE 판정은 그대로다.
+   */
+  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })
   git(['commit', '-q', '-m', `rehearsal baseline (code ${git(['rev-parse', '--short', 'HEAD'], source)} · data ${runtimeHead.slice(0, 7)})`], repo)
   git(['clone', '-q', '--bare', repo, join(root, 'origin.git')], root)
   git(['remote', 'add', 'origin', join(root, 'origin.git')], repo)

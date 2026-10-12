@@ -59,6 +59,8 @@ function replyFor(text) {
   // 🔴 재생성 요청은 보낸 글자를 남긴다 — 실패 패킷에 실제 QA 사유가 실렸는지 rehearsal 이 본다
   log({ slug: item.slug, kind, call: calls[key], mode, ...(kind === 'regen' ? { typed: text } : {}) })
   lastMode = mode
+  // 🔴 obedient — 보낸 글자에 적힌 위반만 고친다 (재생성 패킷의 내용이 결과를 바꾼다 · 2026-10-12 cold)
+  if (mode === 'obedient') return C.obedientRevision(text)
   return C.manuscriptFor({ repo: REPO, draftsDir: L.DRAFTS_DIR, slug: item.slug, item, mode: mode === 'no-identity' ? 'no-frontmatter' : mode, medicalRequired: MEDICAL_REQUIRED })
 }
 
