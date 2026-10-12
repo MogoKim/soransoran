@@ -4,8 +4,8 @@
  *
  *   실제 큐가 바뀌는 세 모양에서 검사를 돌린다 — 저장소를 임시 mini 사본으로 복사하고 **사본의 큐만** 바꾼다.
  *     main   지금 큐 그대로
- *     pr690  gray·autumn 이 정상 등록돼 빠진 큐 (10/12 PR #690 모양)
- *     none   gray·cold·autumn 이 모두 빠진 큐
+ *     pr690  gray·autumn 이 정상 등록돼 큐에서 빠지고 원고가 추적 파일이 된 모양 (10/12 PR #690)
+ *     none   gray·cold·autumn 모두 그렇게 된 모양
  *   기준선: 세 모양 모두 PASS.  변이: 분리 장치를 하나씩 지운 사본이 어느 모양에서든 **단언 실패**로 FAIL.
  *
  * 🔴 저장소·runtime 파일을 바꾸지 않는다 — 변이도 mini 사본에만 건다. 운영 HOME·장부·Chrome·네트워크 0
@@ -31,11 +31,21 @@ const CHECKS = {
   repair: { rel: 'scripts/magazine-input-repair-check.mjs', line: /입력 수리 검사 \d+\/\d+/g },
   recovery: { rel: 'scripts/magazine-auto-recovery-check.mjs', line: /자동 회복 계약 검사 \d+\/\d+/g },
 }
+/** 모양 = 큐에서 빠진 행 (정상 등록돼 큐에서 지워진 글) */
 const SHAPES = {
   main: [],
   pr690: ['gray-hair-leave-as-is', 'autumn-low-mood'],
   none: ['gray-hair-leave-as-is', 'cold-weather-joint-pain', 'autumn-low-mood'],
 }
+/**
+ * 🔴 등록된 글은 원고가 **저장소의 추적 파일**이 된다 (PR #690: gray·autumn 의 draft.md · article-draft.ts).
+ *    큐 행만 지운 모양은 그 결합을 재현하지 못했다 (2026-10-12 · d02af8a 에서 입력 수리 132/135).
+ *    결정적인 최소 파일로 만든다 — GitHub·원격 PR·git show·네트워크 0. hero 바이너리는 이 결함과 무관해 만들지 않는다.
+ */
+const REGISTERED_FILES = (slug) => ({
+  'draft.md': `---\ntitle: 등록된 원고 (${slug} · 시험 fixture)\ndescription: 정상 등록돼 저장소에 추적되는 원고 자리를 재현하는 결정적 최소 파일이다\ncluster: daily\nmedical: false\n---\n\n## 등록된 원고\n\n시험 fixture 원고 본문.\n`,
+  'article-draft.ts': `// 시험 fixture — 등록된 글의 추적 산출물 자리 (${slug})\nexport const ARTICLE_DRAFT = { slug: '${slug}' }\n`,
+})
 const MUTATIONS = [
   { name: '반례 큐 행을 다시 실제 큐에서 찾는다 (앞판)', check: 'repair', shapes: ['pr690', 'none'],
     edits: [{ rel: CHECKS.repair.rel, find: 'const QUEUE = RQ.fixtureQueue()', replace: 'const QUEUE = L.loadQueue()' }] },
@@ -45,6 +55,8 @@ const MUTATIONS = [
     edits: [{ rel: CHECKS.repair.rel, find: "  fs.writeFileSync(miniQueue, RQ.withFixtureRows(fs.readFileSync(miniQueue, 'utf8'), [GRAY, COLD, AUTUMN]).src)\n", replace: '' }] },
   { name: '⑩ 정상 글을 큐에 없는 행으로 판정 (자동 레인 확인 없이 저절로 참)', check: 'repair', shapes: ['main'],
     edits: [{ rel: CHECKS.repair.rel, find: "    isAuto(item('job-credentials')) && isAuto(item(NORMAL_DRAFT)) && ", replace: "    isAuto({ slug: 'avoiding-gatherings' }) && " }] },
+  { name: 'A2 mini 복사가 시험 대상 세 글의 폴더를 빼지 않는다 (등록돼 추적된 원고를 덮어 DIRTY_TREE)', check: 'repair', shapes: ['pr690'],
+    edits: [{ rel: CHECKS.repair.rel, find: " && !excluded(src) })", replace: ' })' }] },
   { name: '자동 회복 F 절의 cold 행을 실제 큐에서 찾는다', check: 'recovery', shapes: ['none'],
     edits: [{ rel: CHECKS.recovery.rel, find: "  const coldItem = (await import('./fixtures/magazine-format-contract/repair-queue-rows.mjs')).fixtureQueue([COLD])[0]",
       replace: '  const coldItem = L.loadQueue().find((q) => q.slug === COLD)' }] },
@@ -68,6 +80,11 @@ function buildMini(name, shape) {
     if (it) src = QL.removeQueueDay(src, it.day)
   }
   fs.writeFileSync(q, src)
+  for (const slug of SHAPES[shape]) {
+    const d = path.join(M, 'drafts', 'magazine', slug)
+    fs.mkdirSync(d, { recursive: true })
+    for (const [f, t] of Object.entries(REGISTERED_FILES(slug))) fs.writeFileSync(path.join(d, f), t)
+  }
   const left = L.parseQueueSource(src).map((x) => x.slug)
   if (SHAPES[shape].some((s) => left.includes(s))) throw new Error(`${shape} 모양을 만들지 못했다`)
   return M
@@ -102,7 +119,8 @@ for (const [i, mu] of MUTATIONS.entries()) {
     const r = runIn(M, mu.check)
     const failed = r.stdout.match(/❌ [^\n]+/g) ?? []
     const crashed = failed.some((x) => /예외로 중단/.test(x))
-    hits.push({ shape, status: r.status, line: lineOf(r.stdout, mu.check), asserts: failed.filter((x) => !/예외로 중단/.test(x)).length, crashed, first: (failed.find((x) => !/예외로 중단/.test(x)) ?? failed[0] ?? '').slice(0, 100) })
+    hits.push({ shape, status: r.status, line: lineOf(r.stdout, mu.check), asserts: failed.filter((x) => !/예외로 중단/.test(x)).length, crashed, first: (failed.find((x) => !/예외로 중단/.test(x)) ?? failed[0] ?? '').slice(0, 100),
+      names: failed.filter((x) => !/예외로 중단/.test(x)).map((x) => x.replace(/^❌\s*/, '').split(' — ')[0].slice(0, 70)) })
     fs.rmSync(M, { recursive: true, force: true })
   }
   if (invalid) { bad++; console.log(`  ❌ ${mu.name} — 변이 무효 (${invalid})`); continue }
@@ -110,7 +128,11 @@ for (const [i, mu] of MUTATIONS.entries()) {
   const deadAssert = hits.filter((h) => h.status !== 0 && h.asserts === 0)
   if (passed.length) { bad++; console.log(`  ❌ ${mu.name} — 검사가 여전히 PASS (${passed.map((h) => h.shape).join(',')}) — 죽은 방어`) }
   else if (deadAssert.length) { bad++; console.log(`  ❌ ${mu.name} — 단언이 아니라 예외로만 멈췄다 (${deadAssert.map((h) => h.shape).join(',')})`) }
-  else { caught++; console.log(`  ✅ ${mu.name} — FAIL ${hits.map((h) => `[${h.shape}: ${h.line} · 실패 단언 ${h.asserts}${h.crashed ? ' · 예외 포함' : ''}]`).join(' ')} · 예: ${hits[0].first.replace(/^❌\s*/, '')}`) }
+  else {
+    caught++
+    console.log(`  ✅ ${mu.name} — FAIL ${hits.map((h) => `[${h.shape}: ${h.line} · 실패 단언 ${h.asserts}${h.crashed ? ' · 예외 포함' : ''}]`).join(' ')}`)
+    for (const n of [...new Set(hits.flatMap((h) => h.names))]) console.log(`       · ${n}`)
+  }
 }
 const realQueue = fs.readFileSync(path.join(REPO, 'drafts', 'magazine', 'topic-queue.ts'), 'utf8')
 console.log(`\n  저장소 큐 불변 — ${L.parseQueueSource(realQueue).length}행 (변이·모양은 mini 사본에만)`)

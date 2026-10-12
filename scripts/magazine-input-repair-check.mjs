@@ -719,9 +719,18 @@ console.log('\nENOTDIR — runtime 모양 임시 루트에서 실제 input-repai
     return r.stdout.trim()
   }
   for (const d of ['home', 'bin', 'tmp']) fs.mkdirSync(path.join(M, d), { recursive: true })
+  /**
+   * 🔴 **시험 대상 세 글의 폴더는 저장소에서 복사하지 않는다** (2026-10-12 · PR #690 결합 트리).
+   *    gray·autumn 이 정상 등록되면 그 draft.md·article-draft.ts 가 저장소의 **추적 파일**이 된다. 통째로 복사해 기준 커밋을 만들면
+   *    아래에서 시험 원고를 덮어쓸 때 추적 파일이 바뀌어 producer 가 DIRTY_TREE(SYSTEM)로 멈추고, gray 는 정상 draft 가 있어
+   *    수리 대상에서 빠진다 — 운영 상태가 시험 결과를 바꾼다. 세 폴더는 기준 커밋 **뒤에** 시험 자료로만(미추적) 만든다.
+   *    제품의 DIRTY_TREE 판정은 그대로다 — 시험이 runtime 과 같은 모양(미추적 원고)을 만들 뿐이다.
+   */
+  const MINI_EXCLUDED = [GRAY, COLD, AUTUMN].map((sl) => path.join(REPO, 'drafts', 'magazine', sl))
+  const excluded = (src) => MINI_EXCLUDED.some((d) => src === d || src.startsWith(d + path.sep))
   for (const rel of ['scripts', 'drafts/magazine', 'src/content/magazine', '.gitignore', 'package.json']) {
     fs.mkdirSync(path.dirname(path.join(R, rel)), { recursive: true })
-    fs.cpSync(path.join(REPO, rel), path.join(R, rel), { recursive: true, filter: (src) => !src.includes(`${path.sep}_runs${path.sep}`) })
+    fs.cpSync(path.join(REPO, rel), path.join(R, rel), { recursive: true, filter: (src) => !src.includes(`${path.sep}_runs${path.sep}`) && !excluded(src) })
   }
   fs.symlinkSync(path.join(REPO, 'node_modules'), path.join(R, 'node_modules'))
   // 🔴 mini 사본 큐에만 수리 대상 세 행을 보장한다 — 실제 큐에서 등록돼 빠져도 반례는 그대로 (실제 큐 파일은 읽기만)
@@ -735,11 +744,19 @@ console.log('\nENOTDIR — runtime 모양 임시 루트에서 실제 input-repai
   sh('git', ['remote', 'add', 'origin', path.join(M, 'origin.git')], R)
   sh('git', ['fetch', '-q', 'origin'], R)
   sh('git', ['branch', '-q', '--set-upstream-to', 'origin/main', 'main'], R)
+  const statusOf = () => sh('git', ['status', '--porcelain', '--untracked-files=all'], R).split('\n').filter(Boolean)
+  check('mini 기준 커밋 직후 clean (추적·미추적 변경 0)', statusOf().length === 0, statusOf().slice(0, 5).join(' · '))
+  check('mini 기준 커밋에 시험 대상 세 글의 파일이 없다 (저장소에서 추적 파일이 돼도 복사하지 않는다)',
+    [GRAY, COLD, AUTUMN].every((sl) => sh('git', ['ls-files', `drafts/magazine/${sl}`], R) === ''), [GRAY, COLD, AUTUMN].map((sl) => sh('git', ['ls-files', `drafts/magazine/${sl}`], R)).join(' '))
   // runtime 처럼 미추적 원고 — gray(형식 계약 위반 brief) · cold·autumn(brief echo)
   const md = (slug, f, t) => { fs.mkdirSync(path.join(R, 'drafts', 'magazine', slug), { recursive: true }); fs.writeFileSync(path.join(R, 'drafts', 'magazine', slug, f), t) }
   md(GRAY, 'brief.md', GRAY_BRIEF); md(GRAY, 'review.ts', 'export const REVIEW = { old: true }\n')
   md(COLD, 'brief.md', GOOD_BRIEF); md(COLD, 'review.ts', 'export const REVIEW = { old: true }\n'); md(COLD, 'draft.md', COLD_DRAFT)
   md(AUTUMN, 'brief.md', GOOD_BRIEF); md(AUTUMN, 'review.ts', 'export const REVIEW = { old: true }\n'); md(AUTUMN, 'draft.md', AUTUMN_ECHO)
+  const expectUntracked = [`?? drafts/magazine/${GRAY}/brief.md`, `?? drafts/magazine/${GRAY}/review.ts`,
+    ...[COLD, AUTUMN].flatMap((sl) => ['brief.md', 'review.ts', 'draft.md'].map((f) => `?? drafts/magazine/${sl}/${f}`))].sort()
+  check('🔴 mini 시험 원고 생성 뒤 — 예상한 미추적 파일 8개만 · 추적 파일 변경 0 (runtime 모양)',
+    JSON.stringify([...statusOf()].sort()) === JSON.stringify(expectUntracked), statusOf().join(' · '))
   check('mini ⓪ runtime 모양 — drafts/magazine/topic-queue.ts 가 일반 파일이다', fs.statSync(path.join(R, 'drafts', 'magazine', 'topic-queue.ts')).isFile())
   // 바깥 세계: claude 는 부르면 기록하고 실패 · gh 는 읽기만 · 네트워크·TCP·DNS 는 전부 기록 후 거부
   const NET_LOG = path.join(M, 'net.jsonl')
@@ -787,6 +804,9 @@ console.error('mini gh: 지원하지 않는다 ' + a.join(' ')); process.exit(1)
   const failures = ho?.repair?.failures ?? null
   let prodRep = null
   try { prodRep = JSON.parse(fs.readFileSync(ho?.repair?.resultFile ?? '', 'utf8')) } catch { prodRep = null }
+  check('🔴 mini ⑦ 실제 producer wrapper — DIRTY_TREE(SYSTEM) 가 아니라 정상 입력 수리 경로까지 갔다',
+    ho?.verdict !== 'SYSTEM' && !/DIRTY_TREE/.test(`${prod.stdout}${prod.stderr}${JSON.stringify(ho ?? {})}`) && Array.isArray(ho?.ran) && ho.ran.includes('repair'),
+    `exit ${prod.status} · ${ho?.verdict} · ${(prod.stdout + prod.stderr).split('\n').filter((l) => /DIRTY_TREE|SYSTEM/.test(l)).slice(0, 2).join(' / ')}`)
   check('mini ⑦ 실제 producer wrapper — 입력 수리 단계가 돌았고 REPAIR_STAGE_FAILED·ENOTDIR 0',
     Array.isArray(ho?.ran) && ho.ran.includes('repair') && Array.isArray(failures) && !failures.some((f) => f.outcome === 'REPAIR_STAGE_FAILED') && !/ENOTDIR/.test(`${prod.stdout}${prod.stderr}`),
     `exit ${prod.status} · ${ho?.verdict} · ${JSON.stringify(failures)} · ${(prod.stdout + prod.stderr).split('\n').filter((l) => /ENOTDIR|REPAIR_STAGE/.test(l)).slice(0, 2).join(' / ')}`)
