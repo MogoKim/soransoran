@@ -229,7 +229,15 @@ if (baseAt > 0 && process.argv[baseAt + 1]) {
     .split('\n').filter(Boolean)
   const working = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' })
     .split('\n').filter(Boolean).map((l) => l.slice(3))
-  const ALLOWED = new Set([...AD_FILES, 'src/app/page.tsx', 'scripts/ads-check.mts'])
+  const ALLOWED = new Set([
+    ...AD_FILES,
+    'src/app/page.tsx',
+    'scripts/ads-check.mts',
+    // MON-2B 개인정보 광고 고지
+    'src/app/privacy/page.tsx',
+    'docs/operations/MONETIZATION-CANON.md',
+    'scripts/ads-privacy-check.mts',
+  ])
   const outside = [...new Set([...changed, ...working])].filter((f) => !ALLOWED.has(f))
   check('허용 목록 밖 변경이 없다', outside.length === 0, outside.join(', '))
 }
