@@ -19,6 +19,15 @@
 
 export const COMMENT_RUNNER_LABEL = 'com.soransoran.persona-comment-runner'
 
+/**
+ * 🔴 **댓글 러너 잠금 디렉터리 — 정본은 여기 하나** — 저장소 밖. 커널 잠금(`runner-lease` · `/usr/bin/lockf`) 파일과
+ *    follow-up 표식이 여기 있다. 러너(`persona-comment-loop`) · 발행 뒤 깨움(`runner-wake`) · 고아 깨움 복구(`runner-recover`)가
+ *    모두 이 함수를 쓴다(2026-10-12 Batch C2 — 무거운 러너 모듈을 끌어오지 않도록 가벼운 이 파일로 옮겼다).
+ */
+export function commentLoopLockDir(home: string = homedir()): string {
+  return join(home, 'Library', 'Application Support', 'soransoran', 'persona-comment-loop')
+}
+
 /** 🔴 runner 는 runtime worktree 에서 돈다. 개발 작업트리를 가리키면 격리가 깨진다 */
 export const COMMENT_RUNNER_SCRIPT = 'scripts/persona-comment-loop.mts'
 /** 🔴 예약 실행은 쓴다(`--live`). 그래도 단계가 bootstrap-auto 가 아니면 provider 0 · write 0 이다 */

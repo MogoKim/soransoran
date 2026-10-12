@@ -47,6 +47,8 @@ import { describePrepared } from '../src/lib/supply-candidates'
 import { describeRelease } from '../src/lib/source-slot-release'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+/** 🔴 commit 뒤 댓글 러너 깨움 — failure-open · kill switch `SORAN_EVENT_WAKE` (2026-10-12 Batch C2) */
+import { describeWake, wakeRunner } from './lib/runner-wake.mjs'
 import { RUN_AT_ENV, runClockFrom } from './lib/run-clock.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
@@ -453,6 +455,13 @@ if (res.kind !== 'published') {
     : res.kind === 'expired' ? `교체 한도를 넘었다 — 마지막 후보도 만료 [${res.reasons.join(',')}]`
       : `발행 오류 — ${res.message}`)
 }
+/**
+ * ── ⑦-b 🔴 **commit 뒤 댓글 러너 깨움** (2026-10-12 Batch C2) ──
+ *    여기는 트랜잭션이 `published` 를 돌려준 뒤다 — commit 전 · 막힘 · 만료 · 오류 경로는 위에서 이미 끝났다(깨움 0).
+ *    `SORAN_EVENT_WAKE` 가 comment|all 일 때만 표식 + kickstart 를 보낸다(미설정 · off 면 0).
+ *    🔴 failure-open — `wakeRunner` 는 던지지 않고, 그 결과는 이 회차의 종료 코드 · 정합 판정 · 감사 선정에 들어가지 않는다.
+ */
+console.log(`   ${describeWake('comment', wakeRunner({ target: 'comment', env: process.env, nowMs: Date.now() }))}`)
 // 🔴 화면이 예고한 사람과 실제로 글을 쓴 사람이 같아야 한다
 const announced = assignOf.get(target.id)?.assigned ?? null
 if (announced !== null && res.personaCode !== announced) {

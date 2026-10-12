@@ -125,3 +125,48 @@ function judgeSlotRecovery(i: RecoveryInput): RecoveryVerdict {
   }
   return skip('정상 — 지난 예약 슬롯 뒤에 회차가 있었고 실패하지 않았다')
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 고아 깨움 표식 — 사건 깨움이 러너에 닿지 못하고 남은 표식 (2026-10-12 Batch C2)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **표식이 이만큼 남아 있어야 고아로 본다** — 깨움 직후 러너가 뜨고 표식을 거두는 시간. 새 정책 문턱이 아니라
+ *    관측 지연 흡수다(같은 성격: `RECOVERY_SLOT_GRACE_MS`).
+ */
+export const ORPHAN_WAKE_GRACE_MS = 3 * 60_000
+
+export type OrphanWakeInput = {
+  /** 사건 깨움이 켜져 있는가(`SORAN_EVENT_WAKE` 가 이 대상을 허용) */
+  enabled: boolean
+  state: JobState
+  running: boolean
+  /** 지금 남아 있는 follow-up 표식 — 없으면 null. trigger · 시각은 표식 원문에서 읽은 것 */
+  marker: { trigger: string | null; at: string | null } | null
+  /** 이 도구가 이미 다시 깨운 표식의 시각 — 없으면 null */
+  handledWakeAt: string | null
+  now: Date
+}
+
+/**
+ * 🔴 **고아 사건 표식을 한 번 다시 깨운다 — 표식 하나에 최대 1회.**
+ *    · 사건(event) 표식만 본다 — 정기 · 수동 겹침이 남긴 표식은 정기 회차가 받는다
+ *    · 시각을 모르는 표식은 건드리지 않는다(상한을 셀 수 없다)
+ *    · 같은 표식(같은 시각)을 이미 깨웠으면 다시 깨우지 않는다 — kickstart 가 실패해도 무한 반복하지 않는다
+ *    · 깨움이 꺼졌거나 · unloaded · 상태 모름 · 실행 중이면 건드리지 않는다
+ */
+export function judgeOrphanWake(i: OrphanWakeInput): RecoveryVerdict {
+  const skip = (reason: string): RecoveryVerdict => ({ action: 'skip', reason, staleAfterMs: ORPHAN_WAKE_GRACE_MS })
+  if (!i.enabled) return skip('사건 깨움이 꺼져 있다 — 고아 표식을 깨우지 않는다')
+  if (i.marker === null) return skip('남은 깨움 표식이 없다')
+  if (i.marker.trigger !== 'event') return skip(`사건 표식이 아니다(${i.marker.trigger ?? '모름'}) — 정기 회차가 받는다`)
+  if (i.marker.at === null) return skip('표식 시각을 모른다 — 상한을 셀 수 없어 건드리지 않는다')
+  const at = Date.parse(i.marker.at)
+  if (!Number.isFinite(at)) return skip('표식 시각을 읽을 수 없다')
+  if (i.state === 'unknown') return skip('launchctl 상태를 모른다 — 모르는 job 을 깨우지 않는다')
+  if (i.state !== 'loaded') return skip('load 되어 있지 않다 — 등록은 사람 일이다')
+  if (i.running) return skip('지금 돌고 있다 — 회차가 끝날 때 표식을 거둔다')
+  if (i.handledWakeAt !== null && i.handledWakeAt === i.marker.at) return skip('이 표식은 이미 한 번 다시 깨웠다 — 반복하지 않는다(정기 회차가 받는다)')
+  if (i.now.getTime() - at < ORPHAN_WAKE_GRACE_MS) return skip('깨운 지 얼마 안 됐다 — 러너가 거둘 시간을 준다')
+  return { action: 'kickstart', reason: `사건 깨움 표식(${i.marker.at})이 러너에 닿지 못하고 남았다 — 한 번 다시 깨운다`, staleAfterMs: ORPHAN_WAKE_GRACE_MS }
+}
