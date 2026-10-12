@@ -10,15 +10,15 @@ export const metadata: Metadata = {
 }
 
 /**
- * 🔴 항목·목적이 바뀌면 이 날짜도 함께 바꾼다.
+ * 🔴 항목·목적이 바뀌면 이 날짜도 함께 바꾼다. 실제 Production 배포일부터 시행하며 소급하지 않는다.
  *
- * 12항에 "중요한 변경은 최소 7일 전에 알린다" 고 스스로 적어 두었다.
- * 초기 개인정보처리방침 이후 GA4 이용 통계 항목이 추가되었다.
- * 회원이 생긴 뒤 중요한 변경을 할 때는 공지가 먼저다.
+ * 변경 공개 방식은 12항이 정한다 — 이 방침에 변경 내용과 시행일을 공개하고, 법령상 사전 고지가
+ * 필요한 경우에는 그 법령이 정한 기간과 방법을 따른다.
  *
- * 🔴 중요한 변경은 최소 7일 전에 알린다.
+ * 🔴 광고 고지(5 · 7 · 9항)는 S-MON 정본(docs/operations/MONETIZATION-CANON.md) §7 을 따른다.
+ *    이 방침을 배포했다고 광고가 켜지지 않는다. 광고 요청은 광고 gate(src/lib/ads/gate.ts)가 정한다.
  */
-const EFFECTIVE_DATE = '2026년 9월 2일'
+const EFFECTIVE_DATE = '2026년 10월 12일'
 
 function Article({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -52,6 +52,7 @@ export default function PrivacyPage() {
           <p>6. 커뮤니티 가입 자격 확인 및 서비스 대상 연령대 확인</p>
           <p>7. 회원 본인 확인과 중복·부정 가입 방지</p>
           <p>8. 서비스 이용 현황 분석 및 품질 개선</p>
+          <p>9. 광고 게재, 광고 빈도 관리, 광고 성과 집계 및 무효 트래픽 방지</p>
         </Article>
 
         <Article title="2. 처리하는 개인정보 항목">
@@ -140,6 +141,7 @@ export default function PrivacyPage() {
           <p>· 접속 로그, IP 주소, 브라우저 정보(User-Agent), 접속 일시</p>
           <p>· 페이지 조회, 스크롤, 클릭 등 서비스 이용 통계</p>
           <p>· 서비스 이용 설정을 위한 쿠키 및 브라우저 저장 정보</p>
+          <p>· 광고가 표시되는 경우 광고 표시·상호작용 정보와 광고용 쿠키 또는 유사 식별자(9항)</p>
           <p className="mt-2 text-sm text-content-muted">
             서비스는 주민등록번호, 계좌정보, 결제정보 등 민감한 정보를 수집하지 않습니다.
           </p>
@@ -175,7 +177,11 @@ export default function PrivacyPage() {
           <p>· Vercel Inc. — 웹 서비스 호스팅 및 실행 로그</p>
           <p>· Supabase Inc. — 데이터베이스 및 회원 인증 데이터 저장</p>
           <p>· 주식회사 카카오 — 카카오 계정 로그인 인증</p>
-          <p>· Google LLC — Google Analytics 를 통한 서비스 이용 통계 분석</p>
+          <p>· Google LLC (Google Analytics) — 서비스 이용 통계 분석 및 품질 개선</p>
+          <p>
+            · Google LLC (Google AdSense) — 비맞춤형·문맥 기반 광고 제공, 광고 빈도 관리, 광고 성과
+            집계, 부정 이용 및 무효 트래픽 방지
+          </p>
           <p className="mt-2 text-sm text-content-muted">
             위탁 업체가 변경되는 경우 이 방침을 통해 알려드립니다.
           </p>
@@ -210,7 +216,7 @@ export default function PrivacyPage() {
           </p>
 
           <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-[520px] border-collapse text-sm">
+            <table className="w-full min-w-[720px] border-collapse text-sm">
               <thead>
                 <tr>
                   <th className="border-b border-subtle py-2 text-left font-bold text-content-primary">
@@ -223,7 +229,10 @@ export default function PrivacyPage() {
                     Supabase Inc.
                   </th>
                   <th className="border-b border-subtle py-2 text-left font-bold text-content-primary">
-                    Google LLC
+                    Google LLC (Google Analytics)
+                  </th>
+                  <th className="border-b border-subtle py-2 text-left font-bold text-content-primary">
+                    Google LLC (Google AdSense)
                   </th>
                 </tr>
               </thead>
@@ -231,7 +240,8 @@ export default function PrivacyPage() {
                 <tr>
                   <td className="border-b border-subtle py-2 pr-3 font-bold">이전받는 자</td>
                   <td className="border-b border-subtle py-2 pr-3">Vercel Inc.</td>
-                  <td className="border-b border-subtle py-2">Supabase Inc.</td>
+                  <td className="border-b border-subtle py-2 pr-3">Supabase Inc.</td>
+                  <td className="border-b border-subtle py-2 pr-3">Google LLC</td>
                   <td className="border-b border-subtle py-2">Google LLC</td>
                 </tr>
                 <tr>
@@ -239,8 +249,11 @@ export default function PrivacyPage() {
                   <td className="border-b border-subtle py-2 pr-3">
                     미국 등 해당 사업자가 인프라를 운영하는 국가
                   </td>
-                  <td className="border-b border-subtle py-2">
+                  <td className="border-b border-subtle py-2 pr-3">
                     미국 등 해당 사업자가 인프라를 운영하는 국가
+                  </td>
+                  <td className="border-b border-subtle py-2 pr-3">
+                    미국 등 해당 사업자가 서비스를 운영하는 국가
                   </td>
                   <td className="border-b border-subtle py-2">
                     미국 등 해당 사업자가 서비스를 운영하는 국가
@@ -252,13 +265,17 @@ export default function PrivacyPage() {
                     접속 로그, IP 주소, 브라우저 정보(User-Agent), 요청 처리 과정에서 전달되는
                     게시글·댓글·신고 내용
                   </td>
-                  <td className="border-b border-subtle py-2">
+                  <td className="border-b border-subtle py-2 pr-3">
                     카카오 계정 식별자, 이름(닉네임), 이메일(제공되는 경우), 성별, 출생연도,
                     전화번호, 프로필 이미지(동의한 경우), 게시글, 댓글, 신고 내용
                   </td>
-                  <td className="border-b border-subtle py-2">
+                  <td className="border-b border-subtle py-2 pr-3">
                     접속 로그, IP 주소, 브라우저 정보(User-Agent), 접속 일시, 페이지 조회와
                     사이트 이용 이벤트
+                  </td>
+                  <td className="border-b border-subtle py-2">
+                    IP 주소, 브라우저·기기 정보, 접속 일시, 방문 페이지 URL, 광고 표시·상호작용
+                    정보, 쿠키 또는 유사 식별자
                   </td>
                 </tr>
                 <tr>
@@ -266,26 +283,33 @@ export default function PrivacyPage() {
                   <td className="border-b border-subtle py-2 pr-3">
                     웹 서비스 호스팅 및 실행, 장애 대응
                   </td>
-                  <td className="border-b border-subtle py-2">
+                  <td className="border-b border-subtle py-2 pr-3">
                     데이터베이스 저장, 회원 인증·세션 처리, 장애 대응
                   </td>
-                  <td className="border-b border-subtle py-2">
+                  <td className="border-b border-subtle py-2 pr-3">
                     서비스 이용 통계 분석 및 품질 개선
+                  </td>
+                  <td className="border-b border-subtle py-2">
+                    비맞춤형·문맥 기반 광고 제공, 광고 빈도 관리, 광고 성과 집계, 부정 이용 및
+                    무효 트래픽 방지
                   </td>
                 </tr>
                 <tr>
                   <td className="border-b border-subtle py-2 pr-3 font-bold">이전 시점 및 방법</td>
-                  <td className="border-b border-subtle py-2 pr-3" colSpan={3}>
+                  <td className="border-b border-subtle py-2 pr-3" colSpan={4}>
                     이용자가 서비스를 이용하는 시점에, 정보통신망을 통해 각 사업자의 서버로 전송되는
-                    방식으로 이전됩니다.
+                    방식으로 이전됩니다. Google AdSense 는 광고가 표시되는 페이지를 이용하는 시점에
+                    이용자의 브라우저에서 Google 의 서버로 직접 전송됩니다.
                   </td>
                 </tr>
                 <tr>
                   <td className="py-2 pr-3 font-bold">보유 및 이용 기간</td>
-                  <td className="py-2" colSpan={3}>
+                  <td className="py-2" colSpan={4}>
                     회원 탈퇴 또는 처리 목적 달성 시까지. Google Analytics 이용 통계는 Google
-                    Analytics 데이터 보관 설정에 따릅니다. 다만 관계 법령에 따른 보존 의무가 있거나
-                    분쟁 대응을 위해 필요한 경우 해당 기간 동안 보관합니다.
+                    Analytics 데이터 보관 설정에 따르고, Google AdSense 관련 정보는 Google 의
+                    개인정보처리방침과 광고 관련 정책(policies.google.com/technologies/ads)에서 정한
+                    기간에 따릅니다. 다만 관계 법령에 따른 보존 의무가 있거나 분쟁 대응을 위해 필요한
+                    경우 해당 기간 동안 보관합니다.
                   </td>
                 </tr>
               </tbody>
@@ -293,9 +317,14 @@ export default function PrivacyPage() {
           </div>
 
           <p className="mt-3">
-            이용자는 개인정보의 국외 이전을 거부할 수 있습니다. 다만 위 이전은 서비스 제공에 필수적인
-            처리이므로, 거부하는 경우 회원가입 및 서비스 이용이 제한될 수 있습니다. 거부 의사는{' '}
-            {CONTACT_EMAIL} 으로 알려주시기 바랍니다.
+            이용자는 개인정보의 국외 이전을 거부할 수 있습니다. Vercel Inc.와 Supabase Inc.로의 이전은
+            서비스 제공에 필수적인 처리이므로, 거부하는 경우 회원가입 및 서비스 이용이 제한될 수
+            있습니다. 거부 의사는 {CONTACT_EMAIL} 으로 알려주시기 바랍니다.
+          </p>
+          <p>
+            Google Analytics 와 Google AdSense 로의 이전은 9항에서 안내하는 브라우저 쿠키 설정과
+            Google 광고 설정으로 거부하거나 관리할 수 있습니다. 거부해도 글 읽기와 커뮤니티 이용 등
+            기본 서비스는 그대로 이용할 수 있으며, 광고 표시 방식이나 빈도가 달라질 수 있습니다.
           </p>
         </Article>
 
@@ -325,7 +354,85 @@ export default function PrivacyPage() {
             3. 서비스는 이용 현황 분석과 품질 개선을 위해 Google Analytics 를 사용할 수 있으며,
             이 과정에서 쿠키 등 자동 수집 장치가 사용될 수 있습니다.
           </p>
-          <p>4. 서비스는 광고 목적의 추적을 위해 쿠키를 사용하지 않습니다.</p>
+          <p>
+            4. 서비스는 광고 게재를 위해 Google AdSense 를 사용할 수 있습니다. 광고가 표시되는
+            페이지에서는 Google 등 제3자 광고 사업자가 쿠키 또는 유사 기술을 사용해 광고를 제공할 수
+            있습니다.
+          </p>
+          <p>
+            5. 서비스는 최초 광고 운영에서 모든 지역에 비맞춤형 광고를 우선 요청합니다. 비맞춤형
+            광고는 이용자의 과거 방문 기록에 따라 광고를 고르지 않고, 지금 보고 있는 페이지의 내용과
+            대략적인 위치 등을 바탕으로 광고를 고릅니다. 다만 비맞춤형 광고도 광고 빈도 관리, 광고 성과
+            집계, 부정 이용 및 무효 트래픽 방지를 위해 쿠키 또는 유사 기술을 사용할 수 있습니다.
+            맞춤형 광고를 사용하게 되는 경우에는 이 방침을 개정해 알립니다.
+          </p>
+          <p>
+            6. 유럽경제지역(EEA)·영국·스위스에서 접속하는 이용자에게는 Google 이 제공하는 인증된
+            동의 관리 도구(CMP)를 통해 광고 관련 쿠키 사용에 대한 선택을 요청하며, 이용자는 그 화면에서
+            선택하거나 바꿀 수 있습니다.
+          </p>
+
+          <p className="mt-2 font-bold">가. 광고 관련 행태정보의 처리</p>
+          <div className="mt-1 overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <tbody className="align-top text-content-primary">
+                <tr>
+                  <td className="w-28 border-b border-subtle py-2 pr-3 font-bold">수집·처리 주체</td>
+                  <td className="border-b border-subtle py-2">
+                    Google LLC (Google AdSense). 서비스는 광고 표시를 위해 Google 이 이용자의 브라우저에서
+                    정보를 수집하도록 허용합니다.
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">항목</td>
+                  <td className="border-b border-subtle py-2">
+                    방문 페이지 URL, 광고 표시·클릭 등 광고 상호작용 정보, 접속 일시, IP 주소,
+                    브라우저·기기 정보, 쿠키 또는 유사 식별자
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">수집 방법</td>
+                  <td className="border-b border-subtle py-2">
+                    광고가 표시되는 페이지를 이용할 때 Google 광고 스크립트와 쿠키 또는 유사 기술을 통해
+                    자동으로 수집됩니다.
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">이용 목적</td>
+                  <td className="border-b border-subtle py-2">
+                    비맞춤형·문맥 기반 광고 제공, 광고 빈도 관리, 광고 성과 집계, 부정 이용 및 무효
+                    트래픽 방지
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">보유·처리 기준</td>
+                  <td className="border-b border-subtle py-2">
+                    Google 의 개인정보처리방침과 광고 관련 정책(policies.google.com/technologies/ads)에서
+                    정한 기간과 기준에 따릅니다. Google 이 파트너 사이트에서 얻은 정보를 사용하는 방식은
+                    policies.google.com/technologies/partner-sites 에서 확인할 수 있습니다.
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">거부 방법</td>
+                  <td className="border-b border-subtle py-2">
+                    · 브라우저 설정의 쿠키·개인정보 메뉴에서 쿠키 저장을 차단하거나 저장된 쿠키를 삭제할 수
+                    있습니다.
+                    <br />· Google 광고 설정(myadcenter.google.com)에서 광고 개인 최적화를 관리할 수
+                    있습니다.
+                    <br />· 유럽경제지역(EEA)·영국·스위스 이용자는 Google 동의 관리 화면에서 선택을 바꿀
+                    수 있습니다.
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-3 font-bold">거부 시 영향</td>
+                  <td className="py-2">
+                    글 읽기와 커뮤니티 이용 등 기본 서비스는 그대로 이용할 수 있습니다. 광고 표시 방식이나
+                    빈도가 달라질 수 있습니다.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </Article>
 
         <Article title="10. 개인정보의 안전성 확보 조치">
@@ -352,8 +459,8 @@ export default function PrivacyPage() {
 
         <Article title="12. 개인정보처리방침의 변경">
           <p>
-            이 방침의 내용이 변경되는 경우, 변경 사항과 적용일을 서비스 내에 공지합니다. 중요한
-            변경이 있는 경우에는 최소 7일 전에 알려드립니다.
+            방침이 변경되는 경우 변경 내용과 시행일을 이 방침을 통해 공개합니다. 법령상 사전 고지가
+            필요한 경우에는 해당 법령에서 정한 기간과 방법에 따라 안내합니다.
           </p>
         </Article>
 
