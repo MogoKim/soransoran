@@ -95,6 +95,12 @@ const MUTATIONS = [
   { name: 'P1 gray — 장부 사건 키 대조 제거 (다른 과거 CONTENT 행 승인)', edits: [{ file: F.reconcile, find: "  if (legacyLedgerKey !== mig.legacyLedgerKey) return no(", replace: "  if (false) return no(" }] },
   { name: 'P1 gray — slug 무관하게 migration 적용', edits: [{ file: F.reconcile, find: '  const mig = migrations.find((x) => x.slug === slug)\n', replace: '  const mig = migrations[0]\n' },
     { file: F.reconcile, find: "  if (!migrations.some((x) => x.slug === slug)) return { ok: true, status: 'NOT_RECONCILED'", replace: "  if (false) return { ok: true, status: 'NOT_RECONCILED'" }] },
+  // ── 2026-10-12 cold — QA 재생성 패킷 ──
+  { name: 'I 꼬리 3줄에 빠진 FAIL 줄을 싣지 않음 (앞판 — description 누락)', edits: [{ file: F.register,
+    find: "    ...fails.filter((x) => !isBody(x) && !tail.includes(x)).map((x) => ({ code: 'QA_FAIL_ITEM', label: x })),\n", replace: '' }] },
+  { name: 'I 꼬리에 이미 있는 FAIL 줄도 다시 실음 (기존 재생성 HOLD 패킷·지문 변경)', edits: [{ file: F.register,
+    find: '    ...fails.filter((x) => !isBody(x) && !tail.includes(x))', replace: '    ...fails.filter((x) => !isBody(x))' }] },
+  { name: 'I 발행 길이 줄의 목표치·계산법 제거', edits: [{ file: F.register, find: '  if (!m) return line\n', replace: '  if (!m || true) return line\n' }] },
   { name: 'P1 gray — 한 번 기록 뒤에도 다시 기록 (재실행 쓰기)', edits: [{ file: F.reconcile, find: "  if (entry.firstResponseInvalid) return no('이미 최초 응답 기록이 있다 (migration 은 한 번만)')\n", replace: '' }] },
 ]
 

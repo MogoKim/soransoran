@@ -53,6 +53,7 @@ import { heroFilePath, injectHeroImage, verifyHeroFile } from './lib/magazine-he
 import { validateManuscript, describeReasons, briefEchoHeadings } from './lib/magazine-manuscript-guard.mjs'
 import { judgeManuscriptFormat, describeFormatViolation } from './lib/magazine-manuscript-format.mjs'
 import { restoreQueueSnapshot, restoreRegisterPair } from './lib/magazine-queue-lock.mjs'
+import { HARD_BODY } from './lib/magazine-body-length.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -398,6 +399,46 @@ export function qaFailLines(out) {
     .filter((x) => /✗\s*FAIL/.test(x))
     .map((x) => x.replace(/^.*?✗\s*FAIL\s*(\[[^\]]*\]\s*)?/, '').trim())
     .filter(Boolean)
+}
+
+/**
+ * 🔴 **QA 재생성 패킷의 실패 줄 — 검사가 본 위반을 빠짐없이** (2026-10-12 cold-weather-joint-pain).
+ *
+ *    앞판은 첫 줄(QA_FAIL)의 문장으로 QA 출력의 **마지막 3줄**만 실었다. 그 3줄은 대개 권장 WARN · 빈 줄 · 요약이다.
+ *    cold 의 `description 57자 — 허용 60~160자 밖` FAIL 줄은 그 위에 있어 **한 번도 모델에 가지 않았고**,
+ *    프롬프트는 "실패하지 않은 frontmatter 값은 그대로 둔다" 고 지시한다 — 재생성 두 번 내내 description 이 57자로 남았다.
+ *    본문 길이 줄도 목표치 없이 "넘었다" 만 말해 3432 → 3267 → 3194 로 조금씩만 줄었다.
+ *
+ *    이제:
+ *      ① 첫 줄은 **바이트 그대로** (QA_FAIL + 마지막 3줄) — 기존 재생성 HOLD 의 전송 지문이 이 패킷에 묶여 있다
+ *      ② 마지막 3줄에 **들어 있지 않은** FAIL 줄만 `QA_FAIL_ITEM` 으로 한 줄씩 더한다 (이미 실린 위반은 다시 싣지 않는다
+ *         → 기존 재생성 HOLD 2건처럼 FAIL 이 꼬리에 있던 글의 패킷은 바뀌지 않는다)
+ *      ③ 발행 길이(hard) 위반은 `BODY_LENGTH` 로 — 검사기와 **같은 계산법**과 **목표치**(얼마나 줄이고 늘릴지)를 함께 싣는다
+ */
+export const QA_TAIL_LINES = 3
+const BODY_TARGET_MARGIN = 200
+export function bodyLengthPacketLabel(line) {
+  const m = /^BODY_TOO_(LONG|SHORT): 본문 (\d+)자/.exec(line)
+  if (!m) return line
+  const n = Number(m[2])
+  const method = '길이는 제목·설명·본문 블록 텍스트를 줄바꿈으로 이은 글자 수(공백·줄바꿈 포함)다 — 권장 WARN 의 "본문 N자"(본문만 · 공백 제외)와 다른 계산이다. 이 기준을 따른다'
+  if (m[1] === 'LONG') {
+    const target = HARD_BODY.max - BODY_TARGET_MARGIN
+    return `${line} → 목표 ${target}자 이하: 지금보다 최소 ${n - target}자를 줄인다 (문단을 덜어 내고 반복 설명을 합친다 · 지정 문장·CTA·소제목 구조는 유지). ${method}`
+  }
+  const target = HARD_BODY.min + BODY_TARGET_MARGIN
+  return `${line} → 목표 ${target}자 이상: 지금보다 최소 ${target - n}자를 늘린다 (brief 범위 안에서만). ${method}`
+}
+export function qaRegenRows(out) {
+  const text = String(out ?? '').trim()
+  const tail = text.split('\n').slice(-QA_TAIL_LINES).join(' ')
+  const fails = qaFailLines(text)
+  const isBody = (x) => /^BODY_TOO_(LONG|SHORT):/.test(x)
+  return [
+    { code: 'QA_FAIL', label: 'magazine QA FAIL', sentence: tail },
+    ...fails.filter((x) => !isBody(x) && !tail.includes(x)).map((x) => ({ code: 'QA_FAIL_ITEM', label: x })),
+    ...fails.filter(isBody).map((x) => ({ code: 'BODY_LENGTH', label: bodyLengthPacketLabel(x) })),
+  ]
 }
 
 /**
@@ -1052,14 +1093,11 @@ export function drive(slug, opts, deps = {}) {
     let r = runStep(QA, ['--draft', p.articleTs])
     while (r.code !== 0) {
       lastQaFailures = qaFailLines(r.stdout || r.stderr)
-      // 🔴 패킷 내용은 바꾸지 않는다 — 전송 지문이 바뀌면 기존 HOLD 가 풀려 같은 요청이 다시 나간다
       /**
-       * 🔴 발행 길이(hard) 위반은 실제 길이와 기준을 **따로 한 줄** 싣는다 (2026-10-11 autumn).
-       *    첫 줄(QA_FAIL)은 그대로 둔다 — 그 문장이 기존 재생성 HOLD 지문의 일부다. 길이 위반이 없으면 패킷은 앞판과 같다.
+       * 🔴 첫 줄(QA_FAIL + 마지막 3줄)은 바이트 그대로 — 기존 재생성 HOLD 의 전송 지문이 거기 묶여 있다.
+       *    꼬리에 빠진 FAIL 줄과 발행 길이 목표만 따로 더한다 (`qaRegenRows` · 2026-10-11 autumn · 2026-10-12 cold).
        */
-      const bodyRows = lastQaFailures.filter((x) => /^BODY_TOO_(LONG|SHORT):/.test(x)).map((x) => ({ code: 'BODY_LENGTH', label: x }))
-      const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL',
-        sentence: (r.stdout || r.stderr).trim().split('\n').slice(-3).join(' ') }, ...bodyRows], lastQaFailures)
+      const rr = regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)
       /**
        * 🔴 **종류를 최종 사유에 싣는다.** 장부는 이 문장을 읽어 종류를 파생한다
        *    (`entryKind`). 여기서 떨어뜨리면 인프라·전송불명 실패가 **내용 실패로 기록되어**

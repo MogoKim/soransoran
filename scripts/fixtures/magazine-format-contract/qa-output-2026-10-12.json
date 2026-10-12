@@ -1,0 +1,5 @@
+{
+  "cold-weather-joint-pain": "\n매거진 QA — 공개 49건 · 예약·차단 2건 · draft 1건 · queue 20건\n\n  ✗ FAIL  [cold-weather-joint-pain · SCHEDULED ] description 57자 — 허용 60~160자 밖\n  ✗ FAIL  [cold-weather-joint-pain · SCHEDULED ] BODY_TOO_LONG: 본문 3432자 — 3000자를 넘었다 (발행 기준 800~3000자 · 공백·줄바꿈 포함)\n  ! WARN  [cold-weather-joint-pain · SCHEDULED ] 본문 2549자 — 권장 1200~2500자\n\n  검사 1건 · FAIL 2 · WARN 1\n\n",
+  "how-much-talk-with-husband": "\n매거진 QA — 공개 49건 · 예약·차단 2건 · draft 1건 · queue 20건\n\n  ! WARN  [how-much-talk-with-husband · SCHEDULED ] description 81자 — 권장 90~120자 밖\n  ✗ FAIL  [how-much-talk-with-husband · SCHEDULED ] 1인칭 경험담으로 읽힌다 — 화자 대명사 3회 · 경험 종결어미 5회(3.96‰). 매거진은 편집팀 글이다 (등록분 실측: 화자 0회 · 최대 1.57‰)\n\n  검사 1건 · FAIL 1 · WARN 1\n\n",
+  "retirement-prep-status": "\n매거진 QA — 공개 49건 · 예약·차단 2건 · draft 1건 · queue 20건\n\n  ! WARN  [retirement-prep-status · SCHEDULED ] description 84자 — 권장 90~120자 밖\n  ✗ FAIL  [retirement-prep-status · SCHEDULED ] 1인칭 경험담으로 읽힌다 — 화자 대명사 1회 · 경험 종결어미 9회(6.57‰). 매거진은 편집팀 글이다 (등록분 실측: 화자 0회 · 최대 1.57‰)\n\n  검사 1건 · FAIL 1 · WARN 1\n\n"
+}

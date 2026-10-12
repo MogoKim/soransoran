@@ -2,7 +2,7 @@
 /**
  * 🔴 **매거진 M-AUTO rehearsal — 실제 엔트리포인트 전체를 격리된 임시 사본에서 같은 날 반복 실행한다** (2026-10-10).
  *
- *   npm run magazine:rehearsal                          시나리오 S1~S12 · S8B + S1 반복성
+ *   npm run magazine:rehearsal                          시나리오 S1~S13 · S8B + S1 반복성
  *   node scripts/magazine-rehearsal.mjs --scenario S1,S4 고른 시나리오만
  *   node scripts/magazine-rehearsal.mjs --date 2026-10-11 --keep --out <report.json>
  *
@@ -646,6 +646,35 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
           row?.lineageReconcile?.legacyInvalidMigration === 'legacy-invalid-first-response/gray-hair-leave-as-is/2026-10-11/v1' && reg.includes('legacy-invalid-first-response/gray-hair-leave-as-is/2026-10-11/v1'), { lr: row?.lineageReconcile, bySlug: ev.sends.bySlug }),
         exp('S12 교정 요청에 실제 위반 문장 그대로 (YAML frontmatter 가 없다 …)', typed.includes('[교정 요청]') && typed.includes('FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다'), typed.split('\n').filter((l) => /FIRST_RESPONSE|frontmatter/.test(l)).slice(0, 3)),
         exp('S12 등록 1 · PR MERGED · 배포 · 장부 행 정리', reg.includes('교정 재생성으로 원고 확보') && ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
+      ]
+    },
+  },
+
+  S13: {
+    title: 'cold 모양 QA 재생성 계약 — description 57자 + 발행 길이 초과 원고 · 지시받은 것만 고치는 응답 → 패킷이 두 위반과 목표치를 모두 실어 재생성 1회로 QA 통과 → 등록 (2026-10-12 cold-weather)',
+    async prepare(repo, date) {
+      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      await curate({ repo, keep: [t.slug] })
+      const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
+      const pr = await templatePair({ repo, item: t })
+      writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
+      const draft = C.manuscriptFor({ repo, draftsDir: join(repo, 'drafts', 'magazine'), slug: t.slug, item: t, mode: 'cold-shape' })
+      writeSlugFiles({ repo, slug: t.slug, files: { 'draft.md': draft } })
+      placeHero({ repo, slug: t.slug })
+      return { target: t.slug, draftSha: createHash('sha256').update(draft).digest('hex') }
+    },
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:regen`]: ['obedient', 'obedient'] } }),
+    async run(ctx) { await normalDay(ctx) },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
+      const first = row?.regenHistory?.[0]?.failures ?? []
+      const typed = ev.regenTyped.filter((r) => r.slug === t).map((r) => r.typed)
+      return [
+        exp('S13 최초 QA — description 57자 · 발행 길이 초과 두 위반 (cold 모양 재현)', first.some((x) => /description 57자 — 허용 60~160자 밖/.test(x)) && first.some((x) => /^BODY_TOO_LONG: 본문 \d+자/.test(x)), first),
+        exp('S13 재생성 요청에 두 위반이 모두 실렸다 — description 줄 · 길이 목표("최소 N자를 줄인다") · 같은 계산법', typed.length >= 1 && /description 57자 — 허용 60~160자 밖/.test(typed[0]) && /최소 \d+자를 줄인다/.test(typed[0]) && typed[0].includes('공백·줄바꿈 포함'), (typed[0] ?? '').split('\n').filter((l) => /QA_FAIL|BODY_LENGTH/.test(l)).slice(0, 4)),
+        exp('S13 재생성 1회로 QA 통과 (같은 실패 반복 0) · 일반 요청 0', ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0 && (row?.regenHistory ?? []).length === 1, { bySlug: ev.sends.bySlug, history: row?.regenHistory }),
+        exp('S13 등록 1 · PR MERGED · 배포 · 장부 행 정리', ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
       ]
     },
   },

@@ -487,5 +487,63 @@ console.log(JSON.stringify({ ok: r.ok, code: r.code ?? null, ran }))
   fs.rmSync(dB, { recursive: true, force: true })
 }
 
+// ── I QA 재생성 패킷 — 검사가 본 위반을 빠짐없이 (2026-10-12 cold) ─────────────────
+console.log('\nI QA 재생성 패킷 — 꼬리 3줄에 빠진 FAIL 줄 · 길이 목표 · 기존 재생성 HOLD 패킷 바이트 불변')
+{
+  const FXD = path.join(HERE, 'fixtures', 'magazine-format-contract')
+  // 실제 QA 출력 원문 (2026-10-12 · 운영 runtime 원고의 읽기 전용 사본으로 실제 magazine-qa 를 돌린 결과)
+  const OUT = JSON.parse(fs.readFileSync(path.join(FXD, 'qa-output-2026-10-12.json'), 'utf8'))
+  const oldRows = (out) => [{ code: 'QA_FAIL', label: 'magazine QA FAIL', sentence: String(out).trim().split('\n').slice(-3).join(' ') },
+    ...AR.qaFailLines(out).filter((x) => /^BODY_TOO_(LONG|SHORT):/.test(x)).map((x) => ({ code: 'BODY_LENGTH', label: x }))]
+  const instr = (rows) => RG.buildFailurePacket({ slug: 'x', profile: 'MEDICAL', failures: rows, attempt: 1, attemptId: 'a' }).instruction
+  const cold = OUT['cold-weather-joint-pain']
+  check('🔴 I 수정 전 반례 — cold 의 앞판 패킷에 description 위반이 없다 (꼬리 3줄 = WARN · 빈 줄 · 요약)', !/description/.test(instr(oldRows(cold))) && /description 57자/.test(cold), instr(oldRows(cold)))
+  const rows = AR.qaRegenRows(cold)
+  check('🔴 I cold — 새 패킷에 description 57자 위반 줄이 실린다', rows.some((r) => r.code === 'QA_FAIL_ITEM' && r.label === 'description 57자 — 허용 60~160자 밖') && /description 57자 — 허용 60~160자 밖/.test(instr(rows)), rows)
+  check('🔴 I cold — 발행 길이 줄에 목표치(최소 632자 줄인다 · 2800자 이하)와 검사기의 계산법', rows.some((r) => r.code === 'BODY_LENGTH' && r.label.startsWith('BODY_TOO_LONG: 본문 3432자') && r.label.includes('목표 2800자 이하') && r.label.includes('최소 632자를 줄인다') && r.label.includes('공백·줄바꿈 포함')), rows.find((r) => r.code === 'BODY_LENGTH'))
+  check('I 첫 줄은 앞판과 바이트 그대로 (QA_FAIL · 꼬리 3줄)', JSON.stringify(rows[0]) === JSON.stringify(oldRows(cold)[0]))
+  check('I 꼬리에 이미 실린 위반은 다시 싣지 않는다 · 길이 위반은 QA_FAIL_ITEM 이 아니라 BODY_LENGTH 하나', rows.filter((r) => /BODY_TOO_LONG/.test(r.label)).length === 1)
+  for (const slug of ['how-much-talk-with-husband', 'retirement-prep-status']) {
+    const o = OUT[slug]
+    const n = AR.qaRegenRows(o)
+    const pk = (r) => RG.buildFailurePacket({ slug, profile: 'STANDARD', failures: r, attempt: 1, attemptId: 'a' })
+    check(`🔴 I 기존 재생성 HOLD ${slug} — 새 패킷 = 앞판 패킷 (줄 · 지시문 · 해시 바이트 그대로 → 전송 지문·HOLD 불변)`,
+      JSON.stringify(n) === JSON.stringify(oldRows(o)) && pk(n).instruction === pk(oldRows(o)).instruction && RG.packetHashOf(pk(n)) === RG.packetHashOf(pk(oldRows(o))), n)
+  }
+  const short = AR.bodyLengthPacketLabel('BODY_TOO_SHORT: 본문 700자 — 800자 미만이면 잘린 응답으로 본다')
+  check('I 짧은 원고 — 목표 1000자 이상 · 최소 300자 늘린다', short.includes('목표 1000자 이상') && short.includes('최소 300자를 늘린다'), short)
+  // 실제 원고 사본 → 실제 변환 · 실제 QA — 캡처한 출력이 지어낸 것이 아님을 같은 바이트로 재현
+  const M = path.join(T, 'i-mini')
+  for (const rel of ['scripts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/_template', 'src/content/magazine', 'src/lib']) {
+    const from = path.join(REPO, rel)
+    if (!fs.existsSync(from)) continue
+    fs.mkdirSync(path.dirname(path.join(M, rel)), { recursive: true })
+    fs.cpSync(from, path.join(M, rel), { recursive: true })
+  }
+  fs.symlinkSync(path.join(REPO, 'node_modules'), path.join(M, 'node_modules'))
+  const RQ = await import('./fixtures/magazine-format-contract/repair-queue-rows.mjs')
+  const mq = path.join(M, 'drafts', 'magazine', 'topic-queue.ts')
+  fs.writeFileSync(mq, RQ.withFixtureRows(fs.readFileSync(mq, 'utf8'), ['cold-weather-joint-pain']).src)
+  const SD = path.join(M, 'drafts', 'magazine', 'cold-weather-joint-pain')
+  fs.mkdirSync(SD, { recursive: true })
+  fs.copyFileSync(path.join(FXD, 'cold-weather-joint-pain.regen-source-2026-10-12.draft.md'), path.join(SD, 'draft.md'))
+  const env = { PATH: process.env.PATH, HOME: T, SORAN_MAGAZINE_TEST_MODE: '1' }
+  const conv = spawnSync(process.execPath, [path.join(M, 'scripts', 'magazine-md-to-draft.mjs'), '--in', path.join(SD, 'draft.md'), '--out', path.join(SD, 'article-draft.ts')], { encoding: 'utf8', env, cwd: M })
+  const qa = spawnSync(process.execPath, [path.join(M, 'scripts', 'magazine-qa.mjs'), '--draft', path.join(SD, 'article-draft.ts')], { encoding: 'utf8', env, cwd: M })
+  check('🔴 I 실제 cold 원고 사본 → 실제 변환·QA — description 57자 · 본문 3432자 재현 (캡처 출력의 FAIL 줄과 같다)',
+    conv.status === 0 && qa.status !== 0 && JSON.stringify(AR.qaFailLines(qa.stdout)) === JSON.stringify(AR.qaFailLines(cold)) && /description 57자/.test(qa.stdout) && /본문 3432자/.test(qa.stdout),
+    { conv: conv.status, fails: AR.qaFailLines(qa.stdout) })
+  // 지시받은 것만 고치는 응답(fixture) — 앞판 패킷은 description 을 그대로 두고 문단 하나만 덜어 같은 실패를 되풀이한다
+  const C = await import('./lib/magazine-rehearsal-content.mjs')
+  const draft = fs.readFileSync(path.join(SD, 'draft.md'), 'utf8')
+  const msg = (rows) => DG.regenerationPromptText(RG.buildFailurePacket({ slug: 'cold-weather-joint-pain', profile: 'MEDICAL', failures: rows, attempt: 1, attemptId: 'a' }), draft)
+  const descOf = (t) => (/^description: (.*)$/m.exec(t) ?? [])[1] ?? ''
+  const before = C.obedientRevision(msg(oldRows(cold)))
+  const after = C.obedientRevision(msg(rows))
+  check('🔴 I 수정 전 계약 — 지시받은 것만 고치면 description 57자가 그대로 (10/12 관측과 같다)', [...descOf(before)].length === 57 && [...descOf(draft)].length === 57, descOf(before))
+  const noDesc = (t) => t.replace(/^description: .*$/m, '')
+  check('I 수정 후 계약 — description 이 60자 이상 · description 밖 원고가 목표(632자) 이상 줄었다', [...descOf(after)].length >= 60 && noDesc(draft).length - noDesc(after).length >= 632, { desc: [...descOf(after)].length, cut: noDesc(draft).length - noDesc(after).length })
+}
+
 check('운영 장부 기본 경로는 격리 HOME 아래', path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep))
 finish()

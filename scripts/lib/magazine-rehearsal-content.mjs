@@ -75,6 +75,7 @@ export function ctaOf(briefText) {
  *   no-frontmatter 첫 줄에 머리말이 붙어 frontmatter 로 시작하지 않는 원고 (2026-10-11 gray-hair 모양)
  *   too-long       형식·QA 다른 규칙은 통과하지만 발행 길이 3000자를 넘는 원고 (2026-10-11 autumn 모양)
  *   short-description 형식·관문은 통과하지만 description 57자로 QA FAIL (2026-10-11 cold-weather 모양)
+ *   cold-shape     description 57자 + 발행 길이 초과 (2026-10-12 cold-weather 모양)
  *   no-identity    정상 원고 — 다만 가짜 ChatGPT 가 대화 주소를 주지 않는다 (응답 신원 부족)
  */
 export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medicalRequired = new Set() }) {
@@ -101,6 +102,11 @@ export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medi
   const head = ['---', `title: ${title}`, `description: ${description}`, `cluster: ${cluster}`, `medical: ${medical}`, '---', ''].join('\n')
   const full = `${head}\n${body}\n\n[CTA] ${cta.href} | ${cta.label} | 비슷한 순간이 있었다면 편하게 이야기를 남겨 주세요.\n`
   if (mode === 'no-frontmatter') return `요청하신 원고를 아래에 정리했습니다.\n\n${full}`
+  if (mode === 'cold-shape') {
+    // 2026-10-11/12 cold-weather 모양 — description 57자 + 발행 길이 3000자 초과 (형식·관문은 통과)
+    const long = manuscriptFor({ repo, draftsDir, slug, item, mode: 'too-long', medicalRequired })
+    return long.replace(/^description: .*$/m, `description: ${`${title} — 우리 또래 이야기`.padEnd(57, ' 이야기').slice(0, 57)}`)
+  }
   if (mode === 'short-description') {
     // 형식·관문은 통과하지만 QA 가 description 길이(60~160자)로 FAIL — 2026-10-11 cold-weather 의 실제 사유 모양
     const d57 = `${title} — 우리 또래 이야기`.padEnd(57, ' 이야기').slice(0, 57)
@@ -113,3 +119,43 @@ export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medi
   }
   return full
 }
+
+/**
+ * 🔴 **지시받은 것만 고치는 재생성 응답** (2026-10-12 cold 재현 · fixture 가 실제보다 강하지 않게).
+ *    실제 모델은 "실패하지 않은 frontmatter 값은 그대로 둔다" 는 지시를 지킨다 — 10/12 cold 는 재생성 두 번 내내
+ *    description 57자가 그대로였다. 이 응답도 **보낸 글자에 적힌 위반만** 고친다:
+ *      description 위반 문장이 실려 있으면 → description 을 90자 이상으로
+ *      BODY_TOO_LONG 에 "최소 N자를 줄인다" 목표가 있으면 → 일반 문단을 덜어 N자 이상 줄인다
+ *      목표 없이 "넘었다" 만 있으면 → 일반 문단 하나만 덜어 낸다 (10/12 관측: 3432 → 3267 → 3194)
+ *    지정 문장(인용)·소제목·목록·CTA 는 건드리지 않는다.
+ */
+export function obedientRevision(typed) {
+  const t = String(typed ?? '')
+  const a = t.indexOf(CURRENT_DRAFT_BEGIN_MARK)
+  const b = t.indexOf(CURRENT_DRAFT_END_MARK)
+  if (a < 0 || b < a) return '현재 원고를 찾지 못했다'
+  let draft = t.slice(a + CURRENT_DRAFT_BEGIN_MARK.length, b).trim()
+  if (/description \d+자 — 허용 60~160자 밖/.test(t)) {
+    draft = draft.replace(/^description: (.*)$/m, (_, d) => `description: ${`${d.trim()} — 같은 시기를 지나는 우리 또래가 겪는 마음과 지금 해 볼 수 있는 작은 일을 차분히 정리했습니다`.slice(0, 120)}`)
+  }
+  const long = /BODY_TOO_LONG: 본문 \d+자/.test(t)
+  const need = Number((/최소 (\d+)자를 줄인다/.exec(t) ?? [])[1] ?? 0)
+  if (long) {
+    const lines = draft.split('\n')
+    const fmEnd = lines.indexOf('---', 1)
+    let removed = 0
+    let removedParas = 0
+    for (let i = lines.length - 1; i > fmEnd; i--) {
+      const l = lines[i]
+      if (!l.trim() || /^(#|>|-|\[CTA\])/.test(l)) continue
+      if (need ? removed >= need : removedParas >= 1) break
+      removed += l.length + 2
+      removedParas++
+      lines.splice(i, 1)
+    }
+    draft = lines.join('\n').replace(/\n{3,}/g, '\n\n')
+  }
+  return `${draft}\n`
+}
+const CURRENT_DRAFT_BEGIN_MARK = '===== 현재 원고 시작 (이 원고를 기준으로 실패 항목만 고친다) ====='
+const CURRENT_DRAFT_END_MARK = '===== 현재 원고 끝 ====='
