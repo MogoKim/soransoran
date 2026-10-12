@@ -104,6 +104,9 @@ const MUTATIONS = [
   { name: '㉘ 단건 회수 관문이 교정 대기를 보지 않음 (01:00 일반 재전송)', scenarios: 'S12', edits: [
     { file: F.webui, find: '  if (gate.correctionPending) {\n    if (!quiet)', replace: '  if (false) {\n    if (!quiet)' },
     { file: F.register, find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
+  // ── 2026-10-12 — 반례 큐 행은 고정 fixture (runtime 큐에서 gray 가 등록돼 빠져도 같은 시나리오) ──
+  { name: '㉙ S12 가 fixture 큐 행을 넣지 않는다 (runtime 큐 상태에 묶임)', scenarios: 'S12', edits: [{ file: F.orch,
+    find: "      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)\n", replace: '      writeFileSync(qPath, qsrc)\n' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
