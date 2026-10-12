@@ -117,6 +117,7 @@ Voice 역사 문서와 `voice-unao-*` 이름이 남아 있다는 사실은 소�
 | 영역 | 대표 문서 | D100과의 경계 |
 |---|---|---|
 | 회원가입 전환 | `MEMBER-CONVERSION-CANON.md` | `MC-*`·`CB-*` 단계. D100 단계·공급·Persona를 변경하지 않음 |
+| 수익화 | `MONETIZATION-CANON.md` | `MON-*` 단계 · D100 공급·Persona·stage·runtime을 변경하지 않음 |
 | 매거진 검색 전략 | `M-GRAPH-PROJECT-CHARTER.md` | 검색 주제망 영역 한정 |
 | 매거진 자동화 | `magazine-automation-runbook.md` | 회사 Mac 매거진 job(현재 구성은 `CURRENT-MILESTONE.md`). 보조 Mac D100 owner와 분리 |
 | 브랜드·UI | `soransoran-brand-design-spec.md` | 화면·색·타이포 정본. D100 운영 상태를 정하지 않음 |
