@@ -53,7 +53,8 @@ const MUTATIONS = [
 /** 저장소 → mini 사본 (scripts · drafts/magazine(_runs 제외) · src/content/magazine · public/magazine 일부) */
 function buildMini(name, shape) {
   const M = path.join(ROOT, name)
-  for (const rel of ['scripts', 'drafts/magazine', 'src/content/magazine', 'public/magazine/avoiding-gatherings', '.gitignore', 'package.json']) {
+  // src/lib — 실제 QA 의 공개 판정이 런타임 판정 파일을 읽는다 (없으면 그 FAIL 줄이 하나 더 붙는다)
+  for (const rel of ['scripts', 'drafts/magazine', 'src/content/magazine', 'src/lib', 'public/magazine/avoiding-gatherings', '.gitignore', 'package.json']) {
     const from = path.join(REPO, rel)
     if (!fs.existsSync(from)) continue
     fs.mkdirSync(path.dirname(path.join(M, rel)), { recursive: true })

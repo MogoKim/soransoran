@@ -76,8 +76,8 @@ const MUTATIONS = [
     find: '  if (!harness.ok) {\n', replace: '  if (false) {\n' }] },
   // ── S7 QA 재생성 ──
   { name: '⑰ QA 재생성 경로 제거', scenarios: 'S7', edits: [{ file: F.register,
-    find: "      const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL',",
-    replace: "      const rr = { ok: false, code: 'MUTATED' } || regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL'," }] },
+    find: "      const rr = regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)",
+    replace: "      const rr = { ok: false, code: 'MUTATED' } || regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)" }] },
   { name: '⑱ 실패 패킷에서 실제 QA 사유 제거', scenarios: 'S7', edits: [{ file: F.regen,
     find: "    code: f.code, label: f.label ?? f.message ?? '', sentence: String(f.sentence ?? '').slice(0, 160),",
     replace: "    code: f.code, label: f.label ?? f.message ?? '', sentence: ''," }] },
