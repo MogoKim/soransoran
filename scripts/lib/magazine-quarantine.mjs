@@ -228,9 +228,14 @@ export function deliveryHoldsFetch(entry, messageFingerprint) {
  * @param {number} p.now
  * @returns {{skip:boolean, code:string, message:string}}
  */
-export function judgeQuarantine({ entry, fingerprint = null, now, maxAttempts = MAX_ATTEMPTS, cooldownMs = COOLDOWN_MS }) {
+export function judgeQuarantine({ entry, slug = null, fingerprint = null, now, maxAttempts = MAX_ATTEMPTS, cooldownMs = COOLDOWN_MS }) {
   if (!entry || !Number.isFinite(entry.attempts)) {
     return { skip: false, code: 'CLEAR', message: '격리 기록 없음' }
+  }
+  // 🔴 코드 상수의 1회성 복구 계보가 열려 있고 아직 쓰지 않았을 때만 격리를 비켜 준다 (그 slug · 그 사건 · 1회)
+  const rec = oneTimeRecoveryOf(slug, entry)
+  if (rec && regenLineageOf(entry).calls < rec.extraCalls) {
+    return { skip: false, code: RECOVERY_ORIGIN, message: `1회성 복구 (${rec.id}) — 재생성 ${rec.extraCalls}회만 허용` }
   }
   /**
    * 🔴 **인프라 실패는 긴 격리의 근거가 아니다** (2026-09-28).
@@ -396,14 +401,69 @@ export function regenLineageOf(entry) {
     attemptIds: Array.isArray(entry?.regenAttemptIds) ? [...entry.regenAttemptIds] : [], legacy: true }
 }
 
-/** 이 slug 를 지금 계보에서 몇 번 더 재생성할 수 있나 — 계보 2회 · 전체 4회 중 먼저 닿는 쪽 */
-export function regenBudget({ entry, maxCalls = MAX_REGEN_CALLS, maxTotal = MAX_REGEN_TOTAL }) {
+/**
+ * 🔴 **정확한 한 사건에만 쓰는 1회성 복구** (2026-10-12 cold-weather-joint-pain · Codex 승인).
+ *
+ *    10/12 cold 는 QA 재생성 패킷이 description 위반을 싣지 않은 **우리 결함**(#693 이전) 때문에 재생성 4회를 다 쓰고
+ *    7일 격리에 들어갔다. #693 의 새 패킷으로 **딱 한 번** 다시 고쳐 쓸 기회를 준다 — 전역 상한은 바꾸지 않는다.
+ *
+ *    - 복구는 아래 상수의 사건에만 열린다. 신원(원고 4파일 SHA-256 · 장부 지문 · attempts · kind · regenCalls · 계보 id ·
+ *      전송 기록 없음)이 **전부** 맞아야 한다 (`magazine-lineage-reconcile.mjs` `openOneTimeRecoveries`).
+ *    - 열리면 그 slug 에 `ONE_TIME_RECOVERY` 계보(calls 0)가 생기고, 그 계보에 한해 계보 상한 = 전체 상한 초과분 = `extraCalls`(1).
+ *      🔴 허용은 **코드 상수**와 계보(id · evidenceKey · slug)가 맞을 때만이다 — 장부 값만으로는 열리지 않는다(수동 편집 0).
+ *    - 실제 1회 소비는 기존 전송 예약 임계구역(`reserveDelivery`)이 한다 — 동시·재실행·급사에도 provider 호출 최대 1.
+ *    - 장부 행 삭제 · regenCalls 감소 · attempts 초기화 · 원고 수정 0.
+ */
+export const RECOVERY_ORIGIN = 'ONE_TIME_RECOVERY'
+export const ONE_TIME_RECOVERIES = Object.freeze([Object.freeze({
+  id: 'one-time-recovery/cold-weather-joint-pain/2026-10-12/qa-regen-packet-v2',
+  slug: 'cold-weather-joint-pain',
+  extraCalls: 1,
+  identity: Object.freeze({
+    briefSha256: 'd8890da092106ab6b1a0cf88b59e3e38b691b9b00ccbb2549d50ed39bb464314',
+    reviewSha256: '1a6129ba44a222dcc3378a33684e86115822ee17269751be569fa61393291489',
+    draftSha256: 'dce6d087af6def7be9ee45c59fbff53935ab72c6fbce43cdeb140ffaf8dc35c5',
+    articleSha256: 'ab68a3d940a580ad8cfede11844cae58f463268b59cc8314417473d12844ecf1',
+    fingerprint: 'sha256:dce6d087af6def7be9ee45c59fbff539',
+    attempts: 2, kind: 'CONTENT', regenCalls: 4,
+    lineageId: 'b542d44b-b6d2-4b8b-8a9b-e96f21768c23',
+  }),
+})])
+export const recoveryKeyOf = (rec) => `${RECOVERY_ORIGIN}:${rec.id}`
+/**
+ * 이 slug 의 지금 계보가 코드 상수의 1회성 복구인가 — 아니면 null.
+ * 🔴 **공식 개방 함수(`openOneTimeRecoveries`)가 원자적으로 남기는 완전한 기록 없이는 인정하지 않는다** (2026-10-12 Codex 재검토 P1):
+ *    slug · 코드 상수의 recovery id · evidenceKey · regenLineageKeys 에 그 키 **정확히 1개** · oneTimeRecoveries 에 그 id **정확히 1개** ·
+ *    previousLineageId = 사건 identity.lineageId · calls 는 0 이상 extraCalls 이하 정수. 하나라도 없거나 중복이면 예산·격리를 열지 않는다.
+ *    (장부 전체를 의도적으로 위조하는 행위까지 막는다는 뜻은 아니다 — 부분 기록·손으로 넣은 id/key 만으로는 열리지 않는다는 뜻이다.)
+ */
+export function oneTimeRecoveryOf(slug, entry, recoveries = ONE_TIME_RECOVERIES) {
+  const l = entry?.regenLineage
+  if (!slug || !l || l.origin !== RECOVERY_ORIGIN) return null
+  const rec = recoveries.find((r) => r.id === l.recoveryId && r.slug === slug)
+  if (!rec) return null
+  const key = recoveryKeyOf(rec)
+  if (l.evidenceKey !== key) return null
+  const keys = Array.isArray(entry.regenLineageKeys) ? entry.regenLineageKeys : []
+  if (keys.filter((k) => k === key).length !== 1) return null
+  const recs = Array.isArray(entry.oneTimeRecoveries) ? entry.oneTimeRecoveries : []
+  if (recs.filter((r) => r?.id === rec.id).length !== 1) return null
+  if (l.previousLineageId !== rec.identity.lineageId) return null
+  if (!Number.isInteger(l.calls) || l.calls < 0 || l.calls > rec.extraCalls) return null
+  return rec
+}
+
+/** 이 slug 를 지금 계보에서 몇 번 더 재생성할 수 있나 — 계보 2회 · 전체 4회 중 먼저 닿는 쪽 (1회성 복구 계보면 그 사건의 extraCalls 만큼) */
+export function regenBudget({ entry, slug = null, maxCalls = MAX_REGEN_CALLS, maxTotal = MAX_REGEN_TOTAL }) {
   const lineage = regenLineageOf(entry)
   const total = Number.isFinite(entry?.regenCalls) ? entry.regenCalls : 0
   const used = lineage.calls
-  const left = Math.max(0, Math.min(maxCalls - used, maxTotal - total))
-  const exhaustedBy = total >= maxTotal ? 'TOTAL' : used >= maxCalls ? 'LINEAGE' : null
-  return { used, total, left, exhausted: exhaustedBy !== null, exhaustedBy, lineage: { id: lineage.id, origin: lineage.origin } }
+  const rec = oneTimeRecoveryOf(slug, entry)
+  const capCalls = rec ? rec.extraCalls : maxCalls
+  const capTotal = rec ? maxTotal + rec.extraCalls : maxTotal
+  const left = Math.max(0, Math.min(capCalls - used, capTotal - total))
+  const exhaustedBy = total >= capTotal ? 'TOTAL' : used >= capCalls ? 'LINEAGE' : null
+  return { used, total, left, exhausted: exhaustedBy !== null, exhaustedBy, lineage: { id: lineage.id, origin: lineage.origin }, ...(rec ? { recoveryId: rec.id } : {}) }
 }
 
 /** 옛 행을 계보가 있는 행으로 굳힌다 (값을 바꾸지 않는다 — 지금 보이는 예산 그대로) */
@@ -576,7 +636,7 @@ export function reserveDelivery({
       return cur
     }
     if (regen) {
-      const b = regenBudget({ entry: cur[slug] })
+      const b = regenBudget({ entry: cur[slug], slug })
       if (b.exhausted) {
         out = { ok: false, exhausted: b,
           why: `🔴 재생성 ${b.used}회를 이미 썼다 (상한 ${MAX_REGEN_CALLS}) — 보내지 않는다` }

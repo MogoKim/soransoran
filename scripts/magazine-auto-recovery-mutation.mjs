@@ -25,6 +25,7 @@ const F = {
   register: path.join(HERE, 'magazine-auto-register.mjs'),
   session: path.join(HERE, 'lib', 'chatgpt-session.mjs'),
   reconcile: path.join(HERE, 'lib', 'magazine-lineage-reconcile.mjs'),
+  ready: path.join(HERE, 'magazine-auto-register-ready.mjs'),
   repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
   pexit: path.join(HERE, 'lib', 'magazine-producer-exit.mjs'),
   gate: path.join(HERE, 'lib', 'magazine-delivery-gate.mjs'),
@@ -41,7 +42,7 @@ const CHECKS = {
 const MUTATIONS = [
   // ── C 예산 계보 ──
   { name: 'C 계보 무시 — 전체 횟수로만 판정 (앞판)', edits: [{ file: F.quarantine, find: '  const used = lineage.calls\n', replace: '  const used = total\n' }] },
-  { name: 'C 전체 상한 4 제거', edits: [{ file: F.quarantine, find: "  const exhaustedBy = total >= maxTotal ? 'TOTAL'", replace: "  const exhaustedBy = false ? 'TOTAL'" }] },
+  { name: 'C 전체 상한 4 제거', edits: [{ file: F.quarantine, find: "  const exhaustedBy = total >= capTotal ? 'TOTAL'", replace: "  const exhaustedBy = false ? 'TOTAL'" }] },
   { name: 'C 같은 증거로 계보 재개방 허용', edits: [{ file: F.quarantine, find: "  if (p.regenLineage?.evidenceKey === key || seen.includes(key)) return { entry: p, opened: false, reason: 'SAME_EVIDENCE' }", replace: "  if (false) return { entry: p, opened: false, reason: 'SAME_EVIDENCE' }" }] },
   { name: 'C 옛 행 이관을 0회로 (예산 되살림)', edits: [{ file: F.quarantine, find: "  return { id: 'legacy', origin: 'LEGACY', evidenceKey: null, calls: used,", replace: "  return { id: 'legacy', origin: 'LEGACY', evidenceKey: null, calls: 0 * used," }] },
   { name: 'C 자기 시도 원복이 계보를 되돌리지 않음', edits: [{ file: F.quarantine, find: '        ...(inLineage ? {', replace: '        ...(false ? {' }] },
@@ -95,6 +96,25 @@ const MUTATIONS = [
   { name: 'P1 gray — 장부 사건 키 대조 제거 (다른 과거 CONTENT 행 승인)', edits: [{ file: F.reconcile, find: "  if (legacyLedgerKey !== mig.legacyLedgerKey) return no(", replace: "  if (false) return no(" }] },
   { name: 'P1 gray — slug 무관하게 migration 적용', edits: [{ file: F.reconcile, find: '  const mig = migrations.find((x) => x.slug === slug)\n', replace: '  const mig = migrations[0]\n' },
     { file: F.reconcile, find: "  if (!migrations.some((x) => x.slug === slug)) return { ok: true, status: 'NOT_RECONCILED'", replace: "  if (false) return { ok: true, status: 'NOT_RECONCILED'" }] },
+  // ── 2026-10-12 cold — 1회성 복구 (J) ──
+  { name: 'J 원고 4파일 신원 대조 제거 (개방 전 확인 · 판정 둘 다)', edits: [
+    { file: F.reconcile, find: "    if (fileMiss) { out.push(", replace: "    if (false) { out.push(" },
+    { file: F.reconcile, find: "    if (shas?.[k] !== id[k]) return no(", replace: "    if (false) return no(" }] },
+  { name: 'J attempts·regenCalls 대조 제거', edits: [
+    { file: F.reconcile, find: "  if (entry.attempts !== id.attempts) return no(", replace: "  if (false) return no(" },
+    { file: F.reconcile, find: "  if (entry.regenCalls !== id.regenCalls) return no(", replace: "  if (false) return no(" }] },
+  { name: 'J 계보 id 대조 제거', edits: [{ file: F.reconcile, find: "  if (entry.regenLineage?.id !== id.lineageId) return no(", replace: "  if (false) return no(" }] },
+  { name: 'J 장부 잠금 안 재판정 제거 (동시 개방)', edits: [{ file: F.reconcile, find: "      if (!again.ok) { raced = again.why; return store }\n      const prev = store[rec.slug]", replace: "      const prev = store[rec.slug]" }] },
+  { name: 'J 복구 계보 evidenceKey 확인 제거', edits: [{ file: F.quarantine, find: "  if (l.evidenceKey !== key) return null\n", replace: '' }] },
+  { name: 'J regenLineageKeys 정확히 1개 확인 제거 (누락·중복 허용)', edits: [{ file: F.quarantine, find: "  if (keys.filter((k) => k === key).length !== 1) return null\n", replace: '' }] },
+  { name: 'J oneTimeRecoveries 정확히 1개 확인 제거 (누락·중복 허용)', edits: [{ file: F.quarantine, find: "  if (recs.filter((r) => r?.id === rec.id).length !== 1) return null\n", replace: '' }] },
+  { name: 'J previousLineageId 확인 제거', edits: [{ file: F.quarantine, find: "  if (l.previousLineageId !== rec.identity.lineageId) return null\n", replace: '' }] },
+  { name: 'J 복구 계보 calls 범위 확인 제거', edits: [{ file: F.quarantine, find: "  if (!Number.isInteger(l.calls) || l.calls < 0 || l.calls > rec.extraCalls) return null\n", replace: '' }] },
+  { name: 'K dry-run 에서도 복구를 연다 (write 가드 제거)', edits: [{ file: F.ready, find: "  report.oneTimeRecoveries = write\n    ? openOneTimeRecoveries(", replace: "  report.oneTimeRecoveries = true\n    ? openOneTimeRecoveries(" }] },
+  { name: 'J 복구 1회 상한 무시 (계보·전체 상한 모두 일반 계보처럼 2회)', edits: [
+    { file: F.quarantine, find: "  const capCalls = rec ? rec.extraCalls : maxCalls", replace: "  const capCalls = maxCalls" },
+    { file: F.quarantine, find: "  const capTotal = rec ? maxTotal + rec.extraCalls : maxTotal", replace: "  const capTotal = rec ? maxTotal + maxCalls : maxTotal" }] },
+  { name: 'J slug 한정 제거 (다른 글에도 복구 계보가 통한다)', edits: [{ file: F.quarantine, find: "  const rec = recoveries.find((r) => r.id === l.recoveryId && r.slug === slug)", replace: "  const rec = recoveries.find((r) => r.id === l.recoveryId)" }] },
   // ── 2026-10-12 cold — QA 재생성 패킷 ──
   { name: 'I 꼬리 3줄에 빠진 FAIL 줄을 싣지 않음 (앞판 — description 누락)', edits: [{ file: F.register,
     find: "    ...fails.filter((x) => !isBody(x) && !tail.includes(x)).map((x) => ({ code: 'QA_FAIL_ITEM', label: x })),\n", replace: '' }] },

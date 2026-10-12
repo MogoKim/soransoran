@@ -34,6 +34,7 @@ const F = {
   qa: path.join(HERE, 'magazine-qa.mjs'),
   repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
   webui: path.join(HERE, 'magazine-webui-runner.mjs'),
+  ready: path.join(HERE, 'magazine-auto-register-ready.mjs'),
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -106,7 +107,8 @@ const MUTATIONS = [
     { file: F.register, find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
   // ── 2026-10-12 — 반례 큐 행은 고정 fixture (runtime 큐에서 gray 가 등록돼 빠져도 같은 시나리오) ──
   { name: '㉙ S12 가 fixture 큐 행을 넣지 않는다 (runtime 큐 상태에 묶임)', scenarios: 'S12', edits: [{ file: F.orch,
-    find: "      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)\n", replace: '      writeFileSync(qPath, qsrc)\n' }] },
+    // S14 공통 준비에도 같은 줄이 있다 — S12 의 다음 줄(등록된 gray 처리)까지 묶어 S12 하나만 고른다
+    find: "      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)\n      // 🔴 gray 가 이미 등록된 runtime", replace: '      writeFileSync(qPath, qsrc)\n      // 🔴 gray 가 이미 등록된 runtime' }] },
   // ── 2026-10-12 cold — QA 재생성 패킷이 검사가 본 위반을 빠짐없이 · 길이 목표 ──
   { name: '㉚ QA 재생성 패킷을 앞판 구성으로 (꼬리 3줄 + 목표 없는 길이 줄 — description 위반 누락)', scenarios: 'S13', edits: [{ file: F.register,
     find: "      const rr = regenOnce('qa', qaRegenRows(r.stdout || r.stderr), lastQaFailures)",
@@ -118,6 +120,11 @@ const MUTATIONS = [
     find: "  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })\n", replace: '' }] },
   { name: '㉝ S12 가 sandbox articles.ts 에서 이미 등록된 gray 항목을 빼지 않는다 (producer 가 등록 글로 건너뜀)', scenarios: 'S12', edits: [{ file: F.orch,
     find: "      if (at >= 0) {\n        const end = asrc.indexOf", replace: "      if (false) {\n        const end = asrc.indexOf" }] },
+  // ── 2026-10-12 cold 1회성 복구 — 운영 경로 연결 ──
+  { name: '㉞ ready 가 후보 판정 전에 1회성 복구를 열지 않는다 (cold 그대로 격리)', scenarios: 'S14', edits: [{ file: F.ready,
+    find: "    ? openOneTimeRecoveries({ draftsDir: DRAFTS_DIR, ...(quarantinePath ? { path: quarantinePath } : {}) })", replace: '    ? []' }] },
+  { name: '㉟ 재생성이 예산을 slug 없이 판정 (복구 계보를 못 보고 소진)', scenarios: 'S14', edits: [{ file: F.regen,
+    find: '  const budget = regenBudget({ entry, slug })', replace: '  const budget = regenBudget({ entry })' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -136,7 +143,7 @@ let caught = 0
 const only = process.argv.includes('--only') ? String(process.argv[process.argv.indexOf('--only') + 1] ?? '').split(',').filter(Boolean) : null
 const RUN = only ? MUTATIONS.filter((m) => only.some((o) => m.name.startsWith(o))) : MUTATIONS
 console.log(`\n매거진 rehearsal 변이 시험${only ? ` (일부만: ${only.join(',')} — 판정용 아님)` : ''}\n`)
-const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14B'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
 /** 🔴 변이 시험이 만든 rehearsal 산출물(임시 루트·보고서)은 남기지 않는다 */
 const cleanup = (stdout) => {
   for (const m of stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {

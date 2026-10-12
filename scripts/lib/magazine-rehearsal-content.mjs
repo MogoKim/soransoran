@@ -127,7 +127,7 @@ export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medi
  *      description 위반 문장이 실려 있으면 → description 을 90자 이상으로
  *      BODY_TOO_LONG 에 "최소 N자를 줄인다" 목표가 있으면 → 일반 문단을 덜어 N자 이상 줄인다
  *      목표 없이 "넘었다" 만 있으면 → 일반 문단 하나만 덜어 낸다 (10/12 관측: 3432 → 3267 → 3194)
- *    지정 문장(인용)·소제목·목록·CTA 는 건드리지 않는다.
+ *    지정 문장(보낸 글자의 brief 지정 문장이 든 줄 · 인용)·소제목·목록·CTA 는 건드리지 않는다.
  */
 export function obedientRevision(typed) {
   const t = String(typed ?? '')
@@ -140,6 +140,9 @@ export function obedientRevision(typed) {
   }
   const long = /BODY_TOO_LONG: 본문 \d+자/.test(t)
   const need = Number((/최소 (\d+)자를 줄인다/.exec(t) ?? [])[1] ?? 0)
+  // 패킷은 "지정 문장·CTA·소제목 구조는 유지" 라고 지시한다 — 보낸 글자에 실린 brief 의 지정 문장이 든 줄은 지우지 않는다
+  const markerBlock = t.split('## 반드시 그대로 넣을 문장')[1] ?? ''
+  const markers = [...markerBlock.matchAll(/^\d+\.\s+(.+)$/gm)].map((m) => m[1].trim()).slice(0, 5)
   if (long) {
     const lines = draft.split('\n')
     const fmEnd = lines.indexOf('---', 1)
@@ -147,7 +150,7 @@ export function obedientRevision(typed) {
     let removedParas = 0
     for (let i = lines.length - 1; i > fmEnd; i--) {
       const l = lines[i]
-      if (!l.trim() || /^(#|>|-|\[CTA\])/.test(l)) continue
+      if (!l.trim() || /^(#|>|-|\[CTA\])/.test(l) || markers.some((m) => l.includes(m))) continue
       if (need ? removed >= need : removedParas >= 1) break
       removed += l.length + 2
       removedParas++
