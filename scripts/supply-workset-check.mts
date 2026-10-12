@@ -422,8 +422,10 @@ console.log('\n⑧ 🔴 한 원천이 막혀도 다음 원천은 간다 · 실�
   const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 🔴 **한 원천 HOLD 가 다음 원천을 막지 않는다**',
     /if \(art\.draft === null\) \{[\s\S]{0,120}continue/.test(draft))
+  // 🔴 (2026-10-12) 러너의 요청 변환은 공용 어댑터 한 벌이다 — 러너가 그것을 쓰고, 어댑터가 정산 기록을 본다
   check('🔴 🔴 **정산 못 적은 건은 완주가 아니다** (fail-closed 유지)',
-    /ok: r\.ok && r\.settlementRecorded/.test(draft))
+    /const v2Ask: Ask = ledgerAskOf\(/.test(draft)
+    && /ok: r\.ok && r\.settlementRecorded/.test(readFileSync('scripts/lib/content-core-ledger-ask.mts', 'utf-8')))
   check('🔴 잘림·사용량 미상은 계속 통과가 아니다 — 원인도 값으로 남는다', (() => {
     const run = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     return /reason: 'truncated', cause: 'truncated'/.test(run)

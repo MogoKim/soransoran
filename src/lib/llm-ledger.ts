@@ -47,7 +47,17 @@ export function previousLedgerDate(date: string): string {
 /** 공급의 어느 단계인가 — 🔴 재시도도 자기 단계로 남는다 */
 export const LEDGER_STAGES = [
   'judge', 'judgeRetry',
+  /**
+   * 🔴 **Content Core 원천 요구 판독** (2026-10-12 Batch B · K-06). 앞판은 `judge` 로 적혀 원천 판정과
+   *    한 이름을 썼다 — 72h 손실표에서 "화자 계획 잘림" 이 판정 줄과 섞였다.
+   */
+  'sourceNeed',
   'draftGen', 'draftQuality', 'jsonRetry', 'schemaRetry',
+  /**
+   * 🔴 **Content Core 일시 실패 재시도** (2026-10-12 Batch B) — 첫 시도와 **다른 줄 · 다른 attemptId** 다.
+   *    같은 예약·정산 규칙을 지난다. 단계 이름만 보고 첫 시도와 재시도를 가를 수 있어야 한다.
+   */
+  'sourceNeedRetry', 'draftGenRetry', 'draftQualityRetry',
   'ageCheck',
   /**
    * 🔴 **댓글 후보 생성** (2026-09-21).

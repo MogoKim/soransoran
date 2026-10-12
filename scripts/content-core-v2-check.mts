@@ -22,7 +22,7 @@ import { runContentCore, personaInputOf, personaPoolIdentity, STAGE_MODEL, type 
 import {
   buildSpeakerPlanSystemPrompt, buildSpeakerPlanPayload,
   buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, lifeContractLines,
-  qualificationLine, sourceBlock,
+  requirementVocabulary, sourceBlock,
 } from './lib/content-core-prompts.mjs'
 import {
   cardValueText, hasFact, verifySelfWarrants,
@@ -405,10 +405,14 @@ console.log('\n③ 🔴 허가 근거 검증 — 없는 사람 · 없는 근거 
     canned: { plan: plan({ personaCode: 'P99', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: facts,
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT } })
-  check('🔴 🔴 **카드에 없는 personaCode 는 HOLD**',
-    ghost.plan.personaCode === null && ghost.plan.rejection === 'unknownPersona'
-    && ghost.draft === null, ghost.plan.reason)
-  check('🔴 묻기 전에 멈춘다 — 유료 1회', ghost.cost.totalCalls === 1)
+  /**
+   * 🔴 (2026-10-12 Batch B · canon §4.1) 앞판은 판독이 후보 밖 코드(P99)를 내면 그 원천을 HOLD 했다 —
+   *    자격자가 풀에 있는데도 원천을 잃었다. 이제 판독의 personaCode 는 **읽지 않는다.** 코드가 정본 카드로 정한다.
+   */
+  check('🔴 🔴 **판독이 후보 밖 personaCode 를 내도 읽지 않는다 — 코드가 자격자를 정한다**',
+    ghost.plan.personaCode === partTime.code && ghost.plan.stance === 'SELF_EXPERIENCE'
+    && ghost.plan.personaDecision?.decidedBy === 'code' && ghost.draft !== null, ghost.plan.reason)
+  check('🔴 정상 경로 3회 — 판독 · 초안 · 검수', ghost.cost.totalCalls === 3, `${ghost.cost.totalCalls}회`)
 
   const noEvidence = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
     personas: [partTime],
@@ -456,8 +460,22 @@ console.log('\n④ 🔴 🔴 후보 순서는 원문이 정한다 — 회차 상
     personas: [partTime, homemaker],
     canned: { plan: planned, draft: DRAFT } })
   const payloadA = sentOf('speakerPlan')[0]!.payload
-  check('🔴 🔴 **앞에 있다고 무자격 Persona 가 SELF 가 되지 않는다**',
-    a.plan.stance !== 'SELF_EXPERIENCE' && a.plan.rejection === 'requiredValueUnmet')
+  /**
+   * 🔴 (2026-10-12 Batch B) 판독이 무자격자 P02 를 지목해도 **코드가 자격자를 고른다** — 무자격자는 SELF 가 되지 않고,
+   *    자격자가 있는 원천을 잃지도 않는다. 앞판은 여기서 `requiredValueUnmet` → `speakerUnqualified`(결론)였다.
+   */
+  check('🔴 🔴 **앞에 있다고 무자격 Persona 가 SELF 가 되지 않는다 — 코드가 자격자를 고른다**',
+    a.plan.personaCode === partTime.code && a.plan.stance === 'SELF_EXPERIENCE'
+    && a.plan.warrants.every((w) => w.verifiedCardValue === partTime.workStatus), `${a.plan.personaCode} ${a.plan.reason}`)
+  {
+    // 🔴 반례: 자격자가 **아무도 없으면** 여전히 HOLD 다 — 안전 기준을 낮추지 않았다
+    const none = await run({
+      id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
+      personas: [homemaker], canned: { plan: planned, draft: DRAFT } })
+    check('🔴 🔴 **자격자가 없으면 HOLD — 자리를 낮춰 만들지 않는다 · 초안 호출 0**',
+      none.plan.personaCode === null && none.plan.rejection === 'requiredValueUnmet'
+      && none.draft === null && none.cost.totalCalls === 1, none.plan.reason)
+  }
   check('🔴 🔴 **회차 안에서만 존재하는 값(맡은 수)이 요청에 없다**',
     !payloadA.includes('맡은 수'), payloadA.slice(0, 200))
 
@@ -470,8 +488,9 @@ console.log('\n④ 🔴 🔴 후보 순서는 원문이 정한다 — 회차 상
     sentOf('speakerPlan')[0]!.payload === payloadA)
   check('🔴 🔴 **그리고 계약도 같다**',
     personaPoolIdentity([partTime, homemaker]) === personaPoolIdentity([homemaker, partTime]))
-  check('🔴 계획 지시가 순서로 자격을 뒤집지 말라고 말한다',
-    buildSpeakerPlanSystemPrompt().includes('자격 없는 사람을 고르지 않는다'))
+  check('🔴 계획 지시가 사람을 고르지 말라고 말하고 personaCode 칸이 없다 (Persona 중립)',
+    buildSpeakerPlanSystemPrompt().includes('사람을 고르지 않는다')
+    && !buildSpeakerPlanSystemPrompt().includes('personaCode'))
   check('🔴 🔴 **지시가 맡은 수를 더는 말하지 않는다**',
     !buildSpeakerPlanSystemPrompt().includes('맡은 수'))
 }
@@ -599,11 +618,18 @@ console.log('\n⑦ 🔴 계획 호출이 받는 것 · 남기는 것')
   const sent = sentOf('speakerPlan')[0]!
   check('🔴 🔴 **계획 payload 에 마스킹된 원문이 들어간다**',
     normalizeForProvenance(sent.payload).includes(normalizeForProvenance('누가 대타뛰어준건 아니고')))
-  check('🔴 🔴 **후보 카드의 자격 칸이 들어간다**', sent.payload.includes('하는 일 파트타임'))
+  // 🔴 (2026-10-12 Batch B · canon §4.1) 판독은 Persona 중립 — 자격 값 어휘만 싣고 후보 코드·후보 줄은 싣지 않는다
+  check('🔴 🔴 **자격 값 어휘가 들어간다 — 사람 없이 값만**',
+    sent.payload.includes('"값목록"') && sent.payload.includes('파트타임'))
+  check('🔴 🔴 **후보 코드·후보 줄이 들어가지 않는다 — 판독은 사람을 고르지 않는다**',
+    !sent.payload.includes(partTime.code) && !sent.payload.includes('"후보"') && !sent.payload.includes('하는 일 '))
   check('🔴 🔴 **말투 참고 댓글 본문은 들어가지 않는다**',
     !sent.payload.includes('참고 댓글 본문 하나') && !sent.payload.includes('참고 댓글 본문 둘'))
-  check('🔴 자격 줄에 말투·성격이 없다',
-    !qualificationLine(partTime).includes('성격') && !qualificationLine(partTime).includes('말투'))
+  check('🔴 자격 값 어휘에 말투·성격·코드가 없다', (() => {
+    const v = JSON.stringify(requirementVocabulary([partTime]))
+    return !v.includes('성격') && !v.includes('말투') && !v.includes(partTime.code)
+      && partTime.personality.every((x) => !v.includes(x))
+  })())
   const json = JSON.stringify(a)
   check('🔴 🔴 **artifact 에 원문 전문이 저장되지 않는다** (300자 예산 안)',
     a.evidence.totalEvidenceChars <= EVIDENCE_CHAR_BUDGET && violatesArtifact(a).length === 0)
@@ -1031,8 +1057,8 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
   check('🔴 🔴 **계획 요청이 cardValue 를 더는 요구하지 않는다**',
     !buildSpeakerPlanSystemPrompt().includes('cardValue'))
   check('🔴 판 번호가 새 계약을 담는다',
-    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p5'
-    && SPEAKER_PLAN_VERSION === 'speaker-plan-v6'
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p6'
+    && SPEAKER_PLAN_VERSION === 'speaker-plan-v7'
     && ARTIFACT_VERSION === 'human-review-v9'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
   check('🔴 🔴 **캐시 key 와 artifact 계약이 같은 함수에서 나온다**', (() => {
@@ -1184,8 +1210,10 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 🔴 **공통 상한 상수가 사라졌다** — 옛 판으로 되돌리면 여기서 걸린다',
     !/DRAFT_MAX_TOKENS/.test(runner))
+  // 🔴 (2026-10-12) 러너의 요청 변환은 공용 어댑터 한 벌이다 — 러너는 그것을 쓰고, 어댑터가 단계 상한을 넘긴다
+  const ledgerAsk = readFileSync('scripts/lib/content-core-ledger-ask.mts', 'utf-8')
   check('🔴 🔴 **러너가 단계 상한을 그대로 넘긴다**',
-    /STAGE_MAX_OUTPUT_TOKENS\[stage\]/.test(runner))
+    /const v2Ask: Ask = ledgerAskOf\(/.test(runner) && /STAGE_MAX_OUTPUT_TOKENS\[stage\]/.test(ledgerAsk))
   /**
    * 🔴 **계약 한 칸이 바뀌면 identity 가 바뀐다.** 캐시 key 도 terminal 판정도
    *    이 값을 쓰므로, 여기서 한 번 확인하면 두 곳이 함께 miss 된다.
@@ -2721,8 +2749,8 @@ console.log('\n🔴 🔴 **계약 판을 올렸다 — 옛 cache/artifact 가 �
    *    load-bearing 판정 자리 이동). 판을 올리지 않으면 옛 응답으로 만든 artifact 와
    *    캐시가 새 계약의 결론으로 재사용된다.
    */
-  check('🔴 🔴 **판이 실제로 올라갔다 — p5 · v6**',
-    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p5' && SPEAKER_PLAN_VERSION === 'speaker-plan-v6',
+  check('🔴 🔴 **판이 실제로 올라갔다 — p6 · v7 (2026-10-12 Persona 중립 판독)**',
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p6' && SPEAKER_PLAN_VERSION === 'speaker-plan-v7',
     `${SPEAKER_PLAN_PROMPT_VERSION} · ${SPEAKER_PLAN_VERSION}`)
 
   const BASE_C = {

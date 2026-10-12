@@ -9,8 +9,9 @@
  */
 import { EVIDENCE_CHAR_BUDGET, type SourceEvidencePacket } from './evidence'
 import type { ClosingIntent, ContentRole, DropReason, ProtectedFact } from './source-facts'
-import type { SelfBasis, SpeakerWarrant, Stance, WarrantRejection } from './speaker'
+import type { PersonaDecision, SelfBasis, SpeakerWarrant, Stance, WarrantRejection } from './speaker'
 import type { GenerationContract } from './pipeline'
+import type { CallOutcome, GenerationFailure } from './generation-failure'
 import type { VoiceProvenance } from './voice-evidence'
 import type {
   DeterministicResult, DroppedFromSource, LifeContradiction, MachineOutcome, ReviewCompletion,
@@ -49,6 +50,14 @@ export type CallMeta = {
    */
   thoughtsTokens: number | null
   usd: number | null
+  /**
+   * 🔴 **같은 단계의 몇 번째 시도인가** (2026-10-12 Batch B). 1 이 첫 시도, 2 가 일시 실패 뒤 재시도다.
+   *    재시도도 **자기 줄**을 갖는다 — 두 시도의 비용을 한 줄에 합치면 이중 정산·누락을 볼 수 없다.
+   *    이 판 전 artifact 에는 없다(=1).
+   */
+  attempt?: 1 | 2
+  /** 🔴 이 요청의 결과 — 재시도 자격은 이 값으로만 정한다(`generation-failure`) */
+  outcome?: CallOutcome
 }
 
 export type HumanReviewArtifact = {
@@ -117,6 +126,12 @@ export type HumanReviewArtifact = {
      *    🔴 값으로 남겨야 다음 회차가 강제된다. 빈 배열은 "추천 없음" 이다.
      */
     suggestedPersonaCodes: string[]
+    /**
+     * 🔴 **누가 Persona 를 정했나** (2026-10-12 Batch B · canon §4.1). 언제나 코드다 — 유료 초안
+     *    요청 **전에** 정해지고 초안·검수·발행이 바꾸지 않는다. 판독이 망가져 정하지 못했으면 `null`.
+     *    이 판 전 artifact 에는 없다.
+     */
+    personaDecision?: PersonaDecision | null
   }
 
   voice: {
@@ -158,6 +173,14 @@ export type HumanReviewArtifact = {
     totalOutputTokens: number | null
     totalUsd: number | null
   }
+
+  /**
+   * 🔴 **이 원천을 무엇 때문에 잃었나** (2026-10-12 Batch B). 채택이면 `null` 이다.
+   *    `review.semanticCompletion.cause` 는 "다음 회차에 다시 볼까" 를 정하고, 이 칸은 손실 유형을 말한다
+   *    (timeout · 잘림 · 파싱 · 제공사 · 사용량 미상 · Persona 자격 · 안전·품질 …).
+   *    이 판 전 artifact 에는 없다.
+   */
+  failure?: GenerationFailure | null
 }
 
 /** 🔴 기록 직전 관문 — 담으면 안 되는 것이 들어갔는가 */
