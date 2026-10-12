@@ -250,7 +250,8 @@ console.log('\nF 입력 수리 → 계보 영수증 — draft 교체 직후 급�
 {
   const FXD = path.join(HERE, 'fixtures', 'magazine-format-contract')
   const COLD = 'cold-weather-joint-pain'
-  const coldItem = L.loadQueue().find((q) => q.slug === COLD)
+  // 🔴 큐 행은 고정 fixture — 실제 큐에서 cold 가 등록돼 빠져도 반례는 그대로 (2026-10-12)
+  const coldItem = (await import('./fixtures/magazine-format-contract/repair-queue-rows.mjs')).fixtureQueue([COLD])[0]
   const ECHO = fs.readFileSync(path.join(FXD, 'cold-weather-joint-pain.draft.md'), 'utf8')
   const GOOD = fs.readFileSync(path.join(REPO, 'drafts', 'magazine', 'job-credentials', 'draft.md'), 'utf8')
   const BRIEF = fs.readFileSync(path.join(FXD, 'job-credentials.brief.md'), 'utf8')
@@ -479,7 +480,8 @@ console.log(JSON.stringify({ ok: r.ok, code: r.code ?? null, ran }))
   const dirOf = (env) => { try { return QLm.queueLockDir(env) } catch (e) { return e.code } }
   check('H 운영 모드 잠금 위치는 고정 하나 — 주입 없으면 QUEUE_LOCK_DIR', dirOf({}) === QLm.QUEUE_LOCK_DIR)
   let seamBlocked = null
-  try { QLm.setQueueLockDirForTest(path.join(REPO, '.not-tmp')) } catch (e) { seamBlocked = e.code }
+  // 저장소 위치와 무관한 임시 폴더 밖 경로 — 검사 사본이 임시 폴더 아래에 있어도 같은 판정 (경로 판정만 · 파일 0)
+  try { QLm.setQueueLockDirForTest('/opt/soransoran-not-tmp-queue-locks') } catch (e) { seamBlocked = e.code }
   check('H 같은 프로세스 시험 주입도 임시 폴더만 받는다', seamBlocked === 'queue_lock_scope_blocked')
   fs.rmSync(dA, { recursive: true, force: true })
   fs.rmSync(dB, { recursive: true, force: true })

@@ -169,6 +169,7 @@
     "magazine:rehearsal": "node scripts/magazine-rehearsal-check.mjs",
     "check:magazine-rehearsal-mutation": "node scripts/magazine-rehearsal-mutation.mjs",
     "check:magazine-auto-recovery-mutation": "node scripts/magazine-auto-recovery-mutation.mjs",
+    "check:magazine-input-repair-fixture-mutation": "node scripts/magazine-input-repair-fixture-mutation.mjs",
     "check:magazine-auto-merge-recovery-mutation": "node scripts/magazine-auto-merge-recovery-mutation.mjs",
     "supply:health": "tsx scripts/supply-health.mts",
     "supply:health-check": "tsx scripts/supply-health-check.mts",
