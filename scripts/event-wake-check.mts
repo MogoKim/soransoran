@@ -63,7 +63,14 @@ try {
   check('🔴 🔴 반례 처리 기록 손상 — JSON 아님 · wakeAt 없음 · 숫자 · null · 빈 문자열 · 배열 · JSON null → 전부 unreadable',
     ['{oops', '{}', '{"wakeAt":123}', '{"wakeAt":null}', '{"wakeAt":""}', '[]', 'null', '"x"'].every((r) => ph(r) === 'unreadable'),
     ['{oops', '{}', '{"wakeAt":123}'].map(ph).join(','))
-  check('처리 기록 정상 — wakeAt 문자열이면 valid', ph(JSON.stringify({ wakeAt: at, at: now.toISOString() })) === `valid:${at}`)
+  check('처리 기록 정상 — wakeAt 이 정본 ISO 시각(writer 가 쓰는 toISOString 모양)이면 valid', ph(JSON.stringify({ wakeAt: at, at: now.toISOString() })) === `valid:${at}`
+    && ph(JSON.stringify({ wakeAt: new Date(0).toISOString() })) === 'valid:1970-01-01T00:00:00.000Z')
+  const BAD_TIMES = ['garbage', '2026-99-99', ' ', '   ', '1760238000000', '42', '2026-10-12', '2026-10-12T03:00:00Z', '2026-10-12T03:00:00.000+09:00',
+    '2026-02-30T00:00:00.000Z', '2026-10-12 03:00:00.000Z', ` ${at}`, `${at} `]
+  check('🔴 🔴 반례 wakeAt 이 날짜가 아닌 문자열 — garbage · 2026-99-99 · 공백 · 숫자 문자열 · 정본이 아닌 ISO 변형 · 넘친 날짜 → 전부 unreadable',
+    BAD_TIMES.every((w) => ph(JSON.stringify({ wakeAt: w })) === 'unreadable'), BAD_TIMES.filter((w) => ph(JSON.stringify({ wakeAt: w })) !== 'unreadable').join(' | '))
+  check('🔴 🔴 반례 {"wakeAt":"garbage"} + 같은 고아 표식 — 몇 번을 판정해도 kickstart 0(fail-closed)',
+    [0, 1, 2, 3].every((k) => judgeOrphanWake({ ...base, handled: parseHandledWake('{"wakeAt":"garbage"}'), now: new Date(now.getTime() + k * 1_800_000) }).action === 'skip'))
   check('🔴 손상 기록 + 같은 고아 표식 — 몇 번을 판정해도 kickstart 0',
     [0, 1, 2, 3].every((k) => judgeOrphanWake({ ...base, handled: parseHandledWake('{"wakeAt":42}'), now: new Date(now.getTime() + k * 1_800_000) }).action === 'skip'))
   check('🔴 깨움 꺼짐 · 표식 없음 · 사건 아닌 표식(scheduled · manual · unknown) → 건드리지 않는다',

@@ -146,13 +146,28 @@ export const ORPHAN_WAKE_GRACE_MS = 3 * 60_000
  */
 export type HandledWake = { kind: 'missing' } | { kind: 'valid'; wakeAt: string } | { kind: 'unreadable' }
 
-/** 🔴 처리 기록 원문 → 상태. 순수 — 파일이 없는 경우(`missing`)는 읽는 쪽이 정한다 */
+/**
+ * 🔴 **정본 ISO 시각인가** — 처리 기록의 `wakeAt` 은 follow-up 표식의 `at` 그대로이고, 그 값은 언제나
+ *    `new Date(ms).toISOString()`(`YYYY-MM-DDTHH:mm:ss.sssZ`)이 만든다(`runner-lease.requestFollowUp`).
+ *    판정은 하나다 — 유한한 시각이고, 그 시각을 `toISOString()` 으로 되돌린 문자열이 원문과 **글자 그대로** 같은가.
+ *    이것만으로 모양(밀리초 · `Z` · `T`)과 넘친 날짜(`2026-02-30`)가 함께 걸린다(정규식을 따로 두면 같은 결정이 두 곳이다).
+ */
+export function isCanonicalIso(v: string): boolean {
+  const t = Date.parse(v)
+  return Number.isFinite(t) && new Date(t).toISOString() === v
+}
+
+/**
+ * 🔴 처리 기록 원문 → 상태. 순수 — 파일이 없는 경우(`missing`)는 읽는 쪽이 정한다.
+ *    `wakeAt` 이 정본 ISO 시각이 아니면(`"garbage"` · `"2026-99-99"` · 공백 · 숫자 문자열 등) `unreadable` 이다 —
+ *    앞판은 비어 있지 않은 문자열이면 valid 로 읽어, 표식 시각과 다르면 같은 고아 표식을 틱마다 다시 깨웠다(2026-10-12 C2 경계 보정).
+ */
 export function parseHandledWake(raw: string): HandledWake {
   let v: unknown
   try { v = JSON.parse(raw) } catch { return { kind: 'unreadable' } }
   if (typeof v !== 'object' || v === null) return { kind: 'unreadable' }
   const w = (v as { wakeAt?: unknown }).wakeAt
-  return typeof w === 'string' && w !== '' ? { kind: 'valid', wakeAt: w } : { kind: 'unreadable' }
+  return typeof w === 'string' && isCanonicalIso(w) ? { kind: 'valid', wakeAt: w } : { kind: 'unreadable' }
 }
 
 export type OrphanWakeInput = {
