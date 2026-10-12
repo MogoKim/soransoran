@@ -35,6 +35,15 @@ function visibleText(tsx: string): string {
     .replace(/\s+/g, ' ')
 }
 
+/**
+ * 문단(<p>)·표 칸(<td>)마다 문장으로 나눈다. 페이지 전체를 이어 붙이면 표 머리글과 먼 문장이
+ * 한 "문장" 으로 붙어 엉뚱한 조합이 생긴다.
+ */
+function sentences(tsx: string): string[] {
+  const blocks = [...tsx.matchAll(/<(p|td)\b[^>]*>([\s\S]*?)<\/\1>/g)].map((m) => visibleText(m[2] ?? ''))
+  return blocks.flatMap((b) => b.split(/(?<=[.다])\s+/)).filter((s) => s.trim() !== '')
+}
+
 /** 「N. 제목」 절 하나 — 다음 Article 전까지 */
 function article(tsx: string, title: string): string {
   const at = tsx.indexOf(`title="${title}`)
@@ -68,11 +77,15 @@ const RULES: Rule[] = [
     return /Google AdSense 관련 정보는 Google 의 개인정보처리방침과 광고 관련 정책/.test(a)
       && !/AdSense[^.]{0,60}\d+\s*(일|개월|년)/.test(a)
   } },
-  { name: '7조: 분석·광고 이전의 거부 방법과 거부 시 영향', ok: (t) => {
-    const a = article(t, '7. 개인정보의 국외 이전')
-    return /Google Analytics 와 Google AdSense 로의 이전은[^.]*거부하거나 관리할 수 있습니다/.test(a)
-      && /기본 서비스는 그대로 이용할 수 있으며/.test(a)
-  } },
+  { name: '7조: Analytics 는 브라우저 쿠키·개인정보 설정으로 제한한다고 따로 적는다', ok: (t) =>
+    /Google Analytics 관련 쿠키 사용은 브라우저의 쿠키·개인정보 설정을 통해 제한할 수 있습니다/.test(article(t, '7. 개인정보의 국외 이전')) },
+  { name: '7조: AdSense 는 쿠키 설정 · Google 광고 설정 · 지역 CMP 로 관리한다고 따로 적는다', ok: (t) =>
+    /Google AdSense 관련 처리는 브라우저 쿠키 설정, Google 광고 설정 및 적용 지역의 Google 동의 관리 화면에서 관리할 수 있습니다/.test(article(t, '7. 개인정보의 국외 이전')) },
+  { name: '7조: 설정해도 기본 이용은 유지되고 통계 정확도·광고 방식이 달라질 수 있다', ok: (t) =>
+    /기본 서비스는 그대로 이용할 수 있으며, 이용 통계의 정확도나 광고 표시 방식·빈도가 달라질 수 있습니다/.test(article(t, '7. 개인정보의 국외 이전')) },
+  { name: 'Google 광고 설정이 Analytics 까지 관리한다고 묶어 쓰지 않는다', ok: (t) =>
+    sentences(t).every((s) => !(s.includes('Google Analytics') && s.includes('Google 광고 설정'))) },
+  { name: '거부·설정 효과를 "완전히 차단" 처럼 보장하지 않는다', ok: (t) => !/완전히 (차단|막|거부)/.test(visibleText(t)) },
   // 9조 쿠키
   { name: '9조: 옛 "광고 목적 쿠키 미사용" 문장이 없다', ok: (t) => !/광고 목적의 추적을 위해 쿠키를 사용하지 않습니다/.test(t) },
   { name: '9조: AdSense 사용 가능성을 알린다', ok: (t) => /광고 게재를 위해 Google AdSense 를 사용할 수 있습니다/.test(article(t, '9. 쿠키')) },
@@ -132,6 +145,12 @@ const MUTANTS: Array<[string, (t: string) => string]> = [
   ['맞춤형 광고 운영 중이라고 오기', (t) => t.replace('</main>', '<p>서비스는 맞춤형 광고를 제공합니다.</p></main>')],
   ['보유기간 임의 숫자', (t) => t.replace('Google AdSense 관련 정보는 Google 의', 'Google AdSense 관련 정보는 13개월 보관하며 Google 의')],
   ['행태정보 거부 방법 칸 삭제', (t) => t.replace('거부 방법</td>', '</td>')],
+  ['Analytics·AdSense 를 Google 광고 설정으로 묶은 옛 문장 복귀', (t) => t.replace(
+    /Google Analytics 관련 쿠키 사용은[\s\S]*?관리할 수 있습니다\(9항\)\./,
+    'Google Analytics 와 Google AdSense 로의 이전은 브라우저 쿠키 설정과 Google 광고 설정으로 거부하거나 관리할 수 있습니다.')],
+  ['Analytics 를 Google 광고 설정으로 거부한다고 추가', (t) => t.replace('</main>',
+    '<p>Google Analytics 수집은 Google 광고 설정에서 거부할 수 있습니다.</p></main>')],
+  ['"완전히 차단" 보장 문구', (t) => t.replace('제한할 수\n            있습니다.', '완전히 차단할 수 있습니다.')],
 ]
 check('실제 방침은 규칙을 전부 통과한다', failures(privacy).length === 0, failures(privacy).join(', '))
 for (const [name, mutate] of MUTANTS) {
