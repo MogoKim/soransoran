@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { TOUCH_MIN } from '@/lib/spacing'
 import PageShell from '@/components/layouts/PageShell'
+import AdSlot from '@/components/ads/AdSlot'
 import PostListItem from '@/components/features/PostListItem'
 import HomeMagazineRail from '@/components/features/HomeMagazineRail'
 import HomeHero from '@/components/features/HomeHero'
@@ -162,6 +163,9 @@ export default async function HomePage() {
         ) : null}
 
         <HomeJoinCta isLoggedIn={Boolean(session?.user)} />
+
+        {/* S-MON 홈 최하단 광고 슬롯 — 기본 OFF. 켬 조건은 src/lib/ads/gate.ts 하나가 정한다. */}
+        <AdSlot slot="home-bottom" />
       </main>
     </PageShell>
   )
