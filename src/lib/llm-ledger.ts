@@ -225,6 +225,14 @@ export type LedgerEntry = {
    *    `supply-jit-v1`. 없으면 legacy — 현재 계약 비용 근거로 세지 않는다(`costAttributionOf` 가 UNKNOWN 으로 닫는다).
    */
   supplyContract?: string | null
+  /**
+   * 🔴 **실행 token shadow** (2026-10-12 Batch C1) — 이 요청을 보낸 프로세스가 공급 커널 lease 안이었고 token 이 진짜였는가.
+   *    다음 단계(C3)에서 예산 판정을 token 으로 옮기기 전에, 지금 판정(`runKind`/`runSlot`)과 어디서 갈리는지 실측하는 칸이다.
+   *    🔴 **판정은 이 칸을 읽지 않는다.** 공급 장부의 예약 · 정산 줄에만 실린다. 없으면 옛 줄이다.
+   */
+  runTokenShadow?: {
+    ok: boolean; code: string | null; tokenId: string | null; trigger: string | null; budgetWindow: string | null
+  } | null
 }
 
 /**

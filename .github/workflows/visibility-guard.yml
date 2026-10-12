@@ -689,6 +689,13 @@ jobs:
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:process-check
 
+      # 🔴 공급 러너 커널 lease · 실행 token(shadow) (2026-10-12 Batch C1). Ubuntu 에는 /usr/bin/lockf 가 없어
+      #    실제 OS 프로세스 반례는 SKIP(PASS 로 세지 않는다)이고, 여기서는 순수 판정 · 예산 판정 불변 · lockf 없음
+      #    fail-closed 만 돈다. 실제 프로세스 반례와 변이 시험(`supply:lease-mutation`)은 macOS 에서 돌린다.
+      - name: 공급 커널 lease · 실행 token shadow (예산 판정 불변 · fail-closed)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run supply:lease-check
+
       # 🔴 **backlog 전체를 판정하지 않는다** — 2026-09-20 canary 가 $0.029949 를 쓰고
       #    후보 0건으로 끝난 구조를 막는다. 순수 함수와 소스 계약만 본다
       #    (provider 0 · DB 0 · write 0 · 실측 0.15 초).

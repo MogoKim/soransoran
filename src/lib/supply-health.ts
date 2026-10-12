@@ -71,7 +71,8 @@ export type FindingCode =
   | 'PENDING_THIN'
   | 'CHECKPOINT_RUNNING'
   | 'CHECKPOINT_FAILED'
-  | 'LOCK_STALE'
+  /** 🔴 공급 커널 lease probe 를 못 했다(2026-10-12 Batch C1 — 옛 `LOCK_STALE` 은 없앴다: 커널 잠금은 죽은 채 남지 않는다) */
+  | 'LOCK_UNKNOWN'
   | 'LOCK_BUSY'
   | 'SUPPLY_STALE'
   | 'HISTORIC_RAW_NOOP'
@@ -388,7 +389,7 @@ export function rollUpSources(perSource: readonly { sourceId: string; findings: 
 export type SupplyInput = {
   /**
    * 🔴 **JIT 수요 재료** (2026-09-30 · source-slot-v1) — 공급 러너와 같은 함수(`jitCoverageOf`)의 값.
-   *    다가오는 슬롯 수(오늘 남은 + 다음 증명일 전체)와 그중 eligible READY 가 덮은 수. 못 읽었으면 `null`(모름).
+   *    다가오는 슬롯 수(가까운 수요 지평 — 오늘 남은 공개 슬롯 + 다음 첫 공개 기회 한 칸)와 그중 eligible READY 가 덮은 수. 못 읽었으면 `null`(모름).
    *    🔴 옛 입력 `usable · stockMin · stockTarget`(완성 글 재고 눈금 5/14 · capacity ×14)은 지웠다.
    */
   jit: { slots: number; readyFilled: number } | null
@@ -400,7 +401,8 @@ export type SupplyInput = {
   historicRawNoop: number
   runningCheckpoints: number
   failedCheckpoints: number
-  lock: 'free' | 'busy' | 'stale'
+  /** 🔴 커널 lease probe — `unknown` 은 probe 를 못 한 것(모르는 것을 free 로 읽지 않는다) */
+  lock: 'free' | 'busy' | 'unknown'
   lastSupplyOkAt: Date | null
   now: Date
   /** 마지막 성공이 이보다 오래되면 경고 */
@@ -431,8 +433,8 @@ export function judgeSupply(input: SupplyInput): Finding[] {
     out.push(f('WARNING', 'CHECKPOINT_RUNNING',
       `미완료 회차 ${input.runningCheckpoints}건 — 다음 회차가 이어받는다`))
   }
-  if (input.lock === 'stale') {
-    out.push(f('WARNING', 'LOCK_STALE', '죽은 lock 이 남아 있다 — 다음 live 회차가 걷어낸다'))
+  if (input.lock === 'unknown') {
+    out.push(f('WARNING', 'LOCK_UNKNOWN', '공급 커널 lease 를 확인하지 못했다(lockf probe 불가) — 지금 회차가 도는지 모른다'))
   } else if (input.lock === 'busy') {
     out.push(f('INFO', 'LOCK_BUSY', '지금 공급 회차가 도는 중이다'))
   }

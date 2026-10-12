@@ -22,6 +22,8 @@ import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { markedStageEnv } from './lib/stage-decision-fixture'
+/** 🔴 Linux 에는 `/usr/bin/lockf` 가 없다 — 공급 러너 live 회차의 커널 lease 를 flock 대역으로 연다(2026-10-12 Batch C1) */
+import { fakeLockfEnv } from './lib/fake-lockf.mjs'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -232,7 +234,7 @@ function runSupply(at: Date, extra: Record<string, string> = {}): { code: number
   const r = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T, 'scripts', 'supply-process.mts'), '--live'], {
     cwd: T, encoding: 'utf-8', timeout: 900_000,
     env: {
-      ...baseEnv(), ...fakeKeys, SORAN_RUN_AT: iso(at), SORAN_SUPPLY_PROCESS_ENABLED: 'true',
+      ...baseEnv(), ...fakeKeys, ...fakeLockfEnv(HM), SORAN_RUN_AT: iso(at), SORAN_SUPPLY_PROCESS_ENABLED: 'true',
       SORAN_LLM_DAILY_BUDGET_USD: '1000', SORAN_LLM_RESERVE_HEADROOM: '1.5', SORAN_LLM_RUN_REQUEST_CAP: '20',
       FAKE_PROVIDER_JUDGE_DECISION: 'AUTO_SEED', FAKE_PROVIDER_VARY_TITLE: '1',
       NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,

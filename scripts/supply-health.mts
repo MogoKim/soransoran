@@ -31,11 +31,11 @@ import {
   PUBLISH_GRACE_MS, type Finding, type HealthReport, type LogFacts,
 } from '../src/lib/supply-health'
 import { readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
-import { LOCK_FILE, LOCK_TTL_MS, RUN_FILE_RE, adaptKeyOf } from '../src/lib/supply-process'
+import { RUN_FILE_RE, adaptKeyOf } from '../src/lib/supply-process'
 // 🔴 완료 판정은 러너·어댑터와 **같은 함수**를 쓴다. 여기서 정규식을 다시 쓰지 않는다
 import { completedAdaptKeys } from '../src/lib/micro-seed-82cook-thin-adapt'
-/** 🔴 잠금 판정 정본 하나 — 관제도 러너와 같은 함수로 본다 */
-import { lockAnomaly as processLockAnomaly } from './lib/collect-lock.mjs'
+/** 🔴 공급 잠금 판정 정본 하나 — 관제도 러너와 같은 커널 lease probe 로 본다(2026-10-12 Batch C1) */
+import { probeSupplyLease } from './lib/supply-lease.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { describeScale } from '../src/lib/scale-runtime'
 import { minuteOfDay, slotLabel } from '../src/lib/scale-profile'
@@ -264,16 +264,13 @@ function checkpoints(): CheckpointSummary {
 }
 
 /**
- * 🔴 **관제가 보는 잠금.** 판정 정본은 러너와 같은 `collect-lock` 하나다.
- *
- *    처리기는 죽은 잠금을 **자동으로 회수하지 않는다**(뺏으면 두 회차가 같이 들어간다).
- *    그래서 남은 잠금은 조용히 풀리지 않고, 관제가 내지 않으면 공급이 멈춘 채로 남는다 —
- *    `stale` 은 **사람이 봐야 할 운영 이상**이다.
+ * 🔴 **관제가 보는 잠금 — 파일이 아니라 커널 잠금이다** (2026-10-12 Batch C1).
+ *    공급 잠금은 커널 lease 라 holder 가 죽으면 커널이 푼다 — "죽은 잠금" 이 남지 않는다.
+ *    그래서 판정은 셋뿐이다: 지금 holder 가 있다(`busy`) · 없다(`free`) · probe 를 못 한다(`unknown` — lockf 없음 등).
+ *    🔴 모르는 것을 free 로 적지 않는다. 잠금 파일이 남아 있다는 사실은 잠금이 아니다.
  */
-function lockState(now: Date): 'free' | 'busy' | 'stale' {
-  const p = join(DATA_DIR, LOCK_FILE)
-  if (!existsSync(p)) return 'free'
-  return processLockAnomaly(p, now.getTime(), LOCK_TTL_MS) !== null ? 'stale' : 'busy'
+function lockState(): 'free' | 'busy' | 'unknown' {
+  return probeSupplyLease(process.env)
 }
 
 type QueueRow = {
@@ -482,7 +479,7 @@ async function main(): Promise<void> {
     jit, human: stock.human, machine: stock.machine, legacyExcluded,
     pendingThin: pendingThinCount(), historicRawNoop: historicRawNoop(),
     runningCheckpoints: cp.running, failedCheckpoints: cp.failed,
-    lock: lockState(now), lastSupplyOkAt: cp.lastOkAt, now, staleAfterMs: SUPPLY_STALE_MS,
+    lock: lockState(), lastSupplyOkAt: cp.lastOkAt, now, staleAfterMs: SUPPLY_STALE_MS,
   })
   const publish = judgePublish({
     todayCount, dailyCap: RELEASE_DAILY_CAP,
@@ -644,7 +641,7 @@ async function main(): Promise<void> {
 
   console.log('\n③-b 다가오는 슬롯 (JIT — 공급 러너와 같은 함수)')
   console.log(`   다음 예약     ${kstStamp(startAt)}`)
-  console.log(`   다가오는 슬롯 ${jit.slots}개 (오늘 남은 + 다음 증명일 전체) · eligible READY 가 덮은 슬롯 ${jit.readyFilled}개`)
+  console.log(`   다가오는 슬롯 ${jit.slots}개 (오늘 남은 공개 슬롯 + 다음 첫 공개 기회 한 칸) · eligible READY 가 덮은 슬롯 ${jit.readyFilled}개`)
   console.log(`   생성 수요     ${Math.max(0, jit.slots - jit.readyFilled)}건 — 🔴 완성 글 재고 목표(700 · ×14)는 없다`)
   for (const line of describeStockClassification(view.classification)) console.log(`   ${line}`)
 
