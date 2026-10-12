@@ -1,0 +1,31 @@
+{
+  "id": "dpl_FixtureLive000000000000000A",
+  "name": "soransoran",
+  "type": "LAMBDAS",
+  "source": "git",
+  "target": "production",
+  "readyState": "READY",
+  "readySubstate": "PROMOTED",
+  "status": "READY",
+  "aliasAssigned": true,
+  "url": "soransoran-fixture000-soransoran.vercel.app",
+  "createdAt": 1791824416946,
+  "ready": 1791824481517,
+  "aliasAssignedAt": 1791824481778,
+  "alias": [
+    "soransoran.com",
+    "www.soransoran.com"
+  ],
+  "gitSource": {
+    "type": "github",
+    "sha": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+    "ref": "main",
+    "repoId": 0,
+    "prId": null
+  },
+  "meta": {
+    "githubCommitSha": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+    "githubCommitRef": "main",
+    "githubDeployment": "1"
+  }
+}

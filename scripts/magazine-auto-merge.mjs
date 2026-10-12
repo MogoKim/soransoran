@@ -34,6 +34,7 @@ import { DRAFTS_DIR, parseArticlesSource, parseQueueSource } from './lib/magazin
 import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, PR_FIELDS_ARG, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock } from './lib/magazine-auto-lock.mjs'
+import { collectProductionDeployment, resolveVercelContext, verifyVercelDirect } from './lib/magazine-deploy-evidence.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -325,6 +326,11 @@ export async function runAutoMerge({ apply = false, deps }) {
     outcome: deploy.outcome,
     state: deploy.deployment?.state ?? null,
     deploymentId: deploy.deployment?.deploymentId ?? null,
+    // 🔴 어느 증거원으로 무엇을 확인했나 — 'github-deployments' | 'vercel-direct' | null (2026-10-13 #701)
+    evidenceSource: deploy.deployment?.evidenceSource ?? null,
+    verifiedSha: deploy.deployment?.found ? deploy.deployment.sha ?? null : null,
+    githubMiss: deploy.deployment?.githubMiss ?? null,
+    fallback: deploy.deployment?.fallback ?? null,
     live: deploy.live,
     waitedMs: deploy.waitedMs,
     checked: dv.checked,
@@ -434,7 +440,7 @@ async function observeDeploy({ sha, deps, now, sleep, log }) {
     if (served || dead || waitedMs >= DEPLOY_OBSERVE_MS) {
       return { deployment, live, waitedMs, outcome: served ? 'SERVED' : dead ? 'FAILED' : 'TIMEOUT' }
     }
-    const note = `${deployment.found ? deployment.state : '배포 없음'} · 도메인 ${live ?? '읽지 못함'}`
+    const note = `${deployment.found ? `${deployment.state} (${deployment.evidenceSource ?? '증거원 없음'})` : `배포 없음${deployment.fallback ? ` · Vercel 직접 ${deployment.fallback.code}` : ''}`} · 도메인 ${live ?? '읽지 못함'}`
     if (note !== last) { log(`배포 관찰: ${note}`); last = note }
     await sleep(DEPLOY_POLL_MS)
   }
@@ -604,8 +610,8 @@ export async function runWatch({ deps }) {
 
 const line = (m) => console.log(`[${stamp()}] ${m}`)
 
-const exec = (cmd, args) => {
-  const r = spawnSync(cmd, [...args], { cwd: ROOT, encoding: 'utf8' })
+const exec = (cmd, args, { timeoutMs } = {}) => {
+  const r = spawnSync(cmd, [...args], { cwd: ROOT, encoding: 'utf8', ...(timeoutMs ? { timeout: timeoutMs } : {}) })
   if (r.error) return { code: 1, out: '', err: String(r.error.message ?? r.error) }
   return { code: r.status ?? 1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() }
 }
@@ -619,7 +625,32 @@ const exec = (cmd, args) => {
  *    풍부한 객체를 돌려주는 바람에 `headRefName` 누락을 아무도 못 봤다.
  *    이제 가짜 `exec` 로 **명령 인자와 응답 파싱까지** 시험한다.
  */
-export function makeRealDeps(exec, { log: logFn = line } = {}) {
+export function makeRealDeps(exec, { log: logFn = line, vercelContext = () => resolveVercelContext() } = {}) {
+  /**
+   * GitHub Deployments 1차 증거 — 🔴 커밋 합산 status 를 쓰지 않는다. 그것은 CI 다 — 검사가 초록이면
+   *    운영 도메인이 옛 빌드여도 success 가 된다.
+   *    GitHub **Deployments API** 로 그 SHA 의 Production 배포와 상태를 읽고,
+   *    Vercel status 의 target_url 에서 배포 id 를 뽑는다.
+   *    (둘 다 이미 쓰고 있는 `gh` 읽기 권한이다 — 새 토큰도 과금도 없다)
+   */
+  const githubDeployment = (sha) => {
+    const miss = { found: false, state: null, sha: null, deploymentId: null }
+    if (!sha) return miss
+    const d = exec('gh', ['api', `repos/{owner}/{repo}/deployments?sha=${sha}&environment=Production&per_page=1`])
+    if (d.code !== 0) return miss
+    let dep
+    try { dep = JSON.parse(d.out || '[]')[0] } catch { return miss }
+    if (!dep) return miss
+
+    const st = exec('gh', ['api', `repos/{owner}/{repo}/deployments/${dep.id}/statuses?per_page=1`, '--jq', '.[0].state'])
+    const state = st.code === 0 ? st.out.trim() || null : null
+
+    // 배포 id — Vercel 커밋 status 의 target_url 끝 조각이 그것이다
+    const v = exec('gh', ['api', `repos/{owner}/{repo}/commits/${sha}/status`, '--jq', '.statuses[] | select(.context == "Vercel") | .target_url'])
+    const url = v.code === 0 ? v.out.trim().split('\n')[0] : ''
+    const tail = (url.match(/\/([A-Za-z0-9]{20,})\s*$/) ?? [, null])[1]
+    return { found: true, state, sha: dep.sha ?? null, deploymentId: tail ? `dpl_${tail}` : null }
+  }
   return {
   log: logFn,
   fetchMain: () => exec('git', ['fetch', 'origin', 'main']).code === 0,
@@ -674,30 +705,15 @@ export function makeRealDeps(exec, { log: logFn = line } = {}) {
     return { ok: true, mergeCommit: after.code === 0 ? after.out.trim() : null }
   },
   /**
-   * 🔴 **커밋 합산 status 를 쓰지 않는다.** 그것은 CI 다 — 검사가 초록이면
-   *    운영 도메인이 옛 빌드여도 success 가 된다.
-   *    GitHub **Deployments API** 로 그 SHA 의 Production 배포와 상태를 읽고,
-   *    Vercel status 의 target_url 에서 배포 id 를 뽑는다.
-   *    (둘 다 이미 쓰고 있는 `gh` 읽기 권한이다 — 새 토큰도 과금도 없다)
+   * Production 배포 증거 — GitHub 1차 → (없거나 불완전할 때만) Vercel 직접 (2026-10-13 #701).
+   * 🔴 GitHub 증거가 완전하면 Vercel 호출 0. Vercel 은 도메인이 가리키는 배포만 본다 (최신 배포 아님 · HTTP 아님).
+   * 🔴 판정(judgeDeploy)은 그대로다 — 여기서 고친 것은 증거를 모으는 쪽뿐이다.
    */
-  getProductionDeployment: (sha) => {
-    const miss = { found: false, state: null, sha: null, deploymentId: null }
-    if (!sha) return miss
-    const d = exec('gh', ['api', `repos/{owner}/{repo}/deployments?sha=${sha}&environment=Production&per_page=1`])
-    if (d.code !== 0) return miss
-    let dep
-    try { dep = JSON.parse(d.out || '[]')[0] } catch { return miss }
-    if (!dep) return miss
-
-    const st = exec('gh', ['api', `repos/{owner}/{repo}/deployments/${dep.id}/statuses?per_page=1`, '--jq', '.[0].state'])
-    const state = st.code === 0 ? st.out.trim() || null : null
-
-    // 배포 id — Vercel 커밋 status 의 target_url 끝 조각이 그것이다
-    const v = exec('gh', ['api', `repos/{owner}/{repo}/commits/${sha}/status`, '--jq', '.statuses[] | select(.context == "Vercel") | .target_url'])
-    const url = v.code === 0 ? v.out.trim().split('\n')[0] : ''
-    const tail = (url.match(/\/([A-Za-z0-9]{20,})\s*$/) ?? [, null])[1]
-    return { found: true, state, sha: dep.sha ?? null, deploymentId: tail ? `dpl_${tail}` : null }
-  },
+  getProductionDeployment: (sha) => collectProductionDeployment({
+    sha,
+    github: githubDeployment,
+    vercelDirect: (s) => verifyVercelDirect({ sha: s, exec, context: vercelContext() }),
+  }),
 
   /**
    * 🔴 **운영 도메인이 지금 서빙 중인 배포.** 추측하지 않고 표식을 읽는다 —

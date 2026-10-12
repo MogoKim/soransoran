@@ -22,6 +22,7 @@ const F = {
   gate: path.join(HERE, 'lib', 'magazine-merge-gate.mjs'),
   install: path.join(HERE, 'magazine-launchd-install.mts'),
   lock: path.join(HERE, 'lib', 'magazine-auto-lock.mjs'),
+  evidence: path.join(HERE, 'lib', 'magazine-deploy-evidence.mjs'),
 }
 const CHECKS = [
   ['복구 검사', process.execPath, [path.join(HERE, 'magazine-auto-merge-recovery-check.mjs')]],
@@ -72,6 +73,28 @@ const MUTATIONS = [
     find: "  const file = join(dir, `auto-merge-recovery-${hms}-${process.pid}-${randomUUID().slice(0, 8)}.json`)",
     replace: "  const file = join(dir, 'auto-merge-recovery.json'); void hms; void randomUUID" },
     { file: F.merge, find: "{ encoding: 'utf8', flag: 'wx' })", replace: "{ encoding: 'utf8', flag: 'w' })" }] },
+  // ── 배포 증거 — GitHub 1차 · 불완전할 때만 Vercel 직접 (2026-10-13 #701) ──
+  { name: 'Vercel 직접 확인 fallback 전체 제거', edits: [{ file: F.evidence,
+    find: '  const v = vercelDirect(sha)\n', replace: "  const v = { ok: false, code: 'FALLBACK_REMOVED', why: '' }\n" }] },
+  { name: 'Vercel 배포 SHA 일치 검사 제거', edits: [{ file: F.evidence,
+    find: "  if (json.gitSource?.sha !== sha) return { code: 'VERCEL_SHA_MISMATCH',", replace: "  if (false) return { code: 'VERCEL_SHA_MISMATCH'," }] },
+  { name: 'Vercel production target 검사 제거', edits: [{ file: F.evidence,
+    find: "  if (json.target !== 'production') return", replace: '  if (false) return' }] },
+  { name: 'Vercel READY 검사 제거', edits: [{ file: F.evidence,
+    find: "  if (json.readyState !== 'READY') return", replace: '  if (false) return' }] },
+  { name: '도메인 deployment id 와 API id 일치 검사 제거', edits: [{ file: F.evidence,
+    find: '  if (json.id !== liveId) return', replace: '  if (false) return' }] },
+  { name: 'GitHub 증거가 완전한데도 Vercel fallback 호출', edits: [{ file: F.evidence,
+    find: '  const gh = github(sha) ?? MISS\n', replace: '  const gh = github(sha) ?? MISS\n  vercelDirect(sha)\n' }] },
+  { name: 'HTTP 200 + 도메인 표식만으로 배포 성공 처리', edits: [{ file: F.merge,
+    find: '    vercelDirect: (s) => verifyVercelDirect({ sha: s, exec, context: vercelContext() }),',
+    replace: "    vercelDirect: (s) => (exec('curl', ['-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '25', SITE]).out.trim() === '200'\n" +
+      "      ? { ok: true, deployment: { found: true, state: 'success', sha: s, deploymentId: (exec('curl', ['-s', '-L', '--max-time', '25', SITE]).out.match(/dpl_[A-Za-z0-9]+/) ?? [null])[0], evidenceSource: 'vercel-direct' } }\n" +
+      '      : verifyVercelDirect({ sha: s, exec, context: vercelContext() })),' }] },
+  { name: '도메인 배포 대신 최신 Production 배포를 무조건 성공 처리', edits: [{ file: F.evidence,
+    find: '  const liveId = parseInspectId(`${ins.out}\\n${ins.err}`)\n',
+    replace: "  const latest = exec(bin, ['api', '/v6/deployments?target=production&limit=1', '--cwd', projectDir], opts)\n" +
+      '  const liveId = (() => { try { return JSON.parse(latest.out).deployments[0].uid } catch { return null } })()\n' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')

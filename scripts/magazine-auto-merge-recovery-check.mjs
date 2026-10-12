@@ -266,5 +266,181 @@ console.log('\n⑤ 배선 — 11:00 watch 는 merge 하지 않는다 · 복구 �
   check('⑤ 병합기는 원고·등록·재생성을 부르지 않는다 (재전송·재생성·재등록 0)', !/magazine-webui-runner|magazine-auto-register\b|magazine-regen|attemptRegeneration/.test(src))
 }
 
+// ── ⑥ 배포 증거 — GitHub 1차 · 불완전할 때만 Vercel 직접 (2026-10-13 #701) ─────
+console.log('\n⑥ 배포 증거 — GitHub Deployments 가 비어도 도메인이 서빙하는 exact SHA·production·READY 배포면 SERVED')
+{
+  const EV = await import('./lib/magazine-deploy-evidence.mjs')
+  const FX = path.join(HERE, 'fixtures', 'magazine-deploy-evidence')
+  // 🔴 10/13 실제 응답 모양 (비식별) — inspect 는 전부 stderr · API 는 /v13 원문
+  const INSPECT_ERR = fs.readFileSync(path.join(FX, 'vercel-inspect-domain.stderr.txt'), 'utf8')
+  const API = JSON.parse(fs.readFileSync(path.join(FX, 'vercel-api-deployment.json'), 'utf8'))
+  const GH_EMPTY = fs.readFileSync(path.join(FX, 'github-deployments-empty.json'), 'utf8').trim()
+  const GH_STATUS_EMPTY = JSON.parse(fs.readFileSync(path.join(FX, 'github-commit-status-empty.json'), 'utf8'))
+  const ID = API.id
+  const SHA = API.gitSource.sha
+  const VBIN = '/fx/vercel'
+  const CTX = { ok: true, value: { bin: VBIN, projectDir: '/fx/project' } }
+  const OLD_ID = 'dpl_FixtureOld0000000000000000B'
+  const NEWEST_ID = 'dpl_FixtureNewest00000000000C'
+  const withApi = (patch) => ({ ...API, ...patch, gitSource: { ...API.gitSource, ...(patch.gitSource ?? {}) } })
+
+  /**
+   * 가짜 gh·vercel·curl — 🔴 실제 네트워크 0. `gh` 는 Deployments 모드, vercel 은 inspect·api, curl 은 도메인 HTML·상태.
+   * gh: 'ok' 완전 · 'empty' 빈 배열(10/13) · 'no-id' 배포는 있으나 Vercel status 없음 · 'pending' 준비 중 · 'fail' gh 실패
+   */
+  const world = ({ gh = 'empty', inspect = { code: 0, out: '', err: INSPECT_ERR }, api = () => ({ code: 0, out: JSON.stringify(API), err: '' }),
+    html = `<img src="/_next/image?url=x&dpl=${ID}">`, siteHttp = 200, slugHttp = 404, newest = null } = {}) => {
+    const calls = []
+    const exec = (cmd, args, opts) => {
+      calls.push({ cmd, args: [...args], opts })
+      const a = args.join(' ')
+      if (cmd === 'gh') {
+        if (gh === 'fail') return { code: 1, out: '', err: 'gh: network' }
+        if (a.includes('/deployments?sha=')) return { code: 0, out: gh === 'empty' ? GH_EMPTY : JSON.stringify([{ id: 77, sha: SHA, environment: 'Production' }]), err: '' }
+        if (a.includes('/deployments/77/statuses')) return { code: 0, out: gh === 'pending' ? 'pending' : 'success', err: '' }
+        if (a.includes(`/commits/${SHA}/status`)) {
+          const statuses = gh === 'ok' || gh === 'pending' ? [{ context: 'Vercel', target_url: `https://vercel.com/soransoran/soransoran/${ID.slice(4)}` }] : GH_STATUS_EMPTY.statuses
+          return { code: 0, out: statuses.map((s) => s.target_url).join('\n'), err: '' }
+        }
+        return { code: 1, out: '', err: `unexpected gh ${a}` }
+      }
+      if (cmd === VBIN) {
+        if (args[0] === 'inspect') return typeof inspect === 'function' ? inspect(args) : inspect
+        if (args[0] === 'api' && args[1].startsWith('/v6/deployments')) return { code: 0, out: JSON.stringify({ deployments: newest ? [{ uid: newest.id }] : [] }), err: '' }
+        if (args[0] === 'api' && newest && args[1] === `/v13/deployments/${newest.id}`) return { code: 0, out: JSON.stringify(newest), err: '' }
+        if (args[0] === 'api') return api(args)
+        return { code: 1, out: '', err: 'unexpected vercel' }
+      }
+      if (cmd === 'curl') {
+        const url = args[args.length - 1]
+        if (args.includes('-w')) return { code: 0, out: String(url.includes('/magazine/') ? slugHttp : siteHttp), err: '' }
+        return { code: 0, out: html, err: '' }
+      }
+      return { code: 127, out: '', err: `unexpected ${cmd}` }
+    }
+    const real = AM.makeRealDeps(exec, { log: () => {}, vercelContext: () => CTX })
+    return { calls, exec, real, vcalls: () => calls.filter((c) => c.cmd === VBIN) }
+  }
+  /** 전체 복구 흐름 — merge 는 가짜, 배포·도메인·HTTP 는 실제 실행기 + 가짜 exec */
+  const flow = async (w) => {
+    const d = deps({ startAt: Date.parse('2026-10-13T02:00:00+09:00'), over: {
+      mergePr: (n, s) => { d.calls.push(`merge:${n}:${s.slice(0, 4)}`); return { ok: true, mergeCommit: SHA } },
+      getProductionDeployment: w.real.getProductionDeployment, liveDeploymentId: w.real.liveDeploymentId, httpStatus: w.real.httpStatus } })
+    return AM.runRecovery({ deps: d, initial: null, acquire: freeLock })
+  }
+
+  // ── 수준 1 — 증거 수집 단위 ──
+  const unit = (w) => w.real.getProductionDeployment(SHA)
+  {
+    const w = world({ gh: 'ok' })
+    const r = unit(w)
+    check('⑥ GitHub 배포 존재 + 성공 → github-deployments · Vercel 호출 0', r.found && r.state === 'success' && r.deploymentId === ID && r.evidenceSource === 'github-deployments' && w.vcalls().length === 0, `${JSON.stringify(r)} · vercel ${w.vcalls().length}`)
+  }
+  {
+    const w = world()
+    const r = unit(w)
+    const vc = w.vcalls()
+    check('⑥ 10/13 재현 — GitHub 빈 배열 + 도메인 배포 exact SHA·production·READY·id 일치 → vercel-direct 성공',
+      r.found && r.state === 'success' && r.sha === SHA && r.deploymentId === ID && r.evidenceSource === 'vercel-direct' && r.githubMiss === 'NOT_FOUND', JSON.stringify(r))
+    check('⑥ Vercel 확인 순서 — inspect soransoran.com → api /v13/deployments/<inspect id> · --cwd 연결 프로젝트 · 시간 상한',
+      vc.length === 2 && vc[0].args.join(' ') === 'inspect soransoran.com --cwd /fx/project' && vc[1].args.join(' ') === `api /v13/deployments/${ID} --cwd /fx/project`
+      && vc.every((c) => c.opts?.timeoutMs === EV.VERCEL_CALL_TIMEOUT_MS), JSON.stringify(vc.map((c) => c.args)))
+  }
+  const blocked = [
+    ['SHA 불일치', { api: () => ({ code: 0, out: JSON.stringify(withApi({ gitSource: { sha: 'e'.repeat(40) } })), err: '' }) }, 'VERCEL_SHA_MISMATCH'],
+    ['preview target', { api: () => ({ code: 0, out: JSON.stringify(withApi({ target: 'preview' })), err: '' }) }, 'VERCEL_NOT_PRODUCTION'],
+    ['target 없음 (null)', { api: () => ({ code: 0, out: JSON.stringify(withApi({ target: null })), err: '' }) }, 'VERCEL_NOT_PRODUCTION'],
+    ['readyState BUILDING', { api: () => ({ code: 0, out: JSON.stringify(withApi({ readyState: 'BUILDING' })), err: '' }) }, 'VERCEL_NOT_READY'],
+    ['readyState ERROR', { api: () => ({ code: 0, out: JSON.stringify(withApi({ readyState: 'ERROR' })), err: '' }) }, 'VERCEL_NOT_READY'],
+    ['도메인 id 와 API 응답 id 불일치', { api: () => ({ code: 0, out: JSON.stringify(withApi({ id: OLD_ID })), err: '' }) }, 'VERCEL_ID_MISMATCH'],
+    ['inspect 실패 (인증 만료)', { inspect: { code: 1, out: '', err: 'Error: The specified token is not valid' } }, 'VERCEL_INSPECT_FAILED'],
+    ['inspect 출력에 id 없음', { inspect: { code: 0, out: '', err: 'Vercel CLI 59.26.0\n  General\n    name\tsoransoran\n' } }, 'VERCEL_INSPECT_NO_ID'],
+    ['API 실패', { api: () => ({ code: 1, out: '', err: 'Error: 403 Forbidden' }) }, 'VERCEL_API_FAILED'],
+    ['API 비정상 JSON', { api: () => ({ code: 0, out: '{ "id": "dpl_', err: '' }) }, 'VERCEL_API_BAD_JSON'],
+    ['API 배열 응답', { api: () => ({ code: 0, out: '[]', err: '' }) }, 'VERCEL_API_BAD_JSON'],
+    // 🔴 최신 배포는 merge SHA·READY 지만 도메인은 아직 옛 배포 — 최신이라는 이유로 인정하지 않는다
+    ['최신 배포는 merge SHA 지만 도메인은 옛 배포', { inspect: { code: 0, out: '', err: INSPECT_ERR.replace(ID, OLD_ID) },
+      api: (args) => ({ code: 0, out: JSON.stringify(args[1].endsWith(OLD_ID) ? withApi({ id: OLD_ID, gitSource: { sha: 'e'.repeat(40) } }) : API), err: '' }),
+      newest: withApi({ id: NEWEST_ID }) }, 'VERCEL_SHA_MISMATCH'],
+  ]
+  for (const [name, opt, code] of blocked) {
+    const w = world(opt)
+    const r = unit(w)
+    check(`⑥ GitHub 빈 배열 + ${name} → 증거 없음 (${code})`, r.found === false && r.evidenceSource === null && r.fallback?.code === code, JSON.stringify(r))
+  }
+  {
+    const r = EV.verifyVercelDirect({ sha: SHA, exec: world().exec, context: { ok: false, why: 'vercel 실행 파일을 찾지 못했다' } })
+    check('⑥ Vercel 실행 맥락 없음(실행 파일·프로젝트 미확정) → 증거 없음 (VERCEL_UNAVAILABLE)', r.ok === false && r.code === 'VERCEL_UNAVAILABLE', JSON.stringify(r))
+  }
+  for (const [name, gh, miss] of [['배포는 있으나 Vercel status 없음 (id 없음)', 'no-id', 'NO_DEPLOYMENT_ID'], ['GitHub 상태 pending', 'pending', 'STATE_pending'], ['gh 조회 실패', 'fail', 'NOT_FOUND']]) {
+    const w = world({ gh })
+    const r = unit(w)
+    check(`⑥ GitHub 불완전 — ${name} + Vercel 성공 → vercel-direct`, r.found && r.evidenceSource === 'vercel-direct' && r.deploymentId === ID && r.githubMiss === miss && w.vcalls().length === 2, JSON.stringify(r))
+  }
+  {
+    const w = world({ gh: 'no-id', inspect: { code: 1, out: '', err: 'x' } })
+    const r = unit(w)
+    check('⑥ GitHub 불완전 + Vercel 실패 → GitHub 이 준 그대로 (판정은 예전과 같다)', r.found === true && r.deploymentId === null && r.evidenceSource === 'github-deployments' && r.fallback?.code === 'VERCEL_INSPECT_FAILED', JSON.stringify(r))
+  }
+
+  // ── 수준 2 — 전체 복구 흐름 (judgeDeploy 그대로) ──
+  {
+    const w = world({ gh: 'ok' })
+    const r = await flow(w)
+    check('⑥ 흐름 · GitHub 성공 → RECOVERED · evidenceSource github-deployments · Vercel 호출 0',
+      r.outcome === 'RECOVERED' && r.deploy.outcome === 'SERVED' && r.deploy.evidenceSource === 'github-deployments' && w.vcalls().length === 0, `${r.outcome} · ${JSON.stringify(r.deploy)}`)
+  }
+  {
+    const w = world()
+    const r = await flow(w)
+    check('⑥ 흐름 · 10/13 재현 — GitHub 빈 배열 + Vercel exact → SERVED · RECOVERED (MERGED_UNVERIFIED 아님)',
+      r.outcome === 'RECOVERED' && r.deploy.outcome === 'SERVED' && r.blockedBy.length === 0, `${r.outcome} · ${codes(r).join(',')}`)
+    check('⑥ 흐름 · 결과에 evidenceSource · 검증한 SHA · deployment id · GitHub 누락 사유가 남는다',
+      r.deploy.evidenceSource === 'vercel-direct' && r.deploy.verifiedSha === SHA && r.deploy.deploymentId === ID && r.deploy.live === ID && r.deploy.githubMiss === 'NOT_FOUND' && r.deploy.fallback === null, JSON.stringify(r.deploy))
+  }
+  {
+    // 🔴 HTTP 200 + 도메인 표식이 merge SHA 배포를 가리켜도, Vercel 직접 확인이 실패하면 배포 증거가 아니다
+    const w = world({ inspect: { code: 1, out: '', err: 'Error: not authorized' }, siteHttp: 200 })
+    const r = await flow(w)
+    check('⑥ 흐름 · HTTP 200 · 도메인 표식만 있고 두 증거원 모두 실패 → MERGED_UNVERIFIED · DEPLOY_NOT_FOUND · TIMEOUT',
+      r.outcome === 'MERGED_UNVERIFIED' && r.deploy.outcome === 'TIMEOUT' && codes(r).includes('DEPLOY_NOT_FOUND') && r.deploy.evidenceSource === null && r.deploy.fallback?.code === 'VERCEL_INSPECT_FAILED',
+      `${r.outcome} · ${codes(r).join(',')} · ${JSON.stringify(r.deploy)}`)
+    check('⑥ 흐름 · 두 증거원 실패도 유한하게 끝난다 (10분 상한)', r.deploy.waitedMs >= AM.DEPLOY_OBSERVE_MS && r.deploy.waitedMs < AM.DEPLOY_OBSERVE_MS + 2 * MIN, String(r.deploy.waitedMs))
+  }
+  for (const [name, opt] of [['SHA 불일치', blocked[0][1]], ['preview', blocked[1][1]], ['준비 중', blocked[3][1]], ['id 불일치', blocked[5][1]], ['최신 배포만 맞음', blocked[11][1]]]) {
+    const w = world(opt)
+    const r = await flow(w)
+    check(`⑥ 흐름 · GitHub 빈 배열 + ${name} → 병합은 됐지만 확인 실패 (RECOVERED 아님)`, r.outcome === 'MERGED_UNVERIFIED' && r.deploy.outcome !== 'SERVED', `${r.outcome} · ${codes(r).join(',')}`)
+  }
+
+  // ── 실행 파일·프로젝트 찾기 — launchd PATH 에 기대지 않는다 ──
+  const HOME = '/Users/fx'
+  const NPX = `${HOME}/.npm/_npx/67eb4586ca667318/node_modules/.bin/vercel`
+  check('⑥ 실행 파일 — HOME 기준 npx 절대 경로를 PATH 보다 먼저 (launchd PATH 에 vercel 없음)',
+    EV.resolveVercelBin(EV.defaultVercelBinCandidates({ HOME }), (p) => p === NPX).value === NPX)
+  check('⑥ 실행 파일 — 명시 경로(SORAN_MAGAZINE_VERCEL_BIN)가 가장 먼저',
+    EV.resolveVercelBin(EV.defaultVercelBinCandidates({ HOME, SORAN_MAGAZINE_VERCEL_BIN: '/opt/v' }), () => true).value === '/opt/v')
+  check('⑥ 실행 파일 — sandbox HOME(npx 없음)이면 PATH 이름으로 떨어진다 (rehearsal fixture 가 받는다)',
+    EV.resolveVercelBin(EV.defaultVercelBinCandidates({ HOME: '/tmp/sandbox/home' }), () => false).value === 'vercel')
+  check('⑥ 실행 파일 — 후보가 전부 없으면 실패 (짐작 0)', EV.resolveVercelBin(['/no/vercel', ''], () => false).ok === false)
+  const link = (m) => ({ exists: (p) => p in m, read: (p) => m[p] })
+  const two = link({ '/a/.vercel/project.json': '{"projectId":"p1","orgId":"o"}', '/b/.vercel/project.json': '{"projectId":"p1","orgId":"o"}' })
+  check('⑥ 프로젝트 — 같은 projectId 면 첫 디렉터리', EV.resolveVercelProjectDir(['/a', '/b'], two.exists, two.read).value === '/a')
+  const split = link({ '/a/.vercel/project.json': '{"projectId":"p1","orgId":"o"}', '/b/.vercel/project.json': '{"projectId":"p2","orgId":"o"}' })
+  check('⑥ 프로젝트 — projectId 가 갈리면 실패 (짐작 0)', EV.resolveVercelProjectDir(['/a', '/b'], split.exists, split.read).ok === false)
+  check('⑥ 프로젝트 — 링크 없음·깨진 링크는 실패', EV.resolveVercelProjectDir(['/a'], () => true, () => '{ 깨진').ok === false && EV.resolveVercelProjectDir([], () => false).ok === false)
+  check('⑥ 기본 프로젝트 후보 — HOME 이 없으면 후보 0 (실패로 이어진다)', EV.defaultVercelProjectDirs({}).length === 0)
+
+  // ── 배선 — 판정은 그대로 · 증거원은 GitHub 1차 ──
+  const src = fs.readFileSync(path.join(HERE, 'magazine-auto-merge.mjs'), 'utf8')
+  check('⑥ 배선 — 실제 실행기의 배포 증거는 collectProductionDeployment(GitHub 1차 → Vercel 직접) 하나로',
+    /getProductionDeployment: \(sha\) => collectProductionDeployment\(\{/.test(src) && /github: githubDeployment,/.test(src) && /verifyVercelDirect\(\{ sha: s, exec, context: vercelContext\(\) \}\)/.test(src))
+  const evSrc = fs.readFileSync(path.join(HERE, 'lib', 'magazine-deploy-evidence.mjs'), 'utf8')
+  check('⑥ 증거 수집기는 읽기만 — env·redeploy·promote·alias·DELETE 0 · HTTP 0',
+    !/'(env|redeploy|promote|alias|rollback|remove|deploy)'|-X|DELETE|curl|fetch\(/.test(evSrc), 'magazine-deploy-evidence.mjs')
+  const importsMgraph = (s) => /^import[^\n]*mgraph-|import\([^)]*mgraph-/m.test(s)
+  check('⑥ M-GRAPH 도구에 묶지 않는다 (mgraph-* import 0)', !importsMgraph(evSrc) && !importsMgraph(src))
+}
+
 finish()
 process.exitCode = fail ? 1 : 0

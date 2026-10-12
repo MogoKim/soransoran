@@ -246,8 +246,19 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
    마지막 줄이 핵심이다. 앞의 둘만 보면 "배포는 됐는데 도메인은 구버전" 을 못 본다.
    Vercel 이 `next/image` URL 에 `dpl=dpl_<id>` 를 심고, 같은 id 가 그 커밋의 Vercel
    status `target_url` 끝에 들어간다 — 두 값을 맞추면 추측 없이 알 수 있다.
-   🔴 **새 토큰도 과금도 없다.** 이미 쓰고 있는 `gh` 읽기 권한과 공개 페이지 GET 뿐이다.
    🔴 표식을 못 읽으면 `PRODUCTION_UNVERIFIED` 로 **막는다** — 모르면 통과가 아니다.
+
+   🔴 **GitHub 증거가 비면 Vercel 을 직접 본다** (2026-10-13 #701 — merge SHA 에 대해 GitHub
+   Deployments 가 빈 배열·커밋 status 0건이었다. Vercel 에는 그 SHA 의 Production READY 배포가 있었고
+   도메인이 서빙 중이었는데 결과는 `MERGED_UNVERIFIED`).
+   GitHub 증거가 완전하면(배포 · success · 같은 SHA · `dpl_` id) Vercel 호출은 0 이다.
+   없거나 불완전할 때만 `vercel inspect soransoran.com` → `vercel api /v13/deployments/<그 id>` 순서로 보고,
+   `gitSource.sha` = merge SHA · `target` = production · `readyState` = READY · 두 id 일치가 **모두** 참일
+   때만 인정한다. 최신 배포·HTTP 200 은 증거가 아니다. 결과의 `deploy.evidenceSource` 에
+   `github-deployments` / `vercel-direct` 를 남긴다. 판정 기준(위 표)은 그대로다.
+   🔴 Vercel 직접 확인은 **이미 로그인된 CLI 자격**(launchd 의 HOME)으로 읽기 두 번만 한다 —
+   새 토큰을 저장소·plist 에 두지 않는다. 실행 파일은 PATH 가 아니라 HOME 기준 npx 경로로 찾는다
+   (`scripts/lib/magazine-deploy-evidence.mjs`).
 
 🔴 **404 만이 "안 나갔다" 를 확인한 것이다.** 500·인증 리다이렉트·네트워크 실패는
    비공개 확인이 아니라 **확인 실패**다 — 즉 배포가 망가진 날 자동 병합이
