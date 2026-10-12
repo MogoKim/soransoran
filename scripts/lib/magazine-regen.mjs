@@ -137,7 +137,7 @@ export function attemptRegeneration({
     return { ok: false, code: 'LEDGER_UNREADABLE', why: read.why, regenCalls: 0 }
   }
   const entry = read.store[slug]
-  const budget = regenBudget({ entry })
+  const budget = regenBudget({ entry, slug })
   if (budget.exhausted) {
     return { ok: false, code: 'REGEN_EXHAUSTED', exhaustedBy: budget.exhaustedBy,
       why: budget.exhaustedBy === 'TOTAL'
@@ -192,7 +192,7 @@ export function attemptRegeneration({
   /** 🔴 횟수는 추측하지 않고 **최신 장부에서** 읽는다 */
   const usedNow = () => {
     const x = readQuarantine(quarantinePath)
-    return x.ok ? regenBudget({ entry: x.store[slug] }).used : budget.used
+    return x.ok ? regenBudget({ entry: x.store[slug], slug }).used : budget.used
   }
 
   /**

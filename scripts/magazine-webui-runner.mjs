@@ -616,10 +616,10 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
    *    이것은 그 전에 불필요한 probe 를 피하는 앞단 확인일 뿐이다)
    */
   const regen = packet ? { attemptId: packet.attemptId ?? null, packetHash: packetHashOf(packet) } : null
-  if (regen && regenBudget({ entry: gate.entry }).exhausted) {
+  if (regen && regenBudget({ entry: gate.entry, slug }).exhausted) {
     return { slug, status: 'failed', reason: REGEN_EXHAUSTED_REASON, stage: 'gate', sent: false,
       messageFingerprint: gate.messageFingerprint,
-      errorDetail: `재생성 ${regenBudget({ entry: gate.entry }).used}회를 이미 썼다 (한 글자도 보내지 않았다)` }
+      errorDetail: `재생성 ${regenBudget({ entry: gate.entry, slug }).used}회를 이미 썼다 (한 글자도 보내지 않았다)` }
   }
 
   if (accessFn) {

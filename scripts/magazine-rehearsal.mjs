@@ -2,7 +2,7 @@
 /**
  * 🔴 **매거진 M-AUTO rehearsal — 실제 엔트리포인트 전체를 격리된 임시 사본에서 같은 날 반복 실행한다** (2026-10-10).
  *
- *   npm run magazine:rehearsal                          시나리오 S1~S13 · S8B + S1 반복성
+ *   npm run magazine:rehearsal                          시나리오 S1~S14 · S8B · S14B + S1 반복성
  *   node scripts/magazine-rehearsal.mjs --scenario S1,S4 고른 시나리오만
  *   node scripts/magazine-rehearsal.mjs --date 2026-10-11 --keep --out <report.json>
  *
@@ -133,6 +133,56 @@ async function oneTarget(repo, date) {
   await curate({ repo, keep: [t.slug] })
   placeHero({ repo, slug: t.slug })
   return { target: t.slug }
+}
+
+/** S14·S14B 공통 — cold 1회성 복구의 운영 모양 (원고 4파일 · 큐 행 · 장부 행은 2026-10-12 운영 값의 읽기 전용 사본) */
+function coldRecoveryScenario(regenMode, { rerun = false } = {}) {
+  const slug = 'cold-weather-joint-pain'
+  return {
+    async prepare(repo) {
+      const L = await imp(repo, 'scripts/lib/magazine-load.mjs')
+      const QL = await imp(repo, 'scripts/lib/magazine-queue-lock.mjs')
+      const RQ = await imp(repo, 'scripts/fixtures/magazine-format-contract/repair-queue-rows.mjs')
+      const Q = await imp(repo, 'scripts/lib/magazine-quarantine.mjs')
+      const qPath = join(repo, 'drafts', 'magazine', 'topic-queue.ts')
+      let qsrc = readFileSync(qPath, 'utf8')
+      const old = L.parseQueueSource(qsrc).find((q) => q.slug === slug)
+      if (old) qsrc = QL.removeQueueDay(qsrc, old.day) ?? (() => { throw new Error(`sandbox 큐에서 ${slug} 행을 빼지 못했다`) })()
+      writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)
+      await curate({ repo, keep: [slug] })
+      const fx = (n) => readFileSync(join(repo, 'scripts', 'fixtures', 'magazine-format-contract', n), 'utf8')
+      const files = { 'brief.md': fx('cold-weather-joint-pain.recovery-2026-10-12.brief.md'), 'review.ts': fx('cold-weather-joint-pain.recovery-2026-10-12.review.ts.txt'),
+        'draft.md': fx('cold-weather-joint-pain.regen-source-2026-10-12.draft.md'), 'article-draft.ts': fx('cold-weather-joint-pain.recovery-2026-10-12.article-draft.ts.txt') }
+      writeSlugFiles({ repo, slug, files })
+      placeHero({ repo, slug })
+      const h = (t) => createHash('sha256').update(t).digest('hex')
+      const shas = { briefSha256: h(files['brief.md']), reviewSha256: h(files['review.ts']), draftSha256: h(files['draft.md']), articleSha256: h(files['article-draft.ts']) }
+      const id = Q.ONE_TIME_RECOVERIES[0].identity
+      return { target: slug, shas, identityOk: Object.entries(shas).every(([k, v]) => id[k] === v), untrack: [`drafts/magazine/${slug}`] }
+    },
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:regen`]: [regenMode, regenMode] } }),
+    async afterBuild(sb, p) {
+      // 🔴 2026-10-12 운영 장부 cold 행 그대로 (읽기 전용 조회값) — 시험이 복구 계보를 만들지 않는다
+      const store = { [p.target]: { attempts: 2, lastAt: 1791734502311, fingerprint: 'sha256:dce6d087af6def7be9ee45c59fbff539', kind: 'CONTENT', sent: false,
+        reasons: ['QA_FAIL: magazine QA FAIL — REGEN_EXHAUSTED: 🔴 등록 전 전체 재생성 4회를 이미 썼다 (상한 4) — 이 글만 HOLD'],
+        regenCalls: 4, lastRegenAt: 1791734462875, lastPacketHash: '04f202aaa72705b3',
+        regenAttemptIds: ['deca3155-ef16-46a3-bfec-a98ba39cdd38', '2b6af026-9829-4a0a-8bb0-c2128ad700b2', '961dc04a-c099-46b5-9fab-5cbfa8aee2a7', '6f3d381f-447e-471b-ad83-0e8dabdc1187'],
+        inputRepairCalls: 1, inputRepairFingerprints: ['sha256:c5e87b4c60fdbce6e767f456c8935f1b0db6992b055e9aa37ee0601f1c40713f'], lastInputRepairAt: 1791645017805,
+        regenLineage: { id: 'b542d44b-b6d2-4b8b-8a9b-e96f21768c23', origin: 'INPUT_REPAIR', evidenceKey: 'INPUT_REPAIR:c5e87b4c60fdbce6e767f456c8935f1b0db6992b055e9aa37ee0601f1c40713f', openedAt: 1791734413421, calls: 2,
+          attemptIds: ['961dc04a-c099-46b5-9fab-5cbfa8aee2a7', '6f3d381f-447e-471b-ad83-0e8dabdc1187'] },
+        regenLineageKeys: ['INPUT_REPAIR:c5e87b4c60fdbce6e767f456c8935f1b0db6992b055e9aa37ee0601f1c40713f'] } }
+      mkdirSync(dirname(ledgerPath(sb)), { recursive: true })
+      writeFileSync(ledgerPath(sb), `${JSON.stringify(store, null, 2)}\n`)
+      return {}
+    },
+    async run(ctx) {
+      await normalDay(ctx)
+      if (rerun) {
+        ctx.stages.push(runStage(ctx.sb, { name: 'rerun-register', entry: 'register', kst: KST(ctx.date, '03:30') }))
+        ctx.rerunResult = readJson(runFile(ctx.sb, ctx.date, /^auto-register\.json$/)[0] ?? '')
+      }
+    },
+  }
 }
 
 export const SCENARIOS = {
@@ -689,6 +739,43 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
         exp('S13 재생성 요청에 두 위반이 모두 실렸다 — description 줄 · 길이 목표("최소 N자를 줄인다") · 같은 계산법', typed.length >= 1 && /description 57자 — 허용 60~160자 밖/.test(typed[0]) && /최소 \d+자를 줄인다/.test(typed[0]) && typed[0].includes('공백·줄바꿈 포함'), (typed[0] ?? '').split('\n').filter((l) => /QA_FAIL|BODY_LENGTH/.test(l)).slice(0, 4)),
         exp('S13 재생성 1회로 QA 통과 (같은 실패 반복 0) · 일반 요청 0', ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0 && (row?.regenHistory ?? []).length === 1, { bySlug: ev.sends.bySlug, history: row?.regenHistory }),
         exp('S13 등록 1 · PR MERGED · 배포 · 장부 행 정리', ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
+      ]
+    },
+  },
+
+  S14: {
+    title: 'cold 1회성 복구 — 10/12 운영 후 상태(attempts 2 · regenCalls 4 · 7일 격리) 그대로 · 원고 4파일 신원 일치 → 복구 개방 → #693 새 패킷(description · 길이 목표)으로 재생성 1회 → QA·등록·PR·병합·배포',
+    ...coldRecoveryScenario('obedient'),
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
+      const typed = ev.regenTyped.filter((r) => r.slug === t).map((r) => r.typed)
+      const rec = ctx.registerResult?.oneTimeRecoveries ?? []
+      return [
+        exp('S14 준비 — 운영 행·원고 4파일 신원 그대로 (attempts 2 · regenCalls 4 · 계보 b542d44b · 4 SHA 일치)', ctx.prepared.identityOk, ctx.prepared.shas),
+        exp('S14 1회성 복구 OPENED (정확한 사건)', rec.some((r) => r.slug === t && r.status === 'OPENED'), rec),
+        exp('S14 재생성 요청 1 — description 57자 위반 · 길이 목표(최소 N자 줄인다) · 계산 기준 모두 실렸다', typed.length === 1 && /description 57자 — 허용 60~160자 밖/.test(typed[0]) && /최소 \d+자를 줄인다/.test(typed[0]) && typed[0].includes('공백·줄바꿈 포함'),
+          (typed[0] ?? '').split('\n').filter((l) => /QA_FAIL|BODY_LENGTH/.test(l)).slice(0, 4)),
+        exp('S14 provider 재생성 정확히 1 · 일반 요청 0 · 재생성 1회(APPLIED)로 QA 통과 · 판정 DONE', ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0 && (row?.regenHistory ?? []).length === 1 &&
+          row.regenHistory[0].outcome === 'APPLIED' && row?.verdict === 'DONE', { bySlug: ev.sends.bySlug, verdict: row?.verdict, history: row?.regenHistory }),
+        exp('S14 등록 1 · PR MERGED · 배포 · 장부 행 정리', ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
+      ]
+    },
+  },
+
+  S14B: {
+    title: 'cold 1회성 복구 — 후보가 다시 QA 실패 → 복구 1회만 쓰고 원본 draft·article 바이트 그대로 · 같은 날 재실행 provider 추가 0',
+    ...coldRecoveryScenario('cold-shape', { rerun: true }),
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const led = ev.ledger?.[t] ?? null
+      const SD = join(ctx.sb.repo, 'drafts', 'magazine', t)
+      const shaOf = (f) => (existsSync(join(SD, f)) ? createHash('sha256').update(readFileSync(join(SD, f))).digest('hex') : null)
+      return [
+        exp('S14B 복구 OPENED → 재생성 provider 정확히 1 (재실행 포함) · 일반 요청 0', ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0, ev.sends.bySlug),
+        exp('🔴 S14B 후보 QA 실패 → 원본 draft.md · article-draft.ts 바이트 그대로', shaOf('draft.md') === ctx.prepared.shas.draftSha256 && shaOf('article-draft.ts') === ctx.prepared.shas.articleSha256, { draft: shaOf('draft.md'), article: shaOf('article-draft.ts') }),
+        exp('S14B 장부 — regenCalls 5 · 복구 계보 calls 1 · 다시 열리지 않음 · 등록 0', led?.regenCalls === 5 && led?.regenLineage?.origin === 'ONE_TIME_RECOVERY' && led.regenLineage.calls === 1 && ev.registered.length === 0 &&
+          (ctx.rerunResult?.oneTimeRecoveries ?? []).every((r) => r.status !== 'OPENED'), { led: led && { regenCalls: led.regenCalls, lineage: led.regenLineage }, rerun: ctx.rerunResult?.oneTimeRecoveries }),
       ]
     },
   },

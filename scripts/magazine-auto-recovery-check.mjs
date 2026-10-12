@@ -545,5 +545,150 @@ console.log('\nI QA 재생성 패킷 — 꼬리 3줄에 빠진 FAIL 줄 · 길�
   check('I 수정 후 계약 — description 이 60자 이상 · description 밖 원고가 목표(632자) 이상 줄었다', [...descOf(after)].length >= 60 && noDesc(draft).length - noDesc(after).length >= 632, { desc: [...descOf(after)].length, cut: noDesc(draft).length - noDesc(after).length })
 }
 
+// ── J 1회성 복구 — 정확한 한 사건 (2026-10-12 cold) ────────────────────
+console.log('\nJ 1회성 복구 — 신원이 전부 맞을 때만 · 장부 잠금 안에서 한 번 · 재생성 1회 · 전역 상한 불변')
+{
+  const FXD = path.join(HERE, 'fixtures', 'magazine-format-contract')
+  const COLD = 'cold-weather-joint-pain'
+  const [REC] = Q.ONE_TIME_RECOVERIES
+  const files = {
+    'brief.md': fs.readFileSync(path.join(FXD, 'cold-weather-joint-pain.recovery-2026-10-12.brief.md'), 'utf8'),
+    'review.ts': fs.readFileSync(path.join(FXD, 'cold-weather-joint-pain.recovery-2026-10-12.review.ts.txt'), 'utf8'),
+    'draft.md': fs.readFileSync(path.join(FXD, 'cold-weather-joint-pain.regen-source-2026-10-12.draft.md'), 'utf8'),
+    'article-draft.ts': fs.readFileSync(path.join(FXD, 'cold-weather-joint-pain.recovery-2026-10-12.article-draft.ts.txt'), 'utf8'),
+  }
+  // 2026-10-12 운영 장부 cold 행 그대로 (읽기 전용 조회값)
+  const prodRow = () => ({ attempts: 2, lastAt: 1791734502311, fingerprint: 'sha256:dce6d087af6def7be9ee45c59fbff539', kind: 'CONTENT', sent: false,
+    reasons: ['QA_FAIL: magazine QA FAIL — REGEN_EXHAUSTED: 🔴 등록 전 전체 재생성 4회를 이미 썼다 (상한 4) — 이 글만 HOLD · 실제 QA FAIL: description 57자 — 허용 60~160자 밖 / BODY_TOO_LONG: 본문 3194자 — 3000자를 넘었다 (발행 기준 800~3000자 · 공백·줄바꿈 포함)'],
+    regenCalls: 4, lastRegenAt: 1791734462875, lastPacketHash: '04f202aaa72705b3',
+    regenAttemptIds: ['deca3155-ef16-46a3-bfec-a98ba39cdd38', '2b6af026-9829-4a0a-8bb0-c2128ad700b2', '961dc04a-c099-46b5-9fab-5cbfa8aee2a7', '6f3d381f-447e-471b-ad83-0e8dabdc1187'],
+    inputRepairCalls: 1, inputRepairFingerprints: ['sha256:c5e87b4c60fdbce6e767f456c8935f1b0db6992b055e9aa37ee0601f1c40713f'], lastInputRepairAt: 1791645017805,
+    regenLineage: { id: 'b542d44b-b6d2-4b8b-8a9b-e96f21768c23', origin: 'INPUT_REPAIR', evidenceKey: 'INPUT_REPAIR:c5e87b4c60fdbce6e767f456c8935f1b0db6992b055e9aa37ee0601f1c40713f', openedAt: 1791734413421, calls: 2,
+      attemptIds: ['961dc04a-c099-46b5-9fab-5cbfa8aee2a7', '6f3d381f-447e-471b-ad83-0e8dabdc1187'] },
+    regenLineageKeys: ['INPUT_REPAIR:c5e87b4c60fdbce6e767f456c8935f1b0db6992b055e9aa37ee0601f1c40713f'] })
+  let n = 0
+  const world = (slug = COLD, row = prodRow(), mutateFile = null) => {
+    n++
+    const DD = path.join(T, `j-${n}`, 'drafts', 'magazine')
+    fs.mkdirSync(path.join(DD, slug), { recursive: true })
+    for (const [f, t] of Object.entries(files)) fs.writeFileSync(path.join(DD, slug, f), mutateFile === f ? `${t} ` : t)
+    return { DD, LF: ledger(`j-${n}`, row ? { [slug]: row } : {}) }
+  }
+  const sha = (t) => crypto.createHash('sha256').update(t).digest('hex')
+  check('J 사건 상수 — 한 건 · 버전 있는 id · cold · 추가 1회 · fixture 4파일 SHA = 신원값 · 전역 상한 불변', Q.ONE_TIME_RECOVERIES.length === 1 && /\/qa-regen-packet-v2$/.test(REC.id) && REC.slug === COLD && REC.extraCalls === 1 &&
+    sha(files['brief.md']) === REC.identity.briefSha256 && sha(files['review.ts']) === REC.identity.reviewSha256 && sha(files['draft.md']) === REC.identity.draftSha256 && sha(files['article-draft.ts']) === REC.identity.articleSha256 &&
+    Q.MAX_REGEN_CALLS === 2 && Q.MAX_REGEN_TOTAL === 4)
+
+  // 수정 전 — 운영 상태 그대로면 격리·예산 모두 막힌다
+  {
+    const e = prodRow()
+    check('J 수정 전 반례 — 운영 행은 격리(7일) · 예산 소진(TOTAL 4) · 계보 소진', Q.judgeQuarantine({ entry: e, slug: COLD, fingerprint: e.fingerprint, now: e.lastAt + 3600e3 }).skip === true &&
+      Q.regenBudget({ entry: e, slug: COLD }).exhausted && Q.regenBudget({ entry: e, slug: COLD }).exhaustedBy === 'TOTAL')
+  }
+  // 정확한 신원 — 열린다 · 1회만
+  const { DD, LF } = world()
+  const r1 = LR.openOneTimeRecoveries({ draftsDir: DD, path: LF })
+  const e1 = row(LF, COLD)
+  check('🔴 J 정확한 신원 → OPENED · ONE_TIME_RECOVERY 계보(calls 0) · regenCalls 4 · attempts 2 · 기존 기록 보존 · 1회 기록', r1[0]?.status === 'OPENED' && e1.regenLineage.origin === 'ONE_TIME_RECOVERY' &&
+    e1.regenLineage.recoveryId === REC.id && e1.regenLineage.calls === 0 && e1.regenLineage.previousLineageId === REC.identity.lineageId && e1.regenCalls === 4 && e1.attempts === 2 &&
+    e1.regenAttemptIds.length === 4 && e1.regenLineageKeys.includes(`ONE_TIME_RECOVERY:${REC.id}`) && e1.oneTimeRecoveries?.[0]?.id === REC.id, { r1, lineage: e1.regenLineage })
+  const now = e1.lastAt + 3600e3
+  check('🔴 J 열린 뒤 — 격리는 그 slug 에만 비켜 준다 (slug 없이 물으면 그대로 격리)', Q.judgeQuarantine({ entry: e1, slug: COLD, fingerprint: e1.fingerprint, now }).code === 'ONE_TIME_RECOVERY' &&
+    Q.judgeQuarantine({ entry: e1, fingerprint: e1.fingerprint, now }).skip === true && Q.judgeQuarantine({ entry: e1, slug: 'other-slug', fingerprint: e1.fingerprint, now }).skip === true)
+  check('🔴 J 열린 뒤 — 예산은 그 slug 에 정확히 1회 (전체 4 + 1) · slug 없이 물으면 소진', Q.regenBudget({ entry: e1, slug: COLD }).left === 1 && !Q.regenBudget({ entry: e1, slug: COLD }).exhausted && Q.regenBudget({ entry: e1 }).exhausted)
+  const before = fs.readFileSync(LF)
+  const again = LR.openOneTimeRecoveries({ draftsDir: DD, path: LF })
+  check('J 재실행 — ALREADY_OPEN · 장부 바이트 그대로', again[0]?.status === 'ALREADY_OPEN' && fs.readFileSync(LF).equals(before), again)
+  // 실제 1회 소비 — 기존 전송 예약 임계구역
+  const fp = (k) => `sha256:${String(k).repeat(64).slice(0, 64)}`
+  const u1 = Q.reserveDelivery({ slug: COLD, messageFingerprint: fp(1), reservationId: 'rv-j1', regen: { attemptId: 'j-a1', packetHash: 'h' }, path: LF })
+  Q.settleDeliveryReservation({ slug: COLD, reservationId: 'rv-j1', path: LF })
+  const u2 = Q.reserveDelivery({ slug: COLD, messageFingerprint: fp(2), reservationId: 'rv-j2', regen: { attemptId: 'j-a2', packetHash: 'h' }, path: LF })
+  const e2 = row(LF, COLD)
+  check('🔴 J 재생성 1회만 — 두 번째 예약은 소진 · regenCalls 5 · 복구 계보 calls 1', u1.ok && !u2.ok && u2.exhausted && e2.regenCalls === 5 && e2.regenLineage.calls === 1, { u1, u2: u2.why })
+  check('J 복구를 쓴 뒤 — 다시 격리 · 예산 소진 · 다시 열리지 않는다 (무한 0)', Q.judgeQuarantine({ entry: e2, slug: COLD, fingerprint: e2.fingerprint, now }).skip === true &&
+    Q.regenBudget({ entry: e2, slug: COLD }).exhausted && LR.openOneTimeRecoveries({ draftsDir: DD, path: LF })[0]?.status === 'ALREADY_OPEN')
+
+  // 신원 불일치 — 하나라도 다르면 쓰기 0
+  const mismatch = (label, opts) => {
+    const w = world(opts.slug ?? COLD, opts.row === undefined ? prodRow() : opts.row, opts.file ?? null)
+    const b = fs.readFileSync(w.LF)
+    const r = LR.openOneTimeRecoveries({ draftsDir: w.DD, path: w.LF })
+    check(`🔴 J 신원 불일치 — ${label} → 열지 않는다 · 장부 바이트 그대로`, r[0]?.status === 'NOT_APPLICABLE' && fs.readFileSync(w.LF).equals(b), r[0])
+  }
+  for (const f of Object.keys(files)) mismatch(`${f} 한 글자`, { file: f })
+  mismatch('ledger fingerprint', { row: { ...prodRow(), fingerprint: 'sha256:0000' } })
+  mismatch('attempts 3', { row: { ...prodRow(), attempts: 3 } })
+  mismatch('kind INFRA', { row: { ...prodRow(), kind: 'INFRA' } })
+  mismatch('regenCalls 3', { row: { ...prodRow(), regenCalls: 3 } })
+  mismatch('regenCalls 5', { row: { ...prodRow(), regenCalls: 5 } })
+  mismatch('다른 계보 id', { row: { ...prodRow(), regenLineage: { ...prodRow().regenLineage, id: 'other-lineage' } } })
+  mismatch('전송불명 기록 있음', { row: { ...prodRow(), delivery: { kind: 'DELIVERY_UNCERTAIN', sent: null, messageFingerprint: fp(9), reservationId: 'x' } } })
+  mismatch('최초 응답 기록 있음', { row: { ...prodRow(), firstResponseInvalid: { x: 1 } } })
+  mismatch('장부 행 없음', { row: null })
+  {
+    const w = world('autumn-low-mood')
+    const b = fs.readFileSync(w.LF)
+    const r = LR.openOneTimeRecoveries({ draftsDir: w.DD, path: w.LF })
+    check('🔴 J 다른 slug 의 같은 행·같은 원고 — 열리지 않는다 · 장부 바이트 그대로', r[0]?.status === 'NOT_APPLICABLE' && fs.readFileSync(w.LF).equals(b) && !row(w.LF, 'autumn-low-mood').oneTimeRecoveries, r[0])
+  }
+  // 수동 장부 편집으로는 예산이 생기지 않는다 — 허용은 코드 상수와 계보(id·evidenceKey·slug)가 맞을 때만
+  {
+    const forged = (l) => ({ ...prodRow(), regenLineage: { id: 'x', origin: 'ONE_TIME_RECOVERY', calls: 0, attemptIds: [], ...l } })
+    const cases = [forged({ recoveryId: 'one-time-recovery/fake', evidenceKey: 'ONE_TIME_RECOVERY:one-time-recovery/fake' }), forged({ recoveryId: REC.id, evidenceKey: 'ONE_TIME_RECOVERY:other' })]
+    check('🔴 J 손으로 만든 복구 계보(모르는 id · 키 불일치)는 예산·격리를 열지 않는다', cases.every((e) => Q.regenBudget({ entry: e, slug: COLD }).exhausted && Q.judgeQuarantine({ entry: e, slug: COLD, fingerprint: e.fingerprint, now }).skip === true))
+    const real = forged({ recoveryId: REC.id, evidenceKey: `ONE_TIME_RECOVERY:${REC.id}` })
+    check('J 같은 계보라도 다른 slug 에서는 열리지 않는다', Q.regenBudget({ entry: real, slug: 'autumn-low-mood' }).exhausted && !Q.regenBudget({ entry: real, slug: COLD }).exhausted)
+  }
+  // 실제 자식 프로세스 — 동시 개방 · 동시 재생성 예약 · 예약 직후 급사
+  const LRURL = pathToFileURL(path.join(HERE, 'lib', 'magazine-lineage-reconcile.mjs')).href
+  const runChildren = async (srcs) => {
+    const outs = await Promise.all(srcs.map((src, i) => new Promise((res) => {
+      const f = path.join(T, `j-child-${n}-${i}.mjs`)
+      fs.writeFileSync(f, src)
+      const c = spawn(process.execPath, [f], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] })
+      let o = ''
+      c.stdout.on('data', (d) => { o += d })
+      c.on('close', (code, signal) => res({ code, signal, out: o.trim() }))
+    })))
+    return outs
+  }
+  {
+    const w = world()
+    const src = `const LR = await import(${JSON.stringify(LRURL)}); console.log(JSON.stringify(LR.openOneTimeRecoveries({ draftsDir: ${JSON.stringify(w.DD)}, path: ${JSON.stringify(w.LF)} })))`
+    const outs = await runChildren([src, src, src])
+    const st = outs.map((o) => { try { return JSON.parse(o.out.split('\n').pop())[0].status } catch { return 'ERR' } })
+    const e = row(w.LF, COLD)
+    check('🔴 J 동시 개방 3 프로세스 — OPENED 정확히 1 · 계보 하나 · 기록 하나', st.filter((x) => x === 'OPENED').length === 1 && st.every((x) => ['OPENED', 'ALREADY_OPEN', 'NOT_RECONCILED'].includes(x)) &&
+      e.regenLineage.origin === 'ONE_TIME_RECOVERY' && e.oneTimeRecoveries.length === 1 && e.regenLineageKeys.filter((k) => k.startsWith('ONE_TIME_RECOVERY')).length === 1, st)
+    const res = (i) => `const Q = await import(${JSON.stringify(QURL)}); const u = Q.reserveDelivery({ slug: ${JSON.stringify(COLD)}, messageFingerprint: ${JSON.stringify(fp(i))}, reservationId: 'rv-c${i}', regen: { attemptId: 'c${i}', packetHash: 'h' }, path: ${JSON.stringify(w.LF)} }); console.log(JSON.stringify({ ok: u.ok }))`
+    const r = await runChildren([res(3), res(4), res(5)])
+    const oks = r.filter((o) => /"ok":true/.test(o.out)).length
+    check('🔴 J 동시 재생성 예약 3 프로세스 — 전송권 정확히 1 (provider 최대 1) · regenCalls 5', oks === 1 && row(w.LF, COLD).regenCalls === 5 && row(w.LF, COLD).regenLineage.calls === 1, r.map((o) => o.out))
+  }
+  {
+    const w = world()
+    LR.openOneTimeRecoveries({ draftsDir: w.DD, path: w.LF })
+    const src = `const Q = await import(${JSON.stringify(QURL)}); const u = Q.reserveDelivery({ slug: ${JSON.stringify(COLD)}, messageFingerprint: ${JSON.stringify(fp(6))}, reservationId: 'rv-k', regen: { attemptId: 'k1', packetHash: 'h' }, path: ${JSON.stringify(w.LF)} }); if (u.ok) process.kill(process.pid, 'SIGKILL'); console.log('SURVIVED')`
+    const [k] = await runChildren([src])
+    const e = row(w.LF, COLD)
+    const sameMsg = Q.reserveDelivery({ slug: COLD, messageFingerprint: fp(6), reservationId: 'rv-k2', regen: { attemptId: 'k2', packetHash: 'h' }, path: w.LF })
+    const newMsg = Q.reserveDelivery({ slug: COLD, messageFingerprint: fp(7), reservationId: 'rv-k3', regen: { attemptId: 'k3', packetHash: 'h' }, path: w.LF })
+    check('🔴 J 예약 직후 SIGKILL — 전송불명(DELIVERY_UNCERTAIN) 남음 · 같은 요청 HOLD · 다른 요청도 소진 → provider 추가 0', k.signal === 'SIGKILL' && e.delivery?.kind === 'DELIVERY_UNCERTAIN' && e.regenLineage.calls === 1 &&
+      !sameMsg.ok && Boolean(sameMsg.held) && !newMsg.ok && (Boolean(newMsg.exhausted) || Boolean(newMsg.held)), { e: e.delivery, sameMsg: sameMsg.why, newMsg: newMsg.why })
+    check('J 급사 뒤 다시 열기 — 계보가 이미 복구 계보라 ALREADY_OPEN (두 번째 기회 0)', LR.openOneTimeRecoveries({ draftsDir: w.DD, path: w.LF })[0]?.status === 'ALREADY_OPEN')
+  }
+  {
+    // 열고 나서 provider 전에 죽은 경우 — 권리는 남고 한 번만 쓴다
+    const w = world()
+    const src = `const LR = await import(${JSON.stringify(LRURL)}); const r = LR.openOneTimeRecoveries({ draftsDir: ${JSON.stringify(w.DD)}, path: ${JSON.stringify(w.LF)} }); if (r[0].status === 'OPENED') process.kill(process.pid, 'SIGKILL')`
+    const [k] = await runChildren([src])
+    const a = Q.reserveDelivery({ slug: COLD, messageFingerprint: fp(8), reservationId: 'rv-o1', regen: { attemptId: 'o1', packetHash: 'h' }, path: w.LF })
+    Q.settleDeliveryReservation({ slug: COLD, reservationId: 'rv-o1', path: w.LF })
+    const b = Q.reserveDelivery({ slug: COLD, messageFingerprint: fp(9), reservationId: 'rv-o2', regen: { attemptId: 'o2', packetHash: 'h' }, path: w.LF })
+    check('J 개방 직후 SIGKILL — 권리는 남고(calls 0) 다음 회차가 정확히 1회 쓴다', k.signal === 'SIGKILL' && a.ok && !b.ok && row(w.LF, COLD).regenCalls === 5)
+  }
+}
+
 check('운영 장부 기본 경로는 격리 HOME 아래', path.resolve(Q.QUARANTINE_PATH).startsWith(T + path.sep))
 finish()

@@ -52,6 +52,7 @@ import {
 import { drive } from './magazine-auto-register.mjs'
 import { buildMessage, send, webhookStatus } from './lib/slack-notify.mjs'
 import { readRunTargets, registerTargets } from './lib/magazine-run-targets.mjs'
+import { openOneTimeRecoveries } from './lib/magazine-lineage-reconcile.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -272,7 +273,7 @@ export function scan({ runDate = null, store = {}, draftsDir = DRAFTS_DIR } = {}
     }
     // 🔴 격리된 후보는 **건너뛴다.** 그래야 뒤의 멀쩡한 후보가 limit 안에 들어온다.
     //    막힌 것을 고쳐 주지 않는다 — 비켜 줄 뿐이다.
-    const q = judgeQuarantine({ entry: store[slug], fingerprint: draftFingerprint(slug), now })
+    const q = judgeQuarantine({ entry: store[slug], slug, fingerprint: draftFingerprint(slug), now })
     if (q.skip) {
       quarantined.push({ slug, code: q.code, message: q.message })
       continue
@@ -303,6 +304,12 @@ export function processCandidates({
   scanFn = scan,
 }) {
   const upd = (fn) => updateQuarantine(fn, ...(quarantinePath ? [quarantinePath] : []))
+  /**
+   * 🔴 **1회성 복구를 후보 판정 전에 연다** (2026-10-12 cold · `ONE_TIME_RECOVERIES`).
+   *    신원이 전부 맞는 그 사건만 · 장부 잠금 안에서 · 한 번. 열리면 격리·예산 판정이 그 slug 에 재생성 1회를 허용한다.
+   *    맞지 않으면 쓰기 0 — 회차는 그대로 간다. provider 호출은 여기서 0 (실제 1회 소비는 전송 예약 임계구역).
+   */
+  report.oneTimeRecoveries = openOneTimeRecoveries({ draftsDir: DRAFTS_DIR, ...(quarantinePath ? { path: quarantinePath } : {}) })
   const ledger = readQuarantine(...(quarantinePath ? [quarantinePath] : []))
   if (!ledger.ok) {
     /**

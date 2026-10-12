@@ -24,15 +24,15 @@
  *
  * 🔴 모든 장부 변경은 `updateQuarantine` 잠금 안에서 **조건을 다시 확인한 뒤** 한다 (CAS). 시험·운영 공통 경로다.
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { writeAtomic } from './magazine-g8-promoter.mjs'
 import { judgeManuscriptFormat } from './magazine-manuscript-format.mjs'
 import { briefEchoHeadings, validateManuscript } from './magazine-manuscript-guard.mjs'
 import {
-  MAX_REGEN_TOTAL, QUARANTINE_PATH, firstResponseInvalidRecord, lineageKeyOf, openLineageIn, readQuarantine,
-  sanitizeViolations, updateQuarantine,
+  MAX_REGEN_TOTAL, ONE_TIME_RECOVERIES, QUARANTINE_PATH, RECOVERY_ORIGIN, firstResponseInvalidRecord, lineageKeyOf, oneTimeRecoveryOf,
+  openLineageIn, readQuarantine, recoveryKeyOf, sanitizeViolations, updateQuarantine,
 } from './magazine-quarantine.mjs'
 
 export const PENDING_FILE = '.regen-lineage-pending.json'
@@ -284,4 +284,75 @@ export function reconcileLegacyInvalid({ draftsDir, slug, messageFingerprint, pa
   if (!u?.ok) return { ok: false, status: 'LEDGER_FAILED', why: u?.why ?? '장부 갱신 실패' }
   if (raced) return { ok: true, status: 'NOT_RECONCILED', why: raced }
   return { ok: true, status: 'RECORDED', violations: j.violations, migrationId: j.migrationId }
+}
+
+// ─────────────────────────────────────────────────────────
+// ④ 1회성 복구 — 정확한 한 사건 (2026-10-12 cold-weather-joint-pain)
+// ─────────────────────────────────────────────────────────
+
+const RECOVERY_FILES = Object.freeze([['briefSha256', 'brief.md'], ['reviewSha256', 'review.ts'], ['draftSha256', 'draft.md'], ['articleSha256', 'article-draft.ts']])
+
+/** 원고 4파일의 SHA-256 — 없으면 null (읽기만) */
+export function recoveryFileShas(draftsDir, slug) {
+  return Object.fromEntries(RECOVERY_FILES.map(([k, f]) => {
+    const p = join(draftsDir, slug, f)
+    return [k, existsSync(p) ? sha(readFileSync(p, 'utf8')) : null]
+  }))
+}
+
+/**
+ * 순수 판정 — 이 사건의 신원이 **전부** 맞는가.
+ * @returns {{ok:true}|{ok:false, why:string}}
+ */
+export function judgeOneTimeRecovery({ rec, entry, shas }) {
+  const no = (why) => ({ ok: false, why })
+  const id = rec.identity
+  if (!entry || typeof entry !== 'object') return no('장부 행이 없다')
+  if ((entry.regenLineageKeys ?? []).includes(recoveryKeyOf(rec)) || entry.regenLineage?.evidenceKey === recoveryKeyOf(rec)) return no('이 복구는 이미 열렸다 (1회)')
+  if (entry.kind !== id.kind) return no(`kind 가 ${id.kind} 가 아니다 (${entry.kind})`)
+  if (entry.attempts !== id.attempts) return no(`attempts 가 ${id.attempts} 가 아니다 (${entry.attempts})`)
+  if (entry.regenCalls !== id.regenCalls) return no(`regenCalls 가 ${id.regenCalls} 가 아니다 (${entry.regenCalls})`)
+  if (entry.fingerprint !== id.fingerprint) return no('장부 지문이 그 사건이 아니다')
+  if (entry.regenLineage?.id !== id.lineageId) return no('재생성 계보가 그 사건이 아니다')
+  if (entry.delivery) return no('전송 예약·전송불명 기록이 있다')
+  if (entry.firstResponseInvalid) return no('최초 응답 기록이 있다')
+  for (const [k, f] of RECOVERY_FILES) {
+    if (shas?.[k] !== id[k]) return no(`${f} 가 그 사건 때와 다르다 (SHA-256 불일치)`)
+  }
+  return { ok: true }
+}
+
+/**
+ * 1회성 복구를 연다 — 신원이 전부 맞을 때만, 장부 잠금 안에서 **다시 판정한 뒤** 원자적으로 한 번.
+ *    열면: 그 slug 에 `ONE_TIME_RECOVERY` 계보(calls 0 · recoveryId · evidenceKey) + 계보 키 영구 기록 + `oneTimeRecoveries` 기록.
+ *    regenCalls · attempts · 기존 기록은 그대로다. 신원이 하나라도 다르면 장부·파일 쓰기 0.
+ * @returns {{id:string, slug:string, status:'OPENED'|'ALREADY_OPEN'|'NOT_APPLICABLE'|'NOT_RECONCILED'|'LEDGER_FAILED', why?:string}[]}
+ */
+export function openOneTimeRecoveries({ draftsDir, path = QUARANTINE_PATH, now = Date.now(), recoveries = ONE_TIME_RECOVERIES }) {
+  const out = []
+  for (const rec of recoveries) {
+    // 🔴 원고 4파일부터 본다 — 그 사건의 원고가 아니면 장부를 열지도 않는다 (저장소·시험 환경에서 장부 접근 0)
+    const fileMiss = RECOVERY_FILES.find(([k]) => recoveryFileShas(draftsDir, rec.slug)[k] !== rec.identity[k])
+    if (fileMiss) { out.push({ id: rec.id, slug: rec.slug, status: 'NOT_APPLICABLE', why: `${fileMiss[1]} 가 그 사건 때와 다르다 (SHA-256 불일치 · 장부 읽기 0)` }); continue }
+    const ledger = readQuarantine(path)
+    if (!ledger.ok) { out.push({ id: rec.id, slug: rec.slug, status: 'LEDGER_FAILED', why: ledger.why }); continue }
+    const entry = ledger.store[rec.slug]
+    if (oneTimeRecoveryOf(rec.slug, entry, recoveries)) { out.push({ id: rec.id, slug: rec.slug, status: 'ALREADY_OPEN' }); continue }
+    const j = judgeOneTimeRecovery({ rec, entry, shas: recoveryFileShas(draftsDir, rec.slug) })
+    if (!j.ok) { out.push({ id: rec.id, slug: rec.slug, status: 'NOT_APPLICABLE', why: j.why }); continue }
+    let raced = null
+    const u = updateQuarantine((store) => {
+      const again = judgeOneTimeRecovery({ rec, entry: store[rec.slug], shas: recoveryFileShas(draftsDir, rec.slug) })
+      if (!again.ok) { raced = again.why; return store }
+      const prev = store[rec.slug]
+      const key = recoveryKeyOf(rec)
+      return { ...store, [rec.slug]: { ...prev,
+        regenLineage: { id: randomUUID(), origin: RECOVERY_ORIGIN, recoveryId: rec.id, evidenceKey: key, openedAt: now, calls: 0, attemptIds: [], previousLineageId: prev.regenLineage.id },
+        regenLineageKeys: [...(prev.regenLineageKeys ?? []), key].slice(-16),
+        oneTimeRecoveries: [...(prev.oneTimeRecoveries ?? []), { id: rec.id, openedAt: now }] } }
+    }, path)
+    if (!u?.ok) { out.push({ id: rec.id, slug: rec.slug, status: 'LEDGER_FAILED', why: u?.why ?? '장부 갱신 실패' }); continue }
+    out.push(raced ? { id: rec.id, slug: rec.slug, status: 'NOT_RECONCILED', why: raced } : { id: rec.id, slug: rec.slug, status: 'OPENED' })
+  }
+  return out
 }
