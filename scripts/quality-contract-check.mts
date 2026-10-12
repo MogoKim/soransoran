@@ -57,6 +57,9 @@ export const FINGERPRINT_FILES = [
   //    끈적한 결함을 조용히 풀지 못하게 지문에 넣는다
   'src/lib/auto-ready-defect-resolution.ts',
   'src/lib/auto-ready-defect-resolution-store.ts',
+  // 🔴 (quality-v7 · 2026-10-12) Persona 결정 정본 — 판독 답을 읽고 정본 카드로 자격을 대조해 화자를 확정한다.
+  //    이 파일만 바꿔 누가 1인칭을 허가받는지 조용히 바꾸지 못하게 지문에 넣는다
+  'src/lib/content-core/speaker.ts',
 ] as const
 
 /**

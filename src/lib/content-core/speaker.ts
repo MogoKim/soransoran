@@ -1,36 +1,32 @@
 /**
- * 화자 계획 — 🔴 **한 호출이 원문과 실제 카드를 함께 보고 고르고, 코드가 근거를 검증한다**
+ * 화자 계획 — 🔴 **유료 판독은 원천 요구만 구조화하고, Persona 는 코드가 정한다** (2026-10-12 · canon §4.1)
  *
- * 🔴 **왜 합쳤나** (2026-09-19, 대안 D).
- *    앞판은 `원문 → claimRequirements → 코드 매칭` 이었다. 매칭하는 쪽이 원문을 본 적이
- *    없어서, 같은 알바 원문에 3차는 `work=파트타임` 을 4차는 `[]` 를 냈고,
- *    **빈 목록이 곧 "모두 자격 있음"** 이 되어 전업 Persona 가 1인칭으로 알바를 했다
- *    (`[].filter()` 가 모든 사람에게 빈 배열을 돌려준다).
+ * 🔴 **두 단계다.**
+ *    ① `parseSourceNeed` — 유료 판독의 답을 읽는다. **Persona 중립**이다: 자리(stance) ·
+ *       1인칭 허가 방식(selfBasis) · 원문이 요구하는 자격 값(warrants) · 원문 화자 자신의 사실 ·
+ *       글자 그대로 지킬 사실. 판독은 후보 Persona 를 보지 않고, 답에 `personaCode` 가 있어도 읽지 않는다.
+ *    ② `decidePersona` — **유료 초안 요청 전에** 코드가 그 요구를 맡을 Persona 를 확정한다.
+ *       원문마다 정해진 후보 순서(`orderPersonasForSource`)에서 자격을 **정본 카드로** 충족하는
+ *       첫 사람이다. 그 뒤 초안·검수·발행은 이 사람을 바꾸지 않는다.
  *
- * 🔴 **그렇다고 "모델이 직접 봤으니 맞을 것" 으로 믿지 않는다.**
- *    `SELF_EXPERIENCE` 는 코드가 확인할 수 있는 **허가 근거**가 있어야 한다:
- *      ① 고른 personaCode 가 실제 후보에 있는가
- *      ② 근거 문장이 지목한 원문 span 에 실제로 있는가
- *      ③ requiredValue 를 **고른 사람의 정본 카드**가 실제로 충족하는가
- *      ④ 모르는 fact·값은 통과시키지 않는다
+ * 🔴 **대체한 옛 경로** (canon §11): 유료 화자 계획 모델이 Persona 를 고르고 코드가 사후에 거절해
+ *    원천 전체를 끝내던 경로. 모델이 자격 없는 사람을 고르면 자격 있는 사람이 풀에 있어도
+ *    `requiredValueUnmet` → `speakerUnqualified`(결론)로 원천이 영구히 탔다.
  *
- *    🔴 **카드 값은 코드가 정본에서 읽는다** (2026-09-20). 모델에게 옮겨 적게 하지
- *       않는다 — 그 계약은 값이 맞아도 표기가 다르면 생성 전에 멈췄다.
+ * 🔴 **`SELF_EXPERIENCE` 허가 근거는 그대로 코드가 검증한다:**
+ *      ① 근거 문장이 지목한 원문 span 에 실제로 있는가 (Persona 무관 — 모양 검사)
+ *      ② requiredValue 를 **고른 사람의 정본 카드**가 실제로 충족하는가
+ *      ③ 모르는 fact·값은 통과시키지 않는다
+ *    🔴 **카드 값은 코드가 정본에서 읽는다** (2026-09-20). 모델에게 옮겨 적게 하지 않는다.
  *
- * 🔴 **검증에 실패하면 HOLD 한다** (2026-09-19 실측 보정).
- *
- *    앞판은 실패를 `QUESTION` 으로 **자동 강등**해서 그대로 생성했다. 그런데
- *    그렇게 만든 A·C 두 편이 초안에서 **다시 자기 경험을 말했다**
- *    ("우리 남편은…" · "3시간씩 일하는 알바를 하고 있는데").
- *    "자격 검증 실패" 를 "다른 자리로는 만들어도 됨" 으로 바꾸는 것은 fail-closed 가 아니다.
- *
- *    🔴 비자기 경험 글이 맞다고 보면 **모델이 처음부터 그 자리를 골라야 한다.**
- *      · SELF 선택 + 검증 성공 → 생성
- *      · SELF 선택 + 검증 실패 → **HOLD**
- *      · 처음부터 QUESTION/OBSERVATION/REFLECTION 선택 → 그 자리로 생성
+ * 🔴 **자격을 채운 사람이 없으면 HOLD 한다** (2026-09-19 실측 보정 그대로).
+ *    자리를 `QUESTION` 으로 **자동 강등**해 만든 글이 초안에서 다시 자기 경험을 말했다
+ *    ("우리 남편은…"). 비자기 경험 글이 맞다고 보면 **판독이 처음부터 그 자리를 골라야 한다.**
+ *      · SELF + 자격 충족자 있음 → 그 사람으로 생성
+ *      · SELF + 자격 충족자 없음 → **HOLD**
+ *      · 처음부터 QUESTION/OBSERVATION/REFLECTION → 순서상 첫 사람으로 그 자리 생성
  *
  * 🔴 `근거 없음 = SELF_EXPERIENCE 허가` 경로는 어디에도 없다.
- * 🔴 검증 실패 후 다른 Persona 를 조용히 고르지도 않는다.
  */
 import type { PoolCard } from '../persona-pool-card'
 import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
@@ -62,7 +58,11 @@ export type SpeakerRelativeEntry = {
  * 🔴 **v6 (2026-09-23)** — 파서 의미가 바뀌었다. `materiality` 미기재는 기본값이 아니라
  *    모양 오류이고, load-bearing 판정 자리가 `resolveLoadBearing` 으로 옮겨졌다.
  */
-export const SPEAKER_PLAN_VERSION = 'speaker-plan-v6'
+/**
+ * 🔴 **v7 (2026-10-12 Batch B)** — Persona 를 판독이 아니라 코드가 정한다. 판독 답의 `personaCode` 는
+ *    읽지 않고, 자격 판정은 후보 전원에 대해 코드가 한다.
+ */
+export const SPEAKER_PLAN_VERSION = 'speaker-plan-v7'
 
 /**
  * 🔴 **아는 값만 통과시킨다** (2026-09-23). 카드에 적힐 수 있는 값을 **열거**한다 —
@@ -215,12 +215,12 @@ export const WARRANT_REJECTIONS = [
 export type WarrantRejection = (typeof WARRANT_REJECTIONS)[number]
 
 export const WARRANT_REJECTION_LABEL: Readonly<Record<WarrantRejection, string>> = {
-  unknownPersona: '후보에 없는 사람을 골랐다',
+  unknownPersona: '정본 카드가 없는 사람이다',
   unknownFact: '우리 생활사 축이 아니다',
   unknownStance: '우리 자리 이름이 아니다',
   unknownBasis: '1인칭 허가 방식을 밝히지 않았다',
   evidenceNotInSource: '근거 문장이 원문에 없다',
-  requiredValueUnmet: '그 사람의 카드가 이 값을 충족하지 않는다',
+  requiredValueUnmet: '후보 중 이 값을 충족하는 정본 카드가 없다',
   emptyWarrants: '생활사 자격이 필요하다면서 근거를 하나도 대지 않았다',
   warrantsWithoutNeed: '자격이 필요 없다면서 자격 근거를 댔다',
   noUniversalReason: '왜 자격이 필요 없는지 말하지 않았다',
@@ -254,9 +254,9 @@ export type SpeakerPlan = {
 /**
  * 🔴 **다시 물어도 같은 거절은 이것 하나다** (2026-09-21).
  *
- *    "그 사람의 카드가 이 값을 충족하지 않는다" 는 원문과 카드가 정하는 사실이라
- *    다시 물어도 같다 — 결론이다. 나머지 거절은 **모델이 이번에 잘못 답한 것**이다:
- *    후보에 없는 코드 · 우리 자리 이름이 아님 · 원문에 없는 근거 문장 · 빈 근거.
+ *    "후보 중 이 값을 충족하는 카드가 없다" 는 원문과 카드가 정하는 사실이라
+ *    다시 물어도 같다 — 결론이다 (2026-10-12 부터 코드가 후보 **전원**을 대조한 뒤에만 낸다).
+ *    나머지 거절은 **판독이 이번에 잘못 답한 것**이다: 우리 자리 이름이 아님 · 원문에 없는 근거 문장 · 빈 근거.
  *    그것을 결론으로 적으면 정상 원천이 영구 제외된다.
  */
 export const QUALIFICATION_REJECTIONS = [
@@ -270,12 +270,6 @@ export const UNPARSABLE_PLAN = 'JSON 이 아니다'
  *    기본값으로 통과시키지 않는다 — 모양 오류로 다시 묻는다.
  */
 export const MATERIALITY_MISSING = '🔴 materiality 누락'
-
-export type SpeakerPlanParse = {
-  plan: SpeakerPlan
-  dropped: { text: string; why: DropReason }[]
-  schemaProblems: string[]
-}
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
@@ -350,52 +344,6 @@ export function hasFact(p: PersonaLifeContract, fact: ClaimFact, requiredValue: 
   }
 }
 
-/**
- * 🔴 **1인칭을 허가해도 되는가.** 하나라도 어긋나면 허가하지 않는다.
- *    실패해도 **다른 사람을 고르지 않는다** — 부르는 쪽이 자리를 낮추거나 HOLD 한다.
- */
-export function verifySelfWarrants(input: {
-  persona: PersonaLifeContract | undefined
-  selfBasis: SelfBasis | null
-  warrants: readonly ClaimedWarrant[]
-  universalReason: string
-  spans: readonly EvidenceSpan[]
-}): { ok: true; warrants: SpeakerWarrant[] } | { ok: false; why: WarrantRejection; detail: string } {
-  const p = input.persona
-  if (p === undefined) return { ok: false, why: 'unknownPersona', detail: '' }
-  if (input.selfBasis === null) return { ok: false, why: 'unknownBasis', detail: '' }
-  if (input.selfBasis === 'noLifeFactNeeded') {
-    if (input.warrants.length > 0) {
-      return { ok: false, why: 'warrantsWithoutNeed', detail: input.warrants.map((w) => w.fact).join(' · ') }
-    }
-    if (input.universalReason.trim() === '') return { ok: false, why: 'noUniversalReason', detail: '' }
-    return { ok: true, warrants: [] }
-  }
-  // ── lifeFacts ──
-  if (input.warrants.length === 0) return { ok: false, why: 'emptyWarrants', detail: '' }
-  const verified: SpeakerWarrant[] = []
-  for (const w of input.warrants) {
-    if (!(CLAIM_FACTS as readonly string[]).includes(w.fact)) {
-      return { ok: false, why: 'unknownFact', detail: w.fact }
-    }
-    if (!(EVIDENCE_REFS as readonly string[]).includes(w.evidenceRef)
-      || w.evidenceText.trim() === ''
-      || !foundInSpan(w.evidenceText, w.evidenceRef, input.spans)) {
-      return { ok: false, why: 'evidenceNotInSource', detail: `${w.fact}: ${w.evidenceText}` }
-    }
-    /**
-     * 🔴 **정본 카드가 이 값을 충족하는가.** 이것이 자격 판정의 전부다 —
-     *    모델이 카드를 옮겨 적었는지는 더 이상 묻지 않는다.
-     */
-    if (!hasFact(p, w.fact, w.requiredValue)) {
-      return { ok: false, why: 'requiredValueUnmet', detail: `${w.fact}=${w.requiredValue}` }
-    }
-    // 🔴 통과한 것에만 **코드가 읽은** 카드 값을 찍는다
-    verified.push({ ...w, verifiedCardValue: cardValueText(p, w.fact) })
-  }
-  return { ok: true, warrants: verified }
-}
-
 const HOLD = (reason: string, rejection: WarrantRejection | null = null): SpeakerPlan => ({
   decision: 'hold', personaCode: null, stance: null, selfBasis: null, warrants: [],
   universalReason: '', protectedFacts: [], speakerRelative: [], closingIntent: null, contentRoles: [],
@@ -403,20 +351,48 @@ const HOLD = (reason: string, rejection: WarrantRejection | null = null): Speake
 })
 
 /**
- * 계획 응답을 읽고 **검증한다.**
- *
- * 🔴 load 는 모델에게 **입력으로만** 준다. 코드는 자격을 검증할 뿐,
- *    검증에 실패했다고 load 로 다른 사람을 다시 고르지 않는다.
+ * 🔴 **원천 요구 — Persona 중립** (2026-10-12 Batch B · canon §4.1).
+ *    유료 판독이 답한 것 중 **누가 쓰든 같은 값**만 담는다. 사람 이름은 여기 없다.
+ *    `warrants` 는 아직 아무 카드와도 대조하지 않은 요구다(근거 위치만 확인됐다).
  */
-export function parseSpeakerPlan(
-  raw: string, packet: SourceEvidencePacket, personas: readonly PersonaLifeContract[],
-): SpeakerPlanParse {
+export type SourceNeed = {
+  decision: 'ok' | 'hold'
+  holdReason: string
+  stance: Stance | null
+  /** 🔴 모르는 자리 이름이었을 때 사람이 볼 원문 값 */
+  stanceRaw: string
+  selfBasis: SelfBasis | null
+  warrants: ClaimedWarrant[]
+  universalReason: string
+  protectedFacts: ProtectedFact[]
+  speakerRelative: SpeakerRelativeEntry[]
+  closingIntent: ClosingIntent | null
+  contentRoles: ContentRole[]
+}
+
+export type SourceNeedParse = {
+  need: SourceNeed
+  dropped: { text: string; why: DropReason }[]
+  schemaProblems: string[]
+}
+
+const EMPTY_NEED: SourceNeed = {
+  decision: 'hold', holdReason: '계획을 읽지 못했다', stance: null, stanceRaw: '', selfBasis: null,
+  warrants: [], universalReason: '', protectedFacts: [], speakerRelative: [], closingIntent: null,
+  contentRoles: [],
+}
+
+/**
+ * 🔴 **유료 판독의 답을 원천 요구로 읽는다.** Persona 를 보지 않는다 — 답에 `personaCode` 가
+ *    실려 와도 읽지 않는다(판독이 사람을 고르는 경로를 남기지 않는다).
+ */
+export function parseSourceNeed(raw: string, packet: SourceEvidencePacket): SourceNeedParse {
   let j: Record<string, unknown>
   try {
     const t = raw.trim()
     j = JSON.parse(t.startsWith('{') ? t : `{${t}`) as Record<string, unknown>
   } catch {
-    return { plan: HOLD('계획을 읽지 못했다'), dropped: [], schemaProblems: [UNPARSABLE_PLAN] }
+    return { need: EMPTY_NEED, dropped: [], schemaProblems: [UNPARSABLE_PLAN] }
   }
   const problems: string[] = []
   const dropped: { text: string; why: DropReason }[] = []
@@ -471,22 +447,10 @@ export function parseSpeakerPlan(
     const selfAxis = speakerRelativeAxisOf({ text, ref: ref as EvidenceRef, spans })
     if (selfAxis !== null) {
       dropped.push({ text, why: 'speakerRelative' })
-      // 🔴 **빼기만 하지 않는다.** 무엇을 바꿔야 하는지 남겨 프롬프트가 쓰게 한다
       /**
-       * 🔴 **계획이 말한 materiality 를 받되, 코드가 증거를 검증한다** (2026-09-23).
-       *    앞판은 전부 `incidental` 로 하드코딩해 `loadBearingMismatch` 가
-       *    **운영상 죽은 경로**였다.
-       *    🔴 모델 말을 그대로 믿지 않는다 — `sourceText`·`evidenceRef` 가
-       *       실제 증거와 맞을 때만 그 값을 쓴다. 아니면 **안전한 쪽(loadBearing)**.
-       */
-      /**
-       * 🔴 **답하지 않았으면 기본값으로 통과시키지 않는다** (2026-09-23 마스터 지적).
-       *
-       *    앞판은 계획이 `speakerRelative` 를 아예 안 쓰면 **검증되지 않은 자기 나이를
-       *    `incidental` 로 간주해 adopt** 했다. artifact 에 경고를 남기는 것은
-       *    안전 검증이 아니다 — 그 글은 그대로 발행 후보가 됐다.
-       *    🔴 지금은 **모양 오류**로 처리한다. 같은 사람에게 다시 묻는 재시도이지
-       *       결론이 아니므로 정상 원천이 영구 제외되지도 않는다.
+       * 🔴 **빼기만 하지 않는다.** 무엇을 바꿔야 하는지 남겨 프롬프트가 쓰게 한다.
+       *    🔴 **답하지 않았으면 기본값으로 통과시키지 않는다** (2026-09-23 마스터 지적) —
+       *       모양 오류로 다시 묻는다. 결론이 아니므로 정상 원천이 영구 제외되지도 않는다.
        */
       const claimedRole = materialityFor(text, ref as EvidenceRef, claimed)
       if (claimedRole === null) {
@@ -506,9 +470,7 @@ export function parseSpeakerPlan(
 
   /**
    * 🔴 **코드가 먼저 찾은 것과 대조한다** (2026-09-23 마스터 P0-1).
-   *
-   *    위 반복은 planner 가 `protectedFacts` 에 적어 준 것만 훑는다. 모델이 원문의
-   *    자기 나이를 **양쪽에서 빠뜨리면** 누락 자체가 발견되지 않았다.
+   *    모델이 원문의 자기 나이를 **양쪽에서 빠뜨리면** 누락 자체가 발견되지 않았다.
    *    🔴 정본 parser 가 원문 span 에서 직접 산출한 목록을 기준으로 삼는다.
    */
   const expected = expectedSelfFactsIn(spans)
@@ -524,10 +486,7 @@ export function parseSpeakerPlan(
         + ' 계획이 protectedFacts·speakerRelative 어디에도 적지 않았다')
       continue
     }
-    /**
-     * 🔴 planner 가 `speakerRelative` 로만 적어 낸 경우다 — 그래도 **변환 대상**이다.
-     *    여기서 싣지 않으면 그 나이가 대체 없이 초안으로 흘러간다.
-     */
+    // 🔴 planner 가 `speakerRelative` 로만 적어 낸 경우다 — 그래도 **변환 대상**이다
     speakerRelative.push({
       axis: e.axis, sourceText: e.sourceText, sourceRole: 'self',
       evidenceRef: e.evidenceRef as EvidenceRef, materiality: role,
@@ -541,92 +500,231 @@ export function parseSpeakerPlan(
     else problems.push(`모르는 contentRole "${v}"`)
   }
   const closing = S(j.closingIntent)
-  const closingIntent = (CLOSING_INTENTS as readonly string[]).includes(closing)
-    ? (closing as ClosingIntent) : null
+  const stanceRaw = S(j.stance)
+  const basisRaw = S(j.selfBasis)
+  return {
+    need: {
+      decision: S(j.decision) === 'hold' ? 'hold' : 'ok',
+      holdReason: S(j.holdReason) === '' ? '계획이 만들지 말자고 했다' : S(j.holdReason),
+      stance: (STANCES as readonly string[]).includes(stanceRaw) ? (stanceRaw as Stance) : null,
+      stanceRaw,
+      selfBasis: (SELF_BASES as readonly string[]).includes(basisRaw) ? (basisRaw as SelfBasis) : null,
+      warrants: arr(j.speakerWarrants).map((x) => {
+        const o = x as Record<string, unknown>
+        return {
+          fact: S(o.fact) as ClaimFact, requiredValue: S(o.requiredValue),
+          evidenceRef: S(o.evidenceRef) as EvidenceRef, evidenceText: S(o.evidenceText),
+        }
+      }),
+      universalReason: S(j.universalReason),
+      protectedFacts: facts, speakerRelative,
+      closingIntent: (CLOSING_INTENTS as readonly string[]).includes(closing) ? (closing as ClosingIntent) : null,
+      contentRoles: [...new Set(roles)],
+    },
+    dropped, schemaProblems: problems,
+  }
+}
+
+/** 🔴 코드가 Persona 를 정한 기록 — artifact 에 그대로 실린다 */
+export type PersonaDecision = {
+  /** 🔴 언제나 코드다. 판독·생성기는 이 값을 정하지 못한다 */
+  decidedBy: 'code'
+  /** 이 원문에 대해 정해진 순서로 본 후보 수 */
+  considered: number
+  /** 자격(과 선호 조건)을 본 뒤 남은 사람 — 순서 그대로 */
+  eligible: string[]
+  /** 확정한 사람 — 없으면 null */
+  chosen: string | null
+}
+
+export type SpeakerPlanParse = {
+  plan: SpeakerPlan
+  dropped: { text: string; why: DropReason }[]
+  schemaProblems: string[]
+  /** 🔴 코드가 Persona 를 정한 기록 — 판독이 망가져 정하지 못했으면 `null` */
+  decision: PersonaDecision | null
+}
+
+/**
+ * 🔴 **1인칭 허가 근거의 모양** — Persona 와 무관하게 판정한다.
+ *    여기서 걸리면 **이번 답이 잘못된 것**이라 누구로 바꿔도 같다(재시도 사유).
+ */
+export function checkWarrantShape(input: {
+  selfBasis: SelfBasis | null
+  warrants: readonly ClaimedWarrant[]
+  universalReason: string
+  spans: readonly EvidenceSpan[]
+}): { ok: true } | { ok: false; why: WarrantRejection; detail: string } {
+  if (input.selfBasis === null) return { ok: false, why: 'unknownBasis', detail: '' }
+  if (input.selfBasis === 'noLifeFactNeeded') {
+    if (input.warrants.length > 0) {
+      return { ok: false, why: 'warrantsWithoutNeed', detail: input.warrants.map((w) => w.fact).join(' · ') }
+    }
+    if (input.universalReason.trim() === '') return { ok: false, why: 'noUniversalReason', detail: '' }
+    return { ok: true }
+  }
+  if (input.warrants.length === 0) return { ok: false, why: 'emptyWarrants', detail: '' }
+  for (const w of input.warrants) {
+    if (!(CLAIM_FACTS as readonly string[]).includes(w.fact)) {
+      return { ok: false, why: 'unknownFact', detail: w.fact }
+    }
+    if (!(EVIDENCE_REFS as readonly string[]).includes(w.evidenceRef)
+      || w.evidenceText.trim() === ''
+      || !foundInSpan(w.evidenceText, w.evidenceRef, input.spans)) {
+      return { ok: false, why: 'evidenceNotInSource', detail: `${w.fact}: ${w.evidenceText}` }
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * 🔴 **1인칭을 허가해도 되는가.** 하나라도 어긋나면 허가하지 않는다.
+ *    모양 검사(`checkWarrantShape`) 뒤에 **이 사람의 정본 카드**가 요구값을 충족하는지 본다.
+ */
+export function verifySelfWarrants(input: {
+  persona: PersonaLifeContract | undefined
+  selfBasis: SelfBasis | null
+  warrants: readonly ClaimedWarrant[]
+  universalReason: string
+  spans: readonly EvidenceSpan[]
+}): { ok: true; warrants: SpeakerWarrant[] } | { ok: false; why: WarrantRejection; detail: string } {
+  const p = input.persona
+  if (p === undefined) return { ok: false, why: 'unknownPersona', detail: '' }
+  const shape = checkWarrantShape(input)
+  if (!shape.ok) return shape
+  if (input.selfBasis === 'noLifeFactNeeded') return { ok: true, warrants: [] }
+  const verified: SpeakerWarrant[] = []
+  for (const w of input.warrants) {
+    /**
+     * 🔴 **정본 카드가 이 값을 충족하는가.** 이것이 자격 판정의 전부다 —
+     *    모델이 카드를 옮겨 적었는지는 더 이상 묻지 않는다.
+     */
+    if (!hasFact(p, w.fact, w.requiredValue)) {
+      return { ok: false, why: 'requiredValueUnmet', detail: `${w.fact}=${w.requiredValue}` }
+    }
+    // 🔴 통과한 것에만 **코드가 읽은** 카드 값을 찍는다
+    verified.push({ ...w, verifiedCardValue: cardValueText(p, w.fact) })
+  }
+  return { ok: true, warrants: verified }
+}
+
+/**
+ * 🔴 **유료 초안 요청 전에 코드가 Persona 를 확정한다** (2026-10-12 · canon §4.1).
+ *
+ *    `personas` 는 부르는 쪽이 **이 원문에 대해 정해진 순서**(`orderPersonasForSource`)로 세워 준다 —
+ *    순서가 원천마다 흩어져 한 Persona 에 몰리지 않는다(앞판이 모델에게 "자격자 중 먼저 나온 사람" 을
+ *    고르라고 지시하던 것과 같은 규칙을 코드가 직접 한다).
+ *
+ *    `prefer` 는 **자격을 채운 사람 사이의 선호**다(예: 결론을 바꾸는 나이 조건을 만족하는가).
+ *    선호를 채운 사람이 없으면 자격자 중 첫 사람이다 — 선호는 자격을 넓히지 않는다.
+ */
+export function decidePersona(input: {
+  need: SourceNeed
+  personas: readonly PersonaLifeContract[]
+  spans: readonly EvidenceSpan[]
+  prefer?: (p: PersonaLifeContract, need: SourceNeed) => boolean
+}): { plan: SpeakerPlan; decision: PersonaDecision } {
+  const { need } = input
   const base = {
-    protectedFacts: facts, speakerRelative, closingIntent, contentRoles: [...new Set(roles)],
+    protectedFacts: need.protectedFacts, speakerRelative: need.speakerRelative,
+    closingIntent: need.closingIntent, contentRoles: need.contentRoles,
     planVersion: SPEAKER_PLAN_VERSION,
   }
   const withBase = (p: SpeakerPlan): SpeakerPlan => ({ ...p, ...base })
-
-  if (personas.length === 0) {
-    return { plan: withBase(HOLD('쓸 수 있는 Persona 가 없다')), dropped, schemaProblems: problems }
-  }
-  if (S(j.decision) === 'hold') {
-    return {
-      plan: withBase(HOLD(S(j.holdReason) === '' ? '계획이 만들지 말자고 했다' : S(j.holdReason))),
-      dropped, schemaProblems: problems,
-    }
-  }
-
-  const personaCode = S(j.personaCode)
-  const persona = personas.find((p) => p.code === personaCode)
-  const stanceRaw = S(j.stance)
-  const stance = (STANCES as readonly string[]).includes(stanceRaw) ? (stanceRaw as Stance) : null
-  const basisRaw = S(j.selfBasis)
-  const selfBasis = (SELF_BASES as readonly string[]).includes(basisRaw) ? (basisRaw as SelfBasis) : null
-  const universalReason = S(j.universalReason)
-  const warrants: ClaimedWarrant[] = arr(j.speakerWarrants).map((x) => {
-    const o = x as Record<string, unknown>
-    return {
-      fact: S(o.fact) as ClaimFact, requiredValue: S(o.requiredValue),
-      evidenceRef: S(o.evidenceRef) as EvidenceRef, evidenceText: S(o.evidenceText),
-    }
+  const decision = (eligible: readonly PersonaLifeContract[], chosen: string | null): PersonaDecision => ({
+    decidedBy: 'code', considered: input.personas.length, eligible: eligible.map((p) => p.code), chosen,
   })
 
-  if (persona === undefined) {
+  if (input.personas.length === 0) {
+    return { plan: withBase(HOLD('쓸 수 있는 Persona 가 없다')), decision: decision([], null) }
+  }
+  if (need.decision === 'hold') {
+    return { plan: withBase(HOLD(need.holdReason)), decision: decision([], null) }
+  }
+  if (need.stance === null) {
+    return {
+      plan: withBase(HOLD(`${WARRANT_REJECTION_LABEL.unknownStance} — "${need.stanceRaw}"`, 'unknownStance')),
+      decision: decision([], null),
+    }
+  }
+
+  // ── 처음부터 낮은 자리 — 1인칭이 아니므로 자격 근거가 필요 없다. 순서상 첫 사람이다 ──
+  if (need.stance !== 'SELF_EXPERIENCE') {
+    const chosen = input.personas[0]!
+    return {
+      plan: withBase({
+        decision: 'ok', personaCode: chosen.code, stance: need.stance, selfBasis: null, warrants: [],
+        universalReason: '', reason: '1인칭이 아닌 자리로 썼다', rejection: null, ...base,
+      }),
+      decision: decision(input.personas, chosen.code),
+    }
+  }
+
+  // ── 🔴 1인칭 — 모양은 누구로 바꿔도 같으므로 먼저 본다 ──
+  const shape = checkWarrantShape({
+    selfBasis: need.selfBasis, warrants: need.warrants, universalReason: need.universalReason, spans: input.spans,
+  })
+  if (!shape.ok) {
+    const why = `${WARRANT_REJECTION_LABEL[shape.why]}${shape.detail === '' ? '' : ` (${shape.detail})`}`
+    return {
+      plan: withBase(HOLD(`1인칭 허가 실패 — ${why}. 🔴 자리를 낮춰 만들지 않는다`, shape.why)),
+      decision: decision([], null),
+    }
+  }
+  // ── 🔴 정본 카드로 자격을 채운 사람만 남긴다 — 순서 그대로 ──
+  const verifiedOf = new Map<string, SpeakerWarrant[]>()
+  for (const p of input.personas) {
+    const v = verifySelfWarrants({
+      persona: p, selfBasis: need.selfBasis, warrants: need.warrants,
+      universalReason: need.universalReason, spans: input.spans,
+    })
+    if (v.ok) verifiedOf.set(p.code, v.warrants)
+  }
+  const eligible = input.personas.filter((p) => verifiedOf.has(p.code))
+  if (eligible.length === 0) {
+    /**
+     * 🔴 **허가하지 않으면 만들지 않는다.** 자리를 낮춰 생성하지 않는다 —
+     *    그렇게 만든 글이 다시 자기 경험을 말했다.
+     */
+    const want = need.warrants.map((w) => `${w.fact}=${w.requiredValue}`).join(' · ')
     return {
       plan: withBase(HOLD(
-        `${WARRANT_REJECTION_LABEL.unknownPersona} — "${personaCode}"`, 'unknownPersona')),
-      dropped, schemaProblems: problems,
+        `1인칭 허가 실패 — ${WARRANT_REJECTION_LABEL.requiredValueUnmet} (${want} · 후보 ${input.personas.length}명)`
+          + '. 🔴 자리를 낮춰 만들지 않는다', 'requiredValueUnmet')),
+      decision: decision([], null),
     }
   }
-  if (stance === null) {
-    return {
-      plan: withBase(HOLD(`${WARRANT_REJECTION_LABEL.unknownStance} — "${stanceRaw}"`, 'unknownStance')),
-      dropped, schemaProblems: problems,
-    }
-  }
-
-  // ── 자리를 낮춰서 고른 경우 — 1인칭이 아니므로 허가 근거가 필요 없다 ──
-  if (stance !== 'SELF_EXPERIENCE') {
-    return {
-      plan: withBase({
-        decision: 'ok', personaCode, stance, selfBasis: null, warrants: [],
-        universalReason: '', reason: '1인칭이 아닌 자리로 썼다', rejection: null,
-        ...base,
-      }),
-      dropped, schemaProblems: problems,
-    }
-  }
-
-  // ── 🔴 1인칭 — 코드가 근거를 검증한다 ──
-  const v = verifySelfWarrants({ persona, selfBasis, warrants, universalReason, spans })
-  if (v.ok) {
-    return {
-      plan: withBase({
-        decision: 'ok', personaCode, stance: 'SELF_EXPERIENCE', selfBasis,
-        // 🔴 **검증이 찍어 준 것만** 싣는다 — 모델이 준 배열을 그대로 쓰지 않는다
-        warrants: v.warrants,
-        universalReason: selfBasis === 'noLifeFactNeeded' ? universalReason : '',
-        reason: selfBasis === 'lifeFacts' ? '원문 근거와 정본 카드로 1인칭을 허가했다'
-          : '특정 생활사 자격이 필요 없는 글이다', rejection: null,
-        ...base,
-      }),
-      dropped, schemaProblems: problems,
-    }
-  }
-  /**
-   * 🔴 **허가하지 않으면 만들지 않는다.**
-   *    자리를 낮춰 생성하지 않는다 — 그렇게 만든 글이 다시 자기 경험을 말했다.
-   *    다른 Persona 를 고르지도 않는다.
-   */
-  const why = `${WARRANT_REJECTION_LABEL[v.why]}${v.detail === '' ? '' : ` (${v.detail})`}`
+  const prefer = input.prefer
+  const chosen = (prefer === undefined ? undefined : eligible.find((p) => prefer(p, need))) ?? eligible[0]!
   return {
-    plan: withBase(HOLD(
-      `1인칭 허가 실패 — ${why}. 🔴 자리를 낮춰 만들지 않는다`, v.why)),
-    dropped, schemaProblems: problems,
+    plan: withBase({
+      decision: 'ok', personaCode: chosen.code, stance: 'SELF_EXPERIENCE', selfBasis: need.selfBasis,
+      // 🔴 **검증이 찍어 준 것만** 싣는다 — 모델이 준 배열을 그대로 쓰지 않는다
+      warrants: verifiedOf.get(chosen.code)!,
+      universalReason: need.selfBasis === 'noLifeFactNeeded' ? need.universalReason : '',
+      reason: need.selfBasis === 'lifeFacts' ? '원문 근거와 정본 카드로 1인칭을 허가했다'
+        : '특정 생활사 자격이 필요 없는 글이다', rejection: null,
+      ...base,
+    }),
+    decision: decision(eligible, chosen.code),
   }
+}
+
+/**
+ * 계획 응답을 읽고 **코드가 Persona 를 정한다** — `parseSourceNeed` + `decidePersona`.
+ *
+ * 🔴 판독 답의 `personaCode` 는 읽지 않는다. 같은 답이면 후보 순서·카드만으로 같은 사람이 나온다.
+ */
+export function parseSpeakerPlan(
+  raw: string, packet: SourceEvidencePacket, personas: readonly PersonaLifeContract[],
+  opts: { prefer?: (p: PersonaLifeContract, need: SourceNeed) => boolean } = {},
+): SpeakerPlanParse {
+  const read = parseSourceNeed(raw, packet)
+  if (read.schemaProblems.includes(UNPARSABLE_PLAN)) {
+    return { plan: HOLD('계획을 읽지 못했다'), dropped: [], schemaProblems: read.schemaProblems, decision: null }
+  }
+  const d = decidePersona({ need: read.need, personas, spans: packet.spans, prefer: opts.prefer })
+  return { plan: d.plan, dropped: read.dropped, schemaProblems: read.schemaProblems, decision: d.decision }
 }
 
 /**

@@ -106,7 +106,7 @@ import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-
  *    회차 상한(`CallBudget`)에도 관제 집계에도 잡히지 않았다.
  */
 import {
-  SupplyLlmSession, limitsFromEnv, LEDGER_BLOCKED, type SupplyCallResult,
+  SupplyLlmSession, limitsFromEnv, type SupplyCallResult,
 } from './lib/supply-llm-call.mjs'
 /**
  * 🔴 **Content Core v2 — 이 러너의 유일한 생성 경로** (2026-09-20 운영 전환).
@@ -115,11 +115,13 @@ import {
 import {
   runContentCore, personaInputOf, STAGE_MODEL, type Ask, type PersonaInput,
 } from './lib/content-core-run.mjs'
+import { GENERATION_RETRY_MAX } from '../src/lib/content-core/generation-failure'
+import { ledgerAskOf } from './lib/content-core-ledger-ask.mjs'
 import { buildSpeakerPlanSystemPrompt } from './lib/content-core-prompts.mjs'
 import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   SPEAKER_PLAN_PROMPT_VERSION, V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
-  STAGE_MAX_OUTPUT_TOKENS, STAGE_MAX_OUTPUT_LABEL, generationIdentity,
+  STAGE_MAX_OUTPUT_LABEL, generationIdentity,
   type GenerationContract,
 } from '../src/lib/content-core/pipeline'
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
@@ -127,7 +129,7 @@ import { REVIEW_VERSION, reviewWarnings } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
 import type { DraftGateSource } from '../src/lib/content-core/draft-life-gates'
 import {
-  ARTIFACT_VERSION, violatesArtifact, type CallMeta, type HumanReviewArtifact,
+  ARTIFACT_VERSION, violatesArtifact, type HumanReviewArtifact,
 } from '../src/lib/content-core/artifact'
 import { type LedgerStage } from '../src/lib/llm-ledger'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
@@ -333,12 +335,8 @@ export const DRAFT_TIMEOUT_MS = 25000
  */
 export const V2_CALL_CAP = 3
 
-/** 🔴 v2 단계 → 장부 단계 이름. 장부 어휘(`LEDGER_STAGES`)는 정본이라 바꾸지 않는다 */
-export const V2_LEDGER_STAGE: Readonly<Record<CallMeta['stage'], LedgerStage>> = Object.freeze({
-  speakerPlan: 'judge',
-  draftGen: 'draftGen',
-  semanticReview: 'draftQuality',
-})
+/** 🔴 v2 단계 → 장부 단계 이름 — 정본은 `content-core-ledger-ask` 하나다(러너와 검사가 같은 변환을 쓴다) */
+export { V2_LEDGER_STAGE, V2_LEDGER_RETRY_STAGE } from './lib/content-core-ledger-ask.mjs'
 export const MAX_ATTEMPTS = 2
 /**
  * 🔴 **원문을 옮겼을 때 다시 쓰게 하는 횟수** (2026-09-13).
@@ -543,36 +541,13 @@ async function ask(
  *    provider 를 직접 부르지 않는다. 회차 요청 상한(`BUDGET`)도 여기서 센다.
  *    🔴 모델은 `runContentCore` 가 `STAGE_MODEL` 로 정해 넘겨준다 — 여기서 고르지 않는다.
  */
-const v2Ask: Ask = async (stage, system, payload, model) => {
-  const blockedRes = {
-    ok: false, rawText: '', truncated: false, usageKnown: false,
-    inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null, blocked: true,
-  }
-  if (!BUDGET.take()) return blockedRes
-  countCall(stage)
+const v2Ask: Ask = ledgerAskOf({
+  // 🔴 재시도도 **같은 회차 공동 예산**에서 한 칸을 가져간다 — 따로 열린 몫이 없다
+  take: () => BUDGET.take(),
+  count: countCall,
   // 🔴 같은 장부 wrapper 를 지난다 — 여기서 provider 를 직접 부르지 않는다
-  // 🔴 **그 단계의 상한**을 쓴다 — 장부 예약도 provider 요청도 이 값으로 나간다
-  const r = await ask(V2_LEDGER_STAGE[stage], system, payload, STAGE_MAX_OUTPUT_TOKENS[stage], model)
-  const code = String(r.errorCode ?? '')
-  return {
-    /**
-     * 🔴 **정산 줄을 못 적었으면 완주가 아니다** (2026-09-20).
-     *    provider 가 성공해도 장부에 안 적혔으면 금액을 모르는 글이다 —
-     *    그런 글이 후보·캐시·AUTO_ADOPT 로 가지 않게 여기서 막는다.
-     */
-    ok: r.ok && r.settlementRecorded,
-    rawText: r.rawText, truncated: r.maxTokensReached,
-    usageKnown: r.usageKnown && r.settlementRecorded,
-    inputTokens: r.inputTokens, outputTokens: r.outputTokens, thoughtsTokens: r.reasoningTokens,
-    /**
-     * 🔴 **영속 장부가 정산한 금액을 그대로 싣는다** (2026-09-20).
-     *    여기서 두 번째로 계산하지 않는다 — 같은 값을 두 곳에서 계산하면 어긋난다.
-     *    정산하지 못한 건은 `null` 이다. 0원이 아니다.
-     */
-    usd: r.settledUsd,
-    blocked: code === 'NO_LEDGER' || code.startsWith(`${LEDGER_BLOCKED}:`),
-  }
-}
+  call: (stage, system, payload, maxOut, model) => ask(stage, system, payload, maxOut, model),
+})
 
 type GenDraft = { title: string; body: string; intendedQuestion: string; sourceAngle: string }
 
@@ -1158,6 +1133,11 @@ async function main(): Promise<void> {
         contract,
         voiceSourceDigest: voice.sourceDigest,
         ask: v2Ask, now, callCap: V2_CALL_CAP,
+        /**
+         * 🔴 **일시적 기술 실패만 원천당 한 번 다시 묻는다** (2026-10-12 Batch B).
+         *    정상 3 + 재시도 1 = 4 — 회차 공동 예산(`CALL_ALLOWANCE_PER_SOURCE`)을 넘지 않는다.
+         */
+        retryCap: GENERATION_RETRY_MAX,
       })
       // 🔴 완주한 회차만 캐시에 남긴다 — 막힌 결과를 재사용하면 다음 회차도 막힌다
       if (art.review.semanticCompletion.complete) {

@@ -223,7 +223,8 @@ console.log('\n②-b 🔴 🔴 단계마다 제 출력 상한으로 나갔다 (2
       const r = rows.find((x) => x.stage === stage && x.status === 'reserved')
       return typeof r?.reservedUsd === 'number' ? r.reservedUsd : null
     }
-    const plan = res('judge')
+    // 🔴 원천 요구 판독은 장부에 `sourceNeed` 로 남는다(2026-10-12 · K-06) — 원천 판정 `judge` 와 이름을 섞지 않는다
+    const plan = res('sourceNeed')
     const draft = res('draftGen')
     return plan !== null && draft !== null && draft > plan
   })())

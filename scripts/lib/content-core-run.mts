@@ -2,12 +2,15 @@
  * Content Core v2 — 🔴 **세로 경로 하나를 끝까지 돈다. 유료 3회**
  *
  * 마스킹된 근거 묶음
- *   → ① 화자 계획 (원문 + 실제 카드를 함께 보고 고르고, **코드가 근거를 검증**)
+ *   → ① 원천 요구 판독 (🔴 Persona 중립 — 자리 · 자격 요구값 · 지킬 사실)
+ *   → 🔴 코드가 Persona 확정 (정본 카드로 자격 대조 · 유료 초안 **전**) — 이후 바뀌지 않는다
  *   → ② 원문 근거 + Persona + Voice 로 초안 한 편
  *   → deterministic (복제 · 개인정보 · 원자적 사실 · 확정 가능한 나이 모순)
  *   → ③ 원문과 초안을 **직접** 견주는 통합 검수
  *   → 사람 판정 한 장
  *
+ * 🔴 **일시적 기술 실패(잘림 · timeout · 네트워크 · 429 · 5xx)는 원천당 `retryCap` 번만 다시 묻는다.**
+ *    재시도도 주입된 `ask` 를 지난다 — 회차 예산·장부를 우회하지 않는다 (2026-10-12 Batch B).
  * 🔴 **효과를 주입받는다.** provider·시계·예산을 직접 부르지 않는다.
  * 🔴 **DB · 큐 · 발행 · 네트워크를 모르는 파일이다.**
  * 🔴 **v1 의 생성·검수 계약을 가져오지 않는다.** 다만 금지 낱말 · 복제 · 자기 나이
@@ -25,7 +28,13 @@ import { STAGE_MODEL as CANON_STAGE_MODEL } from '../../src/lib/content-core/pip
 import {
   canGenerate, lifeContractIdentity, orderPersonasForSource, parseSpeakerPlan, planSchemaFailed,
 } from '../../src/lib/content-core/speaker'
-import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
+import type {
+  PersonaDecision, PersonaLifeContract, SourceNeed, SpeakerPlan,
+} from '../../src/lib/content-core/speaker'
+import {
+  classifyCall, failureKindOf, isTransientCall,
+  type CallOutcome, type GenerationFailure, type GenerationFailureStage,
+} from '../../src/lib/content-core/generation-failure'
 import { materializePersonaAt } from '../../src/lib/persona-birth-anchor'
 import {
   planAxisMapping, fixSourceSpeakerAge, checkAgeMappingApplied,
@@ -39,7 +48,7 @@ import {
   type LoadBearingCandidate,
 } from '../../src/lib/content-core/load-bearing'
 import {
-  selfForbiddenBy, priorFailureLines, type PriorPlanFailure,
+  selfForbiddenBy, priorFailureNeedLines, type PriorPlanFailure,
 } from '../../src/lib/content-core/replan-input'
 /** 🔴 초안 게이트 — 자료 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제 (2026-09-26) */
 import { judgeDraftGates, type DraftGateSource } from '../../src/lib/content-core/draft-life-gates'
@@ -84,6 +93,11 @@ export type AskResult = {
   usd: number | null
   /** 예산·상한에 막혀 **나가지도 않았는가** */
   blocked: boolean
+  /**
+   * 🔴 **답이 없을 때 그 까닭** (2026-10-12 Batch B) — `TIMEOUT` · `NETWORK` · `HTTP_429` · `HTTP_5xx` 만
+   *    일시 실패로 보고 다시 묻는다(`generation-failure`). 없거나 모르는 값은 다시 묻지 않는다.
+   */
+  errorCode?: string | null
 }
 export type AskStage = CallMeta['stage']
 
@@ -97,6 +111,8 @@ export const STAGE_MODEL: Readonly<Record<AskStage, ProviderModel>> = CANON_STAG
 /** 🔴 `model` 을 인자로 받는다 — 어느 단계가 어디로 갔는지 **값으로** 확인된다 */
 export type Ask = (
   stage: AskStage, system: string, payload: string, model: ProviderModel,
+  /** 🔴 1 = 첫 시도 · 2 = 일시 실패 뒤 재시도 — 장부가 두 시도를 다른 단계 이름으로 적는다 */
+  attempt: 1 | 2,
 ) => Promise<AskResult>
 
 /**
@@ -226,6 +242,13 @@ export type RunInput = {
   /** 🔴 원천 하나가 쓸 수 있는 요청 수 — 넘기면 완주 실패로 남는다 */
   callCap: number
   /**
+   * 🔴 **원천 하나가 쓸 수 있는 재시도 수** (2026-10-12 Batch B) — `callCap` 과 **따로** 센다.
+   *    일시적 기술 실패(timeout · 잘림 · 네트워크 · 429 · 5xx)에만 쓴다. 안전·품질·Persona 자격은
+   *    재시도 대상이 아니다. 없으면 0 — 재시도하지 않는다. 운영 러너는 `GENERATION_RETRY_MAX` 를 준다.
+   *    🔴 재시도도 같은 `ask` 를 지난다 — 회차 예산·장부 예약·잠금을 우회하지 않는다.
+   */
+  retryCap?: number
+  /**
    * 🔴 **같은 원천의 지난 실패** (2026-09-23 마스터 지적).
    *
    *    앞판은 실패한 사람을 빼기만 했다. 그러면 계획기는 **왜 실패했는지 모른 채**
@@ -251,14 +274,28 @@ const completionOf = (r: AskResult): ReviewCompletion => {
   return { complete: true, reason: null, cause: null }
 }
 
-const parseDraft = (raw: string): { title: string; body: string } | null => {
+/**
+ * 🔴 **초안 답을 읽는다 — 화자는 바꾸지 않는다** (2026-10-12 Batch B · canon §4.1).
+ *    초안 계약은 `title`·`body` 둘이다. 답이 다른 화자(`personaCode`·`persona`)를 내밀면 그 사람으로
+ *    바꾸지 않고 **실패**다 — 코드가 유료 요청 전에 정한 사람이 끝까지 그 글의 화자다.
+ */
+export const DRAFT_PERSONA_DRIFT = '초안이 다른 화자를 내밀었다'
+export function parseDraft(
+  raw: string, fixedPersonaCode: string,
+): { ok: true; draft: { title: string; body: string } } | { ok: false; why: string } {
   try {
     const t = raw.trim()
     const j = JSON.parse(t.startsWith('{') ? t : `{${t}`) as Record<string, unknown>
+    for (const k of ['personaCode', 'persona'] as const) {
+      const v = typeof j[k] === 'string' ? (j[k] as string).trim() : ''
+      if (v !== '' && v !== fixedPersonaCode) {
+        return { ok: false, why: `${DRAFT_PERSONA_DRIFT} — ${k}=${v} (확정 ${fixedPersonaCode}) · 🔴 바꾸지 않는다` }
+      }
+    }
     const title = typeof j.title === 'string' ? j.title.trim() : ''
     const body = typeof j.body === 'string' ? j.body.trim() : ''
-    return title === '' || body === '' ? null : { title, body }
-  } catch { return null }
+    return title === '' || body === '' ? { ok: false, why: '초안을 읽지 못했다' } : { ok: true, draft: { title, body } }
+  } catch { return { ok: false, why: '초안을 읽지 못했다' } }
 }
 
 /**
@@ -281,23 +318,53 @@ const notRunFrom = (c: ReviewCompletion): ReviewCompletion =>
 export async function runContentCore(input: RunInput): Promise<HumanReviewArtifact> {
   const calls: CallMeta[] = []
   let spent = 0
-  const ask = async (stage: AskStage, system: string, payload: string): Promise<AskResult> => {
+  /** 🔴 이 원천이 쓴 재시도 — `callCap` 과 따로 센다 */
+  let retried = 0
+  const retryCap = Math.max(0, Math.floor(input.retryCap ?? 0))
+  /** 🔴 마지막 요청의 결과 — `noResponse` 를 timeout 과 제공사 오류로 가를 때 쓴다 */
+  let lastOutcome: CallOutcome | null = null
+  const once = async (
+    stage: AskStage, system: string, payload: string, attempt: 1 | 2,
+  ): Promise<AskResult> => {
     const model = STAGE_MODEL[stage]
-    if (spent >= input.callCap) {
+    // 🔴 정상 경로 상한 — 재시도는 아래 `retryCap` 이 따로 막는다
+    if (attempt === 1 && spent >= input.callCap) {
+      lastOutcome = 'blocked'
       return {
         ok: false, rawText: '', truncated: false, usageKnown: false,
         inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null, blocked: true,
       }
     }
-    spent += 1
-    const r = await input.ask(stage, system, payload, model)
+    if (attempt === 1) spent += 1
+    const r = await input.ask(stage, system, payload, model, attempt)
+    const outcome = classifyCall(r)
+    lastOutcome = outcome
     // 🔴 어느 모델이 얼마를 썼는지 단계별로 남긴다 — 합쳐 놓으면 알 수 없다
+    //    🔴 재시도도 **자기 줄**이다 — 두 시도를 한 줄에 합치면 이중 정산·누락을 볼 수 없다
     calls.push({
       stage, model, count: 1, inputTokens: r.inputTokens,
       outputTokens: r.outputTokens, thoughtsTokens: r.thoughtsTokens, usd: r.usd,
+      attempt, outcome,
     })
     return r
   }
+  /**
+   * 🔴 **일시적 기술 실패만, 원천당 `retryCap` 번까지 다시 묻는다** (2026-10-12 Batch B).
+   *    같은 단계 · 같은 요청 · 같은 화자다. 잘림 · timeout · 네트워크 · 429 · 5xx 만이다 —
+   *    사용량 미상 · 예산 차단 · 4xx · 형식 오류 · 안전·품질·Persona 판정은 다시 묻지 않는다.
+   */
+  const ask = async (stage: AskStage, system: string, payload: string): Promise<AskResult> => {
+    const first = await once(stage, system, payload, 1)
+    if (!isTransientCall(classifyCall(first)) || retried >= retryCap) return first
+    retried += 1
+    return once(stage, system, payload, 2)
+  }
+  /**
+   * 🔴 **지금 어느 자리인가** — 원천을 잃었을 때 `failure.stage` 로 남는다.
+   *    실패 경로마다 따로 넘기면 한 곳이 빠진다 — `blank()` 가 이 값을 읽는다.
+   */
+  let phase: GenerationFailureStage = 'sourceNeed'
+  let personaDecision: PersonaDecision | null = null
 
   const packet: SourceEvidencePacket = buildEvidencePacket({
     sourceArticleId: input.sourceArticleId, title: input.title, maskedBody: input.maskedBody,
@@ -334,6 +401,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       contentRoles: plan?.contentRoles ?? [], reason: plan?.reason ?? reason,
       // 🔴 다음 회차를 강제하는 값 — 문구가 아니라 목록이다
       suggestedPersonaCodes: [...suggested],
+      // 🔴 코드가 유료 초안 전에 정한 기록 — 판독이 망가져 정하지 못했으면 null
+      personaDecision,
     },
     voice: { provenance: voice?.provenance ?? null, blindCheckPoints: voice?.blindCheckPoints ?? [] },
     draft,
@@ -358,7 +427,17 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       totalUsd: calls.every((c) => c.usd !== null)
         ? calls.reduce((n, c) => n + (c.usd ?? 0), 0) : null,
     },
+    failure: failureOf(semanticC, outcome),
   })
+  /**
+   * 🔴 **잃은 원천의 손실 유형** — 채택이면 null. 검수까지 완주하고 막혔으면 안전·품질이다.
+   *    완주하지 못했으면 원인 값(`cause`)과 마지막 요청 결과로 가른다.
+   */
+  const failureOf = (c: ReviewCompletion, outcome: 'adopt' | 'hold' | 'drop'): GenerationFailure | null => {
+    if (outcome === 'adopt') return null
+    const kind = c.complete || c.cause === null ? 'safetyQuality' as const : failureKindOf(c.cause, lastOutcome)
+    return { stage: phase, kind, retried: retried > 0 }
+  }
 
   const noDet: DeterministicResult = { pass: true, failures: [] }
   /**
@@ -409,16 +488,45 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const prior = input.priorFailures ?? []
   const selfForbidden = selfForbiddenBy(prior)
+  /**
+   * 🔴 **첫 유료 판독은 Persona 중립이다** (2026-10-12 Batch B · canon §4.1).
+   *    후보 코드도 순서도 싣지 않는다 — 자격 값 어휘와 원문, 지난 실패의 `자리 · 사유` 뿐이다.
+   */
   const pRes = await ask('speakerPlan', buildSpeakerPlanSystemPrompt(),
     buildSpeakerPlanPayload({
-      packet, personas: ordered, priorFailures: priorFailureLines(prior), selfForbidden,
+      packet, personas: ordered, priorFailures: priorFailureNeedLines(prior), selfForbidden,
     }))
   const pC = completionOf(pRes)
   if (!pC.complete) {
     return blank(null, [], null, null, noDet, null, notRunFrom(pC),
       'hold', `화자 계획을 완주하지 못했다 (${INCOMPLETE_LABEL[pC.reason ?? 'noResponse']})`)
   }
-  const parse = parseSpeakerPlan(pRes.rawText, packet, ordered)
+  phase = 'personaDecision'
+  /**
+   * 🔴 **유료 초안 요청 전에 코드가 Persona 를 확정한다** (canon §4.1).
+   *    이 원문에 정해진 순서에서 자격을 정본 카드로 채운 첫 사람이다. 결론을 바꾸는 나이 조건
+   *    (load-bearing)이 있으면 그 조건까지 채운 사람을 먼저 고른다 — 앞판은 모델이 그 사람을
+   *    못 고르면 다음 회차에 유료 3단계를 다시 샀다(`loadBearingMismatch`).
+   */
+  const exactAgeOf = new Map(dated.map((p) => {
+    const v = materializePersonaAt({
+      card: { code: p.code, birthDate: p.birthDate ?? '', ageBand: p.ageBand }, now: input.now,
+    })
+    return [p.code, v.ok ? v.at.exactAge : null] as const
+  }))
+  const satisfiesLoadBearing = (p: PersonaLifeContract, need: SourceNeed): boolean => {
+    const facts = need.speakerRelative
+      .filter((e) => e.materiality === 'loadBearing')
+      .map((e) => ({ axis: e.axis, sourceText: e.sourceText }))
+    if (facts.length === 0) return true
+    return resolveLoadBearing({
+      facts, stance: 'SELF_EXPERIENCE',
+      chosen: { code: p.code, exactAge: exactAgeOf.get(p.code) ?? null },
+      candidates: [], selfAlreadyFailed: false,
+    }).ok
+  }
+  const parse = parseSpeakerPlan(pRes.rawText, packet, ordered, { prefer: satisfiesLoadBearing })
+  personaDecision = parse.decision
   const plan = parse.plan
   const dropped = parse.dropped
   /**
@@ -454,9 +562,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   /**
    * 🔴 **제안하지 않은 화자는 받지 않는다** (2026-09-22).
    *
-   *    화자 여력 계획이 원천마다 후보를 좁히면서, 모델이 **목록에 없는 이름**을
-   *    돌려줄 수 있는 자리가 생겼다. 앞판은 `!` 로 단정해 그 값이 `undefined` 인 채
-   *    아래로 흘렀다 — 말투 근거도 자격 판정도 없는 글이 만들어진다.
+   *    2026-10-12 부터 화자는 코드가 이 묶음 안에서 정하므로 정상 경로에서는 언제나 찾는다.
+   *    그래도 `!` 로 단정하지 않는다 — 찾지 못하면 말투 근거도 자격 판정도 없는 글이 된다.
    *    🔴 제안 밖이면 만들지 않는다(fail-closed).
    */
   // 🔴 계획이 본 것과 **같은 dated 스냅샷**에서 고른다 — 정적 카드로 되돌아가지 않는다
@@ -528,12 +635,13 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       .map((e) => ({ axis: e.axis, sourceText: e.sourceText })),
     stance: plan.stance,
     chosen: { code: persona.code, exactAge: at.exactAge },
-    candidates: dated.map((p): LoadBearingCandidate => {
-      const v = materializePersonaAt({
-        card: { code: p.code, birthDate: p.birthDate ?? '', ageBand: p.ageBand }, now: input.now,
-      })
-      return { code: p.code, exactAge: v.ok ? v.at.exactAge : null }
-    }),
+    /**
+     * 🔴 **자격을 채운 사람만 후보다** (2026-10-12 Batch B). 코드가 이미 그 안에서 나이 조건을
+     *    채운 사람을 먼저 골랐다 — 여기서 다른 추천이 나오면 그 사람은 자격이 없는 사람이다.
+     */
+    candidates: dated
+      .filter((p) => (parse.decision?.eligible ?? []).includes(p.code))
+      .map((p): LoadBearingCandidate => ({ code: p.code, exactAge: exactAgeOf.get(p.code) ?? null })),
     selfAlreadyFailed: selfForbidden,
   })
   if (!lb.ok) {
@@ -595,16 +703,21 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     return blank(plan, dropped, voice, null, noDet, null, notRun('wiringBroken'),
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
+  phase = 'draftGen'
   const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
   const dC = completionOf(dRes)
-  let draft = dC.complete ? parseDraft(dRes.rawText) : null
-  if (draft === null) {
-    const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
+  const read = dC.complete ? parseDraft(dRes.rawText, persona.code) : null
+  if (read === null || !read.ok) {
+    const why = read !== null && !read.ok ? read.why
+      : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(plan, dropped, voice, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
-      // 🔴 읽지 못한 답은 **이번 답**이 잘못된 것이다 — 결론이 아니라 재시도다
+      // 🔴 읽지 못한 답·다른 화자를 내민 답은 **이번 답**이 잘못된 것이다 — 결론이 아니라 재시도다
+      //    (다음 회차도 코드가 정한 사람으로 다시 묻는다. 그 사람을 바꾸지 않는다)
       null, dC.complete ? notRun('parseFailed') : notRunFrom(dC), 'hold', why)
   }
+  let draft = read.draft
+  phase = 'deterministic'
 
   /**
    * 🔴 **자동 보정** (2026-09-23). 모델이 "바꿔 쓰라" 를 어기고 원문 나이를 그대로
@@ -691,6 +804,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
 
   // ── ⑤ 의미 검수 1회 ──
+  phase = 'semanticReview'
   const rRes = await ask('semanticReview', reviewSystem, buildV2ReviewPayload({ draft, packet }))
   const semanticC = completionOf(rRes)
   const parsed = semanticC.complete ? parseSemanticReview(rRes.rawText) : null

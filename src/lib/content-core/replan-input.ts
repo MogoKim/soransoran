@@ -35,3 +35,14 @@ export function priorFailureLines(prior: readonly PriorPlanFailure[]): string[] 
     .filter((f) => f.cause !== null && String(f.cause).trim() !== '')
     .map((f) => `${f.personaCode ?? '(사람 무관)'} · ${f.stance ?? '(자리 없음)'} · ${String(f.cause)}`)
 }
+
+/**
+ * 🔴 **Persona 중립 판독에 실을 지난 실패** (2026-10-12 Batch B · canon §4.1).
+ *    판독은 사람을 고르지 않으므로 사람 이름을 싣지 않는다 — `자리 · 사유` 만이다.
+ *    누구로 실패했는지는 코드가 후보에서 빼는 데(`personasForAttempt`)만 쓴다.
+ */
+export function priorFailureNeedLines(prior: readonly PriorPlanFailure[]): string[] {
+  return prior
+    .filter((f) => f.cause !== null && String(f.cause).trim() !== '')
+    .map((f) => `${f.stance ?? '(자리 없음)'} · ${String(f.cause)}`)
+}

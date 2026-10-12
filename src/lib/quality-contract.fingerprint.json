@@ -1,12 +1,12 @@
 {
-  "version": "quality-v6",
-  "digest": "26b2a32b8a4ecfc54b459a5e1c258ea51057e9568573382fe7f42cf15ad759ec",
+  "version": "quality-v7",
+  "digest": "ef9ff369253ee95de6707acd7a4c8de7cee294a9023c8a7833d64150b33bc8de",
   "files": {
-    "src/lib/quality-contract.ts": "12d1cfe1b64261d15862ee613dfaa845a4bfcc4df6faed9e966c486dedb71b80",
+    "src/lib/quality-contract.ts": "952bd6c5f0a15b1ef122fe98ccfc1d987da3d0a38cd8662419321d82ba1aa0ca",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "ce3fc45e1fafdbf19b8528a38507deda68487942072679f966f85b907f50117e",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "cdfda8aea0d7f873f515c96d7e9e19853215f8c293bbd730d3733d39d3d2bf47",
+    "src/lib/content-core/pipeline.ts": "98de3892fec23d1d014ec5b3b0cef0802a7c4c3db6c7d348cef59f91913bd8e8",
     "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
@@ -14,8 +14,8 @@
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "8f32caf5d6c45cffa858e5088e6fc250ca16d56983c992112a74d98c0a392aa8",
-    "scripts/lib/content-core-run.mts": "2868e056718645a17140238d7269bc6a0ad8f5a9303e29e04752ac957fec4106",
-    "scripts/lib/content-core-prompts.mts": "c746dde7e579474a361a0c523364da61fd6e94c4278f3e3a90ea578999571dac",
+    "scripts/lib/content-core-run.mts": "f339896c32efa6f9e19c057579973322327a2869f272eeac28087daafd37c09d",
+    "scripts/lib/content-core-prompts.mts": "c37bf7d4b5fea4000e61cd94de40bfbaba8a6f607dd34880f0e59b1d0de11500",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -26,13 +26,18 @@
     "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
     "src/lib/persona-no-go.ts": "03e50a98ccaf2b17582d14603d89fba9a7f303aed0f6a8ea606c26f07a070b8e",
     "src/lib/auto-ready-defect-resolution.ts": "3a631b35672ecfa30fbe421a088e803686bd6117aeb851b38553235cee64281a",
-    "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209"
+    "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209",
+    "src/lib/content-core/speaker.ts": "e1cdbf4c17b78b836e2f52fe8068b640ef2af9082d2ef9b3f442d749a1ad214b"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "P0-B0 관측 전용 mentionsMenopause export 추가; MENOPAUSE_RE 및 기존 품질 게이트·판정·digest 불변",
+    "kind": "bump",
+    "reason": "판 quality-v6 → quality-v7",
     "changedFiles": [
-      "src/lib/original-post-persona-match.ts"
+      "src/lib/quality-contract.ts",
+      "src/lib/content-core/pipeline.ts",
+      "scripts/lib/content-core-run.mts",
+      "scripts/lib/content-core-prompts.mts",
+      "src/lib/content-core/speaker.ts"
     ]
   }
 }

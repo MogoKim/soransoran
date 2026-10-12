@@ -77,7 +77,14 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  *    🔴 v6 보정(같은 날)은 판 이름을 올리지 않고 digest 만 `--revise` 로 기록했다 — 운영 v6 행 0.
  *    🔴 v5 이하 행을 고치거나 지우거나 v6 으로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v6'
+/**
+ * 🔴 `quality-v7` (2026-10-12 · Batch B · canon §4.1) = **Persona 를 판독이 아니라 코드가 정한다.** 첫 유료 판독은 Persona
+ *    중립(`speaker-plan-p6` · 후보 줄 없음 · 자격 값 어휘만)이고, 유료 초안 전에 `decidePersona` 가 정본 카드로 자격을 대조해
+ *    원문 순서의 첫 자격자를 확정한다(`speaker-plan-v7`). 초안이 다른 화자를 내밀면 실패다. 일시적 기술 실패(timeout · 잘림 ·
+ *    네트워크 · 429 · 5xx)만 원천당 1회 다시 묻는다. 초안 게이트 · 의미 검수 · 결정적 판정은 그대로다. 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v6 이하 행을 고치거나 지우거나 v7 으로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v7'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

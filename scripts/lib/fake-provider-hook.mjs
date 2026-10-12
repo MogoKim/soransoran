@@ -10,7 +10,7 @@
  *    이 파일은 운영 경로에서 import 되지 않고, 테스트가 `--import` 로만 끼운다.
  *
  * 🔴 **한 응답이 Content Core v2 세 파서를 모두 만족한다** (2026-09-20).
- *    `parseSpeakerPlan` 은 `decision`·`personaCode`·`stance`·`selfBasis`,
+ *    `parseSpeakerPlan` 은 `decision`·`stance`·`selfBasis` (Persona 는 코드가 정한다 — 2026-10-12),
  *    `parseDraft` 는 `title`·`body`,
  *    `parseSemanticReview` 는 `confidence`·`issues` 를 본다 — 키가 겹치지 않아 한 객체다.
  *
@@ -107,8 +107,6 @@ const COUNT_TOKENS = Number(process.env.FAKE_PROVIDER_COUNT_TOKENS ?? '100')
 /** 🔴 응답이 신고할 출력 토큰 수 */
 const OUT_TOKENS = Number(process.env.FAKE_PROVIDER_OUTPUT_TOKENS ?? '22')
 
-/** 🔴 fixture 가 고르게 할 Persona — 없으면 계획이 unknownPersona 로 막힌다 */
-const PERSONA = process.env.FAKE_PROVIDER_PERSONA ?? 'P01'
 /**
  * 🔴 **원문에 있는 화자 자신의 나이** — 주면 계획이 그것을 `loadBearing` 으로 적어 낸다.
  *    그러면 어떤 Persona 로도 숫자만 바꿀 수 없어 **재계획**이 일어난다.
@@ -130,7 +128,10 @@ const DROP_AGE = process.env.FAKE_PROVIDER_DROP_AGE === '1'
 const PAYLOAD = {
   // ── speakerPlan ──
   decision: 'ok',
-  personaCode: PERSONA,
+  /**
+   * 🔴 **personaCode 를 내지 않는다** (2026-10-12 Batch B · canon §4.1). 판독은 Persona 중립이고 초안 계약은
+   *    `title`·`body` 다 — 실제 모델이 내지 않는 칸을 가짜가 내면, 코드가 정한 사람과 어긋나 초안이 실패한다.
+   */
   stance: 'SELF_EXPERIENCE',
   // 🔴 자격 근거가 필요 없는 보편 글로 선언한다 — 합성 원문에 생활사 요구가 없다
   selfBasis: 'noLifeFactNeeded',
@@ -196,23 +197,6 @@ const JUDGE_PAYLOAD = {
  *    돌려주는 provider 는 현실에 없고, 그런 가짜는 **실제보다 강하다.**
  *    요청 본문의 `후보` 목록을 읽어 그 안에서 고른다. 못 읽으면 기본값이다.
  */
-const pickOffered = (body) => {
-  try {
-    const req = JSON.parse(String(body ?? '{}'))
-    /**
-     * 🔴 **`후보` 목록만 본다.** 원문 span 까지 훑으면 본문에 우연히 섞인
-     *    `Pxx` 를 화자로 고른다 — 제안에 없는 이름이 되어 실제와 어긋난다.
-     */
-    const payload = JSON.parse(
-      String(req?.contents?.[0]?.parts?.[0]?.text ?? req?.messages?.[0]?.content ?? '{}'))
-    const lines = Array.isArray(payload?.후보) ? payload.후보 : []
-    const codes = lines
-      .map((l) => (typeof l === 'string' ? /^\[(P\d{2})\]/.exec(l)?.[1] ?? null : null))
-      .filter((c) => c !== null)
-    if (codes.length === 0) return PERSONA
-    return codes.includes(PERSONA) ? PERSONA : codes[0]
-  } catch { return PERSONA }
-}
 /** 🔴 요청에 1인칭 금지가 실렸는가 — 실제 모델이 읽는 그 칸을 본다 */
 const selfForbiddenIn = (body) => {
   try {
@@ -246,7 +230,7 @@ const VARIED_LINES = [
 ]
 let varyIdx = 0
 const payloadFor = (body) => {
-  const base = { ...PAYLOAD, personaCode: pickOffered(body) }
+  const base = { ...PAYLOAD }
   if (VARY_TITLE) {
     base.title = VARIED_TITLES[varyIdx % VARIED_TITLES.length]
     base.body = `아침에 창문을 열어 두었더니 바람이 제법 선선하더라고요.\n${VARIED_LINES[varyIdx % VARIED_LINES.length]}\n`

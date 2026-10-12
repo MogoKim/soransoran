@@ -4,7 +4,9 @@
  * 🔴 **왜 이 모양인가** (2026-09-19, 대안 D).
  *    ① 생성이 요약만 받던 판에서는 원문의 말이 단계마다 변했다 → 원문을 직접 준다.
  *    ② 화자 선택이 `claimRequirements` 라는 중간 표현만 보던 판에서는
- *       그 표현이 비는 순간 **모두가 자격자**가 됐다 → 계획이 원문과 카드를 함께 본다.
+ *       그 표현이 비는 순간 **모두가 자격자**가 됐다 → 계획이 원문을 직접 보고 요구값을 적는다.
+ *    ③ (2026-10-12 Batch B · canon §4.1) 판독은 **Persona 를 보지 않는다.** 요구값을 적으면
+ *       코드가 정본 카드로 그 값을 실제로 가진 사람을 찾는다(`decidePersona`).
  *
  * 🔴 **계획 호출에 말투 참고 댓글 본문을 보내지 않는다.** 자격 판정에 필요 없고,
  *    보내면 남의 글이 화자 선택에 섞인다.
@@ -58,24 +60,36 @@ export function lifeContractLines(p: PersonaLifeContract): string[] {
 }
 
 // ─────────────────────────────────────────────────────────
-// ① 화자 계획 — 🔴 원문과 실제 카드를 **함께** 본다
+// ① 원천 요구 — 🔴 **Persona 중립** (2026-10-12 Batch B · canon §4.1)
+//    판독은 원문만 본다. 누가 쓸지는 코드가 정본 카드로 정한다(`decidePersona`).
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 자격 판정에 쓰는 칸만. 🔴 **이 줄은 모델이 읽는 용도다** — 모델이 이 값을 다시
- *    적어 낼 필요는 없다. 자격 판정은 코드가 정본 카드에서 직접 읽어 한다.
+ * 🔴 **자격 요구값의 어휘** — 후보 풀이 실제로 쓰는 글자만, 사람 이름 없이.
+ *
+ *    `work` · `region` · `age` · `childAgeBand` 는 카드의 글자와 **완전히 같아야** 코드가 대조할 수 있다.
+ *    앞판은 그 글자를 후보 줄(`[P01] … 하는 일 파트타임`)에 실어 보냈다 — 그 줄이 곧 Persona 목록이었다.
+ *    이제 **값만** 모아 보낸다. 코드 오름차순·중복 없이 — 같은 풀이면 같은 요청이다.
  */
-export function qualificationLine(p: PersonaLifeContract): string {
-  return `[${p.code}] 나이대 ${p.ageBand} · 사는 곳 ${p.region} · 혼인 ${p.maritalStatus}`
-    + ` · 자녀수 ${p.childrenCount}${p.childrenAgeBands.length > 0 ? ` (${p.childrenAgeBands.join('·')})` : ''}`
-    + ` · 하는 일 ${p.workStatus} · 형편 ${p.economicStatus}`
-    + ` · 갱년기 ${p.menopauseStatus} · 부모 돌봄 ${p.parentCare}`
+export function requirementVocabulary(personas: readonly PersonaLifeContract[]): {
+  work: string[]; region: string[]; age: string[]; childAgeBand: string[]
+} {
+  const uniq = (xs: readonly string[]): string[] =>
+    [...new Set(xs.map((x) => x.trim()).filter((x) => x !== ''))].sort((a, b) => a.localeCompare(b))
+  return {
+    work: uniq(personas.map((p) => p.workStatus)),
+    region: uniq(personas.map((p) => p.region)),
+    age: uniq(personas.map((p) => p.ageBand)),
+    childAgeBand: uniq(personas.flatMap((p) => p.childrenAgeBands)),
+  }
 }
 
 export function buildSpeakerPlanSystemPrompt(): string {
   return [
-    '너는 40대 중반~60대 중반 여성 커뮤니티에 올릴 글의 **화자를 정한다.**',
-    '[원문]을 읽고, [후보]에서 **이 이야기를 할 자격이 있는 사람**을 한 명 고른다.',
+    '너는 40대 중반~60대 중반 여성 커뮤니티에 올릴 글의 **화자 조건을 정리한다.**',
+    '[원문]을 읽고, 이 이야기를 우리 회원이 어떤 자리에서 말해야 하는지와',
+    '1인칭으로 말하려면 **그 사람에게 어떤 생활사가 있어야 하는지**를 적는다.',
+    '🔴 사람을 고르지 않는다. 누가 쓸지는 코드가 정본 카드로 정한다.',
     '🔴 글을 쓰지 않는다. 요약하지도 않는다.',
     '',
     '## 🔴 원문은 `spans` 로 나뉘어 있다',
@@ -84,7 +98,7 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '   예) 제목에만 있는 말이면 `evidenceRef: "title"`, 본문 앞이면 `"head"`.',
     '   🔴 자리가 틀리면 근거가 **없는 것으로 처리되어** 1인칭이 취소된다.',
     '',
-    '## 자리(stance) — 🔴 자격이 있을 때만 위로 올라간다',
+    '## 자리(stance)',
     ...Object.entries(STANCE_LABEL).map(([k, v]) => `- ${k}: ${v}`),
     '',
     '## 🔴 SELF_EXPERIENCE 를 고르려면 **근거를 대야 한다**',
@@ -97,14 +111,12 @@ export function buildSpeakerPlanSystemPrompt(): string {
     `- fact: ${Object.entries(CLAIM_FACT_LABEL).map(([k, v]) => `${k}(${v})`).join(' · ')}`,
     '- requiredValue: 그 사람에게 있어야 하는 값',
     '   · spouse · parentCare · menopause · children → "있음" 또는 "없음"',
-    '   · work · region · age · childAgeBand → **[후보] 줄에 적힌 글자 그대로**',
+    '   · work · region · age · childAgeBand → **[값목록]에 적힌 글자 그대로**',
     '- evidenceRef / evidenceText: 그 요구가 나온 **[원문]의 실제 문장 조각**',
     '',
-    '🔴 **카드 값을 옮겨 적지 않는다.** 고른 사람의 카드는 코드가 정본에서 직접 읽는다.',
-    '   네가 할 일은 "원문이 어떤 자격을 요구하는가" 를 정하는 것까지다.',
-    '',
-    '🔴 근거는 **코드가 대조한다.** 원문에 없는 문장, 고른 사람이 충족하지 못하는',
-    '   requiredValue 는 **1인칭이 취소된다.** 지어내면 글이 만들어지지 않는다.',
+    '🔴 네가 할 일은 "원문이 어떤 자격을 요구하는가" 를 정하는 것까지다.',
+    '   그 자격을 **정본 카드로 실제로 가진 사람**은 코드가 찾는다. 없으면 글을 만들지 않는다.',
+    '🔴 근거는 **코드가 대조한다.** 원문에 없는 문장은 1인칭이 취소된다. 지어내면 글이 만들어지지 않는다.',
     '',
     '### selfBasis = "noLifeFactNeeded"',
     '원문이 **특정 생활사 자격을 요구하지 않는** 보편적인 이야기·감정·생각인 경우다.',
@@ -112,14 +124,10 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '`speakerWarrants` 는 **빈 배열**로 두고 `universalReason` 에 왜 그런지 한 줄 적는다.',
     '🔴 **"잘 모르겠다" 는 이 값이 아니다.** 모르면 자리를 낮춘다.',
     '',
-    '## 자격이 없으면',
-    '- 관찰 · 생각 · 물음으로 바꿔도 이야기가 남으면 → OBSERVATION · REFLECTION · QUESTION',
-    '- 당사자 경험이 이 글의 알맹이라 바꾸면 사라지면 → `decision: "hold"`',
-    '',
-    '## 누구를 고를까',
-    '🔴 **자격을 채운 사람 중에서** 후보 목록에 **먼저 나온 사람**을 고른다.',
-    '🔴 목록 순서는 이 원문에 대해 미리 정해져 있다 — 원문마다 다르다.',
-    '🔴 앞에 있다는 이유로 **자격 없는 사람을 고르지 않는다.**',
+    '## 자리를 어떻게 고를까',
+    '- 관찰 · 생각 · 물음으로 말해도 이야기가 남으면 → 처음부터 OBSERVATION · REFLECTION · QUESTION',
+    '- 당사자 경험이 이 글의 알맹이라 바꾸면 사라지면 → SELF_EXPERIENCE 와 그 자격 근거',
+    '- 우리 게시판에 옮길 수 없는 글이면 → `decision: "hold"`',
     '',
     /**
      * 🔴 **원문 화자 자신의 사실은 따로 적는다** (2026-09-23).
@@ -138,8 +146,8 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '- 🔴 **제3자(아는 분·친구)의 나이는 여기 넣지 않습니다.** 그것은 원문 이야기의 일부입니다.',
     '- 🔴 **원문 화자 자신의 값을 protectedFacts 에 적었다면 여기에도 반드시 적습니다.**',
     '  한 건이라도 빠지면 그 답은 **버려지고 다시 묻습니다** — 기본값으로 통과시키지 않습니다.',
-    '- 🔴 materiality 가 loadBearing 이면, **그 조건을 실제로 만족하는 후보**를 personaCode 로',
-    '  고르십시오. 그런 후보가 없으면 stance 를 OBSERVATION · QUESTION 으로 바꾸십시오.',
+    '- 🔴 materiality 가 loadBearing 이면 그 나이 조건을 만족하는 사람은 **코드가 찾습니다.**',
+    '  1인칭이 아니어도 뜻이 남는 글이면 처음부터 OBSERVATION · QUESTION 을 고르십시오.',
     '',
     '## protectedFacts — 🔴 글자 자체를 지켜야 하는 **원자적 사실**만',
     '- kind: number(숫자+단위) · publicEntity(공개 프로그램·상품·장소 이름)',
@@ -157,7 +165,7 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '',
     'JSON 만 답한다:',
     '{"decision":"ok|hold","holdReason":"hold 일 때 한 줄",',
-    ' "personaCode":"P01","stance":"SELF_EXPERIENCE|OBSERVATION|REFLECTION|QUESTION",',
+    ' "stance":"SELF_EXPERIENCE|OBSERVATION|REFLECTION|QUESTION",',
     ' "selfBasis":"lifeFacts|noLifeFactNeeded (SELF_EXPERIENCE 일 때만)",',
     ' "speakerWarrants":[{"fact":"work","requiredValue":"파트타임",',
     '                     "evidenceRef":"title|head|tail","evidenceText":"원문에 있는 조각"}],',
@@ -172,28 +180,19 @@ export function buildSpeakerPlanSystemPrompt(): string {
 
 /**
  * 🔴 **원문을 span 으로 나눠 보낸다** (2026-09-19 실측 보정).
+ *    모델이 어느 글자가 어느 자리에 있는지 알아야 `evidenceRef` 를 바로 적는다.
  *
- *    앞판은 제목과 본문을 **한 문자열로 붙여** 보내면서 출력에는 `title`/`head`/`tail`
- *    을 요구했다. 모델은 어느 글자가 어느 자리에 있는지 알 방법이 없었고,
- *    그래서 A(`spouse`)·C(`work`) 의 허가 근거와 C 의 `3시간`·`9명` 이 전부
- *    `evidenceNotInSource` 로 거절됐다 — **지시문 문구가 아니라 준 정보의 문제였다.**
- *
- * 🔴 **말투 참고 댓글 본문은 보내지 않는다.** 자격 판정에 필요 없다.
+ * 🔴 **Persona 를 싣지 않는다** (2026-10-12 Batch B). 후보 줄 · 코드 · 말투 참고 댓글 없이
+ *    자격 값 어휘(`requirementVocabulary`)만 싣는다 — 판독이 사람을 고를 재료가 없다.
  * 🔴 원문 내용·개인정보 범위는 늘리지 않는다 — 이미 마스킹되고 300자로 묶인 그 span 들이다.
- */
-/**
- * 🔴 **후보는 부르는 쪽이 이미 세워서 준다** (`orderPersonasForSource`).
- *    여기서 다시 정렬하지 않는다 — 정렬을 두 곳에 두면 한쪽이 낡는다.
- *    🔴 **회차 안에서만 존재하는 값(맡은 수)은 싣지 않는다.** 그 값은 계약에 담을 수도,
- *    다음 회차가 다시 만들 수도 없어서 "같은 계약, 다른 요청" 을 만들었다.
  */
 export function buildSpeakerPlanPayload(input: {
   packet: SourceEvidencePacket
+  /** 🔴 어휘를 만드는 데만 쓴다 — 코드·순서는 요청에 실리지 않는다 */
   personas: readonly PersonaLifeContract[]
   /**
-   * 🔴 **같은 원천의 지난 실패** (2026-09-23 마스터 지적). 빼기만 하면 계획기는
-   *    왜 실패했는지 모른 채 **같은 1인칭 계획**을 또 세운다. 유료 호출은 늘지 않는다 —
-   *    같은 요청의 입력 한 칸이다.
+   * 🔴 **같은 원천의 지난 실패** (2026-09-23 마스터 지적). 왜 실패했는지 모르면 같은 계획을
+   *    또 세운다. 🔴 Persona 이름 없이 `자리 · 사유` 만 싣는다(`priorFailureNeedLines`).
    */
   priorFailures?: readonly string[]
   /** 🔴 지난 시도가 "조건을 만족하는 사람이 없다" 로 멈췄다 — 1인칭을 쓰면 안 된다 */
@@ -208,7 +207,7 @@ export function buildSpeakerPlanPayload(input: {
       bodyLength: p.bodyLength,
       truncated: p.truncated,
     },
-    후보: input.personas.map((x) => qualificationLine(x)),
+    값목록: requirementVocabulary(input.personas),
     // 🔴 빈 칸을 넣지 않는다 — 빈 배열은 "지난 시도가 없다" 와 구분되지 않는다
     ...(prior.length === 0 ? {} : { 지난실패: prior }),
     ...(input.selfForbidden !== true ? {} : {

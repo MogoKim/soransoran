@@ -677,8 +677,9 @@ console.log('\n⑧ 우회 금지 — 🔴 유료 요청이 지나는 문은 하�
      *    계약은 그대로인데 검사가 깨진 것이다. **직접 provider 를 부르지 않는가**가
      *    진짜 계약이고, 그것은 위 세 줄(`callProvider`·`fetch`·`LEDGER.call` 한 곳)이 본다.
      */
+    // 🔴 (2026-10-12) 생성 러너는 `ask` 를 공용 어댑터(`ledgerAskOf`)의 장부 자리로 넘긴다 — 그래도 ask() 를 지난다
     check(`${label} 러너의 provider 요청이 ask() 를 지난다`,
-      /await ask\(/.test(src))
+      /await ask\(/.test(src) || /call: [^\n]*=> ask\(/.test(src))
   }
   const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   /**
@@ -686,10 +687,17 @@ console.log('\n⑧ 우회 금지 — 🔴 유료 요청이 지나는 문은 하�
    *    나이·가족 모순은 통합 의미 검수의 `lifeContradictions` 가 같은 근거로 받는다.
    *    🔴 대신 **v2 세 단계가 전부 상한과 집계를 지나는지** 본다 — 그것이 새던 자리다.
    */
+  /**
+   * 🔴 (2026-10-12 Batch B) 변환은 `content-core-ledger-ask` 한 벌이다 — 러너는 회차 예산·집계·장부 wrapper 를
+   *    거기 넘기고, 어댑터가 **예산 → 집계 → 장부** 순서로 부른다. 재시도도 같은 함수를 지난다.
+   */
+  const adapter = readFileSync('scripts/lib/content-core-ledger-ask.mts', 'utf-8')
   check('🔴 v2 세 단계가 전부 회차 상한을 지난다',
-    /const v2Ask: Ask = [\s\S]{0,400}BUDGET\.take\(\)[\s\S]{0,300}await ask\(/.test(draft))
+    /const v2Ask: Ask = ledgerAskOf\(\{[\s\S]{0,200}take: \(\) => BUDGET\.take\(\)[\s\S]{0,300}call: [^\n]*=> ask\(/.test(draft)
+    && /if \(!d\.take\(\)\) return BLOCKED[\s\S]{0,300}await d\.call\(/.test(adapter))
   check('🔴 v2 세 단계를 종류별 집계에도 넣는다 — 관제가 못 보던 자리다',
-    /countCall\(stage\)/.test(draft))
+    /count: countCall/.test(draft)
+    && /d\.count\(attempt === 2 \? `\$\{stage\}:retry` : stage\)/.test(adapter))
 
   // 🔴 사전 계산이 실제 요청과 **같은 것**을 센다 — 말이 아니라 조립부를 본다
   const countAt = provider.indexOf('export async function countInputTokens')
@@ -878,7 +886,9 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
    *    별도 나이 검수는 없앴다 — 통합 검수가 같은 근거로 본다.
    */
   check('🔴 [L] v2 세 단계가 장부에 자기 단계로 남는다',
-    ok.entries.some((e) => e.stage === 'judge')
+    // 🔴 원천 요구 판독은 `sourceNeed` 다(2026-10-12 · K-06) — 원천 판정 `judge` 와 같은 이름을 쓰지 않는다
+    ok.entries.some((e) => e.stage === 'sourceNeed')
+    && !ok.entries.some((e) => e.stage === 'judge')
     && ok.entries.some((e) => e.stage === 'draftGen')
     && ok.entries.some((e) => e.stage === 'draftQuality')
     && !ok.entries.some((e) => e.stage === 'ageCheck'),
