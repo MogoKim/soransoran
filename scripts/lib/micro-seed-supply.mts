@@ -228,6 +228,11 @@ export type AutoFetchInput = {
   sourceArticleId: string
   score: number
   flags: readonly string[]
+  /**
+   * 🔴 **게시 시각의 가장 이른 끝**(ISO) — 정확한 시각이면 그 시각, 날짜만 알면 그날 00:00 KST, 모르면 null/생략.
+   *    같은 점수끼리만 쓴다(최신이 먼저). 점수를 이기지 않는다 (2026-10-13 Batch D1 · canon §2.3).
+   */
+  postedFrom?: string | null
   /** 이미 Raw Vault 에 있는가 — 부르는 쪽이 실측해 넘긴다 */
   alreadyInVault?: boolean
 }
@@ -237,6 +242,34 @@ export type AutoSkipReason = 'ALREADY_IN_VAULT' | 'SKIP_FLAG' | 'OVER_MAX'
 export type AutoFetchPlan = {
   picked: string[]
   skipped: { sourceArticleId: string; reason: AutoSkipReason; detail: string }[]
+}
+
+const DIGITS = /^\d+$/
+const postedMsOf = (r: AutoFetchInput): number | null => {
+  const ms = typeof r.postedFrom === 'string' ? Date.parse(r.postedFrom) : Number.NaN
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * 🔴 **같은 점수 안의 순서 — 최신 원천이 먼저** (2026-10-13 Batch D1 · canon §2.3 `품질 → 신선도 → 결정적 tie`).
+ *
+ *    앞판은 같은 점수를 **글 번호 오름차순**(`localeCompare`)으로 풀었다 — 같은 카페에서 글 번호는 올라온 순서라
+ *    (2026-10-08~13 목록 8,727건 실측 · 이웃 역전 0) **오래된 글이 먼저** 열렸다.
+ *    ① 게시 시각 하한이 늦은 것 → ② 둘 다 숫자 글 번호(같은 카페 · 한 회차 목록)면 큰 번호 → ③ 옛 결정적 순서.
+ *    🔴 점수(품질)를 이기지 않는다 — 점수가 다르면 이 함수까지 오지 않는다. 가중치 · 할당량 없음.
+ */
+export function compareFreshFirst(a: AutoFetchInput, b: AutoFetchInput): number {
+  const pa = postedMsOf(a)
+  const pb = postedMsOf(b)
+  if (pa !== null && pb !== null && pa !== pb) return pb - pa
+  if (pa !== null && pb === null) return -1
+  if (pa === null && pb !== null) return 1
+  if (DIGITS.test(a.sourceArticleId) && DIGITS.test(b.sourceArticleId) && a.sourceArticleId !== b.sourceArticleId) {
+    const x = BigInt(a.sourceArticleId)
+    const y = BigInt(b.sourceArticleId)
+    return x > y ? -1 : 1
+  }
+  return a.sourceArticleId.localeCompare(b.sourceArticleId)
 }
 
 /**
@@ -253,7 +286,7 @@ export function planAutoFetch(
   const picked: string[] = []
   const skipped: AutoFetchPlan['skipped'] = []
 
-  const ordered = [...rows].sort((a, b) => b.score - a.score || a.sourceArticleId.localeCompare(b.sourceArticleId))
+  const ordered = [...rows].sort((a, b) => b.score - a.score || compareFreshFirst(a, b))
 
   for (const r of ordered) {
     if (r.alreadyInVault === true) {

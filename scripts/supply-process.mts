@@ -191,7 +191,10 @@ export function worksetRows(
      *    게시 · 목록 · 수집 시각을 서로 메우지 않는다 · 반응이 없으면 null.
      */
     const evidence: SourceEvidenceRecord | null = m === undefined ? null : buildSourceEvidence({
-      postedAt: m.posted, listedAt: m.listed, capturedAt: m.captured,
+      // 🔴 수집이 본 목록 줄이 날짜만 안다고 하면 그 하루 구간이다 — 상세 행의 00:00(옛 수집기)을 싣지 않는다
+      postedAt: material?.postedWindow ? null : m.posted,
+      postedWindow: material?.postedWindow ?? null,
+      listedAt: m.listed, capturedAt: m.captured,
       sourceSite: site, sourceArticleId: id, dedupKey: `${site}|${id}`,
       // 🔴 목록 관측이 없으면(파일 없음 · 열쇠 불일치) 반응을 모른다 — 상세 행 수로 메우지 않는다
       response: material?.response ?? null,

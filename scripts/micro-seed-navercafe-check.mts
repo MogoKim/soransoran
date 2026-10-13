@@ -27,7 +27,7 @@ import {
   SESSION_PATH_ENV, KILL_SWITCH_ENV,
   DEFAULT_SESSION_PATH, PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, DEFAULT_BROWSER_CHANNEL,
   browserLaunchOptions, isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, AUTH_COOKIE_NAMES,
-  parsePostedLabel, normalizeCount,
+  parsePostedLabel, postedDayOfLabel, normalizeCount,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease,
   LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
   LIST_SELECTORS, runIdOf, runOutputPath,
@@ -427,15 +427,21 @@ console.log('\n⑬ 작성 시각 라벨 파싱 — 🔴 애매하면 null (PR-S2
     `받은 값: ${kstDate(parsePostedLabel('15:32', now))}`)
   check('🔴 자정 직후도 같은 날로 본다 (00:05)',
     kstDate(parsePostedLabel('00:05', now)) === '2026-09-03T00:05')
-  check('YYYY.MM.DD. → 그 날 00:00 KST',
-    kstDate(parsePostedLabel('2026.09.01.', now)) === '2026-09-01T00:00')
-  check('YYYY-MM-DD 형태도 받는다',
-    kstDate(parsePostedLabel('2026-09-01', now)) === '2026-09-01T00:00')
-  check('MM.DD. → 올해로 본다',
-    kstDate(parsePostedLabel('09.01.', now)) === '2026-09-01T00:00')
+  // 🔴 (2026-10-13 Batch D1 · canon §2.1) 날짜만 보이는 라벨은 시각이 아니다 — 00:00 을 지어내지 않는다
+  check('🔴 YYYY.MM.DD. → 시각 null (00:00 을 지어내지 않는다)', parsePostedLabel('2026.09.01.', now) === null,
+    `받은 값: ${String(parsePostedLabel('2026.09.01.', now))}`)
+  check('🔴 YYYY-MM-DD · MM.DD. 도 시각 null',
+    parsePostedLabel('2026-09-01', now) === null && parsePostedLabel('09.01.', now) === null)
+  check('YYYY.MM.DD. → 날짜 2026-09-01', postedDayOfLabel('2026.09.01.', now) === '2026-09-01')
+  check('YYYY-MM-DD 형태도 날짜로 받는다', postedDayOfLabel('2026-09-01', now) === '2026-09-01')
+  check('MM.DD. → 올해 날짜', postedDayOfLabel('09.01.', now) === '2026-09-01')
   check('🔴 MM.DD. 가 미래면 작년이다 (연말연시 사고 방지)',
-    kstDate(parsePostedLabel('12.31.', now)) === '2025-12-31T00:00',
+    postedDayOfLabel('12.31.', now) === '2025-12-31',
     '올해로 두면 12월 글이 "3개월 뒤에 쓰인 글" 이 된다')
+  check('🔴 MM.DD. 가 오늘이면 올해다(KST 기준)', postedDayOfLabel('09.03.', now) === '2026-09-03')
+  check('🔴 달력에 없는 날은 null', postedDayOfLabel('2026.02.30.', now) === null && postedDayOfLabel('13.01.', now) === null)
+  check('🔴 시각을 아는 라벨은 날짜 칸이 아니다',
+    postedDayOfLabel('15:32', now) === null && postedDayOfLabel('3시간 전', now) === null && postedDayOfLabel(null, now) === null)
   check('상대시각 3시간 전',
     parsePostedLabel('3시간 전', now) === new Date(now.getTime() - 3 * 3600_000).toISOString())
   check('상대시각 5분 전',
@@ -516,6 +522,24 @@ console.log('\n⑮ 목록 메타가 산출물에 남는가 · importer 계약은
     (() => { try { assertNaverCandidate({ ...full, sourcePostedAt: '오늘' }); return false } catch { return true } })())
   check('🔴 음수 page/rank/view 는 거부한다',
     (() => { try { assertNaverCandidate({ ...full, sourcePage: -1 }); return false } catch { return true } })())
+
+  // 🔴 (2026-10-13 Batch D1) 날짜만 보이는 라벨 — 시각 칸은 비고 날짜 칸만 남는다
+  const dayOnly = buildCollected('remonterrace', {
+    sourceArticleId: '34998600', sourceUrl: ARTICLE_URL('remonterrace', '34998600'),
+    originalTitle: '어제 저녁 이야기', sourceCommentCount: 4, sourcePostedLabel: '2026.09.02.',
+  }, '본문'.repeat(60), capturedAt, listedAt)
+  check('🔴 날짜만 보이는 라벨 → sourcePostedAt null · sourcePostedDay 그 날짜',
+    dayOnly.sourcePostedAt === null && dayOnly.sourcePostedDay === '2026-09-02' && dayOnly.sourcePostedLabel === '2026.09.02.',
+    `받은 값: ${String(dayOnly.sourcePostedAt)} · ${String(dayOnly.sourcePostedDay)}`)
+  check('시각을 아는 라벨은 날짜 칸이 비어 있다', full.sourcePostedDay === null && bare.sourcePostedDay === null)
+  check('날짜만 아는 행도 assertNaverCandidate 통과',
+    (() => { try { assertNaverCandidate(dayOnly); return true } catch { return false } })())
+  check('🔴 날짜와 00:00 시각이 함께 있으면 거부한다(지어낸 시각)',
+    (() => { try { assertNaverCandidate({ ...dayOnly, sourcePostedAt: '2026-09-01T15:00:00.000Z' }); return false } catch { return true } })())
+  check('🔴 라벨 없이 날짜만 있으면 거부한다',
+    (() => { try { assertNaverCandidate({ ...bare, sourcePostedDay: '2026-09-02' }); return false } catch { return true } })())
+  check('🔴 날짜 형식이 아니면 거부한다',
+    (() => { try { assertNaverCandidate({ ...dayOnly, sourcePostedDay: '2026.09.02.' }); return false } catch { return true } })())
 
   // ── 필수 키 계약 (기존) ──
   const required = ['sourceSite', 'sourceArticleId', 'sourceUrl', 'originalTitle', 'rawBody', 'sourceCapturedAt'] as const

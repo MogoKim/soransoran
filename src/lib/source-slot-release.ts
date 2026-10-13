@@ -18,6 +18,9 @@
  *       수집 시각 · 초안 시각 · 목록 시각으로 **대신하지 않는다**(A1 §6: 네이버 `sourceListedAt` 은 회차 시작 시각 하나라
  *       수집 시각과 같은 뜻이다 — 게시 시각의 대용이 될 수 없다).
  *    ③ 슬롯 시점 나이(시간) — `slotAt − postedAt`. 상한은 **기존 hot 72h 하나**. 이벤트·키워드·상시 분기 없음
+ *       🔴 (2026-10-13 Batch D1 · canon §2.1) 날짜만 아는 게시 시각은 00:00 으로 만들지 않는다 — 그날 구간
+ *       (`postedWindow`)을 그대로 받아 **구간 전체**로 판정한다. 가장 늙은 끝도 상한 안 → 통과 · 가장 어린 끝도
+ *       상한 밖 → `SOURCE_TOO_OLD_AT_SLOT` · 그 사이 → `POSTED_WITHIN_DAY_AT_SLOT`(unknown). rank 나이는 늙은 끝이다.
  *       🔴 (Lane B) 기록은 **모든 중첩 칸**을 먼저 확인한다(`parseEvidence`) — 손상은 예외가 아니라
  *       `EVIDENCE_INVALID` + 손상 위치(`issue`)다. 게시 · 수집 코드 다음에 중첩 시각의 순서 · 미래를 본다.
  *    ④ 반응 증거 — 수집 때 관측이 없으면 unknown. 있으면 **같은 원천 · 같은 관측 나이 구간** 안 백분위로만 비교한다
@@ -122,10 +125,46 @@ export type SourceProvenance = {
   dedupKeyHash: string | null
 }
 
+/**
+ * 🔴 **날짜만 아는 게시 시각 — 그 KST 하루 구간** (2026-10-13 Batch D1 · canon §2.1).
+ *    `from` = 그날 00:00 KST · `to` = 다음 날 00:00 KST(끝 미포함). 둘 다 정규 ISO · 정확히 24시간이다.
+ *    🔴 구간 안의 어느 한 점(00:00 · 정오 · 목록 시각)을 게시 시각으로 고르지 않는다.
+ */
+export type PostedWindow = { from: string; to: string }
+
+const DAY_MS = 86_400_000
+const KST_MS = 9 * 3_600_000
+const KST_DAY = /^(\d{4})-(\d{2})-(\d{2})$/
+
+/** 🔴 `YYYY-MM-DD`(KST 날짜) → 그날 구간. 달력에 없는 날이면 null — 지어내지 않는다 */
+export function postedWindowOfKstDay(day: unknown): PostedWindow | null {
+  const m = typeof day === 'string' ? KST_DAY.exec(day.trim()) : null
+  if (m === null) return null
+  const utc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  if (new Date(utc).toISOString().slice(0, 10) !== day) return null
+  return { from: new Date(utc - KST_MS).toISOString(), to: new Date(utc - KST_MS + DAY_MS).toISOString() }
+}
+
+/** 🔴 구간 모양 — 정규 ISO 두 개 · KST 자정에서 시작 · 정확히 하루. 아니면 null */
+function postedWindowOf(v: unknown): PostedWindow | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
+  const o = v as Record<string, unknown>
+  const from = canonicalIso(o.from)
+  const to = canonicalIso(o.to)
+  if (from === null || to === null) return null
+  if (to.getTime() - from.getTime() !== DAY_MS || (from.getTime() + KST_MS) % DAY_MS !== 0) return null
+  return { from: o.from as string, to: o.to as string }
+}
+
 export type SourceEvidenceRecord = {
   version: typeof SOURCE_EVIDENCE_VERSION
   /** 🔴 정규 ISO 이거나 null. 못 읽는 값은 받은 글자 그대로(64자) — "없다" 와 "손상" 을 구분한다 */
   postedAt: string | null
+  /**
+   * 🔴 **날짜만 아는 게시 시각** (2026-10-13 Batch D1) — 있으면 `postedAt` 은 null 이다(둘은 함께 오지 않는다).
+   *    칸이 없는 옛 기록은 null 과 같다. 이 칸을 모르는 옛 판정기는 `postedAt` null 을 POSTED_MISSING 으로 읽는다(fail-closed).
+   */
+  postedWindow?: PostedWindow | null
   listedAt: string | null
   capturedAt: string | null
   sourceKey: string | null
@@ -173,6 +212,11 @@ export const articleIdHashOf = (site: string, id: string): string => sha256Hex(`
  */
 export function buildSourceEvidence(input: {
   postedAt?: unknown; listedAt?: unknown; capturedAt?: unknown
+  /**
+   * 🔴 날짜만 아는 게시 시각의 하루 구간 — 목록 관측(정본)이 라벨에서 정한다. 있으면 칸을 싣고, 없으면 칸을 만들지 않는다.
+   *    `postedAt` 과 함께 오면 그대로 둘 다 싣는다 — 기록 확인(`parseEvidence`)이 손상으로 막는다(조용히 하나를 고르지 않는다)
+   */
+  postedWindow?: PostedWindow | null
   sourceSite?: unknown; sourceArticleId?: unknown; artifactId?: unknown; dedupKey?: unknown
   response?: Partial<Record<keyof SourceResponse, unknown>> | null
   observations?: readonly SourceObservation[]
@@ -190,9 +234,11 @@ export function buildSourceEvidence(input: {
   }
   const observed = response !== null && (response.views !== null || response.comments !== null)
   const dk = strOrNull(input.dedupKey)
+  const postedWindow = input.postedWindow ?? null
   return {
     version: SOURCE_EVIDENCE_VERSION,
     postedAt: normalizeEvidenceTime(input.postedAt),
+    ...(postedWindow === null ? {} : { postedWindow: { from: postedWindow.from, to: postedWindow.to } }),
     listedAt: normalizeEvidenceTime(input.listedAt),
     capturedAt: normalizeEvidenceTime(input.capturedAt),
     sourceKey: site,
@@ -269,55 +315,91 @@ export type ListObservation = {
   sourceKey: string
   articleKey: string
   postedAt: string | null
+  /** 🔴 날짜만 아는 게시 시각의 하루 구간 — 있으면 `postedAt` 은 null 이다(2026-10-13 Batch D1) */
+  postedWindow?: PostedWindow | null
   observedAt: string
   views: number | null
   comments: number | null
 }
 
 /**
+ * 🔴 **관측 시점 나이가 걸치는 관측 나이 구간들(어린 쪽부터)** — 정확한 게시 시각이면 하나다.
+ *    날짜만 알면 관측 나이도 구간이다: `[관측 − min(다음 날 00:00, 관측), 관측 − 그날 00:00]`.
+ *    늙은 끝이 상한 밖이거나 시각을 모르면 null — 어느 표본과 견줄지 정할 수 없다.
+ */
+export function observationBucketsOf(postedAt: unknown, postedWindow: unknown, observedAt: unknown): string[] | null {
+  const observed = strictIso(observedAt)
+  if (!(observed instanceof Date)) return null
+  const posted = strictIso(postedAt)
+  const w = posted === null ? postedWindowOf(postedWindow) : null
+  if (!(posted instanceof Date) && w === null) return null
+  const oldest = posted instanceof Date ? posted.getTime() : Date.parse(w!.from)
+  const youngest = posted instanceof Date ? posted.getTime() : Math.min(Date.parse(w!.to), observed.getTime())
+  const hi = observationBucketOf((observed.getTime() - oldest) / HOUR_MS)
+  const lo = observationBucketOf(Math.max(0, observed.getTime() - youngest) / HOUR_MS)
+  if (hi === null || lo === null) return null
+  const labels = [...BUCKET_LABELS]
+  return labels.slice(labels.indexOf(lo), labels.indexOf(hi) + 1)
+}
+
+/**
  * 🔴 **스냅샷을 만든다.** 비교 모집단 = 같은 원천 · 관측 나이 같은 구간 · 창 `[at − 72h, at]` 안의 관측,
  *    **글마다 가장 최근 하나**(많이 보인 글이 표본을 독차지하지 않게). 창 길이도 나이 상한과 같은 72h 다.
  *    이 글의 관측 나이를 모르면(게시 시각 모름) 구간을 정할 수 없다 → null.
+ *
+ * 🔴 **날짜만 아는 게시 시각** (2026-10-13 Batch D1 · canon §2.1 fail-closed):
+ *    · 후보의 관측 나이가 구간 여러 개에 걸치면 **구간마다** 자리를 재고 **가장 낮은 자리**를 낸다 — 불확실성으로
+ *      과대평가하지 않는다. 한 구간이라도 자리를 못 재면(한 점 · 빈 표본) 그 구간을 낸다 → 판정이 모름으로 읽는다.
+ *    · 표본 쪽 날짜만 아는 줄은 관측 나이가 **구간 하나 안에 다 들어올 때만** 그 구간 표본이 된다.
+ *    · 새 가중치 · 새 구간 경계 · 새 최소 표본 수가 없다 — 기존 구간과 기존 백분위를 그대로 쓴다.
  */
 export function sourceStatsSnapshot(input: {
   sourceKey: string
   articleKey: string
   postedAt: string | null
+  postedWindow?: PostedWindow | null
   observedAt: string | null
   comments: number | null
   views: number | null
   sample: readonly ListObservation[]
   at: Date
 }): SourceStatsSnapshot | null {
-  const posted = strictIso(input.postedAt)
-  const observed = strictIso(input.observedAt)
-  if (!(posted instanceof Date) || !(observed instanceof Date)) return null
-  const bucket = observationBucketOf((observed.getTime() - posted.getTime()) / HOUR_MS)
-  if (bucket === null) return null
+  const spanned = observationBucketsOf(input.postedAt, input.postedWindow ?? null, input.observedAt)
+  if (spanned === null) return null
   const toMs = input.at.getTime()
   const fromMs = toMs - SOURCE_AGE_LIMIT_HOURS * HOUR_MS
   const latest = new Map<string, ListObservation>()
+  const bucketOfRow = new Map<string, string>()
   for (const o of input.sample) {
     if (o.sourceKey !== input.sourceKey) continue
     const om = strictIso(o.observedAt)
-    const pm = strictIso(o.postedAt)
-    if (!(om instanceof Date) || !(pm instanceof Date)) continue
+    if (!(om instanceof Date)) continue
     if (om.getTime() < fromMs || om.getTime() > toMs) continue
-    if (observationBucketOf((om.getTime() - pm.getTime()) / HOUR_MS) !== bucket) continue
+    // 🔴 표본 줄도 관측 나이 구간이 **하나로 정해질 때만** 표본이다
+    const b = observationBucketsOf(o.postedAt, o.postedWindow ?? null, o.observedAt)
+    if (b === null || b.length !== 1 || !spanned.includes(b[0]!)) continue
     // 🔴 후보 자신은 비교 표본이 아니다 — 자기와 비교하면 표본 1건이 "중간(0.5)" 을 만든다(재현)
     if (o.articleKey === input.articleKey) continue
-    const prev = latest.get(o.articleKey)
-    if (prev === undefined || prev.observedAt < o.observedAt) latest.set(o.articleKey, o)
+    const key = `${b[0]}|${o.articleKey}`
+    const prev = latest.get(key)
+    if (prev === undefined || prev.observedAt < o.observedAt) { latest.set(key, o); bucketOfRow.set(key, b[0]!) }
   }
-  const rows = [...latest.values()]
-  const comments = rows.map((r) => r.comments).filter((x): x is number => x !== null)
-  const views = rows.map((r) => r.views).filter((x): x is number => x !== null)
-  return {
-    basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: input.sourceKey, bucket, n: rows.length,
-    commentsPct: relativePosition(input.comments, comments),
-    viewsPct: relativePosition(input.views, views),
-    windowFrom: new Date(fromMs).toISOString(), windowTo: input.at.toISOString(),
-  }
+  const snaps: SourceStatsSnapshot[] = spanned.map((bucket) => {
+    const rows = [...latest.entries()].filter(([k]) => bucketOfRow.get(k) === bucket).map(([, o]) => o)
+    const comments = rows.map((r) => r.comments).filter((x): x is number => x !== null)
+    const views = rows.map((r) => r.views).filter((x): x is number => x !== null)
+    return {
+      basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: input.sourceKey, bucket, n: rows.length,
+      commentsPct: relativePosition(input.comments, comments),
+      viewsPct: relativePosition(input.views, views),
+      windowFrom: new Date(fromMs).toISOString(), windowTo: input.at.toISOString(),
+    }
+  })
+  // 🔴 자리를 못 잰 구간이 하나라도 있으면 가장 나쁜 경우를 말할 수 없다 — 그 구간을 낸다(판정: 모름)
+  const unnormalized = snaps.find((x) => x.n === 0 || (x.commentsPct === null && x.viewsPct === null))
+  if (unnormalized !== undefined) return unnormalized
+  // 🔴 가장 낮은 자리 — 정본 순위(`compareReleaseRank`)에서 가장 뒤에 서는 구간(모르는 성분은 뒤)
+  return snaps.reduce((worst, x) => (desc(x.commentsPct, worst.commentsPct) || desc(x.viewsPct, worst.viewsPct)) > 0 ? x : worst)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -397,6 +479,11 @@ export function parseEvidence(rec: unknown): EvidenceRead {
   for (const k of ['listedAt', 'draftedAt'] as const) {
     if (r[k] !== null && canonicalIso(r[k]) === null) return bad(`${k}:corrupt`)
   }
+  // 🔴 날짜 구간 — 칸이 없거나 null 이면 없음. 있으면 정확한 하루 모양이고 `postedAt` 과 함께 오지 않는다
+  if (r.postedWindow !== undefined && r.postedWindow !== null) {
+    if (postedWindowOf(r.postedWindow) === null) return bad('postedWindow:corrupt')
+    if (r.postedAt !== null) return bad('postedWindow:with-postedAt')
+  }
   if (!(r.sourceKey === null || (typeof r.sourceKey === 'string' && r.sourceKey.trim() !== ''))) return bad('sourceKey:type')
   if (!isStrOrNull(r.participationDriver)) return bad('participationDriver:type')
 
@@ -453,7 +540,8 @@ export function parseEvidence(rec: unknown): EvidenceRead {
  *    허용 오차는 판정과 같은 `SOURCE_CLOCK_SKEW_MS` 다. 경로와 종류만 돌려준다(값 없음).
  */
 export function evidenceTimeIssue(ev: SourceEvidenceRecord, now: Date): string | null {
-  const posted = canonicalIso(ev.postedAt)
+  // 🔴 날짜만 알면 그날 00:00 이 "올라온 가장 이른 시각" 이다 — 그보다 이른 관측만 순서 위반이다
+  const posted = postedLowerBoundOf(ev)
   const timed: [string, unknown][] = [
     ['listedAt', ev.listedAt],
     ['response.observedAt', ev.response?.observedAt ?? null],
@@ -469,6 +557,19 @@ export function evidenceTimeIssue(ev: SourceEvidenceRecord, now: Date): string |
   return null
 }
 
+/**
+ * 🔴 **게시 시각의 가장 이른 끝** — 정확한 시각이면 그 시각, 날짜만 알면 그날 00:00 KST, 모르면 null.
+ *    나이 상한 · 순위 나이 · 선택 trace 의 원문 나이가 이 값 하나로 잰다(늙은 쪽으로 — 신선도를 부풀리지 않는다).
+ *    🔴 게시 시각 "추정값" 이 아니다 — 구간의 경계다. 정확한 시각 칸에 되써 넣지 않는다.
+ */
+export function postedLowerBoundOf(ev: { postedAt: string | null; postedWindow?: unknown }): Date | null {
+  const posted = canonicalIso(ev.postedAt)
+  if (posted !== null) return posted
+  if (ev.postedAt !== null && ev.postedAt !== undefined && ev.postedAt !== '') return null
+  const w = postedWindowOf(ev.postedWindow)
+  return w === null ? null : new Date(w.from)
+}
+
 // ─────────────────────────────────────────────────────────
 // 🔴 판정
 // ─────────────────────────────────────────────────────────
@@ -478,7 +579,7 @@ export const RELEASE_REASONS = [
   'EVIDENCE_MISSING', 'EVIDENCE_INVALID',
   'POSTED_MISSING', 'POSTED_CORRUPT', 'CAPTURED_MISSING', 'CAPTURED_CORRUPT',
   'CAPTURED_IN_FUTURE', 'POSTED_AFTER_CAPTURE', 'POSTED_IN_FUTURE',
-  'SOURCE_TOO_OLD_AT_SLOT',
+  'SOURCE_TOO_OLD_AT_SLOT', 'POSTED_WITHIN_DAY_AT_SLOT',
   'RESPONSE_UNOBSERVED', 'RESPONSE_UNNORMALIZED',
   'DRIVER_UNKNOWN',
   'NO_PERSONA_AT_SLOT',
@@ -497,6 +598,7 @@ export const RELEASE_REASON_LABEL: Readonly<Record<ReleaseReason, string>> = {
   POSTED_AFTER_CAPTURE: '게시 시각이 수집 시각보다 늦다 — 올라오기 전에 볼 수 없다',
   POSTED_IN_FUTURE: '게시 시각이 판정 시각보다 미래다',
   SOURCE_TOO_OLD_AT_SLOT: `예정 슬롯에서 원문 나이가 ${SOURCE_AGE_LIMIT_HOURS}시간 이상이다`,
+  POSTED_WITHIN_DAY_AT_SLOT: `게시 날짜만 안다 — 예정 슬롯에서 그날 안의 어느 시각이냐에 따라 ${SOURCE_AGE_LIMIT_HOURS}시간 안팎이 갈린다(fail-closed)`,
   RESPONSE_UNOBSERVED: '수집 때 관측한 반응이 없다',
   RESPONSE_UNNORMALIZED: '같은 원천 · 같은 관측 나이의 비교 표본이 없거나 한 점이다(자기 제외 서로 다른 값 2개 미만 · 옛 정규화 판) — raw 수로 비교하지 않는다',
   DRIVER_UNKNOWN: '참여 동력(판정기 communityAngle)이 없다',
@@ -508,7 +610,7 @@ export const EXPIRING_REASONS: readonly ReleaseReason[] = [
   'EVIDENCE_MISSING', 'EVIDENCE_INVALID',
   'POSTED_MISSING', 'POSTED_CORRUPT', 'CAPTURED_MISSING', 'CAPTURED_CORRUPT',
   'CAPTURED_IN_FUTURE', 'POSTED_AFTER_CAPTURE', 'POSTED_IN_FUTURE',
-  'SOURCE_TOO_OLD_AT_SLOT', 'RESPONSE_UNOBSERVED', 'RESPONSE_UNNORMALIZED', 'DRIVER_UNKNOWN',
+  'SOURCE_TOO_OLD_AT_SLOT', 'POSTED_WITHIN_DAY_AT_SLOT', 'RESPONSE_UNOBSERVED', 'RESPONSE_UNNORMALIZED', 'DRIVER_UNKNOWN',
 ]
 
 export type ReleaseVerdictKind = 'eligible' | 'ineligible' | 'unknown'
@@ -519,7 +621,7 @@ export type ReleaseRank = {
   commentsPct: number | null
   /** 같은 모집단 안 조회 백분위 — 같은 댓글 백분위끼리만 가른다 */
   viewsPct: number | null
-  /** 예정 슬롯에서의 원문 나이(시간) — 어린 것이 먼저 */
+  /** 예정 슬롯에서의 원문 나이(시간) — 어린 것이 먼저. 🔴 날짜만 알면 늙은 끝(그날 00:00 기준)이다 */
   ageAtSlotH: number | null
   /** 실제 반복 관측 2개 이상일 때만 — 시간당 댓글 증가 */
   velocity: number | null
@@ -595,23 +697,31 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   if (!read.ok) return out('unknown', read.code, read.issue)
   const ev = read.record
   evidenceVersion = ev.version
-  const posted = strictIso(ev.postedAt)
-  if (posted === null) return out('unknown', 'POSTED_MISSING')
-  if (posted === 'corrupt') return out('unknown', 'POSTED_CORRUPT')
+  const exact = strictIso(ev.postedAt)
+  // 🔴 날짜만 아는 게시 시각 — 정확한 시각 칸이 비었을 때만 본다(모양은 `parseEvidence` 가 이미 확인했다)
+  const window = exact === null ? postedWindowOf(ev.postedWindow ?? null) : null
+  if (exact === null && window === null) return out('unknown', 'POSTED_MISSING')
+  if (exact === 'corrupt') return out('unknown', 'POSTED_CORRUPT')
+  /** 🔴 게시 구간 `[oldest, youngest]` — 정확한 시각이면 한 점이다 */
+  const oldest = exact instanceof Date ? exact : new Date(window!.from)
   const captured = strictIso(ev.capturedAt)
   if (captured === null) return out('unknown', 'CAPTURED_MISSING')
   if (captured === 'corrupt') return out('unknown', 'CAPTURED_CORRUPT')
   if (captured.getTime() - i.now.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'CAPTURED_IN_FUTURE')
-  if (posted.getTime() - captured.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_AFTER_CAPTURE')
-  if (posted.getTime() - i.now.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_IN_FUTURE')
+  if (oldest.getTime() - captured.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_AFTER_CAPTURE')
+  if (oldest.getTime() - i.now.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_IN_FUTURE')
+  // 🔴 수집보다 늦게 올라올 수는 없다 — 날짜 구간의 어린 끝은 수집 시각에서 닫는다(목록 시각으로 메우지 않는다)
+  const youngest = exact instanceof Date ? exact : new Date(Math.min(Date.parse(window!.to), captured.getTime()))
   // 🔴 중첩 시각(목록 · 반응 · 반복 관측 · 표본 창)의 순서 · 미래 — 게시 · 수집 고유 코드 다음이다
   const timeIssue = evidenceTimeIssue(ev, i.now)
   if (timeIssue !== null) return out('unknown', 'EVIDENCE_INVALID', timeIssue)
 
-  // ③ 슬롯 시점 나이 — 시간 단위 · floor 없음
-  const ageAtSlotH = Math.max(0, i.slotAt.getTime() - posted.getTime()) / HOUR_MS
+  // ③ 슬롯 시점 나이 — 시간 단위 · floor 없음. 🔴 구간이면 양 끝을 다 본다(fail-closed)
+  const ageAtSlotH = Math.max(0, i.slotAt.getTime() - oldest.getTime()) / HOUR_MS
+  const youngestAgeH = Math.max(0, i.slotAt.getTime() - youngest.getTime()) / HOUR_MS
   rank.ageAtSlotH = Math.round(ageAtSlotH * 1000) / 1000
-  if (!(ageAtSlotH < SOURCE_AGE_LIMIT_HOURS)) return out('ineligible', 'SOURCE_TOO_OLD_AT_SLOT')
+  if (!(youngestAgeH < SOURCE_AGE_LIMIT_HOURS)) return out('ineligible', 'SOURCE_TOO_OLD_AT_SLOT')
+  if (!(ageAtSlotH < SOURCE_AGE_LIMIT_HOURS)) return out('unknown', 'POSTED_WITHIN_DAY_AT_SLOT')
 
   // ④ 반응 증거 — 관측이 없으면 모른다 · 원천 상대로만 비교한다
   const resp = ev.response

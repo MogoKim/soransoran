@@ -83,6 +83,7 @@ import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
+import { postedWindowOfKstDay } from '../src/lib/source-slot-release'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 import { guardedNavigate, readGuard, type NavigationResponse } from './lib/collect-guard-store.mjs'
 import { budgetOf, describeGuard, type SourceId } from '../src/lib/collect-guard'
@@ -697,6 +698,8 @@ async function main() {
         sourceArticleId: r.sourceArticleId,
         score: selectionScore({ stage: r.qualitySignals.stage, flags: r.qualityFlags, signals: r.qualitySignals } as QualityAssessment),
         flags: r.qualityFlags,
+        // 🔴 같은 점수 안에서만 최신이 먼저 — 날짜만 알면 그날 00:00(가장 이른 끝)이다(Batch D1)
+        postedFrom: r.sourcePostedAt ?? postedWindowOfKstDay(r.sourcePostedDay)?.from ?? null,
         alreadyInVault: doneIds.has(r.sourceArticleId),
       })),
       { max: MAX },
