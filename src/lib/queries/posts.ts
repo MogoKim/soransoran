@@ -10,7 +10,7 @@ import {
 import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
 import { BOARD_PAGE_SIZE, isPageOutOfRange, type BoardSort } from '@/lib/list-query'
 import { pickHomePopular } from '@/lib/popularity'
-import { withRealCommentCounts } from '@/lib/popularity-db'
+import { withRealReactions } from '@/lib/popularity-db'
 import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
 import { applyHomeExposure, isOverrideActive } from '@/lib/home-exposure-rules'
 import type { BoardType } from '@prisma/client'
@@ -210,7 +210,7 @@ const HOME_POPULAR_MIN_MENOPAUSE = 7
  * 점수와 배분은 popularity.ts 가 맡는다 — 여기는 조회만 한다.
  * 차단 목록을 인자로 받는다 — 홈 경로가 getBlockedUserIds 를 두 번 부르지 않게 하려는 것이다.
  *
- * 🔴 점수의 댓글 수는 실반응 댓글(popularity-db.ts)이다. 후보를 고른 뒤 한 번의 groupBy 로 붙인다.
+ * 🔴 점수의 반응은 실반응 신호(popularity-db.ts — 실회원 사람 수 + 비회원 상한 3)다. 후보를 고른 뒤 붙인다.
  *    화면에 그리는 `_count.comments`(Persona 댓글 포함 실제 개수)는 그대로 둔다 — 숫자를 바꾸지 않고
  *    순서만 실반응으로 매긴다.
  */
@@ -229,8 +229,8 @@ async function pickPopularByScore(take: number, blockedIds: string[]) {
 
   const [menopauseRows, freeRows] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
   const [menopause, free] = await Promise.all([
-    withRealCommentCounts(prisma, menopauseRows),
-    withRealCommentCounts(prisma, freeRows),
+    withRealReactions(prisma, menopauseRows),
+    withRealReactions(prisma, freeRows),
   ])
 
   return pickHomePopular({
@@ -286,7 +286,7 @@ export async function getHomePopularPosts(take = 20) {
 
   // 고정 글도 자동 후보와 같은 모양으로 맞춘다 — 점수는 쓰지 않지만 어드민이 같은 칸을 그린다.
   const pinnedPosts = activePinIds.length
-    ? await withRealCommentCounts(prisma, await prisma.post.findMany({
+    ? await withRealReactions(prisma, await prisma.post.findMany({
         where: {
           id: { in: activePinIds },
           boardType: { in: COMMUNITY_BOARD_TYPES },

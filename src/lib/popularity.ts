@@ -8,20 +8,21 @@ import type { BoardType } from '@prisma/client'
 /**
  * 점수 계산에 필요한 최소 입력. 목록 렌더용 필드까지 요구하지 않는다.
  *
- * 🔴 댓글 수는 `realComments` 다 — 실회원·비회원 댓글만 센 값(popularity-db.ts withRealCommentCounts).
- *    화면 표시용 `_count.comments` 를 받지 않는다. 그 숫자에는 Persona·운영 댓글이 섞여 있고,
+ * 🔴 반응은 `realReactions` 다 — 댓글 단 실회원 수(글쓴이 제외) + 비회원 댓글(상한 3)
+ *    (popularity-db.ts withRealReactions). 화면 표시용 `_count.comments` 를 받지 않는다.
+ *    그 숫자에는 Persona·운영 댓글과 한 사람의 연속 댓글이 섞여 있고,
  *    타입에서 빼 두어야 누가 "있는 숫자" 를 그대로 넘겨 점수를 부풀리지 못한다.
  */
 export type ScorablePost = {
   id: string
   boardType: BoardType
   createdAt: Date
-  /** 실제 사람 반응 댓글 수 — Persona · 운영 · Micro Seed 원문 · 삭제 댓글 제외 */
-  realComments: number
+  /** 실제 사람 반응 신호 — Persona · 운영 · Micro Seed 원문 · 삭제 · 글쓴이 답글 제외, 사람 단위 */
+  realReactions: number
 }
 
 /**
- * 점수 = (실반응 댓글 수 + 1) / (경과시간h + 4)^0.8
+ * 점수 = (실반응 신호 + 1) / (경과시간h + 4)^0.8
  *
  *   +1    댓글 0 인 글도 최신성으로 겨루게 한다. 없으면 전부 0 이 되어 정렬이 죽는다.
  *   +4h   방금 올라온 글의 점수가 치솟는 것을 막는다.
@@ -37,7 +38,7 @@ const DECAY_EXPONENT = 0.8
 
 export function popularityScore(post: ScorablePost, now: Date): number {
   const ageHours = Math.max(0, (now.getTime() - post.createdAt.getTime()) / 3_600_000)
-  return (post.realComments + 1) / Math.pow(ageHours + DECAY_OFFSET_HOURS, DECAY_EXPONENT)
+  return (post.realReactions + 1) / Math.pow(ageHours + DECAY_OFFSET_HOURS, DECAY_EXPONENT)
 }
 
 /** 최소 노출을 보장받는 게시판. 서비스의 정체성이라 사라지면 다른 서비스로 보인다. */

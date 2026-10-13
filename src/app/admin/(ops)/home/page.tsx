@@ -241,8 +241,8 @@ export default async function AdminHomeExposurePage({
                   </Link>
 
                   <span className="mt-1 block text-xs text-content-muted lg:mt-0">
-                    {/* 댓글은 화면에 보이는 개수, 실반응은 점수가 센 개수다(Persona·운영 댓글 제외). */}
-                    댓글 {post._count.comments} · 실반응 {post.realComments} ·{' '}
+                    {/* 댓글은 화면에 보이는 개수, 실반응은 점수가 센 신호다(실회원 사람 수 + 비회원 상한 3). */}
+                    댓글 {post._count.comments} · 실반응 {post.realReactions} ·{' '}
                     {formatKst(post.createdAt)} · {popularityScore(post, now).toFixed(3)}
                   </span>
 

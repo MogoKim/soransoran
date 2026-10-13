@@ -34,7 +34,7 @@
 | 자동 댓글 provenance · 복구 (canon §5) | ❌ main · 🟡 Batch A PR-head ✅(미병합 · 세 행 provenance · slot recovery · 공통 커널 lease `lockf` — holder 종료·SIGKILL 시 자동 해제) | ❌ | ❌ 10-07 절전 중 회차 미실행 · 복구 없음 |
 | 감사 | ✅ 자동 공개의 `ceil(N×20%)` | ✅ loaded | ⚠️ 7일 표본 7건 판정 · 결함 0 — 결함 탐지력은 UNKNOWN |
 | 82cook | ✅ bounded canary 계약 | ❌ policy-disabled · job 0 | UNKNOWN — clean canary 0회 |
-| 실회원 우선 홈 랭킹 | ❌ main · 🟡 Batch F PR-head ✅(미병합 · 홈 점수 = 실회원 relation MEMBER + GUEST 댓글만 · Persona·운영·Micro Seed 원문 제외 · 화면 댓글 수 불변 · /best 는 best-v2 부터 이미 실회원 전용 · 게시판 정렬은 최신·조회순뿐) | ❌ | UNKNOWN — 운영 순서 replay 미실행(`npm run replay:home-popularity`, 읽기 전용) |
+| 실회원 우선 홈 랭킹 | ❌ main · 🟡 Batch F PR-head ✅(미병합 · 홈 신호 = 글쓴이 제외 서로 다른 실회원 수 + 비회원 댓글 min(n, /best `GUEST_COMMENT_CAP` 3) · Persona·운영·Micro Seed 원문·삭제·모순 행 제외 · 화면 댓글 수 불변 · /best 정책 불변 · 게시판 정렬은 최신·조회순뿐) | ❌ | UNKNOWN — 운영 순서 replay(`npm run replay:home-popularity`, 쓰기 차단 증명 후 해시·집계만) 결과는 PR #706 |
 | North Star | ❌ 재방문 이벤트 없음 | ❌ measure job 미등록 | UNKNOWN — 7일 Persona 글 32편에 실회원·게스트 댓글 0 |
 | D100 scheduler | ❌ d3~d50만 지원 | ❌ | ❌ d100 runtime profile 없음 |
 
