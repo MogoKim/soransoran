@@ -191,9 +191,10 @@ function asFallbackItem(
 function fallback(
   article: MagazineArticle,
   reason: MagazineGraphFallbackReason,
+  now: number,
 ): ResolvedRelatedMagazine {
   return {
-    items: getRelatedMagazineArticles(article, MAX_DIRECT).map((a, i) =>
+    items: getRelatedMagazineArticles(article, MAX_DIRECT, now).map((a, i) =>
       asFallbackItem(a, 'FALLBACK', i),
     ),
     source: 'FALLBACK',
@@ -218,31 +219,35 @@ function fallback(
  *
  * @param env 실제 환경변수. 🔴 값을 바꿔도 **재배포해야** 현재 배포에 반영된다.
  *            (Vercel 환경변수는 빌드·런타임에 주입된다. 「즉시」가 아니다)
+ * @param now 공개 판정 시각. 🔴 **진입할 때 한 번 정하고** 그래프 후보·보충·폴백 모두 이 값으로 본다
+ *            (2026-10-13 — 호출마다 시각을 다시 읽으면 10:30:00 을 사이에 두고 후보 목록과
+ *            폴백이 다른 순간을 봐 예약 글이 섞일 수 있다). 기본값은 지금.
  */
 export function resolveRelatedMagazine(
   article: MagazineArticle,
   env: NodeJS.ProcessEnv = process.env,
+  now: number = Date.now(),
 ): ResolvedRelatedMagazine {
   try {
-    if (!isGraphEnabled(env)) return fallback(article, 'DISABLED')
+    if (!isGraphEnabled(env)) return fallback(article, 'DISABLED', now)
 
     // 버전 파일과 control 이 짝이 맞지 않으면 어느 쪽이 맞는지 알 수 없다. 묻지 않고 물러선다.
     if (GRAPH.graphVersion !== CONTROL.graphVersion) {
-      return fallback(article, 'VERSION_MISMATCH')
+      return fallback(article, 'VERSION_MISMATCH', now)
     }
 
     // 🔴 cluster 단위로 연다. 한 분류에서 먼저 재보고 넓히기 위해서다.
     if (!enabledClusters(env).includes(article.cluster)) {
-      return fallback(article, 'CLUSTER_NOT_ENABLED')
+      return fallback(article, 'CLUSTER_NOT_ENABLED', now)
     }
 
     const fromIntents = new Set(
       GRAPH.mappings.filter((m) => m.slug === article.slug).map((m) => m.intent),
     )
-    if (fromIntents.size === 0) return fallback(article, 'NO_MAPPING')
+    if (fromIntents.size === 0) return fallback(article, 'NO_MAPPING', now)
 
     // 🔴 공개 관문을 거친 글만 후보다. slug → 글 한 번만 만든다.
-    const published = new Map(getAllMagazineArticles().map((a) => [a.slug, a]))
+    const published = new Map(getAllMagazineArticles(now).map((a) => [a.slug, a]))
 
     /**
      * 🔴 **직접 연관과 발견을 처음부터 나눠 모은다.**
@@ -291,7 +296,7 @@ export function resolveRelatedMagazine(
     }
 
     if (direct.length === 0 && discovery.length === 0) {
-      return fallback(article, 'NO_RESULT')
+      return fallback(article, 'NO_RESULT', now)
     }
 
     // 같은 우선순위면 최신 글이 앞이다 — 기존 목록과 같은 태도다.
@@ -313,7 +318,7 @@ export function resolveRelatedMagazine(
      * 🔴 **발견 자리는 채우지 않는다.** 유효한 BRIDGE 가 없으면 그냥 비운다 —
      *    최신 글이나 인기 글을 넣는 순간 "같은 또래가 궁금해한 것" 이 거짓이 된다.
      */
-    const legacy = getRelatedMagazineArticles(article, MAX_DIRECT)
+    const legacy = getRelatedMagazineArticles(article, MAX_DIRECT, now)
     const directTarget = Math.min(MAX_DIRECT, Math.max(legacy.length, direct.length))
 
     const items: RelatedMagazineItem[] = direct.slice(0, directTarget).map((c) => c.item)
@@ -348,6 +353,6 @@ export function resolveRelatedMagazine(
     }
   } catch {
     // 🔴 예외를 밖으로 던지지 않는다. 연관 글 하나 때문에 상세 페이지가 죽는 쪽이 훨씬 큰 손해다.
-    return fallback(article, 'EXCEPTION')
+    return fallback(article, 'EXCEPTION', now)
   }
 }
