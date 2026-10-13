@@ -36,7 +36,7 @@ import {
   judgeSpend, tallyOf, type BudgetLimits, type DayTally, type LedgerEntry, type SpendProtect,
 } from '../src/lib/llm-ledger'
 import { reserveOf } from '../src/lib/llm-pricing'
-import { LOCK_TTL_MS } from '../src/lib/supply-process'
+import { SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-process'
 import {
   SUPPLY_DAILY_USD_APPROVED, SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_WORKSET_PER_RUN,
   estimateSupplySpend,
@@ -88,8 +88,8 @@ check('🔴 보수 기본값 6회분은 계약 천장보다 크다 — 표본이
   SUPPLY_DAILY_USD_APPROVED !== null && SUPPLY_RUNS_PER_DAY * CAPRUN > SUPPLY_DAILY_USD_APPROVED,
   `${SUPPLY_RUNS_PER_DAY}×${CAPRUN.toFixed(4)} vs ${SUPPLY_DAILY_USD_APPROVED}`)
 check('실측 기간·최소 표본이 이름 붙은 상수다', SCHEDULED_COST_LOOKBACK_DAYS === 7 && SCHEDULED_COST_MIN_SAMPLES === 3)
-check('슬롯 창 = 공급 러너 잠금 시효(LOCK_TTL_MS) — 정상 회차가 살아 있을 수 있는 가장 긴 시간',
-  SCHEDULED_RUN_WINDOW_MS === LOCK_TTL_MS)
+check('슬롯 창 = 공급 회차 정상 수명(SUPPLY_RUN_WINDOW_MS · 45분) — 잠금 시효가 아니다(잠금은 커널 lease)',
+  SCHEDULED_RUN_WINDOW_MS === SUPPLY_RUN_WINDOW_MS && SUPPLY_RUN_WINDOW_MS === 45 * 60_000)
 check('🔴 라벨이 공급 job 템플릿의 Label 과 같다',
   readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
     .includes(`<string>${SUPPLY_PROCESS_LAUNCHD_LABEL}</string>`))
@@ -103,7 +103,8 @@ check('🔴 라벨이 공급 job 템플릿의 Label 과 같다',
   const proc = readFileSync('scripts/supply-process.mts', 'utf-8')
   check('🔴 stage-consume-exec 가 부모 env 를 그대로 물려준다', /env:\s*\{\s*\.\.\.process\.env/.test(consume))
   check('🔴 supply-process 가 판정·초안 자식에 부모 env 를 그대로 물려준다',
-    /spawn\('npx', \['tsx', script, \.\.\.args\][\s\S]{0,200}env:\s*\{\s*\.\.\.process\.env/.test(proc))
+    // 🔴 (2026-10-12 Batch C1) 자식은 `npx` 가 아니라 같은 Node · loader 로 직접 띄운다(`stageSpawnOf`) — env 는 그대로 물려준다
+    /const how = stageSpawnOf\(script, args, STAGE_LEASE\)\s*\n\s*const p = spawn\(how\.command, how\.args, \{[\s\S]{0,200}env:\s*\{\s*\.\.\.process\.env/.test(proc))
   const tpl = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
   check('🔴 템플릿이 라벨 env 를 손으로 넣지 않는다 — launchd 가 넣는 값만 믿는다',
     !tpl.includes(LAUNCHD_LABEL_ENV))

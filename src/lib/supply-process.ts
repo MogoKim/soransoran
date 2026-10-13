@@ -26,6 +26,7 @@
 
 // 🔴 **사본 완료 판정은 어댑터와 같은 함수를 쓴다.** 여기서 정규식을 다시 쓰면
 //    한쪽만 고쳐진다 — 실제로 그랬다 (2026-09-11 Codex 리뷰).
+import type { RunTokenShadowTag } from './supply-run-token'
 import { completedAdaptKeys } from './micro-seed-82cook-thin-adapt'
 import type { FillRecord } from './supply-fill-retry'
 import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
@@ -47,12 +48,13 @@ export function fillUpToOf(bufferUpTo: number, limit: number): number {
 export const PROCESS_KILL_SWITCH_ENV = 'SORAN_SUPPLY_PROCESS_ENABLED'
 
 /**
- * lock 이 이보다 오래되면 죽은 것으로 본다 — 45분.
- * 🔴 처리기는 밖으로 나가지 않는다(네트워크 0). 한 회차가 90분씩 걸릴 이유가 없다.
+ * 🔴 **공급 회차 하나가 정상으로 살아 있을 수 있는 가장 긴 시간 — 45분.**
+ *    처리기는 밖으로 나가지 않는다(네트워크 0). 한 회차가 90분씩 걸릴 이유가 없다.
+ *    정기 회차 몫 보호의 슬롯 창(`SCHEDULED_RUN_WINDOW_MS`)과 실행 token 의 수명이 이 값이다.
+ *    🔴 (2026-10-12 Batch C1) **잠금 시효가 아니다.** 공급 잠금은 커널 lease(`runner-lease` · `/usr/bin/lockf`)라
+ *       holder 가 끝나거나 죽으면 커널이 푼다 — 시각으로 죽었다고 판정하거나 사람이 치울 잠금이 없다.
  */
-export const LOCK_TTL_MS = 45 * 60 * 1000
-
-export const LOCK_FILE = 'supply-process.lock'
+export const SUPPLY_RUN_WINDOW_MS = 45 * 60 * 1000
 
 /** 회차 기록 — 🔴 **재개 근거가 아니라 관제 근거**다. 이 파일을 읽고 무엇을 돌릴지 정하지 않는다 */
 export const RUN_FILE_RE = /^supply-process-.*\.run\.json$/
@@ -227,7 +229,8 @@ export function hasWork(p: Pending): boolean {
 /**
  * 🔴 **유료 생성 수요 = 다가오는 슬롯 − 그 슬롯들에 eligible 로 남을 READY.**
  *
- *    다가오는 슬롯 = 오늘 남은 슬롯(공개 단계) + 다음 운영일 증명일 전체 슬롯(준비 단계).
+ *    다가오는 슬롯 = 가까운 수요 지평(`upcomingSlots` · 2026-10-11 Batch A2) — 오늘 남은 공개 단계 슬롯 +
+ *    다음 첫 공개 기회 한 칸. 증명일 전체 슬롯은 공급 수요가 아니다(그 감당은 controller preflight 가 본다).
  *    READY 가 그 슬롯에 eligible 로 남는가는 정본 `judgeSlotRelease` 가 **그 슬롯 시각에** 본다 —
  *    Persona 는 그 슬롯에 실제로 풀리는 것만 센다(`readyOpportunitiesOf` · `matchOpportunitiesToSlots`).
  *
@@ -495,33 +498,24 @@ export function planCarryOverFill(
  * 🔴 **이 lock 이 막는 것과 막지 못하는 것을 분명히 한다.**
  *
  *    막는다    같은 기계에서 두 처리기가 겹쳐 도는 것
- *    못 막는다 다른 기계(GHA 러너)와의 겹침 — 파일 잠금은 기계마다 따로 있다
+ *    못 막는다 다른 기계(GHA 러너)와의 겹침 — 커널 잠금은 기계마다 따로 있다
  *
  *    기계 사이의 중복 적재는 lock 이 아니라 **DB 쪽 dedup** 이 막는다
  *    (`provenanceKeyOf` + `$transaction`, `micro-seed-supply-autofill`).
  *    그래서 두 처리기가 정말 겹쳐도 같은 후보가 두 번 APPROVED 로 들어가지 않는다.
  */
 /**
- * 🔴 **잠금 프로토콜을 여기서 다시 만들지 않는다** (2026-09-11 정정).
+ * 🔴 **잠금은 커널 lease 하나다** (2026-10-12 Batch C1 · 정본 `scripts/lib/runner-lease.mts` · 진입 `scripts/lib/supply-lease.mts`).
  *
- *    앞선 판은 `read → stale 판정 → 삭제 → rename` 으로 획득하고 `rm` 으로 풀었다.
- *    이 저장소는 **이미 2026-09-09(PR #483)에 그 길이 안 된다는 결론**을 내고
- *    `scripts/lib/collect-lock.mts` 에 적어 두었다:
+ *    📜 앞판은 `collect-lock` 의 `wx` 파일 잠금이었다(획득 `wx` 한 번 · 내 token 대조 해제 · 자동 회수 없음).
+ *       뺏지 않는 것은 맞았지만, 강제 종료 · 전원 · 재부팅 뒤 남은 파일이 `STALE_HELD` 로 **사람이 올 때까지 공급을 세웠다**.
+ *    지금: wrapper 가 잠금 파일을 fd 9 로 열어 `lockf` 커널 잠금을 건 뒤 Node 본체로 `exec` 한다 —
+ *       잠금 수명 = 본체(와 fd 9 를 물려받은 자식) 수명. 죽으면 커널이 푼다. 시각 · PID · rename 으로 뺏지 않는다.
  *
- *      "A 와 B 가 같은 stale 을 읽는다 → A 가 교체하고 확인을 통과한다 →
- *       B 가 **과거 관측을 근거로** 다시 교체한다. A 의 확인은 이미 지나갔다."
- *
- *    같은 결함을 공급 처리기에 다시 들여왔던 것이다. 지금은 **그 검증된 계약을 그대로 쓴다**:
- *      · 획득은 `wx` 한 번 — 관측→조작 쌍이 없다
- *      · 해제는 **내 token 대조 삭제** 하나뿐
- *      · 자동 stale takeover/delete/rename **없음**
- *      · 남은 죽은 락은 `STALE_HELD` 로 **사람이 봐야 할 운영 이상**이 된다
- *
- * 🔴 획득·해제 구현은 `scripts/lib/collect-lock.mts` 정본 하나다.
- *    `src/lib` 이 `scripts/lib` 을 import 하는 방향은 두지 않으므로,
- *    러너가 그 결과(`kind`)를 아래 `LockView` 로 옮겨 판정부에 넘긴다.
+ *    `LockView` 는 **live 가 아닌 관측 실행**만 쓴다 — live 회차는 lease 를 증명한 뒤에만 본체에 들어오므로 `free` 다.
+ *    `unreadable` = probe 를 할 수 없다(lockf 없음 등) — 모르는 것을 free 로 읽지 않는다.
  */
-export type LockView = 'free' | 'held' | 'stale-held' | 'unreadable'
+export type LockView = 'free' | 'held' | 'unreadable'
 
 /**
  * 파일을 바꿔도 되는가.
@@ -560,17 +554,6 @@ export function judgeProcessRun(input: {
   // ② lock — 같은 기계에서 두 처리기가 겹치지 않는다
   if (input.lock === 'held') {
     return { ok: false, code: 'LOCKED', reason: '앞 회차가 아직 돈다' }
-  }
-  /**
-   * 🔴 **죽어 보이는 락도 뺏지 않는다.** 뺏는 순간 관측→조작 창이 열리고,
-   *    그 창이 두 회차를 동시에 들여보낸다. 멈추고 사람을 부른다(fail-closed).
-   */
-  if (input.lock === 'stale-held') {
-    return {
-      ok: false, code: 'LOCKED',
-      reason: '🔴 죽은 것으로 보이는 락이 남아 있다 — 자동으로 뺏지 않는다. 사람이 치운다'
-        + ' (관제: npm run supply:health)',
-    }
   }
   if (input.lock === 'unreadable') {
     return { ok: false, code: 'LOCKED', reason: '락 상태를 읽지 못했다 — 통과시키지 않는다(fail-closed)' }
@@ -774,6 +757,11 @@ export type ProcessRun = {
    *    이 칸이 없는 옛 기록은 "자기 파일만 먹었다" 로 읽는다.
    */
   fill?: FillRecord
+  /**
+   * 🔴 **실행 token shadow** (2026-10-12 Batch C1) — 이 회차 자식이 lease · token 을 다시 증명한 결과.
+   *    예산 판정 · 이월 판정은 이 칸을 읽지 않는다. 없으면 옛 기록이다.
+   */
+  runTokenShadow?: RunTokenShadowTag
 }
 export type { FillRecord }
 
