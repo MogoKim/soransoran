@@ -11,8 +11,10 @@
  * 🔴 **첫 댓글 계약을 건드리지 않는다.**
  *    · 첫 댓글이 자동 출처(`auto`)로 붙은 글에만 이어 붙인다 — 추가 댓글은 첫 댓글을 대신하지 않는다.
  *    · 60분 안 첫 댓글을 기다리는 글이 하나라도 있으면 이 레인은 그 회차를 통째로 양보한다.
- *    · 표식이 다르다(`FOLLOWUP_DECIDED_BY` · `FOLLOWUP_ACTIVITY_DECIDED_BY`). 첫 댓글 증거(`commentProvenanceOf`)가
- *      추가 댓글을 첫 댓글로 세거나 "깨진 출처" 로 볼 수 없게 한다.
+ *    · 표식·출처 분류는 단계 증거 정본(`stage-evidence` 의 `FOLLOWUP_LANE_*` · `personaCommentProvenanceOf`)을
+ *      그대로 쓴다(#707). 이 파일에 표식 상수·분류기를 다시 두지 않는다 — 두 곳에 있으면 언젠가 갈린다.
+ *    · 🔴 **대화 감사(`judgeConversationAudit`)가 FAIL 이거나 읽지 못했으면 추가 댓글 후보 0** 이다.
+ *      첫 댓글 경로는 이 파일을 보지 않으므로 멈추지 않는다.
  *
  * 🔴 **기본 OFF.** `SORAN_PERSONA_COMMENT_FOLLOWUP=on` 정확히 그 값일 때만 켜진다. 모르는 값은 OFF.
  *
@@ -36,7 +38,7 @@ import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { MEMBER_COMMENT_LIMIT_ON_PUBLISH } from './persona-comment-queue'
 import { COMMENT_REACTION_ROLES, type ReactionType } from './persona-reaction-roles'
 import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
-import { AUTO_COMMENT_CLOCK_SKEW_MS, commentProvenanceOf, type CommentLinkFacts } from './stage-evidence'
+import type { PersonaCommentProvenance } from './stage-evidence'
 
 // ─────────────────────────────────────────────────────────
 // 🔴 스위치 — 기본 OFF
@@ -153,10 +155,6 @@ export function validateFollowupProfile(
   return { ok: true, profile: p as FollowupProfile }
 }
 
-/** 🔴 Queue.decidedBy — 첫 댓글 표식(`machine:persona-comment-auto`)과 다르다 */
-export const FOLLOWUP_DECIDED_BY = 'machine:persona-comment-followup'
-/** 🔴 PersonaActivityLog.decidedBy — 첫 댓글 표식(`auto`)과 다르다 */
-export const FOLLOWUP_ACTIVITY_DECIDED_BY = 'auto-followup'
 
 // ─────────────────────────────────────────────────────────
 // 🔴 결정적 난수 — 동률 순서와 시간차 jitter 에만 쓴다. 수량·필요성은 정하지 않는다
@@ -183,8 +181,8 @@ export type FollowupCommentRow = ContextRow & {
   reaction: ReactionType | null
   /** 신고가 접수된 댓글인가. 모르면 null — 그 댓글에는 답하지 않는다 */
   reported: boolean | null
-  /** 🔴 자동 출처 판정(`commentProvenanceOf`) — Persona 댓글만 의미가 있다 */
-  provenance: 'auto' | 'followup' | 'none' | 'broken' | null
+  /** 🔴 출처 — 정본 `personaCommentProvenanceOf` 결과. Persona 댓글만 의미가 있다. 모르면 null */
+  provenance: PersonaCommentProvenance | null
 }
 
 export type FollowupPostFacts = {
@@ -271,7 +269,7 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
   const liveReal = live.filter((c) => c.commentOrigin === 'MEMBER' || c.commentOrigin === 'GUEST')
 
   // ── 첫 댓글 계약 — 추가 댓글은 자동 출처 첫 댓글 위에서만 ──
-  if (livePersona.some((c) => c.provenance === 'broken' || c.provenance === null)) {
+  if (livePersona.some((c) => c.provenance === 'broken' || c.provenance === 'followup-broken' || c.provenance === null)) {
     return { verdict: 'BLOCK', reason: '출처가 깨졌거나 모르는 Persona 댓글이 있다(fail-closed)' }
   }
   const firsts = livePersona.filter((c) => c.provenance === 'auto')
@@ -484,6 +482,31 @@ export type FollowupTickFacts = {
   firstCommentReserveUsd: number | null
   /** 추가 댓글 1건의 예약액(USD) */
   perCallReserveUsd: number
+  /**
+   * 🔴 **최근 단계 증거의 대화 감사**(`StageEvidenceVerdict.conversation`) — 그대로 넘긴다.
+   *    PASS 만 통과다. FAIL · 없음 · 모양이 아님 → 추가 댓글 0(fail-closed). 첫 댓글은 이 값을 보지 않는다.
+   */
+  conversationAudit: unknown
+}
+
+/**
+ * 🔴 대화 감사 판독 — `{ verdict: 'PASS', codes: [] }` 만 통과다.
+ *    PASS 인데 코드가 있거나 모양이 아니면 판독 불가로 막는다.
+ */
+export function readConversationAudit(raw: unknown): { ok: true } | { ok: false; reason: string } {
+  if (raw === null || raw === undefined || typeof raw !== 'object') {
+    return { ok: false, reason: '대화 감사를 읽지 못했다 — 추가 댓글 0(fail-closed · 첫 댓글은 그대로)' }
+  }
+  const a = raw as { verdict?: unknown; codes?: unknown }
+  // 🔴 코드 이름은 따로 대조하지 않는다 — FAIL 은 코드와 무관하게 막고, PASS 는 코드 0 만 통과다
+  if (!Array.isArray(a.codes)) return { ok: false, reason: '대화 감사 코드가 모양이 아니다 — 추가 댓글 0(fail-closed)' }
+  if (a.verdict === 'FAIL') {
+    return { ok: false, reason: `대화 감사 FAIL [${(a.codes as string[]).join(',')}] — 추가 댓글 0(첫 댓글은 그대로)` }
+  }
+  if (a.verdict !== 'PASS' || a.codes.length > 0) {
+    return { ok: false, reason: '대화 감사 판정이 모양이 아니다 — 추가 댓글 0(fail-closed)' }
+  }
+  return { ok: true }
 }
 
 export type FollowupTickVerdict = { allowed: number; blockers: string[]; detail: string }
@@ -499,6 +522,8 @@ export function judgeFollowupTick(f: FollowupTickFacts): FollowupTickVerdict {
   if (f.killSwitchOff !== true) blockers.push(f.killSwitchOff === false ? 'kill switch 가 켜져 있다' : 'kill switch 상태를 읽지 못했다(fail-closed)')
   if (!isCount(f.pendingFirstComments)) blockers.push('첫 댓글 대기 수를 읽지 못했다(fail-closed)')
   else if (f.pendingFirstComments > 0) blockers.push(`첫 댓글을 기다리는 글 ${f.pendingFirstComments}편 — 이번 회차는 첫 댓글에 양보한다`)
+  const audit = readConversationAudit(f.conversationAudit)
+  if (!audit.ok) blockers.push(audit.reason)
   const prof = validateFollowupProfile(f.profile, f.runtimeStage)
   if (!prof.ok) blockers.push(prof.reason)
   if (!isCount(f.followupsToday)) blockers.push('오늘 추가 댓글 수를 읽지 못했다(fail-closed)')
@@ -561,33 +586,4 @@ export function verifyStamp(raw: unknown, expect: { postId: string; dedupKey: st
   }
   if (typeof s.hook !== 'string' || !FOLLOWUP_HOOKS.includes(s.hook as ReactionType)) return { ok: false, reason: '도장의 이어질 거리가 모양이 아니다' }
   return { ok: true, stamp: s as FollowupStamp }
-}
-
-// ─────────────────────────────────────────────────────────
-// 🔴 출처 — 첫 댓글 판정(`commentProvenanceOf`) 위에 `followup` 한 칸만 더한다
-// ─────────────────────────────────────────────────────────
-
-export type PersonaCommentProvenance = 'auto' | 'followup' | 'none' | 'broken'
-
-/**
- * 🔴 **추가 댓글 표식이 있으면 추가 댓글 계약으로, 없으면 첫 댓글 정본 그대로 판정한다.**
- *    · 두 표식이 한 댓글에 섞이면 `broken` 이다 — 같은 사건이 첫 댓글이자 추가 댓글일 수 없다.
- *    · 추가 댓글은 60분 창을 보지 않는다(시간차로 늦게 붙는 것이 정상이다). 답글이어도 된다.
- *    · 세 행(Comment · Queue · ActivityLog)이 한 줄씩 · 같은 Persona · 같은 글 · 같은 결정 시각이어야 한다.
- */
-export function followupProvenanceOf(f: CommentLinkFacts): PersonaCommentProvenance {
-  const marked = f.queues.some((q) => (q.decidedBy ?? '').trim() === FOLLOWUP_DECIDED_BY)
-    || f.logs.some((l) => (l.decidedBy ?? '').trim() === FOLLOWUP_ACTIVITY_DECIDED_BY)
-  if (!marked) return commentProvenanceOf(f)
-  if (f.queues.length !== 1 || f.logs.length !== 1) return 'broken'
-  const q = f.queues[0]!
-  const l = f.logs[0]!
-  if (q.status !== 'PUBLISHED' || (q.decidedBy ?? '').trim() !== FOLLOWUP_DECIDED_BY) return 'broken'
-  if ((l.decidedBy ?? '').trim() !== FOLLOWUP_ACTIVITY_DECIDED_BY) return 'broken'
-  const c = f.comment
-  if (c.personaId === null || q.personaId !== c.personaId || l.personaId !== c.personaId) return 'broken'
-  if (q.targetPostId !== c.postId) return 'broken'
-  if (q.decidedAtMs === null || l.publishedAtMs === null || q.decidedAtMs !== l.publishedAtMs) return 'broken'
-  if (c.createdAtMs - q.decidedAtMs < -AUTO_COMMENT_CLOCK_SKEW_MS) return 'broken'
-  return 'followup'
 }

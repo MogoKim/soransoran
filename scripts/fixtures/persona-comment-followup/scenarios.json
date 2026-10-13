@@ -738,6 +738,34 @@
         "targetKind": "reply",
         "targetId": "c0"
       }
+    },
+    {
+      "name": "🔴 출처를 모르는 Persona 댓글(provenance 없음) → BLOCK",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 80,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience"
+        }
+      ],
+      "expect": {
+        "verdict": "BLOCK"
+      }
     }
   ],
   "profiles": {

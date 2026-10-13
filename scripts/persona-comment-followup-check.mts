@@ -11,7 +11,8 @@
  *   ④ 24시간 시뮬레이션 불변식 — 글당 ≤5 · 같은 Persona 0 · 자기 글 0 · 시간차 · 실회원 우선 ·
  *      추가 댓글마다 그때 미해결이던 hook 하나를 소비 · 근거 없는 글은 0 · 글 id 무관 · 같은 입력 같은 결과
  *   ③ profile — 주입 없음·후보·손상·단계 불일치 → 0 · D100 profile 은 40건에 묶이지 않는다
- *   ⑤ 실제 소비자 접점 — `stage-evidence.commentProvenanceOf` 가 추가 댓글을 첫 댓글로 세지 않고
+ *   ⑤ 실제 소비자 접점 — #707 정본(`personaCommentProvenanceOf` · `FOLLOWUP_LANE_*` · `judgeConversationAudit`)을
+ *      그대로 쓰는가 · 대화 감사 FAIL/판독 불가 → 추가 댓글 0 · 첫 댓글 경로는 이 모듈을 보지 않는다
  *      깨진 출처로도 보지 않는다 · bootstrap-auto 상한 1 이 활성화 선행조건임을 실행으로 드러낸다
  *   ⑥ 본문 중복 · Queue 도장
  *
@@ -23,7 +24,10 @@ import { fileURLToPath } from 'node:url'
 
 import type * as FollowupModule from '../src/lib/persona-comment-followup'
 import type { ReactionType } from '../src/lib/persona-reaction-roles'
-import { commentProvenanceOf, personaCommentCapFor, type CommentLinkFacts } from '../src/lib/stage-evidence'
+import {
+  FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, FOLLOWUP_LANE_DECIDED_BY, commentProvenanceOf, judgeConversationAudit,
+  personaCommentCapFor, personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
+} from '../src/lib/stage-evidence'
 import { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -113,7 +117,7 @@ const baseTick: FollowupModule.FollowupTickFacts = {
   switch: { enabled: true, reason: 'on' }, commentStage: 'bootstrap-auto', killSwitchOff: true,
   pendingFirstComments: 0, profile: fx.profiles.approved, runtimeStage: 'd10',
   followupsToday: 0, followupUsdToday: 0, commentLedgerRemainingUsd: 0.2, firstCommentReserveUsd: 0.02,
-  perCallReserveUsd: 0.001,
+  perCallReserveUsd: 0.001, conversationAudit: { verdict: 'PASS', codes: [], counts: {} },
 }
 const tick = (over: Partial<FollowupModule.FollowupTickFacts>) => M.judgeFollowupTick({ ...baseTick, ...over })
 check('③ 승인 profile(d10) → 회차 상한 3', tick({}).allowed === 3)
@@ -346,31 +350,79 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
 
 }
 
-// ═════════ ⑤ 실제 소비자 접점 — stage-evidence ═════════
+// ═════════ ⑤ 실제 소비자 접점 — #707 정본 · 대화 감사 브레이크 ═════════
 {
   const link = (queueBy: string | null, logBy: string | null, over: Partial<CommentLinkFacts['comment']> = {}): CommentLinkFacts => ({
     comment: { postId: 'P', personaId: 'pX', createdAtMs: T0 + 200 * MIN, topLevel: false, ...over },
     queues: queueBy === null ? [] : [{ targetPostId: 'P', personaId: 'pX', status: 'PUBLISHED', decidedBy: queueBy, decidedAtMs: T0 + 200 * MIN }],
     logs: logBy === null ? [] : [{ personaId: 'pX', decidedBy: logBy, publishedAtMs: T0 + 200 * MIN }],
   })
-  const fu = link(M.FOLLOWUP_DECIDED_BY, M.FOLLOWUP_ACTIVITY_DECIDED_BY)
-  check('⑤ 표식이 첫 댓글 표식과 다르다',
-    // 🔴 string 으로 넓혀 비교한다 — 변이 시험이 상수를 바꿔 넣는 자리다
-    (M.FOLLOWUP_DECIDED_BY as string) !== AUTO_LANE_DECIDED_BY
-    && (M.FOLLOWUP_ACTIVITY_DECIDED_BY as string) !== AUTO_LANE_ACTIVITY_DECIDED_BY)
-  check('⑤ 🔴 지금 stage-evidence 는 추가 댓글을 첫 댓글(auto)로 세지 않고 깨짐으로도 보지 않는다(none)',
-    commentProvenanceOf(fu) === 'none', commentProvenanceOf(fu))
-  check('⑤ 추가 댓글 분류기 → followup', M.followupProvenanceOf(fu) === 'followup')
-  check('⑤ 🔴 로그만 첫 댓글 표식(auto)을 쓰면 → broken (표식을 섞으면 첫 댓글 증거가 깨진다)',
-    M.followupProvenanceOf(link(M.FOLLOWUP_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY)) === 'broken'
-    && commentProvenanceOf(link(M.FOLLOWUP_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY)) === 'broken')
-  check('⑤ Queue 만 있고 로그 없음 → broken', M.followupProvenanceOf(link(M.FOLLOWUP_DECIDED_BY, null)) === 'broken')
-  check('⑤ Persona 불일치 → broken', M.followupProvenanceOf({ ...fu, comment: { ...fu.comment, personaId: 'pY' } }) === 'broken')
-  check('⑤ 첫 댓글은 그대로 auto', M.followupProvenanceOf(link(AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY, { topLevel: true, createdAtMs: T0 + 200 * MIN })) === 'auto')
-  check('⑤ 표식 없음 → none', M.followupProvenanceOf(link(null, null)) === 'none')
-  // 🔴 활성화 선행조건을 실행으로 드러낸다 — 이 값이 바뀌면 문서 E1 을 다시 본다
-  check('⑤ 🔴 [활성화 선행조건 E1] bootstrap-auto 단계 증거 상한은 지금 1 — 추가 댓글을 켜면 COMMENT_OVER_CAP',
-    personaCommentCapFor('bootstrap-auto') === 1 && personaCommentCapFor('organic') === 5)
+  // 🔴 모듈이 자체 표식·분류기를 더는 갖지 않는다 — 정본이 하나다
+  const exported = Object.keys(M)
+  check('⑤ 🔴 자체 표식 상수·분류기 없음(정본 단일화)',
+    !['FOLLOWUP_DECIDED_BY', 'FOLLOWUP_ACTIVITY_DECIDED_BY', 'followupProvenanceOf'].some((k) => exported.includes(k)))
+  const src = readFileSync(join(here, '../src/lib/persona-comment-followup.ts'), 'utf-8')
+  check('⑤ 🔴 모듈 소스에 표식 문자열 리터럴이 다시 생기지 않았다',
+    !src.includes("'machine:persona-comment-followup'") && !src.includes("'auto-followup'"))
+  check('⑤ 정본 표식이 첫 댓글 표식과 다르다',
+    (FOLLOWUP_LANE_DECIDED_BY as string) !== AUTO_LANE_DECIDED_BY
+    && (FOLLOWUP_LANE_ACTIVITY_DECIDED_BY as string) !== AUTO_LANE_ACTIVITY_DECIDED_BY)
+  const fu = link(FOLLOWUP_LANE_DECIDED_BY, FOLLOWUP_LANE_ACTIVITY_DECIDED_BY)
+  check('⑤ 정본 분류: 추가 댓글 → followup · 첫 댓글 축(commentProvenanceOf)은 none',
+    personaCommentProvenanceOf(fu) === 'followup' && commentProvenanceOf(fu) === 'none')
+  check('⑤ 정본 분류: 표식 섞임 → broken(첫 댓글 축 FAIL)',
+    personaCommentProvenanceOf(link(FOLLOWUP_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY)) === 'broken')
+  check('⑤ 정본 분류: 추가 댓글 로그 누락 → followup-broken',
+    personaCommentProvenanceOf(link(FOLLOWUP_LANE_DECIDED_BY, null)) === 'followup-broken')
+  check('⑤ #707 이후에도 bootstrap-auto 단계 상한 1 은 그대로(추가 댓글은 상한 밖에서 따로 센다)',
+    personaCommentCapFor('bootstrap-auto') === 1)
+
+  // ── 정본 분류 결과를 모듈 입력으로 — followup-broken 이 있는 글은 BLOCK ──
+  {
+    const base = fx.scenarios[0]!
+    const rows = factsOf(FX_POST, base)
+    const withBroken: FollowupModule.FollowupPostFacts = {
+      ...rows,
+      comments: [...rows.comments, { ...rows.comments[0]!, id: 'fb', parentId: 'c1', personaId: 'pQ', createdAt: new Date(T0 + 90 * MIN), provenance: 'followup-broken' }],
+    }
+    check('⑤ 🔴 출처가 깨진 추가 댓글(followup-broken)이 있는 글 → BLOCK', M.judgeFollowupPost(withBroken, T0 + 200 * MIN).verdict === 'BLOCK')
+  }
+
+  // ── 대화 감사 브레이크 — 실제 judgeConversationAudit 출력을 그대로 넣는다 ──
+  const ep = (personaComments: EvidencePost['personaComments'], author: string | null = 'pA'): EvidencePost => ({
+    postId: 'P', queueId: 'Q', publishedAtMs: T0, unattended: true, queueRows: 1, publishLogs: 1,
+    authorPersonaId: author, decider: 'auto', personaComments, release: 'STAMPED_ELIGIBLE',
+  })
+  const first = { personaId: 'pB', createdAtMs: T0 + 10 * MIN, topLevel: true, provenance: 'auto' as const }
+  const good = judgeConversationAudit([ep([first, { personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])])
+  const none = judgeConversationAudit([ep([first])])
+  check('⑤ 실제 감사 PASS(추가 댓글 정상) → 회차 허용', good.verdict === 'PASS' && tick({ conversationAudit: good }).allowed === 3)
+  check('⑤ 실제 감사 PASS(추가 댓글 0 — 아직 켠 적 없음) → 회차 허용', none.verdict === 'PASS' && tick({ conversationAudit: none }).allowed === 3)
+  const failCases: [string, EvidencePost][] = [
+    ['출처 깨짐', ep([first, { personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup-broken' }])],
+    ['첫 댓글 없음', ep([{ personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
+    ['같은 Persona', ep([first, { personaId: 'pB', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
+    ['자기 글', ep([first, { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
+    ['총 6건', ep([first, ...['p1', 'p2', 'p3', 'p4', 'p5'].map((p, i) => ({ personaId: p, createdAtMs: T0 + (90 + i * 40) * MIN, topLevel: false, provenance: 'followup' as const }))])],
+  ]
+  for (const [name, post] of failCases) {
+    const a = judgeConversationAudit([post])
+    const t = tick({ conversationAudit: a })
+    check(`⑤ 🔴 실제 감사 FAIL(${name}) → 추가 댓글 0`, a.verdict === 'FAIL' && t.allowed === 0 && t.blockers.some((b) => b.includes('대화 감사 FAIL')), a.codes.join(','))
+  }
+  const unreadable: [string, unknown][] = [
+    ['없음(undefined)', undefined], ['null', null], ['문자열 PASS', 'PASS'], ['소문자 pass', { verdict: 'pass', codes: [] }],
+    ['codes 없음', { verdict: 'PASS' }], ['PASS 인데 코드 있음', { verdict: 'PASS', codes: ['FOLLOWUP_SELF'] }],
+    ['모르는 코드', { verdict: 'FAIL', codes: ['COMMENT_MISSING'] }], ['verdict UNKNOWN', { verdict: 'UNKNOWN', codes: [] }],
+  ]
+  for (const [name, raw] of unreadable) {
+    check(`⑤ 🔴 대화 감사 판독 불가(${name}) → 추가 댓글 0`, tick({ conversationAudit: raw }).allowed === 0)
+  }
+  // 🔴 첫 댓글 경로는 이 모듈·대화 감사를 보지 않는다 — 브레이크가 첫 댓글을 멈출 수 없다
+  const autoLane = readFileSync(join(here, '../src/lib/persona-comment-auto-lane.ts'), 'utf-8')
+  const loop = readFileSync(join(here, 'lib/persona-comment-loop.mts'), 'utf-8')
+  check('⑤ 🔴 첫 댓글 레인(auto-lane · comment-loop)은 추가 댓글 모듈·대화 감사를 import 하지 않는다',
+    ![autoLane, loop].some((t) => t.includes('persona-comment-followup') || t.includes('judgeConversationAudit') || t.includes('conversationAudit')))
 }
 
 // ═════════ ⑥ 본문 · 도장 · Persona 고르기 ═════════

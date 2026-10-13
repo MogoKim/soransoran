@@ -1,6 +1,6 @@
 # 글당 Persona 댓글 1~5 — 첫 댓글 뒤 선택적 추가 댓글(0~4)
 
-작성: 2026-10-13 · 보정: 2026-10-13(stamina 제거 · 단계별 profile 주입) · 상태: **준비만 · 기본 OFF · 미연결 · 활성화 아님**
+작성: 2026-10-13 · 보정: 2026-10-13(stamina 제거 · 단계별 profile 주입 · main 11aed451(#707) 통합 · 대화 감사 브레이크) · 상태: **준비만 · 기본 OFF · 미연결 · 활성화 아님**
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
@@ -13,13 +13,13 @@
 | 파일 | 무엇 |
 |---|---|
 | `src/lib/persona-comment-followup.ts` | 스위치 · 미해결 hook · 한 글 판정 · profile 검증 · 회차 판정 · Persona 선택 · 본문 중복 · Queue 도장 · 출처 분류 |
-| `scripts/fixtures/persona-comment-followup/scenarios.json` | 한 글 판정 시나리오 25건 (GO·WAIT·STOP·BLOCK) · profile 반례 15건 |
-| `scripts/persona-comment-followup-check.mts` | fixture · profile · 회차 판정 · 24시간 D10/D100 시뮬레이션 불변식 · 글 id 무관성 · `stage-evidence` 실제 접점 (113개) |
-| `scripts/persona-comment-followup-mutation.mts` | 막는 줄 42개를 하나씩 지워 검사가 전부 잡는지 (worktree 변경 0) |
+| `scripts/fixtures/persona-comment-followup/scenarios.json` | 한 글 판정 시나리오 26건 (GO·WAIT·STOP·BLOCK) · profile 반례 15건 |
+| `scripts/persona-comment-followup-check.mts` | fixture · profile · 회차 판정 · 24시간 D10/D100 시뮬레이션 불변식 · 글 id 무관성 · #707 정본 분류·대화 감사 브레이크 (129개) |
+| `scripts/persona-comment-followup-mutation.mts` | 막는 줄 47개를 하나씩 지워 검사가 전부 잡는지 (worktree 변경 0) |
 
 ```bash
-npx tsx scripts/persona-comment-followup-check.mts      # 113/113 PASS
-npx tsx scripts/persona-comment-followup-mutation.mts   # 변이 42/42 잡힘
+npx tsx scripts/persona-comment-followup-check.mts      # 129/129 PASS
+npx tsx scripts/persona-comment-followup-mutation.mts   # 변이 47/47 잡힘
 ```
 
 `package.json` 스크립트와 CI(`visibility-guard.yml`) 등록은 하지 않았다 — 두 파일 모두 Batch C1/C2 PR이 수정 중이다(§4 C-4).
@@ -28,7 +28,7 @@ npx tsx scripts/persona-comment-followup-mutation.mts   # 변이 42/42 잡힘
 
 | # | 정책 | 코드 |
 |---|---|---|
-| 1 | 첫 댓글 1개 계약·provenance 유지 | 자동 출처(`auto`) 첫 댓글이 없는 글은 `STOP` · 60분 안 첫 댓글 대기 글이 하나라도 있으면 회차 전체 0건 · 표식 분리(`machine:persona-comment-followup` / `auto-followup`) — 지금 `commentProvenanceOf` 가 추가 댓글을 `auto` 로도 `broken` 으로도 보지 않음을 검사가 실행으로 확인 |
+| 1 | 첫 댓글 1개 계약·provenance 유지 | 자동 출처(`auto`) 첫 댓글이 없는 글은 `STOP` · 60분 안 첫 댓글 대기 글이 하나라도 있으면 회차 전체 0건 · 표식·분류는 #707 정본(`FOLLOWUP_LANE_DECIDED_BY` · `FOLLOWUP_LANE_ACTIVITY_DECIDED_BY` · `personaCommentProvenanceOf`)만 쓴다 — 이 모듈에 자체 상수·분류기 없음 · `followup-broken` 이 있는 글은 `BLOCK` · 🔴 **대화 감사(`judgeConversationAudit`) FAIL·판독 불가 → 추가 댓글 0**, 첫 댓글 레인은 이 모듈·감사를 import 하지 않아 멈추지 않는다 |
 | 2 | 추가 0~4 | `FOLLOWUP_EXTRA_PER_POST_MAX = 5 − 1` (기존 상수에서 파생 · 새 숫자 아님) |
 | 3 | 모든 글을 5개로 채우지 않음 | 🔴 **수량은 미해결 hook 이 정한다** (글 id 해시 stamina 폐기). 근거 0 → 0건, 근거가 이어지면 최대 4. 한 건이 미해결 hook 하나를 소비한다 — 답이 한 번이라도 달린 대상(실회원 답·지워진 답 포함)과 이미 최상위 추가 댓글로 쓴 글 hook 은 다시 쓰지 않는다 |
 | 4 | 같은 Persona 반복 · 자기 글 · 내용 중복 금지 | 이미 그 글에 쓴 Persona·글쓴이 제외 · Persona 댓글에만 답하므로 자기 댓글 답글 불가 · 정규화 일치 / bigram Jaccard ≥0.5 / Persona끼리 같은 도입 6자 차단 · Persona 하루 상한은 profile 값 |
@@ -63,16 +63,39 @@ npx tsx scripts/persona-comment-followup-mutation.mts   # 변이 42/42 잡힘
 
 | ID | 파일(Batch C 수정 중) | 접점 |
 |---|---|---|
-| C-1 | `scripts/lib/persona-comment-loop.mts` (C2) | `runCommentLoop` 의 `sweepAfter` 뒤에 추가 댓글 단계를 하나 둔다. 그날 `StageDecision` 공개 단계와 승인 profile 을 읽어 넘긴다. 순서: 첫 댓글 sweep·생성·sweep → `judgeFollowupTick(profile, runtimeStage)` → `judgeFollowupPost` 전부 → `orderFollowupGo` → 허용 수만큼 `pickFollowupPersona` → 기존 `runEnqueuePipeline`(9관문) → 본문 `judgeFollowupText` → PENDING 적재(열쇠·도장·`FOLLOWUP_DECIDED_BY`). **새 job·새 큐·새 lease 없음.** |
+| C-1 | `scripts/lib/persona-comment-loop.mts` (C2) | `runCommentLoop` 의 `sweepAfter` 뒤에 추가 댓글 단계를 하나 둔다. 그날 `StageDecision` 공개 단계와 승인 profile 을 읽어 넘긴다. 순서: 첫 댓글 sweep·생성·sweep → `judgeFollowupTick(profile, runtimeStage)` → `judgeFollowupPost` 전부 → `orderFollowupGo` → 허용 수만큼 `pickFollowupPersona` → 기존 `runEnqueuePipeline`(9관문) → 본문 `judgeFollowupText` → PENDING 적재(열쇠·도장·`FOLLOWUP_LANE_DECIDED_BY`). 그날 최근 `StageEvidenceVerdict.conversation` 을 `conversationAudit` 로 그대로 넘긴다. **새 job·새 큐·새 lease 없음.** |
 | C-2 | `scripts/lib/runner-wake.mts` · `scripts/original-post-auto-publish.mts` (C2) | 공개 commit 이 깨우는 것은 **첫 댓글뿐**이다. 사건 깨움 회차에서는 추가 댓글 단계를 돌지 않는다(첫 댓글 지연 0). |
 | C-3 | `src/lib/runner-recovery.ts` · `scripts/runner-recover.mts` (C2) | 복구 회차는 추가 댓글 단계를 **건너뛴다**(§3). 복구 판정에 추가 댓글을 넣지 않는다. |
-| C-4 | `scripts/lib/runner-lease.mts` · `supply-lease.mts` (C1) · `package.json` · `visibility-guard.yml` (C1·C2) | 추가 댓글은 댓글 runner 의 기존 lease 안에서만 돈다. C 병합 뒤 `check:persona-followup` · `check:persona-followup-mutation` 스크립트와 CI 단계를 등록한다. |
+| C-4 | `scripts/lib/runner-lease.mts` · `supply-lease.mts` (C1) · `package.json` · `visibility-guard.yml` (C1·C2) | 추가 댓글은 댓글 runner 의 기존 lease 안에서만 돈다. CI 등록은 §4.1 — 소유권 해제 확인 뒤에만. |
+
+### 4.1 전용 검사 CI 등록 — 🔴 아직 미등록 · `package.json` · `visibility-guard.yml` 은 C1/C2 담당 소유
+
+지금 green CI 는 이 PR 의 전용 검사·변이 시험을 **돌리지 않는다.** 등록 전에는 병합 근거가 없다. 소유권 해제가 명시 확인되면 아래 두 곳만 고친다.
+
+`package.json` — `"check:comment-thread-db"` 줄 바로 아래(main 224행 · C2 head 228행):
+
+```json
+    "check:persona-followup": "tsx scripts/persona-comment-followup-check.mts",
+    "check:persona-followup-mutation": "tsx scripts/persona-comment-followup-mutation.mts",
+```
+
+`.github/workflows/visibility-guard.yml` — 기존 step `베스트·댓글 정책 가드`(`if: steps.scope.outputs.heavy == 'true'` · main·C2 head 모두 244행)의 `run` 끝에 두 줄. **새 step 이 아니다** — 무조건 step 상한(`workflow-budget-check`) 불변:
+
+```yaml
+          npm run check:best
+          npm run check:comment-thread
+          npm run check:persona-followup
+          npm run check:persona-followup-mutation
+```
+
+로컬 실측: 전용 검사 0.7초 · 변이 시험 44초(변이 47 × tsx 1회). `src/lib/` 변경은 heavy 판정이라 이 step 이 반드시 돈다.
+참고: #707 의 `stage-evidence-check` · `stage-evidence-followup-mutation` 도 지금 어느 workflow 에도 없다.
 
 ## 5. 활성화 선행조건 — 이 PR 밖 · 각각 별도 PR과 승인
 
 | ID | 무엇 | 왜 |
 |---|---|---|
-| E1 | `stage-evidence` 의 댓글 상한·출처 | 🔴 지금 `bootstrap-auto` 단계 증거 상한이 **1**(`personaCommentCapFor`)이다. 켜는 순간 자동 글마다 `COMMENT_OVER_CAP` 로 Dn 증명이 FAIL 한다. 상한은 "자동 출처 첫 댓글 1 + 추가 댓글" 로 나눠 세고, 출처 분류는 `followupProvenanceOf`(첫 댓글 판정 위에 `followup` 한 칸)로 바꿔 추가 댓글을 수동 Persona 댓글(`manualPersonaComments`)로 잘못 세지 않게 한다. 검사 ⑤가 지금 상한 1 을 실행으로 잠가 두었다 — 바뀌면 이 항목을 다시 본다. |
+| E1 | `stage-evidence` 의 댓글 상한·출처 | ✅ **#707 로 해소(main 11aed451).** 추가 댓글(`followup*`)은 단계 증거의 분자·상한·중복 밖이고 상한 1 은 그대로다. 추가 댓글 결함은 대화 감사 FAIL 로만 드러나며 첫 댓글 성공을 지우지 않는다. 이 모듈은 그 감사 FAIL 을 추가 댓글 브레이크로 쓴다. |
 | E2 | 발행 트랜잭션 | 지금 무인 발행은 `judgeAutoLane`(60분 창 · 글당 1)만 연다. 추가 댓글 레인은 트랜잭션 안에서 도장 검증 · `judgeFollowupPost` 재판정 · 도장의 `parentCommentId` 로 답글 write · Queue `decidedBy`/ActivityLog `decidedBy` 를 추가 댓글 표식으로 같은 시각에 남겨야 한다. |
 | E3 | 홈·베스트 랭킹 (CURRENT K C-03 · Batch F) | Persona 댓글이 아직 홈 인기 점수에 합산된다. 추가 댓글을 켜면 합성 인기가 그만큼 오른다. Batch F 분리 전에는 켜지 않는다. |
 | E4 | 창업자 결정 | CURRENT §7 "실회원 계측 전에 자동 답글 확장" 금지 · §6 실회원 댓글 글의 Persona 응답. North Star 계측(Batch F) 뒤 창업자 승인으로만 켠다. 단계별 profile(D10·D20·D100) 값과 저장 위치, 시간 숫자(30+0~40분 · 24시간)도 그때 확정한다. |
