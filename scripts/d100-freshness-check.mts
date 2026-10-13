@@ -215,6 +215,13 @@ console.log('\n③ 원천 상대 반응 — 정확 시각은 관측 나이 구�
   check('🔴 정확 시각 후보는 기존 판 · 같은 관측 나이 구간 정확 시각 줄만(날짜 줄 제외)', ex?.method === SOURCE_STATS_METHOD && ex.bucket === '6-12h' && ex.n === 2
     && ex.commentsPct === 0.5 && ex.postedDay === undefined, JSON.stringify(ex))
 
+  // 🔴 옛 판의 함정 — 날짜만 아는 줄을 00:00 으로 읽으면 24~72h 구간 표본이 된다. 정확 시각 판은 그 줄을 쓰지 않는다
+  const ex72 = sourceStatsSnapshot({
+    sourceKey: site, articleKey: `${site}::cand`, postedAt: new Date(Date.parse(run1) - 30 * H).toISOString(), observedAt: run1, comments: 5, views: 50,
+    sample: [exactRow('e3', 28, 1), exactRow('e4', 40, 9), ...peers], at,
+  })
+  check('🔴 정확 시각 판의 24~72h 표본에 날짜만 아는 줄(00:00 기준 31.5h)이 들어가지 않는다', ex72?.bucket === '24-72h' && ex72.n === 2, JSON.stringify(ex72))
+
   // 판정 — 판이 정밀도와 맞아야 한다
   const listed = new Date(run1)
   const captured = new Date('2026-10-12T22:31:00.000Z')

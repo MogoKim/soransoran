@@ -389,7 +389,7 @@ export function sourceStatsSnapshot(input: {
     const rows = new Map<string, ListObservation>()
     for (const o of input.sample) {
       if (o.sourceKey !== input.sourceKey || o.articleKey === input.articleKey) continue
-      if (o.postedAt !== null && o.postedAt !== undefined) continue
+      // 🔴 같은 날짜의 날짜만 아는 줄만 — 정확 시각 줄은 구간이 없어 여기서 빠진다
       if (kstDayOfWindow(o.postedWindow ?? null) !== day) continue
       // 🔴 같은 회차 — 관측 시각이 정확히 같다(같은 글 · 같은 회차는 읽기 단계에서 하나다)
       if (strictIso(o.observedAt) === null || o.observedAt !== at) continue
