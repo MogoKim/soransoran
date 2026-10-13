@@ -119,7 +119,7 @@ const MUTATIONS = [
   { name: '㉜ S2 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2', edits: [{ file: F.sandbox,
     find: "  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })\n", replace: '' }] },
   { name: '㉝ S12 가 sandbox articles.ts 에서 이미 등록된 gray 항목을 빼지 않는다 (producer 가 등록 글로 건너뜀)', scenarios: 'S12', edits: [{ file: F.orch,
-    find: "      if (at >= 0) {\n        const end = asrc.indexOf", replace: "      if (false) {\n        const end = asrc.indexOf" }] },
+    find: '      if (iso.removed) writeFileSync(aPath, iso.next)', replace: '      if (false) writeFileSync(aPath, iso.next)' }] },
   // ── 2026-10-12 cold 1회성 복구 — 운영 경로 연결 ──
   { name: '㉞ ready 가 후보 판정 전에 1회성 복구를 열지 않는다 (cold 그대로 격리)', scenarios: 'S14', edits: [{ file: F.ready,
     find: "    ? openOneTimeRecoveries({ draftsDir: DRAFTS_DIR, ...(quarantinePath ? { path: quarantinePath } : {}) })", replace: '    ? []' }] },
