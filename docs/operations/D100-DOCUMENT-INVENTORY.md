@@ -57,6 +57,7 @@
 |---|---|---|
 | `ALWAYS-ON-HOST.md` | 보조 Mac 단일 owner·cutover·rollback·전원/로그인/비밀 계약 | `host:migrate`, launchctl, owner 표식 |
 | `launchd/README.md` | 템플릿·runtime 배포·스케줄 관측·수동 진단 | `launchctl`, `runtime:deploy`, stage wrapper |
+| `2026-10-13-persona-expansion-runbook.md` | Persona 30 → 40 → 60 → 300 확장 판정·단계별 활성화 순서 | `persona:expansion -- --db`, `persona:expansion-check` |
 
 runbook의 오래된 실측 절은 `📜` 또는 “작성 당시 스냅샷”으로 분리한다. 등록 템플릿이 있다는 사실과
 현재 loaded 상태를 합치지 않는다.
