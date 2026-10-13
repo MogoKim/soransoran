@@ -181,12 +181,14 @@ async function main(): Promise<void> {
     await prisma.persona.create({ data: { code, userId: u.id, status: 'active' } })
   }
   /**
-   * 🔴 **여력 0 을 만든다** — capacity d1 이면 지평 7일에 자리가 7개다. 자리를 받은 화자마다
-   *    사람 검토 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이다.
+   * 🔴 **여력 0 을 만든다** — 공개 자리를 받았거나 **생성 시도 여력**(speaker-attempt-v1)이 있는 화자마다
+   *    사람 검토 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고 시도 여력도 0 이다.
+   *    🔴 공개 자리만 보고 심으면(옛 계약) 자리가 없던 화자가 시도 여력을 받아 대기 경로가 시험되지 않는다.
    */
   const scale = resolveScale(process.env)
   const probe = await buildSpeakerLoad(prisma, 'probe', { env: process.env, now: RUN_AT, scale })
-  const opened = Object.entries(probe.byCode).filter(([, r]) => r.openDays > 0).map(([c]) => c)
+  const opened = Object.entries(probe.byCode)
+    .filter(([, r]) => r.openDays > 0 || (r.attemptCapacity ?? 0) > 0).map(([c]) => c)
   let seq = 0
   for (const code of opened) {
     seq += 1
@@ -214,7 +216,8 @@ async function main(): Promise<void> {
   const rid = `${RUN_AT.toISOString().slice(0, 10).replace(/-/g, '')}-e2e`
   const load = await writeSpeakerLoad(prisma, rid, scale)
   const file = JSON.parse(readFileSync(join(DATA, 'speaker-load.json'), 'utf-8')) as {
-    writtenAt: string; runId: string; byDate: { date: string }[]; byCode: Record<string, { openDays: number; readyCount: number }>
+    writtenAt: string; runId: string; byDate: { date: string }[]
+    byCode: Record<string, { openDays: number; readyCount: number; attemptCapacity: number }>
   }
   check('🔴 🔴 **writtenAt = 회차 시각** (벽시계 아님)', file.writtenAt === RUN_AT.toISOString(), file.writtenAt)
   check('🔴 지평 첫날 = 회차 시각의 지평 시작', file.byDate[0]?.date === kstDateString(horizonStart(RUN_AT)),
@@ -222,6 +225,9 @@ async function main(): Promise<void> {
   const remaining = Object.values(file.byCode).map((r) => Math.max(0, r.openDays - r.readyCount))
   check('여력 있는 화자 0명 (자리 받은 사람마다 WIP 1)', opened.length > 0 && remaining.every((n) => n === 0),
     `열린 ${opened.length} · WIP ${load.wip.total}`)
+  check('🔴 생성 시도 여력도 전원 0 (시도 여력 있던 사람마다 WIP 1)',
+    Object.values(file.byCode).every((r) => r.attemptCapacity === 0),
+    Object.entries(file.byCode).filter(([, r]) => r.attemptCapacity > 0).map(([c]) => c).join(','))
 
   // ── 판정 파일 · 검수용 상세 · 큐 스냅샷 — 부모가 넘기는 모양 그대로 ──
   const shadowPath = join('.microseed-data', `auto-judge-${rid}.shadow.jsonl`)

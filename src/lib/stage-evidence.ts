@@ -27,6 +27,11 @@
  *         (b) **추가 댓글 계약** — 글당 Persona 댓글 수 ≤ 그 댓글 단계의 상한(`personaCommentCapFor`) ·
  *             같은 Persona 두 번 0 · 자기 글 0. 🔴 "60분 안 2건" 자체는 실패가 아니다 — 상한을 넘을 때만이다.
  *             (bootstrap-auto 의 상한 1 이 "글당 정확히 1건" 을 지금 그대로 지킨다. 장기 1~5 는 상한 5 로 같은 판정이 받는다)
+ *         (c) 🔴 **추가 댓글은 단계 증거 밖이다** (2026-10-13 · PR #704 E1) — 추가 댓글 표식(`FOLLOWUP_LANE_*`)으로
+ *             연결된 댓글(`followup` · `followup-broken`)은 (a) 분자 · (b) 상한 · 중복 · 자기 글 어디에도 세지 않는다.
+ *             🔴 상한을 1→5 로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처는 지금 상한 그대로다.
+ *             추가 댓글의 결함은 **대화 감사**(`judgeConversationAudit` · 판정의 `conversation` 칸)에서만 FAIL 이다 —
+ *             첫 댓글 성공을 소급해서 지우지 않는다. 두 레인 표식이 섞인 행은 첫 댓글 축의 `broken` 이다(위 FAIL).
  *      ④ 사후 감사 — 🔴 **전수 감사가 아니라 정본 표본 계약이다** (마스터 정본 정정).
  *         그날 자동 target N 에 대해 expected = `auditTarget(N)` = ceil(N × 20%) (N>0 이면 최소 1).
  *         · 중복 없는 표본(글 기준) 수 ≥ expected — 0 이면 `AUDIT_COVERAGE_ZERO`, 미달이면 `AUDIT_COVERAGE_SHORT`
@@ -103,6 +108,11 @@ export type EvidenceVerdictFor<S extends string> = {
   readonly codes: readonly StageEvidenceCode[]
   /** 🔴 개수만 — 사람이 어느 조건이 모자랐는지 본다 */
   readonly counts: Readonly<Record<string, number>>
+  /**
+   * 🔴 **대화 감사(추가 댓글) — 단계 판정(`verdict`)에 들어가지 않는다** (2026-10-13).
+   *    사실을 못 읽었으면 없다. 추가 댓글 결함은 여기서만 FAIL 이다 — 첫 댓글 성공을 지우지 않는다.
+   */
+  readonly conversation?: ConversationAudit
 }
 export type StageEvidenceVerdict = EvidenceVerdictFor<RuntimeStage>
 
@@ -165,6 +175,102 @@ export function commentProvenanceOf(f: CommentLinkFacts): CommentProvenance {
   return 'auto'
 }
 
+/**
+ * 🔴 **추가 댓글(followup) 표식 — 첫 댓글 표식과 다른 값이다** (2026-10-13 · PR #704 E1).
+ *    첫 댓글 뒤 선택적 추가 댓글 0~4건(`persona-comment-followup`)이 Queue `decidedBy` · ActivityLog `decidedBy` 에 남긴다.
+ *    🔴 단계 증거가 이 값을 알아야 추가 댓글을 첫 댓글 증거 · 수동 Persona 댓글 · 상한 어디에도 섞지 않는다 —
+ *       그래서 정본은 증거 쪽(여기)이다. 추가 댓글 레인은 이 상수를 가져다 쓴다.
+ */
+export const FOLLOWUP_LANE_DECIDED_BY = 'machine:persona-comment-followup'
+export const FOLLOWUP_LANE_ACTIVITY_DECIDED_BY = 'auto-followup'
+
+/**
+ * 🔴 **Persona 댓글 한 건의 출처 — 첫 댓글 축과 추가 댓글 축을 나눈다** (2026-10-13).
+ *    · `auto` · `none` · `broken`  `commentProvenanceOf` 그대로 — 단계 증거(첫 댓글 · 상한 · 출처 FAIL)가 본다
+ *    · `followup`                 추가 댓글 표식만 있고 세 행이 한 사건이다 — 🔴 단계 증거의 분자·상한 밖
+ *    · `followup-broken`          추가 댓글 표식만 있는데 연결이 깨졌다 — 🔴 대화 감사 FAIL · 단계 증거 밖
+ */
+export type PersonaCommentProvenance = CommentProvenance | 'followup' | 'followup-broken'
+
+/** 🔴 추가 댓글 축인가 — 단계 증거는 이 둘을 세지 않는다 */
+export const isFollowupProvenance = (p: PersonaCommentProvenance): p is 'followup' | 'followup-broken' =>
+  p === 'followup' || p === 'followup-broken'
+
+/**
+ * 🔴 순수 — 첫 댓글 표식이 **한 곳이라도** 있으면 첫 댓글 판정(`commentProvenanceOf`)이 정한다.
+ *    두 레인 표식이 섞인 행은 거기서 `broken` 이 된다 — 🔴 추가 댓글 표식으로 첫 댓글 출처 FAIL 을 피할 수 없다.
+ *    추가 댓글 표식만 있을 때만 추가 댓글 축으로 간다. 표식이 없으면 `none`(수동) · 겹침이면 `broken` 그대로다.
+ */
+export function personaCommentProvenanceOf(f: CommentLinkFacts): PersonaCommentProvenance {
+  const firstMarked = f.queues.some((q) => (q.decidedBy ?? '').trim() === AUTO_LANE_DECIDED_BY)
+    || f.logs.some((l) => (l.decidedBy ?? '').trim() === AUTO_LANE_ACTIVITY_DECIDED_BY)
+  const followupMarked = f.queues.some((q) => (q.decidedBy ?? '').trim() === FOLLOWUP_LANE_DECIDED_BY)
+    || f.logs.some((l) => (l.decidedBy ?? '').trim() === FOLLOWUP_LANE_ACTIVITY_DECIDED_BY)
+  if (firstMarked || !followupMarked) return commentProvenanceOf(f)
+  if (f.queues.length !== 1 || f.logs.length !== 1) return 'followup-broken'
+  const q = f.queues[0]!
+  const l = f.logs[0]!
+  if (q.status !== 'PUBLISHED' || (q.decidedBy ?? '').trim() !== FOLLOWUP_LANE_DECIDED_BY) return 'followup-broken'
+  if ((l.decidedBy ?? '').trim() !== FOLLOWUP_LANE_ACTIVITY_DECIDED_BY) return 'followup-broken'
+  const c = f.comment
+  if (c.personaId === null || q.personaId !== c.personaId || l.personaId !== c.personaId) return 'followup-broken'
+  if (q.targetPostId !== c.postId) return 'followup-broken'
+  if (q.decidedAtMs === null || l.publishedAtMs === null || q.decidedAtMs !== l.publishedAtMs) return 'followup-broken'
+  // 🔴 추가 댓글은 60분 창이 없다(시간차로 이어 붙는다) — 앞쪽 시계 차이만 본다
+  if (c.createdAtMs - q.decidedAtMs < -AUTO_COMMENT_CLOCK_SKEW_MS) return 'followup-broken'
+  return 'followup'
+}
+
+/** 🔴 대화 감사 코드 — 단계 증거 코드(`STAGE_EVIDENCE_CODES`)와 섞지 않는다 */
+export const CONVERSATION_AUDIT_CODES = [
+  'FOLLOWUP_PROVENANCE_BROKEN', 'FOLLOWUP_WITHOUT_FIRST', 'FOLLOWUP_OVER_TOTAL', 'FOLLOWUP_DUP_PERSONA', 'FOLLOWUP_SELF',
+] as const
+export type ConversationAuditCode = (typeof CONVERSATION_AUDIT_CODES)[number]
+
+export type ConversationAudit = {
+  readonly verdict: 'PASS' | 'FAIL'
+  readonly codes: readonly ConversationAuditCode[]
+  readonly counts: Readonly<Record<string, number>>
+}
+
+/**
+ * 🔴 **대화 감사 — 추가 댓글만 본다. 단계 증거와 따로 판정한다** (2026-10-13).
+ *    추가 댓글의 결함은 여기서 FAIL 이지만 🔴 그 글의 첫 댓글 성공을 소급해서 지우지 않는다(단계 증거는 그대로).
+ *    · 출처가 깨진 추가 댓글                                           FOLLOWUP_PROVENANCE_BROKEN
+ *    · 자동 첫 댓글(`auto`)이 없는 글 · 첫 댓글보다 앞선 추가 댓글         FOLLOWUP_WITHOUT_FIRST
+ *    · 그 글의 Persona 댓글 총수 > 장기 정본 `PERSONA_COMMENTS_PER_POST_MAX` FOLLOWUP_OVER_TOTAL
+ *    · 추가 댓글 Persona 가 그 글에 이미 쓴 Persona                       FOLLOWUP_DUP_PERSONA
+ *    · 추가 댓글 Persona 가 글쓴이                                         FOLLOWUP_SELF
+ *    🔴 추가 댓글이 하나도 없으면 PASS 다(대화를 잇지 않는 글이 정상이다).
+ */
+export function judgeConversationAudit(posts: readonly EvidencePost[]): ConversationAudit {
+  const codes = new Set<ConversationAuditCode>()
+  let followups = 0
+  let broken = 0
+  let postsWithFollowup = 0
+  for (const p of posts) {
+    const fu = p.personaComments.filter((c) => isFollowupProvenance(c.provenance))
+    if (fu.length === 0) continue
+    followups += fu.length
+    postsWithFollowup += 1
+    broken += fu.filter((c) => c.provenance === 'followup-broken').length
+    const firsts = p.personaComments.filter((c) => c.provenance === 'auto')
+    const firstAt = firsts.length === 0 ? null : Math.min(...firsts.map((c) => c.createdAtMs))
+    if (firstAt === null || fu.some((c) => c.createdAtMs < firstAt)) codes.add('FOLLOWUP_WITHOUT_FIRST')
+    if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')
+    const seen = p.personaComments.map((c) => c.personaId ?? '(없음)')
+    if (fu.some((c) => c.personaId === null || seen.filter((x) => x === c.personaId).length > 1)) codes.add('FOLLOWUP_DUP_PERSONA')
+    if (p.authorPersonaId !== null && fu.some((c) => c.personaId === p.authorPersonaId)) codes.add('FOLLOWUP_SELF')
+  }
+  if (broken > 0) codes.add('FOLLOWUP_PROVENANCE_BROKEN')
+  const ordered = CONVERSATION_AUDIT_CODES.filter((c) => codes.has(c))
+  return {
+    verdict: ordered.length > 0 ? 'FAIL' : 'PASS',
+    codes: ordered,
+    counts: { followupComments: followups, followupBroken: broken, postsWithFollowup },
+  }
+}
+
 /** 🔴 누가 발행을 결정했나 — 사후 감사 대상인지를 가른다 */
 export type PostDecider = 'auto' | 'human' | 'unknown'
 
@@ -186,8 +292,11 @@ export type EvidencePost = {
   authorPersonaId: string | null
   /** 🔴 Queue 결정자 — 자동 READY(`auto`)만 사후 감사 대상이다 */
   decider: PostDecider
-  /** 이 글의 살아 있는 Persona 댓글 전부 — 🔴 `provenance` 는 `commentProvenanceOf` 결과다(첫 댓글 보장은 `auto` 만 센다) */
-  personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean; provenance: CommentProvenance }[]
+  /**
+   * 이 글의 살아 있는 Persona 댓글 전부 — 🔴 `provenance` 는 `personaCommentProvenanceOf` 결과다.
+   *    첫 댓글 보장은 `auto` 만 센다 · 추가 댓글(`followup*`)은 단계 증거 밖이고 대화 감사가 본다.
+   */
+  personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean; provenance: PersonaCommentProvenance }[]
   /**
    * 🔴 **발행 트랜잭션이 남긴 release 도장 상태**(`releaseStampStatusOf`) — 조항 ⑦.
    *    Queue 가 없으면 `MISSING` 이다(도장을 확인할 곳이 없다).
@@ -302,27 +411,35 @@ export function judgeEvidenceForTarget<S extends string>(
     let firstOk = 0
     let brokenProv = 0
     let manualPersona = 0
+    let followupCount = 0
     for (const p of facts.posts) {
       if (p.queueRows !== 1) codes.add('DUP_QUEUE')
       if (p.publishLogs !== 1) codes.add('DUP_PUBLISH_LOG')
+      /**
+       * 🔴 **추가 댓글(`followup*`)은 단계 증거의 분자·상한·중복 밖이다** (2026-10-13 · PR #704 E1).
+       *    상한을 1→5 로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처만 지금 상한으로 센다.
+       *    추가 댓글의 결함(출처 · 중복 · 자기 글 · 총량)은 대화 감사(`judgeConversationAudit`)가 따로 본다.
+       */
+      const stageComments = p.personaComments.filter((c) => !isFollowupProvenance(c.provenance))
+      followupCount += p.personaComments.length - stageComments.length
       // (b) 추가 댓글 계약 — 같은 Persona 두 번 0 · 자기 글 0 · 상한 이내
       const byPersona = new Map<string, number>()
-      for (const c of p.personaComments) {
+      for (const c of stageComments) {
         const k = c.personaId ?? '(없음)'
         byPersona.set(k, (byPersona.get(k) ?? 0) + 1)
       }
       if ([...byPersona.values()].some((n) => n > 1)) codes.add('DUP_COMMENT')
-      const own = p.personaComments.filter((c) => p.authorPersonaId !== null && c.personaId === p.authorPersonaId)
+      const own = stageComments.filter((c) => p.authorPersonaId !== null && c.personaId === p.authorPersonaId)
       if (own.length > 0) codes.add('COMMENT_SELF')
-      if (cap !== null && p.personaComments.length > cap) codes.add('COMMENT_OVER_CAP')
+      if (cap !== null && stageComments.length > cap) codes.add('COMMENT_OVER_CAP')
       // 🔴 출처가 깨진 댓글 — 어느 글이든 FAIL(자동 표식을 흉내 낸 행 · 반쯤 남은 행)
-      for (const c of p.personaComments) {
+      for (const c of stageComments) {
         if (c.provenance === 'broken') brokenProv += 1
         else if (c.provenance === 'none') manualPersona += 1
       }
       // (a) 첫 댓글 보장 — 🔴 자동 target 글만 · 60분 안 최상위 · 다른 Persona · **자동 출처 연결** **1건 이상**
       if (!(p.decider === 'auto' && p.unattended)) continue
-      const eligible = p.personaComments.filter((c) =>
+      const eligible = stageComments.filter((c) =>
         c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId && c.provenance === 'auto')
       const inWindow = eligible.filter((c) =>
         c.createdAtMs >= p.publishedAtMs && c.createdAtMs - p.publishedAtMs <= AUTO_FIRST_COMMENT_WINDOW_MS)
@@ -333,6 +450,7 @@ export function judgeEvidenceForTarget<S extends string>(
     counts.firstCommentOk = firstOk
     counts.commentProvenanceBroken = brokenProv
     counts.manualPersonaComments = manualPersona
+    counts.followupComments = followupCount
     if (brokenProv > 0) codes.add('COMMENT_PROVENANCE_BROKEN')
     if (facts.orphanPublishLogs > 0) codes.add('PUBLISH_LOG_ORPHAN')
     if (facts.unloggedPublishes > 0) codes.add('UNLOGGED_PUBLISH')
@@ -374,13 +492,16 @@ export function judgeEvidenceForTarget<S extends string>(
   const ordered = STAGE_EVIDENCE_CODES.filter((c) => codes.has(c))
   const failing = ordered.filter((c) => !UNKNOWN_CODES.includes(c))
   const verdict: EvidenceVerdictKind = failing.length > 0 ? 'FAIL' : ordered.length > 0 ? 'UNKNOWN' : 'PASS'
-  return { kstDate, stage, verdict, codes: ordered, counts }
+  const conversation = facts === null ? undefined : judgeConversationAudit(facts.posts)
+  return { kstDate, stage, verdict, codes: ordered, counts, ...(conversation === undefined ? {} : { conversation }) }
 }
 
 /** 🔴 결정 reasons 에 남기는 한 줄 — 코드와 개수만 */
 export function evidenceReasonOf(v: StageEvidenceVerdict): string {
   const n = Object.entries(v.counts).map(([k, x]) => `${k}=${x}`).join(',')
-  return `EVIDENCE ${v.kstDate} ${v.stage} ${v.verdict}${v.codes.length > 0 ? ` [${v.codes.join(',')}]` : ''}${n === '' ? '' : ` (${n})`}`
+  // 🔴 대화 감사는 FAIL 일 때만 붙인다 — 단계 판정과 다른 칸이라는 것이 줄에서도 보이게(`CONVERSATION`)
+  const conv = v.conversation?.verdict === 'FAIL' ? ` CONVERSATION FAIL [${v.conversation.codes.join(',')}]` : ''
+  return `EVIDENCE ${v.kstDate} ${v.stage} ${v.verdict}${v.codes.length > 0 ? ` [${v.codes.join(',')}]` : ''}${n === '' ? '' : ` (${n})`}${conv}`
 }
 
 export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: TrialBasis }
