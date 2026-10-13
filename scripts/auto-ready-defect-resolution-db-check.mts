@@ -356,7 +356,9 @@ async function main(): Promise<void> {
   await prisma.$disconnect()
   rmSync(SCRATCH, { recursive: true, force: true })
   console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)
-  process.exit(fail === 0 ? 0 : 1)
+  if (fail > 0) process.exit(1)
+  // 🔴 (2026-10-13 · PR #710 보정) 품질 계약 전환 preflight 반례 — 같은 CI step · 같은 격리 DB. 실패하면 그 파일이 1 로 끝낸다
+  await import('./quality-contract-transition-db-check.mjs')
 }
 
 function resolutionsOf(editDiff: unknown): unknown[] {

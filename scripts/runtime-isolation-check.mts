@@ -542,6 +542,12 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
 
   type Fault = {
     fetch?: boolean
+    /** 🔴 (2026-10-13) runtime 트리의 품질 계약을 못 읽는다 · 모양이 깨졌다 */
+    runtimeContract?: string | null
+    /** 🔴 (2026-10-13) checkout 뒤 품질 계약 전환 재확인이 BLOCK 이다 */
+    contractBlock?: boolean
+    /** 🔴 (2026-10-13) job 을 내리기 전 staging 트리 전환 preflight 가 BLOCK 이다 */
+    stagedBlock?: boolean
     checkout?: boolean
     install?: boolean
     gateFail?: string
@@ -788,6 +794,20 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       generate: () => { rec('generate'); return true },
 
       offlineGate: (g) => { rec(`gate:${g}`); return f.gateFail !== g },
+      runtimeQualityContract: () => {
+        rec('runtime-contract')
+        return f.runtimeContract === undefined ? `quality-v7:${'e'.repeat(64)}` : f.runtimeContract
+      },
+      stagedTransitionCheck: (target, rt) => {
+        // 🔴 job 을 내리기 전 — 런타임 SHA 는 아직 직전 것이어야 한다
+        rec(`staged-check:${target === NEXT ? 'target' : 'other'}:${w.sha === PREV ? 'runtime-prev' : 'runtime-moved'}:${String(rt).split(':')[0]}`)
+        return f.stagedBlock !== true
+      },
+      contractTransitionGate: (rt) => {
+        // 🔴 target 코드로 돈다 — checkout 된 SHA 와 넘겨받은 runtime 계약을 값으로 남긴다
+        rec(`contract-gate:${w.sha === NEXT ? 'target' : 'prev'}:${String(rt).split(':')[0]}`)
+        return f.contractBlock !== true
+      },
 
       // ── 🔴 plist cutover ──
       readInstalledPlist: (l) => plists.get(l) ?? null,
@@ -2082,6 +2102,45 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [C] 코드는 건드리지 않는다 (checkout 0)', idx(w, 'checkout') === -1)
     check('🔴 [C] 이미 내린 job 을 **다시 올린다** — 전부 올라와 있다', allLoaded(w))
     check('🔴 [C] SHA·의존성은 직전 그대로다', w.sha === PREV && w.deps === PREV)
+  }
+
+  // ── [D-2] 🔴 품질 계약 전환 preflight (2026-10-13 · PR #710 보정) ──
+  {
+    const ok = makeWorld()
+    const r0 = await deploy(ok)
+    check('🔴 [D-2] 정상 — runtime 계약 → staging(target) 전환 preflight → unload → checkout·generate → 재확인 → offline 게이트',
+      r0.ok && idx(ok, 'runtime-contract') < idx(ok, 'staged-check:target:runtime-prev:quality-v7')
+      && idx(ok, 'staged-check:target:runtime-prev:quality-v7') < idx(ok, 'unload')
+      && idx(ok, 'generate') < idx(ok, 'contract-gate:target:quality-v7')
+      && idx(ok, 'contract-gate:target:quality-v7') < idx(ok, 'gate:gate1'))
+    {
+      const st = makeWorld({ stagedBlock: true })
+      const rs = await deploy(st)
+      check('🔴 🔴 [D-2] staging 전환 preflight BLOCK → preflight 에서 멈춘다 · unload·checkout·plist·manifest 0 · job 그대로 · 되돌릴 것 없음',
+        !rs.ok && rs.phase === 'preflight' && idx(st, 'unload') === -1 && idx(st, 'checkout') === -1 && idx(st, 'write-plist') === -1
+        && countOf(st, 'write-manifest') === 0 && st.sha === PREV && pinOf(st) === PREV && allLoaded(st) && rs.rollback === null)
+    }
+    for (const [why, bad] of [['못 읽음', null], ['모양이 깨짐', 'quality-v7:zz']] as const) {
+      const w = makeWorld({ runtimeContract: bad })
+      const r = await deploy(w)
+      check(`🔴 🔴 [D-2] runtime 계약 ${why} → preflight 에서 멈춘다 · unload·checkout·plist 0`,
+        !r.ok && r.phase === 'preflight' && idx(w, 'unload') === -1 && idx(w, 'checkout') === -1 && idx(w, 'write-plist') === -1
+        && w.sha === PREV && allLoaded(w) && r.rollback === null)
+    }
+    const w = makeWorld({ contractBlock: true })
+    const r = await deploy(w)
+    check('🔴 🔴 [D-2] checkout 뒤 재확인 BLOCK → 배포하지 않는다 (contract-transition)', !r.ok && r.phase === 'contract-transition')
+    check('🔴 [D-2] BLOCK 이면 offline 게이트 0 · 새 plist 0(설치본은 배포 전 그대로) · manifest 쓰기 0', idx(w, 'gate:gate1') === -1
+      && J.every((l) => w.plists.get(l) === OLD_PLIST(l))
+      && !r.steps.some((x) => x === 'write-manifest' || x.startsWith('plist:') || x.startsWith('gate:gate')))
+    check('🔴 [D-2] 직전 SHA·의존성·manifest·pin 으로 되돌아가고 job 이 다시 올라온다',
+      w.sha === PREV && w.deps === PREV && manifestSha(w) === PREV && pinOf(w) === PREV && allLoaded(w) && r.rollback?.complete === true)
+    // 🔴 main 최신 판정과 품질 계약 판정은 서로를 대신하지 않는다
+    const offMain = makeWorld()
+    offMain.fx = { ...offMain.fx, isAncestor: () => false }
+    const r2 = await deploy(offMain)
+    check('🔴 🔴 [D-2] 전환 preflight 가 통과여도 target 이 main 이 아니면 막는다 — 계약 검사는 main 판정을 대신하지 않는다',
+      !r2.ok && r2.phase === 'preflight' && /NOT_ON_MAIN|NOT_ORIGIN_MAIN|main/.test(r2.problems.join(' ')) && idx(offMain, 'checkout') === -1)
   }
 
   // ── [D] offline 게이트 실패 ──
