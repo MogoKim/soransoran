@@ -2,7 +2,7 @@
 /**
  * 🔴 **매거진 M-AUTO rehearsal — 실제 엔트리포인트 전체를 격리된 임시 사본에서 같은 날 반복 실행한다** (2026-10-10).
  *
- *   npm run magazine:rehearsal                          시나리오 S1~S14 · S8B · S14B + S1 반복성
+ *   npm run magazine:rehearsal                          시나리오 S1~S14 · S8B · S14U · S14B + S1 반복성
  *   node scripts/magazine-rehearsal.mjs --scenario S1,S4 고른 시나리오만
  *   node scripts/magazine-rehearsal.mjs --date 2026-10-11 --keep --out <report.json>
  *
@@ -135,8 +135,68 @@ async function oneTarget(repo, date) {
   return { target: t.slug }
 }
 
-/** S14·S14B 공통 — cold 1회성 복구의 운영 모양 (원고 4파일 · 큐 행 · 장부 행은 2026-10-12 운영 값의 읽기 전용 사본) */
-function coldRecoveryScenario(regenMode, { rerun = false } = {}) {
+/**
+ * 🔴 **sandbox 사본 articles.ts 에서 slug 하나만 뺀다** — S12·S14·S14B 공통 계약 (2026-10-13).
+ *    과거 사건을 재현하는 시나리오가 **운영이 성공할수록 실행 불가능해지지 않게** 한다
+ *    (#690 뒤 gray · #701 뒤 cold 가 runtime articles.ts 에 이미 있다).
+ *    순수 함수다 — 실제 runtime·제품 article 은 건드리지 않는다. 부른 쪽이 sandbox 사본에만 쓴다.
+ *
+ *    없으면 그대로(no-op). 있으면 여러 줄 항목 하나를 잘라 내고 **구조로** 확인한다:
+ *      그 slug 가 남지 않았다 · 다른 글은 순서와 값이 그대로다. 하나라도 아니면 예외 (짐작 0).
+ */
+export function withoutArticle(src, slug, parse) {
+  if (!parse(src).some((a) => a.slug === slug)) return { next: src, removed: false }
+  const at = src.indexOf(`\n  '${slug}': {\n`)
+  if (at < 0) throw new Error(`articles.ts 에서 ${slug} 항목 시작을 찾지 못했다 (여러 줄 항목이 아니다)`)
+  const end = src.indexOf('\n  },\n', at + 1)
+  if (end < 0) throw new Error(`articles.ts 에서 ${slug} 항목 끝을 찾지 못했다`)
+  const next = src.slice(0, at) + src.slice(end + 5)
+  const after = parse(next)
+  if (after.some((a) => a.slug === slug)) throw new Error(`articles.ts 에서 ${slug} 를 빼지 못했다`)
+  const before = parse(src).filter((a) => a.slug !== slug)
+  if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error(`articles.ts 에서 ${slug} 말고 다른 글이 바뀌었다 (순서·값)`)
+  return { next, removed: true }
+}
+
+/** 등록 모양을 만들 때만 — 항목 원문을 레코드 맨 앞에 넣는다 (sandbox 사본 전용) */
+function withArticleEntry(src, entry) {
+  const anchor = src.indexOf('MAGAZINE_ARTICLE_RECORD')
+  const open = anchor < 0 ? -1 : src.indexOf('{\n', src.indexOf('=', anchor))
+  if (open < 0) throw new Error('articles.ts 레코드 시작을 찾지 못했다')
+  return src.slice(0, open + 2) + entry + src.slice(open + 2)
+}
+
+/**
+ * 제거 계약 자기 시험 — 합성 소스 넷. 🔴 검증을 지우면 여기서 깨진다 (그냥 잘 지워지는 실제 소스만으로는 못 본다).
+ *   ① 미등록 → no-op  ② 등록 1건 → 그것만 제거 · 이웃 순서 그대로
+ *   ③ 닫는 줄 뒤에 한 줄 항목이 붙어 절단이 이웃 둘까지 지우는 모양 → 거부
+ *   ④ 한 줄 항목(절단 불가) → 거부
+ */
+export function articleIsolationSelfTest(parse) {
+  const slug = 'cold-weather-joint-pain'
+  const SYN = (body) => `export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = {\n${body}}\n`
+  const A = "  'a-one': {\n    title: 'A',\n  },\n"
+  const C3 = "  'c-three': {\n    title: 'C3',\n  },\n"
+  const throws = (src) => { try { withoutArticle(src, slug, parse); return false } catch { return true } }
+  const absent = SYN(A + C3)
+  const r0 = withoutArticle(absent, slug, parse)
+  const r1 = withoutArticle(SYN(A + `  '${slug}': {\n    title: 'C',\n  },\n` + C3), slug, parse)
+  return {
+    absentNoop: r0.removed === false && r0.next === absent,
+    removesOnlyIt: r1.removed === true && parse(r1.next).map((a) => a.slug).join(',') === 'a-one,c-three',
+    rejectsNeighborLoss: throws(SYN(A + `  '${slug}': {\n    title: 'C',\n  }, 'b-two': { title: 'B' },\n` + C3)),
+    rejectsOneLine: throws(SYN(A + `  '${slug}': { title: 'C' },\n` + C3)),
+  }
+}
+
+/**
+ * S14·S14B 공통 — cold 1회성 복구의 운영 모양 (원고 4파일 · 큐 행 · 장부 행은 2026-10-12 운영 값의 읽기 전용 사본).
+ * 🔴 `registry` — runtime articles.ts 에 cold 가 있든 없든 같은 과거 사건(10/12 · 등록 전)을 재현한다:
+ *    'registered'   등록된 모양을 강제(없으면 10/13 등록 항목 fixture 를 넣는다) → 격리가 1건 뺀다
+ *    'unregistered' 미등록 모양을 강제(있으면 먼저 뺀다) → 격리는 no-op
+ *    'as-is'        runtime 사본 그대로 → 격리
+ */
+function coldRecoveryScenario(regenMode, { rerun = false, registry = 'as-is' } = {}) {
   const slug = 'cold-weather-joint-pain'
   return {
     async prepare(repo) {
@@ -151,6 +211,19 @@ function coldRecoveryScenario(regenMode, { rerun = false } = {}) {
       writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)
       await curate({ repo, keep: [slug] })
       const fx = (n) => readFileSync(join(repo, 'scripts', 'fixtures', 'magazine-format-contract', n), 'utf8')
+      // 🔴 article registry 격리 — sandbox 사본 articles.ts 에서만 (runtime·제품 article 은 읽기만)
+      const aPath = join(repo, 'src', 'content', 'magazine', 'articles.ts')
+      const parse = (src) => L.parseArticlesSource(src)
+      const has = (src) => parse(src).some((a) => a.slug === slug)
+      let asrc = readFileSync(aPath, 'utf8')
+      if (registry === 'registered' && !has(asrc)) asrc = withArticleEntry(asrc, fx('cold-weather-joint-pain.registered-2026-10-13.articles-entry.ts.txt'))
+      if (registry === 'unregistered' && has(asrc)) asrc = withoutArticle(asrc, slug, parse).next
+      const shape = has(asrc) ? 'registered' : 'unregistered'
+      const othersOf = (src) => JSON.stringify(parse(src).filter((a) => a.slug !== slug))
+      const iso = withoutArticle(asrc, slug, parse)
+      writeFileSync(aPath, iso.next)
+      const isolation = { shape, removed: iso.removed, absentAfter: !has(readFileSync(aPath, 'utf8')), othersKept: othersOf(readFileSync(aPath, 'utf8')) === othersOf(asrc),
+        selfTest: articleIsolationSelfTest(parse) }
       const files = { 'brief.md': fx('cold-weather-joint-pain.recovery-2026-10-12.brief.md'), 'review.ts': fx('cold-weather-joint-pain.recovery-2026-10-12.review.ts.txt'),
         'draft.md': fx('cold-weather-joint-pain.regen-source-2026-10-12.draft.md'), 'article-draft.ts': fx('cold-weather-joint-pain.recovery-2026-10-12.article-draft.ts.txt') }
       writeSlugFiles({ repo, slug, files })
@@ -158,7 +231,7 @@ function coldRecoveryScenario(regenMode, { rerun = false } = {}) {
       const h = (t) => createHash('sha256').update(t).digest('hex')
       const shas = { briefSha256: h(files['brief.md']), reviewSha256: h(files['review.ts']), draftSha256: h(files['draft.md']), articleSha256: h(files['article-draft.ts']) }
       const id = Q.ONE_TIME_RECOVERIES[0].identity
-      return { target: slug, shas, identityOk: Object.entries(shas).every(([k, v]) => id[k] === v), untrack: [`drafts/magazine/${slug}`] }
+      return { target: slug, shas, identityOk: Object.entries(shas).every(([k, v]) => id[k] === v), untrack: [`drafts/magazine/${slug}`], isolation }
     },
     scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:regen`]: [regenMode, regenMode] } }),
     async afterBuild(sb, p) {
@@ -183,6 +256,29 @@ function coldRecoveryScenario(regenMode, { rerun = false } = {}) {
       }
     },
   }
+}
+
+/** S14·S14U 공통 단언 — 🔴 제품 계약은 그대로 (OPENED 1 · regen 1 · 일반 0 · QA · 등록·PR·병합·배포). 등록 모양만 다르다 */
+function coldRecoveryExpect(id, shape, ev, ctx) {
+  const iso = ctx.prepared.isolation ?? {}
+  const st = iso.selfTest ?? {}
+  const t = ctx.prepared.target
+  const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
+  const typed = ev.regenTyped.filter((r) => r.slug === t).map((r) => r.typed)
+  const rec = ctx.registerResult?.oneTimeRecoveries ?? []
+  return [
+    exp(`${id} 준비 — runtime ${shape === 'registered' ? '등록' : '미등록'} 모양 · sandbox 사본 articles.ts 에서 cold 만 ${shape === 'registered' ? '1건 제거' : '제거할 것 없음'} · 다른 글 순서·값 그대로`,
+      iso.shape === shape && iso.removed === (shape === 'registered') && iso.absentAfter === true && iso.othersKept === true, { shape: iso.shape, removed: iso.removed, absentAfter: iso.absentAfter, othersKept: iso.othersKept }),
+    exp(`${id} 격리 자기 시험 — 미등록 no-op · 1건만 제거 · 이웃까지 지우는 절단 거부 · 한 줄 항목 거부`,
+      st.absentNoop === true && st.removesOnlyIt === true && st.rejectsNeighborLoss === true && st.rejectsOneLine === true, st),
+    exp(`${id} 준비 — 운영 행·원고 4파일 신원 그대로 (attempts 2 · regenCalls 4 · 계보 b542d44b · 4 SHA 일치)`, ctx.prepared.identityOk, ctx.prepared.shas),
+    exp(`${id} 1회성 복구 OPENED (정확한 사건)`, rec.filter((r) => r.slug === t && r.status === 'OPENED').length === 1, rec),
+    exp(`${id} 재생성 요청 1 — description 57자 위반 · 길이 목표(최소 N자 줄인다) · 계산 기준 모두 실렸다`, typed.length === 1 && /description 57자 — 허용 60~160자 밖/.test(typed[0]) && /최소 \d+자를 줄인다/.test(typed[0]) && typed[0].includes('공백·줄바꿈 포함'),
+      (typed[0] ?? '').split('\n').filter((l) => /QA_FAIL|BODY_LENGTH/.test(l)).slice(0, 4)),
+    exp(`${id} provider 재생성 정확히 1 · 일반 요청 0 · 재생성 1회(APPLIED)로 QA 통과 · 판정 DONE`, ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0 && (row?.regenHistory ?? []).length === 1 &&
+      row.regenHistory[0].outcome === 'APPLIED' && row?.verdict === 'DONE', { bySlug: ev.sends.bySlug, verdict: row?.verdict, history: row?.regenHistory }),
+    exp(`${id} 등록 1 · PR MERGED · 배포 · 장부 행 정리`, ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
+  ]
 }
 
 export const SCENARIOS = {
@@ -658,17 +754,8 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       writeFileSync(qPath, RQ.withFixtureRows(qsrc, [slug]).src)
       // 🔴 gray 가 이미 등록된 runtime(10/12 #690 뒤)에서도 같은 시나리오 — sandbox 사본 articles.ts 에서만 그 항목을 뺀다
       const aPath = join(repo, 'src', 'content', 'magazine', 'articles.ts')
-      const asrc = readFileSync(aPath, 'utf8')
-      const at = asrc.indexOf(`\n  '${slug}': {\n`)
-      if (at >= 0) {
-        const end = asrc.indexOf('\n  },\n', at + 1)
-        if (end < 0) throw new Error(`sandbox articles.ts 에서 ${slug} 항목 끝을 찾지 못했다`)
-        const next = asrc.slice(0, at) + asrc.slice(end + 5)
-        const before = L.parseArticlesSource(asrc).filter((a) => a.slug !== slug)
-        const after = L.parseArticlesSource(next)
-        if (after.some((a) => a.slug === slug) || JSON.stringify(after) !== JSON.stringify(before)) throw new Error(`sandbox articles.ts 에서 ${slug} 만 빼지 못했다`)
-        writeFileSync(aPath, next)
-      }
+      const iso = withoutArticle(readFileSync(aPath, 'utf8'), slug, (src) => L.parseArticlesSource(src))
+      if (iso.removed) writeFileSync(aPath, iso.next)
       const item = L.parseQueueSource(readFileSync(qPath, 'utf8')).find((q) => q.slug === slug)
       if (JSON.stringify(item) !== JSON.stringify(RQ.fixtureQueue([slug])[0])) throw new Error(`sandbox 큐의 ${slug} 행이 fixture 와 다르다`)
       await curate({ repo, keep: [slug] })
@@ -744,23 +831,15 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
   },
 
   S14: {
-    title: 'cold 1회성 복구 — 10/12 운영 후 상태(attempts 2 · regenCalls 4 · 7일 격리) 그대로 · 원고 4파일 신원 일치 → 복구 개방 → #693 새 패킷(description · 길이 목표)으로 재생성 1회 → QA·등록·PR·병합·배포',
-    ...coldRecoveryScenario('obedient'),
-    expect(ev, ctx) {
-      const t = ctx.prepared.target
-      const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
-      const typed = ev.regenTyped.filter((r) => r.slug === t).map((r) => r.typed)
-      const rec = ctx.registerResult?.oneTimeRecoveries ?? []
-      return [
-        exp('S14 준비 — 운영 행·원고 4파일 신원 그대로 (attempts 2 · regenCalls 4 · 계보 b542d44b · 4 SHA 일치)', ctx.prepared.identityOk, ctx.prepared.shas),
-        exp('S14 1회성 복구 OPENED (정확한 사건)', rec.some((r) => r.slug === t && r.status === 'OPENED'), rec),
-        exp('S14 재생성 요청 1 — description 57자 위반 · 길이 목표(최소 N자 줄인다) · 계산 기준 모두 실렸다', typed.length === 1 && /description 57자 — 허용 60~160자 밖/.test(typed[0]) && /최소 \d+자를 줄인다/.test(typed[0]) && typed[0].includes('공백·줄바꿈 포함'),
-          (typed[0] ?? '').split('\n').filter((l) => /QA_FAIL|BODY_LENGTH/.test(l)).slice(0, 4)),
-        exp('S14 provider 재생성 정확히 1 · 일반 요청 0 · 재생성 1회(APPLIED)로 QA 통과 · 판정 DONE', ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0 && (row?.regenHistory ?? []).length === 1 &&
-          row.regenHistory[0].outcome === 'APPLIED' && row?.verdict === 'DONE', { bySlug: ev.sends.bySlug, verdict: row?.verdict, history: row?.regenHistory }),
-        exp('S14 등록 1 · PR MERGED · 배포 · 장부 행 정리', ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
-      ]
-    },
+    title: 'cold 1회성 복구 — 10/12 운영 후 상태(attempts 2 · regenCalls 4 · 7일 격리) 그대로 · 원고 4파일 신원 일치 → 복구 개방 → #693 새 패킷(description · 길이 목표)으로 재생성 1회 → QA·등록·PR·병합·배포 (runtime 등록 모양)',
+    ...coldRecoveryScenario('obedient', { registry: 'registered' }),
+    expect: (ev, ctx) => coldRecoveryExpect('S14', 'registered', ev, ctx),
+  },
+
+  S14U: {
+    title: 'S14 와 같은 과거 사건 — runtime articles.ts 에 cold 가 아직 없는 모양 (격리 no-op) 에서도 같은 결과',
+    ...coldRecoveryScenario('obedient', { registry: 'unregistered' }),
+    expect: (ev, ctx) => coldRecoveryExpect('S14U', 'unregistered', ev, ctx),
   },
 
   S14B: {
@@ -772,6 +851,8 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const SD = join(ctx.sb.repo, 'drafts', 'magazine', t)
       const shaOf = (f) => (existsSync(join(SD, f)) ? createHash('sha256').update(readFileSync(join(SD, f))).digest('hex') : null)
       return [
+        exp('S14B 준비 — sandbox 사본 articles.ts 에서 cold 격리 (runtime 사본 그대로 · 다른 글 순서·값 그대로)', ctx.prepared.isolation?.absentAfter === true && ctx.prepared.isolation?.othersKept === true,
+          ctx.prepared.isolation && { shape: ctx.prepared.isolation.shape, removed: ctx.prepared.isolation.removed }),
         exp('S14B 복구 OPENED → 재생성 provider 정확히 1 (재실행 포함) · 일반 요청 0', ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0, ev.sends.bySlug),
         exp('🔴 S14B 후보 QA 실패 → 원본 draft.md · article-draft.ts 바이트 그대로', shaOf('draft.md') === ctx.prepared.shas.draftSha256 && shaOf('article-draft.ts') === ctx.prepared.shas.articleSha256, { draft: shaOf('draft.md'), article: shaOf('article-draft.ts') }),
         exp('S14B 장부 — regenCalls 5 · 복구 계보 calls 1 · 다시 열리지 않음 · 등록 0', led?.regenCalls === 5 && led?.regenLineage?.origin === 'ONE_TIME_RECOVERY' && led.regenLineage.calls === 1 && ev.registered.length === 0 &&
