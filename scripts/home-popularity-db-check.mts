@@ -8,14 +8,15 @@
  * 격리 Postgres 는 scripts/operator-compose-db-check.mts 머리 주석의 절차 그대로다
  * (DB 이름 soran_test · `npx prisma migrate deploy` 로 올린 뒤 실행).
  *
- * 홈이 부르는 것과 같은 함수를 부른다 — withRealReactions · pickHomePopular ·
+ * 홈이 부르는 것과 같은 함수를 부른다 — withRealReactions · applyHomeExposure + createHomeAutoFill ·
  * POST_LIST_ITEM_SELECT · DISCOVERY_ELIGIBLE_WHERE. getHomePopularPosts 자체는 auth() 를 불러
  * 세션 없이 돌릴 수 없어, 그 안의 조회 모양(게시판별 최신 후보 → 실반응 수 → 점수)을 그대로 따른다.
  */
 import { PrismaClient, type BoardType, type Prisma } from '@prisma/client'
 
 import { withRealReactions } from '../src/lib/popularity-db'
-import { pickHomePopular } from '../src/lib/popularity'
+import { createHomeAutoFill, pickHomePopular } from '../src/lib/popularity'
+import { applyHomeExposure } from '../src/lib/home-exposure-rules'
 import { DISCOVERY_ELIGIBLE_WHERE } from '../src/lib/post-visibility'
 import { POST_LIST_ITEM_SELECT } from '../src/lib/queries/post-list-item-select'
 
@@ -163,13 +164,11 @@ async function main(): Promise<void> {
   await comment(meno, { commentOrigin: 'GUEST', guestNickname: '손님' })
 
   const [menoRows, freeRows] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
-  const picked = pickHomePopular({
-    menopause: await withRealReactions(prisma, menoRows),
-    free: await withRealReactions(prisma, freeRows),
-    take: 4,
-    minMenopause: 0,
-    now: NOW,
-  })
+  // queries/posts.ts getHomePopularPosts 와 같은 조합 — HIDE·PIN 없음 · 갱년기톡 최소 7
+  const candidates = [...(await withRealReactions(prisma, menoRows)), ...(await withRealReactions(prisma, freeRows))]
+  const auto = createHomeAutoFill<(typeof candidates)[number]>({ minMenopause: 7, now: NOW })
+  const picked = applyHomeExposure({ candidates, overrides: [], take: 4, now: NOW, fillAuto: auto.fill })
+  expect('갱년기톡 후보 1개 · take 4 → 최종 1개 · 원인 = 글 부족 + 자리 부족(4 < 7)', [auto.diagnosis(picked).shown, auto.diagnosis(picked).reasons], [1, ['eligible-short', 'slots-short']])
   // meno 2/5^0.8=0.552 · realOnly 2/5.5^0.8=0.509 · quiet 1/4.5^0.8=0.300 · personaOnly 1/5^0.8=0.276
   expect('순서 = 실반응 순 · Persona 10 글은 꼴찌', picked.map((p) => p.id), [meno, realOnly, quiet, personaOnly])
   expect('화면 댓글 수는 그대로 실린다', picked.map((p) => p._count.comments), [6, 1, 0, 10])

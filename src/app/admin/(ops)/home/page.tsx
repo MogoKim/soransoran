@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import { getHomePopularPosts } from '@/lib/queries/posts'
-import { popularityScore } from '@/lib/popularity'
+import { popularityScore, type MenopauseQuota } from '@/lib/popularity'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import { boardLabel, formatKst } from '@/lib/admin-format'
 import { HOME_MAGAZINE_COUNT, HOME_POPULAR_COUNT } from '@/lib/home-exposure'
@@ -51,6 +51,12 @@ const SOON_MINUTES = 30
 const PIN_COLS = 'lg:grid-cols-[5.5rem_minmax(0,1fr)_11rem_auto]'
 const HOME_COLS = 'lg:grid-cols-[2rem_minmax(0,1fr)_17rem_auto]'
 
+/** 갱년기톡 최소 노출 부족 원인 — popularity.ts MenopauseQuota.reasons */
+const MENOPAUSE_SHORT_REASON: Record<MenopauseQuota['reasons'][number], string> = {
+  'eligible-short': '노출 가능한 갱년기톡 글이 모자람',
+  'slots-short': '고정 글이 자리를 차지해 남은 자리가 모자람',
+}
+
 function minutesLeft(expiresAt: Date | null, now: Date): number | null {
   if (!expiresAt) return null
   return Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 60000))
@@ -75,7 +81,7 @@ export default async function AdminHomeExposurePage({
   const query = (q ?? '').trim()
   const now = new Date()
 
-  const [posts, overrides] = await Promise.all([
+  const [{ posts, menopauseQuota: quota }, overrides] = await Promise.all([
     getHomePopularPosts(HOME_POPULAR_COUNT),
     prisma.homeExposureOverride.findMany({
       where: { surface: 'HOME_POPULAR', isActive: true },
@@ -205,9 +211,23 @@ export default async function AdminHomeExposurePage({
       {/* ── 2) 지금 홈에 뜬 글 ──────────────────────────── */}
       <AdminSection
         title={`지금 홈에 뜬 글 ${posts.length}건`}
-        description="고정·숨김이 반영된 실제 결과입니다. 점수 = (댓글 수 + 1) / (경과시간h + 4)^0.8"
+        description="고정·숨김이 반영된 실제 결과입니다. 점수 = (실반응 + 1) / (경과시간h + 4)^0.8 · 실반응 = 댓글 단 실회원 수(글쓴이 제외) + 비회원 댓글(최대 3)"
         className="mt-6"
       >
+        {/* 🔴 갱년기톡 최소 노출이 모자라면 숨기지 않는다 — 운영자가 원인(글 부족·고정이 자리 차지)을 보고 판단한다. */}
+        <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-content-muted">
+          <span>
+            갱년기톡 {quota.shown} / 최소 {quota.minimum} (고정 {quota.pinned})
+          </span>
+          {quota.deficit > 0 ? (
+            <AdminBadge tone="warning">
+              {quota.deficit}건 모자람 ·{' '}
+              {quota.reasons.length === 0
+                ? '원인 불명 — 배분 결함'
+                : quota.reasons.map((r) => MENOPAUSE_SHORT_REASON[r]).join(' · ')}
+            </AdminBadge>
+          ) : null}
+        </p>
         {posts.length === 0 ? (
           <div className="mt-2">
             <AdminEmptyState>홈에 뜬 글이 없습니다.</AdminEmptyState>
@@ -219,7 +239,7 @@ export default async function AdminHomeExposurePage({
             >
               <span>#</span>
               <span>글</span>
-              <span>댓글 · 작성 · 점수</span>
+              <span>댓글 · 실반응 · 작성 · 점수</span>
               <span className="text-right">고정 · 숨김</span>
             </div>
             <ul className="m-0 flex list-none flex-col gap-2 p-0 lg:gap-0">

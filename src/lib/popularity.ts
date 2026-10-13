@@ -116,3 +116,85 @@ export function pickHomePopular<T extends ScorablePost>({
   selected.sort(byScore)
   return selected.map((e) => e.post)
 }
+
+/** 갱년기톡 최소 노출이 최종 목록에서 어떻게 됐는가. 부족하면 왜 부족한지 숨기지 않는다 */
+export type MenopauseQuota = {
+  /** 정책 최소 — 호출부가 넘긴 값 */
+  minimum: number
+  /** 이번에 지킬 수 있는 수 = min(최소, 노출 가능한 갱년기톡, PIN 갱년기톡 + 남은 자동 자리) */
+  target: number
+  /** 최종 목록의 갱년기톡 수(PIN 포함) */
+  shown: number
+  /** PIN 으로 들어간 갱년기톡 수 */
+  pinned: number
+  /** 최소에서 모자란 수. 0 이면 정상 */
+  deficit: number
+  /**
+   * 모자란 원인. 비어 있으면 deficit 도 0 이다.
+   *   eligible-short  숨김·차단·discovery 조건을 지난 갱년기톡 글이 최소보다 적다
+   *   slots-short     PIN 이 자리를 차지해 남은 자동 자리로는 최소를 채울 수 없다
+   */
+  reasons: ('eligible-short' | 'slots-short')[]
+}
+
+/**
+ * 홈 자동 자리 채우기 — applyHomeExposure 의 fillAuto 로 넘긴다.
+ *
+ * 🔴 갱년기톡 최소 노출은 **최종 목록**에서 성립해야 한다. 예전에는 여유분(take×2)을 고를 때 보장하고
+ *    applyHomeExposure 가 take 로 다시 잘라, 점수가 낮은 갱년기톡이 전부 잘려 나갈 수 있었다
+ *    (운영 replay: 홈 20 이 전부 자유게시판). 지금은 PIN 을 세운 **뒤** 남은 자리 수로 배분한다.
+ *
+ *   PIN 갱년기톡은 최소에 포함한다. 자동 자리에서 채울 몫 = min(최소, 노출 가능 수) − PIN 갱년기톡.
+ *   그 몫을 pickHomePopular 에 넘긴다 — 점수순을 기본으로, 모자라면 가장 낮은 자유게시판 글과만 바꾼다.
+ *   HIDE 는 rest 에 이미 없다 — 숨긴 글을 보장 수 때문에 되살리지 않는다.
+ *
+ * fill 이 한 번 불린 뒤 diagnosis(최종 목록) 가 MenopauseQuota 를 돌려준다.
+ * 🔴 deficit > 0 인데 reasons 가 비었다면 배분 결함이다 — 어드민이 그대로 "배분 결함" 이라고 보여준다.
+ */
+export function createHomeAutoFill<T extends ScorablePost>({
+  minMenopause,
+  now,
+}: {
+  minMenopause: number
+  now: Date
+}): {
+  fill: (rest: readonly T[], ctx: { slots: number; pinned: readonly { boardType: BoardType }[] }) => T[]
+  diagnosis: (finalPosts: readonly { boardType: BoardType }[]) => MenopauseQuota
+} {
+  const minimum = Math.max(0, Math.trunc(minMenopause))
+  const isMeno = (p: { boardType: BoardType }) => p.boardType === GUARANTEED_BOARD
+  // fill 이 불렸을 때만 채워진다(applyHomeExposure 는 자리가 0 이어도 부른다). 안 불렸다 = take 0.
+  let seen: { pinnedMeno: number; poolMeno: number; slots: number } | null = null
+
+  return {
+    fill(rest, { slots, pinned }) {
+      const ids = new Set<string>()
+      const unique = rest.filter((p) => (ids.has(p.id) ? false : (ids.add(p.id), true)))
+      const menopause = unique.filter(isMeno)
+      const pinnedMeno = pinned.filter(isMeno).length
+      seen = { pinnedMeno, poolMeno: menopause.length, slots }
+      const need = Math.max(0, Math.min(minimum, pinnedMeno + menopause.length) - pinnedMeno)
+      return pickHomePopular({
+        menopause,
+        free: unique.filter((p) => !isMeno(p)),
+        take: slots,
+        minMenopause: need,
+        now,
+      })
+    },
+    diagnosis(finalPosts) {
+      // 🔴 shown 은 최종 목록에서 센다 — 배분이 의도한 수가 아니라 실제로 나간 수다
+      const shown = finalPosts.filter(isMeno).length
+      const pinned = seen ? seen.pinnedMeno : shown
+      const eligible = pinned + (seen ? seen.poolMeno : 0)
+      const slots = seen ? seen.slots : 0
+      const target = Math.min(minimum, eligible, pinned + slots)
+      const reasons: MenopauseQuota['reasons'] = []
+      if (shown < minimum) {
+        if (eligible < minimum) reasons.push('eligible-short')
+        if (pinned + slots < minimum) reasons.push('slots-short')
+      }
+      return { minimum, target, shown, pinned, deficit: Math.max(0, minimum - shown), reasons }
+    },
+  }
+}

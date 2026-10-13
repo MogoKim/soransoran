@@ -34,7 +34,7 @@
 | 자동 댓글 provenance · 복구 (canon §5) | ❌ main · 🟡 Batch A PR-head ✅(미병합 · 세 행 provenance · slot recovery · 공통 커널 lease `lockf` — holder 종료·SIGKILL 시 자동 해제) | ❌ | ❌ 10-07 절전 중 회차 미실행 · 복구 없음 |
 | 감사 | ✅ 자동 공개의 `ceil(N×20%)` | ✅ loaded | ⚠️ 7일 표본 7건 판정 · 결함 0 — 결함 탐지력은 UNKNOWN |
 | 82cook | ✅ bounded canary 계약 | ❌ policy-disabled · job 0 | UNKNOWN — clean canary 0회 |
-| 실회원 우선 홈 랭킹 | ❌ main · 🟡 Batch F PR-head ✅(미병합 · 홈 신호 = 글쓴이 제외 서로 다른 실회원 수 + 비회원 댓글 min(n, /best `GUEST_COMMENT_CAP` 3) · Persona·운영·Micro Seed 원문·삭제·모순 행 제외 · 화면 댓글 수 불변 · /best 정책 불변 · 게시판 정렬은 최신·조회순뿐) | ❌ | UNKNOWN — 운영 순서 replay(`npm run replay:home-popularity`, 쓰기 차단 증명 후 해시·집계만) 결과는 PR #706 |
+| 실회원 우선 홈 랭킹 | ❌ main · 🟡 Batch F PR #706 로컬 ✅(미push · 홈 신호 = 글쓴이 제외 서로 다른 실회원 수 + 비회원 댓글 min(n, /best `GUEST_COMMENT_CAP` 3) · Persona·운영·Micro Seed 원문·삭제·모순 행 제외 · 화면 댓글 수 불변 · /best 정책 불변 · 갱년기톡 최소 7 을 PIN·HIDE 뒤 **최종 목록**에서 보장, 부족분·원인은 어드민 홈 노출에 표시) | ❌ | ❌ 10-13 운영 replay(최종 20 · 해시·집계) main 홈 갱년기톡 0/20 — 보정 시 7/20 · 단 노출 가능 갱년기톡 12편 전부 26일 이상 지난 글 |
 | North Star | ❌ 재방문 이벤트 없음 | ❌ measure job 미등록 | UNKNOWN — 7일 Persona 글 32편에 실회원·게스트 댓글 0 |
 | D100 scheduler | ❌ d3~d50만 지원 | ❌ | ❌ d100 runtime profile 없음 |
 
@@ -107,6 +107,7 @@ HEAD = pin = manifest 일치와 설치 경로다. main과의 차이는 매거진
 | C-01 | 수동 Persona 댓글도 `commentOrigin=PERSONA`면 자동 증거가 될 수 있음 | 거짓 댓글 증명 | Batch A — automatic provenance |
 | C-02 | 댓글 runner는 recovery 대상 밖이고 stale lock 자동 회수가 없음 (근거: 10-07 08:10 글 — 호스트 절전 중 60분 안 댓글 회차 3회 미실행 · 복구 없음) | 첫 댓글 누락 | Batch A — bounded recovery |
 | C-03 | Persona 댓글이 홈 인기 점수에 합산됨 | 합성 인기 | Batch F |
+| C-04 | 글 안 "많이 공감한 댓글" 이 Persona 댓글도 실회원 공감 3개 이상이면 위로 올림 (`CommentSection` · `POPULAR_COMMENT_*`) | Persona 댓글이 대화 대표로 보임 | 후속 — #706 범위 밖, 정책 결정 뒤 별도 PR |
 | M-01 | North Star 이벤트와 measure job 없음 | 사업 성과 측정 불가 | Batch F |
 | T-01 | 직접 `supply:health`는 env 기본값으로 단계를 읽고 stage wrapper는 `StageDecision`을 읽음 | 운영자 오판 | 직접 명령도 `StageDecision`을 읽거나 wrapper 밖 실행을 거부 |
 | T-03 | UnaEO 이름의 역사 import·connector 잔존 | 서비스 혼동 | active import 0 증명 뒤 분류 (Batch G) |

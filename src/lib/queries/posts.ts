@@ -9,7 +9,7 @@ import {
 } from '@/lib/post-visibility'
 import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
 import { BOARD_PAGE_SIZE, isPageOutOfRange, type BoardSort } from '@/lib/list-query'
-import { pickHomePopular } from '@/lib/popularity'
+import { createHomeAutoFill, type MenopauseQuota } from '@/lib/popularity'
 import { withRealReactions } from '@/lib/popularity-db'
 import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
 import { applyHomeExposure, isOverrideActive } from '@/lib/home-exposure-rules'
@@ -185,18 +185,13 @@ export async function getRecentDiscoveryPosts(take = 6) {
 const HOME_POPULAR_CANDIDATES_PER_BOARD = 60
 
 /**
- * 홈 노출 예외를 얹기 전, 자동 후보를 몇 배로 넉넉히 뽑을지.
- *
- * 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
- *    PIN 이 자동 상위와 겹쳐도 마찬가지다. 여유를 두고 뽑아 잘라 낸다.
+ * 최종 홈 목록에서 갱년기톡에 보장하는 최소 자리. PIN 된 갱년기톡도 포함한다.
+ * 노출 가능한 글이나 남은 자동 자리가 모자라면 있는 만큼만 채우고, 모자란 원인을 MenopauseQuota 로 남긴다.
  */
-const HOME_OVERRIDE_HEADROOM = 2
-
-/** 총 노출에서 갱년기톡에 보장하는 최소 자리. 후보가 모자라면 있는 만큼만 채운다. */
 const HOME_POPULAR_MIN_MENOPAUSE = 7
 
 /**
- * 홈 인기 점수 목록 — 홈 노출 예외(PIN·HIDE)를 얹기 전의 순수 점수 순서.
+ * 홈 인기 후보 — 게시판별 최신 후보에 실반응 신호를 붙인 것. **순서·배분은 하지 않는다.**
  *
  * 🔴 홈 전용이다. /best 는 이것을 쓰지 않는다 — 자기 입성 기준(best-ranking.ts)과
  *    읽기(queries/best.ts)가 있다. 두 화면의 점수를 합치지 않는다.
@@ -207,14 +202,15 @@ const HOME_POPULAR_MIN_MENOPAUSE = 7
  * 게시판별로 따로 가져오는 이유는 배분 때문이다. 한 번에 가져오면 자유게시판이
  * 상위를 채웠을 때 갱년기톡 후보가 애초에 손에 들어오지 않는다.
  *
- * 점수와 배분은 popularity.ts 가 맡는다 — 여기는 조회만 한다.
- * 차단 목록을 인자로 받는다 — 홈 경로가 getBlockedUserIds 를 두 번 부르지 않게 하려는 것이다.
- *
- * 🔴 점수의 반응은 실반응 신호(popularity-db.ts — 실회원 사람 수 + 비회원 상한 3)다. 후보를 고른 뒤 붙인다.
+ * 🔴 점수의 반응은 실반응 신호(popularity-db.ts — 실회원 사람 수 + 비회원 상한 3)다.
  *    화면에 그리는 `_count.comments`(Persona 댓글 포함 실제 개수)는 그대로 둔다 — 숫자를 바꾸지 않고
  *    순서만 실반응으로 매긴다.
+ *
+ * 🔴 여기서 take 로 자르지 않는다. 예전에는 take×2 로 미리 잘라 갱년기톡을 보장한 뒤
+ *    applyHomeExposure 가 take 로 다시 잘라, 최종 홈에서 갱년기톡이 0 이 될 수 있었다.
+ *    배분은 PIN·HIDE 를 얹은 뒤 남은 자리에서 한다(getHomePopularPosts → createHomeAutoFill).
  */
-async function pickPopularByScore(take: number, blockedIds: string[]) {
+async function loadHomePopularCandidates(blockedIds: string[]) {
   const candidatesFor = (boardType: BoardType) =>
     prisma.post.findMany({
       where: {
@@ -232,32 +228,30 @@ async function pickPopularByScore(take: number, blockedIds: string[]) {
     withRealReactions(prisma, menopauseRows),
     withRealReactions(prisma, freeRows),
   ])
-
-  return pickHomePopular({
-    menopause,
-    free,
-    take,
-    minMenopause: HOME_POPULAR_MIN_MENOPAUSE,
-    now: new Date(),
-  })
+  return [...menopause, ...free]
 }
 
 /**
- * 홈 "지금 뜨는 이야기" 용 — 순수 인기 점수 위에 홈 노출 예외를 한 겹 얹는다.
+ * 홈 "지금 뜨는 이야기" 용 — 홈 노출 예외(PIN·HIDE)를 얹고 남은 자리를 점수로 채운다.
  *
  * 🔴 applyHomeExposure 를 부르는 곳은 여기 하나다.
  *    예전에 순수 점수 함수 안에 두었더니 그 함수를 함께 쓰던 /best 까지
  *    홈 고정·숨김을 따라갔다. 홈 큐레이션은 홈(/) 과 /admin/home 의 것이다.
  *
+ * 순서: HIDE 제외 → PIN 을 앞에(위치 보존) → 남은 자동 자리를 점수순 + 갱년기톡 최소로 채운다.
+ *   🔴 HIDE 는 언제나 이긴다 — 보장 수를 채우려고 숨긴 글을 되살리지 않는다.
+ *   🔴 PIN 갱년기톡은 최소에 포함한다. 자유게시판 PIN 이 자리를 차지하면 남은 자리만큼만 채우고
+ *      menopauseQuota 가 모자란 수와 원인을 남긴다(어드민 홈 노출이 보여준다).
+ *
  * 쓰는 곳: src/app/page.tsx · src/app/admin/(ops)/home/page.tsx
  */
-export async function getHomePopularPosts(take = 20) {
+export async function getHomePopularPosts(
+  take = 20,
+): Promise<{ posts: HomePopularPost[]; menopauseQuota: MenopauseQuota }> {
   const blockedIds = await getBlockedUserIds()
 
   const [candidates, overrides] = await Promise.all([
-    // 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
-    //    여유(HEADROOM)를 두고 뽑아 applyHomeExposure 가 잘라 낸다.
-    pickPopularByScore(take * HOME_OVERRIDE_HEADROOM, blockedIds),
+    loadHomePopularCandidates(blockedIds),
     // 🔴 만료 판정을 SQL 로 하지 않는다. isActive 만 좁혀 가져오고
     //    expiresAt 비교는 규칙 함수가 한 곳에서 한다 — 두 곳이면 언젠가 어긋난다.
     prisma.homeExposureOverride.findMany({
@@ -297,8 +291,13 @@ export async function getHomePopularPosts(take = 20) {
       }))
     : []
 
-  return applyHomeExposure({ candidates, pinnedPosts, overrides, take })
+  const now = new Date()
+  const auto = createHomeAutoFill<HomePopularPost>({ minMenopause: HOME_POPULAR_MIN_MENOPAUSE, now })
+  const posts = applyHomeExposure({ candidates, pinnedPosts, overrides, take, now, fillAuto: auto.fill })
+  return { posts, menopauseQuota: auto.diagnosis(posts) }
 }
+
+type HomePopularPost = Awaited<ReturnType<typeof loadHomePopularCandidates>>[number]
 
 export async function getPostDetail(postId: string) {
   const blockedIds = await getBlockedUserIds()

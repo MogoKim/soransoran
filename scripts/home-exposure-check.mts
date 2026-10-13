@@ -242,5 +242,36 @@ expect(
 )
 expect('오늘 자정은 지금보다 뒤다', (resolveExpiresAt('TODAY_KST', NOW) as Date).getTime() > NOW.getTime(), true)
 
+console.log('\n⑦ fillAuto — 배분 규칙이 틀려도 불변식은 규칙 함수가 지킨다')
+{
+  const cands = [post('a'), post('b'), post('c'), post('d'), post('e')]
+  let seenCtx: { slots: number; pinned: string[]; rest: string[] } | null = null
+  const out = applyHomeExposure({
+    candidates: cands,
+    pinnedPosts: [post('x')],
+    overrides: [pin('x', 0), pin('a', 1), hide('b')],
+    take: 4,
+    now: NOW,
+    // 일부러 나쁜 fill — 숨긴 글 · PIN 글 · 중복 · 후보 밖 글 · 자리보다 많이
+    fillAuto: (rest, { slots, pinned }) => {
+      seenCtx = { slots, pinned: ids([...pinned]), rest: ids([...rest]) }
+      return [post('b'), post('a'), post('zzz'), post('e'), post('e'), post('c'), post('d')]
+    },
+  })
+  expect('fill 은 HIDE·PIN 을 뺀 후보와 남은 자리 수를 받는다', seenCtx, { slots: 2, pinned: ['x', 'a'], rest: ['c', 'd', 'e'] })
+  expect('HIDE·PIN·후보 밖·중복을 거르고 자리 수만큼만 싣는다', ids(out), ['x', 'a', 'e', 'c'])
+  let calledWith: number | null = null
+  const full = applyHomeExposure({
+    candidates: cands,
+    overrides: [pin('a', 0), pin('b', 1)],
+    take: 2,
+    now: NOW,
+    fillAuto: (_rest, { slots }) => ((calledWith = slots), [post('c')]),
+  })
+  expect('PIN 이 자리를 다 차지해도 fill 을 부른다(자리 0) · 싣는 것은 0', [ids(full), calledWith], [['a', 'b'], 0])
+  expect('PIN 이 take 보다 많으면 position 순으로 take 까지만', ids(applyHomeExposure({ candidates: cands, overrides: [pin('c', 2), pin('a', 0), pin('b', 1)], take: 2, now: NOW })), ['a', 'b'])
+  expect('기본 fill 은 예전과 같다 — 중복 후보는 한 번만', ids(applyHomeExposure({ candidates: [post('a'), post('a'), post('b')], overrides: [], take: 5, now: NOW })), ['a', 'b'])
+}
+
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 process.exit(fail === 0 ? 0 : 1)

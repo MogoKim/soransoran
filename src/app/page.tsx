@@ -111,7 +111,7 @@ function SectionHeading({
  *    섹션은 머리글과 여백이 가르고, 줄 사이는 선 하나가 가른다.
  */
 export default async function HomePage() {
-  const posts = await getHomePopularPosts(HOME_POPULAR_COUNT)
+  const { posts } = await getHomePopularPosts(HOME_POPULAR_COUNT)
   // 카드는 비로그인에게만 나간다. JWT 전략이라 auth() 는 쿠키 디코드뿐이다.
   const session = await auth()
   // 막 온 사람에게만 첫 인사를 권한다. 판정은 queries/greeting 이 한다.

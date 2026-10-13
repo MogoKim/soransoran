@@ -65,7 +65,7 @@ export type OverrideRow = {
  * 순서
  *   ① 활성 HIDE 를 뺀다
  *   ② 활성 PIN 을 position 오름차순으로 앞에 세운다
- *   ③ 나머지를 자동 순서대로 채운다
+ *   ③ 남은 자동 자리(take − PIN 수)를 채운다 — 기본은 자동 순서 앞에서부터, 호출부가 fillAuto 로 바꿀 수 있다
  *   ④ take 만큼 자른다
  *
  * 🔴 PIN 글은 `pinnedPosts` 로 따로 받는다.
@@ -84,6 +84,11 @@ export type OverrideRow = {
  *
  * 🔴 HIDE 때문에 자리가 줄지 않는다.
  *    자동 후보를 넉넉히 받아 뒤 후보로 채운다(호출부가 여유를 두고 조회한다).
+ *
+ * 🔴 fillAuto — **최종 자동 자리 수를 아는 곳은 여기뿐이다.** 게시판 최소 노출 같은 배분은
+ *    중간 후보가 아니라 이 자리에서 걸어야 최종 목록에서 성립한다. 그래서 자리 수와 PIN 글을 넘겨준다.
+ *    fill 이 무엇을 돌려주든 불변식은 여기서 다시 지킨다 — HIDE 글 · PIN 글 · 중복 · 후보 밖 글은 거르고
+ *    자리 수만큼만 싣는다. 배분 규칙이 틀려도 숨긴 글이 되살아나거나 PIN 자리가 밀리지 않는다.
  */
 export function applyHomeExposure<T extends { id: string }>({
   candidates,
@@ -91,6 +96,7 @@ export function applyHomeExposure<T extends { id: string }>({
   overrides,
   take,
   now = new Date(),
+  fillAuto = (rest, { slots }) => rest.slice(0, slots),
 }: {
   candidates: readonly T[]
   /**
@@ -101,6 +107,8 @@ export function applyHomeExposure<T extends { id: string }>({
   overrides: readonly OverrideRow[]
   take: number
   now?: Date
+  /** 남은 자동 자리를 채운다. rest 는 HIDE·PIN 을 뺀 자동 후보, slots 는 남은 자리 수다 */
+  fillAuto?: (rest: readonly T[], ctx: { slots: number; pinned: readonly T[] }) => readonly T[]
 }): T[] {
   const limit = Math.max(0, Math.trunc(take))
   if (limit === 0) return []
@@ -132,7 +140,19 @@ export function applyHomeExposure<T extends { id: string }>({
     pinned.push(post)
   }
 
+  const kept = pinned.slice(0, limit)
+  const slots = limit - kept.length
   const rest = candidates.filter((c) => !hidden.has(c.id) && !seen.has(c.id))
+  // 🔴 자리가 0 이어도 fill 을 부른다 — 배분 진단이 "후보는 있는데 자리가 없다" 를 알아야 한다(싣는 것은 0)
 
-  return [...pinned, ...rest].slice(0, limit)
+  // 🔴 fill 의 결과를 믿지 않는다 — 자동 후보 안 · HIDE/PIN 아님 · 한 번씩 · 자리 수만큼
+  const allowed = new Set(rest.map((c) => c.id))
+  const auto: T[] = []
+  for (const post of fillAuto(rest, { slots, pinned: kept })) {
+    if (auto.length === slots) break
+    if (!allowed.has(post.id) || seen.has(post.id)) continue
+    seen.add(post.id)
+    auto.push(post)
+  }
+  return [...kept, ...auto]
 }
