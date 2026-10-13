@@ -13,6 +13,8 @@
  *      계약 유효 Persona 가 0 이라 PERSONA_SHORT(personas=0 · 제공자 연결 증명)이다 — 시험이 열리지 않고
  *         지금 단계의 평상일(PREPARE · 0..Dn)이다 — 막힌 날 REPROVE 없음(2026-10-11 Batch A1). 이것이 오늘 운영의 정직한 결과다.
  *   ④-b (2026-10-11 Batch A3) 첫 댓글 증거는 Comment ↔ Queue(무인 표식) ↔ ActivityLog 세 행이 맞물린 것만 — 하나씩 비튼다
+ *   ④-c (2026-10-13 · PR #704 E1) 추가 댓글 실제 행 — 추가 표식 답글 4건은 상한 1 에서도 PASS · 연결이 깨지면 대화 감사만 FAIL ·
+ *      표식이 섞이면 첫 댓글 축 broken · 연결 없는 수동 Persona 댓글은 여전히 상한에 든다
  *   ⑤ REPROVE 증명일 실제 행 → PASS → 다음 날 d5 계획 · HOLD 는 아니다 · controller 진입점: 전날 TRIAL d20 → d20 재시험
  *      계획이어도 preflight(실제 DB·장부 · 계약 유효 Persona 0)가 막는다 · env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
  *   ⑥ (2026-09-30 · 조항 ⑦) 발행 도장 — 도장 없는 발행 → RELEASE_CONTRACT_MISSING · 옛/ineligible 도장 → STALE_RELEASE
@@ -33,7 +35,10 @@ import { previousKstDate, validateStoredDecision, STAGE_DECISION_VERSION, DECISI
 import { createStageDecision } from '../src/lib/stage-decision-repo'
 import { kstDayBounds, readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { publishLatencyHours } from './lib/stage-preflight-facts.mjs'
-import { judgeStageEvidence, trialPlanOf, type StageEvidenceVerdict, type EvidenceSideSignals } from '../src/lib/stage-evidence'
+import {
+  judgeStageEvidence, trialPlanOf, evidenceReasonOf, FOLLOWUP_LANE_DECIDED_BY, FOLLOWUP_LANE_ACTIVITY_DECIDED_BY,
+  type StageEvidenceVerdict, type EvidenceSideSignals,
+} from '../src/lib/stage-evidence'
 import { UNATTENDED_PUBLISH_DECIDED_BY, publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 import { AUDIT_OVERDUE_MS } from '../src/lib/auto-ready-audit-store'
@@ -100,6 +105,28 @@ async function autoComment(args: { data: Prisma.CommentUncheckedCreateInput & { 
     decidedBy: AUTO_LANE_ACTIVITY_DECIDED_BY, publishedAt: at, createdAt: at,
   } })
   return c
+}
+
+/**
+ * 🔴 **추가 댓글 레인이 남길 세 행** (2026-10-13 · PR #704 E1) — 첫 댓글과 같은 모양 · 표식만 `FOLLOWUP_LANE_*` 다.
+ *    `parentId` 로 첫 댓글에 답한다. 결정 시각 = 로그 발행 시각 = 댓글 시각.
+ */
+async function followupComment(postId: string, parentId: string | null, createdAt: Date,
+  marks: { queue: string; log: string } = { queue: FOLLOWUP_LANE_DECIDED_BY, log: FOLLOWUP_LANE_ACTIVITY_DECIDED_BY }): Promise<{ id: string; personaId: string }> {
+  const personaId = await persona(`F-${seq}-${linkSeq}`)
+  const u = (await prisma.persona.findUniqueOrThrow({ where: { id: personaId }, select: { userId: true } })).userId
+  const c = await prisma.comment.create({ data: { content: '그 얘기 더 듣고 싶어요', source: 'SYSTEM', commentOrigin: 'PERSONA', postId,
+    parentId, authorId: u, personaId, createdAt }, select: { id: true } })
+  linkSeq += 1
+  await prisma.personaApprovalQueue.create({ data: {
+    personaId, targetPostId: postId, status: 'PUBLISHED', candidateText: 'fx', reactionType: 'question',
+    gateStatus: 'pass', gateResults: [], dedupKey: `ev-fu-${linkSeq}-${c.id}`,
+    decidedBy: marks.queue, decidedAt: createdAt, publishedCommentId: c.id,
+  } })
+  await prisma.personaActivityLog.create({ data: {
+    personaId, kind: 'comment', targetId: c.id, gateStatus: 'pass', decidedBy: marks.log, publishedAt: createdAt, createdAt,
+  } })
+  return { id: c.id, personaId }
 }
 
 async function wipe(): Promise<void> {
@@ -289,6 +316,55 @@ try {
     const v = await verdictOf(d2, personaCommentCapFor('organic'))
     check('🟢 상한 5(장기 1~5) — 같은 두 댓글은 PASS (60분 안 2건은 실패가 아니다)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
   }
+
+  console.log('\n④-c 🔴 추가 댓글 실제 행 — 첫 댓글 증거와 분리 (2026-10-13 · PR #704 E1)')
+  const thread = async (n: number): Promise<{ d: ValidatedStageDecision; s: Seeded; fu: { id: string; personaId: string }[] }> => {
+    await wipe()
+    const d = await storeDecision(TRIAL_D3)
+    const s = await seedDay()
+    const fu: { id: string; personaId: string }[] = []
+    for (let k = 0; k < n; k += 1) fu.push(await followupComment(s.posts[0]!, s.comments[0]!, new Date(SLOTS[0]!.getTime() + (90 + 40 * k) * MIN)))
+    return { d, s, fu }
+  }
+  {
+    const { d } = await thread(4)
+    const v = await verdictOf(d)
+    check('🟢 bootstrap-auto(상한 1) — 자동 첫 댓글 1 + 추가 답글 4 → PASS (COMMENT_OVER_CAP 아님)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+    check('그때 counts — 첫 댓글 3 · 추가 4 · 수동 0 · 대화 감사 PASS', v.counts.firstCommentOk === 3 && v.counts.followupComments === 4
+      && v.counts.manualPersonaComments === 0 && v.conversation?.verdict === 'PASS', `${JSON.stringify(v.counts)} ${JSON.stringify(v.conversation)}`)
+  }
+  {
+    const { d, fu } = await thread(2)
+    await prisma.personaActivityLog.deleteMany({ where: { kind: 'comment', targetId: fu[1]!.id } })
+    const v = await verdictOf(d)
+    check('🔴 추가 댓글 로그 없음 → 단계 PASS 그대로 · 첫 댓글 3 (소급 삭제 없음)', v.verdict === 'PASS' && v.counts.firstCommentOk === 3,
+      `${v.verdict} ${v.codes.join(',')}`)
+    check('🔴 그때 대화 감사 FAIL — FOLLOWUP_PROVENANCE_BROKEN · 이유 줄에 따로 남는다',
+      v.conversation?.verdict === 'FAIL' && v.conversation.codes.includes('FOLLOWUP_PROVENANCE_BROKEN')
+      && evidenceReasonOf(v).endsWith('CONVERSATION FAIL [FOLLOWUP_PROVENANCE_BROKEN]'), evidenceReasonOf(v))
+  }
+  {
+    const { d, fu } = await thread(1)
+    await prisma.personaActivityLog.updateMany({ where: { kind: 'comment', targetId: fu[0]!.id }, data: { decidedBy: AUTO_LANE_ACTIVITY_DECIDED_BY } })
+    const v = await verdictOf(d)
+    check('🔴 표식 섞임(Queue 추가 · 로그 첫 댓글) → 첫 댓글 축 COMMENT_PROVENANCE_BROKEN FAIL',
+      v.verdict === 'FAIL' && has(v, 'COMMENT_PROVENANCE_BROKEN'), `${v.verdict} ${v.codes.join(',')}`)
+  }
+  {
+    const { d, s } = await thread(1)
+    const fuPersona = (await prisma.comment.findFirstOrThrow({ where: { postId: s.posts[0]!, parentId: s.comments[0]! }, select: { personaId: true } })).personaId
+    await prisma.comment.updateMany({ where: { postId: s.posts[0]!, parentId: s.comments[0]! }, data: { personaId: s.commenters[0]! } })
+    const v = await verdictOf(d)
+    check('🔴 추가 댓글 Persona 를 첫 댓글 Persona 로 바꾸면 연결이 깨진다 → 단계 PASS · 대화 감사 FAIL',
+      fuPersona !== null && v.verdict === 'PASS' && v.conversation?.verdict === 'FAIL', `${v.verdict} ${JSON.stringify(v.conversation)}`)
+  }
+  await counter('🔴 연결 없는 수동 Persona 댓글은 여전히 상한에 든다(상한 1) → COMMENT_OVER_CAP', 'COMMENT_OVER_CAP', async (s) => {
+    const other = await persona(`M-${seq}`)
+    const u = (await prisma.persona.findUniqueOrThrow({ where: { id: other }, select: { userId: true } })).userId
+    await prisma.comment.create({ data: { content: '수동', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s.posts[0]!, authorId: u,
+      personaId: other, createdAt: new Date(SLOTS[0]!.getTime() + 2 * 60 * MIN) } })
+  })
+
   await counter('🔴 댓글 단계를 모른다(상한 null) → COMMENT_CAP_UNKNOWN', 'COMMENT_CAP_UNKNOWN', async () => undefined, undefined, null)
   await counter('🔴 🔴 **자동 READY 3건인데 감사 행 0 → AUDIT_COVERAGE_ZERO**', 'AUDIT_COVERAGE_ZERO', async (s) => {
     await prisma.autoReadyAudit.delete({ where: { queueId: s.queues[0]! } })
