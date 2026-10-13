@@ -21,7 +21,7 @@
  * (게시판별 DISCOVERY 최신 60 → 점수 → 갱년기톡 최소 7 → 여유 2배 → 홈 노출 예외 → 20).
  */
 import { createHash, randomBytes } from 'node:crypto'
-import { PrismaClient, type BoardType, type CommentOrigin } from '@prisma/client'
+import { PrismaClient, type BoardType, type CommentOrigin, type Prisma } from '@prisma/client'
 
 import { withRealReactions } from '../src/lib/popularity-db'
 import { pickHomePopular } from '../src/lib/popularity'
@@ -102,7 +102,9 @@ async function candidatesAt(at: Date): Promise<{ cands: Cand[]; origins: Partial
       where: { postId: { in: ids }, isDeleted: false, createdAt: { lte: at } },
       _count: { _all: true },
     }),
-    withRealReactions(prisma, posts, { asOf: at }),
+    // 🔴 확장 클라이언트를 그대로 넘긴다 — 쓰기 차단은 런타임 확장이 하고, 타입만 TransactionClient 로 맞춘다.
+    //    (query 확장은 모델 모양을 바꾸지 않는다. 새 사본을 만들면 차단이 빠지므로 다른 클라이언트를 만들지 않는다)
+    withRealReactions(prisma as unknown as Prisma.TransactionClient, posts, { asOf: at }),
   ])
   const shown = new Map<string, number>()
   const origins: Partial<Record<CommentOrigin, number>> = {}
