@@ -17,6 +17,7 @@
  *    "겹치지 않는다" 를 말투 차이의 증거로 쓴 것이 잘못이었다.
  *    이제 **한 작성자(anchor)를 중심으로** 묶고, 모자라면 **문체가 가까운 댓글**로 채운다.
  */
+import { sortPersonaCodes } from '../../src/lib/persona-code'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import {
@@ -355,7 +356,8 @@ export function planBundles(input: {
     .filter(([, s]) => judgeVoiceEvidence({ observed: s.send.length + s.styleOnly.length, safeTexts: s.send.length }).ok)
     .sort((a, b) => b[1].send.length - a[1].send.length || a[0].localeCompare(b[0]))
 
-  const codes = [...new Set(input.personaCodes)].sort()
+  // 🔴 숫자순 — 두 자리끼리는 옛 사전순과 같다(운영 30명 배정 불변). P100 이 기존 순번을 밀지 않는다
+  const codes = sortPersonaCodes(new Set(input.personaCodes))
   if (speakers.length < codes.length) {
     blocks.push(
       `화자가 ${speakers.length}명뿐이다 — Persona ${codes.length}종을 채울 수 없다`
@@ -393,6 +395,101 @@ export function planBundles(input: {
     })
   }
   return { bundles, table, blocks }
+}
+
+/**
+ * 🔴 **보충 코퍼스 원자료 → 불투명 행** (2026-10-13). `loadLocalComments` 와 같은 규칙이다 —
+ *    `content` 만 받고, 작성자는 이 자리에서 곧바로 저장하지 않는 salt 의 불투명 값으로 바꾼다.
+ *    🔴 메모리에만 올린다. 이 함수는 파일 · DB 에 쓰지 않는다.
+ */
+export function opaqueRowsFrom(records: readonly unknown[]): { rows: LocalComment[]; skipped: number } {
+  const rows: LocalComment[] = []
+  let skipped = 0
+  for (const c of records) {
+    const t = contentOf(c).trim()
+    if (t === '' || !inBand(t)) { skipped += 1; continue }
+    // 🔴 여기서 곧바로 불투명 값으로 바꾼다 — 실제 닉네임은 이 줄을 넘어가지 않는다
+    rows.push({ speakerId: speakerIdOf(authorOf(c)), text: t })
+  }
+  return { rows, skipped }
+}
+
+/**
+ * 🔴 **화자 공급 — 기준을 넘는 화자가 몇 명인가.** 기준은 `judgeVoiceEvidence` 하나다(낮추지 않는다).
+ *    `nearMiss` 는 관측이 기준보다 하나 모자란 화자 — 기준을 낮추면 들어온다는 뜻이 아니라,
+ *    같은 사람의 관측이 더 모이면 설 수 있는 화자 수다(보고용).
+ */
+export function speakerSupply(rows: readonly LocalComment[]): { speakers: number; eligible: number; nearMiss: number } {
+  const by = new Map<string, { obs: number; safe: number }>()
+  const seen = new Set<string>()
+  for (const r of rows) {
+    if (r.speakerId === '' || seen.has(`${r.speakerId}\u0000${r.text}`)) continue
+    seen.add(`${r.speakerId}\u0000${r.text}`)
+    const cur = by.get(r.speakerId) ?? { obs: 0, safe: 0 }
+    cur.obs += 1
+    if (!carriesExperience(r.text)) cur.safe += 1
+    by.set(r.speakerId, cur)
+  }
+  let eligible = 0
+  let nearMiss = 0
+  for (const s of by.values()) {
+    if (judgeVoiceEvidence({ observed: s.obs, safeTexts: s.safe }).ok) eligible += 1
+    else if (s.obs === REFERENCE_MIN_COUNT - 1) nearMiss += 1
+  }
+  return { speakers: by.size, eligible, nearMiss }
+}
+
+/**
+ * 🔴 **보충 화자는 뒤에만 붙는다** (2026-10-13).
+ *
+ *    정본 자산의 화자 id 는 저장하지 않은 salt 로 만든 값이라, 정본을 다시 만들면 id 가 바뀌고 동수 순서가 흔들려
+ *    운영 Persona 의 묶음이 바뀐다. 그래서 정본은 그대로 두고 **층을 나눠** 배정한다.
+ *
+ *      ① 운영 코드 — 정본만으로 `planBundles` (= `stableAssignment` 와 같은 입력 · 같은 결과)
+ *      ② 새 코드   — 정본 + 운영 + 새 코드로 다시 나눠 정본에 남은 화자를 먼저 받는다(운영 묶음이 바뀌면 drift)
+ *      ③ 그래도 빈 새 코드 — 보충 화자만으로 `planBundles`. 보충 화자가 정본 댓글과 같은 글자를 하나라도 가지면
+ *         같은 사람 · 같은 원천일 수 있어 뺀다(같은 말투를 이름만 바꿔 복제하지 않는다)
+ *
+ *    🔴 보충 화자가 아무리 많아도 ①은 정본 행만 본다 — 운영 Persona 의 묶음은 보충 코퍼스와 무관하다.
+ */
+export function planAppendOnlyBundles(input: {
+  canonRows: readonly LocalComment[]
+  extraRows: readonly LocalComment[]
+  productionCodes: readonly string[]
+  newCodes: readonly string[]
+  target?: number
+}): {
+  byCode: Map<string, VoiceReferenceBundle>
+  fromCanon: string[]
+  fromExtra: string[]
+  excludedExtraSpeakers: number
+  productionDrift: string[]
+} {
+  const digest = (b: VoiceReferenceBundle | undefined): string =>
+    b === undefined ? '∅' : sha16(JSON.stringify(b.comments.map((c) => c.text)))
+  const base = planBundles({ rows: input.canonRows, personaCodes: input.productionCodes, target: input.target })
+  const baseBy = new Map(base.bundles.map((b) => [b.personaCode, b]))
+  const wide = planBundles({ rows: input.canonRows, personaCodes: [...input.productionCodes, ...input.newCodes], target: input.target })
+  const wideBy = new Map(wide.bundles.map((b) => [b.personaCode, b]))
+  const productionDrift = input.productionCodes.filter((c) => digest(baseBy.get(c)) !== digest(wideBy.get(c)))
+
+  const byCode = new Map<string, VoiceReferenceBundle>()
+  for (const c of input.productionCodes) { const b = baseBy.get(c); if (b !== undefined) byCode.set(c, b) }
+  const fromCanon: string[] = []
+  for (const c of input.newCodes) { const b = wideBy.get(c); if (b !== undefined) { byCode.set(c, b); fromCanon.push(c) } }
+
+  // ── ③ 보충 — 정본과 같은 글자를 가진 화자는 통째로 뺀다 ──
+  const canonTexts = new Set(input.canonRows.map((r) => r.text))
+  const canonSpeakers = new Set(input.canonRows.map((r) => r.speakerId))
+  const tainted = new Set(input.extraRows.filter((r) => canonTexts.has(r.text) || canonSpeakers.has(r.speakerId)).map((r) => r.speakerId))
+  const extra = input.extraRows.filter((r) => !tainted.has(r.speakerId))
+  const remaining = input.newCodes.filter((c) => !byCode.has(c))
+  const fromExtra: string[] = []
+  if (remaining.length > 0 && extra.length > 0) {
+    const plan = planBundles({ rows: extra, personaCodes: remaining, target: input.target })
+    for (const b of plan.bundles) { byCode.set(b.personaCode, b); fromExtra.push(b.personaCode) }
+  }
+  return { byCode, fromCanon, fromExtra, excludedExtraSpeakers: tainted.size, productionDrift }
 }
 
 /**

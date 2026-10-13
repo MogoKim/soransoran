@@ -12,6 +12,7 @@
  * 🔴 순수 함수다. 파일도 DB 도 읽지 않는다 — 텍스트를 받는다.
  */
 
+import { isPersonaCode } from './persona-code'
 import { CHILD_AGE_BANDS, readLengthBand, type ChildAgeBand, type PersonaForMatch } from './original-post-persona-match'
 import { isNoGoExpressionItem } from './persona-no-go'
 
@@ -298,11 +299,13 @@ export function parsePoolDoc(markdown: string): { cards: PoolCard[]; problems: s
   const problems: string[] = []
   // 🔴 카드 본문은 헤딩 **바로 다음 코드펜스** 안이다. 헤딩 사이를 통째로 자르면
   //    마지막 카드가 뒤 절(§5-1) 까지 먹어 variation 을 잘못 센다 — 실측으로 잡았다.
-  const re = /^### (P\d{2})\s*—\s*(.+)$/gm
+  // 🔴 두 · 세 자리를 읽고 정본 표기인지는 `isPersonaCode` 가 본다(옛 `P\d{2}` 는 P100 카드를 조용히 버렸다)
+  const re = /^### (P\d{2,3})\s*—\s*(.+)$/gm
   let m: RegExpExecArray | null
   while ((m = re.exec(markdown)) !== null) {
     const code = m[1]!
     const title = m[2]!.trim()
+    if (!isPersonaCode(code)) { problems.push(`${code}: 정본 코드 표기가 아니다`); continue }
     const open = markdown.indexOf('```', m.index + m[0].length)
     const close = open < 0 ? -1 : markdown.indexOf('```', open + 3)
     if (open < 0 || close < 0) { problems.push(`${code}: 카드 본문(코드펜스)을 찾지 못했다`); continue }

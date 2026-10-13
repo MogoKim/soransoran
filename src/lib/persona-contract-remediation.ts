@@ -19,6 +19,7 @@
  * 🔴 카드가 정본인 근거: `verifySeedCard` ⑧ 이 이 칸들을 정본 카드와 대조한다 — 같은 결정을 여기서 다시 내리지 않고
  *    그 대조가 실패하는 칸을 카드 값으로 옮길 뿐이다. 판정은 `persona-reserve` 하나가 한다.
  */
+import { comparePersonaCodes } from './persona-code'
 import { createHash } from 'node:crypto'
 
 import { MARITAL_VALUES, explicitEndingsOf } from './persona-card-verify'
@@ -169,7 +170,7 @@ export function planRemediation(rows: readonly RemediationRow[], cards: readonly
   const personas: PersonaRemediation[] = []
   const evidenceRequired: EvidenceGap[] = []
   const skipped: RemediationPlan['skipped'] = []
-  for (const r of [...rows].sort((a, b) => a.code.localeCompare(b.code))) {
+  for (const r of [...rows].sort((a, b) => comparePersonaCodes(a.code, b.code))) {
     if (r.status === 'retired') { skipped.push({ code: r.code, reason: 'retired' }); continue }
     if (cards === null) { skipped.push({ code: r.code, reason: '정본 카드 문서를 읽지 못했다' }); continue }
     const card = cards.find((c) => c.code === r.code)
@@ -182,7 +183,7 @@ export function planRemediation(rows: readonly RemediationRow[], cards: readonly
    * 🔴 **모든 행의 지문이 digest 에 들어간다** — 계획에 없는 사람이 바뀌어도 판정(이름 충돌 · 짝 등)이 달라질 수 있다.
    *    계획 뒤 Persona 행이 하나라도 바뀌면 승인된 digest 와 달라져 apply 가 멈춘다.
    */
-  const universe = [...rows].sort((a, b) => a.code.localeCompare(b.code)).map((r) => `${r.code}:${fingerprintOf(r)}`)
+  const universe = [...rows].sort((a, b) => comparePersonaCodes(a.code, b.code)).map((r) => `${r.code}:${fingerprintOf(r)}`)
   const digest = sha(canon({ v: REMEDIATION_PLAN_VERSION, personas, universe }))
   return { version: REMEDIATION_PLAN_VERSION, personas, evidenceRequired, skipped, digest }
 }

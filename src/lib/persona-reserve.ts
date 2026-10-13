@@ -24,6 +24,7 @@
  *    `d100-persona-scale` 의 `personaTiers` 가 정본이다. 여기서 숫자를 다시 적지 않는다 —
  *    **어느 코드가 계약에 들어가는가**만 정한다.
  */
+import { comparePersonaCodes } from './persona-code'
 import {
   DORMANT_AFTER_DAYS, PERSONA_LIFE_AXES, ROLE_SHARE_CAP, personaTiers, type PersonaBlockCode, type PersonaCandidate,
 } from './d100-persona-scale'
@@ -407,7 +408,7 @@ export function judgePersonaReserve(read: PersonaReserveRead): PersonaReserveRes
       activeNotContractValid: [], verdicts: [], detail: read.detail,
     }
   }
-  const verdicts = [...read.personas].sort((a, b) => a.code.localeCompare(b.code)).map(judgePersonaState)
+  const verdicts = [...read.personas].sort((a, b) => comparePersonaCodes(a.code, b.code)).map(judgePersonaState)
   const retired: string[] = []
   const activeNotContractValid: string[] = []
   for (const v of verdicts) {

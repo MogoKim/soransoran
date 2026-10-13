@@ -82,6 +82,8 @@
     "persona:autogen": "tsx scripts/persona-autogen.mts",
     "persona:autogen-check": "tsx scripts/persona-autogen-check.mts && tsx scripts/persona-cohort-seed-check.mts",
     "persona:autogen-db-check": "tsx scripts/persona-autogen-db-check.mts",
+    "persona:scale-base": "tsx scripts/persona-scale-base.mts",
+    "persona:scale-base-check": "tsx scripts/persona-scale-base-check.mts",
     "persona:creative-check": "tsx scripts/persona-creative-check.mts",
     "persona:creative-db-check": "tsx scripts/persona-creative-db-check.mts && tsx scripts/persona-cohort-seed-db-check.mts",
     "persona:cohort-seed": "tsx scripts/persona-cohort-seed.mts",

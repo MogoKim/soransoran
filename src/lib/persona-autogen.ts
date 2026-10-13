@@ -17,6 +17,7 @@
  *    **운영이 쓰는 그 함수**를 부르는 쪽이 부른다(`scripts/lib/persona-autogen.mts`).
  *    여기 있는 것은 골격 생성 · 말투 관찰값 · 카드 렌더러 · seed 조립뿐이다.
  */
+import { PERSONA_CODE_MAX, personaCodeNumber as personaCodeNumberOf, personaCodeOf } from './persona-code'
 import { CHILD_AGE_BANDS, type ChildAgeBand } from './original-post-persona-match'
 import { ANCHOR_BASE_DATE, checkLifeConsistency, exactAgeOn, bandOfAge } from './persona-birth-anchor'
 import { coverageOf, gainOf, THIN_THRESHOLD, type AxisSubject } from './persona-axis-coverage'
@@ -29,15 +30,15 @@ import type { VoiceReferenceBundle } from './persona-voice-reference'
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 **자동 후보가 쓰는 코드 범위** — P26 ~ P50.
+ * 🔴 **자동 후보가 쓰는 코드 범위** — P26 ~ `PERSONA_CODE_MAX`.
  *    실제 발급은 이 범위 안에서 **high-water mark 뒤에서만** 한다(`nextAutogenCodes` · append-only) —
  *    정본 카드 · 운영 DB 행 · 폐기 코드(`RETIRED_AUTOGEN_CODES`) 중 가장 큰 번호 아래 빈 번호는 다시 쓰지 않는다.
- *    상한 P50 은 `isPoolCode` · `verifyManifest` 의 정규식과 같은 값이다.
+ *    🔴 상한은 `persona-code` 의 단일 상수다(2026-10-13 — 옛 P50 하드코딩 대체). `isPoolCode` · `verifyManifest` 와 같은 값이다.
  */
 export const AUTOGEN_CODE_FIRST = 26
-export const AUTOGEN_CODE_LAST = 50
+export const AUTOGEN_CODE_LAST = PERSONA_CODE_MAX
 
-export const autogenCodeOf = (n: number): string => `P${String(n).padStart(2, '0')}`
+export const autogenCodeOf = personaCodeOf
 
 /**
  * 🔴 **폐기 코드 — 영구 재사용 금지** (2026-10-08).
@@ -56,10 +57,7 @@ export const RETIRED_AUTOGEN_CODES: Readonly<Record<string, string>> = {
 }
 
 /** `P34` → 34 · Persona 코드 모양이 아니면 null — 🔴 문자열 사전순이 아니라 숫자로 비교한다 */
-export const personaCodeNumber = (code: string): number | null => {
-  const m = /^P(\d+)$/.exec(code)
-  return m === null ? null : Number(m[1])
-}
+export const personaCodeNumber = personaCodeNumberOf
 
 export type NextAutogenCodes = {
   codes: string[]

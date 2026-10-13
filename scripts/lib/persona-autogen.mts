@@ -14,6 +14,7 @@
  *
  * 🔴 DB · 네트워크 · LLM 없음. 정본 말투 자산(로컬 파일)만 읽는다 — `voicePoolFor`.
  */
+import { comparePersonaCodes } from '../../src/lib/persona-code'
 import { noGoExpressionKey } from '../../src/lib/persona-no-go'
 import { createHash } from 'node:crypto'
 
@@ -31,7 +32,7 @@ import {
 import { PRODUCTION_PERSONA_CODES } from '../../src/lib/persona-cohort'
 import { isPoolCode } from '../../src/lib/persona-card-verify'
 import {
-  AUTOGEN_CODE_FIRST, AUTOGEN_FORBIDDEN_ROLES, distinctSubjectOfCard, isNameOnly, judgeDistinctness,
+  AUTOGEN_CODE_FIRST, AUTOGEN_CODE_LAST, AUTOGEN_FORBIDDEN_ROLES, distinctSubjectOfCard, isNameOnly, judgeDistinctness,
   lifeProblems, renderPoolCardBlock, seedFromCard, voiceCoreFromBundle,
   type AutogenBlockCode, type AutogenCandidate, type DistinctSubject,
 } from '../../src/lib/persona-autogen'
@@ -96,7 +97,7 @@ export function judgeAutogenCandidate(
 
   // ── ① 코드 ──
   const n = Number(c.code.slice(1))
-  if (!isPoolCode(c.code) || n < AUTOGEN_CODE_FIRST) add('CODE_INVALID', `${c.code} — 자동 후보는 P${AUTOGEN_CODE_FIRST}~P50 이다`)
+  if (!isPoolCode(c.code) || n < AUTOGEN_CODE_FIRST) add('CODE_INVALID', `${c.code} — 자동 후보는 P${AUTOGEN_CODE_FIRST}~P${AUTOGEN_CODE_LAST} 이다`)
   if (ctx.takenCodes.has(c.code)) add('CODE_TAKEN', `${c.code} — 이미 카드나 DB 행이 있다`)
 
   // ── ② 생활사 골격 ──
@@ -370,7 +371,7 @@ export function judgeAutogenBatch(
   cands: readonly AutogenCandidate[],
   ctx: { takenCodes: ReadonlySet<string>; existingCards: readonly PoolCard[]; productionBundles: readonly VoiceReferenceBundle[] },
 ): { verdicts: AutogenVerdict[]; voiceBaseline: number | null } {
-  const sorted = [...cands].sort((a, b) => a.code.localeCompare(b.code))
+  const sorted = [...cands].sort((a, b) => comparePersonaCodes(a.code, b.code))
   const verdicts = sorted.map((c) => judgeAutogenCandidate(c, { takenCodes: ctx.takenCodes }))
   const demote = (v: AutogenVerdict, b: AutogenBlockCode, d: string): void => {
     if (!v.blocks.includes(b)) v.blocks.push(b)
