@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs'
 import {
   judgeStageEvidence, trialPlanOf, evidenceReasonOf, STAGE_EVIDENCE_CODES, personaCommentCapFor,
   commentProvenanceOf, AUTO_COMMENT_CLOCK_SKEW_MS, type CommentLinkFacts,
+  personaCommentProvenanceOf, judgeConversationAudit, CONVERSATION_AUDIT_CODES,
+  FOLLOWUP_LANE_DECIDED_BY, FOLLOWUP_LANE_ACTIVITY_DECIDED_BY,
   type StageEvidenceFacts, type EvidencePost, type EvidenceSideSignals, type StageEvidenceVerdict,
 } from '../src/lib/stage-evidence'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
@@ -332,6 +334,117 @@ console.log('\n①-c 🔴 자동 첫 댓글 출처 — Comment ↔ Queue(무인 
   const brokenOnHuman = judge(facts('d3', { posts: [post(0), post(1), post(2), ] .map((p, i) => i === 0 ? { ...p, personaComments: [...p.personaComments,
     { personaId: 'x', createdAtMs: T0 + 30 * MIN, topLevel: true, provenance: 'broken' as const }] } : p) }))
   failWith('🔴 반례⑩ 첫 댓글이 따로 있어도 깨진 출처가 하나라도 있으면 FAIL', brokenOnHuman, 'COMMENT_PROVENANCE_BROKEN')
+}
+
+console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분리 · 단계 분자·상한 밖 · 결함은 대화 감사 (2026-10-13 · PR #704 E1)')
+{
+  const DEC = T0 + 90 * MIN
+  type Q = CommentLinkFacts['queues'][number]
+  type L = CommentLinkFacts['logs'][number]
+  const fl = (o: { queue?: Partial<Q> | null; log?: Partial<L> | null; extraLog?: boolean; comment?: Partial<CommentLinkFacts['comment']> } = {}): CommentLinkFacts => ({
+    comment: { postId: 'p-0', personaId: 'fu-1', createdAtMs: DEC + 200, topLevel: false, ...o.comment },
+    queues: o.queue === null ? [] : [{ targetPostId: 'p-0', personaId: 'fu-1', status: 'PUBLISHED',
+      decidedBy: FOLLOWUP_LANE_DECIDED_BY, decidedAtMs: DEC, ...o.queue }],
+    logs: o.log === null ? [] : [
+      { personaId: 'fu-1', decidedBy: FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, publishedAtMs: DEC, ...o.log },
+      ...(o.extraLog === true ? [{ personaId: 'fu-1', decidedBy: FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, publishedAtMs: DEC }] : []),
+    ],
+  })
+  // 분류기
+  check('표식은 첫 댓글 레인과 다른 값이다',
+    (FOLLOWUP_LANE_DECIDED_BY as string) !== AUTO_LANE_DECIDED_BY && (FOLLOWUP_LANE_ACTIVITY_DECIDED_BY as string) !== AUTO_LANE_ACTIVITY_DECIDED_BY)
+  check('🟢 세 행이 맞물린 추가 댓글(답글) → followup', personaCommentProvenanceOf(fl()) === 'followup', personaCommentProvenanceOf(fl()))
+  check('🟢 추가 댓글은 60분 창이 없다 — 결정 뒤 5시간 · 최상위도 followup',
+    personaCommentProvenanceOf(fl({ comment: { createdAtMs: DEC + 5 * HOUR, topLevel: true } })) === 'followup')
+  check('🔴 첫 댓글 판정(`commentProvenanceOf`)은 그대로 — 추가 댓글을 auto 로 세지 않는다(none)', commentProvenanceOf(fl()) === 'none')
+  const firstLink: CommentLinkFacts = {
+    comment: { postId: 'p-0', personaId: 'c-1', createdAtMs: T0 + 5 * MIN, topLevel: true },
+    queues: [{ targetPostId: 'p-0', personaId: 'c-1', status: 'PUBLISHED', decidedBy: AUTO_LANE_DECIDED_BY, decidedAtMs: T0 + 5 * MIN }],
+    logs: [{ personaId: 'c-1', decidedBy: AUTO_LANE_ACTIVITY_DECIDED_BY, publishedAtMs: T0 + 5 * MIN }],
+  }
+  check('🟢 첫 댓글은 새 분류기에서도 auto', personaCommentProvenanceOf(firstLink) === 'auto')
+  check('🔴 수동(사람 표식) → none', personaCommentProvenanceOf(fl({ queue: { decidedBy: 'admin:founder' }, log: { decidedBy: 'operator' } })) === 'none')
+  check('🔴 연결 행 없음 → none', personaCommentProvenanceOf(fl({ queue: null, log: null })) === 'none')
+  check('🔴 표식 섞임(Queue 추가 · 로그 첫 댓글) → 첫 댓글 축 broken (추가 표식으로 FAIL 을 피하지 못한다)',
+    personaCommentProvenanceOf(fl({ log: { decidedBy: AUTO_LANE_ACTIVITY_DECIDED_BY } })) === 'broken')
+  check('🔴 표식 섞임(Queue 첫 댓글 · 로그 추가) → 첫 댓글 축 broken',
+    personaCommentProvenanceOf({ ...firstLink, logs: [{ personaId: 'c-1', decidedBy: FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, publishedAtMs: T0 + 5 * MIN }] }) === 'broken')
+  const fuBroken: [string, CommentLinkFacts][] = [
+    ['로그 없음', fl({ log: null })],
+    ['Queue 없음', fl({ queue: null })],
+    ['로그 두 줄', fl({ extraLog: true })],
+    ['Queue 상태가 PUBLISHED 아님', fl({ queue: { status: 'PENDING' } })],
+    ['Queue 표식은 추가 · 로그 operator', fl({ log: { decidedBy: 'operator' } })],
+    ['로그 표식은 추가 · Queue 사람', fl({ queue: { decidedBy: 'admin:founder' } })],
+    ['Persona 불일치', fl({ comment: { personaId: 'other' } })],
+    ['대상 글 불일치', fl({ queue: { targetPostId: 'p-9' } })],
+    ['결정 시각 ≠ 로그 시각', fl({ log: { publishedAtMs: DEC + 1 } })],
+    ['결정 시각 없음', fl({ queue: { decidedAtMs: null } })],
+    ['댓글이 결정보다 시계 차이 넘게 앞섬', fl({ comment: { createdAtMs: DEC - AUTO_COMMENT_CLOCK_SKEW_MS - 1 } })],
+  ]
+  for (const [name, f] of fuBroken) check(`🔴 추가 댓글 ${name} → followup-broken`, personaCommentProvenanceOf(f) === 'followup-broken', personaCommentProvenanceOf(f))
+
+  // 판정 본체
+  const first = { personaId: 'commenter-0', createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: 'auto' as const }
+  const fu = (k: number, o: Partial<EvidencePost['personaComments'][number]> = {}) =>
+    ({ personaId: `fu-${k}`, createdAtMs: T0 + (90 + 40 * k) * MIN, topLevel: false, provenance: 'followup' as const, ...o })
+  const withThread = (cs: EvidencePost['personaComments'], cap: number | null = personaCommentCapFor('bootstrap-auto')) =>
+    judge(facts('d3', { commentCapPerPost: cap, posts: [post(0, { personaComments: cs }), post(1), post(2)] }))
+  check('🔴 상한은 그대로 1 이다(bootstrap-auto) — 1→5 로 바꾸지 않았다', personaCommentCapFor('bootstrap-auto') === 1)
+
+  const four = withThread([first, fu(1), fu(2), fu(3), fu(4)])
+  check('🟢 bootstrap-auto(상한 1) — 자동 첫 댓글 1 + 추가 4 → PASS (COMMENT_OVER_CAP 아님)', four.verdict === 'PASS', `${four.verdict} ${four.codes.join(',')}`)
+  check('그때 counts — 첫 댓글 3(글마다 1) · 추가 4 · 수동 0', four.counts.firstCommentOk === 3 && four.counts.followupComments === 4
+    && four.counts.manualPersonaComments === 0, JSON.stringify(four.counts))
+  check('그때 대화 감사 PASS · 이유 줄에 CONVERSATION 없음', four.conversation?.verdict === 'PASS' && !evidenceReasonOf(four).includes('CONVERSATION'),
+    JSON.stringify(four.conversation))
+  for (const n of [0, 1, 2, 3]) {
+    const v = withThread([first, ...Array.from({ length: n }, (_, k) => fu(k + 1))])
+    check(`🟢 첫 댓글 1 + 추가 ${n} → PASS`, v.verdict === 'PASS' && v.conversation?.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+  }
+  failWith('🔴 추가 표식 없는 두 번째 자동 댓글은 여전히 상한 초과 (상한을 넓힌 것이 아니다)',
+    withThread([first, { ...first, personaId: 'c-2', createdAtMs: T0 + 20 * MIN }]), 'COMMENT_OVER_CAP')
+  failWith('🔴 수동 Persona 댓글은 여전히 상한에 든다 — 첫 댓글 + 수동 1 + 추가 2 → 상한 초과',
+    withThread([first, { ...first, personaId: 'm-1', provenance: 'none' }, fu(1), fu(2)]), 'COMMENT_OVER_CAP')
+  const manualNotEvidence = withThread([{ ...first, provenance: 'none' }, fu(1)])
+  failWith('🔴 수동 Persona 댓글은 자동 증거가 아니다 — 수동 + 추가만 있는 글 → COMMENT_MISSING', manualNotEvidence, 'COMMENT_MISSING')
+  check('그때 counts — 수동 1 · 추가 1 · 첫 댓글 2', manualNotEvidence.counts.manualPersonaComments === 1
+    && manualNotEvidence.counts.followupComments === 1 && manualNotEvidence.counts.firstCommentOk === 2, JSON.stringify(manualNotEvidence.counts))
+  const fuOnly = withThread([fu(1, { createdAtMs: T0 + 5 * MIN, topLevel: true })])
+  failWith('🔴 60분 안 최상위라도 추가 댓글은 첫 댓글 증거가 아니다 → COMMENT_MISSING', fuOnly, 'COMMENT_MISSING')
+  check('그때 대화 감사 FAIL — FOLLOWUP_WITHOUT_FIRST', fuOnly.conversation?.verdict === 'FAIL'
+    && fuOnly.conversation.codes.includes('FOLLOWUP_WITHOUT_FIRST'), JSON.stringify(fuOnly.conversation))
+
+  const fuBrokenThread = withThread([first, fu(1), fu(2, { provenance: 'followup-broken' })])
+  check('🔴 추가 댓글 출처가 깨짐 → 단계 증거는 PASS 그대로 · 첫 댓글 3 (소급해서 지우지 않는다)',
+    fuBrokenThread.verdict === 'PASS' && fuBrokenThread.counts.firstCommentOk === 3 && !has(fuBrokenThread, 'COMMENT_PROVENANCE_BROKEN'),
+    `${fuBrokenThread.verdict} ${fuBrokenThread.codes.join(',')}`)
+  check('🔴 그때 대화 감사 FAIL — FOLLOWUP_PROVENANCE_BROKEN · 깨짐 1',
+    fuBrokenThread.conversation?.verdict === 'FAIL' && fuBrokenThread.conversation.codes.includes('FOLLOWUP_PROVENANCE_BROKEN')
+    && fuBrokenThread.conversation.counts.followupBroken === 1, JSON.stringify(fuBrokenThread.conversation))
+  const rr = evidenceReasonOf(fuBrokenThread)
+  check('🔴 이유 줄에 대화 감사 FAIL 이 따로 남는다 — 단계 PASS 와 섞이지 않게', rr.startsWith(`EVIDENCE ${D} d3 PASS`)
+    && rr.endsWith('CONVERSATION FAIL [FOLLOWUP_PROVENANCE_BROKEN]') && !/fu-|commenter-/.test(rr), rr)
+  failWith('🔴 첫 댓글 축 broken 은 추가 댓글이 있어도 단계 FAIL',
+    withThread([first, { ...first, personaId: 'x', provenance: 'broken' }, fu(1)], 5), 'COMMENT_PROVENANCE_BROKEN')
+
+  const dupFirst = withThread([first, fu(1, { personaId: 'commenter-0' })])
+  check('🔴 추가 댓글 Persona = 첫 댓글 Persona → 단계 DUP_COMMENT 아님 · 대화 감사 FOLLOWUP_DUP_PERSONA',
+    dupFirst.verdict === 'PASS' && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
+  const dupFu = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
+  check('🔴 추가 댓글끼리 같은 Persona → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
+  const self = withThread([first, fu(1, { personaId: 'author-0' })])
+  check('🔴 추가 댓글이 자기 글 → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
+    self.verdict === 'PASS' && self.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(self.conversation))
+  const over = withThread([first, fu(1), fu(2), fu(3), fu(4), fu(5)])
+  check('🔴 첫 댓글 1 + 추가 5(총 6 > 5) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
+    over.verdict === 'PASS' && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))
+  const early = withThread([first, fu(1, { createdAtMs: T0 + 6 * MIN })])
+  check('🔴 첫 댓글보다 앞선 추가 댓글 → FOLLOWUP_WITHOUT_FIRST', early.conversation?.codes.includes('FOLLOWUP_WITHOUT_FIRST') === true)
+  check('대화 감사 코드는 단계 코드 목록 밖이다', CONVERSATION_AUDIT_CODES.every((c) => !(STAGE_EVIDENCE_CODES as readonly string[]).includes(c)))
+  check('⬚ 사실을 못 읽었으면 대화 감사도 없다', judge(null).conversation === undefined)
+  check('🟢 추가 댓글이 없는 날 → 대화 감사 PASS(이어지지 않는 글이 정상)', judge(facts()).conversation?.verdict === 'PASS')
+  check('대화 감사는 단계 판정 함수와 같은 결과다(직접 호출)', judgeConversationAudit([post(0, { personaComments: [first, fu(1)] })]).verdict === 'PASS')
 }
 
 console.log('\n② 시험 계획 — 날짜가 아니라 증거로')
