@@ -16,8 +16,10 @@
  *
  * 🔴 **기본 OFF.** `SORAN_PERSONA_COMMENT_FOLLOWUP=on` 정확히 그 값일 때만 켜진다. 모르는 값은 OFF.
  *
- * 🔴 **모든 글을 5건으로 채우지 않는다.** 글마다 "대화 체력"(0~4)을 글 id 로 결정적으로 뽑고,
- *    그 안에서도 **지금 이어질 거리**(답 없는 질문·경험·공감·반론)가 있을 때만 한 건씩 잇는다.
+ * 🔴 **필요성은 대화가 정한다** (2026-10-13 마스터 보정). 추가 댓글은 **아직 답이 없는**
+ *    질문·반론·경험·공감이 있을 때만 한 건씩 잇는다. 같은 대상·같은 hook 은 한 번만 쓴다.
+ *    근거가 없으면 0건, 근거가 있으면 최대 4건이다. 글 id 해시로 수량을 정하지 않는다 —
+ *    결정적 해시는 **동률 순서와 시간차 jitter** 에만 쓴다.
  *    한 회차에 한 글에는 최대 한 건이다 — 한꺼번에 달지 않는다.
  *
  * 🔴 **실회원 대화가 먼저다.** 실회원 댓글이 있으면 추가량을 줄이고, 실회원 댓글에는 답하지 않는다
@@ -75,12 +77,6 @@ export const FOLLOWUP_EXTRA_WITH_MEMBERS_MAX = 1
 /** 답글 사슬 길이 상한(루트 포함) — 새 답글까지 합쳐 이 길이를 넘지 않는다 */
 export const FOLLOWUP_CHAIN_MAX = 3
 
-/**
- * 🔴 "대화 체력" 분포 — 추가 0·1·2·3·4건의 누적 경계. 글 id 해시로 한 번 뽑아 **영원히 같다**.
- *    기대 추가량 ≈ 1.2건/글 — 이어질 거리가 없으면 이보다 훨씬 적다. 5건을 채우는 글은 드물다.
- */
-export const FOLLOWUP_STAMINA_CDF: readonly number[] = [0.35, 0.65, 0.83, 0.94, 1]
-
 /** 이어질 거리로 보는 반응 — `other`(그냥 한마디) · `information` 은 자연스러운 끝이다 */
 export const FOLLOWUP_HOOKS: readonly ReactionType[] = ['question', 'rebuttal', 'experience', 'empathy']
 
@@ -88,68 +84,88 @@ export const FOLLOWUP_HOOKS: readonly ReactionType[] = ['question', 'rebuttal', 
 // 🔴 비용 · 상한 · 표식
 // ─────────────────────────────────────────────────────────
 
-export const FOLLOWUP_BUDGET_ENV = {
-  dailyUsd: 'SORAN_PERSONA_COMMENT_FOLLOWUP_DAILY_USD',
-  dailyCount: 'SORAN_PERSONA_COMMENT_FOLLOWUP_DAILY_MAX',
-} as const
 /**
- * 🔴 **추가 댓글 하루 USD 절대 상한.** 댓글 루프 하루 $0.20(`COMMENT_LOOP_DAILY_USD_MAX`) 안에서
- *    추가 댓글이 쓸 수 있는 몫이다 — 첫 댓글 몫을 먹지 않게 절반 미만으로 둔다. env 로 올릴 수 없다.
+ * 🔴 **수량·비용 상한은 코드 상수가 아니라 승인된 profile 이다** (2026-10-13 마스터 보정).
+ *
+ *    D10 과 D100 의 하루 상한이 같을 수 없다. 그래서 상한을 여기 고정하지 않고, 호출부가 그날의
+ *    런타임 단계에 맞는 **승인된 profile** 을 주입한다. 없거나 · 손상됐거나 · 단계가 다르거나 ·
+ *    승인자가 없으면 그 회차는 **0건**(fail-closed)이다. 첫 댓글 예산은 profile 과 무관하게 먼저 뗀다.
  */
-export const FOLLOWUP_DAILY_USD_MAX = 0.08
-/** 🔴 추가 댓글 하루 건수 절대 상한 — env 로 내릴 수만 있다 */
-export const FOLLOWUP_DAILY_COUNT_MAX = 40
-/** 🔴 한 회차 추가 댓글 상한 — 회차마다 조금씩 */
-export const FOLLOWUP_RUN_MAX = 3
-/** 🔴 한 Persona 의 하루 추가 댓글 상한 — 한 사람이 모든 글에 나타나지 않게 */
-export const FOLLOWUP_PER_PERSONA_DAILY_MAX = 3
+export const FOLLOWUP_PROFILE_VERSION = 'followup-profile-v1'
+
+export type FollowupProfile = {
+  v: typeof FOLLOWUP_PROFILE_VERSION
+  /** 적용 런타임 단계(`d10` · `d20` · `d100` …) — 그날 단계와 같아야 한다 */
+  stage: string
+  /** 하루 추가 댓글 건수 상한 */
+  dailyCount: number
+  /** 하루 추가 댓글 USD 상한 — 공유 장부에서 첫 댓글 몫을 뗀 뒤의 잔량과 둘 중 작은 쪽만 쓴다 */
+  dailyUsd: number
+  /** 한 회차 상한 */
+  runMax: number
+  /** 한 Persona 의 하루 추가 댓글 상한 */
+  perPersonaDailyMax: number
+  /** 🔴 사람 승인 — `machine:` 표식은 승인이 아니다 */
+  approvedBy: string
+  approvedAt: string
+}
+
+/**
+ * 🔴 **canary profile 후보 — 승인 전이라 그대로는 0건이다.** D100 영구 상한이 아니다.
+ *    첫 운영 관측용 숫자 후보일 뿐이며, 창업자 승인(`approvedBy` · `approvedAt`)과 적용 단계를 채운
+ *    profile 만 `validateFollowupProfile` 을 통과한다.
+ */
+export const FOLLOWUP_CANARY_PROFILE_CANDIDATE: Readonly<Omit<FollowupProfile, 'approvedBy' | 'approvedAt'> & { approvedBy: null; approvedAt: null }> = Object.freeze({
+  v: FOLLOWUP_PROFILE_VERSION,
+  stage: 'canary',
+  dailyCount: 40,
+  dailyUsd: 0.08,
+  runMax: 3,
+  perPersonaDailyMax: 3,
+  approvedBy: null,
+  approvedAt: null,
+})
+
+const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1
+
+/** 🔴 주입된 profile 을 그날 단계에 대해 검증한다. 하나라도 어긋나면 쓰지 않는다 */
+export function validateFollowupProfile(
+  raw: unknown, runtimeStage: string | null,
+): { ok: true; profile: FollowupProfile } | { ok: false; reason: string } {
+  if (raw === null || raw === undefined) return { ok: false, reason: '추가 댓글 profile 이 주입되지 않았다 — 0건(fail-closed)' }
+  if (typeof raw !== 'object') return { ok: false, reason: 'profile 이 객체가 아니다(fail-closed)' }
+  const p = raw as Partial<Record<keyof FollowupProfile, unknown>>
+  if (p.v !== FOLLOWUP_PROFILE_VERSION) return { ok: false, reason: `profile 판이 ${String(p.v)} 다(fail-closed)` }
+  if (typeof runtimeStage !== 'string' || runtimeStage.trim() === '') return { ok: false, reason: '그날 런타임 단계를 모른다(fail-closed)' }
+  if (p.stage !== runtimeStage) return { ok: false, reason: `profile 단계 ${String(p.stage)} ≠ 그날 단계 ${runtimeStage}(fail-closed)` }
+  if (!isPosInt(p.dailyCount)) return { ok: false, reason: 'profile 하루 건수가 양의 정수가 아니다(fail-closed)' }
+  if (typeof p.dailyUsd !== 'number' || !Number.isFinite(p.dailyUsd) || p.dailyUsd <= 0) {
+    return { ok: false, reason: 'profile 하루 USD 가 양의 유한수가 아니다(fail-closed)' }
+  }
+  if (!isPosInt(p.runMax) || p.runMax > p.dailyCount) return { ok: false, reason: 'profile 회차 상한이 손상됐다(fail-closed)' }
+  if (!isPosInt(p.perPersonaDailyMax)) return { ok: false, reason: 'profile Persona 하루 상한이 손상됐다(fail-closed)' }
+  if (typeof p.approvedBy !== 'string' || p.approvedBy.trim() === '' || p.approvedBy.trim().startsWith('machine:')) {
+    return { ok: false, reason: 'profile 에 사람 승인자가 없다 — 후보는 쓰지 않는다(fail-closed)' }
+  }
+  if (typeof p.approvedAt !== 'string' || !Number.isFinite(Date.parse(p.approvedAt))) {
+    return { ok: false, reason: 'profile 승인 시각을 읽지 못했다(fail-closed)' }
+  }
+  return { ok: true, profile: p as FollowupProfile }
+}
 
 /** 🔴 Queue.decidedBy — 첫 댓글 표식(`machine:persona-comment-auto`)과 다르다 */
 export const FOLLOWUP_DECIDED_BY = 'machine:persona-comment-followup'
 /** 🔴 PersonaActivityLog.decidedBy — 첫 댓글 표식(`auto`)과 다르다 */
 export const FOLLOWUP_ACTIVITY_DECIDED_BY = 'auto-followup'
 
-export type FollowupLimits = { dailyUsd: number | null; dailyCount: number | null; notes: string[] }
-
-/**
- * 🔴 env 가 없으면 상한 그대로, 못 읽으면 null(그날 0건), 상한보다 크면 상한으로 내린다.
- *    "없음" 과 "잘못 씀" 을 같은 값으로 읽지 않는다(`commentLoopLimitsFromEnv` 와 같은 결정).
- */
-export function followupLimitsFromEnv(env: Readonly<Record<string, string | undefined>>): FollowupLimits {
-  const notes: string[] = []
-  const read = (name: string, max: number, integer: boolean): number | null => {
-    const raw = (env[name] ?? '').trim()
-    if (raw === '') { notes.push(`${name} 미설정 — 상한 ${max}`); return max }
-    const n = Number(raw)
-    if (!Number.isFinite(n) || n < 0 || (integer && !Number.isInteger(n))) {
-      notes.push(`🔴 ${name}=${raw} 를 읽지 못했다 — 추가 댓글 0(fail-closed)`)
-      return null
-    }
-    if (n > max) { notes.push(`🔴 ${name}=${n} 는 상한 ${max} 를 넘는다 — 상한으로 내린다`); return max }
-    return n
-  }
-  return {
-    dailyUsd: read(FOLLOWUP_BUDGET_ENV.dailyUsd, FOLLOWUP_DAILY_USD_MAX, false),
-    dailyCount: read(FOLLOWUP_BUDGET_ENV.dailyCount, FOLLOWUP_DAILY_COUNT_MAX, true),
-    notes,
-  }
-}
-
 // ─────────────────────────────────────────────────────────
-// 🔴 결정적 난수 — 같은 입력은 언제나 같은 값이다(재시도·재기동에도 같은 결정)
+// 🔴 결정적 난수 — 동률 순서와 시간차 jitter 에만 쓴다. 수량·필요성은 정하지 않는다
 // ─────────────────────────────────────────────────────────
 
 /** [0, 1) — sha256 앞 8바이트 */
 export function unitOf(...parts: readonly string[]): number {
   const hex = createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 13)
   return parseInt(hex, 16) / 2 ** 52
-}
-
-/** 🔴 이 글의 "대화 체력" — 추가 댓글을 최대 몇 건까지 이을 수 있는가(0~4). 글 id 만으로 정한다 */
-export function staminaOf(postId: string): number {
-  const u = unitOf('followup-stamina', postId)
-  const i = FOLLOWUP_STAMINA_CDF.findIndex((edge) => u < edge)
-  return Math.min(i < 0 ? FOLLOWUP_EXTRA_PER_POST_MAX : i, FOLLOWUP_EXTRA_PER_POST_MAX)
 }
 
 /** 🔴 멱등 열쇠 — (글 · 순번). 같은 자리에 두 회차가 동시에 넣으면 unique 가 하나만 남긴다 */
@@ -196,7 +212,7 @@ export type FollowupTarget =
   | { kind: 'reply'; commentId: string; hook: ReactionType; threadRootId: string }
 
 export type FollowupPostVerdict =
-  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; key: string; target: FollowupTarget; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; reason: string }
+  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; reason: string }
   | { verdict: 'WAIT'; notBeforeMs: number | null; reason: string }
   | { verdict: 'STOP'; reason: string }
   | { verdict: 'BLOCK'; reason: string }
@@ -225,7 +241,7 @@ export function rolesFor(hook: ReactionType): readonly ReactionType[] {
  * 🔴 **이 글에 지금 한 건 더 이어도 되는가.**
  *
  *    BLOCK — 사실을 못 읽었거나 모순이다(fail-closed). 그 글만 뺀다.
- *    STOP  — 이 글의 대화는 끝났다(체력 소진 · 실회원 우선 · 식음 · 이어질 거리 없음).
+ *    STOP  — 이 글의 대화는 끝났다(상한 · 실회원 우선 · 식음 · 미해결 거리 없음).
  *    WAIT  — 아직 이르다(시간차). `notBeforeMs` 이후 다시 본다.
  *    GO    — 순번 · 멱등 열쇠 · 대상 · 제외 Persona · 역할 후보를 준다. Persona 를 고르지는 않는다.
  */
@@ -263,23 +279,22 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
     return { verdict: 'STOP', reason: '자동 출처 첫 댓글이 없다 — 추가 댓글은 첫 댓글을 대신하지 않는다' }
   }
 
-  // ── 총량 · 체력 ──
+  // ── 총량 · 실회원 상한 — 수량은 미해결 거리가 정하고 여기서는 넘지 못할 선만 본다 ──
   const personaCount = livePersona.length
   if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX) {
     return { verdict: 'STOP', reason: `Persona 댓글 ${personaCount}건 — 글당 ${FOLLOWUP_TOTAL_PER_POST_MAX}건 상한` }
   }
   const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length
-  const stamina = staminaOf(f.postId)
 
   // ── 실회원 우선 ──
   const realCap = liveReal.length >= MEMBER_COMMENT_LIMIT_ON_PUBLISH
     ? 0
     : liveReal.length > 0 ? FOLLOWUP_EXTRA_WITH_MEMBERS_MAX : FOLLOWUP_EXTRA_PER_POST_MAX
-  const cap = Math.min(stamina, realCap, FOLLOWUP_EXTRA_PER_POST_MAX)
+  const cap = Math.min(realCap, FOLLOWUP_EXTRA_PER_POST_MAX)
   if (extrasSoFar >= cap) {
     return {
       verdict: 'STOP',
-      reason: `추가 ${extrasSoFar}건 ≥ 이 글의 상한 ${cap} (체력 ${stamina} · 실회원 ${liveReal.length}건)`,
+      reason: `추가 ${extrasSoFar}건 ≥ 이 글의 상한 ${cap} (실회원 ${liveReal.length}건)`,
     }
   }
   const byTime = [...live].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
@@ -302,47 +317,53 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
   }
 
   // ── 이어질 거리 ──
-  const target = pickTarget(f, live)
+  const open = openHooksOf(f, live)
+  const target = open[0] ?? null
   if (target === null) return { verdict: 'STOP', reason: '이어질 거리(답 없는 질문·경험·공감·반론)가 없다 — 자연스러운 끝' }
 
   const onPost = new Set(livePersona.map((c) => c.personaId).filter((id): id is string => id !== null))
   for (const c of f.comments) if (c.commentOrigin === 'PERSONA' && c.personaId !== null) onPost.add(c.personaId)
   if (f.authorPersonaId !== null) onPost.add(f.authorPersonaId)
   return {
-    verdict: 'GO', ordinal, extrasSoFar, key: followupKeyOf(f.postId, ordinal), target,
+    verdict: 'GO', ordinal, extrasSoFar, openHooks: open.length, key: followupKeyOf(f.postId, ordinal), target,
     excludePersonaIds: [...onPost].sort(),
     roles: rolesFor(target.hook),
-    reason: `추가 ${extrasSoFar + 1}/${cap} · ${target.kind === 'reply' ? `${target.hook} 에 답글` : `글의 ${target.hook} 에 새 댓글`}`,
+    reason: `추가 ${extrasSoFar + 1}/${cap} · 미해결 거리 ${open.length} · ${target.kind === 'reply' ? `${target.hook} 에 답글` : `글의 ${target.hook} 에 새 댓글`}`,
   }
 }
 
 /**
- * 🔴 답할 대상을 고른다. **Persona 댓글에만** 답한다(실회원 응답은 창업자 결정 항목).
- *    이미 Persona 답글이 붙은 댓글 · 신고·삭제·모순 댓글 · 사슬이 긴 댓글은 거리로 세지 않는다.
- *    답할 댓글이 없으면 글 자체의 반응으로 새 최상위 댓글을 연다.
+ * 🔴 **아직 답이 없는 이어질 거리** — 우선순위 순서로 전부 돌려준다. 첫 원소가 이번 대상이다.
+ *
+ *    · 답 대상은 **Persona 댓글뿐**이다(실회원 응답은 창업자 결정 항목).
+ *    · 🔴 같은 대상은 한 번만 소비한다 — 그 댓글에 **누구든**(실회원 포함) 답한 적이 있으면,
+ *      그 답이 지금 지워졌더라도 이미 소비된 거리다. 지운 답을 핑계로 같은 자리에 다시 달지 않는다.
+ *    · 신고·삭제·신고 여부 모름·사슬이 긴 댓글은 거리로 세지 않는다.
+ *    · 글 자체의 반응(질문·반론·경험·공감)은 **새 최상위 추가 댓글 한 번**으로만 소비한다.
+ *      첫 댓글은 글에 대한 기본 응답이라 이 거리를 소비하지 않는다.
  */
-function pickTarget(f: FollowupPostFacts, live: readonly FollowupCommentRow[]): FollowupTarget | null {
-  const answered = new Set(live.filter((c) => c.commentOrigin === 'PERSONA' && c.parentId !== null).map((c) => c.parentId as string))
-  const options: { hookRank: number; atMs: number; t: FollowupTarget }[] = []
+export function openHooksOf(f: FollowupPostFacts, live: readonly FollowupCommentRow[]): FollowupTarget[] {
+  const consumed = new Set(f.comments.filter((c) => c.parentId !== null).map((c) => c.parentId as string))
+  const options: { hookRank: number; atMs: number; id: string; t: FollowupTarget }[] = []
   for (const c of live) {
     if (c.commentOrigin !== 'PERSONA' || c.reaction === null || !FOLLOWUP_HOOKS.includes(c.reaction)) continue
-    if (c.reported !== false || answered.has(c.id)) continue
+    if (c.reported !== false || consumed.has(c.id)) continue
     const ctx = conversationContextFor(f.comments, c.id, { postId: f.postId })
     if (!ctx.ok) continue
     if (ctx.chain.length + 1 > FOLLOWUP_CHAIN_MAX) continue
     options.push({
-      hookRank: HOOK_ORDER.indexOf(c.reaction), atMs: c.createdAt.getTime(),
+      hookRank: HOOK_ORDER.indexOf(c.reaction), atMs: c.createdAt.getTime(), id: c.id,
       t: { kind: 'reply', commentId: c.id, hook: c.reaction, threadRootId: ctx.threadRootId },
     })
   }
-  options.sort((a, b) => a.hookRank - b.hookRank || a.atMs - b.atMs)
-  if (options.length > 0) return options[0]!.t
-  if (f.postReaction !== null && FOLLOWUP_HOOKS.includes(f.postReaction)) {
-    // 🔴 최상위 새 댓글은 글이 부르는 반응이 있을 때만 — 그리고 최상위 Persona 댓글이 둘을 넘지 않게
-    const topLevelPersona = live.filter((c) => c.commentOrigin === 'PERSONA' && c.parentId === null).length
-    if (topLevelPersona < 2) return { kind: 'post', hook: f.postReaction }
+  // 🔴 동률은 시각 → id 순서다(해시 없이도 결정적)
+  options.sort((a, b) => a.hookRank - b.hookRank || a.atMs - b.atMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const out = options.map((o) => o.t)
+  const postHookUsed = f.comments.some((c) => c.commentOrigin === 'PERSONA' && c.parentId === null && c.provenance === 'followup')
+  if (!postHookUsed && f.postReaction !== null && FOLLOWUP_HOOKS.includes(f.postReaction)) {
+    out.push({ kind: 'post', hook: f.postReaction })
   }
-  return null
+  return out
 }
 
 /**
@@ -373,12 +394,15 @@ export function pickFollowupPersona(
   go: Extract<FollowupPostVerdict, { verdict: 'GO' }>,
   postId: string,
   candidates: readonly FollowupPersonaCandidate[],
+  /** 🔴 검증된 profile 의 `perPersonaDailyMax` — 손상이면 아무도 고르지 않는다 */
+  perPersonaDailyMax: number,
 ): { personaId: string } | { personaId: null; reason: string } {
+  if (!isPosInt(perPersonaDailyMax)) return { personaId: null, reason: 'Persona 하루 상한이 손상됐다(fail-closed)' }
   const excluded = new Set(go.excludePersonaIds)
   const pool = candidates.filter((c) => c.eligible && !excluded.has(c.personaId)
-    && isCount(c.followupsToday) && c.followupsToday < FOLLOWUP_PER_PERSONA_DAILY_MAX)
+    && isCount(c.followupsToday) && c.followupsToday < perPersonaDailyMax)
   if (pool.length === 0) return { personaId: null, reason: '이을 수 있는 Persona 가 없다(반복·자기 글·하루 상한·자격)' }
-  // 🔴 결정적 분산 — 같은 (글, 순번)에는 같은 사람, 다른 자리에는 고르게
+  // 🔴 자격이 같은 후보 사이의 동률 순서만 해시로 정한다 — 같은 (글, 순번)에는 같은 사람
   const ranked = [...pool].sort((a, b) =>
     unitOf('followup-persona', postId, String(go.ordinal), a.personaId)
     - unitOf('followup-persona', postId, String(go.ordinal), b.personaId))
@@ -447,7 +471,10 @@ export type FollowupTickFacts = {
   killSwitchOff: boolean | null
   /** 🔴 60분 창 안에서 아직 첫 댓글이 없는 자동 글 수. 모르면 null */
   pendingFirstComments: number | null
-  limits: FollowupLimits
+  /** 🔴 호출부가 주입한 그날의 승인 profile — 검증은 여기서 한다 */
+  profile: unknown
+  /** 그날 런타임 단계(`StageDecision` 공개 단계). 모르면 null */
+  runtimeStage: string | null
   /** 오늘 추가 댓글 발행 수 · 쓴 USD. 모르면 null */
   followupsToday: number | null
   followupUsdToday: number | null
@@ -472,23 +499,25 @@ export function judgeFollowupTick(f: FollowupTickFacts): FollowupTickVerdict {
   if (f.killSwitchOff !== true) blockers.push(f.killSwitchOff === false ? 'kill switch 가 켜져 있다' : 'kill switch 상태를 읽지 못했다(fail-closed)')
   if (!isCount(f.pendingFirstComments)) blockers.push('첫 댓글 대기 수를 읽지 못했다(fail-closed)')
   else if (f.pendingFirstComments > 0) blockers.push(`첫 댓글을 기다리는 글 ${f.pendingFirstComments}편 — 이번 회차는 첫 댓글에 양보한다`)
-  if (f.limits.dailyCount === null || f.limits.dailyUsd === null) blockers.push('추가 댓글 상한 env 를 읽지 못했다(fail-closed)')
+  const prof = validateFollowupProfile(f.profile, f.runtimeStage)
+  if (!prof.ok) blockers.push(prof.reason)
   if (!isCount(f.followupsToday)) blockers.push('오늘 추가 댓글 수를 읽지 못했다(fail-closed)')
   const money = [f.followupUsdToday, f.commentLedgerRemainingUsd, f.firstCommentReserveUsd, f.perCallReserveUsd]
   if (money.some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0) || !(f.perCallReserveUsd > 0)) {
     blockers.push('비용 값을 읽지 못했다(fail-closed)')
   }
-  if (blockers.length > 0) return { allowed: 0, blockers, detail: blockers[0]! }
+  if (blockers.length > 0 || !prof.ok) return { allowed: 0, blockers, detail: blockers[0] ?? '' }
 
-  const countLeft = Math.max(0, (f.limits.dailyCount as number) - (f.followupsToday as number))
-  const ownUsdLeft = Math.max(0, (f.limits.dailyUsd as number) - (f.followupUsdToday as number))
+  const P = prof.profile
+  const countLeft = Math.max(0, P.dailyCount - (f.followupsToday as number))
+  const ownUsdLeft = Math.max(0, P.dailyUsd - (f.followupUsdToday as number))
   // 🔴 공유 장부에서 첫 댓글 몫을 먼저 떼고 남은 것만 쓴다
   const sharedLeft = Math.max(0, (f.commentLedgerRemainingUsd as number) - (f.firstCommentReserveUsd as number))
   const byMoney = Math.floor(Math.min(ownUsdLeft, sharedLeft) / f.perCallReserveUsd)
-  const allowed = Math.min(FOLLOWUP_RUN_MAX, countLeft, byMoney)
+  const allowed = Math.min(P.runMax, countLeft, byMoney)
   return {
     allowed, blockers: [],
-    detail: `회차 ${allowed}건 = min(회차 ${FOLLOWUP_RUN_MAX} · 건수 잔량 ${countLeft} · 비용 ${byMoney})`,
+    detail: `회차 ${allowed}건 = min(회차 ${P.runMax} · 건수 잔량 ${countLeft} · 비용 ${byMoney}) · profile ${P.stage}`,
   }
 }
 

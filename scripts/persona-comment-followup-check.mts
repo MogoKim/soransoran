@@ -8,8 +8,9 @@
  *   ① 스위치 기본 OFF · 오타로 켜지지 않는다
  *   ② fixture 시나리오(scripts/fixtures/persona-comment-followup) — GO · WAIT · STOP · BLOCK
  *   ③ 회차 판정 — kill switch · 첫 댓글 양보 · 공유 장부의 첫 댓글 몫 · 상한 · 모르면 0
- *   ④ 24시간 시뮬레이션 불변식 — 글당 ≤5 · 같은 Persona 0 · 자기 글 0 · 시간차 · 체력 · 실회원 우선 ·
- *      모든 글을 5건으로 채우지 않는다 · 같은 입력 같은 결과(멱등)
+ *   ④ 24시간 시뮬레이션 불변식 — 글당 ≤5 · 같은 Persona 0 · 자기 글 0 · 시간차 · 실회원 우선 ·
+ *      추가 댓글마다 그때 미해결이던 hook 하나를 소비 · 근거 없는 글은 0 · 글 id 무관 · 같은 입력 같은 결과
+ *   ③ profile — 주입 없음·후보·손상·단계 불일치 → 0 · D100 profile 은 40건에 묶이지 않는다
  *   ⑤ 실제 소비자 접점 — `stage-evidence.commentProvenanceOf` 가 추가 댓글을 첫 댓글로 세지 않고
  *      깨진 출처로도 보지 않는다 · bootstrap-auto 상한 1 이 활성화 선행조건임을 실행으로 드러낸다
  *   ⑥ 본문 중복 · Queue 도장
@@ -39,14 +40,8 @@ const check = (name: string, cond: boolean, detail = ''): void => {
 const MIN = 60_000
 const T0 = Date.parse('2026-10-13T00:00:00Z')
 
-// ── 체력별 글 id 찾기 — 고정 접두로 결정적 ──
-const postWithStamina = (n: number, salt = ''): string => {
-  for (let i = 0; i < 100_000; i++) {
-    const id = `post-${salt}${i}`
-    if (M.staminaOf(id) === n) return id
-  }
-  throw new Error(`체력 ${n} 인 글 id 를 찾지 못했다`)
-}
+// 🔴 글 id 는 판정의 필요성에 쓰이지 않는다 — 시나리오는 고정 id 하나로 돈다(④에서 id 무관성을 따로 잠근다)
+const FX_POST = 'post-fx'
 
 type FxComment = {
   id: string; atMin: number; parent?: string; origin: 'PERSONA' | 'MEMBER' | 'GUEST'
@@ -54,7 +49,7 @@ type FxComment = {
   provenance?: 'auto' | 'followup' | 'none' | 'broken'; reported?: boolean; deleted?: boolean
 }
 type FxScenario = {
-  name: string; stamina: number; nowMin: number
+  name: string; nowMin: number
   post: { postReaction: ReactionType | null; autoManaged?: boolean; hasOpenQueue?: boolean; author?: string }
   comments: FxComment[]
   expect: { verdict: string; ordinal?: number; targetKind?: 'post' | 'reply'; targetId?: string; reasonIncludes?: string }
@@ -87,10 +82,14 @@ check('① 정확히 on → ON', M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]:
 check('① 추가 상한 = 5 − 1 = 4', M.FOLLOWUP_EXTRA_PER_POST_MAX === 4 && M.FOLLOWUP_TOTAL_PER_POST_MAX === 5)
 
 // ═════════ ② fixture 시나리오 ═════════
-const fx = JSON.parse(readFileSync(join(here, 'fixtures/persona-comment-followup/scenarios.json'), 'utf-8')) as { scenarios: FxScenario[] }
-check('② fixture 시나리오가 있다', fx.scenarios.length >= 15, `${fx.scenarios.length}건`)
+type FxProfiles = {
+  approved: Record<string, unknown>; approvedD100: Record<string, unknown>
+  broken: { name: string; runtimeStage: string | null; profile?: unknown; patch?: Record<string, unknown> }[]
+}
+const fx = JSON.parse(readFileSync(join(here, 'fixtures/persona-comment-followup/scenarios.json'), 'utf-8')) as { scenarios: FxScenario[]; profiles: FxProfiles }
+check('② fixture 시나리오가 있다', fx.scenarios.length >= 20, `${fx.scenarios.length}건`)
 for (const s of fx.scenarios) {
-  const postId = postWithStamina(s.stamina)
+  const postId = FX_POST
   const v = M.judgeFollowupPost(factsOf(postId, s), T0 + s.nowMin * MIN)
   const e = s.expect
   let ok = v.verdict === e.verdict
@@ -112,12 +111,12 @@ for (const s of fx.scenarios) {
 // ═════════ ③ 회차 판정 ═════════
 const baseTick: FollowupModule.FollowupTickFacts = {
   switch: { enabled: true, reason: 'on' }, commentStage: 'bootstrap-auto', killSwitchOff: true,
-  pendingFirstComments: 0, limits: { dailyUsd: 0.08, dailyCount: 40, notes: [] },
+  pendingFirstComments: 0, profile: fx.profiles.approved, runtimeStage: 'd10',
   followupsToday: 0, followupUsdToday: 0, commentLedgerRemainingUsd: 0.2, firstCommentReserveUsd: 0.02,
   perCallReserveUsd: 0.001,
 }
 const tick = (over: Partial<FollowupModule.FollowupTickFacts>) => M.judgeFollowupTick({ ...baseTick, ...over })
-check('③ 정상 → 회차 상한 3', tick({}).allowed === M.FOLLOWUP_RUN_MAX)
+check('③ 승인 profile(d10) → 회차 상한 3', tick({}).allowed === 3)
 check('③ 스위치 OFF → 0', tick({ switch: M.readFollowupSwitch({}) }).allowed === 0)
 check('③ 댓글 단계 shadow → 0', tick({ commentStage: 'shadow' }).allowed === 0)
 check('③ 댓글 단계 organic → 0 (이 판은 무인 레인 위에서만)', tick({ commentStage: 'organic' }).allowed === 0)
@@ -125,7 +124,6 @@ check('③ kill switch 켜짐 → 0', tick({ killSwitchOff: false }).allowed ===
 check('③ kill switch 모름 → 0', tick({ killSwitchOff: null }).allowed === 0)
 check('③ 첫 댓글 대기 1편 → 0 (첫 댓글에 양보)', tick({ pendingFirstComments: 1 }).allowed === 0)
 check('③ 첫 댓글 대기 수 모름 → 0', tick({ pendingFirstComments: null }).allowed === 0)
-check('③ 상한 env 못 읽음 → 0', tick({ limits: { dailyUsd: null, dailyCount: 40, notes: [] } }).allowed === 0)
 check('③ 오늘 수 모름 → 0', tick({ followupsToday: null }).allowed === 0)
 check('③ 하루 건수 소진 → 0', tick({ followupsToday: 40 }).allowed === 0)
 check('③ 하루 건수 잔량 1 → 1', tick({ followupsToday: 39 }).allowed === 1)
@@ -136,25 +134,42 @@ check('③ 공유 장부에서 첫 댓글 몫을 뺀 잔량 0.0025 → 2',
   tick({ commentLedgerRemainingUsd: 0.0225, firstCommentReserveUsd: 0.02 }).allowed === 2)
 check('③ 비용 값 NaN → 0', tick({ commentLedgerRemainingUsd: Number.NaN }).allowed === 0)
 check('③ 예약액 0 → 0', tick({ perCallReserveUsd: 0 }).allowed === 0)
+// ── profile 주입 · 손상 ──
+check('③ 🔴 canary 후보는 승인 전이라 쓰지 않는다',
+  !M.validateFollowupProfile(M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, 'canary').ok
+  && tick({ profile: M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, runtimeStage: 'canary' }).allowed === 0)
+check('③ 후보 숫자는 40건·$0.08 (상한이 아니라 후보값)',
+  M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyCount === 40 && M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyUsd === 0.08)
+for (const b of fx.profiles.broken) {
+  const profile = b.profile === 'CANDIDATE' ? M.FOLLOWUP_CANARY_PROFILE_CANDIDATE
+    : b.patch !== undefined ? { ...fx.profiles.approved, ...b.patch } : b.profile
+  const v = M.validateFollowupProfile(profile, b.runtimeStage)
+  check(`③ 🔴 profile ${b.name} → 0건`, !v.ok && tick({ profile, runtimeStage: b.runtimeStage }).allowed === 0, v.ok ? '통과해 버렸다' : v.reason)
+}
 {
-  const l = M.followupLimitsFromEnv({})
-  check('③ env 미설정 → 절대 상한', l.dailyUsd === M.FOLLOWUP_DAILY_USD_MAX && l.dailyCount === M.FOLLOWUP_DAILY_COUNT_MAX)
-  const up = M.followupLimitsFromEnv({ [M.FOLLOWUP_BUDGET_ENV.dailyUsd]: '5', [M.FOLLOWUP_BUDGET_ENV.dailyCount]: '999' })
-  check('③ env 로 올릴 수 없다', up.dailyUsd === M.FOLLOWUP_DAILY_USD_MAX && up.dailyCount === M.FOLLOWUP_DAILY_COUNT_MAX)
-  const down = M.followupLimitsFromEnv({ [M.FOLLOWUP_BUDGET_ENV.dailyCount]: '5' })
-  check('③ env 로 내릴 수 있다', down.dailyCount === 5)
-  const typo = M.followupLimitsFromEnv({ [M.FOLLOWUP_BUDGET_ENV.dailyUsd]: '0.0８', [M.FOLLOWUP_BUDGET_ENV.dailyCount]: '4.5' })
-  check('③ 오타 → null(0건)', typo.dailyUsd === null && typo.dailyCount === null)
-  check('③ 🔴 추가 댓글 USD 상한 < 댓글 루프 하루 상한의 절반', M.FOLLOWUP_DAILY_USD_MAX < 0.1)
+  // 🔴 D100 은 40건·$0.08 에 묶이지 않는다 — 승인된 D100 profile 이 정한다
+  const d100 = (over: Partial<FollowupModule.FollowupTickFacts>) => tick({
+    profile: fx.profiles.approvedD100, runtimeStage: 'd100', commentLedgerRemainingUsd: 2, firstCommentReserveUsd: 0.1, ...over,
+  })
+  check('③ D100 승인 profile → 회차 20', d100({}).allowed === 20, d100({}).detail)
+  check('③ D100 승인 profile → 오늘 41번째도 허용(40 고정 아님)', d100({ followupsToday: 40, followupUsdToday: 0.04 }).allowed === 20)
+  check('③ D100 profile 을 D10 날에 주입 → 0', tick({ profile: fx.profiles.approvedD100, runtimeStage: 'd10' }).allowed === 0)
+  check('③ 🔴 D100 이어도 첫 댓글 대기 → 0', d100({ pendingFirstComments: 2 }).allowed === 0)
+  check('③ 🔴 D100 이어도 공유 장부 잔량 = 첫 댓글 몫 → 0', d100({ commentLedgerRemainingUsd: 0.1 }).allowed === 0)
+  check('③ D100 하루 건수 300 소진 → 0', d100({ followupsToday: 300 }).allowed === 0)
 }
 
 // ═════════ ④ 24시간 시뮬레이션 ═════════
 const PERSONAS = Array.from({ length: 30 }, (_, i) => `p${String(i).padStart(2, '0')}`)
 const HOOK_DRAW: readonly ReactionType[] = ['other', 'other', 'other', 'empathy', 'question', 'experience', 'other', 'question']
 
-type SimResult = { perPost: Map<string, FollowupModule.FollowupCommentRow[]>; violations: string[]; trace: string }
+type SimResult = { perPost: Map<string, FollowupModule.FollowupCommentRow[]>; violations: string[]; trace: string; postReaction: Map<string, ReactionType> }
 
-function simulate(opts: { posts: number; salt: string; members?: (postId: string) => number }): SimResult {
+function simulate(opts: { posts: number; salt: string; members?: (postId: string) => number; profile?: Record<string, unknown>; stage?: string }): SimResult {
+  const profile = opts.profile ?? fx.profiles.approved
+  const stage = opts.stage ?? 'd10'
+  const perPersonaMax = profile.perPersonaDailyMax as number
+  const runMax = profile.runMax as number
   const violations: string[] = []
   const perPost = new Map<string, FollowupModule.FollowupCommentRow[]>()
   const author = new Map<string, string>()
@@ -187,7 +202,10 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   let followupsToday = 0
   for (let t = 60; t <= 26 * 60; t += 15) {
     const nowMs = T0 + t * MIN
-    const allowed = M.judgeFollowupTick({ ...baseTick, followupsToday, followupUsdToday: followupsToday * 0.001 }).allowed
+    const allowed = M.judgeFollowupTick({
+      ...baseTick, profile, runtimeStage: stage, followupsToday, followupUsdToday: followupsToday * 0.001,
+      commentLedgerRemainingUsd: 5, firstCommentReserveUsd: 0.02,
+    }).allowed
     let used = 0
     const goPosts = new Set<string>()
     const ready: { postId: string; go: Extract<FollowupModule.FollowupPostVerdict, { verdict: 'GO' }> }[] = []
@@ -202,7 +220,18 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       if (used >= allowed) break
       const rows = perPost.get(postId)!
       if (goPosts.has(postId)) violations.push(`${postId} 한 회차 두 건`)
-      const pick = M.pickFollowupPersona(v, postId, PERSONAS.map((p) => ({ personaId: p, eligible: true, followupsToday: followupsByPersona.get(p) ?? 0 })))
+      // 🔴 소비 기록 — 그 순간 대상이 미해결 hook 이었는가
+      const before = perPost.get(postId)!
+      if (v.target.kind === 'reply') {
+        const tid = v.target.commentId
+        const parent = before.find((x) => x.id === tid)
+        if (parent === undefined || parent.reaction === null || !M.FOLLOWUP_HOOKS.includes(parent.reaction)) violations.push(`${postId} hook 아닌 대상`)
+        if (before.some((x) => x.parentId === tid)) violations.push(`${postId} 이미 답한 대상 재소비`)
+      } else {
+        if (!M.FOLLOWUP_HOOKS.includes(postReaction.get(postId)!)) violations.push(`${postId} hook 없는 글에 최상위 추가`)
+        if (before.some((x) => x.parentId === null && x.provenance === 'followup')) violations.push(`${postId} 글 hook 재소비`)
+      }
+      const pick = M.pickFollowupPersona(v, postId, PERSONAS.map((p) => ({ personaId: p, eligible: true, followupsToday: followupsByPersona.get(p) ?? 0 })), perPersonaMax)
       if (pick.personaId === null) continue
       goPosts.add(postId)
       used++
@@ -217,7 +246,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       })
       trace.push(`${t}:${id}:${pick.personaId}`)
     }
-    if (used > M.FOLLOWUP_RUN_MAX) violations.push(`회차 ${t} 에 ${used}건`)
+    if (used > runMax) violations.push(`회차 ${t} 에 ${used}건`)
   }
   // 불변식
   for (const [postId, rows] of perPost) {
@@ -232,7 +261,11 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       if (persona[k]!.createdAt.getTime() - T0 > M.FOLLOWUP_POST_AGE_MAX_MS) violations.push(`${postId} 식은 글에 이음`)
     }
     const extras = persona.length - 1
-    if (extras > M.staminaOf(postId)) violations.push(`${postId} 체력 초과`)
+    const first = persona[0]!
+    const noGround = !M.FOLLOWUP_HOOKS.includes(postReaction.get(postId)!)
+      && (first.reaction === null || !M.FOLLOWUP_HOOKS.includes(first.reaction))
+    if (noGround && extras > 0) violations.push(`${postId} 🔴 근거 없는 글에 추가 ${extras}건`)
+    if (extras > M.FOLLOWUP_EXTRA_PER_POST_MAX) violations.push(`${postId} 추가 ${extras}건`)
     if (members >= 3 && extras > 0) violations.push(`${postId} 실회원 3건 글에 추가`)
     if (members > 0 && extras > M.FOLLOWUP_EXTRA_WITH_MEMBERS_MAX) violations.push(`${postId} 실회원 글에 추가 ${extras}건`)
     for (const r of persona) {
@@ -243,8 +276,8 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       else if (parent.personaId === r.personaId) violations.push(`${postId} 자기 댓글에 답함`)
     }
   }
-  for (const [p, n] of followupsByPersona) if (n > M.FOLLOWUP_PER_PERSONA_DAILY_MAX) violations.push(`${p} 하루 ${n}건`)
-  return { perPost, violations, trace: trace.join('|') }
+  for (const [p, n] of followupsByPersona) if (n > perPersonaMax) violations.push(`${p} 하루 ${n}건`)
+  return { perPost, violations, trace: trace.join('|'), postReaction }
 }
 
 {
@@ -256,22 +289,48 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   check('④ D10 글마다 Persona 1~5건', counts.every((n) => n >= 1 && n <= 5), counts.join(','))
   check('④ D10 모든 글을 같은 수로 맞추지 않는다', new Set(counts).size > 1, counts.join(','))
 
-  const big = simulate({ posts: 100, salt: 'd100' })
-  check('④ D100 24시간 불변식 위반 0', big.violations.length === 0, big.violations.slice(0, 3).join(' · '))
+  // 🔴 근거가 있는 글은 상한이 묶이지 않는 한 실제로 잇는다(필요성을 해시가 지우지 않는다)
+  const grounded = [...a.perPost.entries()].filter(([id, rows]) =>
+    M.FOLLOWUP_HOOKS.includes(a.postReaction.get(id)!)
+    || M.FOLLOWUP_HOOKS.includes(rows.find((r) => r.provenance === 'auto')!.reaction as ReactionType))
+  const groundedExtras = grounded.map(([, rows]) => rows.filter((r) => r.provenance === 'followup').length)
+  check('④ 🔴 D10 근거 있는 글은 전부 1건 이상 이어진다', grounded.length > 0 && groundedExtras.every((n) => n >= 1),
+    `${grounded.length}편 · ${groundedExtras.join(',')}`)
+
+  const big = simulate({ posts: 100, salt: 'd100', profile: fx.profiles.approvedD100, stage: 'd100' })
+  check('④ D100(승인 profile) 24시간 불변식 위반 0', big.violations.length === 0, big.violations.slice(0, 3).join(' · '))
   const bc = [...big.perPost.values()].map((rows) => rows.filter((r) => r.commentOrigin === 'PERSONA').length)
   const extrasTotal = bc.reduce((s, n) => s + n - 1, 0)
-  const full = bc.filter((n) => n === 5).length
-  check('④ D100 하루 추가 댓글 ≤ 하루 건수 상한', extrasTotal <= M.FOLLOWUP_DAILY_COUNT_MAX, `${extrasTotal}건`)
-  check('④ D100 5건까지 채운 글은 소수(≤15%)', full <= 15, `${full}/100`)
-  check('④ D100 첫 댓글로 끝난 글이 있다', bc.filter((n) => n === 1).length >= 20, `${bc.filter((n) => n === 1).length}/100`)
-  const spread = bc.filter((n) => n >= 2).length
-  check('④ 🔴 D100 상한이 묶여도 앞 글이 독차지하지 않는다(추가 받은 글 ≥ 30)', spread >= 30, `${spread}/100 · 추가 ${extrasTotal}건`)
+  check('④ D100 하루 추가 ≤ 그 profile 의 하루 건수', extrasTotal <= (fx.profiles.approvedD100.dailyCount as number), `${extrasTotal}건`)
+  check('④ 🔴 D100 은 40건에 묶이지 않는다', extrasTotal > 40, `${extrasTotal}건`)
+  check('④ D100 첫 댓글로 끝난 글(근거 없음)이 있다', bc.filter((n) => n === 1).length > 0, `${bc.filter((n) => n === 1).length}/100`)
+
+  // 🔴 상한이 묶일 때 앞 글이 독차지하지 않는다 — d10 profile(40건)로 100편
+  const tight = simulate({ posts: 100, salt: 'tight', profile: { ...fx.profiles.approved, stage: 'd10' } })
+  const tc = [...tight.perPost.values()].map((rows) => rows.filter((r) => r.commentOrigin === 'PERSONA').length)
+  const spread = tc.filter((n) => n >= 2).length
+  check('④ 🔴 상한이 묶여도 앞 글이 독차지하지 않는다(추가 받은 글 ≥ 30)', tight.violations.length === 0 && spread >= 30, `${spread}/100`)
+
+  // 🔴 글 id 무관 — 같은 대화 사실이면 글 id 가 달라도 필요성·대상·순번이 같다
+  {
+    const base = fx.scenarios[0]!
+    const sig = (id: string) => {
+      const v = M.judgeFollowupPost(factsOf(id, base), T0 + 200 * MIN)
+      return v.verdict === 'GO' ? `GO:${v.ordinal}:${v.target.kind}:${v.target.kind === 'reply' ? v.target.commentId : ''}:${v.openHooks}` : v.verdict
+    }
+    // 첫 댓글(10분) + 최소 30분 + jitter 최대 40분이 다 지나고 24시간 안인 200분에 판정한다
+    const sigs = new Set(Array.from({ length: 300 }, (_, i) => sig(`any-${i}`)))
+    check('④ 🔴 필요성은 글 id 와 무관하다(300개 id 판정 동일)', sigs.size === 1 && [...sigs][0]!.startsWith('GO'), [...sigs].join(' | '))
+    const none = { ...base, post: { postReaction: 'other' as ReactionType }, comments: base.comments.map((c) => ({ ...c, reaction: 'other' as ReactionType })) }
+    const zero = Array.from({ length: 300 }, (_, i) => M.judgeFollowupPost(factsOf(`any-${i}`, none), T0 + 200 * MIN).verdict)
+    check('④ 🔴 근거가 없으면 어떤 글 id 든 0(STOP)', zero.every((v) => v === 'STOP'))
+  }
 
   // 🔴 회차 자리 순서 — 추가가 적은 글이 먼저다(해시 순서만으로는 이 계약을 증명할 수 없다)
   {
     const g = (postId: string, extras: number) => ({
       postId,
-      go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, key: M.followupKeyOf(postId, extras + 2),
+      go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1, key: M.followupKeyOf(postId, extras + 2),
         target: { kind: 'post' as const, hook: 'question' as const }, excludePersonaIds: [], roles: ['other' as const], reason: '' },
     })
     let allOk = true
@@ -285,13 +344,6 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   const withMembers = simulate({ posts: 30, salt: 'mem', members: (id) => (M.unitOf('m', id) < 0.5 ? 1 : 3) })
   check('④ 실회원 글 불변식 위반 0', withMembers.violations.length === 0, withMembers.violations.slice(0, 3).join(' · '))
 
-  // 체력 분포 — 모든 글을 5건으로 채우지 않는다
-  const st = Array.from({ length: 5000 }, (_, i) => M.staminaOf(`dist-${i}`))
-  const mean = st.reduce((s, n) => s + n, 0) / st.length
-  check('④ 체력 범위 0~4', st.every((n) => Number.isInteger(n) && n >= 0 && n <= 4))
-  check('④ 체력 평균 1.0~1.5', mean >= 1 && mean <= 1.5, mean.toFixed(2))
-  check('④ 체력 4 비율 ≤ 10%', st.filter((n) => n === 4).length / st.length <= 0.1)
-  check('④ 체력 0 비율 ≥ 25%', st.filter((n) => n === 0).length / st.length >= 0.25)
 }
 
 // ═════════ ⑤ 실제 소비자 접점 — stage-evidence ═════════
@@ -340,7 +392,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     && normalizeDiffers(member[0]!.text, near) && !M.judgeFollowupText({ text: near, existing: member }).ok)
   check('⑥ 빈 말 → 막음', !M.judgeFollowupText({ text: 'ㅋㅋㅋ!!', existing: [] }).ok)
 
-  const postId = postWithStamina(4)
+  const postId = FX_POST
   const go = M.judgeFollowupPost(factsOf(postId, fx.scenarios[0]!), T0 + 140 * MIN)
   if (go.verdict !== 'GO') check('⑥ 도장 시나리오 GO', false, go.reason)
   else {
@@ -354,12 +406,18 @@ const normalizeDiffers = (a: string, b: string): boolean => {
       { personaId: 'pA', eligible: true, followupsToday: 0 },
       { personaId: 'pB', eligible: true, followupsToday: 0 },
       { personaId: 'pQ', eligible: false, followupsToday: 0 },
-      { personaId: 'pR', eligible: true, followupsToday: M.FOLLOWUP_PER_PERSONA_DAILY_MAX },
+      { personaId: 'pR', eligible: true, followupsToday: 3 },
       { personaId: 'pS', eligible: true, followupsToday: null },
-    ])
+    ], 3)
     check('⑥ 글쓴이·이미 단 Persona·자격 없음·하루 상한·모름 → 고를 사람 없음', pick.personaId === null)
-    const ok = M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 2 }])
+    const ok = M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 2 }], 3)
     check('⑥ 남은 사람 → 고른다', ok.personaId === 'pT')
+    check('⑥ 🔴 Persona 하루 상한은 profile 값이다(6이면 4건째 허용 · 3이면 막음)',
+      M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 4 }], 6).personaId === 'pT'
+      && M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 4 }], 3).personaId === null)
+    check('⑥ 🔴 Persona 상한 손상(0·NaN) → 고르지 않는다',
+      M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 0 }], 0).personaId === null
+      && M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 0 }], Number.NaN).personaId === null)
     check('⑥ 역할은 생성기 어휘 안', go.roles.length > 0 && go.roles.every((r) => ['other', 'empathy', 'question', 'experience'].includes(r)))
   }
 }
