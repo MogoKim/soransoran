@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { readRuntimeGate, sealSnapshot, takeSourceSnapshot } from './source-snapshot.mjs'
+import { RUNTIME_GATE_SNIPPET, SOURCE_SNAPSHOT_SNIPPET, readRuntimeGate, sealSnapshot, takeSourceSnapshot } from './source-snapshot.mjs'
 
 /** 🔴 운영 보조 Mac 의 runtime 커밋(2026-10-13 · quality-v7 · draft-gates-v6.1) */
 export const RUNTIME_FIXTURE_SHA = 'e4d31d688ab556470029679c380e9064663594f4'
@@ -38,7 +38,20 @@ export function openRuntimeTree(repoRoot: string, sha = RUNTIME_FIXTURE_SHA): Ru
 export function snapshotToFile(tree: RuntimeTree, file: string, env: NodeJS.ProcessEnv = process.env): { gate: string; unresolved: string[]; resolved: string[] } | null {
   const gate = readRuntimeGate(tree.root)
   const snap = takeSourceSnapshot(tree.root, env)
-  if (gate === null || snap === null) return null
+  if (gate === null || snap === null) {
+    // 🔴 시험 진단 — 같은 스니펫을 다시 돌려 왜 못 떴는지 남긴다(DB 주소는 가린다)
+    const why = (snippet: string): string => {
+      try {
+        execFileSync('npx', ['tsx', '-e', snippet], { cwd: tree.root, env, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 })
+        return 'exit 0'
+      } catch (e) {
+        const x = e as { status?: number | null; stdout?: string; stderr?: string }
+        return `exit ${x.status ?? '?'} · ${`${x.stdout ?? ''}\n${x.stderr ?? ''}`.replace(/postgres(?:ql)?:\/\/\S+/g, '<db>').trim().split('\n').slice(-12).join(' | ')}`
+      }
+    }
+    console.error(`source snapshot 실패 — gate ${gate === null ? why(RUNTIME_GATE_SNIPPET) : 'ok'} · snapshot ${snap === null ? why(SOURCE_SNAPSHOT_SNIPPET) : 'ok'}`)
+    return null
+  }
   writeFileSync(file, sealSnapshot(snap), 'utf-8')
   return {
     gate,
