@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * 🔴 **D100 Batch D1 — 날짜 정밀도 · 품질 동률 신선도 반례 검사** (2026-10-13) — 순수 fixture · DB 0 · 네트워크 0 · 파일 write 0
+ * 🔴 **D100 Batch D1 — 날짜 정밀도 · 품질 동률 신선도 반례 검사** (2026-10-13) — fixture · DB 0 · 네트워크 0 · write 는 임시 디렉터리만
  *
  *   npm run check:d100-freshness
  *
@@ -12,20 +12,27 @@
  *   ⑤ 수집 상세 선별: **같은 점수 안에서만** 최신이 먼저 — 점수(품질)를 이기지 않는다(무작위 대조)
  *   ⑥ 레몬테라스 1p 제외 · 2~16p · 회차 상세 jjong 10 + humor 1 · 요청량 · 회차 · 페이지 수 불변
  *   ⑦ 갱년기 · wgang 은 순위 동률 해소 선호뿐 — quota · 가중치가 새로 생기지 않았다
+ *   ⑧ 배선 — 수집 행 → 얇은 행 → adapt → 공급 러너(`worksetRows`) → 생성 전 판정 · 적재기(`sourceEvidenceOf`)가 같은 구간을 싣는다
  */
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   buildSourceEvidence, compareReleaseRank, judgeSlotRelease, observationBucketOf, observationBucketsOf, parseEvidence,
   postedLowerBoundOf, postedWindowOfKstDay, relativePosition, sourceStatsSnapshot, EXPIRING_REASONS, SOURCE_STATS_METHOD,
   type ListObservation, type SlotReleaseVerdict, type SourceEvidenceRecord, type SourceStatsSnapshot,
 } from '../src/lib/source-slot-release'
-import { compareSupplyRank, type SupplyRankKey } from '../src/lib/supply-workset'
+import { compareSupplyRank, preGenerationRelease, type SupplyRankKey } from '../src/lib/supply-workset'
+import { thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
+import { toDetailRecord, toRawDetailRecord } from '../src/lib/micro-seed-82cook-thin-adapt'
+import { sourceEvidenceOf, type Candidate } from '../src/lib/micro-seed-supply-autofill'
 import { MAX_REQUESTS_PER_DAY, RUNS_PER_DAY } from '../src/lib/collect-schedule'
 import { buildCollected, parsePostedLabel, postedDayOfLabel, BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
 import { compareFreshFirst, planAutoFetch, SLOT_QUOTA, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
 import { planCafeRun } from './lib/navercafe-run-plan.mjs'
-import { evidenceMaterialFor, postedOfListRow, type ListObservationIndex } from './lib/source-list-observations.mjs'
+import { evidenceMaterialFor, postedOfListRow, readListObservations, type ListObservationIndex } from './lib/source-list-observations.mjs'
+import { worksetRows } from './supply-process.mjs'
 
 let pass = 0
 let fail = 0
@@ -410,6 +417,74 @@ console.log('\n⑧ 갱년기 · wgang 은 동률 해소뿐 — quota · 가중�
   const supply = strip(readFileSync('scripts/lib/micro-seed-supply.mts', 'utf8'))
   const fresh = supply.slice(supply.indexOf('export function compareFreshFirst'), supply.indexOf('export function planAutoFetch'))
   check('🔴 수집 동률 비교는 점수 · 게시 시각 · 글 번호만 본다', fresh.length > 0 && !/flags|menopause|wgang|weight|quota/i.test(fresh))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 배선 — 수집 행 → 얇은 행 → adapt → 공급 러너 · 적재기가 같은 하루 구간을 싣는다')
+// ─────────────────────────────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'd100-fresh-'))
+  const listed = '2026-10-12T22:30:00.000Z' // KST 10-13 07:30 회차
+  const captured = '2026-10-12T22:31:00.000Z'
+  const item = (id: string, label: string, comments: number) => ({
+    sourceArticleId: id, sourceUrl: `https://cafe.naver.com/remonterrace/${id}`, originalTitle: `우리 집 이야기 ${id}`,
+    sourceCommentCount: comments, sourceCommentCountRead: true, sourceViewCount: comments * 40, sourcePostedLabel: label,
+    sourcePage: 3, sourceRankOnPage: 1, sourceBoardName: '쫑알쫑알 게시판', sourceBoardKey: 'remonterrace:jjong',
+  })
+  const rows = [
+    buildCollected('remonterrace', item('35080100', '2026.10.12.', 6), '', listed, listed),
+    // 표본 — 정확한 시각(24-72h · 12-24h · 6-12h 에 고루) · 같은 원천
+    ...[30, 34, 40, 46, 52, 60].map((h, i) => ({
+      ...buildCollected('remonterrace', item(String(35070000 + i), '01:00', i * 4), '', listed, listed),
+      sourcePostedAt: new Date(Date.parse(listed) - h * H).toISOString(),
+    })),
+    ...[13, 15, 17, 19, 21, 23].map((h, i) => ({
+      ...buildCollected('remonterrace', item(String(35075000 + i), '01:00', i), '', listed, listed),
+      sourcePostedAt: new Date(Date.parse(listed) - h * H).toISOString(),
+    })),
+    ...[7, 8, 9, 10, 11, 11.5].map((h, i) => ({
+      ...buildCollected('remonterrace', item(String(35079000 + i), '01:00', i), '', listed, listed),
+      sourcePostedAt: new Date(Date.parse(listed) - h * H).toISOString(),
+    })),
+  ]
+  // 🔴 옛 수집기 모양 하나 — 날짜 라벨 + 00:00 sourcePostedAt(라벨이 이긴다)
+  const legacyRow = { ...buildCollected('remonterrace', item('35080200', '2026.10.12.', 6), '', listed, listed), sourcePostedAt: '2026-10-11T15:00:00.000Z', sourcePostedDay: undefined }
+  writeFileSync(join(dir, 'navercafe-remonterrace-20261012-223000.list.jsonl'), `${[...rows, legacyRow].map((r) => JSON.stringify(r)).join('\n')}\n`)
+  const thinOf = (c: Record<string, unknown>) => thinRowFromCollected({
+    collected: { ...c, sourceCapturedAt: captured },
+    maskedBody: '합성 본문입니다. 우리 또래 이야기를 시험용으로 지었습니다. 다들 어떠세요? 충분히 길게 적어 둡니다.',
+    bodyHeadChars: 300, axis: 'seedOriginality', safetyVerdict: 'pass', safetyReasons: [], reason: 'ok',
+    runId: '20261012-223000', fetchedAt: captured,
+  })
+  const thins = [thinOf(rows[0]! as unknown as Record<string, unknown>), thinOf(legacyRow as unknown as Record<string, unknown>)]
+  check('얇은 행: 지금 수집기 행은 게시 시각이 비고 · 옛 행은 00:00 을 실어 온다(목록이 바로잡는다)',
+    thins[0]!.sourcePostedAt === '' && thins[1]!.sourcePostedAt === '2026-10-11T15:00:00.000Z', JSON.stringify(thins.map((t) => t.sourcePostedAt)))
+  writeFileSync(join(dir, '82cook-adapt-remonterrace-20261012-223000.detail.jsonl'), `${thins.map((t) => JSON.stringify(toDetailRecord(t))).join('\n')}\n`)
+  writeFileSync(join(dir, '82cook-adapt-remonterrace-20261012-223000.raw-detail.jsonl'), `${thins.map((t) => JSON.stringify(toRawDetailRecord(t))).join('\n')}\n`)
+  const at = new Date('2026-10-12T23:00:00.000Z')
+  const idx = readListObservations(dir, at)
+  const ws = worksetRows([
+    join(dir, '82cook-adapt-remonterrace-20261012-223000.detail.jsonl'), join(dir, '82cook-adapt-remonterrace-20261012-223000.raw-detail.jsonl'),
+  ], idx, at) ?? []
+  for (const id of ['35080100', '35080200']) {
+    const w = ws.find((r) => r.sourceArticleId === id)
+    const ev = w?.evidence ?? null
+    check(`🔴 공급 러너 증거(${id === '35080100' ? '지금' : '옛'} 수집기 행): postedAt null · 하루 구간 · 원천 상대 자리는 가장 낮은 구간`,
+      ev !== null && ev.postedAt === null && ev.postedWindow?.from === '2026-10-11T15:00:00.000Z'
+        && ev.sourceStats?.bucket === '24-72h' && parseEvidence(ev).ok,
+      JSON.stringify({ p: ev?.postedAt, w: ev?.postedWindow, b: ev?.sourceStats?.bucket }))
+    const v = w === undefined ? null : preGenerationRelease(w, new Date('2026-10-13T01:50:00.000Z'), at)
+    check(`생성 전 판정이 구간으로 나이를 잰다(늙은 끝 34.833h) · ${id}`, v?.rank.ageAtSlotH === 34.833 && v.verdict === 'eligible',
+      JSON.stringify({ v: v?.verdict, r: v?.reasons, a: v?.rank.ageAtSlotH }))
+  }
+  // 적재기 — 후보가 00:00 을 실어 와도 재료의 구간이 이긴다
+  const m = evidenceMaterialFor(idx, { sourceKey: 'navercafe:remonterrace', articleId: '35080200', postedAt: '2026-10-11T15:00:00.000Z', listedAt: listed, at })
+  const rec = sourceEvidenceOf({
+    sourceSite: 'navercafe:remonterrace', sourceArticleId: '35080200',
+    sourcePostedAt: '2026-10-11T15:00:00.000Z', sourceListedAt: listed, sourceCapturedAt: captured,
+  } as Candidate, m) as unknown as SourceEvidenceRecord
+  check('🔴 적재기 증거도 postedAt null · 같은 하루 구간 · 모양 확인 통과',
+    rec.postedAt === null && rec.postedWindow?.from === '2026-10-11T15:00:00.000Z' && parseEvidence(rec).ok, JSON.stringify({ p: rec.postedAt, w: rec.postedWindow }))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} 통과 · ${fail} 실패`)
