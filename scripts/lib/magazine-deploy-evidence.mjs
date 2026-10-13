@@ -14,7 +14,12 @@
  * ── 🔴 계약 ──
  *   ① GitHub Deployments 가 1차 증거원이다. 그것이 **완전하면**(found · success · 같은 SHA · dpl_ id)
  *      Vercel 은 부르지 않는다 (호출 0).
- *   ② 없거나 불완전할 때만 Vercel 을 직접 본다 — 반드시 이 순서로:
+ *   ①' 🔴 **GitHub 의 명시적 결론은 덮지 않는다** (2026-10-13 Codex 재검토 P1-1) — Vercel 호출 0 · GitHub 그대로:
+ *        state 가 failure · error            → 관찰이 FAILED 로 끝난다 (Vercel 성공으로 바꾸지 않는다)
+ *        기대와 다른 SHA 를 명시적으로 돌려줌 → 충돌 · judgeDeploy 가 DEPLOY_SHA_MISMATCH 로 막는다
+ *        그 밖의 모르는 state(inactive 등)   → 허용 목록 밖 · fallback 하지 않는다
+ *   ② fallback 은 이때만 — 배포 없음 · 조회 실패 · state 가 pending/queued/in_progress/null ·
+ *      success 인데 배포 id 없음. 반드시 이 순서로:
  *        `vercel inspect soransoran.com` → 도메인이 **지금 서빙 중인** 배포 id
  *        `vercel api /v13/deployments/<그 id>` → 그 배포의 원문
  *   ③ 성공 증거는 네 가지가 **모두** 참일 때만:
@@ -28,14 +33,23 @@
  *
  * ── 🔴 M-GRAPH 와 섞지 않는다 ──
  *   `mgraph-vercel.mts` 는 차단(env add · redeploy)까지 하는 쓰기 도구다. 여기는 읽기 둘뿐이다.
- *   실행 파일·프로젝트를 찾는 **방식**만 같게 했다 (launchd PATH 에 vercel 이 없다 —
- *   HOME 기준 npx 캐시 절대 경로 → PATH 이름 순서. 실측 2026-10-13: inspect 출력은 전부 stderr).
+ *   프로젝트를 `--cwd` 로 명시하는 **방식**만 같게 했다. 실측 2026-10-13: inspect 출력은 전부 stderr
+ *   (CLI 59.26 · 50.35 둘 다 같은 모양).
+ *
+ * ── 🔴 실행 파일 (Codex 재검토 P1-2) ──
+ *   해시가 든 npx 캐시 경로에 기대지 않는다 — 캐시가 지워지면 조용히 사라진다.
+ *   ① SORAN_MAGAZINE_VERCEL_BIN  ② 지금 node 옆(`dirname(process.execPath)/vercel`)  ③ PATH 의 vercel.
+ *   실행할 수 있는 것만 고른다. 하나도 없으면 VERCEL_UNAVAILABLE 로 막는다.
+ *   운영 launchd 의 node 는 nvm bin 이고, 그 옆에 vercel 이 있다 — plist·env 를 바꾸지 않는다.
+ *
+ * ── 🔴 로그 ──
+ *   CLI 원문(stdout·stderr)과 자격 정보는 결과·로그에 남기지 않는다. 실패는 코드와 종료 코드만.
  *
  * ── 🔴 실행은 주입받는다 ──
  *   `exec(cmd, args, opts)` 하나로만 명령을 부른다. 검사는 가짜 exec 로 실제 네트워크 0 이다.
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs'
+import { delimiter, dirname, join } from 'node:path'
 
 export const EVIDENCE_GITHUB = 'github-deployments'
 export const EVIDENCE_VERCEL = 'vercel-direct'
@@ -47,16 +61,20 @@ export const VERCEL_CALL_TIMEOUT_MS = 60 * 1000
 const MISS = Object.freeze({ found: false, state: null, sha: null, deploymentId: null })
 const DPL = /^dpl_[A-Za-z0-9]+$/
 
+/** GitHub deployment state 중 "아직 모름" — 이때만 Vercel 로 넘어간다 */
+export const GITHUB_FALLBACK_STATES = Object.freeze([null, 'pending', 'queued', 'in_progress'])
+/** GitHub 이 명시적으로 실패를 말한 state — 덮지 않는다 */
+export const GITHUB_TERMINAL_FAILURES = Object.freeze(['failure', 'error'])
+
+const isExecutable = (p) => { try { accessSync(p, constants.X_OK); return true } catch { return false } }
+
 /**
- * 실행 파일 후보. 🔴 HOME 은 `process.env` 에서 읽는다 — rehearsal sandbox 는 HOME 을 임시 폴더로
- * 바꿔 npx 절대 경로가 없게 만들고, PATH 의 fixture 로 떨어지게 한다 (`os.homedir()` 는 그것을 무시한다).
+ * 실행 파일 후보 — 순서가 우선순위다. ① 명시 ② node 옆 ③ PATH 의 각 디렉터리.
+ * 🔴 해시가 든 캐시 경로는 넣지 않는다.
  */
-export function defaultVercelBinCandidates(env = process.env) {
-  return [
-    env.SORAN_MAGAZINE_VERCEL_BIN ?? '',
-    env.HOME ? join(env.HOME, '.npm/_npx/67eb4586ca667318/node_modules/.bin/vercel') : '',
-    'vercel',
-  ]
+export function defaultVercelBinCandidates(env = process.env, execPath = process.execPath) {
+  const fromPath = String(env.PATH ?? '').split(delimiter).filter(Boolean).map((d) => join(d, 'vercel'))
+  return [env.SORAN_MAGAZINE_VERCEL_BIN ?? '', execPath ? join(dirname(execPath), 'vercel') : '', ...fromPath]
 }
 
 export function defaultVercelProjectDirs(env = process.env) {
@@ -65,14 +83,13 @@ export function defaultVercelProjectDirs(env = process.env) {
   return [join(env.HOME, 'Documents/soransoran-product'), join(env.HOME, 'Documents/soransoran')]
 }
 
-/** 실행 파일을 찾는다 — PATH 이름은 존재 확인 없이 그대로(실행할 때 판가름난다) */
-export function resolveVercelBin(candidates, exists = existsSync) {
+/** 실행 파일을 찾는다 — 🔴 절대 경로이고 **실행할 수 있는** 첫 후보만. 이름만 있는 후보는 받지 않는다 */
+export function resolveVercelBin(candidates, executable = isExecutable) {
   for (const c of candidates) {
-    if (!c) continue
-    if (!c.includes('/')) return { ok: true, value: c }
-    if (exists(c)) return { ok: true, value: c }
+    if (!c || !c.startsWith('/')) continue
+    if (executable(c)) return { ok: true, value: c }
   }
-  return { ok: false, why: `vercel 실행 파일을 찾지 못했다 (${candidates.filter(Boolean).join(' · ')})` }
+  return { ok: false, why: `실행할 수 있는 vercel 을 찾지 못했다 (후보 ${candidates.filter(Boolean).length}개)` }
 }
 
 /**
@@ -96,8 +113,8 @@ export function resolveVercelProjectDir(dirs, exists = existsSync, readFile = (p
 }
 
 /** 실제 회차의 Vercel 실행 맥락 — 부를 때마다 다시 찾는다 (회차 중 설치·링크 변화를 짐작하지 않는다) */
-export function resolveVercelContext({ env = process.env, exists = existsSync, readFile } = {}) {
-  const bin = resolveVercelBin(defaultVercelBinCandidates(env), exists)
+export function resolveVercelContext({ env = process.env, execPath = process.execPath, executable = isExecutable, exists = existsSync, readFile } = {}) {
+  const bin = resolveVercelBin(defaultVercelBinCandidates(env, execPath), executable)
   if (!bin.ok) return bin
   const dir = resolveVercelProjectDir(defaultVercelProjectDirs(env), exists, readFile)
   if (!dir.ok) return dir
@@ -139,13 +156,16 @@ export function verifyVercelDirect({ sha, exec, context }) {
   const { bin, projectDir } = context.value
   const opts = { timeoutMs: VERCEL_CALL_TIMEOUT_MS }
 
-  const ins = exec(bin, ['inspect', PRODUCTION_HOST, '--cwd', projectDir], opts)
-  if (ins.code !== 0) return no('VERCEL_INSPECT_FAILED', `${PRODUCTION_HOST} inspect 실패 (${String(ins.err || ins.out).trim().split('\n').pop() || ins.code})`)
+  // 🔴 실행 자체가 던져도(가드·권한) 증거 없음으로 끝낸다. 실패 사유에 CLI 원문을 싣지 않는다 — 종료 코드만
+  const run = (args) => { try { return exec(bin, args, opts) } catch { return { code: -1, out: '', err: '' } } }
+
+  const ins = run(['inspect', PRODUCTION_HOST, '--cwd', projectDir])
+  if (ins.code !== 0) return no('VERCEL_INSPECT_FAILED', `${PRODUCTION_HOST} inspect 실패 (종료 ${ins.code})`)
   const liveId = parseInspectId(`${ins.out}\n${ins.err}`)
   if (!liveId) return no('VERCEL_INSPECT_NO_ID', `${PRODUCTION_HOST} inspect 에서 배포 id 를 읽지 못했다`)
 
-  const api = exec(bin, ['api', `/v13/deployments/${liveId}`, '--cwd', projectDir], opts)
-  if (api.code !== 0) return no('VERCEL_API_FAILED', `배포 원문 조회 실패 (${String(api.err || api.out).trim().split('\n').pop() || api.code})`)
+  const api = run(['api', `/v13/deployments/${liveId}`, '--cwd', projectDir])
+  if (api.code !== 0) return no('VERCEL_API_FAILED', `배포 원문 조회 실패 (종료 ${api.code})`)
   let json
   try { json = JSON.parse(api.out) } catch { return no('VERCEL_API_BAD_JSON', '배포 원문을 JSON 으로 읽지 못했다') }
 
@@ -155,14 +175,29 @@ export function verifyVercelDirect({ sha, exec, context }) {
 }
 
 /**
- * GitHub 1차 → (불완전할 때만) Vercel 직접.
- * 둘 다 실패하면 GitHub 이 준 것을 그대로 돌려준다 — 판정은 예전과 같다 (DEPLOY_NOT_FOUND · NOT_READY · FAILED …).
+ * GitHub 증거가 불완전할 때 Vercel 로 넘어가도 되는가.
+ * 🔴 GitHub 의 **명시적 결론**(failure·error · 다른 SHA · 허용 목록 밖 state)은 넘어가지 않는다 — 덮지 않는다.
+ */
+export function githubFallbackGate(gh, sha) {
+  if (!gh?.found) return { allowed: true, miss: 'NOT_FOUND' }
+  if (GITHUB_TERMINAL_FAILURES.includes(gh.state)) return { allowed: false, miss: `TERMINAL_${gh.state}` }
+  if (gh.sha && gh.sha !== sha) return { allowed: false, miss: 'SHA_CONFLICT' }
+  if (gh.state === 'success') return { allowed: true, miss: DPL.test(gh.deploymentId ?? '') ? 'NO_SHA' : 'NO_DEPLOYMENT_ID' }
+  if (GITHUB_FALLBACK_STATES.includes(gh.state ?? null)) return { allowed: true, miss: `STATE_${gh.state ?? 'null'}` }
+  return { allowed: false, miss: `STATE_${gh.state}` }
+}
+
+/**
+ * GitHub 1차 → (불완전하고 결론이 없을 때만) Vercel 직접.
+ * GitHub 이 결론을 냈거나 Vercel 도 실패하면 GitHub 이 준 것을 그대로 돌려준다 —
+ * 관찰·판정은 예전과 같다 (FAILED · DEPLOY_SHA_MISMATCH · DEPLOY_NOT_FOUND · NOT_READY …).
  */
 export function collectProductionDeployment({ sha, github, vercelDirect }) {
   const gh = github(sha) ?? MISS
   if (isCompleteGithubEvidence(gh, sha)) return { ...gh, evidenceSource: EVIDENCE_GITHUB }
+  const gate = githubFallbackGate(gh, sha)
+  if (!gate.allowed) return { ...gh, evidenceSource: EVIDENCE_GITHUB, githubMiss: gate.miss, fallback: null }
   const v = vercelDirect(sha)
-  const githubMiss = !gh.found ? 'NOT_FOUND' : gh.state !== 'success' ? `STATE_${gh.state ?? 'UNKNOWN'}` : gh.sha !== sha ? 'SHA_MISMATCH' : 'NO_DEPLOYMENT_ID'
-  if (v.ok) return { ...v.deployment, githubMiss }
-  return { ...gh, evidenceSource: gh.found ? EVIDENCE_GITHUB : null, githubMiss, fallback: { code: v.code, why: v.why } }
+  if (v.ok) return { ...v.deployment, githubMiss: gate.miss }
+  return { ...gh, evidenceSource: gh.found ? EVIDENCE_GITHUB : null, githubMiss: gate.miss, fallback: { code: v.code, why: v.why } }
 }

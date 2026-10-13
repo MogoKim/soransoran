@@ -256,9 +256,13 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
    `gitSource.sha` = merge SHA · `target` = production · `readyState` = READY · 두 id 일치가 **모두** 참일
    때만 인정한다. 최신 배포·HTTP 200 은 증거가 아니다. 결과의 `deploy.evidenceSource` 에
    `github-deployments` / `vercel-direct` 를 남긴다. 판정 기준(위 표)은 그대로다.
+   🔴 **GitHub 의 명시적 결론은 덮지 않는다** — deployment state 가 failure·error 이거나 다른 SHA 를
+   명시하면 Vercel 을 부르지 않고 그대로 실패·충돌로 끝낸다. fallback 은 배포 없음·조회 실패·
+   pending/queued/in_progress/null·success 인데 배포 id 없음일 때만.
    🔴 Vercel 직접 확인은 **이미 로그인된 CLI 자격**(launchd 의 HOME)으로 읽기 두 번만 한다 —
-   새 토큰을 저장소·plist 에 두지 않는다. 실행 파일은 PATH 가 아니라 HOME 기준 npx 경로로 찾는다
-   (`scripts/lib/magazine-deploy-evidence.mjs`).
+   새 토큰·env·plist 0 · redeploy/promote/alias/rollback 0 · CLI 원문·자격은 결과·로그에 남기지 않는다.
+   실행 파일은 `SORAN_MAGAZINE_VERCEL_BIN` → 지금 node 옆(`dirname(process.execPath)/vercel`) → PATH
+   순서로 **실행 가능한 것**만 고른다. 없으면 `VERCEL_UNAVAILABLE` (`scripts/lib/magazine-deploy-evidence.mjs`).
 
 🔴 **404 만이 "안 나갔다" 를 확인한 것이다.** 500·인증 리다이렉트·네트워크 실패는
    비공개 확인이 아니라 **확인 실패**다 — 즉 배포가 망가진 날 자동 병합이
