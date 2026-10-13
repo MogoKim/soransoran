@@ -36,6 +36,7 @@ import {
   getAllMagazineArticles,
   getRelatedMagazineArticles,
   isPublicMagazineArticle,
+  resolvePublishAt,
 } from '../src/lib/magazine'
 import {
   DISCOVERY_SLOT,
@@ -105,10 +106,31 @@ function check(label: string, ok: boolean, detail = ''): void {
 }
 
 const OFF: NodeJS.ProcessEnv = {}
-const published = getAllMagazineArticles()
+
+/**
+ * 🔴 **이 검사 한 번의 공개 판정 시각 — 정확히 한 번 정한다** (2026-10-13).
+ *    첫 CI 가 10:30:04 KST 에 「미공개 글이 링크에 뜬 경우 0」 으로 실패했다 — 모듈 시작 때 공개 목록을
+ *    계산하고, 글마다 resolver 가 시각을 다시 읽어 10:30:00 예약 글이 그 사이에 공개로 바뀌었다.
+ *    재실행 통과는 해결이 아니다. 아래 전부(공개 목록 · 미공개 집합 · resolver · 예전 연관 글)가 이 값을 쓴다.
+ */
+const CHECK_NOW = Date.now()
+/** 한 시각의 공개 스냅샷 — 공개·미공개 집합을 **같은 now** 로 만든다 */
+function snapshotAt(now: number) {
+  const list = getAllMagazineArticles(now)
+  return {
+    now,
+    published: list,
+    publicSlugs: new Set(list.map((a) => a.slug)),
+    unpublishedSlugs: new Set(MAGAZINE_ARTICLES.filter((a) => !isPublicMagazineArticle(a, now)).map((a) => a.slug)),
+  }
+}
+const resolveAt = (a: MagazineArticle, env?: NodeJS.ProcessEnv, now: number = CHECK_NOW) => resolveRelatedMagazine(a, env, now)
+const legacyAt = (a: MagazineArticle, now: number = CHECK_NOW) => getRelatedMagazineArticles(a, 3, now).map((x) => x.slug)
+const SNAP = snapshotAt(CHECK_NOW)
+const published = SNAP.published
 const slugsOf = (a: MagazineArticle, env: NodeJS.ProcessEnv) =>
-  resolveRelatedMagazine(a, env).items.map((i) => i.article.slug)
-const legacyOf = (a: MagazineArticle) => getRelatedMagazineArticles(a, 3).map((x) => x.slug)
+  resolveAt(a, env).items.map((i) => i.article.slug)
+const legacyOf = (a: MagazineArticle) => legacyAt(a)
 
 console.log(`\nM-GRAPH 연관 글 회귀 — 공개 글 ${published.length}편 · graphVersion ${GRAPH.graphVersion}\n`)
 
@@ -175,11 +197,11 @@ check('  isGraphEnabled({}) 가 false 다', isGraphEnabled(OFF) === false)
 {
   const diff = published.filter((a) => slugsOf(a, OFF).join(',') !== legacyOf(a).join(','))
   check(`그래프 OFF 에서 ${published.length}편 전부 결과 불변`, diff.length === 0, `달라진 글 ${diff.length}`)
-  const notFallback = published.filter((a) => resolveRelatedMagazine(a, OFF).source !== 'FALLBACK')
+  const notFallback = published.filter((a) => resolveAt(a, OFF).source !== 'FALLBACK')
   check('  전부 FALLBACK 출처다', notFallback.length === 0)
-  const wrongReason = published.filter((a) => resolveRelatedMagazine(a, OFF).reason !== 'DISABLED')
+  const wrongReason = published.filter((a) => resolveAt(a, OFF).reason !== 'DISABLED')
   check('  폴백 사유가 DISABLED 다', wrongReason.length === 0)
-  const wrongVer = published.filter((a) => resolveRelatedMagazine(a, OFF).graphVersion !== 'none')
+  const wrongVer = published.filter((a) => resolveAt(a, OFF).graphVersion !== 'none')
   check("  계측 graph_version 이 'none' 이다 — 그래프분과 섞이지 않는다", wrongVer.length === 0)
 }
 
@@ -192,12 +214,12 @@ check('  열린 cluster 가 family 뿐이다', enabledClusters(FAMILY).join(',')
 
 {
   const fam = published.filter((a) => a.cluster === 'family')
-  const usedGraph = fam.filter((a) => resolveRelatedMagazine(a, FAMILY).source === 'GRAPH')
+  const usedGraph = fam.filter((a) => resolveAt(a, FAMILY).source === 'GRAPH')
   const changed = fam.filter((a) => slugsOf(a, FAMILY).join(',') !== legacyOf(a).join(','))
   check('family 글이 그래프 결과를 쓴다', usedGraph.length > 0, `${usedGraph.length}/${fam.length}편`)
   check('  실제로 예전과 다른 글이 나온다', changed.length > 0, `${changed.length}편 바뀜`)
   const badVer = usedGraph.filter(
-    (a) => resolveRelatedMagazine(a, FAMILY).graphVersion !== GRAPH.graphVersion,
+    (a) => resolveAt(a, FAMILY).graphVersion !== GRAPH.graphVersion,
   )
   check('  계측에 실제 graphVersion 이 실린다', badVer.length === 0)
 
@@ -205,7 +227,7 @@ check('  열린 cluster 가 family 뿐이다', enabledClusters(FAMILY).join(',')
   const leaked = others.filter((a) => slugsOf(a, FAMILY).join(',') !== legacyOf(a).join(','))
   check(`  다른 cluster ${others.length}편은 예전 그대로다`, leaked.length === 0, `샌 글 ${leaked.length}`)
   const otherSource = others.filter(
-    (a) => resolveRelatedMagazine(a, FAMILY).reason !== 'CLUSTER_NOT_ENABLED',
+    (a) => resolveAt(a, FAMILY).reason !== 'CLUSTER_NOT_ENABLED',
   )
   check('  그 사유가 CLUSTER_NOT_ENABLED 다', otherSource.length === 0)
 }
@@ -217,10 +239,8 @@ const ALL_ON: NodeJS.ProcessEnv = {
   MGRAPH_GRAPH_ENABLED: '1',
   MGRAPH_GRAPH_CLUSTERS: [...new Set(published.map((a) => a.cluster))].join(','),
 }
-const publicSlugs = new Set(published.map((a) => a.slug))
-const unpublishedSlugs = new Set(
-  MAGAZINE_ARTICLES.filter((a) => !isPublicMagazineArticle(a)).map((a) => a.slug),
-)
+const publicSlugs = SNAP.publicSlugs
+const unpublishedSlugs = SNAP.unpublishedSlugs
 
 {
   let selfLinks = 0
@@ -229,7 +249,7 @@ const unpublishedSlugs = new Set(
   let overLimit = 0
   let graphUsed = 0
   for (const a of published) {
-    const r = resolveRelatedMagazine(a, ALL_ON)
+    const r = resolveAt(a, ALL_ON)
     if (r.source === 'GRAPH') graphUsed++
     const out = r.items.map((i) => i.article.slug)
     if (out.includes(a.slug)) selfLinks++
@@ -248,6 +268,81 @@ const unpublishedSlugs = new Set(
   )
 }
 
+// ── ④-T 🔴 공개 경계 — 판정 시각을 호출 단위에서 한 번 고정한다 (2026-10-13) ─────
+console.log('\n④-T 공개 경계 — 10:29:59 미공개 · 10:30:00 공개 · 한 계산 안에서는 한 시각')
+{
+  const kst = (ms: number) => new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ')
+  /**
+   * 경계 표본 — 실제 결과에 나오는 글 T 와 그 글을 링크하는 A (A 가 먼저 공개).
+   * 그래프 경로(ALL_ON)와 폴백 경로(OFF)를 따로 고른다. 실제 콘텐츠·실제 resolver 그대로다.
+   */
+  const pairFor = (env: NodeJS.ProcessEnv, wantSource: 'GRAPH' | 'FALLBACK') => {
+    for (const a of published) {
+      const r = resolveAt(a, env)
+      for (const it of r.items) {
+        if (wantSource === 'GRAPH' ? it.source !== 'GRAPH' : r.source !== 'FALLBACK') continue
+        if (resolvePublishAt(it.article) > resolvePublishAt(a) + 1000) return { a, t: it.article }
+      }
+    }
+    return null
+  }
+  const lanes = [['그래프', ALL_ON, pairFor(ALL_ON, 'GRAPH')], ['폴백', OFF, pairFor(OFF, 'FALLBACK')]] as const
+  for (const [lane, env, pair] of lanes) {
+    check(`  ${lane} 경로의 경계 표본이 있다 (실제 결과에 나오는 더 늦게 공개된 글)`, pair !== null)
+    if (!pair) continue
+    const p = resolvePublishAt(pair.t)
+    const before = snapshotAt(p - 1000) // 10:29:59
+    const at = snapshotAt(p) // 10:30:00
+    const outBefore = resolveAt(pair.a, env, p - 1000).items.map((i) => i.article.slug)
+    const outAt = resolveAt(pair.a, env, p).items.map((i) => i.article.slug)
+    check(`🔴 ${lane} · ${kst(p - 1000)} — 예약 글은 공개 목록에 없고 미공개 집합에 있다`,
+      !before.publicSlugs.has(pair.t.slug) && before.unpublishedSlugs.has(pair.t.slug), pair.t.slug)
+    check(`🔴 ${lane} · ${kst(p - 1000)} — 그 글은 연관 글에도 없다`, !outBefore.includes(pair.t.slug), outBefore.join(','))
+    check(`  ${lane} · ${kst(p)} — 같은 글이 공개 목록에 있고 미공개 집합에 없다`,
+      at.publicSlugs.has(pair.t.slug) && !at.unpublishedSlugs.has(pair.t.slug), pair.t.slug)
+    check(`  ${lane} · ${kst(p)} — 같은 글이 연관 글에 들어올 수 있다`, outAt.includes(pair.t.slug), outAt.join(','))
+    // 🔴 공개 목록에는 없는데 resolver 결과에는 있는 상태 0 — 경계 양쪽 · 그 시각에 공개된 모든 글
+    for (const [label, snap] of [['10:29:59', before], ['10:30:00', at]] as const) {
+      const leaks = snap.published.filter((x) => resolveAt(x, env, snap.now).items.some((i) => !snap.publicSlugs.has(i.article.slug)))
+      check(`🔴 ${lane} · ${label} — 공개 목록에 없는 글이 resolver 결과에 나온 경우 0`, leaks.length === 0, leaks.map((x) => x.slug).join(','))
+    }
+    /**
+     * 🔴 실제 시계가 계산 도중 경계를 넘어도 고정 now 결과는 같다.
+     *    시험 안에서만 Date.now 를 호출마다 경계 앞뒤로 번갈아 돌려준다 (제품·검사 본문의 시각 고정 방식이 아니다 —
+     *    "now 를 넘겼는데도 어딘가 Date.now 를 다시 읽는가" 를 드러내는 반례다). 끝나면 되돌린다.
+     */
+    const realNow = Date.now
+    let flip = 0
+    let flipped = { out: [] as string[], snapPublic: -1, snapUnpub: -1 }
+    try {
+      Date.now = () => (flip++ % 2 === 0 ? p - 1000 : p + 3600 * 1000)
+      const s2 = snapshotAt(p - 1000)
+      flipped = { out: resolveAt(pair.a, env, p - 1000).items.map((i) => i.article.slug), snapPublic: s2.publicSlugs.size, snapUnpub: s2.unpublishedSlugs.size }
+    } finally {
+      Date.now = realNow
+    }
+    check(`🔴 ${lane} · 실제 시계가 경계를 넘나들어도 고정 now(10:29:59) 결과는 그대로`,
+      flipped.out.join(',') === outBefore.join(',') && flipped.snapPublic === before.publicSlugs.size && flipped.snapUnpub === before.unpublishedSlugs.size,
+      `${flipped.out.join(',')} · ${outBefore.join(',')}`)
+  }
+  // 🔴 기본 호출(now 생략)은 지금 시각을 쓴다 — 화면 동작 그대로. 시계를 한 값에 고정해 결정적으로 본다
+  const realNow = Date.now
+  let sameDefault = true
+  try {
+    Date.now = () => CHECK_NOW
+    for (const a of published) {
+      for (const env of [OFF, ALL_ON]) {
+        if (JSON.stringify(resolveRelatedMagazine(a, env)) !== JSON.stringify(resolveAt(a, env, CHECK_NOW))) sameDefault = false
+      }
+      if (getRelatedMagazineArticles(a).map((x) => x.slug).join(',') !== legacyAt(a, CHECK_NOW).join(',')) sameDefault = false
+    }
+    if (getAllMagazineArticles().map((x) => x.slug).join(',') !== SNAP.published.map((x) => x.slug).join(',')) sameDefault = false
+  } finally {
+    Date.now = realNow
+  }
+  check('  now 를 생략한 기본 호출 = 지금 시각을 넘긴 호출 (결과·순서 그대로)', sameDefault)
+}
+
 // ── ④-B 🔴 보충 — 그래프를 켰다고 연관 글이 줄면 안 된다 ──
 console.log('\n④-B 부족분 보충')
 
@@ -261,7 +356,7 @@ console.log('\n④-B 부족분 보충')
 
   for (const a of published) {
     const legacy = legacyOf(a)
-    const r = resolveRelatedMagazine(a, ALL_ON)
+    const r = resolveAt(a, ALL_ON)
     const g = r.items.filter((i) => i.source === 'GRAPH')
     const f = r.items.filter((i) => i.source === 'FALLBACK_FILL')
     if (f.length > 0) filled++
@@ -298,14 +393,14 @@ console.log('\n④-B 부족분 보충')
   /** 🔴 보충이 자기 자신·중복을 들여보내지 않는가 */
   let selfOrDup = 0
   for (const a of published) {
-    const out = resolveRelatedMagazine(a, ALL_ON).items.map((i) => i.article.slug)
+    const out = resolveAt(a, ALL_ON).items.map((i) => i.article.slug)
     if (out.includes(a.slug) || new Set(out).size !== out.length) selfOrDup++
   }
   check('  보충 뒤에도 자기 링크·중복 0', selfOrDup === 0)
 
   /** 🔴 **죽은 보충을 만들지 않는다** — 보충을 끄면 13편이 다시 줄어야 한다 */
   const wouldShrink = published.filter((a) => {
-    const r = resolveRelatedMagazine(a, ALL_ON)
+    const r = resolveAt(a, ALL_ON)
     const g = r.items.filter((i) => i.source === 'GRAPH').length
     return r.source === 'GRAPH' && g < legacyOf(a).length
   })
@@ -343,7 +438,7 @@ console.log('\n④-C 추천 4슬롯 (직접 3 + 발견 1)')
   let discNotLast = 0
 
   for (const a of published) {
-    const r = resolveRelatedMagazine(a, ALL_ON)
+    const r = resolveAt(a, ALL_ON)
     const out = r.items
     if (out.length === MAX_TOTAL) total4++
 
@@ -389,10 +484,10 @@ console.log('\n④-C 추천 4슬롯 (직접 3 + 발견 1)')
 
   /** 🔴 **발견이 없으면 4번째를 억지로 채우지 않는다** */
   const noDisc = published.filter(
-    (a) => !resolveRelatedMagazine(a, ALL_ON).items.some((i) => i.slot === DISCOVERY_SLOT),
+    (a) => !resolveAt(a, ALL_ON).items.some((i) => i.slot === DISCOVERY_SLOT),
   )
   const forcedFourth = noDisc.filter(
-    (a) => resolveRelatedMagazine(a, ALL_ON).items.length > MAX_DIRECT,
+    (a) => resolveAt(a, ALL_ON).items.length > MAX_DIRECT,
   )
   check(
     '🔴 발견 관계가 없으면 4번째를 만들지 않는다',
@@ -700,7 +795,7 @@ check(
 )
 {
   const killed = published.filter(
-    (a) => resolveRelatedMagazine(a, { ...ALL_ON, MGRAPH_GRAPH_KILL: '1' }).source !== 'FALLBACK',
+    (a) => resolveAt(a, { ...ALL_ON, MGRAPH_GRAPH_KILL: '1' }).source !== 'FALLBACK',
   )
   check('  KILL=1 이면 전부 폴백이다', killed.length === 0)
   const same = published.every(
@@ -721,7 +816,7 @@ check(
   let out: string[] = []
   let reason: string | null = null
   try {
-    const r = resolveRelatedMagazine(published[0], hostileEnv)
+    const r = resolveAt(published[0], hostileEnv)
     out = r.items.map((i) => i.article.slug)
     reason = r.reason
   } catch {
@@ -753,15 +848,15 @@ console.log('\n⑥ 한 글이 막혀도 나머지는 멀쩡하다')
 {
   // 관계가 하나도 없는 글(매핑 없음)이 섞여 있어도 나머지 글은 그래프를 쓴다.
   const noMapping = published.filter(
-    (a) => resolveRelatedMagazine(a, ALL_ON).reason === 'NO_MAPPING',
+    (a) => resolveAt(a, ALL_ON).reason === 'NO_MAPPING',
   )
-  const stillGraph = published.filter((a) => resolveRelatedMagazine(a, ALL_ON).source === 'GRAPH')
+  const stillGraph = published.filter((a) => resolveAt(a, ALL_ON).source === 'GRAPH')
   check(
     '매핑 없는 글이 다른 글의 그래프를 막지 않는다',
     stillGraph.length > 0,
     `매핑없음 ${noMapping.length}편 · 그래프 ${stillGraph.length}편`,
   )
-  const emptyRender = published.filter((a) => resolveRelatedMagazine(a, ALL_ON).items.length === 0)
+  const emptyRender = published.filter((a) => resolveAt(a, ALL_ON).items.length === 0)
   check(
     '  연관 글이 0건인 글은 예전에도 0건이던 글뿐이다',
     emptyRender.every((a) => legacyOf(a).length === 0),
@@ -769,7 +864,7 @@ console.log('\n⑥ 한 글이 막혀도 나머지는 멀쩡하다')
   // 예약 공개는 그래프와 무관하게 관문이 판정한다.
   check(
     '  예약·차단 글은 그래프를 켜든 끄든 목록에 없다',
-    getAllMagazineArticles().every((a) => !unpublishedSlugs.has(a.slug)),
+    getAllMagazineArticles(CHECK_NOW).every((a) => !unpublishedSlugs.has(a.slug)),
   )
 }
 
@@ -1224,7 +1319,7 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
    *    원래부터 폴백인 글을 놓고 "롤백이 됐다" 고 착각할 수 있다.
    */
   const graphBacked = published.find(
-    (a) => resolveRelatedMagazine(a, ALL_ON).items.some((i) => i.source === 'GRAPH'),
+    (a) => resolveAt(a, ALL_ON).items.some((i) => i.source === 'GRAPH'),
   )
   check('시험에 쓸 그래프 기반 글이 있다', graphBacked !== undefined, graphBacked?.slug ?? '(없음)')
   const graphBackedSlug = graphBacked?.slug ?? published[0].slug
@@ -1263,8 +1358,10 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
       [
         `import { getAllMagazineArticles } from '../src/lib/magazine'`,
         `import { resolveRelatedMagazine } from '../src/lib/magazine-graph'`,
-        `const a = getAllMagazineArticles().find((x) => x.slug === '${graphBackedSlug}')!`,
-        `const r = resolveRelatedMagazine(a)`,
+        // 🔴 하위 프로세스도 부모와 같은 판정 시각 (CHECK_NOW)
+        `const NOW = ${CHECK_NOW}`,
+        `const a = getAllMagazineArticles(NOW).find((x) => x.slug === '${graphBackedSlug}')!`,
+        `const r = resolveRelatedMagazine(a, process.env, NOW)`,
         `console.log(JSON.stringify({ source: r.source, reason: r.reason, graphVersion: r.items[0]?.graphVersion ?? 'none', items: r.items.length }))`,
       ].join('\n'),
       'utf8',
