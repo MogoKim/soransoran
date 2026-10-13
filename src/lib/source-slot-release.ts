@@ -99,6 +99,18 @@ export type SourceObservation = { observedAt: string; views: number | null; comm
 export const SOURCE_STATS_METHOD = 'leave-one-out-spread-v1'
 
 /**
+ * 🔴 **날짜 단위 정규화 판 — 정확 시각 판과 다른 이름이다** (2026-10-13 Batch D1 · 마스터 결정).
+ *    게시 날짜만 아는 원천은 관측 나이 구간을 정할 수 없다(구간이 여러 칸에 걸친다). 그래서 정확 시각 표본과 섞지 않고
+ *    **같은 원천 · 같은 KST 게시 날짜 · 같은 목록 관측 회차(observedAt)** 의 날짜만 아는 글끼리만 견준다 —
+ *    같은 회차에 같은 날짜 라벨로 보였다는 것은 "관측 나이 구간이 정확히 같다" 는 뜻이다(시각을 지어내지 않는다).
+ *    후보 자신 제외 · 서로 다른 값 2개 이상(`relativePosition`)은 정확 시각 판과 같다.
+ *    🔴 정확 시각 원천의 스냅샷이 이 판이면 · 날짜 원천의 스냅샷이 정확 시각 판이면 판정은 RESPONSE_UNNORMALIZED 다.
+ */
+export const SOURCE_STATS_METHOD_DAY = 'same-day-same-run-leave-one-out-v1'
+/** 🔴 날짜 단위 판의 `bucket` 라벨 — 관측 나이 구간이 아니다(구간 라벨과 섞이지 않게 따로 둔다) */
+export const SAME_DAY_RUN_BUCKET = 'same-day-run'
+
+/**
  * 🔴 **원천 상대 반응 — 적재 시점 스냅샷** (B-design §7). 같은 원천 · 같은 관측 나이 구간의 최근 표본 안에서
  *    이 글의 반응이 몇 백분위인가. 표본이 없으면 백분위도 없다(null) — 지어내지 않는다.
  */
@@ -107,8 +119,11 @@ export type SourceStatsSnapshot = {
   /** 🔴 정규화 방법 판 — `SOURCE_STATS_METHOD` 가 아니면 판정이 정규화되지 않은 것으로 읽는다 */
   method: string
   sourceKey: string
-  /** 관측 나이 구간 라벨(`<3h` · `3-6h` …) */
+  /** 관측 나이 구간 라벨(`<3h` · `3-6h` …) · 🔴 날짜 단위 판이면 `SAME_DAY_RUN_BUCKET` */
   bucket: string
+  /** 🔴 날짜 단위 판에서만 — 견준 KST 게시 날짜(`YYYY-MM-DD`) · 같은 목록 관측 회차 시각 */
+  postedDay?: string
+  observedAt?: string
   /** 비교한 표본 수 — 글 기준 · 🔴 후보 자신은 빼고 센다 */
   n: number
   commentsPct: number | null
@@ -322,36 +337,23 @@ export type ListObservation = {
   comments: number | null
 }
 
-/**
- * 🔴 **관측 시점 나이가 걸치는 관측 나이 구간들(어린 쪽부터)** — 정확한 게시 시각이면 하나다.
- *    날짜만 알면 관측 나이도 구간이다: `[관측 − min(다음 날 00:00, 관측), 관측 − 그날 00:00]`.
- *    늙은 끝이 상한 밖이거나 시각을 모르면 null — 어느 표본과 견줄지 정할 수 없다.
- */
-export function observationBucketsOf(postedAt: unknown, postedWindow: unknown, observedAt: unknown): string[] | null {
-  const observed = strictIso(observedAt)
-  if (!(observed instanceof Date)) return null
-  const posted = strictIso(postedAt)
-  const w = posted === null ? postedWindowOf(postedWindow) : null
-  if (!(posted instanceof Date) && w === null) return null
-  const oldest = posted instanceof Date ? posted.getTime() : Date.parse(w!.from)
-  const youngest = posted instanceof Date ? posted.getTime() : Math.min(Date.parse(w!.to), observed.getTime())
-  const hi = observationBucketOf((observed.getTime() - oldest) / HOUR_MS)
-  const lo = observationBucketOf(Math.max(0, observed.getTime() - youngest) / HOUR_MS)
-  if (hi === null || lo === null) return null
-  const labels = [...BUCKET_LABELS]
-  return labels.slice(labels.indexOf(lo), labels.indexOf(hi) + 1)
+/** 🔴 하루 구간 → 그 KST 날짜(`YYYY-MM-DD`). 구간 모양이 아니면 null */
+export function kstDayOfWindow(w: unknown): string | null {
+  const v = postedWindowOf(w)
+  return v === null ? null : new Date(Date.parse(v.from) + KST_MS).toISOString().slice(0, 10)
 }
 
 /**
- * 🔴 **스냅샷을 만든다.** 비교 모집단 = 같은 원천 · 관측 나이 같은 구간 · 창 `[at − 72h, at]` 안의 관측,
- *    **글마다 가장 최근 하나**(많이 보인 글이 표본을 독차지하지 않게). 창 길이도 나이 상한과 같은 72h 다.
- *    이 글의 관측 나이를 모르면(게시 시각 모름) 구간을 정할 수 없다 → null.
+ * 🔴 **스냅샷을 만든다 — 판이 둘이다. 게시 시각의 정밀도가 판을 고른다.**
  *
- * 🔴 **날짜만 아는 게시 시각** (2026-10-13 Batch D1 · canon §2.1 fail-closed):
- *    · 후보의 관측 나이가 구간 여러 개에 걸치면 **구간마다** 자리를 재고 **가장 낮은 자리**를 낸다 — 불확실성으로
- *      과대평가하지 않는다. 한 구간이라도 자리를 못 재면(한 점 · 빈 표본) 그 구간을 낸다 → 판정이 모름으로 읽는다.
- *    · 표본 쪽 날짜만 아는 줄은 관측 나이가 **구간 하나 안에 다 들어올 때만** 그 구간 표본이 된다.
- *    · 새 가중치 · 새 구간 경계 · 새 최소 표본 수가 없다 — 기존 구간과 기존 백분위를 그대로 쓴다.
+ *    ① 정확한 게시 시각(`SOURCE_STATS_METHOD` · 기존 계약 그대로) — 비교 모집단 = 같은 원천 · 관측 나이 같은 구간 ·
+ *       창 `[at − 72h, at]` 안의 관측, **글마다 가장 최근 하나**. 🔴 표본도 정확한 게시 시각 줄만이다 —
+ *       날짜만 아는 줄은 관측 나이 구간이 없다(앞판은 그날 00:00 으로 지어 넣어 24~72h 구간을 채웠다).
+ *    ② 날짜만 아는 게시 시각(`SOURCE_STATS_METHOD_DAY` · 2026-10-13 마스터 결정) — 비교 모집단 = 같은 원천 ·
+ *       **같은 KST 게시 날짜 · 같은 목록 관측 회차**(관측 시각이 같다)의 날짜만 아는 줄. 다른 날짜 · 다른 회차 ·
+ *       다른 원천 · 정확 시각 줄을 섞지 않는다. 원시 수를 원천 사이에서 견주지 않는다.
+ *    두 판 모두 후보 자신을 빼고, 서로 다른 값이 둘 미만이면 자리를 말하지 않는다(→ RESPONSE_UNNORMALIZED).
+ *    관측 나이를 모르면(게시 시각 · 날짜 모름 · 상한 밖) null.
  */
 export function sourceStatsSnapshot(input: {
   sourceKey: string
@@ -364,42 +366,64 @@ export function sourceStatsSnapshot(input: {
   sample: readonly ListObservation[]
   at: Date
 }): SourceStatsSnapshot | null {
-  const spanned = observationBucketsOf(input.postedAt, input.postedWindow ?? null, input.observedAt)
-  if (spanned === null) return null
+  const observed = strictIso(input.observedAt)
+  if (!(observed instanceof Date)) return null
+  const posted = strictIso(input.postedAt)
   const toMs = input.at.getTime()
   const fromMs = toMs - SOURCE_AGE_LIMIT_HOURS * HOUR_MS
+  const inWindow = (ms: number): boolean => ms >= fromMs && ms <= toMs
+  const position = (rows: readonly ListObservation[]) => ({
+    n: rows.length,
+    commentsPct: relativePosition(input.comments, rows.map((r) => r.comments).filter((x): x is number => x !== null)),
+    viewsPct: relativePosition(input.views, rows.map((r) => r.views).filter((x): x is number => x !== null)),
+  })
+
+  if (posted === null) {
+    // ② 날짜 단위 판
+    const day = kstDayOfWindow(input.postedWindow ?? null)
+    if (day === null) return null
+    // 🔴 그날 00:00 기준(늙은 끝)으로도 관측 나이가 상한 밖이면 견줄 대상이 아니다
+    if (observationBucketOf((observed.getTime() - Date.parse(postedWindowOf(input.postedWindow)!.from)) / HOUR_MS) === null) return null
+    if (!inWindow(observed.getTime())) return null
+    const at = observed.toISOString()
+    const rows = new Map<string, ListObservation>()
+    for (const o of input.sample) {
+      if (o.sourceKey !== input.sourceKey || o.articleKey === input.articleKey) continue
+      if (o.postedAt !== null && o.postedAt !== undefined) continue
+      if (kstDayOfWindow(o.postedWindow ?? null) !== day) continue
+      // 🔴 같은 회차 — 관측 시각이 정확히 같다(같은 글 · 같은 회차는 읽기 단계에서 하나다)
+      if (strictIso(o.observedAt) === null || o.observedAt !== at) continue
+      rows.set(o.articleKey, o)
+    }
+    return {
+      basis: 'list-artifacts', method: SOURCE_STATS_METHOD_DAY, sourceKey: input.sourceKey, bucket: SAME_DAY_RUN_BUCKET,
+      postedDay: day, observedAt: at, ...position([...rows.values()]),
+      windowFrom: new Date(fromMs).toISOString(), windowTo: input.at.toISOString(),
+    }
+  }
+
+  // ① 정확 시각 판 — 기존 계약
+  if (posted === 'corrupt') return null
+  const bucket = observationBucketOf((observed.getTime() - posted.getTime()) / HOUR_MS)
+  if (bucket === null) return null
   const latest = new Map<string, ListObservation>()
-  const bucketOfRow = new Map<string, string>()
   for (const o of input.sample) {
     if (o.sourceKey !== input.sourceKey) continue
     const om = strictIso(o.observedAt)
-    if (!(om instanceof Date)) continue
-    if (om.getTime() < fromMs || om.getTime() > toMs) continue
-    // 🔴 표본 줄도 관측 나이 구간이 **하나로 정해질 때만** 표본이다
-    const b = observationBucketsOf(o.postedAt, o.postedWindow ?? null, o.observedAt)
-    if (b === null || b.length !== 1 || !spanned.includes(b[0]!)) continue
+    const pm = strictIso(o.postedAt)
+    // 🔴 날짜만 아는 줄(`postedAt` null)은 관측 나이 구간 표본이 아니다
+    if (!(om instanceof Date) || !(pm instanceof Date)) continue
+    if (!inWindow(om.getTime())) continue
+    if (observationBucketOf((om.getTime() - pm.getTime()) / HOUR_MS) !== bucket) continue
     // 🔴 후보 자신은 비교 표본이 아니다 — 자기와 비교하면 표본 1건이 "중간(0.5)" 을 만든다(재현)
     if (o.articleKey === input.articleKey) continue
-    const key = `${b[0]}|${o.articleKey}`
-    const prev = latest.get(key)
-    if (prev === undefined || prev.observedAt < o.observedAt) { latest.set(key, o); bucketOfRow.set(key, b[0]!) }
+    const prev = latest.get(o.articleKey)
+    if (prev === undefined || prev.observedAt < o.observedAt) latest.set(o.articleKey, o)
   }
-  const snaps: SourceStatsSnapshot[] = spanned.map((bucket) => {
-    const rows = [...latest.entries()].filter(([k]) => bucketOfRow.get(k) === bucket).map(([, o]) => o)
-    const comments = rows.map((r) => r.comments).filter((x): x is number => x !== null)
-    const views = rows.map((r) => r.views).filter((x): x is number => x !== null)
-    return {
-      basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: input.sourceKey, bucket, n: rows.length,
-      commentsPct: relativePosition(input.comments, comments),
-      viewsPct: relativePosition(input.views, views),
-      windowFrom: new Date(fromMs).toISOString(), windowTo: input.at.toISOString(),
-    }
-  })
-  // 🔴 자리를 못 잰 구간이 하나라도 있으면 가장 나쁜 경우를 말할 수 없다 — 그 구간을 낸다(판정: 모름)
-  const unnormalized = snaps.find((x) => x.n === 0 || (x.commentsPct === null && x.viewsPct === null))
-  if (unnormalized !== undefined) return unnormalized
-  // 🔴 가장 낮은 자리 — 정본 순위(`compareReleaseRank`)에서 가장 뒤에 서는 구간(모르는 성분은 뒤)
-  return snaps.reduce((worst, x) => (desc(x.commentsPct, worst.commentsPct) || desc(x.viewsPct, worst.viewsPct)) > 0 ? x : worst)
+  return {
+    basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: input.sourceKey, bucket, ...position([...latest.values()]),
+    windowFrom: new Date(fromMs).toISOString(), windowTo: input.at.toISOString(),
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -513,7 +537,16 @@ export function parseEvidence(rec: unknown): EvidenceRead {
     if (s.basis !== 'list-artifacts') return bad('sourceStats.basis:mismatch')
     if (!(s.method === undefined || typeof s.method === 'string')) return bad('sourceStats.method:type')
     if (typeof s.sourceKey !== 'string' || s.sourceKey !== r.sourceKey) return bad('sourceStats.sourceKey:cross-source')
-    if (typeof s.bucket !== 'string' || !BUCKET_LABELS.has(s.bucket)) return bad('sourceStats.bucket:unknown')
+    if (s.method === SOURCE_STATS_METHOD_DAY) {
+      // 🔴 날짜 단위 판 — 라벨 · 게시 날짜 · 관측 회차가 다 있어야 하고 기록의 하루 구간과 같은 날이어야 한다
+      if (s.bucket !== SAME_DAY_RUN_BUCKET) return bad('sourceStats.bucket:unknown')
+      if (typeof s.postedDay !== 'string' || postedWindowOfKstDay(s.postedDay) === null) return bad('sourceStats.postedDay:corrupt')
+      if (canonicalIso(s.observedAt) === null) return bad('sourceStats.observedAt:corrupt')
+      if (r.postedWindow !== undefined && r.postedWindow !== null && kstDayOfWindow(r.postedWindow) !== s.postedDay) return bad('sourceStats.postedDay:cross-day')
+    } else {
+      if (typeof s.bucket !== 'string' || !BUCKET_LABELS.has(s.bucket)) return bad('sourceStats.bucket:unknown')
+      if (s.postedDay !== undefined || s.observedAt !== undefined) return bad('sourceStats.method:day-fields')
+    }
     if (!(typeof s.n === 'number' && Number.isSafeInteger(s.n) && s.n >= 0)) return bad('sourceStats.n:not-count')
     if (!isPctOrNull(s.commentsPct)) return bad('sourceStats.commentsPct:out-of-range')
     if (!isPctOrNull(s.viewsPct)) return bad('sourceStats.viewsPct:out-of-range')
@@ -730,8 +763,12 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   rank.commentsPct = stats?.commentsPct ?? null
   rank.viewsPct = stats?.viewsPct ?? null
   rank.velocity = velocityOf(ev.observations)
-  // 🔴 지금 정규화 판(`SOURCE_STATS_METHOD`)이 아닌 스냅샷은 자기 포함 · 한 점 표본의 0.5 를 담았을 수 있다 — 믿지 않는다
-  if (stats === null || stats.method !== SOURCE_STATS_METHOD || stats.n === 0
+  // 🔴 지금 정규화 판이 아닌 스냅샷은 자기 포함 · 한 점 표본의 0.5 를 담았을 수 있다 — 믿지 않는다.
+  //    🔴 판은 게시 시각의 정밀도가 정한다 — 정확 시각 원천은 관측 나이 구간 판 · 날짜만 아는 원천은 같은 날짜 · 같은 회차 판.
+  //       날짜 판은 반응을 본 그 회차(`response.observedAt`)의 표본이어야 한다 — 다른 회차 표본으로 견주지 않는다
+  const expectedMethod = exact instanceof Date ? SOURCE_STATS_METHOD : SOURCE_STATS_METHOD_DAY
+  if (stats === null || stats.method !== expectedMethod || stats.n === 0
+    || (expectedMethod === SOURCE_STATS_METHOD_DAY && (stats.observedAt !== resp.observedAt || stats.postedDay !== kstDayOfWindow(window)))
     || (stats.commentsPct === null && stats.viewsPct === null)) {
     return out('unknown', 'RESPONSE_UNNORMALIZED')
   }

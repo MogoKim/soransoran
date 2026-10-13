@@ -7,7 +7,8 @@
  * 정본: `docs/operations/2026-09-21-d100-goal-canon.md` §2.1(날짜 정밀도) · §2.3(원천 순위 하나).
  *   ① 날짜만 보이는 라벨을 00:00 으로 만들지 않는다 — 수집 행 · 목록 관측 · 증거 기록 모두
  *   ② 판정은 하루 구간 **전체**로 한다(fail-closed) — 늙은 끝 통과만 eligible · 사이는 unknown · 어린 끝도 늙으면 만료
- *   ③ 원천 상대 반응은 구간이 걸친 관측 나이 구간 중 **가장 낮은 자리** — 불확실성으로 과대평가하지 않는다
+ *   ③ 원천 상대 반응 — 정확 시각은 관측 나이 구간 판(기존) · 날짜만 알면 **같은 원천 · 같은 날짜 · 같은 목록 회차** 판
+ *      (별도 method). 날짜 · 회차 · 원천 · 정밀도가 다르면 섞지 않는다 · 한 점 표본은 모름
  *   ④ 정확한 게시 시각의 판정 · 스냅샷은 앞판과 **같다**(무작위 대조)
  *   ⑤ 수집 상세 선별: **같은 점수 안에서만** 최신이 먼저 — 점수(품질)를 이기지 않는다(무작위 대조)
  *   ⑥ 레몬테라스 1p 제외 · 2~16p · 회차 상세 jjong 10 + humor 1 · 요청량 · 회차 · 페이지 수 불변
@@ -19,8 +20,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  buildSourceEvidence, compareReleaseRank, judgeSlotRelease, observationBucketOf, observationBucketsOf, parseEvidence,
+  buildSourceEvidence, compareReleaseRank, judgeSlotRelease, observationBucketOf, parseEvidence,
   postedLowerBoundOf, postedWindowOfKstDay, relativePosition, sourceStatsSnapshot, EXPIRING_REASONS, SOURCE_STATS_METHOD,
+  SOURCE_STATS_METHOD_DAY, SAME_DAY_RUN_BUCKET,
   type ListObservation, type SlotReleaseVerdict, type SourceEvidenceRecord, type SourceStatsSnapshot,
 } from '../src/lib/source-slot-release'
 import { compareSupplyRank, preGenerationRelease, type SupplyRankKey } from '../src/lib/supply-workset'
@@ -59,8 +61,8 @@ const dayEvidence = (day: string, listed: Date, captured: Date, stats: Partial<S
     response: { views: 100, comments: 5, listRank: 3, listPage: 2, observedAt: listed.toISOString() },
     observations: [],
     sourceStats: {
-      basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: 'navercafe:fixture', bucket: '24-72h', n: 9,
-      commentsPct: 0.6, viewsPct: 0.5,
+      basis: 'list-artifacts', method: SOURCE_STATS_METHOD_DAY, sourceKey: 'navercafe:fixture', bucket: SAME_DAY_RUN_BUCKET, n: 9,
+      postedDay: day, observedAt: listed.toISOString(), commentsPct: 0.6, viewsPct: 0.5,
       windowFrom: new Date(captured.getTime() - 72 * H).toISOString(), windowTo: captured.toISOString(), ...stats,
     },
     participationDriver: '검사용',
@@ -166,53 +168,76 @@ console.log('\n② 판정은 하루 구간 전체로 — fail-closed')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 원천 상대 반응 — 걸친 구간 중 가장 낮은 자리')
+console.log('\n③ 원천 상대 반응 — 정확 시각은 관측 나이 구간 판 · 날짜만 알면 같은 날짜 · 같은 회차 판')
 // ─────────────────────────────────────────────────────────
 {
   const site = 'navercafe:fixture'
   const at = new Date('2026-10-12T23:00:00.000Z')
-  const observedAt = '2026-10-12T22:30:00.000Z' // KST 10-13 07:30
-  // 후보: 10-12(KST) 날짜만 — 관측 나이 [7.5h, 31.5h] → 6-12h · 12-24h · 24-72h
-  const spanned = observationBucketsOf(null, postedWindowOfKstDay('2026-10-12'), observedAt)
-  check('구간 셋에 걸친다', JSON.stringify(spanned) === JSON.stringify(['6-12h', '12-24h', '24-72h']), JSON.stringify(spanned))
-  check('정확한 시각은 구간 하나', JSON.stringify(observationBucketsOf('2026-10-12T20:00:00.000Z', null, observedAt)) === '["<3h"]')
-  const mk = (id: string, ageH: number, comments: number): ListObservation => ({
-    sourceKey: site, articleKey: `${site}::${id}`, postedAt: new Date(Date.parse(observedAt) - ageH * H).toISOString(),
-    observedAt, views: comments * 10, comments,
+  const run1 = '2026-10-12T22:30:00.000Z' // KST 10-13 07:30
+  const run0 = '2026-10-12T19:30:00.000Z' // KST 10-13 04:30 — 다른 회차
+  const w12 = postedWindowOfKstDay('2026-10-12')
+  const w11 = postedWindowOfKstDay('2026-10-11')
+  const day = (id: string, w: typeof w12, observedAt: string, comments: number, key = site): ListObservation => ({
+    sourceKey: key, articleKey: `${key}::${id}`, postedAt: null, postedWindow: w, observedAt, views: comments * 10, comments,
   })
-  // 6-12h 표본은 댓글이 적고(후보가 높은 자리), 24-72h 표본은 많다(후보가 낮은 자리)
-  const sample: ListObservation[] = [
-    mk('a', 8, 1), mk('b', 9, 2), mk('c', 10, 3),
-    mk('d', 14, 3), mk('e', 16, 6), mk('f', 20, 9),
-    mk('g', 30, 10), mk('h', 40, 20), mk('i', 50, 30),
+  const exactRow = (id: string, ageH: number, comments: number): ListObservation => ({
+    sourceKey: site, articleKey: `${site}::${id}`, postedAt: new Date(Date.parse(run1) - ageH * H).toISOString(),
+    observedAt: run1, views: comments * 10, comments,
+  })
+  const peers = [day('p1', w12, run1, 1), day('p2', w12, run1, 3), day('p3', w12, run1, 9)]
+  // 🔴 섞이면 안 되는 줄 — 다른 날짜 · 다른 회차 · 다른 원천 · 정확 시각 · 후보 자신
+  const intruders = [
+    day('x1', w11, run1, 100), day('x2', w12, run0, 100), day('x3', w12, run1, 100, 'navercafe:other'),
+    exactRow('x4', 8, 100), day('cand', w12, run1, 100),
   ]
-  const snap = sourceStatsSnapshot({
-    sourceKey: site, articleKey: `${site}::cand`, postedAt: null, postedWindow: postedWindowOfKstDay('2026-10-12'),
-    observedAt, comments: 5, views: 50, sample, at,
+  const snapOf = (sample: ListObservation[], comments = 5) => sourceStatsSnapshot({
+    sourceKey: site, articleKey: `${site}::cand`, postedAt: null, postedWindow: w12, observedAt: run1, comments, views: comments * 10, sample, at,
   })
-  check('🔴 가장 낮은 자리 = 24-72h 구간(늙은 표본과 견준 자리)', snap?.bucket === '24-72h' && snap.commentsPct === 0, JSON.stringify(snap))
-  const exactSnap = sourceStatsSnapshot({
-    sourceKey: site, articleKey: `${site}::cand`, postedAt: new Date(Date.parse(observedAt) - 9.5 * H).toISOString(),
-    observedAt, comments: 5, views: 50, sample, at,
+  const s1 = snapOf([...peers, ...intruders])
+  check('🔴 날짜만 아는 후보는 날짜 판(별도 method) · 같은 날짜 · 같은 회차 표본 3', s1?.method === SOURCE_STATS_METHOD_DAY && s1.bucket === SAME_DAY_RUN_BUCKET
+    && s1.n === 3 && s1.postedDay === '2026-10-12' && s1.observedAt === run1, JSON.stringify(s1))
+  check('🔴 다른 날짜 · 회차 · 원천 · 정확 시각 · 자기 자신이 섞이지 않는다(섞이면 자리가 내려간다)', s1?.commentsPct === 0.6667, String(s1?.commentsPct))
+  check('표본 없음 → n 0(모름)', snapOf(intruders)?.n === 0)
+  const onePoint = snapOf([day('q1', w12, run1, 4), day('q2', w12, run1, 4)])
+  check('🔴 표본이 한 점이면 자리가 없다(RESPONSE_UNNORMALIZED 로 읽힌다)', onePoint?.n === 2 && onePoint.commentsPct === null && onePoint.viewsPct === null, JSON.stringify(onePoint))
+  // 🔴 늙은 끝이 관측 때 이미 상한 밖 — 견줄 대상이 아니다
+  const old = sourceStatsSnapshot({
+    sourceKey: site, articleKey: `${site}::cand`, postedAt: null, postedWindow: postedWindowOfKstDay('2026-10-09'), observedAt: run1, comments: 5, views: 50,
+    sample: [day('o1', postedWindowOfKstDay('2026-10-09'), run1, 1), day('o2', postedWindowOfKstDay('2026-10-09'), run1, 9)], at,
   })
-  check('대조: 정확히 9.5h 면 6-12h 에서 높은 자리', exactSnap?.bucket === '6-12h' && exactSnap.commentsPct === 1)
-  // 걸친 구간 하나가 한 점이면 가장 나쁜 경우를 말할 수 없다 → 그 구간(판정: 모름)
-  const thin = sample.filter((o) => !['d', 'e', 'f'].includes(o.articleKey.split('::')[1]!))
-  const un = sourceStatsSnapshot({
-    sourceKey: site, articleKey: `${site}::cand`, postedAt: null, postedWindow: postedWindowOfKstDay('2026-10-12'),
-    observedAt, comments: 5, views: 50, sample: thin, at,
+  check('🔴 그날 00:00 기준 관측 나이가 72h 밖이면 스냅샷 없음', old === null, JSON.stringify(old))
+
+  // 정확 시각 후보 — 기존 판 · 날짜만 아는 줄은 표본이 아니다
+  const ex = sourceStatsSnapshot({
+    sourceKey: site, articleKey: `${site}::cand`, postedAt: new Date(Date.parse(run1) - 9 * H).toISOString(), observedAt: run1, comments: 5, views: 50,
+    sample: [exactRow('e1', 8, 1), exactRow('e2', 10, 9), ...peers, day('z', w12, run1, 2)], at,
   })
-  check('🔴 자리를 못 잰 구간이 있으면 그 구간을 낸다(n=0 → RESPONSE_UNNORMALIZED)', un?.bucket === '12-24h' && un.n === 0, JSON.stringify(un))
-  // 표본 쪽 날짜만 아는 줄은 관측 나이가 한 구간에 다 들어올 때만 표본이다
-  const dayRow: ListObservation = {
-    sourceKey: site, articleKey: `${site}::z`, postedAt: null, postedWindow: postedWindowOfKstDay('2026-10-12'),
-    observedAt, views: 9999, comments: 999,
+  check('🔴 정확 시각 후보는 기존 판 · 같은 관측 나이 구간 정확 시각 줄만(날짜 줄 제외)', ex?.method === SOURCE_STATS_METHOD && ex.bucket === '6-12h' && ex.n === 2
+    && ex.commentsPct === 0.5 && ex.postedDay === undefined, JSON.stringify(ex))
+
+  // 판정 — 판이 정밀도와 맞아야 한다
+  const listed = new Date(run1)
+  const captured = new Date('2026-10-12T22:31:00.000Z')
+  const slot = new Date('2026-10-13T00:00:00.000Z')
+  const dayEv = dayEvidence('2026-10-12', listed, captured)
+  check('날짜 판 스냅샷 + 하루 구간 → eligible', judge(dayEv, slot, captured).verdict === 'eligible', judge(dayEv, slot, captured).reasons.join())
+  const reasonOf = (patch: Partial<SourceStatsSnapshot>): string => {
+    const ev = { ...dayEv, sourceStats: { ...dayEv.sourceStats!, ...patch } }
+    const v = judge(ev, slot, captured)
+    return `${v.verdict}:${v.reasons.join()}${v.issue === null ? '' : `@${v.issue}`}`
   }
-  const withDay = sourceStatsSnapshot({
-    sourceKey: site, articleKey: `${site}::cand`, postedAt: new Date(Date.parse(observedAt) - 9.5 * H).toISOString(),
-    observedAt, comments: 5, views: 50, sample: [...sample, dayRow], at,
-  })
-  check('🔴 구간이 여럿에 걸친 표본 줄은 어느 구간 표본도 아니다', withDay?.n === 3 && withDay.commentsPct === 1, JSON.stringify(withDay))
+  check('🔴 날짜 원천에 정확 시각 판 스냅샷 → RESPONSE_UNNORMALIZED',
+    reasonOf({ method: SOURCE_STATS_METHOD, bucket: '24-72h', postedDay: undefined, observedAt: undefined }) === 'unknown:RESPONSE_UNNORMALIZED')
+  check('🔴 다른 회차 표본 → RESPONSE_UNNORMALIZED', reasonOf({ observedAt: run0 }) === 'unknown:RESPONSE_UNNORMALIZED', reasonOf({ observedAt: run0 }))
+  check('🔴 다른 날짜 표본 → 기록 손상(cross-day)', reasonOf({ postedDay: '2026-10-11' }) === 'unknown:EVIDENCE_INVALID@sourceStats.postedDay:cross-day')
+  check('🔴 한 점 표본 → RESPONSE_UNNORMALIZED', reasonOf({ commentsPct: null, viewsPct: null }) === 'unknown:RESPONSE_UNNORMALIZED')
+  const exactEv = { ...dayEv, postedAt: '2026-10-12T13:00:00.000Z', postedWindow: null }
+  const ev2 = { ...exactEv, sourceStats: { ...dayEv.sourceStats! } }
+  check('🔴 정확 시각 원천에 날짜 판 스냅샷 → RESPONSE_UNNORMALIZED', judge(ev2, slot, captured).reasons[0] === 'RESPONSE_UNNORMALIZED', judge(ev2, slot, captured).reasons.join())
+  const bad = (st: Record<string, unknown>): string | null => { const r = parseEvidence({ ...dayEv, sourceStats: { ...dayEv.sourceStats!, ...st } }); return r.ok ? null : r.issue }
+  check('🔴 날짜 판 라벨이 관측 나이 구간이면 손상', bad({ bucket: '24-72h' }) === 'sourceStats.bucket:unknown')
+  check('🔴 정확 시각 판에 날짜 칸이 붙으면 손상', bad({ method: SOURCE_STATS_METHOD, bucket: '24-72h' }) === 'sourceStats.method:day-fields')
+  check('🔴 날짜 판에 회차 시각이 없으면 손상', bad({ observedAt: undefined }) === 'sourceStats.observedAt:corrupt')
 
   // 🔴 정확한 시각이면 앞판 스냅샷과 같다 — 앞판 식을 그대로 옮긴 참조 구현과 무작위 대조
   const legacySnapshot = (input: { postedAt: string; observedAt: string; comments: number | null; views: number | null; sample: ListObservation[] }): SourceStatsSnapshot | null => {
@@ -252,10 +277,10 @@ console.log('\n③ 원천 상대 반응 — 걸친 구간 중 가장 낮은 자�
     const posted = new Date(Date.parse(obs) - r() * 80 * H).toISOString()
     const c = Math.floor(r() * 6)
     const a = sourceStatsSnapshot({ sourceKey: site, articleKey: `${site}::cand`, postedAt: posted, observedAt: obs, comments: c, views: c * 7, sample: smp, at })
-    const b = legacySnapshot({ postedAt: posted, observedAt: obs, comments: c, views: c * 7, sample: smp })
-    if (JSON.stringify(a) === JSON.stringify(b)) same += 1
+    const b2 = legacySnapshot({ postedAt: posted, observedAt: obs, comments: c, views: c * 7, sample: smp })
+    if (JSON.stringify(a) === JSON.stringify(b2)) same += 1
   }
-  check(`🔴 정확한 시각의 스냅샷은 앞판과 같다 (무작위 ${N}벌)`, same === N, `${same}/${N}`)
+  check(`🔴 정확한 시각의 스냅샷은 앞판과 같다(표본이 정확 시각 줄뿐일 때) (무작위 ${N}벌)`, same === N, `${same}/${N}`)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -301,7 +326,7 @@ console.log('\n⑤ 목록 관측 → 증거 재료: 수집이 본 줄이 날짜�
   })
   const w = postedWindowOfKstDay('2026-10-12')
   const sample = [
-    row('cand', null, w, 5),
+    row('cand', null, w, 5), row('d1', null, w, 1), row('d2', null, w, 9),
     ...Array.from({ length: 6 }, (_, i) => row(`o${i}`, new Date(Date.parse(observedAt) - (30 + i * 5) * H).toISOString(), null, i * 3)),
     ...Array.from({ length: 6 }, (_, i) => row(`m${i}`, new Date(Date.parse(observedAt) - (13 + i) * H).toISOString(), null, i)),
     ...Array.from({ length: 6 }, (_, i) => row(`y${i}`, new Date(Date.parse(observedAt) - (7 + i * 0.5) * H).toISOString(), null, i)),
@@ -315,8 +340,8 @@ console.log('\n⑤ 목록 관측 → 증거 재료: 수집이 본 줄이 날짜�
     sourceKey: site, articleId: 'cand', postedAt: '2026-10-11T15:00:00.000Z', listedAt: observedAt, at: new Date('2026-10-12T23:00:00.000Z'),
   })
   check('🔴 재료가 하루 구간을 낸다', m.postedWindow?.from === w?.from)
-  check('🔴 스냅샷도 구간으로 잰다(00:00 단일 구간이 아니다) — 가장 낮은 자리', m.sourceStats?.bucket === '24-72h' && m.sourceStats.commentsPct !== null,
-    JSON.stringify(m.sourceStats))
+  check('🔴 스냅샷은 날짜 판 — 같은 날짜 · 같은 회차의 날짜만 아는 줄 2개와만 견준다(정확 시각 18줄 제외)',
+    m.sourceStats?.method === SOURCE_STATS_METHOD_DAY && m.sourceStats.n === 2 && m.sourceStats.commentsPct === 0.5, JSON.stringify(m.sourceStats))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -433,6 +458,9 @@ console.log('\n⑨ 배선 — 수집 행 → 얇은 행 → adapt → 공급 러
   })
   const rows = [
     buildCollected('remonterrace', item('35080100', '2026.10.12.', 6), '', listed, listed),
+    // 같은 날짜 · 같은 회차의 날짜만 아는 동료 — 날짜 판 표본
+    buildCollected('remonterrace', item('35080300', '2026.10.12.', 1), '', listed, listed),
+    buildCollected('remonterrace', item('35080400', '2026.10.12.', 12), '', listed, listed),
     // 표본 — 정확한 시각(24-72h · 12-24h · 6-12h 에 고루) · 같은 원천
     ...[30, 34, 40, 46, 52, 60].map((h, i) => ({
       ...buildCollected('remonterrace', item(String(35070000 + i), '01:00', i * 4), '', listed, listed),
@@ -469,9 +497,9 @@ console.log('\n⑨ 배선 — 수집 행 → 얇은 행 → adapt → 공급 러
   for (const id of ['35080100', '35080200']) {
     const w = ws.find((r) => r.sourceArticleId === id)
     const ev = w?.evidence ?? null
-    check(`🔴 공급 러너 증거(${id === '35080100' ? '지금' : '옛'} 수집기 행): postedAt null · 하루 구간 · 원천 상대 자리는 가장 낮은 구간`,
+    check(`🔴 공급 러너 증거(${id === '35080100' ? '지금' : '옛'} 수집기 행): postedAt null · 하루 구간 · 날짜 판(같은 날짜 · 같은 회차 3줄)`,
       ev !== null && ev.postedAt === null && ev.postedWindow?.from === '2026-10-11T15:00:00.000Z'
-        && ev.sourceStats?.bucket === '24-72h' && parseEvidence(ev).ok,
+        && ev.sourceStats?.method === SOURCE_STATS_METHOD_DAY && ev.sourceStats.n === 3 && ev.sourceStats.commentsPct === 0.5 && parseEvidence(ev).ok,
       JSON.stringify({ p: ev?.postedAt, w: ev?.postedWindow, b: ev?.sourceStats?.bucket }))
     const v = w === undefined ? null : preGenerationRelease(w, new Date('2026-10-13T01:50:00.000Z'), at)
     check(`생성 전 판정이 구간으로 나이를 잰다(늙은 끝 34.833h) · ${id}`, v?.rank.ageAtSlotH === 34.833 && v.verdict === 'eligible',
