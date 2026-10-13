@@ -15,6 +15,7 @@
  */
 import {
   planSpeakerAvailability, remainingCapacity, planOpenDays,
+  planAttemptCapacity, planSpeakerAttempts, ATTEMPT_CONTRACT,
 } from '../src/lib/content-core/speaker-availability'
 import {
   readSpeakerLoad, draftSpeakerOf,
@@ -491,6 +492,147 @@ console.log('\n⑪ 🔴 🔴 재고는 **낼 수 있는 글**만 센다 — lega
   check('🔴 🔴 **WIP 는 분류의 `personaWipIds` 다 — 여기서 다시 세지 않는다**',
     /classification\.personaWipIds/.test(src)
     && !/'HUMAN_REVIEW_REQUIRED'/.test(src))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑫ 🔴 🔴 생성 시도 여력은 공개 자리와 다르다 (speaker-attempt-v1 · 2026-10-13 12:15 재현)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실측** (2026-10-13 12:15 회차 · d5). 공개 자리 4개(오늘 13:30·16:10·19:00 + 내일 08:10) ·
+   *    실제 SEED 10건 · 상한·간격을 통과한 화자 27명 · WIP 1(P03). 공개 자리 몫(`openDays`)으로 나누면
+   *    4명 − WIP 1 = **3명**만 후보가 되고 7건이 부르기 전에 멈췄다. 아래는 그 모양을 정본 함수로 재현한다.
+   */
+  const d5 = PROFILES.d5
+  const CAPS5 = { postsPerWeek: d5.postsPerWeek, minDaysBetween: d5.minDaysBetween }
+  const T1 = new Date('2026-10-13T04:30:00.000Z') // 10/13 13:30 KST — 그날 남은 자리 3
+  const T2 = new Date('2026-10-13T23:10:00.000Z') // 10/14 08:10 KST — 다음 첫 기회 1
+  const SEATS = new Map([[T1.getTime(), 3], [T2.getTime(), 1]])
+  const codes = Array.from({ length: 30 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`)
+  const HOUR = 3_600_000
+  /** 🔴 P21~P23 — 지평 두 날 모두 주간 상한(4)에 걸린다 → 자격 27명 */
+  const capped = new Set(['P21', 'P22', 'P23'])
+  const history = codes.map((code) => ({
+    code,
+    matchedAts: capped.has(code) ? [1, 2, 3, 4].map((d) => new Date(T1.getTime() - d * 26 * HOUR)) : [],
+  }))
+  const wip = new Map([['P03', 1]])
+  const avail = (h: readonly { code: string; matchedAts: readonly Date[] }[], at: Date, c: { postsPerWeek: number; minDaysBetween: number }): string[] =>
+    availablePersonasAt(h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, c)
+  const before = JSON.stringify(history)
+  const attempt = planAttemptCapacity({
+    days: [T1, T2], history, availableAt: avail, caps: CAPS5, wipOf: (c) => wip.get(c) ?? 0,
+  })
+  const attemptRows = codes.map((code) => ({ code, attemptCapacity: attempt.get(code)?.attemptCapacity ?? 0 }))
+  const seedKeys = (n: number): string[] => Array.from({ length: n }, (_, i) => `seed-${String(i + 1).padStart(2, '0')}`)
+
+  // 공개 자리 계획 — 정본 그대로 (바꾸지 않았다)
+  const seatPlan = planOpenDays({
+    days: [T1, T2], history, availableAt: avail, dateLabel: (at) => at.toISOString(),
+    profileOf: (at) => ({ dailyTarget: SEATS.get(at.getTime()) ?? 0, ...CAPS5 }),
+  })
+  const seatTotal = [...seatPlan.openDays.values()].reduce((n, v) => n + v, 0)
+  const oldContract = planSpeakerAvailability({
+    sourceKeys: seedKeys(10),
+    capacities: codes.map((code) => ({ code, openDays: seatPlan.openDays.get(code) ?? 0, readyCount: wip.get(code) ?? 0 })),
+  })
+  check('재현 — 옛 계약(공개 자리 몫 − WIP)은 3명 · 7건 보류였다',
+    oldContract.eligible.length === 3 && oldContract.slots.filter((sl) => sl.codes.length === 0).length === 7,
+    `${oldContract.eligible.join(',')}`)
+  check('자격 화자 27명 — 상한에 걸린 3명은 시도 여력 0',
+    [...attempt.values()].filter((r) => r.eligibleDays > 0).length === 27
+    && ['P21', 'P22', 'P23'].every((c) => attempt.get(c)?.attemptCapacity === 0))
+
+  const full = planSpeakerAttempts({ sourceKeys: seedKeys(10), attemptCapacity: attemptRows })
+  const firsts = full.slots.map((sl) => sl.codes[0])
+  const allCodes = full.slots.flatMap((sl) => sl.codes)
+  check('🔴 🔴 **공개 자리 4 · SEED 10 · 자격 27 · WIP 1 → 원천 10건 모두 후보를 받는다**',
+    full.planned === 10 && full.slots.every((sl) => sl.codes.length > 0), JSON.stringify(full.slots))
+  check('🔴 🔴 **원천마다 서로 다른 Persona — 후보 묶음이 겹치지 않는다**',
+    new Set(firsts).size === 10 && new Set(allCodes).size === allCodes.length, allCodes.join(','))
+  check('🔴 상한에 걸린 화자는 어느 원천에도 없다',
+    !allCodes.some((c) => capped.has(c)))
+  check('🔴 🔴 **공개 가능량은 여전히 4 — 공개 자리 계획은 그대로다**',
+    seatTotal === 4 && d5.dailyTarget === 5 && d5.postsPerWeek === 4 && d5.minDaysBetween === 1,
+    `seats ${seatTotal}`)
+  check('🔴 시도 계획은 이력을 바꾸지 않는다 — 다음 판정이 가짜 배정을 보지 않는다',
+    JSON.stringify(history) === before)
+
+  /**
+   * 🔴 **10건이 모두 초안에 성공해도 나가는 수는 공개 자리가 정한다** — 정본 슬롯 매칭(발행 러너 · JIT 와 같은 함수).
+   *    화자마다 한 편 · 어느 자리에서나 유효하다고 가장 너그럽게 둬도 4 를 넘지 않는다.
+   */
+  const slots = [T1, new Date(T1.getTime() + 160 * 60_000), new Date(T1.getTime() + 330 * 60_000), T2]
+  const opps: SlotOpportunity[] = firsts.map((code, i) => ({ key: `draft-${i}`, personaCode: code ?? null, validAt: () => true }))
+  const matched = matchOpportunitiesToSlots(slots, opps)
+  check('🔴 🔴 **10개 초안이 모두 성공해도 발행은 공개 자리 4 — 상한 · cadence 불변**',
+    matched.filled === 4, `filled ${matched.filled}`)
+
+  const eight = planSpeakerAttempts({ sourceKeys: seedKeys(8), attemptCapacity: attemptRows })
+  check('🔴 🔴 **실제 SEED 8 이면 8건만 계획한다**',
+    eight.attemptDemand === 8 && eight.planned === 8 && eight.slots.length === 8)
+
+  const three = planSpeakerAttempts({
+    sourceKeys: seedKeys(10),
+    attemptCapacity: codes.map((code) => ({ code, attemptCapacity: ['P01', 'P02', 'P04'].includes(code) ? 1 : 0 })),
+  })
+  const threeCodes = three.slots.flatMap((sl) => sl.codes)
+  check('🔴 🔴 **자격 화자 3명이면 3건만 — 한 사람에게 두 원천을 주지 않는다**',
+    three.planned === 3 && three.slots.filter((sl) => sl.codes.length === 0).length === 7
+    && new Set(threeCodes).size === threeCodes.length && threeCodes.length === 3, JSON.stringify(three.slots))
+
+  const overfed = planSpeakerAttempts({
+    sourceKeys: seedKeys(10),
+    attemptCapacity: codes.map((code) => ({ code, attemptCapacity: ['P01', 'P02', 'P04'].includes(code) ? 2 : 0 })),
+  })
+  check('🔴 🔴 **시도 여력 값이 2 로 들어와도 한 사람 한 원천 — 회차당 상한을 입구에서 다시 건다**',
+    overfed.planned === 3 && overfed.slots.flatMap((sl) => sl.codes).length === 3, JSON.stringify(overfed.slots))
+
+  const zero = planSpeakerAttempts({ sourceKeys: [], attemptCapacity: attemptRows })
+  check('🔴 🔴 **SEED 0 이면 생성 시도도 0**',
+    zero.attemptDemand === 0 && zero.planned === 0 && zero.slots.length === 0)
+
+  const wipOnly = planAttemptCapacity({
+    days: [T1], history: [{ code: 'P01', matchedAts: [] }, { code: 'P02', matchedAts: [] }],
+    availableAt: avail, caps: CAPS5, wipOf: (c) => (c === 'P01' ? 1 : 0),
+  })
+  check('🔴 WIP 는 계속 뺀다 — 자격 1일 · WIP 1 이면 시도 0',
+    wipOnly.get('P01')?.attemptCapacity === 0 && wipOnly.get('P02')?.attemptCapacity === 1)
+  const noHorizon = planAttemptCapacity({ days: [], history, availableAt: avail, caps: CAPS5, wipOf: () => 0 })
+  check('🔴 지평에 공개 자리가 없으면 시도 여력도 없다 — 지평 밖 날로 앞당기지 않는다',
+    [...noHorizon.values()].every((r) => r.attemptCapacity === 0))
+  const voiceOnly = planAttemptCapacity({
+    days: [T1, T2], history, availableAt: avail, caps: CAPS5, wipOf: () => 0, canTakeSlot: (c) => c === 'P05',
+  })
+  check('🔴 말투 근거 없는 화자는 시도 여력 0 — 자격 없는 사람을 끼우지 않는다',
+    [...voiceOnly.entries()].every(([c, r]) => r.attemptCapacity === (c === 'P05' ? 1 : 0)))
+
+  // 파일 계약 — 시도 계약이 있을 때만 시도 여력을 준다
+  const now = new Date()
+  const withContract = readSpeakerLoad({
+    writtenAt: now.toISOString(), runId: 'r1', horizonDays: 2, attemptContract: ATTEMPT_CONTRACT, releaseSeats: 4,
+    byCode: { P01: { openDays: 0, readyCount: 0, attemptCapacity: 1 } },
+  }, now, 'r1')
+  const legacy = readSpeakerLoad({
+    writtenAt: now.toISOString(), runId: 'r1', horizonDays: 2, byCode: { P01: { openDays: 0, readyCount: 0 } },
+  }, now, 'r1')
+  check('🔴 파일 — 시도 계약이 있으면 공개 자리 몫이 0 이어도 시도 여력 1 · 공개 자리 4 를 그대로 읽는다',
+    withContract.loaded && withContract.attemptCapacityOf?.('P01') === 1 && withContract.releaseSeats === 4
+    && withContract.attemptCapacityOf?.('P99') === 0)
+  check('🔴 파일 — 시도 계약이 없으면 null (옛 계약으로 좁게 돈다)',
+    legacy.loaded && legacy.attemptCapacityOf === null)
+
+  /** 🔴 **배선** — 만든 함수가 실제 소비자에서 쓰인다(사본이 아니다) */
+  const draftSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  const supplySrc = readFileSync('scripts/supply-process.mts', 'utf-8')
+  check('🔴 🔴 **생성 러너가 실제 SEED 와 시도 여력으로 나눈다**',
+    /planSpeakerAttempts\(\{\s*sourceKeys: seeds\.map\(keyOfJ\),\s*attemptCapacity: voice\.candidates\.map\(\(c\) => \(\{ code: c\.code, attemptCapacity: attemptOf\(c\.code\) \}\)\)/.test(draftSrc)
+    && /const attemptOf = speakerLoad\.loaded \? speakerLoad\.attemptCapacityOf : null/.test(draftSrc))
+  check('🔴 🔴 **공급 러너가 같은 지평 · 같은 WIP 로 시도 여력을 적는다**',
+    /planAttemptCapacity\(\{\s*days, history,/.test(supplySrc)
+    && /wipOf: \(code\) => wipBy\.byCode\.get\(code\) \?\? 0/.test(supplySrc)
+    && /attemptCapacity: attempt\.get\(code\)\?\.attemptCapacity \?\? 0/.test(supplySrc)
+    && /attemptContract: ATTEMPT_CONTRACT, releaseSeats,/.test(supplySrc))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

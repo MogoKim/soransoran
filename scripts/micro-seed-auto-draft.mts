@@ -81,7 +81,7 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { digest16, loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
-import { planSpeakerAvailability } from '../src/lib/content-core/speaker-availability'
+import { planSpeakerAttempts, planSpeakerAvailability } from '../src/lib/content-core/speaker-availability'
 import {
   readSpeakerLoad, SPEAKER_LOAD_FILE,
 } from '../src/lib/content-core/speaker-load-file'
@@ -962,7 +962,19 @@ async function main(): Promise<void> {
    *    보류돼, 계획만 보는 회차가 거짓을 보여 준다.
    *    🔴 전원을 후보로 주고 **그 사실을 적는다.** 조용히 넘어가지 않는다.
    */
-  const speakerPlanOfRun = speakerLoad.loaded
+  /**
+   * 🔴 **생성 시도 계약이 있으면 그것으로 나눈다** (speaker-attempt-v1 · 2026-10-13 P0).
+   *    원천은 판정 뒤 **실제 SEED**(`seeds`)다. 여력은 공개 자리 몫이 아니라 시도 여력이다 —
+   *    12:15 회차가 공개 자리 4개에 묶여 SEED 10건 중 7건을 부르기 전에 미뤘다.
+   *    🔴 계약이 없는 파일(옛 계약)은 앞판 그대로 공개 자리 몫 − WIP 로 좁게 돈다.
+   */
+  const attemptOf = speakerLoad.loaded ? speakerLoad.attemptCapacityOf : null
+  const speakerPlanOfRun = attemptOf !== null
+    ? planSpeakerAttempts({
+      sourceKeys: seeds.map(keyOfJ),
+      attemptCapacity: voice.candidates.map((c) => ({ code: c.code, attemptCapacity: attemptOf(c.code) })),
+    })
+    : speakerLoad.loaded
     ? planSpeakerAvailability({
       sourceKeys: seeds.map(keyOfJ),
       capacities: voice.candidates.map((c) => ({
@@ -981,7 +993,8 @@ async function main(): Promise<void> {
     }
   const slotOf = new Map(speakerPlanOfRun.slots.map((sl) => [sl.sourceKey, sl.codes]))
   console.log(`
-   🔴 화자 여력 계획 — 여력 있는 화자 ${speakerPlanOfRun.eligible.length}명`)
+   🔴 화자 여력 계획 — 여력 있는 화자 ${speakerPlanOfRun.eligible.length}명`
+    + (speakerLoad.releaseSeats === null ? '' : ` · 공개 자리 ${speakerLoad.releaseSeats}개는 그대로 (발행 러너가 정한다)`))
   console.log(`      ${speakerPlanOfRun.eligible.join(' ') || '(없음)'}`)
   for (const n of speakerPlanOfRun.notes) console.log(`      · ${n}`)
   for (const sl of speakerPlanOfRun.slots) {

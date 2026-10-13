@@ -105,7 +105,9 @@ export const RUN_AT = RUN_CLOCK.at
 import {
   SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
 } from '../src/lib/content-core/speaker-load-file'
-import { planOpenDays, wipCountsBySpeaker } from '../src/lib/content-core/speaker-availability'
+import {
+  ATTEMPT_CONTRACT, planAttemptCapacity, planOpenDays, wipCountsBySpeaker,
+} from '../src/lib/content-core/speaker-availability'
 /** 🔴 말투 근거가 선 화자 — 생성 러너와 **같은 함수**로 읽는다(파일까지 · DB 0) */
 import { loadVoice } from './lib/voice-runtime.mjs'
 import { kstDateString } from '../src/lib/release-canary'
@@ -389,17 +391,34 @@ export async function buildSpeakerLoad(
     // 🔴 말투 없는 화자는 기계 초안을 받지 못한다 — 하루 자리를 차지하지 않게 뺀다
     ...(eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }),
   })
-  const byCode: Record<string, { openDays: number; readyCount: number }> = {}
+  /**
+   * 🔴 **생성 시도 여력 — 공개 자리와 나눈다** (speaker-attempt-v1 · 2026-10-13 P0).
+   *    위 계획(`openDays`)은 공개 자리 몫이다 — 자리가 4개면 전원 합쳐 4. 생성은 수율만큼 넉넉히 시도해야 하므로
+   *    같은 지평 · 같은 cap · 같은 말투 필터로 **각자 독립 판정**하고 WIP 를 뺀 뒤 회차당 1 을 준다.
+   *    🔴 공개 자리 · release profile · 상한 · 간격은 그대로다 — 몇 건을 시도하든 나가는 수는 발행 러너가 정한다.
+   */
+  const attempt = planAttemptCapacity({
+    days, history,
+    availableAt: (h, at, caps) => availablePersonasAt(
+      h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
+    caps: { postsPerWeek: release.postsPerWeek, minDaysBetween: release.minDaysBetween },
+    ...(eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }),
+    wipOf: (code) => wipBy.byCode.get(code) ?? 0,
+  })
+  const byCode: Record<string, { openDays: number; readyCount: number; attemptCapacity: number }> = {}
   for (const p of loaded.personas) {
     const code = String(p.code)
     byCode[code] = {
       openDays: plan.openDays.get(code) ?? 0,
       readyCount: wipBy.byCode.get(code) ?? 0,
+      attemptCapacity: attempt.get(code)?.attemptCapacity ?? 0,
     }
   }
+  const releaseSeats = [...seatsByDate.values()].reduce((n, d) => n + d.seats, 0)
   return {
     // 🔴 회차 시각으로 적는다 — 자식이 같은 시각으로 검증한다
     writtenAt: opts.now.toISOString(), runId, horizonDays, byCode,
+    attemptContract: ATTEMPT_CONTRACT, releaseSeats,
     byDate: plan.byDate,
     /** 🔴 어느 눈금으로 셌는지 남긴다 — 지평은 지금 공개 단계(release)의 가까운 슬롯이다 */
     stageByDate: days.map((at) => ({ date: kstDateString(at), stage: opts.scale.releaseStage })),
@@ -834,6 +853,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
           + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`
           + ` · 원천 가치 없음으로 칸 해제 ${load.slots.releasedExpired}건 · 화자 미상 ${load.slots.unattributed}건`
           + ` · 말투 ${load.slots.voiceFiltered ? `있는 ${load.slots.slotEligibleCount}명만 자리를 받는다` : '필터 없음(정본을 못 읽었다)'}`)
+        console.log(`   🟢 공개 자리 ${load.releaseSeats ?? 0}개 (발행 상한 · cadence 불변) · 생성 시도 여력 `
+          + `${Object.values(load.byCode).filter((r) => (r.attemptCapacity ?? 0) > 0).length}명 (${load.attemptContract ?? '옛 계약'} — 실제 SEED 수만큼만 쓴다)`)
       } catch (e) {
         const why = e instanceof Error ? e.message : 'unknown'
         console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)
