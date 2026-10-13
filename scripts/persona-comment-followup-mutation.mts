@@ -1,0 +1,84 @@
+#!/usr/bin/env tsx
+/**
+ * 추가 댓글 판정 **변이 시험** — 막는 줄 하나를 지우면 검사가 반드시 FAIL 해야 한다
+ *
+ *   npx tsx scripts/persona-comment-followup-mutation.mts
+ *
+ * 🔴 worktree 를 고치지 않는다. 모듈 사본을 OS 임시 디렉터리에 쓰고(상대 import 는 절대 경로로 바꾼다)
+ *    검사에 `FOLLOWUP_MODULE` 로 주입한다. 변이 원복 사고(백업 0개 · 누적)가 구조적으로 생기지 않는다.
+ * 🔴 먼저 변이 없는 사본이 PASS 하는지 본다 — 하네스가 늘 FAIL 이면 변이 시험은 아무것도 증명하지 않는다.
+ */
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const libDir = join(here, '../src/lib')
+const source = readFileSync(join(libDir, 'persona-comment-followup.ts'), 'utf-8')
+  .replace(/from '\.\/([^']+)'/g, (_m, p: string) => `from '${join(libDir, p)}'`)
+
+type Mutation = { name: string; from: string; to: string }
+const MUTATIONS: Mutation[] = [
+  { name: '스위치 아무 값이나 켬', from: 'if (raw === FOLLOWUP_SWITCH_ON) return', to: 'if (raw !== \'\') return' },
+  { name: '첫 댓글 양보 제거', from: 'else if (f.pendingFirstComments > 0)', to: 'else if (false)' },
+  { name: 'kill switch 모름을 통과', from: 'if (f.killSwitchOff !== true)', to: 'if (f.killSwitchOff === false)' },
+  { name: '공유 장부 첫 댓글 몫 무시', from: '- (f.firstCommentReserveUsd as number))', to: '- 0)' },
+  { name: '회차 상한 제거', from: 'Math.min(FOLLOWUP_RUN_MAX, countLeft, byMoney)', to: 'Math.min(countLeft, byMoney)' },
+  { name: '글당 5건 상한 느슨', from: 'if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX)', to: 'if (personaCount > FOLLOWUP_TOTAL_PER_POST_MAX)' },
+  { name: '체력 무시(전부 채움)', from: 'Math.min(stamina, realCap,', to: 'Math.min(FOLLOWUP_EXTRA_PER_POST_MAX, realCap,' },
+  { name: '실회원 1~2건 축소 제거', from: 'liveReal.length > 0 ? FOLLOWUP_EXTRA_WITH_MEMBERS_MAX', to: 'liveReal.length > 0 ? FOLLOWUP_EXTRA_PER_POST_MAX' },
+  { name: '마지막 말 실회원 STOP 제거', from: "if (latest !== undefined && (latest.commentOrigin === 'MEMBER'", to: "if (false && (latest!.commentOrigin === 'MEMBER'" },
+  { name: '자동 첫 댓글 요구 제거', from: 'if (firsts.length === 0)', to: 'if (false)' },
+  { name: '깨진 출처 BLOCK 제거', from: "c.provenance === 'broken' || c.provenance === null", to: 'false' },
+  { name: '시간차 제거', from: 'if (nowMs < notBeforeMs)', to: 'if (false)' },
+  { name: '식은 글 허용', from: 'if (nowMs - f.publishedAtMs > FOLLOWUP_POST_AGE_MAX_MS)', to: 'if (false)' },
+  { name: '열린 후보 무시', from: 'if (f.hasOpenQueue) return', to: 'if (false) return' },
+  { name: '실회원 댓글에 답함', from: "if (c.commentOrigin !== 'PERSONA' || c.reaction === null", to: 'if (c.reaction === null' },
+  { name: '신고 댓글에 답함', from: 'if (c.reported !== false || answered.has(c.id)) continue', to: 'if (answered.has(c.id)) continue' },
+  { name: '이미 답한 댓글에 또 답함', from: 'if (c.reported !== false || answered.has(c.id)) continue', to: 'if (c.reported !== false) continue' },
+  { name: '사슬 깊이 제거', from: 'if (ctx.chain.length + 1 > FOLLOWUP_CHAIN_MAX) continue', to: '' },
+  { name: '같은 Persona 반복 허용', from: '&& !excluded.has(c.personaId)', to: '' },
+  { name: 'Persona 하루 상한 제거', from: '&& c.followupsToday < FOLLOWUP_PER_PERSONA_DAILY_MAX', to: '' },
+  { name: '글쓴이 제외 제거', from: 'if (f.authorPersonaId !== null) onPost.add(f.authorPersonaId)', to: '' },
+  { name: '중복 문장 허용', from: '>= FOLLOWUP_DUP_JACCARD_MAX)', to: '>= 2)' },
+  { name: '같은 도입 허용', from: "blockers.push('🔴 다른 Persona 댓글과 도입이 같다'); break", to: 'continue' },
+  { name: '표식을 첫 댓글과 같게', from: "FOLLOWUP_ACTIVITY_DECIDED_BY = 'auto-followup'", to: "FOLLOWUP_ACTIVITY_DECIDED_BY = 'auto'" },
+  { name: '추가 출처 로그 누락 허용', from: 'if (f.queues.length !== 1 || f.logs.length !== 1) return \'broken\'', to: '' },
+  { name: '도장 열쇠 대조 제거', from: 'if (followupKeyOf(expect.postId, s.ordinal) !== expect.dedupKey)', to: 'if (false)' },
+  { name: '적은 글 먼저 제거', from: 'a.go.extrasSoFar - b.go.extrasSoFar\n    ||', to: '0 ||' },
+  { name: '관계 이상 BLOCK 제거', from: "blockedAuthorIds: new Set() }).anomalies.length > 0)", to: "blockedAuthorIds: new Set() }).anomalies.length > 99)" },
+]
+
+const dir = mkdtempSync(join(tmpdir(), 'followup-mut-'))
+const run = (code: string, tag: string): number => {
+  const file = join(dir, `followup-${tag}.ts`)
+  writeFileSync(file, code)
+  const r = spawnSync('npx', ['tsx', join(here, 'persona-comment-followup-check.mts')], {
+    env: { ...process.env, FOLLOWUP_MODULE: file }, encoding: 'utf-8',
+  })
+  return r.status ?? 99
+}
+
+let bad = 0
+try {
+  const base = run(source, 'base')
+  console.log(`${base === 0 ? '✅' : '❌'} 변이 없는 사본 → PASS (exit ${base})`)
+  if (base !== 0) bad++
+  MUTATIONS.forEach((m, i) => {
+    if (!source.includes(m.from)) {
+      bad++
+      console.log(`❌ [${m.name}] 변이 자리를 찾지 못했다 — 하네스가 낡았다`)
+      return
+    }
+    const code = run(source.replace(m.from, m.to), String(i))
+    const killed = code !== 0
+    if (!killed) bad++
+    console.log(`${killed ? '✅' : '❌'} [${m.name}] → ${killed ? '검사가 잡았다' : '🔴 살아남았다(죽은 게이트)'} (exit ${code})`)
+  })
+} finally {
+  rmSync(dir, { recursive: true, force: true })
+}
+console.log(`\n${bad === 0 ? '✅ PASS' : `❌ FAIL ${bad}건`} — 변이 ${MUTATIONS.length}개 · worktree 변경 0`)
+process.exit(bad === 0 ? 0 : 1)
