@@ -1,0 +1,50 @@
+<claude-code-hint v="1" type="plugin" value="vercel@claude-plugins-official" />
+Vercel CLI 59.26.0 (Node.js 24.14.0)
+Fetching deployment "soransoran.com" in soransoran
+> Fetched deployment "soransoran-fixture000-soransoran.vercel.app" in soransoran [402ms]
+
+  General
+
+    id		dpl_FixtureLive000000000000000A
+    name	soransoran
+    target	production
+    status	● Ready
+    url		https://soransoran-fixture000-soransoran.vercel.app
+    created	Tue Oct 13 2026 02:00:16 GMT+0900 (Korean Standard Time) [23m ago]
+
+
+  Build Machine
+
+    requested build machine standard
+    actual assigned cores   4 vCPU (actual assignment)
+    memory                  8192 MiB
+    selection type          elastic
+    selection source        elastic-algorithm
+
+
+  Duration
+
+    build duration	1m 3s
+    post-build duration	19s
+    billable duration	2m
+    CPU Minutes Usage	8 minutes (2m x 4vCPU)
+
+
+  Aliases
+
+    ╶ https://soransoran.com
+    ╶ https://soransoran.vercel.app
+    ╶ https://www.soransoran.com
+    ╶ https://soransoran-soransoran.vercel.app
+    ╶ https://soransoran-git-main-soransoran.vercel.app
+
+
+  Builds
+
+    ┌ .        [0ms]
+    ├── λ index (9.68MB) [icn1]
+    ├── λ _not-found (9.68MB) [icn1]
+    ├── λ _not-found.rsc (9.68MB) [icn1]
+    ├── λ admin (9.68MB) [icn1]
+    ├── λ admin.rsc (9.68MB) [icn1]
+    └── 108 output items hidden

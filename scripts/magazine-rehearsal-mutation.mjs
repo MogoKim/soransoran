@@ -119,12 +119,21 @@ const MUTATIONS = [
   { name: '㉜ S2 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2', edits: [{ file: F.sandbox,
     find: "  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })\n", replace: '' }] },
   { name: '㉝ S12 가 sandbox articles.ts 에서 이미 등록된 gray 항목을 빼지 않는다 (producer 가 등록 글로 건너뜀)', scenarios: 'S12', edits: [{ file: F.orch,
-    find: "      if (at >= 0) {\n        const end = asrc.indexOf", replace: "      if (false) {\n        const end = asrc.indexOf" }] },
+    find: '      if (iso.removed) writeFileSync(aPath, iso.next)', replace: '      if (false) writeFileSync(aPath, iso.next)' }] },
   // ── 2026-10-12 cold 1회성 복구 — 운영 경로 연결 ──
   { name: '㉞ ready 가 후보 판정 전에 1회성 복구를 열지 않는다 (cold 그대로 격리)', scenarios: 'S14', edits: [{ file: F.ready,
     find: "    ? openOneTimeRecoveries({ draftsDir: DRAFTS_DIR, ...(quarantinePath ? { path: quarantinePath } : {}) })", replace: '    ? []' }] },
   { name: '㉟ 재생성이 예산을 slug 없이 판정 (복구 계보를 못 보고 소진)', scenarios: 'S14', edits: [{ file: F.regen,
     find: '  const budget = regenBudget({ entry, slug })', replace: '  const budget = regenBudget({ entry })' }] },
+  // ── 2026-10-13 S14 격리 — runtime 에 cold 가 등록돼도 같은 과거 사건 ──
+  { name: '㊱ S14·S14B article registry 격리 제거 (runtime 사본 그대로)', scenarios: 'S14,S14B', edits: [{ file: F.orch,
+    find: '      const iso = withoutArticle(asrc, slug, parse)\n', replace: '      const iso = { next: asrc, removed: false }\n' }] },
+  { name: '㊲ 격리가 지정 slug 가 아니라 첫 글을 지운다', scenarios: 'S14', edits: [{ file: F.orch,
+    find: "  const at = src.indexOf(`\\n  '${slug}': {\\n`)", replace: "  const at = src.indexOf(\"\\n  '\")" }] },
+  { name: '㊳ 격리가 지정 글부터 끝까지 여러 글을 지운다', scenarios: 'S14', edits: [{ file: F.orch,
+    find: "  const end = src.indexOf('\\n  },\\n', at + 1)", replace: "  const end = src.lastIndexOf('\\n  },\\n')" }] },
+  { name: '㊴ 격리 뒤 다른 article 변화 검증 제거', scenarios: 'S14', edits: [{ file: F.orch,
+    find: '  if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error(', replace: '  if (false) throw new Error(' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -143,7 +152,7 @@ let caught = 0
 const only = process.argv.includes('--only') ? String(process.argv[process.argv.indexOf('--only') + 1] ?? '').split(',').filter(Boolean) : null
 const RUN = only ? MUTATIONS.filter((m) => only.some((o) => m.name.startsWith(o))) : MUTATIONS
 console.log(`\n매거진 rehearsal 변이 시험${only ? ` (일부만: ${only.join(',')} — 판정용 아님)` : ''}\n`)
-const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14B'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14U,S14B'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
 /** 🔴 변이 시험이 만든 rehearsal 산출물(임시 루트·보고서)은 남기지 않는다 */
 const cleanup = (stdout) => {
   for (const m of stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {

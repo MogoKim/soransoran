@@ -6,7 +6,7 @@
  *    PR/merge/배포 · 경계 합계 · 반복성 · runtime 불변을 여기서 다시 센다. 그래서 "실패 단계를 성공으로 적는"
  *    결함이나 "래퍼 대신 가짜 성공값" 결함은 orchestrator 가 초록이라고 해도 여기서 FAIL 이다.
  *
- *   node scripts/magazine-rehearsal-check.mjs                     전체 (S1~S14 + S8B · S14B + S1 반복)
+ *   node scripts/magazine-rehearsal-check.mjs                     전체 (S1~S14 + S8B · S14U · S14B + S1 반복)
  *   node scripts/magazine-rehearsal-check.mjs --scenario S1,S4    고른 시나리오만 (변이 시험이 쓴다)
  */
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
@@ -21,7 +21,7 @@ import { FIXTURE_HERO_SPEC } from './lib/magazine-rehearsal-content.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
 const pick = argv.includes('--scenario') ? argv[argv.indexOf('--scenario') + 1] : null
-const ids = (pick ?? 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14B').split(',')
+const ids = (pick ?? 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14U,S14B').split(',')
 const repeat = !pick || argv.includes('--repeat')
 
 let pass = 0

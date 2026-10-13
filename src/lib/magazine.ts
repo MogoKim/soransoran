@@ -38,9 +38,15 @@ export function isPublicMagazineArticle(article: MagazineArticle, now = Date.now
   return resolvePublishAt(article) <= now
 }
 
-/** 공개된 글만, 최신 발행순 */
-export function getAllMagazineArticles(): MagazineArticle[] {
-  return MAGAZINE_ARTICLES.filter((a) => isPublicMagazineArticle(a)).sort((a, b) =>
+/**
+ * 공개된 글만, 최신 발행순.
+ *
+ * 🔴 `now` 를 받는다 (2026-10-13 M-GRAPH 검사 경계). 한 계산 안에서 공개 목록을 여러 번 물을 때
+ *    호출마다 시각을 다시 읽으면 예약 공개 시각(10:30:00)을 사이에 두고 두 답이 갈린다.
+ *    부르는 쪽이 한 번 정한 시각을 넘긴다. 기본값은 지금 — 화면 동작은 그대로다.
+ */
+export function getAllMagazineArticles(now: number = Date.now()): MagazineArticle[] {
+  return MAGAZINE_ARTICLES.filter((a) => isPublicMagazineArticle(a, now)).sort((a, b) =>
     b.publishedAt.localeCompare(a.publishedAt),
   )
 }
@@ -155,8 +161,9 @@ export function getMagazineArticleBySlug(slug: string): MagazineArticle | undefi
 export function getRelatedMagazineArticles(
   article: MagazineArticle,
   limit = 3,
+  now: number = Date.now(),
 ): MagazineArticle[] {
-  return getAllMagazineArticles()
+  return getAllMagazineArticles(now)
     .filter((a) => a.slug !== article.slug && a.cluster === article.cluster)
     .slice(0, limit)
 }
