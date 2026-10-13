@@ -2143,18 +2143,36 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       !r2.ok && r2.phase === 'preflight' && /NOT_ON_MAIN|NOT_ORIGIN_MAIN|main/.test(r2.problems.join(' ')) && idx(offMain, 'checkout') === -1)
   }
 
-  // ── [D-3] 🔴 승계 배선 (contract-transition-v3) — 실제 배포기 효과가 stage 기록 · activate 대조 경로를 넘긴다 ──
+  // ── [D-3] 🔴 승계 · source snapshot 배선 (contract-transition-v4) — 실제 배포기 효과가 넘기는 경로 ──
   {
     const src = readFileSync(join(process.cwd(), 'scripts/runtime-deploy.mts'), 'utf-8')
-    const fxStaged = /stagedTransitionCheck:[^\n]*\n?[^\n]*--verify-succession=\$\{successionFileOf\(target\)\}/.test(src)
-    const fxRecheck = /contractTransitionGate:[^\n]*\n?[^\n]*--verify-succession=\$\{successionFileOf\(TARGET\)\}/.test(src)
-    const stageRec = /--record-succession=\$\{successionFileOf\(target\)\}/.test(src)
+    const between = (a: string, b: string): string => {
+      const i = src.indexOf(a)
+      const j = i < 0 ? -1 : src.indexOf(b, i + a.length)
+      return i < 0 || j < 0 ? '' : src.slice(i, j)
+    }
+    const staged = between('stagedTransitionCheck: (target, rt) => {', 'contractTransitionGate:')
+    const recheck = between('contractTransitionGate: (rt) =>', '// ── 🔴 plist cutover')
+    const stage = between('const rt = readRuntimeContract()', 'process.exit(ok ? 0 : 1)')
+    const snapFn = between('const snapshotSource = (target: string): string | null => {', 'const sourceArgs =')
+    const fxStaged = staged.includes('--verify-succession=${successionFileOf(target)}')
+    const fxRecheck = recheck.includes('--verify-succession=${successionFileOf(TARGET)}')
+    const stageRec = stage.includes('--record-succession=${successionFileOf(target)}')
     check('🔴 🔴 [D-3] job 을 내리기 전 staging 재확인 · checkout 뒤 재확인이 둘 다 stage 승계 집합으로 대조한다', fxStaged && fxRecheck)
     check('🔴 [D-3] --stage 가 승계 집합을 남긴다(같은 경로 함수)', stageRec)
-    // 🔴 전환 검사에 넘기는 인자는 runtime · 승계 기록/대조뿐이다(staging 트리 정리용 `git checkout --force` 는 다른 명령이다)
+    // 🔴 (v4 hotfix) source 는 runtime 트리가 센다 — stage · staging 재확인은 그 자리에서 뜨고, checkout 뒤 재확인은 다시 뜨지 않는다
+    check('🔴 🔴 [D-3] source snapshot 은 runtime 트리(RUNTIME_ROOT)에서 뜬다 — staging(target) 트리가 아니다',
+      /readRuntimeGate\(RUNTIME_ROOT\)/.test(snapFn) && /takeSourceSnapshot\(RUNTIME_ROOT\)/.test(snapFn) && !/STAGE_ROOT/.test(snapFn))
+    check('🔴 🔴 [D-3] stage · staging 재확인 — snapshot 을 먼저 뜨고, 못 뜨면 BLOCK · 전환 검사에 그 snapshot 을 넘긴다',
+      /snapshotSource\(target\)/.test(stage) && /gate === null\) fail\(/.test(stage) && stage.includes('...sourceArgs(target, gate!)')
+      && /SOURCE_GATE = snapshotSource\(target\)/.test(staged) && /SOURCE_GATE === null\) return false/.test(staged)
+      && staged.indexOf('snapshotSource(target)') < staged.indexOf('TRANSITION_CHECK') && staged.includes('...sourceArgs(target, SOURCE_GATE)'))
+    check('🔴 🔴 [D-3] checkout 뒤 재확인 — runtime 트리가 이미 target 이라 다시 뜨지 않고 job 을 내리기 전 snapshot 을 쓴다 · 없으면 BLOCK',
+      !/snapshotSource\(/.test(recheck) && /SOURCE_GATE !== null/.test(recheck) && recheck.includes('...sourceArgs(TARGET, SOURCE_GATE)'))
+    // 🔴 전환 검사에 넘기는 인자는 runtime · source · 승계 기록/대조뿐이다(staging 트리 정리용 `git checkout --force` 는 다른 명령이다)
     const transitionCalls = src.split('\n').filter((l) => l.includes('TRANSITION_CHECK,'))
-    check('🔴 [D-3] 승인 · 우회 인자 없음 — 전환 검사 호출은 --runtime · --record/--verify-succession 뿐',
-      transitionCalls.length === 3 && transitionCalls.every((l) => !/--force|--approve|--defect-plan|--contract-|--skip/.test(l))
+    check('🔴 [D-3] 승인 · 우회 인자 없음 — 전환 검사 호출 3곳 모두 --runtime · source snapshot · --record/--verify-succession 뿐',
+      transitionCalls.length === 3 && transitionCalls.every((l) => l.includes('...sourceArgs(') && !/--force|--approve|--defect-plan|--contract-|--skip/.test(l))
       && !/--contract-approve|--approve-transition/.test(src))
   }
 

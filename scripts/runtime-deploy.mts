@@ -56,6 +56,7 @@ import {
  *    배포 동안만 잠시 멈춘다. `RUNTIME_JOBS` 에 넣지 않는 이유가 그것이다.
  */
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
+import { readRuntimeGate, sealSnapshot, takeSourceSnapshot } from './lib/source-snapshot.mjs'
 
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
 /** 🔴 예약 실행이 절대 물으면 안 되는 곳 — 개발 작업트리들 */
@@ -104,6 +105,31 @@ const TRANSITION_CHECK = 'scripts/quality-contract-transition-check.mts'
  *    target SHA 마다 한 파일이다. 사람이 값을 넣는 자리가 아니다.
  */
 const successionFileOf = (target: string): string => join(CANON_DIR, `contract-succession-${target}.json`)
+/**
+ * 🔴 **source snapshot 자리** (contract-transition-v4 hotfix) — runtime 트리(지금 돌고 있는 SHA)가 **자기 코드로** 센 확정 결함 상태.
+ *    source 를 target 판정기로 다시 세지 않는다. 봉인해 쓰고, 전환 검사가 봉인 · 계약 · 게이트 판 · DB 집합을 대조한다.
+ */
+const sourceFileOf = (target: string): string => join(CANON_DIR, `contract-source-${target}.json`)
+/** 🔴 job 을 내리기 전에 뜬 source 게이트 판 — checkout 뒤 재확인이 같은 값을 쓴다(그때 runtime 트리는 이미 target 이다) */
+let SOURCE_GATE: string | null = null
+/**
+ * 🔴 runtime 트리에서 source snapshot 을 떠서 봉인 파일로 쓴다. 게이트 판을 따로 읽어 돌려준다.
+ *    🔴 runtime 트리가 **옛 SHA 일 때만** 부른다(stage · job 을 내리기 전). 실패하면 null(→ BLOCK).
+ */
+const snapshotSource = (target: string): string | null => {
+  const gate = readRuntimeGate(RUNTIME_ROOT)
+  const snap = takeSourceSnapshot(RUNTIME_ROOT)
+  if (gate === null || snap === null) return null
+  try {
+    mkdirSync(CANON_DIR, { recursive: true })
+    const file = sourceFileOf(target)
+    const tmp = `${file}.tmp-${process.pid}`
+    writeFileSync(tmp, sealSnapshot(snap), { encoding: 'utf-8', mode: 0o600 })
+    renameSync(tmp, file)
+  } catch { return null }
+  return gate
+}
+const sourceArgs = (target: string, gate: string): string[] => [`--runtime-gate=${gate}`, `--source-snapshot=${sourceFileOf(target)}`]
 
 /**
  * 🔴 성공하면 출력, 실패하면 null. **판단에 쓰는 읽기 전용 명령**에만 쓴다.
@@ -168,8 +194,11 @@ if (STAGE) {
   if (!stagedAt(target)) fail('staging 트리가 target 에 깨끗하게 있지 않다')
   const rt = readRuntimeContract()
   if (rt === null) fail('runtime 품질 계약을 읽지 못했다')
-  console.log(`  runtime 계약 ${rt!.split(':')[0]} · staging ${target.slice(0, 12)} 으로 전환 preflight(읽기 전용)\n`)
-  const ok = act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt!}`, `--record-succession=${successionFileOf(target)}`], STAGE_ROOT)
+  // 🔴 source 상태는 runtime 트리(옛 SHA)가 자기 코드로 센다 — target 코드로 다시 세지 않는다
+  const gate = snapshotSource(target)
+  if (gate === null) fail('runtime 트리에서 source snapshot 을 뜨지 못했다(fail-closed)')
+  console.log(`  runtime 계약 ${rt!.split(':')[0]} · 게이트 ${gate!} · staging ${target.slice(0, 12)} 으로 전환 preflight(읽기 전용)\n`)
+  const ok = act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt!}`, ...sourceArgs(target, gate!), `--record-succession=${successionFileOf(target)}`], STAGE_ROOT)
   console.log(ok
     ? `\n✅ STAGED PASS — runtime·target 미해소 0. 활성화: npm run runtime:deploy -- --apply --target=${target}\n`
     : '\n🔴 STAGED BLOCK — 활성화하지 않는다. 계획이 있는 결함은 staging 트리에서 공식 defect-resolve --staged 로 해소한 뒤'
@@ -403,11 +432,17 @@ const fx: DeployEffects = {
    */
   runtimeQualityContract: () => readRuntimeContract(),
   // 🔴 job 을 내리기 전 — staging 트리가 target 에 깨끗하게 있을 때만 그 트리로 잰다 · 읽기 전용 · exit 0 만 통과
-  stagedTransitionCheck: (target, rt) => stagedAt(target)
-    && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, `--verify-succession=${successionFileOf(target)}`], STAGE_ROOT),
+  stagedTransitionCheck: (target, rt) => {
+    if (!stagedAt(target)) return false
+    // 🔴 job 을 내리기 전 — runtime 트리는 아직 옛 SHA 다. 여기서 뜬 snapshot 을 checkout 뒤 재확인도 쓴다
+    SOURCE_GATE = snapshotSource(target)
+    if (SOURCE_GATE === null) return false
+    return act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, ...sourceArgs(target, SOURCE_GATE), `--verify-succession=${successionFileOf(target)}`], STAGE_ROOT)
+  },
   // 🔴 checkout 뒤 runtime 트리의 target 코드로 다시 잰다 · 읽기 전용 · exit 0 만 통과
-  contractTransitionGate: (rt) => TARGET !== null
-    && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, `--verify-succession=${successionFileOf(TARGET)}`]),
+  // 🔴 runtime 트리는 이미 target 이다 — source 는 job 을 내리기 전에 뜬 snapshot 그대로(지금 DB 집합과 대조된다)
+  contractTransitionGate: (rt) => TARGET !== null && SOURCE_GATE !== null
+    && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, ...sourceArgs(TARGET, SOURCE_GATE), `--verify-succession=${successionFileOf(TARGET)}`]),
 
   // ── 🔴 plist cutover — **target commit 의** 템플릿을 실제 설치본으로 옮긴다 ──
   readInstalledPlist: (l) => readInstalled(AGENT_DIR, l),

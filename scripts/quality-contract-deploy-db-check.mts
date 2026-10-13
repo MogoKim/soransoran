@@ -11,6 +11,10 @@
  *     ⑤ rollback — staging 확인 뒤 새 결함이 생기면 checkout 뒤 재확인이 BLOCK → 직전 SHA·pin·manifest·plist·job 으로 되돌린다
  *     ⑥ 활성화 전에 해소할 수 없는 결함(공식 dry-run 이 계획을 못 낸다) → 배포 BLOCK · 해소 시도도 write 0
  *
+ *   🔴 (v4 hotfix) 가짜 호스트의 runtime 트리는 **실제 운영 runtime 커밋**(e4d31d68 · v7) worktree 다. 배포기와 같이
+ *      staging 확인 직전에 그 트리에서 source snapshot 을 뜨고, checkout 뒤 재확인은 그 snapshot 을 다시 쓴다.
+ *      v7 기록은 운영이 실제로 쓴 모양(게이트 판 `draft-gates-v6.1`)이다.
+ *
  * 🔴 운영 DB 에 붙지 않는다(sentinel · localhost · soran_test). 임시 HOME 아래 artifact 정본만 쓴다.
  *    `quality-contract-transition-db-check` 끝에서 같은 CI step 으로 부른다.
  */
@@ -29,7 +33,7 @@ import { pickV2 } from '../src/lib/micro-seed-auto-draft'
 import * as af from '../src/lib/micro-seed-supply-autofill'
 import { SEMANTIC_HOLD_CODES } from '../src/lib/semantic-summary-codes'
 import { planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
-import { DEFECT_RESOLUTION_KEY } from '../src/lib/auto-ready-defect-resolution'
+import { DEFECT_RESOLUTION_KEY, type DefectResolutionRecord } from '../src/lib/auto-ready-defect-resolution'
 import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
 import { QUALITY_CONTRACT_KEY, currentQualityContract } from '../src/lib/quality-contract'
 import { runDeploy, type DeployEffects } from '../src/lib/runtime-deploy'
@@ -39,6 +43,7 @@ import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
 import { LIFE_FIXTURES } from './lib/life-gate-fixtures.mjs'
 import { FIXTURE_NOW } from './lib/draft-gate-fixtures.mjs'
 import { markText, unresolvedUnder } from './lib/quality-contract-transition.mjs'
+import { openRuntimeTree, snapshotToFile, type RuntimeTree } from './lib/source-snapshot-fixture.mjs'
 import {
   requireIsolatedDb, wipeAuditFixtures, newFixture, seedEvidence, autoPublished, selectForAudit, flushArtifacts,
   type AutoPost, type Fixture,
@@ -57,9 +62,12 @@ const CLI = join(ROOT, 'scripts/quality-contract-transition-check.mts')
 const SCRATCH = mkdtempSync(join(tmpdir(), 'soran-contract-deploy-'))
 /** 🔴 승계 집합 기록 — 배포기의 `contract-succession-<SHA>.json` 과 같은 역할(stage 가 쓰고 activate 가 대조) */
 const SUCC_FILE = join(SCRATCH, 'contract-succession.json')
+/** 🔴 source snapshot — 배포기의 `contract-source-<SHA>.json` 과 같은 역할(staging 확인 직전에 뜨고 checkout 뒤 재확인이 다시 쓴다) */
+const SRC_FILE = join(SCRATCH, 'contract-source.json')
 const LEGACY_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
 /** 🔴 운영 runtime 의 계약 — origin/main 의 `quality-contract.fingerprint.json` 그대로 */
 const V7 = { version: 'quality-v7', digest: 'ef9ff369253ee95de6707acd7a4c8de7cee294a9023c8a7833d64150b33bc8de' }
+const V7_GATE = 'draft-gates-v6.1'
 const BLOCKED = LIFE_FIXTURES.find((x) => x.queueId === 'counter-v6-peer-observation')!
 const PASSING = LIFE_FIXTURES.find((x) => x.queueId === 'control-v6-peer-third-party')!
 /** 🔴 14:40 감사 결함 재작성 — P02(자녀 1명) · SELF · `아들 둘 데리고` · v7 표식 · 자동 발행됨 */
@@ -78,6 +86,17 @@ const resolutionsOf = (editDiff: unknown): unknown[] => {
   const v = rec(editDiff)[DEFECT_RESOLUTION_KEY]
   return Array.isArray(v) ? v : []
 }
+/** 🔴 v7 코드가 실제로 쓴 기록의 모양 — 계약 v7 · 게이트 판 v7 */
+const v7RecordOf = (r: DefectResolutionRecord): DefectResolutionRecord =>
+  ({ ...r, qualityContract: V7, reverify: { ...r.reverify, gateVersion: V7_GATE } })
+/** 🔴 실제 runtime 커밋 트리 — main 에서 연다(`--inject-defect` 자식은 쓰지 않는다) */
+let RT_TREE: RuntimeTree | null = null
+/** 🔴 배포기 `snapshotSource` 와 같다 — runtime 트리에서 snapshot 을 떠 SRC_FILE 에 봉인. 뜨지 못하면 null(배포기는 BLOCK) */
+const snapshotSource = (home: string, root?: RuntimeTree) => {
+  const t = root ?? RT_TREE
+  return t === null ? null : snapshotToFile(t, SRC_FILE, { ...process.env, HOME: home })
+}
+const sourceArgs = [`--runtime-gate=${V7_GATE}`, `--source-snapshot=${SRC_FILE}`]
 
 /** 🔴 운영 결함과 같은 모양 — 옛 계약 행 · 기계 의미 감사 yes(측정됨) */
 async function defectRow(f: Fixture, fx: typeof BLOCKED, o: {
@@ -118,14 +137,14 @@ type Host = {
   jobs: Map<string, JobState>; plists: Map<string, string>; order: string[]
   fx: DeployEffects
 }
-function makeHost(home: string, o: { stagedHead?: string } = {}): Host {
+function makeHost(home: string, o: { stagedHead?: string; sourceTree?: RuntimeTree } = {}): Host {
   const h: Host = {
     sha: PREV, pin: PREV, manifest: JSON.stringify({ sha: PREV }),
     jobs: new Map(JOBS.map((l) => [l, 'loaded'])), plists: new Map(JOBS.map((l) => [l, JSON.stringify(['npx', 'tsx', `${RT}/scripts/${l}.mts`, '--old'])])),
     order: [], fx: {} as DeployEffects,
   }
-  // 🔴 activate 의 두 재확인 — 배포기와 같이 stage 가 남긴 승계 집합으로 대조한다
-  const cli = (): boolean => spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--verify-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' }).status === 0
+  // 🔴 activate 의 두 재확인 — 배포기와 같이 stage 가 남긴 승계 집합 · source snapshot 으로 대조한다
+  const cli = (): boolean => spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, ...sourceArgs, `--verify-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' }).status === 0
   h.fx = {
     fetch: () => true, currentSha: () => h.sha, originMain: () => NEXT, isAncestor: () => true, dirty: () => false,
     runningJobs: () => ({ running: [], unknown: [] }), envBlockers: () => [],
@@ -139,8 +158,14 @@ function makeHost(home: string, o: { stagedHead?: string } = {}): Host {
     // 🔴 staging 트리가 target 에 있어야 그 트리로 잰다 — 아니면 false(배포기 실제 효과와 같은 계약)
     stagedTransitionCheck: (target) => {
       h.order.push('staged-check')
-      return (o.stagedHead ?? NEXT) === target && cli()
+      if ((o.stagedHead ?? NEXT) !== target) return false
+      // 🔴 job 을 내리기 전 · runtime 트리가 아직 source 일 때 snapshot 을 뜬다 — 뜨지 못하면 BLOCK
+      rmSync(SRC_FILE, { force: true })
+      if (snapshotSource(home, o.sourceTree) === null) { h.order.push('source-snapshot-failed'); return false }
+      h.order.push('source-snapshot')
+      return cli()
     },
+    // 🔴 checkout 뒤에는 runtime 트리가 target 이다 — source 를 다시 뜨지 않고 staging 직전의 snapshot 을 쓴다
     contractTransitionGate: () => { h.order.push('recheck'); return cli() },
     readInstalledPlist: (l) => h.plists.get(l) ?? null,
     renderPlist: (_t, l) => JSON.stringify(['npx', 'tsx', `${RT}/scripts/${l}.mts`, '--new']),
@@ -161,7 +186,13 @@ function makeHost(home: string, o: { stagedHead?: string } = {}): Host {
 /** 🔴 stage — 배포기 `--stage` 가 staging 트리에서 부르는 것과 같은 CLI · 같은 인자(PASS 면 승계 집합을 남긴다) */
 const stageRun = (home: string) => {
   rmSync(SUCC_FILE, { force: true })
-  return spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--record-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+  if (snapshotSource(home) === null) throw new Error('stage — runtime 트리에서 source snapshot 을 뜨지 못했다')
+  return spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, ...sourceArgs, `--record-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+}
+/** 🔴 activate 대조만 — 배포기처럼 snapshot 을 새로 뜨고 승계 파일과 대조한다 */
+const verifyRun = (home: string, file = SUCC_FILE) => {
+  if (snapshotSource(home) === null) throw new Error('verify — runtime 트리에서 source snapshot 을 뜨지 못했다')
+  return spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, ...sourceArgs, `--verify-succession=${file}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
 }
 const deploy = (h: Host) => runDeploy({ target: NEXT, jobs: JOBS, paths: { runtimeRoot: RT, devRoots: ['/fx/dev'] }, offlineGates: ['fx-gate'], now: () => '2026-10-13T00:00:00.000Z' }, h.fx)
 const allLoaded = (h: Host): boolean => JOBS.every((l) => h.jobs.get(l) === 'loaded')
@@ -173,6 +204,9 @@ async function main(): Promise<void> {
   const home = join(SCRATCH, 'home')
   mkdirSync(home, { recursive: true })
   const TARGET = currentQualityContract()
+  const tree = openRuntimeTree(ROOT)
+  RT_TREE = tree
+  process.on('exit', tree.cleanup)
   const tables = async (): Promise<string> => stableJson({
     audit: await prisma.autoReadyAudit.findMany({ orderBy: { queueId: 'asc' } }),
     queue: await prisma.originalPostApprovalQueue.findMany({ orderBy: { id: 'asc' } }),
@@ -184,7 +218,10 @@ async function main(): Promise<void> {
       select: { id: true, createdPostId: true, draftTitle: true, draftBody: true, gateResults: true, editDiff: true },
     })
     const qs = new Map(rows.map((q) => [q.id, q]))
-    return { v7: unresolvedUnder(audits, qs, V7).length, v8: unresolvedUnder(audits, qs, TARGET).length }
+    // 🔴 v7 축은 runtime 트리(v7 코드)가 센 값이다 — target 코드로 v7 기록을 다시 세지 않는다
+    const s = snapshotSource(home)
+    if (s === null) throw new Error('counts — runtime 트리에서 source snapshot 을 뜨지 못했다')
+    return { v7: s.unresolved.length, v8: unresolvedUnder(audits, qs, TARGET).length }
   }
 
   await wipeAuditFixtures(prisma)
@@ -194,7 +231,7 @@ async function main(): Promise<void> {
   const A = await defectRow(f, BLOCKED)
   const pA = await planDefectResolution(prisma, { queueId: A.queueId, contextOf, now: new Date() })
   if (pA.kind !== 'plan') throw new Error('fixture 계획 실패')
-  const v7Record = { ...pA.plan.record, qualityContract: V7 }
+  const v7Record = v7RecordOf(pA.plan.record)
   const q0 = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: A.queueId }, select: { editDiff: true } })
   await prisma.originalPostApprovalQueue.update({ where: { id: A.queueId }, data: { editDiff: { ...rec(q0.editDiff), [DEFECT_RESOLUTION_KEY]: [v7Record] } as Prisma.InputJsonValue } })
 
@@ -241,23 +278,31 @@ async function main(): Promise<void> {
 
   console.log('\n③ recheck — v7=0 · v8=0')
   {
-    const r = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    if (snapshotSource(home) === null) throw new Error('recheck snapshot 실패')
+    const r = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, ...sourceArgs], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
     check('🟢 CLI exit 0 · PASS NO_UNRESOLVED · runtime 0 · target 0', r.status === 0 && /verdict=PASS code=NO_UNRESOLVED/.test(r.stdout)
-      && /runtime=quality-v7:[0-9a-f]{64} unresolved=0/.test(r.stdout) && new RegExp(`target=${TARGET.version}:[0-9a-f]{64} unresolved=0`).test(r.stdout), r.stdout)
+      && /runtime=quality-v7:[0-9a-f]{64} gate=draft-gates-v6\.1 unresolved=0/.test(r.stdout) && new RegExp(`target=${TARGET.version}:[0-9a-f]{64} unresolved=0`).test(r.stdout), r.stdout)
   }
 
   console.log('\n④ activate — 재확인 둘을 지나야 pin 전환 · job 로드')
   {
     const st = stageRun(home)
     check('stage — PASS · 승계 집합을 남긴다(빈 집합)', st.status === 0 && /CONTRACT_SUCCESSION_STAGED/.test(st.stdout), st.stdout.slice(0, 300))
+    // 🔴 source snapshot 을 뜰 수 없는 runtime 트리 — 나머지가 전부 PASS 여도 활성화 0
+    const broken = makeHost(home, { sourceTree: { root: join(SCRATCH, 'no-runtime-tree'), cleanup: () => undefined } })
+    const rb = await deploy(broken)
+    check('🔴 🔴 **runtime 트리에서 source snapshot 을 뜨지 못하면 → preflight BLOCK · 활성화 0 · v7 job 그대로**', !rb.ok && rb.phase === 'preflight'
+      && broken.order.includes('source-snapshot-failed') && !broken.order.some((x) => x.startsWith('unload') || x.startsWith('checkout'))
+      && broken.sha === PREV && broken.pin === PREV && allLoaded(broken) && oldPlists(broken), `${rb.phase} ${broken.order.join(' ')}`)
     const snap = await tables()
     const h = makeHost(home)
     const r = await deploy(h)
     check('🟢 🟢 **배포 통과 · pin=target · manifest=target · 새 plist · job loaded**', r.ok && h.pin === NEXT && h.sha === NEXT
       && (JSON.parse(h.manifest ?? '{}') as { sha?: string }).sha === NEXT && !oldPlists(h) && allLoaded(h), `${r.phase} ${r.problems.join(' · ')}`)
     const o = h.order
-    check('🔴 순서 — staging 확인 → unload → checkout → 재확인 → 게이트 → plist → manifest → load',
-      o.indexOf('staged-check') < o.findIndex((x) => x.startsWith('unload')) && o.indexOf('checkout:target') < o.indexOf('recheck')
+    check('🔴 순서 — source snapshot → staging 확인 → unload → checkout → 재확인 → 게이트 → plist → manifest → load',
+      o.indexOf('source-snapshot') > -1 && o.indexOf('source-snapshot') < o.findIndex((x) => x.startsWith('unload'))
+      && o.indexOf('staged-check') < o.findIndex((x) => x.startsWith('unload')) && o.indexOf('checkout:target') < o.indexOf('recheck')
       && o.indexOf('recheck') < o.indexOf('gate:fx-gate') && o.indexOf('gate:fx-gate') < o.findIndex((x) => x.startsWith('write-plist'))
       && o.indexOf('write-manifest') < o.findIndex((x) => x.startsWith('load:')), o.join(' '))
     check('🔴 활성화는 DB write 0 · 활성화 뒤 v8 코드의 미해소 0 · v7 기록 그대로', await tables() === snap && await unresolvedDefectCount(prisma) === 0
@@ -292,6 +337,10 @@ async function main(): Promise<void> {
     check('🔴 🔴 **직전 SHA · pin · manifest · 옛 plist · job loaded 로 되돌렸다 · 복구 완전**', h.sha === PREV && h.pin === PREV
       && (JSON.parse(h.manifest ?? '{}') as { sha?: string }).sha === PREV && oldPlists(h) && allLoaded(h) && r.rollback?.complete === true, JSON.stringify(r.rollback))
     check('🔴 재확인 BLOCK 이면 offline 게이트 · plist · manifest 단계에 닿지 않았다', !r.steps.some((x) => x === 'write-manifest' || x.startsWith('plist:') || x.startsWith('gate:fx')))
+    // 🔴 재확인은 unload 전에 뜬 snapshot 을 다시 쓴다 — 그 뒤 생긴 결함은 집합 불일치로 막힌다
+    const why = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, ...sourceArgs, `--verify-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    check('🔴 🔴 **사유 — unload 전 source snapshot 뒤 결함 집합이 바뀌었다(SOURCE_SNAPSHOT_INVALID)**', why.status === 1
+      && /code=SOURCE_SNAPSHOT_INVALID/.test(why.stdout) && /결함 집합이 바뀌었다/.test(why.stdout), why.stdout.slice(0, 300))
     if (injected !== null && (injected as AutoPost).queueId !== 'FAILED') await prisma.autoReadyAudit.delete({ where: { queueId: (injected as AutoPost).queueId } })
   }
 
@@ -385,11 +434,27 @@ async function main(): Promise<void> {
     check('새 결함 K3 도 공식 v8 해소(그래도 stage 집합 밖이다)', await resolveV8(K3.queueId) === 'written')
     const aNew = await activate()
     check('🔴 🔴 **stage 뒤 새 v7 결함 → activate BLOCK(승계 집합 digest 불일치) · 활성화 0**', !aNew.ok && aNew.phase === 'preflight' && untouched(aNew.h), aNew.phase)
-    const rcNew = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--verify-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    const rcNew = verifyRun(home)
     check('🔴 사유 — SUCCESSION_DIGEST_MISMATCH', rcNew.status === 1 && /SUCCESSION_DIGEST_MISMATCH/.test(rcNew.stdout), rcNew.stdout.slice(0, 200))
-    const noStage = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--verify-succession=${join(SCRATCH, 'missing.json')}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    const noStage = verifyRun(home, join(SCRATCH, 'missing.json'))
     check('🔴 stage 기록이 없으면 → BLOCK SUCCESSION_NOT_STAGED', noStage.status === 1 && /SUCCESSION_NOT_STAGED/.test(noStage.stdout))
     await drop(K2.queueId, K3.queueId)
+
+    // ── f2. stage 뒤 source 결함 집합만 바뀜(양쪽에서 해소된 옛 계약 행 결함 B · 링크 · v8 미해소 그대로) → activate 차단 ──
+    const sF = stageRun(home)
+    check('stage — PASS · 승계 1 (K)', sF.status === 0 && /succession=1 /.test(sF.stdout), sF.stdout.slice(0, 300))
+    const B = await defectRow(f, BLOCKED)
+    const pB = await planDefectResolution(prisma, { queueId: B.queueId, contextOf, now: new Date() })
+    if (pB.kind !== 'plan') throw new Error('B 계획 실패')
+    await setRecords(B.queueId, [v7RecordOf(pB.plan.record)])
+    check('B 는 v7 기록(실제 모양) + 공식 v8 해소', await resolveV8(B.queueId) === 'written')
+    const cB = await counts()
+    check('전제 — B 는 v7 · v8 모두 해소 · v7 미해소는 K 하나 · v8 0', cB.v7 === 1 && cB.v8 === 0, JSON.stringify(cB))
+    const aB = await activate()
+    check('🔴 🔴 **stage 뒤 source 결함 집합이 바뀜 → activate BLOCK · 활성화 0**', !aB.ok && aB.phase === 'preflight' && untouched(aB.h), aB.phase)
+    const vB = verifyRun(home)
+    check('🔴 사유 — SUCCESSION_DIGEST_MISMATCH (source 집합이 승계 digest 에 들어 있다)', vB.status === 1 && /SUCCESSION_DIGEST_MISMATCH/.test(vB.stdout), vB.stdout.slice(0, 300))
+    await drop(B.queueId)
 
     // ── g. v7 에 다른 유형의 미해소(옛 계약 행 · v7 기록 없음 · v8 기록만) → 차단 ──
     const L = await defectRow(f, BLOCKED)
@@ -497,6 +562,7 @@ async function main(): Promise<void> {
       && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })).decidedBy === wRow.decidedBy, JSON.stringify(sw))
   }
 
+  tree.cleanup()
   await wipeAuditFixtures(prisma)
   await prisma.$disconnect()
   rmSync(SCRATCH, { recursive: true, force: true })

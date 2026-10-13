@@ -2,7 +2,9 @@
 /**
  * 🔴 **품질 계약 전환 preflight — 읽기 전용** (2026-10-13 · PR #710 보정)
  *
- *   npx tsx scripts/quality-contract-transition-check.mts --runtime=<판>:<digest>
+ *   npx tsx scripts/quality-contract-transition-check.mts --runtime=<판>:<digest> --runtime-gate=<게이트 판> --source-snapshot=<파일>
+ *     🔴 (v4 hotfix) source 미해소는 runtime 트리가 자기 코드로 센 봉인 snapshot 으로만 받는다(`source-snapshot`).
+ *        파일 없음 · 손상 · 봉인 불일치 · 계약/게이트 판 불일치 · 지금 DB 결함 집합과 다름 → BLOCK(fail-closed)
  *     [--record-succession=<파일>]   stage — PASS 면 승계 집합 digest 를 이 파일에 남긴다(DB 아님)
  *     [--verify-succession=<파일>]   activate — 그 파일의 집합과 지금 집합이 같아야 PASS(없으면 BLOCK)
  *   두 파일 경로는 배포기(`runtime-deploy`)가 정한 자리를 넘긴다 — 사람이 넣는 승인값이 아니다.
@@ -23,6 +25,8 @@ import { dirname } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
+import { auditFingerprintOf } from '../src/lib/auto-ready-defect-resolution'
+import { readSealedSnapshot, snapshotProblems } from './lib/source-snapshot.mjs'
 import { planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
 import { currentQualityContract, readQualityContract } from '../src/lib/quality-contract'
 import { defectPlanDigestOf, expectationOf } from './lib/defect-resolution-approval.mjs'
@@ -36,7 +40,7 @@ import {
 const argv = process.argv.slice(2)
 
 async function main(): Promise<number> {
-  const KNOWN = ['--runtime=', '--record-succession=', '--verify-succession=']
+  const KNOWN = ['--runtime=', '--runtime-gate=', '--source-snapshot=', '--record-succession=', '--verify-succession=']
   const unknown = argv.filter((a) => !KNOWN.some((k) => a.startsWith(k)))
   if (unknown.length > 0) {
     // 🔴 우회·승인 플래그(`--force` · `--approve-…`)를 조용히 무시하지 않는다 — 모르는 인자는 거절이다
@@ -46,6 +50,11 @@ async function main(): Promise<number> {
   const runtime = parseContractMark(argv.find((a) => a.startsWith('--runtime='))?.slice('--runtime='.length) ?? '')
   if (runtime === null) { console.error('CONTRACT_TRANSITION refuse code=NO_RUNTIME_CONTRACT · --runtime=<판>:<digest 64> 가 필요하다'); return 2 }
   const target = currentQualityContract()
+  const runtimeGate = argv.find((a) => a.startsWith('--runtime-gate='))?.slice('--runtime-gate='.length).trim() ?? ''
+  const snapshotPath = argv.find((a) => a.startsWith('--source-snapshot='))?.slice('--source-snapshot='.length) ?? ''
+  if (!/^[A-Za-z0-9._-]+$/.test(runtimeGate) || snapshotPath === '') {
+    console.error('CONTRACT_TRANSITION refuse code=NO_SOURCE_IDENTITY · --runtime-gate=<판> · --source-snapshot=<파일> 가 필요하다'); return 2
+  }
   const recordPath = argv.find((a) => a.startsWith('--record-succession='))?.slice('--record-succession='.length) ?? null
   const verifyPath = argv.find((a) => a.startsWith('--verify-succession='))?.slice('--verify-succession='.length) ?? null
   if (recordPath !== null && verifyPath !== null) { console.error('CONTRACT_TRANSITION refuse code=BAD_ARGS · record 와 verify 를 함께 쓰지 않는다'); return 2 }
@@ -71,6 +80,17 @@ async function main(): Promise<number> {
       select: { id: true, createdPostId: true, draftTitle: true, draftBody: true, gateResults: true, editDiff: true },
     })
     const queues = new Map(rows.map((q) => [q.id, q]))
+    // 🔴 source 상태 — 봉인 · 계약 · 게이트 판 · 지금 DB 결함 집합을 대조한 snapshot 만 쓴다. 어긋나면 BLOCK(fail-closed)
+    const sealed = readSealedSnapshot(existsSync(snapshotPath) ? readFileSync(snapshotPath, 'utf8') : null)
+    const sourceBad = sealed.ok
+      ? snapshotProblems(sealed.snapshot, { contract: runtime, gateVersion: runtimeGate, defects: new Map(audits.map((a) => [a.queueId, auditFingerprintOf(a)])) })
+      : [sealed.reason]
+    if (!sealed.ok || sourceBad.length > 0) {
+      console.log(`CONTRACT_TRANSITION ${CONTRACT_TRANSITION_VERSION} verdict=BLOCK code=SOURCE_SNAPSHOT_INVALID`)
+      for (const p of sourceBad) console.log(`  · ${p}`)
+      return 1
+    }
+    const source = { gateVersion: sealed.snapshot.gateVersion, defects: sealed.snapshot.defects }
     // 🔴 공식 dry-run 과 같은 함수 · 같은 digest · 같은 expect — target 미해소 결함에만 묻는다(읽기 트랜잭션)
     const contextOf = makeReverifyContextLoader()
     const plans: PlanObservation[] = []
@@ -83,7 +103,7 @@ async function main(): Promise<number> {
         expects.set(id, `${ex.before}:${ex.after}`)
       } else plans.push(e.kind === 'already' ? { queueId: id, kind: 'already' } : { queueId: id, kind: 'refuse', code: e.code })
     }
-    const r = judgeTransition({ runtime, target, audits, queues, plans, ...(staged === undefined ? {} : { stagedSuccession: staged }) })
+    const r = judgeTransition({ runtime, target, audits, queues, plans, source, ...(staged === undefined ? {} : { stagedSuccession: staged }) })
 
     // 🔴 그때 남아 있는 자동 READY(도장 · 미발행) — 계약별 건수만. 재도장 · 승격은 어디에도 없다
     const ready = await prisma.originalPostApprovalQueue.findMany({
@@ -95,7 +115,8 @@ async function main(): Promise<number> {
     }).length
 
     console.log(`CONTRACT_TRANSITION ${CONTRACT_TRANSITION_VERSION} verdict=${r.verdict} code=${r.code}`)
-    console.log(`  runtime=${markText(r.runtime)} unresolved=${r.runtimeUnresolved.length} autoReadyPending=${readyOf(r.runtime)}`)
+    console.log(`  runtime=${markText(r.runtime)} gate=${runtimeGate} unresolved=${r.runtimeUnresolved.length} autoReadyPending=${readyOf(r.runtime)} source=${sealed.digest.slice(0, 16)}`)
+    for (const id of r.runtimeUnresolved) console.log(`  source-unresolved queue=${id}`)
     console.log(`  target=${markText(r.target)} unresolved=${r.targetUnresolved.length} autoReadyPending=${readyOf(r.target)}`)
     console.log(`  transition=${r.transition ? 'yes' : 'no'} afterPlans target=${r.afterPlans.target} runtime=${r.afterPlans.runtime} autoReadyPendingOther=${ready.length - readyOf(r.runtime) - readyOf(r.target)}`)
     for (const p of r.plans) {

@@ -40,8 +40,11 @@ import { readQualityContract, type QualityContractMark } from '../../src/lib/qua
 /**
  * 🔴 v2 (2026-10-13) — 승인 통과 경로를 없앴다.
  * 🔴 v3 (같은 날 · 마스터 결정) — v7 자기 계약 결함의 **승계**: 정확한 1:1 v8 공식 해소 · stage 집합 digest 대조
+ * 🔴 v4 (같은 날 · #710 뒤 P0 hotfix) — **source 미해소는 source runtime 이 센 snapshot 으로 받는다**(`source-snapshot`).
+ *    target 판정기가 source 기록을 target 게이트로 재해석하지 않는다 — v3 는 그렇게 해서 live v7 에서 해소된
+ *    옛 계약 행 결함을 `NOT_OWN_CONTRACT` 로 부활시켰다. 승계 집합 digest 에 source snapshot 의 결함 상태가 들어간다.
  */
-export const CONTRACT_TRANSITION_VERSION = 'contract-transition-v3'
+export const CONTRACT_TRANSITION_VERSION = 'contract-transition-v4'
 
 const stableJson = (v: unknown): string =>
   JSON.stringify(v, (_k, x) => (x !== null && typeof x === 'object' && !Array.isArray(x)
@@ -154,8 +157,21 @@ export function successionOf(i: {
   return { links: problems.length === 0 ? links : [], problems }
 }
 
-export function successionDigestOf(runtime: QualityContractMark, target: QualityContractMark, links: readonly SuccessionLink[]): string {
-  return sha({ v: CONTRACT_TRANSITION_VERSION, runtime, target, links: [...links].sort((x, y) => x.queueId.localeCompare(y.queueId)) })
+/** 🔴 source 상태 — source runtime 이 자기 계약 · 게이트 판으로 센 값(`source-snapshot`). 전환 판정은 이것을 다시 세지 않는다 */
+export type SourceState = {
+  gateVersion: string
+  /** 확정 결함마다 source 에서 해소됐는가 · 감사 지문 */
+  defects: readonly { queueId: string; auditFingerprint: string; resolved: boolean }[]
+}
+
+export function successionDigestOf(
+  runtime: QualityContractMark, target: QualityContractMark, links: readonly SuccessionLink[], source: SourceState,
+): string {
+  return sha({
+    v: CONTRACT_TRANSITION_VERSION, runtime, target, links: [...links].sort((x, y) => x.queueId.localeCompare(y.queueId)),
+    // 🔴 stage 뒤 source 결함 집합 · 해소 여부가 바뀌면 activate 의 집합이 달라진다
+    source: { gateVersion: source.gateVersion, defects: [...source.defects].sort((x, y) => x.queueId.localeCompare(y.queueId)) },
+  })
 }
 
 /**
@@ -168,13 +184,16 @@ export function judgeTransition(i: {
   audits: readonly AuditRowForResolution[]
   queues: ReadonlyMap<string, QueueRowForResolution>
   plans: readonly PlanObservation[]
+  /** 🔴 source 상태 — source runtime 의 snapshot(봉인 · 계약 · 게이트 판 · DB 집합 대조를 마친 것). 다시 세지 않는다 */
+  source: SourceState
   /**
    * 🔴 activate 쪽 대조 — stage 가 남긴 승계 집합 digest. `undefined` 면 대조하지 않는다(stage 가 재는 자리).
    *    `null` 이면 stage 기록이 없다 → BLOCK. 사람이 넣는 값이 아니다 — 배포가 stage 파일에서 읽어 넘긴다.
    */
   stagedSuccession?: string | null
 }): TransitionResult {
-  const runtimeUnresolved = unresolvedUnder(i.audits, i.queues, i.runtime)
+  // 🔴 source 미해소는 source runtime 이 센 값 그대로다 — target 코드로 다시 세지 않는다(v4)
+  const runtimeUnresolved = i.source.defects.filter((d) => !d.resolved).map((d) => d.queueId).sort()
   const targetUnresolved = unresolvedUnder(i.audits, i.queues, i.target)
   const planOf = new Map(i.plans.map((p) => [p.queueId, p]))
   const plans = targetUnresolved.map((id) => {
@@ -195,10 +214,11 @@ export function judgeTransition(i: {
   }
   const afterPlans = {
     target: unresolvedUnder(i.audits, simulated, i.target).length,
-    runtime: unresolvedUnder(i.audits, simulated, i.runtime).length,
+    // 🔴 target 기록은 source 판정을 바꾸지 않는다 — source 는 snapshot 그대로다
+    runtime: runtimeUnresolved.length,
   }
   const succ = successionOf({ runtime: i.runtime, target: i.target, audits: i.audits, queues: i.queues, runtimeUnresolved })
-  const successionDigest = successionDigestOf(i.runtime, i.target, succ.links)
+  const successionDigest = successionDigestOf(i.runtime, i.target, succ.links, i.source)
   const base = {
     runtime: i.runtime, target: i.target, transition: !sameMark(i.runtime, i.target), runtimeUnresolved, targetUnresolved, plans, afterPlans,
     succession: succ.links, successionDigest,
