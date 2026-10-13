@@ -241,11 +241,14 @@ jobs:
       #    DB 트랜잭션 쪽(best:db-check)은 격리 Postgres 가 필요해 CI 에 넣지 않는다.
       #    🔴 댓글 대화선 순수 검사(check:comment-thread)도 같은 step 에서 돈다 — 대화선 묶기·삭제 자리표시·
       #       작성자 구분·답글 대상 문구. 새 step 이 아니다(무조건 step 상한 불변). DB 쪽은 격리 Postgres 사슬에서 돈다.
+      #    🔴 홈 인기 점수 순수 검사(check:home-popularity)도 같은 step 이다 — Persona·운영 댓글이 홈 순위를
+      #       올리지 못하고 화면 댓글 수는 그대로인지. DB 쪽(check:home-popularity-db)은 격리 Postgres 가 필요해 CI 밖이다.
       - name: 베스트·댓글 정책 가드
         if: steps.scope.outputs.heavy == 'true'
         run: |
           npm run check:best
           npm run check:comment-thread
+          npm run check:home-popularity
 
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
