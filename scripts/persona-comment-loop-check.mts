@@ -476,7 +476,7 @@ console.log('\n⑧ 🔴 공통 lease · 겹친 깨움 합치기 · 예산 선검
   const entryCode = entry.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
   check('🔴 🔴 진입점 — 공통 진입(leaseEntry) 하나 · DB 클라이언트는 커널 잠금 증명 뒤 회차 안에서만',
     (entryCode.match(/leaseEntry\(/g) ?? []).length === 1 && (entryCode.match(/new PrismaClient\(\)/g) ?? []).length === 1
-    && entryCode.indexOf('pass: async (pass, proof)') < entryCode.indexOf('new PrismaClient()'))
+    && entryCode.indexOf('pass: async (pass, proof, ctx)') >= 0 && entryCode.indexOf('pass: async (pass, proof, ctx)') < entryCode.indexOf('new PrismaClient()'))
   check('🔴 🔴 정상 · 복구 회차가 같은 잠금 파일 · 같은 장부 — 회차 종류로 갈리는 경로가 없다',
     /lockFile: COMMENT_LOOP_LOCK_FILE/.test(entryCode) && /dir: commentLoopLedgerDir\(\)/.test(entryCode)
     && !/XPC_SERVICE_NAME[^\n]*(budget|limits|dailyUsd|lockFile|Ledger)/.test(entryCode))

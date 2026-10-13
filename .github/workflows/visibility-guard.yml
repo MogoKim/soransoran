@@ -696,6 +696,12 @@ jobs:
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:lease-check
 
+      # 🔴 발행 commit → 댓글 러너 사건 깨움 (2026-10-12 Batch C2). kill switch 기본 off · commit 뒤에만 · failure-open ·
+      #    합치기 · 고아 표식 복구 표식당 1회. launchctl 은 언제나 대역이다(운영 launchd 0). 실제 프로세스 반례는 macOS 전용(SKIP ≠ PASS).
+      - name: 사건 깨움 — 발행 commit 뒤 댓글 러너 (kill switch · failure-open · 합치기 · 고아 복구 상한)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run ops:event-wake-check
+
       # 🔴 **backlog 전체를 판정하지 않는다** — 2026-09-20 canary 가 $0.029949 를 쓰고
       #    후보 0건으로 끝난 구조를 막는다. 순수 함수와 소스 계약만 본다
       #    (provider 0 · DB 0 · write 0 · 실측 0.15 초).

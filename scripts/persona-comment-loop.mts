@@ -69,8 +69,10 @@ async function main(): Promise<number> {
       lockDir, lockFile: COMMENT_LOOP_LOCK_FILE, scriptPath: fileURLToPath(import.meta.url), argv: process.argv.slice(2),
       env: process.env, trigger: process.env.XPC_SERVICE_NAME === COMMENT_RUNNER_LABEL ? 'scheduled' : 'manual',
       log: (l) => console.log(l),
-      pass: async (pass, proof) => {
+      pass: async (pass, proof, ctx) => {
         if (pass === 0) console.log(`\n══ 무인 Persona 댓글 루프 ${LIVE ? '(--live)' : '(dry-run)'} · 커널 lease 안 ══\n`)
+        // 🔴 진단 — 이 회차를 연 깨움(정기 · 발행 뒤 사건 · 겹친 깨움). 잠금 · 장부 · 상한은 이 값으로 갈리지 않는다
+        console.log(`  깨움 ${ctx.trigger}${ctx.absorbed === null ? '' : ` (거둔 표식 ${ctx.absorbed}${ctx.absorbedAt === null ? '' : ` · ${ctx.absorbedAt}`})`}`)
         prisma ??= new PrismaClient()
         return runPass(prisma, new Date(), pass, proof)
       },
