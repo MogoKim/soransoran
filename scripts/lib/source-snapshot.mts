@@ -26,14 +26,20 @@ export const SOURCE_SNAPSHOT_MARK = 'SOURCE_SNAPSHOT '
  *    `judgeDefectResolution(a, q, currentQualityContract())` 는 그 트리의 정본 판정이다(계약 · 게이트 판 · 기록 판 전부 그 트리 상수).
  *    🔴 이 문자열은 옛 runtime 커밋에서도 돌아야 한다 — 그 커밋에 있는 export 만 쓴다.
  */
+/**
+ * 🔴 Node 판마다 `.ts`(CJS 로 옮겨진) 모듈의 동적 import 모양이 다르다 — Node 20 은 `{ default }` 하나, Node 22+ 는 named export.
+ *    두 모양을 하나로 편다. 이름이 없으면 그 자리에서 `TypeError` → 오류 줄 → BLOCK(fail-closed).
+ */
+const UNWRAP = 'const u = (m) => Object.assign({}, m && typeof m.default === \'object\' ? m.default : {}, m)'
 export const SOURCE_SNAPSHOT_SNIPPET = [
   '(async () => {',
-  "  const ops = await import('./scripts/lib/ops-signals.mts')",
+  `  ${UNWRAP}`,
+  "  const ops = u(await import('./scripts/lib/ops-signals.mts'))",
   "  if (!ops.fillDbConnection()) { console.log('SOURCE_SNAPSHOT_ERROR no-db'); process.exit(2) }",
   "  const { PrismaClient } = await import('@prisma/client')",
-  "  const qc = await import('./src/lib/quality-contract.ts')",
-  "  const g = await import('./src/lib/content-core/draft-life-gates.ts')",
-  "  const dr = await import('./src/lib/auto-ready-defect-resolution.ts')",
+  "  const qc = u(await import('./src/lib/quality-contract.ts'))",
+  "  const g = u(await import('./src/lib/content-core/draft-life-gates.ts'))",
+  "  const dr = u(await import('./src/lib/auto-ready-defect-resolution.ts'))",
   '  const p = new PrismaClient()',
   '  try {',
   '    const contract = qc.currentQualityContract()',
@@ -47,7 +53,7 @@ export const SOURCE_SNAPSHOT_SNIPPET = [
   "    console.log('SOURCE_SNAPSHOT ' + JSON.stringify({ v: 'source-snapshot-v1', contract: { version: contract.version, digest: contract.digest },",
   '      gateVersion: g.DRAFT_GATE_VERSION, recordVersion: dr.DEFECT_RESOLUTION_RECORD_VERSION, defects, takenAt: new Date().toISOString() }))',
   '  } finally { await p.$disconnect() }',
-  "})().catch((e) => { console.log('SOURCE_SNAPSHOT_ERROR ' + (e && e.name ? e.name : 'error')); process.exit(2) })",
+  "})().catch((e) => { console.log('SOURCE_SNAPSHOT_ERROR ' + (e && e.name ? e.name : 'error') + ' ' + String(e && e.message ? e.message : '').replace(/postgres(?:ql)?:\\/\\/\\S+/g, '<db>').slice(0, 200)); process.exit(2) })",
 ].join('\n')
 
 export type SourceDefect = { queueId: string; auditFingerprint: string; resolved: boolean }
@@ -147,12 +153,13 @@ export function takeSourceSnapshot(runtimeRoot: string, env: NodeJS.ProcessEnv =
 
 /** 🔴 runtime 트리의 게이트 판 — snapshot 과 따로 읽어 대조한다 */
 export const RUNTIME_GATE_SNIPPET =
-  "import('./src/lib/content-core/draft-life-gates.ts').then((m) => { console.log('RUNTIME_GATE ' + m.DRAFT_GATE_VERSION) })"
+  `${UNWRAP}; import('./src/lib/content-core/draft-life-gates.ts').then((m) => { console.log('RUNTIME_GATE ' + u(m).DRAFT_GATE_VERSION) })`
 export function readRuntimeGate(runtimeRoot: string): string | null {
   try {
     const out = execFileSync('npx', ['tsx', '-e', RUNTIME_GATE_SNIPPET], { cwd: runtimeRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 120_000 })
     const line = out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('RUNTIME_GATE ')).pop()
     const v = line?.slice('RUNTIME_GATE '.length).trim() ?? ''
-    return /^[A-Za-z0-9._-]+$/.test(v) ? v : null
+    // 🔴 이름을 못 찾은 판(`undefined`)은 판이 아니다
+    return /^[A-Za-z0-9._-]+$/.test(v) && v !== 'undefined' && v !== 'null' ? v : null
   } catch { return null }
 }
