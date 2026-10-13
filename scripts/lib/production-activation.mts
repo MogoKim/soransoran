@@ -12,7 +12,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  activationModeOf, approvalOf, looksIsolatedDb, productionGuardProblems, writerStateOf,
+  activationModeOf, approvalOf, looksIsolatedDb, productionGuardProblems, stagedGuardProblems, writerStateOf,
   type ActivationMode, type Approval, type ProductionFacts, type WriterProbe,
 } from '../../src/lib/production-activation-guard'
 import { RUNTIME_JOBS } from '../../src/lib/runtime-isolation'
@@ -49,6 +49,7 @@ export function collectProductionFacts(p: FactPaths): ProductionFacts {
   const fetched = git(p.repoRoot, ['fetch', '-q', 'origin', 'main']) !== null
   const originMain = fetched ? git(p.repoRoot, ['rev-parse', 'refs/remotes/origin/main']) : null
   const status = git(p.runtimeRoot, ['status', '--porcelain'])
+  const repoStatus = git(p.repoRoot, ['status', '--porcelain'])
   let manifestSha: string | null = null
   try {
     const m = JSON.parse(readFileSync(join(p.canonDir, 'runtime-manifest.json'), 'utf-8')) as { sha?: unknown }
@@ -58,13 +59,25 @@ export function collectProductionFacts(p: FactPaths): ProductionFacts {
   try { pin = readFileSync(join(p.canonDir, 'runtime-pinned-sha'), 'utf-8').trim() } catch { pin = null }
   const env = p.envFile === undefined ? readEnvKeys(['DATABASE_URL', 'DIRECT_URL']) : readEnvKeys(['DATABASE_URL', 'DIRECT_URL'], p.envFile)
   const url = env.values.DATABASE_URL ?? ''
+  const runtimeHead = git(p.runtimeRoot, ['rev-parse', 'HEAD'])
+  const repoHead = git(p.repoRoot, ['rev-parse', 'HEAD'])
+  /** 🔴 (staged) runtime SHA 가 지금 트리 HEAD(target)의 조상인가 — exit 0 이면 조상, 1 이면 아니다, 그 밖은 모른다 */
+  let ancestor: boolean | null = null
+  if (runtimeHead !== null && repoHead !== null) {
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', runtimeHead, repoHead], { cwd: p.repoRoot, stdio: 'ignore' })
+      ancestor = true
+    } catch (e) { ancestor = (e as { status?: number }).status === 1 ? false : null }
+  }
   return {
     originMain,
-    repoHead: git(p.repoRoot, ['rev-parse', 'HEAD']),
-    runtimeHead: git(p.runtimeRoot, ['rev-parse', 'HEAD']),
+    repoHead,
+    runtimeHead,
     runtimePin: pin,
     runtimeManifestSha: manifestSha,
     runtimeClean: status === null ? null : status === '',
+    repoClean: repoStatus === null ? null : repoStatus === '',
+    runtimeIsAncestorOfTarget: ancestor,
     writers: D100_WRITER_JOBS.map((label) => ({ label, state: writerStateOf(probe(label)) })),
     canonicalEnv: { read: env.ok, hasDatabaseUrl: url !== '', looksIsolated: url !== '' && looksIsolatedDb(url) },
   }
@@ -73,7 +86,7 @@ export function collectProductionFacts(p: FactPaths): ProductionFacts {
 export type CliActivation =
   | { kind: 'dry-run' }
   | { kind: 'isolated' }
-  | { kind: 'production'; target: string; approval: Approval }
+  | { kind: 'production'; target: string; approval: Approval; staged: boolean }
   | { kind: 'refuse'; problems: string[] }
 
 const argOf = (argv: readonly string[], k: string): string | null => {
@@ -88,11 +101,18 @@ const argOf = (argv: readonly string[], k: string): string | null => {
  */
 export function openActivation(argv: readonly string[], opts: {
   repoRoot: string
+  /**
+   * 🔴 `--staged` 를 받아도 되는 CLI 인가 — 품질 계약 전환의 해소 기록(`auto-ready:defect-resolve`)만 true 다.
+   *    없거나 false 면 `--staged` 는 거부다(다른 운영 쓰기가 옛 runtime 위에서 새 코드로 쓰지 않게).
+   */
+  allowStaged?: boolean
   collect?: (p: FactPaths) => ProductionFacts
   paths?: FactPaths
 }): CliActivation {
+  const staged = argv.includes('--staged')
+  if (staged && opts.allowStaged !== true) return { kind: 'refuse', problems: ['이 명령은 --staged 를 받지 않는다'] }
   const mode: ActivationMode = activationModeOf({
-    apply: argv.includes('--apply'), production: argv.includes('--production'), target: argOf(argv, '--target'),
+    apply: argv.includes('--apply'), production: argv.includes('--production'), target: argOf(argv, '--target'), staged,
   })
   if (mode.mode === 'refuse') return { kind: 'refuse', problems: mode.problems }
   if (mode.mode === 'dry-run') return { kind: 'dry-run' }
@@ -102,7 +122,7 @@ export function openActivation(argv: readonly string[], opts: {
   if ((process.env.SORAN_ISOLATED_DB ?? '') !== '') return { kind: 'refuse', problems: ['SORAN_ISOLATED_DB 가 켜진 채로 운영을 열지 않는다'] }
   const paths = opts.paths ?? DEFAULT_PATHS(opts.repoRoot)
   const facts = (opts.collect ?? collectProductionFacts)(paths)
-  const problems = productionGuardProblems(mode.target, facts)
+  const problems = mode.staged ? stagedGuardProblems(mode.target, facts) : productionGuardProblems(mode.target, facts)
   if (problems.length > 0) return { kind: 'refuse', problems }
   // 🔴 셸에서 물려받은 주소를 믿지 않는다 — canonical env 값으로 덮는다(찍지 않는다)
   const env = paths.envFile === undefined ? readEnvKeys(['DATABASE_URL', 'DIRECT_URL']) : readEnvKeys(['DATABASE_URL', 'DIRECT_URL'], paths.envFile)
@@ -110,5 +130,5 @@ export function openActivation(argv: readonly string[], opts: {
     if ((env.values[k] ?? '') !== '') process.env[k] = env.values[k]
     else delete process.env[k]
   }
-  return { kind: 'production', target: mode.target, approval: ap.approval }
+  return { kind: 'production', target: mode.target, approval: ap.approval, staged: mode.staged }
 }

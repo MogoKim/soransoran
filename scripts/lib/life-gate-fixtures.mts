@@ -22,6 +22,11 @@ import { FIXTURE_NOW, type GateFixture } from './draft-gate-fixtures.mjs'
 export type LifeFixture = GateFixture & {
   /** 🔴 채택은 되지만 사람 검토로 가야 하는 축. 없으면 `[]` — 모호함 없음 */
   expectReview: DraftLifeReviewCode[]
+  /**
+   * 🔴 (quality-v8 보정) **생성 전에 계획이 멈추는 반례** — 원문 근거 줄의 가족 사실을 카드가 보증하지 못해 1인칭 허가가 없다
+   *    (`requiredValueUnmet`). 생성 경로에서는 초안 요청 0 · 의미 검수 0 이다. 게이트(`expect`)는 생성 뒤 두 번째 방어선이다.
+   */
+  planHold?: true
 }
 
 const POOL_DOC = join(process.cwd(), 'docs/operations/2026-08-30-persona-pool-design.md')
@@ -48,7 +53,7 @@ const review = (codes: DraftLifeReviewCode[]): { expect: DraftGateCode[]; expect
 const SRC_FIGHT = {
   title: '부부싸움 끝에 친정엄마 말씀이 더 아프네요',
   body: '해마다 한두 번은 크게 붙는데 이번에도 막말이 오갔어요. 친정엄마는 헤어질 거면 아이들은 두고 나오라시네요. '
-    + '아들 둘을 혼자는 못 키운다고요.',
+    + '애들 둘을 혼자는 못 키운다고요.',
 }
 const SRC_INLAW = {
   title: '시부모님 생신 챙기기 어렵네요',
@@ -79,7 +84,7 @@ const V2_FIXTURES: readonly LifeFixture[] = [
     plan: planOf({
       personaCode: 'P05', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [
-        { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 둘을 혼자는 못 키운다고요' },
+        { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '애들 둘을 혼자는 못 키운다고요' },
       ],
     }),
     card: realCard('P05'), ...hold(['maritalStatusConflict']),
@@ -139,12 +144,12 @@ const V2_FIXTURES: readonly LifeFixture[] = [
     source: { id: 'fx-v2-c6a', ...SRC_FIGHT },
     draft: {
       title: '이혼하고 애들 키우는 얘기',
-      body: '이혼하고 아들 둘 혼자 키우느라 정신이 없어요.\n그래도 애들 보면 힘이 나네요.\n다들 어떻게 버티세요?',
+      body: '이혼하고 애들 둘 혼자 키우느라 정신이 없어요.\n그래도 애들 보면 힘이 나네요.\n다들 어떻게 버티세요?',
     },
     plan: planOf({
       personaCode: 'P03', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [
-        { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 둘을 혼자는 못 키운다고요' },
+        { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '애들 둘을 혼자는 못 키운다고요' },
       ],
     }),
     card: realCard('P03'), ...pass,
@@ -238,7 +243,7 @@ const V2_FIXTURES: readonly LifeFixture[] = [
     plan: planOf({
       personaCode: 'P06', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [
-        { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 둘을 혼자는 못 키운다고요' },
+        { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '애들 둘을 혼자는 못 키운다고요' },
       ],
     }),
     card: realCard('P06'), ...review(['maritalStatusConflict']),
@@ -510,8 +515,21 @@ const V3_FIXTURES: readonly LifeFixture[] = [
     card: realCard('P02'), ...review(['unwarrantedSelfClaim']),
   },
   {
-    queueId: 'control-v3-teen-card', label: '🟢 대조 · P01 중고생 카드 · 중고생 행동("중2 아들 시험 기간")',
-    source: { id: 'fx-v3-cteen', title: '중학생 시험 기간 다들 어떠세요', body: '중2 아들이 시험 기간인데 폰만 봐요\n다들 어떻게 하세요?' },
+    queueId: 'control-v3-teen-card', label: '🟢 대조 · P01 중고생 카드 · 중고생 행동("중2 아이 시험 기간" · 성별 없음)',
+    source: { id: 'fx-v3-cteen', title: '중학생 시험 기간 다들 어떠세요', body: '중2 아이가 시험 기간인데 폰만 봐요\n다들 어떻게 하세요?' },
+    draft: {
+      title: '중2 아이 시험 기간인데 폰만 보네요',
+      body: '우리 애가 중2인데 시험 기간에도 폰만 봐요.\n다들 어떻게 공부시키세요?',
+    },
+    plan: planOf({
+      personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '중2 아이가 시험 기간인데' }],
+    }),
+    card: realCard('P01'), ...pass,
+  },
+  {
+    queueId: 'counter-v8-teen-gender', label: '🔴 (v8) P01 중고생 카드여도 초안의 "우리 아들이" — 카드에 자녀 성별이 없다(앞판 v3 대조는 통과였다 · 생성 뒤 게이트가 막는다)',
+    source: { id: 'fx-v8-teen-g', title: '중학생 시험 기간 다들 어떠세요', body: '중2 아들이 시험 기간인데 폰만 봐요\n다들 어떻게 하세요?' },
     draft: {
       title: '중2 아들 시험 기간인데 폰만 보네요',
       body: '우리 아들이 중2인데 시험 기간에도 폰만 봐요.\n다들 어떻게 공부시키세요?',
@@ -520,7 +538,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '중2 아들이 시험 기간인데' }],
     }),
-    card: realCard('P01'), ...pass,
+    card: realCard('P01'), ...hold(['childLifeStageConflict']),
   },
   {
     queueId: 'control-v3-songpyeon-trip', label: '🟢 과차단 반례 · 원문 앞 날짜 · "오는 길에 꽃 사고" 는 다녀온 이야기(운영 P07 송편 글)',
@@ -582,7 +600,77 @@ const V6_FIXTURES: readonly LifeFixture[] = [
   },
 ]
 
-export const LIFE_FIXTURES: readonly LifeFixture[] = [...V2_FIXTURES, ...V3_FIXTURES, ...V6_FIXTURES]
+/**
+ * 🔴 **quality-v8 보정 (2026-10-13 14:40 감사 결함 yes)** — P02(정본 카드 자녀 1명 · 초등) · SELF_EXPERIENCE ·
+ *    `children=있음` 근거로 1인칭이 허가됐고, 초안이 원문의 `아들 둘` 을 자기 일로 옮겼다. v7 초안 게이트 · 의미 검수
+ *    (모순 0 · 신뢰 0.95)가 모두 지나 자동 READY · 자동 발행됐다. 원문 · 초안은 다시 쓴 것이다(운영 글자 0).
+ *    대조 — 할아버지 말을 옮긴 `본인도 아들 둘이라` · 카드 자녀 수 이하(`아들 하나`) · 자녀 둘 카드(P01).
+ */
+const SRC_V8_KIDS = {
+  title: '길에서 딸 낳으라는 소리를 들었어요',
+  body: '아들 둘 데리고 정류장에서 버스 기다리는데\n\n처음 보는 할아버지가 딸 하나 꼭 낳으라고 하시네요\n\n당신도 아들만 둘이라 적적하다고\n\n괜히 기분이 상했어요',
+}
+/** 🔴 대조 — 성별 없이 카드와 같은 수를 말하는 원문(근거도 그 조각이다) */
+const SRC_V8_KIDS_ONE = { ...SRC_V8_KIDS, body: SRC_V8_KIDS.body.replace('아들 둘 데리고', '아이 하나 데리고') }
+const SRC_V8_KIDS_TWO = { ...SRC_V8_KIDS, body: SRC_V8_KIDS.body.replace('아들 둘 데리고', '아이 둘 데리고') }
+const SRC_V8_KIDS_PLAIN = { ...SRC_V8_KIDS, body: SRC_V8_KIDS.body.replace('아들 둘 데리고', '아이 데리고') }
+const V8_KIDS_PLAN = planOf({
+  personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts', closingIntent: 'vent', contentRoles: ['experienceResonance'],
+  speakerWarrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 둘 데리고' }],
+  protectedFacts: [{ kind: 'relation', text: '딸', evidenceRef: 'title' }],
+})
+const V8_FIXTURES: readonly LifeFixture[] = [
+  {
+    queueId: 'cmv689wzr0001xm7mubgfebxp', label: '🔴 운영 감사 결함 · P02(자녀 1명) SELF "아들 둘 데리고 정류장에 있었는데요"',
+    source: { id: 'fx-v8-kids', ...SRC_V8_KIDS },
+    draft: {
+      title: '길에서 딸 얘기를 하시는데 난감했어요',
+      body: '아들 둘 데리고 버스를 타려던 참이었어요.\n\n지나가던 분이 다짜고짜 딸이 있어야 한다면서 한참을 말씀하시네요.\n\n웃고 넘겼지만 마음이 좀 그렇더라고요.',
+    },
+    plan: V8_KIDS_PLAN, card: realCard('P02'), ...hold(['childLifeStageConflict']), planHold: true,
+  },
+  {
+    queueId: 'control-v8-kids-quoted', label: '🟢 같은 원천 · 할아버지 말을 옮긴 "본인도 아들 둘이라 적적하다고" — 말한 사람의 수',
+    source: { id: 'fx-v8-kids-q', ...SRC_V8_KIDS_PLAIN },
+    draft: {
+      title: '처음 보는 분이 딸 낳으라고 하셨어요',
+      body: '아이 데리고 정류장에서 버스 기다리고 있었는데요.\n\n처음 보는 할아버지가 본인도 아들 둘이라 적적하다고 하시더라고요.\n\n괜히 기분이 상하네요.',
+    },
+    plan: { ...V8_KIDS_PLAN, speakerWarrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아이 데리고' }] },
+    card: realCard('P02'), ...pass,
+  },
+  {
+    queueId: 'control-v8-kids-one', label: '🟢 성별 없이 카드와 같은 수 "아이 하나 데리고" (P02 · 1명)',
+    source: { id: 'fx-v8-kids-1', ...SRC_V8_KIDS_ONE },
+    draft: {
+      title: '딸이 있어야 한다는 말씀에 웃고 말았어요',
+      body: '아이 하나 데리고 버스를 타려던 참이었어요.\n\n지나가던 분이 다짜고짜 딸이 있어야 한다면서 한참을 말씀하시네요.\n\n웃고 넘겼지만 마음이 좀 그렇더라고요.',
+    },
+    plan: { ...V8_KIDS_PLAN, speakerWarrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아이 하나 데리고' }] },
+    card: realCard('P02'), ...pass,
+  },
+  {
+    queueId: 'control-v8-kids-two-card', label: '🟢 성별 없이 카드와 같은 수 "아이 둘 데리고" (P01 · 2명)',
+    source: { id: 'fx-v8-kids-2', ...SRC_V8_KIDS_TWO },
+    draft: {
+      title: '아이 둘 데리고 다니면 별말을 다 듣네요',
+      body: '아이 둘 데리고 버스를 타려던 참이었어요.\n\n지나가던 분이 다짜고짜 딸이 있어야 한다면서 한참을 말씀하시네요.\n\n웃고 넘겼지만 마음이 좀 그렇더라고요.',
+    },
+    plan: { ...V8_KIDS_PLAN, personaCode: 'P01', speakerWarrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아이 둘 데리고' }] },
+    card: realCard('P01'), ...pass,
+  },
+  {
+    queueId: 'counter-v8-kids-gender-two-card', label: '🔴 자녀 2명 카드(P01)여도 "아들 둘 데리고" — 카드에 자녀 성별이 없다',
+    source: { id: 'fx-v8-kids-g', ...SRC_V8_KIDS },
+    draft: {
+      title: '길에서 딸 얘기를 하시는데 난감했어요',
+      body: '아들 둘 데리고 버스를 타려던 참이었어요.\n\n지나가던 분이 다짜고짜 딸이 있어야 한다면서 한참을 말씀하시네요.\n\n웃고 넘겼지만 마음이 좀 그렇더라고요.',
+    },
+    plan: { ...V8_KIDS_PLAN, personaCode: 'P01' }, card: realCard('P01'), ...hold(['childLifeStageConflict']), planHold: true,
+  },
+]
+
+export const LIFE_FIXTURES: readonly LifeFixture[] = [...V2_FIXTURES, ...V3_FIXTURES, ...V6_FIXTURES, ...V8_FIXTURES]
 
 /**
  * 🔴 **원천·시점 문장 대조표** (quality-v3) — 게이트 정본만 돈다. 원천 사실을 줄마다 바꾼다.

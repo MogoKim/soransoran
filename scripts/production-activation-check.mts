@@ -7,13 +7,14 @@
  *   ③ 다섯 SHA 중 하나만 달라도 · 모르면 거부 · dirty runtime · writer 실행 중/모름 · env 이상 거부
  *   ④ `openActivation` — 운영이 아니면 사실을 모으지 않는다 · 운영 열림이면 canonical env 로 DB 주소를 덮는다
  *   ⑤ 두 CLI 가 DB 에 붙기 **전에** 열림을 판정한다(소스 순서)
+ *   ⑥ (2026-10-13) staged 운영 — staging 트리=target · runtime 은 옛 SHA 그대로 · defect-resolve 만 받는다
  */
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  activationModeOf, approvalOf, productionGuardProblems, writerStateOf, type ProductionFacts,
+  activationModeOf, approvalOf, productionGuardProblems, stagedGuardProblems, writerStateOf, type ProductionFacts,
 } from '../src/lib/production-activation-guard'
 import { D100_WRITER_JOBS, openActivation, type FactPaths } from './lib/production-activation.mjs'
 
@@ -119,6 +120,59 @@ console.log('\n⑤ CLI 순서 — 열림 판정이 DB 접속보다 먼저')
     const db = src.indexOf('new PrismaClient()')
     check(`${f} — openActivation 이 PrismaClient 보다 먼저`, open > 0 && db > open)
   }
+}
+
+console.log('\n⑥ 🔴 staged 운영 — 활성화 전 새 계약 해소 기록 (2026-10-13)')
+{
+  const PREV = 'c'.repeat(40)
+  const staged = (): ProductionFacts => ({
+    ...good(), runtimeHead: PREV, runtimePin: PREV, runtimeManifestSha: PREV, repoClean: true, runtimeIsAncestorOfTarget: true,
+  })
+  check('플래그 — --staged 는 --apply --production --target 과 함께만', activationModeOf({ apply: true, production: true, target: T, staged: true }).mode === 'production'
+    && activationModeOf({ apply: true, production: false, target: null, staged: true }).mode === 'refuse'
+    && activationModeOf({ apply: false, production: false, target: null, staged: true }).mode === 'refuse')
+  check('🟢 staging=target · runtime 옛 SHA 셋 일치 · 조상 · 깨끗 · writer idle → 열림', stagedGuardProblems(T, staged()).length === 0, stagedGuardProblems(T, staged()).join(' / '))
+  check('🔴 같은 사실을 일반 운영 판정에 넣으면 거부 — 옛 runtime 위에서 쓰는 길은 staged 하나다', productionGuardProblems(T, staged()).length > 0)
+  for (const [why, f] of [
+    ['staging HEAD ≠ target', { repoHead: OTHER }],
+    ['origin/main ≠ target', { originMain: OTHER }],
+    ['staging 트리 변경 있음', { repoClean: false }],
+    ['staging 트리 상태 모름', { repoClean: null }],
+    ['runtime pin ≠ HEAD', { runtimePin: OTHER }],
+    ['runtime manifest 모름', { runtimeManifestSha: null }],
+    ['runtime 이 이미 target', { runtimeHead: T, runtimePin: T, runtimeManifestSha: T }],
+    ['runtime 이 target 의 조상이 아님(되돌아가기)', { runtimeIsAncestorOfTarget: false }],
+    ['조상 관계 모름', { runtimeIsAncestorOfTarget: null }],
+    ['runtime 트리 변경 있음', { runtimeClean: false }],
+    ['writer job 실행 중', { writers: [{ label: D100_WRITER_JOBS[0]!, state: 'running' as const }] }],
+    ['writer job 상태 모름', { writers: [{ label: D100_WRITER_JOBS[0]!, state: 'unknown' as const }] }],
+    ['canonical env 가 격리 DB', { canonicalEnv: { read: true, hasDatabaseUrl: true, looksIsolated: true } }],
+  ] as const) {
+    check(`🔴 staged — ${why} → 거부`, stagedGuardProblems(T, { ...staged(), ...f }).length > 0)
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'soran-staged-'))
+  const envFile = join(dir, '.env.local')
+  writeFileSync(envFile, 'DATABASE_URL="postgresql://canon@db.canon.invalid:5432/postgres"\nDIRECT_URL=postgresql://canon@db.canon.invalid:5432/postgres\n')
+  const paths: FactPaths = { repoRoot: dir, runtimeRoot: dir, canonDir: dir, envFile }
+  const args = ['--apply', '--production', '--staged', `--target=${T}`, '--digest=' + 'a'.repeat(64), '--expect=1:0', '--reason=v8 전환']
+  const saved = { ...process.env }
+  delete process.env.SORAN_ISOLATED_DB
+  try {
+    const no = openActivation(args, { repoRoot: dir, paths, collect: () => staged() })
+    check('🔴 🔴 **허용하지 않은 CLI(persona 등)는 --staged 를 거부**', no.kind === 'refuse')
+    const yes = openActivation(args, { repoRoot: dir, paths, collect: () => staged(), allowStaged: true })
+    check('🟢 defect-resolve(허용) → staged 운영 열림', yes.kind === 'production' && yes.staged === true)
+    const back = openActivation(args, { repoRoot: dir, paths, collect: () => ({ ...staged(), runtimeIsAncestorOfTarget: false }), allowStaged: true })
+    check('🔴 허용해도 사실이 어긋나면 거부', back.kind === 'refuse')
+    const plain = openActivation(args.filter((a) => a !== '--staged'), { repoRoot: dir, paths, collect: () => staged(), allowStaged: true })
+    check('🔴 --staged 없이 옛 runtime 사실이면 일반 운영 판정으로 거부', plain.kind === 'refuse')
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+    Object.assign(process.env, saved)
+  }
+  const persona = readFileSync('scripts/persona-contract-remediation.mts', 'utf-8')
+  const resolve = readFileSync('scripts/auto-ready-defect-resolve.mts', 'utf-8')
+  check('🔴 staged 를 받는 CLI 는 defect-resolve 하나 — persona 는 allowStaged 를 넘기지 않는다', !persona.includes('allowStaged') && resolve.includes('allowStaged: true'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail — DB 0 · 네트워크 0\n`)

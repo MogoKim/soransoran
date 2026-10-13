@@ -19,7 +19,63 @@
  *    상한은 "우리가 원문에서 들고 있는 글자 수" 전체에 걸린다.
  */
 export const EVIDENCE_CHAR_BUDGET = 300
-export const EVIDENCE_PACKET_VERSION = 'evidence-v1'
+/**
+ * 🔴 **evidence-v2 (2026-10-13)** — 묶기 전에 수집기가 두 번 이어 붙인 본문을 걷어낸다(`collapseRepeatedBody`).
+ *    옛 판은 같은 글이 두 번 든 300자를 다시 머리·꼬리로 잘라, 끝나지 않은 문장을 꼬리로 보냈다.
+ */
+export const EVIDENCE_PACKET_VERSION = 'evidence-v2'
+
+/**
+ * 🔴 **본문이 통째로 한 번 더 이어 붙은 것으로 볼 최소 길이** — 공백 뺀 글자 수.
+ *    짧은 되풀이(`보고싶다 보고싶다`)는 사람이 쓴 강조일 수 있어 건드리지 않는다.
+ */
+export const REPEAT_MIN_CHARS = 20
+
+/**
+ * 🔴 **수집 상한에 닿았다고 볼 여유** — 수집기는 300자를 자른 뒤 끝 공백을 다듬는다.
+ *    실측(2026-10-13 보조 Mac 3,124건): 상한에서 잘린 두 벌 본문의 길이는 296~300자였다.
+ */
+export const COLLECTION_TRIM_SLACK = 10
+
+/**
+ * 🔴 **수집기가 본문을 두 번 이어 붙였으면 앞의 한 벌만 남긴다** (2026-10-13 의미 손실 감사).
+ *
+ *    네이버 카페 본문 선택자는 감싸는 칸과 안쪽 칸을 함께 잡는다. 둘의 글자를 이으면 같은 글이
+ *    두 번 든다 — 보조 Mac 수집 본문 386건 중 227건, 9/7 첫 수집부터 같은 비율이다.
+ *    수집 상한(300자) 안에서 두 번째 벌은 첫 벌의 **앞부분**으로 잘린다.
+ *    그 300자를 다시 머리·꼬리로 자르면 꼬리는 원문의 끝이 아니라 **두 번째 벌의 중간**이다 —
+ *    생성은 끝나지 않은 문장을 마무리로 읽고, 검수는 그 잘린 문장이 초안에서 "사라졌다" 고 적었다.
+ *
+ * 🔴 **구조로만 판정한다** — 낱말 사전이 아니다. 공백·줄바꿈만 지우고 견줘, 둘 중 하나일 때만 걷어낸다:
+ *    · 본문이 **같은 글 두 벌**이다
+ *    · 두 번째 벌이 첫 벌의 첫머리와 글자 그대로 같고, 본문이 **수집 상한에 닿아** 거기서 잘렸다
+ *    글 끝에 첫 줄을 다시 쓴 짧은 글 · 가운데 한 줄 되풀이 · 뒤가 달라지는 글 · `REPEAT_MIN_CHARS` 미만은 그대로 둔다.
+ * 🔴 원문을 고치지 않는다 — 남기는 것은 수집된 첫 벌의 글자 그대로다.
+ */
+export function collapseRepeatedBody(body: string): { text: string; collapsed: boolean } {
+  const t = body.trim()
+  const flat = t.replace(/\s+/g, '')
+  const keep = { text: t, collapsed: false }
+  if (flat.length < REPEAT_MIN_CHARS * 2) return keep
+  // 🔴 수집 상한은 근거 예산과 같은 300자다(`bodyHead`) — 두 값이 같은지는 생성 손실 검사가 본다
+  const cutAtCollection = t.length > EVIDENCE_CHAR_BUDGET - COLLECTION_TRIM_SLACK
+  const key = flat.slice(0, REPEAT_MIN_CHARS)
+  for (let at = flat.indexOf(key, REPEAT_MIN_CHARS); at > 0; at = flat.indexOf(key, at + 1)) {
+    const first = flat.slice(0, at)
+    const rest = flat.slice(at)
+    // 🔴 `rest` 는 `key` 로 시작하므로 이미 `REPEAT_MIN_CHARS` 이상이다
+    if (rest !== first && !(cutAtCollection && first.startsWith(rest))) continue
+    // 🔴 공백 뺀 위치 `at` → 원문 위치. 공백이 아닌 글자를 그만큼 센 자리에서 자른다
+    let seen = 0
+    let cut = 0
+    while (cut < t.length && seen < at) {
+      if (!/\s/.test(t[cut]!)) seen += 1
+      cut += 1
+    }
+    return { text: t.slice(0, cut).trim(), collapsed: true }
+  }
+  return keep
+}
 
 /**
  * 🔴 가운데를 이만큼 넘게 버렸는데 꼬리가 마무리를 보여 주지 못하면
@@ -183,7 +239,8 @@ export function buildEvidencePacket(input: {
 }): SourceEvidencePacket {
   const budget = input.budget ?? EVIDENCE_CHAR_BUDGET
   const title = S(input.title)
-  const body = S(input.maskedBody)
+  // 🔴 (evidence-v2) 자르기 **전에** 이어 붙은 두 번째 벌을 걷어낸다 — 길이·머리·꼬리가 전부 한 벌 기준이다
+  const body = collapseRepeatedBody(S(input.maskedBody)).text
   const spans: EvidenceSpan[] = []
   if (title !== '') spans.push({ kind: 'title', text: title, fromRatio: 0, toRatio: 0 })
 
