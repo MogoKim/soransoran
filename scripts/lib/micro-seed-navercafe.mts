@@ -917,6 +917,28 @@ export function judgeLockRelease(existed: boolean, unlinkError: unknown): LockRe
  *     td.td_normal.type_readCount                조회수 "1,133"
  * ```
  */
+/**
+ * 🔴 **상세 본문 칸 — 우선순위 순서다** (2026-10-13 · Claude [12] 인계 · 본문 두 벌 결함).
+ *    `.article_viewer`(바깥 칸)가 `.se-main-container`(안쪽 칸)를 감싼다. 앞판은 셋을 한 번에 잡아 innerText 를
+ *    이어 붙였고, 같은 글이 **두 번** 저장됐다(보조 Mac 실측 네이버 bodyHead 3,124건 중 1,791건 · 300자 상한의
+ *    절반을 같은 글이 차지 · 잘린 꼬리가 의미 검수에서 "원문에서 사라짐" 으로 읽힘). 82cook 은 0건.
+ *    이제 **가장 안쪽 · 앞 순위 칸 하나**의 글만 쓴다 — 본문이 있는 첫 순위에서 멈춘다.
+ */
+export const ARTICLE_BODY_SELECTORS = ['.se-main-container', '#postViewArea', '.article_viewer'] as const
+
+/**
+ * 🔴 **본문 고르기 — 순수 함수.** 입력은 잡힌 요소마다 `[가장 앞 순위 번호, innerText]`(문서 순서)다.
+ *    본문이 비지 않은 **가장 앞 순위** 칸들의 글만 잇는다(같은 순위 칸이 여럿이면 문서 순서로 — 바깥 · 안쪽 칸을 섞지 않는다).
+ *    순위 번호가 모양 밖이면 버린다. 아무 칸도 글이 없으면 null.
+ */
+export function pickArticleBody(hits: readonly (readonly [number, string])[]): string | null {
+  for (let rank = 0; rank < ARTICLE_BODY_SELECTORS.length; rank += 1) {
+    const body = hits.filter(([r]) => r === rank).map(([, t]) => t).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+    if (body !== '') return body
+  }
+  return null
+}
+
 export const LIST_SELECTORS = {
   link: 'a.article, a[href*="articleid"], a[href*="/articles/"]',
   row: 'tr, li, .article-board-item',

@@ -52,7 +52,7 @@ import { keepAfterClassify, outPathOf, thinRowFromCollected } from '../src/lib/m
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import {
-  CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate,
+  CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate, ARTICLE_BODY_SELECTORS, pickArticleBody,
   judgeSession, judgeLock, randomDelay, parseArticleId, judgeStorageStateShape,
   LIST_URL, ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
   LOCK_PATH, LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS,
@@ -1111,11 +1111,12 @@ async function readArticleBody(page: NaverPage): Promise<{ body: string | null; 
   const errors: string[] = []
   for (const f of [page, ...frames]) {
     try {
-      const texts = await f.$$eval<string[]>('.se-main-container, #postViewArea, .article_viewer', (els) =>
-        els.map((el) => (el as HTMLElement).innerText ?? ''),
-      )
-      const body = texts.join('\n').replace(/\n{3,}/g, '\n\n').trim()
-      if (body) return { body, errors }
+      // 🔴 칸마다 가장 앞 순위 번호를 함께 읽는다 — 바깥 칸이 안쪽 칸을 감싸 두 벌이 되던 결함(`pickArticleBody`)
+      const hits = await f.$$eval<[number, string][], readonly string[]>(ARTICLE_BODY_SELECTORS.join(', '), (els, sels) =>
+        els.map((el) => [sels.findIndex((sel) => el.matches(sel)), (el as HTMLElement).innerText ?? ''] as [number, string]),
+      ARTICLE_BODY_SELECTORS)
+      const body = pickArticleBody(hits)
+      if (body !== null) return { body, errors }
     } catch (e) {
       // 🔴 message 만 남긴다 — 본문 HTML 을 로그로 흘리지 않는다
       errors.push(e instanceof Error ? e.message : String(e))

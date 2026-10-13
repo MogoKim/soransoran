@@ -27,7 +27,7 @@ import {
   SESSION_PATH_ENV, KILL_SWITCH_ENV,
   DEFAULT_SESSION_PATH, PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, DEFAULT_BROWSER_CHANNEL,
   browserLaunchOptions, isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, AUTH_COOKIE_NAMES,
-  parsePostedLabel, postedDayOfLabel, normalizeCount,
+  parsePostedLabel, postedDayOfLabel, normalizeCount, ARTICLE_BODY_SELECTORS, pickArticleBody,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease,
   LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
   LIST_SELECTORS, runIdOf, runOutputPath,
@@ -679,6 +679,25 @@ check('🔴 메타를 옵셔널 체이닝으로 직접 읽는다 (중간 함수 
     'readList 와 같은 결함이 한 단계 뒤에 있었다 — 셀렉터가 안 맞는 것과 코드가 터진 것을 구분 못 했다')
   check('본문 실패 메시지가 두 경우를 구분한다',
     /본문 셀렉터가 터졌다/.test(COLLECTOR) && /본문이 비었다/.test(COLLECTOR))
+}
+{
+  // 🔴 (2026-10-13 · Claude [12] 인계) 본문 두 벌 — `.article_viewer` 가 `.se-main-container` 를 감싼다.
+  //    앞판은 둘을 한 번에 잡아 innerText 를 이어 붙였다(바깥 → 안쪽 · 네이버 bodyHead 3,124건 중 1,791건 두 벌)
+  const inner = '오늘 시어머니가 김장하자고 하시네요.\n다들 김장 하세요?'
+  const outer = `${inner}\n\n첨부 이미지`
+  check('🔴 바깥 칸 · 안쪽 칸이 함께 잡혀도 본문은 한 벌 — 가장 앞 순위(안쪽) 칸만',
+    pickArticleBody([[2, outer], [0, inner]]) === inner, String(pickArticleBody([[2, outer], [0, inner]])))
+  check('🔴 같은 글이 두 번 들어가지 않는다(앞판 재현 대조)',
+    (pickArticleBody([[2, outer], [0, inner]]) ?? '').split(inner).length === 2 && [outer, inner].join('\n').split(inner).length === 3)
+  check('스마트에디터가 없으면 옛 편집기 칸(#postViewArea)', pickArticleBody([[2, 'X\nY'], [1, 'Y']]) === 'Y')
+  check('안쪽 칸이 비면 다음 순위', pickArticleBody([[0, '  '], [2, '바깥만 있는 글']]) === '바깥만 있는 글')
+  check('같은 순위 칸이 여럿이면 문서 순서로 잇는다', pickArticleBody([[0, '첫 문단'], [0, '둘째 문단']]) === '첫 문단\n둘째 문단')
+  check('모양 밖 순위 · 빈 입력은 본문 없음', pickArticleBody([[-1, '광고'], [3, 'x']]) === null && pickArticleBody([]) === null)
+  check('순위는 안쪽 → 옛 편집기 → 바깥', ARTICLE_BODY_SELECTORS.join(',') === '.se-main-container,#postViewArea,.article_viewer')
+  const bodyCode = COLLECTOR_CODE.slice(COLLECTOR_CODE.indexOf('async function readArticleBody'))
+  check('🔴 수집기 배선 — 순위 번호와 함께 읽고 `pickArticleBody` 하나로 고른다(셋을 이어 붙이지 않는다)',
+    /ARTICLE_BODY_SELECTORS\.join\(', '\)/.test(bodyCode) && /sels\.findIndex\(\(sel\) => el\.matches\(sel\)\)/.test(bodyCode)
+      && /pickArticleBody\(hits\)/.test(bodyCode) && !/texts\.join/.test(bodyCode))
 }
 check('🔴 진단이 예외 message 만 담는다 (스택·HTML 아님)',
   !/e\.stack/.test(COLLECTOR_CODE))
