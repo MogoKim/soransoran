@@ -47,6 +47,8 @@ import { describePrepared } from '../src/lib/supply-candidates'
 import { describeRelease } from '../src/lib/source-slot-release'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+/** 🔴 commit 뒤 댓글 러너 깨움 — failure-open · kill switch `SORAN_EVENT_WAKE` (2026-10-12 Batch C2) */
+import { describeWake, publishWakeGate, wakeRunner } from './lib/runner-wake.mjs'
 import { RUN_AT_ENV, runClockFrom } from './lib/run-clock.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
@@ -504,6 +506,15 @@ if (AUTO_READY_ON) {
     console.log(`   🔴 열림 판정 ${g.open ? '열림 — 🔴 닫혀야 한다' : '닫힘'} · ${g.reasons.join(' · ')}`)
   }
 }
+
+/**
+ * ── ⑩ 🔴 **댓글 러너 깨움 — 이 회차의 최종 정합을 모두 통과한 뒤에만 한 번** (2026-10-12 Batch C2 · 보정) ──
+ *    여기 오기 전에 이미 끝난 길: commit 전 · 막힘 · 만료 · SLOT_UNFILLED · 오류 · 예고 Persona 불일치(전부 깨움 0).
+ *    여기서 한 번 더 막는다: Queue/Post/ActivityLog 정합(`v.ok`) · 자동 발행 감사 무결성(`auditIntegrityOk`) 중 하나라도 실패면 깨움 0.
+ *    🔴 failure-open — `wakeRunner` 는 던지지 않고, 그 결과는 종료 코드에 들어가지 않는다(종료 코드는 아래 한 줄 그대로).
+ */
+const wakeGate = publishWakeGate({ verifyOk: v.ok, auditIntegrityOk })
+console.log(`   ${wakeGate.ok ? describeWake('comment', wakeRunner({ target: 'comment', env: process.env, nowMs: Date.now() })) : `깨움(comment) 0 — ${wakeGate.why}`}`)
 
 await prisma.$disconnect()
 process.exit(v.ok && auditIntegrityOk ? 0 : 1)

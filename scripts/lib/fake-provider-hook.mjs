@@ -46,6 +46,12 @@ globalThis[Symbol.for('soransoran.test.fake-provider-ledger-isolation')] = true
 if ((process.env.FAKE_RUNNER_LOCKF ?? '') !== '') globalThis[Symbol.for('soransoran.test.fake-runner-lockf')] = process.env.FAKE_RUNNER_LOCKF
 
 /**
+ * 🔴 **사건 깨움의 launchctl 대역** (2026-10-12 Batch C2) — `FAKE_LAUNCHCTL` 이 있을 때만 전역 표식에 그 경로를 건다.
+ *    시험이 발행 러너를 실제로 돌려도 운영 launchd job 을 깨우지 않게 한다. 운영 코드(`runner-wake.launchctlPath`)는 이 표식만 본다.
+ */
+if ((process.env.FAKE_LAUNCHCTL ?? '') !== '') globalThis[Symbol.for('soransoran.test.fake-launchctl')] = process.env.FAKE_LAUNCHCTL
+
+/**
  * 🔴 시험 모드 — **가짜 provider 안에서만 뜻이 있다.** 운영 env 가 아니다.
  *
  *    ok            정상 — 사용량을 준다

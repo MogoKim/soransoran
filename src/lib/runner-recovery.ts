@@ -125,3 +125,84 @@ function judgeSlotRecovery(i: RecoveryInput): RecoveryVerdict {
   }
   return skip('정상 — 지난 예약 슬롯 뒤에 회차가 있었고 실패하지 않았다')
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 고아 깨움 표식 — 사건 깨움이 러너에 닿지 못하고 남은 표식 (2026-10-12 Batch C2)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **표식이 이만큼 남아 있어야 고아로 본다** — 깨움 직후 러너가 뜨고 표식을 거두는 시간. 새 정책 문턱이 아니라
+ *    관측 지연 흡수다(같은 성격: `RECOVERY_SLOT_GRACE_MS`).
+ */
+export const ORPHAN_WAKE_GRACE_MS = 3 * 60_000
+
+/**
+ * 🔴 **처리 기록 — 세 상태를 구조로 가른다** (2026-10-12 C2 보정).
+ *    `missing`    기록이 없다 — 아직 이 도구가 다시 깨운 표식이 없다
+ *    `valid`      기록이 있고 다시 깨운 표식의 시각(`wakeAt`)을 읽었다
+ *    `unreadable` 기록 파일은 있는데 읽거나 해석하지 못했다(손상 JSON · `wakeAt` 없음 · 문자열 아님 · 읽기 실패)
+ *    🔴 `unreadable` 은 "이미 깨웠는지 모른다" 다 — 모르는 상태에서 kickstart 하지 않는다(fail-closed).
+ *       앞판은 이 경우를 문자열 `'unreadable'` 로 돌려 표식 시각과 같지 않으면 통과시켰다 → 기록이 깨지면 회차마다 같은 표식을 다시 깨웠다.
+ */
+export type HandledWake = { kind: 'missing' } | { kind: 'valid'; wakeAt: string } | { kind: 'unreadable' }
+
+/**
+ * 🔴 **정본 ISO 시각인가** — 처리 기록의 `wakeAt` 은 follow-up 표식의 `at` 그대로이고, 그 값은 언제나
+ *    `new Date(ms).toISOString()`(`YYYY-MM-DDTHH:mm:ss.sssZ`)이 만든다(`runner-lease.requestFollowUp`).
+ *    판정은 하나다 — 유한한 시각이고, 그 시각을 `toISOString()` 으로 되돌린 문자열이 원문과 **글자 그대로** 같은가.
+ *    이것만으로 모양(밀리초 · `Z` · `T`)과 넘친 날짜(`2026-02-30`)가 함께 걸린다(정규식을 따로 두면 같은 결정이 두 곳이다).
+ */
+export function isCanonicalIso(v: string): boolean {
+  const t = Date.parse(v)
+  return Number.isFinite(t) && new Date(t).toISOString() === v
+}
+
+/**
+ * 🔴 처리 기록 원문 → 상태. 순수 — 파일이 없는 경우(`missing`)는 읽는 쪽이 정한다.
+ *    `wakeAt` 이 정본 ISO 시각이 아니면(`"garbage"` · `"2026-99-99"` · 공백 · 숫자 문자열 등) `unreadable` 이다 —
+ *    앞판은 비어 있지 않은 문자열이면 valid 로 읽어, 표식 시각과 다르면 같은 고아 표식을 틱마다 다시 깨웠다(2026-10-12 C2 경계 보정).
+ */
+export function parseHandledWake(raw: string): HandledWake {
+  let v: unknown
+  try { v = JSON.parse(raw) } catch { return { kind: 'unreadable' } }
+  if (typeof v !== 'object' || v === null) return { kind: 'unreadable' }
+  const w = (v as { wakeAt?: unknown }).wakeAt
+  return typeof w === 'string' && isCanonicalIso(w) ? { kind: 'valid', wakeAt: w } : { kind: 'unreadable' }
+}
+
+export type OrphanWakeInput = {
+  /** 사건 깨움이 켜져 있는가(`SORAN_EVENT_WAKE` 가 이 대상을 허용) */
+  enabled: boolean
+  state: JobState
+  running: boolean
+  /** 지금 남아 있는 follow-up 표식 — 없으면 null. trigger · 시각은 표식 원문에서 읽은 것 */
+  marker: { trigger: string | null; at: string | null } | null
+  /** 이 도구가 이미 다시 깨운 표식의 기록 — `HandledWake` 세 상태 */
+  handled: HandledWake
+  now: Date
+}
+
+/**
+ * 🔴 **고아 사건 표식을 한 번 다시 깨운다 — 표식 하나에 최대 1회.**
+ *    · 사건(event) 표식만 본다 — 정기 · 수동 겹침이 남긴 표식은 정기 회차가 받는다
+ *    · 시각을 모르는 표식은 건드리지 않는다(상한을 셀 수 없다)
+ *    · 같은 표식(같은 시각)을 이미 깨웠으면 다시 깨우지 않는다 — kickstart 가 실패해도 무한 반복하지 않는다
+ *    · 처리 기록을 읽지 못하면(`unreadable`) 깨우지 않는다 — 이미 깨웠는지 모르면 반복을 막을 수 없다(fail-closed)
+ *    · 깨움이 꺼졌거나 · unloaded · 상태 모름 · 실행 중이면 건드리지 않는다
+ */
+export function judgeOrphanWake(i: OrphanWakeInput): RecoveryVerdict {
+  const skip = (reason: string): RecoveryVerdict => ({ action: 'skip', reason, staleAfterMs: ORPHAN_WAKE_GRACE_MS })
+  if (!i.enabled) return skip('사건 깨움이 꺼져 있다 — 고아 표식을 깨우지 않는다')
+  if (i.marker === null) return skip('남은 깨움 표식이 없다')
+  if (i.marker.trigger !== 'event') return skip(`사건 표식이 아니다(${i.marker.trigger ?? '모름'}) — 정기 회차가 받는다`)
+  if (i.marker.at === null) return skip('표식 시각을 모른다 — 상한을 셀 수 없어 건드리지 않는다')
+  const at = Date.parse(i.marker.at)
+  if (!Number.isFinite(at)) return skip('표식 시각을 읽을 수 없다')
+  if (i.state === 'unknown') return skip('launchctl 상태를 모른다 — 모르는 job 을 깨우지 않는다')
+  if (i.state !== 'loaded') return skip('load 되어 있지 않다 — 등록은 사람 일이다')
+  if (i.running) return skip('지금 돌고 있다 — 회차가 끝날 때 표식을 거둔다')
+  if (i.handled.kind === 'unreadable') return skip('처리 기록을 읽지 못했다 — 이미 깨웠는지 모르므로 깨우지 않는다(fail-closed · 정기 회차가 받는다)')
+  if (i.handled.kind === 'valid' && i.handled.wakeAt === i.marker.at) return skip('이 표식은 이미 한 번 다시 깨웠다 — 반복하지 않는다(정기 회차가 받는다)')
+  if (i.now.getTime() - at < ORPHAN_WAKE_GRACE_MS) return skip('깨운 지 얼마 안 됐다 — 러너가 거둘 시간을 준다')
+  return { action: 'kickstart', reason: `사건 깨움 표식(${i.marker.at})이 러너에 닿지 못하고 남았다 — 한 번 다시 깨운다`, staleAfterMs: ORPHAN_WAKE_GRACE_MS }
+}

@@ -247,10 +247,31 @@ const { judgeSlotRelease, compareReleaseRank } = await import('../src/lib/source
 const { publishOriginalPostTx } = await import('../src/lib/original-post-publish-tx')
 const { safetyFilter } = await import('./lib/micro-seed-safety-filter.mjs')
 
+/**
+ * 🔴 **commit 뒤 댓글 깨움 관측** (2026-10-12 Batch C2) — 발행 러너는 언제나 `SORAN_EVENT_WAKE=comment` 로 띄우고,
+ *    launchctl 은 가짜 provider 훅이 거는 대역(호출 인자만 적는 셸)만 쓴다 — 운영 launchd job 을 깨우지 않는다.
+ *    🔴 훅 · 대역 · 깨움 env 는 언제나 함께 넣는다(깨움만 켜고 대역이 없으면 진짜 launchctl 을 부른다).
+ */
+const WAKE_DIR = join(HM, 'Library', 'Application Support', 'soransoran', 'persona-comment-loop')
+const LCTL_LOG = join(HM, 'launchctl.log')
+const LCTL_OK = join(HM, 'fake-launchctl-ok.sh')
+const LCTL_FAIL = join(HM, 'fake-launchctl-fail.sh')
+writeFileSync(LCTL_OK, `#!/bin/sh\necho "$*" >> '${LCTL_LOG}'\nexit 0\n`, { mode: 0o755 })
+writeFileSync(LCTL_FAIL, `#!/bin/sh\necho "FAIL $*" >> '${LCTL_LOG}'\nexit 1\n`, { mode: 0o755 })
+const wakeCalls = (): string[] => (existsSync(LCTL_LOG) ? readFileSync(LCTL_LOG, 'utf-8').split('\n').filter((l) => l !== '') : [])
+const wakeMarker = (): { trigger?: string } | null => {
+  try { return JSON.parse(readFileSync(join(WAKE_DIR, 'follow-up.request'), 'utf-8')) as { trigger?: string } } catch { return null }
+}
+const resetWake = (): void => { rmSync(LCTL_LOG, { force: true }); rmSync(join(WAKE_DIR, 'follow-up.request'), { force: true }); mkdirSync(WAKE_DIR, { recursive: true }) }
+const KICK = `kickstart gui/${process.getuid?.() ?? 0}/com.soransoran.persona-comment-runner`
 function runPublish(at: Date, extra: Record<string, string> = {}): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T, 'scripts', 'original-post-auto-publish.mts'), '--apply', '--limit=1', '--trigger=local'], {
-      cwd: T, env: { ...baseEnv(), SORAN_RUN_AT: iso(at), SORAN_AUTO_READY_ENABLED: 'on', ...extra },
+      cwd: T, env: {
+        ...baseEnv(), SORAN_RUN_AT: iso(at), SORAN_AUTO_READY_ENABLED: 'on',
+        NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`, FAKE_LAUNCHCTL: LCTL_OK, SORAN_EVENT_WAKE: 'comment',
+        ...extra,
+      },
     })
     let out = ''
     c.stdout.on('data', (d: Buffer) => { out += d.toString() })
@@ -306,6 +327,7 @@ async function world(label: string, supplyEnv: Record<string, string> = {}): Pro
   writeNavercafe()
   write82cook()
   writeFileSync(join(DATA, 'held-candidates.json'), '{"held":[]}\n')
+  resetWake()
   const sup = runSupply(SUPPLY_AT, supplyEnv)
   dump(`supply-${label.slice(0, 1)}`, sup.out)
   return { sup }
@@ -382,6 +404,9 @@ async function main(): Promise<void> {
       `발행 ${published[0] === undefined ? '-' : srcId(published[0])} · 기대 ${expected[0] === undefined ? '-' : srcId(expected[0])}`)
     check('🔴 🔴 **⑤ 82cook artifact 가 정상 후보로 발행까지 갔다**', published[0]?.rawContent?.sourceSite.endsWith('82cook') === true && srcId(published[0]!) === '9300001')
     if (published[0] !== undefined) await consistent(published[0].id, '①')
+    check('🔴 🔴 **C2 commit 뒤 댓글 깨움 정확히 1회** — 표식 trigger=event · kickstart 대상 = 댓글 러너 label',
+      wakeCalls().length === 1 && wakeCalls()[0] === KICK && wakeMarker()?.trigger === 'event' && /깨움\(comment\) 표식 REQUESTED · kickstart OK/.test(pub.out),
+      `${JSON.stringify(wakeCalls())} · ${JSON.stringify(wakeMarker())}`)
     check('나머지 행은 그대로 기다린다(만료 0)', after.filter((r) => r.status === 'APPROVED').length === rows.length - 1 && after.every((r) => r.status !== 'EXPIRED'))
   }
 
@@ -422,6 +447,7 @@ async function main(): Promise<void> {
       `${pub.code} · ${published.map(srcId).join(',')} · 기대 ${planOrder[1] === undefined ? '-' : srcId(planOrder[1])}`)
     check('🔴 슬롯은 한 번만 소비 — Post 1 · ActivityLog 1(만료 행은 로그 0)', (await postsNow()) === 1 && (await logsNow()) === 1)
     if (published[0] !== undefined) await consistent(published[0].id, '②')
+    check('🔴 🔴 **C2 만료(트랜잭션이 EXPIRED 로 끝낸 후보)는 깨우지 않는다 — 실제 발행 1건에 깨움 1회**', wakeCalls().length === 1, JSON.stringify(wakeCalls()))
   }
 
   // ── ③ 전원 탈락 → SLOT_UNFILLED ──
@@ -437,6 +463,7 @@ async function main(): Promise<void> {
       pub.code === 0 && info !== null && info.eligible === 0 && info.due === 1 && (info.held.SOURCE_TOO_OLD_AT_SLOT ?? 0) === (await generated()).length,
       m?.[1] ?? pub.out.split('\n').slice(-12).join(' | '))
     check('🔴 오래된 글로 채우지 않았다 — Post 0 · ActivityLog 0', (await postsNow()) === 0 && (await logsNow()) === 0)
+    check('🔴 🔴 **C2 발행 0(SLOT_UNFILLED) → 깨움 0 · 표식 0**', wakeCalls().length === 0 && wakeMarker() === null, JSON.stringify(wakeCalls()))
   }
 
   // ── ④ malformed ──
@@ -446,8 +473,11 @@ async function main(): Promise<void> {
     const order = rankAt(await generated(), PUBLISH_AT)
     await patchGate(order[0]!.id, (g) => ({ ...g, [SOURCE_EVIDENCE_KEY]: { ...(g[SOURCE_EVIDENCE_KEY] as object), observations: [null] } }))
     await patchGate(order[1]!.id, (g) => ({ ...g, [SOURCE_EVIDENCE_KEY]: { ...(g[SOURCE_EVIDENCE_KEY] as object), response: 'x' } }))
-    const pub = await runPublish(PUBLISH_AT)
+    // 🔴 C2 kill switch — 이 회차는 깨움을 끈다(off). 발행은 정상이어도 표식 · kickstart 0
+    const pub = await runPublish(PUBLISH_AT, { SORAN_EVENT_WAKE: 'off' })
     dump('pub-4', pub.out)
+    check('🔴 🔴 **C2 kill switch off — 발행은 됐어도 표식 0 · kickstart 0**', /✅ Post /.test(pub.out) && wakeCalls().length === 0 && wakeMarker() === null
+      && /깨움\(comment\) 0 — SORAN_EVENT_WAKE=off/.test(pub.out), JSON.stringify(wakeCalls()))
     const published = (await generated()).filter((r) => r.status === 'PUBLISHED')
     check('🔴 🔴 **④ 러너가 죽지 않았다(exit 0 · TypeError 0) · 손상 두 행은 발행되지 않았다 · 3위가 발행됐다**',
       pub.code === 0 && !/TypeError|Cannot read properties/.test(pub.out) && published.length === 1 && published[0]!.id === order[2]?.id,
@@ -546,6 +576,7 @@ async function main(): Promise<void> {
       && loser !== undefined && /정상 무발행 · (SLOT_CONSUMED|TARGET_RACE_LOST)|발행하지 않는다/.test(loser.out),
       `${published.length} · ${a.code}/${b.code} · ${loser?.out.split('\n').filter((l) => /⑤|무발행|중단/.test(l)).join(' ') ?? ''}`)
     if (published[0] !== undefined) await consistent(published[0].id, '⑧', new Date(PUBLISH_AT.getTime() - 3 * 864e5))
+    check('🔴 🔴 **C2 동시 두 러너 — 발행한 쪽만 깨운다(깨움 1 · 표식 1)**', wakeCalls().length === 1 && wakeMarker()?.trigger === 'event', JSON.stringify(wakeCalls()))
   }
 
   // ── ⑨ hard gate 가 반응 순위보다 먼저 ──
@@ -557,8 +588,12 @@ async function main(): Promise<void> {
     check('전제 — 그 제목은 정본 안전 판정에서 pass 가 아니다', safetyFilter({ title: unsafe }).verdict !== 'pass', safetyFilter({ title: unsafe }).verdict)
     await prisma.originalPostApprovalQueue.update({ where: { id: order[0]!.id }, data: { draftTitle: unsafe } })
     await prisma.originalPostApprovalQueue.update({ where: { id: order[1]!.id }, data: { gateVerdict: 'HOLD' } })
-    const pub = await runPublish(PUBLISH_AT)
+    // 🔴 C2 failure-open — kickstart 가 실패(exit 1)해도 발행 결과 · 종료 코드는 그대로다
+    const pub = await runPublish(PUBLISH_AT, { FAKE_LAUNCHCTL: LCTL_FAIL })
     dump('pub-9', pub.out)
+    check('🔴 🔴 **C2 깨움 실패(kickstart exit 1) — 발행 성공 · exit 0 그대로 · 실패는 한 줄로만 남는다**',
+      pub.code === 0 && /✅ Post /.test(pub.out) && wakeCalls().length === 1 && wakeCalls()[0] === `FAIL ${KICK}` && /kickstart FAILED/.test(pub.out),
+      JSON.stringify(wakeCalls()))
     const published = (await generated()).filter((r) => r.status === 'PUBLISHED')
     check('🔴 🔴 **⑨ 반응 1위(안전 실패) · 2위(gate HOLD)는 나가지 않고 3위가 나간다** — 반응이 hard gate 를 넘지 못한다',
       pub.code === 0 && published.length === 1 && published[0]!.id === order[2]?.id,
@@ -578,14 +613,17 @@ async function main(): Promise<void> {
     const pub2 = await runPublish(PUBLISH_AT)
     dump('pub-9b', pub2.out)
     check('🔴 그 슬롯은 SLOT_UNFILLED — 예산 밖 생성 · 오래된 글로 채우지 않는다', pub2.code === 0 && /SLOT_UNFILLED/.test(pub2.out) && (await postsNow()) === 0)
+    check('🔴 C2 발행 0 → 깨움 0', wakeCalls().length === 0)
   }
 
   // ── 주입 시계 안전 — 격리 표식 없이 가짜 시각으로 --apply 하지 않는다 ──
   {
     console.log('\n── 주입 시계 가드 — 격리 DB 표식이 없으면 가짜 시각으로 발행하지 않는다 ──')
+    resetWake()
     const r = await runPublish(PUBLISH_AT, { SORAN_ISOLATED_DB: '' })
     check('🔴 🔴 **SORAN_RUN_AT + --apply · 격리 표식 없음 → DB 에 붙기 전에 중단(exit 1)**',
       r.code === 1 && /주입 시각으로 --apply 는 격리 DB 에서만/.test(r.out) && !/① 대기열/.test(r.out), r.out.split('\n').slice(-4).join(' | '))
+    check('🔴 C2 DB 에 붙기 전에 멈춘 회차 → 깨움 0', wakeCalls().length === 0 && wakeMarker() === null)
   }
 
   await wipe()
