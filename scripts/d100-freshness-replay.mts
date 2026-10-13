@@ -22,12 +22,12 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
-  articleIdHashOf, compareReleaseRank, type SlotReleaseVerdict,
+  articleIdHashOf, compareReleaseRank, kstDayOfWindow, SOURCE_STATS_METHOD, SOURCE_STATS_METHOD_DAY, type SlotReleaseVerdict,
 } from '../src/lib/source-slot-release'
 import {
   EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, preGenerationRelease, selectWorkset, type WorksetRow,
 } from '../src/lib/supply-workset'
-import { readListObservations, postedOfListRow, type ListObservationIndex } from './lib/source-list-observations.mjs'
+import { articleKeyOf, readListObservations, postedOfListRow, type ListObservationIndex } from './lib/source-list-observations.mjs'
 import { worksetRows } from './supply-process.mjs'
 import { planAutoFetch, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
@@ -91,6 +91,12 @@ type ModeOut = {
   pickedHashes: string[]
 }
 
+/** 🔴 회차 × 원천 판정 — 모드별(전 · 후). 열쇠 `runId|hash` */
+type RowVerdict = { isDay: boolean; verdict: string; reason: string; rank: string }
+const perRow: Record<Mode, Map<string, RowVerdict>> = { before: new Map(), after: new Map() }
+/** 🔴 "후" 증거 감사 — 날짜 판이 아닌 날짜 원천 · 회차/날짜 어긋남 · 00:00 정확 시각 저장 */
+const audit = { dayEvidence: 0, dayWrongMethod: 0, dayCrossRunOrDay: 0, exactWrongMethod: 0, dayOnePoint: 0, dayEmpty: 0,
+  postedAtWithWindow: 0, midnightExactFromDayLabel: 0, midnightExactTotal: 0 }
 const supplyRuns: { runId: string; universe: number; dayOnlyInUniverse: number; unmatched: number; before: ModeOut; after: ModeOut; actualSelected: number; overlapBeforeActual: number }[] = []
 
 for (const name of names.filter((n) => /^supply-selection-trace-\d{8}-\d{6}\.json$/.test(n))) {
@@ -130,10 +136,32 @@ for (const name of names.filter((n) => /^supply-selection-trace-\d{8}-\d{6}\.jso
     const pickedHashes = picked.map((s) => articleIdHashOf(s.sourceSite, s.sourceArticleId))
     const dayVerdicts: Record<string, number> = {}
     for (const r of rows) {
-      if (!dayKey.has(articleIdHashOf(r.sourceSite, r.sourceArticleId)) || slots.length === 0) continue
+      if (slots.length === 0) continue
+      const h = articleIdHashOf(r.sourceSite, r.sourceArticleId)
+      const isDay = dayKey.has(h)
       const v = releaseOf(r)
       const k = v.verdict === 'eligible' ? 'eligible' : `${v.verdict}:${v.reasons[0] ?? ''}`
-      dayVerdicts[k] = (dayVerdicts[k] ?? 0) + 1
+      perRow[mode].set(`${t.runId}|${h}`, { isDay, verdict: v.verdict, reason: v.reasons[0] ?? '', rank: JSON.stringify({ ...v.rank, tieBreak: '' }) })
+      if (isDay) dayVerdicts[k] = (dayVerdicts[k] ?? 0) + 1
+      if (mode !== 'after' || r.evidence === null) continue
+      const ev = r.evidence
+      const st = ev.sourceStats
+      if (ev.postedAt !== null && ev.postedWindow) audit.postedAtWithWindow += 1
+      if (ev.postedAt !== null && new Date(Date.parse(ev.postedAt) + 9 * H).toISOString().slice(11, 23) === '00:00:00.000') {
+        audit.midnightExactTotal += 1
+        // 🔴 수집이 본 목록 줄이 날짜만 말하는데 정확 시각 00:00 이 실렸다 — 0 이어야 한다
+        const hit = (idxAfter.byArticle.get(articleKeyOf(r.sourceSite, r.sourceArticleId)) ?? []).find((o) => o.observedAt === ev.listedAt)
+        if (hit?.postedWindow) audit.midnightExactFromDayLabel += 1
+      }
+      if (isDay) {
+        audit.dayEvidence += 1
+        if (st !== null) {
+          if (st.method !== SOURCE_STATS_METHOD_DAY) audit.dayWrongMethod += 1
+          else if (st.postedDay !== kstDayOfWindow(ev.postedWindow) || st.observedAt !== ev.response?.observedAt) audit.dayCrossRunOrDay += 1
+          else if (st.n === 0) audit.dayEmpty += 1
+          else if (st.commentsPct === null && st.viewsPct === null) audit.dayOnePoint += 1
+        }
+      } else if (st !== null && st.method !== SOURCE_STATS_METHOD) audit.exactWrongMethod += 1
     }
     // C. 참고 — 같은 기준 슬롯(첫 부족 슬롯)에서 eligible 인 seed 원천을 정본 순위로 세우고, 품질 성분이 정확히 같은 이웃 쌍
     const ranked = slots.length === 0 ? [] : rows
@@ -286,12 +314,38 @@ const agg = (m: Mode) => {
   }
 }
 const A = { before: agg('before'), after: agg('after') }
+/** 🔴 날짜만 아는 원천 — "전" eligible 이 "후" 에 복구됐나 · 정확 시각 원천 — 전후 판정 · rank 가 같은가 */
+const transitions: Record<string, number> = {}
+let dayEligibleBefore = 0
+let dayRecovered = 0
+let exactRows = 0
+let exactVerdictChanged = 0
+let exactRankChanged = 0
+const exactChangeKinds: Record<string, number> = {}
+for (const [k, b] of perRow.before) {
+  const a = perRow.after.get(k)
+  if (a === undefined) continue
+  if (a.isDay) {
+    const key = `${b.verdict}${b.reason === '' ? '' : `:${b.reason}`} → ${a.verdict}${a.reason === '' ? '' : `:${a.reason}`}`
+    transitions[key] = (transitions[key] ?? 0) + 1
+    if (b.verdict === 'eligible') { dayEligibleBefore += 1; if (a.verdict === 'eligible') dayRecovered += 1 }
+  } else {
+    exactRows += 1
+    if (a.verdict !== b.verdict || a.reason !== b.reason) {
+      exactVerdictChanged += 1
+      const kk = `${b.verdict}:${b.reason} → ${a.verdict}:${a.reason}`
+      exactChangeKinds[kk] = (exactChangeKinds[kk] ?? 0) + 1
+    } else if (a.rank !== b.rank) exactRankChanged += 1
+  }
+}
 const cAgeB = collectRuns.flatMap((r) => r.ageBefore)
 const cAgeA = collectRuns.flatMap((r) => r.ageAfter)
 const picksTotal = sum(collectRuns.map((r) => r.ageAfter.length))
 const out = {
   window: { from: FROM, to: TO, supplyRuns: supplyRuns.length, collectRuns: collectRuns.length },
   datePrecision: { listRows, listDayOnly },
+  dayNormalization: { dayEligibleBefore, dayRecovered, transitions, audit },
+  exactUnchanged: { exactRows, exactVerdictChanged, exactRankChanged, exactChangeKinds },
   supply: {
     universe: sum(supplyRuns.map((r) => r.universe)), unmatched: sum(supplyRuns.map((r) => r.unmatched)),
     dayOnlyInUniverse: sum(supplyRuns.map((r) => r.dayOnlyInUniverse)),
@@ -334,6 +388,15 @@ for (const m of ['before', 'after'] as const) {
     + ` · 고른 원천 슬롯 나이 중앙값 ${r1(a.ageMedian)}h`)
   console.log(`      날짜만 아는 원천 판정(첫 eligible 부족 슬롯) ${JSON.stringify(a.verdicts)}`)
 }
+console.log('\n②-2 날짜 판 정규화 (같은 원천 · 같은 KST 날짜 · 같은 목록 회차)')
+console.log(`   "전" eligible 날짜만 원천(회차 누적) ${dayEligibleBefore} 중 "후" eligible ${dayRecovered}`)
+for (const [k, v] of Object.entries(transitions).sort((x, y) => y[1] - x[1])) console.log(`     ${k}  ${v}`)
+console.log(`   감사(후): 날짜 원천 증거 ${audit.dayEvidence} · 날짜 판 아닌 스냅샷 ${audit.dayWrongMethod} · 회차/날짜 어긋남 ${audit.dayCrossRunOrDay}`
+  + ` · 빈 표본 ${audit.dayEmpty} · 한 점 표본 ${audit.dayOnePoint} · 정확 원천의 날짜 판 ${audit.exactWrongMethod}`)
+console.log(`   🔴 00:00 을 정확 시각으로 실은 날짜 라벨 원천 ${audit.midnightExactFromDayLabel} · 정확 시각+구간 동시 ${audit.postedAtWithWindow}`
+  + ` (참고: KST 00:00:00.000 정확 시각 전체 ${audit.midnightExactTotal} — 실제 "00:00" 라벨 포함)`)
+console.log(`   정확 시각 원천(회차 누적) ${exactRows}: 판정 · 사유 바뀜 ${exactVerdictChanged} · 판정 같고 rank 바뀜 ${exactRankChanged}`)
+for (const [k, v] of Object.entries(exactChangeKinds)) console.log(`     ${k}  ${v}`)
 console.log(`   충실도: 실제 회차 선택 ${out.supply.fidelity.actualSelected} 중 "전" replay 와 같은 원천 ${out.supply.fidelity.overlapBeforeActual}`
   + ' (재시도 예약 · DB 상태 · 옛 선택기 판은 재현하지 않는다)')
 console.log('\n③ 수집 상세 선별 (전 = 같은 점수 → 글 번호 오름차순 · 후 = 같은 점수 → 최신)')
