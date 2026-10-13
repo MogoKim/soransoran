@@ -49,7 +49,7 @@ const SOON_MINUTES = 30
 
 /** 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다. */
 const PIN_COLS = 'lg:grid-cols-[5.5rem_minmax(0,1fr)_11rem_auto]'
-const HOME_COLS = 'lg:grid-cols-[2rem_minmax(0,1fr)_13rem_auto]'
+const HOME_COLS = 'lg:grid-cols-[2rem_minmax(0,1fr)_17rem_auto]'
 
 function minutesLeft(expiresAt: Date | null, now: Date): number | null {
   if (!expiresAt) return null
@@ -241,8 +241,9 @@ export default async function AdminHomeExposurePage({
                   </Link>
 
                   <span className="mt-1 block text-xs text-content-muted lg:mt-0">
-                    댓글 {post._count.comments} · {formatKst(post.createdAt)} ·{' '}
-                    {popularityScore(post, now).toFixed(3)}
+                    {/* 댓글은 화면에 보이는 개수, 실반응은 점수가 센 신호다(실회원 사람 수 + 비회원 상한 3). */}
+                    댓글 {post._count.comments} · 실반응 {post.realReactions} ·{' '}
+                    {formatKst(post.createdAt)} · {popularityScore(post, now).toFixed(3)}
                   </span>
 
                   {/* 이미 고정된 글에는 조작 폼을 다시 주지 않는다 — 해제는 위 패널의 일이다. */}

@@ -10,6 +10,7 @@ import {
 import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
 import { BOARD_PAGE_SIZE, isPageOutOfRange, type BoardSort } from '@/lib/list-query'
 import { pickHomePopular } from '@/lib/popularity'
+import { withRealReactions } from '@/lib/popularity-db'
 import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
 import { applyHomeExposure, isOverrideActive } from '@/lib/home-exposure-rules'
 import type { BoardType } from '@prisma/client'
@@ -67,7 +68,7 @@ const POST_LIST_SELECT = {
  * 🔴 조회수는 목록 정렬까지다.
  *    사람이 스스로 고른 정렬과, 서비스가 대표로 골라 첫 화면에 내미는 순서는 다른 문제다.
  *    비정규화 카운터(조회수)는 표시와 목록 정렬에만 쓰고 승격·추천 점수의 입력에서는 뺀다.
- *    홈 인기글·베스트가 쓰는 popularity.ts 는 조회수를 모른다 (정본 C-4).
+ *    홈 인기 점수(popularity.ts)와 /best 입성 기준(best-ranking.ts)은 조회수를 모른다 (정본 C-4).
  *
  * 🔴 정렬 축(`BOARD_SORTS` · `BoardSort` · `parseBoardSort`)은 `@/lib/list-query` 에 있다.
  *    페이지 이동 UI 가 client 인데 정렬 타입을 알아야 한다. 이 파일은 `prisma` 와 `auth` 를
@@ -208,6 +209,10 @@ const HOME_POPULAR_MIN_MENOPAUSE = 7
  *
  * 점수와 배분은 popularity.ts 가 맡는다 — 여기는 조회만 한다.
  * 차단 목록을 인자로 받는다 — 홈 경로가 getBlockedUserIds 를 두 번 부르지 않게 하려는 것이다.
+ *
+ * 🔴 점수의 반응은 실반응 신호(popularity-db.ts — 실회원 사람 수 + 비회원 상한 3)다. 후보를 고른 뒤 붙인다.
+ *    화면에 그리는 `_count.comments`(Persona 댓글 포함 실제 개수)는 그대로 둔다 — 숫자를 바꾸지 않고
+ *    순서만 실반응으로 매긴다.
  */
 async function pickPopularByScore(take: number, blockedIds: string[]) {
   const candidatesFor = (boardType: BoardType) =>
@@ -222,7 +227,11 @@ async function pickPopularByScore(take: number, blockedIds: string[]) {
       take: HOME_POPULAR_CANDIDATES_PER_BOARD,
     })
 
-  const [menopause, free] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
+  const [menopauseRows, freeRows] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
+  const [menopause, free] = await Promise.all([
+    withRealReactions(prisma, menopauseRows),
+    withRealReactions(prisma, freeRows),
+  ])
 
   return pickHomePopular({
     menopause,
@@ -275,8 +284,9 @@ export async function getHomePopularPosts(take = 20) {
     .filter((o) => o.action === 'PIN' && isOverrideActive(o))
     .map((o) => o.postId)
 
+  // 고정 글도 자동 후보와 같은 모양으로 맞춘다 — 점수는 쓰지 않지만 어드민이 같은 칸을 그린다.
   const pinnedPosts = activePinIds.length
-    ? await prisma.post.findMany({
+    ? await withRealReactions(prisma, await prisma.post.findMany({
         where: {
           id: { in: activePinIds },
           boardType: { in: COMMUNITY_BOARD_TYPES },
@@ -284,7 +294,7 @@ export async function getHomePopularPosts(take = 20) {
           ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
         },
         select: POST_LIST_ITEM_SELECT,
-      })
+      }))
     : []
 
   return applyHomeExposure({ candidates, pinnedPosts, overrides, take })
