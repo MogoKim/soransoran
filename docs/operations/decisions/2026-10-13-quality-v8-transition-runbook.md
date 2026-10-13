@@ -18,7 +18,7 @@ pin 을 바꾸고 job 을 올린다. 활성화 전에 해소할 수 없으면 �
 |---|---|---|
 | ① stage | `npm run runtime:deploy -- --stage --target=<40자리 SHA>` | `~/Documents/soransoran-runtime-stage` 만 (별도 clone · 자기 node_modules). runtime 트리 · job · pin · manifest · plist 0 |
 | ② resolve | staging 트리에서 공식 `auto-ready:defect-resolve … --apply --production --staged` (아래) | 운영 DB 의 해당 큐 행 `editDiff` 해소 배열에 v8 기록 **덧붙이기** 한 줄씩. 감사 행 · 글 · 다른 칸 0 |
-| ③ recheck | ①을 다시 돌린다 | 없음 (읽기 전용) |
+| ③ recheck | ①을 다시 돌린다 — PASS 면 승계 집합을 `contract-succession-<SHA>.json` 에 남긴다 | DB 0 (승계 파일 하나) |
 | ④ activate | `npm run runtime:deploy -- --apply --target=<같은 SHA>` | job 을 내리기 **전에** staging 트리로 한 번 더, checkout 뒤 runtime 트리로 한 번 더 잰다. 둘 다 v7=0 · v8=0 일 때만 pin 전환 · job 로드 |
 
 ## ① stage — 출력 읽는 법
@@ -33,19 +33,27 @@ pin 을 바꾸고 job 을 올린다. 활성화 전에 해소할 수 없으면 �
 | target(v8) 미해소 확정 결함 수 | `target=quality-v8:… unresolved=N` |
 | 결함마다 공식 dry-run 계획 | `defect queue=<id> plan=plan digest=<64> expect=<지금>:<뒤>` |
 
-- `STAGED PASS` (runtime 0 · target 0) → ④로 간다.
+- `STAGED PASS` (`code=NO_UNRESOLVED` 또는 `code=SUCCESSION`) → ④로 간다.
 - `code=TARGET_UNRESOLVED` 이고 모든 결함이 `plan=plan` · `afterPlans target=0` → ②로 간다.
 - `plan=refuse`(공식 dry-run 이 계획을 내지 않는다) · `afterPlans target>0` → **이 target 은 활성화할 수 없다.** 배포하지 않는다.
-- `code=RUNTIME_UNRESOLVED` → 지금 v7 gate 가 이미 닫혀 있다. 전환으로 덮지 않는다 — 먼저 원인을 본다.
+- `code=SUCCESSION_BROKEN` → v7 미해소를 v8 이 정확히 인수하지 못했다(`NOT_OWN_CONTRACT` · `UNLINKED` · `DUPLICATE` · `FOREIGN_LINK`). 배포하지 않는다 — 원인을 본다.
 
-### 🔴 마스터 결정 필요 — v7 자기 계약 행의 결함 (2026-10-13 14:40 감사 결함)
+### 🔴 승계 — v7 자기 계약 행의 결함 (2026-10-13 마스터 결정 · contract-transition-v3)
 
-14:40 결함 행(`cmv689wzr…`)은 **quality-v7 표식** 행이다. 정본 규칙상 "지금 계약 행의 결함은 지금 게이트가 놓친 결함이라
-어떤 기록으로도 해소되지 않는다" — 그래서 운영 v7 gate 는 지금 닫혀 있고, **v7 미해소는 v7 코드에서 영원히 1** 이다.
-v8 에서는 그 행이 옛 계약 행이 되어 공식 해소가 실제 계획을 낸다(격리 DB: `childLifeStageConflict` 로 재검증 차단 · expect 1:0 ·
-적용 뒤 v8=0). 그러나 지금 규칙(v7=0 · v8=0)으로는 활성화가 **영구 BLOCK** 이다(격리 DB 반례 ⑦ 로 고정).
-이 PR 은 판정을 스스로 완화하지 않았다. 열 길은 마스터가 정한다 — 예: "v8 미해소 0 이고 v7 미해소가 **전부 v7 자기 계약 행**이며
-그 각각이 v8 공식 기록으로 해소됐을 때만 PASS". 그 전까지 v8 활성화는 막혀 있다.
+14:40 결함 행(`cmv689wzr…`)은 **quality-v7 표식** 행이다. 정본 규칙상 v7 코드는 자기 계약 행의 결함을 어떤 기록으로도 해소하지
+않으므로 v7 미해소는 v7 에서 영원히 1 이다. 이것을 무시 · waiver 하지 않고 **v8 공식 해소가 인수(승계)** 한다. 통과 조건은 전부다:
+
+1. v8 미해소 확정 결함 0
+2. v7 미해소 결함 **전부**가 v7 자기 계약 행에서 났다 — 다른 유형(옛 계약 행 등)의 v7 미해소가 하나라도 있으면 BLOCK(`NOT_OWN_CONTRACT`)
+3. v7 결함마다 그것을 가리키는 v8 판 · digest 공식 해소 기록이 **정확히 한 줄**이고 정본 규칙(`recordProblem`)을 통과한다 —
+   그 기록이 v8 초안 게이트의 재검증 차단(= v8 고정 반례가 발행 전에 막는다)을 담는다. 없음(`UNLINKED`) · 두 줄 이상(깨진 줄 포함 ·
+   `DUPLICATE`) · 다른 결함을 가리키는 줄(`FOREIGN_LINK`)은 BLOCK
+4. stage 가 PASS 일 때 남긴 승계 집합(`<canonical>/contract-succession-<SHA>.json` 의 digest)과 activate 직전(job 을 내리기 전) ·
+   checkout 뒤 두 재확인의 집합이 같다 — 새 결함 · 바뀐 연결은 `SUCCESSION_DIGEST_MISMATCH`, stage 기록 없음은 `SUCCESSION_NOT_STAGED`
+
+범용 force · bypass · 승인 플래그는 없다. 승계 파일은 배포기가 정한 자리에 stage 가 쓰고 activate 가 읽는다 — 사람이 값을 넣지 않는다.
+activate 전까지 v7 자동 lane 은 그대로 닫혀 있다(v8 기록은 v7 판정에 영향이 없다 · 격리 DB 로 고정).
+출력에서 `code=SUCCESSION` · `succession=N digest=…` · `succession queue=<id> record=<…> blocked=<코드>` 를 기록한다.
 
 ## ② resolve — staging 트리에서 공식 경로로만
 

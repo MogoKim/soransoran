@@ -2143,6 +2143,21 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       !r2.ok && r2.phase === 'preflight' && /NOT_ON_MAIN|NOT_ORIGIN_MAIN|main/.test(r2.problems.join(' ')) && idx(offMain, 'checkout') === -1)
   }
 
+  // ── [D-3] 🔴 승계 배선 (contract-transition-v3) — 실제 배포기 효과가 stage 기록 · activate 대조 경로를 넘긴다 ──
+  {
+    const src = readFileSync(join(process.cwd(), 'scripts/runtime-deploy.mts'), 'utf-8')
+    const fxStaged = /stagedTransitionCheck:[^\n]*\n?[^\n]*--verify-succession=\$\{successionFileOf\(target\)\}/.test(src)
+    const fxRecheck = /contractTransitionGate:[^\n]*\n?[^\n]*--verify-succession=\$\{successionFileOf\(TARGET\)\}/.test(src)
+    const stageRec = /--record-succession=\$\{successionFileOf\(target\)\}/.test(src)
+    check('🔴 🔴 [D-3] job 을 내리기 전 staging 재확인 · checkout 뒤 재확인이 둘 다 stage 승계 집합으로 대조한다', fxStaged && fxRecheck)
+    check('🔴 [D-3] --stage 가 승계 집합을 남긴다(같은 경로 함수)', stageRec)
+    // 🔴 전환 검사에 넘기는 인자는 runtime · 승계 기록/대조뿐이다(staging 트리 정리용 `git checkout --force` 는 다른 명령이다)
+    const transitionCalls = src.split('\n').filter((l) => l.includes('TRANSITION_CHECK,'))
+    check('🔴 [D-3] 승인 · 우회 인자 없음 — 전환 검사 호출은 --runtime · --record/--verify-succession 뿐',
+      transitionCalls.length === 3 && transitionCalls.every((l) => !/--force|--approve|--defect-plan|--contract-|--skip/.test(l))
+      && !/--contract-approve|--approve-transition/.test(src))
+  }
+
   // ── [D] offline 게이트 실패 ──
   {
     const w = makeWorld({ gateFail: 'gate2' })

@@ -8,7 +8,7 @@
  *     ② 우회 — 모르는 플래그 · runtime 빠짐 · runtime 을 target 으로 우겨도 · 옛 승인 플래그 → 전부 non-zero (승인 통과 경로 없음)
  *     ③ staged 운영 해소는 격리 env 에서 DB 에 붙기 전에 거절된다
  *     ④ 정본 쓰기로 v8 기록 append → target 미해소 0 · v7 기록 그대로 · v7 결함 축 0 그대로 · exit 0 (PASS)
- *     ⑤ 공식 dry-run 이 계획을 못 내는 결함 → exit 1 · v7 행의 결함 → RUNTIME_UNRESOLVED
+ *     ⑤ 공식 dry-run 이 계획을 못 내는 결함 → exit 1 · v7 자기 계약 결함은 v8 기록 전 BLOCK · 뒤 승계 PASS
  *     ⑥ CLI 출력에 제목 · 본문 · Persona 코드가 없다 · CLI 는 DB 를 한 칸도 바꾸지 않는다(표 전체 스냅샷)
  *
  * 🔴 운영 DB 에 붙지 않는다(sentinel · localhost · soran_test). 임시 HOME 아래 artifact 정본만 쓴다.
@@ -223,16 +223,17 @@ async function main(): Promise<void> {
     const sN = await defectState()
     check('🔴 🔴 **v7 행의 결함은 v7 기록이 있어도 runtime 미해소 1 (그 계약 자신의 행)**', pN.kind === 'plan' && sN.v7 === 1, JSON.stringify(sN))
     const rN = run([`--runtime=${markText(V7)}`])
-    check('🔴 CLI 가 runtime 미해소 1 로 보고 · BLOCK RUNTIME_UNRESOLVED (지금 gate 가 이미 닫혀 있으면 활성화하지 않는다)', rN.status === 1 && /runtime=quality-v7:[0-9a-f]{64} unresolved=1/.test(rN.stdout)
-      && /code=RUNTIME_UNRESOLVED/.test(rN.stdout), rN.stdout)
+    check('🔴 CLI — runtime 미해소 1 · v8 기록이 아직 없다 → BLOCK (TARGET_UNRESOLVED · 승계 UNLINKED)', rN.status === 1 && /runtime=quality-v7:[0-9a-f]{64} unresolved=1/.test(rN.stdout)
+      && /code=TARGET_UNRESOLVED/.test(rN.stdout) && /UNLINKED/.test(rN.stdout), rN.stdout)
     // 🔴 v8 정본 쓰기로 해소해도(target 0) — v7 은 여전히 미해소다. runtime 만 남은 상태도 막아야 한다
     const pN2 = await planDefectResolution(prisma, { queueId: N.queueId, contextOf, now: new Date() })
     const wN = pN2.kind === 'plan' ? await applyDefectResolution(prisma, { plan: pN2.plan, contextOf, now: new Date() }) : null
     const sN2 = await defectState()
     check('전제 — v8 해소 기록 append → target 0 · runtime(v7) 1', wN?.kind === 'written' && sN2.target === 0 && sN2.v7 === 1, JSON.stringify(sN2))
     const rN2 = run([`--runtime=${markText(V7)}`])
-    check('🔴 🔴 **target 0 이어도 runtime 미해소 1 → exit 1 · RUNTIME_UNRESOLVED (v7=0 · v8=0 둘 다여야 PASS)**',
-      rN2.status === 1 && /code=RUNTIME_UNRESOLVED/.test(rN2.stdout) && /runtime=quality-v7:[0-9a-f]{64} unresolved=1/.test(rN2.stdout), rN2.stdout)
+    check('🟢 🟢 **v7 자기 계약 결함 1 + 정확한 v8 공식 기록 1 + v8=0 → PASS SUCCESSION (승계 · v7 미해소는 그대로 1)**',
+      rN2.status === 0 && /code=SUCCESSION/.test(rN2.stdout) && /runtime=quality-v7:[0-9a-f]{64} unresolved=1/.test(rN2.stdout)
+      && /succession=1 /.test(rN2.stdout), rN2.stdout)
     await prisma.autoReadyAudit.delete({ where: { queueId: N.queueId } })
   }
 

@@ -55,6 +55,8 @@ const ROOT = process.cwd()
 const TSX = join(ROOT, 'node_modules/.bin/tsx')
 const CLI = join(ROOT, 'scripts/quality-contract-transition-check.mts')
 const SCRATCH = mkdtempSync(join(tmpdir(), 'soran-contract-deploy-'))
+/** 🔴 승계 집합 기록 — 배포기의 `contract-succession-<SHA>.json` 과 같은 역할(stage 가 쓰고 activate 가 대조) */
+const SUCC_FILE = join(SCRATCH, 'contract-succession.json')
 const LEGACY_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
 /** 🔴 운영 runtime 의 계약 — origin/main 의 `quality-contract.fingerprint.json` 그대로 */
 const V7 = { version: 'quality-v7', digest: 'ef9ff369253ee95de6707acd7a4c8de7cee294a9023c8a7833d64150b33bc8de' }
@@ -122,7 +124,8 @@ function makeHost(home: string, o: { stagedHead?: string } = {}): Host {
     jobs: new Map(JOBS.map((l) => [l, 'loaded'])), plists: new Map(JOBS.map((l) => [l, JSON.stringify(['npx', 'tsx', `${RT}/scripts/${l}.mts`, '--old'])])),
     order: [], fx: {} as DeployEffects,
   }
-  const cli = (): boolean => spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' }).status === 0
+  // 🔴 activate 의 두 재확인 — 배포기와 같이 stage 가 남긴 승계 집합으로 대조한다
+  const cli = (): boolean => spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--verify-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' }).status === 0
   h.fx = {
     fetch: () => true, currentSha: () => h.sha, originMain: () => NEXT, isAncestor: () => true, dirty: () => false,
     runningJobs: () => ({ running: [], unknown: [] }), envBlockers: () => [],
@@ -154,6 +157,11 @@ function makeHost(home: string, o: { stagedHead?: string } = {}): Host {
     log: () => { /* 조용히 */ },
   }
   return h
+}
+/** 🔴 stage — 배포기 `--stage` 가 staging 트리에서 부르는 것과 같은 CLI · 같은 인자(PASS 면 승계 집합을 남긴다) */
+const stageRun = (home: string) => {
+  rmSync(SUCC_FILE, { force: true })
+  return spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--record-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
 }
 const deploy = (h: Host) => runDeploy({ target: NEXT, jobs: JOBS, paths: { runtimeRoot: RT, devRoots: ['/fx/dev'] }, offlineGates: ['fx-gate'], now: () => '2026-10-13T00:00:00.000Z' }, h.fx)
 const allLoaded = (h: Host): boolean => JOBS.every((l) => h.jobs.get(l) === 'loaded')
@@ -240,6 +248,8 @@ async function main(): Promise<void> {
 
   console.log('\n④ activate — 재확인 둘을 지나야 pin 전환 · job 로드')
   {
+    const st = stageRun(home)
+    check('stage — PASS · 승계 집합을 남긴다(빈 집합)', st.status === 0 && /CONTRACT_SUCCESSION_STAGED/.test(st.stdout), st.stdout.slice(0, 300))
     const snap = await tables()
     const h = makeHost(home)
     const r = await deploy(h)
@@ -257,6 +267,7 @@ async function main(): Promise<void> {
   console.log('\n⑤ rollback — staging 확인 뒤 새 결함이 생기면 checkout 뒤 재확인이 막고 되돌린다')
   {
     // 🔴 staging 확인(PASS) 뒤 · 재확인 전에 새 확정 결함이 생긴다 — 동기 효과 안이라 checkout 직전에 넣어 둔다
+    stageRun(home)
     const h = makeHost(home)
     let injected: AutoPost | null = null
     const origCheckout = h.fx.checkout
@@ -296,36 +307,118 @@ async function main(): Promise<void> {
     await prisma.autoReadyAudit.delete({ where: { queueId: P.queueId } })
   }
 
-  console.log('\n⑦ 🔴 14:40 감사 결함 모양 — v7 표식 행이 v7 에서 놓친 결함 (v7 은 자기 계약 행을 해소하지 못한다)')
+  console.log('\n⑦ 🔴 승계 — v7 자기 계약 결함을 v8 공식 해소가 정확히 1:1 로 인수할 때만 (14:40 감사 결함 모양)')
   {
-    const K = await defectRow(f, KIDS, {
-      persona: 'P02', mark: V7,
-      plan: { personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts', closingIntent: 'vent', contentRoles: ['experienceResonance'], protectedFacts: [],
-        warrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 둘 데리고', verifiedCardValue: '1' }] },
-    })
-    const c0 = await counts()
-    check('전제 — v7 미해소 1 (자기 계약 행) · v8 미해소 1', c0.v7 === 1 && c0.v8 === 1, JSON.stringify(c0))
-    const h0 = makeHost(home)
-    const r0 = await deploy(h0)
-    check('🔴 stage — BLOCK · 활성화 0 · v7 job 그대로', !r0.ok && r0.phase === 'preflight' && h0.sha === PREV && allLoaded(h0) && oldPlists(h0))
-    const pK = await planDefectResolution(prisma, { queueId: K.queueId, contextOf, now: new Date() })
-    check('🟢 🟢 **공식 dry-run 이 v8 게이트로 실제 계획을 낸다 — 저장 초안을 childLifeStageConflict 로 확정 차단**',
-      pK.kind === 'plan' && pK.plan.record.reverify.failureCodes.includes('childLifeStageConflict')
-      && stableJson(pK.plan.record.qualityContract) === stableJson(TARGET), JSON.stringify(pK).slice(0, 300))
-    if (pK.kind === 'plan') {
-      const exK = await expectationOf(prisma, pK.plan)
-      const aK = await applyApprovedDefectResolution(prisma, { queueId: K.queueId, approval: { digest: defectPlanDigestOf(pK.plan), expected: exK, reason: '14:40 결함 v8 해소' }, contextOf, now: new Date() })
-      check('🟢 resolve — 정본 승인 적용 written 1 (expect 1:0)', aK.kind === 'written' && exK.before === 1 && exK.after === 0, JSON.stringify([exK, aK]))
+    const KPLAN = { personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts', closingIntent: 'vent', contentRoles: ['experienceResonance'], protectedFacts: [],
+      warrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 둘 데리고', verifiedCardValue: '1' }] }
+    const ownDefect = () => defectRow(f, KIDS, { persona: 'P02', mark: V7, plan: KPLAN })
+    /** 공식 v8 해소 — 정본 dry-run 계획 → 정본 승인 적용(staging 트리의 `defect-resolve --staged` 와 같은 쓰기) */
+    const resolveV8 = async (queueId: string): Promise<string> => {
+      const pl = await planDefectResolution(prisma, { queueId, contextOf, now: new Date() })
+      if (pl.kind !== 'plan') return `plan:${pl.kind}`
+      const ex = await expectationOf(prisma, pl.plan)
+      const ap = await applyApprovedDefectResolution(prisma, { queueId, approval: { digest: defectPlanDigestOf(pl.plan), expected: ex, reason: 'v8 승계 db-check' }, contextOf, now: new Date() })
+      return ap.kind
     }
+    const qOf = (id: string) => prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { editDiff: true } })
+    const setRecords = async (id: string, recs: unknown[]) => {
+      const q = await qOf(id)
+      await prisma.originalPostApprovalQueue.update({ where: { id }, data: { editDiff: { ...rec(q.editDiff), [DEFECT_RESOLUTION_KEY]: recs } as Prisma.InputJsonValue } })
+    }
+    const drop = async (...ids: string[]) => { for (const id of ids) await prisma.autoReadyAudit.delete({ where: { queueId: id } }) }
+    const activate = async (): Promise<{ ok: boolean; h: Host; phase: string; rollback: boolean }> => {
+      const h = makeHost(home)
+      const r = await deploy(h)
+      return { ok: r.ok, h, phase: r.phase, rollback: r.rollback?.complete === true }
+    }
+    const untouched = (h: Host): boolean => h.sha === PREV && h.pin === PREV && allLoaded(h) && oldPlists(h) && !h.order.some((x) => x.startsWith('unload'))
+
+    // ── a. 정확한 1:1 승계 → 통과 ──
+    const K = await ownDefect()
+    const c0 = await counts()
+    check('전제 — v7 자기 계약 결함 1 · v7=1 · v8=1 (v7 자동 lane 닫힘)', c0.v7 === 1 && c0.v8 === 1, JSON.stringify(c0))
+    const pre = stageRun(home)
+    const pre2 = await activate()
+    check('🔴 v8 기록 전 — stage BLOCK(TARGET_UNRESOLVED) · activate BLOCK · 활성화 0', pre.status === 1 && /TARGET_UNRESOLVED/.test(pre.stdout) && !pre2.ok && untouched(pre2.h), pre.stdout.slice(0, 200))
+    const pK = await planDefectResolution(prisma, { queueId: K.queueId, contextOf, now: new Date() })
+    check('🟢 공식 dry-run 이 v8 게이트로 실제 계획을 낸다 (childLifeStageConflict)', pK.kind === 'plan' && pK.plan.record.reverify.failureCodes.includes('childLifeStageConflict'), JSON.stringify(pK).slice(0, 200))
+    check('🟢 resolve — 정본 승인 적용 written', await resolveV8(K.queueId) === 'written')
     const c1 = await counts()
-    check('🔴 🔴 **resolve 뒤 v8=0 · v7=1 그대로 — v7 은 자기 계약 행을 어떤 기록으로도 해소하지 않는다**', c1.v8 === 0 && c1.v7 === 1, JSON.stringify(c1))
-    const rc = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
-    check('🔴 recheck — 지금 규칙(v7=0 · v8=0)으로는 BLOCK RUNTIME_UNRESOLVED', rc.status === 1 && /code=RUNTIME_UNRESOLVED/.test(rc.stdout)
-      && new RegExp(`target=${TARGET.version}:[0-9a-f]{64} unresolved=0`).test(rc.stdout), rc.stdout)
-    const h1 = makeHost(home)
-    const r1 = await deploy(h1)
-    check('🔴 🔴 **activate — 지금 규칙으로는 영구 BLOCK (마스터 결정 필요 · 판정을 스스로 완화하지 않았다)**', !r1.ok && r1.phase === 'preflight' && h1.sha === PREV && allLoaded(h1))
-    await prisma.autoReadyAudit.delete({ where: { queueId: K.queueId } })
+    check('🔴 resolve 뒤 v8=0 · v7=1 그대로 — activate 전까지 v7 자동 lane 은 닫혀 있다', c1.v8 === 0 && c1.v7 === 1, JSON.stringify(c1))
+    const st1 = stageRun(home)
+    check('🟢 🟢 **stage — PASS SUCCESSION · 승계 1 (v7 결함 ↔ v8 기록 1:1)**', st1.status === 0 && /code=SUCCESSION/.test(st1.stdout)
+      && /succession=1 /.test(st1.stdout) && /CONTRACT_SUCCESSION_STAGED/.test(st1.stdout), st1.stdout.slice(0, 400))
+    const a1 = await activate()
+    check('🟢 🟢 **activate — 두 재확인이 같은 승계 집합 · pin=target · job loaded**', a1.ok && a1.h.pin === NEXT && allLoaded(a1.h), a1.phase)
+
+    // ── b. 중복 연결 → 차단 ──
+    const recsK = resolutionsOf((await qOf(K.queueId)).editDiff)
+    const v8rec = recsK.find((x) => stableJson(rec(x).qualityContract) === stableJson(TARGET))!
+    await setRecords(K.queueId, [...recsK, v8rec])
+    const sDup = stageRun(home)
+    check('🔴 🔴 **같은 v8 기록 두 줄(중복 연결) → BLOCK SUCCESSION_BROKEN · DUPLICATE**', sDup.status === 1 && /SUCCESSION_BROKEN/.test(sDup.stdout) && /DUPLICATE/.test(sDup.stdout), sDup.stdout.slice(0, 300))
+    // 🔴 하나는 맞고 하나는 깨진(재검증 차단 코드 비움) v8 기록 두 줄 — 깨진 줄이 섞여도 1:1 이 아니다
+    const broken = { ...rec(v8rec), reverify: { ...rec(rec(v8rec).reverify), failureCodes: [] } }
+    await setRecords(K.queueId, [...recsK, broken])
+    const sDup2 = stageRun(home)
+    check('🔴 🔴 **맞는 v8 기록 + 깨진 v8 기록(같은 결함) → BLOCK DUPLICATE (유효 줄만 세지 않는다)**', sDup2.status === 1 && /DUPLICATE/.test(sDup2.stdout), sDup2.stdout.slice(0, 300))
+    await setRecords(K.queueId, recsK)
+
+    // ── c. 다른 결함 연결 → 차단 ──
+    const K2 = await ownDefect()
+    await setRecords(K2.queueId, [v8rec])
+    const sForeign = stageRun(home)
+    check('🔴 🔴 **다른 결함(K)의 v8 기록만 단 결함 K2 → BLOCK (FOREIGN_LINK · v8 미해소)**', sForeign.status === 1 && /FOREIGN_LINK/.test(sForeign.stdout), sForeign.stdout.slice(0, 300))
+
+    // ── d. v8 기록 없음 → 차단 ──
+    await setRecords(K2.queueId, [])
+    const sNone = stageRun(home)
+    check('🔴 🔴 **v8 기록 없는 v7 결함 → BLOCK (UNLINKED · v8 미해소 1)**', sNone.status === 1 && /TARGET_UNRESOLVED/.test(sNone.stdout) && /UNLINKED/.test(sNone.stdout), sNone.stdout.slice(0, 300))
+
+    // ── e. 여러 결함이 모두 정확히 매핑 → 통과 ──
+    check('K2 도 공식 v8 해소', await resolveV8(K2.queueId) === 'written')
+    const sMulti = stageRun(home)
+    check('🟢 🟢 **v7 결함 2 · 둘 다 정확한 v8 기록 → PASS · 승계 2**', sMulti.status === 0 && /succession=2 /.test(sMulti.stdout), sMulti.stdout.slice(0, 300))
+
+    // ── f. stage 뒤 새 v7 결함 → activate 차단(집합 digest 불일치) ──
+    const K3 = await ownDefect()
+    check('새 결함 K3 도 공식 v8 해소(그래도 stage 집합 밖이다)', await resolveV8(K3.queueId) === 'written')
+    const aNew = await activate()
+    check('🔴 🔴 **stage 뒤 새 v7 결함 → activate BLOCK(승계 집합 digest 불일치) · 활성화 0**', !aNew.ok && aNew.phase === 'preflight' && untouched(aNew.h), aNew.phase)
+    const rcNew = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--verify-succession=${SUCC_FILE}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    check('🔴 사유 — SUCCESSION_DIGEST_MISMATCH', rcNew.status === 1 && /SUCCESSION_DIGEST_MISMATCH/.test(rcNew.stdout), rcNew.stdout.slice(0, 200))
+    const noStage = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`, `--verify-succession=${join(SCRATCH, 'missing.json')}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    check('🔴 stage 기록이 없으면 → BLOCK SUCCESSION_NOT_STAGED', noStage.status === 1 && /SUCCESSION_NOT_STAGED/.test(noStage.stdout))
+    await drop(K2.queueId, K3.queueId)
+
+    // ── g. v7 에 다른 유형의 미해소(옛 계약 행 · v7 기록 없음 · v8 기록만) → 차단 ──
+    const L = await defectRow(f, BLOCKED)
+    check('L(옛 계약 행) 공식 v8 해소', await resolveV8(L.queueId) === 'written')
+    const cL = await counts()
+    const sOther = stageRun(home)
+    check('🔴 🔴 **v7 미해소에 자기 계약 행이 아닌 결함 → BLOCK NOT_OWN_CONTRACT (v8=0 이어도)**', cL.v8 === 0 && sOther.status === 1
+      && /NOT_OWN_CONTRACT/.test(sOther.stdout), `${JSON.stringify(cL)} ${sOther.stdout.slice(0, 300)}`)
+    await drop(L.queueId)
+
+    // ── h. activate 실패 → 완전 rollback (승계 상태에서) ──
+    const sOk = stageRun(home)
+    check('다시 stage — 승계 1 · PASS', sOk.status === 0 && /succession=1 /.test(sOk.stdout))
+    const h = makeHost(home)
+    const origCheckout = h.fx.checkout
+    let injected = ''
+    h.fx.checkout = (sha) => {
+      if (sha === NEXT && injected === '') {
+        const r = spawnSync(TSX, [join(ROOT, 'scripts/quality-contract-deploy-db-check.mts'), '--inject-defect'], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+        injected = r.status === 0 ? r.stdout.trim() : 'FAILED'
+      }
+      return origCheckout(sha)
+    }
+    const rr = await deploy(h)
+    check('🔴 🔴 **activate 도중 새 결함 → checkout 뒤 재확인 BLOCK → runtime · pin · manifest · plist · job 완전 rollback**', !rr.ok && rr.phase === 'contract-transition'
+      && h.sha === PREV && h.pin === PREV && (JSON.parse(h.manifest ?? '{}') as { sha?: string }).sha === PREV && oldPlists(h) && allLoaded(h)
+      && rr.rollback?.complete === true, `${rr.phase} ${injected}`)
+    if (injected !== '' && injected !== 'FAILED') await drop(injected)
+    await drop(K.queueId)
   }
 
   console.log('\n⑧ 🔴 의미 경고 초안(17:15 artifact 3dd770e2 모양) · 자녀 수 생활사 모순 — 최종 pick · 적재 · READY 도장 · 발행 재검증')
@@ -419,8 +512,8 @@ async function injectDefect(): Promise<void> {
   const prisma = new PrismaClient()
   const home = process.env.HOME ?? ''
   const f = newFixture(prisma, home)
-  // 🔴 부모와 원천 id · artifact id 가 겹치지 않게 순번을 띄운다
-  f.seq = 900
+  // 🔴 부모와 · 앞선 주입과 원천 id · artifact id 가 겹치지 않게 순번을 띄운다(같은 회차에 여러 번 주입한다)
+  f.seq = 1000 + (Date.now() % 900000)
   const a = await defectRow(f, BLOCKED)
   console.log(a.queueId)
   await prisma.$disconnect()

@@ -25,6 +25,8 @@
  *    ③ recheck  : `--stage` 를 다시 돌려 runtime 미해소 0 · target 미해소 0 을 본다
  *    ④ activate : `--apply` 가 job 을 내리기 전에 staging 트리로 한 번 더, checkout 뒤 한 번 더 잰다. 하나라도 0 이 아니면 BLOCK
  *    미해소가 남은 채 활성화하고 뒤에서 해소하는 길 · 승인으로 통과시키는 길은 없다.
+ *    🔴 v7 자기 계약 결함은 v8 공식 해소가 정확히 1:1 로 **승계**할 때만 넘긴다 — stage 가 승계 집합 digest 를
+ *       `contract-succession-<SHA>.json` 에 남기고 activate 의 두 재확인이 같은 집합인지 본다(새 결함 · 바뀐 연결 → BLOCK).
  */
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -97,6 +99,11 @@ const STAGE = argv.includes('--stage')
 /** 🔴 target 을 미리 준비하는 자리 — runtime 트리와 따로다. 예약 job 은 이곳을 물지 않는다 */
 const STAGE_ROOT = join(homedir(), 'Documents', 'soransoran-runtime-stage')
 const TRANSITION_CHECK = 'scripts/quality-contract-transition-check.mts'
+/**
+ * 🔴 **승계 집합 기록 자리** (contract-transition-v3) — stage 가 PASS 일 때 남기고, activate 의 두 재확인이 같은 파일로 대조한다.
+ *    target SHA 마다 한 파일이다. 사람이 값을 넣는 자리가 아니다.
+ */
+const successionFileOf = (target: string): string => join(CANON_DIR, `contract-succession-${target}.json`)
 
 /**
  * 🔴 성공하면 출력, 실패하면 null. **판단에 쓰는 읽기 전용 명령**에만 쓴다.
@@ -162,7 +169,7 @@ if (STAGE) {
   const rt = readRuntimeContract()
   if (rt === null) fail('runtime 품질 계약을 읽지 못했다')
   console.log(`  runtime 계약 ${rt!.split(':')[0]} · staging ${target.slice(0, 12)} 으로 전환 preflight(읽기 전용)\n`)
-  const ok = act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt!}`], STAGE_ROOT)
+  const ok = act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt!}`, `--record-succession=${successionFileOf(target)}`], STAGE_ROOT)
   console.log(ok
     ? `\n✅ STAGED PASS — runtime·target 미해소 0. 활성화: npm run runtime:deploy -- --apply --target=${target}\n`
     : '\n🔴 STAGED BLOCK — 활성화하지 않는다. 계획이 있는 결함은 staging 트리에서 공식 defect-resolve --staged 로 해소한 뒤'
@@ -396,9 +403,11 @@ const fx: DeployEffects = {
    */
   runtimeQualityContract: () => readRuntimeContract(),
   // 🔴 job 을 내리기 전 — staging 트리가 target 에 깨끗하게 있을 때만 그 트리로 잰다 · 읽기 전용 · exit 0 만 통과
-  stagedTransitionCheck: (target, rt) => stagedAt(target) && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`], STAGE_ROOT),
+  stagedTransitionCheck: (target, rt) => stagedAt(target)
+    && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, `--verify-succession=${successionFileOf(target)}`], STAGE_ROOT),
   // 🔴 checkout 뒤 runtime 트리의 target 코드로 다시 잰다 · 읽기 전용 · exit 0 만 통과
-  contractTransitionGate: (rt) => act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`]),
+  contractTransitionGate: (rt) => TARGET !== null
+    && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, `--verify-succession=${successionFileOf(TARGET)}`]),
 
   // ── 🔴 plist cutover — **target commit 의** 템플릿을 실제 설치본으로 옮긴다 ──
   readInstalledPlist: (l) => readInstalled(AGENT_DIR, l),
