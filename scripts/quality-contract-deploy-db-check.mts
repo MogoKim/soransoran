@@ -21,7 +21,13 @@ import { join } from 'node:path'
 import { PrismaClient, type Prisma } from '@prisma/client'
 
 import { AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-v2'
-import { unresolvedDefectCount } from '../src/lib/auto-ready-repo'
+import { stampAutoReady, unresolvedDefectCount } from '../src/lib/auto-ready-repo'
+import { eligibilityOf } from '../src/lib/auto-ready-v2'
+import { judgeMachine, type SemanticVerdict } from '../src/lib/content-core/review'
+import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
+import { pickV2 } from '../src/lib/micro-seed-auto-draft'
+import * as af from '../src/lib/micro-seed-supply-autofill'
+import { SEMANTIC_HOLD_CODES } from '../src/lib/semantic-summary-codes'
 import { planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
 import { DEFECT_RESOLUTION_KEY } from '../src/lib/auto-ready-defect-resolution'
 import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
@@ -54,6 +60,8 @@ const LEGACY_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44c
 const V7 = { version: 'quality-v7', digest: 'ef9ff369253ee95de6707acd7a4c8de7cee294a9023c8a7833d64150b33bc8de' }
 const BLOCKED = LIFE_FIXTURES.find((x) => x.queueId === 'counter-v6-peer-observation')!
 const PASSING = LIFE_FIXTURES.find((x) => x.queueId === 'control-v6-peer-third-party')!
+/** 🔴 14:40 감사 결함 재작성 — P02(자녀 1명) · SELF · `아들 둘 데리고` · v7 표식 · 자동 발행됨 */
+const KIDS = LIFE_FIXTURES.find((x) => x.queueId === 'cmv689wzr0001xm7mubgfebxp')!
 const PREV = 'a'.repeat(40)
 const NEXT = 'b'.repeat(40)
 const RT = '/fx/soransoran-runtime'
@@ -70,10 +78,13 @@ const resolutionsOf = (editDiff: unknown): unknown[] => {
 }
 
 /** 🔴 운영 결함과 같은 모양 — 옛 계약 행 · 기계 의미 감사 yes(측정됨) */
-async function defectRow(f: Fixture, fx: typeof BLOCKED): Promise<AutoPost> {
-  const a = await autoPublished(f, { personaCode: 'P04', title: fx.draft.title, body: fx.draft.body, sourceTitle: fx.source.title, sourceBody: fx.source.body })
+async function defectRow(f: Fixture, fx: typeof BLOCKED, o: {
+  persona?: string; mark?: { version: string; digest: string }; plan?: Record<string, unknown>
+} = {}): Promise<AutoPost> {
+  const persona = o.persona ?? 'P04'
+  const a = await autoPublished(f, { personaCode: persona, title: fx.draft.title, body: fx.draft.body, sourceTitle: fx.source.title, sourceBody: fx.source.body })
   const art = f.artifacts.find((x) => x.artifactId === a.artifactId)!
-  art.plan = { personaCode: 'P04', stance: 'QUESTION', selfBasis: null, warrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'], protectedFacts: [] }
+  art.plan = o.plan ?? { personaCode: persona, stance: 'QUESTION', selfBasis: null, warrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'], protectedFacts: [] }
   art.generatedAt = FIXTURE_NOW.toISOString()
   const cand = f.candidates.find((x) => x.artifactId === a.artifactId)!
   cand.sourcePostedAt = FIXTURE_NOW.toISOString()
@@ -81,14 +92,14 @@ async function defectRow(f: Fixture, fx: typeof BLOCKED): Promise<AutoPost> {
   flushArtifacts(f)
   const q = await f.prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: a.queueId }, select: { gateResults: true } })
   await f.prisma.originalPostApprovalQueue.update({
-    where: { id: a.queueId }, data: { gateResults: { ...rec(q.gateResults), [QUALITY_CONTRACT_KEY]: LEGACY_MARK } as Prisma.InputJsonValue },
+    where: { id: a.queueId }, data: { gateResults: { ...rec(q.gateResults), [QUALITY_CONTRACT_KEY]: o.mark ?? LEGACY_MARK } as Prisma.InputJsonValue },
   })
   await selectForAudit(f, a)
   await f.prisma.autoReadyAudit.update({
     where: { queueId: a.queueId },
     data: {
       defect: 'yes', judgedAt: f.now, auditor: 'model:semantic-audit:runner',
-      note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=measured binding=fx artifact=${a.artifactId} persona=P04 card=fx] 결함 fixture`,
+      note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=measured binding=fx artifact=${a.artifactId} persona=${persona} card=fx] 결함 fixture`,
       auditContractVersion: AUDIT_CONTRACT_VERSION, auditModel: 'rule:integrity-safety-audit+claude-haiku-4.5',
       auditPromptVersion: 'integrity-safety-v1+semantic-audit-prompt-v1',
     },
@@ -283,6 +294,114 @@ async function main(): Promise<void> {
     const r = await deploy(h)
     check('🔴 🔴 **배포 BLOCK · 활성화 0 · v7 job 그대로**', !r.ok && r.phase === 'preflight' && h.sha === PREV && h.pin === PREV && allLoaded(h) && oldPlists(h))
     await prisma.autoReadyAudit.delete({ where: { queueId: P.queueId } })
+  }
+
+  console.log('\n⑦ 🔴 14:40 감사 결함 모양 — v7 표식 행이 v7 에서 놓친 결함 (v7 은 자기 계약 행을 해소하지 못한다)')
+  {
+    const K = await defectRow(f, KIDS, {
+      persona: 'P02', mark: V7,
+      plan: { personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts', closingIntent: 'vent', contentRoles: ['experienceResonance'], protectedFacts: [],
+        warrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 둘 데리고', verifiedCardValue: '1' }] },
+    })
+    const c0 = await counts()
+    check('전제 — v7 미해소 1 (자기 계약 행) · v8 미해소 1', c0.v7 === 1 && c0.v8 === 1, JSON.stringify(c0))
+    const h0 = makeHost(home)
+    const r0 = await deploy(h0)
+    check('🔴 stage — BLOCK · 활성화 0 · v7 job 그대로', !r0.ok && r0.phase === 'preflight' && h0.sha === PREV && allLoaded(h0) && oldPlists(h0))
+    const pK = await planDefectResolution(prisma, { queueId: K.queueId, contextOf, now: new Date() })
+    check('🟢 🟢 **공식 dry-run 이 v8 게이트로 실제 계획을 낸다 — 저장 초안을 childLifeStageConflict 로 확정 차단**',
+      pK.kind === 'plan' && pK.plan.record.reverify.failureCodes.includes('childLifeStageConflict')
+      && stableJson(pK.plan.record.qualityContract) === stableJson(TARGET), JSON.stringify(pK).slice(0, 300))
+    if (pK.kind === 'plan') {
+      const exK = await expectationOf(prisma, pK.plan)
+      const aK = await applyApprovedDefectResolution(prisma, { queueId: K.queueId, approval: { digest: defectPlanDigestOf(pK.plan), expected: exK, reason: '14:40 결함 v8 해소' }, contextOf, now: new Date() })
+      check('🟢 resolve — 정본 승인 적용 written 1 (expect 1:0)', aK.kind === 'written' && exK.before === 1 && exK.after === 0, JSON.stringify([exK, aK]))
+    }
+    const c1 = await counts()
+    check('🔴 🔴 **resolve 뒤 v8=0 · v7=1 그대로 — v7 은 자기 계약 행을 어떤 기록으로도 해소하지 않는다**', c1.v8 === 0 && c1.v7 === 1, JSON.stringify(c1))
+    const rc = spawnSync(TSX, [CLI, `--runtime=${markText(V7)}`], { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: 'utf8' })
+    check('🔴 recheck — 지금 규칙(v7=0 · v8=0)으로는 BLOCK RUNTIME_UNRESOLVED', rc.status === 1 && /code=RUNTIME_UNRESOLVED/.test(rc.stdout)
+      && new RegExp(`target=${TARGET.version}:[0-9a-f]{64} unresolved=0`).test(rc.stdout), rc.stdout)
+    const h1 = makeHost(home)
+    const r1 = await deploy(h1)
+    check('🔴 🔴 **activate — 지금 규칙으로는 영구 BLOCK (마스터 결정 필요 · 판정을 스스로 완화하지 않았다)**', !r1.ok && r1.phase === 'preflight' && h1.sha === PREV && allLoaded(h1))
+    await prisma.autoReadyAudit.delete({ where: { queueId: K.queueId } })
+  }
+
+  console.log('\n⑧ 🔴 의미 경고 초안(17:15 artifact 3dd770e2 모양) · 자녀 수 생활사 모순 — 최종 pick · 적재 · READY 도장 · 발행 재검증')
+  {
+    /**
+     * 🔴 artifact `machineOutcome=adopt` 는 **경고를 달고 사람에게 넘긴다**는 기계 결론이다(2026-09-20 결정 · `judgeMachine`).
+     *    최종 정본은 pick · 후보 봉투다. 경고는 적재 때 `holds` 로 실리고, 도장과 발행 트랜잭션이 같은 `eligibilityOf` 로 막는다.
+     */
+    const NOW = new Date()
+    const ok = { complete: true, reason: null, cause: null } as const
+    const det = { pass: true, failures: [] }
+    const warnSem: SemanticVerdict = {
+      issues: [], unknownIssues: [], lifeContradictions: [], confidence: 0.92, note: '',
+      droppedFromSource: [{ evidence: '원문 문장 하나', why: 'x' }, { evidence: '원문 문장 둘', why: 'y' }],
+      unsupportedAdditions: [{ evidence: '초안 문장 하나', why: 'z' }],
+    }
+    const kidSem: SemanticVerdict = {
+      issues: [], unknownIssues: [], droppedFromSource: [], unsupportedAdditions: [], confidence: 0.9, note: '',
+      lifeContradictions: [{ fact: 'children', drafted: '아들 둘', card: '자녀 1명', evidence: '아들 둘 데리고 버스를 탔어요.' }],
+    }
+    const jw = judgeMachine({ deterministic: det, semantic: warnSem, semanticCompletion: ok })
+    const jk = judgeMachine({ deterministic: det, semantic: kidSem, semanticCompletion: ok })
+    check('표현 확인 — 경고만 있으면 기계 결론은 adopt + 경고 2줄(사람에게 넘긴다 · 판정 누락 아님)', jw.outcome === 'adopt' && jw.warnings.length === 2, JSON.stringify(jw))
+    check('🔴 🔴 **자녀 수 생활사 모순 → 기계 결론 hold**', jk.outcome === 'hold' && /children/.test(jk.reason), JSON.stringify(jk))
+    const cand = (id: string) => ({ sourceArticleId: id, draftNo: 1, title: '평범한 하루', body: '아침에 산책을 다녀왔어요. 다들 어떻게 지내세요?',
+      safetyVerdict: 'pass', originality: { runWords: 3, runChars: 8, coverRatio: 0 }, generatedAt: NOW.toISOString() })
+    const pick = (id: string, j: { outcome: 'adopt' | 'hold' | 'drop'; reason: string }) => pickV2({
+      judgement: { sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [] }, draft: cand(id) as never,
+      seenTitles: new Set<string>(), seenBodies: new Set<string>(), sourceUsed: false,
+      machineOutcome: j.outcome, machineReason: j.reason, sourceTitleCopied: false, crisisStop: null,
+    }, NOW.toISOString())
+    const pw = pick('W1', jw)
+    const pk = pick('K1', jk)
+    check('최종 pick — 경고 초안은 AUTO_ADOPT(사람 검토 후보 · 2026-09-20 설계 그대로)', pw.decision === 'AUTO_ADOPT', JSON.stringify(pw))
+    check('🔴 🔴 **최종 pick — 자녀 수 모순은 AUTO_HOLD semanticHold (후보 봉투 · 적재 0)**', pk.decision === 'AUTO_HOLD' && pk.reason === 'semanticHold', JSON.stringify(pk))
+
+    // ── 실제 적재기 → 격리 DB 큐 행 → 실제 도장 ──
+    const env = {
+      provenance: af.MACHINE_PROFILE.envelopeProvenance, ruleVersion: af.MACHINE_PROFILE.envelopeRuleVersion,
+      promptVersion: af.MACHINE_PROFILE.envelopePromptVersion, pipelineVersion: af.MACHINE_PROFILE.envelopePipelineVersion,
+      stageModels: STAGE_MODEL, qualityContractDigest: TARGET.digest,
+    }
+    const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine-shadow' }
+    const review = (sem: SemanticVerdict) => ({ deterministic: det, semanticCompletion: ok, semantic: sem })
+    const cleanSem: SemanticVerdict = { ...warnSem, droppedFromSource: [], unsupportedAdditions: [] }
+    let seq = 0
+    const row = async (sem: SemanticVerdict): Promise<{ id: string; holds: string[] }> => {
+      seq += 1
+      const c = { candidateType: 'seedOriginality', sourceArticleId: `S8${seq}`, sourceSite: 'navercafe:fx8', sourceInput: 'auto-judge',
+        sourceDecision: 'AUTO_ADOPT', title: `평범한 하루 ${seq}`, body: `아침에 산책을 다녀왔어요 ${seq}. 다들 어떻게 지내세요?`,
+        safetyVerdict: 'pass', originality: { runWords: 3, runChars: 8, coverRatio: 0 }, leakedTokens: '', lifeReview: [],
+        voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' } }
+      const p = af.buildQueuePayload({ envelope: env, candidate: c as never, autoJudge: aj, review: review(sem), now: NOW.toISOString() })
+      if (p === null) throw new Error('적재 payload 실패')
+      const raw = await prisma.microSeedRawContent.create({ data: { origin: 'live', sourceSite: p.syntheticSite, sourceUrl: `https://example.invalid/s8/${seq}`,
+        sourceArticleId: `S8${seq}`, sourceCapturedAt: NOW, rawTitle: '원문', rawBody: '원문 본문' }, select: { id: true } })
+      const q = await prisma.originalPostApprovalQueue.create({ data: {
+        sourceRawContentId: raw.id, status: 'APPROVED', draftTitle: c.title, draftBody: c.body, gateVerdict: 'PASS',
+        promptVersion: p.promptVersion, model: p.model, decidedBy: p.decidedBy, decidedAt: NOW, dedupKey: `s8-${seq}-${Date.now()}`,
+        gateResults: p.gateResults as Prisma.InputJsonValue,
+      }, select: { id: true } })
+      return { id: q.id, holds: (rec(p.gateResults).holds as string[] | undefined) ?? [] }
+    }
+    const W = await row(warnSem)
+    const C = await row(cleanSem)
+    check('🔴 🔴 **적재기 — 경고가 holds 에 그대로 실린다 (탈락 2 · 추가 1)**',
+      W.holds.includes(`${SEMANTIC_HOLD_CODES.droppedFromSource}:2`) && W.holds.includes(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:1`), W.holds.join(','))
+    const wRow = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })
+    const ev = eligibilityOf({ gateVerdict: wRow.gateVerdict, gateResults: wRow.gateResults, title: wRow.draftTitle, body: wRow.draftBody })
+    check('🔴 🔴 **자동 READY 적격 — 경고 행은 예외(도장 · 발행 트랜잭션이 같은 판정을 쓴다)**', !ev.auto && ev.reasons.some((r) => r.includes('SEMANTIC_')), ev.reasons.join(' · '))
+    const on = { SORAN_AUTO_READY_ENABLED: 'on' } as const
+    const sc = await stampAutoReady(prisma, { queueId: C.id, env: on, now: NOW })
+    const sw = await stampAutoReady(prisma, { queueId: W.id, env: on, now: NOW })
+    check('대조 — 같은 자리 · 경고 없는 행은 도장된다(gate 열림 · 경고 거부가 경고 때문임을 보인다)', sc.kind === 'stamped', JSON.stringify(sc))
+    check('🔴 🔴 **실제 도장 — 경고 행은 exception · 도장 0 · decidedBy 그대로(자동 발행 대상 아님)**', sw.kind === 'exception'
+      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })).decidedBy === wRow.decidedBy, JSON.stringify(sw))
   }
 
   await wipeAuditFixtures(prisma)

@@ -1058,7 +1058,7 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
     !buildSpeakerPlanSystemPrompt().includes('cardValue'))
   check('🔴 판 번호가 새 계약을 담는다',
     SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p6'
-    && SPEAKER_PLAN_VERSION === 'speaker-plan-v7'
+    && SPEAKER_PLAN_VERSION === 'speaker-plan-v8'
     && ARTIFACT_VERSION === 'human-review-v9'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
   check('🔴 🔴 **캐시 key 와 artifact 계약이 같은 함수에서 나온다**', (() => {
@@ -2750,7 +2750,7 @@ console.log('\n🔴 🔴 **계약 판을 올렸다 — 옛 cache/artifact 가 �
    *    캐시가 새 계약의 결론으로 재사용된다.
    */
   check('🔴 🔴 **판이 실제로 올라갔다 — p6 · v7 (2026-10-12 Persona 중립 판독)**',
-    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p6' && SPEAKER_PLAN_VERSION === 'speaker-plan-v7',
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p6' && SPEAKER_PLAN_VERSION === 'speaker-plan-v8',
     `${SPEAKER_PLAN_PROMPT_VERSION} · ${SPEAKER_PLAN_VERSION}`)
 
   const BASE_C = {

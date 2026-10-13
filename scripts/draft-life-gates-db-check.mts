@@ -159,7 +159,11 @@ async function main(): Promise<void> {
       // 🔴 두 번째 회차는 원천 id 만 달리한다 — 앞 회차가 만든 원천 행과 겹치지 않게(초안·계획·카드는 같다)
       const fx = cachedAdopt ? { ...fx0, source: { ...fx0.source, id: `${fx0.source.id}-cache` } } : fx0
       const r = await runFixturePath(fx, { cachedAdopt })
-      if (fx.expect.length > 0) {
+      if (fx.planHold === true) {
+        // 🔴 (quality-v8 보정) 계획이 1인칭을 허가하지 않아 초안 · pick 이 없다 — 후보 봉투에 들 수 없다
+        check(`🔴 ${tag} · ${fx.label} — 계획 단계 requiredValueUnmet · 초안 0 · pick 0`,
+          r.art.draft === null && r.pick === null && r.art.plan.rejection === 'requiredValueUnmet', `${r.art.plan.rejection} · ${r.pick?.decision}`)
+      } else if (fx.expect.length > 0) {
         check(`🔴 ${tag} · ${fx.label} — pick AUTO_HOLD · ${fx.expect[0]}`,
           r.pick?.decision === 'AUTO_HOLD' && r.pick.reason === fx.expect[0], `${r.pick?.decision} · ${r.pick?.reason}`)
       }

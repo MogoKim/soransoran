@@ -22,7 +22,7 @@ import {
   runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult,
 } from './lib/content-core-run.mjs'
 import {
-  buildV2DraftPayload, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, sourceBlock, sourceKeepOf,
+  REVIEW_FAMILY_SPECIFICS_LINES, buildV2DraftPayload, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, sourceBlock, sourceKeepOf,
 } from './lib/content-core-prompts.mjs'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import {
@@ -50,6 +50,8 @@ const check = (n: string, ok: boolean, extra = ''): void => {
 }
 const NOW = new Date('2026-10-13T03:15:00.000Z')
 const flat = (s: string): string => s.replace(/\s+/g, '')
+/** 🔴 (v2-review-p8) 가족 사실 줄만 걷어낸 검수 지시문 — 이것이 main(p7)과 같아야 다른 축 기준이 그대로다 */
+const withoutFamilyLines = (sys: string): string => sys.split('\n').filter((l) => !REVIEW_FAMILY_SPECIFICS_LINES.includes(l)).join('\n')
 
 type Flag = { evidence: string; why: string; class: FlagClass }
 type FlagClass = 'collectorRepeatCut' | 'accessPathInvented' | 'paraphraseFlagged' | 'intensityFlagged'
@@ -197,7 +199,7 @@ const REVIEW_PROMPT_SHA256 = 'aa33dd5dcee51450fa57be4e12e72e4da9c0327ca0c13c7482
 /** 🔴 같은 방식으로 — origin/main 018da79c 의 `runContentCore` 가 ⑥ 의 입력(B · 그날 기준 카드)으로 보낸 검수 지시문의 sha256 */
 const RUNNER_REVIEW_PROMPT_SHA256 = '18a52eb24c7a89caee3c67b3eeff5eeb5a2160a2b51ab7805b5bdc9b550a71e3'
 {
-  check('🔴 검수 프롬프트 판 · 검수 판 그대로 (v2-review-p7 · review-v7)', V2_REVIEW_PROMPT_VERSION === 'v2-review-p7' && REVIEW_VERSION === 'review-v7')
+  check('🔴 검수 판 그대로(review-v7) · 검수 프롬프트는 p8 (가족 사실 줄 추가 · 2026-10-13 감사 결함)', V2_REVIEW_PROMPT_VERSION === 'v2-review-p8' && REVIEW_VERSION === 'review-v7')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
@@ -205,7 +207,10 @@ const RUNNER_REVIEW_PROMPT_SHA256 = '18a52eb24c7a89caee3c67b3eeff5eeb5a2160a2b51
   const c = CASE('B'); const plan = planOf(c)
   const reviewSys = buildV2ReviewSystemPrompt({ plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan) })
   const sha = createHash('sha256').update(reviewSys, 'utf8').digest('hex')
-  check('🔴 🔴 검수 지시문이 main 과 한 글자도 같다', sha === REVIEW_PROMPT_SHA256, sha)
+  check('🔴 🔴 검수 지시문에서 가족 사실 줄만 걷어내면 main(p7)과 한 글자도 같다 — 다른 축 기준 완화 0',
+    createHash('sha256').update(withoutFamilyLines(reviewSys), 'utf8').digest('hex') === REVIEW_PROMPT_SHA256, sha)
+  check('🔴 🔴 검수 지시문에 가족 사실 줄이 전부 들어 있다(자녀 수 · 성별 · 나이대 · 남의 자녀 제외)',
+    REVIEW_FAMILY_SPECIFICS_LINES.every((l) => reviewSys.split('\n').includes(l)) && reviewSys.includes('자녀 성별 칸이 없다'))
   check('🔴 검수 지시문은 [보존] 을 모른다 — 생성 입력만 바뀌었다', !reviewSys.includes('그대로쓸말') && !reviewSys.includes('원문의물음'))
   // 🔴 같은 경고가 고친 뒤에도 오면 **그대로 센다** — 근거 대조가 느슨해지지 않았다
   for (const id of ['A', 'B', 'C']) {
@@ -295,7 +300,9 @@ async function runOf(c: Case, ask: Ask) {
   check('🔴 🔴 초안·검수·판독이 같은 한 벌 원문을 본다 — 두 번째 벌이 없다',
     dp !== null && dp.원문 === sourceBlock(packet) && r !== undefined && (JSON.parse(r.payload) as { 원문: string }).원문 === sourceBlock(packet)
     && p !== undefined && !p.payload.includes(c.rawBody.slice(c.rawBody.length - 40)))
-  check('🔴 🔴 러너가 보낸 검수 지시문이 main 러너와 한 글자도 같다', r !== undefined && createHash('sha256').update(r.system, 'utf8').digest('hex') === RUNNER_REVIEW_PROMPT_SHA256)
+  check('🔴 🔴 러너가 보낸 검수 지시문 — 가족 사실 줄만 빼면 main 러너와 한 글자도 같다 · 그 줄은 실렸다',
+    r !== undefined && createHash('sha256').update(withoutFamilyLines(r.system), 'utf8').digest('hex') === RUNNER_REVIEW_PROMPT_SHA256
+    && REVIEW_FAMILY_SPECIFICS_LINES.every((l) => r.system.includes(l)))
   check('🔴 artifact 근거 판 = evidence-v2 · 길이는 한 벌', a.evidence.packetVersion === 'evidence-v2' && a.evidence.bodyLength === packet.bodyLength && packet.bodyLength < c.v1BodyLength)
 }
 

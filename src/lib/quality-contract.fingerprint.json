@@ -1,12 +1,12 @@
 {
   "version": "quality-v8",
-  "digest": "1d395aeefe009e11a7cb33d87afbcccd4cf225d899ac5f69b96a187780311b65",
+  "digest": "ba24566726b7bd2b09888a52f5e51c939261d2809411ad08fb8e4d12d547ae5a",
   "files": {
-    "src/lib/quality-contract.ts": "477145437c383b0dc4a0956ff706628db0bda5cdee42f69449d0cef520e5ffb0",
+    "src/lib/quality-contract.ts": "646ff0f55867043140aaff7e175cf5dc342936b2f93cc333147ade14fff44f34",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "ce3fc45e1fafdbf19b8528a38507deda68487942072679f966f85b907f50117e",
+    "src/lib/content-core/draft-life-gates.ts": "51550b880040aed8c0db7557c921755b367acbdef80ec457d82b71df2e2003b5",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "46819511f83b94a578f614cff1b6e5d7a2b2ad5e3065841617959dd4e211d2ed",
+    "src/lib/content-core/pipeline.ts": "30f0d39cc8374acda5c1d962d62a38bad9f02b54a3896ad61e58c7f6df6cfabc",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
@@ -15,7 +15,7 @@
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "8f32caf5d6c45cffa858e5088e6fc250ca16d56983c992112a74d98c0a392aa8",
     "scripts/lib/content-core-run.mts": "c3384f51176d9f6f4c0fab6ce004c3a26ac00413e444e552f1b6a31c5b7dcdce",
-    "scripts/lib/content-core-prompts.mts": "268ac89d108a3b2d6a96fe76957089df32b5d0724f10cdd5754bad093744ef2c",
+    "scripts/lib/content-core-prompts.mts": "d064ae7aaf7afcbddb3e85c8d46855335d663a55feb3b12c3ee99c8f5013ce4b",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -27,17 +27,19 @@
     "src/lib/persona-no-go.ts": "03e50a98ccaf2b17582d14603d89fba9a7f303aed0f6a8ea606c26f07a070b8e",
     "src/lib/auto-ready-defect-resolution.ts": "3a631b35672ecfa30fbe421a088e803686bd6117aeb851b38553235cee64281a",
     "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209",
-    "src/lib/content-core/speaker.ts": "e1cdbf4c17b78b836e2f52fe8068b640ef2af9082d2ef9b3f442d749a1ad214b"
+    "src/lib/content-core/speaker.ts": "d430063b5d2923e008f3f5c1c2874599ee01cbb98fe7acc8ca00d9b5047844f1",
+    "src/lib/content-core/family-specifics.ts": "fbed290b61cb864326035832eb2277615dc430779807fc245e1213f87ed4087e"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v7 → quality-v8",
+    "kind": "revise",
+    "reason": "quality-v8 digest 1d395aeefe00… → ba24566726b7… · quality-v8 보정 — 1인칭 구체 가족 사실(자녀 수·자기 자녀 성별·나이대) 카드 근거 필수: speaker-plan-v8 · draft-gates-v8 · v2-review-p8 · family-specifics (운영 v8 행 0)",
     "changedFiles": [
       "src/lib/quality-contract.ts",
+      "src/lib/content-core/draft-life-gates.ts",
       "src/lib/content-core/pipeline.ts",
-      "src/lib/content-core/evidence.ts",
-      "scripts/lib/content-core-run.mts",
-      "scripts/lib/content-core-prompts.mts"
+      "scripts/lib/content-core-prompts.mts",
+      "src/lib/content-core/speaker.ts",
+      "src/lib/content-core/family-specifics.ts"
     ]
   }
 }

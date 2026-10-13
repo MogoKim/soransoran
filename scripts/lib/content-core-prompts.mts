@@ -393,6 +393,19 @@ export function buildV2DraftPayload(input: { packet: SourceEvidencePacket; plan:
 // ③ 의미 검수 — 🔴 원문과 초안을 **직접** 견준다
 // ─────────────────────────────────────────────────────────
 
+/**
+ * 🔴 (v2-review-p8 · 2026-10-13 · 14:40 감사 결함) **구체적 가족 사실** — 검수가 `아들 둘 데리고`(카드 자녀 1명)를
+ *    모순 0 · 신뢰 0.95 로 놓쳤다. 계획(`speaker-plan-v8`) · 초안 게이트(`draft-gates-v8`)와 **같은 범위**를 적는다:
+ *    수 · 자기 자녀를 가리키는 성별(`우리 딸` · `아들 둘` · `딸 키우는`) · 나이대. 화제로서의 `딸 얘기` 는 아니다.
+ *    🔴 다른 축의 기준은 한 글자도 바꾸지 않는다 — 이 줄들을 지우면 p7 과 같다(의미 손실 검사가 대조한다).
+ */
+export const REVIEW_FAMILY_SPECIFICS_LINES: readonly string[] = [
+  '   🔴 **구체적 가족 사실** — 초안이 글쓴이 **자기 자녀**의 수 · 성별 · 나이대를 말했는데 아래 정본 카드가 그 값을 보증하지 않으면',
+  '      lifeContradictions 다(fact "children" · "childAgeBand"). 카드에는 **자녀 성별 칸이 없다**.',
+  '      예) 카드 자녀 1명인데 "아들 둘 데리고" · "우리 딸이"(성별) · 카드 나이대가 초등인데 "중학생 아들"',
+  '      🔴 남의 자녀 · 남이 한 말(`할아버지가 본인도 아들 둘이라고`) · 화제로서의 "딸 얘기" 는 아니다.',
+]
+
 export function buildV2ReviewSystemPrompt(input: {
   plan: SpeakerPlan
   voice: VoiceEvidence
@@ -453,6 +466,7 @@ export function buildV2ReviewSystemPrompt(input: {
     '   🔴 **불만 · 서운함 · 그날의 다툼을 관계 파탄으로 읽지 않는다.**',
     '      "남편이 집안일을 안 해서 답답하다" 는 원만한 사이에서도 하는 말이다.',
     '      상시 별거 · 이혼 절차 · 관계가 끝났다고 말할 때만 spouseRelationship 이다.',
+    ...REVIEW_FAMILY_SPECIFICS_LINES,
     '',
     '## ④⑤⑥ issues — 해당하는 것만 고른다. 해당 없으면 빈 배열이다',
     ...SEMANTIC_AXES.map((a) => `   - ${a}: ${SEMANTIC_AXIS_PROMPT[a]}`),

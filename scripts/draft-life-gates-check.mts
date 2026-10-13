@@ -335,7 +335,14 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     fresh.set(fx.queueId, r)
     const det = r.art.review.deterministic.failures.map((f) => f.code as string)
     const askedReview = r.asks.some((a) => a.stage === 'semanticReview')
-    if (fx.expect.length > 0) {
+    if (fx.planHold === true) {
+      // 🔴 (quality-v8 보정) 첫 방어선 — 계획이 1인칭을 허가하지 않는다. 초안 요청 0 · 의미 검수 0
+      const askedDraft = r.asks.some((a) => a.stage === 'draftGen')
+      check(`🔴 🔴 **${fx.label} — 계획 단계 requiredValueUnmet · 초안 요청 0 · 유료 검수 0 · 채택 0**`,
+        r.art.draft === null && !askedDraft && !askedReview && r.art.plan.rejection === 'requiredValueUnmet'
+        && r.art.review.machineOutcome === 'hold' && r.pick === null,
+        `${r.art.plan.rejection} · draft ${String(askedDraft)} · 검수 ${String(askedReview)} · ${r.art.review.machineReason.slice(0, 120)}`)
+    } else if (fx.expect.length > 0) {
       check(`🔴 🔴 **${fx.label} — artifact 에 ${fx.expect[0]} · 유료 검수 0 · pick AUTO_HOLD**`,
         fx.expect.every((c) => det.includes(c)) && !askedReview && r.art.review.machineOutcome === 'hold'
         && r.pick?.decision === 'AUTO_HOLD' && r.pick.reason === fx.expect[0],
@@ -351,7 +358,9 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-c 캐시 채택 경로 — adopt 로 저장된 옛 artifact 도 채택 자리에서 다시 판정')
   for (const fx of LIFE_FIXTURES) {
     const r = await runFixturePath(fx, { cachedAdopt: true })
-    if (fx.expect.length > 0) {
+    if (fx.planHold === true) {
+      check(`🔴 ${fx.label} — 계획이 멈춰 캐시로 채택할 초안이 없다`, r.art.draft === null && r.pick === null)
+    } else if (fx.expect.length > 0) {
       check(`🔴 🔴 **${fx.label} — 캐시 adopt 여도 AUTO_HOLD · ${fx.expect[0]}**`,
         r.pick?.decision === 'AUTO_HOLD' && r.pick.reason === fx.expect[0], `${r.pick?.decision} · ${r.pick?.reason}`)
     } else {
@@ -447,7 +456,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   {
     const comp = qualityContractComponents()
     check(`품질 계약 판 = quality-v8 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v8')
-    check(`초안 게이트 판 = draft-gates-v6.1 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v6.1')
+    check(`초안 게이트 판 = draft-gates-v8 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v8')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })
@@ -603,6 +612,62 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   const prompts = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
   check('🔴 초안 프롬프트(모든 자리)가 원문 글쓴이의 만남·들음은 그 사람을 주어로 전하라고 말한다',
     prompts.includes('누구를 만나고 · 이야기를 나누고 · 들은 일') && prompts.includes('그 사람을 주어로'))
+}
+
+console.log('\n⑩ 🔴 (quality-v8 보정 · 14:40 감사 결함) 구체적 가족 사실 — 판독 · 화자 계획 · 게이트')
+{
+  const { readFamilySpecifics, familyMismatches } = await import('../src/lib/content-core/family-specifics')
+  const { verifySelfWarrants } = await import('../src/lib/content-core/speaker')
+  const { buildEvidencePacket } = await import('../src/lib/content-core/evidence')
+  const { realCard } = await import('./lib/life-gate-fixtures.mjs')
+  const { FIXTURE_NOW: FIXTURE_NOW_V8 } = await import('./lib/draft-gate-fixtures.mjs')
+  const fam = (t: string) => readFamilySpecifics(t)
+  check('판독 — "아들 둘 데리고" = 수 2 · 성별', fam('아들 둘 데리고 버스 탔어요').count?.n === 2 && fam('아들 둘 데리고').gender !== null)
+  check('판독 — "두 아이" = 수 2 · 성별 없음', fam('두 아이 엄마예요').count?.n === 2 && fam('두 아이 엄마예요').gender === null)
+  check('판독 — "아이 3명" = 수 3', fam('아이 3명 키워요').count?.n === 3)
+  check('판독 — "우리 딸이" · "딸 키우는" = 성별', fam('우리 딸이 학교 갔어요').gender !== null && fam('딸 키우는 재미').gender !== null)
+  check('🟢 판독 — 화제로서의 "딸 얘기" · "딸이 있어야" · "딸기" · "둘째" 는 성별·수가 아니다',
+    fam('길에서 딸 얘기를 하시는데').gender === null && fam('딸이 있어야 한다면서').gender === null
+    && fam('딸기 샀어요').gender === null && fam('둘째가 아파요').count === null && fam('두 번 갔어요').count === null)
+  check('판독 — "중2" · "유치원" · "대학생" → 정본 나이대', fam('중2 아이').bands[0]?.band === '중고등' && fam('유치원 다니는').bands[0]?.band === '영유아'
+    && fam('대학생 딸').bands[0]?.band === '대학·취준')
+  const P02 = realCard('P02')
+  check('🔴 카드 대조 — P02(1명 · 초등): "아들 둘" 은 수 · 성별 둘 다 어긋난다', familyMismatches(fam('아들 둘 데리고'), P02).length === 2)
+  check('🟢 카드 대조 — P02: "아이 하나" · "초등학생 아이" 는 맞는다', familyMismatches(fam('아이 하나 데리고'), P02).length === 0
+    && familyMismatches(fam('초등학생 아이'), P02).length === 0)
+  check('🔴 카드 대조 — P02: "중학생 아이" 는 나이대가 어긋난다', familyMismatches(fam('중학생 아이'), P02).length === 1)
+  // 🔴 화자 계획 — 근거 줄의 가족 사실이 카드와 다르면 1인칭 허가 없음(requiredValueUnmet)
+  const packet = buildEvidencePacket({ sourceArticleId: 'fx-v8-plan', title: '버스 정류장에서', maskedBody: '아들 둘 데리고 정류장에 있었는데\n할아버지가 딸 낳으라고 하시네요' })
+  const warrant = { fact: 'children' as const, requiredValue: '있음', evidenceRef: 'head' as const, evidenceText: '데리고 정류장에' }
+  const v = verifySelfWarrants({ persona: P02, selfBasis: 'lifeFacts', warrants: [warrant], universalReason: '', spans: packet.spans })
+  check('🔴 🔴 **화자 계획 — 근거 조각이 좁아도(데리고) 그 줄의 "아들 둘" 로 P02 1인칭 허가 없음 · requiredValueUnmet**',
+    !v.ok && v.why === 'requiredValueUnmet' && /자녀 수/.test(v.detail), JSON.stringify(v))
+  const P01 = realCard('P01')
+  const two = buildEvidencePacket({ sourceArticleId: 'fx-v8-plan2', title: '버스 정류장에서', maskedBody: '아이 둘 데리고 정류장에 있었는데\n할아버지가 딸 낳으라고 하시네요' })
+  const v2 = verifySelfWarrants({ persona: P01, selfBasis: 'lifeFacts', warrants: [{ ...warrant, evidenceText: '아이 둘 데리고' }], universalReason: '', spans: two.spans })
+  check('🟢 화자 계획 — 성별 없이 카드와 같은 수(P01 · 2명 "아이 둘") → 허가', v2.ok, JSON.stringify(v2))
+  const spouseOnly = buildEvidencePacket({ sourceArticleId: 'fx-v8-plan3', title: '부부싸움', maskedBody: '남편이랑 크게 싸웠는데 아들 둘이 다 봤어요' })
+  const v3 = verifySelfWarrants({ persona: P02, selfBasis: 'lifeFacts', warrants: [{ fact: 'spouse', requiredValue: '있음', evidenceRef: 'head', evidenceText: '남편이랑 크게 싸웠는데' }], universalReason: '', spans: spouseOnly.spans })
+  check('🟢 화자 계획 — 배우자 근거는 근거 조각만 본다(같은 줄의 자녀 이야기는 생성 뒤 게이트 몫)', v3.ok, JSON.stringify(v3))
+  const one = buildEvidencePacket({ sourceArticleId: 'fx-v8-plan4', title: '버스 정류장에서', maskedBody: '아이 하나 데리고 정류장에 있었는데\n할아버지가 딸 낳으라고 하시네요' })
+  const v4 = verifySelfWarrants({ persona: P01, selfBasis: 'lifeFacts', warrants: [{ ...warrant, evidenceText: '아이 하나 데리고' }], universalReason: '', spans: one.spans })
+  check('🔴 🔴 **화자 계획 — 수는 정확히 같아야 한다(P01 · 2명인데 "아이 하나") → requiredValueUnmet**', !v4.ok && v4.why === 'requiredValueUnmet', JSON.stringify(v4))
+
+  // 🔴 게이트 — 규칙마다 단독으로 걸리는 반례(다른 규칙이 대신 잡지 않게 성별 · 수 · 나이대 · 시점 · 인용을 갈라 둔다)
+  const { judgeDraftLife: judgeLife } = await import('../src/lib/content-core/draft-life-gates')
+  const kidsPlan = { selfBasis: 'lifeFacts' as const, warrants: [{ fact: 'children', evidenceText: '아이 데리고' }] }
+  // 🔴 원천 모름 · 회차 시각만 — 가족 사실 축은 원천·시점과 무관하다
+  const KID_CTX = { at: FIXTURE_NOW_V8, source: null }
+  const gate = (body: string, code = 'P02') => judgeLife({ title: '요즘', body, card: realCard(code), context: KID_CTX, plan: kidsPlan })
+  const hardKid = (r: ReturnType<typeof gate>): boolean => r.failures.some((f) => f.code === 'childLifeStageConflict')
+  check('🔴 🔴 **게이트 — 성별 없이 수만 카드보다 많다(P02 · "아이 둘 데리고") → 확정**', hardKid(gate('아이 둘 데리고 버스를 탔어요.')))
+  // 🔴 지난 일 표지(`예전에` · `몇 년 전`)가 붙어도 자녀 수는 그 사람의 수다 — 다른 축처럼 시점으로 빼지 않는다
+  check('🔴 🔴 **게이트 — 지난 일이어도 그 사람의 수다(P02 · "예전에 아이 둘 데리고 … 다녀왔어요") → 확정**',
+    hardKid(gate('예전에 아이 둘 데리고 제주도에 다녀왔어요.')))
+  check('🔴 🔴 **게이트 — 카드에 없는 나이대(P02 초등 · "우리 아이가 요즘 중학생이라") → 확정**', hardKid(gate('우리 아이가 요즘 중학생이라 사춘기가 왔어요.')))
+  check('🟢 게이트 — 카드 나이대(P02 초등 · "우리 아이가 초등학생이라") → 통과', !hardKid(gate('우리 아이가 초등학생이라 아침이 바빠요.')))
+  check('🟢 🟢 **게이트 — 주어 없이 남의 말을 옮긴 끝(" … 키우기 힘들다고요") 의 "아이 둘" → 통과**',
+    !hardKid(gate('버스 기다리는데 어떤 분이 말을 거셨어요.\n본인도 아이 둘인데 키우기 힘들다고요.')))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
