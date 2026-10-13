@@ -25,7 +25,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { execFileSync, spawn } from 'node:child_process'
 
 
@@ -33,7 +33,7 @@ import type { PrismaClient } from '@prisma/client'
 
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
-  PROCESS_KILL_SWITCH_ENV, LOCK_FILE, LOCK_TTL_MS, SUPPLY_SOURCES,
+  PROCESS_KILL_SWITCH_ENV, SUPPLY_SOURCES,
   fmtCount, hasWork, judgeJitDemand, judgeProcessRun,
   mayWriteRunState, planBoundedCommonPhase, planCarryOverFill, planCommonPhase, planPending, planSourcePhase,
   ledgerRunIdOf, type WorksetGate,
@@ -41,10 +41,14 @@ import {
   type LockView, type ProcessRun, type ProcessStage, type StagePlan, type StageGate,
 } from '../src/lib/supply-process'
 /**
- * 🔴 **잠금은 검증된 계약 하나만 쓴다** (2026-09-11).
- *    `wx` 획득 · token 대조 해제 · 자동 회수 없음. 여기서 새 프로토콜을 만들지 않는다.
+ * 🔴 **잠금은 커널 lease 하나다** (2026-10-12 Batch C1) — 진입 · 회차 자식 · token(shadow) · probe 는 전부 `supply-lease`.
+ *    📜 옛 `collect-lock` `wx` 잠금은 지웠다 — 죽은 회차가 남긴 파일이 `STALE_HELD` 로 사람이 올 때까지 공급을 세웠다.
  */
-import { acquireLock, lockAnomaly, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
+import {
+  SUPPLY_PASS_ENV, probeSupplyLease, runTokenShadowFromEnv, stageSpawnOf, supplyEntry,
+} from './lib/supply-lease.mjs'
+import { LEASE_INNER_ENV, type LeaseProof } from './lib/runner-lease.mjs'
+import { supplyRunIdOf, shadowTagOf } from '../src/lib/supply-run-token'
 /**
  * 🔴 **생성 전 큐 스냅샷** (2026-09-17) — 판정 규칙은 여기서 만들지 않는다.
  *    정본은 `micro-seed-supply-autofill.hasPendingSibling` · `baseArticleId` 이고,
@@ -101,7 +105,9 @@ export const RUN_AT = RUN_CLOCK.at
 import {
   SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
 } from '../src/lib/content-core/speaker-load-file'
-import { planOpenDays, wipCountsBySpeaker } from '../src/lib/content-core/speaker-availability'
+import {
+  ATTEMPT_CONTRACT, planAttemptCapacity, planOpenDays, wipCountsBySpeaker,
+} from '../src/lib/content-core/speaker-availability'
 /** 🔴 말투 근거가 선 화자 — 생성 러너와 **같은 함수**로 읽는다(파일까지 · DB 0) */
 import { loadVoice } from './lib/voice-runtime.mjs'
 import { kstDateString } from '../src/lib/release-canary'
@@ -385,17 +391,34 @@ export async function buildSpeakerLoad(
     // 🔴 말투 없는 화자는 기계 초안을 받지 못한다 — 하루 자리를 차지하지 않게 뺀다
     ...(eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }),
   })
-  const byCode: Record<string, { openDays: number; readyCount: number }> = {}
+  /**
+   * 🔴 **생성 시도 여력 — 공개 자리와 나눈다** (speaker-attempt-v1 · 2026-10-13 P0).
+   *    위 계획(`openDays`)은 공개 자리 몫이다 — 자리가 4개면 전원 합쳐 4. 생성은 수율만큼 넉넉히 시도해야 하므로
+   *    같은 지평 · 같은 cap · 같은 말투 필터로 **각자 독립 판정**하고 WIP 를 뺀 뒤 회차당 1 을 준다.
+   *    🔴 공개 자리 · release profile · 상한 · 간격은 그대로다 — 몇 건을 시도하든 나가는 수는 발행 러너가 정한다.
+   */
+  const attempt = planAttemptCapacity({
+    days, history,
+    availableAt: (h, at, caps) => availablePersonasAt(
+      h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
+    caps: { postsPerWeek: release.postsPerWeek, minDaysBetween: release.minDaysBetween },
+    ...(eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }),
+    wipOf: (code) => wipBy.byCode.get(code) ?? 0,
+  })
+  const byCode: Record<string, { openDays: number; readyCount: number; attemptCapacity: number }> = {}
   for (const p of loaded.personas) {
     const code = String(p.code)
     byCode[code] = {
       openDays: plan.openDays.get(code) ?? 0,
       readyCount: wipBy.byCode.get(code) ?? 0,
+      attemptCapacity: attempt.get(code)?.attemptCapacity ?? 0,
     }
   }
+  const releaseSeats = [...seatsByDate.values()].reduce((n, d) => n + d.seats, 0)
   return {
     // 🔴 회차 시각으로 적는다 — 자식이 같은 시각으로 검증한다
     writtenAt: opts.now.toISOString(), runId, horizonDays, byCode,
+    attemptContract: ATTEMPT_CONTRACT, releaseSeats,
     byDate: plan.byDate,
     /** 🔴 어느 눈금으로 셌는지 남긴다 — 지평은 지금 공개 단계(release)의 가까운 슬롯이다 */
     stageByDate: days.map((at) => ({ date: kstDateString(at), stage: opts.scale.releaseStage })),
@@ -432,8 +455,14 @@ export async function writeSpeakerLoad(
   return payload
 }
 
-const runIdOf = (d: Date): string =>
-  `${d.toISOString().slice(0, 10).replace(/-/g, '')}-${d.toISOString().slice(11, 19).replace(/:/g, '')}`
+/** 🔴 회차 id — holder 가 token 에 적는 값과 **같은 함수**다 */
+const runIdOf = supplyRunIdOf
+
+/**
+ * 🔴 **이 회차가 쥔 커널 lease 증명** — 회차 자식이 lease 를 다시 증명한 뒤에만 채워진다.
+ *    자식 단계는 이 값이 있을 때만 fd 9 를 물려받는다(관측 실행은 자식 단계를 띄우지 않는다).
+ */
+let STAGE_LEASE: LeaseProof | null = null
 
 /** 🔴 임시로 쓰고 rename 한다 — 반쯤 쓰인 기록을 관제가 읽지 않게 */
 function writeAtomic(path: string, body: string): void {
@@ -447,6 +476,11 @@ function writeAtomic(path: string, body: string): void {
  *
  * 🔴 **error 를 받지 않으면 Promise 가 영원히 안 끝난다.** 실행 파일이 없거나
  *    프로세스가 뜨지 못하면 close 가 오지 않는다 — 그러면 lock 을 쥔 채 매달린다.
+ *
+ * 🔴 **자식은 `npx tsx` 가 아니라 같은 Node · 같은 loader 로 직접 띄운다** (2026-10-12 Batch C1).
+ *    `npx → tsx cli → node` 를 거치면 fd 9(커널 잠금)가 자식에게 닿지 않는다(macOS 실측 — 명시해도 사라진다).
+ *    lease 를 쥔 회차면 stdio 9 번 칸에 fd 9 를 싣는다 — 자식이 살아 있는 동안 잠금도 살아 있고,
+ *    자식의 공급 장부가 같은 lease 를 shadow 로 증명한다. stdio 0 · 1 · 2 는 앞판 그대로다.
  */
 export function run(
   script: string, args: readonly string[], env?: Readonly<Record<string, string>>,
@@ -466,13 +500,14 @@ export function run(
     }
     let out = ''
     try {
-      const p = spawn('npx', ['tsx', script, ...args], {
-        stdio: ['ignore', 'pipe', 'pipe'],
+      const how = stageSpawnOf(script, args, STAGE_LEASE)
+      const p = spawn(how.command, how.args, {
+        stdio: how.stdio,
         // 🔴 단계 env 는 **이 자식에게만** 실린다 — 운영 env 파일은 바뀌지 않는다
         env: { ...process.env, ...withClock },
       })
-      p.stdout.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stdout.write(t) })
-      p.stderr.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stderr.write(t) })
+      p.stdout?.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stdout.write(t) })
+      p.stderr?.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stderr.write(t) })
       p.on('error', (e: Error) => {
         const msg = `프로세스를 시작하지 못했다 — ${e.message}`
         console.error(`   🔴 ${msg}`)
@@ -585,24 +620,15 @@ export async function snapshot(
   }
 }
 
-/**
- * 🔴 **내 lock 은 내가 푼다 — 모든 경로에서.**
- *    `finally` 로 풀고, 그래도 빠져나가는 경로(신호·예외 밖)를 위해 `exit` 훅도 건다.
- *    `releaseLock` 은 **내 token 일 때만** 지우므로 두 번 불려도 남의 락을 건드리지 않는다.
- */
-let lockHandle: LockHandle | null = null
 /** 🔴 prisma 는 ③에서 만들어진다 — 만들어졌을 때만 끊는다 */
 const teardown: { disconnect: (() => Promise<void>) | null } = { disconnect: null }
-function releaseHeldLock(): void {
-  if (lockHandle === null) return
-  const r = releaseLock(lockHandle)
-  lockHandle = null
-  // 🔴 내 것이 아니거나 이미 없으면 **지우지 않는다.** 그 사실을 화면에 남긴다
-  if (r !== 'RELEASED') console.error(`   🟡 lock 해제 — ${r} (남의 락은 건드리지 않는다)`)
-}
-process.on('exit', releaseHeldLock)
 
-async function main(): Promise<number> {
+/**
+ * 🔴 **본체 — `proof` 가 있으면 lease 를 다시 증명한 회차 자식이다.** `null` 이면 관측 실행(dry-run · 스위치 닫힘)이다.
+ *    잠금을 풀 코드가 없다 — 커널 잠금은 이 프로세스(와 fd 9 를 물려받은 자식)가 끝나면 커널이 푼다.
+ */
+async function main(proof: LeaseProof | null): Promise<number> {
+  STAGE_LEASE = proof
   await loadEnvLocal()
   // 🔴 `loadEnvLocal()` **뒤에** 설치한다 — import 시점에 읽으면 .env.local 이 반영되지 않는다
   const scale = installFromEnv(process.env)
@@ -617,7 +643,7 @@ async function main(): Promise<number> {
   console.log(`  규모 설정 ${describeScale(scale)}`)
   for (const n of scale.notes) console.log(`     · ${n}`)
   console.log('  🔴 이 러너는 **수집하지 않는다** — 수집은 source 마다 독립 job 이 한다')
-  console.log('  🔴 공급 수요 = 다가오는 슬롯(오늘 남은 + 다음 증명일 전체) − 그 슬롯에 eligible 로 남을 READY (JIT)'
+  console.log('  🔴 공급 수요 = 가까운 수요 지평(오늘 남은 공개 슬롯 + 다음 첫 공개 기회 한 칸) − 그 슬롯에 eligible 로 남을 READY (JIT)'
     + ' · 700 · ×14 재고 목표 없음')
   console.log('  순서 source 별 (얇은 변환 → 검수용 변환) → 공통 (판정 → 초안 → 보충)')
   console.log('  🔴 발행 0 — Post · persona 배정 · ActivityLog 를 만들지 않는다')
@@ -625,31 +651,29 @@ async function main(): Promise<number> {
 
   const canWrite = mayWriteRunState({ live: LIVE, killOpen })
   if (canWrite && !existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
-  const lockPath = join(DATA_DIR, LOCK_FILE)
 
   /**
-   * ── ① lock — 🔴 **획득은 `wx` 한 번, 해제는 내 token 대조 삭제 하나뿐** ──
+   * ── ① lock — 🔴 **커널 lease 는 이 함수 밖(`supplyEntry`)에서 이미 증명됐다** ──
    *
-   *    자동 stale 회수를 하지 않는다. 뺏는 순간 관측→조작 창이 열리고
-   *    그 창이 두 회차를 동시에 들여보낸다(2026-09-09 PR #483 결론).
-   *
-   * 🔴 **dry-run 은 잡지 않고 관측만 한다.** 계획만 보는 실행이 잠금 파일을 만들면
-   *    "파일 write 0" 이 거짓말이 된다.
+   *    live 회차는 회차 자식이 fd 9 로 lease 를 다시 증명한 뒤에만 여기 온다(`proof`).
+   *    🔴 **관측 실행은 잡지 않고 probe 로 보기만 한다** — 계획만 보는 실행이 잠금 파일을 만들면
+   *       "파일 write 0" 이 거짓말이 된다(probe 는 파일을 만들지 않는다).
+   *    🔴 쓸 수 있는 실행인데 증명이 없으면 통과시키지 않는다(그 길은 없어야 한다 — fail-closed).
    */
   let lockView: LockView = 'free'
+  /** 🔴 실행 token shadow — 회차 자식만 판정한다. 예산 판정에 쓰지 않는다 */
+  const tokenShadow = proof === null ? null : runTokenShadowFromEnv(process.env, new Date())
   if (!canWrite) {
-    const anomaly = lockAnomaly(lockPath, now.getTime(), LOCK_TTL_MS)
-    lockView = anomaly !== null ? 'stale-held' : existsSync(lockPath) ? 'held' : 'free'
-    console.log(`① lock  🟡 관측만 한다 (게이트가 닫혀 있다) — ${lockView}`)
+    const probe = probeSupplyLease(process.env)
+    lockView = probe === 'busy' ? 'held' : probe === 'free' ? 'free' : 'unreadable'
+    console.log(`① lock  🟡 관측만 한다 (게이트가 닫혀 있다) — 커널 lease ${probe}`)
+  } else if (proof === null) {
+    lockView = 'unreadable'
+    console.log('① lock  🔴 쓸 수 있는 실행인데 커널 lease 증명이 없다 — 통과시키지 않는다')
   } else {
-    const acq = acquireLock(lockPath, now.getTime(), LOCK_TTL_MS)
-    if (acq.ok) {
-      lockHandle = acq.handle
-      console.log('① lock  🟢 잡았다')
-    } else {
-      lockView = acq.kind === 'HELD' ? 'held' : acq.kind === 'STALE_HELD' ? 'stale-held' : 'unreadable'
-      console.log(`① lock  🔴 잡지 못했다 — ${acq.reason}`)
-    }
+    console.log(`① lock  🟢 커널 lease 안 (fd ${proof.fd})`
+      + ` · 실행 token(shadow) ${tokenShadow?.ok === true ? `${tokenShadow.trigger} · 창 ${tokenShadow.budgetWindowShadow}` : tokenShadow?.ok === false ? `검증 실패 ${tokenShadow.code}` : '—'}`
+      + ' — 🔴 예산 판정은 그대로다')
   }
 
   // ── ② 미처리 입력 ──
@@ -793,6 +817,7 @@ async function main(): Promise<number> {
       paidSources: policy.llm ? paid.sources : 0, paidBasis: paid.basis, sourceYieldHigh: before?.sourceYield?.high ?? null,
     },
     sources: [], stages: [],
+    ...(tokenShadow === null ? {} : { runTokenShadow: shadowTagOf(tokenShadow) }),
   }
   const save = (): void => { writeAtomic(runPath, `${JSON.stringify(record, null, 2)}\n`) }
   save()
@@ -828,6 +853,8 @@ async function main(): Promise<number> {
           + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`
           + ` · 원천 가치 없음으로 칸 해제 ${load.slots.releasedExpired}건 · 화자 미상 ${load.slots.unattributed}건`
           + ` · 말투 ${load.slots.voiceFiltered ? `있는 ${load.slots.slotEligibleCount}명만 자리를 받는다` : '필터 없음(정본을 못 읽었다)'}`)
+        console.log(`   🟢 공개 자리 ${load.releaseSeats ?? 0}개 (발행 상한 · cadence 불변) · 생성 시도 여력 `
+          + `${Object.values(load.byCode).filter((r) => (r.attemptCapacity ?? 0) > 0).length}명 (${load.attemptContract ?? '옛 계약'} — 실제 SEED 수만큼만 쓴다)`)
       } catch (e) {
         const why = e instanceof Error ? e.message : 'unknown'
         console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)
@@ -1236,20 +1263,32 @@ async function main(): Promise<number> {
 
 const isDirectRun = process.argv[1] !== undefined
   && import.meta.url === pathToFileURL(process.argv[1]).href
+/**
+ * 🔴 **진입 — 쓸 수 있는 실행만 커널 lease 를 지난다** (2026-10-12 Batch C1).
+ *    · 관측 실행(dry-run · 스위치 닫힘): 잠금 파일도 만들지 않고 본체(관측)만 돈다 — 앞판과 같다
+ *    · live + 스위치: 바깥 → wrapper(fd 9 커널 잠금) → holder → 회차 자식(lease 재증명) → 본체
+ *    · holder · 회차 자식은 바깥이 읽은 env 를 물려받았다 — 다시 판정하지 않고 lease 로 간다
+ */
+async function entry(): Promise<number> {
+  const viaLease = (): Promise<number> => supplyEntry({
+    scriptPath: fileURLToPath(import.meta.url), argv, env: process.env,
+    body: (proof) => main(proof), log: (l) => console.log(l),
+  })
+  if (process.env[SUPPLY_PASS_ENV] !== undefined || process.env[LEASE_INNER_ENV] !== undefined) return viaLease()
+  await loadEnvLocal()
+  const killOpen = S(process.env[PROCESS_KILL_SWITCH_ENV]) === 'true'
+  return mayWriteRunState({ live: LIVE, killOpen }) ? viaLease() : main(null)
+}
+
 if (isDirectRun) {
   let code = 1
   try {
-    code = await main()
+    code = await entry()
   } catch (e) {
     console.error(`\n🔴 중단: ${e instanceof Error ? e.message : String(e)}\n`)
     code = 1
   } finally {
-    /**
-     * 🔴 **성공·실패·예외 어느 경로로 나가든 여기를 지난다.**
-     *    잡은 lock 을 풀지 않고 죽으면 다음 회차가 `STALE_HELD` 로 멈추고,
-     *    자동 회수를 하지 않으므로 사람이 올 때까지 공급이 선다.
-     */
-    releaseHeldLock()
+    // 🔴 잠금을 풀 코드는 없다 — 커널 잠금은 이 프로세스(와 fd 9 를 물려받은 자식)가 끝나면 커널이 푼다
     if (teardown.disconnect !== null) await teardown.disconnect()
   }
   process.exit(code)

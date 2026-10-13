@@ -23,7 +23,7 @@
  * 🔴 **하지 않는 것** — 시각 · PID · 부모 명령줄 · rename 으로 판정하거나 뺏지 않는다. 잠금 파일을 지우지 않는다.
  *    lockf 가 없거나 실행할 수 없으면 본체를 띄우지 않는다(fail-closed · provider 0 · DB 0).
  */
-import { accessSync, constants, existsSync, fstatSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, fstatSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,13 +62,23 @@ export type OuterOutcome =
 export function runUnderKernelLease(i: {
   lockPath: string; followUpDir: string; command: string; args: readonly string[]
   env: NodeJS.ProcessEnv; nowMs: number; trigger: LeaseTrigger; lockf?: string
+  /**
+   * 🔴 잠금을 못 얻으면 이만큼 쉬고 **한 번만** 다시 본다(2026-10-12 Batch C1). 생략하면 0 — 바로 물러난다(앞판 그대로).
+   *    관제 probe(`probeKernelLease`)는 빈 잠금을 아주 잠깐 잡았다 놓는다 — 그 순간 뜬 정기 회차가 follow-up 표식만
+   *    남기고 사라지지 않게 하려는 것이다. 살아 있는 holder 를 기다리거나 뺏는 장치가 아니다.
+   */
+  busyRetryMs?: number
 }): OuterOutcome {
   const lockf = i.lockf ?? LOCKF_PATH
   if (!lockfUsable(lockf)) return { kind: 'UNAVAILABLE', reason: `${lockf} 를 실행할 수 없다 — 본체를 띄우지 않는다(provider 0 · DB 0)` }
   const env = { ...i.env }
   delete env[LEASE_INNER_ENV]
   delete env[LEASE_FD_ENV]
-  const r = spawnSync('/bin/sh', [LEASE_WRAPPER, i.lockPath, lockf, i.command, ...i.args], { stdio: 'inherit', env })
+  let r = spawnSync('/bin/sh', [LEASE_WRAPPER, i.lockPath, lockf, i.command, ...i.args], { stdio: 'inherit', env })
+  if (r.error === undefined && r.status === LEASE_BUSY_EXIT && (i.busyRetryMs ?? 0) > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, i.busyRetryMs)
+    r = spawnSync('/bin/sh', [LEASE_WRAPPER, i.lockPath, lockf, i.command, ...i.args], { stdio: 'inherit', env })
+  }
   if (r.error !== undefined) return { kind: 'UNAVAILABLE', reason: `wrapper 실행 실패 — ${(r.error as { code?: string }).code ?? r.error.name}` }
   if (r.status === LEASE_BUSY_EXIT) return { kind: 'HELD', followUp: requestFollowUp(i.followUpDir, i.nowMs, i.trigger) }
   if (r.status !== null && LEASE_UNAVAILABLE_EXITS.includes(r.status)) return { kind: 'UNAVAILABLE', reason: `wrapper exit ${r.status} — 잠금을 걸지 못했다` }
@@ -124,13 +134,90 @@ export function requestFollowUp(dir: string, nowMs: number, trigger: LeaseTrigge
 export type FollowUpTake = 'TAKEN' | 'NONE' | 'ERROR'
 
 /**
+ * 🔴 **회차를 연 깨움의 종류** — 네 trigger 또는 `unknown`(표식이 깨졌다 · 칸이 없다 · 모르는 값).
+ *    `unknown` 은 추정하지 않은 값이다. 어떤 trigger 로도 올려 읽지 않는다(fail-closed).
+ */
+export type PassTrigger = LeaseTrigger | 'unknown'
+
+const LEASE_TRIGGERS: readonly LeaseTrigger[] = ['scheduled', 'event', 'recovery', 'manual']
+
+/** 🔴 표식 원문 → trigger. JSON 이 아니거나 칸이 네 값 중 하나가 아니면 `unknown` */
+export function followUpTriggerOf(raw: string): { trigger: PassTrigger; at: string | null } {
+  let v: unknown
+  try { v = JSON.parse(raw) } catch { return { trigger: 'unknown', at: null } }
+  if (typeof v !== 'object' || v === null) return { trigger: 'unknown', at: null }
+  const o = v as { trigger?: unknown; at?: unknown }
+  const at = typeof o.at === 'string' && Number.isFinite(Date.parse(o.at)) ? o.at : null
+  return { trigger: LEASE_TRIGGERS.includes(o.trigger as LeaseTrigger) ? o.trigger as LeaseTrigger : 'unknown', at }
+}
+
+export type FollowUpRecord = { take: FollowUpTake; trigger: PassTrigger | null; at: string | null }
+
+/**
+ * 🔴 **표식 거두기 — 지우기 전에 trigger 를 읽는다** (2026-10-12 Batch C1).
+ *    표식은 `wx` 로만 생기고 지우는 쪽은 holder 하나라, 읽은 뒤 지우기 전까지 내용이 바뀌지 않는다.
+ *    못 읽으면(깨진 내용) `unknown` 으로 남기고 거둔다 — 다음 holder 가 같은 깨진 표식을 또 받지 않게.
+ *    읽기 자체가 실패(권한 등)하면 지우지 않고 `ERROR` 다 — 내용을 모르는 깨움을 없애지 않는다.
+ */
+export function takeFollowUpRecord(proof: LeaseProof): FollowUpRecord {
+  const path = join(proof.followUpDir, FOLLOW_UP_FILE)
+  let raw: string
+  try { raw = readFileSync(path, 'utf-8') } catch (e) {
+    return { take: (e as { code?: string }).code === 'ENOENT' ? 'NONE' : 'ERROR', trigger: null, at: null }
+  }
+  const read = followUpTriggerOf(raw)
+  try { unlinkSync(path) } catch (e) {
+    return { take: (e as { code?: string }).code === 'ENOENT' ? 'NONE' : 'ERROR', trigger: null, at: null }
+  }
+  return { take: 'TAKEN', ...read }
+}
+
+/**
  * 🔴 **표식 거두기 — 커널 잠금 증명을 가진 holder 만**(타입이 `LeaseProof` 를 요구한다).
  *    지운 뒤 생긴 깨움은 다음 holder 가 시작할 때 거둔다 — 깨움은 사라지지 않고 늘지도 않는다.
  */
 export function takeFollowUp(proof: LeaseProof): FollowUpTake {
-  try { unlinkSync(join(proof.followUpDir, FOLLOW_UP_FILE)); return 'TAKEN' } catch (e) {
-    return (e as { code?: string }).code === 'ENOENT' ? 'NONE' : 'ERROR'
-  }
+  return takeFollowUpRecord(proof).take
+}
+
+/**
+ * 🔴 **첫 회차의 trigger** — 띄운 이유와 시작할 때 거둔 표식 중 더 강한 것.
+ *    순서 `scheduled > event > recovery > manual`. 거둔 표식이 `unknown` 이면 올리지 않는다(띄운 이유 그대로).
+ */
+export function mergePassTrigger(launch: LeaseTrigger, absorbed: PassTrigger | null): PassTrigger {
+  if (absorbed === null || absorbed === 'unknown') return launch
+  const rank = (t: LeaseTrigger): number => LEASE_TRIGGERS.length - LEASE_TRIGGERS.indexOf(t)
+  return rank(absorbed) > rank(launch) ? absorbed : launch
+}
+
+/** 🔴 회차 하나를 연 깨움 — 본체가 기록에 남긴다(진단 · shadow). 잠금 · 장부 · 상한은 이 값으로 갈리지 않는다 */
+export type PassContext = {
+  trigger: PassTrigger
+  /** 이 프로세스를 띄운 이유(바깥이 정한 값) */
+  launch: LeaseTrigger
+  /** 이 회차가 거둔 표식의 trigger — 없으면 null */
+  absorbed: PassTrigger | null
+  absorbedAt: string | null
+}
+
+export type LeaseProbe = 'free' | 'busy' | 'unknown'
+
+/**
+ * 🔴 **관측 전용 probe** (2026-10-12 Batch C1) — 파일이 있다는 것이 아니라 **커널 잠금**을 본다.
+ *    · 잠금 파일이 없다 → `free`(만들지 않는다 · `-n`)
+ *    · `lockf -k -s -n -t 0 <파일> /usr/bin/true` → 0 이면 `free`, 75 면 `busy`, 그 밖은 `unknown`
+ *      🔴 `-k` 로 파일을 남긴다 — 지우면 holder 가 쥔 inode 와 새 실행이 잠글 inode 가 갈라진다
+ *    · lockf 를 실행할 수 없다(Linux 등) → `unknown` — 모르는 것을 free 로 읽지 않는다
+ *    🔴 빈 잠금이면 /usr/bin/true 가 도는 아주 짧은 동안 잠금을 쥔다 — 그 순간 뜬 회차는 `busyRetryMs` 로 한 번 더 본다.
+ */
+export function probeKernelLease(lockPath: string, lockf: string = LOCKF_PATH): LeaseProbe {
+  if (!lockfUsable(lockf)) return 'unknown'
+  if (!existsSync(lockPath)) return 'free'
+  // 🔴 `-k` 필수 — 없으면 macOS lockf 는 명령이 끝난 뒤 잠금 파일을 **지운다**. 지우면 다음 실행이 새 inode 를 잠가
+  //    옛 inode 를 쥔 holder 와 동시에 본체에 들어간다(2026-10-12 C1 검사가 잡았다). 관측이 잠금을 깨면 안 된다
+  const r = spawnSync(lockf, ['-k', '-s', '-n', '-t', '0', lockPath, '/usr/bin/true'], { stdio: 'ignore' })
+  if (r.error !== undefined) return 'unknown'
+  return r.status === 0 ? 'free' : r.status === LEASE_BUSY_EXIT ? 'busy' : 'unknown'
 }
 
 /** 🔴 회차 순서 — 첫 회차 + follow-up 최대 `MAX_FOLLOW_UPS`. `pass` 는 방금 끝낸 회차 번호(0 부터) */
@@ -146,7 +233,10 @@ export function shouldRunFollowUp(pass: number, take: FollowUpTake): boolean {
 export async function leaseEntry(o: {
   lockDir: string; lockFile: string; scriptPath: string; argv: readonly string[]
   env: NodeJS.ProcessEnv; trigger: LeaseTrigger; lockf?: string
-  pass: (pass: number, proof: LeaseProof) => Promise<number>
+  /** 🔴 생략하면 0 — `runUnderKernelLease.busyRetryMs` */
+  busyRetryMs?: number
+  /** 🔴 세 번째 인자는 그 회차를 연 깨움이다(생략해도 된다 — 앞판 본체는 두 인자만 받는다) */
+  pass: (pass: number, proof: LeaseProof, ctx: PassContext) => Promise<number>
   log: (line: string) => void
 }): Promise<number> {
   const lockPath = join(o.lockDir, o.lockFile)
@@ -154,8 +244,9 @@ export async function leaseEntry(o: {
     const out = runUnderKernelLease({
       lockPath, followUpDir: o.lockDir, command: process.execPath,
       // 🔴 같은 진입점 · 같은 loader(tsx) — 인자 배열로만 넘긴다(wrapper 가 그대로 exec 한다)
-      args: [...process.execArgv.filter((a, k, all) => a !== '--eval' && all[k - 1] !== '--eval'), o.scriptPath, ...o.argv],
+      args: [...loaderArgs(), o.scriptPath, ...o.argv],
       env: o.env, nowMs: Date.now(), trigger: o.trigger, ...(o.lockf === undefined ? {} : { lockf: o.lockf }),
+      ...(o.busyRetryMs === undefined ? {} : { busyRetryMs: o.busyRetryMs }),
     })
     if (out.kind === 'HELD') {
       o.log(`⏭️  LEASE_HELD — 다른 회차가 커널 잠금을 쥐고 있다 · follow-up ${out.followUp} · 본체에 들어가지 않는다`)
@@ -167,18 +258,34 @@ export async function leaseEntry(o: {
   const v = verifyInKernelLease({ lockPath, followUpDir: o.lockDir, env: o.env, ...(o.lockf === undefined ? {} : { lockf: o.lockf }) })
   if (!v.ok) { o.log(`🔴 LEASE_NOT_PROVEN — ${v.reason} · provider 0 · DB 0`); return 1 }
   // 🔴 잠금 수명 = 이 프로세스 수명 — 증명은 한 번이면 된다(회차마다 다시 볼 실패 경로가 없다 · 죽은 게이트를 두지 않는다)
-  // 🔴 시작할 때 이미 있던 깨움은 이번 회차가 받는다
-  if (takeFollowUp(v.proof) === 'TAKEN') o.log('  follow-up 표식을 거뒀다 — 이번 회차가 그 깨움을 받는다')
+  // 🔴 시작할 때 이미 있던 깨움은 이번 회차가 받는다 — 그 trigger 를 첫 회차에 싣는다
+  const start = takeFollowUpRecord(v.proof)
+  if (start.take === 'TAKEN') o.log(`  follow-up 표식을 거뒀다(${start.trigger}) — 이번 회차가 그 깨움을 받는다`)
+  const absorbed = start.take === 'TAKEN' ? start.trigger : null
+  let ctx: PassContext = {
+    trigger: mergePassTrigger(o.trigger, absorbed), launch: o.trigger, absorbed, absorbedAt: start.take === 'TAKEN' ? start.at : null,
+  }
   let worst = 0
   for (let pass = 0; ; pass += 1) {
-    const raw = await o.pass(pass, v.proof)
+    const raw = await o.pass(pass, v.proof, ctx)
     const code = raw === LEASE_BUSY_EXIT ? 1 : raw
     worst = Math.max(worst, code)
     if (code === 1) break
     // 🔴 상한에 닿았으면 표식을 거두지 않는다 — 남은 깨움은 다음 holder 가 시작할 때 받는다
     if (pass >= MAX_FOLLOW_UPS) break
-    if (!shouldRunFollowUp(pass, takeFollowUp(v.proof))) break
-    o.log(`\n  ── follow-up 회차 (${pass + 1}/${MAX_FOLLOW_UPS}) — 겹친 깨움을 합친 한 번 ──`)
+    const next = takeFollowUpRecord(v.proof)
+    if (!shouldRunFollowUp(pass, next.take)) break
+    // 🔴 follow-up 회차의 trigger 는 거둔 표식 그대로다(띄운 이유는 앞 회차의 것이다)
+    ctx = { trigger: next.trigger ?? 'unknown', launch: o.trigger, absorbed: next.trigger, absorbedAt: next.at }
+    o.log(`\n  ── follow-up 회차 (${pass + 1}/${MAX_FOLLOW_UPS}) — 겹친 깨움(${ctx.trigger})을 합친 한 번 ──`)
   }
   return worst
+}
+
+/**
+ * 🔴 **같은 Node · 같은 loader(tsx) 인자** — wrapper 재실행과 본체가 띄우는 자식이 같은 값을 쓴다.
+ *    `--eval` 과 그 값은 뺀다(스크립트 경로로 다시 띄운다).
+ */
+export function loaderArgs(): string[] {
+  return process.execArgv.filter((a, k, all) => a !== '--eval' && all[k - 1] !== '--eval')
 }
