@@ -286,6 +286,12 @@ export function buildV2DraftSystemPrompt(input: {
     //    최종 게이트(`draft-life-gates` 만남)가 같은 선으로 막는다(위 "이번에 원문이 부른 것" 근거가 그 만남을 담을 때만 예외)
     '- 🔴 원문 글쓴이가 **누구를 만나고 · 이야기를 나누고 · 들은 일**은 그 사람의 경험입니다. 당신이 만나고 들은 일로 옮기지 않습니다.',
     '  그 이야기는 "어떤 분이 … 그러셨대요" 처럼 **그 사람을 주어로** 전합니다.',
+    /**
+     * 🔴 (v2-draft-p11 · 2026-10-13 의미 손실 감사) 전하는 말에 **보고 · 읽고 · 들은 경로**를 덧붙이지 않는다.
+     *    운영 08:15·12:15 두 편이 `어디서 봤는데` · `어떤 글을 봤는데` 를 붙였고, 의미 검수가 원문에 없는
+     *    겪은 일로 적었다(SEMANTIC_UNSUPPORTED_ADDITION). 검수 기준은 그대로 두고 생성이 그 말을 만들지 않는다.
+     */
+    '  🔴 그 이야기를 **어디서 보고 · 읽고 · 들었는지**는 지어내지 않습니다. "어디서 봤는데" · "어떤 글을 봤는데" 를 붙이지 않고 바로 전합니다.',
     '  예) 원문이 "남편이 집안일을 안 한다" 뿐이면,',
     '      "주말에 밥 차려달라고 하면 난리가 난다" 같은 장면을 **지어내지 않습니다.**',
     '',
@@ -339,14 +345,48 @@ export function buildV2DraftSystemPrompt(input: {
     '🔴 실명 + 소속 · 연락처 · 주소 · 계정을 쓰지 않습니다.',
     '🔴 약 · 용량 · 진단 · 치료를 확정적으로 지시하지 않습니다.',
     '',
+    '',
+    '## 🔴 [보존] — 원문에서 반드시 살릴 것 (코드가 원문에서 골라 함께 보냅니다)',
+    '- 그대로쓸말: 글자 그대로 씁니다',
+    '- 원문의물음: 원문이 던진 물음입니다. 그 물음이 초안에 살아 있어야 합니다',
+    '- 원문범위: "일부" 면 [원문]은 머리와 꼬리만 있습니다. 비어 있는 가운데와 뒤는 **모릅니다** — 지어 채우지 않습니다',
+    '',
     '초안 **한 편**을 JSON 으로만 답합니다.',
     '{"title":"...","body":"..."}',
   ].filter((x) => x !== '').join('\n')
 }
 
-/** 🔴 마스킹되고 300자로 묶인 원문 근거를 그대로 건넨다 */
-export function buildV2DraftPayload(input: { packet: SourceEvidencePacket }): string {
-  return JSON.stringify({ 원문: sourceBlock(input.packet) })
+/**
+ * 🔴 **생성 전에 보존할 원문 사실을 구조로 건넨다** (v2-draft-p11 · 2026-10-13 의미 손실 감사).
+ *
+ *    앞판은 원문 한 덩어리만 보냈다. 지킬 말·물음·원문이 어디까지인지는 지시문 문장 속에 흩어져 있거나
+ *    아예 없었다 — 특히 근거가 머리·꼬리뿐인지 알리지 않아, 생성은 300자 조각을 글 전체로 읽었다.
+ *
+ * 🔴 **값은 전부 코드가 원문과 계획에서 고른다.** 새 유료 호출 0 · 계획 출력 칸 0(계획 답이 길어지면 잘린다).
+ *    · 그대로쓸말 — 계획이 지목하고 코드가 원문 자리에서 확인한 `protectedFacts` 그대로
+ *    · 원문의물음 — 원문이 묻고 끝날 때만, 원문 근거에 **실제로 있는** `?` 문장. 낱말 사전이 아니라 물음표다
+ *    · 원문범위 — 근거 묶음이 본문을 잘랐는가(`packet.truncated`)
+ * 🔴 의미 검수는 이것을 받지 않는다 — 검수 입력·기준은 그대로다.
+ */
+export function sourceKeepOf(plan: SpeakerPlan, packet: SourceEvidencePacket): {
+  그대로쓸말: string[]; 원문의물음: string[]; 원문범위: '전체' | '일부'
+} {
+  const questions = plan.closingIntent !== 'ask' ? [] : [...new Set(
+    packet.spans
+      .flatMap((s) => s.text.split(/(?<=[?？])|\n+/))
+      .map((x) => x.trim())
+      .filter((x) => /[?？]$/.test(x) && /[가-힣]/.test(x)),
+  )]
+  return {
+    그대로쓸말: [...new Set(plan.protectedFacts.map((f) => f.text))],
+    원문의물음: questions,
+    원문범위: packet.truncated ? '일부' : '전체',
+  }
+}
+
+/** 🔴 마스킹되고 300자로 묶인 원문 근거와 그 원문에서 살릴 것을 함께 건넨다 */
+export function buildV2DraftPayload(input: { packet: SourceEvidencePacket; plan: SpeakerPlan }): string {
+  return JSON.stringify({ 원문: sourceBlock(input.packet), 보존: sourceKeepOf(input.plan, input.packet) })
 }
 
 // ─────────────────────────────────────────────────────────

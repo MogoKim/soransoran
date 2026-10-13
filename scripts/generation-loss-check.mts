@@ -476,3 +476,6 @@ console.log('\n⑥ 🔴 실패 유형 표 · 장부 어휘 · 배선')
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 가짜 provider 검사다 — 실제 모델의 잘림·timeout 이 재시도로 회복되는 비율은 운영 관측으로만 안다.')
 if (fail > 0) process.exit(1)
+
+// 🔴 (2026-10-13 quality-v8) 의미 손실 감사 반례 — 같은 CI 줄(`check:content-core-v2`)에 태운다. 실패하면 그 파일이 1 로 끝낸다
+await import('./semantic-loss-check.mjs')

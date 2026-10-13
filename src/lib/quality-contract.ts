@@ -84,7 +84,17 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  *    네트워크 · 429 · 5xx)만 원천당 1회 다시 묻는다. 초안 게이트 · 의미 검수 · 결정적 판정은 그대로다. 열림 근거는 그대로 창업자 gold 재생이다.
  *    🔴 v6 이하 행을 고치거나 지우거나 v7 으로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v7'
+/**
+ * 🔴 `quality-v8` (2026-10-13 · 의미 손실 감사) = **생성 입력을 고친다. 검수·게이트는 그대로다.** v7 운영 08:15·12:15 의
+ *    의미 경고 5건(SEMANTIC_DROPPED_FROM_SOURCE 2 · SEMANTIC_UNSUPPORTED_ADDITION 3)이 실제 생성 누락이 아니라
+ *    ① 수집기가 두 번 이어 붙인 본문을 근거 묶음이 다시 잘라 **끝나지 않은 문장을 꼬리로 보낸 것**과
+ *    ② 전하는 말에 생성이 `어디서 봤는데` 같은 **보고 들은 경로**를 지어 붙인 것에서 나왔다.
+ *    근거 묶음 `evidence-v2`(이어 붙은 두 번째 벌을 걷어낸다 · 파이프라인 `content-core-v2.2`) ·
+ *    초안 프롬프트 `v2-draft-p11`(구조화된 `보존` · 경로를 지어 붙이지 않는다). 의미 검수 프롬프트 `v2-review-p7` · 검수 판 ·
+ *    초안 게이트 · 결정적 판정 · 의미 경고 코드 · 자동 READY 판정은 한 글자도 같다. 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v7 이하 행을 고치거나 지우거나 v8 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v8'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
