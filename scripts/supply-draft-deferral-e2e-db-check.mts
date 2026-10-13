@@ -186,7 +186,7 @@ async function main(): Promise<void> {
   const scale = resolveScale(process.env)
   const probe = await buildSpeakerLoad(prisma, 'probe', { env: process.env, now: RUN_AT, scale })
   const opened = Object.entries(probe.byCode)
-    .filter(([, r]) => r.openDays > 0 || r.attemptCapacity > 0).map(([c]) => c)
+    .filter(([, r]) => r.openDays > 0 || (r.attemptCapacity ?? 0) > 0).map(([c]) => c)
   let seq = 0
   for (const code of opened) {
     seq += 1
