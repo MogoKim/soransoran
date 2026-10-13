@@ -22,6 +22,7 @@ const F = {
   gate: path.join(HERE, 'lib', 'magazine-merge-gate.mjs'),
   install: path.join(HERE, 'magazine-launchd-install.mts'),
   lock: path.join(HERE, 'lib', 'magazine-auto-lock.mjs'),
+  evidence: path.join(HERE, 'lib', 'magazine-deploy-evidence.mjs'),
 }
 const CHECKS = [
   ['복구 검사', process.execPath, [path.join(HERE, 'magazine-auto-merge-recovery-check.mjs')]],
@@ -72,6 +73,54 @@ const MUTATIONS = [
     find: "  const file = join(dir, `auto-merge-recovery-${hms}-${process.pid}-${randomUUID().slice(0, 8)}.json`)",
     replace: "  const file = join(dir, 'auto-merge-recovery.json'); void hms; void randomUUID" },
     { file: F.merge, find: "{ encoding: 'utf8', flag: 'wx' })", replace: "{ encoding: 'utf8', flag: 'w' })" }] },
+  // ── 배포 증거 — GitHub 1차 · 불완전할 때만 Vercel 직접 (2026-10-13 #701) ──
+  { name: 'Vercel 직접 확인 fallback 전체 제거', edits: [{ file: F.evidence,
+    find: '  const v = vercelDirect(sha)\n', replace: "  const v = { ok: false, code: 'FALLBACK_REMOVED', why: '' }\n" }] },
+  { name: 'Vercel 배포 SHA 일치 검사 제거', edits: [{ file: F.evidence,
+    find: "  if (json.gitSource?.sha !== sha) return { code: 'VERCEL_SHA_MISMATCH',", replace: "  if (false) return { code: 'VERCEL_SHA_MISMATCH'," }] },
+  { name: 'Vercel production target 검사 제거', edits: [{ file: F.evidence,
+    find: "  if (json.target !== 'production') return", replace: '  if (false) return' }] },
+  { name: 'Vercel READY 검사 제거', edits: [{ file: F.evidence,
+    find: "  if (json.readyState !== 'READY') return", replace: '  if (false) return' }] },
+  { name: '도메인 deployment id 와 API id 일치 검사 제거', edits: [{ file: F.evidence,
+    find: '  if (json.id !== liveId) return', replace: '  if (false) return' }] },
+  { name: 'GitHub 증거가 완전한데도 Vercel fallback 호출', edits: [{ file: F.evidence,
+    find: '  const gh = github(sha) ?? MISS\n', replace: '  const gh = github(sha) ?? MISS\n  vercelDirect(sha)\n' }] },
+  { name: 'HTTP 200 + 도메인 표식만으로 배포 성공 처리', edits: [{ file: F.merge,
+    find: '    vercelDirect: (s) => verifyVercelDirect({ sha: s, exec, context: vercelContext() }),',
+    replace: "    vercelDirect: (s) => (exec('curl', ['-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '25', SITE]).out.trim() === '200'\n" +
+      "      ? { ok: true, deployment: { found: true, state: 'success', sha: s, deploymentId: (exec('curl', ['-s', '-L', '--max-time', '25', SITE]).out.match(/dpl_[A-Za-z0-9]+/) ?? [null])[0], evidenceSource: 'vercel-direct' } }\n" +
+      '      : verifyVercelDirect({ sha: s, exec, context: vercelContext() })),' }] },
+  { name: '도메인 배포 대신 최신 Production 배포를 무조건 성공 처리', edits: [{ file: F.evidence,
+    find: '  const liveId = parseInspectId(`${ins.out}\\n${ins.err}`)\n',
+    replace: "  const latest = exec(bin, ['api', '/v6/deployments?target=production&limit=1', '--cwd', projectDir], opts)\n" +
+      '  const liveId = (() => { try { return JSON.parse(latest.out).deployments[0].uid } catch { return null } })()\n' }] },
+  // ── Codex 재검토 P1-1 — GitHub 의 명시적 결론을 덮지 않는다 ──
+  { name: 'GitHub failure·error 를 Vercel 성공으로 덮음 (종결 실패 보존 제거)', edits: [{ file: F.evidence,
+    find: '  if (GITHUB_TERMINAL_FAILURES.includes(gh.state)) return { allowed: false,', replace: '  if (false) return { allowed: false,' }] },
+  { name: 'GitHub SHA 충돌인데도 fallback (충돌 보존 제거)', edits: [{ file: F.evidence,
+    find: '  if (gh.sha && gh.sha !== sha) return { allowed: false,', replace: '  if (false) return { allowed: false,' }] },
+  { name: '허용 목록 밖 GitHub state(inactive 등)도 fallback', edits: [{ file: F.evidence,
+    find: '  return { allowed: false, miss: `STATE_${gh.state}` }', replace: '  return { allowed: true, miss: `STATE_${gh.state}` }' }] },
+  { name: 'fallback 관문 전체 무시 (GitHub 결론과 무관하게 Vercel)', edits: [{ file: F.evidence,
+    find: '  if (!gate.allowed) return', replace: '  if (false) return' }] },
+  // ── Codex 재검토 P1-2 — 실행 파일 탐색 ──
+  { name: '명시 경로(SORAN_MAGAZINE_VERCEL_BIN) 무시', edits: [{ file: F.evidence,
+    find: "  return [env.SORAN_MAGAZINE_VERCEL_BIN ?? '', ", replace: "  return ['', " }] },
+  { name: 'node 옆 vercel 후보 제거 (launchd 에서 PATH 에만 기댐)', edits: [{ file: F.evidence,
+    find: "execPath ? join(dirname(execPath), 'vercel') : ''", replace: "''" }] },
+  { name: '실행 가능 확인 제거 (없는 경로도 고른다)', edits: [{ file: F.evidence,
+    find: '    if (executable(c)) return { ok: true, value: c }', replace: '    if (true) return { ok: true, value: c }' }] },
+  { name: '이름만 있는 후보 허용 (PATH 를 실행 때까지 짐작)', edits: [{ file: F.evidence,
+    find: "    if (!c || !c.startsWith('/')) continue", replace: '    if (!c) continue' }] },
+  { name: '해시가 든 npx 캐시 경로를 후보로 되살림', edits: [{ file: F.evidence,
+    find: "  return [env.SORAN_MAGAZINE_VERCEL_BIN ?? '', ", replace: "  return [env.SORAN_MAGAZINE_VERCEL_BIN ?? '', env.HOME ? join(env.HOME, '.npm/_npx/67eb4586ca667318/node_modules/.bin/vercel') : '', " }] },
+  // ── 로그에 원문·자격을 남기지 않는다 · 실행 예외도 fail-closed ──
+  { name: 'inspect 실패 사유에 CLI 원문을 싣는다', edits: [{ file: F.evidence,
+    find: 'inspect 실패 (종료 ${ins.code})', replace: 'inspect 실패 (${ins.err})' }] },
+  { name: 'Vercel 실행 예외를 잡지 않는다 (관찰이 깨진다)', edits: [{ file: F.evidence,
+    find: "  const run = (args) => { try { return exec(bin, args, opts) } catch { return { code: -1, out: '', err: '' } } }",
+    replace: '  const run = (args) => exec(bin, args, opts)' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
