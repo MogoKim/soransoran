@@ -14,7 +14,7 @@
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "8f32caf5d6c45cffa858e5088e6fc250ca16d56983c992112a74d98c0a392aa8",
-    "scripts/lib/content-core-run.mts": "c3384f51176d9f6f4c0fab6ce004c3a26ac00413e444e552f1b6a31c5b7dcdce",
+    "scripts/lib/content-core-run.mts": "bc4fbb119cd916a200cbd0a9245d1bbf7042777b07c3b480294131484c3d9800",
     "scripts/lib/content-core-prompts.mts": "d064ae7aaf7afcbddb3e85c8d46855335d663a55feb3b12c3ee99c8f5013ce4b",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
@@ -31,15 +31,10 @@
     "src/lib/content-core/family-specifics.ts": "fbed290b61cb864326035832eb2277615dc430779807fc245e1213f87ed4087e"
   },
   "acknowledgement": {
-    "kind": "revise",
-    "reason": "quality-v8 digest 1d395aeefe00… → ba24566726b7… · quality-v8 보정 — 1인칭 구체 가족 사실(자녀 수·자기 자녀 성별·나이대) 카드 근거 필수: speaker-plan-v8 · draft-gates-v8 · v2-review-p8 · family-specifics (운영 v8 행 0)",
+    "kind": "behaviorUnchanged",
+    "reason": "화자 계획의 동일 상한 잘림 재시도만 제거; 후보 판정·게이트·출력 계약 불변",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
-      "src/lib/content-core/draft-life-gates.ts",
-      "src/lib/content-core/pipeline.ts",
-      "scripts/lib/content-core-prompts.mts",
-      "src/lib/content-core/speaker.ts",
-      "src/lib/content-core/family-specifics.ts"
+      "scripts/lib/content-core-run.mts"
     ]
   }
 }
