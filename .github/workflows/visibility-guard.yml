@@ -618,6 +618,12 @@ jobs:
       - name: 원문 게시 시각 전달 (수집 → thin → adapt → 후보)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run check:source-times
+      # D100 Batch D1 — 🔴 날짜만 보이는 게시 라벨을 00:00 으로 만들지 않는다 · 판정은 하루 구간 전체(fail-closed) ·
+      #    수집 상세 선별은 같은 점수 안에서만 최신 우선 · 레몬테라스 2~16p · jjong 10 + humor 1 · 요청량 불변.
+      #    수집 행 → thin → adapt → 공급 러너 · 적재기 배선까지 본다. 임시 디렉터리 · 네트워크 0 · DB 0.
+      - name: 날짜 정밀도 · 품질 동률 신선도 (D100 Batch D1)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run check:d100-freshness
       # 운영 체인 end-to-end — 🔴 **실제 러너가 쓴 파일**을 실제 적재 순수 함수에 넣는다.
       #    손으로 만든 봉투는 증거가 아니다. 가짜 provider · 임시 HOME · 네트워크 0 · DB 0.
       #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.

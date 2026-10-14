@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto'
 
 import { mentionsMenopause } from './original-post-persona-match'
 import {
-  articleIdHashOf, compareReleaseRank, observationBucketOf, type SlotReleaseVerdict,
+  articleIdHashOf, compareReleaseRank, observationBucketOf, postedLowerBoundOf, type SlotReleaseVerdict,
 } from './source-slot-release'
 import {
   JIT_SELECT_STEPS, maxSlotMatching, retryTierOf, runClockOf, sourceIdentityOf, worksetAxisOf, WGANG_SOURCE_SITE,
@@ -184,8 +184,9 @@ export const worksetDigestOf = (w: Workset): string => sha256(JSON.stringify(w))
  *    eligible 판정을 받은 행에만 부른다(게시 시각이 이미 정본 검증을 지났다). 못 읽으면 null — 지어내지 않는다.
  */
 const rawAgeH = (r: WorksetRow, slotAt: Date): number | null => {
-  const posted = Date.parse(r.evidence?.postedAt ?? '')
-  return Number.isFinite(posted) ? Math.max(0, slotAt.getTime() - posted) / HOUR_MS : null
+  // 🔴 정본 나이와 같은 끝 — 날짜만 알면 그날 00:00(늙은 끝)이다(2026-10-13 Batch D1 · `postedLowerBoundOf`)
+  const posted = r.evidence === null ? null : postedLowerBoundOf(r.evidence)
+  return posted === null ? null : Math.max(0, slotAt.getTime() - posted.getTime()) / HOUR_MS
 }
 
 export function buildSupplySelectionTrace(input: {

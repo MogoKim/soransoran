@@ -20,7 +20,7 @@ import { SUPPLY_INTENT_KEY, type SupplyIntent } from './supply-intent'
 /** 🔴 원문 증거 기록의 정본 — 적재기는 옮길 뿐 판정하지 않는다 */
 import {
   SOURCE_EVIDENCE_KEY, buildSourceEvidence, articleIdHashOf,
-  type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
+  type PostedWindow, type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
 } from './source-slot-release'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import { judgeCopy, readMeasure, describeOriginality } from './draft-originality'
@@ -675,6 +675,8 @@ export type EvidenceMaterial = {
   response: SourceResponse | null
   observations: readonly SourceObservation[]
   sourceStats: SourceStatsSnapshot | null
+  /** 🔴 목록 줄이 날짜만 안다고 하면 그 하루 구간(2026-10-13 Batch D1) — 칸이 없으면 null 과 같다 */
+  postedWindow?: PostedWindow | null
 }
 
 /**
@@ -685,7 +687,10 @@ export type EvidenceMaterial = {
  */
 export function sourceEvidenceOf(c: Candidate, m: EvidenceMaterial | null): Record<string, unknown> {
   return buildSourceEvidence({
-    postedAt: c.sourcePostedAt, listedAt: c.sourceListedAt, capturedAt: c.sourceCapturedAt,
+    // 🔴 목록 줄이 날짜만 안다고 하면 그 하루 구간이다 — 후보가 실어 온 00:00(옛 수집기)을 싣지 않는다
+    postedAt: m?.postedWindow ? null : c.sourcePostedAt,
+    postedWindow: m?.postedWindow ?? null,
+    listedAt: c.sourceListedAt, capturedAt: c.sourceCapturedAt,
     sourceSite: c.sourceSite, sourceArticleId: c.sourceArticleId,
     artifactId: (c as unknown as Record<string, unknown>).artifactId,
     dedupKey: `${S(c.sourceSite)}|${S(c.sourceArticleId)}`,

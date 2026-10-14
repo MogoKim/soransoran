@@ -27,7 +27,7 @@ import {
   SESSION_PATH_ENV, KILL_SWITCH_ENV,
   DEFAULT_SESSION_PATH, PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, DEFAULT_BROWSER_CHANNEL,
   browserLaunchOptions, isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, AUTH_COOKIE_NAMES,
-  parsePostedLabel, normalizeCount,
+  parsePostedLabel, postedDayOfLabel, normalizeCount, ARTICLE_BODY_SELECTORS, pickArticleBody,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease,
   LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
   LIST_SELECTORS, runIdOf, runOutputPath,
@@ -427,15 +427,21 @@ console.log('\n⑬ 작성 시각 라벨 파싱 — 🔴 애매하면 null (PR-S2
     `받은 값: ${kstDate(parsePostedLabel('15:32', now))}`)
   check('🔴 자정 직후도 같은 날로 본다 (00:05)',
     kstDate(parsePostedLabel('00:05', now)) === '2026-09-03T00:05')
-  check('YYYY.MM.DD. → 그 날 00:00 KST',
-    kstDate(parsePostedLabel('2026.09.01.', now)) === '2026-09-01T00:00')
-  check('YYYY-MM-DD 형태도 받는다',
-    kstDate(parsePostedLabel('2026-09-01', now)) === '2026-09-01T00:00')
-  check('MM.DD. → 올해로 본다',
-    kstDate(parsePostedLabel('09.01.', now)) === '2026-09-01T00:00')
+  // 🔴 (2026-10-13 Batch D1 · canon §2.1) 날짜만 보이는 라벨은 시각이 아니다 — 00:00 을 지어내지 않는다
+  check('🔴 YYYY.MM.DD. → 시각 null (00:00 을 지어내지 않는다)', parsePostedLabel('2026.09.01.', now) === null,
+    `받은 값: ${String(parsePostedLabel('2026.09.01.', now))}`)
+  check('🔴 YYYY-MM-DD · MM.DD. 도 시각 null',
+    parsePostedLabel('2026-09-01', now) === null && parsePostedLabel('09.01.', now) === null)
+  check('YYYY.MM.DD. → 날짜 2026-09-01', postedDayOfLabel('2026.09.01.', now) === '2026-09-01')
+  check('YYYY-MM-DD 형태도 날짜로 받는다', postedDayOfLabel('2026-09-01', now) === '2026-09-01')
+  check('MM.DD. → 올해 날짜', postedDayOfLabel('09.01.', now) === '2026-09-01')
   check('🔴 MM.DD. 가 미래면 작년이다 (연말연시 사고 방지)',
-    kstDate(parsePostedLabel('12.31.', now)) === '2025-12-31T00:00',
+    postedDayOfLabel('12.31.', now) === '2025-12-31',
     '올해로 두면 12월 글이 "3개월 뒤에 쓰인 글" 이 된다')
+  check('🔴 MM.DD. 가 오늘이면 올해다(KST 기준)', postedDayOfLabel('09.03.', now) === '2026-09-03')
+  check('🔴 달력에 없는 날은 null', postedDayOfLabel('2026.02.30.', now) === null && postedDayOfLabel('13.01.', now) === null)
+  check('🔴 시각을 아는 라벨은 날짜 칸이 아니다',
+    postedDayOfLabel('15:32', now) === null && postedDayOfLabel('3시간 전', now) === null && postedDayOfLabel(null, now) === null)
   check('상대시각 3시간 전',
     parsePostedLabel('3시간 전', now) === new Date(now.getTime() - 3 * 3600_000).toISOString())
   check('상대시각 5분 전',
@@ -516,6 +522,24 @@ console.log('\n⑮ 목록 메타가 산출물에 남는가 · importer 계약은
     (() => { try { assertNaverCandidate({ ...full, sourcePostedAt: '오늘' }); return false } catch { return true } })())
   check('🔴 음수 page/rank/view 는 거부한다',
     (() => { try { assertNaverCandidate({ ...full, sourcePage: -1 }); return false } catch { return true } })())
+
+  // 🔴 (2026-10-13 Batch D1) 날짜만 보이는 라벨 — 시각 칸은 비고 날짜 칸만 남는다
+  const dayOnly = buildCollected('remonterrace', {
+    sourceArticleId: '34998600', sourceUrl: ARTICLE_URL('remonterrace', '34998600'),
+    originalTitle: '어제 저녁 이야기', sourceCommentCount: 4, sourcePostedLabel: '2026.09.02.',
+  }, '본문'.repeat(60), capturedAt, listedAt)
+  check('🔴 날짜만 보이는 라벨 → sourcePostedAt null · sourcePostedDay 그 날짜',
+    dayOnly.sourcePostedAt === null && dayOnly.sourcePostedDay === '2026-09-02' && dayOnly.sourcePostedLabel === '2026.09.02.',
+    `받은 값: ${String(dayOnly.sourcePostedAt)} · ${String(dayOnly.sourcePostedDay)}`)
+  check('시각을 아는 라벨은 날짜 칸이 비어 있다', full.sourcePostedDay === null && bare.sourcePostedDay === null)
+  check('날짜만 아는 행도 assertNaverCandidate 통과',
+    (() => { try { assertNaverCandidate(dayOnly); return true } catch { return false } })())
+  check('🔴 날짜와 00:00 시각이 함께 있으면 거부한다(지어낸 시각)',
+    (() => { try { assertNaverCandidate({ ...dayOnly, sourcePostedAt: '2026-09-01T15:00:00.000Z' }); return false } catch { return true } })())
+  check('🔴 라벨 없이 날짜만 있으면 거부한다',
+    (() => { try { assertNaverCandidate({ ...bare, sourcePostedDay: '2026-09-02' }); return false } catch { return true } })())
+  check('🔴 날짜 형식이 아니면 거부한다',
+    (() => { try { assertNaverCandidate({ ...dayOnly, sourcePostedDay: '2026.09.02.' }); return false } catch { return true } })())
 
   // ── 필수 키 계약 (기존) ──
   const required = ['sourceSite', 'sourceArticleId', 'sourceUrl', 'originalTitle', 'rawBody', 'sourceCapturedAt'] as const
@@ -655,6 +679,25 @@ check('🔴 메타를 옵셔널 체이닝으로 직접 읽는다 (중간 함수 
     'readList 와 같은 결함이 한 단계 뒤에 있었다 — 셀렉터가 안 맞는 것과 코드가 터진 것을 구분 못 했다')
   check('본문 실패 메시지가 두 경우를 구분한다',
     /본문 셀렉터가 터졌다/.test(COLLECTOR) && /본문이 비었다/.test(COLLECTOR))
+}
+{
+  // 🔴 (2026-10-13 · Claude [12] 인계) 본문 두 벌 — `.article_viewer` 가 `.se-main-container` 를 감싼다.
+  //    앞판은 둘을 한 번에 잡아 innerText 를 이어 붙였다(바깥 → 안쪽 · 네이버 bodyHead 3,124건 중 1,791건 두 벌)
+  const inner = '오늘 시어머니가 김장하자고 하시네요.\n다들 김장 하세요?'
+  const outer = `${inner}\n\n첨부 이미지`
+  check('🔴 바깥 칸 · 안쪽 칸이 함께 잡혀도 본문은 한 벌 — 가장 앞 순위(안쪽) 칸만',
+    pickArticleBody([[2, outer], [0, inner]]) === inner, String(pickArticleBody([[2, outer], [0, inner]])))
+  check('🔴 같은 글이 두 번 들어가지 않는다(앞판 재현 대조)',
+    (pickArticleBody([[2, outer], [0, inner]]) ?? '').split(inner).length === 2 && [outer, inner].join('\n').split(inner).length === 3)
+  check('스마트에디터가 없으면 옛 편집기 칸(#postViewArea)', pickArticleBody([[2, 'X\nY'], [1, 'Y']]) === 'Y')
+  check('안쪽 칸이 비면 다음 순위', pickArticleBody([[0, '  '], [2, '바깥만 있는 글']]) === '바깥만 있는 글')
+  check('같은 순위 칸이 여럿이면 문서 순서로 잇는다', pickArticleBody([[0, '첫 문단'], [0, '둘째 문단']]) === '첫 문단\n둘째 문단')
+  check('모양 밖 순위 · 빈 입력은 본문 없음', pickArticleBody([[-1, '광고'], [3, 'x']]) === null && pickArticleBody([]) === null)
+  check('순위는 안쪽 → 옛 편집기 → 바깥', ARTICLE_BODY_SELECTORS.join(',') === '.se-main-container,#postViewArea,.article_viewer')
+  const bodyCode = COLLECTOR_CODE.slice(COLLECTOR_CODE.indexOf('async function readArticleBody'))
+  check('🔴 수집기 배선 — 순위 번호와 함께 읽고 `pickArticleBody` 하나로 고른다(셋을 이어 붙이지 않는다)',
+    /ARTICLE_BODY_SELECTORS\.join\(', '\)/.test(bodyCode) && /sels\.findIndex\(\(sel\) => el\.matches\(sel\)\)/.test(bodyCode)
+      && /pickArticleBody\(hits\)/.test(bodyCode) && !/texts\.join/.test(bodyCode))
 }
 check('🔴 진단이 예외 message 만 담는다 (스택·HTML 아님)',
   !/e\.stack/.test(COLLECTOR_CODE))
