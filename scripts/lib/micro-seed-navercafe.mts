@@ -405,8 +405,14 @@ export type CollectedCandidate = {
   sourceListedAt: string
   /** 화면 문자열 원형 (예: "15:32" · "2026.09.01.") — 🔴 해석 실패해도 여기는 남는다 */
   sourcePostedLabel: string | null
-  /** 위 라벨을 ISO 로 해석한 값. 🔴 확실할 때만 채운다. 모르면 null */
+  /** 위 라벨을 ISO 로 해석한 값. 🔴 확실할 때만 채운다. 모르면 null — 🔴 날짜만 보이는 라벨이면 null 이다 */
   sourcePostedAt: string | null
+  /**
+   * 🔴 **날짜만 보이는 라벨의 KST 날짜**(`YYYY-MM-DD`) — 시각은 모른다 (2026-10-13 Batch D1 · canon §2.1).
+   *    옛 판은 그날 00:00 을 `sourcePostedAt` 으로 지어냈다(72h 수집분 약 29% 가 정확히 자정). 이제 날짜만 남긴다.
+   *    `sourcePostedAt` 과 함께 채워지지 않는다.
+   */
+  sourcePostedDay: string | null
   sourcePage: number | null
   sourceRankOnPage: number | null
   sourceViewCount: number | null
@@ -488,11 +494,12 @@ export function normalizeCount(raw: unknown): number | null {
  * 다루는 형태 (네이버 카페 목록 실측 기준)
  * ```
  *   15:32          오늘 그 시각 (KST)
- *   2026.09.01.    그 날짜 00:00 KST
- *   09.01.         올해 그 날짜 — 🔴 미래가 되면 작년으로 본다(연말연시)
- *   2026-09-01     ISO 형태
  *   3시간 전 · 5분 전 · 방금 전
+ *   2026.09.01. · 2026-09-01 · 09.01.   → 🔴 null — 날짜만 안다(`postedDayOfLabel`)
  * ```
+ *
+ * 🔴 (2026-10-13 Batch D1 · canon §2.1) 날짜만 보이는 라벨을 그날 00:00 으로 바꾸지 않는다. 옛 판은 바꿨고,
+ *    원문 나이가 최대 24시간 늙게 잡혀 신선한 원천이 일찍 만료됐다. 날짜는 `postedDayOfLabel` 이 따로 낸다.
  */
 export function parsePostedLabel(label: string | null | undefined, now: Date): string | null {
   if (typeof label !== 'string') return null
@@ -511,9 +518,8 @@ export function parsePostedLabel(label: string | null | undefined, now: Date): s
     return new Date(now.getTime() - n * ms).toISOString()
   }
 
-  // 절대 날짜
-  const ymd = t.match(/^(\d{4})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})\.?$/)
-  if (ymd) return iso(Number(ymd[1]), Number(ymd[2]), Number(ymd[3]), 0, 0)
+  // 🔴 절대 날짜(연도 有 · 無)는 시각이 없다 — 여기서 값을 내지 않는다(`postedDayOfLabel`)
+  if (postedDayOfLabel(t, now) !== null) return null
 
   // 오늘 HH:mm — 🔴 '오늘' 은 KST 기준이다
   const hm = t.match(/^(\d{1,2}):(\d{2})$/)
@@ -524,15 +530,36 @@ export function parsePostedLabel(label: string | null | undefined, now: Date): s
     return iso(kstNow.getUTCFullYear(), kstNow.getUTCMonth() + 1, kstNow.getUTCDate(), h, mi)
   }
 
-  // MM.DD. — 연도가 없다. 올해로 보되 미래면 작년이다
+  return null
+}
+
+/**
+ * 🔴 **날짜만 보이는 라벨 → KST 날짜(`YYYY-MM-DD`)** (2026-10-13 Batch D1). 시각을 지어내지 않는다.
+ * ```
+ *   2026.09.01. · 2026-09-01   그 날짜
+ *   09.01.                     올해 그 날짜 — 🔴 그날이 `now`(KST) 보다 뒤면 작년으로 본다(연말연시)
+ *   15:32 · 3시간 전 · 그 밖    null (시각을 아는 라벨은 `parsePostedLabel` 몫이다)
+ * ```
+ *    달력에 없는 날(2026.02.30.)은 null 이다.
+ */
+export function postedDayOfLabel(label: string | null | undefined, now: Date): string | null {
+  if (typeof label !== 'string') return null
+  const t = label.trim()
+  const day = (y: number, mo: number, d: number): string | null => {
+    const ms = Date.UTC(y, mo - 1, d)
+    const s = new Date(ms).toISOString().slice(0, 10)
+    return s === `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` ? s : null
+  }
+  const ymd = t.match(/^(\d{4})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})\.?$/)
+  if (ymd) return day(Number(ymd[1]), Number(ymd[2]), Number(ymd[3]))
   const md = t.match(/^(\d{1,2})[.\-/]\s*(\d{1,2})\.?$/)
   if (md) {
-    const kstNow = new Date(now.getTime() + KST_OFFSET_MS)
-    const y = kstNow.getUTCFullYear()
-    const cand = iso(y, Number(md[1]), Number(md[2]), 0, 0)
-    return Date.parse(cand) > now.getTime() ? iso(y - 1, Number(md[1]), Number(md[2]), 0, 0) : cand
+    const today = new Date(now.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10)
+    const y = Number(today.slice(0, 4))
+    const cand = day(y, Number(md[1]), Number(md[2]))
+    if (cand === null) return null
+    return cand > today ? day(y - 1, Number(md[1]), Number(md[2])) : cand
   }
-
   return null
 }
 
@@ -574,6 +601,8 @@ export function buildCollected(
     // 🔴 '지금' 이 아니라 **목록을 본 시각** 기준으로 해석한다.
     //    "15:32" 는 목록을 본 날의 15:32 이지 파일을 읽는 날의 15:32 가 아니다.
     sourcePostedAt: parsePostedLabel(item.sourcePostedLabel, Number.isNaN(listedAt.getTime()) ? new Date(capturedAtIso) : listedAt),
+    // 🔴 날짜만 보이는 라벨 — 같은 기준 시각으로 날짜만 남긴다(시각을 지어내지 않는다)
+    sourcePostedDay: postedDayOfLabel(item.sourcePostedLabel, Number.isNaN(listedAt.getTime()) ? new Date(capturedAtIso) : listedAt),
     sourcePage: item.sourcePage ?? null,
     sourceRankOnPage: item.sourceRankOnPage ?? null,
     sourceViewCount: item.sourceViewCount ?? null,
@@ -635,6 +664,12 @@ export function assertNaverCandidate(row: CollectedCandidate): void {
   }
   if (row.sourcePostedAt !== null && row.sourcePostedLabel === null) {
     throw new Error('sourcePostedAt 이 있는데 원문 라벨이 없다 — 근거 없는 시각이다')
+  }
+  // 🔴 날짜만 아는 라벨은 시각 칸을 채우지 않는다 — 둘이 함께 오면 어느 한쪽이 지어낸 값이다
+  if (row.sourcePostedDay !== null) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.sourcePostedDay)) throw new Error(`sourcePostedDay 형식이 아니다: ${JSON.stringify(row.sourcePostedDay)}`)
+    if (row.sourcePostedAt !== null) throw new Error('sourcePostedDay 와 sourcePostedAt 이 함께 있다 — 날짜만 아는 시각을 지어냈다')
+    if (row.sourcePostedLabel === null) throw new Error('sourcePostedDay 가 있는데 원문 라벨이 없다 — 근거 없는 날짜다')
   }
   for (const [k, v] of [['sourcePage', row.sourcePage], ['sourceRankOnPage', row.sourceRankOnPage], ['sourceViewCount', row.sourceViewCount]] as const) {
     if (v !== null && (!Number.isFinite(v) || v < 0)) throw new Error(`${k} 가 음수이거나 숫자가 아니다: ${JSON.stringify(v)}`)
@@ -882,6 +917,28 @@ export function judgeLockRelease(existed: boolean, unlinkError: unknown): LockRe
  *     td.td_normal.type_readCount                조회수 "1,133"
  * ```
  */
+/**
+ * 🔴 **상세 본문 칸 — 우선순위 순서다** (2026-10-13 · Claude [12] 인계 · 본문 두 벌 결함).
+ *    `.article_viewer`(바깥 칸)가 `.se-main-container`(안쪽 칸)를 감싼다. 앞판은 셋을 한 번에 잡아 innerText 를
+ *    이어 붙였고, 같은 글이 **두 번** 저장됐다(보조 Mac 실측 네이버 bodyHead 3,124건 중 1,791건 · 300자 상한의
+ *    절반을 같은 글이 차지 · 잘린 꼬리가 의미 검수에서 "원문에서 사라짐" 으로 읽힘). 82cook 은 0건.
+ *    이제 **가장 안쪽 · 앞 순위 칸 하나**의 글만 쓴다 — 본문이 있는 첫 순위에서 멈춘다.
+ */
+export const ARTICLE_BODY_SELECTORS = ['.se-main-container', '#postViewArea', '.article_viewer'] as const
+
+/**
+ * 🔴 **본문 고르기 — 순수 함수.** 입력은 잡힌 요소마다 `[가장 앞 순위 번호, innerText]`(문서 순서)다.
+ *    본문이 비지 않은 **가장 앞 순위** 칸들의 글만 잇는다(같은 순위 칸이 여럿이면 문서 순서로 — 바깥 · 안쪽 칸을 섞지 않는다).
+ *    순위 번호가 모양 밖이면 버린다. 아무 칸도 글이 없으면 null.
+ */
+export function pickArticleBody(hits: readonly (readonly [number, string])[]): string | null {
+  for (let rank = 0; rank < ARTICLE_BODY_SELECTORS.length; rank += 1) {
+    const body = hits.filter(([r]) => r === rank).map(([, t]) => t).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+    if (body !== '') return body
+  }
+  return null
+}
+
 export const LIST_SELECTORS = {
   link: 'a.article, a[href*="articleid"], a[href*="/articles/"]',
   row: 'tr, li, .article-board-item',

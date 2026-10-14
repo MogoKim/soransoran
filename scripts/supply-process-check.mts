@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import {
-  COMMON_STAGES, LOCK_FILE, LOCK_TTL_MS, NETWORK_STAGES, PER_SOURCE_STAGES,
+  COMMON_STAGES, NETWORK_STAGES, PER_SOURCE_STAGES,
   PROCESS_KILL_SWITCH_ENV, RUN_FILE_RE, SUPPLY_SOURCES,
   adaptKeyOf, hasWork, judgeJitDemand, judgeProcessRun,
   mayWriteRunState, planCommonPhase, planPending, planSourcePhase,
@@ -28,7 +28,6 @@ import {
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
 /** 🔴 잠금 정본 — 러너와 **같은 함수**를 시험한다. 사본을 만들지 않는다 */
-import { acquireLock, lockAnomaly, releaseLock } from './lib/collect-lock.mjs'
 import { planRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf, hasPendingSibling, isOurSite, MACHINE_SITE_PREFIX, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
 /** 🔴 생성 전 큐 스냅샷 — 러너와 **같은 함수**를 시험한다 */
 import {
@@ -371,253 +370,42 @@ check('🔴 적재는 트랜잭션 안에서 한 쌍으로 만든다', (() => {
   const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
   return /prisma\.\$transaction\(async \(tx\) => \{[\s\S]{0,600}tx\.microSeedRawContent\.create[\s\S]{0,900}tx\.originalPostApprovalQueue\.create/.test(cli)
 })())
-check('🔴 처리기 lock 은 수집 job 의 lock 과 다른 파일이다', LOCK_FILE === 'supply-process.lock')
-check('🔴 앞 회차가 돌고 있으면 이번 회차는 돌지 않는다', (() => {
+/**
+ * 🔴 **공급 잠금은 커널 lease 하나다** (2026-10-12 Batch C1).
+ *    📜 앞판은 `collect-lock` `wx` 잠금과 그 경쟁 시험(빈 자리 · 죽은 락 · 옛 rename 대조군)을 여기서 돌렸다.
+ *       공급 러너는 더 이상 그 잠금을 쓰지 않는다 — `collect-lock` 계약은 수집 job 의 것이라 `collect-lock-check` 가 본다.
+ *    실제 OS 프로세스 경쟁 · SIGKILL · fd 9 전달 · token shadow 는 `supply:lease-check` 가 본다.
+ */
+check('🔴 앞 회차가 돌고 있으면(관측 실행의 probe busy) 이번 회차는 돌지 않는다', (() => {
   const v = judgeProcessRun({ live: true, killOpen: true, lock: 'held', hasWork: true })
   return !v.ok && v.code === 'LOCKED'
 })())
-/**
- * 🔴 **죽어 보이는 락도 뺏지 않는다** (2026-09-11 정정).
- *
- *    앞선 판은 `read → stale 판정 → 삭제 → rename` 으로 획득했다. 이 저장소는 이미
- *    2026-09-09(PR #483)에 그 길이 안 된다는 결론을 내고 `collect-lock.mts` 에 적어 뒀다 —
- *    같은 결함을 공급 처리기에 다시 들여왔던 것이다.
- */
-check('🔴 죽은 것으로 보이는 락도 뺏지 않고 멈춘다 — 사람이 치운다', (() => {
-  const v = judgeProcessRun({ live: true, killOpen: true, lock: 'stale-held', hasWork: true })
-  return !v.ok && v.code === 'LOCKED' && v.reason.includes('자동으로 뺏지 않는다')
-})())
-check('🔴 락 상태를 못 읽으면 통과시키지 않는다(fail-closed)', (() => {
+check('🔴 잠금 상태를 못 읽으면 통과시키지 않는다(fail-closed)', (() => {
   const v = judgeProcessRun({ live: true, killOpen: true, lock: 'unreadable', hasWork: true })
   return !v.ok && v.code === 'LOCKED'
 })())
-check('🔴 러너가 자동 회수 코드를 갖고 있지 않다', (() => {
-  const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-  // 🔴 stale 을 지우거나 rename 으로 뺏는 길이 **없어야** 한다
-  return !/rmSync\([^)]*lockPath/.test(runner)
-    && !/renameSync\([^)]*lockPath/.test(runner)
-    && !/unlinkSync\([^)]*lockPath/.test(runner)
-    && !/planStaleLock|applyStaleLockPlan|lockDecision/.test(runner)
-})())
-check('🔴 러너가 검증된 계약을 그대로 쓴다 — 새 프로토콜을 만들지 않는다', (() => {
-  const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-  return /from '\.\/lib\/collect-lock\.mjs'/.test(runner)
-    && /acquireLock\(/.test(runner) && /releaseLock\(/.test(runner)
-})())
-check('🔴 모든 경로에서 finally 로 푼다 — process.exit 으로 빠져나가지 않는다', (() => {
-  const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-  const body = runner.slice(runner.indexOf('async function main('), runner.indexOf('const isDirectRun'))
-  return /\} finally \{[\s\S]{0,400}releaseHeldLock\(\)/.test(runner)
-    // 🔴 main 안에 process.exit 이 있으면 finally 를 건너뛴다
-    && !/process\.exit\(/.test(body)
-})())
-
-/**
- * 🔴 **실제 OS 프로세스 두 개로 잰다.** 문자열 검사로는 경쟁을 증명할 수 없다.
- *
- *    두 역할을 준다.
- *      `fast` — 같은 죽은 락을 관측하고, 출발 신호에 곧바로 획득한다
- *      `slow` — **먼저 관측**해 두고, `fast` 가 자리를 차지한 **뒤에** 낡은 관측으로 덤빈다
- *
- *    그리고 **대조군**으로 옛 rename 방식을 같은 안무에 돌린다.
- *    거기서 2가 나와야 이 시험이 경쟁을 실제로 잡아낸다는 뜻이다.
- */
 {
-  const LOCK_NAME = 'supply-process.lock'
-  const OBSERVE_MS = 6000
-  const WAIT_MS = 4000
-  // `npx tsx` startup can exceed 10 seconds on a loaded CI runner. The barrier
-  // timeout is machine headroom, not part of the lock contract being tested.
-  const READY_WAIT_MS = 60_000
-  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-  const lockLib = resolve('scripts/lib/collect-lock.mts')
-
-  /** 🔴 지금 계약 — `wx` 한 번. 지지 않으려고 지우거나 rename 하지 않는다 */
-  const CHILD_REAL = `
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { acquireLock, releaseLock } from ${JSON.stringify(lockLib)}
-const LOCK = join(process.env.ROOT, ${JSON.stringify(LOCK_NAME)})
-const ROLE = process.env.ROLE
-// 🔴 빈 자리 경쟁에서는 관측할 것이 없다 — 그때도 barrier 는 맞춘다
-let observed = null
-try { observed = JSON.parse(readFileSync(LOCK, 'utf-8')) } catch { /* 빈 자리 */ }
-writeFileSync(process.env.READY + '.' + ROLE, String(observed?.at ?? 'empty'))
-while (!existsSync(process.env.START)) { /* spin */ }
-if (ROLE === 'slow' && observed !== null) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ${OBSERVE_MS}) {
-    try {
-      const cur = JSON.parse(readFileSync(LOCK, 'utf-8'))
-      if (cur.token !== observed.token) break
-    } catch { /* 교체 중 */ }
-  }
-}
-let handle = null
-const deadline = Date.now() + ${WAIT_MS}
-while (handle === null && Date.now() < deadline) {
-  const r = acquireLock(LOCK, Date.now(), 1000)
-  if (r.ok) { handle = r.handle; break }
-  await new Promise((res) => setTimeout(res, 10))
-}
-if (handle !== null) {
-  appendFileSync(process.env.OUT, JSON.stringify({ ev: 'enter', t: Date.now(), role: ROLE }) + '\\n')
-  await new Promise((res) => setTimeout(res, 250))
-  appendFileSync(process.env.OUT, JSON.stringify({ ev: 'exit', t: Date.now(), role: ROLE }) + '\\n')
-  releaseLock(handle)
-} else {
-  appendFileSync(process.env.OUT, JSON.stringify({ ev: 'blocked', role: ROLE }) + '\\n')
-}
-`
-  /**
-   * 🔴 **대조군 — 이 PR 이 걷어낸 옛 supply-process 방식 그대로.**
-   *    읽고(관측) → TTL 지났으면 지우고 → rename 으로 자리를 차지한다.
-   *    같은 안무에서 이쪽은 **두 주인**이 나온다.
-   */
-  const CHILD_LEGACY = `
-import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
-const LOCK = join(process.env.ROOT, ${JSON.stringify(LOCK_NAME)})
-const ROLE = process.env.ROLE
-const observed = JSON.parse(readFileSync(LOCK, 'utf-8'))
-const observedStale = Date.now() - observed.at > 1000   // 🔴 이 판정을 끝까지 들고 간다
-writeFileSync(process.env.READY + '.' + ROLE, String(observed.at))
-while (!existsSync(process.env.START)) { /* spin */ }
-if (ROLE === 'slow') {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ${OBSERVE_MS}) {
-    try {
-      const cur = JSON.parse(readFileSync(LOCK, 'utf-8'))
-      if (cur.token !== observed.token) break
-    } catch { /* 교체 중 */ }
-  }
-}
-let got = false
-const deadline = Date.now() + ${WAIT_MS}
-while (!got && Date.now() < deadline) {
-  // 🔴 **낡은 관측으로 지우고, rename 으로 덮어쓴다** — 지금 누가 있는지 다시 보지 않는다
-  if (observedStale) rmSync(LOCK, { force: true })
-  const tmp = LOCK + '.tmp-' + ROLE
-  writeFileSync(tmp, JSON.stringify({ at: Date.now(), token: ROLE }))
-  renameSync(tmp, LOCK)
-  got = true
-  break
-}
-if (got) {
-  appendFileSync(process.env.OUT, JSON.stringify({ ev: 'enter', t: Date.now(), role: ROLE }) + '\\n')
-  await new Promise((res) => setTimeout(res, 250))
-  appendFileSync(process.env.OUT, JSON.stringify({ ev: 'exit', t: Date.now(), role: ROLE }) + '\\n')
-  rmSync(LOCK, { force: true })
-} else {
-  appendFileSync(process.env.OUT, JSON.stringify({ ev: 'blocked', role: ROLE }) + '\\n')
-}
-`
-  const runChild = (dir: string, script: string, env: Record<string, string>): Promise<number> =>
-    new Promise((res) => {
-      // 부모가 이미 tsx로 실행 중이다. 같은 Node/loader를 물려야 두 자식이 동시에
-      // `npx` 초기화를 하다가 한쪽이 준비 표식 전에 죽는 CI 경쟁이 없다.
-      const c = spawn(process.execPath, [...process.execArgv, script], {
-        cwd: dir, env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'],
-      })
-      c.on('close', (code) => res(code ?? -1))
-    })
-
-  const raceOnce = async (src: string, trials: number, plantDead: boolean): Promise<number> => {
-    let peak = 0
-    for (let i = 0; i < trials; i += 1) {
-      const dir = mkdtempSync(join(tmpdir(), 'soran-proc-race-'))
-      try {
-        // 🔴 `plantDead` 면 아주 오래된 락을 심는다 — 두 역할 모두 "죽었다" 고 관측한다
-        if (plantDead) {
-          writeFileSync(join(dir, LOCK_NAME),
-            JSON.stringify({ token: 'dead', pid: 999_999, at: new Date(Date.now() - 3_600_000).toISOString() }))
-        }
-        const script = join(dir, 'child.mts')
-        writeFileSync(script, src)
-        const out = join(dir, 'ev.jsonl')
-        writeFileSync(out, '')
-        const base = { ROOT: dir, OUT: out, START: join(dir, 'START'), READY: join(dir, 'READY') }
-        const running = [
-          runChild(dir, script, { ...base, ROLE: 'fast' }),
-          runChild(dir, script, { ...base, ROLE: 'slow' }),
-        ]
-        // 🔴 **둘 다 관측을 마친 뒤에** 출발시킨다 — 안무를 운에 맡기지 않는다
-        const readyCount = (): number => readdirSync(dir).filter((f) => f.startsWith('READY.')).length
-        const readyDeadline = Date.now() + READY_WAIT_MS
-        while (readyCount() < 2 && Date.now() < readyDeadline) await sleep(25)
-        if (readyCount() < 2) {
-          writeFileSync(base.START, 'abort')
-          const codes = await Promise.all(running)
-          throw new Error(`lock race children did not become ready: ready=${readyCount()} codes=${codes.join(',')}`)
-        }
-        writeFileSync(base.START, 'go')
-        const codes = await Promise.all(running)
-        if (codes.some((code) => code !== 0)) {
-          throw new Error(`lock race child failed: codes=${codes.join(',')}`)
-        }
-        const evs = readFileSync(out, 'utf-8').split('\n').filter(Boolean)
-          .map((l) => JSON.parse(l) as { ev: string; t: number })
-          .sort((a, b) => a.t - b.t)
-        let cur = 0
-        let mx = 0
-        for (const e of evs) {
-          if (e.ev === 'enter') { cur += 1; mx = Math.max(mx, cur) }
-          if (e.ev === 'exit') cur -= 1
-        }
-        peak = Math.max(peak, mx)
-      } finally {
-        rmSync(dir, { recursive: true, force: true })
-      }
-    }
-    return peak
-  }
-
-  /**
-   * ── 시나리오 A: **빈 자리에 두 프로세스** ──
-   *    정상 동작은 "승자 하나". 0 이면 경쟁을 재지 못한 것이고, 2 면 배타가 깨진 것이다.
-   */
-  const freeRace = await raceOnce(CHILD_REAL, 3, false)
-  console.log(`   A 빈 자리   maxConcurrent = ${freeRace}  (승자 1명이어야 한다)`)
-  check(`🔴 [A] 두 프로세스가 동시에 들어가지 않는다 — maxConcurrent === 1 (측정 ${freeRace})`,
-    freeRace === 1)
-
-  /**
-   * ── 시나리오 B: **죽은 락이 남아 있는 자리에 두 프로세스** ──
-   *
-   *    🔴 지금 계약은 **아무도 들어가지 않는다(0)** — 시효가 지나도 뺏지 않기 때문이다.
-   *       멈추는 것이 계약이다. 뺏으면 두 회차가 같이 들어가 DB 를 두 번 민다.
-   *    🔴 대조군(옛 rename 방식)은 **두 주인(2)** 이 된다. 그 2가 이 시험의 검증력이다 —
-   *       보호를 되돌리면 위 [A] 가 아니라 여기가 먼저 빨개진다.
-   */
-  const staleReal = await raceOnce(CHILD_REAL, 3, true)
-  console.log(`   B 죽은 락   지금 계약 maxConcurrent = ${staleReal}  (0 = 둘 다 물러난다)`)
-  check(`🔴 [B] 죽은 락을 뺏지 않는다 — 아무도 들어가지 않는다 (측정 ${staleReal})`, staleReal === 0)
-  const legacy = await raceOnce(CHILD_LEGACY, 3, true)
-  console.log(`   B 대조군(옛) maxConcurrent = ${legacy}   ← 2 여야 이 시험에 검증력이 있다`)
-  check(`🔴 [B] 대조군(옛 rename 방식)은 2가 나온다 — 시험에 검증력이 있다 (측정 ${legacy})`, legacy === 2)
-}
-
-/** 🔴 해제는 **내 token 일 때만**. 남의 락은 건드리지 않는다 */
-{
-  const dir = mkdtempSync(join(tmpdir(), 'soran-proc-release-'))
-  try {
-    const p = join(dir, LOCK_FILE)
-    const mine = acquireLock(p, Date.now(), LOCK_TTL_MS)
-    check('🟢 빈 자리에서는 획득한다', mine.ok)
-    const second = acquireLock(p, Date.now(), LOCK_TTL_MS)
-    check('🔴 이미 있으면 두 번째는 진다 — 지우거나 뺏지 않는다',
-      !second.ok && second.kind === 'HELD' && existsSync(p))
-    check('🔴 남의 token 으로는 못 푼다',
-      releaseLock({ path: p, token: 'not-mine' }) === 'NOT_MINE' && existsSync(p))
-    check('🟢 내 token 으로는 푼다', mine.ok && releaseLock(mine.handle) === 'RELEASED' && !existsSync(p))
-    // 🔴 시효가 지난 락도 **뺏지 않는다** — 사람이 치울 때까지 멈춘다(fail-closed)
-    writeFileSync(p, JSON.stringify({ token: 'dead', pid: 1, at: new Date(Date.now() - 3_600_000).toISOString() }))
-    const stale = acquireLock(p, Date.now(), 1000)
-    check('🔴 죽은 락을 자동으로 뺏지 않는다', !stale.ok && stale.kind === 'STALE_HELD' && existsSync(p))
-    check('🔴 관제가 그것을 이상으로 낸다', lockAnomaly(p, Date.now(), 1000) !== null)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+  const code = runner.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  check('🔴 러너가 옛 wx 잠금(collect-lock) · 시효 판정 · 자동 회수를 쓰지 않는다',
+    !/collect-lock|acquireLock\(|releaseLock\(|lockAnomaly\(|STALE_HELD|stale-held|supply-process\.lock|LOCK_TTL_MS/.test(code)
+    && !/rmSync\([^)]*lock|renameSync\([^)]*lock|unlinkSync\([^)]*lock/i.test(code))
+  check('🔴 live 진입은 커널 lease(supplyEntry) 하나 — 쓸 수 있는 실행만 lease 를 지나고 관측 실행은 probe 만 한다',
+    (code.match(/supplyEntry\(/g) ?? []).length === 1
+    && /return mayWriteRunState\(\{ live: LIVE, killOpen \}\) \? viaLease\(\) : main\(null\)/.test(code)
+    && /body: \(proof\) => main\(proof\)/.test(code) && /probeSupplyLease\(process\.env\)/.test(code))
+  check('🔴 쓸 수 있는 실행인데 lease 증명이 없으면 LOCKED 로 막는다(fail-closed)',
+    /\} else if \(proof === null\) \{\s*\n\s*lockView = 'unreadable'/.test(code))
+  check('🔴 DB 클라이언트는 본체(main) 안에서만 — 진입부 · 모듈 최상위에 PrismaClient 생성 0',
+    (code.match(/new PrismaClient\(\)/g) ?? []).length === 1
+    && code.indexOf('new PrismaClient()') > code.indexOf('async function main(proof: LeaseProof | null)')
+    && code.indexOf('new PrismaClient()') < code.indexOf('async function entry()'))
+  check('🔴 자식 단계는 npx 를 거치지 않고 같은 Node · loader 로 — fd 9 는 lease 증명이 있을 때만(stageSpawnOf)',
+    /const how = stageSpawnOf\(script, args, STAGE_LEASE\)/.test(code) && !/spawn\('npx'/.test(code))
+  check('🔴 main 안에 process.exit 이 없다 — 예외도 진입부 finally 를 지난다', (() => {
+    const body = code.slice(code.indexOf('async function main('), code.indexOf('async function entry('))
+    return !/process\.exit\(/.test(body)
+  })())
 }
 
 check('🔴 회차 기록 이름이 관제가 찾는 형태다', RUN_FILE_RE.test('supply-process-20260911-120000.run.json'))

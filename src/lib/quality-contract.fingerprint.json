@@ -1,21 +1,21 @@
 {
-  "version": "quality-v7",
-  "digest": "ef9ff369253ee95de6707acd7a4c8de7cee294a9023c8a7833d64150b33bc8de",
+  "version": "quality-v9",
+  "digest": "b3f1ed5c4368ab13ff27f51067fc7b11b1ba8de3bdefef7598f607d7daa6ec9e",
   "files": {
-    "src/lib/quality-contract.ts": "952bd6c5f0a15b1ef122fe98ccfc1d987da3d0a38cd8662419321d82ba1aa0ca",
+    "src/lib/quality-contract.ts": "5a82160372579c2f5167963ac14a27423e09728b0d41ee0ba282098de6cb37e4",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "ce3fc45e1fafdbf19b8528a38507deda68487942072679f966f85b907f50117e",
+    "src/lib/content-core/draft-life-gates.ts": "51550b880040aed8c0db7557c921755b367acbdef80ec457d82b71df2e2003b5",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "98de3892fec23d1d014ec5b3b0cef0802a7c4c3db6c7d348cef59f91913bd8e8",
-    "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
+    "src/lib/content-core/pipeline.ts": "e510db30a44267a9704a03ec030108fd84965a59dda2e4ded8f81070d4b1808c",
+    "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
     "src/lib/auto-ready-v2.ts": "3b678eecbc10f0cc87eff300a3fecfec9b57204d735c35d558b7f28c24922b43",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
-    "scripts/lib/content-core-run.mts": "f339896c32efa6f9e19c057579973322327a2869f272eeac28087daafd37c09d",
-    "scripts/lib/content-core-prompts.mts": "c37bf7d4b5fea4000e61cd94de40bfbaba8a6f607dd34880f0e59b1d0de11500",
+    "scripts/lib/content-core-run.mts": "bc4fbb119cd916a200cbd0a9245d1bbf7042777b07c3b480294131484c3d9800",
+    "scripts/lib/content-core-prompts.mts": "d064ae7aaf7afcbddb3e85c8d46855335d663a55feb3b12c3ee99c8f5013ce4b",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -27,14 +27,14 @@
     "src/lib/persona-no-go.ts": "03e50a98ccaf2b17582d14603d89fba9a7f303aed0f6a8ea606c26f07a070b8e",
     "src/lib/auto-ready-defect-resolution.ts": "3a631b35672ecfa30fbe421a088e803686bd6117aeb851b38553235cee64281a",
     "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209",
-    "src/lib/content-core/speaker.ts": "0cf4877b9df4940080e01ceac68c4f193c0121c6d29feeb5545d845d07f139cc"
+    "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
+    "src/lib/content-core/family-specifics.ts": "fbed290b61cb864326035832eb2277615dc430779807fc245e1213f87ed4087e"
   },
   "acknowledgement": {
     "kind": "behaviorUnchanged",
-    "reason": "Persona 코드 비교를 persona-code 숫자순으로 통일(동점 정렬·카드 헤딩 P\\d{2,3}). P01~P99 9801쌍에서 숫자순=옛 사전순(persona-scale-base-check) · 현재 정본 카드 파싱 결과 동일 · 세 자리 코드는 아직 없다",
+    "reason": "Persona code comparison is numeric; P01-P99 ordering and current card parsing are unchanged, while P100+ becomes stable",
     "changedFiles": [
       "src/lib/original-post-persona-match.ts",
-      "src/lib/persona-pool-card.ts",
       "src/lib/content-core/speaker.ts"
     ]
   }

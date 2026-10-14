@@ -38,6 +38,7 @@ import {
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
 import { readSelfAgeClaim, OTHER_MARKERS } from '../persona-self-age'
+import { familyMismatches, readFamilySpecifics } from './family-specifics'
 import {
   AXIS_LABEL, expectedSelfFactsIn, type SpeakerRelativeAxis, type FactRole,
 } from './speaker-relative-facts'
@@ -63,7 +64,12 @@ export type SpeakerRelativeEntry = {
  * 🔴 **v7 (2026-10-12 Batch B)** — Persona 를 판독이 아니라 코드가 정한다. 판독 답의 `personaCode` 는
  *    읽지 않고, 자격 판정은 후보 전원에 대해 코드가 한다.
  */
-export const SPEAKER_PLAN_VERSION = 'speaker-plan-v7'
+/**
+ * 🔴 **v8 (2026-10-13 · quality-v8 보정 · 14:40 감사 결함)** — 1인칭 근거 줄의 **구체적 가족 사실**(자녀 수 · 성별 · 나이대)이
+ *    정본 카드와 정확히 맞아야 허가한다(`family-specifics`). 앞판은 `children=있음` 만 대조해 자녀 1명 카드가 `아들 둘` 을 말했다.
+ *    카드에 자녀 성별 칸이 없으므로 성별을 담은 근거로는 1인칭을 허가하지 않는다 → `requiredValueUnmet`.
+ */
+export const SPEAKER_PLAN_VERSION = 'speaker-plan-v8'
 
 /**
  * 🔴 **아는 값만 통과시킨다** (2026-09-23). 카드에 적힐 수 있는 값을 **열거**한다 —
@@ -578,6 +584,18 @@ export function checkWarrantShape(input: {
   return { ok: true }
 }
 
+/** 🔴 근거 조각이 든 원문 **줄 전체** — 모델이 고른 조각이 좁아도(`데리고`) 그 줄의 가족 사실을 본다. 못 찾으면 조각 그대로 */
+function evidenceLineOf(text: string, spans: readonly EvidenceSpan[]): string {
+  const flat = (x: string): string => x.replace(/\s+/g, '')
+  const want = flat(text)
+  if (want === '') return text
+  for (const sp of spans) {
+    const line = sp.text.split(/\n+/).find((l) => flat(l).includes(want))
+    if (line !== undefined) return line
+  }
+  return text
+}
+
 /**
  * 🔴 **1인칭을 허가해도 되는가.** 하나라도 어긋나면 허가하지 않는다.
  *    모양 검사(`checkWarrantShape`) 뒤에 **이 사람의 정본 카드**가 요구값을 충족하는지 본다.
@@ -602,6 +620,17 @@ export function verifySelfWarrants(input: {
      */
     if (!hasFact(p, w.fact, w.requiredValue)) {
       return { ok: false, why: 'requiredValueUnmet', detail: `${w.fact}=${w.requiredValue}` }
+    }
+    /**
+     * 🔴 (speaker-plan-v8) **근거 줄의 구체적 가족 사실이 이 카드와 정확히 맞는가.** `children=있음` 은 자녀가 있다는 것만 말한다 —
+     *    근거 줄이 `아들 둘` 이면 그 수 · 성별까지가 1인칭으로 옮겨질 사실이다. 카드가 보증하지 못하면 허가하지 않는다.
+     */
+    //     🔴 줄 전체는 **자녀 축** 근거일 때만 본다 — 배우자 근거 줄에 섞인 자녀 이야기로 1인칭을 막지 않는다(그것은 생성 뒤 게이트 몫)
+    const childAxis = w.fact === 'children' || w.fact === 'childAgeBand'
+    const familyText = childAxis ? evidenceLineOf(w.evidenceText, input.spans) : w.evidenceText
+    const family = familyMismatches(readFamilySpecifics(familyText), p)
+    if (family.length > 0) {
+      return { ok: false, why: 'requiredValueUnmet', detail: `${w.fact}: ${family.join(' · ')}` }
     }
     // 🔴 통과한 것에만 **코드가 읽은** 카드 값을 찍는다
     verified.push({ ...w, verifiedCardValue: cardValueText(p, w.fact) })

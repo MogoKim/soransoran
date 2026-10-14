@@ -1383,12 +1383,19 @@ expect(
     /const quality = options\.quality \?\? QUALITY/.test(OPTIMIZE),
   true,
 )
+/**
+ * 🔴 (2026-10-14) 파일 처리는 `post-image-upload.ts` 로 옮겼다 — 운영 직접 작성 업로드와 같은 함수를 지난다.
+ *    회원 라우트가 그 함수를 자기 id 로 부르고, 그 함수가 optimizeImage 를 인자 없이 부르는지 둘 다 본다.
+ */
+const POST_IMAGE_UPLOAD = readFileSync(join(ROOT, 'src/lib/post-image-upload.ts'), 'utf8')
 expect(
   '회원 업로드는 optimizeImage 를 인자 없이 부른다 — 동작이 그대로다',
-  /await optimizeImage\(raw\)/.test(MEMBER_UPLOAD),
+  /receivePostImage\(request, \{ ownerId: userId, store: uploadToR2/.test(MEMBER_UPLOAD)
+    && /const optimize = opts\.optimize \?\? optimizeImage/.test(POST_IMAGE_UPLOAD)
+    && /await optimize\(raw\)/.test(POST_IMAGE_UPLOAD),
   true,
 )
-expect('회원 업로드 key 자리는 그대로 posts/ 다', /`posts\/\$\{userId\}\//.test(MEMBER_UPLOAD), true)
+expect('회원 업로드 key 자리는 그대로 posts/ 다', /`posts\/\$\{opts\.ownerId\}\//.test(POST_IMAGE_UPLOAD), true)
 expect('회원 업로드는 여전히 세션 로그인을 본다', /const session = await auth\(\)/.test(MEMBER_UPLOAD), true)
 
 console.log('\n══════ 어드민 메뉴 · 경로')
@@ -1982,7 +1989,9 @@ expect('돌려주는 주소가 그 값이다', /return \{ key, url \}/.test(R2_S
 const ADMIN_UPLOAD_SRC = readFileSync(join(ROOT, 'src/app/api/admin/hero-banners/upload/route.ts'), 'utf8')
 const MEMBER_UPLOAD_SRC = readFileSync(join(ROOT, 'src/app/api/uploads/route.ts'), 'utf8')
 expect('어드민 업로드가 publicUrlFromKey 를 쓴다', /publicUrlFromKey\(key\)/.test(ADMIN_UPLOAD_SRC), true)
-expect('회원 업로드가 uploadToR2 가 돌려준 주소를 쓴다', /url: stored\.url/.test(MEMBER_UPLOAD_SRC), true)
+expect('회원 업로드가 uploadToR2 가 돌려준 주소를 쓴다',
+  /store: uploadToR2/.test(MEMBER_UPLOAD_SRC) && /url: stored\.url/.test(readFileSync(join(ROOT, 'src/lib/post-image-upload.ts'), 'utf8')), true)
+expect('파일 처리 함수가 env 를 따로 읽지 않는다', /NEXT_PUBLIC_R2_PUBLIC_URL/.test(readFileSync(join(ROOT, 'src/lib/post-image-upload.ts'), 'utf8')), false)
 expect('회원 업로드가 env 를 따로 읽지 않는다', /NEXT_PUBLIC_R2_PUBLIC_URL/.test(MEMBER_UPLOAD_SRC), false)
 
 /**

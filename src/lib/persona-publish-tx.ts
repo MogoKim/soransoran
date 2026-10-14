@@ -17,6 +17,16 @@ import type { CandidateStatus } from './persona-candidate-rules'
 import {
   judgeAutoLane, AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY,
 } from './persona-comment-auto-lane'
+import { readFileSync } from 'node:fs'
+import {
+  followupStageOf, judgeFollowupPublish, readFollowupProfileRaw, readFollowupSwitch, stampFromEditDiff, verifyStamp,
+  type FollowupCommentRow,
+} from './persona-comment-followup'
+import {
+  FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, FOLLOWUP_LANE_DECIDED_BY, personaCommentProvenanceOf,
+} from './stage-evidence'
+import { decisionStageEnv } from './scale-runtime'
+import { OPEN_STATUSES } from './persona-comment-queue'
 
 /**
  * 후보 발행 트랜잭션 — 🔴 실제 write 가 일어나는 유일한 함수
@@ -137,10 +147,20 @@ export async function publishCandidateTx(
      *    🔴 `manual-admin` 과 함께 쓸 수 없다 — 사람 발행은 이 레인이 아니다.
      */
     autoLane?: boolean
+    /**
+     * 🔴 **추가 댓글 레인** (2026-10-14 · PR #704 · 기본 OFF). 첫 댓글 뒤 선택적 추가 0~4건.
+     *    `autoLane`(60분 · 글당 1건) 대신 `judgeFollowupPublish`(스위치 · profile · 도장 · 순번 · 대상 · 시간차 · 실회원 우선)를 본다.
+     *    기존 재검사는 **하나도 빠지지 않고** 그대로 돈다. 표식은 #707 정본(`FOLLOWUP_LANE_*`)이다 —
+     *    단계 증거는 이 댓글을 첫 댓글로 세지 않는다. `autoLane` · `manual-admin` 과 함께 쓸 수 없다.
+     */
+    followupLane?: boolean
   },
 ): Promise<PublishTxResult> {
   const id = (args.id ?? '').trim()
   if (id === '') return { kind: 'error', message: '대상을 찾을 수 없습니다.' }
+  if (args.followupLane === true && (args.autoLane === true || args.actor === 'manual-admin')) {
+    return { kind: 'blocked', blocks: [{ code: 'FOLLOWUP_LANE', message: '추가 댓글 레인은 첫 댓글 레인·사람 발행과 섞을 수 없다' }] }
+  }
   const now = args.now ?? new Date()
 
   try {
@@ -167,6 +187,8 @@ export async function publishCandidateTx(
           gateStatus: true, gateResults: true, aiToneTags: true,
           // 🔴 생성 근거 — 자동 발행 경로가 다시 검증한다 (0024 전용 컬럼)
           generatedModel: true, canonRunId: true, canonDigest: true,
+          // 🔴 추가 댓글 레인 — 멱등 열쇠 · 도장(editDiff.followupStamp)
+          dedupKey: true, editDiff: true,
           persona: {
             select: {
               id: true, status: true, userId: true, dailyCap: true, weeklyCap: true,
@@ -349,11 +371,97 @@ export async function publishCandidateTx(
         }
       }
       /**
+       * 🔴 **추가 댓글 레인 — 이 트랜잭션 안에서 다시 읽은 사실로 판정한다** (2026-10-14).
+       *    댓글·출처(Queue·ActivityLog)·신고·다른 열린 후보·오늘 추가 수·profile·그날 단계를 전부 여기서 다시 읽는다.
+       */
+      const followupLane = args.followupLane === true
+      let followupParentId: string | null = null
+      if (followupLane) {
+        if (post === null) return { kind: 'blocked', blocks: [{ code: 'FOLLOWUP_LANE', message: '대상 글이 없다' }] }
+        const rows = await tx.comment.findMany({
+          where: { postId: post.id },
+          select: {
+            id: true, postId: true, parentId: true, createdAt: true, isDeleted: true, authorId: true,
+            commentOrigin: true, personaId: true, operatorWriterId: true,
+          },
+        })
+        const ids = rows.map((c) => c.id)
+        const personaIds = rows.filter((c) => c.commentOrigin === 'PERSONA').map((c) => c.id)
+        const dayStart = kstDayStart(now)
+        const [qs, ls, reports, otherOpen, fuToday, fuPersonaToday] = await Promise.all([
+          tx.personaApprovalQueue.findMany({
+            where: { publishedCommentId: { in: personaIds } },
+            select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
+          }),
+          tx.personaActivityLog.findMany({
+            where: { kind: 'comment', targetId: { in: personaIds } },
+            select: { targetId: true, personaId: true, decidedBy: true, publishedAt: true },
+          }),
+          tx.report.findMany({ where: { commentId: { in: ids } }, select: { commentId: true } }),
+          tx.personaApprovalQueue.count({
+            where: { targetPostId: post.id, status: { in: [...OPEN_STATUSES] }, id: { not: row.id } },
+          }),
+          tx.personaApprovalQueue.count({
+            where: { decidedBy: FOLLOWUP_LANE_DECIDED_BY, status: 'PUBLISHED', decidedAt: { gte: dayStart } },
+          }),
+          tx.personaApprovalQueue.count({
+            where: { decidedBy: FOLLOWUP_LANE_DECIDED_BY, status: 'PUBLISHED', decidedAt: { gte: dayStart }, personaId: row.persona.id },
+          }),
+        ])
+        const reported = new Set(reports.map((r) => r.commentId))
+        const comments: FollowupCommentRow[] = rows.map((c) => ({
+          ...c,
+          // 🔴 트랜잭션은 반응을 다시 분류하지 않는다 — 대상은 도장이 가리키고, 유효성만 다시 본다
+          reaction: null,
+          reported: reported.has(c.id),
+          provenance: c.commentOrigin !== 'PERSONA' ? null : personaCommentProvenanceOf({
+            comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
+            queues: qs.filter((q) => q.publishedCommentId === c.id).map((q) => ({
+              targetPostId: q.targetPostId, personaId: q.personaId, status: q.status, decidedBy: q.decidedBy,
+              decidedAtMs: q.decidedAt?.getTime() ?? null,
+            })),
+            logs: ls.filter((l) => l.targetId === c.id).map((l) => ({
+              personaId: l.personaId, decidedBy: l.decidedBy, publishedAtMs: l.publishedAt?.getTime() ?? null,
+            })),
+          }),
+        }))
+        const fu = judgeFollowupPublish({
+          switch: readFollowupSwitch(process.env),
+          commentStage: stage.stage,
+          actor: args.actor ?? 'automation',
+          queueStatus: row.status,
+          dedupKey: row.dedupKey,
+          editDiff: row.editDiff,
+          post: {
+            postId: post.id, publishedAtMs: (post.publishAt ?? post.createdAt).getTime(), postStatus: post.status,
+            authorPersonaId: post.personaId,
+            // 🔴 Persona 가 쓴 글만 관리형이다 — 실회원·운영자 글에는 잇지 않는다
+            autoManagedPost: post.personaId !== null,
+            postReaction: null, comments, hasOpenQueue: false,
+          },
+          candidatePersonaId: row.persona.id,
+          otherOpenQueue: otherOpen > 0,
+          profile: readFollowupProfileRaw(process.env, (p) => readFileSync(p, 'utf-8')),
+          // 🔴 그날 단계는 consumer 가 넣은 결정 env 로만 — 러너·트랜잭션은 결정 표를 직접 읽지 않는다(두 번째 판독 금지)
+          runtimeStage: followupStageOf(decisionStageEnv(process.env), now).stage,
+          followupsTodayInTx: fuToday,
+          personaFollowupsTodayInTx: fuPersonaToday,
+          nowMs: now.getTime(),
+        })
+        if (!fu.ok) {
+          return { kind: 'blocked', blocks: fu.blockers.map((message): PublishBlock => ({ code: 'FOLLOWUP_LANE', message })) }
+        }
+        const st = verifyStamp(stampFromEditDiff(row.editDiff), { postId: post.id, dedupKey: row.dedupKey })
+        if (!st.ok) return { kind: 'blocked', blocks: [{ code: 'FOLLOWUP_LANE', message: st.reason }] }
+        followupParentId = st.stamp.parentCommentId
+      }
+      /**
        * 🔴 **무인 레인에서는 이 트랜잭션이 곧 기계 승인이다.** 위 판정을 통과한 PENDING 만
        *    APPROVED 로 **보고** 아래 재검사를 그대로 태운다 — 재검사를 건너뛰지 않는다.
        *    DB 의 상태는 아래 조건부 UPDATE 가 PENDING → PUBLISHED 로 한 번에 옮긴다.
        */
-      const effectiveStatus = autoLane ? 'APPROVED' : row.status
+      const machineLane = autoLane || followupLane
+      const effectiveStatus = machineLane ? 'APPROVED' : row.status
       const storedGates = readStoredGates(row.gateResults)
       /**
        * 🔴 **생성 근거를 트랜잭션 안에서 다시 본다.**
@@ -436,6 +544,8 @@ export async function publishCandidateTx(
           source: 'SYSTEM',
           commentOrigin: 'PERSONA',
           personaId: row.persona.id,
+          // 🔴 추가 댓글 답글만 부모가 있다 — 첫 댓글 · 사람 발행은 언제나 최상위다
+          ...(followupLane && followupParentId !== null ? { parentId: followupParentId } : {}),
         },
         select: { id: true },
       })
@@ -454,7 +564,7 @@ export async function publishCandidateTx(
        */
       const updated = await tx.personaApprovalQueue.updateMany({
         // 🔴 무인 레인은 PENDING 에서 바로 간다 — 사람 승인 행(APPROVED·EDITED)을 이 경로로 잡지 않는다
-        where: autoLane
+        where: machineLane
           ? { id: row.id, status: 'PENDING', publishedCommentId: null }
           : {
             id: row.id,
@@ -465,6 +575,7 @@ export async function publishCandidateTx(
           status: 'PUBLISHED', publishedCommentId: comment.id,
           // 🔴 누가 결정했는가 — 기계 결정은 decidedBy 로만 구분된다
           ...(autoLane ? { decidedBy: AUTO_LANE_DECIDED_BY, decidedAt: now } : {}),
+          ...(followupLane ? { decidedBy: FOLLOWUP_LANE_DECIDED_BY, decidedAt: now } : {}),
         },
       })
       if (updated.count === 0) throw new Error(QUEUE_RACE)
@@ -481,7 +592,7 @@ export async function publishCandidateTx(
             ? {}
             : { gateHits: row.gateResults as Prisma.InputJsonValue }),
           aiToneTags: row.aiToneTags,
-          decidedBy: autoLane ? AUTO_LANE_ACTIVITY_DECIDED_BY : 'operator',
+          decidedBy: autoLane ? AUTO_LANE_ACTIVITY_DECIDED_BY : followupLane ? FOLLOWUP_LANE_ACTIVITY_DECIDED_BY : 'operator',
           publishedAt: now,
         },
       })

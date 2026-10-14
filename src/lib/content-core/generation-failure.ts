@@ -4,7 +4,8 @@
  * 🔴 **왜 따로 두는가.** 72시간 실측(10-08~10-11) 유료 생성 89회 중 기술 실패 35회가
  *    `noResponse` 하나에 timeout 과 제공사 오류를 섞어 담았다. 둘은 다음 행동이 다르다 —
  *    timeout·429·5xx 는 다시 물으면 달라질 수 있고, 400·401 은 다시 물어도 같다.
- *    🔴 재시도 자격은 **이 파일 하나**가 정한다. 호출부가 오류 문자열을 따로 읽지 않는다.
+ *    🔴 요청 결과의 재시도 자격은 **이 파일 하나**가 정한다. 다만 같은 출력 상한을 다시 쓰면 조건이
+ *    바뀌지 않는 화자 계획 잘림은 파이프라인이 단계 정보와 함께 제외한다.
  *
  * 🔴 **안전·품질·Persona 부적격은 재시도 대상이 아니다.** 다시 물어 다른 답을 받는 것은
  *    판정을 우회하는 것이다. 재시도는 **답을 받지 못한** 요청에만 있다.
@@ -36,7 +37,7 @@ export type CallOutcome = (typeof CALL_OUTCOMES)[number]
  */
 export const GENERATION_RETRY_MAX = 1
 
-/** 🔴 다시 물으면 달라질 수 있는 결과 — **이것만** 재시도한다 */
+/** 🔴 다시 물으면 달라질 수 있는 결과 — 단계별 제외를 적용하기 전의 후보 집합 */
 export const TRANSIENT_CALL_OUTCOMES = [
   'timeout', 'truncated', 'providerTransient',
 ] as const satisfies readonly CallOutcome[]

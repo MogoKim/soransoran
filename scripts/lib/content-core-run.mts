@@ -9,8 +9,10 @@
  *   → ③ 원문과 초안을 **직접** 견주는 통합 검수
  *   → 사람 판정 한 장
  *
- * 🔴 **일시적 기술 실패(잘림 · timeout · 네트워크 · 429 · 5xx)는 원천당 `retryCap` 번만 다시 묻는다.**
+ * 🔴 **일시적 기술 실패(timeout · 네트워크 · 429 · 5xx)는 원천당 `retryCap` 번만 다시 묻는다.**
  *    재시도도 주입된 `ask` 를 지난다 — 회차 예산·장부를 우회하지 않는다 (2026-10-12 Batch B).
+ *    화자 계획이 출력 상한에서 잘린 경우에는 같은 상한·같은 요청을 되풀이하지 않는다. 운영에서 같은
+ *    원천 2건이 두 자연 회차 동안 4/4 다시 잘려, 결과 없이 뒤 원천의 예산만 소모한 것이 확인됐다.
  * 🔴 **효과를 주입받는다.** provider·시계·예산을 직접 부르지 않는다.
  * 🔴 **DB · 큐 · 발행 · 네트워크를 모르는 파일이다.**
  * 🔴 **v1 의 생성·검수 계약을 가져오지 않는다.** 다만 금지 낱말 · 복제 · 자기 나이
@@ -355,7 +357,11 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const ask = async (stage: AskStage, system: string, payload: string): Promise<AskResult> => {
     const first = await once(stage, system, payload, 1)
-    if (!isTransientCall(classifyCall(first)) || retried >= retryCap) return first
+    const outcome = classifyCall(first)
+    // 같은 1,200-token 상한으로 같은 화자 계획을 즉시 반복하면 잘림 조건이 바뀌지 않는다.
+    // 초안·검수의 일시 잘림과 timeout/provider 오류 재시도는 그대로 유지한다.
+    if ((stage === 'speakerPlan' && outcome === 'truncated')
+      || !isTransientCall(outcome) || retried >= retryCap) return first
     retried += 1
     return once(stage, system, payload, 2)
   }
@@ -704,7 +710,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
   phase = 'draftGen'
-  const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
+  const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet, plan }))
   const dC = completionOf(dRes)
   const read = dC.complete ? parseDraft(dRes.rawText, persona.code) : null
   if (read === null || !read.ok) {

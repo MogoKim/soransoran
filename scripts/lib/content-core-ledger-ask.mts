@@ -12,7 +12,7 @@
  *    ④ 장부가 정산한 금액을 그대로 싣는다 — 다시 계산하지 않는다. 정산 못 한 건은 `null`(0원이 아니다)
  */
 import type { LedgerStage } from '../../src/lib/llm-ledger'
-import { STAGE_MAX_OUTPUT_TOKENS } from '../../src/lib/content-core/pipeline'
+import { STAGE_MAX_OUTPUT_TOKENS, STAGE_THINKING_LEVEL } from '../../src/lib/content-core/pipeline'
 import type { Ask, AskResult, AskStage } from './content-core-run.mjs'
 import { LEDGER_BLOCKED, type SupplyCallResult } from './supply-llm-call.mjs'
 import type { ProviderModel } from './voice-m3-provider.mjs'
@@ -45,6 +45,7 @@ export type LedgerAskDeps = {
   /** 🔴 공급 장부 wrapper — 예약 → 요청 → 정산이 전부 여기서 일어난다 */
   call: (
     stage: LedgerStage, system: string, payload: string, maxOutputTokens: number, model: ProviderModel,
+    thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high',
   ) => Promise<SupplyCallResult>
 }
 
@@ -62,6 +63,7 @@ export function ledgerAskOf(d: LedgerAskDeps): Ask {
     const r = await d.call(
       (attempt === 2 ? V2_LEDGER_RETRY_STAGE : V2_LEDGER_STAGE)[stage],
       system, payload, STAGE_MAX_OUTPUT_TOKENS[stage], model,
+      STAGE_THINKING_LEVEL[stage] ?? undefined,
     )
     const code = String(r.errorCode ?? '')
     return {

@@ -237,3 +237,143 @@ export function wipCountsBySpeaker(input: {
   }
   return { byCode, released, unattributed }
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 생성 시도 여력 — 공개 자리와 나눈다 (speaker-attempt-v1 · 2026-10-13 P0)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **무엇이 틀렸나** (2026-10-13 12:15 회차 실측).
+ *
+ *    화자 여력(`openDays`)은 가까운 수요 지평의 **공개 자리 수**로 채운 값이다 — 자리가 4개면
+ *    전원 합쳐 4. 그런데 원천은 수율(결말 상한 0.16)만큼 넉넉히 사서 **실제 SEED 10건**이 왔다.
+ *    그 결과 주간 상한 · 최소 간격을 통과한 화자가 27명인데도 4명(WIP 1 차감 → 3명)만 후보가 되고
+ *    판정 비용을 낸 원천 7건이 부르기 전에 멈췄다. **"후보 수 ≤ 공개 자리 수"** 는 원천 하나가
+ *    반드시 글 하나가 된다는 가정이다. 그 가정은 수율이 1 일 때만 맞다.
+ *
+ * 🔴 **나눈 것.**
+ *    · 공개 자리(`releaseSeats`) — 그대로다. 발행 슬롯 · release profile · 주간 상한 · 최소 간격 ·
+ *      stage 증거는 이 파일이 건드리지 않는다. 시도가 10건 성공해도 나가는 수는 발행 러너가 정한다.
+ *    · 생성 시도 여력(`attemptCapacity`) — **같은 지평 안에서 실제로 발행 자격이 있는 날**이 있는
+ *      화자에게, WIP 를 뺀 뒤 **회차당 1**. 자리를 나눠 갖지 않는다 — 각자 독립으로 판정한다.
+ *
+ * 🔴 **하지 않는 것.**
+ *    · 자격 없는 화자를 넣지 않는다 — 지평 안 어느 자리에서도 상한·간격에 걸리면 0 이다
+ *    · 한 회차에 한 사람에게 두 원천을 주지 않는다 — 사람이 모자라면 원천을 보류한다
+ *    · 공개 자리 수(`dailyTarget`)를 키워 흉내 내지 않는다 — 그 값은 발행 목표의 뜻이다
+ */
+export const ATTEMPT_CONTRACT = 'speaker-attempt-v1'
+/** 🔴 한 회차에 한 화자가 받는 생성 시도 상한 — 사람이 모자라도 늘리지 않는다 */
+export const ATTEMPTS_PER_SPEAKER_PER_RUN = 1
+
+export type AttemptCapacityRow = {
+  /** 지평 안에서 이 화자가 **혼자 판정해** 발행 자격이 있는 날 수 — 자리 나눔 없음 */
+  eligibleDays: number
+  /** 🔴 이 회차 생성 시도 여력 — `min(1, max(0, eligibleDays − WIP))` */
+  attemptCapacity: number
+}
+
+export function planAttemptCapacity(input: {
+  /** 공개 자리와 **같은** 지평의 날 (그날 첫 자리 시각) */
+  days: readonly Date[]
+  /** 🔴 실제 이력 — 계획한 자리를 쌓지 않는다(자리를 나눠 갖지 않으므로) */
+  history: readonly { code: string; matchedAts: readonly Date[] }[]
+  /** 🔴 발행 정본이 판정한다 — 공개 자리 계획과 같은 함수 · 같은 cap */
+  availableAt: (
+    hist: readonly { code: string; matchedAts: readonly Date[] }[],
+    at: Date,
+    caps: { postsPerWeek: number; minDaysBetween: number },
+  ) => string[]
+  caps: { postsPerWeek: number; minDaysBetween: number }
+  /** 말투 근거가 선 화자 — 주지 않으면 전원 (공개 자리 계획과 같은 주입) */
+  canTakeSlot?: (code: string) => boolean
+  /** 🔴 화자별 WIP — 공개 자리 계획과 **같은 값**을 뺀다 */
+  wipOf: (code: string) => number
+}): ReadonlyMap<string, AttemptCapacityRow> {
+  const canTake = input.canTakeSlot ?? ((): boolean => true)
+  const eligibleDays = new Map<string, number>()
+  for (const at of input.days) {
+    for (const code of input.availableAt(input.history, at, input.caps)) {
+      if (!canTake(code)) continue
+      eligibleDays.set(code, (eligibleDays.get(code) ?? 0) + 1)
+    }
+  }
+  const out = new Map<string, AttemptCapacityRow>()
+  for (const h of input.history) {
+    const days = eligibleDays.get(h.code) ?? 0
+    const left = Math.max(0, days - Math.max(0, input.wipOf(h.code)))
+    out.set(h.code, { eligibleDays: days, attemptCapacity: Math.min(ATTEMPTS_PER_SPEAKER_PER_RUN, left) })
+  }
+  return out
+}
+
+/**
+ * 🔴 **생성 러너가 원천에 화자를 주는 유일한 입구** (speaker-attempt-v1 · 전체 후보 풀 · 2026-10-14).
+ *
+ * 🔴 **무엇이 틀렸나** (2026-10-14 12:15 회차 실측). 앞판(`planSpeakerAttempts`)은 판독 결과를 알기 **전에**
+ *    시도 가능한 27명을 원천 10개에 stride 로 **겹치지 않게 미리 나눴다** — 원천마다 2~3명이었다.
+ *    판독(`speakerPlan`)은 Persona 를 보지 않고, 자격은 코드(`decidePersona`)가 정본 카드로 정하므로
+ *    후보를 넓혀도 유료 호출은 늘지 않는데도 그랬다. 그 결과 `requiredValueUnmet` 2건이 묶음 3명 안에
+ *    자격자가 없어 멈췄다 — 묶음 밖에는 각각 3명 · 11명이 있었다(read-only 재생).
+ *
+ * 🔴 **고친 방법.** 원천을 **들어온 순서대로** 처리하면서 매 원천에 `시도 가능 전체 − 이번 회차에 이미 선택된 사람`
+ *    을 준다. `decidePersona` 가 그중에서 원천별 정본 순서(`orderPersonasForSource`)로 고른다 — 순서는 건드리지 않는다.
+ *
+ * 🔴 **지키는 것.**
+ *    · 한 회차에 한 사람은 한 원천 — `decidePersona` 가 **고른 순간** `markChosen` 한다. 뒤 초안·게이트가
+ *      실패해도 같은 회차의 다른 원천에 다시 주지 않는다(같은 사람의 글이 한 회차에 둘 생기지 않는다)
+ *    · 유료 경로에 들어가는 원천 수 상한은 앞판과 같다 — `min(실제 SEED, 시도 가능 인원)`. 그 뒤 원천은
+ *      provider 호출 없이 보류다(`[]`). 후보를 넓힌 것만으로 판독 호출이 늘지 않는다
+ *    · 공개 자리 · 상한 · 간격 · 시도 여력 계산은 이 함수가 모른다 — 받은 `attemptCapacity` 를 좁히기만 한다
+ *    · 입력 배열 순서와 무관하다 — 코드순으로 정렬해 둔다
+ */
+export type AttemptPool = {
+  /** 실제 SEED 수 */
+  readonly attemptDemand: number
+  /** 시도 가능 인원 (`attemptCapacity > 0`) */
+  readonly attemptSupply: number
+  /** 🔴 유료 경로에 들어갈 수 있는 원천 수 상한 = `min(demand, supply)` */
+  readonly attemptLimit: number
+  /** 다음 원천의 후보 — 상한을 다 썼거나 남은 사람이 없으면 `[]`(provider 호출 없이 보류) */
+  take(): readonly string[]
+  /** 🔴 `decidePersona` 가 고른 사람을 사용됨으로 적는다 — 풀 밖이거나 이미 쓴 사람이면 throw */
+  markChosen(code: string): void
+  readonly started: number
+  readonly used: ReadonlySet<string>
+  /** 시도 가능 인원 — 코드순 */
+  readonly eligible: readonly string[]
+}
+
+export function createAttemptPool(input: {
+  attemptCapacity: readonly { code: string; attemptCapacity: number }[]
+  attemptDemand: number
+}): AttemptPool {
+  const eligible = [...new Set(input.attemptCapacity
+    .filter((c) => Math.min(ATTEMPTS_PER_SPEAKER_PER_RUN, c.attemptCapacity) > 0)
+    .map((c) => c.code))]
+    .sort((a, b) => a.localeCompare(b))
+  const demand = Math.max(0, Math.floor(input.attemptDemand))
+  const limit = Math.min(demand, eligible.length)
+  const used = new Set<string>()
+  let started = 0
+  return {
+    attemptDemand: demand,
+    attemptSupply: eligible.length,
+    attemptLimit: limit,
+    take() {
+      if (started >= limit) return []
+      const left = eligible.filter((c) => !used.has(c))
+      if (left.length === 0) return []
+      started += 1
+      return left
+    },
+    markChosen(code) {
+      if (!eligible.includes(code)) throw new Error(`시도 풀 밖의 Persona 가 선택됐다 (${code})`)
+      if (used.has(code)) throw new Error(`한 회차에 같은 Persona 가 두 원천에 선택됐다 (${code})`)
+      used.add(code)
+    },
+    get started() { return started },
+    used,
+    eligible,
+  }
+}

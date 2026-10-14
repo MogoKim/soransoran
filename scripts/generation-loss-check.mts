@@ -251,13 +251,19 @@ console.log('\n③ 🔴 일시적 기술 실패만 원천당 1회 다시 묻는�
 // ─────────────────────────────────────────────────────────
 {
   const t = await run({ script: { beats: { speakerPlan: ['truncated'] } } })
-  check('🔴 🔴 판독 잘림 → 1회 재시도 → 채택', t.review.machineOutcome === 'adopt' && t.failure === null, attemptsOf(t))
-  check('🔴 🔴 재시도는 자기 줄을 갖는다 — 4줄 · 시도 번호 · 결과',
-    attemptsOf(t) === 'speakerPlan#1:truncated speakerPlan#2:ok draftGen#1:ok semanticReview#1:ok')
-  check('🔴 재시도 요청은 첫 요청과 같다 — 같은 지시 · 같은 입력',
-    SENT[0]!.system === SENT[1]!.system && SENT[0]!.payload === SENT[1]!.payload && SENT[1]!.attempt === 2)
-  check('🔴 🔴 초안은 한 번만 만들었다 — 재시도가 두 번째 초안을 만들지 않는다',
-    SENT.filter((x) => x.stage === 'draftGen').length === 1)
+  check('🔴 🔴 판독 잘림 → 같은 상한 재시도 0 · 뒤 원천 예산 보존',
+    t.cost.totalCalls === 1 && t.draft === null
+    && t.failure?.kind === 'truncated' && t.failure.stage === 'sourceNeed' && t.failure.retried === false,
+    attemptsOf(t))
+
+  const draftCut = await run({ script: { beats: { draftGen: ['truncated'] } } })
+  check('🔴 초안 잘림은 1회 재시도 → 채택',
+    draftCut.review.machineOutcome === 'adopt' && draftCut.failure === null, attemptsOf(draftCut))
+  check('🔴 🔴 초안 재시도는 자기 줄을 갖는다 — 4줄 · 시도 번호 · 결과',
+    attemptsOf(draftCut) === 'speakerPlan#1:ok draftGen#1:truncated draftGen#2:ok semanticReview#1:ok')
+  check('🔴 초안 재시도 요청은 첫 요청과 같다 — 같은 지시 · 같은 입력',
+    SENT[1]!.system === SENT[2]!.system && SENT[1]!.payload === SENT[2]!.payload && SENT[2]!.attempt === 2)
+  check('🔴 🔴 초안은 한 편만 남는다 — 재시도가 artifact 를 늘리지 않는다', draftCut.draft !== null)
 
   const tt = await run({ script: { beats: { speakerPlan: ['timeout', 'timeout'] } } })
   check('🔴 🔴 timeout 두 번 → 재시도 1회 뒤 멈춘다 (세 번째 없음)',
@@ -382,22 +388,22 @@ const sumSettled = (lines: readonly LedgerEntry[]): number =>
 
 try {
   // ── 재시도 성공 ──
-  const s = await ledgerRun({ beats: ['truncated', 'ok', 'ok'] })
+  const s = await ledgerRun({ beats: ['ok', 'truncated', 'ok'] })
   const stages = s.paidLines.filter((e) => e.status !== 'reserved').map((e) => e.stage).join(',')
-  check('🔴 🔴 [장부] 재시도 성공 — sourceNeed · sourceNeedRetry · draftGen · draftQuality 각 1건',
-    stages === 'sourceNeed,sourceNeedRetry,draftGen,draftQuality', stages)
+  check('🔴 🔴 [장부] 재시도 성공 — sourceNeed · draftGen · draftGenRetry · draftQuality 각 1건',
+    stages === 'sourceNeed,draftGen,draftGenRetry,draftQuality', stages)
   check('🔴 🔴 [장부] 시도마다 예약 1 · 정산 1 — 이중 정산 0', attemptsWellFormed(s.rawLines))
-  const a1 = s.paidLines.find((e) => e.stage === 'sourceNeed')!.attemptId
-  const a2 = s.paidLines.find((e) => e.stage === 'sourceNeedRetry')!.attemptId
+  const a1 = s.paidLines.find((e) => e.stage === 'draftGen')!.attemptId
+  const a2 = s.paidLines.find((e) => e.stage === 'draftGenRetry')!.attemptId
   check('🔴 [장부] 첫 시도와 재시도는 다른 attemptId · 같은 원천 열쇠',
-    a1 !== a2 && s.paidLines.filter((e) => e.stage.startsWith('sourceNeed')).every((e) => e.sourceKey === 'srcBatchB'))
+    a1 !== a2 && s.paidLines.filter((e) => e.stage.startsWith('draftGen')).every((e) => e.sourceKey === 'srcBatchB'))
   check('🔴 🔴 [장부] 열린 예약 0 — 끝나지 않은 요청이 없다', s.open !== null && s.open.length === 0)
   check('🔴 🔴 [장부] artifact 비용 = 장부 정산 합 (누락 0 · 이중 0)',
     s.art.cost.totalUsd !== null && Math.abs(s.art.cost.totalUsd - sumSettled(s.paidLines)) < 1e-12
     && s.art.cost.calls.length === 4, `${s.art.cost.totalUsd} vs ${sumSettled(s.paidLines)}`)
   check('🔴 [장부] 잘린 첫 시도도 실제 사용량으로 정산됐다 — 돈은 썼다',
-    (s.paidLines.find((e) => e.stage === 'sourceNeed' && e.status === 'settled')?.settledUsd ?? 0) > 0)
-  check('🔴 [집계] 재시도는 `단계:retry` 로 센다', s.counted.join(',') === 'speakerPlan,speakerPlan:retry,draftGen,semanticReview', s.counted.join(','))
+    (s.paidLines.find((e) => e.stage === 'draftGen' && e.status === 'settled')?.settledUsd ?? 0) > 0)
+  check('🔴 [집계] 재시도는 `단계:retry` 로 센다', s.counted.join(',') === 'speakerPlan,draftGen,draftGen:retry,semanticReview', s.counted.join(','))
   check('🔴 채택 · provider 유료 4건', s.art.review.machineOutcome === 'adopt' && PAID === 4, `${s.art.review.machineReason} · paid ${PAID}`)
 
   // ── 최종 실패(timeout 두 번) ──
@@ -418,12 +424,12 @@ try {
   check('🔴 [artifact] 유형 usageUnknown · 비용 UNKNOWN', u.art.failure?.kind === 'usageUnknown' && u.art.cost.totalUsd === null)
 
   // ── 회차 공동 예산이 재시도를 막는다 ──
-  const b = await ledgerRun({ beats: ['truncated', 'ok'], take: 1 })
+  const b = await ledgerRun({ beats: ['timeout', 'ok'], take: 1 })
   check('🔴 🔴 [예산] 회차 공동 예산이 다 찼으면 재시도도 나가지 않는다 — 장부 유료 1건',
     PAID === 1 && b.paidLines.filter((e) => e.status !== 'reserved').map((e) => e.stage).join(',') === 'sourceNeed'
     && b.art.failure?.kind === 'budgetBlocked' && b.art.failure.retried === true, b.paidLines.map((e) => `${e.stage}:${e.status}`).join(' '))
   // ── 장부 회차 요청 상한이 재시도를 막는다 ──
-  const c = await ledgerRun({ beats: ['truncated', 'ok'], runCap: 1 })
+  const c = await ledgerRun({ beats: ['timeout', 'ok'], runCap: 1 })
   const blocked = c.paidLines.find((e) => e.stage === 'sourceNeedRetry')
   check('🔴 🔴 [장부 상한] 회차 요청 상한이 재시도에도 걸린다 — sourceNeedRetry 가 blocked 로 남고 provider 0',
     PAID === 1 && blocked?.status === 'blocked' && blocked.settledUsd === null && attemptsWellFormed(c.rawLines),
@@ -476,3 +482,6 @@ console.log('\n⑥ 🔴 실패 유형 표 · 장부 어휘 · 배선')
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 가짜 provider 검사다 — 실제 모델의 잘림·timeout 이 재시도로 회복되는 비율은 운영 관측으로만 안다.')
 if (fail > 0) process.exit(1)
+
+// 🔴 (2026-10-13 quality-v8) 의미 손실 감사 반례 — 같은 CI 줄(`check:content-core-v2`)에 태운다. 실패하면 그 파일이 1 로 끝낸다
+await import('./semantic-loss-check.mjs')

@@ -1,0 +1,894 @@
+{
+  "_note": "추가 댓글 fixture. 시각은 글 공개 뒤 분(min). 본문 없음 — 반응 라벨만. 필요성은 미해결 hook 만 정한다(글 id 무관). profiles 는 호출부 주입 profile 반례다.",
+  "scenarios": [
+    {
+      "name": "첫 댓글(질문) 뒤 75분 · 체력 4 → 그 질문에 답글 GO",
+      "nowMin": 140,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "GO",
+        "ordinal": 2,
+        "targetKind": "reply",
+        "targetId": "c1"
+      }
+    },
+    {
+      "name": "첫 댓글 직후 20분 → 시간차 WAIT",
+      "nowMin": 30,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "WAIT"
+      }
+    },
+    {
+      "name": "첫 댓글이 그냥 한마디 · 글도 한마디 → 자연스러운 끝 STOP",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "other",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "이어질 거리"
+      }
+    },
+    {
+      "name": "첫 댓글이 한마디라도 글이 질문을 부르면 새 최상위 댓글 GO",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "other",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "GO",
+        "ordinal": 2,
+        "targetKind": "post"
+      }
+    },
+    {
+      "name": "자동 출처 첫 댓글이 없다(수동 Persona 댓글만) → STOP",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "none"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "첫 댓글"
+      }
+    },
+    {
+      "name": "출처가 깨진 Persona 댓글 → BLOCK",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 80,
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience",
+          "provenance": "broken"
+        }
+      ],
+      "expect": {
+        "verdict": "BLOCK"
+      }
+    },
+    {
+      "name": "Persona 5건이 이미 있다 → STOP",
+      "nowMin": 600,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 80,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience",
+          "provenance": "followup"
+        },
+        {
+          "id": "c3",
+          "atMin": 160,
+          "parent": "c2",
+          "origin": "PERSONA",
+          "persona": "pD",
+          "reaction": "question",
+          "provenance": "followup"
+        },
+        {
+          "id": "c4",
+          "atMin": 240,
+          "origin": "PERSONA",
+          "persona": "pE",
+          "reaction": "empathy",
+          "provenance": "followup"
+        },
+        {
+          "id": "c5",
+          "atMin": 320,
+          "parent": "c4",
+          "origin": "PERSONA",
+          "persona": "pF",
+          "reaction": "question",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "5건 상한"
+      }
+    },
+    {
+      "name": "실회원 댓글 1건 → 추가 상한 1 (이미 1건 이었으면 STOP)",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "m1",
+          "atMin": 40,
+          "origin": "MEMBER",
+          "member": "u1",
+          "reaction": "experience"
+        },
+        {
+          "id": "c2",
+          "atMin": 120,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "question",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "실회원 1건"
+      }
+    },
+    {
+      "name": "실회원 댓글 1건 · 추가 0건 → 1건까지는 GO (실회원 댓글에는 답하지 않는다)",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "m1",
+          "atMin": 5,
+          "origin": "MEMBER",
+          "member": "u1",
+          "reaction": "question"
+        },
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "experience",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "GO",
+        "ordinal": 2,
+        "targetKind": "reply",
+        "targetId": "c1"
+      }
+    },
+    {
+      "name": "마지막 말이 실회원 → Persona 가 끼어들지 않는다 STOP",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "m1",
+          "atMin": 200,
+          "parent": "c1",
+          "origin": "MEMBER",
+          "member": "u1",
+          "reaction": "experience"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "실회원"
+      }
+    },
+    {
+      "name": "실회원 댓글 3건 → 추가 0 STOP",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "m1",
+          "atMin": 5,
+          "origin": "MEMBER",
+          "member": "u1",
+          "reaction": "question"
+        },
+        {
+          "id": "m2",
+          "atMin": 6,
+          "origin": "GUEST",
+          "reaction": "experience"
+        },
+        {
+          "id": "m3",
+          "atMin": 7,
+          "origin": "MEMBER",
+          "member": "u2",
+          "reaction": "empathy"
+        },
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "상한 0"
+      }
+    },
+    {
+      "name": "공개 25시간 → 식은 글 STOP",
+      "nowMin": 1500,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "식은 글"
+      }
+    },
+    {
+      "name": "열린 후보가 있다 → WAIT (쌓지 않는다)",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question",
+        "hasOpenQueue": true
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "WAIT"
+      }
+    },
+    {
+      "name": "신고된 질문 댓글에는 답하지 않는다 · 글도 한마디 → STOP",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto",
+          "reported": true
+        }
+      ],
+      "expect": {
+        "verdict": "STOP"
+      }
+    },
+    {
+      "name": "이미 답이 붙은 질문은 다시 거리가 아니다 · 답글(경험)이 새 거리",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 90,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "GO",
+        "ordinal": 3,
+        "targetKind": "reply",
+        "targetId": "c2"
+      }
+    },
+    {
+      "name": "사슬 길이 3 끝의 질문에는 답하지 않는다(깊이 상한)",
+      "nowMin": 600,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 90,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience",
+          "provenance": "followup"
+        },
+        {
+          "id": "c3",
+          "atMin": 200,
+          "parent": "c2",
+          "origin": "PERSONA",
+          "persona": "pD",
+          "reaction": "question",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "이어질 거리"
+      }
+    },
+    {
+      "name": "실회원 글(관리형 자동 글 아님) → BLOCK",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question",
+        "autoManaged": false
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        }
+      ],
+      "expect": {
+        "verdict": "BLOCK"
+      }
+    },
+    {
+      "name": "출처 모순 댓글(PERSONA 인데 personaId 없음) → BLOCK",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "x1",
+          "atMin": 20,
+          "origin": "PERSONA",
+          "reaction": "other",
+          "provenance": "none"
+        }
+      ],
+      "expect": {
+        "verdict": "BLOCK"
+      }
+    },
+    {
+      "name": "사라진 부모를 가리키는 댓글 → BLOCK",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 90,
+          "parent": "gone",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "BLOCK"
+      }
+    },
+    {
+      "name": "🔴 실회원 답(지금은 지워짐)이 있던 Persona 질문도 소비됨 · 글도 한마디 → STOP",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "m1",
+          "atMin": 60,
+          "parent": "c1",
+          "origin": "MEMBER",
+          "member": "u1",
+          "reaction": "experience",
+          "deleted": true
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "이어질 거리"
+      }
+    },
+    {
+      "name": "🔴 지워진 답이 있던 질문도 소비됨(같은 대상 재소비 금지) → STOP",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 90,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "other",
+          "provenance": "followup",
+          "deleted": true
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "이어질 거리"
+      }
+    },
+    {
+      "name": "🔴 글 hook 은 최상위 추가 댓글 한 번으로 소비됨 → STOP",
+      "nowMin": 400,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "other",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 90,
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "other",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "STOP",
+        "reasonIncludes": "이어질 거리"
+      }
+    },
+    {
+      "name": "🔴 추가 3건 뒤에도 미해결 거리(공감)가 있으면 순번 5 GO — 상한 4는 근거가 있을 때만",
+      "nowMin": 600,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 80,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience",
+          "provenance": "followup"
+        },
+        {
+          "id": "c3",
+          "atMin": 160,
+          "parent": "c2",
+          "origin": "PERSONA",
+          "persona": "pD",
+          "reaction": "other",
+          "provenance": "followup"
+        },
+        {
+          "id": "c4",
+          "atMin": 240,
+          "origin": "PERSONA",
+          "persona": "pE",
+          "reaction": "empathy",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "GO",
+        "ordinal": 5,
+        "targetKind": "reply",
+        "targetId": "c4"
+      }
+    },
+    {
+      "name": "반론이 경험보다 먼저 답할 대상",
+      "nowMin": 600,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "experience",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 80,
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "rebuttal",
+          "provenance": "followup"
+        }
+      ],
+      "expect": {
+        "verdict": "GO",
+        "targetKind": "reply",
+        "targetId": "c2"
+      }
+    },
+    {
+      "name": "같은 hook 둘이면 먼저 쓴 댓글부터(해시 아님)",
+      "nowMin": 600,
+      "post": {
+        "postReaction": "other"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c0",
+          "atMin": 5,
+          "origin": "PERSONA",
+          "persona": "pZ",
+          "reaction": "question",
+          "provenance": "none"
+        }
+      ],
+      "expect": {
+        "verdict": "GO",
+        "targetKind": "reply",
+        "targetId": "c0"
+      }
+    },
+    {
+      "name": "🔴 출처를 모르는 Persona 댓글(provenance 없음) → BLOCK",
+      "nowMin": 300,
+      "post": {
+        "postReaction": "question"
+      },
+      "comments": [
+        {
+          "id": "c1",
+          "atMin": 10,
+          "origin": "PERSONA",
+          "persona": "pB",
+          "reaction": "question",
+          "provenance": "auto"
+        },
+        {
+          "id": "c2",
+          "atMin": 80,
+          "parent": "c1",
+          "origin": "PERSONA",
+          "persona": "pC",
+          "reaction": "experience"
+        }
+      ],
+      "expect": {
+        "verdict": "BLOCK"
+      }
+    }
+  ],
+  "profiles": {
+    "approved": {
+      "v": "followup-profile-v1",
+      "stage": "d10",
+      "dailyCount": 40,
+      "dailyUsd": 0.08,
+      "runMax": 3,
+      "perPersonaDailyMax": 3,
+      "approvedBy": "fixture-founder",
+      "approvedAt": "2026-10-13T09:00:00+09:00"
+    },
+    "approvedD100": {
+      "v": "followup-profile-v1",
+      "stage": "d100",
+      "dailyCount": 300,
+      "dailyUsd": 0.6,
+      "runMax": 20,
+      "perPersonaDailyMax": 6,
+      "approvedBy": "fixture-founder",
+      "approvedAt": "2026-10-13T09:00:00+09:00"
+    },
+    "broken": [
+      {
+        "name": "profile 없음",
+        "runtimeStage": "d10",
+        "profile": null
+      },
+      {
+        "name": "후보(승인자 없음)",
+        "runtimeStage": "canary",
+        "profile": "CANDIDATE"
+      },
+      {
+        "name": "단계 불일치(d10 profile · 그날 d100)",
+        "runtimeStage": "d100",
+        "patch": {}
+      },
+      {
+        "name": "그날 단계 모름",
+        "runtimeStage": null,
+        "patch": {}
+      },
+      {
+        "name": "판 이름 다름",
+        "runtimeStage": "d10",
+        "patch": {
+          "v": "followup-profile-v0"
+        }
+      },
+      {
+        "name": "하루 건수 0",
+        "runtimeStage": "d10",
+        "patch": {
+          "dailyCount": 0
+        }
+      },
+      {
+        "name": "하루 건수 소수",
+        "runtimeStage": "d10",
+        "patch": {
+          "dailyCount": 4.5
+        }
+      },
+      {
+        "name": "하루 USD 문자열",
+        "runtimeStage": "d10",
+        "patch": {
+          "dailyUsd": "0.08"
+        }
+      },
+      {
+        "name": "하루 USD 0",
+        "runtimeStage": "d10",
+        "patch": {
+          "dailyUsd": 0
+        }
+      },
+      {
+        "name": "회차 상한 > 하루 건수",
+        "runtimeStage": "d10",
+        "patch": {
+          "runMax": 41
+        }
+      },
+      {
+        "name": "Persona 상한 0",
+        "runtimeStage": "d10",
+        "patch": {
+          "perPersonaDailyMax": 0
+        }
+      },
+      {
+        "name": "승인자 빈칸",
+        "runtimeStage": "d10",
+        "patch": {
+          "approvedBy": " "
+        }
+      },
+      {
+        "name": "기계 승인자",
+        "runtimeStage": "d10",
+        "patch": {
+          "approvedBy": "machine:controller"
+        }
+      },
+      {
+        "name": "승인 시각 손상",
+        "runtimeStage": "d10",
+        "patch": {
+          "approvedAt": "어제"
+        }
+      },
+      {
+        "name": "객체 아님",
+        "runtimeStage": "d10",
+        "profile": "d10"
+      }
+    ]
+  },
+  "firstCommentPrompt": {
+    "_note": "origin/main 7b532940 의 toPromptPost 출력 해시(답글 대상 없는 입력 2종). 첫 댓글 프롬프트가 한 바이트라도 바뀌면 FAIL.",
+    "sha256": "f829dc34584735f3988f4d5cb438e26b9736c20c7957f496e721b9ed116fcba9"
+  }
+}

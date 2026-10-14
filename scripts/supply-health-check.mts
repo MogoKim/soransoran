@@ -206,9 +206,13 @@ check('🔴 READY 가 슬롯보다 많아도 초과를 "재고" 로 자랑하지
   sup({ jit: { slots: 3, readyFilled: 3 } })[0].message.includes('3/3개'))
 check('🟡 실패한 회차는 WARNING', codes(sup({ failedCheckpoints: 1 })).includes('CHECKPOINT_FAILED'))
 check('🟡 미완료 회차는 WARNING', codes(sup({ runningCheckpoints: 1 })).includes('CHECKPOINT_RUNNING'))
-check('🟡 죽은 lock 은 WARNING', (() => {
-  const r = sup({ lock: 'stale' })
-  return r.some((x) => x.code === 'LOCK_STALE' && x.level === 'WARNING')
+check('🟡 커널 lease 를 probe 하지 못했으면(모름) WARNING — free 로 적지 않는다', (() => {
+  const r = sup({ lock: 'unknown' })
+  return r.some((x) => x.code === 'LOCK_UNKNOWN' && x.level === 'WARNING') && !r.some((x) => x.code === 'LOCK_BUSY')
+})())
+check('🔴 빈 커널 lease 는 아무 경고도 내지 않는다 — 남은 잠금 파일은 잠금이 아니다', (() => {
+  const r = sup({ lock: 'free' })
+  return !r.some((x) => x.code === 'LOCK_UNKNOWN' || x.code === 'LOCK_BUSY')
 })())
 check('· 도는 중인 lock 은 INFO — 장애가 아니다', (() => {
   const r = sup({ lock: 'busy' })
@@ -662,9 +666,10 @@ check('🔴 본문·세션·키 값을 찍지 않는다', !/bodyHead|rawBody|sto
  */
 check('🔴 판정을 새로 만들지 않는다 — 기존 함수를 쓴다',
   /readStock/.test(code) && /queueProfileOf/.test(code) && /kstDayStart/.test(code)
-  && /processLockAnomaly/.test(code) && /adaptKeyOf/.test(code))
-check('🔴 관제가 잠금 정본(collect-lock)을 쓴다 — 사본을 만들지 않는다',
-  /from '\.\/lib\/collect-lock\.mjs'/.test(readFileSync('scripts/supply-health.mts', 'utf-8')))
+  && /probeSupplyLease\(/.test(code) && /adaptKeyOf/.test(code))
+check('🔴 관제가 공급 잠금을 러너와 같은 커널 lease probe 로 본다 — 파일 존재 · 시효 판정(collect-lock) 0',
+  /from '\.\/lib\/supply-lease\.mjs'/.test(readFileSync('scripts/supply-health.mts', 'utf-8'))
+  && !/processLockAnomaly|LOCK_TTL_MS|supply-process\.lock/.test(readFileSync('scripts/supply-health.mts', 'utf-8')))
 check('🔴 cap 을 자체 정의하지 않는다',
   /DAILY_PUBLISH_CAP/.test(code) && !/DAILY_PUBLISH_CAP\s*=/.test(code))
 check('🔴 금지 키 목록을 lib 과 공유한다', /FORBIDDEN_BODY_KEYS/.test(code))

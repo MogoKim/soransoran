@@ -59,6 +59,10 @@ export function toPromptPost(input: CommentInput): PromptTargetPost {
       : `[이미 달린 댓글 ${ctx.length}건의 문맥]\n${ctx.map((c) => `- ${c}`).join('\n')}`,
     '',
     `[기억] ${memoryLine(input.memory)}`,
+    // 🔴 추가 댓글만 — 첫 댓글 입력에는 이 칸이 없어 위 줄들과 바이트가 같다
+    ...(input.post.replyToDigest === undefined
+      ? []
+      : ['', `[이 댓글에 이어서 답합니다]\n- ${input.post.replyToDigest}`]),
   ]
   return {
     title: input.post.title,

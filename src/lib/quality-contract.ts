@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto'
 
 import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION, STAGE_MODEL, STAGE_MAX_OUTPUT_LABEL,
+  STAGE_THINKING_LABEL,
 } from './content-core/pipeline'
 import { REVIEW_VERSION, DETERMINISTIC_CODES } from './content-core/review'
 import { ARTIFACT_VERSION } from './content-core/artifact'
@@ -84,7 +85,30 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  *    네트워크 · 429 · 5xx)만 원천당 1회 다시 묻는다. 초안 게이트 · 의미 검수 · 결정적 판정은 그대로다. 열림 근거는 그대로 창업자 gold 재생이다.
  *    🔴 v6 이하 행을 고치거나 지우거나 v7 으로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v7'
+/**
+ * 🔴 `quality-v8` (2026-10-13 · 의미 손실 감사) = **생성 입력을 고친다. 검수·게이트는 그대로다.** v7 운영 08:15·12:15 의
+ *    의미 경고 5건(SEMANTIC_DROPPED_FROM_SOURCE 2 · SEMANTIC_UNSUPPORTED_ADDITION 3)이 실제 생성 누락이 아니라
+ *    ① 수집기가 두 번 이어 붙인 본문을 근거 묶음이 다시 잘라 **끝나지 않은 문장을 꼬리로 보낸 것**과
+ *    ② 전하는 말에 생성이 `어디서 봤는데` 같은 **보고 들은 경로**를 지어 붙인 것에서 나왔다.
+ *    근거 묶음 `evidence-v2`(이어 붙은 두 번째 벌을 걷어낸다 · 파이프라인 `content-core-v2.2`) ·
+ *    초안 프롬프트 `v2-draft-p11`(구조화된 `보존` · 경로를 지어 붙이지 않는다). 의미 검수 프롬프트 `v2-review-p7` · 검수 판 ·
+ *    초안 게이트 · 결정적 판정 · 의미 경고 코드 · 자동 READY 판정은 한 글자도 같다. 열림 근거는 그대로 창업자 gold 재생이다.
+ *    🔴 v7 이하 행을 고치거나 지우거나 v8 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ */
+/**
+ * 🔴 `quality-v8` 보정 (2026-10-13 14:40 감사 결함 yes · 운영 v8 행 0 · 판 이름 그대로 digest `--revise`) =
+ *    **1인칭 구체 가족 사실은 정본 카드의 정확한 근거가 있어야 한다.** P02(자녀 1명 · 초등)가 원문의 `아들 둘 데리고` 를
+ *    자기 일로 옮겼고 v7 계획(`children=있음`만 대조) · 초안 게이트(⑦ 복수 낱말만) · 의미 검수(모순 0 · 신뢰 0.95)가 모두 지나 자동 발행됐다.
+ *    세 자리에서 막는다 — 화자 계획 `speaker-plan-v8`(근거 줄의 자녀 수 · 자기 자녀 성별 · 나이대가 카드와 정확히 맞지 않으면
+ *    `requiredValueUnmet`) · 초안 게이트 `draft-gates-v8`(1인칭 자녀 수 > 카드 · 자기 자녀 성별 · 카드에 없는 나이대 → 확정 차단) ·
+ *    의미 검수 `v2-review-p8`(같은 범위를 생활사 모순으로). 판독 정본은 `family-specifics.ts` 하나다. 창업자 gold 재생 그대로(147/147).
+ */
+/**
+ * `quality-v9` (2026-10-14) = speakerPlan 에만 Gemini thinking `low` 를 적용한다.
+ * 1,200-token 안에서 dynamic thinking 이 JSON 자리를 소진한 운영 잘림을 줄이는 생성 계약 변경이다.
+ * 초안·의미 검수·게이트·Persona 자격 판정은 그대로다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v9'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -110,6 +134,7 @@ export function qualityContractComponents(): Record<string, unknown> {
     speakerPlanVersion: SPEAKER_PLAN_VERSION,
     stageModels: STAGE_MODEL,
     stageMaxOutput: STAGE_MAX_OUTPUT_LABEL,
+    stageThinking: STAGE_THINKING_LABEL,
     reviewVersion: REVIEW_VERSION,
     deterministicCodes: DETERMINISTIC_CODES,
     artifactVersion: ARTIFACT_VERSION,
