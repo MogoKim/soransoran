@@ -125,7 +125,7 @@ HEAD = pin = manifest 일치와 설치 경로다. main과의 차이는 매거진
 | C | event-assisted 최소 루프 | 수집 완료 → 공급 · 공개 commit → 첫 댓글 · 시간표 fallback · 중복 0 · kill switch | 새 큐 · exactly-once 시스템 |
 | D | 시간·순위·수집 효율 | 날짜 정밀도 보존 · 품질 경계 replay · 순위 하나 · 우아한갱년기 본문 실패 원인 코드 · 계정 단위 요청 장부 · raw 라벨 replay | quota · 임의 가중치 · 요청량 선증액 |
 | E | 자연 D10 증명 | 증명일 자동 10 · 서로 다른 Persona 10 · release 도장 10 · 자동 provenance 첫 댓글 10 · 감사 · 비용 · 복구 | 수동 게시·댓글·장부·stage |
-| F | 제품 품질과 D20 준비 | North Star 계측 · 홈·베스트 실회원 분리 · 사람 검토 사유 보정 · 닉네임 atomic rename · Persona 40 → 60 | D10 전 Persona 증원 · 실회원 계측 전 자동 답글 |
+| F | 제품 품질과 D20 준비 | North Star 계측 · 홈·베스트 실회원 분리 · 사람 검토 사유 보정 · 닉네임 atomic rename · Persona 40 → 60 | D10 전 Persona 증원 · 안전장치 없는 자동 답글 확대 |
 | G | 문서·하네스 경량화 후속 | on-demand runbook · 역사·외부 memory 격리 · UnaEO 흔적 분류 | 역사 증거 대량 삭제 |
 | H | D20 → D30 → D50 → D100 | 같은 계약으로 단계별 자연 증명 · d100 profile | 단계 정책 분기 |
 
@@ -150,7 +150,8 @@ HEAD = pin = manifest 일치와 설치 경로다. main과의 차이는 매거진
 - 갱년기·우아한갱년기 quota · 예약석 · 큰 가산점.
 - raw 자동 소비 복구 · 새 콘텐츠 레인.
 - 회사 Mac에서 D100 job을 되살려 두 host를 동시에 owner로 만들기.
-- 실회원 계측 전에 자동 답글 확장.
+- 승인 profile·첫 댓글 우선·실회원 우선·비용·중복·감사·kill switch·rollback 없는 자동 답글 확장.
+- 🔴 2026-10-14 창업자 결정: North Star 계측은 제한된 추가 댓글 canary 와 병렬이다. Persona·운영자 활동은 North Star 에 넣지 않는다.
 
 ## 8. 다음 갱신 조건
 

@@ -1,6 +1,6 @@
 # 글당 Persona 댓글 1~5 — 첫 댓글 뒤 선택적 추가 댓글(0~4)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 상태: **code PASS · 기본 OFF · 활성화 금지** (운영 env 0 · profile 은 후보뿐)
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 상태: **code PASS · 기본 OFF · D10 bounded canary 승인** (운영 env 0 · E5 미실행)
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
@@ -101,8 +101,8 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 | E1 | 단계 증거 상한·출처 분리 | ✅ #707 |
 | E2 | 발행 트랜잭션 추가 댓글 레인 | ✅ 이 PR(기본 OFF) |
 | E3 | 홈·베스트 랭킹의 Persona 댓글 합산 분리(Batch F · C-03) | ✅ #706 (main · Production) — 홈 인기 신호는 실회원 사람 수 · Persona·운영 댓글 제외 · 비회원 상한 3. `/best`(best-v2)는 원래 실회원 전용이라 변경 없음 |
-| E4 | 🔴 **North Star 계측 전 활성화 금지** — CURRENT-MILESTONE §7 "실회원 계측 전에 자동 답글 확장" 금지 · North Star 계측(Batch F)이 아직 없다. 계측 뒤 창업자 승인으로만: 단계별 profile 값 · profile 파일 위치 · 시간 숫자 | ❌ BLOCK |
-| E5 | 런타임 반영 — 보조 Mac runtime 배포 · 댓글 러너 plist 재설치 · env 2개 · profile 파일 | ❌ 미실행 · E4 전에는 하지 않는다 |
+| E4 | North Star 와 병렬인 제한 canary 정책 · D10 profile 사람 승인 | ✅ 2026-10-14 창업자 승인. Persona·운영자 활동은 North Star 에서 제외하고 첫 댓글·실회원·비용·중복·감사·kill switch·rollback 불변 |
+| E5 | 런타임 반영 — 보조 Mac runtime 배포 · 댓글 러너 plist 재설치 · env 2개 · profile 파일 | ❌ 미실행 · 아래 승인 절차로만 적용 |
 | E6 | 댓글 러너를 consumer(`stage-consume-exec --by=comment`) 경유로 | ✅ 이 PR — 템플릿 · consumer 종류 `comment` · 스위치 OFF 면 consumer 결정 읽기 0 · 오늘 결정만(`followupStageOf`). **설치된 plist 는 아직 옛 모양**이다 — E5 배포·재설치 때 바뀐다 |
 
 ## 8. 추가 발견 · 제안
@@ -120,3 +120,43 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 - 정기 회차가 사건 표식을 거두면 trigger 가 `event` 로 기록되어 그 회차는 추가 댓글을 건너뛴다. 사건이 잦은 날 추가 댓글이 적게 돌 수 있다(첫 댓글에는 영향 없음).
 - 변이 시험이 실제로 일을 했다: 실회원 댓글이 첫 댓글 뒤에 있던 우회 반례는 모든 사례가 "마지막 말 실회원" 하나로 막혀 의도한 사유를 못 보고 있었다 — 사유 단언으로 고쳤다.
   트랜잭션의 "자기 댓글 답글" 분기는 혼자서는 절대 걸리지 않는 죽은 분기라 지웠다(같은 Persona 규칙이 막는다).
+
+## 9. D10 bounded canary 승인과 E5 runbook (2026-10-14)
+
+이 값은 D100 영구값이 아니라 **첫 D10 실운영 canary** 승인값이다. 그날 정본 공개 단계가 `d10`이 아니면
+profile 단계 불일치로 0건(fail-closed)이다.
+
+```json
+{
+  "v": "followup-profile-v1",
+  "stage": "d10",
+  "dailyCount": 40,
+  "dailyUsd": 0.08,
+  "runMax": 3,
+  "perPersonaDailyMax": 3,
+  "approvedBy": "founder",
+  "approvedAt": "2026-10-14T21:37:00+09:00"
+}
+```
+
+정본 profile 경로는 `~/Library/Application Support/soransoran/followup-profile-v1-d10.json`이다.
+정본 env `~/Library/Application Support/soransoran/env.local`에는 아래 두 키만 추가한다.
+
+```text
+SORAN_PERSONA_COMMENT_FOLLOWUP=on
+SORAN_PERSONA_COMMENT_FOLLOWUP_PROFILE=/Users/<owner>/Library/Application Support/soransoran/followup-profile-v1-d10.json
+```
+
+적용 순서는 다음과 같다.
+
+1. 병합된 main SHA에 exact-head CI가 성공했는지, 보조 Mac job·잠금·실행 프로세스가 idle인지 확인한다.
+2. runtime을 기본 OFF 상태로 배포한다: `npm run runtime:deploy -- --apply --target=<merged-main-full-sha>`.
+3. profile을 위 정본 경로에 mode `0600`으로 쓰고, JSON을 다시 읽어 위 승인값과 정확히 같은지 확인한다.
+4. 정본 env 두 키를 중복 없이 추가한 뒤 runtime `.env.local` 심볼릭 링크가 같은 파일을 가리키는지 확인한다.
+5. runtime 트리에서 `npm run persona:comment-loop-install -- --apply`로 E6 consumer 경유 plist를 재설치한다.
+6. `npm run runtime:isolation-check -- --require-runtime`과 댓글 runner dry-run(provider 0 · write 0)을 통과시킨다.
+7. 다음 정기 자연 회차부터 canary를 관측한다. 수동 회차·수동 stage·READY 변경으로 D10 증거를 만들지 않는다.
+
+가장 빠른 OFF rollback은 정본 env에서 `SORAN_PERSONA_COMMENT_FOLLOWUP`을 지우거나 `off`로 바꾸는 것이다.
+이 경우 다음 회차부터 추가 댓글은 DB 읽기 0이고 첫 댓글은 계속 돈다. 구조 rollback이 필요하면 switch를 먼저 OFF한 뒤
+댓글 runner를 재설치 전 plist로 되돌리거나 runtime을 직전 pin으로 rollback한다. profile 파일은 감사 근거로 보존하며 삭제하지 않는다.
