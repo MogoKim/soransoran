@@ -49,6 +49,11 @@ const {
 } = await import('../src/lib/stage-evidence')
 const { readStageEvidenceFacts } = await import('../src/lib/stage-evidence-repo')
 const { kstDateString } = await import('../src/lib/release-canary')
+const { createStageDecision } = await import('../src/lib/stage-decision-repo')
+const { validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER } = await import('../src/lib/stage-decision-contract')
+const { spawnSync } = await import('node:child_process')
+const { fileURLToPath } = await import('node:url')
+const { dirname } = await import('node:path')
 const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
 const { runCommentLoop, sweepAutoLane } = await import('./lib/persona-comment-loop.mjs')
 const { runFollowupPhase, readFollowupContext, sweepFollowupLane, FOLLOWUP_EXPIRE_REASON } = await import('./lib/persona-comment-followup-run.mjs')
@@ -125,11 +130,16 @@ async function wipe(): Promise<void> {
   await prisma.account.deleteMany({})
   await prisma.user.deleteMany({})
   await prisma.personaGlobalSwitch.deleteMany({})
+  await prisma.stageDecision.deleteMany({})
 }
-/** 🔴 consumer 가 넣는 결정 env 그대로 — 러너·트랜잭션은 이 두 칸으로만 그날 단계를 안다 */
-async function stageDecisionToday(release = STAGE): Promise<void> {
+/** 🔴 consumer(`consumerEnvOf`)가 넣는 결정 env 모양 그대로 — 표식 · 공개 · 천장. ⑪ 은 실제 consumer 프로세스로 같은 것을 만든다 */
+async function stageDecisionToday(release = STAGE, capacity = 'd10'): Promise<void> {
   process.env.SORAN_STAGE_DECISION_DATE = kstDateString(new Date())
   process.env.SORAN_RELEASE_STAGE = release
+  process.env.SORAN_CAPACITY_STAGE = capacity
+}
+const clearDecisionEnv = (): void => {
+  for (const k of ['SORAN_STAGE_DECISION_DATE', 'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', 'SORAN_STAGE_PROOF_STAGE', 'SORAN_STAGE_PROOF_DATE']) delete process.env[k]
 }
 let seq = 0
 type P = { id: string; userId: string; code: string }
@@ -620,6 +630,147 @@ async function main(): Promise<void> {
     const r = await phase(g.gen)
     check('🔴 첫 댓글 대기 1편 → 추가 댓글 provider 0', g.calls() === 0 && (await personaRows(old)).length === 1 && r.outcome === 'TICK_ZERO', r.reason)
     followupOn(false)
+  }
+
+  console.log('\n⑪ E6 — 실제 consumer(stage-consume-exec --by=comment) 가 넣은 오늘 결정으로만 돈다')
+  {
+    const HERE = dirname(fileURLToPath(import.meta.url))
+    const ROOT = join(HERE, '..')
+    const TSX = join(ROOT, 'node_modules', '.bin', 'tsx')
+    // 🔴 consumer 가 읽는 정본 env(임시 HOME) — controller on. 운영 env 0
+    const canon = join(HOME, 'Library', 'Application Support', 'soransoran')
+    mkdirSync(canon, { recursive: true })
+    writeFileSync(join(canon, 'env.local'), 'STAGE_CONTROLLER_ENABLED=on\n')
+    const CWD = mkdtempSync(join(tmpdir(), 'soran-consume-cwd-')) // 🔴 .env.local 없는 작업 디렉터리
+    const consume = (over: Record<string, string | undefined>): { env: Record<string, string>; note: string; status: number | null } => {
+      const env: Record<string, string> = {}
+      for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
+      for (const k of ['SORAN_STAGE_DECISION_DATE', 'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', 'SORAN_PERSONA_COMMENT_FOLLOWUP']) delete env[k]
+      for (const [k, v] of Object.entries(over)) if (v === undefined) delete env[k]; else env[k] = v
+      const r = spawnSync(TSX, [join(ROOT, 'scripts', 'stage-consume-exec.mts'), '--by=comment', '--print'], { cwd: CWD, env, encoding: 'utf-8' })
+      const out: Record<string, string> = {}
+      for (const line of (r.stdout ?? '').split('\n')) { const m = /^([A-Z_]+)=(.*)$/.exec(line); if (m !== null) out[m[1]!] = m[2]! }
+      return { env: out, note: (r.stderr ?? '').trim(), status: r.status }
+    }
+    const storeDecision = async (kstDate: string): Promise<void> => {
+      const v = validateStoredDecision({
+        row: {
+          kstDate, capacity: 'd10', release: STAGE, state: 'HOLD', reasons: ['fixture'], blocks: [], dayPinned: false, supply: null,
+          decidedAt: new Date(`${kstDate}T07:00:00+09:00`).toISOString(), contractVersion: STAGE_DECISION_VERSION,
+          decidedBy: DECISION_WRITER, transition: null,
+        },
+        expectKstDate: kstDate,
+      })
+      if (!v.ok) throw new Error(`fixture 결정이 깨졌다 — ${v.reason}`)
+      await createStageDecision(prisma, v.decision)
+    }
+    const applyConsumed = (e: Record<string, string>): void => {
+      clearDecisionEnv()
+      for (const [k, v] of Object.entries(e)) process.env[k] = v
+    }
+    const setup = async (): Promise<{ pid: string }> => {
+      await wipe(); writeProfile(PROFILE); followupOn(true)
+      const a = await persona('P01'); const b = await persona('P02'); await persona('P03'); await persona('P04')
+      const pid = await post(a, 200); await autoFirst(b, pid, 180)
+      return { pid }
+    }
+    const today = kstDateString(new Date())
+
+    // (가) 오늘 결정 있음 → consumer 가 표식·공개·천장을 넣고 → 추가 댓글이 profile 범위 안에서 돈다
+    {
+      const { pid } = await setup()
+      await storeDecision(today)
+      const c = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
+      check('🔴 consumer — 오늘 결정 표식 · 공개 d5 · 천장 d10 을 넣는다',
+        c.status === 0 && c.env.SORAN_STAGE_DECISION_DATE === today && c.env.SORAN_RELEASE_STAGE === STAGE && c.env.SORAN_CAPACITY_STAGE === 'd10', `${c.note} ${JSON.stringify(c.env)}`)
+      applyConsumed(c.env)
+      const g = fakeGen()
+      const r = await phase(g.gen)
+      check('🟢 consumer 가 넣은 결정 → 추가 댓글 1건(profile d5 범위)', (await personaRows(pid)).length === 2 && r.outcome === 'RAN', `${r.reason} ${JSON.stringify(r.lines)}`)
+      // profile 단계가 consumer 결정과 다르면 0 — 단계별 profile 범위 안에서만
+      const { pid: pid2 } = await setup(); await storeDecision(today)
+      applyConsumed(consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' }).env)
+      writeProfile({ ...PROFILE, stage: 'd10' })
+      const g2 = fakeGen()
+      await phase(g2.gen)
+      check('🔴 consumer 결정 d5 · profile d10 → provider 0 · 추가 0', g2.calls() === 0 && (await personaRows(pid2)).length === 1)
+      writeProfile(PROFILE)
+    }
+    // (나) 결정 없음 → consumer 가 표식 없이 safest → 0
+    {
+      const { pid } = await setup()
+      const c = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
+      applyConsumed(c.env)
+      const g = fakeGen()
+      await phase(g.gen)
+      check('🔴 결정 없음 → 표식 없음 → provider 0 · 추가 0', (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
+    }
+    // (다) 다른 날짜(어제) 결정만 있음 → consumer 는 오늘 키로만 읽는다 → 0
+    {
+      const { pid } = await setup()
+      const y = kstDateString(new Date(Date.now() - 86_400_000))
+      await storeDecision(y)
+      const c = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
+      applyConsumed(c.env)
+      const g = fakeGen()
+      await phase(g.gen)
+      check('🔴 어제 결정만 → 표식 없음 → provider 0 · 추가 0', (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
+    }
+    // (라) 위조·오래된 env — consumer 를 거치지 않고 손으로 넣은 값
+    {
+      const forged: [string, Record<string, string>][] = [
+        ['어제 표식(오래된 프로세스)', { SORAN_STAGE_DECISION_DATE: kstDateString(new Date(Date.now() - 86_400_000)), SORAN_RELEASE_STAGE: STAGE, SORAN_CAPACITY_STAGE: 'd10' }],
+        ['공개 > 천장', { SORAN_STAGE_DECISION_DATE: today, SORAN_RELEASE_STAGE: 'd20', SORAN_CAPACITY_STAGE: 'd10' }],
+        ['정본 밖 단계', { SORAN_STAGE_DECISION_DATE: today, SORAN_RELEASE_STAGE: 'd7', SORAN_CAPACITY_STAGE: 'd10' }],
+        ['천장 없음', { SORAN_STAGE_DECISION_DATE: today, SORAN_RELEASE_STAGE: STAGE }],
+      ]
+      for (const [name, e] of forged) {
+        const { pid } = await setup()
+        applyConsumed(e)
+        const g = fakeGen()
+        await phase(g.gen)
+        // 🔴 트랜잭션도 같은 env 를 다시 읽어 막는다 — planner 를 건너뛴 행으로 확인
+        const first = (await personaRows(pid))[0]!.id
+        const c9 = await persona(`PX${seq}`)
+        const qid = await injectFollowup(c9, pid, stamp(pid, 2, first), 2)
+        const tx = await publishCandidateTx(prisma, { id: qid, now: new Date(), followupLane: true })
+        check(`🔴 위조 env(${name}) → 회차 provider 0 · 트랜잭션도 '단계 모름' 으로 막음`, g.calls() === 0 && tx.kind === 'blocked'
+          && tx.blocks.some((x) => x.message.includes('단계를 모른다')) && (await personaRows(pid)).length === 1,
+          tx.kind === 'blocked' ? tx.blocks.map((x) => x.message).join(' | ') : tx.kind)
+      }
+    }
+    // (마) 스위치 OFF → consumer 는 결정을 읽지 않는다 — 닿을 수 없는 DB 주소로 증명(ON 이면 읽다가 실패한다)
+    {
+      const dead = 'postgresql://soran@127.0.0.1:1/soran_test'
+      const off = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: undefined, DATABASE_URL: dead, DIRECT_URL: dead })
+      const on = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on', DATABASE_URL: dead, DIRECT_URL: dead })
+      check('🔴 스위치 OFF → consumer 가 결정을 읽지 않는다(DB 시도 0 · 표식 없음)',
+        off.status === 0 && off.note.includes('off') && !off.note.includes('읽지 못했다') && (off.env.SORAN_STAGE_DECISION_DATE ?? '') === '', off.note)
+      check('대조 — 스위치 ON 이면 같은 주소에서 읽기를 시도한다(실패 → safest)', on.note.includes('읽지 못했다'), on.note)
+      // 🔴 회차 단계도 OFF 면 DB 접근 0 — prisma 를 건드리면 세는 가짜를 넣는다
+      followupOn(false)
+      let touched = 0
+      const trap = new Proxy({}, { get: () => { touched += 1; throw new Error('DB 접근') } }) as unknown as InstanceType<typeof PrismaClient>
+      const r = await runFollowupPhase({
+        prisma: trap, now: new Date(), env: process.env, source: source(), canon: canonRead,
+        makeGenerate: () => fakeGen().gen, generation: { ok: true, reason: '' },
+        ledger: { entries: [], capUsd: 0.2, headroom: 1.5 }, profile: PROFILE, runtimeStage: STAGE, conversationAudit: PASS_AUDIT,
+      })
+      check('🔴 스위치 OFF → 추가 댓글 단계의 DB 접근 0 · provider 0', r.outcome === 'OFF' && touched === 0, `${r.outcome} touched=${touched}`)
+    }
+    // (바) 같은 회차 두 개가 동시에 — 중복 0
+    {
+      const { pid } = await setup()
+      await stageDecisionToday()
+      const [x, y] = await Promise.all([phase(fakeGen().gen), phase(fakeGen(REPLIES.slice(3)).gen)])
+      const cs = await personaRows(pid)
+      const keys = await prisma.personaApprovalQueue.findMany({ where: { targetPostId: pid, dedupKey: { startsWith: F.FOLLOWUP_KEY_PREFIX } }, select: { dedupKey: true } })
+      check('🔴 동시 두 회차 → 추가 댓글 1건 이하 · 열쇠 중복 0', cs.length <= 2 && new Set(keys.map((k) => k.dedupKey)).size === keys.length,
+        `${cs.length} ${x.outcome}/${y.outcome}`)
+      await phase(fakeGen().gen)
+      check('🔴 다시 돌아도(같은 자리) 추가 댓글 그대로', (await personaRows(pid)).length === cs.length)
+    }
+    clearDecisionEnv(); followupOn(false)
   }
 
   await wipe()

@@ -19,7 +19,7 @@ import {
 } from './persona-comment-auto-lane'
 import { readFileSync } from 'node:fs'
 import {
-  judgeFollowupPublish, readFollowupProfileRaw, readFollowupSwitch, stampFromEditDiff, verifyStamp,
+  followupStageOf, judgeFollowupPublish, readFollowupProfileRaw, readFollowupSwitch, stampFromEditDiff, verifyStamp,
   type FollowupCommentRow,
 } from './persona-comment-followup'
 import {
@@ -443,7 +443,7 @@ export async function publishCandidateTx(
           otherOpenQueue: otherOpen > 0,
           profile: readFollowupProfileRaw(process.env, (p) => readFileSync(p, 'utf-8')),
           // 🔴 그날 단계는 consumer 가 넣은 결정 env 로만 — 러너·트랜잭션은 결정 표를 직접 읽지 않는다(두 번째 판독 금지)
-          runtimeStage: decisionStageEnv(process.env).release ?? null,
+          runtimeStage: followupStageOf(decisionStageEnv(process.env), now).stage,
           followupsTodayInTx: fuToday,
           personaFollowupsTodayInTx: fuPersonaToday,
           nowMs: now.getTime(),

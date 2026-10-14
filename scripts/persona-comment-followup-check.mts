@@ -33,6 +33,11 @@ import { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } from '../src/lib/
 import { toPromptPost } from './lib/persona-comment-bridge'
 import { sourceTextsOf } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
+import { decisionStageEnv } from '../src/lib/scale-runtime'
+import { kstDateString } from '../src/lib/release-canary'
+import { followupEligibleFor } from './lib/persona-comment-followup-run.mjs'
+import { COMMENT_CONSUMER_BY, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
+import { DECISION_CONSUMERS } from '../src/lib/stage-decision-store'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const modulePath = process.env.FOLLOWUP_MODULE ?? join(here, '../src/lib/persona-comment-followup.ts')
@@ -557,6 +562,48 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const rc = toPromptPost(reply).content
   check('⑧ 추가 댓글만 — 답글 대상 줄이 붙는다', rc.startsWith(toPromptPost(input).content) && rc.includes('[이 댓글에 이어서 답합니다]') && rc.endsWith('- 그럴 땐 뭐 하세요?'))
   check('⑧ 🔴 답글 대상 요약도 ① 유출 대조 목록에 들어간다', sourceTextsOf(reply).includes('그럴 땐 뭐 하세요?') && !sourceTextsOf(input).includes('그럴 땐 뭐 하세요?'))
+}
+
+// ═════════ ⑨ E6 — 그날 결정은 consumer 가 넣은 오늘 결정만 · 정기 회차만 · plist 는 consumer 를 지난다 ═════════
+{
+  const NOW = new Date('2026-10-14T03:00:00Z')
+  const today = kstDateString(NOW)
+  const env = (mark: string | undefined, release: string | undefined, capacity: string | undefined) => decisionStageEnv({
+    ...(mark === undefined ? {} : { SORAN_STAGE_DECISION_DATE: mark }),
+    ...(release === undefined ? {} : { SORAN_RELEASE_STAGE: release }),
+    ...(capacity === undefined ? {} : { SORAN_CAPACITY_STAGE: capacity }),
+  })
+  const ok = M.followupStageOf(env(today, 'd5', 'd10'), NOW)
+  check('⑨ 오늘 결정(공개 d5 · 천장 d10) → d5', ok.stage === 'd5', ok.reason)
+  const bad: [string, ReturnType<typeof env>][] = [
+    ['결정 표식 없음(consumer 미경유)', env(undefined, 'd5', 'd10')],
+    ['어제 날짜 표식(오래된 결정)', env('2026-10-13', 'd5', 'd10')],
+    ['다른 날짜 표식(미래)', env('2026-10-15', 'd5', 'd10')],
+    ['표식 모양이 아님', env('today', 'd5', 'd10')],
+    ['정본에 없는 공개 단계(위조)', env(today, 'd7', 'd10')],
+    ['천장 없음', env(today, 'd5', undefined)],
+    ['공개 > 천장(consumer 가 낼 수 없는 모양)', env(today, 'd20', 'd10')],
+  ]
+  for (const [name, e] of bad) {
+    const v = M.followupStageOf(e, NOW)
+    check(`⑨ 🔴 ${name} → 단계 없음(추가 댓글 0)`, v.stage === null, v.reason)
+  }
+  // 🔴 회차 자격 — 정기 · --live · 스위치 on 만
+  const on = { SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' }
+  check('⑨ 정기 회차 · --live · 스위치 on → 추가 댓글 단계', followupEligibleFor({ live: true, trigger: 'scheduled', env: on }).ok)
+  for (const t of ['event', 'recovery', 'manual', 'unknown']) {
+    check(`⑨ 🔴 ${t} 회차 → 첫 댓글만`, !followupEligibleFor({ live: true, trigger: t, env: on }).ok)
+  }
+  check('⑨ 🔴 dry-run → 단계 없음', !followupEligibleFor({ live: false, trigger: 'scheduled', env: on }).ok)
+  check('⑨ 🔴 스위치 OFF → 단계 없음', !followupEligibleFor({ live: true, trigger: 'scheduled', env: {} }).ok)
+  // 🔴 plist — consumer 를 지나 같은 러너를 부른다
+  const xml = renderCommentRunnerPlist({ npxPath: '/n/npx', runtimeRoot: '/rt', logDir: '/log', nodeBinDir: '/n' })
+  const args = [...(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)?.[1] ?? '').matchAll(/<string>([^<]+)<\/string>/g)].map((m) => m[1])
+  check('⑨ 🔴 댓글 러너 plist 가 consumer(--by=comment)를 지나 persona-comment-loop --live 를 부른다',
+    JSON.stringify(args) === JSON.stringify(['/n/npx', 'tsx', '/rt/scripts/stage-consume-exec.mts', '--by=comment', '--',
+      '/n/npx', 'tsx', '/rt/scripts/persona-comment-loop.mts', '--live']), JSON.stringify(args))
+  check('⑨ 댓글 consumer 종류가 정본 목록에 있다', (DECISION_CONSUMERS as readonly string[]).includes(COMMENT_CONSUMER_BY))
+  check('⑨ 🔴 plist 가 단계 env 를 직접 적지 않는다', !/SORAN_(RELEASE_STAGE|CAPACITY_STAGE|STAGE_DECISION_DATE)/.test(xml))
 }
 
 for (const l of lines) console.log(l)

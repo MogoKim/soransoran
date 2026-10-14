@@ -1,6 +1,6 @@
 # 글당 Persona 댓글 1~5 — 첫 댓글 뒤 선택적 추가 댓글(0~4)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI) · 상태: **연결됨 · 기본 OFF · 운영 env 0 · 활성화 아님**
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 상태: **연결됨 · 기본 OFF · 운영 env 0 · 활성화 아님**
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
@@ -15,7 +15,11 @@
 ## 1. 실행 경로
 
 ```
-정기 회차(launchd scheduled) · --live · 스위치 on 일 때만
+launchd → stage-consume-exec --by=comment → persona-comment-loop --live      (E6)
+  · 추가 댓글 스위치 OFF  → consumer 는 결정을 읽지 않는다(DB 0) · safest · 표식 없음
+  · ON · 오늘 결정 있음   → 표식(오늘) · 공개 · 천장 env 를 넣는다
+  · ON · 결정 없음·깨짐  → safest · 표식 없음
+정기 회차(followupEligibleFor: scheduled · --live · 스위치 on) 일 때만
   runCommentLoop
     ① 첫 댓글 sweep → 생성 → sweep            ← 지금과 같다. 추가 댓글 행(comment-followup:*)은 집지 않는다
     ② followupPhase (첫 댓글 sweep 뒤 · 실패해도 첫 댓글 결과 불변)
@@ -60,8 +64,9 @@
   1건 예약액 = 확정 모델 단가 × 댓글 호출 모양 × 여유 배수. 단가를 모르면 0건.
 - 수량 상한은 **승인 profile 파일**(`followup-profile-v1`)에서만 온다: `{ stage · dailyCount · dailyUsd · runMax · perPersonaDailyMax · approvedBy · approvedAt }`.
   파일 없음 · 손상 · 단계 ≠ 그날 단계 · 사람 승인 없음(`machine:` 포함) → 0건. 트랜잭션도 같은 파일을 다시 읽는다.
-  그날 단계는 **consumer 가 넣은 결정 env**(`SORAN_STAGE_DECISION_DATE` 표식 + `SORAN_RELEASE_STAGE`, 정본 문 `decisionStageEnv`)로만 안다 —
-  러너·트랜잭션은 결정 표를 직접 읽지 않는다(`stage:ladder-check` adapter 계약). 표식이 없으면 단계를 모름 → 0건.
+  그날 단계는 **consumer 가 넣은 결정 env** 로만 안다 — 정본 읽기 문 `decisionStageEnv` 결과를 `followupStageOf` 가 판정한다
+  (회차·트랜잭션 같은 함수): 표식 날짜 = 오늘(KST) · 공개·천장이 정본 단계 · 공개 ≤ 천장. 아니면 단계 모름 → 0건.
+  러너·트랜잭션은 결정 표를 직접 읽지 않는다(`stage:ladder-check` adapter 계약). 이 모듈은 단계 칸 env 를 직접 읽지 않는다.
   `FOLLOWUP_CANARY_PROFILE_CANDIDATE`(40건 · $0.08 · 3 · 3)는 승인자가 비어 있는 **후보값**이다.
 - kill switch: `PersonaGlobalSwitch` — 회차와 트랜잭션 둘 다.
 
@@ -83,9 +88,9 @@
 
 | 명령 | CI | 내용 |
 |---|---|---|
-| `npm run check:persona-followup` | `베스트·댓글 정책 가드` step | 순수 155개 — 시나리오 26 · profile 반례 15 · 시뮬레이션 · 트랜잭션 판정 · 첫 댓글 프롬프트 바이트 동일 |
-| `npm run check:persona-followup-mutation` | 같은 step | 막는 줄 60개를 하나씩 지워 전부 잡히는지(임시 디렉터리 · worktree 변경 0) |
-| `npm run persona:followup-db-check` | 격리 Postgres step | 54개 — OFF 무변화 · 첫 댓글 회귀 · 대화 감사 FAIL 에도 첫 댓글 · 정상 답글 · 총 5 상한 도달 · 실회원 우선 · 우회 주입 반례(그 사유로 막혔는지 단언) · 중복·동시 · 복구 · 브레이크 9종 · 장부 단계 · 단계 증거 분리 |
+| `npm run check:persona-followup` | `베스트·댓글 정책 가드` step | 순수 173개 — 시나리오 26 · profile 반례 15 · 시뮬레이션 · 트랜잭션 판정 · 첫 댓글 프롬프트 바이트 동일 |
+| `npm run check:persona-followup-mutation` | 같은 step | 막는 줄 63개를 하나씩 지워 전부 잡히는지(임시 디렉터리 · worktree 변경 0) |
+| `npm run persona:followup-db-check` | 격리 Postgres step | 68개 — 실제 consumer 프로세스 e2e(오늘 결정 · 없음 · 어제 · 위조 env 4종 · OFF 읽기 0) · — OFF 무변화 · 첫 댓글 회귀 · 대화 감사 FAIL 에도 첫 댓글 · 정상 답글 · 총 5 상한 도달 · 실회원 우선 · 우회 주입 반례(그 사유로 막혔는지 단언) · 중복·동시 · 복구 · 브레이크 9종 · 장부 단계 · 단계 증거 분리 |
 
 새 step 은 없다(무조건 step 상한 불변 · `check:workflow-budget` 90/90).
 
@@ -98,9 +103,13 @@
 | E3 | 홈·베스트 랭킹의 Persona 댓글 합산 분리(Batch F) | ❌ 켜면 합성 인기가 그만큼 오른다 |
 | E4 | 창업자 결정 — CURRENT §7 "실회원 계측 전 자동 답글 확장 금지" · 단계별 profile 값 · profile 파일 위치 · 시간 숫자 | ❌ North Star 계측 뒤 |
 | E5 | 런타임 반영 — 보조 Mac runtime 배포 · env 2개 · profile 파일 | ❌ 이 PR 은 하지 않는다 |
-| E6 | 🔴 댓글 러너를 consumer(`stage-consume-exec`) 경유로 띄우기 — 지금 댓글 러너 launchd 는 consumer 를 거치지 않아 결정 env 가 없다 | ❌ 그 전에는 스위치를 켜도 단계 모름 → 0건(격리 DB 검사가 반례로 확인) |
+| E6 | 댓글 러너를 consumer(`stage-consume-exec --by=comment`) 경유로 | ✅ 이 PR — 템플릿 · consumer 종류 `comment` · 스위치 OFF 면 consumer 결정 읽기 0 · 오늘 결정만(`followupStageOf`). **설치된 plist 는 아직 옛 모양**이다 — E5 배포·재설치 때 바뀐다 |
 
 ## 8. 추가 발견 · 제안
+
+- E6 로 댓글 러너가 consumer 를 지나도 **첫 댓글은 단계 칸을 읽지 않아 그대로다**(첫 댓글 경로 import 그래프에서 단계 함수 호출 0 · 첫 댓글 격리 DB 검사 39/39).
+  consumer 의 결정 읽기는 추가 댓글 스위치가 켜졌을 때만 일어난다.
+- 설치된 댓글 러너 plist 는 옛 모양(직접 실행)이다. 이 PR 은 템플릿만 바꾼다 — 보조 Mac 재설치(E5) 전에는 운영에서 consumer 를 지나지 않고, 따라서 스위치를 켜도 추가 댓글은 0 이다.
 
 - 🔴 첫 연결판은 그날 단계를 `StageDecision` 표에서 직접 읽었다 — `stage:ladder-check`(adapter 는 controller·consumer·운영 화면만)가 잡았다.
   consumer env 로 바꾸자 지금 댓글 러너 모양에서는 단계가 비어 0건이 된다. 켜려면 E6(댓글 러너 consumer 경유)이 먼저다.

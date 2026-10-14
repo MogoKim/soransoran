@@ -82,6 +82,10 @@ const MUTATIONS: Mutation[] = [
   { name: '트랜잭션 글 hook 재소비 허용', from: 'if (!postHookOpen(f.post)) blockers.push', to: 'if (false) blockers.push' },
   { name: '🔴 트랜잭션 고아 답글 허용', from: "if (parent === undefined) blockers.push('🔴 답글 대상이 이 글에 없다(고아 답글)')\n    else {", to: 'if (parent === undefined) { /* 변이 */ } else {' },
   { name: '🔴 트랜잭션 대상 유효성 무시', from: '      if (!open.ok) blockers.push(open.reason)', to: '      if (false) blockers.push(open.reason)' },
+  // ── E6 그날 결정 ──
+  { name: '🔴 표식 없음·오늘이 아닌 표식 허용(오래된·다른 날짜)', from: 'if (d.markDate !== kstDateString(now)) {', to: 'if (false) {' },
+  { name: '정본 밖 단계 허용', from: 'if (!isRuntimeStage(d.release) || !isRuntimeStage(d.capacity)) return', to: 'if (false) return' },
+  { name: '🔴 공개 > 천장 허용', from: 'if (RUNTIME_STAGES.indexOf(d.release) > RUNTIME_STAGES.indexOf(d.capacity)) {', to: 'if (false) {' },
 ]
 
 const dir = mkdtempSync(join(tmpdir(), 'followup-mut-'))

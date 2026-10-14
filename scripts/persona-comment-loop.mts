@@ -32,8 +32,7 @@ import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
 import { leaseEntry, type LeaseProof, type PassContext } from './lib/runner-lease.mjs'
 import { readCostSignals, readLedgerToday } from './lib/ops-signals.mjs'
-import { readFollowupSwitch } from '../src/lib/persona-comment-followup'
-import { readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
+import { followupEligibleFor, readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
@@ -134,7 +133,7 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
      *    사건 깨움 · 복구 · 수동 회차는 첫 댓글만 한다. 스위치가 꺼져 있으면 아래 준비 읽기도 0 이다.
      */
     const source = makeDbTargetSource({ prisma, windowStart: new Date(now.getTime() - 7 * 86_400_000) })
-    const followupOn = LIVE && ctx.trigger === 'scheduled' && readFollowupSwitch(process.env).enabled
+    const followupOn = followupEligibleFor({ live: LIVE, trigger: ctx.trigger, env: process.env }).ok
     const followupPhase = !followupOn ? undefined : async () => {
       const fctx = await readFollowupContext({ prisma, now, env: process.env, readText: (path) => readFileSync(path, 'utf-8') })
       const ledgerRead = readLedgerToday(commentLoopLedgerDir(), now)

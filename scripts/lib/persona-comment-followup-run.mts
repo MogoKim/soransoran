@@ -16,7 +16,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
   FOLLOWUP_KEY_PREFIX, followupEditDiffOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
-  orderFollowupGo, pickFollowupPersona, readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
+  followupStageOf, orderFollowupGo, pickFollowupPersona, readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
   type FollowupCommentRow, type FollowupPostFacts, type FollowupPostVerdict,
 } from '../../src/lib/persona-comment-followup'
 import {
@@ -25,7 +25,6 @@ import {
 import { readStageEvidenceFacts } from '../../src/lib/stage-evidence-repo'
 import { kstDateString } from '../../src/lib/release-canary'
 import { decisionStageEnv } from '../../src/lib/scale-runtime'
-import { isRuntimeStage } from '../../src/lib/scale-profile'
 import { readCommentStage } from '../../src/lib/persona-comment-stage'
 import { isAutoLaneCandidatePost } from '../../src/lib/persona-comment-auto-lane'
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
@@ -46,6 +45,20 @@ import { gateInputOf, sourceTextsOf, type GateContext, type SourcePost, type Tar
 import { runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { judgeGateReport } from '../../src/lib/persona-comment-gate-report'
+
+/**
+ * 🔴 **이 회차가 추가 댓글 단계를 돌 수 있는가** — 진입점은 이 함수 하나로 정한다(E6).
+ *    정기 회차(`scheduled`) · `--live` · 스위치 on 만. 사건 깨움(`event`) · 복구(`recovery`) · 수동(`manual`) ·
+ *    표식이 깨진 회차(`unknown`) · dry-run 은 첫 댓글만 한다. 그날 단계(결정 env)는 이 뒤 `readFollowupContext` 가 본다.
+ */
+export function followupEligibleFor(i: {
+  live: boolean; trigger: string; env: Readonly<Record<string, string | undefined>>
+}): { ok: boolean; reason: string } {
+  if (!i.live) return { ok: false, reason: 'dry-run — 추가 댓글 단계 없음' }
+  if (i.trigger !== 'scheduled') return { ok: false, reason: `${i.trigger} 회차 — 첫 댓글만(추가 댓글은 정기 회차에서만)` }
+  const sw = readFollowupSwitch(i.env)
+  return sw.enabled ? { ok: true, reason: '정기 회차 · 스위치 on' } : { ok: false, reason: sw.reason }
+}
 
 /** 🔴 추가 댓글 행을 닫을 때 남기는 코드 — 첫 댓글(`AUTO_LANE_BLOCKED`)과 다르다 */
 export const FOLLOWUP_EXPIRE_REASON = 'FOLLOWUP_LANE_BLOCKED'
@@ -154,8 +167,8 @@ export async function readFollowupContext(i: {
   prisma: PrismaClient; now: Date; env: Readonly<Record<string, string | undefined>>; readText: (path: string) => string
 }): Promise<{ profile: unknown; runtimeStage: string | null; conversationAudit: unknown }> {
   const kstDate = kstDateString(i.now)
-  const release = decisionStageEnv(i.env).release
-  const stage = isRuntimeStage(release) ? release : null
+  // 🔴 오늘 결정 · 정본 단계 · 공개 ≤ 천장 — 트랜잭션과 같은 판정
+  const stage = followupStageOf(decisionStageEnv(i.env), i.now).stage
   const conversationAudit = stage === null ? undefined : await readStageEvidenceFacts(i.prisma, {
     kstDate, stage, decision: null, now: i.now,
     commentCapPerPost: personaCommentCapFor(readCommentStage(i.env).stage),

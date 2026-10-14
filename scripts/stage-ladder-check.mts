@@ -376,8 +376,9 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
     controllerOn: true, by: 'supply',
   })
   check('정상 행은 그대로 쓴다', good.ok && good.decision.release === 'd5')
-  check('🔴 consumer 는 둘이다 — writer 는 하나다',
-    DECISION_CONSUMERS.join(',') === 'supply,publish' && DECISION_WRITER === 'controller')
+  // 🔴 (2026-10-14 · PR #704 E6) 댓글 러너가 세 번째 consumer 다 — 읽기만 한다. writer 는 여전히 하나다
+  check('🔴 consumer 는 셋(공급 · 발행 · 댓글)이다 — writer 는 하나다',
+    DECISION_CONSUMERS.join(',') === 'supply,publish,comment' && DECISION_WRITER === 'controller')
 
   /** 🔴 저장된 행 검증 — 계약 판·날짜·enum·시각 */
   const V = (o: Record<string, unknown>) => validateStoredDecision({
