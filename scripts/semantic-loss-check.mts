@@ -36,6 +36,7 @@ import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION, STAGE_MAX_OUTPUT_LABEL,
   V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
 } from '../src/lib/content-core/pipeline'
+import { COPY_RUN_CHARS, COPY_RUN_WORDS } from '../src/lib/draft-originality'
 import { SPEAKER_PLAN_VERSION, parseSpeakerPlan, type SpeakerPlan } from '../src/lib/content-core/speaker'
 import { buildVoiceEvidence } from '../src/lib/content-core/voice-evidence'
 import {
@@ -165,7 +166,7 @@ console.log('\n② 재생 — 고치기 전 근거 묶음(evidence-v1)과 고친
 console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 보고 들은 경로는 지어 붙이지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 초안 프롬프트 판 = v2-draft-p11', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p11' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p11'))
+  check('🔴 초안 프롬프트 판 = v2-draft-p12', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p12' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p12'))
   for (const id of ['A', 'B', 'C']) {
     const c = CASE(id); const packet = packetOf(c); const plan = planOf(c)
     const keep = sourceKeepOf(plan, packet)
@@ -186,6 +187,13 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 보�
   check('🔴 🔴 초안 지시문이 보고 · 읽고 · 들은 경로를 지어 붙이지 말라고 한다 (운영 두 편의 말을 예로)',
     sys.includes('어디서 보고 · 읽고 · 들었는지') && sys.includes('"어디서 봤는데"') && sys.includes('"어떤 글을 봤는데"'))
   check('🔴 초안 지시문이 [보존] 세 칸을 설명한다', ['그대로쓸말', '원문의물음', '원문범위'].every((k) => sys.includes(k)))
+  check('🔴 보존은 문장 복제 허가가 아니다 — 짧은 원자적 사실만 그대로',
+    sys.includes('짧은 원자적 사실만') && sys.includes('원문의 앞뒤 문장은 옮기지 않습니다'))
+  check('🔴 원문의 물음은 뜻만 살리고 문장·표현은 새로 쓴다',
+    sys.includes('물음의 뜻') && sys.includes('문장과 표현은 새로 씁니다'))
+  check('🔴 생성이 현행 복제 게이트 경계를 답하기 전 스스로 대조한다',
+    sys.includes(`연속 ${COPY_RUN_WORDS}어절`) && sys.includes(`공백을 빼고 ${COPY_RUN_CHARS}자`)
+    && sys.includes('그 문장을 다시 씁니다'))
 }
 
 // ─────────────────────────────────────────────────────────

@@ -50,7 +50,13 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p6'
  *    (`보존`: 그대로쓸말 · 원문의물음 · 원문범위)와, 전하는 말에 보고·읽고·들은 경로를 지어 붙이지 않는다.
  *    (같은 날 보정) 의미 검수 프롬프트는 `v2-review-p8` — 가족 사실 줄만 더했다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p11'
+/**
+ * 🔴 **v2-draft-p12 (2026-10-15 · quality-v10)** — p11 자연 회차에서 생성된 초안의 원문 복제 차단이
+ *    3/33(9.1%) → 8/18(44.4%)로 뛰었다. `보존`은 뜻을 살리는 계약이지 문장을 옮기는 허가가 아니다.
+ *    그대로 쓸 원자적 사실만 남기고, 원문의 물음·주변 문장은 초안의 문장으로 다시 쓰도록 요청한다.
+ *    복제 게이트·임계값·의미 검수는 그대로다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p12'
 /**
  * 🔴 **v2-review-p8 (2026-10-13 · quality-v8 보정)** — 생활사 모순에 구체적 가족 사실(자녀 수 · 자기 자녀 성별 · 나이대) 줄을 더했다
  *    (`REVIEW_FAMILY_SPECIFICS_LINES`). 다른 축 기준은 그대로다.

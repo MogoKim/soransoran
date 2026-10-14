@@ -22,6 +22,7 @@ import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT,
 } from '../../src/lib/content-core/review'
+import { COPY_RUN_CHARS, COPY_RUN_WORDS } from '../../src/lib/draft-originality'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
 
 /**
@@ -347,9 +348,14 @@ export function buildV2DraftSystemPrompt(input: {
     '',
     '',
     '## 🔴 [보존] — 원문에서 반드시 살릴 것 (코드가 원문에서 골라 함께 보냅니다)',
-    '- 그대로쓸말: 글자 그대로 씁니다',
-    '- 원문의물음: 원문이 던진 물음입니다. 그 물음이 초안에 살아 있어야 합니다',
+    '- 그대로쓸말: 이 목록의 **짧은 원자적 사실만** 글자 그대로 씁니다. 원문의 앞뒤 문장은 옮기지 않습니다',
+    '- 원문의물음: 원문이 던진 **물음의 뜻**을 살립니다. 문장과 표현은 새로 씁니다',
     '- 원문범위: "일부" 면 [원문]은 머리와 꼬리만 있습니다. 비어 있는 가운데와 뒤는 **모릅니다** — 지어 채우지 않습니다',
+    '',
+    '## 🔴 원문과 겹치지 않게 마무리합니다',
+    '- [보존].그대로쓸말 밖의 문장과 표현은 원문에서 옮기지 말고 새로 씁니다.',
+    `- 답하기 전 [원문]과 다시 견주어, **연속 ${COPY_RUN_WORDS}어절** 또는 **공백을 빼고 ${COPY_RUN_CHARS}자** 이상 같은 부분이 있으면 그 문장을 다시 씁니다.`,
+    '- 핵심 사실·감정·물음은 남기되, 어순·문장 구조·말투는 이 화자의 글로 바꾸어야 합니다.',
     '',
     '초안 **한 편**을 JSON 으로만 답합니다.',
     '{"title":"...","body":"..."}',
@@ -357,7 +363,7 @@ export function buildV2DraftSystemPrompt(input: {
 }
 
 /**
- * 🔴 **생성 전에 보존할 원문 사실을 구조로 건넨다** (v2-draft-p11 · 2026-10-13 의미 손실 감사).
+ * 🔴 **생성 전에 보존할 원문 사실을 구조로 건넨다** (v2-draft-p12 · 2026-10-15 복제 수율 회귀 보정).
  *
  *    앞판은 원문 한 덩어리만 보냈다. 지킬 말·물음·원문이 어디까지인지는 지시문 문장 속에 흩어져 있거나
  *    아예 없었다 — 특히 근거가 머리·꼬리뿐인지 알리지 않아, 생성은 300자 조각을 글 전체로 읽었다.
