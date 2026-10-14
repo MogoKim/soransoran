@@ -3,6 +3,8 @@
  * Author labels are immediately replaced with secret-salt HMAC values.
  */
 import { createHash, createHmac } from 'node:crypto'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 import { REFERENCE_MAX_CHARS, REFERENCE_MIN_CHARS } from '../../src/lib/persona-voice-reference'
 import {
@@ -15,6 +17,9 @@ export const VOICE_EVIDENCE_SALT_MIN_CHARS = 32
 export const VOICE_EVIDENCE_VERSION = 1
 export const VOICE_EVIDENCE_RETENTION_DAYS = 90
 export const VOICE_EVIDENCE_SUFFIX = '.voice-evidence.jsonl'
+export const voiceEvidenceDataDir = (home = homedir()): string => join(
+  home, 'Library', 'Application Support', 'soransoran', 'microseed-data', 'voice-evidence',
+)
 
 export type EvidenceSalt =
   | { ok: true; salt: string; saltId: string }
@@ -142,7 +147,7 @@ export function captureVoiceEvidence(input: {
 }
 
 export const voiceEvidencePathOf = (dataDir: string, cafeId: string, runId: string): string =>
-  `${dataDir}/navercafe-voice-${cafeId}-${runId}${VOICE_EVIDENCE_SUFFIX}`
+  join(dataDir, `navercafe-voice-${cafeId}-${runId}${VOICE_EVIDENCE_SUFFIX}`)
 
 export const EVIDENCE_READ_DROP_CODES = [
   'SALT_MISSING',

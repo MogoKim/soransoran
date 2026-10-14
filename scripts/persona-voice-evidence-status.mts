@@ -1,11 +1,8 @@
 #!/usr/bin/env tsx
 /** Production evidence inventory. Read-only: DB read, file read, network 0, provider 0. */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-
 import { loadNameCollisionSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readEvidenceSalt } from './lib/voice-evidence-capture.mjs'
+import { readEvidenceSalt, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
 import { readVoiceEvidenceStatus } from './lib/voice-evidence-status.mjs'
 
 const argv = process.argv.slice(2)
@@ -29,7 +26,7 @@ if (!salt.ok) {
   process.exit(2)
 }
 const dataDir = arg('data-dir')
-  ?? join(homedir(), 'Library', 'Application Support', 'soransoran', 'microseed-data')
+  ?? voiceEvidenceDataDir()
 const { PrismaClient } = await import('@prisma/client')
 const prisma = new PrismaClient()
 try {

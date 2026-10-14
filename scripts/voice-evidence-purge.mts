@@ -1,9 +1,7 @@
 #!/usr/bin/env tsx
 /** Dry-run by default. Add --execute to apply retention or an erasure request. */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-
 import { purgeVoiceEvidence } from './lib/voice-evidence-retention.mjs'
+import { voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
 
 const argv = process.argv.slice(2)
 const values = (name: string): string[] => argv
@@ -11,7 +9,7 @@ const values = (name: string): string[] => argv
   .map((value) => value.slice(name.length + 3))
 const execute = argv.includes('--execute')
 const dataDir = values('data-dir')[0]
-  ?? join(homedir(), 'Library', 'Application Support', 'soransoran', 'microseed-data')
+  ?? voiceEvidenceDataDir()
 const speakerHashes = values('speaker-hash')
 if (speakerHashes.some((value) => !/^vs1:[0-9a-f]{64}$/.test(value))) {
   console.error('\n--speaker-hash must be vs1:<64 lowercase hex>.\n')

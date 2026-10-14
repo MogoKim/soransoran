@@ -44,7 +44,7 @@
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --live               🔴 첫 live (승인 필요)
  */
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync,
+  appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs'
 
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
@@ -85,7 +85,7 @@ import {
 import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
 import {
-  captureVoiceEvidence, evidenceRowProblems, readEvidenceSalt, voiceEvidencePathOf,
+  captureVoiceEvidence, evidenceRowProblems, readEvidenceSalt, voiceEvidenceDataDir, voiceEvidencePathOf,
   type CapturedComment, type VoiceEvidenceRow,
 } from './lib/voice-evidence-capture.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -339,8 +339,10 @@ function writeJsonl(path: string, rows: object[]) {
 }
 
 function writeSecureJsonl(path: string, rows: object[]) {
-  mkdirSync(dirname(path), { recursive: true })
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  chmodSync(dirname(path), 0o700)
   writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(''), { encoding: 'utf-8', mode: 0o600 })
+  chmodSync(path, 0o600)
 }
 
 async function main() {
@@ -899,7 +901,7 @@ async function main() {
       if (broken > 0) {
         console.log(`  🔴 말투 근거 계약 위반 ${broken}행 — 이 회차의 말투 근거 저장 0`)
       } else if (keptEvidence.length > 0) {
-        const evidencePath = voiceEvidencePathOf(dirname(OUT), CAFE_ID, RUN_ID)
+        const evidencePath = voiceEvidencePathOf(voiceEvidenceDataDir(), CAFE_ID, RUN_ID)
         writeSecureJsonl(evidencePath, keptEvidence)
         console.log(`  말투 근거 ${keptEvidence.length}행 (댓글 ${evidenceSeen}건 · 글 ${evidenceArticles}건) → ${evidencePath}`)
       } else {

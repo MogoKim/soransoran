@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import {
   captureVoiceEvidence, evidenceRowProblems, memberKeyOf, readEvidenceSalt, rowsFromVoiceEvidence,
-  speakerHashOf, type VoiceEvidenceRow,
+  speakerHashOf, voiceEvidenceDataDir, type VoiceEvidenceRow,
 } from './lib/voice-evidence-capture.mjs'
 import { purgeVoiceEvidence } from './lib/voice-evidence-retention.mjs'
 import { readVoiceEvidenceStatus } from './lib/voice-evidence-status.mjs'
@@ -25,6 +25,8 @@ const otherSalt = readEvidenceSalt({ SORAN_VOICE_EVIDENCE_SALT: `${saltValue}-ro
 check('salt missing fails closed', readEvidenceSalt({}).ok === false)
 check('short salt fails closed', readEvidenceSalt({ SORAN_VOICE_EVIDENCE_SALT: 'short' }).ok === false)
 check('valid salt accepted', salt.ok)
+check('evidence directory is deploy-independent and dedicated',
+  voiceEvidenceDataDir('/tmp/home') === '/tmp/home/Library/Application Support/soransoran/microseed-data/voice-evidence')
 
 const safeText = '그러게요, 이 부분은 다시 생각해 볼 만하네요.'
 const author = '바람꽃'
@@ -139,7 +141,10 @@ const reader = collector.slice(collector.indexOf('async function readArticleComm
 check('collector reads comments only inside thin plus salt gate', gated.includes('readArticleComments(page)'))
 check('comment reader performs no navigation', !reader.includes('.goto(') && !reader.includes('guardedNavigate'))
 check('collector writes evidence with restricted mode', collector.includes('writeSecureJsonl(evidencePath, keptEvidence)')
-  && collector.includes('mode: 0o600'))
+  && collector.includes('mode: 0o600') && collector.includes('chmodSync(dirname(path), 0o700)')
+  && collector.includes('chmodSync(path, 0o600)'))
+check('collector and operators share the canonical evidence directory',
+  collector.includes('voiceEvidencePathOf(voiceEvidenceDataDir(), CAFE_ID, RUN_ID)'))
 check('collector never logs comment text or raw author', !gated.includes('.text}') && !gated.includes('.author}'))
 
 rmSync(temp, { recursive: true, force: true })

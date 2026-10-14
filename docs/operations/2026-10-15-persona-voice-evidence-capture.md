@@ -13,7 +13,8 @@ Collect enough real, public comment-style observations to evaluate new Persona v
 - The browser returns only author-label and comment-text strings. Profile links, member IDs, comment timestamps, images, and raw HTML are not read.
 - Author labels are replaced in memory with HMAC-SHA256 identifiers. The raw label and salt are never written or logged.
 - PII, unsafe text, identity or nickname leakage, lived experience, placeholders, and out-of-band lengths are discarded.
-- Evidence is stored as mode `0600` JSONL and expires after 90 days.
+- Evidence is stored under `~/Library/Application Support/soransoran/microseed-data/voice-evidence`
+  in a mode `0700` directory as mode `0600` JSONL, independent of runtime checkout replacement, and expires after 90 days.
 - Reading fails closed when the member/Persona comparison set is unavailable. Exact N2-normalized member or Persona matches exclude the whole observed speaker.
 - Existing production voice bundles must remain byte-for-byte unchanged. New evidence can only append bundles for new Persona codes.
 
@@ -24,6 +25,7 @@ The salt is a runtime secret, not repository data. Do not print it or put it in 
 Retention and erasure are dry-run by default:
 
 ```bash
+npm run persona:voice-evidence-status -- --db
 npm run persona:voice-evidence-purge
 npm run persona:voice-evidence-purge -- --speaker-hash=vs1:<64-lowercase-hex>
 npm run persona:voice-evidence-purge -- --execute
