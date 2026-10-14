@@ -658,7 +658,9 @@ jobs:
       #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —
       #    상대 경로 하나가 Wave B 다회 수집을 8회 연속 죽였다.
       - name: Naver 수집 계약 (세션 정본 · raw-only)
-        run: npm run micro-seed:navercafe-check
+        run: |
+          npm run micro-seed:navercafe-check
+          npm run persona:voice-evidence-check
 
       # 🔴 **실제 OS 프로세스 2개로 락 경쟁을 붙인다.**
       #    `unlinkSync(LOCK_PATH)` 는 소스에 멀쩡히 있고 문법도 맞았다 —

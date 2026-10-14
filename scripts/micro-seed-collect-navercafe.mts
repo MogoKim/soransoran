@@ -16,7 +16,10 @@
  * 🔴 **네이버는 raw-only 전용이다.** Micro Seed Sheet 레인으로 가는 경로가 없다.
  *    importer 의 judgeSourceSite 가 `navercafe:*` 를 micro-seed 레인에서 거부한다(PR-S2-b-1).
  *
- * 🔴 **댓글 본문을 수집하지 않는다.** 목록의 댓글 **수**만 신호로 쓴다.
+ * 🔴 **댓글 본문은 보조 Persona 말투 근거로만, salt 게이트 뒤에서만 남긴다.**
+ *    `SORAN_VOICE_EVIDENCE_SALT` 가 없으면 댓글 DOM 을 읽지도 않는다. salt 가 있으면 이미 연
+ *    상세 화면에서 문자열만 읽고, 안전·개인정보·경험형 검사를 통과한 행의 작성자를 즉시 HMAC 으로 바꾼다.
+ *    추가 요청, DB write, 회원 ID·프로필·댓글 시각 저장은 없다.
  * 🔴 **이미지를 가져오지 않는다.** 텍스트만 남긴다.
  *
  * 🔴 **사람 속도로 읽는다.** randomDelay(base, 0.8, 1.5) — 82cook 의 고정 2초와 다르다.
@@ -41,7 +44,7 @@
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --live               🔴 첫 live (승인 필요)
  */
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync,
+  appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs'
 
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
@@ -81,6 +84,10 @@ import {
 } from '../src/lib/naver-member-gate'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
+import {
+  captureVoiceEvidence, evidenceRowProblems, readEvidenceSalt, voiceEvidenceDataDir, voiceEvidencePathOf,
+  type CapturedComment, type VoiceEvidenceRow,
+} from './lib/voice-evidence-capture.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import { postedWindowOfKstDay } from '../src/lib/source-slot-release'
@@ -331,6 +338,13 @@ function writeJsonl(path: string, rows: object[]) {
   writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(''), 'utf-8')
 }
 
+function writeSecureJsonl(path: string, rows: object[]) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  chmodSync(dirname(path), 0o700)
+  writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(''), { encoding: 'utf-8', mode: 0o600 })
+  chmodSync(path, 0o600)
+}
+
 async function main() {
   await loadEnvLocal()
   const now = new Date()
@@ -359,7 +373,13 @@ async function main() {
   console.log(`  세션   ${SESSION_PATH_ENV} ${sessionPath === null ? '🔴 없음' : '설정됨'}`)
   console.log('')
   console.log('  🔴 DB write 없음 · Sheet 접근 없음 · Candidate 없음 · Post 없음 · Queue 없음')
-  console.log('  🔴 댓글 본문 미수집 · 이미지 미수집 · 적재는 importer 가 따로 한다')
+  {
+    const salt = readEvidenceSalt(process.env)
+    console.log(salt.ok
+      ? `  🟢 댓글 말투 근거 ON (--thin 전용 · 작성자 HMAC · salt 지문 ${salt.saltId})`
+      : `  🔴 댓글 본문 미수집 (${salt.code} · DOM read 0 · 저장 0)`)
+  }
+  console.log('  🔴 이미지 미수집 · 적재는 importer 가 따로 한다')
   console.log(`  ① 목록 단계 제외 : ${AUTO_SKIP_LIST_FLAGS.join(' · ')}`)
   console.log(`  ② 상세 단계 보류 : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (적재 시점)`)
   console.log('')
@@ -564,6 +584,10 @@ async function main() {
   console.log(`     목록 ${OUT_LIST}\n`)
   const started = Date.now()
   const collected: CollectedCandidate[] = []
+  const evidenceSalt = readEvidenceSalt(process.env)
+  const evidence: VoiceEvidenceRow[] = []
+  let evidenceSeen = 0
+  let evidenceArticles = 0
   let browser: NaverBrowser | null = null
   let membershipStop: MembershipStop | null = null
 
@@ -765,8 +789,23 @@ async function main() {
        *    그 글은 다시 열리지 않으므로 영영 공급되지 않는다.
        *
        *    분류 뒤(`dropped`)와 저장 뒤(`kept`)에 나눠 적는다.
-       */
+      */
       collected.push(row)
+      if (THIN && evidenceSalt.ok) {
+        const readComments = await readArticleComments(page)
+        const captured = captureVoiceEvidence({
+          source: sourceSiteOf(cafe!.cafeId), articleId: id, comments: readComments.comments,
+          runId: RUN_ID, now: new Date(),
+        }, evidenceSalt)
+        evidenceSeen += captured.seen
+        if (captured.rows.length > 0) evidenceArticles += 1
+        evidence.push(...captured.rows)
+        if (readComments.errors.length > 0) {
+          console.log(`  ⚠️ ${id} — 댓글 셀렉터 오류(말투 근거 0): ${readComments.errors[0]}`)
+        }
+        console.log(`  💬 ${id} — 댓글 읽음 ${captured.seen} / 목록 ${row.sourceCommentCount} · 남김 ${captured.rows.length}`
+          + `${captured.seen === 0 && row.sourceCommentCount > 0 ? ' · 🔴 셀렉터 0건' : ''}`)
+      }
       console.log(`  ✅ ${id} · ${[...body].length}자 · 댓글 ${row.sourceCommentCount}`)
     }
   } catch (e) {
@@ -854,6 +893,20 @@ async function main() {
     if (!existsSync(thinPath)) {
       fail(`THIN_WRITE_FAILED — 산출물을 저장하지 못했다 (${thinPath})\n`
         + '   🔴 kept 를 확정하지 않았다. 다음 회차가 그 글을 다시 연다.', 'OTHER')
+    }
+    if (evidenceSalt.ok) {
+      const keptIds = new Set(thinRows.map((r) => String(r.sourceArticleId ?? r.id ?? '')))
+      const keptEvidence = evidence.filter((row) => keptIds.has(row.articleId))
+      const broken = keptEvidence.filter((row) => evidenceRowProblems(row).length > 0).length
+      if (broken > 0) {
+        console.log(`  🔴 말투 근거 계약 위반 ${broken}행 — 이 회차의 말투 근거 저장 0`)
+      } else if (keptEvidence.length > 0) {
+        const evidencePath = voiceEvidencePathOf(voiceEvidenceDataDir(), CAFE_ID, RUN_ID)
+        writeSecureJsonl(evidencePath, keptEvidence)
+        console.log(`  말투 근거 ${keptEvidence.length}행 (댓글 ${evidenceSeen}건 · 글 ${evidenceArticles}건) → ${evidencePath}`)
+      } else {
+        console.log(`  말투 근거 0행 (댓글 ${evidenceSeen}건 읽음)`)
+      }
     }
     for (const r of thinRows) {
       const keptId = typeof r.id === 'string' ? r.id
@@ -1123,6 +1176,31 @@ async function readArticleBody(page: NaverPage): Promise<{ body: string | null; 
     }
   }
   return { body: null, errors }
+}
+
+/** 이미 열린 상세 화면에서 공개 댓글의 작성자 표시와 본문 문자열만 읽는다. */
+async function readArticleComments(page: NaverPage): Promise<{ comments: CapturedComment[]; errors: string[] }> {
+  const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
+  const errors: string[] = []
+  const selectors = {
+    item: '.CommentItem, .comment_list > li',
+    author: '.comment_nickname',
+    text: '.text_comment',
+  }
+  for (const frame of [page, ...frames]) {
+    try {
+      const rows = await frame.$$eval<CapturedComment[], typeof selectors>(selectors.item, (elements, selected) =>
+        elements.map((element) => ({
+          author: (element.querySelector(selected.author)?.textContent ?? '').trim() || null,
+          text: (element.querySelector(selected.text)?.textContent ?? '').trim(),
+        })), selectors)
+      const comments = rows.filter((row) => row.text !== '')
+      if (comments.length > 0) return { comments, errors }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error))
+    }
+  }
+  return { comments: [], errors }
 }
 
 main()
