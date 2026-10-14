@@ -18,6 +18,8 @@
 |---|---|---|
 | `npm run persona:expansion` | 정본 카드 · 정본 말투 자산 · fixture로 자원 · 단계 · canary 후보를 판정 | 0 |
 | `npm run persona:expansion -- --db` | 위 + 운영 DB read-only: 계약 유효 · 4상태 · 활동 집중도 · Gate ⑥-B 실제 대조 · cadence | 0 |
+| `npm run persona:expansion -- --db --voice-evidence` | 위 + 익명 보충 말투 증거로 새 cohort 묶음 가능 여부 판정 | 0 |
+| `npm run persona:reference-supplement-build -- --db` | 기존 30명 불변을 확인하고 새 cohort 말투 스냅샷 계획·digest 출력 | 0 |
 | `npm run persona:expansion-check` | 계약 fixture(변이 반례 포함). DB · 네트워크 · LLM 0 | 0 |
 
 `--db`는 `.env.local`의 DB 접속만 쓴다. 출력에는 코드 · 개수 · 사유 코드만 나오고 회원 이름은 나오지 않는다.
@@ -52,19 +54,23 @@
 
 순서 — 각 단계는 앞 단계의 출력을 확인한 뒤에 한다
 
-1. **카드 승격 커밋** — fixture 후보를 Pool 문서 §5 카드 블록으로 옮긴다(`renderPoolCardBlock` 형식).
+1. **말투 스냅샷** — `persona:expansion -- --db --voice-evidence`에서 10명 전원이 ready면
+   `persona:reference-supplement-build -- --db` dry-run의 digest를 승인한 뒤, 병합된 깨끗한 main runtime에서만
+   `--apply --production --target=<SHA> --digest=<64자리> --reason=<사유>`로 기록한다. 이 파일은
+   `persona-reference/supplement-v1.json`에 0600으로 남고, 기존 30명 배정 digest가 다르면 쓰지 않는다.
+2. **카드 승격 커밋** — fixture 후보를 Pool 문서 §5 카드 블록으로 옮긴다(`renderPoolCardBlock` 형식).
    말투 토큰은 그때 배정된 화자 묶음으로 정한다. `persona:autogen-check` · `persona:expansion-check`가 통과해야 한다.
-2. **cohort 승격 커밋** — 같은 PR에서 한 번에 바꾼다.
+3. **cohort 승격 커밋** — 같은 PR에서 한 번에 바꾼다.
    `COHORTS`에 `wave6-d20-canary` 추가 · `RUNNABLE_COHORTS`를 그 하나로 · `TARGET_PERSONA_COUNT` 40 ·
    `PROPOSED_COHORTS`에서 제거. 이 순간 운영 universe가 바뀐다 —
    `persona:reference-preflight`로 **기존 30명의 말투 배정 변동 0**을 확인한다(변동이 있으면 승격하지 않는다).
-3. **seed 파일** — `persona:cohort-seed --cohort=wave6-d20-canary --creative=<fixture에서 뽑은 creative 파일> --expect-sha=<sha256>`
+4. **seed 파일** — `persona:cohort-seed --cohort=wave6-d20-canary --creative=<fixture에서 뽑은 creative 파일> --expect-sha=<sha256>`
    dry-run 뒤 `--write`. 파일은 `tmp/` (gitignored).
-4. **draft 적재** — `persona:cohort-run --cohort=wave6-d20-canary --step=create --apply --limit=10`
+5. **draft 적재** — `persona:cohort-run --cohort=wave6-d20-canary --step=create --apply --limit=10`
    → `--step=seed --apply --limit=10` → `--step=check`. 운영 DB write이므로 창업자 승인 뒤에만 한다.
-5. **활성화** — `ACTOR_USER_ID=<id> persona:cohort-run --cohort=wave6-d20-canary --step=activate --apply --limit=10 --reason "..."`.
+6. **활성화** — `ACTOR_USER_ID=<id> persona:cohort-run --cohort=wave6-d20-canary --step=activate --apply --limit=10 --reason "..."`.
    일부만 켜지 않는다(전원 아니면 0).
-6. **관측** — `persona:expansion -- --db`의 계약 유효가 40이고, 다음 자연 회차에서 새 10명이 배정 후보에 들어오는지
+7. **관측** — `persona:expansion -- --db`의 계약 유효가 40이고, 다음 자연 회차에서 새 10명이 배정 후보에 들어오는지
    본다. 문제가 있으면 `--step=pause`(actor·reason 필요)로 멈춘다.
 
 ### 3.2 d20-sustained (계약 유효 60)

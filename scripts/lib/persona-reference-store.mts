@@ -38,6 +38,10 @@ import {
 } from '../../src/lib/persona-cohort'
 import { findExperienceClaims } from '../../src/lib/persona-experience-grounding'
 import { classifyReaction } from './voice-comment-signals.mjs'
+import {
+  assignmentDigest, mergeSupplementAssignment, readSupplementSnapshot,
+} from './persona-reference-supplement-store.mjs'
+import { supplementFallbackPartition } from '../../src/lib/persona-reference-supplement'
 
 /**
  * 🔴 **이 참고 댓글은 남의 경험을 담고 있는가** (2026-09-10, 창업자 판정 B).
@@ -547,13 +551,70 @@ export function stableAssignment(input: {
       origin, rows: [], sourceDigest: canon.sourceDigest,
     }
   }
-  /** 🔴 **언제나 현재 production 정본 universe 전체**로 나눈다. 부르는 쪽의 목록을 보지 않는다 */
-  const plan = planBundles({
-    rows, personaCodes: PRODUCTION_PERSONA_CODES, target: input.target,
-  })
+  /**
+   * 🔴 보충 스냅샷이 있으면 그 파일이 기록한 기존 universe 로 정본 배정을 다시 만들고,
+   * 새 코드 묶음만 뒤에 붙인다. 새 증거가 더 쌓여도 기존 30명과 이미 고정한 새 코드는
+   * 바뀌지 않는다. 스냅샷이 없거나 깨졌으면 옛 정본 경로로만 계산한다.
+   */
+  const supplement = canon.ok && canon.sourceDigest !== null
+    ? readSupplementSnapshot({
+      baseSourceDigest: canon.sourceDigest,
+      baseAssignmentDigestFor: (codes) => {
+        // Manifest identity is independent of a caller's display/sample cap.
+        const base = planBundles({ rows, personaCodes: codes })
+        return assignmentDigest(new Map(base.bundles.map((bundle) => [bundle.personaCode, bundle])), codes)
+      },
+    })
+    : { ok: false as const, code: 'SUPPLEMENT_BASE_UNKNOWN', reason: '정본 원천 digest 를 모른다' }
+  const fallback = supplementFallbackPartition(PRODUCTION_PERSONA_CODES)
+  const baseCodes = supplement.ok ? supplement.asset.baseCodes : fallback.baseCodes
+  const plan = planBundles({ rows, personaCodes: baseCodes, target: input.target })
+  const merged = supplement.ok
+    ? mergeSupplementAssignment({
+      productionCodes: PRODUCTION_PERSONA_CODES,
+      baseCodes: supplement.asset.baseCodes,
+      baseBundles: plan.bundles,
+      supplementByCode: supplement.byCode,
+    })
+    : {
+      byCode: new Map(plan.bundles.map((bundle) => [bundle.personaCode, bundle])),
+      missing: fallback.missingCodes,
+      baseOutside: [] as string[],
+    }
+  const { byCode } = merged
+  const table = [...plan.table]
+  const blocks = [...plan.blocks]
+  if (!supplement.ok && supplement.code !== 'SUPPLEMENT_ABSENT') {
+    blocks.push(`보충 말투 스냅샷이 유효하지 않다 — ${supplement.code}`)
+  }
+  if (!supplement.ok) {
+    for (const code of merged.missing) blocks.push(`${code}: 보충 말투 스냅샷에 묶음이 없다`)
+  }
+  if (supplement.ok) {
+    if (merged.baseOutside.length > 0) blocks.push(`보충 스냅샷 base 코드가 production 밖이다 — ${merged.baseOutside.join(',')}`)
+    for (const code of merged.missing) blocks.push(`${code}: 보충 말투 스냅샷에 묶음이 없다`)
+    for (const code of PRODUCTION_PERSONA_CODES.filter((candidate) => !baseCodes.includes(candidate))) {
+      const bundle = byCode.get(code)
+      if (bundle === undefined) continue
+      table.push({
+        personaCode: code,
+        anchorComments: bundle.observedCount,
+        safeTexts: bundle.comments.length,
+        styleOnly: bundle.styleOnlyCount,
+        supplements: bundle.supplementCount,
+        anchorRatio: bundle.anchorRatio,
+        medianLen: bundle.lengths.median,
+        p90Len: bundle.lengths.p90,
+      })
+    }
+  }
   return {
-    byCode: new Map(plan.bundles.map((b) => [b.personaCode, b])),
-    assets, table: plan.table, blocks: plan.blocks, origin, rows,
+    byCode,
+    assets,
+    table,
+    blocks,
+    origin: supplement.ok ? `${origin} + 보충 스냅샷` : origin,
+    rows,
     sourceDigest: canon.sourceDigest ?? sha16(JSON.stringify(rows.map((r) => r.text).sort())),
   }
 }
