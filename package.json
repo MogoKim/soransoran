@@ -224,7 +224,7 @@
     "check:political-axis": "tsx scripts/political-axis-contract-check.mts",
     "stage:probe": "tsx scripts/stage-decision-probe.mts",
     "publish:machine-review": "tsx scripts/original-post-machine-review.mts",
-    "operator:compose-check": "tsx scripts/operator-compose-check.mts",
+    "operator:compose-check": "tsx scripts/operator-compose-check.mts && tsx --tsconfig tsconfig.ops.json scripts/operator-compose-rich-check.mts",
     "operator:compose-db-check": "tsx scripts/operator-compose-db-check.mts",
     "check:comment-compose": "tsx scripts/comment-compose-check.mts",
     "check:comment-thread": "tsx scripts/comment-thread-check.mts",

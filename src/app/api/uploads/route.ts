@@ -1,19 +1,10 @@
 import { NextResponse } from 'next/server'
-import { randomUUID } from 'node:crypto'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { uploadToR2, isR2Configured } from '@/lib/r2'
-import { optimizeImage } from '@/lib/image-optimize'
+import { receivePostImage, UPLOAD_LIMIT, UPLOAD_WINDOW_MS } from '@/lib/post-image-upload'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
-import {
-  MAX_IMAGE_BYTES,
-  ALLOWED_IMAGE_TYPES,
-  HEIC_EXTENSION,
-  IMAGE_TOO_LARGE,
-  IMAGE_TYPE_NOT_ALLOWED,
-  IMAGE_UPLOAD_FAILED,
-  IMAGE_UPLOAD_OFF,
-} from '@/lib/post-media-policy'
+import { IMAGE_UPLOAD_OFF } from '@/lib/post-media-policy'
 
 /**
  * 글에 넣을 사진 한 장 업로드.
@@ -35,9 +26,6 @@ import {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-/** 사용자당 1분에 12장. 여섯 장짜리 글 하나를 한 번에 올리고도 남는다. */
-const UPLOAD_LIMIT = 12
-const UPLOAD_WINDOW_MS = 60 * 1000
 
 function bad(message: string, status: number) {
   return NextResponse.json({ error: message }, { status })
@@ -63,40 +51,6 @@ export async function POST(request: Request) {
   const limited = checkActionRateLimit('upload', userId, UPLOAD_LIMIT, UPLOAD_WINDOW_MS)
   if (!limited.ok) return bad(retryMessage(limited.retryAfterSec), 429)
 
-  let file: File | null = null
-  try {
-    const form = await request.formData()
-    const value = form.get('file')
-    if (value instanceof File) file = value
-  } catch {
-    // 본문이 4.5MB 를 넘으면 여기까지 오지 못하고 잘린다 — 그 경우도 같은 문구로 답한다.
-    return bad(IMAGE_TOO_LARGE, 413)
-  }
-  if (!file) return bad('사진을 골라주세요.', 400)
-
-  if (file.size > MAX_IMAGE_BYTES) return bad(IMAGE_TOO_LARGE, 413)
-
-  // iOS 17 일부에서 heic 의 type 이 빈 문자열로 온다 — 확장자로 한 번 더 본다.
-  const declared = file.type
-  const looksHeic = declared === '' && HEIC_EXTENSION.test(file.name)
-  if (!looksHeic && !ALLOWED_IMAGE_TYPES.includes(declared as (typeof ALLOWED_IMAGE_TYPES)[number])) {
-    return bad(IMAGE_TYPE_NOT_ALLOWED, 415)
-  }
-
-  try {
-    const raw = Buffer.from(await file.arrayBuffer())
-    // sharp 가 열지 못하면 이미지가 아니다 — 확장자·MIME 보다 이쪽이 확실하다.
-    const optimized = await optimizeImage(raw)
-    const key = `posts/${userId}/${randomUUID()}.webp`
-    const stored = await uploadToR2(optimized.buffer, key, optimized.contentType)
-
-    return NextResponse.json(
-      { url: stored.url, width: optimized.width, height: optimized.height },
-      { headers: { 'Cache-Control': 'no-store' } },
-    )
-  } catch (error) {
-    // 🔴 원인을 화면에 흘리지 않는다. 로그에만 남긴다.
-    console.error('[uploads] 실패:', (error as Error).message)
-    return bad(IMAGE_UPLOAD_FAILED, 500)
-  }
+  // 🔴 파일 검사·변환·저장은 관리자 업로드와 같은 함수를 지난다(post-image-upload.ts)
+  return receivePostImage(request, { ownerId: userId, store: uploadToR2, logTag: 'uploads' })
 }
