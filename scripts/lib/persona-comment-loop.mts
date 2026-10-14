@@ -50,6 +50,8 @@ import {
   runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter,
 } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
+import { FOLLOWUP_KEY_PREFIX } from '../../src/lib/persona-comment-followup'
+import type { FollowupPhaseReport } from './persona-comment-followup-run.mjs'
 
 // ─────────────────────────────────────────────────────────
 // 자리 · 상한
@@ -236,6 +238,8 @@ export async function sweepAutoLane(prisma: PrismaClient, now: Date): Promise<Sw
       status: 'PENDING', publishedCommentId: null,
       // 🔴 근거 없는 옛 행은 자동 발행 대상이 아니다(트랜잭션도 막는다) — 애초에 집지 않는다
       canonRunId: { not: null }, targetPostId: { not: null },
+      // 🔴 추가 댓글 행은 집지 않는다 — 집으면 글당 1건 규칙에 막혀 닫힌다(그 레인은 `sweepFollowupLane` 이 낸다)
+      NOT: { dedupKey: { startsWith: FOLLOWUP_KEY_PREFIX } },
       createdAt: { gte: new Date(now.getTime() - COMMENT_LOOP_SWEEP_LOOKBACK_MS) },
     },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -293,6 +297,12 @@ export type CommentLoopDeps = {
   generation: { ok: boolean; reason: string }
   /** 회차 유료 요청 상한(장부 runRequestCap 과 같은 값) */
   runRequestCap: number
+  /**
+   * 🔴 **첫 댓글 뒤 선택적 추가 댓글 단계** (2026-10-14 · PR #704 · 기본 OFF).
+   *    진입점이 **정기 회차 · 스위치 on** 일 때만 넘긴다. 첫 댓글 sweep 이 끝난 **뒤에** 한 번 부른다 —
+   *    첫 댓글 경로는 이 단계를 보지 않고, 이 단계가 실패해도 첫 댓글 결과는 그대로다.
+   */
+  followupPhase?: () => Promise<FollowupPhaseReport>
 }
 
 export type CommentLoopOutcome =
@@ -314,6 +324,8 @@ export type CommentLoopReport = {
   generationSkipped: string | null
   outcomes: readonly PipelineOutcome[]
   lines: string[]
+  /** 🔴 추가 댓글 단계 — 넘기지 않았으면 null */
+  followup?: FollowupPhaseReport | null
 }
 
 const emptyReport = (outcome: CommentLoopOutcome, stage: string, reason: string): CommentLoopReport => ({
@@ -450,9 +462,16 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
   }
 
   const sweepAfter = await sweepAutoLane(deps.prisma, deps.now)
+  // 🔴 첫 댓글이 다 끝난 뒤에만 — 실패해도 첫 댓글 결과를 지우지 않는다
+  let followup: FollowupPhaseReport | null = null
+  if (deps.followupPhase !== undefined) {
+    try { followup = await deps.followupPhase() } catch {
+      lines.push('🔴 추가 댓글 단계 예외 — 첫 댓글 결과는 그대로')
+    }
+  }
   return {
     outcome: 'RAN', stage: stage.stage, reason: stage.reason,
     sweepBefore, sweepAfter, targets, providerCalls, enqueued, generationSkipped,
-    outcomes, lines,
+    outcomes, lines, followup,
   }
 }

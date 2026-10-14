@@ -22,6 +22,7 @@
  * 🔴 DB write 0. 읽기는 오늘 결정 한 행뿐이다.
  */
 import { spawnSync } from 'node:child_process'
+import { join } from 'node:path'
 
 import { PrismaClient } from '@prisma/client'
 
@@ -32,6 +33,7 @@ import { validateStoredDecision } from '../src/lib/stage-decision-contract'
 import { consumerEnvOf } from '../src/lib/stage-controller'
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
 import { recordPublishRun } from './lib/publish-run-record.mjs'
+import { FOLLOWUP_SWITCH_ENV, readFollowupSwitch } from '../src/lib/persona-comment-followup'
 
 const argv = process.argv.slice(2)
 const sep = argv.indexOf('--')
@@ -52,10 +54,24 @@ if (!PRINT && cmd.length === 0) {
 const NOW = new Date()
 const today = kstDateString(NOW)
 const flagOn = controllerEnabled(readEnvKeys([CONTROLLER_ENV]).values)
+/**
+ * 🔴 **댓글 러너(`--by=comment`)는 추가 댓글 스위치가 켜졌을 때만 결정을 읽는다** (2026-10-14 · PR #704 E6).
+ *    첫 댓글은 단계 칸을 쓰지 않는다 — 결정이 필요한 것은 선택적 추가 댓글뿐이고, 스위치가 꺼져 있으면
+ *    결정 행 읽기도 0 이다(가장 안전한 값 · 표식 없음 → 추가 댓글 0). 러너와 같은 순서로 스위치를 본다:
+ *    프로세스 env → 작업 디렉터리 `.env.local`(러너의 `loadEnvLocal`) → 정본 env.
+ */
+const followupOn = BY !== 'comment' ? true : readFollowupSwitch({
+  ...readEnvKeys([FOLLOWUP_SWITCH_ENV]).values,
+  ...readEnvKeys([FOLLOWUP_SWITCH_ENV], join(process.cwd(), '.env.local')).values,
+  ...process.env,
+}).enabled
 
 let overrides: Record<string, string>
 let note: string
-if (!flagOn) {
+if (!followupOn) {
+  overrides = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: `${FOLLOWUP_SWITCH_ENV} off` })
+  note = `${FOLLOWUP_SWITCH_ENV} off — 댓글 러너는 결정을 읽지 않는다(첫 댓글만 · 추가 댓글 0)`
+} else if (!flagOn) {
   // 🔴 kill switch — 결정을 읽지 않고 가장 안전한 단계를 **명시해서** 넣는다(env 파일 단계가 이기지 못한다)
   overrides = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: `${CONTROLLER_ENV} off` })
   note = `${CONTROLLER_ENV} off — kill switch → safest`
