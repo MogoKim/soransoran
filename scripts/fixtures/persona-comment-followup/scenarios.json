@@ -886,5 +886,9 @@
         "profile": "d10"
       }
     ]
+  },
+  "firstCommentPrompt": {
+    "_note": "origin/main 7b532940 의 toPromptPost 출력 해시(답글 대상 없는 입력 2종). 첫 댓글 프롬프트가 한 바이트라도 바뀌면 FAIL.",
+    "sha256": "f829dc34584735f3988f4d5cb438e26b9736c20c7957f496e721b9ed116fcba9"
   }
 }

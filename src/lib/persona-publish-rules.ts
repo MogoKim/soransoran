@@ -59,6 +59,8 @@ export type PublishBlockCode =
   | 'COMMENT_RECHECK'
   /** 🔴 무인 레인(bootstrap-auto) 규칙이 막았다 — 60분 · 글당 1건 · 자기 글 · 단계·주체·상태 */
   | 'AUTO_LANE'
+  /** 🔴 추가 댓글 레인(`judgeFollowupPublish`) — 첫 댓글 레인과 다른 코드다 */
+  | 'FOLLOWUP_LANE'
 
 export type PublishBlock = { code: PublishBlockCode; message: string }
 

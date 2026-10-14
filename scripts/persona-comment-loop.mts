@@ -23,15 +23,17 @@
  *   npx tsx scripts/persona-comment-loop.mts            # dry-run
  *   npx tsx scripts/persona-comment-loop.mts --live     # 🔴 예약 실행과 같다
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { PrismaClient } from '@prisma/client'
 
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
-import { leaseEntry, type LeaseProof } from './lib/runner-lease.mjs'
-import { readCostSignals } from './lib/ops-signals.mjs'
+import { leaseEntry, type LeaseProof, type PassContext } from './lib/runner-lease.mjs'
+import { readCostSignals, readLedgerToday } from './lib/ops-signals.mjs'
+import { readFollowupSwitch } from '../src/lib/persona-comment-followup'
+import { readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
@@ -74,7 +76,7 @@ async function main(): Promise<number> {
         // 🔴 진단 — 이 회차를 연 깨움(정기 · 발행 뒤 사건 · 겹친 깨움). 잠금 · 장부 · 상한은 이 값으로 갈리지 않는다
         console.log(`  깨움 ${ctx.trigger}${ctx.absorbed === null ? '' : ` (거둔 표식 ${ctx.absorbed}${ctx.absorbedAt === null ? '' : ` · ${ctx.absorbedAt}`})`}`)
         prisma ??= new PrismaClient()
-        return runPass(prisma, new Date(), pass, proof)
+        return runPass(prisma, new Date(), pass, proof, ctx)
       },
     })
   } catch (e) {
@@ -87,7 +89,7 @@ async function main(): Promise<number> {
 
 /** 🔴 한 회차 — lease 를 쥔 채로만 부른다. 0 정상 · 1 예외 · 2 발행 오류가 남았다 */
 /** 🔴 `_proof` — 커널 잠금 fd 증명을 받은 쪽만 회차를 돈다(타입이 요구한다) */
-async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: LeaseProof): Promise<number> {
+async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: LeaseProof, ctx: PassContext): Promise<number> {
   try {
     const budget = commentLoopLimitsFromEnv(process.env)
     const missing = missingBudgetEnvNames(budget.limits)
@@ -106,7 +108,7 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
       dir: commentLoopLedgerDir(),
     })
 
-    const makeGenerate = (personaCodes: readonly string[]): CommentGenerate => {
+    const makeGenerate = (personaCodes: readonly string[], stage: 'commentGen' | 'commentFollowupGen' = 'commentGen'): CommentGenerate => {
       // 🔴 말투 근거 — Queue CLI 와 같은 규칙: 자산이 있으면 강제, 없으면 buildPrompt 가 판단한다
       const reference = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes })
       return async ({ model, input, recentTexts }) => {
@@ -115,7 +117,7 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
         if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
         // 🔴 장부를 지나서만 부른다 — 계산 → 예약 → 요청 → 정산
         const res = await session.call({
-          stage: 'commentGen',
+          stage,
           model: model as ProviderModel,
           systemPrompt: prompt.prompt.systemPrompt,
           userPayload: prompt.prompt.userPayload,
@@ -127,13 +129,31 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
     }
 
     const canon = readConfirmedSelection()
+    /**
+     * 🔴 **추가 댓글 단계 — 정기 회차 · `--live` · 스위치 on 일 때만 만든다** (2026-10-14 · PR #704 · 기본 OFF).
+     *    사건 깨움 · 복구 · 수동 회차는 첫 댓글만 한다. 스위치가 꺼져 있으면 아래 준비 읽기도 0 이다.
+     */
+    const source = makeDbTargetSource({ prisma, windowStart: new Date(now.getTime() - 7 * 86_400_000) })
+    const followupOn = LIVE && ctx.trigger === 'scheduled' && readFollowupSwitch(process.env).enabled
+    const followupPhase = !followupOn ? undefined : async () => {
+      const fctx = await readFollowupContext({ prisma, now, env: process.env, readText: (path) => readFileSync(path, 'utf-8') })
+      const ledgerRead = readLedgerToday(commentLoopLedgerDir(), now)
+      return runFollowupPhase({
+        prisma, now, env: process.env, source, canon,
+        makeGenerate: (codes) => makeGenerate(codes, 'commentFollowupGen'),
+        generation: gate,
+        ledger: { entries: ledgerRead.entries, capUsd: budget.limits.dailyUsd, headroom: budget.limits.headroomMultiplier },
+        ...fctx,
+      })
+    }
     const report = await runCommentLoop({
       prisma, now, env: process.env, live: LIVE,
-      source: makeDbTargetSource({ prisma, windowStart: new Date(now.getTime() - 7 * 86_400_000) }),
+      source,
       canon,
       makeGenerate,
       generation: gate,
       runRequestCap: budget.limits.runRequestCap ?? 0,
+      ...(followupPhase === undefined ? {} : { followupPhase }),
     })
 
     console.log(`  단계  ${report.stage} — ${report.reason}`)
@@ -141,6 +161,10 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
     for (const l of report.lines) console.log(`  ${l}`)
     for (const s of [report.sweepBefore, report.sweepAfter]) for (const l of s?.lines ?? []) console.log(`     ${l}`)
     if (report.generationSkipped !== null) console.log(`  생성 건너뜀 — ${report.generationSkipped}`)
+    const fu = report.followup ?? null
+    console.log(`  추가 댓글  ${fu === null ? (followupOn ? '예외' : '단계 없음(OFF · 정기 회차 아님 · dry-run)') : `${fu.outcome} — ${fu.reason}`}`)
+    for (const l of fu?.lines ?? []) console.log(`  ${l}`)
+    for (const sw of [fu?.sweepBefore ?? null, fu?.sweepAfter ?? null]) for (const l of sw?.lines ?? []) console.log(`     ${l}`)
     const t = session.tally
     console.log(`  비용  유료 ${t.paid}회 · 막힘 ${t.blocked}회 · 예약 $${t.reservedUsd.toFixed(6)} · 정산 $${t.settledUsd.toFixed(6)}`
       + `${t.usageUnknown > 0 ? ` · 🔴 사용량 미상 ${t.usageUnknown}` : ''}${t.settleHeld > 0 ? ` · 🔴 정산 보류 ${t.settleHeld}` : ''}`)
@@ -148,6 +172,7 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
     console.log(`COMMENT_LOOP pass=${pass} outcome=${report.outcome} targets=${report.targets} providerCalls=${report.providerCalls}`
       + ` enqueued=${report.enqueued} | ${sweepLine('sweep①', report.sweepBefore)} | ${sweepLine('sweep②', report.sweepAfter)}\n`)
     const errors = (report.sweepBefore?.errors ?? 0) + (report.sweepAfter?.errors ?? 0)
+      + (fu?.sweepBefore?.errors ?? 0) + (fu?.sweepAfter?.errors ?? 0)
     return errors > 0 || t.settleHeld > 0 ? 2 : 0
   } catch (e) {
     console.error(`🔴 회차 예외 — ${e instanceof Error ? e.name : 'unknown'}`)

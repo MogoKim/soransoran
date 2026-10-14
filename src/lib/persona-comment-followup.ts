@@ -167,9 +167,15 @@ export function unitOf(...parts: readonly string[]): number {
 }
 
 /** 🔴 멱등 열쇠 — (글 · 순번). 같은 자리에 두 회차가 동시에 넣으면 unique 가 하나만 남긴다 */
+export const FOLLOWUP_KEY_PREFIX = 'comment-followup:'
 export function followupKeyOf(postId: string, ordinal: number): string {
-  return `comment-followup:${postId}:${ordinal}`
+  return `${FOLLOWUP_KEY_PREFIX}${postId}:${ordinal}`
 }
+/**
+ * 🔴 추가 댓글 Queue 행인가 — **열쇠 모양으로만** 가른다.
+ *    첫 댓글 sweep 은 이 행을 집지 않고(집으면 글당 1건 규칙에 막혀 닫힌다), 추가 댓글 sweep 은 이 행만 집는다.
+ */
+export const isFollowupKey = (dedupKey: string): boolean => dedupKey.startsWith(FOLLOWUP_KEY_PREFIX)
 
 // ─────────────────────────────────────────────────────────
 // 🔴 한 글 판정
@@ -235,6 +241,89 @@ export function rolesFor(hook: ReactionType): readonly ReactionType[] {
   return (ROLES_FOR[hook] ?? ['other']).filter((r) => COMMENT_REACTION_ROLES.includes(r))
 }
 
+type FollowupBase =
+  | { ok: false; verdict: Extract<FollowupPostVerdict, { verdict: 'STOP' | 'BLOCK' }> }
+  | {
+      ok: true
+      live: readonly FollowupCommentRow[]
+      livePersona: readonly FollowupCommentRow[]
+      extrasSoFar: number
+      cap: number
+      ordinal: number
+      lastPersonaMs: number
+      /** 이 글에 이미 나온 Persona(지운 댓글 포함) + 글쓴 Persona — 다시 쓰지 않는다 */
+      onPost: ReadonlySet<string>
+      publishedAtMs: number
+    }
+
+/**
+ * 🔴 **생성 판정과 발행 트랜잭션이 함께 쓰는 사실 검사** — 같은 결정을 두 곳에 적지 않는다.
+ *    사실 · 출처 · 첫 댓글 · 총량 · 실회원 상한 · 마지막 말 · 현재성까지. 시간차 jitter · 열린 후보 · 대상 고르기는 밖에서 본다.
+ */
+function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
+  const block = (reason: string): FollowupBase => ({ ok: false, verdict: { verdict: 'BLOCK', reason } })
+  const stop = (reason: string): FollowupBase => ({ ok: false, verdict: { verdict: 'STOP', reason } })
+  if (f.postStatus !== 'PUBLISHED') return block(`글 상태가 ${f.postStatus ?? '불명'} 다`)
+  if (f.autoManagedPost !== true) {
+    return block(f.autoManagedPost === false ? '관리형 자동 글이 아니다 — 잇지 않는다' : '관리형 자동 글인지 모른다(fail-closed)')
+  }
+  if (f.authorPersonaId === undefined) return block('글 작성 Persona 를 읽지 못했다(fail-closed)')
+  if (f.publishedAtMs === null || !Number.isFinite(f.publishedAtMs) || f.publishedAtMs > nowMs) {
+    return block('글의 공개 시각을 읽지 못했거나 미래다(fail-closed)')
+  }
+  for (const c of f.comments) {
+    if (c.postId !== f.postId) return block('다른 글의 댓글이 섞였다(fail-closed)')
+    // 🔴 지운 댓글도 본다 — 출처 모순은 지웠다고 사라지지 않는다
+    if (!authorKindOf(c).ok) return block('댓글 작성자 종류가 모순이다(fail-closed)')
+  }
+  // 🔴 순환 · 사라진 부모 — 관계가 어긋난 글에 답글을 얹지 않는다
+  if (buildCommentThreads(f.comments, { postId: f.postId, blockedAuthorIds: new Set() }).anomalies.length > 0) {
+    return block('댓글 관계가 어긋났다(순환·사라진 부모) — fail-closed')
+  }
+  const live = f.comments.filter((c) => !c.isDeleted)
+  const livePersona = live.filter((c) => c.commentOrigin === 'PERSONA')
+  const liveReal = live.filter((c) => c.commentOrigin === 'MEMBER' || c.commentOrigin === 'GUEST')
+
+  // ── 첫 댓글 계약 — 추가 댓글은 자동 출처 첫 댓글 위에서만 ──
+  if (livePersona.some((c) => c.provenance === 'broken' || c.provenance === 'followup-broken' || c.provenance === null)) {
+    return block('출처가 깨졌거나 모르는 Persona 댓글이 있다(fail-closed)')
+  }
+  if (!livePersona.some((c) => c.provenance === 'auto')) {
+    return stop('자동 출처 첫 댓글이 없다 — 추가 댓글은 첫 댓글을 대신하지 않는다')
+  }
+
+  // ── 총량 · 실회원 상한 — 수량은 미해결 거리가 정하고 여기서는 넘지 못할 선만 본다 ──
+  const personaCount = livePersona.length
+  if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX) {
+    return stop(`Persona 댓글 ${personaCount}건 — 글당 ${FOLLOWUP_TOTAL_PER_POST_MAX}건 상한`)
+  }
+  const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length
+  // ── 실회원 우선 ──
+  const realCap = liveReal.length >= MEMBER_COMMENT_LIMIT_ON_PUBLISH
+    ? 0
+    : liveReal.length > 0 ? FOLLOWUP_EXTRA_WITH_MEMBERS_MAX : FOLLOWUP_EXTRA_PER_POST_MAX
+  const cap = Math.min(realCap, FOLLOWUP_EXTRA_PER_POST_MAX)
+  if (extrasSoFar >= cap) {
+    return stop(`추가 ${extrasSoFar}건 ≥ 이 글의 상한 ${cap} (실회원 ${liveReal.length}건)`)
+  }
+  const byTime = [...live].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+  const latest = byTime[byTime.length - 1]
+  if (latest !== undefined && (latest.commentOrigin === 'MEMBER' || latest.commentOrigin === 'GUEST')) {
+    return stop('마지막 말이 실회원이다 — Persona 가 끼어들지 않는다(실회원 대화 우선)')
+  }
+  // ── 현재성 ──
+  if (nowMs - f.publishedAtMs > FOLLOWUP_POST_AGE_MAX_MS) {
+    return stop(`공개 ${Math.floor((nowMs - f.publishedAtMs) / 3_600_000)}시간 — 식은 글에 잇지 않는다`)
+  }
+  const onPost = new Set<string>()
+  for (const c of f.comments) if (c.commentOrigin === 'PERSONA' && c.personaId !== null) onPost.add(c.personaId)
+  if (f.authorPersonaId !== null) onPost.add(f.authorPersonaId)
+  return {
+    ok: true, live, livePersona, extrasSoFar, cap, ordinal: personaCount + 1,
+    lastPersonaMs: Math.max(...livePersona.map((c) => c.createdAt.getTime())), onPost, publishedAtMs: f.publishedAtMs,
+  }
+}
+
 /**
  * 🔴 **이 글에 지금 한 건 더 이어도 되는가.**
  *
@@ -244,91 +333,53 @@ export function rolesFor(hook: ReactionType): readonly ReactionType[] {
  *    GO    — 순번 · 멱등 열쇠 · 대상 · 제외 Persona · 역할 후보를 준다. Persona 를 고르지는 않는다.
  */
 export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): FollowupPostVerdict {
-  // ── 사실 확인(fail-closed) ──
-  if (f.postStatus !== 'PUBLISHED') return { verdict: 'BLOCK', reason: `글 상태가 ${f.postStatus ?? '불명'} 다` }
-  if (f.autoManagedPost !== true) {
-    return { verdict: 'BLOCK', reason: f.autoManagedPost === false ? '관리형 자동 글이 아니다 — 잇지 않는다' : '관리형 자동 글인지 모른다(fail-closed)' }
-  }
-  if (f.authorPersonaId === undefined) return { verdict: 'BLOCK', reason: '글 작성 Persona 를 읽지 못했다(fail-closed)' }
-  if (f.publishedAtMs === null || !Number.isFinite(f.publishedAtMs) || f.publishedAtMs > nowMs) {
-    return { verdict: 'BLOCK', reason: '글의 공개 시각을 읽지 못했거나 미래다(fail-closed)' }
-  }
   if (f.hasOpenQueue === null) return { verdict: 'BLOCK', reason: '열린 후보가 있는지 읽지 못했다(fail-closed)' }
-
-  for (const c of f.comments) {
-    if (c.postId !== f.postId) return { verdict: 'BLOCK', reason: '다른 글의 댓글이 섞였다(fail-closed)' }
-    // 🔴 지운 댓글도 본다 — 출처 모순은 지웠다고 사라지지 않는다
-    if (!authorKindOf(c).ok) return { verdict: 'BLOCK', reason: '댓글 작성자 종류가 모순이다(fail-closed)' }
-  }
-  // 🔴 순환 · 사라진 부모 — 관계가 어긋난 글에 답글을 얹지 않는다
-  if (buildCommentThreads(f.comments, { postId: f.postId, blockedAuthorIds: new Set() }).anomalies.length > 0) {
-    return { verdict: 'BLOCK', reason: '댓글 관계가 어긋났다(순환·사라진 부모) — fail-closed' }
-  }
-  const live = f.comments.filter((c) => !c.isDeleted)
-  const livePersona = live.filter((c) => c.commentOrigin === 'PERSONA')
-  const liveReal = live.filter((c) => c.commentOrigin === 'MEMBER' || c.commentOrigin === 'GUEST')
-
-  // ── 첫 댓글 계약 — 추가 댓글은 자동 출처 첫 댓글 위에서만 ──
-  if (livePersona.some((c) => c.provenance === 'broken' || c.provenance === 'followup-broken' || c.provenance === null)) {
-    return { verdict: 'BLOCK', reason: '출처가 깨졌거나 모르는 Persona 댓글이 있다(fail-closed)' }
-  }
-  const firsts = livePersona.filter((c) => c.provenance === 'auto')
-  if (firsts.length === 0) {
-    return { verdict: 'STOP', reason: '자동 출처 첫 댓글이 없다 — 추가 댓글은 첫 댓글을 대신하지 않는다' }
-  }
-
-  // ── 총량 · 실회원 상한 — 수량은 미해결 거리가 정하고 여기서는 넘지 못할 선만 본다 ──
-  const personaCount = livePersona.length
-  if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX) {
-    return { verdict: 'STOP', reason: `Persona 댓글 ${personaCount}건 — 글당 ${FOLLOWUP_TOTAL_PER_POST_MAX}건 상한` }
-  }
-  const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length
-
-  // ── 실회원 우선 ──
-  const realCap = liveReal.length >= MEMBER_COMMENT_LIMIT_ON_PUBLISH
-    ? 0
-    : liveReal.length > 0 ? FOLLOWUP_EXTRA_WITH_MEMBERS_MAX : FOLLOWUP_EXTRA_PER_POST_MAX
-  const cap = Math.min(realCap, FOLLOWUP_EXTRA_PER_POST_MAX)
-  if (extrasSoFar >= cap) {
-    return {
-      verdict: 'STOP',
-      reason: `추가 ${extrasSoFar}건 ≥ 이 글의 상한 ${cap} (실회원 ${liveReal.length}건)`,
-    }
-  }
-  const byTime = [...live].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-  const latest = byTime[byTime.length - 1]
-  if (latest !== undefined && (latest.commentOrigin === 'MEMBER' || latest.commentOrigin === 'GUEST')) {
-    return { verdict: 'STOP', reason: '마지막 말이 실회원이다 — Persona 가 끼어들지 않는다(실회원 대화 우선)' }
-  }
-
-  // ── 현재성 · 시간차 ──
-  if (nowMs - f.publishedAtMs > FOLLOWUP_POST_AGE_MAX_MS) {
-    return { verdict: 'STOP', reason: `공개 ${Math.floor((nowMs - f.publishedAtMs) / 3_600_000)}시간 — 식은 글에 잇지 않는다` }
-  }
+  const b = followupBaseOf(f, nowMs)
+  if (!b.ok) return b.verdict
   if (f.hasOpenQueue) return { verdict: 'WAIT', notBeforeMs: null, reason: '이 글에 열린 후보가 있다 — 쌓지 않는다' }
-  const ordinal = personaCount + 1
-  const lastPersonaMs = Math.max(...livePersona.map((c) => c.createdAt.getTime()))
-  const notBeforeMs = lastPersonaMs + FOLLOWUP_MIN_GAP_MS
-    + Math.floor(unitOf('followup-jitter', f.postId, String(ordinal)) * FOLLOWUP_JITTER_MAX_MS)
+  const notBeforeMs = b.lastPersonaMs + FOLLOWUP_MIN_GAP_MS
+    + Math.floor(unitOf('followup-jitter', f.postId, String(b.ordinal)) * FOLLOWUP_JITTER_MAX_MS)
   if (nowMs < notBeforeMs) {
     return { verdict: 'WAIT', notBeforeMs, reason: `시간차 — ${Math.ceil((notBeforeMs - nowMs) / 60_000)}분 뒤` }
   }
 
   // ── 이어질 거리 ──
-  const open = openHooksOf(f, live)
+  const open = openHooksOf(f, b.live)
   const target = open[0] ?? null
   if (target === null) return { verdict: 'STOP', reason: '이어질 거리(답 없는 질문·경험·공감·반론)가 없다 — 자연스러운 끝' }
-
-  const onPost = new Set(livePersona.map((c) => c.personaId).filter((id): id is string => id !== null))
-  for (const c of f.comments) if (c.commentOrigin === 'PERSONA' && c.personaId !== null) onPost.add(c.personaId)
-  if (f.authorPersonaId !== null) onPost.add(f.authorPersonaId)
   return {
-    verdict: 'GO', ordinal, extrasSoFar, openHooks: open.length, key: followupKeyOf(f.postId, ordinal), target,
-    excludePersonaIds: [...onPost].sort(),
+    verdict: 'GO', ordinal: b.ordinal, extrasSoFar: b.extrasSoFar, openHooks: open.length,
+    key: followupKeyOf(f.postId, b.ordinal), target,
+    excludePersonaIds: [...b.onPost].sort(),
     roles: rolesFor(target.hook),
-    reason: `추가 ${extrasSoFar + 1}/${cap} · 미해결 거리 ${open.length} · ${target.kind === 'reply' ? `${target.hook} 에 답글` : `글의 ${target.hook} 에 새 댓글`}`,
+    reason: `추가 ${b.extrasSoFar + 1}/${b.cap} · 미해결 거리 ${open.length} · ${target.kind === 'reply' ? `${target.hook} 에 답글` : `글의 ${target.hook} 에 새 댓글`}`,
   }
 }
+
+/** 🔴 답이 한 번이라도 달린 댓글(지운 답·실회원 답 포함) — 다시 소비하지 않는다 */
+const consumedOf = (f: FollowupPostFacts): ReadonlySet<string> =>
+  new Set(f.comments.filter((c) => c.parentId !== null).map((c) => c.parentId as string))
+
+/**
+ * 🔴 **그 댓글에 지금 답해도 되는가** — 반응 라벨은 보지 않는다(라벨은 고를 때 본다).
+ *    살아 있음 · Persona 댓글 · 신고 없음(모름 포함 거절) · 아직 아무도 답하지 않음 · 사슬 깊이.
+ *    생성 쪽(`openHooksOf`)과 발행 트랜잭션(`judgeFollowupPublish`)이 **같은 함수**를 쓴다.
+ */
+function replyTargetOpen(f: FollowupPostFacts, c: FollowupCommentRow, consumed: ReadonlySet<string>):
+  { ok: true; threadRootId: string } | { ok: false; reason: string } {
+  if (c.isDeleted) return { ok: false, reason: '대상 댓글이 지워졌다' }
+  if (c.commentOrigin !== 'PERSONA') return { ok: false, reason: '대상이 Persona 댓글이 아니다(실회원 응답은 창업자 결정 항목)' }
+  if (c.reported !== false) return { ok: false, reason: '대상 댓글이 신고됐거나 신고 여부를 모른다' }
+  if (consumed.has(c.id)) return { ok: false, reason: '대상 댓글에 이미 답이 있다(같은 대상 재소비 금지)' }
+  const ctx = conversationContextFor(f.comments, c.id, { postId: f.postId })
+  if (!ctx.ok) return { ok: false, reason: `대상 맥락을 만들지 못했다(${ctx.reason})` }
+  if (ctx.chain.length + 1 > FOLLOWUP_CHAIN_MAX) return { ok: false, reason: '답글 사슬이 깊다' }
+  return { ok: true, threadRootId: ctx.threadRootId }
+}
+
+/** 🔴 글 hook 은 최상위 추가 댓글 한 번으로만 소비한다(지운 것 포함) */
+const postHookOpen = (f: FollowupPostFacts): boolean =>
+  !f.comments.some((c) => c.commentOrigin === 'PERSONA' && c.parentId === null && c.provenance === 'followup')
 
 /**
  * 🔴 **아직 답이 없는 이어질 거리** — 우선순위 순서로 전부 돌려준다. 첫 원소가 이번 대상이다.
@@ -341,24 +392,21 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
  *      첫 댓글은 글에 대한 기본 응답이라 이 거리를 소비하지 않는다.
  */
 export function openHooksOf(f: FollowupPostFacts, live: readonly FollowupCommentRow[]): FollowupTarget[] {
-  const consumed = new Set(f.comments.filter((c) => c.parentId !== null).map((c) => c.parentId as string))
+  const consumed = consumedOf(f)
   const options: { hookRank: number; atMs: number; id: string; t: FollowupTarget }[] = []
   for (const c of live) {
-    if (c.commentOrigin !== 'PERSONA' || c.reaction === null || !FOLLOWUP_HOOKS.includes(c.reaction)) continue
-    if (c.reported !== false || consumed.has(c.id)) continue
-    const ctx = conversationContextFor(f.comments, c.id, { postId: f.postId })
-    if (!ctx.ok) continue
-    if (ctx.chain.length + 1 > FOLLOWUP_CHAIN_MAX) continue
+    if (c.reaction === null || !FOLLOWUP_HOOKS.includes(c.reaction)) continue
+    const open = replyTargetOpen(f, c, consumed)
+    if (!open.ok) continue
     options.push({
       hookRank: HOOK_ORDER.indexOf(c.reaction), atMs: c.createdAt.getTime(), id: c.id,
-      t: { kind: 'reply', commentId: c.id, hook: c.reaction, threadRootId: ctx.threadRootId },
+      t: { kind: 'reply', commentId: c.id, hook: c.reaction, threadRootId: open.threadRootId },
     })
   }
   // 🔴 동률은 시각 → id 순서다(해시 없이도 결정적)
   options.sort((a, b) => a.hookRank - b.hookRank || a.atMs - b.atMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   const out = options.map((o) => o.t)
-  const postHookUsed = f.comments.some((c) => c.commentOrigin === 'PERSONA' && c.parentId === null && c.provenance === 'followup')
-  if (!postHookUsed && f.postReaction !== null && FOLLOWUP_HOOKS.includes(f.postReaction)) {
+  if (postHookOpen(f) && f.postReaction !== null && FOLLOWUP_HOOKS.includes(f.postReaction)) {
     out.push({ kind: 'post', hook: f.postReaction })
   }
   return out
@@ -586,4 +634,105 @@ export function verifyStamp(raw: unknown, expect: { postId: string; dedupKey: st
   }
   if (typeof s.hook !== 'string' || !FOLLOWUP_HOOKS.includes(s.hook as ReactionType)) return { ok: false, reason: '도장의 이어질 거리가 모양이 아니다' }
   return { ok: true, stamp: s as FollowupStamp }
+}
+
+/**
+ * 🔴 **도장은 Queue `editDiff` 의 `followupStamp` 칸에 싣는다** (스키마 변경 0).
+ *    `gateResults` 는 관문 결과 **배열**이라 섞으면 관문 판독(`readStoredGates`)이 깨진다.
+ *    `editDiff` 는 사람 수정 승인용 칸인데, 추가 댓글 행은 무인 레인이라 사람이 고치지 않는다 —
+ *    누가 고쳐 칸이 바뀌면 도장 검증이 실패해 발행하지 않는다(fail-closed).
+ */
+export const FOLLOWUP_STAMP_FIELD = 'followupStamp'
+export const followupEditDiffOf = (stamp: FollowupStamp): Record<string, FollowupStamp> => ({ [FOLLOWUP_STAMP_FIELD]: stamp })
+export function stampFromEditDiff(editDiff: unknown): unknown {
+  if (editDiff === null || typeof editDiff !== 'object' || Array.isArray(editDiff)) return null
+  return (editDiff as Record<string, unknown>)[FOLLOWUP_STAMP_FIELD] ?? null
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 profile 출처 — env 는 **파일 경로**만 가리킨다. 값은 승인 파일 안에 있다
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 미설정이면 profile 없음 → 0건. 이 PR 은 이 env 를 어디에도 설정하지 않는다 */
+export const FOLLOWUP_PROFILE_ENV = 'SORAN_PERSONA_COMMENT_FOLLOWUP_PROFILE'
+
+/** 🔴 읽기만 주입받는다. 경로 없음 · 못 읽음 · JSON 아님 → null(검증이 0건으로 막는다) */
+export function readFollowupProfileRaw(
+  env: Readonly<Record<string, string | undefined>>, readText: (path: string) => string,
+): unknown {
+  const path = (env[FOLLOWUP_PROFILE_ENV] ?? '').trim()
+  if (path === '') return null
+  try { return JSON.parse(readText(path)) as unknown } catch { return null }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 발행 트랜잭션 판정 — 트랜잭션 안에서 다시 읽은 사실로 본다
+// ─────────────────────────────────────────────────────────
+
+export type FollowupPublishFacts = {
+  /** 🔴 트랜잭션이 env 에서 다시 읽은 값 — 호출부 주장을 믿지 않는다 */
+  switch: FollowupSwitch
+  commentStage: string
+  actor: 'automation' | 'manual-admin'
+  queueStatus: string
+  dedupKey: string
+  /** Queue `editDiff` 원본 */
+  editDiff: unknown
+  /** 트랜잭션 안에서 다시 읽은 글·댓글 사실. 반응 라벨은 없다(null) — 대상 고르기는 생성 쪽 몫이다 */
+  post: FollowupPostFacts
+  candidatePersonaId: string
+  /** 그 글을 가리키는 **다른** 열린 Queue 가 있는가 */
+  otherOpenQueue: boolean | null
+  /** 🔴 트랜잭션이 승인 파일에서 다시 읽은 profile · 그날 런타임 단계 */
+  profile: unknown
+  runtimeStage: string | null
+  /** 오늘(KST) 이미 발행된 추가 댓글 수 · 이 Persona 의 오늘 추가 댓글 수 — 트랜잭션 안에서 센 값 */
+  followupsTodayInTx: number | null
+  personaFollowupsTodayInTx: number | null
+  nowMs: number
+}
+
+/**
+ * 🔴 **추가 댓글 발행 직전 재판정.** 하나라도 어긋나면 발행하지 않는다.
+ *    기존 재검사(9관문 · 실회원 3건 · 같은 Persona · kill switch · 하루 예산 · provenance · 생활사 · cap)는
+ *    호출부(`publishCandidateTx`)가 **그대로** 돌린다 — 이 판정은 그 위에 더할 뿐이다.
+ */
+export function judgeFollowupPublish(f: FollowupPublishFacts): { ok: boolean; blockers: string[] } {
+  const blockers: string[] = []
+  if (!f.switch.enabled) blockers.push(f.switch.reason)
+  if (f.commentStage !== 'bootstrap-auto') blockers.push(`댓글 단계 ${f.commentStage} — 추가 댓글은 bootstrap-auto 위에서만`)
+  if (f.actor !== 'automation') blockers.push('사람이 누른 발행은 추가 댓글 레인이 아니다')
+  if (f.queueStatus !== 'PENDING') blockers.push(`Queue 상태가 ${f.queueStatus} 다 — 추가 댓글 레인은 PENDING 만 발행한다`)
+  if (!isFollowupKey(f.dedupKey)) blockers.push('추가 댓글 열쇠가 아니다')
+  const prof = validateFollowupProfile(f.profile, f.runtimeStage)
+  if (!prof.ok) blockers.push(prof.reason)
+  else {
+    if (!isCount(f.followupsTodayInTx)) blockers.push('오늘 추가 댓글 수를 세지 못했다(fail-closed)')
+    else if (f.followupsTodayInTx >= prof.profile.dailyCount) blockers.push(`오늘 추가 댓글 ${f.followupsTodayInTx}건 — profile 하루 상한 ${prof.profile.dailyCount}`)
+    if (!isCount(f.personaFollowupsTodayInTx)) blockers.push('이 Persona 의 오늘 추가 댓글 수를 세지 못했다(fail-closed)')
+    else if (f.personaFollowupsTodayInTx >= prof.profile.perPersonaDailyMax) blockers.push(`이 Persona 오늘 추가 ${f.personaFollowupsTodayInTx}건 — profile 상한 ${prof.profile.perPersonaDailyMax}`)
+  }
+  if (f.otherOpenQueue !== false) blockers.push(f.otherOpenQueue === null ? '다른 열린 후보를 읽지 못했다(fail-closed)' : '이 글에 다른 열린 후보가 있다')
+
+  const st = verifyStamp(stampFromEditDiff(f.editDiff), { postId: f.post.postId, dedupKey: f.dedupKey })
+  if (!st.ok) { blockers.push(st.reason); return { ok: false, blockers } }
+  const b = followupBaseOf(f.post, f.nowMs)
+  if (!b.ok) { blockers.push(b.verdict.reason); return { ok: false, blockers } }
+  // 🔴 순번 — 적재 뒤 그 글에 다른 Persona 댓글이 생겼으면 이 후보의 자리는 사라졌다
+  if (st.stamp.ordinal !== b.ordinal) blockers.push(`도장 순번 ${st.stamp.ordinal} ≠ 지금 자리 ${b.ordinal}`)
+  // 🔴 시간차 — jitter 는 고를 때 이미 지났다. 여기서는 최소 간격만 다시 본다
+  if (f.nowMs - b.lastPersonaMs < FOLLOWUP_MIN_GAP_MS) blockers.push('직전 Persona 댓글과 간격이 짧다')
+  if (b.onPost.has(f.candidatePersonaId)) blockers.push('🔴 이 Persona 는 이 글에 이미 썼거나 글쓴이다')
+  if (st.stamp.parentCommentId === null) {
+    if (!postHookOpen(f.post)) blockers.push('글 hook 은 이미 최상위 추가 댓글로 소비됐다')
+  } else {
+    const parent = f.post.comments.find((c) => c.id === st.stamp.parentCommentId)
+    if (parent === undefined) blockers.push('🔴 답글 대상이 이 글에 없다(고아 답글)')
+    else {
+      // 🔴 자기 댓글 답글은 따로 막지 않는다 — 대상 댓글을 쓴 Persona 는 이미 `onPost` 에 있어 위에서 막힌다(같은 판정 두 벌 금지)
+      const open = replyTargetOpen(f.post, parent, consumedOf(f.post))
+      if (!open.ok) blockers.push(open.reason)
+    }
+  }
+  return { ok: blockers.length === 0, blockers }
 }

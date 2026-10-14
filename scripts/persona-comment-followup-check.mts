@@ -18,6 +18,7 @@
  *
  * 🔴 변이 시험(`persona-comment-followup-mutation.mts`)이 `FOLLOWUP_MODULE` 로 변이 모듈을 주입한다.
  */
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +30,9 @@ import {
   personaCommentCapFor, personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
 } from '../src/lib/stage-evidence'
 import { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
+import { toPromptPost } from './lib/persona-comment-bridge'
+import { sourceTextsOf } from './lib/persona-comment-targets'
+import type { CommentInput } from '../src/lib/persona-comment-input'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const modulePath = process.env.FOLLOWUP_MODULE ?? join(here, '../src/lib/persona-comment-followup.ts')
@@ -90,7 +94,7 @@ type FxProfiles = {
   approved: Record<string, unknown>; approvedD100: Record<string, unknown>
   broken: { name: string; runtimeStage: string | null; profile?: unknown; patch?: Record<string, unknown> }[]
 }
-const fx = JSON.parse(readFileSync(join(here, 'fixtures/persona-comment-followup/scenarios.json'), 'utf-8')) as { scenarios: FxScenario[]; profiles: FxProfiles }
+const fx = JSON.parse(readFileSync(join(here, 'fixtures/persona-comment-followup/scenarios.json'), 'utf-8')) as { scenarios: FxScenario[]; profiles: FxProfiles; firstCommentPrompt: { sha256: string } }
 check('② fixture 시나리오가 있다', fx.scenarios.length >= 20, `${fx.scenarios.length}건`)
 for (const s of fx.scenarios) {
   const postId = FX_POST
@@ -418,11 +422,16 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   for (const [name, raw] of unreadable) {
     check(`⑤ 🔴 대화 감사 판독 불가(${name}) → 추가 댓글 0`, tick({ conversationAudit: raw }).allowed === 0)
   }
-  // 🔴 첫 댓글 경로는 이 모듈·대화 감사를 보지 않는다 — 브레이크가 첫 댓글을 멈출 수 없다
+  // 🔴 첫 댓글 경로는 대화 감사를 보지 않는다 — 브레이크가 첫 댓글을 멈출 수 없다
+  //    (러너는 추가 댓글 단계를 부르기 위해 이 모듈을 import 한다 — 금지할 것은 import 가 아니라 순서·참조다)
   const autoLane = readFileSync(join(here, '../src/lib/persona-comment-auto-lane.ts'), 'utf-8')
   const loop = readFileSync(join(here, 'lib/persona-comment-loop.mts'), 'utf-8')
-  check('⑤ 🔴 첫 댓글 레인(auto-lane · comment-loop)은 추가 댓글 모듈·대화 감사를 import 하지 않는다',
-    ![autoLane, loop].some((t) => t.includes('persona-comment-followup') || t.includes('judgeConversationAudit') || t.includes('conversationAudit')))
+  check('⑤ 🔴 첫 댓글 레인 규칙(auto-lane)은 추가 댓글 모듈·대화 감사를 import 하지 않는다',
+    !autoLane.includes('persona-comment-followup') && !autoLane.includes('ConversationAudit'))
+  check('⑤ 🔴 러너는 대화 감사를 직접 참조하지 않고, 추가 댓글 단계는 첫 댓글 sweep 뒤에서만 부른다',
+    !loop.includes('judgeConversationAudit') && !loop.includes('conversationAudit')
+    && loop.indexOf('const sweepAfter = await sweepAutoLane') > 0
+    && loop.indexOf('await deps.followupPhase()') > loop.indexOf('const sweepAfter = await sweepAutoLane'))
 }
 
 // ═════════ ⑥ 본문 · 도장 · Persona 고르기 ═════════
@@ -472,6 +481,82 @@ const normalizeDiffers = (a: string, b: string): boolean => {
       && M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 0 }], Number.NaN).personaId === null)
     check('⑥ 역할은 생성기 어휘 안', go.roles.length > 0 && go.roles.every((r) => ['other', 'empathy', 'question', 'experience'].includes(r)))
   }
+}
+
+// ═════════ ⑦ 발행 트랜잭션 판정(judgeFollowupPublish) — 트랜잭션이 다시 읽은 사실로 막는다 ═════════
+{
+  const base = fx.scenarios[0]!
+  const post = factsOf(FX_POST, base)
+  const st = { v: M.FOLLOWUP_STAMP_VERSION, postId: FX_POST, ordinal: 2, parentCommentId: 'c1', hook: 'question' }
+  const ok: FollowupModule.FollowupPublishFacts = {
+    switch: { enabled: true, reason: 'on' }, commentStage: 'bootstrap-auto', actor: 'automation', queueStatus: 'PENDING',
+    dedupKey: M.followupKeyOf(FX_POST, 2), editDiff: M.followupEditDiffOf(st as FollowupModule.FollowupStamp),
+    post, candidatePersonaId: 'pZ', otherOpenQueue: false, profile: fx.profiles.approved, runtimeStage: 'd10',
+    followupsTodayInTx: 0, personaFollowupsTodayInTx: 0, nowMs: T0 + 200 * MIN,
+  }
+  const pub = (over: Partial<FollowupModule.FollowupPublishFacts>) => M.judgeFollowupPublish({ ...ok, ...over })
+  check('⑦ 기준선 — 온전한 도장 · 사실 → 발행', pub({}).ok, pub({}).blockers.join(' | '))
+  const no = (name: string, over: Partial<FollowupModule.FollowupPublishFacts>, expect: string) => {
+    const v = pub(over)
+    check(`⑦ 🔴 ${name} → 막음`, !v.ok && v.blockers.some((b) => b.includes(expect)), v.blockers.join(' | '))
+  }
+  no('스위치 OFF(트랜잭션 재판독)', { switch: M.readFollowupSwitch({}) }, '미설정')
+  no('댓글 단계 shadow', { commentStage: 'shadow' }, '댓글 단계')
+  no('사람이 누른 발행', { actor: 'manual-admin' }, '사람이 누른')
+  no('Queue 가 PENDING 아님', { queueStatus: 'APPROVED' }, 'PENDING 만')
+  no('추가 댓글 열쇠 아님', { dedupKey: 'comment:post-fx:pZ:other' }, '열쇠가 아니다')
+  no('profile 없음', { profile: null }, 'profile')
+  no('profile 단계 불일치', { runtimeStage: 'd100' }, '단계')
+  no('오늘 추가 댓글 profile 상한', { followupsTodayInTx: 40 }, '하루 상한')
+  no('오늘 추가 수 모름', { followupsTodayInTx: null }, '세지 못했다')
+  no('Persona 하루 상한', { personaFollowupsTodayInTx: 3 }, 'Persona 오늘')
+  no('다른 열린 후보', { otherOpenQueue: true }, '다른 열린 후보')
+  no('다른 열린 후보 모름', { otherOpenQueue: null }, '읽지 못했다')
+  no('도장 없음', { editDiff: {} }, '도장이 없다')
+  no('도장 순번이 지금 자리와 다름', {
+    dedupKey: M.followupKeyOf(FX_POST, 3), editDiff: M.followupEditDiffOf({ ...st, ordinal: 3 } as FollowupModule.FollowupStamp),
+  }, '도장 순번')
+  no('직전 Persona 댓글과 간격 짧음', { nowMs: T0 + 25 * MIN }, '간격')
+  no('후보 Persona 가 이미 그 글에 씀', { candidatePersonaId: 'pB' }, '이미 썼거나 글쓴이')
+  no('후보 Persona 가 글쓴이', { candidatePersonaId: 'pA' }, '이미 썼거나 글쓴이')
+  no('답글 대상이 이 글에 없음(고아)', {
+    editDiff: M.followupEditDiffOf({ ...st, parentCommentId: 'gone' } as FollowupModule.FollowupStamp),
+  }, '고아')
+  {
+    // 🔴 자기 댓글 답글 — 대상 댓글(c1)을 쓴 pB 가 후보면 '이미 그 글에 쓴 Persona' 로 막힌다(따로 분기를 두지 않는다)
+    const v = pub({ candidatePersonaId: 'pB' })
+    check('⑦ 🔴 자기 댓글에 답글 → 같은 Persona 규칙으로 막음', !v.ok && v.blockers.some((b) => b.includes('이미 썼거나')), v.blockers.join(' | '))
+  }
+  const consumed = {
+    ...post,
+    comments: [...post.comments, { ...post.comments[0]!, id: 'fu0', parentId: null, personaId: 'pY', createdAt: new Date(T0 + 60 * MIN), provenance: 'followup' as const }],
+  }
+  no('글 hook 이미 소비(최상위 추가 댓글 있음)', {
+    post: consumed, dedupKey: M.followupKeyOf(FX_POST, 3), nowMs: T0 + 200 * MIN,
+    editDiff: M.followupEditDiffOf({ ...st, ordinal: 3, parentCommentId: null } as FollowupModule.FollowupStamp),
+  }, '글 hook')
+  const answered = {
+    ...post,
+    comments: [...post.comments, { ...post.comments[0]!, id: 'm9', parentId: 'c1', commentOrigin: 'MEMBER', personaId: null, authorId: 'u9', isDeleted: true, createdAt: new Date(T0 + 30 * MIN), provenance: null }],
+  }
+  no('대상에 이미 답이 있음(지워진 실회원 답 포함)', { post: answered }, '이미 답이 있다')
+}
+
+// ═════════ ⑧ 첫 댓글 프롬프트 바이트 동일 · 답글 대상 줄 ═════════
+{
+  const input = {
+    personaCode: 'P01', reactionRole: 'other',
+    persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: {}, voiceVariations: {}, noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
+    post: { id: 'p', title: '요즘 밤마다 잠이 안 와요', bodyDigest: '새벽 세 시만 되면 눈이 떠져요. 다들 어떻게 보내세요?', boardLabel: 'FREE', existingCommentDigests: ['저도 그래요', '어머 공감돼요'] },
+    voice: {}, memory: { has: false, note: '' }, fingerprint: 'x',
+  } as unknown as CommentInput
+  const empty = { ...input, post: { ...input.post, existingCommentDigests: [] } } as CommentInput
+  const sha = createHash('sha256').update(JSON.stringify([toPromptPost(input), toPromptPost(empty)])).digest('hex')
+  check('⑧ 🔴 첫 댓글 프롬프트(답글 대상 없음)가 main 과 바이트 동일', sha === fx.firstCommentPrompt.sha256, sha)
+  const reply = { ...input, post: { ...input.post, replyToDigest: '그럴 땐 뭐 하세요?' } } as CommentInput
+  const rc = toPromptPost(reply).content
+  check('⑧ 추가 댓글만 — 답글 대상 줄이 붙는다', rc.startsWith(toPromptPost(input).content) && rc.includes('[이 댓글에 이어서 답합니다]') && rc.endsWith('- 그럴 땐 뭐 하세요?'))
+  check('⑧ 🔴 답글 대상 요약도 ① 유출 대조 목록에 들어간다', sourceTextsOf(reply).includes('그럴 땐 뭐 하세요?') && !sourceTextsOf(input).includes('그럴 땐 뭐 하세요?'))
 }
 
 for (const l of lines) console.log(l)
