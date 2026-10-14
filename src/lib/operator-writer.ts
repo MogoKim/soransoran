@@ -16,6 +16,9 @@
  */
 
 import { OPERATOR_POST_VISIBILITY_FLAGS } from './post-visibility'
+import { isHtmlContent } from './post-content-format'
+import { firstImageUrl } from './post-media'
+import { isOwnPublicUrl } from './r2-public'
 import { MAX_POST_TITLE_LENGTH, MIN_POST_TITLE_LENGTH } from './post-policy'
 // 🔴 실회원 판별은 단일 정본이다. 여기서 `accountCount > 0` 을 다시 적지 않는다
 import { judgeRealMember } from './real-member-gate'
@@ -158,9 +161,26 @@ export function buildOperatorPostData(input: OperatorPostInput) {
     source: 'USER',
     // 🔴 예약 발행을 쓰지 않는다. 쓴 순간 올라간다
     publishAt: null,
+    thumbnailUrl: operatorThumbnailUrl(input.content),
     // 🔴 항상 마지막. 위에서 무엇이 왔든 이 값이 이긴다
     ...OPERATOR_POST_VISIBILITY_FLAGS,
   }
+}
+
+/**
+ * 대표 사진 — 목록·홈 카드에 쓴다. 없으면 null.
+ *
+ * 🔴 회원 글쓰기(`actions/posts.ts`)와 같은 함수(`firstImageUrl`)를 쓴다 — 본문의 첫 **우리 R2** 사진.
+ *    외부 주소·blob:·data: 는 고르지 않는다.
+ *
+ * 🔴 **HTML 본문일 때만 고른다.** 평문 본문은 화면에서 글자로 이스케이프되어 그려지므로,
+ *    평문 안에 `<img src="…">` 라는 글자가 적혀 있어도 그것은 사진이 아니다.
+ *    그 글자를 대표 사진으로 세우면 목록에는 사진이 있는데 본문에는 없는 글이 된다.
+ *
+ * 🔴 부르는 쪽은 sanitize 를 **이미 지난** 본문을 넘긴다(actions/operator-compose).
+ */
+export function operatorThumbnailUrl(content: string): string | null {
+  return isHtmlContent(content) ? firstImageUrl(content) : null
 }
 
 /** 🔴 이 레인의 글에 붙으면 안 되는 필드 */
@@ -179,7 +199,7 @@ export const FORBIDDEN_OPERATOR_POST_KEYS: readonly string[] = [
  * 🔴 3축 이름을 여기 적지 않고 게이트 상수에서 **파생**한다 (C-2).
  */
 export const REQUIRED_OPERATOR_POST_KEYS: readonly string[] = [
-  'boardType', 'title', 'content', 'authorId', 'operatorWriterId', 'status', 'source',
+  'boardType', 'title', 'content', 'authorId', 'operatorWriterId', 'status', 'source', 'thumbnailUrl',
   ...Object.keys(OPERATOR_POST_VISIBILITY_FLAGS),
 ]
 
@@ -216,6 +236,15 @@ export function assertOperatorPostData(data: Record<string, unknown>): void {
     if (typeof v !== 'string' || v.trim() === '') {
       throw new Error(`${key} 가 비어 있다 — "누가 썼나" 가 반쪽이면 저장하지 않는다`)
     }
+  }
+  // 🔴 대표 사진은 본문에서만 온다. 본문에 없는 주소·우리 R2 가 아닌 주소를 세우지 않는다
+  const thumb = data.thumbnailUrl
+  const expected = operatorThumbnailUrl(String(data.content ?? ''))
+  if (thumb !== expected) {
+    throw new Error(`thumbnailUrl 이 본문의 첫 사진과 다르다 — 대표 사진은 본문에서만 정한다`)
+  }
+  if (thumb !== null && (typeof thumb !== 'string' || !isOwnPublicUrl(thumb))) {
+    throw new Error('thumbnailUrl 이 우리 R2 주소가 아니다')
   }
 }
 
