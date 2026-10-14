@@ -157,15 +157,27 @@ async function persona(code: string): Promise<P> {
   return { id: p.id, userId: u.id, code }
 }
 const MIN = 60_000
+const KST_OFFSET_MS = 9 * 60 * MIN
+const kstDayStartMs = (nowMs: number): number => {
+  const kst = new Date(nowMs + KST_OFFSET_MS)
+  return Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate()) - KST_OFFSET_MS
+}
+const managedCreatedAtMs = (nowMs: number, minutesAgo: number): number =>
+  Math.max(nowMs - minutesAgo * MIN, kstDayStartMs(nowMs) + 1)
 async function post(author: P, minutesAgo: number): Promise<string> {
   seq += 1
   const now = Date.now()
+  const publishedAt = now - minutesAgo * MIN
+  // The bootstrap budget deliberately counts rows created in today's KST
+  // operating day. Keep that fact explicit even when CI runs just after
+  // midnight and the aged publishAt belongs to yesterday.
+  const createdAt = managedCreatedAtMs(now, minutesAgo)
   const p = await prisma.post.create({
     data: {
       boardType: 'FREE', title: `요즘 밤마다 잠이 안 와요 ${seq}`, status: 'PUBLISHED', source: 'SYSTEM',
       content: `새벽 세 시만 되면 눈이 떠져서 다시 잠들기가 어렵네요. 다들 이런 밤 어떻게 보내세요? (${seq})`,
-      authorId: author.userId, personaId: author.id, publishAt: new Date(now - minutesAgo * MIN),
-      createdAt: new Date(now - minutesAgo * MIN),
+      authorId: author.userId, personaId: author.id, publishAt: new Date(publishedAt),
+      createdAt: new Date(createdAt),
     },
     select: { id: true },
   })
@@ -216,7 +228,11 @@ async function ageAll(postId: string, minutes: number): Promise<void> {
   }
   const p = await prisma.post.findUniqueOrThrow({ where: { id: postId }, select: { publishAt: true, createdAt: true } })
   await prisma.post.update({ where: { id: postId }, data: {
-    createdAt: new Date(p.createdAt.getTime() - d), ...(p.publishAt === null ? {} : { publishAt: new Date(p.publishAt.getTime() - d) }),
+    // Keep the managed-post row in today's KST budget cohort while aging the
+    // public conversation. Otherwise repeated 75-minute aging crosses midnight
+    // and tests a different day's budget instead of the five-comment cap.
+    createdAt: new Date(Math.max(p.createdAt.getTime() - d, kstDayStartMs(Date.now()) + 1)),
+    ...(p.publishAt === null ? {} : { publishAt: new Date(p.publishAt.getTime() - d) }),
   } })
 }
 
@@ -285,6 +301,9 @@ const stamp = (postId: string, ordinal: number, parentCommentId: string | null, 
 async function main(): Promise<void> {
   console.log('\n══ 첫 댓글 뒤 추가 댓글 — 격리 DB 실행 검사 (운영 DB 0 · 네트워크 0) ══\n')
   check('🔴 임시 HOME 의 확정 정본이 운영과 같은 함수로 확정된다', canonRead.selection?.status === 'confirmed', canonRead.detail)
+  const midnightKst = Date.parse('2026-10-15T00:05:00+09:00')
+  check('🔴 자정 직후에도 오래된 공개 글의 createdAt 은 오늘 KST 예산 cohort 에 남는다',
+    kstDateString(new Date(managedCreatedAtMs(midnightKst, 120))) === '2026-10-15')
 
   console.log('\n① 기본 OFF — 스위치가 없으면 아무것도 바뀌지 않는다')
   {
