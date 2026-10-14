@@ -12,7 +12,8 @@ const {
 } = await import('../src/lib/persona-reference-supplement')
 const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
 const {
-  assignmentDigest, mergeSupplementAssignment, readSupplementSnapshot, writeSupplementSnapshot,
+  assignmentDigest, mergeSupplementAssignment, readSupplementSnapshot, selectFrozenSupplementBundle,
+  writeSupplementSnapshot,
 } = await import('./lib/persona-reference-supplement-store.mjs')
 const { planBundles } = await import('./lib/persona-reference-store.mjs')
 type LocalComment = import('./lib/persona-reference-store.mjs').LocalComment
@@ -65,6 +66,20 @@ try {
   check('runtime overlay covers base and new codes', merged.byCode.size === 4 && merged.missing.length === 0)
   check('runtime overlay preserves base bundle bytes',
     assignmentDigest(merged.byCode, baseCodes) === baseDigest)
+  const plannedReplacement = planBundles({ rows: rows('planned', 1), personaCodes: ['P34'] }).bundles[0]!
+  const frozenP34 = plan.asset.bundles[0]!
+  check('card generation selects the frozen bundle over a newly planned replacement',
+    selectFrozenSupplementBundle({
+      personaCode: 'P34',
+      frozenByCode: new Map([['P34', frozenP34]]),
+      plannedByCode: new Map([['P34', plannedReplacement]]),
+    }) === frozenP34)
+  check('card generation falls back to a planned bundle before any snapshot exists',
+    selectFrozenSupplementBundle({
+      personaCode: 'P34',
+      frozenByCode: new Map(),
+      plannedByCode: new Map([['P34', plannedReplacement]]),
+    }) === plannedReplacement)
   const missingOverlay = mergeSupplementAssignment({
     productionCodes: [...baseCodes, ...newCodes, 'P36'],
     baseCodes,
@@ -137,6 +152,11 @@ try {
   check('base/new code overlap rejected', !judgeSupplementAsset(overlap).ok)
   const malformed = { ...plan.asset, bundles: [{ ...plan.asset.bundles[0], anchorRatio: 0.5 }] }
   check('non-single-speaker bundle rejected', !judgeSupplementAsset(malformed).ok)
+  const duplicateBundle = {
+    ...plan.asset,
+    bundles: [plan.asset.bundles[0]!, { ...plan.asset.bundles[0]!, personaCode: 'P35' }],
+  }
+  check('same frozen bundle cannot represent two Persona codes', !judgeSupplementAsset(duplicateBundle).ok)
   const leakedField = {
     ...plan.asset,
     bundles: [{ ...plan.asset.bundles[0], author: 'must-not-exist' }],

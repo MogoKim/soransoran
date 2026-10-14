@@ -64,6 +64,15 @@ export function mergeSupplementAssignment(input: {
   return { byCode, missing, baseOutside }
 }
 
+/** A frozen append-only bundle is authoritative over a newly planned bundle. */
+export function selectFrozenSupplementBundle(input: {
+  personaCode: string
+  frozenByCode: ReadonlyMap<string, VoiceReferenceBundle>
+  plannedByCode: ReadonlyMap<string, VoiceReferenceBundle>
+}): VoiceReferenceBundle | undefined {
+  return input.frozenByCode.get(input.personaCode) ?? input.plannedByCode.get(input.personaCode)
+}
+
 export function serializeSupplementAsset(asset: SupplementalReferenceAsset): string {
   return `${JSON.stringify(asset, null, 2)}\n`
 }

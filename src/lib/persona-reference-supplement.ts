@@ -135,6 +135,13 @@ export function judgeSupplementAsset(parsed: unknown):
     const codes = asset.bundles.map((bundle) => bundle?.personaCode ?? '')
     if (!sameSortedCodes(codes)) problems.push('asset-bundle-codes')
     if (asset.baseCodes?.some((code) => codes.includes(code))) problems.push('asset-code-overlap')
+    const bundleBodies = asset.bundles.map((bundle) => JSON.stringify({
+      comments: bundle?.comments, lengths: bundle?.lengths,
+      anchorCount: bundle?.anchorCount, supplementCount: bundle?.supplementCount,
+      anchorRatio: bundle?.anchorRatio, observedCount: bundle?.observedCount,
+      styleOnlyCount: bundle?.styleOnlyCount, style: bundle?.style,
+    }))
+    if (new Set(bundleBodies).size !== bundleBodies.length) problems.push('asset-bundle-duplicate')
     for (const bundle of asset.bundles) {
       for (const problem of bundleProblems(bundle)) problems.push(`${bundle?.personaCode ?? '?'}:${problem}`)
     }

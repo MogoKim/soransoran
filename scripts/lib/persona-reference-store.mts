@@ -533,8 +533,12 @@ export function stableAssignment(input: {
   table: BundlePlan['table']
   blocks: string[]
   origin: string
+  /** The base corpus came from the verified canonical asset, independent of display text. */
+  canonicalAsset: boolean
   rows: LocalComment[]
   sourceDigest: string | null
+  /** Valid frozen bundles for codes that are not production yet. */
+  supplementByCode: Map<string, VoiceReferenceBundle>
 } {
   const canon = loadCanonAsset()
   const dev = canon.ok ? { rows: [] as LocalComment[], assets: [] as ReferenceAssetReport[] }
@@ -548,7 +552,7 @@ export function stableAssignment(input: {
     return {
       byCode: new Map(), assets, table: [],
       blocks: [`말투 근거 자산이 없다 — ${canon.reason}`],
-      origin, rows: [], sourceDigest: canon.sourceDigest,
+      origin, canonicalAsset: canon.ok, rows: [], sourceDigest: canon.sourceDigest, supplementByCode: new Map(),
     }
   }
   /**
@@ -614,8 +618,10 @@ export function stableAssignment(input: {
     table,
     blocks,
     origin: supplement.ok ? `${origin} + 보충 스냅샷` : origin,
+    canonicalAsset: canon.ok,
     rows,
     sourceDigest: canon.sourceDigest ?? sha16(JSON.stringify(rows.map((r) => r.text).sort())),
+    supplementByCode: supplement.ok ? new Map(supplement.byCode) : new Map(),
   }
 }
 
@@ -666,6 +672,7 @@ export function bundlesForPersonas(input: {
   table: BundlePlan['table']
   blocks: string[]
   origin: string
+  canonicalAsset: boolean
   rows: LocalComment[]
   sourceDigest: string | null
 } {
@@ -692,6 +699,7 @@ export function bundlesForPersonas(input: {
     table: all.table.filter((t) => byCode.has(t.personaCode)),
     blocks,
     origin: all.origin,
+    canonicalAsset: all.canonicalAsset,
     rows: all.rows,
     sourceDigest: all.sourceDigest,
   }

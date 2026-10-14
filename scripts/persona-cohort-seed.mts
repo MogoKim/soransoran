@@ -73,7 +73,7 @@ console.log('  ✅ 정본 카드 ↔ creative — title · personality · noGo �
 
 // ── ③ 말투 — 현재 production 전체 기준 고정 배정 ──
 const sa = stableAssignment({ repoRoot: process.cwd() })
-if (sa.origin !== '정본 자산' || sa.rows.length === 0) fail(`[VOICE_ASSET] 정본 말투 자산이 아니다 — ${sa.origin} · ${sa.blocks.join(' / ')}`)
+if (!sa.canonicalAsset || sa.rows.length === 0) fail(`[VOICE_ASSET] 정본 말투 자산이 아니다 — ${sa.origin} · ${sa.blocks.join(' / ')}`)
 const existing = PRODUCTION_PERSONA_CODES.filter((c) => !CODES.includes(c))
 const base = new Map(planBundles({ rows: sa.rows, personaCodes: existing }).bundles.map((b) => [b.personaCode, b]))
 const voiceProblems = judgeCohortVoice({ cohortCodes: CODES, existingCodes: existing, base, full: sa.byCode })
