@@ -30,7 +30,8 @@ import { judgeJitDemand, fillUpToOf, ledgerRunIdOf } from '../src/lib/supply-pro
 import { judgeSettle } from '../src/lib/llm-ledger'
 import {
   concludedSourceKeys, attemptedOutcomes, CONCLUDED_STATES, worksetFileName, opportunitiesFileName,
-  WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, type PriorOutcome,
+  WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
+  SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, type PriorOutcome,
 } from '../src/lib/supply-workset'
 import { judgeNextPreflight, type PreflightFacts } from '../src/lib/stage-ladder-generic'
 import { jitCoverageOf, type LoadedStock, type ResolvedScale } from './lib/publishable-stock.mjs'
@@ -38,6 +39,7 @@ import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { profileOf } from '../src/lib/scale-profile'
 import { sourceKeyOf } from '../src/lib/source-identity'
 import { claimsJitContract, intentLinkIssue, type SupplyIntent } from '../src/lib/supply-intent'
+import { currentQualityContract } from '../src/lib/quality-contract'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
 import {
   pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf, RUNNER_GRID,
@@ -52,6 +54,7 @@ const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S
 
 const H = 3_600_000
 const NOW = new Date('2026-10-04T07:00:00+09:00')
+const QUALITY = currentQualityContract()
 /** 다가오는 슬롯 5개 — 09:00 · 11:00 · 13:00 · 15:00 · 17:00 KST */
 const SLOTS = [9, 11, 13, 15, 17].map((h) => new Date(`2026-10-04T${String(h).padStart(2, '0')}:00:00+09:00`))
 const iso = (ms: number): string => new Date(ms).toISOString()
@@ -221,7 +224,8 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     check('🔴 🔴 legacy(v2) 묶음만 있으면 JIT 원천 수 모름(null) — optional 칸이 있어도 v2 는 근거가 아니다',
       worksetSourcesIn(dir, from0, to0) === null)
     const w = (runId: string, n: number): void => writeFileSync(join(dir, worksetFileName(runId)), JSON.stringify({
-      kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, runId, takenAt: '2026-10-03T03:15:00.000Z', limit: 10,
+      kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, qualityContract: QUALITY,
+      runId, takenAt: '2026-10-03T03:15:00.000Z', limit: 10,
       sources: Array.from({ length: n }, (_, i) => ({
         sourceSite: 'fx', sourceArticleId: `${runId}-${i}`, slotAt: '2026-10-03T05:00:00.000Z', ageAtSlotH: 4,
       })),
@@ -231,6 +235,21 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     const from = Date.parse('2026-10-02T15:00:00Z')
     const to = Date.parse('2026-10-03T15:00:00Z')
     check('🔴 JIT 묶음 2개 + legacy 1개 → JIT 원천 20 만', worksetSourcesIn(dir, from, to) === 20)
+    writeFileSync(join(dir, worksetFileName('20261003-101500')), JSON.stringify({
+      kind: WORKSET_KIND, version: WORKSET_VERSION_JIT_LEGACY, contract: SUPPLY_JIT_CONTRACT_LEGACY,
+      runId: '20261003-101500', takenAt: '2026-10-03T10:15:00.000Z', limit: 10,
+      sources: [{ sourceSite: 'fx', sourceArticleId: 'v3-old', slotAt: '2026-10-03T11:00:00.000Z', ageAtSlotH: 4 }],
+    }))
+    check('🔴 옛 JIT 판(workset-v3 · supply-jit-v1)은 손상이 아니라 legacy — 현재 품질 cohort 20 유지',
+      worksetSourcesIn(dir, from, to) === 20)
+    writeFileSync(join(dir, worksetFileName('20261003-111500')), JSON.stringify({
+      kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT,
+      runId: '20261003-111500', takenAt: '2026-10-03T11:15:00.000Z', limit: 10,
+      sources: [{ sourceSite: 'fx', sourceArticleId: 'broken-quality', slotAt: '2026-10-03T12:00:00.000Z', ageAtSlotH: 4 }],
+    }))
+    check('🔴 현재 JIT 판이 품질 표식을 빼면 legacy로 숨지 않고 cohort 전체를 모름으로 닫는다',
+      worksetSourcesIn(dir, from, to) === null)
+    rmSync(join(dir, worksetFileName('20261003-111500')))
     writeFileSync(join(dir, worksetFileName('20261003-121500')), '{ 손상')
     check('🔴 🔴 창 안 묶음 하나 손상 → 원천 수 모름(null) — 손상 파일을 빼고 20 으로 세지 않는다',
       worksetSourcesIn(dir, from, to) === null)
@@ -395,12 +414,18 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     && /^[0-9a-f]{64}$/.test(hp))
 }
 
-console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 workset-v3 의도 = 원문 증거 해시')
+console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 current-quality workset-v4 의도 = 원문 증거 해시')
 {
   const hash = articleIdHashOf('fx', 'k1')
-  const ok: SupplyIntent = { contract: SUPPLY_JIT_CONTRACT, runId: '20261004-031500', sourceHash: hash, intendedSlotAt: '2026-10-04T02:00:00.000Z', ageAtSlotH: 7.5 }
-  check('🔴 F 완전 일치 → 이유 없음', intentLinkIssue({ intent: ok, evidenceHash: hash, runInCohort: true, workset: ok }) === null)
-  const cases: [string, Parameters<typeof intentLinkIssue>[0], string][] = [
+  const ok: SupplyIntent = {
+    contract: SUPPLY_JIT_CONTRACT, runId: '20261004-031500', sourceHash: hash,
+    intendedSlotAt: '2026-10-04T02:00:00.000Z', ageAtSlotH: 7.5, qualityContract: QUALITY,
+  }
+  const linked = (x: Omit<Parameters<typeof intentLinkIssue>[0], 'expectedQualityContract'>) =>
+    intentLinkIssue({ ...x, expectedQualityContract: QUALITY })
+  check('🔴 F 완전 일치 → 이유 없음', linked({ intent: ok, evidenceHash: hash, runInCohort: true, workset: ok }) === null)
+  const cases: [string, Omit<Parameters<typeof intentLinkIssue>[0], 'expectedQualityContract'>, string][] = [
+    ['품질 계약', { intent: { ...ok, qualityContract: { version: 'quality-v8', digest: 'b'.repeat(64) } }, evidenceHash: hash, runInCohort: true, workset: ok }, 'QUALITY_CONTRACT_MISMATCH'],
     ['run', { intent: ok, evidenceHash: hash, runInCohort: true, workset: { ...ok, runId: '20261004-091500' } }, 'RUN_MISMATCH'],
     ['hash', { intent: ok, evidenceHash: hash, runInCohort: true, workset: { ...ok, sourceHash: articleIdHashOf('fx', 'k2') } }, 'SOURCE_HASH_MISMATCH'],
     ['slot', { intent: ok, evidenceHash: hash, runInCohort: true, workset: { ...ok, intendedSlotAt: '2026-10-04T04:00:00.000Z' } }, 'SLOT_MISMATCH'],
@@ -411,7 +436,7 @@ console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 works
     ['모양 틀림', { intent: null, evidenceHash: hash, runInCohort: true, workset: ok }, 'INTENT_MALFORMED'],
   ]
   for (const [name, input, want] of cases) {
-    check(`🔴 E ${name} 불일치 → ${want}`, intentLinkIssue(input) === want, String(intentLinkIssue(input)))
+    check(`🔴 E ${name} 불일치 → ${want}`, linked(input) === want, String(linked(input)))
   }
   check('🔴 계약을 주장한 칸은 모양이 틀려도 주장이다(legacy 로 빠지지 않는다) · 칸 없음 · 다른 계약은 주장 아님',
     claimsJitContract({ supplyIntent: { contract: SUPPLY_JIT_CONTRACT, runId: 1 } }) && !claimsJitContract({})
@@ -436,7 +461,7 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /const paid = paidSourcesFor\(\{ deficit: policy\.upTo, yieldHigh: before\?\.sourceYield\?\.high \?\? null, cap: WORKSET_LIMIT \}\)/.test(runner)
     && /judgeStageBudget\(PAID_LIMIT\)/.test(runner)
     // 🔴 (2026-10-10 P0-B1) 배정 · 선택은 `selectWorkset({ jit })` 하나 — 상한은 같은 PAID_LIMIT
-    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
+    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract\(\) \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
     && !/judgeStageBudget\(WORKSET_LIMIT\)/.test(runner) && !/limit: WORKSET_LIMIT, runId/.test(runner))
   check('🔴 묶음은 수요가 있을 때만 만든다(policy.llm) — 수요 0 이면 판정 · 생성 0',
     /if \(policy\.llm\) \{\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)

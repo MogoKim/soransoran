@@ -64,9 +64,13 @@ export const worksetFileName = (runId: string): string => `supply-workset-${runI
 
 /** 🔴 JIT 공급 계약 · 의도 — 정본은 `supply-intent`(적재 모듈과 순환하지 않게 따로 둔다). 여기서 다시 내보낸다 */
 import {
-  SUPPLY_JIT_CONTRACT, WORKSET_VERSION_JIT, SUPPLY_INTENT_KEY, readSupplyIntent, type SupplyIntent,
+  SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
+  SUPPLY_INTENT_KEY, readSupplyIntent, readSupplyQualityContract, type SupplyIntent, type SupplyQualityContractMark,
 } from './supply-intent'
-export { SUPPLY_JIT_CONTRACT, WORKSET_VERSION_JIT, SUPPLY_INTENT_KEY, readSupplyIntent, type SupplyIntent }
+export {
+  SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
+  SUPPLY_INTENT_KEY, readSupplyIntent, type SupplyIntent, type SupplyQualityContractMark,
+}
 
 /** 🔴 묶음 파일 이름 모양 — 회차 id 를 꺼낸다(수율 창을 세는 쪽이 쓴다) */
 export const WORKSET_FILE_RE = /^supply-workset-(\d{8}-\d{6})\.json$/
@@ -221,10 +225,11 @@ export type Workset = {
    */
   sources: { sourceSite: string; sourceArticleId: string; slotAt?: string; ageAtSlotH?: number }[]
   /**
-   * 🔴 **JIT 계약 표식** (2026-10-04 P0-2 보정) — `workset-v3` 에만 있다. 그 판은 원천마다 `slotAt`(배정된 부족 슬롯)과
-   *    `ageAtSlotH`(그 슬롯 시점 원문 나이 · 정본 판정 rank)를 **필수로** 적는다. 원문 · 작성자 없음.
+   * 🔴 **JIT 계약 표식** — `workset-v4`는 원천마다 `slotAt`(배정된 부족 슬롯), `ageAtSlotH`(그 슬롯 시점 원문 나이 ·
+   *    정본 판정 rank), 현재 품질 계약을 **필수로** 적는다. 원문 · 작성자 없음.
    */
   contract?: typeof SUPPLY_JIT_CONTRACT
+  qualityContract?: SupplyQualityContractMark
 }
 
 export type WorksetPlan = {
@@ -942,7 +947,7 @@ export type SelectWorksetInput = {
   runId: string
   takenAt: Date
   /**
-   * 🔴 **JIT 공급 회차** (2026-10-10 P0-B1) — 주면 `selectJitWorkset` 하나가 고르고 배정한다(`workset-v3`).
+   * 🔴 **JIT 공급 회차** (2026-10-10 P0-B1) — 주면 `selectJitWorkset` 하나가 고르고 배정한다(`workset-v4`).
    *    `slots` 는 자동 READY 가 덮지 못한 부족 슬롯, `cap` 은 이번 회차 유료 원천 상한(`paidSourcesFor`)이다.
    *    주지 않으면 옛 판(v2 — 슬롯 없이 손으로 부르는 경로 · 검사)이다. 🔴 v2 는 JIT 근거로 세지 않는다.
    */
@@ -1176,7 +1181,11 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
 //   🔴 합산 점수 · 가중치 · 품질 구간 · 할당량 없음.
 // ─────────────────────────────────────────────────────────
 
-export type JitSelectionInput = { slots: readonly Date[]; now: Date; cap: number }
+export type JitSelectionInput = {
+  slots: readonly Date[]; now: Date; cap: number
+  /** 현재 생성·게이트 계약. 공급 수율·비용 cohort가 다른 품질 판과 섞이지 않게 묶음에 고정한다. */
+  qualityContract: SupplyQualityContractMark
+}
 
 /** 🔴 JIT 선택에서 원천이 들어가거나 멈춘 자리 — 원인이 다르면 값도 다르다 */
 export const JIT_SELECT_STEPS = [
@@ -1360,6 +1369,7 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
         }
       }),
       contract: SUPPLY_JIT_CONTRACT,
+      qualityContract: jit.qualityContract,
     },
     picked: picked.map((c) => c.r),
     dropped,
@@ -1389,9 +1399,11 @@ export type WorksetRead =
       /** 🔴 이 묶음을 집은 시각(ms) — 관제가 단계 상태를 이 값으로 판정한다 */
       takenAtMs: number
       /**
-       * 🔴 **JIT 계약 의도** — `workset-v3` 에서만 원천 열쇠 → 의도. 옛 판이면 `null`(legacy — 근거로 세지 않는다)
+       * 🔴 **JIT 계약 의도** — `workset-v4`에서만 원천 열쇠 → 의도. 옛 판이면 `null`(legacy — 근거로 세지 않는다)
        */
       intents: ReadonlyMap<string, SupplyIntent> | null
+      /** 현재 JIT 판의 품질 계약. 옛 판이면 null. */
+      qualityContract: SupplyQualityContractMark | null
     }
   | { ok: false; code: WorksetFail; reason: string }
 
@@ -1407,7 +1419,8 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   if (o.kind !== WORKSET_KIND) return { ok: false, code: 'KIND', reason: `다른 파일이다 (${String(o.kind)})` }
   const legacy = o.version === WORKSET_VERSION_LEGACY
   const jit = o.version === WORKSET_VERSION_JIT
-  if (o.version !== WORKSET_VERSION && !legacy && !jit) {
+  const legacyJit = o.version === WORKSET_VERSION_JIT_LEGACY
+  if (o.version !== WORKSET_VERSION && !legacy && !jit && !legacyJit) {
     return { ok: false, code: 'VERSION', reason: `모르는 판이다 (${String(o.version)})` }
   }
   if (S(o.runId) !== expectRunId) {
@@ -1432,8 +1445,11 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   }
   // 🔴 JIT 판 — 계약 표식 · 원천마다 예정 슬롯 · 슬롯 시점 나이가 필수다. 하나라도 비면 묶음 전체를 받지 않는다
   let intents: Map<string, SupplyIntent> | null = null
+  let qualityContract: SupplyQualityContractMark | null = null
   if (jit) {
     if (o.contract !== SUPPLY_JIT_CONTRACT) return { ok: false, code: 'SHAPE', reason: `JIT 계약 표식이 다르다 (${String(o.contract)})` }
+    qualityContract = readSupplyQualityContract(o.qualityContract)
+    if (qualityContract === null) return { ok: false, code: 'SHAPE', reason: 'JIT 품질 계약 표식이 없거나 모양이 다르다' }
     intents = new Map()
     for (const [k, x] of (o.sources as Record<string, unknown>[]).entries()) {
       const slotAt = x.slotAt
@@ -1447,6 +1463,7 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
       intents.set(ids[k]!, {
         contract: SUPPLY_JIT_CONTRACT, runId: expectRunId,
         sourceHash: articleIdHashOf(S(x.sourceSite), S(x.sourceArticleId)), intendedSlotAt: slotAt, ageAtSlotH: age,
+        qualityContract,
       })
     }
   }
@@ -1465,7 +1482,9 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   if (takenAtMs === null) {
     return { ok: false, code: 'SHAPE', reason: `takenAt 을 읽을 수 없다 (${String(o.takenAt)})` }
   }
-  return { ok: true, sourceKeys: legacy ? null : new Set(ids), count: ids.length, limit, takenAtMs, intents }
+  return {
+    ok: true, sourceKeys: legacy ? null : new Set(ids), count: ids.length, limit, takenAtMs, intents, qualityContract,
+  }
 }
 
 export type StageBudget = {

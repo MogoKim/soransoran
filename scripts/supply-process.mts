@@ -79,6 +79,7 @@ import {
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 /** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
 import { currentContractBase } from './lib/generation-contract.mjs'
+import { currentQualityContract } from '../src/lib/quality-contract'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
 import { RUN_AT_ENV, runClockFrom } from './lib/run-clock.mjs'
 /**
@@ -1075,7 +1076,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
      */
     const plan = selectWorkset({
       ...eligibilityInput, attempted: prior.attempted,
-      jit: { slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT },
+      jit: { slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract() },
       limit: PAID_LIMIT, runId, takenAt: runAt,
       trace: recorder.sink,
     })

@@ -40,8 +40,9 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 /** 🔴 작업 묶음 정본 — 여기서 모양을 다시 정하지 않는다 */
 import { humanDecisionFor, humanDecisionIndexOf, readWorkset, sourceIdentityOf, type HumanDecisionIndex } from '../src/lib/supply-workset'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
-import type { SupplyIntent } from '../src/lib/supply-intent'
-/** 🔴 이 회차 JIT 묶음(`workset-v3`)의 원천 → 의도. 옛 판 · 묶음 없음이면 null — 장부 줄에 계약 표식을 싣지 않는다 */
+import { sameSupplyQualityContract, type SupplyIntent } from '../src/lib/supply-intent'
+import { currentQualityContract } from '../src/lib/quality-contract'
+/** 🔴 이 회차 current-quality JIT 묶음(`workset-v4`)의 원천 → 의도. 옛 판 · 묶음 없음이면 null — 장부 줄에 계약 표식을 싣지 않는다 */
 let INTENTS: ReadonlyMap<string, SupplyIntent> | null = null
 import { runClockFrom } from './lib/run-clock.mjs'
 
@@ -396,6 +397,9 @@ async function main(): Promise<void> {
     }
     const ws = readWorkset(parsed, RUN_ID)
     if (!ws.ok) fail(`작업 묶음이 계약과 다르다 [${ws.code}] ${ws.reason}`)
+    if (ws.intents !== null && !sameSupplyQualityContract(ws.qualityContract, currentQualityContract())) {
+      fail('작업 묶음의 품질 계약이 지금 코드와 다르다 — 유료 판정을 시작하지 않는다')
+    }
     // 🔴 옛 판 묶음(사이트 없음)으로는 판정하지 않는다 — 같은 번호 다른 사이트 글이 묶음을 빌려 탈 수 있다
     if (ws.sourceKeys === null) fail('작업 묶음이 옛 판(workset-v1 · 사이트 없음)이다 — 판정하지 않는다')
     const wsKeys = ws.sourceKeys

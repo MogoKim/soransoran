@@ -26,6 +26,7 @@ import {
   WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, sourceIdentityOf,
 } from '../src/lib/supply-workset'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
+import { currentQualityContract } from '../src/lib/quality-contract'
 import { RUNNER_GRID, slotValidOpportunitiesOf, sourceOpportunitiesOf } from './lib/stage-preflight-facts.mjs'
 import { judgeNextPreflight, slotTimesOn, type PreflightFacts } from '../src/lib/stage-ladder-generic'
 import { profileOf } from '../src/lib/scale-profile'
@@ -68,6 +69,7 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 
 /** 🔴 기본 원천 사이트 — 원천은 (사이트, id) 쌍이다(P0-B). 검사 값의 id 는 이 사이트의 id 다 */
 const W = 'navercafe:wgang'
+const QUALITY = currentQualityContract()
 /** 🔴 원천 열쇠 — 이미 열쇠면 그대로 */
 const KY = (id: string, site = W): string => (id.includes('\u0000') ? id : sourceKeyOf(site, id))
 /** 🔴 묶음의 원천 id 목록(화면 · 대조용) */
@@ -1647,7 +1649,7 @@ console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑳ 🔴 🔴 (2026-10-04 P0-2 보정) 부족 슬롯마다 원천을 따로 짝짓는다 · workset-v3 의도 필수')
+console.log('\n⑳ 🔴 🔴 부족 슬롯마다 원천을 따로 짝짓는다 · current-quality workset-v4 의도 필수')
 // ─────────────────────────────────────────────────────────
 {
   const s1 = new Date(NOW.getTime() + 2 * 3_600_000)
@@ -1664,7 +1666,7 @@ console.log('\n⑳ 🔴 🔴 (2026-10-04 P0-2 보정) 부족 슬롯마다 원천
       const at = slots.find((d) => preGenerationRelease(r, d, NOW).verdict === 'eligible')
       return preGenerationRelease(r, at ?? slots[0] ?? s1, NOW)
     },
-    jit: { slots, now: NOW, cap }, limit: Math.max(cap, 1), runId: RUN, takenAt: NOW,
+    jit: { slots, now: NOW, cap, qualityContract: QUALITY }, limit: Math.max(cap, 1), runId: RUN, takenAt: NOW,
   })
   const slotMap = (p: ReturnType<typeof jsel>): Map<string, string> =>
     new Map(p.workset.sources.map((x) => [sourceIdentityOf(x.sourceSite, x.sourceArticleId)!, x.slotAt!]))
@@ -1687,7 +1689,7 @@ console.log('\n⑳ 🔴 🔴 (2026-10-04 P0-2 보정) 부족 슬롯마다 원천
     && plan.jit?.coveredSlots === 2 && plan.jit?.maxFillableSlots === 2, JSON.stringify(plan.dropped))
   const twoMap = slotMap(plan)
   const ws = plan.workset
-  check('🔴 🔴 **workset-v3 — 계약 표식 · 원천마다 slotAt · ageAtSlotH 필수**',
+  check('🔴 🔴 **workset-v4 — 계약·품질 표식 · 원천마다 slotAt · ageAtSlotH 필수**',
     ws.version === WORKSET_VERSION_JIT && ws.contract === SUPPLY_JIT_CONTRACT
     && ws.sources.every((x) => typeof x.slotAt === 'string' && typeof x.ageAtSlotH === 'number')
     && new Set(ws.sources.map((x) => x.slotAt)).size === 2, JSON.stringify(ws))

@@ -34,6 +34,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { dirname } from 'node:path'
 import { readWorkset, worksetFileName, sourceIdentityOf, type SupplyIntent } from '../src/lib/supply-workset'
+import { SUPPLY_JIT_CONTRACT, sameSupplyQualityContract } from '../src/lib/supply-intent'
+import { currentQualityContract } from '../src/lib/quality-contract'
 import { findCjkIdeograph, HANJA_LANGUAGE_FIT } from '../src/lib/cjk-ideograph'
 import { PrismaClient } from '@prisma/client'
 import {
@@ -104,7 +106,7 @@ const ajMap = new WeakMap<object, AutoJudgeProvenance>()
 function envelopeOf(c: Candidate): Envelope { return envMap.get(c as object) ?? {} }
 /**
  * 🔴 **후보 → JIT 공급 의도** (2026-10-04 P0-2 보정). 후보 파일(`auto-draft-<runId>.candidates.json`)과 **같은 회차** 묶음
- *    (`supply-workset-<runId>.json` · `workset-v3`)이 그 원천에 배정한 슬롯을 옮긴다. 묶음이 옛 판 · 없음 · 손상이면 없다(legacy).
+ *    (`supply-workset-<runId>.json` · `workset-v4`)이 그 원천에 배정한 슬롯과 품질 계약을 옮긴다. 묶음이 옛 판 · 없음 · 손상이면 없다(legacy).
  */
 const intentMap = new Map<object, SupplyIntent>()
 function intentOf(c: Candidate): SupplyIntent | null { return intentMap.get(c as object) ?? null }
@@ -115,9 +117,22 @@ export function intentsForFile(path: string): ReadonlyMap<string, SupplyIntent> 
   const ws = join(dirname(path), worksetFileName(m[1]!))
   if (!existsSync(ws)) return null
   try {
-    const r = readWorkset(JSON.parse(readFileSync(ws, 'utf-8')), m[1]!)
-    return r.ok ? r.intents : null
-  } catch { return null }
+    const raw = JSON.parse(readFileSync(ws, 'utf-8')) as unknown
+    const claimsCurrent = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      && (raw as Record<string, unknown>).contract === SUPPLY_JIT_CONTRACT
+    const r = readWorkset(raw, m[1]!)
+    if (!r.ok) {
+      if (claimsCurrent) throw new Error(`현재 JIT 묶음이 손상됐다 [${r.code}] ${r.reason}`)
+      return null
+    }
+    if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, currentQualityContract())) {
+      throw new Error('현재 JIT 묶음의 품질 계약이 지금 코드와 다르다')
+    }
+    return r.intents
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('현재 JIT 묶음')) throw e
+    return null
+  }
 }
 /** 후보마다 어느 파일에서 왔는지 — 🔴 보고서가 파일별로 센다 */
 const fileMap = new WeakMap<object, string>()

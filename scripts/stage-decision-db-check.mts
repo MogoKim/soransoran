@@ -51,11 +51,14 @@ import {
   opportunitiesFileName, worksetFileName,
 } from '../src/lib/supply-workset'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
+import { currentQualityContract } from '../src/lib/quality-contract'
 
-/** 🔴 JIT 계약 묶음(workset-v3) — 원천마다 예정 슬롯 · 슬롯 시점 나이 필수 */
-/** 🔴 JIT 계약 묶음(workset-v3) — 원천마다 예정 슬롯 · 슬롯 시점 나이 필수. `ids` 는 큐 행과 연결되는 원천(앞쪽), 나머지는 채움 */
-const wsV3 = (runId: string, site: string, n: number, ids: readonly string[] = []): string => JSON.stringify({
-  kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, runId,
+const QUALITY = currentQualityContract()
+
+/** 🔴 JIT 계약 묶음(workset-v4) — 원천마다 예정 슬롯 · 슬롯 시점 나이 · 품질 계약 필수 */
+/** 🔴 JIT 계약 묶음(workset-v4) — 원천마다 예정 슬롯 · 슬롯 시점 나이 · 품질 계약 필수. `ids` 는 큐 행과 연결되는 원천(앞쪽), 나머지는 채움 */
+const wsV4 = (runId: string, site: string, n: number, ids: readonly string[] = []): string => JSON.stringify({
+  kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, qualityContract: QUALITY, runId,
   takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`, limit: 10,
   sources: Array.from({ length: n }, (_, i) => ({
     sourceSite: site, sourceArticleId: ids[i] ?? `${runId}-${i}`, slotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
@@ -66,7 +69,7 @@ const withIntent = (gate: unknown, site: string, id: string): Record<string, unk
   ...(gate !== null && typeof gate === 'object' ? gate as Record<string, unknown> : {}),
   [SUPPLY_INTENT_KEY]: {
     contract: SUPPLY_JIT_CONTRACT, runId: '20260929-031500', sourceHash: articleIdHashOf(site, id),
-    intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+    intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5, qualityContract: QUALITY,
   },
 })
 import { AUTO_DECIDER, SEMANTIC_RECORD_KEY, eligibilityOf } from '../src/lib/auto-ready-v2'
@@ -502,9 +505,9 @@ async function main(): Promise<void> {
     }
     const now = new Date('2026-10-01T07:00:00+09:00')
     const dir = mkdtempSync(join(tmpdir(), 'pf-opp-'))
-    // JIT 묶음 3개 × 10 원천 = 30 (창 안 회차 · workset-v3)
+    // JIT 묶음 3개 × 10 원천 = 30 (창 안 회차 · current-quality workset-v4)
     for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
-      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, runId === '20260929-031500' ? ['pf-0', 'pf-1', 'pf-2'] : []))
+      writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, 10, runId === '20260929-031500' ? ['pf-0', 'pf-1', 'pf-2'] : []))
     }
     const iso = (ms: number): string => new Date(ms).toISOString()
     const evidence = (i: number): unknown => buildSourceEvidence({
@@ -660,7 +663,7 @@ async function main(): Promise<void> {
     }
     const dir = mkdtempSync(join(tmpdir(), 'pfc-'))
     for (const runId of ['20260928-031500', '20260929-031500', '20260930-031500']) {
-      writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, runId !== '20260929-031500' ? []
+      writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, 10, runId !== '20260929-031500' ? []
         : ['pub1', 'pub2', 'exp', 'dec', 'stale', 'soon', 'start', 'recent', 'old', 'end'].map((k) => `pfc-${k}`)))
     }
     // 🔴 같은 창의 옛 판(v2) 묶음 — 손상이 아니라 legacy: 세지 않는다(원천 30 그대로)
@@ -716,7 +719,7 @@ async function main(): Promise<void> {
       const rec = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { dedupKey: 'pfc-recent' }, select: { id: true, gateResults: true } })
       const g0 = rec.gateResults as Record<string, Record<string, unknown>>
       const moveTo = async (runId: string): Promise<void> => {
-        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 1, ['pfc-recent']))
+        writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, 1, ['pfc-recent']))
         await prisma.originalPostApprovalQueue.update({
           where: { id: rec.id }, data: { gateResults: { ...g0, [SUPPLY_INTENT_KEY]: { ...g0[SUPPLY_INTENT_KEY], runId } } as Prisma.InputJsonValue },
         })
@@ -796,6 +799,7 @@ async function main(): Promise<void> {
     })
     const intentOf = (k: string, runId: string): Record<string, unknown> => ({
       contract: SUPPLY_JIT_CONTRACT, runId, sourceHash: articleIdHashOf(site, k), intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+      qualityContract: QUALITY,
     })
     const runAt = (runId: string): Date => new Date(Date.UTC(+runId.slice(0, 4), +runId.slice(4, 6) - 1, +runId.slice(6, 8), +runId.slice(9, 11), +runId.slice(11, 13)))
     const wipeP = async (): Promise<void> => {
@@ -851,7 +855,7 @@ async function main(): Promise<void> {
       for (const [idx, [runId, sources, ready]] of RUNS.entries()) {
         const ids = Array.from({ length: ready }, (_, i) => `${runId}-r${i}`)
         const inelIds = Array.from({ length: INEL_PER_RUN[idx]! }, (_, i) => `${runId}-x${i}`)
-        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, sources, [...ids, ...inelIds]))
+        writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, sources, [...ids, ...inelIds]))
         for (const k of inelIds) {
           const { o } = inelOf(inel)
           await mk(k, runId, 'APPROVED', 'machine:content-core-v2', new Date(runAt(runId).getTime() + 60_000), o)
@@ -869,7 +873,7 @@ async function main(): Promise<void> {
       ledger(LATE, `${LATE}-r0`, 'usageUnknown', null, 0.0085926)
       // 🔴 창 밖 회차 행 — 앞(창 전 회차 · decidedAt 은 창 안) · 뒤(10-09 08:15 회차) — 둘 다 제외여야 한다
       for (const runId of [OUT_BEFORE, OUT_AFTER]) {
-        writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 8, [`${runId}-r0`]))
+        writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, 8, [`${runId}-r0`]))
         await mk(`${runId}-r0`, runId, 'APPROVED', AUTO_DECIDER, runId === OUT_BEFORE ? new Date('2026-10-05T23:00:00Z') : new Date('2026-10-08T23:00:00Z'))
       }
       const ldir = ledgerDirForHome(home)
@@ -1028,9 +1032,10 @@ async function main(): Promise<void> {
     ]
     const intentOf = (k: string, runId: string): Record<string, unknown> => ({
       contract: SUPPLY_JIT_CONTRACT, runId, sourceHash: articleIdHashOf(site, k), intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
+      qualityContract: QUALITY,
     })
     try {
-      for (const runId of runs) writeFileSync(join(dir, worksetFileName(runId)), wsV3(runId, site, 10, plan.filter((x) => x.run === runId).map((x) => `p0a-${x.k}`)))
+      for (const runId of runs) writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, 10, plan.filter((x) => x.run === runId).map((x) => `p0a-${x.k}`)))
       for (const x of plan) {
         const raw = await prisma.microSeedRawContent.create({
           data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/${x.k}`, sourceArticleId: `p0a-${x.k}`,
@@ -1053,6 +1058,30 @@ async function main(): Promise<void> {
         JSON.stringify({ src: cohort.worksetSources, legacy: cohort.legacyExcluded }))
       check('제외 사실이 메모로 남는다 — 조용히 사라지지 않는다',
         cohort.notes.some((x) => /자동 부적격 미도장 기계 행 3건/.test(x)), JSON.stringify(cohort.notes))
+      // 🔴 현재 묶음에 옛 품질 계약 Queue 행이 섞여도 현재 품질 수율의 분자가 되지 않는다.
+      await prisma.originalPostApprovalQueue.updateMany({
+        where: { dedupKey: 'p0a-elig' },
+        data: { gateResults: {
+          ...evOf('p0a-elig'),
+          [SUPPLY_INTENT_KEY]: {
+            ...intentOf('p0a-elig', runs[5]!),
+            qualityContract: { version: 'quality-v8', digest: 'b'.repeat(64) },
+          },
+        } as Prisma.InputJsonValue },
+      })
+      const oldQuality = await readReadyCohort(prisma, {
+        windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now,
+      })
+      check('🔴 🔴 **옛 품질 계약 Queue 행은 current-quality cohort에서 legacy로 제외 — 분모 60 · 공개 2 · 모름 0**',
+        oldQuality.worksetSources === 60 && oldQuality.readyCount === 2 && oldQuality.fates?.published === 2
+        && oldQuality.fates.unknown === 0 && oldQuality.legacyExcluded === 1 && oldQuality.intentMismatches.length === 0,
+        JSON.stringify({ f: oldQuality.fates, n: oldQuality.readyCount, legacy: oldQuality.legacyExcluded }))
+      await prisma.originalPostApprovalQueue.updateMany({
+        where: { dedupKey: 'p0a-elig' },
+        data: { gateResults: {
+          ...evOf('p0a-elig'), [SUPPLY_INTENT_KEY]: intentOf('p0a-elig', runs[5]!),
+        } as Prisma.InputJsonValue },
+      })
       // 🔴 부적격만 있으면 모름으로 부풀지 않는다 — 적격 미도장 행을 사람 결정으로 옮겨 부적격 3건만 남긴다
       await prisma.originalPostApprovalQueue.updateMany({ where: { dedupKey: 'p0a-elig' }, data: { decidedBy: 'founder' } })
       const only = await readReadyCohort(prisma, { windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now })

@@ -31,6 +31,7 @@ import { articleKeyOf, readListObservations, postedOfListRow, type ListObservati
 import { worksetRows } from './supply-process.mjs'
 import { planAutoFetch, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
+import { currentQualityContract } from '../src/lib/quality-contract'
 import { thresholdBasis, type CollectedCandidate } from './lib/micro-seed-navercafe.mjs'
 import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 
@@ -130,7 +131,8 @@ for (const name of names.filter((n) => /^supply-selection-trace-\d{8}-\d{6}\.jso
     const plan = selectWorkset({
       rows, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS,
       carriedOver: EMPTY_SOURCE_KEYS, concluded: new Set(), attempted: new Map(), releaseOf,
-      limit: t.cap, runId: t.runId, takenAt: at, jit: { slots, now: at, cap: t.cap },
+      limit: t.cap, runId: t.runId, takenAt: at,
+      jit: { slots, now: at, cap: t.cap, qualityContract: currentQualityContract() },
     })
     const picked = plan.workset.sources
     const pickedHashes = picked.map((s) => articleIdHashOf(s.sourceSite, s.sourceArticleId))
