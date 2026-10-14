@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -8,6 +8,7 @@ import {
   speakerHashOf, type VoiceEvidenceRow,
 } from './lib/voice-evidence-capture.mjs'
 import { purgeVoiceEvidence } from './lib/voice-evidence-retention.mjs'
+import { readVoiceEvidenceStatus } from './lib/voice-evidence-status.mjs'
 
 let passed = 0
 let failed = 0
@@ -104,11 +105,24 @@ const mixedPath = join(temp, 'navercafe-voice-test-mixed.voice-evidence.jsonl')
 const unrelatedPath = join(temp, 'other.jsonl')
 const symlinkTarget = join(temp, 'outside.txt')
 const symlinkPath = join(temp, 'navercafe-voice-test-link.voice-evidence.jsonl')
+const eligiblePath = join(temp, 'navercafe-voice-test-eligible.voice-evidence.jsonl')
+const insecurePath = join(temp, 'navercafe-voice-test-insecure.voice-evidence.jsonl')
 writeFileSync(oldPath, `${JSON.stringify(oldRow)}\n`, { mode: 0o600 })
 writeFileSync(mixedPath, `${JSON.stringify(oldRow)}\nnot-json\n${JSON.stringify(row)}\n`, { mode: 0o600 })
 writeFileSync(unrelatedPath, 'leave-me\n')
 writeFileSync(symlinkTarget, 'outside\n')
 symlinkSync(symlinkTarget, symlinkPath)
+const eligibleRows = [
+  { ...row, articleId: '401', text: '그러게요, 찬찬히 다시 보면 답이 보일 것 같아요.' },
+  { ...row, articleId: '402', text: '맞아요, 서두르지 말고 하나씩 살펴보면 좋겠네요.' },
+  { ...row, articleId: '403', text: '저도 같은 생각이에요, 설명이 참 이해하기 쉽네요.' },
+]
+writeFileSync(eligiblePath, eligibleRows.map((value) => `${JSON.stringify(value)}\n`).join(''), { mode: 0o600 })
+writeFileSync(insecurePath, `${JSON.stringify(row)}\n`, { mode: 0o600 })
+chmodSync(insecurePath, 0o644)
+const status = readVoiceEvidenceStatus({ dataDir: temp, salt, members: { memberNames: [] }, now })
+check('status counts only secure regular evidence files', status.insecureFiles === 1 && status.files === 4)
+check('status reports newly eligible stable speaker', status.eligible === 1 && status.nearMiss === 0)
 const dry = purgeVoiceEvidence({ dataDir: temp, now, execute: false })
 check('purge defaults to a write-free plan', !dry.executed && dry.totals.expired === 2 && dry.totals.malformed === 1
   && readFileSync(mixedPath, 'utf8').split('\n').filter(Boolean).length === 3)
