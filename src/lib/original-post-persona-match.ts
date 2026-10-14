@@ -26,6 +26,7 @@
  * 🔴 이 파일은 고객 경로에서 import 되지 않는다. import 가 하나도 없다(fixture 가 강제).
  */
 
+import { comparePersonaCodes } from './persona-code'
 import { noGoHits } from './persona-no-go'
 import { judgeRealMember } from './real-member-gate'
 /**
@@ -1033,7 +1034,7 @@ export function planMatch(input: MatchInput): MatchPlan {
   }
 
   // 🔴 동점이면 code 순 — 정렬이 흔들리면 dry-run 이 재현되지 않는다
-  eligible.sort((a, b) => b.score.total - a.score.total || a.code.localeCompare(b.code))
+  eligible.sort((a, b) => b.score.total - a.score.total || comparePersonaCodes(a.code, b.code))
   const top = eligible.slice(0, TOP_CANDIDATES)
   /**
    * 🔴 **글을 쓴 말투의 Persona 가 쓸 수 있으면 그 사람이 쓴다** (2026-09-13).

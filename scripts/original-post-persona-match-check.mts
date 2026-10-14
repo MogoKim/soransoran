@@ -257,6 +257,8 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
     './real-member-gate', './scale-profile', './scale-runtime', './original-post-voice-match',
     // 🔴 (quality-v5) No-Go 판정 하나 — 순수 함수(DB · 파일 · 네트워크 0)
     './persona-no-go',
+    // 🔴 (2026-10-13) 코드 순서 하나 — 순수 함수(DB · 파일 · 네트워크 0). 동점 정렬을 숫자순으로
+    './persona-code',
   ] as const
   // 🔴 부르는 쪽이 순수해도 불린 쪽이 더러우면 의미가 없다
   {

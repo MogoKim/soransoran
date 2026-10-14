@@ -24,6 +24,8 @@
  *    · 배정할 화자가 없으면 **그 원천을 보류**한다. 억지로 주지 않는다
  */
 
+import { comparePersonaCodes } from '../persona-code'
+
 /** 화자 하나의 여력 근거 — 🔴 전부 실측값이다 */
 export type SpeakerCapacity = {
   code: string
@@ -82,7 +84,7 @@ export function planSpeakerAvailability(input: {
   const eligible = withRemaining
     .filter((c) => c.remaining > 0)
     // 🔴 여력이 많은 사람부터. 같으면 코드 순 — 같은 입력이면 같은 결과다
-    .sort((a, b) => (b.remaining - a.remaining) || a.code.localeCompare(b.code))
+    .sort((a, b) => (b.remaining - a.remaining) || comparePersonaCodes(a.code, b.code))
     .map((c) => c.code)
 
   const dropped = withRemaining.filter((c) => c.remaining === 0)
