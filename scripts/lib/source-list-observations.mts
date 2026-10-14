@@ -25,9 +25,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
-  normalizeEvidenceTime, SOURCE_AGE_LIMIT_HOURS, sourceStatsSnapshot,
-  type ListObservation, type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
+  normalizeEvidenceTime, postedWindowOfKstDay, SOURCE_AGE_LIMIT_HOURS, sourceStatsSnapshot,
+  type ListObservation, type PostedWindow, type SourceObservation, type SourceResponse, type SourceStatsSnapshot,
 } from '../../src/lib/source-slot-release'
+import { postedDayOfLabel } from './micro-seed-navercafe.mjs'
 
 /**
  * 🔴 **활성 · 예정 source connector 가 실제로 쓰는 목록 artifact 모양 — 전부 여기 있다.**
@@ -69,6 +70,25 @@ function runAtOf(name: string, re: RegExp): number | null {
   const t = m[2]
   const ms = Date.parse(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}Z`)
   return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * 🔴 **게시 시각의 정밀도 — 목록 줄 하나가 정한다** (2026-10-13 Batch D1 · canon §2.1).
+ *    · `sourcePostedDay` 가 있으면 날짜만 안다(지금 수집기)
+ *    · 네이버 회차 줄의 라벨이 날짜만 보이면 날짜만 안다 — 🔴 옛 수집기가 그날 00:00 으로 지어 넣은
+ *      `sourcePostedAt` 은 믿지 않는다(원문 라벨이 근거다 · 라벨은 목록을 본 시각 기준으로 읽는다)
+ *    · 그 밖에는 `sourcePostedAt`(정규 ISO 만)
+ */
+export function postedOfListRow(r: Record<string, unknown>, kind: ListArtifactKind, observedAt: string | null): {
+  postedAt: string | null; postedWindow: PostedWindow | null
+} {
+  const day = typeof r.sourcePostedDay === 'string' ? postedWindowOfKstDay(r.sourcePostedDay) : null
+  if (day !== null) return { postedAt: null, postedWindow: day }
+  if (kind === 'navercafe-run' && observedAt !== null && typeof r.sourcePostedLabel === 'string') {
+    const w = postedWindowOfKstDay(postedDayOfLabel(r.sourcePostedLabel, new Date(observedAt)))
+    if (w !== null) return { postedAt: null, postedWindow: w }
+  }
+  return { postedAt: canonical(r.sourcePostedAt), postedWindow: null }
 }
 
 /** 🔴 목록 관측 한 줄 + 자리(반응 기록에 옮긴다) */
@@ -141,7 +161,7 @@ export function readListObservations(dataDir: string, at: Date): ListObservation
       seen.add(`${k}@${observedAt}`)
       const o: ListObservationRow = {
         sourceKey, articleKey: k,
-        postedAt: canonical(r.sourcePostedAt),
+        ...postedOfListRow(r, fmt.kind, observedAt),
         observedAt,
         views: count(r.sourceViewCount),
         // 🔴 댓글 수를 실제로 읽지 못한 줄은 0 이 아니라 모름이다
@@ -169,7 +189,14 @@ export function evidenceMaterialFor(idx: ListObservationIndex, input: {
   /** 🔴 수집이 본 목록의 시각 — 목록 관측과 잇는 열쇠 */
   listedAt: string | null
   at: Date
-}): { response: SourceResponse | null; observations: SourceObservation[]; sourceStats: SourceStatsSnapshot | null } {
+}): {
+  response: SourceResponse | null; observations: SourceObservation[]; sourceStats: SourceStatsSnapshot | null
+  /**
+   * 🔴 **수집이 본 목록 줄이 "날짜만 안다" 고 말하면 그 하루 구간** — 아니면 null (2026-10-13 Batch D1).
+   *    부르는 쪽은 이 값이 있으면 증거 기록의 `postedAt` 을 비우고 이 구간을 싣는다(후보가 실어 온 00:00 을 믿지 않는다).
+   */
+  postedWindow: PostedWindow | null
+} {
   const mine = (idx.byArticle.get(articleKeyOf(input.sourceKey, input.articleId)) ?? [])
     .filter((o) => Date.parse(o.observedAt) <= input.at.getTime())
   const observations: SourceObservation[] = mine.map((o) => ({ observedAt: o.observedAt, views: o.views, comments: o.comments }))
@@ -178,12 +205,15 @@ export function evidenceMaterialFor(idx: ListObservationIndex, input: {
   const response: SourceResponse | null = hit === undefined || (hit.views === null && hit.comments === null) ? null : {
     views: hit.views, comments: hit.comments, listRank: hit.listRank, listPage: hit.listPage, observedAt: hit.observedAt,
   }
+  const postedWindow = hit?.postedWindow ?? null
   const sourceStats = response === null ? null : sourceStatsSnapshot({
     sourceKey: input.sourceKey, articleKey: articleKeyOf(input.sourceKey, input.articleId),
-    // 🔴 게시 시각은 후보가 실어 온 값 하나다 — 기록의 `postedAt` 과 같은 값이어야 구간이 판정과 맞는다
-    postedAt: canonical(input.postedAt),
+    // 🔴 게시 시각은 후보가 실어 온 값 하나다 — 기록의 `postedAt` 과 같은 값이어야 구간이 판정과 맞는다.
+    //    목록 줄이 날짜만 안다고 하면 그 구간이다(기록도 같은 구간을 싣는다)
+    postedAt: postedWindow === null ? canonical(input.postedAt) : null,
+    postedWindow,
     observedAt: response.observedAt, comments: response.comments, views: response.views,
     sample: idx.sample, at: input.at,
   })
-  return { response, observations, sourceStats }
+  return { response, observations, sourceStats, postedWindow }
 }
