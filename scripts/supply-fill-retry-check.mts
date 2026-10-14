@@ -109,7 +109,7 @@ export async function runFillRetryChecks(check: Check): Promise<void> {
     check('[FR] 🔴 시간 상한을 넘기는 대기는 하지 않는다', s.waits.join(',') === '100000,100000' && s.calls() === 3 && /시간 상한/.test(o.stopReason),
       `${s.waits.join(',')} · ${s.calls()} · ${o.stopReason}`)
   }
-  check('[FR] 🔴 정책 상한 — 3회 이하 · 대기 합 ≤ 2분 · 적재 단계 5분 ≤ lock TTL 45분',
+  check('[FR] 🔴 정책 상한 — 3회 이하 · 대기 합 ≤ 2분 · 적재 단계 5분 ≤ 회차 정상 수명 45분',
     FILL_RETRY_POLICY.maxAttempts <= 3
     && FILL_RETRY_POLICY.delaysMs.reduce((a, b) => a + b, 0) <= 120_000
     && FILL_RETRY_POLICY.budgetMs <= 5 * 60_000)

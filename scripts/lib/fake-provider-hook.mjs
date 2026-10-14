@@ -39,6 +39,19 @@ const LOG = process.env.FAKE_PROVIDER_LOG ?? ''
 globalThis[Symbol.for('soransoran.test.fake-provider-ledger-isolation')] = true
 
 /**
+ * 🔴 **공급 커널 lease 의 lockf 대역** (2026-10-12 Batch C1) — `FAKE_RUNNER_LOCKF` 가 있을 때만 전역 표식에 그 경로를 건다.
+ *    Linux CI 에는 `/usr/bin/lockf` 가 없어 격리 DB e2e 의 `supply-process --live` 가 fail-closed 로 끝난다.
+ *    운영 코드(`supply-lease.supplyLockfPath`)는 env 가 아니라 이 표식만 본다 — 이 훅 밖에서는 걸리지 않는다.
+ */
+if ((process.env.FAKE_RUNNER_LOCKF ?? '') !== '') globalThis[Symbol.for('soransoran.test.fake-runner-lockf')] = process.env.FAKE_RUNNER_LOCKF
+
+/**
+ * 🔴 **사건 깨움의 launchctl 대역** (2026-10-12 Batch C2) — `FAKE_LAUNCHCTL` 이 있을 때만 전역 표식에 그 경로를 건다.
+ *    시험이 발행 러너를 실제로 돌려도 운영 launchd job 을 깨우지 않게 한다. 운영 코드(`runner-wake.launchctlPath`)는 이 표식만 본다.
+ */
+if ((process.env.FAKE_LAUNCHCTL ?? '') !== '') globalThis[Symbol.for('soransoran.test.fake-launchctl')] = process.env.FAKE_LAUNCHCTL
+
+/**
  * 🔴 시험 모드 — **가짜 provider 안에서만 뜻이 있다.** 운영 env 가 아니다.
  *
  *    ok            정상 — 사용량을 준다

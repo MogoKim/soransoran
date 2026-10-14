@@ -1,0 +1,248 @@
+{
+  "_about": "🔴 합성 fixture — 2026-10-13 v7(quality-v7) 운영 08:15·12:15 회차의 의미 경고 5건과 화자 판독 잘림 3건을 **구조만** 재현한다. 원문·초안·근거 문장은 전부 새로 지은 글이다. 실제 원천 글·회원·작성자 정보 0.",
+  "_v1": "v1Spans 는 고치기 전 근거 묶음(evidence-v1, origin/main 018da79c)이 이 rawBody 로 만든 값 그대로다.",
+  "cases": [
+    {
+      "id": "A",
+      "run": "08:15",
+      "title": "다투고 오면 용돈 준다는 시아버지",
+      "rawBody": "형편 넉넉한 시댁인데\n\n며느리가 다투고 와서 아버님 하면서 털어놓으면\n\n시아버지가 묵묵히 들어주고\n\n편들어주면서 용돈 봉투를 준다고 ㅡ시부 왈\n\n​\n\n제 입장에선 부럽고 신기한 얘기\n형편 넉넉한 시댁인데\n\n며느리가 다투고 와서 아버님 하면서 털어놓으면\n\n시아버지가 묵묵히 들어주고\n\n편들어주면서 용돈 봉투를 준다고 ㅡ시부 왈\n\n​\n\n제 입장에선 부럽고 신기한 얘기",
+      "plan": {
+        "decision": "ok",
+        "stance": "REFLECTION",
+        "selfBasis": null,
+        "speakerWarrants": [],
+        "universalReason": "",
+        "protectedFacts": [
+          {
+            "kind": "relation",
+            "text": "시아버지",
+            "evidenceRef": "title"
+          }
+        ],
+        "speakerRelative": [],
+        "closingIntent": "share",
+        "contentRoles": [
+          "conversationSpark"
+        ]
+      },
+      "draft": {
+        "title": "다투고 가면 용돈 준다는 시아버지 얘기",
+        "body": "어디서 봤는데 너무 신기하더라고요!! 형편 넉넉한 시댁 이야기래요.\n며느리가 다투고 와서 하소연하면 시아버지가 묵묵히 들어주고 편들어주면서 용돈 봉투를 쥐여준대요!!\n시아버지가 손수 그렇게 얘기하셨다는데 부럽기도 하고 신기하네요ㅋㅋ"
+      },
+      "review": {
+        "droppedFromSource": [],
+        "unsupportedAdditions": [
+          {
+            "evidence": "어디서 봤는데 너무 신기하더라고요!!",
+            "why": "원문에 없는 출처를 구체화했다",
+            "class": "accessPathInvented"
+          },
+          {
+            "evidence": "시아버지가 손수 그렇게 얘기하셨다는데",
+            "why": "원문은 시부 왈이라고만 했다",
+            "class": "paraphraseFlagged"
+          }
+        ],
+        "lifeContradictions": [],
+        "issues": [],
+        "confidence": 0.75,
+        "note": ""
+      },
+      "v1Spans": [
+        {
+          "kind": "title",
+          "text": "다투고 오면 용돈 준다는 시아버지"
+        },
+        {
+          "kind": "head",
+          "text": "형편 넉넉한 시댁인데\n\n며느리가 다투고 와서 아버님 하면서 털어놓으면\n\n시아버지가 묵묵히 들어주고\n\n편들어주면서 용돈 봉투를 준다고 ㅡ시부 왈\n\n​\n\n제 입장에선 부럽고 신기한 얘기\n형편 넉넉한 시댁인데\n\n며느리가 다투고 와서 아버님 하면서 털어놓으면\n\n시아버지가 묵묵히 들어주고\n\n편들어주면서 용돈 봉투를 준다고 ㅡ시부 왈\n\n​\n\n제 입장에선 부럽고 신기한 얘기"
+        }
+      ],
+      "v1Truncated": false,
+      "v1BodyLength": 203
+    },
+    {
+      "id": "B",
+      "run": "08:15",
+      "title": "볶음반찬..번거로운가요?",
+      "rawBody": "제가 볶음 반찬을 좋아해서 \n\n자주 하거든요\n\n근데 막상 해두면 남편은 거의 젓가락도 안 대고\n\n결국 국을 또 끓여야 하는 것 같아요 ㅠ \n\n​\n\n남자들이 잘 먹는 반찬 뭐가 있을까요 \n\n어묵볶음 \n\n김자반 \n\n소시지\n\n이런 건 오히려 안 먹어요\n\n​\n\n그래도 젓가락이 가는 건 갈비찜인데 갈비찜은 손이 더 많이 가요 ㅠ\n제가 볶음 반찬을 좋아해서 \n\n자주 하거든요\n\n근데 막상 해두면 남편은 거의 젓가락도 안 대고\n\n결국 국을 또 끓여야 하는 것 같아요 ㅠ \n\n​\n\n남자들이 잘 먹는 반찬 뭐가 있을까요 \n\n어묵볶음 \n\n김자반 \n\n소시",
+      "plan": {
+        "decision": "ok",
+        "stance": "SELF_EXPERIENCE",
+        "selfBasis": "lifeFacts",
+        "universalReason": "",
+        "speakerWarrants": [
+          {
+            "fact": "spouse",
+            "requiredValue": "있음",
+            "evidenceRef": "head",
+            "evidenceText": "남편은 거의 젓가락도 안 대고"
+          }
+        ],
+        "protectedFacts": [
+          {
+            "kind": "searchTerm",
+            "text": "볶음반찬",
+            "evidenceRef": "title"
+          },
+          {
+            "kind": "relation",
+            "text": "남편",
+            "evidenceRef": "head"
+          },
+          {
+            "kind": "searchTerm",
+            "text": "갈비찜",
+            "evidenceRef": "head"
+          }
+        ],
+        "speakerRelative": [],
+        "closingIntent": "ask",
+        "contentRoles": [
+          "usefulAnswer",
+          "experienceResonance"
+        ]
+      },
+      "draft": {
+        "title": "볶음반찬 해두면 남편은 그냥 지나쳐요",
+        "body": "볶음 반찬을 좋아해서 종종 해두는데\n남편은 거의 안 먹어요 ㅠ 결국 국을 또 끓이게 되네요..\n\n어묵이나 소시지 같은 건 더 싫어하고\n그래도 먹는 건 갈비찜인데 그건 손이 훨씬 많이 가고요.\n\n남자들 잘 먹는 반찬 다들 뭐 하세요?"
+      },
+      "review": {
+        "droppedFromSource": [
+          {
+            "evidence": "그래도 젓가락이 가는 건 갈비찜인데 갈비찜은 손이 더 많",
+            "why": "잘 먹지만 번거롭다는 고민이 약해졌다",
+            "class": "collectorRepeatCut"
+          }
+        ],
+        "unsupportedAdditions": [],
+        "lifeContradictions": [],
+        "issues": [],
+        "confidence": 0.85,
+        "note": ""
+      },
+      "v1Spans": [
+        {
+          "kind": "title",
+          "text": "볶음반찬..번거로운가요?"
+        },
+        {
+          "kind": "head",
+          "text": "제가 볶음 반찬을 좋아해서 \n\n자주 하거든요\n\n근데 막상 해두면 남편은 거의 젓가락도 안 대고\n\n결국 국을 또 끓여야 하는 것 같아요 ㅠ \n\n​\n\n남자들이 잘 먹는 반찬 뭐가 있을까요 \n\n어묵볶음 \n\n김자반 \n\n소시지\n\n이런 건 오히려 안 먹어요\n\n​\n\n그래도 젓가락이 가는 건 갈비찜인데 갈비찜은 손이 더 많"
+        },
+        {
+          "kind": "tail",
+          "text": "반찬을 좋아해서 \n\n자주 하거든요\n\n근데 막상 해두면 남편은 거의 젓가락도 안 대고\n\n결국 국을 또 끓여야 하는 것 같아요 ㅠ \n\n​\n\n남자들이 잘 먹는 반찬 뭐가 있을까요 \n\n어묵볶음 \n\n김자반 \n\n소시"
+        }
+      ],
+      "v1Truncated": true,
+      "v1BodyLength": 300
+    },
+    {
+      "id": "C",
+      "run": "12:15",
+      "title": "아이 키우면 주말 외출 필수인가요?",
+      "rawBody": "​\n\n집에 있는 게 제일 좋은 사람이에요.\n\n주말에 마트나 북적이는 쇼핑몰 가는 걸 정말 싫어해요\n\n(남편도 똑같아요)\n\n​\n\n아이 어릴 때는 동네 산책 정도로도 괜찮았는데 다섯 살 넘으니 우리 아이도 자꾸 나가자고 해서ㅜ\n\n​\n\n키즈카페 쇼핑몰 공원 매주 다니는 게 부모가 해야 할 일처럼 느껴져요.\n\n그래도 너무 답답해요. 남편은 당연히 안 가려 하구요.\n\n제가 평일엔 집에 있으니 주말엔 좀 나가라는 말 들으면 할 말이 없고..\n\n토요일 아침만 되면 벌써 지쳐요 ㅜ\n\n다들 주말에 아이랑 뭐 하고 지내세요 혹시 집에서 하는 놀이 추",
+      "plan": {
+        "decision": "ok",
+        "stance": "QUESTION",
+        "selfBasis": null,
+        "speakerWarrants": [],
+        "universalReason": "",
+        "protectedFacts": [
+          {
+            "kind": "relation",
+            "text": "남편",
+            "evidenceRef": "head"
+          }
+        ],
+        "speakerRelative": [],
+        "closingIntent": "ask",
+        "contentRoles": [
+          "conversationSpark"
+        ]
+      },
+      "draft": {
+        "title": "아이 키우면 주말 외출은 필수일까요",
+        "body": "어떤 글을 봤는데, 두 분 다 집에 있는 게 편한 분들이래요.\n\n아이가 다섯 살이 되니 매주 놀이터든 키즈카페든 가야 하나 고민이시래요.\n남편분도 외출을 싫어하셔서 토요일이 버겁다는데...\n\n아이 키우는 집은 주말 일정을 꼭 세워야 할까요? 다른 집들은 어떠신지 궁금해요."
+      },
+      "review": {
+        "droppedFromSource": [
+          {
+            "evidence": "토요일 아침만 되면 벌써 지쳐요",
+            "why": "감정의 세기가 약해졌다",
+            "class": "intensityFlagged"
+          }
+        ],
+        "unsupportedAdditions": [
+          {
+            "evidence": "어떤 글을 봤는데, 두 분 다 집에 있는 게 편한 분들이래요.",
+            "why": "원문을 본 글처럼 바꿨다",
+            "class": "accessPathInvented"
+          }
+        ],
+        "lifeContradictions": [],
+        "issues": [
+          "voiceMismatch"
+        ],
+        "confidence": 0.75,
+        "note": ""
+      },
+      "unflaggedLoss": [
+        "제가 평일엔 집에 있으니 주말엔 좀 나가라는 말 들으면 할 말이 없고.."
+      ],
+      "v1Spans": [
+        {
+          "kind": "title",
+          "text": "아이 키우면 주말 외출 필수인가요?"
+        },
+        {
+          "kind": "head",
+          "text": "​\n\n집에 있는 게 제일 좋은 사람이에요.\n\n주말에 마트나 북적이는 쇼핑몰 가는 걸 정말 싫어해요\n\n(남편도 똑같아요)\n\n​\n\n아이 어릴 때는 동네 산책 정도로도 괜찮았는데 다섯 살 넘으니 우리 아이도 자꾸 나가자고 해서ㅜ\n\n​\n\n키즈카페 쇼핑몰 공원 매주 다니는 게 부모가 해야 할 일처럼 느껴져요.\n"
+        },
+        {
+          "kind": "tail",
+          "text": "연히 안 가려 하구요.\n\n제가 평일엔 집에 있으니 주말엔 좀 나가라는 말 들으면 할 말이 없고..\n\n토요일 아침만 되면 벌써 지쳐요 ㅜ\n\n다들 주말에 아이랑 뭐 하고 지내세요 혹시 집에서 하는 놀이 추"
+        }
+      ],
+      "v1Truncated": true,
+      "v1BodyLength": 300
+    }
+  ],
+  "incomplete": [
+    {
+      "id": "D",
+      "run": "08:15",
+      "stage": "speakerPlan",
+      "semanticCompletion": {
+        "complete": false,
+        "reason": "notRun",
+        "cause": "truncated"
+      },
+      "machineOutcome": "hold"
+    },
+    {
+      "id": "E",
+      "run": "08:15",
+      "stage": "speakerPlan",
+      "semanticCompletion": {
+        "complete": false,
+        "reason": "notRun",
+        "cause": "truncated"
+      },
+      "machineOutcome": "hold"
+    },
+    {
+      "id": "F",
+      "run": "12:15",
+      "stage": "speakerPlan",
+      "semanticCompletion": {
+        "complete": false,
+        "reason": "notRun",
+        "cause": "truncated"
+      },
+      "machineOutcome": "hold"
+    }
+  ]
+}

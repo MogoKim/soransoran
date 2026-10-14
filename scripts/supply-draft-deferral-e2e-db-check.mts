@@ -32,6 +32,8 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
+/** 🔴 Linux CI 에는 `/usr/bin/lockf` 가 없다 — 공급 러너 live 회차의 커널 lease 를 flock 대역으로 연다(2026-10-12 Batch C1) */
+import { fakeLockfEnv } from './lib/fake-lockf.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
 
@@ -382,7 +384,7 @@ async function worksetAxisRunner(
   const child = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T2, 'scripts', 'supply-process.mts'), '--live'], {
     cwd: T2, encoding: 'utf-8', timeout: 600_000,
     env: {
-      ...process.env, ...fakeKeys, HOME: H,
+      ...process.env, ...fakeKeys, HOME: H, ...fakeLockfEnv(H),
       SORAN_SUPPLY_PROCESS_ENABLED: 'true',
       NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
       // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
@@ -527,7 +529,7 @@ async function duplicateSourceRunner(
     const child = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T3, 'scripts', 'supply-process.mts'), '--live'], {
       cwd: T3, encoding: 'utf-8', timeout: 600_000,
       env: {
-        ...process.env, ...fakeKeys, HOME: H,
+        ...process.env, ...fakeKeys, HOME: H, ...fakeLockfEnv(H),
         // 🔴 ⑤ 와 장부 회차 id 가 겹치지 않게 회차 시각을 따로 준다(회차 요청 상한은 장부 id 로 센다)
         SORAN_RUN_AT: runAt.toISOString(),
         SORAN_SUPPLY_PROCESS_ENABLED: 'true',
@@ -576,6 +578,12 @@ async function duplicateSourceRunner(
     `judge ${paid(`${rid1}-j`)} · draft ${paid(`${rid1}-d`)}`)
   check('🔴 🔴 **러너가 단계 env 상한 10 · 30 을 실었다** (자식 로그)',
     /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 30/.test(r1.out))
+  // 🔴 (2026-10-12 Batch C1) 실제 판정 · 초안 자식이 fd 9 를 물려받아 러너와 같은 커널 lease · 실행 token 을 증명했다 — 장부 shadow 칸
+  const shadowOf = (r: Record<string, unknown>): { ok?: boolean; code?: string | null } | undefined => r.runTokenShadow as never
+  const shadowRows = ledger().filter((r) => String(r.runId).startsWith(rid1) && r.stage !== 'countTokens')
+  check('🔴 🔴 **실제 판정 · 초안 자식이 러너의 커널 lease · 실행 token 을 증명했다** (장부 runTokenShadow ok — fd 9 전달 · 예산 판정과 무관)',
+    shadowRows.length > 0 && shadowRows.every((r) => shadowOf(r)?.ok === true),
+    `${shadowRows.length}줄 · 첫 실패 ${JSON.stringify(shadowRows.map(shadowOf).find((x) => x?.ok !== true) ?? null)}`)
 
   // ── 큐 · 글 중복 ──
   const perSource = async (): Promise<Map<string, number>> => {
