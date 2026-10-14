@@ -275,8 +275,16 @@ check('🔴 Playwright 를 정적으로 import 하지 않는다',
 check('🔴 모듈을 못 찾으면 조용히 넘어가지 않고 안내하며 멈춘다',
   /Playwright 를 찾지 못했다/.test(COLLECTOR) && /playwright-core/.test(COLLECTOR),
   '안내가 없으면 실패 원인이 브라우저인지 세션인지 알 수 없다')
-check('🔴 댓글 본문 · 이미지를 수집하지 않는다',
-  /댓글 본문 미수집/.test(COLLECTOR) && /이미지를 가져오지 않는다|이미지 미수집/.test(COLLECTOR))
+check('🔴 salt 없이는 댓글 DOM read 0 · 저장 0이다',
+  /if \(THIN && evidenceSalt\.ok\)/.test(COLLECTOR_CODE)
+    && /댓글 본문 미수집/.test(COLLECTOR)
+    && /DOM read 0 · 저장 0/.test(COLLECTOR))
+check('🔴 말투 근거는 이미 연 상세 화면만 읽고 작성자를 HMAC으로 바꾼다',
+  /readArticleComments\(page\)/.test(COLLECTOR_CODE)
+    && /captureVoiceEvidence/.test(COLLECTOR_CODE)
+    && /writeSecureJsonl\(evidencePath, keptEvidence\)/.test(COLLECTOR_CODE))
+check('🔴 이미지는 수집하지 않는다',
+  /이미지를 가져오지 않는다|이미지 미수집/.test(COLLECTOR))
 
 // ─────────────────────────────────────────────────────────
 console.log('\n⑨ 카페 설정 — 🔴 주제를 고정 라벨로 굳히지 않는다')
