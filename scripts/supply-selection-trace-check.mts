@@ -24,8 +24,10 @@ import {
 import { articleIdHashOf } from '../src/lib/source-slot-release'
 import { mergeJudgeRows, PROVEN_LANES, RAW_AXIS, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
+import { currentQualityContract } from '../src/lib/quality-contract'
 
 let pass = 0
+const QUALITY = currentQualityContract()
 let fail = 0
 const check = (name: string, ok: boolean, detail = ''): void => {
   if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else {
@@ -83,7 +85,7 @@ const pipeline = (o: {
   const plan = selectWorkset({
     rows: o.rows, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS,
     carriedOver: EMPTY_SOURCE_KEYS, concluded: o.concluded ?? new Set<string>(), attempted, releaseOf,
-    jit: { slots: o.slots, now: NOW, cap: o.cap }, limit: Math.max(1, o.cap), runId: RUN, takenAt: NOW,
+    jit: { slots: o.slots, now: NOW, cap: o.cap, qualityContract: QUALITY }, limit: Math.max(1, o.cap), runId: RUN, takenAt: NOW,
     ...(rec === null ? {} : { trace: rec.sink }),
   })
   const trace = rec === null ? null : buildSupplySelectionTrace({

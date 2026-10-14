@@ -21,6 +21,7 @@ import {
 import { mentionsMenopause } from '../src/lib/original-post-persona-match'
 import { mergeJudgeRows, PROVEN_LANES, RAW_AXIS, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
+import { currentQualityContract } from '../src/lib/quality-contract'
 
 let pass = 0
 let fail = 0
@@ -33,6 +34,7 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 
 const H = 3_600_000
 const NOW = new Date('2026-10-08T00:00:00Z')
+const QUALITY = currentQualityContract()
 const RUN = '20261008-000000'
 const RT = 'navercafe:remonterrace'
 const WG = WGANG_SOURCE_SITE
@@ -77,7 +79,8 @@ const run = (o: {
   return selectWorkset({
     rows: o.rows, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS,
     carriedOver: EMPTY_SOURCE_KEYS, concluded: new Set(), attempted: o.attempted ?? new Map(), releaseOf,
-    jit: { slots: o.slots, now, cap: o.cap }, limit: Math.max(1, o.cap), runId: RUN, takenAt: o.takenAt ?? now,
+    jit: { slots: o.slots, now, cap: o.cap, qualityContract: QUALITY },
+    limit: Math.max(1, o.cap), runId: RUN, takenAt: o.takenAt ?? now,
   })
 }
 const retryOf = (rows: readonly WorksetRow[], waitedH: number, takenAt = NOW): Map<string, PriorOutcome> =>

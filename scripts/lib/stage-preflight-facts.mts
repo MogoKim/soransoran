@@ -50,6 +50,7 @@ import {
   type SupplyIntent,
 } from '../../src/lib/supply-workset'
 import { claimsJitContract, intentLinkIssue, type IntentLinkIssue } from '../../src/lib/supply-intent'
+import { currentQualityContract } from '../../src/lib/quality-contract'
 import type { Health } from '../../src/lib/ops-status'
 import { HEARTBEAT_INTERVAL_MINUTES } from './original-post-runner-template'
 import { COMMENT_RUNNER_SLOTS, FIRST_COMMENT_ATTEMPTS } from './persona-comment-runner-template'
@@ -149,7 +150,7 @@ const runMsOf = (runId: string): number | null => {
 
 
 /**
- * 🔴 **창 안 JIT 계약 묶음(`workset-v3`)의 원천 수 — 하나라도 못 읽으면 `null`(모름)** (2026-10-04 P0-2 · 보정).
+ * 🔴 **창 안 current-quality JIT 계약 묶음(`workset-v4`)의 원천 수 — 하나라도 못 읽으면 `null`(모름)**.
  *    앞판은 못 읽는 파일을 표본에서 뺐다 — 분모가 줄어 수율 · 용량이 실제보다 커 보인다.
  *    🔴 옛 판(v1 · v2) 묶음은 손상이 아니다 — 읽되 **세지 않는다**(legacy). 창 안 JIT 묶음이 없으면 `null`.
  */
@@ -172,6 +173,7 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
   let n = 0
   let files = 0
   const byRun = new Map<string, ReadonlyMap<string, SupplyIntent>>()
+  const quality = currentQualityContract()
   for (const f of readdirSync(dataDir)) {
     const m = WORKSET_FILE_RE.exec(f)
     if (m === null) continue
@@ -182,6 +184,7 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
       const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
       if (!r.ok) return null
       if (r.intents === null) continue
+      if (r.qualityContract?.version !== quality.version || r.qualityContract.digest !== quality.digest) continue
       n += r.count; files += 1
       byRun.set(m[1]!, byHash(r.intents))
     } catch { return null }
@@ -321,7 +324,7 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   /** 🔴 현재 계약을 주장했지만 묶음 · 증거와 맞지 않은 행의 이유 코드 — 하나라도 있으면 cohort 전체가 모름 */
   intentMismatches: IntentLinkIssue[]
   /**
-   * 🔴 **이 cohort 의 회차 집합** — 같은 창 `workset-v3` 색인의 회차 id. 🔴 불변식: 큐 결과(분자) · `worksetSources`(분모) ·
+   * 🔴 **이 cohort 의 회차 집합** — 같은 창 current-quality `workset-v4` 색인의 회차 id. 🔴 불변식: 큐 결과(분자) · `worksetSources`(분모) ·
    *    현재 계약 비용(`costAttributionOf` 의 `cohortRuns`)이 **이 집합 하나**에서 나온다. 창 밖 회차는 셋 다에서 빠진다.
    */
   cohortRuns: ReadonlySet<string>
@@ -336,7 +339,7 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   try {
     /**
      * 🔴 **cohort 시계는 공급 회차 하나다** (2026-10-09 P0). 분모(묶음 원천) · 분자(READY) · 비용(장부)이 **같은 회차 집합**
-     *    (`cohortRuns` = 창 안 `workset-v3` 회차)을 쓴다. 앞판은 분자만 자동 도장 시각(`decidedAt`) 창으로 잘랐다 —
+     *    (`cohortRuns` = 창 안 current-quality `workset-v4` 회차)을 쓴다. 앞판은 분자만 자동 도장 시각(`decidedAt`) 창으로 잘랐다 —
      *    발행 러너는 22:00 뒤 08:00 까지 돌지 않아 **22:15 회차 결과가 매일 분모에만 들고 분자에서 빠졌다**
      *    (2026-10-09 07:00 실측: 원천 101 · READY 16 → 공급 능력 9. 회차 기준이면 READY 20 → 11).
      *    🔴 행은 적재 시각이 창 시작 이후인 것만 후보로 읽는다 — 회차 시작 ≥ 창 시작이고 적재는 회차 뒤다(이월 적재 포함).
@@ -359,13 +362,18 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
       || ((r.decidedBy ?? '').startsWith('machine:') && r.status === 'APPROVED' && r.createdPostId === null))
     /**
      * 🔴 **현재 JIT 계약 행만** (2026-10-04 P0-2 보정 · 최종) — 계약을 주장한 행은 모양만 보고 인정하지 않는다:
-     *    그 회차 `workset-v3`(정본 판독기) 의 같은 원천 의도 · 원문 증거 해시와 **정확히** 같아야 한다.
+     *    그 회차 current-quality `workset-v4`(정본 판독기)의 같은 원천 의도 · 원문 증거 해시와 **정확히** 같아야 한다.
      *    하나라도 다르면 legacy 로 빼지 않고 cohort 전체를 모름으로 닫는다. 주장하지 않는 옛 READY 는 수만 보고한다.
      */
     const claimed = autoPath.filter((r) => claimsJitContract(r.gateResults))
-    legacyExcluded = autoPath.length - claimed.length
+    const quality = currentQualityContract()
+    const currentClaimed = claimed.filter((r) => {
+      const intent = readSupplyIntent(r.gateResults)
+      return intent === null || (intent.qualityContract.version === quality.version && intent.qualityContract.digest === quality.digest)
+    })
+    legacyExcluded = autoPath.length - currentClaimed.length
     // 🔴 창 밖 회차 행은 이 cohort 가 아니다 — 의도를 읽을 수 없는 행은 소속을 모르므로 불일치로 닫는다
-    const current = claimed.filter((r) => {
+    const current = currentClaimed.filter((r) => {
       const intent = readSupplyIntent(r.gateResults)
       return intent === null || ws?.byRun.has(intent.runId) === true
     })
@@ -378,6 +386,7 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
         intent, evidenceHash: ev.ok ? ev.record.provenance.articleIdHash : null,
         runInCohort: run !== undefined,
         workset: intent === null || run === undefined ? null : run.get(intent.sourceHash) ?? null,
+        expectedQualityContract: quality,
       })
       if (issue !== null) intentMismatches.push(issue)
     }
@@ -418,8 +427,8 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   }
   const fates: FateCounts | null = rows === null ? null : cohortFatesOf(rows)
   const readyCount = fates === null ? null : fates.published + fates.lost + fates.scheduled + fates.unknown
-  if (worksetSources === null) notes.push('JIT 묶음 원천 수를 모른다 — 창 안 workset-v3 이 없거나 묶음 하나라도 손상')
-  if (legacyExcluded !== null && legacyExcluded > 0) notes.push(`계약 표식 없는 옛 자동 READY ${legacyExcluded}건 — 근거로 세지 않는다(구제 없음)`)
+  if (worksetSources === null) notes.push('JIT 묶음 원천 수를 모른다 — 창 안 current-quality workset-v4가 없거나 묶음 하나라도 손상')
+  if (legacyExcluded !== null && legacyExcluded > 0) notes.push(`옛 JIT 또는 옛 품질 계약 자동 READY ${legacyExcluded}건 — 현재 품질 근거로 세지 않는다(구제 없음)`)
   if (autoIneligibleExcluded !== null && autoIneligibleExcluded > 0) {
     notes.push(`자동 부적격 미도장 기계 행 ${autoIneligibleExcluded}건 — 자동 READY 분자에서 뺐다(사람 검토 경로) · 원천은 분모에 남는다`)
   }
