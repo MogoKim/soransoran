@@ -21,6 +21,7 @@ import {
   planBatch, POST_CAP_PER_WEEK, type BatchDraft, type PersonaForMatch,
 } from '../src/lib/original-post-persona-match'
 import { duplicateKeys, explicitEndingsOf, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
+import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 
 let pass = 0
@@ -307,9 +308,10 @@ console.log('\n⑥ 설계 카드 검증 (persona-card-verify)')
   })())
 
   // 🔴 코드 형식 · 중복
-  // 🔴 P01~P50 을 받는다 — Pool 확장 계획. 실제 안전장치는 "Pool 문서에 카드가 있는가" 다
-  check('🔴 P01~P50 이 정본 코드 범위다',
-    isPoolCode('P01') && isPoolCode('P25') && isPoolCode('P50') && !isPoolCode('P51') && !isPoolCode('N01'))
+  // 🔴 범위는 `persona-code` 단일 상한이다(2026-10-13 — 옛 P01~P50). 실제 안전장치는 "Pool 문서에 카드가 있는가" 다
+  check(`🔴 P01~P${PERSONA_CODE_MAX} 이 정본 코드 범위다 — 비정본 표기 · 상한 다음은 밖`,
+    isPoolCode('P01') && isPoolCode('P25') && isPoolCode('P50') && isPoolCode('P100') && isPoolCode(`P${PERSONA_CODE_MAX}`)
+    && !isPoolCode(`P${PERSONA_CODE_MAX + 1}`) && !isPoolCode('P1') && !isPoolCode('P051') && !isPoolCode('N01'))
   check('🔴 최상위 중복 키만 센다 — 중첩 키는 정상 반복이다',
     duplicateKeys('{"P01":{"a":1},"P02":{"a":2}}').length === 0
     && duplicateKeys('{"P01":{"a":1},"P01":{"a":2}}').join(',') === 'P01')

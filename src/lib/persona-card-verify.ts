@@ -8,6 +8,7 @@
  * 🔴 판정을 새로 만들지 않는다 — `CHILD_AGE_BANDS` · `readLengthBand` 는 매칭 정본의 것을 부른다.
  */
 
+import { isPersonaCode } from './persona-code'
 import { CHILD_AGE_BANDS, readLengthBand } from './original-post-persona-match'
 import type { PoolCard } from './persona-pool-card'
 import { noGoExpressionKey } from './persona-no-go'
@@ -183,9 +184,9 @@ export function verifySeedCard(code: string, card: SeedCard, poolCard: PoolCard 
 
 /** 🔴 코드가 정본 형식인가 — 임의 코드를 만들면 문서와 DB 가 갈린다 */
 export function isPoolCode(code: string): boolean {
-  // 🔴 **P01~P50** (2026-09-08). Pool 이 25장으로 늘었고 50장까지 갈 계획이다.
+  // 🔴 형식 · 상한은 `persona-code` 하나가 정한다(2026-10-13 — 옛 P50 정규식 대체).
   //    범위를 넓혀도 안전한 이유: 도구가 **정본 Pool 문서에 카드가 없는 코드를 거부**한다.
-  return /^P(0[1-9]|[1-4][0-9]|50)$/.test(code)
+  return isPersonaCode(code)
 }
 
 /**

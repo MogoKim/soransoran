@@ -28,6 +28,7 @@
  *
  * 🔴 `근거 없음 = SELF_EXPERIENCE 허가` 경로는 어디에도 없다.
  */
+import { comparePersonaCodes } from '../persona-code'
 import type { PoolCard } from '../persona-pool-card'
 import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
 import {
@@ -135,7 +136,7 @@ export function orderPersonasForSource<T extends { code: string }>(
   return [...personas].sort((x, y) => {
     const kx = personaOrderKey(sourceInputHash, x.code)
     const ky = personaOrderKey(sourceInputHash, y.code)
-    return kx < ky ? -1 : kx > ky ? 1 : x.code.localeCompare(y.code)
+    return kx < ky ? -1 : kx > ky ? 1 : comparePersonaCodes(x.code, y.code)
   })
 }
 

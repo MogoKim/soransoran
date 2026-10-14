@@ -20,6 +20,7 @@
  *    "몇 개까지" 를 한 함수에 두면 상한을 늘리려 할 때 선정 규칙이 함께 흔들린다.
  */
 
+import { comparePersonaCodes } from './persona-code'
 import {
   judgeLifeHistory, readPostRequirements, type PersonaForMatch,
 } from './original-post-persona-match'
@@ -424,7 +425,7 @@ export function planCommentDistribution(input: PlanInput): PlanResult {
     const candidates = [...input.personas].sort(
       (a, b) => (assigned.get(a.code) ?? 0) - (assigned.get(b.code) ?? 0)
         || a.recentComments - b.recentComments
-        || a.code.localeCompare(b.code),
+        || comparePersonaCodes(a.code, b.code),
     )
     const blocks: PlanBlock[] = []
     for (const role of orderedRoles) {

@@ -14,6 +14,7 @@
  *    글자 규칙을 어기면 그 후보의 creative 는 없다(`null`) — 기본값으로 메우지 않는다.
  *    판정(카드 파서 · seed · 계약 · 겹침 · 문체 거리)은 여기서 하지 않는다 — `judgeAutogenBatch` 그대로다.
  */
+import { comparePersonaCodes, isPersonaCode } from './persona-code'
 import { BRAND_BANNED_WORDS } from './content-guard'
 import { judgeDistinctness, type LifeSkeleton, type PersonaCreative, type SeedVoiceCore } from './persona-autogen'
 import { VARIATION_MAX, VARIATION_MIN } from './persona-card-verify'
@@ -316,7 +317,7 @@ export function parseCreativeFile(raw: string): CreativeFileParse {
   const creatives: Record<string, PersonaCreative> = {}
   const seen = new Set<string>()
   for (const [code, v] of Object.entries(obj as Record<string, unknown>)) {
-    if (!/^P\d\d$/.test(code)) { problems.push(`${code}: 코드 형식이 아니다`); continue }
+    if (!isPersonaCode(code)) { problems.push(`${code}: 코드 형식이 아니다`); continue }
     const p = parseCreative(JSON.stringify(v))
     if (!p.ok) { problems.push(...p.problems.map((x) => `${code}: ${x}`)); continue }
     const key = creativeKeyOf(p.creative)
@@ -585,7 +586,7 @@ export const UNIQUE_BEHAVIOR_MIN = 2
  */
 export function judgeCreativeQuality(input: CreativeQualityInput): CreativeQuality {
   const problems: string[] = []
-  const cs = [...input.candidates].sort((a, b) => a.code.localeCompare(b.code))
+  const cs = [...input.candidates].sort((a, b) => comparePersonaCodes(a.code, b.code))
 
   const repeated = (pick: (c: PersonaCreative) => readonly string[], rule: string): void => {
     const owners = new Map<string, string[]>()
