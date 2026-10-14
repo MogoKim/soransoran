@@ -1,12 +1,12 @@
 {
-  "version": "quality-v8",
-  "digest": "ba24566726b7bd2b09888a52f5e51c939261d2809411ad08fb8e4d12d547ae5a",
+  "version": "quality-v9",
+  "digest": "b3f1ed5c4368ab13ff27f51067fc7b11b1ba8de3bdefef7598f607d7daa6ec9e",
   "files": {
-    "src/lib/quality-contract.ts": "646ff0f55867043140aaff7e175cf5dc342936b2f93cc333147ade14fff44f34",
+    "src/lib/quality-contract.ts": "5a82160372579c2f5167963ac14a27423e09728b0d41ee0ba282098de6cb37e4",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "51550b880040aed8c0db7557c921755b367acbdef80ec457d82b71df2e2003b5",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "30f0d39cc8374acda5c1d962d62a38bad9f02b54a3896ad61e58c7f6df6cfabc",
+    "src/lib/content-core/pipeline.ts": "e510db30a44267a9704a03ec030108fd84965a59dda2e4ded8f81070d4b1808c",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
@@ -31,10 +31,11 @@
     "src/lib/content-core/family-specifics.ts": "fbed290b61cb864326035832eb2277615dc430779807fc245e1213f87ed4087e"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "화자 계획의 동일 상한 잘림 재시도만 제거; 후보 판정·게이트·출력 계약 불변",
+    "kind": "bump",
+    "reason": "판 quality-v8 → quality-v9",
     "changedFiles": [
-      "scripts/lib/content-core-run.mts"
+      "src/lib/quality-contract.ts",
+      "src/lib/content-core/pipeline.ts"
     ]
   }
 }

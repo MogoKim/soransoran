@@ -210,6 +210,8 @@ export type SupplyCallInput = {
   userPayload: string
   maxOutputTokens: number
   timeoutMs: number
+  /** Gemini 전용 reasoning 깊이. 생성 계약이 정한 경우에만 전달한다. */
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
   /** 🔴 원천 해시(`articleIdHashOf`) — 장부 줄의 `sourceKey`. 원천 밖 요청은 비운다 */
   sourceKey?: string | null
   /** 🔴 JIT 공급 계약 표식 — 그 회차 `workset-v3` 묶음 안 원천일 때만. 장부 줄의 `supplyContract` */
@@ -751,6 +753,7 @@ export class SupplyLlmSession {
       userPayload: input.userPayload,
       maxOutputTokens: input.maxOutputTokens,
       timeoutMs: input.timeoutMs,
+      ...(input.thinkingLevel === undefined ? {} : { thinkingLevel: input.thinkingLevel }),
     })
 
     // ── ⑤ 정산. 🔴 사용량을 모르면 예약을 풀지 않는다 ──

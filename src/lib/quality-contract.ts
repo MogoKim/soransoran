@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto'
 
 import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION, STAGE_MODEL, STAGE_MAX_OUTPUT_LABEL,
+  STAGE_THINKING_LABEL,
 } from './content-core/pipeline'
 import { REVIEW_VERSION, DETERMINISTIC_CODES } from './content-core/review'
 import { ARTIFACT_VERSION } from './content-core/artifact'
@@ -102,7 +103,12 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  *    `requiredValueUnmet`) · 초안 게이트 `draft-gates-v8`(1인칭 자녀 수 > 카드 · 자기 자녀 성별 · 카드에 없는 나이대 → 확정 차단) ·
  *    의미 검수 `v2-review-p8`(같은 범위를 생활사 모순으로). 판독 정본은 `family-specifics.ts` 하나다. 창업자 gold 재생 그대로(147/147).
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v8'
+/**
+ * `quality-v9` (2026-10-14) = speakerPlan 에만 Gemini thinking `low` 를 적용한다.
+ * 1,200-token 안에서 dynamic thinking 이 JSON 자리를 소진한 운영 잘림을 줄이는 생성 계약 변경이다.
+ * 초안·의미 검수·게이트·Persona 자격 판정은 그대로다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v9'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -128,6 +134,7 @@ export function qualityContractComponents(): Record<string, unknown> {
     speakerPlanVersion: SPEAKER_PLAN_VERSION,
     stageModels: STAGE_MODEL,
     stageMaxOutput: STAGE_MAX_OUTPUT_LABEL,
+    stageThinking: STAGE_THINKING_LABEL,
     reviewVersion: REVIEW_VERSION,
     deterministicCodes: DETERMINISTIC_CODES,
     artifactVersion: ARTIFACT_VERSION,
