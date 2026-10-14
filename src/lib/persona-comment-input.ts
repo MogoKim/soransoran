@@ -73,6 +73,11 @@ export type CommentInputPost = {
   boardLabel: string
   /** 이미 달린 댓글의 **문맥** — 원문이 아니라 짧은 요약이다 */
   existingCommentDigests: readonly string[]
+  /**
+   * 🔴 **추가 댓글 답글 대상의 짧은 요약** (2026-10-14 · PR #704). 첫 댓글에는 **없다** —
+   *    없으면 프롬프트가 한 글자도 바뀌지 않는다(`persona-comment-followup-check` 가 바이트 동일을 본다).
+   */
+  replyToDigest?: string
 }
 
 export type InputBlockCode =

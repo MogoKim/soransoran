@@ -8,6 +8,7 @@
  * 🔴 두 번째는 **실제 파일과 대조**하는 것이다. 손으로 적은 숫자끼리만 맞춰 보면
  *    launchd 템플릿·워크플로우가 바뀌어도 이 fixture 는 계속 통과한다.
  */
+import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
 import { existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -871,8 +872,9 @@ console.log('\n⑦ cohort manifest')
     verifyManifest({ id: 'wave2', purpose: 'x', codes: ['P01', 'P01'], requires: [] }).some((x) => x.includes('중복')))
   check('🔴 코드순이 아니면 잡는다',
     verifyManifest({ id: 'wave2', purpose: 'x', codes: ['P02', 'P01'], requires: [] }).some((x) => x.includes('코드순')))
-  check('🔴 형식 밖 코드를 잡는다',
-    verifyManifest({ id: 'wave2', purpose: 'x', codes: ['P99'], requires: [] }).some((x) => x.includes('형식')))
+  check('🔴 형식 밖 코드를 잡는다 (비정본 표기 · 상한 다음)',
+    verifyManifest({ id: 'wave2', purpose: 'x', codes: ['P1'], requires: [] }).some((x) => x.includes('형식'))
+    && verifyManifest({ id: 'wave2', purpose: 'x', codes: [`P${PERSONA_CODE_MAX + 1}`], requires: [] }).some((x) => x.includes('형식')))
   /**
    * 🔴 **다음 회차는 총 24명까지 간다** (2026-09-08 결정).
    *    그때 정규식을 고치게 하지 않는다 — manifest 계약이 미리 그 범위를 받아야 한다.
@@ -881,8 +883,10 @@ console.log('\n⑦ cohort manifest')
   check('🔴 P21~P24 를 형식으로 거부하지 않는다 — 24명 확장 계약',
     verifyManifest({ id: 'wave3-scale', purpose: 'x', codes: ['P21', 'P22', 'P23', 'P24'], requires: [] })
       .every((x) => !x.includes('형식')))
-  check('🔴 그래도 P51 은 형식 밖이다 (범위는 P01~P50)',
-    verifyManifest({ id: 'wave3-scale', purpose: 'x', codes: ['P51'], requires: [] }).some((x) => x.includes('형식')))
+  // 🔴 (2026-10-13) 범위는 `persona-code` 단일 상한 — P51 · P100 도 형식 안이다. 안전장치는 아래 "Pool 카드 없는 코드 거부" 다
+  check(`🔴 P51 · P100 은 형식 안 · P${PERSONA_CODE_MAX + 1} 은 형식 밖 (범위는 P01~P${PERSONA_CODE_MAX})`,
+    verifyManifest({ id: 'wave3-scale', purpose: 'x', codes: ['P51', 'P100'], requires: [] }).every((x) => !x.includes('형식'))
+    && verifyManifest({ id: 'wave3-scale', purpose: 'x', codes: [`P${PERSONA_CODE_MAX + 1}`], requires: [] }).some((x) => x.includes('형식')))
   check('🔴 도구가 Pool 카드 없는 코드를 거부한다 — 범위 확장의 안전장치',
     /정본 Pool 에 카드가 없는 대상/.test(read('scripts/persona-cohort-run.mts')))
   // 🔴 회차 전용 입력 파일 — 다른 회차 파일을 덮어쓰지 않는다

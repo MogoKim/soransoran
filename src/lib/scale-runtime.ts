@@ -44,7 +44,15 @@ import {
 export const STAGE_DECISION_MARK_ENV = 'SORAN_STAGE_DECISION_DATE'
 
 /** 🔴 결정이 넣은 단계 칸 — 표식이 있을 때만 값이 있다. 아니면 둘 다 undefined(= 가장 안전한 단계) */
-export type DecisionStageEnv = { capacity: string | undefined; release: string | undefined; marked: boolean; reason: string | null }
+export type DecisionStageEnv = {
+  capacity: string | undefined; release: string | undefined; marked: boolean; reason: string | null
+  /**
+   * 🔴 표식의 결정 날짜(`YYYY-MM-DD`) — 표식이 없으면 null (2026-10-14 · PR #704 E6).
+   *    이 문은 날짜를 오늘과 견주지 않는다(위 주석). 더 엄격히 "오늘 결정만" 받아야 하는 소비자
+   *    (선택 기능인 추가 댓글)가 이 값으로 스스로 견준다 — 단계 칸을 다른 파일이 직접 읽지 않게 여기서 준다.
+   */
+  markDate: string | null
+}
 
 /**
  * 🔴 **단계 env 를 읽는 유일한 문** — `resolveScale` · `releaseStageCeiling` · 증명일이 전부 이것을 지난다.
@@ -54,11 +62,11 @@ export function decisionStageEnv(env: Readonly<Record<string, string | undefined
   const mark = (env[STAGE_DECISION_MARK_ENV] ?? '').trim()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(mark)) {
     return {
-      capacity: undefined, release: undefined, marked: false,
+      capacity: undefined, release: undefined, marked: false, markDate: null,
       reason: 'StageDecision 경유가 아니다(표식 없음) — env 단계 칸은 읽지 않는다 · 가장 안전한 단계',
     }
   }
-  return { capacity: env[CAPACITY_ENV], release: env[RELEASE_ENV], marked: true, reason: null }
+  return { capacity: env[CAPACITY_ENV], release: env[RELEASE_ENV], marked: true, markDate: mark, reason: null }
 }
 
 export type ResolvedScale = {

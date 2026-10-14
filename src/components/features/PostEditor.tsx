@@ -92,6 +92,7 @@ export default function PostEditor({
   onBusyChange,
   placeholder,
   canUploadImage = true,
+  uploadEndpoint = '/api/uploads',
   focusSignal,
   ariaInvalid,
   ariaDescribedBy,
@@ -122,6 +123,14 @@ export default function PostEditor({
    */
   canUploadImage?: boolean
   /**
+   * 사진을 보낼 주소.
+   *
+   * 🔴 기본값은 회원 업로드(`/api/uploads`)다 — 넘기지 않는 화면(/write · 글 고치기)은
+   *    지금과 똑같이 동작한다. 운영 직접 작성 화면만 관리자 전용 주소를 넘긴다.
+   *    파일 규칙(크기·형식·WebP·EXIF)은 두 주소가 같은 서버 함수를 지난다.
+   */
+  uploadEndpoint?: string
+  /**
    * 값이 바뀌면 본문에 초점을 준다.
    *
    * 🔴 에디터 인스턴스를 밖에 내주지 않는다. 밖에서 문서를 직접 만질 수 있게 되면
@@ -146,7 +155,12 @@ export default function PostEditor({
   const editorRef = useRef<Editor | null>(null)
   // 화면을 떠난 뒤 setState 가 도는 것을 막는다 — 올리는 도중 뒤로 가면 생긴다.
   const aliveRef = useRef(true)
-  useEffect(() => () => { aliveRef.current = false }, [])
+  // 🔴 붙을 때 true 로 되돌린다. 정리 함수만 두면 개발 모드(StrictMode)의 붙였다-뗐다-다시 붙이기에서
+  //    false 로 굳어 "올리는 중…" 이 풀리지 않는다(2026-10-14 실측 · 운영 빌드는 한 번만 붙어 영향 없음).
+  useEffect(() => {
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
+  }, [])
 
   /**
    * 🔴 콜백을 ref 로 들고 uploading 만 의존성에 둔다.
@@ -346,7 +360,7 @@ export default function PostEditor({
         try {
           const body = new FormData()
           body.append('file', file)
-          const res = await fetch('/api/uploads', { method: 'POST', body })
+          const res = await fetch(uploadEndpoint, { method: 'POST', body })
 
           if (!res.ok) {
             const payload = (await res.json().catch(() => ({}))) as { error?: string }
@@ -370,7 +384,7 @@ export default function PostEditor({
         }
       }
     },
-    [editor, onChange, canUploadImage],
+    [editor, onChange, canUploadImage, uploadEndpoint],
   )
 
   const insertYoutube = useCallback(() => {

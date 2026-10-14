@@ -106,6 +106,8 @@ export type LlmRequest = {
   userPayload: string
   maxOutputTokens: number
   timeoutMs: number
+  /** Gemini 전용. 비우면 모델 기본 dynamic thinking 을 쓴다. */
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
 }
 
 export type LlmResponse = {
@@ -265,6 +267,9 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
             contents: [{ role: 'user', parts: [{ text: req.userPayload }] }],
             generationConfig: {
               maxOutputTokens: req.maxOutputTokens,
+              ...(req.thinkingLevel === undefined
+                ? {}
+                : { thinkingConfig: { thinkingLevel: req.thinkingLevel } }),
               // 🔴 울타리를 막는 자리. Anthropic prefill 과 같은 목적이고,
               //    prefill 이 없는 provider 라 API 계약으로 대신한다.
               responseMimeType: GEMINI_RESPONSE_MIME,

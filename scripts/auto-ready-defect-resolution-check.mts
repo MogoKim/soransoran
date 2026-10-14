@@ -115,7 +115,7 @@ console.log('\nB. 🔴 기록이 어긋나면 미해소 (fail-closed)')
   check('🟢 옛 기록 + 지금 기록 → 해소(덧붙이기)', judge(a, queue([recordFor(a, { qualityContract: LEGACY_MARK }), recordFor(a)])).resolved)
   check('🔴 옛 기록만 → 미해소', !judge(a, queue([recordFor(a, { qualityContract: LEGACY_MARK })])).resolved)
   check('🔴 🔴 **기록 뒤 지금 계약이 바뀌면(새 digest) → 미해소**', !judge(a, queue([recordFor(a)]), { version: C.version, digest: 'c'.repeat(64) }).resolved)
-  check('🔴 🔴 **기록 뒤 새 판이 나오면 → 미해소**', !judge(a, queue([recordFor(a)]), { version: 'quality-v8', digest: C.digest }).resolved)
+  check('🔴 🔴 **기록 뒤 새 판이 나오면 → 미해소**', !judge(a, queue([recordFor(a)]), { version: `${C.version}-next`, digest: C.digest }).resolved)
 }
 
 console.log('\nC. 🔴 기록이 맞아도 해소 대상이 아닌 결함')
@@ -191,7 +191,7 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
   const runner = codeOnly('scripts/auto-ready-defect-resolve.mts')
   check('🔴 러너의 --apply 는 격리 DB 에서만(운영 적용 범위 밖)', /if \(apply\) \{\s*const bad = isolatedDbProblems\(\)/.test(runner))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
-    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v7')
+    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v9')
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)

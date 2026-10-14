@@ -12,6 +12,8 @@
  * 🔴 순수 함수·상수만. DB 도 파일도 읽지 않는다.
  */
 
+import { isPersonaCode, PERSONA_CODE_MAX, sortPersonaCodes } from './persona-code'
+
 export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth' | 'wave5-d10'
 
 export type CohortManifest = {
@@ -93,7 +95,8 @@ export const EXCLUDED_CODES: Readonly<Record<string, string>> = {
  *    순서가 흔들리면 같은 Persona 가 다른 묶음을 받는다.
  */
 export const PRODUCTION_PERSONA_CODES: readonly string[] = Object.freeze(
-  [...new Set(Object.values(COHORTS).flatMap((c) => c.codes))].sort(),
+  // 🔴 숫자순(`persona-code`) — 두 자리끼리는 사전순과 같아 지금 순서 그대로다. P100 이 P10 · P11 사이에 끼지 않는다
+  sortPersonaCodes(new Set(Object.values(COHORTS).flatMap((c) => c.codes))),
 )
 
 /** 🔴 이 코드가 정본 universe 에 있는가. 밖이면 임의로 채우지 않는다 */
@@ -109,14 +112,13 @@ export function cohortOf(id: string): CohortManifest | null {
 export function verifyManifest(m: CohortManifest): string[] {
   const out: string[] = []
   if (m.codes.length === 0) out.push('codes 가 비었다')
-  // 🔴 **P01~P50 까지 받는다** (2026-09-08). Pool 은 50명까지 늘릴 계획이고,
-  //    다음 회차에서 총 24명까지 가야 한다 — 그때 이 정규식을 고치게 하지 않는다.
+  // 🔴 형식 · 상한은 `persona-code` 하나가 정한다(2026-10-13 — 옛 P50 정규식 대체).
   //    범위를 넓혀도 안전한 이유: 실행 도구가 **정본 Pool 문서에 카드가 없는 코드를 거부**한다.
-  const bad = m.codes.filter((c) => !/^P(0[1-9]|[1-4][0-9]|50)$/.test(c))
-  if (bad.length > 0) out.push(`정본 형식(P01~P50)이 아닌 코드: ${bad.join(', ')}`)
+  const bad = m.codes.filter((c) => !isPersonaCode(c))
+  if (bad.length > 0) out.push(`정본 형식(P01~P${PERSONA_CODE_MAX})이 아닌 코드: ${bad.join(', ')}`)
   const dupes = [...new Set(m.codes.filter((c, i) => m.codes.indexOf(c) !== i))]
   if (dupes.length > 0) out.push(`중복 코드: ${dupes.join(', ')}`)
-  const sorted = [...m.codes].sort()
+  const sorted = sortPersonaCodes(m.codes)
   if (sorted.join(',') !== m.codes.join(',')) out.push('codes 가 코드순이 아니다 — 순서를 고정해야 dry-run 이 재현된다')
   const excluded = m.codes.filter((c) => EXCLUDED_CODES[c] !== undefined)
   if (excluded.length > 0) out.push(`제외 대상이 들어 있다: ${excluded.map((c) => `${c}(${EXCLUDED_CODES[c]})`).join(' / ')}`)

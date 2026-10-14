@@ -115,12 +115,17 @@ export const DEPLOY_STEPS: readonly string[] = [
   '① 배포 잠금을 잡는다 — 두 배포가 겹치면 어느 SHA 가 올라갔는지 알 수 없다',
   '② fetch 하고 preflight — 🔴 fetch 실패는 그 자리에서 멈춘다(오래된 ref 로 판단하지 않는다)',
   '②-b **활성화 스위치 확인** — plist 가 올라가도 스위치가 닫혀 있으면 그 job 은 일하지 않는다',
+  '②-c 🔴 **품질 계약 전환 preflight** — runtime 트리에서 지금 계약을 읽고, **미리 준비한 staging 트리(target)** 로'
+  + ' 같은 DB 를 센다. runtime 미해소 0 · target 미해소 0 이 아니면 **job·코드·plist 를 건드리기 전에** 멈춘다.'
+  + ' 새 계약 해소 기록은 활성화 전에 staging 트리에서 공식 `defect-resolve --staged` 로만 덧붙인다(승인 통과 경로 없음)',
   '③ 현재 SHA·manifest·**설치 plist 원문·loaded 상태**를 보존한다 (되돌릴 곳)',
   '③-b 🔴 **첫 unload 바로 앞에서 실행 여부를 다시 관측한다** —'
   + ' ② 와 ④ 사이에 시작한 회차가 있으면 **아무것도 건드리기 전에** 멈춘다'
   + ' (🔴 unload 뒤에 두면 내려간 job 은 running 으로 보고되지 않아 아무것도 잡지 못한다)',
   '④ 예약 job 5개 + 퇴역 job + **발행 러너**를 unload 하고 **하나씩 내려간 것을 확인**한다',
   '⑤ target SHA 로 checkout · npm ci · prisma generate',
+  '⑤-b 🔴 **품질 계약 전환 재확인** — checkout 한 target 코드로 다시 센다. ②-c 뒤에 DB 가 바뀌어 runtime 또는'
+  + ' target 미해소가 생겼으면 막고 되돌린다(읽기 전용 · 자동 해소 0)',
   '⑥ **offline 게이트** — job 이 내려가 있어도 도는 것들만',
   '⑦ 🔴 **target commit 의 템플릿을 render 해 설치 plist 로 쓴다** —'
   + ' 지금 runtime 에 있는 파일을 읽으면 **옛 인자를 그대로 다시 설치**한다',
@@ -219,6 +224,22 @@ export type DeployEffects = {
 
   /** job 이 내려가 있어도 도는 게이트 */
   offlineGate: (name: string) => boolean
+
+  /**
+   * 🔴 **checkout 전 runtime 트리의 품질 계약** `<판>:<digest 64>` (2026-10-13 · PR #710 보정).
+   *    target 코드는 자기 계약만 안다 — 지금 돌고 있는 계약은 **옛 트리에서 읽어야** 한다. 못 읽으면 `null`.
+   */
+  runtimeQualityContract: () => string | null
+  /**
+   * 🔴 **staging 트리(target)로 돈 품질 계약 전환 preflight** — job 을 내리기 **전**이다. 통과(exit 0)면 true.
+   *    staging 트리가 target 에 깨끗하게 있지 않으면 false 다. 읽기 전용이다(`quality-contract-transition-check.mts`).
+   */
+  stagedTransitionCheck: (target: string, runtimeContract: string) => boolean
+  /**
+   * 🔴 **checkout 뒤 재확인** — runtime 트리에 올라온 target 코드로 같은 검사를 다시 돈다. 통과(exit 0)면 true.
+   *    main 최신 판정(`judgeDeploy`)을 대신하지 않는다.
+   */
+  contractTransitionGate: (runtimeContract: string) => boolean
 
   // ── 🔴 plist cutover — 이것이 없으면 배포해도 **옛 인자가 그대로 돈다** ──
   /**
@@ -458,6 +479,34 @@ export async function runDeploy(input: {
   }
   if (prevSha === null) {
     return { ok: false, phase: 'preflight', steps, problems: ['현재 SHA 를 읽지 못했다'], rollback: null }
+  }
+  /**
+   * 🔴 **지금 돌고 있는 품질 계약을 checkout 전에 읽는다** (2026-10-13 · PR #710 보정).
+   *    Batch B 배포는 운영 DB 를 바꾸지 않았는데 v7 해소 기록이 새 계약에서 무효가 되어 결함 축이 0 → 1 이 됐다.
+   *    전환 판정에는 두 계약이 다 필요하다 — 못 읽으면 **아무것도 건드리기 전에** 멈춘다(fail-closed).
+   */
+  steps.push('runtime-contract')
+  const runtimeContract = fx.runtimeQualityContract()
+  if (runtimeContract === null || !/^[A-Za-z0-9._-]+:[0-9a-f]{64}$/.test(runtimeContract)) {
+    return {
+      ok: false, phase: 'preflight', steps,
+      problems: ['runtime 품질 계약을 읽지 못했다 — 전환 preflight 를 할 수 없어 배포하지 않는다(fail-closed · job·코드·plist 그대로)'],
+      rollback: null,
+    }
+  }
+  /**
+   * 🔴 **활성화 전에 v(옛)=0 · v(새)=0 이어야 한다** (2026-10-13 마스터 재검토).
+   *    미해소가 남은 채 활성화하고 뒤에서 해소하는 길은 없다. 새 계약 기록은 이 배포 **전에** staging 트리에서
+   *    공식 경로로만 덧붙인다 — 여기는 다시 잴 뿐이다. 막히면 job·코드·plist 를 하나도 건드리지 않았다.
+   */
+  steps.push('staged-contract')
+  if (!fx.stagedTransitionCheck(input.target, runtimeContract)) {
+    return {
+      ok: false, phase: 'preflight', steps,
+      problems: ['품질 계약 전환 preflight BLOCK(staging) — runtime·target 미해소가 0 이 아니거나 staging 트리가 target 이 아니다.'
+        + ' 활성화 전에 staging 트리에서 공식 defect-resolve --staged 로 해소한 뒤 다시 배포한다(job·코드·plist 그대로)'],
+      rollback: null,
+    }
   }
 
   /**
@@ -748,6 +797,13 @@ export async function runDeploy(input: {
   if (!fx.install()) return failWith('install', 'npm ci 실패')
   steps.push('generate')
   if (!fx.generate()) return failWith('generate', 'prisma generate 실패')
+
+  // ── ⑤-b 🔴 품질 계약 전환 재확인 — checkout 한 target 코드 · 읽기 전용 · BLOCK 이면 되돌린다 ──
+  steps.push('gate:contract-transition')
+  if (!fx.contractTransitionGate(runtimeContract)) {
+    return failWith('contract-transition',
+      '품질 계약 전환 재확인 BLOCK — staging 확인 뒤 runtime 또는 target 미해소가 생겼다. 되돌리고 다시 staging 부터 한다')
+  }
 
   // ── ⑥ offline 게이트 ──
   for (const g of gates) {

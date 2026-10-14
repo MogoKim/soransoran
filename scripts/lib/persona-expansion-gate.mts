@@ -26,13 +26,15 @@ import { judgeCreativeQuality } from '../../src/lib/persona-creative'
 import {
   diversitySubjectOf, diversitySubjectOfCard, judgePopulationDiversity, type DiversityVerdict,
 } from '../../src/lib/persona-expansion'
-import { candidatesFor, verifyNamePolicy } from '../../src/lib/persona-nickname-candidates'
+import { verifyNamePolicy } from '../../src/lib/persona-nickname-candidates'
+import { nicknameSpace } from '../../src/lib/persona-nickname-space'
 import { COMMON_NO_GO_PHRASES } from '../../src/lib/persona-no-go'
 import { readLengthBand } from '../../src/lib/original-post-persona-match'
 import type { PoolCard } from '../../src/lib/persona-pool-card'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import { judgeAutogenBatch, type AutogenVerdict } from './persona-autogen.mjs'
 import { checkNameCollision, type NameCollisionSets } from './persona-gate-name-collision.mjs'
+import { selectDistinctNames } from './persona-name-space.mjs'
 
 // ─────────────────────────────────────────────────────────
 // fixture — 후보 원자료
@@ -218,15 +220,12 @@ export function judgeCandidateConflicts(c: ExpansionCandidateFixture, ctx: Confl
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 **후보 이름 공간 — 코드마다 다른 조합이 나온다.** `candidatesFor(code)` 는 코드 seed 로 조합을 펴서
- *    한 코드가 보는 것은 공간의 일부다. 확장 전체가 쓸 수 있는 공간은 **발급 가능한 코드 전부의 합집합**이다.
+ * 🔴 **후보 이름 공간.** 300명 이상 확장을 위해 만든 정본 합성 공간을 그대로 쓴다.
  */
 export const NAME_SPACE_PROBE_CODES = 999
 
-export function nameSpaceUnion(probe = NAME_SPACE_PROBE_CODES): string[] {
-  const u = new Set<string>()
-  for (let n = 1; n <= probe; n += 1) for (const x of candidatesFor(`P${String(n).padStart(2, '0')}`, 10_000)) u.add(x)
-  return [...u].sort()
+export function nameSpaceUnion(_probe = NAME_SPACE_PROBE_CODES): string[] {
+  return nicknameSpace()
 }
 
 /**
@@ -236,8 +235,7 @@ export function nameSpaceUnion(probe = NAME_SPACE_PROBE_CODES): string[] {
  *
  *    `bound`  memberNames 를 받았으면 exact, 아니면 upper(회원 이름이 더 막을 수 있다)
  *
- * 🔴 실측(2026-10-13 · 오프라인): 합집합 236개 중 서로 헷갈리지 않는 이름 약 55개 —
- *    세 글자 이름이 같은 두 글자 몸통(`BODY2`)을 나눠 써 편집 거리 1 로 부딪힌다. 300 명은 이 공간으로 서지 않는다.
+ * 🔴 합성 공간은 실사용자 입력을 읽지 않으며, 같은 선택기는 묶음 안 충돌까지 Gate ⑥-B로 제거한다.
  */
 export function nameSpaceCapacity(input: {
   takenNames: readonly string[]
@@ -245,15 +243,14 @@ export function nameSpaceCapacity(input: {
   space?: readonly string[]
 }): { space: number; free: number; bound: 'exact' | 'upper'; picked: string[] } {
   const space = input.space ?? nameSpaceUnion()
-  const picked: string[] = []
-  for (const n of space) {
-    const sets: NameCollisionSets = {
-      personaNames: [...input.takenNames, ...picked],
+  const result = selectDistinctNames({
+    sets: {
+      personaNames: [...input.takenNames],
       ...(input.memberNames === null ? {} : { memberNames: input.memberNames }),
-    }
-    if (checkNameCollision(n, sets).status === 'pass') picked.push(n)
-  }
-  return { space: space.length, free: picked.length, bound: input.memberNames === null ? 'upper' : 'exact', picked }
+    },
+    space,
+  })
+  return { space: result.space, free: result.picked.length, bound: result.bound, picked: result.picked }
 }
 
 // ─────────────────────────────────────────────────────────

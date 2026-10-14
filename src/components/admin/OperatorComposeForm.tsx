@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useFormState } from 'react-dom'
 
+import PostEditor from '@/components/features/PostEditor'
 import ActionButton from '@/components/ui/ActionButton'
 import { createOperatorContent, type ComposeActionState } from '@/lib/actions/operator-compose'
 import { MAX_COMMENT_LENGTH, MIN_COMMENT_LENGTH } from '@/lib/comment-policy'
@@ -32,7 +33,24 @@ import type { ComposeTargetPost, WriterOption } from '@/lib/queries/operator-com
  *    DB unique 제약에 걸린다 — 버튼을 잠그는 것만으로는 재전송을 막지 못한다.
  *
  * 🔴 **AI 를 부르지 않는다.** 생성·검수 버튼을 두지 않는다. 창업자가 직접 쓴다.
+ *
+ * 🔴 **글 본문은 회원 글쓰기와 같은 `PostEditor`(사진·유튜브·굵게)다** (2026-10-14).
+ *    회원용 `PostForm` 을 통째로 가져오지 않는다 — 그쪽은 회원 작성 액션(`createPost`)으로
+ *    저장해서 OperatorWriter 작성자·감사 기록이 사라진다. 에디터만 빌리고 저장은 이 화면의
+ *    액션 그대로다. 사진은 관리자 전용 업로드(`/api/admin/uploads`)로 간다.
+ *    댓글은 지금처럼 글자 칸이다 — 댓글에는 사진·영상을 넣지 않는다.
  */
+
+/** 🔴 관리자 전용 업로드 — 회원 업로드의 "가입 완료" 문에 기대지 않는다 */
+const ADMIN_UPLOAD_ENDPOINT = '/api/admin/uploads'
+
+/** 미리보기에 "사진 N장 · 영상 N개" 를 말해 주려고 센다. 🔴 세기만 한다 — HTML 을 그리지 않는다 */
+function countMedia(html: string): { images: number; videos: number } {
+  return {
+    images: (html.match(/<img\b/gi) ?? []).length,
+    videos: (html.match(/<iframe\b/gi) ?? []).length,
+  }
+}
 
 type Mode = 'post' | 'comment'
 
@@ -62,12 +80,18 @@ export default function OperatorComposeForm({
    *    따로 두면 오가도 **양쪽 다 그대로 남는다.**
    */
   const [postBody, setPostBody] = useState('')
+  /**
+   * 🔴 글 본문의 **글자만**. 길이·최소 본문 판정은 이것으로 한다 — 서버(`postContentToText`)와
+   *    같은 기준이다. HTML 길이로 재면 태그·사진 주소가 글자로 세어져 짧은 글이 통과한다.
+   */
+  const [postText, setPostText] = useState('')
+  /** 사진을 올리는 중인가 — 올리는 동안 본문에는 아직 blob: 주소가 들어 있다 */
+  const [uploading, setUploading] = useState(false)
+  /** 등록에 성공하면 바꿔 에디터를 빈 상태로 다시 세운다. 🔴 에디터는 처음 값만 받는다 */
+  const [editorKey, setEditorKey] = useState(0)
   const [commentBody, setCommentBody] = useState('')
   const [postId, setPostId] = useState(targets[0]?.id ?? '')
   const [requestKey, setRequestKey] = useState(newRequestKey)
-
-  const content = mode === 'post' ? postBody : commentBody
-  const setContent = mode === 'post' ? setPostBody : setCommentBody
 
   /**
    * 🔴 **액션을 바꿔 끼우지 않는다.** 진입점은 하나이고, 무엇을 쓰는지는 `mode` 값으로 보낸다.
@@ -120,7 +144,12 @@ export default function OperatorComposeForm({
     if (rawState.doneKey === undefined) return
     // 🔴 끝난 쪽의 초안만 비운다 — 다른 모드에 써 두고 온 글을 지우지 않는다
     if (rawState.kind === 'comment') setCommentBody('')
-    else { setTitle(''); setPostBody('') }
+    else {
+      setTitle('')
+      setPostBody('')
+      setPostText('')
+      setEditorKey((k) => k + 1)
+    }
     setRequestKey(newRequestKey())
   }, [rawState.doneKey, rawState.kind])
 
@@ -136,20 +165,37 @@ export default function OperatorComposeForm({
     )
   }
 
+  /** 🔴 글은 글자 수(postText), 댓글은 그대로의 길이 — 서버가 재는 값과 같다 */
+  const measured = mode === 'post' ? postText : commentBody
   const contentTooLong =
-    mode === 'post' ? content.length > MAX_POST_CONTENT_LENGTH : content.length > MAX_COMMENT_LENGTH
+    mode === 'post' ? measured.length > MAX_POST_CONTENT_LENGTH : measured.length > MAX_COMMENT_LENGTH
   /**
    * 🔴 화면의 잠금 조건은 **서버와 같은 상수**를 본다. 여기 숫자를 적으면
    *    "버튼은 열렸는데 서버가 막는" 상태가 생긴다 — `postSubmitBlock` 과 같은 계약이다.
    */
   const canSubmit =
     writerId !== '' &&
-    content.trim().length >= (mode === 'post' ? MIN_POST_CONTENT_LENGTH : MIN_COMMENT_LENGTH) &&
+    measured.trim().length >= (mode === 'post' ? MIN_POST_CONTENT_LENGTH : MIN_COMMENT_LENGTH) &&
     !contentTooLong &&
+    // 🔴 사진을 올리는 중에는 보내지 않는다 — blob: 주소는 sanitize 가 지워 사진이 사라진 글이 된다
+    !(mode === 'post' && uploading) &&
     (mode === 'post' ? title.trim().length >= MIN_POST_TITLE_LENGTH : postId !== '')
 
+  const media = mode === 'post' ? countMedia(postBody) : { images: 0, videos: 0 }
+
   return (
-    <form action={formAction} className="mt-4 flex flex-col gap-4">
+    <form
+      action={(formData) => {
+        /**
+         * 🔴 버튼이 잠긴 것만 믿지 않는다. 제목칸 Enter(implicit submission) ·
+         *    `form.requestSubmit()` 은 버튼을 거치지 않는다. 같은 `canSubmit` 으로 멈춘다 —
+         *    회원 글쓰기(PostForm)와 같은 모양이다.
+         */
+        if (!canSubmit) return
+        formAction(formData)
+      }}
+      className="mt-4 flex flex-col gap-4"
+    >
       {/* 🔴 무엇을 쓰는지는 값으로 보낸다 — 액션을 바꿔 끼우지 않는다 */}
       <input type="hidden" name="mode" value={mode} />
       <input type="hidden" name="requestKey" value={requestKey} />
@@ -169,12 +215,14 @@ export default function OperatorComposeForm({
             type="button"
             role="radio"
             aria-checked={mode === m}
+            // 🔴 사진을 올리는 동안 모드를 바꾸지 않는다 — 에디터가 내려가면 올리던 사진을 잃는다
+            disabled={uploading && mode !== m}
             onClick={() => setMode(m)}
             className={`inline-flex min-h-[52px] items-center rounded-lg border px-4 font-bold transition ${
               mode === m
                 ? 'border-cta bg-surface-soft text-content-primary'
                 : 'border-subtle text-content-muted'
-            }`}
+            } disabled:opacity-40`}
           >
             {m === 'post' ? '글 쓰기' : '댓글 달기'}
           </button>
@@ -244,22 +292,42 @@ export default function OperatorComposeForm({
         </label>
       )}
 
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-bold text-content-primary">
-          {mode === 'post' ? '내용' : '댓글'}
-        </span>
-        <textarea
-          name="content"
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          rows={mode === 'post' ? 12 : 4}
-          maxLength={mode === 'post' ? MAX_POST_CONTENT_LENGTH : MAX_COMMENT_LENGTH}
-          className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
-        />
-        <span className="text-xs text-content-muted">
-          {content.length} / {mode === 'post' ? MAX_POST_CONTENT_LENGTH : MAX_COMMENT_LENGTH}자
-        </span>
-      </label>
+      {mode === 'post' ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-bold text-content-primary">내용</span>
+          {/* 🔴 Tiptap 은 name 을 가진 입력이 아니다 — 본문 HTML 은 hidden 으로 보낸다(PostForm 과 같다).
+                 서버가 sanitize · 글자 수 · 콘텐츠 가드를 다시 본다 */}
+          <input type="hidden" name="content" value={postBody} readOnly />
+          <PostEditor
+            key={editorKey}
+            value={postBody}
+            onChange={setPostBody}
+            onTextChange={setPostText}
+            onBusyChange={setUploading}
+            placeholder="창업자가 직접 쓰는 글입니다. 사진·유튜브·굵게를 쓸 수 있어요."
+            uploadEndpoint={ADMIN_UPLOAD_ENDPOINT}
+          />
+          <span className="text-xs text-content-muted">
+            {postText.length} / {MAX_POST_CONTENT_LENGTH}자
+            {uploading ? ' · 사진을 올리는 중이에요. 끝나면 등록할 수 있어요.' : ''}
+          </span>
+        </div>
+      ) : (
+        <label className="flex flex-col gap-1">
+          <span className="text-sm font-bold text-content-primary">댓글</span>
+          <textarea
+            name="content"
+            value={commentBody}
+            onChange={(e) => setCommentBody(e.target.value)}
+            rows={4}
+            maxLength={MAX_COMMENT_LENGTH}
+            className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+          />
+          <span className="text-xs text-content-muted">
+            {commentBody.length} / {MAX_COMMENT_LENGTH}자
+          </span>
+        </label>
+      )}
 
       {/* ── 🔴 등록 직전 확인 — 이 화면의 안전장치 ── */}
       <div className="rounded-lg border border-subtle bg-surface-soft p-3">
@@ -282,9 +350,19 @@ export default function OperatorComposeForm({
         {mode === 'post' && title.trim() !== '' ? (
           <p className="mt-1 break-words text-sm text-content-muted">제목: {title}</p>
         ) : null}
+        {/* 🔴 글은 HTML 을 그리지 않고 **글자만** 보여 준다. 태그 문자열이 그대로 보이지도,
+               정제되지 않은 HTML 이 그려지지도 않는다. 사진·영상은 위 에디터가 실제 모습이다 */}
         <p className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-surface-card p-2 text-sm text-content-primary">
-          {content.trim() === '' ? '(내용이 비어 있습니다)' : content}
+          {measured.trim() === '' ? '(내용이 비어 있습니다)' : measured}
         </p>
+        {media.images + media.videos > 0 ? (
+          <p className="mt-1 text-xs text-content-muted">
+            {media.images > 0 ? `사진 ${media.images}장` : ''}
+            {media.images > 0 && media.videos > 0 ? ' · ' : ''}
+            {media.videos > 0 ? `영상 ${media.videos}개` : ''}
+            {media.images > 0 ? ' — 첫 사진이 목록 대표 사진이 됩니다' : ''}
+          </p>
+        ) : null}
       </div>
 
       {state.error ? <p className="m-0 text-sm text-state-danger">{state.error}</p> : null}

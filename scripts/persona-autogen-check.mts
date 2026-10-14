@@ -138,7 +138,9 @@ check('creative 없음 → LLM_STEP_UNIMPLEMENTED (기본값으로 채우지 않
   has({ ...base, creative: null }, 'LLM_STEP_UNIMPLEMENTED') && judge({ ...base, creative: null }).seed === null)
 check('cadence 모름 → CADENCE_UNMEASURED', has({ ...base, cadence: null }, 'CADENCE_UNMEASURED'))
 check('운영 코드와 겹침 → CODE_TAKEN', has({ ...base, code: 'P25' }, 'CODE_TAKEN'))
-check('자동 범위 밖 코드 → CODE_INVALID', has({ ...base, code: 'P05' }, 'CODE_INVALID') && has({ ...base, code: 'P51' }, 'CODE_INVALID'))
+// 🔴 상한은 `persona-code` 단일 상수다(2026-10-13 — 옛 P50). 상한 다음 번호 · 비정본 표기는 여전히 범위 밖이다
+check('자동 범위 밖 코드 → CODE_INVALID', has({ ...base, code: 'P05' }, 'CODE_INVALID')
+  && has({ ...base, code: `P${AUTOGEN_CODE_LAST + 1}` }, 'CODE_INVALID') && has({ ...base, code: 'P051' }, 'CODE_INVALID'))
 check('생활사 모순 — 60대 초반 갱년기 전 → LIFE_INCONSISTENT',
   has({ ...base, life: { ...LIFE, ageBand: '60대 초반', birthDate: '1963-03-08', menopauseStatus: '전' } }, 'LIFE_INCONSISTENT'))
 check('생활사 모순 — 생일이 나이대 밖 → LIFE_INCONSISTENT',
@@ -167,13 +169,14 @@ console.log('①-b 🔴 코드 발급 — append-only · 폐기 코드 재사용
   // 숫자 비교 — 문자열 사전순이 아니다
   check('🔴 숫자로 비교한다 — "P9" < "P40" < "P100"(사전순이면 P9 가 최대)',
     nextAutogenCodes({ usedCodes: ['P40', 'P9'], count: 1 }).codes[0] === 'P41'
-    && nextAutogenCodes({ usedCodes: ['P100', 'P9'], count: 1 }).codes.length === 0)
+    && nextAutogenCodes({ usedCodes: ['P100', 'P9'], count: 1 }).codes[0] === 'P101')
   check('Persona 코드 모양이 아닌 값은 high-water 에 넣지 않는다', nextAutogenCodes({ usedCodes: ['X999', 'P4x', ''], count: 1 }).codes[0] === 'P34')
   // 반례 5 — 상한까지 쓰였으면 후보 0 · 사유
   const top = nextAutogenCodes({ usedCodes: [...cards, autogenCodeOf(AUTOGEN_CODE_LAST)], count: 8 })
   check(`🔴 반례 5 — ${autogenCodeOf(AUTOGEN_CODE_LAST)} 까지 쓰였으면 후보 0 · problem`, top.codes.length === 0 && /발급할 코드가 없다/.test(top.problem ?? ''))
-  const tail = nextAutogenCodes({ usedCodes: ['P48'], count: 8 })
-  check('상한 앞 자리만큼만 — P48 → P49 · P50', JSON.stringify(tail.codes) === '["P49","P50"]' && tail.problem === null)
+  const tail = nextAutogenCodes({ usedCodes: [autogenCodeOf(AUTOGEN_CODE_LAST - 2)], count: 8 })
+  check(`상한 앞 자리만큼만 — ${autogenCodeOf(AUTOGEN_CODE_LAST - 2)} → ${autogenCodeOf(AUTOGEN_CODE_LAST - 1)} · ${autogenCodeOf(AUTOGEN_CODE_LAST)}`,
+    JSON.stringify(tail.codes) === JSON.stringify([autogenCodeOf(AUTOGEN_CODE_LAST - 1), autogenCodeOf(AUTOGEN_CODE_LAST)]) && tail.problem === null)
   check('결정론 — 같은 입력 같은 출력', JSON.stringify(nextAutogenCodes({ usedCodes: cards, count: 8 })) === JSON.stringify(now))
   // 반례 7 — P09 제외 의미와 섞이지 않는다
   check('🔴 반례 7 — P09 제외(EXCLUDED_CODES)와 폐기 코드가 겹치지 않는다',

@@ -21,6 +21,7 @@ import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, type D100Stage } from '
 import { readLengthBand } from './original-post-persona-match'
 import type { LifeSkeleton, PersonaCreative } from './persona-autogen'
 import type { CohortId } from './persona-cohort'
+import { comparePersonaCodes, isPersonaCode, PERSONA_CODE_MAX, personaCodeNumber } from './persona-code'
 import type { PoolCard } from './persona-pool-card'
 
 // ─────────────────────────────────────────────────────────
@@ -99,14 +100,7 @@ export const PROPOSED_COHORTS: readonly ProposedCohort[] = [
 // 코드 공간 — 🔴 코드 형식이 300 을 막는 곳
 // ─────────────────────────────────────────────────────────
 
-/**
- * 🔴 **코드 형식 한계 — 소스에 실제로 있는 제약의 목록이다.**
- *    `persona-expansion-check` 가 각 줄의 `pattern` 이 그 파일에 **지금도 있는지** 읽어 대조한다 —
- *    누가 한계를 풀었는데 이 표가 남으면 검사가 실패해 표를 고치게 한다(낡은 목록 금지).
- *
- *    `max`   이 제약이 받는 가장 큰 코드 번호
- *    `kind`  regex(형식 거부) · order(사전순 정렬 — 3자리 코드가 섞이면 순서가 틀어진다)
- */
+/** 이미 제거된 코드 한계를 과거 보고와 호환되는 모양으로만 남긴다. 현재 한계는 `PERSONA_CODE_MAX` 하나다. */
 export type CodeFormatLimit = {
   file: string
   pattern: string
@@ -115,42 +109,18 @@ export type CodeFormatLimit = {
   effect: string
 }
 
-export const CODE_FORMAT_LIMITS: readonly CodeFormatLimit[] = [
-  { file: 'src/lib/persona-autogen.ts', pattern: 'AUTOGEN_CODE_LAST = 50', max: 50, kind: 'regex', effect: '자동 후보 코드 발급 상한' },
-  { file: 'src/lib/persona-card-verify.ts', pattern: '/^P(0[1-9]|[1-4][0-9]|50)$/', max: 50, kind: 'regex', effect: 'isPoolCode — seed 검증 · autogen CODE_INVALID' },
-  { file: 'src/lib/persona-cohort.ts', pattern: '/^P(0[1-9]|[1-4][0-9]|50)$/', max: 50, kind: 'regex', effect: 'verifyManifest — cohort 코드 형식' },
-  { file: 'src/lib/persona-pool-card.ts', pattern: '/^### (P\\d{2})', max: 99, kind: 'regex', effect: 'parsePoolDoc — 정본 카드 헤딩' },
-  { file: 'src/lib/persona-creative.ts', pattern: '/^P\\d\\d$/', max: 99, kind: 'regex', effect: 'parseCreativeFile — creative 보충 파일' },
-  {
-    file: 'src/lib/persona-cohort.ts', pattern: '.flatMap((c) => c.codes))].sort()', max: 99, kind: 'order',
-    effect: 'PRODUCTION_PERSONA_CODES 사전순 — P100 이 P10 과 P11 사이에 끼어 말투 고정 배정이 바뀐다',
-  },
-  {
-    file: 'scripts/lib/persona-reference-store.mts', pattern: 'const codes = [...new Set(input.personaCodes)].sort()', max: 99, kind: 'order',
-    effect: 'planBundles 사전순 — 운영 Persona 가 다른 화자 묶음을 받는다(VOICE_ASSIGNMENT_DRIFT)',
-  },
-]
+export const CODE_FORMAT_LIMITS: readonly CodeFormatLimit[] = []
 
 /** 🔴 지금 소스가 받아 주는 가장 큰 코드 번호 — 가장 좁은 한계 */
 export function codeCeiling(limits: readonly CodeFormatLimit[] = CODE_FORMAT_LIMITS): number {
-  return Math.min(...limits.map((l) => l.max))
-}
-
-/** `P34` → 34 · Persona 코드 모양이 아니면 null — 🔴 문자열이 아니라 숫자로 비교한다 */
-const codeNumber = (code: string): number | null => {
-  const m = /^P(\d+)$/.exec(code)
-  return m === null ? null : Number(m[1])
+  return limits.length === 0 ? PERSONA_CODE_MAX : Math.min(PERSONA_CODE_MAX, ...limits.map((l) => l.max))
 }
 
 /**
- * 🔴 **코드 순서가 안전한가** — 사전순과 번호순이 같아야 한다.
- *    운영 정렬(`.sort()`)은 사전순이다. 두 자리 코드끼리는 두 순서가 같지만, `P100` 이 섞이면
- *    `P10 < P100 < P11` 이 되어 기존 Persona 의 말투 배정 순번이 밀린다.
+ * 🔴 **코드 순서가 안전한가** — 전부 정본 코드이고 이미 숫자순이어야 한다.
  */
 export function codeOrderSafe(codes: readonly string[]): boolean {
-  const lex = [...codes].sort()
-  const num = [...codes].sort((a, b) => (codeNumber(a) ?? 0) - (codeNumber(b) ?? 0))
-  return lex.join(',') === num.join(',')
+  return codes.every(isPersonaCode) && codes.every((c, i) => i === 0 || comparePersonaCodes(codes[i - 1]!, c) < 0)
 }
 
 /**
@@ -161,7 +131,7 @@ export function codeRoom(input: { usedCodes: Iterable<string>; retiredCodes: Ite
   highWater: number
   room: number
 } {
-  const nums = [...input.usedCodes, ...input.retiredCodes].map(codeNumber).filter((n): n is number => n !== null)
+  const nums = [...input.usedCodes, ...input.retiredCodes].map(personaCodeNumber).filter((n): n is number => n !== null)
   const highWater = nums.length === 0 ? 0 : Math.max(...nums)
   return { highWater, room: Math.max(0, input.ceiling - highWater) }
 }

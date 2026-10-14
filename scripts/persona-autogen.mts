@@ -37,13 +37,14 @@ import { dirname } from 'node:path'
 
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
-import { assignCandidates } from '../src/lib/persona-nickname-candidates'
 import {
   AUTOGEN_CODE_FIRST, AUTOGEN_CODE_LAST, autogenCodeOf, modeCadence, nextAutogenCodes, proposeLifeSkeletons, RETIRED_AUTOGEN_CODES,
   subjectOfCard, subjectOfLife, thinLifeAxisCount, voiceCoreFromBundle,
   type AutogenCandidate, type Cadence, type DisplayNameCheck, type PersonaCreative,
 } from '../src/lib/persona-autogen'
 import { judgeAutogenBatch, voicePoolFor, type AutogenVerdict } from './lib/persona-autogen.mjs'
+import { assignDistinctNames } from './lib/persona-name-space.mjs'
+import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { applyAutogenDrafts } from './lib/persona-autogen-apply.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -136,7 +137,7 @@ if (pool.problems.length > 0) fail(`정본 Pool 카드 파싱 문제 ${pool.prob
 const taken = new Set<string>(pool.cards.map((c) => c.code))
 
 // ── 운영 DB (read-only) ──
-type DbFacts = { codes: string[]; cadences: Cadence[]; isTaken: (n: string) => boolean; gateOf: (n: string) => DisplayNameCheck['gate'] }
+type DbFacts = { codes: string[]; cadences: Cadence[]; sets: NameCollisionSets; gateOf: (n: string) => DisplayNameCheck['gate'] }
 let db: DbFacts | null = null
 let prismaRef: import('@prisma/client').PrismaClient | null = null
 if (USE_DB) {
@@ -160,7 +161,7 @@ if (USE_DB) {
   db = {
     codes: rows.map((r) => r.code),
     cadences,
-    isTaken: (n) => checkNameCollision(n, sets).status !== 'pass',
+    sets,
     gateOf: (n) => checkNameCollision(n, sets).status,
   }
   for (const c of db.codes) taken.add(c)
@@ -192,7 +193,8 @@ const creative: Record<string, PersonaCreative> = supplemented ?? { ...resumed }
 }
 
 // ── 표시명 — 정책 + Gate ⑥-B (DB 가 있을 때만) ──
-const names = db === null ? null : assignCandidates(codes, db.isTaken)
+// 🔴 합성 이름 공간 + 묶음 안 혼동까지 본다(`persona-name-space`) — 옛 후보 공간은 300명을 받지 못한다
+const names = db === null ? null : assignDistinctNames(codes, db.sets)
 const cadence = db === null ? null : modeCadence(db.cadences)
 
 // ── ⑤ 검증 — 🔴 한 명씩 + 서로·정본과 겹치는가(성격·관점·noGo·말투) ──

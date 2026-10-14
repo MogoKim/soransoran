@@ -81,7 +81,7 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { digest16, loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
-import { planSpeakerAvailability } from '../src/lib/content-core/speaker-availability'
+import { createAttemptPool, planSpeakerAvailability } from '../src/lib/content-core/speaker-availability'
 import {
   readSpeakerLoad, SPEAKER_LOAD_FILE,
 } from '../src/lib/content-core/speaker-load-file'
@@ -520,6 +520,7 @@ function runIntents(runId: string | null): ReadonlyMap<string, SupplyIntent> | n
 async function ask(
   stage: LedgerStage, system: string, payload: string, maxOut: number,
   model: ProviderModel = DRAFT_MODEL,
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high',
 ): Promise<SupplyCallResult> {
   if (LEDGER === null) {
     return {
@@ -533,6 +534,7 @@ async function ask(
   return LEDGER.call({
     stage, model, systemPrompt: system, userPayload: payload,
     maxOutputTokens: maxOut, timeoutMs: DRAFT_TIMEOUT_MS, sourceKey: COST_KEY, supplyContract: COST_CONTRACT,
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   })
 }
 
@@ -546,7 +548,7 @@ const v2Ask: Ask = ledgerAskOf({
   take: () => BUDGET.take(),
   count: countCall,
   // 🔴 같은 장부 wrapper 를 지난다 — 여기서 provider 를 직접 부르지 않는다
-  call: (stage, system, payload, maxOut, model) => ask(stage, system, payload, maxOut, model),
+  call: (stage, system, payload, maxOut, model, thinkingLevel) => ask(stage, system, payload, maxOut, model, thinkingLevel),
 })
 
 type GenDraft = { title: string; body: string; intendedQuestion: string; sourceAngle: string }
@@ -962,7 +964,21 @@ async function main(): Promise<void> {
    *    보류돼, 계획만 보는 회차가 거짓을 보여 준다.
    *    🔴 전원을 후보로 주고 **그 사실을 적는다.** 조용히 넘어가지 않는다.
    */
-  const speakerPlanOfRun = speakerLoad.loaded
+  /**
+   * 🔴 **생성 시도 계약이 있으면 전체 후보 풀로 준다** (speaker-attempt-v1 · 2026-10-14).
+   *    원천은 판정 뒤 **실제 SEED**(`seeds`)다. 여력은 공개 자리 몫이 아니라 시도 여력이다.
+   *    🔴 미리 나누지 않는다 — 원천을 순서대로 처리하며 매 원천에 `시도 가능 전체 − 이번 회차 선택됨` 을 준다
+   *       (`createAttemptPool`). 앞판은 27명을 원천마다 2~3명으로 미리 쪼개 묶음 밖 자격자를 못 봤다(2026-10-14 12:15).
+   *    🔴 계약이 없는 파일(옛 계약)은 앞판 그대로 공개 자리 몫 − WIP 로 좁게 돈다.
+   */
+  const attemptOf = speakerLoad.loaded ? speakerLoad.attemptCapacityOf : null
+  const attemptPool = attemptOf === null ? null : createAttemptPool({
+    attemptCapacity: voice.candidates.map((c) => ({ code: c.code, attemptCapacity: attemptOf(c.code) })),
+    attemptDemand: seeds.length,
+  })
+  const speakerPlanOfRun = attemptPool !== null
+    ? null
+    : speakerLoad.loaded
     ? planSpeakerAvailability({
       sourceKeys: seeds.map(keyOfJ),
       capacities: voice.candidates.map((c) => ({
@@ -979,12 +995,17 @@ async function main(): Promise<void> {
       identity: 'no-load-file',
       notes: ['🔴 여력 파일이 없어 **좁히지 않았다** — 같은 화자가 겹칠 수 있다'],
     }
-  const slotOf = new Map(speakerPlanOfRun.slots.map((sl) => [sl.sourceKey, sl.codes]))
+  const slotOf = new Map((speakerPlanOfRun?.slots ?? []).map((sl) => [sl.sourceKey, sl.codes]))
   console.log(`
-   🔴 화자 여력 계획 — 여력 있는 화자 ${speakerPlanOfRun.eligible.length}명`)
-  console.log(`      ${speakerPlanOfRun.eligible.join(' ') || '(없음)'}`)
-  for (const n of speakerPlanOfRun.notes) console.log(`      · ${n}`)
-  for (const sl of speakerPlanOfRun.slots) {
+   🔴 화자 여력 계획 — 여력 있는 화자 ${attemptPool?.attemptSupply ?? speakerPlanOfRun?.eligible.length ?? 0}명`
+    + (speakerLoad.releaseSeats === null ? '' : ` · 공개 자리 ${speakerLoad.releaseSeats}개는 그대로 (발행 러너가 정한다)`))
+  if (attemptPool !== null) {
+    console.log(`      ${attemptPool.eligible.join(' ') || '(없음)'}`)
+    console.log(`      · 생성 시도 — 실제 SEED ${attemptPool.attemptDemand}건 · 시도 가능 ${attemptPool.attemptSupply}명`
+      + ` · 유료 경로 상한 ${attemptPool.attemptLimit}건 · 원천마다 남은 전체 후보에서 고른다 (한 회차 한 사람 한 원천)`)
+  }
+  for (const n of speakerPlanOfRun?.notes ?? []) console.log(`      · ${n}`)
+  for (const sl of speakerPlanOfRun?.slots ?? []) {
     console.log(`      ${labelOfKey(sl.sourceKey)} → ${sl.codes.join(' ') || '🔴 보류(배정할 화자 없음)'}`)
   }
 
@@ -1056,7 +1077,8 @@ async function main(): Promise<void> {
      *    🔴 대신 **캐시 key 와 artifact** 에 싣는다 — 실제로 보낸 후보와
      *       캐시·기록이 같은 것을 가리킨다. 그것이 앞판이 깨뜨린 지점이다.
      */
-    const slotCodes = slotOf.get(keyOfJ(j)) ?? []
+    // 🔴 시도 계약이면 **남은 전체 후보**다 — 유료 경로 상한을 다 썼거나 남은 사람이 없으면 [] (provider 호출 0)
+    const slotCodes = attemptPool !== null ? attemptPool.take() : slotOf.get(keyOfJ(j)) ?? []
     // 🔴 **여력 대기로 적는다** — 초안 실패(`noDraft`)가 아니다. 부르기 전이다(provider 호출 0)
     if (slotCodes.length === 0) { capacityDeferred += 1; holdPick({ personaDeferred: true }); continue }
     /**
@@ -1142,6 +1164,16 @@ async function main(): Promise<void> {
       // 🔴 완주한 회차만 캐시에 남긴다 — 막힌 결과를 재사용하면 다음 회차도 막힌다
       if (art.review.semanticCompletion.complete) {
         cache.set(v2Key, { artifact: art, status: 'ok', attemptCount: art.cost.totalCalls })
+      }
+    }
+    /**
+     * 🔴 **고른 순간 사용됨으로 적는다** — 초안·게이트 결과를 보기 전이다. 뒤에서 실패해도 이 회차의
+     *    다른 원천에 같은 사람을 다시 주지 않는다. 풀 밖 · 이미 쓴 사람이면 불변식 위반이라 멈춘다.
+     */
+    const chosenCode = (art.plan?.personaDecision?.chosen ?? '').trim()
+    if (attemptPool !== null && chosenCode !== '') {
+      try { attemptPool.markChosen(chosenCode) } catch (e) {
+        fail(`화자 풀 불변식 위반 (${j.sourceArticleId}) — ${e instanceof Error ? e.message : String(e)}`)
       }
     }
     for (const c of art.cost.calls) {
@@ -1278,6 +1310,9 @@ async function main(): Promise<void> {
   }
   if (voiceHeld > 0) {
     console.log(`   🟡 말투 정본을 못 읽어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
+  }
+  if (attemptPool !== null) {
+    console.log(`   🟢 화자 풀 — 유료 경로 진입 ${attemptPool.started}/${attemptPool.attemptLimit}건 · 선택 ${attemptPool.used.size}명 (한 회차 안에서 모두 다른 사람)`)
   }
   if (capacityDeferred > 0) {
     console.log(`   🟡 Persona 여력 대기로 미룬 원천 ${capacityDeferred}건 — AI 를 부르지 않았다 · 초안 실패 아님`

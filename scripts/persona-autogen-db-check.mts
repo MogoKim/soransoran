@@ -35,6 +35,10 @@ const { judgeReferenceBundle } = await import('../src/lib/persona-voice-referenc
 const { preflightPersona } = await import('../src/lib/persona-wave2-verify')
 const { judgeRealMember } = await import('../src/lib/real-member-gate')
 type AutogenCandidate = import('../src/lib/persona-autogen').AutogenCandidate
+// 🔴 (2026-10-13) 상한은 `persona-code` 단일 상수다 — 옛 P49 · P50 대신 상한 맨 위 두 코드를 쓴다
+const { AUTOGEN_CODE_LAST, autogenCodeOf } = await import('../src/lib/persona-autogen')
+const TOP = autogenCodeOf(AUTOGEN_CODE_LAST)
+const TOP1 = autogenCodeOf(AUTOGEN_CODE_LAST - 1)
 
 let pass = 0
 let failN = 0
@@ -65,7 +69,7 @@ const same = (a: Record<string, number>, b: Record<string, number>): boolean =>
  *    시작 전에도 부른다: 앞 회차가 중간에 죽었으면 남은 행 때문에 정상 경로가 거부된다.
  */
 async function cleanup(): Promise<void> {
-  const mine = await prisma.persona.findMany({ where: { code: { in: ['P49', 'P50'] } }, select: { id: true, userId: true } })
+  const mine = await prisma.persona.findMany({ where: { code: { in: [TOP1, TOP] } }, select: { id: true, userId: true } })
   await prisma.personaAuditLog.deleteMany({ where: { personaId: { in: mine.map((m) => m.id) } } })
   await prisma.persona.deleteMany({ where: { id: { in: mine.map((m) => m.id) } } })
   await prisma.user.deleteMany({ where: { id: { in: mine.map((m) => m.userId) } } })
@@ -84,7 +88,7 @@ try {
 
   // ── 운영 판정기를 통과한 후보를 만든다(합성 말투 · 합성 creative) ──
   const texts = ['그 마음 알 것 같아요', '저도 요즘 그래요', '천천히 하셔도 돼요', '날이 많이 추워졌네요']
-  const ref = judgeReferenceBundle({ personaCode: 'P50', texts, anchorCount: texts.length })
+  const ref = judgeReferenceBundle({ personaCode: TOP, texts, anchorCount: texts.length })
   if (!ref.ok) throw new Error('fixture 묶음이 서지 않는다')
   const cand = (code: string): AutogenCandidate => ({
     code,
@@ -106,16 +110,16 @@ try {
     binding: { accountCount: 0, providerId: null },
     displayName: { name: '다온', gate: 'pass' },
   })
-  const v50 = judgeAutogenCandidate(cand('P50'), { takenCodes: new Set() })
-  const v49 = judgeAutogenCandidate(cand('P49'), { takenCodes: new Set() })
+  const v50 = judgeAutogenCandidate(cand(TOP), { takenCodes: new Set() })
+  const v49 = judgeAutogenCandidate(cand(TOP1), { takenCodes: new Set() })
   check('fixture 후보가 운영 판정기에서 valid', v50.status === 'valid' && v49.status === 'valid')
-  const plan50 = { code: 'P50', status: v50.status, name: '다온', seed: v50.seed! }
+  const plan50 = { code: TOP, status: v50.status, name: '다온', seed: v50.seed! }
 
   // ── ④ DB 를 열기 전에 막는다 ──
   {
     const b = await counts()
     const r1 = await applyAutogenDrafts(prisma, {
-      plans: [plan50, { code: 'P49', status: 'quarantined', name: '보람', seed: v49.seed! }], limit: 2, reason: 'check',
+      plans: [plan50, { code: TOP1, status: 'quarantined', name: '보람', seed: v49.seed! }], limit: 2, reason: 'check',
     })
     const r2 = await applyAutogenDrafts(prisma, { plans: [plan50], limit: 3, reason: 'check' })
     const r3 = await applyAutogenDrafts(prisma, { plans: [], limit: 0, reason: 'check' })
@@ -146,7 +150,7 @@ try {
       a.posts === b.posts && a.comments === b.comments && a.queue === b.queue
       && a.activity === b.activity && a.raw === b.raw && a.accounts === b.accounts)
     const row = await prisma.persona.findUnique({
-      where: { code: 'P50' },
+      where: { code: TOP },
       select: {
         code: true, status: true, ageBand: true, region: true, lifeStage: true, identity: true,
         voiceCore: true, voiceVariations: true, activityRhythm: true, noGoTopics: true, noGoExpressions: true,
@@ -182,7 +186,7 @@ try {
     const r = await applyAutogenDrafts(prisma, { plans: [{ ...plan50, name: '보람' }], limit: 1, reason: 'check' })
     check('같은 코드 재적재 → 거부', !r.ok)
     // 🔴 unique 제약이 뒤에서 막아 주더라도 **사유가 코드 중복으로 먼저** 나와야 한다 — 쓰기 전에 멈춘 것이다
-    check('재적재 거부 사유가 "이미 있는 코드" 다', !r.ok && /이미 있는 코드: P50/.test(r.reason))
+    check('재적재 거부 사유가 "이미 있는 코드" 다', !r.ok && new RegExp(`이미 있는 코드: ${TOP}`).test(r.reason))
     check('재적재 거부 → write 0', same(b, await counts()))
   }
 
@@ -190,9 +194,9 @@ try {
   //    Persona 계정은 이제 B1(회원)이 아니라 B3 로만 대조된다 — B3 조회가 비면 여기서 통과해 버린다
   {
     const b = await counts()
-    const plan49 = { code: 'P49', status: v49.status, name: '다온', seed: v49.seed! }
+    const plan49 = { code: TOP1, status: v49.status, name: '다온', seed: v49.seed! }
     const r = await applyAutogenDrafts(prisma, { plans: [plan49], limit: 1, reason: 'check' })
-    check('기존 Persona(P50 다온)와 같은 표시명 → Gate ⑥-B 가 거부', !r.ok && /Gate/.test(r.ok ? '' : r.reason))
+    check(`기존 Persona(${TOP} 다온)와 같은 표시명 → Gate ⑥-B 가 거부`, !r.ok && /Gate/.test(r.ok ? '' : r.reason))
     check('Persona 충돌 거부 → write 0', same(b, await counts()))
   }
 
@@ -202,12 +206,12 @@ try {
     const cli = (args: string[]) => spawnSync('npx', ['tsx', 'scripts/persona-autogen.mts', ...args], {
       env: process.env, encoding: 'utf-8',
     })
-    // 🔴 (2026-10-08) 코드 발급은 append-only — 앞 단계가 적재한 P50 이 high-water 면 자리가 없다
+    // 🔴 (2026-10-08) 코드 발급은 append-only — 앞 단계가 적재한 상한 코드가 high-water 면 자리가 없다
     const full = await counts()
     const top = cli(['--db', '--count=3'])
-    check('🔴 DB 에 P50(상한) 행 → 후보 0 · exit 1 · write 0', await prisma.persona.count({ where: { code: 'P50' } }) === 1
+    check(`🔴 DB 에 ${TOP}(상한) 행 → 후보 0 · exit 1 · write 0`, await prisma.persona.count({ where: { code: TOP } }) === 1
       && top.status === 1 && /발급할 코드가 없다/.test(`${top.stdout}${top.stderr}`) && same(full, await counts()))
-    // 이 검사가 만든 P49 · P50 만 치우고 나머지 dry-run 반례를 본다
+    // 이 검사가 만든 상한 두 코드만 치우고 나머지 dry-run 반례를 본다
     await cleanup()
     const b = await counts()
     const run = cli(['--db', '--count=3'])

@@ -32,6 +32,8 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
+/** 🔴 Linux CI 에는 `/usr/bin/lockf` 가 없다 — 공급 러너 live 회차의 커널 lease 를 flock 대역으로 연다(2026-10-12 Batch C1) */
+import { fakeLockfEnv } from './lib/fake-lockf.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
 
@@ -179,12 +181,14 @@ async function main(): Promise<void> {
     await prisma.persona.create({ data: { code, userId: u.id, status: 'active' } })
   }
   /**
-   * 🔴 **여력 0 을 만든다** — capacity d1 이면 지평 7일에 자리가 7개다. 자리를 받은 화자마다
-   *    사람 검토 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이다.
+   * 🔴 **여력 0 을 만든다** — 공개 자리를 받았거나 **생성 시도 여력**(speaker-attempt-v1)이 있는 화자마다
+   *    사람 검토 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고 시도 여력도 0 이다.
+   *    🔴 공개 자리만 보고 심으면(옛 계약) 자리가 없던 화자가 시도 여력을 받아 대기 경로가 시험되지 않는다.
    */
   const scale = resolveScale(process.env)
   const probe = await buildSpeakerLoad(prisma, 'probe', { env: process.env, now: RUN_AT, scale })
-  const opened = Object.entries(probe.byCode).filter(([, r]) => r.openDays > 0).map(([c]) => c)
+  const opened = Object.entries(probe.byCode)
+    .filter(([, r]) => r.openDays > 0 || (r.attemptCapacity ?? 0) > 0).map(([c]) => c)
   let seq = 0
   for (const code of opened) {
     seq += 1
@@ -212,7 +216,8 @@ async function main(): Promise<void> {
   const rid = `${RUN_AT.toISOString().slice(0, 10).replace(/-/g, '')}-e2e`
   const load = await writeSpeakerLoad(prisma, rid, scale)
   const file = JSON.parse(readFileSync(join(DATA, 'speaker-load.json'), 'utf-8')) as {
-    writtenAt: string; runId: string; byDate: { date: string }[]; byCode: Record<string, { openDays: number; readyCount: number }>
+    writtenAt: string; runId: string; byDate: { date: string }[]
+    byCode: Record<string, { openDays: number; readyCount: number; attemptCapacity: number }>
   }
   check('🔴 🔴 **writtenAt = 회차 시각** (벽시계 아님)', file.writtenAt === RUN_AT.toISOString(), file.writtenAt)
   check('🔴 지평 첫날 = 회차 시각의 지평 시작', file.byDate[0]?.date === kstDateString(horizonStart(RUN_AT)),
@@ -220,6 +225,9 @@ async function main(): Promise<void> {
   const remaining = Object.values(file.byCode).map((r) => Math.max(0, r.openDays - r.readyCount))
   check('여력 있는 화자 0명 (자리 받은 사람마다 WIP 1)', opened.length > 0 && remaining.every((n) => n === 0),
     `열린 ${opened.length} · WIP ${load.wip.total}`)
+  check('🔴 생성 시도 여력도 전원 0 (시도 여력 있던 사람마다 WIP 1)',
+    Object.values(file.byCode).every((r) => r.attemptCapacity === 0),
+    Object.entries(file.byCode).filter(([, r]) => r.attemptCapacity > 0).map(([c]) => c).join(','))
 
   // ── 판정 파일 · 검수용 상세 · 큐 스냅샷 — 부모가 넘기는 모양 그대로 ──
   const shadowPath = join('.microseed-data', `auto-judge-${rid}.shadow.jsonl`)
@@ -376,7 +384,7 @@ async function worksetAxisRunner(
   const child = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T2, 'scripts', 'supply-process.mts'), '--live'], {
     cwd: T2, encoding: 'utf-8', timeout: 600_000,
     env: {
-      ...process.env, ...fakeKeys, HOME: H,
+      ...process.env, ...fakeKeys, HOME: H, ...fakeLockfEnv(H),
       SORAN_SUPPLY_PROCESS_ENABLED: 'true',
       NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
       // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
@@ -521,7 +529,7 @@ async function duplicateSourceRunner(
     const child = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T3, 'scripts', 'supply-process.mts'), '--live'], {
       cwd: T3, encoding: 'utf-8', timeout: 600_000,
       env: {
-        ...process.env, ...fakeKeys, HOME: H,
+        ...process.env, ...fakeKeys, HOME: H, ...fakeLockfEnv(H),
         // 🔴 ⑤ 와 장부 회차 id 가 겹치지 않게 회차 시각을 따로 준다(회차 요청 상한은 장부 id 로 센다)
         SORAN_RUN_AT: runAt.toISOString(),
         SORAN_SUPPLY_PROCESS_ENABLED: 'true',
@@ -570,6 +578,12 @@ async function duplicateSourceRunner(
     `judge ${paid(`${rid1}-j`)} · draft ${paid(`${rid1}-d`)}`)
   check('🔴 🔴 **러너가 단계 env 상한 10 · 30 을 실었다** (자식 로그)',
     /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 30/.test(r1.out))
+  // 🔴 (2026-10-12 Batch C1) 실제 판정 · 초안 자식이 fd 9 를 물려받아 러너와 같은 커널 lease · 실행 token 을 증명했다 — 장부 shadow 칸
+  const shadowOf = (r: Record<string, unknown>): { ok?: boolean; code?: string | null } | undefined => r.runTokenShadow as never
+  const shadowRows = ledger().filter((r) => String(r.runId).startsWith(rid1) && r.stage !== 'countTokens')
+  check('🔴 🔴 **실제 판정 · 초안 자식이 러너의 커널 lease · 실행 token 을 증명했다** (장부 runTokenShadow ok — fd 9 전달 · 예산 판정과 무관)',
+    shadowRows.length > 0 && shadowRows.every((r) => shadowOf(r)?.ok === true),
+    `${shadowRows.length}줄 · 첫 실패 ${JSON.stringify(shadowRows.map(shadowOf).find((x) => x?.ok !== true) ?? null)}`)
 
   // ── 큐 · 글 중복 ──
   const perSource = async (): Promise<Map<string, number>> => {

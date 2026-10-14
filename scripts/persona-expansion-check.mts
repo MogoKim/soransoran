@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
 import { autogenCodeOf, proposeLifeSkeletons, RETIRED_AUTOGEN_CODES, type Cadence } from '../src/lib/persona-autogen'
+import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
 import { COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS, TARGET_PERSONA_COUNT } from '../src/lib/persona-cohort'
 import {
   activityConcentration, CODE_FORMAT_LIMITS, codeCeiling, codeLimitsToLift, codeOrderSafe, codeRoom,
@@ -58,7 +59,7 @@ check('🔴 제안 cohort 는 COHORTS · RUNNABLE_COHORTS 에 없다',
 check('제안 cohort 의 선행은 지금 운영 cohort 전부다',
   PROPOSED_COHORTS[0]!.requires.slice().sort().join(',') === Object.keys(COHORTS).sort().join(','))
 check('canary 는 정확히 10명 = 40 − 30', PROPOSED_COHORTS[0]!.codes.length === PERSONA_CANARY_FLOOR.d20 - PRODUCTION_PERSONA_CODES.length)
-const highWater = codeRoom({ usedCodes: pool.cards.map((c) => c.code), retiredCodes: Object.keys(RETIRED_AUTOGEN_CODES), ceiling: 50 }).highWater
+const highWater = codeRoom({ usedCodes: pool.cards.map((c) => c.code), retiredCodes: Object.keys(RETIRED_AUTOGEN_CODES), ceiling: PERSONA_CODE_MAX }).highWater
 check('제안 코드는 high-water 뒤 append-only · 폐기 코드 재사용 0',
   proposed.every((c) => Number(c.slice(1)) > highWater && RETIRED_AUTOGEN_CODES[c] === undefined)
   && proposed.join(',') === Array.from({ length: proposed.length }, (_, i) => autogenCodeOf(highWater + 1 + i)).join(','))
@@ -67,7 +68,7 @@ check('fixture 코드 = 제안 cohort 코드', fixture.candidates.map((c) => c.c
 // ─────────────────────────────────────────────────────────
 console.log('② 게시 상한을 Persona 수로 계산하지 않는다 · 쓰기 경로 0')
 // ─────────────────────────────────────────────────────────
-const sample = planExpansionStep(EXPANSION_STEPS[0]!, { contractValid: 30, voiceSpeakersFree: 10, namesFree: 10, codesFree: 10, codeCeiling: 50 })
+const sample = planExpansionStep(EXPANSION_STEPS[0]!, { contractValid: 30, voiceSpeakersFree: 10, namesFree: 10, codesFree: 10, codeCeiling: PERSONA_CODE_MAX })
 check('🔴 단계 계획 반환에 글·게시·슬롯 칸이 없다', Object.keys(sample).every((k) => !/post|publish|slot|daily|perDay/i.test(k)), Object.keys(sample).join(','))
 const libSrc = src('src/lib/persona-expansion.ts')
 check('🔴 확장 lib 은 단계 게시 계획(publicPostsPerDay · publishSlotCount)을 읽지 않는다',
@@ -81,26 +82,22 @@ check('🔴 CLI 는 --apply · --execute 를 거부한다', /a === '--apply' \|\
 check('CLI 는 LLM·provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(|generateCreative/i.test(cli))
 
 // ─────────────────────────────────────────────────────────
-console.log('③ 코드 공간 — 300 을 막는 코드 형식')
+console.log('③ 코드 공간 — #712 숫자 코드 정본 통합')
 // ─────────────────────────────────────────────────────────
-for (const l of CODE_FORMAT_LIMITS) {
-  check(`🔴 한계가 소스에 아직 있다 — ${l.file} (${l.kind} P${l.max})`, src(l.file).includes(l.pattern), l.pattern)
-}
-check('지금 가장 좁은 한계는 P50', codeCeiling() === 50)
-check('반례 — P100 이 섞이면 사전순 ≠ 번호순', !codeOrderSafe(['P10', 'P100', 'P11']))
-check('두 자리끼리는 순서 안전', codeOrderSafe(['P09', 'P10', 'P43', 'P99']))
-check('codeRoom — high-water 33(폐기 P33 포함) · P50 까지 17',
-  JSON.stringify(codeRoom({ usedCodes: ['P01', 'P32'], retiredCodes: ['P31', 'P33'], ceiling: 50 })) === JSON.stringify({ highWater: 33, room: 17 }))
-check('canary 10 은 코드 한계를 넘지 않는다', codeLimitsToLift({ highWater: 33, newCodes: 10 }).length === 0)
-check('지속 60(30 더) 은 P50 세 곳을 넘는다',
-  codeLimitsToLift({ highWater: 33, newCodes: 30 }).map((l) => l.max).join(',') === '50,50,50')
-check('300(270 더) 은 일곱 곳 전부를 넘는다', codeLimitsToLift({ highWater: 33, newCodes: 270 }).length === CODE_FORMAT_LIMITS.length)
+check('옛 코드 형식 한계 목록은 비었다', CODE_FORMAT_LIMITS.length === 0)
+check('코드 상한은 정본 P999', codeCeiling() === PERSONA_CODE_MAX && PERSONA_CODE_MAX === 999)
+check('반례 — 숫자순이 아닌 P10,P100,P11을 잡는다', !codeOrderSafe(['P10', 'P100', 'P11']))
+check('세 자리까지 숫자순이면 안전', codeOrderSafe(['P09', 'P10', 'P43', 'P99', 'P100']))
+check('codeRoom — high-water 33(폐기 P33 포함) · P999 까지 966',
+  JSON.stringify(codeRoom({ usedCodes: ['P01', 'P32'], retiredCodes: ['P31', 'P33'], ceiling: PERSONA_CODE_MAX })) === JSON.stringify({ highWater: 33, room: 966 }))
+check('canary·지속60·지속300 모두 추가 코드 한계 해제 작업 0',
+  [10, 30, 270].every((n) => codeLimitsToLift({ highWater: 33, newCodes: n }).length === 0))
 
 // ─────────────────────────────────────────────────────────
 console.log('④ 단계 자원 판정')
 // ─────────────────────────────────────────────────────────
 const R = (o: Partial<ExpansionResources>): ExpansionResources => ({
-  contractValid: 30, voiceSpeakersFree: 10, namesFree: 10, codesFree: 10, codeCeiling: 50, ...o,
+  contractValid: 30, voiceSpeakersFree: 10, namesFree: 10, codesFree: 10, codeCeiling: PERSONA_CODE_MAX, ...o,
 })
 const canary = EXPANSION_STEPS[0]!
 const codesOf = (r: ExpansionResources, o: { assumedContractValid?: number } = {}): string =>
@@ -255,8 +252,8 @@ console.log('⑨ 규모가 커질 때 약해지는 곳 — 현재 사실')
 // ─────────────────────────────────────────────────────────
 const union = nameSpaceUnion()
 const cap0 = nameSpaceCapacity({ takenNames: [], memberNames: null, space: union })
-check(`🔴 이름 공간 합집합 ${union.length} 중 서로 헷갈리지 않는 이름 ${cap0.free} — 270 명을 받을 수 없다 (회원 0 가정 상한)`,
-  cap0.free < PERSONA_SUSTAINED_TARGET.d100 - PRODUCTION_PERSONA_CODES.length && cap0.bound === 'upper')
+check(`이름 공간 합집합 ${union.length} 중 서로 헷갈리지 않는 이름 ${cap0.free} — 기존 30명 뒤 270명을 받을 수 있다 (회원 0 가정)`,
+  cap0.free >= PERSONA_SUSTAINED_TARGET.d100 - PRODUCTION_PERSONA_CODES.length && cap0.bound === 'upper')
 const tiny = nameSpaceCapacity({ takenNames: [], memberNames: [], space: ['노을', '밤수국', '봄수국'] })
 check('반례 — 편집 거리 1 인 세 글자 이름은 하나만 남는다 · 회원 집합을 받으면 exact', tiny.free === 2 && tiny.bound === 'exact', tiny.picked.join(','))
 check('🔴 반례 — 회원 이름과 같은 후보는 공간에서 빠진다 (exact 1)',

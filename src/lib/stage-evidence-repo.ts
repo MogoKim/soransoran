@@ -9,6 +9,7 @@
  *    · 댓글   `commentOrigin=PERSONA` · 지워지지 않은 것 — 상한·중복·자기 글 계약은 전부 센다
  *             🔴 첫 댓글 증거는 **출처 연결**(`commentProvenanceOf`)이 `auto` 인 것만 (2026-10-11 Batch A3):
  *                Queue(`publishedCommentId`) · ActivityLog(`kind=comment` · `targetId`)를 Comment id 로 대조한다
+ *             🔴 추가 댓글 표식만 있는 댓글은 `followup*` 로 따로 분류한다(`personaCommentProvenanceOf` · 2026-10-13)
  *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조) · 표 전체의 정본 카운트(결함 yes · 시한 초과 · 재시도 가능 · 글 유실)
  *    · 도장   Queue `gateResults.release` — 발행 트랜잭션이 같은 트랜잭션에서 남긴 source-slot-v1 도장(조항 ⑦).
  *             🔴 도장 시각이 **그 글의 발행 기록 시각과 정확히 같아야** 증명이다(`publishEventAtOf` · `releaseStampCheck`)
@@ -28,7 +29,7 @@ import { unresolvedDefectCount, missingAutoPostCount } from './auto-ready-repo'
 import { overdueAuditCount, retryableFailureCount, RETRYABLE_NOTE_PREFIX, AUDIT_OVERDUE_MS } from './auto-ready-audit-store'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { machineReviewedByHuman } from './original-post-auto-publish'
-import { commentProvenanceOf, type EvidencePost, type PostDecider, type StageEvidenceFacts } from './stage-evidence'
+import { personaCommentProvenanceOf, type EvidencePost, type PostDecider, type StageEvidenceFacts } from './stage-evidence'
 import { publishEventAtOf, releaseStampStatusOf } from './source-slot-release'
 
 /**
@@ -120,7 +121,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
     where: { kind: 'comment', targetId: { in: commentIds } },
     select: { targetId: true, personaId: true, decidedBy: true, publishedAt: true },
   })
-  const provenanceOf = (c: (typeof comments)[number]) => commentProvenanceOf({
+  const provenanceOf = (c: (typeof comments)[number]) => personaCommentProvenanceOf({
     comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
     queues: linkQueues.filter((q) => q.publishedCommentId === c.id).map((q) => ({
       targetPostId: q.targetPostId, personaId: q.personaId, status: q.status, decidedBy: q.decidedBy,

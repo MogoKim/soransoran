@@ -62,7 +62,7 @@
 import {
   SUPPLY_DAILY_USD_APPROVED, SUPPLY_RUN_SLOTS_KST, SUPPLY_WORKSET_PER_RUN, estimateSupplySpend,
 } from './supply-schedule-contract'
-import { LOCK_TTL_MS } from './supply-process'
+import { SUPPLY_RUN_WINDOW_MS } from './supply-process'
 import type { LedgerEntry, SpendProtect } from './llm-ledger'
 
 export type { SpendProtect }
@@ -76,13 +76,13 @@ export const SUPPLY_PROCESS_LAUNCHD_LABEL = 'com.soransoran.supply-process'
 /**
  * 🔴 **슬롯 하나의 창 — 슬롯 시각부터 이만큼.**
  *
- *    공급 러너의 잠금 시효(`LOCK_TTL_MS`, 45분)와 같은 값이다. 그보다 오래 도는 회차는
- *    러너 스스로 `STALE_HELD` 로 보고 멈추게 되어 있다 — 즉 한 정기 회차가 **정상으로 살아 있을 수
- *    있는 가장 긴 시간**이다. 그 안에서는 ① 그 회차를 정기로 인정하고 ② 그 슬롯의 몫을 지킨다.
+ *    공급 회차 하나가 **정상으로 살아 있을 수 있는 가장 긴 시간**(`SUPPLY_RUN_WINDOW_MS`, 45분)이다.
+ *    그 안에서는 ① 그 회차를 정기로 인정하고 ② 그 슬롯의 몫을 지킨다.
+ *    (2026-10-12 Batch C1 — 앞판은 이 값이 `wx` 잠금 시효였다. 지금 잠금은 커널 lease 라 시효가 없고, 이 값은 창 길이로만 남는다.)
  *    창이 끝나면 슬롯이 돌았든(노트북이 꺼져) 안 돌았든 몫을 푼다 — 안 돈 슬롯의 몫을 하루 종일
  *    묶어 두지 않는다(그 몫은 뒤 슬롯으로 이월된다).
  */
-export const SCHEDULED_RUN_WINDOW_MS = LOCK_TTL_MS
+export const SCHEDULED_RUN_WINDOW_MS = SUPPLY_RUN_WINDOW_MS
 
 /**
  * 🔴 **실측을 모으는 기간(일)** — 어제부터 뒤로 이만큼의 KST 날짜 장부를 읽는다(오늘은 넣지 않는다).

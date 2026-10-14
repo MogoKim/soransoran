@@ -25,6 +25,8 @@ import {
   type BlockCode, type BudgetEnvSource, type BudgetLimits, type LedgerEntry, type LedgerStage,
   type OpenReservation, type SpendProtect,
 } from '../../src/lib/llm-ledger'
+import { runTokenShadowFromEnv } from './supply-lease.mjs'
+import { shadowTagOf } from '../../src/lib/supply-run-token'
 import {
   SCHEDULED_COST_LOOKBACK_DAYS, missingTodayLedgerVerdict, supplySpendProtectAt, type SupplyRunKind,
 } from '../../src/lib/supply-scheduled-reserve'
@@ -208,6 +210,8 @@ export type SupplyCallInput = {
   userPayload: string
   maxOutputTokens: number
   timeoutMs: number
+  /** Gemini 전용 reasoning 깊이. 생성 계약이 정한 경우에만 전달한다. */
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
   /** 🔴 원천 해시(`articleIdHashOf`) — 장부 줄의 `sourceKey`. 원천 밖 요청은 비운다 */
   sourceKey?: string | null
   /** 🔴 JIT 공급 계약 표식 — 그 회차 `workset-v3` 묶음 안 원천일 때만. 장부 줄의 `supplyContract` */
@@ -637,6 +641,12 @@ export class SupplyLlmSession {
         headroomMultiplier: this.limits.headroomMultiplier,
       })
 
+    /**
+     * 🔴 **실행 token shadow** (2026-10-12 Batch C1) — 공급 장부만. 잠금 밖에서 한 번 본다(lockf probe 가 장부 잠금을 붙들지 않게).
+     *    결과는 줄에 **나란히 적기만** 한다 — 아래 판정(`protectAt` · `judgeSpend`)은 이 값을 받지 않는다.
+     */
+    const tokenShadow = this.supply ? { runTokenShadow: shadowTagOf(runTokenShadowFromEnv(process.env, startedAt)) } : {}
+
     // ── ③ 🔴 읽기·판정·예약 기록을 **한 잠금 안에서** 한다 ──
     let verdict: ReturnType<typeof judgeSpend>
     /** 🔴 요청 전 판정이 정한 실행 종류 · 슬롯 — 예약 줄과 정산 줄에 똑같이 남긴다 */
@@ -701,6 +711,7 @@ export class SupplyLlmSession {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
           ...(tag ?? {}),
           ...budget,
+          ...tokenShadow,
           status: v.ok ? 'reserved' : 'blocked',
           blockCode: v.ok ? null : v.code,
           countedInputTokens: counted.inputTokens,
@@ -742,6 +753,7 @@ export class SupplyLlmSession {
       userPayload: input.userPayload,
       maxOutputTokens: input.maxOutputTokens,
       timeoutMs: input.timeoutMs,
+      ...(input.thinkingLevel === undefined ? {} : { thinkingLevel: input.thinkingLevel }),
     })
 
     // ── ⑤ 정산. 🔴 사용량을 모르면 예약을 풀지 않는다 ──
@@ -774,6 +786,7 @@ export class SupplyLlmSession {
           // 🔴 정산 줄도 같은 표식을 싣는다 — 접을 때 이 줄이 이기므로, 빠뜨리면 실측에서 사라진다
           ...(tag ?? {}),
           ...budget,
+          ...tokenShadow,
           status: settled.status,
           blockCode: null,
           countedInputTokens: counted.inputTokens,
