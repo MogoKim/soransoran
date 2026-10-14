@@ -32,6 +32,8 @@
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
 import { readWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent } from '../src/lib/supply-workset'
+import { sameSupplyQualityContract } from '../src/lib/supply-intent'
+import { currentQualityContract } from '../src/lib/quality-contract'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -493,7 +495,7 @@ let BUDGET: CallBudget = new CallBudget(Number.MAX_SAFE_INTEGER)
 let LEDGER: SupplyLlmSession | null = null
 /** 🔴 지금 처리 중인 원천의 해시(`articleIdHashOf`) — 장부 줄의 `sourceKey`. 원천 밖이면 null */
 let COST_KEY: string | null = null
-/** 🔴 지금 원천이 이 회차 JIT 묶음(`workset-v3`)에 있으면 그 계약 — 장부 줄의 `supplyContract`. 아니면 null(legacy) */
+/** 🔴 지금 원천이 이 회차 current-quality JIT 묶음(`workset-v4`)에 있으면 그 계약 — 장부 줄의 `supplyContract`. 아니면 null(legacy) */
 let COST_CONTRACT: string | null = null
 let RUN_INTENTS: ReadonlyMap<string, SupplyIntent> | null = null
 /** 🔴 같은 회차 묶음의 원천 → 의도 — 회차 id 로 찾는다. 옛 판 · 없음 · 손상이면 null */
@@ -503,7 +505,11 @@ function runIntents(runId: string | null): ReadonlyMap<string, SupplyIntent> | n
   if (!existsSync(ws)) return null
   try {
     const r = readWorkset(JSON.parse(readFileSync(ws, 'utf-8')), runId)
-    return r.ok ? r.intents : null
+    if (!r.ok) return null
+    if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, currentQualityContract())) {
+      fail('작업 묶음의 품질 계약이 지금 코드와 다르다 — 유료 생성을 시작하지 않는다')
+    }
+    return r.intents
   } catch { return null }
 }
 

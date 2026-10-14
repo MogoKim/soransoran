@@ -28,11 +28,12 @@ import {
   readSupplyIntent, SUPPLY_JIT_CONTRACT, WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, worksetFileName, type SupplyIntent,
 } from '../src/lib/supply-workset'
 import { intentsForFile } from './micro-seed-supply-autofill.mjs'
-import { qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
+import { currentQualityContract, qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
 
 const NOW = '2026-09-07T12:00:00.000Z'
+const QUALITY = currentQualityContract()
 /**
  * 🔴 후보 행이 싣는 것은 **잰 값**이다. 통과·탈락은 `draft-originality.ts` 가 정한다.
  *    `CLEAN` 은 옛 6자 기준이라면 막혔을 값이다 — 그게 이 판의 요점이다.
@@ -275,7 +276,7 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   const p1 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, now: NOW })
   check('🟢 기계 payload 가 만들어진다', p1 !== null && p1.profile === 'machine')
   /**
-   * 🔴 **JIT 공급 의도가 Queue 까지 간다** (2026-10-04 P0-2 보정) — 같은 회차 묶음(workset-v3) → 적재기 → `gateResults.supplyIntent`.
+   * 🔴 **JIT 공급 의도가 Queue 까지 간다** — 같은 회차 current-quality 묶음(workset-v4) → 적재기 → `gateResults.supplyIntent`.
    */
   {
     const RID = '20261004-031500'
@@ -283,7 +284,7 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     const id = String((mc as unknown as Record<string, unknown>).sourceArticleId)
     const intent: SupplyIntent = {
       contract: SUPPLY_JIT_CONTRACT, runId: RID, sourceHash: articleIdHashOf(site, id),
-      intendedSlotAt: '2026-10-04T02:00:00.000Z', ageAtSlotH: 7.5,
+      intendedSlotAt: '2026-10-04T02:00:00.000Z', ageAtSlotH: 7.5, qualityContract: QUALITY,
     }
     const p2 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, intent, now: NOW })
     check('🔴 🔴 **의도(계약 · 회차 · 원천 해시 · intendedSlotAt)가 큐 행 gateResults 에 그대로 실린다**',
@@ -299,7 +300,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
       const cand = join(dir, `auto-draft-${RID}.candidates.json`)
       writeFileSync(cand, '{}')
       writeFileSync(join(dir, worksetFileName(RID)), JSON.stringify({
-        kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, runId: RID, takenAt: '2026-10-04T03:15:00.000Z',
+        kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, qualityContract: QUALITY,
+        runId: RID, takenAt: '2026-10-04T03:15:00.000Z',
         limit: 10, sources: [{ sourceSite: site, sourceArticleId: id, slotAt: intent.intendedSlotAt, ageAtSlotH: 7.5 }],
       }))
       const m = intentsForFile(cand)
