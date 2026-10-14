@@ -557,7 +557,8 @@ async function main(): Promise<void> {
      *      (`Post.createdAt` · 발행 기록은 트랜잭션 시계로 쓴다 — 갈리는 칸은 감사 `selectedAt` 하나다.)
      *    🔴 운영에서는 생기지 않는다: 운영 러너는 시계를 주입받지 않고(launchd env 에 `SORAN_RUN_AT` 없음 · 트랜잭션 시계 = 벽시계),
      *       주입 시계 + `--apply` 는 격리 DB 가 아니면 DB 에 붙기 전에 멈춘다(아래 "주입 시계 가드" 절이 잠근다). 그래서 운영 코드를 고치지 않는다.
-     *    여기서는 슬롯 경쟁만 본다 — 자동 READY 감사의 동시성은 벽시계로 도는 `auto-ready-runner-chain-check` 가 본다.
+     *    여기서는 슬롯 경쟁만 본다 — 자동 READY 감사의 동시성은 `auto-ready-runner-chain-check` C 절이 본다
+     *    (주입 시계를 **과거 고정 시각**으로 둬서 selectedAt(벽시계)이 늘 회차 시각보다 뒤다 — 이 착시가 안 난다).
      */
     const order = rankAt(await generated(), PUBLISH_AT)
     for (const r of order.slice(0, 2)) {
