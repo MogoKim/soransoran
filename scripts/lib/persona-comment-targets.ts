@@ -131,7 +131,11 @@ export type TargetSource = {
  *    그래서 목록을 **입력 객체에서 파생**시킨다 — 손으로 적지 않는다.
  */
 export function sourceTextsOf(input: CommentInput): string[] {
-  return [input.post.title, input.post.bodyDigest, ...input.post.existingCommentDigests]
+  return [
+    input.post.title, input.post.bodyDigest, ...input.post.existingCommentDigests,
+    // 🔴 추가 댓글 답글 대상도 provider 로 나가는 조각이다 — ① 유출 대조가 같이 본다
+    ...(input.post.replyToDigest === undefined ? [] : [input.post.replyToDigest]),
+  ]
 }
 
 export type GateContext = {

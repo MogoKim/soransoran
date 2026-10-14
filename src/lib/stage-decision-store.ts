@@ -45,7 +45,11 @@ export type { DecisionWriter, ValidatedStageDecision, ValidateResult }
  * 🔴 **전용 daily controller 하나만 쓴다.** 첫 공급·첫 발행보다 **먼저** 돈다.
  *    supply 와 publish 는 저장된 결정을 **읽기만** 한다(consumer).
  */
-export const DECISION_CONSUMERS = ['supply', 'publish'] as const
+/**
+ * 🔴 `comment` (2026-10-14 · PR #704 E6) — 댓글 러너. 첫 댓글은 단계 칸을 읽지 않는다(결정과 무관하게 지금과 같다).
+ *    결정 표식은 **선택적 추가 댓글**만 쓴다 — 추가 댓글 스위치가 꺼져 있으면 consumer 가 결정을 읽지도 않는다.
+ */
+export const DECISION_CONSUMERS = ['supply', 'publish', 'comment'] as const
 export type DecisionConsumer = (typeof DECISION_CONSUMERS)[number]
 
 /**

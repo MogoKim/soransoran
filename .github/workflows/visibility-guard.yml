@@ -248,6 +248,10 @@ jobs:
         run: |
           npm run check:best
           npm run check:comment-thread
+          # 🔴 첫 댓글 뒤 선택적 추가 댓글(PR #704 · 기본 OFF) — 순수 판정 · 첫 댓글 프롬프트 바이트 동일 · 트랜잭션 판정,
+          #    그리고 막는 줄 하나를 지우면 반드시 FAIL 하는지(변이 · 임시 디렉터리만). 새 step 이 아니다(무조건 step 상한 불변)
+          npm run check:persona-followup
+          npm run check:persona-followup-mutation
           npm run check:home-popularity
 
       # typecheck 는 @prisma/client 타입을 필요로 한다.
@@ -1013,6 +1017,10 @@ jobs:
           #    새 글 1건 · 61분 0 · 자기 글 0 · 글당 1 · 실사용자 3건 0 · 한 건 실패 격리 · 장부 상한 · 동시 회차 1건.
           #    임시 HOME(확정 정본·장부) · 가짜 생성 텍스트 · 네트워크 0. 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
           npm run persona:comment-loop-db-check
+          # 🔴 추가 댓글 실행 반례(PR #704 · 기본 OFF) — OFF 무변화 · 첫 댓글 회귀 0 · 글당 총 5 상한 도달 · 같은 Persona·자기 글·
+          #    고아·삭제·신고·실회원 대상 0 · 실회원 우선 · 중복·동시 1건 · 복구 재실행 provider 0 · 예산·profile·대화 감사 브레이크 ·
+          #    장부 단계 commentFollowupGen · 단계 증거 분리. 임시 HOME · 가짜 생성 · 네트워크 0. 새 step 이 아니다
+          npm run persona:followup-db-check
           # 🔴 Persona 자동 확장 적재(2026-09-29 · Track C) — valid 만 · draft 만 · 전원 아니면 0 ·
           #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
           npm run persona:autogen-db-check

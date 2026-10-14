@@ -32,6 +32,8 @@ export function commentLoopLockDir(home: string = homedir()): string {
 export const COMMENT_RUNNER_SCRIPT = 'scripts/persona-comment-loop.mts'
 /** 🔴 예약 실행은 쓴다(`--live`). 그래도 단계가 bootstrap-auto 가 아니면 provider 0 · write 0 이다 */
 export const COMMENT_RUNNER_ARGS: readonly string[] = ['--live']
+/** 🔴 댓글 러너가 consumer 에게 밝히는 종류(`DECISION_CONSUMERS` 의 하나) */
+export const COMMENT_CONSUMER_BY = 'comment'
 
 /**
  * 🔴 **슬롯은 손으로 적지 않고 하루 상한에서 역산한다** (2026-09-11).
@@ -56,7 +58,17 @@ export function renderCommentRunnerPlist(input: RunnerPlistInput): string {
   const slots = COMMENT_RUNNER_SLOTS.map((s) =>
     `        <dict><key>Hour</key><integer>${s.hour}</integer>`
     + `<key>Minute</key><integer>${s.minute}</integer></dict>`).join('\n')
+  /**
+   * 🔴 **consumer 를 지난다** (2026-10-14 · PR #704 E6) — 발행 러너와 같은 모양(`stage-consume-exec --by=comment -- …`).
+   *    그날 결정은 consumer 가 env 로만 넣는다 — 러너는 결정 표를 읽지 않는다. 첫 댓글은 단계 칸을 쓰지 않아 지금과 같고,
+   *    추가 댓글 스위치가 꺼져 있으면 consumer 가 결정을 읽지도 않는다. 사건 깨움 · 복구 kickstart 도 같은 label 이라 같은 문을 지난다.
+   */
   const args = [
+    `        <string>${input.npxPath}</string>`,
+    '        <string>tsx</string>',
+    `        <string>${input.runtimeRoot}/${STAGE_CONSUMER_SCRIPT}</string>`,
+    `        <string>--by=${COMMENT_CONSUMER_BY}</string>`,
+    '        <string>--</string>',
     `        <string>${input.npxPath}</string>`,
     '        <string>tsx</string>',
     `        <string>${input.runtimeRoot}/${COMMENT_RUNNER_SCRIPT}</string>`,
@@ -114,7 +126,7 @@ import { join } from 'node:path'
 import { judgeJobPath, parseLaunchctlPrint } from '../../src/lib/runtime-isolation'
 import { BOOTSTRAP_DAILY_MAX } from '../../src/lib/persona-comment-bootstrap-budget'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES } from '../../src/lib/persona-comment-auto-lane'
-import { runnerPathValue, type RunnerPlistInput } from './original-post-runner-template'
+import { runnerPathValue, STAGE_CONSUMER_SCRIPT, type RunnerPlistInput } from './original-post-runner-template'
 
 export type RunnerState = {
   /** plist 파일이 그 자리에 있는가 */
