@@ -37,6 +37,7 @@ import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as e
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { RUN_AT_ENV } from './lib/run-clock.mjs'
+import { EVENT_WAKE_ENV } from './lib/runner-wake.mjs'
 /**
  * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
  *    발행된 사람 결정 행 · 수정·폐기 없음 → noEdit 로 결속한다.
@@ -91,6 +92,9 @@ const runnerEnv = (at: Date): Record<string, string> => ({
   DATABASE_URL: URL, DIRECT_URL: URL, SORAN_AUTO_READY_ENABLED: 'on',
   // 🔴 주입 시각 + --apply 는 러너가 격리 DB 표식을 다시 확인한다 — 표식을 같이 넘긴다
   SORAN_ISOLATED_DB: 'yes-throwaway', [RUN_AT_ENV]: at.toISOString(),
+  // 🔴 (2026-10-14) 발행 뒤 댓글 러너 깨움(C2)은 이 Mac 의 진짜 launchd job 을 kickstart 한다 — 시험에서는 늘 끈다.
+  //    미설정도 off 지만 기본값에 기대지 않는다
+  [EVENT_WAKE_ENV]: 'off',
 })
 function runRunner(at: Date = AT): { code: number; out: string } {
   const env = runnerEnv(at)
