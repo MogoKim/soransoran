@@ -80,6 +80,11 @@ for (const f of ['scripts/persona-expansion.mts', 'scripts/lib/persona-expansion
 const cli = src('scripts/persona-expansion.mts')
 check('🔴 CLI 는 --apply · --execute 를 거부한다', /a === '--apply' \|\| a\.startsWith\('--apply='\) \|\| a === '--execute'/.test(cli) && /fail\('이 도구는 켜지도 쓰지도 않는다/.test(cli))
 check('CLI 는 LLM·provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(|generateCreative/i.test(cli))
+check('🔴 보충 말투 근거는 --db 없이는 회원 대조 전에 거부한다',
+  cli.includes("if (USE_VOICE_EVIDENCE && !USE_DB) fail('--voice-evidence"))
+check('보충 말투 근거는 익명 행만 append-only 말투 풀에 넘긴다',
+  cli.includes('readUsableVoiceEvidence({')
+  && cli.includes('voicePoolFor({ repoRoot, newCodes: batchCodes, supplementalRows })'))
 
 // ─────────────────────────────────────────────────────────
 console.log('③ 코드 공간 — #712 숫자 코드 정본 통합')

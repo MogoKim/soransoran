@@ -98,6 +98,8 @@ const ref = planBundles({ rows: canonRows, personaCodes: PROD })
 check('운영 코드 묶음 = 정본만으로 나눈 묶음 (보충이 더 많아도)',
   PROD.every((c) => bundleDigest(plan.byCode.get(c)) === bundleDigest(ref.bundles.find((b) => b.personaCode === c))) && plan.productionDrift.length === 0)
 check('새 코드는 정본에 남은 화자를 먼저 받고(1) 나머지를 보충에서 받는다(2)', plan.fromCanon.join(',') === 'P34' && plan.fromExtra.join(',') === 'P35,P36')
+check('보충 공급 수는 정본 중복을 뺀 뒤 같은 최소 근거 계약으로 센다',
+  plan.extraSpeakers === 3 && plan.extraEligibleSpeakers === 3)
 const noExtra = planAppendOnlyBundles({ canonRows, extraRows: [], productionCodes: PROD, newCodes: NEWC })
 check('보충이 없으면 지금과 같다 — 새 코드 1명만 말투를 받는다', noExtra.fromCanon.length === 1 && noExtra.fromExtra.length === 0)
 const tainted = planAppendOnlyBundles({
@@ -105,6 +107,7 @@ const tainted = planAppendOnlyBundles({
 })
 check('🔴 반례 — 정본 댓글과 같은 글자를 가진 보충 화자는 통째로 뺀다 (같은 말투 복제 금지)',
   tainted.excludedExtraSpeakers === 1
+  && tainted.extraSpeakers === 2 && tainted.extraEligibleSpeakers === 2
   && NEWC.every((c) => !(tainted.byCode.get(c)?.comments ?? []).some((x) => x.text.startsWith('마 ')))
   && tainted.fromExtra.length === 2)
 const big = planAppendOnlyBundles({ canonRows, extraRows: [...say('ccccccccccc1', 30, '아'), ...extraRows], productionCodes: PROD, newCodes: NEWC })

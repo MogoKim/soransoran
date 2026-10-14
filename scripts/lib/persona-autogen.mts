@@ -38,7 +38,8 @@ import {
 } from '../../src/lib/persona-autogen'
 import { candidateOf } from './d100-persona-tiers.mjs'
 import {
-  loadCanonAsset, planBundles, referenceSeedShareCount, stableAssignment,
+  loadCanonAsset, planAppendOnlyBundles, planBundles, referenceSeedShareCount, stableAssignment,
+  type LocalComment,
 } from './persona-reference-store.mjs'
 
 export type AutogenVerdict = {
@@ -304,6 +305,9 @@ export type VoicePool = {
   drift: string[]
   /** 🔴 운영 고정 배정 묶음 — 새 후보의 문체 거리를 잴 기준(`judgeAutogenBatch`) */
   productionBundles: VoiceReferenceBundle[]
+  supplementalSpeakers: number
+  supplementalEligible: number
+  supplementalExcluded: number
 }
 
 /**
@@ -315,23 +319,32 @@ export type VoicePool = {
  *      · 남는 화자는 먼저 **운영 active 인데 말투가 없는 코드**(P20~P25)로 가고, 그다음 새 코드로 간다
  *    이것은 운영이 새 코드를 manifest 에 올린 뒤 실제로 계산할 배정과 같다.
  */
-export function voicePoolFor(input: { repoRoot: string; newCodes: readonly string[] }): VoicePool {
+export function voicePoolFor(input: {
+  repoRoot: string
+  newCodes: readonly string[]
+  supplementalRows?: readonly LocalComment[]
+}): VoicePool {
   const canon = loadCanonAsset()
   const empty: VoicePool = {
     ok: false, code: canon.code, eligibleSpeakers: 0, assignedSpeakers: 0,
     productionWithoutVoice: [], byCode: new Map(), drift: [], productionBundles: [],
+    supplementalSpeakers: 0, supplementalEligible: 0, supplementalExcluded: 0,
   }
   if (!canon.ok || canon.rows.length === 0) return empty
   const base = stableAssignment({ repoRoot: input.repoRoot })
-  const universe = [...new Set([...PRODUCTION_PERSONA_CODES, ...input.newCodes])].sort()
-  const wide = planBundles({ rows: canon.rows, personaCodes: universe })
+  const appended = planAppendOnlyBundles({
+    canonRows: canon.rows,
+    extraRows: input.supplementalRows ?? [],
+    productionCodes: PRODUCTION_PERSONA_CODES,
+    newCodes: input.newCodes,
+  })
   // 🔴 코드 수가 화자보다 많으면 모든 화자가 배정된다 — 그 수가 "3건 이상 안전 화자" 전부다
   const all = planBundles({
     rows: canon.rows,
     personaCodes: Array.from({ length: 999 }, (_, i) => `X${String(i).padStart(3, '0')}`),
   })
-  const wideBy = new Map(wide.bundles.map((b) => [b.personaCode, b]))
-  const drift = assignmentDrift(base.byCode, wideBy, PRODUCTION_PERSONA_CODES)
+  const wideBy = appended.byCode
+  const drift = appended.productionDrift
   const byCode: VoicePool['byCode'] = new Map()
   for (const code of input.newCodes) {
     const b = wideBy.get(code)
@@ -341,13 +354,16 @@ export function voicePoolFor(input: { repoRoot: string; newCodes: readonly strin
   return {
     ok: drift.length === 0,
     code: drift.length === 0 ? 'OK' : 'VOICE_ASSIGNMENT_DRIFT',
-    eligibleSpeakers: all.bundles.length,
+    eligibleSpeakers: all.bundles.length + appended.extraEligibleSpeakers,
     assignedSpeakers: base.byCode.size,
     productionWithoutVoice: PRODUCTION_PERSONA_CODES.filter((c) => !base.byCode.has(c)),
     byCode,
     drift,
     productionBundles: PRODUCTION_PERSONA_CODES.map((c) => base.byCode.get(c))
       .filter((b): b is VoiceReferenceBundle => b !== undefined),
+    supplementalSpeakers: appended.extraSpeakers,
+    supplementalEligible: appended.extraEligibleSpeakers,
+    supplementalExcluded: appended.excludedExtraSpeakers,
   }
 }
 
