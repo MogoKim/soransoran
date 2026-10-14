@@ -209,7 +209,7 @@ console.log('\n⑦ (quality-v5) 글 쪽 — 프롬프트 · 최종 초안 게이
     && /isNoGoExpressionItem\(item\)/.test(src('src/lib/persona-pool-card.ts'))
     && /noGoHits\(/.test(src('src/lib/content-core/draft-life-gates.ts'))
     && /noGoHits\(/.test(src('src/lib/original-post-persona-match.ts')))
-  check('품질 계약 v8 (2026-10-13 의미 손실 감사) · 초안 게이트 v8 · 초안 프롬프트 p11 (No-Go 판정은 v5 그대로)', QUALITY_CONTRACT_VERSION === 'quality-v8'
+  check('품질 계약 v9 (speakerPlan thinking low) · 초안 게이트 v8 · 초안 프롬프트 p11 (No-Go 판정은 v5 그대로)', QUALITY_CONTRACT_VERSION === 'quality-v9'
     && DRAFT_GATE_VERSION === 'draft-gates-v8' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p11')
 }
 

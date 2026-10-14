@@ -194,10 +194,12 @@ console.log('\n②-b 🔴 🔴 단계마다 제 출력 상한으로 나갔다 (2
   const caps = sent.map((x) => {
     const b = JSON.parse(x.body) as Record<string, unknown>
     const gen = b.generationConfig as Record<string, unknown> | undefined
+    const thinking = gen?.thinkingConfig as Record<string, unknown> | undefined
     return {
       gemini: x.url.includes('generativelanguage.googleapis.com'),
       max: typeof gen?.maxOutputTokens === 'number' ? gen.maxOutputTokens
         : typeof b.max_tokens === 'number' ? b.max_tokens : null,
+      thinking: typeof thinking?.thinkingLevel === 'string' ? thinking.thinkingLevel : null,
     }
   })
   check('🔴 유료 요청 3건이 나갔다', caps.length === 3, `${caps.length}건`)
@@ -205,6 +207,9 @@ console.log('\n②-b 🔴 🔴 단계마다 제 출력 상한으로 나갔다 (2
   check('🔴 🔴 **speakerPlan 은 1200 으로 나갔다**',
     caps[0]?.gemini === true && caps[0]?.max === STAGE_MAX_OUTPUT_TOKENS.speakerPlan
     && STAGE_MAX_OUTPUT_TOKENS.speakerPlan === 1200, String(caps[0]?.max))
+  check('🔴 speakerPlan 만 thinking low 로 나갔다',
+    caps[0]?.thinking === 'low' && caps[1]?.thinking === null && caps[2]?.thinking === null,
+    caps.map((c) => c.thinking ?? 'default').join(','))
   check('🔴 🔴 **draftGen 은 2000 으로 나갔다** — 본문이 들어갈 자리다',
     caps[1]?.gemini === true && caps[1]?.max === STAGE_MAX_OUTPUT_TOKENS.draftGen
     && STAGE_MAX_OUTPUT_TOKENS.draftGen === 2000, String(caps[1]?.max))

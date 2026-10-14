@@ -520,6 +520,7 @@ function runIntents(runId: string | null): ReadonlyMap<string, SupplyIntent> | n
 async function ask(
   stage: LedgerStage, system: string, payload: string, maxOut: number,
   model: ProviderModel = DRAFT_MODEL,
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high',
 ): Promise<SupplyCallResult> {
   if (LEDGER === null) {
     return {
@@ -533,6 +534,7 @@ async function ask(
   return LEDGER.call({
     stage, model, systemPrompt: system, userPayload: payload,
     maxOutputTokens: maxOut, timeoutMs: DRAFT_TIMEOUT_MS, sourceKey: COST_KEY, supplyContract: COST_CONTRACT,
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   })
 }
 
@@ -546,7 +548,7 @@ const v2Ask: Ask = ledgerAskOf({
   take: () => BUDGET.take(),
   count: countCall,
   // 🔴 같은 장부 wrapper 를 지난다 — 여기서 provider 를 직접 부르지 않는다
-  call: (stage, system, payload, maxOut, model) => ask(stage, system, payload, maxOut, model),
+  call: (stage, system, payload, maxOut, model, thinkingLevel) => ask(stage, system, payload, maxOut, model, thinkingLevel),
 })
 
 type GenDraft = { title: string; body: string; intendedQuestion: string; sourceAngle: string }
