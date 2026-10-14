@@ -15,6 +15,7 @@ import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 import { loadExpansionFixture } from './lib/persona-expansion-gate.mjs'
 import { readExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { readEnvKeys } from './lib/ops-signals.mjs'
 import {
   readEvidenceSalt, voiceEvidenceDataDir,
 } from './lib/voice-evidence-capture.mjs'
@@ -41,7 +42,9 @@ const PRODUCTION = has('--production')
 const TARGET = arg('target')
 const APPROVED_DIGEST = arg('digest')
 const REASON = (arg('reason') ?? '').trim()
-const FIXTURE = arg('fixture') ?? 'scripts/__fixtures__/persona-expansion-canary.json'
+const FIXTURE_ARG = arg('fixture')
+const EVIDENCE_DIR_ARG = arg('voice-evidence-dir')
+const FIXTURE = FIXTURE_ARG ?? 'scripts/__fixtures__/persona-expansion-canary.json'
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 
 if (!has('--db')) fail('--db 가 필요하다 — 정확한 회원·Persona 제외 집합 없이 증거를 고정하지 않는다', 2)
@@ -54,13 +57,24 @@ function git(args: readonly string[]): string | null {
   } catch { return null }
 }
 
-function guardProduction(): void {
+const localDb = (value: string): boolean =>
+  /(?:localhost|127\.0\.0\.1|\[::1\]|soran_test)/i.test(value)
+
+function guardProduction(): { databaseUrl: string; directUrl: string } {
   const problems: string[] = []
   if (!PRODUCTION) problems.push('--production 이 필요하다')
   if (TARGET === null || !/^[0-9a-f]{40}$/.test(TARGET)) problems.push('--target=<40자리 SHA> 가 필요하다')
   if (APPROVED_DIGEST === null || !/^[0-9a-f]{64}$/.test(APPROVED_DIGEST)) problems.push('--digest=<64자리> 가 필요하다')
   if (REASON === '') problems.push('--reason=<사유> 가 필요하다')
   if ((process.env.SORAN_ISOLATED_DB ?? '') !== '') problems.push('SORAN_ISOLATED_DB 가 설정돼 있다')
+  if (FIXTURE_ARG !== null) problems.push('운영 apply 는 정본 fixture 만 쓴다')
+  if (EVIDENCE_DIR_ARG !== null) problems.push('운영 apply 는 정본 evidence 디렉터리만 쓴다')
+  const env = readEnvKeys(['DATABASE_URL', 'DIRECT_URL'])
+  const databaseUrl = env.values.DATABASE_URL ?? ''
+  const directUrl = env.values.DIRECT_URL ?? ''
+  if (!env.ok) problems.push(`canonical env 를 읽지 못했다 — ${env.reason ?? '이유 모름'}`)
+  if (databaseUrl === '' || directUrl === '') problems.push('canonical DB 주소 두 개가 모두 필요하다')
+  if (localDb(databaseUrl) || localDb(directUrl)) problems.push('canonical DB 주소가 로컬·격리 DB 모양이다')
   const fetched = git(['fetch', '-q', 'origin', 'main']) !== null
   const head = git(['rev-parse', 'HEAD'])
   const main = fetched ? git(['rev-parse', 'refs/remotes/origin/main']) : null
@@ -80,9 +94,15 @@ function guardProduction(): void {
     if (git(['cat-file', '-e', `HEAD:${path}`]) === null) problems.push(`${path} 가 HEAD 에 없다`)
   }
   if (problems.length > 0) fail(problems.join(' / '), 2)
+  return { databaseUrl, directUrl }
 }
 
-if (APPLY) guardProduction()
+if (APPLY) {
+  const canonical = guardProduction()
+  // Production apply never inherits a shell-provided database target.
+  process.env.DATABASE_URL = canonical.databaseUrl
+  process.env.DIRECT_URL = canonical.directUrl
+}
 else if (PRODUCTION || TARGET !== null || APPROVED_DIGEST !== null) {
   fail('--production/--target/--digest 는 --apply 와 함께만 쓴다', 2)
 }
@@ -103,7 +123,7 @@ try {
   const facts = await readExpansionFacts(prisma, { now: new Date(), repoRoot: process.cwd() })
   const members = facts.nameSets.memberNames ?? fail('회원 이름 대조 집합을 읽지 못했다')
   evidence = readUsableVoiceEvidence({
-    dataDir: arg('voice-evidence-dir') ?? voiceEvidenceDataDir(),
+    dataDir: EVIDENCE_DIR_ARG ?? voiceEvidenceDataDir(),
     salt: validSalt,
     members: { memberNames: members, personaNames: facts.nameSets.personaNames ?? [] },
     now: new Date(),

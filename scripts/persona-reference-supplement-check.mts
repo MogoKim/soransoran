@@ -142,6 +142,15 @@ try {
     bundles: [{ ...plan.asset.bundles[0], author: 'must-not-exist' }],
   }
   check('unknown identity-shaped field rejected', !judgeSupplementAsset(leakedField).ok)
+
+  const cli = readFileSync(join(process.cwd(), 'scripts/persona-reference-supplement-build.mts'), 'utf8')
+  check('production apply reads canonical DB addresses',
+    /readEnvKeys\(\['DATABASE_URL', 'DIRECT_URL'\]\)/.test(cli))
+  check('production apply discards shell DB addresses',
+    /process\.env\.DATABASE_URL = canonical\.databaseUrl/.test(cli)
+    && /process\.env\.DIRECT_URL = canonical\.directUrl/.test(cli))
+  check('production apply rejects fixture and evidence directory overrides',
+    /FIXTURE_ARG !== null/.test(cli) && /EVIDENCE_DIR_ARG !== null/.test(cli))
 } finally {
   rmSync(home, { recursive: true, force: true })
 }
