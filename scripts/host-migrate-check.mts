@@ -106,6 +106,17 @@ for (const [why, t] of [
   const v = classifyCanonEntryIn('persona-autogen', t)
   check(`🔴 persona-autogen 안에 예상 밖 항목(${why}) → unclassified`, v.kind === 'unclassified' && v.reason.includes('예상 밖'), v.kind)
 }
+{
+  // 🔴 공급 커널 lease 디렉터리 (2026-10-12 Batch C1) — 이름을 정본 상수에서 받는다(사본 문자열 0)
+  const { supplyLockDir, SUPPLY_LOCK_FILE, SUPPLY_RUN_TOKEN_FILE } = await import('./lib/supply-lease.mjs')
+  const { FOLLOW_UP_FILE } = await import('./lib/runner-lease.mjs')
+  const name = basename(supplyLockDir('/h'))
+  check('🔴 공급 lease 디렉터리 — 잠금 · follow-up · token(임시 포함) → exclude(원 호스트 회차 상태)',
+    name === 'supply-process' && classifyCanonEntryIn(name, tree('dir', file(SUPPLY_LOCK_FILE), file(FOLLOW_UP_FILE),
+      file(SUPPLY_RUN_TOKEN_FILE), file(`${SUPPLY_RUN_TOKEN_FILE}.tmp-123`))).kind === 'exclude')
+  check('🔴 공급 lease 디렉터리 안에 모르는 파일 → unclassified(조용히 빼지 않는다)',
+    classifyCanonEntryIn(name, tree('dir', file(SUPPLY_LOCK_FILE), file('ledger.jsonl'))).kind === 'unclassified')
+}
 const HELD = basename(queueLockFile('ignored', {}))
 // 🔴 시험 scope 잠금은 임시 폴더에만 있을 수 있다 (2026-10-11 queue-locks 격리) — 이름만 본다 · 파일 접근 0
 const TEST_HELD = basename(queueLockFile('ignored', { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-abc', SORAN_MAGAZINE_QUEUE_LOCK_DIR: join(tmpdir(), 'host-migrate-check-locks') }))

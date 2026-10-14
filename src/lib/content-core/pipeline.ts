@@ -11,8 +11,12 @@
  *    그대로 두면 Gemini 가 쓴 글을 Haiku 가 썼다고 기록하게 된다.
  */
 
-/** 🔴 파이프라인 판 — 경로 자체가 바뀌면 올린다 */
-export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.1'
+/**
+ * 🔴 파이프라인 판 — 경로 자체가 바뀌면 올린다.
+ *    v2.2 (2026-10-13) — 세 단계가 함께 읽는 원문 근거 묶음이 `evidence-v2` 다(이어 붙은 두 번째 벌을 걷어낸다).
+ *    입력이 바뀌었으므로 옛 판독·초안·검수 artifact 와 캐시를 새 계약으로 재사용하지 않는다.
+ */
+export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.2'
 
 /**
  * 🔴 **p5 (2026-09-23)** — 계획 요청의 출력 계약이 바뀌었다.
@@ -39,8 +43,17 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p6'
  * 🔴 **v2-draft-p10 (같은 날 · quality-v6 보정)** — 만남·들음 줄을 겪지 않는 자리 칸에서 "새로 쓰는 것"(모든 자리)으로 옮기고
  *    "그 사람을 주어로 전한다" 를 적었다. 운영 v6 행 0 — 판 이름은 그대로 두고 digest 를 `--revise` 로 기록한다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p10'
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p7'
+/**
+ * 🔴 **v2-draft-p11 (2026-10-13 · quality-v8 의미 손실 감사)** — 생성 요청이 원문에서 살릴 것을 **구조로** 받는다
+ *    (`보존`: 그대로쓸말 · 원문의물음 · 원문범위)와, 전하는 말에 보고·읽고·들은 경로를 지어 붙이지 않는다.
+ *    (같은 날 보정) 의미 검수 프롬프트는 `v2-review-p8` — 가족 사실 줄만 더했다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p11'
+/**
+ * 🔴 **v2-review-p8 (2026-10-13 · quality-v8 보정)** — 생활사 모순에 구체적 가족 사실(자녀 수 · 자기 자녀 성별 · 나이대) 줄을 더했다
+ *    (`REVIEW_FAMILY_SPECIFICS_LINES`). 다른 축 기준은 그대로다.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p8'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

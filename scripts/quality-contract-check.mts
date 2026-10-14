@@ -60,6 +60,9 @@ export const FINGERPRINT_FILES = [
   // 🔴 (quality-v7 · 2026-10-12) Persona 결정 정본 — 판독 답을 읽고 정본 카드로 자격을 대조해 화자를 확정한다.
   //    이 파일만 바꿔 누가 1인칭을 허가받는지 조용히 바꾸지 못하게 지문에 넣는다
   'src/lib/content-core/speaker.ts',
+  // 🔴 (quality-v8 보정 · 2026-10-13) 구체적 가족 사실 판독 — 화자 계획 · 초안 게이트가 함께 부른다.
+  //    이 파일만 바꿔 1인칭 자녀 수 · 성별 · 나이대 허가를 조용히 바꾸지 못하게 지문에 넣는다
+  'src/lib/content-core/family-specifics.ts',
 ] as const
 
 /**

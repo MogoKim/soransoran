@@ -30,6 +30,7 @@
 import { readMediaDependency, CLOSING_RE } from './evidence'
 /** 🔴 KST 하루 경계의 정본 — 발행 일일 상한과 같은 함수다 */
 import { kstDayStart } from '../persona-cap'
+import { readFamilySpecifics } from './family-specifics'
 import { RELATION_NAMES } from './source-facts'
 /** 🔴 "다른 사람을 가리키는 말" 의 정본 — 여기서 목록을 다시 만들지 않는다 */
 import { OTHER_MARKERS } from '../persona-self-age'
@@ -94,7 +95,13 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  * 🔴 `draft-gates-v6.1` (같은 날 · quality-v6 보정 · 운영 v6 행 0) — 자리 · 원천 대조를 없앴다. 모든 자리에서 확정이고
  *    `lifeFacts` 의 검증된 근거 문장이 그 만남을 직접 담을 때만 통과. 절 머리 주어 판정이 관형어(`아는 사람한테`)를 임자로 읽지 않는다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v6.1'
+/**
+ * 🔴 `draft-gates-v8` (2026-10-13 · quality-v8 보정 · 운영 v8 행 0) — 1인칭이 **수로 말한 자녀**(`아들 둘` · `두 아이`)가
+ *    카드의 자녀 수보다 많으면 확정 차단(`childLifeStageConflict`). 14:40 감사 결함 yes — P02(자녀 1명)가
+ *    `아들 둘 데리고 버스정류장에 서 있었는데요` 로 v7 게이트 · 의미 검수를 모두 지나 자동 발행됐다.
+ *    ⑦ 은 복수 낱말(`우리 아이들`)만 셌다. 자녀 수는 지난 일로 말해도 그 사람의 수다 — 시점으로 빼지 않는다.
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v8'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -132,7 +139,7 @@ export const DRAFT_GATE_LABEL: Readonly<Record<DraftGateCode, string>> = {
   lifeStageTenseConflict: '🔴 Persona 의 지금 삶(자녀 나이대·집안)을 미래·과거로 말하거나 다르게 말한다',
   maritalStatusConflict: '🔴 Persona 의 혼인·부부 관계와 다른 1인칭 이혼·별거 경험을 말한다',
   careHouseholdConflict: '🔴 Persona 가 늘 돌보거나 함께 사는 부모와 연락이 끊겼다·따로 산다고 말한다',
-  childLifeStageConflict: '🔴 Persona 의 자녀 나이대·동거와 다른 자녀의 삶(돈을 건넴·입대·결혼·따로 삶)을 말한다',
+  childLifeStageConflict: '🔴 Persona 의 자녀 수·나이대·동거와 다른 자녀를 말한다(카드보다 많은 자녀 · 돈을 건넴 · 입대 · 결혼 · 따로 삶)',
   unsupportedHealthClaim: '🔴 근거·카드·계획 어디에도 없는 1인칭 정신건강·질병 경험을 말한다',
   staleTimeClaim: '🔴 원문이 올라온 날에만 맞는 명절·실시간 현장 표현을 게시 시점의 지금처럼 말한다',
   externalCommunityClaim: '🔴 다른 커뮤니티에서 본 회원·글의 움직임을 이 곳에서 본 것처럼 말한다',
@@ -498,6 +505,8 @@ const personSubject = (clause: string, counterpart: readonly string[]): 'self' |
  */
 const firstPersonNow = (
   frames: readonly ClauseFrame[], i: number, at: number, counterpart: readonly string[],
+  /** 🔴 (draft-gates-v8) 시점과 무관한 사실(자녀 수)은 지난 일로 말해도 그 사람의 일이다 — 시점으로 빼지 않는다 */
+  o: { anyTime?: boolean } = {},
 ): boolean => {
   const f = frames[i]!
   if (f.general) return false
@@ -507,14 +516,14 @@ const firstPersonNow = (
   const before = c.slice(0, at)
   const after = c.slice(at)
   if (CONDITIONAL_RE.test(after.split(/\s+/).slice(0, 3).join(' '))) return false
-  if (PAST_CUE_RE.test(c) || PAST_FRAME_RE.test(c)) return false
+  if (o.anyTime !== true && (PAST_CUE_RE.test(c) || PAST_FRAME_RE.test(c))) return false
   // 🔴 사건 바로 앞 어절이 남이면(`친구 이혼 소식`) 그 사람 일이다
   const prev = before.trim().split(/\s+/).filter((w) => w !== '').pop()
   if (prev !== undefined && otherIn(prev, counterpart) && bareOrSubject(prev)) return false
   let subj = personSubject(c, counterpart)
   for (let k = i - 1; subj === null && k >= 0 && frames[k]!.sentence === f.sentence; k -= 1) {
     subj = personSubject(frames[k]!.clause, counterpart)
-    if (PAST_CUE_RE.test(frames[k]!.clause)) return false
+    if (o.anyTime !== true && PAST_CUE_RE.test(frames[k]!.clause)) return false
   }
   // 🔴 문장 끝이 전언이면 앞 절의 사건도 들은 말이다
   const last = [...frames].reverse().find((x) => x.sentence === f.sentence)
@@ -682,6 +691,8 @@ const BAND_MIN_AGE: Readonly<Partial<Record<ChildAgeBand, number>>> = {
   '영유아': 0, '초등': 7, '중고등': 13, '대학·취준': 19, '성인': 20,
 }
 const SELF_PLURAL_KIDS_RE = /(?:우리|저희|울)\s*(?:아이들|애들|자식들|아이들이|애들이)/
+/** 🔴 남의 말을 옮긴 끝 — `…심심하다고` · `…최고라고요` · `…있냐고`. 그 수는 말한 사람의 수다 */
+const QUOTED_END_RE = /(?:다고|라고|냐고|자고|다구|라구)(?:요|하셨|했)?[.!~…ㅠㅜ\s]*$/
 /** 🔴 지금의 결혼 햇수 — `결혼 5년 만에 이혼했어요` 는 끝난 결혼의 길이라 세지 않는다 */
 const MARRIAGE_YEARS_RE = /결혼\s*(?:한\s*지\s*)?(\d{1,2})\s*년(?!\s*만에)(?:차|째)?/
 /** 🔴 학령기 학습 — 부모가 시키거나 봐 주는 쪽의 말만. `과외 선생님이에요`(자녀의 일)는 걸리지 않는다 */
@@ -689,6 +700,8 @@ const STUDENT_ACT_RE =
   /과외(?:를|도)?\s*(?:붙|시키|시켜|받|시작)|학원(?:에|을)?\s*(?:보내|보냈|다니|끊|등록)|숙제|채점|성적표|수행\s*평가|학부모\s*상담|등하교/
 const BIRTH_ANCHOR_RE = /(?:아이|아기|애기|딸|아들|첫째|둘째|막내)(?:가|를|이|는)?\s*(?:태어나|낳|출산)|출산\s*(?:하고|후|뒤)/
 const ELAPSED_YEARS_RE = /(\d{1,2})\s*년(?:째|이나|\s*(?:이\s*)?(?:지났|됐|되었|흘렀|넘었))/
+/** 🔴 (draft-gates-v8) 가족 사실 1인칭 판정의 상대 — 자녀 낱말만 */
+const KID_ONLY_WORDS: readonly string[] = ['아이', '아기', '애기', '딸', '아들', '첫째', '둘째', '막내']
 /** 🔴 자녀 · 배우자는 이 축의 상대다 — 남으로 세지 않는다 */
 const CHILD_WORDS: readonly string[] = ['아이', '아기', '애기', '딸', '아들', '첫째', '둘째', '막내', '남편', '신랑', '선생님']
 
@@ -749,6 +762,23 @@ function judgeChildren(
     // 🔴 명시적 1인칭(`우리 아이들`)은 세상 이야기 틀(`세대` · `다들`)보다 세다 — 정본 임자 규칙과 같다
     if (card.childrenCount === 1 && SELF_PLURAL_KIDS_RE.test(c) && !REPORTED_RE.test(c)) {
       push('hard', '카드는 자녀 1명인데 "우리 아이들"', c)
+    }
+    // ⑦-b (draft-gates-v8) 1인칭이 말한 **구체적 가족 사실**이 카드와 다르다 — 수(카드보다 많다) · 성별(카드에 없다) · 나이대(카드에 없다).
+    //     `아들 둘 데리고`(카드 1명 · 초등) · `우리 딸이` · `중학생 아들`. 지난 일이어도 그 사람의 가족이다 — 시점으로 빼지 않는다.
+    //     🔴 남의 말을 옮긴 끝(`…심심하다고`)은 말한 사람의 가족이다
+    const sentenceEnd = [...frames].reverse().find((x) => x.sentence === f.sentence)?.clause ?? c
+    if (!QUOTED_END_RE.test(c) && !QUOTED_END_RE.test(sentenceEnd)) {
+      const fam = readFamilySpecifics(c)
+      // 🔴 상대 낱말은 **자녀만** — `남편` 을 넣으면 `친구 남편이 … 초1 아이` 의 남편을 내 쪽 주어로 읽는다
+      const self = (at: number): boolean => firstPersonNow(frames, i, at, KID_ONLY_WORDS, { anyTime: true })
+      if (fam.count !== null && fam.count.n > card.childrenCount && self(fam.count.at)) {
+        push('hard', `카드는 자녀 ${card.childrenCount}명인데 "${fam.count.token}"`, c)
+      } else if (fam.gender !== null && self(fam.gender.at)) {
+        push('hard', `카드에 없는 자녀 성별 "${fam.gender.token}"`, c)
+      }
+      for (const bd of fam.bands) {
+        if (!bands.includes(bd.band as ChildAgeBand) && self(bd.at)) push('hard', `카드에 없는 자녀 나이대 "${bd.token}"(${bd.band})`, c)
+      }
     }
     // ⑧ 결혼 햇수 — 가장 큰 아이가 결혼보다 먼저 태어났다
     const my = MARRIAGE_YEARS_RE.exec(c)

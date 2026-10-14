@@ -179,6 +179,16 @@ const EXACT_RULES: Readonly<Record<string, EntryRule>> = {
   },
   'publish-heartbeat': { kind: 'state', reason: '발행 heartbeat 틱 기록' },
   /**
+   * 🔴 **공급 러너 커널 lease 디렉터리** (2026-10-12 Batch C1 · `scripts/lib/supply-lease.mts`) — 잠금 파일 · follow-up 표식 ·
+   *    실행 token(shadow) 뿐이다. 모두 원 호스트 회차의 상태라 옮기지 않는다(대상의 첫 회차가 새로 만든다).
+   *    그 밖의 것이 생기면 조용히 빼지 않고 export 를 멈춘다.
+   */
+  'supply-process': {
+    kind: 'exclude',
+    reason: '공급 러너 커널 잠금 · follow-up 표식 · 실행 token(shadow) — 원 호스트 회차 상태(대상 첫 회차가 새로 만든다)',
+    contents: { allow: /^(?:process\.kernel-lock|follow-up\.request|run-token\.json(?:\.tmp-\d+)?)$/, what: '공급 lease 파일' },
+  },
+  /**
    * 🔴 **싣지 않는다.** 원 호스트 launchd 회차의 기록이다. 옮기면 대상에서 한 번도 안 돈 러너가
    *    07:00 판정에서 "최근 실제 회차 성공" 으로 읽힌다 — 재등록을 정상으로 간주하는 것과 같다.
    *    대상은 기록 없음(모름)에서 시작해 첫 heartbeat 로 채운다.

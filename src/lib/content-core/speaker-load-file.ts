@@ -17,6 +17,12 @@ export type SpeakerLoadRow = {
   openDays: number
   /** 이미 READY 재고에 있는 이 화자의 글 수 */
   readyCount: number
+  /**
+   * 🔴 **생성 시도 여력** (speaker-attempt-v1) — 공개 자리 몫(`openDays`)과 다른 값이다.
+   *    지평 안에서 혼자 판정해 발행 자격이 있는 날이 있고 WIP 를 뺀 뒤 남으면 회차당 1.
+   *    옛 파일에는 없다(`undefined`).
+   */
+  attemptCapacity?: number
 }
 export type SpeakerLoadFile = {
   writtenAt: string
@@ -33,6 +39,13 @@ export type SpeakerLoadFile = {
   byCode: Readonly<Record<string, SpeakerLoadRow>>
   /** 날짜별로 누가 자리를 받았는가 — 사람이 읽는 근거. 판정에는 쓰지 않는다 */
   byDate?: readonly { date: string; codes: readonly string[] }[]
+  /**
+   * 🔴 **생성 시도 계약** (2026-10-13 P0). 이 값이 있어야 생성 러너가 `attemptCapacity` 를 쓴다 —
+   *    없으면 옛 계약(공개 자리 몫 − WIP)으로 좁게 돈다.
+   */
+  attemptContract?: string
+  /** 🔴 지평의 공개 자리 수 — 사람이 읽는 근거. 생성 시도가 몇 건이든 이 수는 바뀌지 않는다 */
+  releaseSeats?: number
 }
 
 /** 🔴 모양을 손으로 확인한다 — 한 칸이라도 어긋나면 `null` 이다 */
@@ -49,17 +62,33 @@ function parseLoad(raw: unknown): SpeakerLoadFile | null {
     const r = v as Record<string, unknown>
     if (!Number.isInteger(r.openDays) || (r.openDays as number) < 0) return null
     if (!Number.isInteger(r.readyCount) || (r.readyCount as number) < 0) return null
-    byCode[code] = { openDays: r.openDays as number, readyCount: r.readyCount as number }
+    if (r.attemptCapacity !== undefined
+      && (!Number.isInteger(r.attemptCapacity) || (r.attemptCapacity as number) < 0)) return null
+    byCode[code] = {
+      openDays: r.openDays as number, readyCount: r.readyCount as number,
+      ...(r.attemptCapacity === undefined ? {} : { attemptCapacity: r.attemptCapacity as number }),
+    }
   }
+  if (o.attemptContract !== undefined && (typeof o.attemptContract !== 'string' || o.attemptContract.trim() === '')) return null
+  if (o.releaseSeats !== undefined && (!Number.isInteger(o.releaseSeats) || (o.releaseSeats as number) < 0)) return null
   return {
     writtenAt: o.writtenAt, runId: (o.runId as string).trim(),
     horizonDays: o.horizonDays as number, byCode,
+    ...(o.attemptContract === undefined ? {} : { attemptContract: (o.attemptContract as string).trim() }),
+    ...(o.releaseSeats === undefined ? {} : { releaseSeats: o.releaseSeats as number }),
   }
 }
 
 export type SpeakerLoadReader = {
   openDaysOf: (code: string) => number
   readyCountOf: (code: string) => number
+  /**
+   * 🔴 **생성 시도 여력** — 파일이 시도 계약(`attemptContract`)을 가질 때만 그 값이다.
+   *    계약이 없으면 `null` — 부르는 쪽이 옛 계약(공개 자리 몫 − WIP)으로 좁게 돈다.
+   */
+  attemptCapacityOf: ((code: string) => number) | null
+  /** 지평의 공개 자리 수 — 모르면 null */
+  releaseSeats: number | null
   /** 사람이 읽는 한 줄 — 🔴 파일이 없으면 그 사실이 여기 적힌다 */
   describe: string
   loaded: boolean
@@ -89,6 +118,8 @@ export function readSpeakerLoad(
   ): SpeakerLoadReader => ({
     openDaysOf: () => 1,
     readyCountOf: () => 0,
+    attemptCapacityOf: null,
+    releaseSeats: null,
     loaded: false,
     problem,
     describe: `🔴 화자 여력을 쓸 수 없다 — ${why}`,
@@ -115,8 +146,13 @@ export function readSpeakerLoad(
     problem: null,
     openDaysOf: (code) => f.byCode[code]?.openDays ?? 0,
     readyCountOf: (code) => f.byCode[code]?.readyCount ?? 0,
+    // 🔴 모르는 화자 · 칸이 빠진 행은 0 — 시도 여력을 지어내지 않는다
+    attemptCapacityOf: f.attemptContract === undefined ? null : (code) => f.byCode[code]?.attemptCapacity ?? 0,
+    releaseSeats: f.releaseSeats ?? null,
     loaded: true,
     describe: `🟢 화자 여력 ${Object.keys(f.byCode).length}명 · 지평 ${f.horizonDays}일`
+      + (f.releaseSeats === undefined ? '' : ` · 공개 자리 ${f.releaseSeats}`)
+      + (f.attemptContract === undefined ? ' · 🟡 시도 계약 없음(옛 계약 — 공개 자리 몫으로 좁힌다)' : ` · 시도 계약 ${f.attemptContract}`)
       + ` · 기록 ${f.writtenAt}`,
   }
 }
