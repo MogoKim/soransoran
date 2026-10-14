@@ -462,6 +462,8 @@ export function planAppendOnlyBundles(input: {
   byCode: Map<string, VoiceReferenceBundle>
   fromCanon: string[]
   fromExtra: string[]
+  extraSpeakers: number
+  extraEligibleSpeakers: number
   excludedExtraSpeakers: number
   productionDrift: string[]
 } {
@@ -483,13 +485,25 @@ export function planAppendOnlyBundles(input: {
   const canonSpeakers = new Set(input.canonRows.map((r) => r.speakerId))
   const tainted = new Set(input.extraRows.filter((r) => canonTexts.has(r.text) || canonSpeakers.has(r.speakerId)).map((r) => r.speakerId))
   const extra = input.extraRows.filter((r) => !tainted.has(r.speakerId))
+  const extraSupply = speakerSupply(extra)
+  const extraAssignable = planBundles({
+    rows: extra,
+    personaCodes: Array.from({ length: 999 }, (_, index) => `VE${String(index + 1).padStart(3, '0')}`),
+    target: input.target,
+  }).bundles.length
   const remaining = input.newCodes.filter((c) => !byCode.has(c))
   const fromExtra: string[] = []
   if (remaining.length > 0 && extra.length > 0) {
     const plan = planBundles({ rows: extra, personaCodes: remaining, target: input.target })
     for (const b of plan.bundles) { byCode.set(b.personaCode, b); fromExtra.push(b.personaCode) }
   }
-  return { byCode, fromCanon, fromExtra, excludedExtraSpeakers: tainted.size, productionDrift }
+  return {
+    byCode, fromCanon, fromExtra,
+    extraSpeakers: extraSupply.speakers,
+    extraEligibleSpeakers: extraAssignable,
+    excludedExtraSpeakers: tainted.size,
+    productionDrift,
+  }
 }
 
 /**

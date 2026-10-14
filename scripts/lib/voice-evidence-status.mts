@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { speakerSupply } from './persona-reference-store.mjs'
+import type { LocalComment } from './persona-reference-store.mjs'
 import {
   EVIDENCE_READ_DROP_CODES, rowsFromVoiceEvidence, VOICE_EVIDENCE_SUFFIX,
   type EvidenceReadDropCode, type EvidenceSalt,
@@ -20,12 +21,12 @@ export type VoiceEvidenceStatus = {
   dropped: Record<EvidenceReadDropCode, number>
 }
 
-export function readVoiceEvidenceStatus(input: {
+export function readUsableVoiceEvidence(input: {
   dataDir: string
   salt: EvidenceSalt
   members: { memberNames: readonly string[]; personaNames?: readonly string[] } | null
   now: Date
-}): VoiceEvidenceStatus {
+}): { rows: LocalComment[]; status: VoiceEvidenceStatus } {
   const dropped = Object.fromEntries(EVIDENCE_READ_DROP_CODES.map((code) => [code, 0])) as Record<EvidenceReadDropCode, number>
   const lines: unknown[] = []
   let files = 0
@@ -46,7 +47,19 @@ export function readVoiceEvidenceStatus(input: {
   for (const code of EVIDENCE_READ_DROP_CODES) dropped[code] += read.dropped[code]
   const supply = speakerSupply(read.rows.map((row) => ({ speakerId: row.author ?? '', text: row.text })))
   return {
-    files, insecureFiles, lines: lines.length, usableRows: read.rows.length,
-    speakers: supply.speakers, eligible: supply.eligible, nearMiss: supply.nearMiss, dropped,
+    rows: read.rows.map((row) => ({ speakerId: row.author ?? '', text: row.text })),
+    status: {
+      files, insecureFiles, lines: lines.length, usableRows: read.rows.length,
+      speakers: supply.speakers, eligible: supply.eligible, nearMiss: supply.nearMiss, dropped,
+    },
   }
+}
+
+export function readVoiceEvidenceStatus(input: {
+  dataDir: string
+  salt: EvidenceSalt
+  members: { memberNames: readonly string[]; personaNames?: readonly string[] } | null
+  now: Date
+}): VoiceEvidenceStatus {
+  return readUsableVoiceEvidence(input).status
 }

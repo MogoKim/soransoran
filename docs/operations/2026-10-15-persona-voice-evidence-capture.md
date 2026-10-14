@@ -26,6 +26,7 @@ Retention and erasure are dry-run by default:
 
 ```bash
 npm run persona:voice-evidence-status -- --db
+npm run persona:expansion -- --db --voice-evidence
 npm run persona:voice-evidence-purge
 npm run persona:voice-evidence-purge -- --speaker-hash=vs1:<64-lowercase-hex>
 npm run persona:voice-evidence-purge -- --execute
@@ -36,5 +37,7 @@ Only files named `navercafe-voice-*.voice-evidence.jsonl` are eligible. Symlinks
 ## D20 interpretation
 
 Passing capture checks does not make D20 ready. The canary needs 40 contract-valid Persona rows, so the ten proposed candidates must pass voice, card, name, diversity, cadence, create, seed, and activation gates. Current evidence has two free eligible speakers; eight more are required for the ten-person canary.
+
+The expansion command reads the same secure evidence set, applies the exact member/Persona exclusion set, and only appends eligible supplemental speakers after the canonical remainder. It is read-only and must report zero production assignment drift before any cohort promotion is considered.
 
 The old canonical corpus has speakers that are one observation short, but its original author-to-opaque-ID salt was intentionally not retained. New observations cannot be claimed as top-ups for those speakers. Readiness must count only newly demonstrated stable HMAC speakers or already eligible canonical speakers.

@@ -4,6 +4,7 @@
  *
  *   npx tsx scripts/persona-expansion.mts                 # 오프라인 — 정본 카드 · 말투 자산 · fixture
  *   npx tsx scripts/persona-expansion.mts --db            # + 운영 DB read-only (계약 유효 · 집중도 · Gate ⑥-B · cadence)
+ *   npx tsx scripts/persona-expansion.mts --db --voice-evidence # + 익명 보충 말투 근거 read-only
  *   npx tsx scripts/persona-expansion.mts --fixture=<path> --json=<out.json>
  *
  * 🔴 **켜는 명령이 없다.** `--apply` 를 받으면 거부한다. 활성화는 runbook 의 순서대로
@@ -31,6 +32,9 @@ import { voicePoolFor } from './lib/persona-autogen.mjs'
 import type { ExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { judgeExpansionBatch, loadExpansionFixture, nameSpaceCapacity } from './lib/persona-expansion-gate.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { readEvidenceSalt, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
+import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
+import type { LocalComment } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 
 const argv = process.argv.slice(2)
@@ -43,6 +47,8 @@ if (argv.some((a) => a === '--apply' || a.startsWith('--apply=') || a === '--exe
   fail('이 도구는 켜지도 쓰지도 않는다 — 활성화는 runbook(2026-10-13-persona-expansion-runbook.md) 순서로 persona:cohort-run 이 한다')
 }
 const USE_DB = argv.includes('--db')
+const USE_VOICE_EVIDENCE = argv.includes('--voice-evidence')
+if (USE_VOICE_EVIDENCE && !USE_DB) fail('--voice-evidence 는 정확한 회원·Persona 제외 집합이 필요하므로 --db 와 함께 써야 한다')
 const FIXTURE = arg('fixture') ?? PROPOSED_COHORTS[0]!.fixture
 const JSON_OUT = arg('json')
 const repoRoot = process.cwd()
@@ -103,7 +109,25 @@ if (facts !== null) {
 }
 
 // ── ② 자원 ──
-const voice = voicePoolFor({ repoRoot, newCodes: batchCodes })
+let supplementalRows: LocalComment[] = []
+let supplementalStatus: ReturnType<typeof readUsableVoiceEvidence>['status'] | null = null
+if (USE_VOICE_EVIDENCE) {
+  if (facts === null) fail('운영 DB 사실을 읽지 못했다 — 보충 말투 근거를 사용하지 않는다')
+  const measuredFacts = facts as ExpansionFacts
+  const measuredMembers = measuredFacts.nameSets.memberNames
+    ?? fail('회원 이름 대조 집합을 읽지 못했다 — 보충 말투 근거를 사용하지 않는다')
+  const salt = readEvidenceSalt(process.env)
+  if (!salt.ok) fail(`보충 말투 근거가 꺼져 있다 — ${salt.code}`)
+  const evidence = readUsableVoiceEvidence({
+    dataDir: arg('voice-evidence-dir') ?? voiceEvidenceDataDir(),
+    salt,
+    members: { memberNames: measuredMembers, personaNames: measuredFacts.nameSets.personaNames ?? [] },
+    now: new Date(),
+  })
+  supplementalRows = evidence.rows
+  supplementalStatus = evidence.status
+}
+const voice = voicePoolFor({ repoRoot, newCodes: batchCodes, supplementalRows })
 // 🔴 자산을 못 열었거나(화자 0) 운영 배정이 흔들리면 남은 수를 모른다 — 0 으로 쓰지 않는다
 const voiceFree = voice.eligibleSpeakers > 0 && voice.drift.length === 0
   ? Math.max(0, voice.eligibleSpeakers - voice.assignedSpeakers) : null
@@ -123,6 +147,11 @@ console.log('── ② 확장 자원')
 console.log(`  말투 화자   정본 자산 ${voice.eligibleSpeakers > 0 ? 'OK' : voice.code} · 근거 화자 ${voice.eligibleSpeakers}`
   + ` · 운영 배정 ${voice.assignedSpeakers} · 남음 ${voiceFree ?? '모름'}`
   + (voice.drift.length > 0 ? ` · 🔴 운영 배정 변동 ${voice.drift.join(',')}` : ''))
+if (supplementalStatus !== null) {
+  console.log(`  보충 근거   파일 ${supplementalStatus.files} · 사용 행 ${supplementalStatus.usableRows}`
+    + ` · 화자 ${voice.supplementalSpeakers} · 자격 ${voice.supplementalEligible}`
+    + ` · 정본 중복 제외 ${voice.supplementalExcluded} · 원문/식별자 출력 0`)
+}
 console.log(`  이름 공간   후보 합집합 ${names.space} · canary 뒤 서로·기존과 Gate ⑥-B pass ${names.free}`
   + (names.bound === 'upper' ? ' (상한 — 회원·기존 Persona 이름 미대조, --db 로 정확히)' : ' (회원·기존 Persona 대조)'))
 console.log(`  코드 공간   high-water P${room.highWater} · 현재 한계 P${ceiling} · 남음 ${room.room} · 코드 순서 안전 ${orderSafeAll ? '예' : '아니오'}`)
