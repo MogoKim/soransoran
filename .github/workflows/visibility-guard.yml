@@ -241,11 +241,14 @@ jobs:
       #    DB 트랜잭션 쪽(best:db-check)은 격리 Postgres 가 필요해 CI 에 넣지 않는다.
       #    🔴 댓글 대화선 순수 검사(check:comment-thread)도 같은 step 에서 돈다 — 대화선 묶기·삭제 자리표시·
       #       작성자 구분·답글 대상 문구. 새 step 이 아니다(무조건 step 상한 불변). DB 쪽은 격리 Postgres 사슬에서 돈다.
+      #    🔴 홈 인기 점수 순수 검사(check:home-popularity)도 같은 step 이다 — 홈 신호가 사람 수(글쓴이 제외)·
+      #       비회원 상한 3 이고 Persona·운영 댓글이 순위를 올리지 못하며 화면 댓글 수는 그대로인지. DB 쪽(check:home-popularity-db)은 격리 Postgres 가 필요해 CI 밖이다.
       - name: 베스트·댓글 정책 가드
         if: steps.scope.outputs.heavy == 'true'
         run: |
           npm run check:best
           npm run check:comment-thread
+          npm run check:home-popularity
 
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
@@ -615,6 +618,12 @@ jobs:
       - name: 원문 게시 시각 전달 (수집 → thin → adapt → 후보)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run check:source-times
+      # D100 Batch D1 — 🔴 날짜만 보이는 게시 라벨을 00:00 으로 만들지 않는다 · 판정은 하루 구간 전체(fail-closed) ·
+      #    수집 상세 선별은 같은 점수 안에서만 최신 우선 · 레몬테라스 2~16p · jjong 10 + humor 1 · 요청량 불변.
+      #    수집 행 → thin → adapt → 공급 러너 · 적재기 배선까지 본다. 임시 디렉터리 · 네트워크 0 · DB 0.
+      - name: 날짜 정밀도 · 품질 동률 신선도 (D100 Batch D1)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run check:d100-freshness
       # 운영 체인 end-to-end — 🔴 **실제 러너가 쓴 파일**을 실제 적재 순수 함수에 넣는다.
       #    손으로 만든 봉투는 증거가 아니다. 가짜 provider · 임시 HOME · 네트워크 0 · DB 0.
       #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
@@ -688,6 +697,19 @@ jobs:
       - name: 공급 처리 (수집 금지 · 발행 금지 · source 독립 실패 · lock 게이트)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:process-check
+
+      # 🔴 공급 러너 커널 lease · 실행 token(shadow) (2026-10-12 Batch C1). Ubuntu 에는 /usr/bin/lockf 가 없어
+      #    실제 OS 프로세스 반례는 SKIP(PASS 로 세지 않는다)이고, 여기서는 순수 판정 · 예산 판정 불변 · lockf 없음
+      #    fail-closed 만 돈다. 실제 프로세스 반례와 변이 시험(`supply:lease-mutation`)은 macOS 에서 돌린다.
+      - name: 공급 커널 lease · 실행 token shadow (예산 판정 불변 · fail-closed)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run supply:lease-check
+
+      # 🔴 발행 commit → 댓글 러너 사건 깨움 (2026-10-12 Batch C2). kill switch 기본 off · commit 뒤에만 · failure-open ·
+      #    합치기 · 고아 표식 복구 표식당 1회. launchctl 은 언제나 대역이다(운영 launchd 0). 실제 프로세스 반례는 macOS 전용(SKIP ≠ PASS).
+      - name: 사건 깨움 — 발행 commit 뒤 댓글 러너 (kill switch · failure-open · 합치기 · 고아 복구 상한)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run ops:event-wake-check
 
       # 🔴 **backlog 전체를 판정하지 않는다** — 2026-09-20 canary 가 $0.029949 를 쓰고
       #    후보 0건으로 끝난 구조를 막는다. 순수 함수와 소스 계약만 본다

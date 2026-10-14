@@ -63,10 +63,8 @@ import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 export function commentLoopLedgerDir(home: string = homedir()): string {
   return join(home, 'Library', 'Application Support', 'soransoran', 'persona-comment-ledger')
 }
-/** 🔴 잠금 디렉터리 — 저장소 밖. 커널 잠금(`runner-lease` · `/usr/bin/lockf`) 파일과 follow-up 표식이 여기 있다 */
-export function commentLoopLockDir(home: string = homedir()): string {
-  return join(home, 'Library', 'Application Support', 'soransoran', 'persona-comment-loop')
-}
+/** 🔴 잠금 디렉터리 — 정본은 `persona-comment-runner-template.commentLoopLockDir` 하나다(여기서는 다시 내보내기만) */
+export { commentLoopLockDir } from './persona-comment-runner-template'
 /**
  * 🔴 **커널 잠금 파일** (2026-10-11 Batch A4 보정). 옛 `wx` 잠금 파일(`loop.lock`)과 이름이 다르다 —
  *    옛 runtime 이 남긴 `loop.lock` 이 있어도 이 잠금을 막지 않는다. 이 파일도 **있다는 것 자체는 잠금이 아니다**.

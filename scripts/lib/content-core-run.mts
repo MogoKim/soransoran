@@ -704,7 +704,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
   phase = 'draftGen'
-  const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
+  const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet, plan }))
   const dC = completionOf(dRes)
   const read = dC.complete ? parseDraft(dRes.rawText, persona.code) : null
   if (read === null || !read.ok) {

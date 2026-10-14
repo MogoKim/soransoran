@@ -11,6 +11,12 @@
  *   ⑤ 정본 env      canonical env 에서 DB 주소를 읽었고, 격리 DB 모양이 아니다(값은 판정에만 쓰고 찍지 않는다)
  *   ⑥ 승인          fresh dry-run digest · 정확한 expect(지금:적용 뒤) · 비어 있지 않은 reason
  *
+ * 🔴 **staged 운영 열림** (2026-10-13 · PR #710 품질 계약 전환) — `--staged` 를 더하면 위 ②만 바뀐다:
+ *    target 을 **staging 트리**에 준비해 두고, 아직 옛 SHA 로 도는 runtime 을 그대로 둔 채 운영 DB 에 쓴다.
+ *    ②-s origin/main · staging 트리 HEAD 가 target 이고 staging 트리가 깨끗하다 · runtime HEAD = pin = manifest 가
+ *        **서로 같고 target 이 아니며** target 의 조상이다(되돌아가는 배포가 아니다). ③④⑤⑥ 은 그대로다.
+ *    품질 계약 전환에서 새 계약의 해소 기록을 **활성화 전에** 덧붙이는 길이다 — 부르는 쪽이 허용할 때만 열린다.
+ *
  * 🔴 DB · 파일 · 네트워크 · 프로세스 없음. 사실은 `scripts/lib/production-activation.mts` 가 모아 넘긴다.
  * 🔴 기존 격리 DB `--apply`(플래그 `--production` 없음)는 이 판정과 무관하게 그대로다.
  */
@@ -20,15 +26,18 @@ export const SHA40 = /^[0-9a-f]{40}$/
 export const PLAN_DIGEST = /^[0-9a-f]{16,64}$/
 export const EXPECT_PAIR = /^(\d+):(\d+)$/
 
-export type ActivationFlags = { apply: boolean; production: boolean; target: string | null }
+export type ActivationFlags = { apply: boolean; production: boolean; target: string | null; staged?: boolean }
 export type ActivationMode =
   | { mode: 'dry-run' }
   | { mode: 'isolated' }
-  | { mode: 'production'; target: string }
+  | { mode: 'production'; target: string; staged: boolean }
   | { mode: 'refuse'; problems: string[] }
 
 /** 🔴 플래그 조합 — 운영은 셋 다 명시해야만 열린다. 애매한 조합은 거부한다 */
 export function activationModeOf(f: ActivationFlags): ActivationMode {
+  if (f.staged === true && !(f.apply && f.production)) {
+    return { mode: 'refuse', problems: ['--staged 는 --apply --production --target 과 함께만 쓴다'] }
+  }
   if (!f.apply) {
     return f.production || f.target !== null
       ? { mode: 'refuse', problems: ['--production · --target 은 --apply 와 함께만 쓴다'] }
@@ -38,7 +47,7 @@ export function activationModeOf(f: ActivationFlags): ActivationMode {
     return f.target !== null ? { mode: 'refuse', problems: ['--target 은 --production 과 함께만 쓴다'] } : { mode: 'isolated' }
   }
   if (f.target === null || !SHA40.test(f.target)) return { mode: 'refuse', problems: ['--target=<40자리 소문자 SHA> 가 필요하다'] }
-  return { mode: 'production', target: f.target }
+  return { mode: 'production', target: f.target, staged: f.staged === true }
 }
 
 /** `launchctl print` 한 번의 결과 */
@@ -69,6 +78,10 @@ export type ProductionFacts = {
   runtimeManifestSha: string | null
   /** `git status --porcelain` 이 비었는가. 못 봤으면 null */
   runtimeClean: boolean | null
+  /** 🔴 (staged) 실행하는 트리(staging)의 `git status --porcelain` 이 비었는가. 못 봤거나 안 쟀으면 null/없음 */
+  repoClean?: boolean | null
+  /** 🔴 (staged) runtime HEAD 가 target 의 조상인가. 못 봤거나 안 쟀으면 null/없음 */
+  runtimeIsAncestorOfTarget?: boolean | null
   writers: readonly { label: string; state: WriterState }[]
   /** 🔴 값이 아니라 판정 결과만 — 주소를 담지 않는다 */
   canonicalEnv: { read: boolean; hasDatabaseUrl: boolean; looksIsolated: boolean }
@@ -87,6 +100,39 @@ export function productionGuardProblems(target: string, f: ProductionFacts): str
   same('runtime HEAD', f.runtimeHead)
   same('runtime pin', f.runtimePin)
   same('runtime manifest', f.runtimeManifestSha)
+  if (f.runtimeClean !== true) out.push(f.runtimeClean === null ? 'runtime 작업 트리 상태를 읽지 못했다' : 'runtime 작업 트리에 변경이 있다')
+  if (f.writers.length === 0) out.push('D100 writer job 상태를 하나도 재지 못했다')
+  for (const w of f.writers) {
+    if (w.state === 'running') out.push(`writer job 실행 중 — ${w.label} (unload 하지 않는다 · 끝난 뒤 다시)`)
+    else if (w.state === 'unknown') out.push(`writer job 상태 모름 — ${w.label}`)
+  }
+  if (!f.canonicalEnv.read) out.push('canonical env 를 읽지 못했다')
+  else if (!f.canonicalEnv.hasDatabaseUrl) out.push('canonical env 에 DB 주소가 없다')
+  else if (f.canonicalEnv.looksIsolated) out.push('canonical env 의 DB 가 격리 DB 모양이다 — 운영이 아니다')
+  return out
+}
+
+/**
+ * 🔴 **staged 운영 열림의 사실 판정** — 비어 있으면 열린다. runtime 은 옛 SHA 그대로 깨끗하게 돌고 있어야 하고,
+ *    쓰는 코드는 staging 트리의 target 이다. 모르는 값은 같지 않다 · 깨끗하지 않다 · 조상이 아니다로 본다.
+ */
+export function stagedGuardProblems(target: string, f: ProductionFacts): string[] {
+  const out: string[] = []
+  if (!SHA40.test(target)) out.push('target 이 40자리 SHA 가 아니다')
+  const same = (label: string, v: string | null): void => {
+    if (v === null || v === '') out.push(`${label} 를 읽지 못했다 — 같다고 보지 않는다`)
+    else if (v !== target) out.push(`${label} ${v.slice(0, 12)} ≠ target ${target.slice(0, 12)}`)
+  }
+  same('origin/main(fetch 직후)', f.originMain)
+  same('staging HEAD', f.repoHead)
+  if (f.repoClean !== true) out.push(f.repoClean === false ? 'staging 트리에 변경이 있다' : 'staging 트리 상태를 읽지 못했다')
+  const rt = [f.runtimeHead, f.runtimePin, f.runtimeManifestSha]
+  if (rt.some((v) => v === null || v === '')) out.push('runtime HEAD · pin · manifest 중 읽지 못한 것이 있다')
+  else if (new Set(rt).size !== 1) out.push(`runtime HEAD ${f.runtimeHead!.slice(0, 12)} · pin ${f.runtimePin!.slice(0, 12)} · manifest ${f.runtimeManifestSha!.slice(0, 12)} 가 서로 다르다`)
+  else if (f.runtimeHead === target) out.push('runtime 이 이미 target 이다 — staged 가 아니라 --production 으로 연다')
+  if (f.runtimeIsAncestorOfTarget !== true) {
+    out.push(f.runtimeIsAncestorOfTarget === false ? 'runtime SHA 가 target 의 조상이 아니다 — 되돌아가는 배포에 쓰지 않는다' : 'runtime 과 target 의 관계를 읽지 못했다')
+  }
   if (f.runtimeClean !== true) out.push(f.runtimeClean === null ? 'runtime 작업 트리 상태를 읽지 못했다' : 'runtime 작업 트리에 변경이 있다')
   if (f.writers.length === 0) out.push('D100 writer job 상태를 하나도 재지 못했다')
   for (const w of f.writers) {

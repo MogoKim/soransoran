@@ -7,6 +7,10 @@
  *   npm run auto-ready:defect-resolve -- --queue=<queueId> --apply --production --target=<40자리 SHA> \
  *     --digest=<dry-run digest> --expect=<지금>:<적용 뒤> --reason="…"     🔴 운영(Phase G) — 배포된 SHA 에서만
  *
+ *   npm run auto-ready:defect-resolve -- --queue=<queueId> --apply --production --staged --target=<40자리 SHA> \
+ *     --digest=<dry-run digest> --expect=<지금>:<적용 뒤> --reason="…"     🔴 품질 계약 전환 — target 을 준비한
+ *     **staging 트리**에서, 옛 runtime·job 을 그대로 둔 채 새 계약의 해소 기록을 활성화 **전에** 덧붙인다
+ *
  * 🔴 플래그 없는 `--apply` 는 격리 DB(sentinel · localhost · soran_test)에서만 돈다. 운영은 `production-activation-guard`
  *    (플래그 셋 · 다섯 SHA = target · runtime 깨끗 · writer job 0 · canonical env)와 승인(digest · expect · reason)을 모두 지나야 열린다.
  *    거부는 DB 에 붙기 전에 끝난다(write 0).
@@ -36,7 +40,8 @@ function isolatedDbProblems(): string[] {
 
 async function main(): Promise<number> {
   if (queueId === '') { console.error('🔴 --queue=<queueId> 가 필요하다'); return 2 }
-  const act = openActivation(argv, { repoRoot: process.cwd() })
+  // 🔴 품질 계약 전환은 활성화 전에 새 계약 기록을 써야 한다 — 이 CLI 만 `--staged` 를 받는다
+  const act = openActivation(argv, { repoRoot: process.cwd(), allowStaged: true })
   if (act.kind === 'refuse') {
     console.error('🔴 열지 않는다(write 0)')
     for (const p of act.problems) console.error(`   · ${p}`)
@@ -50,7 +55,7 @@ async function main(): Promise<number> {
       const a = await applyApprovedDefectResolution(prisma, {
         queueId, approval: act.approval, contextOf: makeReverifyContextLoader(), now: new Date(),
       })
-      console.log(`RESOLVE_APPLY production@${act.target.slice(0, 12)} ${a.kind} written=${a.written}${'reason' in a ? ` · ${a.reason}` : ''} · reason="${act.approval.reason}"`)
+      console.log(`RESOLVE_APPLY ${act.staged ? 'staged' : 'production'}@${act.target.slice(0, 12)} ${a.kind} written=${a.written}${'reason' in a ? ` · ${a.reason}` : ''} · reason="${act.approval.reason}"`)
       return a.kind === 'written' || a.kind === 'noop' ? 0 : 1
     } finally {
       await prisma.$disconnect()
