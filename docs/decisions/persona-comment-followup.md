@@ -1,6 +1,6 @@
 # 글당 Persona 댓글 1~5 — 첫 댓글 뒤 선택적 추가 댓글(0~4)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 상태: **연결됨 · 기본 OFF · 운영 env 0 · 활성화 아님**
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 상태: **code PASS · 기본 OFF · 활성화 금지** (운영 env 0 · profile 은 후보뿐)
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
@@ -100,9 +100,9 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 |---|---|---|
 | E1 | 단계 증거 상한·출처 분리 | ✅ #707 |
 | E2 | 발행 트랜잭션 추가 댓글 레인 | ✅ 이 PR(기본 OFF) |
-| E3 | 홈·베스트 랭킹의 Persona 댓글 합산 분리(Batch F) | ❌ 켜면 합성 인기가 그만큼 오른다 |
-| E4 | 창업자 결정 — CURRENT §7 "실회원 계측 전 자동 답글 확장 금지" · 단계별 profile 값 · profile 파일 위치 · 시간 숫자 | ❌ North Star 계측 뒤 |
-| E5 | 런타임 반영 — 보조 Mac runtime 배포 · env 2개 · profile 파일 | ❌ 이 PR 은 하지 않는다 |
+| E3 | 홈·베스트 랭킹의 Persona 댓글 합산 분리(Batch F · C-03) | ✅ #706 (main · Production) — 홈 인기 신호는 실회원 사람 수 · Persona·운영 댓글 제외 · 비회원 상한 3. `/best`(best-v2)는 원래 실회원 전용이라 변경 없음 |
+| E4 | 🔴 **North Star 계측 전 활성화 금지** — CURRENT-MILESTONE §7 "실회원 계측 전에 자동 답글 확장" 금지 · North Star 계측(Batch F)이 아직 없다. 계측 뒤 창업자 승인으로만: 단계별 profile 값 · profile 파일 위치 · 시간 숫자 | ❌ BLOCK |
+| E5 | 런타임 반영 — 보조 Mac runtime 배포 · 댓글 러너 plist 재설치 · env 2개 · profile 파일 | ❌ 미실행 · E4 전에는 하지 않는다 |
 | E6 | 댓글 러너를 consumer(`stage-consume-exec --by=comment`) 경유로 | ✅ 이 PR — 템플릿 · consumer 종류 `comment` · 스위치 OFF 면 consumer 결정 읽기 0 · 오늘 결정만(`followupStageOf`). **설치된 plist 는 아직 옛 모양**이다 — E5 배포·재설치 때 바뀐다 |
 
 ## 8. 추가 발견 · 제안
