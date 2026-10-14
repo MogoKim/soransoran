@@ -306,32 +306,72 @@ export function planAttemptCapacity(input: {
 }
 
 /**
- * 🔴 **생성 러너가 원천에 화자를 나누는 유일한 입구** (speaker-attempt-v1).
+ * 🔴 **생성 러너가 원천에 화자를 주는 유일한 입구** (speaker-attempt-v1 · 전체 후보 풀 · 2026-10-14).
  *
- *    · 원천은 **판정 뒤 실제 SEED** 다(`sourceKeys`). 유료 묶음 크기가 아니다 — SEED 0 이면 계획 0.
- *    · 여력은 `attemptCapacity` 다. 공개 자리 몫(`openDays`)을 쓰지 않는다.
- *    · 화자마다 1 이므로 `planSpeakerAvailability` 의 stride 분배가 **원천마다 서로 다른 사람**을 준다.
- *      자격 있는 사람이 원천보다 적으면 남는 원천은 보류다 — 억지로 늘리지 않는다.
+ * 🔴 **무엇이 틀렸나** (2026-10-14 12:15 회차 실측). 앞판(`planSpeakerAttempts`)은 판독 결과를 알기 **전에**
+ *    시도 가능한 27명을 원천 10개에 stride 로 **겹치지 않게 미리 나눴다** — 원천마다 2~3명이었다.
+ *    판독(`speakerPlan`)은 Persona 를 보지 않고, 자격은 코드(`decidePersona`)가 정본 카드로 정하므로
+ *    후보를 넓혀도 유료 호출은 늘지 않는데도 그랬다. 그 결과 `requiredValueUnmet` 2건이 묶음 3명 안에
+ *    자격자가 없어 멈췄다 — 묶음 밖에는 각각 3명 · 11명이 있었다(read-only 재생).
+ *
+ * 🔴 **고친 방법.** 원천을 **들어온 순서대로** 처리하면서 매 원천에 `시도 가능 전체 − 이번 회차에 이미 선택된 사람`
+ *    을 준다. `decidePersona` 가 그중에서 원천별 정본 순서(`orderPersonasForSource`)로 고른다 — 순서는 건드리지 않는다.
+ *
+ * 🔴 **지키는 것.**
+ *    · 한 회차에 한 사람은 한 원천 — `decidePersona` 가 **고른 순간** `markChosen` 한다. 뒤 초안·게이트가
+ *      실패해도 같은 회차의 다른 원천에 다시 주지 않는다(같은 사람의 글이 한 회차에 둘 생기지 않는다)
+ *    · 유료 경로에 들어가는 원천 수 상한은 앞판과 같다 — `min(실제 SEED, 시도 가능 인원)`. 그 뒤 원천은
+ *      provider 호출 없이 보류다(`[]`). 후보를 넓힌 것만으로 판독 호출이 늘지 않는다
+ *    · 공개 자리 · 상한 · 간격 · 시도 여력 계산은 이 함수가 모른다 — 받은 `attemptCapacity` 를 좁히기만 한다
+ *    · 입력 배열 순서와 무관하다 — 코드순으로 정렬해 둔다
  */
-export function planSpeakerAttempts(input: {
-  sourceKeys: readonly string[]
+export type AttemptPool = {
+  /** 실제 SEED 수 */
+  readonly attemptDemand: number
+  /** 시도 가능 인원 (`attemptCapacity > 0`) */
+  readonly attemptSupply: number
+  /** 🔴 유료 경로에 들어갈 수 있는 원천 수 상한 = `min(demand, supply)` */
+  readonly attemptLimit: number
+  /** 다음 원천의 후보 — 상한을 다 썼거나 남은 사람이 없으면 `[]`(provider 호출 없이 보류) */
+  take(): readonly string[]
+  /** 🔴 `decidePersona` 가 고른 사람을 사용됨으로 적는다 — 풀 밖이거나 이미 쓴 사람이면 throw */
+  markChosen(code: string): void
+  readonly started: number
+  readonly used: ReadonlySet<string>
+  /** 시도 가능 인원 — 코드순 */
+  readonly eligible: readonly string[]
+}
+
+export function createAttemptPool(input: {
   attemptCapacity: readonly { code: string; attemptCapacity: number }[]
-}): AvailabilityPlan & { attemptDemand: number; attemptSupply: number; planned: number } {
-  const capacities = input.attemptCapacity.map((c) => ({
-    code: c.code,
-    // 🔴 WIP 는 이미 뺐다 — 두 번 빼지 않는다. 회차당 상한을 다시 한 번 건다
-    openDays: Math.max(0, Math.min(ATTEMPTS_PER_SPEAKER_PER_RUN, c.attemptCapacity)),
-    readyCount: 0,
-  }))
-  const plan = planSpeakerAvailability({ sourceKeys: input.sourceKeys, capacities })
-  const attemptDemand = input.sourceKeys.length
-  const attemptSupply = plan.eligible.length
-  const planned = plan.slots.filter((s) => s.codes.length > 0).length
+  attemptDemand: number
+}): AttemptPool {
+  const eligible = [...new Set(input.attemptCapacity
+    .filter((c) => Math.min(ATTEMPTS_PER_SPEAKER_PER_RUN, c.attemptCapacity) > 0)
+    .map((c) => c.code))]
+    .sort((a, b) => a.localeCompare(b))
+  const demand = Math.max(0, Math.floor(input.attemptDemand))
+  const limit = Math.min(demand, eligible.length)
+  const used = new Set<string>()
+  let started = 0
   return {
-    ...plan,
-    // 🔴 계약이 바뀌면 캐시가 저절로 miss 된다
-    identity: `${ATTEMPT_CONTRACT}|${plan.identity}`,
-    notes: [`생성 시도 — 실제 SEED ${attemptDemand}건 · 시도 여력 ${attemptSupply}명 · 계획 ${planned}건`, ...plan.notes],
-    attemptDemand, attemptSupply, planned,
+    attemptDemand: demand,
+    attemptSupply: eligible.length,
+    attemptLimit: limit,
+    take() {
+      if (started >= limit) return []
+      const left = eligible.filter((c) => !used.has(c))
+      if (left.length === 0) return []
+      started += 1
+      return left
+    },
+    markChosen(code) {
+      if (!eligible.includes(code)) throw new Error(`시도 풀 밖의 Persona 가 선택됐다 (${code})`)
+      if (used.has(code)) throw new Error(`한 회차에 같은 Persona 가 두 원천에 선택됐다 (${code})`)
+      used.add(code)
+    },
+    get started() { return started },
+    used,
+    eligible,
   }
 }

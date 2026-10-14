@@ -270,7 +270,8 @@ console.log('\n③ Persona 여력 대기 — 초안 실패가 아니다')
 
   const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   // 🔴 (P0-B) 화자 묶음은 원천 열쇠(사이트, id)로 찾는다
-  const at = src.indexOf('const slotCodes = slotOf.get(keyOfJ(j)) ?? []')
+  // 🔴 시도 계약이면 전체 후보 풀(`attemptPool.take()`), 옛 계약이면 묶음 — 어느 쪽이든 빈 후보는 호출 전 여력 대기다
+  const at = src.indexOf('const slotCodes = attemptPool !== null ? attemptPool.take() : slotOf.get(keyOfJ(j)) ?? []')
   const line = src.slice(at, src.indexOf('\n', src.indexOf('if (slotCodes.length === 0)', at)))
   check('🔴 🔴 **생성 러너가 빈 화자 묶음을 여력 대기로 적는다** (호출 전)',
     at > 0 && /if \(slotCodes\.length === 0\) \{ capacityDeferred \+= 1; holdPick\(\{ personaDeferred: true \}\); continue \}/.test(line),
