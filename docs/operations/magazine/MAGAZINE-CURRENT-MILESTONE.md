@@ -1,6 +1,6 @@
 # Magazine current milestone
 
-기준 시각: 2026-10-15 KST  
+기준 시각: 2026-10-15 KST
 구현·배포 집중 게이트: 2026-10-15 KST
 운영 증거 상한: 2026-10-22 KST
 상위 정본: `M-GRAPH-PROJECT-CHARTER.md`, `magazine-automation-runbook.md`
