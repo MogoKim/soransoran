@@ -16,6 +16,11 @@ import {
 } from './magazine-quarantine.mjs'
 import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
 import { judgeLegacyInvalid } from './magazine-lineage-reconcile.mjs'
+import {
+  DIRECT_SPEC_MODE,
+  directSpecMessageFor,
+  resolveMagazineAutoMode,
+} from './magazine-direct-spec.mjs'
 
 /** 일반 전송 직전 brief 형식 계약 실패 — probe·Chrome·예약·전송 모두 0 */
 export const BRIEF_FORMAT_CONTRACT_REASON = 'BRIEF_FORMAT_CONTRACT'
@@ -110,7 +115,18 @@ export function firstResponseCorrectionPromptText(packet) {
 }
 export const isFirstResponseCorrection = (packet) => packet?.source === 'FIRST_RESPONSE'
 
-export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
+export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null, queueItem = null) {
+  // 🔴 좁은 canary 라우팅 — queueItem 이 명시적으로 DIRECT_SPEC_V1 로 opt-in 했을 때만 direct.
+  //    - queueItem 미지정(기존 호출자) → legacy (byte-identical)
+  //    - 모르는 directSpecMode → null (legacy provider 로도 보내지 않는다; deliveryGate 에서 fail-closed 로 번역)
+  //    - direct + packet → canary 는 first-send 만 지원 (regen 은 legacy 로 복귀)
+  const resolved = resolveMagazineAutoMode(queueItem)
+  if (!resolved.ok) return null
+  if (resolved.mode === DIRECT_SPEC_MODE) {
+    if (packet) return null
+    const r = directSpecMessageFor({ slug, draftsDir })
+    return r.ok ? r.message : null
+  }
   const briefPath = join(draftsDir, slug, 'brief.md')
   if (!existsSync(briefPath)) return null
   if (isFirstResponseCorrection(packet)) {
@@ -209,7 +225,45 @@ export function inputRepairGate({ slug, draftsDir = DRAFTS_DIR, quarantinePath =
  * @returns {{ok:true, message:string|null, messageFingerprint:string|null, hold:object|null}
  *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
  */
-export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH }) {
+export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH, queueItem = null }) {
+  // 🔴 좁은 canary 라우팅 — queueItem 이 명시적으로 DIRECT_SPEC_V1 로 opt-in 했을 때만 direct.
+  //    legacy 입력(queueItem 미지정 포함)은 아래 기존 경로를 그대로 지난다 — message bytes · fingerprint 불변.
+  //    모르는 directSpecMode 는 **legacy provider 로도 보내지 않는다** (fail-closed).
+  //    direct 입력의 brief/message 는 adapter 가 verifyArticleSpec 통과 spec 하나로 만든다 — brief.md 를 읽지 않는다.
+  //    missing/invalid spec 은 여기서 ok:false 로 끝난다 → 호출자 provider/Chrome/예약 0.
+  const resolved = resolveMagazineAutoMode(queueItem)
+  if (!resolved.ok) {
+    return { ok: false, code: resolved.code, why: resolved.why, message: null, messageFingerprint: null }
+  }
+  if (resolved.mode === DIRECT_SPEC_MODE) {
+    if (packet) {
+      return { ok: false, code: 'DIRECT_SPEC_REGEN_UNSUPPORTED',
+        why: 'DIRECT_SPEC_V1 canary 는 first-send 만 지원한다 — regen 은 legacy 경로로 복귀',
+        message: null, messageFingerprint: null }
+    }
+    const spec = directSpecMessageFor({ slug, draftsDir })
+    if (!spec.ok) {
+      return { ok: false, code: spec.code, why: spec.why, message: null, messageFingerprint: null }
+    }
+    const ledger = readQuarantine(quarantinePath)
+    if (!ledger.ok) {
+      return { ok: false, code: ledger.code ?? 'QUARANTINE_UNREADABLE', why: ledger.why,
+        message: spec.message, messageFingerprint: spec.messageFingerprint }
+    }
+    const entry = ledger.store[slug] ?? null
+    const hold = deliveryHoldsFetch(entry, spec.messageFingerprint)
+    return {
+      ok: true,
+      mode: DIRECT_SPEC_MODE,
+      message: spec.message,
+      messageFingerprint: spec.messageFingerprint,
+      legacyMessageFingerprint: null,
+      specHash: spec.specHash,
+      schemaVersion: spec.schemaVersion,
+      entry,
+      hold,
+    }
+  }
   const draftPath = join(draftsDir, slug, 'draft.md')
   // 🔴 최초 응답 교정은 저장된 원고 없이 BRIEF 로 다시 쓰게 한다 — 그 밖의 재생성은 현재 원고가 반드시 있어야 한다
   if (packet && !isFirstResponseCorrection(packet) && !existsSync(draftPath)) {

@@ -10,8 +10,8 @@
  *   W01  compile 은 결정론적이다 (같은 입력 → 같은 specHash · canonical JSON)
  *   W02  객체 key 순서 변화는 specHash 를 바꾸지 않는다
  *   W03  verifyArticleSpec 실패는 fail-closed throw (compile 뒤 persist 안 함)
- *   W04  opt-in flag 없는 queueItem 은 legacy 로 간다 (fail-closed · 기본 legacy)
- *   W05  모르는 directSpecMode 는 legacy 로 되돌아간다
+ *   W04  opt-in flag 없는 queueItem 은 legacy 로 간다 (ok:true · 기본 legacy)
+ *   W05  모르는 directSpecMode 는 **legacy 로도 가지 않는다** — ok:false, code:UNKNOWN_MAGAZINE_AUTO_MODE
  *   W06  message 는 schemaVersion · specHash 를 글자 그대로 포함한다 (identity 운반)
  *   W07  message 지문은 spec canonical JSON 의 함수다 — spec 바뀌면 지문 바뀐다
  *   W08  message 조립은 brief.md 파일을 읽지 않는다 (사람이 쓴 brief 조작과 무관)
@@ -26,9 +26,14 @@
  *   W17  spec 파일이 없으면 message/gate 는 DIRECT_SPEC_MISSING 으로 fail-closed
  *   W18  손상된 spec 은 verify 실패 코드로 fail-closed (즉, 쓰기 전 catch)
  *   W19  adapter 는 사이드-이펙트 심볼 (Chrome·CDP·HTTP·DB) 을 import 하지 않는다
- *   W20  운영 호출체인 scripts 는 adapter 를 import 하지 않는다 (운영 접근 0)
+ *   W20  **운영 공용 경계(`deliveryGate`) wiring 동작 단언** — fixture queueItem 으로 direct 1, legacy 1 을 증명한다
  *   W21  canary slug 는 운영 topic-queue · articles.ts 에 없다
  *   W22  LEGACY_BRIEF_V1 fallback 상수는 유지된다 (bounded rollback 경로)
+ *   W23  legacy 입력 — queueItem 미지정 / 명시 LEGACY_BRIEF_V1 / 빈 flag — 셋이 **같은 바이트**다
+ *   W24  모르는 directSpecMode — deliveryGate 가 legacy provider 로도 보내지 않는다 (ok:false, 메시지·지문 0)
+ *   W25  direct mode + article-spec.json 없음 — deliveryGate 가 DIRECT_SPEC_MISSING 으로 fail-closed (전송·예약 0)
+ *   W26  direct mode + 손상 spec — deliveryGate 가 ARTICLE_SPEC_HASH 로 fail-closed (전송·예약 0)
+ *   W27  direct mode + regen packet — fail-closed (DIRECT_SPEC_REGEN_UNSUPPORTED) — canary 는 first-send 만
  */
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
@@ -55,6 +60,7 @@ import {
   DIRECT_SPEC_PROMPT_MARKER,
   DIRECT_SPEC_PROMPT_TEXT,
   LEGACY_BRIEF_MODE,
+  UNKNOWN_MAGAZINE_AUTO_MODE,
   compileAndPersistDirectSpec,
   directSpecBriefText,
   directSpecDeliveryGate,
@@ -65,6 +71,8 @@ import {
   registerDirectSpecSidecar,
   resolveMagazineAutoMode,
 } from './lib/magazine-direct-spec.mjs'
+import { deliveryGate, plannedMessageFor } from './lib/magazine-delivery-gate.mjs'
+import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -124,19 +132,34 @@ check('W03 node.status 가 APPROVED 아니면 fail-closed throw (쓰기 전)', (
   assert.equal(existsSync(join(d, input.queueItem.slug, ARTICLE_SPEC_FILENAME)), false)
 })
 
-// ── W04 · W05 opt-in / legacy fallback ─────────────────────
-check('W04 opt-in flag 없는 queueItem 은 legacy', () => {
+// ── W04 · W05 opt-in / legacy / unknown ────────────────────
+check('W04 opt-in flag 없는 queueItem 은 legacy (ok:true)', () => {
   const r = resolveMagazineAutoMode({ slug: 'x', contentType: 'EVERGREEN' })
+  assert.equal(r.ok, true)
   assert.equal(r.mode, LEGACY_BRIEF_MODE)
+  // null · undefined · '' 도 전부 legacy
+  for (const v of [null, undefined, '']) {
+    const rv = resolveMagazineAutoMode({ [DIRECT_SPEC_OPT_IN_FIELD]: v })
+    assert.equal(rv.ok, true)
+    assert.equal(rv.mode, LEGACY_BRIEF_MODE)
+  }
 })
-check('W05 모르는 directSpecMode 는 legacy 로 되돌아간다 (fail-closed)', () => {
+check('W05 모르는 directSpecMode — ok:false, UNKNOWN_MAGAZINE_AUTO_MODE (legacy provider 로도 보내지 않는다)', () => {
   const r = resolveMagazineAutoMode({ [DIRECT_SPEC_OPT_IN_FIELD]: 'DIRECT_SPEC_V2' })
-  assert.equal(r.mode, LEGACY_BRIEF_MODE)
-  assert.match(r.reason, /모르는/)
-  const r2 = resolveMagazineAutoMode({ [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE })
-  assert.equal(r2.mode, DIRECT_SPEC_MODE)
-  const r3 = resolveMagazineAutoMode({ [DIRECT_SPEC_OPT_IN_FIELD]: LEGACY_BRIEF_MODE })
-  assert.equal(r3.mode, LEGACY_BRIEF_MODE)
+  assert.equal(r.ok, false, '모르는 mode 는 ok:true 로 돌려주면 안 된다 (legacy 로 묻어 넘기면 rollback 계약이 깨진다)')
+  assert.equal(r.code, UNKNOWN_MAGAZINE_AUTO_MODE)
+  assert.equal(r.mode, null)
+  assert.match(r.why, /모르는/)
+
+  // 명시 LEGACY_BRIEF_V1 은 ok:true · legacy
+  const rl = resolveMagazineAutoMode({ [DIRECT_SPEC_OPT_IN_FIELD]: LEGACY_BRIEF_MODE })
+  assert.equal(rl.ok, true)
+  assert.equal(rl.mode, LEGACY_BRIEF_MODE)
+
+  // 명시 DIRECT_SPEC_V1 은 ok:true · direct
+  const rd = resolveMagazineAutoMode({ [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE })
+  assert.equal(rd.ok, true)
+  assert.equal(rd.mode, DIRECT_SPEC_MODE)
 })
 
 // ── W06 · W07 identity 운반 ────────────────────────────────
@@ -340,30 +363,125 @@ check('W19 adapter 는 사이드-이펙트 심볼을 import 하지 않는다 (�
   }
 })
 
-// ── W20 운영 호출체인은 adapter 를 import 하지 않는다 ──────
-check('W20 운영 호출체인 scripts 는 adapter 를 import 하지 않는다 (운영 접근 0)', () => {
-  // adapter 를 import 하는 자리는 **이 wire-check 와 mutation 뿐**이어야 한다.
-  const scripts = [
-    'scripts/magazine-producer-plan.mjs',
-    'scripts/magazine-producer-run.mjs',
-    'scripts/magazine-webui-runner.mjs',
-    'scripts/magazine-auto-register.mjs',
-    'scripts/magazine-auto-register-ready.mjs',
-    'scripts/magazine-brief-auto.mjs',
-    'scripts/magazine-rehearsal.mjs',
-    'scripts/magazine-input-repair.mjs',
-    'scripts/lib/magazine-delivery-gate.mjs',
-    'scripts/lib/magazine-regen.mjs',
-    'scripts/lib/magazine-auto-lane.mjs',
-    'scripts/lib/magazine-manuscript-guard.mjs',
-  ]
-  for (const rel of scripts) {
-    const abs = join(ROOT, rel)
-    if (!existsSync(abs)) continue
-    const src = readFileSync(abs, 'utf8')
-    assert.ok(!/magazine-direct-spec\.mjs/.test(src),
-      `${rel} 가 adapter 를 import 한다 — 좁은 canary 밖으로 흘러나갔다`)
+// ── W20 운영 공용 경계(deliveryGate) wiring 동작 단언 ──────
+//    🔴 **adapter 미사용 단언은 폐기한다.** 적절한 자리에서는 운영이 adapter 를 "써야" 한다 —
+//       그 자리가 narrow common boundary (`deliveryGate` · `plannedMessageFor`) 다. 아래는
+//       그 경계를 **실제로 import 해 호출하고**, direct 1 / legacy 1 이 동작하는지 바이트로 본다.
+//    🔴 fixture 입력만 쓴다 — 운영 topic-queue 에는 opt-in 행이 없다. 운영 접근 0 은
+//       W19 (adapter 가 Chrome/CDP/HTTP/DB 미import), W21 (canary slug 가 운영 큐에 없음) 이 지킨다.
+
+/** direct · legacy 공용 sandbox — article-spec.json 과 brief.md 를 같이 둔다.
+ *    🔴 legacy brief.md 는 adapter 조립 brief 에서 **specHash 라인을 뺀** 글자다. legacy 경로가
+ *       spec identity 를 **"의도치 않게" 운반하지 못하도록** 분리한다 — 그래야 direct 와 legacy 가
+ *       지문·바이트로 확실히 구분된다. */
+function makeDirectAndLegacySandbox() {
+  const input = loadFixture()
+  const d = tmp('ds-w20')
+  const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
+  const slug = persisted.spec.identity.slug
+  mkdirSync(join(d, slug), { recursive: true })
+  const legacyBrief = directSpecBriefText(persisted.spec)
+    .split('\n')
+    .filter((line) => !line.includes('specHash'))
+    .join('\n')
+  writeFileSync(join(d, slug, 'brief.md'), legacyBrief, 'utf8')
+  const quarantinePath = join(d, 'quarantine.json')
+  saveQuarantine({}, quarantinePath)
+  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath }
+}
+
+check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해 direct 1 · legacy 1 을 증명한다', () => {
+  const { input, draftsDir, slug, specHash, quarantinePath } = makeDirectAndLegacySandbox()
+
+  // ── direct 1: queueItem.directSpecMode === 'DIRECT_SPEC_V1' ─────
+  const directQI = { ...input.queueItem, [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE }
+  const directGate = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: directQI })
+  assert.equal(directGate.ok, true, `direct gate 가 ok 가 아니다 — ${directGate.code ?? ''}: ${directGate.why ?? ''}`)
+  assert.equal(directGate.mode, DIRECT_SPEC_MODE, 'direct gate 가 mode 를 알리지 않는다 (wiring 미적용?)')
+  assert.equal(directGate.specHash, specHash, 'direct gate 가 specHash 를 운반하지 않는다')
+  assert.ok(directGate.message.includes(specHash),
+    'direct message 글자에 specHash 가 없다 — adapter 가 아닌 다른 생성기가 돌았다')
+  assert.ok(directGate.message.includes(ARTICLE_SPEC_SCHEMA),
+    'direct message 글자에 schemaVersion 이 없다 — identity 운반 끊김')
+  assert.ok(directGate.message.includes(DIRECT_SPEC_PROMPT_MARKER),
+    'direct marker 가 message 에 없다 — adapter prompt 가 조립되지 않았다')
+
+  // ── legacy 1: 미지정 queueItem — 기존 호출자와 **같은 바이트** ─
+  const legacyGate = deliveryGate({ slug, draftsDir, quarantinePath })
+  assert.equal(legacyGate.ok, true, `legacy gate 가 ok 가 아니다 — ${legacyGate.code ?? ''}: ${legacyGate.why ?? ''}`)
+  assert.notEqual(legacyGate.message, directGate.message,
+    'legacy message 가 direct message 와 글자 동일 — adapter 가 legacy 자리까지 침범했다')
+  assert.notEqual(legacyGate.messageFingerprint, directGate.messageFingerprint,
+    '지문이 같으면 HOLD 가 섞인다 — direct · legacy 는 다른 지문이어야 한다')
+
+  // 🔴 legacy 는 **wiring 전/후 바이트 동일**을 지문으로 증명한다 — plannedMessageFor 를
+  //    queueItem 미지정으로 다시 돌려 **지금 wiring 분기를 지난 결과**와 bitwise 같아야 한다.
+  const legacyPlanned = plannedMessageFor(slug, draftsDir)
+  assert.equal(legacyGate.message, legacyPlanned,
+    'deliveryGate 와 plannedMessageFor 가 legacy 자리에서 다른 글자를 만들었다 — wiring 가 legacy 를 건드렸다')
+})
+
+check('W23 legacy 입력 — 미지정 · 명시 LEGACY · 빈 flag · 임의 non-opt-in 속성 — 넷이 같은 바이트', () => {
+  const { draftsDir, slug, quarantinePath } = makeDirectAndLegacySandbox()
+  const gUndef = deliveryGate({ slug, draftsDir, quarantinePath })
+  const gExplicit = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: LEGACY_BRIEF_MODE } })
+  const gEmpty = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: '' } })
+  const gUnrelated = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: { slug, title: 't', contentType: 'EVERGREEN' } })
+  for (const [label, g] of [['undef', gUndef], ['explicit', gExplicit], ['empty', gEmpty], ['unrelated', gUnrelated]]) {
+    assert.equal(g.ok, true, `${label} gate 가 ok 가 아니다 — ${g.code ?? ''}`)
   }
+  assert.equal(gExplicit.message, gUndef.message, '명시 LEGACY_BRIEF_V1 과 미지정이 바이트 다르다')
+  assert.equal(gEmpty.message, gUndef.message, '빈 flag 와 미지정이 바이트 다르다')
+  assert.equal(gUnrelated.message, gUndef.message, '비관련 queueItem 과 미지정이 바이트 다르다')
+  assert.equal(gExplicit.messageFingerprint, gUndef.messageFingerprint)
+})
+
+check('W24 모르는 directSpecMode — deliveryGate 가 legacy provider 로도 보내지 않는다 (ok:false · 메시지·지문 0)', () => {
+  const { draftsDir, slug, quarantinePath } = makeDirectAndLegacySandbox()
+  const g = deliveryGate({ slug, draftsDir, quarantinePath,
+    queueItem: { slug, [DIRECT_SPEC_OPT_IN_FIELD]: 'DIRECT_SPEC_V2' } })
+  assert.equal(g.ok, false, '모르는 directSpecMode 를 legacy 로 묻어 전송 가능 상태로 돌려줬다 — rollback 계약 깨짐')
+  assert.equal(g.code, UNKNOWN_MAGAZINE_AUTO_MODE)
+  assert.equal(g.message, null, 'fail-closed 인데 message 를 조립했다 — provider 로 흘러갈 글자가 생겼다')
+  assert.equal(g.messageFingerprint, null, 'fail-closed 인데 지문이 있다 — HOLD 장부와 섞인다')
+})
+
+check('W25 direct mode + article-spec.json 없음 — DIRECT_SPEC_MISSING 으로 fail-closed (provider·예약 0)', () => {
+  const d = tmp('ds-w25') // spec 을 쓰지 않는다
+  const quarantinePath = join(d, 'quarantine.json')
+  saveQuarantine({}, quarantinePath)
+  const g = deliveryGate({ slug: 'canary-direct-spec-01', draftsDir: d, quarantinePath,
+    queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE } })
+  assert.equal(g.ok, false, 'spec 없는 direct 입력을 ok 로 돌려줬다 — provider 가 깨어난다')
+  assert.equal(g.code, 'DIRECT_SPEC_MISSING')
+  assert.equal(g.message, null)
+  assert.equal(g.messageFingerprint, null)
+})
+
+check('W26 direct mode + 손상 spec — ARTICLE_SPEC_HASH 로 fail-closed (verify 가 deliveryGate 로 올라온다)', () => {
+  const { input, draftsDir, slug, quarantinePath } = makeDirectAndLegacySandbox()
+  // 디스크의 spec.outline 을 조작한다 (hash 재계산 없이)
+  const specPath = join(draftsDir, slug, ARTICLE_SPEC_FILENAME)
+  const spec = JSON.parse(readFileSync(specPath, 'utf8'))
+  spec.editorial.outline[0] = '손상된 outline'
+  writeFileSync(specPath, JSON.stringify(spec, null, 2) + '\n', 'utf8')
+  const g = deliveryGate({ slug, draftsDir, quarantinePath,
+    queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE } })
+  assert.equal(g.ok, false, 'verify 가 deliveryGate 로 올라오지 않았다 — 손상 spec 이 provider 로 흘러간다')
+  assert.equal(g.code, 'ARTICLE_SPEC_HASH')
+  assert.equal(g.message, null)
+})
+
+check('W27 direct mode + regen packet — fail-closed (canary 는 first-send 만)', () => {
+  const { draftsDir, slug, quarantinePath } = makeDirectAndLegacySandbox()
+  const g = deliveryGate({ slug, draftsDir, quarantinePath,
+    queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE },
+    packet: { schemaVersion: 'regen-packet/3', slug, profile: 'STANDARD', attempt: 1,
+      failures: [{ code: 'X', label: 't', sentence: '' }],
+      instruction: 'ignored' } })
+  assert.equal(g.ok, false)
+  assert.equal(g.code, 'DIRECT_SPEC_REGEN_UNSUPPORTED')
+  assert.equal(g.message, null)
 })
 
 // ── W21 canary slug 는 운영 queue · articles.ts 에 없다 ────

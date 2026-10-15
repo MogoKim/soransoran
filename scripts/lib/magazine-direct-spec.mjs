@@ -42,6 +42,9 @@ export const DIRECT_SPEC_OPT_IN_FIELD = 'directSpecMode'
 export const DIRECT_SPEC_MODE = 'DIRECT_SPEC_V1'
 export const LEGACY_BRIEF_MODE = 'LEGACY_BRIEF_V1'
 
+/** 모르는 directSpecMode 를 봤을 때의 fail-closed 코드 — legacy provider 로도 보내지 않는다 */
+export const UNKNOWN_MAGAZINE_AUTO_MODE = 'UNKNOWN_MAGAZINE_AUTO_MODE'
+
 /** direct 경로가 쓰는 drafts 파일 이름 */
 export const ARTICLE_SPEC_FILENAME = 'article-spec.json'
 export const ARTICLE_SPEC_REGISTER_LEDGER = 'article-spec.registered.json'
@@ -80,17 +83,30 @@ function fail(code, why) {
 
 /**
  * 이 queueItem 이 direct 분기로 가는가.
- * `DIRECT_SPEC_V1` 외의 어떤 값도 legacy 로 돌려준다 — "모름" 은 legacy 다.
+ *
+ * 🔴 **"모름" 은 legacy 가 아니다** — fail-closed 다.
+ *    - undefined · null · '' · 'LEGACY_BRIEF_V1' → legacy (opt-in 없음 또는 명시 legacy)
+ *    - 'DIRECT_SPEC_V1' → direct
+ *    - 그 밖의 값 → `ok:false, code:UNKNOWN_MAGAZINE_AUTO_MODE`. legacy provider 로도 보내지 않는다.
+ *      모르는 opt-in flag 는 코드 결함이거나 신호 손상이므로, 둘 다 legacy 에 묻어 넘기면 bounded
+ *      rollback 계약이 깨진다.
+ *
+ * @returns {{ok:true, mode:'LEGACY_BRIEF_V1'|'DIRECT_SPEC_V1', reason:string}
+ *          |{ok:false, mode:null, code:'UNKNOWN_MAGAZINE_AUTO_MODE', why:string}}
  */
 export function resolveMagazineAutoMode(queueItem) {
   const mode = queueItem?.[DIRECT_SPEC_OPT_IN_FIELD]
-  if (mode === DIRECT_SPEC_MODE) return { mode: DIRECT_SPEC_MODE, reason: 'queueItem opt-in' }
   if (mode === undefined || mode === null || mode === '' || mode === LEGACY_BRIEF_MODE) {
-    return { mode: LEGACY_BRIEF_MODE, reason: 'opt-in flag 없음' }
+    return { ok: true, mode: LEGACY_BRIEF_MODE, reason: '명시 legacy 또는 opt-in 없음' }
+  }
+  if (mode === DIRECT_SPEC_MODE) {
+    return { ok: true, mode: DIRECT_SPEC_MODE, reason: 'queueItem opt-in' }
   }
   return {
-    mode: LEGACY_BRIEF_MODE,
-    reason: `모르는 directSpecMode (${String(mode)}) — legacy 로 되돌아간다 (fail-closed)`,
+    ok: false,
+    mode: null,
+    code: UNKNOWN_MAGAZINE_AUTO_MODE,
+    why: `모르는 directSpecMode (${String(mode)}) — legacy provider 로도 보내지 않는다 (fail-closed)`,
   }
 }
 
