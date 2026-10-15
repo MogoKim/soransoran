@@ -18,6 +18,12 @@
  *    대신 _runs/{date}/selected/{slug}/*.todo.md 에 초안 재료만 놓는다.
  *    정본은 세션이 TODO 를 채운 뒤에 만든다.
  *
+ * 🔴 예외는 하나 — DIRECT_SPEC_V1 행 (2026-10-15).
+ *    승인 source(`magazine-direct-spec-source.mjs`)가 현재 제품 graphVersion 과 정확히 맞을 때만
+ *    결정적으로 컴파일한 `drafts/magazine/{slug}/article-spec.json` 을 덮어쓰지 않고 쓴다.
+ *    source 가 없거나 낡았으면 그 행은 선정에서 빠지고 run.json `held` 에 구조화 사유가 남는다.
+ *    direct 행에는 todo 재료를 놓지 않는다 — legacy brief 생성기가 그 폴더를 대상으로 읽기 때문이다.
+ *
  * 🔴 HIGH 도 초안까지는 만든다 (전략 §5.1)
  *    🔴 M3-A — 등급은 검증 강도다. 만들지 않는 주제도, 사람이 읽는 주제도 없다.
  *    초안을 만들지 않으면 검수할 것이 없어 큐가 그 자리에서 멈춘다.
@@ -37,7 +43,8 @@
  *   node scripts/magazine-producer-plan.mjs --help
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { loadArticles, loadQueue, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import {
   RUN_SCHEMA_VERSION, classifyExistingRun, writeFileAtomic, preserveRunFiles, acquireRunLock,
@@ -49,8 +56,14 @@ import { heroFilePath } from './lib/magazine-hero.mjs'
 import { calculateInventory } from './magazine-inventory.mjs'
 import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+import {
+  judgeDirectSpecSource, persistDirectSpecNoClobber, readProductGraphVersion,
+} from './lib/magazine-direct-spec-source.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const PRODUCT_GRAPH_CURRENT = join(REPO_ROOT, 'src/content/magazine/graph/current.ts')
 
 // 재고 정책 — 운영 전략서 §5. inventory 와 같은 값을 쓴다.
 const TARGET_DAYS = 14
@@ -209,6 +222,58 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
    *    이 블록은 빈 배열을 도는 죽은 코드였다. 호출부 호환을 위해 `review: []` 만 남긴다.
    */
   return { selected, review: [], skipped, reusable }
+}
+
+/**
+ * 🔴 **DIRECT_SPEC_V1 행은 승인 source 가 준비됐을 때만 선정에 남는다** (2026-10-15 상류 관문).
+ *
+ *    opt-in 행이 source 없이 선정되면 legacy brief 생성기가 그 행에도 Claude 를 불렀고,
+ *    하류는 spec 이 없어 멈췄다 — 두 경로가 한 회차에 섞인다.
+ *    이제 선정된 direct 행마다 `judgeDirectSpecSource` 로 판정하고, 준비되지 않은 행은
+ *    slug HOLD 로 빼낸 뒤 **그 행을 뺀 큐로 다시 선정한다** — legacy 후보가 그 자리를 잃지 않는다.
+ *    모르는 directSpecMode 도 같은 방식으로 뺀다 (legacy brief 로 묻어 보내지 않는다).
+ *
+ *    🔴 legacy 만 선정되면 판정 함수를 한 번도 부르지 않는다 — 제품 graph 도 source 도 읽지 않는다.
+ */
+export function selectWithDirectGate({ queue, articles, today, produceCount, reviewCount, draftExists, judgeDirect }) {
+  let pool = queue
+  let pass = selectItems({ queue: pool, articles, today, produceCount, reviewCount, draftExists })
+  const held = []
+  const ready = new Map()
+  for (;;) {
+    const drop = []
+    for (const item of pass.selected) {
+      const mode = resolveMagazineAutoMode(item)
+      if (!mode.ok) { drop.push({ day: item.day, slug: item.slug, code: mode.code, why: mode.why }); continue }
+      if (mode.mode !== DIRECT_SPEC_MODE || ready.has(item.slug)) continue
+      const j = judgeDirect(item)
+      if (j.ok) ready.set(item.slug, j)
+      else drop.push({ day: item.day, slug: item.slug, code: j.code, why: j.why, directSpec: j.evidence })
+    }
+    if (!drop.length) break
+    held.push(...drop)
+    const gone = new Set(drop.map((d) => d.slug))
+    pool = pool.filter((item) => !gone.has(item.slug))
+    pass = selectItems({ queue: pool, articles, today, produceCount, reviewCount, draftExists })
+  }
+  return { ...pass, directHeld: held, directReady: ready }
+}
+
+/** run.json selected 행에 남기는 direct 신원 — 원문 없이 식별자·해시만 */
+function directSpecRow(j, persisted) {
+  const s = j.spec
+  return {
+    mode: s.mode,
+    slug: s.identity.slug,
+    intentId: s.identity.intentId,
+    graphVersion: s.identity.graphVersion,
+    sourcePath: j.evidence.sourcePath,
+    sourceHash: j.evidence.sourceHash,
+    g8ManifestHash: s.identity.admissionManifestHash,
+    schemaVersion: s.schemaVersion,
+    specHash: s.specHash,
+    written: Boolean(persisted?.written),
+  }
 }
 
 // ── 작업 패키지 ────────────────────────────────────────────
@@ -526,6 +591,10 @@ export function planRun({
   quarantinePath = QUARANTINE_PATH, gateFn = deliveryGate,
   heroExists = (slug) => existsSync(heroFilePath(slug)),
   log = (m) => console.log(m),
+  /** 🔴 direct 행이 선정됐을 때만 부른다 — legacy 회차는 제품 graph 도 source 도 읽지 않는다 */
+  productGraphVersionFn = () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
+  directSourceFn = judgeDirectSpecSource,
+  persistSpecFn = persistDirectSpecNoClobber,
 }) {
   const runDir = join(runsDir, today)
   const lockFile = join(runDir, '.lock')
@@ -587,9 +656,35 @@ export function planRun({
     const reviewCount = reviewCountFor(produceCount)
 
     const draftExists = (slug) => existsSync(join(draftsDir, slug))
-    const { selected, review, skipped, reusable: reusableRaw } = selectItems({
-      queue, articles, today, produceCount, reviewCount, draftExists,
+    let expectedGraphVersion
+    const judgeDirect = (queueItem) => {
+      if (expectedGraphVersion === undefined) expectedGraphVersion = productGraphVersionFn()
+      return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT })
+    }
+    const gated = selectWithDirectGate({
+      queue, articles, today, produceCount, reviewCount, draftExists, judgeDirect,
     })
+    const { review, skipped, reusable: reusableRaw, directReady } = gated
+    let selected = gated.selected
+    const directHeld = [...gated.directHeld]
+
+    // 🔴 준비된 direct 행만 spec 을 쓴다 — 덮어쓰지 않는다. 충돌이면 그 행만 HOLD 로 뺀다.
+    const directPersisted = new Map()
+    if (!dryRun) {
+      for (const item of selected) {
+        const j = directReady.get(item.slug)
+        if (!j) continue
+        const p = persistSpecFn({ spec: j.spec, draftsDir })
+        if (p.ok) directPersisted.set(item.slug, p)
+        else directHeld.push({ day: item.day, slug: item.slug, code: p.code, why: p.why, directSpec: j.evidence })
+      }
+      const conflicted = new Set(directHeld.map((h) => h.slug))
+      selected = selected.filter((item) => !conflicted.has(item.slug))
+    }
+    for (const h of directHeld) {
+      const e = h.directSpec
+      log(`  ⏸ ${h.code} — ${h.slug}${e ? ` · expected ${e.expectedGraphVersion ?? '-'} · observed ${e.observedGraphVersion ?? '-'} · blockers ${e.blockers.join(',') || '-'} · missing ${e.missingFields.length}` : ''}`)
+    }
 
     // 🔴 slug 별 멱등성 — 판정 불가·전송불명은 그 slug 만 HOLD 로 뺀다
     const ledger = readQuarantine(quarantinePath)
@@ -597,7 +692,7 @@ export function planRun({
     const gate = ({ slug, draftsDir: dd }) => gateFn({ slug, draftsDir: dd, quarantinePath,
       queueItem: queueBySlug.get(slug) ?? null })
     const reusable = []
-    const held = []
+    const held = [...directHeld]
     for (const item of reusableRaw) {
       const v = reuseVerdict(item.slug, { draftsDir, ledger, gate, heroExists })
       if (v.ok) reusable.push({ ...item, stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })
@@ -623,6 +718,7 @@ export function planRun({
         ...(i.directSpecMode ? { directSpecMode: i.directSpecMode } : {}),
         ...(i.intentId ? { intentId: i.intentId } : {}),
         ...(i.g8ManifestHash ? { g8ManifestHash: i.g8ManifestHash } : {}),
+        ...(directReady.has(i.slug) ? { directSpec: directSpecRow(directReady.get(i.slug), directPersisted.get(i.slug)) } : {}),
         // 🔴 호환 필드 — 자동 진행을 가르지 않는다
         needsFullReview: false,
         packageWritten: false,
@@ -641,6 +737,8 @@ export function planRun({
 
     if (!dryRun) {
       for (const item of all) {
+        // 🔴 direct 행에는 legacy brief 재료를 놓지 않는다 — brief 생성기가 이 폴더를 대상으로 읽는다
+        if (directReady.has(item.slug)) continue
         const dir = join(runDir, 'selected', item.slug)
         mkdirSync(dir, { recursive: true })
         writeFileSync(join(dir, 'brief.todo.md'), briefTodo(item))
