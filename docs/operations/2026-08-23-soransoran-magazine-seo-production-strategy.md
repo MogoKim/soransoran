@@ -1,5 +1,13 @@
 # 소란소란 매거진 성장 운영 전략서
 
+> 🔴 **2026-10-15 운영 경계 정정**
+>
+> 이 문서의 SEO 품질·안전·검수 근거는 유지한다. §13의 Claude 지시서 역할과 자동 commit·push
+> 금지 등 제작·승인 흐름은 역사적 계약이며, 현재 역할은
+> [`M-GRAPH-PROJECT-CHARTER.md`](./M-GRAPH-PROJECT-CHARTER.md) §18,
+> 운영 절차는 [`magazine-automation-runbook.md`](./magazine-automation-runbook.md),
+> 현재 마일스톤은 [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md)가 우선한다.
+
 > 최초 작성 2026-08-23 · **7-A 전면 고도화 2026-08-24** · 기준 커밋 `5409ec7`
 > 성격: **매거진 운영의 정본**. 앞으로 매거진 관련 판단은 이 문서를 기준으로 한다.
 > 콘텐츠 원칙은 [매거진 전략](./2026-08-23-soransoran-magazine-strategy.md),
