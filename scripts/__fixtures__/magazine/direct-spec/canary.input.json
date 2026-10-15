@@ -1,0 +1,77 @@
+{
+  "note": "DIRECT_SPEC_V1 STANDARD 1건 canary. 운영 queue 에 들어가지 않는다.",
+  "node": {
+    "status": "APPROVED",
+    "id": "intent/sleep/direct-spec-canary",
+    "intentId": "intent/sleep/direct-spec-canary",
+    "slug": "canary-direct-spec-01",
+    "graphVersion": "g-canary-direct-spec-v1",
+    "readerQuestion": "밤새 뒤척이다 뜬 아침, 몸이 더 지치기 전에 가장 먼저 챙길 것 하나를 어디서 찾을까?",
+    "scope": {
+      "include": [
+        "뜬 아침에 느끼는 피곤함과 머리가 멍한 감각",
+        "집에서 바로 해볼 수 있는 생활 조정의 범위"
+      ],
+      "exclude": [
+        "수면제·보조제의 복용 권고",
+        "불면증 진단과 치료 지침"
+      ]
+    },
+    "outline": [
+      "먼저 몸 상태를 눈으로 확인한다",
+      "오전과 오후에 다르게 흘려 보내는 방법",
+      "며칠째 같은 패턴이면 어디로 가는지"
+    ],
+    "evidence": {
+      "factsToVerify": [
+        "진단으로 단정하지 않았는가",
+        "지속되면 전문가 확인을 권하는가"
+      ],
+      "sourceRequirements": [
+        "변할 수 있는 의학 수치는 쓰지 않는다",
+        "일반 정보와 개인 진단을 구분한다"
+      ]
+    },
+    "safetyConstraints": [
+      "불안을 부추기지 않는다"
+    ],
+    "hubPath": "/magazine?cluster=sleep",
+    "ctaLabel": "우리의 잠 이야기를 나눠요"
+  },
+  "queueItem": {
+    "day": 9001,
+    "slug": "canary-direct-spec-01",
+    "title": "잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것",
+    "contentType": "EVERGREEN",
+    "intent": "질문",
+    "cluster": "sleep",
+    "target": "40대 후반~60대 중반 여성",
+    "validationProfile": "STANDARD",
+    "riskLevel": "LOW",
+    "reviewMode": "SUMMARY_ONLY",
+    "imageMode": "REQUIRED",
+    "autoEligible": true,
+    "ctaBoard": "/community/menopause",
+    "internalLinks": [],
+    "whyNow": "같은 질문이 겹겹이 쌓인다 — 하루를 어떻게 흘리면 다음 밤이 조금 낫다는 답을 묶어 둔다",
+    "notes": "원인을 하나로 단정하지 않고 오래가면 진료 확인을 권한다",
+    "intentId": "intent/sleep/direct-spec-canary",
+    "g8ManifestHash": "sha256:canary-direct-spec-01-admission-manifest",
+    "directSpecMode": "DIRECT_SPEC_V1"
+  },
+  "relations": {
+    "direct": [
+      { "slug": "sleep-hot-flash", "source": "M-GRAPH", "relationType": "DIRECT_NEXT", "reason": "열감과 각성을 함께 살핀다" },
+      { "slug": "night-sweats-sleep", "source": "M-GRAPH", "relationType": "SAME_EXPERIENCE", "reason": "비슷한 밤 경험이다" },
+      { "slug": "sleep-routine-reset", "source": "M-GRAPH", "relationType": "ACTION_OR_CONTEXT", "reason": "생활 기록으로 이어진다" }
+    ],
+    "discovery": { "slug": "menopause-palpitations-night", "source": "M-GRAPH", "relationType": "BRIDGE_DISCOVERY", "reason": "밤중 신체 변화의 다른 질문이다" }
+  },
+  "hero": {
+    "alt": "창가에 선 50대 한국 여성이 아침 햇살을 가만히 바라보고 있다",
+    "scene": "커튼이 걷힌 창가에 선 모습 · 손에는 따뜻한 머그 · 집 안의 평범한 아침 빛"
+  },
+  "publication": {
+    "publishAt": "2026-10-22T10:30:00+09:00"
+  }
+}

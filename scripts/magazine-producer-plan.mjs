@@ -593,7 +593,9 @@ export function planRun({
 
     // 🔴 slug 별 멱등성 — 판정 불가·전송불명은 그 slug 만 HOLD 로 뺀다
     const ledger = readQuarantine(quarantinePath)
-    const gate = ({ slug, draftsDir: dd }) => gateFn({ slug, draftsDir: dd, quarantinePath })
+    const queueBySlug = new Map(queue.map((item) => [item.slug, item]))
+    const gate = ({ slug, draftsDir: dd }) => gateFn({ slug, draftsDir: dd, quarantinePath,
+      queueItem: queueBySlug.get(slug) ?? null })
     const reusable = []
     const held = []
     for (const item of reusableRaw) {
@@ -618,6 +620,9 @@ export function planRun({
         day: i.day, slug: i.slug, title: i.title,
         contentType: i.contentType, riskLevel: i.riskLevel,
         publishWindow: i.publishWindow ?? null,
+        ...(i.directSpecMode ? { directSpecMode: i.directSpecMode } : {}),
+        ...(i.intentId ? { intentId: i.intentId } : {}),
+        ...(i.g8ManifestHash ? { g8ManifestHash: i.g8ManifestHash } : {}),
         // 🔴 호환 필드 — 자동 진행을 가르지 않는다
         needsFullReview: false,
         packageWritten: false,
