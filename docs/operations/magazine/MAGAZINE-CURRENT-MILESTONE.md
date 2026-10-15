@@ -100,6 +100,35 @@ M-GRAPH next approved node
 - **OUTCOME writer:** 측정 계약과 event 경로. 광고·D100·회원가입 전환 파일과 겹치면 먼저 조정한다.
 - 같은 파일은 한 번에 한 writer만 수정한다. 의미 있는 exact head마다 targeted 검사 후 전수 회귀와 CI는 한 번만 돌린다.
 
+### M-AUTO work order — `DIRECT_SPEC_V1`
+
+- 먼저 schema와 순수 compiler를 만든다. 같은 graph node·queue·policy 입력은 같은 canonical JSON과
+  `specHash`를 내야 하며 모델·시계·네트워크를 읽지 않는다.
+- spec은 검색 의도, 독자 질문, 구조, 근거·안전, 형식, CTA, 3+1 관계, hero, 공개 예약을 빠짐없이 담는다.
+- opt-in STANDARD 한 건만 direct 경로를 타고 나머지는 legacy와 바이트·동작이 같아야 한다.
+- direct는 `brief.md`·`review.ts`가 없어도 원고 요청을 만들 수 있어야 한다. 같은 회차에 legacy와 direct를
+  모두 보내면 실패다.
+- delivery fingerprint와 장부 증거가 `specVersion`·`specHash`를 식별해야 한다. 재실행·급사에도 일반 요청
+  1회 원칙과 HOLD가 유지돼야 한다.
+- QA, 재생성 예산, hero, register, exact-head, 배포 증거, watch는 기존 경로를 재사용한다.
+- rehearsal에 정상, 형식 실패, provider 실패, 급사, 재실행, rollback 반례와 변이를 넣는다.
+
+### M-GRAPH work order — current bundle과 canary
+
+- 공개 52편·예약 글·queue와 167 intents/82 mappings를 대조해 `MAPPED`, `UNMAPPED`, `STALE`,
+  `AMBIGUOUS`를 근거와 함께 산출한다. 제목 유사도로 임의 mapping하지 않는다.
+- 현재 graph 적용 18/52의 나머지 34편이 mapping 부재인지, 관계 부재인지, 미공개 대상 때문인지 분리한다.
+- 최신 bundle을 builder로 재생성하고 hash·reverse relation·미공개 누출·중복·자기 링크를 검증한다.
+- 저위험 cluster 하나만 켠다. 직접 3 + 발견 1, 항목별 source/version/reason, click·impression,
+  kill switch와 fallback을 실제 공개 HTML에서 확인한다.
+
+### OUTCOME work order — 측정 계약
+
+- 기존 `magazine_related_impression`·`magazine_related_click`을 재사용할 수 있는지 먼저 감사한다.
+- search landing, related click, community action, 7-day return을 동일한 identity-safe cohort로 이을 수 없는
+  구간을 명시한다. guest를 회원으로 추정하거나 Persona·운영자 활동을 실사용자로 세지 않는다.
+- 광고·회원가입 전환·D100 파일과 겹치면 구현하지 말고 파일 교집합과 필요한 조정을 먼저 보고한다.
+
 ## 6. 중단과 롤백
 
 - 보안 사고, 데이터 손실, Production 장애는 즉시 중단한다.
