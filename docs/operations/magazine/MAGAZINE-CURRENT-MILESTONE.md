@@ -41,9 +41,11 @@ M-GRAPH next approved node
 - 2026-10-15 10:30 KST 고정 시각의 공개 글은 53편이다. 읽기 전용 coverage audit의 분류는
   `READY 18`, `UNMAPPED 17`, `NO_ACTIVE_EDGE 17`, `NO_USABLE_RESULT 1`이다. mapping은 있으나
   자기 링크·중복을 제외하면 결과가 없는 글은 `fewer-friends-50s` 한 편이다.
-- 운영 `control.ts`는 아직 `enabled: false`, `enabledClusters: []`라 실제 공개 화면은 전부 fallback이다.
-- PR #726은 `sleep` 5편만 여는 첫 canary 후보다. 로컬에서 5/5 GRAPH, 다른 47편 불변,
-  kill switch 전체 fallback, 직접 3 + 발견 1 표본을 확인했고 Linux CI를 기다린다.
+- PR #726은 병합·Production 배포·runtime 반영됐다. 저장소 `control.ts`는 `sleep` 5편만 여는
+  canary이며 로컬 resolver와 같은 SHA의 로컬 Production build는 5/5 GRAPH다.
+- 그러나 2026-10-15 Production HTML은 같은 배포 SHA에서도 5편 모두 FALLBACK이었다. Vercel의
+  빈 cluster env가 저장소 기본값을 덮는 경계를 바로잡는 PR #730이 검증 중이므로, 공개 HTML에서
+  graphVersion이 확인되기 전에는 M-GRAPH ACTIVE로 판정하지 않는다.
 - PR #728은 위 분류를 재현 가능한 읽기 전용 도구와 검사로 고정한 후보다. 현재 bundle은
   한 slug에 여러 intent를 허용하므로 이를 오류로 세지 않고 mapping multiplicity 증거로 따로 낸다.
 - 최신 등록 글의 mapping 보정, reverse update, bundle rebuild와 공개 watch가 남아 있다.
@@ -57,7 +59,8 @@ M-GRAPH next approved node
   바꿨다. 제품의 `DIRTY_TREE` 관문은 유지했고 전체 변이 회귀가 진행 중이다.
 - 현재 배포 경로는 여전히 `LEGACY_BRIEF_V1`이다. `DIRECT_SPEC_V1`은 아직 구현·배포 전이다.
 - PR #727은 `magazine-article-spec/1` schema, 순수 compiler, canonical JSON·SHA-256,
-  31개 계약 검사를 추가한 기반 후보다. producer·delivery 연결과 mode 전환은 아직 하지 않았다.
+  40개 계약 검사를 추가한 기반 후보다. SEASONAL compile 후 verify 양성 반례도 포함한다.
+  producer·delivery 연결과 mode 전환은 아직 하지 않았다.
 
 ### OUTCOME — NOT PROVEN
 
@@ -98,7 +101,7 @@ M-GRAPH next approved node
 
 | 날짜 | M-AUTO | M-GRAPH / OUTCOME |
 |---|---|---|
-| **10/15 오늘** | brief bridge 회귀 완료 → PR·CI·병합·배포. `DIRECT_SPEC_V1` schema·compiler·hash·fixture PR #727을 닫고 STANDARD canary wiring을 병렬 파일 소유권 안에서 구현 | 53편 coverage 분류 PR #728과 PR #726 sleep canary를 닫고 공개 HTML 확인. mapping 보정 입력과 최신 bundle rebuild 후보 생성. event·identity gap을 위 계약으로 고정 |
+| **10/15 오늘** | brief bridge 회귀 완료 → PR·CI·병합·배포. `DIRECT_SPEC_V1` schema·compiler·hash·fixture PR #727을 닫고 STANDARD canary wiring을 병렬 파일 소유권 안에서 구현 | PR #730으로 Production sleep canary를 실제 HTML까지 복구. 53편 coverage 분류 PR #728을 graph gate에 연결하고 닫는다. mapping 보정 입력과 최신 bundle rebuild 후보 생성. event·identity gap을 위 계약으로 고정 |
 | **10/15 오늘 stretch** | direct 정상·형식 실패·provider 실패·재실행 rehearsal과 변이까지 로컬 커밋 | reverse relation·미공개 누출·3+1·kill switch 검증 후 graph bundle PR |
 | **10/16** | 오늘 끝낸 코드의 자연 무인 회차를 운영 증거로만 관측. 결정적 결함 발견을 이 날짜로 미루지 않는다 | canary watch·click/impression 수집 시작 상태 확인. 코드 결함은 즉시 같은 날 수리 |
 | **10/17 이전** | direct canary가 통과하면 default 전환 여부 판정, legacy는 bounded rollback으로만 보존 | canary가 안전하면 다음 cluster 확장. OUTCOME cohort 시계 시작 |
