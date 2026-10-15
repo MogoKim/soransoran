@@ -108,7 +108,7 @@ export const REQUIRED_CONCLUSIONS = ['success']
 export const ALLOWED_FILE_RULES = [
   { re: /^src\/content\/magazine\/articles\.ts$/, slugGroup: 0 },
   { re: /^drafts\/magazine\/topic-queue\.ts$/, slugGroup: 0 },
-  { re: /^drafts\/magazine\/([a-z0-9-]+)\/(draft\.md|article-draft\.ts|brief\.md|review\.ts)$/, slugGroup: 1 },
+  { re: /^drafts\/magazine\/([a-z0-9-]+)\/(draft\.md|article-draft\.ts|brief\.md|review\.ts|article-spec\.json|article-spec\.registered\.json)$/, slugGroup: 1 },
   { re: /^public\/magazine\/([a-z0-9-]+)\/hero\.webp$/, slugGroup: 1 },
 ]
 

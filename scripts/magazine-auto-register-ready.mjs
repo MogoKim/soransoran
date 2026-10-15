@@ -266,7 +266,7 @@ export function scan({ runDate = null, store = {}, draftsDir = DRAFTS_DIR } = {}
   const skipped = []
   const quarantined = []
   for (const slug of pool) {
-    const g = gate(slug, queue)
+    const g = gate(slug, queue, draftsDir)
     if (!g.ok) {
       skipped.push({ slug, riskLevel: g.item?.riskLevel ?? null, blockedBy: g.blockedBy })
       continue
@@ -349,9 +349,12 @@ export function processCandidates({
     // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
     const publishAt = slots.peek()
     // 🔴 자동 레인이다 — alt 는 review.ts 또는 cluster 기본값에서 나온다 (사람 입력 없음)
+    // 🔴 **cand.item 을 queueItem 으로 운반한다** (2026-10-15 wiring).
+    //    legacy queue 는 `directSpecMode` 가 없어 drive 가 바이트 그대로 legacy 분기를 지난다.
+    //    opt-in 이 있을 때만 drive 가 adapter 경로를 탄다.
     const r = driveFn(cand.slug,
       { write, pr: wantPr, publishAt, alt: null, allowOptional: false, autoLane: true },
-      { ...driveDeps, ...(quarantinePath ? { quarantinePath } : {}) })
+      { ...driveDeps, queueItem: cand.item ?? null, ...(quarantinePath ? { quarantinePath } : {}) })
     r.publishAt = publishAt
     // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
     if (CONSUMES_SLOT.has(r.verdict)) { slots.commit(); registered += 1 }
@@ -446,7 +449,9 @@ function expectedFiles(slugs) {
   const files = [...REGISTER_FILES]
   for (const slug of slugs) {
     const p = paths(slug)
-    for (const f of [p.draftMd, p.articleTs]) if (existsSync(f)) files.push(f.replace(`${ROOT}/`, ''))
+    for (const f of [p.draftMd, p.articleTs, p.articleSpec, p.articleSpecRegistered]) {
+      if (existsSync(f)) files.push(f.replace(`${ROOT}/`, ''))
+    }
     if (existsSync(join(ROOT, 'public/magazine', slug, 'hero.webp'))) files.push(`public/magazine/${slug}/hero.webp`)
   }
   return files

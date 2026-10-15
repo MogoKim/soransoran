@@ -19,9 +19,11 @@
  *       catch: 두 번째 호출이 written=true 로 돌아와 identity 가 두 번 적힌다
  *   M6  (delivery-gate) direct wiring 제거 — `deliveryGate` 의 direct 분기가 사라졌다
  *       catch: DIRECT_SPEC_V1 queueItem 도 legacy 경로를 지나 brief.md 를 읽는다 (specHash 운반 끊김)
+ *   M7  (adapter) sidecar 전체 신원 대조 제거 — 같은 specHash 면 다른 graphNodeId 도 멱등으로 인정한다
+ *       catch: 기존 등록 영수증의 graph/spec 신원이 달라지면 fail-closed 해야 한다
  *
  * 🔴 task 가 요구한 세 변이 — **wiring 제거(M6) · unknown-mode 차단 제거(M3) · verify 제거(M2)** —
- *    는 모두 regression 를 catch 한다. 그 밖의 변이(M1·M4·M5)는 adapter 의 결정론·identity·멱등을 추가로 지킨다.
+ *    는 모두 regression 를 catch 한다. 그 밖의 변이(M1·M4·M5·M7)는 adapter 의 결정론·identity·멱등을 추가로 지킨다.
  */
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync, unlinkSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
@@ -37,6 +39,11 @@ const FIXTURE_INPUT = join(ROOT, 'scripts/__fixtures__/magazine/direct-spec/cana
 
 const ADAPTER_ORIGINAL = readFileSync(ADAPTER_PATH, 'utf8')
 const DELIVERY_GATE_ORIGINAL = readFileSync(DELIVERY_GATE_PATH, 'utf8')
+function replaceAfter(source, marker, pattern, replacement) {
+  const at = source.indexOf(marker)
+  if (at === -1) return source
+  return source.slice(0, at) + source.slice(at).replace(pattern, replacement)
+}
 function loadFixture() { return JSON.parse(readFileSync(FIXTURE_INPUT, 'utf8')) }
 const TMPS = []
 function tmp(prefix) {
@@ -171,7 +178,7 @@ async function baseline() {
     pass++; console.log('PASS B6 direct wiring 이 deliveryGate 를 지난다 (specHash 운반)')
   }
 
-  // B7 (M7 짝): compileAndPersistDirectSpec 는 verify 실패를 catch 한다 — 쓰기 전 throw
+  // B7 compileAndPersistDirectSpec 는 verify 실패를 catch 한다 — 쓰기 전 throw
   {
     const d = tmp('ds-base-b7')
     const input = loadFixture()
@@ -182,6 +189,23 @@ async function baseline() {
     assert.ok(threw, 'B7 원본은 verify 실패를 throw 해야 한다')
     assert.equal(threw.code, 'ARTICLE_SPEC_NODE_NOT_APPROVED')
     pass++; console.log('PASS B7 compileAndPersistDirectSpec 가 verify 실패를 catch 한다')
+  }
+
+  // B8 (M7 짝): 같은 specHash 여도 graph/spec 신원이 다르면 멱등으로 인정하지 않는다
+  {
+    const d = tmp('ds-base-b8')
+    const p = adapter.compileAndPersistDirectSpec({ input: loadFixture(), draftsDir: d })
+    adapter.registerDirectSpecSidecar({ spec: p.spec, draftsDir: d, registeredAt: '2026-10-22T10:30:00+09:00' })
+    const receiptPath = join(d, p.spec.identity.slug, ARTICLE_SPEC_REGISTER_LEDGER)
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'))
+    receipt.graphNodeId = 'wrong-graph-node'
+    writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', 'utf8')
+    assert.throws(
+      () => adapter.registerDirectSpecSidecar({ spec: p.spec, draftsDir: d, registeredAt: '2026-10-22T10:30:00+09:00' }),
+      (e) => e.code === 'DIRECT_SPEC_REGISTER_IDENTITY',
+      'B8 원본은 같은 specHash 의 다른 graphNodeId 를 catch 해야 한다',
+    )
+    pass++; console.log('PASS B8 sidecar 전체 identity 대조')
   }
 }
 
@@ -242,7 +266,7 @@ async function runMutations() {
 
   // M4 directSpecRegenPacket 의 instruction 조립에서 specHash 라인을 뺀다
   await mutate('M4', 'identity 운반 제거 — regen 패킷 instruction 에서 specHash 라인이 빠진다', 'adapter',
-    (src) => src.replace(
+    (src) => replaceAfter(src, 'export function directSpecRegenPacket',
       /`원고의 schemaVersion 과 specHash 는 유지합니다: \$\{spec\.schemaVersion\} \/ \$\{spec\.specHash\}\.`,\n/,
       "// mutant M4: specHash 라인 제거\n"),
     async (mod) => {
@@ -270,8 +294,8 @@ async function runMutations() {
 
   // M6 delivery-gate.mjs 안의 direct wiring 블록을 통째로 제거한다 — direct queueItem 도 legacy 경로를 지난다
   await mutate('M6', 'direct wiring 제거 — deliveryGate 가 direct 분기를 지운다', 'deliveryGate',
-    (src) => src.replace(
-      /\n  if \(resolved\.mode === DIRECT_SPEC_MODE\) \{\n    if \(packet\) \{\n[\s\S]*?\n    \}\n  \}\n  const draftPath/,
+    (src) => replaceAfter(src, 'export function deliveryGate',
+      /\n  if \(resolved\.mode === DIRECT_SPEC_MODE\) \{\n[\s\S]*?\n  \}\n  const draftPath/,
       '\n  // mutant M6: direct 분기 제거 — direct queueItem 도 legacy 경로를 지난다\n  const draftPath'),
     async (mod) => {
       const { draftsDir, slug, specHash, quarantinePath } = makeSandbox('ds-m6')
@@ -287,6 +311,24 @@ async function runMutations() {
       }
       assert.notEqual(g.specHash, specHash,
         'M6 catch — direct wiring 가 제거됐는데 specHash 가 운반된다 (불가능)')
+    })
+
+  // M7 sidecar 대조 필드를 specHash 하나로 줄인다 — 같은 해시의 다른 graphNodeId 를 허용한다
+  await mutate('M7', 'sidecar 전체 신원 대조 제거 — 같은 specHash 의 다른 graphNodeId 허용', 'adapter',
+    (src) => src.replace(
+      "const identityFields = ['schema', 'schemaVersion', 'mode', 'specHash', 'slug', 'graphNodeId', 'intentId', 'publishAt']",
+      "const identityFields = ['specHash'] // mutant M7: 나머지 identity 대조 제거"),
+    async (mod) => {
+      const d = tmp('ds-m7')
+      const p = adapter.compileAndPersistDirectSpec({ input: loadFixture(), draftsDir: d })
+      mod.registerDirectSpecSidecar({ spec: p.spec, draftsDir: d, registeredAt: '2026-10-22T10:30:00+09:00' })
+      const receiptPath = join(d, p.spec.identity.slug, ARTICLE_SPEC_REGISTER_LEDGER)
+      const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'))
+      receipt.graphNodeId = 'wrong-graph-node'
+      writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', 'utf8')
+      const r = mod.registerDirectSpecSidecar({ spec: p.spec, draftsDir: d, registeredAt: '2026-10-22T10:30:00+09:00' })
+      assert.equal(r.written, false,
+        'M7 catch — 변이본은 같은 specHash 라는 이유로 다른 graphNodeId 영수증을 멱등으로 인정한다')
     })
 }
 

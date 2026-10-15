@@ -19,6 +19,7 @@ import { judgeLegacyInvalid } from './magazine-lineage-reconcile.mjs'
 import {
   DIRECT_SPEC_MODE,
   directSpecMessageFor,
+  directSpecRegenMessageFor,
   resolveMagazineAutoMode,
 } from './magazine-direct-spec.mjs'
 
@@ -119,11 +120,16 @@ export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null, q
   // 🔴 좁은 canary 라우팅 — queueItem 이 명시적으로 DIRECT_SPEC_V1 로 opt-in 했을 때만 direct.
   //    - queueItem 미지정(기존 호출자) → legacy (byte-identical)
   //    - 모르는 directSpecMode → null (legacy provider 로도 보내지 않는다; deliveryGate 에서 fail-closed 로 번역)
-  //    - direct + packet → canary 는 first-send 만 지원 (regen 은 legacy 로 복귀)
+  //    - direct 는 first-send 와 regen 모두 adapter 가 조립한다 (brief.md 미참조 · schemaVersion/specHash 운반)
   const resolved = resolveMagazineAutoMode(queueItem)
   if (!resolved.ok) return null
   if (resolved.mode === DIRECT_SPEC_MODE) {
-    if (packet) return null
+    if (packet) {
+      const draftPath = join(draftsDir, slug, 'draft.md')
+      const currentDraft = existsSync(draftPath) ? readFileSync(draftPath, 'utf8') : null
+      const r = directSpecRegenMessageFor({ slug, draftsDir, packet, currentDraft })
+      return r.ok ? r.message : null
+    }
     const r = directSpecMessageFor({ slug, draftsDir })
     return r.ok ? r.message : null
   }
@@ -236,12 +242,22 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
     return { ok: false, code: resolved.code, why: resolved.why, message: null, messageFingerprint: null }
   }
   if (resolved.mode === DIRECT_SPEC_MODE) {
+    // 🔴 direct first-send 와 regen 모두 adapter 가 조립한다 — brief.md / review.ts 미참조.
+    //    direct regen 은 현재 원고(draft.md) 가 있어야 "실패 항목만 고친다" 를 지시할 수 있다.
+    //    없으면 fail-closed (REGEN_SOURCE_DRAFT_MISSING) — provider/Chrome/예약/쓰기 0.
+    let spec
     if (packet) {
-      return { ok: false, code: 'DIRECT_SPEC_REGEN_UNSUPPORTED',
-        why: 'DIRECT_SPEC_V1 canary 는 first-send 만 지원한다 — regen 은 legacy 경로로 복귀',
-        message: null, messageFingerprint: null }
+      const draftPath = join(draftsDir, slug, 'draft.md')
+      if (!existsSync(draftPath)) {
+        return { ok: false, code: 'REGEN_SOURCE_DRAFT_MISSING',
+          why: `재생성 기준 원고가 없다: ${draftPath}`,
+          message: null, messageFingerprint: null }
+      }
+      const currentDraft = readFileSync(draftPath, 'utf8')
+      spec = directSpecRegenMessageFor({ slug, draftsDir, packet, currentDraft })
+    } else {
+      spec = directSpecMessageFor({ slug, draftsDir })
     }
-    const spec = directSpecMessageFor({ slug, draftsDir })
     if (!spec.ok) {
       return { ok: false, code: spec.code, why: spec.why, message: null, messageFingerprint: null }
     }

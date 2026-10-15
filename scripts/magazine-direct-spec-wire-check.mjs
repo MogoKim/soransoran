@@ -33,7 +33,13 @@
  *   W24  모르는 directSpecMode — deliveryGate 가 legacy provider 로도 보내지 않는다 (ok:false, 메시지·지문 0)
  *   W25  direct mode + article-spec.json 없음 — deliveryGate 가 DIRECT_SPEC_MISSING 으로 fail-closed (전송·예약 0)
  *   W26  direct mode + 손상 spec — deliveryGate 가 ARTICLE_SPEC_HASH 로 fail-closed (전송·예약 0)
- *   W27  direct mode + regen packet — fail-closed (DIRECT_SPEC_REGEN_UNSUPPORTED) — canary 는 first-send 만
+ *   W27  direct mode + regen packet — 같은 spec identity 만 허용하고 다른 identity 는 차단
+ *   W28  auto-lane gate — direct 는 brief/review 없이 통과, legacy 는 기존대로 차단
+ *   W29  run target — legacy runId 불변, direct mode 신원과 queueItem 운반
+ *   W30  batch plan — direct spec 누락은 probe·Chrome 0
+ *   W31  merge gate — 등록 slug의 spec/sidecar만 허용
+ *   W32  auto-register — 성공한 direct 등록에만 spec sidecar 영수증 기록
+ *   W33  auto-register — sidecar identity 충돌 시 BLOCKED·기존 바이트 보존
  */
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
@@ -67,6 +73,7 @@ import {
   directSpecIdentityHandoff,
   directSpecMessageFor,
   directSpecRegenPacket,
+  directSpecRegenMessageFor,
   readDirectSpec,
   registerDirectSpecSidecar,
   resolveMagazineAutoMode,
@@ -74,6 +81,11 @@ import {
 import { deliveryGate, plannedMessageFor } from './lib/magazine-delivery-gate.mjs'
 import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
+import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
+import { fetchTargets, runIdOf } from './lib/magazine-run-targets.mjs'
+import { judgeFile } from './lib/magazine-merge-gate.mjs'
+import { fetchBatch } from './magazine-webui-runner.mjs'
+import { drive } from './magazine-auto-register.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -472,16 +484,151 @@ check('W26 direct mode + 손상 spec — ARTICLE_SPEC_HASH 로 fail-closed (veri
   assert.equal(g.message, null)
 })
 
-check('W27 direct mode + regen packet — fail-closed (canary 는 first-send 만)', () => {
-  const { draftsDir, slug, quarantinePath } = makeDirectAndLegacySandbox()
+check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 identity 차단', () => {
+  const { draftsDir, slug, quarantinePath, specHash } = makeDirectAndLegacySandbox()
+  const spec = readDirectSpec({ slug, draftsDir }).spec
+  writeFileSync(join(draftsDir, slug, 'draft.md'), '---\ntitle: t\n---\n\n## 본문\n\n[CTA] /community/free | t | t\n', 'utf8')
+  const directPacket = directSpecRegenPacket({ spec, failures: [{ code: 'X', label: 't', sentence: '' }] })
+  const packet = {
+    schemaVersion: 'regen-packet/3', slug, profile: 'STANDARD', attempt: 1,
+    failures: [{ code: 'X', label: 't', sentence: '' }], instruction: directPacket.instruction,
+    specHash: directPacket.specHash, articleSpecSchemaVersion: directPacket.schemaVersion,
+  }
   const g = deliveryGate({ slug, draftsDir, quarantinePath,
     queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE },
-    packet: { schemaVersion: 'regen-packet/3', slug, profile: 'STANDARD', attempt: 1,
-      failures: [{ code: 'X', label: 't', sentence: '' }],
-      instruction: 'ignored' } })
-  assert.equal(g.ok, false)
-  assert.equal(g.code, 'DIRECT_SPEC_REGEN_UNSUPPORTED')
-  assert.equal(g.message, null)
+    packet })
+  assert.equal(g.ok, true, `${g.code ?? ''}: ${g.why ?? ''}`)
+  assert.equal(g.specHash, specHash)
+  assert.ok(g.message.includes(specHash))
+
+  const drift = directSpecRegenMessageFor({ slug, draftsDir,
+    packet: { ...packet, specHash: `sha256:${'0'.repeat(64)}` }, currentDraft: 'draft' })
+  assert.equal(drift.ok, false)
+  assert.equal(drift.code, 'DIRECT_SPEC_REGEN_IDENTITY')
+})
+
+check('W28 auto-lane gate — direct 는 brief/review 없이 통과, legacy 는 차단', () => {
+  const input = loadFixture()
+  const d = tmp('ds-w28')
+  compileAndPersistDirectSpec({ input, draftsDir: d })
+  const direct = autoLaneGate(input.queueItem.slug, [input.queueItem], d)
+  assert.equal(direct.ok, true, JSON.stringify(direct.blockedBy))
+  const legacyItem = { ...input.queueItem }
+  delete legacyItem.directSpecMode
+  const legacy = autoLaneGate(legacyItem.slug, [legacyItem], d)
+  assert.equal(legacy.ok, false)
+  assert.ok(legacy.blockedBy.some((x) => x.code === 'BRIEF_MISSING'))
+  assert.ok(legacy.blockedBy.some((x) => x.code === 'REVIEW_MISSING'))
+})
+
+check('W29 run target — legacy runId 불변, direct mode 신원·queueItem 운반', () => {
+  const legacyString = runIdOf({ status: 'COMPLETED', selected: ['a'], reusable: [] })
+  const legacyObject = runIdOf({ status: 'COMPLETED', selected: [{ slug: 'a' }], reusable: [] })
+  const direct = runIdOf({ status: 'COMPLETED', selected: [{ slug: 'a', directSpecMode: DIRECT_SPEC_MODE }], reusable: [] })
+  assert.equal(legacyString, legacyObject)
+  assert.notEqual(direct, legacyString)
+  const targets = [{ slug: 'a', queueItem: { slug: 'a', directSpecMode: DIRECT_SPEC_MODE },
+    material: { stage: 'NEEDS_BRIEF', draftMd: false, articleSpec: false } }]
+  assert.equal(fetchTargets(targets).length, 1, 'spec 누락 direct도 gate에 도달해 fail-closed 해야 한다')
+})
+
+await checkAsync('W30 batch plan — direct spec 누락은 probe·Chrome 0', async () => {
+  const input = loadFixture()
+  const d = tmp('ds-w30')
+  const date = '2026-10-22'
+  const runDir = join(d, '_runs', date)
+  mkdirSync(runDir, { recursive: true })
+  writeFileSync(join(runDir, 'run.json'), `${JSON.stringify({
+    status: 'COMPLETED', inventoryDays: 0, selected: [input.queueItem], reusable: [],
+  }, null, 2)}\n`, 'utf8')
+  const quarantinePath = join(d, 'quarantine.json')
+  saveQuarantine({}, quarantinePath)
+  let probes = 0
+  const out = await fetchBatch({ date, dryRun: false, draftsDir: d, quarantinePath,
+    probeFn: async () => { probes += 1; throw new Error('probe 호출 금지') } })
+  assert.equal(probes, 0)
+  assert.equal(out.sentTotal, 0)
+  assert.equal(out.results[0]?.reason, 'DIRECT_SPEC_MISSING')
+})
+
+check('W31 merge gate — 등록 slug의 spec/sidecar만 허용', () => {
+  const slugs = new Set(['canary-direct-spec-01'])
+  assert.equal(judgeFile('drafts/magazine/canary-direct-spec-01/article-spec.json', slugs).ok, true)
+  assert.equal(judgeFile('drafts/magazine/canary-direct-spec-01/article-spec.registered.json', slugs).ok, true)
+  assert.equal(judgeFile('drafts/magazine/foreign/article-spec.json', slugs).code, 'FOREIGN_SLUG_FILE')
+})
+
+function directDriveSandbox(prefix) {
+  const input = loadFixture()
+  const d = tmp(prefix)
+  const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
+  const slug = input.queueItem.slug
+  const dir = join(d, slug)
+  writeFileSync(join(dir, 'draft.md'), [
+    '---', 'title: 잠들기 전 밤 마음을 돌보는 방법',
+    'description: 잠들기 전 반복되는 생각을 줄이고 편안한 밤 루틴을 만드는 방법을 살펴봅니다.',
+    'cluster: sleep', 'medical: false', '---', '',
+    '하루를 마치고 불을 끈 뒤에도 생각이 이어지는 밤이 있습니다.', '',
+    '## 오늘 밤에 할 수 있는 일', '',
+    '잠들기 전 내일 할 일을 짧게 적고 휴대전화를 멀리 두어 보세요.', '',
+    '[CTA] /community/free | 밤 이야기를 나눠요 | 오늘 밤 떠오른 생각을 남겨 주세요', '',
+  ].join('\n'), 'utf8')
+  writeFileSync(join(dir, 'article-draft.ts'), 'export const article = {}\n', 'utf8')
+  const quarantinePath = join(d, 'quarantine.json')
+  saveQuarantine({}, quarantinePath)
+  const heroFile = join(d, 'hero.webp')
+  const fakeRun = (cmd) => {
+    if (String(cmd).endsWith('magazine-batch-qa.mjs')) {
+      return { code: 0, json: { results: [{ slug, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [] }] } }
+    }
+    if (String(cmd).endsWith('magazine-register.mjs')) return { code: 0, json: { verdict: 'READY' } }
+    return { code: 0, stdout: '', stderr: '' }
+  }
+  const deps = {
+    draftsDir: d,
+    quarantinePath,
+    loadQueue: () => [input.queueItem],
+    queueItem: input.queueItem,
+    progress: () => ({ hasDraftMd: true }),
+    heroFilePath: () => heroFile,
+    run: fakeRun,
+    now: Date.parse('2026-10-15T03:00:00Z'),
+  }
+  return { d, input, persisted, slug, dir, deps }
+}
+
+check('W32 auto-register — 성공한 direct 등록에 spec sidecar 영수증 기록', () => {
+  const s = directDriveSandbox('ds-w32')
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'DONE', JSON.stringify(r.blockedBy))
+  assert.equal(r.mode, DIRECT_SPEC_MODE)
+  assert.equal(r.specHash, s.persisted.specHash)
+  const receiptPath = join(s.dir, ARTICLE_SPEC_REGISTER_LEDGER)
+  assert.equal(existsSync(receiptPath), true)
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'))
+  assert.equal(receipt.specHash, s.persisted.specHash)
+  assert.equal(receipt.registeredAt, '2026-10-15T12:00:00+09:00')
+})
+
+check('W33 auto-register — sidecar identity 충돌 시 BLOCKED·기존 바이트 보존', () => {
+  const s = directDriveSandbox('ds-w33')
+  const receiptPath = join(s.dir, ARTICLE_SPEC_REGISTER_LEDGER)
+  const before = `${JSON.stringify({
+    schema: 'direct-spec-register/1',
+    schemaVersion: s.persisted.spec.schemaVersion,
+    mode: s.persisted.spec.mode,
+    specHash: s.persisted.specHash,
+    slug: s.slug,
+    graphNodeId: 'wrong-graph-node',
+    intentId: s.persisted.spec.identity.intentId,
+    publishAt: s.persisted.spec.publication.publishAt,
+    registeredAt: '2026-10-15T12:00:00+09:00',
+  }, null, 2)}\n`
+  writeFileSync(receiptPath, before, 'utf8')
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'BLOCKED')
+  assert.ok(r.blockedBy.some((x) => x.code === 'DIRECT_SPEC_REGISTER_IDENTITY'))
+  assert.equal(readFileSync(receiptPath, 'utf8'), before)
 })
 
 // ── W21 canary slug 는 운영 queue · articles.ts 에 없다 ────

@@ -31,12 +31,19 @@ import { RUN_SCHEMA_VERSION } from './magazine-run-file.mjs'
  *    목록과 상태가 같으면 같은 회차다. 지문으로 굳혀 결과 파일에 같이 적는다.
  */
 export function runIdOf(run) {
-  const slugs = (list) => (Array.isArray(list) ? list : [])
-    .map((x) => (typeof x === 'string' ? x : x?.slug)).filter(Boolean)
+  const identities = (list) => (Array.isArray(list) ? list : [])
+    .map((x) => {
+      const slug = typeof x === 'string' ? x : x?.slug
+      if (!slug) return null
+      // legacy 회차는 예전 runId 바이트를 보존한다. 명시 mode가 있을 때만 identity를 넓힌다.
+      return typeof x === 'object' && x?.directSpecMode
+        ? { slug, directSpecMode: x.directSpecMode }
+        : slug
+    }).filter(Boolean)
   const body = JSON.stringify({
     status: run?.status ?? null,
-    selected: slugs(run?.selected),
-    reusable: slugs(run?.reusable),
+    selected: identities(run?.selected),
+    reusable: identities(run?.reusable),
   })
   return createHash('sha256').update(body).digest('hex').slice(0, 16)
 }
@@ -48,6 +55,10 @@ export function materialState(dir) {
   const review = has('review.ts')
   const draftMd = has('draft.md')
   const articleTs = has('article-draft.ts')
+  // 🔴 DIRECT_SPEC_V1 재료 — article-spec.json 이 있으면 direct 경로가 brief/review 없이도 원고 요청을 만들 수 있다.
+  //    legacy stage 판정은 아래 그대로다 (브리프/리뷰 기준). stage DIRECT_NEEDS_DRAFT 는 **별도 축**이므로 legacy
+  //    소비자(`fetchTargets`·`registerTargets`)에 영향이 없다 — direct 소비자(webui-runner)가 이 플래그를 함께 본다.
+  const articleSpec = has('article-spec.json')
   /**
    * 🔴 단계를 **뜻으로** 나눈다.
    *    NEEDS_BRIEF   재료가 없다 — brief 부터 만들어야 한다
@@ -59,7 +70,7 @@ export function materialState(dir) {
   if (brief && review && draftMd && articleTs) stage = 'READY'
   else if (brief && review && draftMd) stage = 'NEEDS_CONVERT'
   else if (brief && review) stage = 'NEEDS_DRAFT'
-  return { brief, review, draftMd, articleTs, stage }
+  return { brief, review, draftMd, articleTs, articleSpec, stage }
 }
 
 /**
@@ -89,6 +100,18 @@ export function readRunTargets({ draftsDir, date, exists = existsSync, read = re
   }
 
   const slugOf = (x) => (typeof x === 'string' ? x : x?.slug)
+  /**
+   * 🔴 **row 가 객체면 slug 외의 필드를 queueItem 으로 운반한다** (2026-10-15 · DIRECT_SPEC_V1 wiring).
+   *    legacy row 가 문자열이거나 추가 필드가 없으면 `null` — 그래야 소비자(deliveryGate · fetchSlug · drive)가
+   *    `queueItem` 미지정으로 보고 **지금까지와 같은 바이트**로 legacy 분기를 지난다.
+   *    producer run.json 이 아직 `directSpecMode` 를 적지 않더라도 호환이 깨지지 않는다.
+   */
+  const queueItemOf = (row) => {
+    if (!row || typeof row !== 'string' && typeof row !== 'object') return null
+    if (typeof row === 'string') return null
+    if (Array.isArray(row)) return null
+    return row
+  }
   const seen = new Set()
   const targets = []
   /**
@@ -100,7 +123,7 @@ export function readRunTargets({ draftsDir, date, exists = existsSync, read = re
       const slug = slugOf(row)
       if (!slug || seen.has(slug)) continue
       seen.add(slug)
-      targets.push({ slug, origin, material: materialState(join(draftsDir, slug)) })
+      targets.push({ slug, origin, material: materialState(join(draftsDir, slug)), queueItem: queueItemOf(row) })
     }
   }
   return { ok: true, targets, run, runId: runIdOf(run),
@@ -118,9 +141,17 @@ export function readRunTargets({ draftsDir, date, exists = existsSync, read = re
  *    소비자는 조건을 다시 쓰지 않고 이 두 함수만 쓴다.
  */
 export function fetchTargets(targets) {
-  return targets.filter((t) => t.material.stage === 'NEEDS_DRAFT')
+  return targets.filter((t) => {
+    const mode = t.queueItem?.directSpecMode
+    if (mode && mode !== 'LEGACY_BRIEF_V1') return !t.material.draftMd
+    return t.material.stage === 'NEEDS_DRAFT'
+  })
 }
 
 export function registerTargets(targets) {
-  return targets.filter((t) => t.material.stage === 'NEEDS_CONVERT' || t.material.stage === 'READY')
+  return targets.filter((t) => {
+    const mode = t.queueItem?.directSpecMode
+    if (mode && mode !== 'LEGACY_BRIEF_V1') return t.material.draftMd
+    return t.material.stage === 'NEEDS_CONVERT' || t.material.stage === 'READY'
+  })
 }

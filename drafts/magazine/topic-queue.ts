@@ -106,6 +106,8 @@ export type TopicQueueItem = {
   intentId?: string
   /** 이 행을 만든 G8 manifest 해시. 그래프 장부(m3-state.jsonl) ADMITTED 행과 같은 값이어야 한다 */
   g8ManifestHash?: string
+  /** 제작 경로 opt-in. 없으면 기존 LEGACY_BRIEF_V1 경로다. */
+  directSpecMode?: 'LEGACY_BRIEF_V1' | 'DIRECT_SPEC_V1'
 }
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [

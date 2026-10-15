@@ -19,24 +19,27 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
+import { DIRECT_SPEC_MODE, readDirectSpec, resolveMagazineAutoMode } from './magazine-direct-spec.mjs'
 
 // 🔴 LANE_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 레인을 가르지 않는다
 
 /** 단계 순서 — 리포트와 진행 판단이 같은 이름을 쓴다 */
 export const STAGES = ['gate', 'draft', 'article', 'qa', 'batch', 'hero', 'register', 'pr']
 
-export function draftDir(slug) {
-  return join(DRAFTS_DIR, slug)
+export function draftDir(slug, draftsDir = DRAFTS_DIR) {
+  return join(draftsDir, slug)
 }
 
-export function paths(slug) {
-  const dir = draftDir(slug)
+export function paths(slug, draftsDir = DRAFTS_DIR) {
+  const dir = draftDir(slug, draftsDir)
   return {
     dir,
     brief: join(dir, 'brief.md'),
     review: join(dir, 'review.ts'),
     draftMd: join(dir, 'draft.md'),
     articleTs: join(dir, 'article-draft.ts'),
+    articleSpec: join(dir, 'article-spec.json'),
+    articleSpecRegistered: join(dir, 'article-spec.registered.json'),
   }
 }
 
@@ -49,7 +52,7 @@ export function paths(slug) {
  *                                  못 정하면 멈춘다. 정해지면 태운다.
  *   ④ brief.md 와 review.ts 가 있다 — 없으면 회수도 대조도 못 한다
  */
-export function gate(slug, queue) {
+export function gate(slug, queue, draftsDir = DRAFTS_DIR) {
   const item = queue.find((q) => q.slug === slug) ?? null
   const blockedBy = []
   const block = (code, message) => blockedBy.push({ code, message })
@@ -68,9 +71,17 @@ export function gate(slug, queue) {
   }
   // 🔴 autoEligible 은 호환 필드로만 읽는다 — 자동 진행을 막지 않는다
 
-  const p = paths(slug)
-  if (!existsSync(p.brief)) block('BRIEF_MISSING', 'brief.md 가 없다 — brief-auto 가 먼저 돌아야 한다')
-  if (!existsSync(p.review)) block('REVIEW_MISSING', 'review.ts 가 없다 — 대조할 riskSentences 가 없다')
+  const p = paths(slug, draftsDir)
+  const mode = resolveMagazineAutoMode(item)
+  if (!mode.ok) {
+    block(mode.code, mode.why)
+  } else if (mode.mode === DIRECT_SPEC_MODE) {
+    const spec = readDirectSpec({ slug, draftsDir })
+    if (!spec.ok) block(spec.code, spec.why)
+  } else {
+    if (!existsSync(p.brief)) block('BRIEF_MISSING', 'brief.md 가 없다 — brief-auto 가 먼저 돌아야 한다')
+    if (!existsSync(p.review)) block('REVIEW_MISSING', 'review.ts 가 없다 — 대조할 riskSentences 가 없다')
+  }
 
   return { ok: blockedBy.length === 0, item, blockedBy }
 }

@@ -1,16 +1,12 @@
 /**
  * DIRECT_SPEC_V1 adapter — 매거진 자동 공급의 좁은 canary.
  *
- * 🔴 **이 adapter 는 운영 호출체인에 아직 연결돼 있지 않다.**
- *    `scripts/magazine-{producer,webui,auto-register,brief-auto,rehearsal}.mjs` 어디도
- *    이 파일을 import 하지 않는다. 아래 adapter 와 두 검사(`check:magazine-direct-spec`,
- *    `check:magazine-direct-spec-mutation`)만 쓴다.
- *
- *    운영 접근 0 의 근거는:
- *      · 운영 topic-queue 에 `directSpecMode === 'DIRECT_SPEC_V1'` 인 행이 없다
- *      · 운영 scripts 어디도 이 adapter 를 import 하지 않는다 (grep 로 확인한다)
- *      · 이 adapter 는 Chrome · CDP · ChatGPT 세션 · HTTP · DB · launchd 를 쓰지 않는다
- *      · 쓰기는 호출자가 넘긴 `draftsDir` 안에만 일어나고, 검사는 임시 디렉터리를 쓴다
+ * 🔴 **운영 호출체인에 좁게 연결돼 있다** (2026-10-15 · narrow STANDARD canary).
+ *    - `deliveryGate` 가 `queueItem.directSpecMode === 'DIRECT_SPEC_V1'` 일 때만 이 adapter 를 쓴다.
+ *    - 운영 `topic-queue.ts` 에는 아직 opt-in 행이 없다 — 그 사이에 실제 호출자가 변해도 legacy 는 바이트 그대로다.
+ *    - 모르는 directSpecMode 는 fail-closed (`UNKNOWN_MAGAZINE_AUTO_MODE`). legacy provider 로 묻어 넘기지 않는다.
+ *    - direct 는 brief.md / review.ts 를 읽지 않는다. 쓰기는 호출자가 넘긴 `draftsDir` 안에만 일어난다.
+ *    - adapter 는 Chrome · CDP · ChatGPT 세션 · HTTP · DB · launchd 를 쓰지 않는다 (W19).
  *
  * 🔴 **spec identity / hash 는 운영 함수와 공유한다.**
  *    `compileArticleSpec` · `verifyArticleSpec` · `buildManuscriptMessage` ·
@@ -61,6 +57,40 @@ export const DIRECT_SPEC_PROMPT_TEXT = [
   '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
   DIRECT_SPEC_PROMPT_MARKER,
 ].join(' ')
+
+/**
+ * 🔴 **direct 재생성 prompt** (2026-10-15 · regen wiring).
+ *    DIRECT_SPEC_V1 QA 실패를 교정할 때 쓴다. legacy regen prompt(`regenerationPromptText`)와
+ *    글자가 겹치지 않도록 schemaVersion · specHash · DIRECT_SPEC_V1 식별 marker 를 글자로 담는다.
+ *    legacy 지문 공간을 침범하지 않는다 (W10 지문 분리).
+ */
+export function directSpecRegenPromptText({ spec, packet, currentDraft = null }) {
+  if (!spec || !spec.specHash) fail('DIRECT_SPEC_INVALID', 'spec/specHash 가 없다')
+  if (!packet || typeof packet !== 'object') fail('DIRECT_SPEC_INVALID', 'regen packet 이 없다')
+  const draft = String(currentDraft ?? '').trim()
+  const lines = [
+    `[DIRECT_SPEC_V1] 아래 BRIEF 는 ${spec.schemaVersion} 계약이다. BRIEF 와 직전 원고를 바꾸지 말고 자동 검사 실패 항목만 수정하세요.`,
+    `원고의 schemaVersion 과 specHash 는 유지합니다: ${spec.schemaVersion} / ${spec.specHash}.`,
+    '설명·인사·요약·후기를 붙이지 말고 수정된 원고 전체만 출력합니다.',
+    '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
+    'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+    '실패하지 않은 frontmatter 값·문단·소제목·문장·순서·CTA 는 유지하고 새 주장을 추가하지 마세요.',
+    '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
+    DIRECT_SPEC_PROMPT_MARKER,
+    '',
+    '--- 직전 원고가 자동 검사에 걸렸습니다 ---',
+    String(packet.instruction ?? ''),
+  ]
+  if (draft) {
+    lines.push(
+      '',
+      '===== 현재 원고 시작 (이 원고를 기준으로 실패 항목만 고친다) =====',
+      draft,
+      '===== 현재 원고 끝 =====',
+    )
+  }
+  return lines.join('\n')
+}
 
 /**
  * 🔴 **운영 접근 0 보장 — adapter 는 사이드 이펙트 심볼을 import 하지 않는다.**
@@ -322,6 +352,44 @@ export function directSpecMessageFor({ slug, draftsDir, promptText = DIRECT_SPEC
 }
 
 /**
+ * direct QA 재생성 전송 message 를 조립한다. first-send 와 **다른** prompt 를 쓰므로 지문이 분리된다.
+ *
+ * - spec 이 없거나 손상이면 fail-closed (verifyArticleSpec 결과 그대로)
+ * - 지문 = `sha256(message)` 이고 message 가 spec identity + packet instruction 을 담는다
+ * - legacy brief.md 를 읽지 않는다
+ *
+ * @returns {{ok:true, message:string, messageFingerprint:string, specHash:string, schemaVersion:string, mode:string}
+ *          |{ok:false, code:string, why:string}}
+ */
+export function directSpecRegenMessageFor({ slug, draftsDir, packet, currentDraft = null }) {
+  const r = readDirectSpec({ slug, draftsDir })
+  if (!r.ok) return r
+  if (!packet || typeof packet !== 'object') {
+    return { ok: false, code: 'DIRECT_SPEC_INVALID', why: 'regen packet 이 없다' }
+  }
+  const packetSchemaVersion = packet.articleSpecSchemaVersion ?? packet.schemaVersion
+  if (packet.specHash !== r.spec.specHash || packetSchemaVersion !== r.spec.schemaVersion) {
+    return {
+      ok: false,
+      code: 'DIRECT_SPEC_REGEN_IDENTITY',
+      why: `regen packet 과 현재 spec 신원이 다르다 (packet=${packet.specHash ?? '-'} / ${packetSchemaVersion ?? '-'} · spec=${r.spec.specHash} / ${r.spec.schemaVersion})`,
+    }
+  }
+  const briefText = directSpecBriefText(r.spec)
+  const promptText = directSpecRegenPromptText({ spec: r.spec, packet, currentDraft })
+  const message = buildManuscriptMessage({ promptText, briefText })
+  const messageFingerprint = deliveryFingerprintOf(message)
+  return {
+    ok: true,
+    message,
+    messageFingerprint,
+    specHash: r.spec.specHash,
+    schemaVersion: r.spec.schemaVersion,
+    mode: r.spec.mode,
+  }
+}
+
+/**
  * direct 전송 관문 — 운영 `deliveryGate` 와 **같은 모양**으로 돌려준다.
  * `readLedger` 를 주입하면 fake 장부로 변이 시험도 돌릴 수 있다.
  */
@@ -403,9 +471,13 @@ export function registerDirectSpecSidecar({ spec, draftsDir, registeredAt }) {
     let prev
     try { prev = JSON.parse(readFileSync(path, 'utf8')) }
     catch (e) { fail('DIRECT_SPEC_REGISTER', `등록 장부를 읽지 못했다: ${e.message}`) }
-    if (prev?.specHash && prev.specHash !== spec.specHash) {
+    const identityFields = ['schema', 'schemaVersion', 'mode', 'specHash', 'slug', 'graphNodeId', 'intentId', 'publishAt']
+    const mismatched = identityFields.filter((field) => prev?.[field] !== record[field])
+    const registeredAtValid = typeof prev?.registeredAt === 'string'
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+09:00$/.test(prev.registeredAt)
+    if (mismatched.length || !registeredAtValid) {
       fail('DIRECT_SPEC_REGISTER_IDENTITY',
-        `이 slug 는 이미 다른 specHash 로 등록돼 있다 (prev=${prev.specHash} · now=${spec.specHash})`)
+        `기존 등록 장부의 신원이 현재 spec 과 다르다 (${mismatched.join(', ') || 'registeredAt'})`)
     }
     return { written: false, path, specHash: spec.specHash, record: prev }
   }
