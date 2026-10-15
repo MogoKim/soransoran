@@ -186,6 +186,8 @@
     "check:magazine-input-repair-mutation": "node scripts/magazine-input-repair-mutation.mjs",
     "magazine:rehearsal": "node scripts/magazine-rehearsal-check.mjs",
     "check:magazine-rehearsal-mutation": "node scripts/magazine-rehearsal-mutation.mjs",
+    "check:magazine-direct-spec": "node scripts/magazine-direct-spec-wire-check.mjs",
+    "check:magazine-direct-spec-mutation": "node scripts/magazine-direct-spec-mutation.mjs",
     "check:magazine-auto-recovery-mutation": "node scripts/magazine-auto-recovery-mutation.mjs",
     "check:magazine-input-repair-fixture-mutation": "node scripts/magazine-input-repair-fixture-mutation.mjs",
     "check:magazine-auto-merge-recovery-mutation": "node scripts/magazine-auto-merge-recovery-mutation.mjs",
