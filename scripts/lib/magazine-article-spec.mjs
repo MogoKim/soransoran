@@ -318,7 +318,10 @@ export function verifyArticleSpec(spec) {
     required(spec.navigation?.community?.label, 'navigation.community.label')
     const checkedHero = heroOf(spec.hero, { imageMode: spec.hero?.mode })
     if (spec.hero.required !== checkedHero.required) fail('ARTICLE_SPEC_HERO', 'hero.required 가 mode와 다르다')
-    publicationOf(spec.publication, { contentType })
+    publicationOf(spec.publication, {
+      contentType,
+      publishWindow: spec.publication.publishWindow,
+    })
   } catch (error) {
     return { ok: false, code: error?.code ?? 'ARTICLE_SPEC_SHAPE', why: error?.message ?? String(error) }
   }

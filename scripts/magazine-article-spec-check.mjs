@@ -143,6 +143,13 @@ check('SEASONAL 예약이 window 밖이면 차단한다', () => throws('ARTICLE_
   x.queueItem.contentType = 'SEASONAL'
   x.queueItem.publishWindow = { after: '2026-11-01', before: '2026-11-30' }
 }))
+check('유효한 SEASONAL spec은 compile 뒤 verify도 통과한다', () => {
+  const input = fixture()
+  input.queueItem.contentType = 'SEASONAL'
+  input.queueItem.publishWindow = { after: '2026-10-01', before: '2026-10-31' }
+  const seasonal = compileArticleSpec(input)
+  assert.equal(verifyArticleSpec(seasonal).ok, true)
+})
 check('publishWindow의 역전 날짜는 차단한다', () => throws('ARTICLE_SPEC_PUBLICATION', (x) => {
   x.queueItem.contentType = 'SEASONAL'
   x.queueItem.publishWindow = { after: '2026-10-31', before: '2026-10-01' }
