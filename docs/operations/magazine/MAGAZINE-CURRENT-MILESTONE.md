@@ -35,8 +35,11 @@ M-GRAPH next approved node
 
 ### M-GRAPH — NOT ACTIVE
 
-- 연구 자산과 canonical graph는 존재한다.
-- 운영 graph control은 아직 전체 공개 구조를 구동하지 않는다.
+- 2026-10-15 현재 제품 graph 검사는 275/275다. 현재 bundle은 2026-09-23 판으로
+  167 intents · 339 edges · 82 mappings다.
+- 공개 글은 52편이지만 전체 cluster를 가정해도 현재 bundle이 graph 결과를 내는 글은 18편이다.
+  `family`만 열면 4편 중 2편만 graph 결과를 쓴다.
+- 운영 `control.ts`는 `enabled: false`, `enabledClusters: []`라 실제 공개 화면은 전부 fallback이다.
 - 최신 등록 글과 intent mapping, reverse update, bundle rebuild, 공개 3+1 링크와 watch가 남아 있다.
 
 ### M-AUTO — PARTIAL
@@ -106,7 +109,10 @@ M-GRAPH next approved node
 
 ## 7. 다음 즉시 작업
 
+0. GitHub Actions가 결제 문제로 job 시작 전 차단된 상태를 해소한다. 해소 전에는 새 PR의 Linux CI와
+   병합 완료를 주장하지 않는다. 로컬 개발·검증은 계속한다.
 1. 현재 Claude 회귀를 끝까지 받고 S8/S8B 수리를 `4adb4c2b`의 자식 커밋으로 검증한다.
 2. 별도 M-AUTO worktree에서 ArticleSpec schema와 legacy/direct 경계를 구현한다.
-3. 별도 M-GRAPH worktree에서 최신 mapping 차이와 canary 후보를 산출한다.
+3. 별도 M-GRAPH worktree에서 공개 52편과 82 mappings의 차이, graph 적용 18/52의 누락 사유,
+   canary 후보를 산출한다.
 4. 세 작업의 파일 교집합을 0으로 유지하고, 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고한다.
