@@ -1,5 +1,9 @@
 import RelatedMagazineLink from '@/components/features/RelatedMagazineLink'
-import { SLOT_LABEL, type RelatedMagazineItem } from '@/lib/magazine-graph'
+import {
+  SLOT_LABEL,
+  type RelatedMagazineItem,
+  type ResolvedRelatedMagazine,
+} from '@/lib/magazine-graph'
 
 /**
  * 🔴 그림을 싣지 않는다 — 연관 글은 같은 분류에서 오고, 그림이 없는 글이 섞인다.
@@ -17,13 +21,20 @@ import { SLOT_LABEL, type RelatedMagazineItem } from '@/lib/magazine-graph'
 export default function RelatedMagazineList({
   items,
   fromSlug,
+  resolution,
 }: {
   items: RelatedMagazineItem[]
   fromSlug: string
+  resolution: Pick<ResolvedRelatedMagazine, 'source' | 'reason' | 'graphVersion'>
 }) {
   if (items.length === 0) return null
   return (
-    <section className="mt-8 border-t border-subtle pt-6">
+    <section
+      className="mt-8 border-t border-subtle pt-6"
+      data-mgraph-source={resolution.source}
+      data-mgraph-reason={resolution.reason ?? 'none'}
+      data-mgraph-version={resolution.graphVersion}
+    >
       <h2 className="text-lg font-bold text-content-primary">함께 읽어보세요</h2>
       <ul className="mt-2 flex flex-col [&>li+li]:border-t [&>li+li]:border-subtle">
         {items.map(({ article, relationType, surface, slot, reason, source, position, graphVersion }) => (

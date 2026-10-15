@@ -168,6 +168,17 @@ function graphClusters(env: NodeJS.ProcessEnv): readonly string[] {
 }
 
 /**
+ * 요청에서 실제로 쓰는 활성화 판정을 한 번만 만든다.
+ * 빈 Vercel 변수는 저장소 기본값을 가리지 않고, kill switch는 항상 우선한다.
+ */
+export function graphRuntimeConfig(env: NodeJS.ProcessEnv = process.env) {
+  return Object.freeze({
+    enabled: isGraphEnabled(env),
+    clusters: Object.freeze([...graphClusters(env)]),
+  })
+}
+
+/**
  * 예전 방식 한 줄로 바꾼다.
  *
  * 🔴 `relationType: 'SIBLING'` 은 "같은 분류의 이웃" 이라는 사실 그대로다.
@@ -240,7 +251,8 @@ export function resolveRelatedMagazine(
   now: number = Date.now(),
 ): ResolvedRelatedMagazine {
   try {
-    if (!isGraphEnabled(env)) return fallback(article, 'DISABLED', now)
+    const runtime = graphRuntimeConfig(env)
+    if (!runtime.enabled) return fallback(article, 'DISABLED', now)
 
     // 버전 파일과 control 이 짝이 맞지 않으면 어느 쪽이 맞는지 알 수 없다. 묻지 않고 물러선다.
     if (GRAPH.graphVersion !== CONTROL.graphVersion) {
@@ -248,7 +260,7 @@ export function resolveRelatedMagazine(
     }
 
     // 🔴 cluster 단위로 연다. 한 분류에서 먼저 재보고 넓히기 위해서다.
-    if (!graphClusters(env).includes(article.cluster)) {
+    if (!runtime.clusters.includes(article.cluster)) {
       return fallback(article, 'CLUSTER_NOT_ENABLED', now)
     }
 
@@ -362,7 +374,9 @@ export function resolveRelatedMagazine(
       reason: null,
       graphVersion: GRAPH.graphVersion,
     }
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error'
+    console.error(`[M-GRAPH] resolver fallback · ${article.slug} · ${detail}`)
     // 🔴 예외를 밖으로 던지지 않는다. 연관 글 하나 때문에 상세 페이지가 죽는 쪽이 훨씬 큰 손해다.
     return fallback(article, 'EXCEPTION', now)
   }
