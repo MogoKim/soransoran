@@ -40,7 +40,7 @@ import { dirname, join, relative } from 'node:path'
 import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
 import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD } from './magazine-direct-spec.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
-import { sliceLiteral } from './magazine-load.mjs'
+import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
 
 export const DIRECT_SPEC_SOURCE_NOT_READY = 'DIRECT_SPEC_SOURCE_NOT_READY'
 export const DIRECT_SPEC_SPEC_CONFLICT = 'DIRECT_SPEC_SPEC_CONFLICT'
@@ -100,6 +100,36 @@ function readStringArray(text, name) {
 }
 
 /**
+ * control.ts 의 `export const CONTROL = {…}` 를 **구조 파서**(sliceLiteral + evalLiteral)로 읽는다.
+ * 🔴 정상 TypeScript 리터럴(여러 줄 · 끝 쉼표 · 주석)은 한 줄 판과 같은 값으로 읽고,
+ *    파싱 불가 · 필드 누락 · 형식 오류는 **던지지 않고** null 이다 — 호출자가 PRODUCT_BASIS_UNREADABLE 로 막는다.
+ */
+export function parseGraphControl(controlText) {
+  const anchor = String(controlText ?? '').indexOf('export const CONTROL')
+  if (anchor === -1) return null
+  const literal = sliceLiteral(controlText, controlText.indexOf('=', anchor), '{', '}')
+  if (!literal) return null
+  let raw
+  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }
+  const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  if (!isPlain(raw)) return null
+  const { graphVersion, enabled, enabledClusters, surfaces, killSwitch } = raw
+  if (typeof graphVersion !== 'string' || !graphVersion.trim()) return null
+  if (typeof enabled !== 'boolean') return null
+  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null
+  if (!isPlain(surfaces) || !Object.values(surfaces).every((v) => typeof v === 'boolean')) return null
+  if (!isPlain(killSwitch) || typeof killSwitch.tripped !== 'boolean') return null
+  // 🔴 격리 컨텍스트의 객체를 이 컨텍스트의 평범한 값으로 옮긴다
+  return {
+    graphVersion,
+    enabled,
+    enabledClusters: [...enabledClusters],
+    surfaces: Object.fromEntries(Object.entries(surfaces)),
+    killSwitch: { tripped: killSwitch.tripped },
+  }
+}
+
+/**
  * 🔴 **제품 M-GRAPH 판 판독 — authoring 과 소비 관문이 같이 쓰는 하나뿐인 구현.**
  *    current.ts → bundle(EXPORT_HASH 재계산) · control.ts · resolver(구현 surface · 관계 type).
  * @returns {{ok:true, pointer, graph, exportHash, recomputedExportHash, control, implemented, footer, relationTypes, surfaces, blockers}
@@ -114,19 +144,15 @@ export function readProductGraphState(productRoot) {
   const bundleText = read(join(dirname(PRODUCT_GRAPH.current), `${pointer}.ts`))
   const literal = bundleText && sliceLiteral(bundleText, bundleText.indexOf('=', bundleText.indexOf('export const GRAPH')), '{', '}')
   if (!literal) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 리터럴을 찾지 못했다' }
-  const graph = JSON.parse(literal)
+  let graph
+  try { graph = JSON.parse(literal) } catch { return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 리터럴을 파싱하지 못했다' } }
   const exportHash = /export const EXPORT_HASH = '([0-9a-f]+)'/.exec(bundleText)?.[1] ?? null
   const recomputedExportHash = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16)
   const controlText = read(PRODUCT_GRAPH.control)
   const resolverText = read(PRODUCT_GRAPH.resolver)
   if (!controlText || !resolverText) return { ok: false, code: 'GRAPH_CONTROL_UNREADABLE', why: 'control.ts 또는 magazine-graph.ts 를 읽지 못했다' }
-  const control = {
-    graphVersion: /graphVersion: '([^']+)'/.exec(controlText)?.[1] ?? null,
-    enabled: /\n\s*enabled: (true|false),/.exec(controlText)?.[1] === 'true',
-    enabledClusters: JSON.parse((/enabledClusters: (\[[^\]]*\])/.exec(controlText)?.[1] ?? '[]').replace(/'/g, '"')),
-    surfaces: JSON.parse(/surfaces: (\{[^}]*\})/.exec(controlText)?.[1] ?? '{}'),
-    killSwitch: JSON.parse(/killSwitch: (\{[^}]*\})/.exec(controlText)?.[1] ?? '{"tripped":true}'),
-  }
+  const control = parseGraphControl(controlText)
+  if (!control) return { ok: false, code: 'GRAPH_CONTROL_UNREADABLE', why: 'control.ts 의 CONTROL 을 읽지 못했거나 필드가 없거나 형식이 다르다' }
   const implemented = readStringArray(resolverText, 'IMPLEMENTED_SURFACES') ?? []
   const footer = readStringArray(resolverText, 'FOOTER_SURFACES') ?? []
   const relationTypes = readStringArray(resolverText, 'MAGAZINE_RELATION_TYPES') ?? []
@@ -170,10 +196,10 @@ export function productBasisFor(state, { intentId, queueCluster = null }) {
   }
 }
 
-/** 소비 시점의 현재 basis — 판독 실패·판 자체 결함이면 ok:false */
+/** 소비 시점의 현재 basis — 판독 실패·판 자체 결함이면 **던지지 않고** ok:false / PRODUCT_BASIS_UNREADABLE */
 export function currentProductBasis(productRoot, { intentId, queueCluster = null }) {
   const state = readProductGraphState(productRoot)
-  if (!state.ok) return state
+  if (!state.ok) return { ok: false, code: 'PRODUCT_BASIS_UNREADABLE', why: `${state.code}: ${state.why}` }
   if (state.blockers.some((b) => ['GRAPH_VERSION_MISMATCH', 'GRAPH_EXPORT_HASH_MISMATCH', 'GRAPH_SURFACE_CONTRACT_UNREADABLE'].includes(b))) {
     return { ok: false, code: 'PRODUCT_BASIS_UNREADABLE', why: `제품 graph 판이 깨졌다: ${state.blockers.join(',')}` }
   }

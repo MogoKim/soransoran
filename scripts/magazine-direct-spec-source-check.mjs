@@ -201,7 +201,8 @@ const GRAPH_FILES = ['src/content/magazine/graph/current.ts', `src/content/magaz
 function basisRoot(mut = null) {
   const root = tmp('basis-root')
   for (const f of GRAPH_FILES) { mkdirSync(dirname(join(root, f)), { recursive: true }); writeFileSync(join(root, f), readFileSync(join(ROOT, f))) }
-  if (mut) {
+  if (typeof mut === 'function') mut(root)
+  else if (mut) {
     const [file, from, to] = mut
     const t = readFileSync(join(root, file), 'utf8')
     assert.ok(t.includes(from), `basis 반례 준비 실패 — ${file} 에 ${from} 이 없다`)
@@ -210,6 +211,54 @@ function basisRoot(mut = null) {
   return root
 }
 const CONTROL = 'src/content/magazine/graph/control.ts'
+/** control.ts 의 CONTROL 객체를 같은 값의 다른 표기로 바꾼다 — 실제 파일의 다른 부분은 그대로 */
+function rewriteControl(root, body) {
+  const p = join(root, CONTROL)
+  const t = readFileSync(p, 'utf8')
+  const start = t.indexOf('{', t.indexOf('=', t.indexOf('export const CONTROL')))
+  const end = t.indexOf('} as const', start)
+  assert.ok(start !== -1 && end !== -1, 'control 반례 준비 실패')
+  writeFileSync(p, t.slice(0, start) + body + t.slice(end))
+}
+const REAL_CONTROL = real.source.parseGraphControl(readFileSync(join(ROOT, CONTROL), 'utf8'))
+/** 정상 TypeScript — 여러 줄 · 끝 쉼표 · 주석 */
+const MULTILINE_CONTROL = (root) => rewriteControl(root, `{
+  // 여러 줄 표기
+  graphVersion: '${REAL_CONTROL.graphVersion}',
+  enabled: ${REAL_CONTROL.enabled},
+  enabledClusters: [
+${REAL_CONTROL.enabledClusters.map((c) => `    '${c}',`).join('\n')}
+  ],
+  surfaces: {
+${Object.entries(REAL_CONTROL.surfaces).map(([k, v]) => `    ${k}: ${v},`).join('\n')}
+  },
+  killSwitch: {
+    tripped: ${REAL_CONTROL.killSwitch.tripped},
+    trippedAt: null,
+    trippedBy: null,
+    reason: null,
+  },
+  /** 끝 쉼표 */
+  previousGraphVersion: null,
+}`)
+const MALFORMED_CONTROL = (root) => rewriteControl(root, `{
+  graphVersion: '${REAL_CONTROL.graphVersion}',
+  enabled: true,
+  enabledClusters: [ 'sleep', 'family'
+  surfaces: { FOOTER_NEXT: true },
+}`)
+const TYPE_ERROR_CONTROL = (root) => rewriteControl(root, `{
+  graphVersion: '${REAL_CONTROL.graphVersion}',
+  enabled: 'true',
+  enabledClusters: 'sleep,family',
+  surfaces: { FOOTER_NEXT: true, FOOTER_SIBLING: true, FOOTER_BRIDGE: true },
+  killSwitch: { tripped: false },
+}`)
+/** 판독 불가 — 던지지 않고 PRODUCT_BASIS_UNREADABLE 로 HOLD 해야 한다 */
+const BASIS_UNREADABLE = [
+  ['control 파싱 불가(괄호 누락)', MALFORMED_CONTROL],
+  ['control 필드 형식 오류', TYPE_ERROR_CONTROL],
+]
 const BASIS_DRIFTS = [
   ['graph off', [CONTROL, '  enabled: true,', '  enabled: false,']],
   ['kill switch', [CONTROL, '"tripped":false', '"tripped":true']],
@@ -306,6 +355,27 @@ function sourceCases(src) {
       }
       const missing = tmp('b1-missing'); writeSource(missing, { entries: [sourceEntry((e) => { delete e.productBasis; return e })] })
       assert.ok(src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: missing, expectedGraphVersion: GV, productRoot: ROOT }).evidence.blockers.includes('PRODUCT_BASIS_MISSING'))
+    }],
+    ['B2 control 표기 — 여러 줄·끝 쉼표는 한 줄 판과 같은 basis · 파싱 불가·필드 형식 오류는 던지지 않고 PRODUCT_BASIS_UNREADABLE', () => {
+      const multi = basisRoot(MULTILINE_CONTROL)
+      assert.notEqual(readFileSync(join(multi, CONTROL), 'utf8'), readFileSync(join(ROOT, CONTROL), 'utf8'), '여러 줄 반례 준비 실패')
+      const st = src.readProductGraphState(multi)
+      assert.equal(st.ok, true, st.why); assert.deepEqual(st.blockers, [])
+      assert.deepEqual(src.productBasisFor(st, { intentId: 'I-DSSC-01', queueCluster: fx().queueItem.cluster }), BASIS)
+      const dm = tmp('b2-multi'); writeSource(dm)
+      const okMulti = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: dm, expectedGraphVersion: GV, productRoot: multi })
+      assert.equal(okMulti.ok, true, okMulti.why)
+      for (const [label, mut] of BASIS_UNREADABLE) {
+        const root = basisRoot(mut)
+        let cur
+        assert.doesNotThrow(() => { cur = src.currentProductBasis(root, { intentId: 'I-DSSC-01', queueCluster: 'sleep' }) }, `${label}: currentProductBasis 가 던졌다`)
+        assert.deepEqual({ ok: cur.ok, code: cur.code }, { ok: false, code: 'PRODUCT_BASIS_UNREADABLE' }, label)
+        assert.doesNotThrow(() => src.readProductGraphState(root), `${label}: readProductGraphState 가 던졌다`)
+        const d = tmp('b2-bad'); writeSource(d)
+        let r
+        assert.doesNotThrow(() => { r = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV, productRoot: root }) }, `${label}: judge 가 던졌다`)
+        assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('PRODUCT_BASIS_UNREADABLE'), `${label}: ${r.evidence.blockers}`)
+      }
     }],
     ['S06 같은 입력 → 같은 바이트 · 두 번째 write 0', () => {
       const d1 = tmp('idem1'); const d2 = tmp('idem2')
@@ -905,8 +975,14 @@ const BASIS_COUNTS = {}
 function basisDriftCases(plan, lane, webui, regen) {
   const wrap = (root) => (a) => real.source.verifyDirectSpecIdentity({ ...a, productRoot: root })
   const cases = []
-  for (const [label, mut] of [['판 그대로(대조군)', null], ...BASIS_DRIFTS]) {
-    cases.push([`P1 basis ${label} — selected · reusable · register · send · regen ${mut ? '모두 0' : '진행'}`, async () => {
+  const plans = [
+    ['판 그대로(대조군)', null, null],
+    ['control 여러 줄·끝 쉼표(정상)', MULTILINE_CONTROL, null],
+    ...BASIS_DRIFTS.map(([l, m]) => [l, m, 'PRODUCT_BASIS_DRIFT']),
+    ...BASIS_UNREADABLE.map(([l, m]) => [l, m, 'PRODUCT_BASIS_UNREADABLE']),
+  ]
+  for (const [label, mut, want] of plans) {
+    cases.push([`P1 basis ${label} — selected · reusable · register · send · regen ${want ? `모두 0 (${want})` : '진행'}`, async () => {
       const root = basisRoot(mut)
       // selected
       const sel = runPlan(plan, { queue: [directItem()], prepare: (d) => writeSource(d) , directSourceFnOverride: wrap(root) })
@@ -931,10 +1007,10 @@ function basisDriftCases(plan, lane, webui, regen) {
         draftsDir: d, queueItem: directItem(), directSourceDeps: deps })
       const c = { selectedSpec: sel.spec ? 1 : 0, selectedProvider, reusableProvider, register, sendProbe: probes, regenRunner: runner }
       BASIS_COUNTS[label] = { ...c, sendReason: sent.reason ?? 'probe', regenCode: rg.code ?? null }
-      if (mut) {
+      if (want) {
         assert.deepEqual(c, { selectedSpec: 0, selectedProvider: 0, reusableProvider: 0, register: 0, sendProbe: 0, regenRunner: 0 }, `${label}: ${JSON.stringify(c)}`)
-        assert.ok(heldOf(sel)?.directSpec?.blockers.includes('PRODUCT_BASIS_DRIFT'), `${label}: selected HOLD 사유`)
-        assert.ok(heldOf(reuse)?.directSpec?.blockers.includes('PRODUCT_BASIS_DRIFT'), `${label}: reusable HOLD 사유`)
+        assert.ok(heldOf(sel)?.directSpec?.blockers.includes(want), `${label}: selected HOLD 사유 ${heldOf(sel)?.directSpec?.blockers}`)
+        assert.ok(heldOf(reuse)?.directSpec?.blockers.includes(want), `${label}: reusable HOLD 사유`)
         assert.equal(sent.reason, 'DIRECT_SPEC_SOURCE_NOT_READY'); assert.equal(rg.code, 'DIRECT_SPEC_SOURCE_NOT_READY')
       } else {
         assert.deepEqual(c, { selectedSpec: 1, selectedProvider: 1, reusableProvider: 1, register: 1, sendProbe: 1, regenRunner: 1 }, `대조군: ${JSON.stringify(c)}`)
@@ -1176,6 +1252,8 @@ const MUTATIONS = [
   ['source', 'MS9', 'hero alt·scene 검사 제거', '  if (heroRequired(queueItem?.imageMode)) {', '  if (false) {'],
   ['source', 'MS12', '소비 관문이 OPTIONAL hero 를 요구하지 않는다 (P1)', "  return imageMode === 'REQUIRED' || imageMode === 'OPTIONAL'", "  return imageMode === 'REQUIRED'"],
   ['source', 'MS13', '승인 basis exact-match 제거 (P1)', "      else if (canonicalJson(entry.productBasis) !== canonicalJson(b)) blockers.push('PRODUCT_BASIS_DRIFT')\n", ''],
+  ['source', 'MS15', 'control 파싱 예외를 다시 던진다 (P1)', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", "  raw = evalLiteral(literal, 'control.ts')"],
+  ['source', 'MS16', 'control 필드 형식 검증 제거 (P1)', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", ''],
   ['source', 'MS14', 'productRoot 없을 때 통과 (P1 fail-closed 제거)', "  if (!productRoot) blockers.push('PRODUCT_BASIS_UNVERIFIED')", '  if (!productRoot) {}'],
   ['source', 'MS10', 'NO_IMAGE hero 금지 검사 제거', "  if (heroForbidden(entry, queueItem)) blockers.push('HERO_FORBIDDEN')\n", ''],
   ['source', 'MS11', '기존 spec 바이트 대조 제거 (재사용 신원)', "  if (existing.state === 'CONFLICT') {", '  if (false) {'],
