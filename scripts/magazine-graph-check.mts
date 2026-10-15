@@ -46,6 +46,7 @@ import {
   MAX_TOTAL,
   SLOT_LABEL,
   resolveRelatedMagazine,
+  graphRuntimeConfig,
 } from '../src/lib/magazine-graph'
 import {
   MAX_KEYS,
@@ -282,6 +283,11 @@ check(
   'Production 공백 env 도 저장소 sleep canary 기본값을 덮지 않는다',
   productionSleepCanary.every((a) => resolveAt(a, WHITESPACE_PRODUCTION_ENV).source === 'GRAPH'),
 )
+check(
+  'Production 빈 env 의 runtime config 가 저장소 canary 를 그대로 연다',
+  graphRuntimeConfig(EMPTY_PRODUCTION_ENV).enabled === true
+    && graphRuntimeConfig(EMPTY_PRODUCTION_ENV).clusters.join(',') === 'sleep',
+)
 
 {
   const fam = published.filter((a) => a.cluster === 'family')
@@ -489,6 +495,11 @@ console.log('\n④-B 부족분 보충')
   )
   const pageSrc = readFileSync(join(ROOT, 'src/app/magazine/[slug]/page.tsx'), 'utf8')
   check('  상세 페이지가 공통 graphVersion 을 넘기지 않는다', !pageSrc.includes('graphVersion={related.graphVersion}'))
+  check('  상세 페이지가 resolver 판정 전체를 진단 속성용으로 넘긴다', pageSrc.includes('resolution={related}'))
+  check('  연관 글 영역이 source·reason·version 진단 속성을 모두 남긴다',
+    listSrc.includes('data-mgraph-source={resolution.source}')
+      && listSrc.includes("data-mgraph-reason={resolution.reason ?? 'none'}")
+      && listSrc.includes('data-mgraph-version={resolution.graphVersion}'))
 }
 
 // ── ④-C 🔴 4슬롯 — 직접 연관 3 + 발견 1 ──────────────────
