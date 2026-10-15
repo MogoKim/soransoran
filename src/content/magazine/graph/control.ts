@@ -6,9 +6,9 @@ import type { MagazineGraphControl } from './types'
 
 export const CONTROL: MagazineGraphControl = {
   graphVersion: 'g-20260923-ad8e89',
-  enabled: false,
-  enabledClusters: [],
-  surfaces: {"CTA_END":true,"FOOTER_NEXT":false,"FOOTER_SIBLING":false,"FOOTER_BRIDGE":false,"SERIES_NAV":false,"BODY_INLINE_OR_TOP":false,"BODY_CALLOUT":false},
+  enabled: true,
+  enabledClusters: ['sleep'],
+  surfaces: {"CTA_END":true,"FOOTER_NEXT":true,"FOOTER_SIBLING":true,"FOOTER_BRIDGE":true,"SERIES_NAV":false,"BODY_INLINE_OR_TOP":false,"BODY_CALLOUT":false},
   killSwitch: {"tripped":false,"trippedAt":null,"trippedBy":null,"reason":null},
   /**
    * 🔴 **제품에 실제 파일이 있는 버전만 적는다.** null 이면 롤백이 불가능하다.

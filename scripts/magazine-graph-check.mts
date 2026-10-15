@@ -105,7 +105,10 @@ function check(label: string, ok: boolean, detail = ''): void {
   }
 }
 
-const OFF: NodeJS.ProcessEnv = {}
+/** 파일 기본값과 무관하게 즉시 폴백시키는 운영 kill switch */
+const OFF: NodeJS.ProcessEnv = { MGRAPH_GRAPH_KILL: '1' }
+/** 제품 기본값 — 첫 카나리는 sleep 한 분류만 연다 */
+const DEFAULT: NodeJS.ProcessEnv = {}
 
 /**
  * 🔴 **이 검사 한 번의 공개 판정 시각 — 정확히 한 번 정한다** (2026-10-13).
@@ -187,22 +190,72 @@ check(
   ),
 )
 
-// ── ② 기본값: 그래프 OFF ──────────────────────────────────
-console.log('\n② 기본값은 꺼짐 — 공개 글 전체가 예전 그대로다')
+// ── ② kill switch: 전체 폴백 ───────────────────────────────
+console.log('\n② kill switch — 공개 글 전체가 예전 그대로다')
 
-check('control.ts 기본값이 꺼짐이다', CONTROL.enabled === false)
-check('  열린 cluster 가 하나도 없다', CONTROL.enabledClusters.length === 0)
-check('  isGraphEnabled({}) 가 false 다', isGraphEnabled(OFF) === false)
+check('MGRAPH_GRAPH_KILL=1 이 그래프를 끈다', isGraphEnabled(OFF) === false)
 
 {
   const diff = published.filter((a) => slugsOf(a, OFF).join(',') !== legacyOf(a).join(','))
-  check(`그래프 OFF 에서 ${published.length}편 전부 결과 불변`, diff.length === 0, `달라진 글 ${diff.length}`)
+  check(`kill switch 에서 ${published.length}편 전부 결과 불변`, diff.length === 0, `달라진 글 ${diff.length}`)
   const notFallback = published.filter((a) => resolveAt(a, OFF).source !== 'FALLBACK')
   check('  전부 FALLBACK 출처다', notFallback.length === 0)
   const wrongReason = published.filter((a) => resolveAt(a, OFF).reason !== 'DISABLED')
   check('  폴백 사유가 DISABLED 다', wrongReason.length === 0)
   const wrongVer = published.filter((a) => resolveAt(a, OFF).graphVersion !== 'none')
   check("  계측 graph_version 이 'none' 이다 — 그래프분과 섞이지 않는다", wrongVer.length === 0)
+}
+
+// ── ②-C 첫 제품 카나리: sleep 만 활성 ────────────────────
+console.log('\n②-C 제품 기본값 — sleep 5편만 그래프 카나리')
+
+check('control.ts 기본값이 켜짐이다', CONTROL.enabled === true)
+check('  열린 cluster 는 sleep 하나뿐이다', CONTROL.enabledClusters.join(',') === 'sleep')
+check('  기본 환경에서 그래프가 켜진다', isGraphEnabled(DEFAULT) === true)
+check('  기본 환경이 여는 cluster 는 sleep 하나뿐이다', enabledClusters(DEFAULT).join(',') === 'sleep')
+check(
+  '  하단 직접·형제·발견 표면이 모두 켜져 있다',
+  CONTROL.surfaces.FOOTER_NEXT
+    && CONTROL.surfaces.FOOTER_SIBLING
+    && CONTROL.surfaces.FOOTER_BRIDGE,
+)
+
+{
+  const canary = published.filter((a) => a.cluster === 'sleep')
+  const outside = published.filter((a) => a.cluster !== 'sleep')
+  const canaryResolved = canary.map((a) => ({ article: a, result: resolveAt(a, DEFAULT) }))
+
+  check('sleep 공개 글이 1편 이상 있다', canary.length > 0, `${canary.length}편`)
+  check(
+    '  sleep 공개 글 전부 GRAPH 결과를 쓴다',
+    canaryResolved.every(({ result }) => result.source === 'GRAPH' && result.reason === null),
+    `${canaryResolved.filter(({ result }) => result.source === 'GRAPH').length}/${canary.length}편`,
+  )
+  check(
+    '  sleep 공개 글 전부 실제 graph 항목을 1개 이상 갖는다',
+    canaryResolved.every(({ result }) => result.items.some((item) => item.source === 'GRAPH')),
+  )
+  check(
+    '  직접 3칸 + 발견 1칸인 sleep 표본이 있다',
+    canaryResolved.some(({ result }) =>
+      result.items.filter((item) => item.slot !== DISCOVERY_SLOT).length === MAX_DIRECT
+      && result.items.filter((item) => item.slot === DISCOVERY_SLOT).length === 1),
+  )
+  check(
+    '  graph 항목은 현재 graphVersion 을 쓴다',
+    canaryResolved.every(({ result }) =>
+      result.items.filter((item) => item.source === 'GRAPH')
+        .every((item) => item.graphVersion === GRAPH.graphVersion)),
+  )
+
+  const outsideChanged = outside.filter((a) => slugsOf(a, DEFAULT).join(',') !== legacyOf(a).join(','))
+  check(`  다른 cluster ${outside.length}편은 예전 결과 그대로다`, outsideChanged.length === 0,
+    `달라진 글 ${outsideChanged.length}`)
+  check(
+    '  다른 cluster 는 CLUSTER_NOT_ENABLED 로 폴백한다',
+    outside.every((a) => resolveAt(a, DEFAULT).source === 'FALLBACK'
+      && resolveAt(a, DEFAULT).reason === 'CLUSTER_NOT_ENABLED'),
+  )
 }
 
 // ── ③ family 만 opt-in ────────────────────────────────────
