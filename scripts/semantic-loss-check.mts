@@ -191,6 +191,8 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 보�
     sys.includes('짧은 원자적 사실만') && sys.includes('원문의 앞뒤 문장은 옮기지 않습니다'))
   check('🔴 원문의 물음은 뜻만 살리고 문장·표현은 새로 쓴다',
     sys.includes('물음의 뜻') && sys.includes('문장과 표현은 새로 씁니다'))
+  check('🔴 그대로쓸말 밖의 문장과 표현은 원문에서 옮기지 않고 새로 쓴다',
+    sys.includes('원문과 겹치지 않게') && sys.includes('그대로쓸말 밖의 문장과 표현은 원문에서 옮기지 말고 새로 씁니다'))
   check('🔴 생성이 현행 복제 게이트 경계를 답하기 전 스스로 대조한다',
     sys.includes(`연속 ${COPY_RUN_WORDS}어절`) && sys.includes(`공백을 빼고 ${COPY_RUN_CHARS}자`)
     && sys.includes('그 문장을 다시 씁니다'))
