@@ -28,7 +28,8 @@
 | 고객·서비스 본질·장기 North Star | [`NORTH-STAR.md`](./NORTH-STAR.md) |
 | 현재 분기 목표와 병목 | [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md) |
 | M-AUTO 설치·가동·잠금·병합·배포·공개 감시 | [`magazine-automation-runbook.md`](./magazine-automation-runbook.md) |
-| 매거진 콘텐츠 품질·글 구조·위험 등급 정의·원고 작성 주체 분리 | [`2026-08-23-soransoran-magazine-strategy.md`](./2026-08-23-soransoran-magazine-strategy.md) |
+| 매거진 콘텐츠 품질·글 구조·위험 등급 정의 | [`2026-08-23-soransoran-magazine-strategy.md`](./2026-08-23-soransoran-magazine-strategy.md) |
+| 일일 제작 역할·`ArticleSpec` 전환·1주 실행표 | 이 문서 §18 · [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) |
 | 매거진 QA·예약 재고·공개 엔진·창업자 개입 기준의 운영 정본 | [`2026-08-23-soransoran-magazine-seo-production-strategy.md`](./2026-08-23-soransoran-magazine-seo-production-strategy.md) |
 | robots·canonical·sitemap·색인 허용 | [`2026-08-23-soransoran-seo-index-policy.md`](./2026-08-23-soransoran-seo-index-policy.md) |
 | 고객 화면 디자인 시스템 | [`soransoran-brand-design-spec.md`](./soransoran-brand-design-spec.md) |
@@ -47,7 +48,7 @@
 **이 문서가 대체하지 않는 범위** — 아래는 위 두 문서와 runbook, 색인 정책이 계속 정본이다.
 
 - M-AUTO의 안전·QA·위험 등급 판정·예약·병합·배포·공개 감시 계약
-- 원고 작성 주체 분리(매거진 전략 §3.0) — 누가 원고를 쓰고 누가 위험 문장을 뽑는가
+- 콘텐츠 품질과 위험 검증의 독립성. 일일 제작 역할은 이 문서 §18의 2026-10-15 결정이 우선한다.
 - 콘텐츠 품질 기준·글 구조·의료 안전 문구
 - `2026-08-23-soransoran-seo-index-policy.md` §5의 **색인 제출 게이트(4개 AND)**
   — 이것은 검색 *성과* 게이트가 아니라 *색인 허용* 게이트다. §14와 무관하게 유지된다.
@@ -962,19 +963,32 @@ watch 거짓 PASS 0
 
 ## 18. 역할과 승인 경계
 
-🔴 **아래 표는 M-GRAPH 의 조사·설계 거버넌스에만 해당한다.**
-누가 원고를 쓰고 누가 위험 문장을 뽑는가 하는 **M-AUTO 제작 역할 분리는 바뀌지 않는다** —
-`2026-08-23-soransoran-magazine-strategy.md` §3.0 이 계속 정본이다.
+🔴 **2026-10-15 창업자 결정 — 일일 제작 경로를 `ArticleSpec` 중심으로 단순화한다.**
+이 결정은 아래의 옛 `Claude brief → ChatGPT 원고` 역할 분리를 대체한다. M-GRAPH 조사와
+위험 근거의 독립 검증은 유지하지만, 매일 Claude가 자유 서술형 `brief.md`·`review.ts`를
+새로 만드는 단계를 목표 경로에서 제거한다.
 
 ```text
-Claude 채팅   주제 해석 · 검색 의도 분석 · 구조 · 위험 문장 후보 · 원고 지시서   (최종 원고를 쓰지 않는다)
-ChatGPT 채팅  최종 원고 · 톤 정리 · hero 이미지                              (주제를 정하지 않는다)
-Claude Code   파일화 · 자동 QA · 검증 · 검수 패킷 · 발행 준비                 (원고를 새로 쓰지 않는다)
-창업자        주제 큐 승인 · 위험 기반 최종 승인 · HIGH 검수 · 이미지 판단
+M-GRAPH       조사된 검색 의도 · 관계 · 다음 승인 노드 제공
+ArticleSpec   그래프·정책에서 결정적으로 생성하는 버전 고정 원고 계약
+ChatGPT       ArticleSpec 안에서 최종 원고와 hero 이미지만 생성
+Claude Code   결정적 QA · 파일화 · 등록 · PR · CI · 병합 · 공개 감시
+창업자        검색 영토 · 브랜드 경계 · 고위험 정책 · 구조 변경 승인
 ```
 
-분석하는 쪽과 쓰는 쪽을 나눠야 위험 문장 추출이 자기 검열이 되지 않는다.
-M-GRAPH 가 검색 의도를 정한다고 해서 이 분리를 합치지 않는다.
+`ArticleSpec`에는 최소한 아래 항목이 들어간다.
+
+- `specVersion`, `specHash`, slug, 검색 의도와 그래프 노드·관계
+- 독자 질문, 범위, 구조, 근거·안전 제약, 길이와 형식 계약
+- CTA, 직접 관련 3개와 발견 1개, 시리즈·허브·커뮤니티 출구
+- hero 요구와 공개 예약 정보
+
+주제 선정은 없애지 않는다. 일일 동적 창작 대신 **M-GRAPH가 승인한 다음 노드를 결정적으로
+선택**한다. `draft.md`는 생성 결과를 QA·재생성·원자 교체하는 경계로 유지한다.
+
+전환은 `DIRECT_SPEC_V1` opt-in 한 건으로 시작한다. 기존 `LEGACY_BRIEF_V1`은 운영 롤백을
+위해 제한적으로 보존하고, 현재 코드로 무인 자연 회차를 증명하기 전에 전면 삭제하지 않는다.
+이 전환의 1주 마일스톤과 완료 조건은 `magazine/MAGAZINE-CURRENT-MILESTONE.md`가 정본이다.
 
 | 역할 | 책임 (M-GRAPH 범위) |
 |---|---|
@@ -991,6 +1005,8 @@ M-GRAPH 가 검색 의도를 정한다고 해서 이 분리를 합치지 않는�
 - 이후 창업자는 매일 주제를 고르지 않는다.
 - 🔴 **원고의 반복 실행은 전부 자동화한다** (M3-A). 등급으로 사람에게 넘기지 않는다.
   사람이 판단하는 것은 브랜드 경계와 새 검색 영토뿐이다.
+- 새 M-AUTO 경로의 일일 입력은 자유 서술형 brief가 아니라 버전 고정 `ArticleSpec`이다.
+- Claude는 M-GRAPH 연구·설계와 코드 구현·검증에는 계속 쓰되, 일일 운영 필수 provider가 아니다.
 
 ---
 
