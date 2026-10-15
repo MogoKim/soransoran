@@ -95,8 +95,21 @@ function isPresent(value, path) {
   return String(value ?? '').trim() !== ''
 }
 
-export function missingSourceFields(entry) {
-  return DIRECT_SPEC_REQUIRED_FIELDS.filter((path) => !isPresent(valueAt(entry, path), path))
+/**
+ * 🔴 hero 는 큐의 imageMode 가 정한다 (ArticleSpec `heroOf` 와 같은 규칙).
+ *    REQUIRED → hero.alt · hero.scene 필수 · NO_IMAGE → 둘 다 금지 · OPTIONAL → compile 계약을 그대로 따른다.
+ */
+export function missingSourceFields(entry, queueItem = null) {
+  const missing = DIRECT_SPEC_REQUIRED_FIELDS.filter((path) => !isPresent(valueAt(entry, path), path))
+  if (queueItem?.imageMode === 'REQUIRED') {
+    for (const path of ['hero.alt', 'hero.scene']) if (!isPresent(valueAt(entry, path), path)) missing.push(path)
+  }
+  return missing
+}
+
+function heroForbidden(entry, queueItem) {
+  return queueItem?.imageMode === 'NO_IMAGE'
+    && (isPresent(entry?.hero?.alt, 'hero.alt') || isPresent(entry?.hero?.scene, 'hero.scene'))
 }
 
 /**
@@ -157,7 +170,7 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   const entry = matches[0]
   evidence.approvalStatus = typeof entry.status === 'string' ? entry.status : null
   evidence.sourceHash = typeof entry.sourceHash === 'string' ? entry.sourceHash : null
-  evidence.missingFields = missingSourceFields(entry)
+  evidence.missingFields = missingSourceFields(entry, queueItem)
 
   if (entry.status !== 'APPROVED' || entry.node?.status !== 'APPROVED' || !String(entry.approvedBy ?? '').trim() || !String(entry.approvedAt ?? '').trim()) {
     blockers.push('NOT_APPROVED')
@@ -166,6 +179,7 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   if (entry.sourceHash !== directSpecSourceHash(entry)) blockers.push('SOURCE_HASH_DRIFT')
   if (entry.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')
   if (evidence.missingFields.length) blockers.push('FIELDS_MISSING')
+  if (heroForbidden(entry, queueItem)) blockers.push('HERO_FORBIDDEN')
 
   const unique = [...new Set(blockers)]
   blockers.length = 0
@@ -192,6 +206,41 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   return { ok: true, input, spec, evidence }
 }
 
+const specBytes = (spec) => `${JSON.stringify(spec, null, 2)}\n`
+
+/**
+ * 디스크의 article-spec.json 이 지금 source 로 컴파일한 spec 과 **같은 바이트**인가.
+ * @returns {{state:'ABSENT'|'IDENTICAL'|'CONFLICT', path:string, why?:string}}
+ */
+export function existingSpecState({ spec, draftsDir }) {
+  const path = join(draftsDir, spec.identity.slug, ARTICLE_SPEC_FILENAME)
+  if (!existsSync(path)) return { state: 'ABSENT', path }
+  let prev
+  try { prev = readFileSync(path, 'utf8') } catch (e) {
+    return { state: 'CONFLICT', path, why: `기존 spec 을 읽지 못했다 (${e.code ?? e.message})` }
+  }
+  if (prev === specBytes(spec)) return { state: 'IDENTICAL', path }
+  return { state: 'CONFLICT', path, why: '기존 article-spec.json 이 현재 승인 source 로 컴파일한 spec 과 다르다 — 덮어쓰지도 재사용하지도 않는다' }
+}
+
+/**
+ * 🔴 **direct 행을 지금 진행해도 되는가** — 선정 · 재사용 · 등록이 모두 이 함수 하나로 본다.
+ *    현재 승인 source 가 준비돼 있고, 디스크 spec 이 있으면 그 바이트가 source 컴파일 결과와 같아야 한다.
+ *    source 부재·stale·승인 취소·hash drift → DIRECT_SPEC_SOURCE_NOT_READY · 다른 spec → DIRECT_SPEC_SPEC_CONFLICT.
+ *
+ * @returns {{ok:true, judged:object, spec:object, evidence:object, existing:'ABSENT'|'IDENTICAL'}
+ *          |{ok:false, code:string, why:string, evidence:object}}
+ */
+export function verifyDirectSpecIdentity({ queueItem, draftsDir, expectedGraphVersion, repoRoot = null }) {
+  const judged = judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersion, repoRoot })
+  if (!judged.ok) return judged
+  const existing = existingSpecState({ spec: judged.spec, draftsDir })
+  if (existing.state === 'CONFLICT') {
+    return { ok: false, code: DIRECT_SPEC_SPEC_CONFLICT, why: existing.why, evidence: judged.evidence }
+  }
+  return { ok: true, judged, spec: judged.spec, evidence: judged.evidence, existing: existing.state }
+}
+
 /**
  * spec 을 `drafts/<slug>/article-spec.json` 에 **덮어쓰지 않고** 원자적으로 쓴다.
  *   · 없으면 tmp → fsync → link(no-clobber) → 쓴다
@@ -200,14 +249,11 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
  */
 export function persistDirectSpecNoClobber({ spec, draftsDir }) {
   const path = join(draftsDir, spec.identity.slug, ARTICLE_SPEC_FILENAME)
-  const bytes = `${JSON.stringify(spec, null, 2)}\n`
+  const bytes = specBytes(spec)
   const sameOrConflict = () => {
-    let prev
-    try { prev = readFileSync(path, 'utf8') } catch (e) {
-      return { ok: false, code: DIRECT_SPEC_SPEC_CONFLICT, why: `기존 spec 을 읽지 못했다 (${e.code ?? e.message})`, path }
-    }
-    if (prev === bytes) return { ok: true, written: false, path, specHash: spec.specHash }
-    return { ok: false, code: DIRECT_SPEC_SPEC_CONFLICT, why: '다른 바이트의 article-spec.json 이 이미 있다 — 덮어쓰지 않는다', path }
+    const e = existingSpecState({ spec, draftsDir })
+    if (e.state === 'IDENTICAL') return { ok: true, written: false, path, specHash: spec.specHash }
+    return { ok: false, code: DIRECT_SPEC_SPEC_CONFLICT, why: e.why ?? '다른 바이트의 article-spec.json 이 이미 있다 — 덮어쓰지 않는다', path }
   }
   if (existsSync(path)) return sameOrConflict()
   mkdirSync(dirname(path), { recursive: true })

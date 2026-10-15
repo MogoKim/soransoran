@@ -34,7 +34,8 @@
  *   W25  direct mode + article-spec.json 없음 — deliveryGate 가 DIRECT_SPEC_MISSING 으로 fail-closed (전송·예약 0)
  *   W26  direct mode + 손상 spec — deliveryGate 가 ARTICLE_SPEC_HASH 로 fail-closed (전송·예약 0)
  *   W27  direct mode + regen packet — 같은 spec identity 만 허용하고 다른 identity 는 차단
- *   W28  auto-lane gate — direct 는 brief/review 없이 통과, legacy 는 기존대로 차단
+ *   W28  auto-lane gate — direct 는 brief/review 없이, **현재 승인 source 와 같은 spec 일 때만** 통과
+ *        (source 없음 → DIRECT_SPEC_SOURCE_NOT_READY · 2026-10-15 Codex P0). legacy 는 기존대로 차단
  *   W29  run target — legacy runId 불변, direct mode 신원과 queueItem 운반
  *   W30  batch plan — direct spec 누락은 probe·Chrome 0
  *   W31  merge gate — 등록 slug의 spec/sidecar만 허용
@@ -82,6 +83,20 @@ import { deliveryGate, plannedMessageFor } from './lib/magazine-delivery-gate.mj
 import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
+import {
+  DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, readProductGraphVersion,
+} from './lib/magazine-direct-spec-source.mjs'
+
+/** 등록 gate 는 현재 승인 source 를 요구한다 — 시험 폴더에 fixture 와 같은 내용의 승인 source 를 놓는다 */
+function writeApprovedSource(d, input, gv) {
+  const entry = { status: 'APPROVED', approvedBy: 'wire-check', approvedAt: '2026-10-15T12:00:00+09:00',
+    g8ManifestHash: input.queueItem.g8ManifestHash, node: input.node, relations: input.relations,
+    hero: input.hero, publication: input.publication }
+  entry.sourceHash = directSpecSourceHash(entry)
+  const sp = directSpecSourcePath(d, gv)
+  mkdirSync(dirname(sp), { recursive: true })
+  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
+}
 import { fetchTargets, runIdOf } from './lib/magazine-run-targets.mjs'
 import { judgeFile } from './lib/magazine-merge-gate.mjs'
 import { fetchBatch } from './magazine-webui-runner.mjs'
@@ -507,11 +522,17 @@ check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 ident
   assert.equal(drift.code, 'DIRECT_SPEC_REGEN_IDENTITY')
 })
 
-check('W28 auto-lane gate — direct 는 brief/review 없이 통과, legacy 는 차단', () => {
+check('W28 auto-lane gate — direct 는 brief/review 없이, 승인 source 와 같은 spec 일 때만 통과 · legacy 는 차단', () => {
   const input = loadFixture()
   const d = tmp('ds-w28')
   compileAndPersistDirectSpec({ input, draftsDir: d })
-  const direct = autoLaneGate(input.queueItem.slug, [input.queueItem], d)
+  const gv = input.node.graphVersion
+  const opts = { expectedGraphVersionFn: () => gv }
+  const noSource = autoLaneGate(input.queueItem.slug, [input.queueItem], d, opts)
+  assert.equal(noSource.ok, false, 'source 없이 direct 가 등록 gate 를 통과했다')
+  assert.ok(noSource.blockedBy.some((x) => x.code === 'DIRECT_SPEC_SOURCE_NOT_READY'))
+  writeApprovedSource(d, input, gv)
+  const direct = autoLaneGate(input.queueItem.slug, [input.queueItem], d, opts)
   assert.equal(direct.ok, true, JSON.stringify(direct.blockedBy))
   const legacyItem = { ...input.queueItem }
   delete legacyItem.directSpecMode
@@ -560,7 +581,11 @@ check('W31 merge gate — 등록 slug의 spec/sidecar만 허용', () => {
 
 function directDriveSandbox(prefix) {
   const input = loadFixture()
+  // 🔴 drive 의 등록 gate 는 제품 current graphVersion 의 승인 source 를 본다
+  const gv = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
+  input.node.graphVersion = gv
   const d = tmp(prefix)
+  writeApprovedSource(d, input, gv)
   const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
   const slug = input.queueItem.slug
   const dir = join(d, slug)

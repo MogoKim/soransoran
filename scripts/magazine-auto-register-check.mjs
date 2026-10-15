@@ -3001,7 +3001,7 @@ const directSourceCheck = spawnSync(process.execPath, [join('scripts', 'magazine
   env: { ...process.env },
 })
 expect('source 관문 반례·변이가 전부 통과한다', directSourceCheck.status, 0)
-expect('source 관문 검사가 80개 반례·변이를 실제 실행했다', /DIRECT_SPEC source 관문: 80 pass, 0 fail/.test(directSourceCheck.stdout), true)
+expect('source 관문 검사가 108개 반례·변이를 실제 실행했다', /DIRECT_SPEC source 관문: 108 pass, 0 fail/.test(directSourceCheck.stdout), true)
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 console.log('  상태: 자동 PR 경로 구현됨 · launchd 설치는 supervised 1회 성공 뒤에만 열린다\n')

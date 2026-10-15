@@ -133,9 +133,15 @@ function inspectTargets(run, date, draftsDir = DRAFTS_DIR) {
   }))
 }
 
-function nextActionFor(t) {
+export function nextActionFor(t) {
   if (t.articleDraft) return '완료 — 이미 변환됨'
   if (t.draftMd) return 'md-to-draft 대기'
+  // 🔴 DIRECT_SPEC_V1 은 brief/review 가 없는 것이 정상이다 — "세션이 채워야 한다" 로 오보하지 않는다
+  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {
+    return t.material?.articleSpec
+      ? 'DIRECT_SPEC 원고 필요 — article-spec.json 으로 --fetch-run 이 회수한다 (brief 불필요)'
+      : 'DIRECT_SPEC spec 없음 — producer source 관문(run.json held)을 본다 (brief 불필요)'
+  }
   if (!t.brief || !t.review) return 'brief/review 미작성 — 세션이 채워야 한다'
   return 'ChatGPT 원고 필요 — --fetch <slug> 또는 --fetch-run 이 회수한다'
 }

@@ -58,7 +58,7 @@ import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
 import {
-  judgeDirectSpecSource, persistDirectSpecNoClobber, readProductGraphVersion,
+  persistDirectSpecNoClobber, readProductGraphVersion, verifyDirectSpecIdentity,
 } from './lib/magazine-direct-spec-source.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
@@ -593,7 +593,7 @@ export function planRun({
   log = (m) => console.log(m),
   /** 🔴 direct 행이 선정됐을 때만 부른다 — legacy 회차는 제품 graph 도 source 도 읽지 않는다 */
   productGraphVersionFn = () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
-  directSourceFn = judgeDirectSpecSource,
+  directSourceFn = verifyDirectSpecIdentity,
   persistSpecFn = persistDirectSpecNoClobber,
 }) {
   const runDir = join(runsDir, today)
@@ -694,9 +694,42 @@ export function planRun({
     const reusable = []
     const held = [...directHeld]
     for (const item of reusableRaw) {
+      /**
+       * 🔴 **재사용 direct 행도 지금 승인 source 를 다시 지난다** (2026-10-15 Codex P0).
+       *    폴더가 있다는 것은 예전에 spec 을 썼다는 뜻일 뿐이다. 그 사이 source 가 사라지거나 바뀌었으면
+       *    (승인 취소·stale·hash drift) 또는 디스크 spec 이 지금 컴파일 결과와 다르면 HOLD 다 — 회수·등록 0.
+       *    spec 저장 직후 run.json 전에 죽은 회차도 다음 회차에서 여기로 온다.
+       */
+      const mode = resolveMagazineAutoMode(item)
+      let directRow = null
+      if (!mode.ok) {
+        held.push({ day: item.day, slug: item.slug, code: mode.code, why: mode.why })
+        continue
+      }
+      if (mode.mode === DIRECT_SPEC_MODE) {
+        const j = judgeDirect(item)
+        if (!j.ok) {
+          held.push({ day: item.day, slug: item.slug, code: j.code, why: j.why, directSpec: j.evidence })
+          continue
+        }
+        let persisted = { written: false }
+        if (j.existing === 'ABSENT' && !dryRun) {
+          persisted = persistSpecFn({ spec: j.spec, draftsDir })
+          if (!persisted.ok) {
+            held.push({ day: item.day, slug: item.slug, code: persisted.code, why: persisted.why, directSpec: j.evidence })
+            continue
+          }
+        }
+        directRow = directSpecRow(j, persisted)
+      }
       const v = reuseVerdict(item.slug, { draftsDir, ledger, gate, heroExists })
-      if (v.ok) reusable.push({ ...item, stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })
+      if (v.ok) reusable.push({ ...item, ...(directRow ? { directSpec: directRow } : {}), stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })
       else held.push({ day: item.day, slug: item.slug, code: v.code, why: v.why })
+    }
+    for (const h of held.slice(directHeld.length)) {
+      if (!h.directSpec && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE') continue
+      const e = h.directSpec
+      log(`  ⏸ ${h.code} — ${h.slug} (재사용)${e ? ` · expected ${e.expectedGraphVersion ?? '-'} · observed ${e.observedGraphVersion ?? '-'} · blockers ${e.blockers.join(',') || '-'}` : ''}`)
     }
 
     const all = [...selected, ...review]
@@ -815,7 +848,9 @@ function report(run) {
       const win = s.publishWindow ? ` · 창 ${s.publishWindow.after}~${s.publishWindow.before}` : ''
       const gate = ''   // 🔴 붙일 표지가 없다
       L.push(`- day ${s.day} \`${s.slug}\` — ${s.title}`)
-      L.push(`  ${s.contentType} · ${s.riskLevel}${win}${s.packageWritten ? '' : ' · 패키지 미생성'}${gate}`)
+      // 🔴 DIRECT_SPEC 행은 todo 재료가 없는 것이 정상이다 — "패키지 미생성" 으로 적지 않는다
+      const pkg = s.directSpec ? ` · DIRECT_SPEC ${s.directSpec.specHash.slice(0, 19)} (brief 불필요)` : (s.packageWritten ? '' : ' · 패키지 미생성')
+      L.push(`  ${s.contentType} · ${s.riskLevel}${win}${pkg}${gate}`)
     }
   }
   if (highs) {
@@ -837,6 +872,9 @@ function report(run) {
   L.push('')
   L.push('## 다음')
   L.push('')
+  if (run.selected.some((s) => s.directSpec)) {
+    L.push('DIRECT_SPEC 행은 brief 를 만들지 않는다 — `drafts/magazine/{slug}/article-spec.json` 으로 원고를 회수한다.')
+  }
   L.push('세션에서 `_runs/' + run.date + '/selected/*/brief.todo.md` 의 TODO 를 채운 뒤')
   L.push('`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다.')
   L.push('')
