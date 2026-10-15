@@ -108,7 +108,13 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  * 1,200-token 안에서 dynamic thinking 이 JSON 자리를 소진한 운영 잘림을 줄이는 생성 계약 변경이다.
  * 초안·의미 검수·게이트·Persona 자격 판정은 그대로다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v9'
+/**
+ * `quality-v10` (2026-10-15) = p11의 구조화된 `보존` 입력은 유지하되 문장 복제를 줄이는
+ * 초안 프롬프트 `v2-draft-p12`를 쓴다. 최근 자연 회차에서 p10의 복제 차단은 3/33이었으나
+ * p11은 8/18이었고, 2026-10-15 08:15 KST에는 초안 3/3이 연속 어절 복제로 차단됐다.
+ * 복제 게이트·임계값·의미 검수·Persona 자격·예산 계약은 바꾸지 않는다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v10'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

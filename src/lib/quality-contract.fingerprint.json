@@ -1,12 +1,12 @@
 {
-  "version": "quality-v9",
-  "digest": "b3f1ed5c4368ab13ff27f51067fc7b11b1ba8de3bdefef7598f607d7daa6ec9e",
+  "version": "quality-v10",
+  "digest": "5ee30e544cb00003eae0adee47e0c4d8d4f3d04c80808958d183bcd984ceb510",
   "files": {
-    "src/lib/quality-contract.ts": "5a82160372579c2f5167963ac14a27423e09728b0d41ee0ba282098de6cb37e4",
+    "src/lib/quality-contract.ts": "0e28ed9ffa17f0f39521b5deacf3aaf398013c60e3c2c3248651f49d13086f12",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "51550b880040aed8c0db7557c921755b367acbdef80ec457d82b71df2e2003b5",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "e510db30a44267a9704a03ec030108fd84965a59dda2e4ded8f81070d4b1808c",
+    "src/lib/content-core/pipeline.ts": "913ad8d47c2968cb1d2a55288a7c73ca1dadfdca7ecaa3a8f325f1a46fa3b360",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
@@ -15,7 +15,7 @@
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
     "scripts/lib/content-core-run.mts": "bc4fbb119cd916a200cbd0a9245d1bbf7042777b07c3b480294131484c3d9800",
-    "scripts/lib/content-core-prompts.mts": "d064ae7aaf7afcbddb3e85c8d46855335d663a55feb3b12c3ee99c8f5013ce4b",
+    "scripts/lib/content-core-prompts.mts": "988828d01d7ceacdbc1a2c90d54b0b1d1d20f9849013bf1a8305e5d7bf1cb9c6",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -31,11 +31,12 @@
     "src/lib/content-core/family-specifics.ts": "fbed290b61cb864326035832eb2277615dc430779807fc245e1213f87ed4087e"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "Persona code comparison is numeric; P01-P99 ordering and current card parsing are unchanged, while P100+ becomes stable",
+    "kind": "bump",
+    "reason": "판 quality-v9 → quality-v10",
     "changedFiles": [
-      "src/lib/original-post-persona-match.ts",
-      "src/lib/content-core/speaker.ts"
+      "scripts/lib/content-core-prompts.mts",
+      "src/lib/content-core/pipeline.ts",
+      "src/lib/quality-contract.ts"
     ]
   }
 }
