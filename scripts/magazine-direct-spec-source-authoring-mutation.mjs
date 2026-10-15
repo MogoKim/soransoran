@@ -14,14 +14,16 @@ import {
   authoringCases, CLI_PATH, extractLinkBlock, LIB_PATH, linkCases, ROOT, SOURCE_CHECK_PATH,
 } from './magazine-direct-spec-source-authoring-check.mjs'
 
-const ORIGINAL = { lib: readFileSync(LIB_PATH, 'utf8'), cli: readFileSync(CLI_PATH, 'utf8'), sourceCheck: readFileSync(SOURCE_CHECK_PATH, 'utf8') }
+const SOURCE_PATH = join(dirname(LIB_PATH), 'magazine-direct-spec-source.mjs')
+const ORIGINAL = { lib: readFileSync(LIB_PATH, 'utf8'), cli: readFileSync(CLI_PATH, 'utf8'), sourceCheck: readFileSync(SOURCE_CHECK_PATH, 'utf8'),
+  source: readFileSync(SOURCE_PATH, 'utf8') }
 const CREATED = []
 process.on('exit', () => { for (const f of CREATED) { try { unlinkSync(f) } catch { /* 이미 지웠다 */ } } })
 
 const MUTATIONS = [
   ['MA1', 'prepare 가 APPROVED 후보를 낸다', "    schema: CANDIDATE_SCHEMA,\n    status: CANDIDATE_STATUS,", "    schema: CANDIDATE_SCHEMA,\n    status: 'APPROVED',"],
-  ['MA2', 'graphVersion(pointer≠bundle) 검사 제거', "  if (graph.graphVersion !== pointer) blockers.push('GRAPH_VERSION_MISMATCH')\n", ''],
-  ['MA3', 'EXPORT_HASH 재계산 대조 제거', "  if (!declared || declared !== recomputed) blockers.push('GRAPH_EXPORT_HASH_MISMATCH')\n", ''],
+  ['MA2', 'graphVersion(pointer≠bundle) 검사 제거 (공용 판독)', "  if (graph.graphVersion !== pointer) blockers.push('GRAPH_VERSION_MISMATCH')\n", '', 'source'],
+  ['MA3', 'EXPORT_HASH 재계산 대조 제거 (공용 판독)', "  if (!exportHash || exportHash !== recomputedExportHash) blockers.push('GRAPH_EXPORT_HASH_MISMATCH')\n", '', 'source'],
   ['MA4', '연구 intent hash ↔ 제품 graph 대조 제거', '  if (recomputed !== graph.contentHash?.intents) {', '  if (false) {'],
   ['MA5', 'G8 ADMITTED 사건 검사 제거', "  if (exact.length !== 1) blockers.push(exact.length ? 'ADMISSION_DUPLICATE' : 'ADMISSION_ABSENT')\n", ''],
   ['MA6', 'slug 표 결속 검사 제거', "  if (intentId && slugs[intentId] !== slug) blockers.push('SLUG_UNBOUND')\n", ''],
@@ -60,9 +62,9 @@ const MUTATIONS = [
   ['MP4', 'runtime canonical 경로 거부 제거', "    if (RUNTIME_PATH_PATTERNS.some((re) => re.test(real))) return fail('RUNTIME_OUTPUT_FORBIDDEN'", "    if (false) return fail('RUNTIME_OUTPUT_FORBIDDEN'"],
   ['MP5', '작업 트리(.git) 검사 제거', "  if (!existsSync(join(canon.repoRoot, '.git'))) return fail(", '  if (false) return fail('],
   // ── M-GRAPH control · surface
-  ['MC1', 'control 판 일치 검사 제거', "  if (control.graphVersion !== pointer) blockers.push('GRAPH_CONTROL_VERSION_MISMATCH')\n", ''],
-  ['MC2', 'graph enabled 검사 제거', "  if (!control.enabled) blockers.push('GRAPH_CONTROL_DISABLED')\n", ''],
-  ['MC3', 'kill switch 검사 제거', "  if (control.killSwitch?.tripped !== false) blockers.push('GRAPH_KILL_SWITCH_TRIPPED')\n", ''],
+  ['MC1', 'control 판 일치 검사 제거 (공용 판독)', "  if (control.graphVersion !== pointer) blockers.push('GRAPH_CONTROL_VERSION_MISMATCH')\n", '', 'source'],
+  ['MC2', 'graph enabled 검사 제거 (공용 판독)', "  if (!control.enabled) blockers.push('GRAPH_CONTROL_DISABLED')\n", '', 'source'],
+  ['MC3', 'kill switch 검사 제거 (공용 판독)', "  if (control.killSwitch?.tripped !== false) blockers.push('GRAPH_KILL_SWITCH_TRIPPED')\n", '', 'source'],
   ['MC4', 'source cluster enabled 검사 제거', "  if (!sourceCluster || !control.enabledClusters.includes(sourceCluster)) blockers.push('GRAPH_CLUSTER_DISABLED')\n", ''],
   ['MC5', '관계 surface 검사 제거 (BODY_CALLOUT 허용)', '      const surfaceOk = surfaces.includes(e.placement)', '      const surfaceOk = true'],
   ['MC6', '관계 type 검사 제거', "      const typeOk = relationTypes.includes(e.type) && (e.slot !== DISCOVERY_SLOT || e.type === DISCOVERY_TYPE)", '      const typeOk = true'],
@@ -76,11 +78,15 @@ const MUTATIONS = [
   ['MG2', 'G8 사건 schema 검사 제거', "  if (exact.some((e) => e.schemaVersion !== G8_LEDGER_SCHEMA || !nonEmpty(e.at) || !nonEmpty(e.title) || !nonEmpty(e.cluster))) blockers.push('ADMISSION_SCHEMA_INVALID')\n", ''],
   ['MG3', 'G8 교차 신원 검사 제거', "  if (crossed.length) blockers.push('ADMISSION_IDENTITY_CROSSED')\n", ''],
   // ── hero
-  ['MH1', 'OPTIONAL hero 를 승인 전 요구하지 않는다', "  return imageMode === 'NO_IMAGE' ? 'NONE' : 'ALT_AND_SCENE'", "  return imageMode === 'REQUIRED' ? 'ALT_AND_SCENE' : 'NONE'"],
+  // ── 승인 basis · 잠금
+  ['MB1', '승인 entry 에 productBasis 를 싣지 않는다', '    productBasis: state.productBasis,\n', ''],
+  ['MK1', '읽을 수 없는 최근 잠금을 죽은 잠금으로 회수', '          if (age < UNREADABLE_LOCK_GRACE_MS) return { ok: false', '          if (false) return { ok: false'],
+  ['MK2', '쓰기 직전 잠금 소유권 재확인 제거', '      if (!lock.owns()) {', '      if (false) {'],
 ]
 /** source-check 의 부속 검사 연결 블록 변이 — 실패를 무시하면 linkCases 가 잡아야 한다 */
 const LINK_MUTATIONS = [
-  ['ML1', 'source-check 가 부속 검사 실패를 무시한다', '    if (!ok) fail++\n', ''],
+  ['ML1', 'source-check 가 부속 검사 실패를 무시한다', '    else fail++\n', ''],
+  ['ML3', 'source-check 가 부속 검사 성공을 pass 에 세지 않는다', '    if (ok) pass++\n    else fail++', '    if (!ok) fail++'],
   ['ML2', 'source-check 가 통과 표식 없이 종료 코드만 본다', '    const ok = r.status === 0 && marker.test(r.stdout)', '    const ok = r.status === 0'],
 ]
 
@@ -88,13 +94,20 @@ let pass = 0
 let fail = 0
 const report = (ok, name, detail = '') => { if (ok) pass++; else fail++; console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`) }
 
-for (const [id, label, from, to] of MUTATIONS) {
+for (const [id, label, from, to, target = 'lib'] of MUTATIONS) {
   const pairs = Array.isArray(from) ? from : [[from, to]]
-  if (!pairs.every(([a]) => ORIGINAL.lib.includes(a))) { report(false, `${id} ${label}`, '변이 지점을 찾지 못했다 (하네스 결함)'); continue }
+  const base = target === 'source' ? ORIGINAL.source : ORIGINAL.lib
+  if (!pairs.every(([a]) => base.includes(a))) { report(false, `${id} ${label}`, '변이 지점을 찾지 못했다 (하네스 결함)'); continue }
   const libPath = join(dirname(LIB_PATH), `.dssa-${id}-${process.pid}-${basename(LIB_PATH)}`)
   const cliPath = join(dirname(CLI_PATH), `.dssa-${id}-${process.pid}-${basename(CLI_PATH)}`)
   CREATED.push(libPath, cliPath)
-  writeFileSync(libPath, pairs.reduce((src, [a, b]) => src.replace(a, b), ORIGINAL.lib))
+  if (target === 'source') {
+    // 🔴 공용 판독(source 모듈) 변이 — authoring lib 사본이 변이 source 를 import 한다
+    const srcPath = join(dirname(SOURCE_PATH), `.dssa-${id}-${process.pid}-${basename(SOURCE_PATH)}`)
+    CREATED.push(srcPath)
+    writeFileSync(srcPath, pairs.reduce((src, [a, b]) => src.replace(a, b), ORIGINAL.source))
+    writeFileSync(libPath, ORIGINAL.lib.replace("from './magazine-direct-spec-source.mjs'", `from './${basename(srcPath)}'`))
+  } else writeFileSync(libPath, pairs.reduce((src, [a, b]) => src.replace(a, b), ORIGINAL.lib))
   writeFileSync(cliPath, ORIGINAL.cli.replace("'./lib/magazine-direct-spec-source-authoring.mjs'", `'./lib/${basename(libPath)}'`))
   let caught = false
   let why = ''
@@ -110,7 +123,7 @@ for (const [id, label, from, to] of MUTATIONS) {
     caught = false
     why = `변이 적재 실패 — 하네스 결함이지 검출이 아니다: ${e.message.split('\n')[0]}`
   } finally {
-    for (const f of [libPath, cliPath]) { try { unlinkSync(f) } catch { /* 이미 지웠다 */ } }
+    for (const f of CREATED.filter((x) => x.includes(`.dssa-${id}-`))) { try { unlinkSync(f) } catch { /* 이미 지웠다 */ } }
   }
   report(caught, `${id} ${label} → 잡혔다`, why.slice(0, 160))
 }
@@ -135,7 +148,7 @@ for (const [id, label, from, to] of MUTATIONS) {
 
 {
   const unchanged = readFileSync(LIB_PATH, 'utf8') === ORIGINAL.lib && readFileSync(CLI_PATH, 'utf8') === ORIGINAL.cli
-    && readFileSync(SOURCE_CHECK_PATH, 'utf8') === ORIGINAL.sourceCheck
+    && readFileSync(SOURCE_CHECK_PATH, 'utf8') === ORIGINAL.sourceCheck && readFileSync(SOURCE_PATH, 'utf8') === ORIGINAL.source
   const residue = ['scripts', 'scripts/lib'].flatMap((d) => readdirSync(join(ROOT, d)).filter((f) => f.startsWith('.dssa-')))
   report(unchanged && residue.length === 0, '변이 뒤 원본 바이트 불변 · 임시 사본 잔여 0', residue.join(', '))
 }

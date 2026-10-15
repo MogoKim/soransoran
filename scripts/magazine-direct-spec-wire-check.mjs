@@ -84,14 +84,16 @@ import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
 import {
-  DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, readProductGraphVersion,
+  DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, readProductGraphState, readProductGraphVersion,
 } from './lib/magazine-direct-spec-source.mjs'
 
 /** 등록 gate 는 현재 승인 source 를 요구한다 — 시험 폴더에 fixture 와 같은 내용의 승인 source 를 놓는다 */
 function writeApprovedSource(d, input, gv) {
+  // 🔴 승인 basis — 소비 관문과 같은 helper 로 실제 제품 판에서 계산한다
+  const productBasis = productBasisFor(readProductGraphState(ROOT), { intentId: input.node.intentId, queueCluster: input.queueItem.cluster })
   const entry = { status: 'APPROVED', approvedBy: 'wire-check', approvedAt: '2026-10-15T12:00:00+09:00',
     g8ManifestHash: input.queueItem.g8ManifestHash, node: input.node, relations: input.relations,
-    hero: input.hero, publication: input.publication }
+    hero: input.hero, publication: input.publication, productBasis }
   entry.sourceHash = directSpecSourceHash(entry)
   const sp = directSpecSourcePath(d, gv)
   mkdirSync(dirname(sp), { recursive: true })
@@ -403,6 +405,8 @@ check('W19 adapter 는 사이드-이펙트 심볼을 import 하지 않는다 (�
  *       지문·바이트로 확실히 구분된다. */
 function makeDirectAndLegacySandbox() {
   const input = loadFixture()
+  // 🔴 전송 관문은 현재 제품 판 basis 를 다시 맞춘다 — fixture 를 현재 graphVersion 에 둔다
+  input.node.graphVersion = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
   const d = tmp('ds-w20')
   const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
   const slug = persisted.spec.identity.slug
@@ -416,7 +420,7 @@ function makeDirectAndLegacySandbox() {
   saveQuarantine({}, quarantinePath)
   // 🔴 전송 경계는 정본 큐 행 + 현재 승인 source 로 다시 검증한다 — 시험 판·큐를 주입한다
   writeApprovedSource(d, input, input.node.graphVersion)
-  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => input.node.graphVersion }
+  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => input.node.graphVersion, productRoot: () => ROOT }
   // 🔴 legacy 호출은 direct 흔적(article-spec.json)이 없는 폴더에서 한다 — 흔적이 있으면 legacy 로 강등하지 않는다
   const legacyDraftsDir = tmp('ds-w20-legacy')
   mkdirSync(join(legacyDraftsDir, slug), { recursive: true })
@@ -531,6 +535,7 @@ check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 ident
 
 check('W28 auto-lane gate — direct 는 brief/review 없이, 승인 source 와 같은 spec 일 때만 통과 · legacy 는 차단', () => {
   const input = loadFixture()
+  input.node.graphVersion = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
   const d = tmp('ds-w28')
   compileAndPersistDirectSpec({ input, draftsDir: d })
   const gv = input.node.graphVersion

@@ -22,18 +22,18 @@
 
 import { createHash } from 'node:crypto'
 import {
-  closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
+  closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 
 import { canonicalJson } from './magazine-article-spec.mjs'
 import {
-  DIRECT_SPEC_REQUIRED_FIELDS, DIRECT_SPEC_SOURCE_DIRNAME, DIRECT_SPEC_SOURCE_SCHEMA,
-  directSpecSourceHash, judgeDirectSpecSource, missingSourceFields,
+  DIRECT_SPEC_REQUIRED_FIELDS, DIRECT_SPEC_SOURCE_DIRNAME, DIRECT_SPEC_SOURCE_SCHEMA, DISCOVERY_RELATION_TYPE,
+  directSpecSourceHash, heroRequired, judgeDirectSpecSource, missingSourceFields, productBasisFor, readProductGraphState,
 } from './magazine-direct-spec-source.mjs'
 import { verifyConsistency } from './magazine-g8-promoter.mjs'
 import { isPublic, resolvePublishAt } from './magazine-gate.mjs'
-import { parseArticlesSource, parseQueueSource, sliceLiteral } from './magazine-load.mjs'
+import { parseArticlesSource, parseQueueSource } from './magazine-load.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 
 export const CANDIDATE_SCHEMA = 'magazine-article-spec-source-candidate/1'
@@ -43,7 +43,7 @@ export const RESEARCH_INTENT_SCHEMA = 'intent/2'
 
 const DIRECT_SLOTS = new Set(['DIRECT_NEXT', 'SAME_EXPERIENCE', 'ACTION_OR_CONTEXT'])
 const DISCOVERY_SLOT = 'BRIDGE_DISCOVERY'
-const DISCOVERY_TYPE = 'BRIDGE'
+const DISCOVERY_TYPE = DISCOVERY_RELATION_TYPE
 const KST_AT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\+09:00$/
 /** 🔴 운영 runtime 작업장에는 쓰지 않는다 — 승인 artifact 는 기능 브랜치에서 검토를 거쳐 들어간다 */
 export const RUNTIME_PATH_PATTERNS = [/soransoran-magazine-runtime(?:\/|$)/]
@@ -51,9 +51,6 @@ export const RUNTIME_PATH_PATTERNS = [/soransoran-magazine-runtime(?:\/|$)/]
 const MACHINE_APPROVER = /:|^(?:machine|bot|auto|automation|system|ci|agent|claude|codex|chatgpt|gpt|openai|anthropic)\b/i
 
 const PRODUCT = {
-  graphCurrent: 'src/content/magazine/graph/current.ts',
-  graphControl: 'src/content/magazine/graph/control.ts',
-  graphResolver: 'src/lib/magazine-graph.ts',
   articles: 'src/content/magazine/articles.ts',
   queue: 'drafts/magazine/topic-queue.ts',
 }
@@ -82,53 +79,12 @@ export function parseKst(value) {
   return back === `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}` ? ms : null
 }
 
-/** 제품 소스의 문자열 배열 상수 — `export const NAME = ['A', 'B'] as const` */
-function readStringArray(text, name) {
-  const m = new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\]`).exec(text)
-  if (!m) return null
-  return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
-}
-
 /**
- * 제품 graph — current.ts 가 가리키는 bundle 을 읽고 EXPORT_HASH 를 재계산한다(check:magazine-graph 와 같은 규칙).
- * control.ts · 구현 surface(magazine-graph.ts) 도 함께 읽는다.
+ * 제품 graph — **공용 판독(`readProductGraphState`)을 그대로 쓴다.** authoring 과 소비 관문이 같은 구현을 본다.
  * 🔴 pointer · bundle · EXPORT_HASH · control 판이 어긋나면 그 판을 증거로 쓰지 않는다.
  */
 export function readProductGraph(repoRoot) {
-  const current = readText(join(repoRoot, PRODUCT.graphCurrent), 'graph current.ts')
-  const m = /^export \{ GRAPH, EXPORT_HASH \} from '\.\/(g-[a-z0-9-]+)'$/m.exec(current)
-  if (!m) return { ok: false, code: 'GRAPH_POINTER_UNREADABLE', why: 'current.ts 가 가리키는 판을 찾지 못했다' }
-  const pointer = m[1]
-  const bundleText = readText(join(repoRoot, dirname(PRODUCT.graphCurrent), `${pointer}.ts`), 'graph bundle')
-  const literal = sliceLiteral(bundleText, bundleText.indexOf('=', bundleText.indexOf('export const GRAPH')), '{', '}')
-  if (!literal) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 리터럴을 찾지 못했다' }
-  const graph = JSON.parse(literal)
-  const declared = /export const EXPORT_HASH = '([0-9a-f]+)'/.exec(bundleText)?.[1] ?? null
-  const recomputed = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16)
-
-  const controlText = readText(join(repoRoot, PRODUCT.graphControl), 'graph control.ts')
-  const control = {
-    graphVersion: /graphVersion: '([^']+)'/.exec(controlText)?.[1] ?? null,
-    enabled: /\n\s*enabled: (true|false),/.exec(controlText)?.[1] === 'true',
-    enabledClusters: JSON.parse((/enabledClusters: (\[[^\]]*\])/.exec(controlText)?.[1] ?? '[]').replace(/'/g, '"')),
-    surfaces: JSON.parse(/surfaces: (\{[^}]*\})/.exec(controlText)?.[1] ?? '{}'),
-    killSwitch: JSON.parse(/killSwitch: (\{[^}]*\})/.exec(controlText)?.[1] ?? '{"tripped":true}'),
-  }
-  const resolverText = readText(join(repoRoot, PRODUCT.graphResolver), 'magazine-graph.ts')
-  const implemented = readStringArray(resolverText, 'IMPLEMENTED_SURFACES') ?? []
-  const footer = readStringArray(resolverText, 'FOOTER_SURFACES') ?? []
-  const relationTypes = readStringArray(resolverText, 'MAGAZINE_RELATION_TYPES') ?? []
-
-  const blockers = []
-  if (graph.graphVersion !== pointer) blockers.push('GRAPH_VERSION_MISMATCH')
-  if (!declared || declared !== recomputed) blockers.push('GRAPH_EXPORT_HASH_MISMATCH')
-  if (control.graphVersion !== pointer) blockers.push('GRAPH_CONTROL_VERSION_MISMATCH')
-  if (!control.enabled) blockers.push('GRAPH_CONTROL_DISABLED')
-  if (control.killSwitch?.tripped !== false) blockers.push('GRAPH_KILL_SWITCH_TRIPPED')
-  if (!implemented.length || !footer.length || !relationTypes.length) blockers.push('GRAPH_SURFACE_CONTRACT_UNREADABLE')
-  // 🔴 3+1 관계가 실제로 보이는 자리 = 구현된 footer surface ∩ control 에서 켠 surface
-  const surfaces = footer.filter((s) => implemented.includes(s) && control.surfaces?.[s] === true)
-  return { ok: true, pointer, graph, exportHash: declared, recomputedExportHash: recomputed, control, surfaces, relationTypes, blockers }
+  return readProductGraphState(repoRoot)
 }
 
 /**
@@ -173,7 +129,7 @@ export function readResearchReference({ researchDir, graph, intentId }) {
  */
 export function readCurrentState({ repoRoot, admissionRoot, slug }) {
   const productGraph = readProductGraph(repoRoot)
-  if (!productGraph.ok) return productGraph
+  if (!productGraph.ok) return { ...productGraph, ok: false }
   const { graph, control } = productGraph
   const articlesText = readText(join(repoRoot, PRODUCT.articles), 'articles.ts')
   const queueText = readText(join(repoRoot, PRODUCT.queue), 'topic-queue.ts')
@@ -219,13 +175,12 @@ export function readCurrentState({ repoRoot, admissionRoot, slug }) {
   return {
     ok: true,
     graph, control, surfaces: productGraph.surfaces, relationTypes: productGraph.relationTypes, articles, queueRow: row, lane, sourceCluster,
+    productBasis: productBasisFor(productGraph, { intentId, queueCluster: row?.cluster ?? null }),
     identity: {
       graphVersion: productGraph.pointer,
-      exportHash: productGraph.exportHash,
       contentHash: graph.contentHash,
-      control: { graphVersion: control.graphVersion, enabled: control.enabled, enabledClusters: control.enabledClusters,
-        surfaces: control.surfaces, killSwitchTripped: control.killSwitch?.tripped ?? null },
-      relationSurfaces: productGraph.surfaces,
+      // 🔴 승인 entry 에 실릴 basis 와 같은 값 — 후보 이후 control·surface·resolver 계약이 바뀌면 STATE_CHANGED
+      productBasis: productBasisFor(productGraph, { intentId, queueCluster: row?.cluster ?? null }),
       queue: row ? { slug, intentId, g8ManifestHash: row.g8ManifestHash ?? null, validationProfile: lane.profile ?? null,
         imageMode: row.imageMode ?? null, rowHash: sha(canonicalJson(row)) } : { slug, intentId: null },
       admission: exact.length === 1 ? { eventHash: sha(canonicalJson(exact[0])), schemaVersion: exact[0].schemaVersion ?? null,
@@ -323,23 +278,10 @@ export function candidateHashOf(candidate) {
   return sha(canonicalJson(body))
 }
 
-/**
- * 🔴 **hero 계약 (authoring)** — 자동 레인에 들어가는 DIRECT_SPEC 은 hero 를 만들 수 있어야 한다.
- *    REQUIRED · OPTIONAL 모두 alt · scene 을 승인 전에 요구하고, NO_IMAGE 만 hero=null 이다.
- *    후보 provenance · unresolvedFields · approve 가 이 함수 하나를 쓴다.
- */
-export function heroContract(imageMode) {
-  return imageMode === 'NO_IMAGE' ? 'NONE' : 'ALT_AND_SCENE'
-}
-
-/** 후보에서 아직 사람이 채우지 않은 필드 — 관문(`missingSourceFields`) 목록에 authoring hero 계약을 더한다 */
+/** 후보에서 아직 사람이 채우지 않은 필드 — 소비 관문과 **같은 함수**(`missingSourceFields`, hero 계약 포함)다 */
 export function unresolvedOf(entry, queueRow) {
   const probe = { ...entry, status: 'APPROVED', node: { ...(entry?.node ?? {}), status: 'APPROVED' } }
-  const missing = missingSourceFields(probe, queueRow)
-  if (heroContract(queueRow?.imageMode) === 'ALT_AND_SCENE') {
-    for (const k of ['alt', 'scene']) if (!nonEmpty(entry?.hero?.[k])) missing.push(`hero.${k}`)
-  }
-  return [...new Set(missing)].sort()
+  return [...new Set(missingSourceFields(probe, queueRow))].sort()
 }
 
 /**
@@ -387,7 +329,7 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
   else { blockers.push('RELATIONS_INSUFFICIENT'); open('relations.discovery', '증명된 discovery 관계가 없다') }
 
   const imageMode = queueRow?.imageMode ?? null
-  const hero = heroContract(imageMode)
+  const hero = heroRequired(imageMode) ? 'ALT_AND_SCENE' : 'NONE'
   const entry = {
     g8ManifestHash: identity.queue.g8ManifestHash ?? null,
     node: {
@@ -478,23 +420,44 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
 }
 
-/** 단일 writer 잠금 — O_EXCL. 죽은 pid 의 잠금만 회수한다 */
+/** 읽을 수 없는 잠금을 회수하기까지 기다리는 시간 — 그보다 새 잠금은 다른 writer 가 쥔 것으로 본다 */
+const UNREADABLE_LOCK_GRACE_MS = 60_000
+
+/**
+ * 단일 writer 잠금.
+ * 🔴 **내용이 다 쓰인 뒤에만 잠금이 보인다** — pid 를 쓴 임시 파일을 `link` 로 원자 생성한다.
+ *    (앞판은 O_EXCL 로 빈 파일을 만든 뒤 pid 를 썼다. 그 사이 다른 프로세스가 빈 파일을 읽고
+ *     죽은 잠금으로 지워 두 writer 가 동시에 잠금을 쥐었다 — 동시 승인 25회 중 1회 재현.)
+ *    죽은 pid 의 잠금만 회수하고, 읽을 수 없는 잠금은 오래된 것만 회수한다.
+ */
 function acquireLock(lockPath) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = openSync(lockPath, 'wx')
-      writeSync(fd, JSON.stringify({ pid: process.pid }))
-      closeSync(fd)
-      return { ok: true, release: () => { try { unlinkSync(lockPath) } catch { /* 이미 없다 */ } } }
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e
-      let holder = null
-      try { holder = JSON.parse(readFileSync(lockPath, 'utf8')) } catch { holder = null }
-      if (holder && pidAlive(holder.pid)) return { ok: false, code: 'LOCK_BUSY', why: `다른 승인이 진행 중이다 (pid ${holder.pid})` }
-      try { unlinkSync(lockPath) } catch { /* 경쟁자가 먼저 지웠다 */ }
+  const token = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  const tmp = `${lockPath}.${token}`
+  const fd = openSync(tmp, 'wx')
+  try { writeSync(fd, JSON.stringify({ pid: process.pid, token })); fsyncSync(fd) } finally { closeSync(fd) }
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        linkSync(tmp, lockPath)
+        const owns = () => { try { return JSON.parse(readFileSync(lockPath, 'utf8')).token === token } catch { return false } }
+        return { ok: true, owns, release: () => { if (owns()) { try { unlinkSync(lockPath) } catch { /* 이미 없다 */ } } } }
+      } catch (e) {
+        if (e.code !== 'EEXIST') throw e
+        let holder = null
+        try { holder = JSON.parse(readFileSync(lockPath, 'utf8')) } catch { holder = null }
+        if (holder && pidAlive(holder.pid)) return { ok: false, code: 'LOCK_BUSY', why: `다른 승인이 진행 중이다 (pid ${holder.pid})` }
+        if (!holder) {
+          let age = Infinity
+          try { age = Date.now() - statSync(lockPath).mtimeMs } catch { /* 방금 사라졌다 */ }
+          if (age < UNREADABLE_LOCK_GRACE_MS) return { ok: false, code: 'LOCK_BUSY', why: '읽을 수 없는 최근 잠금이 있다 — 회수하지 않는다' }
+        }
+        try { unlinkSync(lockPath) } catch { /* 경쟁자가 먼저 지웠다 */ }
+      }
     }
+    return { ok: false, code: 'LOCK_BUSY', why: '잠금을 얻지 못했다' }
+  } finally {
+    try { unlinkSync(tmp) } catch { /* 이미 없다 */ }
   }
-  return { ok: false, code: 'LOCK_BUSY', why: '잠금을 얻지 못했다' }
 }
 
 const docBytes = (doc) => `${JSON.stringify(doc, null, 2)}\n`
@@ -557,13 +520,15 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
     g8ManifestHash: e.g8ManifestHash,
     node: { ...e.node, status: 'APPROVED' },
     relations: e.relations, hero: e.hero ?? null, publication: e.publication,
+    // 🔴 승인한 M-GRAPH 판 — 소비 관문이 같은 helper 로 다시 계산해 정확히 같아야 쓴다 (sourceHash 에 포함)
+    productBasis: state.productBasis,
   }
   approvedEntry.sourceHash = directSpecSourceHash(approvedEntry)
 
   // 🔴 실제 관문(judgeDirectSpecSource)으로 한 번 더 — 승인 artifact 는 관문이 읽을 수 있어야 의미가 있다(쓰기 전, 메모리에서)
   const gv = state.identity.graphVersion
   const gateCheck = judgeDirectSpecSource({
-    queueItem: state.queueRow, draftsDir: '/nonexistent-dssa', expectedGraphVersion: gv,
+    queueItem: state.queueRow, draftsDir: '/nonexistent-dssa', expectedGraphVersion: gv, productRoot: roots.root,
     exists: () => true,
     readFile: () => JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [approvedEntry] }),
   })
@@ -602,6 +567,11 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
     try { writeSync(fd, bytes); fsyncSync(fd) } finally { closeSync(fd) }
     try {
       hooks.beforeRename?.({ tmp, file })
+      // 🔴 잠금을 아직 내가 쥐고 있는가 — 회수 경쟁으로 잃었으면 쓰지 않는다
+      if (!lock.owns()) {
+        unlinkSync(tmp)
+        return fail('LOCK_LOST', '쓰기 직전 잠금 소유권을 잃었다 — 덮어쓰지 않는다')
+      }
       const now = snapshot(file)
       if (now.exists !== before.exists || now.hash !== before.hash) {
         unlinkSync(tmp)

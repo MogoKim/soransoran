@@ -238,11 +238,14 @@ export function inputRepairGate({ slug, draftsDir = DRAFTS_DIR, quarantinePath =
  * @returns {{ok:true, message:string|null, messageFingerprint:string|null, hold:object|null}
  *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
  */
-const PRODUCT_GRAPH_CURRENT = join(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'), 'src/content/magazine/graph/current.ts')
+const PRODUCT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const PRODUCT_GRAPH_CURRENT = join(PRODUCT_ROOT, 'src/content/magazine/graph/current.ts')
 /** 운영 기본값 — 정본 큐와 제품 current graphVersion. 시험만 `directSourceDeps` 로 바꾼다 */
 const DEFAULT_DIRECT_SOURCE_DEPS = {
   queue: () => loadQueue(),
   expectedGraphVersion: () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
+  /** 🔴 승인 basis(control·surface·resolver 계약)를 다시 맞출 제품 루트 */
+  productRoot: () => PRODUCT_ROOT,
 }
 
 /**
@@ -273,7 +276,8 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
   }
   if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {
     const deps = directSourceDeps ?? DEFAULT_DIRECT_SOURCE_DEPS
-    const sourceCheck = () => verifyDirectSpecOnDisk({ slug, queue: deps.queue(), draftsDir, expectedGraphVersion: deps.expectedGraphVersion() })
+    const sourceCheck = () => verifyDirectSpecOnDisk({ slug, queue: deps.queue(), draftsDir, expectedGraphVersion: deps.expectedGraphVersion(),
+      productRoot: deps.productRoot?.() ?? null })
     const blocked = (v) => ({ ok: false, code: v.code, why: v.why, directSpec: v.evidence ?? null, message: null, messageFingerprint: null })
     // 🔴 호출자 행은 direct 가 아닌데 direct 흔적이 있다 — 큐 삭제·opt-in 철회를 무엇보다 먼저 정본 큐로 판정한다
     if (resolved.mode !== DIRECT_SPEC_MODE) {

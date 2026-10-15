@@ -387,8 +387,14 @@ export function authoringCases(lib, { cliPath = CLI_PATH } = {}) {
       const src = await import(pathToFileURL(join(ROOT, 'scripts/lib/magazine-direct-spec-source.mjs')).href)
       const w = makeWorld(); const c = ready(w)
       assert.equal(approve(w, c).written, true)
-      const j = src.judgeDirectSpecSource({ queueItem: queueRow(), draftsDir: join(w.repo, 'drafts/magazine'), expectedGraphVersion: GV })
+      const j = src.judgeDirectSpecSource({ queueItem: queueRow(), draftsDir: join(w.repo, 'drafts/magazine'), expectedGraphVersion: GV, productRoot: w.repo })
       assert.equal(j.ok, true, j.why); assert.equal(j.evidence.approvalStatus, 'APPROVED')
+      // 🔴 승인 entry 는 공용 helper 의 basis 를 싣고, sourceHash 가 그것을 덮는다
+      const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+      const expected = src.productBasisFor(src.readProductGraphState(w.repo), { intentId: INTENT, queueCluster: queueRow().cluster })
+      assert.deepEqual(doc.entries[0].productBasis, expected)
+      const forged = structuredClone(doc.entries[0]); forged.productBasis.control.enabledClusters = ['family']
+      assert.notEqual(src.directSpecSourceHash(forged), doc.entries[0].sourceHash, 'sourceHash 가 productBasis 를 덮지 않는다')
     }],
     ['S18c NO_IMAGE 큐 행에 hero 내용 → 관문 거부(GATE_REJECTED) · 쓰기 0', () => {
       const w = makeWorld({ queue: (q) => { q[0].imageMode = 'NO_IMAGE' } })
@@ -406,6 +412,17 @@ export function authoringCases(lib, { cliPath = CLI_PATH } = {}) {
       const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo)
       mkdirSync(dirname(f), { recursive: true }); writeFileSync(`${f}.lock`, JSON.stringify({ pid: process.pid }))
       assert.equal(approve(w, c).code, 'LOCK_BUSY'); assert.equal(existsSync(f), false)
+    }],
+    ['S21c 읽을 수 없는 최근 잠금(빈 파일) → 회수하지 않고 LOCK_BUSY', () => {
+      const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo)
+      mkdirSync(dirname(f), { recursive: true }); writeFileSync(`${f}.lock`, '')
+      assert.equal(approve(w, c).code, 'LOCK_BUSY'); assert.equal(existsSync(f), false); assert.equal(readFileSync(`${f}.lock`, 'utf8'), '')
+    }],
+    ['S21d 쓰기 직전 잠금 소유권을 잃으면 LOCK_LOST · 쓰기 0', () => {
+      const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo)
+      const a = approve(w, c, { hooks: { beforeRename: () => writeFileSync(`${f}.lock`, JSON.stringify({ pid: process.pid, token: 'other-writer' })) } })
+      assert.equal(a.code, 'LOCK_LOST'); assert.equal(existsSync(f), false)
+      assert.equal(JSON.parse(readFileSync(`${f}.lock`, 'utf8')).token, 'other-writer', '남의 잠금을 지웠다')
     }],
     ['S21b 실제 다중 프로세스 동시 승인 → 쓴 writer 정확히 1', async () => {
       const w = makeWorld(); const c = ready(w); const cf = join(w.base, 'candidate.json'); writeFileSync(cf, JSON.stringify(c))
@@ -446,7 +463,7 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       assert.equal(existsSync(sourceFile(w.repo)), false)
     }],
     ['S24a 생산자는 legacy·producer 경로에서 import 되지 않는다', () => {
-      const users = spawnSync('grep', ['-rl', 'magazine-direct-spec-source-authoring', join(ROOT, 'scripts'), join(ROOT, 'src')], { encoding: 'utf8' }).stdout
+      const users = spawnSync('grep', ['-rlE', "(from|import\\() *'[^']*magazine-direct-spec-source-authoring", join(ROOT, 'scripts'), join(ROOT, 'src')], { encoding: 'utf8' }).stdout
         .split('\n').filter(Boolean).map((p) => p.replace(`${ROOT}/`, '')).filter((p) => !/source-authoring|direct-spec-source-check\.mjs$/.test(p))
       assert.deepEqual(users, [], `생산자를 import 하는 운영 경로: ${users}`)
     }],
@@ -461,7 +478,7 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       assert.equal(r.ok, true, r.why)
       const bad = r.candidate.blockers.filter((b) => /^GRAPH_(EXPORT|VERSION|CONTROL|KILL|SURFACE)/.test(b))
       assert.deepEqual(bad, [], `실제 제품 graph·control 판독 실패: ${bad}`)
-      assert.deepEqual(r.candidate.identity.relationSurfaces, ['FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE'])
+      assert.deepEqual(r.candidate.identity.productBasis.relationContract.enabledRelationSurfaces, ['FOOTER_BRIDGE', 'FOOTER_NEXT', 'FOOTER_SIBLING'])
       assert.ok(r.candidate.blockers.includes('QUEUE_NOT_G8_ADMITTED'))
     }],
     ['(수치) 승인·쓰기·외부 호출', () => { authoringCases.counts = COUNTS }],
@@ -482,19 +499,19 @@ export function linkCases(blockText) {
   const runBlock = (fakes) => {
     const root = tmp('link')
     for (const [rel, body] of Object.entries(fakes)) { mkdirSync(dirname(join(root, rel)), { recursive: true }); writeFileSync(join(root, rel), body) }
-    const driver = `const { join } = await import('node:path'); const ROOT = ${JSON.stringify(root)}; let fail = 0;\n${blockText}\nprocess.stdout.write('\\n@@' + JSON.stringify({ fail }))`
+    const driver = `const { join } = await import('node:path'); const ROOT = ${JSON.stringify(root)}; let fail = 0; let pass = 0;\n${blockText}\nprocess.stdout.write('\\n@@' + JSON.stringify({ fail, pass }))`
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', driver], { encoding: 'utf8' })
     const m = /@@(\{.*\})/.exec(r.stdout ?? '')
     if (!m) throw new Error(`연결 블록 실행 실패: ${r.stderr}`)
-    return JSON.parse(m[1]).fail
+    return JSON.parse(m[1])
   }
   const A = 'scripts/magazine-direct-spec-source-authoring-check.mjs'
   const M = 'scripts/magazine-direct-spec-source-authoring-mutation.mjs'
   return [
-    ['L1 부속 검사 연결 — 실패 종료·통과 표식 없음을 fail 로 센다 · 둘 다 통과면 0', () => {
-      assert.equal(runBlock({ [A]: 'process.exit(1)', [M]: "console.log('DIRECT_SPEC source 작성 변이: 1 pass, 0 fail')" }), 1, 'check 실패를 무시했다')
-      assert.equal(runBlock({ [A]: "console.log('DIRECT_SPEC source 작성 검사: 1 pass, 0 fail')", [M]: "console.log('요약 없음')" }), 1, 'mutation 표식 없음을 무시했다')
-      assert.equal(runBlock({ [A]: "console.log('DIRECT_SPEC source 작성 검사: 1 pass, 0 fail')", [M]: "console.log('DIRECT_SPEC source 작성 변이: 1 pass, 0 fail')" }), 0)
+    ['L1 부속 검사 연결 — 실패 종료·통과 표식 없음은 fail · 성공은 각각 pass 로 센다', () => {
+      assert.deepEqual(runBlock({ [A]: 'process.exit(1)', [M]: "console.log('DIRECT_SPEC source 작성 변이: 1 pass, 0 fail')" }), { fail: 1, pass: 1 }, 'check 실패를 무시했다')
+      assert.deepEqual(runBlock({ [A]: "console.log('DIRECT_SPEC source 작성 검사: 1 pass, 0 fail')", [M]: "console.log('요약 없음')" }), { fail: 1, pass: 1 }, 'mutation 표식 없음을 무시했다')
+      assert.deepEqual(runBlock({ [A]: "console.log('DIRECT_SPEC source 작성 검사: 1 pass, 0 fail')", [M]: "console.log('DIRECT_SPEC source 작성 변이: 1 pass, 0 fail')" }), { fail: 0, pass: 2 }, '두 부속 성공이 pass 에 각각 들어가지 않았다')
     }],
   ]
 }

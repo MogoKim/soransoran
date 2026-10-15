@@ -23,7 +23,8 @@ import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, readDirectSpec, resolveMagazineAutoMode } from './magazine-direct-spec.mjs'
 import { readProductGraphVersion, verifyDirectSpecOnDisk } from './magazine-direct-spec-source.mjs'
 
-const PRODUCT_GRAPH_CURRENT = join(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'), 'src/content/magazine/graph/current.ts')
+const PRODUCT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const PRODUCT_GRAPH_CURRENT = join(PRODUCT_ROOT, 'src/content/magazine/graph/current.ts')
 
 // 🔴 LANE_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 레인을 가르지 않는다
 
@@ -59,6 +60,8 @@ export function paths(slug, draftsDir = DRAFTS_DIR) {
 export function gate(slug, queue, draftsDir = DRAFTS_DIR, {
   /** 🔴 direct 행만 부른다 — legacy 판정은 제품 graph 를 읽지 않는다 */
   expectedGraphVersionFn = () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
+  /** 🔴 승인 basis 를 다시 맞출 제품 루트 — 운영은 이 저장소 */
+  productRootFn = () => PRODUCT_ROOT,
 } = {}) {
   const item = queue.find((q) => q.slug === slug) ?? null
   const blockedBy = []
@@ -92,7 +95,7 @@ export function gate(slug, queue, draftsDir = DRAFTS_DIR, {
        *    source 가 취소·교체된 뒤 남은 spec·원고가 등록으로 흘러갈 수 있다.
        *    디스크 spec 이 현재 source 의 컴파일 결과와 바이트까지 같아야 통과한다.
        */
-      const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion: expectedGraphVersionFn() })
+      const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion: expectedGraphVersionFn(), productRoot: productRootFn() })
       if (!v.ok) block(v.code, v.why)
     }
   } else {
