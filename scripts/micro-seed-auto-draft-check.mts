@@ -372,7 +372,11 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
   check('🔴 생성 쪽이 정본 universe 의 Persona 코드에 묶는다', (() => {
     // 🔴 후보 풀을 읽는 곳은 생성 러너와 계약 산출이 **함께 쓰는 한 파일**이다
     const r = codeOf('scripts/lib/voice-runtime.mts')
-    return /planBundles\(\{ rows: asset\.rows, personaCodes: PRODUCTION_PERSONA_CODES \}\)/.test(r)
+    // 🔴 (2026-10-15 D20) 배정은 댓글과 같은 정본(`stableAssignment` · 동결 보충 묶음 포함)에서 오고,
+    //    생성 후보는 그중 production 정본 코드만 꺼낸다 — 정본 밖 코드로 새지 않는다
+    return /stableAssignment\(\{ repoRoot: process\.cwd\(\) \}\)/.test(r)
+      && /PRODUCTION_PERSONA_CODES\.flatMap\(\(code\) => \{\s*const bundle = plan\.byCode\.get\(code\)/.test(r)
+      && !/planBundles\(/.test(r)
       && !/voice-a/.test(r)
       // 🔴 `loadVoice` 가 시각을 받게 됐다 (2026-09-23) — 후보 풀 지문에 그날 나이가 들어간다.
       //    묶는 곳이 하나라는 계약은 그대로다.

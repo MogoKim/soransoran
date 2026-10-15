@@ -116,7 +116,7 @@ const EXPECT = { before: CODES.length - DRIFT.length, after: CODES.length }
 }
 
 const bundles = bundlesForPersonas({ repoRoot: root, personaCodes: CODES })
-if (bundles.origin !== '정본 자산' || bundles.byCode.size !== CODES.length) {
+if (!bundles.canonicalAsset || bundles.byCode.size !== CODES.length) {
   console.error(`🔴 임시 말투 자산이 운영 모양으로 서지 않았다(${bundles.origin} · ${bundles.byCode.size}) — ${bundles.blocks.join(' / ')}`)
   process.exit(3)
 }

@@ -41,6 +41,7 @@ import {
   loadCanonAsset, planAppendOnlyBundles, planBundles, referenceSeedShareCount, stableAssignment,
   type LocalComment,
 } from './persona-reference-store.mjs'
+import { selectFrozenSupplementBundle } from './persona-reference-supplement-store.mjs'
 
 export type AutogenVerdict = {
   code: string
@@ -346,15 +347,26 @@ export function voicePoolFor(input: {
   const wideBy = appended.byCode
   const drift = appended.productionDrift
   const byCode: VoicePool['byCode'] = new Map()
+  const allAssigned = new Map(base.byCode)
   for (const code of input.newCodes) {
-    const b = wideBy.get(code)
+    // A frozen supplement is the authority once written. This lets card/seed
+    // preparation consume the new bundle before the cohort enters production.
+    const b = selectFrozenSupplementBundle({
+      personaCode: code,
+      frozenByCode: base.supplementByCode,
+      plannedByCode: wideBy,
+    })
     if (b === undefined) continue
-    byCode.set(code, { bundle: b, seedShareCount: referenceSeedShareCount(wideBy, code) })
+    allAssigned.set(code, b)
+    byCode.set(code, { bundle: b, seedShareCount: null })
+  }
+  for (const [code, value] of byCode) {
+    byCode.set(code, { ...value, seedShareCount: referenceSeedShareCount(allAssigned, code) })
   }
   return {
     ok: drift.length === 0,
     code: drift.length === 0 ? 'OK' : 'VOICE_ASSIGNMENT_DRIFT',
-    eligibleSpeakers: all.bundles.length + appended.extraEligibleSpeakers,
+    eligibleSpeakers: Math.max(all.bundles.length + appended.extraEligibleSpeakers, allAssigned.size),
     assignedSpeakers: base.byCode.size,
     productionWithoutVoice: PRODUCTION_PERSONA_CODES.filter((c) => !base.byCode.has(c)),
     byCode,

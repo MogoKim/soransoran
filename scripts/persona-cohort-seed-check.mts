@@ -177,6 +177,8 @@ console.log('⑦ CLI 연결')
     ['readApprovedCreative({', 'judgeCreativeAgainstCards({', 'judgeCohortVoice({', 'buildCohortSeeds({', 'seedPrivacyProblems(text', 'judgeExistingOutput('].every((s) => cli.includes(s)))
   check('🔴 CLI 는 DB 를 읽기만 한다(create · update · delete · upsert · $transaction 0)', !/\.(create|update|updateMany|delete|deleteMany|upsert|createMany)\(|\$transaction|\$executeRaw/.test(cli))
   check('🔴 CLI 는 provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(/i.test(cli))
+  check('🔴 보충 스냅샷 뒤에도 문자열이 아니라 구조화된 정본 판정을 쓴다',
+    cli.includes('!sa.canonicalAsset') && !cli.includes("sa.origin !== '정본 자산'"))
   check('🔴 --write 일 때만 쓴다 · 임시 파일 → rename · 600', /if \(!WRITE\) \{/.test(cli) && cli.indexOf('if (!WRITE) {') < cli.indexOf('writeFileSync(tmp')
     && /writeFileSync\(tmp, text, \{ mode: SEED_FILE_MODE \}\)/.test(cli) && /chmodSync\(tmp, SEED_FILE_MODE\)/.test(cli) && /renameSync\(tmp, path\)/.test(cli))
   check('🔴 CLI 가 기존 파일 권한을 판정에 넘기고 bad-mode · fix-mode 를 처리한다',
