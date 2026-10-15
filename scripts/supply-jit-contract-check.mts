@@ -365,6 +365,53 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   }, RUNNER_GRID)
   check('🔴 🔴 **예약 있는 usageUnknown 이 cohort 에 있으면 preflight 는 SUPPLY_COST_UNKNOWN (SHORT · PASS 아님)**',
     unkV.codes.includes('SUPPLY_COST_UNKNOWN') && !unkV.codes.includes('SUPPLY_COST_SHORT'), JSON.stringify(unkV.codes))
+  const liveSettled = Array.from({ length: 34 }, (_, i) => ({ ...e(hp, 0.003), attemptId: `20261004-031500-s${i}` }))
+  const liveUnknown = { ...e(hp, null, 'usageUnknown'), attemptId: '20261004-031500-u', reservedUsd: 0.006 }
+  const liveCost = costAttributionOf({
+    entries: [...liveSettled, liveUnknown], fateByKey, counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
+  })
+  const trialCostOf = (c: NonNullable<typeof liveCost>) => ({
+    settledRequests: c.settledRequests,
+    usageUnknownRequests: c.usageUnknownRequests,
+    ineligibleOpenRequests: c.trialIneligibleOpenRequests,
+    riskUsdPerSlotValidResult: c.trialRiskUsdPerSlotValidResult,
+  })
+  const trialVerdict = (cost: NonNullable<typeof liveCost>, cap = 0.5) => judgeNextPreflight('d5', {
+    slotValidOpportunities: 5,
+    readyCohort: {
+      sources: 10, published: 3, lost: 0, scheduled: 0, unknown: 0,
+      usdPerSlotValidResult: cost.usdPerSlotValidResult, trialCost: trialCostOf(cost),
+    },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
+    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
+    supplyDailyUsdCap: cap, runnerHealth: 'ok',
+  }, RUNNER_GRID)
+  const liveTrial = liveCost === null ? null : trialVerdict(liveCost)
+  check('🟢 제한 trial — 정산 34 + usageUnknown 1(예약 양수) · 비율 97.1% · 위험액 D5 상한 안 → PASS + 명시 경고',
+    liveCost !== null && liveCost.usdPerSlotValidResult === null && liveCost.settledRequests === 34
+    && liveCost.usageUnknownRequests === 1 && liveCost.trialIneligibleOpenRequests === 0
+    && liveTrial?.verdict === 'PASS' && liveTrial.warnings.includes('SUPPLY_COST_TRIAL_RISK')
+    && !liveTrial.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify({ liveCost, liveTrial }))
+  const tooSmall = costAttributionOf({
+    entries: [...liveSettled.slice(0, 19), liveUnknown], fateByKey, counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
+  })
+  check('🔴 정산 표본 19건은 제한 trial 하한 20 미달 → SUPPLY_COST_UNKNOWN',
+    tooSmall !== null && trialVerdict(tooSmall).codes.includes('SUPPLY_COST_UNKNOWN'))
+  const twoUnknown = costAttributionOf({
+    entries: [...liveSettled, liveUnknown, { ...liveUnknown, attemptId: 'u2' }], fateByKey,
+    counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
+  })
+  check('🔴 usageUnknown 2건은 제한 trial 불가 → SUPPLY_COST_UNKNOWN',
+    twoUnknown !== null && trialVerdict(twoUnknown).codes.includes('SUPPLY_COST_UNKNOWN'))
+  const noReservationTrial = costAttributionOf({
+    entries: [...liveSettled, { ...liveUnknown, reservedUsd: null }], fateByKey,
+    counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
+  })
+  check('🔴 양수 예약 없는 usageUnknown은 위험 envelope를 만들지 않는다 → SUPPLY_COST_UNKNOWN',
+    noReservationTrial !== null && noReservationTrial.trialIneligibleOpenRequests === 1
+    && trialVerdict(noReservationTrial).codes.includes('SUPPLY_COST_UNKNOWN'))
+  check('🔴 제한 trial 위험액이 공급 상한을 넘으면 UNKNOWN으로 숨기지 않고 SUPPLY_COST_SHORT',
+    liveCost !== null && trialVerdict(liveCost, 0.1).codes.includes('SUPPLY_COST_SHORT'))
   check('🟢 결말 모름 $0.01도 분자에 포함 — 전체 $0.03 ÷ 확인 결과 1 = 보수적 상한 $0.03',
     cUnknown !== null && Math.abs((cUnknown.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12
     && Math.abs(cUnknown.byFate.unknown - 0.01) < 1e-12, JSON.stringify(cUnknown))

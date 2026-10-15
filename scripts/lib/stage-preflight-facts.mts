@@ -580,7 +580,16 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       + ` (추정 예약액 $${costAttribution.openReservedUsd.toFixed(4)} — 실제 비용 아님) · 현재 정산 $${costAttribution.totalUsd.toFixed(4)}`)
   }
   const readyCohort: ReadyCohortFact | null = fates === null || worksetSources === null ? null
-    : { sources: worksetSources, ...fates, usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null }
+    : {
+        sources: worksetSources, ...fates,
+        usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null,
+        trialCost: costAttribution === null ? null : {
+          settledRequests: costAttribution.settledRequests,
+          usageUnknownRequests: costAttribution.usageUnknownRequests,
+          ineligibleOpenRequests: costAttribution.trialIneligibleOpenRequests,
+          riskUsdPerSlotValidResult: costAttribution.trialRiskUsdPerSlotValidResult,
+        },
+      }
 
   const facts: PreflightFacts = {
     slotValidOpportunities,

@@ -261,7 +261,20 @@ export type ReadyCohortFact = {
    *    🔴 raw READY 단가(정산 ÷ 행 수)를 대신 쓰지 않는다.
    */
   usdPerSlotValidResult: number | null
+  /** 실제 단가를 만들지 않고, 다음 단계 제한 trial 에만 쓰는 미상 비용 위험 표본 */
+  trialCost?: {
+    settledRequests: number
+    usageUnknownRequests: number
+    ineligibleOpenRequests: number
+    riskUsdPerSlotValidResult: number | null
+  } | null
 }
+
+export const SUPPLY_TRIAL_MIN_SETTLED_REQUESTS = 20
+export const SUPPLY_TRIAL_MAX_USAGE_UNKNOWN_REQUESTS = 1
+export const SUPPLY_TRIAL_MIN_SETTLED_RATIO = 0.95
+export const PREFLIGHT_WARNING_CODES = ['SUPPLY_COST_TRIAL_RISK'] as const
+export type PreflightWarningCode = (typeof PREFLIGHT_WARNING_CODES)[number]
 
 /**
  * 🔴 **필요 READY 구간 = 증명일 목표 슬롯 + 실측 손실 보충** — 처리량 · 공급 비용이 같이 쓰는 **한 계산**.
@@ -298,6 +311,7 @@ export type PreflightVerdict = {
   stage: GenericStage
   verdict: EvidenceVerdictKind
   codes: readonly PreflightCode[]
+  warnings: readonly PreflightWarningCode[]
   counts: Readonly<Record<string, number>>
 }
 
@@ -312,6 +326,7 @@ export type PreflightVerdict = {
  */
 export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, grid: RunnerGrid): PreflightVerdict {
   const codes = new Set<PreflightCode>()
+  const warnings = new Set<PreflightWarningCode>()
   const n = genericDailyTarget(stage)
   const counts: Record<string, number> = { target: n }
   const prof = genericProfileOf(stage, grid)
@@ -377,8 +392,35 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
    */
   const perResult = c === null ? null : c.usdPerSlotValidResult
   if (perResult !== null && perResult > 0) { counts.usdPerSlotValidResult = perResult; counts.supplyDailyUsdNeeded = n * perResult }
-  if (perResult === null || !(perResult > 0) || facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
-  else if (n * perResult > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
+  if (facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
+  else if (perResult !== null && perResult > 0) {
+    if (n * perResult > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
+  } else {
+    const trial = c?.trialCost ?? null
+    const observed = trial === null ? 0 : trial.settledRequests + trial.usageUnknownRequests
+    const settledRatio = observed > 0 && trial !== null ? trial.settledRequests / observed : 0
+    if (trial !== null) {
+      counts.supplySettledRequests = trial.settledRequests
+      counts.supplyUsageUnknownRequests = trial.usageUnknownRequests
+      counts.supplyTrialIneligibleOpenRequests = trial.ineligibleOpenRequests
+      counts.supplySettledRatio = settledRatio
+      if (trial.riskUsdPerSlotValidResult !== null) {
+        counts.supplyTrialRiskUsdPerSlotValidResult = trial.riskUsdPerSlotValidResult
+        counts.supplyTrialRiskUsdNeeded = n * trial.riskUsdPerSlotValidResult
+      }
+    }
+    const boundedTrial = trial !== null
+      && trial.settledRequests >= SUPPLY_TRIAL_MIN_SETTLED_REQUESTS
+      && trial.usageUnknownRequests > 0
+      && trial.usageUnknownRequests <= SUPPLY_TRIAL_MAX_USAGE_UNKNOWN_REQUESTS
+      && trial.ineligibleOpenRequests === 0
+      && settledRatio >= SUPPLY_TRIAL_MIN_SETTLED_RATIO
+      && trial.riskUsdPerSlotValidResult !== null
+      && trial.riskUsdPerSlotValidResult > 0
+    if (!boundedTrial) codes.add('SUPPLY_COST_UNKNOWN')
+    else if (n * trial.riskUsdPerSlotValidResult! > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
+    else warnings.add('SUPPLY_COST_TRIAL_RISK')
+  }
   if (requirementUnknown) codes.add('READY_REQUIREMENT_UNKNOWN')
   // 러너 건강
   if (facts.runnerHealth === null || facts.runnerHealth === 'unknown') codes.add('RUNNER_UNKNOWN')
@@ -386,7 +428,7 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   const ordered = PREFLIGHT_CODES.filter((c) => codes.has(c))
   const failing = ordered.filter((c) => !PREFLIGHT_UNKNOWN.includes(c))
   const verdict: EvidenceVerdictKind = failing.length > 0 ? 'FAIL' : ordered.length > 0 ? 'UNKNOWN' : 'PASS'
-  return { stage, verdict, codes: ordered, counts }
+  return { stage, verdict, codes: ordered, warnings: PREFLIGHT_WARNING_CODES.filter((c) => warnings.has(c)), counts }
 }
 
 // ─────────────────────────────────────────────────────────

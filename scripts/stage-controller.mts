@@ -109,7 +109,7 @@ async function carriedPlanFor(prisma: PrismaClient, previous: ValidatedStageDeci
     if (!r.found || !r.result.ok) break
     const dec = r.result.decision
     const hold = isHold(dec)
-    days.unshift({ decision: dec, evidence: hold ? null : await evidenceFor(prisma, { kstDate: d, stage: dec.release, decision: dec, errors }) })
+    days.unshift({ decision: dec, evidence: await evidenceFor(prisma, { kstDate: d, stage: dec.release, decision: dec, errors }) })
     date = d
     if (!hold) break
   }
@@ -230,6 +230,7 @@ async function main(): Promise<number> {
         nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID)
         preflightDetail = r.detail
         log(`   ${target} preflight ${nextPreflight.verdict}${nextPreflight.codes.length > 0 ? ` [${nextPreflight.codes.join(',')}]` : ''}`
+          + `${nextPreflight.warnings.length > 0 ? ` WARN [${nextPreflight.warnings.join(',')}]` : ''}`
           + ` (${Object.entries(nextPreflight.counts).map(([k, x]) => `${k}=${x}`).join(',')})`)
         for (const n of r.notes) log(`      ⬚ ${n}`)
       }

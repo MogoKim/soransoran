@@ -143,10 +143,11 @@ console.log('\n⑤ 반례 7 · 8 — 비용: 하루 필요 = 목표 × 완전 �
     unknown.codes.includes('SUPPLY_COST_UNKNOWN') && !unknown.codes.includes('SUPPLY_COST_SHORT')
     && !('rawReadyUsd' in unknown.counts) && !('publicPostUsd' in unknown.counts), show(unknown))
   const judge = strip('src/lib/stage-ladder-generic.ts')
-  check('🔴 처리량은 replenishmentOf 구간 하나 · 비용은 목표 × 결과당 비용 하나 — raw 단가 계산 없음',
+  check('🔴 처리량은 replenishmentOf 구간 하나 · 비용은 목표 × 결과당 비용 또는 제한 trial 위험 하나 — raw 단가 계산 없음',
     (judge.match(/[=(]\s*replenishmentOf\(/g) ?? []).length === 1
     && /judgeAgainst\(req, \(need\) => capacity >= need\)/.test(judge)
-    && /else if \(n \* perResult > facts\.supplyDailyUsdCap\) codes\.add\('SUPPLY_COST_SHORT'\)/.test(judge)
+    && /if \(n \* perResult > facts\.supplyDailyUsdCap\) codes\.add\('SUPPLY_COST_SHORT'\)/.test(judge)
+    && /n \* trial\.riskUsdPerSlotValidResult! > facts\.supplyDailyUsdCap/.test(judge)
     && !/rawUnit|supplyUsd\b/.test(judge))
 }
 
@@ -166,8 +167,11 @@ console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 
     && /r\.decidedBy === AUTO_DECIDER\s*\|\| \(\(r\.decidedBy \?\? ''\)\.startsWith\('machine:'\)/.test(facts)
     && !/originalPostApprovalQueue\.count\(/.test(facts)
     && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.scheduled \+ fates\.unknown/.test(facts))
-  check('🔴 비용은 같은 cohort 의 완전 연결 결과당 비용 하나로 사실에 담긴다 — raw 정산 ÷ 행 수 없음',
-    /\{ sources: worksetSources, \.\.\.fates, usdPerSlotValidResult: costAttribution\?\.usdPerSlotValidResult \?\? null \}/.test(facts)
+  check('🔴 비용은 같은 cohort 의 완전 연결 결과당 비용과 제한 trial 위험으로 사실에 담긴다 — raw 정산 ÷ 행 수 없음',
+    /usdPerSlotValidResult: costAttribution\?\.usdPerSlotValidResult \?\? null/.test(facts)
+    && /settledRequests: costAttribution\.settledRequests/.test(facts)
+    && /usageUnknownRequests: costAttribution\.usageUnknownRequests/.test(facts)
+    && /riskUsdPerSlotValidResult: costAttribution\.trialRiskUsdPerSlotValidResult/.test(facts)
     && !/supplyUsdPerReady|supplyUsd: spent/.test(facts))
   check('🔴 감사 retry · overdue · 확정 결함은 전역 quality signal 이 막는다',
     qualitySignalOf({ unresolvedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'bad'
