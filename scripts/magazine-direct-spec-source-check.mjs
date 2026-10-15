@@ -1164,5 +1164,24 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
   report(changed.length === 0 && residue.length === 0, '변이 뒤 원본 바이트 불변 · 임시 사본 잔여 0', [...changed, ...residue].join(', '))
 }
 
+/**
+ * 🔴 **부속 검사 — source 작성(prepare · approve)** (2026-10-15).
+ *    승인 artifact 를 만드는 상류 절차의 반례·변이를 같은 CI 경로에서 돌린다.
+ *    이 검사의 통과 개수(위 pass)는 바꾸지 않는다 — 실패할 때만 fail 로 센다.
+ */
+{
+  const { spawnSync } = await import('node:child_process')
+  for (const [file, marker] of [
+    ['scripts/magazine-direct-spec-source-authoring-check.mjs', /DIRECT_SPEC source 작성 검사: \d+ pass, 0 fail/],
+    ['scripts/magazine-direct-spec-source-authoring-mutation.mjs', /DIRECT_SPEC source 작성 변이: \d+ pass, 0 fail/],
+  ]) {
+    const r = spawnSync(process.execPath, [join(ROOT, file)], { encoding: 'utf8', maxBuffer: 1e8, env: process.env })
+    const ok = r.status === 0 && marker.test(r.stdout)
+    const summary = (r.stdout.match(/DIRECT_SPEC source 작성 (?:검사|변이): .*$/m) ?? ['요약 없음'])[0]
+    console.log(`${ok ? 'OK  ' : 'FAIL'} 부속 ${file} — ${summary} (개수 미포함)`)
+    if (!ok) fail++
+  }
+}
+
 console.log(`\nDIRECT_SPEC source 관문: ${pass} pass, ${fail} fail (실제 반례 ${realPass} pass · ${realFail} fail)`)
 process.exit(fail === 0 ? 0 : 1)
