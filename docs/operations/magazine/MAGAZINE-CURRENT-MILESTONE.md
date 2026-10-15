@@ -34,21 +34,23 @@ M-GRAPH next approved node
 
 ## 2. 현재 상태
 
-### M-GRAPH — NOT ACTIVE
+### M-GRAPH — ACTIVE, NOT COMPLETE
 
-- 2026-10-15 현재 제품 graph 검사는 275/275다. 연구 build는 167 intents · 339 edges ·
-  82 mappings지만 제품에 export된 runtime bundle은 143 intents · 298 edges · 53 mappings다.
-- 2026-10-15 10:30 KST 고정 시각의 공개 글은 53편이다. 읽기 전용 coverage audit의 분류는
-  `READY 18`, `UNMAPPED 17`, `NO_ACTIVE_EDGE 17`, `NO_USABLE_RESULT 1`이다. mapping은 있으나
-  자기 링크·중복을 제외하면 결과가 없는 글은 `fewer-friends-50s` 한 편이다.
-- PR #726은 병합·Production 배포·runtime 반영됐다. 저장소 `control.ts`는 `sleep` 5편만 여는
-  canary이며 로컬 resolver와 같은 SHA의 로컬 Production build는 5/5 GRAPH다.
-- 그러나 2026-10-15 Production HTML은 같은 배포 SHA에서도 5편 모두 FALLBACK이었다. Vercel의
-  빈 cluster env가 저장소 기본값을 덮는 경계를 바로잡는 PR #730이 검증 중이므로, 공개 HTML에서
-  graphVersion이 확인되기 전에는 M-GRAPH ACTIVE로 판정하지 않는다.
-- PR #728은 위 분류를 재현 가능한 읽기 전용 도구와 검사로 고정한 후보다. 현재 bundle은
-  한 slug에 여러 intent를 허용하므로 이를 오류로 세지 않고 mapping multiplicity 증거로 따로 낸다.
-- 최신 등록 글의 mapping 보정, reverse update, bundle rebuild와 공개 watch가 남아 있다.
+- PR #730과 #732가 Production 빈 env 경계와 공개 HTML runtime resolution을 고쳤다. 기존 `sleep`
+  5편은 Production HTML에서 `source=GRAPH`, `reason=none`, `graphVersion=g-20260923-ad8e89`가
+  확인됐다.
+- PR #734는 활성 cluster 전수 coverage, cluster별 3 direct + 1 discovery 표본, 실제 이전 bundle
+  rollback을 일반화한 graph 검사로 고정했다.
+- PR #735는 현재 공개 53편과 M3 편입을 재대조한 `g-20261015-d5f6fe` bundle을 배포했다. 연구
+  build는 167 intents · 345 edges · 87 mappings이고, 제품 runtime export는 143 intents · 304 edges ·
+  71 live mappings · 95 active edges다. 연구 저장소의 날짜별 snapshot으로 같은 version과 content를
+  재생성할 수 있다.
+- 최신 coverage는 `READY 30`, `UNMAPPED 1`, `NO_ACTIVE_EDGE 21`, `NO_USABLE_RESULT 1`,
+  stale mapping 0이다. `sleep` 5/5와 `family` 4/4가 READY다.
+- Production과 magazine runtime은 merge SHA `1d652cbf`를 반영했다. 공개 HTML에서 `sleep` 5편과
+  `family` 4편 모두 `source=GRAPH`, `reason=none`, `graphVersion=g-20261015-d5f6fe`를 반환한다.
+- 따라서 M-GRAPH는 첫 실제 canary를 넘어 두 cluster에서 ACTIVE다. 그러나 전체 mapping·edge 보정,
+  다음 저위험 cluster 확장, 실제 click/impression과 OUTCOME 연결이 남아 있어 COMPLETE가 아니다.
 
 ### M-AUTO — PARTIAL
 
@@ -59,8 +61,8 @@ M-GRAPH next approved node
   바꿨다. 제품의 `DIRTY_TREE` 관문은 유지했고 전체 변이 회귀가 진행 중이다.
 - 현재 배포 경로는 여전히 `LEGACY_BRIEF_V1`이다. `DIRECT_SPEC_V1`은 아직 구현·배포 전이다.
 - PR #727은 `magazine-article-spec/1` schema, 순수 compiler, canonical JSON·SHA-256,
-  40개 계약 검사를 추가한 기반 후보다. SEASONAL compile 후 verify 양성 반례도 포함한다.
-  producer·delivery 연결과 mode 전환은 아직 하지 않았다.
+  40개 계약 검사를 main에 반영했다. SEASONAL compile 후 verify 양성 반례도 포함한다.
+  producer·delivery 연결과 mode 전환은 아직 별도 M-AUTO worktree에서 진행 중이다.
 
 ### OUTCOME — NOT PROVEN
 
@@ -101,8 +103,8 @@ M-GRAPH next approved node
 
 | 날짜 | M-AUTO | M-GRAPH / OUTCOME |
 |---|---|---|
-| **10/15 오늘** | brief bridge 회귀 완료 → PR·CI·병합·배포. `DIRECT_SPEC_V1` schema·compiler·hash·fixture PR #727을 닫고 STANDARD canary wiring을 병렬 파일 소유권 안에서 구현 | PR #730으로 Production sleep canary를 실제 HTML까지 복구. 53편 coverage 분류 PR #728을 graph gate에 연결하고 닫는다. mapping 보정 입력과 최신 bundle rebuild 후보 생성. event·identity gap을 위 계약으로 고정 |
-| **10/15 오늘 stretch** | direct 정상·형식 실패·provider 실패·재실행 rehearsal과 변이까지 로컬 커밋 | reverse relation·미공개 누출·3+1·kill switch 검증 후 graph bundle PR |
+| **10/15 오늘** | `DIRECT_SPEC_V1` schema·compiler·hash·fixture는 main 반영 완료. STANDARD canary wiring과 정상·실패·재실행 rehearsal을 별도 M-AUTO writer가 계속 구현 | Production sleep 복구, 53편 coverage gate, current-article reconciliation, family reverse relation, 새 bundle 배포와 공개 HTML 9편 확인까지 완료 |
+| **10/15 오늘 stretch** | direct wiring의 반례·변이·rollback을 끝내고 코드 PASS 후보를 만든다 | 다음 저위험 cluster 후보를 근거로 순위화하고, OUTCOME event·identity gap 설계를 시작한다 |
 | **10/16** | 오늘 끝낸 코드의 자연 무인 회차를 운영 증거로만 관측. 결정적 결함 발견을 이 날짜로 미루지 않는다 | canary watch·click/impression 수집 시작 상태 확인. 코드 결함은 즉시 같은 날 수리 |
 | **10/17 이전** | direct canary가 통과하면 default 전환 여부 판정, legacy는 bounded rollback으로만 보존 | canary가 안전하면 다음 cluster 확장. OUTCOME cohort 시계 시작 |
 | **10/22 상한** | 현재 코드 자연 무인 회차까지 포함해 M-AUTO OPERATING_PASS/미달을 판정 | M-GRAPH ACTIVE/미달과 OUTCOME 측정 가동을 판정. 7일 실제 사용자 결과는 관측창 종료 뒤 별도 판정 |
@@ -157,15 +159,13 @@ M-GRAPH next approved node
 
 ## 7. 다음 즉시 작업
 
-0. GitHub Actions 잠금 해제는 attempt 2가 실제 runner 단계에 진입해 확인됐다. PR #725 CI가 끝나면
-   정본을 병합한다.
-1. Claude의 `23014791` 전체 변이 회귀와 clean 원복을 확인하고 bridge PR·CI·병합·배포를 오늘 끝낸다.
-2. PR #726 CI 뒤 `sleep` canary를 병합·배포하고 실제 공개 HTML·source/version/reason·kill switch 준비를 확인한다.
-3. 별도 M-AUTO worktree에서 ArticleSpec schema와 legacy/direct 경계를 오늘 구현한다.
-4. PR #727의 ArticleSpec 기반을 닫고, bridge writer 종료 뒤 STANDARD 한 건의 direct wiring을 시작한다.
-5. PR #728의 coverage 분류를 graph gate에 연결한 뒤 미매핑 17편·NO_ACTIVE_EDGE 17편·
-   NO_USABLE_RESULT 1편을 근거별로 보정해 최신 bundle 후보를 오늘 만든다.
-6. OUTCOME은 기존 related event·집계형 signup funnel을 보존하면서 누락된 search landing,
+1. 별도 M-AUTO worktree에서 ArticleSpec과 legacy/direct 경계를 연결하고 STANDARD 한 건의 direct
+   생성·QA·등록 rehearsal과 변이를 끝낸다. Claude writer의 파일을 다른 writer가 동시에 고치지 않는다.
+2. M-GRAPH는 남은 `UNMAPPED 1`, `NO_ACTIVE_EDGE 21`, `NO_USABLE_RESULT 1`을 근거별로 보정하고
+   다음 저위험 cluster를 하나만 확장한다. 설명 가능한 관계가 없으면 숫자를 위해 연결하지 않는다.
+3. family와 sleep의 공개 link·source/version/reason을 watch하고, 잘못된 관계·미공개 누출·기존 링크
+   회귀가 생기면 해당 cluster만 비활성화한다.
+4. OUTCOME은 기존 related event·집계형 signup funnel을 보존하면서 누락된 search landing,
    community action, return_visit identity-safe 계약을 설계한다. 광고·회원가입 전환·D100 파일과
    겹치는 구현은 writer 조정 뒤 진행한다.
-7. 모든 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고하고 한 층의 PASS를 전체 완료로 부르지 않는다.
+5. 모든 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고하고 한 층의 PASS를 전체 완료로 부르지 않는다.
