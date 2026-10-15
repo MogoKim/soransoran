@@ -38,11 +38,14 @@ M-GRAPH next approved node
 
 - 2026-10-15 현재 제품 graph 검사는 275/275다. 연구 build는 167 intents · 339 edges ·
   82 mappings지만 제품에 export된 runtime bundle은 143 intents · 298 edges · 53 mappings다.
-- 공개 글은 52편이지만 전체 cluster를 가정해도 현재 bundle이 graph 결과를 내는 글은 18편이다.
-  공개 16편은 mapping이 없고, mapping이 있는 36편 중 18편은 활성 출발 관계 결과가 없다.
+- 2026-10-15 10:30 KST 고정 시각의 공개 글은 53편이다. 읽기 전용 coverage audit의 분류는
+  `READY 18`, `UNMAPPED 17`, `NO_ACTIVE_EDGE 17`, `NO_USABLE_RESULT 1`이다. mapping은 있으나
+  자기 링크·중복을 제외하면 결과가 없는 글은 `fewer-friends-50s` 한 편이다.
 - 운영 `control.ts`는 아직 `enabled: false`, `enabledClusters: []`라 실제 공개 화면은 전부 fallback이다.
 - PR #726은 `sleep` 5편만 여는 첫 canary 후보다. 로컬에서 5/5 GRAPH, 다른 47편 불변,
   kill switch 전체 fallback, 직접 3 + 발견 1 표본을 확인했고 Linux CI를 기다린다.
+- PR #728은 위 분류를 재현 가능한 읽기 전용 도구와 검사로 고정한 후보다. 현재 bundle은
+  한 slug에 여러 intent를 허용하므로 이를 오류로 세지 않고 mapping multiplicity 증거로 따로 낸다.
 - 최신 등록 글의 mapping 보정, reverse update, bundle rebuild와 공개 watch가 남아 있다.
 
 ### M-AUTO — PARTIAL
@@ -53,12 +56,19 @@ M-GRAPH next approved node
 - 자식 `23014791`은 rehearsal S8/S8B를 10/11 gray 고정 사건·article 격리·untrack으로
   바꿨다. 제품의 `DIRTY_TREE` 관문은 유지했고 전체 변이 회귀가 진행 중이다.
 - 현재 배포 경로는 여전히 `LEGACY_BRIEF_V1`이다. `DIRECT_SPEC_V1`은 아직 구현·배포 전이다.
+- PR #727은 `magazine-article-spec/1` schema, 순수 compiler, canonical JSON·SHA-256,
+  31개 계약 검사를 추가한 기반 후보다. producer·delivery 연결과 mode 전환은 아직 하지 않았다.
 
 ### OUTCOME — NOT PROVEN
 
 - 공개 글과 CTA 기록만으로는 성공이 아니다.
 - 검색 유입 -> 관련 글 -> 커뮤니티 행동 -> 7일 내 실제 사용자 재방문의 identity-safe 측정이
   완결되지 않았다.
+- `magazine_related_impression`과 `magazine_related_click`은 실제 상세 화면에서 수집한다. 매거진
+  가입 퍼널도 `body-end`·`content-end` 기준의 집계형 일일 수치를 기록한다.
+- 그러나 `session_start`, `engaged_session`, `return_visit`은 North Star 정의에만 있고 실제 event
+  계약이 없다. search landing -> related click -> community action -> 7-day return을 같은
+  privacy-safe cohort로 결합할 수 없으므로 OUTCOME은 계속 `NOT PROVEN`이다.
 
 ## 3. 2026-10-22 완료 게이트
 
@@ -88,7 +98,7 @@ M-GRAPH next approved node
 
 | 날짜 | M-AUTO | M-GRAPH / OUTCOME |
 |---|---|---|
-| **10/15 오늘** | brief bridge 회귀 완료 → PR·CI·병합·배포. 이어서 `DIRECT_SPEC_V1` schema·compiler·hash·fixture와 STANDARD canary wiring을 병렬 파일 소유권 안에서 구현 | 52편 대조 완료 → PR #726 sleep canary CI·병합·배포·공개 HTML 확인. mapping 보정 입력과 최신 bundle rebuild 후보 생성. 기존 event·identity gap read-only 감사 |
+| **10/15 오늘** | brief bridge 회귀 완료 → PR·CI·병합·배포. `DIRECT_SPEC_V1` schema·compiler·hash·fixture PR #727을 닫고 STANDARD canary wiring을 병렬 파일 소유권 안에서 구현 | 53편 coverage 분류 PR #728과 PR #726 sleep canary를 닫고 공개 HTML 확인. mapping 보정 입력과 최신 bundle rebuild 후보 생성. event·identity gap을 위 계약으로 고정 |
 | **10/15 오늘 stretch** | direct 정상·형식 실패·provider 실패·재실행 rehearsal과 변이까지 로컬 커밋 | reverse relation·미공개 누출·3+1·kill switch 검증 후 graph bundle PR |
 | **10/16** | 오늘 끝낸 코드의 자연 무인 회차를 운영 증거로만 관측. 결정적 결함 발견을 이 날짜로 미루지 않는다 | canary watch·click/impression 수집 시작 상태 확인. 코드 결함은 즉시 같은 날 수리 |
 | **10/17 이전** | direct canary가 통과하면 default 전환 여부 판정, legacy는 bounded rollback으로만 보존 | canary가 안전하면 다음 cluster 확장. OUTCOME cohort 시계 시작 |
@@ -119,9 +129,11 @@ M-GRAPH next approved node
 
 ### M-GRAPH work order — current bundle과 canary
 
-- 공개 52편·예약 글·queue와 167 intents/82 mappings를 대조해 `MAPPED`, `UNMAPPED`, `STALE`,
-  `AMBIGUOUS`를 근거와 함께 산출한다. 제목 유사도로 임의 mapping하지 않는다.
-- 현재 graph 적용 18/52의 나머지 34편이 mapping 부재인지, 관계 부재인지, 미공개 대상 때문인지 분리한다.
+- 공개 53편·예약 글·queue와 167 intents/82 mappings를 대조해 `READY`, `UNMAPPED`,
+  `NO_ACTIVE_EDGE`, `TARGET_UNMAPPED`, `TARGET_UNPUBLISHED`, `STALE_TARGET_MAPPING`,
+  `NO_USABLE_RESULT`를 근거와 함께 산출한다. 제목 유사도로 임의 mapping하지 않는다.
+- 현재 graph 적용 18/53의 나머지 35편을 mapping 부재 17, 활성 출발 관계 부재 17,
+  self·duplicate 제외 뒤 사용 가능 결과 부재 1로 분리한다.
 - 최신 bundle을 builder로 재생성하고 hash·reverse relation·미공개 누출·중복·자기 링크를 검증한다.
 - 저위험 cluster 하나만 켠다. 직접 3 + 발견 1, 항목별 source/version/reason, click·impression,
   kill switch와 fallback을 실제 공개 HTML에서 확인한다.
@@ -147,7 +159,10 @@ M-GRAPH next approved node
 1. Claude의 `23014791` 전체 변이 회귀와 clean 원복을 확인하고 bridge PR·CI·병합·배포를 오늘 끝낸다.
 2. PR #726 CI 뒤 `sleep` canary를 병합·배포하고 실제 공개 HTML·source/version/reason·kill switch 준비를 확인한다.
 3. 별도 M-AUTO worktree에서 ArticleSpec schema와 legacy/direct 경계를 오늘 구현한다.
-4. M-GRAPH 미매핑 16편과 NO_RESULT 18편을 근거별로 보정해 최신 bundle 후보를 오늘 만든다.
-5. OUTCOME event·identity gap은 읽기 전용으로 오늘 확정하고 광고·회원가입 전환 파일과 겹치는 구현은
-   writer 조정 뒤 진행한다.
-6. 모든 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고하고 한 층의 PASS를 전체 완료로 부르지 않는다.
+4. PR #727의 ArticleSpec 기반을 닫고, bridge writer 종료 뒤 STANDARD 한 건의 direct wiring을 시작한다.
+5. PR #728의 coverage 분류를 graph gate에 연결한 뒤 미매핑 17편·NO_ACTIVE_EDGE 17편·
+   NO_USABLE_RESULT 1편을 근거별로 보정해 최신 bundle 후보를 오늘 만든다.
+6. OUTCOME은 기존 related event·집계형 signup funnel을 보존하면서 누락된 search landing,
+   community action, return_visit identity-safe 계약을 설계한다. 광고·회원가입 전환·D100 파일과
+   겹치는 구현은 writer 조정 뒤 진행한다.
+7. 모든 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고하고 한 층의 PASS를 전체 완료로 부르지 않는다.
