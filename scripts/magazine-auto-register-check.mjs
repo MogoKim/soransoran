@@ -21,6 +21,7 @@
  * 종료 코드: FAIL 이 있으면 1
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { gate, heroPlan } from './lib/magazine-auto-lane.mjs'
 import { validateManuscript, MIN_BODY_LENGTH } from './lib/magazine-manuscript-guard.mjs'
@@ -2985,6 +2986,14 @@ expect('실패를 알린다 (--notify-send)', watchArgs.includes('--notify-send'
 expect('🔴 공개(10:30) 뒤에 본다 — 11:00', /<key>Hour<\/key><integer>11<\/integer>/.test(watchTplText), true)
 expect('🔴 감시도 KeepAlive 를 쓰지 않는다', /<key>KeepAlive<\/key>/.test(watchTplText), false)
 expect('감시 로그도 Documents 밖이다 (TCC)', /__LOGDIR__\/magazine-watch\.log/.test(watchTplText), true)
+
+console.log('\n══════ DIRECT_SPEC_V1 — 결정적 ArticleSpec 계약')
+const articleSpecCheck = spawnSync(process.execPath, [join('scripts', 'magazine-article-spec-check.mjs')], {
+  encoding: 'utf8',
+  env: { ...process.env },
+})
+expect('ArticleSpec schema·compiler·hash 반례가 전부 통과한다', articleSpecCheck.status, 0)
+expect('ArticleSpec 검사가 31개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 31 pass, 0 fail/.test(articleSpecCheck.stdout), true)
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 console.log('  상태: 자동 PR 경로 구현됨 · launchd 설치는 supervised 1회 성공 뒤에만 열린다\n')
