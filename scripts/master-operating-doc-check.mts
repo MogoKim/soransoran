@@ -230,7 +230,7 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계',
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
     'Dn 최대 용량', '가까운 수요 지평', 'event-assisted 실행', '원천 순위 하나', '날짜 정밀도 보존',
-    'Persona 결정 분리', '자동 댓글 provenance']) {
+    'Persona 결정 분리', '자동 댓글 provenance', '댓글 1~5 · 실제 답글', '실제 열람·노출 조회수']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
@@ -259,6 +259,20 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
     d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
     && d100Goal.includes('bounded recovery')])
+  out.push(['canon §5 가 첫 댓글 1 + 선택적 추가 댓글·답글 0~4와 실제 스레드 행을 고정한다',
+    d100Goal.includes('합계 `1..5`건')
+    && d100Goal.includes('선택적 추가 댓글·답글 0~4건')
+    && d100Goal.includes('부모 댓글을 가리키는 실제 스레드 행')
+    && d100Goal.includes('모든 글을 5건으로')])
+  out.push(['canon §5 가 제한 canary의 실회원 댓글 자동 답글을 금지한다',
+    d100Goal.includes('실회원 댓글에는 자동으로 답하지 않는다')])
+  out.push(['North Star와 canon이 실제 상세 열람·목록 노출만 고객 조회수로 허용한다',
+    [northStar, d100Goal].every((body) => body.includes('실제 상세 열람') && body.includes('실제 목록 노출'))
+    && d100Goal.includes('내부 원장에서는 두 값을 분리')
+    && d100Goal.includes('관리자·Persona·자동화·검색봇을 제외')])
+  out.push(['North Star와 canon이 가짜 조회수 배수·최소값·난수를 금지한다',
+    northStar.includes('임의 배수를 곱하거나 무작위 숫자를 더해')
+    && d100Goal.includes('임의 배수를 곱하거나 최소값·난수를 더한 수')])
   out.push(['NORTH-STAR 가 Persona · 봇 · 운영자 활동을 North Star 에서 제외한다',
     northStar.includes('Persona · 봇 · 운영자 활동은 제외한다')])
   // ⑤-c 🔴 상대 링크 무결성 — 권위 문서 · 인덱스 · 목록
@@ -414,7 +428,8 @@ check('D100 목표가 정치 선동과 연예·방송·셀럽을 분리한다',
   && d100Goal.includes('정치적 조직화·선동과 생활 이야기를 문맥으로 분리한다'))
 check('D100 목표가 첫 댓글 증명과 선택적 실제 대화량을 구분한다',
   d100Goal.includes('첫 댓글 1건은 증명용 하한')
-  && d100Goal.includes('글마다 대화량을 똑같이 맞추지 않는다'))
+  && d100Goal.includes('글마다 대화량을 똑같이 맞추지 않는다')
+  && d100Goal.includes('합계 `1..5`건'))
 check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
   d100Goal.includes('홈·베스트는 실회원 반응을 우선한다')
   && d100Goal.includes('Persona 댓글 수를 실회원 인기처럼 합산해 홈 순위를 올리지 않는다'))
@@ -443,9 +458,11 @@ check('현재 실행이 code / deployed / operating PASS 를 한 표의 세 칸�
 check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있다',
   current.includes('UNKNOWN') && /관측하지 않은 것을 PASS\s*로 쓰지 않는다/.test(current))
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
-  current.includes('## 5. 다음 critical path') && /^\| P0-0 \|/m.test(current))
+  current.includes('## 5. 다음 critical path') && /^\| Q10 \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
-  current.includes('댓글 증거·복구 정직화') && current.includes('automatic provenance'))
+  current.includes('첫 댓글 1 + 선택적 0~4')
+  && current.includes('실제 `parentId` 답글')
+  && current.includes('automatic provenance'))
 /**
  * 🔴 2026-10-11 P0-0: 옛 판은 "10월 8일 자동 5/5 · PR #677 · 공급 11/12" 같은 **그날의 문자열**을 요구했다.
  *    상태가 바뀌어 문서를 사실대로 고치면 검사가 깨지는 구조였다 — 검사가 낡은 사실의 편에 섰다.
@@ -487,15 +504,25 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
   check('🔴 완료된 PR 이 다음 critical path 에 활성 작업으로 다시 나오지 않는다', revived.length === 0)
   for (const l of revived.slice(0, 2)) console.log(`     🔴 ${l.trim().slice(0, 120)}`)
   const rows = [...path.matchAll(/^\| ([^|]+?) \|/gm)].map((m) => m[1]!.trim()).filter((c) => c !== '순서' && !/^-+$/.test(c))
-  check('현재 실행의 다음 critical path 첫 두 항목이 P0-0 → Batch A 다', rows[0] === 'P0-0' && rows[1] === 'A')
-  check('현재 실행이 P0-0 을 이 PR 병합으로 완료하고 병합 뒤 첫 실행을 Batch A 로 적는다',
-    /^\| P0-0 \|[^\n]*이 PR 병합으로 완료[^\n]*병합 뒤 첫 실행 작업은 Batch A/m.test(path))
+  check('현재 실행의 다음 critical path 첫 두 항목이 quality-v10 완결 → D5 증명이다',
+    rows[0] === 'Q10' && rows[1] === 'D5')
+  check('현재 실행이 D10·D20 목표일과 각 선행 operating PASS를 함께 적는다',
+    /^\| D10 \|[^\n]*10-16 목표[^\n]*자동 10\/10/m.test(path)
+    && /^\| D20 \|[^\n]*10-17 목표[^\n]*D10 PASS/m.test(path))
 }
-check('현재 실행이 main SHA 를 관측 당시 origin/main · P0-0 base 로 적어 병합 뒤 현재 main 으로 읽히지 않게 한다',
-  /^\| 원격 main \([^|\n]*관측 당시 origin\/main[^|\n]*base[^|\n]*\) \|/m.test(currentLive))
-check('🔴 현재 실행의 활성 충돌 장부에 배터리 알림 · AC 설계 과제가 없다 (절전 누락은 C-02 근거로만)',
-  !/^\| H-01 \|/m.test(currentLive)
-  && /^\| C-02 \|[^\n]*10-07[^\n]*절전/m.test(currentLive))
+check('현재 실행이 원격 main을 분 단위 관측값으로 적고 runtime과 같은 SHA임을 보인다',
+  /^\| 원격 main \(2026-10-15 10:38 관측\) \| `6f28fc3ad475c8b26587a87bb70eca007248f7c5` \|/m.test(currentLive)
+  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `6f28fc3ad475c8b26587a87bb70eca007248f7c5`/m.test(currentLive))
+check('현재 실행이 추가 댓글의 배포 상태와 현재 d3에서 0건인 이유를 함께 적는다',
+  currentLive.includes('switch ON · D10 profile · E6 consumer plist')
+  && currentLive.includes('현재 공개 d3라 stage mismatch로 추가 0이 정상'))
+check('현재 실행이 공격적 목표일을 PASS 약속과 구분하고 D30을 생략하지 않는다',
+  currentLive.includes('10-16 D10/10-17 D20 목표')
+  && currentLive.includes('목표일이지 아직 PASS가 아니며')
+  && currentLive.includes('D30은 생략하지 않음'))
+check('현재 실행이 실제 조회수 구현을 별도 critical path로 두고 가짜 숫자를 금지한다',
+  /^\| VIEWS \| 실제 근거 조회수 \|/m.test(currentLive)
+  && currentLive.includes('댓글 배수·최소값·난수'))
 check('🔴 canon 이 Persona 300+ 를 주간 게시 편수 산식으로 정당화하지 않는다',
   !/주\s*\d+\s*(건|편)씩 맡으면/.test(d100Goal)
   && d100Goal.includes('주간 게시 상한은 집중을 막는 안전 상한이지 고정 생산 목표가 아니다'))

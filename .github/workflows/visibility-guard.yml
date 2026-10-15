@@ -28,9 +28,9 @@
 #
 #    🔴 **경로로 run 을 띄우지 않는 길은 없다.** paths-ignore 를 쓰지 않는다.
 #       어떤 PR 이든 워크플로우는 뜨고, 필수 게이트는 전부 돈다.
-#       docs · 서버 경로 · 판정 불가는 모두 heavy=true 로 **전체 검사**다 —
-#       이 저장소의 문서는 장식이 아니라 검사 대상이기 때문이다(아래 on: 주석 참조).
-#       화면 전용으로 내려가는 것은 9 월 실측 기준 241 커밋 중 20 건(8%) 뿐이다.
+#       docs · 서버 경로 · 판정 불가는 모두 heavy=true 로 core 계약 검사를 돈다.
+#       M3-A와 D100 격리 DB는 별도 병렬 job이며, 명확히 무관한 변경에서만 생략한다.
+#       공용·미분류 변경과 nightly·수동 실행은 세 job을 모두 실행한다.
 #
 #    이 둘이 사라지면 scripts/workflow-budget-check.mts 가 CI 에서 막는다.
 name: visibility-guard
@@ -65,9 +65,13 @@ permissions:
   contents: read
 
 jobs:
-  guard:
-    name: Micro Seed 3축 게이트
+  scope:
+    name: 변경 영향 판정
     runs-on: ubuntu-latest
+    outputs:
+      heavy: ${{ steps.scope.outputs.heavy }}
+      magazine: ${{ steps.scope.outputs.magazine }}
+      d100_db: ${{ steps.scope.outputs.d100_db }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,6 +104,8 @@ jobs:
           # 🔴 set -e 를 쓰지 않는다. 판정에 실패하면 job 을 죽이는 게 아니라
           #    heavy 로 남겨야 한다 — 그것이 fail-closed 다.
           heavy=true
+          magazine=true
+          d100_db=true
           reason='기본값 — 모르면 돌린다'
 
           if [ "$EVENT" = "pull_request" ] && [ -n "$BASE_SHA" ] \
@@ -129,6 +135,15 @@ jobs:
               #       (2026-09-23 실측: 넣기 전에는 전달 PR 이 「화면 전용」으로 판정됐다)
               ALLOW='^(src/app/|src/components/|src/styles/|src/content/|public/)'
               DENY='(^|/)(api|admin|auth|uploads?)/|(^|/)(route|middleware|actions?)\.ts$|(^|/)actions/|^src/content/magazine/graph/'
+              AUTHORITY='^(docs/operations/(README|NORTH-STAR|CURRENT-MILESTONE|2026-09-21-d100-goal-canon)\.md|docs/constitution/MICRO_SEED_LANE_CONSTITUTION\.md|docs/decisions/persona-comment-followup\.md|scripts/master-operating-doc-check\.mts|scripts/lib/active-doc-authority\.mts)$'
+
+              # 도메인별 무거운 job은 명확히 무관한 변경에서만 끈다.
+              # 미분류·공용 경로는 두 job 모두 true로 남겨 fail-closed 한다.
+              SHARED='^(package(-lock)?\.json|tsconfig[^/]*\.json|next\.config\.|prisma/|\.github/|scripts/workflow-budget-check\.mts)'
+              MAGAZINE='^(src/content/magazine/|src/lib/magazine-|scripts/(magazine-|m3a)|docs/operations/.*magazine)'
+              D100_DB='^(src/lib/(auto-ready|content-core|persona-|stage-|supply-|quality-contract)|scripts/(auto-ready|persona-|stage-|supply-|quality-contract|original-post|runner-|micro-seed-auto-draft)|docs/operations/(persona-pool-design|launchd/README))'
+              SAFE_NO_MAGAZINE='^(src/app/|src/components/|src/styles/|public/|src/lib/(auto-ready|content-core|persona-|stage-|supply-|quality-contract)|scripts/(auto-ready|persona-|stage-|supply-|quality-contract|original-post|runner-|micro-seed-auto-draft))'
+              SAFE_NO_D100_DB='^(src/app/|src/components/|src/styles/|public/|src/content/magazine/|src/lib/magazine-|scripts/(magazine-|m3a)|docs/operations/.*magazine)'
 
               # 🔴 **`grep -qv` 를 쓰지 않는다.** `-q` 와 `-v` 를 함께 준 결과는 구현마다 다르다 —
               #    GNU grep 은 "매치되지 않는 줄이 하나라도 있으면 0", ugrep 은 파일 단위로 뒤집는다.
@@ -137,15 +152,40 @@ jobs:
               total="$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
               allowed="$(printf '%s\n' "$files" | grep -cE "$ALLOW" || true)"
               risky="$(printf '%s\n' "$files" | grep -cE "$DENY" || true)"
+              authority="$(printf '%s\n' "$files" | grep -cE "$AUTHORITY" || true)"
               allowed="${allowed:-0}"
               risky="${risky:-0}"
-              if [ "$total" -gt 0 ] && [ "$total" = "$allowed" ] && [ "$risky" = '0' ]; then
+              authority="${authority:-0}"
+              light_allowed="$((allowed + authority))"
+              if [ "$total" -gt 0 ] && [ "$total" = "$light_allowed" ] && [ "$risky" = '0' ]; then
                 heavy=false
-                reason="화면 전용 변경만 있다 ($allowed/$total · 서버 경로 0)"
+                reason="화면·정본 문서 전용 변경만 있다 ($light_allowed/$total · 서버 경로 0)"
               elif [ "$risky" != '0' ]; then
                 reason="서버·쓰기 경로가 ${risky}건 있다 (api · admin · auth · upload · route · action)"
               else
                 reason="화면 전용이 아닌 경로가 있다 ($allowed/$total 만 화면)"
+              fi
+
+              shared="$(printf '%s\n' "$files" | grep -cE "$SHARED" || true)"
+              magazine_hits="$(printf '%s\n' "$files" | grep -cE "$MAGAZINE" || true)"
+              d100_db_hits="$(printf '%s\n' "$files" | grep -cE "$D100_DB" || true)"
+              safe_no_magazine="$(printf '%s\n' "$files" | grep -cE "$SAFE_NO_MAGAZINE" || true)"
+              safe_no_d100_db="$(printf '%s\n' "$files" | grep -cE "$SAFE_NO_D100_DB" || true)"
+              shared="${shared:-0}"
+              magazine_hits="${magazine_hits:-0}"
+              d100_db_hits="${d100_db_hits:-0}"
+              safe_no_magazine="${safe_no_magazine:-0}"
+              safe_no_d100_db="${safe_no_d100_db:-0}"
+
+              safe_no_magazine="$((safe_no_magazine + authority))"
+              safe_no_d100_db="$((safe_no_d100_db + authority))"
+              if [ "$shared" = '0' ] && [ "$magazine_hits" = '0' ] \
+                 && [ "$safe_no_magazine" = "$total" ]; then
+                magazine=false
+              fi
+              if [ "$shared" = '0' ] && [ "$d100_db_hits" = '0' ] \
+                 && [ "$safe_no_d100_db" = "$total" ]; then
+                d100_db=false
               fi
             fi
           elif [ "$EVENT" != "pull_request" ]; then
@@ -155,18 +195,27 @@ jobs:
           fi
 
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
-          echo "무거운 fixture 실행: $heavy ($reason)"
+          echo "magazine=$magazine" >> "$GITHUB_OUTPUT"
+          echo "d100_db=$d100_db" >> "$GITHUB_OUTPUT"
+          echo "무거운 fixture 실행: $heavy · 매거진: $magazine · D100 DB: $d100_db ($reason)"
           {
             echo "## 변경 경로 판정"
             echo "- 이벤트: \`$EVENT\`"
             echo "- 무거운 fixture 실행: \`$heavy\`"
+            echo "- 매거진 관문: \`$magazine\`"
+            echo "- D100 격리 DB: \`$d100_db\`"
             echo "- 근거: $reason"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  core:
+    name: Core 정적·계약 검사
+    needs: scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          # repo 에 engines·.nvmrc 가 없다. Next 14.2 지원 범위의 LTS 로 고정한다.
-          # 버전을 올릴 땐 Vercel 프로젝트 설정과 함께 움직여야 한다.
           node-version: '20'
           cache: npm
 
@@ -244,7 +293,7 @@ jobs:
       #    🔴 홈 인기 점수 순수 검사(check:home-popularity)도 같은 step 이다 — 홈 신호가 사람 수(글쓴이 제외)·
       #       비회원 상한 3 이고 Persona·운영 댓글이 순위를 올리지 못하며 화면 댓글 수는 그대로인지. DB 쪽(check:home-popularity-db)은 격리 Postgres 가 필요해 CI 밖이다.
       - name: 베스트·댓글 정책 가드
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run check:best
           npm run check:comment-thread
@@ -307,17 +356,8 @@ jobs:
       #    GA4 가드 옆에 둔다. 클릭 계측(magazine_related_click)이 그 가드의 7종에 들어 있어
       #    둘이 함께 깨지고 함께 고쳐진다.
       - name: M-GRAPH 연관 글 가드
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run check:magazine-graph
-
-      # 🔴 M3-A 자동 공급 관문 — **무조건 돈다.**
-      #
-      #    이 검사는 "등급이 발행을 막지 않는가 · QA 실패가 자동 재생성으로 살아나는가 ·
-      #    두 번 실패하면 그 글만 HOLD 되는가" 를 **실제 drive() orchestration** 으로 본다.
-      #    heavy 조건에 넣지 않는다 — 여기가 무너지면 공급이 통째로 멈추거나,
-      #    반대로 검증 없이 나간다. 둘 다 조용히 지나가면 안 되는 일이다.
-      - name: M3-A 자동 공급 관문
-        run: npm run check:m3a
 
       # 🔴 막히는 것은 눈에 띄지만 **왜 막혔는지 말해 주는 것**은 조용히 사라진다.
       #    문구가 다시 뭉개져도 화면은 멀쩡하고 타입도 빌드도 통과한다 —
@@ -620,19 +660,19 @@ jobs:
       #       화면만 고친 PR(src/app · components · styles · content · public)에서만 꺼진다 —
       #       그런 PR 은 수집 → thin → adapt → 후보 경로를 건드리지 못한다.
       - name: 원문 게시 시각 전달 (수집 → thin → adapt → 후보)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run check:source-times
       # D100 Batch D1 — 🔴 날짜만 보이는 게시 라벨을 00:00 으로 만들지 않는다 · 판정은 하루 구간 전체(fail-closed) ·
       #    수집 상세 선별은 같은 점수 안에서만 최신 우선 · 레몬테라스 2~16p · jjong 10 + humor 1 · 요청량 불변.
       #    수집 행 → thin → adapt → 공급 러너 · 적재기 배선까지 본다. 임시 디렉터리 · 네트워크 0 · DB 0.
       - name: 날짜 정밀도 · 품질 동률 신선도 (D100 Batch D1)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run check:d100-freshness
       # 운영 체인 end-to-end — 🔴 **실제 러너가 쓴 파일**을 실제 적재 순수 함수에 넣는다.
       #    손으로 만든 봉투는 증거가 아니다. 가짜 provider · 임시 HOME · 네트워크 0 · DB 0.
       #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
       - name: 운영 체인 end-to-end (러너 → 후보 → 적재 → 큐 → 사람 검토)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run check:supply-chain-e2e
       # Content Core v2 — 🔴 **2026-09-20 부터 운영 생성 경로다.**
       #    옛 `check:quality-ground` 는 v2 통합 검수가 대체해 함께 지웠다.
@@ -649,7 +689,7 @@ jobs:
       #    `runContentCore → pickV2` 에서 구조화된 사유로 AUTO_HOLD 되는지, 대조 2편은 채택되는지 본다.
       #    가짜 provider · DB 0 · 네트워크 0.
       - name: Content Core v2 세로 경로 (근거·소재·화자 자격·말투·검수 완주)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run check:content-core-v2
           npm run check:draft-life-gates
@@ -668,7 +708,7 @@ jobs:
       #    누구의 락인지 묻지 않는다는 것은 두 프로세스를 실제로 붙여야 드러난다.
       #    🔴 /tmp 임시 경로만 쓴다. 운영 락은 건드리지 않는다.
       - name: 수집 락 (실제 프로세스 경쟁)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run collect:lock-check
 
       # 기계 판정이 사람 값을 사칭하지 않는지 · 위험 글이 통과하지 않는지 본다 (§4-AR)
@@ -702,20 +742,20 @@ jobs:
       #
       # 🔴 네트워크 0 · LLM 0 · DB 0 — 순수 판정만 검사한다.
       - name: 공급 처리 (수집 금지 · 발행 금지 · source 독립 실패 · lock 게이트)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run supply:process-check
 
       # 🔴 공급 러너 커널 lease · 실행 token(shadow) (2026-10-12 Batch C1). Ubuntu 에는 /usr/bin/lockf 가 없어
       #    실제 OS 프로세스 반례는 SKIP(PASS 로 세지 않는다)이고, 여기서는 순수 판정 · 예산 판정 불변 · lockf 없음
       #    fail-closed 만 돈다. 실제 프로세스 반례와 변이 시험(`supply:lease-mutation`)은 macOS 에서 돌린다.
       - name: 공급 커널 lease · 실행 token shadow (예산 판정 불변 · fail-closed)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run supply:lease-check
 
       # 🔴 발행 commit → 댓글 러너 사건 깨움 (2026-10-12 Batch C2). kill switch 기본 off · commit 뒤에만 · failure-open ·
       #    합치기 · 고아 표식 복구 표식당 1회. launchctl 은 언제나 대역이다(운영 launchd 0). 실제 프로세스 반례는 macOS 전용(SKIP ≠ PASS).
       - name: 사건 깨움 — 발행 commit 뒤 댓글 러너 (kill switch · failure-open · 합치기 · 고아 복구 상한)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run ops:event-wake-check
 
       # 🔴 **backlog 전체를 판정하지 않는다** — 2026-09-20 canary 가 $0.029949 를 쓰고
@@ -727,16 +767,16 @@ jobs:
       #    Persona 확장·North Star·82cook 복구가 한 곳에서 판정된다.
       #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
       - name: 🔴 D100 준비도 정본 (재고·정합·runner·Persona·North Star·82cook)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run d100:readiness-check
       - name: 🔴 작업 묶음 — backlog 전체를 판정하지 않는다
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run supply:workset-check
       # 🔴 **실제 러너 둘을 돌린다** — 가짜 provider · 임시 HOME · 임시 디렉터리.
       #    소스 문자열이 아니라 나간 요청·장부·산출물 파일에서 값을 읽는다.
       #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
       - name: 🔴 작업 묶음 실제 연결 (judge → draft · 장부 id 분리 · 회차 진행성)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run supply:workset-e2e-check
       # 공급 AI 비용 장부 — 🔴 **요청 전 차단**을 행동으로 검사한다.
       #
@@ -747,13 +787,13 @@ jobs:
       # 🔴 "일일 과금이 한도를 넘지 않는다" 를 검사하지 않는다 — 그런 보장은 없다.
       #    공식 `count_tokens` 도 추정이고, 이미 보낸 요청의 과금은 취소되지 않는다.
       - name: 공급 AI 비용 장부 (요청 전 차단 · 미정산 예약 · 동시성 · 날짜 경계)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run supply:ledger-check
       # 🔴 정기 공급 회차 몫 보호 (2026-09-29) — 2026-09-28 손 실행 17회가 하루 예산을 먼저 써서
       #    정기 4회차가 초안 0건이었다. 손 실행은 남은 정기 슬롯 몫을 남기고 쓴다.
       #    네트워크 0 · 실제 provider 0 · 운영 env·장부 0 (임시 디렉터리 · 임시 HOME).
       - name: 정기 공급 회차 몫 보호 (launchd 라벨 · 슬롯 창 · KST 자정 · 열린 예약)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run supply:reserve-check
       - name: D100 공급 계획 (게시판 배선 · 요청 상한)
         run: npm run supply:d100-plan-check
@@ -814,7 +854,7 @@ jobs:
       #    날짜가 지나면 저절로 꺼지는가 · 그날치 판정이 NO-GO 면 안 켜지는가 ·
       #    capacity 상한을 시험이라도 비켜 가지 않는가 · `chosenReady` 가 false 로 남는가.
       #
-      # 🔴 **새 step 을 만들지 않는다.** 무조건 실행 step 은 69/69 로 상한에 닿아 있다.
+      # 🔴 **새 step 을 만들지 않는다.** core 무조건 step 은 68/68로 상한에 닿아 있다.
       #    이 검사가 읽는 것은 `release-canary.ts` · `scale-runtime.ts` · `scale-profile.ts`
       #    뿐이고 셋 다 `src/lib` 이라 **DENY 에 걸려 언제나 heavy** 다 —
       #    화면 전용 PR 은 이 셋을 건드릴 수 없으므로 경로 조건 뒤가 빠짐없는 자리다.
@@ -832,7 +872,7 @@ jobs:
       #    launchd 가 정말 6회인가 · 정기 회차 전 생산율을 unmeasured 로 적는가.
       #    launchd 템플릿(docs/)을 읽는다 — docs 는 ALLOW 에 없어 언제나 heavy 다.
       - name: Scale Foundation (회귀 0 · cohort · 공급 역산 · 병목)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run scale:foundation-check
           npm run release:canary-check
@@ -849,7 +889,7 @@ jobs:
         run: npm run master:doc-check
 
       - name: d10 activation preparation fixture
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run d10:prep-check
 
       # 🔴 자동 단계 사다리 — 순수 계약 (DB 0 · 네트워크 0).
@@ -859,7 +899,7 @@ jobs:
       #       코드(src/lib · scripts · prisma)는 전부 ALLOW 밖이라, 그 코드를 건드리는 PR 은
       #       언제나 heavy 로 판정돼 이 step 이 돈다. 매일 main 예약 실행도 heavy 다.
       - name: 자동 단계 사다리 (승인 천장 · 전날 결정 · 저장 계약)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run stage:ladder-check
           # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
@@ -876,7 +916,7 @@ jobs:
       #    공급 선택 관측 trace(P0-B0) — trace 유무로 선택이 바뀌지 않는다 · 단계 사유 · 개인정보 0. 새 step 이 아니다
       #    JIT 공급 선택(P0-B1) — 최대 슬롯 보존(전수 탐색 대조) · 정본 순위 · raw 0 · 재시도 예약 · 운영 모양 재생
       - name: D100 생동감 계약 (READY 손실 · JIT 공급 · 정치 축)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run stage:ready-loss-check
           npm run supply:jit-contract-check
@@ -886,49 +926,8 @@ jobs:
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
       - name: 무인 운영 루프 (readiness 반례 · controller fail-closed · consumer · 템플릿)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run ops:loop-check
-
-      # 🔴 StageDecision 저장 왕복 — **격리 Postgres 17 컨테이너**에서만 돈다. 운영 DB 0.
-      #    fixture 로는 잴 수 없는 것(유일키 충돌 · 동시 create · JSON null · NOT NULL 제약)을
-      #    실제 DB 로 본다. 주소는 이 step 에만 준다 — 다른 step 에는 DATABASE_URL 이 없다.
-      #    🔴 주소·비밀값을 출력하지 않는다. migrate 로그는 파일로만 받고 찍지 않는다
-      #       (Prisma 는 접속 host · DB 이름을 출력한다). 검사 자신도 주소를 찍지 않는다.
-      #    🔴 주소를 `env:` 에 적지 않는다 — GitHub 은 step env 를 로그 머리에 그대로 찍는다
-      #       (af7eb06 실측: 5줄). run 안에서 조각으로 만들고 즉시 mask 한다.
-      - name: StageDecision 저장 왕복 (격리 Postgres 17 · 운영 DB 0)
-        if: steps.scope.outputs.heavy == 'true'
-        env:
-          SORAN_ISOLATED_DB: yes-throwaway
-        run: |
-          pg_user=soran; pg_host=127.0.0.1; pg_port=54329; pg_db=soran_test
-          DATABASE_URL="postgresql://${pg_user}@${pg_host}:${pg_port}/${pg_db}"
-          echo "::add-mask::$DATABASE_URL"
-          export DATABASE_URL
-          export DIRECT_URL="$DATABASE_URL"
-          docker run -d --name soran-stage-pg -p "${pg_host}:${pg_port}:5432" \
-            -e POSTGRES_USER="$pg_user" -e POSTGRES_DB="$pg_db" \
-            -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17 >/dev/null
-          ready=0
-          for i in $(seq 1 60); do
-            if docker exec soran-stage-pg pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then ready=1; break; fi
-            sleep 1
-          done
-          if [ "$ready" != 1 ]; then echo '🔴 격리 Postgres 가 뜨지 않았다'; exit 1; fi
-          if ! npx prisma migrate deploy >/tmp/stage-migrate.log 2>&1; then
-            echo '🔴 격리 DB migrate deploy 실패 (로그는 주소를 담고 있어 출력하지 않는다)'
-            exit 1
-          fi
-          echo 'migrate deploy 완료 (격리 DB)'
-          npm run stage:db-check
-          # 🔴 controller·consumer 실제 진입점 — 같은 격리 DB · 가짜 HOME (운영 env·장부 0)
-          npm run ops:loop-db-check
-          # 🔴 승격 운영 증거 실제 수집 — 실제 행 6조건 · 행 하나씩 비튼 반례 · 발행 트랜잭션 무인 표식 ·
-          #    controller 진입점(dry-run · 가짜 HOME). launchd 가 없는 러너에서는 "러너 모름 → 재시험" 을 본다
-          npm run stage:evidence-db-check
-          # 🔴 단계 증명일 — 목표 슬롯을 자동 target 이 먼저(사람 복구 행 포함) · 재고 부족이면 혼합 발행 + 증거 FAIL ·
-          #    비시험일은 기존 공정성. 실제 로더 · 계획 · 예약 무인 발행 트랜잭션
-          npm run stage:proof-day-db-check
 
       # 🔴 자동 READY v2 — 순수 계약 (DB 0 · 네트워크 0 · LLM 0).
       #    semanticReview fail-closed · 증거 복원 6분류 · 계약 값 불변 · 도장 hash ·
@@ -936,7 +935,7 @@ jobs:
       #    🔴 증거 배치 검토 화면의 제출 계획(손댄 행만 · 빈 판정 막힘 · 성공 행 잠금 · 기본 확인창 0)도
       #       같은 step 에서 잰다 — 새 step 이 아니다(무조건 step 상한 불변).
       - name: 자동 READY v2 계약 (fail-closed · founder 0 · 스위치 OFF)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run auto-ready:check
           npm run auto-ready:evidence-plan-check
@@ -952,92 +951,11 @@ jobs:
           #    기록·재검증 실패는 미해소 · 옛 전 기간 카운트 삭제 확인. 새 step 이 아니다
           npm run auto-ready:defect-resolution-check
 
-      # 🔴 자동 READY v2 실행 사슬 — 격리 Postgres 17 에서만. 운영 DB 0.
-      #    후보 → 도장 → selector → 발행 트랜잭션 재검증 → Post → 감사 저장 → 결함 시 자동 중지,
-      #    그리고 동시 도장·동시 발행·동시 감사 선정의 경쟁 조건을 실제 DB 로 부딪혀 본다.
-      #    🔴 앞 step 이 띄운 격리 컨테이너를 그대로 쓴다(없으면 새로 띄운다).
-      #    🔴 주소를 `env:` 에 적지 않는다 — 조각으로 만들고 즉시 mask 한다.
-      - name: 자동 READY v2 실행 사슬 (격리 Postgres 17 · 운영 DB 0)
-        if: steps.scope.outputs.heavy == 'true'
-        env:
-          SORAN_ISOLATED_DB: yes-throwaway
-        run: |
-          pg_user=soran; pg_host=127.0.0.1; pg_port=54329; pg_db=soran_test
-          DATABASE_URL="postgresql://${pg_user}@${pg_host}:${pg_port}/${pg_db}"
-          echo "::add-mask::$DATABASE_URL"
-          export DATABASE_URL
-          export DIRECT_URL="$DATABASE_URL"
-          if ! docker ps --format '{{.Names}}' | grep -qx soran-stage-pg; then
-            docker run -d --name soran-stage-pg -p "${pg_host}:${pg_port}:5432" \
-              -e POSTGRES_USER="$pg_user" -e POSTGRES_DB="$pg_db" \
-              -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17 >/dev/null
-            for i in $(seq 1 60); do
-              docker exec soran-stage-pg pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1 && break
-              sleep 1
-            done
-          fi
-          if ! npx prisma migrate deploy >/tmp/ar-migrate.log 2>&1; then
-            echo '🔴 격리 DB migrate deploy 실패 (로그는 주소를 담고 있어 출력하지 않는다)'
-            exit 1
-          fi
-          npm run auto-ready:db-check
-          # 🔴 증거 복원·배치 검토 기록 — 같은 격리 DB 를 스스로 비우고 쓴다
-          npm run auto-ready:evidence-db-check
-          # 🔴 품질 계약 cohort 실행 반례 — legacy 결함 이력 보존 · 첫 30건 연속 · legacy 도장 0 · 실제 적재기 digest
-          #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
-          npm run auto-ready:quality-db-check
-          # 🔴 예약 발행 슬롯 — 트랜잭션 안 슬롯 재계산(같은 격리 DB 를 스스로 비우고 쓴다)
-          npm run publish:slot-db-check
-          # 🔴 발행 heartbeat 후보 — 10분 wake 하루 · 절전 catch-up · 로컬 천장 · 로컬+GitHub 동시 중복 0 · 러너 틱 잠금
-          #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
-          npm run publish:heartbeat-db-check
-          # 🔴 공급 capacity · 발행 release · 재고 분류 일치(공급 9 · 발행 0 반례) — 같은 격리 DB 를 스스로 비우고 쓴다
-          npm run supply:stock-parity-db-check
-          npm run publish:lane-fairness-db-check
-          # 🔴 옛 품질 계약 기계 초안은 지금 계약의 Persona WIP 가 아니다 — 46건 반례 · 큐에 남음 · 자동 발행 0 ·
-          #    사람 검토 옛 행 유지 · 행 전체 스냅샷 변경 0 · 실제 buildSpeakerLoad. 같은 격리 DB 를 스스로 비우고 쓴다
-          npm run supply:wip-contract-db-check
-          # 🔴 부모 → 자식 실제 경로 — 회차 시각 하나(KST 자정·생일 경계) · 여력 0 → provider 0 → personaCapacityDeferred
-          #    임시 cwd · 임시 HOME · 합성 말투 자산 · 가짜 키 — 운영 장부·자산 0
-          npm run supply:draft-deferral-e2e-db-check
-          # 🔴 초안 게이트 → 적재 실제 경로 — 운영 반례 4편은 큐 행이 되지 않고 대조 2편만 APPROVED 로 적재된다
-          #    runContentCore → pickV2 → 후보 봉투 → 실제 supply-autofill --apply (임시 cwd · 가짜 provider)
-          npm run check:draft-life-gates-db
-          # 🔴 독립 감사 루프 실행 반례 — 실제 감사 러너 프로세스(임시 HOME · 가짜 네트워크 · 공급 장부) ·
-          #    결함 yes → 다음 도장·발행 닫힘 · 판정 대기 시한 · 동시 러너 결과 1 · 모델 오류는 no 가 아니다.
-          #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
-          npm run auto-ready:audit-db-check
-          # 🔴 감사 표본은 그날(KST) 자동 발행에서 — 누적 목표로 오늘 표본 0 이 되던 반례(2026-09-29). 새 step 이 아니다
-          npm run auto-ready:audit-day-db-check
-          # 🔴 확정 결함 해소 실행 반례 — 감사 행 불변 · 계획/적용 사이 변경 write 0 · 두 번째 적용 write 0 · 동시 적용 1 ·
-          #    지금 계약의 새 결함은 닫힘 · 운영 주소 --apply 거절. 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
-          npm run auto-ready:defect-resolution-db-check
-          # 🔴 댓글 대화선 쓰기 경로 — 답글 대상 검증(같은 글·삭제·차단) · 삭제/답글 경쟁 잠금 · 비회원 중복 판정 ·
-          #    동시 수정 경쟁. 같은 격리 DB 를 쓰고, 남긴 행은 바로 뒤 Persona 댓글 루프 검사가 시작할 때 비운다.
-          #    새 step 이 아니다(무조건 step 상한 불변)
-          npm run check:comment-thread-db
-          # 🔴 무인 댓글 루프 실행 반례 — 실제 materialize → 9관문 → PENDING → Serializable 발행(autoLane) ·
-          #    새 글 1건 · 61분 0 · 자기 글 0 · 글당 1 · 실사용자 3건 0 · 한 건 실패 격리 · 장부 상한 · 동시 회차 1건.
-          #    임시 HOME(확정 정본·장부) · 가짜 생성 텍스트 · 네트워크 0. 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
-          npm run persona:comment-loop-db-check
-          # 🔴 추가 댓글 실행 반례(PR #704 · 기본 OFF) — OFF 무변화 · 첫 댓글 회귀 0 · 글당 총 5 상한 도달 · 같은 Persona·자기 글·
-          #    고아·삭제·신고·실회원 대상 0 · 실회원 우선 · 중복·동시 1건 · 복구 재실행 provider 0 · 예산·profile·대화 감사 브레이크 ·
-          #    장부 단계 commentFollowupGen · 단계 증거 분리. 임시 HOME · 가짜 생성 · 네트워크 0. 새 step 이 아니다
-          npm run persona:followup-db-check
-          # 🔴 Persona 자동 확장 적재(2026-09-29 · Track C) — valid 만 · draft 만 · 전원 아니면 0 ·
-          #    트랜잭션 안 Gate ⑥-B(실회원 이름) · 재적재 거부 · CLI dry-run write 0. 새 step 이 아니다
-          npm run persona:autogen-db-check
-          # 🔴 creative 생성 실제 CLI(--db --generate-creative) — 격리 DB · 합성 말투 자산 · 가짜 fetch · write 0. 새 step 이 아니다
-          npm run persona:creative-db-check
-          # 🔴 (2026-10-01) Persona 계약 정본 카드 복구 — stale 계획 · 부분 실패 · 멱등 · 기존 유효 회귀 0 · 가짜 활동 0.
-          #    임시 HOME 말투 자산(운영 모양 · 화자 18명). 같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다
-          npm run persona:remediation-db-check
-
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
       # mkdtemp 안에서만 돌고 저장소 .microseed-data 는 건드리지 않는다.
       - name: 수집 차단기 잠금 (실제 프로세스 경쟁)
-        if: steps.scope.outputs.heavy == 'true'
+        if: needs.scope.outputs.heavy == 'true'
         run: npm run collect:guard-lock-check
 
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
@@ -1137,7 +1055,7 @@ jobs:
       #    사용량 미상 · 정산 기록 실패 · 잘린 응답이 후보가 되지 않는지를
       #    실제 세션 → 러너 어댑터 → 적재 파이프라인으로 이어서 확인한다.
       #
-      # 🔴 **새 step 을 만들지 않는다.** 무조건 실행 step 은 69/69 로 상한에 닿아 있다
+      # 🔴 **새 step 을 만들지 않는다.** core 무조건 step 은 68/68로 상한에 닿아 있다
       #    (`scripts/workflow-budget-check.mts` ④). 한 개를 더하면 budget 이 빨개진다.
       #    같은 성격(댓글 후보가 무엇이면 안 되는가)이라 이 step 이 제자리다.
       #    실측 0.62 초(3 회 · 0.81 / 0.62 / 0.62). DB · 네트워크 · provider · write 0.
@@ -1256,3 +1174,55 @@ jobs:
       #    유료 게이트 9중 · 저장 전 원문 대조 · API key 로그 유출 0 을 여기서 잡는다.
       - name: Voice M3 (유료 게이트 · 원문 유출 · key 유출 · 층화 표본)
         run: npm run voice:m3-check
+
+  magazine:
+    name: 매거진 M3-A 관문
+    needs: scope
+    if: needs.scope.outputs.magazine == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: 의존성 설치
+        run: npm ci
+      - name: M3-A 자동 공급 관문
+        run: npm run check:m3a
+
+  d100-db:
+    name: D100 격리 DB 사슬
+    needs: scope
+    if: needs.scope.outputs.d100_db == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: 의존성 설치
+        run: npm ci
+      - name: Prisma Client 생성
+        run: npx prisma generate
+      - name: D100 격리 Postgres 17 실행 사슬
+        run: bash scripts/ci-d100-db-check.sh
+
+  result:
+    name: Micro Seed 3축 게이트
+    needs: [scope, core, magazine, d100-db]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 필수 job 결과 집계
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          CORE_RESULT: ${{ needs.core.result }}
+          MAGAZINE_RESULT: ${{ needs.magazine.result }}
+          D100_DB_RESULT: ${{ needs['d100-db'].result }}
+        run: |
+          test "$SCOPE_RESULT" = success
+          test "$CORE_RESULT" = success
+          case "$MAGAZINE_RESULT" in success|skipped) ;; *) exit 1 ;; esac
+          case "$D100_DB_RESULT" in success|skipped) ;; *) exit 1 ;; esac

@@ -1,6 +1,6 @@
 # 매거진 자동화 운영 runbook
 
-작성 2026-09-15 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09)
+작성 2026-09-15 · 갱신 2026-10-15 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09)
 
 이 문서가 **설치·가동·롤백의 정본**이다. 다른 곳에 절차를 다시 적지 않는다.
 
@@ -10,7 +10,7 @@
 
 | | 자동 | 사람·CI |
 |---|---|---|
-| 글감 선정 · brief 생성 | ✅ producer | |
+| 승인 노드 선택 · 제작 계약 생성 | ✅ producer | 현재 `LEGACY_BRIEF_V1`, 목표 `DIRECT_SPEC_V1` |
 | 원고 회수 (ChatGPT 웹 UI) + 관문 | ✅ producer | |
 | 변환 · QA · hero · batch-qa | ✅ auto-register | |
 | `articles.ts` 등록 (**PR 브랜치 위에서**) | ✅ auto-register | |
@@ -23,6 +23,25 @@
 🔴 **그러나 자동 "공개" 는 아니다.** merge 해도 글은 `publishAt` 전까지 어디에도 안 나온다.
 사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
 **모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
+
+### 0.0A 제작 계약 전환 (2026-10-15 창업자 결정)
+
+현재 Production은 Claude가 `brief.md`·`review.ts`를 만드는 `LEGACY_BRIEF_V1`이다. 목표 경로는
+M-GRAPH의 승인 노드와 정책을 버전 고정 `ArticleSpec`으로 컴파일하는 `DIRECT_SPEC_V1`이다.
+이 문서에서 전환 완료 전의 자연 회차 설명은 현재 경로를 뜻한다.
+
+```text
+LEGACY_BRIEF_V1  M-GRAPH/queue -> Claude brief -> ChatGPT manuscript -> draft.md -> QA...
+DIRECT_SPEC_V1   M-GRAPH next node -> ArticleSpec -> ChatGPT manuscript -> draft.md -> QA...
+```
+
+- 주제 선정은 제거하지 않는다. 승인된 graph의 다음 노드를 결정적으로 고른다.
+- 일일 Claude brief와 review 생성만 direct 경로에서 제거한다.
+- `draft.md`, QA, 재생성 예산, HOLD, dirty-tree, 원자 교체, exact-head, 배포·watch 관문은 유지한다.
+- 첫 전환은 STANDARD 한 건의 opt-in이다. legacy와 direct를 같은 회차에서 이중 전송하지 않는다.
+- direct 실패는 mode를 legacy로 되돌린다. QA나 안전 관문을 완화하지 않는다.
+- 현재 코드 자연 무인 회차 증거 전에 legacy 파일·복구 경로를 삭제하지 않는다.
+- 일정과 완료 게이트는 `magazine/MAGAZINE-CURRENT-MILESTONE.md`를 따른다.
 
 ### 0.0 자동 병합이 확인하는 것
 
@@ -195,6 +214,9 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 ---
 
 ## 4.5 무인 운영 — 하루의 흐름
+
+아래 `brief(claude)`는 **현재 배포된 legacy 경로**다. `DIRECT_SPEC_V1` 전환 뒤에는 같은 위치가
+`승인 노드 → ArticleSpec compiler`로 바뀌며 이후 관문은 동일하다.
 
 ```
 00:10 KST  producer        선정 → brief(claude) → 원고 회수(ChatGPT) → 관문 → 알림
