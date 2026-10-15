@@ -458,7 +458,7 @@ check('현재 실행이 code / deployed / operating PASS 를 한 표의 세 칸�
 check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있다',
   current.includes('UNKNOWN') && /관측하지 않은 것을 PASS\s*로 쓰지 않는다/.test(current))
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
-  current.includes('## 5. 다음 critical path') && /^\| Q10 \|/m.test(current))
+  current.includes('## 5. 다음 critical path') && /^\| D5 \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
   current.includes('첫 댓글 1 + 선택적 0~4')
   && current.includes('실제 `parentId` 답글')
@@ -504,22 +504,22 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
   check('🔴 완료된 PR 이 다음 critical path 에 활성 작업으로 다시 나오지 않는다', revived.length === 0)
   for (const l of revived.slice(0, 2)) console.log(`     🔴 ${l.trim().slice(0, 120)}`)
   const rows = [...path.matchAll(/^\| ([^|]+?) \|/gm)].map((m) => m[1]!.trim()).filter((c) => c !== '순서' && !/^-+$/.test(c))
-  check('현재 실행의 다음 critical path 첫 두 항목이 quality-v10 완결 → D5 증명이다',
-    rows[0] === 'Q10' && rows[1] === 'D5')
+  check('현재 실행의 다음 critical path 첫 두 항목이 D5 증명 → D10 자연 시험이다',
+    rows[0] === 'D5' && rows[1] === 'D10')
   check('현재 실행이 D10·D20 목표일과 각 선행 operating PASS를 함께 적는다',
     /^\| D10 \|[^\n]*10-16 목표[^\n]*자동 10\/10/m.test(path)
     && /^\| D20 \|[^\n]*10-17 목표[^\n]*D10 PASS/m.test(path))
 }
 check('현재 실행이 원격 main을 분 단위 관측값으로 적고 runtime과 같은 SHA임을 보인다',
-  /^\| 원격 main \(2026-10-15 10:38 관측\) \| `6f28fc3ad475c8b26587a87bb70eca007248f7c5` \|/m.test(currentLive)
-  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `6f28fc3ad475c8b26587a87bb70eca007248f7c5`/m.test(currentLive))
+  /^\| 원격 main \(2026-10-15 14:45 관측\) \| `568467aab2b8c6125ac1dbe31b6c92d3fe6efd63` \|/m.test(currentLive)
+  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `568467aab2b8c6125ac1dbe31b6c92d3fe6efd63`/m.test(currentLive))
 check('현재 실행이 추가 댓글의 배포 상태와 현재 d3에서 0건인 이유를 함께 적는다',
   currentLive.includes('switch ON · D10 profile · E6 consumer plist')
   && currentLive.includes('현재 공개 d3라 stage mismatch로 추가 0이 정상'))
 check('현재 실행이 공격적 목표일을 PASS 약속과 구분하고 D30을 생략하지 않는다',
   currentLive.includes('10-16 D10/10-17 D20 목표')
-  && currentLive.includes('목표일이지 아직 PASS가 아니며')
-  && currentLive.includes('D30은 생략하지 않음'))
+  && currentLive.includes('공격적 목표일이지 아직 PASS 약속이 아니다')
+  && currentLive.includes('D30은 생략하지 않는다'))
 check('현재 실행이 실제 조회수 구현을 별도 critical path로 두고 가짜 숫자를 금지한다',
   /^\| VIEWS \| 실제 근거 조회수 \|/m.test(currentLive)
   && currentLive.includes('댓글 배수·최소값·난수'))

@@ -7,9 +7,9 @@
  * `persona:reference-supplement-check` 는 묶음 자체(동결 · 덮어쓰기 금지 · 기존 30 불변)를 본다.
  * 이 검사는 **그 묶음을 읽는 자리**를 본다 — 글 생성(`loadVoice`)과 댓글(`bundlesForPersonas`)이 같은 배정 정본
  * (`stableAssignment`)을 쓰는가.
- *   ① 오늘(스냅샷 없음) 글 생성 말투는 앞판(`planBundles(정본, PRODUCTION)`)과 바이트까지 같다
+ *   ① 스냅샷 없음: 기존 30명 말투는 앞판과 바이트까지 같고, 승격된 신규 코드는 fail-closed
  *   ② 글 생성 표본과 댓글 묶음이 같은 Persona 에 같은 말투를 준다 — Persona 정체성은 한 벌
- *   ③ 승격 전 유효 스냅샷이 생겨도 기존 30명 배정은 그대로 · 정본 밖 코드(P34~)는 글쓴이 · 댓글러가 되지 않는다
+ *   ③ 유효 스냅샷이 있으면 신규 10명을 덮고 기존 30명 배정은 그대로다
  *   ④ 손상 스냅샷은 기존 30명 생성을 멈추지 않는다(새 코드만 fail-closed)
  *   ⑤ 글 생성 경로가 배정을 따로 계산하지 않는다(정적)
  */
@@ -30,6 +30,8 @@ const { loadVoice, digest16 } = await import('./lib/voice-runtime.mjs')
 const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
 const { writeSupplementSnapshot } = await import('./lib/persona-reference-supplement-store.mjs')
 const { VOICE_SAMPLE_MAX } = await import('../src/lib/content-core/voice-evidence')
+const BASE_CODES = PRODUCTION_PERSONA_CODES.slice(0, 30)
+const APPENDED_CODES = PRODUCTION_PERSONA_CODES.slice(30)
 
 let pass = 0
 let fail = 0
@@ -67,13 +69,13 @@ const authorCodes = (): Set<string> => new Set(loadVoice().candidates.map((c) =>
 const bundleDigestOf = (b: { comments: readonly { text: string }[] } | undefined): string => digest16(textsOf(b).join('\u0000'))
 
 // ─────────────────────────────────────────────────────────
-console.log('\n① 오늘(스냅샷 없음) — 글 생성 말투는 앞판과 바이트까지 같다')
+console.log('\n① 스냅샷 없음 — 기존 30명 그대로 · 신규 10명 fail-closed')
 // ─────────────────────────────────────────────────────────
-const legacy = new Map(planBundles({ rows: canon.rows, personaCodes: PRODUCTION_PERSONA_CODES }).bundles.map((b) => [b.personaCode, b]))
+const legacy = new Map(planBundles({ rows: canon.rows, personaCodes: BASE_CODES }).bundles.map((b) => [b.personaCode, b]))
 const voice0 = loadVoice()
 check('글 생성이 막히지 않는다', voice0.blockAllCode === null, String(voice0.blockReason))
 const expected0 = [...legacy.keys()].filter((code) => voice0.candidates.some((c) => c.code === code))
-check('글쓴이 후보 = 말투 · 나이대가 선 production Persona 전원', voice0.candidates.length > 0 && voice0.candidates.length === expected0.length,
+check('글쓴이 후보 = 말투 · 나이대가 선 기존 Persona', voice0.candidates.length > 0 && voice0.candidates.length === expected0.length,
   `${voice0.candidates.length}/${expected0.length}`)
 check('🔴 후보마다 말투 지문 · 표본이 앞판 계산과 같다', voice0.candidates.every((c) =>
   c.bundleDigest === bundleDigestOf(legacy.get(c.code))
@@ -84,32 +86,35 @@ console.log('\n② 글 생성과 댓글이 같은 Persona 에 같은 말투를 �
 // ─────────────────────────────────────────────────────────
 const comment0 = bundlesForPersonas({ repoRoot, personaCodes: PRODUCTION_PERSONA_CODES })
 check('🔴 글 생성 말투 지문 = 댓글 묶음 지문(같은 코드)', voice0.candidates.every((c) => c.bundleDigest === bundleDigestOf(comment0.byCode.get(c.code))))
-check('댓글 묶음이 production 전원에 선다', PRODUCTION_PERSONA_CODES.every((code) => comment0.byCode.has(code)))
+check('스냅샷 없이는 기존 30명 댓글 묶음만 서고 신규 10명은 막힌다',
+  BASE_CODES.every((code) => comment0.byCode.has(code))
+  && APPENDED_CODES.every((code) => !comment0.byCode.has(code)))
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 승격 전 유효 스냅샷 — 기존 30명 그대로 · 정본 밖 코드는 글쓴이 · 댓글러가 아니다')
+console.log('\n③ 유효 스냅샷 — 기존 30명 그대로 · 신규 10명 활성')
 // ─────────────────────────────────────────────────────────
-const newCodes = ['P34', 'P35', 'P36']
 const plan = planSupplementSnapshot({
-  canonRows: canon.rows, extraRows: rowsOf('ex', 3), baseCodes: PRODUCTION_PERSONA_CODES, newCodes,
+  canonRows: canon.rows, extraRows: rowsOf('ex', APPENDED_CODES.length), baseCodes: BASE_CODES, newCodes: APPENDED_CODES,
   baseSourceDigest: sourceDigest, saltId: 'c'.repeat(12), generatedAt: '2026-10-15T00:00:00.000Z', reason: 'fixture',
 })
 check('합성 스냅샷 계획이 선다(기존 배정 변동 0)', plan.ok, plan.problems.join(' / '))
 const written = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText })
 check('스냅샷이 정본 경로에 기록된다', written.ok)
 const sa = stableAssignment({ repoRoot })
-check('배정 정본이 스냅샷을 읽는다(동결 묶음 3)', sa.supplementByCode.size === 3, String(sa.supplementByCode.size))
+check('배정 정본이 스냅샷을 읽는다(동결 묶음 10)', sa.supplementByCode.size === APPENDED_CODES.length, String(sa.supplementByCode.size))
 const voice1 = authorCodes()
 const before = new Map(voice0.candidates.map((c) => [c.code, JSON.stringify(c)]))
 check('🔴 스냅샷이 생겨도 기존 글쓴이 후보 · 말투가 한 글자도 바뀌지 않는다',
-  loadVoice().candidates.length === voice0.candidates.length
-    && loadVoice().candidates.every((c) => before.get(c.code) === JSON.stringify(c)))
-check('🔴 정본 밖 코드(P34~)는 글쓴이 후보가 아니다', newCodes.every((code) => !voice1.has(code)))
-const comment1 = bundlesForPersonas({ repoRoot, personaCodes: newCodes })
-check('🔴 정본 밖 코드는 댓글 묶음도 받지 않는다', comment1.byCode.size === 0 && comment1.blocks.some((b) => b.includes('production 정본 universe 밖')))
+  loadVoice().candidates.filter((c) => before.has(c.code)).every((c) => before.get(c.code) === JSON.stringify(c)))
+check('🔴 신규 10명이 글쓴이 후보에 들어온다', APPENDED_CODES.every((code) => voice1.has(code)))
+const comment1 = bundlesForPersonas({ repoRoot, personaCodes: PRODUCTION_PERSONA_CODES })
+check('🔴 production 40명 댓글 묶음이 모두 선다', PRODUCTION_PERSONA_CODES.every((code) => comment1.byCode.has(code)))
+const outsideCodes = ['P44', 'P45', 'P46']
+const outside = bundlesForPersonas({ repoRoot, personaCodes: outsideCodes })
+check('🔴 정본 밖 코드는 댓글 묶음을 받지 않는다', outside.byCode.size === 0 && outside.blocks.some((b) => b.includes('production 정본 universe 밖')))
 
 // ─────────────────────────────────────────────────────────
-console.log('\n④ 손상 스냅샷 — 기존 30명 생성은 멈추지 않는다')
+console.log('\n④ 손상 스냅샷 — 기존 30명은 유지 · 신규 10명 fail-closed')
 // ─────────────────────────────────────────────────────────
 writeFileSync(SUPPLEMENT_CORPUS_FILE, '{"broken":', { mode: 0o600 })
 const voice2 = loadVoice()

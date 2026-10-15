@@ -2,9 +2,9 @@
 /**
  * Persona **30 → 40 → 60 → 300 확장 판정** — 🔴 read-only. DB write 0 · LLM 0 · 유료 호출 0 (2026-10-13)
  *
- *   npx tsx scripts/persona-expansion.mts                 # 오프라인 — 정본 카드 · 말투 자산 · fixture
- *   npx tsx scripts/persona-expansion.mts --db            # + 운영 DB read-only (계약 유효 · 집중도 · Gate ⑥-B · cadence)
- *   npx tsx scripts/persona-expansion.mts --db --voice-evidence # + 익명 보충 말투 근거 read-only
+ *   npx tsx scripts/persona-expansion.mts --fixture=<path> # 오프라인 — 정본 카드 · 말투 자산 · fixture
+ *   npx tsx scripts/persona-expansion.mts --db --fixture=<path> # + 운영 DB read-only (계약 유효 · 집중도 · Gate ⑥-B · cadence)
+ *   npx tsx scripts/persona-expansion.mts --db --voice-evidence --fixture=<path> # + 익명 보충 말투 근거 read-only
  *   npx tsx scripts/persona-expansion.mts --fixture=<path> --json=<out.json>
  *
  * 🔴 **켜는 명령이 없다.** `--apply` 를 받으면 거부한다. 활성화는 runbook 의 순서대로
@@ -49,7 +49,8 @@ if (argv.some((a) => a === '--apply' || a.startsWith('--apply=') || a === '--exe
 const USE_DB = argv.includes('--db')
 const USE_VOICE_EVIDENCE = argv.includes('--voice-evidence')
 if (USE_VOICE_EVIDENCE && !USE_DB) fail('--voice-evidence 는 정확한 회원·Persona 제외 집합이 필요하므로 --db 와 함께 써야 한다')
-const FIXTURE = arg('fixture') ?? PROPOSED_COHORTS[0]!.fixture
+const FIXTURE = arg('fixture') ?? PROPOSED_COHORTS[0]?.fixture
+  ?? fail('--fixture=<path> 가 필요하다 — 승격 대기 중인 제안 cohort 가 없다')
 const JSON_OUT = arg('json')
 const repoRoot = process.cwd()
 
@@ -233,7 +234,16 @@ if (JSON_OUT !== null) {
     steps: plans,
     canary: {
       cohort: fixture.cohort,
-      candidates: batch.candidates.map((c) => ({ code: c.code, status: c.status, reasons: c.reasons })),
+      candidates: batch.candidates.map((c) => ({
+        code: c.code,
+        status: c.status,
+        reasons: c.reasons,
+        displayName: fixture.candidates.find((candidate) => candidate.code === c.code)?.displayName ?? null,
+        // Promotion consumes only artifacts that passed the same production
+        // card/seed validators used above. Source voice text is never emitted.
+        cardMarkdown: c.status === 'ready' ? c.autogen.cardMarkdown : null,
+        seed: c.status === 'ready' ? c.autogen.seed : null,
+      })),
       creativeQuality: batch.creativeQuality.status,
       diversity: { ok: batch.diversity.ok, problems: batch.diversity.problems, merged: batch.diversity.merged, effective: batch.diversity.effective },
     },
