@@ -109,7 +109,7 @@ function check(label: string, ok: boolean, detail = ''): void {
 
 /** 파일 기본값과 무관하게 즉시 폴백시키는 운영 kill switch */
 const OFF: NodeJS.ProcessEnv = { MGRAPH_GRAPH_KILL: '1' }
-/** 제품 기본값 — 첫 카나리는 sleep 한 분류만 연다 */
+/** 제품 기본값 — 저장소 control 이 선언한 검증 완료 cluster 를 연다 */
 const DEFAULT: NodeJS.ProcessEnv = {}
 
 /**
@@ -193,7 +193,7 @@ check(
 )
 
 // ── ①-C 공개 글 coverage ─────────────────────────────────
-console.log('\n①-C 공개 글 coverage — 수면 canary 준비도와 번들 무결성')
+console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 무결성')
 
 {
   let classifierPassed = false
@@ -222,13 +222,15 @@ console.log('\n①-C 공개 글 coverage — 수면 canary 준비도와 번들 �
     coverage.integrity.staleMappings.length === 0,
     coverage.integrity.staleMappings.map((row: { intent: string; slug: string }) => `${row.intent}:${row.slug}`).join(',') || '0')
 
-  const sleepSlugs = new Set(published.filter((article) => article.cluster === 'sleep').map((article) => article.slug))
-  const sleepRows = coverage.rows.filter((row: { slug: string }) => sleepSlugs.has(row.slug))
-  const sleepBlocked = sleepRows.filter((row: { status: string }) => row.status !== 'READY')
-  check('수면 canary 공개 글이 존재한다', sleepRows.length > 0, `${sleepRows.length}편`)
-  check('수면 canary 공개 글은 전부 공개 graph target을 가진다',
-    sleepBlocked.length === 0,
-    sleepBlocked.map((row: { slug: string; status: string }) => `${row.slug}:${row.status}`).join(',') || `${sleepRows.length}/${sleepRows.length}`)
+  for (const cluster of CONTROL.enabledClusters) {
+    const canarySlugs = new Set(published.filter((article) => article.cluster === cluster).map((article) => article.slug))
+    const canaryRows = coverage.rows.filter((row: { slug: string }) => canarySlugs.has(row.slug))
+    const blocked = canaryRows.filter((row: { status: string }) => row.status !== 'READY')
+    check(`${cluster} canary 공개 글이 존재한다`, canaryRows.length > 0, `${canaryRows.length}편`)
+    check(`${cluster} canary 공개 글은 전부 공개 graph target을 가진다`,
+      blocked.length === 0,
+      blocked.map((row: { slug: string; status: string }) => `${row.slug}:${row.status}`).join(',') || `${canaryRows.length}/${canaryRows.length}`)
+  }
 
   const summary = Object.entries(coverage.counts)
     .map(([status, count]) => `${status} ${count}`)
@@ -252,13 +254,15 @@ check('MGRAPH_GRAPH_KILL=1 이 그래프를 끈다', isGraphEnabled(OFF) === fal
   check("  계측 graph_version 이 'none' 이다 — 그래프분과 섞이지 않는다", wrongVer.length === 0)
 }
 
-// ── ②-C 첫 제품 카나리: sleep 만 활성 ────────────────────
-console.log('\n②-C 제품 기본값 — sleep 5편만 그래프 카나리')
+// ── ②-C 제품 기본값: 검증 완료 cluster 만 활성 ────────────
+console.log('\n②-C 제품 기본값 — control 의 활성 그래프 카나리')
 
 check('control.ts 기본값이 켜짐이다', CONTROL.enabled === true)
-check('  열린 cluster 는 sleep 하나뿐이다', CONTROL.enabledClusters.join(',') === 'sleep')
+check('  기존 sleep canary 는 계속 열린다', CONTROL.enabledClusters.includes('sleep'))
+check('  열린 cluster 에 중복이 없다', new Set(CONTROL.enabledClusters).size === CONTROL.enabledClusters.length)
 check('  기본 환경에서 그래프가 켜진다', isGraphEnabled(DEFAULT) === true)
-check('  기본 환경이 여는 cluster 는 sleep 하나뿐이다', enabledClusters(DEFAULT).join(',') === 'sleep')
+check('  기본 환경이 control 의 cluster 목록을 그대로 연다',
+  enabledClusters(DEFAULT).join(',') === CONTROL.enabledClusters.join(','))
 check(
   '  하단 직접·형제·발견 표면이 모두 켜져 있다',
   CONTROL.surfaces.FOOTER_NEXT
@@ -267,26 +271,45 @@ check(
 )
 
 {
-  const canary = published.filter((a) => a.cluster === 'sleep')
-  const outside = published.filter((a) => a.cluster !== 'sleep')
+  const canaryClusters = new Set(CONTROL.enabledClusters)
+  const canary = published.filter((a) => canaryClusters.has(a.cluster))
+  const outside = published.filter((a) => !canaryClusters.has(a.cluster))
   const canaryResolved = canary.map((a) => ({ article: a, result: resolveAt(a, DEFAULT) }))
 
-  check('sleep 공개 글이 1편 이상 있다', canary.length > 0, `${canary.length}편`)
+  check('활성 canary 공개 글이 있다', canary.length > 0, `${canary.length}편`)
   check(
-    '  sleep 공개 글 전부 GRAPH 결과를 쓴다',
+    '  활성 canary 공개 글 전부 GRAPH 결과를 쓴다',
     canaryResolved.every(({ result }) => result.source === 'GRAPH' && result.reason === null),
     `${canaryResolved.filter(({ result }) => result.source === 'GRAPH').length}/${canary.length}편`,
   )
   check(
-    '  sleep 공개 글 전부 실제 graph 항목을 1개 이상 갖는다',
+    '  활성 canary 공개 글 전부 실제 graph 항목을 1개 이상 갖는다',
     canaryResolved.every(({ result }) => result.items.some((item) => item.source === 'GRAPH')),
   )
   check(
-    '  직접 3칸 + 발견 1칸인 sleep 표본이 있다',
-    canaryResolved.some(({ result }) =>
-      result.items.filter((item) => item.slot !== DISCOVERY_SLOT).length === MAX_DIRECT
-      && result.items.filter((item) => item.slot === DISCOVERY_SLOT).length === 1),
+    '  각 canary에 직접 3칸 + 발견 1칸인 표본이 있다',
+    [...canaryClusters].every((cluster) => canaryResolved
+      .filter(({ article }) => article.cluster === cluster)
+      .some(({ result }) =>
+        result.items.filter((item) => item.slot !== DISCOVERY_SLOT).length === MAX_DIRECT
+        && result.items.filter((item) => item.slot === DISCOVERY_SLOT).length === 1)),
   )
+  if (canaryClusters.has('family')) {
+    check(
+      '  family 신규·기존 글이 서로 역방향으로 연결된다',
+      resolveAt(published.find((a) => a.slug === 'child-marriage-silence')!, DEFAULT).items
+        .some((item) => item.source === 'GRAPH' && item.article.slug === 'empty-nest-quiet')
+        && resolveAt(published.find((a) => a.slug === 'empty-nest-quiet')!, DEFAULT).items
+          .some((item) => item.source === 'GRAPH' && item.article.slug === 'child-marriage-silence'),
+    )
+    check(
+      '  family graph 항목은 설명 가능한 이유를 가진다',
+      canaryResolved.filter(({ article }) => article.cluster === 'family')
+        .every(({ result }) => result.items
+          .filter((item) => item.source === 'GRAPH')
+          .every((item) => Boolean(item.reason))),
+    )
+  }
   check(
     '  graph 항목은 현재 graphVersion 을 쓴다',
     canaryResolved.every(({ result }) =>
@@ -319,19 +342,17 @@ const WHITESPACE_PRODUCTION_ENV: NodeJS.ProcessEnv = {
   MGRAPH_GRAPH_ENABLED: '',
   MGRAPH_GRAPH_CLUSTERS: '   ',
 }
-const productionSleepCanary = published.filter((a) => a.cluster === 'sleep')
+const productionDefaultCanary = published.filter((a) => CONTROL.enabledClusters.includes(a.cluster))
+check('Production 빈 env 는 저장소 canary 기본값을 덮지 않는다',
+  productionDefaultCanary.every((a) => resolveAt(a, EMPTY_PRODUCTION_ENV).source === 'GRAPH'))
 check(
-  'Production 빈 env 는 저장소 sleep canary 기본값을 덮지 않는다',
-  productionSleepCanary.every((a) => resolveAt(a, EMPTY_PRODUCTION_ENV).source === 'GRAPH'),
-)
-check(
-  'Production 공백 env 도 저장소 sleep canary 기본값을 덮지 않는다',
-  productionSleepCanary.every((a) => resolveAt(a, WHITESPACE_PRODUCTION_ENV).source === 'GRAPH'),
+  'Production 공백 env 도 저장소 canary 기본값을 덮지 않는다',
+  productionDefaultCanary.every((a) => resolveAt(a, WHITESPACE_PRODUCTION_ENV).source === 'GRAPH'),
 )
 check(
   'Production 빈 env 의 runtime config 가 저장소 canary 를 그대로 연다',
   graphRuntimeConfig(EMPTY_PRODUCTION_ENV).enabled === true
-    && graphRuntimeConfig(EMPTY_PRODUCTION_ENV).clusters.join(',') === 'sleep',
+    && graphRuntimeConfig(EMPTY_PRODUCTION_ENV).clusters.join(',') === CONTROL.enabledClusters.join(','),
 )
 
 {
@@ -1445,14 +1466,19 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
    * 🔴 **그래프가 실제로 관계를 주는 글**을 고른다. 아무 글이나 쓰면
    *    원래부터 폴백인 글을 놓고 "롤백이 됐다" 고 착각할 수 있다.
    */
+  // 이전 번들에도 활성화돼 있던 sleep 글을 써야 신규 cluster 추가 뒤에도
+  // 현재/이전 번들의 원자적 전환 자체만 검증할 수 있다.
   const graphBacked = published.find(
-    (a) => resolveAt(a, ALL_ON).items.some((i) => i.source === 'GRAPH'),
+    (a) => a.cluster === 'sleep'
+      && resolveAt(a, ALL_ON).items.some((i) => i.source === 'GRAPH'),
   )
-  check('시험에 쓸 그래프 기반 글이 있다', graphBacked !== undefined, graphBacked?.slug ?? '(없음)')
+  check('시험에 쓸 기존 sleep 그래프 글이 있다', graphBacked !== undefined, graphBacked?.slug ?? '(없음)')
   const graphBackedSlug = graphBacked?.slug ?? published[0].slug
 
   const GDIR = join(ROOT, 'src/content/magazine/graph')
-  const PREV = 'g-20260901-r0llba'
+  const declaredPrevious = CONTROL.previousGraphVersion
+  const PREV = declaredPrevious ?? 'g-20260901-r0llba'
+  const syntheticPrevious = declaredPrevious === null
   const curPath = join(GDIR, 'current.ts')
   const ctlPath = join(GDIR, 'control.ts')
   const prevPath = join(GDIR, `${PREV}.ts`)
@@ -1472,14 +1498,16 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
   }
 
   try {
-    // 🔴 이전 버전 번들을 만든다 — 현재 것을 복제해 graphVersion 만 바꾼다.
-    //    같은 스키마(edge/3)라 컴파일도 되고 관계 내용도 실재한다.
-    writeFileSync(
-      prevPath,
-      readFileSync(join(ROOT, `src/content/magazine/graph/${GRAPH.graphVersion}.ts`), 'utf8')
-        .replace(`"graphVersion": "${GRAPH.graphVersion}"`, `"graphVersion": "${PREV}"`),
-      'utf8',
-    )
+    // 실제 이전 파일이 없는 첫 버전에서만 같은 스키마의 시험 번들을 만든다.
+    if (syntheticPrevious) {
+      writeFileSync(
+        prevPath,
+        readFileSync(join(ROOT, `src/content/magazine/graph/${GRAPH.graphVersion}.ts`), 'utf8')
+          .replace(`"graphVersion": "${GRAPH.graphVersion}"`, `"graphVersion": "${PREV}"`),
+        'utf8',
+      )
+    }
+    check('롤백 대상 버전 파일이 제품에 실제로 있다', existsSync(prevPath), PREV)
     writeFileSync(
       probePath,
       [
@@ -1489,7 +1517,7 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
         `const NOW = ${CHECK_NOW}`,
         `const a = getAllMagazineArticles(NOW).find((x) => x.slug === '${graphBackedSlug}')!`,
         `const r = resolveRelatedMagazine(a, process.env, NOW)`,
-        `console.log(JSON.stringify({ source: r.source, reason: r.reason, graphVersion: r.items[0]?.graphVersion ?? 'none', items: r.items.length }))`,
+        `console.log(JSON.stringify({ source: r.source, reason: r.reason, graphVersion: r.items.find((item) => item.source === 'GRAPH')?.graphVersion ?? 'none', items: r.items.length }))`,
       ].join('\n'),
       'utf8',
     )
@@ -1525,13 +1553,16 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
     // 🔴 무슨 일이 있어도 되돌린다
     writeFileSync(curPath, origCur, 'utf8')
     writeFileSync(ctlPath, origCtl, 'utf8')
-    rmSync(prevPath, { force: true })
+    if (syntheticPrevious) rmSync(prevPath, { force: true })
     rmSync(probePath, { force: true })
   }
 
   check('검사가 끝난 뒤 current.ts 가 제자리다', readFileSync(curPath, 'utf8') === origCur)
   check('  control.ts 도 제자리다', readFileSync(ctlPath, 'utf8') === origCtl)
-  check('  임시 버전 파일이 지워졌다', !existsSync(prevPath))
+  check(
+    syntheticPrevious ? '  임시 버전 파일이 지워졌다' : '  실제 이전 버전 파일이 보존됐다',
+    syntheticPrevious ? !existsSync(prevPath) : existsSync(prevPath),
+  )
 
   /** 🔴 복구 경로 둘을 구분해 적는다 */
   const curSrc = readFileSync(curPath, 'utf8')
