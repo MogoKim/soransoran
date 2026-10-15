@@ -414,15 +414,18 @@ function makeDirectAndLegacySandbox() {
   writeFileSync(join(d, slug, 'brief.md'), legacyBrief, 'utf8')
   const quarantinePath = join(d, 'quarantine.json')
   saveQuarantine({}, quarantinePath)
-  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath }
+  // 🔴 전송 경계는 정본 큐 행 + 현재 승인 source 로 다시 검증한다 — 시험 판·큐를 주입한다
+  writeApprovedSource(d, input, input.node.graphVersion)
+  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => input.node.graphVersion }
+  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps }
 }
 
 check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해 direct 1 · legacy 1 을 증명한다', () => {
-  const { input, draftsDir, slug, specHash, quarantinePath } = makeDirectAndLegacySandbox()
+  const { input, draftsDir, slug, specHash, quarantinePath, directSourceDeps } = makeDirectAndLegacySandbox()
 
   // ── direct 1: queueItem.directSpecMode === 'DIRECT_SPEC_V1' ─────
   const directQI = { ...input.queueItem, [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE }
-  const directGate = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: directQI })
+  const directGate = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: directQI, directSourceDeps })
   assert.equal(directGate.ok, true, `direct gate 가 ok 가 아니다 — ${directGate.code ?? ''}: ${directGate.why ?? ''}`)
   assert.equal(directGate.mode, DIRECT_SPEC_MODE, 'direct gate 가 mode 를 알리지 않는다 (wiring 미적용?)')
   assert.equal(directGate.specHash, specHash, 'direct gate 가 specHash 를 운반하지 않는다')
@@ -500,7 +503,7 @@ check('W26 direct mode + 손상 spec — ARTICLE_SPEC_HASH 로 fail-closed (veri
 })
 
 check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 identity 차단', () => {
-  const { draftsDir, slug, quarantinePath, specHash } = makeDirectAndLegacySandbox()
+  const { draftsDir, slug, quarantinePath, specHash, directSourceDeps } = makeDirectAndLegacySandbox()
   const spec = readDirectSpec({ slug, draftsDir }).spec
   writeFileSync(join(draftsDir, slug, 'draft.md'), '---\ntitle: t\n---\n\n## 본문\n\n[CTA] /community/free | t | t\n', 'utf8')
   const directPacket = directSpecRegenPacket({ spec, failures: [{ code: 'X', label: 't', sentence: '' }] })
@@ -511,7 +514,7 @@ check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 ident
   }
   const g = deliveryGate({ slug, draftsDir, quarantinePath,
     queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE },
-    packet })
+    packet, directSourceDeps })
   assert.equal(g.ok, true, `${g.code ?? ''}: ${g.why ?? ''}`)
   assert.equal(g.specHash, specHash)
   assert.ok(g.message.includes(specHash))

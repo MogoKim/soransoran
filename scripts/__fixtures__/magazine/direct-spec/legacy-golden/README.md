@@ -5,7 +5,7 @@
 - `input.json` — legacy 큐 3행(EVERGREEN · SEASONAL publishWindow · series 1편)과 고정 시각, 전송 메시지용 brief.md 본문.
 - `expected.json` — **부모 커밋 `47b8314e490be98d7b60b321b9f67413a8be5777`** 의 `planRun` 과 `deliveryGate` 가
   이 입력으로 낸 결과: run.json(`startedAt`·`finishedAt` 제외), slug 별 `brief.todo.md`·`review.todo.md`,
-  legacy 전송 `message`·`messageFingerprint`.
+  legacy 전송 `message`·`messageFingerprint`, 그리고 producer `report.md` 전문(`reportMd`).
 
 생성 방법(2026-10-15): 부모 커밋을 `git archive` 로 임시 폴더에 풀고, 같은 입력을 임시 HOME·drafts 로
 `planRun` → 각 selected 행에 `briefMd` 를 brief.md 로 놓고 `deliveryGate({ queueItem: run.json 행 })` 를 불렀다.

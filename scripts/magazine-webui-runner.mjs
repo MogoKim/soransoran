@@ -561,7 +561,9 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
    * 🔴 **입력 수리(brief echo → 원고)** — `{ type: 'BRIEF_ECHO' }`. 전용 메시지·지문으로 보내고
    *    응답은 **임시 경로(draftOut)에만** 쓴다. draft.md 는 부모(입력 수리 단계)가 검증한 뒤에만 바뀐다.
    */
-  inputRepair = null } = {}) {
+  inputRepair = null,
+  /** 🔴 시험만 준다 — direct source 재검증의 정본 큐·판 주입점. 운영은 deliveryGate 기본값(실제 큐·current.ts) */
+  directSourceDeps = null } = {}) {
   const dir = join(draftsDir, slug)
   const briefPath = join(dir, 'brief.md')
   const draftPath = join(dir, 'draft.md')
@@ -632,7 +634,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
   //    legacy (queueItem 미지정 · 또는 opt-in 없음) 은 기존 지문·메시지 바이트가 그대로다.
   const gate = inputRepair
     ? inputRepairGate({ slug, draftsDir, quarantinePath })
-    : deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem })
+    : deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem, directSourceDeps })
   if (!gate.ok) {
     return { slug, status: 'failed', reason: gate.code, stage: 'ledger', sent: false,
       messageFingerprint: gate.messageFingerprint, errorDetail: `${gate.why} (한 글자도 보내지 않았다)`,
@@ -966,6 +968,8 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
  *    기본값은 운영 경로 그대로다 — 소스 문자열 검사로 대신하지 않기 위해 연다.
  */
 export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, resultPath = null,
+  /** 🔴 시험만 준다 — 계획표와 실제 전송 경계가 같은 direct source 재검증을 쓰게 */
+  directSourceDeps = null,
   /** 🔴 전송 사실의 정본. 시험은 임시 파일을 준다 — 운영 장부를 건드리지 않는다 */
   quarantinePath = QUARANTINE_PATH,
   /** 🔴 시험이 브라우저를 켜지 않고 실패 경로를 태우기 위한 자리. 운영은 실제 probe 다 */
@@ -1049,7 +1053,7 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   for (const slug of fetchSet) {
     // 🔴 계획표도 queueItem 을 함께 본다 — fetchSlug 와 **같은 분기**를 지나게 하기 위해서다.
     //    opt-in 없는 slug 는 `null` 로 지나므로 legacy 바이트가 바뀌지 않는다.
-    const g = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: queueItemBySlug.get(slug) ?? null })
+    const g = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: queueItemBySlug.get(slug) ?? null, directSourceDeps })
     if (g.ok && g.hold) hold.set(slug, g.hold)
     if (!g.ok) gateBlocked.set(slug, g)
     if (g.ok && g.correctionPending) correctionPending.set(slug, g.correctionPending)
@@ -1143,7 +1147,7 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     console.log('')
     console.log(`  ${p.slug}`)
     const r = await fetchSlug(p.slug, { quarantinePath, runIdHint: runId, dateHint: date, browserDeps, draftsDir,
-      queueItem: queueItemBySlug.get(p.slug) ?? null })
+      queueItem: queueItemBySlug.get(p.slug) ?? null, directSourceDeps })
     if (r.sent) sentTotal += 1
     results.push(r)
 

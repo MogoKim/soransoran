@@ -8,8 +8,10 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { DRAFTS_DIR } from './magazine-load.mjs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { DRAFTS_DIR, loadQueue } from './magazine-load.mjs'
+import { readProductGraphVersion, verifyDirectSpecOnDisk } from './magazine-direct-spec-source.mjs'
 import { buildManuscriptMessage } from './chatgpt-session.mjs'
 import {
   readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH, inputRepairAlreadySent, firstResponseInvalidFor,
@@ -231,7 +233,14 @@ export function inputRepairGate({ slug, draftsDir = DRAFTS_DIR, quarantinePath =
  * @returns {{ok:true, message:string|null, messageFingerprint:string|null, hold:object|null}
  *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
  */
-export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH, queueItem = null }) {
+const PRODUCT_GRAPH_CURRENT = join(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'), 'src/content/magazine/graph/current.ts')
+/** 운영 기본값 — 정본 큐와 제품 current graphVersion. 시험만 `directSourceDeps` 로 바꾼다 */
+const DEFAULT_DIRECT_SOURCE_DEPS = {
+  queue: () => loadQueue(),
+  expectedGraphVersion: () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
+}
+
+export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH, queueItem = null, directSourceDeps = null }) {
   // 🔴 좁은 canary 라우팅 — queueItem 이 명시적으로 DIRECT_SPEC_V1 로 opt-in 했을 때만 direct.
   //    legacy 입력(queueItem 미지정 포함)은 아래 기존 경로를 그대로 지난다 — message bytes · fingerprint 불변.
   //    모르는 directSpecMode 는 **legacy provider 로도 보내지 않는다** (fail-closed).
@@ -260,6 +269,17 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
     }
     if (!spec.ok) {
       return { ok: false, code: spec.code, why: spec.why, message: null, messageFingerprint: null }
+    }
+    /**
+     * 🔴 **전송 직전에 지금 승인 source 를 다시 지난다** (2026-10-15 Codex P0).
+     *    plan 이 통과시킨 뒤 source 가 삭제·승인 취소·stale·drift·교체되면 저장된 spec 으로 보내면 안 된다.
+     *    --fetch-run · 수동 --fetch · direct regen 이 모두 이 함수를 probe · Chrome · 예약 전에 지난다.
+     *    (spec 자기검증 — 없음·손상 — 이 먼저다. 둘 다 부작용 없는 판정이고 장부 읽기보다 앞이다)
+     */
+    const deps = directSourceDeps ?? DEFAULT_DIRECT_SOURCE_DEPS
+    const sendable = verifyDirectSpecOnDisk({ slug, queue: deps.queue(), draftsDir, expectedGraphVersion: deps.expectedGraphVersion() })
+    if (!sendable.ok) {
+      return { ok: false, code: sendable.code, why: sendable.why, directSpec: sendable.evidence ?? null, message: null, messageFingerprint: null }
     }
     const ledger = readQuarantine(quarantinePath)
     if (!ledger.ok) {

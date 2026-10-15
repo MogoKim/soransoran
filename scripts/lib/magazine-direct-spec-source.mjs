@@ -33,7 +33,7 @@ import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFi
 import { dirname, join, relative } from 'node:path'
 
 import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
-import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE } from './magazine-direct-spec.mjs'
+import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD } from './magazine-direct-spec.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 
 export const DIRECT_SPEC_SOURCE_NOT_READY = 'DIRECT_SPEC_SOURCE_NOT_READY'
@@ -239,6 +239,28 @@ export function verifyDirectSpecIdentity({ queueItem, draftsDir, expectedGraphVe
     return { ok: false, code: DIRECT_SPEC_SPEC_CONFLICT, why: existing.why, evidence: judged.evidence }
   }
   return { ok: true, judged, spec: judged.spec, evidence: judged.evidence, existing: existing.state }
+}
+
+/**
+ * 🔴 **이미 디스크에 있는 direct spec 으로 진행해도 되는가** — 등록 gate 와 실제 전송 경계(deliveryGate)가 같이 쓴다.
+ *    호출자가 들고 온 행(run.json 행에는 compile 재료가 없다)이 아니라 **정본 큐 행**으로 다시 컴파일하고,
+ *    디스크 spec 바이트가 그 결과와 같아야 한다. 새 spec 을 쓰지 않는다.
+ *    정본 큐에 없음 → DIRECT_SPEC_NOT_IN_QUEUE · opt-in 철회 → DIRECT_SPEC_MODE_WITHDRAWN ·
+ *    source 부재/취소/stale/drift → DIRECT_SPEC_SOURCE_NOT_READY · 다른 spec → DIRECT_SPEC_SPEC_CONFLICT ·
+ *    spec 없음 → DIRECT_SPEC_MISSING.
+ */
+export function verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion, repoRoot = null }) {
+  const canonical = (queue ?? []).find((q) => q?.slug === slug) ?? null
+  if (!canonical) return { ok: false, code: 'DIRECT_SPEC_NOT_IN_QUEUE', why: `정본 큐에 ${slug} 가 없다 — 승인 신원을 다시 확인할 수 없다`, evidence: null }
+  if (canonical[DIRECT_SPEC_OPT_IN_FIELD] !== DIRECT_SPEC_MODE) {
+    return { ok: false, code: 'DIRECT_SPEC_MODE_WITHDRAWN', why: '정본 큐 행이 더는 DIRECT_SPEC_V1 이 아니다 — 저장된 spec 으로 보내지 않는다', evidence: null }
+  }
+  const v = verifyDirectSpecIdentity({ queueItem: canonical, draftsDir, expectedGraphVersion, repoRoot })
+  if (!v.ok) return v
+  if (v.existing !== 'IDENTICAL') {
+    return { ok: false, code: 'DIRECT_SPEC_MISSING', why: 'article-spec.json 이 없다 — 이 단계는 spec 을 새로 쓰지 않는다', evidence: v.evidence }
+  }
+  return v
 }
 
 /**

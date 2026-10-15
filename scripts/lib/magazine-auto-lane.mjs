@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, readDirectSpec, resolveMagazineAutoMode } from './magazine-direct-spec.mjs'
-import { readProductGraphVersion, verifyDirectSpecIdentity } from './magazine-direct-spec-source.mjs'
+import { readProductGraphVersion, verifyDirectSpecOnDisk } from './magazine-direct-spec-source.mjs'
 
 const PRODUCT_GRAPH_CURRENT = join(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'), 'src/content/magazine/graph/current.ts')
 
@@ -92,9 +92,8 @@ export function gate(slug, queue, draftsDir = DRAFTS_DIR, {
        *    source 가 취소·교체된 뒤 남은 spec·원고가 등록으로 흘러갈 수 있다.
        *    디스크 spec 이 현재 source 의 컴파일 결과와 바이트까지 같아야 통과한다.
        */
-      const v = verifyDirectSpecIdentity({ queueItem: item, draftsDir, expectedGraphVersion: expectedGraphVersionFn() })
+      const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion: expectedGraphVersionFn() })
       if (!v.ok) block(v.code, v.why)
-      else if (v.existing !== 'IDENTICAL') block('DIRECT_SPEC_MISSING', 'article-spec.json 이 현재 source 컴파일 결과와 같은지 확인하지 못했다')
     }
   } else {
     if (!existsSync(p.brief)) block('BRIEF_MISSING', 'brief.md 가 없다 — brief-auto 가 먼저 돌아야 한다')

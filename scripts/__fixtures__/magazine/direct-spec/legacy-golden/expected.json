@@ -80,5 +80,6 @@
       "message": "아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요. 설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다. 출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요. frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다. 웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.\n\n===== BRIEF 시작 (여기부터 끝까지가 작성 지시다) =====\n---\ntitle: 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\ndescription: 요약\ncluster: sleep\n---\n\n## 검색 의도\n\n밤에 잠을 설친 다음 날의 질문.\n\n[CTA] /community/menopause | 이야기 남기기 | 오늘 이야기를 남겨 주세요\n===== BRIEF 끝 =====",
       "messageFingerprint": "sha256:45db49d12552fa46e8175cdf121f1edd732623f216a9d9c2c5e7d4b29379f762"
     }
-  }
+  },
+  "reportMd": "# producer 준비 리포트 — 2026-10-16\n\n재고 0일 · 오늘 생산 5건 · HIGH 1건 · 선정 3건\n매거진 공개 0 · 예약 0 · 차단 0\n\n## 재사용 후보 0건 · slug HOLD 0건\n\n\n## 선정\n\n- day 9102 `golden-legacy-seasonal` — 김장 준비하다 허리가 뻐근해질 때 미리 챙길 것\n  SEASONAL · LOW · 창 2026-10-10~2026-11-30\n- day 9101 `golden-legacy-evergreen` — 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\n  EVERGREEN · LOW\n- day 9103 `golden-legacy-series-1` — 다시 운동을 시작한 첫 주에 느낀 것\n  EVERGREEN · LOW\n\n## 제외 (상위 12건)\n\n\n## 다음\n\n세션에서 `_runs/2026-10-16/selected/*/brief.todo.md` 의 TODO 를 채운 뒤\n`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다.\n\n🚫 producer 는 원고·hero·등록·공개·commit·push 를 하지 않는다.\n"
 }

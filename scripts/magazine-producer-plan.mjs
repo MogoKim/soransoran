@@ -699,6 +699,8 @@ export function planRun({
        *    폴더가 있다는 것은 예전에 spec 을 썼다는 뜻일 뿐이다. 그 사이 source 가 사라지거나 바뀌었으면
        *    (승인 취소·stale·hash drift) 또는 디스크 spec 이 지금 컴파일 결과와 다르면 HOLD 다 — 회수·등록 0.
        *    spec 저장 직후 run.json 전에 죽은 회차도 다음 회차에서 여기로 온다.
+       *    🔴 재사용 폴더에 spec 이 없으면 **새로 쓰지 않는다** (Codex P1) — 기존 legacy draft·article-draft 가 든
+       *       폴더를 direct 로 승격시키는 길이 된다. 최초 spec 저장은 신규 selected 행에만 있다.
        */
       const mode = resolveMagazineAutoMode(item)
       let directRow = null
@@ -712,15 +714,12 @@ export function planRun({
           held.push({ day: item.day, slug: item.slug, code: j.code, why: j.why, directSpec: j.evidence })
           continue
         }
-        let persisted = { written: false }
-        if (j.existing === 'ABSENT' && !dryRun) {
-          persisted = persistSpecFn({ spec: j.spec, draftsDir })
-          if (!persisted.ok) {
-            held.push({ day: item.day, slug: item.slug, code: persisted.code, why: persisted.why, directSpec: j.evidence })
-            continue
-          }
+        if (j.existing !== 'IDENTICAL') {
+          held.push({ day: item.day, slug: item.slug, code: 'DIRECT_SPEC_MISSING',
+            why: '재사용 폴더에 article-spec.json 이 없다 — 재사용 단계는 spec 을 새로 쓰지 않는다', directSpec: j.evidence })
+          continue
         }
-        directRow = directSpecRow(j, persisted)
+        directRow = directSpecRow(j, { written: false })
       }
       const v = reuseVerdict(item.slug, { draftsDir, ledger, gate, heroExists })
       if (v.ok) reusable.push({ ...item, ...(directRow ? { directSpec: directRow } : {}), stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })
@@ -872,11 +871,22 @@ function report(run) {
   L.push('')
   L.push('## 다음')
   L.push('')
-  if (run.selected.some((s) => s.directSpec)) {
-    L.push('DIRECT_SPEC 행은 brief 를 만들지 않는다 — `drafts/magazine/{slug}/article-spec.json` 으로 원고를 회수한다.')
+  /**
+   * 🔴 brief 안내는 legacy 선정 행에만 해당한다 (2026-10-15 Codex P2).
+   *    legacy-only 회차는 예전 두 줄 그대로 · direct-only 는 brief 안내 0 · mixed 는 legacy slug 로 범위를 적는다.
+   */
+  const directSel = run.selected.filter((s) => s.directSpec).map((s) => s.slug)
+  const legacySel = run.selected.filter((s) => !s.directSpec).map((s) => s.slug)
+  if (!directSel.length) {
+    L.push('세션에서 `_runs/' + run.date + '/selected/*/brief.todo.md` 의 TODO 를 채운 뒤')
+    L.push('`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다.')
+  } else {
+    L.push(`DIRECT_SPEC 선정 ${directSel.length}건(${directSel.join(', ')})은 brief 를 만들지 않는다 — \`drafts/magazine/{slug}/article-spec.json\` 으로 \`--fetch-run\` 이 원고를 회수한다.`)
+    if (legacySel.length) {
+      L.push(`legacy 선정 ${legacySel.length}건(${legacySel.join(', ')})에만 해당: \`_runs/${run.date}/selected/{slug}/brief.todo.md\` 의 TODO 를 채운 뒤`)
+      L.push('`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다. DIRECT_SPEC 행에는 적용하지 않는다.')
+    }
   }
-  L.push('세션에서 `_runs/' + run.date + '/selected/*/brief.todo.md` 의 TODO 를 채운 뒤')
-  L.push('`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다.')
   L.push('')
   L.push('🚫 producer 는 원고·hero·등록·공개·commit·push 를 하지 않는다.')
   return L.join('\n') + '\n'
