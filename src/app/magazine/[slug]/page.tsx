@@ -181,7 +181,11 @@ export default async function MagazineArticlePage({ params }: { params: { slug: 
           </article>
 
           {/* 🔴 graphVersion 은 넘기지 않는다 — 항목마다 다르다 (보충은 'none') */}
-          <RelatedMagazineList items={related.items} fromSlug={article.slug} />
+          <RelatedMagazineList
+            items={related.items}
+            fromSlug={article.slug}
+            resolution={related}
+          />
         </main>
       </SignupFunnelBoundary>
     </PageShell>
