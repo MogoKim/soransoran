@@ -143,6 +143,8 @@ export function attemptRegeneration({
   source = null,
   /** 🔴 DIRECT_SPEC_V1 opt-in 신원. 미지 mode 는 provider 호출 전 fail-closed. */
   queueItem = null,
+  /** 🔴 시험만 준다 — 전송 관문의 direct source 재검증(정본 큐·판). 운영은 deliveryGate 기본값 */
+  directSourceDeps = null,
 }) {
   const read = readQuarantine(quarantinePath)
   if (!read.ok) {
@@ -189,7 +191,7 @@ export function attemptRegeneration({
    *    판정은 전송 경계와 **같은 함수**(`deliveryGate`)다. 위 `packet` 은 메모리의 값일 뿐이다.
    *    HOLD 면 packet 파일 0 · runner 0 · Chrome/probe/send 0 · 장부 쓰기 0 이다.
    */
-  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem })
+  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem, directSourceDeps })
   if (!gate.ok) {
     return { ok: false, code: gate.code ?? 'LEDGER_UNREADABLE', why: gate.why, regenCalls: budget.used }
   }

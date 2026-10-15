@@ -87,6 +87,7 @@ import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { saveQuarantine } from './lib/magazine-quarantine.mjs'
 import { ARTICLE_SPEC_SCHEMA } from './lib/magazine-article-spec.mjs'
 import { mkdirSync as _mkdirSync } from 'node:fs'
+import { DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath } from './lib/magazine-direct-spec-source.mjs'
 
 /** direct · legacy 공용 sandbox — article-spec.json 과 brief.md 를 같이 둔다.
  *    🔴 legacy brief.md 는 adapter 조립 brief 에서 **specHash 라인을 뺀** 글자다. 그래야 변이가
@@ -104,7 +105,17 @@ function makeSandbox(prefix) {
   writeFileSync(join(d, slug, 'brief.md'), legacyBrief, 'utf8')
   const quarantinePath = join(d, 'quarantine.json')
   saveQuarantine({}, quarantinePath)
-  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath }
+  // 🔴 전송 경계는 정본 큐 행 + 현재 승인 source 로 다시 검증한다 — 시험 판·큐·승인 source 를 놓는다
+  const gv = input.node.graphVersion
+  const entry = { status: 'APPROVED', approvedBy: 'mutation', approvedAt: '2026-10-15T12:00:00+09:00',
+    g8ManifestHash: input.queueItem.g8ManifestHash, node: input.node, relations: input.relations,
+    hero: input.hero, publication: input.publication }
+  entry.sourceHash = directSpecSourceHash(entry)
+  const sp = directSpecSourcePath(d, gv)
+  _mkdirSync(dirname(sp), { recursive: true })
+  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
+  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => gv }
+  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps }
 }
 
 async function baseline() {
@@ -167,8 +178,8 @@ async function baseline() {
 
   // B6 (M6 짝): direct wiring 이 deliveryGate 에서 실제로 돈다 — direct message 가 specHash 를 운반
   {
-    const { draftsDir, slug, specHash, quarantinePath } = makeSandbox('ds-base-b6')
-    const g = deliveryGate({ slug, draftsDir, quarantinePath,
+    const { draftsDir, slug, specHash, quarantinePath, directSourceDeps } = makeSandbox('ds-base-b6')
+    const g = deliveryGate({ slug, draftsDir, quarantinePath, directSourceDeps,
       queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE } })
     assert.equal(g.ok, true, 'B6 원본은 direct wiring 을 통과시켜야 한다')
     assert.equal(g.mode, DIRECT_SPEC_MODE)
@@ -295,7 +306,7 @@ async function runMutations() {
   // M6 delivery-gate.mjs 안의 direct wiring 블록을 통째로 제거한다 — direct queueItem 도 legacy 경로를 지난다
   await mutate('M6', 'direct wiring 제거 — deliveryGate 가 direct 분기를 지운다', 'deliveryGate',
     (src) => replaceAfter(src, 'export function deliveryGate',
-      /\n  if \(resolved\.mode === DIRECT_SPEC_MODE\) \{\n[\s\S]*?\n  \}\n  const draftPath/,
+      /\n  if \(resolved\.mode === DIRECT_SPEC_MODE \|\| persistedDirectIdentity\(\{ slug, draftsDir, packet \}\)\) \{\n[\s\S]*?\n  \}\n  const draftPath/,
       '\n  // mutant M6: direct 분기 제거 — direct queueItem 도 legacy 경로를 지난다\n  const draftPath'),
     async (mod) => {
       const { draftsDir, slug, specHash, quarantinePath } = makeSandbox('ds-m6')

@@ -149,6 +149,14 @@ export async function runProducerFlow({ dryRun = false, deps }) {
       ? `기존 재료 ${reusableCount}건이 있다. brief 를 부르지 않고 auto-register 로 넘긴다`
       : '큐에 만들 것이 없다 (정상 no-work)'}`)
   }
+  /**
+   * 🔴 **legacy brief 대상이 0 이면 brief 를 부르지 않는다** (2026-10-15 DIRECT_SPEC_V1 상류).
+   *    선정이 전부 DIRECT_SPEC_V1 이면 원고 계약은 이미 article-spec.json 이다 — Claude 를 부를 일이 없다.
+   *    `legacySelected` 를 모르는 옛 공급 신호는 지금과 같이 간다 (selected 만 본다).
+   */
+  const legacySelected = Number.isFinite(supply.legacySelected) ? supply.legacySelected : null
+  const directOnly = supplyState === 'NEW_WORK' && legacySelected === 0
+  if (directOnly) log(`선정 ${selectedCount}건이 전부 DIRECT_SPEC_V1 — legacy brief 를 부르지 않는다`)
 
   // ── 2) brief 생성 (AI 호출) ──────────────────────────────
   let briefStage = stage('brief', { skipped: true })
@@ -158,6 +166,7 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     // 🔴 없는 selected 경로로 brief 를 부르지 않는다 — 그 호출이 SYSTEM 실패를 만들었다
     briefStage = stage('brief', { skipped: true, reason: supplyState })
   }
+  else if (directOnly) briefStage = stage('brief', { skipped: true, reason: 'DIRECT_ONLY' })
   else {
     ran.push('brief')
     const r = deps.runBrief()
@@ -198,6 +207,20 @@ export async function runProducerFlow({ dryRun = false, deps }) {
   }
 
   return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage, repair: repairStage })
+}
+
+/**
+ * producer 가 쓴 run.json 에서 **공급 상태**를 읽는다 (`readSupply` 의 해석부).
+ *    selected 0 이어도 `reusable` 이 있으면 "할 일 없음" 이 아니다 (2026-09-28).
+ *    🔴 `legacySelected` — spec 신원(directSpec)을 남긴 DIRECT_SPEC_V1 행은 legacy brief 대상이 아니다.
+ */
+export function supplyFromRunJson(j) {
+  const selected = Array.isArray(j?.selected) ? j.selected : null
+  return {
+    selected: selected ? selected.length : null,
+    reusable: Array.isArray(j?.reusable) ? j.reusable.length : 0,
+    legacySelected: selected ? selected.filter((s) => !s?.directSpec).length : null,
+  }
 }
 
 /**

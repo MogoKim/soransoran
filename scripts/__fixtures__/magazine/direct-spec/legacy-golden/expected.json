@@ -1,0 +1,85 @@
+{
+  "run": {
+    "schemaVersion": "producer-run/2",
+    "date": "2026-10-16",
+    "status": "COMPLETED",
+    "dryRun": false,
+    "inventoryDays": 0,
+    "produceCount": 5,
+    "reviewCount": 1,
+    "counts": {
+      "live": 0,
+      "scheduled": 0,
+      "blocked": 0
+    },
+    "selected": [
+      {
+        "day": 9102,
+        "slug": "golden-legacy-seasonal",
+        "title": "김장 준비하다 허리가 뻐근해질 때 미리 챙길 것",
+        "contentType": "SEASONAL",
+        "riskLevel": "LOW",
+        "publishWindow": {
+          "after": "2026-10-10",
+          "before": "2026-11-30"
+        },
+        "needsFullReview": false,
+        "packageWritten": true
+      },
+      {
+        "day": 9101,
+        "slug": "golden-legacy-evergreen",
+        "title": "잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것",
+        "contentType": "EVERGREEN",
+        "riskLevel": "LOW",
+        "publishWindow": null,
+        "needsFullReview": false,
+        "packageWritten": true
+      },
+      {
+        "day": 9103,
+        "slug": "golden-legacy-series-1",
+        "title": "다시 운동을 시작한 첫 주에 느낀 것",
+        "contentType": "EVERGREEN",
+        "riskLevel": "LOW",
+        "publishWindow": null,
+        "needsFullReview": false,
+        "packageWritten": true
+      }
+    ],
+    "skipped": [],
+    "reusable": [],
+    "held": [],
+    "supersedes": null,
+    "abortReason": null
+  },
+  "packages": {
+    "golden-legacy-evergreen": {
+      "brief.todo.md": "# [작업 패키지] 원고 지시서 초안 — 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\n\n> ⚠️ **이것은 완성된 brief 가 아니다.** ChatGPT 에 그대로 넣지 마라.\n> producer 가 고정 규칙과 큐 사실만 채운 초안이다.\n> 아래 TODO 를 세션이 채운 뒤 `drafts/magazine/golden-legacy-evergreen/brief.md` 로 옮긴다.\n> producer 는 원고도, 구조도, 위험 문장도 만들지 않는다 (전략 §13.1).\n\n## 큐에서 온 사실\n\n| 항목 | 값 |\n|---|---|\n| slug | `golden-legacy-evergreen` |\n| day | 9101 |\n| contentType | EVERGREEN |\n| cluster | sleep |\n| intent | 질문 |\n| target | 40대 후반~60대 중반 여성 |\n| riskLevel | LOW |\n| reviewMode | SUMMARY_ONLY |\n| imageMode | REQUIRED |\n| ctaBoard | `/community/menopause` |\n| internalLinks | 없음 |\n\n**whyNow**: 같은 질문이 겹겹이 쌓인다\n\n**notes(반드시 지킬 것)**: 원인을 하나로 단정하지 않는다\n\n---\n\n## 채워야 할 것 (producer 가 만들지 않는다)\n\n### 검색 의도\n<!-- TODO(세션): 실제 검색어 4~6개를 나열하고, 이 글이 답할 한 가지를 한 문장으로 적는다 -->\n\n### 대상 독자\n40대 후반~60대 중반 여성 여성.\n<!-- TODO(세션): 이 주제에서 그 사람이 겪는 장면 4개를 불릿으로 적는다 -->\n\n### 도입에서 해야 할 것\n<!-- TODO(세션): 설명이 아니라 장면으로 시작하는 도입 지침 2~3문장 -->\n\n### 글 구조 (h2 5개)\n<!-- TODO(세션): h2 제목 5개와 각각에서 다룰 범위·금지선을 적는다. 이 글의 논리 전개다 -->\n\n### 반드시 그대로 넣을 문장 5개\n<!-- TODO(세션): 원고에 토씨 그대로 들어갈 문장 5개. review 의 riskSentences 와 같은 문장이어야 한다 -->\n\n### 절대 쓰지 말 것 (주제별)\n<!-- TODO(세션): 이 주제에서 특히 위험한 표현·진단명·제품군을 적는다. 아래 공통 금지에 더한다 -->\n\n---\n\n## 공통 규칙 (producer 가 채웠다 — 그대로 쓴다)\n\n### 출력 형식\n\n```\n---\ntitle: 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\ndescription: (90~120자. 직접 쓴 요약)\ncluster: sleep\nmedical: true\n---\n\n첫 문단입니다. 한 문단은 2~3문장으로 씁니다.\n\n## 소제목\n\n문단.\n\n> 짚어둘 문장은 인용 표시로 씁니다.\n\n- 목록 항목\n\n[CTA] /community/menopause | 갱년기톡에 이야기 남기기 | CTA 앞에 붙일 한 문장\n```\n\n### 쓸 수 있는 표기가 전부다\n\n| 표기 | 쓰임 |\n|---|---|\n| `## ` | h2 |\n| `### ` | h3 |\n| `> ` | 인용 |\n| `- ` | 목록 |\n| `[CTA] href \\| 문구 \\| 앞 문장` | 마지막에 정확히 1개 |\n| 그 외 줄 | 문단 |\n\n### 공통 금지\n\n```\n🚫 표 · 코드블록 · 외부 링크 · 마크다운 이미지 · h1 · h4 이하 · HTML · 번호 목록\n🚫 **굵게** · *기울임*\n🚫 \"반드시\" \"치료됩니다\" \"낫습니다\" \"원인입니다\" \"효과적입니다\"\n🚫 \"시니어\" \"어르신\" \"노인\" \"실버\"\n🚫 출처 없는 통계\n🚫 \"~에 대해 알아보겠습니다\" \"결론적으로\" 같은 AI 문형\n```\n\n### 톤\n\n- 존댓말. 상담이 아니라 옆에서 같이 이야기하는 톤\n- 문단은 2~3문장. 길이를 들쭉날쭉하게\n- 목록은 3곳을 넘기지 않는다\n- 전문 용어는 바로 풀어쓴다\n\n### 분량\n\n본문 1,200~2,000자.\n",
+      "review.todo.md": "# [작업 패키지] 검수 데이터 초안 — 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\n\n> ⚠️ **이것은 review.ts 가 아니다.** 패킷 생성 대상이 아니다.\n> 세션이 TODO 를 채운 뒤 `drafts/magazine/golden-legacy-evergreen/review.ts` 로 만든다.\n> riskSentences 는 **원고가 나온 뒤 실제 본문과 대조해 확정**한다.\n\n## producer 가 채운 것\n\n| 항목 | 값 |\n|---|---|\n| slug | `golden-legacy-evergreen` |\n| riskLevel | LOW |\n| reviewMode | SUMMARY_ONLY |\n| medical | MEDIUM (후보) |\n| money | NONE (후보) |\n| legal | NONE (후보) |\n| preparedBy | Claude Code (후보) |\n\n**큐 notes**: 원인을 하나로 단정하지 않는다\n\n## 채워야 할 것\n\n### summary (5줄)\n<!-- TODO(세션): 원고가 무엇을 어떤 순서로 다루는지 5줄. 원고를 받은 뒤에 적는다 -->\n\n### riskSentences (5줄)\n<!-- TODO(세션): brief 의 \"반드시 그대로 넣을 문장 5개\" 와 동일해야 한다. 원고 본문과 문자열이 정확히 일치해야 packet 이 통과한다 -->\n\n### factsToVerify\n<!-- TODO(세션): 창업자가 30초 안에 판단할 확인 항목 4~5개 -->\n\n### notes\n<!-- TODO(세션): 이 글에서 특히 볼 지점. 시리즈 톤 일관성, 계절 창 등 -->\n"
+    },
+    "golden-legacy-seasonal": {
+      "brief.todo.md": "# [작업 패키지] 원고 지시서 초안 — 김장 준비하다 허리가 뻐근해질 때 미리 챙길 것\n\n> ⚠️ **이것은 완성된 brief 가 아니다.** ChatGPT 에 그대로 넣지 마라.\n> producer 가 고정 규칙과 큐 사실만 채운 초안이다.\n> 아래 TODO 를 세션이 채운 뒤 `drafts/magazine/golden-legacy-seasonal/brief.md` 로 옮긴다.\n> producer 는 원고도, 구조도, 위험 문장도 만들지 않는다 (전략 §13.1).\n\n## 큐에서 온 사실\n\n| 항목 | 값 |\n|---|---|\n| slug | `golden-legacy-seasonal` |\n| day | 9102 |\n| contentType | SEASONAL |\n| cluster | daily |\n| intent | 준비 |\n| target | 50대 여성 |\n| riskLevel | LOW |\n| reviewMode | SUMMARY_ONLY |\n| imageMode | OPTIONAL |\n| ctaBoard | `/community/free` |\n| season | AUTUMN |\n| publishWindow | 2026-10-10 ~ 2026-11-30 |\n| internalLinks | sleep-hot-flash |\n\n**whyNow**: 김장철이 다가온다\n\n**notes(반드시 지킬 것)**: 치료법을 권하지 않는다\n\n---\n\n## 채워야 할 것 (producer 가 만들지 않는다)\n\n### 검색 의도\n<!-- TODO(세션): 실제 검색어 4~6개를 나열하고, 이 글이 답할 한 가지를 한 문장으로 적는다 -->\n\n### 대상 독자\n50대 여성 여성.\n<!-- TODO(세션): 이 주제에서 그 사람이 겪는 장면 4개를 불릿으로 적는다 -->\n\n### 도입에서 해야 할 것\n<!-- TODO(세션): 설명이 아니라 장면으로 시작하는 도입 지침 2~3문장 -->\n\n### 글 구조 (h2 5개)\n<!-- TODO(세션): h2 제목 5개와 각각에서 다룰 범위·금지선을 적는다. 이 글의 논리 전개다 -->\n\n### 반드시 그대로 넣을 문장 5개\n<!-- TODO(세션): 원고에 토씨 그대로 들어갈 문장 5개. review 의 riskSentences 와 같은 문장이어야 한다 -->\n\n### 절대 쓰지 말 것 (주제별)\n<!-- TODO(세션): 이 주제에서 특히 위험한 표현·진단명·제품군을 적는다. 아래 공통 금지에 더한다 -->\n\n---\n\n## 공통 규칙 (producer 가 채웠다 — 그대로 쓴다)\n\n### 출력 형식\n\n```\n---\ntitle: 김장 준비하다 허리가 뻐근해질 때 미리 챙길 것\ndescription: (90~120자. 직접 쓴 요약)\ncluster: daily\nmedical: true\n---\n\n첫 문단입니다. 한 문단은 2~3문장으로 씁니다.\n\n## 소제목\n\n문단.\n\n> 짚어둘 문장은 인용 표시로 씁니다.\n\n- 목록 항목\n\n[CTA] /community/free | 자유게시판에 이야기 남기기 | CTA 앞에 붙일 한 문장\n```\n\n### 쓸 수 있는 표기가 전부다\n\n| 표기 | 쓰임 |\n|---|---|\n| `## ` | h2 |\n| `### ` | h3 |\n| `> ` | 인용 |\n| `- ` | 목록 |\n| `[CTA] href \\| 문구 \\| 앞 문장` | 마지막에 정확히 1개 |\n| 그 외 줄 | 문단 |\n\n### 공통 금지\n\n```\n🚫 표 · 코드블록 · 외부 링크 · 마크다운 이미지 · h1 · h4 이하 · HTML · 번호 목록\n🚫 **굵게** · *기울임*\n🚫 \"반드시\" \"치료됩니다\" \"낫습니다\" \"원인입니다\" \"효과적입니다\"\n🚫 \"시니어\" \"어르신\" \"노인\" \"실버\"\n🚫 출처 없는 통계\n🚫 \"~에 대해 알아보겠습니다\" \"결론적으로\" 같은 AI 문형\n```\n\n### 톤\n\n- 존댓말. 상담이 아니라 옆에서 같이 이야기하는 톤\n- 문단은 2~3문장. 길이를 들쭉날쭉하게\n- 목록은 3곳을 넘기지 않는다\n- 전문 용어는 바로 풀어쓴다\n\n### 분량\n\n본문 1,200~2,000자.\n",
+      "review.todo.md": "# [작업 패키지] 검수 데이터 초안 — 김장 준비하다 허리가 뻐근해질 때 미리 챙길 것\n\n> ⚠️ **이것은 review.ts 가 아니다.** 패킷 생성 대상이 아니다.\n> 세션이 TODO 를 채운 뒤 `drafts/magazine/golden-legacy-seasonal/review.ts` 로 만든다.\n> riskSentences 는 **원고가 나온 뒤 실제 본문과 대조해 확정**한다.\n\n## producer 가 채운 것\n\n| 항목 | 값 |\n|---|---|\n| slug | `golden-legacy-seasonal` |\n| riskLevel | LOW |\n| reviewMode | SUMMARY_ONLY |\n| medical | MEDIUM (후보) |\n| money | NONE (후보) |\n| legal | NONE (후보) |\n| preparedBy | Claude Code (후보) |\n\n**큐 notes**: 치료법을 권하지 않는다\n\n## 채워야 할 것\n\n### summary (5줄)\n<!-- TODO(세션): 원고가 무엇을 어떤 순서로 다루는지 5줄. 원고를 받은 뒤에 적는다 -->\n\n### riskSentences (5줄)\n<!-- TODO(세션): brief 의 \"반드시 그대로 넣을 문장 5개\" 와 동일해야 한다. 원고 본문과 문자열이 정확히 일치해야 packet 이 통과한다 -->\n\n### factsToVerify\n<!-- TODO(세션): 창업자가 30초 안에 판단할 확인 항목 4~5개 -->\n\n### notes\n<!-- TODO(세션): 이 글에서 특히 볼 지점. 시리즈 톤 일관성, 계절 창 등 -->\n"
+    },
+    "golden-legacy-series-1": {
+      "brief.todo.md": "# [작업 패키지] 원고 지시서 초안 — 다시 운동을 시작한 첫 주에 느낀 것\n\n> ⚠️ **이것은 완성된 brief 가 아니다.** ChatGPT 에 그대로 넣지 마라.\n> producer 가 고정 규칙과 큐 사실만 채운 초안이다.\n> 아래 TODO 를 세션이 채운 뒤 `drafts/magazine/golden-legacy-series-1/brief.md` 로 옮긴다.\n> producer 는 원고도, 구조도, 위험 문장도 만들지 않는다 (전략 §13.1).\n\n## 큐에서 온 사실\n\n| 항목 | 값 |\n|---|---|\n| slug | `golden-legacy-series-1` |\n| day | 9103 |\n| contentType | EVERGREEN |\n| cluster | daily |\n| intent | 경험 |\n| target | 50대 여성 |\n| riskLevel | LOW |\n| reviewMode | SUMMARY_ONLY |\n| imageMode | OPTIONAL |\n| ctaBoard | `/community/free` |\n| series | golden-series #1 |\n| internalLinks | 없음 |\n\n**whyNow**: 다시 시작하는 사람이 많다\n\n**notes(반드시 지킬 것)**: 운동 프로그램을 처방하지 않는다\n\n---\n\n## 채워야 할 것 (producer 가 만들지 않는다)\n\n### 검색 의도\n<!-- TODO(세션): 실제 검색어 4~6개를 나열하고, 이 글이 답할 한 가지를 한 문장으로 적는다 -->\n\n### 대상 독자\n50대 여성 여성.\n<!-- TODO(세션): 이 주제에서 그 사람이 겪는 장면 4개를 불릿으로 적는다 -->\n\n### 도입에서 해야 할 것\n<!-- TODO(세션): 설명이 아니라 장면으로 시작하는 도입 지침 2~3문장 -->\n\n### 글 구조 (h2 5개)\n<!-- TODO(세션): h2 제목 5개와 각각에서 다룰 범위·금지선을 적는다. 이 글의 논리 전개다 -->\n\n### 반드시 그대로 넣을 문장 5개\n<!-- TODO(세션): 원고에 토씨 그대로 들어갈 문장 5개. review 의 riskSentences 와 같은 문장이어야 한다 -->\n\n### 절대 쓰지 말 것 (주제별)\n<!-- TODO(세션): 이 주제에서 특히 위험한 표현·진단명·제품군을 적는다. 아래 공통 금지에 더한다 -->\n\n---\n\n## 공통 규칙 (producer 가 채웠다 — 그대로 쓴다)\n\n### 출력 형식\n\n```\n---\ntitle: 다시 운동을 시작한 첫 주에 느낀 것\ndescription: (90~120자. 직접 쓴 요약)\ncluster: daily\nmedical: true\nseriesId: golden-series\nseriesOrder: 1\n---\n\n첫 문단입니다. 한 문단은 2~3문장으로 씁니다.\n\n## 소제목\n\n문단.\n\n> 짚어둘 문장은 인용 표시로 씁니다.\n\n- 목록 항목\n\n[CTA] /community/free | 자유게시판에 이야기 남기기 | CTA 앞에 붙일 한 문장\n```\n\n### 쓸 수 있는 표기가 전부다\n\n| 표기 | 쓰임 |\n|---|---|\n| `## ` | h2 |\n| `### ` | h3 |\n| `> ` | 인용 |\n| `- ` | 목록 |\n| `[CTA] href \\| 문구 \\| 앞 문장` | 마지막에 정확히 1개 |\n| 그 외 줄 | 문단 |\n\n### 공통 금지\n\n```\n🚫 표 · 코드블록 · 외부 링크 · 마크다운 이미지 · h1 · h4 이하 · HTML · 번호 목록\n🚫 **굵게** · *기울임*\n🚫 \"반드시\" \"치료됩니다\" \"낫습니다\" \"원인입니다\" \"효과적입니다\"\n🚫 \"시니어\" \"어르신\" \"노인\" \"실버\"\n🚫 출처 없는 통계\n🚫 \"~에 대해 알아보겠습니다\" \"결론적으로\" 같은 AI 문형\n```\n\n### 톤\n\n- 존댓말. 상담이 아니라 옆에서 같이 이야기하는 톤\n- 문단은 2~3문장. 길이를 들쭉날쭉하게\n- 목록은 3곳을 넘기지 않는다\n- 전문 용어는 바로 풀어쓴다\n\n### 분량\n\n본문 1,200~2,000자.\n",
+      "review.todo.md": "# [작업 패키지] 검수 데이터 초안 — 다시 운동을 시작한 첫 주에 느낀 것\n\n> ⚠️ **이것은 review.ts 가 아니다.** 패킷 생성 대상이 아니다.\n> 세션이 TODO 를 채운 뒤 `drafts/magazine/golden-legacy-series-1/review.ts` 로 만든다.\n> riskSentences 는 **원고가 나온 뒤 실제 본문과 대조해 확정**한다.\n\n## producer 가 채운 것\n\n| 항목 | 값 |\n|---|---|\n| slug | `golden-legacy-series-1` |\n| riskLevel | LOW |\n| reviewMode | SUMMARY_ONLY |\n| medical | MEDIUM (후보) |\n| money | NONE (후보) |\n| legal | NONE (후보) |\n| preparedBy | Claude Code (후보) |\n\n**큐 notes**: 운동 프로그램을 처방하지 않는다\n\n## 채워야 할 것\n\n### summary (5줄)\n<!-- TODO(세션): 원고가 무엇을 어떤 순서로 다루는지 5줄. 원고를 받은 뒤에 적는다 -->\n\n### riskSentences (5줄)\n<!-- TODO(세션): brief 의 \"반드시 그대로 넣을 문장 5개\" 와 동일해야 한다. 원고 본문과 문자열이 정확히 일치해야 packet 이 통과한다 -->\n\n### factsToVerify\n<!-- TODO(세션): 창업자가 30초 안에 판단할 확인 항목 4~5개 -->\n\n### notes\n<!-- TODO(세션): 이 글에서 특히 볼 지점. 시리즈 톤 일관성, 계절 창 등 -->\n"
+    }
+  },
+  "messages": {
+    "golden-legacy-seasonal": {
+      "message": "아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요. 설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다. 출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요. frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다. 웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.\n\n===== BRIEF 시작 (여기부터 끝까지가 작성 지시다) =====\n---\ntitle: 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\ndescription: 요약\ncluster: sleep\n---\n\n## 검색 의도\n\n밤에 잠을 설친 다음 날의 질문.\n\n[CTA] /community/menopause | 이야기 남기기 | 오늘 이야기를 남겨 주세요\n===== BRIEF 끝 =====",
+      "messageFingerprint": "sha256:45db49d12552fa46e8175cdf121f1edd732623f216a9d9c2c5e7d4b29379f762"
+    },
+    "golden-legacy-evergreen": {
+      "message": "아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요. 설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다. 출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요. frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다. 웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.\n\n===== BRIEF 시작 (여기부터 끝까지가 작성 지시다) =====\n---\ntitle: 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\ndescription: 요약\ncluster: sleep\n---\n\n## 검색 의도\n\n밤에 잠을 설친 다음 날의 질문.\n\n[CTA] /community/menopause | 이야기 남기기 | 오늘 이야기를 남겨 주세요\n===== BRIEF 끝 =====",
+      "messageFingerprint": "sha256:45db49d12552fa46e8175cdf121f1edd732623f216a9d9c2c5e7d4b29379f762"
+    },
+    "golden-legacy-series-1": {
+      "message": "아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요. 설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다. 출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요. frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다. 웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.\n\n===== BRIEF 시작 (여기부터 끝까지가 작성 지시다) =====\n---\ntitle: 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\ndescription: 요약\ncluster: sleep\n---\n\n## 검색 의도\n\n밤에 잠을 설친 다음 날의 질문.\n\n[CTA] /community/menopause | 이야기 남기기 | 오늘 이야기를 남겨 주세요\n===== BRIEF 끝 =====",
+      "messageFingerprint": "sha256:45db49d12552fa46e8175cdf121f1edd732623f216a9d9c2c5e7d4b29379f762"
+    }
+  },
+  "reportMd": "# producer 준비 리포트 — 2026-10-16\n\n재고 0일 · 오늘 생산 5건 · HIGH 1건 · 선정 3건\n매거진 공개 0 · 예약 0 · 차단 0\n\n## 재사용 후보 0건 · slug HOLD 0건\n\n\n## 선정\n\n- day 9102 `golden-legacy-seasonal` — 김장 준비하다 허리가 뻐근해질 때 미리 챙길 것\n  SEASONAL · LOW · 창 2026-10-10~2026-11-30\n- day 9101 `golden-legacy-evergreen` — 잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것\n  EVERGREEN · LOW\n- day 9103 `golden-legacy-series-1` — 다시 운동을 시작한 첫 주에 느낀 것\n  EVERGREEN · LOW\n\n## 제외 (상위 12건)\n\n\n## 다음\n\n세션에서 `_runs/2026-10-16/selected/*/brief.todo.md` 의 TODO 를 채운 뒤\n`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다.\n\n🚫 producer 는 원고·hero·등록·공개·commit·push 를 하지 않는다.\n"
+}

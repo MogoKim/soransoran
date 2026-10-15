@@ -67,7 +67,7 @@ import {
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
-import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate } from './lib/magazine-delivery-gate.mjs'
+import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate, persistedDirectIdentity, DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
 
@@ -133,9 +133,15 @@ function inspectTargets(run, date, draftsDir = DRAFTS_DIR) {
   }))
 }
 
-function nextActionFor(t) {
+export function nextActionFor(t) {
   if (t.articleDraft) return '완료 — 이미 변환됨'
   if (t.draftMd) return 'md-to-draft 대기'
+  // 🔴 DIRECT_SPEC_V1 은 brief/review 가 없는 것이 정상이다 — "세션이 채워야 한다" 로 오보하지 않는다
+  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {
+    return t.material?.articleSpec
+      ? 'DIRECT_SPEC 원고 필요 — article-spec.json 으로 --fetch-run 이 회수한다 (brief 불필요)'
+      : 'DIRECT_SPEC spec 없음 — producer source 관문(run.json held)을 본다 (brief 불필요)'
+  }
   if (!t.brief || !t.review) return 'brief/review 미작성 — 세션이 채워야 한다'
   return 'ChatGPT 원고 필요 — --fetch <slug> 또는 --fetch-run 이 회수한다'
 }
@@ -555,7 +561,9 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
    * 🔴 **입력 수리(brief echo → 원고)** — `{ type: 'BRIEF_ECHO' }`. 전용 메시지·지문으로 보내고
    *    응답은 **임시 경로(draftOut)에만** 쓴다. draft.md 는 부모(입력 수리 단계)가 검증한 뒤에만 바뀐다.
    */
-  inputRepair = null } = {}) {
+  inputRepair = null,
+  /** 🔴 시험만 준다 — direct source 재검증의 정본 큐·판 주입점. 운영은 deliveryGate 기본값(실제 큐·current.ts) */
+  directSourceDeps = null } = {}) {
   const dir = join(draftsDir, slug)
   const briefPath = join(dir, 'brief.md')
   const draftPath = join(dir, 'draft.md')
@@ -595,7 +603,28 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     return { slug, status: 'failed', reason: modeDecision.code, stage: 'gate', sent: false,
       errorDetail: `${modeDecision.why} (한 글자도 보내지 않았다)` }
   }
-  const isDirect = modeDecision.ok && modeDecision.mode === DIRECT_SPEC_MODE
+  /**
+   * 🔴 direct 로 만든 흔적(article-spec · 등록 영수증 · specHash 를 든 재생성 packet)이 있으면
+   *    큐 행이 사라지거나 철회돼도 legacy 로 강등하지 않는다. packet 도 brief 판정보다 **먼저** 읽어 신원에 넣는다 —
+   *    spec·영수증 없이 direct packet 만 남은 재생성이 brief_missing 으로 끝나지 않게 (2026-10-15 Codex P0).
+   *    packet 오류의 **반환 순서**는 그대로다(아래에서 같은 결과로 판정한다).
+   */
+  const packetRead = regenPacket ? readRegenPacket(regenPacket, slug) : null
+  const isDirect = modeDecision.ok && (modeDecision.mode === DIRECT_SPEC_MODE
+    || persistedDirectIdentity({ slug, draftsDir, packet: packetRead?.ok ? packetRead.packet : null }))
+  /**
+   * 🔴 **DIRECT_SPEC 행은 입력 수리(brief echo → 원고) 경로를 타지 않는다** (2026-10-15 Codex P0).
+   *    입력 수리는 inputRepairGate 를 지나므로 direct source 관문을 우회한다.
+   *    큐 삭제·철회된 persisted direct 는 원인을 숨기지 않게 source 코드(NOT_IN_QUEUE · MODE_WITHDRAWN)를 먼저 낸다.
+   */
+  if (inputRepair && isDirect) {
+    if (modeDecision.mode !== DIRECT_SPEC_MODE) {
+      const g = deliveryGate({ slug, draftsDir, quarantinePath, queueItem, directSourceDeps })
+      if (!g.ok) return { slug, status: 'failed', reason: g.code, stage: 'gate', sent: false, errorDetail: `${g.why} (한 글자도 보내지 않았다)` }
+    }
+    return { slug, status: 'failed', reason: DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN, stage: 'gate', sent: false,
+      errorDetail: 'DIRECT_SPEC_V1 행은 입력 수리 대상이 아니다 — ArticleSpec 경로로만 원고를 받는다 (한 글자도 보내지 않았다)' }
+  }
   if (!isDirect && !existsSync(briefPath)) return { slug, status: 'skipped', reason: 'brief_missing', sent: false }
 
   // 🔴 direct 는 brief 없이도 돈다 — markers 는 비운다. legacy 는 기존대로 brief 에서 추출한다.
@@ -606,7 +635,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
   /** 🔴 옵션을 명시했으면 패킷이 성해야 한다. 아니면 **보내지 않는다** */
   let packet = null
   if (regenPacket) {
-    const pr = readRegenPacket(regenPacket, slug)
+    const pr = packetRead
     if (!pr.ok) {
       return { slug, status: 'failed', reason: pr.code, detail: pr.why, sent: false }
     }
@@ -626,7 +655,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
   //    legacy (queueItem 미지정 · 또는 opt-in 없음) 은 기존 지문·메시지 바이트가 그대로다.
   const gate = inputRepair
     ? inputRepairGate({ slug, draftsDir, quarantinePath })
-    : deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem })
+    : deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem, directSourceDeps })
   if (!gate.ok) {
     return { slug, status: 'failed', reason: gate.code, stage: 'ledger', sent: false,
       messageFingerprint: gate.messageFingerprint, errorDetail: `${gate.why} (한 글자도 보내지 않았다)`,
@@ -842,6 +871,8 @@ function describeDraft(slug, draftsDir = DRAFTS_DIR, path = join(draftsDir, slug
 export async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null, draftOut = null, inputRepair = null,
   quarantinePath = QUARANTINE_PATH, draftsDir = DRAFTS_DIR,
   queueItem = null,
+  /** 🔴 시험만 준다 — direct source 재검증의 정본 큐·판. 운영(--fetch CLI)은 deliveryGate 기본값(실제 큐·current.ts) */
+  directSourceDeps = null,
   probeFn = probe, browserDeps = {}, exit = (code) => process.exit(code) } = {}) {
   console.log('')
   console.log(`  원고 요청 — ${slug}`)
@@ -903,7 +934,7 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
   const r = await fetchSlug(slug, { force, regenPacket, quarantinePath, dateHint: todayKst(),
-    draftsDir, browserDeps, accessFn, draftOut, inputRepair, queueItem })
+    draftsDir, browserDeps, accessFn, draftOut, inputRepair, queueItem, directSourceDeps })
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
@@ -960,6 +991,8 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
  *    기본값은 운영 경로 그대로다 — 소스 문자열 검사로 대신하지 않기 위해 연다.
  */
 export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, resultPath = null,
+  /** 🔴 시험만 준다 — 계획표와 실제 전송 경계가 같은 direct source 재검증을 쓰게 */
+  directSourceDeps = null,
   /** 🔴 전송 사실의 정본. 시험은 임시 파일을 준다 — 운영 장부를 건드리지 않는다 */
   quarantinePath = QUARANTINE_PATH,
   /** 🔴 시험이 브라우저를 켜지 않고 실패 경로를 태우기 위한 자리. 운영은 실제 probe 다 */
@@ -1043,7 +1076,7 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   for (const slug of fetchSet) {
     // 🔴 계획표도 queueItem 을 함께 본다 — fetchSlug 와 **같은 분기**를 지나게 하기 위해서다.
     //    opt-in 없는 slug 는 `null` 로 지나므로 legacy 바이트가 바뀌지 않는다.
-    const g = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: queueItemBySlug.get(slug) ?? null })
+    const g = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: queueItemBySlug.get(slug) ?? null, directSourceDeps })
     if (g.ok && g.hold) hold.set(slug, g.hold)
     if (!g.ok) gateBlocked.set(slug, g)
     if (g.ok && g.correctionPending) correctionPending.set(slug, g.correctionPending)
@@ -1137,7 +1170,7 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     console.log('')
     console.log(`  ${p.slug}`)
     const r = await fetchSlug(p.slug, { quarantinePath, runIdHint: runId, dateHint: date, browserDeps, draftsDir,
-      queueItem: queueItemBySlug.get(p.slug) ?? null })
+      queueItem: queueItemBySlug.get(p.slug) ?? null, directSourceDeps })
     if (r.sent) sentTotal += 1
     results.push(r)
 

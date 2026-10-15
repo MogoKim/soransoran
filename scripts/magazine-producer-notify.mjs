@@ -18,6 +18,8 @@
  *   status === 'PARTIAL'                     → ERROR    도중에 끊겼다
  *   run.json 없음                            → ERROR    01:00 에 안 돌았다
  *   inventoryDays <= 3                       → WARN     재고 바닥
+ *   held 에 DIRECT_SPEC 보류가 있다          → WARN     direct 보류 사실을 한 번에 1건으로 (legacy 는 계속)
+ *   DIRECT_SPEC 선정 > 0 && draft.md 없음   → ERROR    direct 원고 회수 실패 (brief 와 무관 — legacy 문구와 분리)
  *   selected 0건 && inventoryDays < 7        → WARN     만들 게 없는데 재고도 얕다
  *   그 외 COMPLETED                          → 알림 없음
  *
@@ -50,6 +52,38 @@ const DRAFTS_DIR = join(ROOT, 'drafts/magazine')
 const LOG_PATH = join(homedir(), 'Library/Logs/soransoran/magazine-producer.log')
 
 const MIN_DAYS = 7
+
+/** run.held 중 direct 경로 보류 — 조용히 묻히면 canary 가 왜 안 도는지 아무도 모른다 */
+export const DIRECT_HOLD_CODES = new Set(['DIRECT_SPEC_SOURCE_NOT_READY', 'UNKNOWN_MAGAZINE_AUTO_MODE', 'DIRECT_SPEC_SPEC_CONFLICT', 'DIRECT_SPEC_MISSING'])
+const isDirectRow = (x) => Boolean(x && typeof x === 'object' && (x.directSpec || x.directSpecMode === 'DIRECT_SPEC_V1'))
+
+/**
+ * direct 보류 알림 — **몇 건이든 알림 1건**이다. slug · 코드 · 차단 사유 · 기대/관측 판만 싣는다 (원문 0).
+ * 🔴 legacy 대체 후보는 이미 처리됐다 — 이 알림은 회차를 실패로 바꾸지 않는다.
+ */
+export function composeDirectHoldAlert(run) {
+  const holds = (run?.held ?? []).filter((h) => DIRECT_HOLD_CODES.has(h?.code))
+  if (!holds.length) return null
+  const shown = holds.slice(0, 6).map((h) => {
+    const e = h.directSpec
+    return `${h.slug} ${h.code}${e ? ` [${(e.blockers ?? []).join(',')}] expected ${e.expectedGraphVersion ?? '-'} · observed ${e.observedGraphVersion ?? '-'}${e.missingFields?.length ? ` · missing ${e.missingFields.length}` : ''}` : ''}`
+  }).join(' / ')
+  const codes = new Set(holds.map((h) => h.code))
+  const next = []
+  if (codes.has('DIRECT_SPEC_SOURCE_NOT_READY')) {
+    const p = holds.find((h) => h.directSpec?.sourcePath)?.directSpec.sourcePath
+    next.push(`승인 source 를 확인한다${p ? ` (${p})` : ''} — 현재 판 graphVersion · APPROVED · sourceHash · G8 manifest`)
+  }
+  if (codes.has('DIRECT_SPEC_MISSING')) next.push('재사용 폴더에 article-spec.json 이 없다 — 자동으로 만들지 않는다. 폴더의 출처(legacy 원고 여부)를 확인한다')
+  if (codes.has('DIRECT_SPEC_SPEC_CONFLICT')) next.push('drafts/magazine/{slug}/article-spec.json 과 승인 source 컴파일 결과를 대조한다 — 덮어쓰지 않았다')
+  if (codes.has('UNKNOWN_MAGAZINE_AUTO_MODE')) next.push('topic-queue 의 directSpecMode 값을 고친다 (DIRECT_SPEC_V1 · LEGACY_BRIEF_V1 만 허용)')
+  return {
+    severity: 'WARN',
+    title: `매거진 DIRECT_SPEC 보류 ${holds.length}건 — 전송·등록 0 · legacy 후보는 계속 처리했다`,
+    reason: `${shown}${holds.length > 6 ? ` 외 ${holds.length - 6}건` : ''}`,
+    next: next.join(' · '),
+  }
+}
 const CRITICAL_DAYS = 3
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000
@@ -61,7 +95,7 @@ function kstDate(ms = Date.now()) {
  * 알릴 것을 고른다. 여러 개면 전부 돌려준다 — 재고 경고와 ABORTED 는 함께 날 수 있다.
  * 🔴 메시지에 큐 전문·원고·개인정보를 넣지 않는다. 숫자와 상태만 넣는다.
  */
-export function judge({ date, run, runExists, repair = null }) {
+export function judge({ date, run, runExists, repair = null, draftsDir = DRAFTS_DIR }) {
   const alerts = []
   // 🔴 입력 수리 미해결 — run.json 과 무관하게 같은 알림 회차에 싣는다 (producer 가 넘긴 요약)
   const repairAlert = composeRepairAlert(repair)
@@ -121,16 +155,44 @@ export function judge({ date, run, runExists, repair = null }) {
   // 🔴 needsFullReview 는 HIGH review lane 이다. 이 레인은 brief.md/draft.md 정본을
   //    자동 회수하지 않고, _runs/{date}/selected/{slug}/*.todo.md 까지만 만든다.
   //    따라서 brief_missing/fetchFailed 에 섞으면 정상 HIGH 패킷을 ERROR 로 오판한다.
+  const directHold = composeDirectHoldAlert(run)
+  if (directHold) alerts.push(directHold)
+
+  /**
+   * 🔴 **direct 원고 미생성은 reusable 까지 본다** (2026-10-15 Codex P1).
+   *    run.reusable 의 direct 행도 실제 회수(provider) 대상이다. selected 와 같은 slug 면 한 번만 센다.
+   *    legacy 판정은 지금까지처럼 selected 만 본다 — legacy 알림 객체·문구 불변.
+   */
+  const toRow = (x) => (typeof x === 'string' ? { slug: x, needsFullReview: false } : x)
+  const seenDirect = new Set()
+  const directMissing = [...(run.selected ?? []), ...(run.reusable ?? [])]
+    .map(toRow)
+    .filter((x) => x?.slug && isDirectRow(x) && !seenDirect.has(x.slug) && seenDirect.add(x.slug))
+    .filter((x) => !existsSync(join(draftsDir, x.slug, 'draft.md')))
+    .map((x) => x.slug)
+  if (directMissing.length) {
+    const noSpec = directMissing.filter((slug) => !existsSync(join(draftsDir, slug, 'article-spec.json')))
+    alerts.push({
+      severity: 'ERROR',
+      title: '매거진 DIRECT_SPEC 원고가 만들어지지 않았다',
+      reason: `DIRECT_SPEC 대상 ${directMissing.length}건에 draft.md 가 없다${noSpec.length ? ` · article-spec.json 도 없다 ${noSpec.length}건` : ''} — brief 와 무관하다`,
+      next: noSpec.length
+        ? 'producer 의 source 관문·spec 저장을 본다 (run.json directSpec · held) — brief 를 쓰지 않는다'
+        : 'ChatGPT 접근 상태를 본다 — node scripts/magazine-webui-runner.mjs --dry-run --probe (article-spec.json 은 있다)',
+    })
+  }
+
   if (selected > 0) {
-    const missing = (run.selected ?? [])
-      .map((x) => (typeof x === 'string' ? { slug: x, needsFullReview: false } : x))
+    const rows = (run.selected ?? [])
+      .map(toRow)
       // 🔴 needsFullReview 로 자동 진행 목록에서 빼지 않는다 (M3-A)
       .filter((x) => x?.slug)
-      .filter((x) => !existsSync(join(DRAFTS_DIR, x.slug, 'draft.md')))
-      .map((x) => x.slug)
+      .filter((x) => !existsSync(join(draftsDir, x.slug, 'draft.md')))
+    // 🔴 DIRECT_SPEC_V1 행에는 brief 가 없는 것이 정상이다 — "brief 를 채워라" 로 오보하지 않는다
+    const missing = rows.filter((x) => !isDirectRow(x)).map((x) => x.slug)
 
-    const briefMissing = missing.filter((slug) => !existsSync(join(DRAFTS_DIR, slug, 'brief.md')))
-    const fetchFailed = missing.filter((slug) => existsSync(join(DRAFTS_DIR, slug, 'brief.md')))
+    const briefMissing = missing.filter((slug) => !existsSync(join(draftsDir, slug, 'brief.md')))
+    const fetchFailed = missing.filter((slug) => existsSync(join(draftsDir, slug, 'brief.md')))
 
     if (briefMissing.length) {
       alerts.push({

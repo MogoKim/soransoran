@@ -34,7 +34,8 @@
  *   W25  direct mode + article-spec.json 없음 — deliveryGate 가 DIRECT_SPEC_MISSING 으로 fail-closed (전송·예약 0)
  *   W26  direct mode + 손상 spec — deliveryGate 가 ARTICLE_SPEC_HASH 로 fail-closed (전송·예약 0)
  *   W27  direct mode + regen packet — 같은 spec identity 만 허용하고 다른 identity 는 차단
- *   W28  auto-lane gate — direct 는 brief/review 없이 통과, legacy 는 기존대로 차단
+ *   W28  auto-lane gate — direct 는 brief/review 없이, **현재 승인 source 와 같은 spec 일 때만** 통과
+ *        (source 없음 → DIRECT_SPEC_SOURCE_NOT_READY · 2026-10-15 Codex P0). legacy 는 기존대로 차단
  *   W29  run target — legacy runId 불변, direct mode 신원과 queueItem 운반
  *   W30  batch plan — direct spec 누락은 probe·Chrome 0
  *   W31  merge gate — 등록 slug의 spec/sidecar만 허용
@@ -82,6 +83,20 @@ import { deliveryGate, plannedMessageFor } from './lib/magazine-delivery-gate.mj
 import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
+import {
+  DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, readProductGraphVersion,
+} from './lib/magazine-direct-spec-source.mjs'
+
+/** 등록 gate 는 현재 승인 source 를 요구한다 — 시험 폴더에 fixture 와 같은 내용의 승인 source 를 놓는다 */
+function writeApprovedSource(d, input, gv) {
+  const entry = { status: 'APPROVED', approvedBy: 'wire-check', approvedAt: '2026-10-15T12:00:00+09:00',
+    g8ManifestHash: input.queueItem.g8ManifestHash, node: input.node, relations: input.relations,
+    hero: input.hero, publication: input.publication }
+  entry.sourceHash = directSpecSourceHash(entry)
+  const sp = directSpecSourcePath(d, gv)
+  mkdirSync(dirname(sp), { recursive: true })
+  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
+}
 import { fetchTargets, runIdOf } from './lib/magazine-run-targets.mjs'
 import { judgeFile } from './lib/magazine-merge-gate.mjs'
 import { fetchBatch } from './magazine-webui-runner.mjs'
@@ -399,15 +414,22 @@ function makeDirectAndLegacySandbox() {
   writeFileSync(join(d, slug, 'brief.md'), legacyBrief, 'utf8')
   const quarantinePath = join(d, 'quarantine.json')
   saveQuarantine({}, quarantinePath)
-  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath }
+  // 🔴 전송 경계는 정본 큐 행 + 현재 승인 source 로 다시 검증한다 — 시험 판·큐를 주입한다
+  writeApprovedSource(d, input, input.node.graphVersion)
+  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => input.node.graphVersion }
+  // 🔴 legacy 호출은 direct 흔적(article-spec.json)이 없는 폴더에서 한다 — 흔적이 있으면 legacy 로 강등하지 않는다
+  const legacyDraftsDir = tmp('ds-w20-legacy')
+  mkdirSync(join(legacyDraftsDir, slug), { recursive: true })
+  writeFileSync(join(legacyDraftsDir, slug, 'brief.md'), legacyBrief, 'utf8')
+  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps, legacyDraftsDir }
 }
 
 check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해 direct 1 · legacy 1 을 증명한다', () => {
-  const { input, draftsDir, slug, specHash, quarantinePath } = makeDirectAndLegacySandbox()
+  const { input, draftsDir, slug, specHash, quarantinePath, directSourceDeps, legacyDraftsDir } = makeDirectAndLegacySandbox()
 
   // ── direct 1: queueItem.directSpecMode === 'DIRECT_SPEC_V1' ─────
   const directQI = { ...input.queueItem, [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE }
-  const directGate = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: directQI })
+  const directGate = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: directQI, directSourceDeps })
   assert.equal(directGate.ok, true, `direct gate 가 ok 가 아니다 — ${directGate.code ?? ''}: ${directGate.why ?? ''}`)
   assert.equal(directGate.mode, DIRECT_SPEC_MODE, 'direct gate 가 mode 를 알리지 않는다 (wiring 미적용?)')
   assert.equal(directGate.specHash, specHash, 'direct gate 가 specHash 를 운반하지 않는다')
@@ -419,7 +441,7 @@ check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해
     'direct marker 가 message 에 없다 — adapter prompt 가 조립되지 않았다')
 
   // ── legacy 1: 미지정 queueItem — 기존 호출자와 **같은 바이트** ─
-  const legacyGate = deliveryGate({ slug, draftsDir, quarantinePath })
+  const legacyGate = deliveryGate({ slug, draftsDir: legacyDraftsDir, quarantinePath })
   assert.equal(legacyGate.ok, true, `legacy gate 가 ok 가 아니다 — ${legacyGate.code ?? ''}: ${legacyGate.why ?? ''}`)
   assert.notEqual(legacyGate.message, directGate.message,
     'legacy message 가 direct message 와 글자 동일 — adapter 가 legacy 자리까지 침범했다')
@@ -428,13 +450,13 @@ check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해
 
   // 🔴 legacy 는 **wiring 전/후 바이트 동일**을 지문으로 증명한다 — plannedMessageFor 를
   //    queueItem 미지정으로 다시 돌려 **지금 wiring 분기를 지난 결과**와 bitwise 같아야 한다.
-  const legacyPlanned = plannedMessageFor(slug, draftsDir)
+  const legacyPlanned = plannedMessageFor(slug, legacyDraftsDir)
   assert.equal(legacyGate.message, legacyPlanned,
     'deliveryGate 와 plannedMessageFor 가 legacy 자리에서 다른 글자를 만들었다 — wiring 가 legacy 를 건드렸다')
 })
 
 check('W23 legacy 입력 — 미지정 · 명시 LEGACY · 빈 flag · 임의 non-opt-in 속성 — 넷이 같은 바이트', () => {
-  const { draftsDir, slug, quarantinePath } = makeDirectAndLegacySandbox()
+  const { slug, quarantinePath, legacyDraftsDir: draftsDir } = makeDirectAndLegacySandbox()
   const gUndef = deliveryGate({ slug, draftsDir, quarantinePath })
   const gExplicit = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: LEGACY_BRIEF_MODE } })
   const gEmpty = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: '' } })
@@ -485,7 +507,7 @@ check('W26 direct mode + 손상 spec — ARTICLE_SPEC_HASH 로 fail-closed (veri
 })
 
 check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 identity 차단', () => {
-  const { draftsDir, slug, quarantinePath, specHash } = makeDirectAndLegacySandbox()
+  const { draftsDir, slug, quarantinePath, specHash, directSourceDeps } = makeDirectAndLegacySandbox()
   const spec = readDirectSpec({ slug, draftsDir }).spec
   writeFileSync(join(draftsDir, slug, 'draft.md'), '---\ntitle: t\n---\n\n## 본문\n\n[CTA] /community/free | t | t\n', 'utf8')
   const directPacket = directSpecRegenPacket({ spec, failures: [{ code: 'X', label: 't', sentence: '' }] })
@@ -496,7 +518,7 @@ check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 ident
   }
   const g = deliveryGate({ slug, draftsDir, quarantinePath,
     queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE },
-    packet })
+    packet, directSourceDeps })
   assert.equal(g.ok, true, `${g.code ?? ''}: ${g.why ?? ''}`)
   assert.equal(g.specHash, specHash)
   assert.ok(g.message.includes(specHash))
@@ -507,11 +529,17 @@ check('W27 direct mode + regen packet — 같은 identity 허용 · 다른 ident
   assert.equal(drift.code, 'DIRECT_SPEC_REGEN_IDENTITY')
 })
 
-check('W28 auto-lane gate — direct 는 brief/review 없이 통과, legacy 는 차단', () => {
+check('W28 auto-lane gate — direct 는 brief/review 없이, 승인 source 와 같은 spec 일 때만 통과 · legacy 는 차단', () => {
   const input = loadFixture()
   const d = tmp('ds-w28')
   compileAndPersistDirectSpec({ input, draftsDir: d })
-  const direct = autoLaneGate(input.queueItem.slug, [input.queueItem], d)
+  const gv = input.node.graphVersion
+  const opts = { expectedGraphVersionFn: () => gv }
+  const noSource = autoLaneGate(input.queueItem.slug, [input.queueItem], d, opts)
+  assert.equal(noSource.ok, false, 'source 없이 direct 가 등록 gate 를 통과했다')
+  assert.ok(noSource.blockedBy.some((x) => x.code === 'DIRECT_SPEC_SOURCE_NOT_READY'))
+  writeApprovedSource(d, input, gv)
+  const direct = autoLaneGate(input.queueItem.slug, [input.queueItem], d, opts)
   assert.equal(direct.ok, true, JSON.stringify(direct.blockedBy))
   const legacyItem = { ...input.queueItem }
   delete legacyItem.directSpecMode
@@ -560,7 +588,11 @@ check('W31 merge gate — 등록 slug의 spec/sidecar만 허용', () => {
 
 function directDriveSandbox(prefix) {
   const input = loadFixture()
+  // 🔴 drive 의 등록 gate 는 제품 current graphVersion 의 승인 source 를 본다
+  const gv = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
+  input.node.graphVersion = gv
   const d = tmp(prefix)
+  writeApprovedSource(d, input, gv)
   const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
   const slug = input.queueItem.slug
   const dir = join(d, slug)

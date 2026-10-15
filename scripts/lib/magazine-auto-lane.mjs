@@ -16,10 +16,14 @@
  *     대신 자동 경로에서는 이 게이트를 반드시 통과해야 한다.)
  */
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, readDirectSpec, resolveMagazineAutoMode } from './magazine-direct-spec.mjs'
+import { readProductGraphVersion, verifyDirectSpecOnDisk } from './magazine-direct-spec-source.mjs'
+
+const PRODUCT_GRAPH_CURRENT = join(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'), 'src/content/magazine/graph/current.ts')
 
 // 🔴 LANE_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 레인을 가르지 않는다
 
@@ -52,7 +56,10 @@ export function paths(slug, draftsDir = DRAFTS_DIR) {
  *                                  못 정하면 멈춘다. 정해지면 태운다.
  *   ④ brief.md 와 review.ts 가 있다 — 없으면 회수도 대조도 못 한다
  */
-export function gate(slug, queue, draftsDir = DRAFTS_DIR) {
+export function gate(slug, queue, draftsDir = DRAFTS_DIR, {
+  /** 🔴 direct 행만 부른다 — legacy 판정은 제품 graph 를 읽지 않는다 */
+  expectedGraphVersionFn = () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
+} = {}) {
   const item = queue.find((q) => q.slug === slug) ?? null
   const blockedBy = []
   const block = (code, message) => blockedBy.push({ code, message })
@@ -78,6 +85,16 @@ export function gate(slug, queue, draftsDir = DRAFTS_DIR) {
   } else if (mode.mode === DIRECT_SPEC_MODE) {
     const spec = readDirectSpec({ slug, draftsDir })
     if (!spec.ok) block(spec.code, spec.why)
+    else {
+      /**
+       * 🔴 **등록도 지금 승인 source 를 다시 지난다** (2026-10-15 Codex P0).
+       *    운영 등록은 run.json 이 아니라 큐 전체를 후보로 본다 — producer 의 source 관문만으로는
+       *    source 가 취소·교체된 뒤 남은 spec·원고가 등록으로 흘러갈 수 있다.
+       *    디스크 spec 이 현재 source 의 컴파일 결과와 바이트까지 같아야 통과한다.
+       */
+      const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion: expectedGraphVersionFn() })
+      if (!v.ok) block(v.code, v.why)
+    }
   } else {
     if (!existsSync(p.brief)) block('BRIEF_MISSING', 'brief.md 가 없다 — brief-auto 가 먼저 돌아야 한다')
     if (!existsSync(p.review)) block('REVIEW_MISSING', 'review.ts 가 없다 — 대조할 riskSentences 가 없다')
