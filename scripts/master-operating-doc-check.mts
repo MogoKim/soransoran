@@ -235,13 +235,20 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
   // ⑤-b 🔴 2026-10-11 창업자 결정의 뼈대 — 빠지면 실패한다
-  out.push(['canon §1.1 이 Dn 을 인증된 최대 용량 · 평상시 0..Dn · 증명일 정확 N 으로 정의한다',
-    ['### 1.1 Dn 은 인증된 최대 용량이다', '증명된 최대 용량', '`0..Dn`', '증명일에만',
+  out.push(['canon §1.1 이 Dn 을 인증된 최대 용량 · 평상시 0..Dn · 증명일 정확 N · 자연 증거 승계로 정의한다',
+    ['### 1.1 Dn 은 인증된 최대 용량이다', '증명된 최대 용량', '`0..Dn`', '증명일에는', '자연 증거 승계',
       '평상시의 부족분은 다음 날의 실패 증거가 아니다'].every((t) => d100Goal.includes(t))])
-  out.push(['canon §6 이 PASS 조건을 증명일에만 정확 N 으로 적용한다',
-    d100Goal.includes('아래 PASS 조건은 증명일에만 적용한다')
-    && d100Goal.includes('`N-1` 은 FAIL, `N` 은 PASS, `N+1` 은 상한 위반이다')
-    && d100Goal.includes('재시험은 증명일로만 하고')])
+  out.push(['canon §6 이 증명일 정확 N 과 평상일 자연 증거 승계를 분리한다',
+    d100Goal.includes('증명일에는 아래 PASS 조건을 정확한 `N`으로 적용한다')
+    && d100Goal.includes('현재 Dn의 자연 운영 PASS로 승계한다')
+    && d100Goal.includes('`N-1`은 FAIL, `N`은 PASS, `N+1`은 상한 위반이다')
+    && d100Goal.includes('실패 뒤 재시험은 증명일로만 하고')])
+  out.push(['canon §3.4 가 usageUnknown 을 정산하지 않고 제한 시험 위험 envelope 만 허용한다',
+    d100Goal.includes('정산 요청 20건 이상')
+    && d100Goal.includes('`usageUnknown` 1건 이하')
+    && d100Goal.includes('정산 비율 95% 이상')
+    && d100Goal.includes('위험 envelope')
+    && d100Goal.includes('그 시험일 자체의 운영 PASS에는 미상 비용 0이 필요하다')])
   out.push(['canon §3 이 생성 수요를 가장 가까운 실제 공개 기회로 정한다',
     d100Goal.includes('가장 가까운 실제 공개 기회')
     && d100Goal.includes('Persona 여력도 같은')])
@@ -458,7 +465,7 @@ check('현재 실행이 code / deployed / operating PASS 를 한 표의 세 칸�
 check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있다',
   current.includes('UNKNOWN') && /관측하지 않은 것을 PASS\s*로 쓰지 않는다/.test(current))
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
-  current.includes('## 5. 다음 critical path') && /^\| Q10 \|/m.test(current))
+  current.includes('## 5. 다음 critical path') && /^\| D5-FIX \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
   current.includes('첫 댓글 1 + 선택적 0~4')
   && current.includes('실제 `parentId` 답글')
@@ -474,9 +481,9 @@ check('현재 실행이 최신 자연 controller 결정을 결정 모양(상태 
   /`(REPROVE|TRIAL|HOLD|PREPARE|PROMOTE) · 공개 d\d+ · 준비 d\d+`/.test(currentLive))
 check('현재 실행이 최신 d 단계 증거를 날짜와 판정으로 적는다',
   /\d\d-\d\d d\d+ 증거[^\n]{0,8}(PASS|FAIL|UNKNOWN)/.test(currentLive))
-check('현재 실행이 D10 blocker 를 preflight 코드로 적는다',
-  /## 3\. D10의 정확한 blocker/.test(current)
-  && /^\| `[A-Z_]+` \|/m.test(sectionIn(current, '## 3. D10의 정확한 blocker', '\n## ')))
+check('현재 실행이 D5 blocker 를 preflight 코드로 적는다',
+  /## 3\. D5 개방의 정확한 blocker/.test(current)
+  && /^\| `[A-Z_]+` \|/m.test(sectionIn(current, '## 3. D5 개방의 정확한 blocker', '\n## ')))
 check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona contract-valid 를 현재 상태로 적는다',
   /보조 Mac D100 job \| \d+개 loaded/.test(currentLive)
   && /회사 Mac D100 job \| 0/.test(currentLive)
@@ -504,21 +511,21 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
   check('🔴 완료된 PR 이 다음 critical path 에 활성 작업으로 다시 나오지 않는다', revived.length === 0)
   for (const l of revived.slice(0, 2)) console.log(`     🔴 ${l.trim().slice(0, 120)}`)
   const rows = [...path.matchAll(/^\| ([^|]+?) \|/gm)].map((m) => m[1]!.trim()).filter((c) => c !== '순서' && !/^-+$/.test(c))
-  check('현재 실행의 다음 critical path 첫 두 항목이 quality-v10 완결 → D5 증명이다',
-    rows[0] === 'Q10' && rows[1] === 'D5')
+  check('현재 실행의 다음 critical path 첫 두 항목이 D5 병목 보정 → D5 증명이다',
+    rows[0] === 'D5-FIX' && rows[1] === 'D5')
   check('현재 실행이 D10·D20 목표일과 각 선행 operating PASS를 함께 적는다',
     /^\| D10 \|[^\n]*10-16 목표[^\n]*자동 10\/10/m.test(path)
     && /^\| D20 \|[^\n]*10-17 목표[^\n]*D10 PASS/m.test(path))
 }
-check('현재 실행이 원격 main을 분 단위 관측값으로 적고 runtime과 같은 SHA임을 보인다',
-  /^\| 원격 main \(2026-10-15 10:38 관측\) \| `6f28fc3ad475c8b26587a87bb70eca007248f7c5` \|/m.test(currentLive)
-  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `6f28fc3ad475c8b26587a87bb70eca007248f7c5`/m.test(currentLive))
+check('현재 실행이 원격 main과 runtime을 분 단위 관측값으로 분리하고 D100 차이를 판정한다',
+  /^\| 원격 main \(20\d\d-\d\d-\d\d \d\d:\d\d 관측\) \| `[0-9a-f]{40}` \|/m.test(currentLive)
+  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*main 차이는 magazine-only/m.test(currentLive))
 check('현재 실행이 추가 댓글의 배포 상태와 현재 d3에서 0건인 이유를 함께 적는다',
   currentLive.includes('switch ON · D10 profile · E6 consumer plist')
   && currentLive.includes('현재 공개 d3라 stage mismatch로 추가 0이 정상'))
 check('현재 실행이 공격적 목표일을 PASS 약속과 구분하고 D30을 생략하지 않는다',
   currentLive.includes('10-16 D10/10-17 D20 목표')
-  && currentLive.includes('목표일이지 아직 PASS가 아니며')
+  && currentLive.includes('D10·D20은 아직 PASS가 아니다')
   && currentLive.includes('D30은 생략하지 않음'))
 check('현재 실행이 실제 조회수 구현을 별도 critical path로 두고 가짜 숫자를 금지한다',
   /^\| VIEWS \| 실제 근거 조회수 \|/m.test(currentLive)

@@ -109,8 +109,11 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 결정 없음 → FAIL', judge(facts('d3', { decision: null })), 'DECISION_MISSING')
   failWith('🔴 사람이 쓴 결정(decidedBy≠controller) → FAIL', judge(facts('d3', {
     decision: { kstDate: D, state: 'TRIAL', release: 'd3', decidedBy: 'human' } })), 'DECISION_NOT_CONTROLLER')
-  failWith('🔴 HOLD 날(override · env canary 로 낸 날)은 세지 않는다', judge(facts('d3', {
-    decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } })), 'DECISION_NOT_TRANSITION')
+  const naturalHold = judge(facts('d3', {
+    decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } }))
+  check('🟢 자연 HOLD 날도 자동 exact 3 · 나머지 증거 완전이면 D3 운영 PASS', naturalHold.verdict === 'PASS', naturalHold.codes.join(','))
+  failWith('🔴 자연 HOLD 날 2/3은 정상 평상 운영이지만 단계 PASS는 아니다', judge(facts('d3', {
+    posts: [post(0), post(1)], decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } })), 'PUBLISH_NOT_AUTO_READY')
   failWith('🔴 결정 공개 단계 ≠ 판정 단계 → FAIL', judge(facts('d3', {
     decision: { kstDate: D, state: 'TRIAL', release: 'd1', decidedBy: DECISION_WRITER } })), 'DECISION_STAGE_MISMATCH')
 
@@ -129,7 +132,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 D5 혼합(자동 3 · 사람 2) → FAIL', d5mixed, 'PUBLISH_NOT_AUTO_READY')
   /**
    * 🔴 **반례 ② — d10 증명일(TRIAL · RETEST)은 자동 정확히 10편** (2026-10-11 Batch A1).
-   *    9 · 11 · 사람 섞임은 FAIL. 평상일(HOLD/PREPARE)은 이 판정 대상이 아니다(`DECISION_NOT_TRANSITION`).
+   *    9 · 11 · 사람 섞임은 FAIL. 평상일도 자연 exact N이면 같은 운영 증거로 인정한다.
    */
   const d10Audits = { ...CLEAN_AUDITS, rows: [sample(0), sample(1)] }
   const d10Of = (posts: EvidencePost[]) => judgeStageEvidence(D, 'd10', facts('d10', { posts, audits: d10Audits }), side())
@@ -141,8 +144,11 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   const retest10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
     decision: { kstDate: D, state: 'TRIAL', release: 'd10', decidedBy: DECISION_WRITER } }), side())
   check('🟢 반례② RETEST 도 TRIAL 상태다 — 같은 exact 10 판정', retest10.verdict === 'PASS')
-  failWith('🔴 반례② 평상일 PREPARE d10 은 exact N 판정을 받지 않는다(PASS 아님 · 빚 아님)', judgeStageEvidence(D, 'd10', facts('d10', { posts: ten.slice(0, 4), audits: d10Audits,
-    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'DECISION_NOT_TRANSITION')
+  const naturalPrepare10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
+    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side())
+  check('🟢 반례② 평상일 PREPARE도 자동 exact 10이면 운영 PASS', naturalPrepare10.verdict === 'PASS', naturalPrepare10.codes.join(','))
+  failWith('🔴 반례② 평상일 PREPARE 4/10은 단계 PASS가 아니다', judgeStageEvidence(D, 'd10', facts('d10', { posts: ten.slice(0, 4), audits: d10Audits,
+    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'PUBLISH_NOT_AUTO_READY')
 
   // ③ 첫 댓글
   failWith('🔴 09:30 글 Persona 댓글 없음 → FAIL (09-29 반례)', judge(facts('d3', {

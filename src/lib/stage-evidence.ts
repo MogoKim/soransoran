@@ -358,11 +358,12 @@ export function judgeStageEvidence(
 }
 
 /**
- * 🔴 **증명일 상태** — 그날 자동 target 이 목표 슬롯을 먼저 채운 날이다(`consumerEnvOf` 의 증명일 env).
- *    TRIAL(재시험 포함) · REPROVE(현재 단계 재인증 = 현재 단계 RETEST). HOLD·PREPARE 는 **평상일**이다 — 공개 0..Dn ·
- *    exact N 판정을 받지 않는다(그날 증거는 `DECISION_NOT_TRANSITION` 로 PASS 가 아닐 뿐 · 빚을 남기지 않는다).
+ * 🔴 **지정 증명일 상태** — `consumerEnvOf` 가 목표 슬롯을 먼저 채우도록 연 날이다.
+ *    평상일 HOLD·PREPARE도 자연스럽게 exact N을 채우고 나머지 증거를 전부 만족하면 같은 운영능력의 증거로 인정한다.
+ *    N 미만인 평상일은 정상 운영이며, PASS가 아닐 뿐 재시험 빚을 만들지 않는다.
  */
 export const PROOF_STATES: readonly string[] = ['TRIAL', 'REPROVE']
+export const EVIDENCE_STATES: readonly string[] = [...PROOF_STATES, 'HOLD', 'PREPARE']
 
 /**
  * 🔴 **단계 이름과 하루 목표를 받는 판정 본체** (2026-09-29 generic scheduler 골격).
@@ -386,7 +387,7 @@ export function judgeEvidenceForTarget<S extends string>(
     else {
       if (d.kstDate !== kstDate) codes.add('DECISION_MISSING')
       if (d.decidedBy !== DECISION_WRITER) codes.add('DECISION_NOT_CONTROLLER')
-      if (!PROOF_STATES.includes(d.state)) codes.add('DECISION_NOT_TRANSITION')
+      if (!EVIDENCE_STATES.includes(d.state)) codes.add('DECISION_NOT_TRANSITION')
       if (d.release !== stage) codes.add('DECISION_STAGE_MISMATCH')
     }
     // ② 발행 — 🔴 자동 READY 로 만들어져 무인 러너가 낸 글만 자동 target 이다. 사람 승인 글은 0건으로 센다
@@ -513,7 +514,7 @@ export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: Trial
  *       쓰지 않는다. 바닥(d1)에서 다시 증명한다(FLOOR). 지속 단계도 같은 규칙이다(`sustainedReleaseOf`).
  *
  *    · 전날 단계 S 가 운영 PASS            → S 의 다음 칸을 시험한다 (`PASS` · 기반 S)
- *      (전날이 TRIAL · SUSTAIN · REPROVE 증명일이어야 PASS 가 난다 — 판정 본체 ①)
+ *      (지정 증명일 또는 평상일의 자연 exact-N 모두 같은 본체로 판정한다)
  *    · 전날이 TRIAL 인데 PASS 가 아니다     → **같은 단계를 다시** 시험한다 (`RETEST` · 기반은 전날 시험 기반)
  *    · 전날 공개가 바닥(d1)이다             → 바닥의 다음 칸을 시험한다 (`FLOOR` · 증명할 아래 칸이 없다)
  *    · 그 밖(증거 없는 d3 이상 유지 날)      → 시험하지 않는다 — 지금 단계를 지킨다(평상일 0..Dn)

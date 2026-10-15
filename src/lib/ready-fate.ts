@@ -145,6 +145,17 @@ export type CostAttribution = {
   openReservedUsd: number
   /** 예약만 있는 legacy 요청 수 — 보고만 한다 */
   legacyOpenRequests: number
+  /** 이 cohort 에서 실제 사용량으로 정산된 현재 계약 요청 수 */
+  settledRequests: number
+  /** 이 cohort 에 남은 usageUnknown 요청 수 — 장부 상태는 그대로 유지한다 */
+  usageUnknownRequests: number
+  /** trial 위험 계산에 쓸 수 없는 열린 요청 수(예약 중 · 잘못된 회차/원천 · 양수 예약 없음) */
+  trialIneligibleOpenRequests: number
+  /**
+   * 🔴 **제한 trial 위험 단가** — 정산액 + usageUnknown 예약액을 확인된 결과로 나눈 관측 envelope.
+   * 실제 비용도 상한도 아니며 정산 단가를 대신하지 않는다. 다음 단계 trial 허용 여부에만 쓴다.
+   */
+  trialRiskUsdPerSlotValidResult: number | null
   /** 🔴 현재 계약이지만 **다른 cohort 회차**(창 밖 묶음)의 정산 — 이 cohort 의 분자가 아니다 · 보고만 한다 */
   otherCohortUsd: number
   byFate: Record<CostFate, number>
@@ -190,6 +201,9 @@ export function costAttributionOf(i: {
   let openReserved = 0
   let legacyOpen = 0
   let otherCohort = 0
+  let settledRequests = 0
+  let usageUnknownRequests = 0
+  let trialIneligibleOpenRequests = 0
   for (const e of i.entries) {
     if (e.stage === 'countTokens' || e.status === 'blocked') continue
     const current = e.supplyContract === SUPPLY_JIT_CONTRACT
@@ -201,22 +215,31 @@ export function costAttributionOf(i: {
       if (run !== null && !i.cohortRuns.has(run)) continue
       open += 1
       // 🔴 추정 예약액은 보고만 한다 — 실제 비용도 그 한계도 아니다(정산이 예약을 넘을 수 있다). 분자에 넣지 않는다
-      if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd >= 0) openReserved += e.reservedUsd
+      const positiveReservation = e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0
+      if (positiveReservation && e.reservedUsd !== null) openReserved += e.reservedUsd
+      if (e.status === 'usageUnknown') usageUnknownRequests += 1
+      if (e.status !== 'usageUnknown' || run === null || key === null || !positiveReservation) trialIneligibleOpenRequests += 1
       continue
     }
     if (!current) { legacy += e.settledUsd; continue }
     const run = pipelineRunOfLedger(e.runId)
     if (run === null) { unlinked += e.settledUsd; continue }
     if (!i.cohortRuns.has(run)) { otherCohort += e.settledUsd; continue }
+    settledRequests += 1
     total += e.settledUsd
     if (key === null) { unlinked += e.settledUsd; continue }
     byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
   }
   const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
+  const trialRisk = unlinked === 0 && open > 0 && trialIneligibleOpenRequests === 0
+    && total > 0 && results > 0
+    ? (total + openReserved) / results
+    : null
   return {
     totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, openReservedUsd: openReserved,
-    legacyOpenRequests: legacyOpen, otherCohortUsd: otherCohort, byFate,
+    legacyOpenRequests: legacyOpen, settledRequests, usageUnknownRequests, trialIneligibleOpenRequests,
+    trialRiskUsdPerSlotValidResult: trialRisk, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && results > 0 ? total / results : null,
     usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
