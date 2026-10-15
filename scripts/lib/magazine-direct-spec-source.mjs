@@ -130,6 +130,22 @@ export function parseGraphControl(controlText) {
 }
 
 /**
+ * graph bundle 의 구조 — basis 계산과 관계 판정이 실제로 쓰는 필드만, **던지지 않고** 검증한다.
+ * 🔴 JSON 문법이 맞고 EXPORT_HASH 까지 맞아도 intents 가 null·누락·잘못된 원소면 판독 실패다.
+ */
+export function graphBundleShapeOk(graph) {
+  const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  if (!isPlain(graph)) return false
+  if (typeof graph.graphVersion !== 'string' || !graph.graphVersion.trim()) return false
+  if (!isPlain(graph.contentHash)) return false
+  if (!Array.isArray(graph.intents) || !graph.intents.every((i) => isPlain(i) && typeof i.id === 'string' && i.id.trim()
+    && (i.cluster === null || (typeof i.cluster === 'string' && i.cluster.trim())))) return false
+  if (!Array.isArray(graph.edges) || !graph.edges.every(isPlain)) return false
+  if (!Array.isArray(graph.mappings) || !graph.mappings.every(isPlain)) return false
+  return true
+}
+
+/**
  * 🔴 **제품 M-GRAPH 판 판독 — authoring 과 소비 관문이 같이 쓰는 하나뿐인 구현.**
  *    current.ts → bundle(EXPORT_HASH 재계산) · control.ts · resolver(구현 surface · 관계 type).
  * @returns {{ok:true, pointer, graph, exportHash, recomputedExportHash, control, implemented, footer, relationTypes, surfaces, blockers}
@@ -146,6 +162,7 @@ export function readProductGraphState(productRoot) {
   if (!literal) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 리터럴을 찾지 못했다' }
   let graph
   try { graph = JSON.parse(literal) } catch { return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 리터럴을 파싱하지 못했다' } }
+  if (!graphBundleShapeOk(graph)) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 구조(graphVersion·contentHash·intents·edges·mappings)가 다르다' }
   const exportHash = /export const EXPORT_HASH = '([0-9a-f]+)'/.exec(bundleText)?.[1] ?? null
   const recomputedExportHash = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16)
   const controlText = read(PRODUCT_GRAPH.control)

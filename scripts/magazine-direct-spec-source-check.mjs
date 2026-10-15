@@ -34,6 +34,7 @@
  *   plan · brief-auto · flow · source · auto-lane · notify · webui 의 call-site 를 하나씩 끊는다.
  */
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs'
@@ -89,6 +90,7 @@ const realRepair = await imp(PATHS.repair)
 const { randomUUID } = await import('node:crypto')
 const { deliveryGate } = realGate
 const { directSpecRegenPacket } = await imp(join(ROOT, 'scripts/lib/magazine-direct-spec.mjs'))
+const { sliceLiteral } = await imp(join(ROOT, 'scripts/lib/magazine-load.mjs'))
 const { readRunTargets, fetchTargets } = await imp(join(ROOT, 'scripts/lib/magazine-run-targets.mjs'))
 
 // ── 입력 ─────────────────────────────────────────────────────
@@ -254,10 +256,29 @@ const TYPE_ERROR_CONTROL = (root) => rewriteControl(root, `{
   surfaces: { FOOTER_NEXT: true, FOOTER_SIBLING: true, FOOTER_BRIDGE: true },
   killSwitch: { tripped: false },
 }`)
+/**
+ * bundle 의 GRAPH 를 바꾸고 EXPORT_HASH 를 **다시 맞춘다** — 문법·판·해시는 정상이고 구조만 틀린 판.
+ */
+const BUNDLE = `src/content/magazine/graph/${GV}.ts`
+const rewriteBundle = (edit) => (root) => {
+  const p = join(root, BUNDLE)
+  const t = readFileSync(p, 'utf8')
+  const start = t.indexOf('{', t.indexOf('=', t.indexOf('export const GRAPH')))
+  const literal = sliceLiteral(t, start, '{', '}')
+  assert.ok(literal, 'bundle 반례 준비 실패')
+  const graph = JSON.parse(literal)
+  edit(graph)
+  const out = t.slice(0, start) + JSON.stringify(graph, null, 2) + t.slice(start + literal.length)
+  const hash = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16)
+  writeFileSync(p, out.replace(/export const EXPORT_HASH = '[0-9a-f]+'/, `export const EXPORT_HASH = '${hash}'`))
+}
 /** 판독 불가 — 던지지 않고 PRODUCT_BASIS_UNREADABLE 로 HOLD 해야 한다 */
 const BASIS_UNREADABLE = [
   ['control 파싱 불가(괄호 누락)', MALFORMED_CONTROL],
   ['control 필드 형식 오류', TYPE_ERROR_CONTROL],
+  ['bundle intents:null (해시 일치)', rewriteBundle((g) => { g.intents = null })],
+  ['bundle intents 누락 (해시 일치)', rewriteBundle((g) => { delete g.intents })],
+  ['bundle 잘못된 intent 원소 (해시 일치)', rewriteBundle((g) => { g.intents = [...g.intents, { id: 42, cluster: ['sleep'] }] })],
 ]
 const BASIS_DRIFTS = [
   ['graph off', [CONTROL, '  enabled: true,', '  enabled: false,']],
@@ -356,7 +377,7 @@ function sourceCases(src) {
       const missing = tmp('b1-missing'); writeSource(missing, { entries: [sourceEntry((e) => { delete e.productBasis; return e })] })
       assert.ok(src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: missing, expectedGraphVersion: GV, productRoot: ROOT }).evidence.blockers.includes('PRODUCT_BASIS_MISSING'))
     }],
-    ['B2 control 표기 — 여러 줄·끝 쉼표는 한 줄 판과 같은 basis · 파싱 불가·필드 형식 오류는 던지지 않고 PRODUCT_BASIS_UNREADABLE', () => {
+    ['B2 control 표기 — 여러 줄·끝 쉼표는 한 줄 판과 같은 basis · control 파싱 불가·형식 오류 · bundle 구조 결함(해시 일치)은 던지지 않고 PRODUCT_BASIS_UNREADABLE', () => {
       const multi = basisRoot(MULTILINE_CONTROL)
       assert.notEqual(readFileSync(join(multi, CONTROL), 'utf8'), readFileSync(join(ROOT, CONTROL), 'utf8'), '여러 줄 반례 준비 실패')
       const st = src.readProductGraphState(multi)
@@ -370,7 +391,11 @@ function sourceCases(src) {
         let cur
         assert.doesNotThrow(() => { cur = src.currentProductBasis(root, { intentId: 'I-DSSC-01', queueCluster: 'sleep' }) }, `${label}: currentProductBasis 가 던졌다`)
         assert.deepEqual({ ok: cur.ok, code: cur.code }, { ok: false, code: 'PRODUCT_BASIS_UNREADABLE' }, label)
-        assert.doesNotThrow(() => src.readProductGraphState(root), `${label}: readProductGraphState 가 던졌다`)
+        let st
+        assert.doesNotThrow(() => { st = src.readProductGraphState(root) }, `${label}: readProductGraphState 가 던졌다`)
+        assert.equal(st.ok, false, `${label}: 판독 실패를 ok 로 돌려줬다`)
+        // 🔴 bundle 반례는 해시가 맞는 채 구조만 틀렸다 — 해시 불일치가 아니라 구조 판독 실패로 막혀야 한다
+        if (label.startsWith('bundle')) assert.equal(st.code, 'GRAPH_BUNDLE_UNREADABLE', `${label}: ${st.code}`)
         const d = tmp('b2-bad'); writeSource(d)
         let r
         assert.doesNotThrow(() => { r = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV, productRoot: root }) }, `${label}: judge 가 던졌다`)
@@ -1253,6 +1278,7 @@ const MUTATIONS = [
   ['source', 'MS12', '소비 관문이 OPTIONAL hero 를 요구하지 않는다 (P1)', "  return imageMode === 'REQUIRED' || imageMode === 'OPTIONAL'", "  return imageMode === 'REQUIRED'"],
   ['source', 'MS13', '승인 basis exact-match 제거 (P1)', "      else if (canonicalJson(entry.productBasis) !== canonicalJson(b)) blockers.push('PRODUCT_BASIS_DRIFT')\n", ''],
   ['source', 'MS15', 'control 파싱 예외를 다시 던진다 (P1)', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", "  raw = evalLiteral(literal, 'control.ts')"],
+  ['source', 'MS17', 'bundle 구조 검증 제거 (P1 — intents null 이 TypeError 로 번진다)', "  if (!graphBundleShapeOk(graph)) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'", "  if (false) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'"],
   ['source', 'MS16', 'control 필드 형식 검증 제거 (P1)', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", ''],
   ['source', 'MS14', 'productRoot 없을 때 통과 (P1 fail-closed 제거)', "  if (!productRoot) blockers.push('PRODUCT_BASIS_UNVERIFIED')", '  if (!productRoot) {}'],
   ['source', 'MS10', 'NO_IMAGE hero 금지 검사 제거', "  if (heroForbidden(entry, queueItem)) blockers.push('HERO_FORBIDDEN')\n", ''],
