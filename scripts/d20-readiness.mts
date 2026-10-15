@@ -9,23 +9,21 @@
  *   npm run d20:readiness -- --json
  *
  * 🔴 **DB write 0 · provider 0 · env · job · stage 변경 0.** controller 와 **같은 판독기 · 같은 판정**을 d20 에 대고 부른다
- *    (`readPreflightFacts` · `judgeNextPreflight` · `readStageEvidenceFacts` · `judgeStageEvidence`). 새 문턱을 만들지 않는다.
+ *    (`readPreflightFacts` · `judgeNextPreflight`). 새 문턱을 만들지 않는다.
+ * 🔴 D10 증명일 운영 증거는 정본 read-only 명령(`stage:controller -- --evidence-date=<날짜> --json`)의 판정을 그대로 받는다 —
+ *    StageDecision adapter 를 여기서 다시 import 하지 않는다(adapter 호출 자리는 잠겨 있다 · `stage:ladder-check`).
  * 🔴 profile 후보는 `deriveFollowupProfile` 하나가 만든다 — 승인칸이 비어 있어 설치해도 0건(fail-closed)이다.
  *    운영 장부 · 증거가 있는 보조 Mac runtime 에서 돌려야 실측이 선다. 다른 기계에서는 모름(UNKNOWN)으로 나온다.
  */
+import { spawnSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { PrismaClient } from '@prisma/client'
 
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { kstDateString } from '../src/lib/release-canary'
 import { isCalendarDate, previousKstDate } from '../src/lib/stage-decision-contract'
-import { readStageDecision } from '../src/lib/stage-decision-repo'
 import { errorSignalOf } from '../src/lib/stage-controller'
 import { auditAwareGate } from '../src/lib/auto-ready-audit-store'
-import { judgeStageEvidence } from '../src/lib/stage-evidence'
-import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
-import { personaCommentCapFor } from '../src/lib/stage-evidence'
-import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
 import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
@@ -37,7 +35,7 @@ import type { LedgerEntry } from '../src/lib/llm-ledger'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { observeJob, publishFailing, readProcessRuns, supplyFailing, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-record.mjs'
-import { fillDbConnection, readCostSignals, readEnvKeys } from './lib/ops-signals.mjs'
+import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
 import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
 import { commentLoopLedgerDir } from './lib/persona-comment-loop.mjs'
@@ -109,22 +107,17 @@ try {
   const installedD20 = validateFollowupProfile(installed, TARGET)
   let measure: FollowupMeasure | null = null
   if (D10_DATE !== null) {
-    const dec = await readStageDecision(prisma, D10_DATE)
-    const decision = dec.found && dec.result.ok ? dec.result.decision : null
-    const ce = readEnvKeys([COMMENT_STAGE_ENV])
-    const facts = await readStageEvidenceFacts(prisma, {
-      kstDate: D10_DATE, stage: 'd10', decision, now: NOW,
-      commentCapPerPost: ce.ok ? personaCommentCapFor(readCommentStage(ce.values).stage) : null,
+    // 🔴 그날 운영 증거 — 정본 read-only 명령의 판정을 그대로 받는다(못 읽으면 PASS 아님)
+    const ev = spawnSync(process.execPath, [...process.execArgv, 'scripts/stage-controller.mts', `--evidence-date=${D10_DATE}`, '--evidence-stage=d10', '--json'], {
+      cwd: process.cwd(), encoding: 'utf-8', timeout: 300_000,
     })
-    const c = readCostSignals(new Date(`${D10_DATE}T12:00:00+09:00`))
-    const evidence = judgeStageEvidence(D10_DATE, 'd10', facts, {
-      cost: [
-        { name: '공급 장부', health: c.supplyLedger.health },
-        { name: '댓글 장부', health: c.commentLedger.health },
-        { name: '감사 장부', health: c.auditLedger.health },
-      ],
-      errors: health.health,
-    })
+    let evidence: { verdict: string } = { verdict: 'UNREAD' }
+    let decision: { release?: string } | null = null
+    try {
+      const j = JSON.parse(ev.stdout.slice(ev.stdout.indexOf('{'))) as { decision: { release?: string } | null; evidence: { verdict: string } }
+      evidence = j.evidence
+      decision = j.decision
+    } catch { /* 판정을 읽지 못했다 — PASS 아님 */ }
     const day = readLedgerDay(ledgerPathOf(commentLoopLedgerDir(), D10_DATE))
     const entries = day.ok ? day.entries : null
     const gte = new Date(`${D10_DATE}T00:00:00+09:00`)
