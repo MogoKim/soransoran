@@ -54,6 +54,7 @@ const PATHS = {
   run: join(ROOT, 'scripts/magazine-producer-run.mjs'),
   gate: join(ROOT, 'scripts/lib/magazine-delivery-gate.mjs'),
   regen: join(ROOT, 'scripts/lib/magazine-regen.mjs'),
+  repair: join(ROOT, 'scripts/lib/magazine-input-repair.mjs'),
 }
 const FIXTURE = join(ROOT, 'scripts/__fixtures__/magazine/direct-spec/canary.input.json')
 const GOLDEN_DIR = join(ROOT, 'scripts/__fixtures__/magazine/direct-spec/legacy-golden')
@@ -84,6 +85,8 @@ const real = {
 const { compileArticleSpec } = await imp(join(ROOT, 'scripts/lib/magazine-article-spec.mjs'))
 const realGate = await imp(PATHS.gate)
 const realRegen = await imp(PATHS.regen)
+const realRepair = await imp(PATHS.repair)
+const { randomUUID } = await import('node:crypto')
 const { deliveryGate } = realGate
 const { directSpecRegenPacket } = await imp(join(ROOT, 'scripts/lib/magazine-direct-spec.mjs'))
 const { readRunTargets, fetchTargets } = await imp(join(ROOT, 'scripts/lib/magazine-run-targets.mjs'))
@@ -710,6 +713,143 @@ function downgradeCases(webui, regen) {
   return cases
 }
 
+/**
+ * P0-1 — packet-only direct 신원. article-spec · 등록 영수증 · brief 가 모두 없고 유효한 direct regen packet 만 있다.
+ * 실제 `fetchOne(--regen-packet)` wrapper 를 태운다.
+ */
+const PACKET_ONLY = {}
+function packetOnlyCases(webui) {
+  const setup = () => {
+    const r = runPlan(real.plan, { queue: [directItem()], prepare: (d) => writeSource(d) })
+    const spec = JSON.parse(r.spec)
+    rmSync(specPathOf(r.draftsDir))   // 🔴 spec 도 영수증도 brief 도 없다 — packet 만 direct 신원이다
+    writeFileSync(join(r.draftsDir, DIRECT_SLUG, 'draft.md'), '---\ntitle: t\n---\n\n## 본문\n\n[CTA] /community/free | t | t\n')
+    const base = dirname(r.draftsDir); const packetDir = join(base, 'packets'); mkdirSync(packetDir, { recursive: true })
+    const attemptId = randomUUID()
+    const dp = directSpecRegenPacket({ spec, failures: [{ code: 'X', label: 't', sentence: '' }] })
+    const packet = { schemaVersion: 'regen-packet/3', slug: DIRECT_SLUG, profile: 'STANDARD', attempt: 1, attemptId,
+      failures: [{ code: 'X', label: 't', sentence: '' }], instruction: dp.instruction, specHash: dp.specHash, articleSpecSchemaVersion: dp.schemaVersion }
+    const packetPath = join(packetDir, `${DIRECT_SLUG}.${attemptId}.json`)
+    writeFileSync(packetPath, JSON.stringify(packet))
+    return { r, base, packetPath, packetBytes: readFileSync(packetPath, 'utf8') }
+  }
+  const states = [
+    ['큐 삭제', null, () => [], 'DIRECT_SPEC_NOT_IN_QUEUE'],
+    ['opt-in 철회(LEGACY_BRIEF_V1)', () => directItem({ directSpecMode: 'LEGACY_BRIEF_V1' }), () => [directItem({ directSpecMode: 'LEGACY_BRIEF_V1' })], 'DIRECT_SPEC_MODE_WITHDRAWN'],
+    ['opt-in 철회(필드 제거)', () => { const { directSpecMode: _m, ...q } = directItem(); return q }, () => { const { directSpecMode: _m, ...q } = directItem(); return [q] }, 'DIRECT_SPEC_MODE_WITHDRAWN'],
+    ['현재 큐 exact direct · spec 없음', () => directItem(), () => [directItem()], 'DIRECT_SPEC_MISSING'],
+  ]
+  return [
+    ...states.map(([label, qi, queue, code]) => [`P0-1 fetchOne(--regen-packet) packet-only — ${label} → ${code} · provider·probe·Chrome·예약·write 0`, async () => {
+      const { r, base, packetPath, packetBytes } = setup()
+      const q = join(base, 'pk-q.json'); const draftOut = join(base, 'regen-out.md')
+      const draftBefore = readFileSync(join(r.draftsDir, DIRECT_SLUG, 'draft.md'), 'utf8')
+      const m = { probe: 0, chrome: 0 }
+      const log = console.log; const err = console.error
+      console.log = () => {}; console.error = () => {}
+      let out
+      try {
+        out = await webui.fetchOne(DIRECT_SLUG, { regenPacket: packetPath, draftOut, quarantinePath: q, draftsDir: r.draftsDir,
+          queueItem: qi ? qi() : null, directSourceDeps: { queue, expectedGraphVersion: () => GV }, resultPath: join(base, 'pk-result.json'), exit: () => {},
+          probeFn: async () => { m.probe++; return { status: 'DSSC_FAKE_PROBE_STOP' } },
+          browserDeps: { connect: async () => { m.chrome++; throw new Error('Chrome 금지') }, ensureTab: async () => { m.chrome++; throw new Error('Chrome 금지') } } })
+      } finally { console.log = log; console.error = err }
+      const c = { probe: m.probe, chrome: m.chrome, reservation: existsSync(q) && readFileSync(q, 'utf8').includes(DIRECT_SLUG) ? 1 : 0,
+        write: (existsSync(draftOut) ? 1 : 0) + (readFileSync(join(r.draftsDir, DIRECT_SLUG, 'draft.md'), 'utf8') !== draftBefore ? 1 : 0),
+        packetWrite: readFileSync(packetPath, 'utf8') !== packetBytes ? 1 : 0 }
+      PACKET_ONLY[label] = { ...c, reason: out.result.reason }
+      assert.equal(out.result.reason, code, `${label}: ${JSON.stringify(out.result).slice(0, 180)}`)
+      assert.deepEqual(c, { probe: 0, chrome: 0, reservation: 0, write: 0, packetWrite: 0 })
+    }]),
+    ['P0-1 진짜 legacy packet (direct 흔적 없음 · brief 없음) → brief_missing 판정 불변', async () => {
+      const base = tmp('legacy-packet'); const d = join(base, 'drafts'); mkdirSync(join(d, LEGACY_SLUG), { recursive: true })
+      const attemptId = randomUUID(); const pd = join(base, 'packets'); mkdirSync(pd)
+      const pp = join(pd, `${LEGACY_SLUG}.${attemptId}.json`)
+      writeFileSync(pp, JSON.stringify({ schemaVersion: 'regen-packet/3', slug: LEGACY_SLUG, profile: 'STANDARD', attempt: 1, attemptId, failures: [{ code: 'X' }], instruction: 'x' }))
+      const log = console.log; const err = console.error
+      console.log = () => {}; console.error = () => {}
+      let out
+      try {
+        out = await webui.fetchOne(LEGACY_SLUG, { regenPacket: pp, draftOut: join(base, 'o.md'), quarantinePath: join(base, 'q.json'), draftsDir: d,
+          queueItem: legacyItem(), exit: () => {}, probeFn: async () => { throw new Error('probe 금지') } })
+      } finally { console.log = log; console.error = err }
+      assert.equal(out.result.reason, 'brief_missing')
+    }],
+  ]
+}
+
+/**
+ * P0-2 — DIRECT_SPEC 행의 입력 수리 우회. 실제 `scanRepairTargets` · `runInputRepair` · `fetchOne(inputRepair)` 를 태운다.
+ */
+const REPAIR_COUNTS = {}
+function repairCases(repair, webui) {
+  const BAD_BRIEF = '엉터리 brief — 형식 계약을 지키지 않는다\n'
+  const ECHO_DRAFT = '---\ntitle: t\n---\n\n## 검색 의도\n\n## 글 구조\n\n## 반드시 그대로 넣을 문장\n\n본문\n'
+  const folder = (d, slug, { brief = BAD_BRIEF, draft = null, spec = null } = {}) => {
+    mkdirSync(join(d, slug), { recursive: true })
+    if (brief) writeFileSync(join(d, slug, 'brief.md'), brief)
+    if (draft) writeFileSync(join(d, slug, 'draft.md'), draft)
+    if (spec) writeFileSync(join(d, slug, 'article-spec.json'), spec)
+  }
+  const withdrawn = () => directItem({ directSpecMode: 'LEGACY_BRIEF_V1' })
+  return [
+    ['P0-2 scanRepairTargets — current direct(BRIEF·DRAFT_ECHO)·persisted 철회·모르는 mode 는 대상 0 · legacy 대상은 legacy-only 와 deep-equal', () => {
+      const d = tmp('scan')
+      folder(d, DIRECT_SLUG)                                                    // current direct + 잔여 brief
+      folder(d, 'direct-echo', { brief: null, draft: ECHO_DRAFT })              // current direct + brief echo draft (brief 없음은 대상 아님)
+      folder(d, 'direct-echo2', { draft: ECHO_DRAFT })                          // current direct + brief + echo draft
+      folder(d, 'persisted-withdrawn', { spec: '{}' })                          // 철회됐지만 spec 흔적
+      folder(d, 'unknown-mode')
+      folder(d, LEGACY_SLUG)                                                    // 진짜 legacy
+      const queue = [directItem(), directItem({ slug: 'direct-echo', day: 9003 }), directItem({ slug: 'direct-echo2', day: 9004 }),
+        { ...withdrawn(), slug: 'persisted-withdrawn', day: 9005 }, directItem({ slug: 'unknown-mode', day: 9006, directSpecMode: 'X' }), legacyItem()]
+      const scan = repair.scanRepairTargets({ queue, draftsDir: d, store: {} })
+      assert.deepEqual(scan.targets.map((t) => t.slug), [LEGACY_SLUG], `direct 행이 입력 수리 대상이 됐다: ${scan.targets.map((t) => `${t.slug}:${t.type}`)}`)
+      const only = repair.scanRepairTargets({ queue: [legacyItem()], draftsDir: d, store: {} })
+      assert.deepEqual(scan.targets, only.targets, 'legacy 입력 수리 대상이 direct 행 유무에 따라 달라졌다')
+      assert.equal(only.targets[0]?.type, repair.REPAIR.BRIEF, 'legacy 대상이 없어 비교가 무의미하다')
+      const skippedDirect = scan.skipped.filter((x) => x.reason === 'DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN').map((x) => x.slug).sort()
+      assert.deepEqual(skippedDirect, [DIRECT_SLUG, 'direct-echo2', 'persisted-withdrawn', 'unknown-mode'].sort())
+    }],
+    ['P0-2 runInputRepair — direct 행만 있으면 generateBrief · runRepairFetch · repairGate 호출 0', async () => {
+      const d = tmp('runrepair'); folder(d, DIRECT_SLUG, { draft: ECHO_DRAFT }); folder(d, 'persisted-withdrawn', { spec: '{}' })
+      const calls = { generateBrief: 0, runRepairFetch: 0, repairGate: 0, convertCheck: 0 }
+      const deps = Object.fromEntries(Object.keys(calls).map((k) => [k, (...a) => { calls[k]++; throw new Error(`${k} 호출 금지`) }]))
+      const out = await repair.runInputRepair({ draftsDir: d, queue: [directItem(), { ...withdrawn(), slug: 'persisted-withdrawn', day: 9005 }],
+        ledger: { ok: true, store: {} }, quarantinePath: join(dirname(d), `${randomUUID()}-q.json`), deps: { ...deps, log: () => {} }, tmpDir: join(d, '_tmp') })
+      REPAIR_COUNTS['runInputRepair · direct 행'] = { ...calls, results: out.results.length }
+      assert.equal(out.ok, true); assert.equal(out.results.length, 0)
+      assert.deepEqual(calls, { generateBrief: 0, runRepairFetch: 0, repairGate: 0, convertCheck: 0 })
+    }],
+    ...[
+      ['current exact direct', () => directItem(), () => [directItem()], 'DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN', false],
+      ['persisted direct · 큐 삭제', null, () => [], 'DIRECT_SPEC_NOT_IN_QUEUE', true],
+      ['persisted direct · opt-in 철회', withdrawn, () => [withdrawn()], 'DIRECT_SPEC_MODE_WITHDRAWN', true],
+    ].map(([label, qi, queue, code, persisted]) => [`P0-2 fetchOne(inputRepair BRIEF_ECHO) — ${label} → ${code} · probe·Chrome·예약·write 0`, async () => {
+      const r = persisted ? runPlan(real.plan, { queue: [directItem()], prepare: (dd) => writeSource(dd) }) : null
+      const d = r?.draftsDir ?? join(tmp('ir-cur'), 'drafts')
+      if (!r) writeSource(d)
+      folder(d, DIRECT_SLUG, { brief: BAD_BRIEF, draft: ECHO_DRAFT })
+      const base = dirname(d); const q = join(base, 'ir-q.json'); const draftOut = join(base, 'ir-out.md')
+      const m = { probe: 0, chrome: 0 }
+      const log = console.log; const err = console.error
+      console.log = () => {}; console.error = () => {}
+      let out
+      try {
+        out = await webui.fetchOne(DIRECT_SLUG, { inputRepair: { type: 'BRIEF_ECHO' }, draftOut, quarantinePath: q, draftsDir: d,
+          queueItem: qi ? qi() : null, directSourceDeps: { queue, expectedGraphVersion: () => GV }, resultPath: join(base, 'ir-result.json'), exit: () => {},
+          probeFn: async () => { m.probe++; return { status: 'DSSC_FAKE_PROBE_STOP' } },
+          browserDeps: { connect: async () => { m.chrome++; throw new Error('Chrome 금지') }, ensureTab: async () => { m.chrome++; throw new Error('Chrome 금지') } } })
+      } finally { console.log = log; console.error = err }
+      const c = { probe: m.probe, chrome: m.chrome, reservation: existsSync(q) && readFileSync(q, 'utf8').includes(DIRECT_SLUG) ? 1 : 0,
+        write: (existsSync(draftOut) ? 1 : 0) + (readFileSync(join(d, DIRECT_SLUG, 'draft.md'), 'utf8') !== ECHO_DRAFT ? 1 : 0) }
+      REPAIR_COUNTS[`fetchOne inputRepair · ${label}`] = { ...c, reason: out.result.reason }
+      assert.equal(out.result.reason, code, `${label}: ${JSON.stringify(out.result).slice(0, 180)}`)
+      assert.deepEqual(c, { probe: 0, chrome: 0, reservation: 0, write: 0 })
+    }]),
+  ]
+}
+
 function laneCases(lane) {
   return [
     ['R 등록 gate — 큐 전체 경로에서도 source 부재·다른 spec 은 차단, 같은 spec 만 통과', () => {
@@ -891,6 +1031,7 @@ const ALL_REAL = [
   ...notifyCases(real.notify, real.webui), ...await flowCases(real.flow, real.plan, real.brief),
   ...sendCases(real.webui, realGate, { record: true }), ...reportCases(real.plan),
   ...downgradeCases(real.webui, realRegen), ...reuseReportCases(real.plan),
+  ...packetOnlyCases(real.webui), ...repairCases(realRepair, real.webui),
 ]
 for (const [name, fn] of ALL_REAL) {
   try { await fn(); report(true, name) } catch (e) { report(false, name, e.message.split('\n')[0]) }
@@ -901,6 +1042,10 @@ console.log('\n── 실제 전송 경계 (plan 성공 뒤 source 변경) — p
 for (const [k, v] of Object.entries(SEND)) console.log(`  ${k.padEnd(28)} probe ${v.probe} · Chrome ${v.chrome} · 예약 ${v.reservation} · write ${v.write}`)
 console.log('\n── persisted direct 강등 차단 — 실제 fetchOne(brief.md 있음) · attemptRegeneration')
 for (const [k, v] of Object.entries(DOWNGRADE)) console.log(`  ${k.padEnd(40)} ${JSON.stringify(v)}`)
+console.log('\n── packet-only direct · fetchOne(--regen-packet)')
+for (const [k, v] of Object.entries(PACKET_ONLY)) console.log(`  ${k.padEnd(36)} ${JSON.stringify(v)}`)
+console.log('\n── 입력 수리 우회 차단')
+for (const [k, v] of Object.entries(REPAIR_COUNTS)) console.log(`  ${k.padEnd(40)} ${JSON.stringify(v)}`)
 console.log('\n── report "다음" 절 실제 모양')
 for (const [k, v] of Object.entries(NEXT_SHAPES)) console.log(`  [${k}]\n${v.split('\n').map((l) => `    ${l}`).join('\n')}`)
 const realPass = pass
@@ -939,9 +1084,13 @@ const MUTATIONS = [
   ['gate', 'MG2', '큐 삭제(queueItem=null)만 legacy 강등 (P0)', 'if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {', 'if (resolved.mode === DIRECT_SPEC_MODE || (queueItem && persistedDirectIdentity({ slug, draftsDir, packet }))) {'],
   ['gate', 'MG3', 'opt-in 철회만 legacy 강등 (P0)', 'if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {', 'if (resolved.mode === DIRECT_SPEC_MODE || (!queueItem && persistedDirectIdentity({ slug, draftsDir, packet }))) {'],
   ['gate', 'MG4', '철회 경로의 정본 큐 선행 판정 제거 (P0)', '      const early = sourceCheck()\n      if (!early.ok) return blocked(early)', '      const early = { ok: true }'],
-  ['webui', 'MW4', 'fetchSlug 의 persisted direct 판정 제거 (P0)', '(modeDecision.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir }))', '(modeDecision.mode === DIRECT_SPEC_MODE)'],
+  ['webui', 'MW4', 'fetchSlug 의 persisted direct 판정 제거 (P0)', '(modeDecision.mode === DIRECT_SPEC_MODE\n    || persistedDirectIdentity({ slug, draftsDir, packet: packetRead?.ok ? packetRead.packet : null }))', '(modeDecision.mode === DIRECT_SPEC_MODE)'],
   ['webui', 'MW5', 'fetchOne 이 source 재검증 주입을 전달하지 않는다 (call-site)', '    draftsDir, browserDeps, accessFn, draftOut, inputRepair, queueItem, directSourceDeps })', '    draftsDir, browserDeps, accessFn, draftOut, inputRepair, queueItem })'],
   ['regen', 'MR1', 'attemptRegeneration 이 source 재검증 주입을 전달하지 않는다 (call-site)', '  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem, directSourceDeps })', '  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem })'],
+  ['webui', 'MW6', 'wrapper 가 packet direct 신원을 버린다 (P0-1)', 'persistedDirectIdentity({ slug, draftsDir, packet: packetRead?.ok ? packetRead.packet : null })', 'persistedDirectIdentity({ slug, draftsDir })'],
+  ['webui', 'MW7', 'fetchOne 입력 수리가 direct 를 우회해 inputRepairGate 로 간다 (P0-2)', '  if (inputRepair && isDirect) {', '  if (false) {'],
+  ['repair', 'MI1', 'scanRepairTargets 의 direct 행 필터 제거 (P0-2)', "    if (!mode.ok || mode.mode !== LEGACY_BRIEF_MODE || persistedDirectIdentity({ slug, draftsDir })) {", '    if (false) {'],
+  ['repair', 'MI2', 'scanRepairTargets 가 persisted direct 흔적을 보지 않는다 (P0-2)', "    if (!mode.ok || mode.mode !== LEGACY_BRIEF_MODE || persistedDirectIdentity({ slug, draftsDir })) {", '    if (!mode.ok || mode.mode !== LEGACY_BRIEF_MODE) {'],
   ['plan', 'MP15', 'report 가 reusable direct 를 보지 않는다 (P2)', '[...new Set([...run.selected, ...(run.reusable ?? [])].filter((s) => s?.directSpec).map((s) => s.slug))]', '[...new Set([...run.selected].filter((s) => s?.directSpec).map((s) => s.slug))]'],
   ['webui', 'MW2', 'probe 를 전송 관문 앞으로 당긴다 (P0 순서)', 'WEBUI_PROBE_FIRST', ''],
   ['webui', 'MW3', 'fetchSlug 가 source 재검증 주입을 전달하지 않는다 (call-site)', '    : deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem, directSourceDeps })', '    : deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem })'],
@@ -991,14 +1140,15 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
       }
       const webuiForGate = companion ? await imp(companion) : null
       if (companion) unlinkSync(companion)
-      const cases = kind === 'gate' ? [...sendCases(webuiForGate, mod), ...downgradeCases(webuiForGate, regenForGate)]
+      const cases = kind === 'gate' ? [...sendCases(webuiForGate, mod), ...downgradeCases(webuiForGate, regenForGate), ...packetOnlyCases(webuiForGate)]
         : kind === 'regen' ? downgradeCases(real.webui, mod)
+        : kind === 'repair' ? repairCases(mod, real.webui)
         : kind === 'plan' ? [...planCases(mod), ...reportCases(mod), ...reuseReportCases(mod)]
         : kind === 'brief' ? [...briefCases(mod), ...await flowCases(real.flow, real.plan, mod)]
           : kind === 'flow' ? await flowCases(mod, real.plan, real.brief)
             : kind === 'lane' ? [...laneCases(mod), ...reuseCases(real.plan, mod)]
               : kind === 'notify' ? notifyCases(mod, real.webui)
-                : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen)]
+                : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen), ...packetOnlyCases(mod), ...repairCases(realRepair, mod)]
                   : sourceCases(mod)
       const failures = await runCases(cases)
       caught = failures.length > 0; why = failures[0] ?? '모든 반례가 통과했다'

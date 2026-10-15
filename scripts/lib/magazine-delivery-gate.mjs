@@ -27,6 +27,9 @@ import {
   resolveMagazineAutoMode,
 } from './magazine-direct-spec.mjs'
 
+/** DIRECT_SPEC_V1 행(현재 opt-in 또는 persisted 흔적)은 입력 수리 대상이 아니다 — 수리 provider·probe·Chrome 0 */
+export const DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN = 'DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN'
+
 /** 일반 전송 직전 brief 형식 계약 실패 — probe·Chrome·예약·전송 모두 0 */
 export const BRIEF_FORMAT_CONTRACT_REASON = 'BRIEF_FORMAT_CONTRACT'
 
@@ -256,8 +259,11 @@ export function persistedDirectIdentity({ slug, draftsDir = DRAFTS_DIR, packet =
 }
 
 export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH, queueItem = null, directSourceDeps = null }) {
-  // 🔴 좁은 canary 라우팅 — queueItem 이 명시적으로 DIRECT_SPEC_V1 로 opt-in 했을 때만 direct.
-  //    legacy 입력(queueItem 미지정 포함)은 아래 기존 경로를 그대로 지난다 — message bytes · fingerprint 불변.
+  // 🔴 좁은 canary 라우팅 — direct 는 두 경우뿐이다.
+  //    ① queueItem 이 DIRECT_SPEC_V1 로 opt-in 했다.
+  //    ② 호출자 행이 null·LEGACY 여도 이 slug 에 direct 흔적(article-spec · 등록 영수증 · specHash packet)이 있다 —
+  //       이때는 legacy 로 강등하지 않고 정본 큐 재검증이 NOT_IN_QUEUE · MODE_WITHDRAWN 으로 멈춘다.
+  //    direct 흔적이 없는 legacy 입력(queueItem 미지정 포함)만 아래 기존 경로를 지난다 — message bytes · fingerprint 불변.
   //    모르는 directSpecMode 는 **legacy provider 로도 보내지 않는다** (fail-closed).
   //    direct 입력의 brief/message 는 adapter 가 verifyArticleSpec 통과 spec 하나로 만든다 — brief.md 를 읽지 않는다.
   //    missing/invalid spec 은 여기서 ok:false 로 끝난다 → 호출자 provider/Chrome/예약 0.

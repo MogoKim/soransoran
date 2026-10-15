@@ -67,7 +67,7 @@ import {
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
-import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate, persistedDirectIdentity } from './lib/magazine-delivery-gate.mjs'
+import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate, persistedDirectIdentity, DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
 
@@ -603,8 +603,28 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     return { slug, status: 'failed', reason: modeDecision.code, stage: 'gate', sent: false,
       errorDetail: `${modeDecision.why} (한 글자도 보내지 않았다)` }
   }
-  // 🔴 direct 로 만든 흔적(article-spec·등록 영수증)이 있으면 큐 행이 사라지거나 철회돼도 legacy 로 강등하지 않는다
-  const isDirect = modeDecision.ok && (modeDecision.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir }))
+  /**
+   * 🔴 direct 로 만든 흔적(article-spec · 등록 영수증 · specHash 를 든 재생성 packet)이 있으면
+   *    큐 행이 사라지거나 철회돼도 legacy 로 강등하지 않는다. packet 도 brief 판정보다 **먼저** 읽어 신원에 넣는다 —
+   *    spec·영수증 없이 direct packet 만 남은 재생성이 brief_missing 으로 끝나지 않게 (2026-10-15 Codex P0).
+   *    packet 오류의 **반환 순서**는 그대로다(아래에서 같은 결과로 판정한다).
+   */
+  const packetRead = regenPacket ? readRegenPacket(regenPacket, slug) : null
+  const isDirect = modeDecision.ok && (modeDecision.mode === DIRECT_SPEC_MODE
+    || persistedDirectIdentity({ slug, draftsDir, packet: packetRead?.ok ? packetRead.packet : null }))
+  /**
+   * 🔴 **DIRECT_SPEC 행은 입력 수리(brief echo → 원고) 경로를 타지 않는다** (2026-10-15 Codex P0).
+   *    입력 수리는 inputRepairGate 를 지나므로 direct source 관문을 우회한다.
+   *    큐 삭제·철회된 persisted direct 는 원인을 숨기지 않게 source 코드(NOT_IN_QUEUE · MODE_WITHDRAWN)를 먼저 낸다.
+   */
+  if (inputRepair && isDirect) {
+    if (modeDecision.mode !== DIRECT_SPEC_MODE) {
+      const g = deliveryGate({ slug, draftsDir, quarantinePath, queueItem, directSourceDeps })
+      if (!g.ok) return { slug, status: 'failed', reason: g.code, stage: 'gate', sent: false, errorDetail: `${g.why} (한 글자도 보내지 않았다)` }
+    }
+    return { slug, status: 'failed', reason: DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN, stage: 'gate', sent: false,
+      errorDetail: 'DIRECT_SPEC_V1 행은 입력 수리 대상이 아니다 — ArticleSpec 경로로만 원고를 받는다 (한 글자도 보내지 않았다)' }
+  }
   if (!isDirect && !existsSync(briefPath)) return { slug, status: 'skipped', reason: 'brief_missing', sent: false }
 
   // 🔴 direct 는 brief 없이도 돈다 — markers 는 비운다. legacy 는 기존대로 brief 에서 추출한다.
@@ -615,7 +635,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
   /** 🔴 옵션을 명시했으면 패킷이 성해야 한다. 아니면 **보내지 않는다** */
   let packet = null
   if (regenPacket) {
-    const pr = readRegenPacket(regenPacket, slug)
+    const pr = packetRead
     if (!pr.ok) {
       return { slug, status: 'failed', reason: pr.code, detail: pr.why, sent: false }
     }
