@@ -1,7 +1,8 @@
 # Magazine current milestone
 
 기준 시각: 2026-10-15 KST  
-목표 게이트: 2026-10-22 KST  
+구현·배포 집중 게이트: 2026-10-15 KST
+운영 증거 상한: 2026-10-22 KST
 상위 정본: `M-GRAPH-PROJECT-CHARTER.md`, `magazine-automation-runbook.md`
 
 이 문서는 소란소란 매거진의 **현재 상태와 1주 실행 순서**만 관리한다. 목적은 글 수가 아니라,
@@ -35,20 +36,22 @@ M-GRAPH next approved node
 
 ### M-GRAPH — NOT ACTIVE
 
-- 2026-10-15 현재 제품 graph 검사는 275/275다. 현재 bundle은 2026-09-23 판으로
-  167 intents · 339 edges · 82 mappings다.
+- 2026-10-15 현재 제품 graph 검사는 275/275다. 연구 build는 167 intents · 339 edges ·
+  82 mappings지만 제품에 export된 runtime bundle은 143 intents · 298 edges · 53 mappings다.
 - 공개 글은 52편이지만 전체 cluster를 가정해도 현재 bundle이 graph 결과를 내는 글은 18편이다.
-  `family`만 열면 4편 중 2편만 graph 결과를 쓴다.
-- 운영 `control.ts`는 `enabled: false`, `enabledClusters: []`라 실제 공개 화면은 전부 fallback이다.
-- 최신 등록 글과 intent mapping, reverse update, bundle rebuild, 공개 3+1 링크와 watch가 남아 있다.
+  공개 16편은 mapping이 없고, mapping이 있는 36편 중 18편은 활성 출발 관계 결과가 없다.
+- 운영 `control.ts`는 아직 `enabled: false`, `enabledClusters: []`라 실제 공개 화면은 전부 fallback이다.
+- PR #726은 `sleep` 5편만 여는 첫 canary 후보다. 로컬에서 5/5 GRAPH, 다른 47편 불변,
+  kill switch 전체 fallback, 직접 3 + 발견 1 표본을 확인했고 Linux CI를 기다린다.
+- 최신 등록 글의 mapping 보정, reverse update, bundle rebuild와 공개 watch가 남아 있다.
 
 ### M-AUTO — PARTIAL
 
 - 생성·QA·hero·등록·PR·CI·병합·배포·예약 공개 장치는 대부분 구현돼 있다.
 - 2026-10-15 자연 회차는 `kimjang-back-pain-prep`의 Claude brief가 고정 형식 블록을 빠뜨려 중단됐다.
-- `4adb4c2b`는 공통 형식 블록을 코드가 조립하도록 고쳤고 전체 회귀 중이다.
-- rehearsal S8/S8B는 현재 runtime 대상에 의존해 추적 파일을 바꾸는 시험 결함이 확인됐다.
-  제품의 `DIRTY_TREE` 관문은 맞으며, 고정 gray 사건·article 격리·untrack으로 시험만 고친다.
+- `4adb4c2b`는 공통 형식 블록을 코드가 조립하도록 고쳤다.
+- 자식 `23014791`은 rehearsal S8/S8B를 10/11 gray 고정 사건·article 격리·untrack으로
+  바꿨다. 제품의 `DIRTY_TREE` 관문은 유지했고 전체 변이 회귀가 진행 중이다.
 - 현재 배포 경로는 여전히 `LEGACY_BRIEF_V1`이다. `DIRECT_SPEC_V1`은 아직 구현·배포 전이다.
 
 ### OUTCOME — NOT PROVEN
@@ -81,17 +84,18 @@ M-GRAPH next approved node
 - 7일 관측창이 끝나기 전에는 `OUTCOME PROVEN`을 선언하지 않는다. 10월 22일 게이트는 측정 가동
   여부를 판정하며, 충분한 실사용 표본이 늦으면 결과 판정만 이후로 이어간다.
 
-## 4. 1주 실행표
+## 4. 압축 실행표
 
 | 날짜 | M-AUTO | M-GRAPH / OUTCOME |
 |---|---|---|
-| 10/15 | `4adb4c2b` 회귀 완료, S8/S8B 고정 사건 수리, ArticleSpec 계약 확정 | 최신 articles·intent 차이 산출 |
-| 10/16 | `DIRECT_SPEC_V1` compiler·fixture·STANDARD canary rehearsal | mapping 보정안과 bundle rebuild |
-| 10/17 | PR·CI·병합·배포·runtime 반영 | bundle 검증, canary cluster 선정 |
-| 10/18~19 | 자연 회차 또는 bounded live canary, 중복·잔여·rollback 확인 | canary 활성화, 공개 3+1 링크 확인 |
-| 10/20 | direct 경로 결함 수리와 재검증 | reverse update·event·watch 확인 |
-| 10/21 | default 전환 여부 판정 | OUTCOME 측정 end-to-end 확인 |
-| 10/22 | 세 축을 각각 판정하고 legacy 제거 여부 결정 | ACTIVE/미달 사유와 다음 표본 시각 보고 |
+| **10/15 오늘** | brief bridge 회귀 완료 → PR·CI·병합·배포. 이어서 `DIRECT_SPEC_V1` schema·compiler·hash·fixture와 STANDARD canary wiring을 병렬 파일 소유권 안에서 구현 | 52편 대조 완료 → PR #726 sleep canary CI·병합·배포·공개 HTML 확인. mapping 보정 입력과 최신 bundle rebuild 후보 생성. 기존 event·identity gap read-only 감사 |
+| **10/15 오늘 stretch** | direct 정상·형식 실패·provider 실패·재실행 rehearsal과 변이까지 로컬 커밋 | reverse relation·미공개 누출·3+1·kill switch 검증 후 graph bundle PR |
+| **10/16** | 오늘 끝낸 코드의 자연 무인 회차를 운영 증거로만 관측. 결정적 결함 발견을 이 날짜로 미루지 않는다 | canary watch·click/impression 수집 시작 상태 확인. 코드 결함은 즉시 같은 날 수리 |
+| **10/17 이전** | direct canary가 통과하면 default 전환 여부 판정, legacy는 bounded rollback으로만 보존 | canary가 안전하면 다음 cluster 확장. OUTCOME cohort 시계 시작 |
+| **10/22 상한** | 현재 코드 자연 무인 회차까지 포함해 M-AUTO OPERATING_PASS/미달을 판정 | M-GRAPH ACTIVE/미달과 OUTCOME 측정 가동을 판정. 7일 실제 사용자 결과는 관측창 종료 뒤 별도 판정 |
+
+원칙은 **코드로 재현 가능한 결함을 내일 자연 회차로 넘기지 않는 것**이다. 내일 이후로 남겨도 되는 것은
+실제 외부 시스템, 예약 공개, 무인 스케줄, 7일 재방문처럼 시간 경과가 증거의 일부인 관측뿐이다.
 
 ## 5. 병렬 작업과 파일 소유권
 
@@ -138,10 +142,12 @@ M-GRAPH next approved node
 
 ## 7. 다음 즉시 작업
 
-0. GitHub Actions가 결제 문제로 job 시작 전 차단된 상태를 해소한다. 해소 전에는 새 PR의 Linux CI와
-   병합 완료를 주장하지 않는다. 로컬 개발·검증은 계속한다.
-1. 현재 Claude 회귀를 끝까지 받고 S8/S8B 수리를 `4adb4c2b`의 자식 커밋으로 검증한다.
-2. 별도 M-AUTO worktree에서 ArticleSpec schema와 legacy/direct 경계를 구현한다.
-3. 별도 M-GRAPH worktree에서 공개 52편과 82 mappings의 차이, graph 적용 18/52의 누락 사유,
-   canary 후보를 산출한다.
-4. 세 작업의 파일 교집합을 0으로 유지하고, 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고한다.
+0. GitHub Actions 잠금 해제는 attempt 2가 실제 runner 단계에 진입해 확인됐다. PR #725 CI가 끝나면
+   정본을 병합한다.
+1. Claude의 `23014791` 전체 변이 회귀와 clean 원복을 확인하고 bridge PR·CI·병합·배포를 오늘 끝낸다.
+2. PR #726 CI 뒤 `sleep` canary를 병합·배포하고 실제 공개 HTML·source/version/reason·kill switch 준비를 확인한다.
+3. 별도 M-AUTO worktree에서 ArticleSpec schema와 legacy/direct 경계를 오늘 구현한다.
+4. M-GRAPH 미매핑 16편과 NO_RESULT 18편을 근거별로 보정해 최신 bundle 후보를 오늘 만든다.
+5. OUTCOME event·identity gap은 읽기 전용으로 오늘 확정하고 광고·회원가입 전환 파일과 겹치는 구현은
+   writer 조정 뒤 진행한다.
+6. 모든 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고하고 한 층의 PASS를 전체 완료로 부르지 않는다.
