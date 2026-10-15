@@ -14,6 +14,7 @@ export const ARTICLE_SPEC_MODE = 'DIRECT_SPEC_V1'
 
 const RELATION_SOURCES = new Set(['M-GRAPH', 'SERIES', 'HUB'])
 const IMAGE_MODES = new Set(['REQUIRED', 'OPTIONAL', 'NO_IMAGE'])
+const CONTENT_TYPES = new Set(['EVERGREEN', 'SEASONAL', 'COMMUNITY'])
 
 const text = (value) => String(value ?? '').replace(/\r\n?/g, '\n').trim()
 const strings = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : []
@@ -37,6 +38,29 @@ function internalPath(value, field) {
     fail('ARTICLE_SPEC_PATH', `${field} 는 공백 없는 내부 절대 경로여야 한다: ${out}`)
   }
   return out
+}
+
+function slugOf(value, field) {
+  const out = required(value, field)
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(out)) {
+    fail('ARTICLE_SPEC_SLUG', `${field} 는 kebab-case slug 여야 한다: ${out}`)
+  }
+  return out
+}
+
+function exactKeys(value, keys, field) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail('ARTICLE_SPEC_SHAPE', `${field} 가 객체가 아니다`)
+  }
+  if (Object.keys(value).sort().join('|') !== [...keys].sort().join('|')) {
+    fail('ARTICLE_SPEC_SHAPE', `${field} 필드가 schema와 다르다`)
+  }
+}
+
+function sameCanonical(actual, expected, field) {
+  if (canonicalJson(actual) !== canonicalJson(expected)) {
+    fail('ARTICLE_SPEC_CONTRACT', `${field} 가 정본과 다르다`)
+  }
 }
 
 function uniqueNonEmpty(value, field, { min = 1 } = {}) {
@@ -73,7 +97,7 @@ function relation(value, field) {
     fail('ARTICLE_SPEC_RELATION', `${field}.source 가 허용 값이 아니다: ${source}`)
   }
   return {
-    slug: required(value.slug, `${field}.slug`),
+    slug: slugOf(value.slug, `${field}.slug`),
     source,
     relationType: required(value.relationType, `${field}.relationType`),
     reason: required(value.reason, `${field}.reason`),
@@ -107,14 +131,15 @@ function publicationOf(publication, queueItem) {
   if (window) {
     const after = required(window.after, 'publishWindow.after')
     const before = required(window.before, 'publishWindow.before')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(after) || !/^\d{4}-\d{2}-\d{2}$/.test(before) || after > before) {
+      fail('ARTICLE_SPEC_PUBLICATION', `publishWindow 날짜가 유효하지 않다: ${after}~${before}`)
+    }
     if (publishDate < after || publishDate > before) {
       fail('ARTICLE_SPEC_PUBLICATION', `publishAt ${publishDate} 이 publishWindow ${after}~${before} 밖이다`)
     }
+    return { publishAt, publishWindow: { after, before } }
   }
-  return {
-    publishAt,
-    publishWindow: window ? { after: window.after, before: window.before } : null,
-  }
+  return { publishAt, publishWindow: null }
 }
 
 function heroOf(hero, queueItem) {
@@ -150,7 +175,7 @@ export function compileArticleSpec({ node, queueItem, relations, publication, he
   if (!queueItem || typeof queueItem !== 'object' || Array.isArray(queueItem)) fail('ARTICLE_SPEC_INPUT', 'queueItem 이 객체가 아니다')
   if (node.status !== 'APPROVED') fail('ARTICLE_SPEC_NODE_NOT_APPROVED', `승인 노드가 아니다: ${String(node.status)}`)
 
-  const slug = required(queueItem.slug, 'queueItem.slug')
+  const slug = slugOf(queueItem.slug, 'queueItem.slug')
   const intentId = required(queueItem.intentId, 'queueItem.intentId')
   if (required(node.intentId, 'node.intentId') !== intentId) {
     fail('ARTICLE_SPEC_IDENTITY', 'node.intentId 와 queueItem.intentId 가 다르다')
@@ -161,6 +186,8 @@ export function compileArticleSpec({ node, queueItem, relations, publication, he
 
   const lane = isAutoLaneEligible(queueItem)
   if (!lane.ok) fail(lane.code ?? 'ARTICLE_SPEC_PROFILE', lane.why)
+  const contentType = required(queueItem.contentType, 'queueItem.contentType')
+  if (!CONTENT_TYPES.has(contentType)) fail('ARTICLE_SPEC_INPUT', `모르는 contentType 이다: ${contentType}`)
   const relationContract = relationSet(relations, slug)
   const ctaPath = internalPath(queueItem.ctaBoard, 'queueItem.ctaBoard')
   if (!ctaPath.startsWith(CTA_HREF_PREFIX)) {
@@ -177,6 +204,8 @@ export function compileArticleSpec({ node, queueItem, relations, publication, he
       graphNodeId: required(node.id, 'node.id'),
       intentId,
       cluster: required(queueItem.cluster, 'queueItem.cluster'),
+      contentType,
+      admissionManifestHash: required(queueItem.g8ManifestHash, 'queueItem.g8ManifestHash'),
     },
     audience: {
       target: required(queueItem.target, 'queueItem.target'),
@@ -231,16 +260,32 @@ export function verifyArticleSpec(spec) {
     return { ok: false, code: 'ARTICLE_SPEC_VERSION', why: 'spec 판 또는 mode 가 다르다' }
   }
   try {
-    const top = ['audience', 'editorial', 'evidence', 'format', 'hero', 'identity', 'mode', 'navigation', 'publication', 'safety', 'schemaVersion', 'specHash']
-    if (Object.keys(spec).sort().join('|') !== top.join('|')) {
-      fail('ARTICLE_SPEC_SHAPE', '최상위 필드가 schema와 다르다')
-    }
-    const slug = required(spec.identity?.slug, 'identity.slug')
+    exactKeys(spec, ['audience', 'editorial', 'evidence', 'format', 'hero', 'identity', 'mode', 'navigation', 'publication', 'safety', 'schemaVersion', 'specHash'], 'spec')
+    exactKeys(spec.identity, ['slug', 'title', 'graphVersion', 'graphNodeId', 'intentId', 'cluster', 'contentType', 'admissionManifestHash'], 'identity')
+    exactKeys(spec.audience, ['target', 'readerQuestion', 'searchIntent'], 'audience')
+    exactKeys(spec.editorial, ['whyNow', 'include', 'exclude', 'outline'], 'editorial')
+    exactKeys(spec.evidence, ['factsToVerify', 'sourceRequirements'], 'evidence')
+    exactKeys(spec.safety, ['validationProfile', 'riskLevel', 'reviewMode', 'bannedTerms', 'forbiddenAssertions', 'topicConstraints'], 'safety')
+    exactKeys(spec.format, ['frontmatter', 'allowedNotations', 'forbiddenNotations', 'ctaCount', 'ctaMustBeLast', 'bodyLength'], 'format')
+    exactKeys(spec.format?.bodyLength, ['hard', 'soft'], 'format.bodyLength')
+    exactKeys(spec.navigation, ['direct', 'discovery', 'series', 'hub', 'community'], 'navigation')
+    exactKeys(spec.navigation?.community, ['path', 'label'], 'navigation.community')
+    exactKeys(spec.hero, ['mode', 'required', 'alt', 'scene'], 'hero')
+    exactKeys(spec.publication, ['publishAt', 'publishWindow'], 'publication')
+    if (spec.navigation.series !== null) exactKeys(spec.navigation.series, ['id', 'order'], 'navigation.series')
+    if (spec.publication.publishWindow !== null) exactKeys(spec.publication.publishWindow, ['after', 'before'], 'publication.publishWindow')
+    for (const [index, item] of spec.navigation.direct.entries()) exactKeys(item, ['slug', 'source', 'relationType', 'reason'], `navigation.direct[${index}]`)
+    exactKeys(spec.navigation.discovery, ['slug', 'source', 'relationType', 'reason'], 'navigation.discovery')
+
+    const slug = slugOf(spec.identity?.slug, 'identity.slug')
     required(spec.identity?.title, 'identity.title')
     required(spec.identity?.graphVersion, 'identity.graphVersion')
     required(spec.identity?.graphNodeId, 'identity.graphNodeId')
     required(spec.identity?.intentId, 'identity.intentId')
     required(spec.identity?.cluster, 'identity.cluster')
+    const contentType = required(spec.identity?.contentType, 'identity.contentType')
+    if (!CONTENT_TYPES.has(contentType)) fail('ARTICLE_SPEC_INPUT', `모르는 contentType 이다: ${contentType}`)
+    required(spec.identity?.admissionManifestHash, 'identity.admissionManifestHash')
     required(spec.audience?.target, 'audience.target')
     required(spec.audience?.readerQuestion, 'audience.readerQuestion')
     required(spec.audience?.searchIntent, 'audience.searchIntent')
@@ -252,7 +297,14 @@ export function verifyArticleSpec(spec) {
     if (!VALIDATION_PROFILES.includes(spec.safety?.validationProfile)) {
       fail('ARTICLE_SPEC_PROFILE', 'validationProfile 이 허용 값이 아니다')
     }
+    required(spec.safety?.riskLevel, 'safety.riskLevel')
+    required(spec.safety?.reviewMode, 'safety.reviewMode')
     uniqueNonEmpty(spec.safety?.topicConstraints, 'safety.topicConstraints')
+    sameCanonical(spec.safety?.bannedTerms, BANNED_WORDS, 'safety.bannedTerms')
+    sameCanonical(spec.safety?.forbiddenAssertions, MEDICAL_ASSERTIONS, 'safety.forbiddenAssertions')
+    sameCanonical(spec.format?.frontmatter, ['title', 'description', 'cluster', 'publishedAt'], 'format.frontmatter')
+    sameCanonical(spec.format?.allowedNotations, BRIEF_ALLOWED_NOTATIONS, 'format.allowedNotations')
+    sameCanonical(spec.format?.forbiddenNotations, BRIEF_FORBIDDEN_TERMS, 'format.forbiddenNotations')
     if (spec.format?.ctaCount !== 1 || spec.format?.ctaMustBeLast !== true) {
       fail('ARTICLE_SPEC_FORMAT', 'CTA 1개·마지막 줄 계약이 아니다')
     }
@@ -264,8 +316,9 @@ export function verifyArticleSpec(spec) {
     internalPath(spec.navigation?.hub, 'navigation.hub')
     internalPath(spec.navigation?.community?.path, 'navigation.community.path')
     required(spec.navigation?.community?.label, 'navigation.community.label')
-    heroOf(spec.hero, { imageMode: spec.hero?.mode })
-    publicationOf(spec.publication, { contentType: 'EVERGREEN' })
+    const checkedHero = heroOf(spec.hero, { imageMode: spec.hero?.mode })
+    if (spec.hero.required !== checkedHero.required) fail('ARTICLE_SPEC_HERO', 'hero.required 가 mode와 다르다')
+    publicationOf(spec.publication, { contentType })
   } catch (error) {
     return { ok: false, code: error?.code ?? 'ARTICLE_SPEC_SHAPE', why: error?.message ?? String(error) }
   }

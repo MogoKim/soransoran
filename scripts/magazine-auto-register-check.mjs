@@ -2993,7 +2993,7 @@ const articleSpecCheck = spawnSync(process.execPath, [join('scripts', 'magazine-
   env: { ...process.env },
 })
 expect('ArticleSpec schema·compiler·hash 반례가 전부 통과한다', articleSpecCheck.status, 0)
-expect('ArticleSpec 검사가 31개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 31 pass, 0 fail/.test(articleSpecCheck.stdout), true)
+expect('ArticleSpec 검사가 39개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 39 pass, 0 fail/.test(articleSpecCheck.stdout), true)
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 console.log('  상태: 자동 PR 경로 구현됨 · launchd 설치는 supervised 1회 성공 뒤에만 열린다\n')

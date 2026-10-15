@@ -119,6 +119,9 @@ check('출력에 시계나 생성 시각이 없다', () => {
 check('승인 노드가 아니면 차단한다', () => throws('ARTICLE_SPEC_NODE_NOT_APPROVED', (x) => { x.node.status = 'DRAFT' }))
 check('node와 queue의 intent가 다르면 차단한다', () => throws('ARTICLE_SPEC_IDENTITY', (x) => { x.node.intentId = 'other' }))
 check('node와 queue의 slug가 다르면 차단한다', () => throws('ARTICLE_SPEC_IDENTITY', (x) => { x.node.slug = 'other' }))
+check('slug가 kebab-case가 아니면 차단한다', () => throws('ARTICLE_SPEC_SLUG', (x) => { x.queueItem.slug = 'Bad Slug'; x.node.slug = 'Bad Slug' }))
+check('G8 승인 manifest hash가 없으면 차단한다', () => throws('ARTICLE_SPEC_INPUT', (x) => { delete x.queueItem.g8ManifestHash }))
+check('모르는 contentType이면 차단한다', () => throws('ARTICLE_SPEC_INPUT', (x) => { x.queueItem.contentType = 'TREND' }))
 check('validationProfile을 추정할 수 없으면 차단한다', () => throws('PROFILE_UNRESOLVED', (x) => { delete x.queueItem.validationProfile; x.queueItem.slug = 'new-unknown'; x.node.slug = 'new-unknown' }))
 check('직접 관련 글이 3개가 아니면 차단한다', () => throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.direct.pop() }))
 check('3+1에 중복이 있으면 차단한다', () => throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.discovery.slug = x.relations.direct[0].slug }))
@@ -140,7 +143,40 @@ check('SEASONAL 예약이 window 밖이면 차단한다', () => throws('ARTICLE_
   x.queueItem.contentType = 'SEASONAL'
   x.queueItem.publishWindow = { after: '2026-11-01', before: '2026-11-30' }
 }))
+check('publishWindow의 역전 날짜는 차단한다', () => throws('ARTICLE_SPEC_PUBLICATION', (x) => {
+  x.queueItem.contentType = 'SEASONAL'
+  x.queueItem.publishWindow = { after: '2026-10-31', before: '2026-10-01' }
+}))
 check('seriesId가 있으면 순서가 필요하다', () => throws('ARTICLE_SPEC_SERIES', (x) => { delete x.queueItem.seriesOrder }))
+check('중첩 schema 밖 필드는 hash를 다시 계산해도 차단한다', () => {
+  const changed = structuredClone(a)
+  changed.identity.extra = true
+  delete changed.specHash
+  changed.specHash = articleSpecHash(changed)
+  assert.equal(verifyArticleSpec(changed).code, 'ARTICLE_SPEC_SHAPE')
+})
+check('고정 금지어 계약은 hash를 다시 계산해도 바꿀 수 없다', () => {
+  const changed = structuredClone(a)
+  changed.safety.bannedTerms = []
+  delete changed.specHash
+  changed.specHash = articleSpecHash(changed)
+  assert.equal(verifyArticleSpec(changed).code, 'ARTICLE_SPEC_CONTRACT')
+})
+check('hero.required는 mode와 같아야 한다', () => {
+  const changed = structuredClone(a)
+  changed.hero.required = false
+  delete changed.specHash
+  changed.specHash = articleSpecHash(changed)
+  assert.equal(verifyArticleSpec(changed).code, 'ARTICLE_SPEC_HERO')
+})
+check('SEASONAL spec에서 publishWindow를 뺄 수 없다', () => {
+  const changed = structuredClone(a)
+  changed.identity.contentType = 'SEASONAL'
+  changed.publication.publishWindow = null
+  delete changed.specHash
+  changed.specHash = articleSpecHash(changed)
+  assert.equal(verifyArticleSpec(changed).code, 'ARTICLE_SPEC_PUBLICATION')
+})
 check('고정 형식·길이·CTA 계약을 싣는다', () => {
   assert.deepEqual(a.format.bodyLength.hard, { min: 800, max: 3000 })
   assert.equal(a.format.ctaCount, 1)
