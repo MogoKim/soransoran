@@ -87,13 +87,15 @@ import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { saveQuarantine } from './lib/magazine-quarantine.mjs'
 import { ARTICLE_SPEC_SCHEMA } from './lib/magazine-article-spec.mjs'
 import { mkdirSync as _mkdirSync } from 'node:fs'
-import { DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath } from './lib/magazine-direct-spec-source.mjs'
+import { DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, readProductGraphState, readProductGraphVersion } from './lib/magazine-direct-spec-source.mjs'
 
 /** direct · legacy 공용 sandbox — article-spec.json 과 brief.md 를 같이 둔다.
  *    🔴 legacy brief.md 는 adapter 조립 brief 에서 **specHash 라인을 뺀** 글자다. 그래야 변이가
  *       direct 경로를 지웠을 때 legacy 가 specHash 를 "의도치 않게" 운반해 catch 가 깨지는 일이 없다. */
 function makeSandbox(prefix) {
   const input = loadFixture()
+  // 🔴 전송 관문은 현재 제품 판 basis 를 다시 맞춘다 — fixture 를 현재 graphVersion 에 둔다
+  input.node.graphVersion = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
   const d = tmp(prefix)
   const persisted = adapter.compileAndPersistDirectSpec({ input, draftsDir: d })
   const slug = persisted.spec.identity.slug
@@ -107,14 +109,15 @@ function makeSandbox(prefix) {
   saveQuarantine({}, quarantinePath)
   // 🔴 전송 경계는 정본 큐 행 + 현재 승인 source 로 다시 검증한다 — 시험 판·큐·승인 source 를 놓는다
   const gv = input.node.graphVersion
+  const productBasis = productBasisFor(readProductGraphState(ROOT), { intentId: input.node.intentId, queueCluster: input.queueItem.cluster })
   const entry = { status: 'APPROVED', approvedBy: 'mutation', approvedAt: '2026-10-15T12:00:00+09:00',
     g8ManifestHash: input.queueItem.g8ManifestHash, node: input.node, relations: input.relations,
-    hero: input.hero, publication: input.publication }
+    hero: input.hero, publication: input.publication, productBasis }
   entry.sourceHash = directSpecSourceHash(entry)
   const sp = directSpecSourcePath(d, gv)
   _mkdirSync(dirname(sp), { recursive: true })
   writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
-  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => gv }
+  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => gv, productRoot: () => ROOT }
   return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps }
 }
 

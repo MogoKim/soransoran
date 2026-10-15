@@ -34,6 +34,7 @@
  *   plan · brief-auto · flow · source · auto-lane · notify · webui 의 call-site 를 하나씩 끊는다.
  */
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs'
@@ -89,6 +90,7 @@ const realRepair = await imp(PATHS.repair)
 const { randomUUID } = await import('node:crypto')
 const { deliveryGate } = realGate
 const { directSpecRegenPacket } = await imp(join(ROOT, 'scripts/lib/magazine-direct-spec.mjs'))
+const { sliceLiteral } = await imp(join(ROOT, 'scripts/lib/magazine-load.mjs'))
 const { readRunTargets, fetchTargets } = await imp(join(ROOT, 'scripts/lib/magazine-run-targets.mjs'))
 
 // ── 입력 ─────────────────────────────────────────────────────
@@ -102,6 +104,8 @@ const NOW = Date.parse('2026-10-16T00:10:00+09:00')
 const DIRECT_SLUG = 'canary-direct-src-01'
 const LEGACY_SLUG = 'canary-legacy-src-02'
 const fx = () => JSON.parse(readFileSync(FIXTURE, 'utf8'))
+/** 🔴 승인 basis — 소비 관문과 같은 helper 로 실제 제품 판에서 계산한다 */
+const BASIS = real.source.productBasisFor(real.source.readProductGraphState(ROOT), { intentId: 'I-DSSC-01', queueCluster: fx().queueItem.cluster })
 
 const directItem = (over = {}) => {
   const q = fx().queueItem
@@ -117,7 +121,7 @@ function sourceEntry(mutate = (e) => e, { rehash = true } = {}) {
     status: 'APPROVED', approvedBy: 'dssc-test-approver', approvedAt: '2026-10-15T12:00:00+09:00',
     g8ManifestHash: MANIFEST,
     node: { ...f.node, id: 'I-DSSC-01', intentId: 'I-DSSC-01', slug: DIRECT_SLUG, graphVersion: GV },
-    relations: f.relations, hero: f.hero, publication: f.publication,
+    relations: f.relations, hero: f.hero, publication: f.publication, productBasis: BASIS,
   }
   entry = mutate(structuredClone(entry)) ?? entry
   if (rehash) entry.sourceHash = real.source.directSpecSourceHash(entry)
@@ -146,7 +150,7 @@ const INVENTORY = () => ({ inventoryDays: 0, counts: { live: 0, scheduled: 0, bl
 const specPathOf = (draftsDir) => join(draftsDir, DIRECT_SLUG, 'article-spec.json')
 
 /** planRun 한 벌. `draftsDir` 를 주면 그 폴더에서 이어 돈다 (다음 회차) */
-function runPlan(planMod, { queue, prepare = () => {}, sourceMod = real.source, spyJudge = false, draftsDir = null, today = TODAY, persistSpecFn = null } = {}) {
+function runPlan(planMod, { queue, prepare = () => {}, sourceMod = real.source, spyJudge = false, draftsDir = null, today = TODAY, persistSpecFn = null, directSourceFnOverride = null } = {}) {
   const base = draftsDir ? dirname(draftsDir) : tmp('plan')
   const dd = draftsDir ?? join(base, 'drafts')
   const runsDir = join(dd, '_runs')
@@ -159,6 +163,7 @@ function runPlan(planMod, { queue, prepare = () => {}, sourceMod = real.source, 
     inventoryFn: INVENTORY, quarantinePath: join(base, 'quarantine.json'),
     heroExists: () => false, log: () => {},
     ...(persistSpecFn ? { persistSpecFn } : {}),
+    ...(directSourceFnOverride ? { directSourceFn: directSourceFnOverride } : {}),
     ...(spyJudge ? {
       productGraphVersionFn: () => { calls.graph++; return GV },
       directSourceFn: (a) => { calls.judge++; return sourceMod.verifyDirectSpecIdentity(a) },
@@ -193,11 +198,101 @@ function assertNothingForDirect(r, label) {
 }
 
 // ── 반례 묶음 — 모듈을 받아 실패 목록을 돌려준다 (실제·변이 공용) ──────────────
+/** 제품 graph 판 4파일을 임시 루트에 복사하고 mutate 로 승인 뒤 판 변경을 만든다 */
+const GRAPH_FILES = ['src/content/magazine/graph/current.ts', `src/content/magazine/graph/${GV}.ts`, 'src/content/magazine/graph/control.ts', 'src/lib/magazine-graph.ts']
+function basisRoot(mut = null) {
+  const root = tmp('basis-root')
+  for (const f of GRAPH_FILES) { mkdirSync(dirname(join(root, f)), { recursive: true }); writeFileSync(join(root, f), readFileSync(join(ROOT, f))) }
+  if (typeof mut === 'function') mut(root)
+  else if (mut) {
+    const [file, from, to] = mut
+    const t = readFileSync(join(root, file), 'utf8')
+    assert.ok(t.includes(from), `basis 반례 준비 실패 — ${file} 에 ${from} 이 없다`)
+    writeFileSync(join(root, file), t.replace(from, to))
+  }
+  return root
+}
+const CONTROL = 'src/content/magazine/graph/control.ts'
+/** control.ts 의 CONTROL 객체를 같은 값의 다른 표기로 바꾼다 — 실제 파일의 다른 부분은 그대로 */
+function rewriteControl(root, body) {
+  const p = join(root, CONTROL)
+  const t = readFileSync(p, 'utf8')
+  const start = t.indexOf('{', t.indexOf('=', t.indexOf('export const CONTROL')))
+  const end = t.indexOf('} as const', start)
+  assert.ok(start !== -1 && end !== -1, 'control 반례 준비 실패')
+  writeFileSync(p, t.slice(0, start) + body + t.slice(end))
+}
+const REAL_CONTROL = real.source.parseGraphControl(readFileSync(join(ROOT, CONTROL), 'utf8'))
+/** 정상 TypeScript — 여러 줄 · 끝 쉼표 · 주석 */
+const MULTILINE_CONTROL = (root) => rewriteControl(root, `{
+  // 여러 줄 표기
+  graphVersion: '${REAL_CONTROL.graphVersion}',
+  enabled: ${REAL_CONTROL.enabled},
+  enabledClusters: [
+${REAL_CONTROL.enabledClusters.map((c) => `    '${c}',`).join('\n')}
+  ],
+  surfaces: {
+${Object.entries(REAL_CONTROL.surfaces).map(([k, v]) => `    ${k}: ${v},`).join('\n')}
+  },
+  killSwitch: {
+    tripped: ${REAL_CONTROL.killSwitch.tripped},
+    trippedAt: null,
+    trippedBy: null,
+    reason: null,
+  },
+  /** 끝 쉼표 */
+  previousGraphVersion: null,
+}`)
+const MALFORMED_CONTROL = (root) => rewriteControl(root, `{
+  graphVersion: '${REAL_CONTROL.graphVersion}',
+  enabled: true,
+  enabledClusters: [ 'sleep', 'family'
+  surfaces: { FOOTER_NEXT: true },
+}`)
+const TYPE_ERROR_CONTROL = (root) => rewriteControl(root, `{
+  graphVersion: '${REAL_CONTROL.graphVersion}',
+  enabled: 'true',
+  enabledClusters: 'sleep,family',
+  surfaces: { FOOTER_NEXT: true, FOOTER_SIBLING: true, FOOTER_BRIDGE: true },
+  killSwitch: { tripped: false },
+}`)
+/**
+ * bundle 의 GRAPH 를 바꾸고 EXPORT_HASH 를 **다시 맞춘다** — 문법·판·해시는 정상이고 구조만 틀린 판.
+ */
+const BUNDLE = `src/content/magazine/graph/${GV}.ts`
+const rewriteBundle = (edit) => (root) => {
+  const p = join(root, BUNDLE)
+  const t = readFileSync(p, 'utf8')
+  const start = t.indexOf('{', t.indexOf('=', t.indexOf('export const GRAPH')))
+  const literal = sliceLiteral(t, start, '{', '}')
+  assert.ok(literal, 'bundle 반례 준비 실패')
+  const graph = JSON.parse(literal)
+  edit(graph)
+  const out = t.slice(0, start) + JSON.stringify(graph, null, 2) + t.slice(start + literal.length)
+  const hash = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16)
+  writeFileSync(p, out.replace(/export const EXPORT_HASH = '[0-9a-f]+'/, `export const EXPORT_HASH = '${hash}'`))
+}
+/** 판독 불가 — 던지지 않고 PRODUCT_BASIS_UNREADABLE 로 HOLD 해야 한다 */
+const BASIS_UNREADABLE = [
+  ['control 파싱 불가(괄호 누락)', MALFORMED_CONTROL],
+  ['control 필드 형식 오류', TYPE_ERROR_CONTROL],
+  ['bundle intents:null (해시 일치)', rewriteBundle((g) => { g.intents = null })],
+  ['bundle intents 누락 (해시 일치)', rewriteBundle((g) => { delete g.intents })],
+  ['bundle 잘못된 intent 원소 (해시 일치)', rewriteBundle((g) => { g.intents = [...g.intents, { id: 42, cluster: ['sleep'] }] })],
+]
+const BASIS_DRIFTS = [
+  ['graph off', [CONTROL, '  enabled: true,', '  enabled: false,']],
+  ['kill switch', [CONTROL, '"tripped":false', '"tripped":true']],
+  ['cluster off', [CONTROL, "enabledClusters: ['sleep', 'family']", "enabledClusters: ['family']"]],
+  ['surface off', [CONTROL, '"FOOTER_SIBLING":true', '"FOOTER_SIBLING":false']],
+  ['resolver 계약 변경', ['src/lib/magazine-graph.ts', "  'FOOTER_BRIDGE',\n] as const\n\n/** 하단", "] as const\n\n/** 하단"]],
+]
+
 function sourceCases(src) {
   const judge = (queueItem, prepare) => {
     const d = tmp('judge')
     prepare?.(d)
-    return src.judgeDirectSpecSource({ queueItem, draftsDir: d, expectedGraphVersion: GV })
+    return src.judgeDirectSpecSource({ queueItem, draftsDir: d, expectedGraphVersion: GV, productRoot: ROOT })
   }
   const heroEntry = (hero) => sourceEntry((e) => { e.hero = hero; return e })
   return [
@@ -256,15 +351,62 @@ function sourceCases(src) {
       const r = judge(directItem({ imageMode: 'NO_IMAGE' }), (d) => writeSource(d, { entries: [heroEntry(null)] }))
       assert.equal(r.ok, true, r.why); assert.equal(r.spec.hero.mode, 'NO_IMAGE')
     }],
-    ['H5 OPTIONAL + hero 없음 — ArticleSpec 계약대로 준비됨', () => {
+    ['H5 OPTIONAL — hero 없음은 FIELDS_MISSING(hero.alt·scene) · 완전한 hero 는 통과', () => {
       const r = judge(directItem({ imageMode: 'OPTIONAL' }), (d) => writeSource(d, { entries: [heroEntry(null)] }))
-      assert.equal(r.ok, true, r.why); assert.equal(r.spec.hero.required, false)
+      assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('FIELDS_MISSING'))
+      assert.ok(r.evidence.missingFields.includes('hero.alt') && r.evidence.missingFields.includes('hero.scene'), r.evidence.missingFields.join(','))
+      const full = judge(directItem({ imageMode: 'OPTIONAL' }), (d) => writeSource(d))
+      assert.equal(full.ok, true, full.why); assert.equal(full.spec.hero.mode, 'OPTIONAL')
+    }],
+    ['B1 승인 basis — 같은 graphVersion 에서 graph off·kill switch·cluster off·surface off·resolver 계약 변경은 PRODUCT_BASIS_DRIFT · productRoot 없으면 UNVERIFIED', () => {
+      const base = basisRoot()
+      const ok = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: (() => { const d = tmp('b1'); writeSource(d); return d })(), expectedGraphVersion: GV, productRoot: base })
+      assert.equal(ok.ok, true, ok.why)
+      const realRoot = judge(directItem(), (d) => writeSource(d))
+      assert.equal(realRoot.ok, true, realRoot.why)
+      const d0 = tmp('b1-unverified'); writeSource(d0)
+      const un = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d0, expectedGraphVersion: GV })
+      assert.equal(un.ok, false); assert.ok(un.evidence.blockers.includes('PRODUCT_BASIS_UNVERIFIED'))
+      for (const [label, mut] of BASIS_DRIFTS) {
+        const root = basisRoot(mut)
+        const d = tmp('b1-drift'); writeSource(d)
+        const r = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV, productRoot: root })
+        assert.equal(r.ok, false, `${label}: 승인 뒤 판이 바뀌었는데 통과했다`)
+        assert.ok(r.evidence.blockers.includes('PRODUCT_BASIS_DRIFT'), `${label}: ${r.evidence.blockers}`)
+      }
+      const missing = tmp('b1-missing'); writeSource(missing, { entries: [sourceEntry((e) => { delete e.productBasis; return e })] })
+      assert.ok(src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: missing, expectedGraphVersion: GV, productRoot: ROOT }).evidence.blockers.includes('PRODUCT_BASIS_MISSING'))
+    }],
+    ['B2 control 표기 — 여러 줄·끝 쉼표는 한 줄 판과 같은 basis · control 파싱 불가·형식 오류 · bundle 구조 결함(해시 일치)은 던지지 않고 PRODUCT_BASIS_UNREADABLE', () => {
+      const multi = basisRoot(MULTILINE_CONTROL)
+      assert.notEqual(readFileSync(join(multi, CONTROL), 'utf8'), readFileSync(join(ROOT, CONTROL), 'utf8'), '여러 줄 반례 준비 실패')
+      const st = src.readProductGraphState(multi)
+      assert.equal(st.ok, true, st.why); assert.deepEqual(st.blockers, [])
+      assert.deepEqual(src.productBasisFor(st, { intentId: 'I-DSSC-01', queueCluster: fx().queueItem.cluster }), BASIS)
+      const dm = tmp('b2-multi'); writeSource(dm)
+      const okMulti = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: dm, expectedGraphVersion: GV, productRoot: multi })
+      assert.equal(okMulti.ok, true, okMulti.why)
+      for (const [label, mut] of BASIS_UNREADABLE) {
+        const root = basisRoot(mut)
+        let cur
+        assert.doesNotThrow(() => { cur = src.currentProductBasis(root, { intentId: 'I-DSSC-01', queueCluster: 'sleep' }) }, `${label}: currentProductBasis 가 던졌다`)
+        assert.deepEqual({ ok: cur.ok, code: cur.code }, { ok: false, code: 'PRODUCT_BASIS_UNREADABLE' }, label)
+        let st
+        assert.doesNotThrow(() => { st = src.readProductGraphState(root) }, `${label}: readProductGraphState 가 던졌다`)
+        assert.equal(st.ok, false, `${label}: 판독 실패를 ok 로 돌려줬다`)
+        // 🔴 bundle 반례는 해시가 맞는 채 구조만 틀렸다 — 해시 불일치가 아니라 구조 판독 실패로 막혀야 한다
+        if (label.startsWith('bundle')) assert.equal(st.code, 'GRAPH_BUNDLE_UNREADABLE', `${label}: ${st.code}`)
+        const d = tmp('b2-bad'); writeSource(d)
+        let r
+        assert.doesNotThrow(() => { r = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV, productRoot: root }) }, `${label}: judge 가 던졌다`)
+        assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('PRODUCT_BASIS_UNREADABLE'), `${label}: ${r.evidence.blockers}`)
+      }
     }],
     ['S06 같은 입력 → 같은 바이트 · 두 번째 write 0', () => {
       const d1 = tmp('idem1'); const d2 = tmp('idem2')
       writeSource(d1); writeSource(d2)
-      const j1 = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d1, expectedGraphVersion: GV })
-      const j2 = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d2, expectedGraphVersion: GV })
+      const j1 = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d1, expectedGraphVersion: GV, productRoot: ROOT })
+      const j2 = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d2, expectedGraphVersion: GV, productRoot: ROOT })
       assert.equal(j1.ok, true, j1.why); assert.equal(j1.spec.specHash, j2.spec.specHash)
       const a = src.persistDirectSpecNoClobber({ spec: j1.spec, draftsDir: d1 })
       const b = src.persistDirectSpecNoClobber({ spec: j2.spec, draftsDir: d2 })
@@ -274,7 +416,7 @@ function sourceCases(src) {
     }],
     ['S07 기존 다른 spec — DIRECT_SPEC_SPEC_CONFLICT · 기존 바이트 보존', () => {
       const d = tmp('conflict'); writeSource(d)
-      const j = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV })
+      const j = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV, productRoot: ROOT })
       assert.equal(j.ok, true, j.why)
       const p = specPathOf(d)
       mkdirSync(dirname(p), { recursive: true })
@@ -282,7 +424,7 @@ function sourceCases(src) {
       const r = src.persistDirectSpecNoClobber({ spec: j.spec, draftsDir: d })
       assert.equal(r.ok, false); assert.equal(r.code, 'DIRECT_SPEC_SPEC_CONFLICT')
       assert.equal(readFileSync(p, 'utf8'), '{"other":"spec"}\n')
-      const v = src.verifyDirectSpecIdentity({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV })
+      const v = src.verifyDirectSpecIdentity({ queueItem: directItem(), draftsDir: d, expectedGraphVersion: GV, productRoot: ROOT })
       assert.equal(v.ok, false); assert.equal(v.code, 'DIRECT_SPEC_SPEC_CONFLICT')
     }],
   ]
@@ -342,7 +484,7 @@ function planCases(plan, lane = real.lane) {
       const t = fetchTargets(readRunTargets({ draftsDir: r.draftsDir, date: TODAY }).targets).find((x) => x.slug === DIRECT_SLUG)
       assert.ok(t, 'direct 행이 원고 회수 대상이 아니다')
       const g = deliveryGate({ slug: DIRECT_SLUG, draftsDir: r.draftsDir, quarantinePath: join(r.draftsDir, 'q.json'), queueItem: t.queueItem,
-        directSourceDeps: { queue: () => [directItem()], expectedGraphVersion: () => GV } })
+        directSourceDeps: { queue: () => [directItem()], expectedGraphVersion: () => GV, productRoot: () => ROOT } })
       assert.equal(g.ok, true, g.why); assert.equal(g.specHash, expected.specHash)
       assert.equal(existsSync(join(r.draftsDir, DIRECT_SLUG, 'brief.md')), false)
     }],
@@ -517,7 +659,7 @@ function sendCases(webui, gateMod = realGate, { record = false } = {}) {
     assert.ok(r.spec, 'plan 이 spec 을 쓰지 못했다 (반례 준비 실패)')
     return r
   }
-  const deps = { queue: () => [directItem()], expectedGraphVersion: () => GV }
+  const deps = { queue: () => [directItem()], expectedGraphVersion: () => GV, productRoot: () => ROOT }
   const meter = (draftsDir, q) => {
     const m = { probe: 0, chrome: 0 }
     const ledgerBefore = existsSync(q) ? readFileSync(q, 'utf8') : null
@@ -655,7 +797,7 @@ function downgradeCases(webui, regen) {
         const r = setup({ brief })
         const base = dirname(r.draftsDir); const q = join(base, 'one-q.json')
         const m = { probe: 0, chrome: 0 }
-        const deps = { queue: queueFn, expectedGraphVersion: () => GV }
+        const deps = { queue: queueFn, expectedGraphVersion: () => GV, productRoot: () => ROOT }
         const log = console.log; const err = console.error
         console.log = () => {}; console.error = () => {}
         let out
@@ -685,7 +827,7 @@ function downgradeCases(webui, regen) {
       const runner = (a) => { seen.push({ packetExists: existsSync(a.packetPath), specHash: a.packet.specHash ?? null }); return { ok: false, why: '시험 runner — 보내지 않는다' } }
       const out = regen.attemptRegeneration({ slug: DIRECT_SLUG, profile: 'STANDARD', failures: [{ code: 'X', label: 't', sentence: '' }], runner,
         quarantinePath: join(base, 'regen-q.json'), packetDir, draftsDir: r.draftsDir,
-        queueItem: queueItemFn ? queueItemFn() : null, directSourceDeps: { queue: queueFn, expectedGraphVersion: () => GV } })
+        queueItem: queueItemFn ? queueItemFn() : null, directSourceDeps: { queue: queueFn, expectedGraphVersion: () => GV, productRoot: () => ROOT } })
       const c = { runner: seen.length, packet: seen.filter((x) => x.packetExists).length, packetResidue: readdirSync(packetDir).length,
         reservation: existsSync(join(base, 'regen-q.json')) && readFileSync(join(base, 'regen-q.json'), 'utf8').includes(DIRECT_SLUG) ? 1 : 0 }
       DOWNGRADE[`attemptRegeneration · ${label}`] = { ...c, code: out.code ?? (out.ok ? 'ok' : null) }
@@ -706,7 +848,7 @@ function downgradeCases(webui, regen) {
     let out
     try {
       out = await webui.fetchOne(LEGACY_SLUG, { quarantinePath: join(base, 'q.json'), draftsDir: d, queueItem: legacyItem(), exit: () => {},
-        directSourceDeps: { queue: () => [], expectedGraphVersion: () => GV }, probeFn: async () => { throw new Error('probe 금지') } })
+        directSourceDeps: { queue: () => [], expectedGraphVersion: () => GV, productRoot: () => ROOT }, probeFn: async () => { throw new Error('probe 금지') } })
     } finally { console.log = log; console.error = err }
     assert.equal(out.result.reason, 'brief_missing')
   }])
@@ -750,7 +892,7 @@ function packetOnlyCases(webui) {
       let out
       try {
         out = await webui.fetchOne(DIRECT_SLUG, { regenPacket: packetPath, draftOut, quarantinePath: q, draftsDir: r.draftsDir,
-          queueItem: qi ? qi() : null, directSourceDeps: { queue, expectedGraphVersion: () => GV }, resultPath: join(base, 'pk-result.json'), exit: () => {},
+          queueItem: qi ? qi() : null, directSourceDeps: { queue, expectedGraphVersion: () => GV, productRoot: () => ROOT }, resultPath: join(base, 'pk-result.json'), exit: () => {},
           probeFn: async () => { m.probe++; return { status: 'DSSC_FAKE_PROBE_STOP' } },
           browserDeps: { connect: async () => { m.chrome++; throw new Error('Chrome 금지') }, ensureTab: async () => { m.chrome++; throw new Error('Chrome 금지') } } })
       } finally { console.log = log; console.error = err }
@@ -837,7 +979,7 @@ function repairCases(repair, webui) {
       let out
       try {
         out = await webui.fetchOne(DIRECT_SLUG, { inputRepair: { type: 'BRIEF_ECHO' }, draftOut, quarantinePath: q, draftsDir: d,
-          queueItem: qi ? qi() : null, directSourceDeps: { queue, expectedGraphVersion: () => GV }, resultPath: join(base, 'ir-result.json'), exit: () => {},
+          queueItem: qi ? qi() : null, directSourceDeps: { queue, expectedGraphVersion: () => GV, productRoot: () => ROOT }, resultPath: join(base, 'ir-result.json'), exit: () => {},
           probeFn: async () => { m.probe++; return { status: 'DSSC_FAKE_PROBE_STOP' } },
           browserDeps: { connect: async () => { m.chrome++; throw new Error('Chrome 금지') }, ensureTab: async () => { m.chrome++; throw new Error('Chrome 금지') } } })
       } finally { console.log = log; console.error = err }
@@ -848,6 +990,59 @@ function repairCases(repair, webui) {
       assert.deepEqual(c, { probe: 0, chrome: 0, reservation: 0, write: 0 })
     }]),
   ]
+}
+
+/**
+ * P1 — 승인 basis drift 를 **실제 소비 경계 다섯 곳**에서 본다. 같은 graphVersion 에서 판만 바꾼다.
+ *    selected(plan) · reusable(plan 2일차) · register(등록 gate) · send(fetchSlug) · regen(attemptRegeneration).
+ */
+const BASIS_COUNTS = {}
+function basisDriftCases(plan, lane, webui, regen) {
+  const wrap = (root) => (a) => real.source.verifyDirectSpecIdentity({ ...a, productRoot: root })
+  const cases = []
+  const plans = [
+    ['판 그대로(대조군)', null, null],
+    ['control 여러 줄·끝 쉼표(정상)', MULTILINE_CONTROL, null],
+    ...BASIS_DRIFTS.map(([l, m]) => [l, m, 'PRODUCT_BASIS_DRIFT']),
+    ...BASIS_UNREADABLE.map(([l, m]) => [l, m, 'PRODUCT_BASIS_UNREADABLE']),
+  ]
+  for (const [label, mut, want] of plans) {
+    cases.push([`P1 basis ${label} — selected · reusable · register · send · regen ${want ? `모두 0 (${want})` : '진행'}`, async () => {
+      const root = basisRoot(mut)
+      // selected
+      const sel = runPlan(plan, { queue: [directItem()], prepare: (d) => writeSource(d) , directSourceFnOverride: wrap(root) })
+      // reusable — 1일차(실제 판)로 spec 을 남긴 뒤 2일차를 바뀐 판으로
+      const d = crashedDay1()
+      const reuse = runPlan(plan, { queue: [directItem()], draftsDir: d, today: TOMORROW, directSourceFnOverride: wrap(root) })
+      const selectedProvider = providerTargets(sel)
+      const reusableProvider = providerTargets(reuse)   // 🔴 regen 용 draft.md 를 쓰기 전에 센다
+      const register = lane.gate(DIRECT_SLUG, [directItem()], d, { productRootFn: () => root }).ok ? 1 : 0
+      // send — 실제 fetchSlug, probe 직전에서 멈추는 가짜 probe
+      let probes = 0
+      const q = join(dirname(d), 'basis-q.json')
+      const deps = { queue: () => [directItem()], expectedGraphVersion: () => GV, productRoot: () => root }
+      const sent = await webui.fetchSlug(DIRECT_SLUG, { quarantinePath: q, draftsDir: d, queueItem: directItem(), quiet: true, dateHint: TODAY,
+        accessFn: async () => { probes++; return { status: 'DSSC_FAKE_PROBE_STOP' } }, directSourceDeps: deps })
+      // regen — 실제 attemptRegeneration, runner 호출 수
+      writeFileSync(join(d, DIRECT_SLUG, 'draft.md'), '---\ntitle: t\n---\n\n## 본문\n\n[CTA] /community/free | t | t\n')
+      let runner = 0
+      const pd = join(dirname(d), 'basis-packets'); mkdirSync(pd, { recursive: true })
+      const rg = regen.attemptRegeneration({ slug: DIRECT_SLUG, profile: 'STANDARD', failures: [{ code: 'X', label: 't', sentence: '' }],
+        runner: () => { runner++; return { ok: false, why: '시험 runner' } }, quarantinePath: join(dirname(d), 'basis-regen-q.json'), packetDir: pd,
+        draftsDir: d, queueItem: directItem(), directSourceDeps: deps })
+      const c = { selectedSpec: sel.spec ? 1 : 0, selectedProvider, reusableProvider, register, sendProbe: probes, regenRunner: runner }
+      BASIS_COUNTS[label] = { ...c, sendReason: sent.reason ?? 'probe', regenCode: rg.code ?? null }
+      if (want) {
+        assert.deepEqual(c, { selectedSpec: 0, selectedProvider: 0, reusableProvider: 0, register: 0, sendProbe: 0, regenRunner: 0 }, `${label}: ${JSON.stringify(c)}`)
+        assert.ok(heldOf(sel)?.directSpec?.blockers.includes(want), `${label}: selected HOLD 사유 ${heldOf(sel)?.directSpec?.blockers}`)
+        assert.ok(heldOf(reuse)?.directSpec?.blockers.includes(want), `${label}: reusable HOLD 사유`)
+        assert.equal(sent.reason, 'DIRECT_SPEC_SOURCE_NOT_READY'); assert.equal(rg.code, 'DIRECT_SPEC_SOURCE_NOT_READY')
+      } else {
+        assert.deepEqual(c, { selectedSpec: 1, selectedProvider: 1, reusableProvider: 1, register: 1, sendProbe: 1, regenRunner: 1 }, `대조군: ${JSON.stringify(c)}`)
+      }
+    }])
+  }
+  return cases
 }
 
 function laneCases(lane) {
@@ -1032,6 +1227,7 @@ const ALL_REAL = [
   ...sendCases(real.webui, realGate, { record: true }), ...reportCases(real.plan),
   ...downgradeCases(real.webui, realRegen), ...reuseReportCases(real.plan),
   ...packetOnlyCases(real.webui), ...repairCases(realRepair, real.webui),
+  ...basisDriftCases(real.plan, real.lane, real.webui, realRegen),
 ]
 for (const [name, fn] of ALL_REAL) {
   try { await fn(); report(true, name) } catch (e) { report(false, name, e.message.split('\n')[0]) }
@@ -1041,6 +1237,8 @@ for (const [k, v] of Object.entries(COUNTS)) console.log(`  ${k.padEnd(28)} prov
 console.log('\n── 실제 전송 경계 (plan 성공 뒤 source 변경) — probe · Chrome · 예약 · write')
 for (const [k, v] of Object.entries(SEND)) console.log(`  ${k.padEnd(28)} probe ${v.probe} · Chrome ${v.chrome} · 예약 ${v.reservation} · write ${v.write}`)
 console.log('\n── persisted direct 강등 차단 — 실제 fetchOne(brief.md 있음) · attemptRegeneration')
+console.log('\n── 승인 basis drift — selected · reusable · register · send · regen')
+for (const [k, v] of Object.entries(BASIS_COUNTS)) console.log(`  ${k.padEnd(20)} ${JSON.stringify(v)}`)
 for (const [k, v] of Object.entries(DOWNGRADE)) console.log(`  ${k.padEnd(40)} ${JSON.stringify(v)}`)
 console.log('\n── packet-only direct · fetchOne(--regen-packet)')
 for (const [k, v] of Object.entries(PACKET_ONLY)) console.log(`  ${k.padEnd(36)} ${JSON.stringify(v)}`)
@@ -1056,7 +1254,8 @@ const MUTATIONS = [
   ['plan', 'MP1', 'run.json directSpec 신원 제거', '        ...(directReady.has(i.slug) ? { directSpec: directSpecRow(directReady.get(i.slug), directPersisted.get(i.slug)) } : {}),\n', ''],
   ['plan', 'MP2', 'direct 행에 legacy brief 재료를 놓는다', '        if (directReady.has(item.slug)) continue\n', ''],
   ['plan', 'MP3', 'selected direct source 판정 우회', 'if (mode.mode !== DIRECT_SPEC_MODE || ready.has(item.slug)) continue', 'continue'],
-  ['plan', 'MP4', 'expected graphVersion 전달 제거', 'return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT })', 'return directSourceFn({ queueItem, draftsDir, repoRoot: REPO_ROOT })'],
+  ['plan', 'MP4', 'expected graphVersion 전달 제거', 'return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT, productRoot: REPO_ROOT })', 'return directSourceFn({ queueItem, draftsDir, repoRoot: REPO_ROOT, productRoot: REPO_ROOT })'],
+  ['plan', 'MP16', 'plan 이 승인 basis 제품 루트를 넘기지 않는다 (P1 call-site)', 'return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT, productRoot: REPO_ROOT })', 'return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT })'],
   ['plan', 'MP5', 'spec 저장 제거', 'const p = persistSpecFn({ spec: j.spec, draftsDir })', 'const p = { ok: true, written: false }'],
   ['plan', 'MP6', 'NOT_READY HOLD 기록 제거', 'const held = [...directHeld]', 'const held = []'],
   ['plan', 'MP7', '모르는 mode 를 legacy 로 묻는다', "if (!mode.ok) { drop.push({ day: item.day, slug: item.slug, code: mode.code, why: mode.why }); continue }", 'if (!mode.ok) continue'],
@@ -1075,10 +1274,18 @@ const MUTATIONS = [
   ['source', 'MS6', '기존 spec 을 덮어쓴다', 'if (existsSync(path)) return sameOrConflict()', 'if (existsSync(path)) unlinkSync(path)'],
   ['source', 'MS7', 'STANDARD 검사 제거', "if (!lane.ok || lane.profile !== DIRECT_SPEC_CANARY_PROFILE) blockers.push('PROFILE_NOT_STANDARD')", ''],
   ['source', 'MS8', '운영 fixture 를 제품 코드에서 import', "import { createHash } from 'node:crypto'", "import { createHash } from 'node:crypto'\nimport '../__fixtures__/magazine/direct-spec/canary.input.json' with { type: 'json' }"],
-  ['source', 'MS9', 'REQUIRED hero alt·scene 검사 제거', "  if (queueItem?.imageMode === 'REQUIRED') {", '  if (false) {'],
+  ['source', 'MS9', 'hero alt·scene 검사 제거', '  if (heroRequired(queueItem?.imageMode)) {', '  if (false) {'],
+  ['source', 'MS12', '소비 관문이 OPTIONAL hero 를 요구하지 않는다 (P1)', "  return imageMode === 'REQUIRED' || imageMode === 'OPTIONAL'", "  return imageMode === 'REQUIRED'"],
+  ['source', 'MS13', '승인 basis exact-match 제거 (P1)', "      else if (canonicalJson(entry.productBasis) !== canonicalJson(b)) blockers.push('PRODUCT_BASIS_DRIFT')\n", ''],
+  ['source', 'MS15', 'control 파싱 예외를 다시 던진다 (P1)', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", "  raw = evalLiteral(literal, 'control.ts')"],
+  ['source', 'MS17', 'bundle 구조 검증 제거 (P1 — intents null 이 TypeError 로 번진다)', "  if (!graphBundleShapeOk(graph)) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'", "  if (false) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'"],
+  ['source', 'MS16', 'control 필드 형식 검증 제거 (P1)', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", ''],
+  ['source', 'MS14', 'productRoot 없을 때 통과 (P1 fail-closed 제거)', "  if (!productRoot) blockers.push('PRODUCT_BASIS_UNVERIFIED')", '  if (!productRoot) {}'],
   ['source', 'MS10', 'NO_IMAGE hero 금지 검사 제거', "  if (heroForbidden(entry, queueItem)) blockers.push('HERO_FORBIDDEN')\n", ''],
   ['source', 'MS11', '기존 spec 바이트 대조 제거 (재사용 신원)', "  if (existing.state === 'CONFLICT') {", '  if (false) {'],
-  ['lane', 'MA1', '등록 gate 의 source 신원 검사 제거 (P0)', 'const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion: expectedGraphVersionFn() })', "const v = { ok: true, existing: 'IDENTICAL' }"],
+  ['lane', 'MA1', '등록 gate 의 source 신원 검사 제거 (P0)', 'const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion: expectedGraphVersionFn(), productRoot: productRootFn() })', "const v = { ok: true, existing: 'IDENTICAL' }"],
+  ['lane', 'MA2', '등록 gate 가 승인 basis 제품 루트를 넘기지 않는다 (P1 call-site)', 'expectedGraphVersion: expectedGraphVersionFn(), productRoot: productRootFn() })', 'expectedGraphVersion: expectedGraphVersionFn() })'],
+  ['gate', 'MD2', '전송 관문이 승인 basis 제품 루트를 넘기지 않는다 (P1 call-site)', '      productRoot: deps.productRoot?.() ?? null })', '      productRoot: null })'],
   ['gate', 'MD1', '전송 경계의 source 재검증 제거 (P0)', '    const sendable = sourceCheck()\n    if (!sendable.ok) return blocked(sendable)', '    const sendable = { ok: true }'],
   ['gate', 'MG1', 'persisted direct 신원 라우팅 제거 — 큐 삭제·철회 모두 legacy 강등 (P0)', 'if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {', 'if (resolved.mode === DIRECT_SPEC_MODE) {'],
   ['gate', 'MG2', '큐 삭제(queueItem=null)만 legacy 강등 (P0)', 'if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {', 'if (resolved.mode === DIRECT_SPEC_MODE || (queueItem && persistedDirectIdentity({ slug, draftsDir, packet }))) {'],
@@ -1140,13 +1347,13 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
       }
       const webuiForGate = companion ? await imp(companion) : null
       if (companion) unlinkSync(companion)
-      const cases = kind === 'gate' ? [...sendCases(webuiForGate, mod), ...downgradeCases(webuiForGate, regenForGate), ...packetOnlyCases(webuiForGate)]
+      const cases = kind === 'gate' ? [...sendCases(webuiForGate, mod), ...downgradeCases(webuiForGate, regenForGate), ...packetOnlyCases(webuiForGate), ...basisDriftCases(real.plan, real.lane, webuiForGate, regenForGate)]
         : kind === 'regen' ? downgradeCases(real.webui, mod)
         : kind === 'repair' ? repairCases(mod, real.webui)
         : kind === 'plan' ? [...planCases(mod), ...reportCases(mod), ...reuseReportCases(mod)]
         : kind === 'brief' ? [...briefCases(mod), ...await flowCases(real.flow, real.plan, mod)]
           : kind === 'flow' ? await flowCases(mod, real.plan, real.brief)
-            : kind === 'lane' ? [...laneCases(mod), ...reuseCases(real.plan, mod)]
+            : kind === 'lane' ? [...laneCases(mod), ...reuseCases(real.plan, mod), ...basisDriftCases(real.plan, mod, real.webui, realRegen)]
               : kind === 'notify' ? notifyCases(mod, real.webui)
                 : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen), ...packetOnlyCases(mod), ...repairCases(realRepair, mod)]
                   : sourceCases(mod)
@@ -1162,6 +1369,27 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
   const changed = Object.entries(PATHS).filter(([k, p]) => readFileSync(p, 'utf8') !== ORIGINAL[k]).map(([k]) => k)
   const residue = ['scripts', 'scripts/lib'].flatMap((d) => readdirSync(join(ROOT, d)).filter((f) => f.startsWith('.dssc-')))
   report(changed.length === 0 && residue.length === 0, '변이 뒤 원본 바이트 불변 · 임시 사본 잔여 0', [...changed, ...residue].join(', '))
+}
+
+/**
+ * 🔴 **부속 검사 — source 작성(prepare · approve)** (2026-10-15).
+ *    승인 artifact 를 만드는 상류 절차의 반례·변이를 같은 CI 경로에서 돌린다.
+ *    두 부속 검사의 성공을 pass 에 **각각** 센다 — 이 블록이 통째로 사라지면 합계가 줄어 상위 검사
+ *    (magazine-auto-register-check 의 exact 합계 · 두 요약 표식)가 실패한다.
+ */
+{
+  const { spawnSync } = await import('node:child_process')
+  for (const [file, marker] of [
+    ['scripts/magazine-direct-spec-source-authoring-check.mjs', /DIRECT_SPEC source 작성 검사: \d+ pass, 0 fail/],
+    ['scripts/magazine-direct-spec-source-authoring-mutation.mjs', /DIRECT_SPEC source 작성 변이: \d+ pass, 0 fail/],
+  ]) {
+    const r = spawnSync(process.execPath, [join(ROOT, file)], { encoding: 'utf8', maxBuffer: 1e8, env: process.env })
+    const ok = r.status === 0 && marker.test(r.stdout)
+    const summary = (r.stdout.match(/DIRECT_SPEC source 작성 (?:검사|변이): .*$/m) ?? ['요약 없음'])[0]
+    console.log(`${ok ? 'PASS' : 'FAIL'} 부속 ${file} — ${summary}`)
+    if (ok) pass++
+    else fail++
+  }
 }
 
 console.log(`\nDIRECT_SPEC source 관문: ${pass} pass, ${fail} fail (실제 반례 ${realPass} pass · ${realFail} fail)`)
