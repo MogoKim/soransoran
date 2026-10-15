@@ -702,6 +702,7 @@ jobs:
           npm run micro-seed:navercafe-check
           npm run persona:voice-evidence-check
           npm run persona:reference-supplement-check
+          npm run persona:voice-consumer-check
 
       # 🔴 **실제 OS 프로세스 2개로 락 경쟁을 붙인다.**
       #    `unlinkSync(LOCK_PATH)` 는 소스에 멀쩡히 있고 문법도 맞았다 —

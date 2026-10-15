@@ -10,7 +10,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
-import { loadCanonAsset, planBundles } from './persona-reference-store.mjs'
+import { loadCanonAsset, stableAssignment } from './persona-reference-store.mjs'
 import { PRODUCTION_PERSONA_CODES } from '../../src/lib/persona-cohort'
 import { parsePoolDoc, type PoolCard } from '../../src/lib/persona-pool-card'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
@@ -77,8 +77,19 @@ export function loadVoice(now?: Date): VoiceRuntime {
   if (!asset.ok || asset.rows.length === 0) {
     return blocked('voiceAssetMissing', `말투 근거 정본을 읽지 못했다 (${asset.code})`)
   }
-  const plan = planBundles({ rows: asset.rows, personaCodes: PRODUCTION_PERSONA_CODES })
-  const bundleOf = new Map<string, VoiceReferenceBundle>(plan.bundles.map((b) => [b.personaCode, b]))
+  /**
+   * 🔴 **글 생성도 댓글과 같은 배정 정본(`stableAssignment`)을 쓴다** (2026-10-15 · D20 canary).
+   *    앞판은 여기서 `planBundles(정본 행, PRODUCTION_PERSONA_CODES)` 를 따로 계산해 보충 스냅샷(동결 묶음)을 몰랐다 —
+   *    40명으로 승격하면 정본에서 화자를 받는 2명만 글을 쓰고 보충 묶음 8명은 글쓴이 후보에서 빠졌다(댓글은 40명 전원).
+   *    스냅샷이 없으면 production 30명 배정은 앞판과 바이트까지 같다. 스냅샷이 손상되면 새 코드만 빠진다(fail-closed).
+   */
+  const plan = stableAssignment({ repoRoot: process.cwd() })
+  const bundleOf = new Map<string, VoiceReferenceBundle>(
+    PRODUCTION_PERSONA_CODES.flatMap((code) => {
+      const bundle = plan.byCode.get(code)
+      return bundle === undefined ? [] : [[code, bundle] as const]
+    }),
+  )
 
   // 🔴 정본 카드 — 여기서 Persona 를 만들지 않는다. 문서가 정본이다
   let cards: PoolCard[] = []
