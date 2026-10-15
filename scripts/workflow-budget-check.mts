@@ -42,6 +42,7 @@ const check = (n: string, ok: boolean): void => {
 const WF = '.github/workflows/visibility-guard.yml'
 const yml = read(WF)
 const lines = yml.split('\n')
+const d100DbRunner = read('scripts/ci-d100-db-check.sh')
 
 /** 🔴 주석을 판정 근거로 쓰지 않는다 — 주석에 적힌 `cron:` 이 트리거로 읽히면 안 된다 */
 const code = lines.filter((l) => !/^\s*#/.test(l))
@@ -101,9 +102,14 @@ const scopeBlock = lines
   .join('\n')
 
 check('🔴 기본값이 heavy=true 다 — 모르면 돌린다', /^\s*heavy=true\s*$/m.test(scopeBlock))
+check('🔴 기본값이 magazine=true 다 — 모르면 매거진 관문을 돌린다', /^\s*magazine=true\s*$/m.test(scopeBlock))
+check('🔴 기본값이 d100_db=true 다 — 모르면 격리 DB를 돌린다', /^\s*d100_db=true\s*$/m.test(scopeBlock))
 check('🔴 heavy=false 는 한 곳에서만 난다 — 빠져나갈 구멍이 하나여야 읽을 수 있다',
   (scopeBlock.match(/^\s*heavy=false\s*$/gm) ?? []).length === 1)
 check('🔴 판정 결과를 출력으로 넘긴다', /echo "heavy=\$heavy" >> "\$GITHUB_OUTPUT"/.test(scopeBlock))
+check('🔴 도메인 판정 결과도 출력으로 넘긴다',
+  /echo "magazine=\$magazine" >> "\$GITHUB_OUTPUT"/.test(scopeBlock)
+  && /echo "d100_db=\$d100_db" >> "\$GITHUB_OUTPUT"/.test(scopeBlock))
 /**
  * 🔴 `set -e` 가 있으면 diff 실패가 job 을 죽인다. 그건 fail-closed 가 아니라 fail-stop 이다.
  *    판정에 실패하면 **무거운 쪽으로 남아야** 한다.
@@ -118,6 +124,7 @@ check('🔴 diff 를 낼 수 있게 fetch-depth: 0 이다', /fetch-depth: 0/.tes
  */
 check('🔴 허용 목록(ALLOW)이 판정 step 안에 있다', /^\s*ALLOW='/m.test(scopeBlock))
 check('🔴 금지 목록(DENY)이 판정 step 안에 있다', /^\s*DENY='/m.test(scopeBlock))
+check('🔴 정본 문서 경량 목록(AUTHORITY)이 판정 step 안에 있다', /^\s*AUTHORITY='/m.test(scopeBlock))
 check('🔴 허용과 금지를 둘 다 세어서 본다 — 허용만으로는 부족하다',
   /grep -cE "\$ALLOW"/.test(scopeBlock) && /grep -cE "\$DENY"/.test(scopeBlock))
 /** 🔴 금지에 하나라도 걸리면 무겁다 — 개수가 0 일 때만 내려간다 */
@@ -144,7 +151,7 @@ const HEAVY_STEPS: readonly { script: string; sec: number }[] = [
   { script: 'scale:foundation-check', sec: 11.9 },
 ]
 
-const GATE = `steps.${SCOPE_ID}.outputs.heavy == 'true'`
+const GATE = `needs.${SCOPE_ID}.outputs.heavy == 'true'`
 
 /** 어떤 step 의 `run:` 이 그 스크립트를 부르는가 — 그 step 이 게이트를 갖는가 */
 function stepIsGated(script: string): boolean {
@@ -221,34 +228,30 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *       `micro-seed:safety-check` 를 무조건으로 둔 것과 같은 이유다.
  *
  * 🔴 68 → 69 (2026-09-21). 목록 쪽 이동 경계값 fixture 1 개를 무조건 실행으로 더했다.
- * 🔴 69 → 70 (2026-09-24, M3-A). `check:m3a` 1 개를 **무조건 실행**으로 더했다.
- *    heavy 조건에 넣지 않은 이유: 이 관문이 무너지면 자동 공급이 통째로 멈추거나
- *    반대로 검증 없이 나간다. 둘 다 조용히 지나가면 안 되는 일이라 경로와 무관하게 돈다.
- *    🔴 상한을 올린 것은 **이 한 개 때문**이다. 다음에 또 올리려면 같은 크기의 근거를 적는다.
- *    실측 0.19 초(3 회 · 0.20 / 0.18 / 0.19). 지금까지 더한 어느 무조건 step 보다 싸고
- *    DB · 네트워크 · write 가 0 이다 — `src/lib/list-query.ts` 는 import 가 하나도 없다.
- *
- *    🔴 **경로 조건 뒤로 보내지 않는다.** 이 검사를 깨뜨리는 PR 이 두 종류이기 때문이다 —
- *       `list-query.ts` · `queries/posts.ts` 를 고치는 **서버 경로 PR** 과,
- *       `Pagination.tsx` 만 고치는 **화면 전용 PR** 이다.
- *       경로 조건은 후자에서 생략되는데, 이 fixture 의 aria-current 가드는
- *       바로 그 화면 전용 PR 이 깨뜨리는 것이다. 한쪽만 보면 가드가 절반만 닫힌다.
+ * 🔴 2026-10-15: M3-A와 격리 DB 사슬을 별도 병렬 job으로 옮겼다.
+ *    core 상한은 이동 뒤 실측값 68로 다시 잠근다. 도메인 job의 존재·조건·최종 집계는
+ *    바로 아래 ⑤에서 별도로 검증하므로 병렬화가 검사 누락 통로가 되지 않는다.
  */
-const MAX_UNCONDITIONAL_STEPS = 70
+const MAX_UNCONDITIONAL_STEPS = 68
+
+const coreStart = lines.findIndex((l) => /^  core:\s*$/.test(l))
+const coreEnd = lines.findIndex((l, i) => i > coreStart && /^  [a-zA-Z0-9_-]+:\s*$/.test(l))
+const coreLines = lines.slice(coreStart, coreEnd < 0 ? lines.length : coreEnd)
+check('🔴 core job 범위를 읽을 수 있다', coreStart >= 0 && coreLines.length > 0)
 
 let total = 0
 let gated = 0
-for (let i = 0; i < lines.length; i += 1) {
-  if (!/^      - (name|uses):/.test(lines[i] ?? '')) continue
+for (let i = 0; i < coreLines.length; i += 1) {
+  if (!/^      - (name|uses):/.test(coreLines[i] ?? '')) continue
   total += 1
-  const end = lines.findIndex((l, j) => j > i && /^      - (name|uses):/.test(l))
-  const block = lines.slice(i, end < 0 ? lines.length : end)
+  const relativeEnd = coreLines.findIndex((l, j) => j > i && /^      - (name|uses):/.test(l))
+  const block = coreLines.slice(i, relativeEnd < 0 ? coreLines.length : relativeEnd)
   if (block.some((l) => l.includes(GATE))) gated += 1
 }
 const unconditional = total - gated
 
-console.log(`  step ${total} 개 · 경로 조건 뒤 ${gated} 개 · 무조건 ${unconditional} 개 (상한 ${MAX_UNCONDITIONAL_STEPS})`)
-check(`🔴 무조건 실행 step 이 ${MAX_UNCONDITIONAL_STEPS} 개 이하다`,
+console.log(`  core step ${total} 개 · 경로 조건 뒤 ${gated} 개 · 무조건 ${unconditional} 개 (상한 ${MAX_UNCONDITIONAL_STEPS})`)
+check(`🔴 core 무조건 실행 step 이 ${MAX_UNCONDITIONAL_STEPS} 개 이하다`,
   unconditional <= MAX_UNCONDITIONAL_STEPS)
 check('🔴 경로 조건 뒤에 있는 step 이 실제로 있다 (게이트가 통째로 사라지지 않았다)',
   gated >= HEAVY_STEPS.length)
@@ -258,6 +261,76 @@ check('🔴 경로 조건 뒤에 있는 step 이 실제로 있다 (게이트가 
  *    거기서는 `|| echo` 하나가 preflight 의 **모든** 실패를 초록으로 바꿨다.
  */
 check('🔴 continue-on-error 가 없다', !/continue-on-error/.test(yml))
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑤ 느린 도메인 검사가 병렬 job으로 분리돼 있다')
+// ─────────────────────────────────────────────────────────
+const jobBlock = (id: string): string => {
+  const start = lines.findIndex((l) => new RegExp(`^  ${id}:\\s*$`).test(l))
+  if (start < 0) return ''
+  const end = lines.findIndex((l, i) => i > start && /^  [a-zA-Z0-9_-]+:\s*$/.test(l))
+  return lines.slice(start, end < 0 ? lines.length : end).join('\n')
+}
+
+const scopeJob = jobBlock('scope')
+const coreJob = jobBlock('core')
+const magazineJob = jobBlock('magazine')
+const d100DbJob = jobBlock('d100-db')
+const resultJob = jobBlock('result')
+
+check('🔴 scope job 이 세 판정을 job output으로 공개한다',
+  /heavy: \$\{\{ steps\.scope\.outputs\.heavy \}\}/.test(scopeJob)
+  && /magazine: \$\{\{ steps\.scope\.outputs\.magazine \}\}/.test(scopeJob)
+  && /d100_db: \$\{\{ steps\.scope\.outputs\.d100_db \}\}/.test(scopeJob))
+check('🔴 core job 은 scope 뒤에서 실행된다', /needs: scope/.test(coreJob))
+check('🔴 M3-A는 매거진 전용 job에서만 실행된다',
+  /if: needs\.scope\.outputs\.magazine == 'true'/.test(magazineJob)
+  && /npm run check:m3a/.test(magazineJob)
+  && !/npm run check:m3a/.test(coreJob))
+check('🔴 D100 DB 사슬은 전용 job에서만 실행된다',
+  /if: needs\.scope\.outputs\.d100_db == 'true'/.test(d100DbJob)
+  && /bash scripts\/ci-d100-db-check\.sh/.test(d100DbJob)
+  && !/ci-d100-db-check/.test(coreJob))
+const EXPECTED_D100_DB_COMMANDS = [
+  'stage:db-check',
+  'ops:loop-db-check',
+  'stage:evidence-db-check',
+  'stage:proof-day-db-check',
+  'auto-ready:db-check',
+  'auto-ready:evidence-db-check',
+  'auto-ready:quality-db-check',
+  'publish:slot-db-check',
+  'publish:heartbeat-db-check',
+  'supply:stock-parity-db-check',
+  'publish:lane-fairness-db-check',
+  'supply:wip-contract-db-check',
+  'supply:draft-deferral-e2e-db-check',
+  'check:draft-life-gates-db',
+  'auto-ready:audit-db-check',
+  'auto-ready:audit-day-db-check',
+  'auto-ready:defect-resolution-db-check',
+  'check:comment-thread-db',
+  'persona:comment-loop-db-check',
+  'persona:followup-db-check',
+  'persona:autogen-db-check',
+  'persona:creative-db-check',
+  'persona:remediation-db-check',
+] as const
+const wiredD100DbCommands = [...d100DbRunner.matchAll(/^npm run (\S+)\s*$/gm)].map((m) => m[1])
+check('🔴 D100 DB 명령 23개가 이동 전과 같은 순서로 모두 남아 있다',
+  JSON.stringify(wiredD100DbCommands) === JSON.stringify(EXPECTED_D100_DB_COMMANDS))
+check('🔴 D100 DB runner는 격리 주소만 만들고 종료 때 컨테이너를 정리한다',
+  /SORAN_ISOLATED_DB=yes-throwaway/.test(d100DbRunner)
+  && /trap cleanup EXIT/.test(d100DbRunner)
+  && /postgres:17/.test(d100DbRunner))
+check('🔴 required-check 이름은 최종 집계 job이 유지한다',
+  /name: Micro Seed 3축 게이트/.test(resultJob)
+  && /needs: \[scope, core, magazine, d100-db\]/.test(resultJob)
+  && /if: always\(\)/.test(resultJob))
+check('🔴 최종 집계는 core 실패와 선택 job 실패를 삼키지 않는다',
+  /test "\$CORE_RESULT" = success/.test(resultJob)
+  && /success\|skipped/.test(resultJob)
+  && !/continue-on-error/.test(resultJob))
 
 /**
  * 🔴 **생략하면 안 되는 검사** — 배선이 지워지거나 경로 조건 뒤로 밀리면 여기서 빨개진다.
@@ -293,7 +366,7 @@ for (const cmd of MUST_RUN_ALWAYS) {
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑤ 화면 전용 판정이 실제 경로에서 맞는다')
+console.log('\n⑥ 화면 전용 판정이 실제 경로에서 맞는다')
 // ─────────────────────────────────────────────────────────
 /**
  * 🔴 **패턴을 여기 다시 적지 않는다.** 워크플로우에서 그대로 꺼내 쓴다 —
@@ -311,14 +384,24 @@ const grab = (name: string): RegExp | null => {
 }
 const ALLOW = grab('ALLOW')
 const DENY = grab('DENY')
+const AUTHORITY = grab('AUTHORITY')
+const SHARED = grab('SHARED')
+const MAGAZINE = grab('MAGAZINE')
+const D100_DB = grab('D100_DB')
+const SAFE_NO_MAGAZINE = grab('SAFE_NO_MAGAZINE')
+const SAFE_NO_D100_DB = grab('SAFE_NO_D100_DB')
 check('🔴 허용 패턴(ALLOW)을 워크플로우에서 읽어 올 수 있다', ALLOW !== null)
 check('🔴 금지 패턴(DENY)을 워크플로우에서 읽어 올 수 있다', DENY !== null)
+check('🔴 정본 문서 패턴(AUTHORITY)을 워크플로우에서 읽어 올 수 있다', AUTHORITY !== null)
+check('🔴 도메인 판정 패턴을 워크플로우에서 읽어 올 수 있다',
+  SHARED !== null && MAGAZINE !== null && D100_DB !== null
+  && SAFE_NO_MAGAZINE !== null && SAFE_NO_D100_DB !== null)
 
-if (ALLOW !== null && DENY !== null) {
+if (ALLOW !== null && DENY !== null && AUTHORITY !== null) {
   /** 워크플로우의 계수 비교와 같은 규칙 — 전부 허용에 들고, 금지에 하나도 안 걸려야 화면 전용이다 */
   const isLight = (files: readonly string[]): boolean =>
     files.length > 0
-    && files.every((f) => ALLOW.test(f))
+    && files.every((f) => ALLOW.test(f) || AUTHORITY.test(f))
     && !files.some((f) => DENY.test(f))
 
   const CASES: readonly { light: boolean; why: string; files: readonly string[] }[] = [
@@ -326,7 +409,7 @@ if (ALLOW !== null && DENY !== null) {
     //    d10:prep-check 가 MASTER-OPERATING-SYSTEM.md 를, scale:foundation-check 가
     //    persona-pool-design.md 를 읽는다. 문서만 고쳤다고 건너뛰면 그 검사를 건너뛴다.
     { light: false, why: '운영 정본 문서', files: ['docs/operations/MASTER-OPERATING-SYSTEM.md'] },
-    { light: false, why: '분기 목표 문서', files: ['docs/operations/CURRENT-MILESTONE.md'] },
+    { light: true, why: '분기 목표 정본 문서', files: ['docs/operations/CURRENT-MILESTONE.md'] },
     { light: false, why: '문서 여러 개', files: ['docs/operations/NORTH-STAR.md', 'README.md'] },
 
     // 🔴 서버·쓰기 경로 — src/app 아래에 있어도 화면이 아니다
@@ -386,7 +469,7 @@ if (ALLOW !== null && DENY !== null) {
     // 🔴 섞이면 무겁다 — 화면 파일이 같이 있다고 가벼워지지 않는다
     { light: false, why: '화면 + API 혼합', files: ['src/app/page.tsx', 'src/app/api/example/route.ts'] },
     { light: false, why: '화면 + server action 혼합', files: ['src/components/ui/Button.tsx', 'src/lib/actions/scraps.ts'] },
-    { light: false, why: '화면 + 문서 혼합', files: ['src/app/page.tsx', 'docs/operations/CURRENT-MILESTONE.md'] },
+    { light: true, why: '화면 + 정본 문서 혼합', files: ['src/app/page.tsx', 'docs/operations/CURRENT-MILESTONE.md'] },
     { light: false, why: '화면 + 공용 lib', files: ['src/app/page.tsx', 'src/lib/collect-schedule.ts'] },
 
     // 🔴 영향 범위가 넓은 것들
@@ -430,6 +513,58 @@ if (ALLOW !== null && DENY !== null) {
     const block = lines.slice(start, end < 0 ? lines.length : end)
     check('🔴 M-GRAPH 가드는 heavy 조건 뒤에 있다 (화면 전용 PR 에 tsc 를 더하지 않는다)',
       block.some((l) => l.includes(GATE)))
+  }
+}
+
+if (AUTHORITY !== null && SHARED !== null && MAGAZINE !== null && D100_DB !== null
+  && SAFE_NO_MAGAZINE !== null && SAFE_NO_D100_DB !== null) {
+  const classifyDomains = (files: readonly string[]): { magazine: boolean; d100Db: boolean } => {
+    if (files.length === 0) return { magazine: true, d100Db: true }
+    const shared = files.some((f) => SHARED.test(f))
+    const magazineHit = files.some((f) => MAGAZINE.test(f))
+    const d100DbHit = files.some((f) => D100_DB.test(f))
+    const safeNoMagazine = files.every((f) => SAFE_NO_MAGAZINE.test(f) || AUTHORITY.test(f))
+    const safeNoD100Db = files.every((f) => SAFE_NO_D100_DB.test(f) || AUTHORITY.test(f))
+    return {
+      magazine: !(!shared && !magazineHit && safeNoMagazine),
+      d100Db: !(!shared && !d100DbHit && safeNoD100Db),
+    }
+  }
+
+  const DOMAIN_CASES: readonly {
+    files: readonly string[]
+    magazine: boolean
+    d100Db: boolean
+    why: string
+  }[] = [
+    { files: ['docs/operations/CURRENT-MILESTONE.md'], magazine: false, d100Db: false, why: '운영 정본 문서' },
+    {
+      files: [
+        'docs/decisions/persona-comment-followup.md',
+        'docs/operations/2026-09-21-d100-goal-canon.md',
+        'docs/operations/CURRENT-MILESTONE.md',
+        'docs/operations/NORTH-STAR.md',
+        'scripts/lib/active-doc-authority.mts',
+        'scripts/master-operating-doc-check.mts',
+      ],
+      magazine: false,
+      d100Db: false,
+      why: 'PR #729과 같은 정본 동기화',
+    },
+    { files: ['src/app/page.tsx'], magazine: false, d100Db: false, why: '일반 화면' },
+    { files: ['scripts/magazine-m3a-check.mjs'], magazine: true, d100Db: false, why: '매거진 전용' },
+    { files: ['scripts/auto-ready-check.mts'], magazine: false, d100Db: true, why: 'D100 DB 전용' },
+    { files: ['scripts/magazine-m3a-check.mjs', 'scripts/auto-ready-check.mts'], magazine: true, d100Db: true, why: '두 도메인 혼합' },
+    { files: ['package-lock.json'], magazine: true, d100Db: true, why: '공용 의존성' },
+    { files: ['prisma/schema.prisma'], magazine: true, d100Db: true, why: '공용 DB 스키마' },
+    { files: ['.github/workflows/visibility-guard.yml'], magazine: true, d100Db: true, why: '워크플로우 자신' },
+    { files: ['unknown/new-system.ts'], magazine: true, d100Db: true, why: '미분류 경로' },
+    { files: [], magazine: true, d100Db: true, why: '빈 목록' },
+  ]
+  for (const c of DOMAIN_CASES) {
+    const got = classifyDomains(c.files)
+    check(`🔴 도메인 판정 ${c.why} — magazine=${c.magazine} d100Db=${c.d100Db}`,
+      got.magazine === c.magazine && got.d100Db === c.d100Db)
   }
 }
 
