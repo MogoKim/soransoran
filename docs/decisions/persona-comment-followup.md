@@ -1,6 +1,6 @@
 # 글당 Persona 댓글 1~5 — 첫 댓글 뒤 선택적 추가 댓글(0~4)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 상태: **code PASS · 기본 OFF · D10 bounded canary 승인** (운영 env 0 · E5 미실행)
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-15 운영 확인 · 상태: **code PASS · deployed PASS · D10 bounded canary 운영 대기**
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
@@ -8,9 +8,11 @@
 - 자동 글마다 60분 안 첫 댓글 1건 계약과 provenance는 **그대로**다. 첫 댓글 경로는 한 바이트도 다르게 돌지 않는다
   (첫 댓글 프롬프트 바이트 동일 · 첫 댓글 격리 DB 검사 39/39 · 단계 증거 격리 DB 검사 81/81).
 - 첫 댓글 뒤 **아직 답이 없는 질문·반론·경험·공감**이 있을 때만 Persona 댓글을 한 건씩, 시간차를 두고 잇는다. 글당 Persona 총 5건이 상한이다.
-- 러너 · 발행 트랜잭션 · 장부 · 단계 증거 분리 · CI 까지 **실행 경로가 연결됐다.** 그러나 스위치 `SORAN_PERSONA_COMMENT_FOLLOWUP` 와
-  profile 경로 `SORAN_PERSONA_COMMENT_FOLLOWUP_PROFILE` 은 **어디에도 설정하지 않았다** — 스위치가 꺼져 있으면 추가 댓글 단계는 DB 읽기도 0 이다.
-- event-wake(`SORAN_EVENT_WAKE`)·launchd·runtime·운영 DB·운영 env 변경 0.
+- 러너 · 발행 트랜잭션 · 장부 · 단계 증거 분리 · CI 까지 **실행 경로가 연결됐다.** 보조 Mac runtime `6f28fc3`에는
+  E6 consumer 경유 plist, 스위치 `on`, 승인된 D10 profile이 설치돼 있다.
+- 2026-10-15 현재 공개 단계는 `d3`이므로 profile 단계가 일치하지 않아 추가 댓글은 0건이 정상이다. 첫 D10 자연 회차에서
+  code PASS와 deployed PASS가 실제 1~5개 대화로 이어지는지 operating PASS를 판정한다.
+- `SORAN_EVENT_WAKE`는 계속 unset(OFF)이다. D20 이상 profile은 아직 승인·설치되지 않았다.
 
 ## 1. 실행 경로
 
@@ -102,8 +104,8 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 | E2 | 발행 트랜잭션 추가 댓글 레인 | ✅ 이 PR(기본 OFF) |
 | E3 | 홈·베스트 랭킹의 Persona 댓글 합산 분리(Batch F · C-03) | ✅ #706 (main · Production) — 홈 인기 신호는 실회원 사람 수 · Persona·운영 댓글 제외 · 비회원 상한 3. `/best`(best-v2)는 원래 실회원 전용이라 변경 없음 |
 | E4 | North Star 와 병렬인 제한 canary 정책 · D10 profile 사람 승인 | ✅ 2026-10-14 창업자 승인. Persona·운영자 활동은 North Star 에서 제외하고 첫 댓글·실회원·비용·중복·감사·kill switch·rollback 불변 |
-| E5 | 런타임 반영 — 보조 Mac runtime 배포 · 댓글 러너 plist 재설치 · env 2개 · profile 파일 | ❌ 미실행 · 아래 승인 절차로만 적용 |
-| E6 | 댓글 러너를 consumer(`stage-consume-exec --by=comment`) 경유로 | ✅ 이 PR — 템플릿 · consumer 종류 `comment` · 스위치 OFF 면 consumer 결정 읽기 0 · 오늘 결정만(`followupStageOf`). **설치된 plist 는 아직 옛 모양**이다 — E5 배포·재설치 때 바뀐다 |
+| E5 | 런타임 반영 — 보조 Mac runtime 배포 · 댓글 러너 plist 재설치 · env 2개 · profile 파일 | ✅ 2026-10-15 확인 — runtime `6f28fc3`, E6 plist, switch ON, D10 profile 설치. D10 자연 회차 operating 증거는 대기 |
+| E6 | 댓글 러너를 consumer(`stage-consume-exec --by=comment`) 경유로 | ✅ 코드·설치 모두 확인 — `stage-consume-exec --by=comment` 뒤 `persona-comment-loop --live`. 스위치 OFF면 consumer 결정 읽기 0 · 오늘 결정만(`followupStageOf`) |
 
 ## 8. 추가 발견 · 제안
 
