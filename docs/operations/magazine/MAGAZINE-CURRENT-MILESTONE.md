@@ -1,6 +1,6 @@
 # Magazine current milestone
 
-기준 시각: 2026-10-15 KST
+기준 시각: 2026-10-15 19:30 KST
 구현·배포 집중 게이트: 2026-10-15 KST
 운영 증거 상한: 2026-10-22 KST
 상위 정본: `M-GRAPH-PROJECT-CHARTER.md`, `magazine-automation-runbook.md`
@@ -55,14 +55,20 @@ M-GRAPH next approved node
 ### M-AUTO — PARTIAL
 
 - 생성·QA·hero·등록·PR·CI·병합·배포·예약 공개 장치는 대부분 구현돼 있다.
-- 2026-10-15 자연 회차는 `kimjang-back-pain-prep`의 Claude brief가 고정 형식 블록을 빠뜨려 중단됐다.
-- `4adb4c2b`는 공통 형식 블록을 코드가 조립하도록 고쳤다.
-- 자식 `23014791`은 rehearsal S8/S8B를 10/11 gray 고정 사건·article 격리·untrack으로
-  바꿨다. 제품의 `DIRTY_TREE` 관문은 유지했고 전체 변이 회귀가 진행 중이다.
-- 현재 배포 경로는 여전히 `LEGACY_BRIEF_V1`이다. `DIRECT_SPEC_V1`은 아직 구현·배포 전이다.
-- PR #727은 `magazine-article-spec/1` schema, 순수 compiler, canonical JSON·SHA-256,
-  40개 계약 검사를 main에 반영했다. SEASONAL compile 후 verify 양성 반례도 포함한다.
-  producer·delivery 연결과 mode 전환은 아직 별도 M-AUTO worktree에서 진행 중이다.
+- PR #727은 `magazine-article-spec/1` schema, 순수 compiler, canonical JSON·SHA-256과
+  40개 계약 검사를 main에 반영했다.
+- PR #738은 `DIRECT_SPEC_V1`의 하류 원고 요청·QA·재생성·등록 계약을 연결했고, PR #739는
+  승인 source 신원을 선정·재사용·등록·전송·regen·입력 수리 경계에서 동일하게 재검증하도록
+  연결했다. source 부재·승인 취소·stale·hash drift·spec 충돌은 provider·write·register 전에
+  fail-closed로 멈춘다. legacy golden은 run/todo/report/message/fingerprint 바이트 불변으로 고정됐다.
+- PR #739 exact head `4d3f326c`는 로컬 전수 검사와 Linux CI를 통과했고 merge SHA
+  `20e15ec7`로 병합됐다. Production `dpl_4crdFAHLrvWV2ihMUvjZVVWy3r7J`가 같은 SHA를 READY로
+  서빙하며 magazine runtime도 `20e15ec7`에 `ff-only`로 반영됐다.
+- 그러나 운영 queue의 `directSpecMode: 'DIRECT_SPEC_V1'` 행은 아직 0건이고,
+  `magazine-article-spec-source/1` 생산자·승인 artifact도 없다. 따라서 현재 자연 경로는 계속
+  `LEGACY_BRIEF_V1`이며 DIRECT_SPEC 자연 회차는 0회다.
+- DIRECT_SPEC production-shaped rehearsal, 실제 STANDARD canary source 승인, opt-in 한 건,
+  현재 코드 자연 무인 회차가 남아 있으므로 `M-AUTO OPERATING_PASS`가 아니다.
 
 ### OUTCOME — NOT PROVEN
 
@@ -103,8 +109,8 @@ M-GRAPH next approved node
 
 | 날짜 | M-AUTO | M-GRAPH / OUTCOME |
 |---|---|---|
-| **10/15 오늘** | `DIRECT_SPEC_V1` schema·compiler·hash·fixture는 main 반영 완료. STANDARD canary wiring과 정상·실패·재실행 rehearsal을 별도 M-AUTO writer가 계속 구현 | Production sleep 복구, 53편 coverage gate, current-article reconciliation, family reverse relation, 새 bundle 배포와 공개 HTML 9편 확인까지 완료 |
-| **10/15 오늘 stretch** | direct wiring의 반례·변이·rollback을 끝내고 코드 PASS 후보를 만든다 | 다음 저위험 cluster 후보를 근거로 순위화하고, OUTCOME event·identity gap 설계를 시작한다 |
+| **10/15 오늘** | `DIRECT_SPEC_V1` schema·compiler·하류 wiring·상류 source 관문을 main·Production·runtime에 반영. legacy 불변과 fail-closed 반례·변이는 PASS | Production sleep 복구, 53편 coverage gate, current-article reconciliation, family reverse relation, 새 bundle 배포와 공개 HTML 9편 확인까지 완료 |
+| **10/15 오늘 stretch** | 승인 source 생산자·승인 artifact와 production-shaped direct rehearsal을 끝내고 STANDARD 한 건의 opt-in 준비. 자연 회차를 결함 탐색에 쓰지 않는다 | 다음 저위험 cluster 후보를 근거로 순위화하고, OUTCOME event·identity gap 설계를 시작한다 |
 | **10/16** | 오늘 끝낸 코드의 자연 무인 회차를 운영 증거로만 관측. 결정적 결함 발견을 이 날짜로 미루지 않는다 | canary watch·click/impression 수집 시작 상태 확인. 코드 결함은 즉시 같은 날 수리 |
 | **10/17 이전** | direct canary가 통과하면 default 전환 여부 판정, legacy는 bounded rollback으로만 보존 | canary가 안전하면 다음 cluster 확장. OUTCOME cohort 시계 시작 |
 | **10/22 상한** | 현재 코드 자연 무인 회차까지 포함해 M-AUTO OPERATING_PASS/미달을 판정 | M-GRAPH ACTIVE/미달과 OUTCOME 측정 가동을 판정. 7일 실제 사용자 결과는 관측창 종료 뒤 별도 판정 |
@@ -159,13 +165,19 @@ M-GRAPH next approved node
 
 ## 7. 다음 즉시 작업
 
-1. 별도 M-AUTO worktree에서 ArticleSpec과 legacy/direct 경계를 연결하고 STANDARD 한 건의 direct
-   생성·QA·등록 rehearsal과 변이를 끝낸다. Claude writer의 파일을 다른 writer가 동시에 고치지 않는다.
-2. M-GRAPH는 남은 `UNMAPPED 1`, `NO_ACTIVE_EDGE 21`, `NO_USABLE_RESULT 1`을 근거별로 보정하고
+1. 별도 M-GRAPH/source worktree에서 현재 제품 graphVersion과 G8 admission에 묶인
+   `magazine-article-spec-source/1` 생산·검증·승인 절차를 만든다. 빈 필드나 3+1 관계를 추정하거나
+   시험 fixture를 운영 source로 승격하지 않는다.
+2. 별도 M-AUTO worktree에서 실제 producer·webui·QA·regen·hero·register·PR·merge·deploy·watch
+   entrypoint를 쓰는 production-shaped DIRECT_SPEC rehearsal과 변이를 끝낸다. 외부 서비스는 fixture,
+   운영 파일은 복사본으로만 쓰며 legacy 회귀를 함께 고정한다.
+3. source 승인과 rehearsal PASS 뒤에만 STANDARD 한 건을 `DIRECT_SPEC_V1`로 opt-in한다. 첫 자연 회차는
+   결함 탐색이 아니라 무인 운영 증거 수집으로 사용한다.
+4. M-GRAPH는 남은 `UNMAPPED 1`, `NO_ACTIVE_EDGE 21`, `NO_USABLE_RESULT 1`을 근거별로 보정하고
    다음 저위험 cluster를 하나만 확장한다. 설명 가능한 관계가 없으면 숫자를 위해 연결하지 않는다.
-3. family와 sleep의 공개 link·source/version/reason을 watch하고, 잘못된 관계·미공개 누출·기존 링크
+5. family와 sleep의 공개 link·source/version/reason을 watch하고, 잘못된 관계·미공개 누출·기존 링크
    회귀가 생기면 해당 cluster만 비활성화한다.
-4. OUTCOME은 기존 related event·집계형 signup funnel을 보존하면서 누락된 search landing,
+6. OUTCOME은 기존 related event·집계형 signup funnel을 보존하면서 누락된 search landing,
    community action, return_visit identity-safe 계약을 설계한다. 광고·회원가입 전환·D100 파일과
    겹치는 구현은 writer 조정 뒤 진행한다.
-5. 모든 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고하고 한 층의 PASS를 전체 완료로 부르지 않는다.
+7. 모든 결과를 M-GRAPH·M-AUTO·OUTCOME으로 분리 보고하고 한 층의 PASS를 전체 완료로 부르지 않는다.

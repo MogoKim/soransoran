@@ -659,7 +659,7 @@ export function planRun({
     let expectedGraphVersion
     const judgeDirect = (queueItem) => {
       if (expectedGraphVersion === undefined) expectedGraphVersion = productGraphVersionFn()
-      return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT })
+      return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT, productRoot: REPO_ROOT })
     }
     const gated = selectWithDirectGate({
       queue, articles, today, produceCount, reviewCount, draftExists, judgeDirect,

@@ -20,11 +20,16 @@
  * 🔴 **source artifact 계약** (`magazine-article-spec-source/1` · 소비자 쪽 요구 계약).
  *      경로      drafts/magazine/article-spec-source/<graphVersion>.json
  *      최상위    { schema, graphVersion, entries: [entry] }
- *      entry     { status, approvedBy, approvedAt, g8ManifestHash, node, relations, hero, publication, sourceHash }
- *      sourceHash = sha256(canonicalJson(entry 에서 sourceHash 를 뺀 것))
- *    생산자(M-GRAPH export·승인)는 아직 없다. 이 파일을 이 저장소에서 손으로 만들지 않는다.
+ *      entry     { status, approvedBy, approvedAt, g8ManifestHash, node, relations, hero, publication, productBasis, sourceHash }
+ *      sourceHash = sha256(canonicalJson(entry 에서 sourceHash 를 뺀 것)) — productBasis 를 포함한다
+ *    생산자는 `magazine-direct-spec-source-authoring` 의 approve 하나다. 이 파일을 손으로 만들지 않는다.
  *
- * 🔴 모델 · 시계 · 네트워크를 읽지 않는다. 읽는 파일은 제품 current.ts 와 source artifact 둘뿐이다.
+ * 🔴 **productBasis — 승인한 M-GRAPH 판을 소비 시점에 다시 맞춘다** (2026-10-15 Codex P1).
+ *    graphVersion 만 같으면 control(enabled · kill switch · cluster · surface)이나 resolver 의 surface·type 계약이
+ *    바뀌어도 옛 source 를 쓴다. 승인 entry 에 basis 를 싣고, 관문은 `productRoot` 에서 같은 helper 로 다시 계산해
+ *    정확히 같을 때만 통과시킨다. productRoot 를 주지 않으면 PRODUCT_BASIS_UNVERIFIED 로 막는다.
+ *
+ * 🔴 모델 · 시계 · 네트워크를 읽지 않는다. 읽는 파일은 제품 graph(current·bundle·control·resolver)와 source artifact 뿐이다.
  *    사유에는 경로 · 버전 · 필드 이름 · 승인 상태만 남긴다 — source 원문을 남기지 않는다.
  */
 
@@ -35,6 +40,7 @@ import { dirname, join, relative } from 'node:path'
 import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
 import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD } from './magazine-direct-spec.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
+import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
 
 export const DIRECT_SPEC_SOURCE_NOT_READY = 'DIRECT_SPEC_SOURCE_NOT_READY'
 export const DIRECT_SPEC_SPEC_CONFLICT = 'DIRECT_SPEC_SPEC_CONFLICT'
@@ -78,6 +84,150 @@ export function readProductGraphVersion(currentTsPath) {
   return m ? m[1] : null
 }
 
+const PRODUCT_GRAPH = {
+  current: 'src/content/magazine/graph/current.ts',
+  control: 'src/content/magazine/graph/control.ts',
+  resolver: 'src/lib/magazine-graph.ts',
+}
+/** discovery 자리는 BRIDGE 관계만 채운다 — 제품 resolver 의 규칙 */
+export const DISCOVERY_RELATION_TYPE = 'BRIDGE'
+
+/** 제품 소스의 문자열 배열 상수 — `export const NAME = ['A', 'B'] as const` */
+function readStringArray(text, name) {
+  const m = new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\]`).exec(text)
+  if (!m) return null
+  return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
+}
+
+/**
+ * control.ts 의 `export const CONTROL = {…}` 를 **구조 파서**(sliceLiteral + evalLiteral)로 읽는다.
+ * 🔴 정상 TypeScript 리터럴(여러 줄 · 끝 쉼표 · 주석)은 한 줄 판과 같은 값으로 읽고,
+ *    파싱 불가 · 필드 누락 · 형식 오류는 **던지지 않고** null 이다 — 호출자가 PRODUCT_BASIS_UNREADABLE 로 막는다.
+ */
+export function parseGraphControl(controlText) {
+  const anchor = String(controlText ?? '').indexOf('export const CONTROL')
+  if (anchor === -1) return null
+  const literal = sliceLiteral(controlText, controlText.indexOf('=', anchor), '{', '}')
+  if (!literal) return null
+  let raw
+  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }
+  const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  if (!isPlain(raw)) return null
+  const { graphVersion, enabled, enabledClusters, surfaces, killSwitch } = raw
+  if (typeof graphVersion !== 'string' || !graphVersion.trim()) return null
+  if (typeof enabled !== 'boolean') return null
+  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null
+  if (!isPlain(surfaces) || !Object.values(surfaces).every((v) => typeof v === 'boolean')) return null
+  if (!isPlain(killSwitch) || typeof killSwitch.tripped !== 'boolean') return null
+  // 🔴 격리 컨텍스트의 객체를 이 컨텍스트의 평범한 값으로 옮긴다
+  return {
+    graphVersion,
+    enabled,
+    enabledClusters: [...enabledClusters],
+    surfaces: Object.fromEntries(Object.entries(surfaces)),
+    killSwitch: { tripped: killSwitch.tripped },
+  }
+}
+
+/**
+ * graph bundle 의 구조 — basis 계산과 관계 판정이 실제로 쓰는 필드만, **던지지 않고** 검증한다.
+ * 🔴 JSON 문법이 맞고 EXPORT_HASH 까지 맞아도 intents 가 null·누락·잘못된 원소면 판독 실패다.
+ */
+export function graphBundleShapeOk(graph) {
+  const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  if (!isPlain(graph)) return false
+  if (typeof graph.graphVersion !== 'string' || !graph.graphVersion.trim()) return false
+  if (!isPlain(graph.contentHash)) return false
+  if (!Array.isArray(graph.intents) || !graph.intents.every((i) => isPlain(i) && typeof i.id === 'string' && i.id.trim()
+    && (i.cluster === null || (typeof i.cluster === 'string' && i.cluster.trim())))) return false
+  if (!Array.isArray(graph.edges) || !graph.edges.every(isPlain)) return false
+  if (!Array.isArray(graph.mappings) || !graph.mappings.every(isPlain)) return false
+  return true
+}
+
+/**
+ * 🔴 **제품 M-GRAPH 판 판독 — authoring 과 소비 관문이 같이 쓰는 하나뿐인 구현.**
+ *    current.ts → bundle(EXPORT_HASH 재계산) · control.ts · resolver(구현 surface · 관계 type).
+ * @returns {{ok:true, pointer, graph, exportHash, recomputedExportHash, control, implemented, footer, relationTypes, surfaces, blockers}
+ *          |{ok:false, code:string, why:string}}
+ */
+export function readProductGraphState(productRoot) {
+  const read = (rel) => { try { return readFileSync(join(productRoot, rel), 'utf8') } catch { return null } }
+  const current = read(PRODUCT_GRAPH.current)
+  const m = current && /^export \{ GRAPH, EXPORT_HASH \} from '\.\/(g-[a-z0-9-]+)'$/m.exec(current)
+  if (!m) return { ok: false, code: 'GRAPH_POINTER_UNREADABLE', why: 'current.ts 가 가리키는 판을 찾지 못했다' }
+  const pointer = m[1]
+  const bundleText = read(join(dirname(PRODUCT_GRAPH.current), `${pointer}.ts`))
+  const literal = bundleText && sliceLiteral(bundleText, bundleText.indexOf('=', bundleText.indexOf('export const GRAPH')), '{', '}')
+  if (!literal) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 리터럴을 찾지 못했다' }
+  let graph
+  try { graph = JSON.parse(literal) } catch { return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 리터럴을 파싱하지 못했다' } }
+  if (!graphBundleShapeOk(graph)) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE', why: 'bundle 의 GRAPH 구조(graphVersion·contentHash·intents·edges·mappings)가 다르다' }
+  const exportHash = /export const EXPORT_HASH = '([0-9a-f]+)'/.exec(bundleText)?.[1] ?? null
+  const recomputedExportHash = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16)
+  const controlText = read(PRODUCT_GRAPH.control)
+  const resolverText = read(PRODUCT_GRAPH.resolver)
+  if (!controlText || !resolverText) return { ok: false, code: 'GRAPH_CONTROL_UNREADABLE', why: 'control.ts 또는 magazine-graph.ts 를 읽지 못했다' }
+  const control = parseGraphControl(controlText)
+  if (!control) return { ok: false, code: 'GRAPH_CONTROL_UNREADABLE', why: 'control.ts 의 CONTROL 을 읽지 못했거나 필드가 없거나 형식이 다르다' }
+  const implemented = readStringArray(resolverText, 'IMPLEMENTED_SURFACES') ?? []
+  const footer = readStringArray(resolverText, 'FOOTER_SURFACES') ?? []
+  const relationTypes = readStringArray(resolverText, 'MAGAZINE_RELATION_TYPES') ?? []
+  const blockers = []
+  if (graph.graphVersion !== pointer) blockers.push('GRAPH_VERSION_MISMATCH')
+  if (!exportHash || exportHash !== recomputedExportHash) blockers.push('GRAPH_EXPORT_HASH_MISMATCH')
+  if (control.graphVersion !== pointer) blockers.push('GRAPH_CONTROL_VERSION_MISMATCH')
+  if (!control.enabled) blockers.push('GRAPH_CONTROL_DISABLED')
+  if (control.killSwitch?.tripped !== false) blockers.push('GRAPH_KILL_SWITCH_TRIPPED')
+  if (!implemented.length || !footer.length || !relationTypes.length) blockers.push('GRAPH_SURFACE_CONTRACT_UNREADABLE')
+  // 🔴 3+1 관계가 실제로 보이는 자리 = 구현된 footer surface ∩ control 에서 켠 surface
+  const surfaces = footer.filter((x) => implemented.includes(x) && control.surfaces?.[x] === true)
+  return { ok: true, pointer, graph, exportHash, recomputedExportHash, control, implemented, footer, relationTypes, surfaces, blockers }
+}
+
+/**
+ * 승인 entry 에 싣고 소비 시점에 다시 맞추는 **정본 basis**. canonical — 순서가 의미 없는 목록은 정렬한다.
+ * sourceCluster = 제품 graph intent 의 cluster, 없으면 큐 행 cluster.
+ */
+export function productBasisFor(state, { intentId, queueCluster = null }) {
+  const sourceCluster = state.graph.intents.find((i) => i.id === intentId)?.cluster ?? queueCluster ?? null
+  const sortedSurfaces = Object.fromEntries(Object.keys(state.control.surfaces ?? {}).sort().map((k) => [k, state.control.surfaces[k] === true]))
+  return {
+    graphVersion: state.pointer,
+    exportHash: state.exportHash,
+    control: {
+      graphVersion: state.control.graphVersion,
+      enabled: state.control.enabled,
+      killSwitchTripped: state.control.killSwitch?.tripped !== false,
+      enabledClusters: [...state.control.enabledClusters].sort(),
+      surfaces: sortedSurfaces,
+    },
+    sourceCluster,
+    relationContract: {
+      implementedSurfaces: [...state.implemented].sort(),
+      footerSurfaces: [...state.footer].sort(),
+      enabledRelationSurfaces: [...state.surfaces].sort(),
+      relationTypes: [...state.relationTypes].sort(),
+      discoveryType: DISCOVERY_RELATION_TYPE,
+    },
+  }
+}
+
+/** 소비 시점의 현재 basis — 판독 실패·판 자체 결함이면 **던지지 않고** ok:false / PRODUCT_BASIS_UNREADABLE */
+export function currentProductBasis(productRoot, { intentId, queueCluster = null }) {
+  const state = readProductGraphState(productRoot)
+  if (!state.ok) return { ok: false, code: 'PRODUCT_BASIS_UNREADABLE', why: `${state.code}: ${state.why}` }
+  if (state.blockers.some((b) => ['GRAPH_VERSION_MISMATCH', 'GRAPH_EXPORT_HASH_MISMATCH', 'GRAPH_SURFACE_CONTRACT_UNREADABLE'].includes(b))) {
+    return { ok: false, code: 'PRODUCT_BASIS_UNREADABLE', why: `제품 graph 판이 깨졌다: ${state.blockers.join(',')}` }
+  }
+  return { ok: true, basis: productBasisFor(state, { intentId, queueCluster }) }
+}
+
+/** 🔴 hero 계약 — NO_IMAGE 만 hero=null. REQUIRED · OPTIONAL 은 자동 레인이 hero 를 만들어야 하므로 alt·scene 필수 */
+export function heroRequired(imageMode) {
+  return imageMode === 'REQUIRED' || imageMode === 'OPTIONAL'
+}
+
 function valueAt(obj, path) {
   let cur = obj
   for (const key of path.split('.')) {
@@ -96,12 +246,12 @@ function isPresent(value, path) {
 }
 
 /**
- * 🔴 hero 는 큐의 imageMode 가 정한다 (ArticleSpec `heroOf` 와 같은 규칙).
- *    REQUIRED → hero.alt · hero.scene 필수 · NO_IMAGE → 둘 다 금지 · OPTIONAL → compile 계약을 그대로 따른다.
+ * 🔴 hero 는 큐의 imageMode 가 정한다 — `heroRequired` 하나가 계약이다(authoring 도 이것만 쓴다).
+ *    REQUIRED · OPTIONAL → hero.alt · hero.scene 필수 · NO_IMAGE → 둘 다 금지.
  */
 export function missingSourceFields(entry, queueItem = null) {
   const missing = DIRECT_SPEC_REQUIRED_FIELDS.filter((path) => !isPresent(valueAt(entry, path), path))
-  if (queueItem?.imageMode === 'REQUIRED') {
+  if (heroRequired(queueItem?.imageMode)) {
     for (const path of ['hero.alt', 'hero.scene']) if (!isPresent(valueAt(entry, path), path)) missing.push(path)
   }
   return missing
@@ -120,7 +270,7 @@ function heroForbidden(entry, queueItem) {
  *   evidence = { mode, slug, intentId, expectedGraphVersion, observedGraphVersion, sourcePath,
  *                approvalStatus, missingFields, blockers, g8ManifestHash, sourceHash }
  */
-export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersion, repoRoot = null, readFile = (p) => readFileSync(p, 'utf8'), exists = existsSync }) {
+export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersion, repoRoot = null, productRoot = null, readFile = (p) => readFileSync(p, 'utf8'), exists = existsSync }) {
   const blockers = []
   const slug = queueItem?.slug ?? null
   const intentId = queueItem?.intentId ?? null
@@ -180,6 +330,19 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   if (entry.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')
   if (evidence.missingFields.length) blockers.push('FIELDS_MISSING')
   if (heroForbidden(entry, queueItem)) blockers.push('HERO_FORBIDDEN')
+  // 🔴 승인한 M-GRAPH 판(productBasis)이 지금 제품 판과 정확히 같아야 한다
+  if (!productRoot) blockers.push('PRODUCT_BASIS_UNVERIFIED')
+  else {
+    const cur = currentProductBasis(productRoot, { intentId, queueCluster: queueItem?.cluster ?? null })
+    if (!cur.ok) blockers.push('PRODUCT_BASIS_UNREADABLE')
+    else {
+      const b = cur.basis
+      if (!entry.productBasis || typeof entry.productBasis !== 'object') blockers.push('PRODUCT_BASIS_MISSING')
+      else if (canonicalJson(entry.productBasis) !== canonicalJson(b)) blockers.push('PRODUCT_BASIS_DRIFT')
+      if (b.graphVersion !== expectedGraphVersion) blockers.push('PRODUCT_BASIS_DRIFT')
+      if (!b.control.enabled || b.control.killSwitchTripped || !b.control.enabledClusters.includes(b.sourceCluster)) blockers.push('PRODUCT_BASIS_INACTIVE')
+    }
+  }
 
   const unique = [...new Set(blockers)]
   blockers.length = 0
@@ -231,8 +394,8 @@ export function existingSpecState({ spec, draftsDir }) {
  * @returns {{ok:true, judged:object, spec:object, evidence:object, existing:'ABSENT'|'IDENTICAL'}
  *          |{ok:false, code:string, why:string, evidence:object}}
  */
-export function verifyDirectSpecIdentity({ queueItem, draftsDir, expectedGraphVersion, repoRoot = null }) {
-  const judged = judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersion, repoRoot })
+export function verifyDirectSpecIdentity({ queueItem, draftsDir, expectedGraphVersion, repoRoot = null, productRoot = null }) {
+  const judged = judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersion, repoRoot, productRoot })
   if (!judged.ok) return judged
   const existing = existingSpecState({ spec: judged.spec, draftsDir })
   if (existing.state === 'CONFLICT') {
@@ -249,13 +412,13 @@ export function verifyDirectSpecIdentity({ queueItem, draftsDir, expectedGraphVe
  *    source 부재/취소/stale/drift → DIRECT_SPEC_SOURCE_NOT_READY · 다른 spec → DIRECT_SPEC_SPEC_CONFLICT ·
  *    spec 없음 → DIRECT_SPEC_MISSING.
  */
-export function verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion, repoRoot = null }) {
+export function verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion, repoRoot = null, productRoot = null }) {
   const canonical = (queue ?? []).find((q) => q?.slug === slug) ?? null
   if (!canonical) return { ok: false, code: 'DIRECT_SPEC_NOT_IN_QUEUE', why: `정본 큐에 ${slug} 가 없다 — 승인 신원을 다시 확인할 수 없다`, evidence: null }
   if (canonical[DIRECT_SPEC_OPT_IN_FIELD] !== DIRECT_SPEC_MODE) {
     return { ok: false, code: 'DIRECT_SPEC_MODE_WITHDRAWN', why: '정본 큐 행이 더는 DIRECT_SPEC_V1 이 아니다 — 저장된 spec 으로 보내지 않는다', evidence: null }
   }
-  const v = verifyDirectSpecIdentity({ queueItem: canonical, draftsDir, expectedGraphVersion, repoRoot })
+  const v = verifyDirectSpecIdentity({ queueItem: canonical, draftsDir, expectedGraphVersion, repoRoot, productRoot })
   if (!v.ok) return v
   if (v.existing !== 'IDENTICAL') {
     return { ok: false, code: 'DIRECT_SPEC_MISSING', why: 'article-spec.json 이 없다 — 이 단계는 spec 을 새로 쓰지 않는다', evidence: v.evidence }
