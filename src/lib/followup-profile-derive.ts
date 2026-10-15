@@ -17,7 +17,9 @@
  *   dailyUsd(S)           = dailyCount(S) × usdPerAccepted(P)                                       — 0.0001 USD 올림(표기)
  *   runMax(S)             = max(runMax(P), ⌈dailyCount(S) / 하루 댓글 러너 회차⌉)
  *   perPersonaDailyMax(S) = max(perPersonaDailyMax(P), ⌈dailyCount(S) / 계약 유효 Persona⌉)
- *   첫 댓글 예산          = 하루 목표 글(S) × (P 첫 댓글 정산 USD 합 / P 첫 댓글 정산 건수)
+ *   첫 댓글 예산          = 하루 목표 글(S) × (P 첫 댓글 정산 USD 합 / P 실제 공개 첫 댓글 수)
+ *                           — 분모는 정본 증거 `firstCommentOk`(자동 출처 · 60분 안 첫 댓글이 붙은 글). 장부 정산 요청 수가
+ *                             아니다(재시도 · 실패 요청이 섞이면 단가가 낮게 잡힌다)
  *   예산 판정             = 첫 댓글 예산 + dailyUsd(S) ≤ 댓글 장부 하루 상한
  * ```
  */
@@ -37,8 +39,10 @@ export type FollowupMeasure = {
   installedProfile: unknown
   /** 장부 `commentFollowupGen` — 정산 줄 수 · 정산 USD 합 · 미정산(예약만) 줄 수 */
   followup: { settled: number; settledUsd: number; open: number }
-  /** 장부 `commentGen` — 첫 댓글 */
+  /** 장부 `commentGen` — 첫 댓글 provider 요청(재시도 · 실패 포함) */
   first: { settled: number; settledUsd: number; open: number }
+  /** 🔴 그날 실제 공개된 provenance-valid 첫 댓글 수 — 정본 증거 `counts.firstCommentOk`. 모르면 null */
+  acceptedFirstComments: number | null
   /** 🔴 그날 실제로 발행된 추가 댓글 수(큐 → 공개 댓글 행) */
   acceptedFollowups: number
 }
@@ -91,7 +95,7 @@ export function deriveFollowupProfile(i: {
   // 🔴 미정산을 추정으로 정산하지 않는다
   if (m.followup.open > 0 || m.first.open > 0) codes.add('COST_UNSETTLED')
   if (!(m.followup.settled > 0) || !(m.acceptedFollowups > 0) || !(m.followup.settledUsd > 0)) codes.add('FOLLOWUP_UNMEASURED')
-  if (!(m.first.settled > 0) || !(m.first.settledUsd > 0)) codes.add('FIRST_UNMEASURED')
+  if (m.acceptedFirstComments === null || !(m.acceptedFirstComments > 0) || !(m.first.settledUsd > 0)) codes.add('FIRST_UNMEASURED')
   if (i.contractValidPersonas === null || !(i.contractValidPersonas > 0)) codes.add('PERSONA_UNKNOWN')
   if (i.commentDailyUsdCap === null || !(i.commentDailyUsdCap > 0)) codes.add('COMMENT_CAP_UNKNOWN')
   if (!base.ok || codes.has('FOLLOWUP_UNMEASURED') || codes.has('PERSONA_UNKNOWN')) return out(null)
@@ -102,7 +106,7 @@ export function deriveFollowupProfile(i: {
   const perPersonaDailyMax = Math.max(base.profile.perPersonaDailyMax, Math.ceil(dailyCount / i.contractValidPersonas!))
   Object.assign(counts, { usdPerAccepted, dailyUsd, runMax, perPersonaDailyMax })
   if (!codes.has('FIRST_UNMEASURED') && i.commentDailyUsdCap !== null && i.commentDailyUsdCap > 0) {
-    const firstUsd = i.targetDailyPosts * (m.first.settledUsd / m.first.settled)
+    const firstUsd = i.targetDailyPosts * (m.first.settledUsd / m.acceptedFirstComments!)
     counts.firstCommentUsd = firstUsd
     counts.commentUsdNeeded = firstUsd + dailyUsd
     counts.commentDailyUsdCap = i.commentDailyUsdCap

@@ -32,7 +32,7 @@ const D10_PROFILE = {
 const measure = (patch: Partial<FollowupMeasure> = {}): FollowupMeasure => ({
   stage: 'd10', kstDate: '2026-10-16', evidenceVerdict: 'PASS', installedProfile: D10_PROFILE,
   followup: { settled: 12, settledUsd: 0.03, open: 0 }, first: { settled: 10, settledUsd: 0.02, open: 0 },
-  acceptedFollowups: 10, ...patch,
+  acceptedFollowups: 10, acceptedFirstComments: 10, ...patch,
 })
 const D20_POSTS = profileOf('d20').dailyTarget
 const RUNS = RUNNER_GRID.commentSlots.length
@@ -53,6 +53,11 @@ console.log('\n① 실측이 없으면 숫자를 만들지 않는다')
   check('🔴 D10 추가 댓글 0건 → 단가를 모른다 · 후보 0', zero.candidate === null && zero.codes.includes('FOLLOWUP_UNMEASURED'))
   const noFirst = derive(measure({ first: { settled: 0, settledUsd: 0, open: 0 } }))
   check('🔴 첫 댓글 단가를 모르면 예산 판정을 못 한다 · 후보 0', noFirst.candidate === null && noFirst.codes.includes('FIRST_UNMEASURED'))
+  for (const accepted of [0, null]) {
+    const x = derive(measure({ acceptedFirstComments: accepted }))
+    check(`🔴 실제 공개 첫 댓글 ${String(accepted)} → 후보 0 · FIRST_UNMEASURED(장부 요청 수로 대신하지 않는다)`,
+      x.candidate === null && x.codes.includes('FIRST_UNMEASURED'))
+  }
   const badProfile = derive(measure({ installedProfile: { ...D10_PROFILE, approvedBy: null } }))
   check('🔴 D10 에 설치된 profile 이 승인 없는 후보였으면 BLOCK', badProfile.verdict === 'BLOCK' && badProfile.codes.includes('MEASURE_PROFILE_INVALID'))
   const noPersona = derive(measure(), { personas: null })
@@ -90,6 +95,21 @@ console.log('\n③ 승인 없이 설치되지 않는다 · 첫 댓글 예산이 
     short.verdict === 'BLOCK' && short.candidate === null && short.codes.includes('COMMENT_BUDGET_SHORT'), JSON.stringify(short.counts))
 }
 
+console.log('\n③-2 첫 댓글 단가 분모 — 장부 요청 수가 아니라 실제 공개 첫 댓글 수')
+{
+  // 🔴 정산 요청 12건(재시도 · 실패 포함) $0.036 · 실제 공개 첫 댓글 10건 → 단가 $0.0036(= 총비용/10). 요청 수로 나누면 $0.003 으로 낮게 잡힌다
+  const retry = measure({ first: { settled: 12, settledUsd: 0.036, open: 0 }, acceptedFirstComments: 10 })
+  const d = derive(retry, { cap: 1 })
+  check('🔴 첫 댓글 예산 = 목표 20 × (총비용 $0.036 / 실제 10건) = $0.072', Math.abs((d.counts.firstCommentUsd ?? 0) - 0.072) < 1e-12,
+    String(d.counts.firstCommentUsd))
+  check('🔴 요청 수(12)로 나눈 값($0.06)이 아니다', Math.abs((d.counts.firstCommentUsd ?? 0) - 0.06) > 1e-9)
+  // 필요액 = 첫 댓글 $0.072 + 추가 $0.24 = $0.312 — 상한 $0.31 이면 막힌다. 요청 수로 나눴다면 $0.30 으로 통과했을 경계다
+  const edge = derive(retry, { cap: 0.31 })
+  check('🔴 같은 실측 · 상한 $0.31 → COMMENT_BUDGET_SHORT(과소계상이면 $0.30 으로 통과했을 경계) · 후보 0',
+    edge.verdict === 'BLOCK' && edge.candidate === null && edge.codes.includes('COMMENT_BUDGET_SHORT'), JSON.stringify(edge.counts))
+  check('D10 PASS 요구는 그대로', derive(measure({ evidenceVerdict: 'FAIL', first: { settled: 12, settledUsd: 0.036, open: 0 } }), { cap: 1 }).verdict === 'BLOCK')
+}
+
 console.log('\n④ 도구가 쓰지 않는다')
 {
   const cli = readFileSync('scripts/d20-readiness.mts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
@@ -97,6 +117,7 @@ console.log('\n④ 도구가 쓰지 않는다')
   check('🔴 --apply · --write 를 거부한다', /'--apply' \|\| a === '--write'/.test(cli))
   check('🔴 후보 파일은 새 경로에만(덮어쓰기 0 · 0600)', /flag: 'wx'/.test(cli) && /mode: 0o600/.test(cli))
   check('🔴 preflight 는 controller 와 같은 판정 함수', /judgeNextPreflight\(TARGET, r\.facts, RUNNER_GRID\)/.test(cli) && /readPreflightFacts\(prisma/.test(cli))
+  check('🔴 첫 댓글 분모는 정본 증거 firstCommentOk 에서만 온다', /acceptedFirstComments: typeof evidence\.counts\?\.firstCommentOk === 'number'/.test(cli))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} 통과 · ${fail} 실패 — DB 0 · 파일 0`)

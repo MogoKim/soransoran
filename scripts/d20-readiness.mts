@@ -111,10 +111,10 @@ try {
     const ev = spawnSync(process.execPath, [...process.execArgv, 'scripts/stage-controller.mts', `--evidence-date=${D10_DATE}`, '--evidence-stage=d10', '--json'], {
       cwd: process.cwd(), encoding: 'utf-8', timeout: 300_000,
     })
-    let evidence: { verdict: string } = { verdict: 'UNREAD' }
+    let evidence: { verdict: string; counts?: Record<string, number> } = { verdict: 'UNREAD' }
     let decision: { release?: string } | null = null
     try {
-      const j = JSON.parse(ev.stdout.slice(ev.stdout.indexOf('{'))) as { decision: { release?: string } | null; evidence: { verdict: string } }
+      const j = JSON.parse(ev.stdout.slice(ev.stdout.indexOf('{'))) as { decision: { release?: string } | null; evidence: { verdict: string; counts?: Record<string, number> } }
       evidence = j.evidence
       decision = j.decision
     } catch { /* 판정을 읽지 못했다 — PASS 아님 */ }
@@ -133,8 +133,10 @@ try {
     measure = fu === null || first === null ? null : {
       stage: 'd10', kstDate: D10_DATE, evidenceVerdict: evidence.verdict, installedProfile: installed,
       followup: fu, first, acceptedFollowups: accepted,
+      // 🔴 첫 댓글 단가의 분모 — 정본 증거의 실제 공개 첫 댓글 수(장부 요청 수가 아니다)
+      acceptedFirstComments: typeof evidence.counts?.firstCommentOk === 'number' ? evidence.counts.firstCommentOk : null,
     }
-    out.d10 = { date: D10_DATE, decision: decision?.release ?? null, evidence: evidence.verdict, ledgerRead: entries !== null, followup: fu, first, acceptedFollowups: accepted }
+    out.d10 = { date: D10_DATE, decision: decision?.release ?? null, evidence: evidence.verdict, ledgerRead: entries !== null, followup: fu, first, acceptedFollowups: accepted, acceptedFirstComments: evidence.counts?.firstCommentOk ?? null }
   }
   const derived = deriveFollowupProfile({
     measure, targetStage: TARGET, targetDailyPosts: prof.dailyTarget,
