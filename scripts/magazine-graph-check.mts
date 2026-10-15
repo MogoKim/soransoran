@@ -265,6 +265,24 @@ const FAMILY: NodeJS.ProcessEnv = { MGRAPH_GRAPH_ENABLED: '1', MGRAPH_GRAPH_CLUS
 check('환경변수로 켜진다', isGraphEnabled(FAMILY) === true)
 check('  열린 cluster 가 family 뿐이다', enabledClusters(FAMILY).join(',') === 'family')
 
+const EMPTY_PRODUCTION_ENV: NodeJS.ProcessEnv = {
+  MGRAPH_GRAPH_ENABLED: '',
+  MGRAPH_GRAPH_CLUSTERS: '',
+}
+const WHITESPACE_PRODUCTION_ENV: NodeJS.ProcessEnv = {
+  MGRAPH_GRAPH_ENABLED: '',
+  MGRAPH_GRAPH_CLUSTERS: '   ',
+}
+const productionSleepCanary = published.filter((a) => a.cluster === 'sleep')
+check(
+  'Production 빈 env 는 저장소 sleep canary 기본값을 덮지 않는다',
+  productionSleepCanary.every((a) => resolveAt(a, EMPTY_PRODUCTION_ENV).source === 'GRAPH'),
+)
+check(
+  'Production 공백 env 도 저장소 sleep canary 기본값을 덮지 않는다',
+  productionSleepCanary.every((a) => resolveAt(a, WHITESPACE_PRODUCTION_ENV).source === 'GRAPH'),
+)
+
 {
   const fam = published.filter((a) => a.cluster === 'family')
   const usedGraph = fam.filter((a) => resolveAt(a, FAMILY).source === 'GRAPH')
