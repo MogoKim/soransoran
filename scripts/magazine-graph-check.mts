@@ -88,6 +88,7 @@ import {
   type Pr,
 } from './magazine-graph-merge.mjs'
 import { AUTO_BRANCH_PREFIX, REQUIRED_CHECKS } from './lib/magazine-merge-gate.mjs'
+import { analyzeGraphCoverage } from './lib/magazine-graph-coverage.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 let pass = 0
@@ -186,6 +187,50 @@ check(
     readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8'),
   ),
 )
+
+// ── ①-C 공개 글 coverage ─────────────────────────────────
+console.log('\n①-C 공개 글 coverage — 수면 canary 준비도와 번들 무결성')
+
+{
+  let classifierPassed = false
+  let classifierDetail = ''
+  try {
+    classifierDetail = execFileSync(process.execPath, [join(ROOT, 'scripts/magazine-graph-coverage-check.mjs')], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    }).trim().split('\n').at(-1) ?? ''
+    classifierPassed = /14 pass, 0 fail/.test(classifierDetail)
+  } catch (err) {
+    classifierDetail = String((err as { stdout?: string | Buffer }).stdout ?? err)
+  }
+  check('coverage 분류기 반례 14개가 독립 실행에서 통과한다', classifierPassed, classifierDetail)
+
+  const coverage = analyzeGraphCoverage({
+    publicArticles: published,
+    allArticles: MAGAZINE_ARTICLES,
+    graph: GRAPH,
+  })
+  const countTotal = Object.values(coverage.counts).reduce((sum, count) => sum + count, 0)
+  check('coverage 행·상태 합이 공개 글 수와 같다',
+    coverage.rows.length === published.length && countTotal === published.length,
+    `${coverage.rows.length}/${published.length}`)
+  check('현재 article에 없는 stale mapping이 0이다',
+    coverage.integrity.staleMappings.length === 0,
+    coverage.integrity.staleMappings.map((row: { intent: string; slug: string }) => `${row.intent}:${row.slug}`).join(',') || '0')
+
+  const sleepSlugs = new Set(published.filter((article) => article.cluster === 'sleep').map((article) => article.slug))
+  const sleepRows = coverage.rows.filter((row: { slug: string }) => sleepSlugs.has(row.slug))
+  const sleepBlocked = sleepRows.filter((row: { status: string }) => row.status !== 'READY')
+  check('수면 canary 공개 글이 존재한다', sleepRows.length > 0, `${sleepRows.length}편`)
+  check('수면 canary 공개 글은 전부 공개 graph target을 가진다',
+    sleepBlocked.length === 0,
+    sleepBlocked.map((row: { slug: string; status: string }) => `${row.slug}:${row.status}`).join(',') || `${sleepRows.length}/${sleepRows.length}`)
+
+  const summary = Object.entries(coverage.counts)
+    .map(([status, count]) => `${status} ${count}`)
+    .join(' · ')
+  console.log(`  info 공개 ${coverage.publicArticleCount}편 coverage — ${summary}`)
+}
 
 // ── ② 기본값: 그래프 OFF ──────────────────────────────────
 console.log('\n② 기본값은 꺼짐 — 공개 글 전체가 예전 그대로다')
