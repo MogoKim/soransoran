@@ -811,7 +811,7 @@ function main() {
   if (r.code) process.exitCode = r.code
 }
 
-function report(run) {
+export function report(run) {
   const L = []
   L.push(`# producer 준비 리포트 — ${run.date}${run.dryRun ? ' (dry-run)' : ''}`)
   L.push('')
@@ -875,16 +875,17 @@ function report(run) {
    * 🔴 brief 안내는 legacy 선정 행에만 해당한다 (2026-10-15 Codex P2).
    *    legacy-only 회차는 예전 두 줄 그대로 · direct-only 는 brief 안내 0 · mixed 는 legacy slug 로 범위를 적는다.
    */
-  const directSel = run.selected.filter((s) => s.directSpec).map((s) => s.slug)
+  //    🔴 direct 는 selected 와 reusable 을 함께 본다 (reusable-only direct 회차도 direct 회차다) — slug 는 한 번만 센다.
+  const directSel = [...new Set([...run.selected, ...(run.reusable ?? [])].filter((s) => s?.directSpec).map((s) => s.slug))]
   const legacySel = run.selected.filter((s) => !s.directSpec).map((s) => s.slug)
   if (!directSel.length) {
     L.push('세션에서 `_runs/' + run.date + '/selected/*/brief.todo.md` 의 TODO 를 채운 뒤')
     L.push('`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다.')
   } else {
-    L.push(`DIRECT_SPEC 선정 ${directSel.length}건(${directSel.join(', ')})은 brief 를 만들지 않는다 — \`drafts/magazine/{slug}/article-spec.json\` 으로 \`--fetch-run\` 이 원고를 회수한다.`)
+    L.push(`DIRECT_SPEC ${directSel.length}건(${directSel.join(', ')})은 brief 를 만들지 않는다 — \`drafts/magazine/{slug}/article-spec.json\` 으로 \`--fetch-run\` 이 원고를 회수하거나 재사용한다.`)
     if (legacySel.length) {
       L.push(`legacy 선정 ${legacySel.length}건(${legacySel.join(', ')})에만 해당: \`_runs/${run.date}/selected/{slug}/brief.todo.md\` 의 TODO 를 채운 뒤`)
-      L.push('`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다. DIRECT_SPEC 행에는 적용하지 않는다.')
+      L.push('`drafts/magazine/{slug}/brief.md` 로 옮기고 원고 제작을 이어간다. DIRECT_SPEC 행(선정·재사용)에는 적용하지 않는다.')
     }
   }
   L.push('')

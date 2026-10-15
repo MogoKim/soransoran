@@ -417,11 +417,15 @@ function makeDirectAndLegacySandbox() {
   // 🔴 전송 경계는 정본 큐 행 + 현재 승인 source 로 다시 검증한다 — 시험 판·큐를 주입한다
   writeApprovedSource(d, input, input.node.graphVersion)
   const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => input.node.graphVersion }
-  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps }
+  // 🔴 legacy 호출은 direct 흔적(article-spec.json)이 없는 폴더에서 한다 — 흔적이 있으면 legacy 로 강등하지 않는다
+  const legacyDraftsDir = tmp('ds-w20-legacy')
+  mkdirSync(join(legacyDraftsDir, slug), { recursive: true })
+  writeFileSync(join(legacyDraftsDir, slug, 'brief.md'), legacyBrief, 'utf8')
+  return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps, legacyDraftsDir }
 }
 
 check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해 direct 1 · legacy 1 을 증명한다', () => {
-  const { input, draftsDir, slug, specHash, quarantinePath, directSourceDeps } = makeDirectAndLegacySandbox()
+  const { input, draftsDir, slug, specHash, quarantinePath, directSourceDeps, legacyDraftsDir } = makeDirectAndLegacySandbox()
 
   // ── direct 1: queueItem.directSpecMode === 'DIRECT_SPEC_V1' ─────
   const directQI = { ...input.queueItem, [DIRECT_SPEC_OPT_IN_FIELD]: DIRECT_SPEC_MODE }
@@ -437,7 +441,7 @@ check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해
     'direct marker 가 message 에 없다 — adapter prompt 가 조립되지 않았다')
 
   // ── legacy 1: 미지정 queueItem — 기존 호출자와 **같은 바이트** ─
-  const legacyGate = deliveryGate({ slug, draftsDir, quarantinePath })
+  const legacyGate = deliveryGate({ slug, draftsDir: legacyDraftsDir, quarantinePath })
   assert.equal(legacyGate.ok, true, `legacy gate 가 ok 가 아니다 — ${legacyGate.code ?? ''}: ${legacyGate.why ?? ''}`)
   assert.notEqual(legacyGate.message, directGate.message,
     'legacy message 가 direct message 와 글자 동일 — adapter 가 legacy 자리까지 침범했다')
@@ -446,13 +450,13 @@ check('W20 wiring 동작 — fixture queueItem 으로 deliveryGate 를 호출해
 
   // 🔴 legacy 는 **wiring 전/후 바이트 동일**을 지문으로 증명한다 — plannedMessageFor 를
   //    queueItem 미지정으로 다시 돌려 **지금 wiring 분기를 지난 결과**와 bitwise 같아야 한다.
-  const legacyPlanned = plannedMessageFor(slug, draftsDir)
+  const legacyPlanned = plannedMessageFor(slug, legacyDraftsDir)
   assert.equal(legacyGate.message, legacyPlanned,
     'deliveryGate 와 plannedMessageFor 가 legacy 자리에서 다른 글자를 만들었다 — wiring 가 legacy 를 건드렸다')
 })
 
 check('W23 legacy 입력 — 미지정 · 명시 LEGACY · 빈 flag · 임의 non-opt-in 속성 — 넷이 같은 바이트', () => {
-  const { draftsDir, slug, quarantinePath } = makeDirectAndLegacySandbox()
+  const { slug, quarantinePath, legacyDraftsDir: draftsDir } = makeDirectAndLegacySandbox()
   const gUndef = deliveryGate({ slug, draftsDir, quarantinePath })
   const gExplicit = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: LEGACY_BRIEF_MODE } })
   const gEmpty = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: { [DIRECT_SPEC_OPT_IN_FIELD]: '' } })

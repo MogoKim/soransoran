@@ -19,6 +19,8 @@ import {
 import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
 import { judgeLegacyInvalid } from './magazine-lineage-reconcile.mjs'
 import {
+  ARTICLE_SPEC_FILENAME,
+  ARTICLE_SPEC_REGISTER_LEDGER,
   DIRECT_SPEC_MODE,
   directSpecMessageFor,
   directSpecRegenMessageFor,
@@ -240,6 +242,19 @@ const DEFAULT_DIRECT_SOURCE_DEPS = {
   expectedGraphVersion: () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
 }
 
+/**
+ * 🔴 **이 slug 에 direct 로 만든 흔적이 남아 있는가** (2026-10-15 Codex P0 — legacy 강등 차단).
+ *    article-spec.json · 등록 영수증 · specHash 를 든 재생성 packet 중 하나라도 있으면 direct 작업이다.
+ *    그때 현재 큐 행이 사라졌거나(queueItem=null) opt-in 이 철회됐어도 legacy 로 보내지 않는다 —
+ *    direct 분기로 가서 정본 큐 재검증이 DIRECT_SPEC_NOT_IN_QUEUE / DIRECT_SPEC_MODE_WITHDRAWN 으로 멈춘다.
+ *    흔적이 없는 진짜 legacy 호출은 지금과 같은 바이트·판정이다.
+ */
+export function persistedDirectIdentity({ slug, draftsDir = DRAFTS_DIR, packet = null }) {
+  return existsSync(join(draftsDir, slug, ARTICLE_SPEC_FILENAME))
+    || existsSync(join(draftsDir, slug, ARTICLE_SPEC_REGISTER_LEDGER))
+    || typeof packet?.specHash === 'string'
+}
+
 export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH, queueItem = null, directSourceDeps = null }) {
   // 🔴 좁은 canary 라우팅 — queueItem 이 명시적으로 DIRECT_SPEC_V1 로 opt-in 했을 때만 direct.
   //    legacy 입력(queueItem 미지정 포함)은 아래 기존 경로를 그대로 지난다 — message bytes · fingerprint 불변.
@@ -250,7 +265,15 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
   if (!resolved.ok) {
     return { ok: false, code: resolved.code, why: resolved.why, message: null, messageFingerprint: null }
   }
-  if (resolved.mode === DIRECT_SPEC_MODE) {
+  if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {
+    const deps = directSourceDeps ?? DEFAULT_DIRECT_SOURCE_DEPS
+    const sourceCheck = () => verifyDirectSpecOnDisk({ slug, queue: deps.queue(), draftsDir, expectedGraphVersion: deps.expectedGraphVersion() })
+    const blocked = (v) => ({ ok: false, code: v.code, why: v.why, directSpec: v.evidence ?? null, message: null, messageFingerprint: null })
+    // 🔴 호출자 행은 direct 가 아닌데 direct 흔적이 있다 — 큐 삭제·opt-in 철회를 무엇보다 먼저 정본 큐로 판정한다
+    if (resolved.mode !== DIRECT_SPEC_MODE) {
+      const early = sourceCheck()
+      if (!early.ok) return blocked(early)
+    }
     // 🔴 direct first-send 와 regen 모두 adapter 가 조립한다 — brief.md / review.ts 미참조.
     //    direct regen 은 현재 원고(draft.md) 가 있어야 "실패 항목만 고친다" 를 지시할 수 있다.
     //    없으면 fail-closed (REGEN_SOURCE_DRAFT_MISSING) — provider/Chrome/예약/쓰기 0.
@@ -276,11 +299,8 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
      *    --fetch-run · 수동 --fetch · direct regen 이 모두 이 함수를 probe · Chrome · 예약 전에 지난다.
      *    (spec 자기검증 — 없음·손상 — 이 먼저다. 둘 다 부작용 없는 판정이고 장부 읽기보다 앞이다)
      */
-    const deps = directSourceDeps ?? DEFAULT_DIRECT_SOURCE_DEPS
-    const sendable = verifyDirectSpecOnDisk({ slug, queue: deps.queue(), draftsDir, expectedGraphVersion: deps.expectedGraphVersion() })
-    if (!sendable.ok) {
-      return { ok: false, code: sendable.code, why: sendable.why, directSpec: sendable.evidence ?? null, message: null, messageFingerprint: null }
-    }
+    const sendable = sourceCheck()
+    if (!sendable.ok) return blocked(sendable)
     const ledger = readQuarantine(quarantinePath)
     if (!ledger.ok) {
       return { ok: false, code: ledger.code ?? 'QUARANTINE_UNREADABLE', why: ledger.why,

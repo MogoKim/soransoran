@@ -67,7 +67,7 @@ import {
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
-import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate } from './lib/magazine-delivery-gate.mjs'
+import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate, persistedDirectIdentity } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
 
@@ -603,7 +603,8 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     return { slug, status: 'failed', reason: modeDecision.code, stage: 'gate', sent: false,
       errorDetail: `${modeDecision.why} (한 글자도 보내지 않았다)` }
   }
-  const isDirect = modeDecision.ok && modeDecision.mode === DIRECT_SPEC_MODE
+  // 🔴 direct 로 만든 흔적(article-spec·등록 영수증)이 있으면 큐 행이 사라지거나 철회돼도 legacy 로 강등하지 않는다
+  const isDirect = modeDecision.ok && (modeDecision.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir }))
   if (!isDirect && !existsSync(briefPath)) return { slug, status: 'skipped', reason: 'brief_missing', sent: false }
 
   // 🔴 direct 는 brief 없이도 돈다 — markers 는 비운다. legacy 는 기존대로 brief 에서 추출한다.
@@ -850,6 +851,8 @@ function describeDraft(slug, draftsDir = DRAFTS_DIR, path = join(draftsDir, slug
 export async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null, draftOut = null, inputRepair = null,
   quarantinePath = QUARANTINE_PATH, draftsDir = DRAFTS_DIR,
   queueItem = null,
+  /** 🔴 시험만 준다 — direct source 재검증의 정본 큐·판. 운영(--fetch CLI)은 deliveryGate 기본값(실제 큐·current.ts) */
+  directSourceDeps = null,
   probeFn = probe, browserDeps = {}, exit = (code) => process.exit(code) } = {}) {
   console.log('')
   console.log(`  원고 요청 — ${slug}`)
@@ -911,7 +914,7 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
   const r = await fetchSlug(slug, { force, regenPacket, quarantinePath, dateHint: todayKst(),
-    draftsDir, browserDeps, accessFn, draftOut, inputRepair, queueItem })
+    draftsDir, browserDeps, accessFn, draftOut, inputRepair, queueItem, directSourceDeps })
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')

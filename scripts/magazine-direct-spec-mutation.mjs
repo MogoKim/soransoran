@@ -306,7 +306,7 @@ async function runMutations() {
   // M6 delivery-gate.mjs 안의 direct wiring 블록을 통째로 제거한다 — direct queueItem 도 legacy 경로를 지난다
   await mutate('M6', 'direct wiring 제거 — deliveryGate 가 direct 분기를 지운다', 'deliveryGate',
     (src) => replaceAfter(src, 'export function deliveryGate',
-      /\n  if \(resolved\.mode === DIRECT_SPEC_MODE\) \{\n[\s\S]*?\n  \}\n  const draftPath/,
+      /\n  if \(resolved\.mode === DIRECT_SPEC_MODE \|\| persistedDirectIdentity\(\{ slug, draftsDir, packet \}\)\) \{\n[\s\S]*?\n  \}\n  const draftPath/,
       '\n  // mutant M6: direct 분기 제거 — direct queueItem 도 legacy 경로를 지난다\n  const draftPath'),
     async (mod) => {
       const { draftsDir, slug, specHash, quarantinePath } = makeSandbox('ds-m6')
