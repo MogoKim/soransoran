@@ -12,8 +12,8 @@
  *    "운영 active cadence 없음" 반례는 다른 검사의 cadence 있는 active 행이 0 일 때만 성립한다 —
  *    있으면 건너뛰지 않고 FAIL 한다(그 수를 함께 적는다).
  *
- *   ① dry-run → 6명 seed · lifeStage · 파일 0
- *   ② --write → 원자적 파일 · 권한 600 · 정확히 6키 · privacy · 같은 내용 재실행 no-op · 다른 내용 기존 파일 → 거부
+ *   ① dry-run → 현재 runnable cohort 전원 seed · lifeStage · 파일 0
+ *   ② --write → 원자적 파일 · 권한 600 · cohort 전원 key · privacy · 같은 내용 재실행 no-op · 다른 내용 기존 파일 → 거부
  *   ②-b 🔴 기존 파일 권한 경계 — 같은 내용 0600 no-op · 같은 내용 0644 dry-run 거부 · --write 는 권한만 고침 ·
  *       다른 내용 0644 → 내용 · 권한 모두 그대로
  *   ③ 잘못된 SHA · creative 누락 · 추가 · 중복 · 카드 불일치 · variation 개수 · 말투 묶음 누락 · cadence 없음 → 파일 0
@@ -70,7 +70,7 @@ async function cleanup(): Promise<void> {
   await prisma.user.deleteMany({ where: { name: { startsWith: NAME_PREFIX }, accounts: { none: {} } } })
 }
 
-const COHORT = 'wave5-d10'
+const COHORT = 'wave6-d20-canary'
 const CODES = COHORTS[COHORT].codes
 const pool = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
 const card = (c: string) => pool.cards.find((x) => x.code === c)!
@@ -81,15 +81,42 @@ const creativeOf = (c: string): PersonaCreative => ({
   variations: BEHAVIORS.slice(0, card(c).variationCount).map((b) => `${b} (${c})`),
 })
 const GOOD: Record<string, PersonaCreative> = Object.fromEntries(CODES.map((c) => [c, creativeOf(c)]))
+const FIRST = CODES[0]!
+const SECOND = CODES[1]!
+const THIRD = CODES[2]!
+const FOURTH = CODES[3]!
 
 const T = mkdtempSync(join(tmpdir(), 'soran-cohort-seed-'))
 const HOME_OK = join(T, 'home-ok')
 const HOME_THIN = join(T, 'home-thin')
 mkdirSync(HOME_OK); mkdirSync(HOME_THIN)
-const asset = writeFakePersonaAsset({ home: HOME_OK, speakers: 40 })
-// 🔴 화자가 production 수보다 적다 — 코드순 배정에서 뒤 코드(wave5)가 묶음을 못 받는다
+const asset = writeFakePersonaAsset({ home: HOME_OK, speakers: PRODUCTION_PERSONA_CODES.length + CODES.length })
+// 🔴 화자가 production 수보다 적다 — 코드순 배정에서 현재 cohort가 묶음을 못 받는다
 writeFakePersonaAsset({ home: HOME_THIN, speakers: PRODUCTION_PERSONA_CODES.length - CODES.length })
 const assetRows = (JSON.parse(readFileSync(asset.corpus, 'utf-8')) as { comments: { speakerId: string; content: string }[] }).comments
+const assetManifest = JSON.parse(readFileSync(asset.manifest, 'utf-8')) as { sourceDigest: string }
+// wave6 is fail-closed without the append-only snapshot. Build the same shape
+// in the temporary HOME from synthetic rows only; production assets stay unread.
+const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
+const canonRows = assetRows.map((row) => ({ speakerId: row.speakerId, text: row.content }))
+const extraRows = CODES.flatMap((_, speakerIndex) => [
+  { speakerId: `cohort-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 차분히 읽어 보니 마음이 놓이네요` },
+  { speakerId: `cohort-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 무리하지 말고 천천히 쉬어 가세요` },
+  { speakerId: `cohort-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 서두르지 않아도 괜찮으니 편하게 나눠요` },
+])
+const supplement = planSupplementSnapshot({
+  canonRows,
+  extraRows,
+  baseCodes: PRODUCTION_PERSONA_CODES.filter((code) => !CODES.includes(code)),
+  newCodes: CODES,
+  baseSourceDigest: assetManifest.sourceDigest,
+  saltId: 'c'.repeat(12),
+  generatedAt: '2026-10-15T00:00:00.000Z',
+  reason: 'fixture',
+})
+if (!supplement.ok) throw new Error(`합성 보충 snapshot 계획 실패: ${supplement.problems.join(' / ')}`)
+writeFileSync(join(asset.dir, 'supplement-v1.json'), supplement.assetText, { mode: 0o600 })
+writeFileSync(join(asset.dir, 'supplement-v1-manifest.json'), supplement.manifestText, { mode: 0o600 })
 // 🔴 임시 cwd — 출력 `tmp/` 가 저장소에 생기지 않는다. 정본 Pool 문서만 그대로 연결한다
 const CWD = join(T, 'cwd')
 mkdirSync(join(CWD, 'docs'), { recursive: true })
@@ -140,9 +167,9 @@ try {
   const d = cli(args(good))
   check('CLI 종료 0', d.status === 0, d.out.slice(-600))
   check('🔴 반례 12 — --write 없음 → 파일 0', !existsSync(OUT) && /dry-run — 파일 0/.test(d.out))
-  check('🔴 반례 1 — 6명 전원 verifySeedCard ✅', CODES.every((c) => new RegExp(`^  ${c}  .*verifySeedCard ✅`, 'm').test(d.out)) && !/불일치/.test(d.out))
+  check(`🔴 반례 1 — ${CODES.length}명 전원 verifySeedCard ✅`, CODES.every((c) => new RegExp(`^  ${c}  .*verifySeedCard ✅`, 'm').test(d.out)) && !/불일치/.test(d.out))
   check('🔴 반례 2~5 — 출력 lifeStage = lifeStageOf(카드)', CODES.every((c) => new RegExp(`^  ${c}  ${lifeStageOf(card(c))} `, 'm').test(d.out)))
-  check('말투 묶음 6/6 · 기존 production 배정 drift 0', new RegExp(`말투 묶음 ${CODES.length}/${CODES.length} · 기존 production ${PRODUCTION_PERSONA_CODES.length - CODES.length}명 배정 drift 0`).test(d.out))
+  check(`말투 묶음 ${CODES.length}/${CODES.length} · 기존 production 배정 drift 0`, new RegExp(`말투 묶음 ${CODES.length}/${CODES.length} · 기존 production ${PRODUCTION_PERSONA_CODES.length - CODES.length}명 배정 drift 0`).test(d.out))
 
   // ── ② --write ──
   console.log('② --write')
@@ -150,7 +177,7 @@ try {
   check('CLI 종료 0', w.status === 0, w.out.slice(-400))
   const raw = existsSync(OUT) ? readFileSync(OUT, 'utf-8') : ''
   const seeds = raw === '' ? {} : JSON.parse(raw) as Record<string, Record<string, unknown>>
-  check('🔴 반례 13 — 파일 생성 · 권한 600 · 정확히 6키 · 임시 파일 0', raw !== '' && (statSync(OUT).mode & 0o777) === 0o600
+  check(`🔴 반례 13 — 파일 생성 · 권한 600 · 정확히 ${CODES.length}키 · 임시 파일 0`, raw !== '' && (statSync(OUT).mode & 0o777) === 0o600
     && JSON.stringify(Object.keys(seeds)) === JSON.stringify(CODES) && tmpLeft().length === 0, `${raw === '' ? '파일 없음' : (statSync(OUT).mode & 0o777).toString(8)}`)
   check('출력 digest = 파일 sha256', w.out.includes(`digest ${sha256Hex(raw)}`))
   check('seed lifeStage = lifeStageOf(카드) · 카드 제목 아님', CODES.every((c) => seeds[c]?.lifeStage === lifeStageOf(card(c)) && seeds[c]?.lifeStage !== card(c).title))
@@ -188,11 +215,11 @@ try {
       run.out.split('\n').filter((l) => l.includes('[')).slice(0, 2).join(' | ').slice(0, 300))
   bad('반례 6 — 잘못된 SHA', cli([`--creative=${good.path}`, `--expect-sha=${'0'.repeat(64)}`, '--write']), 'CREATIVE_SHA_MISMATCH')
   bad('반례 7a — creative 코드 누락', cli(args(writeCreative('miss.json', fileOf(Object.fromEntries(CODES.slice(1).map((c) => [c, GOOD[c]!])))), ['--write'])), 'CREATIVE_MISSING_CODE')
-  bad('반례 7b — creative 코드 추가', cli(args(writeCreative('extra.json', fileOf({ ...GOOD, P34: { ...GOOD.P26!, title: '다른 사람', variations: GOOD.P26!.variations.map((v) => `${v}!`) } })), ['--write'])), 'CREATIVE_EXTRA_CODE')
+  bad('반례 7b — creative 코드 추가', cli(args(writeCreative('extra.json', fileOf({ ...GOOD, P44: { ...GOOD[FIRST]!, title: '다른 사람', variations: GOOD[FIRST]!.variations.map((v) => `${v}!`) } })), ['--write'])), 'CREATIVE_EXTRA_CODE')
   const goodText = fileOf(GOOD)
-  bad('반례 7c — creative 코드 중복', cli(args(writeCreative('dup.json', `${goodText.trimEnd().slice(0, -1)},"P27":${JSON.stringify(GOOD.P27)}}\n`), ['--write'])), 'CREATIVE_DUPLICATE_CODE')
-  bad('반례 8 — 카드와 creative 불일치(title)', cli(args(writeCreative('title.json', fileOf({ ...GOOD, P28: { ...GOOD.P28!, title: `${GOOD.P28!.title} 다르게` } })), ['--write'])), 'CARD_CREATIVE_MISMATCH')
-  bad('반례 9 — variation 개수 불일치', cli(args(writeCreative('vcount.json', fileOf({ ...GOOD, P29: { ...GOOD.P29!, variations: GOOD.P29!.variations.slice(0, -1) } })), ['--write'])), 'VARIATION_COUNT_MISMATCH')
+  bad('반례 7c — creative 코드 중복', cli(args(writeCreative('dup.json', `${goodText.trimEnd().slice(0, -1)},"${SECOND}":${JSON.stringify(GOOD[SECOND])}}\n`), ['--write'])), 'CREATIVE_DUPLICATE_CODE')
+  bad('반례 8 — 카드와 creative 불일치(title)', cli(args(writeCreative('title.json', fileOf({ ...GOOD, [THIRD]: { ...GOOD[THIRD]!, title: `${GOOD[THIRD]!.title} 다르게` } })), ['--write'])), 'CARD_CREATIVE_MISMATCH')
+  bad('반례 9 — variation 개수 불일치', cli(args(writeCreative('vcount.json', fileOf({ ...GOOD, [FOURTH]: { ...GOOD[FOURTH]!, variations: [...GOOD[FOURTH]!.variations, `추가 변형 (${FOURTH})`] } })), ['--write'])), 'VARIATION_COUNT_MISMATCH')
   bad('반례 10 — 말투 묶음 누락(화자 부족 자산)', cli(args(good, ['--write']), HOME_THIN), 'VOICE_BUNDLE_MISSING')
   const mineOnly = { user: { name: { startsWith: NAME_PREFIX } } }
   await prisma.persona.updateMany({ where: mineOnly, data: { status: 'paused' } })

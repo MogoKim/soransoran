@@ -152,20 +152,20 @@ console.log('①-b 🔴 코드 발급 — append-only · 폐기 코드 재사용
   const pool = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
   const cards = pool.cards.map((c) => c.code)
   const range = (a: number, b: number): string[] => Array.from({ length: b - a + 1 }, (_, i) => autogenCodeOf(a + i))
-  // 반례 1 — 지금 Pool(P26~P30 · P32 카드) + 폐기 P31 · P33 → P34~P41
+  // 반례 1 — wave6 카드 승격 뒤 다음 후보는 P44부터다
   check('정본 Pool 에 P26~P30 · P32 카드가 있고 P31 · P33 카드는 없다',
     ['P26', 'P27', 'P28', 'P29', 'P30', 'P32'].every((c) => cards.includes(c)) && !cards.includes('P31') && !cards.includes('P33'))
   const now = nextAutogenCodes({ usedCodes: cards, count: 8 })
-  check('🔴 반례 1 — 지금 Pool · count=8 → P34~P41', JSON.stringify(now.codes) === JSON.stringify(range(34, 41)) && now.problem === null, now.codes.join(' '))
+  check('🔴 반례 1 — 지금 Pool · count=8 → P44~P51', JSON.stringify(now.codes) === JSON.stringify(range(44, 51)) && now.problem === null, now.codes.join(' '))
   // 반례 2 — P31 · P33 은 어떤 경우에도 후보가 아니다
   const scenarios: string[][] = [[], cards, ['P01'], ['P30'], ['P26', 'P27'], range(1, 30), cards.filter((c) => c !== 'P32')]
   check('🔴 반례 2 — 어떤 사용 코드 조합에서도 P31 · P33 은 후보가 아니다 · 최소 P34',
     scenarios.every((u) => nextAutogenCodes({ usedCodes: u, count: 25 }).codes.every((c) => !['P31', 'P33'].includes(c) && personaCodeNumber(c)! >= 34)))
   check('폐기 코드 authority 는 P31 · P33 이고 이유가 적혀 있다', JSON.stringify(Object.keys(RETIRED_AUTOGEN_CODES).sort()) === '["P31","P33"]'
     && Object.values(RETIRED_AUTOGEN_CODES).every((why) => /VOICE_TOO_CLOSE/.test(why)))
-  // 반례 3 — DB 최대 코드가 P40 이면 P34~P39 빈칸을 채우지 않는다
-  const hw40 = nextAutogenCodes({ usedCodes: [...cards, 'P40'], count: 3 })
-  check('🔴 반례 3 — DB 에 P40 → P41 부터 · P34~P39 재사용 0', JSON.stringify(hw40.codes) === '["P41","P42","P43"]' && hw40.highWater === 40, hw40.codes.join(' '))
+  // 반례 3 — DB 최대 코드가 Pool보다 뒤면 그 아래 빈칸을 채우지 않는다
+  const hw50 = nextAutogenCodes({ usedCodes: [...cards, 'P50'], count: 3 })
+  check('🔴 반례 3 — DB 에 P50 → P51 부터 · 빈 번호 재사용 0', JSON.stringify(hw50.codes) === '["P51","P52","P53"]' && hw50.highWater === 50, hw50.codes.join(' '))
   // 숫자 비교 — 문자열 사전순이 아니다
   check('🔴 숫자로 비교한다 — "P9" < "P40" < "P100"(사전순이면 P9 가 최대)',
     nextAutogenCodes({ usedCodes: ['P40', 'P9'], count: 1 }).codes[0] === 'P41'
@@ -184,9 +184,10 @@ console.log('①-b 🔴 코드 발급 — append-only · 폐기 코드 재사용
     && Object.keys(RETIRED_AUTOGEN_CODES).every((c) => EXCLUDED_CODES[c] === undefined))
   check('P09 는 카드가 있는 제외 · 폐기 코드는 카드도 production 도 아니다', cards.includes('P09')
     && Object.keys(RETIRED_AUTOGEN_CODES).every((c) => !cards.includes(c) && !PRODUCTION_PERSONA_CODES.includes(c)))
-  // 반례 8 — PR #672 계약 불변
-  check('🔴 반례 8 — 카드 31장 · production 30명 · wave5-d10 6명 그대로', cards.length === 31 && PRODUCTION_PERSONA_CODES.length === 30
-    && JSON.stringify(COHORTS['wave5-d10'].codes) === JSON.stringify(['P26', 'P27', 'P28', 'P29', 'P30', 'P32']))
+  // 반례 8 — D10 cohort 보존 + D20 canary 승격
+  check('🔴 반례 8 — 카드 41장 · production 40명 · wave5 보존 · wave6 10명', cards.length === 41 && PRODUCTION_PERSONA_CODES.length === 40
+    && JSON.stringify(COHORTS['wave5-d10'].codes) === JSON.stringify(['P26', 'P27', 'P28', 'P29', 'P30', 'P32'])
+    && COHORTS['wave6-d20-canary'].codes.length === 10)
 }
 
 // ── ③ 생활사 골격 — 결정론 · 모순 0 · 정본과 겹치지 않음 ──

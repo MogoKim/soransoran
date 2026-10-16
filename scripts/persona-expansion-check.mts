@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
-import { autogenCodeOf, proposeLifeSkeletons, RETIRED_AUTOGEN_CODES, type Cadence } from '../src/lib/persona-autogen'
+import { autogenCodeOf, RETIRED_AUTOGEN_CODES, type Cadence } from '../src/lib/persona-autogen'
 import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
 import { COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS, TARGET_PERSONA_COUNT } from '../src/lib/persona-cohort'
 import {
@@ -37,8 +37,11 @@ const src = (p: string): string => readFileSync(p, 'utf-8')
 console.log('\n══ Persona 확장 계약 fixture ══\n')
 
 const pool = parsePoolDoc(src(PERSONA_POOL_DOC))
-const prodCards = pool.cards.filter((c) => PRODUCTION_PERSONA_CODES.includes(c.code))
-const fxRead = loadExpansionFixture(repoRoot, PROPOSED_COHORTS[0]!.fixture)
+const FIXTURE = 'scripts/__fixtures__/persona-expansion-canary.json'
+const promoted = COHORTS['wave6-d20-canary'].codes
+const priorProductionCodes = PRODUCTION_PERSONA_CODES.filter((code) => !promoted.includes(code))
+const priorCards = pool.cards.filter((c) => priorProductionCodes.includes(c.code))
+const fxRead = loadExpansionFixture(repoRoot, FIXTURE)
 if (!fxRead.ok) { console.log(`🔴 fixture 를 읽지 못했다: ${fxRead.problems.join(' / ')}`); process.exit(1) }
 const fixture: ExpansionFixture = fxRead.fixture
 
@@ -51,19 +54,45 @@ check('단계 목표는 정본 표에서 온다 — d20 canary · d20 지속 · 
   && expansionStepOf('d100-sustained')?.target === PERSONA_SUSTAINED_TARGET.d100)
 check('정본 값 그대로 40 · 60 · 300', EXPANSION_STEPS.map((s) => s.target).join(',') === '40,60,300')
 check('단계는 앞 단계를 선행으로 둔다', EXPANSION_STEPS.every((s, i) => s.requires === (i === 0 ? null : EXPANSION_STEPS[i - 1]!.id)))
-const proposed = PROPOSED_COHORTS.flatMap((c) => c.codes)
-check('🔴 제안 코드는 운영 universe 밖이다', proposed.every((c) => !PRODUCTION_PERSONA_CODES.includes(c)))
-check('🔴 운영 universe 는 그대로 30명이다', PRODUCTION_PERSONA_CODES.length === 30 && TARGET_PERSONA_COUNT === 30)
-check('🔴 제안 cohort 는 COHORTS · RUNNABLE_COHORTS 에 없다',
-  PROPOSED_COHORTS.every((p) => !(p.id in COHORTS) && !(RUNNABLE_COHORTS as readonly string[]).includes(p.id)))
-check('제안 cohort 의 선행은 지금 운영 cohort 전부다',
-  PROPOSED_COHORTS[0]!.requires.slice().sort().join(',') === Object.keys(COHORTS).sort().join(','))
-check('canary 는 정확히 10명 = 40 − 30', PROPOSED_COHORTS[0]!.codes.length === PERSONA_CANARY_FLOOR.d20 - PRODUCTION_PERSONA_CODES.length)
-const highWater = codeRoom({ usedCodes: pool.cards.map((c) => c.code), retiredCodes: Object.keys(RETIRED_AUTOGEN_CODES), ceiling: PERSONA_CODE_MAX }).highWater
-check('제안 코드는 high-water 뒤 append-only · 폐기 코드 재사용 0',
-  proposed.every((c) => Number(c.slice(1)) > highWater && RETIRED_AUTOGEN_CODES[c] === undefined)
-  && proposed.join(',') === Array.from({ length: proposed.length }, (_, i) => autogenCodeOf(highWater + 1 + i)).join(','))
-check('fixture 코드 = 제안 cohort 코드', fixture.candidates.map((c) => c.code).join(',') === proposed.join(','))
+check('🔴 운영 universe 는 40명이고 wave6 canary가 열린 회차다',
+  PRODUCTION_PERSONA_CODES.length === 40 && TARGET_PERSONA_COUNT === 40
+  && RUNNABLE_COHORTS.join() === 'wave6-d20-canary')
+check('🔴 승격이 끝난 제안 cohort 목록은 비었다', PROPOSED_COHORTS.length === 0)
+check('wave6 선행은 기존 다섯 cohort 전부다',
+  COHORTS['wave6-d20-canary'].requires.slice().sort().join(',')
+  === Object.keys(COHORTS).filter((id) => id !== 'wave6-d20-canary').sort().join(','))
+check('canary 는 정확히 10명 = 40 − 30', promoted.length === PERSONA_CANARY_FLOOR.d20 - priorProductionCodes.length)
+check('승격 코드는 P34~P43 append-only · 폐기 코드 재사용 0',
+  promoted.every((c) => RETIRED_AUTOGEN_CODES[c] === undefined)
+  && promoted.join(',') === Array.from({ length: 10 }, (_, i) => autogenCodeOf(34 + i)).join(','))
+check('fixture 코드 = 승격 cohort 코드', fixture.candidates.map((c) => c.code).join(',') === promoted.join(','))
+const promotedCards = new Map(pool.cards.filter((card) => promoted.includes(card.code)).map((card) => [card.code, card]))
+check('🔴 wave6 카드 10장이 모두 정본 Pool에 있고 파싱 문제 0', promotedCards.size === 10 && pool.problems.length === 0)
+for (const candidate of fixture.candidates) {
+  const card = promotedCards.get(candidate.code)
+  const life = candidate.life
+  const creative = candidate.creative
+  check(`🔴 ${candidate.code} 카드 = 승인 fixture 생활사·creative`, card !== undefined
+    && card.title === creative.title
+    && card.birthDate === life.birthDate
+    && card.ageBand === life.ageBand
+    && card.region === life.region
+    && card.maritalStatus === life.maritalStatus
+    && (card.spouseRelationship ?? '해당없음') === life.spouseRelationship
+    && card.childrenCount === life.childrenCount
+    && card.childrenAgeBands.join(',') === life.childrenAgeBands.join(',')
+    && card.household.childrenLiving === life.childrenLiving
+    && card.workStatus === life.workStatus
+    && card.economicStatus === life.economicStatus
+    && card.housing === life.housing
+    && card.menopauseStatus === life.menopauseStatus
+    && card.parentCare === life.parentCare
+    && card.personality.join(',') === creative.personality.join(',')
+    && card.noGoTopics.join(',') === creative.noGoTopics.join(',')
+    && card.noGoExpressions.join(',') === creative.noGoExpressions.join(',')
+    && card.variationCount === creative.variations.length
+    && card.voiceLength !== null)
+}
 
 // ─────────────────────────────────────────────────────────
 console.log('② 게시 상한을 Persona 수로 계산하지 않는다 · 쓰기 경로 0')
@@ -85,6 +114,9 @@ check('🔴 보충 말투 근거는 --db 없이는 회원 대조 전에 거부�
 check('보충 말투 근거는 익명 행만 append-only 말투 풀에 넘긴다',
   cli.includes('readUsableVoiceEvidence({')
   && cli.includes('voicePoolFor({ repoRoot, newCodes: batchCodes, supplementalRows })'))
+check('🔴 승격 산출물은 ready 후보의 검증된 카드·seed만 JSON에 싣는다',
+  cli.includes("cardMarkdown: c.status === 'ready' ? c.autogen.cardMarkdown : null")
+  && cli.includes("seed: c.status === 'ready' ? c.autogen.seed : null"))
 
 // ─────────────────────────────────────────────────────────
 console.log('③ 코드 공간 — #712 숫자 코드 정본 통합')
@@ -122,7 +154,7 @@ check('이미 목표를 넘었으면 필요 0 · 자원 0 이어도 준비', pla
 // ─────────────────────────────────────────────────────────
 console.log('⑤ 집단 다양성 — 모두 다른데도 한쪽으로 쏠리는 것')
 // ─────────────────────────────────────────────────────────
-const existing = prodCards.map(diversitySubjectOfCard)
+const existing = priorCards.map(diversitySubjectOfCard)
 const batchOf = (f: ExpansionFixture): DiversitySubject[] => f.candidates.map((c) => diversitySubjectOf(c.code, c.life, c.creative, null))
 const real = judgePopulationDiversity({ existing, batch: batchOf(fixture) })
 check('canary fixture 는 30명 집단을 기울이지 않는다', real.ok, real.problems.map((p) => `${p.rule}: ${p.detail}`).join(' / '))
@@ -131,11 +163,6 @@ const rules = (batch: DiversitySubject[], ex: DiversitySubject[] = existing): Di
 const base = batchOf(fixture)
 const mut = (f: (s: DiversitySubject, i: number) => Partial<DiversitySubject>): DiversitySubject[] => base.map((s, i) => ({ ...s, ...f(s, i) }))
 
-// 🔴 실제 결함 재현 — autogen 골격 선택기가 고른 10명
-const skeletons = proposeLifeSkeletons({ existing: pool.cards, codes: proposed })
-const autogenBatch = skeletons.map((s) => diversitySubjectOf(s.code, s.life, null, null))
-const autogenRules = rules(autogenBatch)
-check('🔴 실제 반례 — 얇은 축만 메우는 autogen 골격 10명은 BATCH_MONOCULTURE 로 막힌다', autogenRules.includes('BATCH_MONOCULTURE'), autogenRules.join(','))
 check('반례 — 10명 전원 같은 자녀 구성 → BATCH_MONOCULTURE',
   rules(mut(() => ({ childrenCount: 2, childrenAgeBands: ['중고등', '초등'] }))).includes('BATCH_MONOCULTURE'))
 check('반례 — 10명 전원 40대 → CORE_DECADE_NOT_PLURALITY',
@@ -191,7 +218,7 @@ check('반례 — 변주에 공통 금지 문구 → COMMON_NOGO_IN_VARIATION �
 // ─────────────────────────────────────────────────────────
 console.log('⑦ fixture 파서 — 칸을 기본값으로 메우지 않는다')
 // ─────────────────────────────────────────────────────────
-const raw = src(PROPOSED_COHORTS[0]!.fixture)
+const raw = src(FIXTURE)
 check('정본 fixture 는 읽힌다', parseExpansionFixture(raw).ok)
 const broken = JSON.parse(raw) as { candidates: Record<string, unknown>[] }
 delete broken.candidates[0]!.interests
@@ -224,8 +251,8 @@ const CADENCE: Cadence = { dailyCap: 3, weeklyCap: 12, silenceRate: 0.3, activit
 const voiceFor = (codes: readonly string[]): Map<string, { bundle: VoiceReferenceBundle; seedShareCount: number | null }> =>
   new Map(codes.map((c, i) => [c, { bundle: bundleOf(c, [TEXTS, MID, LONG][i % 3]!), seedShareCount: 1 }]))
 const judge = (o: { voice?: readonly string[]; cadence?: Cadence | null; nameSets?: typeof EMPTY_SETS | null } = {}) => judgeExpansionBatch({
-  fixture, existingCards: pool.cards, productionCodes: PRODUCTION_PERSONA_CODES, takenCodes: new Set(pool.cards.map((c) => c.code)),
-  voiceByCode: voiceFor(o.voice ?? proposed), productionBundles: prodBundles,
+  fixture, existingCards: priorCards, productionCodes: priorProductionCodes, takenCodes: new Set(priorCards.map((c) => c.code)),
+  voiceByCode: voiceFor(o.voice ?? promoted), productionBundles: prodBundles,
   cadence: o.cadence === undefined ? CADENCE : o.cadence, nameSets: o.nameSets === undefined ? EMPTY_SETS : o.nameSets,
 })
 const full = judge()
@@ -243,8 +270,8 @@ check('cadence 모름 → unmeasured (CADENCE_UNMEASURED)', noCad.candidates.eve
 
 // ─────────────────────────────────────────────────────────
 const sameVoice = judgeExpansionBatch({
-  fixture, existingCards: pool.cards, productionCodes: PRODUCTION_PERSONA_CODES, takenCodes: new Set(pool.cards.map((c) => c.code)),
-  voiceByCode: new Map(proposed.map((c) => [c, { bundle: bundleOf(c, TEXTS), seedShareCount: 1 }])), productionBundles: prodBundles,
+  fixture, existingCards: priorCards, productionCodes: priorProductionCodes, takenCodes: new Set(priorCards.map((c) => c.code)),
+  voiceByCode: new Map(promoted.map((c) => [c, { bundle: bundleOf(c, TEXTS), seedShareCount: 1 }])), productionBundles: prodBundles,
   cadence: CADENCE, nameSets: EMPTY_SETS,
 })
 check('🔴 반례 — 열 명이 같은 길이 밴드 말투 → 묶음 다양성 BATCH_MONOCULTURE(voiceBand)',
@@ -257,7 +284,7 @@ console.log('⑨ 규모가 커질 때 약해지는 곳 — 현재 사실')
 // ─────────────────────────────────────────────────────────
 const union = nameSpaceUnion()
 const cap0 = nameSpaceCapacity({ takenNames: [], memberNames: null, space: union })
-check(`이름 공간 합집합 ${union.length} 중 서로 헷갈리지 않는 이름 ${cap0.free} — 기존 30명 뒤 270명을 받을 수 있다 (회원 0 가정)`,
+check(`이름 공간 합집합 ${union.length} 중 서로 헷갈리지 않는 이름 ${cap0.free} — 기존 40명 뒤 260명을 받을 수 있다 (회원 0 가정)`,
   cap0.free >= PERSONA_SUSTAINED_TARGET.d100 - PRODUCTION_PERSONA_CODES.length && cap0.bound === 'upper')
 const tiny = nameSpaceCapacity({ takenNames: [], memberNames: [], space: ['노을', '밤수국', '봄수국'] })
 check('반례 — 편집 거리 1 인 세 글자 이름은 하나만 남는다 · 회원 집합을 받으면 exact', tiny.free === 2 && tiny.bound === 'exact', tiny.picked.join(','))

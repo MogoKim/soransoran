@@ -95,7 +95,9 @@ async function cleanup(): Promise<void> {
 }
 
 const T = mkdtempSync(join(tmpdir(), 'soran-creative-db-'))
-const asset = writeFakePersonaAsset({ home: T, speakers: 40 })
+// Production 40 + future creative candidates 10. Keeping only production-sized
+// evidence would make every append-only candidate fail before the fake provider.
+const asset = writeFakePersonaAsset({ home: T, speakers: 50 })
 const assetTexts = (JSON.parse(readFileSync(asset.corpus, 'utf-8')) as { comments: { speakerId: string; content: string }[] }).comments
 const creativeFile = join(T, 'fake-creative.json')
 

@@ -92,16 +92,20 @@ noGo 남의 형편 비교
     p.maritalStatus === '기혼' && p.childrenCount === 2 && p.parentCare === '간헐')
 }
 
-// ── ② 정본 문서 — 🔴 25장이 전부 읽혀야 한다 ──
+// ── ② 정본 문서 — 현재 카드가 전부 읽혀야 한다 ──
 console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-design.md §5)')
 {
   const doc = readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')
   const { cards, problems } = parsePoolDoc(doc)
-  check('🔴 카드 31장을 전부 읽는다', cards.length === 31)
+  check('🔴 카드 41장을 전부 읽는다', cards.length === 41)
   check('🔴 파싱 문제 0건', problems.length === 0)
   // 🔴 P31 · P33 은 VOICE_TOO_CLOSE 로 카드가 없다(2026-10-08 wave5)
-  check('코드가 P01~P30 · P32 이다',
-    cards.map((c) => c.code).join(',') === [...Array.from({ length: 30 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`), 'P32'].join(','))
+  check('코드가 P01~P30 · P32 · P34~P43 이다',
+    cards.map((c) => c.code).join(',') === [
+      ...Array.from({ length: 30 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`),
+      'P32',
+      ...Array.from({ length: 10 }, (_, i) => `P${String(i + 34).padStart(2, '0')}`),
+    ].join(','))
   check('🔴 카드마다 제목이 있다', cards.every((c) => c.title.trim() !== ''))
   check('🔴 카드마다 성격이 있다', cards.every((c) => c.personality.length >= 3))
   check('🔴 나이대가 전부 매칭이 아는 밴드다', cards.every((c) => c.childrenAgeBands.every(isKnownChildBand)))
