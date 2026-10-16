@@ -132,9 +132,12 @@ check('🔴 planAppendOnlyBundles · opaqueRowsFrom 은 파일 · DB 에 쓰지 
   !/writeFileSync|renameSync|prisma|\$executeRaw/.test(store.slice(store.indexOf('export function opaqueRowsFrom'), store.indexOf('export function stableAssignment'))))
 // 🔴 정본 자산이 있으면 운영 30명 digest 를 실제로 대조한다
 const canon = loadCanonAsset()
+const voiceFixture = loadVoiceDigestFixture(repoRoot)
 const cmp = compareVoiceDigests({
-  fixture: loadVoiceDigestFixture(repoRoot), sourceDigest: canon.ok ? canon.sourceDigest : null,
-  order: PRODUCTION_PERSONA_CODES, byCode: stableAssignment({ repoRoot }).byCode,
+  fixture: voiceFixture, sourceDigest: canon.ok ? canon.sourceDigest : null,
+  // The fixture freezes the original 30. Appended production codes are
+  // covered by the immutable supplement and must not rewrite this baseline.
+  order: voiceFixture.order, byCode: stableAssignment({ repoRoot }).byCode,
 })
 // 🔴 대조기 자체 — 자산이 없거나 다르면 미실행, 묶음이 바뀌면 changed (합성)
 const fx = { sourceDigest: 'aaaa', order: ['P01'], digests: { P01: bundleDigest(plan.byCode.get('P01')) } }
@@ -146,7 +149,7 @@ check('🔴 반례 — 묶음이 바뀌면 changed', compareVoiceDigests({ fixtu
 if (cmp.status === 'notRun') { notRun += 1; console.log(`  ⏸ 미실행  운영 30명 digest 대조 — ${cmp.reason}`) }
 else check('🔴 운영 30명 말투 배정 digest = 고정값 (P01~P32)', cmp.status === 'same', cmp.changed.join(','))
 if (canon.ok) {
-  const real = planAppendOnlyBundles({ canonRows: canon.rows, extraRows: [], productionCodes: PRODUCTION_PERSONA_CODES, newCodes: ['P34', 'P100'] })
+  const real = planAppendOnlyBundles({ canonRows: canon.rows, extraRows: [], productionCodes: PRODUCTION_PERSONA_CODES, newCodes: ['P44', 'P100'] })
   check('🔴 실제 자산 — 세 자리 새 코드를 붙여도 운영 배정 변동 0', real.productionDrift.length === 0, real.productionDrift.join(','))
 } else { notRun += 1; console.log('  ⏸ 미실행  실제 자산 세 자리 코드 drift — 정본 말투 자산이 없다') }
 

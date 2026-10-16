@@ -9,16 +9,21 @@
 
 - 게시 상한 · 슬롯 · 하루 공개 글 수를 Persona 수로 계산하지 않는다. 그것은 단계 계획과 preflight다.
 - 판정 도구(`persona:expansion`)는 DB에 쓰지 않는다. `--apply`를 받으면 거부한다.
-- 신규 후보는 `PROPOSED_COHORTS`(제안)에만 있다. `COHORTS`에 없으므로 운영 universe·말투 배정·runtime은 그대로다.
-- 현재 30명을 고치거나 지우지 않는다.
+- 신규 후보는 검증 전에는 `PROPOSED_COHORTS`에만 둔다. wave6-d20-canary는 카드·cohort 승격 PR에 올라갔지만,
+  그 PR만으로 운영 DB 행을 만들거나 활성화하지 않는다.
+- 기존 30명을 고치거나 지우지 않는다. wave6가 코드에 있어도 적재·활성화 전 운영 active는 30명이다.
+
+> 2026-10-15 준비 상태: 말투 스냅샷 10묶음은 운영 호스트에 동결했고, P34~P43은 운영 DB read-only
+> 판정에서 ready 10/10 · creative PASS · 집단 다양성 OK였다. 카드·cohort 승격은 D10 PASS 뒤 병합할
+> Draft로 준비하며, 아래 4~7단계는 아직 실행하지 않는다.
 
 ## 1. 명령
 
 | 명령 | 하는 일 | 쓰기 |
 |---|---|---|
-| `npm run persona:expansion` | 정본 카드 · 정본 말투 자산 · fixture로 자원 · 단계 · canary 후보를 판정 | 0 |
-| `npm run persona:expansion -- --db` | 위 + 운영 DB read-only: 계약 유효 · 4상태 · 활동 집중도 · Gate ⑥-B 실제 대조 · cadence | 0 |
-| `npm run persona:expansion -- --db --voice-evidence` | 위 + 익명 보충 말투 증거로 새 cohort 묶음 가능 여부 판정 | 0 |
+| `npm run persona:expansion -- --fixture=<후보.json>` | 정본 카드 · 정본 말투 자산 · fixture로 자원 · 단계 · 후보를 판정 | 0 |
+| `npm run persona:expansion -- --db --fixture=<후보.json>` | 위 + 운영 DB read-only: 계약 유효 · 4상태 · 활동 집중도 · Gate ⑥-B 실제 대조 · cadence | 0 |
+| `npm run persona:expansion -- --db --voice-evidence --fixture=<후보.json>` | 위 + 익명 보충 말투 증거로 새 cohort 묶음 가능 여부 판정 | 0 |
 | `npm run persona:reference-supplement-build -- --db` | 기존 30명 불변을 확인하고 새 cohort 말투 스냅샷 계획·digest 출력 | 0 |
 | `npm run persona:expansion-check` | 계약 fixture(변이 반례 포함). DB · 네트워크 · LLM 0 | 0 |
 
@@ -47,7 +52,8 @@
 선행 조건
 
 1. CURRENT-MILESTONE이 Persona 증원을 허용한다(지금은 D10 전 증원 금지).
-2. `persona:expansion -- --db`에서 `d20-canary`가 `✅ 자원 준비`이고 canary 10명이 전원 `ready`,
+2. `persona:expansion -- --db --fixture=scripts/__fixtures__/persona-expansion-canary.json`에서
+   `d20-canary`가 `✅ 자원 준비`이고 canary 10명이 전원 `ready`,
    creative 품질 `PASS`, 집단 다양성 `OK`다.
    말투 화자가 모자라면 정본 말투 자산을 다시 만든다(`persona:reference-build-asset`).
    근거 기준(관측 3 · 안전 원문 2)은 낮추지 않는다.

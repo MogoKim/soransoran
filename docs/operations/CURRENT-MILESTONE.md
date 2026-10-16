@@ -32,12 +32,12 @@ cohort는 34건 정산·1건 `usageUnknown`이고, 10월 14일 자연 d3는 자�
 | quality-v10 | ✅ 원문 복제·재서술 보정 · 현재 계약 | ✅ runtime `568467aa` | ✅ gate open · current cohort 정상 기록 |
 | 신선도 #709 | ✅ 게시 시각 구간·수집 selector·72h 판정 | ✅ | ✅ 날짜 구간 저장 · 배포 뒤 두 벌 본문 표본 0건 |
 | 전체 화자 풀 #717 | ✅ 원천마다 전체 적격 풀 - 이미 선택된 화자 | ✅ | ✅ 10-14 17:15 `requiredValueUnmet` 0 · 중복 화자 0 |
-| Persona 계약 | ✅ production universe 30 | ✅ runtime 30 인식 | ✅ contract-valid 30 · active 30 · draft 0 |
+| Persona 계약 | ✅ main universe 30 · PR #737 Draft에 code universe 40(P34~P43 카드·`wave6-d20-canary`) | ✅ runtime 30 인식 · universe 40 미병합·미배포 | ✅ contract-valid 30 · active 30 · draft 0 · 신규 10명 DB 생성·활성화 승인 전 |
 | 첫 댓글 | ✅ 60분 계약·automatic provenance·복구 | ✅ runner loaded | ✅ quality-v8 operating 표본 발행 뒤 4분 |
 | 추가 댓글·답글 #704 + E6 | ✅ 첫 댓글 1 + 선택적 0~4 · 실제 `parentId` 답글 · 글당 합계 1..5 | ✅ switch ON · D10 profile · E6 consumer plist | UNKNOWN - 현재 공개 d3라 stage mismatch로 추가 0이 정상 |
 | 실회원 우선 홈 #706 | ✅ Persona·운영 댓글을 인기 점수에서 제외 | ✅ Production | ✅ 화면 댓글 수는 유지하고 실반응 순서와 20/20 일치 |
 | 운영 직접 작성 #714·#716 | ✅ OP01~OP30 · 사진·유튜브·굵게 | ✅ Production·DB 30명 | ✅ 수동 운영 가능 · Dn 증거에는 포함하지 않음 |
-| D20 말투 근거 #722·#723 | ✅ 익명 근거 capture·consumer | ✅ runtime 반영 | ⚠️ 기존 30명은 유효 · 신규 10명용 근거 bundle 확정 #724 대기 |
+| D20 말투 근거 #722·#723·#724 | ✅ 익명 근거 capture·consumer·append-only bundle snapshot | ✅ runtime 반영 | ⚠️ 기존 30명은 유효 · 신규 10명 소비는 #737 병합·승인된 apply 전 UNKNOWN |
 | 고객 조회수 정책 | ✅ 실제 상세 열람 + 실제 목록 노출 · 내부 분리 · 중복/봇 제외가 정본 | ❌ 구현 전 | UNKNOWN - 임의 배수·최소값·난수 금지 |
 | North Star | ❌ 재방문 이벤트·measure job 없음 | ❌ | UNKNOWN |
 
@@ -56,7 +56,7 @@ cohort는 34건 정산·1건 `usageUnknown`이고, 10월 14일 자연 d3는 자�
 | 회사 Mac D100 job | 0 |
 | 추가 댓글 설정 | `SORAN_PERSONA_COMMENT_FOLLOWUP=on` · D10 profile · E6 consumer 경유 |
 | event wake | `SORAN_EVENT_WAKE` unset · OFF |
-| Persona | contract-valid 30 · active 30 · 운영 작성자 OP01~OP30 |
+| Persona | contract-valid 30 · active 30 · code-ready 40은 PR #737 Draft · 운영 작성자 OP01~OP30 |
 
 보조 Mac이 D100 9개 job의 유일한 owner다. 실행 중인 자연 수집·공급·댓글 작업을 사람이 끊어 단계 증거를 만들지 않는다.
 
@@ -100,7 +100,7 @@ read-only forecast에서 D5 기준을 충족했다. 후보 배포 뒤 실제 pre
 |---|---|---|---|
 | S-05 | D5의 실제 입력은 확보됐지만 비용 1건 미상과 자연 d3 라벨 결함이 코드상 차단 | 10-16 D5 trial 차단 | 제한 trial envelope + 자연 exact-N 승계 후보 검증·병합·배포·preflight |
 | C-10 | 추가 댓글은 배포됐지만 현재 d3, profile은 D10 | 지금은 글당 첫 댓글만 보임 | D10 trial에서 1 + 선택적 0~4 operating 판정 |
-| P-20 | D20은 contract-valid Persona 40명이 필요하나 현재 30명 | D20 preflight `PERSONA_SHORT` 가능 | #724 확정 → 신규 10명 dry-run/충돌 0 · 승인된 apply → 40명 검증 |
+| P-20 | D20은 contract-valid Persona 40명이 필요하나 현재 30명 | D20 preflight `PERSONA_SHORT` 가능 | #737 P34~P43 카드·seed dry-run/충돌 0 → D10 operating PASS 뒤 승인된 apply → 40명 검증 |
 | C-20 | D20 이상 추가 댓글 profile·예산이 미승인·미설치 | D20에서 후속 대화 용량 미정 | D10 비용·수율 실측으로 D20 profile 작성·승인 |
 | S-100 | d100은 runtime 단계가 아니고 canary 180·지속 300+ Persona가 없음 | D100 실행 불가 | D30·D50 실측과 병렬로 scheduler/profile·Persona 공급 준비 |
 | V-01 | 고객 조회수는 아직 기존 상세 조회 중심이고 실제 목록 노출 합산이 없음 | 새 글이 0·1로 보여 활력이 약함 | 실제 노출 계측·중복/주체 제외 후 단순 조회수로 합산 |
@@ -109,14 +109,14 @@ read-only forecast에서 D5 기준을 충족했다. 후보 배포 뒤 실제 pre
 ## 5. 다음 critical path
 
 📜 완료되어 활성 목록에서 뺀 작업: PR #699 · PR #700 · PR #704 · PR #706 · PR #709 · PR #710 ·
-PR #711 · PR #713 · PR #714 · PR #715 · PR #716 · PR #717 · PR #720 · PR #722 · PR #723.
+PR #711 · PR #713 · PR #714 · PR #715 · PR #716 · PR #717 · PR #720 · PR #722 · PR #723 · PR #724.
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
 | D5-FIX | D5 개방 병목 보정·배포 | targeted+격리 DB → exact-head CI → 일반 merge → 보조 Mac 안전 배포 → preflight PASS | 미상 비용 정산 조작 · 수동 증거 · 기준 없는 force |
 | D5 | 자연 D5 증명 - 10-16 목표 | controller가 연 D5 TRIAL → 자동 5/5·첫 댓글·감사·비용 미상 0·중복 0 PASS | 수동 stage·READY·장부·발행으로 증거 만들기 |
 | D10 | 자연 D10 + 글당 Persona 댓글 1..5 - **10-16 목표** | 자동 10/10 · 서로 다른 Persona · 첫 댓글 10 · 선택적 추가 0~4 · 감사·비용·중복 PASS | 모든 글 5개 강제 · 실회원 댓글 자동 답글 |
-| P20 | D20 Persona 40명 준비 | #724 append-only bundle green · 신규 10명 dry-run/충돌 0 · 승인된 apply · contract-valid 40 | 근거 없는 Persona 활성화 |
+| P20 | D20 Persona 40명 준비 | #737 code universe 40·seed dry-run/충돌 0 green · D10 operating PASS 뒤 승인된 apply · contract-valid 40 (canary 하한 40 · 지속 목표 60은 별개) | 근거 없는 Persona 활성화 · D10 PASS 전 병합·활성화 |
 | C20 | D20 후속 댓글 profile 준비 | D10 실측 단가·수율로 첫 댓글 우선 예산과 추가 댓글 상한 검증 · kill switch·rollback 유지 | 비용 상한 선증액 · D10 근거 없는 숫자 |
 | D20 | 자연 D20 - **10-17 목표** | D10 PASS + preflight green → 자동 20/20 · 댓글 1..5 · 감사·비용·중복 PASS | D10 실패 은폐 · 단계 건너뛰기 |
 | SCALE | D30 → D50 → D100 | 각 단계 operating PASS 직후 다음 유효 슬롯 · d100 scheduler/profile · Persona 180 canary/300+ 지속 | D30 생략 · 가짜 조회수 · 수동 물량을 Dn으로 계산 |

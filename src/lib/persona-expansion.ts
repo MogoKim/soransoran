@@ -13,9 +13,9 @@
  *
  * 🔴 **목표 인원은 여기 다시 적지 않는다.** `PERSONA_CANARY_FLOOR` · `PERSONA_SUSTAINED_TARGET` 에서 읽는다.
  *
- * 🔴 **새 후보는 운영 universe 밖에 있다.** `PROPOSED_COHORTS` 는 `persona-cohort.COHORTS` 와 다른 표다 —
- *    `COHORTS` 에 올리는 순간 `PRODUCTION_PERSONA_CODES` 가 바뀌고 말투 고정 배정이 다시 계산된다.
- *    올리는 일은 활성화 단계의 커밋이다(runbook `2026-10-13-persona-expansion-runbook.md`).
+ * 🔴 **새 후보는 승격 전까지 운영 universe 밖에 있다.** `PROPOSED_COHORTS` 는
+ *    `persona-cohort.COHORTS` 와 다른 표다. 승격 PR에서 `COHORTS`로 옮겨도 DB 적재·활성화는
+ *    별도 승인 단계다(runbook `2026-10-13-persona-expansion-runbook.md`).
  */
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, type D100Stage } from './d100-capacity'
 import { readLengthBand } from './original-post-persona-match'
@@ -82,19 +82,10 @@ export type ProposedCohort = {
 }
 
 /**
- * 🔴 **canary 10명 — 제안 상태다.** 운영 DB 행도, cohort 도, 말투 배정도 없다.
- *    코드는 high-water(P33 · 폐기 P31·P33 포함) 뒤 append-only 로 잡았다(`nextAutogenCodes` 와 같은 규칙).
+ * 🔴 아직 승격하지 않은 다음 묶음만 둔다. wave6-d20-canary는 2026-10-15 카드·cohort로 승격되어
+ *    여기서 빠졌다. 이 목록이 비어 있어도 운영 DB 적재·활성화를 뜻하지 않는다.
  */
-export const PROPOSED_COHORTS: readonly ProposedCohort[] = [
-  {
-    id: 'wave6-d20-canary',
-    step: 'd20-canary',
-    purpose: 'D20 canary 40 — 신규 10명 (기본 비활성 · 운영 DB write 0)',
-    codes: ['P34', 'P35', 'P36', 'P37', 'P38', 'P39', 'P40', 'P41', 'P42', 'P43'],
-    requires: ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10'],
-    fixture: 'scripts/__fixtures__/persona-expansion-canary.json',
-  },
-]
+export const PROPOSED_COHORTS: readonly ProposedCohort[] = []
 
 // ─────────────────────────────────────────────────────────
 // 코드 공간 — 🔴 코드 형식이 300 을 막는 곳

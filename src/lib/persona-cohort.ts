@@ -14,7 +14,7 @@
 
 import { isPersonaCode, PERSONA_CODE_MAX, sortPersonaCodes } from './persona-code'
 
-export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth' | 'wave5-d10'
+export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth' | 'wave5-d10' | 'wave6-d20-canary'
 
 export type CohortManifest = {
   id: CohortId
@@ -76,6 +76,17 @@ export const COHORTS: Readonly<Record<CohortId, CohortManifest>> = {
     purpose: 'D10 최소 contract-valid 30명 확보 — autogen 카드 6장 (P31·P33 VOICE_TOO_CLOSE 제외)',
     codes: ['P26', 'P27', 'P28', 'P29', 'P30', 'P32'],
     requires: ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'],
+  },
+  /**
+   * 🔴 **D20 canary 최소 contract-valid 40명 회차** (2026-10-15).
+   *    승인 fixture의 생활사·creative와 동결 말투 스냅샷을 운영 검증기에 함께 통과시킨 카드 10장이다.
+   *    이 manifest 승격만으로 DB 행을 만들거나 활성화하지 않는다.
+   */
+  'wave6-d20-canary': {
+    id: 'wave6-d20-canary',
+    purpose: 'D20 canary 최소 contract-valid 40명 확보 — 검증된 카드 10장',
+    codes: ['P34', 'P35', 'P36', 'P37', 'P38', 'P39', 'P40', 'P41', 'P42', 'P43'],
+    requires: ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10'],
   },
 }
 
@@ -265,20 +276,20 @@ export function judgeArgs(input: {
  *    이미 켜진 wave1·wave2 를 대상으로 `--apply` 를 돌리는 실수를 막으려면
  *    "지금 열려 있는 회차" 를 코드로 좁혀야 한다. 다음 회차는 여기에 추가한다 — 커밋으로 남는다.
  */
-export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave5-d10']
+export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave6-d20-canary']
 
 /**
  * 🔴 이미 끝난 회차 — 도구가 다시 만지지 않는다.
- *    wave1~wave4 24명은 운영 active 다(2026-10-08 운영 DB read-only: Persona 24행 · active cadence 24).
+ *    wave1~wave5 30명은 운영 active 다(2026-10-15 운영 DB read-only: Persona 30행 · contract-valid 30).
  */
-export const CLOSED_COHORTS: readonly CohortId[] = ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth']
+export const CLOSED_COHORTS: readonly CohortId[] = ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10']
 
 /**
- * 🔴 **목표 인원** — wave1 5 + wave2 3 + wave3 11 + wave4 5 + wave5 6 = 30 (D10 최소 contract-valid).
- *    Pool 31장에서 P09(길이 미상)를 뺀 수와 같아야 한다. fixture 가 대조한다.
- *    🔴 코드상 준비 인원이다 — 운영 active 는 wave5 적재 · 활성화 전까지 24명이다.
+ * 🔴 **목표 인원** — 기존 30 + wave6 10 = 40 (D20 canary 최소 contract-valid).
+ *    Pool 41장에서 P09(길이 미상)를 뺀 수와 같아야 한다. fixture 가 대조한다.
+ *    🔴 코드상 준비 인원이다 — 운영 active 는 wave6 적재 · 활성화 전까지 30명이다.
  */
-export const TARGET_PERSONA_COUNT = 30
+export const TARGET_PERSONA_COUNT = 40
 
 /** 🔴 회차 전용 입력 파일. gitignored 이며 다른 회차 파일을 덮어쓰지 않는다 */
 export function displayNamePathOf(id: CohortId): string { return `tmp/persona-${id}-displayname.json` }
