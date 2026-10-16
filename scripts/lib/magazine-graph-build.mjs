@@ -197,6 +197,11 @@ export const BACKLINK_STATUSES = Object.freeze(['PLANNED', 'PAIRED'])
 export const ASSET_STATES = Object.freeze(['LIVE', 'SCHEDULED_NOT_YET_PUBLIC', 'QUEUED', 'BLOCKED'])
 export const MAPPING_COVERAGES = Object.freeze(['ANSWERS', 'ANSWERS_PARTIAL', 'ANSWERS_WITH_DEFECT', 'ANSWERS_WITH_SCOPE_EXPANSION',
   'PARTIAL', 'ADJACENT', 'QUEUED_NOT_PUBLIC', 'SCHEDULED_NOT_YET_PUBLIC'])
+/**
+ * 🔴 lifecycle 정합 — 공개(LIVE)된 글에 "아직 공개 전" coverage 가 남아 있으면 오래된 판정이다.
+ *    공개 뒤 본문을 다시 대조해 ANSWERS · ANSWERS_PARTIAL 등으로 바꾸거나 매핑을 지워야 한다.
+ */
+export const PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC'])
 
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v) => typeof v === 'string'
@@ -324,6 +329,7 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
     if (!nonEmpty(m.slug)) bad.push(`${at} slug 누락`)
     if (!ASSET_STATES.includes(m.assetState)) bad.push(`${at} assetState 계약 밖: ${JSON.stringify(m.assetState)}`)
     if (!MAPPING_COVERAGES.includes(m.coverage)) bad.push(`${at} coverage 계약 밖: ${JSON.stringify(m.coverage)}`)
+    if (m.assetState === 'LIVE' && PRE_PUBLIC_COVERAGES.includes(m.coverage)) bad.push(`${at} lifecycle 모순 — LIVE 인데 coverage ${m.coverage}`)
     if (m.cluster !== null && !nonEmpty(m.cluster)) bad.push(`${at} cluster 형식 오류: ${JSON.stringify(m.cluster)}`)
     if (m.publishedAt !== null && !isRealDate(m.publishedAt)) bad.push(`${at} publishedAt 형식 오류: ${JSON.stringify(m.publishedAt)}`)
     if (m.publishAt !== null && !isRealKstAt(m.publishAt)) bad.push(`${at} publishAt 형식 오류: ${JSON.stringify(m.publishAt)}`)

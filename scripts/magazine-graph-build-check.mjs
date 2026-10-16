@@ -2,10 +2,10 @@
 /**
  * M-GRAPH 결정적 build · readiness 반례 검사.
  *
- *   node scripts/magazine-graph-build-check.mjs [--real-input <연구 입력 폴더> --real-product <제품 루트>]
+ *   node scripts/magazine-graph-build-check.mjs [--old-input <2026-10-15-family> --new-input <2026-10-17-money-work> --real-product <제품 루트>]
  *
  * 합성 fixture 만 쓴다(임시 폴더). 운영 연구 폴더 · 제품 graph 파일을 쓰지 않는다.
- * `--real-input` 을 주면 실제 입력으로 현재 제품 bundle 과의 의미·해시 동일성을 **추가로** 본다(읽기 전용).
+ * 실제 입력을 주면 lifecycle 계약 기준 재현성 증거를 **추가로** 본다(읽기 전용) — old 거부 11건 · new 2회 동일 · semantic delta whitelist · readiness.
  *
  * 🔴 변이 하네스가 lib · CLI 사본을 주입한다: MGRAPH_BUILD_LIB · MGRAPH_BUILD_CLI (없으면 저장소 파일).
  *    적재 실패는 `LOAD_ERROR` 로 따로 알린다 — 검출로 세지 않게 하기 위해서다.
@@ -540,43 +540,139 @@ test('반례16b — 최종 산출의 빈·형식 밖 edgeId · 중복 edgeId · 
   eq(rejectWhy(() => lib.validateBuiltArtifacts(l)), null, '같은 intent 의 다른 slug 는 정상')
 })
 
-// ── 실제 입력 동일성 (선택) ──
-const realInput = argOf('--real-input'), realProduct = argOf('--real-product')
-if (realInput && realProduct) {
-  test('실제 입력 — 2026-10-15 family 입력이 현재 제품 bundle 과 같은 판 · 같은 EXPORT_HASH · 같은 GRAPH 본문', () => {
-    const read = (p) => readFileSync(p, 'utf8')
-    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
-    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
-    const b = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN })
-    eq([b.graphVersion, b.manifest.contentHash.combined, b.manifest.exportHash], ['g-20261015-d5f6fe', 'd5f6fe78fc422b1b', '87c775af6cd5ea0f'], '판')
-    const strip = (t) => t.split('\n').slice(3).join('\n')
-    eq(strip(b.files[`bundle/${b.graphVersion}.ts`]), strip(read(join(realProduct, `src/content/magazine/graph/${b.graphVersion}.ts`))), 'GRAPH 본문')
+// ── 반례 17 — lifecycle 정합: 공개(LIVE) 글에 공개 전 coverage 가 남으면 build 전 거부 ──
+test('반례17 — LIVE + SCHEDULED_NOT_YET_PUBLIC · QUEUED_NOT_PUBLIC 는 INPUT_SCHEMA_INVALID, LIVE + ANSWERS · 비공개 + 공개 전 coverage 는 통과', () => {
+  const layers = build().layers
+  const live = layers.mappings.findIndex((m) => m.assetState === 'LIVE')
+  const withMapping = (patch, i = live) => { const l = JSON.parse(JSON.stringify(layers)); Object.assign(l.mappings[i], patch); return l }
+  for (const cov of ['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC']) {
+    const r = rejectWhy(() => lib.validateBuiltArtifacts(withMapping({ coverage: cov })))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(`lifecycle 모순 — LIVE 인데 coverage ${cov}`), `${cov}: ${JSON.stringify(r)}`)
+  }
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(withMapping({ coverage: 'ANSWERS' }))), null, 'LIVE + ANSWERS')
+  for (const cov of ['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC']) {
+    eq(rejectWhy(() => lib.validateBuiltArtifacts(withMapping({ assetState: 'QUEUED', coverage: cov }))), null, `QUEUED + ${cov} 는 모순이 아니다`)
+  }
+})
+test('반례17b — 입력에서 공개 글의 coverage 가 공개 전이면 build 가 멈추고 CLI 산출 write 0', () => {
+  const w = baseWorld(); w.canonical[1].existingSlugs[0].coverage = 'QUEUED_NOT_PUBLIC'
+  const r = rejectWhy(() => build({ world: w }))
+  ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('lifecycle 모순'), JSON.stringify(r))
+  const inStale = join(TMP, 'in-stale'); writeTree(inStale, inputTextsOf(w))
+  const out = join(TMP, 'out-stale'); const c = runCli(inStale, out)
+  eq([c.code, c.json?.code], [1, 'INPUT_SCHEMA_INVALID'], 'CLI')
+  ok(!existsSync(out), 'out-dir 가 만들어졌다')
+})
+
+// ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
+//    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
+const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')
+const readText = (p) => readFileSync(p, 'utf8')
+const inputsAt = (dir) => Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, readText(join(dir, n))]))
+const productAt = (root) => Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, readText(join(root, rel))]))
+const REAL_EFF = '2026-10-17T00:00:00+09:00', REAL_GEN = '2026-10-16T15:00:00.000Z'
+/** 2026-10-15-family 의 lifecycle 모순 — 2026-10-17 본문 대조 감사 대상과 같은 11건 */
+const LIFECYCLE_11 = ['I-T0-02|moment-body-changed', 'I-T1-17|dry-eyes-menopause', 'I-T2-10|autumn-low-mood', 'I-T3-04|husband-retired-at-home',
+  'I-T4-04|checkup-items-50s', 'I-T4-05|hormone-therapy-who', 'I-T4-06|bone-density-test-when', 'I-T5-06|irp-tax-benefit',
+  'I-T6-01|starting-work-at-this-age', 'I-T6-04|certificate-in-50s', 'I-T8-05|menopause-supplements-talk']
+/** 감사로 승인된 mapping 변화 — 이 밖의 mapping 변화는 0 이어야 한다 */
+const APPROVED_MAPPING = {
+  'I-T0-02|moment-body-changed': 'ANSWERS_PARTIAL', 'I-T1-17|dry-eyes-menopause': 'ANSWERS_PARTIAL', 'I-T2-10|autumn-low-mood': 'ANSWERS_PARTIAL',
+  'I-T3-04|husband-retired-at-home': 'ANSWERS', 'I-T4-04|checkup-items-50s': 'ANSWERS', 'I-T4-05|hormone-therapy-who': 'ANSWERS',
+  'I-T4-06|bone-density-test-when': 'ANSWERS', 'I-T5-06|irp-tax-benefit': 'ANSWERS_PARTIAL', 'I-T6-01|starting-work-at-this-age': 'REMOVED',
+  'I-T6-04|certificate-in-50s': 'ANSWERS', 'I-T8-05|menopause-supplements-talk': 'ANSWERS',
+}
+const runRealCli = (input, out) => {
+  try {
+    execFileSync(process.execPath, [CLI, '--input-root', input, '--product-root', realProduct, '--effective-at', REAL_EFF, '--generated-at', REAL_GEN, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] })
+    return 0
+  } catch (e) { return e.status }
+}
+if (oldInput && newInput && realProduct) {
+  const product = lib.parseProductTexts(productAt(realProduct))
+  const layersAt = (dir) => lib.buildGraphLayers({ inputs: lib.parseInputTexts(inputsAt(dir)), implementedSurfaces: product.implemented })
+  test('실제 입력 1 — 2026-10-15-family 는 정확히 lifecycle 모순 11건으로 INPUT_SCHEMA_INVALID · bundle 0 · write 0 · 다른 모순 0', () => {
+    const r = rejectWhy(() => lib.buildAll({ inputTexts: inputsAt(oldInput), productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.startsWith('산출 계약 11건 — '), JSON.stringify(r).slice(0, 300))
+    const l = layersAt(oldInput)
+    eq(l.mappings.filter((m) => m.assetState === 'LIVE' && lib.PRE_PUBLIC_COVERAGES.includes(m.coverage)).map((m) => `${m.intentId}|${m.slug}`).sort(), [...LIFECYCLE_11].sort(), '모순 11건 신원')
+    const out = join(TMP, 'real-old-out')
+    eq(runRealCli(oldInput, out), 1, 'CLI 종료 코드'); ok(!existsSync(out), 'old 입력으로 out-dir 가 만들어졌다')
   })
-  test('실제 입력 — automation 첫 행 primaryQuery 를 지우면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
-    const read = (p) => readFileSync(p, 'utf8')
-    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
+  test('실제 입력 2 — 2026-10-17-money-work 는 같은 effectiveAt · generatedAt 2회 build 가 목록 · 바이트 · manifest · hash 까지 동일', () => {
+    const a = join(TMP, 'real-new-a'), b = join(TMP, 'real-new-b')
+    eq([runRealCli(newInput, a), runRealCli(newInput, b)], [0, 0], 'CLI 종료 코드')
+    eq(treeHash(a), treeHash(b), '트리 해시'); eq(fileList(a), fileList(b), '파일 목록')
+  })
+  test('실제 입력 3 — semantic delta whitelist: intent 는 감사 11건의 existingAssetRelation 만 · mapping 은 승인 11건만 · authored edge 추가는 E-0329 만 · generated tuple 집합 동일', () => {
+    const o = layersAt(oldInput), n = layersAt(newInput)
+    const J = (x) => JSON.stringify(x)
+    const audited = new Set(LIFECYCLE_11.map((k) => k.split('|')[0]))
+    const oi = new Map(o.intents.map((x) => [x.intentId, x]))
+    eq(n.intents.map((x) => x.intentId), o.intents.map((x) => x.intentId), 'intent 목록 · 순서')
+    const intentDiff = n.intents.flatMap((b) => { const a = oi.get(b.intentId); return Object.keys({ ...a, ...b }).filter((k) => J(a[k]) !== J(b[k])).map((k) => `${b.intentId}.${k}`) })
+    eq(intentDiff.filter((d) => !(d.endsWith('.existingAssetRelation') && audited.has(d.split('.')[0]))), [], '승인 밖 intent 변화')
+    const mk = (m) => `${m.intentId}|${m.slug}`
+    const om = new Map(o.mappings.map((m) => [mk(m), m])), nm = new Map(n.mappings.map((m) => [mk(m), m]))
+    const mapDiff = {}
+    for (const [k, a] of om) { const b = nm.get(k); if (!b) mapDiff[k] = 'REMOVED'; else if (J(a) !== J(b)) { const keys = Object.keys({ ...a, ...b }).filter((x) => J(a[x]) !== J(b[x])); ok(keys.every((x) => ['coverage', 'publishedAt'].includes(x)), `${k} 승인 밖 필드 ${keys}`); mapDiff[k] = b.coverage } }
+    for (const k of nm.keys()) if (!om.has(k)) mapDiff[k] = 'ADDED'
+    eq(mapDiff, APPROVED_MAPPING, 'mapping 변화')
+    const auth = (L) => new Map(L.edges.filter((e) => !e.generatedBy).map((e) => [e.edgeId, e]))
+    const oa = auth(o), na = auth(n)
+    eq([...na.keys()].filter((id) => !oa.has(id)), ['E-0329'], '신규 authored edge')
+    eq([...oa.keys()].filter((id) => !na.has(id)), [], '사라진 authored edge')
+    const e329 = na.get('E-0329')
+    eq([e329.fromIntentId, e329.toIntentId, e329.relationType, e329.placement, e329.priority, e329.reciprocalPolicy, e329.readerReason, e329.anchorLabel],
+      ['I-T6-05', 'I-T6-01', 'NEXT_QUESTION', 'FOOTER_NEXT', 2, 'ONE_WAY', '배울 것을 고른 다음에는 지금 조건으로 일을 다시 시작하려면 어디부터 알아볼지 묻게 된다', '재취업은 어디부터 알아볼까'], 'E-0329 고정값')
+    const tup = (e) => J([e.fromIntentId, e.toIntentId, e.relationType, e.placement, e.readerReason])
+    const oById = new Map(o.edges.map((e) => [e.edgeId, e])), nById = new Map(n.edges.map((e) => [e.edgeId, e]))
+    const liveChanged = new Set(['I-T6-01']) // starting-work-at-this-age 매핑 제거로 LIVE slug 목록이 바뀐 intent
+    const DERIVED = new Set(['fromLive', 'toLive'])
+    for (const [id, a] of oa) {
+      const b = na.get(id)
+      for (const k of Object.keys({ ...a, ...b }).filter((x) => J(a[x]) !== J(b[x]))) {
+        if (k === 'reverseEdgeId') { ok(oById.get(a.reverseEdgeId)?.generatedBy && tup(oById.get(a.reverseEdgeId)) === tup(nById.get(b.reverseEdgeId)), `${id} reverseEdgeId 가 다른 의미의 edge 로 옮겨 갔다`); continue }
+        ok(DERIVED.has(k) && (liveChanged.has(a.fromIntentId) || liveChanged.has(a.toIntentId)), `${id}.${k} 승인 밖 변화`)
+        const removed = [...(a[k] ?? [])].filter((x) => !(b[k] ?? []).includes(x)), addedLive = [...(b[k] ?? [])].filter((x) => !(a[k] ?? []).includes(x))
+        eq([removed, addedLive], [['starting-work-at-this-age'], []], `${id}.${k}`)
+      }
+    }
+    const og = o.edges.filter((e) => e.generatedBy), ng = n.edges.filter((e) => e.generatedBy)
+    eq(ng.map(tup).sort(), og.map(tup).sort(), 'generated 의미 tuple 집합')
+    const gBy = new Map(og.map((e) => [tup(e), e]))
+    for (const e of ng) { const a = gBy.get(tup(e)); eq(Object.keys({ ...a, ...e }).filter((k) => !['edgeId', 'reverseEdgeId'].includes(k) && J(a[k]) !== J(e[k])), [], `generated ${e.edgeId} 기타 필드`) }
+  })
+  test('실제 입력 3b — money-work 를 켠 control 사본에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099', () => {
+    const pt = productAt(realProduct)
+    const control = pt.control.replace("enabledClusters: ['sleep', 'family'],", "enabledClusters: ['sleep', 'family', 'money-work'],")
+    ok(control !== pt.control, 'control 사본 치환 실패 — 제품 control 이 예상과 다르다')
+    const b = lib.buildAll({ inputTexts: inputsAt(newInput), productTexts: { ...pt, control }, admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN })
+    eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-05'], 'GRAPH_READY')
+    const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')
+    eq(x.direct.targets.map((t) => `${t.edgeId}→${t.toIntentId}/${t.slug}`), ['E-0188→I-T6-04/certificate-in-50s', 'E-0329→I-T6-01/rehire-where-to-start'], 'direct')
+    eq(x.discovery.targets.map((t) => t.edgeId), ['E-0100'], 'discovery')
+    ok(x.reverse.sources.some((s) => s.edgeId === 'E-0099'), `reverse ${JSON.stringify(x.reverse.sources)}`)
+    eq(b.layers.mappings.filter((m) => m.slug === 'starting-work-at-this-age').length, 0, 'starting-work-at-this-age graph 매핑 0')
+  })
+  test('실제 입력 — 새 snapshot 에서 automation 첫 행 primaryQuery 를 지우면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
+    const inputTexts = inputsAt(newInput)
     const rows = inputTexts['g4-automation-2026-09-23.jsonl'].trim().split('\n')
     const first = JSON.parse(rows[0]); delete first.primaryQuery; rows[0] = JSON.stringify(first)
     inputTexts['g4-automation-2026-09-23.jsonl'] = rows.join('\n') + '\n'
-    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
-    let err = null, built = null
-    try { built = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { err = e }
-    eq([err?.code, built === null], ['INPUT_SCHEMA_INVALID', true], '손상 입력')
-    ok(/primaryQuery 누락/.test(err.why), err.why)
+    const r = rejectWhy(() => lib.buildAll({ inputTexts, productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && /primaryQuery 누락/.test(r.why), JSON.stringify(r).slice(0, 300))
   })
-  test('실제 입력 — 첫 graph 행 edgeId 를 null 로 손상하면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
-    const read = (p) => readFileSync(p, 'utf8')
-    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
+  test('실제 입력 — 새 snapshot 의 첫 graph 행 edgeId 를 null 로 손상하면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
+    const inputTexts = inputsAt(newInput)
     const rows = inputTexts['g5-graph-2026-09-23.jsonl'].trim().split('\n')
     rows[0] = JSON.stringify({ ...JSON.parse(rows[0]), edgeId: null })
     inputTexts['g5-graph-2026-09-23.jsonl'] = rows.join('\n') + '\n'
-    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
-    let code = null, built = null
-    try { built = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { code = e.code }
-    eq([code, built === null], ['INPUT_SCHEMA_INVALID', true], '손상 입력')
+    const r = rejectWhy(() => lib.buildAll({ inputTexts, productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN }))
+    eq(r?.code, 'INPUT_SCHEMA_INVALID', '손상 입력')
   })
 } else {
-  results.push('  ⏭  실제 입력 동일성 — --real-input · --real-product 미지정 (통과로 세지 않는다)')
+  results.push('  ⏭  실제 입력 재현성 — --old-input · --new-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 
 rmSync(TMP, { recursive: true, force: true })

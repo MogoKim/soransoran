@@ -115,6 +115,12 @@ const MUTATIONS = [
     to: "label: '산출 mapping', keyOf: mappingKey, valid: nonEmpty, unique: false", expect: '반례16b' },
   { id: 'M68 공용 시각 왕복 대조를 항상 참으로', file: 'lib', from: "return new Date(ms + offsetMin * 60e3).toISOString().slice(0, 19) === text.slice(0, 19)",
     to: 'return true', expect: '반례11' },
+  { id: 'M69 lifecycle 정합 관문 전체 제거', file: 'lib', from: "if (m.assetState === 'LIVE' && PRE_PUBLIC_COVERAGES.includes(m.coverage)) bad.push(",
+    to: 'if (false) bad.push(', expect: '반례17' },
+  { id: 'M70 SCHEDULED_NOT_YET_PUBLIC 거부 제거', file: 'lib', from: "PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC'])",
+    to: "PRE_PUBLIC_COVERAGES = Object.freeze(['QUEUED_NOT_PUBLIC'])", expect: '반례17' },
+  { id: 'M71 QUEUED_NOT_PUBLIC 거부 제거', file: 'lib', from: "PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC'])",
+    to: "PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC'])", expect: '반례17' },
 ]
 
 const TMP = mkdtempSync(join(tmpdir(), 'mgraph-build-mutation-'))
