@@ -11,7 +11,7 @@
  *
  * 🔴 모든 입력은 명시한다. 기본 경로 · 벽시계가 없다.
  * 🔴 읽기 전용: input-root · product-root · admission-root. 쓰기는 out-dir 하나뿐이다.
- * 🔴 current.ts · control.ts 를 쓰지 않는다. out-dir 의 **실제 경로**(symlink 해소)가 제품 src · 입력 · 장부 아래면 받지 않는다.
+ * 🔴 current.ts · control.ts 를 쓰지 않는다. out-dir 의 **실제 경로**(symlink 해소)가 product-root · 입력 · 장부 아래면 받지 않는다.
  *    판정 뒤 경로가 바뀌면 OUT_DIR_CHANGED 로 멈춘다.
  * 🔴 같은 graphVersion 폴더가 이미 있으면 바이트가 같을 때만 통과(UNCHANGED), 다르면 거부한다.
  *
@@ -44,8 +44,9 @@ const productRoot = resolve(arg('--product-root'))
 const outDir = resolve(arg('--out-dir'))
 const admissionRoot = arg('--admission-root') ? resolve(arg('--admission-root')) : null
 
-// 🔴 쓰기 경계 — **실제 경로**로 판정한다(조상 symlink 우회 차단). 입력 폴더 · 제품 src 아래에는 쓰지 않는다
-const forbidden = [{ label: '제품 src', path: join(productRoot, 'src') }, { label: 'input-root', path: inputRoot }]
+// 🔴 쓰기 경계 — **실제 경로**로 판정한다(조상 symlink 우회 차단).
+//    product-root 는 통째로 읽기 전용이다(src 만이 아니라 .git · scripts · docs · 루트 자체까지). 입력 · 장부도 같다
+const forbidden = [{ label: 'product-root', path: productRoot }, { label: 'input-root', path: inputRoot }]
 if (admissionRoot) forbidden.push({ label: 'admission-root', path: admissionRoot })
 let plan
 try { plan = planOutDir({ outDir, forbidden }) } catch (e) {

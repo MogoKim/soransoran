@@ -162,6 +162,17 @@ export function parseInputTexts(texts) {
 export const KNOWN_PLACEMENTS = Object.freeze(['CTA_END', 'FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE',
   'SERIES_NAV', 'BODY_INLINE_OR_TOP', 'BODY_CALLOUT'])
 const EDGE_ID_RE = /^E-\d{4,}$/
+const TERRITORY_RE = /^T\d+/
+/** intent/2 열거 계약 — 연구 입력 2026-10-15 판의 값 전부. 새 값은 계약 변경으로 들인다 */
+export const INTENT_ENUMS = Object.freeze({
+  policyScope: Object.freeze(['ALLOWED', 'BLOCKED']),
+  verificationProfile: Object.freeze(['STANDARD', 'MEDICAL', 'SENSITIVE', 'FINANCIAL']),
+  automationDecision: Object.freeze(['PASS', 'HOLD', 'REJECT']),
+  topicVerdict: Object.freeze(['AUTO_READY_TOPIC', 'EXTEND_EXISTING', 'AUTO_HOLD', 'AUTO_REJECT']),
+})
+/** runtimeState 는 없으면 builder 가 UNPUBLISHED 로 채운다. 있으면 이 값만 */
+export const RUNTIME_STATES = Object.freeze(['UNPUBLISHED', 'QUARANTINED'])
+export const RECIPROCAL_POLICIES = Object.freeze(['ONE_WAY', 'BACKLINK_REQUIRED', 'MUTUAL'])
 
 /**
  * 🔴 build 전 최소 구조 · 신원 계약. 손상된 입력이 TypeError 나 **잘못된 bundle** 로 새지 않고
@@ -180,18 +191,41 @@ export function validateInputs({ canonical, automation, graph, published, queued
     })
     return seen
   }
+  if (!canonical.length) bad.push('canonical intent 가 0개다')
+  if (!automation.length) bad.push('automation intent 가 0개다')
+  if (!graph.length) bad.push('graph edge 가 0개다')
   const canon = ids(canonical, 'canonical')
   const auto = ids(automation, 'automation')
   const onlyAuto = [...auto].filter((x) => !canon.has(x)), onlyCanon = [...canon].filter((x) => !auto.has(x))
   if (onlyAuto.length || onlyCanon.length) bad.push(`canonical·automation intent 집합이 다르다 (automation 만 ${onlyAuto.slice(0, 3)} · canonical 만 ${onlyCanon.slice(0, 3)})`)
+  const board = (v) => v == null || BOARDS.includes(v)
   canonical.forEach((c, i) => {
     if (!plain(c)) return
+    const at = `canonical ${i + 1}행`
     if (c.existingSlugs != null && (!Array.isArray(c.existingSlugs) || !c.existingSlugs.every((s) => plain(s) && nonEmpty(s.slug)))) {
-      bad.push(`canonical ${i + 1}행 existingSlugs 형식 오류`)
+      bad.push(`${at} existingSlugs 형식 오류`)
     }
+    if (c.answerScope != null && !str(c.answerScope)) bad.push(`${at} answerScope 형식 오류`)
+    if (c.exclusions != null && (!Array.isArray(c.exclusions) || !c.exclusions.every(str))) bad.push(`${at} exclusions 형식 오류`)
+    if (!board(c.communityDestination)) bad.push(`${at} communityDestination 이 게시판 계약 밖이다: ${JSON.stringify(c.communityDestination)}`)
   })
+  // 🔴 intent/2 산출의 필수 필드. null 허용 · builder 기본값(runtimeState → UNPUBLISHED, communityDestination → 영토 게시판)은 그대로 둔다
   automation.forEach((a, i) => {
-    if (plain(a) && (!str(a.automationDecision) || !str(a.policyScope))) bad.push(`automation ${i + 1}행 automationDecision·policyScope 가 문자열이 아니다`)
+    if (!plain(a)) return
+    const at = `automation ${i + 1}행 ${a.intentId ?? ''}`
+    for (const k of ['primaryQuery', 'audienceSituation']) if (!nonEmpty(a[k])) bad.push(`${at} ${k} 누락`)
+    if (!str(a.territoryId) || !TERRITORY_RE.test(a.territoryId)) bad.push(`${at} territoryId 형식 오류: ${JSON.stringify(a.territoryId)}`)
+    if (a.magazineCluster != null && !nonEmpty(a.magazineCluster)) bad.push(`${at} magazineCluster 형식 오류`)
+    for (const [k, allowed] of Object.entries(INTENT_ENUMS)) {
+      if (!allowed.includes(a[k])) bad.push(`${at} ${k} 계약 밖: ${JSON.stringify(a[k])}`)
+    }
+    if (a.runtimeState != null && !RUNTIME_STATES.includes(a.runtimeState)) bad.push(`${at} runtimeState 계약 밖: ${JSON.stringify(a.runtimeState)}`)
+    for (const k of ['policyScopeWhy', 'verdictWhy', 'existingAssetRelation']) if (!str(a[k])) bad.push(`${at} ${k} 누락`)
+    for (const k of ['profileSpec', 'evidence']) if (!plain(a[k])) bad.push(`${at} ${k} 누락·형식 오류`)
+    if (a.retryPolicy != null && !plain(a.retryPolicy)) bad.push(`${at} retryPolicy 형식 오류`)
+    if (a.quarantineReason != null && !str(a.quarantineReason)) bad.push(`${at} quarantineReason 형식 오류`)
+    if (a.duplicateReason != null && !str(a.duplicateReason)) bad.push(`${at} duplicateReason 형식 오류`)
+    if (!board(a.communityDestination)) bad.push(`${at} communityDestination 이 게시판 계약 밖이다: ${JSON.stringify(a.communityDestination)}`)
   })
   const edgeIds = new Set()
   graph.forEach((e, i) => {
@@ -206,7 +240,9 @@ export function validateInputs({ canonical, automation, graph, published, queued
     if (e.relationType === 'COMMUNITY') { if (!nonEmpty(e.toIntentId)) bad.push(`${at} COMMUNITY 의 toIntentId 가 비었다`) }
     else if (!nonEmpty(e.toIntentId) || !auto.has(e.toIntentId)) bad.push(`${at} toIntentId 가 intent 집합에 없다: ${JSON.stringify(e.toIntentId)}`)
     if (!str(e.readerReason) || !str(e.anchorLabel)) bad.push(`${at} readerReason·anchorLabel 이 문자열이 아니다`)
-    if (typeof e.priority !== 'number' || !Number.isFinite(e.priority)) bad.push(`${at} priority 가 수가 아니다`)
+    if (!Number.isInteger(e.priority) || e.priority < 1) bad.push(`${at} priority 가 1 이상 정수가 아니다: ${JSON.stringify(e.priority)}`)
+    if (!RECIPROCAL_POLICIES.includes(e.reciprocalPolicy)) bad.push(`${at} reciprocalPolicy 계약 밖: ${JSON.stringify(e.reciprocalPolicy)}`)
+    if (e.riskNote != null && !str(e.riskNote)) bad.push(`${at} riskNote 형식 오류`)
     if (e.reverseEdgeId != null && !str(e.reverseEdgeId)) bad.push(`${at} reverseEdgeId 형식 오류`)
     if (e.backlinkPlan != null) {
       const p = e.backlinkPlan

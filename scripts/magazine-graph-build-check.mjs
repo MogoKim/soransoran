@@ -169,7 +169,8 @@ const input1 = join(TMP, 'in1'), input2 = join(TMP, 'deep/other/in2'), product =
 writeTree(input1, inputTextsOf(baseWorld()))
 writeTree(input2, inputTextsOf(baseWorld()))
 writeTree(product, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': ARTICLES,
-  'src/content/magazine/graph/current.ts': "export { GRAPH, EXPORT_HASH } from './g-00000000-000000'\n" })
+  'src/content/magazine/graph/current.ts': "export { GRAPH, EXPORT_HASH } from './g-00000000-000000'\n",
+  '.git/HEAD': 'ref: refs/heads/main\n', 'scripts/tool.mjs': '// x\n', 'docs/note.md': '# n\n' })
 writeTree(adm, { 'contract/m3-slug-manifest.json': ADMISSION.slugManifest, 'contract/m3-state.jsonl': '' })
 const runCli = (inputRoot, outDir, extra = []) => {
   try {
@@ -394,6 +395,62 @@ test('반례12 — 신원 · 구조 손상은 bundle 을 만들지 않고 INPUT_
   }
 })
 
+// ── 반례 13 — product-root 전체가 읽기 전용 ──
+test('반례13 — product-root 자체 · .git · scripts · docs 아래와 그리로 귀결되는 symlink 는 OUT_DIR_FORBIDDEN · write 0', () => {
+  symlinkSync(product, join(safe, 'to-product-root'))
+  const outs = [product, join(product, '.git/mgraph-stage'), join(product, 'scripts/out'), join(product, 'docs/out'), join(product, 'new-dir/out'),
+    join(safe, 'to-product-root'), join(safe, 'to-product-root/.git/mgraph-stage')]
+  for (const out of outs) {
+    const r = runCli(input1, out)
+    eq([r.code, r.json?.code], [1, 'OUT_DIR_FORBIDDEN'], out)
+    ok(/product-root/.test(r.json?.why ?? ''), `거부 사유가 product-root 가 아니다: ${r.json?.why}`)
+  }
+  eq(fileList(product), productListBefore, '제품 파일 목록'); eq(treeHash(product), productBefore, '제품 바이트')
+  eq([treeHash(input1), treeHash(adm)], [inputBefore, admBefore], '입력 · 장부 바이트')
+})
+
+// ── 반례 14 — intent/2 · edge/3 필수 필드 ──
+test('반례14 — 빈 집합 · 필수 필드 누락 · 계약 밖 enum/type 은 build 전 INPUT_SCHEMA_INVALID (사유까지 대조)', () => {
+  const del = (k) => (w) => { delete w.automation[0][k] }
+  const cases = [
+    ['세 집합 모두 빈 입력 — canonical', (w) => { w.canonical = []; w.automation = []; w.graph = [] }, 'canonical intent 가 0개'],
+    ['세 집합 모두 빈 입력 — automation', (w) => { w.canonical = []; w.automation = []; w.graph = [] }, 'automation intent 가 0개'],
+    ['세 집합 모두 빈 입력 — graph', (w) => { w.canonical = []; w.automation = []; w.graph = [] }, 'graph edge 가 0개'],
+    ['primaryQuery 누락', del('primaryQuery'), 'primaryQuery 누락'],
+    ['audienceSituation 빈 문자열', (w) => { w.automation[0].audienceSituation = ' ' }, 'audienceSituation 누락'],
+    ['territoryId 누락', del('territoryId'), 'territoryId 형식 오류'],
+    ['policyScope 누락', del('policyScope'), 'policyScope 계약 밖'],
+    ['verificationProfile 계약 밖', (w) => { w.automation[0].verificationProfile = 'LOOSE' }, 'verificationProfile 계약 밖'],
+    ['automationDecision 계약 밖', (w) => { w.automation[0].automationDecision = 'MAYBE' }, 'automationDecision 계약 밖'],
+    ['topicVerdict 누락', del('topicVerdict'), 'topicVerdict 계약 밖'],
+    ['runtimeState 계약 밖', (w) => { w.automation[0].runtimeState = 'LIVE' }, 'runtimeState 계약 밖'],
+    ['evidence 누락', del('evidence'), 'evidence 누락'],
+    ['profileSpec 누락', del('profileSpec'), 'profileSpec 누락'],
+    ['verdictWhy 누락', del('verdictWhy'), 'verdictWhy 누락'],
+    ['automation communityDestination 계약 밖', (w) => { w.automation[0].communityDestination = '/community/x' }, 'communityDestination 이 게시판 계약 밖'],
+    ['canonical communityDestination 계약 밖', (w) => { w.canonical[0].communityDestination = '/x' }, 'canonical 1행 communityDestination'],
+    ['reciprocalPolicy 누락', (w) => { delete w.graph[0].reciprocalPolicy }, 'reciprocalPolicy 계약 밖'],
+    ['reciprocalPolicy 계약 밖', (w) => { w.graph[0].reciprocalPolicy = 'SOMETIMES' }, 'reciprocalPolicy 계약 밖'],
+    ['priority 0', (w) => { w.graph[0].priority = 0 }, 'priority 가 1 이상 정수가 아니다'],
+    ['priority 1.5', (w) => { w.graph[0].priority = 1.5 }, 'priority 가 1 이상 정수가 아니다'],
+  ]
+  for (const [name, mutate, why] of cases) {
+    const w = baseWorld(); mutate(w)
+    let err = null, built = null
+    try { built = build({ world: w }) } catch (e) { err = e }
+    eq([err?.code, built === null], ['INPUT_SCHEMA_INVALID', true], name)
+    ok(String(err.why).includes(why), `${name}: 사유에 「${why}」 가 없다 — ${err.why}`)
+  }
+})
+test('반례14b — nullable · builder 기본값은 그대로 받는다(runtimeState 없음 · communityDestination null · cluster null)', () => {
+  const w = baseWorld()
+  delete w.automation[1].runtimeState; w.automation[1].communityDestination = null; w.automation[2].magazineCluster = null
+  w.automation[3].retryPolicy = null; w.automation[3].duplicateReason = null
+  const b = build({ world: w })
+  const i1 = b.layers.intents.find((x) => x.intentId === 'I-P1')
+  eq([i1.runtimeState, i1.communityDestination], ['UNPUBLISHED', '/community/free'], '기본값')
+})
+
 // ── 실제 입력 동일성 (선택) ──
 const realInput = argOf('--real-input'), realProduct = argOf('--real-product')
 if (realInput && realProduct) {
@@ -405,6 +462,18 @@ if (realInput && realProduct) {
     eq([b.graphVersion, b.manifest.contentHash.combined, b.manifest.exportHash], ['g-20261015-d5f6fe', 'd5f6fe78fc422b1b', '87c775af6cd5ea0f'], '판')
     const strip = (t) => t.split('\n').slice(3).join('\n')
     eq(strip(b.files[`bundle/${b.graphVersion}.ts`]), strip(read(join(realProduct, `src/content/magazine/graph/${b.graphVersion}.ts`))), 'GRAPH 본문')
+  })
+  test('실제 입력 — automation 첫 행 primaryQuery 를 지우면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
+    const read = (p) => readFileSync(p, 'utf8')
+    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
+    const rows = inputTexts['g4-automation-2026-09-23.jsonl'].trim().split('\n')
+    const first = JSON.parse(rows[0]); delete first.primaryQuery; rows[0] = JSON.stringify(first)
+    inputTexts['g4-automation-2026-09-23.jsonl'] = rows.join('\n') + '\n'
+    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
+    let err = null, built = null
+    try { built = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { err = e }
+    eq([err?.code, built === null], ['INPUT_SCHEMA_INVALID', true], '손상 입력')
+    ok(/primaryQuery 누락/.test(err.why), err.why)
   })
   test('실제 입력 — 첫 graph 행 edgeId 를 null 로 손상하면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
     const read = (p) => readFileSync(p, 'utf8')
