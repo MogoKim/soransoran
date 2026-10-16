@@ -96,7 +96,8 @@ M-GRAPH next approved node
 - 중복 provider·write·register 0
 - 재실행 멱등성
 - fail-closed와 rollback — 실패하면 해당 행만 HOLD하고 legacy로 되돌릴 수 있다
-- 운영자 수동 개입 0
+- 운영자 수동 개입 0 — 범위: 승인 source 작성·명시적 승인·G8 편입·한 건 opt-in이 완료된 **뒤**,
+  source 소비부터 manuscript·QA·hero·register·PR·CI·merge·deploy·watch까지. 그 앞 단계의 사람 승인은 이 조건에 들지 않는다
 
 ### 경계
 
@@ -110,7 +111,7 @@ M-GRAPH next approved node
 |---|---|---|
 | **10/16 오늘** | canary 후보 1건 준비. 현재 3+1이 증명되는 노드가 0이므로 먼저 §5의 M-GRAPH 선행 작업을 닫는다 | Codex 승인 뒤 실제 source 승인·G8·opt-in 1건, supervised commissioning 1건 |
 | **10/17** | 활성 cluster·surface의 공개 HTML·watch와 kill switch 확인 | 첫 DIRECT_SPEC 자연 회차, 두 번째 canary |
-| **10/18** | M-GRAPH OPERATING_PASS 또는 정확한 미달 판정 | 반복성·rollback 확인, M-AUTO OPERATING_PASS 또는 정확한 미달 판정 |
+| **10/18** | M-GRAPH ACTIVE 및 이번 commissioning 조건 충족/미달 판정 | 반복성·rollback 확인, M-AUTO OPERATING_PASS 또는 정확한 미달 판정 |
 
 원칙은 **코드로 재현 가능한 결함을 내일 자연 회차로 넘기지 않는 것**이다. 내일 이후로 남겨도 되는 것은
 실제 외부 시스템, 예약 공개, 무인 스케줄처럼 시간 경과가 증거의 일부인 관측뿐이다.
