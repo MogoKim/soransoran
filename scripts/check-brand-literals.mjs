@@ -225,7 +225,221 @@ function walk(dir, out = []) {
   return out
 }
 
+/**
+ * 외부 간판 계약 — 검색 제목·설명·공유 카드가 확정 문구 하나를 읽는가
+ *
+ * 🔴 바깥 간판은 연령을 앞세우지 않는다(2026-10-16 확정). 내부 핵심 고객 정의는
+ *    NORTH-STAR 가 정하고, 이 계약은 바깥에 보이는 세 문구만 본다.
+ *
+ *   1. SITE.title · tagline · description 이 확정 문구와 정확히 같다
+ *      (title 의 브랜드명은 brand-name.ts 의 BRAND_NAME 을 풀어 비교한다)
+ *   2. 기본 OG 그림이 SITE.tagline 을 JSX 안에서 읽고, 한글 카피를 직접 적지 않는다
+ *      — 직접 적으면 정본을 바꿔도 그림에는 옛 문구가 남는다(실제로 그랬다)
+ *   3. 폐기 문구가 간판 경로에 다시 나타나지 않는다. 여러 JSX 조각으로 나눠 적어도
+ *      잡히도록 파일의 문자열 조각을 이어 붙인 뒤 공백을 접어 비교한다
+ */
+const SIGNBOARD = {
+  nameFile: 'src/lib/brand-name.ts',
+  brandFile: 'src/lib/brand.ts',
+  ogFile: 'src/app/opengraph-image.tsx',
+  expected: {
+    title: '소란소란 - 여성을 위한 커뮤니티',
+    tagline: '여성들이 이야기하는 곳',
+    description:
+      '갱년기, 몸과 마음, 가족과 관계, 일과 사는 이야기. 여성들이 편하게 자기 경험을 나누고 서로의 이야기에 답하는 커뮤니티입니다.',
+  },
+  /** 제목 폐기 문구 `소란소란 - 40대 50대 여성을 위한 커뮤니티` 는 브랜드명이 템플릿이라 뒷부분으로 잡는다 */
+  retired: ['40대 50대 여성이 이야기하는 곳', '40대 50대 여성을 위한 커뮤니티'],
+  /** SITE 문구가 바깥으로 나가는 경로 — 검색 metadata · 공유 카드 · manifest · 카카오 공유 · 홈 첫 화면 */
+  surfaces: [
+    'src/lib/brand.ts',
+    'src/app/layout.tsx',
+    'src/app/manifest.ts',
+    'src/app/opengraph-image.tsx',
+    'src/app/community/[boardSlug]/[postId]/opengraph-image.tsx',
+    'src/lib/share-link.ts',
+    'src/components/features/HomeHero.tsx',
+  ],
+}
+
+function parse(rel, text) {
+  return ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, rel.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+}
+
+function findConst(sourceFile, name) {
+  let init = null
+  const visit = (node) => {
+    if (init) return
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name) init = node.initializer ?? null
+    else ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  while (init && (ts.isAsExpression(init) || ts.isParenthesizedExpression(init))) init = init.expression
+  return init
+}
+
+/** 문자열 리터럴이거나 `${BRAND_NAME}` 만 끼운 템플릿이면 값을 돌려준다. 그 밖은 null — 정본이 아니다 */
+function resolveText(node, brandName) {
+  if (!node) return null
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
+  if (ts.isTemplateExpression(node)) {
+    let out = node.head.text
+    for (const span of node.templateSpans) {
+      if (!ts.isIdentifier(span.expression) || span.expression.text !== 'BRAND_NAME' || brandName == null) return null
+      out += brandName + span.literal.text
+    }
+    return out
+  }
+  return null
+}
+
+function readSignboard(nameText, brandText) {
+  const nameInit = findConst(parse(SIGNBOARD.nameFile, nameText), 'BRAND_NAME')
+  const brandName = nameInit && ts.isStringLiteral(nameInit) ? nameInit.text : null
+  const site = findConst(parse(SIGNBOARD.brandFile, brandText), 'SITE')
+  const values = {}
+  if (site && ts.isObjectLiteralExpression(site)) {
+    for (const p of site.properties) {
+      if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) values[p.name.text] = resolveText(p.initializer, brandName)
+    }
+  }
+  return values
+}
+
+function ogProblems(ogText) {
+  const problems = []
+  let readsTagline = false
+  const visit = (node, inJsx) => {
+    const jsx = inJsx || ts.isJsxExpression(node)
+    if (
+      jsx &&
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'SITE' &&
+      node.name.text === 'tagline'
+    ) {
+      readsTagline = true
+    }
+    if (ts.isJsxText(node) && /[가-힣]/.test(node.text)) problems.push(`그림에 직접 적힌 한글 카피: "${node.text.trim()}"`)
+    ts.forEachChild(node, (child) => visit(child, jsx))
+  }
+  visit(parse(SIGNBOARD.ogFile, ogText), false)
+  if (!readsTagline) problems.push('그림이 SITE.tagline 을 JSX 안에서 읽지 않는다')
+  return problems
+}
+
+function retiredHits(rel, text) {
+  const joined = collectTextNodes(parse(rel, text))
+    .map((n) => n.text ?? '')
+    .join(' ')
+    .replace(/\s+/g, ' ')
+  return SIGNBOARD.retired.filter((phrase) => joined.includes(phrase))
+}
+
+function signboardProblems(files) {
+  const problems = []
+  const values = readSignboard(files[SIGNBOARD.nameFile] ?? '', files[SIGNBOARD.brandFile] ?? '')
+  for (const [key, want] of Object.entries(SIGNBOARD.expected)) {
+    if (values[key] !== want) problems.push(`SITE.${key} 가 확정 문구와 다르다: ${JSON.stringify(values[key] ?? null)}`)
+  }
+  problems.push(...ogProblems(files[SIGNBOARD.ogFile] ?? ''))
+  for (const rel of SIGNBOARD.surfaces) {
+    if (files[rel] == null) {
+      problems.push(`간판 경로가 없다: ${rel}`)
+      continue
+    }
+    for (const phrase of retiredHits(rel, files[rel])) problems.push(`${rel}  폐기 문구 재등장: "${phrase}"`)
+  }
+  return problems
+}
+
+/** 🔴 간판 계약이 조용히 통과만 하는 죽은 검사가 되지 않도록, 깨진 입력을 실제로 잡는지 먼저 본다 */
+function signboardSelfTest() {
+  const { title, tagline, description } = SIGNBOARD.expected
+  const titleTail = title.replace('소란소란 - ', '')
+  const name = "export const BRAND_NAME = '소란소란'"
+  const brand = (t, g, d) =>
+    `export const SITE = { name: BRAND_NAME, title: \`\${BRAND_NAME} - ${t}\`, tagline: '${g}', description: '${d}', url: x } as const`
+  const goodBrand = brand(titleTail, tagline, description)
+  const goodOg = 'export const alt = `${SITE.name} — ${SITE.tagline}`\nconst a = <div style={{}}>{SITE.tagline}</div>'
+  const base = Object.fromEntries(SIGNBOARD.surfaces.map((rel) => [rel, 'export {}']))
+  const files = (patch) => ({
+    ...base,
+    [SIGNBOARD.nameFile]: name,
+    [SIGNBOARD.brandFile]: goodBrand,
+    [SIGNBOARD.ogFile]: goodOg,
+    ...patch,
+  })
+
+  const cases = [
+    { why: '확정 문구와 tagline 을 읽는 OG 는 통과', input: files({}), expect: 0 },
+    {
+      why: '옛 제목은 실패(불일치 + 폐기 문구)',
+      input: files({ [SIGNBOARD.brandFile]: brand('40대 50대 여성을 위한 커뮤니티', tagline, description) }),
+      expect: 2,
+    },
+    {
+      why: '옛 tagline 은 실패(불일치 + 폐기 문구)',
+      input: files({ [SIGNBOARD.brandFile]: brand(titleTail, '40대 50대 여성이 이야기하는 곳', description) }),
+      expect: 2,
+    },
+    {
+      why: 'description 한 글자 차이도 실패',
+      input: files({ [SIGNBOARD.brandFile]: brand(titleTail, tagline, description.replace('답하는', '답하')) }),
+      expect: 1,
+    },
+    {
+      why: 'BRAND_NAME 이 아닌 값을 끼운 제목은 풀지 않고 실패',
+      input: files({ [SIGNBOARD.brandFile]: goodBrand.replace('${BRAND_NAME}', '${OTHER}') }),
+      expect: 1,
+    },
+    {
+      why: 'alt 에서만 tagline 을 읽고 그림엔 옛 문구를 나눠 적으면 실패(미연결 + 한글 2조각 + 폐기 문구)',
+      input: files({
+        [SIGNBOARD.ogFile]:
+          'export const alt = `${SITE.tagline}`\nconst a = <div><div>40대 50대 여성이</div><div>이야기하는 곳</div></div>',
+      }),
+      expect: 4,
+    },
+    {
+      why: '다른 간판 경로에 다시 적힌 폐기 문구도 실패',
+      input: files({ 'src/lib/share-link.ts': "const d = '40대 50대 여성이 이야기하는 곳'" }),
+      expect: 1,
+    },
+    { why: '간판 경로 파일이 사라지면 실패', input: files({ 'src/app/manifest.ts': undefined }), expect: 1 },
+  ]
+
+  const failed = []
+  for (const c of cases) {
+    const got = signboardProblems(c.input).length
+    if (got !== c.expect) failed.push({ ...c, got })
+  }
+  if (failed.length) {
+    console.error('🔴 외부 간판 계약 self-test 실패 — 검사 자신이 고장났습니다:\n')
+    for (const f of failed) console.error(`  ${f.why}\n    기대 ${f.expect}건, 실제 ${f.got}건`)
+    process.exit(1)
+  }
+  return cases.length
+}
+
 const selfTestCount = selfTest()
+const signboardSelfTestCount = signboardSelfTest()
+
+const signboardFiles = {}
+for (const rel of [SIGNBOARD.nameFile, ...SIGNBOARD.surfaces]) {
+  try {
+    signboardFiles[rel] = readFileSync(join(ROOT, rel), 'utf8')
+  } catch {
+    // 없는 파일은 signboardProblems 가 "간판 경로가 없다" 로 보고한다
+  }
+}
+const signboard = signboardProblems(signboardFiles)
+if (signboard.length) {
+  console.error('외부 간판 계약 위반:\n')
+  for (const p of signboard) console.error(`  ${p}`)
+  console.error(`\n총 ${signboard.length}건. 바깥 문구는 src/lib/brand.ts 의 SITE 하나에서만 정한다.`)
+  process.exit(1)
+}
 
 const violations = []
 for (const file of walk(TARGET)) {
@@ -241,4 +455,7 @@ if (violations.length) {
   process.exit(1)
 }
 
-console.log(`브랜드 리터럴 가드 통과 — 정본 파일 외 0건 (self-test ${selfTestCount}건 통과)`)
+console.log(
+  `브랜드 리터럴 가드 통과 — 정본 파일 외 0건 (self-test ${selfTestCount}건 통과) · ` +
+    `외부 간판 계약 통과 (self-test ${signboardSelfTestCount}건 통과)`,
+)
