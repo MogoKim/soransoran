@@ -111,12 +111,19 @@ function resolveSiteUrl(): string {
   )
 }
 
+/**
+ * 외부 간판 — 검색 제목·설명, 공유 카드, manifest 가 읽는 단일 정본
+ *
+ * 🔴 바깥 간판은 연령을 앞세우지 않는다. 내부 핵심 고객(40대 중반~60대 중반 · 핵심 50대)은
+ *    docs/operations/NORTH-STAR.md 가 정하며, 이 문구를 바꿔도 그 정의는 바뀌지 않는다.
+ * 🔴 세 값과 OG 그림의 소비 관계는 check:brand 가 대조한다.
+ */
 export const SITE = {
   name: BRAND_NAME,
-  title: `${BRAND_NAME} - 40대 50대 여성을 위한 커뮤니티`,
-  tagline: '40대 50대 여성이 이야기하는 곳',
+  title: `${BRAND_NAME} - 여성을 위한 커뮤니티`,
+  tagline: '여성들이 이야기하는 곳',
   description:
-    '갱년기, 몸과 마음, 사는 이야기. 40대 50대 여성이 서로의 이야기를 나누는 곳입니다.',
+    '갱년기, 몸과 마음, 가족과 관계, 일과 사는 이야기. 여성들이 편하게 자기 경험을 나누고 서로의 이야기에 답하는 커뮤니티입니다.',
   /** 항상 유효한 절대 URL. trailing slash 없음 */
   url: resolveSiteUrl(),
 } as const

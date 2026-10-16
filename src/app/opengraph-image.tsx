@@ -11,6 +11,11 @@ import { loadBrandLogoDataUri, OG_LOGO_HEIGHT, OG_LOGO_WIDTH } from '@/lib/brand
  * 🕘 **로고 자리는 2026-09-21 에 이미지로 바뀌었다.** 그 전에는 두 색 텍스트
  *    워드마크를 코드로 그렸다(앞 800 BRAND.color · 뒤 500 BRAND.strong · 52px).
  *    이제 화면과 같은 파일을 그린다 — 줄 높이 52px 은 그대로라 판은 바뀌지 않는다.
+ *
+ * 🔴 카피는 `SITE.tagline` 하나만 읽는다. 여기에 문장을 직접 적지 않는다.
+ *    2026-10-16 까지 이 자리에 옛 tagline 이 따로 적혀 있어서, 정본을 바꿔도
+ *    공유 카드 그림에는 옛 문구가 남았다. check:brand 가 이 연결을 대조한다.
+ *    줄은 tagline 길이에 맞춰 자동으로 접고, 어절 중간에서는 끊지 않는다(keep-all).
  */
 export const alt = `${SITE.name} — ${SITE.tagline}`
 export const size = { width: 1200, height: 630 }
@@ -47,12 +52,10 @@ export default function OgImage() {
             fontWeight: 800,
             color: BRAND.text,
             lineHeight: 1.25,
+            wordBreak: 'keep-all',
           }}
         >
-          40대 50대 여성이
-        </div>
-        <div style={{ display: 'flex', fontSize: 76, fontWeight: 800, color: BRAND.text }}>
-          이야기하는 곳
+          {SITE.tagline}
         </div>
         <div style={{ display: 'flex', marginTop: 40, width: 160, height: 12, background: BRAND.color }} />
       </div>
