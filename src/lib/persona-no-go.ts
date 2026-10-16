@@ -57,11 +57,28 @@ export function commonNoGoHits(text: string): string[] {
 export type NoGoHits = { topics: string[]; expressions: string[]; common: string[] }
 
 /**
- * 🔴 **본문 No-Go 판정** — 소재는 적힌 그대로, 말버릇은 열쇠로, 공통은 언제나 본다.
+ * 카드의 넓은 생활 소재를 실제 글에 나오는 구체 표현으로만 확장한다.
+ * 일반 소재 분류표가 아니라, 정본 카드 경계를 우회한 운영 결함이 확인된 축만 둔다.
+ */
+const NO_GO_TOPIC_TERMS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  자녀: Object.freeze([
+    '자녀', '아들', '딸아이', '우리 딸', '제 딸', '딸이 ', '딸은 ', '딸과 ', '딸을 ', '딸에게',
+    '임신', '출산', '태아', '육아', '양육', '산후', '입덧',
+  ]),
+})
+
+const noGoTopicHit = (text: string, stored: string): boolean => {
+  const topic = stored.trim()
+  if (topic === '') return false
+  return (NO_GO_TOPIC_TERMS[topic] ?? [topic]).some((term) => text.includes(term))
+}
+
+/**
+ * 🔴 **본문 No-Go 판정** — 소재는 정본 경계의 구체 표현까지, 말버릇은 열쇠로, 공통은 언제나 본다.
  *    빈 값은 건너뛴다(빈 문자열은 모든 본문에 들어 있다).
  */
 export function noGoHits(text: string, persona: { noGoTopics?: readonly string[]; noGoExpressions?: readonly string[] }): NoGoHits {
-  const topics = (persona.noGoTopics ?? []).map((t) => t.trim()).filter((t) => t !== '' && text.includes(t))
+  const topics = (persona.noGoTopics ?? []).map((t) => t.trim()).filter((t) => noGoTopicHit(text, t))
   const expressions = (persona.noGoExpressions ?? []).map(noGoExpressionKey).filter((k) => k !== '' && text.includes(k))
   return { topics, expressions, common: commonNoGoHits(text) }
 }
