@@ -299,7 +299,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
      *    그날 이미 정산된 액수가 이 상한에 함께 든다. 회차마다 새로 $0.30 이 아니다.
      */
     /**
-     * 🔴 **장부는 env 값으로 막는다** — 운영 env 는 $0.30 (계약 천장 $0.50 이하, 2026-09-28).
+     * 🔴 **장부는 env 값으로 막는다** — 이 fixture의 운영 env는 $0.30이고 계약 천장 이하이다.
      *    아래 사례의 금액(0.28 · 0.19 …)은 그 운영 값 기준이다.
      */
     const OPERATING_DAILY_USD = 0.30
@@ -456,14 +456,14 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
       describeSupplySchedule().includes('회차당 원천 10 · 요청 40 (judge 10 · draft 30)'))
   }
 
-  // ── 🔴 하루 비용 — 계약 천장 $0.50 · 운영 env 0.30 ──
+  // ── 🔴 하루 비용 — 계약 천장 $1.20 · 운영 env는 별도 정본 ──
   const e10 = estimateSupplySpend(SUPPLY_WORKSET_PER_RUN)
   const e5 = estimateSupplySpend(5)
   console.log(`     실측 단가 추정 — 묶음 5: 회차 $${e5.expectedPerRun.toFixed(4)} · 하루 $${e5.expectedPerDay.toFixed(4)}`
     + `  |  묶음 10: 회차 $${e10.expectedPerRun.toFixed(4)} · 하루 $${e10.expectedPerDay.toFixed(4)}`
     + ` · 상한 전부 사용 시 회차 $${e10.capPerRun.toFixed(4)} · 하루 $${e10.capPerDay.toFixed(4)}`)
-  check('🔴 🔴 **계약 천장은 $0.50 — 운영 env 는 그 이하여야 한다(지금 0.30)**',
-    SUPPLY_DAILY_USD_APPROVED === 0.50)
+  check('🔴 🔴 **D20 준비 계약 천장은 $1.20 — 운영 env 는 그 이하여야 한다**',
+    SUPPLY_DAILY_USD_APPROVED === 1.20)
   check('🔴 🔴 **묶음 10 의 실측 기대 하루 지출이 천장 안이다** (공급만 · 장부는 댓글과 함께 쓴다)',
     SUPPLY_DAILY_USD_APPROVED !== null && e10.expectedPerDay <= SUPPLY_DAILY_USD_APPROVED
     && Math.abs(e10.expectedPerRun - 2 * e5.expectedPerRun) < 1e-9, `$${e10.expectedPerDay.toFixed(4)}`)

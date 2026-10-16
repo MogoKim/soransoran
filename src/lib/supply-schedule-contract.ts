@@ -61,16 +61,16 @@ export const SUPPLY_REQUESTS_PER_RUN = 40
  * 🔴 승인값이 `null` 이면 어떤 회차도 돌지 않는다(`NO_BUDGET`).
  */
 /**
- * 🔴 **계약 천장 $0.50/day** (2026-09-28 공급 가속 P0). 위 $0.30 근거는 그대로 남긴다 —
- *    천장은 "여기까지 허용한다" 이지 "이만큼 쓴다" 가 아니다.
+ * 🔴 **계약 천장 $1.20/day** (2026-10-16 D20 준비). 위 $0.30 근거와 D10까지 쓰던
+ *    $0.50 운영값은 그대로 남긴다 — 천장은 "여기까지 올릴 수 있다" 이지 "이만큼 쓴다" 가 아니다.
  *
- *    🔴 **운영 env(`SORAN_LLM_DAILY_BUDGET_USD`)는 0.30 그대로다** — 이 PR 은 env 를 바꾸지 않는다.
- *       장부는 env 값으로 막는다. 묶음 10 에서 하루 기대 지출(`estimateSupplySpend`)이 0.30 에
- *       가까우므로, 무거운 날에는 **늦은 회차(21:15 · 22:15)가 `DAILY_EXHAUSTED` 로 보류될 수 있다**
- *       (fail-closed · 입력은 남고 다음 날 첫 회차가 집는다). env 를 올릴지는 사람이 정한다 — 이 값 이하로만.
+ *    🔴 이 변경은 운영 env(`SORAN_LLM_DAILY_BUDGET_USD`)를 쓰지 않는다. D5·D10은 현재 env 값으로
+ *       계속 막히고, D20은 D10 operating PASS의 slot-valid 결과당 실측 비용으로 필요한 총액을 계산한 뒤
+ *       사람이 env를 올려야만 열린다. 최근 D5 실측 $0.0487/result를 단순 적용하면 D20은 $0.974/day라
+ *       옛 $0.50 천장으로는 구조적으로 불가능했고, $1.20은 그 값에 약 23% 여유를 둔 승인 천장이다.
  */
-export const SUPPLY_DAILY_USD_PROPOSED = 0.50
-export const SUPPLY_DAILY_USD_APPROVED: number | null = 0.50
+export const SUPPLY_DAILY_USD_PROPOSED = 1.20
+export const SUPPLY_DAILY_USD_APPROVED: number | null = 1.20
 
 /**
  * 🔴 **실측 단가** — 장부(`llm-ledger/2026-09-24~27.jsonl`) 정산액을 공급 회차별로 모은 값.
@@ -152,7 +152,7 @@ export function describeSupplySchedule(): string {
       + ` (judge ${SUPPLY_JUDGE_REQUESTS_PER_RUN} · draft ${SUPPLY_DRAFT_REQUESTS_PER_RUN})`,
     SUPPLY_DAILY_USD_APPROVED === null
       ? `🔴 하루 비용 상한 **미승인** — 제안값 $${SUPPLY_DAILY_USD_PROPOSED.toFixed(2)}`
-      : `하루 비용 계약 천장 $${SUPPLY_DAILY_USD_APPROVED.toFixed(2)} — 🔴 장부는 env 값으로 막는다(운영 0.30 · 이 천장 이하)`,
+      : `하루 비용 계약 천장 $${SUPPLY_DAILY_USD_APPROVED.toFixed(2)} — 🔴 장부는 별도 운영 env 값으로 막는다(이 천장 이하)`,
     `예산 env ${SUPPLY_BUDGET_ENV_NAMES.join(' · ')} — 🔴 정본 env 파일(~/${SUPPLY_ENV_FILE_REL}) 한 곳에 둔다`,
     `여유 배수 ${SUPPLY_RESERVE_HEADROOM} (입력 추정치에만 곱한다 · 출력은 확정 한도)`,
     `🔴 스위치 ${SUPPLY_ENABLE_ENV} 가 true 여야 --live 가 산다`,

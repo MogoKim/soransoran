@@ -177,11 +177,12 @@ export const COMMENT_LOOP_BUDGET_ENV = {
 
 /**
  * 🔴 **하루 절대 상한(USD).** env 가 이보다 크면 이 값으로 내린다 — 올릴 수 없다.
- *    마스터 정책(2026-09-28): 댓글 루프 하루 ≤ $0.20.
+ *    2026-10-16 D20 준비: D10 실측에서 산출한 첫 댓글 + 추가 댓글 비용을 담을 수 있게 최대 $0.50.
+ *    이 값은 소비 목표가 아니며 운영 env를 쓰지 않는다.
  */
-export const COMMENT_LOOP_DAILY_USD_MAX = 0.2
-/** env 가 없을 때의 기본값 — 🔴 상한과 같다(기본값이 상한을 넘지 않는다) */
-export const COMMENT_LOOP_DAILY_USD_DEFAULT = COMMENT_LOOP_DAILY_USD_MAX
+export const COMMENT_LOOP_DAILY_USD_MAX = 0.5
+/** env 가 없을 때의 기본값 — 🔴 D10까지 쓰던 $0.20을 유지한다. D20은 실측 뒤 env를 명시해야 한다 */
+export const COMMENT_LOOP_DAILY_USD_DEFAULT = 0.2
 /** 한 회차 유료 요청 상한 기본값 — 20회/day 슬롯 × 이 값이 하루 요청의 천장이다 */
 export const COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT = 6
 /** 예약 여유 배수 기본값 — 공급·감사 운영값과 같다 */
