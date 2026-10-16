@@ -13,7 +13,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -309,6 +309,91 @@ test('반례9 — 미등록 intent 전부가 한 행씩(edge 0 · HOLD 포함), 
   eq(row(b, 'I-Z').status, 'GRAPH_INCOMPLETE', 'edge 0 intent')
 })
 
+// ── 반례 10 — symlink 로 쓰기 경계 우회 ──
+const inputBefore = treeHash(input1), admBefore = treeHash(adm)
+const fileList = (root) => { const out = []; const walk = (d) => { for (const n of readdirSync(d).sort()) { const p = join(d, n); out.push(relative(root, p)); if (statSync(p).isDirectory()) walk(p) } }; walk(root); return out }
+const productListBefore = fileList(product)
+const safe = join(TMP, 'safe'); mkdirSync(safe, { recursive: true })
+test('반례10 — 안전해 보이는 symlink(safe/alias → 제품 src) 아래 out-dir 는 OUT_DIR_FORBIDDEN · write 0', () => {
+  symlinkSync(join(product, 'src'), join(safe, 'alias'))
+  const r = runCli(input1, join(safe, 'alias/mgraph-escape'))
+  eq([r.code, r.json?.code], [1, 'OUT_DIR_FORBIDDEN'], 'symlink 조상')
+  ok(!existsSync(join(product, 'src/mgraph-escape')), '제품 src 안에 산출물이 생겼다')
+  eq(fileList(product), productListBefore, '제품 파일 목록'); eq(treeHash(product), productBefore, '제품 바이트')
+})
+test('반례10b — out-dir 자신 · 깊은 조상 symlink 가 input · admission · 제품 src 로 귀결되거나 끊어진 symlink 면 거부', () => {
+  symlinkSync(input1, join(safe, 'to-input')); symlinkSync(adm, join(safe, 'to-adm')); symlinkSync(product, join(safe, 'to-product'))
+  symlinkSync(join(TMP, 'nowhere'), join(safe, 'dangling'))
+  for (const out of [join(safe, 'to-input'), join(safe, 'to-adm/x'), join(safe, 'to-product/src/content/y'), join(safe, 'dangling/z')]) {
+    const r = runCli(input1, out)
+    eq([r.code, r.json?.code], [1, 'OUT_DIR_FORBIDDEN'], out)
+  }
+  ok(!existsSync(join(TMP, 'nowhere')), '끊어진 symlink 를 따라 썼다')
+  eq(fileList(product), productListBefore, '제품 파일 목록'); eq(treeHash(product), productBefore, '제품 바이트')
+  eq([treeHash(input1), treeHash(adm)], [inputBefore, admBefore], '입력 · 장부 바이트')
+})
+test('반례10c — 금지 구역 밖을 가리키는 symlink 는 막지 않고 실제 위치에 쓴다', () => {
+  mkdirSync(join(TMP, 'real-out')); symlinkSync(join(TMP, 'real-out'), join(safe, 'ok-link'))
+  const r = runCli(input1, join(safe, 'ok-link/o'))
+  eq([r.code, r.json?.result], [0, 'WRITTEN'], 'symlink 안전 경로')
+  eq(treeHash(join(TMP, 'real-out/o')), treeHash(join(TMP, 'out2')), '같은 바이트')
+})
+test('반례10d — 판정 뒤 mkdir 전 · rename 전에 경로가 symlink 로 바뀌면 OUT_DIR_CHANGED · 제품 write 0', () => {
+  const b = build()
+  for (const when of ['afterPlan', 'beforeRename']) {
+    const parent = join(TMP, `race-${when}`); mkdirSync(parent)
+    const out = join(parent, 'sub/out')
+    const plan = lib.planOutDir({ outDir: out, forbidden: [{ label: '제품 src', path: join(product, 'src') }] })
+    const swap = () => { renameSync(parent, `${parent}-moved`); symlinkSync(join(product, 'src'), parent) }
+    let code = null
+    try { lib.writeStage({ plan, graphVersion: b.graphVersion, files: b.files, hooks: { [when]: swap } }) } catch (e) { code = e.code }
+    eq(code, 'OUT_DIR_CHANGED', when)
+    eq(fileList(product), productListBefore, `${when} 제품 파일 목록`); eq(treeHash(product), productBefore, `${when} 제품 바이트`)
+  }
+})
+
+// ── 반례 11 — 존재하지 않는 effectiveAt ──
+test('반례11 — 달력에 없는 날짜 · 범위 밖 시분초 · offset 은 EFFECTIVE_AT_INVALID', () => {
+  for (const t of ['2026-02-30T13:00:00+09:00', '2026-04-31T00:00:00Z', '2025-02-29T00:00:00Z', '2026-13-01T00:00:00Z', '2026-00-10T00:00:00Z',
+    '2026-10-15T24:00:00+09:00', '2026-10-15T12:60:00+09:00', '2026-10-15T12:00:60+09:00',
+    '2026-10-15T13:00:00+14:30', '2026-10-15T13:00:00+25:00', '2026-10-15T13:00:00+09:60', '2026-10-15T13:00:00-99:00']) {
+    let code = null
+    try { lib.parseEffectiveAt(t) } catch (e) { code = e.code }
+    eq(code, 'EFFECTIVE_AT_INVALID', t)
+  }
+})
+test('반례11b — Z · 양수 · 음수 offset · 윤일 · KST 날짜 경계는 받는다', () => {
+  const cases = [['2026-10-15T13:00:00+09:00', '20261015'], ['2026-10-15T14:59:59Z', '20261015'], ['2026-10-15T15:00:00Z', '20261016'],
+    ['2026-10-15T10:00:00-05:00', '20261016'], ['2026-10-16T08:59:59+09:00', '20261016'], ['2024-02-29T12:00:00Z', '20240229'],
+    ['2026-10-15T00:00:00+14:00', '20261014'], ['2026-10-15T23:59:59-12:00', '20261016']]
+  for (const [t, d] of cases) eq(lib.parseEffectiveAt(t).versionDate, d, t)
+})
+
+// ── 반례 12 — 손상된 연구 입력 ──
+test('반례12 — 신원 · 구조 손상은 bundle 을 만들지 않고 INPUT_SCHEMA_INVALID', () => {
+  const cases = {
+    'edgeId null': (w) => { w.graph[0].edgeId = null },
+    'edgeId 빈 문자열': (w) => { w.graph[0].edgeId = '' },
+    'edgeId 중복': (w) => { w.graph[1].edgeId = w.graph[0].edgeId },
+    'relationType 미지': (w) => { w.graph[0].relationType = 'FRIEND' },
+    'placement 미지': (w) => { w.graph[0].placement = 'SIDEBAR' },
+    'to intent 미지': (w) => { w.graph[0].toIntentId = 'I-NOPE' },
+    'from intent null': (w) => { w.graph[0].fromIntentId = null },
+    'priority 문자열': (w) => { w.graph[0].priority = '1' },
+    'backlinkPlan 손상': (w) => { w.graph[0].backlinkPlan = { fromIntentId: 'I-X' } },
+    'automation intentId 누락': (w) => { delete w.automation[0].intentId },
+    'canonical intentId 중복': (w) => { w.canonical[1].intentId = w.canonical[0].intentId },
+    'intent 집합 불일치': (w) => { w.canonical.push(canon('I-EXTRA')) },
+    'published slug null': (w) => { w.published[0].slug = null },
+  }
+  for (const [name, mutate] of Object.entries(cases)) {
+    const w = baseWorld(); mutate(w)
+    let code = null, built = null
+    try { built = build({ world: w }) } catch (e) { code = e.code }
+    eq([code, built === null], ['INPUT_SCHEMA_INVALID', true], name)
+  }
+})
+
 // ── 실제 입력 동일성 (선택) ──
 const realInput = argOf('--real-input'), realProduct = argOf('--real-product')
 if (realInput && realProduct) {
@@ -320,6 +405,17 @@ if (realInput && realProduct) {
     eq([b.graphVersion, b.manifest.contentHash.combined, b.manifest.exportHash], ['g-20261015-d5f6fe', 'd5f6fe78fc422b1b', '87c775af6cd5ea0f'], '판')
     const strip = (t) => t.split('\n').slice(3).join('\n')
     eq(strip(b.files[`bundle/${b.graphVersion}.ts`]), strip(read(join(realProduct, `src/content/magazine/graph/${b.graphVersion}.ts`))), 'GRAPH 본문')
+  })
+  test('실제 입력 — 첫 graph 행 edgeId 를 null 로 손상하면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
+    const read = (p) => readFileSync(p, 'utf8')
+    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
+    const rows = inputTexts['g5-graph-2026-09-23.jsonl'].trim().split('\n')
+    rows[0] = JSON.stringify({ ...JSON.parse(rows[0]), edgeId: null })
+    inputTexts['g5-graph-2026-09-23.jsonl'] = rows.join('\n') + '\n'
+    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
+    let code = null, built = null
+    try { built = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { code = e.code }
+    eq([code, built === null], ['INPUT_SCHEMA_INVALID', true], '손상 입력')
   })
 } else {
   results.push('  ⏭  실제 입력 동일성 — --real-input · --real-product 미지정 (통과로 세지 않는다)')

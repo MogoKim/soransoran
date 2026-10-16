@@ -24,6 +24,8 @@
  *   ⑥ 자체 검사  미공개 누출 · 출발 비공개 · 게시판 · 슬롯 · BRIDGE · COMMUNITY 슬롯 · 이유 · 미구현 표면
  */
 import { createHash } from 'node:crypto'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
 import { isPublic } from './magazine-gate.mjs'
 import { evalLiteral, parseArticlesSource, sliceLiteral } from './magazine-load.mjs'
@@ -99,13 +101,26 @@ export const prettyStable = (value) => `${JSON.stringify(JSON.parse(stableJson(v
 const EFFECTIVE_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})([+-]\d{2}:\d{2}|Z)$/
 const GENERATED_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
-/** effectiveAt — 오프셋을 명시한 시각만. graphVersion 날짜는 이 시각의 **KST 날짜**다 */
+/**
+ * effectiveAt — 오프셋을 명시한 시각만. graphVersion 날짜는 이 시각의 **KST 날짜**다.
+ * 🔴 `Date.parse` 는 2026-02-30 을 3월 2일로, 24:00 을 다음 날 0시로 굴린다. 그래서 파싱한 시각을
+ *    같은 offset 의 벽시계로 되돌려 입력의 날짜·시·분·초와 **문자 그대로** 같을 때만 받는다.
+ *    offset 은 ±14:00 안이어야 한다(V8 은 +14:30 도 받는다).
+ */
 export function parseEffectiveAt(text) {
-  if (typeof text !== 'string' || !EFFECTIVE_AT_RE.test(text)) {
-    fail('EFFECTIVE_AT_INVALID', `effectiveAt 은 오프셋이 있는 ISO 시각이어야 한다 (예 2026-10-15T13:00:00+09:00): ${text}`)
+  const m = typeof text === 'string' ? EFFECTIVE_AT_RE.exec(text) : null
+  if (!m) fail('EFFECTIVE_AT_INVALID', `effectiveAt 은 오프셋이 있는 ISO 시각이어야 한다 (예 2026-10-15T13:00:00+09:00): ${text}`)
+  const offset = m[7]
+  let offsetMin = 0
+  if (offset !== 'Z') {
+    const oh = Number(offset.slice(1, 3)), om = Number(offset.slice(4, 6))
+    if (oh > 14 || om > 59 || (oh === 14 && om > 0)) fail('EFFECTIVE_AT_INVALID', `offset 이 범위 밖이다: ${text}`)
+    offsetMin = (offset[0] === '-' ? -1 : 1) * (oh * 60 + om)
   }
   const ms = Date.parse(text)
   if (!Number.isFinite(ms)) fail('EFFECTIVE_AT_INVALID', `해석할 수 없는 시각이다: ${text}`)
+  const wall = new Date(ms + offsetMin * 60e3).toISOString().slice(0, 19)
+  if (wall !== text.slice(0, 19)) fail('EFFECTIVE_AT_INVALID', `달력에 없는 날짜·시각이다 (${text} → ${wall}${offset})`)
   const kstDate = new Date(ms + 9 * 3600e3).toISOString().slice(0, 10)
   return { text, ms, kstDate, versionDate: kstDate.replace(/-/g, '') }
 }
@@ -139,7 +154,69 @@ export function parseInputTexts(texts) {
     out[key] = parseJsonl(text, name)
     hashes[name] = sha256(text)
   }
+  validateInputs(out)
   return { ...out, hashes }
+}
+
+/** placement 계약 — 구현 여부와 무관하게 graph 가 쓸 수 있는 표면 전부 */
+export const KNOWN_PLACEMENTS = Object.freeze(['CTA_END', 'FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE',
+  'SERIES_NAV', 'BODY_INLINE_OR_TOP', 'BODY_CALLOUT'])
+const EDGE_ID_RE = /^E-\d{4,}$/
+
+/**
+ * 🔴 build 전 최소 구조 · 신원 계약. 손상된 입력이 TypeError 나 **잘못된 bundle** 로 새지 않고
+ *    `INPUT_SCHEMA_INVALID` 로 멈춘다. 의미 판정(PASS·HOLD 등)은 하지 않는다 — 그건 layer 의 몫이다.
+ */
+export function validateInputs({ canonical, automation, graph, published, queued }) {
+  const bad = []
+  const plain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  const str = (v) => typeof v === 'string'
+  const ids = (rows, label) => {
+    const seen = new Set()
+    rows.forEach((r, i) => {
+      if (!plain(r) || !nonEmpty(r.intentId)) { bad.push(`${label} ${i + 1}행 intentId 가 비었거나 문자열이 아니다`); return }
+      if (seen.has(r.intentId)) bad.push(`${label} intentId 중복 ${r.intentId}`)
+      seen.add(r.intentId)
+    })
+    return seen
+  }
+  const canon = ids(canonical, 'canonical')
+  const auto = ids(automation, 'automation')
+  const onlyAuto = [...auto].filter((x) => !canon.has(x)), onlyCanon = [...canon].filter((x) => !auto.has(x))
+  if (onlyAuto.length || onlyCanon.length) bad.push(`canonical·automation intent 집합이 다르다 (automation 만 ${onlyAuto.slice(0, 3)} · canonical 만 ${onlyCanon.slice(0, 3)})`)
+  canonical.forEach((c, i) => {
+    if (!plain(c)) return
+    if (c.existingSlugs != null && (!Array.isArray(c.existingSlugs) || !c.existingSlugs.every((s) => plain(s) && nonEmpty(s.slug)))) {
+      bad.push(`canonical ${i + 1}행 existingSlugs 형식 오류`)
+    }
+  })
+  automation.forEach((a, i) => {
+    if (plain(a) && (!str(a.automationDecision) || !str(a.policyScope))) bad.push(`automation ${i + 1}행 automationDecision·policyScope 가 문자열이 아니다`)
+  })
+  const edgeIds = new Set()
+  graph.forEach((e, i) => {
+    const at = `graph ${i + 1}행`
+    if (!plain(e)) { bad.push(`${at} 객체가 아니다`); return }
+    if (!str(e.edgeId) || !EDGE_ID_RE.test(e.edgeId)) bad.push(`${at} edgeId 형식 오류: ${JSON.stringify(e.edgeId)}`)
+    else if (edgeIds.has(e.edgeId)) bad.push(`${at} edgeId 중복 ${e.edgeId}`)
+    else edgeIds.add(e.edgeId)
+    if (!Object.hasOwn(RELATION_TO_SLOT, e.relationType)) bad.push(`${at} 모르는 relationType: ${JSON.stringify(e.relationType)}`)
+    if (!KNOWN_PLACEMENTS.includes(e.placement)) bad.push(`${at} 모르는 placement: ${JSON.stringify(e.placement)}`)
+    if (!nonEmpty(e.fromIntentId) || !auto.has(e.fromIntentId)) bad.push(`${at} fromIntentId 가 intent 집합에 없다: ${JSON.stringify(e.fromIntentId)}`)
+    if (e.relationType === 'COMMUNITY') { if (!nonEmpty(e.toIntentId)) bad.push(`${at} COMMUNITY 의 toIntentId 가 비었다`) }
+    else if (!nonEmpty(e.toIntentId) || !auto.has(e.toIntentId)) bad.push(`${at} toIntentId 가 intent 집합에 없다: ${JSON.stringify(e.toIntentId)}`)
+    if (!str(e.readerReason) || !str(e.anchorLabel)) bad.push(`${at} readerReason·anchorLabel 이 문자열이 아니다`)
+    if (typeof e.priority !== 'number' || !Number.isFinite(e.priority)) bad.push(`${at} priority 가 수가 아니다`)
+    if (e.reverseEdgeId != null && !str(e.reverseEdgeId)) bad.push(`${at} reverseEdgeId 형식 오류`)
+    if (e.backlinkPlan != null) {
+      const p = e.backlinkPlan
+      if (!plain(p) || !auto.has(p.fromIntentId) || !auto.has(p.toIntentId) || !Object.hasOwn(RELATION_TO_SLOT, p.relationType)
+        || !str(p.readerReason) || !str(p.anchorLabel)) bad.push(`${at} backlinkPlan 형식 오류`)
+    }
+  })
+  published.forEach((p, i) => { if (!plain(p) || !nonEmpty(p.slug) || !str(p.assetState)) bad.push(`assets-published ${i + 1}행 slug·assetState 형식 오류`) })
+  queued.forEach((q, i) => { if (!plain(q) || !nonEmpty(q.slug)) bad.push(`assets-queue ${i + 1}행 slug 형식 오류`) })
+  if (bad.length) fail('INPUT_SCHEMA_INVALID', `${bad.length}건 — ${bad.slice(0, 5).join(' | ')}`)
 }
 
 /** 제품 resolver 의 문자열 배열 상수 */
@@ -642,4 +719,121 @@ export function topCandidates(report, k = 5) {
   return [...report.rows].sort((a, b) => rank[a.status] - rank[b.status]
     || (b.direct.count + b.discovery.count) - (a.direct.count + a.discovery.count)
     || b.reverse.count - a.reverse.count || a.intentId.localeCompare(b.intentId)).slice(0, k)
+}
+
+// ── 쓰기 경계 (CLI 전용 · 파일 시스템) ──
+
+/**
+ * 아직 없을 수도 있는 경로의 **실제 신원**. 존재하는 가장 가까운 조상을 realpath 로 풀고
+ * 남은 이름을 붙인다. 🔴 남은 이름 중 하나라도 lstat 로 보이면(=끊어진 symlink) 거부한다 —
+ * mkdir · write 가 그 링크를 따라 엉뚱한 곳에 쓴다.
+ */
+export function canonicalPath(p) {
+  let cur = resolve(p)
+  const rest = []
+  for (;;) {
+    try {
+      return rest.length ? join(realpathSync(cur), ...rest.reverse()) : realpathSync(cur)
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e
+      let dangling = false
+      try { lstatSync(cur); dangling = true } catch { /* 진짜로 없다 */ }
+      if (dangling) fail('OUT_DIR_FORBIDDEN', `끊어진 symlink 가 경로에 있다: ${cur}`)
+      const parent = dirname(cur)
+      if (parent === cur) fail('OUT_DIR_FORBIDDEN', `경로를 풀 수 없다: ${p}`)
+      rest.push(basename(cur))
+      cur = parent
+    }
+  }
+}
+
+const insideOf = (child, parent) => {
+  const r = relative(parent, child)
+  return r === '' || (r !== '..' && !r.startsWith(`..${sep}`) && !r.startsWith(sep))
+}
+
+/**
+ * out-dir 판정 — **실제 경로**로 본다. 문자열 경로가 안전해 보여도 조상의 symlink 가
+ * 금지 구역으로 귀결되면 쓰기 전에 거부한다.
+ * @param {{ outDir: string, forbidden: { label: string, path: string }[] }} p
+ * @returns {{ canon: string }}
+ */
+export function planOutDir({ outDir, forbidden }) {
+  const canon = canonicalPath(outDir)
+  for (const f of forbidden) {
+    const root = canonicalPath(f.path)
+    if (insideOf(canon, root)) fail('OUT_DIR_FORBIDDEN', `out-dir 의 실제 경로가 ${f.label} 아래다: ${canon}`)
+  }
+  for (const marker of ['current.ts', 'control.ts']) {
+    let seen = false
+    try { lstatSync(join(canon, marker)); seen = true } catch { /* 없음 */ }
+    if (seen) fail('OUT_DIR_FORBIDDEN', 'out-dir 에 current.ts · control.ts 가 있다 — 제품 graph 폴더로 보인다. build 는 판 전환을 하지 않는다')
+  }
+  return { canon }
+}
+
+/** canon 의 모든 구성요소가 symlink 가 아닌 실제 디렉터리인지 — 없는 것은 하나씩 만든다 */
+function ensureRealDirs(canon) {
+  const parts = canon.split(sep).filter(Boolean)
+  let cur = sep
+  for (const part of parts) {
+    cur = join(cur, part)
+    let st = null
+    try { st = lstatSync(cur) } catch (e) { if (e.code !== 'ENOENT') throw e }
+    if (!st) { mkdirSync(cur); st = lstatSync(cur) }
+    if (st.isSymbolicLink() || !st.isDirectory()) fail('OUT_DIR_CHANGED', `판정 뒤 경로가 바뀌었다(symlink·파일): ${cur}`)
+  }
+  if (realpathSync(canon) !== canon) fail('OUT_DIR_CHANGED', `판정 뒤 실제 경로가 바뀌었다: ${canon}`)
+}
+
+const listTree = (dir) => {
+  const out = []
+  const walk = (d) => { for (const n of readdirSync(d).sort()) { const p = join(d, n); statSync(p).isDirectory() ? walk(p) : out.push(relative(dir, p)) } }
+  walk(dir)
+  return out.sort()
+}
+
+/**
+ * 판 폴더 쓰기 — 임시 폴더에 다 쓴 뒤 rename. 같은 판이 있으면 바이트가 같을 때만 UNCHANGED.
+ * 🔴 판정(planOutDir) 뒤 mkdir · write · rename 사이에 경로가 바뀌면 OUT_DIR_CHANGED 로 멈춘다(fail-closed).
+ * @param {{ plan: {canon:string}, graphVersion: string, files: Record<string,string>, hooks?: { afterPlan?: () => void, beforeRename?: () => void } }} p
+ * @returns {'WRITTEN'|'UNCHANGED'}
+ */
+export function writeStage({ plan, graphVersion, files, hooks = {} }) {
+  const { canon } = plan
+  hooks.afterPlan?.()
+  ensureRealDirs(canon)
+  const stage = join(canon, graphVersion)
+  let st = null
+  try { st = lstatSync(stage) } catch (e) { if (e.code !== 'ENOENT') throw e }
+  if (st) {
+    if (st.isSymbolicLink() || !st.isDirectory()) fail('OUT_DIR_CHANGED', `판 폴더가 디렉터리가 아니다: ${stage}`)
+    const have = listTree(stage)
+    const want = Object.keys(files).sort()
+    const same = have.length === want.length && want.every((f, i) => have[i] === f && readFileSync(join(stage, f), 'utf8') === files[f])
+    if (!same) fail('OUT_STAGE_CONFLICT', `${graphVersion} 폴더가 이미 있고 내용이 다르다 — 덮어쓰지 않는다`)
+    return 'UNCHANGED'
+  }
+  const tmp = mkdtempSync(join(canon, `.${graphVersion}.tmp-`))
+  const realTmp = realpathSync(tmp)
+  if (realTmp !== tmp || dirname(realTmp) !== canon) {
+    try { rmSync(realTmp, { recursive: true, force: true }) } catch { /* 정리 실패도 아래에서 막힌다 */ }
+    fail('OUT_DIR_CHANGED', `임시 폴더가 판정한 경로 밖에 생겼다: ${realTmp}`)
+  }
+  try {
+    for (const [rel, text] of Object.entries(files)) {
+      const target = join(tmp, rel)
+      mkdirSync(dirname(target), { recursive: true })
+      if (realpathSync(dirname(target)) !== dirname(target)) fail('OUT_DIR_CHANGED', `쓰기 위치가 바뀌었다: ${target}`)
+      writeFileSync(target, text, { flag: 'wx' })
+    }
+    hooks.beforeRename?.()
+    ensureRealDirs(canon)
+    if (realpathSync(tmp) !== tmp) fail('OUT_DIR_CHANGED', `임시 폴더 경로가 바뀌었다: ${tmp}`)
+    renameSync(tmp, stage)
+  } catch (e) {
+    try { if (realpathSync(tmp) === tmp) rmSync(tmp, { recursive: true, force: true }) } catch { /* 이미 없음 */ }
+    throw e
+  }
+  return 'WRITTEN'
 }

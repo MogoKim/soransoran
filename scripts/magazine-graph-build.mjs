@@ -11,15 +11,18 @@
  *
  * 🔴 모든 입력은 명시한다. 기본 경로 · 벽시계가 없다.
  * 🔴 읽기 전용: input-root · product-root · admission-root. 쓰기는 out-dir 하나뿐이다.
- * 🔴 current.ts · control.ts 를 쓰지 않는다. 제품 graph 폴더나 src 아래를 out-dir 로 받지 않는다.
+ * 🔴 current.ts · control.ts 를 쓰지 않는다. out-dir 의 **실제 경로**(symlink 해소)가 제품 src · 입력 · 장부 아래면 받지 않는다.
+ *    판정 뒤 경로가 바뀌면 OUT_DIR_CHANGED 로 멈춘다.
  * 🔴 같은 graphVersion 폴더가 이미 있으면 바이트가 같을 때만 통과(UNCHANGED), 다르면 거부한다.
  *
  * 종료 코드: 0 성공 · 1 거부(구조화 코드) · 2 사용법 오류
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 
-import { ADMISSION_FILES, GraphBuildError, INPUT_FILES, PRODUCT_FILES, buildAll, topCandidates } from './lib/magazine-graph-build.mjs'
+import {
+  ADMISSION_FILES, GraphBuildError, INPUT_FILES, PRODUCT_FILES, buildAll, planOutDir, topCandidates, writeStage,
+} from './lib/magazine-graph-build.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (name) => {
@@ -41,14 +44,13 @@ const productRoot = resolve(arg('--product-root'))
 const outDir = resolve(arg('--out-dir'))
 const admissionRoot = arg('--admission-root') ? resolve(arg('--admission-root')) : null
 
-const inside = (child, parent) => { const r = relative(parent, child); return r === '' || (!r.startsWith('..') && !r.startsWith(sep) && r !== '..') }
-// 🔴 쓰기 경계 — 입력 폴더 · 제품 src 아래에는 쓰지 않는다
-if (inside(outDir, join(productRoot, 'src'))) refuse('OUT_DIR_FORBIDDEN', `out-dir 가 제품 src 아래다: ${outDir}`)
-for (const root of [inputRoot, admissionRoot].filter(Boolean)) {
-  if (inside(outDir, root)) refuse('OUT_DIR_FORBIDDEN', `out-dir 가 읽기 전용 입력 아래다: ${outDir}`)
-}
-if (existsSync(join(outDir, 'current.ts')) || existsSync(join(outDir, 'control.ts'))) {
-  refuse('OUT_DIR_FORBIDDEN', 'out-dir 에 current.ts · control.ts 가 있다 — 제품 graph 폴더로 보인다. build 는 판 전환을 하지 않는다')
+// 🔴 쓰기 경계 — **실제 경로**로 판정한다(조상 symlink 우회 차단). 입력 폴더 · 제품 src 아래에는 쓰지 않는다
+const forbidden = [{ label: '제품 src', path: join(productRoot, 'src') }, { label: 'input-root', path: inputRoot }]
+if (admissionRoot) forbidden.push({ label: 'admission-root', path: admissionRoot })
+let plan
+try { plan = planOutDir({ outDir, forbidden }) } catch (e) {
+  if (e instanceof GraphBuildError) refuse(e.code, e.why)
+  throw e
 }
 
 const readOrNull = (p) => { try { return readFileSync(p, 'utf8') } catch { return null } }
@@ -66,34 +68,12 @@ try {
   throw e
 }
 
-const stage = join(outDir, built.graphVersion)
-const listFiles = (dir) => {
-  const out = []
-  const walk = (d) => { for (const n of readdirSync(d).sort()) { const p = join(d, n); statSync(p).isDirectory() ? walk(p) : out.push(relative(dir, p)) } }
-  walk(dir)
-  return out.sort()
+let result
+try { result = writeStage({ plan, graphVersion: built.graphVersion, files: built.files }) } catch (e) {
+  if (e instanceof GraphBuildError) refuse(e.code, e.why)
+  throw e
 }
-let result = 'WRITTEN'
-if (existsSync(stage)) {
-  const have = listFiles(stage)
-  const want = Object.keys(built.files).sort()
-  const same = have.length === want.length && want.every((f, i) => have[i] === f && readFileSync(join(stage, f), 'utf8') === built.files[f])
-  if (!same) refuse('OUT_STAGE_CONFLICT', `${built.graphVersion} 폴더가 이미 있고 내용이 다르다 — 덮어쓰지 않는다`)
-  result = 'UNCHANGED'
-} else {
-  mkdirSync(outDir, { recursive: true })
-  const tmp = mkdtempSync(join(outDir, `.${built.graphVersion}.tmp-`))
-  try {
-    for (const [rel, text] of Object.entries(built.files)) {
-      mkdirSync(dirname(join(tmp, rel)), { recursive: true })
-      writeFileSync(join(tmp, rel), text)
-    }
-    renameSync(tmp, stage)
-  } catch (e) {
-    rmSync(tmp, { recursive: true, force: true })
-    throw e
-  }
-}
+const stage = join(plan.canon, built.graphVersion)
 
 const r = built.readiness
 process.stdout.write(`${JSON.stringify({
