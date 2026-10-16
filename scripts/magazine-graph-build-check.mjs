@@ -51,7 +51,7 @@ const intent = (intentId, magazineCluster, extra = {}) => ({ intentId, primaryQu
 const canon = (intentId, slugs = []) => ({ intentId, answerScope: 'a', exclusions: [], existingSlugs: slugs.map((slug) => ({ slug, coverage: 'ANSWERS', cluster: 'fam' })) })
 const edge = (edgeId, fromIntentId, toIntentId, relationType, placement, extra = {}) => ({ edgeId, fromIntentId, toIntentId, relationType,
   readerReason: `${fromIntentId}에서 ${toIntentId}로 가는 이유`, anchorLabel: `${toIntentId} 보기`, placement, priority: 1,
-  reciprocalPolicy: 'ONE_WAY', reciprocalGroupId: null, backlinkStatus: 'NONE', backlinkPlan: null, reciprocalWhy: null, ...extra })
+  reciprocalPolicy: 'ONE_WAY', reciprocalGroupId: null, backlinkPlan: null, reciprocalWhy: null, ...extra })
 
 function baseWorld() {
   return {
@@ -428,11 +428,11 @@ test('반례14 — 빈 집합 · 필수 필드 누락 · 계약 밖 enum/type �
     ['profileSpec 누락', del('profileSpec'), 'profileSpec 누락'],
     ['verdictWhy 누락', del('verdictWhy'), 'verdictWhy 누락'],
     ['automation communityDestination 계약 밖', (w) => { w.automation[0].communityDestination = '/community/x' }, 'communityDestination 이 게시판 계약 밖'],
-    ['canonical communityDestination 계약 밖', (w) => { w.canonical[0].communityDestination = '/x' }, 'canonical 1행 communityDestination'],
+    ['canonical communityDestination 계약 밖(산출에 쓰일 때)', (w) => { w.canonical[0].communityDestination = '/x' }, 'intent I-X communityDestination 이 게시판 계약 밖'],
     ['reciprocalPolicy 누락', (w) => { delete w.graph[0].reciprocalPolicy }, 'reciprocalPolicy 계약 밖'],
     ['reciprocalPolicy 계약 밖', (w) => { w.graph[0].reciprocalPolicy = 'SOMETIMES' }, 'reciprocalPolicy 계약 밖'],
-    ['priority 0', (w) => { w.graph[0].priority = 0 }, 'priority 가 1 이상 정수가 아니다'],
-    ['priority 1.5', (w) => { w.graph[0].priority = 1.5 }, 'priority 가 1 이상 정수가 아니다'],
+    ['priority 0', (w) => { w.graph[0].priority = 0 }, 'priority 계약 밖'],
+    ['priority 1.5', (w) => { w.graph[0].priority = 1.5 }, 'priority 계약 밖'],
   ]
   for (const [name, mutate, why] of cases) {
     const w = baseWorld(); mutate(w)
@@ -449,6 +449,53 @@ test('반례14b — nullable · builder 기본값은 그대로 받는다(runtime
   const b = build({ world: w })
   const i1 = b.layers.intents.find((x) => x.intentId === 'I-P1')
   eq([i1.runtimeState, i1.communityDestination], ['UNPUBLISHED', '/community/free'], '기본값')
+})
+
+// ── 반례 15 — 산출 계약(intent/2 · edge/3 · mapping/2) 한 곳 ──
+const rejectWhy = (fn) => { try { fn(); return null } catch (e) { return { code: e.code, why: String(e.why) } } }
+test('반례15 — runtimeState ACTIVE · FALLBACK 은 통과, 미지 값은 거부', () => {
+  for (const st of ['ACTIVE', 'FALLBACK']) {
+    const w = baseWorld(); w.automation[0].runtimeState = st
+    eq(build({ world: w }).layers.intents[0].runtimeState, st, st)
+  }
+  const w = baseWorld(); w.automation[0].runtimeState = 'GONE'
+  const r = rejectWhy(() => build({ world: w }))
+  ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('runtimeState 계약 밖'), JSON.stringify(r))
+})
+test('반례15b — priority 4 · evidence.refs 문자열 · COMMUNITY /community/other · activateWhen 누락 · mapping coverage·publishedAt 계약 밖은 거부', () => {
+  const plan = { fromIntentId: 'I-P1', toIntentId: 'I-X', relationType: 'NEXT_QUESTION', readerReason: 'r', anchorLabel: 'a' }
+  const cases = [
+    ['priority 4', (w) => { w.graph[0].priority = 4 }, 'priority 계약 밖'],
+    ['evidence.refs 문자열', (w) => { w.automation[0].evidence = { refs: '2' } }, 'evidence.refs 가 수가 아니다'],
+    ['COMMUNITY /community/other', (w) => { w.graph.find((e) => e.relationType === 'COMMUNITY').toIntentId = '/community/other' }, 'COMMUNITY 도착이 게시판 계약 밖'],
+    ['backlinkPlan.activateWhen 누락', (w) => { w.graph[0].backlinkPlan = { ...plan } }, 'backlinkPlan.activateWhen 누락'],
+    ['mapping coverage 계약 밖', (w) => { w.canonical[1].existingSlugs[0].coverage = 'MAYBE' }, 'coverage 계약 밖'],
+    ['mapping publishedAt 형식 오류', (w) => { w.canonical[1].existingSlugs[0].publishedAt = '2026/10/01' }, 'publishedAt 형식 오류'],
+  ]
+  for (const [name, mutate, why] of cases) {
+    const w = baseWorld(); mutate(w)
+    const r = rejectWhy(() => build({ world: w }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(why), `${name}: ${JSON.stringify(r)}`)
+  }
+  const w = baseWorld(); w.graph[0].backlinkPlan = { ...plan, activateWhen: '두 글이 공개되면' }
+  w.canonical[1].existingSlugs[0].publishedAt = '2026-10-01'
+  ok(build({ world: w }).graphVersion, 'activateWhen 이 있는 backlinkPlan · 정상 publishedAt 은 통과')
+})
+test('반례15c — builder 가 만들 수 없는 산출 손상도 산출 계약이 잡는다(assetState · mapping intent · layers)', () => {
+  const layers = build().layers
+  const clone = () => JSON.parse(JSON.stringify(layers))
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(clone())), null, '정상 산출 통과')
+  const cases = [
+    ['mapping assetState 계약 밖', (l) => { l.mappings[0].assetState = 'GONE' }, 'assetState 계약 밖'],
+    ['mapping intentId 미지', (l) => { l.mappings[0].intentId = 'I-NOPE' }, 'intentId 가 intent 집합에 없다'],
+    ['edge layers 문자열', (l) => { l.edges[0].layers.AUTOMATION_READY = 'true' }, 'layers 가 boolean 이 아니다'],
+    ['edge 슬롯이 관계와 다름', (l) => { l.edges[0].recommendationSlot = 'BRIDGE_DISCOVERY' }, 'recommendationSlot 이 관계에서 파생된 값이 아니다'],
+  ]
+  for (const [name, mutate, why] of cases) {
+    const l = clone(); mutate(l)
+    const r = rejectWhy(() => lib.validateBuiltArtifacts(l))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(why), `${name}: ${JSON.stringify(r)}`)
+  }
 })
 
 // ── 실제 입력 동일성 (선택) ──
