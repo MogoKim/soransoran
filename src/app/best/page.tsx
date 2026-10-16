@@ -3,6 +3,7 @@ import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
 import ListHeader from '@/components/ui/list-header'
 import PostListItem from '@/components/features/PostListItem'
+import PostExposureList from '@/components/features/PostExposureList'
 import Pagination from '@/components/features/Pagination'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { buildListHref, parsePageParam } from '@/lib/list-query'
@@ -63,13 +64,13 @@ export default async function BestPage({ searchParams }: { searchParams: BestSea
           /* -mx-4 로 바깥 여백을 되돌린다 — 행이 자기 px-4 를 가지므로 그대로 두면 32px 이 된다.
              구분선은 항목 사이에만 긋는다.
              🔴 rank 를 넘기지 않는다 — 순번 자리 자체가 그려지지 않는다(PostListItem). */
-          <ul className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
+          <PostExposureList as="ul" surface="BEST" className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
             {result.posts.map((post) => (
               <li key={post.id}>
                 <PostListItem post={post} surface="page" emphasis hideEmptyStats />
               </li>
             ))}
-          </ul>
+          </PostExposureList>
         )}
 
         {/* 쪽이 하나뿐이면 Pagination 이 스스로 아무것도 그리지 않는다. */}

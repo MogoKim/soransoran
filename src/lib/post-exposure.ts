@@ -1,15 +1,21 @@
 import { createHmac, randomBytes } from 'node:crypto'
 
-export const POST_EXPOSURE_WINDOW_MS = 30 * 60 * 1000
-export const POST_EXPOSURE_RETENTION_DAYS = 30
-export const POST_EXPOSURE_VISITOR_COOKIE = 'soran-viewer-v1'
-export const POST_EXPOSURE_VISITOR_MAX_AGE = POST_EXPOSURE_RETENTION_DAYS * 24 * 60 * 60
-
-export const POST_EXPOSURE_KINDS = ['DETAIL_OPEN', 'LIST_EXPOSURE'] as const
-export type PostExposureKind = (typeof POST_EXPOSURE_KINDS)[number]
-
-export const POST_EXPOSURE_SURFACES = ['DETAIL', 'HOME', 'BOARD', 'BEST', 'NEXT_TO_READ'] as const
-export type PostExposureSurface = (typeof POST_EXPOSURE_SURFACES)[number]
+export {
+  POST_EXPOSURE_BATCH_MAX,
+  POST_EXPOSURE_KINDS,
+  POST_EXPOSURE_LIST_SURFACES,
+  POST_EXPOSURE_RETENTION_DAYS,
+  POST_EXPOSURE_SURFACES,
+  POST_EXPOSURE_VISITOR_COOKIE,
+  POST_EXPOSURE_VISITOR_MAX_AGE,
+  POST_EXPOSURE_WINDOW_MS,
+  validListExposurePayload,
+  type ListExposurePayload,
+  type PostExposureKind,
+  type PostExposureListSurface,
+  type PostExposureSurface,
+} from '@/lib/post-exposure-contract'
+import { POST_EXPOSURE_WINDOW_MS } from '@/lib/post-exposure-contract'
 
 export function exposureWindowStart(now: Date): Date {
   return new Date(Math.floor(now.getTime() / POST_EXPOSURE_WINDOW_MS) * POST_EXPOSURE_WINDOW_MS)

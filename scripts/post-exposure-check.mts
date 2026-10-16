@@ -6,11 +6,14 @@ import {
   exposureWindowStart,
   newAnonymousViewerToken,
   postExposureSecret,
+  POST_EXPOSURE_BATCH_MAX,
+  POST_EXPOSURE_LIST_SURFACES,
   POST_EXPOSURE_RETENTION_DAYS,
   POST_EXPOSURE_VISITOR_COOKIE,
   POST_EXPOSURE_VISITOR_MAX_AGE,
   shouldRejectExposureRequest,
   validAnonymousViewerToken,
+  validListExposurePayload,
   viewerKeyHash,
 } from '../src/lib/post-exposure'
 import { schemaCompatibleForBorrowedClient } from './lib/source-snapshot-fixture.mjs'
@@ -76,11 +79,33 @@ check('보관·쿠키 계약', () => {
   assert.equal(POST_EXPOSURE_VISITOR_MAX_AGE, 30 * 24 * 60 * 60)
 })
 
+check('목록 payload는 네 표면·20개 상한·중복 제거만 허용', () => {
+  assert.deepEqual(POST_EXPOSURE_LIST_SURFACES, ['HOME', 'BOARD', 'BEST', 'NEXT_TO_READ'])
+  assert.equal(POST_EXPOSURE_BATCH_MAX, 20)
+  assert.deepEqual(validListExposurePayload({ surface: 'HOME', postIds: ['p1', 'p1', 'p2'] }), {
+    surface: 'HOME', postIds: ['p1', 'p2'],
+  })
+  assert.equal(validListExposurePayload({ surface: 'DETAIL', postIds: ['p1'] }), null)
+  assert.equal(validListExposurePayload({ surface: 'HOME', postIds: [] }), null)
+  assert.equal(validListExposurePayload({ surface: 'HOME', postIds: Array.from({ length: 21 }, (_, i) => `p${i}`) }), null)
+  assert.equal(validListExposurePayload({ surface: 'HOME', postIds: [1] }), null)
+})
+
 const schema = readFileSync('prisma/schema.prisma', 'utf8')
 const migration = readFileSync('prisma/migrations/0032_post_exposure_event/migration.sql', 'utf8')
 const route = readFileSync('src/app/api/view/[postId]/route.ts', 'utf8')
 const store = readFileSync('src/lib/post-exposure-store.ts', 'utf8')
 const beacon = readFileSync('src/components/features/PostViewBeacon.tsx', 'utf8')
+const listRoute = readFileSync('src/app/api/view/route.ts', 'utf8')
+const listTracker = readFileSync('src/components/features/PostExposureList.tsx', 'utf8')
+const listWiring = [
+  readFileSync('src/app/page.tsx', 'utf8'),
+  readFileSync('src/app/community/[boardSlug]/page.tsx', 'utf8'),
+  readFileSync('src/app/best/page.tsx', 'utf8'),
+  readFileSync('src/components/features/NextToRead.tsx', 'utf8'),
+  readFileSync('src/components/features/PostListItem.tsx', 'utf8'),
+  readFileSync('src/components/features/PostCard.tsx', 'utf8'),
+].join('\n')
 const ranking = [
   readFileSync('src/lib/popularity.ts', 'utf8'),
   readFileSync('src/lib/best-ranking.ts', 'utf8'),
@@ -112,6 +137,22 @@ check('옛 per-post cookie·직접 증가 제거', () => {
   assert.doesNotMatch(route, /soran-viewed-|viewedCookie|cookies\(\)\.get\(name\)/)
   assert.match(route, /POST_EXPOSURE_VISITOR_COOKIE/)
   assert.match(beacon, /sessionStorage/)
+})
+
+check('목록 노출은 50%·1초 뒤 네 표면을 한 batch로만 기록', () => {
+  assert.match(listTracker, /MIN_VISIBLE_RATIO = 0\.5/)
+  assert.match(listTracker, /MIN_VISIBLE_MS = 1_000/)
+  assert.match(listTracker, /new IntersectionObserver/)
+  assert.match(listTracker, /document\.visibilityState !== 'visible'/)
+  assert.match(listTracker, /addEventListener\('visibilitychange'/)
+  assert.match(listTracker, /fetch\('\/api\/view'/)
+  assert.match(listRoute, /validListExposurePayload/)
+  assert.match(listRoute, /recordPostExposureBatch\(prisma/)
+  assert.match(listRoute, /kind: 'LIST_EXPOSURE'/)
+  for (const surface of ['HOME', 'BOARD', 'BEST', 'NEXT_TO_READ']) {
+    assert.match(listWiring, new RegExp(`surface="${surface}"`))
+  }
+  assert.ok((listWiring.match(/data-post-exposure-id/g) ?? []).length >= 2)
 })
 
 check('조회수는 홈·베스트 점수 입력으로 들어가지 않음', () => {

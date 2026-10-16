@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 import assert from 'node:assert/strict'
 import { PrismaClient } from '@prisma/client'
-import { cleanupPostExposureEvents, recordPostExposure } from '../src/lib/post-exposure-store'
+import { cleanupPostExposureEvents, recordPostExposure, recordPostExposureBatch } from '../src/lib/post-exposure-store'
 
 const url = process.env.DATABASE_URL ?? ''
 if (process.env.SORAN_ISOLATED_DB !== 'yes-throwaway'
@@ -64,6 +64,29 @@ try {
   assert.equal(await expose('visible', null, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', now, 'LIST_EXPOSURE'), 'duplicate')
   assert.equal(await expose('visible', null, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', now, 'DETAIL_OPEN'), 'accepted')
   assert.equal((await db.post.findUniqueOrThrow({ where: { id: 'visible' } })).viewCount, 4)
+  pass += 1
+
+  await db.post.createMany({ data: ['list-a', 'list-b', 'list-c'].map((id) => ({
+    id, boardType: 'FREE' as const, title: id, content: 'body', authorId: 'author', status: 'PUBLISHED' as const,
+  })) })
+  const batchInput = {
+    postIds: ['list-a', 'list-b', 'list-c', 'hidden'],
+    kind: 'LIST_EXPOSURE' as const,
+    surface: 'BOARD' as const,
+    userId: null,
+    anonymousToken: 'cccccccccccccccccccccccccccccccc',
+    secret,
+    now,
+  }
+  const firstBatch = await recordPostExposureBatch(db, batchInput)
+  assert.deepEqual(firstBatch.acceptedIds.sort(), ['list-a', 'list-b', 'list-c'])
+  assert.deepEqual(firstBatch.absentIds, ['hidden'])
+  assert.deepEqual(firstBatch.duplicateIds, [])
+  const secondBatch = await recordPostExposureBatch(db, batchInput)
+  assert.deepEqual(secondBatch.duplicateIds.sort(), ['list-a', 'list-b', 'list-c'])
+  assert.equal(await db.postExposureEvent.count({ where: { postId: { in: ['list-a', 'list-b', 'list-c'] } } }), 3)
+  assert.equal(await db.post.count({ where: { id: { in: ['list-a', 'list-b', 'list-c'] }, viewCount: 1 } }), 3)
+  assert.equal((await recordPostExposureBatch(db, { ...batchInput, userId: 'admin', anonymousToken: null })).excluded, true)
   pass += 1
 
   for (const actor of ['admin', 'persona', 'operator']) {

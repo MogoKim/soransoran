@@ -3,6 +3,7 @@ import { TOUCH_MIN } from '@/lib/spacing'
 import PageShell from '@/components/layouts/PageShell'
 import AdSlot from '@/components/ads/AdSlot'
 import PostListItem from '@/components/features/PostListItem'
+import PostExposureList from '@/components/features/PostExposureList'
 import HomeMagazineRail from '@/components/features/HomeMagazineRail'
 import HomeHero from '@/components/features/HomeHero'
 import HomeJoinCta from '@/components/features/HomeJoinCta'
@@ -136,7 +137,7 @@ export default async function HomePage() {
             {/* -mx-4 로 섹션 여백을 되돌린다 — 행이 자기 px-4 를 가지므로
                 그대로 두면 32px 이 된다.
                 구분선은 항목 사이에만 긋는다(마지막 예외를 둘 필요가 없다). */}
-            <ol className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
+            <PostExposureList as="ol" surface="HOME" className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
               {posts.map((post, index) => (
                 <li key={post.id}>
                   <PostListItem
@@ -148,7 +149,7 @@ export default async function HomePage() {
                   />
                 </li>
               ))}
-            </ol>
+            </PostExposureList>
           </section>
         ) : null}
 
