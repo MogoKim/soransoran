@@ -1,6 +1,6 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-16 20:53 KST
+> as-of: 2026-10-16 21:24 KST
 > 마지막 창업자 동기화: 2026-10-16 (D5→D10→D20→D30→D50→D100을 임의 대기 없이 진행하고,
 > 댓글·조회수·Persona 확장·North Star·레거시 제거를 의존관계가 겹치지 않는 범위에서 병렬 준비한다)
 >
@@ -12,10 +12,10 @@
 ## 0. 창업자용 한 문장
 
 **10-16 d5 증거 FAIL은 quality-v10 결함과 `usageUnknown`이 있는 과거 증거로 확정됐고 고쳐 쓰지 않는다.
-quality-v11과 D5 제한 시험 보정은 배포됐으며, 17:15 자연 공급 뒤 10-17 07:00 예측은
-`PREPARE · 공개 d3 · 준비 d5`에서 D5 `TRIAL` 진입 PASS다. 21:22에 read-only로 한 번 더 확인한 뒤
-10-17 자연 D5를 증명한다. D10·D20은 아직 PASS가 아니다. 그 사이 조회수·확장 Persona·D30/D50 용량·
-North Star·레거시 정리는 별도 소유권으로 설계부터 진행한다.**
+quality-v11과 D5 제한 시험 보정은 배포됐으며, 21:22 최종 read-only 예측은
+`TRIAL · 공개 d5 · 준비 d10 · d3→d5 RETEST` PASS다. 현재 blocker는 없고 10-17 자연 D5의
+자동 5/5·첫 댓글·감사·비용 미상 0·중복 0을 증명해야 한다. D10·D20은 아직 PASS가 아니다.
+그 사이 조회수·확장 Persona·D30/D50 용량·North Star·D100 scheduler를 별도 소유권으로 선행 준비한다.**
 
 ## 1. 검증 기준과 상태
 
@@ -48,7 +48,7 @@ North Star·레거시 정리는 별도 소유권으로 설계부터 진행한다
 
 | 항목 | 값 |
 |---|---|
-| 원격 main (2026-10-16 20:53 관측) | `75a889022103402ce28442ec42e996e3b5228112` |
+| 원격 main (2026-10-16 21:24 관측) | `011fc2cf084a8879bada85311fc016802bb82b70` |
 | 보조 Mac D100 runtime HEAD = pin = manifest | `697fcad2ec80d3465a3e28c8d125420762ceaa48` · 마지막 독립 확인 tracked 0 · main 차이를 별도 판정 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
@@ -56,20 +56,23 @@ North Star·레거시 정리는 별도 소유권으로 설계부터 진행한다
 | event wake | unset · OFF |
 | Persona | contract-valid 30 · active 30 · code-ready 40 · 운영 작성자 OP01~OP30 |
 
-실제 자연 실행은 보조 Mac만 소유한다. 회사 Mac의 21:22 예약은 read-only 예측이며 운영 owner가 아니다.
+#750 통합 실행판은 위 main에 병합됐다. 실제 자연 실행은 보조 Mac만 소유한다. 회사 Mac의 21:22 예약은
+read-only 예측만 실행했고 운영 owner가 아니다.
 
 ### 2.2 10-17 D5 예측
 
-| 축 | 17:22 실측 | D5 기준 |
+| 축 | 21:22 실측 | D5 기준 |
 |---|---:|---:|
-| quality-v11 원천 / READY | 24 / 4 (공개 3 · 예정 1 · 유실/unknown 0) | 처리량으로 환산 |
+| quality-v11 원천 / READY | 30 / 5 (공개 4 · 예정 1 · 유실/unknown 0) | 처리량으로 환산 |
 | 처리량 용량 | 10 | ≥5 |
 | 기회 | 5 | ≥5 |
-| 위험 반영 결과당 비용 | $0.0487 | 실측 입력 |
-| 목표 5건 공급 투영 | $0.244 | ≤ 현재 $0.50 운영 cap |
+| 위험 반영 결과당 비용 | $0.0471 | 실측 입력 |
+| 목표 5건 공급 투영 | $0.2354 | ≤ 현재 $0.50 운영 cap |
+| 공급 정산 | 78건 · usageUnknown 1 · 정산률 98.7% | 제한 trial envelope PASS · proof day는 0이어야 함 |
 | Persona / 첫 댓글 용량 | 30 / 5 | ≥24 / ≥5 |
 
-21:22에 같은 정본 함수로 한 번 더 계산한다. PASS면 22:15는 수요 0이 정상이고, 부족하면 부족분만 공급한다.
+정본 결과는 `TRIAL · 공개 d5 · 준비 d10 · brake none`이다. 22:15는 JIT가 실제 수요만 판정하며,
+수요 0이면 유료 원천 0이 정상이다. 이 예측 PASS는 10-17 자연 operating PASS를 대신하지 않는다.
 
 ### 2.3 이미 해소된 병목
 
@@ -83,11 +86,11 @@ North Star·레거시 정리는 별도 소유권으로 설계부터 진행한다
 
 | blocker | 현재 | 다음 판정 |
 |---|---|---|
-| `NO_CURRENT_BLOCKER` | 17:22 예측 PASS · 품질·비용·오류 신호 green | 21:22 read-only 재확인 |
+| `NO_CURRENT_BLOCKER` | 21:22 최종 예측 PASS · 품질·비용·오류 신호 green | 10-17 07:00 자연 controller 결정 |
 | `PROOF_NOT_RUN` | 10-17 자연 D5는 아직 실행 전 | 자동 5/5·첫 댓글·감사·비용 미상 0·중복 0으로만 해소 |
 
-21:22에 FAIL이면 D5를 포기하지 않는다. 실패 축 하나를 당일 확정하고, 데이터 조작 없이 필요한 코드·설정만
-targeted 검사 → exact-head CI 1회 → 안전 배포 → 다음 유효 슬롯 순으로 보정한다.
+10-17 operating 증거가 FAIL이면 D5를 포기하거나 임의 관측일을 추가하지 않는다. 실패 축 하나를 당일 확정하고,
+데이터 조작 없이 필요한 코드·설정만 targeted 검사 → exact-head CI 1회 → 안전 배포 → 다음 유효 슬롯 순으로 보정한다.
 
 ## 4. 통합 workstream과 설계 산출물
 
@@ -119,8 +122,8 @@ targeted 검사 → exact-head CI 1회 → 안전 배포 → 다음 유효 슬�
 | 순서 | 대상 | 처리 |
 |---|---|---|
 | L1 | 낡은 CURRENT 상태와 날짜 고정 문서 검사 | 이번 통합 실행판과 구조 검사로 교체 |
-| L2 | 오래된 열린 PR 14개 | main 포함·대체·보존 가치·폐기 후보를 read-only 분류한 뒤 owner 승인으로 닫기 |
-| L3 | 다수의 오래된 worktree | dirty/미push/운영 참조 여부를 먼저 분류하고 안전한 것만 제거 |
+| L2 | 오래된 열린 PR | **분류·정리 완료:** 14개→2개. #749는 M-GRAPH owner에게 유지, #708은 제공사 확정 금액 기반 resolver로 보존 |
+| L3 | worktree 97개 | 분류 완료: clean+main 포함 40개가 정리 후보. dirty 26개·runtime 2개·active master는 보존하고 owner/process 확인 뒤만 제거 |
 | L4 | main↔보조 runtime 차이 | D100 영향 diff를 판정해 필요한 runtime 변경만 한 번에 sync |
 | L5 | D20 이후 profile 수작업 | D10/D20 실측을 입력으로 profile 후보·검사·승인 packet을 자동 생성 |
 | L6 | D100 scheduler 미지원 | D30/D50 운영과 병렬로 100 슬롯·복구·댓글 창·lease 용량을 설계·구현 |
@@ -128,11 +131,11 @@ targeted 검사 → exact-head CI 1회 → 안전 배포 → 다음 유효 슬�
 ## 5. 다음 critical path
 
 📜 완료되어 활성 목록에서 뺀 작업: #699 · #700 · #704 · #706 · #709 · #710 · #711 · #713 · #714 ·
-#715 · #716 · #717 · #720 · #722 · #723 · #724 · #729 · #731 · #737 · #741 · #743 · #744 · #745 · #747 · #748.
+#715 · #716 · #717 · #720 · #722 · #723 · #724 · #729 · #731 · #737 · #741 · #743 · #744 · #745 · #747 · #748 · #750.
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D5-FIX | 10-16 21:22 최종 재확인 | 같은 정본 함수 PASS · 새 blocker 0 | 수동 READY·장부 보정 |
+| D5-FIX | ✅ 10-16 21:22 최종 재확인 | 정본 함수 PASS · 새 blocker 0 | 수동 READY·장부 보정 |
 | D5 | 자연 D5 · 10-17 목표 | 자동 5/5·서로 다른 화자·첫 댓글 5·감사·usageUnknown 0·중복 0 | 수동 stage·발행 |
 | D10 | 자연 D10 · 10-18 목표 · D5 operating PASS 뒤 자동 10/10 | 첫 댓글 10·선택적 추가 0~4·감사·비용·복구 PASS | 모든 글 5개 강제 |
 | P20 | D20 Persona 40명 적용 | D10 PASS 뒤 dry-run·이름/말투/카드 충돌 0·contract-valid 40 | 이름만 만들고 용량으로 계산 |
@@ -141,7 +144,7 @@ targeted 검사 → exact-head CI 1회 → 안전 배포 → 다음 유효 슬�
 | D30 | 자연 D30 · 10-20 공격적 목표 | D20 PASS·Persona 60·profile green·자동 30/30 | D30 생략하지 않음 |
 | D50 | 자연 D50 · 10-21 이후 공격적 목표 | D30 PASS·Persona 100·profile green·자동 50/50 | D20에서 바로 D50 |
 | D100 | D50 운영 중 기반 완성 | scheduler/profile·Persona 180 canary·300+ 지속·자동 100/100 | 날짜만 선언 |
-| VIEWS | 실제 근거 조회수 | 상세 열람·목록 노출 별도 원장·dedupe·내부/봇 제외·UI 합산 | 댓글 배수·최소값·난수 |
+| VIEWS | 실제 근거 조회수 | 설계 packet 로컬 완료 · 상세 열람·목록 노출 별도 원장·dedupe·내부/봇 제외·UI 합산 | 댓글 배수·최소값·난수 |
 | NORTH | 실회원 North Star | 7일 안 재방문해 글/댓글을 남긴 고유 실사용자 · Persona/운영자 제외 | 자동 활동을 성과로 계산 |
 
 공격적 목표일은 PASS 약속이 아니다. 그러나 실패를 이유로 임의 관측일을 추가하지 않는다. 실패 축만 당일 보정하고
@@ -151,7 +154,7 @@ targeted 검사 → exact-head CI 1회 → 안전 배포 → 다음 유효 슬�
 
 | 날짜 | 운영 증명 | 병렬 설계·구현 | 그날 종료 조건 |
 |---|---|---|---|
-| 10-16 | 21:22 D5 최종 예측 | 통합 실행판·Persona 이름 정책·레거시 inventory 설계 | blocker 0 또는 단일 원인 확정 |
+| 10-16 | ✅ 21:22 D5 최종 예측 PASS | 통합 실행판 병합 · 조회수 설계 · Persona 이름 gate · 레거시 PR/worktree 분류 | blocker 0 |
 | 10-17 | 자연 D5 | VIEW 설계/구현 시작 · Persona 40 activation packet · D30 60명 gap | D5 operating PASS 또는 실패 축 보정 착수 |
 | 10-18 | 자연 D10 | VIEW exact-head CI · D20 profile · D30/D50 Persona 공급 설계 | 댓글 1..5 첫 operating 증거 |
 | 10-19 | 자연 D20 목표 | VIEW Production 검증 · D30 60명 준비 · North Star 설계 | D20 PASS 또는 실패 축 즉시 보정 |
@@ -179,7 +182,7 @@ targeted 검사 → exact-head CI 1회 → 안전 배포 → 다음 유효 슬�
 
 ## 9. 다음 갱신 조건
 
-1. 21:22 D5 예측 또는 10-17 D5 자연 증명이 끝난다.
+1. 10-17 D5 자연 증명이 끝난다.
 2. D10 첫 추가 댓글·답글 operating 증거가 생긴다.
 3. 조회수 schema/PR 또는 Production 표본이 생긴다.
 4. Persona contract-valid 수·runtime HEAD·stage가 바뀐다.
