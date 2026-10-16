@@ -387,11 +387,15 @@ test('반례12 — 신원 · 구조 손상은 bundle 을 만들지 않고 INPUT_
     'intent 집합 불일치': (w) => { w.canonical.push(canon('I-EXTRA')) },
     'published slug null': (w) => { w.published[0].slug = null },
   }
+  // 🔴 신원 손상은 **입력 경계**에서 멈춰야 한다 — 산출 검증이 뒤에서 잡아 입력 검증 변이를 가리지 않게 사유 출처까지 본다
+  const INPUT_LAYER = new Set(['edgeId null', 'edgeId 빈 문자열', 'edgeId 중복', 'automation intentId 누락', 'canonical intentId 중복', 'intent 집합 불일치', 'published slug null'])
   for (const [name, mutate] of Object.entries(cases)) {
     const w = baseWorld(); mutate(w)
-    let code = null, built = null
-    try { built = build({ world: w }) } catch (e) { code = e.code }
-    eq([code, built === null], ['INPUT_SCHEMA_INVALID', true], name)
+    let err = null, built = null
+    try { built = build({ world: w }) } catch (e) { err = e }
+    eq([err?.code, built === null], ['INPUT_SCHEMA_INVALID', true], name)
+    const atBuilt = String(err.why).startsWith('산출 계약')
+    eq(atBuilt ? 'built' : 'input', INPUT_LAYER.has(name) ? 'input' : 'built', `${name} 를 막은 경계`)
   }
 })
 
@@ -496,6 +500,44 @@ test('반례15c — builder 가 만들 수 없는 산출 손상도 산출 계약
     const r = rejectWhy(() => lib.validateBuiltArtifacts(l))
     ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(why), `${name}: ${JSON.stringify(r)}`)
   }
+})
+
+// ── 반례 16 — 산출 날짜 의미 · 최종 산출 신원 (validateBuiltArtifacts 직접 호출 — 입력 검증이 가리지 않는다) ──
+test('반례16 — 불가능한 publishedAt · publishAt 은 거부, 윤일 · 월말 · 00:00:00 · 23:59:59 · null 은 통과', () => {
+  const layers = build().layers
+  const withMapping = (patch) => { const l = JSON.parse(JSON.stringify(layers)); Object.assign(l.mappings[0], patch); return l }
+  for (const [patch, why] of [
+    [{ publishedAt: '2026-02-30' }, 'publishedAt 형식 오류'], [{ publishedAt: '2025-02-29' }, 'publishedAt 형식 오류'],
+    [{ publishedAt: '2026-13-01' }, 'publishedAt 형식 오류'],
+    [{ publishAt: '2026-10-15T25:61:61+09:00' }, 'publishAt 형식 오류'], [{ publishAt: '2026-02-30T10:30:00+09:00' }, 'publishAt 형식 오류'],
+    [{ publishAt: '2026-10-15T24:00:00+09:00' }, 'publishAt 형식 오류'], [{ publishAt: '2026-10-15T10:30:00+00:00' }, 'publishAt 형식 오류'],
+  ]) {
+    const r = rejectWhy(() => lib.validateBuiltArtifacts(withMapping(patch)))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(why), `${JSON.stringify(patch)}: ${JSON.stringify(r)}`)
+  }
+  for (const patch of [{ publishedAt: '2024-02-29' }, { publishedAt: '2026-12-31' }, { publishedAt: '2026-04-30' }, { publishedAt: null, publishAt: null },
+    { publishAt: '2024-02-29T10:30:00+09:00' }, { publishAt: '2026-10-15T00:00:00+09:00' }, { publishAt: '2026-10-15T23:59:59+09:00' }]) {
+    eq(rejectWhy(() => lib.validateBuiltArtifacts(withMapping(patch))), null, JSON.stringify(patch))
+  }
+})
+test('반례16b — 최종 산출의 빈·형식 밖 edgeId · 중복 edgeId · 중복 intentId · 중복 (intentId, slug) 는 거부', () => {
+  const layers = build().layers
+  const clone = () => JSON.parse(JSON.stringify(layers))
+  const cases = [
+    ['빈 edgeId', (l) => { l.edges[0].edgeId = '' }, '산출 edge 1번 신원 형식 오류'],
+    ['형식 밖 edgeId', (l) => { l.edges[0].edgeId = 'X-1' }, '산출 edge 1번 신원 형식 오류'],
+    ['중복 edgeId', (l) => { l.edges[1].edgeId = l.edges[0].edgeId }, '산출 edge 신원 중복'],
+    ['중복 intentId', (l) => { l.intents.push({ ...l.intents[0] }) }, '산출 intent 신원 중복'],
+    ['빈 intentId', (l) => { l.intents.push({ ...l.intents[0], intentId: '' }) }, '산출 intent'],
+    ['중복 (intentId, slug)', (l) => { l.mappings.push({ ...l.mappings[0] }) }, '산출 mapping 신원 중복'],
+  ]
+  for (const [name, mutate, why] of cases) {
+    const l = clone(); mutate(l)
+    const r = rejectWhy(() => lib.validateBuiltArtifacts(l))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(why), `${name}: ${JSON.stringify(r)}`)
+  }
+  const l = clone(); l.mappings.push({ ...l.mappings[0], slug: `${l.mappings[0].slug}-2` })
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(l)), null, '같은 intent 의 다른 slug 는 정상')
 })
 
 // ── 실제 입력 동일성 (선택) ──

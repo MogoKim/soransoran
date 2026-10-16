@@ -102,6 +102,22 @@ const EFFECTIVE_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})([+-]\d
 const GENERATED_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
 /**
+ * 🔴 공용 시각 의미 검증 — 파싱한 시각을 같은 offset 의 벽시계로 되돌려 입력의 `YYYY-MM-DDTHH:mm:ss` 와
+ *    **문자 그대로** 같은지 본다. 2026-02-30 · 24:00 · 25:61:61 처럼 Date 가 굴리거나 못 읽는 값은 false.
+ *    effectiveAt · mapping publishedAt · publishAt 이 같은 함수를 쓴다(규칙이 갈라지지 않게).
+ */
+export function wallClockRoundTrips(text, offsetMin) {
+  if (typeof text !== 'string') return false
+  const ms = Date.parse(text)
+  if (!Number.isFinite(ms)) return false
+  return new Date(ms + offsetMin * 60e3).toISOString().slice(0, 19) === text.slice(0, 19)
+}
+/** 달력에 실제로 있는 YYYY-MM-DD */
+export const isRealDate = (v) => isStr(v) && DATE_RE.test(v) && wallClockRoundTrips(`${v}T00:00:00Z`, 0)
+/** 실제로 있는 KST 초 단위 시각 — +09:00 고정 */
+export const isRealKstAt = (v) => isStr(v) && KST_AT_RE.test(v) && wallClockRoundTrips(v, 9 * 60)
+
+/**
  * effectiveAt — 오프셋을 명시한 시각만. graphVersion 날짜는 이 시각의 **KST 날짜**다.
  * 🔴 `Date.parse` 는 2026-02-30 을 3월 2일로, 24:00 을 다음 날 0시로 굴린다. 그래서 파싱한 시각을
  *    같은 offset 의 벽시계로 되돌려 입력의 날짜·시·분·초와 **문자 그대로** 같을 때만 받는다.
@@ -119,8 +135,7 @@ export function parseEffectiveAt(text) {
   }
   const ms = Date.parse(text)
   if (!Number.isFinite(ms)) fail('EFFECTIVE_AT_INVALID', `해석할 수 없는 시각이다: ${text}`)
-  const wall = new Date(ms + offsetMin * 60e3).toISOString().slice(0, 19)
-  if (wall !== text.slice(0, 19)) fail('EFFECTIVE_AT_INVALID', `달력에 없는 날짜·시각이다 (${text} → ${wall}${offset})`)
+  if (!wallClockRoundTrips(text, offsetMin)) fail('EFFECTIVE_AT_INVALID', `달력에 없는 날짜·시각이다: ${text}`)
   const kstDate = new Date(ms + 9 * 3600e3).toISOString().slice(0, 10)
   return { text, ms, kstDate, versionDate: kstDate.replace(/-/g, '') }
 }
@@ -185,6 +200,27 @@ export const MAPPING_COVERAGES = Object.freeze(['ANSWERS', 'ANSWERS_PARTIAL', 'A
 
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v) => typeof v === 'string'
+export const isEdgeId = (v) => isStr(v) && EDGE_ID_RE.test(v)
+/** mapping 신원 = (intentId, slug). 둘 중 하나라도 비면 신원이 없다 */
+export const mappingKey = (m) => (nonEmpty(m.intentId) && nonEmpty(m.slug) ? `${m.intentId}\u0000${m.slug}` : null)
+
+/**
+ * 🔴 공용 신원 검증 — 입력 경계와 산출 경계가 **같은 함수**로 형식 · 중복을 본다.
+ * @param {object[]} rows
+ * @param {{ label: string, keyOf: (r: object) => unknown, valid: (k: unknown) => boolean, unique: boolean }} rule
+ * @returns {{ seen: Set<string>, problems: string[] }}
+ */
+export function identityProblems(rows, { label, keyOf, valid, unique }) {
+  const seen = new Set()
+  const problems = []
+  rows.forEach((r, i) => {
+    const key = isPlain(r) ? keyOf(r) : undefined
+    if (!valid(key)) { problems.push(`${label} ${i + 1}번 신원 형식 오류: ${JSON.stringify(key)}`); return }
+    if (unique && seen.has(key)) problems.push(`${label} 신원 중복 ${String(key).replace('\u0000', '→')}`)
+    seen.add(key)
+  })
+  return { seen, problems }
+}
 
 /**
  * 🔴 입력 신원 계약 — buildGraphLayers 가 TypeError 없이 돌 수 있는 최소 구조와 **신원**만 본다.
@@ -193,20 +229,12 @@ const isStr = (v) => typeof v === 'string'
  */
 export function validateInputs({ canonical, automation, graph, published, queued }) {
   const bad = []
-  const ids = (rows, label) => {
-    const seen = new Set()
-    rows.forEach((r, i) => {
-      if (!isPlain(r) || !nonEmpty(r.intentId)) { bad.push(`${label} ${i + 1}행 intentId 가 비었거나 문자열이 아니다`); return }
-      if (seen.has(r.intentId)) bad.push(`${label} intentId 중복 ${r.intentId}`)
-      seen.add(r.intentId)
-    })
-    return seen
-  }
+  const ids = (rows, rule) => { const r = identityProblems(rows, rule); bad.push(...r.problems); return r.seen }
   if (!canonical.length) bad.push('canonical intent 가 0개다')
   if (!automation.length) bad.push('automation intent 가 0개다')
   if (!graph.length) bad.push('graph edge 가 0개다')
-  const canon = ids(canonical, 'canonical')
-  const auto = ids(automation, 'automation')
+  const canon = ids(canonical, { label: 'canonical intent', keyOf: (r) => r.intentId, valid: nonEmpty, unique: true })
+  const auto = ids(automation, { label: 'automation intent', keyOf: (r) => r.intentId, valid: nonEmpty, unique: true })
   const onlyAuto = [...auto].filter((x) => !canon.has(x)), onlyCanon = [...canon].filter((x) => !auto.has(x))
   if (onlyAuto.length || onlyCanon.length) bad.push(`canonical·automation intent 집합이 다르다 (automation 만 ${onlyAuto.slice(0, 3)} · canonical 만 ${onlyCanon.slice(0, 3)})`)
   canonical.forEach((c, i) => {
@@ -215,14 +243,8 @@ export function validateInputs({ canonical, automation, graph, published, queued
       bad.push(`canonical ${i + 1}행 existingSlugs 형식 오류`)
     }
   })
-  const edgeIds = new Set()
-  graph.forEach((e, i) => {
-    const at = `graph ${i + 1}행`
-    if (!isPlain(e)) { bad.push(`${at} 객체가 아니다`); return }
-    if (!isStr(e.edgeId) || !EDGE_ID_RE.test(e.edgeId)) bad.push(`${at} edgeId 형식 오류: ${JSON.stringify(e.edgeId)}`)
-    else if (edgeIds.has(e.edgeId)) bad.push(`${at} edgeId 중복 ${e.edgeId}`)
-    else edgeIds.add(e.edgeId)
-  })
+  graph.forEach((e, i) => { if (!isPlain(e)) bad.push(`graph ${i + 1}행 객체가 아니다`) })
+  ids(graph, { label: 'graph edge', keyOf: (e) => e.edgeId, valid: isEdgeId, unique: true })
   published.forEach((p, i) => { if (!isPlain(p) || !nonEmpty(p.slug) || !isStr(p.assetState)) bad.push(`assets-published ${i + 1}행 slug·assetState 형식 오류`) })
   queued.forEach((q, i) => { if (!isPlain(q) || !nonEmpty(q.slug)) bad.push(`assets-queue ${i + 1}행 slug 형식 오류`) })
   if (bad.length) fail('INPUT_SCHEMA_INVALID', `${bad.length}건 — ${bad.slice(0, 5).join(' | ')}`)
@@ -235,7 +257,11 @@ export function validateInputs({ canonical, automation, graph, published, queued
  */
 export function validateBuiltArtifacts({ intents, edges, mappings }) {
   const bad = []
-  const intentIds = new Set(intents.map((x) => x.intentId))
+  // 🔴 최종 산출 신원 — 자동 생성 edge 까지 포함한 결과를 입력과 같은 helper 로 본다
+  const identity = (rows, rule) => { const r = identityProblems(rows, rule); bad.push(...r.problems); return r.seen }
+  const intentIds = identity(intents, { label: '산출 intent', keyOf: (x) => x.intentId, valid: nonEmpty, unique: true })
+  identity(edges, { label: '산출 edge', keyOf: (e) => e.edgeId, valid: isEdgeId, unique: true })
+  identity(mappings, { label: '산출 mapping', keyOf: mappingKey, valid: nonEmpty, unique: true })
   const nullableStr = (v) => v == null || isStr(v)
 
   intents.forEach((x) => {
@@ -299,8 +325,8 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
     if (!ASSET_STATES.includes(m.assetState)) bad.push(`${at} assetState 계약 밖: ${JSON.stringify(m.assetState)}`)
     if (!MAPPING_COVERAGES.includes(m.coverage)) bad.push(`${at} coverage 계약 밖: ${JSON.stringify(m.coverage)}`)
     if (m.cluster !== null && !nonEmpty(m.cluster)) bad.push(`${at} cluster 형식 오류: ${JSON.stringify(m.cluster)}`)
-    if (m.publishedAt !== null && !(isStr(m.publishedAt) && DATE_RE.test(m.publishedAt))) bad.push(`${at} publishedAt 형식 오류: ${JSON.stringify(m.publishedAt)}`)
-    if (m.publishAt !== null && !(isStr(m.publishAt) && KST_AT_RE.test(m.publishAt))) bad.push(`${at} publishAt 형식 오류: ${JSON.stringify(m.publishAt)}`)
+    if (m.publishedAt !== null && !isRealDate(m.publishedAt)) bad.push(`${at} publishedAt 형식 오류: ${JSON.stringify(m.publishedAt)}`)
+    if (m.publishAt !== null && !isRealKstAt(m.publishAt)) bad.push(`${at} publishAt 형식 오류: ${JSON.stringify(m.publishAt)}`)
   })
 
   if (bad.length) fail('INPUT_SCHEMA_INVALID', `산출 계약 ${bad.length}건 — ${bad.slice(0, 5).join(' | ')}`)
