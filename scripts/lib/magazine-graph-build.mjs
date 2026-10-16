@@ -203,6 +203,21 @@ export const MAPPING_COVERAGES = Object.freeze(['ANSWERS', 'ANSWERS_PARTIAL', 'A
  */
 export const PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC'])
 
+/**
+ * 🔴 existing asset 요약의 유일한 권위 — canonical `existingSlugs` 에서 만든 **built mappings** 다.
+ *    automation `existingAssetRelation` 은 legacy 입력이며 산출을 정하지 않는다(두 권위가 한 bundle 안에서 모순되지 않게).
+ *    형식: `slug(상태/coverage)` 를 mapping 순서대로 `, ` 로 잇는다. 상태는 LIVE 만 기존 호환 표현 PUBLISHED, 그 외는 assetState. 없으면 `없음`.
+ */
+export function summarizeExistingAssets(intentMappings) {
+  return intentMappings.map((m) => `${m.slug}(${m.assetState === 'LIVE' ? 'PUBLISHED' : m.assetState}/${m.coverage})`).join(', ') || '없음'
+}
+/** intentId → 요약. mapping 순서(canonical 순서)를 그대로 따른다 */
+export function existingAssetSummaries(mappings) {
+  const by = new Map()
+  for (const m of mappings) (by.get(m.intentId) ?? by.set(m.intentId, []).get(m.intentId)).push(m)
+  return (intentId) => summarizeExistingAssets(by.get(intentId) ?? [])
+}
+
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v) => typeof v === 'string'
 export const isEdgeId = (v) => isStr(v) && EDGE_ID_RE.test(v)
@@ -265,6 +280,7 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
   // 🔴 최종 산출 신원 — 자동 생성 edge 까지 포함한 결과를 입력과 같은 helper 로 본다
   const identity = (rows, rule) => { const r = identityProblems(rows, rule); bad.push(...r.problems); return r.seen }
   const intentIds = identity(intents, { label: '산출 intent', keyOf: (x) => x.intentId, valid: nonEmpty, unique: true })
+  const assetSummaryOf = existingAssetSummaries(mappings)
   identity(edges, { label: '산출 edge', keyOf: (e) => e.edgeId, valid: isEdgeId, unique: true })
   identity(mappings, { label: '산출 mapping', keyOf: mappingKey, valid: nonEmpty, unique: true })
   const nullableStr = (v) => v == null || isStr(v)
@@ -282,6 +298,7 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
     }
     if (!RUNTIME_STATES.includes(x.runtimeState)) bad.push(`${at} runtimeState 계약 밖: ${JSON.stringify(x.runtimeState)}`)
     for (const k of ['policyScopeWhy', 'verdictWhy', 'existingAssetRelation']) if (!isStr(x[k])) bad.push(`${at} ${k} 누락`)
+    if (isStr(x.existingAssetRelation) && x.existingAssetRelation !== assetSummaryOf(x.intentId)) bad.push(`${at} existingAssetRelation 이 mappings 와 다르다: ${JSON.stringify(x.existingAssetRelation)}`)
     for (const k of ['profileSpec', 'evidence']) if (!isPlain(x[k])) bad.push(`${at} ${k} 누락·형식 오류`)
     if (isPlain(x.evidence) && (typeof x.evidence.refs !== 'number' || !Number.isFinite(x.evidence.refs))) bad.push(`${at} evidence.refs 가 수가 아니다: ${JSON.stringify(x.evidence.refs)}`)
     if (x.retryPolicy !== null && !isPlain(x.retryPolicy)) bad.push(`${at} retryPolicy 형식 오류`)
@@ -408,6 +425,8 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
       cluster: s.cluster ?? null, coverage: s.coverage ?? 'ADJACENT' })
   }
   const liveSlugsOf = (id) => mappings.filter((m) => m.intentId === id && m.assetState === 'LIVE').map((m) => m.slug)
+  // 🔴 automation.existingAssetRelation(legacy)은 읽지 않는다 — 요약은 built mappings 하나에서 나온다
+  const assetSummaryOf = existingAssetSummaries(mappings)
 
   // ② intents
   const intents = autoRaw.map((r) => ({ schemaVersion: 'intent/2',
@@ -428,7 +447,7 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
     communityDestination: r.communityDestination
       ?? I[r.intentId]?.communityDestination
       ?? ((r.territoryId === 'T1' || r.territoryId === 'T4') ? '/community/menopause' : '/community/free'),
-    existingAssetRelation: r.existingAssetRelation, duplicateReason: r.duplicateReason ?? null }))
+    existingAssetRelation: assetSummaryOf(r.intentId), duplicateReason: r.duplicateReason ?? null }))
 
   const intentUsable = (id) => {
     const x = A[id]

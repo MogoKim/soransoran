@@ -121,6 +121,16 @@ const MUTATIONS = [
     to: "PRE_PUBLIC_COVERAGES = Object.freeze(['QUEUED_NOT_PUBLIC'])", expect: '반례17' },
   { id: 'M71 QUEUED_NOT_PUBLIC 거부 제거', file: 'lib', from: "PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC'])",
     to: "PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC'])", expect: '반례17' },
+  { id: 'M72 산출이 automation legacy 값을 그대로 복사', file: 'lib', from: 'existingAssetRelation: assetSummaryOf(r.intentId),',
+    to: 'existingAssetRelation: r.existingAssetRelation,', expect: '반례18' },
+  { id: 'M73 요약 helper 무력화(항상 없음)', file: 'lib', from: '  return intentMappings.map((m) =>', to: "  return '없음' || intentMappings.map((m) =>", expect: '반례18' },
+  { id: 'M74 LIVE → PUBLISHED 호환 표현 제거', file: 'lib', from: "${m.assetState === 'LIVE' ? 'PUBLISHED' : m.assetState}", to: '${m.assetState}', expect: '반례18' },
+  { id: 'M75 요약 = mappings 산출 검증 제거', file: 'lib', from: 'if (isStr(x.existingAssetRelation) && x.existingAssetRelation !== assetSummaryOf(x.intentId)) bad.push(',
+    to: 'if (false) bad.push(', expect: '반례18c' },
+  { id: 'M76 다중 mapping 순서를 slug 정렬로', file: 'lib', from: 'return (intentId) => summarizeExistingAssets(by.get(intentId) ?? [])',
+    to: 'return (intentId) => summarizeExistingAssets([...(by.get(intentId) ?? [])].sort((a, b) => a.slug.localeCompare(b.slug)))', expect: '반례18b' },
+  { id: 'M77 automation 값이 있으면 그것을 신뢰', file: 'lib', from: 'existingAssetRelation: assetSummaryOf(r.intentId),',
+    to: 'existingAssetRelation: r.existingAssetRelation ?? assetSummaryOf(r.intentId),', expect: '반례18' },
 ]
 
 const TMP = mkdtempSync(join(tmpdir(), 'mgraph-build-mutation-'))

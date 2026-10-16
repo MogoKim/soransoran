@@ -457,6 +457,8 @@ test('반례14b — nullable · builder 기본값은 그대로 받는다(runtime
 
 // ── 반례 15 — 산출 계약(intent/2 · edge/3 · mapping/2) 한 곳 ──
 const rejectWhy = (fn) => { try { fn(); return null } catch (e) { return { code: e.code, why: String(e.why) } } }
+/** mapping 을 손댄 산출 반례는 intent 요약도 그 mappings 로 다시 맞춘다 — 다른 계약을 시험할 때 요약 일관성 검사가 끼어들지 않게 */
+const resync = (l) => { const f = lib.existingAssetSummaries(l.mappings); for (const x of l.intents) x.existingAssetRelation = f(x.intentId); return l }
 test('반례15 — runtimeState ACTIVE · FALLBACK 은 통과, 미지 값은 거부', () => {
   for (const st of ['ACTIVE', 'FALLBACK']) {
     const w = baseWorld(); w.automation[0].runtimeState = st
@@ -537,14 +539,14 @@ test('반례16b — 최종 산출의 빈·형식 밖 edgeId · 중복 edgeId · 
     ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(why), `${name}: ${JSON.stringify(r)}`)
   }
   const l = clone(); l.mappings.push({ ...l.mappings[0], slug: `${l.mappings[0].slug}-2` })
-  eq(rejectWhy(() => lib.validateBuiltArtifacts(l)), null, '같은 intent 의 다른 slug 는 정상')
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(resync(l))), null, '같은 intent 의 다른 slug 는 정상')
 })
 
 // ── 반례 17 — lifecycle 정합: 공개(LIVE) 글에 공개 전 coverage 가 남으면 build 전 거부 ──
 test('반례17 — LIVE + SCHEDULED_NOT_YET_PUBLIC · QUEUED_NOT_PUBLIC 는 INPUT_SCHEMA_INVALID, LIVE + ANSWERS · 비공개 + 공개 전 coverage 는 통과', () => {
   const layers = build().layers
   const live = layers.mappings.findIndex((m) => m.assetState === 'LIVE')
-  const withMapping = (patch, i = live) => { const l = JSON.parse(JSON.stringify(layers)); Object.assign(l.mappings[i], patch); return l }
+  const withMapping = (patch, i = live) => { const l = JSON.parse(JSON.stringify(layers)); Object.assign(l.mappings[i], patch); return resync(l) }
   for (const cov of ['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC']) {
     const r = rejectWhy(() => lib.validateBuiltArtifacts(withMapping({ coverage: cov })))
     ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(`lifecycle 모순 — LIVE 인데 coverage ${cov}`), `${cov}: ${JSON.stringify(r)}`)
@@ -562,6 +564,37 @@ test('반례17b — 입력에서 공개 글의 coverage 가 공개 전이면 bui
   const out = join(TMP, 'out-stale'); const c = runCli(inStale, out)
   eq([c.code, c.json?.code], [1, 'INPUT_SCHEMA_INVALID'], 'CLI')
   ok(!existsSync(out), 'out-dir 가 만들어졌다')
+})
+
+// ── 반례 18 — existing asset 권위는 built mappings 하나 (automation.existingAssetRelation 은 legacy) ──
+test('반례18 — canonical mapping 있음 + automation 「없음」 → 산출은 mapping, mapping 없음 + automation 주장 → 산출 「없음」', () => {
+  const w = baseWorld()
+  w.automation.find((a) => a.intentId === 'I-P1').existingAssetRelation = '없음'
+  w.automation.find((a) => a.intentId === 'I-Z').existingAssetRelation = 'ghost(PUBLISHED/ANSWERS)'
+  const b = build({ world: w })
+  const at = (id) => b.layers.intents.find((x) => x.intentId === id).existingAssetRelation
+  eq([at('I-P1'), at('I-Z')], ['p1(PUBLISHED/ANSWERS)', '없음'], '산출 요약')
+})
+test('반례18b — LIVE · SCHEDULED · QUEUED · BLOCKED 상태 요약과 다중 mapping 순서(canonical 순서)가 정확하고 결정적이다', () => {
+  const w = baseWorld()
+  w.automation.push(intent('I-S', 'fam', { existingAssetRelation: '아무 값' }))
+  w.canonical.push({ intentId: 'I-S', answerScope: 'a', exclusions: [], existingSlugs: [
+    { slug: 'zz-queue', coverage: 'QUEUED_NOT_PUBLIC', cluster: 'fam' }, { slug: 'aa-live', coverage: 'ANSWERS', cluster: 'fam' },
+    { slug: 'mm-sched', coverage: 'SCHEDULED_NOT_YET_PUBLIC', cluster: 'fam' }, { slug: 'bb-block', coverage: 'ADJACENT', cluster: 'fam' }] })
+  w.published.push({ slug: 'aa-live', assetState: 'LIVE' }, { slug: 'mm-sched', assetState: 'SCHEDULED_NOT_YET_PUBLIC' })
+  w.queued.push({ slug: 'zz-queue' })
+  const want = 'zz-queue(QUEUED/QUEUED_NOT_PUBLIC), aa-live(PUBLISHED/ANSWERS), mm-sched(SCHEDULED_NOT_YET_PUBLIC/SCHEDULED_NOT_YET_PUBLIC), bb-block(BLOCKED/ADJACENT)'
+  const one = build({ world: w }), two = build({ world: w })
+  eq(one.layers.intents.find((x) => x.intentId === 'I-S').existingAssetRelation, want, '요약')
+  eq(two.files, one.files, '같은 입력 두 번 — 산출 바이트')
+})
+test('반례18c — 모든 intent 의 산출 요약 = mappings, 요약을 mappings 와 다르게 고친 산출은 INPUT_SCHEMA_INVALID', () => {
+  const l = build().layers
+  const f = lib.existingAssetSummaries(l.mappings)
+  eq(l.intents.filter((x) => x.existingAssetRelation !== f(x.intentId)).map((x) => x.intentId), [], '요약 ≠ mappings')
+  const bad = JSON.parse(JSON.stringify(l)); bad.intents.find((x) => x.intentId === 'I-P1').existingAssetRelation = '없음'
+  const r = rejectWhy(() => lib.validateBuiltArtifacts(bad))
+  ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('I-P1 existingAssetRelation 이 mappings 와 다르다'), JSON.stringify(r))
 })
 
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
@@ -654,6 +687,21 @@ if (oldInput && newInput && realProduct) {
     eq(x.discovery.targets.map((t) => t.edgeId), ['E-0100'], 'discovery')
     ok(x.reverse.sources.some((s) => s.edgeId === 'E-0099'), `reverse ${JSON.stringify(x.reverse.sources)}`)
     eq(b.layers.mappings.filter((m) => m.slug === 'starting-work-at-this-age').length, 0, 'starting-work-at-this-age graph 매핑 0')
+  })
+  test('실제 입력 3c — 새 snapshot: raw legacy existingAssetRelation 불일치는 산출에 남지 않는다(전 intent 요약 = mappings)', () => {
+    const inputs = lib.parseInputTexts(inputsAt(newInput))
+    const l = lib.buildGraphLayers({ inputs, implementedSurfaces: product.implemented })
+    const f = lib.existingAssetSummaries(l.mappings)
+    eq(l.intents.filter((x) => x.existingAssetRelation !== f(x.intentId)).map((x) => x.intentId), [], '산출 요약 ≠ mappings')
+    const raw = new Map(inputs.automation.map((a) => [a.intentId, a.existingAssetRelation]))
+    // 감사 11 + legacy 6(automation 이 canonical 을 못 따라온 행) + canonical state 가 QUEUED 로 남은 공개 글 2
+    eq(l.intents.filter((x) => raw.get(x.intentId) !== x.existingAssetRelation).map((x) => x.intentId).sort(),
+      [...LIFECYCLE_11.map((k) => k.split('|')[0]), 'I-T3-06', 'I-T7-05', 'I-T6-12', 'I-T6-13', 'I-T8-38', 'I-T4-15', 'I-T5-07', 'I-T1-26'].sort(), 'raw ≠ 산출 집합')
+    const at = (id) => l.intents.find((x) => x.intentId === id).existingAssetRelation
+    eq(['I-T3-06', 'I-T7-05', 'I-T6-12', 'I-T6-13', 'I-T8-38', 'I-T4-15'].map(at),
+      ['child-marriage-silence(PUBLISHED/ANSWERS)', 'alone-pastime(PUBLISHED/ANSWERS)', 'retirement-others-what-work(PUBLISHED/ANSWERS)',
+        'job-credentials(PUBLISHED/ANSWERS)', 'gray-hair-leave-as-is(PUBLISHED/ANSWERS)', 'clinic-booking-app(PUBLISHED/ANSWERS)'], 'legacy 6건 산출')
+    eq(at('I-T6-01'), 'rehire-where-to-start(PUBLISHED/ANSWERS)', 'I-T6-01 산출')
   })
   test('실제 입력 — 새 snapshot 에서 automation 첫 행 primaryQuery 를 지우면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
     const inputTexts = inputsAt(newInput)
