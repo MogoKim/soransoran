@@ -422,8 +422,112 @@ function signboardSelfTest() {
   return cases.length
 }
 
+/**
+ * 동의 판본 계약 — 약관·방침 화면의 시행일과 동의 기록 판본이 같은 날을 가리키는가
+ *
+ * 🔴 판본 = 시행일이다(agreement-policy.ts). 한쪽만 바꾸면 신규 가입자의 동의 행이
+ *    본 적 없는 판본으로 기록된다 — 2026-10-12 방침 개정에서 실제로 그랬다.
+ * 🔴 문자열이 있는지가 아니라 쌍을 맞춘다. 화면의 `EFFECTIVE_DATE`('YYYY년 M월 D일')를
+ *    YYYY-MM-DD 로 바꾸고, AGREEMENT_VERSION 의 `[AGREEMENT_TYPE.<키>]` 값과 정확히 비교한다.
+ *    marketing 은 화면 시행일이 없는 판본이라 대상이 아니다.
+ */
+const AGREEMENT = {
+  policyFile: 'src/lib/agreement-policy.ts',
+  pages: { terms: 'src/app/terms/page.tsx', privacy: 'src/app/privacy/page.tsx' },
+}
+
+function effectiveDateOf(rel, text) {
+  const init = findConst(parse(rel, text), 'EFFECTIVE_DATE')
+  if (!init || !ts.isStringLiteral(init)) return null
+  const m = /^(\d{4})년 (\d{1,2})월 (\d{1,2})일$/.exec(init.text)
+  return m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : null
+}
+
+function agreementVersionsOf(text) {
+  const init = findConst(parse(AGREEMENT.policyFile, text), 'AGREEMENT_VERSION')
+  const out = {}
+  if (!init || !ts.isObjectLiteralExpression(init)) return out
+  for (const p of init.properties) {
+    if (!ts.isPropertyAssignment(p) || !ts.isComputedPropertyName(p.name)) continue
+    const key = p.name.expression
+    if (!ts.isPropertyAccessExpression(key) || !ts.isIdentifier(key.expression) || key.expression.text !== 'AGREEMENT_TYPE') continue
+    out[key.name.text] = ts.isStringLiteral(p.initializer) ? p.initializer.text : null
+  }
+  return out
+}
+
+function agreementProblems(files) {
+  const problems = []
+  const versions = agreementVersionsOf(files[AGREEMENT.policyFile] ?? '')
+  for (const [key, rel] of Object.entries(AGREEMENT.pages)) {
+    const effective = effectiveDateOf(rel, files[rel] ?? '')
+    if (effective == null) {
+      problems.push(`${rel}  EFFECTIVE_DATE 를 'YYYY년 M월 D일' 로 읽지 못했다`)
+      continue
+    }
+    if (versions[key] !== effective) {
+      problems.push(`AGREEMENT_VERSION.${key} ${JSON.stringify(versions[key] ?? null)} ≠ ${rel} 시행일 ${effective}`)
+    }
+  }
+  return problems
+}
+
+/** 🔴 한쪽만 바꾼 변경을 실제로 잡는지 먼저 본다 — 쌍 대조가 죽으면 이 검사는 아무것도 막지 못한다 */
+function agreementSelfTest() {
+  const policy = (t, p) =>
+    `export const AGREEMENT_VERSION = { [AGREEMENT_TYPE.terms]: '${t}', [AGREEMENT_TYPE.privacy]: '${p}', [AGREEMENT_TYPE.marketing]: '2026-08-28' } as const`
+  const page = (d) => `const EFFECTIVE_DATE = '${d}'\nexport default function P() { return null }`
+  const files = (patch) => ({
+    [AGREEMENT.policyFile]: policy('2026-08-22', '2026-10-12'),
+    [AGREEMENT.pages.terms]: page('2026년 8월 22일'),
+    [AGREEMENT.pages.privacy]: page('2026년 10월 12일'),
+    ...patch,
+  })
+
+  const cases = [
+    { why: '시행일과 판본이 쌍으로 같으면 통과(한 자리 월·일 정규화)', input: files({}), expect: 0 },
+    { why: '방침 시행일만 바꾸면 실패', input: files({ [AGREEMENT.pages.privacy]: page('2026년 11월 1일') }), expect: 1 },
+    { why: '방침 판본만 바꾸면 실패 — 2026-10-12 이전 상태', input: files({ [AGREEMENT.policyFile]: policy('2026-08-22', '2026-08-27') }), expect: 1 },
+    { why: '약관 시행일만 바꾸면 실패', input: files({ [AGREEMENT.pages.terms]: page('2026년 12월 1일') }), expect: 1 },
+    { why: '두 판본을 서로 바꿔 적으면 둘 다 실패(값 존재가 아니라 쌍 대조)', input: files({ [AGREEMENT.policyFile]: policy('2026-10-12', '2026-08-22') }), expect: 2 },
+    { why: '시행일 형식을 못 읽으면 실패', input: files({ [AGREEMENT.pages.terms]: page('2026-08-22') }), expect: 1 },
+    { why: 'EFFECTIVE_DATE 가 없으면 실패', input: files({ [AGREEMENT.pages.privacy]: 'export default function P() { return null }' }), expect: 1 },
+    { why: '판본 키가 빠지면 실패', input: files({ [AGREEMENT.policyFile]: "export const AGREEMENT_VERSION = { [AGREEMENT_TYPE.terms]: '2026-08-22' } as const" }), expect: 1 },
+    { why: 'marketing 판본은 대상이 아니다', input: files({ [AGREEMENT.policyFile]: policy('2026-08-22', '2026-10-12').replace('2026-08-28', '2099-01-01') }), expect: 0 },
+  ]
+
+  const failed = []
+  for (const c of cases) {
+    const got = agreementProblems(c.input).length
+    if (got !== c.expect) failed.push({ ...c, got })
+  }
+  if (failed.length) {
+    console.error('🔴 동의 판본 계약 self-test 실패 — 검사 자신이 고장났습니다:\n')
+    for (const f of failed) console.error(`  ${f.why}\n    기대 ${f.expect}건, 실제 ${f.got}건`)
+    process.exit(1)
+  }
+  return cases.length
+}
+
 const selfTestCount = selfTest()
 const signboardSelfTestCount = signboardSelfTest()
+const agreementSelfTestCount = agreementSelfTest()
+
+const agreementFiles = {}
+for (const rel of [AGREEMENT.policyFile, ...Object.values(AGREEMENT.pages)]) {
+  try {
+    agreementFiles[rel] = readFileSync(join(ROOT, rel), 'utf8')
+  } catch {
+    // 없는 파일은 agreementProblems 가 시행일·판본을 읽지 못한 것으로 보고한다
+  }
+}
+const agreement = agreementProblems(agreementFiles)
+if (agreement.length) {
+  console.error('동의 판본 계약 위반:\n')
+  for (const p of agreement) console.error(`  ${p}`)
+  console.error(`\n총 ${agreement.length}건. 시행일을 바꾸면 src/lib/agreement-policy.ts 의 판본도 같은 날로 바꾼다.`)
+  process.exit(1)
+}
 
 const signboardFiles = {}
 for (const rel of [SIGNBOARD.nameFile, ...SIGNBOARD.surfaces]) {
@@ -457,5 +561,6 @@ if (violations.length) {
 
 console.log(
   `브랜드 리터럴 가드 통과 — 정본 파일 외 0건 (self-test ${selfTestCount}건 통과) · ` +
-    `외부 간판 계약 통과 (self-test ${signboardSelfTestCount}건 통과)`,
+    `외부 간판 계약 통과 (self-test ${signboardSelfTestCount}건 통과) · ` +
+    `동의 판본 계약 통과 (self-test ${agreementSelfTestCount}건 통과)`,
 )

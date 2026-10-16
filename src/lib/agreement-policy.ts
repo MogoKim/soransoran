@@ -24,10 +24,14 @@ export type AgreementType = (typeof AGREEMENT_TYPE)[keyof typeof AGREEMENT_TYPE]
  *   이용약관        /terms   시행일
  *   개인정보처리방침 /privacy 시행일
  *   광고성 정보 수신  온보딩 화면의 동의 문구가 바뀐 날
+ *
+ * 🔴 terms·privacy 판본과 각 화면의 EFFECTIVE_DATE 는 check:brand 가 쌍으로 대조한다.
+ * 🕘 privacy 는 2026-10-12 방침 개정 때 시행일만 바뀌고 여기가 2026-08-27 에 남아,
+ *    그 뒤 가입자의 동의 행이 옛 판본으로 기록됐다. 이미 쌓인 행은 사실 기록이라 고치지 않는다.
  */
 export const AGREEMENT_VERSION = {
   [AGREEMENT_TYPE.terms]: '2026-08-22',
-  [AGREEMENT_TYPE.privacy]: '2026-08-27',
+  [AGREEMENT_TYPE.privacy]: '2026-10-12',
   [AGREEMENT_TYPE.marketing]: '2026-08-28',
 } as const
 
