@@ -29,7 +29,7 @@
 | 현재 분기 목표와 병목 | [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md) |
 | M-AUTO 설치·가동·잠금·병합·배포·공개 감시 | [`magazine-automation-runbook.md`](./magazine-automation-runbook.md) |
 | 매거진 콘텐츠 품질·글 구조·위험 등급 정의 | [`2026-08-23-soransoran-magazine-strategy.md`](./2026-08-23-soransoran-magazine-strategy.md) |
-| 일일 제작 역할·`ArticleSpec` 전환·1주 실행표 | 이 문서 §18 · [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) |
+| 일일 제작 역할·`ArticleSpec` 전환·48~72시간 commissioning 실행표 | 이 문서 §18 · [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) |
 | 매거진 QA·예약 재고·공개 엔진·창업자 개입 기준의 운영 정본 | [`2026-08-23-soransoran-magazine-seo-production-strategy.md`](./2026-08-23-soransoran-magazine-seo-production-strategy.md) |
 | robots·canonical·sitemap·색인 허용 | [`2026-08-23-soransoran-seo-index-policy.md`](./2026-08-23-soransoran-seo-index-policy.md) |
 | 고객 화면 디자인 시스템 | [`soransoran-brand-design-spec.md`](./soransoran-brand-design-spec.md) |
@@ -988,7 +988,10 @@ Claude Code   결정적 QA · 파일화 · 등록 · PR · CI · 병합 · 공�
 
 전환은 `DIRECT_SPEC_V1` opt-in 한 건으로 시작한다. 기존 `LEGACY_BRIEF_V1`은 운영 롤백을
 위해 제한적으로 보존하고, 현재 코드로 무인 자연 회차를 증명하기 전에 전면 삭제하지 않는다.
-이 전환의 1주 마일스톤과 완료 조건은 `magazine/MAGAZINE-CURRENT-MILESTONE.md`가 정본이다.
+이 전환의 48~72시간 commissioning 마일스톤(목표 2026-10-18 KST)과 완료 조건은
+`magazine/MAGAZINE-CURRENT-MILESTONE.md`가 정본이다. 이 게이트는 M-GRAPH → M-AUTO 순서로 두 층만 판정하고,
+OUTCOME은 트래픽이 충분해질 때까지 `DEFERRED — TRAFFIC_NOT_SUFFICIENT`로 둔다(2026-10-16 창업자 결정).
+OUTCOME이 제품 목적의 최상위라는 원칙은 바뀌지 않는다.
 
 | 역할 | 책임 (M-GRAPH 범위) |
 |---|---|
