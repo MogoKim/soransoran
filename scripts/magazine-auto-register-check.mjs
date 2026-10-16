@@ -2993,7 +2993,7 @@ const articleSpecCheck = spawnSync(process.execPath, [join('scripts', 'magazine-
   env: { ...process.env },
 })
 expect('ArticleSpec schema·compiler·hash 반례가 전부 통과한다', articleSpecCheck.status, 0)
-expect('ArticleSpec 검사가 40개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 40 pass, 0 fail/.test(articleSpecCheck.stdout), true)
+expect('ArticleSpec 검사가 42개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 42 pass, 0 fail/.test(articleSpecCheck.stdout), true)
 
 console.log('\n══════ DIRECT_SPEC_V1 — 상류 source 관문 (승인 source 없으면 brief·spec·회수 0)')
 const directSourceCheck = spawnSync(process.execPath, [join('scripts', 'magazine-direct-spec-source-check.mjs')], {

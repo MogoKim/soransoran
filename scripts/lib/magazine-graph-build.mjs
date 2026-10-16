@@ -28,6 +28,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathS
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
 import { isPublic } from './magazine-gate.mjs'
+import { RELATION_POLICY } from './magazine-relation-policy.mjs'
 import { evalLiteral, parseArticlesSource, sliceLiteral } from './magazine-load.mjs'
 
 export const BUILD_SCHEMA = 'mgraph-build/1'
@@ -72,8 +73,8 @@ export const BOARDS = Object.freeze(['/community/menopause', '/community/free'])
 
 /** 🔴 생산 최소선과 화면 표시 목표는 다른 숫자다 — 섞지 않는다 */
 export const READINESS_POLICY = Object.freeze({
-  productionMinimum: Object.freeze({ direct: 2, discovery: 1 }),
-  displayTarget: Object.freeze({ directMax: 3, discovery: 1 }),
+  productionMinimum: Object.freeze({ direct: RELATION_POLICY.directMin, discovery: RELATION_POLICY.discovery }),
+  displayTarget: Object.freeze({ directMax: RELATION_POLICY.directMax, discovery: RELATION_POLICY.discovery }),
 })
 
 export class GraphBuildError extends Error {

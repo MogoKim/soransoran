@@ -123,7 +123,20 @@ check('slug가 kebab-case가 아니면 차단한다', () => throws('ARTICLE_SPEC
 check('G8 승인 manifest hash가 없으면 차단한다', () => throws('ARTICLE_SPEC_INPUT', (x) => { delete x.queueItem.g8ManifestHash }))
 check('모르는 contentType이면 차단한다', () => throws('ARTICLE_SPEC_INPUT', (x) => { x.queueItem.contentType = 'TREND' }))
 check('validationProfile을 추정할 수 없으면 차단한다', () => throws('PROFILE_UNRESOLVED', (x) => { delete x.queueItem.validationProfile; x.queueItem.slug = 'new-unknown'; x.node.slug = 'new-unknown' }))
-check('직접 관련 글이 3개가 아니면 차단한다', () => throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.direct.pop() }))
+check('직접 관련 글이 1개 · 4개면 차단한다 (공용 정책 direct 2~3)', () => {
+  throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.direct = x.relations.direct.slice(0, 1) })
+  throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.direct.push({ ...x.relations.direct[0], slug: 'direct-four' }) })
+})
+check('직접 관련 글 2개 + 발견 1개는 compile · verify 를 통과한다', () => {
+  const input = fixture(); input.relations.direct = input.relations.direct.slice(0, 2)
+  const spec = compileArticleSpec(input)
+  assert.equal(spec.navigation.direct.length, 2)
+  assert.equal(verifyArticleSpec(spec).ok, true)
+})
+check('발견 관련 글이 0개 · 2개(배열)면 차단한다', () => {
+  throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.discovery = null })
+  throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.discovery = [x.relations.discovery, x.relations.discovery] })
+})
 check('3+1에 중복이 있으면 차단한다', () => throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.discovery.slug = x.relations.direct[0].slug }))
 check('자기 링크는 차단한다', () => throws('ARTICLE_SPEC_RELATION', (x) => { x.relations.direct[0].slug = x.queueItem.slug }))
 check('관계 근거가 비면 차단한다', () => throws('ARTICLE_SPEC_INPUT', (x) => { x.relations.direct[0].reason = '' }))

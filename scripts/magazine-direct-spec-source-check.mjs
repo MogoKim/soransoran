@@ -141,7 +141,8 @@ const deleteAt = (obj, path) => {
   if (parent) delete parent[last]
 }
 const missingMutation = (field) => (e) => {
-  if (field === 'relations.direct') e.relations.direct = e.relations.direct.slice(0, 2)
+  // 🔴 direct 계약은 2~3 — 1개면 누락이다
+  if (field === 'relations.direct') e.relations.direct = e.relations.direct.slice(0, 1)
   else if (field === 'node.outline') e.node.outline = e.node.outline.slice(0, 2)
   else deleteAt(e, field)
   return e

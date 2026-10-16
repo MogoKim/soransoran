@@ -201,16 +201,51 @@ export function authoringCases(lib, { cliPath = CLI_PATH } = {}) {
     ['S07 STANDARD 아님 → PROFILE_NOT_STANDARD', () => {
       assert.ok(blockersOf(makeWorld({ queue: (q) => { q[0].validationProfile = 'MEDICAL' } })).includes('PROFILE_NOT_STANDARD'))
     }],
-    ['S08 관계 3+1 부족 → 후보 blocker · 승인 거부 (숫자를 맞추려 만들지 않는다)', () => {
-      const w = makeWorld({ graph: (g) => { g.edges = g.edges.filter((e) => e.slot !== 'SAME_EXPERIENCE') } })
+    ['S08 관계 부족(direct 1 · discovery 0) → 후보 blocker · 승인 거부 (숫자를 맞추려 만들지 않는다)', () => {
+      const w = makeWorld({ graph: (g) => { g.edges = g.edges.filter((e) => e.slot !== 'SAME_EXPERIENCE' && e.slot !== 'ACTION_OR_CONTEXT') } })
       const r = prepare(w)
       assert.ok(r.candidate.blockers.includes('RELATIONS_INSUFFICIENT')); assert.equal(r.candidate.entry.relations.direct, null)
-      const w2 = makeWorld(); const c = ready(w2); c.entry.relations.direct = c.entry.relations.direct.slice(0, 2)
+      const w2 = makeWorld(); const c = ready(w2); c.entry.relations.direct = c.entry.relations.direct.slice(0, 1)
       const a = approve(w2, c)
       assert.equal(a.code, 'CANDIDATE_UNRESOLVED'); assert.ok(a.problems.includes('relations.direct'))
       const st = lib.readCurrentState({ repoRoot: w2.repo, admissionRoot: w2.admission, slug: SLUG })
-      assert.ok(lib.judgeRelations({ relations: c.entry.relations, state: st, intentId: INTENT, slug: SLUG, atMs: Date.parse(AT) }).problems.includes('RELATIONS_DIRECT_NOT_3'))
+      assert.ok(lib.judgeRelations({ relations: c.entry.relations, state: st, intentId: INTENT, slug: SLUG, atMs: Date.parse(AT) }).problems.includes('RELATIONS_DIRECT_COUNT_INVALID'))
       assert.ok(lib.judgeRelations({ relations: { direct: ready(w2).entry.relations.direct, discovery: null }, state: st, intentId: INTENT, slug: SLUG, atMs: Date.parse(AT) }).problems.includes('RELATIONS_DISCOVERY_NOT_1'))
+    }],
+    ['S08b 관계 수량 경계 — 2+1 · 3+1 승인 · direct 1·4 · discovery 0·2 거부 · direct 2 에서도 중복·self·미공개·근거 불일치 거부', () => {
+      const w = makeWorld(); const c3 = ready(w)
+      const st = lib.readCurrentState({ repoRoot: w.repo, admissionRoot: w.admission, slug: SLUG })
+      const judge = (relations, s = st, at = AT) => lib.judgeRelations({ relations, state: s, intentId: INTENT, slug: SLUG, atMs: Date.parse(at) })
+      const R = c3.entry.relations
+      assert.equal(judge(R).ok, true, 'direct 3 + discovery 1')
+      assert.equal(judge({ direct: R.direct.slice(0, 2), discovery: R.discovery }).ok, true, 'direct 2 + discovery 1')
+      assert.ok(judge({ direct: R.direct.slice(0, 1), discovery: R.discovery }).problems.includes('RELATIONS_DIRECT_COUNT_INVALID'), 'direct 1')
+      assert.ok(judge({ direct: [...R.direct, { ...R.direct[0], slug: 'rel-x' }], discovery: R.discovery }).problems.includes('RELATIONS_DIRECT_COUNT_INVALID'), 'direct 4')
+      assert.ok(judge({ direct: R.direct, discovery: null }).problems.includes('RELATIONS_DISCOVERY_NOT_1'), 'discovery 0')
+      assert.ok(judge({ direct: R.direct, discovery: [R.discovery, R.discovery] }).problems.includes('RELATIONS_DISCOVERY_NOT_1'), 'discovery 2')
+      const two = R.direct.slice(0, 2)
+      assert.ok(judge({ direct: [two[0], two[0]], discovery: R.discovery }).problems.includes('RELATION_DUPLICATE'), '2개 중복')
+      assert.ok(judge({ direct: [two[0], { ...two[1], slug: SLUG }], discovery: R.discovery }).problems.includes('RELATION_SELF'), '2개 self')
+      assert.ok(judge({ direct: [two[0], { ...two[1], reason: '근거에 없는 이유' }], discovery: R.discovery }).problems.includes('RELATION_NOT_IN_PRODUCT_GRAPH'), '2개 근거 불일치')
+      const wf = makeWorld({ articles: (a) => { a['rel-b'].publishAt = '2026-10-20T10:30:00+09:00' } })
+      const stf = lib.readCurrentState({ repoRoot: wf.repo, admissionRoot: wf.admission, slug: SLUG })
+      assert.ok(judge({ direct: two, discovery: R.discovery }, stf).problems.includes('RELATION_TARGET_NOT_YET_PUBLIC'), '2개 미공개')
+      // 실제 승인 — 증명된 direct 가 2개인 세계에서 그대로 승인된다
+      const w2 = makeWorld({ articles: (a) => { delete a['rel-b'] } }); const c2 = ready(w2)
+      assert.deepEqual(c2.entry.relations.direct.map((x) => x.slug), ['rel-a', 'rel-c'])
+      const a2 = approve(w2, c2); assert.equal(a2.ok, true, JSON.stringify(a2).slice(0, 240))
+    }],
+    ['S08c 증명된 direct 4개 → 자동으로 3개를 자르지 않는다 · 사람이 고를 때까지 승인 거부', () => {
+      const w = makeWorld({
+        graph: (g) => { g.edges.push({ id: 'E-5', from: INTENT, to: 'I-R5', type: 'NEXT_QUESTION', slot: 'DIRECT_NEXT', anchor: 'a', reason: '또 다른 다음 질문이다', placement: 'FOOTER_NEXT', priority: 5, fromCluster: 'sleep', toCluster: 'sleep', active: false })
+          g.mappings.push({ intent: 'I-R5', slug: 'rel-e', cluster: 'sleep' }); g.intents.push({ id: 'I-R5', cluster: 'sleep', board: 'menopause' }) },
+        articles: (a) => { a['rel-e'] = { title: 'rel-e', description: 'd', cluster: 'sleep', publishedAt: '2026-10-01' } },
+      })
+      const r = prepare(w)
+      assert.equal(r.candidate.relationEvidence.filter((e) => e.eligible && e.slot !== 'BRIDGE_DISCOVERY').length, 4)
+      assert.equal(r.candidate.entry.relations.direct, null); assert.equal(r.candidate.provenance['relations.direct'].status, 'UNRESOLVED')
+      assert.ok(!r.candidate.blockers.includes('RELATIONS_INSUFFICIENT'))
+      const a = approve(w, fill(r.candidate)); assert.equal(a.code, 'CANDIDATE_UNRESOLVED'); assert.ok(a.problems.includes('relations.direct'))
     }],
     ['S09 관계 중복·자기 자신 → 거부', () => {
       const w = makeWorld(); const c = ready(w); c.entry.relations.direct[2] = { ...c.entry.relations.direct[0] }
@@ -222,13 +257,15 @@ export function authoringCases(lib, { cliPath = CLI_PATH } = {}) {
       const w = makeWorld({ articles: (a) => { delete a['rel-b'] } })
       const r = prepare(w)
       assert.equal(r.candidate.relationEvidence.find((e) => e.slug === 'rel-b').target, 'UNREGISTERED')
-      assert.ok(r.candidate.blockers.includes('RELATIONS_INSUFFICIENT'))
+      // 🔴 미등록 글은 빠지고 남은 증명된 2개만 채운다(direct 2~3 계약) — 자리를 채우려 만들지 않는다
+      assert.deepEqual(r.candidate.entry.relations.direct.map((x) => x.slug), ['rel-a', 'rel-c']); assert.ok(!r.candidate.blockers.includes('RELATIONS_INSUFFICIENT'))
       const st = lib.readCurrentState({ repoRoot: w.repo, admissionRoot: w.admission, slug: SLUG })
       assert.ok(lib.judgeRelations({ relations: ready(makeWorld()).entry.relations, state: st, intentId: INTENT, slug: SLUG, atMs: Date.parse(AT) }).problems.includes('RELATION_TARGET_UNREGISTERED'))
     }],
     ['S11 승인 시각보다 뒤에 공개되는 관계 글 → RELATION_TARGET_NOT_YET_PUBLIC', () => {
       const w = makeWorld({ articles: (a) => { a['rel-c'].publishAt = '2026-10-14T09:30:00+09:00' } })
-      assert.ok(prepare(w).candidate.blockers.includes('RELATIONS_INSUFFICIENT'))   // as-of 09:00 에는 아직 비공개
+      { const r = prepare(w); assert.equal(r.candidate.relationEvidence.find((e) => e.slug === 'rel-c').target, 'FUTURE')   // as-of 09:00 에는 아직 비공개
+        assert.deepEqual(r.candidate.entry.relations.direct.map((x) => x.slug), ['rel-a', 'rel-b']) }
       const w2 = makeWorld({ articles: (a) => { a['rel-c'].publishAt = '2026-10-14T08:00:00+09:00' } })
       const c = ready(w2)
       // 승인 시각이 후보 asOf 보다 앞이면 그 전에 막힌다 — 관계 판정 자체는 함수로 본다
@@ -268,9 +305,12 @@ export function authoringCases(lib, { cliPath = CLI_PATH } = {}) {
       const callout = makeWorld({ graph: (g) => { g.edges[2].placement = 'BODY_CALLOUT' } })
       const r = prepare(callout)
       const ev = r.candidate.relationEvidence.find((e) => e.edgeId === 'E-3')
-      assert.equal(ev.surfaceOk, false); assert.equal(ev.eligible, false); assert.ok(r.candidate.blockers.includes('RELATIONS_INSUFFICIENT'))
+      assert.equal(ev.surfaceOk, false); assert.equal(ev.eligible, false); assert.deepEqual(r.candidate.entry.relations.direct.map((x) => x.slug), ['rel-a', 'rel-b'])
       const off = makeWorld({ control: (c) => { c.surfaces.FOOTER_SIBLING = false } })
-      assert.ok(prepare(off).candidate.blockers.includes('RELATIONS_INSUFFICIENT'))
+      { const ro = prepare(off); assert.equal(ro.candidate.relationEvidence.find((e) => e.slug === 'rel-b').surfaceOk, false)
+        assert.deepEqual(ro.candidate.entry.relations.direct.map((x) => x.slug), ['rel-a', 'rel-c']) }
+      const offBoth = makeWorld({ control: (c) => { c.surfaces.FOOTER_SIBLING = false }, graph: (g) => { g.edges[2].placement = 'BODY_CALLOUT' } })
+      assert.ok(prepare(offBoth).candidate.blockers.includes('RELATIONS_INSUFFICIENT'))
       const notImpl = makeWorld({ resolver: (t) => t.replace("  'FOOTER_BRIDGE',\n] as const\n\n/** 하단", "] as const\n\n/** 하단") })
       assert.ok(prepare(notImpl).candidate.blockers.includes('RELATIONS_INSUFFICIENT'))
       // 승인 단계 — 사람이 BODY_CALLOUT edge 를 관계로 적어도 거부
