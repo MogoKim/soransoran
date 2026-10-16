@@ -13,6 +13,7 @@ import {
   validAnonymousViewerToken,
   viewerKeyHash,
 } from '../src/lib/post-exposure'
+import { schemaCompatibleForBorrowedClient } from './lib/source-snapshot-fixture.mjs'
 
 let pass = 0
 const check = (label: string, fn: () => void): void => {
@@ -129,6 +130,19 @@ check('원장 정리는 cron secret과 30일·1만 행 상한 안에서만 실�
   assert.match(cleanup, /POST_EXPOSURE_CLEANUP_MAX_BATCHES = 10/)
   assert.match(vercel, /\/api\/internal\/post-exposure-cleanup/)
   assert.match(vercel, /"schedule": "0 18 \* \* \*"/)
+})
+
+check('runtime fixture는 additive 원장만 허용하고 기존 Prisma 계약 변경은 차단', () => {
+  const parent = readFileSync('prisma/schema.prisma', 'utf8')
+    .replace(/\n\s*\/\/\/ 실제 고객 열람·목록 노출의 30일 중복 제거 원장\. 공개 누적값은 viewCount 다\.\n\s*exposureEvents\s+PostExposureEvent\[\]\n/, '\n')
+    .replace(/\n\/\/\/ 실제 브라우저 노출만 기록하는 단기 원장\.[\s\S]*?\nmodel PostExposureEvent \{[\s\S]*?\n\}\n/, '\n')
+    .replace(/\nenum PostExposureKind \{[\s\S]*?\n\}\n\nenum PostExposureSurface \{[\s\S]*?\n\}\n/, '\n')
+  const changedField = schema.replace(/^(\s*title\s+)String$/m, '$1Int')
+  assert.notEqual(changedField, schema)
+  assert.equal(schemaCompatibleForBorrowedClient(parent, schema), true)
+  assert.equal(schemaCompatibleForBorrowedClient(parent, changedField), false)
+  assert.equal(schemaCompatibleForBorrowedClient(parent, schema.replace('model User {', 'model User {\n  unsafeRequired String')), false)
+  assert.equal(schemaCompatibleForBorrowedClient(parent, schema.replace('enum PostStatus {', 'enum PostStatus {\n  UNSAFE')), false)
 })
 
 console.log(`\nPASS ${pass} · FAIL 0`)

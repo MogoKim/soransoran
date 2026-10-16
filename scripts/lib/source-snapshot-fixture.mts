@@ -7,7 +7,7 @@
  *   🔴 node_modules 는 이 저장소 것을 빌려 **실행만** 한다(prisma generate · build 0). 스키마는 그 커밋과 같다(검사가 대조한다).
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -18,12 +18,81 @@ export const RUNTIME_FIXTURE_SHA = 'e4d31d688ab556470029679c380e9064663594f4'
 
 export type RuntimeTree = { root: string; cleanup: () => void }
 
+type PrismaBlock = { kind: 'model' | 'enum'; name: string; lines: string[] }
+
+function schemaBlocks(source: string): Map<string, PrismaBlock> {
+  const blocks = new Map<string, PrismaBlock>()
+  const re = /^(model|enum)\s+(\w+)\s*\{([\s\S]*?)^\}/gm
+  for (const match of source.matchAll(re)) {
+    const kind = match[1] as PrismaBlock['kind']
+    const name = match[2]!
+    const lines = match[3]!
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, '').trim())
+      .filter(Boolean)
+    blocks.set(`${kind}:${name}`, { kind, name, lines })
+  }
+  return blocks
+}
+
+function withoutBlocks(source: string): string {
+  return source
+    .replace(/^(?:model|enum)\s+\w+\s*\{[\s\S]*?^\}/gm, '')
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, '').trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+function isSubsequence(needles: readonly string[], haystack: readonly string[]): boolean {
+  let at = 0
+  for (const line of haystack) if (line === needles[at]) at += 1
+  return at === needles.length
+}
+
+/**
+ * 옛 runtime 코드가 현재 Prisma Client를 빌려 써도 되는 additive schema인지 판정한다.
+ * 기존 datasource·generator·model·enum은 그대로여야 한다. 예외는 새 model로 향하는
+ * 역관계 배열뿐이다. 새 scalar나 기존 필드 변경은 계속 fail-closed다.
+ */
+export function schemaCompatibleForBorrowedClient(runtimeSource: string, currentSource: string): boolean {
+  if (withoutBlocks(runtimeSource) !== withoutBlocks(currentSource)) return false
+
+  const runtime = schemaBlocks(runtimeSource)
+  const current = schemaBlocks(currentSource)
+  const newModels = new Set(
+    [...current.values()]
+      .filter((block) => block.kind === 'model' && !runtime.has(`model:${block.name}`))
+      .map((block) => block.name),
+  )
+
+  for (const [key, oldBlock] of runtime) {
+    const next = current.get(key)
+    if (!next || next.kind !== oldBlock.kind) return false
+    if (oldBlock.kind === 'enum') {
+      if (JSON.stringify(oldBlock.lines) !== JSON.stringify(next.lines)) return false
+      continue
+    }
+
+    const extras = next.lines.filter((line) => !oldBlock.lines.includes(line))
+    if (!isSubsequence(oldBlock.lines, next.lines)) return false
+    if (extras.some((line) => {
+      const field = /^(\w+)\s+(\w+)\[\](?:\s+.*)?$/.exec(line)
+      return field === null || !newModels.has(field[2]!)
+    })) return false
+  }
+  return true
+}
+
 export function openRuntimeTree(repoRoot: string, sha = RUNTIME_FIXTURE_SHA): RuntimeTree {
   const root = join(mkdtempSync(join(tmpdir(), 'soran-rt-src-')), 'rt')
   execFileSync('git', ['worktree', 'add', '--detach', root, sha], { cwd: repoRoot, stdio: 'ignore' })
-  // 🔴 스키마가 같은지 먼저 본다 — 다르면 빌린 client 로 옛 트리를 돌릴 수 없다
-  const diff = execFileSync('git', ['diff', '--stat', sha, 'HEAD', '--', 'prisma/schema.prisma'], { cwd: repoRoot, encoding: 'utf-8' })
-  if (diff.trim() !== '') throw new Error('runtime 커밋과 지금 저장소의 Prisma 스키마가 다르다 — 빌린 client 로 돌릴 수 없다')
+  // 🔴 기존 model·필드가 같고 새 model만 더해진 경우에만 현재 client를 빌린다.
+  const runtimeSchema = readFileSync(join(root, 'prisma/schema.prisma'), 'utf8')
+  const currentSchema = readFileSync(join(repoRoot, 'prisma/schema.prisma'), 'utf8')
+  if (!schemaCompatibleForBorrowedClient(runtimeSchema, currentSchema)) {
+    throw new Error('runtime 커밋과 지금 저장소의 기존 Prisma 계약이 다르다 — 빌린 client 로 돌릴 수 없다')
+  }
   symlinkSync(join(repoRoot, 'node_modules'), join(root, 'node_modules'))
   return {
     root,
