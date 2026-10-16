@@ -263,6 +263,11 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §4.1 이 유료 생성 전 코드의 Persona 확정을 적는다',
     d100Goal.includes('유료 초안 생성 전에 코드가')
     && d100Goal.includes('생성기가 Persona 후보를 임의로 다시 고르지 않는다')])
+  out.push(['canon §4.2 가 실제 고객 작명 분포를 참고하되 닉네임 복사 없이 확장 Persona 를 만든다',
+    d100Goal.includes('실제 고객 작명 분포를 닮되 복사하지 않는다')
+    && d100Goal.includes('길이·리듬·평범한 작명 습관의')
+    && d100Goal.includes('문자열을 후보로 복사·변형·노출하지 않는다')
+    && d100Goal.includes('최종 배정 직전에는 현재 회원·기존 Persona·같은 신규 cohort·수집 작성자 대조를 다시 실행한다')])
   out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
     d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
     && d100Goal.includes('bounded recovery')])
@@ -514,17 +519,17 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
   check('현재 실행의 다음 critical path 첫 두 항목이 D5 병목 보정 → D5 증명이다',
     rows[0] === 'D5-FIX' && rows[1] === 'D5')
   check('현재 실행이 D10·D20 목표일과 각 선행 operating PASS를 함께 적는다',
-    /^\| D10 \|[^\n]*10-16 목표[^\n]*자동 10\/10/m.test(path)
-    && /^\| D20 \|[^\n]*10-17 목표[^\n]*D10 PASS/m.test(path))
+    /^\| D10 \|[^\n]*목표[^\n]*D5 operating PASS[^\n]*자동 10\/10/m.test(path)
+    && /^\| D20 \|[^\n]*목표[^\n]*D10 operating PASS/m.test(path))
 }
 check('현재 실행이 원격 main과 runtime을 분 단위 관측값으로 분리하고 D100 차이를 판정한다',
   /^\| 원격 main \(20\d\d-\d\d-\d\d \d\d:\d\d 관측\) \| `[0-9a-f]{40}` \|/m.test(currentLive)
-  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*main 차이는 magazine-only/m.test(currentLive))
+  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*main 차이를 별도 판정/m.test(currentLive))
 check('현재 실행이 추가 댓글의 배포 상태와 현재 d3에서 0건인 이유를 함께 적는다',
   currentLive.includes('switch ON · D10 profile · E6 consumer plist')
   && currentLive.includes('현재 공개 d3라 stage mismatch로 추가 0이 정상'))
 check('현재 실행이 공격적 목표일을 PASS 약속과 구분하고 D30을 생략하지 않는다',
-  currentLive.includes('10-16 D10/10-17 D20 목표')
+  currentLive.includes('공격적 목표일은 PASS 약속이 아니다')
   && currentLive.includes('D10·D20은 아직 PASS가 아니다')
   && currentLive.includes('D30은 생략하지 않음'))
 check('현재 실행이 실제 조회수 구현을 별도 critical path로 두고 가짜 숫자를 금지한다',
