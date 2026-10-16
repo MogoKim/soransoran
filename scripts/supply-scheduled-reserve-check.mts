@@ -21,7 +21,7 @@
  *    ⑬ (3차) 지난 날 장부가 깨졌거나 어제 장부가 없으면 **세션 경로에서** 보수 기본값이다(부분 표본 금지)
  *    ⑭ (3차) 잠에서 깬 · 창 전에 kickstart 로 뜬 회차는 손 실행이다 — 회차 시작 시각도 같은 창이어야 한다
  *    ⑮ (2026-09-30) 별도 장부로 새 예산을 여는 길 — `$HOME` 바꾸기(정본 실경로 대조) · 오늘 파일 없음(경계 포함)
- *       · 적용 한도·env 출처 기록 · 9/28 모양(env $5 덮어쓰기)이 $0.50 안에 머무는지
+ *       · 적용 한도·env 출처 기록 · env $5 덮어쓰기도 승인 천장 안에 머무는지
  *
  * 🔴 **확인하지 못하는 것** — 실제 launchd 가 이 라벨을 넣는지는 이 검사가 띄운 프로세스로 증명하지 못한다.
  *    근거는 수집 기록(같은 `judgeTrigger` 규칙으로 `schedule` 522건)이고, 운영 적용 뒤 장부의
@@ -84,8 +84,8 @@ check('보수 기본값 = 회차 상한(estimateSupplySpend(묶음).capPerRun) �
   CAPRUN === estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerRun
   && FLOOR === estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).expectedPerRun && FLOOR > 0 && CAPRUN > FLOOR,
   `cap=${CAPRUN} floor=${FLOOR}`)
-check('🔴 보수 기본값 6회분은 계약 천장보다 크다 — 표본이 없으면 비례 축소로 하루 여력 전부를 정기 슬롯이 나눠 갖는다',
-  SUPPLY_DAILY_USD_APPROVED !== null && SUPPLY_RUNS_PER_DAY * CAPRUN > SUPPLY_DAILY_USD_APPROVED,
+check('🔴 D20 승인 천장은 보수 기본값 6회분을 덮는다 — 최악 단가에서도 정기 슬롯 6개가 예산 때문에 굶지 않는다',
+  SUPPLY_DAILY_USD_APPROVED !== null && SUPPLY_RUNS_PER_DAY * CAPRUN <= SUPPLY_DAILY_USD_APPROVED,
   `${SUPPLY_RUNS_PER_DAY}×${CAPRUN.toFixed(4)} vs ${SUPPLY_DAILY_USD_APPROVED}`)
 check('실측 기간·최소 표본이 이름 붙은 상수다', SCHEDULED_COST_LOOKBACK_DAYS === 7 && SCHEDULED_COST_MIN_SAMPLES === 3)
 check('슬롯 창 = 공급 회차 정상 수명(SUPPLY_RUN_WINDOW_MS · 45분) — 잠금 시효가 아니다(잠금은 커널 lease)',
@@ -193,7 +193,7 @@ function P(reserved: number, ceiling: number | null = 0.5): SpendProtect {
   const d = judge({ t: tally(0.48), usd: 0.04, p: P(0.25) })
   check('🔴 하루 총액이 모자라면 DAILY_EXHAUSTED 가 먼저다 — 양보와 소진을 가른다', !d.ok && d.code === 'DAILY_EXHAUSTED')
   const e = judge({ t: tally(0.45), usd: 0.06, p: P(0, 0.5), lim: { ...LIM, dailyUsd: 5 } })
-  check('🔴 손 실행이 env 로 하루 예산을 5달러로 올려도 계약 천장 0.5 를 넘지 못한다',
+  check('🔴 손 실행이 env 로 하루 예산을 5달러로 올려도 주어진 계약 천장 0.5 를 넘지 못한다',
     !e.ok && e.code === 'SCHEDULED_RESERVE')
   check('보호 없음(null)이면 앞판 판정 그대로 — env 예산만 본다',
     judge({ t: tally(0.45), usd: 0.06, lim: { ...LIM, dailyUsd: 5 } }).ok)
@@ -1149,7 +1149,7 @@ const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultip
   rmSync(other, { recursive: true, force: true })
 }
 {
-  // ⓙ-4 🔴 적용 한도·env 출처 기록 — 9/28 모양(오늘 $0.4978 사용 · 손 실행이 env 를 $5 로 덮음)
+  // ⓙ-4 🔴 적용 한도·env 출처 기록 — 승인 천장 직전까지 사용 · 손 실행이 env 를 $5 로 덮음
   const pv = budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '5', [BUDGET_ENV.runRequestCap]: '20', [BUDGET_ENV.headroomMultiplier]: '1.2' },
     `${BUDGET_ENV.dailyUsd}=0.50\n${BUDGET_ENV.runRequestCap}="20"\n${BUDGET_ENV.headroomMultiplier}=1.2\n`)
   check('🔴 [출처] .env.local 0.50 · 프로세스 5 → process-override · 다른 두 키는 env.local',
@@ -1174,8 +1174,8 @@ const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultip
   try {
     const res = await inHome({ mark: true, label: false, clock: '2026-09-28T23:10:00' }, async () => {
       const d = defaultLedgerDir()
-      // 9/28 15시 무렵 모양 — 이미 $0.4978 을 썼다
-      putRows(d, '2026-09-28', [line({ usd: 0.4978, kind: 'scheduled', slot: '2026-09-28 12:15', at: '2026-09-28T12:20:00' })])
+      // 승인 천장 직전 모양 — 이미 $1.1978 을 썼다
+      putRows(d, '2026-09-28', [line({ usd: 1.1978, kind: 'scheduled', slot: '2026-09-28 12:15', at: '2026-09-28T12:20:00' })])
       const s = new SupplyLlmSession({ runId: 'OVR', limits: LIM5, now: at('2026-09-28T23:10:00'), envLocalPath: envFile })
       const b0 = paidFetches
       const r = await s.call(ASK)
@@ -1183,9 +1183,9 @@ const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultip
       const row = day.ok ? day.entries.find((e) => e.runId === 'OVR' && e.stage !== 'countTokens') : undefined
       return { r, paid: paidFetches - b0, row, text: s.describe() }
     })
-    check('🔴 [9/28 재현] 오늘 $0.4978 사용 · 손 실행이 env 를 $5 로 덮어도 23:10 에 막힌다 — min(env, 천장 $0.50) · 유료 0',
+    check('🔴 [상한 재현] 오늘 $1.1978 사용 · 손 실행이 env 를 $5 로 덮어도 막힌다 — min(env, 천장 $1.20) · 유료 0',
       !res.r.ok && (res.r.errorCode ?? '').endsWith('SCHEDULED_RESERVE') && res.paid === 0, res.r.errorCode ?? '')
-    check('🔴 [기록] 막힌 예약 줄에 적용 한도가 남는다 — env $5 · 천장 $0.50 · 적용 $0.50 · 출처 process-override',
+    check('🔴 [기록] 막힌 예약 줄에 적용 한도가 남는다 — env $5 · 천장 $1.20 · 적용 $1.20 · 출처 process-override',
       res.row !== undefined && res.row.budgetDailyUsd === 5 && res.row.budgetCeilingUsd === SUPPLY_DAILY_USD_APPROVED
       && res.row.budgetCapUsd === SUPPLY_DAILY_USD_APPROVED && res.row.budgetSource === 'process-override', JSON.stringify(res.row))
     check('🔴 [경고] 프로세스가 .env.local 예산을 덮으면 세션이 한 번 경고한다(키 이름 · 두 값)',
@@ -1201,7 +1201,7 @@ const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultip
       const settledRow = day.ok ? day.entries.find((e) => e.runId === 'OVR2' && e.status === 'settled' && e.stage !== 'countTokens') : undefined
       return { n, t, settledRow }
     })
-    check('🔴 [9/28 재현] 빈 장부에서 env $5 로 덮고 23:10 부터 계속 불러도 합계(정산+열린 예약) ≤ $0.50',
+    check('🔴 [상한 재현] 빈 장부에서 env $5 로 덮고 계속 불러도 합계(정산+열린 예약) ≤ $1.20',
       okRun.n > 0 && okRun.t !== null && okRun.t.settledUsd + okRun.t.openReservedUsd <= (SUPPLY_DAILY_USD_APPROVED ?? 0) + 1e-12,
       `n=${okRun.n} settled=${okRun.t?.settledUsd} open=${okRun.t?.openReservedUsd}`)
     check('[기록] 정산 줄(접은 뒤 이기는 줄)에도 같은 한도가 남는다',

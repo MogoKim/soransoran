@@ -15,8 +15,8 @@
  *    · 살아 있는 holder 는 시각 · PID · rename 으로 뺏지 않는다
  *    · lease · 예산은 provider 호출 · DB write **전에** 본다 — lease 가 먼저, 유료 생성 전에 예산
  *    기계 사이는 발행 트랜잭션(Serializable · 글당 1건 재검사)이 막는다.
- * 🔴 **비용** — 댓글 전용 장부(`persona-comment-ledger`) · 하루 상한 ≤ $0.20
- *    (`SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`, 코드 기본값 0.20 · 그 위로는 못 올린다).
+ * 🔴 **비용** — 댓글 전용 장부(`persona-comment-ledger`) · 기본 하루 $0.20 · 승인 천장 $0.50
+ *    (`SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`, D20 실측 뒤 명시한 값만 기본보다 높게 쓴다).
  *
  * 종료 코드 — 0 정상(할 일이 없던 회차 포함) · 1 잠금/설정/예외 · 2 발행 오류(재시도 대상)가 남았다
  *

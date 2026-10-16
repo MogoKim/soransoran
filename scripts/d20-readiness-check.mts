@@ -12,6 +12,7 @@ import { deriveFollowupProfile, type FollowupMeasure } from '../src/lib/followup
 import {
   FOLLOWUP_EXTRA_PER_POST_MAX, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
 } from '../src/lib/persona-comment-followup'
+import { COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import { profileOf } from '../src/lib/scale-profile'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 
@@ -84,6 +85,8 @@ console.log('\n② 식 — 실측에서만 나온다')
 
 console.log('\n③ 승인 없이 설치되지 않는다 · 첫 댓글 예산이 먼저다')
 {
+  check('D20 후보 fixture 상한 $0.50은 런타임 승인 천장과 같고 기본 $0.20은 그대로다',
+    COMMENT_LOOP_DAILY_USD_MAX === 0.5 && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2)
   const c = derive(measure()).candidate!
   check('🔴 승인칸이 비어 있다', c.approvedBy === null && c.approvedAt === null)
   check('🔴 후보 그대로는 validateFollowupProfile 이 거부한다(설치해도 0건)', !validateFollowupProfile(c, 'd20').ok)

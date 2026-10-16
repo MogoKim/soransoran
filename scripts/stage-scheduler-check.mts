@@ -35,7 +35,9 @@ import {
 } from '../src/lib/scale-profile'
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, simulateDay } from '../src/lib/publish-slot-catchup'
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
-import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
+import {
+  AUTO_FIRST_COMMENT_WINDOW_MINUTES, COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX,
+} from '../src/lib/persona-comment-auto-lane'
 import {
   d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf,
 } from '../src/lib/d100-capacity'
@@ -179,7 +181,8 @@ const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFa
   auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
   supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
 })
-check('비용 상한 정본 — 공급 $0.50 · 댓글 $0.20', SUPPLY_DAILY_USD_APPROVED === 0.5 && COMMENT_LOOP_DAILY_USD_MAX === 0.2)
+check('비용 상한 정본 — 공급 승인 천장 $1.20 · 댓글 기본 $0.20 / 승인 천장 $0.50',
+  SUPPLY_DAILY_USD_APPROVED === 1.2 && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.5)
 for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
   const v = judgeNextPreflight(s, factsFor(s), GRID)
   check(`${s} preflight PASS — 댓글 ${v.counts.firstComments}건 · 감사 ${v.counts.auditExpected}건 · READY ${v.counts.readyNeeded}건 비용 상한 안`,
@@ -194,9 +197,8 @@ for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
 }
 const pf100 = judgeNextPreflight('d100', factsFor('d100'), GRID)
 console.log(`   d100: ${pf100.verdict} [${pf100.codes.join(',')}] · 댓글 감당 ${pf100.counts.commentAffordable}건/day`)
-check('🔴 [blocker 실측] d100 — 댓글 $0.20 로 첫 댓글 100건 불가 · 발행 용량 부족 · 공급 $0.50 로 READY 100건(목표 + 실측 손실 0) 불가',
-  pf100.verdict === 'FAIL' && pf100.codes.includes('COMMENT_COST_SHORT') && pf100.codes.includes('PUBLISH_CAPACITY_SHORT')
-  && pf100.codes.includes('SLOTS_INFEASIBLE') && pf100.codes.includes('SUPPLY_COST_SHORT'))
+check('🔴 [blocker 실측] d100 — 상한을 D20까지만 열어도 발행 용량·슬롯이 부족해 자동 통과하지 않는다',
+  pf100.verdict === 'FAIL' && pf100.codes.includes('PUBLISH_CAPACITY_SHORT') && pf100.codes.includes('SLOTS_INFEASIBLE'))
 const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want: 'FAIL' | 'UNKNOWN'; code: PreflightCode }[] = [
   { name: 'slot-valid 기회 19 < 20', s: 'd20', o: { slotValidOpportunities: 19 }, want: 'FAIL', code: 'OPPORTUNITY_SHORT' },
   { name: '기회 모름', s: 'd20', o: { slotValidOpportunities: null }, want: 'UNKNOWN', code: 'OPPORTUNITY_UNKNOWN' },
@@ -211,10 +213,10 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '댓글 단가 모름', s: 'd20', o: { commentUsdPerRequest: null }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
   { name: '댓글 단가 0 은 모름', s: 'd20', o: { commentUsdPerRequest: 0 }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
   { name: '댓글 상한 모름', s: 'd20', o: { commentDailyUsdCap: null }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
-  { name: '댓글 단가 $0.011 × 20 > $0.20', s: 'd20', o: { commentUsdPerRequest: 0.011 }, want: 'FAIL', code: 'COMMENT_COST_SHORT' },
+  { name: '댓글 단가 $0.026 × 20 > $0.50', s: 'd20', o: { commentUsdPerRequest: 0.026 }, want: 'FAIL', code: 'COMMENT_COST_SHORT' },
   { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
   { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
-  { name: '공급 결과당 비용 $0.011 × 목표 50 > $0.50', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.011 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
+  { name: '공급 결과당 비용 $0.025 × 목표 50 > $1.20', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.025 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
   { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → UNKNOWN', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, unknown: 5 }) }, want: 'UNKNOWN', code: 'READY_REQUIREMENT_UNKNOWN' },
   { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
   { name: '결과당 공급 비용 모름(미연결 · legacy)', s: 'd20', o: { readyCohort: cohortFor('d20', { usdPerSlotValidResult: null }) }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
