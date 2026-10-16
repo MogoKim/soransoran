@@ -168,10 +168,10 @@ export function authorityRequired(): ReadonlyArray<readonly [string, boolean]> {
     && launchd.includes('direct supply:health')])
   const current = read('docs/operations/CURRENT-MILESTONE.md')
   out.push(['CURRENT-MILESTONE 이 최신 D5 증거 판정 · Persona contract-valid · D5 blocker 코드를 분리해 적는다',
-    /d3 증거[^\n]*(PASS|FAIL|UNKNOWN)|자동 D5[^\n]*(시험 전|BLOCK)/.test(current)
+    /d\d+ 증거[^\n]*(PASS|FAIL|UNKNOWN)|자동 D5[^\n]*(시험 전|BLOCK|fresh proof)/.test(current)
     && /contract-valid \d+/.test(current)
-    && /SUPPLY_COST_(SHORT|UNKNOWN)/.test(current)
-    && /DECISION_NOT_TRANSITION/.test(current)])
+    && /^\| `[A-Z_]+` \|[^\n]+\|[^\n]+\|$/m.test(current)
+    && current.includes('## 3. D5 개방의 정확한 blocker')])
   return out
 }
 
