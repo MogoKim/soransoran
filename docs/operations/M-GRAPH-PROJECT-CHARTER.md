@@ -29,7 +29,7 @@
 | 현재 분기 목표와 병목 | [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md) |
 | M-AUTO 설치·가동·잠금·병합·배포·공개 감시 | [`magazine-automation-runbook.md`](./magazine-automation-runbook.md) |
 | 매거진 콘텐츠 품질·글 구조·위험 등급 정의 | [`2026-08-23-soransoran-magazine-strategy.md`](./2026-08-23-soransoran-magazine-strategy.md) |
-| 일일 제작 역할·`ArticleSpec` 전환·1주 실행표 | 이 문서 §18 · [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) |
+| 일일 제작 역할·`ArticleSpec` 전환·48~72시간 commissioning 실행표 | 이 문서 §18 · [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) |
 | 매거진 QA·예약 재고·공개 엔진·창업자 개입 기준의 운영 정본 | [`2026-08-23-soransoran-magazine-seo-production-strategy.md`](./2026-08-23-soransoran-magazine-seo-production-strategy.md) |
 | robots·canonical·sitemap·색인 허용 | [`2026-08-23-soransoran-seo-index-policy.md`](./2026-08-23-soransoran-seo-index-policy.md) |
 | 고객 화면 디자인 시스템 | [`soransoran-brand-design-spec.md`](./soransoran-brand-design-spec.md) |
@@ -963,16 +963,18 @@ watch 거짓 PASS 0
 
 ## 18. 역할과 승인 경계
 
-🔴 **2026-10-15 창업자 결정 — 일일 제작 경로를 `ArticleSpec` 중심으로 단순화한다.**
-이 결정은 아래의 옛 `Claude brief → ChatGPT 원고` 역할 분리를 대체한다. M-GRAPH 조사와
-위험 근거의 독립 검증은 유지하지만, 매일 Claude가 자유 서술형 `brief.md`·`review.ts`를
-새로 만드는 단계를 목표 경로에서 제거한다.
+🔴 **2026-10-16 창업자 결정 — M-GRAPH plan-first와 M-AUTO execute-only로 단순화한다.**
+이 결정은 후보를 고른 뒤 관계·source 부족을 발견하던 흐름과 옛 `Claude brief → ChatGPT 원고`
+역할 분리를 대체한다. M-GRAPH가 생산 가능한 계획 재고를 먼저 만들고, M-AUTO는 승인된 계획을
+재해석하지 않고 실행한다. 매일 Claude가 자유 서술형 `brief.md`·`review.ts`를 새로 만드는 단계는
+목표 경로에서 제거한다.
 
 ```text
-M-GRAPH       조사된 검색 의도 · 관계 · 다음 승인 노드 제공
-ArticleSpec   그래프·정책에서 결정적으로 생성하는 버전 고정 원고 계약
-ChatGPT       ArticleSpec 안에서 최종 원고와 hero 이미지만 생성
-Claude Code   결정적 QA · 파일화 · 등록 · PR · CI · 병합 · 공개 감시
+M-GRAPH       조사된 검색 의도 -> GRAPH_READY 계획 재고와 근거 있는 관계 제공
+G8            graph-ready intent에 stable slug와 admission 신원 부여
+ArticlePlan   독자 질문·범위·관계·근거·안전·공개 계획의 승인 정본
+ArticleSpec   ArticlePlan에서 결정적으로 생성하는 버전 고정 실행 계약
+M-AUTO        SPEC_READY 선택 -> 원고·QA·hero·등록·배포·watch 실행
 창업자        검색 영토 · 브랜드 경계 · 고위험 정책 · 구조 변경 승인
 ```
 
@@ -980,23 +982,34 @@ Claude Code   결정적 QA · 파일화 · 등록 · PR · CI · 병합 · 공�
 
 - `specVersion`, `specHash`, slug, 검색 의도와 그래프 노드·관계
 - 독자 질문, 범위, 구조, 근거·안전 제약, 길이와 형식 계약
-- CTA, 직접 관련 3개와 발견 1개, 시리즈·허브·커뮤니티 출구
+- CTA, 근거 있는 직접 관련 2~3개와 발견 1개, 시리즈·허브·커뮤니티 출구
 - hero 요구와 공개 예약 정보
 
-주제 선정은 없애지 않는다. 일일 동적 창작 대신 **M-GRAPH가 승인한 다음 노드를 결정적으로
-선택**한다. `draft.md`는 생성 결과를 QA·재생성·원자 교체하는 경계로 유지한다.
+graph에는 근거 있는 관계를 수량 제한 없이 저장한다. 생산 최소선은 공개 대상 direct 2개 이상과
+discovery 1개이며, 제품 상세의 표시 목표는 direct 최대 3개와 discovery 1개다. direct가 2개뿐이면
+2개만 표시하고 숫자를 위해 약한 관계를 만들지 않는다. hub·series·community 출구는 discovery를
+대신하지 않는다.
 
-전환은 `DIRECT_SPEC_V1` opt-in 한 건으로 시작한다. 기존 `LEGACY_BRIEF_V1`은 운영 롤백을
-위해 제한적으로 보존하고, 현재 코드로 무인 자연 회차를 증명하기 전에 전면 삭제하지 않는다.
-이 전환의 1주 마일스톤과 완료 조건은 `magazine/MAGAZINE-CURRENT-MILESTONE.md`가 정본이다.
+주제 선정은 없애지 않는다. 일일 동적 창작 대신 **M-GRAPH가 미리 준비한 `GRAPH_READY` 재고에서
+다음 계획을 결정적으로 선택**한다. readiness는 graph에서 재생성되는 파생 보고서이며 사람이 수정하는
+새 정본이 아니다. `draft.md`는 생성 결과를 QA·재생성·원자 교체하는 경계로 유지한다.
+
+전환 중 DIRECT와 LEGACY는 실행 입구와 후보 집합을 분리한다. 한 run에서 두 mode를 섞거나 DIRECT
+실패 행을 legacy로 자동 강등하지 않는다. `LEGACY_BRIEF_V1`은 신규 유입을 동결한 bounded rollback으로만
+보존하고, 서로 다른 DIRECT 계획 2건과 lane rollback을 증명한 뒤 활성 경로에서 제거한다.
+이 전환의 48~72시간 commissioning 마일스톤(목표 2026-10-18 KST)과 완료 조건은
+`magazine/MAGAZINE-CURRENT-MILESTONE.md`가 정본이다. 이 게이트는 M-GRAPH → M-AUTO 순서로 두 층만 판정하고,
+OUTCOME은 트래픽이 충분해질 때까지 `DEFERRED — TRAFFIC_NOT_SUFFICIENT`로 둔다(2026-10-16 창업자 결정).
+OUTCOME이 제품 목적의 최상위라는 원칙은 바뀌지 않는다.
 
 | 역할 | 책임 (M-GRAPH 범위) |
 |---|---|
 | 창업자 | 검색 정체성·핵심 영토·브랜드 방향·고위험 주제 결정 |
 | Codex | 목적·정본·조사 품질·중복·마일스톤·구현 범위·배포 판단 총괄 |
 | Claude Code | 승인된 범위의 read-only 조사, 구현, 검증, 증거 보고 |
-| M-GRAPH | 확정된 검색 의도·관계·장기 계획 제공 |
-| M-AUTO | 정해진 대상을 안전하게 생성·검사·예약·병합·공개 |
+| M-GRAPH | 확정된 검색 의도·관계·GRAPH_READY ArticlePlan 재고 제공 |
+| G8 | graph-ready intent의 stable slug·admission 신원 부여 |
+| M-AUTO | SPEC_READY 참조를 안전하게 생성·검사·예약·병합·공개 |
 
 ### 초기 운영
 
@@ -1005,7 +1018,8 @@ Claude Code   결정적 QA · 파일화 · 등록 · PR · CI · 병합 · 공�
 - 이후 창업자는 매일 주제를 고르지 않는다.
 - 🔴 **원고의 반복 실행은 전부 자동화한다** (M3-A). 등급으로 사람에게 넘기지 않는다.
   사람이 판단하는 것은 브랜드 경계와 새 검색 영토뿐이다.
-- 새 M-AUTO 경로의 일일 입력은 자유 서술형 brief가 아니라 버전 고정 `ArticleSpec`이다.
+- 새 M-AUTO 경로의 일일 입력은 자유 서술형 brief나 전체 콘텐츠를 복제한 queue 행이 아니라
+  `planId`·`planHash`로 참조하는 버전 고정 `ArticleSpec`이다.
 - Claude는 M-GRAPH 연구·설계와 코드 구현·검증에는 계속 쓰되, 일일 운영 필수 provider가 아니다.
 
 ---
@@ -1014,11 +1028,13 @@ Claude Code   결정적 QA · 파일화 · 등록 · PR · CI · 병합 · 공�
 
 1. **깊은 복잡성은 사전 조사에 둔다.** 매일 실행기에 동적 판단을 계속 추가하지 않는다.
 2. **검색 성과를 기다리지 않는다.** 기술 문제가 없으면 확정된 계획을 계속 실행한다.
-3. **한 개의 정본만 둔다.** 주제 지도와 topic queue가 독립적으로 갈라지지 않게 한다.
+3. **역할마다 한 개의 정본만 둔다.** graph, ArticlePlan, ArticleSpec, execution ledger, published article의
+   책임을 분리하고 queue·run·ledger에 콘텐츠 필드를 복제하지 않는다.
 4. **규칙에는 사고 근거가 있어야 한다.** 막연한 품질 우려로 새 FAIL 게이트를 만들지 않는다.
 5. **WARN과 FAIL을 구분한다.** 불확실함을 전부 차단으로 바꾸지 않는다.
-6. **기존 정상 경로를 먼저 보존한다.** 신규 기능 때문에 예약 공급이 멈추면 설계 실패다.
-7. **한 번에 전면 전환하지 않는다.** 새 캠페인 opt-in으로 시작한다.
+6. **공유 경계는 `draft.md` 이후로 제한한다.** DIRECT와 LEGACY가 후보 선정·prompt 경로를 공유하지 않는다.
+7. **증거 뒤에 삭제한다.** DIRECT 2건과 rollback 전에는 legacy를 격리 보존하고, 증거 뒤에는 활성 경로와
+   제거된 분기 전용 검사를 함께 삭제한다.
 8. **수치가 작을 때 과잉 반응하지 않는다.** 노출 0~소수는 기록하되 일일 실행을 바꾸지 않는다.
 9. **매일 승인받지 않는다.** 승인 대상은 검색 영토·고위험 주제·구조 변경이다.
 10. **완료를 과장하지 않는다.** 설계·구현·가동·실제 캠페인·장기 성과를 분리해 보고한다.
