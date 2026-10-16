@@ -40,13 +40,13 @@ export default function PostViewBeacon({ postId }: { postId: string }) {
 
     // sendBeacon 은 화면을 떠나도 전송이 보장된다. 응답을 읽지 않는 이 용도에 맞다.
     try {
-      if (navigator.sendBeacon?.(url)) return
+      if (navigator.sendBeacon?.(url, new Blob([], { type: 'text/plain' }))) return
     } catch {
       // 아래 fetch 로 넘어간다.
     }
 
     // keepalive 로 이탈 중에도 전송을 이어 간다. 실패는 그대로 삼킨다.
-    void fetch(url, { method: 'POST', keepalive: true }).catch(() => {})
+    void fetch(url, { method: 'POST', keepalive: true, credentials: 'same-origin' }).catch(() => {})
   }, [postId])
 
   return null
