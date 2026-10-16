@@ -468,8 +468,13 @@ try {
     await prisma.personaActivityLog.create({ data: { personaId: s.authors[0]!, kind: 'post', targetId: 'no-such-post', gateStatus: 'PASS',
       decidedBy: UNATTENDED_PUBLISH_DECIDED_BY, createdAt: SLOTS[1]! } })
   })
-  await counter('🔴 HOLD 결정(override · env canary 날)은 세지 않는다 → DECISION_NOT_TRANSITION', 'DECISION_NOT_TRANSITION',
-    async () => undefined, { release: 'd3', state: 'HOLD' })
+  {
+    await wipe()
+    const hold = await storeDecision({ release: 'd3', state: 'HOLD' })
+    await seedDay()
+    const v = await verdictOf(hold)
+    check('🟢 자연 HOLD 결정도 실제 자동 3편 · 첫 댓글 · 감사 · 비용이 완전하면 PASS', v.verdict === 'PASS', v.codes.join(','))
+  }
   {
     await wipe()
     await seedDay()
@@ -742,8 +747,8 @@ try {
       const hold = await storeDecision({ release: 'd3', state: 'HOLD' })
       await seedDay()
       const hv = await verdictOf(hold)
-      check('🔴 HOLD d3 는 같은 행이어도 DECISION_NOT_TRANSITION → 계획 없음', hv.verdict === 'FAIL' && has(hv, 'DECISION_NOT_TRANSITION')
-        && trialPlanOf(hold, hv) === null)
+      check('🟢 HOLD d3 자연 exact-N도 PASS → 다음 날 d5 계획', hv.verdict === 'PASS'
+        && trialPlanOf(hold, hv)?.target === 'd5')
 
       // (나) controller 진입점 — 전날 TRIAL d20(기반 d10) · 증거 없음 → d20 재시험 계획 · preflight 가 막는다
       const envWith = (release: string, capacity: string): void => {

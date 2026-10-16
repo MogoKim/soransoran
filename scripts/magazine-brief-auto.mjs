@@ -47,6 +47,23 @@ import {
   verifyBrief,
 } from './lib/magazine-brief-policy.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+import { LEGACY_BRIEF_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+
+/**
+ * 🔴 **legacy brief 는 LEGACY_BRIEF_V1 행에만 만든다** (2026-10-15 상류 관문).
+ *    DIRECT_SPEC_V1 행은 ArticleSpec 이 원고 계약이다 — Claude 를 부르지도, brief.md·review.ts 를 쓰지도 않는다.
+ *    모르는 directSpecMode 도 legacy 로 묻지 않는다. 둘 다 생성기 호출 0 으로 비켜간다.
+ *
+ * @returns {{brief:true}|{brief:false, status:'SKIP_DIRECT'|'HOLD', detail:string}}
+ */
+export function legacyBriefTarget(queueItem) {
+  const mode = resolveMagazineAutoMode(queueItem)
+  if (!mode.ok) return { brief: false, status: 'HOLD', detail: `${mode.code} — ${mode.why}` }
+  if (mode.mode !== LEGACY_BRIEF_MODE) {
+    return { brief: false, status: 'SKIP_DIRECT', detail: `${mode.mode} — ArticleSpec 경로다. legacy brief 를 만들지 않는다` }
+  }
+  return { brief: true }
+}
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 const BRIEF_MARK = '===BRIEF==='
@@ -394,6 +411,12 @@ async function main() {
     const todoPath = join(selDir, slug, 'brief.todo.md')
     const queueItem = queueBySlug.get(slug) ?? null
 
+    const target = legacyBriefTarget(queueItem)
+    if (!target.brief) {
+      reports.push({ slug, status: target.status, detail: target.detail })
+      continue
+    }
+
     if (!existsSync(todoPath)) {
       reports.push({ slug, status: 'NO_TODO', detail: 'brief.todo.md 가 없다' })
       continue
@@ -475,7 +498,7 @@ async function main() {
       const mark =
         r.status === 'PASS' || r.status === 'WRITTEN'
           ? '✅'
-          : r.status === 'HOLD' || r.status === 'SKIP_EXISTS'
+          : r.status === 'HOLD' || r.status === 'SKIP_EXISTS' || r.status === 'SKIP_DIRECT'
             ? '⏸'
             : '🔴'
       console.log(`  ${mark} ${r.slug}  ${r.status}${r.detail ? ` — ${r.detail}` : ''}`)
@@ -492,7 +515,7 @@ async function main() {
     }
     const pass = reports.filter((r) => r.status === 'PASS' || r.status === 'WRITTEN').length
     const written = reports.filter((r) => r.status === 'WRITTEN').length
-    const skipped = reports.filter((r) => r.status === 'SKIP_EXISTS' || r.status === 'HOLD').length
+    const skipped = reports.filter((r) => r.status === 'SKIP_EXISTS' || r.status === 'HOLD' || r.status === 'SKIP_DIRECT').length
     console.log(`  통과 ${pass} / ${reports.length}` + (write ? ` · 쓴 것 ${written} · 건너뜀 ${skipped}` : ''))
     console.log('')
   }

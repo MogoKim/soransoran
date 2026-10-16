@@ -342,9 +342,8 @@ const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) =>
   console.log(`   S1 전부 PASS: ${w.trace}`)
   check('🟢 S1 PASS 다음 날마다 한 칸 — d3 → d5 → d10 → d20 → d30 → d50 (날짜로 기다리지 않는다)',
     w.days.slice(0, 6).map(tr).join(' ') === 'TRIAL:d3 TRIAL:d5 TRIAL:d10 TRIAL:d20 TRIAL:d30 TRIAL:d50', w.trace)
-  check('S1 근거 — FLOOR 다음은 전부 PASS · 기반은 전날 공개', basisOf(w.days[0]!) === 'FLOOR'
-    && w.days.slice(1, 6).every((d) => basisOf(d) === 'PASS')
-    && w.days.slice(1, 6).every((d, i) => baseOf(d) === w.days[i]!.decision.release))
+  check('S1 근거 — 자연 exact d1을 포함해 전부 PASS · 기반은 전날 공개', w.days.slice(0, 6).every((d) => basisOf(d) === 'PASS')
+    && w.days.slice(0, 6).every((d, i) => baseOf(d) === (i === 0 ? 'd1' : w.days[i - 1]!.decision.release)))
   check('S1 모든 결정이 저장 계약을 통과한다', w.allValid, w.days.map((d) => d.reason).filter((x) => x !== '').join(' / '))
   check('🔴 S1 d50 PASS 뒤 — 지속 d50(증명됐다) · 위 칸 없음 → 평상일 HOLD d50(재증명할 다음 칸이 없다) · 러너 밖(d100)으로 가지 않는다',
     tr(w.days[6]!) === 'HOLD:d50' && w.days.every((d) => stageRank(d.decision.release) <= stageRank('d50')), w.trace)
@@ -385,14 +384,14 @@ const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) =>
   check('S3 PASS 가 난 다음 날에야 d50', tr(w.days[6]!) === 'TRIAL:d50' && basisOf(w.days[6]!) === 'PASS')
 }
 
-// S4 — 날짜만으로는 오르지 않는다 · HOLD 날은 PASS 가 아니다
+// S4 — 날짜만으로는 오르지 않는다 · HOLD 날도 실질 증거가 완전할 때만 PASS
 {
   const w = walk(startRow('d5', 'REPROVE'), Array.from({ length: 10 }, () => 'unread' as const))
   check('🔴 🔴 S4 증거 없는 10일(d10 preflight 초록) — REPROVE d5 에 머문다(시험 0 · 올라가지 않는다)', w.days.every((d) => tr(d) === 'REPROVE:d5'), w.trace)
   const h = walk(startRow('d10', 'HOLD'), ['perfect', 'perfect'])
-  check('🔴 S4 HOLD d10 날은 완벽해도 PASS 가 아니다 → 다음 날 REPROVE d10 → 그 PASS 다음 날 TRIAL d20',
-    h.trace === 'REPROVE:d10 TRIAL:d20' && h.days[0]!.evidence?.codes.includes('DECISION_NOT_TRANSITION') === true, h.trace)
-  check('🔴 S4 REPROVE 는 증거 본체가 증명일로 받는다(HOLD 는 아니다)',
+  check('🟢 S4 HOLD d10 자연 exact-N PASS → 다음 날 바로 TRIAL d20 → 그 PASS 다음 날 TRIAL d30',
+    h.trace === 'TRIAL:d20 TRIAL:d30' && h.days[0]!.evidence?.verdict === 'PASS', h.trace)
+  check('🔴 S4 지정 증명일 표식은 REPROVE만 받는다(HOLD 자연 증거는 표식과 별개)',
     PROOF_STATES.includes('REPROVE') && !PROOF_STATES.includes('HOLD') && TRANSITION_STATES.includes('REPROVE'))
 }
 
@@ -451,12 +450,12 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   const full = runDay(addDays(D0, 2), w.days[0]!.valid, 'perfect', { facts: blockedD10 })
   check('🔴 🔴 S12 반례③ 평상일 부족(0편 · 못 읽음)과 완벽한 날의 다음 결정이 같다 — 이월 빚 0',
     tr(short) === tr(full) && tr(short) === 'PREPARE:d5' && short.decision.release === 'd5', `${tr(short)} vs ${tr(full)}`)
-  // 증명 기반 없음 + d10 preflight PASS 인 날 — 현재 단계 재인증 REPROVE d5 → 그 PASS 다음 날 TRIAL d10
+  // 자연 exact-N 증거 + d10 preflight PASS 인 날 — 불필요한 재인증 없이 바로 d10
   const healed = walk(startRow('d5', 'HOLD'), ['perfect', 'perfect', 'perfect'], (i) => (i === 0 ? { facts: blockedD10 } : {}))
-  check('🟢 S12 재인증 — 막힌 날 PREPARE d5 → d10 preflight PASS 날 REPROVE d5(현재 단계 RETEST) → 그 PASS 다음 날 TRIAL d10',
-    healed.trace === 'PREPARE:d5 REPROVE:d5 TRIAL:d10' && basisOf(healed.days[2]!) === 'PASS', healed.trace)
-  check('S12 REPROVE 는 증명일 env 를 받는다(그날만 exact 5)', healed.days[1]!.valid !== null
-    && consumerEnvOf({ ok: true, decision: healed.days[1]!.valid })[PROOF_STAGE_ENV] === 'd5')
+  check('🟢 S12 자연 증거 승계 — 막힌 날 PREPARE d5 → preflight 회복 즉시 TRIAL d10 → PASS 뒤 TRIAL d20',
+    healed.trace === 'PREPARE:d5 TRIAL:d10 TRIAL:d20' && basisOf(healed.days[1]!) === 'PASS', healed.trace)
+  check('S12 실제 다음 시험일만 증명일 env 를 받는다', healed.days[1]!.valid !== null
+    && consumerEnvOf({ ok: true, decision: healed.days[1]!.valid })[PROOF_STAGE_ENV] === 'd10')
   check('S12 모든 결정이 저장 계약을 통과한다', w.allValid && healed.allValid)
 }
 {
@@ -597,8 +596,8 @@ section('⑧ 증거 본체 — d1~d10 두 입구 동일 · REPROVE 증명일')
   }
   check('🟢 REPROVE 날 완전한 운영 → PASS', judgeStageEvidence(D0, 'd10', factsOfDay(row('d10', 'REPROVE'), 'perfect'), SIDE_OK).verdict === 'PASS')
   const hold = judgeStageEvidence(D0, 'd10', factsOfDay(row('d10', 'HOLD'), 'perfect'), SIDE_OK)
-  check('🔴 HOLD · PREPARE 날은 완벽해도 DECISION_NOT_TRANSITION', hold.verdict === 'FAIL' && hold.codes.join(',') === 'DECISION_NOT_TRANSITION'
-    && judgeStageEvidence(D0, 'd5', factsOfDay(row('d5', 'PREPARE'), 'perfect'), SIDE_OK).codes.includes('DECISION_NOT_TRANSITION'))
+  check('🟢 HOLD · PREPARE 날도 자연 exact-N과 모든 실질 증거를 채우면 운영 PASS', hold.verdict === 'PASS'
+    && judgeStageEvidence(D0, 'd5', factsOfDay(row('d5', 'PREPARE'), 'perfect'), SIDE_OK).verdict === 'PASS')
   check('비용·러너 모름 → UNKNOWN (PASS 아님)', judgeStageEvidence(D0, 'd20', factsOfDay(row('d20', 'TRIAL'), 'perfect'), null).verdict === 'UNKNOWN')
 }
 

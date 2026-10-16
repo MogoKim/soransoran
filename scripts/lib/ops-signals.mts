@@ -11,7 +11,7 @@ import { existsSync, openSync, readSync, closeSync, readFileSync, statSync } fro
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { ledgerDateOf, tallyOf, type LedgerEntry, type LedgerStage } from '../../src/lib/llm-ledger'
+import { ledgerDateOf, relevantUsageUnknownCount, tallyOf, type LedgerEntry, type LedgerStage } from '../../src/lib/llm-ledger'
 import { judgeCost, type CostVerdict } from '../../src/lib/ops-status'
 import { defaultLedgerDir, ledgerPathOf, readLedgerDay, readSettleHold } from './llm-ledger-store.mjs'
 import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
@@ -80,6 +80,12 @@ export type CostSignals = {
   commentLedger: CostVerdict
   /** 감사 전용 장부 — 공급과 섞이지 않는다 */
   auditLedger: CostVerdict
+  /**
+   * 🔴 **그 KST 날 공급 장부에서 proof-day 증거로 셀 관련 `usageUnknown` 요청 수** (2026-10-16 D5 보정 B).
+   *    정본 `relevantUsageUnknownCount` 가 센 값. `null` 이면 그 날 장부를 못 읽었다(모름). stage-evidence 는
+   *    이 값을 `EvidenceSideSignals.supplyUsageUnknown` 로 받아 §3.4(증명일 미상 0)를 평가한다.
+   */
+  supplyUsageUnknownRelevant: number | null
 }
 
 export function readCostSignals(
@@ -123,7 +129,9 @@ export function readCostSignals(
     settleHold: readSettleHold(commentDir),
     capUsd: commentLoopLimitsFromEnv(envVals).limits.dailyUsd,
   })
-  return { supplyLedger, commentSpentUsd, auditLedger, commentLedger }
+  // 🔴 §3.4 — proof-day 관련 natural supply 미상 수(2026-10-16 D5 보정 B). 못 읽었으면 null(모름).
+  const supplyUsageUnknownRelevant = s.entries === null ? null : relevantUsageUnknownCount(s.entries)
+  return { supplyLedger, commentSpentUsd, auditLedger, commentLedger, supplyUsageUnknownRelevant }
 }
 
 /** 🔴 로그 끝만 읽는다 — 큰 로그를 통째로 올리지 않는다 */

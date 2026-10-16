@@ -8,14 +8,27 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { DRAFTS_DIR } from './magazine-load.mjs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { DRAFTS_DIR, loadQueue } from './magazine-load.mjs'
+import { readProductGraphVersion, verifyDirectSpecOnDisk } from './magazine-direct-spec-source.mjs'
 import { buildManuscriptMessage } from './chatgpt-session.mjs'
 import {
   readQuarantine, deliveryFingerprintOf, deliveryHoldsFetch, QUARANTINE_PATH, inputRepairAlreadySent, firstResponseInvalidFor,
 } from './magazine-quarantine.mjs'
 import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
 import { judgeLegacyInvalid } from './magazine-lineage-reconcile.mjs'
+import {
+  ARTICLE_SPEC_FILENAME,
+  ARTICLE_SPEC_REGISTER_LEDGER,
+  DIRECT_SPEC_MODE,
+  directSpecMessageFor,
+  directSpecRegenMessageFor,
+  resolveMagazineAutoMode,
+} from './magazine-direct-spec.mjs'
+
+/** DIRECT_SPEC_V1 행(현재 opt-in 또는 persisted 흔적)은 입력 수리 대상이 아니다 — 수리 provider·probe·Chrome 0 */
+export const DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN = 'DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN'
 
 /** 일반 전송 직전 brief 형식 계약 실패 — probe·Chrome·예약·전송 모두 0 */
 export const BRIEF_FORMAT_CONTRACT_REASON = 'BRIEF_FORMAT_CONTRACT'
@@ -110,7 +123,23 @@ export function firstResponseCorrectionPromptText(packet) {
 }
 export const isFirstResponseCorrection = (packet) => packet?.source === 'FIRST_RESPONSE'
 
-export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
+export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null, queueItem = null) {
+  // 🔴 좁은 canary 라우팅 — queueItem 이 명시적으로 DIRECT_SPEC_V1 로 opt-in 했을 때만 direct.
+  //    - queueItem 미지정(기존 호출자) → legacy (byte-identical)
+  //    - 모르는 directSpecMode → null (legacy provider 로도 보내지 않는다; deliveryGate 에서 fail-closed 로 번역)
+  //    - direct 는 first-send 와 regen 모두 adapter 가 조립한다 (brief.md 미참조 · schemaVersion/specHash 운반)
+  const resolved = resolveMagazineAutoMode(queueItem)
+  if (!resolved.ok) return null
+  if (resolved.mode === DIRECT_SPEC_MODE) {
+    if (packet) {
+      const draftPath = join(draftsDir, slug, 'draft.md')
+      const currentDraft = existsSync(draftPath) ? readFileSync(draftPath, 'utf8') : null
+      const r = directSpecRegenMessageFor({ slug, draftsDir, packet, currentDraft })
+      return r.ok ? r.message : null
+    }
+    const r = directSpecMessageFor({ slug, draftsDir })
+    return r.ok ? r.message : null
+  }
   const briefPath = join(draftsDir, slug, 'brief.md')
   if (!existsSync(briefPath)) return null
   if (isFirstResponseCorrection(packet)) {
@@ -209,7 +238,98 @@ export function inputRepairGate({ slug, draftsDir = DRAFTS_DIR, quarantinePath =
  * @returns {{ok:true, message:string|null, messageFingerprint:string|null, hold:object|null}
  *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
  */
-export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH }) {
+const PRODUCT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const PRODUCT_GRAPH_CURRENT = join(PRODUCT_ROOT, 'src/content/magazine/graph/current.ts')
+/** 운영 기본값 — 정본 큐와 제품 current graphVersion. 시험만 `directSourceDeps` 로 바꾼다 */
+const DEFAULT_DIRECT_SOURCE_DEPS = {
+  queue: () => loadQueue(),
+  expectedGraphVersion: () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
+  /** 🔴 승인 basis(control·surface·resolver 계약)를 다시 맞출 제품 루트 */
+  productRoot: () => PRODUCT_ROOT,
+}
+
+/**
+ * 🔴 **이 slug 에 direct 로 만든 흔적이 남아 있는가** (2026-10-15 Codex P0 — legacy 강등 차단).
+ *    article-spec.json · 등록 영수증 · specHash 를 든 재생성 packet 중 하나라도 있으면 direct 작업이다.
+ *    그때 현재 큐 행이 사라졌거나(queueItem=null) opt-in 이 철회됐어도 legacy 로 보내지 않는다 —
+ *    direct 분기로 가서 정본 큐 재검증이 DIRECT_SPEC_NOT_IN_QUEUE / DIRECT_SPEC_MODE_WITHDRAWN 으로 멈춘다.
+ *    흔적이 없는 진짜 legacy 호출은 지금과 같은 바이트·판정이다.
+ */
+export function persistedDirectIdentity({ slug, draftsDir = DRAFTS_DIR, packet = null }) {
+  return existsSync(join(draftsDir, slug, ARTICLE_SPEC_FILENAME))
+    || existsSync(join(draftsDir, slug, ARTICLE_SPEC_REGISTER_LEDGER))
+    || typeof packet?.specHash === 'string'
+}
+
+export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH, queueItem = null, directSourceDeps = null }) {
+  // 🔴 좁은 canary 라우팅 — direct 는 두 경우뿐이다.
+  //    ① queueItem 이 DIRECT_SPEC_V1 로 opt-in 했다.
+  //    ② 호출자 행이 null·LEGACY 여도 이 slug 에 direct 흔적(article-spec · 등록 영수증 · specHash packet)이 있다 —
+  //       이때는 legacy 로 강등하지 않고 정본 큐 재검증이 NOT_IN_QUEUE · MODE_WITHDRAWN 으로 멈춘다.
+  //    direct 흔적이 없는 legacy 입력(queueItem 미지정 포함)만 아래 기존 경로를 지난다 — message bytes · fingerprint 불변.
+  //    모르는 directSpecMode 는 **legacy provider 로도 보내지 않는다** (fail-closed).
+  //    direct 입력의 brief/message 는 adapter 가 verifyArticleSpec 통과 spec 하나로 만든다 — brief.md 를 읽지 않는다.
+  //    missing/invalid spec 은 여기서 ok:false 로 끝난다 → 호출자 provider/Chrome/예약 0.
+  const resolved = resolveMagazineAutoMode(queueItem)
+  if (!resolved.ok) {
+    return { ok: false, code: resolved.code, why: resolved.why, message: null, messageFingerprint: null }
+  }
+  if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {
+    const deps = directSourceDeps ?? DEFAULT_DIRECT_SOURCE_DEPS
+    const sourceCheck = () => verifyDirectSpecOnDisk({ slug, queue: deps.queue(), draftsDir, expectedGraphVersion: deps.expectedGraphVersion(),
+      productRoot: deps.productRoot?.() ?? null })
+    const blocked = (v) => ({ ok: false, code: v.code, why: v.why, directSpec: v.evidence ?? null, message: null, messageFingerprint: null })
+    // 🔴 호출자 행은 direct 가 아닌데 direct 흔적이 있다 — 큐 삭제·opt-in 철회를 무엇보다 먼저 정본 큐로 판정한다
+    if (resolved.mode !== DIRECT_SPEC_MODE) {
+      const early = sourceCheck()
+      if (!early.ok) return blocked(early)
+    }
+    // 🔴 direct first-send 와 regen 모두 adapter 가 조립한다 — brief.md / review.ts 미참조.
+    //    direct regen 은 현재 원고(draft.md) 가 있어야 "실패 항목만 고친다" 를 지시할 수 있다.
+    //    없으면 fail-closed (REGEN_SOURCE_DRAFT_MISSING) — provider/Chrome/예약/쓰기 0.
+    let spec
+    if (packet) {
+      const draftPath = join(draftsDir, slug, 'draft.md')
+      if (!existsSync(draftPath)) {
+        return { ok: false, code: 'REGEN_SOURCE_DRAFT_MISSING',
+          why: `재생성 기준 원고가 없다: ${draftPath}`,
+          message: null, messageFingerprint: null }
+      }
+      const currentDraft = readFileSync(draftPath, 'utf8')
+      spec = directSpecRegenMessageFor({ slug, draftsDir, packet, currentDraft })
+    } else {
+      spec = directSpecMessageFor({ slug, draftsDir })
+    }
+    if (!spec.ok) {
+      return { ok: false, code: spec.code, why: spec.why, message: null, messageFingerprint: null }
+    }
+    /**
+     * 🔴 **전송 직전에 지금 승인 source 를 다시 지난다** (2026-10-15 Codex P0).
+     *    plan 이 통과시킨 뒤 source 가 삭제·승인 취소·stale·drift·교체되면 저장된 spec 으로 보내면 안 된다.
+     *    --fetch-run · 수동 --fetch · direct regen 이 모두 이 함수를 probe · Chrome · 예약 전에 지난다.
+     *    (spec 자기검증 — 없음·손상 — 이 먼저다. 둘 다 부작용 없는 판정이고 장부 읽기보다 앞이다)
+     */
+    const sendable = sourceCheck()
+    if (!sendable.ok) return blocked(sendable)
+    const ledger = readQuarantine(quarantinePath)
+    if (!ledger.ok) {
+      return { ok: false, code: ledger.code ?? 'QUARANTINE_UNREADABLE', why: ledger.why,
+        message: spec.message, messageFingerprint: spec.messageFingerprint }
+    }
+    const entry = ledger.store[slug] ?? null
+    const hold = deliveryHoldsFetch(entry, spec.messageFingerprint)
+    return {
+      ok: true,
+      mode: DIRECT_SPEC_MODE,
+      message: spec.message,
+      messageFingerprint: spec.messageFingerprint,
+      legacyMessageFingerprint: null,
+      specHash: spec.specHash,
+      schemaVersion: spec.schemaVersion,
+      entry,
+      hold,
+    }
+  }
   const draftPath = join(draftsDir, slug, 'draft.md')
   // 🔴 최초 응답 교정은 저장된 원고 없이 BRIEF 로 다시 쓰게 한다 — 그 밖의 재생성은 현재 원고가 반드시 있어야 한다
   if (packet && !isFirstResponseCorrection(packet) && !existsSync(draftPath)) {

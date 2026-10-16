@@ -1,6 +1,6 @@
 # 매거진 자동화 운영 runbook
 
-작성 2026-09-15 · 갱신 2026-10-15 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09)
+작성 2026-09-15 · 갱신 2026-10-16 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09)
 
 이 문서가 **설치·가동·롤백의 정본**이다. 다른 곳에 절차를 다시 적지 않는다.
 
@@ -10,7 +10,8 @@
 
 | | 자동 | 사람·CI |
 |---|---|---|
-| 승인 노드 선택 · 제작 계약 생성 | ✅ producer | 현재 `LEGACY_BRIEF_V1`, 목표 `DIRECT_SPEC_V1` |
+| graph readiness·ArticlePlan 승인 | ❌ | M-GRAPH·G8가 실행 queue 앞에서 완료 |
+| `SPEC_READY` 다음 계획 선택 | ✅ producer | 계획 내용을 재해석하지 않음 |
 | 원고 회수 (ChatGPT 웹 UI) + 관문 | ✅ producer | |
 | 변환 · QA · hero · batch-qa | ✅ auto-register | |
 | `articles.ts` 등록 (**PR 브랜치 위에서**) | ✅ auto-register | |
@@ -24,23 +25,29 @@
 사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
 **모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
 
-### 0.0A 제작 계약 전환 (2026-10-15 창업자 결정)
+### 0.0A plan-first 제작 계약 전환 (2026-10-16 창업자 결정)
 
 현재 Production은 Claude가 `brief.md`·`review.ts`를 만드는 `LEGACY_BRIEF_V1`이다. 목표 경로는
-M-GRAPH의 승인 노드와 정책을 버전 고정 `ArticleSpec`으로 컴파일하는 `DIRECT_SPEC_V1`이다.
-이 문서에서 전환 완료 전의 자연 회차 설명은 현재 경로를 뜻한다.
+M-GRAPH가 미리 준비한 `GRAPH_READY` 계획을 G8이 편입하고, 승인된 ArticlePlan을 버전 고정
+`ArticleSpec`으로 컴파일해 M-AUTO가 실행만 하는 `DIRECT_SPEC_V1`이다. 전환 완료 전의 자연 회차
+설명은 현재 legacy 경로를 뜻한다.
 
 ```text
-LEGACY_BRIEF_V1  M-GRAPH/queue -> Claude brief -> ChatGPT manuscript -> draft.md -> QA...
-DIRECT_SPEC_V1   M-GRAPH next node -> ArticleSpec -> ChatGPT manuscript -> draft.md -> QA...
+LEGACY_BRIEF_V1  frozen legacy queue -> Claude brief -> ChatGPT manuscript -> draft.md -> QA...
+DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -> draft.md -> QA...
 ```
 
-- 주제 선정은 제거하지 않는다. 승인된 graph의 다음 노드를 결정적으로 고른다.
-- 일일 Claude brief와 review 생성만 direct 경로에서 제거한다.
+- M-GRAPH는 생산 최소선인 공개 direct 2개 이상 + discovery 1개를 갖춘 계획만 `GRAPH_READY`로 낸다.
+  제품 표시는 direct 최대 3개 + discovery 1개다. 숫자를 위해 관계를 만들지 않는다.
+- M-AUTO는 `SPEC_READY` 참조 중 다음 하나를 결정적으로 고르며 주제·관계·계획을 다시 판단하지 않는다.
+- queue는 최종 목표에서 `planId`·`planHash`·`executeAt`만 참조한다.
+- 일일 Claude brief와 review 생성은 direct 경로에서 제거한다.
 - `draft.md`, QA, 재생성 예산, HOLD, dirty-tree, 원자 교체, exact-head, 배포·watch 관문은 유지한다.
-- 첫 전환은 STANDARD 한 건의 opt-in이다. legacy와 direct를 같은 회차에서 이중 전송하지 않는다.
-- direct 실패는 mode를 legacy로 되돌린다. QA나 안전 관문을 완화하지 않는다.
-- 현재 코드 자연 무인 회차 증거 전에 legacy 파일·복구 경로를 삭제하지 않는다.
+- DIRECT와 LEGACY는 runner 입구와 후보 집합을 분리한다. 한 run에서 두 mode를 섞지 않는다.
+- DIRECT 실패 행을 legacy로 자동 강등하지 않는다. 정확한 HOLD를 남기고 같은 spec 신원으로 재개한다.
+- rollback은 행별 mode 변경이 아니라 실행 lane 전체를 명시적으로 legacy runner로 전환한다.
+- 서로 다른 DIRECT 계획 2건과 rollback 증거 전에는 legacy를 격리 보존한다. 증거 뒤에는 daily brief/review,
+  direct 대상 input-repair, mixed selected/reusable, 행별 mode 분기와 그 전용 검사를 활성 경로에서 제거한다.
 - 일정과 완료 게이트는 `magazine/MAGAZINE-CURRENT-MILESTONE.md`를 따른다.
 
 ### 0.0 자동 병합이 확인하는 것
@@ -215,11 +222,13 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 
 ## 4.5 무인 운영 — 하루의 흐름
 
-아래 `brief(claude)`는 **현재 배포된 legacy 경로**다. `DIRECT_SPEC_V1` 전환 뒤에는 같은 위치가
-`승인 노드 → ArticleSpec compiler`로 바뀌며 이후 관문은 동일하다.
+아래 `brief(claude)`는 **현재 배포된 legacy runner**다. DIRECT 전환 뒤 producer 입구는
+`SPEC_READY 참조 → ArticleSpec 검증 → 원고 회수`로 바뀐다. 두 runner는 같은 회차에 실행하지 않으며,
+`draft.md` 이후의 QA·재생성·hero·register·merge·deploy·watch만 공유한다.
 
 ```
-00:10 KST  producer        선정 → brief(claude) → 원고 회수(ChatGPT) → 관문 → 알림
+00:10 KST  producer        LEGACY: 동결 queue → brief(claude) → 원고 회수 → 관문 → 알림
+                           DIRECT: SPEC_READY 선택 → ArticleSpec 검증 → 원고 회수 → 관문 → 알림
                            끝나면 _runs/{date}/producer-handoff.json 을 남긴다
 01:00 KST  auto-register   ① producer 완료 신호·lock 을 최대 40분 기다린다 (재시도 없음)
                            ② 미해결 자동 PR 확인 → ③ 변환·QA·hero·batch-qa·register

@@ -4,7 +4,8 @@
  *
  *   00:10 KST → 이 스크립트
  *                 ├ magazine-producer-plan.mjs      오늘 무엇을 만들지 정한다
- *                 ├ magazine-brief-auto.mjs         선정분의 brief.md · review.ts 를 만든다
+ *                 ├ magazine-brief-auto.mjs         LEGACY 선정분의 brief.md · review.ts 를 만든다
+ *                 │                                 (DIRECT_SPEC_V1 행은 plan 이 승인 source 로 article-spec.json 을 쓴다 · brief 0)
  *                 ├ magazine-webui-runner.mjs       선정분의 원고를 받아 draft.md 로 저장
  *                 └ magazine-producer-notify.mjs    알릴 것이 있으면 Slack
  *
@@ -53,7 +54,7 @@ import { fileURLToPath } from 'node:url'
 
 import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
-import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
+import { composeProducerMessage, runProducerFlow, supplyFromRunJson } from './lib/magazine-producer-flow.mjs'
 import { readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { writeHandoff } from './lib/magazine-handoff.mjs'
@@ -165,11 +166,8 @@ const result = await runProducerFlow({
      */
     readSupply: () => {
       try {
-        const j = JSON.parse(readFileSync(join(ROOT, 'drafts/magazine/_runs', kstDate(), 'run.json'), 'utf8'))
-        return {
-          selected: Array.isArray(j.selected) ? j.selected.length : null,
-          reusable: Array.isArray(j.reusable) ? j.reusable.length : 0,
-        }
+        // 🔴 legacy brief 대상 수도 같이 본다 — spec 신원(directSpec)을 남긴 행은 brief 를 받지 않는다
+        return supplyFromRunJson(JSON.parse(readFileSync(join(ROOT, 'drafts/magazine/_runs', kstDate(), 'run.json'), 'utf8')))
       } catch { return { selected: null, reusable: 0 } }   // 🔴 모르면 옛 경로 그대로 간다
     },
     runBrief: () => spawnStage([BRIEF_AUTO, '--run', kstDate(), '--write']),

@@ -114,7 +114,12 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  * p11은 8/18이었고, 2026-10-15 08:15 KST에는 초안 3/3이 연속 어절 복제로 차단됐다.
  * 복제 게이트·임계값·의미 검수·Persona 자격·예산 계약은 바꾸지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v10'
+/**
+ * `quality-v11` (2026-10-16) = `자녀` No-Go의 구체 생활 표현을 원천 배정과 초안 게이트에서 함께 막는다.
+ * quality-v10 운영 첫 D5 글에서 무자녀 P29가 `태아보험` 질문을 맡아 감사 결함이 됐다.
+ * 일반 소재 분류를 만들지 않고 확인된 생활 경계만 정본 `persona-no-go`에 추가한다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v11'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

@@ -101,7 +101,12 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    `아들 둘 데리고 버스정류장에 서 있었는데요` 로 v7 게이트 · 의미 검수를 모두 지나 자동 발행됐다.
  *    ⑦ 은 복수 낱말(`우리 아이들`)만 셌다. 자녀 수는 지난 일로 말해도 그 사람의 수다 — 시점으로 빼지 않는다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v8'
+/**
+ * 🔴 `draft-gates-v9` (2026-10-16 · quality-v11) — 카드가 피하라고 한 생활 소재를 생성 초안에서도 다시 막는다.
+ *    P29의 `noGoTopics=[자녀]`를 원천 배정은 글자 그대로만 비교해 `태아보험` 질문을 통과시켰고,
+ *    초안 게이트는 소재를 보지 않아 자동 발행 뒤 감사에서 처음 잡혔다. 정본 `noGoHits` 하나를 배정과 초안이 함께 쓴다.
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v9'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -276,11 +281,14 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
     ...judgeThinVent(input.title, input.body, input.plan),
   ]
   /**
-   * 🔴 (v5) **글쓴이 No-Go** — 판정은 `persona-no-go` 하나. 개인 말버릇(카드 · 열쇠 비교)과 전원 공통 금지.
-   *    카드가 없어도 공통 금지는 본다(누가 쓰든 금지다). 소재(`noGoTopics`)는 배정(`hardFilter`)이 원천 글로 본다 — 여기서 다시 보지 않는다.
+   * 🔴 (v9) **글쓴이 No-Go** — 판정은 `persona-no-go` 하나. 개인 소재·말버릇과 전원 공통 금지.
+   *    배정에서 원천 소재를 먼저 막고, 생성이 새로 끌어온 금지 소재도 여기서 다시 막는다.
+   *    카드가 없어도 공통 금지는 본다(누가 쓰든 금지다).
    */
-  const nogo = noGoHits(`${input.title}\n${input.body}`, { noGoExpressions: input.card?.noGoExpressions ?? [] })
-  const nogoHits = [...nogo.expressions.map(() => 'expression'), ...nogo.common]
+  const nogo = noGoHits(`${input.title}\n${input.body}`, {
+    noGoTopics: input.card?.noGoTopics ?? [], noGoExpressions: input.card?.noGoExpressions ?? [],
+  })
+  const nogoHits = [...nogo.topics.map(() => 'topic'), ...nogo.expressions.map(() => 'expression'), ...nogo.common]
   const nogoFail: DraftGateFailure[] = nogoHits.length === 0 ? []
     : [{ code: 'personaNoGo', detail: [...new Set(nogoHits.map((h) => h.replace(/^phrase:.*/, 'phrase')))].join('·') }]
   const all = [...failures, ...life.hard, ...ctx.hard, ...nogoFail]

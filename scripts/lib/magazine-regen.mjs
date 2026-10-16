@@ -22,6 +22,12 @@ import {
   regenBudget, DELIVERY_HOLD_REASON, REGEN_EXHAUSTED_REASON, MANUSCRIPT_IN_PROGRESS_REASON, revertRegenAttempt,
 } from './magazine-quarantine.mjs'
 import { deliveryGate } from './magazine-delivery-gate.mjs'
+import {
+  DIRECT_SPEC_MODE,
+  directSpecRegenPacket,
+  readDirectSpec,
+  resolveMagazineAutoMode,
+} from './magazine-direct-spec.mjs'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { classifyFailure, consumesAttempt, sentOf } from './magazine-failure-kind.mjs'
 
@@ -72,8 +78,13 @@ export function buildFailurePacket({ slug, profile, failures, attempt, attemptId
 }
 
 export function packetHashOf(packet) {
+  const identity = {
+    slug: packet.slug,
+    codes: packet.failures.map((f) => f.code).sort(),
+    ...(packet.specHash ? { specHash: packet.specHash } : {}),
+  }
   return createHash('sha256')
-    .update(JSON.stringify({ slug: packet.slug, codes: packet.failures.map((f) => f.code).sort() }))
+    .update(JSON.stringify(identity))
     .digest('hex').slice(0, 16)
 }
 
@@ -130,6 +141,10 @@ export function attemptRegeneration({
   draftsDir = DRAFTS_DIR,
   /** 🔴 'FIRST_RESPONSE' — 최초 응답 교정 (저장된 원고 없음 · 다른 문장의 요청) */
   source = null,
+  /** 🔴 DIRECT_SPEC_V1 opt-in 신원. 미지 mode 는 provider 호출 전 fail-closed. */
+  queueItem = null,
+  /** 🔴 시험만 준다 — 전송 관문의 direct source 재검증(정본 큐·판). 운영은 deliveryGate 기본값 */
+  directSourceDeps = null,
 }) {
   const read = readQuarantine(quarantinePath)
   if (!read.ok) {
@@ -147,7 +162,28 @@ export function attemptRegeneration({
   }
 
   const attemptId = randomUUID()
-  const packet = buildFailurePacket({ slug, profile, failures, attempt: budget.used + 1, attemptId, source })
+  const basePacket = buildFailurePacket({ slug, profile, failures, attempt: budget.used + 1, attemptId, source })
+  const mode = resolveMagazineAutoMode(queueItem)
+  if (!mode.ok) {
+    return { ok: false, code: mode.code, why: mode.why, regenCalls: budget.used }
+  }
+  let packet = basePacket
+  if (mode.mode === DIRECT_SPEC_MODE) {
+    const spec = readDirectSpec({ slug, draftsDir })
+    if (!spec.ok) return { ok: false, code: spec.code, why: spec.why, regenCalls: budget.used }
+    const direct = directSpecRegenPacket({ spec: spec.spec, failures: basePacket.failures,
+      source: source ?? 'DIRECT_SPEC_V1_QA' })
+    packet = {
+      ...basePacket,
+      source: direct.source,
+      specHash: direct.specHash,
+      articleSpecSchemaVersion: direct.schemaVersion,
+      graphNodeId: direct.graphNodeId,
+      intentId: direct.intentId,
+      directPacketHash: direct.packetHash,
+      instruction: direct.instruction,
+    }
+  }
   const hash = packetHashOf(packet)
 
   /**
@@ -155,7 +191,7 @@ export function attemptRegeneration({
    *    판정은 전송 경계와 **같은 함수**(`deliveryGate`)다. 위 `packet` 은 메모리의 값일 뿐이다.
    *    HOLD 면 packet 파일 0 · runner 0 · Chrome/probe/send 0 · 장부 쓰기 0 이다.
    */
-  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath })
+  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath, queueItem, directSourceDeps })
   if (!gate.ok) {
     return { ok: false, code: gate.code ?? 'LEDGER_UNREADABLE', why: gate.why, regenCalls: budget.used }
   }
@@ -185,7 +221,8 @@ export function attemptRegeneration({
    *    성공·실패·예외 **세 경우 모두** `finally` 에서 지운다. **자기 시도의 파일만** 지운다.
    */
   let r
-  try { r = runner({ slug, packet, packetPath }) }
+  try { r = runner({ slug, packet, packetPath, queueItem,
+    ...(packet.specHash ? { specHash: packet.specHash, articleSpecSchemaVersion: packet.articleSpecSchemaVersion } : {}) }) }
   catch (e) { r = { ok: false, why: `재생성 경로 예외: ${e.message}` } }
   finally { removePacket(packetPath) }
 

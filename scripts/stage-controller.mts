@@ -88,6 +88,11 @@ async function evidenceFor(prisma: PrismaClient, i: {
         { name: '감사 장부', health: c.auditLedger.health },
       ],
       errors: i.errors.health,
+      /**
+       * 🔴 §3.4 — proof-day 관련 natural supply 미상 수를 명시적으로 넘긴다 (2026-10-16 D5 보정 B).
+       *    `relevantUsageUnknownCount` 가 KST 날짜 · stage · runKind·manual 제외 규칙으로 센 값이다.
+       */
+      supplyUsageUnknown: c.supplyUsageUnknownRelevant,
     }
   } catch (e) { log(`   ⬚ 그날 장부를 읽지 못했다 — ${(e as Error).name} (모름 = PASS 아님)`) }
   return judgeStageEvidence(i.kstDate, i.stage, facts, side)
@@ -109,7 +114,7 @@ async function carriedPlanFor(prisma: PrismaClient, previous: ValidatedStageDeci
     if (!r.found || !r.result.ok) break
     const dec = r.result.decision
     const hold = isHold(dec)
-    days.unshift({ decision: dec, evidence: hold ? null : await evidenceFor(prisma, { kstDate: d, stage: dec.release, decision: dec, errors }) })
+    days.unshift({ decision: dec, evidence: await evidenceFor(prisma, { kstDate: d, stage: dec.release, decision: dec, errors }) })
     date = d
     if (!hold) break
   }
@@ -230,6 +235,7 @@ async function main(): Promise<number> {
         nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID)
         preflightDetail = r.detail
         log(`   ${target} preflight ${nextPreflight.verdict}${nextPreflight.codes.length > 0 ? ` [${nextPreflight.codes.join(',')}]` : ''}`
+          + `${nextPreflight.warnings.length > 0 ? ` WARN [${nextPreflight.warnings.join(',')}]` : ''}`
           + ` (${Object.entries(nextPreflight.counts).map(([k, x]) => `${k}=${x}`).join(',')})`)
         for (const n of r.notes) log(`      ⬚ ${n}`)
       }

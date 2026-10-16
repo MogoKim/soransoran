@@ -49,6 +49,12 @@ import { describeFetchFailure } from './magazine-webui-runner.mjs'
 import { fingerprintOf, firstResponseInvalidFor, invalidEvidenceSha, openRegenLineage, violationsOfResponse } from './lib/magazine-quarantine.mjs'
 import { completePendingLineage, reconcileLegacyInputRepair, reconcileLegacyInvalid } from './lib/magazine-lineage-reconcile.mjs'
 import { deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
+import {
+  DIRECT_SPEC_MODE,
+  readDirectSpec,
+  registerDirectSpecSidecar,
+  resolveMagazineAutoMode,
+} from './lib/magazine-direct-spec.mjs'
 import { heroFilePath, injectHeroImage, verifyHeroFile } from './lib/magazine-hero.mjs'
 import { validateManuscript, describeReasons, briefEchoHeadings } from './lib/magazine-manuscript-guard.mjs'
 import { judgeManuscriptFormat, describeFormatViolation } from './lib/magazine-manuscript-format.mjs'
@@ -642,6 +648,12 @@ export function drive(slug, opts, deps = {}) {
    */
   const loadQueueFn = deps.loadQueue ?? loadQueue
   /**
+   * 🔴 **DIRECT_SPEC_V1 opt-in 운반점** (2026-10-15 wiring).
+   *    `deps.queueItem.directSpecMode === 'DIRECT_SPEC_V1'` 일 때만 adapter 경로로 간다.
+   *    legacy queueItem (opt-in 없음 또는 미지정) 은 기존 바이트·지문·HOLD 계약이 그대로다.
+   */
+  const providedQueueItem = deps.queueItem ?? null
+  /**
    * 🔴 `autoLane` — 이 회차를 사람이 아니라 **자동 레인이** 돌리고 있는가.
    *    자동 레인에서는 대표 이미지가 선택이 아니라 필수다 (2026-09-21 사고).
    */
@@ -669,12 +681,19 @@ export function drive(slug, opts, deps = {}) {
   let firstResponse = null
   /** 계보 대조 결과 (영수증 · 옛 입력 수리) — 회차 결과에 남긴다 */
   let lineageReconcile = null
+  /** DIRECT_SPEC_V1 신원 — gate 통과 후 한 번만 읽고 provider·regen·register 결과에 공유한다. */
+  let directSpec = null
   const evidence = () => ({
     ...(firstResponse ? { firstResponse } : {}),
     ...(lineageReconcile ? { lineageReconcile } : {}),
     ...(regenHistory.length ? { regenHistory } : {}),
     ...(lastQaFailures.length ? { qaFailures: lastQaFailures } : {}),
     ...(lastFormatViolations.length ? { formatViolations: lastFormatViolations } : {}),
+    ...(directSpec ? {
+      mode: DIRECT_SPEC_MODE,
+      specHash: directSpec.specHash,
+      articleSpecSchemaVersion: directSpec.schemaVersion,
+    } : {}),
   })
   const rollback = () => {
     if (!write || (!snapshot.length && !own.length)) return { restored: [], failures: [] }
@@ -723,18 +742,35 @@ export function drive(slug, opts, deps = {}) {
   }
 
   // ── ① gate — 등급·큐·brief ────────────────────────────────
-  const g = gate(slug, loadQueueFn())
+  const draftsDir = deps.draftsDir ?? DRAFTS_DIR
+  const queue = loadQueueFn()
+  const g = gate(slug, queue, draftsDir)
   if (!g.ok) {
     for (const b of g.blockedBy) blockedBy.push(b)
     add('gate', 'blocked', g.blockedBy.map((b) => b.message).join(' · '))
     return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, item: g.item }
   }
   const item = g.item
+  const queueItem = providedQueueItem ?? item
+  const modeDecision = resolveMagazineAutoMode(queueItem)
+  if (!modeDecision.ok) {
+    return stop('gate', modeDecision.code, modeDecision.why)
+  }
+  const isDirectMode = modeDecision.mode === DIRECT_SPEC_MODE
   add('gate', 'ok', `${isAutoLaneEligible(item).profile ?? '-'} · image=${item.imageMode ?? '-'}`)
 
   // 🔴 경로도 주입점이다 — 시험이 실제 파일로 원복·교체를 확인하기 위한 자리 (운영은 저장소 경로 그대로)
-  const p = (deps.paths ?? paths)(slug)
+  const p = deps.paths ? deps.paths(slug) : paths(slug, draftsDir)
   const heroFile = (deps.heroFilePath ?? heroFilePath)(slug)
+  if (isDirectMode) {
+    const r = readDirectSpec({ slug, draftsDir })
+    if (!r.ok) return stop('gate', r.code, r.why)
+    directSpec = r.spec
+    if (publishAt && directSpec.publication.publishAt.slice(0, 10) !== publishAt) {
+      return stop('gate', 'DIRECT_SPEC_PUBLISH_AT_MISMATCH',
+        `spec publishAt ${directSpec.publication.publishAt.slice(0, 10)} 와 등록 예약일 ${publishAt} 이 다르다`)
+    }
+  }
   if (write) {
     const recovered = recoverRegenTransaction({ slug, draftMd: p.draftMd, articleTs: p.articleTs })
     if (!recovered.ok) {
@@ -748,11 +784,13 @@ export function drive(slug, opts, deps = {}) {
      *    ② 옛 판 입력 수리 APPLIED (cold · autumn) → 결과 행 · 수리 지문 · 지금 draft 검증이 모두 맞으면 한 번만 연다
      *    애매하면 아무것도 바꾸지 않는다 — 예산은 옛 계보 그대로(fail-closed). 실패해도 회차는 이어 간다.
      */
-    const dd = deps.draftsDir ?? dirname(dirname(p.draftMd))
+    const dd = draftsDir
     const qp = quarantinePath ? { path: quarantinePath } : {}
     try {
       const pend = completePendingLineage({ draftsDir: dd, slug, ...qp })
-      const legacy = pend.status === 'NONE' ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp }) : null
+      const legacy = !isDirectMode && pend.status === 'NONE'
+        ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp })
+        : null
       const shown = [pend.status !== 'NONE' ? `영수증 ${pend.status}${pend.why ? ` (${pend.why})` : ''}` : null,
         legacy && legacy.status !== 'NOT_APPLICABLE' ? `옛 입력 수리 대조 ${legacy.status}${legacy.why ? ` (${legacy.why})` : ''}` : null].filter(Boolean)
       if (shown.length) add('lineage', pend.ok && (legacy?.ok ?? true) ? 'ok' : 'blocked', shown.join(' · '))
@@ -772,10 +810,14 @@ export function drive(slug, opts, deps = {}) {
    *    🔴 등록에 **성공**하면 되돌리지 않는다 — rollback 은 BLOCKED 경로에서만 돈다.
    */
   if (write) {
-    snapshot = trackedSnapshot([p.articleTs, heroFile, p.draftMd, ARTICLES_TS, QUEUE_TS])
+    snapshot = trackedSnapshot([p.articleTs, heroFile, p.draftMd, p.articleSpecRegistered, ARTICLES_TS, QUEUE_TS])
       .map((f) => (f.path === QUEUE_TS ? { ...f, queueCas: { day: item.day, slug } }
         : f.path === ARTICLES_TS ? { ...f, pairWithQueue: true } : f))
-    own = [...fileSnapshot([p.articleTs]), ...fileSnapshot([heroFile], { keepIfCreated: true })]
+    own = [
+      ...fileSnapshot([p.articleTs]),
+      ...fileSnapshot([p.articleSpecRegistered]),
+      ...fileSnapshot([heroFile], { keepIfCreated: true }),
+    ]
   }
 
   /**
@@ -851,7 +893,9 @@ export function drive(slug, opts, deps = {}) {
         previousFingerprint: before(), fingerprintOf: after,
         ...(quarantinePath ? { quarantinePath } : {}),
         ...(packetDir ? { packetDir } : {}),
-        ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}) })
+        draftsDir,
+        // 🔴 queueItem 을 그대로 넘긴다 — direct 는 adapter 로 regen message 를 조립, legacy 는 바이트 그대로.
+        queueItem })
       regenCalls = rr.regenCalls ?? regenCalls
       if (rr.reason) record.reason = rr.reason
       if (rr.invalid?.length) record.invalid = rr.invalid
@@ -910,7 +954,7 @@ export function drive(slug, opts, deps = {}) {
      *    판정은 전송 경계와 **같은 함수**(`deliveryGate`)다 — 같은 brief → 같은 지문일 때만 HOLD 다.
      *    brief 가 바뀌어 지문이 달라지면 새 작업으로 연다. 정본 판정은 여전히 자식의 send 직전 예약이다.
      */
-    const g0 = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
+    const g0 = deliveryGate({ slug, draftsDir, ...(quarantinePath ? { quarantinePath } : {}), queueItem })
     /**
      * 🔴 **brief 형식 계약 위반은 장부 문제가 아니다** (2026-10-08). 이 글만 막고 회차는 이어 간다.
      *    runner 0 · probe·Chrome 0 · 전송 0 — 보내지 않았으므로 `sent=false` 다.
@@ -924,7 +968,8 @@ export function drive(slug, opts, deps = {}) {
     if (!g0.ok) {
       failClosed = true
       lastSent = null
-      return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 읽지 못해 HOLD 여부를 모른다 — 보내지 않는다 (runner 0): ${g0.why}`)
+      return stop('draft', g0.code ?? 'QUARANTINE_UNREADABLE',
+        `[INFRA] 전송 관문을 통과하지 못했다 — 보내지 않는다 (runner 0): ${g0.why}`)
     }
     if (g0.hold) {
       held = true
@@ -942,12 +987,12 @@ export function drive(slug, opts, deps = {}) {
      *    맞지 않으면 아무것도 바꾸지 않는다 (아래 일반 경로 그대로).
      */
     let entryNow = g0.entry
-    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {
-      const lr = reconcileLegacyInvalid({ draftsDir: deps.draftsDir ?? dirname(dirname(p.draftMd)), slug, messageFingerprint: g0.messageFingerprint, ...(quarantinePath ? { path: quarantinePath } : {}) })
+    if (!isDirectMode && !firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {
+      const lr = reconcileLegacyInvalid({ draftsDir, slug, messageFingerprint: g0.messageFingerprint, ...(quarantinePath ? { path: quarantinePath } : {}) })
       if (lr.status === 'RECORDED') {
         add('lineage', 'ok', `옛 장부의 최초 invalid 응답 대조 (${lr.migrationId}) → 위반 ${lr.violations.length}건 기록 (일반 요청 재전송 0)`)
         lineageReconcile = { ...(lineageReconcile ?? {}), legacyInvalid: 'RECORDED', legacyInvalidMigration: lr.migrationId }
-        const again = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
+        const again = deliveryGate({ slug, draftsDir, ...(quarantinePath ? { quarantinePath } : {}), queueItem })
         if (!again.ok) { failClosed = true; return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 다시 읽지 못했다 — 보내지 않는다: ${again.why}`) }
         entryNow = again.entry
       } else if (!lr.ok) {
@@ -1123,8 +1168,10 @@ export function drive(slug, opts, deps = {}) {
   //    사람에게 입력을 요구하지 않는다. 지어내지도 않는다 —
   //    미리 정해 둔 표를 읽을 뿐이다 (lib/magazine-hero-brief.mjs).
   //    `--alt` 를 직접 준 경우에는 그쪽이 이긴다.
-  let heroBrief = { ok: true, alt: null, scene: null, reasons: [] }
-  if (!alt) heroBrief = resolveHeroBrief(slug, item)
+  let heroBrief = isDirectMode
+    ? { ok: true, alt: directSpec.hero.alt, scene: directSpec.hero.scene, reasons: [] }
+    : { ok: true, alt: null, scene: null, reasons: [] }
+  if (!alt && !isDirectMode) heroBrief = resolveHeroBrief(slug, item)
   const heroAlt = alt ?? heroBrief.alt
 
   // 🔴 자동 레인이면 OPTIONAL 도 필수다 — 판단할 사람이 없는 자리에서 "선택" 은 "없음" 이 된다
@@ -1200,6 +1247,17 @@ export function drive(slug, opts, deps = {}) {
       return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, item }
     }
     add('register', write ? 'ok' : 'skip', write ? `등록 (publishAt ${publishAt})` : `dry-run 통과 (publishAt ${publishAt})`)
+    if (write && isDirectMode) {
+      try {
+        const now = typeof deps.now === 'function' ? deps.now() : (deps.now ?? Date.now())
+        const registeredAt = `${new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 19)}+09:00`
+        const receipt = registerDirectSpecSidecar({ spec: directSpec, draftsDir, registeredAt })
+        add('register', 'ok', `DIRECT_SPEC_V1 영수증 ${receipt.written ? '기록' : '재확인'} (${directSpec.specHash})`)
+      } catch (error) {
+        return stop('register', error?.code ?? 'DIRECT_SPEC_REGISTER_FAILED',
+          `DIRECT_SPEC_V1 등록 영수증을 남기지 못했다: ${error?.message ?? error}`)
+      }
+    }
   }
 
   // ── ⑧ PR ─────────────────────────────────────────────────

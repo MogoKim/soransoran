@@ -106,6 +106,8 @@ export type TopicQueueItem = {
   intentId?: string
   /** 이 행을 만든 G8 manifest 해시. 그래프 장부(m3-state.jsonl) ADMITTED 행과 같은 값이어야 한다 */
   g8ManifestHash?: string
+  /** 제작 경로 opt-in. 없으면 기존 LEGACY_BRIEF_V1 경로다. */
+  directSpecMode?: 'LEGACY_BRIEF_V1' | 'DIRECT_SPEC_V1'
 }
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [
@@ -197,26 +199,6 @@ export const TOPIC_QUEUE: TopicQueueItem[] = [
     internalLinks: ['menopause-tears'],
     whyNow: '증상 나열이 아니라 경험을 부르는 형태. 댓글 전환이 높다',
     notes: '발행 전 갱년기톡에서 유사 글을 확인한다. 증상 심각도를 비교하거나 서열화하지 않는다',
-  },
-  {
-    day: 43,
-    slug: 'kimjang-back-pain-prep',
-    title: '김장 앞두고 허리가 걱정될 때',
-    contentType: 'SEASONAL',
-    intent: '상황',
-    cluster: 'family',
-    target: '50대~60대 중반',
-    riskLevel: 'LOW',
-    reviewMode: 'SUMMARY_ONLY',
-    imageMode: 'OPTIONAL',
-    autoEligible: true,
-    season: '겨울',
-    calendarEvent: '김장',
-    publishWindow: { after: '2026-10-15', before: '2026-12-05' },
-    ctaBoard: '/community/free',
-    internalLinks: ['after-holiday-body-ache'],
-    whyNow: '김장 준비는 11월 검색이 몰린다. 2~4주 전 발행',
-    notes: '김장을 해야 한다고 전제하지 않는다. 안 하는 선택도 자연스럽게 둔다',
   },
   {
     day: 44,

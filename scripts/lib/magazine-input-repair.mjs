@@ -27,6 +27,8 @@ import { judgeBriefFormatContract, judgeManuscriptFormat } from './magazine-manu
 import { briefEchoHeadings, validateManuscript } from './magazine-manuscript-guard.mjs'
 import { verifyBrief } from './magazine-brief-policy.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
+import { DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN, persistedDirectIdentity } from './magazine-delivery-gate.mjs'
+import { LEGACY_BRIEF_MODE, resolveMagazineAutoMode } from './magazine-direct-spec.mjs'
 import { checkJournalIdentity, shaOrAbsent, writeAtomic } from './magazine-g8-promoter.mjs'
 import { reserveBriefRepair, settleBriefRepair } from './magazine-quarantine.mjs'
 import { completeAllPendingLineages, completePendingLineage, writeLineagePending } from './magazine-lineage-reconcile.mjs'
@@ -54,6 +56,16 @@ export function scanRepairTargets({ queue, draftsDir, store, exists = existsSync
     const draft = join(draftsDir, slug, 'draft.md')
     if (!exists(brief)) continue
     if (!isAutoLaneEligible(item).ok) continue
+    /**
+     * 🔴 **DIRECT_SPEC 행은 입력 수리 대상이 아니다** (2026-10-15 Codex P0).
+     *    잔여 brief.md 나 brief echo draft 가 있어도 legacy brief 수리(Claude)·brief-echo 원고 수리(ChatGPT)는
+     *    direct source 관문을 우회한다. 현재 opt-in·모르는 mode·persisted direct 흔적이 있으면 건너뛴다.
+     */
+    const mode = resolveMagazineAutoMode(item)
+    if (!mode.ok || mode.mode !== LEGACY_BRIEF_MODE || persistedDirectIdentity({ slug, draftsDir })) {
+      skipped.push({ slug, type: null, reason: DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN })
+      continue
+    }
     const entry = store?.[slug] ?? null
     if (exists(draft)) {
       const echo = briefEchoHeadings(read(draft))

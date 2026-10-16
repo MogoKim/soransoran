@@ -2995,6 +2995,17 @@ const articleSpecCheck = spawnSync(process.execPath, [join('scripts', 'magazine-
 expect('ArticleSpec schema·compiler·hash 반례가 전부 통과한다', articleSpecCheck.status, 0)
 expect('ArticleSpec 검사가 40개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 40 pass, 0 fail/.test(articleSpecCheck.stdout), true)
 
+console.log('\n══════ DIRECT_SPEC_V1 — 상류 source 관문 (승인 source 없으면 brief·spec·회수 0)')
+const directSourceCheck = spawnSync(process.execPath, [join('scripts', 'magazine-direct-spec-source-check.mjs')], {
+  encoding: 'utf8',
+  env: { ...process.env },
+})
+expect('source 관문 반례·변이가 전부 통과한다', directSourceCheck.status, 0)
+expect('source 관문 검사가 200개(부속 2 포함) 반례·변이를 실제 실행했다', /DIRECT_SPEC source 관문: 200 pass, 0 fail/.test(directSourceCheck.stdout), true)
+// 🔴 부속 검사 연결 블록이 통째로 사라지면 합계가 198 로 줄고, 아래 두 요약 표식도 사라진다
+expect('부속 source 작성 검사가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-check\.mjs — DIRECT_SPEC source 작성 검사: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)
+expect('부속 source 작성 변이가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-mutation\.mjs — DIRECT_SPEC source 작성 변이: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)
+
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 console.log('  상태: 자동 PR 경로 구현됨 · launchd 설치는 supervised 1회 성공 뒤에만 열린다\n')
 process.exit(fail === 0 ? 0 : 1)

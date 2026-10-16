@@ -33,7 +33,7 @@ import { judgeNextPreflight, type PreflightFacts } from '../src/lib/stage-ladder
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { judgeCost } from '../src/lib/ops-status'
-import { tallyOf, type DayTally } from '../src/lib/llm-ledger'
+import { relevantUsageUnknownCount, tallyOf, type DayTally, type LedgerEntry } from '../src/lib/llm-ledger'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -109,8 +109,11 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 결정 없음 → FAIL', judge(facts('d3', { decision: null })), 'DECISION_MISSING')
   failWith('🔴 사람이 쓴 결정(decidedBy≠controller) → FAIL', judge(facts('d3', {
     decision: { kstDate: D, state: 'TRIAL', release: 'd3', decidedBy: 'human' } })), 'DECISION_NOT_CONTROLLER')
-  failWith('🔴 HOLD 날(override · env canary 로 낸 날)은 세지 않는다', judge(facts('d3', {
-    decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } })), 'DECISION_NOT_TRANSITION')
+  const naturalHold = judge(facts('d3', {
+    decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } }))
+  check('🟢 자연 HOLD 날도 자동 exact 3 · 나머지 증거 완전이면 D3 운영 PASS', naturalHold.verdict === 'PASS', naturalHold.codes.join(','))
+  failWith('🔴 자연 HOLD 날 2/3은 정상 평상 운영이지만 단계 PASS는 아니다', judge(facts('d3', {
+    posts: [post(0), post(1)], decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } })), 'PUBLISH_NOT_AUTO_READY')
   failWith('🔴 결정 공개 단계 ≠ 판정 단계 → FAIL', judge(facts('d3', {
     decision: { kstDate: D, state: 'TRIAL', release: 'd1', decidedBy: DECISION_WRITER } })), 'DECISION_STAGE_MISMATCH')
 
@@ -129,7 +132,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 D5 혼합(자동 3 · 사람 2) → FAIL', d5mixed, 'PUBLISH_NOT_AUTO_READY')
   /**
    * 🔴 **반례 ② — d10 증명일(TRIAL · RETEST)은 자동 정확히 10편** (2026-10-11 Batch A1).
-   *    9 · 11 · 사람 섞임은 FAIL. 평상일(HOLD/PREPARE)은 이 판정 대상이 아니다(`DECISION_NOT_TRANSITION`).
+   *    9 · 11 · 사람 섞임은 FAIL. 평상일도 자연 exact N이면 같은 운영 증거로 인정한다.
    */
   const d10Audits = { ...CLEAN_AUDITS, rows: [sample(0), sample(1)] }
   const d10Of = (posts: EvidencePost[]) => judgeStageEvidence(D, 'd10', facts('d10', { posts, audits: d10Audits }), side())
@@ -141,8 +144,11 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   const retest10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
     decision: { kstDate: D, state: 'TRIAL', release: 'd10', decidedBy: DECISION_WRITER } }), side())
   check('🟢 반례② RETEST 도 TRIAL 상태다 — 같은 exact 10 판정', retest10.verdict === 'PASS')
-  failWith('🔴 반례② 평상일 PREPARE d10 은 exact N 판정을 받지 않는다(PASS 아님 · 빚 아님)', judgeStageEvidence(D, 'd10', facts('d10', { posts: ten.slice(0, 4), audits: d10Audits,
-    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'DECISION_NOT_TRANSITION')
+  const naturalPrepare10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
+    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side())
+  check('🟢 반례② 평상일 PREPARE도 자동 exact 10이면 운영 PASS', naturalPrepare10.verdict === 'PASS', naturalPrepare10.codes.join(','))
+  failWith('🔴 반례② 평상일 PREPARE 4/10은 단계 PASS가 아니다', judgeStageEvidence(D, 'd10', facts('d10', { posts: ten.slice(0, 4), audits: d10Audits,
+    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'PUBLISH_NOT_AUTO_READY')
 
   // ③ 첫 댓글
   failWith('🔴 09:30 글 Persona 댓글 없음 → FAIL (09-29 반례)', judge(facts('d3', {
@@ -250,6 +256,79 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 러너 최근 회차 실패 → FAIL', judge(facts(), side({ errors: 'bad' })), 'RUNNER_BAD')
   check('⬚ 러너 모름 → UNKNOWN', judge(facts(), side({ errors: 'unknown' })).verdict === 'UNKNOWN')
   check('⬚ 비용 칸이 비었다 → UNKNOWN', judge(facts(), side({ cost: [] })).verdict === 'UNKNOWN')
+
+  // ⑥-b 🔴 **proof-day 관련 natural supply usageUnknown** — canon §3.4 (2026-10-16 D5 보정 B)
+  {
+    const base = facts()  // d3 PASS 기준선
+    const sideU = (u: number | null | undefined) => side({ supplyUsageUnknown: u })
+    const vZero = judge(base, sideU(0))
+    check('🟢 반례 B-0 — 관련 usageUnknown 0 → PASS (counts.supplyUsageUnknown=0)',
+      vZero.verdict === 'PASS' && vZero.counts.supplyUsageUnknown === 0, `${vZero.verdict} ${vZero.codes.join(',')}`)
+    failWith('🔴 반례 B-1 — 관련 usageUnknown 1 → FAIL (SUPPLY_USAGE_UNKNOWN · counts.supplyUsageUnknown=1)',
+      judge(base, sideU(1)), 'SUPPLY_USAGE_UNKNOWN')
+    check('그때 counts — supplyUsageUnknown=1', judge(base, sideU(1)).counts.supplyUsageUnknown === 1)
+    const vNull = judge(base, sideU(null))
+    check('⬚ 반례 B-null — 공급 장부를 못 읽었다 → UNKNOWN (COST_UNKNOWN)',
+      vNull.verdict === 'UNKNOWN' && has(vNull, 'COST_UNKNOWN'), `${vNull.verdict} ${vNull.codes.join(',')}`)
+    const vUndef = judge(base, sideU(undefined))
+    check('🟢 반례 B-skip — supplyUsageUnknown 를 안 넘기면(옛 호출) 체크 skip · PASS 유지',
+      vUndef.verdict === 'PASS' && vUndef.counts.supplyUsageUnknown === undefined,
+      `${vUndef.verdict} ${vUndef.codes.join(',')}`)
+
+    // 🔴 helper 자체의 분리 반례 — relevantUsageUnknownCount
+    const PROOF = '2026-10-16'
+    const START = (iso: string): string => iso  // 가독성
+    const base0 = (o: Partial<LedgerEntry>): LedgerEntry => ({
+      runId: 'r', stage: 'draftGen', attemptId: 'a', requestNo: 0,
+      provider: 'google', apiModelId: 'm', model: 'm',
+      status: 'usageUnknown', blockCode: null,
+      countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006, inputTokens: null,
+      outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+      settledUsd: null, pricingVersion: 'p1',
+      startedAt: `${PROOF}T14:15:30+09:00`, endedAt: `${PROOF}T14:16:00+09:00`,
+      errorCode: 'TIMEOUT', runKind: 'scheduled', runSlot: `${PROOF} 14:15`, ...o,
+    })
+    const emp = relevantUsageUnknownCount([])
+    check('🟢 helper 반례 — 빈 장부 → 0', emp === 0)
+    // 1 usageUnknown · scheduled · proof day
+    check('🟢 helper 반례 — scheduled usageUnknown 1건 → 1', relevantUsageUnknownCount([base0({})]) === 1)
+    // manual 은 제외
+    check('🟢 helper 반례 — manual 손 실행 usageUnknown → 제외 (0)',
+      relevantUsageUnknownCount([base0({ runKind: 'manual', runSlot: null })]) === 0)
+    // countTokens(무료) 제외
+    check('🟢 helper 반례 — countTokens(무료 단계) usageUnknown → 제외 (0)',
+      relevantUsageUnknownCount([base0({ stage: 'countTokens' })]) === 0)
+    // settled 는 센지 않음(미상이 아니다)
+    check('🟢 helper 반례 — status=settled 는 세지 않는다 → 0',
+      relevantUsageUnknownCount([base0({ status: 'settled', settledUsd: 0.004, inputTokens: 100, outputTokens: 200 })]) === 0)
+    // blocked 도 센지 않음
+    check('🟢 helper 반례 — status=blocked 는 세지 않는다 → 0',
+      relevantUsageUnknownCount([base0({ status: 'blocked', blockCode: 'NO_PRICE' })]) === 0)
+    // runKind null · undefined 는 포함(fail-closed)
+    check('🟢 helper 반례 — runKind=null 은 관련으로 센다 (fail-closed) → 1',
+      relevantUsageUnknownCount([base0({ runKind: null })]) === 1)
+    check('🟢 helper 반례 — runKind 미기재(옛 줄) 는 관련으로 센다 (fail-closed) → 1',
+      relevantUsageUnknownCount([base0({ runKind: undefined })]) === 1)
+    /**
+     * 🔴 **반례 B-timeout+retry** — 같은 sourceKey 의 다른 attemptId 재시도가 뒤에 정산돼도
+     *    원 요청이 미상으로 남아 있는 한 그 1건은 센다. 10-16 14:15 Google draftGen 재현.
+     */
+    const SRC = 'src-hash-A'
+    const retryTimeoutSettled: readonly LedgerEntry[] = [
+      base0({ attemptId: 'a1', requestNo: 0, sourceKey: SRC, status: 'usageUnknown' }),
+      base0({ attemptId: 'a2', requestNo: 1, sourceKey: SRC, status: 'settled',
+        settledUsd: 0.0049, inputTokens: 100, outputTokens: 200, errorCode: null,
+        startedAt: `${PROOF}T14:40:00+09:00`, endedAt: `${PROOF}T14:40:12+09:00` }),
+    ]
+    check('🟢 반례 B-timeout+retry — 재시도가 정산돼도 원 요청 미상이면 여전히 1',
+      relevantUsageUnknownCount(retryTimeoutSettled) === 1)
+    const vRetry = judge(base, sideU(relevantUsageUnknownCount(retryTimeoutSettled)))
+    check('🔴 반례 B-timeout+retry — stage-evidence 도 FAIL (SUPPLY_USAGE_UNKNOWN)',
+      vRetry.verdict === 'FAIL' && has(vRetry, 'SUPPLY_USAGE_UNKNOWN'), `${vRetry.verdict} ${vRetry.codes.join(',')}`)
+    // 🔴 mutation 반례: judgeEvidenceForTarget 의 `side.supplyUsageUnknown > 0` 조건을 지우거나 반대로 바꾸면
+    //    위 B-1 · B-timeout+retry 가 바로 FAIL → PASS 로 뒤집혀 이 테스트가 그 변이를 즉시 잡는다.
+    //    문법 오류는 compile 실패로 거르고, 조건 반전은 B-1 case 를 PASS 로 만들어 FAIL. 유효 mutation 이다.
+  }
 
   // 못 읽음
   const unread = judge(null)
