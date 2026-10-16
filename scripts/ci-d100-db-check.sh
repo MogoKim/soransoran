@@ -65,3 +65,4 @@ npm run persona:followup-db-check
 npm run persona:autogen-db-check
 npm run persona:creative-db-check
 npm run persona:remediation-db-check
+npm run check:post-exposure-db
