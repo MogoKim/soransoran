@@ -86,6 +86,12 @@ export const STAGE_EVIDENCE_CODES = [
   'DUP_QUEUE', 'DUP_PUBLISH_LOG', 'UNLOGGED_PUBLISH', 'PUBLISH_LOG_ORPHAN', 'DUP_COMMENT',
   // ⑥ 비용 · 러너
   'COST_BAD', 'COST_UNKNOWN', 'RUNNER_BAD', 'RUNNER_UNKNOWN',
+  /**
+   * 🔴 **그 KST proof day 의 관련 natural supply 요청에 사용량 미상이 있다** (2026-10-16 D5 보정 B).
+   *    canon §3.4 — 증명일 자체의 운영 PASS 는 `usageUnknown=0` 을 요구한다. 예약은 그대로 미상(§3.4).
+   *    원인은 `scripts/lib/ops-signals.mts` 가 `relevantUsageUnknownCount` 로 센 수를 그대로 받는다.
+   */
+  'SUPPLY_USAGE_UNKNOWN',
   // ⑦ 공개 증명 행의 release 계약 도장
   'RELEASE_CONTRACT_MISSING', 'STALE_RELEASE',
   // 못 읽음
@@ -344,6 +350,15 @@ export type EvidenceSideSignals = {
   cost: readonly { name: string; health: Health }[]
   /** 발행·공급 러너 최근 회차(정본 `errorSignalOf`) */
   errors: Health
+  /**
+   * 🔴 **그 KST proof day 의 관련 natural supply 요청 중 `usageUnknown` 수** (2026-10-16 D5 보정 B).
+   *    정본 `relevantUsageUnknownCount` 가 센 값. 호출부가 그 날 공급 장부 entries 로 계산해 넘긴다.
+   *    · `undefined`  옛 호출(테스트 fixture 등) — 체크 skip. 운영 경로(`stage-controller`)는 반드시 넘긴다
+   *    · `null`       그 날 공급 장부를 못 읽었다 → `COST_UNKNOWN`(모름 = PASS 아님)
+   *    · `0`          관련 미상 없음 — 통과(§3.4 운영 PASS 조건)
+   *    · `>0`         관련 미상 있음 → `SUPPLY_USAGE_UNKNOWN` FAIL (예약은 미상 그대로 — 정산으로 바꾸지 않는다)
+   */
+  supplyUsageUnknown?: number | null
 }
 
 /**
@@ -489,6 +504,19 @@ export function judgeEvidenceForTarget<S extends string>(
     if (side.cost.some((c) => c.health === 'bad')) codes.add('COST_BAD')
     if (side.errors === 'bad') codes.add('RUNNER_BAD')
     if (side.errors === 'unknown') codes.add('RUNNER_UNKNOWN')
+    /**
+     * 🔴 **proof-day 관련 natural supply 의 `usageUnknown` 수를 명시적으로 본다** (2026-10-16 D5 보정 B).
+     *    `judgeCost` 는 미상을 FAIL 로 올리지 않는다 — 그래서 §3.4 의 "증명일 운영 PASS 는 미상 0" 요구가
+     *    stage-evidence 에서 조용히 넘어갔다(10-16 14:47 재현: 미상 1건이 `AUDIT_DEFECT` 아래 가려짐).
+     *    예약은 그대로 미상(§3.4). 호출부가 넘기지 않았으면(`undefined`) 체크 skip — 옛 호출을 깨지 않는다.
+     */
+    if (side.supplyUsageUnknown !== undefined) {
+      if (side.supplyUsageUnknown === null) codes.add('COST_UNKNOWN')
+      else {
+        counts.supplyUsageUnknown = side.supplyUsageUnknown
+        if (side.supplyUsageUnknown > 0) codes.add('SUPPLY_USAGE_UNKNOWN')
+      }
+    }
   }
   const ordered = STAGE_EVIDENCE_CODES.filter((c) => codes.has(c))
   const failing = ordered.filter((c) => !UNKNOWN_CODES.includes(c))
