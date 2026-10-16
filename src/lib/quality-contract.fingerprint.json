@@ -1,10 +1,10 @@
 {
-  "version": "quality-v10",
-  "digest": "5ee30e544cb00003eae0adee47e0c4d8d4f3d04c80808958d183bcd984ceb510",
+  "version": "quality-v11",
+  "digest": "fa597d2c6e7b13a7f4e6d969791453f0b7b45284fb3df9884e70d629e6228b91",
   "files": {
-    "src/lib/quality-contract.ts": "0e28ed9ffa17f0f39521b5deacf3aaf398013c60e3c2c3248651f49d13086f12",
+    "src/lib/quality-contract.ts": "bbfdb350e290651ee56750933daf643ad1c603982bfde45e9514c53cce40da4d",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "51550b880040aed8c0db7557c921755b367acbdef80ec457d82b71df2e2003b5",
+    "src/lib/content-core/draft-life-gates.ts": "a535eafa24d1b7ebd54cf4db79c47f1a735a062baf04c0999d8af42b78c0e60b",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
     "src/lib/content-core/pipeline.ts": "913ad8d47c2968cb1d2a55288a7c73ca1dadfdca7ecaa3a8f325f1a46fa3b360",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
@@ -24,7 +24,7 @@
     "src/lib/persona-cap.ts": "83744d04e42d76a4402d31ff743c0da94db7456efe89091084ec87968cadbf50",
     "src/lib/founder-gold.ts": "92e7ddb5629d29f4fac275333ab029ffadeb7a0da4a77fcc8f2cda95e05b6b74",
     "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
-    "src/lib/persona-no-go.ts": "03e50a98ccaf2b17582d14603d89fba9a7f303aed0f6a8ea606c26f07a070b8e",
+    "src/lib/persona-no-go.ts": "043c734ff551c93a5e5cfe18ebaf56c0b5087232efb0ecc75581ffdaf6bf4318",
     "src/lib/auto-ready-defect-resolution.ts": "3a631b35672ecfa30fbe421a088e803686bd6117aeb851b38553235cee64281a",
     "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209",
     "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
@@ -32,11 +32,11 @@
   },
   "acknowledgement": {
     "kind": "bump",
-    "reason": "판 quality-v9 → quality-v10",
+    "reason": "판 quality-v10 → quality-v11",
     "changedFiles": [
-      "scripts/lib/content-core-prompts.mts",
-      "src/lib/content-core/pipeline.ts",
-      "src/lib/quality-contract.ts"
+      "src/lib/quality-contract.ts",
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/persona-no-go.ts"
     ]
   }
 }

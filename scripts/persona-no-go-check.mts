@@ -175,11 +175,13 @@ console.log('\n⑥ 가짜 활동 · 가짜 소재 · 임계 완화 0')
   check('🔴 옛 소재 축 삭제 — topicShareOf · TOPIC_SHARE_CAP · topicConcentrated 0', !/topicShareOf|TOPIC_SHARE_CAP|topicConcentrated/.test(files))
 }
 
-console.log('\n⑦ (quality-v5) 글 쪽 — 프롬프트 · 최종 초안 게이트 · 발행 배정이 같은 helper')
+console.log('\n⑦ (quality-v11) 글 쪽 — 프롬프트 · 최종 초안 게이트 · 발행 배정이 같은 helper')
 {
-  const card = (expr: string[]) => ({ childrenCount: 0, childrenAgeBands: [], maritalStatus: '기혼', noGoExpressions: expr })
-  const gate = (body: string, expr: string[] = []) => judgeDraftLife({
-    title: '요즘 잠이 안 와요', body, plan: null, card: card(expr), context: { at: new Date('2026-10-01T03:00:00Z'), source: null },
+  const card = (expr: string[], topics: string[] = []) => ({
+    childrenCount: 0, childrenAgeBands: [], maritalStatus: '기혼', noGoTopics: topics, noGoExpressions: expr,
+  })
+  const gate = (body: string, expr: string[] = [], topics: string[] = [], title = '요즘 잠이 안 와요') => judgeDraftLife({
+    title, body, plan: null, card: card(expr, topics), context: { at: new Date('2026-10-01T03:00:00Z'), source: null },
   }).failures.filter((f) => f.code === 'personaNoGo')
   const NORMAL = '요즘 밤에 자꾸 깨서 아침이 힘들어요. 다들 어떻게 지내세요? 저만 이런 건지 궁금하네요.'
   check('🔴 정상 대화체 글 → personaNoGo 0', gate(NORMAL, ['"우리 때는"']).length === 0)
@@ -191,6 +193,15 @@ console.log('\n⑦ (quality-v5) 글 쪽 — 프롬프트 · 최종 초안 게이
   check('초안 게이트 — 카드가 없어도 공통 금지는 본다', judgeDraftLife({
     title: 't', body: '1. 물 마시기\n2. 일찍 자기', plan: null, card: null, context: { at: new Date(), source: null },
   }).failures.some((f) => f.code === 'personaNoGo'))
+  const FETAL_TITLE = '태아보험 들 때 실비보험도 다들 꼭 같이 하시나요'
+  const FETAL_BODY = '태아보험 알아보는데 실비보험도 같이 들어야 하는지 궁금해요.'
+  check('🔴 10/16 운영 반례 — `자녀` No-Go가 태아보험 초안을 personaNoGo로 차단',
+    gate(FETAL_BODY, [], ['자녀'], FETAL_TITLE).length === 1)
+  check('🔴 10/16 운영 반례 — 원천 배정도 `자녀` No-Go를 NOGO_TOPIC으로 차단',
+    hardFilter({ code: 'P29', status: 'active', providerId: null, accountCount: 0, noGoTopics: ['결혼', '자녀'], noGoExpressions: [], postsThisWeek: 0, daysSinceLastPost: null },
+      readPostRequirements(FETAL_TITLE, FETAL_BODY), FETAL_TITLE, FETAL_BODY).some((b) => b.code === 'NOGO_TOPIC'))
+  check('보험 일반 질문은 `자녀` No-Go로 과차단하지 않는다',
+    noGoHits('실비보험 갱신 보험료가 올라서 고민이에요', { noGoTopics: ['자녀'] }).topics.length === 0)
   const P = (expr: string[], topics: string[] = []): PersonaForMatch => ({
     code: 'P', status: 'active', providerId: null, accountCount: 0, noGoTopics: topics, noGoExpressions: expr,
     postsThisWeek: 0, daysSinceLastPost: null,
@@ -209,8 +220,8 @@ console.log('\n⑦ (quality-v5) 글 쪽 — 프롬프트 · 최종 초안 게이
     && /isNoGoExpressionItem\(item\)/.test(src('src/lib/persona-pool-card.ts'))
     && /noGoHits\(/.test(src('src/lib/content-core/draft-life-gates.ts'))
     && /noGoHits\(/.test(src('src/lib/original-post-persona-match.ts')))
-  check('품질 계약 v10 (보존 의미는 유지 · 문장은 재작성) · 초안 게이트 v8 · 초안 프롬프트 p12 (No-Go 판정은 v5 그대로)', QUALITY_CONTRACT_VERSION === 'quality-v10'
-    && DRAFT_GATE_VERSION === 'draft-gates-v8' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p12')
+  check('품질 계약 v11 · 초안 게이트 v9 · 초안 프롬프트 p12', QUALITY_CONTRACT_VERSION === 'quality-v11'
+    && DRAFT_GATE_VERSION === 'draft-gates-v9' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p12')
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail — DB 0 · 네트워크 0\n`)
