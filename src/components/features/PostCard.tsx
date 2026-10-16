@@ -33,6 +33,7 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
        가로 여백은 <main> 의 px-4 가 준다 — 여기서 또 주면 글자가 안쪽으로 밀린다. */
     <Link
       href={`${boardHref}/${post.id}`}
+      data-post-exposure-id={post.id}
       className="group block py-3.5 no-underline"
     >
       <h2 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong`}>

@@ -61,6 +61,7 @@ export default function PostListItem({
           그래서 선이 한 줄도 그려지지 않았다. 목록이 `[&>li+li]` 로 사이에만 긋는다. */
     <Link
       href={`${board.href}/${post.id}`}
+      data-post-exposure-id={post.id}
       data-surface={surface}
       className={`group flex ${TOUCH_MIN} items-start gap-3 px-4 py-3.5 no-underline`}
     >
