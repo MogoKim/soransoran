@@ -627,7 +627,8 @@ export function slimGraph({ graphVersion, contentHash, generatedAt, intents, edg
       placement: e.placement, priority: e.priority,
       fromCluster: e.fromCluster, toCluster: e.toCluster,
       active: e.layers.RUNTIME_ACTIVE })),
-    mappings: mappings.filter((x) => x.assetState === 'LIVE').map((x) => ({ intent: x.intentId, slug: x.slug, cluster: x.cluster })),
+    // 🔴 coverage 는 resolver 의 다중 mapping 선택 정책(ANSWERS 우선)이 읽는다 — 검증된 산출 값을 그대로 싣는다
+    mappings: mappings.filter((x) => x.assetState === 'LIVE').map((x) => ({ intent: x.intentId, slug: x.slug, cluster: x.cluster, coverage: x.coverage })),
     intents: intents.filter((x) => x.automationDecision === 'PASS' && x.runtimeState !== 'QUARANTINED')
       .map((x) => ({ id: x.intentId, cluster: x.magazineCluster, board: x.communityDestination })),
   }
@@ -642,6 +643,9 @@ export function exportProblems(slim, implementedSurfaces) {
   const boards = new Set(BOARDS)
   if (!slim.edges.length) bad.push('EXPORT_EDGES_EMPTY')
   const ids = (xs) => xs.map((e) => e.id).join(',')
+  // 🔴 새 산출의 LIVE mapping 은 공개 후 coverage 를 반드시 갖는다 — 없으면 resolver 가 ANSWERS 우선을 못 한다
+  const coverageBad = slim.mappings.filter((m) => !MAPPING_COVERAGES.includes(m.coverage) || PRE_PUBLIC_COVERAGES.includes(m.coverage))
+  if (coverageBad.length) bad.push(`EXPORT_MAPPING_COVERAGE_MISSING ${coverageBad.map((m) => `${m.intent}|${m.slug}`).join(',')}`)
   const leak = slim.edges.filter((e) => e.active && e.type !== 'COMMUNITY' && !live.has(e.to))
   if (leak.length) bad.push(`EXPORT_UNPUBLISHED_TARGET_ACTIVE ${ids(leak)}`)
   const badBoard = slim.edges.filter((e) => e.type === 'COMMUNITY' && !boards.has(e.to))

@@ -673,6 +673,23 @@ test('반례20b — 미래 publishAt 의 정상 예약은 통과, 경계가 지�
   eq(d.length, 1, 'slug 1건'); ok(d[0].reasons[0].includes('공개인데 snapshot 은 SCHEDULED'), d[0].reasons.join(','))
 })
 
+// ── 반례 21 — resolver 다중 mapping 선택 정책이 읽는 coverage 를 slim export 가 싣는다 ──
+test('반례21 — slim 의 모든 LIVE mapping 이 산출 layer 의 coverage 를 그대로 싣는다', () => {
+  const b = build()
+  const want = b.layers.mappings.filter((x) => x.assetState === 'LIVE').map((x) => `${x.intentId}|${x.slug}|${x.coverage}`)
+  eq(b.slim.mappings.map((m) => `${m.intent}|${m.slug}|${m.coverage}`), want, 'slim mapping coverage')
+  ok(b.files[`bundle/${b.graphVersion}.ts`].includes('"coverage": "ANSWERS"'), 'bundle 텍스트에 coverage 가 없다')
+})
+test('반례21b — coverage 가 없거나 계약 밖 · 공개 전인 slim mapping 은 export 자체 검사가 거부한다', () => {
+  const slim = build().slim
+  const surfaces = ['CTA_END', 'FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE']
+  for (const [label, cov] of [['없음', undefined], ['계약 밖', 'GREAT'], ['공개 전', 'QUEUED_NOT_PUBLIC']]) {
+    const bad = { ...slim, mappings: slim.mappings.map((m, i) => (i === 0 ? { ...m, coverage: cov } : m)) }
+    ok(lib.exportProblems(bad, surfaces).some((p) => p.startsWith('EXPORT_MAPPING_COVERAGE_MISSING')), label)
+  }
+  eq(lib.exportProblems(slim, surfaces), [], '정상 slim')
+})
+
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
 //    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
 const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')

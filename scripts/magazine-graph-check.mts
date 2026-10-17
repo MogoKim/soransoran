@@ -45,8 +45,10 @@ import {
   MAX_DIRECT,
   MAX_TOTAL,
   SLOT_LABEL,
+  compareGraphCandidates,
   resolveRelatedMagazine,
   graphRuntimeConfig,
+  type GraphCandidateKey,
 } from '../src/lib/magazine-graph'
 import {
   MAX_KEYS,
@@ -669,6 +671,75 @@ console.log('\n④-C 추천 4슬롯 (직접 3 + 발견 1)')
     GRAPH.edges.filter((e) => e.type === 'COMMUNITY').every((e) => e.slot === null),
   )
   check('번들: 활성 edge 는 전부 추천 이유를 가진다', activeFooter.every((e) => Boolean(e.reason)))
+}
+
+// ── ④-F 🔴 다중 mapping 선택 정책 — priority → ANSWERS → 최신 → slug ──
+console.log('\n④-F 다중 mapping 선택 정책')
+
+{
+  const key = (slug: string, coverage: string | undefined, publishedAt: string, priority = 1): GraphCandidateKey =>
+    ({ slug, coverage, publishedAt, priority })
+  /** 🔴 입력 순서를 뒤집어도 같은 답이어야 한다 — 정렬이 순서에 기대면 결과가 흔들린다 */
+  const pick = (...ks: GraphCandidateKey[]) => {
+    const a = [...ks].sort(compareGraphCandidates)[0].slug
+    const b = [...ks].reverse().sort(compareGraphCandidates)[0].slug
+    return a === b ? a : `순서 의존(${a}/${b})`
+  }
+
+  check('반례1: 오래된 ANSWERS 가 최신 ANSWERS_PARTIAL 보다 먼저',
+    pick(key('old', 'ANSWERS', '2026-09-02'), key('new', 'ANSWERS_PARTIAL', '2026-10-16')) === 'old')
+  check('반례2: 둘 다 ANSWERS 면 최신 글',
+    pick(key('old', 'ANSWERS', '2026-09-02'), key('new', 'ANSWERS', '2026-10-16')) === 'new')
+  check('반례3: ANSWERS 가 없으면 기존처럼 최신 글 (비-ANSWERS 끼리 순위 없음)',
+    pick(key('old', 'ANSWERS_PARTIAL', '2026-09-02'), key('new', 'ADJACENT', '2026-10-16'),
+      key('mid', 'ANSWERS_WITH_SCOPE_EXPANSION', '2026-10-01')) === 'new')
+  check('반례4: coverage 없는 과거 bundle 도 기존 최신순',
+    pick(key('old', undefined, '2026-09-02'), key('new', undefined, '2026-10-16')) === 'new')
+  check('반례5: priority 가 다르면 coverage 보다 edge priority 가 먼저',
+    pick(key('p2-answers', 'ANSWERS', '2026-10-16', 2), key('p1-partial', 'ANSWERS_PARTIAL', '2026-09-02', 1)) === 'p1-partial')
+  check('반례6: 날짜·등급이 같으면 slug 오름차순으로 결정적',
+    pick(key('b-slug', 'ANSWERS', '2026-10-16'), key('a-slug', 'ANSWERS', '2026-10-16')) === 'a-slug')
+
+  /**
+   * 🔴 연결 검사 — resolver 가 실제로 이 정책으로 고르는가.
+   *    고른 GRAPH 항목마다, 그 항목을 낼 수 있는 edge 의 **고르지 않은** 공개 후보 중
+   *    정책상 더 앞서는 글이 있으면 위반이다. 특정 slug 를 적지 않는다.
+   */
+  const pubBySlug = new Map(published.map((a) => [a.slug, a]))
+  const covOf = (intent: string, slug: string) => GRAPH.mappings.find((m) => m.intent === intent && m.slug === slug)?.coverage
+  const violations: string[] = []
+  let compared = 0
+  for (const env of [DEFAULT, ALL_ON]) {
+    for (const a of published) {
+      const r = resolveAt(a, env)
+      if (r.source !== 'GRAPH') continue
+      const fromIntents = new Set(GRAPH.mappings.filter((m) => m.slug === a.slug).map((m) => m.intent))
+      const shown = new Set(r.items.map((i) => i.article.slug))
+      for (const item of r.items.filter((i) => i.source === 'GRAPH')) {
+        const edges = GRAPH.edges.filter((e) => e.active && fromIntents.has(e.from) && e.slot === item.slot &&
+          e.reason === item.reason && GRAPH.mappings.some((m) => m.intent === e.to && m.slug === item.article.slug))
+        for (const e of edges) {
+          const chosen = key(item.article.slug, covOf(e.to, item.article.slug), item.article.publishedAt, e.priority)
+          for (const m of GRAPH.mappings.filter((x) => x.intent === e.to && !shown.has(x.slug) && x.slug !== a.slug)) {
+            const other = pubBySlug.get(m.slug)
+            if (!other) continue
+            compared++
+            if (compareGraphCandidates(key(m.slug, m.coverage, other.publishedAt, e.priority), chosen) < 0) {
+              violations.push(`${a.slug}: ${e.id} 이 ${item.article.slug} 를 골랐지만 ${m.slug} 가 앞선다`)
+            }
+          }
+        }
+      }
+    }
+  }
+  check('resolver 가 정책대로 고른다 — 같은 edge 의 고르지 않은 공개 후보 중 앞서는 글 0',
+    violations.length === 0, `${compared}쌍 비교${violations.length ? ` · ${violations.slice(0, 3).join(' | ')}` : ''}`)
+  check('연결 검사가 실제로 경쟁 후보를 비교했다 (0쌍이면 검사가 아니다)', compared > 0, `${compared}쌍`)
+
+  /** 🔴 coverage 는 과거 bundle 호환으로 optional 이다. 다만 한 bundle 안에서 일부만 있으면 산출이 깨진 것이다 */
+  const withCov = GRAPH.mappings.filter((m) => m.coverage !== undefined).length
+  check('번들: mapping coverage 는 전부 있거나 전부 없다',
+    withCov === 0 || withCov === GRAPH.mappings.length, `${withCov}/${GRAPH.mappings.length}`)
 }
 
 // ── ④-D 🔴 연속 열람 깊이 ────────────────────────────────

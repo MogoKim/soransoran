@@ -178,6 +178,40 @@ export function graphRuntimeConfig(env: NodeJS.ProcessEnv = process.env) {
   })
 }
 
+/** 선택 정책이 우선하는 coverage — 질문에 온전히 답하는 글 */
+export const PREFERRED_COVERAGE = 'ANSWERS'
+
+/** 그래프 후보 하나를 줄 세우는 데 필요한 값만 */
+export type GraphCandidateKey = {
+  priority: number
+  /** 없으면(coverage 이전 bundle) 비-ANSWERS 로 본다 */
+  coverage?: string
+  publishedAt: string
+  slug: string
+}
+
+/**
+ * 🔴 **다중 mapping 선택 정책** (2026-10-17) — 한 관계가 가리키는 intent 에 공개 글이 여럿일 때.
+ *
+ *   1. edge priority 오름차순
+ *   2. coverage 가 정확히 ANSWERS 인 글이 먼저
+ *   3. 같은 등급이면 publishedAt 최신순
+ *   4. 그래도 같으면 slug 오름차순 — 결과가 입력 순서에 기대지 않는다
+ *
+ *    최신순만 쓰면 새 글이 coverage 가 약해도 질문에 온전히 답하는 글을 밀어낸다
+ *    (실측: cold-weather-joint-pain 공개로 명절 글 2편의 발견 카드가 바뀌었다).
+ * 🔴 ANSWERS 외 coverage 끼리는 순위를 만들지 않는다. 특정 intent · edge · slug 예외도 두지 않는다.
+ */
+export function compareGraphCandidates(a: GraphCandidateKey, b: GraphCandidateKey): number {
+  const answers = (k: GraphCandidateKey) => (k.coverage === PREFERRED_COVERAGE ? 0 : 1)
+  return (
+    a.priority - b.priority ||
+    answers(a) - answers(b) ||
+    b.publishedAt.localeCompare(a.publishedAt) ||
+    (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
+  )
+}
+
 /**
  * 예전 방식 한 줄로 바꾼다.
  *
@@ -277,7 +311,7 @@ export function resolveRelatedMagazine(
      *    한 통에 담았다가 나중에 고르면, 우선순위가 높은 직접 연관이 4자리를 다 차지해
      *    발견 카드가 영원히 나오지 않는다. 발견은 "밀려나는 자리" 가 아니라 **전용 자리**다.
      */
-    type Cand = { item: RelatedMagazineItem; priority: number }
+    type Cand = { item: RelatedMagazineItem; priority: number; coverage?: string }
     const direct: Cand[] = []
     const discovery: Cand[] = []
     const seen = new Set<string>([article.slug]) // 🔴 자기 자신을 먼저 넣어 자기 링크를 원천 차단
@@ -312,6 +346,7 @@ export function resolveRelatedMagazine(
             graphVersion: GRAPH.graphVersion,
           },
           priority: edge.priority,
+          coverage: m.coverage,
         }
         if (edge.slot === DISCOVERY_SLOT) discovery.push(cand)
         else direct.push(cand)
@@ -322,12 +357,16 @@ export function resolveRelatedMagazine(
       return fallback(article, 'NO_RESULT', now)
     }
 
-    // 같은 우선순위면 최신 글이 앞이다 — 기존 목록과 같은 태도다.
-    const byPriority = (a: Cand, b: Cand) =>
-      a.priority - b.priority ||
-      b.item.article.publishedAt.localeCompare(a.item.article.publishedAt)
-    direct.sort(byPriority)
-    discovery.sort(byPriority)
+    // 🔴 다중 mapping 선택 정책 — priority → ANSWERS 우선 → 최신 → slug (compareGraphCandidates)
+    const keyOf = (c: Cand): GraphCandidateKey => ({
+      priority: c.priority,
+      coverage: c.coverage,
+      publishedAt: c.item.article.publishedAt,
+      slug: c.item.article.slug,
+    })
+    const bySelectionPolicy = (a: Cand, b: Cand) => compareGraphCandidates(keyOf(a), keyOf(b))
+    direct.sort(bySelectionPolicy)
+    discovery.sort(bySelectionPolicy)
 
     /**
      * 🔴 **모자란 직접 연관만 채운다.** 그래프를 켰다는 이유로 독자가 보는 연관 글이

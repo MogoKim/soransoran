@@ -151,6 +151,8 @@ const MUTATIONS = [
     to: "      if (false) add(slug, 'snapshot 은 SCHEDULED 인데 제품에 글이 없다')", expect: '반례20' },
   { id: 'M89 DRAFT 를 예약으로 허용', file: 'lib', from: "UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT', 'BLOCKED'])", to: "UNSCHEDULABLE_STATUSES = Object.freeze(['BLOCKED'])", expect: '반례20' },
   { id: 'M90 BLOCKED 를 예약으로 허용', file: 'lib', from: "UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT', 'BLOCKED'])", to: "UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT'])", expect: '반례20' },
+  { id: 'M91 slim export 에서 coverage 제거', file: 'lib', from: 'cluster: x.cluster, coverage: x.coverage })),', to: 'cluster: x.cluster })),', expect: '반례21' },
+  { id: 'M92 export coverage 자체 검사 제거', file: 'lib', from: 'if (coverageBad.length) bad.push(', to: 'if (false) bad.push(', expect: '반례21b' },
 ]
 
 const TMP = mkdtempSync(join(tmpdir(), 'mgraph-build-mutation-'))
