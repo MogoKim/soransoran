@@ -31,6 +31,19 @@ enum PostStatus {
   DELETED
 }
 
+enum PostExposureKind {
+  DETAIL_OPEN
+  LIST_EXPOSURE
+}
+
+enum PostExposureSurface {
+  DETAIL
+  HOME
+  BOARD
+  BEST
+  NEXT_TO_READ
+}
+
 // 🔴 우나어에는 Comment.source 컬럼이 없어 봇/실회원 판별이
 //    authorId → User.providerId 조인이었다. 소란소란은 처음부터 컬럼으로 둔다.
 enum AuthorSource {
@@ -359,6 +372,8 @@ model Post {
   homeExposureOverrides HomeExposureOverride[]
   /// 베스트 입성 기록 역관계 — 칼럼 없음
   bestSelection         BestSelection?
+  /// 실제 고객 열람·목록 노출의 30일 중복 제거 원장. 공개 누적값은 viewCount 다.
+  exposureEvents        PostExposureEvent[]
 
   @@index([boardType, status, createdAt])
   // 🔴 DEPRECATED (best-v2) — best-v1 의 /best 현재 12개 정렬용이었다. 읽는 쿼리가 없다.
@@ -376,6 +391,24 @@ model Post {
   autoReadyAudit AutoReadyAudit?
   /// 🔴 이 글을 낸 오리지널 큐 행 역관계 — 칼럼 없음 (OriginalPostApprovalQueue.createdPostId FK)
   originalPostQueue OriginalPostApprovalQueue?
+}
+
+/// 실제 브라우저 노출만 기록하는 단기 원장.
+/// viewerKeyHash 는 서버 HMAC 이며 User.id·익명 쿠키 원문·IP 를 저장하지 않는다.
+model PostExposureEvent {
+  id            String              @id @default(cuid())
+  postId        String
+  kind          PostExposureKind
+  surface       PostExposureSurface
+  viewerKeyHash String
+  windowStart   DateTime
+  createdAt     DateTime            @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, kind, viewerKeyHash, windowStart])
+  @@index([createdAt])
+  @@index([postId, kind, createdAt])
 }
 
 // ─────────── 댓글 ───────────

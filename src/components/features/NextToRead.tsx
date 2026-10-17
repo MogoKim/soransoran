@@ -1,4 +1,5 @@
 import PostListItem, { type PostListItemData } from '@/components/features/PostListItem'
+import PostExposureList from '@/components/features/PostExposureList'
 
 /** 이어읽기에 최대 몇 건을 보여줄지. 더 길면 댓글에서 시선이 멀어진다. */
 const TAKE = 3
@@ -36,13 +37,13 @@ export default function NextToRead({
 
       {/* 흰 카드 위에 올려 본문과 갈라 보이게 한다. hover 는 면을 쓰지 않는다.
           가로 여백은 행이 자기 px-4 로 가진다. */}
-      <ol className="m-0 mt-2 flex list-none flex-col overflow-hidden rounded-2xl border border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
+      <PostExposureList as="ol" surface="NEXT_TO_READ" className="m-0 mt-2 flex list-none flex-col overflow-hidden rounded-2xl border border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
         {next.map((post, index) => (
           <li key={post.id}>
             <PostListItem post={post} rank={index + 1} />
           </li>
         ))}
-      </ol>
+      </PostExposureList>
     </section>
   )
 }

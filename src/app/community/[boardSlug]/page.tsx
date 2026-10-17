@@ -17,6 +17,7 @@ import {
   type BoardSort,
 } from '@/lib/list-query'
 import PostCard from '@/components/features/PostCard'
+import PostExposureList from '@/components/features/PostExposureList'
 import Pagination from '@/components/features/Pagination'
 import type { BoardType } from '@prisma/client'
 
@@ -165,13 +166,13 @@ export default async function BoardPage({
                 흰 면 + 위아래 선 + 화면 끝까지 닿는 폭이 겹치면 목록이 "표" 로 읽힌다.
                 글은 바탕 위에 그대로 얹고, 사이를 가르는 선만 남긴다.
                 행 hover 는 PostCard 가 제목색으로 처리한다 — 면을 만들지 않는다. */
-          <ul className="flex flex-col [&>li+li]:border-t [&>li+li]:border-subtle">
+          <PostExposureList as="ul" surface="BOARD" className="flex flex-col [&>li+li]:border-t [&>li+li]:border-subtle">
             {posts.map((post) => (
               <li key={post.id}>
                 <PostCard post={post} boardHref={board.href} />
               </li>
             ))}
-          </ul>
+          </PostExposureList>
         )}
 
         {/* 🔴 쪽이 하나뿐이면 Pagination 이 스스로 아무것도 그리지 않는다.
