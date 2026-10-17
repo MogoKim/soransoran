@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * M-GRAPH 다중 mapping 선택 정책 변이 시험 (2026-10-17) — 정책을 지운 resolver 로 graph 검사를 다시 돌려 **FAIL 로 바뀌는지** 본다.
+ * M-GRAPH edge 단위 선택 정책 변이 시험 (2026-10-17) — 정책을 지운 resolver 로 graph 검사를 다시 돌려 **FAIL 로 바뀌는지** 본다.
  *
- *   정책: edge priority → coverage ANSWERS 우선 → publishedAt 최신 → slug 오름차순 (`compareGraphCandidates`).
+ *   edge 안 대표 1개: coverage ANSWERS → publishedAt 최신 → slug (`compareEdgeTargets`)
+ *   edge 대표 사이:   priority → publishedAt 최신 → edgeId → slug, coverage 비교 없음 (`compareEdgePicks`)
+ *   slug 중복은 대표 선택 · 정렬 뒤에 뺀다.
  *   cold-weather-joint-pain 공개 때 최신순만으로 고르다 명절 글 2편의 발견 카드가 바뀌었다.
  *
- * 바꿀 문장이 파일에 정확히 한 번 있어야 한다 (없거나 여럿이면 변이 무효 = FAIL).
+ * 한 변이는 edit 여러 개일 수 있다. 각 문장이 파일에 정확히 한 번 있어야 한다 (없거나 여럿이면 변이 무효 = FAIL).
  * 🔴 파일을 제자리에서 바꾸고 매 변이 뒤 원본 바이트로 되돌린 것을 해시로 확인한다. 중간에 끊겨도 되돌린다.
  * 🔴 무변이 코드에서 검사가 먼저 PASS 여야 한다.
  *
@@ -23,18 +25,39 @@ const GRAPH_LIB = path.join(ROOT, 'src', 'lib', 'magazine-graph.ts')
 const CHECK = [path.join(ROOT, 'node_modules', '.bin', 'tsx'), [path.join(HERE, 'magazine-graph-check.mts')]]
 
 const MUTATIONS = [
-  { name: 'coverage 우선 비교 제거 (priority → 최신 → slug)',
-    find: '    answers(a) - answers(b) ||\n', replace: '' },
-  { name: 'ANSWERS_* 도 ANSWERS 로 취급 (비-ANSWERS 끼리 새 순위)',
-    find: '(k.coverage === PREFERRED_COVERAGE ? 0 : 1)', replace: "(k.coverage?.startsWith(PREFERRED_COVERAGE) ? 0 : 1)" },
-  { name: 'slug 결정 규칙 제거 (입력 순서 의존)',
-    find: '    b.publishedAt.localeCompare(a.publishedAt) ||\n    (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)\n',
-    replace: '    b.publishedAt.localeCompare(a.publishedAt)\n' },
-  { name: 'resolver 가 mapping coverage 를 후보에 싣지 않는다',
-    find: '          coverage: m.coverage,\n', replace: '' },
-  { name: 'resolver 가 정책 대신 예전 최신순으로 정렬한다',
-    find: 'const bySelectionPolicy = (a: Cand, b: Cand) => compareGraphCandidates(keyOf(a), keyOf(b))',
-    replace: 'const bySelectionPolicy = (a: Cand, b: Cand) => a.priority - b.priority || b.item.article.publishedAt.localeCompare(a.item.article.publishedAt)' },
+  // ── edge 안 대표 선택 (compareEdgeTargets) ──
+  { name: 'edge 안 coverage 우선 비교 제거 (최신 → slug)', edits: [
+    { find: '    answers(a) - answers(b) ||\n', replace: '' }] },
+  { name: 'ANSWERS_* 도 ANSWERS 로 취급 (비-ANSWERS 끼리 새 순위)', edits: [
+    { find: '(t.coverage === PREFERRED_COVERAGE ? 0 : 1)', replace: '(t.coverage?.startsWith(PREFERRED_COVERAGE) ? 0 : 1)' }] },
+  { name: 'edge 안 slug 결정 규칙 제거 (입력 순서 의존)', edits: [
+    { find: '    b.article.publishedAt.localeCompare(a.article.publishedAt) ||\n    byString(a.article.slug, b.article.slug)\n  )',
+      replace: '    b.article.publishedAt.localeCompare(a.article.publishedAt)\n  )' }] },
+  { name: 'resolver 가 mapping coverage 를 대상에 싣지 않는다', edits: [
+    { find: 'targets.push({ article, coverage: m.coverage })', replace: 'targets.push({ article })' }] },
+  { name: 'edge 안 대표를 예전 최신순만으로 고른다', edits: [
+    { find: 'const [rep] = targets.sort(compareEdgeTargets)', replace: 'const [rep] = targets.sort((a, b) => b.article.publishedAt.localeCompare(a.article.publishedAt))' }] },
+  { name: 'edge 별 대표 선택 제거 (입력 순서 첫 글)', edits: [
+    { find: 'const [rep] = targets.sort(compareEdgeTargets)', replace: 'const [rep] = targets' }] },
+  { name: '한 edge 의 mapping 여러 개를 모두 후보로 방출', edits: [
+    { find: '    const [rep] = targets.sort(compareEdgeTargets)\n    const pick: EdgePick<A> = { edge, article: rep.article, coverage: rep.coverage }\n    if (edge.slot === DISCOVERY_SLOT) discovery.push(pick)\n    else direct.push(pick)\n',
+      replace: '    for (const rep of targets.sort(compareEdgeTargets)) {\n      const pick: EdgePick<A> = { edge, article: rep.article, coverage: rep.coverage }\n      if (edge.slot === DISCOVERY_SLOT) discovery.push(pick)\n      else direct.push(pick)\n    }\n' }] },
+  { name: '대표 선택 전 slug dedupe (앞 edge 가 고른 글을 뒤 edge 후보에서 미리 뺀다)', edits: [
+    { find: '  const discovery: EdgePick<A>[] = []\n\n  for (const edge of graph.edges) {',
+      replace: '  const discovery: EdgePick<A>[] = []\n  const claimed = new Set<string>()\n\n  for (const edge of graph.edges) {' },
+    { find: '      if (m.slug === selfSlug) continue // 🔴 자기 링크 원천 차단', replace: '      if (m.slug === selfSlug || claimed.has(m.slug)) continue' },
+    { find: '    const pick: EdgePick<A> = { edge, article: rep.article, coverage: rep.coverage }\n',
+      replace: '    const pick: EdgePick<A> = { edge, article: rep.article, coverage: rep.coverage }\n    claimed.add(rep.article.slug)\n' }] },
+  // ── edge 대표 사이 순서 (compareEdgePicks) ──
+  { name: '서로 다른 edge 에 coverage 전역 정렬을 다시 적용', edits: [
+    { find: '    a.edge.priority - b.edge.priority ||\n',
+      replace: '    a.edge.priority - b.edge.priority ||\n    (a.coverage === PREFERRED_COVERAGE ? 0 : 1) - (b.coverage === PREFERRED_COVERAGE ? 0 : 1) ||\n' }] },
+  { name: 'edge 사이 결정적 tie-break(edgeId · slug) 제거', edits: [
+    { find: '    b.article.publishedAt.localeCompare(a.article.publishedAt) ||\n    byString(a.edge.id, b.edge.id) ||\n    byString(a.article.slug, b.article.slug)\n',
+      replace: '    b.article.publishedAt.localeCompare(a.article.publishedAt)\n' }] },
+  { name: '대표 정렬 뒤 slug 중복 제거를 뺀다', edits: [
+    { find: 'return { direct: ownSlugs(direct.sort(compareEdgePicks)), discovery: ownSlugs(discovery.sort(compareEdgePicks)) }',
+      replace: 'return { direct: direct.sort(compareEdgePicks), discovery: discovery.sort(compareEdgePicks) }' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
@@ -54,17 +77,17 @@ const run = () => {
 
 let bad = 0
 let caught = 0
-console.log('\nM-GRAPH 다중 mapping 선택 정책 변이 시험\n')
+console.log('\nM-GRAPH edge 단위 선택 정책 변이 시험\n')
 const base = run()
 if (base.status !== 0) { bad++; console.log(`  ❌ 변이 없는 코드에서 검사가 FAIL 이다 (${base.summary})`) }
 else console.log(`  기준선 (변이 없음) — PASS · ${base.summary}`)
 try {
   for (const mu of MUTATIONS) {
-    const n = occurrences(original.toString('utf8'), mu.find)
-    if (n !== 1) { bad++; console.log(`  ❌ ${mu.name} — 바꿀 문장이 ${n}번 있다 (변이 무효)`); continue }
+    const invalid = mu.edits.find((e) => occurrences(original.toString('utf8'), e.find) !== 1)
+    if (invalid) { bad++; console.log(`  ❌ ${mu.name} — 바꿀 문장이 ${occurrences(original.toString('utf8'), invalid.find)}번 있다 (변이 무효)`); continue }
     let res
     try {
-      fs.writeFileSync(GRAPH_LIB, original.toString('utf8').replace(mu.find, mu.replace))
+      fs.writeFileSync(GRAPH_LIB, mu.edits.reduce((s, e) => s.replace(e.find, e.replace), original.toString('utf8')))
       res = run()
     } finally { restore() }
     if (sha(GRAPH_LIB) !== startHash) { bad++; console.log(`  ❌ ${mu.name} — 원복 후 해시가 다르다`); break }

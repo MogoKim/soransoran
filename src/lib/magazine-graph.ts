@@ -35,7 +35,11 @@
  */
 import { CONTROL, isGraphEnabled } from '@/content/magazine/graph/control'
 import { GRAPH } from '@/content/magazine/graph/current'
-import type { MagazineRecommendationSlot as GraphSlot } from '@/content/magazine/graph/types'
+import type {
+  MagazineGraph,
+  MagazineGraphEdge,
+  MagazineRecommendationSlot as GraphSlot,
+} from '@/content/magazine/graph/types'
 import type { MagazineArticle } from '@/content/magazine/types'
 import { getAllMagazineArticles, getRelatedMagazineArticles } from '@/lib/magazine'
 
@@ -181,35 +185,111 @@ export function graphRuntimeConfig(env: NodeJS.ProcessEnv = process.env) {
 /** 선택 정책이 우선하는 coverage — 질문에 온전히 답하는 글 */
 export const PREFERRED_COVERAGE = 'ANSWERS'
 
-/** 그래프 후보 하나를 줄 세우는 데 필요한 값만 */
-export type GraphCandidateKey = {
-  priority: number
-  /** 없으면(coverage 이전 bundle) 비-ANSWERS 로 본다 */
+/** 선택에 필요한 글 정보만 — 검사가 합성 글로 같은 함수를 돌릴 수 있게 */
+export type GraphArticleRef = { slug: string; publishedAt: string }
+
+/** 한 edge 가 가리키는 공개 글 하나. coverage 가 없으면(coverage 이전 bundle) 비-ANSWERS 다 */
+export type EdgeTarget<A extends GraphArticleRef = GraphArticleRef> = { article: A; coverage?: string }
+
+/** edge 하나가 낸 대표 카드 */
+export type EdgePick<A extends GraphArticleRef = GraphArticleRef> = {
+  edge: MagazineGraphEdge
+  article: A
   coverage?: string
-  publishedAt: string
-  slug: string
+}
+
+const byString = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
+/**
+ * 🔴 **edge 안** 대표 순서 — coverage 가 정확히 ANSWERS → publishedAt 최신 → slug 오름차순.
+ *    최신순만 쓰면 coverage 가 약한 새 글이 질문에 온전히 답하는 글을 밀어낸다
+ *    (실측 2026-10-17: cold-weather-joint-pain 공개로 명절 글 2편의 발견 카드가 바뀌었다).
+ *    ANSWERS 외 coverage 끼리는 순위를 만들지 않는다.
+ */
+export function compareEdgeTargets(a: EdgeTarget, b: EdgeTarget): number {
+  const answers = (t: EdgeTarget) => (t.coverage === PREFERRED_COVERAGE ? 0 : 1)
+  return (
+    answers(a) - answers(b) ||
+    b.article.publishedAt.localeCompare(a.article.publishedAt) ||
+    byString(a.article.slug, b.article.slug)
+  )
 }
 
 /**
- * 🔴 **다중 mapping 선택 정책** (2026-10-17) — 한 관계가 가리키는 intent 에 공개 글이 여럿일 때.
- *
- *   1. edge priority 오름차순
- *   2. coverage 가 정확히 ANSWERS 인 글이 먼저
- *   3. 같은 등급이면 publishedAt 최신순
- *   4. 그래도 같으면 slug 오름차순 — 결과가 입력 순서에 기대지 않는다
- *
- *    최신순만 쓰면 새 글이 coverage 가 약해도 질문에 온전히 답하는 글을 밀어낸다
- *    (실측: cold-weather-joint-pain 공개로 명절 글 2편의 발견 카드가 바뀌었다).
- * 🔴 ANSWERS 외 coverage 끼리는 순위를 만들지 않는다. 특정 intent · edge · slug 예외도 두지 않는다.
+ * 🔴 **edge 대표 사이** 순서 — edge priority → 대표 글 publishedAt 최신 → edgeId → slug.
+ *    서로 다른 관계는 coverage 로 비교하지 않는다. coverage 는 한 관계 안에서 어느 글을 보일지만 정한다.
  */
-export function compareGraphCandidates(a: GraphCandidateKey, b: GraphCandidateKey): number {
-  const answers = (k: GraphCandidateKey) => (k.coverage === PREFERRED_COVERAGE ? 0 : 1)
+export function compareEdgePicks(a: EdgePick, b: EdgePick): number {
   return (
-    a.priority - b.priority ||
-    answers(a) - answers(b) ||
-    b.publishedAt.localeCompare(a.publishedAt) ||
-    (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
+    a.edge.priority - b.edge.priority ||
+    b.article.publishedAt.localeCompare(a.article.publishedAt) ||
+    byString(a.edge.id, b.edge.id) ||
+    byString(a.article.slug, b.article.slug)
   )
+}
+
+/** 정렬이 끝난 대표에서 slug 중복을 뺀다 — 같은 글은 정렬상 먼저인 edge 가 갖고, slot·reason 도 그 edge 것이다 */
+function ownSlugs<A extends GraphArticleRef>(picks: EdgePick<A>[]): EdgePick<A>[] {
+  const seen = new Set<string>()
+  return picks.filter((p) => {
+    if (seen.has(p.article.slug)) return false
+    seen.add(p.article.slug)
+    return true
+  })
+}
+
+/**
+ * 🔴 **edge 단위 선택** (2026-10-17) — 의미 단위는 mapping 이 아니라 관계(edge)다.
+ *
+ *   1. 하단 대상 edge 마다 공개된 mapped 글을 모은다 (자기 자신 · 미공개 제외)
+ *   2. 그 edge 안에서 대표를 **정확히 1개** 고른다 (`compareEdgeTargets`)
+ *   3. 대표만 direct / discovery 로 나눠 담고 `compareEdgePicks` 로 줄 세운다
+ *   4. 그 다음에 slug 중복을 뺀다 — 대표 선택 전에 빼면 앞 edge 가 고른 글 때문에 뒤 edge 가 다른 글로 바뀐다
+ *
+ *    한 edge 가 여러 카드 자리를 차지하지 않는다. 입력(edge · mapping) 순서와 무관하게 같은 답이다.
+ * 🔴 특정 intent · edge · slug · cluster 예외를 두지 않는다.
+ */
+export function selectGraphPicks<A extends GraphArticleRef>(
+  graph: Pick<MagazineGraph, 'edges' | 'mappings'>,
+  fromIntents: ReadonlySet<string>,
+  published: ReadonlyMap<string, A>,
+  selfSlug: string,
+): { direct: EdgePick<A>[]; discovery: EdgePick<A>[] } {
+  /**
+   * 🔴 **직접 연관과 발견을 처음부터 나눠 모은다.**
+   *    한 통에 담았다가 나중에 고르면, 우선순위가 높은 직접 연관이 4자리를 다 차지해
+   *    발견 카드가 영원히 나오지 않는다. 발견은 "밀려나는 자리" 가 아니라 **전용 자리**다.
+   */
+  const direct: EdgePick<A>[] = []
+  const discovery: EdgePick<A>[] = []
+
+  for (const edge of graph.edges) {
+    if (!edge.active) continue
+    if (!FOOTER.has(edge.placement)) continue
+    if (!RELATION_TYPES.has(edge.type)) continue
+    if (!fromIntents.has(edge.from)) continue
+    // 🔴 슬롯이 없는 edge 는 하단 추천 대상이 아니다 (COMMUNITY 등)
+    if (!edge.slot) continue
+    // 🔴 발견 슬롯은 BRIDGE 관계만 채울 수 있다. 번들이 어긋나도 여기서 한 번 더 막는다
+    if (edge.slot === DISCOVERY_SLOT && edge.type !== 'BRIDGE') continue
+
+    const targets: EdgeTarget<A>[] = []
+    for (const m of graph.mappings) {
+      if (m.intent !== edge.to) continue
+      if (m.slug === selfSlug) continue // 🔴 자기 링크 원천 차단
+      const article = published.get(m.slug)
+      if (!article) continue // 🔴 미공개·존재하지 않는 slug — 관문이 걸렀다
+      targets.push({ article, coverage: m.coverage })
+    }
+    if (targets.length === 0) continue
+
+    const [rep] = targets.sort(compareEdgeTargets)
+    const pick: EdgePick<A> = { edge, article: rep.article, coverage: rep.coverage }
+    if (edge.slot === DISCOVERY_SLOT) discovery.push(pick)
+    else direct.push(pick)
+  }
+
+  return { direct: ownSlugs(direct.sort(compareEdgePicks)), discovery: ownSlugs(discovery.sort(compareEdgePicks)) }
 }
 
 /**
@@ -260,6 +340,84 @@ function fallback(
 }
 
 /**
+ * 그래프 하나로 이 글의 하단 목록을 만든다 — 켜짐 · 버전 · cluster 판정이 끝난 뒤의 몫.
+ *
+ * 🔴 그래프 · 공개 글 · 보충 재료를 인자로 받는다. resolver 는 운영 GRAPH 와 공개 목록을 넘기고,
+ *    검사는 같은 함수에 합성 그래프를 넘겨 edge 단위 계약을 **실제 조립 결과로** 본다.
+ * @param published 공개 관문을 거친 글 전부 (같은 now 로 만든 것)
+ * @param legacy    예전 방식 연관 글 — 그래프 후보가 있을 때만 부른다
+ */
+export function resolveFromGraph(
+  article: MagazineArticle,
+  graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings'>,
+  published: readonly MagazineArticle[],
+  legacy: () => readonly MagazineArticle[],
+): { resolved: ResolvedRelatedMagazine } | { reason: 'NO_MAPPING' | 'NO_RESULT' } {
+  const fromIntents = new Set(graph.mappings.filter((m) => m.slug === article.slug).map((m) => m.intent))
+  if (fromIntents.size === 0) return { reason: 'NO_MAPPING' }
+
+  const { direct, discovery } = selectGraphPicks(
+    graph,
+    fromIntents,
+    new Map(published.map((a) => [a.slug, a])),
+    article.slug,
+  )
+  if (direct.length === 0 && discovery.length === 0) return { reason: 'NO_RESULT' }
+
+  const asItem = (p: EdgePick<MagazineArticle>): RelatedMagazineItem => ({
+    article: p.article,
+    relationType: p.edge.type as MagazineRelationType,
+    surface: p.edge.placement as MagazineRelationSurface,
+    slot: p.edge.slot,
+    reason: p.edge.reason || null,
+    position: 0, // 아래에서 최종 순서가 정해진 뒤 다시 매긴다
+    source: 'GRAPH',
+    graphVersion: graph.graphVersion,
+  })
+
+  /**
+   * 🔴 **모자란 직접 연관만 채운다.** 그래프를 켰다는 이유로 독자가 보는 연관 글이
+   *    줄어들면 안 된다 — 실측(2026-09-23): 채우지 않으면 36편 중 **13편**이 줄었다.
+   *
+   * 🔴 **얼마나 채우나.** `max(예전 개수, 그래프 직접 연관 수)` 까지다 (상한 3).
+   *      · 예전보다 적어지지 않는다 — 그게 보충의 목적이다
+   *      · 예전보다 억지로 많아지지도 않는다
+   *
+   * 🔴 채우는 재료는 **기존 함수의 결과뿐**이다. 세 번째 규칙을 만들지 않는다.
+   * 🔴 **발견 자리는 채우지 않는다.** 유효한 BRIDGE 가 없으면 그냥 비운다 —
+   *    최신 글이나 인기 글을 넣는 순간 "같은 또래가 궁금해한 것" 이 거짓이 된다.
+   */
+  const fill = legacy()
+  const directTarget = Math.min(MAX_DIRECT, Math.max(fill.length, direct.length))
+
+  const items: RelatedMagazineItem[] = direct.slice(0, directTarget).map(asItem)
+  const chosen = new Set<string>([article.slug, ...items.map((i) => i.article.slug)])
+
+  for (const a of fill) {
+    if (items.length >= directTarget) break
+    if (chosen.has(a.slug)) continue // 자기 자신 · 그래프가 이미 고른 글
+    chosen.add(a.slug)
+    items.push(asFallbackItem(a, 'FALLBACK_FILL', items.length))
+  }
+
+  // 🔴 발견 카드는 마지막 한 자리. 직접 연관과 중복될 수 없다.
+  for (const p of discovery) {
+    if (items.length >= MAX_TOTAL) break
+    if (chosen.has(p.article.slug)) continue
+    chosen.add(p.article.slug)
+    items.push(asItem(p))
+    break // 🔴 발견은 최대 1개
+  }
+
+  // 화면 순서를 계측 position 과 일치시킨다
+  items.forEach((it, n) => {
+    it.position = n
+  })
+
+  return { resolved: { items, source: 'GRAPH', reason: null, graphVersion: graph.graphVersion } }
+}
+
+/**
  * 이 글 아래에 무엇을 놓을지 정한다.
  *
  * 🔴 **개수 인자를 받지 않는다.** 개수는 계약이 정하지 호출부가 정하는 값이 아니다.
@@ -298,121 +456,12 @@ export function resolveRelatedMagazine(
       return fallback(article, 'CLUSTER_NOT_ENABLED', now)
     }
 
-    const fromIntents = new Set(
-      GRAPH.mappings.filter((m) => m.slug === article.slug).map((m) => m.intent),
+    // 🔴 공개 관문을 거친 글만 후보다
+    const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>
+      getRelatedMagazineArticles(article, MAX_DIRECT, now),
     )
-    if (fromIntents.size === 0) return fallback(article, 'NO_MAPPING', now)
-
-    // 🔴 공개 관문을 거친 글만 후보다. slug → 글 한 번만 만든다.
-    const published = new Map(getAllMagazineArticles(now).map((a) => [a.slug, a]))
-
-    /**
-     * 🔴 **직접 연관과 발견을 처음부터 나눠 모은다.**
-     *    한 통에 담았다가 나중에 고르면, 우선순위가 높은 직접 연관이 4자리를 다 차지해
-     *    발견 카드가 영원히 나오지 않는다. 발견은 "밀려나는 자리" 가 아니라 **전용 자리**다.
-     */
-    type Cand = { item: RelatedMagazineItem; priority: number; coverage?: string }
-    const direct: Cand[] = []
-    const discovery: Cand[] = []
-    const seen = new Set<string>([article.slug]) // 🔴 자기 자신을 먼저 넣어 자기 링크를 원천 차단
-
-    for (const edge of GRAPH.edges) {
-      if (!edge.active) continue
-      if (!FOOTER.has(edge.placement)) continue
-      if (!RELATION_TYPES.has(edge.type)) continue
-      if (!fromIntents.has(edge.from)) continue
-      // 🔴 슬롯이 없는 edge 는 하단 추천 대상이 아니다 (COMMUNITY 등)
-      if (!edge.slot) continue
-      // 🔴 발견 슬롯은 BRIDGE 관계만 채울 수 있다. 번들이 어긋나도 여기서 한 번 더 막는다
-      if (edge.slot === DISCOVERY_SLOT && edge.type !== 'BRIDGE') continue
-
-      for (const m of GRAPH.mappings) {
-        if (m.intent !== edge.to) continue
-        if (seen.has(m.slug)) continue // 자기 자신 · 이미 담은 slug
-
-        const target = published.get(m.slug)
-        if (!target) continue // 🔴 미공개·존재하지 않는 slug — 관문이 걸렀다
-
-        seen.add(m.slug)
-        const cand: Cand = {
-          item: {
-            article: target,
-            relationType: edge.type as MagazineRelationType,
-            surface: edge.placement as MagazineRelationSurface,
-            slot: edge.slot,
-            reason: edge.reason || null,
-            position: 0, // 아래에서 최종 순서가 정해진 뒤 다시 매긴다
-            source: 'GRAPH',
-            graphVersion: GRAPH.graphVersion,
-          },
-          priority: edge.priority,
-          coverage: m.coverage,
-        }
-        if (edge.slot === DISCOVERY_SLOT) discovery.push(cand)
-        else direct.push(cand)
-      }
-    }
-
-    if (direct.length === 0 && discovery.length === 0) {
-      return fallback(article, 'NO_RESULT', now)
-    }
-
-    // 🔴 다중 mapping 선택 정책 — priority → ANSWERS 우선 → 최신 → slug (compareGraphCandidates)
-    const keyOf = (c: Cand): GraphCandidateKey => ({
-      priority: c.priority,
-      coverage: c.coverage,
-      publishedAt: c.item.article.publishedAt,
-      slug: c.item.article.slug,
-    })
-    const bySelectionPolicy = (a: Cand, b: Cand) => compareGraphCandidates(keyOf(a), keyOf(b))
-    direct.sort(bySelectionPolicy)
-    discovery.sort(bySelectionPolicy)
-
-    /**
-     * 🔴 **모자란 직접 연관만 채운다.** 그래프를 켰다는 이유로 독자가 보는 연관 글이
-     *    줄어들면 안 된다 — 실측(2026-09-23): 채우지 않으면 36편 중 **13편**이 줄었다.
-     *
-     * 🔴 **얼마나 채우나.** `max(예전 개수, 그래프 직접 연관 수)` 까지다 (상한 3).
-     *      · 예전보다 적어지지 않는다 — 그게 보충의 목적이다
-     *      · 예전보다 억지로 많아지지도 않는다
-     *
-     * 🔴 채우는 재료는 **기존 함수의 결과뿐**이다. 세 번째 규칙을 만들지 않는다.
-     * 🔴 **발견 자리는 채우지 않는다.** 유효한 BRIDGE 가 없으면 그냥 비운다 —
-     *    최신 글이나 인기 글을 넣는 순간 "같은 또래가 궁금해한 것" 이 거짓이 된다.
-     */
-    const legacy = getRelatedMagazineArticles(article, MAX_DIRECT, now)
-    const directTarget = Math.min(MAX_DIRECT, Math.max(legacy.length, direct.length))
-
-    const items: RelatedMagazineItem[] = direct.slice(0, directTarget).map((c) => c.item)
-    const chosen = new Set<string>([article.slug, ...items.map((i) => i.article.slug)])
-
-    for (const a of legacy) {
-      if (items.length >= directTarget) break
-      if (chosen.has(a.slug)) continue // 자기 자신 · 그래프가 이미 고른 글
-      chosen.add(a.slug)
-      items.push(asFallbackItem(a, 'FALLBACK_FILL', items.length))
-    }
-
-    // 🔴 발견 카드는 마지막 한 자리. 직접 연관과 중복될 수 없다.
-    for (const c of discovery) {
-      if (items.length >= MAX_TOTAL) break
-      if (chosen.has(c.item.article.slug)) continue
-      chosen.add(c.item.article.slug)
-      items.push(c.item)
-      break // 🔴 발견은 최대 1개
-    }
-
-    // 화면 순서를 계측 position 과 일치시킨다
-    items.forEach((it, n) => {
-      it.position = n
-    })
-
-    return {
-      items,
-      source: 'GRAPH',
-      reason: null,
-      graphVersion: GRAPH.graphVersion,
-    }
+    if ('reason' in result) return fallback(article, result.reason, now)
+    return result.resolved
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error'
     console.error(`[M-GRAPH] resolver fallback · ${article.slug} · ${detail}`)

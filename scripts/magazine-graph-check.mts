@@ -29,6 +29,7 @@ import { join } from 'node:path'
 import { MAGAZINE_ARTICLES } from '../src/content/magazine/articles'
 import { CONTROL, enabledClusters, isGraphEnabled } from '../src/content/magazine/graph/control'
 import { EXPORT_HASH, GRAPH } from '../src/content/magazine/graph/current'
+import type { MagazineGraph } from '../src/content/magazine/graph/types'
 import type { MagazineArticle } from '../src/content/magazine/types'
 import type { SoranEventMap } from '../src/lib/analytics/events'
 import { trackEvent } from '../src/lib/analytics/track'
@@ -45,10 +46,9 @@ import {
   MAX_DIRECT,
   MAX_TOTAL,
   SLOT_LABEL,
-  compareGraphCandidates,
+  resolveFromGraph,
   resolveRelatedMagazine,
   graphRuntimeConfig,
-  type GraphCandidateKey,
 } from '../src/lib/magazine-graph'
 import {
   MAX_KEYS,
@@ -673,68 +673,117 @@ console.log('\n④-C 추천 4슬롯 (직접 3 + 발견 1)')
   check('번들: 활성 edge 는 전부 추천 이유를 가진다', activeFooter.every((e) => Boolean(e.reason)))
 }
 
-// ── ④-F 🔴 다중 mapping 선택 정책 — priority → ANSWERS → 최신 → slug ──
-console.log('\n④-F 다중 mapping 선택 정책')
+// ── ④-F 🔴 edge 단위 선택 — edge 안 대표 1개(ANSWERS → 최신 → slug) · edge 사이는 priority → 최신 → edgeId ──
+console.log('\n④-F edge 단위 선택 정책 (실제 조립 함수 resolveFromGraph)')
 
 {
-  const key = (slug: string, coverage: string | undefined, publishedAt: string, priority = 1): GraphCandidateKey =>
-    ({ slug, coverage, publishedAt, priority })
-  /** 🔴 입력 순서를 뒤집어도 같은 답이어야 한다 — 정렬이 순서에 기대면 결과가 흔들린다 */
-  const pick = (...ks: GraphCandidateKey[]) => {
-    const a = [...ks].sort(compareGraphCandidates)[0].slug
-    const b = [...ks].reverse().sort(compareGraphCandidates)[0].slug
-    return a === b ? a : `순서 의존(${a}/${b})`
+  type FEdge = MagazineGraph['edges'][number]
+  type FMap = MagazineGraph['mappings'][number]
+  const art = (slug: string, publishedAt: string) =>
+    ({ slug, publishedAt, cluster: 'fam', title: slug }) as unknown as MagazineArticle
+  const SELF = art('self', '2026-01-01')
+  const fe = (id: string, to: string, priority = 1, slot: FEdge['slot'] = 'DIRECT_NEXT'): FEdge => ({
+    id, from: 'I-SELF', to, type: slot === DISCOVERY_SLOT ? 'BRIDGE' : 'NEXT_QUESTION', slot,
+    anchor: id, reason: `${id} 이유`, placement: slot === DISCOVERY_SLOT ? 'FOOTER_BRIDGE' : 'FOOTER_NEXT',
+    priority, fromCluster: 'fam', toCluster: 'fam', active: true,
+  })
+  const fm = (intent: string, slug: string, coverage?: string): FMap =>
+    coverage === undefined ? { intent, slug, cluster: 'fam' } : { intent, slug, cluster: 'fam', coverage }
+  const once = (edges: FEdge[], maps: FMap[], arts: MagazineArticle[], legacy: MagazineArticle[]) => {
+    const r = resolveFromGraph(SELF, { graphVersion: 'g-test', edges, mappings: [fm('I-SELF', 'self'), ...maps] }, [SELF, ...arts], () => legacy)
+    return 'reason' in r ? r.reason : r.resolved.items.map((i) => `${i.article.slug}|${i.source}|${i.slot ?? '-'}|${i.reason ?? '-'}`)
   }
+  /** 🔴 edge · mapping · 공개 글 순서를 모두 뒤집어도 같은 답이어야 한다 */
+  const run = (edges: FEdge[], maps: FMap[], arts: MagazineArticle[], legacy: MagazineArticle[] = []) => {
+    const a = once(edges, maps, arts, legacy)
+    const b = once([...edges].reverse(), [...maps].reverse(), [...arts].reverse(), legacy)
+    return JSON.stringify(a) === JSON.stringify(b) ? a : [`순서 의존 ${JSON.stringify(a)} / ${JSON.stringify(b)}`]
+  }
+  const graphSlugs = (r: string[] | string) => (Array.isArray(r) ? r.filter((x) => x.split('|')[1] === 'GRAPH').map((x) => x.split('|')[0]) : [r])
+  const same = (r: string[] | string, want: string[]) => JSON.stringify(graphSlugs(r)) === JSON.stringify(want)
 
-  check('반례1: 오래된 ANSWERS 가 최신 ANSWERS_PARTIAL 보다 먼저',
-    pick(key('old', 'ANSWERS', '2026-09-02'), key('new', 'ANSWERS_PARTIAL', '2026-10-16')) === 'old')
-  check('반례2: 둘 다 ANSWERS 면 최신 글',
-    pick(key('old', 'ANSWERS', '2026-09-02'), key('new', 'ANSWERS', '2026-10-16')) === 'new')
-  check('반례3: ANSWERS 가 없으면 기존처럼 최신 글 (비-ANSWERS 끼리 순위 없음)',
-    pick(key('old', 'ANSWERS_PARTIAL', '2026-09-02'), key('new', 'ADJACENT', '2026-10-16'),
-      key('mid', 'ANSWERS_WITH_SCOPE_EXPANSION', '2026-10-01')) === 'new')
-  check('반례4: coverage 없는 과거 bundle 도 기존 최신순',
-    pick(key('old', undefined, '2026-09-02'), key('new', undefined, '2026-10-16')) === 'new')
-  check('반례5: priority 가 다르면 coverage 보다 edge priority 가 먼저',
-    pick(key('p2-answers', 'ANSWERS', '2026-10-16', 2), key('p1-partial', 'ANSWERS_PARTIAL', '2026-09-02', 1)) === 'p1-partial')
-  check('반례6: 날짜·등급이 같으면 slug 오름차순으로 결정적',
-    pick(key('b-slug', 'ANSWERS', '2026-10-16'), key('a-slug', 'ANSWERS', '2026-10-16')) === 'a-slug')
+  const OLD = art('old', '2026-09-02'), NEW = art('new', '2026-10-16'), MID = art('mid', '2026-10-01')
+  let r = run([fe('E-1', 'I-A')], [fm('I-A', 'old', 'ANSWERS'), fm('I-A', 'new', 'ANSWERS_PARTIAL')], [OLD, NEW])
+  check('같은 edge: 오래된 ANSWERS 가 최신 ANSWERS_PARTIAL 보다 대표', same(r, ['old']), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A')], [fm('I-A', 'old', 'ANSWERS'), fm('I-A', 'new', 'ANSWERS')], [OLD, NEW])
+  check('같은 edge: 둘 다 ANSWERS 면 최신 글', same(r, ['new']), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A')], [fm('I-A', 'old', 'ANSWERS_PARTIAL'), fm('I-A', 'new', 'ADJACENT'), fm('I-A', 'mid', 'ANSWERS_WITH_SCOPE_EXPANSION')], [OLD, NEW, MID])
+  check('같은 edge: ANSWERS 가 없으면 최신 글 (비-ANSWERS 끼리 순위 없음)', same(r, ['new']), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A')], [fm('I-A', 'old'), fm('I-A', 'new')], [OLD, NEW])
+  check('같은 edge: coverage 없는 과거 bundle 은 최신 글', same(r, ['new']), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A')], [fm('I-A', 'old', 'ANSWERS'), fm('I-A', 'new', 'ANSWERS'), fm('I-A', 'mid', 'PARTIAL')], [OLD, NEW, MID])
+  check('한 edge 에 mapping 3개 → GRAPH 카드 정확히 1개', graphSlugs(r).length === 1, JSON.stringify(r))
+
+  r = run([fe('E-1', 'I-A'), fe('E-2', 'I-B')], [fm('I-A', 'new', 'ANSWERS_PARTIAL'), fm('I-B', 'old', 'ANSWERS')], [OLD, NEW])
+  check('서로 다른 같은 priority edge: coverage 로 edge 순서를 바꾸지 않는다 (최신 대표 먼저)', same(r, ['new', 'old']), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A', 2), fe('E-2', 'I-B', 1)], [fm('I-A', 'old', 'ANSWERS'), fm('I-B', 'new', 'ANSWERS_PARTIAL')], [OLD, NEW])
+  check('priority 가 다르면 edge priority 가 먼저', same(r, ['new', 'old']), JSON.stringify(r))
+
+  const X = art('x', '2026-10-01')
+  r = run([fe('E-1', 'I-A', 1, 'DIRECT_NEXT'), fe('E-2', 'I-B', 1, 'SAME_EXPERIENCE')], [fm('I-A', 'x', 'ANSWERS'), fm('I-B', 'x', 'ANSWERS')], [X])
+  check('같은 slug 를 두 edge 가 가리키면 정렬상 먼저인 edge 가 소유 — slot·reason 도 그 edge 것, 입력 순서 무관',
+    JSON.stringify(r) === JSON.stringify(['x|GRAPH|DIRECT_NEXT|E-1 이유']), JSON.stringify(r))
+
+  const Y = art('y', '2026-10-10')
+  r = run([fe('E-1', 'I-A', 1), fe('E-2', 'I-B', 2)], [fm('I-A', 'x', 'ANSWERS'), fm('I-B', 'x', 'ANSWERS'), fm('I-B', 'y', 'PARTIAL')], [X, Y])
+  check('slug 중복은 대표 선택 뒤에 뺀다 — 뒤 edge 의 대표가 이미 소유된 글이면 그 edge 는 카드를 내지 않는다', same(r, ['x']), JSON.stringify(r))
+
+  const D3 = ['a', 'b', 'c'].flatMap((k, i) => [art(`${k}1`, `2026-09-0${i + 1}`), art(`${k}2`, `2026-10-0${i + 1}`)])
+  r = run([fe('E-1', 'I-A'), fe('E-2', 'I-B'), fe('E-3', 'I-C')],
+    ['a', 'b', 'c'].flatMap((k) => [fm(`I-${k.toUpperCase()}`, `${k}1`, 'ANSWERS'), fm(`I-${k.toUpperCase()}`, `${k}2`, 'PARTIAL')]), D3)
+  const reasons = Array.isArray(r) ? r.filter((x) => x.split('|')[1] === 'GRAPH').map((x) => x.split('|')[3]) : []
+  check('direct edge 3개 + 각 mapping 여러 개 → 카드 3개 · edge 당 1개',
+    reasons.length === 3 && new Set(reasons).size === 3 && same(r, ['c1', 'b1', 'a1']), JSON.stringify(r))
+
+  const P = art('p-slug', '2026-10-16'), Q = art('q-slug', '2026-10-16')
+  r = run([fe('E-1', 'I-A')], [fm('I-A', 'q-slug', 'ANSWERS'), fm('I-A', 'p-slug', 'ANSWERS')], [P, Q])
+  check('같은 edge: 날짜·등급이 같으면 slug 오름차순으로 결정적', same(r, ['p-slug']), JSON.stringify(r))
+
+  r = run([fe('E-1', 'I-A', 1, DISCOVERY_SLOT)], [fm('I-A', 'old', 'ANSWERS'), fm('I-A', 'new', 'ANSWERS_PARTIAL')], [OLD, NEW])
+  check('발견 edge 도 같은 규칙 — 대표 1개(오래된 ANSWERS)', same(r, ['old']), JSON.stringify(r))
 
   /**
-   * 🔴 연결 검사 — resolver 가 실제로 이 정책으로 고르는가.
-   *    고른 GRAPH 항목마다, 그 항목을 낼 수 있는 edge 의 **고르지 않은** 공개 후보 중
-   *    정책상 더 앞서는 글이 있으면 위반이다. 특정 slug 를 적지 않는다.
+   * 🔴 연결 검사 — 운영 resolver 가 실제 GRAPH 에서 edge 단위 계약을 지키는가. 특정 slug 를 적지 않는다.
+   *    ① 한 edge 가 GRAPH 카드 2장 이상을 내지 않는다
+   *    ② 고른 카드는 그 edge 의 공개 대상 중 (ANSWERS → 최신 → slug) 으로 가장 앞선다
    */
   const pubBySlug = new Map(published.map((a) => [a.slug, a]))
   const covOf = (intent: string, slug: string) => GRAPH.mappings.find((m) => m.intent === intent && m.slug === slug)?.coverage
-  const violations: string[] = []
-  let compared = 0
+  const better = (a: { coverage?: string; publishedAt: string; slug: string }, b: typeof a) => {
+    const ans = (k: typeof a) => (k.coverage === 'ANSWERS' ? 0 : 1)
+    return ans(a) - ans(b) || b.publishedAt.localeCompare(a.publishedAt) || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
+  }
+  const multi: string[] = []
+  const notRep: string[] = []
+  let graphCards = 0
   for (const env of [DEFAULT, ALL_ON]) {
     for (const a of published) {
-      const r = resolveAt(a, env)
-      if (r.source !== 'GRAPH') continue
+      const res = resolveAt(a, env)
+      if (res.source !== 'GRAPH') continue
       const fromIntents = new Set(GRAPH.mappings.filter((m) => m.slug === a.slug).map((m) => m.intent))
-      const shown = new Set(r.items.map((i) => i.article.slug))
-      for (const item of r.items.filter((i) => i.source === 'GRAPH')) {
-        const edges = GRAPH.edges.filter((e) => e.active && fromIntents.has(e.from) && e.slot === item.slot &&
+      const perEdge = new Map<string, number>()
+      for (const item of res.items.filter((i) => i.source === 'GRAPH')) {
+        graphCards++
+        const owners = GRAPH.edges.filter((e) => e.active && fromIntents.has(e.from) && e.slot === item.slot &&
           e.reason === item.reason && GRAPH.mappings.some((m) => m.intent === e.to && m.slug === item.article.slug))
-        for (const e of edges) {
-          const chosen = key(item.article.slug, covOf(e.to, item.article.slug), item.article.publishedAt, e.priority)
-          for (const m of GRAPH.mappings.filter((x) => x.intent === e.to && !shown.has(x.slug) && x.slug !== a.slug)) {
-            const other = pubBySlug.get(m.slug)
-            if (!other) continue
-            compared++
-            if (compareGraphCandidates(key(m.slug, m.coverage, other.publishedAt, e.priority), chosen) < 0) {
-              violations.push(`${a.slug}: ${e.id} 이 ${item.article.slug} 를 골랐지만 ${m.slug} 가 앞선다`)
-            }
+        if (owners.length !== 1) continue // 같은 slot·reason 의 edge 가 여럿이면 귀속을 단정하지 않는다
+        const e = owners[0]
+        perEdge.set(e.id, (perEdge.get(e.id) ?? 0) + 1)
+        const mine = { coverage: covOf(e.to, item.article.slug), publishedAt: item.article.publishedAt, slug: item.article.slug }
+        for (const m of GRAPH.mappings.filter((x) => x.intent === e.to && x.slug !== a.slug && x.slug !== item.article.slug)) {
+          const o = pubBySlug.get(m.slug)
+          if (o && better({ coverage: m.coverage, publishedAt: o.publishedAt, slug: o.slug }, mine) < 0) {
+            notRep.push(`${a.slug}: ${e.id} 이 ${item.article.slug} 를 냈지만 ${m.slug} 가 대표다`)
           }
         }
       }
+      for (const [id, n] of perEdge) if (n > 1) multi.push(`${a.slug}: ${id} ${n}장`)
     }
   }
-  check('resolver 가 정책대로 고른다 — 같은 edge 의 고르지 않은 공개 후보 중 앞서는 글 0',
-    violations.length === 0, `${compared}쌍 비교${violations.length ? ` · ${violations.slice(0, 3).join(' | ')}` : ''}`)
-  check('연결 검사가 실제로 경쟁 후보를 비교했다 (0쌍이면 검사가 아니다)', compared > 0, `${compared}쌍`)
+  check('운영 resolver: 한 edge 가 GRAPH 카드 2장 이상을 내지 않는다', multi.length === 0, multi.slice(0, 3).join(' | '))
+  check('운영 resolver: GRAPH 카드는 그 edge 의 대표다 (ANSWERS → 최신 → slug)', notRep.length === 0,
+    `${graphCards}장${notRep.length ? ` · ${notRep.slice(0, 3).join(' | ')}` : ''}`)
+  check('연결 검사가 실제 GRAPH 카드를 봤다 (0장이면 검사가 아니다)', graphCards > 0, `${graphCards}장`)
 
   /** 🔴 coverage 는 과거 bundle 호환으로 optional 이다. 다만 한 bundle 안에서 일부만 있으면 산출이 깨진 것이다 */
   const withCov = GRAPH.mappings.filter((m) => m.coverage !== undefined).length
