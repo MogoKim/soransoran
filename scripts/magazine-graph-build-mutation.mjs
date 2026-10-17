@@ -131,6 +131,21 @@ const MUTATIONS = [
     to: 'return (intentId) => summarizeExistingAssets([...(by.get(intentId) ?? [])].sort((a, b) => a.slug.localeCompare(b.slug)))', expect: '반례18b' },
   { id: 'M77 automation 값이 있으면 그것을 신뢰', file: 'lib', from: 'existingAssetRelation: assetSummaryOf(r.intentId),',
     to: 'existingAssetRelation: r.existingAssetRelation ?? assetSummaryOf(r.intentId),', expect: '반례18' },
+  { id: 'M78 제품 lifecycle 관문 호출 제거', file: 'lib', from: '  assertProductLifecycle({ inputs, articles: product.articles, effectiveMs: eff.ms })\n', to: '', expect: '반례19i' },
+  { id: 'M79 published 우선순위 제거(queue 가 published 를 덮는다)', file: 'lib', from: "    resolved.set(p.slug, state ?? 'UNKNOWN') // published 가 queue 를 가린다",
+    to: "    if (!resolved.has(p.slug)) resolved.set(p.slug, state ?? 'UNKNOWN')", expect: '반례19b' },
+  { id: 'M80 published·queue 교차 중복을 잘못 거부', file: 'lib', from: '    seenPublished.add(p.slug)\n',
+    to: "    seenPublished.add(p.slug)\n    if (seenQueue.has(p.slug)) add(p.slug, '교차 중복')\n", expect: '반례19b' },
+  { id: 'M81 queue-only 공개 slug 허용', file: 'lib', from: "    if (live && state !== 'LIVE') add(", to: "    if (live && state !== 'LIVE' && state !== 'QUEUE') add(", expect: '반례19' },
+  { id: 'M82 effectiveAt 대신 현재 시각', file: 'lib', from: '    const live = Boolean(article) && isPublic(article, effectiveMs)',
+    to: '    const live = Boolean(article) && isPublic(article, Date.now())', expect: '반례19h' },
+  { id: 'M83 raw status 만 신뢰', file: 'lib', from: '    const live = Boolean(article) && isPublic(article, effectiveMs)',
+    to: "    const live = Boolean(article) && article.status === 'PUBLISHED'", expect: '반례19' },
+  { id: 'M84 미래 LIVE 허용', file: 'lib', from: "    if (!live && state === 'LIVE') add(", to: '    if (false) add(', expect: '반례19c' },
+  { id: 'M85 canonical 공개 slug 누락 허용', file: 'lib', from: '  for (const slug of new Set([...resolved.keys(), ...canonicalSlugs])) {',
+    to: '  for (const slug of new Set([...resolved.keys()])) {', expect: '반례19e' },
+  { id: 'M86 slug 별 dedupe 제거', file: 'lib', from: '.map(([slug, reasons]) => ({ slug, reasons }))',
+    to: '.flatMap(([slug, reasons]) => reasons.map((r) => ({ slug, reasons: [r] })))', expect: '반례19g' },
 ]
 
 const TMP = mkdtempSync(join(tmpdir(), 'mgraph-build-mutation-'))

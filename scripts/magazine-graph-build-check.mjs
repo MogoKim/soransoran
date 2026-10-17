@@ -90,11 +90,13 @@ const controlText = ({ enabled = true, clusters = ['fam', 'rel'], bridge = true,
   previousGraphVersion: null,
 } as const\n`
 const art = (cluster, publishAt) => ({ title: 't', cluster, publishedAt: publishAt.slice(0, 10), status: 'SCHEDULED', publishAt })
-const ARTICLES = `export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = ${JSON.stringify({
+const BASE_ARTICLES = {
   p1: art('fam', '2026-10-01T10:30:00+09:00'), p2: art('fam', '2026-10-02T10:30:00+09:00'), p3: art('fam', '2026-10-03T10:30:00+09:00'),
   d: art('rel', '2026-10-04T10:30:00+09:00'), h: art('fam', '2026-10-05T10:30:00+09:00'),
   u: art('fam', '2026-12-31T10:30:00+09:00'), w: art('fam', '2026-10-06T10:30:00+09:00'),
-}, null, 2)}\n`
+}
+const articlesText = (extra = {}) => `export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = ${JSON.stringify({ ...BASE_ARTICLES, ...extra }, null, 2)}\n`
+const ARTICLES = articlesText()
 const ADMISSION = { slugManifest: JSON.stringify({ slugs: { 'I-X': 'x-slug' } }), ledger: '' }
 
 const jsonl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n'
@@ -104,8 +106,8 @@ const inputTextsOf = (w) => ({
 })
 const EFF = '2026-10-15T13:00:00+09:00'
 const GEN = '2026-10-15T04:43:55.080Z'
-const build = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, generatedAt = GEN } = {}) =>
-  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles: ARTICLES },
+const build = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, generatedAt = GEN, articles = ARTICLES } = {}) =>
+  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles },
     admissionTexts: admission, effectiveAt, generatedAt })
 const row = (b, id) => b.readiness.rows.find((r) => r.intentId === id)
 
@@ -584,7 +586,9 @@ test('반례18b — LIVE · SCHEDULED · QUEUED · BLOCKED 상태 요약과 다�
   w.published.push({ slug: 'aa-live', assetState: 'LIVE' }, { slug: 'mm-sched', assetState: 'SCHEDULED_NOT_YET_PUBLIC' })
   w.queued.push({ slug: 'zz-queue' })
   const want = 'zz-queue(QUEUED/QUEUED_NOT_PUBLIC), aa-live(PUBLISHED/ANSWERS), mm-sched(SCHEDULED_NOT_YET_PUBLIC/SCHEDULED_NOT_YET_PUBLIC), bb-block(BLOCKED/ADJACENT)'
-  const one = build({ world: w }), two = build({ world: w })
+  // 🔴 snapshot 의 LIVE · SCHEDULED 는 제품 글과 맞아야 한다(제품 lifecycle 관문) — 제품에 없는 LIVE 는 실제로 있을 수 없는 fixture 다
+  const articles = articlesText({ 'aa-live': art('fam', '2026-10-01T10:30:00+09:00'), 'mm-sched': art('fam', '2026-12-01T10:30:00+09:00') })
+  const one = build({ world: w, articles }), two = build({ world: w, articles })
   eq(one.layers.intents.find((x) => x.intentId === 'I-S').existingAssetRelation, want, '요약')
   eq(two.files, one.files, '같은 입력 두 번 — 산출 바이트')
 })
@@ -597,13 +601,71 @@ test('반례18c — 모든 intent 의 산출 요약 = mappings, 요약을 mappin
   ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('I-P1 existingAssetRelation 이 mappings 와 다르다'), JSON.stringify(r))
 })
 
+// ── 반례 19 — snapshot ↔ 제품 lifecycle 대조 (published > queue · effectiveAt 만 · slug 별 1건) ──
+const lc = (inputs, arts, eff) => lib.productLifecycleDrift({ inputs: { canonical: [], queued: [], published: [], ...inputs }, articles: arts, effectiveMs: Date.parse(eff) })
+const pa = (slug, publishAt, status = 'SCHEDULED') => ({ slug, title: slug, cluster: 'fam', publishedAt: publishAt.slice(0, 10), status, publishAt })
+const T = '2026-10-17T10:30:00+09:00', T_1 = '2026-10-17T10:29:59+09:00'
+test('반례19 — 공개 1초 전 queue 는 통과, 공개 경계(publishAt 그 시각)부터 queue-only 는 drift', () => {
+  const arts = [pa('q1', T)]
+  eq(lc({ queued: [{ slug: 'q1' }] }, arts, T_1), [], '1초 전')
+  const d = lc({ queued: [{ slug: 'q1' }] }, arts, T)
+  eq(d.map((x) => x.slug), ['q1'], '경계'); ok(d[0].reasons.some((r) => r.includes('QUEUE')), d[0].reasons.join(','))
+})
+test('반례19b — published LIVE 와 queue 의 교차 중복은 drift 0 (published > queue · queue 는 provenance 사본)', () => {
+  eq(lc({ published: [{ slug: 'x', assetState: 'LIVE' }], queued: [{ slug: 'x' }] }, [pa('x', '2026-10-01T10:30:00+09:00')], T), [], '교차')
+})
+test('반례19c — 미래 글 · 제품에 없는 글을 LIVE 로 기록하면 drift', () => {
+  const d = lc({ published: [{ slug: 'f', assetState: 'LIVE' }, { slug: 'gone', assetState: 'LIVE' }] }, [pa('f', '2026-12-01T10:30:00+09:00')], T)
+  eq(d.map((x) => x.slug), ['f', 'gone'], 'LIVE drift')
+  ok(d[0].reasons[0].includes('아직 공개 전') && d[1].reasons[0].includes('없음'), JSON.stringify(d))
+})
+test('반례19d — raw status 가 SCHEDULED 여도 publishAt 이 지나면 공개, DRAFT 는 시각이 지나도 비공개', () => {
+  eq(lc({ queued: [{ slug: 's' }] }, [pa('s', '2026-10-01T10:30:00+09:00', 'SCHEDULED')], T).map((x) => x.slug), ['s'], 'SCHEDULED 지난 글')
+  eq(lc({ queued: [{ slug: 'dr' }] }, [pa('dr', '2026-10-01T10:30:00+09:00', 'DRAFT')], T), [], 'DRAFT')
+})
+test('반례19e — canonical 의 공개 slug 가 assets 에서 빠지면 drift, canonical 밖 제품 글은 mapping 을 강제하지 않는다', () => {
+  const canonical = [{ intentId: 'I-1', existingSlugs: [{ slug: 'c1' }] }]
+  const d = lc({ canonical }, [pa('c1', '2026-10-01T10:30:00+09:00'), pa('free', '2026-10-01T10:30:00+09:00')], T)
+  eq(d.map((x) => x.slug), ['c1'], 'canonical 공개 누락만'); ok(d[0].reasons[0].includes('ABSENT'), d[0].reasons[0])
+})
+test('반례19f — published · queue 각 파일 안의 slug 중복은 drift', () => {
+  const arts = [pa('a', '2026-12-01T10:30:00+09:00'), pa('b', '2026-12-01T10:30:00+09:00')]
+  const d = lc({ published: [{ slug: 'a', assetState: 'SCHEDULED_NOT_YET_PUBLIC' }, { slug: 'a', assetState: 'SCHEDULED_NOT_YET_PUBLIC' }], queued: [{ slug: 'b' }, { slug: 'b' }] }, arts, T)
+  eq(d.map((x) => [x.slug, x.reasons]), [['a', ['assets-published 안에서 slug 중복']], ['b', ['assets-queue 안에서 slug 중복']]], '중복')
+})
+test('반례19g — 한 slug 의 여러 근거는 한 건으로 모은다', () => {
+  const d = lc({ queued: [{ slug: 'm' }, { slug: 'm' }], canonical: [{ intentId: 'I-1', existingSlugs: [{ slug: 'm' }] }] }, [pa('m', '2026-10-01T10:30:00+09:00')], T)
+  eq(d.length, 1, 'slug 1건'); eq(d[0].reasons.length, 2, '사유 2개')
+})
+test('반례19h — 벽시계가 아니라 effectiveAt 으로 본다(지금은 공개됐지만 effectiveAt 에는 공개 전)', () => {
+  eq(lc({ queued: [{ slug: 'later' }] }, [pa('later', '2026-10-16T10:30:00+09:00')], '2026-10-15T13:00:00+09:00'), [], 'effectiveAt 기준')
+})
+test('반례19i — build 는 drift 면 INPUT_PRODUCT_LIFECYCLE_DRIFT 로 멈추고 CLI 산출 write 0 · 입력 · 제품 불변, 같은 입력 반복 결과 동일', () => {
+  const w = baseWorld(); w.queued.push({ slug: 'qpub' }); w.canonical[0].existingSlugs = [{ slug: 'qpub', coverage: 'QUEUED_NOT_PUBLIC', cluster: 'fam' }]
+  const articles = articlesText({ qpub: art('fam', '2026-10-10T10:30:00+09:00') })
+  const r1 = rejectWhy(() => build({ world: w, articles })), r2 = rejectWhy(() => build({ world: w, articles }))
+  ok(r1?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r1.why.includes('qpub'), JSON.stringify(r1)); eq(r2, r1, '반복 동일')
+  const inDrift = join(TMP, 'in-drift'); writeTree(inDrift, inputTextsOf(w))
+  const prodDrift = join(TMP, 'product-drift'); writeTree(prodDrift, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': articles })
+  const before = [treeHash(inDrift), treeHash(prodDrift)]
+  const out = join(TMP, 'out-drift')
+  let code = null, json = null
+  try { execFileSync(process.execPath, [CLI, '--input-root', inDrift, '--product-root', prodDrift, '--effective-at', EFF, '--generated-at', GEN, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] }); code = 0 }
+  catch (e) { code = e.status; try { json = JSON.parse(e.stdout) } catch { /* 요약 없음 */ } }
+  eq([code, json?.code], [1, 'INPUT_PRODUCT_LIFECYCLE_DRIFT'], 'CLI'); ok(!existsSync(out), 'out-dir 가 생겼다')
+  eq([treeHash(inDrift), treeHash(prodDrift)], before, '입력 · 제품 바이트')
+})
+
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
 //    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
 const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')
 const readText = (p) => readFileSync(p, 'utf8')
 const inputsAt = (dir) => Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, readText(join(dir, n))]))
 const productAt = (root) => Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, readText(join(root, rel))]))
-const REAL_EFF = '2026-10-17T00:00:00+09:00', REAL_GEN = '2026-10-16T15:00:00.000Z'
+const parseArticlesForReal = () => lib.parseProductTexts(productAt(realProduct)).articles
+// 🔴 old(10-15) · new(money-work) snapshot 이 제품과 맞던 마지막 시각 — cold-weather-joint-pain 공개(2026-10-16 10:30) 1초 전.
+//    그 뒤 시각에서 두 snapshot 이 거부되는 것은 아래 「실제 입력 4」가 본다
+const REAL_EFF = '2026-10-16T10:29:59+09:00', REAL_GEN = '2026-10-16T15:00:00.000Z'
 /** 2026-10-15-family 의 lifecycle 모순 — 2026-10-17 본문 대조 감사 대상과 같은 11건 */
 const LIFECYCLE_11 = ['I-T0-02|moment-body-changed', 'I-T1-17|dry-eyes-menopause', 'I-T2-10|autumn-low-mood', 'I-T3-04|husband-retired-at-home',
   'I-T4-04|checkup-items-50s', 'I-T4-05|hormone-therapy-who', 'I-T4-06|bone-density-test-when', 'I-T5-06|irp-tax-benefit',
@@ -702,6 +764,17 @@ if (oldInput && newInput && realProduct) {
       ['child-marriage-silence(PUBLISHED/ANSWERS)', 'alone-pastime(PUBLISHED/ANSWERS)', 'retirement-others-what-work(PUBLISHED/ANSWERS)',
         'job-credentials(PUBLISHED/ANSWERS)', 'gray-hair-leave-as-is(PUBLISHED/ANSWERS)', 'clinic-booking-app(PUBLISHED/ANSWERS)'], 'legacy 6건 산출')
     eq(at('I-T6-01'), 'rehire-where-to-start(PUBLISHED/ANSWERS)', 'I-T6-01 산출')
+  })
+  test('실제 입력 4 — 제품 lifecycle 경계: money-work 10:29:59 = cold-weather · 10:30:00 = cold-weather + kimjang · kimjang-live = cold-weather · kimjang-cold-live = 0 · 교차 8건 drift 0', () => {
+    const root = dirname(newInput)
+    const articles = parseArticlesForReal()
+    const at = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(join(root, snap))), articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
+    eq(at('2026-10-17-money-work', '2026-10-17T10:29:59+09:00'), ['cold-weather-joint-pain'], 'old 10:29:59')
+    eq(at('2026-10-17-money-work', '2026-10-17T10:30:00+09:00'), ['cold-weather-joint-pain', 'kimjang-back-pain-prep'], 'old 10:30:00')
+    eq(at('2026-10-17-money-work-kimjang-live', '2026-10-17T10:30:00+09:00'), ['cold-weather-joint-pain'], 'kimjang-live')
+    eq(at('2026-10-17-money-work-kimjang-cold-live', '2026-10-17T10:30:00+09:00'), [], 'kimjang-cold-live')
+    const r = rejectWhy(() => lib.buildAll({ inputTexts: inputsAt(join(root, '2026-10-17-money-work')), productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: '2026-10-17T10:30:00+09:00', generatedAt: REAL_GEN }))
+    ok(r?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r.why.startsWith('2개 slug'), JSON.stringify(r).slice(0, 200))
   })
   test('실제 입력 — 새 snapshot 에서 automation 첫 행 primaryQuery 를 지우면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
     const inputTexts = inputsAt(newInput)

@@ -403,6 +403,60 @@ export function parseProductTexts(texts) {
 
 // ── build ──
 
+export const PRODUCT_LIFECYCLE_DRIFT = 'INPUT_PRODUCT_LIFECYCLE_DRIFT'
+
+/**
+ * 🔴 snapshot ↔ 제품 lifecycle 대조 — 오래된 연구 snapshot 이 이미 공개된 글을 QUEUE · 공개 전으로 계속 분류하거나,
+ *    아직 공개 전인 글을 LIVE 로 기록하면 build 전에 멈춘다(2026-10-17 kimjang · cold-weather 사고의 일반 관문).
+ *
+ *    시각: 명시한 effectiveAt 만 쓴다(벽시계 0). 공개 판정은 제품과 같은 `isPublic(article, ms)` — raw status 로 판정하지 않는다.
+ *    snapshot 상태(slug 별): published 의 LIVE · SCHEDULED_NOT_YET_PUBLIC 가 queue 를 가린다(published > queue).
+ *      `assets-queue` 는 topic-queue 의 append-only provenance 사본이라 공개 뒤에도 행이 남는다 — 교차 중복은 허용한다.
+ *    규칙:
+ *      · 제품에서 공개된 slug 는 snapshot 에서 LIVE 여야 한다(queue-only · scheduled · 없음 → drift)
+ *      · 제품에서 아직 공개 전인(또는 없는) slug 를 LIVE 로 기록하면 drift
+ *      · 대상 slug = snapshot 의 published · queue · canonical existingSlugs. canonical 밖 제품 글은 mapping 을 요구하지 않는다
+ *      · published · queue 각 파일 안의 slug 중복, 계약 밖 published assetState 는 drift
+ *    오류는 slug 별 한 건(사유를 모은다)으로 낸다.
+ *    🔴 `validateBuiltArtifacts` 의 LIVE ↔ coverage 검사는 산출 내부 계약이고, 이 관문은 snapshot 과 제품 사실의 대조다 — 중복이 아니다.
+ * @returns {{ slug: string, reasons: string[] }[]} slug 순 정렬
+ */
+export function productLifecycleDrift({ inputs, articles, effectiveMs }) {
+  const bySlug = new Map(articles.map((a) => [a.slug, a]))
+  const drift = new Map()
+  const add = (slug, why) => (drift.get(slug) ?? drift.set(slug, []).get(slug)).push(why)
+  const resolved = new Map()
+  const seenQueue = new Set()
+  for (const q of inputs.queued) {
+    if (seenQueue.has(q.slug)) add(q.slug, 'assets-queue 안에서 slug 중복')
+    seenQueue.add(q.slug)
+    resolved.set(q.slug, 'QUEUE')
+  }
+  const seenPublished = new Set()
+  for (const p of inputs.published) {
+    if (seenPublished.has(p.slug)) add(p.slug, 'assets-published 안에서 slug 중복')
+    seenPublished.add(p.slug)
+    const state = p.assetState === 'LIVE' ? 'LIVE' : p.assetState === 'SCHEDULED_NOT_YET_PUBLIC' ? 'SCHEDULED' : null
+    if (!state) add(p.slug, `assets-published assetState 계약 밖: ${JSON.stringify(p.assetState)}`)
+    resolved.set(p.slug, state ?? 'UNKNOWN') // published 가 queue 를 가린다
+  }
+  const canonicalSlugs = inputs.canonical.flatMap((c) => (c.existingSlugs ?? []).map((s) => s.slug))
+  for (const slug of new Set([...resolved.keys(), ...canonicalSlugs])) {
+    const article = bySlug.get(slug)
+    const state = resolved.get(slug) ?? 'ABSENT'
+    const live = Boolean(article) && isPublic(article, effectiveMs)
+    if (live && state !== 'LIVE') add(slug, `제품은 effectiveAt 에 공개인데 snapshot 은 ${state}`)
+    if (!live && state === 'LIVE') add(slug, `snapshot 은 LIVE 인데 제품은 ${article ? 'effectiveAt 에 아직 공개 전' : '없음'}`)
+  }
+  return [...drift].sort(([a], [b]) => a.localeCompare(b)).map(([slug, reasons]) => ({ slug, reasons }))
+}
+
+/** 관문 — drift 가 있으면 `INPUT_PRODUCT_LIFECYCLE_DRIFT` 로 멈춘다 */
+export function assertProductLifecycle({ inputs, articles, effectiveMs }) {
+  const drift = productLifecycleDrift({ inputs, articles, effectiveMs })
+  if (drift.length) fail(PRODUCT_LIFECYCLE_DRIFT, `${drift.length}개 slug — ${drift.slice(0, 5).map((d) => `${d.slug}: ${d.reasons.join(' · ')}`).join(' | ')}`)
+}
+
 /**
  * 연구 입력 + 제품 구현 표면 → intents · edges · mappings (연구 builder 와 같은 바이트).
  * @param {{ inputs: ReturnType<typeof parseInputTexts>, implementedSurfaces: string[] }} p
@@ -631,6 +685,8 @@ export function buildAll({ inputTexts, productTexts, admissionTexts = null, effe
   const gen = parseGeneratedAt(generatedAt)
   const inputs = parseInputTexts(inputTexts)
   const product = parseProductTexts(productTexts)
+  // 🔴 snapshot ↔ 제품 lifecycle — layer · 직렬화 · 해시 · 쓰기 전에
+  assertProductLifecycle({ inputs, articles: product.articles, effectiveMs: eff.ms })
   const layers = buildGraphLayers({ inputs, implementedSurfaces: product.implemented })
   // 🔴 산출 계약 — 직렬화 · 해시 · export 전에 한 번
   validateBuiltArtifacts(layers)
