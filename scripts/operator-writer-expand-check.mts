@@ -34,15 +34,19 @@ const truthy = (label: string, v: boolean): void => expect(label, v, true)
 // ─────────────────────────────────────────────────────────
 console.log('\n① 명단 · 지문')
 expect('새 이름 20명', EXPANSION.length, 20)
-expect('목표 active 30', TARGET_ACTIVE, 30)
-expect('code OP11~OP30 연속', EXPANSION.map((s) => s.code), TARGET_CODES.slice(10))
+expect('목표 active 50', TARGET_ACTIVE, 50)
+expect('code OP31~OP50 연속', EXPANSION.map((s) => s.code), TARGET_CODES.slice(30))
 expect('명단 결함 0', judgeSpecs(EXPANSION), [])
-truthy('기존 OP01~OP10 이름과 N2 충돌 0', EXPANSION.every((s) => ![
+truthy('기존 OP01~OP30 이름과 N2 충돌 0', EXPANSION.every((s) => ![
   '갱년기화끈이', '명품상자속편지', '남의편퇴치제', '찬장속빌보', '갱년기폭주기관차',
   '당근마켓만렙', '방풍나물무침', '아들놈밥상파업', '샤넬녀', '짠돌이남편',
+  '빈둥지신입생', '새벽수영반장', '무릎이일기예보', '손주등원담당', '김장총사령관',
+  '사표는서랍속', '텃밭상추부자', '혼밥고수', '트로트직관러', '반찬가게사장',
+  '잠못드는올빼미', '코바늘중독', '시댁가는길치', '말티즈집사', '노후자금계산기',
+  '드라마정주행', '등산화두켤레', '늦둥이초딩맘', '두번째스무살', '약봉투수집가',
 ].map(normalizeName).includes(normalizeName(s.nickname))))
-expect('OP21 note 보정(교대 근무 직장인)', EXPANSION.find((s) => s.code === 'OP21')?.note.includes('교대 근무 직장인'), true)
-expect('OP30 note 보정(가족 돌봄 경험이 많음)', EXPANSION.find((s) => s.code === 'OP30')?.note.includes('가족 돌봄 경험이 많음'), true)
+expect('OP38 note(부모 돌봄 병행)', EXPANSION.find((s) => s.code === 'OP38')?.note.includes('부모 돌봄 병행'), true)
+expect('OP48 note(교대 근무)', EXPANSION.find((s) => s.code === 'OP48')?.note.includes('교대 근무'), true)
 truthy('직업 특정어 제거(간호사·요양보호사)', EXPANSION.every((s) => !s.note.includes('간호사') && !s.note.includes('요양보호사')))
 const mut = (f: (s: WriterSpec[]) => void): string[] => { const c = EXPANSION.map((s) => ({ ...s })); f(c); return judgeSpecs(c) }
 truthy('변이: 금지 표현(시니어) → 막힘', mut((c) => { c[0]!.nickname = '시니어수다' }).length > 0)
@@ -51,7 +55,7 @@ truthy('변이: 사칭(운영자) → 막힘', mut((c) => { c[1]!.nickname = '�
 truthy('변이: 11자 → 막힘', mut((c) => { c[2]!.nickname = '가나다라마바사아자차카' }).length > 0)
 truthy('변이: 공백 → 막힘', mut((c) => { c[3]!.nickname = '혼밥 고수' }).length > 0)
 truthy('변이: 명단 안 중복 → 막힘', mut((c) => { c[4]!.nickname = c[5]!.nickname }).length > 0)
-truthy('변이: code 순서 뒤바뀜 → 막힘', mut((c) => { c[6]!.code = 'OP31' }).length > 0)
+truthy('변이: code 순서 뒤바뀜 → 막힘', mut((c) => { c[6]!.code = 'OP51' }).length > 0)
 truthy('변이: 출처 커뮤니티 이름 → 막힘', mut((c) => { c[7]!.nickname = '82쿡단골' }).length > 0)
 const D = specDigest(EXPANSION)
 truthy('digest 는 SHA-256 64자리', /^[0-9a-f]{64}$/.test(D))
@@ -79,13 +83,13 @@ const facts = (writers: WriterFact[], names: [string, 'operator' | 'persona' | '
 const base = BASELINE_CODES.map((c) => baseW(c))
 const full = [...base, ...EXPANSION.map((s) => baseW(s.code, { nickname: s.nickname, note: s.note, userId: `n-${s.code}` }))]
 
-expect('기준 10 · 충돌 0 → create 20 · expect 10:30', (() => { const p = planExpansion(facts(base)); return [p.action, p.action === 'create' ? p.creates.length : 0, `${p.activeBefore}:${p.activeAfter}`] })(), ['create', 20, '10:30'])
-expect('같은 20명 이미 있음 → noop · expect 30:30', (() => { const p = planExpansion(facts(full)); return [p.action, `${p.activeBefore}:${p.activeAfter}`] })(), ['noop', '30:30'])
-expect('20명 중 1명 note 다름 → abort', planExpansion(facts(full.map((w) => (w.code === 'OP17' ? { ...w, note: '다름' } : w)))).action, 'abort')
-expect('20명 중 1명 nickname 다름 → abort', planExpansion(facts(full.map((w) => (w.code === 'OP30' ? { ...w, nickname: '다른이름' } : w)))).action, 'abort')
-expect('20명 중 1명 Account 붙음 → abort', planExpansion(facts(full.map((w) => (w.code === 'OP11' ? { ...w, accountCount: 1 } : w)))).action, 'abort')
-expect('부분 상태(5명만) → abort', planExpansion(facts(full.slice(0, 15))).action, 'abort')
-const partialOnly = planExpansion(facts([...base, baseW('OP11', { nickname: '전혀다른이름' })]))
+expect('기준 30 · 충돌 0 → create 20 · expect 30:50', (() => { const p = planExpansion(facts(base)); return [p.action, p.action === 'create' ? p.creates.length : 0, `${p.activeBefore}:${p.activeAfter}`] })(), ['create', 20, '30:50'])
+expect('같은 20명 이미 있음 → noop · expect 50:50', (() => { const p = planExpansion(facts(full)); return [p.action, `${p.activeBefore}:${p.activeAfter}`] })(), ['noop', '50:50'])
+expect('20명 중 1명 note 다름 → abort', planExpansion(facts(full.map((w) => (w.code === 'OP37' ? { ...w, note: '다름' } : w)))).action, 'abort')
+expect('20명 중 1명 nickname 다름 → abort', planExpansion(facts(full.map((w) => (w.code === 'OP50' ? { ...w, nickname: '다른이름' } : w)))).action, 'abort')
+expect('20명 중 1명 Account 붙음 → abort', planExpansion(facts(full.map((w) => (w.code === 'OP31' ? { ...w, accountCount: 1 } : w)))).action, 'abort')
+expect('부분 상태(5명만) → abort', planExpansion(facts(full.slice(0, 35))).action, 'abort')
+const partialOnly = planExpansion(facts([...base, baseW('OP31', { nickname: '전혀다른이름' })]))
 truthy('부분 상태(이름 충돌 없음) → 부분 상태 사유로 abort', partialOnly.action === 'abort' && partialOnly.problems.some((p) => p.startsWith('부분 상태')))
 expect('기준 OP03 없음 → abort', planExpansion(facts(base.filter((w) => w.code !== 'OP03'))).action, 'abort')
 expect('기준 OP05 retired → abort', planExpansion(facts(base.map((w) => (w.code === 'OP05' ? { ...w, status: 'retired' } : w)))).action, 'abort')
@@ -112,14 +116,14 @@ concurrent.totals.accounts = 4
 const vc = verifyAfter(before, concurrent)
 expect('무관한 동시 가입(User +24 · Account +4) → 문제 0', vc.problems, [])
 expect('…진단에는 보인다', [vc.diagnostics.usersDelta, vc.diagnostics.accountsDelta], [24, 4])
-truthy('새 code 가 기존 User 를 쓰면 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP12' ? { ...w, userId: 'x0' } : w)), [['어느회원', 'member-or-other']])).problems.some((p) => p.includes('OP12')))
-truthy('새 code 두 개가 같은 User 면 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP13' ? { ...w, userId: 'n-OP14' } : w)))).problems.some((p) => p.includes('OP14') || p.includes('OP13')))
-truthy('새 code 에 Account 1 → 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP20' ? { ...w, accountCount: 1 } : w)))).problems.some((p) => p.includes('OP20')))
-truthy('새 code 에 Persona → 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP21' ? { ...w, hasPersona: true } : w)))).problems.some((p) => p.includes('OP21')))
+truthy('새 code 가 기존 User 를 쓰면 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP32' ? { ...w, userId: 'x0' } : w)), [['어느회원', 'member-or-other']])).problems.some((p) => p.includes('OP32')))
+truthy('새 code 두 개가 같은 User 면 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP33' ? { ...w, userId: 'n-OP34' } : w)))).problems.some((p) => p.includes('OP34') || p.includes('OP33')))
+truthy('새 code 에 Account 1 → 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP40' ? { ...w, accountCount: 1 } : w)))).problems.some((p) => p.includes('OP40')))
+truthy('새 code 에 Persona → 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP41' ? { ...w, hasPersona: true } : w)))).problems.some((p) => p.includes('OP41')))
 truthy('기준 OP04 닉네임 바뀜 → 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP04' ? { ...w, nickname: '바뀜' } : w)))).problems.some((p) => p.includes('OP04')))
 truthy('기준 OP06 User 바뀜 → 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP06' ? { ...w, userId: 'u-other' } : w)))).problems.some((p) => p.includes('OP06')))
 truthy('기준 OP07 retired → 실패', verifyAfter(before, facts(full.map((w) => (w.code === 'OP07' ? { ...w, status: 'retired' } : w)))).problems.length > 0)
-truthy('새 code 하나 빠짐 → 실패', verifyAfter(before, facts(full.filter((w) => w.code !== 'OP25'))).problems.some((p) => p.includes('OP25')))
+truthy('새 code 하나 빠짐 → 실패', verifyAfter(before, facts(full.filter((w) => w.code !== 'OP45'))).problems.some((p) => p.includes('OP45')))
 
 // ─────────────────────────────────────────────────────────
 // ④ 실행 모드 · 운영 가드
@@ -128,7 +132,7 @@ console.log('\n④ 실행 모드 · 운영 가드')
 const PROD = 'postgresql://u:p@aws-0.pooler.supabase.com:6543/postgres'
 const ISO = 'postgresql://soran@127.0.0.1:54329/soran_test'
 const SHA = 'a'.repeat(40)
-const OK_ARGS = ['--expect=10:30', `--digest=${D}`, '--reason=창업자 승인']
+const OK_ARGS = ['--expect=30:50', `--digest=${D}`, '--reason=창업자 승인']
 expect('인자 없음 → dry-run', decideMode([], PROD).kind, 'dry-run')
 expect('--json → dry-run', decideMode(['--json'], PROD).kind, 'dry-run')
 expect('--production 만 → 거부', decideMode(['--production'], PROD).kind, 'refuse')
@@ -137,12 +141,12 @@ expect('운영: target 없음 → 거부', decideMode(['--apply', '--production'
 expect('운영: target 39자리 → 거부', decideMode(['--apply', '--production', `--target=${'a'.repeat(39)}`, ...OK_ARGS], PROD).kind, 'refuse')
 expect('운영: expect 없음 → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, `--digest=${D}`, '--reason=x'], PROD).kind, 'refuse')
 expect('운영: expect=10 (한쪽만) → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect=10', `--digest=${D}`, '--reason=x'], PROD).kind, 'refuse')
-expect('운영: 옛 8자리 digest → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect=10:30', '--digest=313041d8', '--reason=x'], PROD).kind, 'refuse')
-expect('운영: reason 빈칸 → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect=10:30', `--digest=${D}`, '--reason=  '], PROD).kind, 'refuse')
-expect('운영: reason 없음 → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect=10:30', `--digest=${D}`], PROD).kind, 'refuse')
+expect('운영: 옛 8자리 digest → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect=30:50', '--digest=313041d8', '--reason=x'], PROD).kind, 'refuse')
+expect('운영: reason 빈칸 → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect=30:50', `--digest=${D}`, '--reason=  '], PROD).kind, 'refuse')
+expect('운영: reason 없음 → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect=30:50', `--digest=${D}`], PROD).kind, 'refuse')
 expect('옛 --expect-active 인자 → 거부', decideMode(['--apply', '--production', `--target=${SHA}`, '--expect-active=10', `--digest=${D}`, '--reason=x'], PROD).kind, 'refuse')
 expect('운영 인자 완비 → apply-production', decideMode(['--apply', '--production', `--target=${SHA}`, ...OK_ARGS], PROD),
-  { kind: 'apply-production', target: SHA, expected: { before: 10, after: 30 }, digest: D, reason: '창업자 승인' })
+  { kind: 'apply-production', target: SHA, expected: { before: 30, after: 50 }, digest: D, reason: '창업자 승인' })
 expect('운영 모드는 셸 주소를 보지 않는다(셸이 격리여도 인자 단계는 통과 → 가드가 판정)', decideMode(['--apply', '--production', `--target=${SHA}`, ...OK_ARGS], ISO).kind, 'apply-production')
 expect('--production 없이 운영 주소 → 거부', decideMode(['--apply', ...OK_ARGS], PROD).kind, 'refuse')
 expect('--production 없이 --target → 거부', decideMode(['--apply', `--target=${SHA}`, ...OK_ARGS], ISO).kind, 'refuse')
@@ -181,7 +185,7 @@ if (process.argv.includes('--db')) {
   const url = process.env.DATABASE_URL ?? ''
   if (!isIsolatedUrl(url)) { console.error('🔴 격리 DB 가 아니다. 멈춘다.'); process.exit(2) }
   const prisma = new PrismaClient()
-  const E = { before: 10, after: 30 }
+  const E = { before: 30, after: 50 }
   try {
     // 🔴 시험 DB 만 비운다
     await prisma.operatorWriteLog.deleteMany({})
@@ -201,10 +205,10 @@ if (process.argv.includes('--db')) {
     const counts = async (): Promise<number[]> => [await prisma.user.count(), await prisma.operatorWriter.count(), await prisma.account.count(), await prisma.persona.count()]
     const start = await counts()
 
-    let r = await applyExpansion(prisma, { expected: { before: 11, after: 31 }, approvedDigest: D })
+    let r = await applyExpansion(prisma, { expected: { before: 31, after: 51 }, approvedDigest: D })
     expect('(a) expect 틀림 → 실패', r.ok, false)
     expect('(a) write 0', await counts(), start)
-    r = await applyExpansion(prisma, { expected: { before: 10, after: 29 }, approvedDigest: D })
+    r = await applyExpansion(prisma, { expected: { before: 30, after: 49 }, approvedDigest: D })
     expect('(a2) expect 뒤쪽만 틀림 → 실패', r.ok, false)
     expect('(a2) write 0', await counts(), start)
 
@@ -218,17 +222,17 @@ if (process.argv.includes('--db')) {
     expect('(c) write 0 (앞 19명도 안 생김)', await counts(), start)
     await prisma.user.update({ where: { id: member.id }, data: { name: '카카오이름' } })
 
-    // (d) 적용 뒤 검증 실패 → 실제 생성 뒤 rollback (19명만 넣으면 code 집합이 OP01~OP30 이 아님)
+    // (d) 적용 뒤 검증 실패 → 실제 생성 뒤 rollback (19명만 넣으면 code 집합이 OP01~OP50 이 아님)
     const nineteen = EXPANSION.slice(0, 19)
-    r = await applyExpansion(prisma, { expected: { before: 10, after: 29 }, approvedDigest: specDigest(nineteen), specs: nineteen })
+    r = await applyExpansion(prisma, { expected: { before: 30, after: 49 }, approvedDigest: specDigest(nineteen), specs: nineteen })
     expect('(d) 검증 실패 → 실패', r.ok ? 'ok' : r.reason, '적용 뒤 검증 실패 — rollback')
     expect('(d) rollback — write 0', await counts(), start)
 
     r = await applyExpansion(prisma, { expected: E, approvedDigest: D })
-    expect('(e) 적용 성공', r.ok && !r.noop ? [r.created, r.activeBefore, r.activeAfter] : r, [20, 10, 30])
+    expect('(e) 적용 성공', r.ok && !r.noop ? [r.created, r.activeBefore, r.activeAfter] : r, [20, 30, 50])
     expect('(e) User +20 · Writer +20 · Account +0 · Persona +0', await counts(), [start[0]! + 20, start[1]! + 20, start[2]!, start[3]!])
     const after = await readFacts(prisma)
-    expect('(e) code OP01~OP30', after.writers.map((w) => w.code), [...TARGET_CODES])
+    expect('(e) code OP01~OP50', after.writers.map((w) => w.code), [...TARGET_CODES])
     truthy('(e) 새 20명 Account 0 · Persona 0 · 값 일치', EXPANSION.every((s) => {
       const w = after.writers.find((x) => x.code === s.code)
       return w !== undefined && w.accountCount === 0 && !w.hasPersona && w.nickname === s.nickname && w.note === s.note && w.status === 'active'
@@ -244,25 +248,25 @@ if (process.argv.includes('--db')) {
     }
 
     const before2 = await counts()
-    r = await applyExpansion(prisma, { expected: { before: 30, after: 30 }, approvedDigest: D })
-    expect('(f) 재실행 noop (expect 30:30)', r.ok ? r.noop : r, true)
+    r = await applyExpansion(prisma, { expected: { before: 50, after: 50 }, approvedDigest: D })
+    expect('(f) 재실행 noop (expect 50:50)', r.ok ? r.noop : r, true)
     expect('(f) write 0', await counts(), before2)
     r = await applyExpansion(prisma, { expected: E, approvedDigest: D })
-    expect('(f2) 재실행인데 expect 10:30 → 실패', r.ok, false)
+    expect('(f2) 재실행인데 expect 30:50 → 실패', r.ok, false)
     expect('(f) dry-run 계획도 noop', planExpansion(await readFacts(prisma)).action, 'noop')
 
-    const op18 = await prisma.operatorWriter.findUniqueOrThrow({ where: { code: 'OP18' }, select: { id: true } })
-    await prisma.operatorWriter.update({ where: { id: op18.id }, data: { note: '누가 바꿈' } })
-    r = await applyExpansion(prisma, { expected: { before: 30, after: 30 }, approvedDigest: D })
+    const op38 = await prisma.operatorWriter.findUniqueOrThrow({ where: { code: 'OP38' }, select: { id: true } })
+    await prisma.operatorWriter.update({ where: { id: op38.id }, data: { note: '누가 바꿈' } })
+    r = await applyExpansion(prisma, { expected: { before: 50, after: 50 }, approvedDigest: D })
     expect('(g) 값 다름 → 실패', r.ok, false)
     expect('(g) write 0', await counts(), before2)
 
-    const op30 = await prisma.operatorWriter.findUniqueOrThrow({ where: { code: 'OP30' }, select: { id: true, userId: true } })
-    await prisma.operatorWriter.delete({ where: { id: op30.id } })
-    await prisma.user.delete({ where: { id: op30.userId } })
-    r = await applyExpansion(prisma, { expected: { before: 29, after: 29 }, approvedDigest: D })
+    const op50 = await prisma.operatorWriter.findUniqueOrThrow({ where: { code: 'OP50' }, select: { id: true, userId: true } })
+    await prisma.operatorWriter.delete({ where: { id: op50.id } })
+    await prisma.user.delete({ where: { id: op50.userId } })
+    r = await applyExpansion(prisma, { expected: { before: 49, after: 49 }, approvedDigest: D })
     expect('(h) 부분 상태 → 부분 상태 사유로 실패', !r.ok && r.problems.some((p) => p.startsWith('부분 상태')), true)
-    expect('(h) OP30 을 메우지 않음', await prisma.operatorWriter.count({ where: { code: 'OP30' } }), 0)
+    expect('(h) OP50 을 메우지 않음', await prisma.operatorWriter.count({ where: { code: 'OP50' } }), 0)
   } finally {
     await prisma.$disconnect()
   }

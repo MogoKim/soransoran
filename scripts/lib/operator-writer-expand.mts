@@ -1,5 +1,5 @@
 /**
- * 운영용 작성자 풀 확장 OP01~OP10 → OP01~OP30 — 판정 · 읽기 · 적용 (2026-10-13)
+ * 운영용 작성자 풀 확장 OP01~OP30 → OP01~OP50 — 판정 · 읽기 · 적용 (2026-10-17)
  *
  * 🔴 **D100 자동 Persona(P01~) 확장이 아니다.** 이 파일은 `/admin/compose` 에서 창업자가
  *    직접 고르는 이름(`OperatorWriter`)만 다룬다. Persona · 공급 · 발행 · 댓글 · stage ·
@@ -34,42 +34,43 @@ export function opCode(n: number): string {
   return `OP${String(n).padStart(2, '0')}`
 }
 
-/** 이미 운영 중인 10명. 🔴 이 도구는 이 행들을 읽기만 한다 */
-export const BASELINE_CODES: readonly string[] = Array.from({ length: 10 }, (_, i) => opCode(i + 1))
+/** 이미 운영 중인 30명. 🔴 이 도구는 이 행들을 읽기만 한다 */
+export const BASELINE_CODES: readonly string[] = Array.from({ length: 30 }, (_, i) => opCode(i + 1))
 
 /**
  * 새 20명. note 는 운영자가 자기에게 남기는 메모이고 고객 화면에 나가지 않는다.
  *
- * 🔴 생활사·지역·가족·일·말투가 한쪽으로 쏠리지 않게 짰다. 지역은 note 에만 두고
- *    닉네임에는 넣지 않는다 — 이름만으로 사는 곳이 좁혀지지 않게.
+ * 🔴 이름은 실제 고객 커뮤니티에서 관찰한 길이·리듬·작명 유형만 참고한 합성 이름이다.
+ *    실제 작성자 이름은 복사·변형하지 않는다. 생활사·지역·가족·일·말투가 한쪽으로
+ *    쏠리지 않게 짰고, 지역은 note 에만 둬 이름만으로 사는 곳이 좁혀지지 않게 한다.
  */
 export const EXPANSION: readonly WriterSpec[] = [
-  { code: 'OP11', nickname: '빈둥지신입생', note: '50대 초반 · 경기 신도시 · 막내 대학 기숙사 보냄 · 재취업 고민 · 다정한 수다' },
-  { code: 'OP12', nickname: '새벽수영반장', note: '50대 중반 · 부산 · 방과후 강사 · 운동 예찬 · 씩씩하고 빠른 말투' },
-  { code: 'OP13', nickname: '무릎이일기예보', note: '60대 초반 · 대구 · 공무원 퇴직 · 무릎·관절 · 담담한 농담' },
-  { code: 'OP14', nickname: '손주등원담당', note: '60대 초반 · 서울 · 맞벌이 딸네 손주 돌봄 · 황혼육아 고충 · 푸근' },
-  { code: 'OP15', nickname: '김장총사령관', note: '50대 후반 · 광주 · 큰며느리 · 명절·집안 행사 총괄 · 호탕' },
-  { code: 'OP16', nickname: '사표는서랍속', note: '40대 후반 · 서울 · 회사 차장 · 직장 스트레스 · 시크한 단문' },
-  { code: 'OP17', nickname: '텃밭상추부자', note: '50대 후반 · 충남 귀촌 · 남편과 텃밭 · 느긋하고 나눔 좋아함' },
-  { code: 'OP18', nickname: '혼밥고수', note: '50대 중반 · 서울 · 비혼 1인 가구 · 프리랜서 번역 · 담백하고 짧게' },
-  { code: 'OP19', nickname: '트로트직관러', note: '60대 초반 · 인천 · 동네 미용실 운영 · 공연 다니기 · 흥 많은 말투' },
-  { code: 'OP20', nickname: '반찬가게사장', note: '50대 초반 · 창원 · 반찬가게 자영업 · 손님 이야기 · 바쁘고 시원시원' },
-  { code: 'OP21', nickname: '잠못드는올빼미', note: '40대 후반 · 대전 · 교대 근무 직장인 · 불면·열감 · 조용한 존댓말' },
-  { code: 'OP22', nickname: '코바늘중독', note: '50대 중반 · 강원 · 뜨개 공방 · 손으로 하는 취미 · 조곤조곤' },
-  { code: 'OP23', nickname: '시댁가는길치', note: '40대 후반 · 경기 · 둘째 며느리 · 명절·시댁 투덜 · 유쾌한 반말체' },
-  { code: 'OP24', nickname: '말티즈집사', note: '50대 초반 · 울산 · 자녀 독립 뒤 반려견 · 경리 사무직 · 다정' },
-  { code: 'OP25', nickname: '노후자금계산기', note: '60대 초반 · 서울 · 연금·노후 준비 · 숫자 꼼꼼 · 질문 많은 말투' },
-  { code: 'OP26', nickname: '드라마정주행', note: '50대 후반 · 전주 · 전업주부 · 드라마·연예 수다 · 감성적' },
-  { code: 'OP27', nickname: '등산화두켤레', note: '50대 중반 · 수원 · 학원 수학강사 · 주말 산행 · 활발' },
-  { code: 'OP28', nickname: '늦둥이초딩맘', note: '40대 중반 · 경기 · 늦둥이 초등생 · 워킹맘 · 바쁘고 솔직' },
-  { code: 'OP29', nickname: '두번째스무살', note: '50대 초반 · 제주 · 이혼 뒤 혼자 서기 · 새 일 배우는 중 · 씩씩' },
-  { code: 'OP30', nickname: '약봉투수집가', note: '60대 중반 · 부산 · 가족 돌봄 경험이 많음 · 병원 다니는 일상 · 자조적 유머' },
+  { code: 'OP31', nickname: '그냥웃자', note: '50대 초반 · 경기 · 사무직 · 걱정이 많아도 웃고 넘기려 함 · 편한 단문' },
+  { code: 'OP32', nickname: '오늘도천천히', note: '50대 후반 · 부산 · 자녀 독립 뒤 생활 속도를 늦춤 · 차분한 존댓말' },
+  { code: 'OP33', nickname: '또하루시작', note: '40대 후반 · 서울 · 출근하는 워킹맘 · 아침 일상 · 현실적인 말투' },
+  { code: 'OP34', nickname: '별일없어요', note: '60대 초반 · 대구 · 퇴직 뒤 평범한 하루를 즐김 · 담백하고 짧게' },
+  { code: 'OP35', nickname: '커피두잔째', note: '50대 중반 · 인천 · 자영업 · 바쁜 오후와 손님 이야기 · 빠른 수다' },
+  { code: 'OP36', nickname: '저녁산책중', note: '50대 초반 · 대전 · 반려견과 저녁 산책 · 다정한 관찰형 말투' },
+  { code: 'OP37', nickname: '살림은내일', note: '40대 후반 · 경기 · 집안일보다 자기 시간을 찾는 중 · 유쾌한 반말체' },
+  { code: 'OP38', nickname: '주말기다리는중', note: '50대 초반 · 서울 · 회사 생활과 부모 돌봄 병행 · 솔직한 존댓말' },
+  { code: 'OP39', nickname: '보리차한잔', note: '60대 초반 · 전주 · 집밥과 동네 장보기 · 푸근하고 느린 말투' },
+  { code: 'OP40', nickname: '조금늦어도돼', note: '50대 후반 · 광주 · 새 일을 배우는 중 · 응원과 공감이 많은 말투' },
+  { code: 'OP41', nickname: '초록단추', note: '50대 중반 · 수원 · 옷 수선과 손바느질 취미 · 조곤조곤 설명함' },
+  { code: 'OP42', nickname: '몽실라떼', note: '40대 후반 · 울산 · 고양이와 사는 1인 가구 · 가볍고 장난스러운 말투' },
+  { code: 'OP43', nickname: '토닥토닥77', note: '50대 후반 · 창원 · 가족 고민을 잘 들어 줌 · 따뜻한 위로형 말투' },
+  { code: 'OP44', nickname: '라라503', note: '50대 초반 · 충북 · 음악과 드라이브를 좋아함 · 짧고 경쾌한 말투' },
+  { code: 'OP45', nickname: '봄비오는날', note: '60대 초반 · 강원 · 텃밭과 날씨 이야기 · 감성적이되 과장하지 않음' },
+  { code: 'OP46', nickname: '마음은맑음', note: '50대 중반 · 제주 · 이혼 뒤 혼자 서는 중 · 씩씩한 존댓말' },
+  { code: 'OP47', nickname: '그럴수도있지', note: '60대 중반 · 서울 · 성인 자녀와 거리 두기 연습 · 너그러운 말투' },
+  { code: 'OP48', nickname: '일단자고보자', note: '40대 후반 · 부산 · 교대 근무 · 잠과 피로 고민 · 자조적인 농담' },
+  { code: 'OP49', nickname: '다시해보는중', note: '50대 초반 · 경기 · 재취업 준비 · 실패담도 편하게 말하는 말투' },
+  { code: 'OP50', nickname: '우리집오후', note: '50대 후반 · 충남 · 남편과 둘이 사는 일상 · 소소한 이야기를 길게 나눔' },
 ]
 
-/** 적용 뒤 기대하는 active 수 — 기준 10 + 새 20 */
+/** 적용 뒤 기대하는 active 수 — 기준 30 + 새 20 */
 export const TARGET_ACTIVE = BASELINE_CODES.length + EXPANSION.length
 
-/** 적용 뒤 존재해야 하는 code 전체 — OP01~OP30 */
+/** 적용 뒤 존재해야 하는 code 전체 — OP01~OP50 */
 export const TARGET_CODES: readonly string[] = Array.from({ length: TARGET_ACTIVE }, (_, i) => opCode(i + 1))
 
 /**
@@ -181,7 +182,7 @@ export function planExpansion(facts: DbFacts, specs: readonly WriterSpec[] = EXP
   const byCode = new Map(facts.writers.map((w) => [w.code, w]))
   const activeBefore = facts.writers.filter((w) => w.status === 'active').length
 
-  // 기준 10명 — 그대로 있어야 한다
+  // 기준 30명 — 그대로 있어야 한다
   for (const code of BASELINE_CODES) {
     const w = byCode.get(code)
     if (w === undefined) { problems.push(`기준 ${code} 가 없다`); continue }
@@ -300,10 +301,10 @@ export type AfterVerdict = {
 
 /**
  * 🔴 판정의 정본은 **이 도구가 만든 행과 건드리면 안 되는 행**뿐이다.
- *    - 새 OP11~OP30: 각각 있고 · 값이 명단과 같고 · active · Account 0 · Persona 0 ·
+ *    - 새 OP31~OP50: 각각 있고 · 값이 명단과 같고 · active · Account 0 · Persona 0 ·
  *      그 User 가 적용 전에 없던 새 User 이고 · 서로 다른 User 다.
- *    - 기준 OP01~OP10: 같은 User · 같은 닉네임 · 같은 note · active · Account 0 · Persona 0.
- *    - OperatorWriter 표: code 집합이 정확히 OP01~OP30 이고 전원 active.
+ *    - 기준 OP01~OP30: 같은 User · 같은 닉네임 · 같은 note · active · Account 0 · Persona 0.
+ *    - OperatorWriter 표: code 집합이 정확히 OP01~OP50 이고 전원 active.
  *
  * 🔴 전체 User·Account·Persona 수는 **판정에 쓰지 않는다.** 적용과 같은 순간에 누가 가입하면
  *    그 수가 움직이고, 그것을 실패로 보면 커밋된 적용을 거짓으로 "실패" 라 보고하게 된다.
@@ -460,7 +461,7 @@ export function decideMode(argv: readonly string[], shellDbUrl: string): Mode {
 
   const problems: string[] = []
   const m = /^(\d+):(\d+)$/.exec(val('--expect') ?? '')
-  if (m === null) problems.push('--expect=<지금 active>:<예측 active> 가 필요하다 (dry-run 이 보고한 값 — 예: 10:30)')
+  if (m === null) problems.push('--expect=<지금 active>:<예측 active> 가 필요하다 (dry-run 이 보고한 값 — 예: 30:50)')
   const digest = val('--digest')
   if (digest === null || !/^[0-9a-f]{64}$/.test(digest)) problems.push('--digest=<dry-run 의 SHA-256 64자리> 가 필요하다')
   const reason = (val('--reason') ?? '').trim()
