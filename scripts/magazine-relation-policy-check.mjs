@@ -10,7 +10,8 @@
  *   P4 ArticleSpec compile · verify — direct 2·3 통과 · 1·4 거부 · discovery 0·2 거부 · direct 2 에서도 중복·self 거부
  *   P5 제품 resolver 표시 상한(MAX_DIRECT · MAX_DISCOVERY) = 정책
  *   P6 소비 모듈이 공용 정책을 import 한다
- *   (선택) 실제 I-T6-05 — direct 2 + discovery 1 이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker 로 남는다
+ *   (선택) 실제 I-T6-05 — 최종 snapshot `2026-10-17-money-work-kimjang-cold-live` · effectiveAt 2026-10-17T10:30:00+09:00 에서
+ *         direct 2 + discovery 1 이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker 로 남는다
  * authoring prepare · judge 경계는 `magazine-direct-spec-source-authoring-check.mjs` S08 · S08b · S08c 가 본다.
  *
  * 🔴 변이 하네스가 lib 사본 폴더를 주입한다: RELATION_POLICY_LIB (없으면 이 저장소 scripts/lib).
@@ -120,14 +121,16 @@ check('P6 소비 모듈이 공용 정책 모듈을 import 한다', () => {
 
 const newInput = argOf('--new-input'), realProduct = argOf('--real-product')
 if (newInput && realProduct) {
-  check('실제 I-T6-05 — direct 2(E-0188 · E-0329) + discovery 1(E-0100)이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker', () => {
+  check('실제 I-T6-05 — 최종 snapshot · 10:30 에서 direct 2(E-0188 · E-0329) + discovery 1(E-0100)이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker', () => {
+    // 🔴 제품 lifecycle 과 맞는 최종 snapshot 만 받는다 — 낡은 snapshot 은 build 가 INPUT_PRODUCT_LIFECYCLE_DRIFT 로 막는다
+    assert.equal(newInput.replace(/\/+$/, '').split('/').pop(), '2026-10-17-money-work-kimjang-cold-live', '--new-input 은 최종 snapshot 이어야 한다')
     const read = (p) => readFileSync(p, 'utf8')
     const inputTexts = Object.fromEntries(Object.values(build.INPUT_FILES).map((n) => [n, read(join(newInput, n))]))
     const productTexts = Object.fromEntries(Object.entries(build.PRODUCT_FILES).map(([k, r]) => [k, read(join(realProduct, r))]))
     const control = productTexts.control.replace("enabledClusters: ['sleep', 'family'],", "enabledClusters: ['sleep', 'family', 'money-work'],")
     assert.notEqual(control, productTexts.control, 'control 사본 치환 실패')
     const b = build.buildAll({ inputTexts, productTexts: { ...productTexts, control }, admissionTexts: { slugManifest: '{"slugs":{}}', ledger: '' },
-      effectiveAt: '2026-10-17T00:00:00+09:00', generatedAt: '2026-10-16T15:00:00.000Z' })
+      effectiveAt: '2026-10-17T10:30:00+09:00', generatedAt: '2026-10-17T01:30:00.000Z' })
     const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')
     assert.equal(x.status, 'GRAPH_READY')
     assert.deepEqual(x.direct.targets.map((t) => t.edgeId), ['E-0188', 'E-0329']); assert.deepEqual(x.discovery.targets.map((t) => t.edgeId), ['E-0100'])

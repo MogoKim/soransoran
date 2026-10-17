@@ -404,6 +404,8 @@ export function parseProductTexts(texts) {
 // ── build ──
 
 export const PRODUCT_LIFECYCLE_DRIFT = 'INPUT_PRODUCT_LIFECYCLE_DRIFT'
+/** 예약될 수 없는 제품 status — snapshot 이 SCHEDULED 라고 적어도 공개 예정이 아니다 */
+export const UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT', 'BLOCKED'])
 
 /**
  * 🔴 snapshot ↔ 제품 lifecycle 대조 — 오래된 연구 snapshot 이 이미 공개된 글을 QUEUE · 공개 전으로 계속 분류하거나,
@@ -415,6 +417,7 @@ export const PRODUCT_LIFECYCLE_DRIFT = 'INPUT_PRODUCT_LIFECYCLE_DRIFT'
  *    규칙:
  *      · 제품에서 공개된 slug 는 snapshot 에서 LIVE 여야 한다(queue-only · scheduled · 없음 → drift)
  *      · 제품에서 아직 공개 전인(또는 없는) slug 를 LIVE 로 기록하면 drift
+ *      · SCHEDULED 는 제품에 그 글이 있고 DRAFT · BLOCKED 가 아닐 때만 — phantom 예약 · 초안 · 차단 글은 drift
  *      · 대상 slug = snapshot 의 published · queue · canonical existingSlugs. canonical 밖 제품 글은 mapping 을 요구하지 않는다
  *      · published · queue 각 파일 안의 slug 중복, 계약 밖 published assetState 는 drift
  *    오류는 slug 별 한 건(사유를 모은다)으로 낸다.
@@ -447,6 +450,11 @@ export function productLifecycleDrift({ inputs, articles, effectiveMs }) {
     const live = Boolean(article) && isPublic(article, effectiveMs)
     if (live && state !== 'LIVE') add(slug, `제품은 effectiveAt 에 공개인데 snapshot 은 ${state}`)
     if (!live && state === 'LIVE') add(slug, `snapshot 은 LIVE 인데 제품은 ${article ? 'effectiveAt 에 아직 공개 전' : '없음'}`)
+    // 🔴 SCHEDULED 제품 신원 — 예약은 제품에 실제로 예약된 글이어야 한다(이미 공개된 경우는 위 줄이 잡는다)
+    if (state === 'SCHEDULED') {
+      if (!article) add(slug, 'snapshot 은 SCHEDULED 인데 제품에 글이 없다')
+      if (article && UNSCHEDULABLE_STATUSES.includes(article.status)) add(slug, `snapshot 은 SCHEDULED 인데 제품 status 가 ${article.status}`)
+    }
   }
   return [...drift].sort(([a], [b]) => a.localeCompare(b)).map(([slug, reasons]) => ({ slug, reasons }))
 }

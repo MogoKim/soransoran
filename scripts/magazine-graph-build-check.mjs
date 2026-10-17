@@ -656,6 +656,23 @@ test('반례19i — build 는 drift 면 INPUT_PRODUCT_LIFECYCLE_DRIFT 로 멈추
   eq([treeHash(inDrift), treeHash(prodDrift)], before, '입력 · 제품 바이트')
 })
 
+// ── 반례 20 — SCHEDULED 제품 신원 ──
+test('반례20 — 제품에 없는 phantom SCHEDULED · DRAFT · BLOCKED 를 SCHEDULED 로 기록하면 drift', () => {
+  const sched = (slug) => ({ published: [{ slug, assetState: 'SCHEDULED_NOT_YET_PUBLIC' }] })
+  const d1 = lc(sched('ph'), [], T)
+  eq(d1.map((x) => [x.slug, x.reasons]), [['ph', ['snapshot 은 SCHEDULED 인데 제품에 글이 없다']]], 'phantom')
+  for (const st of ['DRAFT', 'BLOCKED']) {
+    const d = lc(sched('s'), [pa('s', '2026-12-01T10:30:00+09:00', st)], T)
+    eq(d.map((x) => [x.slug, x.reasons]), [['s', [`snapshot 은 SCHEDULED 인데 제품 status 가 ${st}`]]], st)
+  }
+})
+test('반례20b — 미래 publishAt 의 정상 예약은 통과, 경계가 지난 SCHEDULED 는 기존 공개 drift', () => {
+  const sched = { published: [{ slug: 's', assetState: 'SCHEDULED_NOT_YET_PUBLIC' }] }
+  eq(lc(sched, [pa('s', '2026-12-01T10:30:00+09:00')], T), [], '정상 예약')
+  const d = lc(sched, [pa('s', T)], T)
+  eq(d.length, 1, 'slug 1건'); ok(d[0].reasons[0].includes('공개인데 snapshot 은 SCHEDULED'), d[0].reasons.join(','))
+})
+
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
 //    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
 const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')

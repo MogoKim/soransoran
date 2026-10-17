@@ -146,6 +146,11 @@ const MUTATIONS = [
     to: '  for (const slug of new Set([...resolved.keys()])) {', expect: '반례19e' },
   { id: 'M86 slug 별 dedupe 제거', file: 'lib', from: '.map(([slug, reasons]) => ({ slug, reasons }))',
     to: '.flatMap(([slug, reasons]) => reasons.map((r) => ({ slug, reasons: [r] })))', expect: '반례19g' },
+  { id: 'M87 SCHEDULED 제품 신원 관문 제거', file: 'lib', from: "    if (state === 'SCHEDULED') {", to: '    if (false) {', expect: '반례20' },
+  { id: 'M88 SCHEDULED 제품 존재 검사 제거(phantom 허용)', file: 'lib', from: "      if (!article) add(slug, 'snapshot 은 SCHEDULED 인데 제품에 글이 없다')",
+    to: "      if (false) add(slug, 'snapshot 은 SCHEDULED 인데 제품에 글이 없다')", expect: '반례20' },
+  { id: 'M89 DRAFT 를 예약으로 허용', file: 'lib', from: "UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT', 'BLOCKED'])", to: "UNSCHEDULABLE_STATUSES = Object.freeze(['BLOCKED'])", expect: '반례20' },
+  { id: 'M90 BLOCKED 를 예약으로 허용', file: 'lib', from: "UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT', 'BLOCKED'])", to: "UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT'])", expect: '반례20' },
 ]
 
 const TMP = mkdtempSync(join(tmpdir(), 'mgraph-build-mutation-'))
