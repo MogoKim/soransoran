@@ -26,6 +26,7 @@ import {
   verifyArticleSpec,
 } from './magazine-article-spec.mjs'
 import { buildManuscriptMessage } from './chatgpt-session.mjs'
+import { RELATION_CONTRACT_LABEL } from './magazine-relation-policy.mjs'
 import { deliveryFingerprintOf, deliveryHoldsFetch } from './magazine-quarantine.mjs'
 import {
   BRIEF_ALLOWED_NOTATIONS,
@@ -289,7 +290,7 @@ export function directSpecBriefText(spec) {
     '',
     '🚫 표 · 코드블록 · 외부 링크 · 이미지 · h1 · h4 · HTML · 번호 목록',
     '',
-    '## 관계 (3+1)',
+    `## 관계 (${RELATION_CONTRACT_LABEL})`,
     '',
   )
   for (const r of n.direct) push(`- ${r.source}:${r.relationType} \`${r.slug}\` — ${r.reason}`)

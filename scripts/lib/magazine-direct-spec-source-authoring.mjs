@@ -35,6 +35,7 @@ import { verifyConsistency } from './magazine-g8-promoter.mjs'
 import { isPublic, resolvePublishAt } from './magazine-gate.mjs'
 import { parseArticlesSource, parseQueueSource } from './magazine-load.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
+import { RELATION_CONTRACT_LABEL, RELATION_POLICY, isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
 
 export const CANDIDATE_SCHEMA = 'magazine-article-spec-source-candidate/1'
 export const CANDIDATE_STATUS = 'DRAFT'
@@ -229,7 +230,7 @@ export function graphRelationEvidence({ state, intentId, atMs }) {
 }
 
 /**
- * 관계 3+1 판정 — prepare 의 후보 관계와 approve 의 사람이 확정한 관계를 **같은 규칙**으로 본다.
+ * 관계 수량(공용 정책 direct 2~3 + discovery 1) 판정 — prepare 의 후보 관계와 approve 의 사람이 확정한 관계를 **같은 규칙**으로 본다.
  * 🔴 M-GRAPH 관계는 현재 제품 graph 의 edge 와 slot · reason 까지 같고, surface · type 이 실제로 보이는 것이어야 한다.
  *    SERIES 는 같은 seriesId 의 등록 글만. HUB 는 지금 코드·데이터로 증명할 수 없다 — 거부한다.
  */
@@ -238,15 +239,16 @@ export function judgeRelations({ relations, state, intentId, slug, atMs }) {
   const problems = []
   const direct = Array.isArray(relations?.direct) ? relations.direct : null
   const discovery = relations?.discovery ?? null
-  if (!direct || direct.length !== 3) problems.push('RELATIONS_DIRECT_NOT_3')
-  if (!discovery || typeof discovery !== 'object') problems.push('RELATIONS_DISCOVERY_NOT_1')
-  const all = [...(direct ?? []), ...(discovery ? [discovery] : [])]
+  if (!direct || !isValidDirectCount(direct.length)) problems.push('RELATIONS_DIRECT_COUNT_INVALID')
+  if (!isSingleDiscovery(discovery)) problems.push('RELATIONS_DISCOVERY_NOT_1')
+  const single = isSingleDiscovery(discovery)
+  const all = [...(direct ?? []), ...(single ? [discovery] : [])]
   const slugsOf = all.map((r) => r?.slug)
   if (slugsOf.includes(slug)) problems.push('RELATION_SELF')
   if (new Set(slugsOf).size !== slugsOf.length) problems.push('RELATION_DUPLICATE')
   const evidence = graphRelationEvidence({ state, intentId, atMs })
   all.forEach((r, i) => {
-    const isDiscovery = discovery && i === all.length - 1
+    const isDiscovery = single && i === all.length - 1
     if (!r || !nonEmpty(r.slug) || !nonEmpty(r.source) || !nonEmpty(r.relationType) || !nonEmpty(r.reason)) {
       problems.push('RELATION_FIELD_MISSING'); return
     }
@@ -314,13 +316,13 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
   const open = (path, why) => { provenance[path] = { status: 'UNRESOLVED', source: null, why } }
   const activationOf = (list) => list.map((e) => ({ edgeId: e.edgeId, active: e.active, activation: e.activation, basis: e.activationBasis }))
 
-  // 🔴 관계는 정확히 3+1 이 증명될 때만 채운다. 남으면 사람이 고르고, 모자라면 막는다 — 숫자를 맞추려고 만들지 않는다
+  // 🔴 관계는 공용 정책(direct 2~3 + discovery 1)이 증명될 때만 채운다. 남으면 사람이 고르고(자동 절단 금지), 모자라면 막는다 — 숫자를 맞추려고 만들지 않는다
   let direct = null
-  if (eligibleDirect.length === 3) {
+  if (isValidDirectCount(eligibleDirect.length)) {
     direct = eligibleDirect.map(asRelation)
     derived('relations.direct', `product-graph:${eligibleDirect.map((e) => e.edgeId).join(',')}`, { activation: activationOf(eligibleDirect) })
-  } else if (eligibleDirect.length > 3) open('relations.direct', `증명된 direct 후보 ${eligibleDirect.length}개 — 사람이 3개를 고른다`)
-  else { blockers.push('RELATIONS_INSUFFICIENT'); open('relations.direct', `증명된 direct 관계 ${eligibleDirect.length}개 — 3개가 필요하다`) }
+  } else if (eligibleDirect.length > RELATION_POLICY.directMax) open('relations.direct', `증명된 direct 후보 ${eligibleDirect.length}개 — 사람이 ${RELATION_POLICY.directMin}~${RELATION_POLICY.directMax}개를 고른다`)
+  else { blockers.push('RELATIONS_INSUFFICIENT'); open('relations.direct', `증명된 direct 관계 ${eligibleDirect.length}개 — 최소 ${RELATION_POLICY.directMin}개가 필요하다`) }
   let discovery = null
   if (eligibleDiscovery.length === 1) {
     discovery = asRelation(eligibleDiscovery[0])
@@ -513,7 +515,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   const drifted = Object.entries(pinned).filter(([, ok]) => !ok).map(([k]) => k)
   if (drifted.length) return fail('CANDIDATE_IDENTITY_EDITED', `기계가 고정한 신원 필드가 바뀌었다: ${drifted.join(',')}`, drifted)
   const rel = judgeRelations({ relations: e.relations, state, intentId: e.node.intentId, slug: e.node.slug, atMs })
-  if (!rel.ok) return fail('RELATIONS_INVALID', `관계 3+1 이 증명되지 않는다: ${rel.problems.join(',')}`, rel.problems)
+  if (!rel.ok) return fail('RELATIONS_INVALID', `관계 ${RELATION_CONTRACT_LABEL} 이 증명되지 않는다: ${rel.problems.join(',')}`, rel.problems)
 
   const approvedEntry = {
     status: 'APPROVED', approvedBy: approver.trim(), approvedAt: at,

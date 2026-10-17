@@ -2,10 +2,10 @@
 /**
  * M-GRAPH 결정적 build · readiness 반례 검사.
  *
- *   node scripts/magazine-graph-build-check.mjs [--real-input <연구 입력 폴더> --real-product <제품 루트>]
+ *   node scripts/magazine-graph-build-check.mjs [--old-input <2026-10-15-family> --new-input <2026-10-17-money-work> --real-product <제품 루트>]
  *
  * 합성 fixture 만 쓴다(임시 폴더). 운영 연구 폴더 · 제품 graph 파일을 쓰지 않는다.
- * `--real-input` 을 주면 실제 입력으로 현재 제품 bundle 과의 의미·해시 동일성을 **추가로** 본다(읽기 전용).
+ * 실제 입력을 주면 lifecycle 계약 기준 재현성 증거를 **추가로** 본다(읽기 전용) — old 거부 11건 · new 2회 동일 · semantic delta whitelist · readiness.
  *
  * 🔴 변이 하네스가 lib · CLI 사본을 주입한다: MGRAPH_BUILD_LIB · MGRAPH_BUILD_CLI (없으면 저장소 파일).
  *    적재 실패는 `LOAD_ERROR` 로 따로 알린다 — 검출로 세지 않게 하기 위해서다.
@@ -90,11 +90,13 @@ const controlText = ({ enabled = true, clusters = ['fam', 'rel'], bridge = true,
   previousGraphVersion: null,
 } as const\n`
 const art = (cluster, publishAt) => ({ title: 't', cluster, publishedAt: publishAt.slice(0, 10), status: 'SCHEDULED', publishAt })
-const ARTICLES = `export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = ${JSON.stringify({
+const BASE_ARTICLES = {
   p1: art('fam', '2026-10-01T10:30:00+09:00'), p2: art('fam', '2026-10-02T10:30:00+09:00'), p3: art('fam', '2026-10-03T10:30:00+09:00'),
   d: art('rel', '2026-10-04T10:30:00+09:00'), h: art('fam', '2026-10-05T10:30:00+09:00'),
   u: art('fam', '2026-12-31T10:30:00+09:00'), w: art('fam', '2026-10-06T10:30:00+09:00'),
-}, null, 2)}\n`
+}
+const articlesText = (extra = {}) => `export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = ${JSON.stringify({ ...BASE_ARTICLES, ...extra }, null, 2)}\n`
+const ARTICLES = articlesText()
 const ADMISSION = { slugManifest: JSON.stringify({ slugs: { 'I-X': 'x-slug' } }), ledger: '' }
 
 const jsonl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n'
@@ -104,8 +106,8 @@ const inputTextsOf = (w) => ({
 })
 const EFF = '2026-10-15T13:00:00+09:00'
 const GEN = '2026-10-15T04:43:55.080Z'
-const build = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, generatedAt = GEN } = {}) =>
-  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles: ARTICLES },
+const build = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, generatedAt = GEN, articles = ARTICLES } = {}) =>
+  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles },
     admissionTexts: admission, effectiveAt, generatedAt })
 const row = (b, id) => b.readiness.rows.find((r) => r.intentId === id)
 
@@ -457,6 +459,8 @@ test('반례14b — nullable · builder 기본값은 그대로 받는다(runtime
 
 // ── 반례 15 — 산출 계약(intent/2 · edge/3 · mapping/2) 한 곳 ──
 const rejectWhy = (fn) => { try { fn(); return null } catch (e) { return { code: e.code, why: String(e.why) } } }
+/** mapping 을 손댄 산출 반례는 intent 요약도 그 mappings 로 다시 맞춘다 — 다른 계약을 시험할 때 요약 일관성 검사가 끼어들지 않게 */
+const resync = (l) => { const f = lib.existingAssetSummaries(l.mappings); for (const x of l.intents) x.existingAssetRelation = f(x.intentId); return l }
 test('반례15 — runtimeState ACTIVE · FALLBACK 은 통과, 미지 값은 거부', () => {
   for (const st of ['ACTIVE', 'FALLBACK']) {
     const w = baseWorld(); w.automation[0].runtimeState = st
@@ -537,46 +541,276 @@ test('반례16b — 최종 산출의 빈·형식 밖 edgeId · 중복 edgeId · 
     ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(why), `${name}: ${JSON.stringify(r)}`)
   }
   const l = clone(); l.mappings.push({ ...l.mappings[0], slug: `${l.mappings[0].slug}-2` })
-  eq(rejectWhy(() => lib.validateBuiltArtifacts(l)), null, '같은 intent 의 다른 slug 는 정상')
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(resync(l))), null, '같은 intent 의 다른 slug 는 정상')
 })
 
-// ── 실제 입력 동일성 (선택) ──
-const realInput = argOf('--real-input'), realProduct = argOf('--real-product')
-if (realInput && realProduct) {
-  test('실제 입력 — 2026-10-15 family 입력이 현재 제품 bundle 과 같은 판 · 같은 EXPORT_HASH · 같은 GRAPH 본문', () => {
-    const read = (p) => readFileSync(p, 'utf8')
-    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
-    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
-    const b = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN })
-    eq([b.graphVersion, b.manifest.contentHash.combined, b.manifest.exportHash], ['g-20261015-d5f6fe', 'd5f6fe78fc422b1b', '87c775af6cd5ea0f'], '판')
-    const strip = (t) => t.split('\n').slice(3).join('\n')
-    eq(strip(b.files[`bundle/${b.graphVersion}.ts`]), strip(read(join(realProduct, `src/content/magazine/graph/${b.graphVersion}.ts`))), 'GRAPH 본문')
+// ── 반례 17 — lifecycle 정합: 공개(LIVE) 글에 공개 전 coverage 가 남으면 build 전 거부 ──
+test('반례17 — LIVE + SCHEDULED_NOT_YET_PUBLIC · QUEUED_NOT_PUBLIC 는 INPUT_SCHEMA_INVALID, LIVE + ANSWERS · 비공개 + 공개 전 coverage 는 통과', () => {
+  const layers = build().layers
+  const live = layers.mappings.findIndex((m) => m.assetState === 'LIVE')
+  const withMapping = (patch, i = live) => { const l = JSON.parse(JSON.stringify(layers)); Object.assign(l.mappings[i], patch); return resync(l) }
+  for (const cov of ['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC']) {
+    const r = rejectWhy(() => lib.validateBuiltArtifacts(withMapping({ coverage: cov })))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(`lifecycle 모순 — LIVE 인데 coverage ${cov}`), `${cov}: ${JSON.stringify(r)}`)
+  }
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(withMapping({ coverage: 'ANSWERS' }))), null, 'LIVE + ANSWERS')
+  for (const cov of ['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC']) {
+    eq(rejectWhy(() => lib.validateBuiltArtifacts(withMapping({ assetState: 'QUEUED', coverage: cov }))), null, `QUEUED + ${cov} 는 모순이 아니다`)
+  }
+})
+test('반례17b — 입력에서 공개 글의 coverage 가 공개 전이면 build 가 멈추고 CLI 산출 write 0', () => {
+  const w = baseWorld(); w.canonical[1].existingSlugs[0].coverage = 'QUEUED_NOT_PUBLIC'
+  const r = rejectWhy(() => build({ world: w }))
+  ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('lifecycle 모순'), JSON.stringify(r))
+  const inStale = join(TMP, 'in-stale'); writeTree(inStale, inputTextsOf(w))
+  const out = join(TMP, 'out-stale'); const c = runCli(inStale, out)
+  eq([c.code, c.json?.code], [1, 'INPUT_SCHEMA_INVALID'], 'CLI')
+  ok(!existsSync(out), 'out-dir 가 만들어졌다')
+})
+
+// ── 반례 18 — existing asset 권위는 built mappings 하나 (automation.existingAssetRelation 은 legacy) ──
+test('반례18 — canonical mapping 있음 + automation 「없음」 → 산출은 mapping, mapping 없음 + automation 주장 → 산출 「없음」', () => {
+  const w = baseWorld()
+  w.automation.find((a) => a.intentId === 'I-P1').existingAssetRelation = '없음'
+  w.automation.find((a) => a.intentId === 'I-Z').existingAssetRelation = 'ghost(PUBLISHED/ANSWERS)'
+  const b = build({ world: w })
+  const at = (id) => b.layers.intents.find((x) => x.intentId === id).existingAssetRelation
+  eq([at('I-P1'), at('I-Z')], ['p1(PUBLISHED/ANSWERS)', '없음'], '산출 요약')
+})
+test('반례18b — LIVE · SCHEDULED · QUEUED · BLOCKED 상태 요약과 다중 mapping 순서(canonical 순서)가 정확하고 결정적이다', () => {
+  const w = baseWorld()
+  w.automation.push(intent('I-S', 'fam', { existingAssetRelation: '아무 값' }))
+  w.canonical.push({ intentId: 'I-S', answerScope: 'a', exclusions: [], existingSlugs: [
+    { slug: 'zz-queue', coverage: 'QUEUED_NOT_PUBLIC', cluster: 'fam' }, { slug: 'aa-live', coverage: 'ANSWERS', cluster: 'fam' },
+    { slug: 'mm-sched', coverage: 'SCHEDULED_NOT_YET_PUBLIC', cluster: 'fam' }, { slug: 'bb-block', coverage: 'ADJACENT', cluster: 'fam' }] })
+  w.published.push({ slug: 'aa-live', assetState: 'LIVE' }, { slug: 'mm-sched', assetState: 'SCHEDULED_NOT_YET_PUBLIC' })
+  w.queued.push({ slug: 'zz-queue' })
+  const want = 'zz-queue(QUEUED/QUEUED_NOT_PUBLIC), aa-live(PUBLISHED/ANSWERS), mm-sched(SCHEDULED_NOT_YET_PUBLIC/SCHEDULED_NOT_YET_PUBLIC), bb-block(BLOCKED/ADJACENT)'
+  // 🔴 snapshot 의 LIVE · SCHEDULED 는 제품 글과 맞아야 한다(제품 lifecycle 관문) — 제품에 없는 LIVE 는 실제로 있을 수 없는 fixture 다
+  const articles = articlesText({ 'aa-live': art('fam', '2026-10-01T10:30:00+09:00'), 'mm-sched': art('fam', '2026-12-01T10:30:00+09:00') })
+  const one = build({ world: w, articles }), two = build({ world: w, articles })
+  eq(one.layers.intents.find((x) => x.intentId === 'I-S').existingAssetRelation, want, '요약')
+  eq(two.files, one.files, '같은 입력 두 번 — 산출 바이트')
+})
+test('반례18c — 모든 intent 의 산출 요약 = mappings, 요약을 mappings 와 다르게 고친 산출은 INPUT_SCHEMA_INVALID', () => {
+  const l = build().layers
+  const f = lib.existingAssetSummaries(l.mappings)
+  eq(l.intents.filter((x) => x.existingAssetRelation !== f(x.intentId)).map((x) => x.intentId), [], '요약 ≠ mappings')
+  const bad = JSON.parse(JSON.stringify(l)); bad.intents.find((x) => x.intentId === 'I-P1').existingAssetRelation = '없음'
+  const r = rejectWhy(() => lib.validateBuiltArtifacts(bad))
+  ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('I-P1 existingAssetRelation 이 mappings 와 다르다'), JSON.stringify(r))
+})
+
+// ── 반례 19 — snapshot ↔ 제품 lifecycle 대조 (published > queue · effectiveAt 만 · slug 별 1건) ──
+const lc = (inputs, arts, eff) => lib.productLifecycleDrift({ inputs: { canonical: [], queued: [], published: [], ...inputs }, articles: arts, effectiveMs: Date.parse(eff) })
+const pa = (slug, publishAt, status = 'SCHEDULED') => ({ slug, title: slug, cluster: 'fam', publishedAt: publishAt.slice(0, 10), status, publishAt })
+const T = '2026-10-17T10:30:00+09:00', T_1 = '2026-10-17T10:29:59+09:00'
+test('반례19 — 공개 1초 전 queue 는 통과, 공개 경계(publishAt 그 시각)부터 queue-only 는 drift', () => {
+  const arts = [pa('q1', T)]
+  eq(lc({ queued: [{ slug: 'q1' }] }, arts, T_1), [], '1초 전')
+  const d = lc({ queued: [{ slug: 'q1' }] }, arts, T)
+  eq(d.map((x) => x.slug), ['q1'], '경계'); ok(d[0].reasons.some((r) => r.includes('QUEUE')), d[0].reasons.join(','))
+})
+test('반례19b — published LIVE 와 queue 의 교차 중복은 drift 0 (published > queue · queue 는 provenance 사본)', () => {
+  eq(lc({ published: [{ slug: 'x', assetState: 'LIVE' }], queued: [{ slug: 'x' }] }, [pa('x', '2026-10-01T10:30:00+09:00')], T), [], '교차')
+})
+test('반례19c — 미래 글 · 제품에 없는 글을 LIVE 로 기록하면 drift', () => {
+  const d = lc({ published: [{ slug: 'f', assetState: 'LIVE' }, { slug: 'gone', assetState: 'LIVE' }] }, [pa('f', '2026-12-01T10:30:00+09:00')], T)
+  eq(d.map((x) => x.slug), ['f', 'gone'], 'LIVE drift')
+  ok(d[0].reasons[0].includes('아직 공개 전') && d[1].reasons[0].includes('없음'), JSON.stringify(d))
+})
+test('반례19d — raw status 가 SCHEDULED 여도 publishAt 이 지나면 공개, DRAFT 는 시각이 지나도 비공개', () => {
+  eq(lc({ queued: [{ slug: 's' }] }, [pa('s', '2026-10-01T10:30:00+09:00', 'SCHEDULED')], T).map((x) => x.slug), ['s'], 'SCHEDULED 지난 글')
+  eq(lc({ queued: [{ slug: 'dr' }] }, [pa('dr', '2026-10-01T10:30:00+09:00', 'DRAFT')], T), [], 'DRAFT')
+})
+test('반례19e — canonical 의 공개 slug 가 assets 에서 빠지면 drift, canonical 밖 제품 글은 mapping 을 강제하지 않는다', () => {
+  const canonical = [{ intentId: 'I-1', existingSlugs: [{ slug: 'c1' }] }]
+  const d = lc({ canonical }, [pa('c1', '2026-10-01T10:30:00+09:00'), pa('free', '2026-10-01T10:30:00+09:00')], T)
+  eq(d.map((x) => x.slug), ['c1'], 'canonical 공개 누락만'); ok(d[0].reasons[0].includes('ABSENT'), d[0].reasons[0])
+})
+test('반례19f — published · queue 각 파일 안의 slug 중복은 drift', () => {
+  const arts = [pa('a', '2026-12-01T10:30:00+09:00'), pa('b', '2026-12-01T10:30:00+09:00')]
+  const d = lc({ published: [{ slug: 'a', assetState: 'SCHEDULED_NOT_YET_PUBLIC' }, { slug: 'a', assetState: 'SCHEDULED_NOT_YET_PUBLIC' }], queued: [{ slug: 'b' }, { slug: 'b' }] }, arts, T)
+  eq(d.map((x) => [x.slug, x.reasons]), [['a', ['assets-published 안에서 slug 중복']], ['b', ['assets-queue 안에서 slug 중복']]], '중복')
+})
+test('반례19g — 한 slug 의 여러 근거는 한 건으로 모은다', () => {
+  const d = lc({ queued: [{ slug: 'm' }, { slug: 'm' }], canonical: [{ intentId: 'I-1', existingSlugs: [{ slug: 'm' }] }] }, [pa('m', '2026-10-01T10:30:00+09:00')], T)
+  eq(d.length, 1, 'slug 1건'); eq(d[0].reasons.length, 2, '사유 2개')
+})
+test('반례19h — 벽시계가 아니라 effectiveAt 으로 본다(지금은 공개됐지만 effectiveAt 에는 공개 전)', () => {
+  eq(lc({ queued: [{ slug: 'later' }] }, [pa('later', '2026-10-16T10:30:00+09:00')], '2026-10-15T13:00:00+09:00'), [], 'effectiveAt 기준')
+})
+test('반례19i — build 는 drift 면 INPUT_PRODUCT_LIFECYCLE_DRIFT 로 멈추고 CLI 산출 write 0 · 입력 · 제품 불변, 같은 입력 반복 결과 동일', () => {
+  const w = baseWorld(); w.queued.push({ slug: 'qpub' }); w.canonical[0].existingSlugs = [{ slug: 'qpub', coverage: 'QUEUED_NOT_PUBLIC', cluster: 'fam' }]
+  const articles = articlesText({ qpub: art('fam', '2026-10-10T10:30:00+09:00') })
+  const r1 = rejectWhy(() => build({ world: w, articles })), r2 = rejectWhy(() => build({ world: w, articles }))
+  ok(r1?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r1.why.includes('qpub'), JSON.stringify(r1)); eq(r2, r1, '반복 동일')
+  const inDrift = join(TMP, 'in-drift'); writeTree(inDrift, inputTextsOf(w))
+  const prodDrift = join(TMP, 'product-drift'); writeTree(prodDrift, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': articles })
+  const before = [treeHash(inDrift), treeHash(prodDrift)]
+  const out = join(TMP, 'out-drift')
+  let code = null, json = null
+  try { execFileSync(process.execPath, [CLI, '--input-root', inDrift, '--product-root', prodDrift, '--effective-at', EFF, '--generated-at', GEN, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] }); code = 0 }
+  catch (e) { code = e.status; try { json = JSON.parse(e.stdout) } catch { /* 요약 없음 */ } }
+  eq([code, json?.code], [1, 'INPUT_PRODUCT_LIFECYCLE_DRIFT'], 'CLI'); ok(!existsSync(out), 'out-dir 가 생겼다')
+  eq([treeHash(inDrift), treeHash(prodDrift)], before, '입력 · 제품 바이트')
+})
+
+// ── 반례 20 — SCHEDULED 제품 신원 ──
+test('반례20 — 제품에 없는 phantom SCHEDULED · DRAFT · BLOCKED 를 SCHEDULED 로 기록하면 drift', () => {
+  const sched = (slug) => ({ published: [{ slug, assetState: 'SCHEDULED_NOT_YET_PUBLIC' }] })
+  const d1 = lc(sched('ph'), [], T)
+  eq(d1.map((x) => [x.slug, x.reasons]), [['ph', ['snapshot 은 SCHEDULED 인데 제품에 글이 없다']]], 'phantom')
+  for (const st of ['DRAFT', 'BLOCKED']) {
+    const d = lc(sched('s'), [pa('s', '2026-12-01T10:30:00+09:00', st)], T)
+    eq(d.map((x) => [x.slug, x.reasons]), [['s', [`snapshot 은 SCHEDULED 인데 제품 status 가 ${st}`]]], st)
+  }
+})
+test('반례20b — 미래 publishAt 의 정상 예약은 통과, 경계가 지난 SCHEDULED 는 기존 공개 drift', () => {
+  const sched = { published: [{ slug: 's', assetState: 'SCHEDULED_NOT_YET_PUBLIC' }] }
+  eq(lc(sched, [pa('s', '2026-12-01T10:30:00+09:00')], T), [], '정상 예약')
+  const d = lc(sched, [pa('s', T)], T)
+  eq(d.length, 1, 'slug 1건'); ok(d[0].reasons[0].includes('공개인데 snapshot 은 SCHEDULED'), d[0].reasons.join(','))
+})
+
+// ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
+//    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
+const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')
+const readText = (p) => readFileSync(p, 'utf8')
+const inputsAt = (dir) => Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, readText(join(dir, n))]))
+const productAt = (root) => Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, readText(join(root, rel))]))
+const parseArticlesForReal = () => lib.parseProductTexts(productAt(realProduct)).articles
+// 🔴 old(10-15) · new(money-work) snapshot 이 제품과 맞던 마지막 시각 — cold-weather-joint-pain 공개(2026-10-16 10:30) 1초 전.
+//    그 뒤 시각에서 두 snapshot 이 거부되는 것은 아래 「실제 입력 4」가 본다
+const REAL_EFF = '2026-10-16T10:29:59+09:00', REAL_GEN = '2026-10-16T15:00:00.000Z'
+/** 2026-10-15-family 의 lifecycle 모순 — 2026-10-17 본문 대조 감사 대상과 같은 11건 */
+const LIFECYCLE_11 = ['I-T0-02|moment-body-changed', 'I-T1-17|dry-eyes-menopause', 'I-T2-10|autumn-low-mood', 'I-T3-04|husband-retired-at-home',
+  'I-T4-04|checkup-items-50s', 'I-T4-05|hormone-therapy-who', 'I-T4-06|bone-density-test-when', 'I-T5-06|irp-tax-benefit',
+  'I-T6-01|starting-work-at-this-age', 'I-T6-04|certificate-in-50s', 'I-T8-05|menopause-supplements-talk']
+/** 감사로 승인된 mapping 변화 — 이 밖의 mapping 변화는 0 이어야 한다 */
+const APPROVED_MAPPING = {
+  'I-T0-02|moment-body-changed': 'ANSWERS_PARTIAL', 'I-T1-17|dry-eyes-menopause': 'ANSWERS_PARTIAL', 'I-T2-10|autumn-low-mood': 'ANSWERS_PARTIAL',
+  'I-T3-04|husband-retired-at-home': 'ANSWERS', 'I-T4-04|checkup-items-50s': 'ANSWERS', 'I-T4-05|hormone-therapy-who': 'ANSWERS',
+  'I-T4-06|bone-density-test-when': 'ANSWERS', 'I-T5-06|irp-tax-benefit': 'ANSWERS_PARTIAL', 'I-T6-01|starting-work-at-this-age': 'REMOVED',
+  'I-T6-04|certificate-in-50s': 'ANSWERS', 'I-T8-05|menopause-supplements-talk': 'ANSWERS',
+}
+const runRealCli = (input, out) => {
+  try {
+    execFileSync(process.execPath, [CLI, '--input-root', input, '--product-root', realProduct, '--effective-at', REAL_EFF, '--generated-at', REAL_GEN, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] })
+    return 0
+  } catch (e) { return e.status }
+}
+if (oldInput && newInput && realProduct) {
+  const product = lib.parseProductTexts(productAt(realProduct))
+  const layersAt = (dir) => lib.buildGraphLayers({ inputs: lib.parseInputTexts(inputsAt(dir)), implementedSurfaces: product.implemented })
+  test('실제 입력 1 — 2026-10-15-family 는 정확히 lifecycle 모순 11건으로 INPUT_SCHEMA_INVALID · bundle 0 · write 0 · 다른 모순 0', () => {
+    const r = rejectWhy(() => lib.buildAll({ inputTexts: inputsAt(oldInput), productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.startsWith('산출 계약 11건 — '), JSON.stringify(r).slice(0, 300))
+    const l = layersAt(oldInput)
+    eq(l.mappings.filter((m) => m.assetState === 'LIVE' && lib.PRE_PUBLIC_COVERAGES.includes(m.coverage)).map((m) => `${m.intentId}|${m.slug}`).sort(), [...LIFECYCLE_11].sort(), '모순 11건 신원')
+    const out = join(TMP, 'real-old-out')
+    eq(runRealCli(oldInput, out), 1, 'CLI 종료 코드'); ok(!existsSync(out), 'old 입력으로 out-dir 가 만들어졌다')
   })
-  test('실제 입력 — automation 첫 행 primaryQuery 를 지우면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
-    const read = (p) => readFileSync(p, 'utf8')
-    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
+  test('실제 입력 2 — 2026-10-17-money-work 는 같은 effectiveAt · generatedAt 2회 build 가 목록 · 바이트 · manifest · hash 까지 동일', () => {
+    const a = join(TMP, 'real-new-a'), b = join(TMP, 'real-new-b')
+    eq([runRealCli(newInput, a), runRealCli(newInput, b)], [0, 0], 'CLI 종료 코드')
+    eq(treeHash(a), treeHash(b), '트리 해시'); eq(fileList(a), fileList(b), '파일 목록')
+  })
+  test('실제 입력 3 — semantic delta whitelist: intent 는 감사 11건의 existingAssetRelation 만 · mapping 은 승인 11건만 · authored edge 추가는 E-0329 만 · generated tuple 집합 동일', () => {
+    const o = layersAt(oldInput), n = layersAt(newInput)
+    const J = (x) => JSON.stringify(x)
+    const audited = new Set(LIFECYCLE_11.map((k) => k.split('|')[0]))
+    const oi = new Map(o.intents.map((x) => [x.intentId, x]))
+    eq(n.intents.map((x) => x.intentId), o.intents.map((x) => x.intentId), 'intent 목록 · 순서')
+    const intentDiff = n.intents.flatMap((b) => { const a = oi.get(b.intentId); return Object.keys({ ...a, ...b }).filter((k) => J(a[k]) !== J(b[k])).map((k) => `${b.intentId}.${k}`) })
+    eq(intentDiff.filter((d) => !(d.endsWith('.existingAssetRelation') && audited.has(d.split('.')[0]))), [], '승인 밖 intent 변화')
+    const mk = (m) => `${m.intentId}|${m.slug}`
+    const om = new Map(o.mappings.map((m) => [mk(m), m])), nm = new Map(n.mappings.map((m) => [mk(m), m]))
+    const mapDiff = {}
+    for (const [k, a] of om) { const b = nm.get(k); if (!b) mapDiff[k] = 'REMOVED'; else if (J(a) !== J(b)) { const keys = Object.keys({ ...a, ...b }).filter((x) => J(a[x]) !== J(b[x])); ok(keys.every((x) => ['coverage', 'publishedAt'].includes(x)), `${k} 승인 밖 필드 ${keys}`); mapDiff[k] = b.coverage } }
+    for (const k of nm.keys()) if (!om.has(k)) mapDiff[k] = 'ADDED'
+    eq(mapDiff, APPROVED_MAPPING, 'mapping 변화')
+    const auth = (L) => new Map(L.edges.filter((e) => !e.generatedBy).map((e) => [e.edgeId, e]))
+    const oa = auth(o), na = auth(n)
+    eq([...na.keys()].filter((id) => !oa.has(id)), ['E-0329'], '신규 authored edge')
+    eq([...oa.keys()].filter((id) => !na.has(id)), [], '사라진 authored edge')
+    const e329 = na.get('E-0329')
+    eq([e329.fromIntentId, e329.toIntentId, e329.relationType, e329.placement, e329.priority, e329.reciprocalPolicy, e329.readerReason, e329.anchorLabel],
+      ['I-T6-05', 'I-T6-01', 'NEXT_QUESTION', 'FOOTER_NEXT', 2, 'ONE_WAY', '배울 것을 고른 다음에는 지금 조건으로 일을 다시 시작하려면 어디부터 알아볼지 묻게 된다', '재취업은 어디부터 알아볼까'], 'E-0329 고정값')
+    const tup = (e) => J([e.fromIntentId, e.toIntentId, e.relationType, e.placement, e.readerReason])
+    const oById = new Map(o.edges.map((e) => [e.edgeId, e])), nById = new Map(n.edges.map((e) => [e.edgeId, e]))
+    const liveChanged = new Set(['I-T6-01']) // starting-work-at-this-age 매핑 제거로 LIVE slug 목록이 바뀐 intent
+    const DERIVED = new Set(['fromLive', 'toLive'])
+    for (const [id, a] of oa) {
+      const b = na.get(id)
+      for (const k of Object.keys({ ...a, ...b }).filter((x) => J(a[x]) !== J(b[x]))) {
+        if (k === 'reverseEdgeId') { ok(oById.get(a.reverseEdgeId)?.generatedBy && tup(oById.get(a.reverseEdgeId)) === tup(nById.get(b.reverseEdgeId)), `${id} reverseEdgeId 가 다른 의미의 edge 로 옮겨 갔다`); continue }
+        ok(DERIVED.has(k) && (liveChanged.has(a.fromIntentId) || liveChanged.has(a.toIntentId)), `${id}.${k} 승인 밖 변화`)
+        const removed = [...(a[k] ?? [])].filter((x) => !(b[k] ?? []).includes(x)), addedLive = [...(b[k] ?? [])].filter((x) => !(a[k] ?? []).includes(x))
+        eq([removed, addedLive], [['starting-work-at-this-age'], []], `${id}.${k}`)
+      }
+    }
+    const og = o.edges.filter((e) => e.generatedBy), ng = n.edges.filter((e) => e.generatedBy)
+    eq(ng.map(tup).sort(), og.map(tup).sort(), 'generated 의미 tuple 집합')
+    const gBy = new Map(og.map((e) => [tup(e), e]))
+    for (const e of ng) { const a = gBy.get(tup(e)); eq(Object.keys({ ...a, ...e }).filter((k) => !['edgeId', 'reverseEdgeId'].includes(k) && J(a[k]) !== J(e[k])), [], `generated ${e.edgeId} 기타 필드`) }
+  })
+  test('실제 입력 3b — money-work 를 켠 control 사본에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099', () => {
+    const pt = productAt(realProduct)
+    const control = pt.control.replace("enabledClusters: ['sleep', 'family'],", "enabledClusters: ['sleep', 'family', 'money-work'],")
+    ok(control !== pt.control, 'control 사본 치환 실패 — 제품 control 이 예상과 다르다')
+    const b = lib.buildAll({ inputTexts: inputsAt(newInput), productTexts: { ...pt, control }, admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN })
+    eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-05'], 'GRAPH_READY')
+    const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')
+    eq(x.direct.targets.map((t) => `${t.edgeId}→${t.toIntentId}/${t.slug}`), ['E-0188→I-T6-04/certificate-in-50s', 'E-0329→I-T6-01/rehire-where-to-start'], 'direct')
+    eq(x.discovery.targets.map((t) => t.edgeId), ['E-0100'], 'discovery')
+    ok(x.reverse.sources.some((s) => s.edgeId === 'E-0099'), `reverse ${JSON.stringify(x.reverse.sources)}`)
+    eq(b.layers.mappings.filter((m) => m.slug === 'starting-work-at-this-age').length, 0, 'starting-work-at-this-age graph 매핑 0')
+  })
+  test('실제 입력 3c — 새 snapshot: raw legacy existingAssetRelation 불일치는 산출에 남지 않는다(전 intent 요약 = mappings)', () => {
+    const inputs = lib.parseInputTexts(inputsAt(newInput))
+    const l = lib.buildGraphLayers({ inputs, implementedSurfaces: product.implemented })
+    const f = lib.existingAssetSummaries(l.mappings)
+    eq(l.intents.filter((x) => x.existingAssetRelation !== f(x.intentId)).map((x) => x.intentId), [], '산출 요약 ≠ mappings')
+    const raw = new Map(inputs.automation.map((a) => [a.intentId, a.existingAssetRelation]))
+    // 감사 11 + legacy 6(automation 이 canonical 을 못 따라온 행) + canonical state 가 QUEUED 로 남은 공개 글 2
+    eq(l.intents.filter((x) => raw.get(x.intentId) !== x.existingAssetRelation).map((x) => x.intentId).sort(),
+      [...LIFECYCLE_11.map((k) => k.split('|')[0]), 'I-T3-06', 'I-T7-05', 'I-T6-12', 'I-T6-13', 'I-T8-38', 'I-T4-15', 'I-T5-07', 'I-T1-26'].sort(), 'raw ≠ 산출 집합')
+    const at = (id) => l.intents.find((x) => x.intentId === id).existingAssetRelation
+    eq(['I-T3-06', 'I-T7-05', 'I-T6-12', 'I-T6-13', 'I-T8-38', 'I-T4-15'].map(at),
+      ['child-marriage-silence(PUBLISHED/ANSWERS)', 'alone-pastime(PUBLISHED/ANSWERS)', 'retirement-others-what-work(PUBLISHED/ANSWERS)',
+        'job-credentials(PUBLISHED/ANSWERS)', 'gray-hair-leave-as-is(PUBLISHED/ANSWERS)', 'clinic-booking-app(PUBLISHED/ANSWERS)'], 'legacy 6건 산출')
+    eq(at('I-T6-01'), 'rehire-where-to-start(PUBLISHED/ANSWERS)', 'I-T6-01 산출')
+  })
+  test('실제 입력 4 — 제품 lifecycle 경계: money-work 10:29:59 = cold-weather · 10:30:00 = cold-weather + kimjang · kimjang-live = cold-weather · kimjang-cold-live = 0 · 교차 8건 drift 0', () => {
+    const root = dirname(newInput)
+    const articles = parseArticlesForReal()
+    const at = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(join(root, snap))), articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
+    eq(at('2026-10-17-money-work', '2026-10-17T10:29:59+09:00'), ['cold-weather-joint-pain'], 'old 10:29:59')
+    eq(at('2026-10-17-money-work', '2026-10-17T10:30:00+09:00'), ['cold-weather-joint-pain', 'kimjang-back-pain-prep'], 'old 10:30:00')
+    eq(at('2026-10-17-money-work-kimjang-live', '2026-10-17T10:30:00+09:00'), ['cold-weather-joint-pain'], 'kimjang-live')
+    eq(at('2026-10-17-money-work-kimjang-cold-live', '2026-10-17T10:30:00+09:00'), [], 'kimjang-cold-live')
+    const r = rejectWhy(() => lib.buildAll({ inputTexts: inputsAt(join(root, '2026-10-17-money-work')), productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: '2026-10-17T10:30:00+09:00', generatedAt: REAL_GEN }))
+    ok(r?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r.why.startsWith('2개 slug'), JSON.stringify(r).slice(0, 200))
+  })
+  test('실제 입력 — 새 snapshot 에서 automation 첫 행 primaryQuery 를 지우면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
+    const inputTexts = inputsAt(newInput)
     const rows = inputTexts['g4-automation-2026-09-23.jsonl'].trim().split('\n')
     const first = JSON.parse(rows[0]); delete first.primaryQuery; rows[0] = JSON.stringify(first)
     inputTexts['g4-automation-2026-09-23.jsonl'] = rows.join('\n') + '\n'
-    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
-    let err = null, built = null
-    try { built = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { err = e }
-    eq([err?.code, built === null], ['INPUT_SCHEMA_INVALID', true], '손상 입력')
-    ok(/primaryQuery 누락/.test(err.why), err.why)
+    const r = rejectWhy(() => lib.buildAll({ inputTexts, productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && /primaryQuery 누락/.test(r.why), JSON.stringify(r).slice(0, 300))
   })
-  test('실제 입력 — 첫 graph 행 edgeId 를 null 로 손상하면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
-    const read = (p) => readFileSync(p, 'utf8')
-    const inputTexts = Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, read(join(realInput, n))]))
+  test('실제 입력 — 새 snapshot 의 첫 graph 행 edgeId 를 null 로 손상하면 INPUT_SCHEMA_INVALID (bundle 0)', () => {
+    const inputTexts = inputsAt(newInput)
     const rows = inputTexts['g5-graph-2026-09-23.jsonl'].trim().split('\n')
     rows[0] = JSON.stringify({ ...JSON.parse(rows[0]), edgeId: null })
     inputTexts['g5-graph-2026-09-23.jsonl'] = rows.join('\n') + '\n'
-    const productTexts = Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, read(join(realProduct, rel))]))
-    let code = null, built = null
-    try { built = lib.buildAll({ inputTexts, productTexts, admissionTexts: null, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { code = e.code }
-    eq([code, built === null], ['INPUT_SCHEMA_INVALID', true], '손상 입력')
+    const r = rejectWhy(() => lib.buildAll({ inputTexts, productTexts: productAt(realProduct), admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN }))
+    eq(r?.code, 'INPUT_SCHEMA_INVALID', '손상 입력')
   })
 } else {
-  results.push('  ⏭  실제 입력 동일성 — --real-input · --real-product 미지정 (통과로 세지 않는다)')
+  results.push('  ⏭  실제 입력 재현성 — --old-input · --new-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 
 rmSync(TMP, { recursive: true, force: true })

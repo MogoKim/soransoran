@@ -8,6 +8,7 @@ import {
   CTA_HREF_PREFIX,
 } from './magazine-manuscript-format.mjs'
 import { isAutoLaneEligible, VALIDATION_PROFILES } from './magazine-validation-profile.mjs'
+import { RELATION_CONTRACT_LABEL, RELATION_POLICY, isValidDirectCount } from './magazine-relation-policy.mjs'
 
 export const ARTICLE_SPEC_SCHEMA = 'magazine-article-spec/1'
 export const ARTICLE_SPEC_MODE = 'DIRECT_SPEC_V1'
@@ -88,6 +89,7 @@ export function articleSpecHash(specWithoutHash) {
   return sha256(canonicalJson(specWithoutHash))
 }
 
+/** 단일 관계 — 객체만. discovery 가 없거나 배열(0·2개)이면 여기서 막힌다(공용 정책: discovery 정확히 1) */
 function relation(value, field) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     fail('ARTICLE_SPEC_RELATION', `${field} 가 객체가 아니다`)
@@ -108,13 +110,13 @@ function relationSet(relations, ownSlug) {
   const direct = Array.isArray(relations?.direct)
     ? relations.direct.map((item, index) => relation(item, `relations.direct[${index}]`))
     : []
-  if (direct.length !== 3) {
-    fail('ARTICLE_SPEC_RELATION', `직접 관련 글은 정확히 3개여야 한다 (현재 ${direct.length}개)`)
+  if (!isValidDirectCount(direct.length)) {
+    fail('ARTICLE_SPEC_RELATION', `직접 관련 글은 ${RELATION_POLICY.directMin}~${RELATION_POLICY.directMax}개여야 한다 (현재 ${direct.length}개)`)
   }
   const discovery = relation(relations?.discovery, 'relations.discovery')
   const slugs = [...direct.map((item) => item.slug), discovery.slug]
   if (slugs.includes(ownSlug)) fail('ARTICLE_SPEC_RELATION', '자기 글을 관련 글로 연결할 수 없다')
-  if (new Set(slugs).size !== slugs.length) fail('ARTICLE_SPEC_RELATION', '3+1 관련 글에 중복 slug 가 있다')
+  if (new Set(slugs).size !== slugs.length) fail('ARTICLE_SPEC_RELATION', `${RELATION_CONTRACT_LABEL} 관련 글에 중복 slug 가 있다`)
   return { direct, discovery }
 }
 

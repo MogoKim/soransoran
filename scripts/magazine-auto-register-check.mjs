@@ -2993,7 +2993,7 @@ const articleSpecCheck = spawnSync(process.execPath, [join('scripts', 'magazine-
   env: { ...process.env },
 })
 expect('ArticleSpec schema·compiler·hash 반례가 전부 통과한다', articleSpecCheck.status, 0)
-expect('ArticleSpec 검사가 40개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 40 pass, 0 fail/.test(articleSpecCheck.stdout), true)
+expect('ArticleSpec 검사가 42개 계약을 실제 실행했다', /ArticleSpec 계약 검사: 42 pass, 0 fail/.test(articleSpecCheck.stdout), true)
 
 console.log('\n══════ DIRECT_SPEC_V1 — 상류 source 관문 (승인 source 없으면 brief·spec·회수 0)')
 const directSourceCheck = spawnSync(process.execPath, [join('scripts', 'magazine-direct-spec-source-check.mjs')], {
@@ -3005,6 +3005,22 @@ expect('source 관문 검사가 200개(부속 2 포함) 반례·변이를 실제
 // 🔴 부속 검사 연결 블록이 통째로 사라지면 합계가 198 로 줄고, 아래 두 요약 표식도 사라진다
 expect('부속 source 작성 검사가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-check\.mjs — DIRECT_SPEC source 작성 검사: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)
 expect('부속 source 작성 변이가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-mutation\.mjs — DIRECT_SPEC source 작성 변이: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)
+
+console.log('\n══════ 관계 수량 공용 정책 (direct 2~3 + discovery 1) — 저장소 fixture 만')
+// 🔴 실제 연구 폴더 인자를 넘기지 않는다 — CI 에서도 같은 결과여야 한다. 실제 I-T6-05 검사는 SKIP 이고 pass 로 세지 않는다
+const relationPolicyCheck = spawnSync(process.execPath, [join('scripts', 'magazine-relation-policy-check.mjs')], {
+  encoding: 'utf8',
+  env: { ...process.env },
+})
+expect('관계 수량 정책 경계 반례가 전부 통과한다', relationPolicyCheck.status, 0)
+expect('관계 수량 정책 검사가 9개 경계를 실제 실행했다(실제 입력 SKIP 은 pass 아님)', /관계 수량 정책 검사: 9 pass, 0 fail/.test(relationPolicyCheck.stdout), true)
+const relationPolicyMutation = spawnSync(process.execPath, [join('scripts', 'magazine-relation-policy-mutation.mjs')], {
+  encoding: 'utf8',
+  env: { ...process.env },
+  maxBuffer: 1e8,
+})
+expect('관계 수량 정책 변이가 전부 검출된다', relationPolicyMutation.status, 0)
+expect('관계 수량 정책 변이 8개를 실제 실행했다', /관계 수량 정책 변이: 8 pass, 0 fail \(변이 8\)/.test(relationPolicyMutation.stdout), true)
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 console.log('  상태: 자동 PR 경로 구현됨 · launchd 설치는 supervised 1회 성공 뒤에만 열린다\n')

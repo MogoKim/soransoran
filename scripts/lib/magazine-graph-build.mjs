@@ -28,6 +28,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathS
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
 import { isPublic } from './magazine-gate.mjs'
+import { RELATION_POLICY } from './magazine-relation-policy.mjs'
 import { evalLiteral, parseArticlesSource, sliceLiteral } from './magazine-load.mjs'
 
 export const BUILD_SCHEMA = 'mgraph-build/1'
@@ -72,8 +73,8 @@ export const BOARDS = Object.freeze(['/community/menopause', '/community/free'])
 
 /** 🔴 생산 최소선과 화면 표시 목표는 다른 숫자다 — 섞지 않는다 */
 export const READINESS_POLICY = Object.freeze({
-  productionMinimum: Object.freeze({ direct: 2, discovery: 1 }),
-  displayTarget: Object.freeze({ directMax: 3, discovery: 1 }),
+  productionMinimum: Object.freeze({ direct: RELATION_POLICY.directMin, discovery: RELATION_POLICY.discovery }),
+  displayTarget: Object.freeze({ directMax: RELATION_POLICY.directMax, discovery: RELATION_POLICY.discovery }),
 })
 
 export class GraphBuildError extends Error {
@@ -197,6 +198,26 @@ export const BACKLINK_STATUSES = Object.freeze(['PLANNED', 'PAIRED'])
 export const ASSET_STATES = Object.freeze(['LIVE', 'SCHEDULED_NOT_YET_PUBLIC', 'QUEUED', 'BLOCKED'])
 export const MAPPING_COVERAGES = Object.freeze(['ANSWERS', 'ANSWERS_PARTIAL', 'ANSWERS_WITH_DEFECT', 'ANSWERS_WITH_SCOPE_EXPANSION',
   'PARTIAL', 'ADJACENT', 'QUEUED_NOT_PUBLIC', 'SCHEDULED_NOT_YET_PUBLIC'])
+/**
+ * 🔴 lifecycle 정합 — 공개(LIVE)된 글에 "아직 공개 전" coverage 가 남아 있으면 오래된 판정이다.
+ *    공개 뒤 본문을 다시 대조해 ANSWERS · ANSWERS_PARTIAL 등으로 바꾸거나 매핑을 지워야 한다.
+ */
+export const PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC'])
+
+/**
+ * 🔴 existing asset 요약의 유일한 권위 — canonical `existingSlugs` 에서 만든 **built mappings** 다.
+ *    automation `existingAssetRelation` 은 legacy 입력이며 산출을 정하지 않는다(두 권위가 한 bundle 안에서 모순되지 않게).
+ *    형식: `slug(상태/coverage)` 를 mapping 순서대로 `, ` 로 잇는다. 상태는 LIVE 만 기존 호환 표현 PUBLISHED, 그 외는 assetState. 없으면 `없음`.
+ */
+export function summarizeExistingAssets(intentMappings) {
+  return intentMappings.map((m) => `${m.slug}(${m.assetState === 'LIVE' ? 'PUBLISHED' : m.assetState}/${m.coverage})`).join(', ') || '없음'
+}
+/** intentId → 요약. mapping 순서(canonical 순서)를 그대로 따른다 */
+export function existingAssetSummaries(mappings) {
+  const by = new Map()
+  for (const m of mappings) (by.get(m.intentId) ?? by.set(m.intentId, []).get(m.intentId)).push(m)
+  return (intentId) => summarizeExistingAssets(by.get(intentId) ?? [])
+}
 
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v) => typeof v === 'string'
@@ -260,6 +281,7 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
   // 🔴 최종 산출 신원 — 자동 생성 edge 까지 포함한 결과를 입력과 같은 helper 로 본다
   const identity = (rows, rule) => { const r = identityProblems(rows, rule); bad.push(...r.problems); return r.seen }
   const intentIds = identity(intents, { label: '산출 intent', keyOf: (x) => x.intentId, valid: nonEmpty, unique: true })
+  const assetSummaryOf = existingAssetSummaries(mappings)
   identity(edges, { label: '산출 edge', keyOf: (e) => e.edgeId, valid: isEdgeId, unique: true })
   identity(mappings, { label: '산출 mapping', keyOf: mappingKey, valid: nonEmpty, unique: true })
   const nullableStr = (v) => v == null || isStr(v)
@@ -277,6 +299,7 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
     }
     if (!RUNTIME_STATES.includes(x.runtimeState)) bad.push(`${at} runtimeState 계약 밖: ${JSON.stringify(x.runtimeState)}`)
     for (const k of ['policyScopeWhy', 'verdictWhy', 'existingAssetRelation']) if (!isStr(x[k])) bad.push(`${at} ${k} 누락`)
+    if (isStr(x.existingAssetRelation) && x.existingAssetRelation !== assetSummaryOf(x.intentId)) bad.push(`${at} existingAssetRelation 이 mappings 와 다르다: ${JSON.stringify(x.existingAssetRelation)}`)
     for (const k of ['profileSpec', 'evidence']) if (!isPlain(x[k])) bad.push(`${at} ${k} 누락·형식 오류`)
     if (isPlain(x.evidence) && (typeof x.evidence.refs !== 'number' || !Number.isFinite(x.evidence.refs))) bad.push(`${at} evidence.refs 가 수가 아니다: ${JSON.stringify(x.evidence.refs)}`)
     if (x.retryPolicy !== null && !isPlain(x.retryPolicy)) bad.push(`${at} retryPolicy 형식 오류`)
@@ -324,6 +347,7 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
     if (!nonEmpty(m.slug)) bad.push(`${at} slug 누락`)
     if (!ASSET_STATES.includes(m.assetState)) bad.push(`${at} assetState 계약 밖: ${JSON.stringify(m.assetState)}`)
     if (!MAPPING_COVERAGES.includes(m.coverage)) bad.push(`${at} coverage 계약 밖: ${JSON.stringify(m.coverage)}`)
+    if (m.assetState === 'LIVE' && PRE_PUBLIC_COVERAGES.includes(m.coverage)) bad.push(`${at} lifecycle 모순 — LIVE 인데 coverage ${m.coverage}`)
     if (m.cluster !== null && !nonEmpty(m.cluster)) bad.push(`${at} cluster 형식 오류: ${JSON.stringify(m.cluster)}`)
     if (m.publishedAt !== null && !isRealDate(m.publishedAt)) bad.push(`${at} publishedAt 형식 오류: ${JSON.stringify(m.publishedAt)}`)
     if (m.publishAt !== null && !isRealKstAt(m.publishAt)) bad.push(`${at} publishAt 형식 오류: ${JSON.stringify(m.publishAt)}`)
@@ -379,6 +403,68 @@ export function parseProductTexts(texts) {
 
 // ── build ──
 
+export const PRODUCT_LIFECYCLE_DRIFT = 'INPUT_PRODUCT_LIFECYCLE_DRIFT'
+/** 예약될 수 없는 제품 status — snapshot 이 SCHEDULED 라고 적어도 공개 예정이 아니다 */
+export const UNSCHEDULABLE_STATUSES = Object.freeze(['DRAFT', 'BLOCKED'])
+
+/**
+ * 🔴 snapshot ↔ 제품 lifecycle 대조 — 오래된 연구 snapshot 이 이미 공개된 글을 QUEUE · 공개 전으로 계속 분류하거나,
+ *    아직 공개 전인 글을 LIVE 로 기록하면 build 전에 멈춘다(2026-10-17 kimjang · cold-weather 사고의 일반 관문).
+ *
+ *    시각: 명시한 effectiveAt 만 쓴다(벽시계 0). 공개 판정은 제품과 같은 `isPublic(article, ms)` — raw status 로 판정하지 않는다.
+ *    snapshot 상태(slug 별): published 의 LIVE · SCHEDULED_NOT_YET_PUBLIC 가 queue 를 가린다(published > queue).
+ *      `assets-queue` 는 topic-queue 의 append-only provenance 사본이라 공개 뒤에도 행이 남는다 — 교차 중복은 허용한다.
+ *    규칙:
+ *      · 제품에서 공개된 slug 는 snapshot 에서 LIVE 여야 한다(queue-only · scheduled · 없음 → drift)
+ *      · 제품에서 아직 공개 전인(또는 없는) slug 를 LIVE 로 기록하면 drift
+ *      · SCHEDULED 는 제품에 그 글이 있고 DRAFT · BLOCKED 가 아닐 때만 — phantom 예약 · 초안 · 차단 글은 drift
+ *      · 대상 slug = snapshot 의 published · queue · canonical existingSlugs. canonical 밖 제품 글은 mapping 을 요구하지 않는다
+ *      · published · queue 각 파일 안의 slug 중복, 계약 밖 published assetState 는 drift
+ *    오류는 slug 별 한 건(사유를 모은다)으로 낸다.
+ *    🔴 `validateBuiltArtifacts` 의 LIVE ↔ coverage 검사는 산출 내부 계약이고, 이 관문은 snapshot 과 제품 사실의 대조다 — 중복이 아니다.
+ * @returns {{ slug: string, reasons: string[] }[]} slug 순 정렬
+ */
+export function productLifecycleDrift({ inputs, articles, effectiveMs }) {
+  const bySlug = new Map(articles.map((a) => [a.slug, a]))
+  const drift = new Map()
+  const add = (slug, why) => (drift.get(slug) ?? drift.set(slug, []).get(slug)).push(why)
+  const resolved = new Map()
+  const seenQueue = new Set()
+  for (const q of inputs.queued) {
+    if (seenQueue.has(q.slug)) add(q.slug, 'assets-queue 안에서 slug 중복')
+    seenQueue.add(q.slug)
+    resolved.set(q.slug, 'QUEUE')
+  }
+  const seenPublished = new Set()
+  for (const p of inputs.published) {
+    if (seenPublished.has(p.slug)) add(p.slug, 'assets-published 안에서 slug 중복')
+    seenPublished.add(p.slug)
+    const state = p.assetState === 'LIVE' ? 'LIVE' : p.assetState === 'SCHEDULED_NOT_YET_PUBLIC' ? 'SCHEDULED' : null
+    if (!state) add(p.slug, `assets-published assetState 계약 밖: ${JSON.stringify(p.assetState)}`)
+    resolved.set(p.slug, state ?? 'UNKNOWN') // published 가 queue 를 가린다
+  }
+  const canonicalSlugs = inputs.canonical.flatMap((c) => (c.existingSlugs ?? []).map((s) => s.slug))
+  for (const slug of new Set([...resolved.keys(), ...canonicalSlugs])) {
+    const article = bySlug.get(slug)
+    const state = resolved.get(slug) ?? 'ABSENT'
+    const live = Boolean(article) && isPublic(article, effectiveMs)
+    if (live && state !== 'LIVE') add(slug, `제품은 effectiveAt 에 공개인데 snapshot 은 ${state}`)
+    if (!live && state === 'LIVE') add(slug, `snapshot 은 LIVE 인데 제품은 ${article ? 'effectiveAt 에 아직 공개 전' : '없음'}`)
+    // 🔴 SCHEDULED 제품 신원 — 예약은 제품에 실제로 예약된 글이어야 한다(이미 공개된 경우는 위 줄이 잡는다)
+    if (state === 'SCHEDULED') {
+      if (!article) add(slug, 'snapshot 은 SCHEDULED 인데 제품에 글이 없다')
+      if (article && UNSCHEDULABLE_STATUSES.includes(article.status)) add(slug, `snapshot 은 SCHEDULED 인데 제품 status 가 ${article.status}`)
+    }
+  }
+  return [...drift].sort(([a], [b]) => a.localeCompare(b)).map(([slug, reasons]) => ({ slug, reasons }))
+}
+
+/** 관문 — drift 가 있으면 `INPUT_PRODUCT_LIFECYCLE_DRIFT` 로 멈춘다 */
+export function assertProductLifecycle({ inputs, articles, effectiveMs }) {
+  const drift = productLifecycleDrift({ inputs, articles, effectiveMs })
+  if (drift.length) fail(PRODUCT_LIFECYCLE_DRIFT, `${drift.length}개 slug — ${drift.slice(0, 5).map((d) => `${d.slug}: ${d.reasons.join(' · ')}`).join(' | ')}`)
+}
+
 /**
  * 연구 입력 + 제품 구현 표면 → intents · edges · mappings (연구 builder 와 같은 바이트).
  * @param {{ inputs: ReturnType<typeof parseInputTexts>, implementedSurfaces: string[] }} p
@@ -402,6 +488,8 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
       cluster: s.cluster ?? null, coverage: s.coverage ?? 'ADJACENT' })
   }
   const liveSlugsOf = (id) => mappings.filter((m) => m.intentId === id && m.assetState === 'LIVE').map((m) => m.slug)
+  // 🔴 automation.existingAssetRelation(legacy)은 읽지 않는다 — 요약은 built mappings 하나에서 나온다
+  const assetSummaryOf = existingAssetSummaries(mappings)
 
   // ② intents
   const intents = autoRaw.map((r) => ({ schemaVersion: 'intent/2',
@@ -422,7 +510,7 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
     communityDestination: r.communityDestination
       ?? I[r.intentId]?.communityDestination
       ?? ((r.territoryId === 'T1' || r.territoryId === 'T4') ? '/community/menopause' : '/community/free'),
-    existingAssetRelation: r.existingAssetRelation, duplicateReason: r.duplicateReason ?? null }))
+    existingAssetRelation: assetSummaryOf(r.intentId), duplicateReason: r.duplicateReason ?? null }))
 
   const intentUsable = (id) => {
     const x = A[id]
@@ -605,6 +693,8 @@ export function buildAll({ inputTexts, productTexts, admissionTexts = null, effe
   const gen = parseGeneratedAt(generatedAt)
   const inputs = parseInputTexts(inputTexts)
   const product = parseProductTexts(productTexts)
+  // 🔴 snapshot ↔ 제품 lifecycle — layer · 직렬화 · 해시 · 쓰기 전에
+  assertProductLifecycle({ inputs, articles: product.articles, effectiveMs: eff.ms })
   const layers = buildGraphLayers({ inputs, implementedSurfaces: product.implemented })
   // 🔴 산출 계약 — 직렬화 · 해시 · export 전에 한 번
   validateBuiltArtifacts(layers)

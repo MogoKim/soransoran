@@ -41,6 +41,7 @@ import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine
 import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD } from './magazine-direct-spec.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
+import { isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
 
 export const DIRECT_SPEC_SOURCE_NOT_READY = 'DIRECT_SPEC_SOURCE_NOT_READY'
 export const DIRECT_SPEC_SPEC_CONFLICT = 'DIRECT_SPEC_SPEC_CONFLICT'
@@ -180,7 +181,7 @@ export function readProductGraphState(productRoot) {
   if (!control.enabled) blockers.push('GRAPH_CONTROL_DISABLED')
   if (control.killSwitch?.tripped !== false) blockers.push('GRAPH_KILL_SWITCH_TRIPPED')
   if (!implemented.length || !footer.length || !relationTypes.length) blockers.push('GRAPH_SURFACE_CONTRACT_UNREADABLE')
-  // 🔴 3+1 관계가 실제로 보이는 자리 = 구현된 footer surface ∩ control 에서 켠 surface
+  // 🔴 direct·discovery 관계가 실제로 보이는 자리 = 구현된 footer surface ∩ control 에서 켠 surface
   const surfaces = footer.filter((x) => implemented.includes(x) && control.surfaces?.[x] === true)
   return { ok: true, pointer, graph, exportHash, recomputedExportHash, control, implemented, footer, relationTypes, surfaces, blockers }
 }
@@ -238,7 +239,9 @@ function valueAt(obj, path) {
 }
 
 function isPresent(value, path) {
-  if (path === 'relations.direct') return Array.isArray(value) && value.length === 3
+  // 🔴 관계 수량은 공용 정책 하나로 본다 — direct 2~3 · discovery 단일 객체
+  if (path === 'relations.direct') return Array.isArray(value) && isValidDirectCount(value.length)
+  if (path === 'relations.discovery') return isSingleDiscovery(value)
   if (path === 'node.outline') return Array.isArray(value) && value.filter((v) => String(v ?? '').trim()).length >= 3
   if (Array.isArray(value)) return value.some((v) => String(v ?? '').trim())
   if (value && typeof value === 'object') return Object.keys(value).length > 0
