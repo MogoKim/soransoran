@@ -1,15 +1,15 @@
 #!/usr/bin/env tsx
 /**
- * 운영용 작성자 풀 확장 OP01~OP10 → OP01~OP30 — 🔴 기본 dry-run (write 0)
+ * 운영용 작성자 풀 확장 OP01~OP30 → OP01~OP50 — 🔴 기본 dry-run (write 0)
  *
  *   npx tsx scripts/operator-writer-expand.mts                 # read-only 계획 · digest · 충돌 종류
  *   npx tsx scripts/operator-writer-expand.mts --json
  *   # 격리 DB(127.0.0.1 soran_test) 적용
  *   DATABASE_URL=postgresql://soran@127.0.0.1:54329/soran_test DIRECT_URL=$DATABASE_URL \
- *     npx tsx scripts/operator-writer-expand.mts --apply --expect=10:30 --digest=<64자리> --reason="…"
+ *     npx tsx scripts/operator-writer-expand.mts --apply --expect=30:50 --digest=<64자리> --reason="…"
  *   # 🔴 운영 적용 — 마스터 승인 뒤, main 에 병합된 깨끗한 checkout 에서만
  *   npx tsx scripts/operator-writer-expand.mts --apply --production --target=<origin/main 40자리> \
- *     --expect=10:30 --digest=<dry-run 의 64자리> --reason="…"
+ *     --expect=30:50 --digest=<dry-run 의 64자리> --reason="…"
  *
  * 🔴 운영 apply 는 셸의 DATABASE_URL 을 믿지 않는다 — canonical env 를 읽어 덮는다.
  * 🔴 D100 자동 Persona(P01~) 확장이 아니다. 공급·발행·Persona·댓글·stage·runtime 과 무관하다.
@@ -113,7 +113,7 @@ try {
         for (const p of v.problems) console.error(`   · ${p}`)
         process.exitCode = 1
       } else {
-        console.log(`✅ 생성 ${r.created}명 · active ${r.activeBefore}→${r.activeAfter} · OP01~OP${TARGET_ACTIVE} · 새 20명 각각 Account 0 · Persona 0 · 기준 10명 불변`)
+        console.log(`✅ 생성 ${r.created}명 · active ${r.activeBefore}→${r.activeAfter} · OP01~OP${TARGET_ACTIVE} · 새 20명 각각 Account 0 · Persona 0 · 기준 30명 불변`)
         console.log(`   ${diag} (무관한 동시 가입이 있으면 User·Account 는 더 움직일 수 있다)`)
       }
     }
