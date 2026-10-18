@@ -792,6 +792,39 @@ async function main(): Promise<void> {
     clearDecisionEnv(); followupOn(false)
   }
 
+  console.log('\n⑫ dedupKey 선제 제거 — EXPIRED · PUBLISHED 열쇠가 이미 있으면 provider 0 · Queue write 0 · Comment write 0')
+  {
+    // 같은 표로 두 상태를 순서대로 확인한다(복잡도 최소)
+    for (const priorStatus of ['EXPIRED', 'PUBLISHED'] as const) {
+      await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
+      const a = await persona('P01'); const b = await persona('P02'); await persona('P03')
+      const pid = await post(a, 200); await autoFirst(b, pid, 180)
+      const key = F.followupKeyOf(pid, 2)
+      // 글/ordinal 이 같은 followup dedupKey 를 미리 priorStatus 로 넣는다
+      await prisma.personaApprovalQueue.create({
+        data: {
+          personaId: b.id, targetPostId: pid, status: priorStatus,
+          candidateText: '그 시간에 깨면 괜히 생각이 많아지죠.',
+          reactionType: 'experience', gateStatus: 'pass', gateResults: [],
+          dedupKey: key, decidedBy: FOLLOWUP_LANE_DECIDED_BY, decidedAt: new Date(Date.now() - 170 * MIN),
+          ...(priorStatus === 'EXPIRED' ? { declineReason: FOLLOWUP_EXPIRE_REASON } : {}),
+        },
+      })
+      const qBefore = await prisma.personaApprovalQueue.count()
+      const cBefore = await prisma.comment.count()
+      const g = fakeGen()
+      const r = await phase(g.gen)
+      const qAfter = await prisma.personaApprovalQueue.count()
+      const cAfter = await prisma.comment.count()
+      check(`🔴 기존 열쇠 ${priorStatus} → provider 0 · Queue write 0 · Comment write 0`,
+        g.calls() === 0 && qAfter === qBefore && cAfter === cBefore,
+        `calls=${g.calls()} ΔQ=${qAfter - qBefore} ΔC=${cAfter - cBefore} ${r.outcome}`)
+      const row = await prisma.personaApprovalQueue.findFirst({ where: { dedupKey: key }, select: { status: true } })
+      check(`🔴 기존 ${priorStatus} 행 보존됨`, row?.status === priorStatus)
+      followupOn(false)
+    }
+  }
+
   await wipe()
 }
 
