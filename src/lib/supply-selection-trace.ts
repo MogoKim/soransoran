@@ -2,8 +2,8 @@
  * 🔴 **공급 선택 관측 trace v2** (2026-10-10 P0-B1 · v1 은 P0-B0) — 순수 함수 · DB · 네트워크 · provider 0
  *
  *   공급 한 회차에서 원천 하나하나가 **어느 단계에서 왜** 골라지거나 빠졌는지를 남긴다.
- *     생성 가능 판정(`worksetEligibility`) → JIT 선택(`selectJitWorkset`: raw 제외 · 슬롯 연결 · 최대 슬롯 보존
- *     · 재시도 예약 · 정본 순위 · EDF 배정) → 최종 묶음
+ *     생성 가능 판정(`worksetEligibility`) → JIT 선택(`selectJitWorkset`: raw 제외 · 슬롯 연결 · 신규 우선
+ *     · 신규 우선 · 재시도 보충 · 정본 순위 · EDF 배정) → 최종 묶음
  *   기록은 선택 함수에 넘긴 기록기(`WorksetTraceSink`)가 모은다. 이 파일은 모은 것을 **읽기만** 해서 조립한다.
  *
  * 🔴 **선택을 바꾸지 않는다.** 묶음 · 순서 · 배정은 trace 를 주든 안 주든 같다(검사가 digest 로 대조한다).
@@ -71,7 +71,7 @@ export type TraceCandidate = {
   retry: boolean
   retryTier: number | null
   retryWaitedH: number | null
-  /** 🔴 재시도 예약으로 들어갔는가 */
+  /** 🔴 신규 뒤 남은 자리를 재시도로 보충했는가(필드명은 v2 호환 유지) */
   retryReserved: boolean
   /** 🔴 부족 슬롯(시각순)마다 그 슬롯에서 eligible 이면 원래 원문 나이(h · 반올림 없음), 아니면 null · 슬롯 판정까지 안 갔으면 null */
   slotAgesH: (number | null)[] | null
@@ -117,7 +117,7 @@ export type TraceSummary = {
   /** 🔴 선택 원천 중 게시 KST 날짜가 회차 KST 날짜와 같은 수 */
   selectedSameKstDay: number
   /**
-   * 🔴 **순위 역전** — 고른 원천 s(재시도 예약 제외)보다 정본 순위가 엄격히 앞서는 미선택 원천 u 가 있고,
+   * 🔴 **순위 역전** — 같은 신규/재시도 부류에서 고른 원천 s보다 정본 순위가 엄격히 앞서는 미선택 원천 u 가 있고,
    *    s 를 u 로 바꿔도 덮는 슬롯 수가 줄지 않는 쌍의 수. 새 선택에서는 0 이어야 한다.
    */
   rankInversions: number
@@ -336,9 +336,9 @@ export function summarizeTrace(
   const unselected = linkable.filter((c) => !c.selected)
   let rankInversions = 0
   for (const s of [...cover, ...extra]) {
-    if (s.retryReserved || s.rank === null) continue
+    if (s.rank === null) continue
     for (const u of unselected) {
-      if (u.rank === null || !(strictBefore(u, s) < 0)) continue
+      if (u.retry !== s.retry || u.rank === null || !(strictBefore(u, s) < 0)) continue
       if (s.stage === 'SELECTED_EXTRA' || matchable([...cover.filter((c) => c !== s), u], n) >= cover.length) rankInversions += 1
     }
   }

@@ -6,7 +6,7 @@
  *
  * 공급 러너와 **같은 연결**(생성 가능 판정 → `selectWorkset({ jit })` → `buildSupplySelectionTrace`)로 다음을 고정한다.
  *   ① trace 를 넘기든 안 넘기든 슬롯 배정 · 묶음 · 순서 · digest 가 같다(무작위 50벌)
- *   ② 원천이 멈춘 단계가 서로 다른 사유로 적힌다 · 재시도 예약 표시 · 순위 역전 0 · 동률 선호 횟수
+ *   ② 원천이 멈춘 단계가 서로 다른 사유로 적힌다 · 신규 우선/재시도 보충 표시 · 부류 안 순위 역전 0 · 동률 선호 횟수
  *   ③ 판정은 원래 나이로(반올림 없음) · 원문 · 제목 · id 평문 없음 · 손상 기록을 정상으로 읽지 않는다
  *   ④ v1 기록(P0-B0)을 계속 읽는다 · 실패가 되풀이 호출 · 중복 write 를 만들지 않는다
  */
@@ -132,12 +132,12 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
   }
   check(`① trace on/off — 슬롯 · 묶음 · 순서 · 제외 · JIT 사실 · digest 동일(무작위 ${N}벌)`, same === N, `${same}/${N}`)
   check(`① 무작위 ${N}벌 trace 가 실제 선택과 어긋나지 않는다(불일치 0 · 선택 위치 · 최대 슬롯 · 덮은 슬롯 일치 · 다시 읽기 v2)`, consistent === N, `${consistent}/${N}`)
-  check(`② 무작위 ${N}벌 — 순위 역전 0(더 좋은 미선택 원천과 바꿔도 덮는 슬롯이 유지되는 쌍 없음)`, inversions === 0, String(inversions))
+  check(`② 무작위 ${N}벌 — 같은 신규/재시도 부류 안 순위 역전 0`, inversions === 0, String(inversions))
   const wanted = ['SELECTED_COVER', 'CAP_REACHED', 'RAW_NOT_AUTO_CONSUMED', 'SLOT_INELIGIBLE']
   check(`① 무작위 ${N}벌이 여러 단계를 실제로 지난다 — ${[...seen].sort().join(' · ')}`, wanted.every((w) => seen.has(w)), wanted.filter((w) => !seen.has(w)).join(','))
 }
 
-// ── ② 단계 사유 · 예약 표시 ──
+// ── ② 단계 사유 · 신규 우선/재시도 보충 표시 ──
 {
   const done = ROW({ id: 'st-done', ageH: 5, cp: 0.9, title: '갱년기 열감 이야기' })
   const raw = ROW({ id: 'st-raw', ageH: 5, cp: 0.99, axis: 'raw', site: WG })
@@ -149,11 +149,11 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
   const { off, on } = sameRun({ rows: [done, raw, old, a, b, c, r], slots: [S1, S2], cap: 3, attempted: retryOf([r], 9), concluded: new Set([KEY(done)]) })
   const t = on.trace!
   const rs = (id: string, site = RT): string => byId(t, site, id)!.reason
-  check('② 끝난 원천 TERMINAL · raw RAW_NOT_AUTO_CONSUMED · 72h 초과 SLOT_INELIGIBLE · 상한 밖 CAP_REACHED — 서로 다른 사유',
+  check('② 끝난 원천 TERMINAL · raw RAW_NOT_AUTO_CONSUMED · 72h 초과 SLOT_INELIGIBLE · 상한 밖 재시도 CAP_REACHED — 서로 다른 사유',
     rs('st-done') === 'TERMINAL' && rs('st-raw', WG) === 'RAW_NOT_AUTO_CONSUMED' && rs('st-old') === 'SLOT_INELIGIBLE'
-    && rs('st-c') === 'CAP_REACHED', `${rs('st-done')} ${rs('st-raw', WG)} ${rs('st-old')} ${rs('st-c')}`)
-  check('② 재시도 예약 — 순위 최하위 재시도가 예약 표시와 함께 들어가고, 덮기 2 · 추가 1',
-    byId(t, RT, 'st-r')!.selected && byId(t, RT, 'st-r')!.retryReserved && t.summary.retryReserved === 1
+    && rs('st-r') === 'CAP_REACHED', `${rs('st-done')} ${rs('st-raw', WG)} ${rs('st-old')} ${rs('st-r')}`)
+  check('② 신규가 상한을 채우면 재시도는 보충하지 않는다 — 신규 3 · 재시도 선택 0 · 덮기 2 · 추가 1',
+    !byId(t, RT, 'st-r')!.selected && !byId(t, RT, 'st-r')!.retryReserved && t.summary.retryReserved === 0
     && t.summary.byReason.SELECTED_COVER === 2 && t.summary.byReason.SELECTED_EXTRA === 1, JSON.stringify(t.summary.byReason))
   check('② 갱년기 · wgang 단계별 집계 — 갱년기 끝난 원천 TERMINAL 1 · wgang raw 제외 1 · wgang 선택 1',
     t.summary.menopauseByReason.TERMINAL === 1 && t.summary.wgangByReason.RAW_NOT_AUTO_CONSUMED === 1 && t.summary.wgang.selected === 1)
