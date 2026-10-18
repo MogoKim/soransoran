@@ -33,6 +33,22 @@ const HELPER_MUTATIONS = [
     to: "  if (false) fail('OTHER_FIELD_CHANGED'", expect: '대상 필드 밖이 바뀌면' },
   { id: 'CE6 하위 객체 변경을 못 보는 직렬화로 회귀', from: '  const rest = (o) => { const { enabledClusters: _drop, ...r } = o; return stable(r) }',
     to: '  const rest = (o) => { const { enabledClusters: _drop, ...r } = o; return JSON.stringify(r, Object.keys(r).sort()) }', expect: '대상 필드 밖이 바뀌면' },
+  // ── 실제 CONTROL 선언 탐색 ──
+  { id: 'CE7 단순 indexOf 탐색으로 되돌리기', from: '  const { start, end } = findControlObject(src)\n  const literal = src.slice(start, end)',
+    to: "  const start = src.indexOf('{', src.indexOf('=', src.indexOf('export const CONTROL')))\n  const literal = sliceLiteral(src, start, '{', '}')",
+    expect: 'decoy: line 주석 안의 완전한 가짜 CONTROL 선언' },
+  { id: 'CE8 line 주석 무시 제거', from: "    if (ch === '/' && next === '/') { const e = src.indexOf('\\n', i);",
+    to: "    if (false) { const e = src.indexOf('\\n', i);", expect: 'decoy: line 주석 안의 완전한 가짜 CONTROL 선언' },
+  { id: 'CE9 block 주석 무시 제거', from: "    if (ch === '/' && next === '*') {\n      const e = src.indexOf('*/', i + 2)",
+    to: "    if (false) {\n      const e = src.indexOf('*/', i + 2)", expect: 'decoy: block 주석 안의 가짜 CONTROL 선언' },
+  { id: 'CE10 문자열 무시 제거', from: "    if (ch === \"'\" || ch === '\"') {\n      const s = i++",
+    to: "    if (false) {\n      const s = i++", expect: 'decoy: 작은따옴표 문자열 안의 가짜 선언' },
+  { id: 'CE11 template literal 무시 제거', from: "    if (ch === '`') {\n      const s = i++",
+    to: "    if (false) {\n      const s = i++", expect: 'decoy: template literal' },
+  { id: 'CE12 정확한 CONTROL identifier 경계 제거', from: "const isControlName = (w) => w === 'CONTROL'",
+    to: "const isControlName = (w) => w.startsWith('CONTROL')", expect: 'decoy: CONTROLLER 선언(부분 일치 이름)' },
+  { id: 'CE13 중복 실제 선언 허용', from: "  if (decls.length > 1) fail('CONTROL_AMBIGUOUS'",
+    to: "  if (false) fail('CONTROL_AMBIGUOUS'", expect: '실제 CONTROL 선언 2개는 CONTROL_AMBIGUOUS' },
 ]
 const CONSUMER_MUTATIONS = [
   { id: 'CE1a direct-spec source 가 helper 대신 고정 문자열로 cluster-off', file: 'scripts/magazine-direct-spec-source-check.mjs',

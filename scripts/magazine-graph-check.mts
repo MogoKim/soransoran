@@ -236,11 +236,11 @@ console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 �
       cwd: ROOT,
       encoding: 'utf8',
     }).trim().split('\n').at(-1) ?? ''
-    controlEditPassed = /10 pass, 0 fail/.test(controlEditDetail)
+    controlEditPassed = /20 pass, 0 fail/.test(controlEditDetail)
   } catch (err) {
     controlEditDetail = String((err as { stdout?: string | Buffer }).stdout ?? err)
   }
-  check('control 편집 helper 반례 10개가 독립 실행에서 통과한다', controlEditPassed, controlEditDetail)
+  check('control 편집 helper 반례 20개가 독립 실행에서 통과한다', controlEditPassed, controlEditDetail)
 
   const coverage = COVERAGE
   const countTotal = Object.values(coverage.counts).reduce((sum, count) => sum + count, 0)

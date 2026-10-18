@@ -27,7 +27,10 @@ const check = (name, fn) => {
 }
 const codeOf = (fn) => { try { fn(); return null } catch (e) { return e instanceof h.ControlEditError ? e.code : `NOT_CONTROL_EDIT_ERROR ${e?.constructor?.name}` } }
 const REAL = readFileSync(join(ROOT, 'src/content/magazine/graph/control.ts'), 'utf8')
-const real = h.readControl(REAL)
+// 🔴 실제 control 판독 실패도 반례 하나의 FAIL 로 남긴다 — 모듈 최상위에서 죽으면 요약이 없어 무엇이 깨졌는지 모른다
+let real = null
+check('실제 control.ts 를 판독한다', () => { real = h.readControl(REAL) })
+real ??= { enabledClusters: [] }
 const without = (o) => { const { enabledClusters: _d, ...r } = o; return r }
 /** 대상 필드 밖이 의미상 같은가 */
 const sameRest = (a, b) => assert.deepEqual(without(h.readControl(b)), without(h.readControl(a)))
@@ -107,6 +110,36 @@ check('대상 필드 밖이 바뀌면 OTHER_FIELD_CHANGED (graphVersion · enabl
   ]
   for (const v of variants) assert.equal(codeOf(() => h.verifyClusterEdit(real, v, v.enabledClusters)), 'OTHER_FIELD_CHANGED', JSON.stringify(Object.keys(v)))
   assert.equal(codeOf(() => h.assertOnlyClustersChanged(real, { ...real, enabledClusters: ['x'] })), null)
+})
+// ── 실제 선언만 — 주석 · 문자열 · template · 부분 일치 이름의 가짜 CONTROL 은 편집 대상이 아니다 ──
+const DECOYS = [
+  ['decoy: line 주석 안의 완전한 가짜 CONTROL 선언', "// export const CONTROL = { enabledClusters: ['decoy'] }\n"],
+  ['decoy: block 주석 안의 가짜 CONTROL 선언', "/* export const CONTROL = { enabledClusters: ['decoy'] } */\n"],
+  ['decoy: 작은따옴표 문자열 안의 가짜 선언', "export const NOTE = 'export const CONTROL = { enabledClusters: [] }'\n"],
+  ['decoy: 큰따옴표 문자열 안의 가짜 선언', 'export const NOTE2 = "export const CONTROL = { enabledClusters: [] }"\n'],
+  ['decoy: template literal(${} 중첩) 안의 가짜 선언', "export const TPL = `export const CONTROL = ${JSON.stringify({ enabledClusters: ['decoy'] })} }`\n"],
+  ['decoy: CONTROLLER 선언(부분 일치 이름)', "export const CONTROLLER = { enabledClusters: ['decoy'] }\n"],
+  ['decoy: CONTROL_EXTRA 선언(부분 일치 이름)', "export const CONTROL_EXTRA = { enabledClusters: ['decoy'] }\n"],
+]
+for (const [name, decoy] of DECOYS) {
+  check(`${name} 뒤 실제 선언 — 실제 CONTROL 만 바뀌고 decoy 바이트 불변 · readControl 은 실제 값`, () => {
+    const src = decoy + REAL
+    assert.deepEqual(h.readControl(src).enabledClusters, real.enabledClusters)
+    const out = h.addCluster(src, 'money-work')
+    assert.ok(out.startsWith(decoy), 'decoy 가 바뀌었다')
+    assert.deepEqual(h.readControl(out).enabledClusters, [...real.enabledClusters, 'money-work'])
+    assert.equal(out.slice(decoy.length), h.addCluster(REAL, 'money-work'), '실제 선언 편집 결과가 decoy 없을 때와 다르다')
+    const rm = h.removeCluster(src, real.enabledClusters[0])
+    assert.ok(rm.startsWith(decoy), 'remove 가 decoy 를 바꿨다')
+  })
+}
+check('실제 CONTROL 선언 2개는 CONTROL_AMBIGUOUS · 0개는 CONTROL_NOT_FOUND', () => {
+  assert.equal(codeOf(() => h.addCluster(REAL + REAL.slice(REAL.indexOf('export const CONTROL')), 'money-work')), 'CONTROL_AMBIGUOUS')
+  assert.equal(codeOf(() => h.addCluster("// export const CONTROL = { enabledClusters: [] }\nexport const CONTROLLER = { enabledClusters: [] }", 'money-work')), 'CONTROL_NOT_FOUND')
+})
+check('실제 CONTROL 의 초기값이 함수 호출 · 배열이면 CONTROL_PARSE_FAILED', () => {
+  assert.equal(codeOf(() => h.addCluster("export const CONTROL = makeControl({ enabledClusters: ['a'] })", 'money-work')), 'CONTROL_PARSE_FAILED')
+  assert.equal(codeOf(() => h.addCluster("export const CONTROL = [{ enabledClusters: ['a'] }]", 'money-work')), 'CONTROL_PARSE_FAILED')
 })
 check('세 소비처가 고정 cluster 문자열 없이 공용 helper 를 쓴다', () => {
   const FIXED = /enabledClusters:\s*\[\s*['"]sleep['"]\s*,\s*['"]family['"]\s*\]/
