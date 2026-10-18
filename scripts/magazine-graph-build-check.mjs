@@ -18,6 +18,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { ensureCluster, readControl } from './lib/magazine-graph-control-edit.mjs'
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIB = process.env.MGRAPH_BUILD_LIB ?? join(HERE, 'lib/magazine-graph-build.mjs')
 const CLI = process.env.MGRAPH_BUILD_CLI ?? join(HERE, 'magazine-graph-build.mjs')
@@ -866,8 +868,9 @@ if (oldInput && newInput && realProduct) {
   })
   test('실제 입력 3b — money-work 를 켠 control 사본에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099', () => {
     const pt = productAt(realProduct)
-    const control = pt.control.replace("enabledClusters: ['sleep', 'family'],", "enabledClusters: ['sleep', 'family', 'money-work'],")
-    ok(control !== pt.control, 'control 사본 치환 실패 — 제품 control 이 예상과 다르다')
+    // 🔴 money-work 를 켠 control 사본 — 구조 편집(멱등). 이미 켜진 control 이어도 준비가 실패하지 않는다
+    const { text: control } = ensureCluster(pt.control, 'money-work')
+    ok(readControl(control).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
     const b = lib.buildAll({ inputTexts: inputsAt(newInput), productTexts: { ...pt, control }, admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN })
     eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-05'], 'GRAPH_READY')
     const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')

@@ -26,10 +26,11 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const LIB = process.env.RELATION_POLICY_LIB ?? join(HERE, 'lib')
 const load = async (name) => import(pathToFileURL(join(LIB, name)).href)
-let policy, build, source, spec
+let policy, build, source, spec, controlEdit
 try {
   policy = await load('magazine-relation-policy.mjs')
   build = await load('magazine-graph-build.mjs')
+  controlEdit = await load('magazine-graph-control-edit.mjs')
   source = await load('magazine-direct-spec-source.mjs')
   spec = await load('magazine-article-spec.mjs')
 } catch (e) { console.log(`LOAD_ERROR ${e.message}`); process.exit(3) }
@@ -127,8 +128,9 @@ if (newInput && realProduct) {
     const read = (p) => readFileSync(p, 'utf8')
     const inputTexts = Object.fromEntries(Object.values(build.INPUT_FILES).map((n) => [n, read(join(newInput, n))]))
     const productTexts = Object.fromEntries(Object.entries(build.PRODUCT_FILES).map(([k, r]) => [k, read(join(realProduct, r))]))
-    const control = productTexts.control.replace("enabledClusters: ['sleep', 'family'],", "enabledClusters: ['sleep', 'family', 'money-work'],")
-    assert.notEqual(control, productTexts.control, 'control 사본 치환 실패')
+    // 🔴 money-work 를 켠 control 사본 — 구조 편집(멱등). 이미 켜진 control 이어도 준비가 실패하지 않는다
+    const { text: control } = controlEdit.ensureCluster(productTexts.control, 'money-work')
+    assert.ok(controlEdit.readControl(control).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
     const b = build.buildAll({ inputTexts, productTexts: { ...productTexts, control }, admissionTexts: { slugManifest: '{"slugs":{}}', ledger: '' },
       effectiveAt: '2026-10-17T10:30:00+09:00', generatedAt: '2026-10-17T01:30:00.000Z' })
     const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')

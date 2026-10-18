@@ -228,6 +228,20 @@ console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 �
   }
   check('coverage 분류기 반례 31개가 독립 실행에서 통과한다', classifierPassed, classifierDetail)
 
+  // 🔴 control 사본 구조 편집 helper — 검사들이 control 문자열 고정 치환 대신 이것만 쓴다
+  let controlEditPassed = false
+  let controlEditDetail = ''
+  try {
+    controlEditDetail = execFileSync(process.execPath, [join(ROOT, 'scripts/magazine-graph-control-edit-check.mjs')], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    }).trim().split('\n').at(-1) ?? ''
+    controlEditPassed = /10 pass, 0 fail/.test(controlEditDetail)
+  } catch (err) {
+    controlEditDetail = String((err as { stdout?: string | Buffer }).stdout ?? err)
+  }
+  check('control 편집 helper 반례 10개가 독립 실행에서 통과한다', controlEditPassed, controlEditDetail)
+
   const coverage = COVERAGE
   const countTotal = Object.values(coverage.counts).reduce((sum, count) => sum + count, 0)
   check('coverage 행·상태 합이 공개 글 수와 같다',

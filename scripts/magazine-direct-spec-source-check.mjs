@@ -42,6 +42,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { removeCluster } from './lib/magazine-graph-control-edit.mjs'
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const PATHS = {
@@ -284,7 +286,8 @@ const BASIS_UNREADABLE = [
 const BASIS_DRIFTS = [
   ['graph off', [CONTROL, '  enabled: true,', '  enabled: false,']],
   ['kill switch', [CONTROL, '"tripped":false', '"tripped":true']],
-  ['cluster off', [CONTROL, "enabledClusters: ['sleep', 'family']", "enabledClusters: ['family']"]],
+  // 🔴 승인 basis 의 sourceCluster 를 실제 control 사본에서 구조적으로 끈다 — 현재 cluster 목록 문자열에 기대지 않는다
+  ['cluster off', (root) => { const p = join(root, CONTROL); writeFileSync(p, removeCluster(readFileSync(p, 'utf8'), BASIS.sourceCluster)) }],
   ['surface off', [CONTROL, '"FOOTER_SIBLING":true', '"FOOTER_SIBLING":false']],
   ['resolver 계약 변경', ['src/lib/magazine-graph.ts', "  'FOOTER_BRIDGE',\n] as const\n\n/** 하단", "] as const\n\n/** 하단"]],
 ]
