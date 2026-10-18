@@ -19,7 +19,8 @@ export type MagazineGraph = {
   contentHash: { intents: string; edges: string; mappings: string; combined: string }
   generatedAt: string
   edges: readonly MagazineGraphEdge[]
-  mappings: readonly { intent: string; slug: string; cluster: string | null }[]
+  /** 🔴 coverage 는 optional — 그 전 bundle(롤백 대상)에는 없다. 없으면 resolver 가 비-ANSWERS 로 본다 */
+  mappings: readonly { intent: string; slug: string; cluster: string | null; coverage?: string }[]
   intents: readonly { id: string; cluster: string | null; board: string }[]
 }
 export type MagazineGraphControl = {
