@@ -24,9 +24,12 @@ export const PARTICIPATION = Object.freeze({
   UNRESOLVED: 'UNRESOLVED',
   CONFLICT: 'CONFLICT',
 })
+/** 🔴 builder · resolver 와 같은 값이어야 한다 — graph 검사가 세 곳을 대조한다 */
+export const EDITORIAL_REASON_CODES = Object.freeze(['BOUNDED_RESEARCH_EXHAUSTED'])
+export const PARTICIPATION_SCHEMA = 'participation/1'
 const SHA256_RE = /^[0-9a-f]{64}$/
 const validEditorial = (p) => p?.state === PARTICIPATION.EDITORIAL_NON_SEARCH
-  && typeof p.reasonCode === 'string' && p.reasonCode.trim() !== ''
+  && EDITORIAL_REASON_CODES.includes(p.reasonCode)
   && typeof p.evidenceHash === 'string' && SHA256_RE.test(p.evidenceHash)
 
 const eligibleEdge = (edge) => edge?.active === true
@@ -112,6 +115,17 @@ export function analyzeGraphCoverage({ publicArticles, allArticles, graph }) {
     .filter((mapping) => !allSlugs.has(mapping.slug))
     .map((mapping) => ({ intent: mapping.intent, slug: mapping.slug }))
     .sort((a, b) => `${a.slug}/${a.intent}`.localeCompare(`${b.slug}/${b.intent}`))
+  // 🔴 bundle 판정 무결성 — 제품에 없는 slug 를 가리키는 선언 · 판정과 schema 표식의 짝이 어긋난 bundle
+  const declaredParticipation = Array.isArray(graph.participation) ? graph.participation : []
+  const staleParticipation = [...new Set(declaredParticipation
+    .map((p) => p?.slug)
+    .filter((slug) => typeof slug !== 'string' || !allSlugs.has(slug)))]
+    .map((slug) => ({ slug: typeof slug === 'string' ? slug : String(slug) }))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+  const marker = graph.schemaVersion?.participation
+  const participationSchemaValid = declaredParticipation.length > 0
+    ? marker === PARTICIPATION_SCHEMA
+    : marker === undefined && graph.participation === undefined
 
   const counts = Object.fromEntries(
     [...new Set(rows.map((row) => row.status))].sort().map((status) => [status, rows.filter((row) => row.status === status).length]),
@@ -123,7 +137,7 @@ export function analyzeGraphCoverage({ publicArticles, allArticles, graph }) {
     counts,
     rows,
     mappingMultiplicity: { sharedIntentMappings, multiIntentSlugs },
-    integrity: { staleMappings },
+    integrity: { staleMappings, staleParticipation, participationSchemaValid },
   }
 }
 
@@ -141,6 +155,9 @@ export function clusterActivationVerdict(report, cluster) {
       ? row.status !== 'READY'
       : row.participation !== PARTICIPATION.EDITORIAL_NON_SEARCH))
     .map((row) => ({ slug: row.slug, participation: row.participation, status: row.status }))
+  // 🔴 bundle 무결성이 깨지면 어느 cluster 도 판정을 통과하지 못한다 — 판정 자체를 믿을 수 없다
+  for (const stale of report.integrity.staleParticipation) blockers.push({ slug: stale.slug, participation: 'INTEGRITY', status: 'STALE_PARTICIPATION' })
+  if (!report.integrity.participationSchemaValid) blockers.push({ slug: '*', participation: 'INTEGRITY', status: 'PARTICIPATION_SCHEMA_INVALID' })
   const slugsOf = (state) => rows.filter((row) => row.participation === state).map((row) => row.slug)
   return {
     cluster,

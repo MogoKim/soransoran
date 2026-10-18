@@ -34,19 +34,30 @@ const COVERAGE_MUTATIONS = [
   { id: 'PC4 SEARCH_NODE 미준비가 활성화를 막지 않는다', from: "      ? row.status !== 'READY'", to: '      ? false',
     expect: '참여: mapped + edge 없음' },
   { id: 'PC5 slug 이름으로 editorial 처리', from: '    const declared = editorialBySlug.get(article.slug) ?? []',
-    to: "    const declared = editorialBySlug.get(article.slug) ?? (/editorial/.test(article.slug) ? [{ state: 'EDITORIAL_NON_SEARCH', reasonCode: 'NAME', evidenceHash: 'f'.repeat(64) }] : [])",
+    // 🔴 주입 선언은 계약 안의 reasonCode 를 쓴다 — 계약 밖이면 다른 방어가 막아 이 변이가 무효가 된다
+    to: "    const declared = editorialBySlug.get(article.slug) ?? (/editorial/.test(article.slug) ? [{ state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidenceHash: 'f'.repeat(64) }] : [])",
     expect: '참여: slug 이름·cluster 이름만으로는' },
   { id: 'PC6 공개 글 0편 cluster 활성 허용', from: '    ok: rows.length > 0 && blockers.length === 0,', to: '    ok: blockers.length === 0,',
     expect: '활성: 공개 글이 없는 cluster' },
   { id: 'PC7 같은 slug 의 editorial 선언 중복 허용', from: '      if (declared.length === 1 && validEditorial(declared[0])) {',
     to: '      if (declared.length >= 1 && validEditorial(declared[0])) {', expect: '참여: 같은 slug 의 editorial 선언 중복' },
+  { id: 'PC8 reasonCode 계약을 아무 문자열로 완화', from: '  && EDITORIAL_REASON_CODES.includes(p.reasonCode)',
+    to: "  && typeof p.reasonCode === 'string' && p.reasonCode.trim() !== ''", expect: '참여: reasonCode 가 계약 밖 문자열(OTHER)' },
+  { id: 'PC9 stale participation 차단 제거', from: '  for (const stale of report.integrity.staleParticipation) blockers.push(',
+    to: '  for (const stale of []) blockers.push(', expect: '무결성: 제품 글에 없는 slug' },
+  { id: 'PC10 schema 표식 무결성 차단 제거', from: '  if (!report.integrity.participationSchemaValid) blockers.push(',
+    to: '  if (false) blockers.push(', expect: '무결성: 판정은 있는데 schema 표식이' },
+  { id: 'PC11 stale participation 판정 제거', from: ".filter((slug) => typeof slug !== 'string' || !allSlugs.has(slug)))]",
+    to: '.filter(() => false))]', expect: '무결성: 제품 글에 없는 slug' },
 ]
 const RESOLVER_MUTATIONS = [
   { id: 'PR1 resolver 가 editorial 사유를 버린다', from: "    return { reason: editorial ? 'EDITORIAL_NON_SEARCH' : 'NO_MAPPING' }",
     to: "    return { reason: 'NO_MAPPING' }", expect: 'resolver: 매핑 없음 + editorial 선언' },
   { id: 'PR2 resolver 가 다른 slug 의 선언도 editorial 로 본다',
-    from: "(graph.participation ?? []).some((p) => p.slug === article.slug && p.state === 'EDITORIAL_NON_SEARCH')",
-    to: "(graph.participation ?? []).some((p) => p.state === 'EDITORIAL_NON_SEARCH')", expect: 'resolver: 다른 slug 의 선언' },
+    from: "(graph.participation ?? []).some((p) => p.slug === article.slug && p.state === 'EDITORIAL_NON_SEARCH'\n",
+    to: "(graph.participation ?? []).some((p) => p.state === 'EDITORIAL_NON_SEARCH'\n", expect: 'resolver: 다른 slug 의 선언' },
+  { id: 'PR3 resolver 가 reasonCode 계약을 보지 않는다', from: '\n      && (EDITORIAL_REASON_CODES as readonly string[]).includes(p.reasonCode))',
+    to: ')', expect: 'resolver: reasonCode 가 계약 밖 문자열(OTHER)' },
 ]
 
 const occurrences = (s, sub) => s.split(sub).length - 1

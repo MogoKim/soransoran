@@ -213,6 +213,8 @@ export const PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', '
  */
 export const EDITORIAL_NON_SEARCH = 'EDITORIAL_NON_SEARCH'
 export const EDITORIAL_REASON_CODES = Object.freeze(['BOUNDED_RESEARCH_EXHAUSTED'])
+/** 판정을 운반하는 bundle 의 schema 표식 — 판정 산출 행의 schemaVersion 과 같은 값 */
+export const PARTICIPATION_SCHEMA = 'participation/1'
 const SHA256_RE = /^[0-9a-f]{64}$/
 /** editorial 근거 묶음의 hash — 근거 순서와 무관하다. 연구 기록과 builder 가 이 함수 하나를 쓴다 */
 export function editorialEvidenceHash(evidence) {
@@ -377,17 +379,23 @@ export function validateBuiltArtifacts({ intents, edges, mappings, participation
 
   // 🔴 editorial 선언 — 근거 신원 · hash 가 없으면 받지 않고, 검색 mapping 과 동시에 있으면 계약 오류다
   const mappedSlugs = new Set(mappings.map((m) => m.slug))
-  identity(participation, { label: '산출 participation', keyOf: (p) => p.slug, valid: nonEmpty, unique: true })
-  participation.forEach((p) => {
+  const partRows = Array.isArray(participation) ? participation : []
+  if (!Array.isArray(participation)) bad.push('participation 산출이 배열이 아니다')
+  identity(partRows, { label: '산출 participation', keyOf: (p) => p.slug, valid: nonEmpty, unique: true })
+  partRows.forEach((p, i) => {
+    // 🔴 형식이 깨진 행은 역참조하지 않는다 — TypeError 가 아니라 계약 위반으로 막는다
+    if (!isPlain(p)) { bad.push(`participation ${i + 1}번 객체가 아니다`); return }
     const at = `participation ${p.slug}`
-    if (p.schemaVersion !== 'participation/1') bad.push(`${at} schemaVersion 계약 밖`)
+    if (p.schemaVersion !== PARTICIPATION_SCHEMA) bad.push(`${at} schemaVersion 계약 밖`)
     if (p.state !== EDITORIAL_NON_SEARCH) bad.push(`${at} state 계약 밖: ${JSON.stringify(p.state)}`)
     if (!EDITORIAL_REASON_CODES.includes(p.reasonCode)) bad.push(`${at} reasonCode 계약 밖: ${JSON.stringify(p.reasonCode)}`)
-    const refs = p.evidence.map((e) => e.ref)
-    if (!p.evidence.length || !p.evidence.every((e) => nonEmpty(e.ref) && isStr(e.sha256) && SHA256_RE.test(e.sha256))) {
+    const evidence = Array.isArray(p.evidence) ? p.evidence : null
+    if (evidence === null) bad.push(`${at} 근거 목록이 배열이 아니다`)
+    else if (!evidence.length || !evidence.every((e) => isPlain(e) && nonEmpty(e.ref) && isStr(e.sha256) && SHA256_RE.test(e.sha256))) {
       bad.push(`${at} 근거 신원·hash 누락`)
-    } else if (new Set(refs).size !== refs.length) bad.push(`${at} 근거 신원 중복`)
-    else if (p.evidenceHash !== editorialEvidenceHash(p.evidence)) bad.push(`${at} evidenceHash 가 근거 묶음과 다르다`)
+    } else if (new Set(evidence.map((e) => e.ref)).size !== evidence.length) bad.push(`${at} 근거 신원 중복`)
+    // 🔴 hash 는 형식 검증을 통과한 근거에만 계산한다
+    else if (p.evidenceHash !== editorialEvidenceHash(evidence)) bad.push(`${at} evidenceHash 가 근거 묶음과 다르다`)
     if (mappedSlugs.has(p.slug)) bad.push(`${at} EDITORIAL_NON_SEARCH 인데 canonical mapping 이 있다`)
   })
 
@@ -629,7 +637,7 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
   // ⑤ graph 참여 — editorial 선언만 싣는다. SEARCH_NODE 는 mappings 가, UNRESOLVED 는 선언 없음이 말한다
   const participation = published.filter((p) => p.graphParticipation !== undefined).map((p) => {
     const g = p.graphParticipation
-    return { schemaVersion: 'participation/1', slug: p.slug, state: g.state ?? null, reasonCode: g.reasonCode ?? null,
+    return { schemaVersion: PARTICIPATION_SCHEMA, slug: p.slug, state: g.state ?? null, reasonCode: g.reasonCode ?? null,
       evidence: g.evidence.map((e) => ({ ref: isPlain(e) ? e.ref ?? null : null, sha256: isPlain(e) ? e.sha256 ?? null : null })),
       evidenceHash: g.evidenceHash ?? null }
   }).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
@@ -681,6 +689,8 @@ export function slimGraph({ graphVersion, contentHash, generatedAt, intents, edg
   // 🔴 editorial 판정은 선언이 있을 때만 싣는다 — 선언 없는 판의 bundle 바이트(롤백 대상 포함)를 바꾸지 않는다.
   //    근거 신원 목록은 participation.jsonl 에 남고, 제품은 판정과 evidenceHash 만 읽는다
   if (participation.length) {
+    // 🔴 판정을 운반하는 bundle 만 schema 표식을 단다 — 선언 없는 판은 schemaVersion 바이트도 그대로
+    slim.schemaVersion = { ...slim.schemaVersion, participation: PARTICIPATION_SCHEMA }
     slim.participation = participation.map((p) => ({ slug: p.slug, state: p.state, reasonCode: p.reasonCode, evidenceHash: p.evidenceHash }))
   }
   return slim
@@ -703,6 +713,11 @@ export function exportProblems(slim, implementedSurfaces) {
   const partBad = (slim.participation ?? []).filter((p) => p.state !== EDITORIAL_NON_SEARCH || !EDITORIAL_REASON_CODES.includes(p.reasonCode)
     || !SHA256_RE.test(p.evidenceHash ?? '') || mappedSlugs.has(p.slug))
   if (partBad.length) bad.push(`EXPORT_PARTICIPATION_INVALID ${partBad.map((p) => p.slug).join(',')}`)
+  // 🔴 판정과 schema 표식은 함께 다닌다 — 한쪽만 있으면 소비자가 판을 잘못 읽는다
+  const hasPart = Array.isArray(slim.participation) && slim.participation.length > 0
+  const marker = slim.schemaVersion?.participation
+  if (hasPart && marker !== PARTICIPATION_SCHEMA) bad.push(`EXPORT_PARTICIPATION_SCHEMA_MISSING ${JSON.stringify(marker ?? null)}`)
+  if (!hasPart && (marker !== undefined || 'participation' in slim)) bad.push('EXPORT_PARTICIPATION_SCHEMA_ORPHAN')
   const leak = slim.edges.filter((e) => e.active && e.type !== 'COMMUNITY' && !live.has(e.to))
   if (leak.length) bad.push(`EXPORT_UNPUBLISHED_TARGET_ACTIVE ${ids(leak)}`)
   const badBoard = slim.edges.filter((e) => e.type === 'COMMUNITY' && !boards.has(e.to))

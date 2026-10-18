@@ -736,7 +736,41 @@ test('반례22c — provenance 누락·빈 hash·hash 불일치·reasonCode 계�
 })
 test('반례22d — 선언이 없으면 participation 키 · participation.jsonl · contentHash.participation 이 없다(롤백 bundle 호환)', () => {
   const b = build()
-  eq([b.layers.participation, 'participation' in b.slim, 'participation' in b.manifest.contentHash, 'participation.jsonl' in b.files], [[], false, false, false], '선언 없는 판')
+  eq([b.layers.participation, 'participation' in b.slim, 'participation' in b.manifest.contentHash, 'participation.jsonl' in b.files, 'participation' in b.slim.schemaVersion],
+    [[], false, false, false, false], '선언 없는 판')
+})
+test('반례22f — 깨진 participation 행(null · 비객체 · 근거 없음 · 근거 객체 · 근거 원소 null · 배열 아님)은 TypeError 없이 GraphBuildError INPUT_SCHEMA_INVALID', () => {
+  const good = build({ world: edWorld(), articles: ED_ARTICLES }).layers
+  const ok1 = good.participation[0]
+  const cases = [
+    ['null 행', [null], '객체가 아니다'],
+    ['문자열 행', ['ed'], '객체가 아니다'],
+    ['근거 undefined', [{ ...ok1, evidence: undefined }], '근거 목록이 배열이 아니다'],
+    ['근거 객체', [{ ...ok1, evidence: { ref: 'x', sha256: 'a'.repeat(64) } }], '근거 목록이 배열이 아니다'],
+    ['근거 원소 null', [{ ...ok1, evidence: [null] }], '근거 신원·hash 누락'],
+    ['participation 이 배열 아님', { 0: ok1 }, '배열이 아니다'],
+  ]
+  for (const [label, participation, want] of cases) {
+    let err = null
+    try { lib.validateBuiltArtifacts({ ...good, participation }) } catch (e) { err = e }
+    ok(err instanceof lib.GraphBuildError, `${label}: GraphBuildError 아님 — ${err?.constructor?.name} ${String(err?.message).slice(0, 120)}`)
+    ok(err.code === 'INPUT_SCHEMA_INVALID' && String(err.why).includes(want), `${label}: ${err.code} ${String(err.why).slice(0, 160)}`)
+  }
+})
+test('반례22g — 판정을 운반하는 bundle 만 schemaVersion.participation = participation/1 · 짝이 어긋나면 export 가 거부 · EXPORT_HASH 가 표식을 덮는다', () => {
+  const b = build({ world: edWorld(), articles: ED_ARTICLES })
+  eq(b.slim.schemaVersion.participation, 'participation/1', '표식')
+  ok(b.files[`bundle/${b.graphVersion}.ts`].includes('"participation": "participation/1"'), 'bundle 텍스트에 표식 없음')
+  const surfaces = ['CTA_END', 'FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE']
+  const { participation: _drop, ...noMarker } = b.slim.schemaVersion
+  ok(lib.exportProblems({ ...b.slim, schemaVersion: noMarker }, surfaces).some((x) => x.startsWith('EXPORT_PARTICIPATION_SCHEMA_MISSING')), '표식 없음')
+  ok(lib.exportProblems({ ...b.slim, schemaVersion: { ...noMarker, participation: 'participation/2' } }, surfaces).some((x) => x.startsWith('EXPORT_PARTICIPATION_SCHEMA_MISSING')), '다른 표식')
+  const plain = build().slim
+  ok(lib.exportProblems({ ...plain, schemaVersion: { ...plain.schemaVersion, participation: 'participation/1' } }, surfaces).includes('EXPORT_PARTICIPATION_SCHEMA_ORPHAN'), '판정 없는 표식')
+  ok(lib.exportProblems({ ...plain, participation: [] }, surfaces).includes('EXPORT_PARTICIPATION_SCHEMA_ORPHAN'), '빈 판정 키')
+  ok(lib.bundleText({ ...b.slim, schemaVersion: noMarker }).exportHash !== b.manifest.exportHash, 'EXPORT_HASH 가 표식을 덮지 않는다')
+  const row = b.files['participation.jsonl'].trim()
+  ok(row.includes('"schemaVersion":"participation/1"'), 'contentHash 가 덮는 산출 행에 schema 가 없다')
 })
 test('반례22e — 검색 mapping 과 겹치거나 hash 형식 밖인 slim participation 은 export 자체 검사가 거부한다', () => {
   const slim = build({ world: edWorld(), articles: ED_ARTICLES }).slim

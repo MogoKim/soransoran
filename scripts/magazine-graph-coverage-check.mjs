@@ -94,9 +94,13 @@ check('상태별 count 합이 공개 글 수와 같다', () => {
 // ── graph 참여 상태 · 활성 cluster 계약 (2026-10-18) ──
 const HASH = 'a'.repeat(64)
 const editorial = (slug, over = {}) => ({ slug, state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidenceHash: HASH, ...over })
-const world = ({ articles, mappings = [], edges = [], participation }) => analyzeGraphCoverage({
-  publicArticles: articles, allArticles: articles,
-  graph: participation === undefined ? { graphVersion: 'g-test', mappings, edges } : { graphVersion: 'g-test', mappings, edges, participation },
+// 🔴 fixture 는 실제 bundle 보다 강할 수 없다 — 판정을 운반하는 bundle 은 schema 표식을 함께 단다(builder 와 같은 모양)
+const SCHEMA = { intent: 'intent/2', edge: 'edge/3', mapping: 'mapping/2', manifest: 'manifest/1' }
+const world = ({ articles, allArticles = articles, mappings = [], edges = [], participation, schemaVersion }) => analyzeGraphCoverage({
+  publicArticles: articles, allArticles,
+  graph: participation === undefined
+    ? { graphVersion: 'g-test', schemaVersion: schemaVersion ?? SCHEMA, mappings, edges }
+    : { graphVersion: 'g-test', schemaVersion: schemaVersion ?? { ...SCHEMA, participation: 'participation/1' }, mappings, edges, participation },
 })
 const verdict = (report, cluster = 'sleep') => clusterActivationVerdict(report, cluster)
 // a → b 로 쓸 수 있는 관계가 있는 기본 판. c 는 cluster 의 세 번째 공개 글
@@ -164,6 +168,34 @@ check('활성: editorial 1편이 있어도 다른 SEARCH_NODE 의 NO_ACTIVE_EDGE
     mappings: [...READY_BASE.mappings, { intent: 'i4', slug: 'd' }], edges: READY_BASE.edges, participation: [editorial('c')] })
   assert.equal(verdict(report).ok, false)
   assert.deepEqual(verdict(report).blockers, [{ slug: 'd', participation: 'SEARCH_NODE', status: 'NO_ACTIVE_EDGE' }])
+})
+check('참여: reasonCode 가 계약 밖 문자열(OTHER)이면 PARTICIPATION_INVALID · UNRESOLVED · 활성 차단', () => {
+  const report = world({ articles: [article('a'), article('b'), article('c')], ...READY_BASE, participation: [editorial('c', { reasonCode: 'OTHER' })] })
+  assert.deepEqual([row(report, 'c').participation, row(report, 'c').status], ['UNRESOLVED', 'PARTICIPATION_INVALID'])
+  assert.equal(verdict(report).ok, false)
+})
+check('무결성: 제품 글에 없는 slug 를 가리키는 선언은 STALE_PARTICIPATION 으로 모든 cluster 활성 차단', () => {
+  const report = world({ articles: [article('a'), article('b')], ...READY_BASE, participation: [editorial('ghost')] })
+  assert.deepEqual(report.integrity.staleParticipation, [{ slug: 'ghost' }])
+  assert.equal(verdict(report).ok, false)
+  assert.ok(verdict(report).blockers.some((b) => b.status === 'STALE_PARTICIPATION' && b.slug === 'ghost'))
+})
+check('무결성: 미공개지만 제품에 있는 글을 가리키는 선언은 stale 이 아니다', () => {
+  const report = world({ articles: [article('a'), article('b')], allArticles: [article('a'), article('b'), article('later')], ...READY_BASE, participation: [editorial('later')] })
+  assert.deepEqual(report.integrity.staleParticipation, [])
+  assert.equal(verdict(report).ok, true)
+})
+check('무결성: 판정은 있는데 schema 표식이 없거나 다르면 PARTICIPATION_SCHEMA_INVALID 로 차단', () => {
+  for (const schemaVersion of [SCHEMA, { ...SCHEMA, participation: 'participation/2' }]) {
+    const report = world({ articles: [article('a'), article('b'), article('c')], ...READY_BASE, participation: [editorial('c')], schemaVersion })
+    assert.equal(report.integrity.participationSchemaValid, false, JSON.stringify(schemaVersion))
+    assert.ok(verdict(report).blockers.some((b) => b.status === 'PARTICIPATION_SCHEMA_INVALID'), JSON.stringify(schemaVersion))
+  }
+})
+check('무결성: schema 표식만 있고 판정이 없으면 PARTICIPATION_SCHEMA_INVALID 로 차단', () => {
+  const report = world({ articles: [article('a'), article('b')], ...READY_BASE, schemaVersion: { ...SCHEMA, participation: 'participation/1' } })
+  assert.equal(report.integrity.participationSchemaValid, false)
+  assert.equal(verdict(report).ok, false)
 })
 
 console.log(`\nM-GRAPH coverage 검사: ${pass} pass, ${fail} fail`)

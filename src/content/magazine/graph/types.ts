@@ -15,7 +15,8 @@ export type MagazineGraphEdge = {
 }
 export type MagazineGraph = {
   graphVersion: string
-  schemaVersion: { intent: string; edge: string; mapping: string; manifest: string }
+  /** 🔴 participation 은 판정을 운반하는 bundle 에만 있다 */
+  schemaVersion: { intent: string; edge: string; mapping: string; manifest: string; participation?: 'participation/1' }
   contentHash: { intents: string; edges: string; mappings: string; participation?: string; combined: string }
   generatedAt: string
   edges: readonly MagazineGraphEdge[]
@@ -28,7 +29,7 @@ export type MagazineGraph = {
 export type MagazineGraphParticipation = {
   slug: string
   state: 'EDITORIAL_NON_SEARCH'
-  reasonCode: string
+  reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED'
   evidenceHash: string
 }
 export type MagazineGraphControl = {

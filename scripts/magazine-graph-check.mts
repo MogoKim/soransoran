@@ -41,6 +41,7 @@ import {
 } from '../src/lib/magazine'
 import {
   DISCOVERY_SLOT,
+  EDITORIAL_REASON_CODES as RESOLVER_REASON_CODES,
   FOOTER_SURFACES,
   IMPLEMENTED_SURFACES,
   MAX_DIRECT,
@@ -91,7 +92,16 @@ import {
   type Pr,
 } from './magazine-graph-merge.mjs'
 import { AUTO_BRANCH_PREFIX, REQUIRED_CHECKS } from './lib/magazine-merge-gate.mjs'
-import { analyzeGraphCoverage, clusterActivationVerdict } from './lib/magazine-graph-coverage.mjs'
+import {
+  EDITORIAL_REASON_CODES as COVERAGE_REASON_CODES,
+  PARTICIPATION_SCHEMA as COVERAGE_PARTICIPATION_SCHEMA,
+  analyzeGraphCoverage,
+  clusterActivationVerdict,
+} from './lib/magazine-graph-coverage.mjs'
+import {
+  EDITORIAL_REASON_CODES as BUILD_REASON_CODES,
+  PARTICIPATION_SCHEMA as BUILD_PARTICIPATION_SCHEMA,
+} from './lib/magazine-graph-build.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 let pass = 0
@@ -212,11 +222,11 @@ console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 �
       cwd: ROOT,
       encoding: 'utf8',
     }).trim().split('\n').at(-1) ?? ''
-    classifierPassed = /26 pass, 0 fail/.test(classifierDetail)
+    classifierPassed = /31 pass, 0 fail/.test(classifierDetail)
   } catch (err) {
     classifierDetail = String((err as { stdout?: string | Buffer }).stdout ?? err)
   }
-  check('coverage 분류기 반례 26개가 독립 실행에서 통과한다', classifierPassed, classifierDetail)
+  check('coverage 분류기 반례 31개가 독립 실행에서 통과한다', classifierPassed, classifierDetail)
 
   const coverage = COVERAGE
   const countTotal = Object.values(coverage.counts).reduce((sum, count) => sum + count, 0)
@@ -828,6 +838,13 @@ console.log('\n④-G graph 참여 (SEARCH_NODE · EDITORIAL_NON_SEARCH · UNRESO
       && reasonOf({ ...base, participation: [decl('self', { state: 'SEARCH_NODE' as FPart['state'] })] }) === 'NO_MAPPING')
   check('resolver: 매핑이 있으면 선언이 있어도 editorial 사유를 쓰지 않는다',
     reasonOf({ ...base, mappings: [{ intent: 'I-S', slug: 'self', cluster: 'fam' }], participation: [decl('self')] }) === 'NO_RESULT')
+  check('resolver: reasonCode 가 계약 밖 문자열(OTHER)이면 editorial 이 아니다 → NO_MAPPING',
+    reasonOf({ ...base, participation: [decl('self', { reasonCode: 'OTHER' as FPart['reasonCode'] })] }) === 'NO_MAPPING')
+  check('계약 대조: builder · coverage · resolver 의 editorial reasonCode 와 participation schema 가 같다',
+    JSON.stringify([...BUILD_REASON_CODES]) === JSON.stringify([...COVERAGE_REASON_CODES])
+      && JSON.stringify([...BUILD_REASON_CODES]) === JSON.stringify([...RESOLVER_REASON_CODES])
+      && BUILD_PARTICIPATION_SCHEMA === COVERAGE_PARTICIPATION_SCHEMA && BUILD_PARTICIPATION_SCHEMA === 'participation/1',
+    `${[...BUILD_REASON_CODES]} · ${BUILD_PARTICIPATION_SCHEMA}`)
 
   // 🔴 현재 운영 판 — 선언 이전 판이다. 활성 cluster 는 전부 SEARCH_NODE 로 서 있어야 한다
   check('운영 bundle: participation 선언이 없으면 키 자체가 없다 (선언 이전 판 호환)',
@@ -843,7 +860,7 @@ console.log('\n④-G graph 참여 (SEARCH_NODE · EDITORIAL_NON_SEARCH · UNRESO
   const unmappedMw = COVERAGE.rows.filter((r: { cluster: string; participation: string }) => r.cluster === 'money-work' && r.participation === 'UNRESOLVED')
     .map((r: { slug: string }) => r.slug)
   const withEditorial = analyzeGraphCoverage({ publicArticles: published, allArticles: MAGAZINE_ARTICLES,
-    graph: { ...GRAPH, participation: unmappedMw.map((slug: string) => decl(slug)) } })
+    graph: { ...GRAPH, schemaVersion: { ...GRAPH.schemaVersion, participation: 'participation/1' }, participation: unmappedMw.map((slug: string) => decl(slug)) } })
   const mwVerdict = clusterActivationVerdict(withEditorial, 'money-work')
   check('money-work: 미매핑 글을 editorial 로 선언해도 활성화는 계속 차단된다',
     mw.length > 0 && unmappedMw.length > 0 && !mwVerdict.ok
