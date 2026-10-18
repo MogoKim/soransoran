@@ -1,5 +1,5 @@
 /**
- * 닉네임 후보 자동 생성 — 🔴 **순수 함수. DB·네트워크·난수 0** (2026-10-18)
+ * 닉네임 후보 자동 생성 — 🔴 **순수 함수. DB·네트워크·난수 0** (2026-10-19)
  *
  * 🔴 왜 자동인가.
  *    회차마다 창업자가 이름을 하나씩 고르면 16명(Wave3 11 + Wave4 5)에 16번 멈춘다.
@@ -10,16 +10,17 @@
  *    여기 있는 것은 **후보 공간**이다. 누구에게 갈지는 정해져 있지 않고,
  *    최종 결정은 **적용 시점의 Gate ⑥-B**(회원 닉네임·기존 persona 대조 · 규칙)가 한다. 원천 작가명은 입력이 아니다(2026-10-01 · #641).
  *
- * 🔴 정책(Pool §3-2)
- *      🟢 **두세 글자** 순우리말 · 일상 사물/음식/활동 — 커뮤니티 실사용 어감을 따른다
+ * 🔴 정책(D100 canon §4.2 · runbook §2.1 2026-10-16 — Pool §3-2 는 역사 문서)
+ *      🟢 합성 이름 — 길이·리듬·일상 구어체가 커뮤니티 실분포를 따른다.
+ *         짧은 순우리말(2~3자)은 소수. 반복 리듬(도란도란 류)과
+ *         일상 구어체(수다쟁이 류) 4~5자도 함께 쓴다.
  *      🔴 AI 티(숫자 접미 · 영문 혼용 · 봇/AI 연상) · 운영자 티
  *      🔴 출처 커뮤니티 호칭 계열 · 실명형 · 지역명
  *      🔴 정확한 나이 · 지역 · 병명 · 가족상태가 드러나는 이름
  *
- * 🔴 **길이는 2~3자다.** 두세 글자 어감이 커뮤니티 닉네임 관행과 맞는다.
- *    자연어 계열만 단일 문화로 채우지 않는다 — 음식·살림·일상 활동·생물 등 다양한
- *    일상어를 섞어 실제 커뮤니티 이름 패턴을 따른다(2026-10-18).
- *    🔴 `살`이 든 말(`살림`)은 IDENTITY_MARKERS(나이·가족 표지)에 걸려
+ * 🔴 **길이는 2~5자다.** 짧은 순우리말 단일 문화에서 벗어나 반복 리듬(4자)·구어체(4자)를
+ *    포함해 커뮤니티 실분포를 따른다(2026-10-19).
+ *    🔴 `살`이 든 말은 IDENTITY_MARKERS(나이·가족 표지)에 걸려
  *       어차피 걸러지므로 pool 에 두지 않는다.
  */
 
@@ -41,13 +42,27 @@ const BODY2: readonly string[] = [
 ]
 
 /**
- * 🔴 단독으로 쓰는 두세 글자 — 음식·살림·활동·자연·생물 등 일상어 전반을 고루 섞는다.
+ * 🔴 단독으로 쓰는 2~3글자 — 음식·살림·활동·일상어 전반. 짧은 순우리말은 소수다.
  */
 const SOLO: readonly string[] = [
   ...BODY2,
   '인절미', '누룽지', '부침개', '바구니', '책갈피', '앞치마', '도라지', '취나물',
   '보자기', '손수건', '민들레', '봉숭아', '오솔길', '무지개', '조약돌',
-  '들꽃', '냇가', '솔숲', '노을', '달빛',
+  // 2자 일상어 — 짧은 이름이 소수임을 보장하는 최소 보충
+  '소담', '다솜', '가온', '단비',
+]
+
+/**
+ * 🔴 4~5자 반복 리듬·일상 구어체 — 커뮤니티 실분포의 중심축.
+ *    D100 canon §4.2 · runbook §2.1 (2026-10-16) 이 요구하는 길이·리듬 다양성을 담는다.
+ *    `살`이 든 말(IDENTITY_MARKERS)은 넣지 않는다.
+ */
+const PHRASE: readonly string[] = [
+  // 반복 리듬 (4자)
+  '도란도란', '따끈따끈', '조용조용', '나풀나풀', '소곤소곤', '토닥토닥',
+  '두근두근', '오손도손', '반짝반짝', '다사다사',
+  // 일상 구어체 (4자)
+  '수다쟁이', '이것저것', '소소하게', '요리조리', '이따금씩',
 ]
 
 // ─────────────────────────────────────────────────────────
@@ -75,8 +90,11 @@ const IDENTITY_MARKERS = [
 /** 🔴 브랜드 금지어 (CLAUDE.md · Gate ⑤) */
 const BRAND_BANNED = ['시니어', '어르신', '노인', '실버']
 
-/** 🔴 정본 Pool §3-2 "두세 글자". 이 상수 하나가 생성기와 검사기를 함께 묶는다 */
-export const NAME_LENGTH = { min: 2, max: 3 } as const
+/**
+ * 🔴 D100 canon §4.2 · runbook §2.1 (2026-10-16). 이 상수 하나가 생성기와 검사기를 함께 묶는다.
+ *    옛 Pool §3-2 의 "두세 글자" 상한은 커뮤니티 실분포를 반영한 2~5자로 대체됐다.
+ */
+export const NAME_LENGTH = { min: 2, max: 5 } as const
 
 export type NamePolicyVerdict = { ok: boolean; problems: string[] }
 
@@ -87,10 +105,10 @@ export function verifyNamePolicy(raw: string): NamePolicyVerdict {
   if (name === '') return { ok: false, problems: ['비어 있다'] }
   const lower = name.toLowerCase()
 
-  // 🔴 길이 — 정본(Pool §3-2)이 **두세 글자**로 못박았다. 조합형 예외를 두지 않는다
+  // 🔴 길이 — canon §4.2 · runbook §2.1: 커뮤니티 실분포 2~5자. 조합형 예외 없음.
   const len = [...name].length
   if (len < NAME_LENGTH.min) problems.push(`${len}자 — 너무 짧다 (${NAME_LENGTH.min}~${NAME_LENGTH.max}자)`)
-  if (len > NAME_LENGTH.max) problems.push(`${len}자 — 정본은 두세 글자다 (${NAME_LENGTH.min}~${NAME_LENGTH.max}자)`)
+  if (len > NAME_LENGTH.max) problems.push(`${len}자 — 범위 초과 (${NAME_LENGTH.min}~${NAME_LENGTH.max}자)`)
 
   if (/[0-9]/.test(name)) problems.push('숫자가 들어 있다 (AI 티)')
   if (/[A-Za-z]/.test(name)) problems.push('영문이 섞여 있다 (AI 티)')
@@ -141,6 +159,10 @@ export function candidatesFor(code: string, limit = 40): string[] {
     if (out.includes(n)) return
     if (!verifyNamePolicy(n).ok) return
     out.push(n)
+  }
+  // 🔴 PHRASE 먼저 — 4~5자 반복 리듬·구어체가 pool 앞자리를 보장받아야 단일 길이 복구를 막는다
+  for (let i = 0; i < PHRASE.length && out.length < limit; i += 1) {
+    push(PHRASE[(seed + i) % PHRASE.length]!)
   }
   for (let i = 0; i < SOLO.length && out.length < limit; i += 1) {
     push(SOLO[(seed + i) % SOLO.length]!)

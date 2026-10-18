@@ -78,6 +78,44 @@ const bad = (name: string, kind: string, detail: string): void => {
   }
 }
 
+// ─── ①-b 길이 다양성 · 반복 리듬 회귀 감지 ─────────────────────
+//   canon §4.2 · runbook §2.1 (2026-10-16): 짧은 순우리말은 소수,
+//   반복 리듬·구어체 4자 이름이 pool 에 있어야 한다.
+{
+  // NAME_LENGTH 상한이 4자 이상을 허용하는가
+  if (NAME_LENGTH.max < 4) {
+    bad('길이 상한 다양성', 'source',
+      `🔴 NAME_LENGTH.max=${NAME_LENGTH.max} < 4 — 커뮤니티 스타일 4자 이름 불허`)
+  } else {
+    ok('길이 상한 다양성', 'source',
+      `NAME_LENGTH.max=${NAME_LENGTH.max} ≥ 4 — 반복 리듬·구어체 통과 가능`)
+  }
+
+  // D20 후보 pool 에 4자 이름이 충분한가 (단일 길이 복구 방지)
+  const cands4 = D20_CODES.flatMap((code) => candidatesFor(code, 40))
+    .filter((n) => [...n].length === 4)
+  const unique4 = [...new Set(cands4)]
+  if (unique4.length < 3) {
+    bad('pool 4자 다양성', 'source',
+      `🔴 D20 후보 중 4자 이름 ${unique4.length}종 < 3 — 단일 길이 pool 복구 의심`)
+  } else {
+    ok('pool 4자 다양성', 'source',
+      `D20 후보 중 4자 이름 ${unique4.length}종 (${unique4.slice(0, 3).join(' · ')} …)`)
+  }
+
+  // 짧은 이름(2~3자)이 전체의 90% 이하인가 (짧은 이름 단일 문화 방지)
+  const allCands = D20_CODES.flatMap((code) => candidatesFor(code, 40))
+  const shortCount = allCands.filter((n) => [...n].length <= 3).length
+  const shortRatio = shortCount / (allCands.length || 1)
+  if (shortRatio > 0.9) {
+    bad('pool 길이 쏠림', 'source',
+      `🔴 2~3자 이름 비율 ${Math.round(shortRatio * 100)}% > 90% — 짧은 이름 단일 문화 의심`)
+  } else {
+    ok('pool 길이 쏠림 방지', 'source',
+      `2~3자 비율 ${Math.round(shortRatio * 100)}% ≤ 90% (4자+ 포함)`)
+  }
+}
+
 // ─── ② 정책 검사기: AI·운영자·식별·브랜드 마커 ──────────────────
 {
   const cases: [string, string][] = [
