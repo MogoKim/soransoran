@@ -1,12 +1,12 @@
 {
   "version": "quality-v12",
-  "digest": "8f3c4c6430657bd782a6169f089fd40d587eec2eb678be4ba09f5b95f7e7793d",
+  "digest": "8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3",
   "files": {
-    "src/lib/quality-contract.ts": "5c578fc1eeb512e4eef6cea0134c6455fe580a3e92cb31d73e0d91119c94ea4c",
+    "src/lib/quality-contract.ts": "5967a0472a07b3675973bb08d45ce3cb464f86a9d76df33c21a07cac6c621baa",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "23a27b0069c0e031556583f3af25af5b67b9b4806b959a20b5514148ffa39ce5",
+    "src/lib/content-core/draft-life-gates.ts": "151947848ae6773b4beea8b547b34e9e36a40f1b8fba8ecd09bbe59ca7681137",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "913ad8d47c2968cb1d2a55288a7c73ca1dadfdca7ecaa3a8f325f1a46fa3b360",
+    "src/lib/content-core/pipeline.ts": "07d84f0b858d0f2c7db827c297f17adc7f28c79718ddb5aa41510524dcd65653",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
@@ -15,7 +15,7 @@
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
     "scripts/lib/content-core-run.mts": "bc4fbb119cd916a200cbd0a9245d1bbf7042777b07c3b480294131484c3d9800",
-    "scripts/lib/content-core-prompts.mts": "988828d01d7ceacdbc1a2c90d54b0b1d1d20f9849013bf1a8305e5d7bf1cb9c6",
+    "scripts/lib/content-core-prompts.mts": "9037cc98a237c0e174581cb772d37bcb90069f4263c87ddeea2e3a1ed605a0cd",
     "src/lib/auto-ready-quality-cohort.ts": "2872b10712712c081e27aa456912ccd41386bd0f230edc2f4492062453b3f229",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -31,11 +31,13 @@
     "src/lib/content-core/family-specifics.ts": "fbed290b61cb864326035832eb2277615dc430779807fc245e1213f87ed4087e"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v11 → quality-v12",
+    "kind": "revise",
+    "reason": "quality-v12 digest 8f3c4c643065… → 8ff1640313d5… · 미배포 quality-v12의 안전 창작 허용과 고위험 사실 차단 경계를 최종 보정",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/content-core/draft-life-gates.ts"
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/content-core/pipeline.ts",
+      "scripts/lib/content-core-prompts.mts"
     ]
   }
 }

@@ -388,7 +388,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
     card: realCard('P13'), ...hold(['externalCommunityClaim']),
   },
   {
-    queueId: 'cmukme8nr00012yl0vi02d16v', label: '🔴 #19 P08 원천 카페 글을 본 말 + 🟡 계획 noLifeFactNeeded 인데 "우리 집만 그런 게 아니었구나"',
+    queueId: 'cmukme8nr00012yl0vi02d16v', label: '🔴 #19 P08 원천 카페 글을 본 말 + 🟢 구체 사실 없는 공감 표현',
     source: { id: 'fx-v3-19', ...SRC_ESTATE },
     sourceMeta: UNKNOWN_TIME,
     draft: {
@@ -400,7 +400,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P08', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
       universalReason: '부모님의 아들 편중 상속에 대한 보편적인 씁쓸함이다',
     }),
-    card: realCard('P08'), expect: ['externalCommunityClaim'], expectReview: ['unwarrantedSelfClaim'],
+    card: realCard('P08'), expect: ['externalCommunityClaim'], expectReview: [],
   },
   {
     queueId: 'cmukme8sk00052yl0v1l7903m', label: '🔴 #21 P15 원문 사흘 전 · "지금 콘서트인데 배우가 나왔어요"',
@@ -755,9 +755,9 @@ export const SOURCE_PHRASES: readonly SourcePhrase[] = [
     source: { title: '명절', body: '그래도 모처럼 모이니 갈비도 구워 먹고 김밥도 해서 먹으니 좋네요\n그래도 모처럼 모이니\n갈비도 구워 먹고' }, want: 'pass' },
   { card: 'P01', title: '기사', body: '가수 부녀 인터뷰 기사 보셨나요? 마음이 안 좋더라고요.',
     source: { title: '기사', body: '[단독] 가수 부녀 인터뷰 마음 안좋더라 입력 2026.09.21. 오후 3:33 기사원문 공감 텍스트 음성 변환 서비스 글자 크기 변경 공유하기' }, want: 'pass' },
-  // 9 noLifeFactNeeded 가족사 — 사람 검토 · 과차단 반례
-  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'review:unwarrantedSelfClaim' },
-  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: Q, want: 'hold:unwarrantedSelfClaim' },
+  // 9 구체 생활 사실 없는 가족 유사 공감 — 자리와 무관하게 허용
+  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'pass' },
+  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: Q, want: 'pass' },
   { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: { selfBasis: 'lifeFacts', warrants: [{ fact: 'children' }] }, want: 'pass' },
   { card: 'P07', title: '관리비', body: '저희 아파트는 여름마다 관리비를 좀 깎아 줘요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'pass' },
   { card: 'P14', title: '호칭', body: '친정이나 처가는 친정댁, 처가댁이라고 안 부르잖아요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'pass' },

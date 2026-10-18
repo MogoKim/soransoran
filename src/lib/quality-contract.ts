@@ -121,8 +121,9 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  */
 /**
  * `quality-v12` (2026-10-18) = **bounded creativity** — 과도한 요약형 보수성 제거.
- * `draft-gates-v10` 의 Section B 를 분기한다: 저위험 자기 주장 축(work·parents)과 가족 유사 연결 표현("우리 집도 그래요")은
- * 즉시 차단 대신 사람 검토(`reviews`)로만 보낸다. 고위험 축(배우자·자녀·돌봄·갱년기·자산)·만남·No-Go·시점·자료 의존·잘림 완성은 그대로다.
+ * 생성 `v2-draft-p13`과 의미 검수 `v2-review-p9`가 감상·질문·비유·일반 관찰·재구성을 허용하고,
+ * `draft-gates-v10`은 저위험 직장 결 및 구체 사실 없는 가족 유사 연결 표현만 허용한다.
+ * 부모·배우자·자녀·돌봄·건강·갱년기·자산과 제3자 사건·결말 왜곡·핵심 누락·자료 의존·잘림 완성은 그대로 막는다.
  * CREATIVITY_BLOCK_CLASS 로 8-클래스 분류 기준을 코드에 명시한다.
  * 🔴 v11 이하 행을 고치거나 지우거나 v12 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  */

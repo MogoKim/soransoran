@@ -16,6 +16,10 @@ import {
   CREATIVITY_BLOCK_CLASS, DRAFT_GATE_VERSION,
   type DraftGateInput, type DraftGateCard, type DraftGatePlan, type DraftGateContext,
 } from '../src/lib/content-core/draft-life-gates'
+import { V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION } from '../src/lib/content-core/pipeline'
+import { buildVoiceEvidence } from '../src/lib/content-core/voice-evidence'
+import { buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt } from './lib/content-core-prompts.mjs'
+import { P13 } from './lib/draft-gate-fixtures.mjs'
 
 // ─── 공유 픽스처 ───────────────────────────────────────────
 const NOW = new Date('2026-10-18T09:00:00+09:00')
@@ -67,20 +71,20 @@ console.log(`\n── ALLOW: ${CREATIVITY_BLOCK_CLASS.PERSONA_SUPPORTED} ──`
 }
 
 console.log(`\n── ALLOW (v12): ${CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE} ──`)
-// work 축: EXPLICIT_ONLY → 제/저희 + 직장 표현. selfBasis=null 이어도 v12 에서 즉시 차단 없음
+// work 축: selfBasis=null 이어도 저위험 일상 결은 자동 READY hold 없이 통과
 {
   const i1 = inp('직장이라는 공간', '제 직장에서도 비슷한 일이 있었어요.', NO_PLAN)
   const h1 = hardCodes(i1)
   check('[work] 제 직장 selfBasis=null — 하드 차단 없음(v12)', h1.length === 0, h1.join(','))
   const s1 = softCodes(i1)
-  check('[work] 사람 검토 unwarrantedSelfClaim 존재', s1.includes('unwarrantedSelfClaim'), s1.join(','))
+  check('[work] 사람 검토도 없음 — 자동 READY 후보 유지', !s1.includes('unwarrantedSelfClaim'), s1.join(','))
 }
 
-// parents 축: 저희 엄마 표현. selfBasis=null 이어도 v12 에서 즉시 차단 없음
+// parents 축은 건강·돌봄·생애 사실로 번지므로 고위험 유지
 {
-  const i1 = inp('엄마 걱정', '저희 엄마가 요즘 힘드셔서 걱정이 많이 돼요.', NO_PLAN, null)
+  const i1 = inp('부모님 걱정', '저희 부모님은 올해 은퇴하셨어요.', NO_PLAN, null)
   const h1 = hardCodes(i1)
-  check('[parents] 저희 엄마 selfBasis=null — 하드 차단 없음(v12)', h1.length === 0, h1.join(','))
+  check('[parents] 저희 부모님 selfBasis=null — unwarrantedSelfClaim 차단 유지', h1.includes('unwarrantedSelfClaim'), h1.join(','))
 }
 
 // 가족 유사 연결 표현 ("저희 집도 그래요") → v12 에서 즉시 차단 없음
@@ -88,6 +92,35 @@ console.log(`\n── ALLOW (v12): ${CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE} �
   const i1 = inp('공감이요', '저희 집도 그런 상황이라 정말 공감이 됐어요.', NO_PLAN)
   const h1 = hardCodes(i1)
   check('[family-like] 저희 집도 그런 — 하드 차단 없음(v12)', h1.length === 0, h1.join(','))
+  check('[family-like] 구체 사실이 없으면 사람 검토도 없음', !softCodes(i1).includes('unwarrantedSelfClaim'), softCodes(i1).join(','))
+}
+
+console.log('\n── 실제 생성·검수 프롬프트 경계 ──')
+{
+  const plan = {
+    decision: 'ok', personaCode: 'P13', stance: 'REFLECTION', selfBasis: null,
+    warrants: [], universalReason: '보편적인 이야기', protectedFacts: [], speakerRelative: [],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'], reason: '', rejection: null,
+    planVersion: 'speaker-plan-p6',
+  } as never
+  const voice = buildVoiceEvidence({
+    personaCode: 'P13', voiceTokens: ['존댓말'], samples: [], bundleDigest: 'b', sourceDigest: 's',
+  })
+  const draftPrompt = buildV2DraftSystemPrompt({ plan, voice, life: P13, mappings: [] })
+  const reviewPrompt = buildV2ReviewSystemPrompt({ plan, voice, life: P13 })
+  check('초안 프롬프트 판 p13', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p13')
+  check('검수 프롬프트 판 p9', V2_REVIEW_PROMPT_VERSION === 'v2-review-p9')
+  check('초안이 감상·질문·비유·일반 관찰을 허용',
+    draftPrompt.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
+  check('초안이 고위험 생활 사실과 제3자 사건·결과를 금지',
+    draftPrompt.includes('배우자 · 자녀 · 부모 · 건강 · 치료 · 돈')
+    && draftPrompt.includes('제3자의 사건 · 날짜 · 직접 대사 · 결과'))
+  check('검수가 사소한 생략·재구성을 경고하지 않음',
+    reviewPrompt.includes('사소한 세부 · 문장 순서 · 표현')
+    && reviewPrompt.includes('재구성했어도 핵심 뜻과 결론이 남아 있으면 적지 않는다'))
+  check('검수가 안전한 창작과 고위험 사실을 구분',
+    reviewPrompt.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰')
+    && reviewPrompt.includes('구체적 고위험 생활사'))
 }
 
 // ══════════════════════════════════════════════════════════
@@ -153,15 +186,10 @@ console.log(`\n── 변이: 저위험→고위험 전환이 차단을 켠다 �
   check('변이1 변이(spouse 추가) — unwarrantedSelfClaim 차단', hardCodes(mut).includes('unwarrantedSelfClaim'))
 }
 
-// 변이 2: parents 텍스트 → parentCare(돌봄 상시) 추가 → 즉시 차단
+// 변이 2: parents 텍스트 자체가 고위험으로 즉시 차단
 {
-  const base = inp('', '저희 엄마가 요즘 걱정이 많이 돼요.', NO_PLAN, null)
-  const card2: DraftGateCard = { ...CARD_BASE, parentCare: '상시', household: { careSide: '친정', careCohabit: true } as DraftGateCard['household'] }
-  const mut = inp('', '저희 엄마한테 연락도 못 드리고 있어요.', NO_PLAN, card2)
-  check('변이2 기준(parents만) — 차단 없음', hardCodes(base).length === 0)
-  const m2 = judgeDraftLife(mut)
-  check('변이2 변이(careHouseholdConflict) — 사람 검토', m2.reviews.some((r) => r.code === 'careHouseholdConflict'),
-    m2.reviews.map((r) => r.code).join(','))
+  const base = inp('', '저희 부모님은 올해 은퇴하셨어요.', NO_PLAN, null)
+  check('변이2 parents — unwarrantedSelfClaim 차단', hardCodes(base).includes('unwarrantedSelfClaim'))
 }
 
 // 변이 3: 가족 유사 표현 → 배우자 이혼 추가 → 즉시 차단

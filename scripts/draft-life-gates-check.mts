@@ -150,7 +150,8 @@ console.log('\n④ A 자료 의존 — 말바꿈은 막고 carve-out 은 통과'
 console.log('\n⑤ B 1인칭 허가 없는 생활사 — selfBasis=null 에서만')
 {
   const blocked: [string, string][] = [
-    // spouse/children/assets 는 v12 에서도 즉시 차단
+    ['부모님 이사 고민', '저희 부모님은 올해 은퇴하셨어요. 집을 줄이실지 고민이세요.'],
+    ['시댁 명절', '시어머니께서 올해는 오지 말라고 하시네요.'],
     ['남편 이야기', '남편이 요즘 퇴근이 늦어요.'],
     ['아이 이야기', '애들이 방학이라 집이 시끄러워요.'],
     ['노후', '제 연금으로는 부족할 것 같아요.'],
@@ -160,19 +161,11 @@ console.log('\n⑤ B 1인칭 허가 없는 생활사 — selfBasis=null 에서�
     check(`🔴 QUESTION · "${b.slice(0, 22)}…" — unwarrantedSelfClaim`, g.includes('unwarrantedSelfClaim'),
       `${g.join(',')} · ${JSON.stringify(readSelfClaims(t, b))}`)
   }
-  // (v12) parents 축은 저위험 — 즉시 차단 대신 사람 검토
-  const softReviewedParents: [string, string][] = [
-    ['부모님 이사 고민', '저희 부모님은 올해 은퇴하셨어요. 집을 줄이실지 고민이세요.'],
-    ['시댁 명절', '시어머니께서 올해는 오지 말라고 하시네요.'],
-  ]
-  for (const [t, b] of softReviewedParents) {
-    const g = codes(t, b, QUESTION, P13)
-    const r = judgeDraftLife({ title: t, body: b, plan: QUESTION, card: P13, context: NEUTRAL })
-    check(`🟡 (v12) QUESTION · "${b.slice(0, 22)}…" — 하드 차단 없음`, !g.includes('unwarrantedSelfClaim'),
-      g.join(','))
-    check(`🔴 (v12) QUESTION · "${b.slice(0, 22)}…" — reviews 에 unwarrantedSelfClaim`, r.reviews.some((x) => x.code === 'unwarrantedSelfClaim'),
-      r.reviews.map((x) => x.code).join(','))
-  }
+  check('🟢 (v12) 일반 직장 공감은 하드 차단·검토 없이 통과', (() => {
+    const r = judgeDraftLife({ title: '직장 공감', body: '제 직장에서도 비슷한 일이 있었어요.', plan: QUESTION, card: P13, context: NEUTRAL })
+    return !r.failures.some((x) => x.code === 'unwarrantedSelfClaim')
+      && !r.reviews.some((x) => x.code === 'unwarrantedSelfClaim')
+  })())
   // 🔴 같은 글도 1인칭 허가가 있으면 B 는 막지 않는다 (카드 모순은 C 가 본다)
   // 🔴 재검토 — 남의 집안이 `-고` 로 이어져도 B 는 그 사람 아이를 글쓴이 자녀로 세지 않는다
   check('🟢 QUESTION · "친구 남편이 육아휴직 쓰고 애들이랑 놀아줘요" — B 통과',

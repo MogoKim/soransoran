@@ -23,8 +23,8 @@
  *    같은 extractor 의 보수적 규칙을 그대로 물려받는다. 과차단은 곧 공급 0 이다.
  * 🔴 **유료 호출이 늘지 않는다.** 문자열 판정이다. 의미 검수 요청 **앞**에서 막으므로 오히려 준다.
  * 🔴 **(quality-v2 · 2026-09-28) 생활 일관성 게이트 넷** — 혼인 · 돌봄·한집 · 자녀 삶의 단계 ·
- *    정신건강·질병. 확정 모순은 위 셋과 같이 막고(AUTO_HOLD), **모호하면 사람 검토**(`judgeDraftLife`
- *    의 `reviews` → 적재 `DRAFT_LIFE_REVIEW:<코드>` 경고)로 보낸다. 아래 「생활 일관성 게이트 넷」 참고.
+ *    정신건강·질병. 확정 모순은 위 셋과 같이 막고(AUTO_HOLD), **모호한 생활 일관성만 사람 검토**
+ *    (`judgeDraftLife`의 `reviews` → 적재 `DRAFT_LIFE_REVIEW:<코드>` 경고)로 보낸다. 아래 「생활 일관성 게이트 넷」 참고.
  * 🔴 순수 함수다. DB · 네트워크 · 파일 IO 없음.
  */
 import { readMediaDependency, CLOSING_RE } from './evidence'
@@ -39,7 +39,7 @@ import { noGoHits } from '../persona-no-go'
 import {
   CHILD_AGE_BANDS, judgeLifeHistory, readSelfChildBands, readSelfClaims,
   readClauseFrames, readSelfChildClauses,
-  type ChildAgeBand, type ClauseFrame, type PersonaForMatch, type PostRequirements, type SelfClaimAxis,
+  type ChildAgeBand, type ClauseFrame, type PersonaForMatch, type PostRequirements, type SelfClaim, type SelfClaimAxis,
 } from '../original-post-persona-match'
 
 /**
@@ -218,11 +218,15 @@ const WARRANT_OF: Readonly<Record<SelfClaimAxis, readonly string[]>> = {
 
 /**
  * 🔴 (v12) `selfBasis=null` 시 즉시 차단하지 않고 **사람 검토**로만 보내는 저위험 축.
- *    Persona 에게 자연스러운 일반 경험(직장·부모 언급)은 고위험 사실이 아니다 — CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE.
- *    고위험 축(배우자·자녀·돌봄·갱년기·자산)은 이 집합 밖이라 기존과 같이 즉시 차단한다.
- *    가족 유사 연결 표현("우리 집도 그래요")도 저위험으로 분류한다.
+ *    직장에 관한 짧은 일반 경험은 저위험 결이다 — CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE.
+ *    부모 축은 원문을 옮긴 생략 주어(`부모님이…`)만 허용한다. `저희 부모님`처럼 명시적으로
+ *    Persona 자기 사실로 만든 문장은 배우자·자녀·돌봄·갱년기·자산과 함께 즉시 차단한다.
+ *    구체 사실이 없는 가족 유사 연결 표현("우리 집도 그래요")도 허용한다.
  */
-const LOW_RISK_SELF_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['work', 'parents'])
+const LOW_RISK_SELF_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['work'])
+const isLowRiskSelfClaim = (claim: SelfClaim): boolean =>
+  LOW_RISK_SELF_AXES.has(claim.axis)
+  || (claim.axis === 'parents' && claim.owner === 'elided' && /부모님/.test(claim.clause))
 
 /**
  * 🔴 **미래·과거로 말하는 절** — 절 안의 시간 틀만 본다. **조건·앞날을 여는 어미만** 넣는다.
@@ -351,35 +355,22 @@ function judgeCoreGates(input: DraftGateInput): { failures: DraftGateFailure[]; 
   // ── B. 1인칭 허가 없이 자기 생활사 ──
   /**
    * 🔴 **`selfBasis=null` 일 때만** 막는다 — 계획이 "1인칭이 아닌 자리" 를 골랐다는 뜻이다.
-   *    🔴 (v12) **고위험 축만** 즉시 차단한다 — `LOW_RISK_SELF_AXES`(work·parents) 와 가족 유사
-   *       연결 표현("우리 집도 그래요")은 Persona 에게 자연스러운 저위험 결(CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE)로
-   *       보고 사람 검토(`coreReviews`)로만 보낸다.
+   *    🔴 (v12) **고위험 축만** 즉시 차단한다 — `LOW_RISK_SELF_AXES`(work)와 구체 사실 없는 가족 유사
+   *       연결 표현("우리 집도 그래요")은 Persona 에게 자연스러운 저위험 결(CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE)이다.
    *       카드 모순은 C 게이트·생활 일관성이 따로 본다.
    */
   const claims = readSelfClaims(title, body, OWNER_OPTS)
   if (input.plan !== null && input.plan.selfBasis === null) {
     const warranted = new Set(input.plan.warrants.map((w) => w.fact))
-    const badAll: { axis: string; clause: string }[] = claims
+    const badAll = claims
       .filter((c) => !WARRANT_OF[c.axis].some((f) => warranted.has(f)))
     // 🔴 (v12) 고위험 축(배우자·자녀·돌봄·갱년기·자산) → 즉시 차단
-    const bad = badAll.filter((c) => !LOW_RISK_SELF_AXES.has(c.axis as SelfClaimAxis))
-    // 🔴 (v12) 저위험 축(일·부모) → 사람 검토
-    const softBad = badAll.filter((c) => LOW_RISK_SELF_AXES.has(c.axis as SelfClaimAxis))
-    // 🔴 (v12) 가족 유사 연결 표현("우리 집도 그래요") → 사람 검토 (v11: 즉시 차단)
-    const familyClauses = readSelfFamilyLikeTopic(title, body)
+    const bad = badAll.filter((c) => !isLowRiskSelfClaim(c))
     if (bad.length > 0) {
       const axes = [...new Set(bad.map((c) => c.axis))]
       out.push({
         code: 'unwarrantedSelfClaim',
         detail: `${axes.join('·')} — ${[...new Set(bad.map((c) => c.clause))].slice(0, 3).join(' / ')}`,
-      })
-    }
-    if (softBad.length > 0 || familyClauses.length > 0) {
-      const softAxes = [...new Set([...softBad.map((c) => c.axis), ...familyClauses.map(() => 'family')])]
-      const clauses = [...new Set([...softBad.map((c) => c.clause), ...familyClauses])].slice(0, 3)
-      coreReviews.push({
-        code: 'unwarrantedSelfClaim',
-        detail: `(v12 저위험) ${softAxes.join('·')} — ${clauses.join(' / ')}`,
       })
     }
   }
@@ -1077,7 +1068,6 @@ function judgeNoLifeFactClaims(title: string, body: string, plan: DraftGatePlan 
     ...readSelfClaims(title, body, OWNER_OPTS)
       .filter((c) => FAMILY_AXES.has(c.axis) && c.owner === 'explicit' && SELF_OWNER_WORD_RE.test(c.clause))
       .map((c) => c.clause),
-    ...readSelfFamilyLikeTopic(title, body),
   ]
   if (clauses.length === 0) return finReview
   return [...finReview, { code: 'unwarrantedSelfClaim', detail: `계획 noLifeFactNeeded · 자기 가족사 — ${[...new Set(clauses)].slice(0, 3).join(' / ')}` }]
