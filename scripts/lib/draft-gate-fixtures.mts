@@ -160,7 +160,7 @@ export const FIXTURES: readonly GateFixture[] = [
         { kind: 'number', text: '12억', evidenceRef: 'head' },
       ],
     }),
-    card: P02, expect: ['unwarrantedSelfClaim'],
+    card: P02, expect: [],
   },
   {
     queueId: 'cmuiexffr00012y20uili19gp', label: 'P01 카드 자녀 중고등 · 초안은 "중고등 돼서 … 오면"',

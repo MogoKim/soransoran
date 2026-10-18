@@ -1,10 +1,10 @@
 {
-  "version": "quality-v11",
-  "digest": "fa597d2c6e7b13a7f4e6d969791453f0b7b45284fb3df9884e70d629e6228b91",
+  "version": "quality-v12",
+  "digest": "8f3c4c6430657bd782a6169f089fd40d587eec2eb678be4ba09f5b95f7e7793d",
   "files": {
-    "src/lib/quality-contract.ts": "bbfdb350e290651ee56750933daf643ad1c603982bfde45e9514c53cce40da4d",
+    "src/lib/quality-contract.ts": "5c578fc1eeb512e4eef6cea0134c6455fe580a3e92cb31d73e0d91119c94ea4c",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "a535eafa24d1b7ebd54cf4db79c47f1a735a062baf04c0999d8af42b78c0e60b",
+    "src/lib/content-core/draft-life-gates.ts": "23a27b0069c0e031556583f3af25af5b67b9b4806b959a20b5514148ffa39ce5",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
     "src/lib/content-core/pipeline.ts": "913ad8d47c2968cb1d2a55288a7c73ca1dadfdca7ecaa3a8f325f1a46fa3b360",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
@@ -32,11 +32,10 @@
   },
   "acknowledgement": {
     "kind": "bump",
-    "reason": "판 quality-v10 → quality-v11",
+    "reason": "판 quality-v11 → quality-v12",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/content-core/draft-life-gates.ts",
-      "src/lib/persona-no-go.ts"
+      "src/lib/content-core/draft-life-gates.ts"
     ]
   }
 }

@@ -106,7 +106,34 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    P29의 `noGoTopics=[자녀]`를 원천 배정은 글자 그대로만 비교해 `태아보험` 질문을 통과시켰고,
  *    초안 게이트는 소재를 보지 않아 자동 발행 뒤 감사에서 처음 잡혔다. 정본 `noGoHits` 하나를 배정과 초안이 함께 쓴다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v9'
+export const DRAFT_GATE_VERSION = 'draft-gates-v10'
+
+/**
+ * 🔴 **창의 계약 분류** (quality-v12) — 창업자 승인 의미 경계.
+ *    각 클래스를 증명하는 반례·변이는 `scripts/quality-v12-creativity-mutation.mts` 에 있다.
+ *
+ *    ALLOW:
+ *      safeRhetorical         — 공감 반응 · 독자 질문 · 비유 · 연결 문장 · 새 구조 (원천 진실 불변)
+ *      personaSupported       — Persona 카드가 뒷받침하는 1인칭 서술
+ *      lowRiskTexture         — 고위험 사실 없는 Persona 적합 저위험 체험 결
+ *    BLOCK:
+ *      highRiskFact           — 카드·계획 미지원 고위험 사실 (배우자·자녀·건강·의료·돈·나이·장소)
+ *      thirdPartyFabrication  — 지어낸 제3자 사건·주장
+ *      sourceDistortion       — 원천 시간순서·결과·행위자·결론 왜곡
+ *      criticalOmission       — 이야기를 바꾸는 핵심 누락
+ *      truncatedMediaCompletion — 잘린 원문 또는 시각 자료에 의존한 완성
+ */
+export const CREATIVITY_BLOCK_CLASS = {
+  SAFE_RHETORICAL: 'safeRhetorical',
+  PERSONA_SUPPORTED: 'personaSupported',
+  LOW_RISK_TEXTURE: 'lowRiskTexture',
+  HIGH_RISK_FACT: 'highRiskFact',
+  THIRD_PARTY_FABRICATION: 'thirdPartyFabrication',
+  SOURCE_DISTORTION: 'sourceDistortion',
+  CRITICAL_OMISSION: 'criticalOmission',
+  TRUNCATED_MEDIA_COMPLETION: 'truncatedMediaCompletion',
+} as const
+export type CreativityBlockClass = (typeof CREATIVITY_BLOCK_CLASS)[keyof typeof CREATIVITY_BLOCK_CLASS]
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -188,6 +215,14 @@ const WARRANT_OF: Readonly<Record<SelfClaimAxis, readonly string[]>> = {
   work: ['work'],
   assets: [],
 }
+
+/**
+ * 🔴 (v12) `selfBasis=null` 시 즉시 차단하지 않고 **사람 검토**로만 보내는 저위험 축.
+ *    Persona 에게 자연스러운 일반 경험(직장·부모 언급)은 고위험 사실이 아니다 — CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE.
+ *    고위험 축(배우자·자녀·돌봄·갱년기·자산)은 이 집합 밖이라 기존과 같이 즉시 차단한다.
+ *    가족 유사 연결 표현("우리 집도 그래요")도 저위험으로 분류한다.
+ */
+const LOW_RISK_SELF_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['work', 'parents'])
 
 /**
  * 🔴 **미래·과거로 말하는 절** — 절 안의 시간 틀만 본다. **조건·앞날을 여는 어미만** 넣는다.
@@ -273,7 +308,7 @@ export type DraftGateSource = {
  *    같은 코드가 둘 다에 있으면 `failures` 만 남긴다.
  */
 export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFailure[]; reviews: DraftLifeReview[] } {
-  const failures = judgeCoreGates(input)
+  const core = judgeCoreGates(input)
   const life = input.card === null ? { hard: [], review: [] } : judgeLifeConsistency(input.title, input.body, input.plan, input.card)
   const ctx = judgeSourceContext(input.title, input.body, input.context)
   const basis = [
@@ -291,18 +326,20 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
   const nogoHits = [...nogo.topics.map(() => 'topic'), ...nogo.expressions.map(() => 'expression'), ...nogo.common]
   const nogoFail: DraftGateFailure[] = nogoHits.length === 0 ? []
     : [{ code: 'personaNoGo', detail: [...new Set(nogoHits.map((h) => h.replace(/^phrase:.*/, 'phrase')))].join('·') }]
-  const all = [...failures, ...life.hard, ...ctx.hard, ...nogoFail]
+  const all = [...core.failures, ...life.hard, ...ctx.hard, ...nogoFail]
   const rank = (c: DraftGateCode): number => DRAFT_GATE_CODES.indexOf(c)
   const hardCodes = new Set(all.map((f) => f.code))
   return {
     failures: [...all].sort((a, b) => rank(a.code) - rank(b.code)),
-    reviews: [...life.review, ...ctx.review, ...basis]
+    // 🔴 (v12) core.reviews: 저위험 축(work·parents)·가족 유사 표현 사람 검토가 여기 섞인다
+    reviews: [...core.reviews, ...life.review, ...ctx.review, ...basis]
       .filter((r) => !hardCodes.has(r.code)).sort((a, b) => rank(a.code) - rank(b.code)),
   }
 }
 
-function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
+function judgeCoreGates(input: DraftGateInput): { failures: DraftGateFailure[]; reviews: DraftLifeReview[] } {
   const out: DraftGateFailure[] = []
+  const coreReviews: DraftLifeReview[] = []
   const { title, body } = input
 
   // ── A. 자료 의존 — 우리 글에는 사진·첨부가 없다 ──
@@ -313,24 +350,36 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
 
   // ── B. 1인칭 허가 없이 자기 생활사 ──
   /**
-   * 🔴 **`selfBasis=null` 일 때만** 막는다 — 계획이 "1인칭이 아닌 자리" 를 골랐다는 뜻이다
-   *    (`STANCE_LABEL`: 관찰·질문·생각은 *겪었다고 말하지 않는다*). 그 자리에서 자기 남편·
-   *    부모·자녀를 사실로 말하면 **카드로 검증받지 않은 생활사**가 된다.
-   *    🔴 `lifeFacts` 의 허가 밖 주장은 여기서 세지 않는다 — 카드 모순은 C 와 의미 검수가 본다.
-   *    🔴 (quality-v3) 축 낱말 없이 글의 사정을 통째로 자기 집안 일로 두는 말(`우리 집도 그래요`)도 센다.
-   *       `noLifeFactNeeded` 는 여기가 아니라 `judgeNoLifeFactClaims`(사람 검토)가 본다.
+   * 🔴 **`selfBasis=null` 일 때만** 막는다 — 계획이 "1인칭이 아닌 자리" 를 골랐다는 뜻이다.
+   *    🔴 (v12) **고위험 축만** 즉시 차단한다 — `LOW_RISK_SELF_AXES`(work·parents) 와 가족 유사
+   *       연결 표현("우리 집도 그래요")은 Persona 에게 자연스러운 저위험 결(CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE)로
+   *       보고 사람 검토(`coreReviews`)로만 보낸다.
+   *       카드 모순은 C 게이트·생활 일관성이 따로 본다.
    */
   const claims = readSelfClaims(title, body, OWNER_OPTS)
   if (input.plan !== null && input.plan.selfBasis === null) {
     const warranted = new Set(input.plan.warrants.map((w) => w.fact))
-    const bad: { axis: string; clause: string }[] = claims
+    const badAll: { axis: string; clause: string }[] = claims
       .filter((c) => !WARRANT_OF[c.axis].some((f) => warranted.has(f)))
-    bad.push(...readSelfFamilyLikeTopic(title, body).map((clause) => ({ axis: 'family', clause })))
+    // 🔴 (v12) 고위험 축(배우자·자녀·돌봄·갱년기·자산) → 즉시 차단
+    const bad = badAll.filter((c) => !LOW_RISK_SELF_AXES.has(c.axis as SelfClaimAxis))
+    // 🔴 (v12) 저위험 축(일·부모) → 사람 검토
+    const softBad = badAll.filter((c) => LOW_RISK_SELF_AXES.has(c.axis as SelfClaimAxis))
+    // 🔴 (v12) 가족 유사 연결 표현("우리 집도 그래요") → 사람 검토 (v11: 즉시 차단)
+    const familyClauses = readSelfFamilyLikeTopic(title, body)
     if (bad.length > 0) {
       const axes = [...new Set(bad.map((c) => c.axis))]
       out.push({
         code: 'unwarrantedSelfClaim',
         detail: `${axes.join('·')} — ${[...new Set(bad.map((c) => c.clause))].slice(0, 3).join(' / ')}`,
+      })
+    }
+    if (softBad.length > 0 || familyClauses.length > 0) {
+      const softAxes = [...new Set([...softBad.map((c) => c.axis), ...familyClauses.map(() => 'family')])]
+      const clauses = [...new Set([...softBad.map((c) => c.clause), ...familyClauses])].slice(0, 3)
+      coreReviews.push({
+        code: 'unwarrantedSelfClaim',
+        detail: `(v12 저위험) ${softAxes.join('·')} — ${clauses.join(' / ')}`,
       })
     }
   }
@@ -413,7 +462,10 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
     }
   }
   // 🔴 정본 순서로 돌려준다 — 계산 순서가 아니라 `DRAFT_GATE_CODES` 가 대표 사유를 정한다
-  return [...out].sort((a, b) => DRAFT_GATE_CODES.indexOf(a.code) - DRAFT_GATE_CODES.indexOf(b.code))
+  return {
+    failures: [...out].sort((a, b) => DRAFT_GATE_CODES.indexOf(a.code) - DRAFT_GATE_CODES.indexOf(b.code)),
+    reviews: coreReviews,
+  }
 }
 
 // ─────────────────────────────────────────────────────────

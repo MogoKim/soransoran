@@ -13,7 +13,7 @@
  *   🔴 네트워크 0 · provider 0 · DB 0. 가짜 provider 는 운영에서 실제로 돌아온 답(`clean`)을 준다.
  */
 import { readFileSync } from 'node:fs'
-import { judgeDraftGates, DRAFT_GATE_CODES, DRAFT_GATE_LABEL, type DraftGateCode }
+import { judgeDraftGates, judgeDraftLife, DRAFT_GATE_CODES, DRAFT_GATE_LABEL, type DraftGateCode }
   from '../src/lib/content-core/draft-life-gates'
 import { readMediaDependency, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { DETERMINISTIC_CODES, DETERMINISTIC_LABEL } from '../src/lib/content-core/review'
@@ -150,8 +150,7 @@ console.log('\n④ A 자료 의존 — 말바꿈은 막고 carve-out 은 통과'
 console.log('\n⑤ B 1인칭 허가 없는 생활사 — selfBasis=null 에서만')
 {
   const blocked: [string, string][] = [
-    ['부모님 이사 고민', '저희 부모님은 올해 은퇴하셨어요. 집을 줄이실지 고민이세요.'],
-    ['시댁 명절', '시어머니께서 올해는 오지 말라고 하시네요.'],
+    // spouse/children/assets 는 v12 에서도 즉시 차단
     ['남편 이야기', '남편이 요즘 퇴근이 늦어요.'],
     ['아이 이야기', '애들이 방학이라 집이 시끄러워요.'],
     ['노후', '제 연금으로는 부족할 것 같아요.'],
@@ -160,6 +159,19 @@ console.log('\n⑤ B 1인칭 허가 없는 생활사 — selfBasis=null 에서�
     const g = codes(t, b, QUESTION, P13)
     check(`🔴 QUESTION · "${b.slice(0, 22)}…" — unwarrantedSelfClaim`, g.includes('unwarrantedSelfClaim'),
       `${g.join(',')} · ${JSON.stringify(readSelfClaims(t, b))}`)
+  }
+  // (v12) parents 축은 저위험 — 즉시 차단 대신 사람 검토
+  const softReviewedParents: [string, string][] = [
+    ['부모님 이사 고민', '저희 부모님은 올해 은퇴하셨어요. 집을 줄이실지 고민이세요.'],
+    ['시댁 명절', '시어머니께서 올해는 오지 말라고 하시네요.'],
+  ]
+  for (const [t, b] of softReviewedParents) {
+    const g = codes(t, b, QUESTION, P13)
+    const r = judgeDraftLife({ title: t, body: b, plan: QUESTION, card: P13, context: NEUTRAL })
+    check(`🟡 (v12) QUESTION · "${b.slice(0, 22)}…" — 하드 차단 없음`, !g.includes('unwarrantedSelfClaim'),
+      g.join(','))
+    check(`🔴 (v12) QUESTION · "${b.slice(0, 22)}…" — reviews 에 unwarrantedSelfClaim`, r.reviews.some((x) => x.code === 'unwarrantedSelfClaim'),
+      r.reviews.map((x) => x.code).join(','))
   }
   // 🔴 같은 글도 1인칭 허가가 있으면 B 는 막지 않는다 (카드 모순은 C 가 본다)
   // 🔴 재검토 — 남의 집안이 `-고` 로 이어져도 B 는 그 사람 아이를 글쓴이 자녀로 세지 않는다
@@ -455,8 +467,8 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v11 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v11')
-    check(`초안 게이트 판 = draft-gates-v9 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v9')
+    check(`품질 계약 판 = quality-v12 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v12')
+    check(`초안 게이트 판 = draft-gates-v10 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v10')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })

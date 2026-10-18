@@ -119,7 +119,14 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  * quality-v10 운영 첫 D5 글에서 무자녀 P29가 `태아보험` 질문을 맡아 감사 결함이 됐다.
  * 일반 소재 분류를 만들지 않고 확인된 생활 경계만 정본 `persona-no-go`에 추가한다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v11'
+/**
+ * `quality-v12` (2026-10-18) = **bounded creativity** — 과도한 요약형 보수성 제거.
+ * `draft-gates-v10` 의 Section B 를 분기한다: 저위험 자기 주장 축(work·parents)과 가족 유사 연결 표현("우리 집도 그래요")은
+ * 즉시 차단 대신 사람 검토(`reviews`)로만 보낸다. 고위험 축(배우자·자녀·돌봄·갱년기·자산)·만남·No-Go·시점·자료 의존·잘림 완성은 그대로다.
+ * CREATIVITY_BLOCK_CLASS 로 8-클래스 분류 기준을 코드에 명시한다.
+ * 🔴 v11 이하 행을 고치거나 지우거나 v12 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v12'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
