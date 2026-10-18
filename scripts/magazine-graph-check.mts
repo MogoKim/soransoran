@@ -91,7 +91,7 @@ import {
   type Pr,
 } from './magazine-graph-merge.mjs'
 import { AUTO_BRANCH_PREFIX, REQUIRED_CHECKS } from './lib/magazine-merge-gate.mjs'
-import { analyzeGraphCoverage } from './lib/magazine-graph-coverage.mjs'
+import { analyzeGraphCoverage, clusterActivationVerdict } from './lib/magazine-graph-coverage.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 let pass = 0
@@ -194,6 +194,13 @@ check(
   ),
 )
 
+/** 🔴 공개 글의 graph 참여 상태 — 활성 계약은 SEARCH_NODE 와 EDITORIAL_NON_SEARCH 를 다르게 본다 */
+const COVERAGE = analyzeGraphCoverage({ publicArticles: published, allArticles: MAGAZINE_ARTICLES, graph: GRAPH })
+const participationOf = (slug: string): string | undefined =>
+  COVERAGE.rows.find((row: { slug: string }) => row.slug === slug)?.participation
+const isSearchNode = (a: MagazineArticle) => participationOf(a.slug) === 'SEARCH_NODE'
+const isEditorial = (a: MagazineArticle) => participationOf(a.slug) === 'EDITORIAL_NON_SEARCH'
+
 // ── ①-C 공개 글 coverage ─────────────────────────────────
 console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 무결성')
 
@@ -205,17 +212,13 @@ console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 �
       cwd: ROOT,
       encoding: 'utf8',
     }).trim().split('\n').at(-1) ?? ''
-    classifierPassed = /14 pass, 0 fail/.test(classifierDetail)
+    classifierPassed = /26 pass, 0 fail/.test(classifierDetail)
   } catch (err) {
     classifierDetail = String((err as { stdout?: string | Buffer }).stdout ?? err)
   }
-  check('coverage 분류기 반례 14개가 독립 실행에서 통과한다', classifierPassed, classifierDetail)
+  check('coverage 분류기 반례 26개가 독립 실행에서 통과한다', classifierPassed, classifierDetail)
 
-  const coverage = analyzeGraphCoverage({
-    publicArticles: published,
-    allArticles: MAGAZINE_ARTICLES,
-    graph: GRAPH,
-  })
+  const coverage = COVERAGE
   const countTotal = Object.values(coverage.counts).reduce((sum, count) => sum + count, 0)
   check('coverage 행·상태 합이 공개 글 수와 같다',
     coverage.rows.length === published.length && countTotal === published.length,
@@ -224,14 +227,14 @@ console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 �
     coverage.integrity.staleMappings.length === 0,
     coverage.integrity.staleMappings.map((row: { intent: string; slug: string }) => `${row.intent}:${row.slug}`).join(',') || '0')
 
+  // 🔴 활성 cluster 계약 (2026-10-18) — SEARCH_NODE 전부 READY · editorial 은 선언이 있을 때만 · UNRESOLVED·CONFLICT 0
   for (const cluster of CONTROL.enabledClusters) {
-    const canarySlugs = new Set(published.filter((article) => article.cluster === cluster).map((article) => article.slug))
-    const canaryRows = coverage.rows.filter((row: { slug: string }) => canarySlugs.has(row.slug))
-    const blocked = canaryRows.filter((row: { status: string }) => row.status !== 'READY')
-    check(`${cluster} canary 공개 글이 존재한다`, canaryRows.length > 0, `${canaryRows.length}편`)
-    check(`${cluster} canary 공개 글은 전부 공개 graph target을 가진다`,
-      blocked.length === 0,
-      blocked.map((row: { slug: string; status: string }) => `${row.slug}:${row.status}`).join(',') || `${canaryRows.length}/${canaryRows.length}`)
+    const v = clusterActivationVerdict(coverage, cluster)
+    check(`${cluster} canary 공개 글이 존재한다`, v.publicCount > 0, `${v.publicCount}편`)
+    check(`${cluster} canary 활성 계약 — SEARCH_NODE 는 전부 공개 graph target · 미분류 0`,
+      v.ok,
+      v.blockers.map((b: { slug: string; participation: string; status: string }) => `${b.slug}:${b.participation}/${b.status}`).join(',')
+        || `SEARCH_NODE ${v.searchNodes.length} · EDITORIAL ${v.editorial.length}`)
   }
 
   const summary = Object.entries(coverage.counts)
@@ -278,15 +281,27 @@ check(
   const outside = published.filter((a) => !canaryClusters.has(a.cluster))
   const canaryResolved = canary.map((a) => ({ article: a, result: resolveAt(a, DEFAULT) }))
 
+  const searchResolved = canaryResolved.filter(({ article }) => isSearchNode(article))
+  const editorialResolved = canaryResolved.filter(({ article }) => isEditorial(article))
   check('활성 canary 공개 글이 있다', canary.length > 0, `${canary.length}편`)
   check(
-    '  활성 canary 공개 글 전부 GRAPH 결과를 쓴다',
-    canaryResolved.every(({ result }) => result.source === 'GRAPH' && result.reason === null),
-    `${canaryResolved.filter(({ result }) => result.source === 'GRAPH').length}/${canary.length}편`,
+    '  활성 canary 공개 글은 SEARCH_NODE 이거나 editorial 선언이 있다 (미분류 0)',
+    searchResolved.length + editorialResolved.length === canary.length,
+    `SEARCH_NODE ${searchResolved.length} · EDITORIAL ${editorialResolved.length} / ${canary.length}편`,
   )
   check(
-    '  활성 canary 공개 글 전부 실제 graph 항목을 1개 이상 갖는다',
-    canaryResolved.every(({ result }) => result.items.some((item) => item.source === 'GRAPH')),
+    '  활성 canary SEARCH_NODE 전부 GRAPH 결과를 쓴다',
+    searchResolved.length > 0 && searchResolved.every(({ result }) => result.source === 'GRAPH' && result.reason === null),
+    `${searchResolved.filter(({ result }) => result.source === 'GRAPH').length}/${searchResolved.length}편`,
+  )
+  check(
+    '  활성 canary SEARCH_NODE 전부 실제 graph 항목을 1개 이상 갖는다',
+    searchResolved.every(({ result }) => result.items.some((item) => item.source === 'GRAPH')),
+  )
+  check(
+    '  활성 canary editorial 은 FALLBACK 이고 사유가 EDITORIAL_NON_SEARCH 다',
+    editorialResolved.every(({ result }) => result.source === 'FALLBACK' && result.reason === 'EDITORIAL_NON_SEARCH'),
+    `${editorialResolved.length}편`,
   )
   check(
     '  각 canary에 직접 3칸 + 발견 1칸인 표본이 있다',
@@ -344,12 +359,13 @@ const WHITESPACE_PRODUCTION_ENV: NodeJS.ProcessEnv = {
   MGRAPH_GRAPH_ENABLED: '',
   MGRAPH_GRAPH_CLUSTERS: '   ',
 }
-const productionDefaultCanary = published.filter((a) => CONTROL.enabledClusters.includes(a.cluster))
+// 🔴 editorial 글은 설계상 FALLBACK 이다 — env 가 기본값을 덮었는지는 SEARCH_NODE 로 본다
+const productionDefaultCanary = published.filter((a) => CONTROL.enabledClusters.includes(a.cluster) && isSearchNode(a))
 check('Production 빈 env 는 저장소 canary 기본값을 덮지 않는다',
-  productionDefaultCanary.every((a) => resolveAt(a, EMPTY_PRODUCTION_ENV).source === 'GRAPH'))
+  productionDefaultCanary.length > 0 && productionDefaultCanary.every((a) => resolveAt(a, EMPTY_PRODUCTION_ENV).source === 'GRAPH'))
 check(
   'Production 공백 env 도 저장소 canary 기본값을 덮지 않는다',
-  productionDefaultCanary.every((a) => resolveAt(a, WHITESPACE_PRODUCTION_ENV).source === 'GRAPH'),
+  productionDefaultCanary.length > 0 && productionDefaultCanary.every((a) => resolveAt(a, WHITESPACE_PRODUCTION_ENV).source === 'GRAPH'),
 )
 check(
   'Production 빈 env 의 runtime config 가 저장소 canary 를 그대로 연다',
@@ -789,6 +805,53 @@ console.log('\n④-F edge 단위 선택 정책 (실제 조립 함수 resolveFrom
   const withCov = GRAPH.mappings.filter((m) => m.coverage !== undefined).length
   check('번들: mapping coverage 는 전부 있거나 전부 없다',
     withCov === 0 || withCov === GRAPH.mappings.length, `${withCov}/${GRAPH.mappings.length}`)
+}
+
+// ── ④-G 🔴 graph 참여 — EDITORIAL_NON_SEARCH 는 선언으로만 · 활성 계약은 미분류를 막는다 (2026-10-18) ──
+console.log('\n④-G graph 참여 (SEARCH_NODE · EDITORIAL_NON_SEARCH · UNRESOLVED)')
+
+{
+  type FPart = NonNullable<MagazineGraph['participation']>[number]
+  const HASH = 'e'.repeat(64)
+  const decl = (slug: string, over: Partial<FPart> = {}): FPart =>
+    ({ slug, state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidenceHash: HASH, ...over })
+  const self = { slug: 'self', publishedAt: '2026-01-01', cluster: 'fam', title: 'self' } as unknown as MagazineArticle
+  const reasonOf = (graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'>) => {
+    const r = resolveFromGraph(self, graph, [self], () => [])
+    return 'reason' in r ? r.reason : 'RESOLVED'
+  }
+  const base = { graphVersion: 'g-test', edges: [], mappings: [] }
+  check('resolver: 매핑 없음 + editorial 선언 → 폴백 사유 EDITORIAL_NON_SEARCH', reasonOf({ ...base, participation: [decl('self')] }) === 'EDITORIAL_NON_SEARCH')
+  check('resolver: participation 키가 없는 bundle(롤백 대상) → NO_MAPPING', reasonOf(base) === 'NO_MAPPING')
+  check('resolver: 다른 slug 의 선언 · state 밖 선언은 editorial 이 아니다 → NO_MAPPING',
+    reasonOf({ ...base, participation: [decl('other')] }) === 'NO_MAPPING'
+      && reasonOf({ ...base, participation: [decl('self', { state: 'SEARCH_NODE' as FPart['state'] })] }) === 'NO_MAPPING')
+  check('resolver: 매핑이 있으면 선언이 있어도 editorial 사유를 쓰지 않는다',
+    reasonOf({ ...base, mappings: [{ intent: 'I-S', slug: 'self', cluster: 'fam' }], participation: [decl('self')] }) === 'NO_RESULT')
+
+  // 🔴 현재 운영 판 — 선언 이전 판이다. 활성 cluster 는 전부 SEARCH_NODE 로 서 있어야 한다
+  check('운영 bundle: participation 선언이 없으면 키 자체가 없다 (선언 이전 판 호환)',
+    GRAPH.participation === undefined || GRAPH.participation.length > 0)
+  for (const cluster of CONTROL.enabledClusters) {
+    const v = clusterActivationVerdict(COVERAGE, cluster)
+    check(`운영 ${cluster}: 활성 판정 근거가 SEARCH_NODE 와 선언된 editorial 뿐이다`,
+      v.ok && v.searchNodes.length + v.editorial.length === v.publicCount, `SEARCH_NODE ${v.searchNodes.length} · EDITORIAL ${v.editorial.length}`)
+  }
+
+  // 🔴 money-work — editorial 이 1편 생겨도 SEARCH_NODE 의 NO_ACTIVE_EDGE 는 계속 막는다 (slug 예외 없음)
+  const mw = published.filter((a) => a.cluster === 'money-work')
+  const unmappedMw = COVERAGE.rows.filter((r: { cluster: string; participation: string }) => r.cluster === 'money-work' && r.participation === 'UNRESOLVED')
+    .map((r: { slug: string }) => r.slug)
+  const withEditorial = analyzeGraphCoverage({ publicArticles: published, allArticles: MAGAZINE_ARTICLES,
+    graph: { ...GRAPH, participation: unmappedMw.map((slug: string) => decl(slug)) } })
+  const mwVerdict = clusterActivationVerdict(withEditorial, 'money-work')
+  check('money-work: 미매핑 글을 editorial 로 선언해도 활성화는 계속 차단된다',
+    mw.length > 0 && unmappedMw.length > 0 && !mwVerdict.ok
+      && mwVerdict.editorial.join(',') === unmappedMw.join(',')
+      && mwVerdict.blockers.length > 0
+      && mwVerdict.blockers.every((b: { participation: string; status: string }) => b.participation === 'SEARCH_NODE' && b.status !== 'READY')
+      && mwVerdict.blockers.some((b: { slug: string; status: string }) => b.slug === 'pension-early-vs-normal' && b.status === 'NO_ACTIVE_EDGE'),
+    `editorial ${mwVerdict.editorial.join(',')} · 차단 ${mwVerdict.blockers.map((b: { slug: string; status: string }) => `${b.slug}:${b.status}`).join(',')}`)
 }
 
 // ── ④-D 🔴 연속 열람 깊이 ────────────────────────────────

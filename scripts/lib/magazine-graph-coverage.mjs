@@ -11,6 +11,24 @@ const group = (rows, key) => {
   return out
 }
 
+/**
+ * 🔴 graph 참여 상태 (2026-10-18)
+ *   SEARCH_NODE           canonical mapping 이 있는 공개 글
+ *   EDITORIAL_NON_SEARCH  bundle 의 participation 선언(reasonCode · evidenceHash)이 있는 글. slug · cluster 이름으로 정하지 않는다
+ *   UNRESOLVED            둘 다 아닌 글 · 선언 형식이 깨진 글
+ *   CONFLICT              mapping 과 editorial 선언이 동시에 있는 글 — 계약 오류
+ */
+export const PARTICIPATION = Object.freeze({
+  SEARCH_NODE: 'SEARCH_NODE',
+  EDITORIAL_NON_SEARCH: 'EDITORIAL_NON_SEARCH',
+  UNRESOLVED: 'UNRESOLVED',
+  CONFLICT: 'CONFLICT',
+})
+const SHA256_RE = /^[0-9a-f]{64}$/
+const validEditorial = (p) => p?.state === PARTICIPATION.EDITORIAL_NON_SEARCH
+  && typeof p.reasonCode === 'string' && p.reasonCode.trim() !== ''
+  && typeof p.evidenceHash === 'string' && SHA256_RE.test(p.evidenceHash)
+
 const eligibleEdge = (edge) => edge?.active === true
   && Boolean(edge.slot)
   && FOOTER.has(edge.placement)
@@ -28,18 +46,32 @@ export function analyzeGraphCoverage({ publicArticles, allArticles, graph }) {
   const mappingsBySlug = group(graph.mappings, 'slug')
   const mappingsByIntent = group(graph.mappings, 'intent')
   const edgesByFrom = group(graph.edges.filter(eligibleEdge), 'from')
+  // 🔴 participation 이 없는 bundle(선언 이전 판 · 롤백 대상)은 editorial 이 0개다 — 모든 미매핑 글이 UNRESOLVED
+  const editorialBySlug = group(Array.isArray(graph.participation) ? graph.participation : [], 'slug')
   const publicSlugs = new Set(publicArticles.map((article) => article.slug))
   const allSlugs = new Set(allArticles.map((article) => article.slug))
 
   const rows = publicArticles.map((article) => {
     const sourceMappings = mappingsBySlug.get(article.slug) ?? []
+    const declared = editorialBySlug.get(article.slug) ?? []
     const base = {
       slug: article.slug,
       cluster: article.cluster,
       intents: sourceMappings.map((mapping) => mapping.intent).sort(),
       graphVersion: graph.graphVersion,
+      participation: sourceMappings.length > 0 ? PARTICIPATION.SEARCH_NODE : PARTICIPATION.UNRESOLVED,
     }
-    if (sourceMappings.length === 0) return { ...base, status: 'UNMAPPED', evidence: ['mapping 0'] }
+    if (sourceMappings.length > 0 && declared.length > 0) {
+      return { ...base, participation: PARTICIPATION.CONFLICT, status: 'PARTICIPATION_CONFLICT', evidence: ['mapping 과 editorial 선언 동시'] }
+    }
+    if (sourceMappings.length === 0) {
+      if (declared.length === 1 && validEditorial(declared[0])) {
+        return { ...base, participation: PARTICIPATION.EDITORIAL_NON_SEARCH, status: 'EDITORIAL_NON_SEARCH',
+          evidence: [declared[0].reasonCode, `evidenceHash ${declared[0].evidenceHash}`] }
+      }
+      if (declared.length > 0) return { ...base, status: 'PARTICIPATION_INVALID', evidence: [`editorial 선언 ${declared.length}건 · 형식 오류 또는 중복`] }
+      return { ...base, status: 'UNMAPPED', evidence: ['mapping 0'] }
+    }
     // 한 글이 여러 검색 질문을 대표하는 것은 product resolver가 지원하는 정상 구조다.
     const edges = sourceMappings.flatMap((mapping) => edgesByFrom.get(mapping.intent) ?? [])
     if (edges.length === 0) return { ...base, status: 'NO_ACTIVE_EDGE', evidence: ['eligible active outgoing edge 0'] }
@@ -85,12 +117,37 @@ export function analyzeGraphCoverage({ publicArticles, allArticles, graph }) {
     [...new Set(rows.map((row) => row.status))].sort().map((status) => [status, rows.filter((row) => row.status === status).length]),
   )
   return {
-    schemaVersion: 'magazine-graph-coverage/1',
+    schemaVersion: 'magazine-graph-coverage/2',
     graphVersion: graph.graphVersion,
     publicArticleCount: publicArticles.length,
     counts,
     rows,
     mappingMultiplicity: { sharedIntentMappings, multiIntentSlugs },
     integrity: { staleMappings },
+  }
+}
+
+/**
+ * 🔴 활성 cluster 계약 (2026-10-18) — coverage 근거로 이 cluster 를 켤 수 있는가.
+ *   1. SEARCH_NODE 는 전부 READY 여야 한다
+ *   2. EDITORIAL_NON_SEARCH 는 선언이 있을 때만 폴백을 허용한다
+ *   3. UNRESOLVED · CONFLICT 는 한 건이라도 있으면 막는다
+ *   임의 비율 · slug · cluster 예외를 두지 않는다. resolver 결과와 3+1 표본은 호출자가 따로 본다.
+ */
+export function clusterActivationVerdict(report, cluster) {
+  const rows = report.rows.filter((row) => row.cluster === cluster)
+  const blockers = rows
+    .filter((row) => (row.participation === PARTICIPATION.SEARCH_NODE
+      ? row.status !== 'READY'
+      : row.participation !== PARTICIPATION.EDITORIAL_NON_SEARCH))
+    .map((row) => ({ slug: row.slug, participation: row.participation, status: row.status }))
+  const slugsOf = (state) => rows.filter((row) => row.participation === state).map((row) => row.slug)
+  return {
+    cluster,
+    ok: rows.length > 0 && blockers.length === 0,
+    publicCount: rows.length,
+    searchNodes: slugsOf(PARTICIPATION.SEARCH_NODE),
+    editorial: slugsOf(PARTICIPATION.EDITORIAL_NON_SEARCH),
+    blockers,
   }
 }

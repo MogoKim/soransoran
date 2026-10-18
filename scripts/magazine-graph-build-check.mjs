@@ -690,6 +690,64 @@ test('반례21b — coverage 가 없거나 계약 밖 · 공개 전인 slim mapp
   eq(lib.exportProblems(slim, surfaces), [], '정상 slim')
 })
 
+// ── 반례 22 — graph 참여(EDITORIAL_NON_SEARCH) 선언 (2026-10-18) ──
+const ED_EVIDENCE = [{ ref: 'account-2/evidence/serpapi/a.json', sha256: 'a'.repeat(64) }, { ref: 'concept-coverage-gaps.jsonl#C6-06', sha256: 'b'.repeat(64) }]
+const edDecl = (over = {}) => ({ state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidence: ED_EVIDENCE,
+  evidenceHash: lib.editorialEvidenceHash(ED_EVIDENCE), ...over })
+const ED_ARTICLES = articlesText({ ed: art('fam', '2026-10-01T10:30:00+09:00') })
+const edWorld = (decl = edDecl()) => { const w = baseWorld(); w.published.push({ slug: 'ed', assetState: 'LIVE', graphParticipation: decl }); return w }
+test('반례22 — editorial 선언은 participation 산출 · slim 판정 · contentHash 로 운반되고 graphVersion 을 바꾼다', () => {
+  const plain = (() => { const w = baseWorld(); w.published.push({ slug: 'ed', assetState: 'LIVE' }); return build({ world: w, articles: ED_ARTICLES }) })()
+  const b = build({ world: edWorld(), articles: ED_ARTICLES })
+  eq(b.layers.participation.map((p) => [p.slug, p.state, p.reasonCode, p.evidenceHash]), [['ed', 'EDITORIAL_NON_SEARCH', 'BOUNDED_RESEARCH_EXHAUSTED', lib.editorialEvidenceHash(ED_EVIDENCE)]], 'layer')
+  eq(b.slim.participation, [{ slug: 'ed', state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidenceHash: lib.editorialEvidenceHash(ED_EVIDENCE) }], 'slim')
+  ok(typeof b.manifest.contentHash.participation === 'string', 'contentHash.participation 없음')
+  ok(b.graphVersion !== plain.graphVersion, '선언을 더해도 graphVersion 이 같다')
+  ok(b.files['participation.jsonl']?.includes('"slug":"ed"'), 'participation.jsonl 없음')
+  ok(b.files[`bundle/${b.graphVersion}.ts`].includes('"participation"'), 'bundle 에 participation 없음')
+  eq(lib.editorialEvidenceHash([...ED_EVIDENCE].reverse()), lib.editorialEvidenceHash(ED_EVIDENCE), '근거 순서와 무관한 hash')
+})
+test('반례22b — editorial 선언과 canonical mapping 이 같은 slug 에 동시에 있으면 INPUT_SCHEMA_INVALID', () => {
+  const w = edWorld(); w.canonical.find((c) => c.intentId === 'I-T').existingSlugs = [{ slug: 'ed', coverage: 'ANSWERS', cluster: 'fam' }]
+  const r = rejectWhy(() => build({ world: w, articles: ED_ARTICLES }))
+  ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('canonical mapping 이 있다'), JSON.stringify(r))
+})
+test('반례22c — provenance 누락·빈 hash·hash 불일치·reasonCode 계약 밖·state 계약 밖·근거 0·근거 hash 형식 밖·근거 중복은 INPUT_SCHEMA_INVALID', () => {
+  const cases = [
+    ['hash 누락', edDecl({ evidenceHash: undefined }), 'evidenceHash'],
+    ['빈 hash', edDecl({ evidenceHash: '' }), 'evidenceHash'],
+    ['hash 불일치', edDecl({ evidenceHash: 'c'.repeat(64) }), 'evidenceHash'],
+    ['reasonCode 누락', edDecl({ reasonCode: undefined }), 'reasonCode'],
+    ['reasonCode 계약 밖', edDecl({ reasonCode: 'LOOKS_EDITORIAL' }), 'reasonCode'],
+    ['state 계약 밖', edDecl({ state: 'SEARCH_NODE' }), 'state'],
+    ['근거 0', edDecl({ evidence: [], evidenceHash: lib.editorialEvidenceHash([]) }), '근거 신원·hash 누락'],
+    ['근거 hash 형식 밖', edDecl({ evidence: [{ ref: 'x', sha256: '' }] }), '근거 신원·hash 누락'],
+    ['근거 신원 누락', edDecl({ evidence: [{ ref: '', sha256: 'a'.repeat(64) }] }), '근거 신원·hash 누락'],
+    ['근거 중복', edDecl({ evidence: [ED_EVIDENCE[0], ED_EVIDENCE[0]] }), '근거 신원 중복'],
+  ]
+  for (const [label, decl, want] of cases) {
+    const r = rejectWhy(() => build({ world: edWorld(decl), articles: ED_ARTICLES }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(want), `${label}: ${JSON.stringify(r)}`)
+  }
+  for (const decl of [null, 'EDITORIAL_NON_SEARCH', { state: 'EDITORIAL_NON_SEARCH' }]) {
+    const r = rejectWhy(() => build({ world: edWorld(decl), articles: ED_ARTICLES }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('graphParticipation 형식 오류'), `구조 ${JSON.stringify(decl)}: ${JSON.stringify(r)}`)
+  }
+})
+test('반례22d — 선언이 없으면 participation 키 · participation.jsonl · contentHash.participation 이 없다(롤백 bundle 호환)', () => {
+  const b = build()
+  eq([b.layers.participation, 'participation' in b.slim, 'participation' in b.manifest.contentHash, 'participation.jsonl' in b.files], [[], false, false, false], '선언 없는 판')
+})
+test('반례22e — 검색 mapping 과 겹치거나 hash 형식 밖인 slim participation 은 export 자체 검사가 거부한다', () => {
+  const slim = build({ world: edWorld(), articles: ED_ARTICLES }).slim
+  const surfaces = ['CTA_END', 'FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE']
+  eq(lib.exportProblems(slim, surfaces), [], '정상 slim')
+  const mappedSlug = slim.mappings[0].slug
+  for (const [label, p] of [['mapping 과 겹침', { ...slim.participation[0], slug: mappedSlug }], ['빈 hash', { ...slim.participation[0], evidenceHash: '' }], ['reasonCode 밖', { ...slim.participation[0], reasonCode: 'X' }]]) {
+    ok(lib.exportProblems({ ...slim, participation: [p] }, surfaces).some((x) => x.startsWith('EXPORT_PARTICIPATION_INVALID')), label)
+  }
+})
+
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
 //    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
 const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')

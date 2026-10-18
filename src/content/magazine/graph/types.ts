@@ -16,12 +16,20 @@ export type MagazineGraphEdge = {
 export type MagazineGraph = {
   graphVersion: string
   schemaVersion: { intent: string; edge: string; mapping: string; manifest: string }
-  contentHash: { intents: string; edges: string; mappings: string; combined: string }
+  contentHash: { intents: string; edges: string; mappings: string; participation?: string; combined: string }
   generatedAt: string
   edges: readonly MagazineGraphEdge[]
   /** 🔴 coverage 는 optional — 그 전 bundle(롤백 대상)에는 없다. 없으면 resolver 가 비-ANSWERS 로 본다 */
   mappings: readonly { intent: string; slug: string; cluster: string | null; coverage?: string }[]
   intents: readonly { id: string; cluster: string | null; board: string }[]
+  /** 🔴 검색 근거 없음이 증명된 editorial 글. optional — 선언 없는 bundle(롤백 대상 포함)에는 키가 없다 */
+  participation?: readonly MagazineGraphParticipation[]
+}
+export type MagazineGraphParticipation = {
+  slug: string
+  state: 'EDITORIAL_NON_SEARCH'
+  reasonCode: string
+  evidenceHash: string
 }
 export type MagazineGraphControl = {
   graphVersion: string

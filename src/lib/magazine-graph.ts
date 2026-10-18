@@ -84,6 +84,7 @@ export type MagazineGraphFallbackReason =
   | 'VERSION_MISMATCH'
   | 'CLUSTER_NOT_ENABLED'
   | 'NO_MAPPING'
+  | 'EDITORIAL_NON_SEARCH'
   | 'NO_RESULT'
   | 'EXCEPTION'
 
@@ -349,12 +350,16 @@ function fallback(
  */
 export function resolveFromGraph(
   article: MagazineArticle,
-  graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings'>,
+  graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'>,
   published: readonly MagazineArticle[],
   legacy: () => readonly MagazineArticle[],
-): { resolved: ResolvedRelatedMagazine } | { reason: 'NO_MAPPING' | 'NO_RESULT' } {
+): { resolved: ResolvedRelatedMagazine } | { reason: 'NO_MAPPING' | 'EDITORIAL_NON_SEARCH' | 'NO_RESULT' } {
   const fromIntents = new Set(graph.mappings.filter((m) => m.slug === article.slug).map((m) => m.intent))
-  if (fromIntents.size === 0) return { reason: 'NO_MAPPING' }
+  if (fromIntents.size === 0) {
+    // 🔴 검색 근거 없음이 증명된 글과 아직 분류되지 않은 글을 폴백 사유로 구분한다. 화면은 같은 폴백이다
+    const editorial = (graph.participation ?? []).some((p) => p.slug === article.slug && p.state === 'EDITORIAL_NON_SEARCH')
+    return { reason: editorial ? 'EDITORIAL_NON_SEARCH' : 'NO_MAPPING' }
+  }
 
   const { direct, discovery } = selectGraphPicks(
     graph,
