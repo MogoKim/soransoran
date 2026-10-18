@@ -325,12 +325,21 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const perPersonaMax = prof.ok ? prof.profile.perPersonaDailyMax : 0
 
   // ── 대상 — 추가가 적은 글부터 · 한 글 한 건 ──
-  const ready: { postId: string; go: Extract<FollowupPostVerdict, { verdict: 'GO' }>; facts: FollowupPostFacts }[] = []
+  const ready: { postId: string; publishedAtMs: number; go: Extract<FollowupPostVerdict, { verdict: 'GO' }>; facts: FollowupPostFacts }[] = []
   for (const p of posts) {
     const f = factsOf(p)
     const v = judgeFollowupPost(f, nowMs)
-    if (v.verdict === 'GO') ready.push({ postId: p.id, go: v, facts: f })
+    if (v.verdict === 'GO') ready.push({ postId: p.id, publishedAtMs: f.publishedAtMs ?? 0, go: v, facts: f })
   }
+  // ── dedupKey 선제 제거 — provider 전에 이미 존재하는 열쇠는 다시 호출하지 않는다 ──
+  const candidateKeys = ready.map((r) => r.go.key)
+  const existingDedupRows = candidateKeys.length === 0 ? [] : await prisma.personaApprovalQueue.findMany({
+    where: { dedupKey: { in: candidateKeys } },
+    select: { dedupKey: true },
+  })
+  const existingDedupKeys = new Set(existingDedupRows.map((r) => r.dedupKey))
+  const eligibleReady = ready.filter((r) => !existingDedupKeys.has(r.go.key))
+  if (existingDedupKeys.size > 0) lines.push(`dedupKey 선제 제거 ${existingDedupKeys.size}건 — provider 호출 생략`)
   const personas = await deps.source.personas()
   const [knownNames, frequencyRead] = await Promise.all([deps.source.knownNames(), deps.source.frequency()])
   const fuToday = new Map<string, number>()
@@ -341,7 +350,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     go: Extract<FollowupPostVerdict, { verdict: 'GO' }>; existing: { text: string; persona: boolean }[] }
   const planned: Planned[] = []
   const usedPersonas = new Set<string>()
-  for (const { postId, go, facts } of orderFollowupGo(ready)) {
+  for (const { postId, go, facts } of orderFollowupGo(eligibleReady)) {
     if (planned.length >= allowed) break
     const src = srcById.get(postId)
     if (src === undefined) continue
@@ -468,7 +477,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       }
       return r
     },
-    gate, writer, providerCallLimit: allowed, limit: allowed, oneCreatedPerPost: true,
+    gate, writer, providerCallLimit: planned.length, limit: allowed, oneCreatedPerPost: true,
   })
   for (const o of result.outcomes) lines.push(`   추가 ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}`)
   const sweepAfter = await sweepFollowupLane(prisma, now)

@@ -420,11 +420,12 @@ export function openHooksOf(f: FollowupPostFacts, live: readonly FollowupComment
  *    읽은 순서대로 자리를 주면 앞 글들이 하루 상한을 다 먹고 나머지는 전부 첫 댓글로 끝난다
  *    (fixture 시뮬레이션 D100 실측: 71/100). 같은 수면 글 id 해시로 섞는다 — 결정적이다.
  */
-export function orderFollowupGo<T extends { postId: string; go: Extract<FollowupPostVerdict, { verdict: 'GO' }> }>(
+export function orderFollowupGo<T extends { postId: string; publishedAtMs?: number | null; go: Extract<FollowupPostVerdict, { verdict: 'GO' }> }>(
   items: readonly T[],
 ): T[] {
   return [...items].sort((a, b) => a.go.extrasSoFar - b.go.extrasSoFar
-    || unitOf('followup-order', a.postId, String(a.go.ordinal)) - unitOf('followup-order', b.postId, String(b.go.ordinal)))
+    || (b.publishedAtMs ?? 0) - (a.publishedAtMs ?? 0)
+    || (a.postId < b.postId ? -1 : a.postId > b.postId ? 1 : 0))
 }
 
 // ─────────────────────────────────────────────────────────

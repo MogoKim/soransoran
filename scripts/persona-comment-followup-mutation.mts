@@ -67,6 +67,9 @@ const MUTATIONS: Mutation[] = [
   { name: '대화 감사 없음을 PASS 로', from: "if (raw === null || raw === undefined || typeof raw !== 'object') {", to: "if (raw === null || raw === undefined) return { ok: true }\n  if (typeof raw !== 'object') {" },
   { name: '도장 열쇠 대조 제거', from: 'if (followupKeyOf(expect.postId, s.ordinal) !== expect.dedupKey)', to: 'if (false)' },
   { name: '적은 글 먼저 제거', from: 'a.go.extrasSoFar - b.go.extrasSoFar\n    ||', to: '0 ||' },
+  { name: '🔴 최신 글 우선 제거(hash-only 정렬 복원)',
+    from: "(b.publishedAtMs ?? 0) - (a.publishedAtMs ?? 0)\n    || (a.postId < b.postId ? -1 : a.postId > b.postId ? 1 : 0)",
+    to: "unitOf('followup-order', a.postId, String(a.go.ordinal)) - unitOf('followup-order', b.postId, String(b.go.ordinal))" },
   { name: '관계 이상 BLOCK 제거', from: "blockedAuthorIds: new Set() }).anomalies.length > 0)", to: "blockedAuthorIds: new Set() }).anomalies.length > 99)" },
   // ── 발행 트랜잭션 판정 ──
   { name: '🔴 트랜잭션 스위치 재판독 제거', from: '  if (!f.switch.enabled) blockers.push(f.switch.reason)\n  if (f.commentStage', to: '  if (f.commentStage' },
