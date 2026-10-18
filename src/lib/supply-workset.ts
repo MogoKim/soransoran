@@ -1173,10 +1173,10 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
 //     ① 생성 가능 판정(그대로) → raw 축은 자동 소비자가 없어 뺀다(마스터 결정 · 자료는 그대로 남는다)
 //     ② 부족 슬롯 어디에도 연결되지 않는 원천은 뺀다
 //     ③ 채울 수 있는 최대 슬롯 수 M — 원천마다 서로 다른 슬롯 하나(증대 경로) · 목표 = min(상한, M)
-//     ④ 재시도(기존 차례 → 오래 기다린 것 → 순위)를 예약 수만큼 먼저, 그다음 정본 순위대로 —
+//     ④ 신규를 정본 순위대로 상한까지 먼저 고르고, 자리가 남을 때만 재시도(차례→기다린 순서)로 보충 —
 //        **넣어도 서로 다른 슬롯 짝이 유지될 때만** 넣는다. 짝 가능 집합은 matroid 라 어떤 순서로 넣어도
-//        멈출 때 크기는 목표와 같다(최대 슬롯 보존). 같은 순서 안에서는 가장 좋은 집합이다(교환 역전 0)
-//     ⑤ 상한이 남으면 같은 순서로 더 산다(재고 수율 대비 — 앞판의 다음 바퀴와 같은 자리)
+//        신규 안에서 가장 좋은 최대 짝 집합이 된다. 짝에 못 든 신규도 재시도보다 먼저 남는 상한을 쓴다.
+//     ⑤ 신규 뒤에도 상한이 남으면 재시도로 슬롯을 더 덮고, 그래도 남으면 재시도 재고로 채운다.
 //     ⑥ 고른 집합에만 EDF 로 실제 슬롯을 배정한다 — **EDF 는 더 이상 무엇을 살지 정하지 않는다**
 //   🔴 합산 점수 · 가중치 · 품질 구간 · 할당량 없음.
 // ─────────────────────────────────────────────────────────
@@ -1202,10 +1202,13 @@ export type JitSelectionFacts = {
   unlinkable: number
   /** 🔴 원천마다 서로 다른 슬롯 하나로 덮을 수 있는 최대 슬롯 수 */
   maxFillableSlots: number
-  /** min(상한, 최대 슬롯) — 선택이 반드시 덮어야 하는 슬롯 수 */
+  /** min(상한, 최대 슬롯) — 신규 우선 적용 전 전체 후보의 이론상 슬롯 상한 */
   coverTarget: number
+  /** 신규 우선 선택 결과가 실제로 덮은 서로 다른 슬롯 수 */
   coveredSlots: number
+  /** 기존 v2 필드명 유지: 남는 자리에 재시도를 보충할 최소 목표 */
   retryReserve: number
+  /** 기존 v2 필드명 유지: 남는 자리에 실제로 보충한 재시도 수 */
   retryReserved: number
 }
 
@@ -1291,7 +1294,7 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
     })
   }
 
-  const byRank = [...pool].sort((a, b) => compareSupplyRank(a.sk, b.sk))
+  const freshByRank = pool.filter((c) => c.prior === undefined).sort((a, b) => compareSupplyRank(a.sk, b.sk))
   const retries = pool.filter((c) => c.prior !== undefined).sort((a, b) =>
     retryTierOf(a.prior) - retryTierOf(b.prior) || runClockOf(a.prior!) - runClockOf(b.prior!) || compareSupplyRank(a.sk, b.sk))
   const reserve = Math.min(cap, retryReserveFor(cap, retries.map((c) => runClockOf(c.prior!)), input.takenAt))
@@ -1300,32 +1303,31 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
   const maxFillable = maxSlotMatching(valid, n)
   const coverTarget = Math.min(cap, maxFillable)
 
-  // ④ 덮기 — 재시도 예약 먼저, 그다음 순위. 짝이 유지될 때만 넣는다
+  // ④ 신규 — 짝 가능한 신규를 먼저 덮고, 짝에 못 든 신규도 재시도보다 먼저 상한을 쓴다
   const m = slotMatcher(valid, n)
   const cover: Cand[] = []
   const reserved = new Set<Cand>()
-  for (const c of retries) {
-    if (reserved.size >= reserve || cover.length >= coverTarget) break
-    if (m.tryAdd(idx.get(c)!)) { cover.push(c); reserved.add(c) }
-  }
-  for (const c of byRank) {
+  for (const c of freshByRank) {
     if (cover.length >= coverTarget) break
-    if (reserved.has(c)) continue
     if (m.tryAdd(idx.get(c)!)) cover.push(c)
   }
-  // ⑤ 남는 상한 — 재시도 예약을 마저 채우고 순위 순
   const taken = new Set<Cand>(cover)
   const extra: Cand[] = []
-  const seats = cap - cover.length
-  for (const c of retries) {
-    if (reserved.size >= reserve || extra.length >= seats) break
-    if (taken.has(c)) continue
-    extra.push(c); reserved.add(c); taken.add(c)
-  }
-  for (const c of byRank) {
-    if (extra.length >= seats) break
+  for (const c of freshByRank) {
+    if (cover.length + extra.length >= cap) break
     if (taken.has(c)) continue
     extra.push(c); taken.add(c)
+  }
+
+  // ⑤ 재시도 — 신규가 쓰고 남긴 자리만 슬롯 덮기와 재고 보충에 쓴다
+  for (const c of retries) {
+    if (cover.length + extra.length >= cap || cover.length >= coverTarget) break
+    if (m.tryAdd(idx.get(c)!)) { cover.push(c); reserved.add(c); taken.add(c) }
+  }
+  for (const c of retries) {
+    if (cover.length + extra.length >= cap) break
+    if (taken.has(c)) continue
+    extra.push(c); reserved.add(c); taken.add(c)
   }
 
   // ⑥ 배정 — 고른 집합에만 EDF(마감이 이른 것이 이른 슬롯). 덮기 집합은 한 바퀴에 전부 짝지어진다
@@ -1348,9 +1350,10 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
   const assigned = new Map<Cand, Date>(coverFirstRound ? coverSlots : cover.map((c) => [c, slots[m.slotOf(idx.get(c)!)!]!]))
   for (const [c, d] of edfRounds(extra)) assigned.set(c, d)
 
-  const picked = [...cover, ...extra]
+  const coverSet = new Set(cover)
+  const picked = [...freshByRank, ...retries].filter((c) => taken.has(c))
   picked.forEach((c, i) => {
-    note(c.key, i < cover.length ? 'SELECTED_COVER' : 'SELECTED_EXTRA', assigned.get(c) ?? null, i, reserved.has(c))
+    note(c.key, coverSet.has(c) ? 'SELECTED_COVER' : 'SELECTED_EXTRA', assigned.get(c) ?? null, i, reserved.has(c))
   })
   for (const c of pool) if (!taken.has(c)) { dropped.slotUnassigned += 1; note(c.key, 'CAP_REACHED') }
 

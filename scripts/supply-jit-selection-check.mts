@@ -14,11 +14,10 @@
 import { readFileSync } from 'node:fs'
 
 import {
-  compareSupplyRank, isAutoSupplyConsumable, EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, preGenerationRelease, retryReserveFor, selectWorkset,
+  isAutoSupplyConsumable, EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, preGenerationRelease, selectWorkset,
   sourceIdentityOf, WGANG_SOURCE_SITE,
-  type PriorOutcome, type SupplyRankKey, type WorksetRow,
+  type PriorOutcome, type WorksetRow,
 } from '../src/lib/supply-workset'
-import { mentionsMenopause } from '../src/lib/original-post-persona-match'
 import { mergeJudgeRows, PROVEN_LANES, RAW_AXIS, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import { currentQualityContract } from '../src/lib/quality-contract'
@@ -101,15 +100,7 @@ const bruteCover = (valid: readonly (readonly boolean[])[], nSlots: number): num
 }
 const validOf = (r: WorksetRow, slots: readonly Date[], now = NOW): boolean[] =>
   [...slots].sort((a, b) => a.getTime() - b.getTime()).map((d) => preGenerationRelease(r, d, now).verdict === 'eligible')
-const rankKeyOf = (r: WorksetRow, slots: readonly Date[], now = NOW): SupplyRankKey => {
-  const s0 = [...slots].sort((a, b) => a.getTime() - b.getTime())[0]!
-  return {
-    rank: preGenerationRelease(r, s0, now).rank, key: KEY(r), wgang: r.sourceSite === WG,
-    menopause: mentionsMenopause(`${r.input.title ?? ''}\n${r.input.bodyHead ?? ''}`),
-  }
-}
-
-console.log('\n══ JIT 공급 선택 (P0-B1) — 최대 슬롯 보존 → 정본 순위 → 결정적 동률 · raw 0 · 재시도 예약 2 ══\n')
+console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안 최대 슬롯/정본 순위 → 결정적 동률 · raw 0 · 재시도 보충 ══\n')
 
 // ── ① B형 반례 · 순위 탐욕이 슬롯을 잃는 모양 ──
 {
@@ -133,11 +124,11 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 최대 슬롯 보존 → 정
     pb.picked.length === 3 && pb.picked.every((r) => r.input.axis === SEED_AXIS) && pb.jit?.coveredSlots === 3, JSON.stringify(pb.jit))
 }
 
-// ── ② 무작위 300벌 — 최대 슬롯 보존 · 정본 순위 최적 · 결정성 (전수 탐색 대조) ──
+// ── ② 무작위 300벌 — 신규 우선 · 같은 부류 정본 순위 · 결정성 (전수 탐색 대조) ──
 {
   let seed = 11
   const rnd = (): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
-  let coverOk = 0, bestOk = 0, detOk = 0, starveOk = 0, rawOk = 0
+  let coverOk = 0, freshFirstOk = 0, retryFillOk = 0, detOk = 0, rawOk = 0
   let coverMiss = ''
   const N = 300
   for (let t = 0; t < N; t += 1) {
@@ -155,46 +146,29 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 최대 슬롯 보존 → 정
     const seedsLinkable = rows.filter((r) => r.input.axis === SEED_AXIS && validOf(r, slots).some(Boolean))
     const valid = seedsLinkable.map((r) => validOf(r, slots))
     const maxCover = bruteCover(valid, slots.length)
-    const target = Math.min(cap, maxCover)
-    if (p.jit?.coveredSlots === target && p.jit?.maxFillableSlots === maxCover
+    const selectedCover = bruteCover(p.picked.map((r) => validOf(r, slots)), slots.length)
+    if (p.jit?.coveredSlots === selectedCover && p.jit?.maxFillableSlots === maxCover
       && p.picked.length === Math.min(cap, seedsLinkable.length)) coverOk += 1
-    else if (coverMiss === '') coverMiss = JSON.stringify({ t, cap, maxCover, target, jit: p.jit, picked: p.picked.length, linkable: seedsLinkable.length })
+    else if (coverMiss === '') coverMiss = JSON.stringify({ t, cap, maxCover, selectedCover, jit: p.jit, picked: p.picked.length, linkable: seedsLinkable.length })
     if (p.picked.every((r) => r.input.axis === SEED_AXIS)) rawOk += 1
-    // 정본 순위 최적 — 같은 크기 · 목표 슬롯을 덮는 · 예약 재시도를 담은 부분집합 중 순위 위치가 사전식으로 가장 앞선 것
-    const ord = [...seedsLinkable].sort((a, b) => compareSupplyRank(rankKeyOf(a, slots), rankKeyOf(b, slots)))
-    // 🔴 선택 결과의 행은 생성 가능 판정이 만든 사본이다 — 원천 열쇠로 위치를 찾는다
-    const pos = (r: WorksetRow): number => ord.findIndex((x) => KEY(x) === KEY(r))
+    // 🔴 직접 불변식 — 신규가 상한을 먼저 쓰고, 재시도는 남은 자리만 순서대로 보충한다
     const pickedSet = new Set(p.picked.map(KEY))
+    const freshLinkable = seedsLinkable.filter((r) => !attempted.has(KEY(r)))
     const retryLinkable = seedsLinkable.filter((r) => attempted.has(KEY(r)))
-    const reserve = Math.min(cap, retryReserveFor(cap, retryLinkable.map((r) => attempted.get(KEY(r))!.atMs), NOW))
-    const reservedPicked = retryLinkable.filter((r) => pickedSet.has(KEY(r)))
-    const m = p.picked.length
-    let best: number[] | null = null
-    const lexLess = (a: number[], b: number[]): boolean => { for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return a[i]! < b[i]!; return false }
-    const subsets = (k: number, start: number, acc: WorksetRow[]): void => {
-      if (acc.length === k) {
-        if (!reservedPicked.every((r) => acc.includes(r))) return
-        if (bruteCover(acc.map((r) => validOf(r, slots)), slots.length) < target) return
-        const v = acc.map(pos).sort((x, y) => x - y)
-        if (best === null || lexLess(v, best)) best = v
-        return
-      }
-      for (let i = start; i < seedsLinkable.length; i += 1) { acc.push(seedsLinkable[i]!); subsets(k, i + 1, acc); acc.pop() }
-    }
-    subsets(m, 0, [])
-    const mine = p.picked.map(pos).sort((x, y) => x - y)
-    if (best !== null && JSON.stringify(best) === JSON.stringify(mine)) bestOk += 1
+    const freshPicked = freshLinkable.filter((r) => pickedSet.has(KEY(r)))
+    const retryPicked = retryLinkable.filter((r) => pickedSet.has(KEY(r)))
+    const unpickedFresh = freshLinkable.filter((r) => !pickedSet.has(KEY(r)))
+    if (freshPicked.length === Math.min(cap, freshLinkable.length)
+      && !(retryPicked.length > 0 && unpickedFresh.length > 0)) freshFirstOk += 1
+    if (retryPicked.length === Math.min(Math.max(0, cap - freshPicked.length), retryLinkable.length)) retryFillOk += 1
     // 결정성 — 입력 순서를 뒤집어도 같은 묶음
     if (JSON.stringify(run({ rows: [...rows].reverse(), slots: [...slots].reverse(), cap, attempted }).workset) === JSON.stringify(p.workset)) detOk += 1
-    // 굶김 — 예약 수보다 적게 고른 재시도가 남아 있으면 상한이 찼고 그 재시도는 덮기에도 못 들어간다
-    const unpickedRetry = retryLinkable.filter((r) => !pickedSet.has(KEY(r)))
-    if (reservedPicked.length >= Math.min(reserve, retryLinkable.length) || (p.picked.length === cap && unpickedRetry.length > 0)) starveOk += 1
   }
-  check(`② 무작위 ${N}벌 — 덮은 슬롯 = min(상한, 전수 탐색 최대) · 선택 수 = min(상한, 연결 가능 seed)`, coverOk === N, `${coverOk}/${N} ${coverMiss}`)
-  check(`② 무작위 ${N}벌 — 같은 조건의 모든 부분집합 중 정본 순위상 가장 좋은 집합(전수 탐색)`, bestOk === N, `${bestOk}/${N}`)
+  check(`② 무작위 ${N}벌 — 전체 최대 슬롯과 선택 집합 실제 덮음을 전수 탐색과 대조 · 선택 수 = min(상한, 연결 가능 seed)`, coverOk === N, `${coverOk}/${N} ${coverMiss}`)
+  check(`② 무작위 ${N}벌 — 선택 신규 수 = min(상한, 연결 가능 신규) · 미선택 신규가 있으면 재시도 선택 0`, freshFirstOk === N, `${freshFirstOk}/${N}`)
+  check(`② 무작위 ${N}벌 — 재시도 선택 수 = 신규 뒤 남은 자리와 연결 가능 재시도 중 작은 수`, retryFillOk === N, `${retryFillOk}/${N}`)
   check(`② 무작위 ${N}벌 — raw 0`, rawOk === N, `${rawOk}/${N}`)
   check(`② 무작위 ${N}벌 — 입력 · 슬롯 순서를 뒤집어도 같은 묶음(결정성)`, detOk === N, `${detOk}/${N}`)
-  check(`③ 무작위 ${N}벌 — 재시도는 예약 수만큼 들어가거나, 못 들어간 경우 상한이 찼다`, starveOk === N, `${starveOk}/${N}`)
 }
 
 // ── ② 같은 시각 슬롯은 한 슬롯 ──
@@ -205,23 +179,50 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 최대 슬롯 보존 → 정
     p.jit?.slots === 1 && p.jit?.maxFillableSlots === 1 && p.jit?.coveredSlots === 1 && p.picked.length === 2, JSON.stringify(p.jit))
 }
 
-// ── ③ 재시도 예약 2 ──
+// ── ③ 신규 우선 · 재시도 보충 ──
 {
   const slots = Array.from({ length: 12 }, (_, i) => at(1 + i))
   const fresh = Array.from({ length: 12 }, (_, i) => ROW({ id: `f${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
   const old = [ROW({ id: 'rt0', ageH: 20, cp: 0.1 }), ROW({ id: 'rt1', ageH: 21, cp: 0.11 }), ROW({ id: 'rt2', ageH: 22, cp: 0.12 })]
   const attempted = new Map([...retryOf([old[0]!], 9), ...retryOf([old[1]!], 7), ...retryOf([old[2]!], 3)])
   const p = run({ rows: [...fresh, ...old], slots, cap: 10, attempted })
-  const none = run({ rows: [...fresh, ...old], slots, cap: 10 })
-  check('③ 상한 10 · 순위 최하위 재시도 3건 중 가장 오래 기다린 2건(rt0 · rt1)이 예약으로 들어간다',
-    ids(p).includes('rt0') && ids(p).includes('rt1') && !ids(p).includes('rt2') && p.jit?.retryReserved === 2 && p.jit?.retryReserve === 2, ids(p).join(','))
-  check('③ 예약이 없으면 같은 원천은 순위에 밀려 0 — 예약이 굶김을 막는다',
-    !ids(none).some((x) => x.startsWith('rt')))
-  check('③ 예약이 최대 슬롯을 줄이지 않는다(10슬롯 모두 덮음)', p.jit?.coveredSlots === 10 && p.jit?.maxFillableSlots === 12)
+  check('③ 신규 12건 ≥ 상한 10 · 재시도 3건이 있어도 전부 신규 · retryReserved 0',
+    !ids(p).some((x) => x.startsWith('rt')) && p.jit?.retryReserved === 0 && p.picked.length === 10, ids(p).join(','))
+  check('③ 이 사례는 신규만으로 10슬롯을 모두 덮는다', p.jit?.coveredSlots === 10 && p.jit?.maxFillableSlots === 12)
   const one = run({ rows: [...fresh.slice(0, 2), old[0]!], slots: [at(1)], cap: 1, attempted: retryOf([old[0]!], 7) })
   const oneShort = run({ rows: [...fresh.slice(0, 2), old[0]!], slots: [at(1)], cap: 1, attempted: retryOf([old[0]!], 5) })
-  check('③ 상한 1 — 6시간 넘게 기다린 재시도만 그 한 자리를 가져간다(기존 굶김 규칙)',
-    ids(one).join() === 'rt0' && ids(oneShort).join() === 'f0', `${ids(one)} · ${ids(oneShort)}`)
+  check('③ 상한 1 · 신규가 있으면 기다린 시간과 무관하게 신규가 선택된다',
+    ids(one).join() === 'f0' && ids(oneShort).join() === 'f0', `${ids(one)} · ${ids(oneShort)}`)
+}
+
+// ── 🔴 신규 우선 반례 · 변이 탐지 ──
+{
+  // cap10 · 신규 8건 < cap → 재시도 2건 보충(오래 기다린 rt0·rt1)
+  const slots10 = Array.from({ length: 10 }, (_, i) => at(1 + i))
+  const fresh8 = Array.from({ length: 8 }, (_, i) => ROW({ id: `n${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
+  const ret3 = [ROW({ id: 'rv0', ageH: 20, cp: 0.1 }), ROW({ id: 'rv1', ageH: 21, cp: 0.11 }), ROW({ id: 'rv2', ageH: 22, cp: 0.12 })]
+  const att3 = new Map([...retryOf([ret3[0]!], 9), ...retryOf([ret3[1]!], 7), ...retryOf([ret3[2]!], 3)])
+  const p8 = run({ rows: [...fresh8, ...ret3], slots: slots10, cap: 10, attempted: att3 })
+  check('🔴 신규 8건 < 상한 10 — 신규 8건 전부 + 재시도 오래 기다린 2건(rv0·rv1) 보충 · retryReserved 2',
+    fresh8.every((r) => ids(p8).includes(r.sourceArticleId))
+    && ids(p8).includes('rv0') && ids(p8).includes('rv1') && !ids(p8).includes('rv2')
+    && p8.jit?.retryReserved === 2 && p8.picked.length === 10, ids(p8).join(','))
+  // 동일 슬롯에 연결 가능한 신규·재시도 — cp 높은 재시도보다 낮은 신규가 선택된다
+  const sfresh = ROW({ id: 'sf1', ageH: 5, cp: 0.4 })
+  const sretry = ROW({ id: 'sr1', ageH: 5, cp: 0.99 })   // 같은 나이지만 재시도 신분
+  const sAtt = retryOf([sretry], 9)
+  const ps = run({ rows: [sfresh, sretry], slots: [at(1)], cap: 1, attempted: sAtt })
+  check('🔴 동일 슬롯 · 신규(cp 낮음)와 재시도(cp 높음) — 재시도 신분만으로 우선권 없음, 신규가 선택',
+    ids(ps).join() === 'sf1', `selected: ${ids(ps).join()}`)
+  // 변이 탐지 — 신규 = cap 일 때 재시도 reserve-first 가 복원되면 실패한다
+  const slotsMut = Array.from({ length: 10 }, (_, i) => at(1 + i))
+  const freshMut = Array.from({ length: 10 }, (_, i) => ROW({ id: `mf${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
+  const retMut = [ROW({ id: 'mr0', ageH: 20, cp: 0.1 }), ROW({ id: 'mr1', ageH: 21, cp: 0.11 })]
+  const attMut = new Map([...retryOf([retMut[0]!], 9), ...retryOf([retMut[1]!], 7)])
+  const pMut = run({ rows: [...freshMut, ...retMut], slots: slotsMut, cap: 10, attempted: attMut })
+  check('🔴 변이 탐지 — 신규 10건 = 상한 10 · 재시도 2건이 예약석으로 밀고 들어오지 않는다',
+    !ids(pMut).some((x) => x.startsWith('mr')) && pMut.jit?.retryReserved === 0,
+    `selected: ${ids(pMut).join(',')} retryReserved: ${pMut.jit?.retryReserved}`)
 }
 
 // ── ④ raw ──

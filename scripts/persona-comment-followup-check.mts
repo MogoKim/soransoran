@@ -354,6 +354,33 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     }
     check('④ 🔴 회차 자리는 추가 댓글이 적은 글부터', allOk)
   }
+  // 🔴 같은 extrasSoFar 에서 최신 공개 글이 먼저다(hash 아님 — 오래된 글이 예산을 선점하지 않는다)
+  // 방법: hash 순서로 먼저 줄 세운 뒤 publishedAtMs 를 역순으로 붙인다
+  //       시각 정렬 → hash 역순 / hash 정렬 → hash 순서 — 두 결과가 반드시 다르다
+  {
+    const g3 = (postId: string, extras: number, publishedAtMs: number) => ({
+      postId, publishedAtMs,
+      go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1,
+        key: M.followupKeyOf(postId, extras + 2), target: { kind: 'post' as const, hook: 'question' as const },
+        excludePersonaIds: [], roles: ['other' as const], reason: '' },
+    })
+    const hIds = ['p-h1', 'p-h2', 'p-h3', 'p-h4', 'p-h5']
+    // hash 오름차순으로 줄 세우기
+    const byHash = [...hIds].sort((a, b) => M.unitOf('followup-order', a, '2') - M.unitOf('followup-order', b, '2'))
+    // hash 순으로 시각 배정(hash 최소 = 시각 최소/가장 오래됨) → 시각 최신 먼저 = hash 역순
+    const items3 = byHash.map((id, i) => g3(id, 0, T0 + (i + 1) * MIN))
+    const sorted3 = M.orderFollowupGo(items3).map((x) => x.postId)
+    // 시각 내림차순(최신 먼저) = byHash 역순(hash 최대가 시각 최대)
+    const expectedByTime = [...byHash].reverse()
+    check('④ 🔴 같은 extrasSoFar 에서 최신 공개 글 먼저(hash 아님)',
+      sorted3.join(',') === expectedByTime.join(','),
+      `결과: ${sorted3.join(',')} | 기대: ${expectedByTime.join(',')}`)
+    // publishedAtMs 없으면 postId 사전순 fallback — 결정적
+    const mkNoTime = (id: string) => ({ postId: id, go: g3(id, 0, 0).go })
+    const sorted4 = M.orderFollowupGo([mkNoTime('z-0'), mkNoTime('a-0')]).map((x) => x.postId)
+    check('④ publishedAtMs 없으면 postId 사전순 fallback(결정적)', sorted4[0] === 'a-0' && sorted4[1] === 'z-0', sorted4.join(','))
+  }
+
   const withMembers = simulate({ posts: 30, salt: 'mem', members: (id) => (M.unitOf('m', id) < 0.5 ? 1 : 3) })
   check('④ 실회원 글 불변식 위반 0', withMembers.violations.length === 0, withMembers.violations.slice(0, 3).join(' · '))
 
@@ -604,6 +631,17 @@ const normalizeDiffers = (a: string, b: string): boolean => {
       '/n/npx', 'tsx', '/rt/scripts/persona-comment-loop.mts', '--live']), JSON.stringify(args))
   check('⑨ 댓글 consumer 종류가 정본 목록에 있다', (DECISION_CONSUMERS as readonly string[]).includes(COMMENT_CONSUMER_BY))
   check('⑨ 🔴 plist 가 단계 env 를 직접 적지 않는다', !/SORAN_(RELEASE_STAGE|CAPACITY_STAGE|STAGE_DECISION_DATE)/.test(xml))
+}
+
+// ═════════ ⑩ 추가 효율 보정 — dedupKey 선제 제거 · 최신 글 우선 구조 ═════════
+{
+  const runSrc = readFileSync(join(here, 'lib/persona-comment-followup-run.mts'), 'utf-8')
+  check('⑩ 🔴 run 파일에 dedupKey 선제 제거 쿼리가 있다(provider 전에 기존 키 확인)',
+    runSrc.includes('existingDedupKeys') && runSrc.includes('dedupKey: { in:'))
+  check('⑩ 🔴 run 파일 providerCallLimit 이 planned.length 다(선제 차단 후보가 allowed 를 먹지 않는다)',
+    runSrc.includes('providerCallLimit: planned.length'))
+  check('⑩ 🔴 run 파일 orderFollowupGo 호출에 publishedAtMs 가 있다(최신 글 우선)',
+    runSrc.includes('publishedAtMs'))
 }
 
 for (const l of lines) console.log(l)
