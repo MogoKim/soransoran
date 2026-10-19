@@ -14,6 +14,10 @@
  *   · 외부 브랜드(locked)가 구분돼 있다
  *   · 🔴 **PNG 자산의 실제 픽셀 크기가 적힌 값과 같다** (PNG 헤더를 직접 읽는다)
  *   · 🔴 **manifest 의 아이콘 4종이 실제 파일·실제 크기·MIME 과 맞는다**
+ *   · 🔴 **manifest 아이콘이 any 192·512 · maskable 192·512 이고, 쿼리 없는 /icon.png · /apple-icon.png 가 없다**
+ *   · 🔴 **manifest 아이콘 픽셀** — 불투명 · 배경이 가장자리까지 채움 · 내부 네모 섬 없음 ·
+ *        maskable 은 내용이 안전 원(지름 80%) 안 (PNG 를 zlib 로 직접 풀어 잰다)
+ *   · 🔴 **우나어 3원 심볼 자산의 해시가 public/ · src/ 에 0건**
  *   · 🔴 **탭·검색 favicon(src/app/icon.png)이 정사각이고 48px 보다 크다** (소란소란 제품 계약)
  *   · 🔴 **가로형 로고 파일이 표시 상자(brand-logo.ts)의 정확히 2배다**
  *   · 🔴 **구 텍스트 워드마크 계약이 코드에 남아 있지 않다**
@@ -34,8 +38,10 @@
  * manifest 는 src/lib/brand-assets.ts 다. TypeScript 파일이라 node 가 직접 못 읽으므로
  * 파서로 배열 리터럴을 훑는다 — 새 dependency 없이 tsc 만 쓴다.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { deflateSync, inflateSync } from 'node:zlib'
 import ts from 'typescript'
 
 const ROOT = process.cwd()
@@ -123,7 +129,231 @@ export function faviconSizeProblem(size) {
 }
 const FAVICON_PATH = 'src/app/icon.png'
 
-/** manifest.ts 의 icons 배열에서 { src, sizes, type } 을 읽는다 */
+/**
+ * PNG 를 픽셀로 푼다 — 8비트 RGB/RGBA · 비인터레이스만. 그 밖은 오류로 돌려준다.
+ *
+ * 🔴 이미지 라이브러리 없이 zlib 만 쓴다(머리말 원칙). 앱 아이콘은 생성기가 이 형식으로만 만든다.
+ *    "못 풀었으니 통과"는 없다 — 형식이 다르면 문제로 올린다.
+ */
+export function decodePng(buf) {
+  const head = readPngSize(buf)
+  if (head.error) return head
+  const bitDepth = buf[24]
+  const colorType = buf[25]
+  const interlace = buf[28]
+  const channels = colorType === 2 ? 3 : colorType === 6 ? 4 : 0
+  if (bitDepth !== 8 || !channels || interlace !== 0) {
+    return { error: `지원하지 않는 PNG 형식 (bitDepth ${bitDepth} · colorType ${colorType} · interlace ${interlace})` }
+  }
+  const idat = []
+  for (let off = 8; off + 8 <= buf.length; ) {
+    const len = buf.readUInt32BE(off)
+    const type = buf.toString('latin1', off + 4, off + 8)
+    if (type === 'IDAT') idat.push(buf.subarray(off + 8, off + 8 + len))
+    if (type === 'IEND') break
+    off += 12 + len
+  }
+  const { width, height } = head
+  const raw = inflateSync(Buffer.concat(idat))
+  const stride = width * channels
+  if (raw.length !== height * (stride + 1)) return { error: 'IDAT 길이가 크기와 맞지 않습니다' }
+  const data = Buffer.alloc(height * stride)
+  for (let y = 0; y < height; y++) {
+    const f = raw[y * (stride + 1)]
+    for (let x = 0; x < stride; x++) {
+      const v = raw[y * (stride + 1) + 1 + x]
+      const a = x >= channels ? data[y * stride + x - channels] : 0
+      const b = y > 0 ? data[(y - 1) * stride + x] : 0
+      const c = x >= channels && y > 0 ? data[(y - 1) * stride + x - channels] : 0
+      let p
+      if (f === 0) p = 0
+      else if (f === 1) p = a
+      else if (f === 2) p = b
+      else if (f === 3) p = (a + b) >> 1
+      else if (f === 4) {
+        const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c)
+        p = pa <= pb && pa <= pc ? a : pb <= pc ? b : c
+      } else return { error: `알 수 없는 필터 ${f}` }
+      data[y * stride + x] = (v + p) & 0xff
+    }
+  }
+  return { width, height, channels, data }
+}
+
+/** CRC-32 — 시험용 PNG 를 만들 때만 쓴다 (Node 20 에는 zlib.crc32 가 없다) */
+function crc32(buf) {
+  let c = ~0
+  for (const byte of buf) {
+    c ^= byte
+    for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1
+  }
+  return ~c >>> 0
+}
+
+/** 시험용 PNG 인코더 — 줄마다 필터를 돌려 써서 decodePng 의 다섯 필터를 모두 지나게 한다 */
+export function encodePng({ width, height, channels, data }) {
+  const stride = width * channels
+  const rows = []
+  for (let y = 0; y < height; y++) {
+    const f = y % 5
+    const row = Buffer.alloc(stride + 1)
+    row[0] = f
+    for (let x = 0; x < stride; x++) {
+      const v = data[y * stride + x]
+      const a = x >= channels ? data[y * stride + x - channels] : 0
+      const b = y > 0 ? data[(y - 1) * stride + x] : 0
+      const c = x >= channels && y > 0 ? data[(y - 1) * stride + x - channels] : 0
+      const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c)
+      const paeth = pa <= pb && pa <= pc ? a : pb <= pc ? b : c
+      const p = [0, a, b, (a + b) >> 1, paeth][f]
+      row[1 + x] = (v - p) & 0xff
+    }
+    rows.push(row)
+  }
+  const chunk = (type, body) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(body.length)
+    const tb = Buffer.concat([Buffer.from(type, 'latin1'), body])
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(tb))
+    return Buffer.concat([len, tb, crc])
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8; ihdr[9] = channels === 4 ? 6 : 2
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(Buffer.concat(rows))),
+    chunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
+/**
+ * 앱 아이콘 픽셀 판정 — 배경은 왼쪽 위 모서리 색이다.
+ *
+ *   opaque      알파가 없거나 전부 255
+ *   edgeDiff    가장자리 1px 둘레가 배경색에서 벗어난 최대치 (채널별) — 작으면 끝까지 채움
+ *   radius      내용(배경에서 CONTENT_TOL 넘게 벗어난 픽셀)의 중심에서 가장 먼 거리 / (한 변의 절반)
+ *   island      배경이 로고 상자(배경에서 STROKE_TOL 넘게 벗어난 진한 획) 네 변 바로 바깥까지
+ *               닿지 못한 변의 수. 흰 캔버스 위에 아이보리 네모를 깔고 그 안에 로고를 둔 그림
+ *               (2026-09-29 판)은 바깥 배경이 네모 테두리에서 멈춰 로고 상자에 닿지 못한다.
+ *               🔴 상자를 CONTENT_TOL 로 잡으면 아이보리 네모 자체가 내용으로 세어져 섬을 놓친다
+ *                  (실제 09-29 파일로 확인). 그래서 섬은 진한 획 기준으로 본다.
+ */
+export const EDGE_TOL = 8
+export const BG_TOL = 12
+export const CONTENT_TOL = 24
+export const STROKE_TOL = 64
+export const MASKABLE_SAFE_RADIUS = 0.8
+export function analyzeIcon({ width: w, height: h, channels: ch, data }) {
+  const px = (x, y) => data.subarray((y * w + x) * ch, (y * w + x) * ch + ch)
+  const bg = px(0, 0)
+  const diff = (x, y) => {
+    const p = px(x, y)
+    return Math.max(Math.abs(p[0] - bg[0]), Math.abs(p[1] - bg[1]), Math.abs(p[2] - bg[2]))
+  }
+  let opaque = true
+  if (ch === 4) for (let i = 3; i < data.length; i += 4) if (data[i] !== 255) { opaque = false; break }
+
+  let edgeDiff = 0
+  for (let x = 0; x < w; x++) edgeDiff = Math.max(edgeDiff, diff(x, 0), diff(x, h - 1))
+  for (let y = 0; y < h; y++) edgeDiff = Math.max(edgeDiff, diff(0, y), diff(w - 1, y))
+
+  let radius = 0
+  const box = { x0: w, y0: h, x1: -1, y1: -1 }
+  const half = w / 2
+  let hasContent = false
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const d = diff(x, y)
+      if (d <= CONTENT_TOL) continue
+      hasContent = true
+      radius = Math.max(radius, Math.hypot(x + 0.5 - half, y + 0.5 - h / 2) / half)
+      if (d <= STROKE_TOL) continue
+      box.x0 = Math.min(box.x0, x); box.y0 = Math.min(box.y0, y)
+      box.x1 = Math.max(box.x1, x); box.y1 = Math.max(box.y1, y)
+    }
+  }
+
+  // 가장자리에서 배경색으로 이어진 영역을 칠한다
+  const reached = new Uint8Array(w * h)
+  const stack = []
+  const push = (x, y) => {
+    if (x < 0 || y < 0 || x >= w || y >= h || reached[y * w + x] || diff(x, y) > BG_TOL) return
+    reached[y * w + x] = 1
+    stack.push(x, y)
+  }
+  for (let x = 0; x < w; x++) { push(x, 0); push(x, h - 1) }
+  for (let y = 0; y < h; y++) { push(0, y); push(w - 1, y) }
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop()
+    push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1)
+  }
+  let island = 0
+  if (box.x1 >= 0) {
+    const rowHit = (y, from, to) => { for (let x = from; x <= to; x++) if (reached[y * w + x]) return true; return false }
+    const colHit = (x, from, to) => { for (let y = from; y <= to; y++) if (reached[y * w + x]) return true; return false }
+    if (box.y0 > 0 && !rowHit(box.y0 - 1, box.x0, box.x1)) island++
+    if (box.y1 < h - 1 && !rowHit(box.y1 + 1, box.x0, box.x1)) island++
+    if (box.x0 > 0 && !colHit(box.x0 - 1, box.y0, box.y1)) island++
+    if (box.x1 < w - 1 && !colHit(box.x1 + 1, box.y0, box.y1)) island++
+  }
+  return { opaque, edgeDiff, radius, island, hasContent, bg: [bg[0], bg[1], bg[2]] }
+}
+
+/** 판정 → 문제 목록. maskable 이면 안전 원도 본다 */
+export function iconPixelProblems(a, { maskable }) {
+  const out = []
+  if (!a.opaque) out.push('투명 픽셀이 있습니다 — 불투명이어야 합니다')
+  if (a.edgeDiff > EDGE_TOL) out.push(`가장자리가 배경색으로 채워져 있지 않습니다 (최대 차이 ${a.edgeDiff})`)
+  if (!a.hasContent) out.push('내용이 없습니다')
+  if (a.island) out.push(`내부 네모 섬이 있습니다 — 배경이 내용 상자 ${a.island}개 변에 닿지 못합니다`)
+  if (maskable && a.radius > MASKABLE_SAFE_RADIUS) {
+    out.push(`내용이 maskable 안전 원 밖입니다 (반지름 비 ${a.radius.toFixed(3)} > ${MASKABLE_SAFE_RADIUS})`)
+  }
+  return out
+}
+
+/**
+ * 우나어 3원 심볼 — 소란소란에 2026-08-26~09-07 동안 /icon.png · /apple-icon.png 로 있던 재렌더본과
+ * 우나어 원본 아이콘들의 SHA-256. 어느 것도 저장소에 다시 들어오면 안 된다.
+ */
+export const RETIRED_FOREIGN_ICON_SHA256 = new Set([
+  '72674b12272f214825e752f7fd64b272caf49fb4c295847044bdeb3d4d1821c6',
+  '229160d4f0c5ae5ac842492540ecafbd538a0c3f4210c9c93693f57bd4a065a9',
+  'bf56c90c6354aa00470d10fb8a2ab66d149f5292adb84b173c9af7a3d9eab4ad',
+  '16bac3bb424c730c8b166c46661c21b42963c53a5212dce421d96a45f8aaab73',
+  '88f013d930f202de0d2b9e2e5bb60a0f12bc91db457e251f9d9d6583d11efdbb',
+])
+
+/** manifest 가 담아야 하는 아이콘 — 이 넷이 정확히 있어야 한다 */
+export const REQUIRED_MANIFEST_ICONS = [
+  { src: '/brand/icon-192.png', sizes: '192x192', purpose: 'any' },
+  { src: '/brand/icon-512.png', sizes: '512x512', purpose: 'any' },
+  { src: '/brand/icon-maskable-192.png', sizes: '192x192', purpose: 'maskable' },
+  { src: '/brand/icon-maskable-512.png', sizes: '512x512', purpose: 'maskable' },
+]
+/** 1년 immutable 캐시인 쿼리 없는 Next.js 규약 주소 — manifest 에 있으면 옛 그림이 설치 아이콘으로 나온다 */
+export const FORBIDDEN_MANIFEST_SRC = ['/icon.png', '/apple-icon.png']
+
+/** manifest 아이콘 구성 판정 */
+export function manifestIconSetProblems(icons) {
+  const out = []
+  for (const ic of icons) {
+    const path = String(ic.src ?? '').split(/[?#]/)[0]
+    if (FORBIDDEN_MANIFEST_SRC.includes(path)) out.push(`쿼리 없는 1년 캐시 주소를 선언합니다: ${ic.src}`)
+    if (ic.purpose !== 'any' && ic.purpose !== 'maskable') {
+      out.push(`purpose 는 'any' 또는 'maskable' 이어야 합니다: ${ic.src} → '${ic.purpose}'`)
+    }
+  }
+  for (const want of REQUIRED_MANIFEST_ICONS) {
+    if (!icons.some((ic) => ic.src === want.src && ic.sizes === want.sizes && ic.purpose === want.purpose)) {
+      out.push(`필수 아이콘 누락: ${want.src} ${want.sizes} purpose '${want.purpose}'`)
+    }
+  }
+  return out
+}
+
+/** manifest.ts 의 icons 배열에서 { src, sizes, type, purpose } 를 읽는다 */
 export function readManifestIcons(text) {
   const sf = ts.createSourceFile('manifest.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const icons = []
@@ -437,6 +667,65 @@ function selfTest() {
       manifestSrcToPath('/icon.png') === 'src/app/icon.png' &&
         manifestSrcToPath('/brand/icon-192.png') === join('public', 'brand/icon-192.png'),
     ],
+    (() => {
+      const icons = readManifestIcons(
+        `export default function m(){return{icons:[{ src: '/a.png', sizes: '1x1', type: 'image/png', purpose: 'maskable' }]}}`,
+      )
+      return ['manifest icons 의 purpose 를 읽는다', icons[0]?.purpose === 'maskable']
+    })(),
+    ['필수 아이콘 4종이 맞으면 문제 0', manifestIconSetProblems(REQUIRED_MANIFEST_ICONS).length === 0],
+    [
+      '🔴 쿼리 없는 /icon.png 를 잡는다',
+      manifestIconSetProblems([...REQUIRED_MANIFEST_ICONS, { src: '/icon.png', sizes: '96x96', purpose: 'any' }])
+        .some((x) => x.includes('1년 캐시')),
+    ],
+    [
+      '🔴 /apple-icon.png 를 잡는다',
+      manifestIconSetProblems([...REQUIRED_MANIFEST_ICONS, { src: '/apple-icon.png', sizes: '180x180', purpose: 'any' }])
+        .some((x) => x.includes('1년 캐시')),
+    ],
+    [
+      '🔴 purpose 없는 아이콘을 잡는다',
+      manifestIconSetProblems([...REQUIRED_MANIFEST_ICONS, { src: '/brand/x.png', sizes: '1x1' }])
+        .some((x) => x.includes('purpose')),
+    ],
+    [
+      '🔴 maskable 이 빠지면 잡는다',
+      manifestIconSetProblems(REQUIRED_MANIFEST_ICONS.filter((x) => x.purpose === 'any'))
+        .some((x) => x.includes('필수 아이콘 누락')),
+    ],
+
+    // ── 아이콘 픽셀 ──
+    ...(() => {
+      // 섬 색은 2026-09-29 판 실측(252,241,224)이다 — 흰 바탕과 24 넘게 달라 "내용"으로도 세어지는 실제 조건
+      const IVORY = [253, 248, 232], WHITE = [255, 255, 255], ORANGE = [250, 70, 1], ISLAND = [252, 241, 224]
+      const make = (n, paint, channels = 3) => {
+        const data = Buffer.alloc(n * n * channels)
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+          const c = paint(x, y)
+          for (let k = 0; k < channels; k++) data[(y * n + x) * channels + k] = c[k] ?? 255
+        }
+        return { width: n, height: n, channels, data }
+      }
+      const inBox = (x, y, a, b) => x >= a && x <= b && y >= a && y <= b
+      const good = make(40, (x, y) => (inBox(x, y, 12, 27) ? ORANGE : IVORY))
+      const wide = make(40, (x, y) => (inBox(x, y, 2, 37) ? ORANGE : IVORY))
+      const island = make(40, (x, y) => (inBox(x, y, 14, 25) ? ORANGE : inBox(x, y, 6, 33) ? ISLAND : WHITE))
+      const holey = make(40, (x, y) => (x === 0 && y === 0 ? [...IVORY, 0] : inBox(x, y, 12, 27) ? ORANGE : IVORY), 4)
+      const edged = make(40, (x, y) => (x === 39 && y === 20 ? ORANGE : inBox(x, y, 12, 27) ? ORANGE : IVORY))
+      const roundTrip = decodePng(encodePng(good))
+      const has = (img, opts, word) => iconPixelProblems(analyzeIcon(img), opts).some((x) => x.includes(word))
+      return [
+        ['PNG 다섯 필터를 모두 왕복한다', !roundTrip.error && roundTrip.data.equals(good.data)],
+        ['꽉 채운 아이콘은 maskable 로도 문제 0', iconPixelProblems(analyzeIcon(good), { maskable: true }).length === 0],
+        ['🔴 안전 원 밖 내용을 maskable 에서 잡는다', has(wide, { maskable: true }, '안전 원')],
+        ['같은 그림도 any 에서는 안전 원을 묻지 않는다', !has(wide, { maskable: false }, '안전 원')],
+        ['🔴 흰 캔버스 위 네모 섬을 잡는다 (2026-09-29 판)', has(island, { maskable: false }, '네모 섬')],
+        ['🔴 투명 픽셀을 잡는다', has(holey, { maskable: false }, '투명')],
+        ['🔴 가장자리 미채움을 잡는다', has(edged, { maskable: false }, '가장자리')],
+        ['RGB 가 아닌 PNG 는 오류다', Boolean(decodePng(Buffer.concat([encodePng(good).subarray(0, 25), Buffer.from([3]), encodePng(good).subarray(26)])).error)],
+      ]
+    })(),
 
     // ── 구 워드마크 계약 ──
     [
@@ -586,6 +875,37 @@ for (const ic of icons) {
     iconProblems.push(`자산 목록에 없습니다: ${ic.src} → ${rel} (brand-assets.ts 에 추가하세요)`)
   }
 }
+iconProblems.push(...manifestIconSetProblems(icons))
+
+// ── 🔴 manifest 아이콘 픽셀 — 크기만이 아니라 그려진 면을 잰다 ──
+const iconPixels = []
+for (const ic of icons) {
+  const rel = manifestSrcToPath(ic.src)
+  if (!rel || !existsSync(join(ROOT, rel))) continue
+  const img = decodePng(readFileSync(join(ROOT, rel)))
+  if (img.error) { iconProblems.push(`${ic.src} — ${img.error}`); continue }
+  const a = analyzeIcon(img)
+  iconPixels.push({ ic, a })
+  for (const why of iconPixelProblems(a, { maskable: ic.purpose === 'maskable' })) iconProblems.push(`${ic.src} — ${why}`)
+}
+
+// ── 🔴 우나어 3원 심볼 해시가 다시 들어오지 않았는가 ──
+const foreignHits = []
+{
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const abs = join(dir, name)
+      if (statSync(abs).isDirectory()) walk(abs)
+      else if (/\.(png|ico|svg|webp|jpe?g)$/i.test(name)) {
+        const sha = createHash('sha256').update(readFileSync(abs)).digest('hex')
+        if (RETIRED_FOREIGN_ICON_SHA256.has(sha)) foreignHits.push(abs.slice(ROOT.length + 1))
+      }
+    }
+  }
+  walk(join(ROOT, 'public'))
+  walk(join(ROOT, 'src'))
+}
+for (const rel of foreignHits) iconProblems.push(`우나어 3원 심볼 자산이 있습니다: ${rel}`)
 
 // ── 🔴 가로형 로고는 표시 상자의 정확히 2배여야 한다 ──
 const logoProblems = []
@@ -679,7 +999,14 @@ console.log('')
 console.log(`PNG 실측 ${pngSize.size}건 — 전부 적힌 크기와 일치`)
 for (const [rel, s] of pngSize) console.log(`    ${s.width}x${s.height}  ${rel}`)
 console.log(`검색 favicon ${FAVICON_PATH} — 정사각 · 48px 초과`)
-console.log(`manifest 아이콘 ${icons.length}건 — 경로·크기·MIME 전부 실제와 일치`)
+console.log(`manifest 아이콘 ${icons.length}건 — 경로·크기·MIME·purpose 전부 실제와 일치 · 쿼리 없는 /icon.png·/apple-icon.png 0건`)
+for (const { ic, a } of iconPixels) {
+  console.log(
+    `    ${ic.purpose.padEnd(8)} ${ic.sizes.padEnd(8)} 불투명 ${a.opaque ? '예' : '아니오'} · 가장자리 차이 ${a.edgeDiff} · ` +
+      `네모 섬 ${a.island} · 내용 반지름 비 ${a.radius.toFixed(3)}${ic.purpose === 'maskable' ? ` (≤ ${MASKABLE_SAFE_RADIUS})` : ''}  ${ic.src}`,
+  )
+}
+console.log(`우나어 3원 심볼 해시 — public/ · src/ 에서 0건`)
 console.log('가로형 로고 — 파일이 표시 상자의 정확히 2배 (@2x)')
 console.log('가로형 로고 — 화면 주소 · OG 런타임 경로 · 파일 추적 설정이 모두 같은 파일을 가리킨다')
 console.log('구 텍스트 워드마크 계약(HEAD·TAIL·SPLIT_AT) 코드 잔존 0건')
