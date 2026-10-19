@@ -84,7 +84,7 @@ import {
 } from './lib/magazine-direct-spec.mjs'
 import { deliveryGate, plannedMessageFor } from './lib/magazine-delivery-gate.mjs'
 import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
-import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
+import { judgeBriefFormatContract, judgeManuscriptFormat } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
 import {
   DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, readProductGraphState, readProductGraphVersion,
@@ -613,7 +613,7 @@ function driveManuscript(title, { body = '잠들기 전 내일 할 일을 짧게
  *   - `qaFailsFirst` 만큼 QA 가 FAIL 한 뒤 통과한다 — 재생성 후보는 `candidate` 글자다
  *   - `calls` 에 하위 단계 호출을 센다: run 대상 파일 이름 · 재생성 · 후보 교체
  */
-function directDriveSandbox(prefix, { draftTitle = null, qaFailsFirst = 0, candidate = null } = {}) {
+function directDriveSandbox(prefix, { draftTitle = null, draftText = null, qaFailsFirst = 0, candidate = null } = {}) {
   const input = loadFixture()
   // 🔴 drive 의 등록 gate 는 제품 current graphVersion 의 승인 source 를 본다
   const gv = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
@@ -623,7 +623,7 @@ function directDriveSandbox(prefix, { draftTitle = null, qaFailsFirst = 0, candi
   const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
   const slug = input.queueItem.slug
   const dir = join(d, slug)
-  writeFileSync(join(dir, 'draft.md'), driveManuscript(draftTitle ?? persisted.spec.identity.title), 'utf8')
+  writeFileSync(join(dir, 'draft.md'), draftText ?? driveManuscript(draftTitle ?? persisted.spec.identity.title), 'utf8')
   writeFileSync(join(dir, 'article-draft.ts'), 'export const article = {}\n', 'utf8')
   const quarantinePath = join(d, 'quarantine.json')
   saveQuarantine({}, quarantinePath)
@@ -800,6 +800,36 @@ check('W39 제목 대조는 공용 함수 하나 — auto-register 의 호출 �
   for (const rel of ['scripts/lib/magazine-delivery-gate.mjs', 'scripts/magazine-register.mjs', 'scripts/magazine-md-to-draft.mjs', 'scripts/magazine-qa.mjs']) {
     assert.ok(!readFileSync(join(ROOT, rel), 'utf8').includes('directSpecTitleCheck'), `${rel} 에 제목 대조가 중복됐다`)
   }
+})
+
+/** 제목 mismatch 가 형식 재생성보다 먼저 막았는가 — provider·교체·하위 단계 0 · 영수증 없음 · 바이트 불변 */
+function assertTitleFirst(s, before) {
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'BLOCKED')
+  assert.equal(r.blockedBy[0]?.code, DIRECT_SPEC_TITLE_MISMATCH, JSON.stringify(r.blockedBy))
+  assert.equal(s.calls.regen, 0, '제목이 다른 원고에 형식 재생성(provider)을 먼저 걸었다')
+  assert.equal(s.calls.apply, 0)
+  assert.equal(r.regenHistory, undefined)
+  assertNoDownstream(s)
+  assert.equal(readFileSync(join(s.dir, 'draft.md'), 'utf8'), before.draft, '원고를 고쳐 썼다 — 자동 교정 금지')
+  assert.equal(readFileSync(join(s.dir, 'article-draft.ts'), 'utf8'), before.article)
+  return r
+}
+
+check('W40 제목도 다르고 CTA 도 없는 원고 — 형식 재생성보다 제목 mismatch 가 먼저 막는다', () => {
+  const text = driveManuscript('잠들기 전 밤 마음을 돌보는 방법').split('\n').filter((l) => !l.startsWith('[CTA]')).join('\n')
+  assert.equal(judgeManuscriptFormat(text).ok, false, '반례 전제 — 이 원고는 형식 위반이어야 한다')
+  const s = directDriveSandbox('ds-w40', { draftText: text, candidate: driveManuscript('잠들기 전 밤 마음을 돌보는 방법') })
+  const r = assertTitleFirst(s, { draft: text, article: 'export const article = {}\n' })
+  assert.equal(r.blockedBy[0].actualTitle, '잠들기 전 밤 마음을 돌보는 방법')
+})
+
+check('W41 frontmatter 가 없는 원고 — 제목 없음으로 형식 재생성보다 먼저 막는다', () => {
+  const text = ['## 오늘 밤에 할 수 있는 일', '', '잠들기 전 내일 할 일을 짧게 적어 보세요.', ''].join('\n')
+  assert.equal(judgeManuscriptFormat(text).ok, false, '반례 전제 — 이 원고는 형식 위반이어야 한다')
+  const s = directDriveSandbox('ds-w41', { draftText: text, candidate: driveManuscript('아무 제목') })
+  const r = assertTitleFirst(s, { draft: text, article: 'export const article = {}\n' })
+  assert.equal(r.blockedBy[0].actualTitle, null)
 })
 
 // ── W21 canary slug 는 운영 queue · articles.ts 에 없다 ────

@@ -1096,6 +1096,17 @@ export function drive(slug, opts, deps = {}) {
     return stop('article', 'DRAFT_MD_MISSING', 'draft.md 가 없어 변환할 수 없다')
   }
   /**
+   * 🔴 **DIRECT_SPEC_V1 원고 제목 대조 — 원고를 다루는 첫 자리** (2026-10-19).
+   *    형식 재생성 · 변환 · QA · hero · batch QA · 등록 · 영수증보다 **먼저** 본다.
+   *    앞판은 형식 재생성 루프 뒤에 있어, 제목도 다르고 형식도 틀린 원고가 provider 재생성을 먼저 불렀다.
+   *    다르면 재생성을 걸지 않는다 — 제목은 고칠 실패 항목이 아니라 계약 위반이다.
+   *    frontmatter 가 없는 원고도 제목이 없으므로 여기서 막힌다. 틀린 제목을 spec 제목으로 덮어쓰지 않는다.
+   */
+  if (isDirectMode) {
+    const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })
+    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })
+  }
+  /**
    * 🔴 **이미 저장된 draft.md 도 변환기와 같은 판정을 받는다** (2026-10-08 `clinic-booking-app`).
    *    앞판은 변환기를 그냥 돌렸고, 막히면 사람용 안내문만 남긴 채 멈췄다. 원고는 이미 있으니
    *    다음 회차도 다시 보내지 않고 같은 자리에서 멈췄다 — 스스로 회복하지 못했다.
@@ -1130,15 +1141,6 @@ export function drive(slug, opts, deps = {}) {
       }
       fmt = judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8'))
     }
-  }
-  /**
-   * 🔴 **DIRECT_SPEC_V1 원고 제목 대조** (2026-10-19) — 형식 판정을 통과한 원고를 **변환 전**에 본다.
-   *    다르면 article-draft.ts 교체 · QA · hero · 등록 · 영수증으로 가지 않는다. 재생성도 걸지 않는다 —
-   *    제목은 고칠 실패 항목이 아니라 계약 위반이다. 틀린 제목을 spec 제목으로 덮어쓰지 않는다.
-   */
-  if (isDirectMode) {
-    const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })
-    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })
   }
   {
     // --out 없이 부르면 검사만 한다. dry-run 은 그 모드를 쓴다.

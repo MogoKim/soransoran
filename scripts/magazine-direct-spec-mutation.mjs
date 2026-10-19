@@ -22,8 +22,9 @@
  *   M7  (adapter) sidecar 전체 신원 대조 제거 — 같은 specHash 면 다른 graphNodeId 도 멱등으로 인정한다
  *       catch: 기존 등록 영수증의 graph/spec 신원이 달라지면 fail-closed 해야 한다
  *
- *   T1~T7 (2026-10-19 · 원고 제목 = spec 제목) — 최초 원고 대조 제거 · 재생성 후보 대조 우회 · 정규화 완화 ·
- *       항상 통과 · 최초/재생성 prompt 불변 문구 제거 · mismatch 코드 덮어쓰기. 지점은 `patchOnce` 로 정확히 1곳이다.
+ *   T1~T10 (2026-10-19 · 원고 제목 = spec 제목) — 최초 원고 대조 제거 · 재생성 후보 대조 우회 · 정규화 완화 ·
+ *       항상 통과 · 최초/재생성 prompt 불변 문구 제거 · mismatch 코드 덮어쓰기 · 형식 재생성 뒤로 이동 ·
+ *       mismatch 에도 형식 재생성 허용. 지점은 `patchOnce` 로 정확히 1곳이다.
  *       auto-register 변이는 drive 를 provider·Chrome 0 으로 태운다 (재생성·교체·등록은 주입 함수가 센다).
  *
  * 🔴 task 가 요구한 세 변이 — **wiring 제거(M6) · unknown-mode 차단 제거(M3) · verify 제거(M2)** —
@@ -161,11 +162,11 @@ const WRONG_TITLE = '잠 못 든 다음 날, 무엇부터 할까요'
  * auto-register drive 를 provider·Chrome 0 으로 태운다. `draftTitle` 이 없으면 원고 제목 = spec 제목.
  * `qaFailsFirst` 만큼 QA 가 FAIL 한 뒤 통과하고, 재생성 후보는 `candidate` 글자다.
  */
-function titleDriveSandbox(prefix, { draftTitle = null, qaFailsFirst = 0, candidate = null } = {}) {
+function titleDriveSandbox(prefix, { draftTitle = null, draftText = null, qaFailsFirst = 0, candidate = null } = {}) {
   const sb = makeSandbox(prefix)
   const spec = adapter.readDirectSpec({ slug: sb.slug, draftsDir: sb.draftsDir }).spec
   const dir = join(sb.draftsDir, sb.slug)
-  writeFileSync(join(dir, 'draft.md'), titledManuscript(draftTitle ?? spec.identity.title), 'utf8')
+  writeFileSync(join(dir, 'draft.md'), draftText ?? titledManuscript(draftTitle ?? spec.identity.title), 'utf8')
   writeFileSync(join(dir, 'article-draft.ts'), 'export const article = {}\n', 'utf8')
   const calls = { regen: 0, apply: 0, register: 0 }
   let qaRuns = 0
@@ -193,6 +194,12 @@ function titleDriveSandbox(prefix, { draftTitle = null, qaFailsFirst = 0, candid
   return { ...sb, spec, dir, deps, calls, receipt }
 }
 const DRIVE_OPTS = { write: true, publishAt: '2026-10-22', autoLane: true }
+/** 제목도 다르고 CTA 도 없는 원고 — 제목 mismatch 가 형식 재생성보다 먼저 막아야 한다 */
+const WRONG_TITLE_NO_CTA = titledManuscript(WRONG_TITLE).split('\n').filter((l) => !l.startsWith('[CTA]')).join('\n')
+/** 최초 원고 제목 대조 블록 (변이 지점) */
+const INITIAL_TITLE_GATE = "  if (isDirectMode) {\n    const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })\n    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })\n  }\n"
+/** 형식 재생성 루프의 끝 (T8 이 제목 대조를 옮겨 놓는 자리) */
+const FORMAT_LOOP_END = "      fmt = judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8'))\n    }\n  }\n"
 
 async function baseline() {
   console.log('\n── baseline (원본 adapter 는 반례를 catch 한다) ──')
@@ -323,6 +330,16 @@ async function baseline() {
     assert.equal(r.verdict, 'DONE', JSON.stringify(r.blockedBy))
     assert.equal(s.calls.apply, 1)
     pass++; console.log('PASS B11 제목이 같은 재생성 — 교체 · 등록')
+  }
+
+  // B13 (T8·T9·T10 짝): 제목도 다르고 형식도 틀린 원고 — 형식 재생성(provider) 0 으로 제목 mismatch
+  {
+    const s = titleDriveSandbox('ds-base-b13', { draftText: WRONG_TITLE_NO_CTA, candidate: titledManuscript(WRONG_TITLE) })
+    const r = drive(s.slug, DRIVE_OPTS, s.deps)
+    assert.equal(r.blockedBy?.[0]?.code, adapter.DIRECT_SPEC_TITLE_MISMATCH, 'B13 원본은 제목 mismatch 로 먼저 막아야 한다')
+    assert.equal(s.calls.regen, 0, 'B13 원본은 형식 재생성을 걸지 않아야 한다')
+    assert.equal(s.calls.apply, 0)
+    pass++; console.log('PASS B13 제목+형식 위반 — 형식 재생성 0 · 제목 mismatch')
   }
 
   // B12 (T5·T6 짝): 최초·재생성 prompt 에 제목 불변 문구
@@ -460,9 +477,7 @@ async function runMutations() {
   // ── 제목 관문 변이 (2026-10-19) — 지점은 정확히 1곳 (patchOnce) ──
   // T1 최초 원고 제목 대조 제거 → 다른 제목이 그대로 등록·영수증까지 간다
   await mutate('T1', '최초 원고 제목 대조 제거', 'autoRegister',
-    patchOnce(
-      "  if (isDirectMode) {\n    const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })\n    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })\n  }\n",
-      '  // mutant T1: 최초 원고 제목 대조 제거\n'),
+    patchOnce(INITIAL_TITLE_GATE, '  // mutant T1: 최초 원고 제목 대조 제거\n'),
     async (mod) => {
       const s = titleDriveSandbox('ds-t1', { draftTitle: WRONG_TITLE })
       const r = mod.drive(s.slug, DRIVE_OPTS, s.deps)
@@ -532,6 +547,31 @@ async function runMutations() {
       assert.equal(r.verdict, 'BLOCKED')
       assert.equal(r.blockedBy?.[0]?.code, 'QA_FAIL', 'T7 catch — 변이본은 제목 계약 위반을 일반 QA_FAIL 로 덮는다')
     })
+
+  // ── 제목 대조 순서 변이 — 제목도 다르고 CTA 도 없는 원고 (WRONG_TITLE_NO_CTA) ──
+  /** 변이본이 제목 mismatch 원고에 형식 재생성(provider)을 걸었는가 — 이것이 결함이다 */
+  const formatRegenRanOnMismatch = async (mod, prefix, id) => {
+    const s = titleDriveSandbox(prefix, { draftText: WRONG_TITLE_NO_CTA, candidate: titledManuscript(WRONG_TITLE) })
+    const r = mod.drive(s.slug, DRIVE_OPTS, s.deps)
+    assert.equal(s.calls.regen, 1, `${id} catch — 변이본은 제목이 다른 원고에 형식 재생성(provider)을 건다 (실제 regen=${s.calls.regen} · ${JSON.stringify(r.blockedBy)})`)
+    assert.equal(r.regenHistory?.[0]?.stage, 'article', `${id} catch — 형식 재생성 자리에서 provider 가 불렸다`)
+  }
+
+  // T8 최초 제목 대조를 형식 재생성 루프 뒤로 옮긴다 (adcb2414 의 순서)
+  await mutate('T8', '최초 제목 대조를 형식 재생성 뒤로 이동', 'autoRegister',
+    (src) => patchOnce(FORMAT_LOOP_END, `${FORMAT_LOOP_END}${INITIAL_TITLE_GATE}`)(patchOnce(INITIAL_TITLE_GATE, '  // mutant T8: 제목 대조를 형식 재생성 뒤로 옮김\n')(src)),
+    (mod) => formatRegenRanOnMismatch(mod, 'ds-t8', 'T8'))
+
+  // T9 제목 mismatch 여도 형식이 틀리면 막지 않고 형식 재생성으로 보낸다
+  await mutate('T9', '제목 mismatch 에도 형식 재생성 허용', 'autoRegister',
+    patchOnce("    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })\n",
+      "    if (!t.ok && judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8')).ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual }) // mutant T9\n"),
+    (mod) => formatRegenRanOnMismatch(mod, 'ds-t9', 'T9'))
+
+  // T10 최초 제목 대조 제거 — 형식 위반 원고에서는 provider 재생성이 먼저 돈다 (T1 은 형식 정상 원고의 등록 경로)
+  await mutate('T10', '최초 제목 대조 제거 (형식 위반 원고)', 'autoRegister',
+    patchOnce(INITIAL_TITLE_GATE, '  // mutant T10: 최초 원고 제목 대조 제거\n'),
+    (mod) => formatRegenRanOnMismatch(mod, 'ds-t10', 'T10'))
 }
 
 await baseline()
