@@ -180,7 +180,7 @@ export function summarizeTraceV1(cs: readonly TraceCandidateV1[], identityMissin
   }
 }
 
-/** 🔴 지금 공급 순위 그대로 — `compareReleaseRank`(마지막 열쇠만 해시) */
+/** 🔴 지금 공급 순위 그대로 — `compareReleaseRank`(마지막 열쇠만 해시) · 2026-10-19 창업자 결정 뒤 출처·주제 우대 없음 */
 const currentOrder = (a: TraceCandidateV1, b: TraceCandidateV1): number =>
   compareReleaseRank({ ...a.rank!, tieBreak: '' }, { ...b.rank!, tieBreak: '' })
   || (a.sourceHash < b.sourceHash ? -1 : a.sourceHash > b.sourceHash ? 1 : 0)

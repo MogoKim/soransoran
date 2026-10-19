@@ -217,7 +217,7 @@ export function planOpenDays(input: {
 /**
  * 🔴 **화자별 WIP 수 — 칸에서 뺄 행은 주입받는다.**
  *
- *    발행 분류는 사람 검토 대기(`humanReviewPending`) · 자동 READY 닫힘 행을 WIP 로 센다. 그러면 **원천 가치가
+ *    발행 분류는 자동 도장 대기(`autoReadyPending`) · 자동 READY 닫힘 행을 WIP 로 센다. 그러면 **원천 가치가
  *    이미 사라져 자동으로는 영영 못 나가는 초안**이 그 화자의 칸을 영구히 막는다(진단 B: 말투 있는 18명 중 11명 여력 0).
  *    🔴 이 함수는 가치를 판정하지 않는다 — "칸에서 뺄 행" 판정(`releasesSlot`)을 **입력으로 받을 뿐**이다.
  *       정기 경로는 정본 `judgeSlotRelease` 가 만료 사유를 낸 행을 넘긴다. 주지 않으면 앞판과 같다(전부 점유).

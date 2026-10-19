@@ -192,7 +192,7 @@ console.log('\n⑥ 같은 원천 중복 유료 생성 0 · retryable 과 termina
     { sourceKey: k2, sourceArticleId: 'retry', atMs: 1, stage: 'draft', state: 'retryable' },
   ]
   const concluded = concludedSourceKeys(rows)
-  check('🔴 terminal 은 결론(다시 고르지 않는다) · retryable 은 결론이 아니다(재시도 자리에서만)',
+  check('🔴 terminal 은 결론(다시 고르지 않는다) · retryable 은 결론이 아니다(다음 단일 순위의 후보)',
     concluded.has(k1) && !concluded.has(k2) && attemptedOutcomes(rows).has(k2)
     && (CONCLUDED_STATES as readonly string[]).includes('terminal') && !(CONCLUDED_STATES as readonly string[]).includes('retryable'))
   const judge = strip('scripts/micro-seed-auto-judge.mts')

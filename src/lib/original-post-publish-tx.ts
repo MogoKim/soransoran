@@ -48,6 +48,8 @@ import {
   judgeSlotRelease, releaseStampOf, RELEASE_STAMP_KEY, type ReleaseReason,
 } from './source-slot-release'
 import type { Prisma, PrismaClient } from '@prisma/client'
+import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION } from './micro-seed-auto-judge'
+import { routeBoardType, readAutoJudgeFromGateResults } from './original-post-publish'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
   type PublishBlockCode,
@@ -264,6 +266,19 @@ async function publishAttempt(
        *    여기서 막히면 이 트랜잭션은 아무것도 쓰지 않는다.
        */
       const isAuto = (row.decidedBy ?? '').trim() === AUTO_DECIDER
+      /**
+       * 🔴 **게시판 신뢰 경계도 모든 write보다 먼저다** (2026-10-19 Codex 독립 재검토).
+       *    앞 구현은 Persona 자동 배정을 쓴 뒤 boardTopic 손상을 알아차려, Post는 0인데 배정만 남길 수 있었다.
+       *    저장된 gateResults만 읽고 여기서 FREE/MENOPAUSE를 확정한다. null이면 배정·Post·Queue·ActivityLog 모두 0.
+       */
+      const aj = readAutoJudgeFromGateResults(row.gateResults, { currentRuleVersion: CURRENT_AUTO_JUDGE_RULE_VERSION })
+      const boardType = routeBoardType(aj)
+      if (boardType === null) {
+        return {
+          kind: 'blocked', code: 'AUTO_READY_RECHECK',
+          detail: `boardTopic 라우팅 fail-closed (state=${aj.state}·ruleVersion=${aj.ruleVersion ?? 'null'}·boardTopic=${JSON.stringify(aj.boardTopic)})`,
+        }
+      }
       if (isAuto) {
         const recheck = await recheckAutoReadyInTx(tx, {
           env: input.autoReadyEnv ?? {},
@@ -484,6 +499,7 @@ async function publishAttempt(
         content: row.editedBody ?? row.draftBody,
         authorId: persona.userId,
         personaId: persona.id,
+        boardType,
       })
       // 🔴 create 직전. 함수가 있다는 것과 그 함수만 쓰인다는 것은 다르다
       assertOriginalPostData(data)

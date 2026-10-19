@@ -9,12 +9,12 @@
  *   ① 수집기가 두 번 이어 붙인 본문만 걷어낸다 — 사람이 쓴 되풀이는 건드리지 않는다
  *   ② 재생: 고치기 전 근거 묶음은 끝나지 않은 문장을 꼬리로 보냈고, 고친 뒤에는 한 벌 전체가 간다
  *   ③ 생성 입력: 보존할 사실이 구조로 간다 · 전하는 말에 보고 들은 경로를 지어 붙이지 않는다
- *   ④ 🔴 검수는 그대로다 — 검수 프롬프트 · 판 · 경고 코드 · 근거 대조 · 기계 결론이 한 글자도 같다
+ *   ④ 🔴 quality-v12 검수는 안전한 창작과 핵심 손실·고위험 사실을 구분한다
  *   ⑤ 🔴 잘림 · 파싱 · 무응답은 의미 탈락이 아니다 — 경고 수 0 · INCOMPLETE 하나
  *   ⑥ 러너 배선: 실제 `runContentCore` 가 고친 묶음과 `보존` 을 요청에 싣는다
  *   ⑦ 분류표 — 경고 5건의 원인과 이번 판이 다루는 몫
  */
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -51,8 +51,6 @@ const check = (n: string, ok: boolean, extra = ''): void => {
 }
 const NOW = new Date('2026-10-13T03:15:00.000Z')
 const flat = (s: string): string => s.replace(/\s+/g, '')
-/** 🔴 (v2-review-p8) 가족 사실 줄만 걷어낸 검수 지시문 — 이것이 main(p7)과 같아야 다른 축 기준이 그대로다 */
-const withoutFamilyLines = (sys: string): string => sys.split('\n').filter((l) => !REVIEW_FAMILY_SPECIFICS_LINES.includes(l)).join('\n')
 
 type Flag = { evidence: string; why: string; class: FlagClass }
 type FlagClass = 'collectorRepeatCut' | 'accessPathInvented' | 'paraphraseFlagged' | 'intensityFlagged'
@@ -163,10 +161,10 @@ console.log('\n② 재생 — 고치기 전 근거 묶음(evidence-v1)과 고친
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 보고 들은 경로는 지어 붙이지 않는다')
+console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안전한 창작만 허용한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 초안 프롬프트 판 = v2-draft-p12', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p12' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p12'))
+  check('🔴 초안 프롬프트 판 = v2-draft-p13', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p13' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p13'))
   for (const id of ['A', 'B', 'C']) {
     const c = CASE(id); const packet = packetOf(c); const plan = planOf(c)
     const keep = sourceKeepOf(plan, packet)
@@ -196,29 +194,31 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 보�
   check('🔴 생성이 현행 복제 게이트 경계를 답하기 전 스스로 대조한다',
     sys.includes(`연속 ${COPY_RUN_WORDS}어절`) && sys.includes(`공백을 빼고 ${COPY_RUN_CHARS}자`)
     && sys.includes('그 문장을 다시 씁니다'))
+  check('🟢 안전한 창작 — 감상·질문·비유·연결·일반 관찰을 허용한다',
+    sys.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
+  check('🔴 고위험 사실과 제3자 사건·결과는 계속 금지한다',
+    sys.includes('배우자 · 자녀 · 부모 · 건강 · 치료 · 돈')
+    && sys.includes('제3자의 사건 · 날짜 · 직접 대사 · 결과'))
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n④ 🔴 검수는 그대로다 — 기준 완화 0')
+console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
-/**
- * 🔴 **검수 지시문 지문** — origin/main 018da79c 의 `buildV2ReviewSystemPrompt` 가 아래 고정 입력으로 낸 글자의 sha256.
- *    이 값이 바뀌면 검수 기준이 바뀐 것이다 — 이 PR 의 범위가 아니다. 바꾸려면 판(`V2_REVIEW_PROMPT_VERSION`)부터 올린다.
- */
-const REVIEW_PROMPT_SHA256 = 'aa33dd5dcee51450fa57be4e12e72e4da9c0327ca0c13c74823dbb7ad765f208'
-/** 🔴 같은 방식으로 — origin/main 018da79c 의 `runContentCore` 가 ⑥ 의 입력(B · 그날 기준 카드)으로 보낸 검수 지시문의 sha256 */
-const RUNNER_REVIEW_PROMPT_SHA256 = '18a52eb24c7a89caee3c67b3eeff5eeb5a2160a2b51ab7805b5bdc9b550a71e3'
 {
-  check('🔴 검수 판 그대로(review-v7) · 검수 프롬프트는 p8 (가족 사실 줄 추가 · 2026-10-13 감사 결함)', V2_REVIEW_PROMPT_VERSION === 'v2-review-p8' && REVIEW_VERSION === 'review-v7')
+  check('🔴 검수 판 review-v7 · 검수 프롬프트 p9', V2_REVIEW_PROMPT_VERSION === 'v2-review-p9' && REVIEW_VERSION === 'review-v7')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
   }))
   const c = CASE('B'); const plan = planOf(c)
   const reviewSys = buildV2ReviewSystemPrompt({ plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan) })
-  const sha = createHash('sha256').update(reviewSys, 'utf8').digest('hex')
-  check('🔴 🔴 검수 지시문에서 가족 사실 줄만 걷어내면 main(p7)과 한 글자도 같다 — 다른 축 기준 완화 0',
-    createHash('sha256').update(withoutFamilyLines(reviewSys), 'utf8').digest('hex') === REVIEW_PROMPT_SHA256, sha)
+  check('🟢 사소한 생략·재구성은 droppedFromSource로 세지 않는다',
+    reviewSys.includes('사소한 세부 · 문장 순서 · 표현')
+    && reviewSys.includes('재구성했어도 핵심 뜻과 결론이 남아 있으면 적지 않는다'))
+  check('🟢 감상·질문·비유·일반 관찰은 unsupportedAdditions로 세지 않는다',
+    reviewSys.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
+  check('🔴 검수는 고위험 생활사와 제3자 사건·결과를 계속 적는다',
+    reviewSys.includes('구체적 고위험 생활사') && reviewSys.includes('제3자의 사건 · 행동 · 날짜 · 기간 · 결과'))
   check('🔴 🔴 검수 지시문에 가족 사실 줄이 전부 들어 있다(자녀 수 · 성별 · 나이대 · 남의 자녀 제외)',
     REVIEW_FAMILY_SPECIFICS_LINES.every((l) => reviewSys.split('\n').includes(l)) && reviewSys.includes('자녀 성별 칸이 없다'))
   check('🔴 검수 지시문은 [보존] 을 모른다 — 생성 입력만 바뀌었다', !reviewSys.includes('그대로쓸말') && !reviewSys.includes('원문의물음'))
@@ -310,8 +310,10 @@ async function runOf(c: Case, ask: Ask) {
   check('🔴 🔴 초안·검수·판독이 같은 한 벌 원문을 본다 — 두 번째 벌이 없다',
     dp !== null && dp.원문 === sourceBlock(packet) && r !== undefined && (JSON.parse(r.payload) as { 원문: string }).원문 === sourceBlock(packet)
     && p !== undefined && !p.payload.includes(c.rawBody.slice(c.rawBody.length - 40)))
-  check('🔴 🔴 러너가 보낸 검수 지시문 — 가족 사실 줄만 빼면 main 러너와 한 글자도 같다 · 그 줄은 실렸다',
-    r !== undefined && createHash('sha256').update(withoutFamilyLines(r.system), 'utf8').digest('hex') === RUNNER_REVIEW_PROMPT_SHA256
+  check('🔴 🔴 러너가 보낸 p9 검수 지시문 — 안전한 창작 carve-out과 가족 사실 보호가 함께 실렸다',
+    r !== undefined
+    && r.system.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰')
+    && r.system.includes('구체적 고위험 생활사')
     && REVIEW_FAMILY_SPECIFICS_LINES.every((l) => r.system.includes(l)))
   check('🔴 artifact 근거 판 = evidence-v2 · 길이는 한 벌', a.evidence.packetVersion === 'evidence-v2' && a.evidence.bodyLength === packet.bodyLength && packet.bodyLength < c.v1BodyLength)
 }
@@ -325,16 +327,15 @@ console.log('\n⑦ 분류표 — v7 08:15·12:15 의미 경고 5건')
   const table: Record<FlagClass, { n: number; where: string; handled: boolean }> = {
     collectorRepeatCut: { n: by('collectorRepeatCut'), where: '중간 변환 — 수집 두 벌 + 근거 묶음 재절단', handled: true },
     accessPathInvented: { n: by('accessPathInvented'), where: '생성 지시문 — 전하는 말에 보고 들은 경로를 지어 붙임', handled: true },
-    paraphraseFlagged: { n: by('paraphraseFlagged'), where: '검수 판단 — 원문 `왈` 을 풀어 쓴 것을 새 사실로 셈', handled: false },
-    intensityFlagged: { n: by('intensityFlagged'), where: '검수 판단 — 감정의 세기 차이를 탈락으로 셈', handled: false },
+    paraphraseFlagged: { n: by('paraphraseFlagged'), where: 'v7 과거 응답 재생 — p9 검수 지시에서는 적지 않음', handled: true },
+    intensityFlagged: { n: by('intensityFlagged'), where: 'v7 과거 응답 재생 — p9 검수 지시에서는 적지 않음', handled: true },
   }
   for (const [k, v] of Object.entries(table)) console.log(`   ${v.handled ? '🛠 ' : '👤 '}${k} ${v.n}건 — ${v.where}${v.handled ? '' : ' (사람 검토 유지 · 기준 그대로)'}`)
   check('경고 5건 = 탈락 2 · 추가 3', flags.length === 5
     && FX.cases.reduce((n, c) => n + c.review.droppedFromSource.length, 0) === 2
     && FX.cases.reduce((n, c) => n + c.review.unsupportedAdditions.length, 0) === 3)
-  check('🔴 이번 판이 원인을 고친 몫 3 · 검수 판단으로 사람에게 남는 몫 2',
-    Object.values(table).filter((v) => v.handled).reduce((n, v) => n + v.n, 0) === 3
-    && Object.values(table).filter((v) => !v.handled).reduce((n, v) => n + v.n, 0) === 2)
+  check('🔴 p9 검수 지시가 과거 의미 경고 5건의 원인을 모두 다룬다',
+    Object.values(table).filter((v) => v.handled).reduce((n, v) => n + v.n, 0) === 5)
   check('잘림 3건은 표에 없다 — 의미 경고가 아니다', FX.incomplete.length === 3 && flags.every((f) => !FX.incomplete.some((x) => x.id === f.id)))
   const missed = FX.cases.flatMap((c) => c.unflaggedLoss ?? [])
   console.log(`   ⚠️ 검수가 잡지 못한 실제 손실 ${missed.length}건 — 경고 수가 0 이어도 손실 0 이 아니다`)

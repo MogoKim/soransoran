@@ -199,6 +199,8 @@ const JUDGE_PAYLOAD = {
   confidence: 0.8,
   risks: [],
   communityAngle: '우리 또래가 겪는 이야기',
+  // 🔴 auto-judge-v4 계약: 중심 주제는 strict enum 이다. 기본 fixture 는 일반 생활 글이다.
+  boardTopic: process.env.FAKE_PROVIDER_JUDGE_BOARD_TOPIC ?? 'FREE',
 }
 
 // 🔴 prefill 뒤를 이어 쓰는 모양 — 여는 `{` 를 뺀다 (Anthropic 전용)

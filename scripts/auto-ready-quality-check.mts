@@ -32,6 +32,7 @@ type CohortRow = import('../src/lib/auto-ready-quality-cohort').CohortRow
 const { bindingOf, digestOf, EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT } = await import('../src/lib/auto-ready-evidence')
 const { judgeOpen, CONTRACT } = await import('../src/lib/auto-ready-v2')
 const af = await import('../src/lib/micro-seed-supply-autofill')
+const { RULE_VERSION: AUTO_JUDGE_RULE_VERSION } = await import('../src/lib/micro-seed-auto-judge')
 const { STAGE_MODEL } = await import('../src/lib/content-core/pipeline')
 const { judgeFingerprint, FINGERPRINT_FILES, FINGERPRINT_PATH, JUDGE_DEFINITIONS } = await import('./quality-contract-check.mjs')
 const fxMod = await import('./lib/draft-gate-fixtures.mjs')
@@ -57,7 +58,7 @@ const D = qualityContractDigest()
 const INDEPENDENT = createHash('sha256').update(stableJson(qualityContractComponents()), 'utf8').digest('hex')
 check('digest 는 sha256 hex 64', /^[0-9a-f]{64}$/.test(D))
 check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 digest 는 코드 상수 그대로 (독립 재계산과 같다)**',
-  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v11', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
+  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v12', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
 const comps = qualityContractComponents()
 check('🔴 digest 구성 — 게이트·검수·판정 판이 들어 있다',
   ['version', 'pipelineVersion', 'promptVersion', 'reviewVersion', 'draftRuleVersion', 'draftGateVersion', 'draftGateCodes', 'judgeContractDigest', 'semanticHoldCodes']
@@ -82,7 +83,14 @@ const mc = {
   // 🔴 호출자가 후보에 계약 표식을 실어 보낸다 — 저장되면 안 된다
   qualityContract: { version: 'quality-forged', digest: FORGED },
 }
-const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine-shadow' }
+const aj = {
+  ruleVersion: AUTO_JUDGE_RULE_VERSION,
+  promptVersion: 'p',
+  model: 'm',
+  inputHash: 'h',
+  provenance: 'machine-shadow',
+  boardTopic: 'FREE' as const,
+}
 const measured = af.machineProfileMismatch(mEnv, mc as never)
 check('fixture 후보는 기계 profile 을 통째로 만족한다', measured.length === 0, measured.join(' · '))
 const p1 = af.buildQueuePayload({ envelope: mEnv, candidate: mc as never, autoJudge: { ...aj, qualityContract: FORGED } as never, review: { qualityContract: FORGED }, now: '2026-09-27T00:00:00Z' })

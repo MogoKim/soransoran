@@ -514,14 +514,14 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     }
   }
 
-  // ── 2회차 — 한 번도 안 본 backlog 가 먼저 올라온다 ──
+  // ── 2회차 — 신규/재시도 상태가 원천 순위를 뒤집지 않는다 ──
   const attempted1 = attemptedOutcomes(outcomesOf(w))
   check('🔴 1회차가 본 원천은 5건이다', attempted1.size === 5, `${attempted1.size}건`)
   const second = selectAt(`${RUN}-2`)
   check('🔴 🔴 **적재된 원천을 다시 고르지 않는다**',
     second.workset.sources.map(sid).every((id) => !queued.has(id)), second.workset.sources.map(sid).join(','))
-  check('🔴 🔴 **한 번도 안 본 backlog 가 앞자리다** — 결론 안 난 것이 자리를 점유하지 못한다',
-    second.workset.sources.map(sid).slice(0, 3).join(',') === 'e5,e6,e7',
+  check('🔴 🔴 **동일 신선도에서 반응 순위가 그대로다** — 신규/재시도가 순위를 뒤집지 않는다',
+    second.workset.sources.map(sid).join(',') === 'e1,e2,e3,e4,e5',
     second.workset.sources.map(sid).join(','))
   check('🔴 적재분이 제외 사유로 세어진다',
     second.dropped.queueSibling === queued.size, `${second.dropped.queueSibling}/${queued.size}`)
@@ -538,25 +538,27 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
   const t2 = concludedIds(outcomesOf(w))
   const newlyJudged = second.workset.sources.map(sid).filter((id) => !attempted1.has(KY(id)))
   check('🔴 🔴 **2회차에 처음 본 원천은 그 판정으로 끝났다**',
-    newlyJudged.length === 3 && newlyJudged.every((id) => t2.has(id)),
+    newlyJudged.length === 1 && newlyJudged[0] === 'e5' && t2.has('e5'),
     `${newlyJudged.join(',')} / terminal ${[...t2].join(',')}`)
-  check('🔴 🔴 **한 회차 만에 모든 원천이 한 번씩은 올라갔다** — 굶은 원천 0',
-    rows.every((r) => attempted1.has(KY(r.sourceArticleId))
-      || second.workset.sources.map(sid).includes(r.sourceArticleId)),
-    `${rows.length}건 중 남은 것 ${rows.filter((r) => !attempted1.has(KY(r.sourceArticleId))
-      && !second.workset.sources.map(sid).includes(r.sourceArticleId)).length}`)
+  check('🔴 🔴 **순위 밖 원천은 다음 회차로 유예된다** — 미시도 예약석이 없다',
+    second.deferred === 2
+      && rows.filter((r) => !attempted1.has(KY(r.sourceArticleId))
+        && !second.workset.sources.map(sid).includes(r.sourceArticleId))
+        .map((r) => r.sourceArticleId).sort().join(',') === 'e6,e7',
+    `${second.deferred}건 유예`)
 
   const third = selectAt(`${RUN}-3`)
   check('🔴 🔴 **끝난 원천을 되풀이해 고르지 않는다**',
     third.workset.sources.map(sid).every((id) => !t2.has(id)), third.workset.sources.map(sid).join(','))
   /**
-   * 🔴 **결론이 안 난 원천은 다시 올라온다** — 그것이 옳다. 판정은 AUTO_SEED 였는데
-   *    초안이 중복으로 걸려 큐까지 못 간 원천이다. 🔴 다만 **공짜여야 한다** —
-   *    입력도 계약도 그대로이므로 판정 캐시가 받는다. 그렇지 않으면 회차마다 돈이 샌다.
+   * 🔴 결론이 안 난 상위 원천은 다시 올라온다. 입력·계약이 같은 재시도 4건은
+   *    판정 캐시가 받고, 이번에 처음 보는 e6 한 건만 유료 호출한다.
    */
   const r3 = judgeRound(`${RUN}-3`, third, Math.max(1, third.picked.length))
-  check('🔴 🔴 **결론 안 난 원천을 다시 물어도 유료 호출 0** — 같은 입력·같은 계약이다',
-    r3.code === 0 && r3.paid === 0, `${r3.paid}회 · code=${r3.code}`)
+  check('🔴 🔴 **캐시된 재시도는 공짜·새 원천 한 건만 유료**',
+    r3.code === 0 && r3.paid === 1
+      && third.workset.sources.map(sid).join(',') === 'e1,e2,e3,e4,e6',
+    `${r3.paid}회 · code=${r3.code} · ${third.workset.sources.map(sid).join(',')}`)
   check('🔴 그래도 그 묶음만 본다',
     r3.ids.slice().sort().join(',') === third.workset.sources.map(sid).slice().sort().join(','),
     r3.ids.join(','))
@@ -569,9 +571,10 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     fourth.picked.length <= third.picked.length,
     `${third.picked.length} → ${fourth.picked.length}`)
   const seenAll = new Set([
-    ...[...attempted1.values()].map((o) => o.sourceArticleId), ...second.workset.sources.map(sid), ...third.workset.sources.map(sid),
+    ...[...attempted1.values()].map((o) => o.sourceArticleId), ...second.workset.sources.map(sid),
+    ...third.workset.sources.map(sid), ...fourth.workset.sources.map(sid),
   ])
-  check('🔴 🔴 **8건 전부 한 번씩은 끝까지 갔다** — 영구 제외도, 굶김도 없다',
+  check('🔴 🔴 **계속 최신 원천이 추가되지 않으면 유예분도 순서대로 올라온다**',
     rows.every((r) => seenAll.has(r.sourceArticleId)), `${seenAll.size}/${rows.length}`)
 }
 
@@ -799,7 +802,7 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑨ 🔴 🔴 신규가 계속 들어와도 재시도가 굶지 않는다 (실제 파일)')
+console.log('\n⑨ 🔴 🔴 최신 원천이 재시도 예약석에 밀리지 않는다 (실제 파일)')
 // ─────────────────────────────────────────────────────────
 {
   const w5 = makeWorld()
@@ -813,40 +816,36 @@ console.log('\n⑨ 🔴 🔴 신규가 계속 들어와도 재시도가 굶지 �
       decidedAt: at, provenance: 'machine-shadow', reasonCodes: ['semanticFailed'],
     })}\n`, 'utf-8')
   }
-  writeAdaptPair(w5.dd, [{ id: 'old-retry', comments: 1, posted: '2026-09-01T00:00:00Z' }])
-  writeRetryShadow('old-retry', inputHashOf(rowsOf(w5.dd)[0]!.input), '2026-09-01T00:00:00.000Z')
-
-  let everPicked = 0
-  for (let round = 1; round <= 10; round += 1) {
-    const fresh = Array.from({ length: 5 }, (_, i) => ({
-      id: `r${round}-${i}`, comments: 50 + i, posted: `2026-09-1${round % 10}T00:00:00Z`,
-    }))
-    const detail = fresh.map((f) => JSON.stringify({
-      runId: `adapt-new-${round}`, sourceArticleId: f.id, sourceSite: 'navercafe:wgang',
-      axis: SEED_AXIS, lane: PROVEN_LANE, access: 'ok', safetyVerdict: 'pass', safetyReasons: '',
-      title: `우리 나이 이야기 ${f.id}`,
-      bodyHead: `${f.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
-      commentCount: f.comments, bodyLength: 300, imageCount: 0, assetAxes: 'sleep|work',
-      qualityFlags: [], sourcePostedAt: f.posted, sourceListedAt: f.posted,
-      sourceCapturedAt: f.posted,
-    })).join('\n')
-    writeFileSync(join(w5.dd, `adapt-new-${round}.detail.jsonl`), `${detail}\n`, 'utf-8')
-
-    const rows5 = rowsOf(w5.dd)
-    const hash5 = new Map(rows5.map((r) => [KY(r.sourceArticleId), inputHashOf(r.input)]))
-    const got = readPriorOutcomes({
-      dataDir: w5.dd, hashOf: hash5, canon: canon5, base: base5,
-      artifactVersion: ARTIFACT_VERSION,
-    })
-    const plan = selectWorkset({
-      rows: rows5, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
-      concluded: concludedSourceKeys(got), attempted: attemptedOutcomes(got),
-      limit: 5, runId: `w5-${round}`, takenAt: new Date(`2026-09-2${round % 10}T00:00:00.000Z`),
-    })
-    if (plan.workset.sources.map(sid).includes('old-retry')) everPicked += 1
-  }
-  check('🔴 🔴 **실제 판정 파일로도 재시도가 매 회차 자리를 얻는다**',
-    everPicked === 10, `${everPicked}/10`)
+  const at = new Date('2026-09-20T12:00:00.000Z')
+  writeAdaptPair(w5.dd, [
+    { id: 'old-retry', comments: 99, posted: '2026-09-20T07:00:00.000Z' },
+    ...Array.from({ length: 5 }, (_, i) => ({
+      id: `fresh-${i}`, comments: 1, posted: `2026-09-20T08:0${i}:00.000Z`,
+    })),
+  ])
+  const rawRows5 = rowsOf(w5.dd)
+  const hash5 = new Map(rawRows5.map((r) => [KY(r.sourceArticleId), inputHashOf(r.input)]))
+  writeRetryShadow('old-retry', hash5.get(KY('old-retry'))!, '2026-09-20T08:00:00.000Z')
+  const got = readPriorOutcomes({
+    dataDir: w5.dd, hashOf: hash5, canon: canon5, base: base5,
+    artifactVersion: ARTIFACT_VERSION,
+  })
+  const rows5 = rawRows5.map((r) => ({
+    ...r,
+    evidence: fakeSourceEvidence(at, {
+      site: r.sourceSite, id: r.sourceArticleId, postedAt: new Date(r.sourcePostedAt),
+      commentsPct: Math.min(0.99, r.commentCount / 100),
+    }),
+  }))
+  const plan = selectWorkset({
+    rows: rows5, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
+    concluded: concludedSourceKeys(got), attempted: attemptedOutcomes(got),
+    limit: 5, runId: 'w5-freshness', takenAt: at,
+  })
+  check('🔴 🔴 **반응이 높은 재시도보다 실제 게시 시각이 최신인 5건을 먼저 고른다**',
+    !plan.workset.sources.map(sid).includes('old-retry')
+      && plan.workset.sources.map(sid).join(',') === 'fresh-4,fresh-3,fresh-2,fresh-1,fresh-0',
+    plan.workset.sources.map(sid).join(','))
 }
 
 // ─────────────────────────────────────────────────────────

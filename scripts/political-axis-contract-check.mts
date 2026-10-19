@@ -48,7 +48,7 @@ function paths(title: string, body = '', risks: SemanticVerdict['risks'] = []): 
     assetAxes: '', safetyVerdict: safety.verdict, safetyReasons: safety.reasons.map((r) => r.code).join('|'),
     bodyLength: 800, qualityFlags: flags, title, bodyHead: '가'.repeat(120), commentCount: 10,
   } as JudgeInput, '2026-10-04T00:00:00.000Z', {
-    verdict: { decision: 'AUTO_SEED', confidence: 0.9, risks, communityAngle: '같이 이야기' }, status: 'ok',
+    verdict: { decision: 'AUTO_SEED', confidence: 0.9, risks, communityAngle: '같이 이야기', boardTopic: 'FREE' }, status: 'ok',
     attemptCount: 1, providerErrorCode: null, model: 'm',
   })
   const thin = planThinFetch({
@@ -234,7 +234,7 @@ console.log('\nD 🔴 연예인 관련 위해 → 별도 hard gate (의미 판�
       qualityFlags: assessCandidate({ originalTitle: title, sourceCommentCount: 10, rawBody: '' }).flags as string[],
       title, bodyHead: '가'.repeat(120), commentCount: 10,
     } as JudgeInput, '2026-10-04T00:00:00.000Z', {
-      verdict: { decision: 'AUTO_SEED', confidence: 0.9, risks, communityAngle: '이야기' }, status: 'ok',
+      verdict: { decision: 'AUTO_SEED', confidence: 0.9, risks, communityAngle: '이야기', boardTopic: 'FREE' }, status: 'ok',
       attemptCount: 1, providerErrorCode: null, model: 'm',
     }).decision
   }

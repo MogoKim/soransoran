@@ -29,6 +29,7 @@ import {
 } from '../src/lib/supply-workset'
 import { intentsForFile } from './micro-seed-supply-autofill.mjs'
 import { currentQualityContract, qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
+import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as CURRENT_AUTO_JUDGE_PROMPT_VERSION } from '../src/lib/micro-seed-auto-judge'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
 
@@ -271,8 +272,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' },
 
   })
-  const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
-    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
+  const aj = { ruleVersion: CURRENT_AUTO_JUDGE_RULE_VERSION, promptVersion: CURRENT_AUTO_JUDGE_PROMPT_VERSION,
+    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow', boardTopic: 'FREE' as const }
   const p1 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, now: NOW })
   check('🟢 기계 payload 가 만들어진다', p1 !== null && p1.profile === 'machine')
   /**
@@ -333,7 +334,7 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   check('🔴 decidedBy 가 founder 가 아니다', p1 !== null && p1.decidedBy === MACHINE_DECIDED_BY)
   check('🔴 autoJudge 를 상수가 아니라 후보 값으로 남긴다', (() => {
     const g = p1?.gateResults.autoJudge as Record<string, unknown> | undefined
-    return g?.ruleVersion === 'auto-judge-v3' && g?.inputHash === 'abc123'
+    return g?.ruleVersion === CURRENT_AUTO_JUDGE_RULE_VERSION && g?.inputHash === 'abc123' && g?.boardTopic === 'FREE'
   })())
   check('🔴 🔴 **적재가 품질 계약을 코드 상수로 남긴다**', (() => {
     const q = p1?.gateResults.qualityContract as Record<string, unknown> | undefined
@@ -341,6 +342,12 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   })())
   check('🔴 판정 출처가 없으면 payload 를 만들지 않는다',
     buildQueuePayload({ envelope: mEnv, candidate: mc, now: NOW }) === null)
+  check('🔴 현재 판인데 boardTopic이 없거나 enum 밖이면 payload를 만들지 않는다',
+    buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, boardTopic: undefined }, now: NOW }) === null
+    && buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, boardTopic: 'MAGAZINE' as never }, now: NOW }) === null)
+  check('🔴 과거·모르는 판정판을 오늘 새 legacy Queue 행으로 만들지 않는다',
+    buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, ruleVersion: 'auto-judge-v3', boardTopic: undefined }, now: NOW }) === null
+    && buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, ruleVersion: 'auto-judge-v99' }, now: NOW }) === null)
   check('🔴 provenance 에 원문·제목·본문이 없다', (() => {
     const j = JSON.stringify(p1?.gateResults ?? {})
     return !/bodyHead|rawBody|"title"|"body"/.test(j)
@@ -660,8 +667,8 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     // 🔴 (quality-v2) 생성기 봉투가 싣는 칸 — 채택 판정이 모호함 없음(빈 배열)으로 낸 후보다
     lifeReview: [],
   })
-  const eAj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
-    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
+  const eAj = { ruleVersion: CURRENT_AUTO_JUDGE_RULE_VERSION, promptVersion: CURRENT_AUTO_JUDGE_PROMPT_VERSION,
+    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow', boardTopic: 'FREE' as const }
 
   const dirs = [join(homedir(), 'Documents/soransoran-runtime/.microseed-data'), '.microseed-data']
   let real: { file: string; review: unknown; n: number } | null = null

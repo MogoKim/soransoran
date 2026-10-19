@@ -1,6 +1,6 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-19 10:25 KST
+> as-of: 2026-10-19 15:25 KST
 > 마지막 창업자 동기화: 2026-10-19 (D10 실패 원인을 당일 보정하고 D20 이상 용량을 병렬 준비하되,
 > 품질·자동 READY·Persona·댓글·조회수의 code/deployed/operating 상태를 섞지 않는다)
 >
@@ -11,11 +11,10 @@
 
 ## 0. 창업자용 한 문장
 
-**10-17 d5 증거는 PASS다. 10-18 d10은 자동 READY 부족으로 7/10에 그쳐
-`PUBLISH_NOT_AUTO_READY` FAIL이며 고쳐 쓰지 않는다. 보조 Mac에는 fresh-first 공급과 추가 댓글 효율 보정이
-배포됐고, 현재 controller는 `PREPARE · 공개 d5 · 준비 d10`이다. quality-v12, D20 Persona 이름,
-기계 초안 자동 격리는 exact-head code PASS인 Draft라 아직 운영 사실이 아니다. 다음 순서는 세 정책 PR을
-최신 main에 통합하고 필요한 계약 전환·runtime 배포를 한 번에 검증한 뒤 자연 D10을 재시험하는 것이다.**
+**10-17 d5 증거는 PASS다. 10-18 d10은 자동 READY 부족으로 7/10에 그친 불변 FAIL이다. 10-19 14:15 뒤
+내일 D10 preflight는 기회 10 · 처리 용량 11 · 공급 위험 $0.4574로 PASS이며, 오늘은 늦은 시작이라 공개 d5를
+유지한다. quality-v12·기계 초안 자동 생명주기·fresh-first/게시판 라우팅·모든 단계 추가 댓글 profile을 한
+통합 packet에서 검증 중이다. D20 Persona 10명은 D10 PASS 뒤 적용할 별도 PR로 유지한다.**
 
 ## 1. 검증 기준과 상태
 
@@ -25,7 +24,7 @@
 | 자동 단계 controller | ✅ `StageDecision` 단일 authority | ✅ 보조 Mac | ✅ `PREPARE · 공개 d5 · 준비 d10` |
 | 자동 D3 | ✅ | ✅ | ✅ 10-14 d3 증거 PASS |
 | 자동 D5 | ✅ | ✅ | ✅ 10-17 d5 증거 PASS |
-| 자동 D10 | ✅ 10개 슬롯·Persona 30 | ✅ 10-18 실패 보정 runtime 포함 | ❌ 10-18 d10 증거 FAIL · 7/10 |
+| 자동 D10 | ✅ 10개 슬롯·Persona 30 | ✅ 기존 runtime · 통합 packet 배포 전 | ❌ 10-18 d10 증거 FAIL · 7/10 · 다음 preflight PASS |
 | 자동 D20 | ✅ code universe 40·비용 ceiling | ⚠️ 웹 코드만 · Persona DB/profile 미적용 | UNKNOWN - D10 PASS·Persona 40·profile 필요 |
 | 자동 D30·D50 | ✅ 단계 사다리 | ⚠️ profile 코드 | UNKNOWN - Persona 60/100·앞 단계 PASS 필요 |
 | 자동 D100 | ❌ 100 슬롯 runtime scheduler/profile 없음 | ❌ | UNKNOWN - Persona 180 canary·300+ 지속 용량 필요 |
@@ -35,7 +34,7 @@
 | Persona 계약 | ✅ 기존 30·code universe 40 | ✅ 기존 30 | ✅ contract-valid 30 · active 30 |
 | D20 Persona 이름 | ✅ PR #762 exact-head | ❌ Draft·DB row 0 | UNKNOWN - D10 PASS 뒤 활성화 gate 필요 |
 | 첫 댓글 | ✅ 60분·automatic provenance·복구 | ✅ runner loaded | ✅ 10-18 자동 글 7편 모두 첫 댓글 |
-| 추가 댓글·답글 | ✅ 첫 댓글 1 + 선택적 0~4 · 실제 `parentId` 답글 · automatic provenance | ✅ switch ON · D10 profile · E6 consumer plist | ❌ 10-18 d10 followup 0 · #760 보정 뒤 재증명 필요 |
+| 추가 댓글·답글 | ✅ 첫 댓글 1 + 선택적 0~4 · 실제 `parentId` 답글 · 운영 공통 profile | ⚠️ 기존 D10 profile 배포 · 공통 profile 배포 전 | ❌ 자연 회차 1..5 operating 증거 필요 |
 | 고객 조회수 | ✅ 실제 상세 열람+목록노출 원장 main 포함 | ⚠️ Production exact SHA·migration 재확인 필요 | UNKNOWN - 실제 표본·dedupe·내부 제외 대조 전 |
 | 운영 작성자 | ✅ OP01~OP50 코드 | ⚠️ OP31~OP50 운영 DB 적용 미확인 | Dn 증거와 무관 |
 | North Star | ❌ 7일 재방문+글/댓글 measure job 없음 | ❌ | UNKNOWN |
@@ -51,13 +50,13 @@
 
 | 항목 | 값 |
 |---|---|
-| 원격 main (2026-10-19 10:25 관측) | `3ac8f6107c401a1d642851ea2fb33f51895ed713` |
+| 원격 main (2026-10-19 15:04 관측) | `bca1014e9df14b74ab20092009864f51aa3a0bf8` |
 | 보조 Mac D100 runtime HEAD = pin = manifest | `d9b42328e102d055a9b680addaa53ee7c970b45d` · tracked 0 · main 차이를 별도 판정: D100 diff 0, M-GRAPH #759만 미포함 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 지속 d5 |
 | 품질 계약 | quality-v11 operating · quality-v12 PR #761 code PASS/Draft |
-| 추가 댓글 설정 | switch ON · D10 profile · E6 consumer plist · 현재 공개 단계와 profile이 다르면 fail-closed 0건 |
+| 추가 댓글 설정 | switch ON · D10 전용 profile · E6 consumer plist · 운영 공통 profile은 통합 packet code PASS 후보 |
 | event wake | unset · OFF |
 | Persona | contract-valid 30 · active 30 · code-ready 40 · 운영 작성자 OP01~OP30 적용 확인, OP31~OP50 DB 미확인 |
 
@@ -69,7 +68,7 @@
 |---|---|---|
 | 10-17 d5 증거 | **PASS** | 자동 5/5 · 서로 다른 화자 5 · 첫 댓글 5 · 감사 1/1 · release stamp 5 · usageUnknown 0 |
 | 10-18 d10 증거 | **FAIL `PUBLISH_NOT_AUTO_READY`** | 자동 7/10 · 서로 다른 화자 7 · 첫 댓글 7 · 감사 2/2 · release stamp 7 · usageUnknown 0 · followup 0 |
-| 10-19 d10 preflight | **UNKNOWN `READY_REQUIREMENT_UNKNOWN`** | READY 17 중 공개 16·결말 unknown 1 · 필요 10~11 · 용량 10 · 공급 위험 투영 $0.5146 |
+| 10-19 14:15 뒤 다음 d10 preflight | **PASS** | 기회 10 · 처리 용량 11≥10 · READY 18/97 전부 공개 · 유실/예정/unknown 0 · 공급 위험 투영 $0.4574 |
 
 10-18 실패는 품질 결함·댓글 결함·비용 미상이 아니라 자동 READY 공급량 부족이다. #760은 최신 원천을
 재시도보다 먼저 선택하고, 추가 댓글의 dedup·최신 글 우선·호출 상한을 보정해 보조 Mac에 배포됐다.
@@ -91,10 +90,10 @@ quality-v12 전환 순서를 한 실행 packet으로 다시 확인한다.
 | blocker | 현재 | 해소 조건 |
 |---|---|---|
 | `PUBLISH_NOT_AUTO_READY` | 10-18 자동 7/10 | #761·#763 반영 뒤 자연 공급에서 10개 slot-valid READY 증명 |
-| `READY_REQUIREMENT_UNKNOWN` | READY 결말 unknown 1건 때문에 필요량 10~11, 용량 10 | unknown이 공개/유실로 확정되거나 새 current-contract READY 추가 |
+| 다음 D10 preflight | 10-19 14:15 뒤 PASS | 남은 자연 회차에서 품질·비용·runner 신호 유지 |
 | `QUALITY_V12_NOT_OPERATING` | code PASS Draft | transition unresolved 0·gate open·runtime 일치 |
 | `ROUTINE_REVIEW_WIP_NOT_DEPLOYED` | #763 code PASS Draft | 품질 격리가 WIP를 점유하지 않는 runtime 배포·재측정 |
-| `FOLLOWUP_NOT_PROVEN` | 10-18 followup 0 | D10 profile과 공개 d10이 맞는 자연 회차에서 선택적 추가 댓글·실제 답글 또는 정당한 0 사유 증명 |
+| `FOLLOWUP_NOT_PROVEN` | 10-18 followup 0 | 운영 공통 profile 배포 뒤 자연 회차에서 선택적 추가 댓글·실제 답글 또는 정당한 0 사유 증명 |
 
 실패 축은 코드·계약·runtime을 한 번에 맞춘 뒤 다음 유효 자연 D10에서 재시험한다. 수동 READY·stage·게시·댓글·
 장부 보정으로 증거를 만들지 않는다.
@@ -163,3 +162,17 @@ quality-v12 전환 순서를 한 실행 packet으로 다시 확인한다.
 3. #762 Persona 40이 DB에 생성·활성화된다.
 4. 조회수 Production 원장 표본이 확인된다.
 5. runtime HEAD·pin·manifest 또는 loaded job 수가 바뀐다.
+
+## 9. 2026-10-19 로컬 code/static PASS — fresh-first·board routing (미배포)
+
+- 자격 gate 뒤 공급 순위를 신선도 1순위로 통일(compareReleaseRank 재정렬). retry/recovery/lane 분리는 관측 축으로만
+  남고, source time 1순위 ordering(selectJitWorkset·prepareCandidates·compareAutoRow·pickPublishTarget·
+  compareFreshFirst) 로 수집→생성→READY→발행 끝단까지 흐른다. 숫자 article id 를 source-time proxy 로 쓰지 않는다.
+- `micro-seed-auto-judge` 에 `boardTopic` 필수 enum 추가(auto-judge-v4·semantic-shadow-v3). `gateResults.autoJudge.
+  boardTopic` 한 칸을 publish tx 의 `routeBoardType` 이 읽어 FREE/MENOPAUSE 로 라우팅한다. current provenance 결여/
+  invalid 는 publish 0(fail-closed), 실제 legacy인 `autoJudge` 부재/`auto-judge-v3`만 FREE 유지한다. `null`·모르는/
+  미래 판은 publish 0이다.
+- 로컬 code/static 검증은 PASS다. 타입·lint·build·정적 계약·변이·격리 DB에서 source-time 단일 순위,
+  lane/recovery 비개입, current boardTopic fail-closed, legacy v3 FREE 호환, 발행 전 write 0을 확인했다.
+- **deployed/operating PASS는 아니다.** 후속은 PR exact-head CI 뒤 별도 승인으로 운영 cache를 v4로 갱신하고
+  보조 Mac runtime을 배포한 다음, 자연 자료에서 MENOPAUSE 라우팅 분포·신선도 p50/p90/max와 10-18 d10 FAIL 축을 재측정한다.

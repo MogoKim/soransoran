@@ -45,6 +45,7 @@ const fxMod = await import('./lib/draft-gate-fixtures.mjs')
 const { candidateEnvelope } = await import('./lib/candidate-envelope.mjs')
 const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
 const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
+const { RULE_VERSION: AUTO_JUDGE_RULE_VERSION } = await import('../src/lib/micro-seed-auto-judge')
 const { copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION } = await import('../src/lib/draft-originality')
 
 let pass = 0
@@ -344,7 +345,14 @@ async function main(): Promise<void> {
         meta: { site: 'navercafe:fixture', sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: '' },
         draft: { title: r.cand!.title, body: r.cand!.body, safetyVerdict: r.cand!.safetyVerdict, originality: r.cand!.originality, generatedAt: r.cand!.generatedAt },
         sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title), sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-        autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
+        autoJudge: {
+          ruleVersion: AUTO_JUDGE_RULE_VERSION,
+          promptVersion: 'fixture',
+          model: 'fixture',
+          inputHash: `h-${fx.source.id}`,
+          provenance: 'machine-shadow',
+          boardTopic: 'FREE',
+        },
         ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
         lifeReview: r.pick.lifeReview ?? null,
       })

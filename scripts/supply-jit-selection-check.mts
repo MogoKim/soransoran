@@ -7,7 +7,7 @@
  * 공급 러너와 **같은 연결**(생성 가능 판정 → `selectWorkset({ jit })`)로 다음을 고정한다.
  *   ① 채울 수 있는 최대 슬롯 수를 줄이지 않는다 — 작은 무작위 입력 300벌을 **따로 짠 전수 탐색**과 대조
  *   ② 같은 조건에서 정본 순위상 가장 좋은 집합을 고른다 — 전수 탐색과 대조
- *   ③ raw 는 자동 유료 묶음에 들어가지 않는다 · 재시도 예약 2 는 최대 슬롯을 줄이지 않고 굶김을 막는다
+ *   ③ raw 는 자동 유료 묶음에 들어가지 않는다 · 재시도 상태는 선택 순위를 바꾸지 않고 관측으로만 남는다
  *   ④ 품질 → 신선도 → 갱년기 → wgang → 열쇠 · 시각을 지어내지 않는다
  *   ⑤ 2026-10-10 08:15 · 12:15 · 14:15 운영 모양 재생에서 자동 소비 가능한 선택 수가 줄지 않는다
  */
@@ -100,7 +100,7 @@ const bruteCover = (valid: readonly (readonly boolean[])[], nSlots: number): num
 }
 const validOf = (r: WorksetRow, slots: readonly Date[], now = NOW): boolean[] =>
   [...slots].sort((a, b) => a.getTime() - b.getTime()).map((d) => preGenerationRelease(r, d, now).verdict === 'eligible')
-console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안 최대 슬롯/정본 순위 → 결정적 동률 · raw 0 · 재시도 보충 ══\n')
+console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단일 순위 → 최대 슬롯 → 결정적 동률 · raw 0 ══\n')
 
 // ── ① B형 반례 · 순위 탐욕이 슬롯을 잃는 모양 ──
 {
@@ -124,7 +124,7 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안
     pb.picked.length === 3 && pb.picked.every((r) => r.input.axis === SEED_AXIS) && pb.jit?.coveredSlots === 3, JSON.stringify(pb.jit))
 }
 
-// ── ② 무작위 300벌 — 신규 우선 · 같은 부류 정본 순위 · 결정성 (전수 탐색 대조) ──
+// ── ② 무작위 300벌 — 단일 정본 순위 · 결정성 (전수 탐색 대조) ──
 {
   let seed = 11
   const rnd = (): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
@@ -151,22 +151,24 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안
       && p.picked.length === Math.min(cap, seedsLinkable.length)) coverOk += 1
     else if (coverMiss === '') coverMiss = JSON.stringify({ t, cap, maxCover, selectedCover, jit: p.jit, picked: p.picked.length, linkable: seedsLinkable.length })
     if (p.picked.every((r) => r.input.axis === SEED_AXIS)) rawOk += 1
-    // 🔴 직접 불변식 — 신규가 상한을 먼저 쓰고, 재시도는 남은 자리만 순서대로 보충한다
+    // 🔴 2026-10-19 창업자/Codex: 공급 순위는 신선도 1순위 하나다 — fresh/retry 분리 bias 없음.
+    //    reserved(=retry 선택 수)는 관측 지표일 뿐이며 신규가 재시도를 자동으로 이기지 않는다.
+    //    불변식: 선택된 재시도는 "같은 자리에 더 신선한 미선택 신규가 있지 않은" 자리에서만 들어온다.
     const pickedSet = new Set(p.picked.map(KEY))
     const freshLinkable = seedsLinkable.filter((r) => !attempted.has(KEY(r)))
     const retryLinkable = seedsLinkable.filter((r) => attempted.has(KEY(r)))
-    const freshPicked = freshLinkable.filter((r) => pickedSet.has(KEY(r)))
     const retryPicked = retryLinkable.filter((r) => pickedSet.has(KEY(r)))
-    const unpickedFresh = freshLinkable.filter((r) => !pickedSet.has(KEY(r)))
-    if (freshPicked.length === Math.min(cap, freshLinkable.length)
-      && !(retryPicked.length > 0 && unpickedFresh.length > 0)) freshFirstOk += 1
-    if (retryPicked.length === Math.min(Math.max(0, cap - freshPicked.length), retryLinkable.length)) retryFillOk += 1
+    // reserved 집계: picked 중 재시도 수가 jit.retryReserved 와 같다
+    if ((p.jit?.retryReserved ?? -1) === retryPicked.length) freshFirstOk += 1
+    // retry 선택 수는 전체 상한에서 선택된 신규를 뺀 자리와 연결 가능한 재시도 중 작은 수를 넘지 않는다
+    const freshPicked = freshLinkable.filter((r) => pickedSet.has(KEY(r)))
+    if (retryPicked.length <= Math.min(Math.max(0, cap - freshPicked.length), retryLinkable.length)) retryFillOk += 1
     // 결정성 — 입력 순서를 뒤집어도 같은 묶음
     if (JSON.stringify(run({ rows: [...rows].reverse(), slots: [...slots].reverse(), cap, attempted }).workset) === JSON.stringify(p.workset)) detOk += 1
   }
   check(`② 무작위 ${N}벌 — 전체 최대 슬롯과 선택 집합 실제 덮음을 전수 탐색과 대조 · 선택 수 = min(상한, 연결 가능 seed)`, coverOk === N, `${coverOk}/${N} ${coverMiss}`)
-  check(`② 무작위 ${N}벌 — 선택 신규 수 = min(상한, 연결 가능 신규) · 미선택 신규가 있으면 재시도 선택 0`, freshFirstOk === N, `${freshFirstOk}/${N}`)
-  check(`② 무작위 ${N}벌 — 재시도 선택 수 = 신규 뒤 남은 자리와 연결 가능 재시도 중 작은 수`, retryFillOk === N, `${retryFillOk}/${N}`)
+  check(`② 무작위 ${N}벌 — reserved 집계가 선택된 재시도 수와 일치 (관측 지표 정합)`, freshFirstOk === N, `${freshFirstOk}/${N}`)
+  check(`② 무작위 ${N}벌 — 재시도 선택 수는 남은 자리와 연결 가능 재시도 중 작은 수를 넘지 않는다 (상한 불변)`, retryFillOk === N, `${retryFillOk}/${N}`)
   check(`② 무작위 ${N}벌 — raw 0`, rawOk === N, `${rawOk}/${N}`)
   check(`② 무작위 ${N}벌 — 입력 · 슬롯 순서를 뒤집어도 같은 묶음(결정성)`, detOk === N, `${detOk}/${N}`)
 }
@@ -179,41 +181,50 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안
     p.jit?.slots === 1 && p.jit?.maxFillableSlots === 1 && p.jit?.coveredSlots === 1 && p.picked.length === 2, JSON.stringify(p.jit))
 }
 
-// ── ③ 신규 우선 · 재시도 보충 ──
+// ── ③ 같은 신선도에서는 반응 순위가 결정한다 ──
 {
   const slots = Array.from({ length: 12 }, (_, i) => at(1 + i))
   const fresh = Array.from({ length: 12 }, (_, i) => ROW({ id: `f${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
   const old = [ROW({ id: 'rt0', ageH: 20, cp: 0.1 }), ROW({ id: 'rt1', ageH: 21, cp: 0.11 }), ROW({ id: 'rt2', ageH: 22, cp: 0.12 })]
   const attempted = new Map([...retryOf([old[0]!], 9), ...retryOf([old[1]!], 7), ...retryOf([old[2]!], 3)])
   const p = run({ rows: [...fresh, ...old], slots, cap: 10, attempted })
-  check('③ 신규 12건 ≥ 상한 10 · 재시도 3건이 있어도 전부 신규 · retryReserved 0',
+  check('③ 더 신선한 원문 12건 ≥ 상한 10 · 오래된 재시도 3건은 선택되지 않는다 · retryReserved 0',
     !ids(p).some((x) => x.startsWith('rt')) && p.jit?.retryReserved === 0 && p.picked.length === 10, ids(p).join(','))
   check('③ 이 사례는 신규만으로 10슬롯을 모두 덮는다', p.jit?.coveredSlots === 10 && p.jit?.maxFillableSlots === 12)
   const one = run({ rows: [...fresh.slice(0, 2), old[0]!], slots: [at(1)], cap: 1, attempted: retryOf([old[0]!], 7) })
   const oneShort = run({ rows: [...fresh.slice(0, 2), old[0]!], slots: [at(1)], cap: 1, attempted: retryOf([old[0]!], 5) })
-  check('③ 상한 1 · 신규가 있으면 기다린 시간과 무관하게 신규가 선택된다',
+  check('③ 상한 1 · 더 신선한 신규가 기다린 시간과 무관하게 선택된다',
     ids(one).join() === 'f0' && ids(oneShort).join() === 'f0', `${ids(one)} · ${ids(oneShort)}`)
 }
 
-// ── 🔴 신규 우선 반례 · 변이 탐지 ──
+// ── 🔴 신선도 단일 순위 반례 · 변이 탐지 ──
 {
-  // cap10 · 신규 8건 < cap → 재시도 2건 보충(오래 기다린 rt0·rt1)
+  // cap10 · 더 신선한 신규 8건 뒤에 재시도 중 가장 신선한 2건이 이어진다.
   const slots10 = Array.from({ length: 10 }, (_, i) => at(1 + i))
   const fresh8 = Array.from({ length: 8 }, (_, i) => ROW({ id: `n${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
   const ret3 = [ROW({ id: 'rv0', ageH: 20, cp: 0.1 }), ROW({ id: 'rv1', ageH: 21, cp: 0.11 }), ROW({ id: 'rv2', ageH: 22, cp: 0.12 })]
   const att3 = new Map([...retryOf([ret3[0]!], 9), ...retryOf([ret3[1]!], 7), ...retryOf([ret3[2]!], 3)])
   const p8 = run({ rows: [...fresh8, ...ret3], slots: slots10, cap: 10, attempted: att3 })
-  check('🔴 신규 8건 < 상한 10 — 신규 8건 전부 + 재시도 오래 기다린 2건(rv0·rv1) 보충 · retryReserved 2',
+  check('🔴 상한 10 — 최신 원문 8건 뒤에 재시도 중 더 신선한 2건(rv0·rv1) · retryReserved 2',
     fresh8.every((r) => ids(p8).includes(r.sourceArticleId))
     && ids(p8).includes('rv0') && ids(p8).includes('rv1') && !ids(p8).includes('rv2')
     && p8.jit?.retryReserved === 2 && p8.picked.length === 10, ids(p8).join(','))
-  // 동일 슬롯에 연결 가능한 신규·재시도 — cp 높은 재시도보다 낮은 신규가 선택된다
+  // 🔴 2026-10-19 창업자/Codex: 재시도 신분·오래 기다린 시간은 **순위를 뒤집지 않는다** —
+  //    공급 순위(신선도 1순위 → 반응 → 결정적 열쇠)만이 선택한다. 신선도가 같으면 더 높은 반응이 이긴다 —
+  //    설령 그 쪽이 재시도여도.
   const sfresh = ROW({ id: 'sf1', ageH: 5, cp: 0.4 })
-  const sretry = ROW({ id: 'sr1', ageH: 5, cp: 0.99 })   // 같은 나이지만 재시도 신분
+  const sretry = ROW({ id: 'sr1', ageH: 5, cp: 0.99 })
   const sAtt = retryOf([sretry], 9)
   const ps = run({ rows: [sfresh, sretry], slots: [at(1)], cap: 1, attempted: sAtt })
-  check('🔴 동일 슬롯 · 신규(cp 낮음)와 재시도(cp 높음) — 재시도 신분만으로 우선권 없음, 신규가 선택',
-    ids(ps).join() === 'sf1', `selected: ${ids(ps).join()}`)
+  check('🔴 동일 신선도 · 신규(cp 0.4) vs 재시도(cp 0.99) — 공급 순위(반응)로 재시도가 이긴다 (재시도 신분이 순위를 꺾지 않는다)',
+    ids(ps).join() === 'sr1', `selected: ${ids(ps).join()}`)
+  // 🔴 반례: 더 신선한 재시도 vs 더 늙은 신규 — 재시도가 이긴다 (신선도 1순위)
+  const freshOld = ROW({ id: 'fo1', ageH: 40, cp: 0.9 })
+  const retryNew = ROW({ id: 'rn1', ageH: 3, cp: 0.1 })
+  const nAtt = retryOf([retryNew], 9)
+  const pn = run({ rows: [freshOld, retryNew], slots: [at(1)], cap: 1, attempted: nAtt })
+  check('🔴 반례 — 더 신선한 재시도(3h · cp 0.1) 가 더 늙은 신규(40h · cp 0.9) 를 이긴다',
+    ids(pn).join() === 'rn1', `selected: ${ids(pn).join()}`)
   // 변이 탐지 — 신규 = cap 일 때 재시도 reserve-first 가 복원되면 실패한다
   const slotsMut = Array.from({ length: 10 }, (_, i) => at(1 + i))
   const freshMut = Array.from({ length: 10 }, (_, i) => ROW({ id: `mf${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
@@ -235,24 +246,40 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안
     p.picked.length === 0 && p.workset.sources.length === 0 && p.dropped.rawNotAutoConsumed === 6 && p.jit?.rawExcluded === 6, JSON.stringify(p.dropped))
 }
 
-// ── ⑤ ⑥ ⑦ 순위 ──
+// ── ⑤ ⑥ ⑦ 순위 (2026-10-19 창업자 결정: 신선도 1순위 · 반응은 동률 tie-break · 출처·주제 우대 없음) ──
 {
   const s = [at(1)]
+  // ⑤ 신선도가 같으면 반응이 가른다 — qG(cp 0.9) vs qM(cp 0.5), 둘 다 4h
   const G = ROW({ id: 'qG', ageH: 4, cp: 0.9 })
   const M = ROW({ id: 'qM', ageH: 4, cp: 0.5, title: '갱년기 열감', site: WG })
-  check('⑤ 높은 품질 일반 글(0.9)이 낮은 품질 갱년기 · wgang 글(0.5)을 이긴다', ids(run({ rows: [M, G], slots: s, cap: 1 })).join() === 'qG')
+  check('⑤ 신선도가 같으면 반응 높은 글(0.9)이 낮은 글(0.5)을 이긴다',
+    ids(run({ rows: [M, G], slots: s, cap: 1 })).join() === 'qG')
+  // ⑥ 반응이 같으면 더 신선한 글이 가른다
   const Gn = ROW({ id: 'fG', ageH: 3, cp: 0.8 })
   const Mo = ROW({ id: 'fM', ageH: 30, cp: 0.8, title: '갱년기 열감', site: WG })
-  check('⑥ 품질이 같으면 최신 일반 글(3h)이 오래된 갱년기 · wgang 글(30h)을 이긴다', ids(run({ rows: [Mo, Gn], slots: s, cap: 1 })).join() === 'fG')
+  check('⑥ 반응이 같으면 최신(3h)이 오래된(30h)을 이긴다 — 신선도 1순위',
+    ids(run({ rows: [Mo, Gn], slots: s, cap: 1 })).join() === 'fG')
+  // ⑥-b 반응이 더 높아도 오래됐으면 뒤 — 신선도가 반응을 이긴다 (옛 정책 반례)
+  const OldHi = ROW({ id: 'oH', ageH: 40, cp: 0.95 })
+  const FreshLo = ROW({ id: 'fL', ageH: 2, cp: 0.5 })
+  check('⑥-b 신선도가 반응을 이긴다 — 더 늙은 고반응 글(40h · cp 0.95)은 신선 저반응 글(2h · cp 0.5)에 진다',
+    ids(run({ rows: [OldHi, FreshLo], slots: s, cap: 1 })).join() === 'fL')
+  // ⑦ 신선도·반응 모두 같으면 **결정적 열쇠**로 간다 — 주제·출처 보너스 없음
   const t0 = new Date(NOW.getTime() - 5 * H)
   const plain = ROW({ id: 'tP', posted: t0, cp: 0.7 })
   const meno = ROW({ id: 'tM', posted: t0, cp: 0.7, title: '갱년기 이야기' })
   const wg = ROW({ id: 'tW', posted: t0, cp: 0.7, site: WG })
   const wgMeno = ROW({ id: 'tX', posted: t0, cp: 0.7, site: WG, title: '갱년기 이야기' })
-  check('⑦ 품질 · 신선도가 같으면 갱년기가 이긴다', ids(run({ rows: [plain, meno], slots: s, cap: 1 })).join() === 'tM')
-  check('⑦ 그것도 같으면 wgang 이 이긴다', ids(run({ rows: [plain, wg], slots: s, cap: 1 })).join() === 'tW')
-  check('⑦ 갱년기가 wgang 보다 앞선다 · 둘 다면 가장 앞', ids(run({ rows: [wg, meno], slots: s, cap: 1 })).join() === 'tM'
-    && ids(run({ rows: [wg, meno, plain, wgMeno], slots: s, cap: 1 })).join() === 'tX')
+  // 열쇠 = `${sourceSite}::${id}` 기준 lex 순 — 'navercafe:remonterrace::tM' < 'navercafe:remonterrace::tP'
+  check('⑦ 신선도·반응 동률이면 결정적 열쇠로 — 주제 선호 없음(tM 이 lex 순 더 작아서 선택)',
+    ids(run({ rows: [plain, meno], slots: s, cap: 1 })).join() === 'tM')
+  // 'navercafe:remonterrace::tP' < 'navercafe:wgang::tW' — remonterrace 가 lex 순 더 작아서 선택
+  check('⑦ 신선도·반응 동률이면 결정적 열쇠로 — 출처 선호 없음(remonterrace 가 lex 순 더 작아서 선택)',
+    ids(run({ rows: [plain, wg], slots: s, cap: 1 })).join() === 'tP')
+  // 전부 섞여도 열쇠 lex 가장 작은 글이 가장 앞 — meno(RT::tM) < plain(RT::tP) < wgMeno(WG::tX) < wg(WG::tW)
+  check('⑦ 동률 전수 — 열쇠 lex 가장 작은 meno 가 1위 (주제·출처 선호 없음)',
+    ids(run({ rows: [wg, meno], slots: s, cap: 1 })).join() === 'tM'
+    && ids(run({ rows: [wg, meno, plain, wgMeno], slots: s, cap: 1 })).join() === 'tM')
   const twin = [ROW({ id: 'zz', posted: t0, cp: 0.7 }), ROW({ id: 'aa', posted: t0, cp: 0.7 })]
   check('⑦ 모두 같으면 원천 열쇠로 결정적(입력 순서와 무관)',
     ids(run({ rows: twin, slots: s, cap: 1 })).join() === ids(run({ rows: [...twin].reverse(), slots: s, cap: 1 })).join())
@@ -271,13 +298,13 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안
     !/sourceArticleId\s*[<>]|localeCompare\(.*sourceArticleId|parseInt|Number\(.*sourceArticleId/.test(body))
 }
 
-// ── ⑬ 임의 점수 · 보너스 · 품질 구간 없음 ──
+// ── ⑬ 임의 점수 · 보너스 · 품질 구간 · 주제·출처 우대 없음 (2026-10-19 창업자 결정) ──
 {
   const src = readFileSync('src/lib/supply-workset.ts', 'utf-8')
   const cmp = src.slice(src.indexOf('export function compareSupplyRank'), src.indexOf('export function compareSupplyRank') + 600)
-  check('⑬ 공급 순위는 정본 compareReleaseRank 그대로 + 동률 선호 둘 + 열쇠 — 가산 · 곱셈 · 상수 없음',
+  check('⑬ 공급 순위는 정본 compareReleaseRank + 결정적 열쇠뿐 — 가산 · 곱셈 · 상수 · menopause · wgang 없음',
     /compareReleaseRank\(\{ \.\.\.a\.rank, tieBreak: '' \}, \{ \.\.\.b\.rank, tieBreak: '' \}\)/.test(cmp)
-    && !/[0-9]\.[0-9]|\*\s*[0-9]|\+\s*0\.|score|weight|bonus|band/i.test(cmp.replace(/\/\*\*[\s\S]*?\*\//g, '')))
+    && !/[0-9]\.[0-9]|\*\s*[0-9]|\+\s*0\.|score|weight|bonus|band|menopause|wgang/i.test(cmp.replace(/\/\*\*[\s\S]*?\*\//g, '')))
 }
 
 // ── ⑩ 운영 모양 재생 — 2026-10-10 08:15 · 12:15 · 14:15 (v1 trace 에서 해시 · id · 원문 없이 뽑은 모양) ──
@@ -314,7 +341,7 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 신규 우선 → 부류 안
     const ages = p.workset.sources.map((x) => x.ageAtSlotH ?? 0).sort((a, b) => a - b)
     const actualAges = sh.candidates.filter((c) => c.actualSelected).map((c) => Math.min(...c.slotAgesH.filter((a): a is number => a !== null))).sort((a, b) => a - b)
     const med = (xs: number[]): number => (xs.length === 0 ? NaN : xs[Math.floor((xs.length - 1) / 2)]!)
-    check(`⑩ ${sh.runId} 재생 — 자동 소비 가능(seed) 선택 ${actualSeed} → ${p.picked.length} · 덮은 슬롯 ${p.jit?.coveredSlots}/${p.jit?.maxFillableSlots} · raw 0 · 재시도 예약 ${p.jit?.retryReserved}`
+    check(`⑩ ${sh.runId} 재생 — 자동 소비 가능(seed) 선택 ${actualSeed} → ${p.picked.length} · 덮은 슬롯 ${p.jit?.coveredSlots}/${p.jit?.maxFillableSlots} · raw 0 · 선택된 재시도 ${p.jit?.retryReserved}`
       + ` · 선택 나이 중앙 ${med(actualAges).toFixed(1)}h(실제 · 가장 이른 유효 슬롯 기준) → ${med(ages).toFixed(1)}h(배정 슬롯)`,
     p.picked.length >= actualSeed && p.picked.every((r) => r.input.axis === SEED_AXIS)
       && p.jit?.coveredSlots === Math.min(sh.cap, p.jit?.maxFillableSlots ?? -1))

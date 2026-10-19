@@ -35,6 +35,7 @@ import {
 import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, lifeReviewHoldsOf, type SemanticSummary } from './semantic-summary-codes'
 /** 🔴 품질 계약 — 적재기가 저장하는 값은 이 파일의 코드 상수다(후보 파일 값이 아니다) */
 import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } from './quality-contract'
+import { BOARD_TOPICS, RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION } from './micro-seed-auto-judge'
 
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
@@ -663,6 +664,8 @@ export type AutoJudgeProvenance = {
   model?: string
   inputHash?: string
   provenance?: string
+  /** 🔴 2026-10-19 창업자 — 중심 주제. publish tx 가 이 값으로 boardType 을 라우팅한다 (null 은 현재 provenance 에서 fail-closed) */
+  boardTopic?: 'MENOPAUSE' | 'FREE' | null
 }
 
 /**
@@ -734,8 +737,10 @@ export function buildQueuePayload(input: {
   if (isMachine) {
     if (impersonatesHuman(env, c)) return null
     const aj = input.autoJudge ?? {}
-    // 🔴 판정 출처가 없으면 만들지 않는다 — 있지도 않은 근거를 지어내지 않는다
-    if (S(aj.ruleVersion) === '' || S(aj.provenance) === '') return null
+    // 🔴 새 Queue 행은 현재 판정판 + 유효한 중심 주제만 받는다. 옛 v3 DB 행은 publish 경계에서 FREE로 보존하지만
+    //    과거/모르는 후보 파일을 오늘 새 legacy 행으로 적재하지 않는다.
+    if (S(aj.ruleVersion) !== CURRENT_AUTO_JUDGE_RULE_VERSION || S(aj.provenance) === ''
+      || !(BOARD_TOPICS as readonly string[]).includes(S(aj.boardTopic))) return null
     return {
       profile: 'machine',
       // 🔴 여기가 P0 였다. 기계는 기계 접두다
@@ -817,6 +822,12 @@ export function buildQueuePayload(input: {
           model: S(aj.model),
           inputHash: S(aj.inputHash),
           provenance: S(aj.provenance),
+          /**
+           * 🔴 2026-10-19 창업자 — 중심 주제 전달점. publish tx 는 **여기만** 읽어서 boardType 을 라우팅한다.
+           *    새 적재는 위에서 현재 판+유효 enum만 통과한다. 이미 DB에 있는 legacy 행의 FREE 호환은
+           *    발행 신뢰 경계가 담당하며, 이 함수가 새 legacy 행을 만들지는 않는다.
+           */
+          ...(aj.boardTopic === undefined ? {} : { boardTopic: aj.boardTopic }),
         },
       },
     }

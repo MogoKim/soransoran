@@ -13,7 +13,7 @@
  *   🔴 네트워크 0 · provider 0 · DB 0. 가짜 provider 는 운영에서 실제로 돌아온 답(`clean`)을 준다.
  */
 import { readFileSync } from 'node:fs'
-import { judgeDraftGates, DRAFT_GATE_CODES, DRAFT_GATE_LABEL, type DraftGateCode }
+import { judgeDraftGates, judgeDraftLife, DRAFT_GATE_CODES, DRAFT_GATE_LABEL, type DraftGateCode }
   from '../src/lib/content-core/draft-life-gates'
 import { readMediaDependency, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { DETERMINISTIC_CODES, DETERMINISTIC_LABEL } from '../src/lib/content-core/review'
@@ -161,6 +161,11 @@ console.log('\n⑤ B 1인칭 허가 없는 생활사 — selfBasis=null 에서�
     check(`🔴 QUESTION · "${b.slice(0, 22)}…" — unwarrantedSelfClaim`, g.includes('unwarrantedSelfClaim'),
       `${g.join(',')} · ${JSON.stringify(readSelfClaims(t, b))}`)
   }
+  check('🟢 (v12) 일반 직장 공감은 하드 차단·검토 없이 통과', (() => {
+    const r = judgeDraftLife({ title: '직장 공감', body: '제 직장에서도 비슷한 일이 있었어요.', plan: QUESTION, card: P13, context: NEUTRAL })
+    return !r.failures.some((x) => x.code === 'unwarrantedSelfClaim')
+      && !r.reviews.some((x) => x.code === 'unwarrantedSelfClaim')
+  })())
   // 🔴 같은 글도 1인칭 허가가 있으면 B 는 막지 않는다 (카드 모순은 C 가 본다)
   // 🔴 재검토 — 남의 집안이 `-고` 로 이어져도 B 는 그 사람 아이를 글쓴이 자녀로 세지 않는다
   check('🟢 QUESTION · "친구 남편이 육아휴직 쓰고 애들이랑 놀아줘요" — B 통과',
@@ -312,6 +317,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   const { qualityContractComponents, QUALITY_CONTRACT_VERSION } = await import('../src/lib/quality-contract')
   const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
   const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
+  const { RULE_VERSION: AUTO_JUDGE_RULE_VERSION } = await import('../src/lib/micro-seed-auto-judge')
   const { copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION } = await import('../src/lib/draft-originality')
   const LIFE = DRAFT_LIFE_REVIEW_CODES as readonly string[]
 
@@ -415,7 +421,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
           meta: { site: 'navercafe:fixture', sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: '' },
           draft: { title: r.cand!.title, body: r.cand!.body, safetyVerdict: r.cand!.safetyVerdict, originality: r.cand!.originality, generatedAt: r.cand!.generatedAt },
           sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title), sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-          autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
+          autoJudge: { ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow', boardTopic: 'FREE' },
           ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso, lifeReview,
         }],
       }) as Record<string, unknown>
@@ -455,8 +461,8 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v11 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v11')
-    check(`초안 게이트 판 = draft-gates-v9 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v9')
+    check(`품질 계약 판 = quality-v12 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v12')
+    check(`초안 게이트 판 = draft-gates-v10 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v10')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })

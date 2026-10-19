@@ -11,7 +11,7 @@
  *   A. **공급 선택** — 회차마다 그 회차 시각의 목록 관측 · 상세 파일로 `worksetRows` → `selectWorkset({ jit })` 를
  *      전(날짜만 아는 줄을 옛 수집기처럼 그날 00:00 으로 읽음) · 후(지금 코드) 두 번 부른다.
  *      모집단은 그 회차 trace 에서 **DB 상태로 빠진 원천(큐 · 형제 · 사람 판정 · 끝남 · 이월)을 뺀** 원천이다.
- *      🔴 재시도 예약(attempted)은 재현하지 않는다 — 두 모드 모두 비운다(차이만 본다).
+ *      재시도 상태(attempted)는 재현하지 않는다 — 두 모드 모두 비운다(선택 순위를 바꾸지 않는 관측값이다).
  *   B. **수집 상세 선별** — 네이버 회차 목록마다 `planAutoFetch` 를 앞판 동률(점수 → 글 번호 오름차순) · 지금 동률
  *      (점수 → 게시 시각 하한 ↓ → 글 번호 ↓)로 고른다. 상한은 회차 계획(`planCafeRun`)의 게시판 상세 몫.
  *      "이미 본 글" 은 그 회차 전 thin 파일의 글로 근사한다(상세 원장은 사본에 없을 수 있다).
@@ -400,7 +400,7 @@ console.log(`   🔴 00:00 을 정확 시각으로 실은 날짜 라벨 원천 $
 console.log(`   정확 시각 원천(회차 누적) ${exactRows}: 판정 · 사유 바뀜 ${exactVerdictChanged} · 판정 같고 rank 바뀜 ${exactRankChanged}`)
 for (const [k, v] of Object.entries(exactChangeKinds)) console.log(`     ${k}  ${v}`)
 console.log(`   충실도: 실제 회차 선택 ${out.supply.fidelity.actualSelected} 중 "전" replay 와 같은 원천 ${out.supply.fidelity.overlapBeforeActual}`
-  + ' (재시도 예약 · DB 상태 · 옛 선택기 판은 재현하지 않는다)')
+  + ' (재시도 상태 · DB 상태 · 옛 선택기 판은 재현하지 않는다)')
 console.log('\n③ 수집 상세 선별 (전 = 같은 점수 → 글 번호 오름차순 · 후 = 같은 점수 → 최신)')
 console.log(`   회차 ${out.collect.runs} · 고른 글 ${out.collect.picks} · 바뀐 글 ${out.collect.changedPicks} (${out.collect.runsChanged}회차)`)
 console.log(`   🔴 고른 집합의 점수 다중집합 보존 — ${out.collect.scoreMultisetPreserved ? '전 회차 같다 ✅' : '다른 회차가 있다 🔴'}`)
@@ -414,7 +414,8 @@ for (const [b, x] of Object.entries(out.collect.byBoard)) {
   console.log(`     ${b}: 회차 ${x.runs} · 바뀐 글 ${x.changed}/${x.picks} · 나이 중앙값 ${r1(x.ageMedianBefore)}h → ${r1(x.ageMedianAfter)}h`)
 }
 console.log('\n④ 참고 · 운영 미적용 — 품질 경계 결정 재료')
-console.log(`   공급 순위 이웃 쌍 ${A.after.poolPairs} 중 품질 성분(댓글 · 조회 백분위)이 정확히 같아 나이가 순서를 정한 쌍 ${A.after.tiedPairs}`)
+// 🔴 2026-10-19 창업자/Codex: 현재 canon 은 "슬롯 나이 1순위 · 반응은 동률 tie-break". 아래 📜 설명은 옛 판(반응 1순위)의 모양이다.
+console.log(`   📜 공급 순위 이웃 쌍 ${A.after.poolPairs} 중 품질 성분(댓글 · 조회 백분위)이 정확히 같아 나이가 순서를 정한 쌍 ${A.after.tiedPairs} (옛 판 설명 · historical)`)
 console.log('   🔴 이 replay 는 어떤 품질 경계 · 가중치도 운영에 넣지 않는다 — 경계는 창업자 승인 사항이다(CURRENT §6)')
 if (JSON_OUT !== null) {
   writeFileSync(JSON_OUT, `${JSON.stringify(out, null, 2)}\n`)

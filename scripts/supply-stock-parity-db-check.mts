@@ -2,11 +2,11 @@
 /**
  * 🔴 **공급 capacity 준비 · 발행 release 제한 · 재고 분류 일치 — 실행 검사 (격리 Postgres 전용)** (2026-09-26)
  *
- *   반례 ①  release=d1 · capacity=d5 · 검토 대기 기계 초안 8건
+ *   반례 ①  release=d1 · capacity=d5 · 자동 품질 격리 기계 초안 8건
  *           → 앞판은 공급 화자 여력을 **release d1** 지평(7일 7자리)으로 셌다. 8건이 그 자리를 차지해
  *             여력 있는 화자가 1명만 남았다(실측 2026-09-26). 공급은 capacity 로, 발행은 release 로 잰다.
  *   반례 ②  같은 DB 에서 공급 `readStock` = 9 · 발행 러너 = 0
- *           → 공급과 발행이 **같은 분류**를 쓴다. 검토 대기는 발행 가능 재고가 아니다.
+ *           → 공급과 발행이 **같은 분류**를 쓴다. 격리 행은 발행 가능 재고도 WIP 도 아니다.
  *
  *   발행 쪽 계산은 러너가 부르는 순서 그대로 부른다(`original-post-auto-publish.mts`):
  *     authoritativeGate → loadPublishableStock → resolvePublishScale → planPublishBatch
@@ -69,7 +69,7 @@ const envOf = (release: ReleaseStage, capacity: ReleaseStage): Record<string, st
 
 /**
  * 🔴 기계 profile 이 **통째로** 맞는 gate 기록 — 적재기가 남기는 모양 그대로.
- *    🔴 적재기는 **지금 품질 계약** 표식을 함께 적는다(`buildQueuePayload`) — 검토 대기 WIP 는 그 행의 뜻이다.
+ *    🔴 적재기는 **지금 품질 계약** 표식을 함께 적는다(`buildQueuePayload`).
  *       옛 계약 행은 WIP 가 아니다 — `supply:wip-contract-db-check` 가 본다(2026-09-28).
  */
 let gateSeq = 0
@@ -148,7 +148,7 @@ async function main(): Promise<void> {
       data: { personaId: p.id, kind: 'post', targetId: post.id, gateStatus: 'PASS', decidedBy: 'operator', createdAt: TWO_DAYS_AGO },
     })
   }
-  /** 🔴 사람 검토를 기다리는 기계 초안 — 운영의 8건과 같은 모양(`machine:auto-draft-v5` · 배정 전) */
+  /** 🔴 자동 READY 경고로 격리되는 기계 초안 — 운영의 검토 대기 8건과 같은 모양 */
   const REVIEW_SPEAKERS = ['P01', 'P02', 'P04', 'P07', 'P12', 'P13', 'P14', 'P15'] as const
   const reviewIds: string[] = []
   for (const code of REVIEW_SPEAKERS) {
@@ -224,12 +224,12 @@ async function main(): Promise<void> {
       c.counts.publishableNow === 0 && same(c.ids.publishableNow, pub.runnable),
       `공급 ${c.counts.publishableNow} · 러너 ${pub.runnable.length}`)
     check('🔴 공급 snapshot 의 형식 행은 9 로 남는다 — 표시용 (발행 가능이 아니다)', sup.profiled === 9)
-    check('🔴 🔴 **검토 대기 8건은 publishable 이 아니라 humanReviewPending 이다**',
-      same(c.ids.humanReviewPending, reviewIds) && !c.ids.publishableNow.some((id) => reviewIds.includes(id)))
+    check('🔴 품질 경고 8건은 publishable 이 아니라 qualityQuarantine 이다',
+      same(c.ids.qualityQuarantine, reviewIds) && !c.ids.publishableNow.some((id) => reviewIds.includes(id)))
     check('🔴 슬롯에서 72h 넘은 원문 1건은 releaseIneligible — 발행 재고로 합치지 않는다',
       same(c.ids.releaseIneligible, [ttlId]) && !c.ids.publishableNow.includes(ttlId))
-    check('🔴 🔴 **원천 가치 없는 행은 WIP 를 점유하지 않는다 · 검토 대기는 점유한다**',
-      !c.personaWipIds.includes(ttlId) && reviewIds.every((id) => c.personaWipIds.includes(id)))
+    check('🔴 원천 가치 없는 행과 자동 품질 격리 행은 WIP 를 점유하지 않는다',
+      !c.personaWipIds.includes(ttlId) && reviewIds.every((id) => !c.personaWipIds.includes(id)))
     check('profile 불일치 1건 · gate 탈락 1건',
       same(c.ids.profileMismatch, [legacyId]) && same(c.ids.gateBlocked, [gateId]))
     const total = STOCK_BUCKETS.reduce((n, b) => n + c.counts[b], 0)
@@ -243,7 +243,7 @@ async function main(): Promise<void> {
     check('공용 로더도 같은 답이다', STOCK_BUCKETS.every((b) => same(shared.classification.ids[b], pub.classification.ids[b])))
   }
 
-  console.log('\n② 🔴 반례 ① — release d1 · capacity d5 · 검토 대기 8건 → 공급 여력은 수요와 같은 가까운 지평(release), 발행 상한은 d1')
+  console.log('\n② 🔴 반례 ① — release d1 · capacity d5 · 자동 품질 격리 8건 → Persona 자리를 막지 않는다')
   {
     const scale = resolveScale(E15)
     check('정본이 release d1 · capacity d5 로 읽는다', scale.releaseStage === 'd1' && scale.capacityStage === 'd5')
@@ -258,10 +258,9 @@ async function main(): Promise<void> {
       load.horizonDays === new Set(horizon.map((d) => kstDateString(d))).size && load.stageByDate.every((d) => d.stage === 'd1'),
       `${load.horizonDays} ${JSON.stringify(load.stageByDate)}`)
     check('파일 눈금 — 공급 지평도 발행도 release(d1)', load.releaseStage === 'd1' && load.planningStage === 'd1')
-    /** 🔴 검토 대기는 WIP 에 **남는다** — 같은 화자로 또 만들지 않는다 */
-    check('🔴 🔴 **검토 대기 8건은 화자 WIP 에 남는다** (P01 · P02 · P04 · P07 · P12 · P13 · P14 · P15 각 1)',
-      REVIEW_SPEAKERS.every((code) => load.byCode[code]?.readyCount === 1)
-      && load.wip.humanReviewPending === 8,
+    check('🔴 자동 품질 격리 8건은 화자 WIP 를 점유하지 않는다',
+      REVIEW_SPEAKERS.every((code) => load.byCode[code]?.readyCount === 0)
+      && load.wip.qualityQuarantine === 8 && load.wip.autoReadyPending === 0,
       REVIEW_SPEAKERS.map((c) => `${c}:${load.byCode[c]?.readyCount}`).join(' '))
     const caps = Object.entries(load.byCode).map(([code, r]) => ({ code, ...r }))
     const eligible = caps.filter((c) => remainingCapacity(c) > 0)
@@ -384,7 +383,7 @@ async function main(): Promise<void> {
     const sup = (await snapshot(prisma, { env: envOf('d1', 'd5'), now: NOW })).classification!
     check('🔴 공급 분류도 같은 답이다', sup.ids.assignmentException.includes(negId) && sup.ids.assignmentDeferred.includes(posId))
     const load = await buildSpeakerLoad(prisma, 'parity-voice', { env: envOf('d1', 'd5'), now: NOW, scale: resolveScale(envOf('d1', 'd5')) })
-    const load0 = { P01: 1, P03: 0 }
+    const load0 = { P01: 0, P03: 0 }
     check('🔴 화자 WIP — P01 은 그 글을 든다 · P03 은 예외 글로 점유되지 않는다',
       (load.byCode.P01?.readyCount ?? -1) === load0.P01 + 1 && (load.byCode.P03?.readyCount ?? -1) === load0.P03,
       `P01 ${load.byCode.P01?.readyCount} · P03 ${load.byCode.P03?.readyCount}`)

@@ -779,7 +779,9 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
     life: homemaker,
   })
   check('🔴 생활사는 자격 장치이지 글의 재료가 아니라고 말한다', gen.includes('글의 재료가 아닙니다'))
-  check('🔴 원문에 없는 사건을 만들지 말라고 말한다', gen.includes('사건 · 날짜 · 대사 · 겪은 일'))
+  check('🔴 원문에 없는 제3자 사건·결과와 고위험 생활 사실을 만들지 말라고 말한다',
+    gen.includes('제3자의 사건 · 날짜 · 직접 대사 · 결과')
+    && gen.includes('배우자 · 자녀 · 부모 · 건강 · 치료 · 돈'))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1249,7 +1251,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.3'
-    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p12'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p13'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**
    * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**
@@ -1576,7 +1578,7 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
    *
    * 🔴 **재시도 계약** (2026-09-23 재정정). `AUTO_HOLD` 원천은 `concluded` 가 아니어서
    *    **재시도 자격을 유지한다.** 다만 **다음 회차 즉시 선택은 보장되지 않는다** —
-   *    workset 의 reserve 자리 · 신규 우선 · starvation 규칙에 따라 다시 선택된다.
+   *    신규·재시도를 나누지 않고 실제 원문 시각 1순위의 단일 순위에서 다시 선택된다.
    *    그 동작은 아래 `selectWorkset` 실행 검사가 값으로 확인한다.
    */
   const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
@@ -1698,25 +1700,25 @@ console.log('\n🔴 🔴 **실행 사슬 — artifact.plan → voice candidate a
       '저는 48인데 요즘 그런 생각이 들더라고요.').adopted === 1)
 }
 
-console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확인한다 (다음 회차 즉시 선택을 보장하지 않는다)**')
+console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확인한다 (선택 순서는 실제 원문 신선도다)**')
 {
   /**
    * 🔴 앞판은 "다음 회차에 그 원천이 다시 뽑힌다" 고 단언했다. **철회한다.**
    *    정확한 계약은 이렇다.
    *      · HOLD 된 원천은 `concluded` 에 들어가지 않아 **재시도 자격을 유지**한다
-   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 신규가 자리를 채울 수 있다
-   *      · `WORKSET_RETRY_RESERVE` 한 자리와 **오래 기다린 순** 정렬이 굶김을 막는다
+   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 더 신선한 원천이 자리를 채울 수 있다
+   *      · 신규/재시도 구분·대기 시간·단계는 순위를 바꾸지 않는다
    */
   const NOW = new Date('2026-09-23T05:00:00Z')
   // 🔴 (2026-09-30) 순서는 정본 rank(원천 상대 백분위)다 — 옛 댓글 수 순서를 백분위로 옮겨 싣는다
-  const row = (id: string, comments: number) => ({
+  const row = (id: string, comments: number, ageH = 6) => ({
     sourceArticleId: id, sourceSite: 'navercafe:remonterrace',
-    commentCount: comments, sourcePostedAt: '', sourceListedAt: '',
+    commentCount: comments, sourcePostedAt: new Date(NOW.getTime() - ageH * 3600e3).toISOString(), sourceListedAt: '',
     input: { sourceArticleId: id, title: `요즘 김치 담그기 어떠신가요 ${id}`,
       bodyHead: '주변에 물어보면 반반이더라고요. 다들 어떻게 하시는지 궁금해서 여쭤봐요.',
       bodyLength: 120, commentCount: comments,
       safetyVerdict: 'pass', access: 'ok', axis: SEED_AXIS } as never,
-    evidence: fakeSourceEvidence(NOW, { id, commentsPct: comments / 100 }),
+    evidence: fakeSourceEvidence(NOW, { id, postedAt: new Date(NOW.getTime() - ageH * 3600e3), commentsPct: comments / 100 }),
   })
   const releaseOf = (r: Parameters<typeof preGenerationRelease>[0]) => preGenerationRelease(r, NOW, NOW)
   const ago = (h: number) => NOW.getTime() - h * 3600e3
@@ -1731,19 +1733,33 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
   const att = new Map([['old-1', { atMs: ago(30) }], ['old-2', { atMs: ago(5) }]])
   const p5 = plan(5, att, ['new-1', 'new-2', 'new-3', 'new-4', 'new-5'])
   const ids5 = p5.workset.sources.map((s) => s.sourceArticleId)
-  check('🔴 🔴 **신규가 충분해도 재시도 자리가 남는다**',
-    ids5.some((x) => x.startsWith('old-')), JSON.stringify(ids5))
-  check('🔴 🔴 **재시도 중에서는 오래 기다린 것이 먼저다**',
-    ids5.filter((x) => x.startsWith('old-'))[0] === 'old-1', JSON.stringify(ids5))
+  check('🔴 재시도 예약석이 없다 — 같은 신선도에서는 반응이 높은 신규 다섯 건',
+    ids5.join(',') === 'new-1,new-2,new-3,new-4,new-5', JSON.stringify(ids5))
+  check('🔴 재시도 대기 시간을 바꿔도 선택은 바뀌지 않는다', (() => {
+    const reversed = new Map([['old-1', { atMs: ago(1) }], ['old-2', { atMs: ago(30) }]])
+    return JSON.stringify(plan(5, reversed, ['new-1', 'new-2', 'new-3', 'new-4', 'new-5']).workset.sources)
+      === JSON.stringify(p5.workset.sources)
+  })())
   check('🔴 신규가 자리를 다 못 채우면 재시도가 남은 칸을 쓴다',
     plan(5, att, ['new-1']).workset.sources.map((s) => s.sourceArticleId).length > 1)
-  check('🔴 🔴 **다음 회차 즉시 선택은 보장되지 않는다 — 자리가 하나면 신규가 가져갈 수 있다**', (() => {
+  check('🔴 다음 회차 즉시 선택은 보장되지 않는다 — 같은 신선도면 반응이 높은 신규가 가져간다', (() => {
     const one = plan(1, new Map([['old-2', { atMs: ago(1) }]]), ['new-1'])
     return one.workset.sources.map((s) => s.sourceArticleId).length === 1 && one.workset.sources.map((s) => s.sourceArticleId)[0] === 'new-1'
   })())
-  check('🔴 🔴 **다만 오래 굶으면 자리 하나여도 재시도가 가져간다**', (() => {
+  check('🔴 오래 기다렸다는 이유만으로 자리 하나를 가져가지 않는다', (() => {
     const one = plan(1, new Map([['old-1', { atMs: ago(72) }]]), ['new-1'])
-    return one.workset.sources.map((s) => s.sourceArticleId)[0] === 'old-1'
+    return one.workset.sources.map((s) => s.sourceArticleId)[0] === 'new-1'
+  })())
+  check('🔴 신규/재시도 신분과 무관하게 더 신선한 원문이 자리 하나를 가져간다', (() => {
+    const freshOld = row('new-old', 99, 20)
+    const retryNew = row('old-new', 1, 4)
+    const one = selectWorkset({
+      rows: [freshOld, retryNew], humanDecided: EMPTY_HUMAN_DECISIONS,
+      queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
+      concluded: new Set<string>(), attempted: new Map([[sourceKeyOf(RT_SITE, 'old-new'), { atMs: ago(72) }]]) as never,
+      releaseOf, limit: 1, runId: 'r1', takenAt: NOW,
+    })
+    return one.workset.sources.map((s) => s.sourceArticleId)[0] === 'old-new'
   })())
   check('🔴 `concluded` 에 들어간 원천은 다시 뽑히지 않는다', (() => {
     const p2 = selectWorkset({
@@ -1998,8 +2014,8 @@ console.log('\n🔴 🔴 **P02 실제 E2E — 원문 "곧 44" 가 초안 프롬�
   })())
   check('🔴 🔴 **⑨ "빼지 말고 바꾼다" 는 지시가 있다 — 내용 유실을 막는다**',
     prompt.includes('빼지 말고 바꿉니다'))
-  check('🔴 🔴 **⑩ 원문에 없던 사실을 더하지 말라는 지시도 있다**',
-    prompt.includes('새로 더하지 않습니다'))
+  check('🔴 🔴 **⑩ 근거 없는 고위험 생활 사실을 더하지 말라는 지시도 있다**',
+    prompt.includes('원문이나 카드 근거 없이 더하지 않습니다'))
 
   // ④ exactAge 가 없으면 연령대까지만
   const bandMap = planAxisMapping({

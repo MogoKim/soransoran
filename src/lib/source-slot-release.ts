@@ -650,12 +650,12 @@ export type ReleaseVerdictKind = 'eligible' | 'ineligible' | 'unknown'
 
 /** 🔴 비교 성분 — 합산하지 않는다. 비교는 `compareReleaseRank` 하나다 */
 export type ReleaseRank = {
-  /** 같은 원천 · 같은 관측 나이 안 댓글 백분위 — 대화 신호가 먼저다 */
+  /** 예정 슬롯에서의 원문 나이(시간) — 🔴 신선도가 1순위다. 어린 것이 먼저. 날짜만 알면 늙은 끝(그날 00:00 기준) */
+  ageAtSlotH: number | null
+  /** 같은 원천 · 같은 관측 나이 안 댓글 백분위 — 🔴 실질적으로 같은 나이에서만 선다 */
   commentsPct: number | null
   /** 같은 모집단 안 조회 백분위 — 같은 댓글 백분위끼리만 가른다 */
   viewsPct: number | null
-  /** 예정 슬롯에서의 원문 나이(시간) — 어린 것이 먼저. 🔴 날짜만 알면 늙은 끝(그날 00:00 기준)이다 */
-  ageAtSlotH: number | null
   /** 실제 반복 관측 2개 이상일 때만 — 시간당 댓글 증가 */
   velocity: number | null
   /** 마지막 열쇠 — 같은 입력이면 같은 순서 */
@@ -805,13 +805,18 @@ const asc = (a: number | null, b: number | null): number =>
   (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : a - b)
 
 /**
- * 🔴 **사전식 비교 — 가중치 없음.** 댓글 백분위 ↓ → 조회 백분위 ↓ → 슬롯 나이 ↑ → velocity ↓(없으면 뒤) → tieBreak.
- *    모르는 성분은 언제나 뒤다.
+ * 🔴 **사전식 비교 — 가중치 없음. 신선도가 1순위다** (2026-10-19 창업자 결정).
+ *    슬롯 나이 ↑ → 댓글 백분위 ↓ → 조회 백분위 ↓ → velocity ↓(없으면 뒤) → tieBreak.
+ *    품질·안전은 자격 gate에서 끝났고, 그 뒤에는 오래된 고반응 글이 최신 글을 앞설 수 없다.
+ *    반응은 실질적으로 같은 게시 시각에서만 선다 — 모르는 성분은 언제나 뒤다.
+ *
+ *    옛 순서(2026-09-30~2026-10-18): 댓글 백분위 ↓ → 조회 백분위 ↓ → 슬롯 나이 ↑. 반응이 신선도를 이겨
+ *    오래된 고반응 글이 72시간 안의 새 글을 앞섰다 — 10-18 d10 재시험에서 재현.
  */
 export function compareReleaseRank(a: ReleaseRank, b: ReleaseRank): number {
-  return desc(a.commentsPct, b.commentsPct)
+  return asc(a.ageAtSlotH, b.ageAtSlotH)
+    || desc(a.commentsPct, b.commentsPct)
     || desc(a.viewsPct, b.viewsPct)
-    || asc(a.ageAtSlotH, b.ageAtSlotH)
     || desc(a.velocity, b.velocity)
     || a.tieBreak.localeCompare(b.tieBreak)
 }

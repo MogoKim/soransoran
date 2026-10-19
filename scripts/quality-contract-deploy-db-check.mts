@@ -30,6 +30,7 @@ import { eligibilityOf } from '../src/lib/auto-ready-v2'
 import { judgeMachine, type SemanticVerdict } from '../src/lib/content-core/review'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { pickV2 } from '../src/lib/micro-seed-auto-draft'
+import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION } from '../src/lib/micro-seed-auto-judge'
 import * as af from '../src/lib/micro-seed-supply-autofill'
 import { SEMANTIC_HOLD_CODES } from '../src/lib/semantic-summary-codes'
 import { planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
@@ -526,7 +527,14 @@ async function main(): Promise<void> {
       promptVersion: af.MACHINE_PROFILE.envelopePromptVersion, pipelineVersion: af.MACHINE_PROFILE.envelopePipelineVersion,
       stageModels: STAGE_MODEL, qualityContractDigest: TARGET.digest,
     }
-    const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine-shadow' }
+    const aj = {
+      ruleVersion: AUTO_JUDGE_RULE_VERSION,
+      promptVersion: 'p',
+      model: 'm',
+      inputHash: 'h',
+      provenance: 'machine-shadow',
+      boardTopic: 'FREE' as const,
+    }
     const review = (sem: SemanticVerdict) => ({ deterministic: det, semanticCompletion: ok, semantic: sem })
     const cleanSem: SemanticVerdict = { ...warnSem, droppedFromSource: [], unsupportedAdditions: [] }
     let seq = 0

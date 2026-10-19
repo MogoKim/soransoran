@@ -26,7 +26,9 @@ const check = (label: string, ok: boolean): void => {
 const NOW = '2026-09-07T12:00:00.000Z'
 /** 🔴 모델 응답을 mock 한다 — fixture 는 네트워크를 쓰지 않는다 */
 const okSem = (o: Partial<SemanticVerdict> = {}): SemanticVerdict => ({
-  decision: 'AUTO_SEED', confidence: 0.9, risks: [], communityAngle: '살림 이야기', ...o,
+  decision: 'AUTO_SEED', confidence: 0.9, risks: [], communityAngle: '살림 이야기',
+  // 🔴 2026-10-19 — boardTopic 은 필수 enum (MENOPAUSE|FREE). 기본 fixture 는 FREE
+  boardTopic: 'FREE', ...o,
 })
 /** semantic 결과를 outcome 으로 감싼다 — 러너가 넘기는 모양 그대로 */
 const oc = (v: SemanticVerdict | null, status: SemanticOutcome['status'] = v === null ? 'timeout' : 'ok'): SemanticOutcome =>
@@ -51,7 +53,7 @@ console.log('\n① 🔴 사람 판정을 사칭하지 않는다')
   check('🔴 provenance 가 사람 것이 아니다',
     !(HUMAN_PROVENANCE as readonly string[]).includes(AUTO_PROVENANCE))
   check('ruleVersion 이 붙는다', j().ruleVersion === RULE_VERSION)
-  check('🔴 v3 로 올랐다 — 판정 규칙이 바뀌면 캐시를 분리한다', RULE_VERSION === 'auto-judge-v3')
+  check('🔴 v4 로 올랐다 — boardTopic 저장 공간 추가로 캐시를 분리한다 (2026-10-19)', RULE_VERSION === 'auto-judge-v4')
   check('promptVersion 이 붙는다', j().promptVersion === PROMPT_VERSION)
   check('decidedAt 이 붙는다', j().decidedAt === NOW)
   check('reasonCodes 가 배열이다', Array.isArray(j().reasonCodes))
@@ -159,14 +161,22 @@ console.log('\n②-c 🔴 semantic judge — 모르면 통과가 아니다')
   check('🔴 사람 값을 답해도 → null', parseSemantic('{"decision":"SEED","confidence":1}') === null)
   check('🔴 confidence 가 없으면 → null', parseSemantic('{"decision":"AUTO_SEED"}') === null)
   check('🔴 confidence 범위 밖 → null', parseSemantic('{"decision":"AUTO_SEED","confidence":2}') === null)
-  check('🟢 온전한 응답은 읽는다', (() => {
-    const v = parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":[],"communityAngle":"살림"}')
-    return v !== null && v.decision === 'AUTO_SEED' && v.confidence === 0.9
+  check('🟢 온전한 응답은 읽는다 (boardTopic 필수)', (() => {
+    const v = parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":[],"communityAngle":"살림","boardTopic":"FREE"}')
+    return v !== null && v.decision === 'AUTO_SEED' && v.confidence === 0.9 && v.boardTopic === 'FREE'
   })())
-  check('앞 중괄호가 없어도 읽는다 (Anthropic prefill)',
-    parseSemantic('"decision":"AUTO_SEED","confidence":0.8,"risks":[]}') !== null)
+  check('🔴 boardTopic 결여 → null (strict enum · 2026-10-19)',
+    parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":[],"communityAngle":"살림"}') === null)
+  check('🔴 boardTopic 가 enum 밖(예: "MAGAZINE") → null',
+    parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":[],"boardTopic":"MAGAZINE"}') === null)
+  check('🟢 boardTopic MENOPAUSE 는 읽는다', (() => {
+    const v = parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":[],"boardTopic":"MENOPAUSE"}')
+    return v !== null && v.boardTopic === 'MENOPAUSE'
+  })())
+  check('앞 중괄호가 없어도 읽는다 (Anthropic prefill · boardTopic 필수)',
+    parseSemantic('"decision":"AUTO_SEED","confidence":0.8,"risks":[],"boardTopic":"FREE"}') !== null)
   check('🔴 모르는 위험 이름은 insufficientContext 로 읽는다', (() => {
-    const v = parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":["newRiskName"]}')
+    const v = parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":["newRiskName"],"boardTopic":"FREE"}')
     return v !== null && v.risks.includes('insufficientContext')
   })())
   check(`🔴 confidence ${MIN_CONFIDENCE} 미만이면 HOLD`,

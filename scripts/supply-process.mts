@@ -308,7 +308,7 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *
  * 🔴 **WIP 는 공용 분류에서 받는다** (2026-09-26). 앞판은 여기서 selector 를 따로 불러
  *    `HUMAN_REVIEW_REQUIRED` 를 직접 세었다 — 발행 러너와 다른 조립(editDiff 없음 · 자동 READY 닫힘 가정)이었다.
- *    🔴 검토 대기는 **WIP 에 남는다**(같은 화자로 또 만들지 않는다). 발행 가능 재고로는 세지 않는다.
+ *    🔴 자동 적격 미도장 행만 **WIP 에 남는다**. 품질 경고 행은 격리하고 Persona 자리를 해제한다.
  *    🔴 **WIP 여부는 칸마다 정해져 있다**(`STOCK_BUCKET_META`) — TTL 만료 · 영구 배정 예외 · 깨진 복구 ·
  *       스스로 풀리지 않는 신선도 실패는 화자를 **영구 점유하지 않는다**. 시간성 유예(WEEKLY_CAP · TOO_SOON)는 점유한다.
  *    🔴 **옛 품질 계약의 기계 초안(`qualityContractMismatch`)도 점유하지 않는다** (2026-09-28) — 자동 경로가
@@ -329,7 +329,13 @@ export async function buildSpeakerLoad(
   stageByDate: readonly { date: string; stage: string }[]
   planningStage: string
   releaseStage: string
-  wip: { total: number; humanReviewPending: number; publishableNow: number; qualityContractMismatch: number }
+  wip: {
+    total: number
+    autoReadyPending: number
+    qualityQuarantine: number
+    publishableNow: number
+    qualityContractMismatch: number
+  }
   /** 🔴 원천 가치가 사라진 WIP(정본 판정 만료 사유) — 화자 칸을 막지 않는다 · 화자 미상 · 말투 필터 */
   slots: { releasedExpired: number; unattributed: number; voiceFiltered: boolean; slotEligibleCount: number | null }
 }> {
@@ -430,7 +436,8 @@ export async function buildSpeakerLoad(
     releaseStage: opts.scale.releaseStage,
     wip: {
       total: wip.size,
-      humanReviewPending: classification.counts.humanReviewPending,
+      autoReadyPending: classification.counts.autoReadyPending,
+      qualityQuarantine: classification.counts.qualityQuarantine,
       publishableNow: classification.counts.publishableNow,
       /** 🔴 WIP 가 **아니다** — 옛 품질 계약이라 WIP 에서 빠진 수를 보이려고 적는다 */
       qualityContractMismatch: classification.counts.qualityContractMismatch,
@@ -853,7 +860,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
       try {
         const load = await writeSpeakerLoad(prisma, runId, scale)
         console.log(`   🟢 화자 여력 — 가까운 수요 지평 ${load.horizonDays}일(${load.planningStage} release 슬롯 · 오늘 남은 + 다음 첫 기회)`
-          + ` · WIP ${load.wip.total}건 (사람 검토 대기 ${load.wip.humanReviewPending} · 발행 가능 ${load.wip.publishableNow})`
+          + ` · WIP ${load.wip.total}건 (자동 도장 대기 ${load.wip.autoReadyPending} · 발행 가능 ${load.wip.publishableNow})`
+          + ` · 자동 품질 격리 ${load.wip.qualityQuarantine}건은 WIP 아님`
           + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`
           + ` · 원천 가치 없음으로 칸 해제 ${load.slots.releasedExpired}건 · 화자 미상 ${load.slots.unattributed}건`
           + ` · 말투 ${load.slots.voiceFiltered ? `있는 ${load.slots.slotEligibleCount}명만 자리를 받는다` : '필터 없음(정본을 못 읽었다)'}`)
@@ -1071,7 +1079,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     const recorder = createSelectionRecorder()
     if (policy.llm) {
     /**
-     * 🔴 **JIT 선택 하나** (2026-10-10 P0-B1) — raw 제외 → 부족 슬롯 연결 → 신규 우선 → 재시도 보충 → 정본 순위 →
+     * 🔴 **JIT 선택 하나** (2026-10-19) — raw 제외 → 부족 슬롯 연결 → 신선도 우선 단일 순위 →
      *    고른 집합에만 EDF 배정. 고른 원천은 **배정 슬롯**에서 다시 판정해 묶음에 나이를 적는다.
      */
     const plan = selectWorkset({
@@ -1082,7 +1090,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     })
     const jf = plan.jit!
     console.log(`   부족 슬롯 ${jf.slots}개 · 채울 수 있는 최대 ${jf.maxFillableSlots} · 덮음 ${jf.coveredSlots}`
-      + ` · 연결 가능 seed ${jf.linkable} · raw 제외 ${jf.rawExcluded} · 재시도 보충 ${jf.retryReserved}/${jf.retryReserve}`)
+      + ` · 연결 가능 seed ${jf.linkable} · raw 제외 ${jf.rawExcluded} · 선택된 재시도 ${jf.retryReserved}`)
     if (plan.picked.length === 0) {
       // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
       worksetEmpty = true
@@ -1252,8 +1260,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
     })
     console.log(`   형식 행  ${before.profiled} → ${after.profiled} (적재 정합용 수 — 재고 목표 없음)`)
     const pn = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.publishableNow))
-    const hr = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.humanReviewPending))
-    console.log(`   발행 가능 ${pn(before)} → ${pn(after)} · 사람 검토 대기 ${hr(before)} → ${hr(after)}`)
+    const hr = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.qualityQuarantine))
+    console.log(`   발행 가능 ${pn(before)} → ${pn(after)} · 자동 품질 격리 ${hr(before)} → ${hr(after)}`)
     console.log(`   Post     ${before.post} → ${after.post} ${after.post === before.post ? '✅ 불변' : '🔴 변했다'}`)
     console.log(`\n⑦ 정합 ${v.ok ? '✅ 통과' : '🔴 이상'}`)
     for (const p of v.problems) console.log(`   ${p}`)
