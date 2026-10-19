@@ -539,9 +539,9 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
 check('현재 실행이 원격 main과 runtime을 분 단위 관측값으로 분리하고 D100 차이를 판정한다',
   /^\| 원격 main \(20\d\d-\d\d-\d\d \d\d:\d\d 관측\) \| `[0-9a-f]{40}` \|/m.test(currentLive)
   && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*main 차이를 별도 판정/m.test(currentLive))
-check('현재 실행이 추가 댓글의 배포 상태와 단계 불일치 fail-closed를 함께 적는다',
-  currentLive.includes('switch ON · D10 profile · E6 consumer plist')
-  && currentLive.includes('현재 공개 단계와 profile이 다르면 fail-closed 0건'))
+check('현재 실행이 추가 댓글의 기존 배포 상태와 운영 공통 profile 배포 전을 구분한다',
+  currentLive.includes('switch ON · D10 전용 profile · E6 consumer plist')
+  && currentLive.includes('운영 공통 profile은 통합 packet code PASS 후보'))
 check('현재 실행이 공격적 목표일을 PASS 약속과 구분하고 D30을 생략하지 않는다',
   currentLive.includes('공격적 목표일은 PASS 약속이 아니다')
   && currentLive.includes('D30은 생략하지 않음'))

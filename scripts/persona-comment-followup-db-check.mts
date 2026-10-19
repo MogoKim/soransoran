@@ -100,7 +100,7 @@ const PROV = provenanceOf(CANON)
 const STAGE = 'd5'
 const PROFILE_PATH = join(HOME, 'followup-profile.json')
 const PROFILE = {
-  v: F.FOLLOWUP_PROFILE_VERSION, stage: STAGE, dailyCount: 40, dailyUsd: 0.08, runMax: 3, perPersonaDailyMax: 3,
+  v: F.FOLLOWUP_PROFILE_VERSION, stage: F.FOLLOWUP_PROFILE_ALL_STAGES, dailyCount: 40, dailyUsd: 0.08, runMax: 3, perPersonaDailyMax: 3,
   approvedBy: 'fixture-founder', approvedAt: '2026-10-14T09:00:00+09:00',
 }
 const writeProfile = (p: unknown): void => writeFileSync(PROFILE_PATH, JSON.stringify(p))
@@ -705,8 +705,8 @@ async function main(): Promise<void> {
       applyConsumed(c.env)
       const g = fakeGen()
       const r = await phase(g.gen)
-      check('🟢 consumer 가 넣은 결정 → 추가 댓글 1건(profile d5 범위)', (await personaRows(pid)).length === 2 && r.outcome === 'RAN', `${r.reason} ${JSON.stringify(r.lines)}`)
-      // profile 단계가 consumer 결정과 다르면 0 — 단계별 profile 범위 안에서만
+      check('🟢 consumer 가 넣은 결정 → 추가 댓글 1건(운영 공통 profile)', (await personaRows(pid)).length === 2 && r.outcome === 'RAN', `${r.reason} ${JSON.stringify(r.lines)}`)
+      // 단계 전용 profile 을 쓰면 consumer 결정과 다른 단계에서는 계속 0
       const { pid: pid2 } = await setup(); await storeDecision(today)
       applyConsumed(consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' }).env)
       writeProfile({ ...PROFILE, stage: 'd10' })

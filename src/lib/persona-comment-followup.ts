@@ -93,14 +93,16 @@ export const FOLLOWUP_HOOKS: readonly ReactionType[] = ['question', 'rebuttal', 
  * 🔴 **수량·비용 상한은 코드 상수가 아니라 승인된 profile 이다** (2026-10-13 마스터 보정).
  *
  *    D10 과 D100 의 하루 상한이 같을 수 없다. 그래서 상한을 여기 고정하지 않고, 호출부가 그날의
- *    런타임 단계에 맞는 **승인된 profile** 을 주입한다. 없거나 · 손상됐거나 · 단계가 다르거나 ·
+ *    런타임 단계 또는 모든 단계에 적용되는 **승인된 profile** 을 주입한다. 없거나 · 손상됐거나 · 단계가 다르거나 ·
  *    승인자가 없으면 그 회차는 **0건**(fail-closed)이다. 첫 댓글 예산은 profile 과 무관하게 먼저 뗀다.
  */
 export const FOLLOWUP_PROFILE_VERSION = 'followup-profile-v1'
+/** 기능을 Dn 단계와 묶지 않는 운영 공통 profile 표식. 단계 전용 profile도 계속 지원한다. */
+export const FOLLOWUP_PROFILE_ALL_STAGES = 'all'
 
 export type FollowupProfile = {
   v: typeof FOLLOWUP_PROFILE_VERSION
-  /** 적용 런타임 단계(`d10` · `d20` · `d100` …) — 그날 단계와 같아야 한다 */
+  /** 적용 런타임 단계(`d10` · `d20` · `d100` …) 또는 운영 공통 `all` */
   stage: string
   /** 하루 추가 댓글 건수 상한 */
   dailyCount: number
@@ -142,7 +144,9 @@ export function validateFollowupProfile(
   const p = raw as Partial<Record<keyof FollowupProfile, unknown>>
   if (p.v !== FOLLOWUP_PROFILE_VERSION) return { ok: false, reason: `profile 판이 ${String(p.v)} 다(fail-closed)` }
   if (typeof runtimeStage !== 'string' || runtimeStage.trim() === '') return { ok: false, reason: '그날 런타임 단계를 모른다(fail-closed)' }
-  if (p.stage !== runtimeStage) return { ok: false, reason: `profile 단계 ${String(p.stage)} ≠ 그날 단계 ${runtimeStage}(fail-closed)` }
+  if (p.stage !== FOLLOWUP_PROFILE_ALL_STAGES && p.stage !== runtimeStage) {
+    return { ok: false, reason: `profile 단계 ${String(p.stage)} ≠ 운영 공통 또는 그날 단계 ${runtimeStage}(fail-closed)` }
+  }
   if (!isPosInt(p.dailyCount)) return { ok: false, reason: 'profile 하루 건수가 양의 정수가 아니다(fail-closed)' }
   if (typeof p.dailyUsd !== 'number' || !Number.isFinite(p.dailyUsd) || p.dailyUsd <= 0) {
     return { ok: false, reason: 'profile 하루 USD 가 양의 유한수가 아니다(fail-closed)' }

@@ -160,6 +160,12 @@ for (const b of fx.profiles.broken) {
   check(`③ 🔴 profile ${b.name} → 0건`, !v.ok && tick({ profile, runtimeStage: b.runtimeStage }).allowed === 0, v.ok ? '통과해 버렸다' : v.reason)
 }
 {
+  const common = { ...fx.profiles.approved, stage: M.FOLLOWUP_PROFILE_ALL_STAGES }
+  check('③ 운영 공통 profile 은 d5·d10·d20 모두 같은 관문을 통과',
+    ['d5', 'd10', 'd20'].every((stage) => M.validateFollowupProfile(common, stage).ok))
+  check('③ 단계 전용 D10 profile 은 d5에서 계속 차단', !M.validateFollowupProfile(fx.profiles.approved, 'd5').ok)
+}
+{
   // 🔴 D100 은 40건·$0.08 에 묶이지 않는다 — 승인된 D100 profile 이 정한다
   const d100 = (over: Partial<FollowupModule.FollowupTickFacts>) => tick({
     profile: fx.profiles.approvedD100, runtimeStage: 'd100', commentLedgerRemainingUsd: 2, firstCommentReserveUsd: 0.1, ...over,
@@ -528,6 +534,9 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   }
   const pub = (over: Partial<FollowupModule.FollowupPublishFacts>) => M.judgeFollowupPublish({ ...ok, ...over })
   check('⑦ 기준선 — 온전한 도장 · 사실 → 발행', pub({}).ok, pub({}).blockers.join(' | '))
+  check('⑦ 운영 공통 profile — d5에서도 같은 트랜잭션 관문으로 발행', pub({
+    profile: { ...fx.profiles.approved, stage: M.FOLLOWUP_PROFILE_ALL_STAGES }, runtimeStage: 'd5',
+  }).ok)
   const no = (name: string, over: Partial<FollowupModule.FollowupPublishFacts>, expect: string) => {
     const v = pub(over)
     check(`⑦ 🔴 ${name} → 막음`, !v.ok && v.blockers.some((b) => b.includes(expect)), v.blockers.join(' | '))
