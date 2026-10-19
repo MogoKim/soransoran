@@ -98,13 +98,15 @@ const MUTATIONS = [
     find: '        const st = settleDeliveryReservation({ slug, reservationId, outcome, path: quarantinePath })', replace: '        const st = settleDeliveryReservation({ slug, reservationId, outcome: null, path: quarantinePath })' }] },
   { name: '㉕ producer 일괄 계획이 교정 대기를 보지 않음 (00:10 gray 가 fetch 로 잡혀 접근 확인을 깨운다)', scenarios: 'S12', edits: [{ file: F.webui,
     find: '    if (fetchSet.has(t.slug) && correctionPending.has(t.slug)) {', replace: '    if (false) {' }] },
+  // 🔴 ㉖·㉗·㉘ 지점 이동 (2026-10-19) — 두 대조는 DIRECT_SPEC wiring(47b8314e) 뒤 legacy 경로에서만 돈다(`!isDirectMode &&`).
+  //    변이는 앞판과 같은 의미 — 대조 블록 전체를 끈다. 지점만 지금 글자로 옮겼다.
   { name: '㉖ auto-register 가 옛 장부 사유를 대조하지 않음 (gray — 교정 근거 없음)', scenarios: 'S12', edits: [{ file: F.register,
-    find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
+    find: '    if (!isDirectMode && !firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
   { name: '㉗ auto-register 가 옛 입력 수리 영수증을 대조하지 않음 (cold·autumn — REGEN_EXHAUSTED)', scenarios: 'S11', edits: [{ file: F.register,
-    find: "      const legacy = pend.status === 'NONE' ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp }) : null", replace: '      const legacy = null' }] },
+    find: "      const legacy = !isDirectMode && pend.status === 'NONE'\n        ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp })\n        : null", replace: '      const legacy = null' }] },
   { name: '㉘ 단건 회수 관문이 교정 대기를 보지 않음 (01:00 일반 재전송)', scenarios: 'S12', edits: [
     { file: F.webui, find: '  if (gate.correctionPending) {\n    if (!quiet)', replace: '  if (false) {\n    if (!quiet)' },
-    { file: F.register, find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
+    { file: F.register, find: '    if (!isDirectMode && !firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
   // ── 2026-10-12 — 반례 큐 행은 고정 fixture (runtime 큐에서 gray 가 등록돼 빠져도 같은 시나리오) ──
   { name: '㉙ S12 가 fixture 큐 행을 넣지 않는다 (runtime 큐 상태에 묶임)', scenarios: 'S12', edits: [{ file: F.orch,
     // S14 공통 준비에도 같은 줄이 있다 — S12 의 다음 줄(등록된 gray 처리)까지 묶어 S12 하나만 고른다
@@ -116,7 +118,9 @@ const MUTATIONS = [
   { name: '㉛ 발행 길이 줄에서 목표치·계산법 제거', scenarios: 'S13', edits: [{ file: F.register,
     find: "  if (!m) return line\n", replace: "  if (!m || true) return line\n" }] },
   // ── 2026-10-12 #690 뒤 — 등록돼 추적된 원고·articles 항목이 있어도 시나리오는 같다 (sandbox 사본에서만) ──
-  { name: '㉜ S2 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2', edits: [{ file: F.sandbox,
+  // 🔴 ㉜ 관찰 시나리오 (2026-10-19) — S2 대상 원고가 runtime 에서 이미 미추적이면 선언 없이도 같아 변이가 죽는다.
+  //    S8·S8B 는 새로 쓴 brief·review 를 untrack 으로 runtime 모양에 맞춘다 — 같은 변이를 그 둘에서도 본다 (변이 의미 불변).
+  { name: '㉜ S2·S8·S8B 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2,S8,S8B', edits: [{ file: F.sandbox,
     find: "  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })\n", replace: '' }] },
   { name: '㉝ S12 가 sandbox articles.ts 에서 이미 등록된 gray 항목을 빼지 않는다 (producer 가 등록 글로 건너뜀)', scenarios: 'S12', edits: [{ file: F.orch,
     find: '      if (iso.removed) writeFileSync(aPath, iso.next)', replace: '      if (false) writeFileSync(aPath, iso.next)' }] },

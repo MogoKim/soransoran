@@ -548,7 +548,10 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const pr = await templatePair({ repo, item: t, broken: true })
       writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
       placeHero({ repo, slug: t.slug })
-      return { target: t.slug }
+      // 🔴 runtime 모양 — 진행 중인 글의 brief·review 는 미추적이다 (S2·S11 과 같은 선언 · 2026-10-19).
+      //    선언이 없으면 새로 쓴 brief 가 기준 커밋에서 추적 파일이 되어, 입력 수리가 고치는 순간 DIRTY_TREE 로 멈춘다
+      //    (대상이 runtime 에 미추적 brief 가 없는 글 — national-pension-voluntary — 로 바뀌면서 드러났다)
+      return { target: t.slug, untrack: [`drafts/magazine/${t.slug}`] }
     },
     scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['no-frontmatter'] } }),
     async run(ctx) {
@@ -585,7 +588,10 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const pr = await templatePair({ repo, item: t, broken: true })
       writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
       placeHero({ repo, slug: t.slug })
-      return { target: t.slug }
+      // 🔴 runtime 모양 — 진행 중인 글의 brief·review 는 미추적이다 (S2·S11 과 같은 선언 · 2026-10-19).
+      //    선언이 없으면 새로 쓴 brief 가 기준 커밋에서 추적 파일이 되어, 입력 수리가 고치는 순간 DIRTY_TREE 로 멈춘다
+      //    (대상이 runtime 에 미추적 brief 가 없는 글 — national-pension-voluntary — 로 바뀌면서 드러났다)
+      return { target: t.slug, untrack: [`drafts/magazine/${t.slug}`] }
     },
     scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['no-identity'] } }),
     async run(ctx) {

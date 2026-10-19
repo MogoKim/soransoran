@@ -9,6 +9,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
+import { resolveValidationProfile } from './magazine-validation-profile.mjs'
 
 /** 가짜 ChatGPT 이미지 — 결정적 PNG (같은 sharp 로 같은 바이트). rehearsal 검사가 기대 변환 결과를 독립 계산할 때도 쓴다 */
 export const FIXTURE_HERO_SPEC = Object.freeze({ width: 1536, height: 1024, channels: 3, background: { r: 214, g: 180, b: 150 } })
@@ -22,6 +23,28 @@ export const SKELETON = Object.freeze({
 const read = (p) => readFileSync(p, 'utf8')
 
 /**
+ * 🔴 **FINANCIAL 프로필 뼈대** (2026-10-19) — 관계 글 본문을 금융 제목에 끼우지 않는다.
+ *    앞판은 모든 cluster 에 avoiding-gatherings 본문을 썼다. money-work 대상(national-pension-voluntary)은
+ *    제목만 금융이고 본문은 모임 이야기라 FIN_AUTHORITY_LINE 으로 막혀 S1 이 연쇄 실패했다.
+ *    이 fixture 는 #765 가 사실 정정한 **공개본**(health-insurance-after-retire)을 글자 그대로 렌더한 것이다 — 새 문장 0.
+ *    저장소 drafts 의 금융 brief·review 는 #765 에서 바로잡은 틀린 지시(자동차 부과 · 퇴직일 기준 두 달 ·
+ *    「되돌리기 어렵다」)를 아직 담고 있어 뼈대로 쓰지 않는다. brief·review 의 **형식 껍데기**는 템플릿 그대로다.
+ *    읽을 때 확인한다 (fail-closed): 반드시 넣을 문장 5개가 본문에 글자 그대로 있다.
+ */
+export const FINANCIAL_SKELETON_FIXTURE = join('scripts', '__fixtures__', 'magazine', 'rehearsal-financial-skeleton.json')
+export function profileSkeleton({ repo, item }) {
+  if (resolveValidationProfile(item).profile !== 'FINANCIAL') return null
+  const fx = JSON.parse(read(join(repo, FINANCIAL_SKELETON_FIXTURE)))
+  if (fx.profile !== 'FINANCIAL' || fx.riskSentences?.length !== 5) throw new Error('rehearsal 금융 뼈대 fixture 모양이 다르다')
+  const missing = fx.riskSentences.filter((s) => !fx.body.includes(s))
+  if (missing.length) throw new Error(`rehearsal 금융 뼈대 — 반드시 넣을 문장이 본문에 없다: ${missing.join(' / ')}`)
+  return fx
+}
+
+/** 템플릿 review 의 반드시 넣을 문장 — 뼈대가 바뀌면 brief 마커와 review 를 같은 글자로 바꿔 끼운다 */
+const templateRiskSentences = (repo) => riskSentencesOf(read(join(repo, 'drafts', 'magazine', SKELETON.brief.slug, 'review.ts')))
+
+/**
  * 가짜 Claude 출력 — `===BRIEF===` · `===REVIEW===` 두 마커 (brief-auto 의 splitOutput 계약).
  * @param {{repo:string, item:object, mode?:'good'|'no-format-contract'}} p
  */
@@ -30,10 +53,22 @@ export function claudeBriefOutput({ repo, item, mode = 'good' }) {
   let brief = read(join(dir, 'brief.md'))
     .replaceAll(SKELETON.brief.title, item.title)
     .replace(/^cluster: .*$/m, `cluster: ${item.cluster}`)
-  const review = read(join(dir, 'review.ts'))
+  let review = read(join(dir, 'review.ts'))
     .replace(`slug: '${SKELETON.brief.slug}'`, `slug: '${item.slug}'`)
+  const fx = profileSkeleton({ repo, item })
+  if (fx) {
+    // 🔴 금융 — 반드시 넣을 문장 5개(brief 마커 · review)를 같은 글자로, 위험 축·금지 패턴은 금융 review 그대로
+    templateRiskSentences(repo).forEach((s, i) => {
+      brief = brief.replaceAll(s, fx.riskSentences[i])
+      review = review.replace(`'${s}'`, `'${fx.riskSentences[i]}'`)
+    })
+    review = review
+      .replace(/risk: \{[^}]*\}/, `risk: {\n    medical: '${fx.risk.medical}',\n    money: '${fx.risk.money}',\n    legal: '${fx.risk.legal}',\n  }`)
+      .replace(/forbiddenPatterns: \[[\s\S]*?\]/, `forbiddenPatterns: [\n${fx.forbiddenPatterns.map((p) => `    '${p}',`).join('\n')}\n  ]`)
+  } else {
     // 🔴 위험 축 하나를 MEDIUM 으로 — 큐 riskLevel 이 무엇이든 G6 가 같은 근거(진료 확인 문장)를 요구한다
-    .replace("medical: 'LOW'", "medical: 'MEDIUM'")
+    review = review.replace("medical: 'LOW'", "medical: 'MEDIUM'")
+  }
   if (mode === 'no-format-contract') brief = stripFormatContract(brief)
   return `===BRIEF===\n${brief}\n===REVIEW===\n${review}\n`
 }
@@ -68,7 +103,7 @@ export function ctaOf(briefText) {
 }
 
 /**
- * 가짜 ChatGPT 원고 — brief 뼈대와 짝인 합격 원고(avoiding-gatherings) + 이 글의 제목·클러스터·의료 여부·반드시 넣을 문장·CTA.
+ * 가짜 ChatGPT 원고 — brief 뼈대와 짝인 합격 원고(avoiding-gatherings · FINANCIAL 은 금융 정정 공개본) + 이 글의 제목·클러스터·의료 여부·반드시 넣을 문장·CTA.
  *    medical 은 실제 QA 정본(`MEDICAL_REQUIRED`)으로 정한다 — fixture 가 규칙을 따로 갖지 않는다.
  * @param {{repo:string, draftsDir:string, slug:string, item:object, mode?:'good'|'too-short'|'brief-echo'|'qa-fail', medicalRequired?:Set<string>}} p
  *   qa-fail        형식 관문은 통과하지만 실제 QA 가 결정적으로 막는 원고 — medical: true 인데 진료 권고 문장이 없다
@@ -84,8 +119,11 @@ export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medi
   const brief = existsSync(briefPath) ? read(briefPath) : ''
   if (mode === 'brief-echo') return brief
   const fm = frontmatterOf(brief)
-  const skeleton = read(join(repo, 'drafts', 'magazine', SKELETON.brief.slug, 'draft.md'))
-  let body = skeleton.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/\n\[CTA\][^\n]*\n?$/, '\n').trimEnd()
+  // 🔴 뼈대 본문 — FINANCIAL 은 금융 정정 공개본 fixture, 그 밖은 brief 뼈대와 짝인 합격 원고
+  const fx = profileSkeleton({ repo, item })
+  let body = fx
+    ? fx.body.trimEnd()
+    : read(join(repo, 'drafts', 'magazine', SKELETON.brief.slug, 'draft.md')).replace(/^---\n[\s\S]*?\n---\n/, '').replace(/\n\[CTA\][^\n]*\n?$/, '\n').trimEnd()
   const title = item?.title ?? fm.title ?? slug
   const cluster = item?.cluster ?? fm.cluster ?? 'relationship'
   const medical = mode === 'qa-fail' || medicalRequired.has(cluster) || String(fm.medical) === 'true'
