@@ -220,8 +220,8 @@ export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely', 'politicalFigureMent
  *
  *    점수 하한으로 본문을 열기 **전에** 후보를 버리던 값이다(20).
  *    실측: remonterrace 후보 15 → 상세 4, wgang 후보 15 → 상세 2 —
- *    상한이 10 인데 점수 때문에 빈손으로 끝났다. 점수는 `planAutoFetch` 안에서
- *    **여는 순서**로만 쓴다. 품질은 본문을 읽은 뒤 safety·judge·draft 가 본다.
+ *    상한이 10 인데 점수 때문에 빈손으로 끝났다. 점수는 관측값으로만 남기고,
+ *    자동 상세 열기 순서는 실제 원문 게시 시각을 쓴다. 품질은 본문을 읽은 뒤 safety·judge·draft 가 본다.
  */
 
 export type AutoFetchInput = {
@@ -230,7 +230,7 @@ export type AutoFetchInput = {
   flags: readonly string[]
   /**
    * 🔴 **게시 시각의 가장 이른 끝**(ISO) — 정확한 시각이면 그 시각, 날짜만 알면 그날 00:00 KST, 모르면 null/생략.
-   *    같은 점수끼리만 쓴다(최신이 먼저). 점수를 이기지 않는다 (2026-10-13 Batch D1 · canon §2.3).
+   *    자동 상세 열기의 1순위다(최신이 먼저). 점수는 이 시각을 이기지 않는다.
    */
   postedFrom?: string | null
   /** 이미 Raw Vault 에 있는가 — 부르는 쪽이 실측해 넘긴다 */
@@ -244,19 +244,19 @@ export type AutoFetchPlan = {
   skipped: { sourceArticleId: string; reason: AutoSkipReason; detail: string }[]
 }
 
-const DIGITS = /^\d+$/
+// 🔴 2026-10-19 창업자/Codex — DIGITS 를 지웠다. 숫자 article id 를 source-time proxy 로 쓰지 않는다.
 const postedMsOf = (r: AutoFetchInput): number | null => {
   const ms = typeof r.postedFrom === 'string' ? Date.parse(r.postedFrom) : Number.NaN
   return Number.isFinite(ms) ? ms : null
 }
 
 /**
- * 🔴 **같은 점수 안의 순서 — 최신 원천이 먼저** (2026-10-13 Batch D1 · canon §2.3 `품질 → 신선도 → 결정적 tie`).
+ * 🔴 **신선도 1순위** (2026-10-19 창업자 결정 · canon §2.3) — 자격 gate 뒤 공급 순위는 실제 게시 시각(최신)이다.
  *
- *    앞판은 같은 점수를 **글 번호 오름차순**(`localeCompare`)으로 풀었다 — 같은 카페에서 글 번호는 올라온 순서라
- *    (2026-10-08~13 목록 8,727건 실측 · 이웃 역전 0) **오래된 글이 먼저** 열렸다.
- *    ① 게시 시각 하한이 늦은 것 → ② 둘 다 숫자 글 번호(같은 카페 · 한 회차 목록)면 큰 번호 → ③ 옛 결정적 순서.
- *    🔴 점수(품질)를 이기지 않는다 — 점수가 다르면 이 함수까지 오지 않는다. 가중치 · 할당량 없음.
+ *    ① 게시 시각 하한이 늦은 것(known 최신) → ② known > unknown → ③ 결정적 열쇠(id localeCompare).
+ *    🔴 **숫자 article id 를 source time proxy 로 쓰지 않는다** — 글 번호가 같은 카페에서 올라온 순서라도
+ *       그것은 time 이 아니다(2026-10-19 Codex). 모두 unknown 이면 id 로 결정하되 추론으로 쓰지 않는다.
+ *    🔴 점수(품질)·주제·출처는 비교에 들어오지 않는다 — 자격 gate 가 다룬다.
  */
 export function compareFreshFirst(a: AutoFetchInput, b: AutoFetchInput): number {
   const pa = postedMsOf(a)
@@ -264,11 +264,6 @@ export function compareFreshFirst(a: AutoFetchInput, b: AutoFetchInput): number 
   if (pa !== null && pb !== null && pa !== pb) return pb - pa
   if (pa !== null && pb === null) return -1
   if (pa === null && pb !== null) return 1
-  if (DIGITS.test(a.sourceArticleId) && DIGITS.test(b.sourceArticleId) && a.sourceArticleId !== b.sourceArticleId) {
-    const x = BigInt(a.sourceArticleId)
-    const y = BigInt(b.sourceArticleId)
-    return x > y ? -1 : 1
-  }
   return a.sourceArticleId.localeCompare(b.sourceArticleId)
 }
 
@@ -286,7 +281,12 @@ export function planAutoFetch(
   const picked: string[] = []
   const skipped: AutoFetchPlan['skipped'] = []
 
-  const ordered = [...rows].sort((a, b) => b.score - a.score || compareFreshFirst(a, b))
+  // 🔴 신선도 1순위 (2026-10-19 창업자 결정) — 수집·생성·READY·발행이 같은 순서를 흐른다.
+  //    옛 판: `b.score - a.score || compareFreshFirst(a, b)` 로 반응·댓글 추산이 신선도를 이겨
+  //    72시간 안에 식을 글이 뒤로 밀렸다. 점수는 더 이상 자격 gate 가 아니고 하드 차단이 아니다
+  //    (`AUTO_MIN_SCORE` 는 2026-09-11 삭제됨). 순서는 `compareFreshFirst` 하나다 —
+  //    상한을 넘긴 후보는 다음 실행에서 열린다.
+  const ordered = [...rows].sort((a, b) => compareFreshFirst(a, b))
 
   for (const r of ordered) {
     if (r.alreadyInVault === true) {
@@ -300,14 +300,13 @@ export function planAutoFetch(
       continue
     }
     /**
-     * 🔴 **점수는 순서이지 관문이 아니다** (2026-09-11).
+     * 🔴 **점수는 관측값이지 순서나 관문이 아니다** (2026-10-19).
      *
      *    옛 판은 `score < AUTO_MIN_SCORE` 면 **본문을 열기도 전에** 버렸다.
      *    실측: remonterrace 목록 23 → 후보 15 → 상세 **4**, wgang 21 → 15 → 상세 **2**.
      *    상한은 10 인데 점수 때문에 2~4 건만 열렸다 — 후보가 남아 있는데도 빈손으로 끝났다.
      *
-     *    점수는 "무엇을 먼저 열까" 를 정하는 값이다. 이미 위에서 점수 내림차순으로
-     *    정렬했으므로 **좋은 것이 먼저 열린다.** 상한(`max`)이 그 뒤를 자른다.
+     *    자동 상세 열기는 위에서 실제 원문 게시 시각 최신순으로 정렬했다. 상한(`max`)이 그 뒤를 자른다.
      *    품질은 본문을 읽은 뒤 safety·judge·draft 게이트가 판단한다 —
      *    읽지도 않고 버리면 그 게이트들이 볼 것이 없다.
      *

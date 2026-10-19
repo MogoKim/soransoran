@@ -12,7 +12,7 @@ import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
 
 import { SOURCE_TITLE_CHECK_VERSION } from '../src/lib/draft-originality'
 import {
-  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, queueOrderKey, compareAutoRow,
+  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, compareAutoRow,
   sourceTitleCheckOf, founderRetitled,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT, REJECT_LABEL,
   type AutoRow,
@@ -20,6 +20,7 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_GATE_MARKS,
   MACHINE_REVIEWED_BY, machineReviewedByHuman, judgeReviewSnapshot, type ReviewSnapshot,
 } from '../src/lib/original-post-auto-publish'
+import { buildSourceEvidence } from '../src/lib/source-slot-release'
 import { DRAFT_PROVENANCE, DRAFT_RULE_VERSION } from '../src/lib/micro-seed-auto-draft'
 import { MACHINE_DECIDED_BY, HUMAN_ONLY_VALUES } from '../src/lib/micro-seed-supply-autofill'
 import { kstDayStart, DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
@@ -49,6 +50,11 @@ const legacy = (o: Partial<AutoRow> = {}): AutoRow => ok({
   sourceSite: '82cook', title: '주기적으로 사람 잡는 친정아빠', ...o,
 })
 const allPass = (): string => 'pass'
+const sourceGate = (id: string, postedAt: string): Record<string, unknown> => ({
+  sourceEvidence: buildSourceEvidence({
+    sourceSite: 'navercafe:fixture', sourceArticleId: id, postedAt,
+  }),
+})
 
 console.log('\n자동 발행 러너 — 계약 확인')
 console.log('─────────────────────────────────────────────────────────')
@@ -156,29 +162,34 @@ console.log('\n② 🔴 legacy APPROVED 5건이 섞이지 않는다')
     r.rejected.every((x) => x.code === 'PROFILE' || x.code === 'GATE'))
 }
 
-console.log('\n③ 줄 세우기 — 오래 기다린 것이 먼저다')
+console.log('\n③ 줄 세우기 — 실제 원문 게시 시각이 최신인 것이 먼저다')
 {
   const D = (iso: string): Date => new Date(iso)
-  const older = ok({ id: 'zzz', decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') })
-  const newer = ok({ id: 'aaa', decidedAt: D('2026-09-05T00:00:00Z'), createdAt: D('2026-09-05T00:00:00Z') })
-  const r = selectAutoTargets([newer, older], allPass)
-  check('🔴 오래된 것이 앞 — id 가 뒤여도 시각이 이긴다',
+  const fresh = ok({
+    id: 'zzz', gateResults: sourceGate('fresh', '2026-09-05T00:00:00Z'),
+    decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z'),
+  })
+  const stale = ok({
+    id: 'aaa', gateResults: sourceGate('stale', '2026-09-01T00:00:00Z'),
+    decidedAt: D('2026-09-05T00:00:00Z'), createdAt: D('2026-09-05T00:00:00Z'),
+  })
+  const r = selectAutoTargets([stale, fresh], allPass)
+  check('🔴 더 최신 원문이 앞 — 큐 시각과 id가 반대여도 source time이 이긴다',
     r.targets.map((t) => t.id).join(',') === 'zzz,aaa')
   check('입력 순서를 바꿔도 같다',
-    selectAutoTargets([older, newer], allPass).targets.map((t) => t.id).join(',') === 'zzz,aaa')
-  // 🔴 후보 2건이면 오래된 1건만 나간다
+    selectAutoTargets([fresh, stale], allPass).targets.map((t) => t.id).join(',') === 'zzz,aaa')
+  // 🔴 후보 2건이면 최신 원문 1건만 나간다
   const g = judgeApply({ targets: r.targets, picked: r.targets[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT })
-  check('🔴 후보 2건이면 오래된 1건을 고른다', g.ok && g.target.id === 'zzz')
-  const t2 = selectAutoTargets([older, newer], allPass).targets
+  check('🔴 후보 2건이면 최신 원문 1건을 고른다', g.ok && g.target.id === 'zzz')
+  const t2 = selectAutoTargets([fresh, stale], allPass).targets
   const g2 = judgeApply({ targets: t2, picked: t2[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT })
   check('🔴 입력 순서가 바뀌어도 같은 1건을 고른다', g2.ok && g2.target.id === 'zzz')
 
-  check('decidedAt 이 없으면 createdAt 이 대신한다',
-    queueOrderKey(ok({ decidedAt: null, createdAt: D('2026-01-01T00:00:00Z') })) === D('2026-01-01T00:00:00Z').getTime())
-  check('시각이 같으면 id 로 가른다', compareAutoRow(
-    ok({ id: 'a', decidedAt: D('2026-09-01T00:00:00Z') }),
-    ok({ id: 'b', decidedAt: D('2026-09-01T00:00:00Z') }),
+  check('source time이 같으면 결정적 id로 가른다', compareAutoRow(
+    ok({ id: 'a', gateResults: sourceGate('a', '2026-09-05T00:00:00Z') }),
+    ok({ id: 'b', gateResults: sourceGate('b', '2026-09-05T00:00:00Z') }),
   ) < 0)
+  check('source time known이 unknown보다 앞선다', compareAutoRow(fresh, ok({ id: '000' })) < 0)
 
   const sp = pickPublishTarget({ ordered: r.targets, assignedOf: () => 'PXX' })
   check('선택 1건 + 대기 N건으로 나뉜다', sp.picked?.id === 'zzz' && sp.waiting.length === 1)
@@ -213,11 +224,11 @@ console.log('\n③-b 🔴 배정 없는 맨 앞 글 때문에 하루를 버리�
   //    맨 앞 글만 보고 멈췄기 때문이다. 이제는 **배정이 있는 첫 글**을 집는다.
   const D = (iso: string): Date => new Date(iso)
   const rows = selectAutoTargets([
-    ok({ id: 'first', decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') }),
-    ok({ id: 'second', decidedAt: D('2026-09-02T00:00:00Z'), createdAt: D('2026-09-02T00:00:00Z') }),
-    ok({ id: 'third', decidedAt: D('2026-09-03T00:00:00Z'), createdAt: D('2026-09-03T00:00:00Z') }),
+    ok({ id: 'first', gateResults: sourceGate('first', '2026-09-03T00:00:00Z'), decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') }),
+    ok({ id: 'second', gateResults: sourceGate('second', '2026-09-02T00:00:00Z'), decidedAt: D('2026-09-02T00:00:00Z'), createdAt: D('2026-09-02T00:00:00Z') }),
+    ok({ id: 'third', gateResults: sourceGate('third', '2026-09-01T00:00:00Z'), decidedAt: D('2026-09-03T00:00:00Z'), createdAt: D('2026-09-03T00:00:00Z') }),
   ], allPass).targets
-  check('줄은 오래된 순 그대로다', rows.map((t) => t.id).join(',') === 'first,second,third')
+  check('줄은 원문 최신 순 그대로다', rows.map((t) => t.id).join(',') === 'first,second,third')
 
   // 맨 앞이 생활사로 영구 차단(LIFE_BLOCKED) — 뒤 후보가 나간다
   const lifeBlocked = pickPublishTarget({ ordered: rows, assignedOf: (id) => (id === 'first' ? null : 'PXX') })
@@ -244,9 +255,9 @@ console.log('\n③-b 🔴 배정 없는 맨 앞 글 때문에 하루를 버리�
 
   // 🔴 입력 순서를 바꿔도 같은 글이 나간다
   const reordered = selectAutoTargets([
-    ok({ id: 'third', decidedAt: D('2026-09-03T00:00:00Z'), createdAt: D('2026-09-03T00:00:00Z') }),
-    ok({ id: 'first', decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') }),
-    ok({ id: 'second', decidedAt: D('2026-09-02T00:00:00Z'), createdAt: D('2026-09-02T00:00:00Z') }),
+    ok({ id: 'third', gateResults: sourceGate('third', '2026-09-01T00:00:00Z'), decidedAt: D('2026-09-03T00:00:00Z'), createdAt: D('2026-09-03T00:00:00Z') }),
+    ok({ id: 'first', gateResults: sourceGate('first', '2026-09-03T00:00:00Z'), decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') }),
+    ok({ id: 'second', gateResults: sourceGate('second', '2026-09-02T00:00:00Z'), decidedAt: D('2026-09-02T00:00:00Z'), createdAt: D('2026-09-02T00:00:00Z') }),
   ], allPass).targets
   check('🔴 입력 순서가 바뀌어도 같은 글을 낸다',
     pickPublishTarget({ ordered: reordered, assignedOf: (id) => (id === 'first' ? null : 'PXX') }).picked?.id === 'second')
@@ -259,13 +270,13 @@ console.log('\n③-b 🔴 배정 없는 맨 앞 글 때문에 하루를 버리�
   check('🔴 러너도 특정 id 를 박지 않는다', !/cm[a-z0-9]{20,}/.test(codeOf('scripts/original-post-auto-publish.mts')))
 }
 
-console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행이 먼저 나간다 (2026-09-07)')
+console.log('\n③-c 🔴 복구는 관측값 — 원문 최신 순을 뒤집지 않는다 (2026-10-19)')
 {
   const D = (iso: string): Date => new Date(iso)
   const rows = selectAutoTargets([
-    ok({ id: 'stuck', decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') }),
-    ok({ id: 'newer1', decidedAt: D('2026-09-02T00:00:00Z'), createdAt: D('2026-09-02T00:00:00Z') }),
-    ok({ id: 'newer2', decidedAt: D('2026-09-03T00:00:00Z'), createdAt: D('2026-09-03T00:00:00Z') }),
+    ok({ id: 'stuck', gateResults: sourceGate('stuck', '2026-09-03T00:00:00Z'), decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') }),
+    ok({ id: 'newer1', gateResults: sourceGate('newer1', '2026-09-02T00:00:00Z'), decidedAt: D('2026-09-02T00:00:00Z'), createdAt: D('2026-09-02T00:00:00Z') }),
+    ok({ id: 'newer2', gateResults: sourceGate('newer2', '2026-09-01T00:00:00Z'), decidedAt: D('2026-09-03T00:00:00Z'), createdAt: D('2026-09-03T00:00:00Z') }),
   ], allPass).targets
 
   // 🔴 기존 배정 행이 앞에 있고, 뒤에 신규 배정 행이 있다 → 기존 행이 우선이다
@@ -276,14 +287,14 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
   })
   check('🔴 기존 배정 행 뒤에 신규 배정 행이 있어도 기존 행이 먼저다', r1.picked?.id === 'stuck' && r1.recovered)
 
-  // 🔴 기존 배정 행이 **뒤에** 있어도 복구가 먼저다 — 그 persona 의 여력이 이미 묶여 있다
+  // 🔴 복구 행이 뒤에 있어도 원문 최신 순을 뒤집지 않는다
   const r2 = pickPublishTarget({
     ordered: rows,
     assignedOf: () => 'PXX',
     isRecovery: (id) => id === 'newer2',
   })
-  check('🔴 복구 행이 줄 뒤에 있어도 먼저 나간다', r2.picked?.id === 'newer2' && r2.recovered)
-  check('복구로 건너뛴 앞줄은 지워지지 않고 보고된다', r2.skipped.map((t) => t.id).join(',') === 'stuck,newer1')
+  check('🔴 뒤의 복구 행이 더 최신 원문을 추월하지 않는다', r2.picked?.id === 'stuck' && !r2.recovered)
+  check('복구 신호 때문에 앞줄을 건너뛰지 않는다', r2.skipped.length === 0)
 
   // 🔴 복구 행의 배정이 깨졌으면(assignedOf null) 복구 대상이 아니다 — 다음 배정 행이 나간다
   const r3 = pickPublishTarget({
@@ -293,9 +304,9 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
   })
   check('🔴 배정이 깨진 복구 행은 고르지 않는다', r3.picked?.id === 'newer1' && !r3.recovered)
 
-  // 🔴 복구 행이 없으면 예전과 같다 — 가장 오래된 배정 행
+  // 🔴 복구 행이 없으면 원문 최신 순 첫 배정 행
   const r4 = pickPublishTarget({ ordered: rows, assignedOf: () => 'PXX', isRecovery: () => false })
-  check('복구 행이 없으면 가장 오래된 배정 행이 나간다', r4.picked?.id === 'stuck' && !r4.recovered)
+  check('복구 행이 없으면 가장 최신 원문 배정 행이 나간다', r4.picked?.id === 'stuck' && !r4.recovered)
 
   // 🔴 한 회차 1건은 그대로다
   check('🔴 복구여도 한 회차 1건이다', r2.skipped.length + 1 + r2.waiting.length === rows.length)
@@ -594,9 +605,9 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
     return r.targets.length === 1 && r.targets[0]!.id === 'm-new'
       && r.rejected.some((x) => x.id === 'm-old' && x.code === 'HUMAN_REVIEW_REQUIRED')
   })())
-  check('🟢 검토 완료본이 여럿이면 오래 기다린 것이 먼저다', (() => {
-    const a = mach({ id: 'm-a', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-02T00:00:00Z') })
-    const b = mach({ id: 'm-b', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-05T00:00:00Z') })
+  check('🟢 검토 완료본이 여럿이어도 최신 원문이 먼저다', (() => {
+    const a = mach({ id: 'm-a', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-02T00:00:00Z'), gateResults: { autoDraft: MACHINE_GATE, ...sourceGate('m-a', '2026-09-05T00:00:00Z') } })
+    const b = mach({ id: 'm-b', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-05T00:00:00Z'), gateResults: { autoDraft: MACHINE_GATE, ...sourceGate('m-b', '2026-09-01T00:00:00Z') } })
     return sel([b, a]).targets[0]!.id === 'm-a'
   })())
 
@@ -705,22 +716,24 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
     /back\.decidedAt\.getTime\(\) !== input\.now\.getTime\(\)/.test(revLib)
     && /RollbackSignal\('stampMissing'/.test(revLib))
 
-  // ── ② 자동 발행 정렬이 **실제 사람 검토 순서**를 쓴다 ──
-  check('🟢 정렬 근거가 decidedAt 이다', (() => {
-    const machineLoaded = m2({ id: 'old-load', decidedAt: new Date('2026-09-01T00:00:00Z') })
-    // 🔴 같은 행이 사람 검토로 decidedAt 이 갱신된 모습
-    const afterReview = m2({ id: 'old-load', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-14T09:00:00Z') })
-    return queueOrderKey(machineLoaded) !== queueOrderKey(afterReview)
-      && queueOrderKey(afterReview) === new Date('2026-09-14T09:00:00Z').getTime()
+  // ── ② 자동 발행 정렬은 검토 시각이 아니라 **실제 원문 게시 시각**을 쓴다 ──
+  check('🟢 decidedAt 변경만으로 줄 순서가 바뀌지 않는다', (() => {
+    const gate = { autoDraft: MACHINE_GATE2, ...sourceGate('same-source', '2026-09-12T00:00:00Z') }
+    const before = m2({ id: 'same', decidedAt: new Date('2026-09-01T00:00:00Z'), gateResults: gate })
+    const after = m2({ id: 'same', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-14T09:00:00Z'), gateResults: gate })
+    return compareAutoRow(before, after) === 0
   })())
-  check('🟢 [요구] 오래된 기계 적재 시각이 founder 검토 시각으로 교체되면 줄 뒤로 간다', (() => {
-    // A: 기계 적재 09-01 → 사람이 09-14 에 검토 → decidedAt 09-14
-    const a = m2({ id: 'm-a', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-14T09:00:00Z') })
-    // B: 기계 적재 09-05 → 사람이 09-10 에 검토 → decidedAt 09-10
-    const b = m2({ id: 'm-b', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-10T09:00:00Z') })
+  check('🟢 [요구] founder 검토 시각이 늦어도 더 최신 원문이 먼저다', (() => {
+    const a = m2({
+      id: 'm-a', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-14T09:00:00Z'),
+      gateResults: { autoDraft: MACHINE_GATE2, ...sourceGate('m-a', '2026-09-15T00:00:00Z') },
+    })
+    const b = m2({
+      id: 'm-b', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-10T09:00:00Z'),
+      gateResults: { autoDraft: MACHINE_GATE2, ...sourceGate('m-b', '2026-09-11T00:00:00Z') },
+    })
     const r = selectAutoTargets([a, b], allPass)
-    // 🔴 적재 순서(A 가 먼저)가 아니라 **검토 순서**(B 가 먼저)로 나간다
-    return r.targets.length === 2 && r.targets[0]!.id === 'm-b'
+    return r.targets.length === 2 && r.targets[0]!.id === 'm-a'
   })())
 
   // ── ③ 스냅샷 보호 — 하나라도 바뀌면 founder 를 붙이지 않는다 ──

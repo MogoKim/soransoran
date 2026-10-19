@@ -50,32 +50,9 @@ export type PublishLane = 'auto' | 'human'
 export const laneOf = (decidedBy: string | null): PublishLane =>
   (decidedBy ?? '').trim() === AUTO_DECIDER ? 'auto' : 'human'
 
-/**
- * 🔴 **이번 회차에 앞세울 lane** (2026-09-28 마스터 정책 · 순수). 두 lane 이 모두 대기 중일 때만 고른다.
- *    · 발행 이력이 없는 lane 이 먼저다 — 둘 다 없으면 auto(첫 자동 행 우선)
- *    · 둘 다 있으면 **가장 최근에 발행되지 않은**(마지막 발행이 더 오래된) lane
- *    d1 에서는 날마다, d3 이상에서는 슬롯마다 번갈아 나간다 — 한 번 나가면 그 lane 이 최근이 되기 때문이다.
- *    🔴 한 lane 만 대기 중이면 `null`(기존 순서 그대로). 상한 · 슬롯 · 트랜잭션은 이 값과 무관하다.
- */
-export function preferredLane(input: {
-  waiting: ReadonlySet<PublishLane>
-  lastPublishedAt: { auto: Date | null; human: Date | null }
-}): PublishLane | null {
-  if (!input.waiting.has('auto') || !input.waiting.has('human')) return null
-  const { auto, human } = input.lastPublishedAt
-  if (auto === null) return 'auto'
-  if (human === null) return 'human'
-  return auto.getTime() <= human.getTime() ? 'auto' : 'human'
-}
-
 export type LoadedStock = {
   /** 대기열 전체 (APPROVED·EDITED · 미발행) */
   queueTotal: number
-  /**
-   * 🔴 (2026-09-28) lane 별 마지막 발행 시각 — Post 생성 시각 기준. 없으면 `null`(이력 0).
-   *    fixture 가 주지 않으면 둘 다 이력 0 으로 본다.
-   */
-  laneLastPublishedAt?: { auto: Date | null; human: Date | null }
   /**
    * 🔴 (2026-09-29) 오늘(KST) 자동 target 발행 수 — 자동 READY(`AUTO_DECIDER`) 행이 **무인 표식**으로 나간 것만.
    *    단계 증명일의 "N 슬롯을 자동이 먼저" 가 이 값으로 남은 자리를 센다. fixture 가 주지 않으면 0.
@@ -196,20 +173,6 @@ export async function loadPublishableStock(
     .map(([code, ids]) => ({ code, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count)
 
-  /** 🔴 lane 별 마지막 발행 — 발행된 큐 행의 Post 생성 시각. 읽기만 한다 */
-  const publishedRows = await prisma.originalPostApprovalQueue.findMany({
-    where: { createdPostId: { not: null } },
-    select: { decidedBy: true, createdPost: { select: { createdAt: true } } },
-  })
-  const laneLastPublishedAt: { auto: Date | null; human: Date | null } = { auto: null, human: null }
-  for (const p of publishedRows) {
-    const at = p.createdPost?.createdAt ?? null
-    if (at === null) continue
-    const l = laneOf(p.decidedBy)
-    const cur = laneLastPublishedAt[l]
-    if (cur === null || at.getTime() > cur.getTime()) laneLastPublishedAt[l] = at
-  }
-
   const personaRows = await prisma.persona.findMany({
     where: { status: 'active' }, select: PERSONA_FOR_MATCH_SELECT,
   })
@@ -267,7 +230,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId, allRows: rows, pinnedAutoPersona, laneLastPublishedAt, autoTargetsToday,
+    codeOfPersonaId, allRows: rows, pinnedAutoPersona, autoTargetsToday,
   }
 }
 
@@ -457,7 +420,7 @@ export function jitCoverageOf(
   const scale = view.resolved.scale
   const slots = upcomingSlots({ now, publishedToday: view.loaded.publishedToday, release: scale.releaseProfile })
   /**
-   * 🔴 **자동 READY 만 센다** (2026-10-04 P0-2 보정). 사람 승인 READY 는 발행 러너의 공정성(`preferredLane`)에는 남지만
+   * 🔴 **자동 READY 만 센다** (2026-10-04 P0-2 보정). 사람 승인 READY 는 정상 발행 후보지만
    *    자동 단계 증명 물량이 아니다(canon §6) — 사람 글이 슬롯을 덮었다고 자동 공급을 닫지 않는다.
    */
   const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.releaseProfile), now, autoOnly: true })
@@ -503,19 +466,12 @@ export function planPublishBatch(input: {
   loaded: LoadedStock
   caps: Parameters<typeof prepareCandidates>[0]['caps']
   at: Date
-  /**
-   * 🔴 **단계 증명일에 자동 target 이 더 필요한 수** (`autoFirstNeeded` · 2026-09-29 마스터 결정).
-   *    0 보다 크면 auto lane 이 **복구 행까지 포함해** 앞선다 — 사람 승인 행은 그 자리를 먼저 차지하지 못한다.
-   *    auto 후보가 없으면 기존 순서대로 사람 행이 나갈 수 있다(물량은 증거가 세지 않는다).
-   *    주지 않거나 0 이면 기존 공정성 그대로다.
-   */
-  proofAutoNeeded?: number
 }): PublishPlan {
   const { loaded } = input
   /**
    * 🔴 **기존 배정 자동 행을 발행 트랜잭션과 같은 판정으로 먼저 본다** (2026-09-25 마스터 P0).
-   *    막히는 행을 줄에 두면 "복구 먼저" 규칙이 그 행을 매 회차 선두에 세운다 —
-   *    트랜잭션은 막고, 러너는 멈추고, 뒤의 정상 행은 영원히 나가지 못한다.
+   *    막히는 행을 줄에 두면 신선도 순위에서 앞선 행이 매 회차 다시 선택될 수 있다 —
+   *    트랜잭션은 막고, 러너는 멈추고, 뒤의 정상 행이 나가지 못한다.
    *    그래서 그 행만 이번 줄에서 뺀다. 배정은 그대로 두고 다른 Persona 로 바꾸지 않는다.
    */
   const autoDeferred: { id: string; codes: string[] }[] = []
@@ -530,19 +486,9 @@ export function planPublishBatch(input: {
   }
   const blocked = new Set([...autoDeferred, ...autoExceptions].map((x) => x.id))
   const targets = loaded.targets.filter((t) => !blocked.has(t.id))
-  /** 🔴 lane 공정성 — 두 lane 이 모두 대기 중이면 가장 최근에 발행되지 않은 lane 을 앞세운다 */
-  const laneById = new Map(targets.map((t) => [t.id, laneOf(t.decidedBy)]))
-  const autoFirst = (input.proofAutoNeeded ?? 0) > 0
-  const lane: PublishLane | null = autoFirst ? 'auto' : preferredLane({
-    waiting: new Set(targets.map((t) => laneById.get(t.id)!)),
-    lastPublishedAt: loaded.laneLastPublishedAt ?? { auto: null, human: null },
-  })
   const prepared = prepareCandidates({
     candidates: loaded.queueCandidates.filter((c) => !blocked.has(c.queueId)), personas: loaded.personas as never,
     caps: input.caps, at: input.at,
-    ...(lane === null ? {} : { preferLane: (id: string) => laneById.get(id) === lane }),
-    // 🔴 증명일 — 사람 복구 행도 자동 target 앞에 서지 못한다
-    ...(autoFirst ? { laneBeforeRecovery: true } : {}),
   })
   const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
   const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
@@ -562,12 +508,8 @@ export function planPublishBatch(input: {
     : pickPublishTarget({
       ordered: freshOrdered,
       assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
-      /**
-       * 🔴 증명일에는 **auto 복구 행만** 먼저 올린다. `pickPublishTarget` 의 "복구 먼저" 는 줄 순서를 무시하고
-       *    복구 행을 앞세우므로, 그대로 두면 사람 복구 행이 자동 target 슬롯을 차지한다(격리 DB 반례).
-       *    사람 복구 행은 배정을 그대로 둔 채 자동 행 뒤에서 기다린다 — 목표를 채우면 기존 규칙대로 복구된다.
-       */
-      isRecovery: (id) => assignOf.get(id)?.recovery === true && (!autoFirst || laneById.get(id) === 'auto'),
+      /** 복구 여부는 보고용일 뿐 선택 순서를 바꾸지 않는다. */
+      isRecovery: (id) => assignOf.get(id)?.recovery === true,
     })
   return {
     prepared, assignOf, freshOrdered, brokenRecovery, assignmentReady,

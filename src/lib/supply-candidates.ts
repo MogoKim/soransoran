@@ -100,8 +100,8 @@ const scoreFrom = (plan: BatchPlan, id: string): number => {
  *
  *    ① `at`(예정 슬롯)에서 정본 판정 — 배정은 아직이다(`pending`). eligible 이 아니면 뺀다(held)
  *       🔴 hard gate 는 부르는 쪽 선택기(`selectAutoTargets`)가 이미 통과시킨 행만 온다 — 결과를 그대로 넘긴다
- *    ② 발행 순서 — **복구(기존 배정) 행 먼저**, 그다음 정본 rank 사전식 비교(`compareReleaseRank`)
- *       🔴 복구도 판정을 면제받지 않는다 — 상했으면 ①에서 이미 빠졌다
+ *    ② 발행 순서 — **compareReleaseRank 하나(신선도 1순위)** (2026-10-19 창업자/Codex).
+ *       📜 2026-09-28 "복구 먼저 · lane 우선" 은 superseded — observation 축으로만 보존한다.
  *    ③ 그 순서를 우선권으로 넘겨 최대 매칭
  *    ④ 배정 결과까지 넣어 **같은 함수로 최종 판정**을 남긴다(배정 불가 → `NO_PERSONA_AT_SLOT`)
  *
@@ -113,21 +113,9 @@ export function prepareCandidates(input: {
   caps?: BatchCaps
   /** 🔴 기준 시각 = 예정 슬롯. 러너는 지금(도래 슬롯을 지금 채운다), 예측은 그 날 */
   at: Date
-  /**
-   * 🔴 **발행 lane 공정성** (2026-09-28 마스터 정책) — 참이면 이번 회차에 앞세울 lane 의 행이다.
-   *    판정 순서 안에서 **복구 행 → 앞세울 lane → 나머지 lane** 으로 안정 분할한다(각 묶음 안 순서 불변).
-   *    🔴 주지 않으면 기존 동작 그대로다. 발행 권한(슬롯 · 상한 · 트랜잭션)은 바꾸지 않는다.
-   */
-  preferLane?: (queueId: string) => boolean
-  /**
-   * 🔴 **단계 증명일** (2026-09-29) — 참이면 앞세울 lane 이 **복구 행보다도** 먼저다.
-   *    `preferLane` 이 없으면 아무 일도 하지 않는다.
-   */
-  laneBeforeRecovery?: boolean
 }): PreparedCandidates {
   const caps = input.caps ?? {}
   const at = input.at
-  const isRecovery = (c: QueueCandidate): boolean => (c.assignedPersonaCode ?? '').trim() !== ''
 
   // ── ① 정본 판정 — 예정 슬롯 시각으로 · 배정은 아직 ──
   const first = new Map<string, SlotReleaseVerdict>()
@@ -156,20 +144,9 @@ export function prepareCandidates(input: {
     voice: c.voice, profile: c.profile,
   })
 
-  // ── ② 발행 순서 — 복구 먼저 · 그다음 정본 rank ──
-  const byRank = [...keep].sort((a, b) => compareReleaseRank(first.get(a.queueId)!.rank, first.get(b.queueId)!.rank))
-  const fresh = [...byRank.filter(isRecovery), ...byRank.filter((c) => !isRecovery(c))]
-  const pref = input.preferLane
-  const ordered = pref === undefined ? fresh : input.laneBeforeRecovery === true ? [
-    ...fresh.filter((c) => pref(c.queueId) && isRecovery(c)),
-    ...fresh.filter((c) => pref(c.queueId) && !isRecovery(c)),
-    ...fresh.filter((c) => !pref(c.queueId) && isRecovery(c)),
-    ...fresh.filter((c) => !pref(c.queueId) && !isRecovery(c)),
-  ] : [
-    ...fresh.filter((c) => isRecovery(c)),
-    ...fresh.filter((c) => !isRecovery(c) && pref(c.queueId)),
-    ...fresh.filter((c) => !isRecovery(c) && !pref(c.queueId)),
-  ]
+  // ── ② 발행 순서 — 🔴 2026-10-19 창업자/Codex 결정: 복구·lane 선호가 **source rank 를 뒤집지 않는다** ──
+  //    자격 gate 뒤에는 compareReleaseRank(신선도 1순위) 하나로 세운다. 더 신선한 글이 lane·recovery 보다 앞선다.
+  const ordered = [...keep].sort((a, b) => compareReleaseRank(first.get(a.queueId)!.rank, first.get(b.queueId)!.rank))
   const rank = new Map(ordered.map((c, i) => [c.queueId, i]))
 
   // ── ③ 우선권을 반영한 최대 매칭 ──

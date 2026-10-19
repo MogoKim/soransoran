@@ -215,11 +215,23 @@ export const SYSTEM_PROMPT = [
   '',
   '🔴 **위 목록에 없으면 위험이 아니다.** 자극적이거나 화제성이 있다는 이유로 막지 않는다.',
   '',
+  '🔴 **게시판 중심 주제(boardTopic)** — 글의 **중심 주제**가 무엇이냐를 둘 중 하나로 적는다.',
+  '    🔴 **화자 본인/가족/제3자 여부와 무관하다.** 글의 **중심**이 갱년기 자체면 MENOPAUSE 다 — 화자가 겪는 중이든, 가족이 겪어 그 중심이 그 변화·치료·일상 변화에 있든 상관없다.',
+  '- MENOPAUSE: 글의 중심이 **갱년기/폐경/호르몬 변화 그 자체** 또는 그와 직접 묶인 증상·치료·생활·관계·일 경험이다',
+  '    예: "요즘 안면홍조·불면이 심해 호르몬 치료를 받을까 고민입니다"',
+  '    예: "갱년기 들어서 남편과 사이가 틀어졌는데"',
+  '    예: "엄마가 갱년기 호르몬 치료를 받고 몸이 많이 상하셨는데" (중심이 가족의 갱년기 변화·치료)',
+  '- FREE: 그 밖의 모든 글. **단순 언급**(truly incidental mention)은 FREE 다 — 갱년기 낱말이 지나가듯 한 번 나와도 중심이 아니면 FREE',
+  '    예: "주말에 전시회 갔다왔는데 (갱년기 때문에 땀이 좀 났지만) 오랜만에 좋았어요" (중심은 전시회)',
+  '    예: 요리·절약·여행·연예·가족 갈등 등',
+  '🔴 **출처 사이트로 추론하지 않는다** — remonterrace 라고 자동 MENOPAUSE 가 아니고 wgang 이라고 자동 FREE 가 아니다. 글의 중심이 무엇인가만 본다.',
+  '',
   'JSON 만 답한다:',
   '{"decision":"AUTO_SEED|AUTO_RAW|AUTO_HOLD|AUTO_DROP",',
   ' "confidence":0.0~1.0,',
   ' "risks":["위 이름 중 해당하는 것. 없으면 빈 배열"],',
-  ' "communityAngle":"우리 커뮤니티에서 어떤 이야기가 될지 한 줄. 40자 이내"}',
+  ' "communityAngle":"우리 커뮤니티에서 어떤 이야기가 될지 한 줄. 40자 이내",',
+  ' "boardTopic":"MENOPAUSE 또는 FREE"}',
 ].join('\n')
 
 /** 🔴 보내는 것이 이게 전부다. 전문 필드가 없다 */
@@ -351,6 +363,8 @@ const CACHE_PATH = join(DATA_DIR, 'auto-judge-cache.json')
 type CacheEntry = {
   decision: string; confidence: number | null; semanticRisks: string[]
   communityAngle: string; semanticStatus: string; attemptCount: number
+  /** 🔴 2026-10-19 — 중심 주제 (MENOPAUSE|FREE). parseSemantic 실패로 null 일 수 있다 */
+  boardTopic: 'MENOPAUSE' | 'FREE' | null
 }
 /**
  * 🔴 캐시 열쇠 — **원천 (사이트, id)** 를 담는다(2026-09-30 야간 P0-B). 앞판은 id 만 담아 같은 번호 다른 사이트 글이
@@ -476,9 +490,10 @@ async function main(): Promise<void> {
     if (c !== undefined) {
       hit += 1
       outcome = {
-        verdict: c.semanticStatus === 'ok'
+        verdict: c.semanticStatus === 'ok' && c.boardTopic !== null
           ? { decision: c.decision as never, confidence: c.confidence ?? 0,
-            risks: c.semanticRisks as never[], communityAngle: c.communityAngle }
+            risks: c.semanticRisks as never[], communityAngle: c.communityAngle,
+            boardTopic: c.boardTopic }
           : null,
         status: c.semanticStatus as SemanticStatus,
         attemptCount: c.attemptCount, providerErrorCode: null, model: JUDGE_MODEL,
@@ -492,6 +507,7 @@ async function main(): Promise<void> {
         cache.set(k, {
           decision: outcome.verdict?.decision ?? '', confidence: outcome.verdict?.confidence ?? null,
           semanticRisks: outcome.verdict?.risks ?? [], communityAngle: outcome.verdict?.communityAngle ?? '',
+          boardTopic: outcome.verdict?.boardTopic ?? null,
           semanticStatus: outcome.status, attemptCount: outcome.attemptCount,
         })
       }
@@ -534,9 +550,10 @@ async function main(): Promise<void> {
       if (c !== undefined) {
         hit += 1
         outcome = {
-          verdict: c.semanticStatus === 'ok'
+          verdict: c.semanticStatus === 'ok' && c.boardTopic !== null
             ? { decision: c.decision as never, confidence: c.confidence ?? 0,
-              risks: c.semanticRisks as never[], communityAngle: c.communityAngle }
+              risks: c.semanticRisks as never[], communityAngle: c.communityAngle,
+              boardTopic: c.boardTopic }
             : null,
           status: c.semanticStatus as SemanticStatus,
           attemptCount: c.attemptCount, providerErrorCode: null, model: JUDGE_MODEL,
@@ -548,6 +565,7 @@ async function main(): Promise<void> {
           cache.set(k, {
             decision: outcome.verdict?.decision ?? '', confidence: outcome.verdict?.confidence ?? null,
             semanticRisks: outcome.verdict?.risks ?? [], communityAngle: outcome.verdict?.communityAngle ?? '',
+            boardTopic: outcome.verdict?.boardTopic ?? null,
             semanticStatus: outcome.status, attemptCount: outcome.attemptCount,
           })
         }

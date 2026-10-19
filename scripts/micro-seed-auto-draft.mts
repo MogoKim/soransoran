@@ -239,6 +239,8 @@ function jsonl(path: string): Record<string, unknown>[] {
 type JudgeProv = {
   ruleVersion: string; promptVersion: string; model: string
   inputHash: string; provenance: string
+  /** 🔴 2026-10-19 창업자 — 중심 주제. publish tx 가 이 값으로 boardType 을 라우팅한다 (null 은 fail-closed) */
+  boardTopic: 'MENOPAUSE' | 'FREE' | null
 }
 /** 🔴 원천 열쇠(사이트, id) → 판정 출처 */
 const seedProv = new Map<string, JudgeProv>()
@@ -292,9 +294,13 @@ function loadAutoSeeds(metas: ReadonlyMap<string, Meta>): Judgement[] {
       sourceSite: site, sourceArticleId: id, decision: S(r.decision),
       semanticRisks: Array.isArray(r.semanticRisks) ? r.semanticRisks.map(String) : [],
     })
+    // 🔴 2026-10-19 창업자 — boardTopic 을 shadow 기록 → provenance 로 이관한다. enum 밖은 null (publish tx fail-closed)
+    const btRaw = S(r.boardTopic)
+    const bt: 'MENOPAUSE' | 'FREE' | null = btRaw === 'MENOPAUSE' || btRaw === 'FREE' ? btRaw : null
     seedProv.set(key, {
       ruleVersion: S(r.ruleVersion), promptVersion: S(r.promptVersion),
       model: S(r.model), inputHash: S(r.inputHash), provenance: S(r.provenance),
+      boardTopic: bt,
     })
   }
   return [...byKey.values()].filter((j) => j.decision === 'AUTO_SEED')

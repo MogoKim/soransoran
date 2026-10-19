@@ -257,8 +257,18 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     ['수집 완료가 공급을 깨운다', '공개 commit 이 첫 댓글을 깨운다', 'fallback', '실행 lease/token',
       'coalescing', 'exactly-once 시스템을 새로 만들지 않는다'].every((t) => d100Goal.includes(t))])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
-    d100Goal.includes('hard safety/truth -> 대화 가치·품질 -> 신선도 -> 갱년기 적합성 -> 우아한갱년기 출처 -> 결정적 tie')
+    d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')
+    && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')
+    && d100Goal.includes('출처별 우대 없음')
+    && d100Goal.includes('주제형 숫자 보너스 없음')
     && d100Goal.includes('`jjong 10 + humor 1`')])
+  out.push(['canon §7 이 게시판을 중심 주제로만 라우팅하고 호환 경계를 닫는다',
+    d100Goal.includes('게시판 라우팅 — 중심 주제 하나')
+    && d100Goal.includes('중심 주제**를 `MENOPAUSE`')
+    && d100Goal.includes('그 밖에는 자유게시판')
+    && d100Goal.includes('갱년기톡 편수 quota·예약석·숫자 보너스를 만들지 않는다')
+    && d100Goal.includes('실제로 운영됐던 호환 판은 `auto-judge-v3` 하나다')
+    && d100Goal.includes('손상됐거나 모르는/미래 판이면')])
   out.push(['canon §2.1 이 날짜만 아는 게시 시각을 00:00 으로 지어내지 않는다',
     d100Goal.includes('날짜만 아는 게시 시각을 그날 00:00 으로 지어내지 않는다')])
   out.push(['canon §4.1 이 유료 생성 전 코드의 Persona 확정을 적는다',

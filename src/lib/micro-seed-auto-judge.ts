@@ -36,14 +36,15 @@ export const HUMAN_PROVENANCE = ['human-curated', 'founder'] as const
 /** 규칙을 고치면 올린다 — 어느 판이 내린 결정인지 나중에 알 수 있어야 한다 */
 // 🔴 v2 — Semantic Shadow. v1 결과와 섞이지 않게 판을 올린다
 // 🔴 v3 — 정책 taxonomy 가 모델 decision 을 이긴다. v2 캐시와 섞이지 않는다
-export const RULE_VERSION = 'auto-judge-v3'
+// 🔴 v4 (2026-10-19) — SemanticVerdict 에 boardTopic(MENOPAUSE|FREE) 추가. 중심 주제 판정이 저장 공간에
+//   저장되기 전에는 publish tx 가 라우팅할 신호가 없었다. v3 캐시에는 boardTopic 이 없으므로 섞이지 않는다.
+export const RULE_VERSION = 'auto-judge-v4'
 /** 프롬프트를 고치면 올린다 — 같은 규칙판이라도 물음이 달라지면 답이 달라진다 */
 /**
- * 🔴 **v2c** (2026-09-16) — 위해 축에 `crisisSignal` · `medicalDecisionRequest` ·
- *    `healthEfficacyClaim` 셋을 더했다. 프롬프트가 바뀌었으므로 판을 올린다 —
- *    올리지 않으면 옛 판정이 캐시에서 그대로 hit 된다.
+ * 🔴 **v3** (2026-10-19) — JSON 응답에 boardTopic 을 필수로 요구한다. v2c 응답에는 그 칸이 없어
+ *    parseSemantic 이 null 로 거부하므로, 판을 올려 캐시가 섞이지 않게 한다.
  */
-export const PROMPT_VERSION = 'semantic-shadow-v2c'
+export const PROMPT_VERSION = 'semantic-shadow-v3'
 
 /** 🔴 이 값으로 기록한다. 사람 것과 한 글자도 겹치지 않는다 */
 export const AUTO_PROVENANCE = 'machine-shadow'
@@ -376,6 +377,8 @@ export type Judgement = {
   confidence: number | null
   semanticRisks: string[]
   communityAngle: string
+  /** 🔴 2026-10-19 — 중심 주제. semantic 이 null 로 떨어진 경우 null (publish tx 에서 current provenance 라면 fail-closed) */
+  boardTopic: BoardTopic | null
   attemptCount: number
   semanticStatus: SemanticStatus
   providerErrorCode: string | null
@@ -438,12 +441,18 @@ export function readFlags(flags: readonly string[]): ReasonCode[] {
   return out
 }
 
+/** 🔴 2026-10-19 — 게시판 중심 주제. 글의 중심이 갱년기/폐경/호르몬 변화 그 자체면 MENOPAUSE, 단순 언급은 FREE */
+export const BOARD_TOPICS = ['MENOPAUSE', 'FREE'] as const
+export type BoardTopic = (typeof BOARD_TOPICS)[number]
+
 /** 🔴 semantic judge 가 돌려주는 것 — 모양이 어긋나면 HOLD 다 */
 export type SemanticVerdict = {
   decision: AutoDecision
   confidence: number
   risks: SemanticRisk[]
   communityAngle: string
+  /** 🔴 2026-10-19 창업자 — 중심 주제. parseSemantic 이 'MENOPAUSE'|'FREE' 가 아니면 전체를 null 로 거부(HOLD) */
+  boardTopic: BoardTopic
 }
 
 /**
@@ -470,10 +479,14 @@ export function parseSemantic(rawText: string): SemanticVerdict | null {
     if ((SEMANTIC_RISKS as readonly string[]).includes(r)) risks.push(r as SemanticRisk)
     else risks.push('insufficientContext')
   }
+  // 🔴 2026-10-19 — boardTopic 은 필수 enum. 누락·unknown 은 null (호출부가 HOLD 로 보낸다).
+  const bt = String(j.boardTopic ?? '')
+  if (!(BOARD_TOPICS as readonly string[]).includes(bt)) return null
   return {
     decision: d as AutoDecision, confidence: conf,
     risks: [...new Set(risks)],
     communityAngle: String(j.communityAngle ?? '').slice(0, 120),
+    boardTopic: bt as BoardTopic,
   }
 }
 
@@ -565,6 +578,7 @@ export function judgeOne(
     confidence: semantic === null ? null : semantic.confidence,
     semanticRisks: semantic === null ? [] : [...semantic.risks],
     communityAngle: semantic === null ? '' : semantic.communityAngle,
+    boardTopic: semantic === null ? null : semantic.boardTopic,
     attemptCount: outcome.attemptCount,
     semanticStatus: outcome.status,
     providerErrorCode: outcome.providerErrorCode,

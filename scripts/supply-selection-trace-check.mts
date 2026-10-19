@@ -6,7 +6,7 @@
  *
  * 공급 러너와 **같은 연결**(생성 가능 판정 → `selectWorkset({ jit })` → `buildSupplySelectionTrace`)로 다음을 고정한다.
  *   ① trace 를 넘기든 안 넘기든 슬롯 배정 · 묶음 · 순서 · digest 가 같다(무작위 50벌)
- *   ② 원천이 멈춘 단계가 서로 다른 사유로 적힌다 · 신규 우선/재시도 보충 표시 · 부류 안 순위 역전 0 · 동률 선호 횟수
+ *   ② 원천이 멈춘 단계가 서로 다른 사유로 적힌다 · 재시도 관측 표시 · 신선도 순위 역전 0 · 동률 선호 횟수
  *   ③ 판정은 원래 나이로(반올림 없음) · 원문 · 제목 · id 평문 없음 · 손상 기록을 정상으로 읽지 않는다
  *   ④ v1 기록(P0-B0)을 계속 읽는다 · 실패가 되풀이 호출 · 중복 write 를 만들지 않는다
  */
@@ -137,7 +137,7 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
   check(`① 무작위 ${N}벌이 여러 단계를 실제로 지난다 — ${[...seen].sort().join(' · ')}`, wanted.every((w) => seen.has(w)), wanted.filter((w) => !seen.has(w)).join(','))
 }
 
-// ── ② 단계 사유 · 신규 우선/재시도 보충 표시 ──
+// ── ② 단계 사유 · 재시도 관측 표시 ──
 {
   const done = ROW({ id: 'st-done', ageH: 5, cp: 0.9, title: '갱년기 열감 이야기' })
   const raw = ROW({ id: 'st-raw', ageH: 5, cp: 0.99, axis: 'raw', site: WG })
@@ -161,11 +161,18 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
   const p5 = new Date(NOW.getTime() - 5 * H)
   const tie = [ROW({ id: 'pf-plain', posted: p5, cp: 0.7 }), ROW({ id: 'pf-meno', posted: p5, cp: 0.7, title: '갱년기 이야기' }), ROW({ id: 'pf-wg', posted: p5, cp: 0.7, site: WG })]
   const pt = pipeline({ rows: tie, slots: [S1], cap: 1, traced: true }).trace!
-  check('② 정본 rank 동률에서만 갱년기 · wgang 이 순서를 정한 횟수를 센다(갱년기 1 · wgang 1)',
-    pt.summary.preferenceDecided.menopause === 1 && pt.summary.preferenceDecided.wgang === 1 && byId(pt, RT, 'pf-meno')!.selected,
+  // 🔴 2026-10-19 창업자 결정: 공급 순위에서 주제·출처 선호 제거. 선택은 결정적 열쇠(sk.key) 로만 간다 —
+  //    `preferenceDecided` 는 trace 가 보존한 shadow 지표로, rank 동률 adjacent 쌍에서 선호 축이 다른
+  //    경우를 그대로 센다(≥1 이상 관측 가능하면 shadow 가 살아 있는 것이다).
+  check('② 공급 순위 동률에서 선택은 결정적 열쇠로 — 열쇠 lex 가장 작은 pf-meno 가 선택',
+    byId(pt, RT, 'pf-meno')!.selected && !byId(pt, RT, 'pf-plain')!.selected && !byId(pt, WG, 'pf-wg')!.selected,
+    JSON.stringify({ selected: tie.map((r) => ({ id: r.sourceArticleId, selected: byId(pt, r.sourceSite as typeof RT | typeof WG, r.sourceArticleId)?.selected })) }))
+  check('② preferenceDecided 는 shadow 로 남아 rank-tied 쌍의 주제·출처 차이를 센다 — 적어도 한 쌍 관측',
+    pt.summary.preferenceDecided.menopause + pt.summary.preferenceDecided.wgang >= 1,
     JSON.stringify(pt.summary.preferenceDecided))
   const nt = pipeline({ rows: [ROW({ id: 'nt-hi', ageH: 3, cp: 0.9 }), ROW({ id: 'nt-lo', ageH: 3, cp: 0.5, title: '갱년기 이야기', site: WG })], slots: [S1], cap: 1, traced: true }).trace!
-  check('② 품질이 다르면 선호가 순서를 정한 횟수 0 — 그대로 0 으로 적는다', nt.summary.preferenceDecided.menopause === 0 && nt.summary.preferenceDecided.wgang === 0)
+  check('② 반응이 다르면 rank 동률이 아니라 선호 쌍 0 — 그대로 0 으로 적는다',
+    nt.summary.preferenceDecided.menopause === 0 && nt.summary.preferenceDecided.wgang === 0)
 }
 
 // ── ③ 원래 값 ──

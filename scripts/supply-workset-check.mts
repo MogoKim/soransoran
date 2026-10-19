@@ -15,7 +15,7 @@ import {
   concludedSourceKeys, attemptedOutcomes, latestOutcomes, parseInstantMs, humanDecisionIndexOf, sourceKeyOf,
   humanDecisionFor, artifactRecordOutcome, WORKSET_VERSION_LEGACY,
   worksetAxisCaps, worksetAxisOf, worksetAxisQuota, WORKSET_RAW_SLOT_EVERY,
-  OUTCOME_STATES, CONCLUDED_STATES, STAGE_RANK, worksetRetryReserve, WORKSET_RETRY_STARVE_MS,
+  OUTCOME_STATES, CONCLUDED_STATES, STAGE_RANK,
   attributeRuns, runWindowOf, isLaterOutcome, runClockOf, retryTierOf, resolveWorksetLimit,
   queuedSourceKeysOf, hasSource, originalSourceOf, EMPTY_SOURCE_KEYS, WORKSET_MAX_LIMIT,
   shadowRecordOutcome,
@@ -114,8 +114,7 @@ const ROW = (o: {
 const NOW = new Date('2026-09-20T12:00:00Z')
 const RUN = '20260920-120000'
 /**
- * 🔴 이미 본 원천은 **언제 봤는지**가 함께 필요하다 — 오래 기다린 것부터 집기 때문이다.
- *    문자열만 주면 `NOW` 직전에 본 것으로 둔다.
+ * 이미 본 원천의 마지막 결과 시각을 관측용으로 보존한다. 선택 순서는 source rank가 정한다.
  */
 const attemptedMap = (
   v: readonly string[] | Readonly<Record<string, string>>,
@@ -133,7 +132,7 @@ const sel = (o: {
   queuePending?: readonly string[]
   concluded?: readonly string[]
   attempted?: readonly string[] | Readonly<Record<string, string>>
-  /** 🔴 이미 본 원천을 **모양 그대로** 줄 때 — 차례(`retryTierOf`)를 시험한다 */
+  /** 이미 본 원천을 모양 그대로 줄 때 — 단계 관측과 선택 독립성을 시험한다 */
   attemptedOutcomes?: ReadonlyMap<string, PriorOutcome>
   queuedSources?: SourceKeySet
   carriedOver?: SourceKeySet
@@ -248,8 +247,8 @@ console.log('\n④ 🔴 순서 — 지금 있는 신호만 쓴다')
   const ids = p4.workset.sources.map(sid)
   check('🔴 🔴 **(2026-09-30) 반응이 커도 예정 슬롯에서 72h 를 넘긴 원문은 유료 생성에 들어가지 않는다**',
     !ids.includes('high') && p4.dropped.slotIneligible === 1, ids.join(','))
-  check('🔴 🔴 **원천 상대 반응 백분위가 먼저다**', ids[0] === 'mid-new' || ids[0] === 'mid-old', ids.join(','))
-  check('🔴 같은 백분위면 예정 슬롯에서 더 어린 원문이 먼저다', ids[0] === 'mid-new' && ids[1] === 'mid-old' && ids[2] === 'low')
+  check('🔴 실제 원문 게시 시각이 먼저다', ids[0] === 'mid-new', ids.join(','))
+  check('🔴 반응이 낮아도 더 어린 원문이 먼저다', ids.join(',') === 'mid-new,low,mid-old', ids.join(','))
   check('🔴 🔴 **게시 시각이 없으면 목록 시각으로 대신하지 않는다 — 모름으로 빠진다(유료 0)**', (() => {
     const two = sel({
       rows: [
@@ -885,89 +884,41 @@ console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧-b 🔴 🔴 지속 유입에서도 재시도가 굶지 않는다')
+console.log('\n⑧-b 🔴 🔴 신규·재시도 모두 실제 원문 신선도 한 줄로 고른다')
 // ─────────────────────────────────────────────────────────
 {
   const at = (h: number): string => `2026-09-20T${String(h).padStart(2, '0')}:00:00.000Z`
-  const R = (id: string, comments: number): WorksetRow => ROW({ sourceArticleId: id, commentCount: comments })
-
-  /** 🔴 신규 5건이 회차마다 들어와도 재시도 차례가 온다 */
-  {
-    const rows: WorksetRow[] = [R('retry-me', 1)]
-    let pickedRounds = 0
-    for (let round = 1; round <= 10; round += 1) {
-      for (let i = 0; i < 5; i += 1) rows.push(R(`new-${round}-${i}`, 50 + i))
-      const plan = sel({
-        rows, attempted: { 'retry-me': at(1) }, limit: 5,
-        takenAt: new Date(`2026-09-20T${String(11 + round).padStart(2, '0')}:00:00.000Z`),
-      })
-      if (plan.workset.sources.map(sid).includes('retry-me')) pickedRounds += 1
-    }
-    check('🔴 🔴 **신규 5건 × 10회차에도 재시도가 매 회차 자리를 얻는다**',
-      pickedRounds === 10, `${pickedRounds}/10`)
-  }
-  check('🔴 🔴 **재시도 자리 — 상한 5 에서 1 · 상한 10 에서 2 · 상한 1 은 0(기다린 시간 규칙)**',
-    worksetRetryReserve(5) === 1 && worksetRetryReserve(10) === 2 && worksetRetryReserve(7) === 1
-    && worksetRetryReserve(2) === 1 && worksetRetryReserve(1) === 0,
-    `5→${worksetRetryReserve(5)} · 10→${worksetRetryReserve(10)}`)
-  {
-    // 🔴 상한 10 · 신규가 넘쳐도 재시도 **2** 자리 — 1 로 되돌리면 여기서 깨진다
-    const rows = [...Array.from({ length: 20 }, (_, i) => R(`n${i}`, 90 - i)), R('r1', 1), R('r2', 1), R('r3', 1)]
-    const plan = sel({ rows, attempted: { r1: at(1), r2: at(2), r3: at(3) }, limit: 10 })
-    const retries = plan.workset.sources.map(sid).filter((x) => x.startsWith('r'))
-    check('🔴 🔴 **상한 10 — 신규 8 + 재시도 2 (오래 기다린 r1 · r2)**',
-      plan.workset.sources.map(sid).length === 10 && retries.join(',') === 'r1,r2', plan.workset.sources.map(sid).join(','))
-  }
-  {
-    const rows = [
-      ...Array.from({ length: 6 }, (_, i) => R(`n${i}`, 90 - i)),
-      R('r1', 10), R('r2', 9),
-    ]
-    const plan = sel({ rows, attempted: { r1: at(1), r2: at(2) }, limit: 5 })
-    check('🔴 🔴 **신규 4 + 재시도 1**',
-      plan.workset.sources.map(sid).join(',') === 'n0,n1,n2,n3,r1', plan.workset.sources.map(sid).join(','))
-    check('🔴 🔴 **재시도 안에서는 오래 기다린 것이 먼저다**',
-      sel({ rows, attempted: { r1: at(5), r2: at(2) }, limit: 5 })
-        .workset.sources.map(sid).includes('r2'))
-  }
-  check('🔴 🔴 **재시도가 없으면 신규가 5칸을 다 쓴다**',
-    sel({ rows: Array.from({ length: 6 }, (_, i) => R(`n${i}`, 90 - i)), limit: 5 })
-      .workset.sources.map(sid).join(',') === 'n0,n1,n2,n3,n4')
-  check('🔴 🔴 **신규가 2건이면 재시도가 나머지 3칸을 채운다**', (() => {
-    const rows = [R('n0', 90), R('n1', 89), R('r1', 10), R('r2', 9), R('r3', 8), R('r4', 7)]
-    const got = sel({ rows, attempted: { r1: at(1), r2: at(2), r3: at(3), r4: at(4) }, limit: 5 })
-    return got.workset.sources.map(sid).join(',') === 'n0,n1,r1,r2,r3'
+  const R = (id: string, postedAt: string): WorksetRow => ROW({ sourceArticleId: id, sourcePostedAt: postedAt })
+  check('🔴 더 최신 재시도가 더 오래된 신규보다 먼저다',
+    sel({
+      rows: [R('new-stale', '2026-09-19T10:00:00Z'), R('retry-fresh', '2026-09-20T10:00:00Z')],
+      attempted: { 'retry-fresh': at(1) }, limit: 1,
+    }).workset.sources.map(sid).join(',') === 'retry-fresh')
+  check('🔴 더 최신 신규가 오래 기다린 재시도보다 먼저다', (() => {
+    const p = sel({
+      rows: [R('retry-stale', '2026-09-19T08:00:00Z'), R('new-fresh', '2026-09-20T09:30:00Z')],
+      attempted: { 'retry-stale': at(1) }, limit: 1,
+    })
+    return p.workset.sources.map(sid).join(',') === 'new-fresh'
+  })())
+  check('🔴 재시도 시각을 바꿔도 원문 순서가 바뀌지 않는다', (() => {
+    const rows = [R('r-new', '2026-09-20T09:00:00Z'), R('r-old', '2026-09-19T09:00:00Z')]
+    const a = sel({ rows, attempted: { 'r-new': at(10), 'r-old': at(1) }, limit: 2 }).workset.sources.map(sid).join(',')
+    const b = sel({ rows, attempted: { 'r-new': at(1), 'r-old': at(10) }, limit: 2 }).workset.sources.map(sid).join(',')
+    return a === 'r-new,r-old' && b === a
   })())
   check('🔴 🔴 **끝난 원천은 재시도 자리에도 들어오지 않는다**', (() => {
-    const rows = [R('n0', 90), R('r1', 10), R('r2', 9)]
+    const rows = [R('n0', '2026-09-20T10:00:00Z'), R('r1', '2026-09-20T11:00:00Z'), R('r2', '2026-09-20T09:00:00Z')]
     const got = sel({ rows, concluded: ['r1'], attempted: { r1: at(1), r2: at(2) }, limit: 5 })
     return !got.workset.sources.map(sid).includes('r1') && got.workset.sources.map(sid).includes('r2')
       && got.dropped.terminal === 1
   })())
   check('🔴 🔴 **같은 입력은 같은 순서를 낸다**', (() => {
-    const rows = [R('a', 10), R('b', 10), R('c', 10), R('r1', 10), R('r2', 10)]
+    const rows = ['a', 'b', 'c', 'r1', 'r2'].map((id) => R(id, '2026-09-20T10:00:00Z'))
     const o = { rows, attempted: { r1: at(1), r2: at(1) }, limit: 4 } as const
-    return sel(o).workset.sources.map(sid).join(',') === sel(o).workset.sources.map(sid).join(',')
-      && sel(o).workset.sources.map(sid).join(',') === 'a,b,c,r1'
+    const once = sel(o).workset.sources.map(sid).join(',')
+    return once === sel(o).workset.sources.map(sid).join(',') && once === 'a,b,c,r1'
   })())
-  /** 🔴 상한 1 — 자리를 나눌 수 없으니 **기다린 시간**이 정한다 */
-  {
-    const rows = [R('n0', 90), R('r1', 10)]
-    const soon = sel({
-      rows, attempted: { r1: at(10) }, limit: 1,
-      takenAt: new Date('2026-09-20T11:00:00.000Z'),
-    })
-    const later = sel({
-      rows, attempted: { r1: at(10) }, limit: 1,
-      takenAt: new Date(Date.parse(at(10)) + WORKSET_RETRY_STARVE_MS),
-    })
-    check('🔴 🔴 **상한 1 — 처음에는 신규가 그 자리를 쓴다**',
-      soon.workset.sources.map(sid).join(',') === 'n0')
-    check('🔴 🔴 **상한 1 — 오래 기다리면 재시도가 그 자리를 가져간다**',
-      later.workset.sources.map(sid).join(',') === 'r1')
-    check('🔴 🔴 **상한 1에서도 신규가 영구히 굶지 않는다** — 재시도가 없으면 신규가 쓴다',
-      sel({ rows: [R('n0', 90)], limit: 1 }).workset.sources.map(sid).join(',') === 'n0')
-  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1089,61 +1040,47 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
     return c.seed === 1 && c.raw === 1
   })())
 
-  // ── 신규/재시도 자리가 축 자리 안에서 그대로인가 ──
+  // ── 재시도 신분은 축 자리와 신선도 순서를 뒤집지 않는다 ──
   {
     const rows = [...seeds(10, 90), SEED('rs1', 1), SEED('rs2', 1), SEED('rs3', 1), ...raws(5, 200)]
     const p = sel({ rows, attempted: { rs1: at(5), rs2: at(2), rs3: at(9) }, limit: 5 })
-    check('🔴 🔴 **재시도 자리 1 이 유지된다 — 신규 seed 가 축 자리를 먼저 채워도**',
-      ids(p) === 'w0,s0,s1,s2,rs2', ids(p))
+    check('🔴 재시도 예약석 없이 같은 source rank로 고른다',
+      ids(p) === 'w0,s0,s1,s2,s3', ids(p))
   }
   {
     const rows = [...seeds(10, 90), RAW('rw1', 1), RAW('rw2', 1)]
     const p = sel({ rows, attempted: { rw1: at(5), rw2: at(2) }, limit: 5 })
-    check('🔴 🔴 **재시도가 raw 뿐이면 그 raw 재시도가 raw 자리로 들어온다** — 오래 기다린 것',
-      ids(p) === 's0,s1,s2,s3,rw2', ids(p))
+    check('🔴 raw 재시도도 대기 시간 대신 source rank로 고른다',
+      ids(p) === 's0,s1,s2,s3,rw1', ids(p))
   }
   {
     const rows = [SEED('n0', 90), SEED('r1', 1), SEED('r2', 1), SEED('r3', 1), SEED('r4', 1), ...raws(3)]
     const p = sel({ rows, attempted: { r1: at(4), r2: at(1), r3: at(3), r4: at(2) }, limit: 5 })
-    check('🔴 🔴 **신규가 모자라면 재시도가 채운다 — 오래 기다린 순서로 · 축 자리 안에서**',
-      ids(p) === 'n0,w0,r2,r4,r3', ids(p))
+    check('🔴 신규가 모자라면 재시도도 source rank 순으로 남은 축 자리를 쓴다',
+      ids(p) === 'n0,w0,r1,r2,r3', ids(p))
   }
   {
-    // 🔴 raw 재시도가 가장 오래 기다렸어도 raw 자리를 신규 raw 가 이미 쓰면 들어오지 못한다 — 대신 seed 재시도가 자리를 받는다
+    // raw 재시도 여부와 무관하게 축 상한은 유지된다
     const rows = [...seeds(10, 90), SEED('rs', 1), RAW('rw', 1), ...raws(2, 300)]
     const p = sel({ rows, attempted: { rw: at(1), rs: at(3) }, limit: 5 })
     const c = axisCount(p)
-    check('🔴 raw 자리는 1 을 넘지 않는다 — 재시도라도',
-      c.raw === 1 && c.seed === 4 && p.workset.sources.map(sid).some((x) => x === 'rs' || x === 'rw'), ids(p))
+    check('🔴 raw 자리는 1 을 넘지 않는다 — 재시도 신분과 무관',
+      c.raw === 1 && c.seed === 4, ids(p))
   }
-  // ── 상한 1 · 기다린 시간 규칙이 축 자리와 함께 그대로 ──
+  // ── 상한 1도 source rank 하나 ──
   {
-    const rows = [SEED('n0', 90), SEED('r1', 10)]
-    check('🔴 🔴 **상한 1 · 오래 기다린 seed 재시도가 그 자리를 가져간다 (앞판 규칙 유지)**',
-      ids(sel({ rows, attempted: { r1: at(10) }, limit: 1,
-        takenAt: new Date(Date.parse(at(10)) + WORKSET_RETRY_STARVE_MS) })) === 'r1'
-      && ids(sel({ rows, attempted: { r1: at(10) }, limit: 1, takenAt: new Date('2026-09-20T11:00:00.000Z') })) === 'n0')
+    const rows = [
+      ROW({ sourceArticleId: 'n0', sourcePostedAt: '2026-09-20T09:00:00Z' }),
+      ROW({ sourceArticleId: 'r1', sourcePostedAt: '2026-09-19T10:00:00Z' }),
+    ]
+    const first = ids(sel({ rows, attempted: { r1: at(1) }, limit: 1, takenAt: NOW }))
+    const second = ids(sel({ rows, attempted: { r1: at(1) }, limit: 1, takenAt: new Date('2026-09-21T11:00:00Z') }))
+    check('🔴 상한 1 · 실행 시각이 바뀌어도 더 최신 원문이 그 자리를 쓴다',
+      first === 'n0' && second === 'n0', `${first} / ${second}`)
   }
 
-  // ── 🔴 원천이 전부 seed 이면 앞판과 **값이 같다** — 축 자리가 다른 규칙을 몰래 바꾸지 않는다 ──
+  // ── 무작위 입력에서도 attempt 상태와 입력 배열 순서가 선택을 바꾸지 않는다 ──
   {
-    /** 🔴 2026-09-27 판(`720fc98`)의 신규/재시도 나눔을 그대로 적은 기준 — 비교용이다 */
-    const reference = (rows: readonly WorksetRow[], attempted: ReadonlyMap<string, PriorOutcome>, limit: number, takenAt: Date): string => {
-      const byWeight = (a: WorksetRow, b: WorksetRow): number =>
-        b.commentCount - a.commentCount
-        || (b.sourcePostedAt || b.sourceListedAt).localeCompare(a.sourcePostedAt || a.sourceListedAt)
-        || a.sourceArticleId.localeCompare(b.sourceArticleId)
-      // 🔴 지난 결과는 원천 열쇠로 찾는다(P0-B) — 규칙은 앞판 그대로다
-      const A = (r: WorksetRow): PriorOutcome | undefined => attempted.get(KY(r.sourceArticleId, r.sourceSite))
-      const fresh = rows.filter((r) => A(r) === undefined).sort(byWeight)
-      const retry = rows.filter((r) => A(r) !== undefined)
-        .sort((a, b) => (A(a)?.atMs ?? 0) - (A(b)?.atMs ?? 0) || byWeight(a, b))
-      const waited = retry.length === 0 ? 0 : takenAt.getTime() - (A(retry[0]!)?.atMs ?? 0)
-      const reserve = retry.length === 0 ? 0 : limit >= 2 ? 1 : waited >= WORKSET_RETRY_STARVE_MS ? limit : 0
-      const f = fresh.slice(0, Math.max(0, limit - reserve))
-      const r = retry.slice(0, Math.max(0, limit - f.length))
-      return [...f, ...r].map((x) => x.sourceArticleId).join(',')
-    }
     let seed = 20260928
     const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
     let same = 0
@@ -1159,11 +1096,11 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
       const limit = 1 + rnd(8)
       const takenAt = new Date(`2026-09-2${String(rnd(2))}T0${String(rnd(9))}:00:00.000Z`)
       const got = ids(sel({ rows, attempted: att, limit, takenAt }))
-      const want = reference(rows, attemptedMap(att), limit, takenAt)
-      if (got === want) same += 1
-      else if (firstDiff === '') firstDiff = `case ${k}: ${got} ≠ ${want}`
+      const withoutAttempt = ids(sel({ rows: [...rows].reverse(), attempted: {}, limit, takenAt }))
+      if (got === withoutAttempt) same += 1
+      else if (firstDiff === '') firstDiff = `case ${k}: ${got} ≠ ${withoutAttempt}`
     }
-    check(`🔴 🔴 **seed 만 있는 무작위 ${CASES} 경우 — 앞판과 선택·순서가 모두 같다**`, same === CASES, `${same}/${CASES} ${firstDiff}`)
+    check(`🔴 seed 무작위 ${CASES} 경우 — attempt 상태·입력 순서가 선택을 바꾸지 않는다`, same === CASES, `${same}/${CASES} ${firstDiff}`)
   }
 
   // ── 러너가 이 결과를 쓰는가 — 실행 증명은 `supply:draft-deferral-e2e-db-check` ⑤ 가 한다 ──
@@ -1175,7 +1112,7 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 공급 가속 P0 (2026-09-28) — ⑪ 시계 역전 · ⑫ 같은 원천 두 번째 글 금지 · ⑬ 운영 33원천 · ⑭ 재시도 차례
+// 🔴 공급 가속 P0 (2026-09-28) — ⑪ 시계 역전 · ⑫ 같은 원천 두 번째 글 금지 · ⑬ 운영 33원천 · ⑭ 재시도 상태
 // ─────────────────────────────────────────────────────────
 const P0_CANON = {
   ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2c', judgeModel: 'claude-haiku-4.5',
@@ -1472,31 +1409,42 @@ console.log('\n⑬ 🔴 🔴 운영 33원천 재분류 — 읽기 전용 fixture
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑭ 🔴 🔴 재시도 차례 — 초안 없는 seeded 가 판정 retryable 보다 먼저 (2026-09-28)')
+console.log('\n⑭ 🔴 🔴 재시도 단계는 관측값이고 선택은 실제 원문 신선도가 정한다')
 // ─────────────────────────────────────────────────────────
 {
   const at = (h: number): string => `2026-09-20T${String(h).padStart(2, '0')}:00:00.000Z`
-  const R = (id: string, c: number): WorksetRow => ROW({ sourceArticleId: id, commentCount: c })
+  const R = (id: string, postedAt: string): WorksetRow => ROW({ sourceArticleId: id, sourcePostedAt: postedAt })
   const att = new Map<string, PriorOutcome>([
-    // 판정 retryable 이 **가장 오래** 기다렸다 — 그래도 seeded 가 먼저다
+    // 단계가 서로 달라도 선택 순서는 원문 시각으로만 검증한다.
     ['jr', pj({ sourceArticleId: 'jr', semanticStatus: 'providerError', decidedAt: at(1) })],
     ['dr', pa({ sourceArticleId: 'dr', retryable: true, generatedAt: at(3) })],
     ['sd', pj({ sourceArticleId: 'sd', decision: 'AUTO_SEED', decidedAt: at(9) })],
   ])
-  check('🔴 차례 값 — seeded 0 · 생성 결과 1 · 판정 retryable 2',
+  check('🔴 관측 단계 값 — seeded 0 · 생성 결과 1 · 판정 retryable 2',
     retryTierOf(att.get('sd')) === 0 && retryTierOf(att.get('dr')) === 1 && retryTierOf(att.get('jr')) === 2
     && att.get('jr')?.state === 'retryable' && att.get('sd')?.state === 'seeded')
-  const fresh = Array.from({ length: 20 }, (_, i) => R(`n${i}`, 90 - i))
-  const rows = [...fresh, R('jr', 1), R('dr', 1), R('sd', 1)]
+  const fresh = Array.from({ length: 20 }, (_, i) => {
+    const minutes = 9 * 60 + 30 - i * 30
+    return R(`n${i}`, `2026-09-20T${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}:00Z`)
+  })
+  const rows = [
+    ...fresh,
+    R('jr', '2026-09-20T08:45:00Z'),
+    R('dr', '2026-09-20T07:45:00Z'),
+    R('sd', '2026-09-20T06:45:00Z'),
+  ]
   const p5 = sel({ rows, attemptedOutcomes: att, limit: 5 })
-  check('🔴 🔴 **상한 5 · 재시도 1 자리 → seeded(sd)** — 더 오래 기다린 판정 retryable 보다 먼저',
-    p5.workset.sources.map(sid).filter((x) => !x.startsWith('n')).join(',') === 'sd', p5.workset.sources.map(sid).join(','))
+  check('🔴 상한 5 · 재시도 예약석 없이 최신 원문 다섯 건',
+    p5.workset.sources.map(sid).join(',') === 'n0,n1,jr,n2,n3', p5.workset.sources.map(sid).join(','))
   const p10 = sel({ rows, attemptedOutcomes: att, limit: 10 })
-  check('🔴 🔴 **상한 10 · 재시도 2 자리 → sd · dr**',
-    p10.workset.sources.map(sid).filter((x) => !x.startsWith('n')).join(',') === 'sd,dr', p10.workset.sources.map(sid).join(','))
-  const pAll = sel({ rows: [R('jr', 1), R('dr', 1), R('sd', 1)], attemptedOutcomes: att, limit: 10 })
-  check('🔴 신규가 없으면 재시도가 전부 — 차례대로 sd · dr · jr',
-    pAll.workset.sources.map(sid).join(',') === 'sd,dr,jr', pAll.workset.sources.map(sid).join(','))
+  check('🔴 상한 10 · 신규/재시도 구분 없이 최신 원문 열 건',
+    p10.workset.sources.map(sid).join(',') === 'n0,n1,jr,n2,n3,dr,n4,n5,sd,n6', p10.workset.sources.map(sid).join(','))
+  const pAll = sel({
+    rows: [R('jr', '2026-09-20T08:45:00Z'), R('dr', '2026-09-20T07:45:00Z'), R('sd', '2026-09-20T06:45:00Z')],
+    attemptedOutcomes: att, limit: 10,
+  })
+  check('🔴 재시도만 있어도 단계가 아니라 실제 원문 최신 순',
+    pAll.workset.sources.map(sid).join(',') === 'jr,dr,sd', pAll.workset.sources.map(sid).join(','))
   check('🔴 상한 10 — seed 8 · raw 2 기본 자리 · raw 는 빠지지 않는다',
     JSON.stringify(worksetAxisQuota(10, { seed: 30, raw: 30 })) === JSON.stringify({ seed: 8, raw: 2 })
     && JSON.stringify(worksetAxisQuota(10, { seed: 3, raw: 30 })) === JSON.stringify({ seed: 3, raw: 2 })
@@ -1684,8 +1632,8 @@ console.log('\n⑳ 🔴 🔴 부족 슬롯마다 원천을 따로 짝짓는다 �
   check('🔴 유료 상한이 1 이면 한 원천만 · 상한 0 이면 0',
     jsel([A, B], [s1, s2], 1).picked.length === 1 && jsel([A, B], [s1, s2], 0).picked.length === 0)
   const plan = jsel([A, B, C], [s1, s2], 2)
-  check('🔴 상한 밖 원천(B · 가장 낮은 순위)은 고르지 않는다 — slotUnassigned · 고른 둘이 두 슬롯을 덮는다',
-    plan.picked.map(sid).sort().join(',') === 'jitA,jitC' && plan.dropped.slotUnassigned === 1
+  check('🔴 상한 밖의 더 오래된 원천(C)은 고르지 않는다 — slotUnassigned · 고른 둘이 두 슬롯을 덮는다',
+    plan.picked.map(sid).sort().join(',') === 'jitA,jitB' && plan.dropped.slotUnassigned === 1
     && plan.jit?.coveredSlots === 2 && plan.jit?.maxFillableSlots === 2, JSON.stringify(plan.dropped))
   const twoMap = slotMap(plan)
   const ws = plan.workset

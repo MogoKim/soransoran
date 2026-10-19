@@ -439,7 +439,7 @@ async function worksetAxisRunner(
     latest?.evidence != null && JSON.stringify(oppKeys) === JSON.stringify(seedHashes) && !oppKeys.some((h) => rawHashes.includes(h)),
     `기회 ${oppKeys.length}`)
   check('🔴 러너 로그가 JIT 선택 사실과 raw 제외 사유를 적는다',
-    /연결 가능 seed 5 · raw 제외 4 · 재시도 보충 0\/0/.test(out) && /원문 그대로\(raw\) 축 — 자동 소비자가 없다[^\n]* 4/.test(out),
+    /연결 가능 seed 5 · raw 제외 4 · 선택된 재시도 0/.test(out) && /원문 그대로\(raw\) 축 — 자동 소비자가 없다[^\n]* 4/.test(out),
     (/부족 슬롯 .*/.exec(out) ?? [''])[0])
   const shadowFile = ws === null ? '' : join(D2, `auto-judge-${ws.runId}.shadow.jsonl`)
   const judged = shadowFile !== '' && existsSync(shadowFile)

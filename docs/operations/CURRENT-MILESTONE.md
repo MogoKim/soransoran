@@ -163,3 +163,17 @@ quality-v12 전환 순서를 한 실행 packet으로 다시 확인한다.
 3. #762 Persona 40이 DB에 생성·활성화된다.
 4. 조회수 Production 원장 표본이 확인된다.
 5. runtime HEAD·pin·manifest 또는 loaded job 수가 바뀐다.
+
+## 9. 2026-10-19 로컬 code/static PASS — fresh-first·board routing (미배포)
+
+- 자격 gate 뒤 공급 순위를 신선도 1순위로 통일(compareReleaseRank 재정렬). retry/recovery/lane 분리는 관측 축으로만
+  남고, source time 1순위 ordering(selectJitWorkset·prepareCandidates·compareAutoRow·pickPublishTarget·
+  compareFreshFirst) 로 수집→생성→READY→발행 끝단까지 흐른다. 숫자 article id 를 source-time proxy 로 쓰지 않는다.
+- `micro-seed-auto-judge` 에 `boardTopic` 필수 enum 추가(auto-judge-v4·semantic-shadow-v3). `gateResults.autoJudge.
+  boardTopic` 한 칸을 publish tx 의 `routeBoardType` 이 읽어 FREE/MENOPAUSE 로 라우팅한다. current provenance 결여/
+  invalid 는 publish 0(fail-closed), 실제 legacy인 `autoJudge` 부재/`auto-judge-v3`만 FREE 유지한다. `null`·모르는/
+  미래 판은 publish 0이다.
+- 로컬 code/static 검증은 PASS다. 타입·lint·build·정적 계약·변이·격리 DB에서 source-time 단일 순위,
+  lane/recovery 비개입, current boardTopic fail-closed, legacy v3 FREE 호환, 발행 전 write 0을 확인했다.
+- **deployed/operating PASS는 아니다.** 후속은 PR exact-head CI 뒤 별도 승인으로 운영 cache를 v4로 갱신하고
+  보조 Mac runtime을 배포한 다음, 자연 자료에서 MENOPAUSE 라우팅 분포·신선도 p50/p90/max와 10-18 d10 FAIL 축을 재측정한다.

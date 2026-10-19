@@ -1071,7 +1071,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     const recorder = createSelectionRecorder()
     if (policy.llm) {
     /**
-     * 🔴 **JIT 선택 하나** (2026-10-10 P0-B1) — raw 제외 → 부족 슬롯 연결 → 신규 우선 → 재시도 보충 → 정본 순위 →
+     * 🔴 **JIT 선택 하나** (2026-10-19) — raw 제외 → 부족 슬롯 연결 → 신선도 우선 단일 순위 →
      *    고른 집합에만 EDF 배정. 고른 원천은 **배정 슬롯**에서 다시 판정해 묶음에 나이를 적는다.
      */
     const plan = selectWorkset({
@@ -1082,7 +1082,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     })
     const jf = plan.jit!
     console.log(`   부족 슬롯 ${jf.slots}개 · 채울 수 있는 최대 ${jf.maxFillableSlots} · 덮음 ${jf.coveredSlots}`
-      + ` · 연결 가능 seed ${jf.linkable} · raw 제외 ${jf.rawExcluded} · 재시도 보충 ${jf.retryReserved}/${jf.retryReserve}`)
+      + ` · 연결 가능 seed ${jf.linkable} · raw 제외 ${jf.rawExcluded} · 선택된 재시도 ${jf.retryReserved}`)
     if (plan.picked.length === 0) {
       // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
       worksetEmpty = true

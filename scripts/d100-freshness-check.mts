@@ -10,9 +10,9 @@
  *   ③ 원천 상대 반응 — 정확 시각은 관측 나이 구간 판(기존) · 날짜만 알면 **같은 원천 · 같은 날짜 · 같은 목록 회차** 판
  *      (별도 method). 날짜 · 회차 · 원천 · 정밀도가 다르면 섞지 않는다 · 한 점 표본은 모름
  *   ④ 정확한 게시 시각의 판정 · 스냅샷은 앞판과 **같다**(무작위 대조)
- *   ⑤ 수집 상세 선별: **같은 점수 안에서만** 최신이 먼저 — 점수(품질)를 이기지 않는다(무작위 대조)
+ *   ⑤ 수집 상세 선별: hard exclusion 뒤 **실제 원문 시각 최신 순** — 옛 점수가 신선도를 이기지 않는다(무작위 대조)
  *   ⑥ 레몬테라스 1p 제외 · 2~16p · 회차 상세 jjong 10 + humor 1 · 요청량 · 회차 · 페이지 수 불변
- *   ⑦ 갱년기 · wgang 은 순위 동률 해소 선호뿐 — quota · 가중치가 새로 생기지 않았다
+ *   ⑦ 출처·주제 선호 없음 — quota · 가중치 · 예약석이 없다
  *   ⑧ 배선 — 수집 행 → 얇은 행 → adapt → 공급 러너(`worksetRows`) → 생성 전 판정 · 적재기(`sourceEvidenceOf`)가 같은 구간을 싣는다
  */
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -352,36 +352,39 @@ console.log('\n⑤ 목록 관측 → 증거 재료: 수집이 본 줄이 날짜�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑥ 수집 상세 선별 — 같은 점수 안에서만 최신이 먼저')
+console.log('\n⑥ 수집 상세 선별 — 신선도 1순위 (2026-10-19 창업자 결정) · 점수는 자격 gate 가 아니다')
 // ─────────────────────────────────────────────────────────
 {
   const today = (hh: number): string => new Date(Date.UTC(2026, 9, 12, hh - 9 + 24)).toISOString()
   const p = planAutoFetch([
-    { sourceArticleId: '35080001', score: 40, flags: [], postedFrom: today(6) },
-    { sourceArticleId: '35080500', score: 40, flags: [], postedFrom: today(9) },
-    { sourceArticleId: '35070000', score: 40, flags: [], postedFrom: postedWindowOfKstDay('2026-10-12')!.from },
-    { sourceArticleId: '35060000', score: 55, flags: [], postedFrom: postedWindowOfKstDay('2026-10-11')!.from },
+    { sourceArticleId: '35080001', score: 40, flags: [], postedFrom: today(6) },        // 10-13 06 KST
+    { sourceArticleId: '35080500', score: 40, flags: [], postedFrom: today(9) },        // 10-13 09 KST (가장 최신)
+    { sourceArticleId: '35070000', score: 40, flags: [], postedFrom: postedWindowOfKstDay('2026-10-12')!.from }, // 날짜만 10-12
+    { sourceArticleId: '35060000', score: 55, flags: [], postedFrom: postedWindowOfKstDay('2026-10-11')!.from }, // 날짜만 10-11 · 점수만 55
   ], { max: 3 })
-  check('🔴 높은 점수가 먼저 — 오래된 글이라도 점수를 잃지 않는다', p.picked[0] === '35060000', p.picked.join())
-  check('같은 점수 안에서 최신(09시) → 06시 순', p.picked[1] === '35080500' && p.picked[2] === '35080001', p.picked.join())
-  check('같은 점수 · 날짜만 아는 어제 글은 오늘 글 뒤', p.skipped.some((s) => s.sourceArticleId === '35070000' && s.reason === 'OVER_MAX'))
+  check('🔴 가장 최신 글이 1순위 — 점수가 높아도 늙었으면 뒤', p.picked[0] === '35080500', p.picked.join())
+  check('🔴 신선도 순서로 2위·3위 — 10-13 06시 → 날짜만 10-12', p.picked[1] === '35080001' && p.picked[2] === '35070000', p.picked.join())
+  check('🔴 점수만 큰 오래된 글(score 55, 10-11)은 신선 글에 밀려 OVER_MAX',
+    p.skipped.some((s) => s.sourceArticleId === '35060000' && s.reason === 'OVER_MAX'))
   const sameDay = planAutoFetch([
     { sourceArticleId: '35070000', score: 40, flags: [], postedFrom: postedWindowOfKstDay('2026-10-12')!.from },
     { sourceArticleId: '35070900', score: 40, flags: [], postedFrom: postedWindowOfKstDay('2026-10-12')!.from },
   ], { max: 1 })
-  check('🔴 같은 날짜만 아는 글끼리는 큰 글 번호(나중에 올라온 글)가 먼저', sameDay.picked[0] === '35070900', sameDay.picked.join())
+  check('🔴 같은 게시 시각(effective tie) — 결정적 id lex 로 간다 (숫자 article id 를 time proxy 로 쓰지 않는다 · 2026-10-19)',
+    sameDay.picked[0] === '35070000', sameDay.picked.join())
   const noTime = planAutoFetch([
     { sourceArticleId: '100', score: 40, flags: [] },
     { sourceArticleId: '99', score: 40, flags: [] },
   ], { max: 1 })
-  check('🔴 글 번호는 숫자로 견준다(문자열 "100" < "99" 함정)', noTime.picked[0] === '100', noTime.picked.join())
+  check('🔴 모두 시각이 없으면 lex 순 — 숫자 id 를 time proxy 로 쓰지 않는다 ("100" < "99")',
+    noTime.picked[0] === '100', noTime.picked.join())
   check('숫자가 아닌 열쇠는 옛 결정적 순서', compareFreshFirst({ sourceArticleId: 'a1', score: 0, flags: [] }, { sourceArticleId: 'a2', score: 0, flags: [] }) < 0)
 
-  // 🔴 무작위 대조 — 고른 집합의 점수 다중집합은 앞판(점수 → 글 번호 오름차순)과 같다(점수를 이기지 않는다)
+  // 🔴 무작위 대조 — 고른 순서는 **신선도 내림차순**을 지킨다. 옛 판(점수 1순위 → 글 번호)과는 **적어도 한 벌 이상** 다르다
+  //    (점수가 신선도를 더 이상 이기지 않는 운영이 복원되지 않았는지 검증)
   const r = rng(99)
-  let sameScores = 0
-  let sortedByScore = 0
-  let changed = 0
+  let sortedByFreshness = 0
+  let changedFromLegacy = 0
   const N = 500
   for (let k = 0; k < N; k += 1) {
     const rows: AutoFetchInput[] = Array.from({ length: 5 + Math.floor(r() * 30) }, (_, i) => ({
@@ -396,14 +399,17 @@ console.log('\n⑥ 수집 상세 선별 — 같은 점수 안에서만 최신이
     const admissible = planAutoFetch(rows, { max: Number.MAX_SAFE_INTEGER }).picked
     const byId = new Map(rows.map((x) => [x.sourceArticleId, x]))
     const legacy = [...admissible].sort((a, b) => byId.get(b)!.score - byId.get(a)!.score || a.localeCompare(b)).slice(0, max)
-    const scoresOf = (ids: readonly string[]): string => ids.map((id) => byId.get(id)!.score).sort((a, b) => a - b).join()
-    if (scoresOf(now.picked) === scoresOf(legacy)) sameScores += 1
-    if (now.picked.every((id, i) => i === 0 || byId.get(now.picked[i - 1]!)!.score >= byId.get(id)!.score)) sortedByScore += 1
-    if (now.picked.join() !== legacy.join()) changed += 1
+    // 🔴 신선도 내림차순 성립 — 앞 글의 게시 시각(postedFrom)이 뒤 글보다 더 최근(또는 같음). postedFrom null 은 뒤로 간다
+    const ms = (id: string): number => {
+      const v = byId.get(id)!.postedFrom
+      const t = typeof v === 'string' ? Date.parse(v) : Number.NaN
+      return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY
+    }
+    if (now.picked.every((id, i) => i === 0 || ms(now.picked[i - 1]!) >= ms(id))) sortedByFreshness += 1
+    if (now.picked.join() !== legacy.join()) changedFromLegacy += 1
   }
-  check(`🔴 고른 집합의 점수 다중집합이 앞판과 같다 — 점수를 이기지 않는다 (무작위 ${N}벌)`, sameScores === N, `${sameScores}/${N}`)
-  check(`🔴 고른 순서는 점수 내림차순을 지킨다 (무작위 ${N}벌)`, sortedByScore === N, `${sortedByScore}/${N}`)
-  check('동률 해소가 실제로 작동한다(바뀐 벌이 있다)', changed > 0, `${changed}/${N}`)
+  check(`🔴 고른 순서는 신선도 내림차순을 지킨다 (무작위 ${N}벌)`, sortedByFreshness === N, `${sortedByFreshness}/${N}`)
+  check(`🔴 옛 점수 1순위 판정과 **다른 결과를 내는 벌이 있다** — 점수가 신선도를 이기지 않는다`, changedFromLegacy > 0, `${changedFromLegacy}/${N}`)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -430,25 +436,32 @@ console.log('\n⑦ 레몬테라스 1p 제외 · 2~16p · jjong 10 + humor 1 · �
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 갱년기 · wgang 은 동률 해소뿐 — quota · 가중치 없음 · 신선도가 품질을 이기지 않는다')
+console.log('\n⑧ 신선도 1순위 (2026-10-19 창업자) — 자격 gate 뒤에는 오래된 고반응 글이 최신 글을 앞서지 않는다 · 출처·주제 보너스 없음')
 // ─────────────────────────────────────────────────────────
 {
   const rank = (commentsPct: number, viewsPct: number, ageAtSlotH: number) => ({ commentsPct, viewsPct, ageAtSlotH, velocity: null, tieBreak: '' })
-  const k = (r: ReturnType<typeof rank>, menopause: boolean, wgang: boolean, key: string): SupplyRankKey => ({ rank: r, menopause, wgang, key })
-  check('🔴 더 낮은 품질의 갱년기 · wgang 이 높은 품질을 이기지 않는다',
-    compareSupplyRank(k(rank(0.9, 0.5, 40), false, false, 'a'), k(rank(0.8, 0.9, 1), true, true, 'b')) < 0)
-  check('🔴 신선도가 품질을 이기지 않는다 — 댓글 자리가 높으면 늙어도 앞', compareReleaseRank(rank(0.9, 0.1, 70), rank(0.89, 0.9, 1)) < 0)
-  check('품질 동률이면 최신이 앞', compareReleaseRank(rank(0.7, 0.6, 30), rank(0.7, 0.6, 5)) > 0)
-  check('품질 · 신선도 동률이면 갱년기 → wgang',
-    compareSupplyRank(k(rank(0.7, 0.6, 5), false, true, 'a'), k(rank(0.7, 0.6, 5), true, false, 'b')) > 0
-      && compareSupplyRank(k(rank(0.7, 0.6, 5), false, false, 'a'), k(rank(0.7, 0.6, 5), false, true, 'b')) > 0)
-  // 정적: 판정 정본 · 수집 동률 비교에 주제 · 출처 · 가중치가 새로 들어오지 않았다
+  const k = (r: ReturnType<typeof rank>, key: string): SupplyRankKey => ({ rank: r, key })
+  check('🔴 더 낮은 신선도의 고반응 글은 더 신선한 글을 이기지 않는다',
+    compareSupplyRank(k(rank(0.9, 0.5, 40), 'a'), k(rank(0.8, 0.9, 1), 'b')) > 0)
+  check('🔴 신선도가 반응을 이긴다 — 댓글 자리가 더 높아도 늙었으면 뒤',
+    compareReleaseRank(rank(0.9, 0.1, 70), rank(0.89, 0.9, 1)) > 0)
+  check('신선도 동률이면 반응이 앞', compareReleaseRank(rank(0.9, 0.6, 5), rank(0.7, 0.6, 5)) < 0)
+  check('반응 동률이면 더 신선한 글이 앞', compareReleaseRank(rank(0.7, 0.6, 30), rank(0.7, 0.6, 5)) > 0)
+  check('🔴 신선도·반응 모두 동률이면 결정적 열쇠로 — 출처·주제 보너스 없음',
+    compareSupplyRank(k(rank(0.7, 0.6, 5), 'a'), k(rank(0.7, 0.6, 5), 'b')) < 0
+      && compareSupplyRank(k(rank(0.7, 0.6, 5), 'b'), k(rank(0.7, 0.6, 5), 'a')) > 0)
+  // 정적: 판정 정본 · 공급 순위 · 수집 동률 비교에 주제 · 출처 · 가중치가 들어 있지 않다
   const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
   const release = strip(readFileSync('src/lib/source-slot-release.ts', 'utf8'))
   check('🔴 판정 정본에 갱년기 · wgang · 가중치 · quota 가 없다', !/menopause|wgang|WEIGHT|weight|quota/i.test(release))
+  const workset = strip(readFileSync('src/lib/supply-workset.ts', 'utf8'))
+  const sr = workset.slice(workset.indexOf('export function compareSupplyRank'), workset.indexOf('export function compareSupplyRank') + 400)
+  check('🔴 공급 순위도 compareReleaseRank + 열쇠 — 주제 · 출처 · 가중치 없음',
+    sr.length > 0 && !/menopause|wgang|WEIGHT|weight|quota|bonus/i.test(sr))
   const supply = strip(readFileSync('scripts/lib/micro-seed-supply.mts', 'utf8'))
   const fresh = supply.slice(supply.indexOf('export function compareFreshFirst'), supply.indexOf('export function planAutoFetch'))
-  check('🔴 수집 동률 비교는 점수 · 게시 시각 · 글 번호만 본다', fresh.length > 0 && !/flags|menopause|wgang|weight|quota/i.test(fresh))
+  check('🔴 수집 동률 비교는 게시 시각 · 글 번호만 본다 — 주제·출처·가중치 없음',
+    fresh.length > 0 && !/flags|menopause|wgang|weight|quota/i.test(fresh))
 }
 
 // ─────────────────────────────────────────────────────────
