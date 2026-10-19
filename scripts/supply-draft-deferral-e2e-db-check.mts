@@ -154,6 +154,8 @@ const { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROF
  *    그래야 화자 WIP 다. 옛 계약 행은 WIP 가 아니다(2026-09-28 · `supply:wip-contract-db-check`).
  */
 const { currentQualityContract, QUALITY_CONTRACT_KEY } = await import('../src/lib/quality-contract')
+const { RULE_VERSION: AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION: AUTO_JUDGE_PROMPT_VERSION }
+  = await import('../src/lib/micro-seed-auto-judge')
 
 async function main(): Promise<void> {
   console.log('\n══ 부모 → 자식 실제 경로 · 회차 시각 하나 · Persona 여력 대기 (격리 DB · 임시 디렉터리) ══')
@@ -235,7 +237,8 @@ async function main(): Promise<void> {
   writeFileSync(join(T, shadowPath), seeds.map((id) => JSON.stringify({
     // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — 아래 상세 행과 같은 사이트
     sourceSite: 'navercafe:fixture', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [], semanticStatus: 'ok',
-    ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${id}`, provenance: 'machine-shadow',
+    ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+    model: 'fixture', inputHash: `h-${id}`, provenance: 'machine-shadow', boardTopic: 'FREE',
   })).join('\n') + '\n')
   writeFileSync(join(DATA, `fixture-${rid}.detail.jsonl`), seeds.map((id, i) => JSON.stringify({
     sourceArticleId: id, title: `동네 산책길에 핀 꽃 ${i}`, bodyHead: '요즘 아침마다 동네를 걷는데 꽃이 피었어요',

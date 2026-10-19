@@ -26,6 +26,8 @@ import {
   type ExecResult, type ProcessStage, type StagePlan, type SupplySourceId, type StageGate,
 } from '../src/lib/supply-process'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
+import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION }
+  from '../src/lib/micro-seed-auto-judge'
 import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
 /** 🔴 잠금 정본 — 러너와 **같은 함수**를 시험한다. 사본을 만들지 않는다 */
 import { planRefill, provenanceKeyOf, existingSourceKeysOf, sourceProvenanceKeyOf, hasPendingSibling, isOurSite, MACHINE_SITE_PREFIX, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
@@ -812,8 +814,8 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     const SITE_A = 'navercafe:remonterrace'
     const seed = (id: string): string => JSON.stringify({
       sourceSite: SITE_A, sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
-      ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
-      provenance: 'machine-shadow',
+      ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+      model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
     })
     writeFileSync(join(dd, 'x.shadow.jsonl'), `${seed('A1')}\n${seed('A9')}\n`, 'utf-8')
     writeFileSync(join(dd, 'x.detail.jsonl'), `${JSON.stringify({
@@ -983,8 +985,8 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
   // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양 그대로다
   const seed = (id: string): string => JSON.stringify({
     sourceSite: 'navercafe:remonterrace', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
-    ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
-    provenance: 'machine-shadow',
+    ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+    model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
   })
   const meta = (id: string, t: string): string => JSON.stringify({
     sourceArticleId: id, sourceSite: 'navercafe:remonterrace', title: t,

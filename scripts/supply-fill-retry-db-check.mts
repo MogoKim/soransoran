@@ -60,6 +60,7 @@ export async function runFillRetryDbScenarios(check: Check, prisma: PrismaClient
   const { candidateEnvelope } = await import('./lib/candidate-envelope.mjs')
   const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
   const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
+  const { RULE_VERSION: AUTO_JUDGE_RULE_VERSION } = await import('../src/lib/micro-seed-auto-judge')
   const { copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION } = await import('../src/lib/draft-originality')
   const {
     runFillWithRetry, parseFillReport, resolveFillArgs, buildFillRecord, fillInputsOf,
@@ -89,7 +90,7 @@ export async function runFillRetryDbScenarios(check: Check, prisma: PrismaClient
       },
       sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title),
       sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-      autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
+      autoJudge: { ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow', boardTopic: 'FREE' },
       ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
       lifeReview: r.pick!.lifeReview ?? null,
     })),
