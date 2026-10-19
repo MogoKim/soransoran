@@ -971,8 +971,9 @@ asset/Favicon.png   1254 × 1254 · 943,952B · SHA-256 31386c40…62dcbe   (202
 | 카드 바탕 | `#FCF4E5` | **`#FCF1E0`** |
 | 심볼 ↔ 카드 대비 | 3.23:1 | **2.81:1** |
 
-🔴 **새 색을 지어내지 않았다.** 가로형 로고와 아이콘 4종은 모두 원본 픽셀을 **축소만** 한 것이라
-색을 따로 뽑거나 다시 칠하지 않는다. 위 두 색은 원본을 재서 기록한 값이다.
+🔴 **새 색을 지어내지 않았다.** 가로형 로고와 아이콘 6종은 모두 원본 픽셀을 **축소만** 한 것이라
+색을 따로 뽑거나 다시 칠하지 않는다. maskable 2종의 바깥 채움색도 원본 모서리 평균을 읽은 값이다.
+위 두 색은 원본을 재서 기록한 값이다.
 
 🔴 **`--brand`(`#FA4601`)는 이번에 바꾸지 않았다.** 그것은 CTA·FAB·링크가 쓰는 **UI 색**이고
 이번 교체 대상은 **이미지 자산**이다. 지금 화면에는 두 주황이 함께 선다 — §3-2-A-1 참조.
@@ -1065,24 +1066,47 @@ public/brand/soransoran-logo.png     192×96 · 16.8KB · 투명 배경
 이 있으면 링크 이름은 그쪽이 이기므로 "소란소란" 이 두 번 읽히지 않는다.
 오류 화면에서는 로고가 홀로 서므로 그 `alt` 가 이름이 된다.
 
-#### 크기별 아이콘 — 원본 한 장을 그대로 줄인다 (현행)
+#### 크기별 아이콘 — 원본 한 장에서 6종을 만든다 (현행 · 2026-10-19 S-PWA 갱신)
 
 > 🔴 **파비콘·Apple 홈 아이콘·Android/PWA 아이콘은 창업자가 지정한 최신 `asset/Favicon.png`
-> 전체 이미지를 디자인 변경 없이 규격별로 축소해 사용한다.**
+> 한 장에서 만든다.** any 아이콘은 원본 전체를 디자인 변경 없이 규격별로 축소하고,
+> maskable 아이콘만 아래 한정 예외를 따른다.
 
-| 자리 | 파일 | 크기 | SHA-256 (앞 12자리) |
-|---|---|---:|---|
-| 브라우저 탭 · 즐겨찾기 · 검색 결과 | `src/app/icon.png` | 96×96 | `308331e0d2b4` |
-| iPhone·iPad 홈 화면 | `src/app/apple-icon.png` | 180×180 | `579bebfd1e3e` |
-| Android/PWA 설치 | `public/brand/icon-192.png` | 192×192 | `8eb867271393` |
-| Android/PWA 고해상도·스플래시 | `public/brand/icon-512.png` | 512×512 | `8e7159b5b5cd` |
+| 자리 | 파일 | 크기 | 용도 | SHA-256 (앞 12자리) |
+|---|---|---:|---|---|
+| 브라우저 탭 · 즐겨찾기 · 검색 결과 | `src/app/icon.png` | 96×96 | HTML favicon | `308331e0d2b4` |
+| iPhone·iPad 홈 화면 | `src/app/apple-icon.png` | 180×180 | HTML Apple touch | `579bebfd1e3e` |
+| Android/PWA 설치 | `public/brand/icon-192.png` | 192×192 | manifest any | `8eb867271393` |
+| Android/PWA 고해상도·스플래시 | `public/brand/icon-512.png` | 512×512 | manifest any | `8e7159b5b5cd` |
+| Android 원형·둥근 사각형 마스크 | `public/brand/icon-maskable-192.png` | 192×192 | manifest maskable | `d5223a89815c` |
+| Android 마스크 고해상도 | `public/brand/icon-maskable-512.png` | 512×512 | manifest maskable | `56596be9e1cb` |
 
 ```
 생성     node scripts/generate-app-icons.mjs <asset/Favicon.png 경로> --write
 대조     node scripts/generate-app-icons.mjs <asset/Favicon.png 경로>        (기본 · 쓰지 않는다)
-방식     정사각 원본 전체 → 각 규격 · lanczos3 축소 · 무손실 PNG(RGB · 팔레트 양자화 없음)
+방식     any       정사각 원본 전체 → 각 규격 · lanczos3 축소 · 무손실 PNG(RGB · 팔레트 양자화 없음)
+         maskable  원본 전체 → 0.90배 축소 → 가운데 · 바깥을 원본 모서리 평균색으로 채움 (renderMaskable 한 곳)
          원본 SHA-256 을 스크립트에 고정 — 다른 파일로는 만들지 못한다
 ```
+
+🔴 **PWA manifest 에는 정확히 4종만 넣는다** — any 192·512 · maskable 192·512.
+`/icon.png` · `/apple-icon.png` 는 HTML favicon · Apple touch 용도로 그대로 쓰지만 **manifest 에서는
+뺀다.** Next.js 는 쿼리 없는 이 두 주소를 `immutable, max-age=1년` 으로 내보내고, manifest 는 쿼리 없는
+주소를 쓴다. Chrome 이 설치 아이콘으로 180 을 고르면 1년 캐시에 남은 옛 그림(2026-08 의 우나어 3원
+심볼 등)이 나왔다. HTML 은 `?hash` 를 붙여 최신을 받으므로 그대로 둔다.
+
+🔴 **maskable 전용 한정 예외 (2026-10-19 창업자 승인)** — 원본은 내용이 반지름의 약 84% 까지 나가
+maskable 안전 원(가운데 지름 80%)을 넘는다. 그래서 maskable 2종에 한해:
+
+```
+같은 Favicon 원본 전체를 0.90배 축소한다
+바깥은 원본 모서리 평균 아이보리색으로 캔버스 가장자리까지 채운다
+로고의 형태 · 색 · 글자 · 비율은 바꾸지 않는다 — 자르기 · 재해석 · 새 심볼 · 색 변경 금지
+내용은 maskable 안전 원(지름 80%) 안에 있다 — 실측 반지름 비 0.762(192) · 0.758(512)
+```
+
+이 예외는 브랜드 재디자인이 아니라 기기 마스크 대응용 기술 자산이다. any 아이콘에는 적용하지 않는다 —
+마스크가 없는 자리에서 로고가 괜히 작아진다.
 
 🔴 **96 인 이유** — Google 공식 문서는 favicon 을 정사각 · 최소 8×8 로 요구하고, 여러 플랫폼에서
 잘 보이도록 48×48 보다 큰 크기를 권장한다. **96×96 은 48px 보다 큰 정사각형이며 현재 소란소란이
@@ -1091,7 +1115,14 @@ public/brand/soransoran-logo.png     192×96 · 16.8KB · 투명 배경
 
 🟡 16·32px 탭에서는 이름 글자가 판독되지 않는다 — 원본을 바꾸지 않는 결정의 대가다.
 
-🔴 **`purpose` 는 `any` 다.** 내용 일부가 maskable 안전영역(가운데 지름 80% 원) 밖이라 선언하지 않는다.
+🔴 **`purpose` 는 any 와 maskable 을 나눠 선언한다.** 원본 전체 축소본(192·512)은 `any`,
+0.90배 축소본(192·512)은 `maskable` 이다. 🕘 2026-10-19 까지는 "purpose 는 any 이며 maskable 을
+선언하지 않는다" 였다 — 내용이 안전 원 밖이었기 때문이고, 위 한정 예외로 대체됐다.
+
+🔴 **브라우저 상단색** — 일반 Chrome 에는 `theme-color` 를 선언하지 않아 시스템 기본색을 쓴다
+(`layout.tsx` 에 `viewport.themeColor` 없음). 설치형 PWA 의 manifest `theme_color` 는
+`BRAND.background`(페이지 바탕)다. 브랜드 주황은 화면 안의 로고·링크·버튼·FAB 에만 둔다.
+🕘 2026-10-19 까지는 둘 다 `BRAND.color` 라 Android Chrome 상단 전체가 주황으로 칠해졌다.
 
 🕘 이전 파생본은 폐기했다 — 09-21 반전안·A안(원본에서 심볼만 뽑아 다시 칠함), 09-29 이전 원본(`1e580263…`) 전체 축소본.
 
@@ -1127,6 +1158,7 @@ OG 카드     로고(#F46333)  ↔  아래 강조 바(#FA4601)
               → 상자 192×96 에 **늘리지 않고 담는다**(contain) · 내용 왜곡 0
 아이콘        🔴 Favicon.png 정사각 전체를 **그대로 축소만** 한다(2026-09-29 · 위 "크기별 아이콘").
               조각 분리·알파 추출·재채색을 하지 않는다 — 2026-09-21 의 추출 방식은 폐기했다
+              예외: maskable 2종만 0.90배 축소 + 모서리 평균색 채움(2026-10-19 · 위 한정 예외)
 색            🔴 원본 픽셀 그대로다. 새 색을 지어내지 않고 1차의 #FA4601 을 섞지 않는다
 ```
 
@@ -1137,8 +1169,14 @@ OG 카드     로고(#F46333)  ↔  아래 강조 바(#FA4601)
 `npm run check:brand-assets` 가 **선언이 아니라 파일을 읽어** 확인한다.
 
 ```
-PNG 헤더에서 실제 픽셀을 재서 brand-assets.ts 의 pixels 와 대조   5건
+PNG 헤더에서 실제 픽셀을 재서 brand-assets.ts 의 pixels 와 대조   7건
+manifest 아이콘이 정확히 4종인지 — any 192·512 · maskable 192·512
+  (추가 · 중복 · 승인 밖 경로/크기/purpose 조합 · 쿼리 없는 /icon.png·/apple-icon.png 는 실패)
 manifest 아이콘 4종의 경로·크기·MIME 이 실제와 같은지             4건
+manifest 아이콘 픽셀 (PNG 를 zlib 로 직접 풀어 잰다)
+  불투명 · 배경이 가장자리까지 채움 · 내부 네모 섬 없음
+  maskable 은 내용이 안전 원(지름 80%) 안
+우나어 3원 심볼 자산의 SHA-256 이 public/ · src/ 에 0건
 검색 favicon(src/app/icon.png)이 정사각 · 48px 초과인지
 가로형 로고가 표시 상자(brand-logo.ts)의 정확히 2배인지
 BRAND_LOGO.src · OG 런타임 리터럴 경로 · 파일 추적 설정이 모두 같은 파일을 가리키는지
@@ -1149,7 +1187,7 @@ BRAND_LOGO.src · OG 런타임 리터럴 경로 · 파일 추적 설정이 모�
 경계를 그대로 적는다 — 과장하면 그 목록을 믿고 눈으로 보지 않게 된다.
 
 ✅ **구 로고·구 아이콘 잔존 0건.** 헤더·route error·global-error·OG 2곳·favicon·
-Apple touch·PWA 2종·manifest·자산 manifest·검사기·이 문서가 전부 신규 브랜드다.
+Apple touch·PWA any 2종·maskable 2종·manifest·자산 manifest·검사기·이 문서가 전부 신규 브랜드다.
 
 ---
 
@@ -1535,7 +1573,7 @@ npm run typecheck · lint · build
 | `check:brand-colors` | 대조 **8쌍 일치** · **`KNOWN_DRIFT` 0건** |
 | `check:contrast` | **42조합 · 예외 0건** + 고객 CTA 계약 **10파일 11개 className 표현** 전부 통과 |
 | `check:contrast:rebrand` | **exit 0** · **`BASELINE_DEBT` 0건** |
-| `check:brand-assets` | 11건 · 필수 교체 5건(아이콘 2 + 로그인 이미지 3) |
+| `check:brand-assets` | 16건 · `replace: true` 10건(앱 아이콘 6 + 가로형 로고 1 + 로그인 이미지 3) — 2026-10-19 S-PWA 실측 |
 
 `--brand-ink` 사용처는 `check:contrast` 가 파일별로 고정한다(`BRAND_INK_USAGE`).
 4곳 전부 `LARGE_TEXT` 이며, **작은 글씨에 새로 쓰면 CI 가 실패한다.**
@@ -1562,7 +1600,9 @@ npm run typecheck · lint · build
 | 🕘 ~~`global-error` · OG 2곳도 두 색으로 통일 — CSS 밖 보조색 `BRAND.strong`~~ | **이전 정책 · 지금은 같은 이미지 파일을 쓴다.** parity 8쌍은 그대로 유지 |
 | 🔴 **가로형 이미지 로고** — 표시 48px 고정 · @2x · 네 자리가 한 파일 | ✅ 반영 · **2026-09-21 §3-2-A** |
 | 🕘 ~~크기별 아이콘 — 탭 32/16 C-반전 · Apple 180 · PWA 192/512 A안~~ | **폐기 · 2026-09-29** — 원본과 다른 그림 |
-| 🔴 **아이콘 4종 원본 통일** — 최신 Favicon.png 전체 축소 · 탭/검색 96 · Apple 180 · PWA 192/512 | ✅ 반영 · **2026-09-30 §3-2-A** |
+| 🕘 ~~아이콘 4종 원본 통일 — 최신 Favicon.png 전체 축소 · 탭/검색 96 · Apple 180 · PWA 192/512~~ | **2026-09-30 반영 · 2026-10-19 아래 행으로 갱신** |
+| 🔴 **앱 아이콘 6종 · any/maskable 분리** — 같은 Favicon.png · favicon 96 · Apple 180 · any 192/512(전체 축소) · maskable 192/512(0.90배 + 모서리색 채움). manifest 는 any·maskable 4종만 · `/icon.png`·`/apple-icon.png` 제외 | ✅ 반영 · **2026-10-19 §3-2-A** |
+| 🔴 **브라우저 상단색** — 일반 Chrome `theme-color` 미선언(시스템 기본) · 설치형 PWA `theme_color` = `BRAND.background` | ✅ 반영 · **2026-10-19 §3-2-A** |
 | 🔴 **`check:brand-assets` 가 실제 픽셀·manifest·@2x·구 계약 잔존을 검사** | ✅ 반영 · **2026-09-21** |
 | ✅ **단색 워드마크 잔존** | **0건** (워드마크 자체가 없다) |
 | ✅ **구 로고·구 아이콘 잔존** | **0건** |
@@ -1574,14 +1614,15 @@ npm run typecheck · lint · build
 > 🔴 **`brand-assets.ts` 의 `replace: true` 를 "지금 어긋나 있다" 로 읽지 않는다.**
 > 그 값은 **다음 리브랜딩에서도 사람이 다시 만들어야 하는 자산**이라는 **정책값**이다 —
 > 글자·색이 픽셀에 구워져 있어 이름이 바뀌면 코드로 고칠 수 없기 때문이다.
-> `replace: true` 자산 5건(아이콘 2종 · 로그인 슬라이드 3장)은 **전부 새 팔레트로 교체 완료**다.
+> `replace: true` 자산 10건(앱 아이콘 6종 · 가로형 로고 1 · 로그인 슬라이드 3장)은 **전부 현행 브랜드 자산**이다
+> (2026-10-19 실측 · 🕘 2026-09-08 기준으로는 5건이었다).
 >
 > 🕘 2026-09-07까지는 이 행이 "로그인 슬라이드 3장뿐" 이었다. 그 3장이 마지막 stale 자산이었다.
 | ~~CTA 흰 글씨 대비 예외~~ → **예외 0건** (현행: `--cta-content` `#FFFFFF` 3.53:1 이 큰 굵은 글씨 3:1 을 실제 통과) | ✅ 해소 · 2026-09-07 → **기준 갱신 2026-09-08** |
 | ~~`--brand-ink` 대비 예외 2건~~ → **예외 0건** (큰 글씨 3:1 실제 통과) | ✅ 해소 · 2026-09-07 |
 | ~~`BRAND.background` drift~~ → **`--surface-app` 과 정식 PAIR** | ✅ 해소 · `KNOWN_DRIFT` **0건** |
 | `text-brand-ink` 49건 → **큰 글씨 4건만 유지, 45건 `--brand-strong` 이관** | ✅ 반영 · `BASELINE_DEBT` **0건** |
-| 🔁 **아이콘 2종 · 로그인 이미지 3장** | 🔴 **미교체** — 이전 코랄이 픽셀에 남아 있다(§2-1-C 후속 자산) |
+| 🕘 ~~아이콘 2종 · 로그인 이미지 3장 미교체~~ | 2026-09-08 당시 후속 과제 · 현재는 전부 현행 브랜드 자산으로 교체 완료 (§3-2-A) |
 | ~~웜 아이보리 바탕 `#FFF8F6`~~ → **중립 바탕 `#F2F3F5`** (바탕 겸 hover) | 🕘 2026-08-27 개정 §2-3-A — **현재는 웜 뉴트럴 `#FBFAF9` 로 대체** |
 | ~~코랄 구분선 `#F2C9C1`~~ → **웜 뉴트럴 `#E0DEDD`** | 🕘 2026-08-27 — **현재는 `#E4E0DC`** |
 | **상세·매거진 흰 카드 면** | ✅ 반영 · 2026-08-27 |
@@ -1608,7 +1649,8 @@ npm run typecheck · lint · build
        목록 순번 22px bold · 댓글 수                          --brand-ink
        활성 표시 밑줄(정렬 탭) · 슬라이드 점 · 온보딩 단계 바     border-brand / bg-brand
        FAB 그림자                                             --shadow-brand
-       브라우저 주소창 theme-color · 파비콘 · OG 이미지          BRAND.color / BRAND.ink
+       OG 이미지 강조 바                                       BRAND.color
+       🕘 브라우저 주소창 theme-color 는 2026-10-19 부터 선언하지 않는다(§3-2-A)
        최후 에러 화면 버튼 면 (CSS 없이 인라인)                  BRAND.cta
 
 흰색   🔴 고객 primary CTA 의 글자·아이콘 — 전부 같은 토큰이다      --cta-content

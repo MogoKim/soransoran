@@ -103,6 +103,7 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
       '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
       '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다. ' +
       '96 은 Google 이 권장하는 48px 초과 조건을 만족하는 우리 채택 규격이다. ' +
+      '🔴 2026-10-19 부터 PWA manifest 에는 넣지 않는다 — 쿼리 없는 주소가 1년 immutable 캐시라 옛 그림이 남았다(manifest.ts). ' +
       '🔴 이름이 픽셀에 들어 있다. 이름이 바뀌면 코드로는 못 고친다(replace: true).',
   },
   {
@@ -117,7 +118,8 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
       '✅ 2026-09-30 신규 원본으로 교체. ' +
       '파비콘·Apple 홈 아이콘·Android/PWA 아이콘은 창업자가 지정한 최신 asset/Favicon.png 전체 이미지를 디자인 변경 없이 규격별로 축소해 사용한다. ' +
       '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
-      '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다.',
+      '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다. ' +
+      '🔴 2026-10-19 부터 PWA manifest 에는 넣지 않는다 — HTML apple-touch-icon(?hash) 으로만 쓴다(manifest.ts).',
   },
   {
     path: 'public/brand/icon-192.png',
@@ -132,7 +134,7 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
       '파비콘·Apple 홈 아이콘·Android/PWA 아이콘은 창업자가 지정한 최신 asset/Favicon.png 전체 이미지를 디자인 변경 없이 규격별로 축소해 사용한다. ' +
       '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
       '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다. ' +
-      'purpose 는 any 다 — 내용 일부가 maskable 안전영역 밖이다(manifest.ts).',
+      'purpose 는 any 다 — 내용 일부가 maskable 안전영역 밖이다(manifest.ts). maskable 은 아래 별도 파일이 진다.',
   },
   {
     path: 'public/brand/icon-512.png',
@@ -148,6 +150,31 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
       '생성·대조: node scripts/generate-app-icons.mjs <원본 경로> (원본 SHA 는 스크립트에 고정). ' +
       '🕘 이전 원본(09-29)·반전안·A안(09-21) 파생본은 폐기했다. ' +
       'purpose 는 192 와 같다.',
+  },
+  {
+    path: 'public/brand/icon-maskable-192.png',
+    kind: 'file',
+    category: 'app-icon',
+    use: 'Android 원형·둥근 사각형 마스크 아이콘 — manifest 192×192 maskable',
+    replace: true,
+    locked: false,
+    pixels: '192x192',
+    note:
+      '✅ 2026-10-19 S-PWA 신규. 같은 asset/Favicon.png 전체를 0.90배로 줄여 가운데 두고, ' +
+      '바깥을 원본 모서리 평균색으로 캔버스 끝까지 채웠다 — 창업자 승인 한정 예외(maskable 전용). ' +
+      '로고의 색·형태·글자·비율은 그대로다. 생성 규칙은 generate-app-icons.mjs 의 renderMaskable 하나다. ' +
+      '불투명 · 가장자리 채움 · 안전 원(지름 80%) 안 내용은 check:brand-assets 가 픽셀로 잰다. ' +
+      '새 파일명이라 옛 1년 캐시 주소를 재사용하지 않는다.',
+  },
+  {
+    path: 'public/brand/icon-maskable-512.png',
+    kind: 'file',
+    category: 'app-icon',
+    use: 'Android 원형·둥근 사각형 마스크 아이콘 고해상도 — manifest 512×512 maskable',
+    replace: true,
+    locked: false,
+    pixels: '512x512',
+    note: 'maskable 192 와 같은 규칙·같은 원본이다.',
   },
   {
     path: 'public/brand/soransoran-logo.png',
@@ -216,8 +243,9 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     replace: false,
     locked: false,
     note:
-      'SITE.name 과 BRAND 색을 읽는다. 아이콘 4종(96·180·192·512)은 위 file 자산이 지고 ' +
-      'manifest 는 경로·크기·MIME 만 선언한다. purpose 는 any 다 — 근거는 manifest.ts 머리말.',
+      'SITE.name 과 BRAND 색을 읽는다. theme_color 는 브랜드 주황이 아니라 페이지 바탕이다(2026-10-19). ' +
+      '아이콘은 any 192·512 와 maskable 192·512 의 4종이고 위 file 자산이 진다. ' +
+      'manifest 는 경로·크기·MIME·purpose 만 선언한다 — 근거는 manifest.ts 머리말.',
   },
   {
     path: 'public/images/hero/soransoran-community-hero.jpg',
