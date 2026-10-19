@@ -9,7 +9,9 @@
     "commit": "bca1014e9df14b74ab20092009864f51aa3a0bf8",
     "pr": 765,
     "render": "p → 문단 · h2 → \"## \" · h3 → \"### \" · list → \"- \" 항목 · callout → \"> \" · image·cta 생략 · 블록 사이 빈 줄 1개",
-    "bodySha256": "4ea75c41076dd2ff70a24b7864b2c862fbe8259ed09b76566221e0df67c34f61"
+    "bodySha256": "4ea75c41076dd2ff70a24b7864b2c862fbe8259ed09b76566221e0df67c34f61",
+    "description": "퇴직 후 건강보험료가 달라지는 이유와 지역가입자 보험료를 매기는 소득·재산 기준, 임의계속가입 신청기한과 피부양자 등재처럼 확인해볼 수 있는 선택지를 함께 정리했습니다.",
+    "descriptionSha256": "edad22a37b06ad844bec5cc58b1aab65108e8f0ba26ea5bfdeef04d1d90a948b"
   },
   "queueBlock": "  {\n    day: 15,\n    slug: 'health-insurance-after-retire',\n    title: '퇴직 후 건강보험료는 어떻게 되나요',\n    contentType: 'EVERGREEN',\n    intent: '계산',\n    cluster: 'money-work',\n    target: '50대 후반~60대',\n    validationProfile: 'FINANCIAL',\n    riskLevel: 'MEDIUM',\n    reviewMode: 'RISK_SENTENCES',\n    imageMode: 'OPTIONAL',\n    autoEligible: true,\n    ctaBoard: '/community/free',\n    internalLinks: ['pension-early-vs-normal'],\n    whyNow: '고지서를 받고 놀라는 시점이 실제로 온다',\n    notes: '구체 금액이 아니라 산정 방식과 범위까지. 금액을 못 박으면 HIGH 다',\n  },\n",
   "queueBlockSource": "dda97b7f^ (#114 등록 직전) drafts/magazine/topic-queue.ts 의 health-insurance-after-retire 행 원문. 바꾼 것 둘 — title 을 #765 공개 제목(source.title)으로 · validationProfile FINANCIAL 명시(지금 호환 표에 이 행이 없어 프로필이 정해지지 않는다). sandbox 사본 큐에만 넣는다",

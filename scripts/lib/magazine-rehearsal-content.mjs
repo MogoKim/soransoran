@@ -11,6 +11,8 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { resolveValidationProfile } from './magazine-validation-profile.mjs'
+import { parseQueueSource } from './magazine-load.mjs'
+import { extractMarkers } from './magazine-brief-policy.mjs'
 
 /** 가짜 ChatGPT 이미지 — 결정적 PNG (같은 sharp 로 같은 바이트). rehearsal 검사가 기대 변환 결과를 독립 계산할 때도 쓴다 */
 export const FIXTURE_HERO_SPEC = Object.freeze({ width: 1536, height: 1024, channels: 3, background: { r: 214, g: 180, b: 150 } })
@@ -49,6 +51,7 @@ export function validateFinancialSkeleton(fx) {
   const sha = createHash('sha256').update(fx.body).digest('hex')
   if (sha !== fx.source?.bodySha256) bad(`본문 sha256 ${sha} ≠ source.bodySha256 ${fx.source?.bodySha256}`)
   if (typeof fx.source?.slug !== 'string' || !fx.source.slug || typeof fx.source?.title !== 'string' || !fx.source.title) bad('출처 slug·title 이 없다')
+  if (typeof fx.source.description !== 'string' || !fx.source.description || createHash('sha256').update(fx.source.description).digest('hex') !== fx.source.descriptionSha256) bad('출처 description 이 없거나 sha256 이 다르다')
   if (!Array.isArray(fx.riskSentences) || fx.riskSentences.length !== 5) bad('반드시 넣을 문장이 5개가 아니다')
   const missing = fx.riskSentences.filter((s) => typeof s !== 'string' || !fx.body.includes(s))
   if (missing.length) bad(`반드시 넣을 문장이 본문에 없다: ${missing.join(' / ')}`)
@@ -118,33 +121,123 @@ export function standardSkeleton({ repo, item }) {
   return x
 }
 
-/** 템플릿 review 의 반드시 넣을 문장 — 뼈대가 바뀌면 brief 마커와 review 를 같은 글자로 바꿔 끼운다 */
-const templateRiskSentences = (repo) => riskSentencesOf(read(join(repo, 'drafts', 'magazine', SKELETON.brief.slug, 'review.ts')))
+/**
+ * 🔴 **금융 정상 후보의 brief·review — 같은 질문에서 결정적으로 컴파일한다** (2026-10-19 · Codex 재검토 P1).
+ *    앞판은 avoiding-gatherings brief·review 를 불러 제목·cluster·5문장만 바꿔 끼웠다. 그래서 금융 brief 의
+ *    description·검색 의도·도입 장면·h2 설계가 모임 이야기로 남았다 (원고는 fixture 본문이라 등록 신원 검사로는 안 보였다).
+ *    이제 근거는 같은 질문뿐이다 — 새 사실 문장 0:
+ *      fixture 큐 행 (title · cluster · target · whyNow · notes) · #765 공개본 (description · 첫 문단 · h2 구성) ·
+ *      fixture 반드시 넣을 문장 5개 · 금지 패턴 · 위험 축
+ *    템플릿 brief 에서는 내용과 무관한 「공통 규칙」 형식 블록(출력 형식 · 허용 표기 · 공통 금지 · 톤 · 분량)만 가져온다.
+ *    #765 이전 health drafts 는 근거로 쓰지 않는다.
+ */
+const queueItemOf = (fx) => parseQueueSource(`export const TOPIC_QUEUE = [\n${fx.queueBlock}]\n`, 'rehearsal-financial-skeleton.json')[0]
+const h2sOf = (body) => body.split('\n').filter((l) => l.startsWith('## ')).map((l) => l.slice(3))
+const firstParagraphOf = (body) => body.split('\n\n').find((x) => x && !/^(##|>|- )/.test(x))
+const tsString = (v) => `'${String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
+
+/** 템플릿 brief 의 「공통 규칙」 블록 — 형식만 (출력 형식의 title·cluster 는 이 글의 값으로) */
+function commonRulesOf(repo, item) {
+  const t = read(join(repo, 'drafts', 'magazine', SKELETON.brief.slug, 'brief.md'))
+  const at = t.indexOf('\n---\n\n## 공통 규칙')
+  if (at < 0) throw new Error('템플릿 brief 에 「공통 규칙」 블록이 없다')
+  return t.slice(at + 1)
+    .replace(`title: ${SKELETON.brief.title}`, `title: ${item.title}`)
+    .replace(/^cluster: .*$/m, `cluster: ${item.cluster}`)
+}
+
+export function financialBriefReview({ repo, fx }) {
+  const q = queueItemOf(fx)
+  const h2s = h2sOf(fx.body)
+  if (q.slug !== fx.source.slug || q.title !== fx.source.title) throw new Error('금융 큐 행이 출처와 다른 질문이다')
+  if (h2s.length < 3 || h2s.length > CIRCLED.length) throw new Error(`금융 공개본 h2 수 ${h2s.length}`)
+  const brief = [
+    '---', `title: ${q.title}`, `description: ${fx.source.description}`, `cluster: ${q.cluster}`, 'medical: false', '---', '',
+    '## 검색 의도', '', '이 글이 답하는 질문입니다.', '', `- "${q.title}"`, '', `답하는 범위: ${q.notes}`, '',
+    '## 대상 독자', '', `- ${q.target}`, `- ${q.whyNow}`, '',
+    '## 도입에서 해야 할 것', '', '공개본의 첫 장면으로 엽니다.', '', `> ${firstParagraphOf(fx.body)}`, '',
+    `## 글 구조 (h2 ${h2s.length}개)`, '', ...h2s.map((h, i) => `- **h2 ${CIRCLED[i]}  ${h}**`), '', '마지막 줄은 자유게시판 CTA 한 줄로 닫습니다.', '',
+    '## 반드시 그대로 넣을 문장', '', ...fx.riskSentences.map((x, i) => `${i + 1}. ${x}`), '',
+    '## 절대 쓰지 말 것', '', ...fx.forbiddenPatterns.map((x) => `- "${x}"`), `- ${q.notes}`, '',
+  ].join('\n') + commonRulesOf(repo, q)
+  const review = [
+    "import type { ReviewData } from '../_template/review'", '',
+    'export const REVIEW: ReviewData = {',
+    `  slug: ${tsString(q.slug)},`,
+    '  summary: [', ...h2s.map((h) => `    ${tsString(h)},`), '  ],',
+    '  riskSentences: [', ...fx.riskSentences.map((x) => `    ${tsString(x)},`), '  ],',
+    `  risk: {\n    medical: '${fx.risk.medical}',\n    money: '${fx.risk.money}',\n    legal: '${fx.risk.legal}',\n  },`,
+    '  factsToVerify: [', ...fx.riskSentences.map((x) => `    ${tsString(x)},`), '  ],',
+    '  forbiddenPatterns: [', ...fx.forbiddenPatterns.map((x) => `    ${tsString(x)},`), '  ],',
+    "  preparedAt: '2026-10-19',", "  preparedBy: 'Claude Code',", `  notes: ${tsString(q.notes)},`, '}', '',
+  ].join('\n')
+  return { brief, review }
+}
+
+/** avoiding-gatherings 의 내용 문구 — 금융 brief·review 에 한 줄도 남으면 안 된다 */
+export const FINANCIAL_FOREIGN_PHRASES = Object.freeze(['모임', '약속', '친목', '관계의 무게', '카톡', '동창회', '사회성', '나가기 싫'])
+/** #765 이전 health drafts 의 틀린 사실 문장 조각 — 되살아나면 안 된다 */
+export const FINANCIAL_STALE_PHRASES = Object.freeze(['소득과 재산과 자동차', '소득, 재산, 자동차', '퇴직일로부터 두 달', '두 달 안에 신청', '자동차를 보유', '얼마나 나오나요', '60대 초반 퇴직'])
+
+const sectionOf = (text, name) => {
+  const lines = String(text ?? '').split('\n')
+  const at = lines.findIndex((l) => l.startsWith(`## ${name}`))
+  if (at < 0) return null
+  const end = lines.findIndex((l, i) => i > at && (l.startsWith('## ') || l === '---'))
+  return lines.slice(at + 1, end < 0 ? lines.length : end).join('\n')
+}
+const listOf = (reviewText, key) => {
+  const m = new RegExp(`${key}:\\s*\\[([\\s\\S]*?)\\]`).exec(reviewText ?? '')
+  return m ? [...m[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((x) => x[1].replace(/\\'/g, "'")) : null
+}
+
+/**
+ * 🔴 **상류 신원 판정** — brief·review 가 금융 정상 후보와 같은 질문인가 (등록 글 신원 검사와 별도).
+ *    순수 함수 · 문제 목록을 돌려준다 (빈 목록이면 같은 질문).
+ */
+export function financialUpstreamIdentity({ brief, review, fx }) {
+  const p = []
+  const fm = frontmatterOf(brief)
+  const h2s = h2sOf(fx.body)
+  if (fm.title !== fx.source.title) p.push(`frontmatter title ${fm.title}`)
+  if (fm.description !== fx.source.description) p.push('description 이 공개본과 다르다')
+  const intent = sectionOf(brief, '검색 의도') ?? ''
+  if (!intent.includes(`- "${fx.source.title}"`)) p.push('검색 의도 primary query 가 이 질문이 아니다')
+  const design = [...(sectionOf(brief, '글 구조') ?? '').matchAll(/^- \*\*h2 \S+\s+(.+)\*\*$/gm)].map((m) => m[1])
+  if (JSON.stringify(design) !== JSON.stringify(h2s)) p.push('h2 설계가 공개본 구성과 다르다')
+  if (JSON.stringify(extractMarkers(brief)) !== JSON.stringify(fx.riskSentences)) p.push('brief 반드시 넣을 문장이 fixture 와 다르다')
+  if (!new RegExp(`slug:\\s*'${fx.source.slug}'`).test(review ?? '')) p.push('review slug 가 다르다')
+  if (JSON.stringify(listOf(review, 'summary')) !== JSON.stringify(h2s)) p.push('review summary(글 설계)가 공개본 구성과 다르다')
+  if (JSON.stringify(listOf(review, 'riskSentences')) !== JSON.stringify(fx.riskSentences)) p.push('review riskSentences 가 fixture 와 다르다')
+  const all = `${brief}\n${review}`
+  const foreign = FINANCIAL_FOREIGN_PHRASES.filter((x) => all.includes(x))
+  if (foreign.length) p.push(`다른 질문 문구 ${foreign.join(',')}`)
+  const stale = FINANCIAL_STALE_PHRASES.filter((x) => all.includes(x))
+  if (stale.length) p.push(`옛 사실 문구 ${stale.join(',')}`)
+  return p
+}
 
 /**
  * 가짜 Claude 출력 — `===BRIEF===` · `===REVIEW===` 두 마커 (brief-auto 의 splitOutput 계약).
  * @param {{repo:string, item:object, mode?:'good'|'no-format-contract'}} p
  */
 export function claudeBriefOutput({ repo, item, mode = 'good' }) {
-  const dir = join(repo, 'drafts', 'magazine', SKELETON.brief.slug)
-  let brief = read(join(dir, 'brief.md'))
-    .replaceAll(SKELETON.brief.title, item.title)
-    .replace(/^cluster: .*$/m, `cluster: ${item.cluster}`)
-  let review = read(join(dir, 'review.ts'))
-    .replace(`slug: '${SKELETON.brief.slug}'`, `slug: '${item.slug}'`)
   const fx = profileSkeleton({ repo, item })
+  let brief
+  let review
   if (fx) {
-    // 🔴 금융 — 반드시 넣을 문장 5개(brief 마커 · review)를 같은 글자로, 위험 축·금지 패턴은 금융 review 그대로
-    templateRiskSentences(repo).forEach((s, i) => {
-      brief = brief.replaceAll(s, fx.riskSentences[i])
-      review = review.replace(`'${s}'`, `'${fx.riskSentences[i]}'`)
-    })
-    review = review
-      .replace(/risk: \{[^}]*\}/, `risk: {\n    medical: '${fx.risk.medical}',\n    money: '${fx.risk.money}',\n    legal: '${fx.risk.legal}',\n  }`)
-      .replace(/forbiddenPatterns: \[[\s\S]*?\]/, `forbiddenPatterns: [\n${fx.forbiddenPatterns.map((p) => `    '${p}',`).join('\n')}\n  ]`)
+    // 🔴 금융 — 같은 질문에서 컴파일한 brief·review (avoiding brief 부분 치환 0)
+    ({ brief, review } = financialBriefReview({ repo, fx }))
   } else {
-    // 🔴 위험 축 하나를 MEDIUM 으로 — 큐 riskLevel 이 무엇이든 G6 가 같은 근거(진료 확인 문장)를 요구한다
-    review = review.replace("medical: 'LOW'", "medical: 'MEDIUM'")
+    const dir = join(repo, 'drafts', 'magazine', SKELETON.brief.slug)
+    brief = read(join(dir, 'brief.md'))
+      .replaceAll(SKELETON.brief.title, item.title)
+      .replace(/^cluster: .*$/m, `cluster: ${item.cluster}`)
+    review = read(join(dir, 'review.ts'))
+      .replace(`slug: '${SKELETON.brief.slug}'`, `slug: '${item.slug}'`)
+      // 🔴 위험 축 하나를 MEDIUM 으로 — 큐 riskLevel 이 무엇이든 G6 가 같은 근거(진료 확인 문장)를 요구한다
+      .replace("medical: 'LOW'", "medical: 'MEDIUM'")
   }
   if (mode === 'no-format-contract') brief = stripFormatContract(brief)
   return `===BRIEF===\n${brief}\n===REVIEW===\n${review}\n`

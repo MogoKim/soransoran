@@ -1072,6 +1072,11 @@ export async function runScenario(id, { date, runtime, base, keep = false }) {
   const registeredArticles = []
   for (const a of ev.registered) registeredArticles.push({ slug: a.slug, ...((await mergedArticle(ctx, a.slug)) ?? { title: null, text: null }) })
   ctx.registeredArticles = registeredArticles
+  // 🔴 등록 글의 상류 — 그 회차 producer·시나리오가 실제로 쓴 brief·review (rehearsal-check 가 같은 질문인지 다시 판정한다)
+  const registeredUpstream = registeredArticles.map((a) => {
+    const f = (n) => { const p = join(sb.repo, 'drafts', 'magazine', a.slug, n); return existsSync(p) ? readFileSync(p, 'utf8') : null }
+    return { slug: a.slug, brief: f('brief.md'), review: f('review.ts') }
+  })
   let checks
   try { checks = [...def.expect(ev, ctx), ...boundaryChecks(ev)] } catch (e) { checks = [exp(`${id} 기대값 판정 예외`, false, String(e?.message ?? e))] }
   if (error) checks.unshift(exp(`${id} 실행 예외 없음`, false, error))
@@ -1088,6 +1093,7 @@ export async function runScenario(id, { date, runtime, base, keep = false }) {
     publishAt: ctx.publishAt ?? null,
     hold: ctx.holdEntryBefore ? { before: ctx.holdEntryBefore, after: ctx.holdEntryAfter } : null,
     registeredArticles,
+    registeredUpstream,
   }
   const report = { id, title: def.title, ok, date, root: sb.root, kept: keep || !ok, prepared: ctx.prepared, baseline: sb.baseline,
     stages: ctx.stages, evidence: ev, extras, checks }

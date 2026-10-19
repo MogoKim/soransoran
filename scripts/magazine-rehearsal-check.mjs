@@ -16,7 +16,11 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
-import { FIXTURE_HERO_SPEC, FINANCIAL_SKELETON_FIXTURE, STANDARD_SKELETON_FIXTURE, financialSkeleton, profileSkeleton, standardSkeleton, standardSkeletons, validateFinancialSkeleton, validateStandardSkeletons } from './lib/magazine-rehearsal-content.mjs'
+import { FIXTURE_HERO_SPEC, FINANCIAL_SKELETON_FIXTURE, STANDARD_SKELETON_FIXTURE, claudeBriefOutput, financialBriefReview, financialSkeleton, financialUpstreamIdentity, profileSkeleton, standardSkeleton, standardSkeletons, validateFinancialSkeleton, validateStandardSkeletons } from './lib/magazine-rehearsal-content.mjs'
+import { verifyBrief } from './lib/magazine-brief-policy.mjs'
+import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
+import { parseReview } from './magazine-brief-auto.mjs'
+import { parseQueueSource } from './lib/magazine-load.mjs'
 import { fixtureQueue } from './fixtures/magazine-format-contract/repair-queue-rows.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -62,6 +66,26 @@ const finish = () => { console.log(`\n${fail ? '🔴' : '✅'} 리허설 검사 
   check('STANDARD 뼈대 반례 — 큐 행이 다른 질문이면 거부', rejects(() => validateStandardSkeletons(stamper((c) => { c.sources[0].queueBlock = c.sources[0].queueBlock.replace(c.sources[0].title, '저녁 식사를 바꿔 본 2주') }))))
   check('STANDARD 뼈대 반례 — 같은 slug 라도 제목이 다른 대상에는 쓰지 않는다 (임의 queue 대상 재부착)',
     rejects(() => standardSkeleton({ repo: ROOT, item: { slug: 'avoiding-gatherings', title: '저녁 식사를 바꿔 본 2주', cluster: 'relationship' } })))
+  // ── 금융 brief·review 상류 신원 (2026-10-19) — 큐 행 → title → brief → review 가 한 질문 ──
+  {
+    const item = parseQueueSource(`export const TOPIC_QUEUE = [\n${fx.queueBlock}]\n`)[0]
+    const out = claudeBriefOutput({ repo: ROOT, item })
+    const brief = out.slice(out.indexOf('===BRIEF===') + 11, out.indexOf('===REVIEW===')).replace(/^\n/, '').replace(/\n$/, '')
+    const review = out.slice(out.indexOf('===REVIEW===') + 12).replace(/^\n/, '').replace(/\n$/, '')
+    const compiled = financialBriefReview({ repo: ROOT, fx })
+    const ident = financialUpstreamIdentity({ brief, review, fx })
+    check('금융 brief·review — 실제 claudeBriefOutput 이 같은 질문에서 컴파일한 brief·review 를 그대로 낸다', brief === compiled.brief && review === compiled.review)
+    check('금융 brief·review 상류 신원 — title · description · 검색 의도 · h2 설계 · 5문장 · review slug·summary·riskSentences · 다른 질문/옛 사실 문구 0', ident.length === 0, ident)
+    const vb = verifyBrief({ briefText: brief, review: parseReview(review), queueItem: item })
+    check('금융 brief·review — 실제 verifyBrief G1~G7·GF 전부 통과 (검사 우회 0)', vb.ok, vb.results.filter((r) => !r.ok))
+    check('금융 brief — 실제 형식 계약 통과', judgeBriefFormatContract(brief).ok)
+    const tdir = join(ROOT, 'drafts', 'magazine', 'avoiding-gatherings')
+    const oldShape = { brief: readFileSync(join(tdir, 'brief.md'), 'utf8').replaceAll('모임에 나가기 싫어질 때', fx.source.title), review: readFileSync(join(tdir, 'review.ts'), 'utf8').replace("slug: 'avoiding-gatherings'", `slug: '${fx.source.slug}'`) }
+    check('금융 상류 반례 — 앞판 모양(avoiding brief·review 를 제목만 바꿔 끼움)은 신원 판정에서 거부', financialUpstreamIdentity({ ...oldShape, fx }).length > 0)
+    check('금융 상류 반례 — 검색 의도만 모임 질문으로 되돌리면 거부', financialUpstreamIdentity({ brief: brief.replace(`- "${fx.source.title}"`, '- "50대 모임 나가기 싫어"'), review, fx }).length > 0)
+    check('금융 상류 반례 — review 글 설계(summary)만 모임 이야기로 되돌리면 거부', financialUpstreamIdentity({ brief, review: review.replace(/summary: \[[\s\S]*?\]/, "summary: [\n    '카톡 모임 알림에 마음이 무거워지는 장면으로 공감대를 연다.',\n  ]"), fx }).length > 0)
+    check('금융 상류 반례 — 옛 사실 문장(자동차 부과 · 퇴직일로부터 두 달)이 되살아나면 거부', financialUpstreamIdentity({ brief: `${brief}\n- 소득과 재산과 자동차를 모두 반영합니다. 퇴직일로부터 두 달 안에 신청합니다.\n`, review, fx }).length > 0)
+  }
   check('STANDARD 뼈대 — 출처가 아닌 대상은 정상 뼈대를 받지 않는다 (null → 실패 경로 전용)', standardSkeleton({ repo: ROOT, item: { slug: 'dinner-change-two-weeks', title: '저녁 식사를 바꿔 본 2주' } }) === null)
 }
 
@@ -210,6 +234,20 @@ if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios
       if (mixed.length) bad.push(`${a.slug} 다른 질문 문장 ${mixed.length}개 섞임`)
     }
     check(`${sc.id} 등록 글 신원 — 정상 출처·실제 원고만 · 질문 혼합 0 (${arts.map((a) => a.slug).join(',') || '등록 0'})`, bad.length === 0, bad)
+  }
+  // 상류 — 금융 정상 후보를 등록한 모든 시나리오의 실제 brief·review 가 같은 질문의 컴파일 결과와 같다
+  const compiledFin = financialBriefReview({ repo: ROOT, fx: fin })
+  for (const sc of report.scenarios) {
+    const ups = (sc.extras?.registeredUpstream ?? []).filter((u) => u.slug === fin.source.slug)
+    if (!sc.evidence.registered.some((r) => r.slug === fin.source.slug)) continue
+    const bad = []
+    if (ups.length !== 1) bad.push(`상류 파일 ${ups.length}`)
+    for (const u of ups) {
+      if (u.brief?.trim() !== compiledFin.brief.trim()) bad.push('brief.md 가 같은 질문의 컴파일 결과와 다르다')
+      if (u.review?.trim() !== compiledFin.review.trim()) bad.push('review.ts 가 같은 질문의 컴파일 결과와 다르다')
+      bad.push(...financialUpstreamIdentity({ brief: u.brief ?? '', review: u.review ?? '', fx: fin }))
+    }
+    check(`${sc.id} 금융 등록 글 상류 — 실제 brief.md·review.ts 가 같은 질문 (큐 행 → title → brief → review → 원고 → 등록)`, bad.length === 0, bad)
   }
   // 실패 경로 전용 뼈대를 쓰는 경로 — 등록 0 · 지정 실패에서 멈춘다
   if (S.S2) check('S2 실패 경로 뼈대(입력 수리 응답) — 등록 0 · producer 단계만 (실제 종료 3)', S.S2.evidence.registered.length === 0 && stage(S.S2, 'producer')?.exit === 3, S.S2.evidence.registered)

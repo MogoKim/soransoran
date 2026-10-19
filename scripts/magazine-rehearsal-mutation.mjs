@@ -156,7 +156,15 @@ const MUTATIONS = [
   { name: '㊺ STANDARD 뼈대 fixture 의 대표 문장 대조 제거', scenarios: 'S11', edits: [{ file: F.content,
     find: '    if (missing.length) bad(`${x.slug} 대표 문장이 본문에 없다', replace: '    if (false) bad(`${x.slug} 대표 문장이 본문에 없다' }] },
   { name: '㊻ 정상 출처 원고도 실패 경로 뼈대로 만든다 (gray 제목 + 다른 질문 본문 등록)', scenarios: 'S12', edits: [{ file: F.content,
-    find: '  let body = (fx ? fx.body : sx ? sx.body : foreign()).trimEnd()', replace: '  let body = (fx ? fx.body : foreign()).trimEnd()' }] },
+    find: '  let body = (fx ? fx.body : sx ? sx.body : foreign()).trimEnd()', replace: '  let body = (fx ? fx.body : foreign()).trimEnd()' }] },  // ── 2026-10-19 금융 brief·review 상류 — 큐 행 → title → brief → review 가 한 질문 ──
+  { name: '㊼ FINANCIAL 이 다시 avoiding brief·review 를 부분 치환해 쓴다', scenarios: 'S1', edits: [{ file: F.content,
+    find: '    ({ brief, review } = financialBriefReview({ repo, fx }))\n  } else {', replace: '    void financialBriefReview\n  }\n  if (true) {' }] },
+  { name: '㊽ 금융 brief 검색 의도만 모임 질문으로 되돌린다', scenarios: 'S1', edits: [{ file: F.content,
+    find: "'이 글이 답하는 질문입니다.', '', `- \"${q.title}\"`,", replace: "'이 글이 답하는 질문입니다.', '', '- \"50대 모임 나가기 싫어\"'," }] },
+  { name: '㊾ 금융 review 글 설계(summary)만 모임 이야기로 되돌린다', scenarios: 'S1', edits: [{ file: F.content,
+    find: "    '  summary: [', ...h2s.map((h) => `    ${tsString(h)},`), '  ],',", replace: "    '  summary: [', \"    '카톡 모임 알림에 마음이 무거워지는 장면으로 공감대를 연다.',\", '  ],'," }] },
+  { name: '㊿ 금융 상류 brief·review 신원 판정 제거', scenarios: 'S1', edits: [{ file: F.content,
+    find: '  if (stale.length) p.push(`옛 사실 문구 ${stale.join(\',\')}`)\n  return p\n', replace: '  if (stale.length) p.push(`옛 사실 문구 ${stale.join(\',\')}`)\n  return []\n' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
