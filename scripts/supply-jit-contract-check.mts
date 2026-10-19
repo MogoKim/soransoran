@@ -115,12 +115,14 @@ console.log('\n② 반례 — 슬롯 5 · 유효 READY 3 → 부족 2 만')
   const ready = Array.from({ length: 3 }, (_, i) => readyOpp(`r${i}`, gate(fresh - i * 60_000)))
   const policy = judgeJitDemand({ slots: SLOTS.length, readyFilled: matchOpportunitiesToSlots(SLOTS, ready).filled })
   check('🔴 수요 = 5 − 3 = 2 · 적재 상한 2', policy.llm && policy.upTo === 2 && fillUpToOf(policy.upTo, 10) === 2, JSON.stringify(policy))
-  check('🔴 수율을 모르면 증폭하지 않는다 — 유료 원천 2(부족분만)',
-    JSON.stringify(paidSourcesFor({ deficit: 2, yieldHigh: null, cap: 10 })) === JSON.stringify({ sources: 2, basis: 'deficitOnly' }))
+  check('🔴 수율을 모르면 작은 회복 canary — 부족 2 × 원천 3 = 유료 원천 6',
+    JSON.stringify(paidSourcesFor({ deficit: 2, yieldHigh: null, cap: 10 })) === JSON.stringify({ sources: 6, basis: 'boundedRecovery' }))
   check('🔴 결말 수율 상한 0.5 → ceil(2 ÷ 0.5) = 4 (실측 근거로만 증폭)',
     paidSourcesFor({ deficit: 2, yieldHigh: 0.5, cap: 10 }).sources === 4)
-  check('🔴 수율 0 이면 돈을 더 써도 결과가 늘지 않는다 — 부족분만(2)',
-    paidSourcesFor({ deficit: 2, yieldHigh: 0, cap: 10 }).sources === 2)
+  check('🔴 수율 0도 단일 HOLD 고착을 복구하는 작은 canary — 부족 2 × 원천 3 = 6',
+    paidSourcesFor({ deficit: 2, yieldHigh: 0, cap: 10 }).sources === 6)
+  check('🔴 회복 canary도 묶음 상한을 넘지 않는다 — 부족 5 × 원천 3이어도 10',
+    paidSourcesFor({ deficit: 5, yieldHigh: null, cap: 10 }).sources === 10)
   check('🔴 묶음 상한은 안전장치 — ceil(2 ÷ 0.05) = 40 이어도 10',
     paidSourcesFor({ deficit: 2, yieldHigh: 0.05, cap: 10 }).sources === 10)
   check('🔴 수요를 모르면(null) 모델 · 적재 0', !judgeJitDemand(null).llm && judgeJitDemand(null).upTo === 0)

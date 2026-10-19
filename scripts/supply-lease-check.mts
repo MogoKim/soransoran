@@ -48,12 +48,12 @@ const kst = (s: string): Date => new Date(`${s}+09:00`)
 console.log('\n① 순수 — token · shadow · 창 · trigger')
 // ─────────────────────────────────────────────────────────
 {
-  check('예산 창(shadow) — 첫 슬롯 전은 첫 슬롯의 창', budgetWindowShadowOf(kst('2026-10-12T07:30:00')) === '2026-10-12 08:15')
+  check('예산 창(shadow) — 첫 슬롯 전은 첫 슬롯의 창', budgetWindowShadowOf(kst('2026-10-12T05:30:00')) === '2026-10-12 06:15')
   check('예산 창(shadow) — 슬롯 시각 정각은 그 슬롯', budgetWindowShadowOf(kst('2026-10-12T12:15:00')) === '2026-10-12 12:15')
   check('예산 창(shadow) — 다음 슬롯 직전까지 앞 슬롯 (이어 붙인 창 · 45분 창이 아니다)',
     budgetWindowShadowOf(kst('2026-10-12T12:14:59')) === '2026-10-12 08:15' && budgetWindowShadowOf(kst('2026-10-12T16:59:00')) === '2026-10-12 14:15')
   check('예산 창(shadow) — 마지막 슬롯 뒤 자정 전은 마지막 슬롯 · KST 날짜', budgetWindowShadowOf(kst('2026-10-12T23:59:00')) === '2026-10-12 22:15'
-    && budgetWindowShadowOf(kst('2026-10-13T00:05:00')) === '2026-10-13 08:15')
+    && budgetWindowShadowOf(kst('2026-10-13T00:05:00')) === '2026-10-13 06:15')
   check('회차 id = 회차 시각(UTC) YYYYMMDD-HHMMSS', supplyRunIdOf(new Date('2026-10-12T09:22:47.039Z')) === '20261012-092247')
   check('token 수명 = 공급 회차 정상 수명(45분)', RUN_TOKEN_TTL_MS === SUPPLY_RUN_WINDOW_MS && RUN_TOKEN_TTL_MS === 45 * 60_000)
 

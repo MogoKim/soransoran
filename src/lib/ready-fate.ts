@@ -96,17 +96,22 @@ export function terminalYieldOf(c: FateCounts, sources: number | null): { low: n
 
 /**
  * 🔴 **이번 회차에 유료로 보낼 원천 수.** 수요(다가오는 슬롯 − 그 슬롯에 eligible 인 READY)가 0 이면 0 이다.
- *    부족분보다 많은 원천을 보내는 근거는 **실측 수율** 하나다 — `ceil(부족 ÷ 수율 상한)`.
+ *    부족분보다 많은 원천을 보내는 근거는 실측 수율 또는 **작은 회복 canary**다.
  *    🔴 상한(`high`)을 쓰는 이유: 근거가 허락하는 **가장 작은 증폭**이다. 모르는 대기를 실패로 보고 더 사지 않는다.
- *    🔴 수율을 모르거나 0 이면 증폭하지 않는다 — 부족분만큼만(돈을 더 써도 결과가 는다는 근거가 없다).
+ *    🔴 수율을 모르거나 0 이면 부족 슬롯당 최대 3개 원천만 시도한다. 단일 원천 HOLD가 가까운 슬롯 전체를
+ *       굶긴 운영 결함을 복구하되, 묶음 전체를 근거 없이 소진하지 않는 작은 canary다.
  *    회차 묶음 천장(`cap`)은 안전장치다 — 소비 목표가 아니다.
  */
+export const COLD_START_SOURCES_PER_DEFICIT = 3
+
 export function paidSourcesFor(i: { deficit: number; yieldHigh: number | null; cap: number }): {
-  sources: number; basis: 'noDemand' | 'deficitOnly' | 'measuredYield'
+  sources: number; basis: 'noDemand' | 'boundedRecovery' | 'measuredYield'
 } {
   const cap = Number.isInteger(i.cap) && i.cap > 0 ? i.cap : 0
   if (!Number.isInteger(i.deficit) || i.deficit <= 0 || cap === 0) return { sources: 0, basis: 'noDemand' }
-  if (i.yieldHigh === null || !(i.yieldHigh > 0)) return { sources: Math.min(cap, i.deficit), basis: 'deficitOnly' }
+  if (i.yieldHigh === null || !(i.yieldHigh > 0)) {
+    return { sources: Math.min(cap, i.deficit * COLD_START_SOURCES_PER_DEFICIT), basis: 'boundedRecovery' }
+  }
   return { sources: Math.min(cap, Math.ceil(i.deficit / i.yieldHigh)), basis: 'measuredYield' }
 }
 

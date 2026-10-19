@@ -120,7 +120,7 @@ const EXPECTED: Record<string, {
   },
   /**
    * 🔴 **처리기는 수집하지 않는다** (2026-09-11). 이미 생긴 입력만 비운다.
-   *    하루 6회다 — 수집이 하루 4~10회 들어오는데 처리가 1회면 입력이 반나절씩 묵는다.
+   *    하루 7회다 — 06:15는 07:00 controller 전 복구, 나머지는 수집 뒤 drain이다.
    */
   'com.soransoran.supply-process.plist.template': {
     label: 'com.soransoran.supply-process',
@@ -330,7 +330,7 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
     'com.soransoran.supply-collect-82cook-thin.plist.template': '07:40 10:40 13:40 16:40 19:40',
     'com.soransoran.navercafe-collect-remonterrace-multi.plist.template': '07:30 10:30 13:30 16:30 21:30',
     'com.soransoran.navercafe-collect-wgang-multi.plist.template': '09:30 11:30 15:30 20:30',
-    'com.soransoran.supply-process.plist.template': '08:15 12:15 14:15 17:15 21:15 22:15',
+    'com.soransoran.supply-process.plist.template': '06:15 08:15 12:15 14:15 17:15 21:15 22:15',
   }
   const fmt = (a: readonly { hour: number; minute: number }[]): string =>
     a.map((s2) => `${String(s2.hour).padStart(2, '0')}:${String(s2.minute).padStart(2, '0')}`).join(' ')
@@ -347,8 +347,9 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
   /** 🔴 노트북이 꺼져 있는 시간에 슬롯을 두지 않는다 */
   for (const [f] of Object.entries(want)) {
     const hs = calendarSlots(readFileSync(join(DIR, f), 'utf-8')).map((s2) => s2.hour)
-    check(`🔴 [${f.replace('com.soransoran.', '').replace('.plist.template', '')}] 전부 07~22시 안이다`,
-      hs.every((h) => h >= 7 && h <= 22))
+    const earliest = f === 'com.soransoran.supply-process.plist.template' ? 6 : 7
+    check(`🔴 [${f.replace('com.soransoran.', '').replace('.plist.template', '')}] 전부 ${earliest.toString().padStart(2, '0')}~22시 안이다`,
+      hs.every((h) => h >= earliest && h <= 22))
   }
 }
 /**
