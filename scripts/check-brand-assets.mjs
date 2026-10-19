@@ -335,20 +335,32 @@ export const REQUIRED_MANIFEST_ICONS = [
 /** 1년 immutable 캐시인 쿼리 없는 Next.js 규약 주소 — manifest 에 있으면 옛 그림이 설치 아이콘으로 나온다 */
 export const FORBIDDEN_MANIFEST_SRC = ['/icon.png', '/apple-icon.png']
 
-/** manifest 아이콘 구성 판정 */
+/**
+ * manifest 아이콘 구성 판정 — 🔴 집합이 REQUIRED_MANIFEST_ICONS 와 **정확히** 같아야 한다.
+ *    필수 4종이 있는지만 보면 다섯 번째 아이콘(옛 주소·다른 그림)을 끼워 넣어도 통과한다.
+ *    그래서 승인 밖 조합 · 같은 항목 중복 · 누락을 모두 실패로 본다.
+ */
 export function manifestIconSetProblems(icons) {
   const out = []
+  const key = (ic) => `${ic.src} ${ic.sizes} ${ic.purpose}`
+  const approved = new Set(REQUIRED_MANIFEST_ICONS.map(key))
+  const seen = new Set()
   for (const ic of icons) {
     const path = String(ic.src ?? '').split(/[?#]/)[0]
     if (FORBIDDEN_MANIFEST_SRC.includes(path)) out.push(`쿼리 없는 1년 캐시 주소를 선언합니다: ${ic.src}`)
     if (ic.purpose !== 'any' && ic.purpose !== 'maskable') {
       out.push(`purpose 는 'any' 또는 'maskable' 이어야 합니다: ${ic.src} → '${ic.purpose}'`)
     }
+    const k = key(ic)
+    if (!approved.has(k)) out.push(`승인되지 않은 아이콘 조합: ${ic.src} ${ic.sizes} purpose '${ic.purpose}'`)
+    if (seen.has(k)) out.push(`같은 아이콘 중복 선언: ${ic.src} ${ic.sizes} purpose '${ic.purpose}'`)
+    seen.add(k)
   }
   for (const want of REQUIRED_MANIFEST_ICONS) {
-    if (!icons.some((ic) => ic.src === want.src && ic.sizes === want.sizes && ic.purpose === want.purpose)) {
-      out.push(`필수 아이콘 누락: ${want.src} ${want.sizes} purpose '${want.purpose}'`)
-    }
+    if (!seen.has(key(want))) out.push(`필수 아이콘 누락: ${want.src} ${want.sizes} purpose '${want.purpose}'`)
+  }
+  if (icons.length !== REQUIRED_MANIFEST_ICONS.length) {
+    out.push(`manifest 아이콘은 정확히 ${REQUIRED_MANIFEST_ICONS.length}종이어야 합니다 (지금 ${icons.length}건)`)
   }
   return out
 }
@@ -688,6 +700,22 @@ function selfTest() {
       '🔴 purpose 없는 아이콘을 잡는다',
       manifestIconSetProblems([...REQUIRED_MANIFEST_ICONS, { src: '/brand/x.png', sizes: '1x1' }])
         .some((x) => x.includes('purpose')),
+    ],
+    [
+      '🔴 다섯 번째 아이콘(/brand/extra.png)을 잡는다',
+      manifestIconSetProblems([...REQUIRED_MANIFEST_ICONS, { src: '/brand/extra.png', sizes: '192x192', purpose: 'any' }])
+        .some((x) => x.includes('승인되지 않은')),
+    ],
+    [
+      '🔴 같은 항목 중복 선언을 잡는다',
+      manifestIconSetProblems([...REQUIRED_MANIFEST_ICONS, REQUIRED_MANIFEST_ICONS[0]]).some((x) => x.includes('중복')),
+    ],
+    [
+      '🔴 승인된 경로라도 크기·purpose 조합이 다르면 잡는다',
+      manifestIconSetProblems([
+        ...REQUIRED_MANIFEST_ICONS.slice(0, 3),
+        { src: '/brand/icon-maskable-512.png', sizes: '512x512', purpose: 'any' },
+      ]).some((x) => x.includes('승인되지 않은')),
     ],
     [
       '🔴 maskable 이 빠지면 잡는다',
