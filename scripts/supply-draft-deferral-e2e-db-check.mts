@@ -408,9 +408,9 @@ async function worksetAxisRunner(
     : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] }
   check('🔴 러너가 실제로 돌아 묶음 파일을 적었다', ws !== null, `출력 끝: ${out.slice(-600)}`)
   const got = ws?.sources.map((s) => s.sourceArticleId).join(',') ?? ''
-  // 🔴 부족 슬롯 1(다음 첫 기회) — seed 중 형제를 뺀 정본 순위 1등 하나 · raw 는 0. 댓글 순이면 raw 가 먼저 든다
-  check('🔴 🔴 **러너가 적은 묶음 = 가까운 지평 부족 1칸만큼 · 형제 뺀 정본 순위 1등 seed(wsxs2) 정확히** (옛 지평: seed 5)',
-    got === 'wsxs2', got)
+  // 🔴 부족 슬롯 1(다음 첫 기회) — 무수율 회복 상한 3개 · seed 중 형제를 뺀 정본 순위 1~3등 · raw 는 0
+  check('🔴 🔴 **러너가 적은 묶음 = 가까운 지평 부족 1칸의 회복 상한 3개 · 형제 뺀 정본 순위 seed(wsxs2~4) 정확히** (옛 지평: seed 5)',
+    got === 'wsxs2,wsxs3,wsxs4', got)
   check('🔴 🔴 **raw 선택 정확히 0** — 댓글이 더 많은 raw 4건이 하나도 묶음에 들지 않는다',
     ws !== null && ws.sources.filter((s) => s.sourceArticleId.startsWith('wsxw')).length === 0, got)
   check('🔴 🔴 **러너가 격리 DB 큐를 읽어 형제를 뺐다** — wsxs1 없음 · 제외 사유 1건',
@@ -425,7 +425,7 @@ async function worksetAxisRunner(
     ? traced.trace.candidates.filter((c) => c.reason === 'RAW_NOT_AUTO_CONSUMED').map((c) => c.sourceHash).sort() : []
   check('🔴 🔴 **raw 후보 4건이 정확히 RAW_NOT_AUTO_CONSUMED 사유로 제외됐다** — 러너가 쓴 선택 trace v2 · 원천 해시 대조 · 불일치 0',
     traced?.ok === true && traced.version === 'v2' && JSON.stringify(rawReasoned) === JSON.stringify(rawHashes)
-    && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 1,
+    && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 3,
     traced === null ? 'trace 없음' : traced.ok ? `제외 ${rawReasoned.length}` : traced.problems.join(','))
   // 🔴 (P0-B1 정합) 기회 스냅샷 = 자동 seed 전용(opportunities-v2) — preflight 의 실제 함수로 세어도 raw 는 증명일 기회가 아니다
   const { latestOpportunities, sourceOpportunitiesOf } = await import('./lib/stage-preflight-facts.mjs')

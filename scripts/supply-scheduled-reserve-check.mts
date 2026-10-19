@@ -84,7 +84,7 @@ check('보수 기본값 = 회차 상한(estimateSupplySpend(묶음).capPerRun) �
   CAPRUN === estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerRun
   && FLOOR === estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).expectedPerRun && FLOOR > 0 && CAPRUN > FLOOR,
   `cap=${CAPRUN} floor=${FLOOR}`)
-check('🔴 D20 승인 천장은 보수 기본값 6회분을 덮는다 — 최악 단가에서도 정기 슬롯 6개가 예산 때문에 굶지 않는다',
+check('🔴 D20 승인 천장은 보수 기본값 7회분을 덮는다 — 최악 단가에서도 정기 슬롯 7개가 예산 때문에 굶지 않는다',
   SUPPLY_DAILY_USD_APPROVED !== null && SUPPLY_RUNS_PER_DAY * CAPRUN <= SUPPLY_DAILY_USD_APPROVED,
   `${SUPPLY_RUNS_PER_DAY}×${CAPRUN.toFixed(4)} vs ${SUPPLY_DAILY_USD_APPROVED}`)
 check('실측 기간·최소 표본이 이름 붙은 상수다', SCHEDULED_COST_LOOKBACK_DAYS === 7 && SCHEDULED_COST_MIN_SAMPLES === 3)
@@ -130,6 +130,8 @@ check('🔴 늦게 뜬 launchd 회차(12:15 를 놓치고 13:30 에 깸)는 손 
   supplyRunKindOf(LABEL, kst('2026-09-28T13:30:00')).kind === 'manual'
   && supplyRunKindOf(LABEL, kst('2026-09-28T13:30:00')).slot === null)
 check('공급 job 라벨 + 슬롯 시각 정각 → 정기', supplyRunKindOf(LABEL, kst('2026-09-28T14:15:00')).kind === 'scheduled')
+check('🔴 07:00 controller 전 06:15 회복 슬롯도 정기',
+  supplyRunKindOf(LABEL, kst('2026-09-28T06:20:00')).slot === '2026-09-28 06:15')
 check('🔴 공급 job 라벨이어도 창 밖(11:13 kickstart)은 손 실행이다',
   supplyRunKindOf(LABEL, kst('2026-09-28T11:13:00')).kind === 'manual')
 check('🔴 창 끝(슬롯+45분) 정각은 창 밖이다',
@@ -151,8 +153,8 @@ check('17:33 — 3개', n('2026-09-28T17:33:00') === 3)
 check('🔴 22:59:59 — 1개 (마지막 회차 창 안)', n('2026-09-28T22:59:59') === 1)
 check('🔴 23:00 — 0개. 마지막 슬롯 창이 끝나면 몫이 풀린다', n('2026-09-28T23:00:00') === 0)
 check('23:59:59 — 0개', n('2026-09-28T23:59:59') === 0)
-check('🔴 00:00(다음 날) — 6개. 새 날의 몫이 다시 잡힌다',
-  n('2026-09-29T00:00:00') === 6 && pendingSlotsAt(kst('2026-09-29T00:00:00')).every((w) => w.label.startsWith('2026-09-29')))
+check('🔴 00:00(다음 날) — 7개. 새 날의 몫이 다시 잡힌다',
+  n('2026-09-29T00:00:00') === 7 && pendingSlotsAt(kst('2026-09-29T00:00:00')).every((w) => w.label.startsWith('2026-09-29')))
 check('🔴 UTC 자정(09:00 KST)에 날이 바뀌지 않는다 — 08:59 와 09:01 이 같은 날 슬롯이다',
   pendingSlotsAt(kst('2026-09-28T08:59:00')).slice(-1)[0]?.label === '2026-09-28 22:15'
   && pendingSlotsAt(kst('2026-09-28T09:01:00')).slice(-1)[0]?.label === '2026-09-28 22:15')
@@ -165,7 +167,7 @@ check('🔴 UTC 자정(09:00 KST)에 날이 바뀌지 않는다 — 08:59 와 09
     p.length === 2 && p[0]?.label === '2026-09-28 23:50', p.map((x) => x.label).join(','))
   check('🔴 자정을 넘는 창 안의 정기 회차는 정기다', activeSlotAt(at, late)?.label === '2026-09-28 23:50')
 }
-check('슬롯 정본이 6개다', SUPPLY_RUN_SLOTS_KST.length === 6)
+check('슬롯 정본이 7개다', SUPPLY_RUN_SLOTS_KST.length === 7)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n④ 판정 — 🔴 손 실행은 몫을 남기고, 정기 회차는 몫을 쓴다')
@@ -211,18 +213,18 @@ function P(reserved: number, ceiling: number | null = 0.5): SpendProtect {
 {
   const S5 = 0.05
   const mm = supplySpendProtectAt({ env: {}, now: kst('2026-09-28T11:13:00'), shareUsd: S5, dailyUsd: 0.5 })
-  check('손 실행 11:13 — 남은 5개 슬롯 몫 전부(안 돈 08:15 몫도 이월돼 남는다 = 6몫) · 천장 = 계약 천장',
-    Math.abs(mm.protect.reservedForOthersUsd - 6 * S5) < 1e-12 && mm.protect.ceilingUsd === SUPPLY_DAILY_USD_APPROVED,
+  check('손 실행 11:13 — 남은 5개 슬롯 + 안 돈 06:15·08:15 이월 = 7몫 · 천장 = 계약 천장',
+    Math.abs(mm.protect.reservedForOthersUsd - 7 * S5) < 1e-12 && mm.protect.ceilingUsd === SUPPLY_DAILY_USD_APPROVED,
     `${mm.protect.reservedForOthersUsd}`)
   const sc = supplySpendProtectAt({ env: LABEL, now: kst('2026-09-28T12:20:00'), shareUsd: S5, dailyUsd: 0.5 })
-  check('🔴 정기 회차 12:20 — 보호 없음이 아니라 **뒤 4개 슬롯** 몫을 남긴다(자기 슬롯은 뺀다 · 이월 포함 6몫/5)',
-    sc.kind === 'scheduled' && sc.slot === '2026-09-28 12:15' && Math.abs(sc.protect.reservedForOthersUsd - 4 * (6 * S5 / 5)) < 1e-12)
+  check('🔴 정기 회차 12:20 — 보호 없음이 아니라 **뒤 4개 슬롯** 몫을 남긴다(자기 슬롯은 뺀다 · 이월 포함 7몫/5)',
+    sc.kind === 'scheduled' && sc.slot === '2026-09-28 12:15' && Math.abs(sc.protect.reservedForOthersUsd - 4 * (7 * S5 / 5)) < 1e-12)
   const noCarry = supplySpendProtectAt({
     env: {}, now: kst('2026-09-28T11:13:00'), shareUsd: S5, dailyUsd: 0.5,
     todayEntries: [line({ usd: S5, kind: 'scheduled', slot: '2026-09-28 08:15', at: '2026-09-28T08:20:00' })],
   })
-  check('08:15 가 자기 몫을 다 썼으면 이월 없음 — 손 실행 11:13 은 남은 5몫만 남긴다',
-    Math.abs(noCarry.protect.reservedForOthersUsd - 5 * S5) < 1e-12, `${noCarry.protect.reservedForOthersUsd}`)
+  check('08:15 가 자기 몫을 다 썼어도 안 돈 06:15가 이월된다 — 손 실행 11:13 은 6몫을 남긴다',
+    Math.abs(noCarry.protect.reservedForOthersUsd - 6 * S5) < 1e-12, `${noCarry.protect.reservedForOthersUsd}`)
   const last = supplySpendProtectAt({ env: {}, now: kst('2026-09-28T23:10:00'), shareUsd: S5, dailyUsd: 0.5 })
   check('🔴 손 실행 23:10 — 몫 0 (마지막 회차 뒤 풀림)', last.protect.reservedForOthersUsd === 0)
   check('🔴 천장 미승인(null)은 손 실행에게 0 이다',
@@ -397,7 +399,7 @@ function simulate(
 }
 const M = (name: string, at: string, demand = 10): Ev => ({ name, at, env: {}, demand })
 const S = (name: string, at: string, demand: number): Ev => ({ name, at, env: LABEL, demand })
-/** 09-30 하루 — 정기 6회는 09-29 실측 수준으로 쓰고 싶어 하고, 손 실행은 틈마다 전부 가져가려 한다 */
+/** 09-30 하루 — 정기 7회는 실측 수준으로 쓰고 싶어 하고, 손 실행은 틈마다 전부 가져가려 한다 */
 const DEMAND = { s0815: 0.0655, s1215: 0.0992, s1415: 0.0923, s1715: 0.0923, s2115: 0.0992, s2215: 0.0923 }
 const DAY_0930: Ev[] = [
   M('m0700', '2026-09-30T07:00:00'),
@@ -422,7 +424,7 @@ const fmt = (g: Record<string, number>): string => Object.entries(g).map(([k, v]
   check('🔴 22:15 정기 회차가 굶지 않는다 — 공정 몫(min(실측 평균, 천장/6))의 90% 이상',
     (g.s2215 ?? 0) >= 0.9 * fair, `s2215=${(g.s2215 ?? 0).toFixed(4)} fair=${fair.toFixed(4)} · ${fmt(g)}`)
   check('🔴 21:15 정기 회차도 공정 몫의 90% 이상', (g.s2115 ?? 0) >= 0.9 * fair)
-  check('정기 6회 모두 공정 몫의 90% 이상 또는 자기 수요만큼',
+  check('06:15를 건너뛴 모의의 나머지 정기 6회가 모두 공정 몫의 90% 이상 또는 자기 수요만큼',
     Object.entries(DEMAND).every(([k, dem]) => (g[k] ?? 0) >= Math.min(dem, 0.9 * fair) - 1e-9), fmt(g))
   const total = Object.values(g).reduce((s, x) => s + x, 0)
   check('하루 총액은 천장 이하', total <= 0.5 + 1e-9, `total=${total}`)
@@ -432,7 +434,7 @@ const fmt = (g: Record<string, number>): string => Object.entries(g).map(([k, v]
   check('마지막 슬롯 뒤(23:10) 손 실행은 남은 것을 쓴다', (g.m2310 ?? 0) >= 0 && total >= 0.5 - STEP - 1e-9, `total=${total}`)
 }
 {
-  // ⓑ 🔴 비례 축소 — 여력 0.30 · 표본 없음(보수 기본값). 6슬롯이 1/6 씩, 앞 슬롯이 더 가져가지 못한다
+  // ⓑ 🔴 비례 축소 — 06:15가 못 돈 날이라 그 몫이 뒤 6슬롯으로 이월된다
   const greedy: Ev[] = [
     M('m0700', '2026-09-30T07:00:00'),
     S('s0815', '2026-09-30T08:20:00', 10), S('s1215', '2026-09-30T12:20:00', 10), S('s1415', '2026-09-30T14:20:00', 10),
@@ -441,9 +443,9 @@ const fmt = (g: Record<string, number>): string => Object.entries(g).map(([k, v]
   const g = simulate({ daily: 0.3, history: null, events: greedy })
   console.log(`     비례 축소($0.30 · 보수 기본값): ${fmt(g)}`)
   const each = 0.3 / 6
-  check('🔴 여력 < 6슬롯 몫 → 08:15 는 여력/6 을 넘지 못한다 — 뒤 슬롯 몫을 먹지 못한다',
+  check('🔴 06:15를 건너뛴 뒤 여력 < 6슬롯 몫 → 08:15 는 여력/6 을 넘지 못한다',
     (g.s0815 ?? 0) <= each + 1e-9 && (g.s0815 ?? 0) >= each - STEP - 1e-9, fmt(g))
-  check('🔴 6슬롯 모두 여력/6 − 요청 1건 이상 — 22:15 까지 살아 있다 (요청 단위로 남은 자투리는 뒤로 이월)',
+  check('🔴 남은 6슬롯 모두 여력/6 − 요청 1건 이상 — 22:15 까지 살아 있다',
     ['s0815', 's1215', 's1415', 's1715', 's2115', 's2215'].every((k) => (g[k] ?? 0) >= each - STEP - 1e-9)
     && Object.values(g).reduce((s, x) => s + x, 0) <= 0.3 + 1e-9, fmt(g))
   check('🔴 표본 없음 → 손 실행은 0 (fail-closed · 여력 전부가 정기 몫)', (g.m0700 ?? 0) === 0)
@@ -474,8 +476,8 @@ const fmt = (g: Record<string, number>): string => Object.entries(g).map(([k, v]
   const lowShare = 0.05
   const pre = [line({ usd: 0.2, kind: 'scheduled', slot: '2026-09-30 08:15', at: '2026-09-30T08:20:00' })]
   const after = supplySpendProtectAt({ env: {}, now: kst('2026-09-30T11:00:00'), todayEntries: pre, shareUsd: lowShare, dailyUsd: 0.5 })
-  check('🔴 08:15 가 자기 몫(0.05)을 넘어 0.2 를 썼어도 뒤 5슬롯은 각 0.05 를 그대로 받는다',
-    after.allocation.slots.length === 5 && after.allocation.slots.every((x) => Math.abs(x.claimUsd - lowShare) < 1e-12),
+  check('🔴 08:15 가 자기 몫을 넘어 써도 뒤 슬롯은 최소 자기 몫을 받고, 안 돈 06:15 몫도 잃지 않는다',
+    after.allocation.slots.length === 5 && after.allocation.slots.every((x) => x.claimUsd >= lowShare - 1e-12),
     after.allocation.slots.map((x) => x.claimUsd.toFixed(4)).join(','))
 }
 {
@@ -528,8 +530,8 @@ const fmt = (g: Record<string, number>): string => Object.entries(g).map(([k, v]
     pending: pendingSlotsAt(kst('2026-09-30T00:05:00')), ended: endedSlotsAt(kst('2026-09-30T00:05:00')),
     shareUsd: 0.05, capUsd: 0.5, todayEntries: yday, ownSlot: null,
   })
-  check('🔴 00:05 — 새 날 6슬롯 · 어제 슬롯 지출은 오늘 슬롯 몫을 줄이지 않는다',
-    al.slots.length === 6 && al.slots.every((s) => Math.abs(s.claimUsd - 0.05) < 1e-12 && s.label.startsWith('2026-09-30')),
+  check('🔴 00:05 — 새 날 7슬롯 · 어제 슬롯 지출은 오늘 슬롯 몫을 줄이지 않는다',
+    al.slots.length === 7 && al.slots.every((s) => Math.abs(s.claimUsd - 0.05) < 1e-12 && s.label.startsWith('2026-09-30')),
     al.slots.map((s) => `${s.label}=${s.claimUsd}`).join(','))
 }
 
@@ -684,7 +686,7 @@ async function runCalls(s: SupplyLlmSession, k: number, stage: typeof ASK.stage 
   check('🔴 23:00 손 실행 — 마지막 창이 끝나 몫이 풀려 통과한다', a === 1)
   check('09-28 장부의 막힌 줄은 22:59:59 한 건뿐이다', blockedCodes(d2, '2026-09-28').length === 1)
   const mid = await runCalls(new SupplyLlmSession({ runId: 'L4', dir: d2, limits: tight, now: at('2026-09-29T00:00:00'), protectAt: protectOf({}) }), 1)
-  check('🔴 00:00 손 실행 — 새 날 장부는 비었지만 새 날 몫 6개가 다시 잡혀 막힌다',
+  check('🔴 00:00 손 실행 — 새 날 장부는 비었지만 새 날 몫 7개가 다시 잡혀 막힌다',
     mid === 0 && blockedCodes(d2, '2026-09-29').includes('SCHEDULED_RESERVE'))
   /**
    * 🔴 (2차) 다음 날 08:20 정기 회차는 **하루 여력의 1/6** 만 쓴다 — 여력(몫 1개 + 반 건)이 6슬롯 몫보다 작아
@@ -1072,8 +1074,8 @@ const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultip
   })
   check('[오늘 없음] 오늘 파일이 있으면 통과', v('2026-10-06T11:13:00', { today: true }).ok)
   check('[오늘 없음] 🟢 자정 직후(00:00:01) 첫 호출은 허용 — 오늘 파일이 아직 없는 게 정상이다', v('2026-10-06T00:00:01').ok)
-  check('[오늘 없음] 🟢 첫 정기 슬롯 직전(08:14:59)까지 손 실행도 허용', v('2026-10-06T08:14:59').ok)
-  check('🔴 [오늘 없음] 첫 정기 슬롯 시각(08:15:00)부터 손 실행은 보류', !v('2026-10-06T08:15:00').ok)
+  check('[오늘 없음] 🟢 첫 정기 슬롯 직전(06:14:59)까지 손 실행도 허용', v('2026-10-06T06:14:59').ok)
+  check('🔴 [오늘 없음] 첫 정기 슬롯 시각(06:15:00)부터 손 실행은 보류', !v('2026-10-06T06:15:00').ok)
   check('🔴 [오늘 없음] 23:30 손 실행도 보류 — 하루 종일 정기 회차가 못 돈 날의 손실(문서화된 대가)', !v('2026-10-06T23:30:00').ok)
   check('[오늘 없음] 🟢 정기 회차는 오늘 첫 줄을 연다 — 아침 슬롯 동안 꺼져 있었던 날', v('2026-10-06T12:20:00', { kind: 'scheduled' }).ok)
   check('[오늘 없음] 🟢 최근 7일 장부가 하나도 없으면(새 장부) 허용', v('2026-10-06T11:13:00', { recent: false }).ok)

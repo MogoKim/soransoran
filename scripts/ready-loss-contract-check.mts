@@ -94,8 +94,8 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
 console.log('\n③ 반례 4 · 5 — 대기 행은 성공도 손실도 아니다 (운영 10월 4일 모양)')
 {
   const op = d5({ published: 4, lost: 0, unknown: 10, sources: 160 })
-  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 용량 5 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
-    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 5
+  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 회복 용량 6 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
+    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 6
     && op.counts.readyNeededMin === 5 && op.counts.readyNeededMax === 18 && !('readyNeeded' in op.counts), show(op))
   const base = d5({ published: 4, lost: 0, unknown: 0, sources: 160 })
   check('🔴 반례5 대기 0 이면 같은 원천에서 용량 1 → FAIL', base.verdict === 'FAIL' && base.codes.includes('THROUGHPUT_SHORT'), show(base))

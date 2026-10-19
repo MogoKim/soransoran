@@ -26,7 +26,7 @@ const BRAND_TS = join(ROOT, 'src/lib/brand.ts')
 
 /** 같은 역할이므로 값이 일치해야 하는 쌍 */
 const PAIRS = [
-  { brand: 'color', css: '--brand', why: '브랜드 시그니처 — theme-color · OG 장식 면' },
+  { brand: 'color', css: '--brand', why: '브랜드 시그니처 — OG 장식 면' },
   { brand: 'ink', css: '--brand-ink', why: '큰 글씨 브랜드색 — 화면 --brand-ink 의 CSS 밖 짝' },
   /**
    * 🕘 2026-09-21 까지는 두 색 워드마크의 뒤 조각이었다. 로고가 이미지로 바뀌어
