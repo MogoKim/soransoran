@@ -70,6 +70,54 @@ export function profileSkeleton({ repo, item }) {
   return fx
 }
 
+/**
+ * 🔴 **STANDARD 정상 성공 뼈대** (2026-10-19 · Codex 재검토 P1 — 거짓 녹색).
+ *    앞판 manuscriptFor 는 비FINANCIAL 대상에 avoiding-gatherings 본문을 쓰고 제목만 바꿔 붙였다.
+ *    S11 의 두 번째 대상·S12 gray 는 그 원고로 실제 등록·PR·병합·배포까지 PASS 했다 — 다른 질문 본문이 등록되는데 녹색이었다.
+ *    이제 **정상 등록 경로**는 아래 공개본 출처와 slug·title 이 같은 대상만 그 본문을 받는다 (새 문장 0).
+ *    출처가 아닌 대상의 원고는 여전히 avoiding 본문 뼈대지만 **등록되지 않는 실패 경로 전용**이다 —
+ *    rehearsal-check 가 모든 시나리오의 등록 글 신원을 따로 단언한다 (등록되면 FAIL).
+ */
+export const STANDARD_SKELETON_FIXTURE = join('scripts', '__fixtures__', 'magazine', 'rehearsal-standard-skeletons.json')
+export const STANDARD_SKELETON_SCHEMA = 'rehearsal-standard-skeletons/1'
+
+/** provenance fail-closed — 출처마다 slug·title · 본문 sha256 · 큐 행 slug·title · 대표 문장 전부 본문에 */
+export function validateStandardSkeletons(fx) {
+  const bad = (why) => { throw new Error(`rehearsal STANDARD 뼈대 fixture 거부 — ${why}`) }
+  if (fx?.schema !== STANDARD_SKELETON_SCHEMA) bad(`schema ${JSON.stringify(fx?.schema)} ≠ ${STANDARD_SKELETON_SCHEMA}`)
+  if (!Array.isArray(fx.sources) || !fx.sources.length) bad('출처가 없다')
+  const seen = new Set()
+  for (const x of fx.sources) {
+    if (typeof x?.slug !== 'string' || !x.slug || typeof x?.title !== 'string' || !x.title) bad('출처 slug·title 이 없다')
+    if (seen.has(x.slug)) bad(`출처 slug 중복 ${x.slug}`)
+    seen.add(x.slug)
+    if (typeof x.body !== 'string' || !x.body.trim()) bad(`${x.slug} 본문이 비었다`)
+    const sha = createHash('sha256').update(x.body).digest('hex')
+    if (sha !== x.bodySha256) bad(`${x.slug} 본문 sha256 ${sha} ≠ bodySha256 ${x.bodySha256}`)
+    if (!Array.isArray(x.representativeSentences) || x.representativeSentences.length < 3) bad(`${x.slug} 대표 문장이 3개 미만이다`)
+    const missing = x.representativeSentences.filter((r) => typeof r !== 'string' || !r || !x.body.includes(r))
+    if (missing.length) bad(`${x.slug} 대표 문장이 본문에 없다: ${missing.join(' / ')}`)
+    if (typeof x.queueBlock !== 'string' || !x.queueBlock.includes(`slug: '${x.slug}',`) || !x.queueBlock.includes(`title: '${x.title}',`)) bad(`${x.slug} 큐 행이 출처 slug·title 과 다르다`)
+  }
+  return fx
+}
+
+export function standardSkeletons(repo) {
+  return validateStandardSkeletons(JSON.parse(read(join(repo, STANDARD_SKELETON_FIXTURE))))
+}
+
+/**
+ * 이 대상이 STANDARD 정상 출처인가 — slug 가 같으면 title 도 글자 그대로 같아야 한다 (다르면 throw).
+ * 출처가 아니면 null — 그 원고는 실패 경로 전용 뼈대를 받는다.
+ */
+export function standardSkeleton({ repo, item }) {
+  const fx = standardSkeletons(repo)
+  const x = fx.sources.find((s) => s.slug === item?.slug)
+  if (!x) return null
+  if (item?.title !== x.title) throw new Error(`rehearsal STANDARD 뼈대 ${x.slug} 는 「${x.title}」 질문이다 — 「${item?.title}」 제목에 쓰지 않는다`)
+  return x
+}
+
 /** 템플릿 review 의 반드시 넣을 문장 — 뼈대가 바뀌면 brief 마커와 review 를 같은 글자로 바꿔 끼운다 */
 const templateRiskSentences = (repo) => riskSentencesOf(read(join(repo, 'drafts', 'magazine', SKELETON.brief.slug, 'review.ts')))
 
@@ -150,9 +198,11 @@ export function manuscriptFor({ repo, draftsDir, slug, item, mode = 'good', medi
   const fm = frontmatterOf(brief)
   // 🔴 뼈대 본문 — FINANCIAL 은 금융 정정 공개본 fixture, 그 밖은 brief 뼈대와 짝인 합격 원고
   const fx = profileSkeleton({ repo, item })
-  let body = fx
-    ? fx.body.trimEnd()
-    : read(join(repo, 'drafts', 'magazine', SKELETON.brief.slug, 'draft.md')).replace(/^---\n[\s\S]*?\n---\n/, '').replace(/\n\[CTA\][^\n]*\n?$/, '\n').trimEnd()
+  // 🔴 정상 출처(금융·STANDARD)와 같은 질문이면 그 공개본 — 아니면 실패 경로 전용 뼈대(등록되면 rehearsal-check 가 FAIL)
+  //    실패 경로 뼈대도 fixture 의 avoiding 공개본이다 — sandbox drafts 상태(curate 가 지운 폴더)에 기대지 않는다
+  const sx = fx ? null : standardSkeleton({ repo, item })
+  const foreign = () => standardSkeletons(repo).sources.find((x) => x.slug === SKELETON.brief.slug).body
+  let body = (fx ? fx.body : sx ? sx.body : foreign()).trimEnd()
   const title = item?.title ?? fm.title ?? slug
   const cluster = item?.cluster ?? fm.cluster ?? 'relationship'
   const medical = mode === 'qa-fail' || medicalRequired.has(cluster) || String(fm.medical) === 'true'

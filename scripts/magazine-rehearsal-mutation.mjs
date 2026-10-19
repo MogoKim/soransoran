@@ -145,6 +145,18 @@ const MUTATIONS = [
     find: '  if (sha !== fx.source?.bodySha256) bad(', replace: '  if (false) bad(' }] },
   { name: '㊶ 금융 뼈대를 다른 금융 질문에도 쓴다 (같은 질문 가드 제거)', scenarios: 'S1', edits: [{ file: F.content,
     find: '  if (item?.slug !== fx.source.slug || item?.title !== fx.source.title) {', replace: '  if (false) {' }] },
+  // ── 2026-10-19 STANDARD 정상 성공 — 한 질문 한 묶음 (거짓 녹색 차단) ──
+  { name: '㊷ S11 STANDARD 성공 대상을 임의 queue 대상에 다시 붙인다 (다른 질문 본문 등록)', scenarios: 'S11', edits: [{ file: F.orch,
+    find: "      const [a, , c] = await pickTargets({ repo, date, selectable: 1, others: 2 })\n      const std = await prepareStandardCandidate(repo, 'avoiding-gatherings')\n      const b = std.item\n",
+    replace: "      const [a, b, c] = await pickTargets({ repo, date, selectable: 1, others: 2 })\n      const std = await prepareStandardCandidate(repo, 'avoiding-gatherings')\n" }] },
+  { name: '㊸ STANDARD 출처 신원 가드 제거 (같은 slug 면 제목이 달라도 출처 본문)', scenarios: 'S11', edits: [{ file: F.content,
+    find: '  if (item?.title !== x.title) throw new Error(', replace: '  if (false) throw new Error(' }] },
+  { name: '㊹ STANDARD 뼈대 fixture 의 본문 sha256 대조 제거', scenarios: 'S11', edits: [{ file: F.content,
+    find: '    if (sha !== x.bodySha256) bad(', replace: '    if (false) bad(' }] },
+  { name: '㊺ STANDARD 뼈대 fixture 의 대표 문장 대조 제거', scenarios: 'S11', edits: [{ file: F.content,
+    find: '    if (missing.length) bad(`${x.slug} 대표 문장이 본문에 없다', replace: '    if (false) bad(`${x.slug} 대표 문장이 본문에 없다' }] },
+  { name: '㊻ 정상 출처 원고도 실패 경로 뼈대로 만든다 (gray 제목 + 다른 질문 본문 등록)', scenarios: 'S12', edits: [{ file: F.content,
+    find: '  let body = (fx ? fx.body : sx ? sx.body : foreign()).trimEnd()', replace: '  let body = (fx ? fx.body : foreign()).trimEnd()' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')

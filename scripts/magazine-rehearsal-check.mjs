@@ -16,7 +16,8 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
-import { FIXTURE_HERO_SPEC, FINANCIAL_SKELETON_FIXTURE, financialSkeleton, profileSkeleton, validateFinancialSkeleton } from './lib/magazine-rehearsal-content.mjs'
+import { FIXTURE_HERO_SPEC, FINANCIAL_SKELETON_FIXTURE, STANDARD_SKELETON_FIXTURE, financialSkeleton, profileSkeleton, standardSkeleton, standardSkeletons, validateFinancialSkeleton, validateStandardSkeletons } from './lib/magazine-rehearsal-content.mjs'
+import { fixtureQueue } from './fixtures/magazine-format-contract/repair-queue-rows.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
@@ -48,6 +49,20 @@ const finish = () => { console.log(`\n${fail ? '🔴' : '✅'} 리허설 검사 
   check('금융 뼈대 반례 — 큐 행이 다른 질문이면 거부', rejects(() => validateFinancialSkeleton(tamper((c) => { c.queueBlock = c.queueBlock.replace(c.source.title, '전업주부도 국민연금을 넣을 수 있나요?') }))))
   check('금융 뼈대 반례 — 다른 금융 질문(national-pension-voluntary)에는 본문을 쓰지 않는다',
     rejects(() => profileSkeleton({ repo: ROOT, item: { slug: 'national-pension-voluntary', title: '전업주부도 국민연금을 넣을 수 있나요?', cluster: 'money-work', validationProfile: 'FINANCIAL' } })))
+  // ── STANDARD 정상 뼈대 provenance (2026-10-19) ──
+  const sraw = JSON.parse(readFileSync(join(ROOT, STANDARD_SKELETON_FIXTURE), 'utf8'))
+  const stamper = (f) => { const c = JSON.parse(JSON.stringify(sraw)); f(c); return c }
+  const sfx = standardSkeletons(ROOT)
+  check('STANDARD 뼈대 — 저장소 fixture 는 provenance 검증을 지난다 (schema · 출처마다 sha256 · 대표 문장 · 큐 행)', sfx.sources.length >= 2 &&
+    sfx.sources.every((x) => x.bodySha256 === createHash('sha256').update(x.body).digest('hex') && x.representativeSentences.every((r) => x.body.includes(r))))
+  check('STANDARD 뼈대 반례 — schema 가 다르면 거부', rejects(() => validateStandardSkeletons(stamper((c) => { c.schema = 'rehearsal-standard-skeletons/2' }))))
+  check('STANDARD 뼈대 반례 — 본문 한 글자 변조는 sha256 불일치로 거부', rejects(() => validateStandardSkeletons(stamper((c) => { c.sources[0].body = c.sources[0].body.replace('모임', '모 임') }))))
+  check('STANDARD 뼈대 반례 — bodySha256 변조 거부', rejects(() => validateStandardSkeletons(stamper((c) => { c.sources[1].bodySha256 = 'f'.repeat(64) }))))
+  check('STANDARD 뼈대 반례 — 대표 문장이 본문에 없으면 거부 (해시는 맞춰도)', rejects(() => validateStandardSkeletons(stamper((c) => { c.sources[0].representativeSentences[0] = '본문에 없는 대표 문장' }))))
+  check('STANDARD 뼈대 반례 — 큐 행이 다른 질문이면 거부', rejects(() => validateStandardSkeletons(stamper((c) => { c.sources[0].queueBlock = c.sources[0].queueBlock.replace(c.sources[0].title, '저녁 식사를 바꿔 본 2주') }))))
+  check('STANDARD 뼈대 반례 — 같은 slug 라도 제목이 다른 대상에는 쓰지 않는다 (임의 queue 대상 재부착)',
+    rejects(() => standardSkeleton({ repo: ROOT, item: { slug: 'avoiding-gatherings', title: '저녁 식사를 바꿔 본 2주', cluster: 'relationship' } })))
+  check('STANDARD 뼈대 — 출처가 아닌 대상은 정상 뼈대를 받지 않는다 (null → 실패 경로 전용)', standardSkeleton({ repo: ROOT, item: { slug: 'dinner-change-two-weeks', title: '저녁 식사를 바꿔 본 2주' } }) === null)
 }
 
 const work = mkdtempSync(join(tmpdir(), 'rehearsal-check-'))
@@ -166,4 +181,43 @@ for (const s of report.scenarios) if (s.root && s.ok) rmSync(s.root, { recursive
 for (const s of report.scenarios) if (s.root) { try { const up = dirname(s.root); if (readdirSync(up).length === 0) rmSync(up, { recursive: true, force: true }) } catch { /* 없다 */ } }
 console.log(`  보고서: ${out}`)
 if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios.filter((s) => !s.ok).map((s) => s.root).join(' · ') || '없음'}`)
+// ── 등록 글 신원 — 모든 시나리오 (2026-10-19 · 정상 등록 경로의 질문 혼합 0) ──
+//    등록되는 글은 ① 정상 출처(금융·STANDARD fixture)와 slug·title 이 같고 대표 문장이 전부 있거나
+//    ② 실제 운영 원고 fixture(cold-weather-joint-pain · S14 계열 — 2026-10-12 실제 원고 바이트)여야 한다.
+//    실패 경로 전용 뼈대(avoiding 본문에 다른 제목)는 어느 시나리오에서도 등록되면 안 된다.
+{
+  const ROOT = dirname(HERE)
+  const fin = financialSkeleton(ROOT)
+  const std = standardSkeletons(ROOT)
+  const sources = new Map([[fin.source.slug, { title: fin.source.title, rep: fin.riskSentences }], ...std.sources.map((x) => [x.slug, { title: x.title, rep: x.representativeSentences }])])
+  const realManuscripts = new Map(fixtureQueue(['cold-weather-joint-pain']).map((q) => [q.slug, q.title]))
+  const otherRep = (slug) => [...sources].filter(([k]) => k !== slug).flatMap(([, v]) => v.rep)
+  for (const sc of report.scenarios) {
+    const arts = sc.extras?.registeredArticles ?? []
+    const bad = []
+    if (arts.length !== sc.evidence.registered.length) bad.push(`등록 ${sc.evidence.registered.length} · 신원 ${arts.length}`)
+    for (const a of arts) {
+      const text = a.text ?? ''
+      const src = sources.get(a.slug)
+      if (src) {
+        if (a.title !== src.title) bad.push(`${a.slug} title ${a.title} ≠ ${src.title}`)
+        const miss = src.rep.filter((x) => !text.includes(x))
+        if (miss.length) bad.push(`${a.slug} 대표 문장 누락 ${miss.length}`)
+      } else if (realManuscripts.has(a.slug)) {
+        if (a.title !== realManuscripts.get(a.slug)) bad.push(`${a.slug} title ${a.title} ≠ ${realManuscripts.get(a.slug)}`)
+      } else bad.push(`${a.slug} — 정상 출처도 실제 원고 fixture 도 아닌 글이 등록됐다 (실패 경로 뼈대)`)
+      const mixed = otherRep(a.slug).filter((x) => text.includes(x))
+      if (mixed.length) bad.push(`${a.slug} 다른 질문 문장 ${mixed.length}개 섞임`)
+    }
+    check(`${sc.id} 등록 글 신원 — 정상 출처·실제 원고만 · 질문 혼합 0 (${arts.map((a) => a.slug).join(',') || '등록 0'})`, bad.length === 0, bad)
+  }
+  // 실패 경로 전용 뼈대를 쓰는 경로 — 등록 0 · 지정 실패에서 멈춘다
+  if (S.S2) check('S2 실패 경로 뼈대(입력 수리 응답) — 등록 0 · producer 단계만 (실제 종료 3)', S.S2.evidence.registered.length === 0 && stage(S.S2, 'producer')?.exit === 3, S.S2.evidence.registered)
+  if (S.S11) {
+    const u = S.S11.prepared.unrelated
+    const row = S.S11.checks.find((c) => c.id.startsWith('S11 무관한 옛 행'))
+    check('S11 실패 경로 뼈대(무관한 옛 행) — 등록 0 · REGEN_EXHAUSTED 로 멈춤 · 재생성 전송 0', !S.S11.evidence.registered.some((r) => r.slug === u) && Boolean(row?.ok) && !S.S11.evidence.sends.bySlug[`${u}:regen`], { registered: S.S11.evidence.registered.map((r) => r.slug), row })
+  }
+}
+
 finish()
