@@ -572,7 +572,7 @@ export type SupplySnapshot = {
   jit: { slots: number; readyFilled: number; publishedToday: number; matched: string[]; horizon: Date[]; unfilled: Date[] } | null
   /**
    * 🔴 **결말 기준 원천 수율 구간** (2026-10-04 P0-2) — preflight 와 같은 판독(`readReadyCohort`)의 최근 3 KST 일.
-   *    유료 묶음 크기(`paidSourcesFor`)가 상한을 쓴다. 모르면 `null` — 부족분보다 많이 사지 않는다.
+   *    유료 묶음 크기(`paidSourcesFor`)가 상한을 쓴다. 모르면 `null` — 작은 회복 canary만 허용한다.
    */
   sourceYield: { low: number; high: number } | null
   cohortNotes: string[]
@@ -748,7 +748,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const policy = judgeJitDemand(jitIn)
   /**
    * 🔴 **유료 원천 수 = 부족분에서만** (2026-10-04 P0-2). 앞판은 수요가 1 이어도 고정 묶음 상한(`WORKSET_LIMIT`)만큼
-   *    판정 · 생성을 돌렸다(적재만 수요로 묶였다). 이제 `ceil(부족 ÷ 결말 수율 상한)` · 수율을 모르면 부족분만.
+   *    판정 · 생성을 돌렸다(적재만 수요로 묶였다). 이제 `ceil(부족 ÷ 결말 수율 상한)` · 수율을 모르면
+   *    부족 슬롯당 최대 3원천의 작은 회복 canary다.
    *    묶음 상한은 안전장치로만 남는다. 수요 0 이면 묶음 · 유료 호출 0 이다(`policy.llm` false).
    */
   const paid = paidSourcesFor({ deficit: policy.upTo, yieldHigh: before?.sourceYield?.high ?? null, cap: WORKSET_LIMIT })

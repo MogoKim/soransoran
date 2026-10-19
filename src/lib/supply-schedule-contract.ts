@@ -2,17 +2,17 @@
  * 정기 공급 회차 계약 — 🔴 **수치는 정본 하나에서만 온다** (2026-09-22)
  *
  * 🔴 **왜 이 파일이 있는가.** 보고에서 "하루 2회" 라고 적었는데 실제 launchd
- *    템플릿은 **6회**였다. 문서와 값이 갈리면 승인받은 것과 도는 것이 달라진다.
+ *    템플릿은 **7회**다. 문서와 값이 갈리면 승인받은 것과 도는 것이 달라진다.
  *    회차·상한·한계를 여기 하나에 두고, 검사가 템플릿과 대조한다.
  */
 
 /** 🔴 `com.soransoran.supply-process.plist.template` 의 실제 슬롯 (KST) */
 export const SUPPLY_RUN_SLOTS_KST = [
-  { hour: 8, minute: 15 }, { hour: 12, minute: 15 }, { hour: 14, minute: 15 },
+  { hour: 6, minute: 15 }, { hour: 8, minute: 15 }, { hour: 12, minute: 15 }, { hour: 14, minute: 15 },
   { hour: 17, minute: 15 }, { hour: 21, minute: 15 }, { hour: 22, minute: 15 },
 ] as const
 
-/** 🔴 **6회다.** 다른 수로 부르지 않는다 */
+/** 🔴 **7회다.** 06:15 회차는 07:00 단계 판정 전의 정상 복구 창이다. */
 export const SUPPLY_RUNS_PER_DAY = SUPPLY_RUN_SLOTS_KST.length
 
 /**
@@ -53,7 +53,7 @@ export const SUPPLY_REQUESTS_PER_RUN = 40
  *
  *    근거 — 장부 실측(9/19~9/22, 유료 4건 이상인 회차 21개):
  *      회차당 정산 **중앙 $0.0265 · 최대 $0.0535** (5원천 꽉 채운 회차 SHADOW5B)
- *      → 꽉 찬 회차 기준 하루 약 5.6회분. 6회 전부가 꽉 차면 $0.32 로 상한에 닿고,
+ *      → 당시 꽉 찬 회차 기준 하루 약 5.6회분. 운영 장부는 늦은 회차 몫을 먼저 보호하고,
  *        그때는 장부가 마지막 회차를 **막는다**(fail-closed). 그것이 의도한 동작이다.
  *
  * 🔴 **하루 총액이다** — 공급·판정·초안·댓글이 **같은 장부**를 쓴다.

@@ -177,14 +177,14 @@ console.log('\n② 🔴 🔴 (2026-09-30) 기간형(window) · 하루 canary 경
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 잡는 것')
+console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 잡는 것')
 // ─────────────────────────────────────────────────────────
 {
   const tpl = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
   const hours = [...tpl.matchAll(/<key>Hour<\/key><integer>(\d+)<\/integer><key>Minute<\/key><integer>(\d+)<\/integer>/g)]
     .map((m) => ({ hour: Number(m[1]), minute: Number(m[2]) }))
-  check('🔴 🔴 **정본 회차 수가 템플릿과 같다 — 6회**',
-    hours.length === SUPPLY_RUNS_PER_DAY && SUPPLY_RUNS_PER_DAY === 6,
+  check('🔴 🔴 **정본 회차 수가 템플릿과 같다 — 7회**',
+    hours.length === SUPPLY_RUNS_PER_DAY && SUPPLY_RUNS_PER_DAY === 7,
     `템플릿 ${hours.length} · 정본 ${SUPPLY_RUNS_PER_DAY}`)
   check('🔴 🔴 **슬롯 시각도 같다 — 2회라고 부르지 않는다**',
     JSON.stringify(hours) === JSON.stringify(SUPPLY_RUN_SLOTS_KST.map((s) => ({ hour: s.hour, minute: s.minute }))),
@@ -282,7 +282,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
       installed === null || (enabled && declared.length === SUPPLY_BUDGET_ENV_NAMES.length))
   }
   if (installed !== null) {
-    check('🔴 설치본도 6회다',
+    check('🔴 설치본도 7회다',
       (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
     check('🔴 🔴 **설치본에 비밀값 리터럴이 없다**',
       !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(installed.text))
@@ -481,8 +481,10 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
     const at50 = judgeSpend({ limits: limits(0.50), tally: t(2 * e10.capPerRun), runPaid: 0, reserve: req, ledgerOk: true, settleHold: null, unresolved: [] })
     check('🔴 🔴 **운영 0.30 — 상한을 다 쓴 회차 둘 뒤 다음 요청은 DAILY_EXHAUSTED (fail-closed)**',
       !at30.ok && at30.code === 'DAILY_EXHAUSTED' && at50.ok, `${JSON.stringify(at30)}`)
-    check('🔴 기대 지출이면 0.30 에서도 6회가 들어간다 (공급만 볼 때) — 다른 사용량이 있으면 늦은 회차부터 막힌다',
-      e10.expectedRunsWithin(0.30) === SUPPLY_RUNS_PER_DAY && estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerDay > 0.30,
+    check('🔴 기대 지출이면 0.30 에서 7회 중 6회가 들어간다 — 운영 0.80은 7회와 댓글을 함께 수용한다',
+      e10.expectedRunsWithin(0.30) === 6 && SUPPLY_RUNS_PER_DAY === 7
+      && e10.expectedRunsWithin(0.80) === SUPPLY_RUNS_PER_DAY
+      && estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerDay > 0.30,
       `${e10.expectedRunsWithin(0.30)}회`)
   }
 }

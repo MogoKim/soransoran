@@ -322,7 +322,7 @@ export const THIN_82COOK_SLOTS: readonly Slot[] =
 
 /** 🔴 공급 처리(drain) 슬롯 — 수집 결과를 비운다. 수집 레인과 분이 겹치지 않게 :15 */
 export const SUPPLY_PROCESS_SLOTS: readonly Slot[] =
-  [at(8, 15), at(12, 15), at(14, 15), at(17, 15), at(21, 15), at(22, 15)]
+  [at(6, 15), at(8, 15), at(12, 15), at(14, 15), at(17, 15), at(21, 15), at(22, 15)]
 
 /** 🔴 계획은 **정본 테이블 그대로**다. 여기서 시각을 계산하지 않는다 */
 export function planSlots(id: SourceId, phase: Phase): Slot[] {

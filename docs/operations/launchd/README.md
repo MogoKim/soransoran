@@ -205,7 +205,7 @@ npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
 82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
 remonterrace     07:30 10:30 13:30 16:30 21:30        5회
 wgang            09:30 11:30 15:30 20:30              4회
-supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 비운다
+supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 07:00 전 복구 + 수집 뒤 drain
 ```
 
 🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 하루에 고르게 폈고,
@@ -249,7 +249,7 @@ keep-awake를 포함한 9개이고 `ALWAYS-ON-HOST.md`가 싣는다.
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
 | `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (5슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
 | `com.soransoran.navercafe-collect-wgang-multi.plist.template` | 우아한 갱년기 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
-| `com.soransoran.supply-process.plist.template` | 공급 처리(drain) — 미처리 입력을 변환→판정→초안→적재 (6슬롯) | 🔴 **로컬 전용** (§4-AU) |
+| `com.soransoran.supply-process.plist.template` | 공급 처리(drain) — 미처리 입력을 변환→판정→초안→적재 (7슬롯) | 🔴 **로컬 전용** (§4-AU) |
 
 ## 공급 처리(drain) 등록 (승인 후)
 
@@ -271,8 +271,9 @@ npm run supply:process -- --simulate-stock=5  # 다가오는 슬롯 중 eligible
 JOB=com.soransoran.supply-process
 ```
 
-실행 시각은 **08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST** 6회다.
-🔴 **수집 슬롯 뒤에 붙인다** — 07:00/07:30/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
+실행 시각은 **06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST** 7회다.
+🔴 06:15는 전날 밤 최신 수집분을 07:00 controller 전에 복구한다. 나머지는 **수집 슬롯 뒤에 붙인다** —
+07:00/07:30/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
 입력이 생긴 뒤에 비워야 대기 시간이 줄고, 그만큼 APPROVED 순증이 빨라진다.
 🔴 22:15 가 마지막이다 — 노트북이 22:30 쯤 꺼지므로 그 앞에 한 번 더 비운다.
 
