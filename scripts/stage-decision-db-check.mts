@@ -691,11 +691,11 @@ async function main(): Promise<void> {
       check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 4) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 6 / 30, JSON.stringify(y))
       if (c !== null) {
         const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) 같은 cohort 용량 20 이 채운다 → 처리량 확정',
-          d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 20
+        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) bounded recovery 포함 용량 23 이 채운다 → 처리량 확정',
+          d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 23
           && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
         const d5 = judgeNextPreflight('d5', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 20 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
+        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 23 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
           d5.counts.readyNeededMin === 9 && d5.counts.readyNeededMax === 25
           && d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict !== 'PASS', JSON.stringify(d5.counts))
         check('🔴 공급 비용 = 목표 5 × 결과당 $0.01 — raw READY 단가 · 공개 단가 칸 없음',
@@ -907,8 +907,8 @@ async function main(): Promise<void> {
         latencyP50H: 46.99, latencyP90H: 68.81, contractValidPersonas: 30, commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
         auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
       }, RUNNER_GRID)
-      check('🔴 앞판 07:00 재현 — readyCapacity 9 · readyNeeded 12 · THROUGHPUT_SHORT · SUPPLY_COST_UNKNOWN',
-        old0700.counts.readyCapacity === 9 && old0700.counts.readyNeeded === 12
+      check('🔴 앞판 07:00 사실을 현재 bounded recovery로 재판정 — readyCapacity 11 · readyNeeded 12 · THROUGHPUT_SHORT · SUPPLY_COST_UNKNOWN',
+        old0700.counts.readyCapacity === 11 && old0700.counts.readyNeeded === 12
         && old0700.codes.includes('THROUGHPUT_SHORT') && old0700.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(old0700.counts))
       process.env.HOME = home
       const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.5', SORAN_LLM_RUN_REQUEST_CAP: '40', SORAN_LLM_RESERVE_HEADROOM: '1.2' }
@@ -930,9 +930,9 @@ async function main(): Promise<void> {
       check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
       const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
-      check('🔴 🔴 **보정 후 공급 능력 11 (앞판 9 · 부적격을 셌다면 floor(32 × 60 ÷ 101) = 19) · 필요 하한 12 → 여전히 THROUGHPUT_SHORT (11 < 12) · D10 FAIL**',
-        v.counts.readyCapacity === 11 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
-        && v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
+      check('🔴 🔴 **보정 후 공급 능력 13 · 필요 하한 12 → bounded recovery가 처리량 부족은 해소하되 다른 미상 때문에 D10은 계속 FAIL**',
+        v.counts.readyCapacity === 13 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
+        && !v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
         JSON.stringify({ counts: v.counts, codes: v.codes }))
       // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
       const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-r` } }, select: { id: true } })).map((x) => x.id)
@@ -946,8 +946,8 @@ async function main(): Promise<void> {
       check('🔴 🔴 **사용량 미상 2건 → 결과당 비용 null · 추정 예약액 $0.0172446 은 보고만 · SUPPLY_COST_UNKNOWN 유지**',
         c !== null && c.usdPerSlotValidResult === null && v.codes.includes('SUPPLY_COST_UNKNOWN') && !v.codes.includes('SUPPLY_COST_SHORT'),
         JSON.stringify({ usd: c?.usdPerSlotValidResult, codes: v.codes }))
-      check('🔴 🔴 **최종 판정 — THROUGHPUT_SHORT + SUPPLY_COST_UNKNOWN · D10 BLOCK (FAIL)**',
-        v.verdict === 'FAIL' && v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
+      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소됐지만 SUPPLY_COST_UNKNOWN 등 남은 축으로 D10 BLOCK (FAIL)**',
+        v.verdict === 'FAIL' && !v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
       check('preflight 메모 — 미정산 2건 · 추정 예약액 $0.0172 · 실제 비용 아님',
         (r.notes as string[]).some((x) => /미정산 2건 \(추정 예약액 \$0\.0172 — 실제 비용 아님\)/.test(x)), JSON.stringify(r.notes))
       // 🔴 예약이 없는 미상이어도 같다 — SUPPLY_COST_UNKNOWN
