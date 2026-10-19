@@ -167,11 +167,12 @@ export function authorityRequired(): ReadonlyArray<readonly [string, boolean]> {
     && launchd.includes('main과 보조 Mac runtime에 배포됐다')
     && launchd.includes('direct supply:health')])
   const current = read('docs/operations/CURRENT-MILESTONE.md')
-  out.push(['CURRENT-MILESTONE 이 최신 D5 증거 판정 · Persona contract-valid · D5 blocker 코드를 분리해 적는다',
-    /d\d+ 증거[^\n]*(PASS|FAIL|UNKNOWN)|자동 D5[^\n]*(시험 전|BLOCK|fresh proof)/.test(current)
+  const currentStage = /^## 3\. (D\d+) 개방의 정확한 blocker$/m.exec(current)?.[1]
+  out.push(['CURRENT-MILESTONE 이 최신 단계 증거 판정 · Persona contract-valid · 현재 단계 blocker 코드를 분리해 적는다',
+    /d\d+ 증거[^\n]*(PASS|FAIL|UNKNOWN)|자동 D\d+[^\n]*(시험 전|BLOCK|fresh proof)/.test(current)
     && /contract-valid \d+/.test(current)
-    && /^\| `[A-Z_]+` \|[^\n]+\|[^\n]+\|$/m.test(current)
-    && current.includes('## 3. D5 개방의 정확한 blocker')])
+    && /^\| `[A-Z0-9_]+` \|[^\n]+\|[^\n]+\|$/m.test(current)
+    && currentStage !== undefined])
   return out
 }
 
