@@ -47,6 +47,10 @@ import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
+import {
+  RULE_VERSION as AUTO_JUDGE_RULE_VERSION,
+  PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION,
+} from '../src/lib/micro-seed-auto-judge'
 
 let pass = 0
 let fail = 0
@@ -85,8 +89,8 @@ writeFileSync(join(dd, 'x.detail.jsonl'), `${JSON.stringify({
 writeFileSync(join(dd, 'x.shadow.jsonl'), `${JSON.stringify({
   // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
   sourceSite: 'navercafe:wgang', sourceArticleId: SRC_ID, decision: 'AUTO_SEED', semanticRisks: [],
-  ruleVersion: 'auto-judge-v1', promptVersion: 'p', model: 'm', inputHash: 'h',
-  provenance: 'machine-judged',
+  ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+  model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
 })}\n`, 'utf-8')
 const runId = 'E2E'
 writeFileSync(join(dd, queueSnapshotFileName(runId)),
@@ -275,7 +279,11 @@ console.log('\n④ 🔴 planRefill → buildQueuePayload')
   const payload = plan.targets.length === 1
     ? buildQueuePayload({
       envelope, candidate: plan.targets[0]!,
-      autoJudge: { ruleVersion: 'auto-judge-v1', promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine-judged' },
+      autoJudge: {
+        ruleVersion: AUTO_JUDGE_RULE_VERSION,
+        promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+        model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
+      },
       now: new Date().toISOString(),
     })
     : null
