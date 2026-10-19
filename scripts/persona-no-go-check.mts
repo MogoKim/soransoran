@@ -175,7 +175,7 @@ console.log('\n⑥ 가짜 활동 · 가짜 소재 · 임계 완화 0')
   check('🔴 옛 소재 축 삭제 — topicShareOf · TOPIC_SHARE_CAP · topicConcentrated 0', !/topicShareOf|TOPIC_SHARE_CAP|topicConcentrated/.test(files))
 }
 
-console.log('\n⑦ (quality-v11) 글 쪽 — 프롬프트 · 최종 초안 게이트 · 발행 배정이 같은 helper')
+console.log('\n⑦ (quality-v12) 글 쪽 — 프롬프트 · 최종 초안 게이트 · 발행 배정이 같은 helper')
 {
   const card = (expr: string[], topics: string[] = []) => ({
     childrenCount: 0, childrenAgeBands: [], maritalStatus: '기혼', noGoTopics: topics, noGoExpressions: expr,
@@ -220,8 +220,8 @@ console.log('\n⑦ (quality-v11) 글 쪽 — 프롬프트 · 최종 초안 게�
     && /isNoGoExpressionItem\(item\)/.test(src('src/lib/persona-pool-card.ts'))
     && /noGoHits\(/.test(src('src/lib/content-core/draft-life-gates.ts'))
     && /noGoHits\(/.test(src('src/lib/original-post-persona-match.ts')))
-  check('품질 계약 v11 · 초안 게이트 v9 · 초안 프롬프트 p12', QUALITY_CONTRACT_VERSION === 'quality-v11'
-    && DRAFT_GATE_VERSION === 'draft-gates-v9' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p12')
+  check('품질 계약 v12 · 초안 게이트 v10 · 초안 프롬프트 p13', QUALITY_CONTRACT_VERSION === 'quality-v12'
+    && DRAFT_GATE_VERSION === 'draft-gates-v10' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p13')
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail — DB 0 · 네트워크 0\n`)

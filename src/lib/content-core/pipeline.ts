@@ -56,12 +56,20 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p6'
  *    그대로 쓸 원자적 사실만 남기고, 원문의 물음·주변 문장은 초안의 문장으로 다시 쓰도록 요청한다.
  *    복제 게이트·임계값·의미 검수는 그대로다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p12'
+/**
+ * 🔴 **v2-draft-p13 (2026-10-19 · quality-v12)** — 요약형 보수성을 풀고 감상·질문·비유·일반 관찰·재구성을
+ * 허용한다. 대신 근거 없는 고위험 생활 사실과 제3자 사건·결과는 계속 금지한다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p13'
 /**
  * 🔴 **v2-review-p8 (2026-10-13 · quality-v8 보정)** — 생활사 모순에 구체적 가족 사실(자녀 수 · 자기 자녀 성별 · 나이대) 줄을 더했다
  *    (`REVIEW_FAMILY_SPECIFICS_LINES`). 다른 축 기준은 그대로다.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p8'
+/**
+ * 🔴 **v2-review-p9 (2026-10-19 · quality-v12)** — 사소한 생략과 안전한 창작을 의미 경고로 세지 않는다.
+ * 핵심 뜻·결론 손실과 고위험 생활 사실·제3자 사건·결과 창작만 기존 경고 배열에 남긴다.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p9'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]
