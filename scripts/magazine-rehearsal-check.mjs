@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
-import { FIXTURE_HERO_SPEC } from './lib/magazine-rehearsal-content.mjs'
+import { FIXTURE_HERO_SPEC, FINANCIAL_SKELETON_FIXTURE, financialSkeleton, profileSkeleton, validateFinancialSkeleton } from './lib/magazine-rehearsal-content.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
@@ -31,6 +31,24 @@ const check = (name, ok, detail = '') => {
   else { fail++; console.log(`  ❌ ${name}${detail ? ` — ${typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 400)}` : ''}`) }
 }
 const finish = () => { console.log(`\n${fail ? '🔴' : '✅'} 리허설 검사 ${pass}/${pass + fail}\n`); process.exitCode = fail ? 1 : 0 }
+
+// ── 금융 뼈대 fixture provenance (2026-10-19) — 쓰기 전에 거부되는가 (rehearsal 을 돌리기 전 · 시나리오 선택과 무관) ──
+{
+  const ROOT = dirname(HERE)
+  const rejects = (fn) => { try { fn(); return false } catch { return true } }
+  const fx = financialSkeleton(ROOT)
+  const raw = JSON.parse(readFileSync(join(ROOT, FINANCIAL_SKELETON_FIXTURE), 'utf8'))
+  const tamper = (f) => { const c = JSON.parse(JSON.stringify(raw)); f(c); return c }
+  check('금융 뼈대 — 저장소 fixture 는 provenance 검증을 지난다 (schema · sha256 · 5문장)', fx.source.bodySha256 === createHash('sha256').update(fx.body).digest('hex') && fx.riskSentences.every((x) => fx.body.includes(x)))
+  check('금융 뼈대 반례 — schema 가 다르면 거부', rejects(() => validateFinancialSkeleton(tamper((c) => { c.schema = 'rehearsal-financial-skeleton/2' }))))
+  check('금융 뼈대 반례 — 본문 한 글자만 바뀌어도 sha256 불일치로 거부', rejects(() => validateFinancialSkeleton(tamper((c) => { c.body = c.body.replace('지역가입자', '지역 가입자') }))))
+  check('금융 뼈대 반례 — source.bodySha256 이 다르면 거부', rejects(() => validateFinancialSkeleton(tamper((c) => { c.source.bodySha256 = '0'.repeat(64) }))))
+  check('금융 뼈대 반례 — 빈 본문은 거부', rejects(() => validateFinancialSkeleton(tamper((c) => { c.body = '   ' }))))
+  check('금융 뼈대 반례 — 반드시 넣을 문장이 본문에 없으면 거부 (해시는 맞춰도)', rejects(() => validateFinancialSkeleton(tamper((c) => { c.riskSentences[2] = '본문에 없는 문장입니다.' }))))
+  check('금융 뼈대 반례 — 큐 행이 다른 질문이면 거부', rejects(() => validateFinancialSkeleton(tamper((c) => { c.queueBlock = c.queueBlock.replace(c.source.title, '전업주부도 국민연금을 넣을 수 있나요?') }))))
+  check('금융 뼈대 반례 — 다른 금융 질문(national-pension-voluntary)에는 본문을 쓰지 않는다',
+    rejects(() => profileSkeleton({ repo: ROOT, item: { slug: 'national-pension-voluntary', title: '전업주부도 국민연금을 넣을 수 있나요?', cluster: 'money-work', validationProfile: 'FINANCIAL' } })))
+}
 
 const work = mkdtempSync(join(tmpdir(), 'rehearsal-check-'))
 const out = join(work, 'report.json')

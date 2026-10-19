@@ -6,6 +6,7 @@
  * 🔴 저장소에 이미 있는(사람이 검수해 합격한) brief·원고를 뼈대로 쓰고, 큐 행의 사실만 바꿔 끼운다.
  *    새로운 문장을 지어내 관문을 맞추지 않는다 — fixture 가 실제보다 강해지면 시험이 결함을 덮는다.
  */
+import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
@@ -23,21 +24,49 @@ export const SKELETON = Object.freeze({
 const read = (p) => readFileSync(p, 'utf8')
 
 /**
- * 🔴 **FINANCIAL 프로필 뼈대** (2026-10-19) — 관계 글 본문을 금융 제목에 끼우지 않는다.
+ * 🔴 **FINANCIAL 정상 후보 뼈대** (2026-10-19) — 한 질문의 큐 행 · 제목 · 본문을 한 묶음으로 쓴다.
  *    앞판은 모든 cluster 에 avoiding-gatherings 본문을 썼다. money-work 대상(national-pension-voluntary)은
  *    제목만 금융이고 본문은 모임 이야기라 FIN_AUTHORITY_LINE 으로 막혀 S1 이 연쇄 실패했다.
  *    이 fixture 는 #765 가 사실 정정한 **공개본**(health-insurance-after-retire)을 글자 그대로 렌더한 것이다 — 새 문장 0.
+ *    그 질문의 큐 행(`queueBlock`)도 함께 들고 있다 — rehearsal 이 sandbox 사본 큐에만 넣는다.
+ *    🔴 이 뼈대는 **출처 글과 slug·title 이 같은 대상**에만 쓴다. 금융 프로필이라는 이유로 다른 질문에 끼우지 않는다.
  *    저장소 drafts 의 금융 brief·review 는 #765 에서 바로잡은 틀린 지시(자동차 부과 · 퇴직일 기준 두 달 ·
  *    「되돌리기 어렵다」)를 아직 담고 있어 뼈대로 쓰지 않는다. brief·review 의 **형식 껍데기**는 템플릿 그대로다.
- *    읽을 때 확인한다 (fail-closed): 반드시 넣을 문장 5개가 본문에 글자 그대로 있다.
  */
 export const FINANCIAL_SKELETON_FIXTURE = join('scripts', '__fixtures__', 'magazine', 'rehearsal-financial-skeleton.json')
+export const FINANCIAL_SKELETON_SCHEMA = 'rehearsal-financial-skeleton/1'
+
+/**
+ * 🔴 **provenance fail-closed** — 쓰기 전에 전부 본다. 하나라도 어긋나면 throw (조용히 다른 뼈대로 넘어가지 않는다).
+ *    schema · profile · 비어 있지 않은 본문 · sha256(body) = source.bodySha256 · 출처 slug·title ·
+ *    반드시 넣을 문장 5개가 본문에 글자 그대로 · 큐 행이 같은 slug·title
+ */
+export function validateFinancialSkeleton(fx) {
+  const bad = (why) => { throw new Error(`rehearsal 금융 뼈대 fixture 거부 — ${why}`) }
+  if (fx?.schema !== FINANCIAL_SKELETON_SCHEMA) bad(`schema ${JSON.stringify(fx?.schema)} ≠ ${FINANCIAL_SKELETON_SCHEMA}`)
+  if (fx.profile !== 'FINANCIAL') bad(`profile ${JSON.stringify(fx.profile)}`)
+  if (typeof fx.body !== 'string' || !fx.body.trim()) bad('본문이 비었다')
+  const sha = createHash('sha256').update(fx.body).digest('hex')
+  if (sha !== fx.source?.bodySha256) bad(`본문 sha256 ${sha} ≠ source.bodySha256 ${fx.source?.bodySha256}`)
+  if (typeof fx.source?.slug !== 'string' || !fx.source.slug || typeof fx.source?.title !== 'string' || !fx.source.title) bad('출처 slug·title 이 없다')
+  if (!Array.isArray(fx.riskSentences) || fx.riskSentences.length !== 5) bad('반드시 넣을 문장이 5개가 아니다')
+  const missing = fx.riskSentences.filter((s) => typeof s !== 'string' || !fx.body.includes(s))
+  if (missing.length) bad(`반드시 넣을 문장이 본문에 없다: ${missing.join(' / ')}`)
+  if (typeof fx.queueBlock !== 'string' || !fx.queueBlock.includes(`slug: '${fx.source.slug}',`) || !fx.queueBlock.includes(`title: '${fx.source.title}',`)) bad('큐 행이 출처 slug·title 과 다르다')
+  return fx
+}
+
+/** 저장소(또는 sandbox 사본)의 금융 뼈대 — 검증을 지난 것만 돌려준다 */
+export function financialSkeleton(repo) {
+  return validateFinancialSkeleton(JSON.parse(read(join(repo, FINANCIAL_SKELETON_FIXTURE))))
+}
+
 export function profileSkeleton({ repo, item }) {
   if (resolveValidationProfile(item).profile !== 'FINANCIAL') return null
-  const fx = JSON.parse(read(join(repo, FINANCIAL_SKELETON_FIXTURE)))
-  if (fx.profile !== 'FINANCIAL' || fx.riskSentences?.length !== 5) throw new Error('rehearsal 금융 뼈대 fixture 모양이 다르다')
-  const missing = fx.riskSentences.filter((s) => !fx.body.includes(s))
-  if (missing.length) throw new Error(`rehearsal 금융 뼈대 — 반드시 넣을 문장이 본문에 없다: ${missing.join(' / ')}`)
+  const fx = financialSkeleton(repo)
+  if (item?.slug !== fx.source.slug || item?.title !== fx.source.title) {
+    throw new Error(`rehearsal 금융 원고 뼈대는 ${fx.source.slug} 「${fx.source.title}」 한 질문뿐이다 — ${item?.slug} 「${item?.title}」 에 다른 질문의 본문을 쓰지 않는다`)
+  }
   return fx
 }
 

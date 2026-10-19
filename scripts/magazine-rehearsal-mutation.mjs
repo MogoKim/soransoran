@@ -35,6 +35,7 @@ const F = {
   repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
   webui: path.join(HERE, 'magazine-webui-runner.mjs'),
   ready: path.join(HERE, 'magazine-auto-register-ready.mjs'),
+  content: path.join(HERE, 'lib', 'magazine-rehearsal-content.mjs'),
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -64,9 +65,10 @@ const MUTATIONS = [
     find: '    SORAN_REHEARSAL_CLOCK: `${clock.fakeMs}:${clock.realMs}:${clock.speed}`,\n', replace: '' }] },
   // ── hero 신규 생성 (2026-10-10 · 선택지 B) ──
   { name: '⑬ S1 에 placeHero 사전 복사를 되살림 (재사용 우회)', scenarios: 'S1', edits: [{ file: F.orch,
-    // S9 prepare 도 같은 세 줄이다 — S1 의 scenario 줄까지 묶어 S1 하나만 고른다
-    find: '      await curate({ repo, keep: [t.slug] })\n      return { target: t.slug }\n    },\n    scenario: { ci: {}, deploy: {} },\n',
-    replace: '      await curate({ repo, keep: [t.slug] })\n      placeHero({ repo, slug: t.slug })\n      return { target: t.slug }\n    },\n    scenario: { ci: {}, deploy: {} },\n' }] },
+    // S9 prepare 도 curate 줄이 같다 — S1 만의 대상 확인 줄(금융 정상 후보 fail-closed · 2026-10-19)까지 묶어 S1 하나만 고른다.
+    // 의미 불변 — S1 의 curate 직후에 hero 사전 복사를 넣는다
+    find: '      if (t.slug !== fx.source.slug || t.title !== fx.source.title) throw new Error(`S1 대상이 금융 정상 후보 fixture 가 아니다: ${t.slug} 「${t.title}」`)\n      await curate({ repo, keep: [t.slug] })\n',
+    replace: '      if (t.slug !== fx.source.slug || t.title !== fx.source.title) throw new Error(`S1 대상이 금융 정상 후보 fixture 가 아니다: ${t.slug} 「${t.title}」`)\n      await curate({ repo, keep: [t.slug] })\n      placeHero({ repo, slug: t.slug })\n' }] },
   { name: '⑭ 신규 이미지 생성 호출 생략 (기존 hero 를 생성 결과로)', scenarios: 'S1', edits: [{ file: F.hero,
     find: '  const gen = await generate(prompt)\n',
     replace: "  const gen = { ok: true, buffer: readFileSync(new URL('../public/magazine/avoiding-gatherings/hero.webp', import.meta.url)) }\n" }] },
@@ -138,6 +140,11 @@ const MUTATIONS = [
     find: "  const end = src.indexOf('\\n  },\\n', at + 1)", replace: "  const end = src.lastIndexOf('\\n  },\\n')" }] },
   { name: '㊴ 격리 뒤 다른 article 변화 검증 제거', scenarios: 'S14', edits: [{ file: F.orch,
     find: '  if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error(', replace: '  if (false) throw new Error(' }] },
+  // ── 2026-10-19 금융 정상 후보 — 한 질문 한 묶음 · fixture provenance fail-closed ──
+  { name: '㊵ 금융 뼈대 fixture 의 본문 sha256 대조 제거 (바뀐 본문을 그대로 쓴다)', scenarios: 'S1', edits: [{ file: F.content,
+    find: '  if (sha !== fx.source?.bodySha256) bad(', replace: '  if (false) bad(' }] },
+  { name: '㊶ 금융 뼈대를 다른 금융 질문에도 쓴다 (같은 질문 가드 제거)', scenarios: 'S1', edits: [{ file: F.content,
+    find: '  if (item?.slug !== fx.source.slug || item?.title !== fx.source.title) {', replace: '  if (false) {' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
