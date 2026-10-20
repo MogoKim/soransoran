@@ -293,12 +293,32 @@
       🔴 이 override 값은 admin 전용이라 웜 모노크롬 전환에서 바꾸지 않았다.
    ────────────────────────────────────────────────────────────── */
 .admin-shell {
-  --text-caption: 0.875rem;  /* 14px — 날짜·배지·표 머리줄 */
-  --text-sm: 0.9375rem;      /* 15px — 보조 설명·라벨 */
-  --text-body: 1.0625rem;    /* 17px — 본문·주요 표 값·버튼 라벨 */
-  --text-title: 1.25rem;     /* 20px — 섹션 제목 */
+  /* 🔴 Admin Console V2 (2026-10-20 · 창업자 확정 B Calm Spacious 체계).
+        표 값·라벨 15 → 16, 섹션 제목 20 → 18, 수치 30 → 24 로 맞췄다.
+        페이지 제목 26 · 본문 17 · 메타 14 는 그대로다. */
+  --text-caption: 0.875rem;  /* 14px — 메타·배지·표 머리줄 */
+  --text-sm: 1rem;           /* 16px — 표 값·보조 설명·라벨 */
+  --text-body: 1.0625rem;    /* 17px — 본문·버튼 라벨 */
+  --text-title: 1.125rem;    /* 18px — 섹션 제목 */
   --text-heading: 1.625rem;  /* 26px — 페이지 제목 */
-  --text-display: 1.875rem;  /* 30px */
+  --text-display: 1.5rem;    /* 24px — 수치 */
+
+  /* ── 관리자 전용 action 토큰 ──
+     🔴 --cta · --cta-content 를 여기서 재선언하지 않는다. 둘은 고객 CTA 와
+        기존 ui/ActionButton 의 계약이다 — 덮으면 compact 버튼(bg-cta + 먹색 글씨)이
+        먹색 위 먹색이 된다. 운영 콘솔의 주요 버튼(AdminButton primary)만 이 세 값을 쓴다.
+        흰 글씨 대비: 면 16.4:1 · hover 9.3:1 */
+  --admin-action-bg: var(--text-primary);
+  --admin-action-content: var(--cta-content);
+  --admin-action-hover: var(--text-secondary);
+
+  /* ── 관리자 상태 면 ── 배지·안내 배너 바탕. 글자는 --state-* 를 그대로 쓴다.
+     네 글자색 모두 자기 면 위에서 4.5:1 을 넘는다. 색만으로 구분하지 않는다 —
+     배지는 늘 문구를 함께 단다. */
+  --admin-danger-soft: #fbeae8;
+  --admin-warning-soft: #fbf1e2;
+  --admin-success-soft: #e7f3ea;
+  --admin-info-soft: #e8f0fb;
 
   /* 🔴 이 두 줄이 위 토큰을 실제로 적용한다.
         없으면 클래스 없는 자리가 body(고객값)를 상속한다 — 위 실측 참조.
