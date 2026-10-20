@@ -127,7 +127,17 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  * CREATIVITY_BLOCK_CLASS 로 8-클래스 분류 기준을 코드에 명시한다.
  * 🔴 v11 이하 행을 고치거나 지우거나 v12 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v12'
+/**
+ * `quality-v13` (2026-10-20) = **가족 주장의 뜻을 하나로 모은다.** 운영 D5 결함 — 성인 자녀(`[성인]`)만 둔 P16이
+ * `2살 아이 보험… 아이 거니까…` 를 자기 일로 써 v12 게이트 · 의미 검수가 모두 지나갔다(큐 cmvfr8glb0001xm4r2n7abt2z).
+ * `family-specifics`(`family-specifics-v2`)가 숫자 나이(0~18살 · `N개월`)를 기존 나이대로 보수적으로 읽고(경계 나이는 이웃 나이대 둘 허용 ·
+ * `성인` 은 추측하지 않는다) 소유 표지(`우리 아이` · `아이 거니까`)를 자기 가족 증거로 읽는다. 초안 게이트 `draft-gates-v11` 은
+ * 그 뜻을 쓰고, 묻는 어미 · 물음표가 1인칭 소유를 지우던 우회를 닫는다(증거 없는 일반·제3자 물음과 카드가 허가하는 어린 자녀는 그대로 통과).
+ * 화자 계획(`speaker.ts`)도 같은 판독을 불러 근거 줄의 숫자 나이가 카드와 어긋나면 1인칭을 허가하지 않는다. 기존 게이트는 약화하지 않았다.
+ * 🔴 v12 이하 행을 고치거나 지우거나 v13 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ *    v12 행의 확정 결함은 지금 계약의 재검증(`auto-ready-defect-resolution`)으로만 해소된다 — 수동 PASS 로 만들지 않는다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v13'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
