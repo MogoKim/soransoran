@@ -181,9 +181,10 @@ export const FILL_REPORT_PREFIX = 'FILL_REPORT '
  * 적재기가 끝에 한 줄로 찍는 결과. 🔴 파일별로 센다 — 이월이 "그 파일을 끝냈는가" 를 여기서 읽는다.
  *
  *    `skipped`  적재기 관문의 코드(`SkipCode`) + 적재 직전 재검증(`RECHECK`) · payload 거절(`PAYLOAD`)
+ *               · 자동 READY 불가(`AUTO_READY_INELIGIBLE`)
  *    `cut`      관문은 지났는데 **상한 때문에 이번에 넣지 못한** 수 — 0 이 아니면 그 파일은 안 끝났다
  */
-export type FillSkipCode = SkipCode | 'RECHECK' | 'PAYLOAD'
+export type FillSkipCode = SkipCode | 'RECHECK' | 'PAYLOAD' | 'AUTO_READY_INELIGIBLE'
 export type FillReportFile = {
   name: string
   candidates: number

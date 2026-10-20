@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os'
 import {
   readSupplyIntent, SUPPLY_JIT_CONTRACT, WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, worksetFileName, type SupplyIntent,
 } from '../src/lib/supply-workset'
-import { intentsForFile } from './micro-seed-supply-autofill.mjs'
+import { autoReadyLoadability, intentsForFile } from './micro-seed-supply-autofill.mjs'
 import { currentQualityContract, qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
 import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as CURRENT_AUTO_JUDGE_PROMPT_VERSION } from '../src/lib/micro-seed-auto-judge'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
@@ -315,7 +315,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
       check('🔴 옛 판(v2) 묶음이면 의도 없음 — 옵션 칸으로 옛 묶음을 새 근거로 인정하지 않는다', intentsForFile(cand) === null)
     } finally { rmSync(dir, { recursive: true, force: true }) }
     const runner = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
-    check('🔴 실제 적재 호출이 후보의 의도를 넘긴다', (runner.match(/candidate: c, intent: intentOf\(c\),/g) ?? []).length === 2)
+    check('🔴 사전 판정·미리보기·실제 적재가 모두 후보의 의도를 넘긴다',
+      (runner.match(/candidate: c, intent: intentOf\(c\),/g) ?? []).length === 3)
   }
   // 🔴 (P0-B) 원천 identity 가 한 칸이라도 없으면 기계 후보가 아니다 — 접두뿐인 synthetic 사이트를 만들지 않는다
   for (const [label, patch] of [['사이트 빈 값', { sourceSite: '' }], ['id 빈 값', { sourceArticleId: '' }]] as const) {
@@ -457,7 +458,7 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
   check('🔴 autofill CLI 가 --up-to 를 실제로 판정부에 넘긴다', (() => {
     const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
     return /const UP_TO = UP_TO_RAW === null \? null : Number\.parseInt\(UP_TO_RAW, 10\)/.test(cli)
-      && /judgeApply\(\{ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
+      && /judgeApply\(\{ targets: selectableTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
   })())
   check('여력만큼만 가져간다', (() => {
     const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
@@ -771,6 +772,26 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     Array.isArray(ng.holds) && (ng.holds as string[]).includes('SEMANTIC_REVIEW_INCOMPLETE'))
   check('🔴 ⑤ 그때도 `blocks` 는 비어 있다 — 후보 생성은 멈추지 않는다',
     Array.isArray(ng.blocks) && (ng.blocks as unknown[]).length === 0)
+
+  // ⑥ 운영 2026-10-20 22:15 반례 — 부적격 둘 뒤의 깨끗한 후보가 --up-to=1 자리를 가져야 한다.
+  const blockedA = { ...eC, sourceArticleId: 'blocked-a', title: '백내장 진단 이야기', lifeReview: ['truncatedSourceCompletion'] }
+  const blockedB = { ...eC, sourceArticleId: 'blocked-b', title: '시어머니 안마의자 이야기', lifeReview: ['truncatedSourceCompletion'] }
+  const clean = { ...eC, sourceArticleId: 'clean-c', title: '연애박사 OST 이야기', lifeReview: [] }
+  const loadable = [blockedA, blockedB, clean].filter((candidate) => autoReadyLoadability({
+    candidate,
+    payload: buildQueuePayload({ envelope: eEnv, candidate, autoJudge: eAj, review: cleanRev, now: NOW }),
+  }).loadable)
+  const one = judgeApply({ targets: loadable, apply: true, limit: null, upTo: 1 })
+  check('🔴 🔴 **⑥ 자동 부적격 2건은 JIT 자리를 먹지 않고 깨끗한 1건이 --up-to=1에 선택된다**',
+    loadable.length === 1 && loadable[0]?.sourceArticleId === 'clean-c'
+    && one.ok && one.take[0]?.sourceArticleId === 'clean-c')
+  const blockedVerdict = autoReadyLoadability({
+    candidate: blockedA,
+    payload: buildQueuePayload({ envelope: eEnv, candidate: blockedA, autoJudge: eAj, review: cleanRev, now: NOW }),
+  })
+  check('🔴 자동 READY 정본의 실제 차단 사유를 보존한다',
+    !blockedVerdict.loadable && blockedVerdict.code === 'AUTO_READY_INELIGIBLE'
+    && blockedVerdict.verdict?.reasons.some((r) => r.includes('DRAFT_LIFE_REVIEW:truncatedSourceCompletion')) === true)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')
