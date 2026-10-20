@@ -210,7 +210,7 @@ export function judgeProductionRate(t: ProductionTally, days: number): Productio
 /**
  * 🔴 **글마다 사람이 승인하는 것은 지금의 안전장치이지 목표가 아니다.**
  *    D20 이상에서 하루 수십 편을 사람이 다 보는 것은 성립하지 않는다.
- *    그렇다고 그냥 여는 것도 아니다 — **경고 없는 글**만, **측정된 정확도** 위에서 연다.
+ *    그렇다고 그냥 여는 것도 아니다 — **차단 경고 없는 글**만, **측정된 정확도** 위에서 연다.
  */
 export const AUTO_READY_CONTRACT = {
   /** 사람이 먼저 판정해 둔 표본 수 — 이보다 적으면 정확도를 말하지 않는다 */
@@ -219,8 +219,8 @@ export const AUTO_READY_CONTRACT = {
   noEditAccuracyMin: 0.90,
   /** 🔴 중대 결함은 0 이어야 한다 — 비율로 넘기지 않는다 */
   hardDefectMax: 0,
-  /** 자동 READY 를 열 수 있는 대상 — 🔴 경고가 하나라도 있으면 제외 */
-  eligible: 'warningsZero',
+  /** 자동 READY 를 열 수 있는 대상 — 🔴 안전·정합성 차단 경고가 하나라도 있으면 제외 */
+  eligible: 'blockingWarningsZero',
   /** 열어도 사람 표본 감사는 계속한다 */
   sampledAuditRatio: 0.2,
 } as const
@@ -229,7 +229,7 @@ export const AUTO_READY_CONTRACT = {
 export const AUTO_READY_STEPS = [
   '① 정기 회차를 돌려 후보와 사람 READY 판정을 같은 창에서 쌓는다',
   '② 표본 30건이 모이면 무수정 READY 정확도와 중대 결함 수를 센다',
-  '③ 정확도 90% 이상 · 중대 결함 0 이면 **경고 없는 글**만 자동 READY 를 연다',
+  '③ 정확도 90% 이상 · 중대 결함 0 이면 **차단 경고 없는 글**만 자동 READY 를 연다',
   '④ 연 뒤에도 20% 를 사람이 표본 감사한다 — 떨어지면 되돌린다',
   '🔴 ②를 건너뛰고 ③을 열지 않는다. 표본 없이 정확도를 말하지 않는다',
 ] as const

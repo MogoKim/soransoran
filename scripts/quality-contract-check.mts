@@ -32,6 +32,7 @@ export const FINGERPRINT_FILES = [
   'src/lib/content-core/load-bearing.ts',
   'src/lib/micro-seed-auto-draft.ts',
   'src/lib/auto-ready-v2.ts',
+  'src/lib/supply-schedule-contract.ts',
   'src/lib/draft-originality.ts',
   'src/lib/persona-self-age.ts',
   'src/lib/original-post-persona-match.ts',

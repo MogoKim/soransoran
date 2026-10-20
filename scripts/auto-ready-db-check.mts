@@ -259,7 +259,7 @@ async function main(): Promise<void> {
   const open = await authoritativeGate(prisma, ON)
   check('🔴 증거 30/30 · 결함 0 → 열림', open.open, open.reasons.join(' · '))
 
-  console.log('\n④ 🔴 적격 판정 — 경고 행은 예외 묶음 · 도장 없음')
+  console.log('\n④ 🔴 적격 판정 — 깨진 검수 기록은 예외 묶음 · 도장 없음')
   {
     const bad = await machineRow({ sr: { ...GOOD_SR, confidence: 'high' } })
     check('🔴 🔴 **semanticReview 가 망가진 행 → exception**', (await stampAutoReady(prisma, { queueId: bad.id, env: ON, now: NOW })).kind === 'exception')
