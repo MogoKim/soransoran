@@ -97,8 +97,8 @@ export default async function AdminReportsPage() {
   ])
 
   return (
-    <main className="pt-2 lg:pt-0">
-      <AdminPageHeader title="신고" />
+    <div>
+      <AdminPageHeader group="운영" title="신고" />
 
       {/* 상단 요약 — /admin/home 과 같은 리듬. 미처리가 0이어도 상태를 한 줄로 말한다 */}
       <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -142,6 +142,6 @@ export default async function AdminReportsPage() {
           </details>
         </section>
       ) : null}
-    </main>
+    </div>
   )
 }

@@ -93,8 +93,9 @@ export default async function AdminCustomerCompositionPage() {
   const sevenDayDenominator = totalOf(data.sevenDay.complete)
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
+        group="운영 › 회원"
         title="고객 구성"
         description={`집계 기준 ${formatKst(data.measuredAt)} · 분석연령 기준연도 ${data.baseYear}년(KST)`}
       />
@@ -280,6 +281,6 @@ export default async function AdminCustomerCompositionPage() {
           <li>방문 기록이 없어 재방문은 셀 수 없습니다. 7일 내 참여는 가입 당일 바로 쓴 경우도 포함합니다.</li>
         </ul>
       </AdminSection>
-    </main>
+    </div>
   )
 }

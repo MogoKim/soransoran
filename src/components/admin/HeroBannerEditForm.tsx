@@ -9,6 +9,7 @@ import {
   HERO_BANNER_MAX_NAME_LENGTH,
   type HeroBannerLinkKind,
 } from '@/lib/hero-banner-rules'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 배너의 글자 값들 — 이름 · 설명 · 링크 · 예약.
@@ -30,7 +31,7 @@ function SaveBtn() {
     <button
       type="submit"
       disabled={pending}
-      className="inline-flex min-h-[52px] items-center justify-center rounded-lg bg-cta px-4 font-bold text-content-primary transition duration-150 hover:brightness-95 active:scale-[0.98] disabled:opacity-50 lg:min-h-[48px]"
+      className={adminButtonClass('primary')}
     >
       {pending ? '저장 중…' : '저장'}
     </button>

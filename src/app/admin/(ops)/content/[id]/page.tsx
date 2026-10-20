@@ -91,7 +91,7 @@ export default async function AdminContentDetailPage({
   const hiddenComments = post.comments.filter((c) => c.isDeleted).length
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
         backHref="/admin/content"
         title={post.title}
@@ -286,6 +286,6 @@ export default async function AdminContentDetailPage({
           </AdminActionGroup>
         )}
       </section>
-    </main>
+    </div>
   )
 }

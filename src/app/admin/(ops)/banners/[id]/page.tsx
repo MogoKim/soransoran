@@ -87,7 +87,7 @@ export default async function AdminHeroBannerDetailPage({
   }
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
         title={banner.name}
         backHref="/admin/banners"
@@ -210,6 +210,6 @@ export default async function AdminHeroBannerDetailPage({
           </div>
         </AdminSection>
       )}
-    </main>
+    </div>
   )
 }

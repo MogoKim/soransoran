@@ -24,6 +24,15 @@ export const dynamic = 'force-dynamic'
 
 const RECENT_DAYS = 7
 
+/** 자동 운영 화면 — 메뉴(AdminNav)의 「자동 운영」 묶음과 같은 순서 · 같은 이름 */
+const AUTO_LINKS = [
+  { href: '/admin/auto-ready-defects', title: '중대 결함 신고', hint: '자동 발행된 글의 중대 결함 기록' },
+  { href: '/admin/auto-ready-evidence', title: '정확도 표본 검토', hint: '자동 READY 증거 묶음 검토' },
+  { href: '/admin/persona-candidates', title: '댓글 후보 대기열', hint: '결정 · 대상 지정 · 발행' },
+  { href: '/admin/original-post-candidates', title: '글 초안 대기열', hint: '읽기 전용 검수' },
+  { href: '/admin/personas', title: '페르소나 관제', hint: '상태 · 전체 중지 스위치' },
+] as const
+
 export default async function AdminHomePage() {
   const { ok } = await requireAdmin()
   if (!ok) return null
@@ -96,8 +105,8 @@ export default async function AdminHomePage() {
   ]
 
   return (
-    <main className="pt-2 lg:pt-0">
-      <AdminPageHeader title="운영 홈" />
+    <div>
+      <AdminPageHeader group="개요" title="운영 홈" />
 
       {/* /admin/home 과 같은 리듬 — 큰 박스 대신 한 줄로 상태를 말한다.
           🔴 이 줄이 화면에서 가장 먼저 읽혀야 하는데 13px 이라 가장 작았다.
@@ -140,7 +149,7 @@ export default async function AdminHomePage() {
             >
               <Link
                 href={card.href}
-                className="flex min-h-[52px] flex-col gap-1 px-3 py-3 no-underline hover:bg-surface-soft lg:min-h-[60px] lg:flex-row lg:items-center lg:gap-4 lg:px-4"
+                className="flex min-h-[52px] flex-col gap-1 px-3 py-3 no-underline hover:bg-surface-page lg:min-h-[60px] lg:flex-row lg:items-center lg:gap-4 lg:px-4"
               >
                 <span className="shrink-0 text-base font-bold text-content-primary lg:w-24">
                   {card.title}
@@ -154,6 +163,29 @@ export default async function AdminHomePage() {
           ))}
         </ul>
       </AdminSection>
-    </main>
+
+      {/* 🔴 자동 운영 바로가기 — 건수를 붙이지 않는다.
+             여기서 세려면 페르소나·후보·감사 표를 새로 조회해야 한다. Phase 1 은 조회를 늘리지 않는다
+             (Admin Console V2 · 2026-10-20). 숫자는 각 화면에서 본다. */}
+      <AdminSection
+        title="자동 운영"
+        description="건수는 각 화면에서 확인합니다."
+        className="mt-10 lg:max-w-3xl"
+      >
+        <ul className="m-0 mt-3 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2">
+          {AUTO_LINKS.map((a) => (
+            <li key={a.href}>
+              <Link
+                href={a.href}
+                className="flex min-h-[72px] flex-col justify-center gap-0.5 rounded-[10px] border border-subtle bg-surface-card px-4 py-3 no-underline hover:bg-surface-page"
+              >
+                <span className="text-base font-bold text-content-primary">{a.title}</span>
+                <span className="text-sm text-content-muted">{a.hint}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </AdminSection>
+    </div>
   )
 }

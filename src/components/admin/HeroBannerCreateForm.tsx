@@ -8,6 +8,7 @@ import {
   type HeroBannerActionState,
 } from '@/lib/actions/admin-hero-banner'
 import { HERO_BANNER_MAX_NAME_LENGTH } from '@/lib/hero-banner-rules'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 새 배너 초안 만들기 — 이름 하나만 받는다.
@@ -28,7 +29,7 @@ function SubmitBtn() {
     <button
       type="submit"
       disabled={pending}
-      className="inline-flex min-h-[52px] items-center justify-center rounded-lg bg-cta px-4 font-bold text-content-primary transition duration-150 hover:brightness-95 active:scale-[0.98] disabled:opacity-50 lg:min-h-[48px]"
+      className={adminButtonClass('primary')}
     >
       {pending ? '만드는 중…' : '초안 만들기'}
     </button>

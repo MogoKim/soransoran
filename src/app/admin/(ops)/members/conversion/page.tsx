@@ -63,8 +63,8 @@ export default async function AdminSignupConversionPage() {
   const { gate, configuredStartDay, counts } = report
 
   return (
-    <main className="pt-2 lg:pt-0">
-      <AdminPageHeader title="가입 전환" description={`측정 시각 ${formatKst(now)}`} />
+    <div>
+      <AdminPageHeader group="운영 › 회원" title="가입 전환" description={`측정 시각 ${formatKst(now)}`} />
       <MemberAdminTabs current="conversion" />
 
       <AdminSection title="수집 상태" description={notice.description}>
@@ -141,6 +141,6 @@ export default async function AdminSignupConversionPage() {
           <li>수집 시작 전 기간은 0 이 아니라 알 수 없음(UNKNOWN)입니다.</li>
         </ul>
       </AdminSection>
-    </main>
+    </div>
   )
 }

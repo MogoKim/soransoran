@@ -53,6 +53,7 @@ export default async function AdminComposePage() {
   return (
     <>
       <AdminPageHeader
+        group="운영"
         title="직접 작성"
         description="운영용 이름을 골라 직접 글과 댓글을 씁니다. 자동 페르소나와는 별개입니다."
       />
