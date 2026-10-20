@@ -52,7 +52,7 @@ READY·발행했다. 현재 D10 preflight는 처리량 7/10·투영 공급비 $0
 | 항목 | 값 |
 |---|---|
 | 원격 main (2026-10-20 14:37 관측) | `10555d49c507a989d4f74977fd6463478aedaf8d` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `10555d49c507a989d4f74977fd6463478aedaf8d` · tracked 0 |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `10555d49c507a989d4f74977fd6463478aedaf8d` · tracked 0 · main 차이를 별도 판정 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 지속 d5 |
