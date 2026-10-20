@@ -500,7 +500,8 @@ async function main(): Promise<void> {
           // 🔴 현재 계약 표본 — 의도 · 원문 증거 해시 · 그 회차 v3 묶음이 정확히 연결된다
           gateResults: withIntent({ sourceEvidence: buildSourceEvidence({ sourceSite: site, sourceArticleId: `pf-${k}` }) }, site, `pf-${k}`) as Prisma.InputJsonValue,
           gateVerdict: 'PASS', promptVersion: 'pf', model: 'pf',
-          decidedBy: AUTO_DECIDER, decidedAt: new Date('2026-09-30T03:00:00Z'), dedupKey: `pf-${k}` },
+          decidedBy: AUTO_DECIDER, decidedAt: new Date('2026-09-30T03:00:00Z'),
+          createdAt: new Date('2026-09-30T03:00:00Z'), dedupKey: `pf-${k}` },
       })
     }
     const now = new Date('2026-10-01T07:00:00+09:00')
@@ -624,7 +625,7 @@ async function main(): Promise<void> {
     })
     const fresh = now.getTime() - 2 * 3_600_000
     /**
-     * 증거일 2026-09-30 → 창 = UTC [09-27T15:00Z, 09-30T15:00Z). 지금 10-01 07:00 KST · d5 첫 슬롯 이후 판정.
+     * 용량 창 = UTC [09-27T22:00Z, 09-30T22:00Z). 지금 10-01 07:00 KST · d5 첫 슬롯 이후 판정.
      *    창 안: PUBLISHED 2 · EXPIRED 1 · DECLINED 1 ·
      *      대기 — 증거 없음(EDITED) → 손실 · 원문 80h(오래됨) → 손실 · 지금은 72h 미만이지만 첫 슬롯에서 72h 초과 → 손실 ·
      *             신선(창 시작 정각) · 신선(창 끝 1초 전) → 짝 없음 = 모름(자동 READY 닫힘)
@@ -658,7 +659,8 @@ async function main(): Promise<void> {
           // 🔴 legacy 행만 공급 의도가 없다 — 근거로 세지 않는다
           // 🔴 legacy · 증거 없는 옛 행만 공급 의도가 없다 — 근거로 세지 않는다(증거 없는 행이 계약을 주장하면 cohort 가 모름이 된다)
           gateResults: (r.k === 'legacy' || r.k === 'noev' ? r.gate : withIntent(r.gate, site, `pfc-${r.k}`)) as Prisma.InputJsonValue,
-          decidedBy: r.by ?? AUTO_DECIDER, decidedAt: new Date(r.at), dedupKey: `pfc-${r.k}` },
+          decidedBy: r.by ?? AUTO_DECIDER, decidedAt: new Date(r.at),
+          createdAt: new Date('2026-09-29T03:30:00Z'), dedupKey: `pfc-${r.k}` },
       })
     }
     const dir = mkdtempSync(join(tmpdir(), 'pfc-'))
@@ -838,7 +840,7 @@ async function main(): Promise<void> {
         await prisma.originalPostApprovalQueue.create({
           data: { sourceRawContentId: raw.id, status: status as never, draftTitle: `초안 ${k}`, draftBody: o.body ?? `본문 ${k}`, gateVerdict: o.verdict ?? 'PASS',
             promptVersion: 'p0r', model: 'p0r', gateResults: { ...evOf(k), ...(o.gate ?? {}), [SUPPLY_INTENT_KEY]: intentOf(k, runId) } as Prisma.InputJsonValue,
-            decidedBy: by, decidedAt, dedupKey: `p0r-${k}` },
+            decidedBy: by, decidedAt, createdAt: new Date(runAt(runId).getTime() + 60_000), dedupKey: `p0r-${k}` },
         })
       }
       /**
@@ -1004,6 +1006,9 @@ async function main(): Promise<void> {
     const windowFrom = new Date('2026-10-05T15:00:00Z')
     const windowTo = new Date('2026-10-08T15:00:00Z')
     const runs = ['20261007-031500', '20261007-051500', '20261007-081500', '20261008-031500', '20261008-051500', '20261008-081500']
+    const runCreatedAt = (runId: string): Date => new Date(Date.UTC(
+      +runId.slice(0, 4), +runId.slice(4, 6) - 1, +runId.slice(6, 8), +runId.slice(9, 11), +runId.slice(11, 13),
+    ) + 60_000)
     const fresh = now.getTime() - 2 * 3_600_000
     const iso = (ms: number): string => new Date(ms).toISOString()
     const evOf = (k: string): Record<string, unknown> => ({
@@ -1045,7 +1050,7 @@ async function main(): Promise<void> {
           data: { sourceRawContentId: raw.id, status: x.status as never, draftTitle: `초안 ${x.k}`, draftBody: x.body ?? `본문 ${x.k}`,
             gateVerdict: x.verdict ?? 'PASS', promptVersion: 'p0a', model: 'p0a',
             gateResults: { ...evOf(`p0a-${x.k}`), ...(x.gate ?? {}), [SUPPLY_INTENT_KEY]: intentOf(`p0a-${x.k}`, x.run) } as Prisma.InputJsonValue,
-            decidedBy: x.by, decidedAt: new Date('2026-10-07T04:00:00Z'), dedupKey: `p0a-${x.k}` },
+            decidedBy: x.by, decidedAt: new Date('2026-10-07T04:00:00Z'), createdAt: runCreatedAt(x.run), dedupKey: `p0a-${x.k}` },
         })
       }
       const cohort = await readReadyCohort(prisma, { windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now })

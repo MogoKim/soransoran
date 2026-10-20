@@ -293,6 +293,8 @@ check('🔴 D100 DB 사슬은 전용 job에서만 실행된다',
   && !/ci-d100-db-check/.test(coreJob))
 const EXPECTED_D100_DB_COMMANDS = [
   'stage:db-check',
+  'stage:preflight-window-check',
+  'stage:preflight-window-mutation',
   'ops:loop-db-check',
   'stage:evidence-db-check',
   'stage:proof-day-db-check',
@@ -319,7 +321,7 @@ const EXPECTED_D100_DB_COMMANDS = [
   'check:post-exposure-db',
 ] as const
 const wiredD100DbCommands = [...d100DbRunner.matchAll(/^npm run (\S+)\s*$/gm)].map((m) => m[1])
-check('🔴 격리 DB 명령 24개가 승인된 순서로 모두 남아 있다',
+check('🔴 격리 DB 명령 26개가 승인된 순서로 모두 남아 있다',
   JSON.stringify(wiredD100DbCommands) === JSON.stringify(EXPECTED_D100_DB_COMMANDS))
 check('🔴 D100 DB runner는 격리 주소만 만들고 종료 때 컨테이너를 정리한다',
   /SORAN_ISOLATED_DB=yes-throwaway/.test(d100DbRunner)

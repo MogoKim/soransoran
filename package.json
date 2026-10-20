@@ -252,6 +252,8 @@
     "persona:followup-db-check": "tsx scripts/persona-comment-followup-db-check.mts",
     "persona:birth-anchors": "tsx scripts/persona-birth-anchor-table.mts",
     "stage:db-check": "tsx scripts/stage-decision-db-check.mts",
+    "stage:preflight-window-check": "tsx scripts/stage-preflight-window-check.mts",
+    "stage:preflight-window-mutation": "tsx scripts/stage-preflight-window-mutation.mts",
     "stage:controller": "tsx scripts/stage-controller.mts",
     "stage:evidence-check": "tsx scripts/stage-evidence-check.mts",
     "d5:rehearsal": "tsx scripts/d5-proof-rehearsal.mts",
