@@ -320,6 +320,30 @@
   --admin-success-soft: #e7f3ea;
   --admin-info-soft: #e8f0fb;
 
+  /* ── 관리자 본문 면 (2026-10-20 · 창업자 확정 B안) ──
+     페이지 바탕은 웜 베이지, 카드는 흰 면. 오래 보는 화면이라 시안(#F5F0EA)보다 한 톤 밝다.
+     muted 글자 5.33:1 · 표 머리줄 위 muted 4.81:1 */
+  --admin-page: #f7f3ee;
+  --admin-card-line: #e6ddd3;
+  --admin-table-head: #efe7de;
+  --admin-row-hover: #fbf7f2;
+
+  /* ── 관리자 내비게이션 (딥 사이드바 · 모바일 전체 화면 메뉴) ──
+     🔴 대비(바탕 #2A2321 기준): 메뉴 글자 13.5 · 하위 글자 10.5 · 묶음 이름 6.5(hover 위 5.4) ·
+        선택 행 흰 글자 10.1 · 코랄선 3.55(비텍스트 3:1) · focus 9.0 */
+  --admin-nav-bg: #2a2321;
+  --admin-nav-bg-strong: #221c1a;   /* 머리 · 바닥 면 */
+  --admin-nav-line: #3a312d;
+  --admin-nav-text: #f5efea;
+  --admin-nav-text-sub: #ddd3cc;
+  --admin-nav-label: #b5a69c;       /* 묶음 이름 · 보조 글자 */
+  --admin-nav-hover: #3a302b;
+  --admin-nav-active-bg: #5a3a2e;
+  --admin-nav-active-text: #ffffff;
+  --admin-nav-active-bar: #ff6a3d;
+  --admin-nav-guide: #4f443e;       /* 하위 메뉴 세로 안내선 */
+  --admin-nav-focus: #ffb59a;
+
   /* 🔴 이 두 줄이 위 토큰을 실제로 적용한다.
         없으면 클래스 없는 자리가 body(고객값)를 상속한다 — 위 실측 참조.
         line-height 는 body 의 1.75 보다 낮다. 운영 표는 한 줄이 한 항목이라
@@ -338,6 +362,12 @@
       목록 줄 높이 지정 무시. 창업자 확정 규격은 데스크탑 행 56px · 컨트롤 44px 이다.
       높이는 이제 각 컴포넌트(AdminUi · AdminButton · AdminNav)가 직접 정한다.
       글 안의 링크처럼 inline 으로 흐르는 a 는 min-height 가 걸리지 않으므로 영향이 없다. */
+
+/* 딥 내비게이션 안의 키보드 focus — 기본 외곽선(#9E2900)은 짙은 바탕 위에서 보이지 않는다.
+   밝은 코랄로 바꿔 9:1 을 낸다. 내비게이션 밖 본문은 그대로다. */
+.admin-shell .admin-nav {
+  --focus-ring: var(--admin-nav-focus);
+}
 
 /* ──────────────────────────────────────────────────────────────
    글 본문 — 쓰는 화면(.tiptap)과 읽는 화면(.post-body)

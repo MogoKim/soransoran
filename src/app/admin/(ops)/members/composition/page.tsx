@@ -72,9 +72,9 @@ function StatRow({
 /** 큰 숫자 한 칸 — 제목 · 값 · 분모 설명 */
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
-    <div className="rounded-lg border border-subtle bg-surface-card p-3">
+    <div className="rounded-[10px] border border-[color:var(--admin-card-line)] bg-surface-card px-4 py-3">
       <p className="m-0 text-sm text-content-muted">{label}</p>
-      <p className="m-0 mt-1 break-words text-lg font-bold tabular-nums text-content-primary">{value}</p>
+      <p className="m-0 mt-1 break-words text-2xl font-bold tabular-nums text-content-primary">{value}</p>
       {note ? <p className="m-0 mt-1 text-xs text-content-muted">{note}</p> : null}
     </div>
   )

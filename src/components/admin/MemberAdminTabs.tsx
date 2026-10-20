@@ -29,10 +29,12 @@ export default function MemberAdminTabs({ current }: { current: MemberAdminTab }
               <Link
                 href={tab.href}
                 aria-current={active ? 'page' : undefined}
-                /* 🔴 선택 표시는 주황 밑줄 3px + 굵게 + aria-current (Admin Console V2).
-                      --cta 가 아니라 --brand 를 쓴다 — 누르는 면이 아니라 "지금 여기" 표시다. */
-                className={`inline-flex min-h-[52px] items-center whitespace-nowrap border-b-[3px] px-4 text-sm no-underline transition-colors lg:min-h-[48px] ${
-                  active ? 'border-brand font-bold text-content-primary' : 'border-transparent text-content-secondary hover:bg-surface-page'
+                /* 🔴 선택 표시: 흰 면 + 코랄 밑줄 3px + 진한 코랄 굵은 글자 + aria-current (창업자 확정 B안).
+                      --cta 가 아니라 --brand · --brand-strong 을 쓴다 — 누르는 면이 아니라 "지금 여기" 표시다. */
+                className={`inline-flex min-h-[52px] items-center whitespace-nowrap rounded-t-lg border-b-[3px] px-4 text-sm no-underline transition-colors lg:min-h-[48px] ${
+                  active
+                    ? 'border-brand bg-surface-card font-bold text-brand-strong'
+                    : 'border-transparent text-content-secondary hover:bg-[color:var(--admin-table-head)]'
                 }`}
               >
                 {tab.label}

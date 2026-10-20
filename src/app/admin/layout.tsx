@@ -28,7 +28,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // 권한 없는 사람에게는 운영 메뉴를 보여 주지 않는다 — 어떤 화면이 있는지도 알리지 않는다.
   if (!ok) {
     return (
-      <div className="admin-shell min-h-screen bg-[color:var(--surface-app)]">
+      <div className="admin-shell min-h-screen bg-[color:var(--admin-page)]">
         <div className="mx-auto max-w-lg px-4 py-24 text-left">
           <h1 className="m-0 text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>

@@ -151,9 +151,9 @@ export default async function AdminHomeExposurePage({
             </AdminEmptyState>
           </div>
         ) : (
-          <div className="mt-3 lg:rounded-[10px] lg:border lg:border-subtle lg:bg-surface-card">
+          <div className="mt-3 lg:rounded-[10px] lg:border lg:border-[color:var(--admin-card-line)] lg:bg-surface-card">
             <div
-              className={`hidden min-h-[44px] items-center rounded-t-[10px] border-b border-subtle bg-surface-page px-4 text-xs font-bold text-content-secondary lg:grid lg:gap-4 ${PIN_COLS}`}
+              className={`hidden min-h-[44px] items-center rounded-t-[10px] border-b border-[color:var(--admin-card-line)] bg-[color:var(--admin-table-head)] px-4 text-xs font-bold text-content-secondary lg:grid lg:gap-4 ${PIN_COLS}`}
             >
               <span>상태</span>
               <span>글</span>
@@ -216,9 +216,9 @@ export default async function AdminHomeExposurePage({
             <AdminEmptyState>홈에 뜬 글이 없습니다.</AdminEmptyState>
           </div>
         ) : (
-          <div className="mt-3 lg:rounded-[10px] lg:border lg:border-subtle lg:bg-surface-card">
+          <div className="mt-3 lg:rounded-[10px] lg:border lg:border-[color:var(--admin-card-line)] lg:bg-surface-card">
             <div
-              className={`hidden min-h-[44px] items-center rounded-t-[10px] border-b border-subtle bg-surface-page px-4 text-xs font-bold text-content-secondary lg:grid lg:gap-4 ${HOME_COLS}`}
+              className={`hidden min-h-[44px] items-center rounded-t-[10px] border-b border-[color:var(--admin-card-line)] bg-[color:var(--admin-table-head)] px-4 text-xs font-bold text-content-secondary lg:grid lg:gap-4 ${HOME_COLS}`}
             >
               <span>#</span>
               <span>글</span>
@@ -297,7 +297,7 @@ export default async function AdminHomeExposurePage({
               </AdminEmptyState>
             </div>
           ) : (
-            <ul className="m-0 mt-3 flex list-none flex-col gap-2 p-0 lg:gap-0 lg:rounded-[10px] lg:border lg:border-subtle lg:bg-surface-card">
+            <ul className="m-0 mt-3 flex list-none flex-col gap-2 p-0 lg:gap-0 lg:rounded-[10px] lg:border lg:border-[color:var(--admin-card-line)] lg:bg-surface-card">
               {results.map((r) => (
                 <li
                   key={r.id}

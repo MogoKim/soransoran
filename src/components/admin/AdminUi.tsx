@@ -84,6 +84,9 @@ export function AdminSection({
   )
 }
 
+/** 흰 카드의 테두리 — 웜 베이지 바탕(--admin-page) 위에서 카드가 서게 한다 */
+const CARD_LINE = 'border-[color:var(--admin-card-line)]'
+
 /** 흰 면 하나. 폼·요약·조치 묶음을 담는다. 🔴 패널 안에 패널을 넣지 않는다. */
 export function AdminPanel({
   children,
@@ -100,7 +103,7 @@ export function AdminPanel({
       ? 'border-2 border-content-primary bg-surface-card'
       : tone === 'locked'
         ? 'border border-dashed border-interactive bg-surface-page'
-        : 'border border-subtle bg-surface-card'
+        : `border ${CARD_LINE} bg-surface-card`
   return <div className={`rounded-[10px] p-4 lg:p-6 ${skin} ${className}`}>{children}</div>
 }
 
@@ -274,9 +277,9 @@ export function AdminTable({
   children: React.ReactNode
 }) {
   return (
-    <div className="mt-3 lg:rounded-[10px] lg:border lg:border-subtle lg:bg-surface-card">
+    <div className="mt-3 lg:rounded-[10px] lg:border lg:border-[color:var(--admin-card-line)] lg:bg-surface-card">
       <div
-        className={`hidden min-h-[44px] items-center rounded-t-[10px] border-b border-subtle bg-surface-page px-4 text-xs font-bold text-content-secondary lg:grid lg:gap-4 ${columns}`}
+        className={`hidden min-h-[44px] items-center rounded-t-[10px] border-b border-[color:var(--admin-card-line)] bg-[color:var(--admin-table-head)] px-4 text-xs font-bold text-content-secondary lg:grid lg:gap-4 ${columns}`}
       >
         {head}
       </div>
@@ -303,7 +306,7 @@ const ROW_LAYOUT =
 
 /** 줄의 면 — 모바일은 카드 한 장, 데스크탑은 표 면 위 아랫줄만 */
 const ROW_CARD =
-  'rounded-[10px] border border-subtle bg-surface-card lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent'
+  'rounded-[10px] border border-[color:var(--admin-card-line)] bg-surface-card lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent'
 
 /**
  * 왼쪽 강조선.
@@ -337,7 +340,7 @@ export function AdminTableRow({
     <li {...rowData(filterKey, searchText)} className="lg:last:[&>a]:border-b-0">
       <Link
         href={href}
-        className={`${ROW_LAYOUT} ${ROW_CARD} no-underline hover:bg-surface-page ${accentEdge(accent)} ${columns}`}
+        className={`${ROW_LAYOUT} ${ROW_CARD} no-underline hover:bg-[color:var(--admin-row-hover)] ${accentEdge(accent)} ${columns}`}
       >
         {children}
       </Link>
@@ -412,10 +415,10 @@ export function AdminCard({
   children: React.ReactNode
   className?: string
 }) {
-  const base = `rounded-[10px] border border-subtle bg-surface-card p-4 ${className}`
+  const base = `rounded-[10px] border ${CARD_LINE} bg-surface-card p-4 ${className}`
   if (!href) return <div className={base}>{children}</div>
   return (
-    <Link href={href} className={`flex min-h-[52px] flex-col gap-1 no-underline hover:bg-surface-page ${base}`}>
+    <Link href={href} className={`flex min-h-[52px] flex-col gap-1 no-underline hover:bg-[color:var(--admin-row-hover)] ${base}`}>
       {children}
     </Link>
   )
