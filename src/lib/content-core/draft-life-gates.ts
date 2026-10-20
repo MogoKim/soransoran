@@ -30,7 +30,7 @@
 import { readMediaDependency, CLOSING_RE } from './evidence'
 /** 🔴 KST 하루 경계의 정본 — 발행 일일 상한과 같은 함수다 */
 import { kstDayStart } from '../persona-cap'
-import { readFamilySpecifics } from './family-specifics'
+import { bandFits, readFamilyOwnership, readFamilySpecifics, type AgeShape } from './family-specifics'
 import { RELATION_NAMES } from './source-facts'
 /** 🔴 "다른 사람을 가리키는 말" 의 정본 — 여기서 목록을 다시 만들지 않는다 */
 import { OTHER_MARKERS } from '../persona-self-age'
@@ -106,7 +106,16 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    P29의 `noGoTopics=[자녀]`를 원천 배정은 글자 그대로만 비교해 `태아보험` 질문을 통과시켰고,
  *    초안 게이트는 소재를 보지 않아 자동 발행 뒤 감사에서 처음 잡혔다. 정본 `noGoHits` 하나를 배정과 초안이 함께 쓴다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v10'
+/**
+ * 🔴 `draft-gates-v11` (2026-10-20 · quality-v13) — **가족 주장의 뜻을 `family-specifics` 하나로 모은다.** 운영 D5 결함 —
+ *    성인 자녀만 둔 P16(`childrenAgeBands=[성인]`)이 `2살 아이 보험… 아이 거니까…` 를 자기 일로 써 v12 가 지나갔다. 세 틈을 닫는다:
+ *    ① 숫자 나이(0~18살 · `N개월`)를 정본 나이대로 읽는다(경계 나이는 이웃 나이대를 둘 다 허용 · `성인` 은 추측하지 않는다)
+ *    ② 소유 표지(`우리 아이` · `아이 거니까`)를 자기 가족 증거로 센다
+ *    ③ **물음표 · 묻는 어미가 1인칭 소유를 지우지 못한다** — 자기 가족 증거가 글에 있거나 `아이가 2살인데` 처럼 한 아이를 서술하면
+ *       묻는 문장이어도 자기 일이다. 증거도 서술도 없는 일반·제3자 물음(`2살 아이 보험 어떻게 하세요?`)은 그대로 통과한다.
+ *    카드의 자녀 나이대에 맞는 어린 아이(영유아 카드의 `2살 아이`)는 막지 않는다. 앞에 남이 선 말(`친구 아이가 2살`)도 막지 않는다.
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v11'
 
 /**
  * 🔴 **창의 계약 분류** (quality-v12) — 창업자 승인 의미 경계.
@@ -556,13 +565,15 @@ const personSubject = (clause: string, counterpart: readonly string[]): 'self' |
  */
 const firstPersonNow = (
   frames: readonly ClauseFrame[], i: number, at: number, counterpart: readonly string[],
-  /** 🔴 (draft-gates-v8) 시점과 무관한 사실(자녀 수)은 지난 일로 말해도 그 사람의 일이다 — 시점으로 빼지 않는다 */
-  o: { anyTime?: boolean } = {},
+  /** 🔴 (draft-gates-v8) 시점과 무관한 사실(자녀 수)은 지난 일로 말해도 그 사람의 일이다 — 시점으로 빼지 않는다
+   *  🔴 (v11) `askOk` — 묻는 어미(`…할까요`)로 끝나는 문장이어도 1인칭으로 읽는다(자기 가족 증거를 부른 쪽이 확인했을 때만)
+   *     `fragmentOk` — 서술 어미가 없는 말줄임 토막(`2살 아이 보험...`)도 센다(같은 글에 자기 가족 증거가 있을 때만) */
+  o: { anyTime?: boolean; askOk?: boolean; fragmentOk?: boolean } = {},
 ): boolean => {
   const f = frames[i]!
   if (f.general) return false
   const c = f.clause
-  if (!isPredicate(c)) return false
+  if (o.fragmentOk !== true && !isPredicate(c)) return false
   if (REPORTED_RE.test(c)) return false
   const before = c.slice(0, at)
   const after = c.slice(at)
@@ -578,7 +589,8 @@ const firstPersonNow = (
   }
   // 🔴 문장 끝이 전언이면 앞 절의 사건도 들은 말이다
   const last = [...frames].reverse().find((x) => x.sentence === f.sentence)
-  if (last !== undefined && (REPORTED_RE.test(last.clause) || QUESTION_END_RE.test(last.clause))) return false
+  //    🔴 (v11) 묻는 어미는 호출자가 자기 가족 증거를 따로 확인했을 때(`askOk`) 1인칭을 지우지 못한다 — 전언은 여전히 남의 말이다
+  if (last !== undefined && (REPORTED_RE.test(last.clause) || (o.askOk !== true && QUESTION_END_RE.test(last.clause)))) return false
   return subj !== 'other'
 }
 
@@ -773,7 +785,8 @@ function judgeChildren(
     // 🔴 지난 일·앞날은 지금 삶의 주장이 아니다(C 게이트와 같은 시간 틀)
     if (PAST_FRAME_RE.test(c) || PAST_CUE_RE.test(c)) continue
     const future = FUTURE_FRAME_RE.test(c)
-    if (!isPredicate(c) || REPORTED_RE.test(c) || CONDITIONAL_RE.test(c) || QUESTION_END_RE.test(c)) continue
+    // 🔴 (v11) 묻는 어미라도 명시적 1인칭(`우리 딸이 … 했는데 어쩌죠`)은 자기 자녀의 일이다 — 생략된 임자만 묻는 말로 보고 건너뛴다
+    if (!isPredicate(c) || REPORTED_RE.test(c) || CONDITIONAL_RE.test(c) || (QUESTION_END_RE.test(c) && k.owner !== 'explicit')) continue
     if (bands.length === 0) {
       if (MONEY_RE.test(c) || CHILD_JOB_RE.test(c) || MILITARY_RE.test(c) || WEDDING_RE.test(c) || CHILD_APART_RE.test(c)) {
         push('review', '카드 자녀 나이대 미상', c)
@@ -798,11 +811,24 @@ function judgeChildren(
   }
   // ── (quality-v4 · 2026-09-28 창업자 gold #4 · #10 · #28) 카드의 자녀 수 · 나이와 초안의 숫자·행동 ──
   /**
+   * 🔴 (v11) **묻는 문장의 1인칭** — 물음표만 걷어 다시 읽은 절 틀(`declFrames`). 정본 틀은 `?` 로 끝난 문장을 통째로 세상 이야기로
+   *    돌려 `우리 아이 2살인데 … 어떡할까요?` 의 소유를 지웠다. 걷은 틀은 `다들` · `분들` 같은 **낱말** 세상 이야기 틀만 남는다
+   *    (문장·절 경계는 `?` 를 `.` 로 바꿔도 같다). 길이가 어긋나면 쓰지 않는다.
+   */
+  const unask = (t: string): string => t.replace(/[?？]/g, '.')
+  const reread = readClauseFrames(unask(title), unask(body), OWNER_OPTS)
+  const declFrames = reread.length === frames.length ? reread : frames
+  /** 🔴 글 어딘가에 자기 가족 소유 표지(`우리 아이` · `아이 거니까`)가 있다 — 남의 것 · 전언 · 세상 이야기가 아닐 때만 */
+  const owned = declFrames.some((f, k) => {
+    const own = readFamilyOwnership(f.clause)
+    return own !== null && firstPersonNow(declFrames, k, own.at, KID_ONLY_WORDS, { anyTime: true, askOk: true, fragmentOk: true })
+  })
+  /**
    * 🔴 **이 글이 글쓴이 자기 자녀 이야기인가** — 정본 자녀 절(`readSelfChildClauses`) 또는 계획이 원문 근거로
    *    **자녀를 허가**했다(`lifeFacts` · `children`/`childAgeBand` 근거). 조사 없는 `좋아 죽겠다는 딸` 은 정본 절이
    *    세지 않지만 계획은 이미 "내 딸" 로 썼다(창업자 gold #28).
    */
-  const ownChildPost = kids.length > 0 || (plan?.selfBasis === 'lifeFacts'
+  const ownChildPost = kids.length > 0 || owned || (plan?.selfBasis === 'lifeFacts'
     && plan.warrants.some((w) => w.fact === 'children' || w.fact === 'childAgeBand'))
   const minAges = bands.map((b) => BAND_MIN_AGE[b]).filter((n): n is number => n !== undefined)
   const youngest = minAges.length === 0 ? null : Math.min(...minAges)
@@ -821,14 +847,20 @@ function judgeChildren(
     if (!QUOTED_END_RE.test(c) && !QUOTED_END_RE.test(sentenceEnd)) {
       const fam = readFamilySpecifics(c)
       // 🔴 상대 낱말은 **자녀만** — `남편` 을 넣으면 `친구 남편이 … 초1 아이` 의 남편을 내 쪽 주어로 읽는다
-      const self = (at: number): boolean => firstPersonNow(frames, i, at, KID_ONLY_WORDS, { anyTime: true })
+      //    🔴 (v11) 묻는 문장은 자기 가족 증거가 있거나(`owned`) 한 아이를 서술했을 때(`predicative` — `아이가 2살인데`)만 자기 일로 센다.
+      //       수식형 숫자 나이(`2살 아이` · `1살 아기`)는 누구의 아이든 쓰는 말이라 증거가 있을 때만 자기 일이다(손주 · 남의 아이를 막지 않는다)
+      const self = (at: number, shape: AgeShape = 'word'): boolean => {
+        const asked = (): boolean => firstPersonNow(declFrames, i, at, KID_ONLY_WORDS, { anyTime: true, askOk: true, fragmentOk: true })
+        if (shape === 'attributive') return owned && asked()
+        return firstPersonNow(frames, i, at, KID_ONLY_WORDS, { anyTime: true }) || ((owned || shape === 'predicative') && asked())
+      }
       if (fam.count !== null && fam.count.n > card.childrenCount && self(fam.count.at)) {
         push('hard', `카드는 자녀 ${card.childrenCount}명인데 "${fam.count.token}"`, c)
       } else if (fam.gender !== null && self(fam.gender.at)) {
         push('hard', `카드에 없는 자녀 성별 "${fam.gender.token}"`, c)
       }
       for (const bd of fam.bands) {
-        if (!bands.includes(bd.band as ChildAgeBand) && self(bd.at)) push('hard', `카드에 없는 자녀 나이대 "${bd.token}"(${bd.band})`, c)
+        if (!bandFits(bd, bands) && self(bd.at, bd.shape)) push('hard', `카드에 없는 자녀 나이대 "${bd.token}"(${bd.anyOf.join('|')})`, c)
       }
     }
     // ⑧ 결혼 햇수 — 가장 큰 아이가 결혼보다 먼저 태어났다

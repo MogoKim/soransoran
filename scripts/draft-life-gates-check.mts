@@ -461,8 +461,8 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v12 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v12')
-    check(`초안 게이트 판 = draft-gates-v10 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v10')
+    check(`품질 계약 판 = quality-v13 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v13')
+    check(`초안 게이트 판 = draft-gates-v11 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v11')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })
@@ -674,6 +674,100 @@ console.log('\n⑩ 🔴 (quality-v8 보정 · 14:40 감사 결함) 구체적 가
   check('🟢 게이트 — 카드 나이대(P02 초등 · "우리 아이가 초등학생이라") → 통과', !hardKid(gate('우리 아이가 초등학생이라 아침이 바빠요.')))
   check('🟢 🟢 **게이트 — 주어 없이 남의 말을 옮긴 끝(" … 키우기 힘들다고요") 의 "아이 둘" → 통과**',
     !hardKid(gate('버스 기다리는데 어떤 분이 말을 거셨어요.\n본인도 아이 둘인데 키우기 힘들다고요.')))
+}
+
+console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫자 나이 · 소유 표지 · 물음표가 지우지 못하는 1인칭')
+{
+  const { FAMILY_CASES, runFamilyCase } = await import('./lib/family-claim-cases.mjs')
+  const { readFamilySpecifics, familyMismatches, bandsOfAge, readFamilyOwnership } = await import('../src/lib/content-core/family-specifics')
+  const { realCard } = await import('./lib/life-gate-fixtures.mjs')
+  const { currentQualityContract, isCurrentQualityContract, QUALITY_CONTRACT_KEY } = await import('../src/lib/quality-contract')
+  const { judgeDefectResolution, resolvableDefectProblem, auditFingerprintOf, DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, DEFECT_RESOLVER } =
+    await import('../src/lib/auto-ready-defect-resolution')
+  const { digestOf } = await import('../src/lib/auto-ready-v2')
+  const { SEMANTIC_AUDIT_CONTRACT_VERSION } = await import('../src/lib/auto-ready-semantic-audit')
+  const { DRAFT_GATE_VERSION } = await import('../src/lib/content-core/draft-life-gates')
+
+  // ── 한 의미: 숫자 나이 0~18 은 기존 나이대로, 성인은 추측하지 않는다 ──
+  const table = Array.from({ length: 19 }, (_, n) => bandsOfAge(n))
+  check('🔴 숫자 나이 0~18 전부 나이대로 읽힌다 · 어느 나이도 `성인` 이 아니다',
+    table.every((b) => b !== null && b.length >= 1 && !b.includes('성인')), JSON.stringify(table))
+  check('🔴 범위 밖(19살 이상 · 음수 · 소수)은 읽지 않는다 — 성인을 추측하지 않는다',
+    bandsOfAge(19) === null && bandsOfAge(40) === null && bandsOfAge(-1) === null && bandsOfAge(2.5) === null
+    && readFamilySpecifics('19살 아들').bands.length === 0)
+  check('🟢 경계 나이는 이웃 나이대를 둘 다 허용한다(6~7 영유아|초등 · 12~13 초등|중고등 · 18 중고등|대학·취준)',
+    sameSet(bandsOfAge(7)!, ['영유아', '초등']) && sameSet(bandsOfAge(12)!, ['초등', '중고등']) && sameSet(bandsOfAge(18)!, ['중고등', '대학·취준'])
+    && sameSet(bandsOfAge(2)!, ['영유아']) && sameSet(bandsOfAge(10)!, ['초등']) && sameSet(bandsOfAge(15)!, ['중고등']))
+  const P16 = realCard('P16')
+  check('🔴 P16 정본 카드 = 자녀 2명 · 성인만', P16.childrenCount === 2 && P16.childrenAgeBands.join('|') === '성인')
+  check('🔴 카드 대조(공유 판독) — P16 에게 "2살 아이" 는 어긋난다 · 영유아 카드에는 맞는다',
+    familyMismatches(readFamilySpecifics('2살 아이 보험'), P16).length === 1
+    && familyMismatches(readFamilySpecifics('2살 아이 보험'), { childrenCount: 1, childrenAgeBands: ['영유아'] }).length === 0)
+  check('🟢 나이 차이 · 회상 · 19살 이상 · 개월 상한은 아이의 지금 나이가 아니다',
+    readFamilySpecifics('두 아이가 2살 차이예요').bands.length === 0
+    && readFamilySpecifics('아이 2살 때 보험 들었어요').bands.length === 0
+    && readFamilySpecifics('아이 보험 3개월 전에 들었어요').bands.length === 0
+    && readFamilySpecifics('아이가 100개월이에요').bands.length === 0)
+  check('판독 — 개월 · 한글 수 · 수식형 · 서술형', readFamilySpecifics('아기 18개월').bands[0]?.band === '영유아'
+    && readFamilySpecifics('두 살 된 딸').bands[0]?.band === '영유아'
+    && readFamilySpecifics('2살 아이').bands[0]?.shape === 'attributive'
+    && readFamilySpecifics('아이가 2살인데').bands[0]?.shape === 'predicative')
+  check('판독 — 소유 표지: "아이 거니까" · "우리 아이" 는 자기 가족 증거, "아이돌 거니까" · "아이거기" 는 아니다',
+    readFamilyOwnership('아이 거니까 제대로') !== null && readFamilyOwnership('우리 아이 보험') !== null
+    && readFamilyOwnership('아이돌 거니까') === null && readFamilyOwnership('아이거기') === null)
+
+  // ── 회귀 케이스 — 계획 변형(null · lifeFacts · noLife)마다 같은 답이어야 한다 ──
+  const results = FAMILY_CASES.flatMap((c) => runFamilyCase(c).map((r) => ({ c, r })))
+  for (const c of FAMILY_CASES) {
+    const rs = results.filter((x) => x.c.id === c.id).map((x) => x.r)
+    check(`${c.label} → ${c.want === 'hold' ? '확정 차단' : '통과'}`, rs.every((r) => r.got === r.want),
+      rs.filter((r) => r.got !== r.want).map((r) => `${r.plan}:${r.got}(${r.codes.join('+')})`).join(' '))
+  }
+
+  // ── 🔴 결함 해소 경로 — v12 로 만든 행은 v13 에서 legacy 가 되고, 재검증이 확정 차단하면 해소 기록이 지금 계약에 맞는다 ──
+  const exact = FAMILY_CASES.find((c) => c.id === 'p16-exact')!
+  const V12_MARK = { version: 'quality-v12', digest: '8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3' }
+  const C13 = currentQualityContract()
+  check('🔴 v12 표식 행은 지금(v13) 품질 계약 행이 아니다 → legacy(결함 해소 대상이 될 수 있다)',
+    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && C13.version === 'quality-v13' && C13.digest !== V12_MARK.digest)
+  const aud = {
+    queueId: 'cmvfr8glb0001xm4r2n7abt2z', postId: 'cmvfvauqy0001xmui1bz7u95n', selectedAtN: 1, selectedTarget: 1,
+    selectedAt: new Date('2026-10-20T00:30:00.000Z'), publishedTitleHash: digestOf(exact.title), publishedBodyHash: digestOf(exact.body),
+    stampContractDigest: V12_MARK.digest, defect: 'yes', judgedAt: new Date('2026-10-20T01:00:00.000Z'),
+    auditor: 'model:semantic-audit:runner', note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=measured binding=x] 결함`,
+    auditContractVersion: 'auto-ready-audit-v1', auditModel: 'rule+model', auditPromptVersion: 'p+q',
+  }
+  const reverify = judgeDraftLife({
+    title: exact.title, body: exact.body, card: P16, plan: { selfBasis: 'lifeFacts', warrants: [{ fact: 'children', evidenceText: '아이 보험' }] },
+    context: { at: FIXTURE_NOW, source: null },
+  })
+  check('🔴 🔴 **지금 게이트(v11)가 결함 모양을 다시 돌려 확정 차단한다 — 재검증 failures ≥ 1**', reverify.failures.some((f) => f.code === 'childLifeStageConflict'),
+    reverify.failures.map((f) => f.code).join(','))
+  const q = (entries: unknown[]) => ({
+    id: aud.queueId, createdPostId: aud.postId, draftTitle: exact.title, draftBody: exact.body,
+    gateResults: { [QUALITY_CONTRACT_KEY]: V12_MARK }, editDiff: { [DEFECT_RESOLUTION_KEY]: entries },
+  })
+  const record = {
+    recordVersion: DEFECT_RESOLUTION_RECORD_VERSION, qualityContract: C13,
+    audit: { queueId: aud.queueId, postId: aud.postId, fingerprint: auditFingerprintOf(aud) },
+    draft: { titleHash: digestOf(exact.title), bodyHash: digestOf(exact.body) },
+    reverify: { gateVersion: DRAFT_GATE_VERSION, outcome: 'blocked' as const, failureCodes: reverify.failures.map((f) => f.code as string), reviewCodes: [], inputDigest: 'c'.repeat(64), artifactId: 'cbc406c2f0444364bf8aa139a3853366' },
+    resolvedAt: '2026-10-20T02:00:00.000Z', resolvedBy: DEFECT_RESOLVER,
+  }
+  check('🔴 🔴 **공식 결함 모양(v12 표식 행) — 해소 전제를 만족한다(resolvableDefectProblem=null)**', resolvableDefectProblem(aud, q([])) === null,
+    String(resolvableDefectProblem(aud, q([]))))
+  check('🔴 🔴 **지금 게이트 재검증 결과로 쓴 해소 기록 → 지금 계약에서 해소(judgeDefectResolution)**', judgeDefectResolution(aud, q([record]), C13).resolved,
+    judgeDefectResolution(aud, q([record]), C13).reason)
+  check('🔴 기록 없이는 해소되지 않는다(수동 PASS 로 만들 수 없다) · 옛 v12 계약 기록도 해소하지 못한다',
+    !judgeDefectResolution(aud, q([]), C13).resolved
+    && !judgeDefectResolution(aud, q([{ ...record, qualityContract: V12_MARK }]), C13).resolved)
+
+  // ── 🔴 변이 — 숫자 나이 해석을 빼거나 물음표 우회를 되살리면 이 회귀가 실패로 드러나는가(사본에서 실제로 돌린다) ──
+  const { spawnSync } = await import('node:child_process')
+  const mut = spawnSync(`${process.cwd()}/node_modules/.bin/tsx`, ['scripts/quality-v13-family-mutation.mts'], { encoding: 'utf8', timeout: 300_000 })
+  const tail = mut.stdout.split('\n').filter((l) => l.includes('통과') || l.includes('FAIL')).join(' | ')
+  check('🔴 🔴 **변이 하네스 — 숫자 나이 제거 · 물음표 우회 재도입 · 과차단 방지 장치 제거를 전부 실패로 드러낸다(문법·로드 오류는 세지 않음)**',
+    mut.status === 0 && /통과 \d+ · 실패 0/.test(mut.stdout), tail || (mut.stderr ?? '').slice(0, 200))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

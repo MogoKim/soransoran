@@ -191,7 +191,7 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
   const runner = codeOnly('scripts/auto-ready-defect-resolve.mts')
   check('🔴 러너의 --apply 는 격리 DB 에서만(운영 적용 범위 밖)', /if \(apply\) \{\s*const bad = isolatedDbProblems\(\)/.test(runner))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
-    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v12')
+    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v13')
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)

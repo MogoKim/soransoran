@@ -1,10 +1,10 @@
 {
-  "version": "quality-v12",
-  "digest": "8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3",
+  "version": "quality-v13",
+  "digest": "03174bd43003a8052698788f9cee404cf595ac7ca185d0bad7e1743b7bfb7d64",
   "files": {
-    "src/lib/quality-contract.ts": "5967a0472a07b3675973bb08d45ce3cb464f86a9d76df33c21a07cac6c621baa",
+    "src/lib/quality-contract.ts": "13d91ac17a980aa0134b7b3fe0de5fb238a54238b2b9ee14f806a82131a4e346",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "151947848ae6773b4beea8b547b34e9e36a40f1b8fba8ecd09bbe59ca7681137",
+    "src/lib/content-core/draft-life-gates.ts": "c1edbb1e97bfecee7185e97078be869afa08ac8f96f5f6d4d72165b2a68eb811",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
     "src/lib/content-core/pipeline.ts": "07d84f0b858d0f2c7db827c297f17adc7f28c79718ddb5aa41510524dcd65653",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
@@ -28,16 +28,15 @@
     "src/lib/auto-ready-defect-resolution.ts": "3a631b35672ecfa30fbe421a088e803686bd6117aeb851b38553235cee64281a",
     "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209",
     "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
-    "src/lib/content-core/family-specifics.ts": "fbed290b61cb864326035832eb2277615dc430779807fc245e1213f87ed4087e"
+    "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "revise",
-    "reason": "quality-v12 digest 8f3c4c643065… → 8ff1640313d5… · 미배포 quality-v12의 안전 창작 허용과 고위험 사실 차단 경계를 최종 보정",
+    "kind": "bump",
+    "reason": "판 quality-v12 → quality-v13",
     "changedFiles": [
       "src/lib/quality-contract.ts",
       "src/lib/content-core/draft-life-gates.ts",
-      "src/lib/content-core/pipeline.ts",
-      "scripts/lib/content-core-prompts.mts"
+      "src/lib/content-core/family-specifics.ts"
     ]
   }
 }
