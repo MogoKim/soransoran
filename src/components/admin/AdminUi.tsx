@@ -181,7 +181,7 @@ export function AdminRangeNote({ children }: { children: React.ReactNode }) {
   return <p className="m-0 text-xs text-content-muted">{children}</p>
 }
 
-type BadgeTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success' | 'brand'
+export type BadgeTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success' | 'brand'
 
 const BADGE_SKIN: Record<BadgeTone, string> = {
   neutral: 'bg-surface-page text-content-secondary',
@@ -329,7 +329,7 @@ export function AdminTableRow({
   columns: string
   children: React.ReactNode
   /** 왼쪽 얇은 선으로만 구분한다 — 행 전체를 칠하지 않는다 */
-  accent?: 'muted' | 'danger'
+  accent?: 'muted' | 'danger' | 'warning'
   filterKey?: string
   searchText?: string
 }) {

@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { publishPersonaCandidate, takedownPersonaComment } from '@/lib/actions/persona-publish'
 import { canPublish } from '@/lib/persona-publish-rules'
 import type { CandidateStatus } from '@/lib/persona-candidate-rules'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 후보 발행 · 내림 — 🔴 승인과 다른 버튼이다
@@ -61,8 +62,8 @@ export default function PersonaCandidatePublish({
   }
 
   return (
-    <div className="mt-3 rounded-lg border border-gray-300 bg-white px-4 py-3">
-      <h3 className="text-sm font-bold text-gray-700">발행</h3>
+    <div className="mt-3 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+      <h3 className="text-sm font-bold text-content-secondary">발행</h3>
 
       {liveCommentId === null ? (
         <>
@@ -72,11 +73,11 @@ export default function PersonaCandidatePublish({
                 type="button"
                 onClick={runPublish}
                 disabled={pending}
-                className="mt-3 min-h-[52px] rounded-lg bg-cta px-5 text-sm font-bold text-content-primary disabled:opacity-50"
+                className={adminButtonClass('primary', 'mt-3')}
               >
                 {pending ? '발행 중…' : '발행하기'}
               </button>
-              <p className="mt-2 text-xs leading-relaxed text-gray-600">
+              <p className="mt-2 text-xs leading-relaxed text-content-secondary">
                 🔴 누르면 고객 화면에 댓글이 올라갑니다.
                 {targetPostId === null && ' 대상 글이 없어 막힐 것입니다.'}
                 <br />
@@ -84,14 +85,14 @@ export default function PersonaCandidatePublish({
               </p>
             </>
           ) : (
-            <p className="mt-2 text-sm text-gray-600">
+            <p className="mt-2 text-sm text-content-secondary">
               승인(APPROVED) 상태만 발행할 수 있습니다. 현재 {status}.
             </p>
           )}
         </>
       ) : (
         <div className="mt-3">
-          <p className="rounded bg-green-50 px-3 py-2 text-sm text-green-900">
+          <p className="rounded-lg border border-state-success bg-[color:var(--admin-success-soft)] px-3 py-2 text-sm text-content-primary">
             발행됨 — 댓글 <span className="font-mono text-xs">{liveCommentId}</span>
             {takenDown && ' · 내려감'}
           </p>
@@ -101,11 +102,11 @@ export default function PersonaCandidatePublish({
                 type="button"
                 onClick={() => runTakedown(liveCommentId)}
                 disabled={pending}
-                className="mt-3 min-h-[52px] rounded-lg border border-gray-400 bg-white px-5 text-sm text-gray-700 disabled:opacity-50"
+                className={adminButtonClass('danger', 'mt-3')}
               >
                 {pending ? '내리는 중…' : '댓글 내리기'}
               </button>
-              <p className="mt-2 text-xs leading-relaxed text-gray-600">
+              <p className="mt-2 text-xs leading-relaxed text-content-secondary">
                 고객 화면에서 즉시 사라집니다. 대기열은 발행됨(PUBLISHED)으로 남습니다 —
                 발행된 사실 자체는 기록으로 남깁니다.
               </p>
@@ -115,9 +116,9 @@ export default function PersonaCandidatePublish({
       )}
 
       {blocks.length > 0 && (
-        <ul className="mt-3 list-none space-y-1 rounded bg-amber-50 px-3 py-2 p-0">
+        <ul className="mt-3 list-none space-y-1 rounded-lg border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 p-0">
           {blocks.map((b) => (
-            <li key={b.code} className="text-xs text-amber-900">
+            <li key={b.code} className="text-xs text-content-primary">
               <span className="font-mono">[{b.code}]</span> {b.message}
             </li>
           ))}
@@ -125,7 +126,7 @@ export default function PersonaCandidatePublish({
       )}
 
       {error !== null && (
-        <p className="mt-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>
+        <p className="mt-3 rounded-lg border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
       )}
     </div>
   )

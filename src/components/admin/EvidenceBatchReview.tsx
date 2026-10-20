@@ -9,6 +9,7 @@ import {
   canReview, reviewingAfter, describeSend, phaseLabel, type Entry, type EvidenceRowState, type BatchPlan, type RowResult,
 } from '@/lib/auto-ready-evidence-batch-plan'
 import { DECLINE_REASONS } from '@/lib/original-post-decision'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 자동 READY 증거 — 배치 검토 화면
@@ -166,7 +167,7 @@ export default function EvidenceBatchReview() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg bg-surface-soft px-4 py-3 text-sm text-content-primary">
+      <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3 text-sm text-content-primary">
         <label htmlFor="bundle-file" className="mb-2 block font-bold">검토 묶음 (bundle.json)</label>
         <input id="bundle-file" type="file" accept="application/json" disabled={frozen}
           onChange={(e) => { void onFile(e.target.files?.[0]) }} className="block min-h-[52px] w-full text-sm" />
@@ -186,7 +187,7 @@ export default function EvidenceBatchReview() {
 
       {items.length > 0 && !stateLoaded && busy === null && bundleText !== null && (
         <button type="button" onClick={() => { void loadState(bundleText) }}
-          className="min-h-[52px] w-full rounded-lg border border-interactive px-4 font-bold text-content-primary">
+          className={adminButtonClass('secondary', 'w-full')}>
           지금 상태 다시 불러오기
         </button>
       )}
@@ -201,7 +202,7 @@ export default function EvidenceBatchReview() {
         const needWithdraw = ed === 'record' && s !== undefined && isOpenApproved(s) && e.hardDefect === 'yes'
         return (
           <section key={i.queueId} data-queue-id={i.queueId} data-phase={s?.phase ?? 'unknown'} data-locked={ed === null ? 'yes' : 'no'}
-            className="rounded-lg border border-subtle px-4 py-3 text-sm">
+            className="rounded-[10px] border border-subtle bg-surface-card p-4 text-sm">
             <header className="mb-2 flex flex-wrap items-center gap-2">
               <span className="font-bold">{s === undefined ? '상태 없음' : phaseLabel(s)}</span>
               <span className="text-content-muted">{i.queueId}</span>
@@ -234,7 +235,7 @@ export default function EvidenceBatchReview() {
             )}
             {canReview(s, reviewing) && (
               <button type="button" onClick={() => toggleReview(i.queueId, true)} disabled={frozen} data-cta="rereview"
-                className="mb-2 min-h-[52px] rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+                className={adminButtonClass('secondary', 'mb-2')}>
                 재검토 — 중대 결함 판정 다시 하기
               </button>
             )}
@@ -242,7 +243,7 @@ export default function EvidenceBatchReview() {
               <div className="mb-2 flex flex-wrap items-center gap-2" data-review-open="">
                 <span className="font-bold">재검토 중 — 결정은 바꾸지 않습니다. 중대 결함 판정만 새로 기록합니다(이전 기록은 남습니다).</span>
                 <button type="button" onClick={() => toggleReview(i.queueId, false)} disabled={frozen} data-cta="rereview-cancel"
-                  className="min-h-[52px] rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+                  className={adminButtonClass('secondary')}>
                   재검토 취소
                 </button>
               </div>
@@ -262,20 +263,20 @@ export default function EvidenceBatchReview() {
               <p className="whitespace-pre-wrap break-words">{i.draft.body}</p>
             </div>
             {i.edit !== null && (
-              <div className="mb-2 rounded bg-surface-soft px-3 py-2">
+              <div className="mb-2 rounded-lg bg-surface-page px-3 py-2">
                 <div className="font-bold">수정본 — {i.edit.after.title ?? i.draft.title}</div>
                 <p className="whitespace-pre-wrap break-words">{i.edit.after.body ?? i.draft.body}</p>
               </div>
             )}
 
             {ed !== null && (
-              <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-wrap items-end gap-3 lg:flex-nowrap">
                 {ed === 'decide' && (
                   <>
                     <label className="flex flex-col">
                       <span className="text-xs font-bold">결정</span>
                       <select name="decision" value={e.decision} disabled={frozen} onChange={(ev) => set(i.queueId, { decision: ev.target.value as Entry['decision'] })}
-                        className="min-h-[52px] rounded border px-2">
+                        className="min-h-[52px] rounded-lg border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                         <option value="">정하지 않음 (보내지 않음)</option>
                         <option value="ready">그대로 내보내도 된다</option>
                         <option value="reject">폐기</option>
@@ -285,7 +286,7 @@ export default function EvidenceBatchReview() {
                       <label className="flex flex-col">
                         <span className="text-xs font-bold">폐기 사유</span>
                         <select name="declineReason" value={e.declineReason} disabled={frozen} onChange={(ev) => set(i.queueId, { declineReason: ev.target.value })}
-                          className="min-h-[52px] rounded border px-2">
+                          className="min-h-[52px] rounded-lg border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                           <option value="">선택</option>
                           {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                         </select>
@@ -296,20 +297,20 @@ export default function EvidenceBatchReview() {
                 <label className="flex flex-col">
                   <span className="text-xs font-bold">중대 결함</span>
                   <select name="hardDefect" value={e.hardDefect} disabled={frozen} onChange={(ev) => set(i.queueId, { hardDefect: ev.target.value as Entry['hardDefect'] })}
-                    className="min-h-[52px] rounded border px-2">
+                    className="min-h-[52px] rounded-lg border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                     <option value="">고르지 않음</option>
                     <option value="no">없음</option>
                     <option value="yes">있음</option>
                   </select>
                 </label>
                 {needWithdraw && (
-                  <div className="flex flex-col rounded border border-subtle px-3 py-2">
+                  <div className="flex flex-col rounded-lg border border-subtle px-3 py-2">
                     <label className="flex min-h-[52px] items-center gap-2 font-bold text-state-danger">
                       <input type="checkbox" name="withdraw" checked={e.withdraw} disabled={frozen} onChange={(ev) => set(i.queueId, { withdraw: ev.target.checked })} className="h-6 w-6" />
                       ⚠ 철회 — 승인을 거둬들여 발행 대상에서 뺀다
                     </label>
                     <select name="withdrawReason" value={e.declineReason} disabled={frozen || !e.withdraw} onChange={(ev) => set(i.queueId, { declineReason: ev.target.value })}
-                      className="mt-2 min-h-[52px] rounded border px-2">
+                      className="mt-2 min-h-[52px] rounded-lg border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                       <option value="">철회 사유 선택 (필수)</option>
                       {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                     </select>
@@ -318,7 +319,7 @@ export default function EvidenceBatchReview() {
                 <label className="flex min-w-[240px] flex-1 flex-col">
                   <span className="text-xs font-bold">근거 (있음이면 필수 · 줄마다 하나)</span>
                   <textarea name="reasons" value={e.reasons} disabled={frozen} rows={2} onChange={(ev) => set(i.queueId, { reasons: ev.target.value })}
-                    className="rounded border px-2 py-1" />
+                    className="rounded-lg border border-interactive bg-surface-card px-2 py-1" />
                 </label>
               </div>
             )}
@@ -335,7 +336,7 @@ export default function EvidenceBatchReview() {
             보낼 행 {plan.send.length}건 · 막힌 행 {plan.blocking.length}건 · 고르지 않은 행 {plan.untouched}건(보내지 않음) · 잠긴 행 {plan.locked}건
           </p>
           <button type="button" onClick={openConfirm} disabled={!canSubmit(plan) || busy !== null} data-cta="review"
-            className="min-h-[52px] w-full rounded-lg bg-cta px-4 font-bold text-cta-content disabled:opacity-50">
+            className={adminButtonClass('primary', 'w-full')}>
             {plan.blocking.length > 0
               ? `막힌 행 ${plan.blocking.length}건 — 먼저 고쳐 주세요`
               : plan.send.length === 0 ? '기록할 행을 골라 주세요' : `${plan.send.length}건 기록 내용 확인`}
@@ -344,7 +345,7 @@ export default function EvidenceBatchReview() {
       )}
 
       {step === 'confirm' && confirmed !== null && (
-        <div className="space-y-3 rounded-lg border border-interactive px-4 py-3 text-sm" data-confirm-panel="">
+        <div className="space-y-3 rounded-[10px] border-2 border-content-primary bg-surface-card p-4 text-sm" data-confirm-panel="">
           <div className="font-bold">아래 {confirmed.send.length}건을 기록합니다</div>
           <p className="text-content-muted">결정 전 행의 &quot;그대로&quot; · &quot;폐기&quot; 는 되돌리는 버튼이 없습니다. 목록을 확인해 주세요.</p>
           <ol className="list-decimal space-y-1 pl-5">
@@ -354,11 +355,11 @@ export default function EvidenceBatchReview() {
           </ol>
           <div className="flex flex-col gap-2 sm:flex-row">
             <button type="button" onClick={() => { setStep('edit'); setConfirmed(null) }} disabled={busy !== null} data-cta="back"
-              className="min-h-[52px] flex-1 rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+              className={adminButtonClass('secondary', 'flex-1')}>
               돌아가서 고치기
             </button>
             <button type="button" onClick={() => { void submitConfirmed() }} disabled={busy !== null} data-cta="submit"
-              className="min-h-[52px] flex-1 rounded-lg bg-cta px-4 font-bold text-cta-content disabled:opacity-50">
+              className={adminButtonClass('primary', 'flex-1')}>
               {busy === 'submitting' ? '기록 중… (창을 닫지 마세요)' : `${confirmed.send.length}건 기록 확정`}
             </button>
           </div>
@@ -366,7 +367,7 @@ export default function EvidenceBatchReview() {
       )}
 
       {results.size > 0 && (
-        <div className="rounded-lg bg-surface-soft px-4 py-3 text-sm" role="status" data-results="">
+        <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3 text-sm" role="status" data-results="">
           <div className="mb-2 font-bold">
             기록 결과{reviewer !== null ? ` — 검토자 ${reviewer}` : ''} · 성공 {tally.성공} · 건너뜀 {tally.건너뜀} · 거절 {tally.거절}
           </div>
