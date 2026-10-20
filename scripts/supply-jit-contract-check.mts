@@ -538,7 +538,7 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /const claimed = autoPath\.filter\(\(r\) => claimsJitContract\(r\.gateResults\)\)/.test(facts)
     && /rows = counted\.map\(/.test(facts) && /if \(r\.intents === null\) continue/.test(facts))
   check('🔴 🔴 cohort 시계는 회차 하나 — 분자를 decidedAt 창으로 자르지 않고 의도 runId ∈ 창 안 묶음 회차로 고른다 (2026-10-09 P0)',
-    /where: \{ createdAt: \{ gte: i\.windowFrom \} \}/.test(facts) && !/decidedAt: \{ gte: i\.windowFrom/.test(facts)
+    /where: \{ createdAt: \{ gte: i\.windowFrom, lt: i\.windowTo \} \}/.test(facts) && !/decidedAt: \{ gte: i\.windowFrom/.test(facts)
     && /return intent === null \|\| ws\?\.byRun\.has\(intent\.runId\) === true/.test(facts)
     && /fate: terminal \? null : !stamped \? 'unknown' : pendingFateOf\(\{/.test(facts))
   check('🔴 🔴 미도장 기계 행은 정본 eligibilityOf 로만 나눈다 — 자동 부적격은 분자 제외 · 제외 수를 사실로 보고 · 분모는 묶음 원천 그대로 (2026-10-09 P0-a)',
