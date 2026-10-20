@@ -163,7 +163,7 @@ console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 
     r.published === 5 && r.lost === 3 && r.scheduled === 1 && r.unknown === 2, JSON.stringify(r))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
   check('🔴 생산능력 · 결말이 한 번의 조회(창 시작 이후 적재 · 자동 READY 경로 · 회차 소속) — 별도 count 로 raw 를 따로 세지 않는다',
-    /findMany\(\{\s*where: \{ createdAt: \{ gte: i\.windowFrom \} \}/.test(facts)
+    /findMany\(\{\s*where: \{ createdAt: \{ gte: i\.windowFrom, lt: i\.windowTo \} \}/.test(facts)
     && /r\.decidedBy === AUTO_DECIDER\s*\|\| \(\(r\.decidedBy \?\? ''\)\.startsWith\('machine:'\)/.test(facts)
     && !/originalPostApprovalQueue\.count\(/.test(facts)
     && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.scheduled \+ fates\.unknown/.test(facts))
