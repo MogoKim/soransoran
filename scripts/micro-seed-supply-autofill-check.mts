@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os'
 import {
   readSupplyIntent, SUPPLY_JIT_CONTRACT, WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, worksetFileName, type SupplyIntent,
 } from '../src/lib/supply-workset'
-import { autoReadyLoadability, intentsForFile } from './micro-seed-supply-autofill.mjs'
+import { autoReadyPriority, intentsForFile } from './micro-seed-supply-autofill.mjs'
 import { currentQualityContract, qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
 import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as CURRENT_AUTO_JUDGE_PROMPT_VERSION } from '../src/lib/micro-seed-auto-judge'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
@@ -458,7 +458,7 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
   check('🔴 autofill CLI 가 --up-to 를 실제로 판정부에 넘긴다', (() => {
     const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
     return /const UP_TO = UP_TO_RAW === null \? null : Number\.parseInt\(UP_TO_RAW, 10\)/.test(cli)
-      && /judgeApply\(\{ targets: selectableTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
+      && /judgeApply\(\{ targets: orderedTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
   })())
   check('여력만큼만 가져간다', (() => {
     const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
@@ -777,20 +777,25 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
   const blockedA = { ...eC, sourceArticleId: 'blocked-a', title: '백내장 진단 이야기', lifeReview: ['truncatedSourceCompletion'] }
   const blockedB = { ...eC, sourceArticleId: 'blocked-b', title: '시어머니 안마의자 이야기', lifeReview: ['truncatedSourceCompletion'] }
   const clean = { ...eC, sourceArticleId: 'clean-c', title: '연애박사 OST 이야기', lifeReview: [] }
-  const loadable = [blockedA, blockedB, clean].filter((candidate) => autoReadyLoadability({
+  const candidates = [blockedA, blockedB, clean]
+  const priority = candidates.filter((candidate) => autoReadyPriority({
     candidate,
     payload: buildQueuePayload({ envelope: eEnv, candidate, autoJudge: eAj, review: cleanRev, now: NOW }),
-  }).loadable)
-  const one = judgeApply({ targets: loadable, apply: true, limit: null, upTo: 1 })
+  }).priority)
+  const deferred = candidates.filter((candidate) => !priority.includes(candidate))
+  const ordered = [...priority, ...deferred]
+  const one = judgeApply({ targets: ordered, apply: true, limit: null, upTo: 1 })
   check('🔴 🔴 **⑥ 자동 부적격 2건은 JIT 자리를 먹지 않고 깨끗한 1건이 --up-to=1에 선택된다**',
-    loadable.length === 1 && loadable[0]?.sourceArticleId === 'clean-c'
+    priority.length === 1 && priority[0]?.sourceArticleId === 'clean-c'
     && one.ok && one.take[0]?.sourceArticleId === 'clean-c')
-  const blockedVerdict = autoReadyLoadability({
+  check('🔴 기존 경고 후보는 제거하지 않고 후순위로 보존한다',
+    ordered.length === 3 && ordered[1]?.sourceArticleId === 'blocked-a' && ordered[2]?.sourceArticleId === 'blocked-b')
+  const blockedVerdict = autoReadyPriority({
     candidate: blockedA,
     payload: buildQueuePayload({ envelope: eEnv, candidate: blockedA, autoJudge: eAj, review: cleanRev, now: NOW }),
   })
   check('🔴 자동 READY 정본의 실제 차단 사유를 보존한다',
-    !blockedVerdict.loadable && blockedVerdict.code === 'AUTO_READY_INELIGIBLE'
+    !blockedVerdict.priority
     && blockedVerdict.verdict?.reasons.some((r) => r.includes('DRAFT_LIFE_REVIEW:truncatedSourceCompletion')) === true)
 }
 

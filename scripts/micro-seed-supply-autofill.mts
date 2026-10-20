@@ -169,22 +169,21 @@ function fillReport(input: {
 function autoJudgeOf(c: Candidate): AutoJudgeProvenance { return ajMap.get(c as object) ?? {} }
 
 /**
- * JIT 적재 한 자리는 자동 READY까지 갈 수 있는 기계 후보만 차지한다.
- * 사람 후보는 기존 승인 경로이므로 이 자동 판정을 다시 적용하지 않는다.
+ * JIT 상한을 자르기 전에 자동 READY까지 갈 수 있는 기계 후보를 앞에 둔다.
+ * 나머지 후보는 기존 큐 의미를 보존하려고 제거하지 않고 뒤에 둔다.
  */
-export function autoReadyLoadability(input: {
+export function autoReadyPriority(input: {
   candidate: Candidate
   payload: ReturnType<typeof buildQueuePayload>
-}): { loadable: boolean; verdict: RowVerdict | null; code: 'PAYLOAD' | 'AUTO_READY_INELIGIBLE' | null } {
-  if (input.payload === null) return { loadable: false, verdict: null, code: 'PAYLOAD' }
-  if (input.payload.profile === 'human') return { loadable: true, verdict: null, code: null }
+}): { priority: boolean; verdict: RowVerdict | null } {
+  if (input.payload === null || input.payload.profile === 'human') {
+    return { priority: false, verdict: null }
+  }
   const verdict = eligibilityOf({
     gateVerdict: 'PASS', gateResults: input.payload.gateResults,
     title: S(input.candidate.title), body: S(input.candidate.body),
   })
-  return verdict.auto
-    ? { loadable: true, verdict, code: null }
-    : { loadable: false, verdict, code: 'AUTO_READY_INELIGIBLE' }
+  return { priority: verdict.auto, verdict }
 }
 
 /**
@@ -423,28 +422,25 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── ③-b JIT 적재 가능 후보 ──
+  // ── ③-b JIT 적재 우선순위 ──
   // 🔴 상한을 자르기 전에 실제 자동 READY 정본으로 판정한다. 앞판은 `--up-to=1`을 먼저 잘라
   //    자동 부적격 후보가 한 자리를 먹고, 같은 파일의 깨끗한 후보가 cut으로 남았다.
   const selectionNow = new Date().toISOString()
-  const selectableTargets: Candidate[] = []
-  const ineligible: { c: Candidate; code: FillSkipCode; reasons: readonly string[] }[] = []
+  const priorityTargets: Candidate[] = []
+  const deferredTargets: { c: Candidate; reasons: readonly string[] }[] = []
   for (const c of targets) {
     const payload = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c, intent: intentOf(c),
       autoJudge: autoJudgeOf(c), review: reviewOf(c), now: selectionNow,
     })
-    const v = autoReadyLoadability({ candidate: c, payload })
-    if (v.loadable) selectableTargets.push(c)
-    else {
-      const code = v.code ?? 'PAYLOAD'
-      skippedC.push({ c, code })
-      ineligible.push({ c, code, reasons: v.verdict?.reasons ?? [] })
-    }
+    const v = autoReadyPriority({ candidate: c, payload })
+    if (v.priority) priorityTargets.push(c)
+    else deferredTargets.push({ c, reasons: v.verdict?.reasons ?? [] })
   }
-  console.log(`\n③-b JIT 적재 가능 ${selectableTargets.length}건 · 상한 전 제외 ${ineligible.length}건`)
-  for (const x of ineligible) {
-    console.log(`   ⏭ ${S(x.c.title).slice(0, 22)} — ${x.code}`
+  const orderedTargets = [...priorityTargets, ...deferredTargets.map((x) => x.c)]
+  console.log(`\n③-b JIT 자동 READY 우선 ${priorityTargets.length}건 · 후순위 보존 ${deferredTargets.length}건`)
+  for (const x of deferredTargets) {
+    console.log(`   ↘ ${S(x.c.title).slice(0, 22)} — 후순위`
       + (x.reasons.length === 0 ? '' : ` · ${x.reasons.join(' · ')}`))
   }
 
@@ -452,8 +448,8 @@ async function main(): Promise<void> {
   // 🔴 dry-run 에서도 실제 create 에 쓰일 값을 그대로 만들어 profileOf 를 확인한다.
   //    P0 (기계 행에 사람 접두가 붙어 러너가 전부 거절) 이 다시 나면 여기서 먼저 걸린다.
   const askedN = UP_TO ?? LIMIT
-  const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, selectableTargets.length) : 0
-  const preview = selectableTargets.slice(0, previewN).map((c) => {
+  const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, orderedTargets.length) : 0
+  const preview = orderedTargets.slice(0, previewN).map((c) => {
     const pl = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c, intent: intentOf(c),
       autoJudge: autoJudgeOf(c), review: reviewOf(c), now: new Date().toISOString(),
@@ -481,12 +477,12 @@ async function main(): Promise<void> {
   if (nNull > 0) console.log('   🔴 profile 을 못 만든 건이 있다 — 그 건은 적재 단계에서 건너뛴다')
 
   // ── ④ 실행 판정 ──
-  const gate = judgeApply({ targets: selectableTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO })
+  const gate = judgeApply({ targets: orderedTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO })
   if (!gate.ok) {
     console.log(`\n④ 보충하지 않는다 — ${gate.reason}`)
     // 🔴 관문을 지난 후보가 있었는데 넣지 않았으면 전부 `cut` 이다 — 끝낸 것이 아니다
     console.log(`${FILL_REPORT_PREFIX}${JSON.stringify(fillReport({
-      files: fileCounts, skipped: skippedC, loaded: [], cut: selectableTargets, applied: APPLY,
+      files: fileCounts, skipped: skippedC, loaded: [], cut: orderedTargets, applied: APPLY,
     }))}`)
     if (!APPLY) {
       console.log('   🟡 dry-run 입니다. DB write 0 · Post 0'
@@ -628,7 +624,7 @@ async function main(): Promise<void> {
   const takenSet = new Set<object>(gate.take as object[])
   console.log(`${FILL_REPORT_PREFIX}${JSON.stringify(fillReport({
     files: fileCounts, skipped: skippedC, loaded: loadedC,
-    cut: selectableTargets.filter((c) => !takenSet.has(c as object)), applied: true,
+    cut: orderedTargets.filter((c) => !takenSet.has(c as object)), applied: true,
   }))}`)
   await prisma.$disconnect()
   process.exit(v.ok ? 0 : 1)
