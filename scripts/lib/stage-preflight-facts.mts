@@ -35,6 +35,7 @@ import {
   type CostAttribution, type CostFate, type FateCounts, type PendingFate,
 } from '../../src/lib/ready-fate'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
+import { kstDateString } from '../../src/lib/release-canary'
 import {
   COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv,
 } from '../../src/lib/persona-comment-auto-lane'
@@ -130,6 +131,41 @@ const readDay = (dir: string, date: string): LedgerEntry[] | null => {
 const kstRange = (date: string): { gte: Date; lt: Date } => {
   const gte = new Date(`${date}T00:00:00+09:00`)
   return { gte, lt: new Date(gte.getTime() + 864e5) }
+}
+
+/** 🔴 용량(cohort) 창 길이 — 롤링 72시간(= `UNIT_COST_DAYS` 일) */
+export const CAPACITY_WINDOW_MS = UNIT_COST_DAYS * 864e5
+
+/**
+ * 🔴 **preflight 시계 둘 — 증명 창과 용량 창을 섞지 않는다** (2026-10-20 D10 preflight 시계 결함).
+ *    앞판은 둘 다 `evidenceDate`(전날)에서 만들었다 — 용량 창 끝이 오늘 00:00 KST 에 멈춰 **오늘 아침 자연 공급
+ *    (06:15 회차 · READY)이 07:00 판정에서 통째로 빠졌다**(readyRaw=0 · worksetSources=2 → 가짜 FAIL).
+ *    · 증명(proof)    전날 KST 달력일 기준 최근 3일 — 지연 · 댓글/감사 단가. `[전날 00:00 − 2일, 오늘 00:00)` 고정.
+ *                     🔴 오늘 데이터를 섞지 않는다 — 전날 증명은 전날이 끝난 뒤에 닫힌 값이다.
+ *    · 용량(capacity) 판정 시각(`now`)에서 거슬러 정확히 72시간 `[now − 72h, now)` — READY cohort · 묶음 원천 · 공급 장부.
+ *                     🔴 `now` 이후 사건은 들어오지 않는다(상한 배타). 장부 날짜는 창이 걸친 KST 날 전부 + 다음 날 파일.
+ */
+export function preflightWindowsOf(evidenceDate: string, now: Date): {
+  proof: { dates: string[]; from: Date; to: Date }
+  capacity: { dates: string[]; from: Date; to: Date; ledgerDates: string[] }
+} {
+  const proofDates = recentDates(evidenceDate)
+  const proofFrom = kstRange(proofDates[0] ?? evidenceDate).gte
+  const proofTo = kstRange(evidenceDate).lt
+  const to = now
+  const from = new Date(now.getTime() - CAPACITY_WINDOW_MS)
+  // 창 `[from, to)` 의 마지막 순간은 `to − 1ms` — 정확히 KST 자정인 `now` 는 그날 파일을 포함하지 않는다
+  const first = kstDateString(from)
+  const last = kstDateString(new Date(to.getTime() - 1))
+  const days: string[] = []
+  for (let t = Date.parse(`${first}T00:00:00Z`); t <= Date.parse(`${last}T00:00:00Z`); t += 864e5) {
+    days.push(new Date(t).toISOString().slice(0, 10))
+  }
+  const spill = new Date(Date.parse(`${last}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)
+  return {
+    proof: { dates: proofDates, from: proofFrom, to: proofTo },
+    capacity: { dates: days, from, to, ledgerDates: [...days, spill] },
+  }
 }
 
 /** 🔴 백분위(최근접 순위) — 표본이 없으면 null. 보고용 수치이지 가중치가 아니다 */
@@ -346,7 +382,7 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
      *    소속은 시각이 아니라 `supplyIntent.runId ∈ cohortRuns` 가 정한다. 창 밖 회차 행은 **제외**다(불일치가 아니다).
      */
     const found = await prisma.originalPostApprovalQueue.findMany({
-      where: { createdAt: { gte: i.windowFrom } },
+      where: { createdAt: { gte: i.windowFrom, lt: i.windowTo } },
       select: {
         id: true, status: true, gateResults: true, decidedBy: true, createdPostId: true,
         // 🔴 미도장 기계 행의 자동 적격 판정(`eligibilityOf`) 입력 — 출력하지 않는다
@@ -441,7 +477,8 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
 }
 
 /**
- * 🔴 **preflight 사실을 모은다.** `evidenceDate` 는 전날(증거일) — 단가 · 수율 · 지연은 그날까지 최근 3일.
+ * 🔴 **preflight 사실을 모은다.** `evidenceDate` 는 전날(증거일) — 지연 · 댓글/감사 단가는 그날까지 최근 3일(증명 창).
+ *    READY cohort · 수율 · 공급 단가(용량 창)는 `now` 에서 거슬러 72시간이다(`preflightWindowsOf`).
  *    어느 하나를 못 읽으면 그 칸만 `null` 이다(나머지는 계속 모은다).
  */
 /**
@@ -498,9 +535,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   contractValidPersonas?: () => Promise<number | null>
 }): Promise<{ facts: PreflightFacts; notes: string[]; detail: Record<string, unknown> }> {
   const notes: string[] = []
-  const dates = recentDates(i.evidenceDate)
-  const windowFrom = kstRange(dates[0] ?? i.evidenceDate).gte
-  const windowTo = kstRange(i.evidenceDate).lt
+  const win = preflightWindowsOf(i.evidenceDate, i.now)
+  const dates = win.proof.dates
   const pooled = (dir: string): LedgerEntry[] | null => pooledEntries(dates.map((d) => readDay(dir, d)))
 
   // 기회(READY) — 자동 · 열림. 증명일 슬롯 짝짓기는 커버리지와 대기 결말 분류가 **같은 호출**을 쓴다
@@ -511,7 +547,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
 
   // READY cohort — 공급 러너와 같은 판독(`readReadyCohort`)
   const cohort = await readReadyCohort(prisma, {
-    windowFrom, windowTo, dataDir: i.dataDir, matched: matchedReady, horizon: i.proofSlots, now: i.now,
+    windowFrom: win.capacity.from, windowTo: win.capacity.to, dataDir: i.dataDir, matched: matchedReady, horizon: i.proofSlots, now: i.now,
   })
   notes.push(...cohort.notes)
   const { rows, fates, readyCount, worksetSources, yieldBounds } = cohort
@@ -539,7 +575,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   let latencyP50H: number | null = null
   let latencyP90H: number | null = null
   try {
-    const lat = await publishLatencyHours(prisma, windowFrom, windowTo)
+    const lat = await publishLatencyHours(prisma, win.proof.from, win.proof.to)
     latencyP50H = quantileOf(lat, 0.5)
     latencyP90H = quantileOf(lat, 0.9)
     if (lat.length === 0) notes.push('지연 관측 없음 — 지금 계약 도장으로 나간 글이 창 안에 없다')
@@ -566,9 +602,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
    * 🔴 공급 장부 — cohort 창의 KST 날들 + 그 다음 날 파일. 장부 날짜는 요청 시작 시각이라 창 마지막 날 늦은 회차의 요청이
    *    다음 날 파일에 적힐 수 있다. 줄은 **cohort 회차 것만** 분자에 들어간다(`cohortRuns`) — 다음 날의 다른 회차 줄은 보고만.
    */
-  const lastDay = dates[dates.length - 1] ?? i.evidenceDate
-  const spillDay = new Date(Date.parse(`${lastDay}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)
-  const supplyEntries = pooledEntries([...dates, spillDay].map((d) => readDay(defaultLedgerDir(), d)))
+  const supplyEntries = pooledEntries(win.capacity.ledgerDates.map((d) => readDay(defaultLedgerDir(), d)))
   if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
   const fateByKey = new Map<string, CostFate>()
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
@@ -612,6 +646,11 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,
       intentMismatches: cohort.intentMismatches,
       costAttribution,
+      // 🔴 두 시계를 그대로 보고한다 — 증명(전날 KST 달력일 3일) · 용량(`now` 에서 거슬러 72h)
+      proofWindow: { from: win.proof.from.toISOString(), to: win.proof.to.toISOString() },
+      // 🔴 댓글 · 감사 단가를 모은 날 — 증명 달력일이다(오늘이 끼면 전날 증명이 오염된 것)
+      unitCostDates: dates,
+      capacityWindow: { from: win.capacity.from.toISOString(), to: win.capacity.to.toISOString() },
     },
   }
 }

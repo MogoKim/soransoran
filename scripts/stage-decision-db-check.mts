@@ -712,7 +712,7 @@ async function main(): Promise<void> {
       })
       /**
        * 🔴 **cohort 경계 — 창 밖 회차의 행은 이 cohort 가 아니다** (2026-10-04 P0-2 · 2026-10-09 P0 회차 시계).
-       *    창 = UTC [09-27T15:00:00Z, 09-30T15:00:00Z). 같은 큐 행(창 안 decidedAt)의 의도를 창 시작 1초 전 회차로 옮기면
+       *    창 = 용량 창 UTC [09-27T22:00:00Z, 09-30T22:00:00Z) — `now`(10-01 07:00 KST)에서 거슬러 정확히 72h (2026-10-20 롤링 창). 같은 큐 행(창 안 decidedAt)의 의도를 창 시작 1초 전 회차로 옮기면
        *    분자 · 분모 · 비용 어디에도 넣지 않는다(제외) — 앞판처럼 cohort 전체를 모름으로 닫지 않는다.
        *    같은 행을 창 시작 정각 회차로 옮기면 그 묶음 원천 1 과 함께 들어온다.
        */
@@ -724,7 +724,7 @@ async function main(): Promise<void> {
           where: { id: rec.id }, data: { gateResults: { ...g0, [SUPPLY_INTENT_KEY]: { ...g0[SUPPLY_INTENT_KEY], runId } } as Prisma.InputJsonValue },
         })
       }
-      await moveTo('20260927-145959')
+      await moveTo('20260927-215959')
       const outside = await factsAgain()
       const ov = judgeNextPreflight('d5', outside.facts, RUNNER_GRID)
       const oc = outside.facts.readyCohort
@@ -732,7 +732,7 @@ async function main(): Promise<void> {
         oc !== null && oc.unknown === 3 && oc.published === 2 && oc.lost === 4 && oc.sources === 30
         && (outside.detail.intentMismatches as unknown[]).length === 0 && outside.detail.readyCount === 9 && !ov.codes.includes('THROUGHPUT_UNKNOWN'),
         JSON.stringify({ oc, m: outside.detail.intentMismatches, codes: ov.codes }))
-      await moveTo('20260927-150000')
+      await moveTo('20260927-220000')
       const inside = await factsAgain()
       const ic = inside.facts.readyCohort
       check('🔴 🔴 **같은 행의 묶음 runAt 이 창 시작 정각(창 안) → 정상 계산 — 공개 2 · 손실 4 · 모름 4 · 원천 31(그 묶음 1 포함)**',
