@@ -338,7 +338,8 @@ check('🔴 재고는 회차를 막지 않는다 — judgeProcessRun 이 재고�
 })())
 check('🔴 적재기는 재고 목표로 여력을 다시 재지 않는다 — 상한은 `--up-to` 하나다', (() => {
   const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
-  return /judgeApply\(\{ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli) && !/target: /.test(cli.slice(cli.indexOf('judgeApply(')))
+  return /judgeApply\(\{ targets: orderedTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
+    && !/target: /.test(cli.slice(cli.indexOf('judgeApply(')))
 })())
 
 // ─────────────────────────────────────────────────────────
