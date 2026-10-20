@@ -76,7 +76,7 @@ function ReportRow({
       <AdminStatusBadge kind="report" value={status} />
       <span className="text-content-muted">{formatKst(createdAt)}</span>
       {postId ? (
-        <Link href={`/admin/content/${postId}`} className="text-link">
+        <Link href={`/admin/content/${postId}`} className="inline-flex min-h-[52px] items-center text-link lg:min-h-[44px]">
           대상 글 보기
         </Link>
       ) : commentId ? (

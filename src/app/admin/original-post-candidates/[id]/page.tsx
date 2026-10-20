@@ -88,7 +88,7 @@ export default async function OriginalPostCandidateDetailPage(
   return (
     <>
       <div className="w-full">
-        <Link href="/admin/original-post-candidates" className="inline-flex min-h-[44px] items-center text-sm text-link">
+        <Link href="/admin/original-post-candidates" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
           ← 대기열
         </Link>
 

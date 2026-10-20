@@ -183,7 +183,7 @@ export default async function AdminPersonasPage() {
                     searchText={`${p.code} ${masked}`}
                     below={
                       <details className="text-xs">
-                        <summary className="inline-flex min-h-[44px] cursor-pointer items-center text-sm text-content-secondary">
+                        <summary className="inline-flex min-h-[52px] lg:min-h-[44px] cursor-pointer items-center text-sm text-content-secondary">
                           설정 · 기억 보기
                         </summary>
                         <dl className="m-0 mt-1 grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-surface-page p-3 sm:grid-cols-4">
@@ -240,7 +240,7 @@ export default async function AdminPersonasPage() {
                     </span>
                     <Link
                       href={`/admin/personas/${p.id}`}
-                      className="inline-flex min-h-[44px] items-center text-sm text-link lg:justify-end"
+                      className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link lg:justify-end"
                     >
                       상세
                     </Link>

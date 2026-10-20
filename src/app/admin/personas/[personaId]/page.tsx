@@ -113,7 +113,7 @@ export default async function AdminPersonaDetailPage({
   return (
     <>
       <div className="max-w-3xl">
-        <Link href="/admin/personas" className="inline-flex min-h-[44px] items-center text-sm text-link">
+        <Link href="/admin/personas" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
           ← 관제실
         </Link>
 
@@ -145,7 +145,7 @@ export default async function AdminPersonaDetailPage({
                   : '중지 꺼짐'}
             </span>
             {/* 🔴 전환은 목록에서만 한다 — write 경로를 한 곳으로 모은다 */}
-            <Link href="/admin/personas" className="inline-flex min-h-[44px] items-center text-sm text-link">
+            <Link href="/admin/personas" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
               관제실에서 전환
             </Link>
           </div>

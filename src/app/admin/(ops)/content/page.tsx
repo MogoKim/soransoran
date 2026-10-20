@@ -116,6 +116,8 @@ export default async function AdminContentPage() {
                 {p.title}
               </span>
 
+              {/* 모바일은 메타 칸을 한 줄로 모은다(A 모바일). 데스크탑은 lg:contents 로 각 칸이 표의 열이 된다 */}
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1 lg:contents">
               <AdminCell label="게시판">{boardLabel(p.boardType)}</AdminCell>
 
               <AdminCell label="작성자">
@@ -136,6 +138,7 @@ export default async function AdminContentPage() {
                   <AdminBadge tone="danger">신고 {p._count.reports}</AdminBadge>
                 ) : null}
                 <span className="text-xs text-content-muted">댓글 {p._count.comments}</span>
+              </span>
               </span>
             </AdminTableRow>
           ))}

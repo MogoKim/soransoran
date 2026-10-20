@@ -45,7 +45,7 @@ export function AdminPageHeader({
       {backHref ? (
         <Link
           href={backHref}
-          className="inline-flex min-h-[44px] items-center self-start text-sm text-link"
+          className="inline-flex min-h-[52px] lg:min-h-[44px] items-center self-start text-sm text-link"
         >
           {backLabel}
         </Link>

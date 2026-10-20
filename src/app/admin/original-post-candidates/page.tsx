@@ -54,7 +54,7 @@ const STATUS_ORDER = ['PENDING', 'APPROVED', 'EDITED', 'DECLINED', 'PUBLISHED', 
 const VERDICT_TONE: Record<string, BadgeTone> = { PASS: 'neutral', HOLD: 'warning', BLOCK: 'danger' }
 
 /** 데스크탑 열 폭 — 머리줄과 각 줄이 같은 값을 쓴다 */
-const COLS = 'lg:grid-cols-[6.5rem_5.5rem_minmax(0,1.4fr)_minmax(0,1fr)_3.5rem_8.5rem]'
+const COLS = 'lg:grid-cols-[8rem_minmax(0,1.6fr)_minmax(0,1fr)_8.5rem]'
 
 export default async function OriginalPostCandidatesPage() {
   const { ok } = await requireAdmin()
@@ -99,7 +99,7 @@ export default async function OriginalPostCandidatesPage() {
       <div>
         <AdminPageHeader group="자동 운영" title="오리지널 초안 대기열" />
         <p className="m-0 mt-1">
-          <Link href="/admin/persona-candidates" className="inline-flex min-h-[44px] items-center text-sm text-link">
+          <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
             페르소나 후보 대기열 →
           </Link>
         </p>
@@ -166,12 +166,11 @@ export default async function OriginalPostCandidatesPage() {
               columns={COLS}
               head={
                 <>
-                  <span>판정</span>
-                  <span>상태</span>
+                  {/* 🔴 네 칸이다 — 1024~1279px 본문 폭(약 670px)에서 여섯 칸이면 줄이 계속 접혔다 */}
+                  <span><span>판정</span> · <span>상태</span></span>
                   <span>제목</span>
                   <span>사유</span>
-                  <span>배정</span>
-                  <span>생성</span>
+                  <span><span>배정</span> · <span>생성</span></span>
                 </>
               }
             >
@@ -189,7 +188,7 @@ export default async function OriginalPostCandidatesPage() {
                     filterKey={`${r.status} ${r.gateVerdict}`}
                     searchText={r.matchedPersona?.code ?? ''}
                   >
-                    <span className="flex flex-wrap items-center gap-2 lg:contents">
+                    <span className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-start lg:gap-1">
                       <span>
                         <span className={adminBadgeClass(VERDICT_TONE[r.gateVerdict] ?? 'neutral')}>
                           {OP_VERDICT_LABEL[r.gateVerdict] ?? r.gateVerdict}
@@ -222,8 +221,10 @@ export default async function OriginalPostCandidatesPage() {
                       {why.length === 0 ? '—' : why.map((f) => OP_REASON_LABEL[f.code] ?? f.code).join(' · ')}
                     </AdminCell>
                     {/* 🔴 배정은 발행이 아니다. 값이 있어도 글은 나가지 않았다 */}
-                    <AdminCell label="배정" className="tabular-nums">{r.matchedPersona?.code ?? '—'}</AdminCell>
-                    <AdminCell label="생성" tone="meta" className="tabular-nums">{formatKst(r.createdAt)}</AdminCell>
+                    <span className="flex flex-wrap gap-x-3 gap-y-0.5 lg:flex-col">
+                      <AdminCell label="배정" className="tabular-nums">{r.matchedPersona?.code ?? '—'}</AdminCell>
+                      <AdminCell label="생성" tone="meta" className="tabular-nums">{formatKst(r.createdAt)}</AdminCell>
+                    </span>
                   </AdminTableRow>
                 )
               })}

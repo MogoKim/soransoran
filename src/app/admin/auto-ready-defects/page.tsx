@@ -75,7 +75,7 @@ export default async function AutoReadyDefectsPage() {
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-content-muted">
                 <span className="tabular-nums">{r.publishedAt === null ? '' : r.publishedAt.toISOString().slice(0, 16).replace('T', ' ')}</span>
                 <span className={adminBadgeClass(r.audit?.defect === 'yes' ? 'danger' : 'neutral')}>{auditLabel(r)}</span>
-                <Link href={`/community/free/${r.postId}`} className="inline-flex min-h-[44px] items-center text-link underline">글 보기</Link>
+                <Link href={`/community/free/${r.postId}`} className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-link underline">글 보기</Link>
               </div>
               {r.audit?.defect === 'yes'
                 ? <p className="m-0 font-bold text-state-danger">이미 결함으로 기록된 글입니다.</p>

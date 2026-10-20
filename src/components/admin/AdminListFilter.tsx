@@ -107,7 +107,7 @@ export default function AdminListFilter({
                       type="button"
                       aria-pressed={on}
                       onClick={() => pick(c.key)}
-                      className={`inline-flex min-h-[52px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-surface-card px-4 text-sm lg:min-h-[40px] ${
+                      className={`inline-flex min-h-[52px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-surface-card px-4 text-sm lg:min-h-[44px] ${
                         on
                           ? 'border-2 border-brand font-bold text-content-primary'
                           : 'border border-interactive text-content-secondary hover:bg-surface-page'

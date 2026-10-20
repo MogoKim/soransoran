@@ -130,7 +130,7 @@ export default async function AdminReportsPage() {
       {handled.length > 0 ? (
         <section className="mt-6 border-t border-subtle pt-4">
           <details>
-            <summary className="min-h-[44px] cursor-pointer list-none py-2 text-sm font-bold text-content-primary">
+            <summary className="min-h-[52px] cursor-pointer lg:min-h-[44px] list-none py-2 text-sm font-bold text-content-primary">
               처리한 신고 {handled.length}건 보기{' '}
               <span className="font-normal text-content-muted">(최신순)</span>
             </summary>

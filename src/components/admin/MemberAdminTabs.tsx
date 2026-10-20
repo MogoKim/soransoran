@@ -9,7 +9,8 @@ import Link from 'next/link'
  * 🔴 회원 상세에는 두지 않는다. 상세는 목록으로 돌아가는 화면이다.
  * 🔴 지금 화면은 부르는 쪽이 알려 준다 — 서버 컴포넌트로 두고 client 조각을 만들지 않는다.
  */
-const TABS = [
+/** 🔴 사이드바의 「회원」 하위 메뉴(AdminNav)도 이 목록을 그대로 쓴다 — 두 곳에 적지 않는다 */
+export const TABS = [
   { key: 'members', href: '/admin/members', label: '회원 관리' },
   { key: 'composition', href: '/admin/members/composition', label: '고객 구성' },
   { key: 'conversion', href: '/admin/members/conversion', label: '가입 전환' },

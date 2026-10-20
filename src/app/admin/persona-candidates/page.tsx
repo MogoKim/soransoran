@@ -43,7 +43,7 @@ export const dynamic = 'force-dynamic'
 const STATUS_ORDER = ['PENDING', 'APPROVED', 'EDITED', 'DECLINED', 'PUBLISHED', 'EXPIRED'] as const
 
 /** 데스크탑 열 폭 — 머리줄과 각 줄이 같은 값을 쓴다 */
-const COLS = 'lg:grid-cols-[5.5rem_4.5rem_minmax(0,1fr)_6rem_5.5rem_4rem_4rem_8.5rem]'
+const COLS = 'lg:grid-cols-[9rem_minmax(0,1fr)_minmax(0,1.3fr)_8.5rem]'
 
 export default async function PersonaCandidatesPage() {
   const { ok } = await requireAdmin()
@@ -83,7 +83,7 @@ export default async function PersonaCandidatesPage() {
       <div>
         <AdminPageHeader group="자동 운영" title="페르소나 후보 대기열" />
         <p className="m-0 mt-1">
-          <Link href="/admin/personas" className="inline-flex min-h-[44px] items-center text-sm text-link">
+          <Link href="/admin/personas" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
             페르소나 관제실 →
           </Link>
         </p>
@@ -145,13 +145,10 @@ export default async function PersonaCandidatesPage() {
               columns={COLS}
               head={
                 <>
-                  <span>상태</span>
-                  <span>페르소나</span>
+                  {/* 🔴 네 칸이다 — 1024~1279px 본문 폭(약 670px)에 여덟 칸이 들어가지 않아 페이지가 넘쳤다 */}
+                  <span><span>상태</span> · <span>페르소나</span></span>
                   <span>본문</span>
-                  <span>반응</span>
-                  <span>Gate</span>
-                  <span>AI 티</span>
-                  <span>재생성</span>
+                  <span><span>반응</span> · <span>Gate</span> · <span>AI 티</span> · <span>재생성</span></span>
                   <span>생성</span>
                 </>
               }
@@ -164,7 +161,7 @@ export default async function PersonaCandidatesPage() {
                   filterKey={r.status}
                   searchText={r.persona.code}
                 >
-                  <span className="flex flex-wrap items-center gap-2 lg:contents">
+                  <span className="flex flex-wrap items-center gap-2">
                     <span>
                       <span className={adminBadgeClass('neutral')}>
                         {CANDIDATE_STATUS_LABEL[r.status] ?? r.status}
@@ -174,13 +171,13 @@ export default async function PersonaCandidatesPage() {
                   </span>
                   {/* 🔴 첫 글자 + 길이만 */}
                   <span className="min-w-0 text-sm font-bold text-link">{maskCandidateText(r.candidateText)}</span>
-                  <span className="flex flex-wrap gap-x-4 gap-y-1 lg:contents">
+                  <span className="flex flex-wrap gap-x-4 gap-y-1">
                     <AdminCell label="반응">{r.reactionType}</AdminCell>
                     <AdminCell label="Gate">{GATE_STATUS_LABEL[r.gateStatus] ?? r.gateStatus}</AdminCell>
                     <AdminCell label="AI 티">{r.aiToneTags.length === 0 ? '—' : `${r.aiToneTags.length}종`}</AdminCell>
                     <AdminCell label="재생성" className="tabular-nums">{r.regenCount}</AdminCell>
-                    <AdminCell label="생성" tone="meta" className="tabular-nums">{formatKst(r.createdAt)}</AdminCell>
                   </span>
+                  <AdminCell label="생성" tone="meta" className="tabular-nums">{formatKst(r.createdAt)}</AdminCell>
                 </AdminTableRow>
               ))}
             </AdminTable>

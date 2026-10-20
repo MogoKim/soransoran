@@ -133,7 +133,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
             {report.post.status !== 'PUBLISHED' ? (
               <AdminStatusBadge kind="post" value={report.post.status} />
             ) : null}
-            <Link href={`/admin/content/${report.post.id}`} className="break-words text-link">
+            <Link href={`/admin/content/${report.post.id}`} className="inline-flex min-h-[52px] items-center break-words text-link lg:min-h-[44px]">
               {report.post.title}
             </Link>
           </p>
@@ -151,7 +151,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
             <span>댓글 원문</span>
             {report.comment.isDeleted ? <AdminBadge tone="danger">숨김</AdminBadge> : null}
             {targetPostId ? (
-              <Link href={`/admin/content/${targetPostId}`} className="text-link">
+              <Link href={`/admin/content/${targetPostId}`} className="inline-flex min-h-[52px] items-center text-link lg:min-h-[44px]">
                 글에서 보기
               </Link>
             ) : null}
@@ -186,7 +186,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
             <dt className="text-content-muted">작성자</dt>
             <dd className="m-0 flex flex-wrap items-center gap-1 text-content-primary">
               {authorIsMember ? (
-                <Link href={`/admin/members/${author.id}`} className="text-link">
+                <Link href={`/admin/members/${author.id}`} className="inline-flex min-h-[52px] items-center text-link lg:min-h-[44px]">
                   {displayName(author)}
                 </Link>
               ) : (
@@ -204,7 +204,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
         <div className="flex flex-wrap items-center gap-2">
           <dt className="text-content-muted">신고자</dt>
           <dd className="m-0 text-content-primary">
-            <Link href={`/admin/members/${report.reporter.id}`} className="text-link">
+            <Link href={`/admin/members/${report.reporter.id}`} className="inline-flex min-h-[52px] items-center text-link lg:min-h-[44px]">
               {displayName(report.reporter)}
             </Link>
           </dd>

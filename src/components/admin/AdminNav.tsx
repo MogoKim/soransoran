@@ -3,9 +3,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
+import { OPS_NAV, isCurrent } from '@/components/admin/AdminOpsNav'
+import { TABS as MEMBER_TABS } from '@/components/admin/MemberAdminTabs'
 
 /**
  * 운영 메뉴 — 데스크탑 사이드바와 모바일 전체 화면 메뉴가 같은 목록(NAV)을 쓴다.
+ *
+ * 🔴 목록은 두 곳에서 온다 — 운영 묶음 7개는 AdminOpsNav(OPS_NAV), 자동 운영은 아래 AUTO_NAV.
  *
  * 🔴 묶음은 셋이다 (Admin Console V2 · 2026-10-20 창업자 확정 IA).
  *      개요 · 운영(남이 쓴 것과 회원을 다루는 일) · 자동 운영(페르소나 · 후보 · 자동 READY)
@@ -31,59 +35,38 @@ type NavItem = {
   href?: string
   label: string
   hint: string
-  subs?: NavLeaf[]
+  subs?: readonly NavLeaf[]
 }
-type NavGroup = { group: string; items: NavItem[] }
+type NavGroup = { group: string; items: readonly NavItem[] }
 
-const NAV: NavGroup[] = [
-  { group: '개요', items: [{ href: '/admin', label: '운영 홈', hint: '오늘 확인할 것' }] },
+/** 자동 운영 묶음 — 운영 묶음(OPS_NAV · 7개)과 따로 센다 */
+const AUTO_NAV: readonly NavItem[] = [
+  { href: '/admin/personas', label: '페르소나 관제', hint: '상태 · 전체 중지 스위치' },
+  { href: '/admin/persona-candidates', label: '댓글 후보 대기열', hint: '결정 · 대상 지정 · 발행' },
+  { href: '/admin/original-post-candidates', label: '글 초안 대기열', hint: '읽기 전용 검수' },
   {
-    group: '운영',
-    items: [
-      { href: '/admin/reports', label: '신고', hint: '판단하고 조치' },
-      { href: '/admin/content', label: '게시글', hint: '수정하고 숨기기' },
-      {
-        href: '/admin/members',
-        label: '회원',
-        hint: '차단 · 고객 구성 · 가입 전환',
-        subs: [
-          { href: '/admin/members', label: '회원 관리' },
-          { href: '/admin/members/composition', label: '고객 구성' },
-          { href: '/admin/members/conversion', label: '가입 전환' },
-        ],
-      },
-      { href: '/admin/home', label: '홈 노출', hint: '고정 · 숨김' },
-      { href: '/admin/banners', label: '배너', hint: '히어로 배너' },
-      { href: '/admin/compose', label: '직접 작성', hint: '운영자가 쓰기' },
-    ],
-  },
-  {
-    group: '자동 운영',
-    items: [
-      { href: '/admin/personas', label: '페르소나 관제', hint: '상태 · 전체 중지 스위치' },
-      { href: '/admin/persona-candidates', label: '댓글 후보 대기열', hint: '결정 · 대상 지정 · 발행' },
-      { href: '/admin/original-post-candidates', label: '글 초안 대기열', hint: '읽기 전용 검수' },
-      {
-        label: '자동 READY 품질',
-        hint: '표본 검토 · 결함 신고',
-        subs: [
-          { href: '/admin/auto-ready-evidence', label: '정확도 표본 검토' },
-          { href: '/admin/auto-ready-defects', label: '중대 결함 신고' },
-        ],
-      },
+    label: '자동 READY 품질',
+    hint: '표본 검토 · 결함 신고',
+    subs: [
+      { href: '/admin/auto-ready-evidence', label: '정확도 표본 검토' },
+      { href: '/admin/auto-ready-defects', label: '중대 결함 신고' },
     ],
   },
 ]
 
-/** 경로가 이 주소 아래인가. '/admin' 은 정확히 일치할 때만 — 하위 전부에서 켜지면 표시가 의미를 잃는다 */
-function covers(pathname: string, href: string): boolean {
-  if (href === '/admin') return pathname === '/admin'
-  return pathname === href || pathname.startsWith(`${href}/`)
-}
+/** 「회원」 의 하위 메뉴는 회원 화면의 공통 하위 탭과 같은 목록이다(MemberAdminTabs · 회원가입 전환 정본 §10) */
+const withSubs = (it: (typeof OPS_NAV)[number]): NavItem =>
+  it.href === '/admin/members' ? { ...it, subs: MEMBER_TABS.map(({ href, label }) => ({ href, label })) } : it
+
+const NAV: readonly NavGroup[] = [
+  { group: '개요', items: OPS_NAV.filter((it) => it.href === '/admin') },
+  { group: '운영', items: OPS_NAV.filter((it) => it.href !== '/admin').map(withSubs) },
+  { group: '자동 운영', items: AUTO_NAV },
+]
 
 /**
  * 지금 화면에 해당하는 링크 하나를 고른다.
- * 🔴 가장 긴 주소가 이긴다. /admin/members/composition 에서 '회원 관리'(/admin/members)와
+ * 🔴 가장 긴 주소가 이긴다. 고객 구성 화면에서 '회원 관리'(/admin/members)와
  *    '고객 구성'이 함께 켜지지 않게 한다. 회원 상세(/admin/members/:id)는 '회원 관리'가 켜진다.
  */
 function currentHref(pathname: string): string | null {
@@ -92,7 +75,7 @@ function currentHref(pathname: string): string | null {
     for (const it of g.items) {
       const hrefs = it.subs ? it.subs.map((s) => s.href) : it.href ? [it.href] : []
       for (const h of hrefs) {
-        if (covers(pathname, h) && (best === null || h.length > best.length)) best = h
+        if (isCurrent(pathname, h) && (best === null || h.length > best.length)) best = h
       }
     }
   }
@@ -246,9 +229,8 @@ export function AdminMobileNav() {
     <>
       <div className="flex items-start justify-between gap-3 border-b border-subtle bg-surface-card py-2 pl-4 pr-2 text-left">
         <div className="flex min-w-0 flex-col pt-1.5">
-          <Link href="/admin" className="self-start text-sm font-bold text-content-primary no-underline">
-            소란소란 운영
-          </Link>
+          {/* 🔴 링크로 두지 않는다 — 두 줄 머리 안에서 52px 터치를 줄 자리가 없고, 운영 홈은 메뉴에 있다 */}
+          <p className="m-0 text-sm font-bold text-content-primary">소란소란 운영</p>
           {here ? (
             <p className="m-0 truncate text-sm text-content-muted">
               {here.group} › <span className="font-bold text-content-primary">{here.label}</span>

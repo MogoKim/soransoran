@@ -166,7 +166,9 @@ export default async function AdminMembersPage() {
                   </span>
                 </span>
 
-                <AdminCell label="이메일" className="truncate">
+                {/* 모바일은 메타 칸을 한 줄로 모은다(A 모바일). 데스크탑은 lg:contents 로 각 칸이 표의 열이 된다 */}
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 lg:contents">
+                <AdminCell label="이메일" className="min-w-0 max-w-full truncate">
                   {m.email ?? <span className="text-content-muted">없음</span>}
                 </AdminCell>
 
@@ -188,6 +190,7 @@ export default async function AdminMembersPage() {
                   ) : null}
                   {m.isAdmin ? <AdminBadge tone="brand">운영자</AdminBadge> : null}
                   {!m.isOnboarded ? <AdminBadge>온보딩 전</AdminBadge> : null}
+                </span>
                 </span>
               </AdminTableRow>
             )
