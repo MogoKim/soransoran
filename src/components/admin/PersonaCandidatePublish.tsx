@@ -61,38 +61,45 @@ export default function PersonaCandidatePublish({
     })
   }
 
-  return (
-    <div className="mt-3 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
-      <h3 className="text-sm font-bold text-content-secondary">발행</h3>
+  // 🔴 대상 글이 없으면 누를 수 없다 — 화면 판단은 targetPostId === null 하나뿐이다.
+  //    canPublish(상태 판정)는 그대로이고, 서버 발행 검증이 최종 권한이다(이 막음은 헛걸음을 줄일 뿐).
+  const noTarget = targetPostId === null
 
+  return (
+    <div className="rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
       {liveCommentId === null ? (
         <>
           {publishable ? (
             <>
+              {noTarget && (
+                <p id="publish-needs-target" className="m-0 mb-3 rounded-lg border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 text-sm font-bold text-content-primary">
+                  발행하려면 먼저 대상 글을 지정해야 합니다.
+                </p>
+              )}
               <button
                 type="button"
                 onClick={runPublish}
-                disabled={pending}
-                className={adminButtonClass('primary', 'mt-3')}
+                disabled={pending || noTarget}
+                aria-describedby={noTarget ? 'publish-needs-target' : undefined}
+                className={adminButtonClass('primary')}
               >
                 {pending ? '발행 중…' : '발행하기'}
               </button>
               <p className="mt-2 text-xs leading-relaxed text-content-secondary">
                 🔴 누르면 고객 화면에 댓글이 올라갑니다.
-                {targetPostId === null && ' 대상 글이 없어 막힐 것입니다.'}
                 <br />
                 페르소나가 활동 중(active)이 아니거나 전체 중지가 켜져 있으면 막힙니다.
               </p>
             </>
           ) : (
-            <p className="mt-2 text-sm text-content-secondary">
+            <p className="m-0 text-sm text-content-secondary">
               승인(APPROVED) 상태만 발행할 수 있습니다. 현재 {status}.
             </p>
           )}
         </>
       ) : (
-        <div className="mt-3">
-          <p className="rounded-lg border border-state-success bg-[color:var(--admin-success-soft)] px-3 py-2 text-sm text-content-primary">
+        <div>
+          <p className="m-0 rounded-lg border border-state-success bg-[color:var(--admin-success-soft)] px-3 py-2 text-sm text-content-primary">
             발행됨 — 댓글 <span className="font-mono text-xs">{liveCommentId}</span>
             {takenDown && ' · 내려감'}
           </p>

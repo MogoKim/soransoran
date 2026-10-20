@@ -39,7 +39,7 @@ import {
  *    원문 조각이 든 초안을 DB 에 남기지 않기 위해서다.
  */
 export const metadata: Metadata = {
-  title: '오리지널 초안 대기열',
+  title: '글 초안 대기열',
   robots: { index: false, follow: false },
 }
 
@@ -97,7 +97,7 @@ export default async function OriginalPostCandidatesPage() {
   return (
     <>
       <div>
-        <AdminPageHeader group="자동 운영" title="오리지널 초안 대기열" />
+        <AdminPageHeader group="자동 운영" title="글 초안 대기열" />
         <p className="m-0 mt-1">
           <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
             페르소나 후보 대기열 →

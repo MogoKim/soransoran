@@ -10,7 +10,8 @@ import PersonaCandidateDecision from '@/components/admin/PersonaCandidateDecisio
 import PersonaCandidateWithdraw from '@/components/admin/PersonaCandidateWithdraw'
 import PersonaCandidatePublish from '@/components/admin/PersonaCandidatePublish'
 import PersonaCandidateTarget from '@/components/admin/PersonaCandidateTarget'
-import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-rules'
+import { DECLINE_REASONS, canWithdraw, type CandidateStatus } from '@/lib/persona-candidate-rules'
+import { adminBadgeClass, type BadgeTone } from '@/components/admin/AdminUi'
 
 /**
  * 페르소나 댓글 후보 상세 — 🔴 읽기 전용
@@ -53,6 +54,21 @@ function toGateRows(value: unknown): Array<{ gate: string; outcome: string; deta
       detail: typeof r.detail === 'string' ? r.detail : '',
     }
   })
+}
+
+/** 작업 구역 머리 — 번호 · 이름 · 지금 값(배지). 왼쪽 읽을거리의 ①~④ 와 섞이지 않게 「작업 N」 으로 쓴다 */
+function StepHead({ n, title, state, tone }: { n: number; title: string; state: string; tone: BadgeTone }) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2">
+      <span aria-hidden="true" className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color:var(--admin-action-bg)] text-sm font-bold text-[color:var(--admin-action-content)]">
+        {n}
+      </span>
+      <h2 className="m-0 text-base font-bold text-content-primary">
+        <span className="sr-only">작업 {n} · </span>{title}
+      </h2>
+      <span className={adminBadgeClass(tone)}>{state}</span>
+    </div>
+  )
 }
 
 export default async function PersonaCandidateDetailPage(
@@ -115,8 +131,8 @@ export default async function PersonaCandidateDetailPage(
         </div>
 
         {/* 🔴 데스크탑은 두 칸이다 — 왼쪽은 읽을 것(생성물 · 페르소나 · 관문 · 소스 · 결정 기록),
-              오른쪽은 할 일(결정 → 철회 → 대상 지정 → 발행). 순서와 각 단계의 버튼·확인은 그대로다.
-              모바일은 같은 순서로 위에서 아래로 쌓인다. */}
+              오른쪽은 할 일(작업 1 결정 → 작업 2 대상 지정 → 작업 3 발행 · 맨 아래 위험 작업).
+              각 단계의 버튼·확인은 그대로다. 모바일은 같은 순서로 위에서 아래로 쌓인다. */}
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] lg:items-start lg:gap-8">
         <div className="min-w-0">
         {/* ① 생성물 — 🔴 본문 전문은 여기서만 */}
@@ -212,7 +228,7 @@ export default async function PersonaCandidateDetailPage(
 
         {/* 결정 이력 */}
         <section className="mb-6">
-          <h2 className="mb-2 text-base font-bold text-content-primary">결정</h2>
+          <h2 className="mb-2 text-base font-bold text-content-primary">결정 기록</h2>
           <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-[10px] [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
             <dt className="text-content-muted">생성</dt>
             <dd>{formatKst(row.createdAt)}</dd>
@@ -230,43 +246,70 @@ export default async function PersonaCandidateDetailPage(
         </section>
 
         </div>
+        {/* 🔴 할 일은 운영자가 실제로 하는 순서다 — 작업 1 결정 → 작업 2 대상 지정 → 작업 3 발행.
+              구역마다 머리에 지금 값을 보인다(기존 컬럼을 그대로 읽은 것 · 새 상태가 아니다).
+              세 action 은 그대로 따로다 — 한 버튼에 합치지 않는다.
+              승인 철회는 정상 순서 밖이라 맨 아래 「위험 작업」으로 뺐다. */}
         <div className="mt-6 flex min-w-0 flex-col gap-4 lg:sticky lg:top-8 lg:mt-0">
-        {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
-        <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+        <ol className="m-0 flex list-none flex-col gap-6 p-0" aria-label="처리 순서">
+          <li>
+            <StepHead n={1} title="결정" state={CANDIDATE_STATUS_LABEL[row.status] ?? row.status} tone="neutral" />
+            {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
+            <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+            {row.declineReason !== null && (
+              <p className="mt-2 text-xs text-content-secondary">
+                폐기 사유 —{' '}
+                {DECLINE_REASONS.find((r) => r.code === row.declineReason)?.label ?? row.declineReason}
+              </p>
+            )}
+          </li>
 
-        {/* 🔴 승인해 두고 아직 공개하지 않은 후보를 거둬들이는 자리.
-              결정(PENDING) 버튼과 **다른 자리**다 — 결정 기록을 덮지 않는다. */}
-        <PersonaCandidateWithdraw
-          candidateId={row.id}
-          status={row.status as CandidateStatus}
-          publishedCommentId={row.publishedCommentId}
-          approvedBy={row.decidedBy}
-          approvedAt={row.decidedAt}
-        />
+          <li>
+            <StepHead n={2} title="대상 지정"
+              state={row.targetPostId === null ? '지정 안 됨' : '지정됨'} tone={row.targetPostId === null ? 'warning' : 'success'} />
+            {/* 🔴 대상 글 지정은 발행이 아니다. targetPostId 한 컬럼만 바꾼다.
+                  발행보다 위에 둔다 — 대상을 정해야 발행이 가능해지는 순서다. */}
+            <PersonaCandidateTarget
+              candidateId={row.id}
+              status={row.status as CandidateStatus}
+              targetPostId={row.targetPostId}
+              publishedCommentId={row.publishedCommentId}
+            />
+          </li>
 
-        {/* 🔴 대상 글 지정은 발행이 아니다. targetPostId 한 컬럼만 바꾼다.
-              발행 버튼보다 위에 둔다 — 대상을 정해야 발행이 가능해지는 순서다. */}
-        <PersonaCandidateTarget
-          candidateId={row.id}
-          status={row.status as CandidateStatus}
-          targetPostId={row.targetPostId}
-          publishedCommentId={row.publishedCommentId}
-        />
+          <li>
+            <StepHead n={3} title="발행"
+              state={row.publishedCommentId === null ? '발행 전' : '발행됨'} tone={row.publishedCommentId === null ? 'neutral' : 'success'} />
+            {/* 🔴 발행은 승인과 다른 축이다 — 별도 버튼 · 별도 server action.
+                  승인 버튼으로는 PUBLISHED 에 도달할 수 없다(persona-candidate-rules.ts). */}
+            <PersonaCandidatePublish
+              candidateId={row.id}
+              status={row.status as CandidateStatus}
+              publishedCommentId={row.publishedCommentId}
+              targetPostId={row.targetPostId}
+            />
+          </li>
+        </ol>
 
-        {/* 🔴 발행은 승인과 다른 축이다 — 별도 버튼 · 별도 server action.
-              승인 버튼으로는 PUBLISHED 에 도달할 수 없다(persona-candidate-rules.ts). */}
-        <PersonaCandidatePublish
-          candidateId={row.id}
-          status={row.status as CandidateStatus}
-          publishedCommentId={row.publishedCommentId}
-          targetPostId={row.targetPostId}
-        />
-
-        {row.declineReason !== null && (
-          <p className="mt-2 text-xs text-content-secondary">
-            폐기 사유 —{' '}
-            {DECLINE_REASONS.find((r) => r.code === row.declineReason)?.label ?? row.declineReason}
-          </p>
+        {/* 🔴 위험 작업 — 승인해 두고 아직 공개하지 않은 후보를 거둬들이는 자리.
+              결정(PENDING) 버튼과 **다른 자리**다 — 결정 기록을 덮지 않는다.
+              발행된 댓글 내리기(작업 3)와 합치지 않는다. 조건 · 확인창 · action 은 컴포넌트 그대로이고,
+              구역은 컴포넌트가 무언가를 그릴 때와 같은 조건에서만 연다(빈 위험 구역을 띄우지 않는다). */}
+        {canWithdraw(row.status as CandidateStatus) && (row.publishedCommentId === null || row.publishedCommentId === '') && (
+          <section aria-labelledby="danger-zone" className="mt-4 rounded-[10px] border-2 border-dashed border-state-danger p-3 lg:p-4">
+            <h2 id="danger-zone" className="m-0 text-base font-bold text-state-danger">⚠ 위험 작업</h2>
+            <p className="mb-3 mt-1 text-xs leading-relaxed text-content-secondary">
+              승인 철회 — 이 후보는 공개되지 않고 폐기(DECLINED)로 바뀝니다. 되돌리는 버튼은 없습니다.
+              이미 공개된 댓글을 내리는 일은 여기가 아니라 작업 3 발행에서 합니다.
+            </p>
+            <PersonaCandidateWithdraw
+              candidateId={row.id}
+              status={row.status as CandidateStatus}
+              publishedCommentId={row.publishedCommentId}
+              approvedBy={row.decidedBy}
+              approvedAt={row.decidedAt}
+            />
+          </section>
         )}
         </div>
         </div>
