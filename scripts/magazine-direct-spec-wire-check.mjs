@@ -66,9 +66,12 @@ import {
   DIRECT_SPEC_OPT_IN_FIELD,
   DIRECT_SPEC_PROMPT_MARKER,
   DIRECT_SPEC_PROMPT_TEXT,
+  DIRECT_SPEC_TITLE_LOCK_LINE,
+  DIRECT_SPEC_TITLE_MISMATCH,
   LEGACY_BRIEF_MODE,
   UNKNOWN_MAGAZINE_AUTO_MODE,
   compileAndPersistDirectSpec,
+  directSpecTitleCheck,
   directSpecBriefText,
   directSpecDeliveryGate,
   directSpecIdentityHandoff,
@@ -81,7 +84,7 @@ import {
 } from './lib/magazine-direct-spec.mjs'
 import { deliveryGate, plannedMessageFor } from './lib/magazine-delivery-gate.mjs'
 import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
-import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
+import { judgeBriefFormatContract, judgeManuscriptFormat } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
 import {
   DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, readProductGraphState, readProductGraphVersion,
@@ -591,7 +594,26 @@ check('W31 merge gate — 등록 slug의 spec/sidecar만 허용', () => {
   assert.equal(judgeFile('drafts/magazine/foreign/article-spec.json', slugs).code, 'FOREIGN_SLUG_FILE')
 })
 
-function directDriveSandbox(prefix) {
+/** drive 시험 원고 — frontmatter title 만 바꿔 끼운다 (본문은 같은 글자) */
+function driveManuscript(title, { body = '잠들기 전 내일 할 일을 짧게 적고 휴대전화를 멀리 두어 보세요.' } = {}) {
+  return [
+    '---', `title: ${title}`,
+    'description: 잠들기 전 반복되는 생각을 줄이고 편안한 밤 루틴을 만드는 방법을 살펴봅니다.',
+    'cluster: sleep', 'medical: false', '---', '',
+    '하루를 마치고 불을 끈 뒤에도 생각이 이어지는 밤이 있습니다.', '',
+    '## 오늘 밤에 할 수 있는 일', '',
+    body, '',
+    '[CTA] /community/free | 밤 이야기를 나눠요 | 오늘 밤 떠오른 생각을 남겨 주세요', '',
+  ].join('\n')
+}
+
+/**
+ * direct drive sandbox.
+ *   - `draftTitle` 을 주지 않으면 원고 제목 = spec 제목이다 (2026-10-19 · 앞판 fixture 는 다른 제목으로 DONE 이 났다)
+ *   - `qaFailsFirst` 만큼 QA 가 FAIL 한 뒤 통과한다 — 재생성 후보는 `candidate` 글자다
+ *   - `calls` 에 하위 단계 호출을 센다: run 대상 파일 이름 · 재생성 · 후보 교체
+ */
+function directDriveSandbox(prefix, { draftTitle = null, draftText = null, qaFailsFirst = 0, candidate = null } = {}) {
   const input = loadFixture()
   // 🔴 drive 의 등록 gate 는 제품 current graphVersion 의 승인 source 를 본다
   const gv = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
@@ -601,24 +623,24 @@ function directDriveSandbox(prefix) {
   const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
   const slug = input.queueItem.slug
   const dir = join(d, slug)
-  writeFileSync(join(dir, 'draft.md'), [
-    '---', 'title: 잠들기 전 밤 마음을 돌보는 방법',
-    'description: 잠들기 전 반복되는 생각을 줄이고 편안한 밤 루틴을 만드는 방법을 살펴봅니다.',
-    'cluster: sleep', 'medical: false', '---', '',
-    '하루를 마치고 불을 끈 뒤에도 생각이 이어지는 밤이 있습니다.', '',
-    '## 오늘 밤에 할 수 있는 일', '',
-    '잠들기 전 내일 할 일을 짧게 적고 휴대전화를 멀리 두어 보세요.', '',
-    '[CTA] /community/free | 밤 이야기를 나눠요 | 오늘 밤 떠오른 생각을 남겨 주세요', '',
-  ].join('\n'), 'utf8')
+  writeFileSync(join(dir, 'draft.md'), draftText ?? driveManuscript(draftTitle ?? persisted.spec.identity.title), 'utf8')
   writeFileSync(join(dir, 'article-draft.ts'), 'export const article = {}\n', 'utf8')
   const quarantinePath = join(d, 'quarantine.json')
   saveQuarantine({}, quarantinePath)
   const heroFile = join(d, 'hero.webp')
+  const calls = { run: [], regen: 0, apply: 0 }
+  let qaRuns = 0
   const fakeRun = (cmd) => {
-    if (String(cmd).endsWith('magazine-batch-qa.mjs')) {
+    const name = String(cmd).split('/').pop()
+    calls.run.push(name)
+    if (name === 'magazine-batch-qa.mjs') {
       return { code: 0, json: { results: [{ slug, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [] }] } }
     }
-    if (String(cmd).endsWith('magazine-register.mjs')) return { code: 0, json: { verdict: 'READY' } }
+    if (name === 'magazine-register.mjs') return { code: 0, json: { verdict: 'READY' } }
+    if (name === 'magazine-qa.mjs') {
+      qaRuns += 1
+      if (qaRuns <= qaFailsFirst) return { code: 1, stdout: '  ✗ FAIL [본문] 본문 1100자 — 허용 1200~3000자 밖\n\n  검사 1건 · FAIL 1\n', stderr: '' }
+    }
     return { code: 0, stdout: '', stderr: '' }
   }
   const deps = {
@@ -630,8 +652,30 @@ function directDriveSandbox(prefix) {
     heroFilePath: () => heroFile,
     run: fakeRun,
     now: Date.parse('2026-10-15T03:00:00Z'),
+    firstFetchResult: null,
+    candidateDir: d,
+    // 🔴 provider 대신 — 후보 원고를 임시 경로에 쓰는 것까지만 한다 (ChatGPT · Chrome 0)
+    attemptRegeneration: ({ runner }) => { calls.regen += 1; runner({}); return { ok: true, regenCalls: calls.regen } },
+    regenRunner: ({ draftOut }) => { writeFileSync(draftOut, candidate ?? '', 'utf8'); return { ok: true } },
+    // 🔴 교체 함수 — 호출되면 센 뒤 후보를 draft.md 로 옮긴다 (실제 교체와 같은 결과)
+    applyRegenCandidate: ({ candidatePath, draftMd }) => {
+      calls.apply += 1
+      writeFileSync(draftMd, readFileSync(candidatePath, 'utf8'), 'utf8')
+      return { ok: true, heroCarried: false }
+    },
   }
-  return { d, input, persisted, slug, dir, deps }
+  return { d, input, persisted, slug, dir, deps, calls }
+}
+
+/**
+ * 원고 제목 mismatch 뒤 하위 단계가 하나도 돌지 않았는가 — 변환 · QA · hero · batch-qa · 등록 · 영수증.
+ * `before` 는 mismatch 전에 정상으로 돈 횟수다 (재생성 반례: 최초 원고 변환 1 · QA 1).
+ */
+function assertNoDownstream(s, before = {}) {
+  for (const name of ['magazine-md-to-draft.mjs', 'magazine-qa.mjs', 'magazine-hero-runner.mjs', 'magazine-batch-qa.mjs', 'magazine-register.mjs']) {
+    assert.equal(s.calls.run.filter((n) => n === name).length, before[name] ?? 0, `mismatch 뒤 ${name} 가 돌았다`)
+  }
+  assert.equal(existsSync(join(s.dir, ARTICLE_SPEC_REGISTER_LEDGER)), false, 'mismatch 인데 등록 영수증(sidecar)이 쓰였다')
 }
 
 check('W32 auto-register — 성공한 direct 등록에 spec sidecar 영수증 기록', () => {
@@ -666,6 +710,126 @@ check('W33 auto-register — sidecar identity 충돌 시 BLOCKED·기존 바이�
   assert.equal(r.verdict, 'BLOCKED')
   assert.ok(r.blockedBy.some((x) => x.code === 'DIRECT_SPEC_REGISTER_IDENTITY'))
   assert.equal(readFileSync(receiptPath, 'utf8'), before)
+})
+
+// ── W34~W40 원고 제목 = spec 제목 (2026-10-19 · 제목 drift 수리) ──
+check('W34 최초 원고 제목이 spec 과 다르면 DIRECT_SPEC_TITLE_MISMATCH — 변환·QA·등록·영수증·재생성 0, article 바이트 불변', () => {
+  const s = directDriveSandbox('ds-w34', { draftTitle: '잠들기 전 밤 마음을 돌보는 방법' })
+  const draftBefore = readFileSync(join(s.dir, 'draft.md'), 'utf8')
+  const articleBefore = readFileSync(join(s.dir, 'article-draft.ts'), 'utf8')
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'BLOCKED')
+  assert.equal(r.blockedBy[0].code, DIRECT_SPEC_TITLE_MISMATCH, JSON.stringify(r.blockedBy))
+  assert.equal(r.blockedBy[0].expectedTitle, s.persisted.spec.identity.title)
+  assert.equal(r.blockedBy[0].actualTitle, '잠들기 전 밤 마음을 돌보는 방법')
+  assertNoDownstream(s)
+  assert.equal(s.calls.regen, 0, '제목 위반에 재생성(provider)을 걸었다')
+  assert.equal(s.calls.apply, 0)
+  assert.equal(readFileSync(join(s.dir, 'draft.md'), 'utf8'), draftBefore, '틀린 제목을 고쳐 썼다 — 자동 덮어쓰기 금지')
+  assert.equal(readFileSync(join(s.dir, 'article-draft.ts'), 'utf8'), articleBefore)
+})
+
+check('W35 공백·구두점·대소문자 차이도 정규화하지 않고 거부한다', () => {
+  const spec = { identity: { title: '퇴직금을 IRP에 넣어야 하나요' } }
+  for (const t of ['퇴직금을 IRP에 넣어야 하나요?', '퇴직금을  IRP에 넣어야 하나요', '퇴직금을 irp에 넣어야 하나요', '퇴직금을, IRP에 넣어야 하나요']) {
+    const r = directSpecTitleCheck({ spec, manuscript: driveManuscript(t) })
+    assert.equal(r.ok, false, `정규화해서 통과시켰다: ${JSON.stringify(t)}`)
+    assert.equal(r.code, DIRECT_SPEC_TITLE_MISMATCH)
+  }
+  assert.equal(directSpecTitleCheck({ spec, manuscript: driveManuscript('퇴직금을 IRP에 넣어야 하나요') }).ok, true)
+  // frontmatter 가 없거나 spec 제목이 비면 통과하지 않는다 (fail-closed)
+  assert.equal(directSpecTitleCheck({ spec, manuscript: '본문만 있다' }).ok, false)
+  assert.equal(directSpecTitleCheck({ spec: { identity: {} }, manuscript: driveManuscript('') }).ok, false)
+  // drive 에서도 끝 구두점 하나가 다르면 막힌다
+  const s = directDriveSandbox('ds-w35', { draftTitle: '잠을 설친 밤, 다음 날 가장 먼저 챙기면 좋은 것?' })
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.blockedBy[0]?.code, DIRECT_SPEC_TITLE_MISMATCH)
+  assertNoDownstream(s)
+})
+
+check('W36 재생성 후보가 제목을 바꾸면 거부 — 교체 0 · draft/article 바이트 불변 · QA 재실행·등록·영수증 0', () => {
+  const s0 = directDriveSandbox('ds-w36-probe')
+  const changed = driveManuscript('잠 못 든 다음 날, 무엇부터 할까요', { body: '내일 할 일을 짧게 적고 휴대전화를 멀리 두면 마음이 조금 가라앉습니다.' })
+  const s = directDriveSandbox('ds-w36', { qaFailsFirst: 1, candidate: changed })
+  assert.equal(s0.persisted.spec.identity.title, s.persisted.spec.identity.title)
+  const draftBefore = readFileSync(join(s.dir, 'draft.md'), 'utf8')
+  const articleBefore = readFileSync(join(s.dir, 'article-draft.ts'), 'utf8')
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'BLOCKED')
+  assert.equal(r.blockedBy[0].code, DIRECT_SPEC_TITLE_MISMATCH, JSON.stringify(r.blockedBy))
+  assert.equal(r.regenHistory?.[0]?.outcome, DIRECT_SPEC_TITLE_MISMATCH)
+  assert.equal(s.calls.regen, 1)
+  assert.equal(s.calls.apply, 0, '제목이 바뀐 후보로 원고를 교체했다')
+  // 최초 원고 변환 1 · 최초 QA 1 뿐 — 거부된 후보로 변환·QA 를 다시 돌리지 않는다
+  assertNoDownstream(s, { 'magazine-md-to-draft.mjs': 1, 'magazine-qa.mjs': 1 })
+  assert.equal(readFileSync(join(s.dir, 'draft.md'), 'utf8'), draftBefore)
+  assert.equal(readFileSync(join(s.dir, 'article-draft.ts'), 'utf8'), articleBefore)
+})
+
+check('W37 본문만 고친 재생성 — 제목이 같으면 교체되고 등록·영수증까지 간다', () => {
+  const s0 = directDriveSandbox('ds-w37-probe')
+  const fixed = driveManuscript(s0.persisted.spec.identity.title, { body: '내일 할 일을 짧게 적고 휴대전화를 멀리 두면 마음이 조금 가라앉습니다.' })
+  const s = directDriveSandbox('ds-w37', { qaFailsFirst: 1, candidate: fixed })
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'DONE', JSON.stringify(r.blockedBy))
+  assert.equal(s.calls.apply, 1)
+  assert.equal(r.regenHistory?.[0]?.outcome, 'APPLIED')
+  assert.equal(existsSync(join(s.dir, ARTICLE_SPEC_REGISTER_LEDGER)), true)
+})
+
+check('W38 최초·재생성 prompt 에 제목 불변 문구 · legacy prompt 에는 없다', () => {
+  const { input, draftsDir, slug, legacyDraftsDir, quarantinePath } = makeDirectAndLegacySandbox()
+  assert.ok(DIRECT_SPEC_PROMPT_TEXT.includes(DIRECT_SPEC_TITLE_LOCK_LINE))
+  const first = directSpecMessageFor({ slug, draftsDir })
+  assert.ok(first.ok && first.message.includes(DIRECT_SPEC_TITLE_LOCK_LINE), '최초 전송 message 에 제목 불변 문구가 없다')
+  const spec = readDirectSpec({ slug, draftsDir }).spec
+  const packet = directSpecRegenPacket({ spec, failures: [{ code: 'W38', label: '본문 길이' }] })
+  const regen = directSpecRegenMessageFor({ slug, draftsDir, packet })
+  assert.ok(regen.ok && regen.message.includes(DIRECT_SPEC_TITLE_LOCK_LINE), '재생성 message 에 제목 불변 문구가 없다')
+  const legacy = deliveryGate({ slug, draftsDir: legacyDraftsDir, quarantinePath })
+  assert.equal(legacy.ok, true)
+  assert.ok(!legacy.message.includes(DIRECT_SPEC_TITLE_LOCK_LINE), 'legacy message 에 direct 문구가 섞였다')
+  assert.equal(legacy.message, plannedMessageFor(slug, legacyDraftsDir))
+  assert.ok(input.queueItem.title)
+})
+
+check('W39 제목 대조는 공용 함수 하나 — auto-register 의 호출 두 자리 (최초 원고 · 재생성 후보)', () => {
+  const src = readFileSync(join(ROOT, 'scripts/magazine-auto-register.mjs'), 'utf8')
+  assert.equal(src.split('directSpecTitleCheck({').length - 1, 2, 'auto-register 의 directSpecTitleCheck 호출이 두 자리가 아니다')
+  // 다른 계층에 제목 대조를 다시 두지 않는다 — 변이가 가려진다
+  for (const rel of ['scripts/lib/magazine-delivery-gate.mjs', 'scripts/magazine-register.mjs', 'scripts/magazine-md-to-draft.mjs', 'scripts/magazine-qa.mjs']) {
+    assert.ok(!readFileSync(join(ROOT, rel), 'utf8').includes('directSpecTitleCheck'), `${rel} 에 제목 대조가 중복됐다`)
+  }
+})
+
+/** 제목 mismatch 가 형식 재생성보다 먼저 막았는가 — provider·교체·하위 단계 0 · 영수증 없음 · 바이트 불변 */
+function assertTitleFirst(s, before) {
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'BLOCKED')
+  assert.equal(r.blockedBy[0]?.code, DIRECT_SPEC_TITLE_MISMATCH, JSON.stringify(r.blockedBy))
+  assert.equal(s.calls.regen, 0, '제목이 다른 원고에 형식 재생성(provider)을 먼저 걸었다')
+  assert.equal(s.calls.apply, 0)
+  assert.equal(r.regenHistory, undefined)
+  assertNoDownstream(s)
+  assert.equal(readFileSync(join(s.dir, 'draft.md'), 'utf8'), before.draft, '원고를 고쳐 썼다 — 자동 교정 금지')
+  assert.equal(readFileSync(join(s.dir, 'article-draft.ts'), 'utf8'), before.article)
+  return r
+}
+
+check('W40 제목도 다르고 CTA 도 없는 원고 — 형식 재생성보다 제목 mismatch 가 먼저 막는다', () => {
+  const text = driveManuscript('잠들기 전 밤 마음을 돌보는 방법').split('\n').filter((l) => !l.startsWith('[CTA]')).join('\n')
+  assert.equal(judgeManuscriptFormat(text).ok, false, '반례 전제 — 이 원고는 형식 위반이어야 한다')
+  const s = directDriveSandbox('ds-w40', { draftText: text, candidate: driveManuscript('잠들기 전 밤 마음을 돌보는 방법') })
+  const r = assertTitleFirst(s, { draft: text, article: 'export const article = {}\n' })
+  assert.equal(r.blockedBy[0].actualTitle, '잠들기 전 밤 마음을 돌보는 방법')
+})
+
+check('W41 frontmatter 가 없는 원고 — 제목 없음으로 형식 재생성보다 먼저 막는다', () => {
+  const text = ['## 오늘 밤에 할 수 있는 일', '', '잠들기 전 내일 할 일을 짧게 적어 보세요.', ''].join('\n')
+  assert.equal(judgeManuscriptFormat(text).ok, false, '반례 전제 — 이 원고는 형식 위반이어야 한다')
+  const s = directDriveSandbox('ds-w41', { draftText: text, candidate: driveManuscript('아무 제목') })
+  const r = assertTitleFirst(s, { draft: text, article: 'export const article = {}\n' })
+  assert.equal(r.blockedBy[0].actualTitle, null)
 })
 
 // ── W21 canary slug 는 운영 queue · articles.ts 에 없다 ────

@@ -35,6 +35,7 @@ const F = {
   repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
   webui: path.join(HERE, 'magazine-webui-runner.mjs'),
   ready: path.join(HERE, 'magazine-auto-register-ready.mjs'),
+  content: path.join(HERE, 'lib', 'magazine-rehearsal-content.mjs'),
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -64,9 +65,10 @@ const MUTATIONS = [
     find: '    SORAN_REHEARSAL_CLOCK: `${clock.fakeMs}:${clock.realMs}:${clock.speed}`,\n', replace: '' }] },
   // ── hero 신규 생성 (2026-10-10 · 선택지 B) ──
   { name: '⑬ S1 에 placeHero 사전 복사를 되살림 (재사용 우회)', scenarios: 'S1', edits: [{ file: F.orch,
-    // S9 prepare 도 같은 세 줄이다 — S1 의 scenario 줄까지 묶어 S1 하나만 고른다
-    find: '      await curate({ repo, keep: [t.slug] })\n      return { target: t.slug }\n    },\n    scenario: { ci: {}, deploy: {} },\n',
-    replace: '      await curate({ repo, keep: [t.slug] })\n      placeHero({ repo, slug: t.slug })\n      return { target: t.slug }\n    },\n    scenario: { ci: {}, deploy: {} },\n' }] },
+    // S9 prepare 도 curate 줄이 같다 — S1 만의 대상 확인 줄(금융 정상 후보 fail-closed · 2026-10-19)까지 묶어 S1 하나만 고른다.
+    // 의미 불변 — S1 의 curate 직후에 hero 사전 복사를 넣는다
+    find: '      if (t.slug !== fx.source.slug || t.title !== fx.source.title) throw new Error(`S1 대상이 금융 정상 후보 fixture 가 아니다: ${t.slug} 「${t.title}」`)\n      await curate({ repo, keep: [t.slug] })\n',
+    replace: '      if (t.slug !== fx.source.slug || t.title !== fx.source.title) throw new Error(`S1 대상이 금융 정상 후보 fixture 가 아니다: ${t.slug} 「${t.title}」`)\n      await curate({ repo, keep: [t.slug] })\n      placeHero({ repo, slug: t.slug })\n' }] },
   { name: '⑭ 신규 이미지 생성 호출 생략 (기존 hero 를 생성 결과로)', scenarios: 'S1', edits: [{ file: F.hero,
     find: '  const gen = await generate(prompt)\n',
     replace: "  const gen = { ok: true, buffer: readFileSync(new URL('../public/magazine/avoiding-gatherings/hero.webp', import.meta.url)) }\n" }] },
@@ -98,13 +100,15 @@ const MUTATIONS = [
     find: '        const st = settleDeliveryReservation({ slug, reservationId, outcome, path: quarantinePath })', replace: '        const st = settleDeliveryReservation({ slug, reservationId, outcome: null, path: quarantinePath })' }] },
   { name: '㉕ producer 일괄 계획이 교정 대기를 보지 않음 (00:10 gray 가 fetch 로 잡혀 접근 확인을 깨운다)', scenarios: 'S12', edits: [{ file: F.webui,
     find: '    if (fetchSet.has(t.slug) && correctionPending.has(t.slug)) {', replace: '    if (false) {' }] },
+  // 🔴 ㉖·㉗·㉘ 지점 이동 (2026-10-19) — 두 대조는 DIRECT_SPEC wiring(47b8314e) 뒤 legacy 경로에서만 돈다(`!isDirectMode &&`).
+  //    변이는 앞판과 같은 의미 — 대조 블록 전체를 끈다. 지점만 지금 글자로 옮겼다.
   { name: '㉖ auto-register 가 옛 장부 사유를 대조하지 않음 (gray — 교정 근거 없음)', scenarios: 'S12', edits: [{ file: F.register,
-    find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
+    find: '    if (!isDirectMode && !firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
   { name: '㉗ auto-register 가 옛 입력 수리 영수증을 대조하지 않음 (cold·autumn — REGEN_EXHAUSTED)', scenarios: 'S11', edits: [{ file: F.register,
-    find: "      const legacy = pend.status === 'NONE' ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp }) : null", replace: '      const legacy = null' }] },
+    find: "      const legacy = !isDirectMode && pend.status === 'NONE'\n        ? reconcileLegacyInputRepair({ draftsDir: dd, slug, ...qp })\n        : null", replace: '      const legacy = null' }] },
   { name: '㉘ 단건 회수 관문이 교정 대기를 보지 않음 (01:00 일반 재전송)', scenarios: 'S12', edits: [
     { file: F.webui, find: '  if (gate.correctionPending) {\n    if (!quiet)', replace: '  if (false) {\n    if (!quiet)' },
-    { file: F.register, find: '    if (!firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
+    { file: F.register, find: '    if (!isDirectMode && !firstResponseInvalidFor(entryNow, g0.messageFingerprint)) {', replace: '    if (false) {' }] },
   // ── 2026-10-12 — 반례 큐 행은 고정 fixture (runtime 큐에서 gray 가 등록돼 빠져도 같은 시나리오) ──
   { name: '㉙ S12 가 fixture 큐 행을 넣지 않는다 (runtime 큐 상태에 묶임)', scenarios: 'S12', edits: [{ file: F.orch,
     // S14 공통 준비에도 같은 줄이 있다 — S12 의 다음 줄(등록된 gray 처리)까지 묶어 S12 하나만 고른다
@@ -116,7 +120,9 @@ const MUTATIONS = [
   { name: '㉛ 발행 길이 줄에서 목표치·계산법 제거', scenarios: 'S13', edits: [{ file: F.register,
     find: "  if (!m) return line\n", replace: "  if (!m || true) return line\n" }] },
   // ── 2026-10-12 #690 뒤 — 등록돼 추적된 원고·articles 항목이 있어도 시나리오는 같다 (sandbox 사본에서만) ──
-  { name: '㉜ S2 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2', edits: [{ file: F.sandbox,
+  // 🔴 ㉜ 관찰 시나리오 (2026-10-19) — S2 대상 원고가 runtime 에서 이미 미추적이면 선언 없이도 같아 변이가 죽는다.
+  //    S8·S8B 는 새로 쓴 brief·review 를 untrack 으로 runtime 모양에 맞춘다 — 같은 변이를 그 둘에서도 본다 (변이 의미 불변).
+  { name: '㉜ S2·S8·S8B 역할 글 원고를 sandbox 기준 커밋에서 미추적으로 두지 않는다 (추적 원고 → DIRTY_TREE)', scenarios: 'S2,S8,S8B', edits: [{ file: F.sandbox,
     find: "  for (const f of prepared?.untrack ?? []) git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', f], repo, { allowFail: true })\n", replace: '' }] },
   { name: '㉝ S12 가 sandbox articles.ts 에서 이미 등록된 gray 항목을 빼지 않는다 (producer 가 등록 글로 건너뜀)', scenarios: 'S12', edits: [{ file: F.orch,
     find: '      if (iso.removed) writeFileSync(aPath, iso.next)', replace: '      if (false) writeFileSync(aPath, iso.next)' }] },
@@ -134,6 +140,31 @@ const MUTATIONS = [
     find: "  const end = src.indexOf('\\n  },\\n', at + 1)", replace: "  const end = src.lastIndexOf('\\n  },\\n')" }] },
   { name: '㊴ 격리 뒤 다른 article 변화 검증 제거', scenarios: 'S14', edits: [{ file: F.orch,
     find: '  if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error(', replace: '  if (false) throw new Error(' }] },
+  // ── 2026-10-19 금융 정상 후보 — 한 질문 한 묶음 · fixture provenance fail-closed ──
+  { name: '㊵ 금융 뼈대 fixture 의 본문 sha256 대조 제거 (바뀐 본문을 그대로 쓴다)', scenarios: 'S1', edits: [{ file: F.content,
+    find: '  if (sha !== fx.source?.bodySha256) bad(', replace: '  if (false) bad(' }] },
+  { name: '㊶ 금융 뼈대를 다른 금융 질문에도 쓴다 (같은 질문 가드 제거)', scenarios: 'S1', edits: [{ file: F.content,
+    find: '  if (item?.slug !== fx.source.slug || item?.title !== fx.source.title) {', replace: '  if (false) {' }] },
+  // ── 2026-10-19 STANDARD 정상 성공 — 한 질문 한 묶음 (거짓 녹색 차단) ──
+  { name: '㊷ S11 STANDARD 성공 대상을 임의 queue 대상에 다시 붙인다 (다른 질문 본문 등록)', scenarios: 'S11', edits: [{ file: F.orch,
+    find: "      const [a, , c] = await pickTargets({ repo, date, selectable: 1, others: 2 })\n      const std = await prepareStandardCandidate(repo, 'avoiding-gatherings')\n      const b = std.item\n",
+    replace: "      const [a, b, c] = await pickTargets({ repo, date, selectable: 1, others: 2 })\n      const std = await prepareStandardCandidate(repo, 'avoiding-gatherings')\n" }] },
+  { name: '㊸ STANDARD 출처 신원 가드 제거 (같은 slug 면 제목이 달라도 출처 본문)', scenarios: 'S11', edits: [{ file: F.content,
+    find: '  if (item?.title !== x.title) throw new Error(', replace: '  if (false) throw new Error(' }] },
+  { name: '㊹ STANDARD 뼈대 fixture 의 본문 sha256 대조 제거', scenarios: 'S11', edits: [{ file: F.content,
+    find: '    if (sha !== x.bodySha256) bad(', replace: '    if (false) bad(' }] },
+  { name: '㊺ STANDARD 뼈대 fixture 의 대표 문장 대조 제거', scenarios: 'S11', edits: [{ file: F.content,
+    find: '    if (missing.length) bad(`${x.slug} 대표 문장이 본문에 없다', replace: '    if (false) bad(`${x.slug} 대표 문장이 본문에 없다' }] },
+  { name: '㊻ 정상 출처 원고도 실패 경로 뼈대로 만든다 (gray 제목 + 다른 질문 본문 등록)', scenarios: 'S12', edits: [{ file: F.content,
+    find: '  let body = (fx ? fx.body : sx ? sx.body : foreign()).trimEnd()', replace: '  let body = (fx ? fx.body : foreign()).trimEnd()' }] },  // ── 2026-10-19 금융 brief·review 상류 — 큐 행 → title → brief → review 가 한 질문 ──
+  { name: '㊼ FINANCIAL 이 다시 avoiding brief·review 를 부분 치환해 쓴다', scenarios: 'S1', edits: [{ file: F.content,
+    find: '    ({ brief, review } = financialBriefReview({ repo, fx }))\n  } else {', replace: '    void financialBriefReview\n  }\n  if (true) {' }] },
+  { name: '㊽ 금융 brief 검색 의도만 모임 질문으로 되돌린다', scenarios: 'S1', edits: [{ file: F.content,
+    find: "'이 글이 답하는 질문입니다.', '', `- \"${q.title}\"`,", replace: "'이 글이 답하는 질문입니다.', '', '- \"50대 모임 나가기 싫어\"'," }] },
+  { name: '㊾ 금융 review 글 설계(summary)만 모임 이야기로 되돌린다', scenarios: 'S1', edits: [{ file: F.content,
+    find: "    '  summary: [', ...h2s.map((h) => `    ${tsString(h)},`), '  ],',", replace: "    '  summary: [', \"    '카톡 모임 알림에 마음이 무거워지는 장면으로 공감대를 연다.',\", '  ],'," }] },
+  { name: '㊿ 금융 상류 brief·review 신원 판정 제거', scenarios: 'S1', edits: [{ file: F.content,
+    find: '  if (stale.length) p.push(`옛 사실 문구 ${stale.join(\',\')}`)\n  return p\n', replace: '  if (stale.length) p.push(`옛 사실 문구 ${stale.join(\',\')}`)\n  return []\n' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')

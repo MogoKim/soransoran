@@ -22,6 +22,11 @@
  *   M7  (adapter) sidecar 전체 신원 대조 제거 — 같은 specHash 면 다른 graphNodeId 도 멱등으로 인정한다
  *       catch: 기존 등록 영수증의 graph/spec 신원이 달라지면 fail-closed 해야 한다
  *
+ *   T1~T10 (2026-10-19 · 원고 제목 = spec 제목) — 최초 원고 대조 제거 · 재생성 후보 대조 우회 · 정규화 완화 ·
+ *       항상 통과 · 최초/재생성 prompt 불변 문구 제거 · mismatch 코드 덮어쓰기 · 형식 재생성 뒤로 이동 ·
+ *       mismatch 에도 형식 재생성 허용. 지점은 `patchOnce` 로 정확히 1곳이다.
+ *       auto-register 변이는 drive 를 provider·Chrome 0 으로 태운다 (재생성·교체·등록은 주입 함수가 센다).
+ *
  * 🔴 task 가 요구한 세 변이 — **wiring 제거(M6) · unknown-mode 차단 제거(M3) · verify 제거(M2)** —
  *    는 모두 regression 를 catch 한다. 그 밖의 변이(M1·M4·M5·M7)는 adapter 의 결정론·identity·멱등을 추가로 지킨다.
  */
@@ -35,10 +40,28 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const ADAPTER_PATH = join(ROOT, 'scripts/lib/magazine-direct-spec.mjs')
 const DELIVERY_GATE_PATH = join(ROOT, 'scripts/lib/magazine-delivery-gate.mjs')
+const AUTO_REGISTER_PATH = join(ROOT, 'scripts/magazine-auto-register.mjs')
 const FIXTURE_INPUT = join(ROOT, 'scripts/__fixtures__/magazine/direct-spec/canary.input.json')
 
 const ADAPTER_ORIGINAL = readFileSync(ADAPTER_PATH, 'utf8')
 const DELIVERY_GATE_ORIGINAL = readFileSync(DELIVERY_GATE_PATH, 'utf8')
+const AUTO_REGISTER_ORIGINAL = readFileSync(AUTO_REGISTER_PATH, 'utf8')
+const TARGETS = {
+  adapter: { path: ADAPTER_PATH, original: ADAPTER_ORIGINAL, base: 'magazine-direct-spec' },
+  deliveryGate: { path: DELIVERY_GATE_PATH, original: DELIVERY_GATE_ORIGINAL, base: 'magazine-delivery-gate' },
+  autoRegister: { path: AUTO_REGISTER_PATH, original: AUTO_REGISTER_ORIGINAL, base: 'magazine-auto-register' },
+}
+/**
+ * 🔴 문자열 지점 정확히 1곳 치환 (2026-10-19 · 제목 관문 변이). 0곳·여러 곳이면 throw —
+ *    지점이 사라진 변이를 "검출" 로 세지 않는다 (mutate 가 FAIL 로 센다).
+ */
+function patchOnce(from, to) {
+  return (src) => {
+    const n = src.split(from).length - 1
+    if (n !== 1) throw new Error(`변이 지점이 ${n}곳이다 (정확히 1곳이어야 한다): ${from.slice(0, 80)}`)
+    return src.replace(from, () => to)
+  }
+}
 function replaceAfter(source, marker, pattern, replacement) {
   const at = source.indexOf(marker)
   if (at === -1) return source
@@ -54,14 +77,16 @@ process.on('exit', () => { for (const d of TMPS) { try { rmSync(d, { recursive: 
 
 /**
  * 변이본은 **원본 파일 옆**에 저장한다 — 상대 import (`./magazine-article-spec.mjs` 등) 가 그대로 돈다.
- * target: 'adapter' | 'deliveryGate'
+ * target: 'adapter' | 'deliveryGate' | 'autoRegister'
  */
 async function withMutant(id, target, patch, assertion) {
-  const sourcePath = target === 'deliveryGate' ? DELIVERY_GATE_PATH : ADAPTER_PATH
-  const original = target === 'deliveryGate' ? DELIVERY_GATE_ORIGINAL : ADAPTER_ORIGINAL
+  const t = TARGETS[target]
+  if (!t) throw new Error(`${id}: 모르는 변이 대상 ${target}`)
+  const sourcePath = t.path
+  const original = t.original
   const patched = patch(original)
   if (patched === original) throw new Error(`${id}: 패치가 ${target} 소스를 바꾸지 못했다 — anchor 가 틀렸다`)
-  const baseName = target === 'deliveryGate' ? 'magazine-delivery-gate' : 'magazine-direct-spec'
+  const baseName = t.base
   const mutantPath = join(dirname(sourcePath), `.${baseName}.__mutant.${id}.mjs`)
   writeFileSync(mutantPath, patched, 'utf8')
   try {
@@ -86,7 +111,8 @@ import { ARTICLE_SPEC_FILENAME, ARTICLE_SPEC_REGISTER_LEDGER, DIRECT_SPEC_MODE, 
 import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { saveQuarantine } from './lib/magazine-quarantine.mjs'
 import { ARTICLE_SPEC_SCHEMA } from './lib/magazine-article-spec.mjs'
-import { mkdirSync as _mkdirSync } from 'node:fs'
+import { mkdirSync as _mkdirSync, existsSync } from 'node:fs'
+import { drive } from './magazine-auto-register.mjs'
 import { DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, readProductGraphState, readProductGraphVersion } from './lib/magazine-direct-spec-source.mjs'
 
 /** direct · legacy 공용 sandbox — article-spec.json 과 brief.md 를 같이 둔다.
@@ -120,6 +146,60 @@ function makeSandbox(prefix) {
   const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => gv, productRoot: () => ROOT }
   return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps }
 }
+
+// ── 제목 관문 drive sandbox (2026-10-19) ──────────────────────
+/** frontmatter title 만 바꿔 끼우는 시험 원고 */
+function titledManuscript(title, body = '잠들기 전 내일 할 일을 짧게 적고 휴대전화를 멀리 두어 보세요.') {
+  return ['---', `title: ${title}`,
+    'description: 잠들기 전 반복되는 생각을 줄이고 편안한 밤 루틴을 만드는 방법을 살펴봅니다.',
+    'cluster: sleep', 'medical: false', '---', '',
+    '하루를 마치고 불을 끈 뒤에도 생각이 이어지는 밤이 있습니다.', '',
+    '## 오늘 밤에 할 수 있는 일', '', body, '',
+    '[CTA] /community/free | 밤 이야기를 나눠요 | 오늘 밤 떠오른 생각을 남겨 주세요', ''].join('\n')
+}
+const WRONG_TITLE = '잠 못 든 다음 날, 무엇부터 할까요'
+/**
+ * auto-register drive 를 provider·Chrome 0 으로 태운다. `draftTitle` 이 없으면 원고 제목 = spec 제목.
+ * `qaFailsFirst` 만큼 QA 가 FAIL 한 뒤 통과하고, 재생성 후보는 `candidate` 글자다.
+ */
+function titleDriveSandbox(prefix, { draftTitle = null, draftText = null, qaFailsFirst = 0, candidate = null } = {}) {
+  const sb = makeSandbox(prefix)
+  const spec = adapter.readDirectSpec({ slug: sb.slug, draftsDir: sb.draftsDir }).spec
+  const dir = join(sb.draftsDir, sb.slug)
+  writeFileSync(join(dir, 'draft.md'), draftText ?? titledManuscript(draftTitle ?? spec.identity.title), 'utf8')
+  writeFileSync(join(dir, 'article-draft.ts'), 'export const article = {}\n', 'utf8')
+  const calls = { regen: 0, apply: 0, register: 0 }
+  let qaRuns = 0
+  const deps = {
+    draftsDir: sb.draftsDir, quarantinePath: sb.quarantinePath,
+    loadQueue: () => [sb.input.queueItem], queueItem: sb.input.queueItem,
+    progress: () => ({ hasDraftMd: true }), heroFilePath: () => join(sb.draftsDir, 'hero.webp'),
+    now: Date.parse('2026-10-15T03:00:00Z'), firstFetchResult: null, candidateDir: sb.draftsDir,
+    run: (cmd) => {
+      const name = String(cmd).split('/').pop()
+      if (name === 'magazine-batch-qa.mjs') return { code: 0, json: { results: [{ slug: sb.slug, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [] }] } }
+      if (name === 'magazine-register.mjs') { calls.register += 1; return { code: 0, json: { verdict: 'READY' } } }
+      if (name === 'magazine-qa.mjs' && ++qaRuns <= qaFailsFirst) return { code: 1, stdout: '  ✗ FAIL [본문] 본문 1100자 — 허용 1200~3000자 밖\n', stderr: '' }
+      return { code: 0, stdout: '', stderr: '' }
+    },
+    attemptRegeneration: ({ runner }) => { calls.regen += 1; runner({}); return { ok: true, regenCalls: calls.regen } },
+    regenRunner: ({ draftOut }) => { writeFileSync(draftOut, candidate ?? '', 'utf8'); return { ok: true } },
+    applyRegenCandidate: ({ candidatePath, draftMd }) => {
+      calls.apply += 1
+      writeFileSync(draftMd, readFileSync(candidatePath, 'utf8'), 'utf8')
+      return { ok: true, heroCarried: false }
+    },
+  }
+  const receipt = join(dir, ARTICLE_SPEC_REGISTER_LEDGER)
+  return { ...sb, spec, dir, deps, calls, receipt }
+}
+const DRIVE_OPTS = { write: true, publishAt: '2026-10-22', autoLane: true }
+/** 제목도 다르고 CTA 도 없는 원고 — 제목 mismatch 가 형식 재생성보다 먼저 막아야 한다 */
+const WRONG_TITLE_NO_CTA = titledManuscript(WRONG_TITLE).split('\n').filter((l) => !l.startsWith('[CTA]')).join('\n')
+/** 최초 원고 제목 대조 블록 (변이 지점) */
+const INITIAL_TITLE_GATE = "  if (isDirectMode) {\n    const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })\n    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })\n  }\n"
+/** 형식 재생성 루프의 끝 (T8 이 제목 대조를 옮겨 놓는 자리) */
+const FORMAT_LOOP_END = "      fmt = judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8'))\n    }\n  }\n"
 
 async function baseline() {
   console.log('\n── baseline (원본 adapter 는 반례를 catch 한다) ──')
@@ -220,6 +300,55 @@ async function baseline() {
       'B8 원본은 같은 specHash 의 다른 graphNodeId 를 catch 해야 한다',
     )
     pass++; console.log('PASS B8 sidecar 전체 identity 대조')
+  }
+
+  // B9 (T1·T3·T4 짝): 최초 원고 제목이 다르면 DIRECT_SPEC_TITLE_MISMATCH — 등록·영수증 0
+  {
+    const s = titleDriveSandbox('ds-base-b9', { draftTitle: WRONG_TITLE })
+    const r = drive(s.slug, DRIVE_OPTS, s.deps)
+    assert.equal(r.blockedBy?.[0]?.code, adapter.DIRECT_SPEC_TITLE_MISMATCH, 'B9 원본은 최초 원고 제목 drift 를 막아야 한다')
+    assert.equal(s.calls.register, 0)
+    assert.equal(existsSync(s.receipt), false)
+    pass++; console.log('PASS B9 최초 원고 제목 drift — DIRECT_SPEC_TITLE_MISMATCH · 등록 0')
+  }
+
+  // B10 (T2·T7 짝): 재생성 후보가 제목을 바꾸면 교체 0 · 코드 그대로
+  {
+    const s = titleDriveSandbox('ds-base-b10', { qaFailsFirst: 1, candidate: titledManuscript(WRONG_TITLE, '본문만 바뀌어야 하는데 제목도 바뀌었다.') })
+    const r = drive(s.slug, DRIVE_OPTS, s.deps)
+    assert.equal(r.blockedBy?.[0]?.code, adapter.DIRECT_SPEC_TITLE_MISMATCH, 'B10 원본은 재생성 후보의 제목 drift 를 막아야 한다')
+    assert.equal(s.calls.apply, 0)
+    assert.equal(s.calls.register, 0)
+    pass++; console.log('PASS B10 재생성 후보 제목 drift — 교체 0 · 등록 0')
+  }
+
+  // B11 (짝 없음 — 정상 경로): 제목이 같은 재생성은 교체되고 등록까지 간다
+  {
+    const s0 = titleDriveSandbox('ds-base-b11-probe')
+    const s = titleDriveSandbox('ds-base-b11', { qaFailsFirst: 1, candidate: titledManuscript(s0.spec.identity.title, '본문만 고쳤다. 제목은 그대로다.') })
+    const r = drive(s.slug, DRIVE_OPTS, s.deps)
+    assert.equal(r.verdict, 'DONE', JSON.stringify(r.blockedBy))
+    assert.equal(s.calls.apply, 1)
+    pass++; console.log('PASS B11 제목이 같은 재생성 — 교체 · 등록')
+  }
+
+  // B13 (T8·T9·T10 짝): 제목도 다르고 형식도 틀린 원고 — 형식 재생성(provider) 0 으로 제목 mismatch
+  {
+    const s = titleDriveSandbox('ds-base-b13', { draftText: WRONG_TITLE_NO_CTA, candidate: titledManuscript(WRONG_TITLE) })
+    const r = drive(s.slug, DRIVE_OPTS, s.deps)
+    assert.equal(r.blockedBy?.[0]?.code, adapter.DIRECT_SPEC_TITLE_MISMATCH, 'B13 원본은 제목 mismatch 로 먼저 막아야 한다')
+    assert.equal(s.calls.regen, 0, 'B13 원본은 형식 재생성을 걸지 않아야 한다')
+    assert.equal(s.calls.apply, 0)
+    pass++; console.log('PASS B13 제목+형식 위반 — 형식 재생성 0 · 제목 mismatch')
+  }
+
+  // B12 (T5·T6 짝): 최초·재생성 prompt 에 제목 불변 문구
+  {
+    const { draftsDir, slug } = makeSandbox('ds-base-b12')
+    const spec = adapter.readDirectSpec({ slug, draftsDir }).spec
+    assert.ok(adapter.directSpecMessageFor({ slug, draftsDir }).message.includes(adapter.DIRECT_SPEC_TITLE_LOCK_LINE))
+    assert.ok(adapter.directSpecRegenPromptText({ spec, packet: { instruction: 'x' } }).includes(adapter.DIRECT_SPEC_TITLE_LOCK_LINE))
+    pass++; console.log('PASS B12 최초·재생성 prompt 제목 불변 문구')
   }
 }
 
@@ -344,6 +473,105 @@ async function runMutations() {
       assert.equal(r.written, false,
         'M7 catch — 변이본은 같은 specHash 라는 이유로 다른 graphNodeId 영수증을 멱등으로 인정한다')
     })
+
+  // ── 제목 관문 변이 (2026-10-19) — 지점은 정확히 1곳 (patchOnce) ──
+  // T1 최초 원고 제목 대조 제거 → 다른 제목이 그대로 등록·영수증까지 간다
+  await mutate('T1', '최초 원고 제목 대조 제거', 'autoRegister',
+    patchOnce(INITIAL_TITLE_GATE, '  // mutant T1: 최초 원고 제목 대조 제거\n'),
+    async (mod) => {
+      const s = titleDriveSandbox('ds-t1', { draftTitle: WRONG_TITLE })
+      const r = mod.drive(s.slug, DRIVE_OPTS, s.deps)
+      assert.equal(r.verdict, 'DONE', `T1 catch — 변이본은 제목 drift 를 등록해야 한다 (실제: ${JSON.stringify(r.blockedBy)})`)
+      assert.equal(s.calls.register, 1)
+      assert.equal(existsSync(s.receipt), true, 'T1 catch — spec 과 다른 제목에 specHash 영수증이 남는다')
+    })
+
+  // T2 재생성 후보 제목 대조 우회 → 제목이 바뀐 후보로 원고를 교체하고 등록한다
+  await mutate('T2', '재생성 경로 제목 대조 우회', 'autoRegister',
+    patchOnce('      if (isDirectMode && existsSync(candidate)) {\n', '      if (false) { // mutant T2: 재생성 후보 제목 대조 우회\n'),
+    async (mod) => {
+      const s = titleDriveSandbox('ds-t2', { qaFailsFirst: 1, candidate: titledManuscript(WRONG_TITLE, '본문만 바뀌어야 하는데 제목도 바뀌었다.') })
+      const r = mod.drive(s.slug, DRIVE_OPTS, s.deps)
+      assert.equal(s.calls.apply, 1, 'T2 catch — 변이본은 제목이 바뀐 후보로 원고를 교체해야 한다')
+      assert.equal(r.verdict, 'DONE', `T2 catch — 교체된 다른 제목이 등록된다 (실제: ${JSON.stringify(r.blockedBy)})`)
+      assert.ok(readFileSync(join(s.dir, 'draft.md'), 'utf8').includes(`title: ${WRONG_TITLE}`))
+    })
+
+  // T3 정규화 비교 → 끝 구두점·공백·대소문자 차이를 같은 제목으로 본다
+  await mutate('T3', '제목 비교를 정규화로 완화', 'adapter',
+    patchOnce("expected !== '' && actual === expected) return",
+      "expected !== '' && String(actual).replace(/[\\s\\p{P}]/gu, '').toLowerCase() === expected.replace(/[\\s\\p{P}]/gu, '').toLowerCase()) return"),
+    async (mod) => {
+      const spec = { identity: { title: '퇴직금을 IRP에 넣어야 하나요' } }
+      const r = mod.directSpecTitleCheck({ spec, manuscript: titledManuscript('퇴직금을  irp에 넣어야 하나요?') })
+      assert.equal(r.ok, true, 'T3 catch — 변이본은 정규화로 다른 제목을 통과시킨다')
+    })
+
+  // T4 대조 함수가 항상 통과
+  await mutate('T4', '제목 대조 함수 항상 통과', 'adapter',
+    patchOnce("if (typeof expected === 'string' && expected !== '' && actual === expected) return { ok: true, title: expected }",
+      'return { ok: true, title: expected } // mutant T4'),
+    async (mod) => {
+      const r = mod.directSpecTitleCheck({ spec: { identity: { title: '가' } }, manuscript: titledManuscript('나') })
+      assert.equal(r.ok, true, 'T4 catch — 변이본은 다른 제목을 통과시킨다')
+    })
+
+  // T5 최초 전송 prompt 의 제목 불변 문구 제거
+  await mutate('T5', '최초 prompt 제목 불변 문구 제거', 'adapter',
+    patchOnce("  'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',\n  DIRECT_SPEC_TITLE_LOCK_LINE,\n",
+      "  'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',\n"),
+    async (mod) => {
+      const { draftsDir, slug } = makeSandbox('ds-t5')
+      const m = mod.directSpecMessageFor({ slug, draftsDir })
+      assert.equal(m.ok, true)
+      assert.ok(!m.message.includes(mod.DIRECT_SPEC_TITLE_LOCK_LINE), 'T5 catch — 변이본 최초 message 에 제목 불변 문구가 없다')
+    })
+
+  // T6 재생성 prompt 의 제목 불변 문구 제거
+  await mutate('T6', '재생성 prompt 제목 불변 문구 제거', 'adapter',
+    patchOnce("    '실패하지 않은 frontmatter 값·문단·소제목·문장·순서·CTA 는 유지하고 새 주장을 추가하지 마세요.',\n    DIRECT_SPEC_TITLE_LOCK_LINE,\n",
+      "    '실패하지 않은 frontmatter 값·문단·소제목·문장·순서·CTA 는 유지하고 새 주장을 추가하지 마세요.',\n"),
+    async (mod) => {
+      const { draftsDir, slug } = makeSandbox('ds-t6')
+      const spec = mod.readDirectSpec({ slug, draftsDir }).spec
+      const text = mod.directSpecRegenPromptText({ spec, packet: { instruction: 'x' } })
+      assert.ok(!text.includes(mod.DIRECT_SPEC_TITLE_LOCK_LINE), 'T6 catch — 변이본 재생성 prompt 에 제목 불변 문구가 없다')
+    })
+
+  // T7 재생성 mismatch 코드를 호출 자리의 일반 코드로 덮는다 → 결과에 DIRECT_SPEC_TITLE_MISMATCH 가 없다
+  await mutate('T7', '재생성 mismatch 코드 덮어쓰기', 'autoRegister',
+    patchOnce('(rr?.code === DIRECT_SPEC_TITLE_MISMATCH ? rr.code : fallback)', 'fallback /* mutant T7 */'),
+    async (mod) => {
+      const s = titleDriveSandbox('ds-t7', { qaFailsFirst: 1, candidate: titledManuscript(WRONG_TITLE) })
+      const r = mod.drive(s.slug, DRIVE_OPTS, s.deps)
+      assert.equal(r.verdict, 'BLOCKED')
+      assert.equal(r.blockedBy?.[0]?.code, 'QA_FAIL', 'T7 catch — 변이본은 제목 계약 위반을 일반 QA_FAIL 로 덮는다')
+    })
+
+  // ── 제목 대조 순서 변이 — 제목도 다르고 CTA 도 없는 원고 (WRONG_TITLE_NO_CTA) ──
+  /** 변이본이 제목 mismatch 원고에 형식 재생성(provider)을 걸었는가 — 이것이 결함이다 */
+  const formatRegenRanOnMismatch = async (mod, prefix, id) => {
+    const s = titleDriveSandbox(prefix, { draftText: WRONG_TITLE_NO_CTA, candidate: titledManuscript(WRONG_TITLE) })
+    const r = mod.drive(s.slug, DRIVE_OPTS, s.deps)
+    assert.equal(s.calls.regen, 1, `${id} catch — 변이본은 제목이 다른 원고에 형식 재생성(provider)을 건다 (실제 regen=${s.calls.regen} · ${JSON.stringify(r.blockedBy)})`)
+    assert.equal(r.regenHistory?.[0]?.stage, 'article', `${id} catch — 형식 재생성 자리에서 provider 가 불렸다`)
+  }
+
+  // T8 최초 제목 대조를 형식 재생성 루프 뒤로 옮긴다 (adcb2414 의 순서)
+  await mutate('T8', '최초 제목 대조를 형식 재생성 뒤로 이동', 'autoRegister',
+    (src) => patchOnce(FORMAT_LOOP_END, `${FORMAT_LOOP_END}${INITIAL_TITLE_GATE}`)(patchOnce(INITIAL_TITLE_GATE, '  // mutant T8: 제목 대조를 형식 재생성 뒤로 옮김\n')(src)),
+    (mod) => formatRegenRanOnMismatch(mod, 'ds-t8', 'T8'))
+
+  // T9 제목 mismatch 여도 형식이 틀리면 막지 않고 형식 재생성으로 보낸다
+  await mutate('T9', '제목 mismatch 에도 형식 재생성 허용', 'autoRegister',
+    patchOnce("    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })\n",
+      "    if (!t.ok && judgeManuscriptFormat(readFileSync(p.draftMd, 'utf8')).ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual }) // mutant T9\n"),
+    (mod) => formatRegenRanOnMismatch(mod, 'ds-t9', 'T9'))
+
+  // T10 최초 제목 대조 제거 — 형식 위반 원고에서는 provider 재생성이 먼저 돈다 (T1 은 형식 정상 원고의 등록 경로)
+  await mutate('T10', '최초 제목 대조 제거 (형식 위반 원고)', 'autoRegister',
+    patchOnce(INITIAL_TITLE_GATE, '  // mutant T10: 최초 원고 제목 대조 제거\n'),
+    (mod) => formatRegenRanOnMismatch(mod, 'ds-t10', 'T10'))
 }
 
 await baseline()

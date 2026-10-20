@@ -32,6 +32,7 @@ import {
   BRIEF_ALLOWED_NOTATIONS,
   judgeBriefFormatContract,
   describeBriefViolations,
+  judgeManuscriptFormat,
 } from './magazine-manuscript-format.mjs'
 
 /** 운영 queueItem 에 이 값이 있을 때만 direct 경로로 간다 */
@@ -49,15 +50,53 @@ export const ARTICLE_SPEC_REGISTER_LEDGER = 'article-spec.registered.json'
 /** 지문 식별 라인 — message 안에 들어가 fingerprint 가 spec identity 의 함수가 되게 한다 */
 export const DIRECT_SPEC_PROMPT_MARKER = `[${DIRECT_SPEC_MODE} · ${ARTICLE_SPEC_SCHEMA}]`
 
+/**
+ * 🔴 **제목 불변 문구** (2026-10-19 · 제목 drift 수리) — 최초 전송과 재생성 prompt 에 같은 글자로 싣는다.
+ *    모델에게 알리는 것일 뿐이다. 실제 안전은 `directSpecTitleCheck` 의 코드 대조가 보장한다.
+ */
+export const DIRECT_SPEC_TITLE_LOCK_LINE = 'frontmatter 의 title 은 BRIEF 의 title 과 한 글자도 다르지 않게 그대로 둡니다.'
+
 /** direct 전송 요청의 prompt — legacy prompt 와 글자가 겹치지 않는다 (지문 분리 보장) */
 export const DIRECT_SPEC_PROMPT_TEXT = [
   '[DIRECT_SPEC_V1] 아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요.',
   '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
   '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
   'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+  DIRECT_SPEC_TITLE_LOCK_LINE,
   '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
   DIRECT_SPEC_PROMPT_MARKER,
 ].join(' ')
+
+/** 원고 제목이 spec 제목과 다를 때의 fail-closed 코드 */
+export const DIRECT_SPEC_TITLE_MISMATCH = 'DIRECT_SPEC_TITLE_MISMATCH'
+
+/**
+ * 🔴 **원고 제목 = `ArticleSpec.identity.title`** (2026-10-19 · 제목 drift 수리).
+ *
+ *    앞판은 spec 제목을 brief 에 적기만 했고, 실제로 등록되는 제목은 모델이 원고 frontmatter 에 쓴 값이었다.
+ *    둘을 비교하는 곳이 없어 specHash 영수증은 "계약대로" 라고 남기는데 공개 제목은 계약과 다를 수 있었다.
+ *
+ *    - 최초 원고와 모든 재생성 후보가 **이 함수 하나**를 지난다 (auto-register 두 자리).
+ *    - 제목은 md-to-draft 가 article 로 옮기는 값과 **같은 파서**(`judgeManuscriptFormat().meta.title`)로 읽는다.
+ *      정규식으로 따로 뽑지 않는다.
+ *    - 공백·구두점·대소문자를 정규화하지 않는다 — `===` 하나다.
+ *    - 틀린 제목을 spec 제목으로 고쳐 쓰지 않는다. 판정만 한다 (순수 · 쓰기 0).
+ *
+ * @returns {{ok:true, title:string}
+ *          |{ok:false, code:'DIRECT_SPEC_TITLE_MISMATCH', expected:string|null, actual:string|null, why:string}}
+ */
+export function directSpecTitleCheck({ spec, manuscript }) {
+  const expected = spec?.identity?.title
+  const actual = judgeManuscriptFormat(String(manuscript ?? '')).meta.title ?? null
+  if (typeof expected === 'string' && expected !== '' && actual === expected) return { ok: true, title: expected }
+  return {
+    ok: false,
+    code: DIRECT_SPEC_TITLE_MISMATCH,
+    expected: typeof expected === 'string' ? expected : null,
+    actual,
+    why: `원고 title ${JSON.stringify(actual)} 이 spec title ${JSON.stringify(expected ?? null)} 과 다르다 — 자동으로 고치지 않는다`,
+  }
+}
 
 /**
  * 🔴 **direct 재생성 prompt** (2026-10-15 · regen wiring).
@@ -76,6 +115,7 @@ export function directSpecRegenPromptText({ spec, packet, currentDraft = null })
     '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
     'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
     '실패하지 않은 frontmatter 값·문단·소제목·문장·순서·CTA 는 유지하고 새 주장을 추가하지 마세요.',
+    DIRECT_SPEC_TITLE_LOCK_LINE,
     '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
     DIRECT_SPEC_PROMPT_MARKER,
     '',
