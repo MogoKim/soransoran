@@ -14,7 +14,7 @@ import { AUTO_READY_CONTRACT } from './supply-schedule-contract'
 import { LEGACY_DECISION_MARK } from './review-provenance'
 import { semanticHoldsOf, type SemanticSummary } from './micro-seed-supply-autofill'
 // 🔴 모듈 로드 때 읽는 값은 의존 없는 정본에서 — 품질 계약 순환 안에서도 비지 않는다
-import { SEMANTIC_SUMMARY_KEY } from './semantic-summary-codes'
+import { SEMANTIC_HOLD_CODES, SEMANTIC_SUMMARY_KEY } from './semantic-summary-codes'
 
 /**
  * 🔴 사람 결정 경로의 표식 — 기계 자동 판정은 이 값을 **절대** 쓰지 않는다(founder 위장 금지).
@@ -33,9 +33,9 @@ export const CONTRACT = AUTO_READY_CONTRACT
  * 🔴 **`semanticReview` 는 "객체이면 통과" 가 아니다** (2026-09-25 마스터 지적).
  *    #565 판은 `typeof rec === 'object'` 만 봤다 — `{}` 도, 필드가 문자열인 것도,
  *    `complete: false` 인 것도 **경고 0** 으로 읽혔다. 재지 않은 것을 이상 없음으로 읽은 것이다.
- *    이제 여섯 필드를 **구조적으로** 본다. 하나라도 어긋나면 예외 검토로 간다.
+ *    이제 여섯 필드를 **구조적으로** 본다. 하나라도 어긋나면 품질 격리로 간다.
  *
- * 🔴 이 경고는 후보 생성도 사람 검토도 막지 않는다. **자동 READY 에서만** 뺀다.
+ * 🔴 구조 결함·holds 불일치·차단 축은 자동 READY에서 뺀다. ADOPT의 경고 전용 두 축은 기록만 유지한다.
  * 🔴 `confidence` 에 통과 임계값을 만들지 않는다. "유한한 0~1 숫자인가" 만 본다.
  */
 export const SEMANTIC_RECORD_KEY = SEMANTIC_SUMMARY_KEY
@@ -105,6 +105,20 @@ export function warningsOfGate(gate: unknown): string[] {
   return out
 }
 
+/**
+ * Content Core가 ADOPT한 뒤 근거로 남긴 경고 전용 축이다. 둘은 품질 기록과
+ * holds 정합성에는 남지만, 그 사실만으로 자동 READY를 막지는 않는다.
+ */
+const NON_BLOCKING_SEMANTIC_HOLDS = [
+  SEMANTIC_HOLD_CODES.unsupportedAdditions,
+  SEMANTIC_HOLD_CODES.droppedFromSource,
+] as const
+
+export function blockingWarningsOfGate(gate: unknown): string[] {
+  return warningsOfGate(gate).filter((warning) =>
+    !NON_BLOCKING_SEMANTIC_HOLDS.some((code) => warning === code || warning.startsWith(`${code}:`)))
+}
+
 /** 🔴 회귀 사례에서 나온 네 가지 — #565 가 실측으로 얻은 값이다 */
 export const AUTO_READY_BLOCKERS = {
   /** 이미지가 있어야 성립하는 문장 (P08 실측) */
@@ -127,8 +141,8 @@ export type RowInput = {
 export type RowVerdict = { auto: boolean; reasons: string[] }
 
 /**
- * 🔴 **그 행이 자동 판정 대상인가** — "경고 없는 적격 후보" 하나다.
- *    하나라도 걸리면 **예외 묶음**으로 간다. 조용히 통과시키지 않는다.
+ * 🔴 **그 행이 자동 판정 대상인가** — "차단 경고 없는 적격 후보" 하나다.
+ *    차단 경고가 하나라도 걸리면 **예외 묶음**으로 간다. 조용히 통과시키지 않는다.
  */
 export function judgeRow(i: RowInput): RowVerdict {
   const reasons: string[] = []
@@ -156,7 +170,7 @@ export function eligibilityOf(r: {
 }): RowVerdict {
   return judgeRow({
     gateVerdict: String(r.gateVerdict),
-    warnings: warningsOfGate(r.gateResults),
+    warnings: blockingWarningsOfGate(r.gateResults),
     title: r.title, body: r.body,
   })
 }

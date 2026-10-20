@@ -547,7 +547,7 @@ console.log('\n⑥ 🔴 🔴 자동 READY 시험 계약 — 사람 승인이 최
     AUTO_READY_CONTRACT.reviewSampleMin === 30
     && AUTO_READY_CONTRACT.noEditAccuracyMin === 0.90
     && AUTO_READY_CONTRACT.hardDefectMax === 0)
-  check('🔴 🔴 **경고 없는 글만 대상이다**', AUTO_READY_CONTRACT.eligible === 'warningsZero')
+  check('🔴 🔴 **차단 경고 없는 글만 대상이다**', AUTO_READY_CONTRACT.eligible === 'blockingWarningsZero')
   check('🔴 열어도 표본 감사를 계속한다', AUTO_READY_CONTRACT.sampledAuditRatio > 0)
   check('🔴 🔴 **표본 없이 정확도를 말하지 않는다는 순서가 적혀 있다**',
     AUTO_READY_STEPS.some((s) => s.includes('표본 없이 정확도를 말하지 않는다')))

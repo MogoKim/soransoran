@@ -137,7 +137,14 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  * 🔴 v12 이하 행을 고치거나 지우거나 v13 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
  *    v12 행의 확정 결함은 지금 계약의 재검증(`auto-ready-defect-resolution`)으로만 해소된다 — 수동 PASS 로 만들지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v13'
+/**
+ * `quality-v14` (2026-10-20) = **bounded creativity 판정을 자동 READY 끝단까지 잇는다.** Content Core는
+ * `unsupportedAdditions`·`droppedFromSource`만 있는 초안을 경고와 근거를 남긴 채 ADOPT했지만, auto-READY가
+ * 모든 holds를 다시 차단해 14:15 자연 v13 후보 3건 중 2건을 품질 격리했다. 두 경고 전용 축만 비차단으로 읽고,
+ * 구조 오류·검수 미완료·생활사 모순·안전·복제·핵심 누락·자료 의존 차단은 그대로 유지한다.
+ * 🔴 v13 이하 행은 고치거나 지우거나 v14로 옮기지 않는다. 새 계약 생성만 새 판정을 받는다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v14'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

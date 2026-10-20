@@ -1,7 +1,8 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-20 11:40 KST
-> 마지막 창업자 동기화: 2026-10-20 (D5 품질 결함과 D10 preflight 시계 결함을 같은 packet으로 보정하고,
+> as-of: 2026-10-20 14:50 KST
+> 마지막 창업자 동기화: 2026-10-20 (첫 quality-v13 자연 공급에서 확인한 자동 READY 끝단의 경고 의미 불일치를
+> quality-v14로 보정하되,
 > 품질·자동 READY·Persona·댓글·조회수의 code/deployed/operating 상태를 섞지 않는다)
 >
 > 이 문서는 **검증된 현재 상태와 다음 실행**만 적는다. 정책은
@@ -11,10 +12,10 @@
 
 ## 0. 창업자용 한 문장
 
-**10-17 d5 증거는 PASS, 10-18 d10 증거는 7/10 FAIL, 10-19 d5 증거는 4/5·감사 결함 1건으로 FAIL이다.
-quality-v12·자동 품질 생명주기·fresh-first·공통 추가 댓글 profile은 운영 중이다. 새 결함은 실제 운영 행으로
-quality-v13에서 차단했고, 07:00 preflight가 06:15 자연 공급을 자르는 시계 결함도 롤링 72시간 용량 창으로
-보정했다. 둘은 exact-head CI·전환·runtime 배포 전이며, D20 Persona 10명은 D10 operating PASS 뒤 적용한다.**
+**quality-v13과 D10 preflight 시계 보정은 main·보조 Mac runtime `10555d49`에 배포됐다. 14:15 첫 v13 자연
+공급은 원천 9건에서 Content Core ADOPT 3건을 만들었지만, auto-READY가 경고 전용 축까지 다시 막아 1건만
+READY·발행했다. 현재 D10 preflight는 처리량 7/10·투영 공급비 $0.891/$0.80로 FAIL이다. 안전 차단은 유지하고
+이 의미 불일치만 quality-v14 후보로 보정한다. D20 Persona 10명은 D10 operating PASS 뒤 적용한다.**
 
 ## 1. 검증 기준과 상태
 
@@ -24,12 +25,12 @@ quality-v13에서 차단했고, 07:00 preflight가 06:15 자연 공급을 자르
 | 자동 단계 controller | ✅ `StageDecision` 단일 authority | ✅ 보조 Mac | ✅ `PREPARE · 공개 d5 · 준비 d10` |
 | 자동 D3 | ✅ | ✅ | ✅ 10-14 d3 증거 PASS |
 | 자동 D5 | ✅ | ✅ | ❌ 10-19 d5 증거 FAIL · 4/5 · 감사 결함 1 |
-| 자동 D10 | ✅ 10개 슬롯·Persona 30 | ✅ 기존 runtime · 시계 보정 배포 전 | ❌ 10-18 d10 증거 FAIL · 현재 preflight 오판 보정 전 |
+| 자동 D10 | ✅ 10개 슬롯·Persona 30 | ✅ v13·시계 보정 runtime | ❌ 14:38 preflight `THROUGHPUT_SHORT`·`SUPPLY_COST_SHORT` |
 | 자동 D20 | ✅ code universe 40·비용 ceiling | ⚠️ 웹 코드만 · Persona DB/profile 미적용 | UNKNOWN - D10 PASS·Persona 40·profile 필요 |
 | 자동 D30·D50 | ✅ 단계 사다리 | ⚠️ profile 코드 | UNKNOWN - Persona 60/100·앞 단계 PASS 필요 |
 | 자동 D100 | ❌ 100 슬롯 runtime scheduler/profile 없음 | ❌ | UNKNOWN - Persona 180 canary·300+ 지속 용량 필요 |
-| quality-v12 | ✅ | ✅ runtime | ❌ P16 가족 사실 결함 1건 미해소 · gate closed |
-| quality-v13 후보 | ✅ 실제 운영 결함 행 차단 | ❌ 통합·전환 전 | UNKNOWN - exact-head CI·runtime·자연 감사 전 |
+| quality-v13 | ✅ | ✅ runtime `10555d49` | ✅ 미해소 0 · gate open · 14:15 자연 공급 완료 |
+| quality-v14 후보 | ✅ 경고 전용 축과 안전 차단 분리 | ❌ 로컬 검증 중 | UNKNOWN - exact-head CI·전환·runtime·자연 회차 전 |
 | 기계 초안 자동 생명주기 | ✅ | ✅ runtime | ✅ routine 사람 검토 없이 자동 READY·품질 격리 |
 | Persona 계약 | ✅ 기존 30·code universe 40 | ✅ 기존 30 | ✅ contract-valid 30 · active 30 |
 | D20 Persona 이름 | ✅ PR #762 exact-head | ❌ Draft·DB row 0 | UNKNOWN - D10 PASS 뒤 활성화 gate 필요 |
@@ -50,12 +51,12 @@ quality-v13에서 차단했고, 07:00 preflight가 06:15 자연 공급을 자르
 
 | 항목 | 값 |
 |---|---|
-| 원격 main (2026-10-20 11:37 관측) | `a340d61f468dd6fd96b82742166e96c5024c150d` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `e0f0b403b6e8b30b02796349f46b9eaa87613387` · tracked 0 · main 차이를 별도 판정: D100은 #771 고정시각 검사만 미포함, M-AUTO #770·M-GRAPH #769는 D100 runtime 무관 |
+| 원격 main (2026-10-20 14:37 관측) | `10555d49c507a989d4f74977fd6463478aedaf8d` |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `10555d49c507a989d4f74977fd6463478aedaf8d` · tracked 0 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 지속 d5 |
-| 품질 계약 | quality-v12 operating · 미해소 결함 1 · quality-v13 통합 후보 |
+| 품질 계약 | quality-v13 operating · 미해소 결함 0 · gate open · quality-v14 보정 후보 |
 | 추가 댓글 설정 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 |
 | event wake | unset · OFF |
 | Persona | contract-valid 30 · active 30 · code-ready 40 · 운영 작성자 OP01~OP50 적용 확인 |
@@ -70,6 +71,8 @@ quality-v13에서 차단했고, 07:00 preflight가 06:15 자연 공급을 자르
 | 10-18 d10 증거 | **FAIL `PUBLISH_NOT_AUTO_READY`** | 자동 7/10 · 서로 다른 화자 7 · 첫 댓글 7 · 감사 2/2 · release stamp 7 · usageUnknown 0 · followup 0 |
 | 10-19 d5 증거 | **FAIL `PUBLISH_NOT_AUTO_READY` · `AUDIT_DEFECT`** | 자동 4/5 · 첫 댓글 4 · followup 3(2개 글) · 감사 1/1 결함 yes |
 | 10-20 11:39 다음 d10 preflight | **FAIL(오판 재현)** | `OPPORTUNITY_SHORT` · `THROUGHPUT_SHORT` · `SUPPLY_COST_UNKNOWN` · 같은 날 06:15 공급을 전날 자정에서 잘라 READY 0 |
+| 10-20 14:15 v13 자연 공급 | **완주 · 병목 재현** | 원천 9 · ADOPT 3 · HOLD 5 · READY/발행 1 · 호출 26 · $0.0891 · usageUnknown 0 · 추가/누락 경고만 있던 2건이 auto-READY 끝단에서 재차단 |
+| 10-20 14:38 다음 d10 preflight | **FAIL(실측 병목)** | 기회 10 · Persona/댓글/품질 정상 · 처리량 7/10 · 투영 공급비 $0.891/$0.80 |
 
 10-18 실패는 자동 READY 공급량 부족이었다. #760의 최신 원천 우선과 뒤이은 자동 품질 생명주기는 배포됐다.
 10-19에는 성인 자녀 Persona가 2살 아이를 자기 자녀처럼 말한 v12 결함과 4/5가 확인됐다. 10-20 preflight의
@@ -80,7 +83,7 @@ READY 0은 공급 0이 아니라 시계 결함이다. 두 결함의 보정 이�
 | PR | 상태 | 채택된 목적 | 운영 반영 조건 |
 |---|---|---|---|
 | #762 D20 Persona 이름 | Draft · CLEAN · exact-head CI PASS | P34~P43 합성 닉네임 다양화, 실제 닉네임 복제 금지 | D10 PASS → 충돌 gate → DB 생성·활성화 |
-| D10 복구 packet | 로컬 통합 후보 | quality-v13 + preflight 롤링 72h + 기존 DB CI 연결 | exact-head CI → main → 전환 → runtime |
+| quality-v14 보정 | 로컬 검증 중 | Content Core ADOPT의 경고 전용 축을 auto-READY가 다시 차단하지 않음 | targeted·격리 DB → exact-head CI → main → 전환 → runtime |
 
 Draft와 로컬 후보를 운영 PASS로 쓰지 않는다. #762는 D10 operating PASS 전 활성화하지 않고, 복구 packet은
 exact-head 검증과 quality-v13 전환 순서를 한 번에 확인한다.
@@ -89,8 +92,8 @@ exact-head 검증과 quality-v13 전환 순서를 한 번에 확인한다.
 
 | blocker | 현재 | 해소 조건 |
 |---|---|---|
-| `AUDIT_DEFECT` | quality-v12 미해소 1건 · gate closed | quality-v13 실제 행 확정 차단 → 공식 해소 기록 → unresolved 0 |
-| `PREFLIGHT_FAIL` | READY 0 오판 · 06:15 공급 누락 | 롤링 72h 용량 창 배포 뒤 controller dry-run 재측정 |
+| `THROUGHPUT_SHORT` | v13 원천 9건 · ADOPT 3건 중 READY 1건 → 처리량 7/10 | quality-v14에서 경고 전용 ADOPT 2건도 READY로 이어지는지 17:15 자연 회차 확인 |
+| `SUPPLY_COST_SHORT` | READY 1건 기준 결과당 $0.0891 → D10 $0.891 > $0.80 | 같은 호출비에서 READY 수율이 회복돼 투영액 ≤ $0.80 |
 | `LATE_START` | 오늘 첫 d10 슬롯 뒤 판정 | 조각 하루를 열지 않고 다음 유효 전체 슬롯에서 자연 시험 |
 | `PUBLISH_NOT_AUTO_READY` | 10-19 자동 4/5 | 보정된 자연 공급에서 10개 slot-valid READY 증명 |
 
@@ -119,7 +122,7 @@ exact-head 검증과 quality-v13 전환 순서를 한 번에 확인한다.
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D10-FIX | quality-v13·preflight 시계 보정 통합·계약 전환·runtime sync | exact-head CI · unresolved 0 · gate open · HEAD=pin=manifest | 기존 D5/D10 증거 수정 |
+| D10-FIX | quality-v14 경고 의미 정합·계약 전환·runtime sync | exact-head CI · unresolved 0 · gate open · HEAD=pin=manifest | 기존 v13 행 변경·수동 READY |
 | D10 | 다음 자연 D10 재시험 | 자동 10/10·첫 댓글 10·선택적 추가 0~4·감사·usageUnknown 0·중복 0 | 수동 stage·READY·게시 |
 | P20 | #762 기반 Persona 40 활성화 | D10 PASS · 이름/말투/카드/회원·크롤 작성자 충돌 0 · contract-valid 40 | 이름만 만들고 용량으로 계산 |
 | C20 | D20 댓글·공급 profile | D10 실측 단가·수율·추가 댓글 결과로 예산과 run cap 산정 | 근거 없는 선증액 |

@@ -58,7 +58,7 @@ const D = qualityContractDigest()
 const INDEPENDENT = createHash('sha256').update(stableJson(qualityContractComponents()), 'utf8').digest('hex')
 check('digest 는 sha256 hex 64', /^[0-9a-f]{64}$/.test(D))
 check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 digest 는 코드 상수 그대로 (독립 재계산과 같다)**',
-  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v13', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
+  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v14', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
 const comps = qualityContractComponents()
 check('🔴 digest 구성 — 게이트·검수·판정 판이 들어 있다',
   ['version', 'pipelineVersion', 'promptVersion', 'reviewVersion', 'draftRuleVersion', 'draftGateVersion', 'draftGateCodes', 'judgeContractDigest', 'semanticHoldCodes']
@@ -127,7 +127,7 @@ type Rev = { user?: string; hd: 'yes' | 'no' | 'unmeasured'; at?: string }
 let n = 0
 const row = (o: {
   kind?: Kind; hd?: 'yes' | 'no' | 'unmeasured'; mark?: 'current' | 'legacy' | 'otherDigest' | 'otherVersion'
-  holds?: string[]; at?: number; id?: string; reviews?: Rev[]; machine?: boolean
+  holds?: string[]; semanticReview?: typeof GOOD_SR; at?: number; id?: string; reviews?: Rev[]; machine?: boolean
 } = {}): CohortRow => {
   n += 1
   const kind = o.kind ?? 'noEdit'
@@ -156,7 +156,7 @@ const row = (o: {
     decidedBy: kind === 'pending' ? 'machine:auto-draft-v5' : 'founder',
     editDiff: records.length === 0 ? null : { [EVIDENCE_REVIEW_KEY]: records },
     ...bound, gateVerdict: 'PASS', machine: o.machine ?? true,
-    gateResults: { holds: o.holds ?? [], blocks: [], semanticReview: GOOD_SR, ...qcm },
+    gateResults: { holds: o.holds ?? [], blocks: [], semanticReview: o.semanticReview ?? GOOD_SR, ...qcm },
   }
 }
 const good = (k: number, o: Parameters<typeof row>[0] = {}) => Array.from({ length: k }, () => row(o))
@@ -237,11 +237,12 @@ check('무수정 최소 = ceil(30×0.9) = 27 (정수 계산)', noEditNeed() === 
   check('🔴 🔴 **#7 창 안 결속이 깨짐(검토 뒤 수정) → 닫힘 · bindingBroken**', !open(br).meetsContract && open(br).firstBlocking?.why === 'bindingBroken')
 }
 {
-  const ws = [...good(4), row({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'], kind: 'pending' }), ...good(23), ...good(3, { kind: 'edited' })]
+  const warning = { ...GOOD_SR, unsupportedAdditions: 1 }
+  const ws = [...good(4), row({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'], semanticReview: warning, kind: 'pending' }), ...good(23), ...good(3, { kind: 'edited' })]
   const v = open(ws)
-  check('🔴 🔴 **#8(Q2) 경고 행은 수열에 들지 않는다 — 미검토 경고 행이 끼어도 열림**', v.meetsContract && v.sequence === 30, v.reasons.join(' · '))
-  const wd = [...good(27), ...good(3, { kind: 'edited' }), row({ holds: ['X'], kind: 'declined', hd: 'yes' })]
-  check('🔴 경고 행(자동 대상 아님)의 사람 결함은 이 계약의 자동 표본 결함이 아니다', open(wd).meetsContract && open(wd).cohortHardDefects === 0)
+  check('🔴 🔴 **#8(Q2) 경고 전용 행도 자동 적격 수열에 든다 — 첫 미검토를 건너뛰지 않는다**', !v.meetsContract && v.sequence === 31 && v.firstBlocking?.index === 5, v.reasons.join(' · '))
+  const wd = [...good(27), ...good(3, { kind: 'edited' }), row({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'], semanticReview: warning, kind: 'declined', hd: 'yes' })]
+  check('🔴 경고 전용 행의 사람 결함도 지금 계약 결함으로 센다', !open(wd).meetsContract && open(wd).cohortHardDefects === 1)
 }
 {
   const base = [...good(27), ...good(3, { kind: 'edited' })]

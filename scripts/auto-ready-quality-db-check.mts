@@ -82,7 +82,7 @@ async function main(): Promise<void> {
     author = (await prisma.user.create({ data: { nickname: '작성자' }, select: { id: true } })).id
   }
   /** 🔴 적재기가 만드는 모양 — 결정 전(machine:*) · APPROVED · 생성 순서는 createdAt */
-  const seed = async (o: { legacy?: boolean; holds?: string[]; status?: 'APPROVED' | 'EXPIRED'; persona?: { id: string; code: string } } = {}) => {
+  const seed = async (o: { legacy?: boolean; holds?: string[]; semanticReview?: typeof GOOD_SR; status?: 'APPROVED' | 'EXPIRED'; persona?: { id: string; code: string } } = {}) => {
     seq += 1
     const k = seq
     const raw = await prisma.microSeedRawContent.create({
@@ -102,7 +102,7 @@ async function main(): Promise<void> {
         createdAt: new Date(T0 + k * 60_000),
         ...(o.persona === undefined ? {} : { matchedPersonaId: o.persona.id, matchedAt: NOW }),
         gateResults: {
-          holds: o.holds ?? [], blocks: [], semanticReview: GOOD_SR,
+          holds: o.holds ?? [], blocks: [], semanticReview: o.semanticReview ?? GOOD_SR,
           autoDraft: {
             provenance: af.MACHINE_PROFILE.envelopeProvenance, sourceDecision: af.MACHINE_PROFILE.sourceDecision,
             draftRuleVersion: af.MACHINE_PROFILE.envelopeRuleVersion,
@@ -289,9 +289,10 @@ async function main(): Promise<void> {
     // 🔴 (quality-v4) 사람 표본은 그대로 센다(무수정 26 · 폐기 4) — 사람 비율은 v4 열림 근거가 아니다(창업자 gold)
     check('🔴 🔴 **#6 26/30 — 무수정 26 · 폐기 4 로 그대로 센다(폐기도 표본) · v4 열림은 gold**',
       v.meetsContract && v.basis === 'founderGold' && v.noEdit === 26 && v.declined === 4, v.reasons.join(' · '))
-    // 미검토 경고 행이 끼어도 수열 밖
-    const warn = await seed({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'] })
-    check('🔴 경고 행은 수열에 들지 않는다', !(await evidenceFromDb(prisma)).windowIds.includes(warn.id))
+    // 경고 전용 행도 자동 적격 수열에 들어가지만, 뒤에 생성돼 첫 30건 창 밖이다
+    const warn = await seed({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'], semanticReview: { ...GOOD_SR, unsupportedAdditions: 1 } })
+    const withWarn = await evidenceFromDb(prisma)
+    check('🔴 경고 전용 행은 수열에 들고 생성 순서상 첫 30건 창 밖이다', withWarn.sequence === 31 && !withWarn.windowIds.includes(warn.id))
     // 판이 섞인 행 — legacy 30 건은 아무리 좋아도 수열에 없다
     const lg: Seeded[] = []
     for (let i = 0; i < 3; i += 1) lg.push(await seed({ legacy: true }))
