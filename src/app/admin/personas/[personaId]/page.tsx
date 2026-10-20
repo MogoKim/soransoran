@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import {
@@ -39,12 +38,12 @@ export default async function AdminPersonaDetailPage({
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <Link href="/" className="mt-6 inline-block text-link">홈으로 가기</Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -111,8 +110,8 @@ export default async function AdminPersonaDetailPage({
   ]
 
   return (
-    <PageShell chrome="minimal">
-      <main className="mx-auto max-w-3xl px-4 pb-16">
+    <>
+      <div className="mx-auto max-w-3xl px-4 pb-16">
         <Link href="/admin/personas" className="mt-8 inline-block text-xs text-link">
           ← 관제실
         </Link>
@@ -209,7 +208,7 @@ export default async function AdminPersonaDetailPage({
             ))}
           </ul>
         )}
-      </main>
-    </PageShell>
+      </div>
+    </>
   )
 }

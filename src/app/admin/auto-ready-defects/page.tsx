@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import PageShell from '@/components/layouts/PageShell'
 import AutoReadyDefectReportForm from '@/components/admin/AutoReadyDefectReportForm'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
@@ -30,13 +29,13 @@ export default async function AutoReadyDefectsPage() {
   const { ok } = await requireAdmin()
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">홈으로 가기</Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
   let rows: ReportableRow[] = []
@@ -48,8 +47,8 @@ export default async function AutoReadyDefectsPage() {
     readError = '자동 발행 목록을 읽지 못했습니다.'
   }
   return (
-    <PageShell chrome="minimal">
-      <main className="mx-auto max-w-3xl px-4 py-8">
+    <>
+      <div className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="mb-2 text-xl font-bold text-content-primary">자동 READY 결함 신고</h1>
         <p className="mb-6 text-sm text-content-muted">
           자동으로 발행된 글에서 중대 결함(없는 사실 · 생활사 모순 · 원문 왜곡 등)을 찾으면 신고합니다.
@@ -72,7 +71,7 @@ export default async function AutoReadyDefectsPage() {
             </li>
           ))}
         </ul>
-      </main>
-    </PageShell>
+      </div>
+    </>
   )
 }

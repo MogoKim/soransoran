@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import { formatKst, filledMark } from '@/lib/persona-admin'
@@ -35,15 +34,15 @@ export default async function OriginalPostCandidateDetailPage(
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">
             홈으로 가기
           </Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -66,14 +65,14 @@ export default async function OriginalPostCandidateDetailPage(
 
   if (row === null) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">후보를 찾을 수 없습니다</h1>
           <Link href="/admin/original-post-candidates" className="mt-6 inline-block text-link">
             대기열로 돌아가기
           </Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -83,7 +82,7 @@ export default async function OriginalPostCandidateDetailPage(
   const drfLen = [...row.draftBody].length
 
   return (
-    <PageShell>
+    <>
       <div className="mx-auto w-full max-w-5xl px-4 py-6">
         <Link href="/admin/original-post-candidates" className="text-sm text-link underline">
           ← 대기열
@@ -190,6 +189,6 @@ export default async function OriginalPostCandidateDetailPage(
           </dl>
         </section>
       </div>
-    </PageShell>
+    </>
   )
 }

@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import { maskNickname, filledMark, STATUS_LABEL, formatKst } from '@/lib/persona-admin'
@@ -35,15 +34,15 @@ export default async function AdminPersonasPage() {
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">
             홈으로 가기
           </Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -82,8 +81,8 @@ export default async function AdminPersonasPage() {
   const stopped = killSwitch?.enabled === true
 
   return (
-    <PageShell chrome="minimal">
-      <main className="mx-auto max-w-5xl px-4 pb-16">
+    <>
+      <div className="mx-auto max-w-5xl px-4 pb-16">
         <h1 className="pt-8 text-xl font-bold text-content-primary">페르소나 관제실</h1>
         <p className="mt-1 text-sm text-content-muted">
           읽기 전용입니다. 상태 전환 · 중지 · 수정은 아직 여기서 하지 않습니다.
@@ -211,7 +210,7 @@ export default async function AdminPersonasPage() {
         <p className="mt-8 text-xs text-content-muted">
           🔴 고객 화면에는 페르소나 표시가 없습니다(전략 §10-1). 구분은 여기에서만 합니다.
         </p>
-      </main>
-    </PageShell>
+      </div>
+    </>
   )
 }

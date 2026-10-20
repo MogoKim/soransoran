@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import {
@@ -63,15 +62,15 @@ export default async function PersonaCandidateDetailPage(
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">
             홈으로 가기
           </Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -99,7 +98,7 @@ export default async function PersonaCandidateDetailPage(
   const notRun = gates.filter((g) => g.outcome === 'notRun')
 
   return (
-    <PageShell>
+    <>
       <div className="mx-auto w-full max-w-3xl px-4 py-6">
         <Link href="/admin/persona-candidates" className="text-sm text-link underline">
           ← 대기열
@@ -263,6 +262,6 @@ export default async function PersonaCandidateDetailPage(
           </p>
         )}
       </div>
-    </PageShell>
+    </>
   )
 }
