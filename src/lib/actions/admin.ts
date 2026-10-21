@@ -15,6 +15,8 @@ import { checkContent } from '@/lib/content-guard'
 import { sanitizePostHtml, isHtmlContent } from '@/lib/post-html'
 import { firstImageUrl } from '@/lib/post-media'
 import { applyMemberBlock, syncBestEligibility } from '@/lib/best-ranking-db'
+import { BOARD_MOVE_BLOCK_MESSAGE, isMovableBoard, type MovableBoard } from '@/lib/board-move'
+import { movePostBoardTx } from '@/lib/board-move-tx'
 
 /**
  * 어드민 1차 MVP — 운영 write 경로. 🔴 이 파일이 유일한 지점이다.
@@ -138,6 +140,43 @@ export async function setPostHidden(postId: string, hidden: boolean): Promise<Ad
   revalidatePath('/admin/home')
   revalidatePostSurfaces(postId, post.boardType)
   return { ok: true }
+}
+
+export type BoardMoveActionState =
+  | { ok: true; from: MovableBoard; to: MovableBoard; href: string | null }
+  | { ok?: undefined; error: string; code?: string }
+
+/**
+ * 게시판 변경 — 자유게시판 ↔ 갱년기톡. 본문 수정(updatePost)과 다른 action 이다.
+ *
+ * 🔴 판정 · 쓰기는 board-move-tx.ts 의 트랜잭션 하나다. 여기서는 권한 · 입력 모양 · revalidate 만 한다.
+ *    화면이 막아도 서버가 다시 판정한다 — 자동 운영 글 · 가입인사 · 열린 Persona 후보 · 숨김 글.
+ * 🔴 옛 주소는 고객 상세가 새 정식 주소로 308 보낸다(community/[boardSlug]/[postId]/page.tsx).
+ *    그래서 옛 게시판의 목록 · 상세와 새 게시판의 목록 · 상세를 함께 다시 그린다.
+ */
+export async function movePostBoard(postId: string, from: string, to: string): Promise<BoardMoveActionState> {
+  const { ok } = await requireAdmin()
+  if (!ok) return { error: '권한이 없습니다.', code: 'DENIED' }
+  if (!postId) return { error: '글을 찾지 못했습니다.' }
+  // 목표는 여기서 먼저 거른다. 지금 게시판(from)은 트랜잭션이 실제 값과 대조한다(매거진이면 거기서 막힌다).
+  if (typeof from !== 'string' || !isMovableBoard(to)) {
+    return { error: BOARD_MOVE_BLOCK_MESSAGE.INVALID_TARGET, code: 'INVALID_TARGET' }
+  }
+
+  const res = await movePostBoardTx(prisma, { postId, from, to })
+  if (!res.ok) return { error: res.message, code: res.code }
+
+  revalidatePath(`/admin/content/${postId}`)
+  revalidatePath('/admin/content')
+  revalidatePath('/admin/home')
+  // 옛 게시판 — 목록에서 빠지고 상세는 새 주소로 보낸다
+  const oldHref = communityPostHref(postId, res.from)
+  if (oldHref) revalidatePath(oldHref)
+  const oldBoard = getBoardByType(res.from)
+  if (oldBoard) revalidatePath(oldBoard.href)
+  // 새 게시판 목록 · 상세 · 홈 · /best
+  revalidatePostSurfaces(postId, res.to)
+  return { ok: true, from: res.from, to: res.to, href: communityPostHref(postId, res.to) }
 }
 
 /** 댓글 숨김/복구 — isDeleted 만 바꾼다 (행을 지우지 않는다) */

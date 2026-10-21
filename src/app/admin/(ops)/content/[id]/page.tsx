@@ -9,6 +9,9 @@ import { GUEST_BADGE } from '@/lib/guest-comment-policy'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminPostEditForm from '@/components/admin/AdminPostEditForm'
 import AdminCommentEditForm from '@/components/admin/AdminCommentEditForm'
+import AdminBoardMovePanel from '@/components/admin/AdminBoardMovePanel'
+import { readBoardMoveFacts } from '@/lib/board-move-tx'
+import { judgeBoardMoveSource } from '@/lib/board-move'
 import {
   AdminPageHeader,
   AdminSection,
@@ -89,6 +92,9 @@ export default async function AdminContentDetailPage({
   const publicHref = communityPostHref(post.id, post.boardType)
   const pendingReports = post.reports.filter((r) => r.status === 'PENDING').length
   const hiddenComments = post.comments.filter((c) => c.isDeleted).length
+  // 게시판 변경 — 서버 트랜잭션과 같은 사실 읽기 · 같은 판정 함수를 쓴다(표시용)
+  const moveFacts = await readBoardMoveFacts(prisma, post.id)
+  const moveBlock = moveFacts === null ? null : judgeBoardMoveSource(moveFacts)
 
   return (
     <div>
@@ -244,6 +250,15 @@ export default async function AdminContentDetailPage({
           </ul>
         )}
       </AdminSection>
+
+      {/* 🔴 게시판 변경은 본문 수정과 다른 조치다 — 판정 · 쓰기가 따로다(board-move-tx.ts).
+            옮길 수 없는 글도 패널을 숨기지 않고 이유를 보인다. 판정은 서버가 트랜잭션 안에서 다시 한다. */}
+      <AdminBoardMovePanel
+        postId={post.id}
+        current={post.boardType}
+        boardLabels={{ FREE: boardLabel('FREE'), MENOPAUSE: boardLabel('MENOPAUSE') }}
+        blockedReason={moveBlock?.message ?? (moveFacts === null ? '글을 찾지 못했습니다.' : null)}
+      />
 
       <section className="mt-8 border-t border-subtle pt-6">
         {deleted ? (

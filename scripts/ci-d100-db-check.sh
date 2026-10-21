@@ -68,3 +68,7 @@ npm run persona:autogen-db-check
 npm run persona:creative-db-check
 npm run persona:remediation-db-check
 npm run check:post-exposure-db
+# 어드민 게시판 변경 — 자동 운영 글(Persona · Micro Seed · 오리지널 큐) · 열린 Persona 후보 차단과
+# 자동 운영 기록 write 0 을 실제 트랜잭션으로 잰다. 판정표는 DB 없이 먼저 본다.
+npm run check:board-move
+npm run board-move:db-check
