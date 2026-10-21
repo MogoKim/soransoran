@@ -15,7 +15,7 @@ import { INTEGRITY_MODEL, INTEGRITY_PROMPT_VERSION } from '../src/lib/auto-ready
 import {
   SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION, SEMANTIC_AUDITOR, SEMANTIC_PAID_ENV,
   SEMANTIC_AUDIT_MAX_OUTPUT_TOKENS, semanticPaidEnabled, parseSemanticAuditResponse, judgeSemantic, semanticBindingOf,
-  buildSemanticAuditRequest, combineAuditVerdicts, semanticNoteHead, AUDIT_BUDGET_ENV,
+  buildSemanticAuditRequest, combineAuditVerdicts, semanticNoteHead, AUDIT_BUDGET_ENV, SEMANTIC_AUDIT_SYSTEM_PROMPT,
   type CombinedAudit, type SemanticAuditContext, type SemanticAuditProvider, type SemanticVerdict,
 } from '../src/lib/auto-ready-semantic-audit'
 import {
@@ -65,6 +65,22 @@ console.log('① 판 · 모델 · 계약 — 무결성 감사자와 섞지 않�
   check('🔴 자동 감사자는 human:* · founder 일 수 없다', !automatedAuditorOk('human:operator') && !automatedAuditorOk('founder') && !automatedAuditorOk(' ') && automatedAuditorOk(`${SEMANTIC_AUDITOR}:runner`))
   check('🔴 의미 감사 모델은 가격표에 단가가 있다 — 예약액을 낼 수 있다', priceOf(SEMANTIC_AUDIT_MODEL) !== null)
   check('🔴 장부 단계 semanticAudit 는 유료 단계다', (LEDGER_STAGES as readonly string[]).includes('semanticAudit') && PAID_STAGES.includes('semanticAudit'))
+  check('🟢 bounded creativity — 감상·질문·재구성·자연스러운 강조와 비핵심 생략은 결함이 아니다',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('감상·반응·질문·비유·연결 문장·일반적 관찰·새로운 구성')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('정도 부사·강조 부사의 추가')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('같은 주체가 같은 행동을 했다고 명시했다면')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('새 사건·새 행위자·새 사실이라 하지 않는다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('핵심 사실을 바꾸지 않는 자연스러운 강조')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('세부 내용을 일부 생략했어도'))
+  check('🟢 no 출력은 허용 표현 설명 없이 세 배열을 비우는 단일 모양이다',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('허용된 표현이나 결함이 아닌 이유를 배열에 설명하지 않는다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('defect 가 "no"이면 세 배열은 반드시 모두 []이다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('{"unsupportedFacts":[],"lifeContradictions":[],"sourceDistortions":[],"defect":"no"}')
+    && !SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('[{"claim":"","why":""}]'))
+  check('🔴 계속 막는 경계 — 구체 사실·명시적 생활사 모순·핵심 주체/행동/원인/결과/결론 왜곡',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('숫자·금액·장소·새 사건·진단')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('같은 주어·같은 사실 축')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('주체·핵심 행동·원인·결과·결론'))
 }
 
 console.log('\n② 🔴 유료 호출 — 기본 OFF')

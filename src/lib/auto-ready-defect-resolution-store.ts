@@ -18,12 +18,16 @@ import { Prisma, type PrismaClient } from '@prisma/client'
 
 import { digestOf } from './auto-ready-v2'
 import {
-  DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, DEFECT_RESOLVER,
+  DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, DEFECT_RESOLVER, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
   auditFingerprintOf, judgeDefectResolution, resolvableDefectProblem, resolutionEntriesOf, reverifyInputDigestOf,
-  type DefectResolutionRecord,
+  type AuditRowForResolution, type DefectResolutionRecord, type QueueRowForResolution,
 } from './auto-ready-defect-resolution'
 import { DRAFT_GATE_VERSION, judgeDraftLife, type DraftGateCard, type DraftGatePlan, type DraftGateSource } from './content-core/draft-life-gates'
 import { currentQualityContract } from './quality-contract'
+import {
+  SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
+  judgeSemantic, semanticBindingOf, type SemanticAuditProvider, type SemanticContextResult,
+} from './auto-ready-semantic-audit'
 
 type Tx = Prisma.TransactionClient
 
@@ -41,6 +45,7 @@ export type ReverifyQueueRow = {
   rawSourceSite: string; rawSourceArticleId: string; matchedPersonaCode: string | null
 }
 export type ContextLoader = (row: ReverifyQueueRow) => { ok: true; ctx: ReverifyContext } | { ok: false; code: string; reason: string }
+export type SemanticResolutionContextLoader = (row: { queueId: string; postId: string }) => Promise<SemanticContextResult>
 
 export type ResolutionPlan = {
   queueId: string
@@ -185,6 +190,138 @@ export async function applyDefectResolution(prisma: PrismaClient, i: {
       })
       if (r.count !== 1) return { kind: 'changed', written: 0, reason: '쓰는 순간 큐 행이 바뀌었다' }
       return { kind: 'written', written: 1 }
+    }, SERIALIZABLE)
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2034') {
+      return { kind: 'race', written: 0, reason: '직렬화 충돌 — 다른 쓰기가 먼저였다' }
+    }
+    throw e
+  }
+}
+
+type SemanticBase = {
+  audit: AuditRowForResolution
+  queueUpdatedAt: Date
+  queue: QueueRowForResolution
+}
+
+async function semanticBaseInTx(tx: Tx, queueId: string): Promise<
+  | { kind: 'base'; base: SemanticBase }
+  | { kind: 'already'; reason: string }
+  | { kind: 'refuse'; code: string; reason: string }
+> {
+  const audit = await tx.autoReadyAudit.findUnique({ where: { queueId } })
+  if (audit === null) return { kind: 'refuse', code: 'NO_AUDIT', reason: '감사 행이 없다' }
+  const q = await tx.originalPostApprovalQueue.findUnique({
+    where: { id: queueId },
+    select: { id: true, status: true, createdPostId: true, updatedAt: true, draftTitle: true, draftBody: true, gateResults: true, editDiff: true },
+  })
+  const qr = q === null ? null : {
+    id: q.id, createdPostId: q.createdPostId, draftTitle: q.draftTitle, draftBody: q.draftBody,
+    gateResults: q.gateResults, editDiff: q.editDiff,
+  }
+  const pre = resolvableDefectProblem(audit, qr)
+  if (pre !== null) return { kind: 'refuse', code: 'NOT_RESOLVABLE', reason: pre }
+  if (q!.status !== 'PUBLISHED') return { kind: 'refuse', code: 'NOT_PUBLISHED', reason: `큐 상태 ${q!.status}` }
+  const post = await tx.post.findUnique({ where: { id: audit.postId }, select: { title: true, content: true } })
+  if (post === null) return { kind: 'refuse', code: 'NO_POST', reason: '감사 대상 글이 없다' }
+  if (digestOf(post.title) !== audit.publishedTitleHash || digestOf(post.content) !== audit.publishedBodyHash) {
+    return { kind: 'refuse', code: 'POST_CHANGED', reason: '발행 글이 감사가 묶은 글과 다르다' }
+  }
+  const already = judgeDefectResolution(audit, qr!, currentQualityContract())
+  if (already.resolved) return { kind: 'already', reason: already.reason }
+  return { kind: 'base', base: { audit, queueUpdatedAt: q!.updatedAt, queue: qr! } }
+}
+
+/**
+ * 새 의미 감사 계약으로 같은 글·도장·원문·Persona 결속을 다시 측정해 `no`일 때만 해소 계획을 만든다.
+ * 원래 감사 행은 고치지 않으며, 재시도 실패·무결성·새 결함은 모두 refuse다.
+ */
+export async function planSemanticDefectResolution(prisma: PrismaClient, i: {
+  queueId: string; loadContext: SemanticResolutionContextLoader; provider: SemanticAuditProvider; now: Date
+}): Promise<Evaluation> {
+  const base = await prisma.$transaction((tx) => semanticBaseInTx(tx, i.queueId), {
+    isolationLevel: 'RepeatableRead', maxWait: 5_000, timeout: 20_000,
+  })
+  if (base.kind !== 'base') return base
+  const context = await i.loadContext({ queueId: base.base.audit.queueId, postId: base.base.audit.postId })
+  const semantic = await judgeSemantic(context, i.provider)
+  if (semantic.outcome !== 'measured' || semantic.defect !== 'no' || semantic.binding === null) {
+    return {
+      kind: 'refuse', code: semantic.outcome === 'retryable' ? (semantic.code ?? 'SEMANTIC_RETRYABLE') : 'SEMANTIC_NOT_CLEAR',
+      reason: semantic.reasons.join(' · ') || `의미 재감사 결과 ${semantic.outcome}/${semantic.defect}`,
+    }
+  }
+  if (semantic.binding.postId !== base.base.audit.postId
+    || semantic.binding.titleHash !== base.base.audit.publishedTitleHash
+    || semantic.binding.bodyHash !== base.base.audit.publishedBodyHash) {
+    return { kind: 'refuse', code: 'SEMANTIC_BINDING_MISMATCH', reason: '의미 재감사 결속이 감사 대상 글과 다르다' }
+  }
+  const record: DefectResolutionRecord = {
+    recordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+    qualityContract: currentQualityContract(),
+    audit: {
+      queueId: base.base.audit.queueId, postId: base.base.audit.postId,
+      fingerprint: auditFingerprintOf(base.base.audit),
+    },
+    draft: { titleHash: digestOf(base.base.queue.draftTitle), bodyHash: digestOf(base.base.queue.draftBody) },
+    reverify: {
+      gateVersion: 'semantic-only', outcome: 'semanticCleared', failureCodes: [], reviewCodes: [],
+      inputDigest: semantic.binding.digest, artifactId: semantic.binding.artifactId,
+      semanticContractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, semanticModel: SEMANTIC_AUDIT_MODEL,
+      semanticPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
+    },
+    resolvedAt: i.now.toISOString(), resolvedBy: DEFECT_RESOLVER,
+  }
+  return {
+    kind: 'plan',
+    plan: {
+      queueId: base.base.audit.queueId, postId: base.base.audit.postId,
+      auditFingerprint: record.audit.fingerprint, queueUpdatedAt: base.base.queueUpdatedAt.toISOString(), record,
+    },
+  }
+}
+
+/**
+ * 승인된 의미 재감사 계획을 append-only로 기록한다. provider 판정은 계획 단계가 담당하고,
+ * 여기서는 쓰기 직전에 같은 결속을 정본 파일과 DB에서 다시 계산해 계획과 대조한다.
+ */
+export async function applySemanticDefectResolution(prisma: PrismaClient, i: {
+  plan: ResolutionPlan; loadContext: SemanticResolutionContextLoader; now: Date
+}): Promise<ApplyOutcome> {
+  const rv = i.plan.record.reverify
+  if (rv.outcome !== 'semanticCleared') return { kind: 'refuse', written: 0, code: 'WRONG_METHOD', reason: '의미 재감사 해소 계획이 아니다' }
+  const currentContext = await i.loadContext({ queueId: i.plan.queueId, postId: i.plan.postId })
+  if (!currentContext.ok) return { kind: 'refuse', written: 0, code: currentContext.code, reason: currentContext.reason }
+  const binding = semanticBindingOf(currentContext.ctx)
+  if (binding.digest !== rv.inputDigest || binding.artifactId !== rv.artifactId) {
+    return { kind: 'changed', written: 0, reason: '계획 뒤 의미 재감사 결속이 바뀌었다' }
+  }
+  try {
+    return await prisma.$transaction(async (tx): Promise<ApplyOutcome> => {
+      const base = await semanticBaseInTx(tx, i.plan.queueId)
+      if (base.kind === 'already') return { kind: 'already', written: 0, reason: base.reason }
+      if (base.kind === 'refuse') return { ...base, written: 0 }
+      const current: ResolutionPlan = {
+        queueId: base.base.audit.queueId, postId: base.base.audit.postId,
+        auditFingerprint: auditFingerprintOf(base.base.audit), queueUpdatedAt: base.base.queueUpdatedAt.toISOString(),
+        record: { ...i.plan.record, resolvedAt: i.now.toISOString() },
+      }
+      const diff = samePlan(i.plan, current)
+      if (diff !== null) return { kind: 'changed', written: 0, reason: diff }
+      const ed = rec(base.base.queue.editDiff)
+      const updated = await tx.originalPostApprovalQueue.updateMany({
+        where: { id: i.plan.queueId, updatedAt: base.base.queueUpdatedAt },
+        data: {
+          editDiff: {
+            ...ed,
+            [DEFECT_RESOLUTION_KEY]: [...resolutionEntriesOf(base.base.queue.editDiff), { ...i.plan.record, resolvedAt: i.now.toISOString() }],
+          } as Prisma.InputJsonValue,
+        },
+      })
+      return updated.count === 1
+        ? { kind: 'written', written: 1 }
+        : { kind: 'changed', written: 0, reason: '쓰는 순간 큐 행이 바뀌었다' }
     }, SERIALIZABLE)
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2034') {

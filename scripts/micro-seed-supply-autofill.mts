@@ -48,6 +48,7 @@ import {
   type Envelope, type AutoJudgeProvenance,
 } from '../src/lib/micro-seed-supply-autofill'
 import { FILL_REPORT_PREFIX, type FillReport, type FillReportFile, type FillSkipCode } from '../src/lib/supply-fill-retry'
+import { eligibilityOf, type RowVerdict } from '../src/lib/auto-ready-v2'
 // 🔴 적재 직전 재검증 — 새 판정을 만들지 않고 §4-AS 의 함수를 그대로 쓴다
 import { echoesTitleAtEnd, hasBannedWord } from '../src/lib/micro-seed-auto-draft'
 /** 🔴 독창성 정본 — 생성 · 적재 · 여기가 같은 함수를 쓴다 */
@@ -166,6 +167,24 @@ function fillReport(input: {
   }
 }
 function autoJudgeOf(c: Candidate): AutoJudgeProvenance { return ajMap.get(c as object) ?? {} }
+
+/**
+ * JIT 상한을 자르기 전에 자동 READY까지 갈 수 있는 기계 후보를 앞에 둔다.
+ * 나머지 후보는 기존 큐 의미를 보존하려고 제거하지 않고 뒤에 둔다.
+ */
+export function autoReadyPriority(input: {
+  candidate: Candidate
+  payload: ReturnType<typeof buildQueuePayload>
+}): { priority: boolean; verdict: RowVerdict | null } {
+  if (input.payload === null || input.payload.profile === 'human') {
+    return { priority: false, verdict: null }
+  }
+  const verdict = eligibilityOf({
+    gateVerdict: 'PASS', gateResults: input.payload.gateResults,
+    title: S(input.candidate.title), body: S(input.candidate.body),
+  })
+  return { priority: verdict.auto, verdict }
+}
 
 /**
  * 🔴 **후보가 들고 온 의미 검수 요약**. 생성 쪽(`micro-seed-auto-draft`)이 artifact 에서
@@ -403,12 +422,34 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── ③-b 적재 예정 payload 미리보기 ──
+  // ── ③-b JIT 적재 우선순위 ──
+  // 🔴 상한을 자르기 전에 실제 자동 READY 정본으로 판정한다. 앞판은 `--up-to=1`을 먼저 잘라
+  //    자동 부적격 후보가 한 자리를 먹고, 같은 파일의 깨끗한 후보가 cut으로 남았다.
+  const selectionNow = new Date().toISOString()
+  const priorityTargets: Candidate[] = []
+  const deferredTargets: { c: Candidate; reasons: readonly string[] }[] = []
+  for (const c of targets) {
+    const payload = buildQueuePayload({
+      envelope: envelopeOf(c), candidate: c, intent: intentOf(c),
+      autoJudge: autoJudgeOf(c), review: reviewOf(c), now: selectionNow,
+    })
+    const v = autoReadyPriority({ candidate: c, payload })
+    if (v.priority) priorityTargets.push(c)
+    else deferredTargets.push({ c, reasons: v.verdict?.reasons ?? [] })
+  }
+  const orderedTargets = [...priorityTargets, ...deferredTargets.map((x) => x.c)]
+  console.log(`\n③-b JIT 자동 READY 우선 ${priorityTargets.length}건 · 후순위 보존 ${deferredTargets.length}건`)
+  for (const x of deferredTargets) {
+    console.log(`   ↘ ${S(x.c.title).slice(0, 22)} — 후순위`
+      + (x.reasons.length === 0 ? '' : ` · ${x.reasons.join(' · ')}`))
+  }
+
+  // ── ③-c 적재 예정 payload 미리보기 ──
   // 🔴 dry-run 에서도 실제 create 에 쓰일 값을 그대로 만들어 profileOf 를 확인한다.
   //    P0 (기계 행에 사람 접두가 붙어 러너가 전부 거절) 이 다시 나면 여기서 먼저 걸린다.
   const askedN = UP_TO ?? LIMIT
-  const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, targets.length) : 0
-  const preview = targets.slice(0, previewN).map((c) => {
+  const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, orderedTargets.length) : 0
+  const preview = orderedTargets.slice(0, previewN).map((c) => {
     const pl = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c, intent: intentOf(c),
       autoJudge: autoJudgeOf(c), review: reviewOf(c), now: new Date().toISOString(),
@@ -428,7 +469,7 @@ async function main(): Promise<void> {
   const nMachine = preview.filter((x) => x.profile === 'machine').length
   const nHuman = preview.filter((x) => x.profile === 'human').length
   const nNull = preview.filter((x) => x.profile === null).length
-  console.log(`\n③-b 적재 예정 ${preview.length}건의 profile — machine ${nMachine} · human ${nHuman} · 만들지 않음 ${nNull}`)
+  console.log(`\n③-c 적재 예정 ${preview.length}건의 profile — machine ${nMachine} · human ${nHuman} · 만들지 않음 ${nNull}`)
   for (const x of preview) {
     console.log(`   ${x.profile === 'machine' ? '✅' : '🔴'} ${String(x.profile)} · ${String(x.decidedBy)} · ${x.title.slice(0, 22)}`)
   }
@@ -436,12 +477,12 @@ async function main(): Promise<void> {
   if (nNull > 0) console.log('   🔴 profile 을 못 만든 건이 있다 — 그 건은 적재 단계에서 건너뛴다')
 
   // ── ④ 실행 판정 ──
-  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO })
+  const gate = judgeApply({ targets: orderedTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO })
   if (!gate.ok) {
     console.log(`\n④ 보충하지 않는다 — ${gate.reason}`)
     // 🔴 관문을 지난 후보가 있었는데 넣지 않았으면 전부 `cut` 이다 — 끝낸 것이 아니다
     console.log(`${FILL_REPORT_PREFIX}${JSON.stringify(fillReport({
-      files: fileCounts, skipped: skippedC, loaded: [], cut: targets, applied: APPLY,
+      files: fileCounts, skipped: skippedC, loaded: [], cut: orderedTargets, applied: APPLY,
     }))}`)
     if (!APPLY) {
       console.log('   🟡 dry-run 입니다. DB write 0 · Post 0'
@@ -583,7 +624,7 @@ async function main(): Promise<void> {
   const takenSet = new Set<object>(gate.take as object[])
   console.log(`${FILL_REPORT_PREFIX}${JSON.stringify(fillReport({
     files: fileCounts, skipped: skippedC, loaded: loadedC,
-    cut: targets.filter((c) => !takenSet.has(c as object)), applied: true,
+    cut: orderedTargets.filter((c) => !takenSet.has(c as object)), applied: true,
   }))}`)
   await prisma.$disconnect()
   process.exit(v.ok ? 0 : 1)

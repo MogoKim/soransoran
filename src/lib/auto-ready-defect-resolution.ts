@@ -27,13 +27,17 @@ import { createHash } from 'node:crypto'
 
 import { digestOf } from './auto-ready-v2'
 import { DRAFT_GATE_CODES, DRAFT_GATE_VERSION } from './content-core/draft-life-gates'
-import { SEMANTIC_AUDITOR, SEMANTIC_AUDIT_CONTRACT_VERSION } from './auto-ready-semantic-audit'
+import {
+  SEMANTIC_AUDITOR, SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
+} from './auto-ready-semantic-audit'
 import { isCurrentQualityContract, type QualityContractMark } from './quality-contract'
 
 /** 🔴 큐 행 `editDiff` 안의 칸 — 해소 기록 배열(덧붙이기만 한다) */
 export const DEFECT_RESOLUTION_KEY = 'autoReadyDefectResolutions'
 /** 🔴 기록 판 — 품질 계약 digest 구성에 들어간다(판정 규칙이 바뀌면 digest 가 바뀌어 옛 기록이 무효가 된다) */
 export const DEFECT_RESOLUTION_RECORD_VERSION = 'defect-resolution-v1'
+/** 의미 감사의 측정된 no로만 쓰는 별도 기록 판 — 기존 초안 게이트 해소 기록과 섞지 않는다. */
+export const SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION = 'defect-resolution-semantic-v1'
 /** 🔴 기록한 쪽 — 사람이 아니다. 재검증을 돌린 저장 경계다 */
 export const DEFECT_RESOLVER = 'system:defect-resolution'
 
@@ -65,20 +69,25 @@ export type QueueRowForResolution = {
   editDiff: unknown
 }
 
+export type DefectReverify = {
+  gateVersion: string
+  outcome: 'blocked' | 'semanticCleared'
+  failureCodes: string[]
+  reviewCodes: string[]
+  /** 🔴 재검증에 넣은 계획·카드·원천·시각의 지문 — 글자는 싣지 않는다 */
+  inputDigest: string
+  artifactId: string
+  semanticContractVersion?: string
+  semanticModel?: string
+  semanticPromptVersion?: string
+}
+
 export type DefectResolutionRecord = {
   recordVersion: string
   qualityContract: QualityContractMark
   audit: { queueId: string; postId: string; fingerprint: string }
   draft: { titleHash: string; bodyHash: string }
-  reverify: {
-    gateVersion: string
-    outcome: 'blocked'
-    failureCodes: string[]
-    reviewCodes: string[]
-    /** 🔴 재검증에 넣은 계획·카드·원천·시각의 지문 — 글자는 싣지 않는다 */
-    inputDigest: string
-    artifactId: string
-  }
+  reverify: DefectReverify
   resolvedAt: string
   resolvedBy: string
 }
@@ -118,7 +127,7 @@ export function resolvableDefectProblem(a: AuditRowForResolution, q: QueueRowFor
   if (auditor !== SEMANTIC_AUDITOR && !auditor.startsWith(`${SEMANTIC_AUDITOR}:`)) {
     return `감사자 ${auditor || '(없음)'} — 기계 의미 감사 결함만 초안 게이트 재검증으로 해소한다(무결성 · 사람 신고는 해소 대상이 아니다)`
   }
-  if (!(a.note ?? '').startsWith(`[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=measured `)) {
+  if (!/^\[auto-ready-semantic-audit-v\d+ outcome=measured /.test(a.note ?? '')) {
     return '의미 감사가 측정한 결함이 아니다(note 머리가 outcome=measured 가 아니다)'
   }
   if (q === null) return '감사 대상 큐 행이 없다'
@@ -141,17 +150,25 @@ export function readResolutionRecord(v: unknown): DefectResolutionRecord | null 
   const str = (x: unknown): x is string => typeof x === 'string' && x !== ''
   const strArr = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === 'string')
   if (!str(r.recordVersion) || !str(qc.version) || !str(qc.digest) || !str(au.queueId) || !str(au.postId)
-    || !str(au.fingerprint) || !str(dr.titleHash) || !str(dr.bodyHash) || !str(rv.gateVersion) || rv.outcome !== 'blocked'
-    || !strArr(rv.failureCodes) || !strArr(rv.reviewCodes) || !str(rv.inputDigest) || !str(rv.artifactId)
-    || !str(r.resolvedAt) || !str(r.resolvedBy)) return null
+    || !str(au.fingerprint) || !str(dr.titleHash) || !str(dr.bodyHash) || !str(r.resolvedAt) || !str(r.resolvedBy)) return null
+  let reverify: DefectReverify
+  if (rv.outcome === 'blocked') {
+    if (!str(rv.gateVersion) || !strArr(rv.failureCodes) || !strArr(rv.reviewCodes) || !str(rv.inputDigest) || !str(rv.artifactId)) return null
+    reverify = { gateVersion: rv.gateVersion, outcome: 'blocked', failureCodes: [...rv.failureCodes], reviewCodes: [...rv.reviewCodes], inputDigest: rv.inputDigest, artifactId: rv.artifactId }
+  } else if (rv.outcome === 'semanticCleared') {
+    if (!str(rv.gateVersion) || !strArr(rv.failureCodes) || !strArr(rv.reviewCodes) || !str(rv.inputDigest) || !str(rv.artifactId)
+      || !str(rv.semanticContractVersion) || !str(rv.semanticModel) || !str(rv.semanticPromptVersion)) return null
+    reverify = {
+      gateVersion: rv.gateVersion, outcome: 'semanticCleared', failureCodes: [...rv.failureCodes], reviewCodes: [...rv.reviewCodes],
+      inputDigest: rv.inputDigest, artifactId: rv.artifactId, semanticContractVersion: rv.semanticContractVersion,
+      semanticModel: rv.semanticModel, semanticPromptVersion: rv.semanticPromptVersion,
+    }
+  } else return null
   return {
     recordVersion: r.recordVersion, qualityContract: { version: qc.version, digest: qc.digest },
     audit: { queueId: au.queueId, postId: au.postId, fingerprint: au.fingerprint },
     draft: { titleHash: dr.titleHash, bodyHash: dr.bodyHash },
-    reverify: {
-      gateVersion: rv.gateVersion, outcome: 'blocked', failureCodes: [...rv.failureCodes], reviewCodes: [...rv.reviewCodes],
-      inputDigest: rv.inputDigest, artifactId: rv.artifactId,
-    },
+    reverify,
     resolvedAt: r.resolvedAt, resolvedBy: r.resolvedBy,
   }
 }
@@ -168,7 +185,9 @@ export function resolutionEntriesOf(editDiff: unknown): unknown[] {
 export function recordProblem(
   r: DefectResolutionRecord, a: AuditRowForResolution, q: QueueRowForResolution, contract: QualityContractMark,
 ): string | null {
-  if (r.recordVersion !== DEFECT_RESOLUTION_RECORD_VERSION) return `기록 판 ${r.recordVersion}`
+  const expectedRecordVersion = r.reverify.outcome === 'blocked'
+    ? DEFECT_RESOLUTION_RECORD_VERSION : SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION
+  if (r.recordVersion !== expectedRecordVersion) return `기록 판 ${r.recordVersion}`
   if (r.resolvedBy !== DEFECT_RESOLVER) return `기록한 쪽 ${r.resolvedBy}`
   if (r.qualityContract.version !== contract.version) return `품질 계약 판 ${r.qualityContract.version} ≠ 지금 ${contract.version}`
   if (r.qualityContract.digest !== contract.digest) return '품질 계약 digest 가 지금과 다르다'
@@ -176,10 +195,18 @@ export function recordProblem(
   if (r.audit.fingerprint !== auditFingerprintOf(a)) return '기록 뒤 감사 행이 바뀌었다(지문 불일치)'
   if (r.draft.titleHash !== digestOf(q.draftTitle) || r.draft.bodyHash !== digestOf(q.draftBody)) return '기록의 초안 hash 가 지금 초안과 다르다'
   if (r.draft.titleHash !== a.publishedTitleHash || r.draft.bodyHash !== a.publishedBodyHash) return '기록의 초안 hash 가 감사가 묶은 발행 글과 다르다'
-  if (r.reverify.gateVersion !== DRAFT_GATE_VERSION) return `재검증 게이트 판 ${r.reverify.gateVersion} ≠ 지금 ${DRAFT_GATE_VERSION}`
-  if (r.reverify.failureCodes.length === 0) return '재검증이 확정 차단하지 않았다'
-  if (!r.reverify.failureCodes.every((c) => GATE_CODES.has(c))) return '재검증 차단 코드가 지금 게이트 코드가 아니다'
-  if (!HEX64.test(r.reverify.inputDigest)) return '재검증 입력 지문 모양이 깨졌다'
+  if (r.reverify.outcome === 'blocked') {
+    if (r.reverify.gateVersion !== DRAFT_GATE_VERSION) return `재검증 게이트 판 ${r.reverify.gateVersion} ≠ 지금 ${DRAFT_GATE_VERSION}`
+    if (r.reverify.failureCodes.length === 0) return '재검증이 확정 차단하지 않았다'
+    if (!r.reverify.failureCodes.every((c) => GATE_CODES.has(c))) return '재검증 차단 코드가 지금 게이트 코드가 아니다'
+    if (!HEX64.test(r.reverify.inputDigest)) return '재검증 입력 지문 모양이 깨졌다'
+  } else {
+    if (r.reverify.failureCodes.length !== 0 || r.reverify.reviewCodes.length !== 0) return '의미 재감사 no 기록에 차단·검토 코드가 있다'
+    if (r.reverify.semanticContractVersion !== SEMANTIC_AUDIT_CONTRACT_VERSION) return `의미 재감사 계약 판 ${r.reverify.semanticContractVersion ?? '(없음)'} ≠ 지금 ${SEMANTIC_AUDIT_CONTRACT_VERSION}`
+    if (r.reverify.semanticModel !== SEMANTIC_AUDIT_MODEL) return `의미 재감사 모델 ${r.reverify.semanticModel ?? '(없음)'} ≠ 지금 ${SEMANTIC_AUDIT_MODEL}`
+    if (r.reverify.semanticPromptVersion !== SEMANTIC_AUDIT_PROMPT_VERSION) return `의미 재감사 프롬프트 판 ${r.reverify.semanticPromptVersion ?? '(없음)'} ≠ 지금 ${SEMANTIC_AUDIT_PROMPT_VERSION}`
+    if (!HEX64.test(r.reverify.inputDigest)) return '의미 재감사 결속 지문 모양이 깨졌다'
+  }
   return null
 }
 
@@ -201,7 +228,11 @@ export function judgeDefectResolution(
     const r = readResolutionRecord(e)
     if (r === null) { problems.push('기록 모양이 깨졌다'); continue }
     const p = recordProblem(r, a, q!, contract)
-    if (p === null) return { resolved: true, reason: `지금 계약 재검증 차단 ${r.reverify.failureCodes.join(',')}` }
+    if (p === null) {
+      return r.reverify.outcome === 'blocked'
+        ? { resolved: true, reason: `지금 계약 재검증 차단 ${r.reverify.failureCodes.join(',')}` }
+        : { resolved: true, reason: `지금 의미 감사 계약 재검증 no ${r.reverify.inputDigest.slice(0, 12)}` }
+    }
     problems.push(p)
   }
   return { resolved: false, reason: problems.join(' · ') }

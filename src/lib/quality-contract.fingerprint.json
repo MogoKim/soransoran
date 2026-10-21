@@ -1,8 +1,8 @@
 {
-  "version": "quality-v14",
-  "digest": "c41c0e5536b238fdfb55dad2d86846fac26cb3a6d8c97eedd8f7f58e1533e16b",
+  "version": "quality-v17",
+  "digest": "d40b13f834754c6875aa3c9d4ec2ad75d45f07bd3ff4ce1b203f40d341872078",
   "files": {
-    "src/lib/quality-contract.ts": "25f171732cbbc11dce98e4661c054ad6a7aed0d6019d289b1e52fb72920c8fc1",
+    "src/lib/quality-contract.ts": "bafe4be8a993f9ee005012dd2e8ce88d4ce2ea5a18d42a6ecea720747cca0f80",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "c1edbb1e97bfecee7185e97078be869afa08ac8f96f5f6d4d72165b2a68eb811",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
@@ -26,19 +26,18 @@
     "src/lib/founder-gold.ts": "92e7ddb5629d29f4fac275333ab029ffadeb7a0da4a77fcc8f2cda95e05b6b74",
     "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
     "src/lib/persona-no-go.ts": "043c734ff551c93a5e5cfe18ebaf56c0b5087232efb0ecc75581ffdaf6bf4318",
-    "src/lib/auto-ready-defect-resolution.ts": "3a631b35672ecfa30fbe421a088e803686bd6117aeb851b38553235cee64281a",
-    "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209",
+    "src/lib/auto-ready-defect-resolution.ts": "a3b1039d2876533d8cfeb7b348976dc168717f3674ecc188f27e80f60abba8a7",
+    "src/lib/auto-ready-defect-resolution-store.ts": "40a718a119213a02a468c8dd53a604aa66ea211f2de56c65df22440ae1e83cc7",
+    "src/lib/auto-ready-semantic-audit.ts": "af60b227cc501a8bd44aaf8e75cc9b77995e1b16e3e2e338ca8e10c010852811",
     "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
     "kind": "bump",
-    "reason": "판 quality-v13 → quality-v14",
+    "reason": "판 quality-v16 → quality-v17",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/auto-ready-v2.ts",
-      "src/lib/supply-schedule-contract.ts",
-      "src/lib/auto-ready-quality-cohort.ts"
+      "src/lib/auto-ready-semantic-audit.ts"
     ]
   }
 }

@@ -41,7 +41,12 @@ import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
 import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
-import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-ready-defect-resolution'
+import {
+  DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+} from './auto-ready-defect-resolution'
+import {
+  SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
+} from './auto-ready-semantic-audit'
 
 /**
  * 🔴 **품질 계약 판** — 게이트·검수의 판정이 바뀌면 올린다.
@@ -144,7 +149,24 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  * 구조 오류·검수 미완료·생활사 모순·안전·복제·핵심 누락·자료 의존 차단은 그대로 유지한다.
  * 🔴 v13 이하 행은 고치거나 지우거나 v14로 옮기지 않는다. 새 계약 생성만 새 판정을 받는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v14'
+/**
+ * `quality-v15` (2026-10-21) = **Content Core와 발행 뒤 의미 감사의 품질 기준을 하나로 묶는다.**
+ * v14 글을 사후 감사자가 옛 요약 기준으로 다시 읽어, 원문의 핵심을 바꾸지 않은 자연스러운 강조를
+ * `sourceDistortions`로 확정한 운영 오탐이 발생했다. 의미 감사도 bounded creativity를 따르고,
+ * 감사 계약·프롬프트·모델 판을 품질 계약 digest에 포함해 두 결정자가 다시 조용히 갈라질 수 없게 한다.
+ * 기존 감사 yes는 수정·삭제하지 않고, 새 감사 계약으로 같은 글·원문·Persona 결속을 재검증한 기록으로만 해소한다.
+ */
+/**
+ * `quality-v16` (2026-10-21) = **의미 감사 no의 출력 모양을 한 가지로 고정한다.**
+ * 허용 표현은 finding에 설명하지 않고, defect=no이면 세 finding 배열을 모두 비운다.
+ * parser의 자기모순 fail-closed와 실제 결함 차단 기준은 그대로다.
+ */
+/**
+ * `quality-v17` (2026-10-21) = **같은 주체·같은 행동의 부사 강조를 새 사실과 구분한다.**
+ * 원문에 이미 주체와 행동이 있으면 직접·바로·정말 같은 부사만으로 새 사건이나 새 행위자가 되지 않는다.
+ * 숫자·장소·관계·새 사건 등 구체 사실과 주체·행동·원인·결과 왜곡 차단은 그대로다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v17'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -187,9 +209,18 @@ export function qualityContractComponents(): Record<string, unknown> {
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
     semanticHoldCodes: SEMANTIC_HOLD_CODES,
     judgeContractDigest: JUDGE_CONTRACT_DIGEST,
+    semanticAudit: {
+      contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION,
+      promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
+      model: SEMANTIC_AUDIT_MODEL,
+    },
     // 🔴 (v6 보정 2026-10-01) 결함 축 정본 — "지금 계약에서 해소되지 않은 확정 결함" 의 기록 판.
     //    해소 기록은 이 digest 에 묶인다 — 판정 규칙(기록 판)이 바뀌면 digest 가 바뀌어 옛 기록은 아무것도 해소하지 못한다
-    defectResolution: { recordVersion: DEFECT_RESOLUTION_RECORD_VERSION, key: DEFECT_RESOLUTION_KEY },
+    defectResolution: {
+      recordVersion: DEFECT_RESOLUTION_RECORD_VERSION,
+      semanticRecordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+      key: DEFECT_RESOLUTION_KEY,
+    },
   }
 }
 
