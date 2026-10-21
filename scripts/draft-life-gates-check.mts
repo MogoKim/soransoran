@@ -461,7 +461,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v17 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v17')
+    check(`품질 계약 판 = quality-v18 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v18')
     check(`초안 게이트 판 = draft-gates-v11 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v11')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
@@ -729,7 +729,7 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
   const V12_MARK = { version: 'quality-v12', digest: '8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3' }
   const C14 = currentQualityContract()
   check('🔴 v12 표식 행은 지금(v14) 품질 계약 행이 아니다 → legacy(결함 해소 대상이 될 수 있다)',
-    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && C14.version === 'quality-v17' && C14.digest !== V12_MARK.digest)
+    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && C14.version === 'quality-v18' && C14.digest !== V12_MARK.digest)
   const aud = {
     queueId: 'cmvfr8glb0001xm4r2n7abt2z', postId: 'cmvfvauqy0001xmui1bz7u95n', selectedAtN: 1, selectedTarget: 1,
     selectedAt: new Date('2026-10-20T00:30:00.000Z'), publishedTitleHash: digestOf(exact.title), publishedBodyHash: digestOf(exact.body),

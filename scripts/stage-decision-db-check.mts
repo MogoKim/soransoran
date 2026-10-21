@@ -76,6 +76,10 @@ import { AUTO_DECIDER, SEMANTIC_RECORD_KEY, eligibilityOf } from '../src/lib/aut
 /** 🔴 운영 자동 적격 행이 가진 온전한 의미 검수 요약(경고 0) — 없으면 정본이 SEMANTIC_REVIEW_MISSING 으로 부적격이라 본다 */
 const CLEAN_SEMANTIC = { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 }
 const SEMANTIC_BLOCK_GATE = { [SEMANTIC_RECORD_KEY]: { ...CLEAN_SEMANTIC, lifeContradictions: 1 }, holds: ['SEMANTIC_LIFE_CONTRADICTION:1'] }
+const INCOMPLETE_GATE = {
+  [SEMANTIC_RECORD_KEY]: { ...CLEAN_SEMANTIC, complete: false },
+  holds: ['SEMANTIC_REVIEW_INCOMPLETE'],
+}
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
@@ -845,12 +849,12 @@ async function main(): Promise<void> {
       }
       /**
        * 🔴 (2026-10-09 P0-a) 운영 실측 모양 — 창 안 회차에 섞인 **자동 부적격 미도장 기계 행 12건**
-       *    (gate FAIL 4 · 생활사 모순 4 · 금지 문구 4). 같은 회차 묶음 원천이다 — 원천 수 101 은 그대로다(분모 불변).
+       *    (gate FAIL 4 · 생활사 모순 4 · 검수 미완료 4). 같은 회차 묶음 원천이다 — 원천 수 101 은 그대로다(분모 불변).
        */
-      const INEL_KINDS = ['gateFail', 'semantic', 'forbidden'] as const
+      const INEL_KINDS = ['gateFail', 'semantic', 'incomplete'] as const
       const inelOf = (i: number): { kind: (typeof INEL_KINDS)[number]; o: { verdict?: string; gate?: Record<string, unknown>; body?: string } } => {
         const kind = INEL_KINDS[i % 3]!
-        return { kind, o: kind === 'gateFail' ? { verdict: 'FAIL' } : kind === 'semantic' ? { gate: SEMANTIC_BLOCK_GATE } : { body: '방금 들은 얘기예요' } }
+        return { kind, o: kind === 'gateFail' ? { verdict: 'FAIL' } : kind === 'semantic' ? { gate: SEMANTIC_BLOCK_GATE } : { gate: INCOMPLETE_GATE } }
       }
       const INEL_PER_RUN = [1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1]
       let inel = 0
@@ -891,10 +895,10 @@ async function main(): Promise<void> {
       const verdictOf = (m: (typeof machineRows)[number]) => eligibilityOf({ gateVerdict: m.gateVerdict, gateResults: m.gateResults, title: m.editedTitle ?? m.draftTitle, body: m.editedBody ?? m.draftBody })
       const inelRows = machineRows.filter((m) => /-x\d+$/.test(m.dedupKey ?? ''))
       const reasons = inelRows.map((m) => verdictOf(m).reasons.join(','))
-      check('fixture 전제 — 정본 eligibilityOf: 22:15 도장 전 4건 적격 · 부적격 12건(gate FAIL 4 · 생활사 모순 4 · 금지 문구 4)',
+      check('fixture 전제 — 정본 eligibilityOf: 22:15 도장 전 4건 적격 · 부적격 12건(gate FAIL 4 · 생활사 모순 4 · 검수 미완료 4)',
         machineRows.filter((m) => !/-x\d+$/.test(m.dedupKey ?? '')).every((m) => verdictOf(m).auto) && inelRows.length === 12
         && inelRows.every((m) => !verdictOf(m).auto) && reasons.filter((x) => x.includes('gate=FAIL')).length === 4
-        && reasons.filter((x) => x.includes('SEMANTIC_LIFE_CONTRADICTION')).length === 4 && reasons.filter((x) => x.includes('timeDrift')).length === 4,
+        && reasons.filter((x) => x.includes('SEMANTIC_LIFE_CONTRADICTION')).length === 4 && reasons.filter((x) => x.includes('SEMANTIC_REVIEW_INCOMPLETE')).length === 4,
         JSON.stringify(reasons))
       // 🔴 앞판 분자 — 같은 DB 에서 decidedAt 창 + 자동 도장만 세면 16 (22:15 4건 · 창 밖 회차 행은 시각상 빠지거나 끼어든다)
       const oldNumerator = (await prisma.originalPostApprovalQueue.findMany({
@@ -998,7 +1002,7 @@ async function main(): Promise<void> {
   {
     /**
      * 창 = 증거일 2026-10-08 · 회차 6개 × 원천 10 = 60. 자동 도장 공개 2건 + 미도장 기계 행:
-     *   적격 1(→ 모름) · gate FAIL 1 · 생활사 모순 1 · 금지 문구 1 · 부적격 셋은 분자에서 빠진다.
+     *   적격 1(→ 모름) · gate FAIL 1 · 생활사 모순 1 · 검수 미완료 1 · 부적격 셋은 분자에서 빠진다.
      *   🔴 앞판(#676)은 부적격까지 모름으로 셌다 — raw 6 → 공급 능력 6 · 필요 3~12 → READY_REQUIREMENT_UNKNOWN 으로 부풀었다.
      */
     const site = 'fixture:p0a'
@@ -1033,7 +1037,7 @@ async function main(): Promise<void> {
       { k: 'elig', run: runs[5]!, status: 'APPROVED', by: 'machine:content-core-v2' },
       { k: 'gfail', run: runs[1]!, status: 'APPROVED', by: 'machine:content-core-v2', verdict: 'FAIL' },
       { k: 'sem', run: runs[2]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: SEMANTIC_BLOCK_GATE },
-      { k: 'forbid', run: runs[4]!, status: 'APPROVED', by: 'machine:content-core-v2', body: '방금 들은 얘기예요' },
+      { k: 'incomplete', run: runs[4]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: INCOMPLETE_GATE },
     ]
     const intentOf = (k: string, runId: string): Record<string, unknown> => ({
       contract: SUPPLY_JIT_CONTRACT, runId, sourceHash: articleIdHashOf(site, k), intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
@@ -1055,7 +1059,7 @@ async function main(): Promise<void> {
       }
       const cohort = await readReadyCohort(prisma, { windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now })
       const f = cohort.fates
-      check('🔴 🔴 **미도장 + 자동 적격 → 모름 1 · 미도장 + gate FAIL · 생활사 모순 · 금지 문구 → 분자 제외 3**',
+      check('🔴 🔴 **미도장 + 자동 적격 → 모름 1 · 미도장 + gate FAIL · 생활사 모순 · 검수 미완료 → 분자 제외 3**',
         f !== null && f.published === 2 && f.unknown === 1 && f.lost === 0 && f.scheduled === 0 && cohort.readyCount === 3 && cohort.autoIneligibleExcluded === 3,
         JSON.stringify({ f, n: cohort.readyCount, ex: cohort.autoIneligibleExcluded }))
       check('🔴 🔴 **제외돼도 분모(원천) 60 그대로 · 부적격은 legacy 가 아니다(legacy 0) · 불일치 0**',

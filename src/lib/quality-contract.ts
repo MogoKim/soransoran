@@ -166,7 +166,13 @@ import {
  * 원문에 이미 주체와 행동이 있으면 직접·바로·정말 같은 부사만으로 새 사건이나 새 행위자가 되지 않는다.
  * 숫자·장소·관계·새 사건 등 구체 사실과 주체·행동·원인·결과 왜곡 차단은 그대로다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v17'
+/**
+ * `quality-v18` (2026-10-21) = **Content Core를 유일한 발행 전 품질 결정자로 고정한다.**
+ * auto-READY와 규칙 감사가 `확실히`·`방금`·`논란`과 같은 단어로 Content Core ADOPT를
+ * 다시 뒤집지 않는다. 구조 오류·검수 미완료·holds 불일치·생활사 모순·안전·복제·
+ * 자료 의존·시점 왜곡은 Content Core의 구조화 차단으로 계속 막는다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v18'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
