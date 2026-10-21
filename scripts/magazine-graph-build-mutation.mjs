@@ -186,6 +186,18 @@ const MUTATIONS = [
     to: 'if (false) bad.push(', expect: '반례22g' },
   { id: 'M107 export 판정 없는 표식 검사 제거', file: 'lib', from: "if (!hasPart && (marker !== undefined || 'participation' in slim)) bad.push(",
     to: 'if (false) bad.push(', expect: '반례22g' },
+  // 🔴 crossCluster — 2026-10-21 이전 구현(canonical 끼리만 비교)을 되살리면 잡혀야 한다
+  { id: 'M108 crossCluster 를 canonical 값끼리만 비교(옛 구현)', file: 'lib',
+    from: '      fromCluster, toCluster, crossCluster: isCommunity ? false : fromCluster !== toCluster,',
+    to: '      fromCluster, toCluster, crossCluster: isCommunity ? false : ((I[e.fromIntentId]?.magazineCluster ?? null) !== (I[e.toIntentId]?.magazineCluster ?? null)),',
+    expect: '반례23' },
+  { id: 'M109 입력 edge cluster 가 canonical 보다 앞선다', file: 'lib', from: 'const fromCluster = I[e.fromIntentId]?.magazineCluster ?? e.fromCluster ?? null',
+    to: 'const fromCluster = e.fromCluster ?? I[e.fromIntentId]?.magazineCluster ?? null', expect: '반례23' },
+  { id: 'M110 COMMUNITY 도 cluster 로 crossCluster 판정', file: 'lib',
+    from: 'crossCluster: isCommunity ? false : fromCluster !== toCluster,', to: 'crossCluster: fromCluster !== toCluster,', expect: '반례23' },
+  { id: 'M111 산출 계약의 crossCluster 값 대조 제거', file: 'lib',
+    from: "else if (e.crossCluster !== (e.relationType === 'COMMUNITY' ? false : e.fromCluster !== e.toCluster)) bad.push(",
+    to: 'else if (false) bad.push(', expect: '반례23b' },
 ]
 
 const TMP = mkdtempSync(join(tmpdir(), 'mgraph-build-mutation-'))

@@ -2,7 +2,8 @@
 /**
  * M-GRAPH 결정적 build · readiness 반례 검사.
  *
- *   node scripts/magazine-graph-build-check.mjs [--old-input <2026-10-15-family> --new-input <2026-10-17-money-work> --real-product <제품 루트>]
+ *   node scripts/magazine-graph-build-check.mjs [--final-input <reconciled/2026-10-21-money-work-retirement-next-e0335> --real-product <제품 루트>]
+ *     (과거 계약 입력은 같은 reconciled 폴더에서 찾는다 · --old-input · --new-input 으로 덮을 수 있다)
  *
  * 합성 fixture 만 쓴다(임시 폴더). 운영 연구 폴더 · 제품 graph 파일을 쓰지 않는다.
  * 실제 입력을 주면 lifecycle 계약 기준 재현성 증거를 **추가로** 본다(읽기 전용) — old 거부 11건 · new 2회 동일 · semantic delta whitelist · readiness.
@@ -784,9 +785,59 @@ test('반례22e — 검색 mapping 과 겹치거나 hash 형식 밖인 slim part
   }
 })
 
+// ── 반례 23 — crossCluster 는 산출 cluster 두 값에서만 나온다 (2026-10-21 실측: canonical 만 비교해 74건 어긋남) ──
+//    builder 의 canonical 은 g4-intents-canonical 행이다. 기본 world 의 canon() 은 magazineCluster 가 없어 전부 null 로 가린다 —
+//    canonical 값이 있는 끝과 없는 끝을 섞어야 옛 구현(canonical 끼리만 비교)이 드러난다
+const crossWorld = () => {
+  const w = baseWorld()
+  for (const c of w.canonical) if (c.intentId === 'I-X') c.magazineCluster = 'fam'; else if (c.intentId === 'I-D') c.magazineCluster = 'rel'
+  w.automation.push(intent('I-N1', null), intent('I-N2', null), intent('I-N3', null))
+  w.canonical.push(canon('I-N1'), canon('I-N2'), canon('I-N3'))
+  w.graph.push(
+    edge('E-0013', 'I-X', 'I-N1', 'SIBLING', 'FOOTER_SIBLING', { fromCluster: 'zzz', toCluster: 'fam' }), // canonical fam 이 앞선다 · 보충 fam → 같은 cluster
+    edge('E-0014', 'I-N1', 'I-D', 'BRIDGE', 'FOOTER_BRIDGE', { fromCluster: 'fam', toCluster: 'fam' }), // 보충 fam · canonical rel → 다른 cluster
+    edge('E-0015', 'I-N2', 'I-N3', 'SIBLING', 'FOOTER_SIBLING'), // 양쪽 다 없음 → null · null
+    edge('E-0016', 'I-N1', '/community/free', 'COMMUNITY', 'CTA_END', { fromCluster: 'fam' }))
+  return w
+}
+test('반례23 — canonical cluster 가 비면 입력 edge cluster 로 보충하고, crossCluster 는 그 보충값으로 판정한다', () => {
+  const by = new Map(build({ world: crossWorld() }).layers.edges.map((e) => [e.edgeId, e]))
+  const pick = (id) => { const e = by.get(id); return [e.fromCluster, e.toCluster, e.crossCluster] }
+  eq(pick('E-0013'), ['fam', 'fam', false], 'canonical 이 입력 edge cluster 보다 앞선다 · 보충값끼리 같은 cluster')
+  eq(pick('E-0014'), ['fam', 'rel', true], '보충값과 canonical 이 다르면 cross')
+  eq(pick('E-0015'), [null, null, false], '양쪽 다 없으면 null · null · false')
+  eq(pick('E-0016'), ['fam', null, false], 'COMMUNITY 는 언제나 false')
+  const off = [...by.values()].filter((e) => e.crossCluster !== (e.relationType === 'COMMUNITY' ? false : e.fromCluster !== e.toCluster))
+  eq(off.map((e) => e.edgeId), [], '산출 전체 crossCluster 일관성')
+})
+test('반례23b — 산출 계약은 crossCluster 값 불일치를 거부한다 (형식이 맞아도)', () => {
+  const layers = build({ world: crossWorld() }).layers
+  const clone = () => JSON.parse(JSON.stringify(layers))
+  const same = layers.edges.findIndex((e) => e.relationType !== 'COMMUNITY' && e.fromCluster === e.toCluster)
+  const cross = layers.edges.findIndex((e) => e.relationType !== 'COMMUNITY' && e.fromCluster !== e.toCluster)
+  const com = layers.edges.findIndex((e) => e.relationType === 'COMMUNITY')
+  ok(same >= 0 && cross >= 0 && com >= 0, `표본 부족 ${same} ${cross} ${com}`)
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(clone())), null, '정상 산출 통과')
+  for (const [name, mutate] of [
+    ['같은 cluster 인데 true', (l) => { l.edges[same].crossCluster = true }],
+    ['다른 cluster 인데 false', (l) => { l.edges[cross].crossCluster = false }],
+    ['COMMUNITY 가 true', (l) => { l.edges[com].crossCluster = true }],
+    ['cluster 만 바꾸고 crossCluster 는 그대로', (l) => { l.edges[same].toCluster = 'other' }],
+  ]) {
+    const l = clone(); mutate(l)
+    const r = rejectWhy(() => lib.validateBuiltArtifacts(l))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('crossCluster 가 산출 fromCluster·toCluster 와 어긋난다'), `${name}: ${JSON.stringify(r)}`)
+  }
+})
+
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
 //    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
-const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')
+//    🔴 `--final-input` 만 주면 같은 reconciled 폴더의 10-15-family · 10-17-money-work 로 이 과거 계약도 함께 돈다 — 과거 반례를 빼지 않는다
+const finalInput = argOf('--final-input')
+const reconciledRoot = finalInput ? dirname(finalInput.replace(/\/+$/, '')) : null
+const oldInput = argOf('--old-input') ?? (reconciledRoot && join(reconciledRoot, '2026-10-15-family'))
+const newInput = argOf('--new-input') ?? (reconciledRoot && join(reconciledRoot, '2026-10-17-money-work'))
+const realProduct = argOf('--real-product')
 const readText = (p) => readFileSync(p, 'utf8')
 const inputsAt = (dir) => Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, readText(join(dir, n))]))
 const productAt = (root) => Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, readText(join(root, rel))]))
@@ -805,9 +856,9 @@ const APPROVED_MAPPING = {
   'I-T4-06|bone-density-test-when': 'ANSWERS', 'I-T5-06|irp-tax-benefit': 'ANSWERS_PARTIAL', 'I-T6-01|starting-work-at-this-age': 'REMOVED',
   'I-T6-04|certificate-in-50s': 'ANSWERS', 'I-T8-05|menopause-supplements-talk': 'ANSWERS',
 }
-const runRealCli = (input, out) => {
+const runRealCli = (input, out, eff = REAL_EFF, gen = REAL_GEN) => {
   try {
-    execFileSync(process.execPath, [CLI, '--input-root', input, '--product-root', realProduct, '--effective-at', REAL_EFF, '--generated-at', REAL_GEN, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] })
+    execFileSync(process.execPath, [CLI, '--input-root', input, '--product-root', realProduct, '--effective-at', eff, '--generated-at', gen, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] })
     return 0
   } catch (e) { return e.status }
 }
@@ -923,6 +974,81 @@ if (oldInput && newInput && realProduct) {
   })
 } else {
   results.push('  ⏭  실제 입력 재현성 — --old-input · --new-input · --real-product 미지정 (통과로 세지 않는다)')
+}
+
+// ── 실제 최종 입력 (2026-10-21) — money-work 활성 graph 의 입력 계약 ──
+//    🔴 snapshot 이름 · effectiveAt 을 고정한다. 다른 snapshot 이나 다른 시각으로 돌리면 통과가 아니라 실패다
+const FINAL_NAME = '2026-10-21-money-work-retirement-next-e0335'
+const FINAL_PARENT = '2026-10-21-national-pension-live-money-work-relations'
+const FINAL_EFF = '2026-10-21T11:00:00+09:00', FINAL_GEN = '2026-10-21T02:00:00.000Z'
+if (finalInput && realProduct) {
+  const at = (snap) => join(reconciledRoot, snap)
+  const product = lib.parseProductTexts(productAt(realProduct))
+  const articles = product.articles
+  // 연구 루트(reconciled 의 부모)의 G8 admission 을 읽는다 — 읽기 전용
+  const admissionTexts = Object.fromEntries(Object.entries(lib.ADMISSION_FILES).map(([k, rel]) => [k, readText(join(dirname(reconciledRoot), rel))]))
+  const buildFinal = (dir, productTexts = productAt(realProduct)) => lib.buildAll({ inputTexts: inputsAt(dir), productTexts, admissionTexts, effectiveAt: FINAL_EFF, generatedAt: FINAL_GEN })
+  const drift = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(at(snap))), articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
+  test('최종 입력 0 — --final-input 은 정확히 최종 snapshot 이다', () => {
+    eq(finalInput.replace(/\/+$/, '').split('/').pop(), FINAL_NAME, 'snapshot 이름')
+  })
+  test('최종 입력 1 — 같은 effectiveAt · generatedAt 2회 CLI build 가 목록 · 바이트까지 동일', () => {
+    const a = join(TMP, 'final-a'), b = join(TMP, 'final-b')
+    eq([runRealCli(finalInput, a, FINAL_EFF, FINAL_GEN), runRealCli(finalInput, b, FINAL_EFF, FINAL_GEN)], [0, 0], 'CLI 종료 코드')
+    eq(treeHash(a), treeHash(b), '트리 해시'); eq(fileList(a), fileList(b), '파일 목록')
+  })
+  test('최종 입력 2 — 2026-10-21 lifecycle 경계: 10:29:59 최종=national 만 · 10:30:00 최종=0 · 옛 snapshot 은 10:29:59=0 · 10:30:00=national · 11:00 옛 snapshot build 거부', () => {
+    eq(drift(FINAL_NAME, '2026-10-21T10:29:59+09:00'), ['national-pension-voluntary'], '최종 10:29:59')
+    eq(drift(FINAL_NAME, '2026-10-21T10:30:00+09:00'), [], '최종 10:30:00')
+    eq(drift(FINAL_NAME, FINAL_EFF), [], '최종 11:00')
+    for (const old of ['2026-10-19-rehearsal-editorial-participation', '2026-10-17-money-work-kimjang-cold-live']) {
+      eq(drift(old, '2026-10-21T10:29:59+09:00'), [], `${old} 10:29:59`)
+      eq(drift(old, '2026-10-21T10:30:00+09:00'), ['national-pension-voluntary'], `${old} 10:30:00`)
+      const r = rejectWhy(() => buildFinal(at(old)))
+      ok(r?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r.why.startsWith('1개 slug — national-pension-voluntary'), `${old}: ${JSON.stringify(r).slice(0, 200)}`)
+    }
+  })
+  test('최종 입력 3 — parent 대비 semantic delta: authored edge 추가는 E-0335 하나 · 그 밖 intent · mapping · edge 변화 0', () => {
+    const layersAt = (dir) => lib.buildGraphLayers({ inputs: lib.parseInputTexts(inputsAt(dir)), implementedSurfaces: product.implemented })
+    const o = layersAt(at(FINAL_PARENT)), n = layersAt(finalInput)
+    const J = (x) => JSON.stringify(x)
+    eq(J(n.intents), J(o.intents), 'intent'); eq(J(n.mappings), J(o.mappings), 'mapping')
+    const oById = new Map(o.edges.map((e) => [e.edgeId, e]))
+    eq(n.edges.filter((e) => !oById.has(e.edgeId)).map((e) => e.edgeId), ['E-0335'], '신규 edge')
+    eq(n.edges.filter((e) => oById.has(e.edgeId) && J(e) !== J(oById.get(e.edgeId))).map((e) => e.edgeId), [], '바뀐 edge')
+    eq(o.edges.filter((e) => !n.edges.some((x) => x.edgeId === e.edgeId)).map((e) => e.edgeId), [], '사라진 edge')
+    const e = n.edges.find((x) => x.edgeId === 'E-0335')
+    eq([e.fromIntentId, e.toIntentId, e.relationType, e.recommendationSlot, e.placement, e.priority, e.reciprocalPolicy, e.readerReason, e.anchorLabel, e.runtimeState],
+      ['I-T6-12', 'I-T6-01', 'NEXT_QUESTION', 'DIRECT_NEXT', 'FOOTER_NEXT', 1, 'ONE_WAY', '남들 하루를 보고 돈 버는 일이 필요하다고 느끼면 어디부터 알아볼지로 간다', '재취업은 어디부터 알아볼까', 'ACTIVE'], 'E-0335 고정값')
+    eq(n.edges.filter((x) => x.edgeId === 'E-0334' || (x.fromIntentId === 'I-T5-01' && x.toIntentId === 'I-T5-06')).length, 0, 'E-0334 계열 0')
+  })
+  test('최종 입력 4 — 실제 산출 전 edge 의 crossCluster = (fromCluster ≠ toCluster) · 옛 구현이면 정확히 74건 어긋나는 입력이다', () => {
+    const inputs = lib.parseInputTexts(inputsAt(finalInput))
+    const edges = lib.buildGraphLayers({ inputs, implementedSurfaces: product.implemented }).edges
+    const sem = edges.filter((e) => e.relationType !== 'COMMUNITY')
+    eq(edges.filter((e) => e.relationType === 'COMMUNITY' && e.crossCluster !== false).map((e) => e.edgeId), [], 'COMMUNITY')
+    eq(sem.filter((e) => e.crossCluster !== (e.fromCluster !== e.toCluster)).map((e) => e.edgeId), [], '불일치')
+    // 🔴 이 입력이 결함을 실제로 건드린다는 증거 — canonical 끼리만 비교하던 판정과 다른 edge 수
+    const C = Object.fromEntries(inputs.canonical.map((r) => [r.intentId, r.magazineCluster ?? null]))
+    eq(sem.filter((e) => ((C[e.fromIntentId] ?? null) !== (C[e.toIntentId] ?? null)) !== (e.fromCluster !== e.toCluster)).length, 74, '옛 판정과 다른 edge')
+  })
+  test('최종 입력 5 — money-work 를 켠 control 에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099 · G8_NOT_ADMITTED 유지', () => {
+    const pt = productAt(realProduct)
+    const mwControl = ensureCluster(pt.control, 'money-work').text
+    ok(readControl(mwControl).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
+    const b = buildFinal(finalInput, { ...pt, control: mwControl })
+    eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-05'], 'GRAPH_READY')
+    const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')
+    eq(x.direct.targets.map((t) => `${t.edgeId}→${t.toIntentId}/${t.slug}`), ['E-0188→I-T6-04/certificate-in-50s', 'E-0329→I-T6-01/rehire-where-to-start'], 'direct')
+    eq(x.discovery.targets.map((t) => t.edgeId), ['E-0100'], 'discovery')
+    ok(x.reverse.sources.some((s) => s.edgeId === 'E-0099'), `reverse ${JSON.stringify(x.reverse.sources)}`)
+    eq([x.admission.state, x.admission.blockers], ['NOT_ADMITTED', ['G8_NOT_ADMITTED']], 'G8')
+    eq(b.layers.mappings.filter((m) => m.slug === 'starting-work-at-this-age').length, 0, 'starting-work-at-this-age graph 매핑 0')
+    eq(b.layers.participation.map((p) => `${p.slug}:${p.state}:${p.evidenceHash}`),
+      ['starting-work-at-this-age:EDITORIAL_NON_SEARCH:0a4dfd8b35d1b8ebc17fcdac3e3cc1b537a7cb919f638ecc7262612104181872'], 'participation')
+  })
+} else {
+  results.push('  ⏭  실제 최종 입력 — --final-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 
 rmSync(TMP, { recursive: true, force: true })

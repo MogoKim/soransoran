@@ -52,19 +52,25 @@ export const CONTROL: MagazineGraphControl = {
 } as const
 `
 const QUOTED_KEY = MULTI.replace('  enabledClusters: [', '  "enabledClusters": [')
+/**
+ * 🔴 실제 control 에 **아직 켜지지 않은** 실재 cluster — 실제 control 편집 반례의 대상이다.
+ *    money-work 는 2026-10-21 부터 실제로 켜져 있어 대상이 될 수 없다. 이 전제가 깨지면 아래 사전조건이 먼저 FAIL 한다(조용히 건너뛰지 않는다)
+ */
+const ADD = 'relationship'
+check(`사전조건: 실제 control 에 ${ADD} 가 아직 없다`, () => { assert.ok(!real.enabledClusters.includes(ADD), `${ADD} 가 이미 켜져 있다 — 다른 미활성 cluster 로 대상을 옮긴다`) })
 
-check('실제 control: money-work 추가 — 기존 순서 보존 · 끝에 한 번 · 한 줄만 바뀜 · 다른 필드 불변', () => {
-  const out = h.addCluster(REAL, 'money-work')
-  assert.deepEqual(h.readControl(out).enabledClusters, [...real.enabledClusters, 'money-work'])
+check(`실제 control: ${ADD} 추가 — 기존 순서 보존 · 끝에 한 번 · 한 줄만 바뀜 · 다른 필드 불변`, () => {
+  const out = h.addCluster(REAL, ADD)
+  assert.deepEqual(h.readControl(out).enabledClusters, [...real.enabledClusters, ADD])
   assert.equal(changedLines(REAL, out), 1)
   sameRest(REAL, out)
 })
-check('이미 money-work 가 있으면 addCluster 는 CLUSTER_ALREADY_PRESENT · ensureCluster 는 바이트 그대로 changed=false', () => {
-  const once = h.addCluster(REAL, 'money-work')
-  assert.equal(codeOf(() => h.addCluster(once, 'money-work')), 'CLUSTER_ALREADY_PRESENT')
-  const r = h.ensureCluster(once, 'money-work')
+check('이미 켜진 cluster 면 addCluster 는 CLUSTER_ALREADY_PRESENT · ensureCluster 는 바이트 그대로 changed=false', () => {
+  const once = h.addCluster(REAL, ADD)
+  assert.equal(codeOf(() => h.addCluster(once, ADD)), 'CLUSTER_ALREADY_PRESENT')
+  const r = h.ensureCluster(once, ADD)
   assert.deepEqual([r.text === once, r.changed], [true, false])
-  const r2 = h.ensureCluster(REAL, 'money-work')
+  const r2 = h.ensureCluster(REAL, ADD)
   assert.deepEqual([r2.text === once, r2.changed], [true, true])
 })
 check('실제 control: 켜진 cluster 제거(cluster-off) — 정확히 그 cluster 만 빠진다', () => {
@@ -100,7 +106,7 @@ check('malformed CONTROL · enabledClusters 비배열·누락·중복은 구조�
   assert.equal(codeOf(() => h.addCluster("export const CONTROL = { enabledClusters: ['a'], enabledClusters: ['b'] }", 'money-work')), 'CLUSTERS_AMBIGUOUS')
 })
 check('사후조건: 편집 뒤 cluster 가 기대값이 아니면 POSTCONDITION_FAILED', () => {
-  assert.equal(codeOf(() => h.verifyClusterEdit(real, real, [...real.enabledClusters, 'money-work'])), 'POSTCONDITION_FAILED')
+  assert.equal(codeOf(() => h.verifyClusterEdit(real, real, [...real.enabledClusters, ADD])), 'POSTCONDITION_FAILED')
   assert.equal(codeOf(() => h.verifyClusterEdit(real, real, real.enabledClusters)), null)
 })
 check('대상 필드 밖이 바뀌면 OTHER_FIELD_CHANGED (graphVersion · enabled · surfaces · killSwitch · previousGraphVersion · 필드 추가)', () => {
@@ -125,16 +131,16 @@ for (const [name, decoy] of DECOYS) {
   check(`${name} 뒤 실제 선언 — 실제 CONTROL 만 바뀌고 decoy 바이트 불변 · readControl 은 실제 값`, () => {
     const src = decoy + REAL
     assert.deepEqual(h.readControl(src).enabledClusters, real.enabledClusters)
-    const out = h.addCluster(src, 'money-work')
+    const out = h.addCluster(src, ADD)
     assert.ok(out.startsWith(decoy), 'decoy 가 바뀌었다')
-    assert.deepEqual(h.readControl(out).enabledClusters, [...real.enabledClusters, 'money-work'])
-    assert.equal(out.slice(decoy.length), h.addCluster(REAL, 'money-work'), '실제 선언 편집 결과가 decoy 없을 때와 다르다')
+    assert.deepEqual(h.readControl(out).enabledClusters, [...real.enabledClusters, ADD])
+    assert.equal(out.slice(decoy.length), h.addCluster(REAL, ADD), '실제 선언 편집 결과가 decoy 없을 때와 다르다')
     const rm = h.removeCluster(src, real.enabledClusters[0])
     assert.ok(rm.startsWith(decoy), 'remove 가 decoy 를 바꿨다')
   })
 }
 check('실제 CONTROL 선언 2개는 CONTROL_AMBIGUOUS · 0개는 CONTROL_NOT_FOUND', () => {
-  assert.equal(codeOf(() => h.addCluster(REAL + REAL.slice(REAL.indexOf('export const CONTROL')), 'money-work')), 'CONTROL_AMBIGUOUS')
+  assert.equal(codeOf(() => h.addCluster(REAL + REAL.slice(REAL.indexOf('export const CONTROL')), ADD)), 'CONTROL_AMBIGUOUS')
   assert.equal(codeOf(() => h.addCluster("// export const CONTROL = { enabledClusters: [] }\nexport const CONTROLLER = { enabledClusters: [] }", 'money-work')), 'CONTROL_NOT_FOUND')
 })
 check('실제 CONTROL 의 초기값이 함수 호출 · 배열이면 CONTROL_PARSE_FAILED', () => {
@@ -144,15 +150,16 @@ check('실제 CONTROL 의 초기값이 함수 호출 · 배열이면 CONTROL_PAR
 check('세 소비처가 고정 cluster 문자열 없이 공용 helper 를 쓴다', () => {
   const FIXED = /enabledClusters:\s*\[\s*['"]sleep['"]\s*,\s*['"]family['"]\s*\]/
   const consumers = [
-    ['scripts/magazine-direct-spec-source-check.mjs', /removeCluster\(readFileSync\(p, 'utf8'\), BASIS\.sourceCluster\)/],
-    ['scripts/magazine-graph-build-check.mjs', /ensureCluster\(pt\.control, 'money-work'\)/],
-    ['scripts/magazine-relation-policy-check.mjs', /controlEdit\.ensureCluster\(productTexts\.control, 'money-work'\)/],
+    ['scripts/magazine-direct-spec-source-check.mjs', [/removeCluster\(readFileSync\(p, 'utf8'\), BASIS\.sourceCluster\)/]],
+    // 🔴 build-check 는 두 자리다 — 과거 계약 3b · 최종 입력 5. 한 자리만 helper 를 써도 통과하면 다른 자리가 고정 문자열로 돌아가도 못 본다
+    ['scripts/magazine-graph-build-check.mjs', [/const \{ text: control \} = ensureCluster\(pt\.control, 'money-work'\)/, /const mwControl = ensureCluster\(pt\.control, 'money-work'\)\.text/]],
+    ['scripts/magazine-relation-policy-check.mjs', [/controlEdit\.ensureCluster\(productTexts\.control, 'money-work'\)/]],
   ]
-  for (const [file, use] of consumers) {
+  for (const [file, uses] of consumers) {
     const t = readFileSync(join(ROOT, file), 'utf8')
     assert.ok(!FIXED.test(t), `${file} 에 고정 cluster 문자열이 남아 있다`)
     assert.ok(t.includes('magazine-graph-control-edit.mjs'), `${file} 가 helper 를 불러오지 않는다`)
-    assert.ok(use.test(t), `${file} 가 helper 를 그 자리에서 쓰지 않는다`)
+    for (const use of uses) assert.ok(use.test(t), `${file} 가 helper 를 그 자리에서 쓰지 않는다: ${use}`)
   }
 })
 
@@ -166,7 +173,8 @@ if (oldInput && newInput) {
       mkdirSync(dirname(join(tmp, rel)), { recursive: true }); cpSync(join(ROOT, rel), join(tmp, rel), { recursive: true })
     }
     const ctl = join(tmp, 'src/content/magazine/graph/control.ts')
-    writeFileSync(ctl, h.addCluster(readFileSync(ctl, 'utf8'), 'money-work'))
+    // 🔴 2026-10-21 부터 실제 control 에 money-work 가 켜져 있다 — 멱등 편집으로 「이미 켜진」 사본을 만든다
+    writeFileSync(ctl, h.ensureCluster(readFileSync(ctl, 'utf8'), 'money-work').text)
     check('실제 입력: money-work 가 이미 켜진 제품 사본에서 실제 I-T6-05 · 실제 입력 3b 가 준비 실패하지 않는다', () => {
       assert.deepEqual(h.readControl(readFileSync(ctl, 'utf8')).enabledClusters.slice(-1), ['money-work'])
       const rp = spawnSync(process.execPath, [join(HERE, 'magazine-relation-policy-check.mjs'), '--new-input', newInput, '--real-product', tmp], { encoding: 'utf8' })
