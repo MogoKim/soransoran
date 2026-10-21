@@ -52,8 +52,8 @@ exact-head CI·계약 전환·runtime 배포·다음 자연 회차 검증 뒤 �
 
 | 항목 | 값 |
 |---|---|
-| 원격 main (2026-10-21 작업 기준) | `7e5e1ae7ac65a6c372a2781ce6f1a7ae2b98a3ab` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `7e5e1ae7ac65a6c372a2781ce6f1a7ae2b98a3ab` · quality-v15 배포 전 |
+| 원격 main (2026-10-21 10:45 관측) | `7e5e1ae7ac65a6c372a2781ce6f1a7ae2b98a3ab` |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `7e5e1ae7ac65a6c372a2781ce6f1a7ae2b98a3ab` · main 차이를 별도 판정: 0 · tracked 0 · quality-v15 배포 전 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 10-21 07:00 D10 미개방 |
