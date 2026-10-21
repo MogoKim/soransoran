@@ -421,6 +421,88 @@ async function main(): Promise<void> {
     check('🔴 같은 승인 재실행은 provider 0 · write 0 no-op', replay?.kind === 'noop' && cleanProviderCalls === 1
       && resolutionsOf((await queueOf(S.queueId)).editDiff).length === 1, JSON.stringify(replay))
 
+    const C = await defectRow(sf, PASSING, { legacy: true })
+    let carrySeedCalls = 0
+    const carrySeedProvider: SemanticAuditProvider = {
+      model: SEMANTIC_AUDIT_MODEL,
+      complete: async () => {
+        carrySeedCalls += 1
+        return { ok: true, text: JSON.stringify({ unsupportedFacts: [], lifeContradictions: [], sourceDistortions: [], defect: 'no' }) }
+      },
+    }
+    const carrySeed = await planSemanticDefectResolution(prisma, {
+      queueId: C.queueId, loadContext, provider: carrySeedProvider, now: new Date(),
+    })
+    const currentC = await queueOf(C.queueId)
+    const priorRecord = carrySeed.kind === 'plan'
+      ? { ...carrySeed.plan.record, qualityContract: { version: 'quality-prior', digest: 'a'.repeat(64) } }
+      : null
+    if (priorRecord !== null) {
+      await prisma.originalPostApprovalQueue.update({
+        where: { id: C.queueId },
+        data: { editDiff: { ...rec(currentC.editDiff), [DEFECT_RESOLUTION_KEY]: [priorRecord] } },
+      })
+    }
+    let carryUnexpectedCalls = 0
+    const mustNotCallProvider: SemanticAuditProvider = {
+      model: SEMANTIC_AUDIT_MODEL,
+      complete: async () => {
+        carryUnexpectedCalls += 1
+        return { ok: false, code: 'UNEXPECTED_PROVIDER', reason: '승계 가능한데 provider를 불렀다' }
+      },
+    }
+    const carried = await planSemanticDefectResolution(prisma, {
+      queueId: C.queueId, loadContext, provider: mustNotCallProvider, now: new Date(),
+    })
+    check('🟢 같은 의미 감사 판·결속의 공식 semanticCleared → 현재 계약 계획으로 승계 · provider 0',
+      carrySeedCalls === 1 && carryUnexpectedCalls === 0 && carried.kind === 'plan'
+      && carried.plan.record.qualityContract.version === currentQualityContract().version
+      && carried.plan.record.qualityContract.digest === currentQualityContract().digest,
+    JSON.stringify({ carrySeedCalls, carryUnexpectedCalls, kind: carried.kind }))
+    const carriedApply = carried.kind === 'plan'
+      ? await applyApprovedSemanticDefectResolution(prisma, {
+        queueId: C.queueId, plan: carried.plan, loadContext, now: new Date(),
+        approval: { digest: defectPlanDigestOf(carried.plan), expected: { before: 1, after: 0 }, reason: 'semantic carry db-check' },
+      }) : null
+    check('🟢 승계 apply는 append-only 현재 계약 기록 1줄 · 옛 기록 보존 · provider 0',
+      carriedApply?.kind === 'written' && resolutionsOf((await queueOf(C.queueId)).editDiff).length === 2
+      && carryUnexpectedCalls === 0 && await unresolvedDefectCount(prisma) === 0, JSON.stringify(carriedApply))
+
+    const D = await defectRow(sf, PASSING, { legacy: true })
+    const staleSeed = await planSemanticDefectResolution(prisma, {
+      queueId: D.queueId, loadContext, provider: carrySeedProvider, now: new Date(),
+    })
+    const currentD = await queueOf(D.queueId)
+    const stalePrior = staleSeed.kind === 'plan'
+      ? {
+        ...staleSeed.plan.record,
+        qualityContract: { version: 'quality-prior', digest: 'b'.repeat(64) },
+        reverify: { ...staleSeed.plan.record.reverify, inputDigest: 'c'.repeat(64) },
+      }
+      : null
+    if (stalePrior !== null) {
+      await prisma.originalPostApprovalQueue.update({
+        where: { id: D.queueId },
+        data: { editDiff: { ...rec(currentD.editDiff), [DEFECT_RESOLUTION_KEY]: [stalePrior] } },
+      })
+    }
+    let changedBindingCalls = 0
+    const changedBindingProvider: SemanticAuditProvider = {
+      model: SEMANTIC_AUDIT_MODEL,
+      complete: async () => {
+        changedBindingCalls += 1
+        return { ok: false, code: 'HTTP_500', reason: 'fixture' }
+      },
+    }
+    const notCarried = await planSemanticDefectResolution(prisma, {
+      queueId: D.queueId, loadContext, provider: changedBindingProvider, now: new Date(),
+    })
+    check('🔴 의미 결속 digest가 다르면 승계하지 않고 provider 재감사',
+      changedBindingCalls === 1 && notCarried.kind === 'refuse' && notCarried.code === 'HTTP_500'
+      && resolutionsOf((await queueOf(D.queueId)).editDiff).length === 1,
+    JSON.stringify({ changedBindingCalls, kind: notCarried.kind }))
+    await prisma.autoReadyAudit.delete({ where: { queueId: D.queueId } })
+
     const T = await defectRow(sf, PASSING, { legacy: true })
     const stale = await planSemanticDefectResolution(prisma, { queueId: T.queueId, loadContext, provider: cleanProvider, now: new Date() })
     const art = sf.artifacts.find((x) => x.artifactId === T.artifactId)!
