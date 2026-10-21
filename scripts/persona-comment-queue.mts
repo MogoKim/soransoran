@@ -35,6 +35,7 @@ import {
   judgeReadiness, windowFromRows, RATIO_WINDOW_DAYS,
 } from '../src/lib/persona-comment-governor'
 import { runEnqueuePipeline } from './lib/persona-comment-pipeline'
+import { createPendingCandidateLocked } from '../src/lib/persona-candidate-write'
 import {
   gateInputOf, materializeTargets, type GateContext,
 } from './lib/persona-comment-targets'
@@ -363,42 +364,42 @@ const result = await runEnqueuePipeline({
   },
   ...(WANT_APPLY ? {
     writer: async ({ input, text, dedupKey, gates, gateStatus, provenance }) => {
-      try {
-        /**
-         * 🔴 **중복은 unique constraint 가 가른다.**
-         *    미리 `findUnique` 로 보고 쓰면 그 사이에 다른 회차가 넣을 수 있다.
-         *    `create` 가 P2002 로 지는 쪽이 진 것이다 — 조회로 이기려 하지 않는다.
-         */
-        await prisma.personaApprovalQueue.create({
-          data: {
-            persona: { connect: { code: input.personaCode } },
-            targetPostId: input.post.id,
-            status: 'PENDING',
-            candidateText: text,
-            reactionType: input.reactionRole,
-            gateStatus,
-            gateResults: gates as unknown as Prisma.InputJsonValue,
-            dedupKey,
-            /**
-             * 🔴 **생성 근거는 전용 칼럼에 쓴다** (마이그레이션 0024).
-             *    옛 판은 `storyRefs`·`topicTags` 에 문자열로 끼워 넣었다 —
-             *    그 두 칼럼은 사람이 편집하는 자리라, 편집 한 번이면
-             *    "어느 모델이 만들었나" 가 사라지거나 위조된다.
-             */
-            generatedModel: provenance.model,
-            canonRunId: provenance.canonRunId,
-            canonDigest: provenance.canonDigest,
-          },
-        })
-        return { created: true, reason: 'PENDING 적재' }
-      } catch (e) {
-        const code = (e as { code?: string }).code
-        return {
-          created: false,
-          reason: code === 'P2002'
-            ? '🔴 같은 dedupKey 가 이미 있다 — 다른 회차가 먼저 넣었다(fail-closed)'
-            : `적재 실패 — ${code ?? 'UNKNOWN'}`,
-        }
+      /**
+       * 🔴 **중복은 unique constraint 가 가른다.**
+       *    미리 `findUnique` 로 보고 쓰면 그 사이에 다른 회차가 넣을 수 있다.
+       *    `create` 가 P2002 로 지는 쪽이 진 것이다 — 조회로 이기려 하지 않는다.
+       *
+       * 🔴 저장은 공용 계약 하나다 — 트랜잭션 · Post 잠금 · 생성 때 게시판(boardLabel = boardType)
+       *    재확인 뒤 create (persona-candidate-write.ts). provider 호출은 이미 끝났다 — 잠금은 여기서 처음 잡는다.
+       */
+      const res = await createPendingCandidateLocked(prisma, {
+        postId: input.post.id,
+        expectedBoardType: input.post.boardLabel,
+        data: {
+          persona: { connect: { code: input.personaCode } },
+          candidateText: text,
+          reactionType: input.reactionRole,
+          gateStatus,
+          gateResults: gates as unknown as Prisma.InputJsonValue,
+          dedupKey,
+          /**
+           * 🔴 **생성 근거는 전용 칼럼에 쓴다** (마이그레이션 0024).
+           *    옛 판은 `storyRefs`·`topicTags` 에 문자열로 끼워 넣었다 —
+           *    그 두 칼럼은 사람이 편집하는 자리라, 편집 한 번이면
+           *    "어느 모델이 만들었나" 가 사라지거나 위조된다.
+           */
+          generatedModel: provenance.model,
+          canonRunId: provenance.canonRunId,
+          canonDigest: provenance.canonDigest,
+        },
+      })
+      if (res.created) return { created: true, reason: 'PENDING 적재' }
+      const code = res.errorCode // 🔴 중복은 unique constraint(P2002)가 가른다
+      return {
+        created: false,
+        reason: code === 'P2002'
+          ? '🔴 같은 dedupKey 가 이미 있다 — 다른 회차가 먼저 넣었다(fail-closed)'
+          : res.reason,
       }
     },
   } : {}),

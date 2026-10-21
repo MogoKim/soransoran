@@ -83,6 +83,24 @@ export function isExternalSourcedBody(p: PostVisibilityInput): boolean {
   return p.isMicroSeed
 }
 
+/**
+ * 🔴 **Micro Seed 레인이 낸 글인가** — 운영 조치의 소유 판정이 쓴다 (2026-10-21 게시판 변경).
+ *
+ *    운영자가 손대도 되는 글인지 물을 때 "자동 운영 자산" 쪽으로 빼는 축 하나다.
+ *    Persona(personaId) · 오리지널 큐(OriginalPostApprovalQueue) 축은 이 파일 소관이 아니라
+ *    호출부(board-move-tx.ts)가 따로 본다.
+ *
+ * 🔴 노출 판정이 아니다. 화면·검색·추천에 쓰지 않는다 — 그건 위 3축 함수가 한다.
+ *    WHERE 조각은 조건부 update 가 같은 축을 다시 걸 때 쓴다(읽은 뒤 바뀌어도 쓰지 않게).
+ */
+export function belongsToMicroSeedLane(p: PostVisibilityInput): boolean {
+  return p.isMicroSeed
+}
+
+export const NOT_MICRO_SEED_LANE_WHERE = {
+  isMicroSeed: false,
+} as const satisfies Prisma.PostWhereInput
+
 // ─────────────────────────────────────────────────────────
 // 축 1 — 커뮤니티 노출
 // ─────────────────────────────────────────────────────────

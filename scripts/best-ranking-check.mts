@@ -111,6 +111,8 @@ console.log('\n■ 3. 쓰기 경로 — syncBestEligibility(tx) 하나로 W 와 
     { file: 'src/lib/actions/delete.ts', events: '회원 글 삭제 · 회원 댓글 삭제', calls: 2 },
     { file: 'src/lib/actions/admin.ts', events: '어드민 글 숨김·복구 · 댓글 숨김·복구', calls: 2 },
     { file: 'src/lib/operator-compose-tx.ts', events: '운영 글 숨김', calls: 1 },
+    // 커뮤니티 → 커뮤니티 이동이라 공개 자격 · W 는 그대로다 — 기존 입성 기록을 건드리지 않는지 같은 진입점이 본다
+    { file: 'src/lib/board-move-tx.ts', events: '어드민 게시판 변경(자유게시판 ↔ 갱년기톡)', calls: 1 },
   ]
   for (const w of WRITERS) {
     const c = code(w.file)

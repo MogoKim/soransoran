@@ -39,6 +39,7 @@ import { dedupKeyOf } from '../../src/lib/persona-comment-queue'
 import type { CommentInput } from '../../src/lib/persona-comment-input'
 import type { ModelCanon } from '../../src/lib/persona-comment-provenance'
 import { publishCandidateTx, type PublishTxResult } from '../../src/lib/persona-publish-tx'
+import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-write'
 import {
   AUTO_LANE_DECIDED_BY, AUTO_LANE_EXPIRE_REASON, AUTO_LANE_STAGE,
   firstPerPost, isAutoLaneCandidatePost,
@@ -176,31 +177,30 @@ export function makeCanonGate(ctxOf: (input: CommentInput) => GateContext | unde
  */
 export function makePendingWriter(prisma: PrismaClient): PipelineWriter {
   return async ({ input, text, dedupKey, gates, gateStatus, provenance }) => {
-    try {
-      await prisma.personaApprovalQueue.create({
-        data: {
-          persona: { connect: { code: input.personaCode } },
-          targetPostId: input.post.id,
-          status: 'PENDING',
-          candidateText: text,
-          reactionType: input.reactionRole,
-          gateStatus,
-          gateResults: gates as unknown as Prisma.InputJsonValue,
-          dedupKey,
-          generatedModel: provenance.model,
-          canonRunId: provenance.canonRunId,
-          canonDigest: provenance.canonDigest,
-        },
-      })
-      return { created: true, reason: 'PENDING 적재' }
-    } catch (e) {
-      const code = (e as { code?: string }).code
-      return {
-        created: false,
-        reason: code === 'P2002'
-          ? '🔴 같은 dedupKey 가 이미 있다 — 다른 회차가 먼저 넣었다(fail-closed)'
-          : `적재 실패 — ${code ?? 'UNKNOWN'}`,
-      }
+    // 🔴 저장은 공용 계약 하나다 — 트랜잭션 · Post 잠금 · 생성 때 게시판(boardLabel = boardType) 재확인 뒤 create
+    //    (persona-candidate-write.ts). provider 호출은 이미 끝났다 — 잠금은 여기서 처음 잡는다.
+    const res = await createPendingCandidateLocked(prisma, {
+      postId: input.post.id,
+      expectedBoardType: input.post.boardLabel,
+      data: {
+        persona: { connect: { code: input.personaCode } },
+        candidateText: text,
+        reactionType: input.reactionRole,
+        gateStatus,
+        gateResults: gates as unknown as Prisma.InputJsonValue,
+        dedupKey,
+        generatedModel: provenance.model,
+        canonRunId: provenance.canonRunId,
+        canonDigest: provenance.canonDigest,
+      },
+    })
+    if (res.created) return { created: true, reason: 'PENDING 적재' }
+    const code = res.errorCode // 🔴 중복은 unique constraint(P2002)가 가른다
+    return {
+      created: false,
+      reason: code === 'P2002'
+        ? '🔴 같은 dedupKey 가 이미 있다 — 다른 회차가 먼저 넣었다(fail-closed)'
+        : res.reason,
     }
   }
 }
