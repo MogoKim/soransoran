@@ -1,8 +1,8 @@
 {
-  "version": "quality-v17",
-  "digest": "d40b13f834754c6875aa3c9d4ec2ad75d45f07bd3ff4ce1b203f40d341872078",
+  "version": "quality-v18",
+  "digest": "6e79eb6cef1ad6ca2ccc32123bb100ec9f5ad1c6b99381b91d1bf728de9d8997",
   "files": {
-    "src/lib/quality-contract.ts": "bafe4be8a993f9ee005012dd2e8ce88d4ce2ea5a18d42a6ecea720747cca0f80",
+    "src/lib/quality-contract.ts": "34d15d190efae0944a9244be0fa76ef3fc7ecaa463af53b74c6723446ef5903c",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "c1edbb1e97bfecee7185e97078be869afa08ac8f96f5f6d4d72165b2a68eb811",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
@@ -10,7 +10,7 @@
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
-    "src/lib/auto-ready-v2.ts": "07bb325ec6f23c45300f385ee02e72016eaab87b9428c3aee5c0737bdb8c813d",
+    "src/lib/auto-ready-v2.ts": "72e909de248a5dc080f35e9ef51c8bb140bef80d68d486962548285dee2f5094",
     "src/lib/supply-schedule-contract.ts": "f459df65a91d146d227faa086177573af602b93fa8a57393a79f88a2b1416f11",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
@@ -29,15 +29,17 @@
     "src/lib/auto-ready-defect-resolution.ts": "a3b1039d2876533d8cfeb7b348976dc168717f3674ecc188f27e80f60abba8a7",
     "src/lib/auto-ready-defect-resolution-store.ts": "40a718a119213a02a468c8dd53a604aa66ea211f2de56c65df22440ae1e83cc7",
     "src/lib/auto-ready-semantic-audit.ts": "af60b227cc501a8bd44aaf8e75cc9b77995e1b16e3e2e338ca8e10c010852811",
+    "scripts/lib/auto-ready-rule-judge.mts": "d9348652c0ab2d5ab6c98a358fd99408c3a34483895ab3b58fe72deb2a48b293",
     "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
     "kind": "bump",
-    "reason": "판 quality-v16 → quality-v17",
+    "reason": "판 quality-v17 → quality-v18",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/auto-ready-semantic-audit.ts"
+      "src/lib/auto-ready-v2.ts",
+      "scripts/lib/auto-ready-rule-judge.mts"
     ]
   }
 }

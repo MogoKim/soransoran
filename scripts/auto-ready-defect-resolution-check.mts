@@ -247,7 +247,7 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
     productionBranch.includes('semanticPlan!.plan') && productionBranch.includes('applyApprovedSemanticDefectResolution')
     && !productionBranch.includes('semanticProviderFromEnv') && !productionBranch.includes('planSemanticDefectResolution'))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
-    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v17')
+    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v18')
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)

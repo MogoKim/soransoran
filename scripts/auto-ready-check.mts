@@ -178,7 +178,8 @@ console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지'
   check('🔴 미배정(null) 그림자는 허용', run(row({ matchedPersonaCode: null })).klass === 'clean')
   check('🔴 🔴 **artifact 의 의미 검수가 불완전 → warning**',
     run(row(), [artifact({ review: { deterministic: { pass: true }, semanticCompletion: { complete: false }, semantic: { confidence: 0.9 } } })]).klass === 'warning')
-  check('🔴 원문에 차단 표현이 있다 → warning', run(row({ draftBody: '오늘도 산책했어요', draftTitle: draft.title }), [artifact({ draft: { title: draft.title, body: '오늘도 산책했어요' } })]).klass === 'warning')
+  check('Content Core가 검증한 문안을 단어로 다시 차단하지 않는다',
+    run(row({ draftBody: '오늘도 산책했어요', draftTitle: draft.title }), [artifact({ draft: { title: draft.title, body: '오늘도 산책했어요' } })]).klass === 'clean')
 }
 
 console.log('\n③ 🔴 표본 — 인증된 사람 v2 기록만 · 결과도 기록이 확정 · 결속이 깨지면 제외 · 기준 불변')
@@ -375,7 +376,7 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
   const V4_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
   check('🔴 🔴 **실제 v4 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
     codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V4_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
-    && QUALITY_CONTRACT_VERSION === 'quality-v17' && currentQualityContract().digest !== V4_MARK.digest)
+    && QUALITY_CONTRACT_VERSION === 'quality-v18' && currentQualityContract().digest !== V4_MARK.digest)
   /**
    * 🔴 (quality-v6 · 2026-10-01) **실제 v5 표식**도 같다 — 만남 게이트 전에 도장 찍힌 READY 는 v6 에서 자동 발행되지 않는다(구제 없음).
    */
@@ -556,9 +557,14 @@ console.log('\n⑪ 🔴 감사 — 묶음 대조 · 옛 판정 거절 · 규칙 
   check('🔴 🔴 **발행 본문이 도장 본문과 다르면 yes**', changed.defect === 'yes')
   const noStamp = await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '산책을 다녀왔어요. 다들 어떠세요?', stamp: null })
   check('🔴 도장이 없으면 yes', noStamp.defect === 'yes')
-  const drift = makeStamp('평범한 하루', '오늘도 산책했어요', new Date())
-  check('🔴 발행 글에 차단 표현이 있으면 yes',
-    (await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '오늘도 산책했어요', stamp: drift })).defect === 'yes')
+  const accepted = makeStamp('평범한 하루', '확실히 오늘도 산책하니 좋았어요', new Date())
+  check('규칙 감사도 Content Core가 적격 판정한 표현을 단어로 뒤집지 않는다',
+    (await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '확실히 오늘도 산책하니 좋았어요', stamp: accepted })).defect === 'no')
+  const eligibilitySource = codeOnly('src/lib/auto-ready-v2.ts')
+  const auditSource = codeOnly('scripts/lib/auto-ready-rule-judge.mts')
+  check('🔴 단어 재차단 구현이 되살아나지 않는다',
+    !/AUTO_READY_BLOCKERS|Object\.entries\([^)]*BLOCKER/.test(eligibilitySource + auditSource)
+    && !/확실히\|틀림없이|오늘도\|아직도|저격\|논란/.test(eligibilitySource + auditSource))
   check('🔴 규칙 감사자는 자기 판을 밝힌다 — 모델·프롬프트·감사 계약',
     good.model === 'rule:integrity-safety-audit' && good.promptVersion === 'integrity-safety-v1'
     && good.contractVersion === AUDIT_CONTRACT_VERSION)
