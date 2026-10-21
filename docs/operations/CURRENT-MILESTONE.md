@@ -55,7 +55,7 @@
 | 항목 | 값 |
 |---|---|
 | 원격 main (2026-10-21 19:24 관측) | `aaba33e88d04d86a422585d9b9e113fc570b0be2` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `aaba33e88d04d86a422585d9b9e113fc570b0be2` · tracked 0 |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `aaba33e88d04d86a422585d9b9e113fc570b0be2` · main 차이를 별도 판정: D100 차이 0 · tracked 0 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 10-21 07:00 D10 미개방 |
