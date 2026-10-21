@@ -1,132 +1,103 @@
 /**
- * G8 편입기 — M-GRAPH 연구 정본의 AUTO_READY 의도를 M-AUTO topic queue 로 올린다.
+ * G8 편입기 — builder 가 판정한 **GRAPH_READY** intent 에 영구 신원(slug)과 admission 을 부여한다.
  *
- * 🔴 **새 주제를 만들지 않는다.** 이미 조사·판정된 의도만 옮긴다.
- *    입력은 연구 정본(의도·판정·그래프 빌드)과 제품의 articles·queue·graph 번들이고,
- *    출력은 manifest 하나다. 큐 행과 **편입 장부** 행은 같은 manifest 에서 나온다
- *    — 둘이 따로 갈라질 길을 만들지 않는다 (헌장 §15 전환 규칙 9).
+ * 🔴 **G8 은 queue writer 가 아니다** (2026-10-21 · g8-promotion/2).
+ *    콘텐츠 계획(형식 · 검색 의도 · 위험 · CTA …)은 ArticlePlan 이 정한다. G8 이 쓰는 것은 연구 쪽 세 파일뿐이다.
+ *      contract/g8-admission/<manifestHash>.json   receipt — manifest 원문 + 사람 승인 (wx · 불변)
+ *      contract/m3-slug-manifest.json             intentId ↔ slug 영구 binding (키 추가만)
+ *      contract/m3-state.jsonl                    ADMITTED 사건 (정본 recordAdmission · append-only)
+ *    제품 파일(articles · topic-queue · graph)은 읽기만 한다.
  *
- * 🔴 **용어를 섞지 않는다.**
- *    · 편입 장부(admission ledger) — 연구 `contract/m3-state.jsonl`(ADMITTED 사건) +
- *      `contract/m3-slug-manifest.json`(intentId ↔ slug). 이 도구가 쓰는 것은 여기까지다.
- *    · 제품 graph bundle — `src/content/magazine/graph/*`. 이 도구는 **읽기만** 한다.
- *      편입 장부가 제품 그래프에 반영되려면 연구 build-graph 재빌드 → export → 배포가 따로 돌아야 한다.
+ * 🔴 **판정을 다시 만들지 않는다.** 후보는 builder `computeGraphAndReadiness` 의 GRAPH_READY 행뿐이다.
+ *    G8 은 그 위에 신원 검사(이미 편입 · slug 충돌 · 제목 충돌 · 제목 형식)만 얹는다 — 새 후보를 만들지 않는다.
  *
- * 🔴 **필수 필드를 추측하지 않는다.** 연구 정본에 값이 없으면 그 의도는 INCOMPLETE 다.
- *    STANDARD·EVERGREEN 같은 값으로 조용히 채우지 않는다.
- *    예외는 정본 문서가 이미 값을 정한 세 가지뿐이고, 행마다 출처를 적는다 (`DERIVED`).
+ * 🔴 **입력 권위는 snapshot 하나다.** 연구 current · 루트 canonical 을 읽지 않는다.
+ *    snapshot 으로 다시 계산한 graph 가 제품 bundle payload 와 바이트까지 같아야 한다.
+ *    graphVersion 에 build 날짜가 들어가므로 build effectiveAt(`graphEffectiveAt`)을 명시로 받는다 — 추정하지 않는다.
  *
- * 🔴 **기본은 dry-run 이다.** 쓰기는 `applyManifest` 하나뿐이고, 그것도 호출자가
- *    큐 루트·편입 장부 루트·manifest 해시를 명시해야 돈다.
- *    apply 는 단일 writer 잠금 안에서만 쓰고, 급사하면 다음 apply 가 journal 로 되돌린다.
+ * 🔴 **apply 는 commit-forward 다.** 임시 공간에서 세 파일의 최종 바이트를 전부 만들고 검증한 뒤에만 journal 을 쓴다.
+ *    journal 이후의 급사는 같은 최종 바이트를 끝까지 놓아 완성한다 — 의미 판정을 다시 하지 않고, ledger 를 줄이지 않는다.
  */
 import fs from 'node:fs'
-import path from 'node:path'
 import os from 'node:os'
+import path from 'node:path'
 import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { parseArticlesSource, parseQueueSource, sliceLiteral } from './magazine-load.mjs'
-import { isPublic } from './magazine-gate.mjs'
 import { checkTitleForm } from './magazine-editorial.mjs'
 import { BANNED_WORDS } from './magazine-brief-policy.mjs'
-import { VALIDATION_PROFILES } from './magazine-validation-profile.mjs'
-import { withQuarantineLock } from './magazine-quarantine.mjs'
-import { withQueueWriteLock } from './magazine-queue-lock.mjs'
+import {
+  INPUT_FILES as SNAPSHOT_FILE_NAMES, computeGraphAndReadiness, isRealKstAt, parseControlText, semanticHashOf,
+} from './magazine-graph-build.mjs'
 
-export const G8_SCHEMA = 'g8-promotion/1'
-export const PRIMARY_COUNT = 5
-export const FALLBACK_COUNT = 3
+export const G8_SCHEMA = 'g8-promotion/2'
+export const RECEIPT_SCHEMA = 'g8-admission-receipt/1'
+export const ADMISSION_JOURNAL_SCHEMA = 'g8-admission-journal/1'
+export const LOCK_SCHEMA = 'g8-admission-lock/1'
 
-/** 의도는 이 중 **정확히 하나**다. 순서가 판정 우선순위다 (`classifyIntents`) */
-export const CLASSES = [
-  'LIVE', 'SCHEDULED', 'ALREADY_QUEUED', 'DUPLICATE_OR_CONFLICT',
-  'REJECT', 'HOLD', 'EXTEND_EXISTING', 'TERRITORY_DECISION_REQUIRED',
-  'INCOMPLETE', 'ELIGIBLE_NEW',
-]
-
+/** 연구 쪽 — G8 이 읽는 모듈 */
 export const RESEARCH_FILES = {
-  canonical: 'g4-intents-canonical.jsonl',
-  automation: 'g4-automation-2026-09-23.jsonl',
-  rebaseline: 'g4-rebaseline-2026-09-23.jsonl',
-  buildIntents: 'contract/build/current/intents.jsonl',
-  buildEdges: 'contract/build/current/edges.jsonl',
-  buildMappings: 'contract/build/current/mappings.jsonl',
-  buildManifest: 'contract/build/current/manifest.json',
   slugModule: 'contract/m3-slug.mjs',
   /** 🔴 장부 사건은 이 정본 계약(validateLedger · recordAdmission)으로만 적는다 */
   pipelineModule: 'contract/m3-pipeline.mjs',
-  productModule: 'contract/m3-product.mjs',
 }
-/** 편입 장부 — 이 도구가 쓰는 연구 쪽 파일. 없으면 빈 것으로 본다 (해시 `ABSENT`) */
+/** 편입 장부 — G8 이 쓰는 연구 쪽 파일. 없으면 빈 것으로 본다 (해시 `ABSENT`) */
 export const ADMISSION_FILES = {
   slugManifest: 'contract/m3-slug-manifest.json',
   ledger: 'contract/m3-state.jsonl',
 }
-/** 급사 복구 journal — apply 가 쓰기 전에 원본 바이트를 적는다. 정상 종료면 남지 않는다 */
-export const JOURNAL_FILE = 'contract/.g8-apply.journal.json'
+export const RECEIPT_DIR = 'contract/g8-admission'
+export const LOCK_FILE = 'contract/.g8-admission.lock'
+export const JOURNAL_FILE = 'contract/.g8-admission.journal.json'
 export const PRODUCT_FILES = {
   articles: 'src/content/magazine/articles.ts',
   queue: 'drafts/magazine/topic-queue.ts',
-  types: 'src/content/magazine/types.ts',
   graphCurrent: 'src/content/magazine/graph/current.ts',
+  graphControl: 'src/content/magazine/graph/control.ts',
+  graphResolver: 'src/lib/magazine-graph.ts',
 }
+export const SNAPSHOT_FILES = Object.freeze(Object.values(SNAPSHOT_FILE_NAMES))
 
 /**
- * 의도가 기존 글로 **이미 답해졌다**고 보는 대응. PARTIAL·ADJACENT 는 답이 아니다 —
- * 그 의도는 연구 판정(EXTEND_EXISTING 또는 AUTO_READY)으로 간다.
+ * 🔴 **receipt 없이 이미 있는 ADMITTED 5행** — G8 v1 이전 편입. intentId · slug · 행 sha256 으로 정확히 열거한다.
+ *    「receipt 가 없으면 legacy」 가 아니다 — 여기 없는 receipt 없는 행은 UNKNOWN 이고 실패다.
  */
-/**
- * 🔴 `ANSWERS_PARTIAL` · `ANSWERS_WITH_SCOPE_EXPANSION` 은 **완료 답변이 아니다** — 기존 글이 일부만 답하거나
- *    범위를 넓혀야 답한다. 그 의도는 연구 판정(EXTEND_EXISTING)을 따른다 (I-T6-09 · I-T1-26).
- */
-const ANSWER_COVERAGE = new Set([
-  'ANSWERS', 'ANSWERS_WITH_DEFECT',
-  'QUEUED_NOT_PUBLIC', 'SCHEDULED_NOT_YET_PUBLIC', 'PRIMARY',
+export const KNOWN_LEGACY_ADMISSIONS = Object.freeze([
+  { intentId: 'I-T6-12', slug: 'retirement-others-what-work', lineSha256: 'e1c0ce82802a21ecfa1e9af0a4ffdc0f16ca5f77d35b10c7928e6faa544e96c6' },
+  { intentId: 'I-T4-15', slug: 'clinic-booking-app', lineSha256: 'fbdd21af605bdf94736d0cd2362b556970a2d8f487138c18fa6ac0075d6b6ae4' },
+  { intentId: 'I-T6-13', slug: 'job-credentials', lineSha256: 'a77ad0919213effd58d64bfd68fce9c08c16e5355830e717eb035c0b9c2ffe1c' },
+  { intentId: 'I-T7-05', slug: 'alone-pastime', lineSha256: 'bb4ac3d0d9cb9e82fcb3492dcfdda389adaf924883e51689153349aa87082f02' },
+  { intentId: 'I-T8-38', slug: 'gray-hair-leave-as-is', lineSha256: '3eea17205f16511f2ca7d4a5900c2ff8dd8cde594de0c69472228b769c6c4834' },
 ])
 
-/** 연구 graph-contract.ts 의 RELATION_TO_SLOT 과 같다 */
-const RELATION_TO_SLOT = {
-  NEXT_QUESTION: 'DIRECT_NEXT',
-  SIBLING: 'SAME_EXPERIENCE',
-  ACTION: 'ACTION_OR_CONTEXT',
-  PREREQUISITE: 'ACTION_OR_CONTEXT',
-  SERIES: 'ACTION_OR_CONTEXT',
-  BRIDGE: 'BRIDGE_DISCOVERY',
-  COMMUNITY: null,
-}
+/** 🔴 기계 승인 표식 — admission 은 사람 승인만 받는다 (DIRECT source 승인과 같은 규칙) */
+const MACHINE_APPROVER = /:|^(?:machine|bot|auto|automation|system|ci|agent|claude|codex|chatgpt|gpt|openai|anthropic)\b/i
 
-/**
- * 🔴 정본 문서가 이미 값을 정한 필드 — 연구 정본에 없어도 추측이 아니다.
- *    출처를 행의 `derived` 에 그대로 싣는다.
- */
-export const DERIVED = {
-  imageMode: {
-    value: 'REQUIRED',
-    source: 'scripts/lib/magazine-auto-lane.mjs heroPlan — 자동 레인에서는 OPTIONAL 도 hero 필수 (2026-09-21 사고)',
-  },
-  reviewMode: {
-    byRisk: { LOW: 'SUMMARY_ONLY', MEDIUM: 'RISK_SENTENCES', HIGH: 'FULL_REVIEW' },
-    source: 'topic-queue.ts ReviewMode — riskLevel 에서 파생되는 호환 필드. 자동 판정에 쓰이지 않는다',
-  },
-  autoEligible: {
-    value: true,
-    source: 'topic-queue.ts autoEligible — M3-A 호환 필드. 자동 진행 판정에 쓰이지 않는다',
-  },
-  target: {
-    value: '40대 중반~60대 중반',
-    source: 'NORTH-STAR 고객 정의 — 의도별 연령대를 좁힌 근거가 없으면 서비스 전체 독자층',
-  },
-}
-
-/** 영토 판단이 창업자에게 남아 있는 묶음 (Foundation §14 「아직 열려 있는 것」) */
-const TERRITORY_BUNDLES = new Set(['T9_PARENT_CARE', 'SEX_SCOPE'])
-
-// ── 읽기 ─────────────────────────────────────────────────────
+// ── 기본 ─────────────────────────────────────────────────────
 
 export const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex')
+const sha16 = (text) => sha256(text).slice(0, 16)
+
+/** 키를 정렬한 canonical JSON — manifest · receipt 해시의 유일한 직렬화 */
+export function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v)
+}
+/** manifest 해시 — hash 필드만 뺀 canonical JSON 의 sha256 */
+export const hashManifest = (m) => { const { hash: _omit, ...body } = m ?? {}; return sha256(canonicalJson(body)) }
+/** receipt 해시 — receiptHash 필드만 뺀 receipt 전체의 canonical JSON 의 sha256 */
+export const receiptHashOf = (r) => { const { receiptHash: _omit, ...body } = r ?? {}; return sha256(canonicalJson(body)) }
+
+class G8Error extends Error {
+  constructor(code, why) { super(`${code} — ${why}`); this.code = code; this.why = why }
+}
+const fail = (code, why) => { throw new G8Error(code, why) }
 
 function readRequired(file, label) {
-  if (!fs.existsSync(file)) throw new Error(`${label} 가 없다: ${file}`)
+  if (!fs.existsSync(file)) fail('INPUT_MISSING', `${label} 가 없다: ${file}`)
   return fs.readFileSync(file, 'utf8')
 }
 function readOptional(file) {
@@ -136,159 +107,16 @@ const parseJsonl = (text, label) => String(text ?? '').split('\n').filter((l) =>
   try { return JSON.parse(l) } catch (e) { throw new Error(`${label} ${i + 1}행 JSON 파싱 실패: ${e.message}`) }
 })
 
-/** 큐 파일의 문자열 union 타입을 읽는다 — 허용값을 이 파일에 다시 적지 않는다 */
-export function readStringUnion(src, typeName) {
-  const m = new RegExp(`export type ${typeName}\\s*=([^\\n]*(?:\\n\\s*\\|[^\\n]*)*)`).exec(src)
-  if (!m) throw new Error(`타입 ${typeName} 를 찾지 못했다`)
-  const values = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
-  if (!values.length) throw new Error(`타입 ${typeName} 에 값이 없다`)
-  return new Set(values)
-}
-
-function loadGraphBundle(repoDir) {
-  const currentPath = path.join(repoDir, PRODUCT_FILES.graphCurrent)
-  const current = readRequired(currentPath, 'graph current.ts')
-  const m = /export \{ GRAPH, EXPORT_HASH \} from '\.\/(g-[a-z0-9-]+)'/.exec(current)
-  if (!m) throw new Error('graph current.ts 가 가리키는 버전을 찾지 못했다')
-  const bundlePath = path.join(repoDir, path.dirname(PRODUCT_FILES.graphCurrent), `${m[1]}.ts`)
-  const src = readRequired(bundlePath, 'graph 번들')
-  const literal = sliceLiteral(src, src.indexOf('=', src.indexOf('export const GRAPH')), '{', '}')
-  if (!literal) throw new Error('graph 번들의 GRAPH 리터럴을 찾지 못했다')
-  return { file: path.relative(repoDir, bundlePath), text: current + src, graph: JSON.parse(literal) }
-}
-
 /**
- * 입력 전부를 읽고 해시를 단다. 🔴 같은 바이트면 같은 해시 — manifest 가 입력을 고정한다.
+ * 🔴 **판정 시각은 정확한 KST 시각 하나다.** 날짜만 받아 하루 끝으로 해석하지 않는다 · 벽시계로 대신하지 않는다.
  */
-/**
- * 입력 전부의 원문과 해시. 🔴 manifest 생성과 apply 직전 재검사가 **같은 함수**를 쓴다 —
- *    apply 가 일부 파일만 다시 보면, 나머지가 바뀐 채로 옛 판정이 쓰인다.
- */
-export function readInputs({ researchDir, repoDir }) {
-  const research = {}
-  for (const [k, rel] of Object.entries(RESEARCH_FILES)) {
-    research[k] = readRequired(path.join(researchDir, rel), `연구 ${rel}`)
-  }
-  const admission = {}
-  for (const [k, rel] of Object.entries(ADMISSION_FILES)) admission[k] = readOptional(path.join(researchDir, rel))
-  const product = {}
-  for (const k of ['articles', 'queue', 'types']) product[k] = readRequired(path.join(repoDir, PRODUCT_FILES[k]), PRODUCT_FILES[k])
-  const bundle = loadGraphBundle(repoDir)
-  const draftsDir = path.join(repoDir, 'drafts/magazine')
-  const draftDirs = fs.existsSync(draftsDir)
-    ? fs.readdirSync(draftsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()
-    : []
-  const hashes = {
-    research: Object.fromEntries(Object.keys(RESEARCH_FILES).map((k) => [k, sha256(research[k])])),
-    admission: Object.fromEntries(Object.keys(ADMISSION_FILES).map((k) => [k, admission[k] === null ? 'ABSENT' : sha256(admission[k])])),
-    product: {
-      articles: sha256(product.articles),
-      queue: sha256(product.queue),
-      types: sha256(product.types),
-      graphBundle: sha256(bundle.text),
-      draftDirs: sha256(draftDirs.join('\n')),
-    },
-  }
-  return { research, admission, product, bundle, draftDirs, hashes }
+export function parseAt(at, label = '판정 시각') {
+  if (!isRealKstAt(at)) fail('AT_INVALID', `${label}은 실제로 있는 YYYY-MM-DDTHH:MM:SS+09:00 이어야 한다: ${at}`)
+  return { at, ms: new Date(at).getTime() }
 }
-
-/** 두 해시 묶음에서 다른 입력의 이름 — 한쪽에만 있는 키도 다른 것으로 센다 */
-export function diffHashes(want, got) {
-  const out = []
-  for (const group of new Set([...Object.keys(want ?? {}), ...Object.keys(got ?? {})])) {
-    const a = want?.[group] ?? {}
-    const b = got?.[group] ?? {}
-    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (a[k] !== b[k]) out.push(`${group}.${k}`)
-  }
-  return out.sort()
-}
-
-/**
- * 입력 전부를 읽고 해시를 단다. 🔴 같은 바이트면 같은 해시 — manifest 가 입력을 고정한다.
- */
-export async function loadInputs({ researchDir, repoDir }) {
-  const { research, admission, product, bundle, draftDirs, hashes } = readInputs({ researchDir, repoDir })
-  const slugModule = await import(pathToFileURL(path.join(researchDir, RESEARCH_FILES.slugModule)).href)
-  if (typeof slugModule.proposeSlug !== 'function') throw new Error('m3-slug.mjs 에 proposeSlug 가 없다')
-
-  return {
-    hashes,
-    proposeSlug: slugModule.proposeSlug,
-    canonical: parseJsonl(research.canonical, RESEARCH_FILES.canonical),
-    automation: parseJsonl(research.automation, RESEARCH_FILES.automation),
-    rebaseline: parseJsonl(research.rebaseline, RESEARCH_FILES.rebaseline),
-    buildIntents: parseJsonl(research.buildIntents, RESEARCH_FILES.buildIntents),
-    buildEdges: parseJsonl(research.buildEdges, RESEARCH_FILES.buildEdges),
-    buildMappings: parseJsonl(research.buildMappings, RESEARCH_FILES.buildMappings),
-    buildManifest: JSON.parse(research.buildManifest),
-    slugManifest: admission.slugManifest === null ? { slugs: {} } : JSON.parse(admission.slugManifest),
-    ledger: parseJsonl(admission.ledger, ADMISSION_FILES.ledger),
-    articles: parseArticlesSource(product.articles),
-    queue: parseQueueSource(product.queue),
-    unions: {
-      cluster: readStringUnion(product.types, 'MagazineCluster'),
-      ctaBoard: readStringUnion(product.queue, 'CtaBoard'),
-      contentType: readStringUnion(product.queue, 'ContentType'),
-      searchIntent: readStringUnion(product.queue, 'SearchIntent'),
-      riskLevel: readStringUnion(product.queue, 'RiskLevel'),
-    },
-    graph: bundle.graph,
-    graphFile: bundle.file,
-    draftDirs,
-  }
-}
-
-/**
- * 🔴 **판정 시각은 정확한 KST 시각 하나다.** 날짜만 받아 하루 끝으로 해석하지 않는다 —
- *    10:30 공개 글은 같은 날 10:29 에는 예약이고 10:30 에는 공개다.
- */
-export function parseAt(at) {
-  if (typeof at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+09:00$/.test(at)) {
-    throw new Error(`판정 시각은 YYYY-MM-DDTHH:MM:SS+09:00 이어야 한다: ${at}`)
-  }
-  const ms = new Date(at).getTime()
-  if (Number.isNaN(ms)) throw new Error(`판정 시각이 날짜가 아니다: ${at}`)
-  return { at, asOf: at.slice(0, 10), ms }
-}
-
-// ── 판정 ─────────────────────────────────────────────────────
 
 /** 비교용 — 공백·문장부호를 걷어 낸 질문/제목 */
 export const normalizeTitle = (s) => String(s ?? '').replace(/[\s?!.,·…"'「」()~]/g, '')
-
-const isDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
-
-/**
- * 🔴 **필수 필드 판정.** 값이 없거나 허용값 밖이면 이유를 돌려준다. 채워 넣지 않는다.
- *    정본 위치를 이유에 적는다 — 무엇을 어디에 채워야 풀리는지 바로 읽히게.
- */
-export function requiredFieldProblems(ctx) {
-  const { canon, build, unions, relations, slug } = ctx
-  const problems = []
-  if (!unions.cluster.has(build.magazineCluster)) problems.push('cluster — build intents.magazineCluster 없음/허용값 밖')
-  else if (canon.magazineCluster && canon.magazineCluster !== build.magazineCluster) {
-    problems.push(`cluster_conflict — canonical ${canon.magazineCluster} ≠ automation ${build.magazineCluster}`)
-  }
-  if (!unions.ctaBoard.has(build.communityDestination)) problems.push('cta — communityDestination 없음/허용값 밖')
-  if (!unions.riskLevel.has(canon.riskLevel)) problems.push('riskLevel — canonical.riskLevel 없음')
-  if (!VALIDATION_PROFILES.includes(build.verificationProfile)) problems.push('validationProfile — verificationProfile 없음/허용값 밖')
-  if (!unions.contentType.has(canon.contentTypeHint)) problems.push('contentType — canonical.contentTypeHint 없음')
-  else if (canon.contentTypeHint === 'SEASONAL') {
-    const w = canon.publishWindow
-    if (!w || !isDate(w.after) || !isDate(w.before) || w.after > w.before) problems.push('publishWindow — SEASONAL 인데 canonical.publishWindow 없음/형식 오류')
-  }
-  if (!unions.searchIntent.has(canon.searchIntentType)) problems.push('searchIntent — canonical.searchIntentType 없음')
-  if (canon.seriesId !== undefined && canon.seriesId !== null) {
-    if (typeof canon.seriesId !== 'string' || !Number.isInteger(canon.seriesOrder) || canon.seriesOrder < 1) {
-      problems.push('series — seriesId 는 있는데 seriesOrder 가 1 이상의 정수가 아니다')
-    }
-  }
-  if (!String(build.answerScope ?? '').trim()) problems.push('answerScope — 없음')
-  if (!String(build.audienceSituation ?? '').trim()) problems.push('audienceSituation — 없음')
-  if (!relations.direct.length && !relations.discovery) problems.push('relations — AUTOMATION_READY 관계가 하나도 없다')
-  if (!slug || !/^[a-z][a-z0-9-]*$/.test(slug)) problems.push(`slug — 영구 slug 를 정하지 못했다 (${slug || '빈 값'})`)
-  return problems
-}
 
 /** 🔴 제목 계약 — 큐 작업 제목은 자동 제작에 넣을 최소 형식과 금지어를 통과해야 한다 */
 export function titleProblems(title) {
@@ -300,353 +128,682 @@ export function titleProblems(title) {
   return out
 }
 
-/** 의도의 AUTOMATION_READY 관계 — 직접 최대 3 + 발견 1. 우선순위 → edgeId 순 */
-function relationsOf(intentId, edges) {
-  const out = edges
-    .filter((e) => e.fromIntentId === intentId && e.layers?.AUTOMATION_READY && RELATION_TO_SLOT[e.relationType])
-    .sort((a, b) => (a.priority - b.priority) || (a.edgeId < b.edgeId ? -1 : a.edgeId > b.edgeId ? 1 : 0))
-  const direct = []
-  let discovery = null
-  for (const e of out) {
-    const slot = RELATION_TO_SLOT[e.relationType]
-    const rel = { slot, toIntentId: e.toIntentId, relationType: e.relationType, anchorLabel: e.anchorLabel, readerReason: e.readerReason }
-    if (slot === 'BRIDGE_DISCOVERY') { if (!discovery) discovery = rel } else if (direct.length < 3) direct.push(rel)
+// ── 신원 입력 (15개) ──────────────────────────────────────────
+
+/**
+ * 🔴 **apply 직전에 전부 다시 센다.** 하나라도 다르면 journal 전에 STALE_INPUT — 실제 write 0.
+ *    제품 7 · 연구 3 · snapshot 5. 연구 current 는 여기 없다(읽지 않는다).
+ */
+export function readIdentityInputs({ repoDir, researchDir, snapshotDir }) {
+  const p = (rel) => path.join(repoDir, rel)
+  const current = readRequired(p(PRODUCT_FILES.graphCurrent), 'graph current.ts')
+  const m = /export \{ GRAPH, EXPORT_HASH \} from '\.\/(g-[a-z0-9-]+)'/.exec(current)
+  if (!m) fail('INPUT_MISSING', 'graph current.ts 가 가리키는 버전을 찾지 못했다')
+  const bundleRel = path.join(path.dirname(PRODUCT_FILES.graphCurrent), `${m[1]}.ts`)
+  const draftsDir = p('drafts/magazine')
+  const draftSlugs = fs.existsSync(draftsDir)
+    ? fs.readdirSync(draftsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()
+    : []
+  const texts = {
+    articles: readRequired(p(PRODUCT_FILES.articles), PRODUCT_FILES.articles),
+    topicQueue: readRequired(p(PRODUCT_FILES.queue), PRODUCT_FILES.queue),
+    graphCurrent: current,
+    graphPointer: m[1],
+    graphBundle: readRequired(p(bundleRel), bundleRel),
+    graphControl: readRequired(p(PRODUCT_FILES.graphControl), PRODUCT_FILES.graphControl),
+    graphResolver: readRequired(p(PRODUCT_FILES.graphResolver), PRODUCT_FILES.graphResolver),
+    draftSlugs,
+    slugManifest: readOptional(path.join(researchDir, ADMISSION_FILES.slugManifest)),
+    ledger: readOptional(path.join(researchDir, ADMISSION_FILES.ledger)),
+    slugModule: readRequired(path.join(researchDir, RESEARCH_FILES.slugModule), RESEARCH_FILES.slugModule),
+    snapshot: Object.fromEntries(SNAPSHOT_FILES.map((n) => [n, readRequired(path.join(snapshotDir, n), `snapshot ${n}`)])),
   }
-  return { direct, discovery }
+  const absent = (t) => (t === null ? 'ABSENT' : sha256(t))
+  const entries = [
+    ['product.articles', sha256(texts.articles)],
+    ['product.topicQueue', sha256(texts.topicQueue)],
+    ['product.draftsSlugSet', sha256(texts.draftSlugs.join('\n'))],
+    ['product.graphCurrent', sha256(texts.graphCurrent)],
+    ['product.graphBundle', sha256(texts.graphBundle)],
+    ['product.graphControl', sha256(texts.graphControl)],
+    ['product.graphResolver', sha256(texts.graphResolver)],
+    ['research.slugManifest', absent(texts.slugManifest)],
+    ['research.ledger', absent(texts.ledger)],
+    ['research.slugModule', sha256(texts.slugModule)],
+    ...SNAPSHOT_FILES.map((n) => [`snapshot.${n}`, sha256(texts.snapshot[n])]),
+  ]
+  return { texts, hashes: Object.fromEntries(entries) }
 }
 
-function productStateOf(slug, artBySlug, queueBySlug, nowMs) {
-  const a = artBySlug.get(slug)
-  if (a) return isPublic(a, nowMs) ? 'LIVE' : 'SCHEDULED'
-  if (queueBySlug.has(slug)) return 'ALREADY_QUEUED'
-  return 'ABSENT'
+// ── 제품 bundle 대조 ─────────────────────────────────────────
+
+/** 제품 bundle 파일의 GRAPH payload 와 EXPORT_HASH 를 실제로 읽는다 */
+export function readBundlePayload(bundleText) {
+  const literal = sliceLiteral(bundleText, bundleText.indexOf('=', bundleText.indexOf('export const GRAPH')), '{', '}')
+  if (!literal) fail('GRAPH_BUNDLE_UNREADABLE', 'graph 번들의 GRAPH 리터럴을 찾지 못했다')
+  const e = /export const EXPORT_HASH = '([0-9a-f]+)'/.exec(bundleText)
+  if (!e) fail('GRAPH_BUNDLE_UNREADABLE', 'graph 번들의 EXPORT_HASH 를 찾지 못했다')
+  let payload
+  try { payload = JSON.parse(literal) } catch (err) { fail('GRAPH_BUNDLE_UNREADABLE', `GRAPH 리터럴 JSON 파싱 실패: ${err.message}`) }
+  return { payload, exportHash: e[1] }
 }
 
 /**
- * 🔴 **모든 의도를 정확히 한 상태로 분류한다.** 순서가 우선순위다.
- *   ① 제품에 이미 있는가 (LIVE > SCHEDULED > ALREADY_QUEUED) — 연구 판정보다 제품 사실이 이긴다
- *   ② 대응 slug 가 제품 어디에도 없다 → DUPLICATE_OR_CONFLICT (재편입하지 않는다)
- *   ③ REJECT → HOLD → EXTEND_EXISTING → AUTO_READY 가 아닌 판정(INCOMPLETE)
- *   ④ 영토 판단 대기 → 중복 → 필수 필드·제목 → ELIGIBLE_NEW
+ * 🔴 **snapshot ↔ 제품 bundle.** 선언값만 보지 않는다 — 전부 다시 계산해 대조한다.
+ *    payload deep-equal(generatedAt 제외) · contentHash 각 필드 · participation 포함 combined · graphVersion ·
+ *    graphSemanticHash · EXPORT_HASH · current 가 가리키는 파일 · control 판.
+ * @returns {string[]} 어긋난 것 (비면 일치)
  */
-export function classifyIntents(inputs, { at }) {
-  const time = parseAt(at)
-  const nowMs = time.ms
-  const canonById = new Map(inputs.canonical.map((x) => [x.intentId, x]))
-  const autoById = new Map(inputs.automation.map((x) => [x.intentId, x]))
-  const rebById = new Map(inputs.rebaseline.map((x) => [x.intentId, x]))
-  const ids = inputs.buildIntents.map((x) => x.intentId)
-  const missing = ids.filter((id) => !canonById.has(id) || !autoById.has(id))
-  if (missing.length || canonById.size !== ids.length || autoById.size !== ids.length) {
-    throw new Error(`연구 정본의 의도 집합이 서로 다르다 (build ${ids.length} · canonical ${canonById.size} · automation ${autoById.size} · 누락 ${missing.slice(0, 3).join(',')})`)
+export function graphIdentityProblems({ core, texts }) {
+  const { payload, exportHash } = readBundlePayload(texts.graphBundle)
+  const problems = []
+  if (sha16(JSON.stringify(payload)) !== exportHash) problems.push('EXPORT_HASH — bundle payload 와 EXPORT_HASH 가 다르다')
+  const recomputed = { ...core.parts.slimCore, generatedAt: payload.generatedAt }
+  if (JSON.stringify(recomputed) !== JSON.stringify(payload)) problems.push('PAYLOAD — snapshot 재계산 payload 가 제품 bundle 과 다르다')
+  const pc = payload.contentHash ?? {}
+  for (const k of ['intents', 'edges', 'mappings', 'participation', 'combined']) {
+    if (core.contentHash[k] !== pc[k]) problems.push(`CONTENT_HASH.${k} — ${core.contentHash[k]} ≠ ${pc[k]}`)
   }
-
-  const artBySlug = new Map(inputs.articles.map((a) => [a.slug, a]))
-  const queueBySlug = new Map(inputs.queue.map((q) => [q.slug, q]))
-  const titleOwner = new Map()
-  for (const a of inputs.articles) titleOwner.set(normalizeTitle(a.title), `article:${a.slug}`)
-  for (const q of inputs.queue) if (!titleOwner.has(normalizeTitle(q.title))) titleOwner.set(normalizeTitle(q.title), `queue:${q.slug}`)
-
-  /** 이미 다른 것이 쓰는 slug — 글·큐·원고 폴더·그래프 매핑·영구 slug 표 */
-  const takenSlugs = new Map()
-  const take = (slug, who) => { if (slug && !takenSlugs.has(slug)) takenSlugs.set(slug, who) }
-  for (const a of inputs.articles) take(a.slug, 'articles.ts')
-  for (const q of inputs.queue) take(q.slug, 'topic-queue.ts')
-  for (const d of inputs.draftDirs) take(d, 'drafts/magazine')
-  for (const m of inputs.graph.mappings) take(m.slug, 'graph 번들 매핑')
-  for (const m of inputs.buildMappings) take(m.slug, '연구 build 매핑')
-  const boundSlug = new Map(Object.entries(inputs.slugManifest.slugs ?? {}))
-  for (const [intentId, slug] of boundSlug) take(slug, `영구 slug 표(${intentId})`)
-
-  /** intentId → 기존 글로 답한 slug 들 */
-  const answered = new Map()
-  const addAnswer = (id, slug, via) => {
-    if (!answered.has(id)) answered.set(id, [])
-    if (!answered.get(id).some((x) => x.slug === slug)) answered.get(id).push({ slug, via })
-  }
-  for (const c of inputs.canonical) for (const s of c.existingSlugs ?? []) if (ANSWER_COVERAGE.has(s.coverage)) addAnswer(c.intentId, s.slug, `canonical:${s.coverage}`)
-  for (const m of inputs.buildMappings) if (ANSWER_COVERAGE.has(m.coverage)) addAnswer(m.intentId, m.slug, `build:${m.coverage}`)
-  for (const [id, slug] of boundSlug) addAnswer(id, slug, 'm3-slug-manifest')
-
-  const rows = []
-  const draft = []
-  for (const build of inputs.buildIntents) {
-    const id = build.intentId
-    const canon = canonById.get(id)
-    const auto = autoById.get(id)
-    const row = { intentId: id, class: null, reasons: [], territoryId: build.territoryId, primaryQuery: build.primaryQuery,
-      topicVerdict: build.topicVerdict, automationDecision: build.automationDecision }
-    rows.push(row)
-
-    const answers = (answered.get(id) ?? []).map((x) => ({ ...x, state: productStateOf(x.slug, artBySlug, queueBySlug, nowMs) }))
-    const present = ['LIVE', 'SCHEDULED', 'ALREADY_QUEUED'].find((st) => answers.some((x) => x.state === st))
-    if (present) {
-      row.class = present
-      row.reasons = answers.filter((x) => x.state === present).map((x) => `${x.slug} (${x.via})`)
-      continue
-    }
-    if (answers.length) {
-      row.class = 'DUPLICATE_OR_CONFLICT'
-      row.reasons = answers.map((x) => `MAPPED_SLUG_ABSENT — ${x.slug} (${x.via}) 가 글·큐 어디에도 없다`)
-      continue
-    }
-    if (build.automationDecision === 'REJECT') { row.class = 'REJECT'; row.reasons = [String(auto.verdictWhy ?? '')]; continue }
-    if (build.automationDecision === 'HOLD') { row.class = 'HOLD'; row.reasons = [String(auto.verdictWhy ?? '')]; continue }
-    if (build.topicVerdict === 'EXTEND_EXISTING') { row.class = 'EXTEND_EXISTING'; row.reasons = [String(auto.verdictWhy ?? '')]; continue }
-    if (build.automationDecision !== 'PASS' || build.topicVerdict !== 'AUTO_READY_TOPIC') {
-      row.class = 'INCOMPLETE'
-      row.reasons = [`verdict — ${build.automationDecision}/${build.topicVerdict} 는 편입 대상 판정이 아니다`]
-      continue
-    }
-    const bundle = rebById.get(id)?.decisionBundle ?? null
-    if ((bundle && TERRITORY_BUNDLES.has(bundle)) || /후보/.test(String(build.territoryId))) {
-      row.class = 'TERRITORY_DECISION_REQUIRED'
-      row.reasons = [`${bundle ?? build.territoryId} — Foundation §14 영토 결정이 열려 있다`]
-      continue
-    }
-    const relations = relationsOf(id, inputs.buildEdges)
-    const slug = boundSlug.get(id) ?? inputs.proposeSlug(build.primaryQuery, build.territoryId)
-    draft.push({ row, build, canon, auto, relations, slug })
-  }
-
-  // 중복 — 기존 글·큐의 제목, 다른 후보의 질문, slug 충돌
-  const bySlug = new Map()
-  const byQuestion = new Map()
-  for (const d of draft) {
-    if (d.slug) bySlug.set(d.slug, [...(bySlug.get(d.slug) ?? []), d.row.intentId])
-    const q = normalizeTitle(d.build.primaryQuery)
-    byQuestion.set(q, [...(byQuestion.get(q) ?? []), d.row.intentId])
-  }
-  for (const d of draft) {
-    const dup = []
-    const owner = titleOwner.get(normalizeTitle(d.build.primaryQuery))
-    if (owner?.startsWith('article:')) dup.push(`TITLE_MATCHES_ARTICLE — ${owner}`)
-    if (owner?.startsWith('queue:')) dup.push(`TITLE_MATCHES_QUEUE — ${owner}`)
-    const sameQ = byQuestion.get(normalizeTitle(d.build.primaryQuery)).filter((x) => x !== d.row.intentId)
-    if (sameQ.length) dup.push(`QUESTION_MATCHES_INTENT — ${sameQ.join(',')}`)
-    if (d.slug && takenSlugs.has(d.slug) && boundSlug.get(d.row.intentId) !== d.slug) dup.push(`SLUG_TAKEN — ${d.slug} (${takenSlugs.get(d.slug)})`)
-    if (dup.length) { d.row.class = 'DUPLICATE_OR_CONFLICT'; d.row.reasons = dup; continue }
-
-    /**
-     * 🔴 후보끼리 같은 slug 는 **중복 주제가 아니라 slug 사전의 공백**이다 (m3-slug.mjs —
-     *    「가를 관점어가 사전에 없으면 실패로 끝내고 사전을 고친다」). 번호를 붙이지 않는다.
-     */
-    const sameSlug = d.slug ? bySlug.get(d.slug).filter((x) => x !== d.row.intentId) : []
-    const problems = [
-      ...requiredFieldProblems({ canon: d.canon, build: d.build, unions: inputs.unions, relations: d.relations, slug: d.slug }),
-      ...(sameSlug.length ? [`slug_collision — ${d.slug} = ${sameSlug.join(',')} (slug 사전이 두 의도를 가르지 못한다)`] : []),
-      ...titleProblems(d.build.primaryQuery),
-    ]
-    if (problems.length) { d.row.class = 'INCOMPLETE'; d.row.reasons = problems; continue }
-    d.row.class = 'ELIGIBLE_NEW'
-    d.row.reasons = []
-  }
-
-  rows.sort((a, b) => (a.intentId < b.intentId ? -1 : a.intentId > b.intentId ? 1 : 0))
-  const counts = Object.fromEntries(CLASSES.map((c) => [c, rows.filter((r) => r.class === c).length]))
-  const eligible = draft.filter((d) => d.row.class === 'ELIGIBLE_NEW')
-  return { rows, counts, eligible, nowMs, artBySlug, queueBySlug, answered }
+  if (sha16(`${pc.intents}${pc.edges}${pc.mappings}${pc.participation ?? ''}`) !== pc.combined) problems.push('COMBINED — payload combined 가 각 필드에서 나오지 않는다')
+  if (core.graphVersion !== payload.graphVersion) problems.push(`GRAPH_VERSION — ${core.graphVersion} ≠ ${payload.graphVersion}`)
+  if (texts.graphPointer !== payload.graphVersion) problems.push(`CURRENT — current.ts 가 ${texts.graphPointer} 를 가리킨다`)
+  if (!String(payload.graphVersion).endsWith(`-${String(pc.combined).slice(0, 6)}`)) problems.push('GRAPH_VERSION_SUFFIX — combined 앞 6자리와 다르다')
+  if (semanticHashOf(payload) !== core.graphSemanticHash) problems.push('GRAPH_SEMANTIC_HASH — payload 재계산 값이 다르다')
+  if (parseControlText(texts.graphControl)?.graphVersion !== payload.graphVersion) problems.push('CONTROL — control.ts 판이 bundle 과 다르다 (제품이 폴백 중)')
+  return problems
 }
 
-// ── 순위와 선정 ──────────────────────────────────────────────
+// ── dry-run (manifest) ───────────────────────────────────────
 
-/** 1차 실행 구간은 LOW/STANDARD 중심 — 등급은 막지 않고 순서만 뒤로 보낸다 */
-const tierOf = (risk, profile) => (risk === 'LOW' && profile === 'STANDARD' ? 0 : profile === 'STANDARD' ? 1 : risk !== 'HIGH' ? 2 : 3)
-const FIT_SCORE = { HIGH: 3, MEDIUM: 1 }
-
-/**
- * 선정 근거를 점수로 남긴다 — 검색 증거 · cluster 공백 · 기존 글 연결 · 커뮤니티 전환.
- * 🔴 점수는 입력에서만 나온다. 시각·난수·파일 순서를 보지 않는다.
- */
-function scoreOf(d, ctx) {
-  const ev = d.build.evidence ?? {}
-  const evidence = Math.min(ev.observedHits ?? 0, 10) + 2 * Math.min(ev.branchOpened ?? 0, 5) + 3 * Math.min(ev.communityWomen ?? 0, 3)
-  const inCluster = ctx.clusterCount.get(d.build.magazineCluster) ?? 0
-  const clusterGap = Math.max(0, 6 - Math.min(inCluster, 6))
-  const rels = [...d.relations.direct, ...(d.relations.discovery ? [d.relations.discovery] : [])]
-  const liveLinks = rels.filter((r) => ctx.liveSlugsOf(r.toIntentId).length > 0).length
-  const connection = 2 * Math.min(liveLinks, 3)
-  const community = FIT_SCORE[d.auto.priorCommunityFit] ?? 0
-  return { total: evidence + clusterGap + connection + community, evidence, clusterGap, connection, community, inCluster, liveLinks }
-}
-
-export function compareCandidates(a, b) {
-  return (a.tier - b.tier) || (b.score.total - a.score.total) || (a.intentId < b.intentId ? -1 : a.intentId > b.intentId ? 1 : 0)
-}
-
-/** 큐 행 — TopicQueueItem 모양. 키 순서가 출력 바이트를 정하므로 여기서 고정한다 */
-function queueRowOf(d, { day, internalLinks }) {
-  const c = d.canon
-  const row = {
-    day,
-    slug: d.slug,
-    title: d.build.primaryQuery,
-    contentType: c.contentTypeHint,
-    intent: c.searchIntentType,
-    cluster: d.build.magazineCluster,
-    target: DERIVED.target.value,
-    validationProfile: d.build.verificationProfile,
-    riskLevel: c.riskLevel,
-    reviewMode: DERIVED.reviewMode.byRisk[c.riskLevel],
-    imageMode: DERIVED.imageMode.value,
-    autoEligible: DERIVED.autoEligible.value,
-  }
-  if (c.seriesId) { row.seriesId = c.seriesId; row.seriesOrder = c.seriesOrder }
-  if (c.contentTypeHint === 'SEASONAL') row.publishWindow = { after: c.publishWindow.after, before: c.publishWindow.before }
-  row.ctaBoard = d.build.communityDestination
-  row.internalLinks = internalLinks
-  row.whyNow = String(d.auto.verdictWhy ?? '')
-  row.notes = (d.build.exclusions ?? []).join(' · ')
-  row.intentId = d.row.intentId
-  return row
+async function loadProposeSlug(researchDir) {
+  const mod = await import(pathToFileURL(path.join(researchDir, RESEARCH_FILES.slugModule)).href)
+  if (typeof mod.proposeSlug !== 'function') fail('SLUG_MODULE', 'm3-slug.mjs 에 proposeSlug 가 없다')
+  // 🔴 순수 proposeSlug 만 쓴다 — assignSlugs · collectTakenSlugs 는 운영 경로 · 연구 current 를 읽는다
+  return mod.proposeSlug
 }
 
 /**
- * 계절 창과 시리즈 선행편 — 판정은 ELIGIBLE_NEW 로 두고 이번 구간에서만 뺀다.
- * producer `selectItems` 와 같은 비교를 쓴다 (asOf 문자열 비교 · 시리즈 다음 회차).
+ * 🔴 **G8 manifest (g8-promotion/2)** — 같은 입력이면 바이트까지 같다. 시각 · 난수 · 파일 순서가 들어가지 않는다.
+ * @param {{ repoDir: string, researchDir: string, snapshotDir: string, at: string, graphEffectiveAt: string }} p
  */
-function selectionBlock(d, { asOf, seriesNext }) {
-  const c = d.canon
-  if (c.contentTypeHint === 'SEASONAL') {
-    // 분류가 이미 막았어야 한다 — 선정도 창 없는 계절 주제를 믿지 않는다
-    if (!c.publishWindow) return 'WINDOW_MISSING — SEASONAL 인데 publishWindow 가 없다'
-    if (asOf < c.publishWindow.after) return `WINDOW_NOT_OPEN — ${c.publishWindow.after} 이전`
-    if (asOf > c.publishWindow.before) return `WINDOW_CLOSED — ${c.publishWindow.before} 경과`
-  }
-  if (c.seriesId) {
-    const next = seriesNext.get(c.seriesId) ?? 1
-    if (c.seriesOrder !== next) return `SERIES_PREREQ — ${c.seriesId} 다음 회차는 ${next} 인데 ${c.seriesOrder}`
-  }
-  return null
-}
+export async function buildManifest({ repoDir, researchDir, snapshotDir, at, graphEffectiveAt }) {
+  const t = parseAt(at, '판정 시각(--at)')
+  const g = parseAt(graphEffectiveAt, 'graph 기준 시각(--graph-effective-at)')
+  if (t.ms < g.ms) fail('AT_INVALID', `판정 시각 ${at} 이 graph 기준 시각 ${graphEffectiveAt} 보다 이르다`)
+  const { texts, hashes } = readIdentityInputs({ repoDir, researchDir, snapshotDir })
+  const proposeSlug = await loadProposeSlug(researchDir)
 
-export function selectCandidates(inputs, classified, { at }) {
-  const { asOf } = parseAt(at)
-  const clusterCount = new Map()
-  for (const x of [...inputs.articles, ...inputs.queue]) clusterCount.set(x.cluster, (clusterCount.get(x.cluster) ?? 0) + 1)
-  const liveSlugsOf = (intentId) => (classified.answered.get(intentId) ?? [])
-    .filter((x) => productStateOf(x.slug, classified.artBySlug, classified.queueBySlug, classified.nowMs) === 'LIVE')
-    .map((x) => x.slug)
-  const ranked = classified.eligible.map((d) => ({
-    d, intentId: d.row.intentId,
-    tier: tierOf(d.canon.riskLevel, d.build.verificationProfile),
-    score: scoreOf(d, { clusterCount, liveSlugsOf }),
-  }))
-  ranked.sort(compareCandidates)
+  let core
+  try {
+    core = computeGraphAndReadiness({
+      inputTexts: texts.snapshot,
+      productTexts: { resolver: texts.graphResolver, control: texts.graphControl, articles: texts.articles },
+      admissionTexts: { slugManifest: texts.slugManifest, ledger: texts.ledger },
+      effectiveAt: graphEffectiveAt,
+    })
+  } catch (e) { fail('GRAPH_BUNDLE_MISMATCH', `snapshot 으로 graph 를 다시 계산하지 못했다: ${e.code ?? ''} ${e.why ?? e.message}`) }
+  const problems = graphIdentityProblems({ core, texts })
+  if (problems.length) fail('GRAPH_BUNDLE_MISMATCH', problems.join(' | '))
+  const { payload, exportHash } = readBundlePayload(texts.graphBundle)
 
-  const seriesNext = new Map()
-  for (const x of [...inputs.articles, ...inputs.queue]) {
-    if (!x.seriesId || !Number.isInteger(x.seriesOrder)) continue
-    seriesNext.set(x.seriesId, Math.max(seriesNext.get(x.seriesId) ?? 1, x.seriesOrder + 1))
+  // ── 신원 검사 재료 (제품 · 연구 장부) ──
+  const articles = parseArticlesSource(texts.articles)
+  const queue = parseQueueSource(texts.topicQueue)
+  const slugTable = texts.slugManifest ? JSON.parse(texts.slugManifest).slugs ?? {} : {}
+  const ledger = parseJsonl(texts.ledger ?? '', 'ledger')
+  const admittedIntent = new Set(ledger.filter((r) => r.event === 'ADMITTED').map((r) => r.intentId))
+  const takenBy = new Map()
+  const take = (slug, who) => { if (slug && !takenBy.has(slug)) takenBy.set(slug, who) }
+  for (const a of articles) take(a.slug, 'articles.ts')
+  for (const q of queue) take(q.slug, 'topic-queue.ts')
+  for (const d of texts.draftSlugs) take(d, 'drafts/magazine')
+  for (const x of payload.mappings ?? []) take(x.slug, 'graph 번들 매핑')
+  for (const [id, slug] of Object.entries(slugTable)) take(slug, `slug 표(${id})`)
+  for (const r of ledger) take(r.slug, `장부(${r.intentId})`)
+  const titles = new Set([...articles.map((a) => normalizeTitle(a.title)), ...queue.map((q) => normalizeTitle(q.title))])
+  const intents = new Map(core.layers.intents.map((x) => [x.intentId, x]))
+  const edges = new Map(core.layers.edges.map((e) => [e.edgeId, e]))
+  const rel = (tgt) => {
+    const e = edges.get(tgt.edgeId)
+    if (!e || e.readerReason !== tgt.reason) fail('READINESS_EDGE', `${tgt.edgeId} 가 graph edge 와 다르다`)
+    return { edgeId: tgt.edgeId, slot: tgt.slot, toIntentId: tgt.toIntentId, anchorLabel: e.anchorLabel, readerReason: e.readerReason, targetSlug: tgt.slug }
   }
-  const days = inputs.queue.map((q) => q.day).filter(Number.isInteger)
-  let nextDay = (days.length ? Math.max(...days) : 0) + 1
 
-  const primary = []
-  const fallback = []
-  const excluded = []
-  for (const r of ranked) {
-    const block = selectionBlock(r.d, { asOf, seriesNext })
-    if (block) { excluded.push({ intentId: r.intentId, reason: block }); continue }
-    const target = primary.length < PRIMARY_COUNT ? primary : fallback.length < FALLBACK_COUNT ? fallback : null
-    if (!target) { excluded.push({ intentId: r.intentId, reason: 'BEYOND_RUN — 이번 구간 8건 밖' }); continue }
-    if (r.d.canon.seriesId) seriesNext.set(r.d.canon.seriesId, r.d.canon.seriesOrder + 1)
-    const internalLinks = [...new Set([...r.d.relations.direct, ...(r.d.relations.discovery ? [r.d.relations.discovery] : [])]
-      .flatMap((rel) => liveSlugsOf(rel.toIntentId)))].slice(0, 3)
-    const day = target === primary ? nextDay++ : null
-    target.push({
-      intentId: r.intentId,
-      tier: r.tier,
-      score: r.score,
-      queueRow: queueRowOf(r.d, { day, internalLinks }),
-      /** 편입 장부 사건의 재료 — 실제 행은 정본 recordAdmission 이 만든다 */
-      admissionRow: {
-        intentId: r.intentId,
-        slug: r.d.slug,
-        title: r.d.build.primaryQuery,
-        cluster: r.d.build.magazineCluster,
-        directRelations: r.d.relations.direct.map(({ slot, toIntentId, anchorLabel, readerReason }) => ({ slot, toIntentId, anchorLabel, readerReason })),
-        discoveryRelation: r.d.relations.discovery
-          ? { slot: r.d.relations.discovery.slot, toIntentId: r.d.relations.discovery.toIntentId,
-              anchorLabel: r.d.relations.discovery.anchorLabel, readerReason: r.d.relations.discovery.readerReason }
-          : null,
-        internalLinks,
-      },
-      evidence: {
-        territoryId: r.d.build.territoryId,
-        evidenceRefs: (r.d.canon.evidenceRefs ?? []).map((e) => e.evidencePath).filter(Boolean),
-        relations: [...r.d.relations.direct, ...(r.d.relations.discovery ? [r.d.relations.discovery] : [])]
-          .map((rel) => `${rel.slot}→${rel.toIntentId}${liveSlugsOf(rel.toIntentId).length ? `(${liveSlugsOf(rel.toIntentId).join(',')})` : ''}`),
-      },
+  const drafts = []
+  const refused = []
+  for (const r of core.readiness.rows) {
+    if (!(r.status === 'GRAPH_READY' && r.graphReady === true)) continue
+    const it = intents.get(r.intentId)
+    const slug = slugTable[r.intentId] ?? proposeSlug(it.primaryQuery, it.territoryId)
+    const why = []
+    if (admittedIntent.has(r.intentId)) why.push('ALREADY_ADMITTED')
+    if (!slug || !/^[a-z][a-z0-9-]*$/.test(slug)) why.push(`SLUG_INVALID — ${slug || '빈 값'}`)
+    else if (takenBy.has(slug)) why.push(`SLUG_TAKEN — ${slug} (${takenBy.get(slug)})`)
+    if (titles.has(normalizeTitle(it.primaryQuery))) why.push('TITLE_TAKEN')
+    why.push(...titleProblems(it.primaryQuery))
+    if (why.length) { refused.push({ intentId: r.intentId, slug: slug || null, why }); continue }
+    drafts.push({
+      intentId: r.intentId, slug, cluster: it.magazineCluster ?? r.cluster, primaryQuery: it.primaryQuery, territoryId: it.territoryId,
+      direct: r.direct.targets.map(rel),
+      discovery: r.discovery.targets.length ? rel(r.discovery.targets[0]) : null,
+      reverse: r.reverse.sources.map((s) => s.edgeId),
     })
   }
-  return { primary, fallback, excluded }
-}
+  // 🔴 후보끼리 같은 slug — 사전이 두 의도를 가르지 못한다. 번호를 붙이지 않는다
+  const bySlug = new Map()
+  for (const d of drafts) bySlug.set(d.slug, [...(bySlug.get(d.slug) ?? []), d.intentId])
+  const admissions = drafts.filter((d) => {
+    if (bySlug.get(d.slug).length === 1) return true
+    refused.push({ intentId: d.intentId, slug: d.slug, why: [`SLUG_COLLISION — ${bySlug.get(d.slug).join(',')}`] })
+    return false
+  })
 
-// ── manifest ────────────────────────────────────────────────
-
-/** 공개 글인데 제품 그래프 번들에 매핑이 없는 것 — 재작성하지 않고 보고만 한다 */
-function driftOf(inputs, classified) {
-  const mapped = new Set(inputs.graph.mappings.map((m) => m.slug))
-  const research = new Map()
-  for (const c of inputs.canonical) for (const s of c.existingSlugs ?? []) {
-    research.set(s.slug, [...(research.get(s.slug) ?? []), `${c.intentId}:${s.coverage}`])
-  }
-  return inputs.articles
-    .filter((a) => !mapped.has(a.slug))
-    .map((a) => ({
-      slug: a.slug,
-      state: isPublic(a, classified.nowMs) ? 'LIVE' : 'SCHEDULED',
-      publishAt: a.publishAt ?? a.publishedAt,
-      researchIntents: research.get(a.slug) ?? [],
-      kind: research.has(a.slug) ? 'BUNDLE_STALE — 연구 매핑은 있고 제품 번들에 없다' : 'NO_INTENT — 연구 정본에 대응 의도가 없다',
-    }))
-    .sort((a, b) => (a.slug < b.slug ? -1 : 1))
-}
-
-const manifestBody = (m) => { const { hash, ...body } = m; return body }
-export const hashManifest = (m) => sha256(JSON.stringify(manifestBody(m)))
-
-/**
- * 🔴 **같은 입력 → 바이트 단위 같은 manifest.** 시각·난수·파일 순서가 들어가지 않는다.
- *    큐 행과 그래프 행이 이 한 객체에서 나오고, 이 객체의 해시를 함께 단다.
- */
-export function buildManifest(inputs, { at }) {
-  const { asOf } = parseAt(at)
-  const bm = inputs.buildManifest
-  if (bm.graphVersion !== inputs.graph.graphVersion || bm.contentHash?.combined !== inputs.graph.contentHash?.combined) {
-    throw new Error(`GRAPH_BUNDLE_MISMATCH — 연구 build ${bm.graphVersion}/${bm.contentHash?.combined} ≠ 제품 번들 ${inputs.graph.graphVersion}/${inputs.graph.contentHash?.combined}`)
-  }
-  const classified = classifyIntents(inputs, { at })
-  const selection = selectCandidates(inputs, classified, { at })
   const m = {
     schema: G8_SCHEMA,
     at,
-    asOf,
-    inputs: inputs.hashes,
-    /** 🔴 읽기만 한 제품 graph bundle. 이 도구는 이것을 갱신하지 않는다 — 편입 장부만 쓴다 */
-    productGraphBundle: { graphVersion: inputs.graph.graphVersion, combined: inputs.graph.contentHash.combined,
-      file: inputs.graphFile, updatedByThisTool: false },
-    derived: DERIVED,
-    counts: { intents: classified.rows.length, ...classified.counts,
-      autoReadyTopic: inputs.buildIntents.filter((x) => x.topicVerdict === 'AUTO_READY_TOPIC').length,
-      articles: inputs.articles.length, queue: inputs.queue.length },
-    classification: classified.rows,
-    selection: {
-      primary: selection.primary.map(({ intentId, tier, score, evidence }) => ({ intentId, tier, score, evidence })),
-      fallback: selection.fallback.map(({ intentId, tier, score, evidence }) => ({ intentId, tier, score, evidence })),
-      excluded: selection.excluded,
-    },
-    queueRows: selection.primary.map((p) => p.queueRow),
-    fallbackRows: selection.fallback.map((p) => p.queueRow),
-    admissionRows: selection.primary.map((p) => p.admissionRow),
-    drift: driftOf(inputs, classified),
+    graphEffectiveAt,
+    snapshot: { name: path.basename(path.resolve(snapshotDir)), inputSha256: Object.fromEntries(SNAPSHOT_FILES.map((n) => [n, hashes[`snapshot.${n}`]])) },
+    graph: { graphVersion: core.graphVersion, contentHash: core.contentHash, graphSemanticHash: core.graphSemanticHash, exportHash },
+    readiness: { readinessHash: core.readinessHash, readinessFileSha256: core.readinessFileSha256, inputs: core.readiness.inputs },
+    identityInputHashes: hashes,
+    admissions: admissions.sort((a, b) => (a.intentId < b.intentId ? -1 : a.intentId > b.intentId ? 1 : 0)),
+    refused: refused.sort((a, b) => (a.intentId < b.intentId ? -1 : a.intentId > b.intentId ? 1 : 0)),
   }
   m.hash = hashManifest(m)
   return m
 }
 
-// ── 쓰기 (명시적 apply 전용) ─────────────────────────────────
+// ── receipt · 장부 행 ────────────────────────────────────────
+
+export const receiptPathOf = (researchDir, manifestHash) => path.join(researchDir, RECEIPT_DIR, `${manifestHash}.json`)
+/** 정본 recordAdmission 에 넘기는 사건 재료 — 관계는 receipt 와 같은 네 필드 */
+const ledgerItemOf = (a) => ({
+  intentId: a.intentId, slug: a.slug, title: a.primaryQuery, cluster: a.cluster,
+  directRelations: a.direct.map(({ slot, toIntentId, anchorLabel, readerReason }) => ({ slot, toIntentId, anchorLabel, readerReason })),
+  discoveryRelation: a.discovery
+    ? { slot: a.discovery.slot, toIntentId: a.discovery.toIntentId, anchorLabel: a.discovery.anchorLabel, readerReason: a.discovery.readerReason }
+    : null,
+  internalLinks: [],
+})
+const relTuple = (r) => (r ? `${r.slot}|${r.toIntentId}|${r.anchorLabel}|${r.readerReason}` : 'null')
+
+export function makeReceipt({ manifest, approval, committedAt }) {
+  const r = { schema: RECEIPT_SCHEMA, manifestHash: manifest.hash, manifest, approval, committedAt }
+  r.receiptHash = receiptHashOf(r)
+  return r
+}
+export const receiptBytes = (r) => `${JSON.stringify(r, null, 2)}\n`
+
+/** 승인 형식 — 사람 · 실제 KST 시각 · 확인한 manifest 해시 */
+export function approvalProblems(approval, manifestHash) {
+  const out = []
+  const by = String(approval?.approvedBy ?? '').trim()
+  if (!by) out.push('APPROVER_MISSING')
+  else if (MACHINE_APPROVER.test(by)) out.push(`APPROVER_MACHINE — ${by}`)
+  if (!isRealKstAt(approval?.approvedAt)) out.push('APPROVED_AT_INVALID')
+  if (approval?.confirmManifestHash !== manifestHash) out.push('CONFIRM_HASH_MISMATCH')
+  return out
+}
+
+/** 한 receipt 파일의 자기 불변식 */
+export function receiptProblems(file, text) {
+  let r
+  try { r = JSON.parse(text) } catch { return ['RECEIPT_PARSE'] }
+  const out = []
+  if (r.schema !== RECEIPT_SCHEMA) out.push('RECEIPT_SCHEMA')
+  if (path.basename(file) !== `${r.manifestHash}.json`) out.push('RECEIPT_FILENAME — 파일명이 manifestHash 가 아니다')
+  if (hashManifest(r.manifest) !== r.manifestHash || r.manifest?.hash !== r.manifestHash) out.push('RECEIPT_MANIFEST_HASH — manifest 원문 해시가 다르다')
+  out.push(...approvalProblems(r.approval, r.manifestHash).map((x) => `RECEIPT_APPROVAL — ${x}`))
+  if (!isRealKstAt(r.committedAt)) out.push('RECEIPT_COMMITTED_AT')
+  if (receiptHashOf(r) !== r.receiptHash) out.push('RECEIPT_HASH — receiptHash 가 본문과 다르다')
+  return out
+}
+
+/**
+ * 🔴 **receipt · slug binding · ledger 의 정확한 일치.**
+ *    · receipt 의 admission 마다 slug 표 binding · ledger ADMITTED 1행 · 관계 4필드 · 그 판 bundle edge 가 같다
+ *    · ledger ADMITTED 행은 CURRENT(receipt 있음) · KNOWN_LEGACY(정확한 열거) · UNKNOWN(실패) 중 하나
+ *    · slug binding 은 receipt 나 KNOWN_LEGACY 로 설명돼야 한다
+ *    · journal 이 남아 있으면 일관 상태로 판정하지 않는다
+ * @param {{ receipts: {file:string,text:string}[], slugManifestText: string|null, ledgerText: string|null,
+ *           payloadOf: (graphVersion:string)=>object|null, journalPresent?: boolean, knownLegacy?: object[] }} p
+ */
+export function verifyAdmissions({ receipts, slugManifestText, ledgerText, payloadOf, journalPresent = false, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
+  const problems = []
+  if (journalPresent) problems.push('ADMISSION_IN_PROGRESS — journal 이 남아 있다')
+  const slugs = slugManifestText ? JSON.parse(slugManifestText).slugs ?? {} : {}
+  const lines = String(ledgerText ?? '').split('\n').filter((l) => l.trim())
+  const admitted = lines.map((line) => ({ line, row: JSON.parse(line) })).filter((x) => x.row.event === 'ADMITTED')
+  const current = new Map()
+  for (const { file, text } of receipts) {
+    const rp = receiptProblems(file, text)
+    if (rp.length) { problems.push(...rp.map((x) => `${path.basename(file)} ${x}`)); continue }
+    const r = JSON.parse(text)
+    const payload = payloadOf(r.manifest.graph?.graphVersion)
+    const bEdges = new Map((payload?.edges ?? []).map((e) => [e.id, e]))
+    if (!payload) problems.push(`${path.basename(file)} GRAPH_MISSING — ${r.manifest.graph?.graphVersion} bundle 이 제품에 없다`)
+    for (const a of r.manifest.admissions ?? []) {
+      const key = `${a.intentId}|${a.slug}`
+      if (current.has(key)) problems.push(`DUPLICATE_ADMISSION — ${key}`)
+      current.set(key, a)
+      if (slugs[a.intentId] !== a.slug) problems.push(`SLUG_BINDING — ${a.intentId} → ${a.slug} (표: ${slugs[a.intentId] ?? '없음'})`)
+      const owners = Object.entries(slugs).filter(([, s]) => s === a.slug).map(([id]) => id)
+      if (owners.length !== 1) problems.push(`SLUG_OWNER — ${a.slug} 의 intent 가 ${owners.length}개`)
+      const rows = admitted.filter((x) => x.row.intentId === a.intentId && x.row.slug === a.slug)
+      if (rows.length !== 1) { problems.push(`LEDGER_ROW — ${key} ADMITTED ${rows.length}행`); continue }
+      const lr = rows[0].row
+      const want = ledgerItemOf(a)
+      if (JSON.stringify((lr.directRelations ?? []).map(relTuple)) !== JSON.stringify(want.directRelations.map(relTuple))
+        || relTuple(lr.discoveryRelation) !== relTuple(want.discoveryRelation)) problems.push(`LEDGER_RELATION — ${key} 관계가 receipt 와 다르다`)
+      for (const x of [...a.direct, ...(a.discovery ? [a.discovery] : [])]) {
+        const e = bEdges.get(x.edgeId)
+        if (payload && (!e || e.from !== a.intentId || e.to !== x.toIntentId || e.slot !== x.slot || e.anchor !== x.anchorLabel || e.reason !== x.readerReason)) {
+          problems.push(`BUNDLE_EDGE — ${key} ${x.edgeId} 가 ${r.manifest.graph.graphVersion} 의 edge 와 다르다`)
+        }
+      }
+    }
+  }
+  const legacyKey = new Set(knownLegacy.map((x) => `${x.intentId}|${x.slug}|${x.lineSha256}`))
+  const legacyPair = new Set(knownLegacy.map((x) => `${x.intentId}|${x.slug}`))
+  const classes = { CURRENT: 0, KNOWN_LEGACY: 0, UNKNOWN: 0 }
+  for (const { line, row } of admitted) {
+    const key = `${row.intentId}|${row.slug}`
+    if (current.has(key)) classes.CURRENT++
+    else if (legacyKey.has(`${key}|${sha256(line)}`)) classes.KNOWN_LEGACY++
+    else { classes.UNKNOWN++; problems.push(`UNKNOWN_ADMISSION — ${key} (receipt 도 KNOWN_LEGACY 도 아니다)`) }
+  }
+  for (const [id, slug] of Object.entries(slugs)) {
+    const key = `${id}|${slug}`
+    if (!current.has(key) && !legacyPair.has(key)) problems.push(`UNEXPLAINED_BINDING — ${key}`)
+  }
+  return { ok: problems.length === 0, problems: [...new Set(problems)], classes }
+}
+
+/** 연구 루트의 receipt 전부 — 파일명 정렬 */
+export function readReceipts(researchDir) {
+  const dir = path.join(researchDir, RECEIPT_DIR)
+  if (!fs.existsSync(dir)) return []
+  return fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort().map((n) => ({ file: path.join(dir, n), text: fs.readFileSync(path.join(dir, n), 'utf8') }))
+}
+/** 제품 repo 에서 graphVersion 의 bundle payload — 없으면 null */
+export const productPayloadOf = (repoDir) => (gv) => {
+  const f = path.join(repoDir, path.dirname(PRODUCT_FILES.graphCurrent), `${gv}.ts`)
+  return fs.existsSync(f) ? readBundlePayload(fs.readFileSync(f, 'utf8')).payload : null
+}
+/** 지금 연구 루트 상태 그대로의 일치 판정 */
+export function verifyAdmissionState({ researchDir, repoDir, knownLegacy }) {
+  return verifyAdmissions({
+    receipts: readReceipts(researchDir),
+    slugManifestText: readOptional(path.join(researchDir, ADMISSION_FILES.slugManifest)),
+    ledgerText: readOptional(path.join(researchDir, ADMISSION_FILES.ledger)),
+    payloadOf: productPayloadOf(repoDir),
+    journalPresent: fs.existsSync(path.join(researchDir, JOURNAL_FILE)),
+    knownLegacy,
+  })
+}
+
+// ── 잠금 ─────────────────────────────────────────────────────
+
+/**
+ * 🔴 **연구 admission 잠금.** O_EXCL 로 만든다. 있으면 ADMISSION_LOCKED — 시간 · PID 만 보고 지우지 않는다.
+ *    급사로 남은 잠금은 `recoverStaleLock`(잠금 파일 sha256 을 사람이 확인한 명시 경로)으로만 넘겨받는다.
+ */
+function acquireLock(researchDir, manifestHash) {
+  const file = path.join(researchDir, LOCK_FILE)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const body = `${JSON.stringify({ schema: LOCK_SCHEMA, host: os.hostname(), pid: process.pid, startedAt: new Date().toISOString(), manifestHash })}\n`
+  let fd
+  try { fd = fs.openSync(file, 'wx') } catch (e) {
+    if (e.code !== 'EEXIST') throw e
+    const text = readOptional(file)
+    let holder = null
+    try { holder = JSON.parse(text) } catch { /* 깨진 잠금 — 그대로 둔다 */ }
+    return { ok: false, code: 'ADMISSION_LOCKED', why: '다른 admission 이 잠금을 쥐고 있다 — 자동으로 지우지 않는다', holder, lockSha256: text === null ? null : sha256(text) }
+  }
+  try { fs.writeSync(fd, body); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  return { ok: true, file, body }
+}
+function releaseLock(lock) {
+  if (readOptional(lock.file) === lock.body) fs.unlinkSync(lock.file)
+}
+
+// ── 쓰기 ─────────────────────────────────────────────────────
+
+/** 🔴 임시 파일 → fsync → rename. 입력 수리 journal 도 이것을 쓴다 (약한 사본을 따로 두지 않는다) */
+export function writeAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const tmp = `${file}.g8tmp-${process.pid}`
+  const fd = fs.openSync(tmp, 'w')
+  try { fs.writeSync(fd, text); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  fs.renameSync(tmp, file)
+}
+export const shaOrAbsent = (text) => (text === null ? 'ABSENT' : sha256(text))
+
+/** 🔴 receipt 는 wx — 임시 파일을 끝까지 쓴 뒤 link 로 놓는다. 이미 있으면 덮지 않는다 */
+function placeReceipt(file, bytes) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const tmp = `${file}.g8tmp-${process.pid}`
+  const fd = fs.openSync(tmp, 'w')
+  try { fs.writeSync(fd, bytes); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  try { fs.linkSync(tmp, file) } finally { fs.rmSync(tmp, { force: true }) }
+}
+
+/** 🔴 ledger 는 append 만 — O_APPEND 로 붙이고 fsync 한다 */
+function appendLedger(file, bytes) {
+  const fd = fs.openSync(file, 'a')
+  try { fs.writeSync(fd, bytes); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+}
+
+function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
+
+/**
+ * 🔴 **시험 전용 정지점** — 실제 자식 프로세스로 동시 apply·SIGKILL 을 재현하려고 둔다.
+ *    `SORAN_MAGAZINE_TEST_MODE=1` 이 없으면 열리지 않고, 변수만 있으면 apply 를 거부한다.
+ */
+export function testPauseHook(env = process.env) {
+  const stage = env.G8_TEST_PAUSE_AT
+  const gate = env.G8_TEST_GATE
+  if (!stage && !gate) return () => {}
+  if (env.SORAN_MAGAZINE_TEST_MODE !== '1') throw new Error('G8_TEST_PAUSE_AT · G8_TEST_GATE 는 SORAN_MAGAZINE_TEST_MODE=1 에서만 쓴다 — 운영에서는 금지다')
+  return (s) => {
+    if (s !== stage) return
+    fs.writeFileSync(`${gate}.reached`, String(process.pid))
+    while (!fs.existsSync(`${gate}.go`)) sleepSync(20)
+  }
+}
+
+/**
+ * 🔴 **journal 신원 검증** (입력 수리 journal 이 쓰는 공용 형식) — 되돌리기 전에 「이 journal 이 지금 이 루트의 그 파일만
+ *    가리키는가」를 본다. schema · 개수 · 중복 0 · 현재 루트에서 계산한 절대 경로와 정확히 일치.
+ *    하나라도 어긋나면 어떤 파일도 쓰거나 지우지 않는다 — journal 자체도 남긴다.
+ */
+export const JOURNAL_SCHEMA = 'g8-journal/1'
+export function checkJournalIdentity(j, expectedPaths, schema = JOURNAL_SCHEMA) {
+  const failId = (why) => ({ ok: false, code: 'RECOVERY_IDENTITY', why })
+  if (!j || typeof j !== 'object') return failId('journal 이 객체가 아니다')
+  if (j.schema !== schema) return failId(`schema 가 ${schema} 가 아니다 (${String(j.schema)})`)
+  if (!Array.isArray(j.files)) return failId('files 가 배열이 아니다')
+  const want = [...expectedPaths].sort()
+  if (j.files.length !== want.length) return failId(`파일 수가 ${want.length} 이 아니다 (${j.files.length})`)
+  const got = j.files.map((f) => f?.path)
+  if (got.some((p) => typeof p !== 'string' || !path.isAbsolute(p))) return failId('절대 경로가 아닌 항목이 있다')
+  if (new Set(got).size !== got.length) return failId('같은 경로가 두 번 있다')
+  const sorted = [...got].sort()
+  if (sorted.some((p, i) => p !== want[i])) return failId(`경로가 현재 루트의 세 파일과 다르다 (${sorted.join(', ')})`)
+  for (const f of j.files) {
+    if (!(f.before === null || typeof f.before === 'string')) return failId(`${f.path} 의 before 가 원문 또는 null 이 아니다`)
+    if (typeof f.afterSha !== 'string') return failId(`${f.path} 의 afterSha 가 없다`)
+  }
+  return { ok: true }
+}
+
+/**
+ * 실제 위치 — 같은 파일을 다른 표기(/var ↔ /private/var · symlink)로 가리켜도 같은 값이다.
+ * 아직 없는 경로는 존재하는 가장 가까운 상위 폴더를 풀고 나머지를 붙인다.
+ */
+function realPathOf(p) {
+  if (typeof p !== 'string' || !path.isAbsolute(p)) return null
+  let d = path.resolve(p)
+  const rest = []
+  while (!fs.existsSync(d)) { rest.unshift(path.basename(d)); const up = path.dirname(d); if (up === d) return null; d = up }
+  return path.join(fs.realpathSync(d), ...rest)
+}
+const samePath = (a, b) => realPathOf(a) !== null && realPathOf(a) === realPathOf(b)
+
+/** admission journal 신원 — 이 연구 루트의 세 파일 · 이 manifest 의 receipt 경로만 (실제 위치로 대조) */
+function admissionJournalProblems(j, researchDir) {
+  const out = []
+  if (!j || typeof j !== 'object') return ['journal 이 객체가 아니다']
+  if (j.schema !== ADMISSION_JOURNAL_SCHEMA) out.push(`schema ${String(j.schema)}`)
+  if (typeof j.manifestHash !== 'string' || !/^[0-9a-f]{64}$/.test(j.manifestHash)) out.push('manifestHash')
+  else if (!samePath(j.receipt?.path, receiptPathOf(researchDir, j.manifestHash))) out.push('receipt 경로')
+  if (typeof j.receipt?.bytes !== 'string' || sha256(j.receipt?.bytes ?? '') !== j.receipt?.sha256) out.push('receipt 바이트')
+  if (!samePath(j.slugManifest?.path, path.join(researchDir, ADMISSION_FILES.slugManifest)) || typeof j.slugManifest?.afterBytes !== 'string'
+    || sha256(j.slugManifest.afterBytes) !== j.slugManifest.afterSha256 || typeof j.slugManifest.beforeSha256 !== 'string') out.push('slug manifest')
+  if (!samePath(j.ledger?.path, path.join(researchDir, ADMISSION_FILES.ledger)) || typeof j.ledger?.appendBytes !== 'string'
+    || !Number.isInteger(j.ledger?.beforeLength) || typeof j.ledger?.beforeSha256 !== 'string' || typeof j.ledger?.afterSha256 !== 'string') out.push('ledger')
+  return out
+}
+
+/**
+ * 🔴 **commit-forward** — journal 에 적힌 최종 바이트만 놓는다. 의미 판정(recordAdmission · proposeSlug)을 부르지 않는다.
+ *    ledger 를 줄이거나 이전 바이트로 되돌리는 경로는 없다. before 도 after 도 아니면 CONFLICT 로 멈추고 덮지 않는다.
+ */
+function commitForward(j, faultHook) {
+  const R = j.receipt, S = j.slugManifest, L = j.ledger
+  // ① receipt
+  const curReceipt = readOptional(R.path)
+  if (curReceipt === null) {
+    // 급사로 남은 임시 receipt 조각을 치운다 — 본 파일이 아니므로 판정에는 쓰이지 않는다
+    const dir = path.dirname(R.path)
+    if (fs.existsSync(dir)) for (const n of fs.readdirSync(dir)) if (n.startsWith(`${path.basename(R.path)}.g8tmp-`)) fs.rmSync(path.join(dir, n), { force: true })
+    faultHook('receipt:before', { file: R.path })
+    placeReceipt(R.path, R.bytes)
+  } else if (sha256(curReceipt) !== R.sha256) return { ok: false, code: 'RECEIPT_CONFLICT', why: `${R.path} 가 journal 의 receipt 와 다르다 — 덮지 않는다` }
+  faultHook('receipt:written')
+  // ② slug manifest
+  const curSlug = shaOrAbsent(readOptional(S.path))
+  if (curSlug === S.beforeSha256) writeAtomic(S.path, S.afterBytes)
+  else if (curSlug !== S.afterSha256) return { ok: false, code: 'SLUG_MANIFEST_CONFLICT', why: `${S.path} 가 before 도 after 도 아니다 — 덮지 않는다` }
+  faultHook('slug:written')
+  // ③ ledger — 바이트 단위 접두 대조 뒤 남은 부분만 붙인다
+  const cur = fs.existsSync(L.path) ? fs.readFileSync(L.path) : Buffer.alloc(0)
+  const append = Buffer.from(L.appendBytes, 'utf8')
+  if (sha256(cur) !== L.afterSha256) {
+    const head = cur.subarray(0, L.beforeLength)
+    const tail = cur.subarray(L.beforeLength)
+    const headSha = L.beforeSha256 === 'ABSENT' && L.beforeLength === 0 ? 'ABSENT' : sha256(head)
+    if (cur.length < L.beforeLength || headSha !== L.beforeSha256 || !append.subarray(0, tail.length).equals(tail)) {
+      return { ok: false, code: 'LEDGER_CONFLICT', why: `${L.path} 앞부분이 journal 의 before 와 다르다 — 줄이지도 덮지도 않는다` }
+    }
+    const rest = append.subarray(tail.length)
+    if (rest.length) {
+      // 시험 급사 재현 지점 — 훅이 일부만 붙이고 죽을 수 있다(운영 훅은 아무것도 하지 않는다)
+      faultHook('ledger:append', { file: L.path, bytes: rest, appendLedger })
+      appendLedger(L.path, rest)
+    }
+  }
+  faultHook('ledger:written')
+  const after = { receipt: sha256(readOptional(R.path) ?? ''), slug: shaOrAbsent(readOptional(S.path)), ledger: sha256(fs.readFileSync(L.path)) }
+  if (after.receipt !== R.sha256 || after.slug !== S.afterSha256 || after.ledger !== L.afterSha256) {
+    return { ok: false, code: 'COMMIT_MISMATCH', why: `쓰기 뒤 해시가 journal 과 다르다 (${JSON.stringify(after)})` }
+  }
+  return { ok: true }
+}
+
+function finishJournal({ researchDir, repoDir, journalPath, knownLegacy }) {
+  const v = verifyAdmissions({
+    receipts: readReceipts(researchDir),
+    slugManifestText: readOptional(path.join(researchDir, ADMISSION_FILES.slugManifest)),
+    ledgerText: readOptional(path.join(researchDir, ADMISSION_FILES.ledger)),
+    payloadOf: productPayloadOf(repoDir), journalPresent: false, knownLegacy,
+  })
+  if (!v.ok) return { ok: false, code: 'VERIFY_FAILED', why: v.problems.slice(0, 5).join(' / ') }
+  fs.unlinkSync(journalPath)
+  return { ok: true }
+}
+
+/** 잠금 안에서 남은 journal 을 끝까지 완성한다 */
+async function recoverJournal({ researchDir, repoDir, faultHook, knownLegacy }) {
+  const journalPath = path.join(researchDir, JOURNAL_FILE)
+  let j
+  try { j = JSON.parse(fs.readFileSync(journalPath, 'utf8')) } catch (e) { return { ok: false, code: 'RECOVERY_IDENTITY', why: `journal 을 읽지 못했다: ${e.message}` } }
+  const bad = admissionJournalProblems(j, researchDir)
+  if (bad.length) return { ok: false, code: 'RECOVERY_IDENTITY', why: bad.join(', ') }
+  const c = commitForward(j, faultHook)
+  if (!c.ok) return c
+  const f = finishJournal({ researchDir, repoDir, journalPath, knownLegacy })
+  return f.ok ? { ok: true, code: 'RECOVERED', manifestHash: j.manifestHash } : f
+}
+
+async function loadPipeline(researchDir) {
+  const pipelinePath = path.join(researchDir, RESEARCH_FILES.pipelineModule)
+  if (!fs.existsSync(pipelinePath)) return null
+  const pipeline = await import(pathToFileURL(pipelinePath).href)
+  if (typeof pipeline.recordAdmission !== 'function' || typeof pipeline.validateLedger !== 'function') return null
+  return pipeline
+}
+
+/**
+ * 🔴 **staged preflight** — 임시 공간에서 세 최종 상태를 전부 만들고 검증한다. 실제 파일은 건드리지 않는다.
+ *    한 admission 이라도 실패하면 아무것도 쓰지 않는다.
+ */
+function stageAdmission({ manifest, researchDir, repoDir, pipeline, approval, committedAt, knownLegacy }) {
+  const receipt = makeReceipt({ manifest, approval, committedAt })
+  const rBytes = receiptBytes(receipt)
+  const slugPath = path.join(researchDir, ADMISSION_FILES.slugManifest)
+  const ledgerPath = path.join(researchDir, ADMISSION_FILES.ledger)
+  const slugBefore = readOptional(slugPath)
+  const sm = slugBefore === null ? { _note: '🔴 intentId ↔ slug 영구 대응. 한 번 정하면 바꾸지 않는다', slugs: {} } : JSON.parse(slugBefore)
+  const nextSlugs = { ...(sm.slugs ?? {}) }
+  for (const a of manifest.admissions) {
+    if (nextSlugs[a.intentId] !== undefined) return { ok: false, code: 'INTENT_BOUND_ELSEWHERE', why: `${a.intentId} → ${nextSlugs[a.intentId]}` }
+    if (Object.values(nextSlugs).includes(a.slug)) return { ok: false, code: 'SLUG_BOUND_ELSEWHERE', why: a.slug }
+    nextSlugs[a.intentId] = a.slug
+  }
+  const slugAfter = `${JSON.stringify({ ...sm, slugs: nextSlugs }, null, 2)}\n`
+
+  const ledgerBefore = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath) : null
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-stage-'))
+  try {
+    const stateFile = path.join(dir, 'm3-state.jsonl')
+    fs.writeFileSync(stateFile, ledgerBefore ?? '')
+    for (const a of manifest.admissions) {
+      const r = pipeline.recordAdmission({ stateFile, item: ledgerItemOf(a), at: committedAt })
+      if (!r.ok || !r.appended) return { ok: false, code: 'ADMISSION_REJECTED', why: `${a.intentId}: ${r.ok ? '새 사건이 아니다 (idempotent)' : r.why}` }
+    }
+    const ledgerAfter = fs.readFileSync(stateFile)
+    const before = ledgerBefore ?? Buffer.alloc(0)
+    if (!ledgerAfter.subarray(0, before.length).equals(before)) return { ok: false, code: 'LEDGER_NOT_APPEND_ONLY', why: '최종 ledger 가 기존 바이트로 시작하지 않는다' }
+    const lv = pipeline.validateLedger(parseJsonl(ledgerAfter.toString('utf8'), 'ledger'))
+    if (!lv.ok) return { ok: false, code: 'ADMISSION_REJECTED', why: lv.problems[0] }
+
+    const receiptFile = receiptPathOf(researchDir, manifest.hash)
+    const v = verifyAdmissions({
+      receipts: [...readReceipts(researchDir), { file: receiptFile, text: rBytes }],
+      slugManifestText: slugAfter, ledgerText: ledgerAfter.toString('utf8'),
+      payloadOf: productPayloadOf(repoDir), journalPresent: false, knownLegacy,
+    })
+    if (!v.ok) return { ok: false, code: 'STAGED_VERIFY_FAILED', why: v.problems.slice(0, 5).join(' / ') }
+    return {
+      ok: true,
+      journal: {
+        schema: ADMISSION_JOURNAL_SCHEMA, manifestHash: manifest.hash, phase: 'PREPARED',
+        receipt: { path: receiptFile, bytes: rBytes, sha256: sha256(rBytes) },
+        slugManifest: { path: slugPath, beforeSha256: shaOrAbsent(slugBefore), afterBytes: slugAfter, afterSha256: sha256(slugAfter) },
+        ledger: { path: ledgerPath, beforeSha256: ledgerBefore === null ? 'ABSENT' : sha256(ledgerBefore), beforeLength: before.length,
+          appendBytes: ledgerAfter.subarray(before.length).toString('utf8'), afterSha256: sha256(ledgerAfter) },
+      },
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/** 동일 manifest 가 이미 세 곳에 정확히 있는가 */
+function alreadyApplied({ manifest, researchDir, repoDir, knownLegacy }) {
+  const file = receiptPathOf(researchDir, manifest.hash)
+  const text = readOptional(file)
+  if (text === null) return { state: 'ABSENT' }
+  const r = (() => { try { return JSON.parse(text) } catch { return null } })()
+  if (!r || canonicalJson(r.manifest) !== canonicalJson(manifest)) return { state: 'CONFLICT', why: 'receipt 의 manifest 가 이 manifest 가 아니다' }
+  const v = verifyAdmissionState({ researchDir, repoDir, knownLegacy })
+  return v.ok ? { state: 'COMPLETE' } : { state: 'INCOMPLETE', why: v.problems.slice(0, 5).join(' / ') }
+}
+
+/**
+ * 🔴 **명시적 apply** — 연구 세 파일만 쓴다. 제품 파일 · topic queue 는 쓰지 않는다.
+ *   lock → 남은 journal 완성 → ALREADY_APPLIED 판정 → 입력 15개 재해시 · graph · readiness 재검증
+ *   → 승인 형식 → staged preflight → journal → receipt wx → slug 원자 교체 → ledger append → 검증 → journal 삭제 → unlock
+ *
+ * 🔴 journal 을 쓴 뒤의 예외는 급사와 같다 — 잠금 · journal 을 남긴다(`recoverStaleLock` 이 이어서 완성한다).
+ */
+export async function applyAdmissions({ manifest, repoDir, researchDir, snapshotDir, approval, committedAt, faultHook = testPauseHook(), knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
+  if (manifest?.schema !== G8_SCHEMA) return { ok: false, code: 'SCHEMA', why: `manifest schema 가 ${G8_SCHEMA} 가 아니다` }
+  if (hashManifest(manifest) !== manifest.hash) return { ok: false, code: 'HASH_MISMATCH', why: 'manifest 본문과 해시가 다르다' }
+  if (!isRealKstAt(committedAt)) return { ok: false, code: 'AT_INVALID', why: 'committedAt 은 실제 KST 시각이어야 한다' }
+  const ap = approvalProblems(approval, manifest.hash)
+  if (ap.length) return { ok: false, code: 'APPROVAL_INVALID', why: ap.join(', ') }
+
+  const lock = acquireLock(researchDir, manifest.hash)
+  if (!lock.ok) return lock
+  faultHook('locked')
+  const done = (r) => { releaseLock(lock); return r }
+
+  // ① 남은 journal 을 먼저 끝까지 완성한다
+  let recovered = null
+  if (fs.existsSync(path.join(researchDir, JOURNAL_FILE))) {
+    recovered = await recoverJournal({ researchDir, repoDir, faultHook, knownLegacy })
+    if (!recovered.ok) return done({ ...recovered, recovered })
+  }
+  // ② 이미 전부 반영된 같은 manifest
+  const already = alreadyApplied({ manifest, researchDir, repoDir, knownLegacy })
+  if (already.state === 'COMPLETE') return done({ ok: true, code: 'ALREADY_APPLIED', written: [], recovered })
+  if (already.state !== 'ABSENT') return done({ ok: false, code: 'ADMISSION_INCONSISTENT', why: already.why, recovered })
+
+  // ③ 입력 15개 · graph · readiness 재검증 — 다르면 journal 전에 멈춘다
+  let current
+  try { current = readIdentityInputs({ repoDir, researchDir, snapshotDir }) } catch (e) { return done({ ok: false, code: 'STALE_INPUT', why: e.message, recovered }) }
+  const stale = Object.keys({ ...manifest.identityInputHashes, ...current.hashes }).filter((k) => manifest.identityInputHashes?.[k] !== current.hashes[k]).sort()
+  if (stale.length) return done({ ok: false, code: 'STALE_INPUT', why: `manifest 이후 바뀌었다: ${stale.join(', ')}`, stale, recovered })
+  let rebuilt
+  try {
+    rebuilt = await buildManifest({ repoDir, researchDir, snapshotDir, at: manifest.at, graphEffectiveAt: manifest.graphEffectiveAt })
+  } catch (e) { return done({ ok: false, code: 'STALE_INPUT', why: e.message, recovered }) }
+  if (canonicalJson(rebuilt.graph) !== canonicalJson(manifest.graph)) return done({ ok: false, code: 'STALE_INPUT', why: 'graph 신원이 manifest 와 다르다', recovered })
+  if (rebuilt.readiness.readinessHash !== manifest.readiness?.readinessHash) return done({ ok: false, code: 'READINESS_STALE', why: 'readinessHash 가 manifest 와 다르다', recovered })
+  if (rebuilt.hash !== manifest.hash) return done({ ok: false, code: 'MANIFEST_MISMATCH', why: '같은 입력으로 다시 만든 manifest 가 다르다', recovered })
+  if (!manifest.admissions.length) return done({ ok: true, code: 'NOTHING_TO_APPLY', written: [], recovered })
+  const pre = verifyAdmissionState({ researchDir, repoDir, knownLegacy })
+  if (!pre.ok) return done({ ok: false, code: 'ADMISSION_INCONSISTENT', why: pre.problems.slice(0, 5).join(' / '), recovered })
+
+  // ④ staged preflight
+  const pipeline = await loadPipeline(researchDir)
+  if (!pipeline) return done({ ok: false, code: 'PIPELINE_MISSING', why: 'm3-pipeline.mjs 의 recordAdmission · validateLedger', recovered })
+  const staged = stageAdmission({ manifest, researchDir, repoDir, pipeline, approval, committedAt, knownLegacy })
+  if (!staged.ok) return done({ ...staged, recovered })
+  faultHook('journal:before')
+
+  // ⑤ journal → commit-forward (이후 예외는 급사와 같다)
+  const journalPath = path.join(researchDir, JOURNAL_FILE)
+  writeAtomic(journalPath, JSON.stringify(staged.journal))
+  faultHook('journal:written')
+  const c = commitForward(staged.journal, faultHook)
+  if (!c.ok) return done({ ...c, recovered })
+  const f = finishJournal({ researchDir, repoDir, journalPath, knownLegacy })
+  if (!f.ok) return done({ ...f, recovered })
+  return done({ ok: true, code: 'APPLIED', written: ['receipt', 'slugManifest', 'ledger'], admissions: manifest.admissions.length, hash: manifest.hash, recovered })
+}
+
+/**
+ * 🔴 **stale lock 의 유일한 명시 경로** — 사람이 확인한 잠금 파일 sha256 이 지금 파일과 같을 때만 넘겨받는다.
+ *    journal 이 있으면 잠금만 지우지 않는다 — 넘겨받은 잠금 안에서 journal 을 끝까지 완성한 뒤에 놓는다.
+ */
+export async function recoverStaleLock({ researchDir, repoDir, expectLockSha256, operator, faultHook = () => {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
+  const file = path.join(researchDir, LOCK_FILE)
+  const text = readOptional(file)
+  if (text === null) return { ok: false, code: 'NO_LOCK', why: '잠금 파일이 없다' }
+  if (!String(operator ?? '').trim() || MACHINE_APPROVER.test(String(operator).trim())) return { ok: false, code: 'OPERATOR_INVALID', why: '사람 operator 가 필요하다' }
+  if (sha256(text) !== expectLockSha256) return { ok: false, code: 'LOCK_SHA_MISMATCH', why: `잠금 파일 sha256 이 ${expectLockSha256} 가 아니다 — 아무것도 하지 않는다` }
+  const body = `${JSON.stringify({ schema: LOCK_SCHEMA, host: os.hostname(), pid: process.pid, startedAt: new Date().toISOString(), takeoverOf: sha256(text), operator })}\n`
+  writeAtomic(file, body)
+  const lock = { file, body }
+  if (fs.existsSync(path.join(researchDir, JOURNAL_FILE))) {
+    const r = await recoverJournal({ researchDir, repoDir, faultHook, knownLegacy })
+    releaseLock(lock)
+    return r.ok ? { ok: true, code: 'STALE_LOCK_RECOVERED', manifestHash: r.manifestHash } : r
+  }
+  releaseLock(lock)
+  return { ok: true, code: 'STALE_LOCK_RELEASED' }
+}
+
+/** CLI 용 — manifest 를 읽고 해시를 확인한다 */
+export function readManifestFile(file) {
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+  return { manifest, valid: hashManifest(manifest) === manifest.hash }
+}
+
+// ── 큐 행 렌더 (등록 · 입력 수리 · 시험이 쓰는 공용 helper — G8 은 큐를 쓰지 않는다) ──
 
 const q = (s) => `'${String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
 function tsValue(v) {
@@ -671,10 +828,9 @@ export function insertQueueRows(src, rows) {
 }
 
 /**
- * 🔴 **큐와 편입 장부가 같은 편입에서 왔는가.** G8 큐 행(intentId·g8ManifestHash)마다 장부 ADMITTED 사건이 있고,
+ * 🔴 **(G8 v1 큐 행 대조 — DIRECT source 작성이 아직 쓴다)** G8 큐 행(intentId·g8ManifestHash)마다 장부 ADMITTED 사건이 있고,
  *    장부 사건마다 큐 행이 있거나 **등록된 글**이어야 한다. 영구 slug 표가 그 짝을 묶고 있어야 한다.
- *    급사 journal 이 남아 있으면 반쪽 상태일 수 있다 — 그것도 어긋남이다.
- *    🔴 제품 graph bundle 은 보지 않는다. 그것은 이 도구가 쓰지 않는다.
+ *    G8 v2 의 receipt 일치 판정은 `verifyAdmissions` 다 — 이 함수의 의미는 ArticlePlan 단계(PR C)에서 바뀐다.
  */
 export function verifyConsistency({ queueSource, articlesSource = null, ledgerSource, slugManifestSource, journalPresent = false }) {
   const problems = []
@@ -696,259 +852,4 @@ export function verifyConsistency({ queueSource, articlesSource = null, ledgerSo
     if (slugs[r.intentId] !== r.slug) problems.push(`SLUG_UNBOUND — ${r.intentId} → ${r.slug} (표: ${slugs[r.intentId] ?? '없음'})`)
   }
   return { ok: problems.length === 0, problems: [...new Set(problems)] }
-}
-
-/** 🔴 임시 파일 → fsync → rename. 입력 수리 journal 도 이것을 쓴다 (약한 사본을 따로 두지 않는다) */
-export function writeAtomic(file, text) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const tmp = `${file}.g8tmp-${process.pid}`
-  const fd = fs.openSync(tmp, 'w')
-  try { fs.writeSync(fd, text); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-  fs.renameSync(tmp, file)
-}
-function restore(file, original) {
-  if (original === null) { if (fs.existsSync(file)) fs.unlinkSync(file) } else writeAtomic(file, original)
-}
-export const shaOrAbsent = (text) => (text === null ? 'ABSENT' : sha256(text))
-
-/**
- * 🔴 **급사 복구.** journal 이 있다는 것은 앞선 apply 가 쓰는 도중 죽었다는 뜻이다(잠금을 지금 내가 쥐었으므로
- *    주인은 살아 있지 않다). 세 파일을 들어오기 전 바이트로 되돌린다.
- *    단, 파일이 그 apply 의 「전」 또는 「후」 바이트일 때만 — 그 사이 다른 writer(M-AUTO 등록)가 바꿨다면
- *    덮어쓰지 않고 RECOVERY_CONFLICT 로 멈춘다.
- */
-export const JOURNAL_SCHEMA = 'g8-journal/1'
-
-/**
- * 🔴 **journal 신원 검증** — 되돌리기 전에 「이 journal 이 지금 이 루트의 그 세 파일만 가리키는가」를 본다.
- *    schema · 정확히 3개 · 중복 0 · 현재 queueRoot/admissionRoot 에서 계산한 절대 경로와 정확히 일치.
- *    하나라도 어긋나면 어떤 파일도 쓰거나 지우지 않는다 — journal 자체도 남긴다.
- *    (앞판은 외부 경로를 가리킨 위조 journal 로 저장소 밖 파일을 **실제로 지웠다** — schema 가 틀려도.)
- */
-export function checkJournalIdentity(j, expectedPaths, schema = JOURNAL_SCHEMA) {
-  const fail = (why) => ({ ok: false, code: 'RECOVERY_IDENTITY', why })
-  if (!j || typeof j !== 'object') return fail('journal 이 객체가 아니다')
-  if (j.schema !== schema) return fail(`schema 가 ${schema} 가 아니다 (${String(j.schema)})`)
-  if (!Array.isArray(j.files)) return fail('files 가 배열이 아니다')
-  const want = [...expectedPaths].sort()
-  if (j.files.length !== want.length) return fail(`파일 수가 ${want.length} 이 아니다 (${j.files.length})`)
-  const got = j.files.map((f) => f?.path)
-  if (got.some((p) => typeof p !== 'string' || !path.isAbsolute(p))) return fail('절대 경로가 아닌 항목이 있다')
-  if (new Set(got).size !== got.length) return fail('같은 경로가 두 번 있다')
-  const sorted = [...got].sort()
-  if (sorted.some((p, i) => p !== want[i])) return fail(`경로가 현재 루트의 세 파일과 다르다 (${sorted.join(', ')})`)
-  for (const f of j.files) {
-    if (!(f.before === null || typeof f.before === 'string')) return fail(`${f.path} 의 before 가 원문 또는 null 이 아니다`)
-    if (typeof f.afterSha !== 'string') return fail(`${f.path} 의 afterSha 가 없다`)
-  }
-  return { ok: true }
-}
-
-function recoverJournal(journalPath, expectedPaths) {
-  let j
-  try { j = JSON.parse(fs.readFileSync(journalPath, 'utf8')) } catch (e) {
-    return { ok: false, code: 'RECOVERY_IDENTITY', why: `journal 을 읽지 못했다: ${e.message}` }
-  }
-  const id = checkJournalIdentity(j, expectedPaths)
-  if (!id.ok) return id
-  const files = j.files
-  for (const f of files) {
-    const cur = shaOrAbsent(readOptional(f.path))
-    if (cur !== shaOrAbsent(f.before) && cur !== f.afterSha) {
-      return { ok: false, code: 'RECOVERY_CONFLICT', why: `${f.path} 가 급사 뒤 다른 writer 에 의해 바뀌었다 — 되돌리지 않는다` }
-    }
-  }
-  for (const f of files) restore(f.path, f.before)
-  const intact = files.every((f) => readOptional(f.path) === f.before)
-  if (!intact) return { ok: false, code: 'RECOVERY_FAILED', why: '되돌린 뒤 바이트가 원본과 다르다' }
-  fs.unlinkSync(journalPath)
-  return { ok: true, manifestHash: j.manifestHash ?? null, files: files.map((f) => f.path) }
-}
-
-/**
- * 🔴 편입 장부 행은 **정본 m3-pipeline 의 recordAdmission 이 만든다.** 직접 append 하지 않는다.
- *    임시 사본에 차례로 적어 다음 장부 바이트를 얻고, 정본 validateLedger 로 다시 확인한다.
- *    한 건이라도 거부되면 null — 실제 장부에는 한 바이트도 쓰지 않는다.
- */
-function stageAdmissions(pipeline, beforeLedger, rows, at) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-ledger-'))
-  const stateFile = path.join(dir, 'm3-state.jsonl')
-  try {
-    fs.writeFileSync(stateFile, beforeLedger ?? '')
-    for (const item of rows) {
-      const r = pipeline.recordAdmission({ stateFile, item, at })
-      if (!r.ok) return { ok: false, why: `${item.intentId}: ${r.why}` }
-      if (!r.appended) return { ok: false, why: `${item.intentId}: 장부에 이미 있다 (idempotent) — 일부만 반영된 상태다` }
-    }
-    const text = fs.readFileSync(stateFile, 'utf8')
-    const v = pipeline.validateLedger(parseJsonl(text, 'ledger'))
-    return v.ok ? { ok: true, text } : { ok: false, why: v.problems[0] }
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-}
-
-function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
-
-/**
- * 🔴 **시험 전용 정지점** — 실제 자식 프로세스로 동시 apply·SIGKILL 을 재현하려고 둔다.
- *    `SORAN_MAGAZINE_TEST_MODE=1` 이 없으면 열리지 않고, 변수만 있으면 apply 를 거부한다.
- */
-export function testPauseHook(env = process.env) {
-  const stage = env.G8_TEST_PAUSE_AT
-  const gate = env.G8_TEST_GATE
-  if (!stage && !gate) return () => {}
-  if (env.SORAN_MAGAZINE_TEST_MODE !== '1') throw new Error('G8_TEST_PAUSE_AT · G8_TEST_GATE 는 SORAN_MAGAZINE_TEST_MODE=1 에서만 쓴다 — 운영에서는 금지다')
-  return (s) => {
-    if (s !== stage) return
-    fs.writeFileSync(`${gate}.reached`, String(process.pid))
-    while (!fs.existsSync(`${gate}.go`)) sleepSync(20)
-  }
-}
-
-/**
- * 🔴 **명시적 apply.** 큐 1파일 + 편입 장부 2파일을 한 묶음으로 쓴다. 제품 graph bundle 은 쓰지 않는다.
- *    · 단일 writer 잠금(`m3-state.jsonl.lock` — 격리 장부와 같은 잠금 구현) 안에서만 읽고 쓴다
- *    · 잠금을 쥐면 먼저 앞선 급사의 journal 을 되돌린다
- *    · manifest 해시가 본문과 다르면 쓰지 않는다
- *    · 이미 전부 반영됐으면 아무것도 쓰지 않는다 (ALREADY_APPLIED)
- *    · manifest 에 기록된 **모든 입력**을 다시 해시해 하나라도 다르면 쓰지 않는다 (STALE_INPUT)
- *    · 장부가 정본 계약을 어기면 쓰지 않는다 (LEDGER_INVALID · ADMISSION_REJECTED)
- *    · 쓰기 전에 원본 바이트를 journal 에 적고, 실패하면 세 파일을 되돌린다
- *
- * @param {object} p
- * @param {object} p.manifest
- * @param {string} p.queueRoot      drafts/magazine/topic-queue.ts 를 가진 저장소 루트
- * @param {string} p.admissionRoot  편입 장부(contract/m3-slug-manifest.json · m3-state.jsonl)를 가진 연구 루트
- * @param {(stage:string)=>void} [p.faultHook]  시험 전용 — 단계마다 불린다
- */
-export async function applyManifest({ manifest, queueRoot, admissionRoot, faultHook = testPauseHook() }) {
-  if (manifest?.schema !== G8_SCHEMA) return { ok: false, code: 'SCHEMA', why: `manifest schema 가 ${G8_SCHEMA} 가 아니다` }
-  if (hashManifest(manifest) !== manifest.hash) return { ok: false, code: 'HASH_MISMATCH', why: 'manifest 본문과 해시가 다르다' }
-  /**
-   * 🔴 **후보 0건이어도 여기서 돌아가지 않는다.** 앞선 급사의 journal 은 잠금 안에서만 되돌릴 수 있고,
-   *    빈 manifest 가 그것을 건너뛰면 반쪽 상태가 남는다. pipeline 은 실제로 쓸 행이 있을 때만 읽는다.
-   */
-  let pipeline = null
-  if (manifest.queueRows.length) {
-    const pipelinePath = path.join(admissionRoot, RESEARCH_FILES.pipelineModule)
-    if (!fs.existsSync(pipelinePath)) return { ok: false, code: 'PIPELINE_MISSING', why: pipelinePath }
-    pipeline = await import(pathToFileURL(pipelinePath).href)
-    if (typeof pipeline.recordAdmission !== 'function' || typeof pipeline.validateLedger !== 'function') {
-      return { ok: false, code: 'PIPELINE_MISSING', why: 'm3-pipeline.mjs 에 recordAdmission · validateLedger 가 없다' }
-    }
-  }
-  const ctx = { manifest, queueRoot, admissionRoot, faultHook, pipeline }
-  /**
-   * 🔴 **잠금 순서는 queue → admission 으로 고정이다** (`QUEUE_LOCK_ORDER`).
-   *    queue 잠금은 M-AUTO 등록과 공유한다 — 큐를 읽기 전에 쥐고 쓴 뒤에 놓는다.
-   */
-  const queueFile = path.join(queueRoot, PRODUCT_FILES.queue)
-  const ledgerPath = path.join(admissionRoot, ADMISSION_FILES.ledger)
-  const locked = withQueueWriteLock(queueFile, () => {
-    const inner = withQuarantineLock(ledgerPath, () => applyLocked(ctx), { waitMs: 0 })
-    return inner.ok ? inner.value : { ok: false, code: 'LOCKED', why: `편입 장부 잠금: ${inner.why}` }
-  }, { waitMs: 0 })
-  if (!locked.ok) return { ok: false, code: 'LOCKED', why: `큐 writer 잠금: ${locked.why}` }
-  return locked.value
-}
-
-/** 잠금 안에서만 불린다. 🔴 동기다 — 잠금은 이 함수가 돌아오는 순간 풀린다 */
-function applyLocked({ manifest, queueRoot, admissionRoot, faultHook, pipeline }) {
-  faultHook('locked:enter')
-  const journalPath = path.join(admissionRoot, JOURNAL_FILE)
-  const files = {
-    queue: path.join(queueRoot, PRODUCT_FILES.queue),
-    slugManifest: path.join(admissionRoot, ADMISSION_FILES.slugManifest),
-    ledger: path.join(admissionRoot, ADMISSION_FILES.ledger),
-  }
-  let recovered = null
-  if (fs.existsSync(journalPath)) {
-    recovered = recoverJournal(journalPath, Object.values(files))
-    if (!recovered.ok) return recovered
-  }
-  if (!manifest.queueRows.length) return { ok: true, code: 'NOTHING_TO_APPLY', written: [], recovered }
-
-  const before = Object.fromEntries(Object.entries(files).map(([k, f]) => [k, readOptional(f)]))
-  if (before.queue === null) return { ok: false, code: 'QUEUE_MISSING', why: files.queue, recovered }
-  const articlesSource = readOptional(path.join(queueRoot, PRODUCT_FILES.articles))
-  const stamped = manifest.queueRows.map((r) => ({ ...r, g8ManifestHash: manifest.hash }))
-
-  // 이미 전부 반영됐는가 — 큐에서 빠진 행은 M-AUTO 가 등록한 것이다(장부·slug 표가 함께 있을 때만)
-  const queue = parseQueueSource(before.queue)
-  const ledger = parseJsonl(before.ledger ?? '', 'ledger')
-  const slugs = before.slugManifest ? JSON.parse(before.slugManifest).slugs ?? {} : {}
-  const registered = articlesSource ? new Set(parseArticlesSource(articlesSource).map((a) => a.slug)) : new Set()
-  const complete = stamped.every((r) =>
-    (registered.has(r.slug) || queue.some((x) => x.slug === r.slug && x.intentId === r.intentId && x.g8ManifestHash === manifest.hash))
-    && ledger.some((x) => x.event === 'ADMITTED' && x.slug === r.slug && x.intentId === r.intentId)
-    && slugs[r.intentId] === r.slug)
-  if (complete) return { ok: true, code: 'ALREADY_APPLIED', written: [], recovered }
-
-  // 🔴 manifest 가 읽은 입력 전부를 다시 해시한다 — 큐 하나만 보지 않는다
-  let current
-  try { current = readInputs({ researchDir: admissionRoot, repoDir: queueRoot }) } catch (e) {
-    return { ok: false, code: 'STALE_INPUT', why: `입력을 다시 읽지 못했다: ${e.message}`, recovered }
-  }
-  const stale = diffHashes(manifest.inputs, current.hashes)
-  if (stale.length) return { ok: false, code: 'STALE_INPUT', why: `manifest 이후 바뀌었다: ${stale.join(', ')}`, stale, recovered }
-
-  const ledgerCheck = pipeline.validateLedger(ledger)
-  if (!ledgerCheck.ok) return { ok: false, code: 'LEDGER_INVALID', why: ledgerCheck.problems[0], recovered }
-  for (const r of stamped) {
-    if (queue.some((x) => x.slug === r.slug)) return { ok: false, code: 'SLUG_IN_QUEUE', why: r.slug, recovered }
-    if (slugs[r.intentId] && slugs[r.intentId] !== r.slug) return { ok: false, code: 'INTENT_BOUND_ELSEWHERE', why: `${r.intentId} → ${slugs[r.intentId]}`, recovered }
-    if (Object.entries(slugs).some(([id, sl]) => sl === r.slug && id !== r.intentId)) return { ok: false, code: 'SLUG_BOUND_ELSEWHERE', why: r.slug, recovered }
-  }
-
-  const next = {}
-  next.queue = insertQueueRows(before.queue, stamped)
-  const sm = before.slugManifest ? JSON.parse(before.slugManifest) : { _note: '🔴 intentId ↔ slug 영구 대응. 한 번 정하면 바꾸지 않는다', asOf: manifest.asOf, slugs: {} }
-  const nextSlugs = { ...(sm.slugs ?? {}) }
-  for (const r of stamped) nextSlugs[r.intentId] = r.slug
-  next.slugManifest = `${JSON.stringify({ ...sm, asOf: manifest.asOf, slugs: nextSlugs }, null, 2)}\n`
-  const staged = stageAdmissions(pipeline, before.ledger, manifest.admissionRows, manifest.at)
-  if (!staged.ok) return { ok: false, code: 'ADMISSION_REJECTED', why: staged.why, recovered }
-  next.ledger = staged.text
-
-  // 쓰기 전 검증 — M-AUTO 가 읽는 같은 파서로 읽힌다
-  const parsed = parseQueueSource(next.queue)
-  if (parsed.length !== queue.length + stamped.length) return { ok: false, code: 'RENDER_INVALID', why: '큐 행 수가 맞지 않는다', recovered }
-  for (const r of stamped) {
-    const got = parsed.find((x) => x.slug === r.slug)
-    if (JSON.stringify(got) !== JSON.stringify(r)) return { ok: false, code: 'RENDER_INVALID', why: `${r.slug} 가 그대로 읽히지 않는다`, recovered }
-  }
-
-  faultHook('locked:ready')
-  writeAtomic(journalPath, JSON.stringify({
-    schema: 'g8-journal/1', manifestHash: manifest.hash, pid: process.pid,
-    files: Object.keys(files).map((k) => ({ path: files[k], before: before[k], afterSha: sha256(next[k]) })),
-  }))
-  const written = []
-  try {
-    for (const k of ['queue', 'slugManifest', 'ledger']) {
-      writeAtomic(files[k], next[k])
-      written.push(k)
-      faultHook(`after:${k}`)
-    }
-    const check = verifyConsistency({
-      queueSource: readOptional(files.queue), articlesSource,
-      ledgerSource: readOptional(files.ledger), slugManifestSource: readOptional(files.slugManifest),
-    })
-    faultHook('after:verify')
-    if (!check.ok) throw new Error(`쓰기 뒤 대조 실패: ${check.problems.join(' / ')}`)
-    fs.unlinkSync(journalPath)
-    return { ok: true, code: 'APPLIED', written, rows: stamped.length, hash: manifest.hash, recovered }
-  } catch (e) {
-    for (const k of Object.keys(files)) restore(files[k], before[k])
-    const intact = Object.keys(files).every((k) => readOptional(files[k]) === before[k])
-    if (intact && fs.existsSync(journalPath)) fs.unlinkSync(journalPath)
-    return { ok: false, code: 'ROLLED_BACK', why: e.message, written, restored: intact, recovered }
-  }
-}
-
-/** CLI 용 — manifest 를 읽고 해시를 확인한다 */
-export function readManifestFile(file) {
-  const m = JSON.parse(fs.readFileSync(file, 'utf8'))
-  return { manifest: m, valid: m?.schema === G8_SCHEMA && hashManifest(m) === m.hash }
 }
