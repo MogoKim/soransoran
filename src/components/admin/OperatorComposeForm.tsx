@@ -16,7 +16,9 @@ import {
 } from '@/lib/post-policy'
 import { getBoardByType } from '@/lib/board-registry'
 import { OPERATOR_BOARDS } from '@/lib/operator-writer'
-import type { ComposeTargetPost, WriterOption } from '@/lib/queries/operator-compose'
+import type { ComposeTargetPost, ReplyTargetPost, WriterOption } from '@/lib/queries/operator-compose'
+import CommentBadges from '@/components/features/CommentBadges'
+import { AdminNotice, adminBadgeClass } from '@/components/admin/AdminUi'
 
 /**
  * 창업자 직접 작성 폼 — 글 또는 댓글 한 편.
@@ -39,6 +41,10 @@ import type { ComposeTargetPost, WriterOption } from '@/lib/queries/operator-com
  *    저장해서 OperatorWriter 작성자·감사 기록이 사라진다. 에디터만 빌리고 저장은 이 화면의
  *    액션 그대로다. 사진은 관리자 전용 업로드(`/api/admin/uploads`)로 간다.
  *    댓글은 지금처럼 글자 칸이다 — 댓글에는 사진·영상을 넣지 않는다.
+ *
+ * 🔴 **작성자 대댓글(2026-10-21)은 작성자를 고르지 않는다.** 원글 작성자 이름으로만 올라가고,
+ *    그 값은 서버가 원글에서 읽는다. 이 모드에서는 작성자 선택창도 `writerId` 입력도 그리지 않는다 —
+ *    보내지 않은 값은 위조될 수도 없다. 최상위 「댓글 달기」 는 지금처럼 작성자를 고른다.
  */
 
 /** 🔴 관리자 전용 업로드 — 회원 업로드의 "가입 완료" 문에 기대지 않는다 */
@@ -52,7 +58,9 @@ function countMedia(html: string): { images: number; videos: number } {
   }
 }
 
-type Mode = 'post' | 'comment'
+type Mode = 'post' | 'comment' | 'reply'
+
+const MODE_LABEL: Record<Mode, string> = { post: '글 쓰기', comment: '댓글 달기', reply: '작성자 대댓글' }
 
 /** 🔴 요청 1회를 가리키는 값. 내용이 아니라 **요청**을 식별한다 */
 function newRequestKey(): string {
@@ -63,9 +71,12 @@ function newRequestKey(): string {
 export default function OperatorComposeForm({
   writers,
   targets,
+  replyTargets,
 }: {
   writers: WriterOption[]
   targets: ComposeTargetPost[]
+  /** 작성자 대댓글을 달 운영 직접 작성 글 — 🔴 작성자는 여기 보이는 값이고 고르는 값이 아니다 */
+  replyTargets: ReplyTargetPost[]
 }) {
   const [mode, setMode] = useState<Mode>('post')
   const [writerId, setWriterId] = useState(writers[0]?.id ?? '')
@@ -91,6 +102,10 @@ export default function OperatorComposeForm({
   const [editorKey, setEditorKey] = useState(0)
   const [commentBody, setCommentBody] = useState('')
   const [postId, setPostId] = useState(targets[0]?.id ?? '')
+  /** 작성자 대댓글 — 원글 · 답할 댓글 · 본문. 🔴 작성자 state 는 없다(원글에서 정해진다) */
+  const [replyPostId, setReplyPostId] = useState(replyTargets[0]?.id ?? '')
+  const [parentId, setParentId] = useState('')
+  const [replyBody, setReplyBody] = useState('')
   const [requestKey, setRequestKey] = useState(newRequestKey)
 
   /**
@@ -120,6 +135,9 @@ export default function OperatorComposeForm({
 
   const writer = useMemo(() => writers.find((w) => w.id === writerId) ?? null, [writers, writerId])
   const target = useMemo(() => targets.find((t) => t.id === postId) ?? null, [targets, postId])
+  const replyPost = useMemo(() => replyTargets.find((t) => t.id === replyPostId) ?? null, [replyTargets, replyPostId])
+  /** 🔴 고른 댓글이 새로 불러온 목록에 없으면(지워짐 · 사라짐) 고르지 않은 것으로 본다 */
+  const parent = useMemo(() => replyPost?.comments.find((c) => c.id === parentId) ?? null, [replyPost, parentId])
 
   /**
    * 🔴 **실패해도 입력이 그대로 남는다.** 제목·내용은 이 컴포넌트의 state 이고,
@@ -144,6 +162,7 @@ export default function OperatorComposeForm({
     if (rawState.doneKey === undefined) return
     // 🔴 끝난 쪽의 초안만 비운다 — 다른 모드에 써 두고 온 글을 지우지 않는다
     if (rawState.kind === 'comment') setCommentBody('')
+    else if (rawState.kind === 'reply') setReplyBody('')
     else {
       setTitle('')
       setPostBody('')
@@ -167,19 +186,22 @@ export default function OperatorComposeForm({
 
   /** 🔴 글은 글자 수(postText), 댓글은 그대로의 길이 — 서버가 재는 값과 같다 */
   const measured = mode === 'post' ? postText : commentBody
+  /** 지금 모드에서 잴 본문 — 대댓글은 그대로의 길이(댓글과 같은 기준) */
+  const written = mode === 'reply' ? replyBody : measured
   const contentTooLong =
-    mode === 'post' ? measured.length > MAX_POST_CONTENT_LENGTH : measured.length > MAX_COMMENT_LENGTH
+    mode === 'post' ? written.length > MAX_POST_CONTENT_LENGTH : written.length > MAX_COMMENT_LENGTH
   /**
    * 🔴 화면의 잠금 조건은 **서버와 같은 상수**를 본다. 여기 숫자를 적으면
    *    "버튼은 열렸는데 서버가 막는" 상태가 생긴다 — `postSubmitBlock` 과 같은 계약이다.
    */
   const canSubmit =
-    writerId !== '' &&
-    measured.trim().length >= (mode === 'post' ? MIN_POST_CONTENT_LENGTH : MIN_COMMENT_LENGTH) &&
+    // 🔴 대댓글은 작성자를 고르지 않는다 — 원글 · 답할 댓글 · 원글 자격이 조건이다
+    (mode === 'reply' ? replyPost !== null && replyPost.blocked === null && parent !== null : writerId !== '') &&
+    written.trim().length >= (mode === 'post' ? MIN_POST_CONTENT_LENGTH : MIN_COMMENT_LENGTH) &&
     !contentTooLong &&
     // 🔴 사진을 올리는 중에는 보내지 않는다 — blob: 주소는 sanitize 가 지워 사진이 사라진 글이 된다
     !(mode === 'post' && uploading) &&
-    (mode === 'post' ? title.trim().length >= MIN_POST_TITLE_LENGTH : postId !== '')
+    (mode === 'post' ? title.trim().length >= MIN_POST_TITLE_LENGTH : mode === 'comment' ? postId !== '' : true)
 
   const media = mode === 'post' ? countMedia(postBody) : { images: 0, videos: 0 }
 
@@ -199,9 +221,12 @@ export default function OperatorComposeForm({
       {/* 🔴 무엇을 쓰는지는 값으로 보낸다 — 액션을 바꿔 끼우지 않는다 */}
       <input type="hidden" name="mode" value={mode} />
       <input type="hidden" name="requestKey" value={requestKey} />
-      <input type="hidden" name="writerId" value={writerId} />
+      {/* 🔴 대댓글 모드에는 작성자 값이 폼에 아예 없다 — 서버가 원글에서 정한다 */}
+      {mode !== 'reply' ? <input type="hidden" name="writerId" value={writerId} /> : null}
       {mode === 'post' ? <input type="hidden" name="boardType" value={boardType} /> : null}
       {mode === 'comment' ? <input type="hidden" name="postId" value={postId} /> : null}
+      {mode === 'reply' ? <input type="hidden" name="postId" value={replyPostId} /> : null}
+      {mode === 'reply' ? <input type="hidden" name="parentId" value={parent?.id ?? ''} /> : null}
 
       {/* ── 무엇을 쓰는가 ── */}
       <div
@@ -209,7 +234,7 @@ export default function OperatorComposeForm({
         aria-label="무엇을 쓸까요"
         className="flex flex-wrap gap-2"
       >
-        {(['post', 'comment'] as const).map((m) => (
+        {(['post', 'comment', 'reply'] as const).map((m) => (
           <button
             key={m}
             type="button"
@@ -224,12 +249,13 @@ export default function OperatorComposeForm({
                 : 'border-subtle text-content-muted'
             } disabled:opacity-40`}
           >
-            {m === 'post' ? '글 쓰기' : '댓글 달기'}
+            {MODE_LABEL[m]}
           </button>
         ))}
       </div>
 
-      {/* ── 누구 이름으로 ── */}
+      {/* ── 누구 이름으로 ── 🔴 대댓글은 고르지 않는다(아래 「이 글의 작성자」 고정 표시) */}
+      {mode !== 'reply' ? (
       <label className="flex flex-col gap-1">
         <span className="text-sm font-bold text-content-primary">누구 이름으로 쓸까요</span>
         <select
@@ -245,8 +271,18 @@ export default function OperatorComposeForm({
         </select>
         {writer?.note ? <span className="text-xs text-content-muted">{writer.note}</span> : null}
       </label>
+      ) : null}
 
-      {mode === 'post' ? (
+      {mode === 'reply' ? (
+        <ReplyPicker
+          posts={replyTargets}
+          postId={replyPostId}
+          onPost={(id) => { setReplyPostId(id); setParentId('') }}
+          parentId={parentId}
+          parentGone={parentId !== '' && parent === null}
+          onParent={setParentId}
+        />
+      ) : mode === 'post' ? (
         <>
           <label className="flex flex-col gap-1">
             <span className="text-sm font-bold text-content-primary">어느 게시판에</span>
@@ -312,6 +348,21 @@ export default function OperatorComposeForm({
             {uploading ? ' · 사진을 올리는 중이에요. 끝나면 등록할 수 있어요.' : ''}
           </span>
         </div>
+      ) : mode === 'reply' ? (
+        <label className="flex flex-col gap-1">
+          <span className="text-sm font-bold text-content-primary">대댓글</span>
+          <textarea
+            name="content"
+            value={replyBody}
+            onChange={(e) => setReplyBody(e.target.value)}
+            rows={4}
+            maxLength={MAX_COMMENT_LENGTH}
+            className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+          />
+          <span className="text-xs text-content-muted">
+            {replyBody.length} / {MAX_COMMENT_LENGTH}자
+          </span>
+        </label>
       ) : (
         <label className="flex flex-col gap-1">
           <span className="text-sm font-bold text-content-primary">댓글</span>
@@ -334,6 +385,9 @@ export default function OperatorComposeForm({
         <p className="m-0 text-xs font-bold uppercase tracking-wide text-content-muted">
           이대로 올라갑니다
         </p>
+        {mode === 'reply' ? (
+          <ReplyPreview post={replyPost} parent={parent} text={replyBody} />
+        ) : (
         <p className="mt-1 break-words text-sm text-content-primary">
           <strong>{writer?.name ?? '—'}</strong> 이름으로{' '}
           {mode === 'post' ? (
@@ -347,14 +401,17 @@ export default function OperatorComposeForm({
             </>
           )}
         </p>
+        )}
         {mode === 'post' && title.trim() !== '' ? (
           <p className="mt-1 break-words text-sm text-content-muted">제목: {title}</p>
         ) : null}
         {/* 🔴 글은 HTML 을 그리지 않고 **글자만** 보여 준다. 태그 문자열이 그대로 보이지도,
                정제되지 않은 HTML 이 그려지지도 않는다. 사진·영상은 위 에디터가 실제 모습이다 */}
+        {mode !== 'reply' ? (
         <p className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-surface-card p-2 text-sm text-content-primary">
           {measured.trim() === '' ? '(내용이 비어 있습니다)' : measured}
         </p>
+        ) : null}
         {media.images + media.videos > 0 ? (
           <p className="mt-1 text-xs text-content-muted">
             {media.images > 0 ? `사진 ${media.images}장` : ''}
@@ -380,11 +437,146 @@ export default function OperatorComposeForm({
       <ActionButton
         tone="primary"
         size="compact"
-        label={mode === 'post' ? '글 등록' : '댓글 등록'}
+        label={mode === 'post' ? '글 등록' : mode === 'reply' ? '대댓글 등록' : '댓글 등록'}
         pendingLabel="등록 중…"
         disabled={!canSubmit}
         className="justify-center px-4"
       />
     </form>
+  )
+}
+
+/**
+ * 작성자 대댓글 — 원글 고르기 · 원글 작성자 고정 표시 · 답할 댓글 고르기.
+ *
+ * 🔴 작성자는 보여 주기만 한다. 고르는 칸이 없다.
+ * 🔴 댓글은 고객 화면처럼 한 단계만 들여 쓴다(대댓글의 대댓글도 같은 단계).
+ */
+function ReplyPicker({
+  posts, postId, onPost, parentId, parentGone, onParent,
+}: {
+  posts: ReplyTargetPost[]
+  postId: string
+  onPost: (id: string) => void
+  parentId: string
+  parentGone: boolean
+  onParent: (id: string) => void
+}) {
+  const post = posts.find((p) => p.id === postId) ?? null
+  if (posts.length === 0) {
+    return (
+      <AdminNotice tone="info" title="대댓글을 달 글이 없습니다">
+        운영자가 직접 작성한 글만 작성자 대댓글을 달 수 있습니다. 먼저 「글 쓰기」 로 글을 올려 주세요.
+      </AdminNotice>
+    )
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-bold text-content-primary">어느 글에 달까요 (운영 직접 작성 글)</span>
+        <select
+          value={postId}
+          onChange={(e) => onPost(e.target.value)}
+          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+        >
+          {posts.map((p) => (
+            <option key={p.id} value={p.id}>
+              [{p.boardLabel}] {p.title} · 댓글 {p.comments.length}{p.blocked ? ' · 달 수 없음' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {post ? (
+        <div className="rounded-lg border border-subtle bg-surface-card p-3" data-reply-author="">
+          <p className="m-0 break-words text-sm text-content-primary">
+            이 글의 작성자: <strong>{post.writerName}</strong>{' '}
+            <span className={adminBadgeClass('neutral')}>{post.writerCode}</span>
+          </p>
+          {/* 막힌 글에는 "등록됩니다" 를 말하지 않는다 — 아래 안내가 왜 안 되는지 말한다 */}
+          {post.blocked === null ? (
+            <p className="m-0 mt-1 text-sm text-content-muted">이 작성자 이름으로 대댓글이 등록됩니다.</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {post?.blocked ? (
+        <AdminNotice tone="warning" title="이 글에는 작성자 대댓글을 달 수 없습니다">{post.blocked}</AdminNotice>
+      ) : post && post.comments.length === 0 ? (
+        <AdminNotice tone="info" title="답할 댓글이 없습니다">이 글에는 답할 수 있는 댓글이 없습니다.</AdminNotice>
+      ) : post ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-bold text-content-primary" id="reply-parent-label">어느 댓글에 답할까요</span>
+          {parentGone ? (
+            <AdminNotice tone="warning" title="다시 골라 주세요">선택한 댓글이 삭제되었거나 더 이상 존재하지 않습니다.</AdminNotice>
+          ) : null}
+          <ul role="radiogroup" aria-labelledby="reply-parent-label" className="m-0 flex list-none flex-col gap-2 p-0">
+            {post.comments.map((c) => {
+              const on = c.id === parentId
+              return (
+                <li key={c.id} className={c.isReply ? 'pl-4 lg:pl-6' : undefined}>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    data-parent-id={c.id}
+                    onClick={() => onParent(c.id)}
+                    className={`flex min-h-[52px] w-full flex-col items-start gap-1 rounded-lg border px-3 py-2 text-left transition lg:min-h-[44px] ${
+                      on ? 'border-cta bg-surface-soft' : 'border-subtle bg-surface-card'
+                    }`}
+                  >
+                    <span className="flex w-full flex-wrap items-center gap-2 text-sm">
+                      <span className={adminBadgeClass(c.isReply ? 'info' : 'neutral')}>{c.isReply ? '대댓글' : '댓글'}</span>
+                      <strong className="min-w-0 break-words text-content-primary">{c.authorName}</strong>
+                      {c.guest ? <span className={adminBadgeClass('neutral')}>비회원</span> : null}
+                      <span className="text-xs text-content-muted">{c.createdAtLabel}</span>
+                      {on ? <span className={`${adminBadgeClass('brand')} ml-auto`}>선택됨</span> : null}
+                    </span>
+                    <span className="w-full whitespace-pre-wrap break-words text-sm text-content-secondary">{c.preview}</span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** 고객 화면에 올라갈 모양 — 답할 댓글 아래 한 단계 들여 쓴 대댓글 */
+function ReplyPreview({
+  post, parent, text,
+}: {
+  post: ReplyTargetPost | null
+  parent: ReplyTargetPost['comments'][number] | null
+  text: string
+}) {
+  if (!post || !parent) {
+    return <p className="mt-1 text-sm text-content-muted">글과 답할 댓글을 고르면 고객 화면 모양이 보입니다.</p>
+  }
+  return (
+    <div className="mt-2 rounded-lg bg-surface-card p-3 text-sm" data-reply-preview="">
+      <p className="m-0 break-words text-content-muted">
+        <strong className="text-content-primary">{post.title}</strong> 글
+      </p>
+      <div className="mt-2 border-l-2 border-subtle pl-3">
+        <p className="m-0 flex flex-wrap items-center gap-1.5 text-xs text-content-muted">
+          <span className="font-bold text-content-primary" data-preview-parent-author="">{parent.authorName}</span>
+          <CommentBadges isPostAuthor={false} isGuest={parent.guest} />
+        </p>
+        <p className="m-0 mt-1 whitespace-pre-wrap break-words text-content-secondary">{parent.preview}</p>
+        <div className="mt-2 pl-4">
+          <p className="m-0 flex flex-wrap items-center gap-1.5 text-xs text-content-muted">
+            <span aria-hidden>↳</span>
+            <span className="font-bold text-content-primary" data-preview-author="">{post.writerName}</span>
+            <CommentBadges isPostAuthor isGuest={false} />
+          </p>
+          <p className="m-0 mt-1 whitespace-pre-wrap break-words text-content-primary">
+            {text.trim() === '' ? '(내용이 비어 있습니다)' : text}
+          </p>
+        </div>
+      </div>
+    </div>
   )
 }

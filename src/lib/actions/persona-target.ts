@@ -9,7 +9,7 @@ import {
   planClearTarget, judgeTargetPost,
   type TargetBlock, type TargetPostFacts,
 } from '@/lib/persona-target-rules'
-import { setCandidateTargetTx } from '@/lib/persona-target-tx'
+import { TARGET_COMMENT_SELECT, setCandidateTargetTx, targetCommentCounts } from '@/lib/persona-target-tx'
 import type { CandidateStatus } from '@/lib/persona-candidate-rules'
 
 /**
@@ -86,9 +86,9 @@ export async function searchTargetPosts(query: string): Promise<SearchState> {
       },
       select: {
         id: true, title: true, boardType: true, status: true, createdAt: true,
-        // 🔴 personaId 만 읽는다. 본문도 작성자도 가져오지 않는다.
+        // 🔴 세는 데 필요한 세 칸만 읽는다(TARGET_COMMENT_SELECT). 본문도 작성자도 가져오지 않는다.
         //    상한이 12건이라 댓글 배열을 세도 부담이 없다 — groupBy 두 번보다 단순하다
-        comments: { where: { isDeleted: false }, select: { personaId: true } },
+        comments: { where: { isDeleted: false }, select: TARGET_COMMENT_SELECT },
       },
       orderBy: { createdAt: 'desc' },
       take: SEARCH_LIMIT,
@@ -98,8 +98,8 @@ export async function searchTargetPosts(query: string): Promise<SearchState> {
       posts: posts.map((p) => {
         const facts: TargetPostFacts = {
           status: p.status,
-          personaComments: p.comments.filter((c) => c.personaId !== null).length,
-          memberComments: p.comments.filter((c) => c.personaId === null).length,
+          // 🔴 저장 트랜잭션과 같은 함수 — 목록에 보인 수와 저장 때 재판정 수가 갈라지지 않는다
+          ...targetCommentCounts(p.comments),
         }
         const verdict = judgeTargetPost(facts)
         return {

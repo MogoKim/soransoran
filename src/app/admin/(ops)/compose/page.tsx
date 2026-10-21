@@ -15,6 +15,7 @@ import {
   getComposedItems,
   getComposeTargetPosts,
   getOperatorWriters,
+  getReplyTargetPosts,
 } from '@/lib/queries/operator-compose'
 
 /**
@@ -44,9 +45,10 @@ export default async function AdminComposePage() {
     )
   }
 
-  const [writers, targets, items] = await Promise.all([
+  const [writers, targets, replyTargets, items] = await Promise.all([
     getOperatorWriters(),
     getComposeTargetPosts(),
+    getReplyTargetPosts(),
     getComposedItems(),
   ])
 
@@ -62,7 +64,7 @@ export default async function AdminComposePage() {
         title="새로 쓰기"
         description="AI 가 만들지 않습니다. 여기서 쓴 것이 그대로 올라갑니다."
       >
-        <OperatorComposeForm writers={writers} targets={targets} />
+        <OperatorComposeForm writers={writers} targets={targets} replyTargets={replyTargets} />
       </AdminSection>
 
       <AdminSection

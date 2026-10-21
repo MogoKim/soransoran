@@ -12,7 +12,12 @@
 import {
   assertOperatorCommentData,
   assertOperatorPostData,
+  assertOperatorReplyData,
   buildOperatorCommentData,
+  buildOperatorReplyData,
+  judgeOperatorReplyPost,
+  OPERATOR_REPLY_BLOCK_LABEL,
+  type OperatorReplyPostFacts,
   buildOperatorPostData,
   isOperatorBoard,
   judgeOperatorOwnership,
@@ -33,6 +38,7 @@ import { planCommentDistribution, type PlannerPersona, type PlannerPost } from '
 import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
 import { isRealMember } from '../src/lib/admin-format'
 import { displayName } from '../src/lib/display-name'
+import { targetCommentCounts } from '../src/lib/persona-target-tx'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -454,6 +460,87 @@ console.log('\n══════ ⑩ 입력 규칙 — 회원 글쓰기와 같�
   expect('두 글자면 통과', judgeOperatorTitle('안녕'), null)
   expect('앞뒤 공백은 세지 않는다', judgeOperatorTitle('  안녕  '), null)
   expect('너무 긴 제목은 막힌다', judgeOperatorTitle('가'.repeat(200)) !== null, true)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ ⑪ 작성자 대댓글 — 원글 작성자로 서버가 고정한다 · 최상위 댓글 계약과 분리')
+// ─────────────────────────────────────────────────────────
+{
+  const reply = buildOperatorReplyData({ postId: 'p1', parentId: 'c1', content: '저도요', authorId: 'u-w', operatorWriterId: 'w1' })
+  expect('대댓글 데이터 — parentId · OPERATOR · USER · personaId 자리 없음',
+    [reply.parentId, reply.commentOrigin, reply.source, 'personaId' in reply], ['c1', 'OPERATOR', 'USER', false])
+  assertOperatorReplyData(reply as unknown as Record<string, unknown>)
+  expect('대댓글 assert 통과', true, true)
+  throws('🔴 대댓글에 parentId 가 비면 막는다', () => assertOperatorReplyData({ ...reply, parentId: '' }))
+  throws('🔴 대댓글에 personaId 가 붙으면 막는다', () => assertOperatorReplyData({ ...reply, personaId: 'x' }))
+  throws('🔴 대댓글 commentOrigin 이 OPERATOR 가 아니면 막는다', () => assertOperatorReplyData({ ...reply, commentOrigin: 'MEMBER' }))
+  throws('🔴 최상위 댓글 assert 는 그대로 — parentId 가 있으면 막는다(느슨해지지 않았다)',
+    () => assertOperatorCommentData({ ...(buildOperatorCommentData({ postId: 'p1', content: 'x', authorId: 'u', operatorWriterId: 'w' }) as Record<string, unknown>), parentId: 'c1' }))
+  expect('최상위 댓글 데이터에는 여전히 parentId 가 없다', 'parentId' in buildOperatorCommentData({ postId: 'p', content: 'x', authorId: 'u', operatorWriterId: 'w' }), false)
+
+  const ok: OperatorReplyPostFacts = {
+    status: 'PUBLISHED', boardType: 'FREE', personaId: null, microSeedLane: false, originalQueueLinked: false,
+    operatorWriterId: 'w1', authorId: 'u-w', writerUserId: 'u-w',
+    writer: { status: 'active', accountCount: 0, providerId: null, hasPersona: false },
+  }
+  const code = (f: Partial<OperatorReplyPostFacts>) => { const v = judgeOperatorReplyPost({ ...ok, ...f }); return v.ok ? `ok:${v.operatorWriterId}/${v.authorId}` : v.code }
+  expect('운영 직접 작성 글 → ok · 작성자는 원글의 operatorWriterId · authorId', code({}), 'ok:w1/u-w')
+  expect('회원 글(operatorWriterId 없음) → NOT_OPERATOR_POST', code({ operatorWriterId: null }), 'NOT_OPERATOR_POST')
+  expect('Persona 글 → AUTOMATED', code({ personaId: 'p' }), 'AUTOMATED')
+  expect('Micro Seed 글 → AUTOMATED', code({ microSeedLane: true }), 'AUTOMATED')
+  expect('오리지널 큐 연결 글(D100 자동 글) → AUTOMATED', code({ originalQueueLinked: true }), 'AUTOMATED')
+  expect('원글 authorId ≠ writer.userId → AUTHOR_MISMATCH', code({ authorId: 'u-other' }), 'AUTHOR_MISMATCH')
+  expect('작성자 행이 없다 → AUTHOR_MISMATCH', code({ writerUserId: null, writer: null }), 'AUTHOR_MISMATCH')
+  expect('retired 작성자 → WRITER_BLOCKED', code({ writer: { ...ok.writer!, status: 'retired' } }), 'WRITER_BLOCKED')
+  expect('Persona 가 붙은 작성자 → WRITER_BLOCKED', code({ writer: { ...ok.writer!, hasPersona: true } }), 'WRITER_BLOCKED')
+  expect('실회원 계정 작성자 → WRITER_BLOCKED', code({ writer: { ...ok.writer!, accountCount: 1, providerId: 'kakao' } }), 'WRITER_BLOCKED')
+  expect('숨김 글 → NOT_PUBLISHED', code({ status: 'HIDDEN' }), 'NOT_PUBLISHED')
+  expect('삭제 글 → NOT_PUBLISHED', code({ status: 'DELETED' }), 'NOT_PUBLISHED')
+  expect('매거진 → NOT_COMMUNITY', code({ boardType: 'MAGAZINE' }), 'NOT_COMMUNITY')
+  expect('자동 운영이 다른 사유보다 먼저', code({ personaId: 'p', status: 'HIDDEN', operatorWriterId: null }), 'AUTOMATED')
+  expect('막힘 문구 — 회원 글', OPERATOR_REPLY_BLOCK_LABEL.NOT_OPERATOR_POST, '운영자가 직접 작성한 글만 작성자 대댓글을 달 수 있습니다.')
+
+  // 🔴 소스 계약 — 작성자 값은 화면 → action → 트랜잭션 어디에서도 받지 않는다
+  const src = (f: string) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', f), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+  const act = src('src/lib/actions/operator-compose.ts')
+  const replyAct = act.slice(act.indexOf('export async function createOperatorReply('), act.indexOf('export async function updateOperatorPost('))
+  expect('action — mode=reply 는 createOperatorReply 로만 간다', /if \(mode === 'reply'\) return createOperatorReply\(prev, formData\)/.test(act), true)
+  expect('🔴 action — FormData 에서 읽는 값은 postId · parentId · content · requestKey 넷뿐(writerId · authorId 0)',
+    [...replyAct.matchAll(/formData\.get\('(\w+)'\)/g)].map((m) => m[1]).sort().join(), 'content,parentId,postId,requestKey')
+  expect('action — 첫 문장이 requireActor(관리자 · 세션 조작자)', /createOperatorReply\([^)]*\)[^{]*\{\s*const actor = await requireActor\(\)\s*if \(actor === null\) return DENIED/.test(replyAct), true)
+  expect('action — 길이 · 금칙어는 같은 정본(MIN/MAX_COMMENT_LENGTH · checkContent user)',
+    /MIN_COMMENT_LENGTH/.test(replyAct) && /MAX_COMMENT_LENGTH/.test(replyAct) && /checkContent\(content, \{ audience: 'user' \}\)/.test(replyAct), true)
+  const tx = src('src/lib/operator-reply-tx.ts')
+  expect('🔴 트랜잭션 입력 타입에 작성자 칸이 없다', /export type CreateReplyInput = \{\s*postId: string\s*parentId: string\s*content: string\s*actorUserId: string\s*requestKey: string\s*\}/.test(tx), true)
+  expect('🔴 트랜잭션 — 작성자는 원글 판정 결과(verdict)에서만 온다',
+    /authorId: verdict\.authorId/.test(tx) && /operatorWriterId: verdict\.operatorWriterId/.test(tx) && !/input\.(authorId|operatorWriterId|writerId)/.test(tx), true)
+  expect('트랜잭션 — 부모는 resolveReplyTarget · holdReplyTarget(회원 답글과 같은 계약)',
+    /resolveReplyTarget\(tx, input\.parentId, post\.id, null\)/.test(tx) && /holdReplyTarget\(tx, target, post\.id\)/.test(tx), true)
+  expect('트랜잭션 — Serializable · P2034 재시도 상한(무한 0)',
+    /TransactionIsolationLevel\.Serializable/.test(tx) && /attempt <= OPERATOR_REPLY_MAX_ATTEMPTS/.test(tx) && /OPERATOR_REPLY_MAX_ATTEMPTS = 3/.test(tx), true)
+  expect('트랜잭션 — 댓글과 감사 기록이 한 $transaction 안(같은 tx)', /tx\.comment\.create\(/.test(tx) && /tx\.operatorWriteLog\.create\(/.test(tx) && (tx.match(/\$transaction\(/g) ?? []).length === 1, true)
+  expect('🔴 최상위 댓글 트랜잭션은 그대로 — 화면이 고른 작성자(readWriter) · parentId 없음',
+    /readWriter\(tx, input\.operatorWriterId\)/.test(src('src/lib/operator-compose-tx.ts')) && !/parentId/.test(src('src/lib/operator-compose-tx.ts')), true)
+  const form = src('src/components/admin/OperatorComposeForm.tsx')
+  expect('🔴 화면 — 대댓글 모드에는 writerId 입력이 없다', /\{mode !== 'reply' \? <input type="hidden" name="writerId"/.test(form), true)
+  expect('화면 — 대댓글 모드에는 작성자 선택창이 없다(고정 표시)', /\{mode !== 'reply' \? \(\s*<label className="flex flex-col gap-1">\s*<span[^>]*>누구 이름으로 쓸까요/.test(form) && /이 작성자 이름으로 대댓글이 등록됩니다\./.test(form), true)
+
+  // 🔴 Persona 대상 지정 — 회원 댓글 = MEMBER · GUEST 이고 personaId · operatorWriterId 가 없는 것
+  const counts = targetCommentCounts([
+    { personaId: null, operatorWriterId: null, commentOrigin: 'MEMBER' },
+    { personaId: null, operatorWriterId: null, commentOrigin: 'GUEST' },
+    { personaId: null, operatorWriterId: 'w1', commentOrigin: 'OPERATOR' },
+    { personaId: 'p1', operatorWriterId: null, commentOrigin: 'PERSONA' },
+    { personaId: null, operatorWriterId: null, commentOrigin: 'MICRO_SEED_VERBATIM' },
+  ])
+  expect('🔴 Persona 대상 회원 댓글 수 — 운영 · Persona · Micro Seed 를 빼고 2 · Persona 1', counts, { personaComments: 1, memberComments: 2 })
+  const list = src('src/lib/actions/persona-target.ts')
+  const save = src('src/lib/persona-target-tx.ts')
+  expect('목록과 저장 트랜잭션이 같은 함수로 센다(갈라지지 않는다)',
+    /targetCommentCounts\(p\.comments\)/.test(list) && /targetCommentCounts\(post\.comments\)/.test(save)
+    && /select: TARGET_COMMENT_SELECT/.test(list) && /select: TARGET_COMMENT_SELECT/.test(save)
+    && !/personaId === null\)\.length/.test(list + save), true)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')
