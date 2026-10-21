@@ -1,8 +1,8 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-21 10:30 KST
+> as-of: 2026-10-21 11:14 KST
 > 마지막 창업자 동기화: 2026-10-21 (quality-v14 자연 운영에서 Content Core가 허용한 bounded creativity를
-> 발행 뒤 의미 감사가 옛 기준으로 다시 차단한 불일치를 quality-v15로 보정하되,
+> 발행 뒤 의미 감사가 옛 기준으로 다시 차단한 불일치를 quality-v16으로 보정하되,
 > 품질·자동 READY·Persona·댓글·조회수의 code/deployed/operating 상태를 섞지 않는다)
 >
 > 이 문서는 **검증된 현재 상태와 다음 실행**만 적는다. 정책은
@@ -14,8 +14,10 @@
 
 **quality-v14는 main·보조 Mac runtime `7e5e1ae7`에 배포됐고, 10-21 08:15 자연 공급은 READY 4건을 적재해
 공급 수율을 회복했다. 그러나 08:40 발행 뒤 의미 감사가 원문의 핵심을 바꾸지 않은 자연스러운 강조를
-`sourceDistortions`로 확정해 gate를 닫았다. quality-v15 후보는 Content Core와 사후 감사의 품질 경계를 하나로
-묶고, 옛 감사 기록을 수정하지 않은 채 같은 결속의 재감사 `no`만 append-only로 해소한다. 정확한 D10 재개는
+`sourceDistortions`로 확정해 gate를 닫았다. quality-v15 전환 중 모델이 `defect=no`와 finding을 함께 내는
+출력 모순도 확인돼 배포하지 않았다. quality-v16 후보는 Content Core와 사후 감사의 품질 경계를 하나로 묶고,
+`no` 출력은 세 finding 배열을 모두 비우게 하며, 옛 감사 기록을 수정하지 않은 채 같은 결속의 재감사 `no`만
+append-only로 해소한다. 정확한 D10 재개는
 exact-head CI·계약 전환·runtime 배포·다음 자연 회차 검증 뒤 판정한다. D20 Persona 10명은 D10 operating PASS 뒤 적용한다.**
 
 ## 1. 검증 기준과 상태
@@ -31,7 +33,7 @@ exact-head CI·계약 전환·runtime 배포·다음 자연 회차 검증 뒤 �
 | 자동 D30·D50 | ✅ 단계 사다리 | ⚠️ profile 코드 | UNKNOWN - Persona 60/100·앞 단계 PASS 필요 |
 | 자동 D100 | ❌ 100 슬롯 runtime scheduler/profile 없음 | ❌ | UNKNOWN - Persona 180 canary·300+ 지속 용량 필요 |
 | quality-v14 | ✅ | ✅ runtime `7e5e1ae7` | ❌ 08:40 의미 감사 오탐 1 · gate closed |
-| quality-v15 후보 | ✅ Content Core·사후 감사 단일 품질 경계 · append-only 재감사 해소 | ❌ 로컬 검증 완료 · exact-head CI 전 | UNKNOWN - 전환·runtime·자연 회차 전 |
+| quality-v16 후보 | ✅ Content Core·사후 감사 단일 품질 경계 · no 출력 단일화 · append-only 재감사 해소 | ❌ targeted 검증 중 · exact-head CI 전 | UNKNOWN - 전환·runtime·자연 회차 전 |
 | 기계 초안 자동 생명주기 | ✅ | ✅ runtime | ✅ routine 사람 검토 없이 자동 READY·품질 격리 |
 | Persona 계약 | ✅ 기존 30·code universe 40 | ✅ 기존 30 | ✅ contract-valid 30 · active 30 |
 | D20 Persona 이름 | ✅ PR #762 exact-head | ❌ Draft·DB row 0 | UNKNOWN - D10 PASS 뒤 활성화 gate 필요 |
@@ -52,12 +54,12 @@ exact-head CI·계약 전환·runtime 배포·다음 자연 회차 검증 뒤 �
 
 | 항목 | 값 |
 |---|---|
-| 원격 main (2026-10-21 10:45 관측) | `7e5e1ae7ac65a6c372a2781ce6f1a7ae2b98a3ab` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `7e5e1ae7ac65a6c372a2781ce6f1a7ae2b98a3ab` · main 차이를 별도 판정: 0 · tracked 0 · quality-v15 배포 전 |
+| 원격 main (2026-10-21 11:14 관측) | `eb32a05f449622a9ab6dd996554700b1d98fe42e` |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `7e5e1ae7ac65a6c372a2781ce6f1a7ae2b98a3ab` · main 차이를 별도 판정: quality-v15 미배포 · tracked 0 · quality-v16 배포 전 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 10-21 07:00 D10 미개방 |
-| 품질 계약 | quality-v14 deployed · 미해소 의미 감사 결함 1 · gate closed · quality-v15 보정 후보 |
+| 품질 계약 | quality-v14 deployed · 미해소 의미 감사 결함 1 · gate closed · quality-v16 보정 후보 |
 | 추가 댓글 설정 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 |
 | event wake | unset · OFF |
 | Persona | contract-valid 30 · active 30 · code-ready 40 · 운영 작성자 OP01~OP50 적용 확인 |
@@ -87,16 +89,16 @@ READY 0은 공급 0이 아니라 시계 결함이다. 두 결함의 보정 이�
 | PR | 상태 | 채택된 목적 | 운영 반영 조건 |
 |---|---|---|---|
 | #762 D20 Persona 이름 | Draft · CLEAN · exact-head CI PASS | P34~P43 합성 닉네임 다양화, 실제 닉네임 복제 금지 | D10 PASS → 충돌 gate → DB 생성·활성화 |
-| quality-v15 보정 | 로컬 targeted·격리 DB PASS | Content Core와 사후 감사가 같은 bounded creativity를 쓰고, 옛 오탐은 재감사 no로만 append-only 해소 | exact-head CI → main → 전환 → runtime → 자연 회차 |
+| quality-v16 보정 | targeted 재검증 중 | Content Core와 사후 감사가 같은 bounded creativity를 쓰고, no 출력은 빈 finding 한 모양이며, 옛 오탐은 재감사 no로만 append-only 해소 | exact-head CI → main → 전환 → runtime → 자연 회차 |
 
-Draft와 로컬 후보를 운영 PASS로 쓰지 않는다. #762는 D10 operating PASS 전 활성화하지 않고, quality-v15는
+Draft와 로컬 후보를 운영 PASS로 쓰지 않는다. #762는 D10 operating PASS 전 활성화하지 않고, quality-v16은
 exact-head 검증과 품질 계약 전환·오탐 재감사·runtime 동기화를 한 순서로 확인한다.
 
 ## 3. D10 개방의 정확한 blocker
 
 | blocker | 현재 | 해소 조건 |
 |---|---|---|
-| `AUDIT_DEFECT` | 08:40 의미 감사 오탐 1 · gate closed | quality-v15 exact-head에서 같은 결속 재감사 no → append-only 해소 · 실제 결함이면 계속 BLOCK |
+| `AUDIT_DEFECT` | 08:40 의미 감사 오탐 1 · gate closed | quality-v16 exact-head에서 같은 결속 재감사 no → append-only 해소 · 실제 결함이면 계속 BLOCK |
 | `THROUGHPUT_SHORT` | 08:15 READY 4 적재로 개선 | 다음 preflight에서 READY capacity ≥ D10 필요량 확인 |
 | `SUPPLY_COST_SHORT` | 수율 회복 뒤 재계산 필요 | 다음 preflight 투영 공급비 ≤ D10 profile 상한 확인 |
 | `PUBLISH_NOT_AUTO_READY` | 전날 D5 4/5 | 다음 유효 자연 증명에서 exact-N 자동 발행 확인 |
@@ -126,7 +128,7 @@ exact-head 검증과 품질 계약 전환·오탐 재감사·runtime 동기화�
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D10-FIX | quality-v15 감사 의미 정합·계약 전환·runtime sync | exact-head CI · 재감사 no일 때만 unresolved 0 · gate open · HEAD=pin=manifest | 기존 감사 행 변경·수동 READY |
+| D10-FIX | quality-v16 감사 의미·출력 정합·계약 전환·runtime sync | exact-head CI · 재감사 no일 때만 unresolved 0 · gate open · HEAD=pin=manifest | 기존 감사 행 변경·수동 READY |
 | D10 | 다음 자연 D10 재시험 | 자동 10/10·첫 댓글 10·선택적 추가 0~4·감사·usageUnknown 0·중복 0 | 수동 stage·READY·게시 |
 | P20 | #762 기반 Persona 40 활성화 | D10 PASS · 이름/말투/카드/회원·크롤 작성자 충돌 0 · contract-valid 40 | 이름만 만들고 용량으로 계산 |
 | C20 | D20 댓글·공급 profile | D10 실측 단가·수율·추가 댓글 결과로 예산과 run cap 산정 | 근거 없는 선증액 |

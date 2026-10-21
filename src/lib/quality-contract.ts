@@ -156,7 +156,12 @@ import {
  * 감사 계약·프롬프트·모델 판을 품질 계약 digest에 포함해 두 결정자가 다시 조용히 갈라질 수 없게 한다.
  * 기존 감사 yes는 수정·삭제하지 않고, 새 감사 계약으로 같은 글·원문·Persona 결속을 재검증한 기록으로만 해소한다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v15'
+/**
+ * `quality-v16` (2026-10-21) = **의미 감사 no의 출력 모양을 한 가지로 고정한다.**
+ * 허용 표현은 finding에 설명하지 않고, defect=no이면 세 finding 배열을 모두 비운다.
+ * parser의 자기모순 fail-closed와 실제 결함 차단 기준은 그대로다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v16'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
