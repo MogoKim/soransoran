@@ -146,6 +146,9 @@ test('반례2 — generatedAt 만 바꾸면 graphVersion · contentHash · seman
   eq([b.graphVersion, b.manifest.contentHash, b.manifest.semanticHash], [a.graphVersion, a.manifest.contentHash, a.manifest.semanticHash], 'generatedAt 의존')
   ok(a.manifest.exportHash !== b.manifest.exportHash, 'EXPORT_HASH 는 bundle 무결성 해시라 generatedAt 을 포함해야 한다')
   eq(b.readiness, a.readiness, 'readiness 는 generatedAt 과 무관')
+  // 🔴 semanticHash 는 generatedAt 을 담은 **실제 payload** 에 적용해도 같아야 한다 — G8 이 bundle payload 를 이 함수로 재계산한다.
+  //    manifest 의 값은 generatedAt 자리가 빈 slim 에서 나오므로, 실제 slim 으로 재지 않으면 「generatedAt 제외」 가 죽은 방어가 된다
+  eq([lib.semanticHashOf(a.slim), lib.semanticHashOf(b.slim)], [a.manifest.semanticHash, a.manifest.semanticHash], '실제 payload 의 semanticHash')
 })
 test('반례2b — 시각 형식이 모호하면 거부(벽시계로 대신하지 않는다)', () => {
   for (const [k, v, code] of [['effectiveAt', '2026-10-15T13:00:00', 'EFFECTIVE_AT_INVALID'], ['effectiveAt', null, 'EFFECTIVE_AT_INVALID'],
@@ -828,6 +831,88 @@ test('반례23b — 산출 계약은 crossCluster 값 불일치를 거부한다 
     const r = rejectWhy(() => lib.validateBuiltArtifacts(l))
     ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('crossCluster 가 산출 fromCluster·toCluster 와 어긋난다'), `${name}: ${JSON.stringify(r)}`)
   }
+})
+
+// ── 반례 24 — graph semanticHash 와 readinessHash 분리 · 유일한 계산 경로 (2026-10-21) ──
+//    readinessHash = sha256(canonicalJson(report)) · readinessFileSha256 = sha256(readiness.json 바이트)
+//    🔴 canonical 직렬화를 검사 쪽에 따로 둔다 — lib 의 함수로 lib 를 재면 정의가 바뀌어도 같은 값이 나온다
+const canonicalJson = (v) => Array.isArray(v) ? `[${v.map(canonicalJson).join(',')}]`
+  : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`
+    : JSON.stringify(v)
+const compute = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, articles = ARTICLES, extra = {} } = {}) =>
+  lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles }, admissionTexts: admission, effectiveAt, ...extra })
+test('반례24a — buildAll 의 readiness · 해시 · graph 신원은 computeGraphAndReadiness 와 같다', () => {
+  const b = build(), c = compute()
+  eq(canonicalJson(b.readiness), canonicalJson(c.readiness), 'readiness 객체')
+  eq([b.graphVersion, b.manifest.contentHash, b.manifest.semanticHash], [c.graphVersion, c.contentHash, c.graphSemanticHash], 'graph 신원')
+  eq(c.readinessHash, sha(canonicalJson(c.readiness)), 'readinessHash = sha256(canonicalJson(report))')
+  eq(c.readinessFileSha256, sha(b.files['readiness.json']), 'readinessFileSha256 = readiness.json 바이트')
+  eq(b.files['readiness.json'], lib.serializeReadiness(c.readiness), '파일 바이트 = serializeReadiness')
+  eq(b.readiness.schemaVersion, 'mgraph-readiness/2', 'schema')
+})
+test('반례24b — control · articles · admission · effectiveAt 하나만 바꾸면 readinessHash 가 바뀌고 graph combined 는 그대로', () => {
+  const base = compute()
+  const cases = [
+    ['control', compute({ control: controlText({ clusters: ['fam'] }) })],
+    ['articles', compute({ articles: articlesText({ zz: art('fam', '2026-10-07T10:30:00+09:00') }) })],
+    ['admission', compute({ admission: { ...ADMISSION, ledger: `${JSON.stringify({ event: 'ADMITTED', intentId: 'I-X', slug: 'x-slug' })}\n` } })],
+    ['effectiveAt', compute({ effectiveAt: '2026-10-15T14:00:00+09:00' })],
+  ]
+  for (const [name, c] of cases) {
+    ok(c.readinessHash !== base.readinessHash, `${name}: readinessHash 가 그대로다`)
+    ok(c.readinessFileSha256 !== base.readinessFileSha256, `${name}: readinessFileSha256 이 그대로다`)
+    eq([c.contentHash, c.graphVersion, c.graphSemanticHash], [base.contentHash, base.graphVersion, base.graphSemanticHash], `${name}: graph 가 바뀌었다`)
+  }
+})
+test('반례24c — generatedAt 만 바꾸면 readiness · 두 해시 · graph 파일은 그대로 · bundle 은 generatedAt 줄과 EXPORT_HASH 만 다르다', () => {
+  const a = build(), b = build({ generatedAt: '2031-01-01T00:00:00.000Z' })
+  eq(a.files['readiness.json'], b.files['readiness.json'], 'readiness.json')
+  for (const f of ['intents.jsonl', 'edges.jsonl', 'mappings.jsonl']) eq(a.files[f], b.files[f], f)
+  const bundleOf = (x) => x.files[`bundle/${x.graphVersion}.ts`]
+  const diffLines = bundleOf(a).split('\n').filter((l, i) => l !== bundleOf(b).split('\n')[i])
+  ok(diffLines.length > 0 && diffLines.every((l) => /generatedAt|^\/\/ 생성:|EXPORT_HASH/.test(l)), `bundle 차이: ${diffLines.join(' | ').slice(0, 200)}`)
+  const ca = compute(), cb = compute()
+  eq([ca.readinessHash, ca.readinessFileSha256], [cb.readinessHash, cb.readinessFileSha256], '재계산')
+})
+test('반례24d — 직렬화 공백 · 키 순서만 바꾸면 의미 readinessHash 는 같고 파일 해시만 다르다', () => {
+  const c = compute()
+  const compact = JSON.parse(JSON.stringify(c.readiness))
+  const reordered = Object.fromEntries(Object.entries(compact).reverse())
+  eq(lib.readinessHashOf(reordered), c.readinessHash, '키 순서')
+  eq(lib.readinessHashOf(JSON.parse(JSON.stringify(c.readiness, null, 4))), c.readinessHash, '공백')
+  ok(sha(JSON.stringify(c.readiness)) !== c.readinessFileSha256, '압축 직렬화의 파일 해시가 같다')
+  ok(c.readinessHash !== c.readinessFileSha256, '의미 해시와 파일 해시가 같은 정의다')
+})
+test('반례24e — computeGraphAndReadiness 는 generatedAt · 벽시계를 읽지 않는다', () => {
+  const ref = compute()
+  eq(compute({ extra: { generatedAt: 'not-a-time' } }).readinessHash, ref.readinessHash, 'generatedAt 인자')
+  const RealDate = Date
+  globalThis.Date = class extends RealDate { constructor(...x) { if (!x.length) throw new Error('벽시계'); super(...x) } static now() { throw new Error('벽시계') } }
+  let r
+  try { r = compute() } finally { globalThis.Date = RealDate }
+  eq([r.readinessHash, r.readinessFileSha256, r.graphSemanticHash], [ref.readinessHash, ref.readinessFileSha256, ref.graphSemanticHash], '벽시계 차단')
+})
+test('반례24f — readiness.inputs 는 graph 신원 · 제품 3파일 · admission · effectiveAt 를 정확히 싣는다', () => {
+  const c = compute()
+  const products = { resolver: RESOLVER, control: controlText(), articles: ARTICLES }
+  eq(c.readiness.inputs, {
+    graphVersion: c.graphVersion, graphCombined: c.contentHash.combined, graphSemanticHash: c.graphSemanticHash,
+    productHashes: { resolver: sha(products.resolver), control: sha(products.control), articles: sha(products.articles) },
+    admissionHashes: { 'contract/m3-slug-manifest.json': sha(ADMISSION.slugManifest), 'contract/m3-state.jsonl': sha(ADMISSION.ledger) },
+    effectiveAt: EFF,
+  }, 'inputs')
+  ok(!('semanticHash' in c.readiness), 'graph semanticHash 를 readiness 최상위에 다시 둔다')
+  eq(compute({ admission: null }).readiness.inputs.admissionHashes, 'UNREAD', 'admission 미판독')
+})
+test('반례24g — buildAll 은 계산을 computeGraphAndReadiness 한 번에 맡긴다 · 그 함수 본문은 시각 · 파일을 읽지 않는다', () => {
+  const src = readFileSync(LIB, 'utf8')
+  const bodyOf = (name) => { const i = src.indexOf(`export function ${name}(`); ok(i >= 0, `${name} 없음`); return src.slice(i, src.indexOf('\n}\n', i)) }
+  const ba = bodyOf('buildAll'), cg = bodyOf('computeGraphAndReadiness')
+  eq((ba.match(/computeGraphAndReadiness\(/g) ?? []).length, 1, 'buildAll 의 computeGraphAndReadiness 호출 수')
+  eq(['buildReadiness(', 'buildGraphLayers(', 'parseInputTexts(', 'semanticHashOf(', 'slimGraph(', 'parseAdmissionTexts('].filter((t) => ba.includes(t)), [], 'buildAll 의 두 번째 계산')
+  const cgCode = cg.replace('generatedAt: null', '')
+  // 🔴 단어 경계로 본다 — eff.versionDate 같은 이름은 벽시계가 아니다
+  eq([/\bgeneratedAt\b/, /\bDate\b/, /\breadFileSync\b/, /\bprocess\./, /\bparseGeneratedAt\b/].filter((re) => re.test(cgCode)).map(String), [], 'computeGraphAndReadiness 의 시각 · 파일 접근')
 })
 
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
