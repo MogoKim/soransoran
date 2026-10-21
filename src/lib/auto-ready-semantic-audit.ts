@@ -38,7 +38,7 @@ import { LIFE_CONTRACT_FIELDS, lifeContractIdentity, type PersonaLifeContract } 
 /** 🔴 의미 감사 계약의 판 — 판정 기준·출력 모양·묶음 구성이 바뀌면 올린다 */
 export const SEMANTIC_AUDIT_CONTRACT_VERSION = 'auto-ready-semantic-audit-v2'
 /** 🔴 프롬프트 판 — 지시문이 한 글자라도 바뀌면 올린다 */
-export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v4'
+export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v5'
 /**
  * 🔴 **의미 감사 모델** — 가격표(`llm-pricing`)에 단가가 있는 내부 라벨이어야 한다.
  *    초안 생성(`gemini-3.7-flash`)과 다른 계열을 쓴다 — 쓴 모델이 제 글을 채점하지 않게 한다.
@@ -156,6 +156,7 @@ export const SEMANTIC_AUDIT_SYSTEM_PROMPT = [
   '이 감사는 Content Core의 bounded creativity 계약을 그대로 따른다. 원문 요약 여부를 검사하지 않는다.',
   '감상·반응·질문·비유·연결 문장·일반적 관찰·새로운 구성과, 핵심 사실을 바꾸지 않는 자연스러운 강조·바꿔쓰기는 허용한다.',
   '주체·행동·원인·결과를 바꾸지 않는 정도 부사·강조 부사의 추가는 새 사실이나 왜곡이 아니다.',
+  '원문이 이미 같은 주체가 같은 행동을 했다고 명시했다면, 직접·바로·정말 같은 부사를 붙인 것만으로 새 사건·새 행위자·새 사실이라 하지 않는다.',
   '세부 내용을 일부 생략했어도 사건의 주체·핵심 행동·원인·결과·결론을 바꾸지 않았다면 결함이 아니다.',
   '1) unsupportedFacts: 원문근거에도 글쓴이카드에도 없는 구체적 사실(숫자·금액·장소·새 사건·진단 등)을 사실로 지어냈다.',
   '   일반적인 감상·질문·인사·비유·연결·강조는 구체적 사실이 아니다.',

@@ -161,7 +161,12 @@ import {
  * 허용 표현은 finding에 설명하지 않고, defect=no이면 세 finding 배열을 모두 비운다.
  * parser의 자기모순 fail-closed와 실제 결함 차단 기준은 그대로다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v16'
+/**
+ * `quality-v17` (2026-10-21) = **같은 주체·같은 행동의 부사 강조를 새 사실과 구분한다.**
+ * 원문에 이미 주체와 행동이 있으면 직접·바로·정말 같은 부사만으로 새 사건이나 새 행위자가 되지 않는다.
+ * 숫자·장소·관계·새 사건 등 구체 사실과 주체·행동·원인·결과 왜곡 차단은 그대로다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v17'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

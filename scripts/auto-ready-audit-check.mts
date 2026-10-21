@@ -68,6 +68,8 @@ console.log('① 판 · 모델 · 계약 — 무결성 감사자와 섞지 않�
   check('🟢 bounded creativity — 감상·질문·재구성·자연스러운 강조와 비핵심 생략은 결함이 아니다',
     SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('감상·반응·질문·비유·연결 문장·일반적 관찰·새로운 구성')
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('정도 부사·강조 부사의 추가')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('같은 주체가 같은 행동을 했다고 명시했다면')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('새 사건·새 행위자·새 사실이라 하지 않는다')
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('핵심 사실을 바꾸지 않는 자연스러운 강조')
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('세부 내용을 일부 생략했어도'))
   check('🟢 no 출력은 허용 표현 설명 없이 세 배열을 비우는 단일 모양이다',
