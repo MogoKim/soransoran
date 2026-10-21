@@ -119,18 +119,6 @@ export function blockingWarningsOfGate(gate: unknown): string[] {
     !NON_BLOCKING_SEMANTIC_HOLDS.some((code) => warning === code || warning.startsWith(`${code}:`)))
 }
 
-/** 🔴 회귀 사례에서 나온 네 가지 — #565 가 실측으로 얻은 값이다 */
-export const AUTO_READY_BLOCKERS = {
-  /** 이미지가 있어야 성립하는 문장 (P08 실측) */
-  imageDependent: /이런\s*(가죽|레더|옷)|이\s*옷\s*어(떨|떻)|사진\s*보|위\s*사진|여기\s*보/,
-  /** 발행일 당일처럼 읽히는 표현 (P03 실측) */
-  timeDrift: /오늘도|아직도\s*안|방금|어제\s*밤|지금\s*막/,
-  /** 근거 없는 단정 */
-  unsourcedClaim: /확실히|틀림없이|반드시\s*그렇/,
-  /** 후속 뉴스가 있을 수 있는 시의성 소재 (P01 실측) */
-  followUpLikely: /저격|논란|해명|사과|입장문|폭로/,
-} as const
-
 export type RowInput = {
   gateVerdict: string
   /** 생성 시점 게이트가 남긴 경고 코드 — 빈 배열이면 경고 없음 */
@@ -153,11 +141,6 @@ export function judgeRow(i: RowInput): RowVerdict {
    *    `MicroSeedRawContent.sourceCapturedAt` 은 NOT NULL 이고 적재기가 **초안 시각**을 넣으므로 언제나 참이었다(A1 ⑧).
    *    원문 시각 · 나이 · 반응 판정은 `judgeSlotRelease`(선택기 · 발행 트랜잭션) 하나가 한다. 행동은 바뀌지 않는다.
    */
-  const both = `${i.title}\n${i.body}`
-  for (const [name, re] of Object.entries(AUTO_READY_BLOCKERS)) {
-    const hit = re.exec(both)
-    if (hit !== null) reasons.push(`${name}="${hit[0]}"`)
-  }
   return { auto: reasons.length === 0, reasons }
 }
 
@@ -196,7 +179,8 @@ const stableJson = (v: unknown): string =>
  */
 export const JUDGE_CONTRACT_DIGEST = digestOf(stableJson({
   contract: CONTRACT,
-  blockers: Object.fromEntries(Object.entries(AUTO_READY_BLOCKERS).map(([k, v]) => [k, v.source])),
+  /** Content Core가 이미 검증한 문안을 단어 정규식으로 다시 판정하지 않는다. */
+  contentDecision: 'content-core-only-v1',
   semantic: [NO_SEMANTIC_RECORD, SEMANTIC_INVALID, SEMANTIC_HOLDS_MISMATCH],
   recordVersion: AUTO_READY_RECORD_VERSION,
 })).slice(0, 32)
