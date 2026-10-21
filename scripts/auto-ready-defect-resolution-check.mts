@@ -12,13 +12,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
-  DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, DEFECT_RESOLVER,
+  DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, DEFECT_RESOLVER, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
   auditFingerprintOf, judgeDefectResolution,
   type AuditRowForResolution, type DefectResolutionRecord, type QueueRowForResolution,
 } from '../src/lib/auto-ready-defect-resolution'
 import { digestOf, judgeOpen } from '../src/lib/auto-ready-v2'
 import { DRAFT_GATE_VERSION, judgeDraftLife } from '../src/lib/content-core/draft-life-gates'
-import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
+import {
+  SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
+} from '../src/lib/auto-ready-semantic-audit'
 import { INTEGRITY_AUDITOR } from '../src/lib/auto-ready-repo'
 import { ADMIN_DEFECT_AUDITOR } from '../src/lib/auto-ready-audit-store'
 import { currentQualityContract, qualityContractComponents, QUALITY_CONTRACT_KEY, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
@@ -68,6 +70,17 @@ const recordFor = (a: AuditRowForResolution, o: Partial<DefectResolutionRecord> 
   reverify: { gateVersion: DRAFT_GATE_VERSION, outcome: 'blocked', failureCodes: ['unwarrantedSelfClaim'], reviewCodes: [], inputDigest: 'a'.repeat(64), artifactId: 'art-a' },
   resolvedAt: '2026-10-01T12:00:00.000Z', resolvedBy: DEFECT_RESOLVER, ...o,
 })
+const semanticRecordFor = (a: AuditRowForResolution, o: Partial<DefectResolutionRecord> = {}): DefectResolutionRecord => ({
+  recordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION, qualityContract: C,
+  audit: { queueId: a.queueId, postId: a.postId, fingerprint: auditFingerprintOf(a) },
+  draft: { titleHash: digestOf(BLOCKED.draft.title), bodyHash: digestOf(BLOCKED.draft.body) },
+  reverify: {
+    gateVersion: 'semantic-only', outcome: 'semanticCleared', failureCodes: [], reviewCodes: [], inputDigest: 'b'.repeat(64), artifactId: 'art-a',
+    semanticContractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, semanticModel: SEMANTIC_AUDIT_MODEL,
+    semanticPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
+  },
+  resolvedAt: '2026-10-01T12:00:00.000Z', resolvedBy: DEFECT_RESOLVER, ...o,
+})
 const queue = (entries: unknown[] | null, o: Partial<QueueRowForResolution> = {}): QueueRowForResolution => ({
   id: 'q-a', createdPostId: 'p-a', draftTitle: BLOCKED.draft.title, draftBody: BLOCKED.draft.body,
   gateResults: { [QUALITY_CONTRACT_KEY]: LEGACY_MARK, autoDraft: { artifactId: 'art-a' } },
@@ -81,6 +94,8 @@ console.log('A. 기준선 — 묶인 기록 하나면 해소, 없으면 미해�
   const a = audit()
   check('🔴 기록 없음 → 미해소', !judge(a, queue(null)).resolved)
   check('🟢 지금 계약 · 이 감사 지문 · 이 큐·글 · 저장 초안 · 재검증 차단 → 해소', judge(a, queue([recordFor(a)])).resolved, judge(a, queue([recordFor(a)])).reason)
+  check('🟢 지금 의미 감사 계약 · 같은 결속의 재감사 no → 해소', judge(a, queue([semanticRecordFor(a)])).resolved,
+    judge(a, queue([semanticRecordFor(a)])).reason)
   check('🔴 큐 행이 없다 → 미해소', !judge(a, null).resolved)
 }
 
@@ -116,6 +131,14 @@ console.log('\nB. 🔴 기록이 어긋나면 미해소 (fail-closed)')
   check('🔴 옛 기록만 → 미해소', !judge(a, queue([recordFor(a, { qualityContract: LEGACY_MARK })])).resolved)
   check('🔴 🔴 **기록 뒤 지금 계약이 바뀌면(새 digest) → 미해소**', !judge(a, queue([recordFor(a)]), { version: C.version, digest: 'c'.repeat(64) }).resolved)
   check('🔴 🔴 **기록 뒤 새 판이 나오면 → 미해소**', !judge(a, queue([recordFor(a)]), { version: `${C.version}-next`, digest: C.digest }).resolved)
+  for (const [label, reverify] of [
+    ['다른 의미 감사 계약', { ...semanticRecordFor(a).reverify, semanticContractVersion: 'auto-ready-semantic-audit-v1' }],
+    ['다른 의미 감사 모델', { ...semanticRecordFor(a).reverify, semanticModel: 'other-model' }],
+    ['다른 의미 감사 프롬프트', { ...semanticRecordFor(a).reverify, semanticPromptVersion: 'semantic-audit-prompt-v1' }],
+    ['깨진 의미 감사 결속', { ...semanticRecordFor(a).reverify, inputDigest: 'bad' }],
+  ] as const) {
+    check(`🔴 ${label} → 미해소`, !judge(a, queue([semanticRecordFor(a, { reverify } as Partial<DefectResolutionRecord>)])).resolved)
+  }
 }
 
 console.log('\nC. 🔴 기록이 맞아도 해소 대상이 아닌 결함')
@@ -132,6 +155,9 @@ console.log('\nC. 🔴 기록이 맞아도 해소 대상이 아닌 결함')
   check('🔴 사람 신고(human:operator) → 기록이 맞아도 미해소', !withAudit({ auditor: ADMIN_DEFECT_AUDITOR }))
   check('🔴 의미 감사지만 측정되지 않은(outcome=integrity) 결함 → 미해소',
     !withAudit({ note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=integrity binding=none] x` }))
+  const oldMeasured = audit({ note: '[auto-ready-semantic-audit-v1 outcome=measured binding=x] 옛 판 결함' })
+  check('🟢 옛 의미 감사 measured yes도 새 계약 재감사 no 기록으로만 해소 가능',
+    judge(oldMeasured, queue([semanticRecordFor(oldMeasured)])).resolved)
   check('🔴 감사자 이름이 비슷한 다른 것(model:semantic-auditX) → 미해소', !withAudit({ auditor: 'model:semantic-auditX' }))
   check('🔴 defect=no 행 → 해소 대상 아님(미해소로 센다 · 부르는 쪽은 yes 만 넘긴다)', !withAudit({ defect: 'no' }))
   check('🔴 🔴 **지금 품질 계약 행의 결함 → 어떤 기록으로도 미해소**',
@@ -189,9 +215,15 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
   check('🔴 해소 쓰기 전에 지금 초안 게이트(judgeDraftLife)를 저장 초안에 돈다',
     /judgeDraftLife\(\{\s*title: q!\.draftTitle, body: q!\.draftBody/.test(store))
   const runner = codeOnly('scripts/auto-ready-defect-resolve.mts')
-  check('🔴 러너의 --apply 는 격리 DB 에서만(운영 적용 범위 밖)', /if \(apply\) \{\s*const bad = isolatedDbProblems\(\)/.test(runner))
+  check('🔴 승인 없는 로컬 --apply는 격리 DB에서만', /if \(apply\) \{\s*const bad = isolatedDbProblems\(\)/.test(runner))
+  check('🔴 운영 적용은 production activation 승인 경계와 staged 가드를 지난다',
+    /openActivation\(argv, \{ repoRoot: process\.cwd\(\), allowStaged: true \}\)/.test(runner)
+    && runner.includes('applyApprovedDefectResolution') && runner.includes('applyApprovedSemanticDefectResolution'))
+  check('🔴 의미 오탐 해소는 전용 플래그·계획·적용·매번 새 결속 로더를 함께 쓴다',
+    runner.includes("argv.includes('--semantic-clear')") && runner.includes('planSemanticDefectResolution')
+    && runner.includes('applySemanticDefectResolution') && runner.includes('freshEachCall: semanticClear'))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
-    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v14')
+    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v15')
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)

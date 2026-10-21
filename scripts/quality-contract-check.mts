@@ -58,6 +58,9 @@ export const FINGERPRINT_FILES = [
   //    끈적한 결함을 조용히 풀지 못하게 지문에 넣는다
   'src/lib/auto-ready-defect-resolution.ts',
   'src/lib/auto-ready-defect-resolution-store.ts',
+  // 🔴 (quality-v15 · 2026-10-21) 발행 뒤 의미 감사도 Content Core와 같은 품질 계약을 따른다.
+  //    프롬프트·판정 함수를 판본 상수만 올리지 않고 조용히 바꾸지 못하게 파일 자체를 지문에 넣는다.
+  'src/lib/auto-ready-semantic-audit.ts',
   // 🔴 (quality-v7 · 2026-10-12) Persona 결정 정본 — 판독 답을 읽고 정본 카드로 자격을 대조해 화자를 확정한다.
   //    이 파일만 바꿔 누가 1인칭을 허가받는지 조용히 바꾸지 못하게 지문에 넣는다
   'src/lib/content-core/speaker.ts',
@@ -92,6 +95,7 @@ export const JUDGE_DEFINITIONS: Readonly<Record<string, string>> = {
   // 🔴 (v6 보정) 결함 축 정본
   unresolvedDefectCount: 'src/lib/auto-ready-repo.ts',
   judgeDefectResolution: 'src/lib/auto-ready-defect-resolution.ts',
+  judgeSemantic: 'src/lib/auto-ready-semantic-audit.ts',
 }
 
 export const FINGERPRINT_PATH = 'src/lib/quality-contract.fingerprint.json'

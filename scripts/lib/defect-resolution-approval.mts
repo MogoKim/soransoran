@@ -16,8 +16,10 @@ import type { PrismaClient } from '@prisma/client'
 import { unresolvedDefectCount } from '../../src/lib/auto-ready-repo'
 import { DEFECT_RESOLUTION_KEY, judgeDefectResolution, resolutionEntriesOf } from '../../src/lib/auto-ready-defect-resolution'
 import {
-  applyDefectResolution, planDefectResolution, type ContextLoader, type ResolutionPlan,
+  applyDefectResolution, applySemanticDefectResolution, planDefectResolution, planSemanticDefectResolution,
+  type ContextLoader, type ResolutionPlan, type SemanticResolutionContextLoader,
 } from '../../src/lib/auto-ready-defect-resolution-store'
+import type { SemanticAuditProvider } from '../../src/lib/auto-ready-semantic-audit'
 import { currentQualityContract } from '../../src/lib/quality-contract'
 import type { Approval } from '../../src/lib/production-activation-guard'
 
@@ -70,6 +72,35 @@ export async function applyApprovedDefectResolution(prisma: PrismaClient, i: {
     return { kind: 'refuse', written: 0, code: 'EXPECTATION_MISMATCH', reason: `승인 ${i.approval.expected.before}:${i.approval.expected.after} · 지금 ${ex.before}:${ex.after}` }
   }
   const a = await applyDefectResolution(prisma, { plan: e.plan, contextOf: i.contextOf, now: i.now })
+  if (a.kind === 'already') return { kind: 'noop', written: 0, reason: a.reason }
+  if (a.kind !== 'written') return { kind: 'refuse', written: 0, code: a.kind.toUpperCase(), reason: a.reason }
+  const after = await unresolvedDefectCount(prisma)
+  if (after !== i.approval.expected.after) {
+    return { kind: 'post-mismatch', written: 1, after, reason: `쓴 뒤 미해소 ${after} ≠ 승인 ${i.approval.expected.after}` }
+  }
+  return { kind: 'written', written: 1, after }
+}
+
+/** 의미 재감사 해소의 운영 승인 적용 — 측정된 `no` 계획도 같은 digest·expect·reason에 묶는다. */
+export async function applyApprovedSemanticDefectResolution(prisma: PrismaClient, i: {
+  queueId: string; approval: Approval; loadContext: SemanticResolutionContextLoader
+  provider: SemanticAuditProvider; now: Date
+}): Promise<ApprovedOutcome> {
+  if (i.approval.reason.trim() === '') return { kind: 'refuse', written: 0, code: 'NO_REASON', reason: 'reason 이 비었다' }
+  const e = await planSemanticDefectResolution(prisma, {
+    queueId: i.queueId, loadContext: i.loadContext, provider: i.provider, now: i.now,
+  })
+  if (e.kind === 'already') return { kind: 'noop', written: 0, reason: `이미 해소 — ${e.reason}` }
+  if (e.kind === 'refuse') return { kind: 'refuse', written: 0, code: e.code, reason: e.reason }
+  const digest = defectPlanDigestOf(e.plan)
+  if (digest !== i.approval.digest) {
+    return { kind: 'refuse', written: 0, code: 'PLAN_STALE', reason: `승인 ${i.approval.digest.slice(0, 16)} · 지금 ${digest.slice(0, 16)}` }
+  }
+  const ex = await expectationOf(prisma, e.plan)
+  if (ex.before !== i.approval.expected.before || ex.after !== i.approval.expected.after) {
+    return { kind: 'refuse', written: 0, code: 'EXPECTATION_MISMATCH', reason: `승인 ${i.approval.expected.before}:${i.approval.expected.after} · 지금 ${ex.before}:${ex.after}` }
+  }
+  const a = await applySemanticDefectResolution(prisma, { plan: e.plan, loadContext: i.loadContext, now: i.now })
   if (a.kind === 'already') return { kind: 'noop', written: 0, reason: a.reason }
   if (a.kind !== 'written') return { kind: 'refuse', written: 0, code: a.kind.toUpperCase(), reason: a.reason }
   const after = await unresolvedDefectCount(prisma)
