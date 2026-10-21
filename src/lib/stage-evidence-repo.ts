@@ -28,6 +28,8 @@ import { UNATTENDED_PUBLISH_DECIDED_BY } from './original-post-publish-tx'
 import { unresolvedDefectCount, missingAutoPostCount } from './auto-ready-repo'
 import { overdueAuditCount, retryableFailureCount, RETRYABLE_NOTE_PREFIX, AUDIT_OVERDUE_MS } from './auto-ready-audit-store'
 import { AUTO_DECIDER } from './auto-ready-v2'
+import { judgeDefectResolution } from './auto-ready-defect-resolution'
+import { currentQualityContract } from './quality-contract'
 import { machineReviewedByHuman } from './original-post-auto-publish'
 import { personaCommentProvenanceOf, type EvidencePost, type PostDecider, type StageEvidenceFacts } from './stage-evidence'
 import { publishEventAtOf, releaseStampStatusOf } from './source-slot-release'
@@ -134,8 +136,14 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
 
   const audits = await db.autoReadyAudit.findMany({
     where: { OR: [{ selectedAt: inDay }, ...(targetIds.length === 0 ? [] : [{ postId: { in: targetIds } }])] },
-    select: { postId: true, queueId: true, defect: true, note: true, selectedAt: true },
   })
+  const defectQueueIds = audits.filter((a) => a.defect === 'yes').map((a) => a.queueId)
+  const defectQueues = defectQueueIds.length === 0 ? [] : await db.originalPostApprovalQueue.findMany({
+    where: { id: { in: defectQueueIds } },
+    select: { id: true, createdPostId: true, draftTitle: true, draftBody: true, gateResults: true, editDiff: true },
+  })
+  const defectQueueById = new Map(defectQueues.map((q) => [q.id, q]))
+  const qualityContract = currentQualityContract()
 
   const evidencePosts: EvidencePost[] = posts.map((p) => {
     const mine = logsOf(p.id)
@@ -181,7 +189,9 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
         postId: a.postId,
         queueId: a.queueId,
         judged: a.defect !== null,
-        defectYes: a.defect === 'yes',
+        // 원래 yes 행은 감사 이력에 남긴다. 단계 증거는 정본 해소 판정을 통과하지 못한 현재 결함만 막는다.
+        defectYes: a.defect === 'yes'
+          && !judgeDefectResolution(a, defectQueueById.get(a.queueId) ?? null, qualityContract).resolved,
         retryable: a.defect === null && (a.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX),
         overdue: a.defect === null && a.selectedAt.getTime() < i.now.getTime() - AUDIT_OVERDUE_MS,
       })),
