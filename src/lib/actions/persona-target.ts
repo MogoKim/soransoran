@@ -6,9 +6,10 @@ import { auth } from '@/lib/auth'
 import { requireAdmin } from '@/lib/admin'
 import { getBoardByType, type BoardType } from '@/lib/board-registry'
 import {
-  planSetTarget, planClearTarget, judgeTargetPost,
+  planClearTarget, judgeTargetPost,
   type TargetBlock, type TargetPostFacts,
 } from '@/lib/persona-target-rules'
+import { setCandidateTargetTx } from '@/lib/persona-target-tx'
 import type { CandidateStatus } from '@/lib/persona-candidate-rules'
 
 /**
@@ -40,6 +41,8 @@ export type TargetPostOption = {
   id: string
   title: string
   boardLabel: string
+  /** 🔴 고를 때 본 게시판 — 지정 저장이 지금 게시판과 대조한다(옮겨졌으면 STALE) */
+  boardType: BoardType
   createdAt: string
   personaComments: number
   memberComments: number
@@ -103,6 +106,7 @@ export async function searchTargetPosts(query: string): Promise<SearchState> {
           id: p.id,
           title: p.title,
           boardLabel: boardLabelOf(p.boardType),
+          boardType: p.boardType,
           createdAt: p.createdAt.toISOString(),
           personaComments: facts.personaComments,
           memberComments: facts.memberComments,
@@ -116,7 +120,7 @@ export async function searchTargetPosts(query: string): Promise<SearchState> {
   }
 }
 
-/** 후보와 대상 글을 함께 읽어 판정한다 — set · clear 가 공유한다 */
+/** 후보를 읽는다 — 해제(clear)가 쓴다. 지정(set)은 잠금 아래에서 다시 읽는다(persona-target-tx.ts) */
 async function loadCandidate(id: string) {
   return prisma.personaApprovalQueue.findUnique({
     where: { id },
@@ -127,10 +131,15 @@ async function loadCandidate(id: string) {
 /**
  * 대상 글을 지정한다.
  *
- * @param id     PersonaApprovalQueue.id
- * @param postId 대상 Post.id
+ * 🔴 판정 · 쓰기는 persona-target-tx.ts 의 트랜잭션 하나다 — 대상 Post 행을 먼저 잠그고
+ *    화면이 본 게시판(expectedBoardType)과 지금 게시판을 대조한 뒤 후보 · 글을 다시 읽어 판정한다.
+ *    어드민 게시판 변경과 같은 잠금 계약이다(post-row-lock.ts).
+ *
+ * @param id                PersonaApprovalQueue.id
+ * @param postId            대상 Post.id
+ * @param expectedBoardType 대상 글을 고를 때 화면에 보인 게시판(searchTargetPosts 의 boardType)
  */
-export async function setPersonaCandidateTarget(id: string, postId: string): Promise<TargetState> {
+export async function setPersonaCandidateTarget(id: string, postId: string, expectedBoardType: string): Promise<TargetState> {
   const { ok } = await requireAdmin()
   if (!ok) return { error: '권한이 없습니다.' }
 
@@ -141,54 +150,16 @@ export async function setPersonaCandidateTarget(id: string, postId: string): Pro
   if (target === '') return { error: '대상을 찾을 수 없습니다.' }
 
   try {
-    const row = await loadCandidate(target)
-    if (row === null) return { error: '대상을 찾을 수 없습니다.' }
-
-    const wanted = (postId ?? '').trim()
-    // 🔴 저장 직전에 글 상태를 다시 읽는다. 목록을 띄운 뒤 댓글이 달렸을 수 있다
-    const post = wanted === ''
-      ? null
-      : await prisma.post.findUnique({
-          where: { id: wanted },
-          select: {
-            status: true,
-            comments: { where: { isDeleted: false }, select: { personaId: true } },
-          },
-        })
-
-    const facts: TargetPostFacts | null = post
-      ? {
-          status: post.status,
-          personaComments: post.comments.filter((c) => c.personaId !== null).length,
-          memberComments: post.comments.filter((c) => c.personaId === null).length,
-        }
-      : null
-
-    const plan = planSetTarget({
-      candidate: {
-        status: row.status as CandidateStatus,
-        publishedCommentId: row.publishedCommentId,
-      },
-      postId: wanted,
-      post: facts,
+    const res = await setCandidateTargetTx(prisma, {
+      candidateId: target,
+      postId: postId ?? '',
+      expectedBoardType: expectedBoardType ?? '',
     })
-    if (!plan.ok) return { blocks: plan.blocks }
-
-    // 🔴 조건부 UPDATE — 읽은 뒤 쓰는 사이에 발행됐으면 0건이 되어 덮어쓰지 않는다.
-    //    🔴 targetPostId 한 컬럼만 쓴다. status 는 건드리지 않는다
-    const res = await prisma.personaApprovalQueue.updateMany({
-      where: {
-        id: row.id,
-        status: { in: ['PENDING', 'APPROVED'] },
-        publishedCommentId: null,
-      },
-      data: { targetPostId: plan.postId },
-    })
-    if (res.count === 0) return { error: '이미 처리된 후보입니다. 새로고침해 주세요.' }
+    if (!res.ok) return res.code === 'BLOCKED' ? { blocks: res.blocks } : { error: res.error }
 
     revalidatePath('/admin/persona-candidates')
-    revalidatePath(`/admin/persona-candidates/${row.id}`)
-    return { targetPostId: plan.postId }
+    revalidatePath(`/admin/persona-candidates/${target}`)
+    return { targetPostId: res.targetPostId }
   } catch {
     return { error: '저장하지 못했습니다. 잠시 후 다시 시도해 주세요.' }
   }

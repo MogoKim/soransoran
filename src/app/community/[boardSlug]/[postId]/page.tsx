@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
-import { notFound, permanentRedirect } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import CommentSection from '@/components/features/CommentSection'
 import DeleteButton from '@/components/features/DeleteButton'
@@ -92,13 +92,15 @@ export default async function PostDetailPage({
   const detail = await getPostDetail(params.postId)
   if (!detail) notFound()
   if (detail.post.boardType !== board.type) {
-    // 🔴 게시판을 옮긴 글(어드민 게시판 변경)의 옛 주소 — 지금 게시판의 정식 주소로 308 보낸다.
-    //    공유된 링크가 404 가 되지 않게 한다. getPostDetail 이 이미 공개 글만 돌려주므로
+    // 🔴 게시판을 옮긴 글(어드민 게시판 변경)의 옛 주소 — 지금 게시판의 정식 주소로 **307(임시)** 보낸다.
+    //    공유된 링크가 404 가 되지 않게 한다. 308(영구)을 쓰지 않는다 — 게시판은 다시 옮겨질 수 있고,
+    //    브라우저 · 검색이 영구 redirect 를 기억하면 되돌린 뒤에도 옛 목적지로 간다(redirect 고리).
+    //    getPostDetail 이 이미 공개 글만 돌려주므로
     //    숨김 · 삭제 · 차단 작성자 글은 위에서 404 로 끝나고, 여기서 존재가 새지 않는다.
     //    정식 주소를 만들 수 없는 글(매거진 등)은 예전처럼 404 다.
     const current = getBoardByType(detail.post.boardType)
     if (!current || !current.isCommunity) notFound()
-    permanentRedirect(`${current.href}/${detail.post.id}`)
+    redirect(`${current.href}/${detail.post.id}`)
   }
 
   const { post, threads } = detail

@@ -50,11 +50,11 @@ export default function PersonaCandidateTarget({
     })
   }
 
-  function runSet(postId: string) {
+  function runSet(postId: string, expectedBoardType: string) {
     setError(null)
     setBlocks([])
     startTransition(async () => {
-      const res = await setPersonaCandidateTarget(candidateId, postId)
+      const res = await setPersonaCandidateTarget(candidateId, postId, expectedBoardType)
       if (res.error !== undefined) setError(res.error)
       else if (res.blocks !== undefined) setBlocks(res.blocks)
       else {
@@ -157,7 +157,7 @@ export default function PersonaCandidateTarget({
                       {p.eligible ? (
                         <button
                           type="button"
-                          onClick={() => runSet(p.id)}
+                          onClick={() => runSet(p.id, p.boardType)}
                           disabled={pending || p.id === current}
                           className={adminButtonClass('primary', 'mt-2 px-4')}
                         >

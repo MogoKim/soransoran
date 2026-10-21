@@ -2,7 +2,8 @@
 /**
  * 🔴 **어드민 게시판 변경 — 고객 주소 · 권한 HTTP 검사** (격리 DB + 로컬 `next start` 전용)
  *
- *   · 옮긴 공개 글의 옛 주소 → 308 · Location = 새 정식 주소 · 새 주소 200 · redirect 고리 0
+ *   · 옮긴 공개 글의 옛 주소 → 307(임시) · Location = 지금 정식 주소 · 지금 주소 200(redirect 0) · 고리 0
+ *     FREE → MENOPAUSE 로 옮기고 MENOPAUSE → FREE 로 되돌린 두 시점 모두 · redirect 는 최대 한 번
  *   · 숨김 · 삭제 글 → 옛 주소 · 새 주소 모두 404 (redirect 로 존재가 새지 않는다)
  *   · 보는 회원이 차단한 작성자의 글(UserBlock) → 그 회원에게는 옛 주소 · 새 주소 모두 404
  *   · 모르는 게시판 slug · 매거진 slug → 404 (기존 계약 그대로)
@@ -17,6 +18,8 @@ import { resolve } from 'node:path'
 import { encode } from '@auth/core/jwt'
 import { PrismaClient } from '@prisma/client'
 import { movePostBoardTx } from '../src/lib/board-move-tx'
+
+const slugOf = { FREE: 'free', MENOPAUSE: 'menopause' } as const
 
 const DB = process.env.DATABASE_URL ?? ''
 if (!/^postgresql:\/\/[^@/]*@(127\.0\.0\.1|localhost):\d+\/soran_test$/.test(DB)) {
@@ -67,15 +70,30 @@ async function main(): Promise<void> {
   console.log('\n══ 어드민 게시판 변경 — 고객 주소 · 권한 (localhost · 격리 DB) ══\n')
   const author = await member()
 
-  console.log('1. 옮긴 공개 글')
+  console.log('1. 옮긴 공개 글 — 307 왕복')
   const a = await moved(author)
-  expect('옛 주소 /community/free/{id} → 308 · 새 정식 주소', await get(`/community/free/${a}`), { status: 308, location: `/community/menopause/${a}` })
-  expect('새 주소 /community/menopause/{id} → 200', (await get(`/community/menopause/${a}`)).status, 200)
-  {
-    let path = `/community/free/${a}`; const seen: string[] = []
-    for (let i = 0; i < 5; i++) { const r = await get(path); seen.push(`${r.status}`); if (r.status !== 308 || !r.location) break; path = r.location }
-    expect('redirect 를 따라가면 한 번 만에 200 — 고리 0', seen, ['308', '200'])
+  /** 따라가며 상태를 모은다 — 최대 5번. 고리가 있으면 307 이 계속 쌓인다 */
+  const follow = async (path: string): Promise<string[]> => {
+    const seen: string[] = []
+    for (let i = 0; i < 5; i++) {
+      const r = await get(path)
+      seen.push(`${r.status}${r.location ? ` ${r.location}` : ''}`)
+      if (r.status < 300 || r.status >= 400 || !r.location) break
+      path = r.location
+    }
+    return seen
   }
+  const atBoard = async (now: 'FREE' | 'MENOPAUSE', old: 'FREE' | 'MENOPAUSE', label: string) => {
+    const cur = `/community/${slugOf[now]}/${a}`
+    const prev = `/community/${slugOf[old]}/${a}`
+    expect(`${label} — 옛 주소 → 307 · Location = 지금 정식 주소`, await get(prev), { status: 307, location: cur })
+    expect(`${label} — 지금 주소 → 200 · redirect 0`, await get(cur), { status: 200, location: null })
+    expect(`${label} — 옛 주소를 따라가면 307 한 번 뒤 200 · 고리 0`, await follow(prev), [`307 ${cur}`, '200'])
+  }
+  await atBoard('MENOPAUSE', 'FREE', 'FREE → MENOPAUSE 뒤')
+  const back = await movePostBoardTx(prisma, { postId: a, from: 'MENOPAUSE', to: 'FREE' })
+  if (!back.ok) throw new Error(`되돌리기 실패 — ${back.code}`)
+  await atBoard('FREE', 'MENOPAUSE', 'MENOPAUSE → FREE 되돌린 뒤')
 
   console.log('\n2. 숨김 · 삭제 · 차단 작성자 — redirect 로 존재가 새지 않는다')
   const hidden = await moved(author)
@@ -96,8 +114,8 @@ async function main(): Promise<void> {
   expect('차단한 회원에게 — 옛 주소 404 · 새 주소 404 · Location 없음',
     [await get(`/community/free/${byBlocked}`, cookie), await get(`/community/menopause/${byBlocked}`, cookie)],
     [{ status: 404, location: null }, { status: 404, location: null }])
-  expect('같은 글 · 차단하지 않은 방문자에게는 기존대로 308 → 200',
-    [(await get(`/community/free/${byBlocked}`)).status, (await get(`/community/menopause/${byBlocked}`)).status], [308, 200])
+  expect('같은 글 · 차단하지 않은 방문자에게는 기존대로 307 → 200',
+    [(await get(`/community/free/${byBlocked}`)).status, (await get(`/community/menopause/${byBlocked}`)).status], [307, 200])
 
   console.log('\n3. 기존 계약 그대로')
   expect('모르는 게시판 slug → 404', (await get(`/community/nope/${a}`)).status, 404)

@@ -151,7 +151,7 @@ export type BoardMoveActionState =
  *
  * 🔴 판정 · 쓰기는 board-move-tx.ts 의 트랜잭션 하나다. 여기서는 권한 · 입력 모양 · revalidate 만 한다.
  *    화면이 막아도 서버가 다시 판정한다 — 자동 운영 글 · 가입인사 · 열린 Persona 후보 · 숨김 글.
- * 🔴 옛 주소는 고객 상세가 새 정식 주소로 308 보낸다(community/[boardSlug]/[postId]/page.tsx).
+ * 🔴 옛 주소는 고객 상세가 새 정식 주소로 307(임시) 보낸다(community/[boardSlug]/[postId]/page.tsx).
  *    그래서 옛 게시판의 목록 · 상세와 새 게시판의 목록 · 상세를 함께 다시 그린다.
  */
 export async function movePostBoard(postId: string, from: string, to: string): Promise<BoardMoveActionState> {

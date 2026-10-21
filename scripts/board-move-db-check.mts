@@ -10,6 +10,8 @@
  *     오리지널 큐 · Persona 후보 · 자동 READY 감사 · 단계 결정 · OperatorWriteLog
  *   · best-v2 — W 불변 · 입성 기록과 입성 시각 그대로
  *   · 동시성 — 같은 이동 두 번 · 반대 방향 동시 요청에서 성공은 한 번
+ *   · 공용 Post 잠금(결정적 순서 · barrier) — 후보 writer 가 먼저 / 게시판 이동이 먼저 / 수동 대상 지정 ↔ 이동.
+ *     어느 순서든 "옮겨진 글에 열린 후보" 상태 0 · 잠금은 updatedAt · 값을 바꾸지 않는다
  *
  * 🔴 운영 DB 에서 돌지 않는다. 이 검사가 만든 행만 지운다(같은 DB 를 쓰는 다른 검사를 건드리지 않는다).
  *
@@ -17,6 +19,10 @@
  */
 import { PrismaClient, type BoardType, type PersonaCandidateStatus, type Prisma } from '@prisma/client'
 import { movePostBoardTx, type BoardMoveResult } from '../src/lib/board-move-tx'
+import { lockPostRow } from '../src/lib/post-row-lock'
+import { createPendingCandidateLocked, type CandidateWriteResult } from '../src/lib/persona-candidate-write'
+import { setCandidateTargetTx, type SetTargetTxResult } from '../src/lib/persona-target-tx'
+import { OPEN_PERSONA_CANDIDATE_STATUSES } from '../src/lib/board-move'
 import { syncBestEligibility } from '../src/lib/best-ranking-db'
 import {
   GREETING_POST_VISIBILITY_FLAGS, MICRO_SEED_POST_VISIBILITY_FLAGS, OPERATOR_POST_VISIBILITY_FLAGS,
@@ -104,6 +110,33 @@ async function queueLinked(authorId: string): Promise<string> {
   made.queues.push(q.id)
   return id
 }
+
+/** 결정적 순서 — 한쪽이 잠금을 잡은 뒤 멈추게 하고, 다른 쪽을 시작한 다음 놓아준다(sleep 0) */
+function barrier() {
+  let open!: () => void
+  const p = new Promise<void>((r) => { open = r })
+  return { wait: () => p, open }
+}
+/** 잠금 쪽이 멈춘 자리 — 잠근 직후 · 판정 전 */
+function holdAfterLock() {
+  const locked = barrier()
+  const release = barrier()
+  return { hook: async () => { locked.open(); await release.wait() }, locked: locked.wait, release: release.open }
+}
+const openCandidates = (postId: string) =>
+  prisma.personaApprovalQueue.count({ where: { targetPostId: postId, status: { in: [...OPEN_PERSONA_CANDIDATE_STATUSES] } } })
+/** 🔴 불가능 상태 — 게시판 이동이 성공했는데 그 글에 열린 후보가 있거나, 이동이 막혔는데 게시판이 바뀌었다 */
+async function impossible(postId: string, moved: BoardMoveResult, before: BoardType): Promise<boolean> {
+  const now = (await board(postId))?.boardType
+  return moved.ok ? (await openCandidates(postId)) > 0 || now !== moved.to : now !== before
+}
+async function personaRow(): Promise<string> { return persona() }
+const candidateData = async (key: string) => ({
+  persona: { connect: { id: await personaRow() } }, candidateText: '저도 그래요', reactionType: 'experience',
+  gateStatus: 'pass', gateResults: [], dedupKey: `${tag}:w:${key}`,
+})
+const cshort = (r: CandidateWriteResult) => (r.created ? 'created' : r.code)
+const tshort = (r: SetTargetTxResult) => (r.ok ? 'ok' : r.code)
 
 /** 이동 전후 비교용 — boardType · updatedAt 을 뺀 글 전부 + 연결 기록 */
 async function snap(postId: string) {
@@ -193,33 +226,136 @@ async function main(): Promise<void> {
   await blockedNoWrite('삭제 글', await post(author, { status: 'DELETED' }), 'FREE', 'MENOPAUSE', 'NOT_PUBLISHED')
   expect('없는 글 → NOT_FOUND', short(await move('cl-not-a-post-id', 'FREE', 'MENOPAUSE')), 'NOT_FOUND')
 
-  console.log('\n5. 동시성 — 성공은 한 번')
-  for (let i = 0; i < 5; i++) {
+  console.log('\n5. 동시성 — 성공은 한 번 (barrier 로 순서를 고정한다 · sleep 0)')
+  {
     const p = await post(author)
-    const rs = await Promise.all([move(p, 'FREE', 'MENOPAUSE'), move(p, 'FREE', 'MENOPAUSE')])
-    const okN = rs.filter((r) => r.ok).length
-    expect(`같은 이동 동시 두 번 #${i + 1} — 성공 1 · 나머지 STALE · 최종 MENOPAUSE`,
-      [okN, rs.every((r) => r.ok || r.code === 'STALE'), (await board(p))?.boardType], [1, true, 'MENOPAUSE'])
+    const h = holdAfterLock()
+    const first = movePostBoardTx(prisma, { postId: p, from: 'FREE', to: 'MENOPAUSE' }, h.hook)
+    await h.locked()
+    const second = move(p, 'FREE', 'MENOPAUSE')
+    h.release()
+    const [a, b] = await Promise.all([first, second])
+    expect('같은 이동 두 번(앞이 잠근 사이 뒤가 도착) — 앞 ok · 뒤 STALE · 최종 MENOPAUSE',
+      [short(a), short(b), (await board(p))?.boardType], ['ok', 'STALE', 'MENOPAUSE'])
   }
-  for (let i = 0; i < 5; i++) {
+  {
     const p = await post(author)
-    const rs = await Promise.all([move(p, 'FREE', 'MENOPAUSE'), move(p, 'MENOPAUSE', 'FREE')])
-    const okN = rs.filter((r) => r.ok).length
-    const final = (await board(p))?.boardType
-    expect(`반대 방향 동시 #${i + 1} — 성공 1 · 최종은 성공한 쪽 목표`,
-      [okN, final === (rs[0].ok ? 'MENOPAUSE' : 'FREE')], [1, true])
+    const h = holdAfterLock()
+    const first = movePostBoardTx(prisma, { postId: p, from: 'FREE', to: 'MENOPAUSE' }, h.hook)
+    await h.locked()
+    // 뒤 요청은 MENOPAUSE 를 본 낡은 화면에서 왔다 — 앞 요청이 끝나면 우연히 같아지지만 통과하면 안 된다
+    const second = move(p, 'MENOPAUSE', 'FREE')
+    h.release()
+    const [a, b] = await Promise.all([first, second])
+    expect('반대 방향 동시(앞이 잠근 사이 뒤가 도착) — 앞 ok · 뒤 STALE · 최종 MENOPAUSE · 성공 1',
+      [short(a), short(b), (await board(p))?.boardType], ['ok', 'STALE', 'MENOPAUSE'])
   }
   const twice = await post(author)
   expect('같은 요청 연달아 두 번 — 첫 번째 ok · 두 번째 STALE(write 0)',
     [short(await move(twice, 'FREE', 'MENOPAUSE')), short(await move(twice, 'FREE', 'MENOPAUSE')), (await board(twice))?.boardType],
     ['ok', 'STALE', 'MENOPAUSE'])
+
+  console.log('\n6. 공용 Post 잠금 — 값 · updatedAt 그대로')
+  {
+    const p = await post(author)
+    await thread(p)
+    const before = await prisma.post.findUniqueOrThrow({ where: { id: p }, select: { updatedAt: true, bestReactionWeight: true, boardType: true, title: true, status: true } })
+    const seen = await prisma.$transaction((tx) => lockPostRow(tx, p))
+    const after = await prisma.post.findUniqueOrThrow({ where: { id: p }, select: { updatedAt: true, bestReactionWeight: true, boardType: true, title: true, status: true } })
+    expect('잠금 뒤 updatedAt · W · 게시판 · 제목 · 상태 전부 그대로 · 돌려준 값 = 현재 값',
+      [after, seen?.updatedAt.toISOString(), seen?.boardType], [before, before.updatedAt.toISOString(), before.boardType])
+    expect('없는 글 → null', await prisma.$transaction((tx) => lockPostRow(tx, 'cl-not-a-post-id')), null)
+  }
+
+  console.log('\n7. A — 자동 후보 writer 가 먼저 잠근다 → 후보 1 · 이동 OPEN_PERSONA_CANDIDATE')
+  for (const lane of ['첫 댓글', '추가 댓글']) {
+    const p = await post(author)
+    const h = holdAfterLock()
+    const writing = createPendingCandidateLocked(prisma, { postId: p, expectedBoardType: 'FREE', data: await candidateData(`a-${lane}`) }, h.hook)
+    await h.locked()
+    const moving = movePostBoardTx(prisma, { postId: p, from: 'FREE', to: 'MENOPAUSE' })
+    h.release()
+    const [w, m] = await Promise.all([writing, moving])
+    made.candidates.push(...(await prisma.personaApprovalQueue.findMany({ where: { targetPostId: p }, select: { id: true } })).map((r) => r.id))
+    expect(`${lane} — 후보 created · 이동 OPEN_PERSONA_CANDIDATE · 게시판 FREE 그대로 · 열린 후보 1 · 불가능 상태 0`,
+      [cshort(w), short(m), (await board(p))?.boardType, await openCandidates(p), await impossible(p, m, 'FREE')],
+      ['created', 'OPEN_PERSONA_CANDIDATE', 'FREE', 1, false])
+  }
+
+  console.log('\n8. B — 게시판 이동이 먼저 잠근다 → 이동 성공 · 옛 게시판을 본 후보 write 0')
+  for (const lane of ['첫 댓글', '추가 댓글']) {
+    const p = await post(author)
+    const h = holdAfterLock()
+    const moving = movePostBoardTx(prisma, { postId: p, from: 'FREE', to: 'MENOPAUSE' }, h.hook)
+    await h.locked()
+    const writing = createPendingCandidateLocked(prisma, { postId: p, expectedBoardType: 'FREE', data: await candidateData(`b-${lane}`) })
+    h.release()
+    const [m, w] = await Promise.all([moving, writing])
+    expect(`${lane} — 이동 ok · 후보 BOARD_CHANGED · 게시판 MENOPAUSE · 열린 후보 0 · 불가능 상태 0`,
+      [short(m), cshort(w), (await board(p))?.boardType, await openCandidates(p), await impossible(p, m, 'FREE')],
+      ['ok', 'BOARD_CHANGED', 'MENOPAUSE', 0, false])
+  }
+  {
+    const p = await post(author)
+    expect('새 게시판을 본 후보는 옮긴 뒤에도 적재된다(정상 경로)',
+      [short(await move(p, 'FREE', 'MENOPAUSE')), cshort(await createPendingCandidateLocked(prisma, { postId: p, expectedBoardType: 'MENOPAUSE', data: await candidateData('b-new') }))],
+      ['ok', 'created'])
+    made.candidates.push(...(await prisma.personaApprovalQueue.findMany({ where: { targetPostId: p }, select: { id: true } })).map((r) => r.id))
+    expect('게시판을 알 수 없는 생성 입력 → BOARD_UNKNOWN · write 0',
+      [cshort(await createPendingCandidateLocked(prisma, { postId: p, expectedBoardType: '수다방', data: await candidateData('b-unknown') })), await openCandidates(p)], ['BOARD_UNKNOWN', 1])
+    const h = await post(author, { status: 'HIDDEN' })
+    expect('숨김 글 → NOT_PUBLISHED · write 0',
+      [cshort(await createPendingCandidateLocked(prisma, { postId: h, expectedBoardType: 'FREE', data: await candidateData('b-hidden') })), await openCandidates(h)], ['NOT_PUBLISHED', 0])
+  }
+
+  console.log('\n9. C — 수동 대상 지정 ↔ 게시판 이동')
+  {
+    // 대상이 비어 있는 승인 후보 — 다른 글을 보고 만들어진 뒤 운영자가 대상을 고르는 자리
+    const mk = async () => {
+      seq += 1
+      const c = await prisma.personaApprovalQueue.create({
+        data: { personaId: await persona(), status: 'APPROVED', candidateText: '저도 그래요', reactionType: 'experience', gateStatus: 'pass', gateResults: [], dedupKey: `${tag}:t:${seq}` },
+        select: { id: true },
+      })
+      made.candidates.push(c.id)
+      return c.id
+    }
+    {
+      const p = await post(author)
+      const c = await mk()
+      const h = holdAfterLock()
+      const setting = setCandidateTargetTx(prisma, { candidateId: c, postId: p, expectedBoardType: 'FREE' }, h.hook)
+      await h.locked()
+      const moving = movePostBoardTx(prisma, { postId: p, from: 'FREE', to: 'MENOPAUSE' })
+      h.release()
+      const [t, m] = await Promise.all([setting, moving])
+      expect('대상 지정이 먼저 — 지정 ok · 이동 OPEN_PERSONA_CANDIDATE · 게시판 FREE · 불가능 상태 0',
+        [tshort(t), short(m), (await board(p))?.boardType, await openCandidates(p), await impossible(p, m, 'FREE')],
+        ['ok', 'OPEN_PERSONA_CANDIDATE', 'FREE', 1, false])
+    }
+    {
+      const p = await post(author)
+      const c = await mk()
+      const h = holdAfterLock()
+      const moving = movePostBoardTx(prisma, { postId: p, from: 'FREE', to: 'MENOPAUSE' }, h.hook)
+      await h.locked()
+      const setting = setCandidateTargetTx(prisma, { candidateId: c, postId: p, expectedBoardType: 'FREE' })
+      h.release()
+      const [m, t] = await Promise.all([moving, setting])
+      const row = await prisma.personaApprovalQueue.findUniqueOrThrow({ where: { id: c }, select: { targetPostId: true, status: true } })
+      expect('이동이 먼저 — 이동 ok · 지정 STALE · 후보 대상 null · 상태 APPROVED 그대로 · 불가능 상태 0',
+        [short(m), tshort(t), row, (await board(p))?.boardType, await openCandidates(p), await impossible(p, m, 'FREE')],
+        ['ok', 'STALE', { targetPostId: null, status: 'APPROVED' }, 'MENOPAUSE', 0, false])
+      expect('새 게시판을 보고 다시 고르면 지정된다(정상 경로)', tshort(await setCandidateTargetTx(prisma, { candidateId: c, postId: p, expectedBoardType: 'MENOPAUSE' })), 'ok')
+    }
+  }
 }
 
 async function cleanup(): Promise<void> {
   const posts = made.posts
   await prisma.bestSelection.deleteMany({ where: { postId: { in: posts } } })
   await prisma.comment.deleteMany({ where: { postId: { in: posts } } })
-  await prisma.personaApprovalQueue.deleteMany({ where: { id: { in: made.candidates } } })
+  await prisma.personaApprovalQueue.deleteMany({ where: { OR: [{ id: { in: made.candidates } }, { personaId: { in: made.personas } }, { targetPostId: { in: posts } }] } })
   await prisma.originalPostApprovalQueue.deleteMany({ where: { id: { in: made.queues } } })
   await prisma.microSeedRawContent.deleteMany({ where: { id: { in: made.raws } } })
   await prisma.post.deleteMany({ where: { id: { in: posts } } })

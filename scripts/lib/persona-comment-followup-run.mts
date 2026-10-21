@@ -45,6 +45,7 @@ import { gateInputOf, sourceTextsOf, type GateContext, type SourcePost, type Tar
 import { runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { judgeGateReport } from '../../src/lib/persona-comment-gate-report'
+import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-write'
 
 /**
  * 🔴 **이 회차가 추가 댓글 단계를 돌 수 있는가** — 진입점은 이 함수 하나로 정한다(E6).
@@ -443,23 +444,24 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const writer: PipelineWriter = async ({ input, text, gates, gateStatus, provenance }) => {
     const p = planOf(input)
     if (p === undefined) return { created: false, reason: '추가 댓글 계획을 찾지 못했다' }
-    try {
-      await prisma.personaApprovalQueue.create({
-        data: {
-          persona: { connect: { code: input.personaCode } }, targetPostId: input.post.id, status: 'PENDING',
-          candidateText: text, reactionType: input.reactionRole, gateStatus,
-          gateResults: gates as unknown as Prisma.InputJsonValue,
-          // 🔴 멱등 열쇠는 (글 · 순번) — 같은 자리에 두 번 들어가지 않는다
-          dedupKey: p.go.key,
-          editDiff: followupEditDiffOf(stampOf(input.post.id, p.go)) as unknown as Prisma.InputJsonValue,
-          generatedModel: provenance.model, canonRunId: provenance.canonRunId, canonDigest: provenance.canonDigest,
-        },
-      })
-      return { created: true, reason: '추가 댓글 PENDING 적재' }
-    } catch (e) {
-      const code = (e as { code?: string }).code
-      return { created: false, reason: code === 'P2002' ? '🔴 같은 자리(글·순번) 열쇠가 이미 있다(fail-closed)' : `적재 실패 — ${code ?? 'UNKNOWN'}` }
-    }
+    // 🔴 저장은 공용 계약 하나다 — 트랜잭션 · Post 잠금 · 생성 때 게시판(boardLabel = boardType) 재확인 뒤 create
+    //    (persona-candidate-write.ts). provider 호출은 이미 끝났다 — 잠금은 여기서 처음 잡는다.
+    const res = await createPendingCandidateLocked(prisma, {
+      postId: input.post.id,
+      expectedBoardType: input.post.boardLabel,
+      data: {
+        persona: { connect: { code: input.personaCode } },
+        candidateText: text, reactionType: input.reactionRole, gateStatus,
+        gateResults: gates as unknown as Prisma.InputJsonValue,
+        // 🔴 멱등 열쇠는 (글 · 순번) — 같은 자리에 두 번 들어가지 않는다
+        dedupKey: p.go.key,
+        editDiff: followupEditDiffOf(stampOf(input.post.id, p.go)) as unknown as Prisma.InputJsonValue,
+        generatedModel: provenance.model, canonRunId: provenance.canonRunId, canonDigest: provenance.canonDigest,
+      },
+    })
+    if (res.created) return { created: true, reason: '추가 댓글 PENDING 적재' }
+    const code = res.errorCode // 🔴 중복은 unique constraint(P2002)가 가른다
+    return { created: false, reason: code === 'P2002' ? '🔴 같은 자리(글·순번) 열쇠가 이미 있다(fail-closed)' : res.reason }
   }
   const result = await runEnqueuePipeline({
     selection: deps.canon.selection, canon: deps.canon.canon, targets: planned.map((p) => p.target),

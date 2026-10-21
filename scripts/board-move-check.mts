@@ -4,11 +4,13 @@
  *
  *   ① 판정표 — 허용 · 막힘 사유 · 우선순위 (board-move.ts)
  *   ② 소스 계약 — 권한이 먼저 · 바꾸는 값은 boardType 하나 · 자동 운영 기록 · OperatorWriteLog write 0 ·
- *      best-v1 이름 0 · 브라우저 확인창 0 · 옛 주소 redirect 는 공개 조회 뒤에만
+ *      best-v1 이름 0 · 브라우저 확인창 0 · 옛 주소 redirect 는 공개 조회 뒤에만(307)
+ *   ③ 공용 Post 잠금 — 게시판 변경 · 자동 후보 적재 · 수동 대상 지정이 전부 잠금을 먼저 잡는다(live writer 연결)
  *
  *   DB 쪽(실제 트랜잭션 · 동시성 · 불변)은 board-move-db-check.mts, 화면 주소는 board-move-http-check.mts.
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   BOARD_MOVE_BLOCK_MESSAGE, MOVABLE_BOARDS, OPEN_PERSONA_CANDIDATE_STATUSES, judgeBoardMove, judgeBoardMoveSource,
   type BoardMoveFacts,
@@ -124,16 +126,78 @@ console.log('\n■ 5. 화면 — 이름 · 확인 단계 · 숨기지 않고 이
   check('관리자 글 상세가 서버와 같은 사실 읽기 · 판정을 쓴다', /readBoardMoveFacts\(prisma, post\.id\)/.test(page) && /judgeBoardMoveSource\(moveFacts\)/.test(page) && /<AdminBoardMovePanel/.test(page))
 }
 
-console.log('\n■ 6. 옛 고객 주소 — 공개 글만 새 정식 주소로 308')
+console.log('\n■ 6. 옛 고객 주소 — 공개 글만 새 정식 주소로 307(임시) · 308(영구) 0')
 {
   const detail = code('src/app/community/[boardSlug]/[postId]/page.tsx')
   const at = detail.indexOf('export default async function PostDetailPage(')
   const body = detail.slice(at)
   const nf = body.indexOf('if (!detail) notFound()')
-  const rd = body.indexOf('permanentRedirect(')
+  const rd = body.indexOf('redirect(')
   check('공개 조회(getPostDetail)가 null 이면 404 가 먼저 — 숨김 · 삭제 · 차단 글은 redirect 로 새지 않는다', nf >= 0 && rd > nf)
   check('redirect 는 게시판이 다를 때만 · 커뮤니티 게시판이 아니면 404', /if \(detail\.post\.boardType !== board\.type\) \{/.test(body) && /!current\.isCommunity\) notFound\(\)/.test(body))
-  check('정식 주소는 board-registry 에서 만든다', /permanentRedirect\(`\$\{current\.href\}\/\$\{detail\.post\.id\}`\)/.test(body))
+  check('정식 주소는 board-registry 에서 만든다 · 임시 redirect()', /\bredirect\(`\$\{current\.href\}\/\$\{detail\.post\.id\}`\)/.test(body))
+  check('🔴 permanentRedirect(308) 0 — 게시판은 다시 옮겨질 수 있다', !/permanentRedirect/.test(detail))
+}
+
+console.log('\n■ 7. 게시글 단위 공용 mutex — 같은 글의 게시판 · 열린 후보를 바꾸는 writer 는 전부 Post 잠금을 먼저 잡는다')
+{
+  const lock = code('src/lib/post-row-lock.ts')
+  const lockBody = lock.slice(lock.indexOf('export async function lockPostRow('))
+  check('lockPostRow — 읽은 updatedAt 을 조건으로 · 같은 값을 다시 쓴다(bestReactionWeight +0) · 의미 있는 값 write 0',
+    /where: \{ id: postId, updatedAt: seen\.updatedAt \}/.test(lockBody)
+    && /data: \{ bestReactionWeight: \{ increment: 0 \}, updatedAt: seen\.updatedAt \}/.test(lockBody)
+    && (lockBody.match(/data:/g) ?? []).length === 1)
+  check('lockPostRow — 재시도 상한이 있다(무한 재시도 0)', /for \(let attempt = 0; attempt < POST_LOCK_ATTEMPTS; attempt \+= 1\)/.test(lockBody) && /throw new Error/.test(lockBody))
+
+  /** 트랜잭션 본문에서 lockPostRow 가 첫 DB 호출인지 — 그 앞에 tx.* 읽기 · 쓰기가 없어야 한다 */
+  const lockFirst = (src: string, fn: string): boolean => {
+    const at = src.indexOf(fn)
+    const txAt = src.indexOf('$transaction(async (tx) => {', at)
+    const lockAt = src.indexOf('lockPostRow(tx,', txAt)
+    const between = src.slice(txAt, lockAt)
+    return at >= 0 && txAt > at && lockAt > txAt && !/tx\.\w+\.\w+\(/.test(between)
+  }
+  const mv = code('src/lib/board-move-tx.ts')
+  check('movePostBoardTx — 트랜잭션 첫 DB 호출이 lockPostRow · 그 뒤에 사실 읽기 · 판정 · 쓰기',
+    lockFirst(mv, 'export async function movePostBoardTx(')
+    && mv.indexOf('lockPostRow(tx,') < mv.indexOf('readBoardMoveFacts(tx,') && mv.indexOf('readBoardMoveFacts(tx,') < mv.indexOf('tx.post.updateMany('))
+  const cw = code('src/lib/persona-candidate-write.ts')
+  check('createPendingCandidateLocked — 트랜잭션 첫 DB 호출이 lockPostRow · 게시판 대조 뒤에만 create',
+    lockFirst(cw, 'export async function createPendingCandidateLocked(')
+    && /post\.boardType !== args\.expectedBoardType/.test(cw)
+    && cw.indexOf('post.boardType !== args.expectedBoardType') < cw.indexOf('tx.personaApprovalQueue.create('))
+  const tt = code('src/lib/persona-target-tx.ts')
+  check('setCandidateTargetTx — 트랜잭션 첫 DB 호출이 대상 글 lockPostRow · 게시판 대조(STALE) 뒤에 후보 · 글 재읽기 · 조건부 update',
+    /const locked = wanted === '' \? null : await lockPostRow\(tx, wanted\)/.test(tt)
+    && tt.indexOf('lockPostRow(tx,') < tt.indexOf("locked.boardType !== input.expectedBoardType")
+    && tt.indexOf("locked.boardType !== input.expectedBoardType") < tt.indexOf('tx.personaApprovalQueue.findUnique(')
+    && tt.indexOf('tx.personaApprovalQueue.findUnique(') < tt.indexOf('tx.personaApprovalQueue.updateMany('))
+  const act = code('src/lib/actions/persona-target.ts')
+  const setBody = act.slice(act.indexOf('export async function setPersonaCandidateTarget('), act.indexOf('export async function clearPersonaCandidateTarget('))
+  check('setPersonaCandidateTarget — 화면이 본 게시판을 받아 setCandidateTargetTx 로만 쓴다(직접 update 0)',
+    /expectedBoardType: string/.test(setBody) && (setBody.match(/setCandidateTargetTx\(/g) ?? []).length === 1
+    && !/personaApprovalQueue\.(update|updateMany)\(/.test(setBody))
+
+  // D — live writer 연결 단언: 세 자동 writer 가 공용 저장 함수를 쓰고, 직접 create 하지 않는다
+  for (const f of ['scripts/persona-comment-queue.mts', 'scripts/lib/persona-comment-loop.mts', 'scripts/lib/persona-comment-followup-run.mts']) {
+    const src = code(f)
+    check(`${f} — createPendingCandidateLocked(생성 때 게시판 = input.post.boardLabel) · 직접 personaApprovalQueue.create 0`,
+      /createPendingCandidateLocked\(prisma, \{\s*postId: input\.post\.id,\s*expectedBoardType: input\.post\.boardLabel,/.test(src)
+      && !/personaApprovalQueue\.create\(/.test(src))
+    check(`${f} — 트랜잭션 · Post 잠금을 직접 열지 않는다(provider 구간 잠금 0)`, !/\$transaction\(/.test(src) && !/lockPostRow\(/.test(src))
+  }
+  const pipe = code('scripts/lib/persona-comment-pipeline.ts')
+  check('파이프라인 — 트랜잭션 0 · provider → gate → writer 순서(저장 트랜잭션은 provider 가 끝난 뒤에만 열린다)',
+    !/\$transaction\(/.test(pipe) && !/lockPostRow\(/.test(pipe)
+    && pipe.indexOf('await args.provider(') < pipe.indexOf('args.gate(') && pipe.indexOf('args.gate(') < pipe.indexOf('await args.writer('))
+
+  // 새 우회 writer 를 막는다 — 운영 코드에서 Persona 후보를 만드는 곳은 공용 저장 함수 하나뿐이다
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : /\.(ts|tsx|mts|mjs)$/.test(e.name) ? [join(dir, e.name)] : [])
+  const creators = [...walk('src'), ...walk('scripts')]
+    .filter((f) => !/-check(-\w+)?\.mts$|check\.mjs$|-mutation\.mts$/.test(f))
+    .filter((f) => /personaApprovalQueue\.create\(/.test(code(f)))
+  check('운영 코드에서 personaApprovalQueue.create = persona-candidate-write.ts 하나', creators.join() === 'src/lib/persona-candidate-write.ts', creators.join(', '))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} board-move-check: ${pass} 통과 · ${fail} 실패\n`)
