@@ -56,6 +56,12 @@ export const PUBLISH_WINDOW_START_MINUTE = 8 * 60
 export const PUBLISH_WINDOW_END_MINUTE = 22 * 60
 
 /**
+ * 발행기와 JIT 공급이 함께 쓰는 catch-up 기회 간격.
+ * 공급이 다른 간격을 가정하면 만들 수 없는 시각의 글을 준비하거나, 실제로 남은 기회를 놓친다.
+ */
+export const HEARTBEAT_INTERVAL_MINUTES = 10
+
+/**
  * 🔴 **한 회차가 낼 수 있는 최대 건수.**
  *
  *    backlog 가 3이어도 한 번에 3건을 쏟지 않는다. 같은 분에 세 편이 올라오면
