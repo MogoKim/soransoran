@@ -223,7 +223,7 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
     runner.includes("argv.includes('--semantic-clear')") && runner.includes('planSemanticDefectResolution')
     && runner.includes('applySemanticDefectResolution') && runner.includes('freshEachCall: semanticClear'))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
-    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v15')
+    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v16')
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)

@@ -38,7 +38,7 @@ import { LIFE_CONTRACT_FIELDS, lifeContractIdentity, type PersonaLifeContract } 
 /** 🔴 의미 감사 계약의 판 — 판정 기준·출력 모양·묶음 구성이 바뀌면 올린다 */
 export const SEMANTIC_AUDIT_CONTRACT_VERSION = 'auto-ready-semantic-audit-v2'
 /** 🔴 프롬프트 판 — 지시문이 한 글자라도 바뀌면 올린다 */
-export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v3'
+export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v4'
 /**
  * 🔴 **의미 감사 모델** — 가격표(`llm-pricing`)에 단가가 있는 내부 라벨이어야 한다.
  *    초안 생성(`gemini-3.7-flash`)과 다른 계열을 쓴다 — 쓴 모델이 제 글을 채점하지 않게 한다.
@@ -162,10 +162,11 @@ export const SEMANTIC_AUDIT_SYSTEM_PROMPT = [
   '2) lifeContradictions: 게시글의 같은 주어·같은 사실 축에 명시된 값이 글쓴이카드의 생활사와 양립 불가능하다.',
   '   카드에 정보가 없거나 표현이 모호하다는 이유만으로 모순이라 하지 않는다.',
   '3) sourceDistortions: 원문근거의 주체·핵심 행동·원인·결과·결론을 실질적으로 뒤집거나, 원문에 없는 결론을 원문이 한 말처럼 옮겼다.',
-  '확실한 것만 적는다. 없으면 빈 배열이다. defect 는 셋 중 하나라도 비어 있지 않으면 "yes", 모두 비면 "no" 다.',
+  '확실한 결함만 배열에 적는다. 허용된 표현이나 결함이 아닌 이유를 배열에 설명하지 않는다.',
+  'defect 가 "no"이면 세 배열은 반드시 모두 []이다. 셋 중 하나라도 항목이 있으면 defect 는 반드시 "yes"다.',
   '출력은 JSON 객체 하나뿐이다. 다른 글자를 쓰지 않는다:',
-  '{"unsupportedFacts":[{"claim":"","why":""}],"lifeContradictions":[{"claim":"","card":""}],'
-    + '"sourceDistortions":[{"claim":"","source":""}],"defect":"yes|no"}',
+  '{"unsupportedFacts":[],"lifeContradictions":[],"sourceDistortions":[],"defect":"no"}',
+  '결함이 있을 때만 해당 배열에 위에서 정의한 claim·why, claim·card, claim·source 객체를 넣고 defect 를 "yes"로 쓴다.',
 ].join('\n')
 
 /** 🔴 카드에서 프롬프트에 싣는 칸 — 생활사 계약 정본 칸 그대로다(다시 고르지 않는다) */

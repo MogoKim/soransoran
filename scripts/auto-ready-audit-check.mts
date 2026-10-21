@@ -70,6 +70,11 @@ console.log('① 판 · 모델 · 계약 — 무결성 감사자와 섞지 않�
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('정도 부사·강조 부사의 추가')
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('핵심 사실을 바꾸지 않는 자연스러운 강조')
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('세부 내용을 일부 생략했어도'))
+  check('🟢 no 출력은 허용 표현 설명 없이 세 배열을 비우는 단일 모양이다',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('허용된 표현이나 결함이 아닌 이유를 배열에 설명하지 않는다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('defect 가 "no"이면 세 배열은 반드시 모두 []이다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('{"unsupportedFacts":[],"lifeContradictions":[],"sourceDistortions":[],"defect":"no"}')
+    && !SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('[{"claim":"","why":""}]'))
   check('🔴 계속 막는 경계 — 구체 사실·명시적 생활사 모순·핵심 주체/행동/원인/결과/결론 왜곡',
     SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('숫자·금액·장소·새 사건·진단')
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('같은 주어·같은 사실 축')
