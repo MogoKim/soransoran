@@ -19,15 +19,23 @@
  */
 import { PrismaClient } from '@prisma/client'
 
-import { applyDefectResolution, planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
-import { applyApprovedDefectResolution, defectPlanDigestOf, expectationOf } from './lib/defect-resolution-approval.mjs'
+import {
+  applyDefectResolution, applySemanticDefectResolution, planDefectResolution, planSemanticDefectResolution,
+} from '../src/lib/auto-ready-defect-resolution-store'
+import {
+  applyApprovedDefectResolution, applyApprovedSemanticDefectResolution, defectPlanDigestOf, expectationOf,
+} from './lib/defect-resolution-approval.mjs'
 import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
+import { makeAuditContextLoader } from './lib/auto-ready-audit-context.mjs'
+import { semanticProviderFromEnv } from './lib/auto-ready-semantic-provider.mjs'
 import { fillDbConnection } from './lib/ops-signals.mjs'
 import { openActivation } from './lib/production-activation.mjs'
+import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const argv = process.argv.slice(2)
 const queueId = (argv.find((a) => a.startsWith('--queue=')) ?? '').slice('--queue='.length).trim()
 const apply = argv.includes('--apply')
+const semanticClear = argv.includes('--semantic-clear')
 
 function isolatedDbProblems(): string[] {
   const url = process.env.DATABASE_URL ?? ''
@@ -40,6 +48,7 @@ function isolatedDbProblems(): string[] {
 
 async function main(): Promise<number> {
   if (queueId === '') { console.error('🔴 --queue=<queueId> 가 필요하다'); return 2 }
+  if (semanticClear) await loadEnvLocal()
   // 🔴 품질 계약 전환은 활성화 전에 새 계약 기록을 써야 한다 — 이 CLI 만 `--staged` 를 받는다
   const act = openActivation(argv, { repoRoot: process.cwd(), allowStaged: true })
   if (act.kind === 'refuse') {
@@ -52,9 +61,14 @@ async function main(): Promise<number> {
   if (act.kind === 'production') {
     const prisma = new PrismaClient()
     try {
-      const a = await applyApprovedDefectResolution(prisma, {
-        queueId, approval: act.approval, contextOf: makeReverifyContextLoader(), now: new Date(),
-      })
+      const a = semanticClear
+        ? await applyApprovedSemanticDefectResolution(prisma, {
+          queueId, approval: act.approval, loadContext: makeAuditContextLoader(prisma, { freshEachCall: true }),
+          provider: semanticProviderFromEnv(process.env, `defect-resolve-${Date.now()}`).provider, now: new Date(),
+        })
+        : await applyApprovedDefectResolution(prisma, {
+          queueId, approval: act.approval, contextOf: makeReverifyContextLoader(), now: new Date(),
+        })
       console.log(`RESOLVE_APPLY ${act.staged ? 'staged' : 'production'}@${act.target.slice(0, 12)} ${a.kind} written=${a.written}${'reason' in a ? ` · ${a.reason}` : ''} · reason="${act.approval.reason}"`)
       return a.kind === 'written' || a.kind === 'noop' ? 0 : 1
     } finally {
@@ -72,14 +86,20 @@ async function main(): Promise<number> {
   const prisma = new PrismaClient()
   try {
     const contextOf = makeReverifyContextLoader()
+    const loadContext = makeAuditContextLoader(prisma, { freshEachCall: semanticClear })
+    const provider = semanticProviderFromEnv(process.env, `defect-resolve-${Date.now()}`).provider
     const now = new Date()
-    const e = await planDefectResolution(prisma, { queueId, contextOf, now })
+    const e = semanticClear
+      ? await planSemanticDefectResolution(prisma, { queueId, loadContext, provider, now })
+      : await planDefectResolution(prisma, { queueId, contextOf, now })
     if (e.kind === 'refuse') { console.log(`RESOLVE_PLAN refuse code=${e.code} · ${e.reason}`); return 1 }
     if (e.kind === 'already') { console.log(`RESOLVE_PLAN already · ${e.reason}`); return 0 }
     const r = e.plan.record
+    const proof = r.reverify.outcome === 'blocked'
+      ? `gate=${r.reverify.gateVersion} blocked=${r.reverify.failureCodes.join(',')} review=${r.reverify.reviewCodes.join(',') || '-'} input=${r.reverify.inputDigest.slice(0, 16)}`
+      : `semantic=${r.reverify.semanticContractVersion}/${r.reverify.semanticPromptVersion} binding=${r.reverify.inputDigest.slice(0, 16)}`
     console.log(`RESOLVE_PLAN plan queue=${e.plan.queueId} post=${e.plan.postId} contract=${r.qualityContract.version}/${r.qualityContract.digest.slice(0, 16)}`
-      + ` audit=${e.plan.auditFingerprint.slice(0, 16)} gate=${r.reverify.gateVersion} blocked=${r.reverify.failureCodes.join(',')}`
-      + ` review=${r.reverify.reviewCodes.join(',') || '-'} input=${r.reverify.inputDigest.slice(0, 16)}`)
+      + ` audit=${e.plan.auditFingerprint.slice(0, 16)} ${proof}`)
     if (!apply) {
       // 🔴 운영 승인에 넣을 값 — 결정적 계획 지문 · 기대 상태(미해소 결함 수 지금:적용 뒤)
       const ex = await expectationOf(prisma, e.plan)
@@ -87,7 +107,9 @@ async function main(): Promise<number> {
       console.log('RESOLVE_APPLY skipped (dry-run) written=0')
       return 0
     }
-    const a = await applyDefectResolution(prisma, { plan: e.plan, contextOf, now: new Date() })
+    const a = semanticClear
+      ? await applySemanticDefectResolution(prisma, { plan: e.plan, loadContext, now: new Date() })
+      : await applyDefectResolution(prisma, { plan: e.plan, contextOf, now: new Date() })
     console.log(`RESOLVE_APPLY ${a.kind} written=${a.written}${a.kind === 'written' ? '' : ` · ${'reason' in a ? a.reason : ''}`}`)
     return a.kind === 'written' || a.kind === 'already' ? 0 : 1
   } finally {

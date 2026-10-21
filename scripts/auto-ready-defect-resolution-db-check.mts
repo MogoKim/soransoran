@@ -22,12 +22,16 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 
 import { AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-v2'
 import { authoritativeGate, unresolvedDefectCount } from '../src/lib/auto-ready-repo'
-import { applyDefectResolution, planDefectResolution, type ResolutionPlan } from '../src/lib/auto-ready-defect-resolution-store'
+import {
+  applyDefectResolution, applySemanticDefectResolution, planDefectResolution, planSemanticDefectResolution,
+  type ResolutionPlan,
+} from '../src/lib/auto-ready-defect-resolution-store'
 import { DEFECT_RESOLUTION_KEY, auditFingerprintOf } from '../src/lib/auto-ready-defect-resolution'
-import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
+import { SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, type SemanticAuditProvider } from '../src/lib/auto-ready-semantic-audit'
 import { QUALITY_CONTRACT_KEY, currentQualityContract } from '../src/lib/quality-contract'
 import { applyApprovedDefectResolution } from './lib/defect-resolution-approval.mjs'
 import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
+import { makeAuditContextLoader } from './lib/auto-ready-audit-context.mjs'
 import { LIFE_FIXTURES } from './lib/life-gate-fixtures.mjs'
 import { FIXTURE_NOW } from './lib/draft-gate-fixtures.mjs'
 import {
@@ -350,6 +354,54 @@ async function main(): Promise<void> {
       const r = spawnSync(TSX, bad, { cwd: ROOT, env: { ...process.env, HOME: home, SORAN_ISOLATED_DB: '' }, encoding: 'utf8' })
       check(`🔴 운영 인자 누락(${bad.slice(2).map((a) => a.split('=')[0]).join(' ')}) → exit 2 · write 0`, r.status === 2 && stableJson(await fullQueue(H.queueId)) === sH, r.stderr.slice(0, 160))
     }
+  }
+
+  console.log('\n⑪ 의미 재감사 no — 오탐만 append-only 해소 · 결속 변경/재시도/실제 결함은 write 0')
+  {
+    await wipeAuditFixtures(prisma)
+    const sf = newFixture(prisma, join(SCRATCH, 'semantic-home'))
+    await seedEvidence(sf, 30)
+    const cleanProvider: SemanticAuditProvider = {
+      model: SEMANTIC_AUDIT_MODEL,
+      complete: async () => ({ ok: true, text: JSON.stringify({ unsupportedFacts: [], lifeContradictions: [], sourceDistortions: [], defect: 'no' }) }),
+    }
+    const defectProvider: SemanticAuditProvider = {
+      model: SEMANTIC_AUDIT_MODEL,
+      complete: async () => ({ ok: true, text: JSON.stringify({
+        unsupportedFacts: [{ claim: '3억', why: '원문과 카드에 없다' }], lifeContradictions: [], sourceDistortions: [], defect: 'yes',
+      }) }),
+    }
+    const retryProvider: SemanticAuditProvider = {
+      model: SEMANTIC_AUDIT_MODEL,
+      complete: async () => ({ ok: false, code: 'HTTP_500', reason: 'fixture' }),
+    }
+    const S = await defectRow(sf, PASSING, { legacy: true })
+    const loadContext = makeAuditContextLoader(prisma, { artifactDir: sf.artifactDir, freshEachCall: true })
+    const beforeAudit = await auditTable()
+    const plan = await planSemanticDefectResolution(prisma, { queueId: S.queueId, loadContext, provider: cleanProvider, now: new Date() })
+    check('🟢 같은 글·원문·Persona를 새 감사 계약으로 측정한 no → semanticCleared 계획',
+      plan.kind === 'plan' && plan.plan.record.reverify.outcome === 'semanticCleared', JSON.stringify(plan).slice(0, 300))
+    check('🔴 계획은 감사 행·큐 write 0', await auditTable() === beforeAudit && resolutionsOf((await queueOf(S.queueId)).editDiff).length === 0)
+    const actual = await planSemanticDefectResolution(prisma, { queueId: S.queueId, loadContext, provider: defectProvider, now: new Date() })
+    check('🔴 실제 결함 yes 재감사 → refuse SEMANTIC_NOT_CLEAR · write 0', actual.kind === 'refuse' && actual.code === 'SEMANTIC_NOT_CLEAR')
+    const retry = await planSemanticDefectResolution(prisma, { queueId: S.queueId, loadContext, provider: retryProvider, now: new Date() })
+    check('🔴 제공사 실패 → refuse HTTP_500 · write 0', retry.kind === 'refuse' && retry.code === 'HTTP_500')
+    const applied = plan.kind === 'plan'
+      ? await applySemanticDefectResolution(prisma, { plan: plan.plan, loadContext, now: new Date() }) : null
+    check('🟢 semanticCleared 기록 1줄 append → 미해소 0 · 열림', applied?.kind === 'written'
+      && resolutionsOf((await queueOf(S.queueId)).editDiff).length === 1 && await unresolvedDefectCount(prisma) === 0 && (await gate()).open,
+    JSON.stringify(applied))
+    check('🔴 원래 감사 yes 행 전체는 그대로', await auditTable() === beforeAudit)
+
+    const T = await defectRow(sf, PASSING, { legacy: true })
+    const stale = await planSemanticDefectResolution(prisma, { queueId: T.queueId, loadContext, provider: cleanProvider, now: new Date() })
+    const art = sf.artifacts.find((x) => x.artifactId === T.artifactId)!
+    art.evidence = { spans: [{ kind: 'title', text: '바뀐 원문' }, { kind: 'head', text: '계획 뒤 바뀐 근거' }] }
+    flushArtifacts(sf)
+    const changed = stale.kind === 'plan'
+      ? await applySemanticDefectResolution(prisma, { plan: stale.plan, loadContext, now: new Date() }) : null
+    check('🔴 계획 뒤 원문 결속 변경 → changed · write 0', changed?.kind === 'changed'
+      && resolutionsOf((await queueOf(T.queueId)).editDiff).length === 0, JSON.stringify(changed))
   }
 
   await wipeAuditFixtures(prisma)

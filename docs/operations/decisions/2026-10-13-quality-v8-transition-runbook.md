@@ -89,6 +89,19 @@ npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --apply --produc
   --target=<staging SHA> --digest=<dry-run digest> --expect=<dry-run expect> --reason="quality-v8 활성화 전 해소"
 ```
 
+옛 의미 감사의 `measured yes`가 지금 초안 게이트의 확정 차단이 아닌 경우에는 일반 해소를 억지로 쓰지 않는다.
+`--semantic-clear`로 **같은 발행 글·원문 근거·Persona 카드·도장 결속**을 지금 의미 감사 계약에 다시 측정한다.
+새 판정이 `no`일 때만 별도 append-only 기록을 계획하며, `yes`·제공사 실패·결속 변경은 write 0으로 거부한다.
+
+```bash
+npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --semantic-clear
+npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --semantic-clear --apply --production --staged \
+  --target=<staging SHA> --digest=<dry-run digest> --expect=<dry-run expect> --reason="새 의미 감사 계약으로 옛 오탐 재검증"
+```
+
+원래 감사 `yes` 행은 수정·삭제하지 않는다. 해소 기록은 현재 품질 계약·감사 행 지문·발행 글 hash·원문·Persona·
+도장 결속에 묶이며, 이후 어느 하나라도 바뀌거나 품질 계약이 바뀌면 자동으로 무효가 된다.
+
 `--staged` 가드(`stagedGuardProblems`)가 전부 참이어야 열린다:
 - origin/main(fetch 직후) = staging HEAD = target이고, staging 트리가 깨끗해야 한다.
 - runtime HEAD = pin = manifest가 **서로 같고 target이 아니며**, target의 조상이어야 한다. 되돌아가는 배포에는 쓰지 않는다.

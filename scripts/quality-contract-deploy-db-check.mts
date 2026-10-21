@@ -35,7 +35,6 @@ import * as af from '../src/lib/micro-seed-supply-autofill'
 import { SEMANTIC_HOLD_CODES } from '../src/lib/semantic-summary-codes'
 import { planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
 import { DEFECT_RESOLUTION_KEY, type DefectResolutionRecord } from '../src/lib/auto-ready-defect-resolution'
-import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
 import { QUALITY_CONTRACT_KEY, currentQualityContract } from '../src/lib/quality-contract'
 import { runDeploy, type DeployEffects } from '../src/lib/runtime-deploy'
 import type { JobState } from '../src/lib/runtime-isolation'
@@ -121,7 +120,7 @@ async function defectRow(f: Fixture, fx: typeof BLOCKED, o: {
     where: { queueId: a.queueId },
     data: {
       defect: 'yes', judgedAt: f.now, auditor: 'model:semantic-audit:runner',
-      note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=measured binding=fx artifact=${a.artifactId} persona=${persona} card=fx] 결함 fixture`,
+      note: `[auto-ready-semantic-audit-v1 outcome=measured binding=fx artifact=${a.artifactId} persona=${persona} card=fx] 결함 fixture`,
       auditContractVersion: AUDIT_CONTRACT_VERSION, auditModel: 'rule:integrity-safety-audit+claude-haiku-4.5',
       auditPromptVersion: 'integrity-safety-v1+semantic-audit-prompt-v1',
     },

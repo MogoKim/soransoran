@@ -1,8 +1,8 @@
 {
-  "version": "quality-v14",
-  "digest": "c41c0e5536b238fdfb55dad2d86846fac26cb3a6d8c97eedd8f7f58e1533e16b",
+  "version": "quality-v15",
+  "digest": "f9344c08918651005a05725db0587cc5526f55c3d470998508ac7b6bab9dd149",
   "files": {
-    "src/lib/quality-contract.ts": "25f171732cbbc11dce98e4661c054ad6a7aed0d6019d289b1e52fb72920c8fc1",
+    "src/lib/quality-contract.ts": "82decba7da70141226882580131b9a0fba22a6f79aef397854aec2908ab2cc1f",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "c1edbb1e97bfecee7185e97078be869afa08ac8f96f5f6d4d72165b2a68eb811",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
@@ -26,19 +26,17 @@
     "src/lib/founder-gold.ts": "92e7ddb5629d29f4fac275333ab029ffadeb7a0da4a77fcc8f2cda95e05b6b74",
     "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
     "src/lib/persona-no-go.ts": "043c734ff551c93a5e5cfe18ebaf56c0b5087232efb0ecc75581ffdaf6bf4318",
-    "src/lib/auto-ready-defect-resolution.ts": "3a631b35672ecfa30fbe421a088e803686bd6117aeb851b38553235cee64281a",
-    "src/lib/auto-ready-defect-resolution-store.ts": "f3b74aff5cd6612ae3e7cea88c109dee7eb4278126e266c0b6960161611c3209",
+    "src/lib/auto-ready-defect-resolution.ts": "a3b1039d2876533d8cfeb7b348976dc168717f3674ecc188f27e80f60abba8a7",
+    "src/lib/auto-ready-defect-resolution-store.ts": "40a718a119213a02a468c8dd53a604aa66ea211f2de56c65df22440ae1e83cc7",
+    "src/lib/auto-ready-semantic-audit.ts": "1e41454dc597a51d6abb5b2f431f61fcb8b30df12ba066040fa5b0c7977ca3e5",
     "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v13 → quality-v14",
+    "kind": "behaviorUnchanged",
+    "reason": "quality-v15 의미 감사 파일과 판정 정의를 CI 지문 경계에 추가",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
-      "src/lib/auto-ready-v2.ts",
-      "src/lib/supply-schedule-contract.ts",
-      "src/lib/auto-ready-quality-cohort.ts"
+      "src/lib/auto-ready-semantic-audit.ts"
     ]
   }
 }

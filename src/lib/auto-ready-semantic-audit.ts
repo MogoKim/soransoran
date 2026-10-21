@@ -22,7 +22,8 @@
  *                      그런 행이 하나라도 있으면 자동 도장·발행이 즉시 닫힌다(저장 경로 참조).
  *    🔴 retryable 이 `no` 로 읽히는 길은 없다. `no` 는 측정이 끝나고 발견이 0 일 때 하나뿐이다.
  * 🔴 **판·모델·계약 상수는 무결성 감사자와 따로다.** 섞지 않는다.
- * 🔴 **품질 계약 digest 밖이다** — 이 파일의 상수는 `qualityContractComponents()` 에 들어가지 않는다.
+ * 🔴 **품질 계약의 일부다** — 이 감사가 Content Core의 최종 품질 결정을 뒤집을 수 있으므로
+ *    계약·프롬프트·모델 판은 `qualityContractComponents()`에 들어간다.
  * 🔴 순수 함수다 — DB·파일·네트워크를 모른다. 제공사는 `SemanticAuditProvider` 로 주입받는다.
  */
 import { createHash } from 'node:crypto'
@@ -35,9 +36,9 @@ import { LIFE_CONTRACT_FIELDS, lifeContractIdentity, type PersonaLifeContract } 
 // ─────────────────────────────────────────────────────────
 
 /** 🔴 의미 감사 계약의 판 — 판정 기준·출력 모양·묶음 구성이 바뀌면 올린다 */
-export const SEMANTIC_AUDIT_CONTRACT_VERSION = 'auto-ready-semantic-audit-v1'
+export const SEMANTIC_AUDIT_CONTRACT_VERSION = 'auto-ready-semantic-audit-v2'
 /** 🔴 프롬프트 판 — 지시문이 한 글자라도 바뀌면 올린다 */
-export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v1'
+export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v3'
 /**
  * 🔴 **의미 감사 모델** — 가격표(`llm-pricing`)에 단가가 있는 내부 라벨이어야 한다.
  *    초안 생성(`gemini-3.7-flash`)과 다른 계열을 쓴다 — 쓴 모델이 제 글을 채점하지 않게 한다.
@@ -152,10 +153,15 @@ export const SEMANTIC_AUDIT_SYSTEM_PROMPT = [
   '당신은 40대 중반~60대 중반 여성 커뮤니티에 이미 게시된 글을 사후 감사한다.',
   '입력은 JSON 이다 — "게시글"(실제로 게시된 제목·본문), "원문근거"(이 글의 바탕이 된 원문 조각),',
   '"글쓴이카드"(이 글을 쓴 사람으로 표시된 인물의 생활사). 세 가지를 서로 대조해 아래 셋만 찾는다.',
-  '1) unsupportedFacts: 원문근거에도 글쓴이카드에도 없는 구체적 사실(숫자·금액·장소·사건·진단 등)을 지어냈다.',
-  '   일반적인 감상·질문·인사는 사실이 아니다.',
-  '2) lifeContradictions: 글쓴이카드의 생활사(나이대·혼인·자녀·일·갱년기·부양 등)와 게시글이 어긋난다.',
-  '3) sourceDistortions: 원문근거의 뜻을 뒤집거나, 원문에 없는 결론을 원문이 한 말처럼 옮겼다.',
+  '이 감사는 Content Core의 bounded creativity 계약을 그대로 따른다. 원문 요약 여부를 검사하지 않는다.',
+  '감상·반응·질문·비유·연결 문장·일반적 관찰·새로운 구성과, 핵심 사실을 바꾸지 않는 자연스러운 강조·바꿔쓰기는 허용한다.',
+  '주체·행동·원인·결과를 바꾸지 않는 정도 부사·강조 부사의 추가는 새 사실이나 왜곡이 아니다.',
+  '세부 내용을 일부 생략했어도 사건의 주체·핵심 행동·원인·결과·결론을 바꾸지 않았다면 결함이 아니다.',
+  '1) unsupportedFacts: 원문근거에도 글쓴이카드에도 없는 구체적 사실(숫자·금액·장소·새 사건·진단 등)을 사실로 지어냈다.',
+  '   일반적인 감상·질문·인사·비유·연결·강조는 구체적 사실이 아니다.',
+  '2) lifeContradictions: 게시글의 같은 주어·같은 사실 축에 명시된 값이 글쓴이카드의 생활사와 양립 불가능하다.',
+  '   카드에 정보가 없거나 표현이 모호하다는 이유만으로 모순이라 하지 않는다.',
+  '3) sourceDistortions: 원문근거의 주체·핵심 행동·원인·결과·결론을 실질적으로 뒤집거나, 원문에 없는 결론을 원문이 한 말처럼 옮겼다.',
   '확실한 것만 적는다. 없으면 빈 배열이다. defect 는 셋 중 하나라도 비어 있지 않으면 "yes", 모두 비면 "no" 다.',
   '출력은 JSON 객체 하나뿐이다. 다른 글자를 쓰지 않는다:',
   '{"unsupportedFacts":[{"claim":"","why":""}],"lifeContradictions":[{"claim":"","card":""}],'

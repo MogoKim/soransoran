@@ -31,7 +31,6 @@ import { AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-v2'
 import { authoritativeGate, unresolvedDefectCount } from '../src/lib/auto-ready-repo'
 import { applyDefectResolution, planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
 import { DEFECT_RESOLUTION_KEY, type DefectResolutionRecord } from '../src/lib/auto-ready-defect-resolution'
-import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
 import { QUALITY_CONTRACT_KEY, currentQualityContract } from '../src/lib/quality-contract'
 import { applyApprovedDefectResolution } from './lib/defect-resolution-approval.mjs'
 import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
@@ -100,7 +99,7 @@ async function defectRow(f: Fixture, fx: typeof BLOCKED, mark: { version: string
     where: { queueId: a.queueId },
     data: {
       defect: 'yes', judgedAt: f.now, auditor: 'model:semantic-audit:runner',
-      note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=measured binding=fx artifact=${a.artifactId} persona=P04 card=fx] 결함 fixture`,
+      note: `[auto-ready-semantic-audit-v1 outcome=measured binding=fx artifact=${a.artifactId} persona=P04 card=fx] 결함 fixture`,
       auditContractVersion: AUDIT_CONTRACT_VERSION, auditModel: 'rule:integrity-safety-audit+claude-haiku-4.5',
       auditPromptVersion: 'integrity-safety-v1+semantic-audit-prompt-v1',
     },

@@ -31,7 +31,9 @@ const rec = (v: unknown): Record<string, unknown> =>
 /** 🔴 환경(정본 파일 읽기) 실패 코드 — 이것만 재시도 가능이다. 나머지 문맥 실패는 무결성이다 */
 export const ENV_READ_CODES: readonly string[] = ['ARTIFACT_INDEX_UNREADABLE', 'PERSONA_CANON_UNREADABLE']
 
-export function makeAuditContextLoader(prisma: PrismaClient, opts: { artifactDir?: string; poolDocPath?: string } = {}): AuditContextLoader {
+export function makeAuditContextLoader(prisma: PrismaClient, opts: {
+  artifactDir?: string; poolDocPath?: string; freshEachCall?: boolean
+} = {}): AuditContextLoader {
   let index: ArtifactIndex | null = null
   let indexError: string | null = null
   let cards: PoolCard[] | null = null
@@ -60,6 +62,12 @@ export function makeAuditContextLoader(prisma: PrismaClient, opts: { artifactDir
     ({ ok: false, code, reason, integrity: !ENV_READ_CODES.includes(code) })
 
   return async ({ queueId, postId }): Promise<SemanticContextResult> => {
+    if (opts.freshEachCall) {
+      index = null
+      indexError = null
+      cards = null
+      cardError = null
+    }
     const q = await prisma.originalPostApprovalQueue.findUnique({
       where: { id: queueId },
       select: {
