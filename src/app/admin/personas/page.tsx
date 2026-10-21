@@ -1,10 +1,21 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import { maskNickname, filledMark, STATUS_LABEL, formatKst } from '@/lib/persona-admin'
 import PersonaGlobalSwitchControl from '@/components/admin/PersonaGlobalSwitchControl'
+import AdminListFilter from '@/components/admin/AdminListFilter'
+import {
+  AdminPageHeader,
+  AdminEmptyState,
+  AdminTable,
+  AdminTableItem,
+  AdminCell,
+  adminBadgeClass,
+} from '@/components/admin/AdminUi'
+
+/** 데스크탑 열 폭 — 머리줄과 각 줄이 같은 값을 쓴다 */
+const COLS = 'lg:grid-cols-[4.5rem_minmax(0,1fr)_6rem_4.5rem_4.5rem_4.5rem_4.5rem_3.5rem]'
 
 /**
  * 페르소나 관제실 — 🔴 읽기 전용
@@ -35,15 +46,15 @@ export default async function AdminPersonasPage() {
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">
             홈으로 가기
           </Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -82,35 +93,17 @@ export default async function AdminPersonasPage() {
   const stopped = killSwitch?.enabled === true
 
   return (
-    <PageShell chrome="minimal">
-      <main className="mx-auto max-w-5xl px-4 pb-16">
-        <h1 className="pt-8 text-xl font-bold text-content-primary">페르소나 관제실</h1>
-        <p className="mt-1 text-sm text-content-muted">
-          읽기 전용입니다. 상태 전환 · 중지 · 수정은 아직 여기서 하지 않습니다.
-        </p>
+    <>
+      <div>
+        <AdminPageHeader
+          group="자동 운영"
+          title="페르소나 관제실"
+          description="읽기 전용입니다. 상태 전환 · 중지 · 수정은 아직 여기서 하지 않습니다."
+        />
 
-        {/* ── 구분 요약 — 실고객과 페르소나 ── */}
-        <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-lg border border-subtle bg-surface-card p-4">
-            <p className="text-xs text-content-muted">실회원</p>
-            <p className="mt-1 text-lg font-bold text-content-primary">{memberCount}명</p>
-          </div>
-          <div className="rounded-lg border border-subtle bg-surface-card p-4">
-            <p className="text-xs text-content-muted">페르소나</p>
-            <p className="mt-1 text-lg font-bold text-brand-ink">{personas.length}명</p>
-          </div>
-          <div className="rounded-lg border border-subtle bg-surface-card p-4">
-            <p className="text-xs text-content-muted">페르소나 글</p>
-            <p className="mt-1 text-lg font-bold text-content-primary">{linkedPosts}건</p>
-          </div>
-          <div className="rounded-lg border border-subtle bg-surface-card p-4">
-            <p className="text-xs text-content-muted">페르소나 댓글</p>
-            <p className="mt-1 text-lg font-bold text-content-primary">{linkedComments}건</p>
-          </div>
-        </section>
-
-        {/* ── 전체 중지 kill switch — 🔴 이 화면의 유일한 write ── */}
-        <section className="mt-4 rounded-lg border border-subtle bg-surface-card p-4">
+        {/* ── 전체 중지 kill switch — 🔴 이 화면의 유일한 write ──
+               맨 위에 둔다. 사고가 났을 때 찾아 내려가지 않게 한다(Admin Console V2). */}
+        <section className="mt-6 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
           <PersonaGlobalSwitchControl initialEnabled={stopped} exists={killSwitch !== null} />
           {killSwitch !== null ? (
             <p className="mt-2 text-xs text-content-muted">
@@ -121,97 +114,147 @@ export default async function AdminPersonasPage() {
           ) : null}
         </section>
 
-        {/* ── 페르소나 목록 ── */}
+        {/* ── 구분 요약 — 실고객과 페르소나 ── */}
+        <section className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
+            <p className="m-0 text-xs text-content-muted">실회원</p>
+            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{memberCount}명</p>
+          </div>
+          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
+            <p className="m-0 text-xs text-content-muted">페르소나</p>
+            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{personas.length}명</p>
+          </div>
+          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
+            <p className="m-0 text-xs text-content-muted">페르소나 글</p>
+            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{linkedPosts}건</p>
+          </div>
+          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
+            <p className="m-0 text-xs text-content-muted">페르소나 댓글</p>
+            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{linkedComments}건</p>
+          </div>
+        </section>
+
+        {/* ── 페르소나 목록 ──
+               🔴 30명 전체를 한 번에 불러온 그대로다(조회·정렬 변경 0). 거르기는 이 안에서만 한다.
+               데스크탑은 한 줄 표, 모바일은 세 줄 요약이다. 설정 칸은 줄마다 접어 둔다. */}
         {personas.length === 0 ? (
-          <p className="py-16 text-center text-content-muted">등록된 페르소나가 없습니다.</p>
+          <div className="mt-6">
+            <AdminEmptyState>등록된 페르소나가 없습니다.</AdminEmptyState>
+          </div>
         ) : (
-          <ul className="mt-6 flex list-none flex-col gap-3 p-0">
-            {personas.map((p) => {
-              const memoryCount =
-                p._count.selfMemories + p._count.relationships +
-                p._count.communityMemories + p._count.negativeMemories
-              const noGo = p.noGoTopics.length + p.noGoExpressions.length
-              return (
-                <li key={p.id} className="rounded-lg border border-subtle bg-surface-card p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-strong">
-                      {p.code}
+          <AdminListFilter
+            searchLabel="코드 찾기"
+            searchPlaceholder="예: P12"
+            chips={[
+              { key: 'all', label: '전체', count: personas.length },
+              ...Object.entries(STATUS_LABEL).map(([key, label]) => ({
+                key,
+                label,
+                count: personas.filter((p) => p.status === key).length,
+              })),
+            ]}
+          >
+            <AdminTable
+              columns={COLS}
+              head={
+                <>
+                  <span>코드</span>
+                  <span>이름</span>
+                  <span>상태</span>
+                  <span>일 상한</span>
+                  <span>주 상한</span>
+                  <span>침묵률</span>
+                  <span>발화</span>
+                  <span />
+                </>
+              }
+            >
+              {personas.map((p) => {
+                const memoryCount =
+                  p._count.selfMemories + p._count.relationships +
+                  p._count.communityMemories + p._count.negativeMemories
+                const noGo = p.noGoTopics.length + p.noGoExpressions.length
+                const masked = maskNickname(p.user.nickname ?? p.user.name)
+                return (
+                  <AdminTableItem
+                    key={p.id}
+                    columns={COLS}
+                    filterKey={p.status}
+                    searchText={`${p.code} ${masked}`}
+                    below={
+                      <details className="text-xs">
+                        <summary className="inline-flex min-h-[52px] lg:min-h-[44px] cursor-pointer items-center text-sm text-content-secondary">
+                          설정 · 기억 보기
+                        </summary>
+                        <dl className="m-0 mt-1 grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-surface-page p-3 sm:grid-cols-4">
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">identity</dt>
+                            <dd className="m-0 text-content-primary">{filledMark(p.identity)}</dd>
+                          </div>
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">voiceCore</dt>
+                            <dd className="m-0 text-content-primary">{filledMark(p.voiceCore)}</dd>
+                          </div>
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">variations</dt>
+                            <dd className="m-0 text-content-primary">{filledMark(p.voiceVariations)}</dd>
+                          </div>
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">rhythm</dt>
+                            <dd className="m-0 text-content-primary">{filledMark(p.activityRhythm)}</dd>
+                          </div>
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">noGo</dt>
+                            <dd className="m-0 text-content-primary">{noGo > 0 ? `${noGo}개` : '—'}</dd>
+                          </div>
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">memory</dt>
+                            <dd className="m-0 text-content-primary">{memoryCount > 0 ? `${memoryCount}건` : '—'}</dd>
+                          </div>
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">mood</dt>
+                            <dd className="m-0 text-content-primary">{p._count.moodStates}일</dd>
+                          </div>
+                          <div className="flex gap-1">
+                            <dt className="text-content-muted">생성</dt>
+                            <dd className="m-0 text-content-primary">{formatKst(p.createdAt)}</dd>
+                          </div>
+                        </dl>
+                      </details>
+                    }
+                  >
+                    {/* 모바일 첫 줄: 코드 · 이름 · 상태 / 데스크탑: 각자 한 칸 (lg:contents) */}
+                    <span className="flex flex-wrap items-center gap-2 lg:contents">
+                      <span className="text-base font-bold tabular-nums text-content-primary">{p.code}</span>
+                      {/* 🔴 마스킹. 전문은 상세에서만 */}
+                      <span className="text-sm text-content-primary">{masked}</span>
+                      <span>
+                        <span className={adminBadgeClass('neutral')}>{STATUS_LABEL[p.status] ?? p.status}</span>
+                      </span>
                     </span>
-                    {/* 🔴 마스킹. 전문은 상세에서만 */}
-                    <span className="text-sm font-bold text-content-primary">
-                      {maskNickname(p.user.nickname ?? p.user.name)}
-                    </span>
-                    <span className="rounded-md bg-surface-soft px-2 py-1 text-xs text-content-muted">
-                      {STATUS_LABEL[p.status] ?? p.status}
+                    <span className="flex flex-wrap gap-x-4 gap-y-1 lg:contents">
+                      <AdminCell label="일 상한" className="tabular-nums">{p.dailyCap ?? '—'}</AdminCell>
+                      <AdminCell label="주 상한" className="tabular-nums">{p.weeklyCap ?? '—'}</AdminCell>
+                      <AdminCell label="침묵률" className="tabular-nums">{p.silenceRate?.toString() ?? '—'}</AdminCell>
+                      <AdminCell label="발화" className="tabular-nums">{p._count.activityLogs}건</AdminCell>
                     </span>
                     <Link
                       href={`/admin/personas/${p.id}`}
-                      className="ml-auto text-xs text-link"
+                      className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link lg:justify-end"
                     >
                       상세
                     </Link>
-                  </div>
-
-                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">일 상한</dt>
-                      <dd className="text-content-primary">{p.dailyCap ?? '—'}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">주 상한</dt>
-                      <dd className="text-content-primary">{p.weeklyCap ?? '—'}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">침묵률</dt>
-                      <dd className="text-content-primary">{p.silenceRate?.toString() ?? '—'}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">발화</dt>
-                      <dd className="text-content-primary">{p._count.activityLogs}건</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">identity</dt>
-                      <dd className="text-content-primary">{filledMark(p.identity)}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">voiceCore</dt>
-                      <dd className="text-content-primary">{filledMark(p.voiceCore)}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">variations</dt>
-                      <dd className="text-content-primary">{filledMark(p.voiceVariations)}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">rhythm</dt>
-                      <dd className="text-content-primary">{filledMark(p.activityRhythm)}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">noGo</dt>
-                      <dd className="text-content-primary">{noGo > 0 ? `${noGo}개` : '—'}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">memory</dt>
-                      <dd className="text-content-primary">{memoryCount > 0 ? `${memoryCount}건` : '—'}</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">mood</dt>
-                      <dd className="text-content-primary">{p._count.moodStates}일</dd>
-                    </div>
-                    <div className="flex gap-1">
-                      <dt className="text-content-muted">생성</dt>
-                      <dd className="text-content-primary">{formatKst(p.createdAt)}</dd>
-                    </div>
-                  </dl>
-                </li>
-              )
-            })}
-          </ul>
+                  </AdminTableItem>
+                )
+              })}
+            </AdminTable>
+          </AdminListFilter>
         )}
 
         <p className="mt-8 text-xs text-content-muted">
           🔴 고객 화면에는 페르소나 표시가 없습니다(전략 §10-1). 구분은 여기에서만 합니다.
         </p>
-      </main>
-    </PageShell>
+      </div>
+    </>
   )
 }

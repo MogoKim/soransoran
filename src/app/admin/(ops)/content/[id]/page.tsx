@@ -91,7 +91,7 @@ export default async function AdminContentDetailPage({
   const hiddenComments = post.comments.filter((c) => c.isDeleted).length
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
         backHref="/admin/content"
         title={post.title}
@@ -172,7 +172,7 @@ export default async function AdminContentDetailPage({
              이 화면에 오는 이유는 대개 "무슨 글인지 보려고" 지 고치려는 것이 아니다. */}
       <section className="mt-4">
         <details>
-          <summary className="min-h-[44px] cursor-pointer list-none py-2 text-base font-bold text-content-primary">
+          <summary className="min-h-[52px] cursor-pointer lg:min-h-[44px] list-none py-2 text-base font-bold text-content-primary">
             글 내용 수정{' '}
             <span className="text-sm font-normal text-content-muted">
               (수정해도 작성자에게 알림이 가지 않습니다)
@@ -286,6 +286,6 @@ export default async function AdminContentDetailPage({
           </AdminActionGroup>
         )}
       </section>
-    </main>
+    </div>
   )
 }

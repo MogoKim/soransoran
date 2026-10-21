@@ -59,8 +59,8 @@ export default async function AdminHeroBannersPage() {
   const incomplete = banners.filter((b) => !b.isActive && canActivateHeroBanner(b) !== null).length
 
   return (
-    <main className="pt-2 lg:pt-0">
-      <AdminPageHeader title="배너 관리" />
+    <div>
+      <AdminPageHeader group="운영" title="배너 관리" />
 
       {/* 상단 요약 — 상태와 범위를 한 줄로. 큰 박스를 두지 않는다. */}
       <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -210,6 +210,6 @@ export default async function AdminHeroBannersPage() {
           </ul>
         </AdminSection>
       ) : null}
-    </main>
+    </div>
   )
 }

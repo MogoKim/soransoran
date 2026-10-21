@@ -10,7 +10,9 @@ import {
   AdminTable,
   AdminTableRow,
   AdminCell,
+  AdminRangeNote,
 } from '@/components/admin/AdminUi'
+import AdminListFilter from '@/components/admin/AdminListFilter'
 
 /**
  * 회원 목록 — 가볍게 훑고 상세로 넘어간다.
@@ -95,8 +97,9 @@ export default async function AdminMembersPage() {
   }
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
+        group="운영 › 회원"
         title="회원 관리"
         description={
           total > members.length
@@ -113,6 +116,25 @@ export default async function AdminMembersPage() {
           카카오로 가입한 회원이 아직 없습니다. 페르소나 계정은 여기 나오지 않습니다.
         </AdminEmptyState>
       ) : (
+        /* 🔴 거르기는 불러온 최근 가입 {TAKE}명 안에서만 한다 — 조회·정렬·take 는 그대로다(Phase 1). */
+        <AdminListFilter
+          searchLabel="닉네임 · 카카오 이름 찾기"
+          searchPlaceholder="불러온 회원 안에서 찾기"
+          chips={[
+            { key: 'all', label: '전체', count: members.length },
+            { key: 'blocked', label: '차단됨', count: members.filter((m) => m.isBlocked).length },
+            {
+              key: 'pending-report',
+              label: '신고 미처리',
+              count: members.filter((m) => (reportedAgainst.get(m.id)?.pending ?? 0) > 0).length,
+            },
+          ]}
+        >
+          <AdminRangeNote>
+            {total > members.length
+              ? `${total}명 중 최근 가입 ${members.length}명을 불러왔습니다. 거르기와 찾기는 이 범위 안에서만 됩니다.`
+              : `${total}명을 모두 불러왔습니다.`}
+          </AdminRangeNote>
         <AdminTable
           columns={COLS}
           head={
@@ -128,7 +150,13 @@ export default async function AdminMembersPage() {
           {members.map((m) => {
             const against = reportedAgainst.get(m.id)
             return (
-              <AdminTableRow key={m.id} href={`/admin/members/${m.id}`} columns={COLS}>
+              <AdminTableRow
+                key={m.id}
+                href={`/admin/members/${m.id}`}
+                columns={COLS}
+                filterKey={`${m.isBlocked ? 'blocked' : ''}${against?.pending ? ' pending-report' : ''}`}
+                searchText={`${m.nickname ?? ''} ${m.name ?? ''}`}
+              >
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate font-bold text-content-primary">
                     {m.nickname ?? '(닉네임 없음)'}
@@ -138,7 +166,9 @@ export default async function AdminMembersPage() {
                   </span>
                 </span>
 
-                <AdminCell label="이메일" className="truncate">
+                {/* 모바일은 메타 칸을 한 줄로 모은다(A 모바일). 데스크탑은 lg:contents 로 각 칸이 표의 열이 된다 */}
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 lg:contents">
+                <AdminCell label="이메일" className="min-w-0 max-w-full truncate">
                   {m.email ?? <span className="text-content-muted">없음</span>}
                 </AdminCell>
 
@@ -161,12 +191,14 @@ export default async function AdminMembersPage() {
                   {m.isAdmin ? <AdminBadge tone="brand">운영자</AdminBadge> : null}
                   {!m.isOnboarded ? <AdminBadge>온보딩 전</AdminBadge> : null}
                 </span>
+                </span>
               </AdminTableRow>
             )
           })}
         </AdminTable>
+        </AdminListFilter>
       )}
 
-    </main>
+    </div>
   )
 }

@@ -72,9 +72,9 @@ function StatRow({
 /** 큰 숫자 한 칸 — 제목 · 값 · 분모 설명 */
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
-    <div className="rounded-lg border border-subtle bg-surface-card p-3">
+    <div className="rounded-[10px] border border-[color:var(--admin-card-line)] bg-surface-card px-4 py-3">
       <p className="m-0 text-sm text-content-muted">{label}</p>
-      <p className="m-0 mt-1 break-words text-lg font-bold tabular-nums text-content-primary">{value}</p>
+      <p className="m-0 mt-1 break-words text-2xl font-bold tabular-nums text-content-primary">{value}</p>
       {note ? <p className="m-0 mt-1 text-xs text-content-muted">{note}</p> : null}
     </div>
   )
@@ -93,8 +93,9 @@ export default async function AdminCustomerCompositionPage() {
   const sevenDayDenominator = totalOf(data.sevenDay.complete)
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
+        group="운영 › 회원"
         title="고객 구성"
         description={`집계 기준 ${formatKst(data.measuredAt)} · 분석연령 기준연도 ${data.baseYear}년(KST)`}
       />
@@ -280,6 +281,6 @@ export default async function AdminCustomerCompositionPage() {
           <li>방문 기록이 없어 재방문은 셀 수 없습니다. 7일 내 참여는 가입 당일 바로 쓴 경우도 포함합니다.</li>
         </ul>
       </AdminSection>
-    </main>
+    </div>
   )
 }

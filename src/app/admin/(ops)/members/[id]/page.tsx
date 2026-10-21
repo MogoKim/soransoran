@@ -76,7 +76,7 @@ function ReportRow({
       <AdminStatusBadge kind="report" value={status} />
       <span className="text-content-muted">{formatKst(createdAt)}</span>
       {postId ? (
-        <Link href={`/admin/content/${postId}`} className="text-link">
+        <Link href={`/admin/content/${postId}`} className="inline-flex min-h-[52px] items-center text-link lg:min-h-[44px]">
           대상 글 보기
         </Link>
       ) : commentId ? (
@@ -183,7 +183,7 @@ export default async function AdminMemberDetailPage({
   const hiddenPosts = member.posts.filter((p) => p.status !== 'PUBLISHED').length
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
         backHref="/admin/members"
         title={member.nickname ?? member.name ?? '회원'}
@@ -428,6 +428,6 @@ export default async function AdminMemberDetailPage({
           차단된 회원입니다. 글과 댓글은 그대로 남아 있고, 새로 쓰는 것만 막혀 있습니다.
         </AdminQuote>
       ) : null}
-    </main>
+    </div>
   )
 }

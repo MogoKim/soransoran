@@ -7,6 +7,7 @@ import {
 } from '@/lib/actions/persona-target'
 import { canSetTarget } from '@/lib/persona-target-rules'
 import type { CandidateStatus } from '@/lib/persona-candidate-rules'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 발행 대상 글 선택 — 🔴 발행이 아니다
@@ -75,24 +76,24 @@ export default function PersonaCandidateTarget({
   }
 
   return (
-    <div className="mt-3 rounded-lg border border-gray-300 bg-white px-4 py-3">
-      <h3 className="text-sm font-bold text-gray-700">발행 대상 글</h3>
+    <div className="mt-3 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+      <h3 className="text-sm font-bold text-content-secondary">발행 대상 글</h3>
 
-      <p className="mt-1 text-xs leading-relaxed text-gray-500">
+      <p className="mt-1 text-xs leading-relaxed text-content-muted">
         어느 글에 댓글을 달지 정합니다. 🔴 정한다고 발행되지 않습니다.
       </p>
 
       <p className="mt-2 text-sm">
         현재:{' '}
         {current === null ? (
-          <span className="text-gray-500">지정 안 됨 — 이 상태로는 발행이 막힙니다</span>
+          <span className="text-content-muted">지정 안 됨 — 이 상태로는 발행이 막힙니다</span>
         ) : (
           <span className="font-mono text-xs">{current}</span>
         )}
       </p>
 
       {!editable ? (
-        <p className="mt-2 text-sm text-gray-600">
+        <p className="mt-2 text-sm text-content-secondary">
           {publishedCommentId !== null
             ? '이미 발행된 후보입니다 — 대상 글을 바꿀 수 없습니다.'
             : `대기(PENDING) · 승인(APPROVED) 상태만 지정할 수 있습니다. 현재 ${status}.`}
@@ -106,13 +107,13 @@ export default function PersonaCandidateTarget({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="제목으로 찾기 (비우면 최신순)"
               disabled={pending}
-              className="min-h-[52px] flex-1 rounded-lg border border-gray-300 px-3 text-sm"
+              className="min-h-[52px] flex-1 rounded-lg border border-interactive bg-surface-card px-3 text-sm lg:min-h-[44px]"
             />
             <button
               type="button"
               onClick={runSearch}
               disabled={pending}
-              className="min-h-[52px] rounded-lg border border-gray-400 bg-white px-5 text-sm font-bold text-gray-700 disabled:opacity-50"
+              className={adminButtonClass('secondary')}
             >
               {pending ? '찾는 중…' : '글 찾기'}
             </button>
@@ -121,7 +122,7 @@ export default function PersonaCandidateTarget({
                 type="button"
                 onClick={runClear}
                 disabled={pending}
-                className="min-h-[52px] rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-600 disabled:opacity-50"
+                className={adminButtonClass('secondary', 'px-4')}
               >
                 지정 해제
               </button>
@@ -131,17 +132,17 @@ export default function PersonaCandidateTarget({
           {posts !== null && (
             <div className="mt-3">
               {posts.length === 0 ? (
-                <p className="text-sm text-gray-500">조건에 맞는 글이 없습니다.</p>
+                <p className="text-sm text-content-muted">조건에 맞는 글이 없습니다.</p>
               ) : (
                 <ul className="list-none space-y-2 p-0">
                   {posts.map((p) => (
                     <li
                       key={p.id}
                       className={`rounded-lg border px-3 py-2 ${
-                        p.eligible ? 'border-gray-200' : 'border-gray-200 bg-gray-50'
+                        p.eligible ? 'border-subtle bg-surface-card' : 'border-subtle bg-surface-page'
                       }`}
                     >
-                      <div className="flex flex-wrap items-center gap-x-2 text-xs text-gray-500">
+                      <div className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
                         <span>{p.boardLabel}</span>
                         <span aria-hidden>·</span>
                         <span>{p.createdAt.slice(0, 10)}</span>
@@ -151,21 +152,21 @@ export default function PersonaCandidateTarget({
                         </span>
                       </div>
                       {/* 🔴 제목까지다. 본문은 그리지 않는다 */}
-                      <p className="mt-1 text-sm font-bold text-gray-900">{p.title}</p>
+                      <p className="mt-1 text-sm font-bold text-content-primary">{p.title}</p>
 
                       {p.eligible ? (
                         <button
                           type="button"
                           onClick={() => runSet(p.id)}
                           disabled={pending || p.id === current}
-                          className="mt-2 min-h-[52px] rounded-lg bg-cta px-4 text-sm font-bold text-content-primary disabled:opacity-50"
+                          className={adminButtonClass('primary', 'mt-2 px-4')}
                         >
                           {p.id === current ? '지정됨' : '이 글로 지정'}
                         </button>
                       ) : (
                         <ul className="mt-2 list-none space-y-0.5 p-0">
                           {p.blocks.map((b) => (
-                            <li key={b.code} className="text-xs text-amber-900">
+                            <li key={b.code} className="text-xs text-content-primary">
                               <span className="font-mono">[{b.code}]</span> {b.message}
                             </li>
                           ))}
@@ -181,9 +182,9 @@ export default function PersonaCandidateTarget({
       )}
 
       {blocks.length > 0 && (
-        <ul className="mt-3 list-none space-y-1 rounded bg-amber-50 px-3 py-2 p-0">
+        <ul className="mt-3 list-none space-y-1 rounded-lg border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 p-0">
           {blocks.map((b) => (
-            <li key={b.code} className="text-xs text-amber-900">
+            <li key={b.code} className="text-xs text-content-primary">
               <span className="font-mono">[{b.code}]</span> {b.message}
             </li>
           ))}
@@ -191,7 +192,7 @@ export default function PersonaCandidateTarget({
       )}
 
       {error !== null && (
-        <p className="mt-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>
+        <p className="mt-3 rounded-lg border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
       )}
     </div>
   )

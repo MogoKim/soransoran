@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import PageShell from '@/components/layouts/PageShell'
+import { adminBadgeClass } from '@/components/admin/AdminUi'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import {
@@ -39,12 +39,12 @@ export default async function AdminPersonaDetailPage({
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <Link href="/" className="mt-6 inline-block text-link">홈으로 가기</Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -111,33 +111,33 @@ export default async function AdminPersonaDetailPage({
   ]
 
   return (
-    <PageShell chrome="minimal">
-      <main className="mx-auto max-w-3xl px-4 pb-16">
-        <Link href="/admin/personas" className="mt-8 inline-block text-xs text-link">
+    <>
+      <div className="max-w-3xl">
+        <Link href="/admin/personas" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
           ← 관제실
         </Link>
 
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-strong">
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <span className={`${adminBadgeClass('neutral')} font-bold tabular-nums`}>
             {persona.code}
           </span>
-          <h1 className="text-xl font-bold text-content-primary">
+          <h1 className="m-0 break-words text-xl font-bold leading-snug text-content-primary">
             {/* 🔴 상세에서만 전문을 보여준다 */}
             {persona.user.nickname ?? persona.user.name ?? '(이름 없음)'}
           </h1>
-          <span className="rounded-md bg-surface-soft px-2 py-1 text-xs text-content-muted">
+          <span className={adminBadgeClass('neutral')}>
             {STATUS_LABEL[persona.status] ?? persona.status}
           </span>
         </div>
-        <p className="mt-1 text-xs text-content-muted">
+        <p className="mt-2 text-xs text-content-muted">
           목록에서는 {maskNickname(persona.user.nickname ?? persona.user.name)} 로 마스킹됩니다.
         </p>
 
-        <section className="mt-4 rounded-lg border border-subtle bg-surface-card p-4">
+        <section className="mt-6 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-bold text-content-primary">전체 중지 스위치</span>
-            {/* 🔴 enabled = "중지" 다 */}
-            <span className="rounded-md bg-surface-soft px-2 py-1 text-xs text-content-muted">
+            {/* 🔴 enabled = "중지" 다. 중지가 켜진 상태만 빨간 배지로 눈에 건다 — 문구는 그대로 */}
+            <span className={adminBadgeClass(killSwitch?.enabled === true ? 'danger' : 'neutral')}>
               {killSwitch?.enabled === true
                 ? '중지 켜짐'
                 : killSwitch === null
@@ -145,7 +145,7 @@ export default async function AdminPersonaDetailPage({
                   : '중지 꺼짐'}
             </span>
             {/* 🔴 전환은 목록에서만 한다 — write 경로를 한 곳으로 모은다 */}
-            <Link href="/admin/personas" className="text-xs text-link">
+            <Link href="/admin/personas" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
               관제실에서 전환
             </Link>
           </div>
@@ -157,14 +157,14 @@ export default async function AdminPersonaDetailPage({
           ) : null}
         </section>
 
-        <table className="mt-4 w-full table-fixed border-collapse text-sm">
+        <table className="mt-6 w-full table-fixed border-collapse rounded-[10px] bg-surface-card text-sm">
           <tbody>
             {rows.map(([label, value]) => (
-              <tr key={label} className="border-b border-subtle">
-                <th className="w-2/5 py-2 pr-2 text-left align-top font-normal text-content-muted">
+              <tr key={label} className="border-b border-subtle last:border-b-0">
+                <th className="w-2/5 px-4 py-3 text-left align-top font-normal text-content-muted [overflow-wrap:anywhere]">
                   {label}
                 </th>
-                <td className="py-2 align-top text-content-primary break-words">{value}</td>
+                <td className="px-4 py-3 align-top text-content-primary [overflow-wrap:anywhere]">{value}</td>
               </tr>
             ))}
           </tbody>
@@ -175,16 +175,16 @@ export default async function AdminPersonaDetailPage({
           내용 열람은 별도 승인 후 붙입니다 — 관계 기억에는 회원 정보가 섞입니다.
         </p>
 
-        <h2 className="mt-8 text-lg font-bold text-content-primary">변경 이력</h2>
+        <h2 className="mt-10 text-lg font-bold text-content-primary">변경 이력</h2>
         <p className="mt-1 text-xs text-content-muted">최근 100건 · 총 {auditLogs.length}건</p>
         {auditLogs.length === 0 ? (
-          <p className="py-8 text-center text-sm text-content-muted">이력이 없습니다.</p>
+          <p className="mt-3 rounded-[10px] border border-dashed border-interactive px-4 py-6 text-sm text-content-muted">이력이 없습니다.</p>
         ) : (
           <ul className="mt-3 flex list-none flex-col gap-2 p-0">
             {auditLogs.map((log) => (
-              <li key={log.id} className="rounded-lg border border-subtle bg-surface-card p-3">
+              <li key={log.id} className="rounded-[10px] border border-subtle bg-surface-card p-4">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-strong">
+                  <span className={`${adminBadgeClass('neutral')} font-bold`}>
                     {AUDIT_ACTION_LABEL[log.action] ?? log.action}
                   </span>
                   {log.fromStatus !== null || log.toStatus !== null ? (
@@ -209,7 +209,7 @@ export default async function AdminPersonaDetailPage({
             ))}
           </ul>
         )}
-      </main>
-    </PageShell>
+      </div>
+    </>
   )
 }

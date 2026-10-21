@@ -97,8 +97,8 @@ export default async function AdminReportsPage() {
   ])
 
   return (
-    <main className="pt-2 lg:pt-0">
-      <AdminPageHeader title="신고" />
+    <div>
+      <AdminPageHeader group="운영" title="신고" />
 
       {/* 상단 요약 — /admin/home 과 같은 리듬. 미처리가 0이어도 상태를 한 줄로 말한다 */}
       <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -130,7 +130,7 @@ export default async function AdminReportsPage() {
       {handled.length > 0 ? (
         <section className="mt-6 border-t border-subtle pt-4">
           <details>
-            <summary className="min-h-[44px] cursor-pointer list-none py-2 text-sm font-bold text-content-primary">
+            <summary className="min-h-[52px] cursor-pointer lg:min-h-[44px] list-none py-2 text-sm font-bold text-content-primary">
               처리한 신고 {handled.length}건 보기{' '}
               <span className="font-normal text-content-muted">(최신순)</span>
             </summary>
@@ -142,6 +142,6 @@ export default async function AdminReportsPage() {
           </details>
         </section>
       ) : null}
-    </main>
+    </div>
   )
 }

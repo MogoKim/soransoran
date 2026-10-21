@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import PageShell from '@/components/layouts/PageShell'
 import EvidenceBatchReview from '@/components/admin/EvidenceBatchReview'
+import { AdminPageHeader } from '@/components/admin/AdminUi'
 import { requireAdmin } from '@/lib/admin'
 
 /**
@@ -23,24 +23,27 @@ export default async function AutoReadyEvidencePage() {
   const { ok } = await requireAdmin()
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">홈으로 가기</Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
   return (
-    <PageShell chrome="minimal">
-      <main className="mx-auto max-w-3xl px-4 py-8">
-        <h1 className="mb-2 text-xl font-bold text-content-primary">자동 READY 증거 — 배치 검토</h1>
-        <p className="mb-6 text-sm text-content-muted">
-          묶음 하나를 올려 모든 행을 한 번에 검토합니다. 사람 검토 기록만 자동 READY 정확도 표본이 됩니다.
-        </p>
-        <EvidenceBatchReview />
-      </main>
-    </PageShell>
+    <>
+      <div className="w-full">
+        <AdminPageHeader
+          group="자동 운영 › 자동 READY 품질"
+          title="자동 READY 증거 — 배치 검토"
+          description="묶음 하나를 올려 모든 행을 한 번에 검토합니다. 사람 검토 기록만 자동 READY 정확도 표본이 됩니다."
+        />
+        <div className="mt-6">
+          <EvidenceBatchReview />
+        </div>
+      </div>
+    </>
   )
 }

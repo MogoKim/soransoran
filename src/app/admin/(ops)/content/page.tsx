@@ -10,7 +10,9 @@ import {
   AdminTable,
   AdminTableRow,
   AdminCell,
+  AdminRangeNote,
 } from '@/components/admin/AdminUi'
+import AdminListFilter from '@/components/admin/AdminListFilter'
 
 /**
  * 게시글 목록.
@@ -52,8 +54,9 @@ export default async function AdminContentPage() {
   ])
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
+        group="운영"
         title="게시글"
         description={
           total > posts.length
@@ -65,6 +68,24 @@ export default async function AdminContentPage() {
       {posts.length === 0 ? (
         <AdminEmptyState>아직 올라온 글이 없습니다.</AdminEmptyState>
       ) : (
+        /* 🔴 거르기는 불러온 최신 {TAKE}건 안에서만 한다 — 조회·정렬·take 는 그대로다(Phase 1).
+              서버 검색·페이지는 Phase 2 에서 실제로 연결될 때 붙인다. 가짜 페이지 버튼은 그리지 않는다. */
+        <AdminListFilter
+          searchLabel="제목 · 작성자 찾기"
+          searchPlaceholder="불러온 글 안에서 찾기"
+          chips={[
+            { key: 'all', label: '전체', count: posts.length },
+            { key: 'PUBLISHED', label: '공개', count: posts.filter((p) => p.status === 'PUBLISHED').length },
+            { key: 'HIDDEN', label: '숨김', count: posts.filter((p) => p.status === 'HIDDEN').length },
+            { key: 'DELETED', label: '삭제됨', count: posts.filter((p) => p.status === 'DELETED').length },
+            { key: 'reported', label: '신고 있음', count: posts.filter((p) => p._count.reports > 0).length },
+          ]}
+        >
+          <AdminRangeNote>
+            {total > posts.length
+              ? `전체 ${total}건 중 최신 ${posts.length}건을 불러왔습니다. 거르기와 찾기는 이 범위 안에서만 됩니다.`
+              : `전체 ${total}건을 불러왔습니다.`}
+          </AdminRangeNote>
         <AdminTable
           columns={COLS}
           head={
@@ -82,6 +103,8 @@ export default async function AdminContentPage() {
               key={p.id}
               href={`/admin/content/${p.id}`}
               columns={COLS}
+              filterKey={`${p.status}${p._count.reports > 0 ? ' reported' : ''}`}
+              searchText={`${p.title} ${p.author.nickname ?? p.author.name ?? ''}`}
               /* 🔴 행 전체를 분홍으로 칠하지 않는다. 목록의 절반이 가려진 글일 때
                  화면이 온통 분홍이 되어 오히려 아무것도 눈에 안 띈다. 얇은 왼쪽 선만 둔다. */
               accent={p.status === 'PUBLISHED' ? undefined : 'muted'}
@@ -93,6 +116,8 @@ export default async function AdminContentPage() {
                 {p.title}
               </span>
 
+              {/* 모바일은 메타 칸을 한 줄로 모은다(A 모바일). 데스크탑은 lg:contents 로 각 칸이 표의 열이 된다 */}
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1 lg:contents">
               <AdminCell label="게시판">{boardLabel(p.boardType)}</AdminCell>
 
               <AdminCell label="작성자">
@@ -114,11 +139,13 @@ export default async function AdminContentPage() {
                 ) : null}
                 <span className="text-xs text-content-muted">댓글 {p._count.comments}</span>
               </span>
+              </span>
             </AdminTableRow>
           ))}
         </AdminTable>
+        </AdminListFilter>
       )}
 
-    </main>
+    </div>
   )
 }

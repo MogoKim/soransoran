@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react'
 import { decidePersonaCandidate } from '@/lib/actions/persona-candidate'
 import { DECLINE_REASONS, canDecide, type CandidateStatus } from '@/lib/persona-candidate-rules'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 후보 결정 — 승인 · 폐기
@@ -32,7 +33,7 @@ export default function PersonaCandidateDecision({
 
   if (!decidable) {
     return (
-      <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600">
+      <div className="rounded-[10px] border border-subtle bg-surface-page px-4 py-3 text-sm text-content-secondary">
         이미 결정된 후보입니다 (현재 {status}). 대기 상태만 결정할 수 있습니다.
       </div>
     )
@@ -60,7 +61,7 @@ export default function PersonaCandidateDecision({
 
   if (done !== null) {
     return (
-      <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-900">
+      <div className="rounded-[10px] border border-state-success bg-[color:var(--admin-success-soft)] px-4 py-3 text-sm text-content-primary">
         처리했습니다 — {done}.
         {done === 'APPROVED' && ' 🔴 승인이지 발행이 아닙니다. 고객 화면에 올라가지 않았습니다.'}
       </div>
@@ -68,9 +69,9 @@ export default function PersonaCandidateDecision({
   }
 
   return (
-    <div className="rounded-lg bg-amber-50 px-4 py-3">
+    <div className="rounded-[10px] border-2 border-content-primary bg-surface-card p-4 lg:p-6">
       <div className="mb-3">
-        <label htmlFor="decline-reason" className="mb-1 block text-xs font-bold text-amber-900">
+        <label htmlFor="decline-reason" className="mb-1 block text-xs font-bold text-content-primary">
           폐기 사유 (폐기할 때만)
         </label>
         <select
@@ -78,7 +79,7 @@ export default function PersonaCandidateDecision({
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           disabled={pending}
-          className="min-h-[52px] w-full rounded-lg border border-gray-300 bg-white px-3 text-sm"
+          className="min-h-[52px] w-full rounded-lg border border-interactive bg-surface-card px-3 text-sm lg:min-h-[44px]"
         >
           <option value="">— 선택 —</option>
           {DECLINE_REASONS.map((r) => (
@@ -94,7 +95,7 @@ export default function PersonaCandidateDecision({
           type="button"
           onClick={() => run('approve')}
           disabled={pending}
-          className="min-h-[52px] rounded-lg bg-cta px-5 text-sm font-bold text-content-primary disabled:opacity-50"
+          className={adminButtonClass('primary')}
         >
           {pending ? '처리 중…' : '승인'}
         </button>
@@ -102,7 +103,7 @@ export default function PersonaCandidateDecision({
           type="button"
           onClick={() => run('decline')}
           disabled={pending}
-          className="min-h-[52px] rounded-lg border border-gray-400 bg-white px-5 text-sm text-gray-700 disabled:opacity-50"
+          className={adminButtonClass('danger')}
         >
           폐기
         </button>
@@ -110,20 +111,20 @@ export default function PersonaCandidateDecision({
           type="button"
           disabled
           title="editedText · editDiff 가 필요해 다음 단계로 미뤘습니다"
-          className="min-h-[52px] cursor-not-allowed rounded-lg border border-gray-300 bg-gray-100 px-5 text-sm text-gray-400"
+          className={adminButtonClass('secondary')}
         >
           수정 후 승인
         </button>
       </div>
 
-      <p className="mt-2 text-xs leading-relaxed text-amber-900">
+      <p className="mt-2 text-xs leading-relaxed text-content-primary">
         🔴 승인해도 발행되지 않습니다. 고객 화면에 올라가지 않고 APPROVED 에 머뭅니다.
         <br />
         수정 후 승인은 수정본과 diff 기록이 필요해 다음 단계로 미뤘습니다.
       </p>
 
       {error !== null && (
-        <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>
+        <p className="mt-2 rounded-lg border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
       )}
     </div>
   )
