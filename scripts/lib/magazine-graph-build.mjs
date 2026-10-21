@@ -359,6 +359,8 @@ export function validateBuiltArtifacts({ intents, edges, mappings, participation
     if (!isStr(e.policyScopeWhy) || !isStr(e.automationDecisionWhy) || !isStr(e.runtimeWhy)) bad.push(`${at} 계산 사유 누락`)
     if (!nullableStr(e.fromCluster) || !nullableStr(e.toCluster)) bad.push(`${at} cluster 형식 오류`)
     if (typeof e.exposeNow !== 'boolean' || typeof e.crossCluster !== 'boolean') bad.push(`${at} boolean 필드 형식 오류`)
+    // 🔴 형식이 아니라 값 — crossCluster 는 산출 cluster 두 값에서만 나온다. COMMUNITY 는 언제나 false
+    else if (e.crossCluster !== (e.relationType === 'COMMUNITY' ? false : e.fromCluster !== e.toCluster)) bad.push(`${at} crossCluster 가 산출 fromCluster·toCluster 와 어긋난다`)
     if (!Array.isArray(e.fromLive) || !e.fromLive.every(isStr) || !Array.isArray(e.toLive) || !e.toLive.every(isStr)) bad.push(`${at} fromLive·toLive 형식 오류`)
     if (!isPlain(e.layers) || !['DESIGN', 'AUTOMATION_READY', 'RUNTIME_ACTIVE'].every((k) => typeof e.layers[k] === 'boolean')) bad.push(`${at} layers 가 boolean 이 아니다`)
     if (!isPlain(e.layerWhy)) bad.push(`${at} layerWhy 형식 오류`)
@@ -594,6 +596,10 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
     else if (!isCommunity && !tLive.length) { runtimeState = 'UNPUBLISHED'; runtimeWhy = '🔴 도착 글이 아직 공개되지 않았다' }
     else { runtimeState = 'ACTIVE'; runtimeWhy = '✅ 구현된 표면 · 출발 글 공개됨' }
     const recommendationSlot = RELATION_TO_SLOT[e.relationType] ?? null
+    // 🔴 cluster 는 한 번만 계산한다 — canonical magazineCluster → 입력 edge cluster → null.
+    //    crossCluster 를 canonical 값끼리 따로 비교하면 한쪽이 null 일 때 산출 cluster 와 어긋난다 (2026-10-21 실측 74건)
+    const fromCluster = I[e.fromIntentId]?.magazineCluster ?? e.fromCluster ?? null
+    const toCluster = isCommunity ? null : (I[e.toIntentId]?.magazineCluster ?? e.toCluster ?? null)
     return { schemaVersion: 'edge/3', edgeId: e.edgeId, recommendationSlot,
       fromIntentId: e.fromIntentId, toIntentId: e.toIntentId, relationType: e.relationType,
       readerReason: e.readerReason, anchorLabel: e.anchorLabel,
@@ -605,9 +611,7 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
       automationDecision: arOk ? 'PASS' : (f.why || t.why || '').includes('REJECT') ? 'REJECT' : 'HOLD',
       automationDecisionWhy: arOk ? '양 끝 intent 가 PASS 이고 격리되지 않았다' : `🔴 ${arWhy}`,
       runtimeState, runtimeWhy, exposeNow: runtimeState === 'ACTIVE',
-      fromCluster: I[e.fromIntentId]?.magazineCluster ?? e.fromCluster ?? null,
-      toCluster: isCommunity ? null : (I[e.toIntentId]?.magazineCluster ?? e.toCluster ?? null),
-      crossCluster: isCommunity ? false : ((I[e.fromIntentId]?.magazineCluster ?? null) !== (I[e.toIntentId]?.magazineCluster ?? null)),
+      fromCluster, toCluster, crossCluster: isCommunity ? false : fromCluster !== toCluster,
       fromLive: fLive, toLive: tLive, riskNote: e.riskNote ?? null,
       layers: { DESIGN: designOk, AUTOMATION_READY: arOk, RUNTIME_ACTIVE: runtimeState === 'ACTIVE' },
       layerWhy: { design: designWhy, automationReady: arWhy, runtime: runtimeWhy },

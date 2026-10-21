@@ -24,7 +24,7 @@ const CHECK = path.join(HERE, 'magazine-graph-control-edit-check.mjs')
 
 const HELPER_MUTATIONS = [
   { id: 'CE2 중복 추가 허용', from: "  if (cs.includes(cluster)) fail('CLUSTER_ALREADY_PRESENT'", to: "  if (false) fail('CLUSTER_ALREADY_PRESENT'",
-    expect: '이미 money-work 가 있으면' },
+    expect: '이미 켜진 cluster 면' },
   { id: 'CE3 없는 cluster 제거 허용', from: "  if (!cs.includes(cluster)) fail('CLUSTER_NOT_PRESENT'", to: "  if (false) fail('CLUSTER_NOT_PRESENT'",
     expect: '없는 cluster 제거는' },
   { id: 'CE4 사후조건(cluster 기대값) 제거', from: '  if (JSON.stringify(after.enabledClusters) !== JSON.stringify(nextClusters)) {',
@@ -57,6 +57,9 @@ const CONSUMER_MUTATIONS = [
   { id: 'CE1b graph-build 3b 가 helper 대신 고정 문자열', file: 'scripts/magazine-graph-build-check.mjs',
     from: "    const { text: control } = ensureCluster(pt.control, 'money-work')",
     to: "    const control = pt.control.replace(\"enabledClusters: ['sleep', 'family'],\", \"enabledClusters: ['sleep', 'family', 'money-work'],\")", expect: '세 소비처가' },
+  { id: 'CE1d graph-build 최종 입력 5 가 helper 대신 고정 문자열', file: 'scripts/magazine-graph-build-check.mjs',
+    from: "    const mwControl = ensureCluster(pt.control, 'money-work').text",
+    to: "    const mwControl = pt.control.replace(\"enabledClusters: ['sleep', 'family'],\", \"enabledClusters: ['sleep', 'family', 'money-work'],\")", expect: '세 소비처가' },
   { id: 'CE1c relation-policy 가 helper 대신 고정 문자열', file: 'scripts/magazine-relation-policy-check.mjs',
     from: "    const { text: control } = controlEdit.ensureCluster(productTexts.control, 'money-work')",
     to: "    const control = productTexts.control.replace(\"enabledClusters: ['sleep', 'family'],\", \"enabledClusters: ['sleep', 'family', 'money-work'],\")", expect: '세 소비처가' },
