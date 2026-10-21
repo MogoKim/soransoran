@@ -294,7 +294,7 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  */
 /**
  * 🔴 **화자 여력 지평 = JIT 수요 지평 하나** (2026-10-11 Batch A2). 고정 7일 · capacity 눈금을 지웠다.
- *    지평의 날과 그날 자리 수는 `upcomingSlots`(오늘 남은 release 슬롯 + 다음 첫 기회)에서 그대로 나온다 —
+ *    지평의 날과 그날 자리 수는 `upcomingSlots`(오늘 발행기가 회수할 수 있는 기회 + 다음 첫 기회)에서 그대로 나온다 —
  *    수요가 보지 않는 날의 자리로 화자를 앞당겨 쓰지 않는다. cap 은 같은 눈금(release)이다.
  *
  * 🕘 (옛 판 · 2026-09-26) **공급은 capacity 로 준비하고, 발행은 release 로 제한한다**.

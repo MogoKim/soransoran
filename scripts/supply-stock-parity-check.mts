@@ -237,7 +237,7 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   check('제목 복제는 gateBlocked', same(auto.ids.gateBlocked, ['t']))
 }
 
-console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 release 슬롯 + 다음 첫 기회 (2026-10-11 Batch A2)')
+console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 실제 catch-up 기회 + 다음 첫 기회')
 {
   const at = (hm: string): Date => new Date(`2026-10-12T${hm}:00+09:00`)
   const tomorrowFirst = (p: (typeof PROFILES)[keyof typeof PROFILES]): string =>
@@ -249,18 +249,31 @@ console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 release 슬롯
     && morning[5]!.toISOString() === tomorrowFirst(PROFILES.d5), `${morning.length}`)
   const afternoon = upcomingSlots({ now: at('14:00'), publishedToday: 3, release: PROFILES.d5 })
   check('반례④ 14:00 · 3편 낸 뒤 — 지평 3(남은 d5 2 + 다음 첫 기회 1) · 옛 12', afternoon.length === 3, `${afternoon.length}`)
-  // 반례⑤ 오늘 슬롯이 끝났으면 다음 첫 기회 하나만
+  // 목표를 다 채웠으면 다음 첫 기회 하나만
   const night = upcomingSlots({ now: at('21:15'), publishedToday: 5, release: PROFILES.d5 })
   check('🔴 🔴 반례⑤ 오늘 d5 슬롯 끝(21:15 · 5편) — 지평 1(다음 첫 기회만) · 옛 10',
     night.length === 1 && night[0]!.toISOString() === tomorrowFirst(PROFILES.d5), `${night.length}`)
   const shortDay = upcomingSlots({ now: at('21:15'), publishedToday: 2, release: PROFILES.d5 })
-  check('🔴 반례③ 평상일 부족분(2/5)을 지난 슬롯으로 되살리지 않는다 — 지평 1', shortDay.length === 1, `${shortDay.length}`)
+  check('🔴 반례③ 21:15 · 2/5 — 발행기와 같은 catch-up 3회 + 다음 첫 기회 = 지평 4',
+    shortDay.length === 4
+    && shortDay.slice(0, 3).map((d) => d.toISOString()).join(',') === ['21:20', '21:30', '21:40']
+      .map((hm) => at(hm).toISOString()).join(','), `${shortDay.map((d) => d.toISOString()).join(',')}`)
+  const nearClose = upcomingSlots({ now: at('21:55'), publishedToday: 3, release: PROFILES.d5 })
+  check('🔴 운영 창 직전 3/5 — 22:00 한 건만 회수하고 나머지는 다음 날로 넘긴다',
+    nearClose.length === 2 && nearClose[0]!.toISOString() === at('22:00').toISOString()
+    && nearClose[1]!.toISOString() === tomorrowFirst(PROFILES.d5), `${nearClose.length}`)
+  const afterClose = upcomingSlots({ now: at('22:15'), publishedToday: 3, release: PROFILES.d5 })
+  check('🔴 운영 창 뒤 부족분은 되살리지 않는다 — 다음 첫 기회만',
+    afterClose.length === 1 && afterClose[0]!.toISOString() === tomorrowFirst(PROFILES.d5), `${afterClose.length}`)
   // 반례⑥ 열린 d10 증명일 — 그날 남은 d10 슬롯이 든다
   const proof = upcomingSlots({ now: at('12:00'), publishedToday: 3, release: PROFILES.d10 })
   check('🔴 🔴 반례⑥ 열린 d10 증명일 12:00 · 3편 — 지평 8(남은 d10 7 + 다음 첫 기회 1) · 옛 7 + 내일 d20 20 = 27',
     proof.length === 8 && proof.slice(0, 7).every((d) => d.getTime() >= at('12:00').getTime() && d.getTime() < at('23:59').getTime()), `${proof.length}`)
   const lib = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
   const body = lib.slice(lib.indexOf('export function upcomingSlots'), lib.indexOf('export type PublishPlan'))
+  check('🔴 공급 수요가 발행기와 같은 heartbeat · 운영 창 · 회차 상한을 쓴다',
+    /HEARTBEAT_INTERVAL_MINUTES/.test(body) && /PUBLISH_WINDOW_END_MINUTE/.test(body) && /PER_RUN_MAX/.test(body)
+    && !/todayLeft/.test(body))
   check('🔴 🔴 수요 지평 · JIT 짝짓기 · Persona 여력 cap 에 capacity 눈금이 없다(옛 길 제거)',
     !/capacity/.test(body.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n'))
     && /caps: releaseCapsOf\(scale\.releaseProfile\)/.test(body))
