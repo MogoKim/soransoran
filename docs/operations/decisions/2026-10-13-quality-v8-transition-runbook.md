@@ -96,8 +96,12 @@ npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --apply --produc
 ```bash
 npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --semantic-clear
 npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --semantic-clear --apply --production --staged \
-  --target=<staging SHA> --digest=<dry-run digest> --expect=<dry-run expect> --reason="새 의미 감사 계약으로 옛 오탐 재검증"
+  --target=<staging SHA> --digest=<dry-run digest> --expect=<dry-run expect> \
+  --semantic-plan=<dry-run semanticPlan> --reason="새 의미 감사 계약으로 옛 오탐 재검증"
 ```
+
+의미 재감사 provider는 dry-run에서 한 번만 부른다. apply는 승인된 `semanticPlan`을 다시 해석하지 않고 현재
+DB·글·원문·Persona·도장 결속과 결정적으로 대조한다. 토큰이 없거나 다른 계약·큐·결속이면 write 0이다.
 
 원래 감사 `yes` 행은 수정·삭제하지 않는다. 해소 기록은 현재 품질 계약·감사 행 지문·발행 글 hash·원문·Persona·
 도장 결속에 묶이며, 이후 어느 하나라도 바뀌거나 품질 계약이 바뀌면 자동으로 무효가 된다.

@@ -10,6 +10,8 @@
  *   npm run auto-ready:defect-resolve -- --queue=<queueId> --apply --production --staged --target=<40자리 SHA> \
  *     --digest=<dry-run digest> --expect=<지금>:<적용 뒤> --reason="…"     🔴 품질 계약 전환 — target 을 준비한
  *     **staging 트리**에서, 옛 runtime·job 을 그대로 둔 채 새 계약의 해소 기록을 활성화 **전에** 덧붙인다
+ *   의미 재감사(`--semantic-clear`) 운영 적용은 dry-run이 낸 `--semantic-plan=<token>`도 필수다. provider는
+ *   dry-run에서 정확히 한 번만 부르고, apply는 같은 계획의 DB·원문·글·Persona 결속만 결정적으로 재검사한다.
  *
  * 🔴 플래그 없는 `--apply` 는 격리 DB(sentinel · localhost · soran_test)에서만 돈다. 운영은 `production-activation-guard`
  *    (플래그 셋 · 다섯 SHA = target · runtime 깨끗 · writer job 0 · canonical env)와 승인(digest · expect · reason)을 모두 지나야 열린다.
@@ -24,6 +26,7 @@ import {
 } from '../src/lib/auto-ready-defect-resolution-store'
 import {
   applyApprovedDefectResolution, applyApprovedSemanticDefectResolution, defectPlanDigestOf, expectationOf,
+  semanticPlanFromToken, semanticPlanTokenOf,
 } from './lib/defect-resolution-approval.mjs'
 import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
 import { makeAuditContextLoader } from './lib/auto-ready-audit-context.mjs'
@@ -36,6 +39,7 @@ const argv = process.argv.slice(2)
 const queueId = (argv.find((a) => a.startsWith('--queue=')) ?? '').slice('--queue='.length).trim()
 const apply = argv.includes('--apply')
 const semanticClear = argv.includes('--semantic-clear')
+const argOf = (key: string): string => (argv.find((a) => a.startsWith(`${key}=`)) ?? '').slice(key.length + 1).trim()
 
 function isolatedDbProblems(): string[] {
   const url = process.env.DATABASE_URL ?? ''
@@ -48,6 +52,12 @@ function isolatedDbProblems(): string[] {
 
 async function main(): Promise<number> {
   if (queueId === '') { console.error('🔴 --queue=<queueId> 가 필요하다'); return 2 }
+  const productionSemanticApply = semanticClear && apply && argv.includes('--production')
+  const semanticPlan = productionSemanticApply ? semanticPlanFromToken(argOf('--semantic-plan')) : null
+  if (semanticPlan !== null && !semanticPlan.ok) {
+    console.error(`🔴 --semantic-plan 이 유효하지 않다(write 0) · ${semanticPlan.reason}`)
+    return 2
+  }
   if (semanticClear) await loadEnvLocal()
   // 🔴 품질 계약 전환은 활성화 전에 새 계약 기록을 써야 한다 — 이 CLI 만 `--staged` 를 받는다
   const act = openActivation(argv, { repoRoot: process.cwd(), allowStaged: true })
@@ -64,7 +74,7 @@ async function main(): Promise<number> {
       const a = semanticClear
         ? await applyApprovedSemanticDefectResolution(prisma, {
           queueId, approval: act.approval, loadContext: makeAuditContextLoader(prisma, { freshEachCall: true }),
-          provider: semanticProviderFromEnv(process.env, `defect-resolve-${Date.now()}`).provider, now: new Date(),
+          plan: semanticPlan!.plan, now: new Date(),
         })
         : await applyApprovedDefectResolution(prisma, {
           queueId, approval: act.approval, contextOf: makeReverifyContextLoader(), now: new Date(),
@@ -103,7 +113,8 @@ async function main(): Promise<number> {
     if (!apply) {
       // 🔴 운영 승인에 넣을 값 — 결정적 계획 지문 · 기대 상태(미해소 결함 수 지금:적용 뒤)
       const ex = await expectationOf(prisma, e.plan)
-      console.log(`RESOLVE_APPROVAL digest=${defectPlanDigestOf(e.plan)} expect=${ex.before}:${ex.after}`)
+      const token = semanticClear ? ` semanticPlan=${semanticPlanTokenOf(e.plan)}` : ''
+      console.log(`RESOLVE_APPROVAL digest=${defectPlanDigestOf(e.plan)} expect=${ex.before}:${ex.after}${token}`)
       console.log('RESOLVE_APPLY skipped (dry-run) written=0')
       return 0
     }

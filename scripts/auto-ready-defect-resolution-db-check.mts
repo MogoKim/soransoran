@@ -29,7 +29,10 @@ import {
 import { DEFECT_RESOLUTION_KEY, auditFingerprintOf } from '../src/lib/auto-ready-defect-resolution'
 import { SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, type SemanticAuditProvider } from '../src/lib/auto-ready-semantic-audit'
 import { QUALITY_CONTRACT_KEY, currentQualityContract } from '../src/lib/quality-contract'
-import { applyApprovedDefectResolution } from './lib/defect-resolution-approval.mjs'
+import {
+  applyApprovedDefectResolution, applyApprovedSemanticDefectResolution, defectPlanDigestOf,
+  semanticPlanFromToken, semanticPlanTokenOf,
+} from './lib/defect-resolution-approval.mjs'
 import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
 import { makeAuditContextLoader } from './lib/auto-ready-audit-context.mjs'
 import { LIFE_FIXTURES } from './lib/life-gate-fixtures.mjs'
@@ -354,6 +357,12 @@ async function main(): Promise<void> {
       const r = spawnSync(TSX, bad, { cwd: ROOT, env: { ...process.env, HOME: home, SORAN_ISOLATED_DB: '' }, encoding: 'utf8' })
       check(`🔴 운영 인자 누락(${bad.slice(2).map((a) => a.split('=')[0]).join(' ')}) → exit 2 · write 0`, r.status === 2 && stableJson(await fullQueue(H.queueId)) === sH, r.stderr.slice(0, 160))
     }
+    const noSemanticPlan = spawnSync(TSX, [...prodArgs, '--semantic-clear'], {
+      cwd: ROOT, env: { ...process.env, HOME: home, SORAN_ISOLATED_DB: '' }, encoding: 'utf8',
+    })
+    check('🔴 의미 운영 apply에 semantic-plan 누락 → activation·provider 전에 exit 2 · write 0',
+      noSemanticPlan.status === 2 && /--semantic-plan 이 유효하지 않다/.test(noSemanticPlan.stderr)
+      && stableJson(await fullQueue(H.queueId)) === sH, noSemanticPlan.stderr.slice(0, 240))
   }
 
   console.log('\n⑪ 의미 재감사 no — 오탐만 append-only 해소 · 결속 변경/재시도/실제 결함은 write 0')
@@ -361,9 +370,13 @@ async function main(): Promise<void> {
     await wipeAuditFixtures(prisma)
     const sf = newFixture(prisma, join(SCRATCH, 'semantic-home'))
     await seedEvidence(sf, 30)
+    let cleanProviderCalls = 0
     const cleanProvider: SemanticAuditProvider = {
       model: SEMANTIC_AUDIT_MODEL,
-      complete: async () => ({ ok: true, text: JSON.stringify({ unsupportedFacts: [], lifeContradictions: [], sourceDistortions: [], defect: 'no' }) }),
+      complete: async () => {
+        cleanProviderCalls += 1
+        return { ok: true, text: JSON.stringify({ unsupportedFacts: [], lifeContradictions: [], sourceDistortions: [], defect: 'no' }) }
+      },
     }
     const defectProvider: SemanticAuditProvider = {
       model: SEMANTIC_AUDIT_MODEL,
@@ -381,17 +394,32 @@ async function main(): Promise<void> {
     const plan = await planSemanticDefectResolution(prisma, { queueId: S.queueId, loadContext, provider: cleanProvider, now: new Date() })
     check('🟢 같은 글·원문·Persona를 새 감사 계약으로 측정한 no → semanticCleared 계획',
       plan.kind === 'plan' && plan.plan.record.reverify.outcome === 'semanticCleared', JSON.stringify(plan).slice(0, 300))
+    const token = plan.kind === 'plan' ? semanticPlanTokenOf(plan.plan) : ''
+    const decoded = semanticPlanFromToken(token)
+    check('🟢 dry-run 의미 계획은 토큰으로 같은 계획을 전달', plan.kind === 'plan' && decoded.ok
+      && defectPlanDigestOf(decoded.plan) === defectPlanDigestOf(plan.plan))
     check('🔴 계획은 감사 행·큐 write 0', await auditTable() === beforeAudit && resolutionsOf((await queueOf(S.queueId)).editDiff).length === 0)
     const actual = await planSemanticDefectResolution(prisma, { queueId: S.queueId, loadContext, provider: defectProvider, now: new Date() })
     check('🔴 실제 결함 yes 재감사 → refuse SEMANTIC_NOT_CLEAR · write 0', actual.kind === 'refuse' && actual.code === 'SEMANTIC_NOT_CLEAR')
     const retry = await planSemanticDefectResolution(prisma, { queueId: S.queueId, loadContext, provider: retryProvider, now: new Date() })
     check('🔴 제공사 실패 → refuse HTTP_500 · write 0', retry.kind === 'refuse' && retry.code === 'HTTP_500')
-    const applied = plan.kind === 'plan'
-      ? await applySemanticDefectResolution(prisma, { plan: plan.plan, loadContext, now: new Date() }) : null
-    check('🟢 semanticCleared 기록 1줄 append → 미해소 0 · 열림', applied?.kind === 'written'
+    const applied = decoded.ok
+      ? await applyApprovedSemanticDefectResolution(prisma, {
+        queueId: S.queueId, plan: decoded.plan, loadContext, now: new Date(),
+        approval: { digest: defectPlanDigestOf(decoded.plan), expected: { before: 1, after: 0 }, reason: 'semantic token db-check' },
+      }) : null
+    check('🟢 승인 apply는 provider 재호출 없이 기록 1줄 append → 미해소 0 · 열림', applied?.kind === 'written'
       && resolutionsOf((await queueOf(S.queueId)).editDiff).length === 1 && await unresolvedDefectCount(prisma) === 0 && (await gate()).open,
     JSON.stringify(applied))
+    check('🔴 provider 호출은 계획의 정확히 1회뿐', cleanProviderCalls === 1, String(cleanProviderCalls))
     check('🔴 원래 감사 yes 행 전체는 그대로', await auditTable() === beforeAudit)
+    const replay = decoded.ok
+      ? await applyApprovedSemanticDefectResolution(prisma, {
+        queueId: S.queueId, plan: decoded.plan, loadContext, now: new Date(),
+        approval: { digest: defectPlanDigestOf(decoded.plan), expected: { before: 1, after: 0 }, reason: 'semantic token replay' },
+      }) : null
+    check('🔴 같은 승인 재실행은 provider 0 · write 0 no-op', replay?.kind === 'noop' && cleanProviderCalls === 1
+      && resolutionsOf((await queueOf(S.queueId)).editDiff).length === 1, JSON.stringify(replay))
 
     const T = await defectRow(sf, PASSING, { legacy: true })
     const stale = await planSemanticDefectResolution(prisma, { queueId: T.queueId, loadContext, provider: cleanProvider, now: new Date() })
@@ -399,8 +427,11 @@ async function main(): Promise<void> {
     art.evidence = { spans: [{ kind: 'title', text: '바뀐 원문' }, { kind: 'head', text: '계획 뒤 바뀐 근거' }] }
     flushArtifacts(sf)
     const changed = stale.kind === 'plan'
-      ? await applySemanticDefectResolution(prisma, { plan: stale.plan, loadContext, now: new Date() }) : null
-    check('🔴 계획 뒤 원문 결속 변경 → changed · write 0', changed?.kind === 'changed'
+      ? await applyApprovedSemanticDefectResolution(prisma, {
+        queueId: T.queueId, plan: stale.plan, loadContext, now: new Date(),
+        approval: { digest: defectPlanDigestOf(stale.plan), expected: { before: 1, after: 0 }, reason: 'semantic binding changed' },
+      }) : null
+    check('🔴 계획 뒤 원문 결속 변경 → refuse · write 0', changed?.kind === 'refuse' && changed.code === 'CHANGED'
       && resolutionsOf((await queueOf(T.queueId)).editDiff).length === 0, JSON.stringify(changed))
   }
 

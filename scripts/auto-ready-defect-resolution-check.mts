@@ -24,6 +24,8 @@ import {
 import { INTEGRITY_AUDITOR } from '../src/lib/auto-ready-repo'
 import { ADMIN_DEFECT_AUDITOR } from '../src/lib/auto-ready-audit-store'
 import { currentQualityContract, qualityContractComponents, QUALITY_CONTRACT_KEY, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
+import type { ResolutionPlan } from '../src/lib/auto-ready-defect-resolution-store'
+import { defectPlanDigestOf, semanticPlanFromToken, semanticPlanTokenOf } from './lib/defect-resolution-approval.mjs'
 import { LIFE_FIXTURES } from './lib/life-gate-fixtures.mjs'
 import { gateContextOf, type GateFixture } from './lib/draft-gate-fixtures.mjs'
 
@@ -80,6 +82,11 @@ const semanticRecordFor = (a: AuditRowForResolution, o: Partial<DefectResolution
     semanticPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
   },
   resolvedAt: '2026-10-01T12:00:00.000Z', resolvedBy: DEFECT_RESOLVER, ...o,
+})
+
+const semanticPlanFor = (a: AuditRowForResolution): ResolutionPlan => ({
+  queueId: a.queueId, postId: a.postId, auditFingerprint: auditFingerprintOf(a),
+  queueUpdatedAt: '2026-10-01T12:00:00.000Z', record: semanticRecordFor(a),
 })
 const queue = (entries: unknown[] | null, o: Partial<QueueRowForResolution> = {}): QueueRowForResolution => ({
   id: 'q-a', createdPostId: 'p-a', draftTitle: BLOCKED.draft.title, draftBody: BLOCKED.draft.body,
@@ -139,6 +146,19 @@ console.log('\nB. 🔴 기록이 어긋나면 미해소 (fail-closed)')
   ] as const) {
     check(`🔴 ${label} → 미해소`, !judge(a, queue([semanticRecordFor(a, { reverify } as Partial<DefectResolutionRecord>)])).resolved)
   }
+}
+
+console.log('\nB2. 의미 재감사 승인 토큰 — 본문 없이 지금 계약 계획만 왕복')
+{
+  const plan = semanticPlanFor(audit())
+  const token = semanticPlanTokenOf(plan)
+  const decoded = semanticPlanFromToken(token)
+  check('🟢 의미 계획 토큰 왕복', decoded.ok && defectPlanDigestOf(decoded.plan) === defectPlanDigestOf(plan))
+  check('🔴 빈 토큰·깨진 base64 토큰 거절', !semanticPlanFromToken('').ok && !semanticPlanFromToken('%%%').ok)
+  const envelope = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) as { plan: ResolutionPlan }
+  envelope.plan.record.qualityContract = { ...C, digest: '0'.repeat(64) }
+  const wrongContract = Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url')
+  check('🔴 다른 품질 계약 토큰 거절', !semanticPlanFromToken(wrongContract).ok)
 }
 
 console.log('\nC. 🔴 기록이 맞아도 해소 대상이 아닌 결함')
@@ -215,13 +235,17 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
   check('🔴 해소 쓰기 전에 지금 초안 게이트(judgeDraftLife)를 저장 초안에 돈다',
     /judgeDraftLife\(\{\s*title: q!\.draftTitle, body: q!\.draftBody/.test(store))
   const runner = codeOnly('scripts/auto-ready-defect-resolve.mts')
+  const productionBranch = runner.slice(runner.indexOf("if (act.kind === 'production')"), runner.indexOf('if (apply)'))
   check('🔴 승인 없는 로컬 --apply는 격리 DB에서만', /if \(apply\) \{\s*const bad = isolatedDbProblems\(\)/.test(runner))
   check('🔴 운영 적용은 production activation 승인 경계와 staged 가드를 지난다',
     /openActivation\(argv, \{ repoRoot: process\.cwd\(\), allowStaged: true \}\)/.test(runner)
     && runner.includes('applyApprovedDefectResolution') && runner.includes('applyApprovedSemanticDefectResolution'))
-  check('🔴 의미 오탐 해소는 전용 플래그·계획·적용·매번 새 결속 로더를 함께 쓴다',
+  check('🔴 의미 오탐 해소 dry-run은 provider 1회 계획과 승인 토큰을 만든다',
     runner.includes("argv.includes('--semantic-clear')") && runner.includes('planSemanticDefectResolution')
-    && runner.includes('applySemanticDefectResolution') && runner.includes('freshEachCall: semanticClear'))
+    && runner.includes('semanticPlanTokenOf(e.plan)') && runner.includes('freshEachCall: semanticClear'))
+  check('🔴 운영 apply는 승인 토큰만 쓰고 provider·재계획을 부르지 않는다',
+    productionBranch.includes('semanticPlan!.plan') && productionBranch.includes('applyApprovedSemanticDefectResolution')
+    && !productionBranch.includes('semanticProviderFromEnv') && !productionBranch.includes('planSemanticDefectResolution'))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
     JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v17')
 }
