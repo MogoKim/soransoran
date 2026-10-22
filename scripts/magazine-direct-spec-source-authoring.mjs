@@ -74,7 +74,7 @@ if (command === 'prepare') {
   const outRoot = arg('--out-root')
   if (!repo || !admission || !outRoot || !arg('--slug')) usage('--slug · --repo · --admission-root · --out-root 를 모두 명시해야 한다')
   const r = materializePlan({ repoRoot: resolve(repo), admissionRoot: resolve(admission), outRoot: resolve(outRoot), slug: arg('--slug') })
-  out(r.ok ? { ok: true, written: r.written, path: r.path, day: r.day, articlePlanHash: r.row.articlePlanHash } : r, r.ok ? 0 : 1)
+  out(r.ok ? { ok: true, written: r.written, concurrentWrite: r.concurrentWrite, path: r.path, day: r.day, articlePlanHash: r.row.articlePlanHash } : r, r.ok ? 0 : 1)
 } else {
   usage(`모르는 명령이다: ${command}`)
 }

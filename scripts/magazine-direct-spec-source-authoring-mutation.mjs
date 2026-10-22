@@ -2,7 +2,7 @@
 /**
  * ArticlePlan(source/2) 변이 — 핵심 관문을 하나씩 끊으면 `authoringCases` 중 하나가 단언으로 실패해야 한다.
  *
- * 대상 세 겹 — lib(authoring: prepare · approve · materialize) · source(소비 관문 · 큐 복제 계약) · direct(G8 행 모드 판정).
+ * 대상 네 겹 — lib(authoring: prepare · approve · materialize) · source(소비 관문 · 큐 복제 계약) · direct(G8 행 모드 판정) · cli(출력).
  * 🔴 변이본은 원본 옆 임시 사본이다(상대 import 유지). source · direct 변이는 그 사본을 import 하는 lib · source 사본을 함께 만들고,
  *    반례는 변이된 source · direct 모듈을 주입받는다. CLI 도 변이 lib 을 import 하는 사본을 만든다.
  *    import 뒤 즉시 지우고, 끝에 원본 바이트 불변 · 잔여 0 을 확인한다.
@@ -99,8 +99,9 @@ const MUTATIONS = [
     + "      if (!alive) {\n        try { unlinkSync(lockPath) } catch { /* 경쟁자가 먼저 지웠다 */ }\n"
     + "        try { linkSync(tmp, lockPath); const mineR = () => { try { return JSON.parse(readFileSync(lockPath, 'utf8')).token === token } catch { return false } }\n"
     + "          return { ok: true, owns: mineR, release: () => { if (mineR()) unlinkSync(lockPath) } } } catch { /* 또 졌다 */ }\n      }\n"],
+  ['MK4', '해제가 token 확인 없이 잠금 경로를 지운다', '    const release = () => {\n', '    const release = () => {\n      try { unlinkSync(lockPath) } catch { /* 이미 없다 */ }\n      return\n'],
+  ['MK5', '이미 잃은 잠금도 해제가 rename·link 로 움직인다 (선행 소유권 검사 제거)', '      if (!owns()) return\n', ''],
   ['MK3', '해제가 내 것이 아닌 잠금도 지운다', "      try { linkSync(parked, lockPath); unlinkSync(parked) } catch { /* parked 를 보존한다 */ }", "      try { unlinkSync(parked) } catch { /* 이미 없다 */ }"],
-  ['MK4', '해제가 token 확인 없이 잠금 경로를 지운다', "    const release = () => {\n      const parked = `${lockPath}.release-${token}`", "    const release = () => {\n      try { unlinkSync(lockPath) } catch { /* 이미 없다 */ }\n      return\n      const parked = `${lockPath}.release-${token}`"],
   ['MK2', '쓰기 직전 잠금 소유권 재확인 제거', '      if (!lock.owns()) {', '      if (false) {'],
   ['MR1', '연구 intents 원문 해시 재계산 대조 제거', '  if (manifest?.contentHash?.intents !== recomputed) {', '  if (false) {'],
   ['MR2', '연구 intent schema 검사 제거', "  if (rows.some((r) => r?.schemaVersion !== RESEARCH_INTENT_SCHEMA || !nonEmpty(r?.intentId))) throw", '  if (false) throw'],
@@ -118,10 +119,16 @@ const MUTATIONS = [
   // ── D. materialize ──
   ['MM1', 'materialize 가 plan 밖의 값(receipt 질문)을 제목으로 쓴다', '    const row = queueRowFromEntry(entry, { day })', '    const row = { ...queueRowFromEntry(entry, { day }), title: state.admission.primaryQuery }'],
   ['MM2', 'day 를 max(day)+1 이 아니라 행 수로 정한다', '    const day = Math.max(0, ...queue.map((q) => q.day).filter(Number.isInteger)) + 1', '    const day = queue.length + 1'],
-  ['MM3', '쓴 뒤 실제 바이트 대조 제거', '    if (observed !== next || !exactlyAdded(observed)) {', '    if (false) {'],
-  ['MMC1', '쓰기 충돌 시 이전 큐 전체로 되돌린다 (남의 변경을 지운다)', "    if (observed !== next || !exactlyAdded(observed)) {\n      return fail('QUEUE_WRITE_CONFLICT'", "    if (observed !== next || !exactlyAdded(observed)) {\n      writeAtomic(queuePath, before)\n      return fail('QUEUE_WRITE_CONFLICT'"],
-  ['MMC2', '쓰기 충돌 시 관측 바이트를 내 바이트로 덮는다', "    if (observed !== next || !exactlyAdded(observed)) {\n      return fail('QUEUE_WRITE_CONFLICT'", "    if (observed !== next || !exactlyAdded(observed)) {\n      writeAtomic(queuePath, next)\n      return fail('QUEUE_WRITE_CONFLICT'"],
-  ['MMC3', '바이트 대조를 빼고 parser 대조만 한다', '    if (observed !== next || !exactlyAdded(observed)) {', '    if (!exactlyAdded(observed)) {'],
+  ['MCW0', '쓴 뒤 동시 쓰기 판정 없이 성공으로 본다', '    const settled = settleConcurrentWrite(observed)', '    const settled = { ok: true, problems: [] }'],
+  ['MCW1', '내 DIRECT 행이 그대로 있는데 실패로 돌려준다', '    if (settled.ok) return { ok: true, written: true, concurrentWrite: true,', '    if (false) return { ok: true, written: true, concurrentWrite: true,'],
+  ['MCW2', '동시 쓰기 판정에서 내 행 존재 검사를 뺀다', "      if (hits.length === 0) problems.push('ROW_MISSING')\n", ''],
+  ['MCW3', '동시 쓰기 판정에서 승인 행과의 deep-equal 을 뺀다', "      if (mine && canonicalJson(mine) !== canonicalJson(row)) problems.push('ROW_CHANGED')\n", ''],
+  ['MCW4', '동시 쓰기 판정에서 slug·intent 중복 검사를 뺀다', "      if (hits.length > 1) problems.push('ROW_DUPLICATE')\n", ''],
+  ['MCW5', '동시 쓰기 판정에서 실제 소비 관문을 뺀다', "        if (!j.ok) problems.push('GATE_REJECTED')\n", ''],
+  ['MCW6', 'materialize 가 concurrentWrite 를 돌려주지 않는다', '    if (settled.ok) return { ok: true, written: true, concurrentWrite: true, path: queuePath, row, day }', '    if (settled.ok) return { ok: true, written: true, path: queuePath, row, day }'],
+  ['MCW7', 'CLI 가 concurrentWrite 를 출력하지 않는다', 'concurrentWrite: r.concurrentWrite, ', '', 'cli'],
+  ['MMC1', '쓰기 충돌 시 이전 큐 전체로 되돌린다 (남의 변경을 지운다)', "    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤", "    writeAtomic(queuePath, before)\n    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤"],
+  ['MMC2', '쓰기 충돌 시 관측 바이트를 내 바이트로 덮는다', "    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤", "    writeAtomic(queuePath, next)\n    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤"],
   ['MM4', '쓰기 전 렌더 검증 제거', "    if (!exactlyAdded(next)) return fail('QUEUE_RENDER_INVALID'", "    if (false) return fail('QUEUE_RENDER_INVALID'"],
   ['MM5', '큐 CAS 재확인 제거 (외부 writer 를 덮는다)', "    if (readFileSync(queuePath, 'utf8') !== before) return fail('QUEUE_CHANGED'", "    if (false) return fail('QUEUE_CHANGED'"],
   ['MM6', '큐 writer lock 없이 쓴다', [
@@ -183,19 +190,19 @@ for (const [id, label, from, to, target = 'lib'] of MUTATIONS) {
     writeFileSync(dirPath, mutated)
     sourceText = ORIGINAL.source.replace("from './magazine-direct-spec.mjs'", `from './${basename(dirPath)}'`)
   } else if (target === 'source') sourceText = mutated
-  else libText = mutated
-  if (target !== 'lib') {
+  else if (target === 'lib') libText = mutated
+  if (target === 'source' || target === 'direct') {
     writeFileSync(srcPath, sourceText)
     libText = libText.replace("from './magazine-direct-spec-source.mjs'", `from './${basename(srcPath)}'`)
   }
   writeFileSync(libPath, libText)
-  writeFileSync(cliPath, ORIGINAL.cli.replace("'./lib/magazine-direct-spec-source-authoring.mjs'", `'./lib/${basename(libPath)}'`))
+  writeFileSync(cliPath, (target === 'cli' ? mutated : ORIGINAL.cli).replace("'./lib/magazine-direct-spec-source-authoring.mjs'", `'./lib/${basename(libPath)}'`))
   let caught = false
   let why = ''
   try {
     const mod = await import(pathToFileURL(libPath).href)
     const deps = { cliPath }
-    if (target !== 'lib') deps.source = await import(pathToFileURL(srcPath).href)
+    if (target === 'source' || target === 'direct') deps.source = await import(pathToFileURL(srcPath).href)
     if (target === 'direct') deps.direct = await import(pathToFileURL(dirPath).href)
     const failures = []
     for (const [name, fn] of authoringCases(mod, deps)) {

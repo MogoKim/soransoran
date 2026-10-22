@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -232,6 +232,25 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
   const rejected = (w, extra) => { const r = prepare(w, extra); assert.equal(r.ok, false, '거부돼야 할 admission 으로 후보를 만들었다'); return r }
   const blockersOf = (w, extra) => { const r = prepare(w, extra); assert.equal(r.ok, true, `${r.code} ${r.why}`); return r.candidate.blockers }
   const judgeRow = (w, row) => source.judgeDirectSpecSource({ queueItem: row, draftsDir: join(w.repo, 'drafts/magazine'), expectedGraphVersion: GV, productRoot: w.repo })
+  /** 충돌 뒤 큐에 남은 내 slug·intent 행(변조 행)은 실제 소비 관문과 producer 선택이 HOLD 해야 한다 (자동 생산 대상 0) */
+  const assertHeld = (w, blocker) => {
+    const q = queueOf(w.repo)
+    const rows = q.filter((x) => x.slug === SLUG || x.intentId === INTENT)
+    assert.ok(rows.length >= 1, '반례 준비 실패 — 남은 행이 없다')
+    const draftsDir = join(w.repo, 'drafts/magazine')
+    const judge = (item) => source.verifyDirectSpecIdentity({ queueItem: item, draftsDir, expectedGraphVersion: GV, productRoot: w.repo })
+    for (const r of rows) {
+      const j = judge(r)
+      if (r.directSpecMode === 'DIRECT_SPEC_V1' && r.g8ManifestHash) {
+        assert.equal(j.ok, false, `남은 행 ${r.slug} 이 소비 관문을 통과했다`)
+        assert.ok(j.evidence.blockers.includes(blocker), `${r.slug}: ${j.evidence.blockers}`)
+      }
+    }
+    const articles = parseArticlesSource(readFileSync(join(w.repo, 'src/content/magazine/articles.ts'), 'utf8'))
+    const sel = producerPlan.selectWithDirectGate({ queue: q, articles, today: TODAY, produceCount: 5, reviewCount: 0, draftExists: () => false, judgeDirect: judge })
+    assert.ok(!sel.directReady.has(SLUG) && ![...sel.directReady.values()].some((x) => x.spec?.identity?.intentId === INTENT), 'producer 가 충돌 행을 DIRECT 준비로 골랐다')
+    assert.ok(!sel.selected.some((x) => x.slug === SLUG || x.intentId === INTENT), 'producer 가 충돌 행을 선정했다')
+  }
   const COUNTS = {}
 
   return [
@@ -666,9 +685,25 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
     }],
     ['S21d 쓰기 직전 잠금 소유권을 잃으면 LOCK_LOST · 쓰기 0', () => {
       const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo)
-      const a = approve(w, c, { hooks: { beforeRename: () => writeFileSync(`${f}.lock`, JSON.stringify({ pid: process.pid, token: 'other-writer' })) } })
+      let seen = null
+      const other = JSON.stringify({ pid: process.pid, token: 'other-writer' })
+      const a = approve(w, c, { hooks: { beforeRename: () => { writeFileSync(`${f}.lock`, other); seen = statSync(`${f}.lock`, { bigint: true }) } } })
       assert.equal(a.code, 'LOCK_LOST'); assert.equal(existsSync(f), false)
-      assert.equal(JSON.parse(readFileSync(`${f}.lock`, 'utf8')).token, 'other-writer', '남의 잠금을 지웠다')
+      assert.equal(readFileSync(`${f}.lock`, 'utf8'), other, '남의 잠금 바이트가 바뀌었다')
+      // 🔴 이미 잃은 잠금은 release 가 건드리지 않는다 — 경로 이동(rename·link)이 있었으면 ctime 이 바뀐다
+      const after = statSync(`${f}.lock`, { bigint: true })
+      assert.deepEqual([after.ino, after.ctimeNs], [seen.ino, seen.ctimeNs], '남의 잠금 경로를 움직였다 (rename·link)')
+      assert.deepEqual(readdirSync(dirname(f)).filter((x) => x.includes('.release-')), [], '.release-* 잔존')
+    }],
+    ['S21g 해제 — 소유를 확인한 직후 다른 holder 로 바뀌면 떼어 낸 잠금을 제자리에 되돌린다 · 남의 잠금 바이트 그대로 · .release-* 0', () => {
+      const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo)
+      const other = JSON.stringify({ pid: process.pid, token: 'other-after-owns' })
+      let raced = 0
+      const a = approve(w, c, { hooks: { beforeReleaseRename: ({ lockPath }) => { raced++; writeFileSync(lockPath, other) } } })
+      assert.equal(raced, 1, '반례 준비 실패 — 해제 경쟁 지점을 지나지 않았다')
+      assert.equal(a.ok, true, `${a.code} ${a.why}`)
+      assert.equal(existsSync(`${f}.lock`) ? readFileSync(`${f}.lock`, 'utf8') : null, other, '해제가 남의 잠금을 지웠다')
+      assert.deepEqual(readdirSync(dirname(f)).filter((n) => n.includes('.release-')), [], '.release-* 잔존')
     }],
     ['S21b 실제 다중 프로세스 동시 승인 → 쓴 writer 정확히 1 · 나머지는 LOCK_BUSY 또는 ALREADY_PLANNED', async () => {
       const w = makeWorld(); const c = ready(w); const cf = join(w.base, 'candidate.json'); writeFileSync(cf, JSON.stringify(c))
@@ -782,31 +817,66 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const r = materialize(w2, { hooks: { beforeLock: ({ queuePath }) => writeFileSync(queuePath, racer) } })
       assert.equal(r.code, 'ALREADY_QUEUED', `${r.code} ${r.why}`); assert.equal(readFileSync(queueFile(w2.repo), 'utf8'), racer)
     }],
-    ['M05 쓴 뒤 다른 writer 가 대상 행을 바꾸면 QUEUE_WRITE_CONFLICT · 관측 바이트를 덮지도 되돌리지도 않는다 · 성공 0', () => {
+    ['M05 쓴 뒤 다른 writer 가 내 행을 바꾸면 QUEUE_WRITE_CONFLICT · 관측 바이트 보존 · 남은 행은 소비 관문 · producer 선택이 HOLD', () => {
       const w = makeWorld(); approved(w); const q0 = readFileSync(queueFile(w.repo), 'utf8'); const s0 = readFileSync(sourceFile(w.repo), 'utf8')
       let observed = null
-      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => { observed = readFileSync(queuePath, 'utf8').replace(`slug: '${SLUG}'`, `slug: '${SLUG}-x'`); writeFileSync(queuePath, observed) } } })
-      assert.equal(m.ok, false); assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`)
+      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => { observed = readFileSync(queuePath, 'utf8').replace(`slug: '${SLUG}',\n    title: '${PLAN().title}'`, `slug: '${SLUG}',\n    title: '${PLAN().title} (다른 writer)'`); writeFileSync(queuePath, observed) } } })
+      assert.notEqual(observed, null); assert.ok(observed.includes('(다른 writer)'), '반례 준비 실패 — 내 행 제목을 바꾸지 못했다')
+      assert.equal(m.ok, false); assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`); assert.ok(m.problems.includes('ROW_CHANGED'), m.problems.join(','))
       const now = readFileSync(queueFile(w.repo), 'utf8')
       assert.equal(now, observed, '다른 writer 가 쓴 바이트를 덮었다'); assert.notEqual(now, q0, '이전 큐 전체로 되돌렸다')
       assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), s0, '승인 artifact 가 바뀌었다')
+      assertHeld(w, 'SOURCE_QUEUE_DRIFT')
     }],
-    ['M05c 쓴 뒤 외부 writer 가 별도 행을 더하면 QUEUE_WRITE_CONFLICT · 외부 행 바이트 그대로 · 이전 큐로 rollback 0 · 성공 0', () => {
-      const w = makeWorld(); approved(w); const q0 = readFileSync(queueFile(w.repo), 'utf8'); const s0 = readFileSync(sourceFile(w.repo), 'utf8')
+    ['M05c 쓴 뒤 외부 writer 가 별도 정상 행을 더해도 내 행이 그대로면 성공 · concurrentWrite=true · DIRECT 행과 외부 행 모두 보존', () => {
+      const w = makeWorld(); approved(w); const s0 = readFileSync(sourceFile(w.repo), 'utf8')
       let external = null
       const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => {
         external = g8.insertQueueRows(readFileSync(queuePath, 'utf8'), [{ ...LEGACY_ROW(), day: 500, slug: 'external-writer-row' }]); writeFileSync(queuePath, external) } } })
-      assert.equal(m.ok, false); assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`)
-      const now = readFileSync(queueFile(w.repo), 'utf8')
-      assert.equal(now, external, '외부 writer 바이트가 바뀌었다'); assert.ok(queueOf(w.repo).some((q) => q.slug === 'external-writer-row'), '외부 행이 사라졌다')
-      assert.notEqual(now, q0, '이전 큐 전체로 되돌렸다'); assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), s0)
-      assert.ok(!('written' in m) && !('row' in m), 'materialize 가 성공 기록을 냈다')
+      assert.deepEqual({ ok: m.ok, written: m.written, concurrentWrite: m.concurrentWrite }, { ok: true, written: true, concurrentWrite: true }, `${m.code} ${m.why}`)
+      assert.equal(readFileSync(queueFile(w.repo), 'utf8'), external, '외부 writer 바이트가 바뀌었다')
+      const q = queueOf(w.repo)
+      assert.ok(q.some((x) => x.slug === 'external-writer-row'), '외부 행이 사라졌다')
+      assert.deepEqual(plain(q.find((x) => x.slug === SLUG)), plain(m.row), 'DIRECT 행이 승인 행과 다르다')
+      assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), s0)
     }],
-    ['M05d 쓴 뒤 다른 writer 가 parse 결과는 같은 바이트(주석)를 더해도 QUEUE_WRITE_CONFLICT · 그 바이트 보존', () => {
+    ['M05d 쓴 뒤 다른 writer 가 주석만 더해도 성공 · concurrentWrite=true · 그 바이트 보존', () => {
       const w = makeWorld(); approved(w)
       let observed = null
       const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => { observed = `${readFileSync(queuePath, 'utf8')}// 다른 writer 의 주석\n`; writeFileSync(queuePath, observed) } } })
-      assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`); assert.equal(readFileSync(queueFile(w.repo), 'utf8'), observed)
+      assert.deepEqual({ ok: m.ok, concurrentWrite: m.concurrentWrite }, { ok: true, concurrentWrite: true }, `${m.code} ${m.why}`)
+      assert.equal(readFileSync(queueFile(w.repo), 'utf8'), observed)
+    }],
+    ['M05h 쓴 뒤 다른 writer 가 내 행의 day 만 바꾸면(소비 관문은 통과) QUEUE_WRITE_CONFLICT(ROW_CHANGED) · 관측 바이트 보존', () => {
+      const w = makeWorld(); approved(w)
+      let observed = null
+      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => { observed = readFileSync(queuePath, 'utf8').replace(`day: 23,\n    slug: '${SLUG}'`, `day: 99,\n    slug: '${SLUG}'`); writeFileSync(queuePath, observed) } } })
+      assert.ok(observed.includes('day: 99,'), '반례 준비 실패 — day 를 바꾸지 못했다')
+      assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`); assert.deepEqual(m.problems, ['ROW_CHANGED'])
+      assert.equal(readFileSync(queueFile(w.repo), 'utf8'), observed)
+    }],
+    ['M05e 쓴 뒤 다른 writer 가 내 행을 지우면 QUEUE_WRITE_CONFLICT(ROW_MISSING) · 관측 바이트 보존', () => {
+      const w = makeWorld(); approved(w); const q0 = readFileSync(queueFile(w.repo), 'utf8')
+      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => writeFileSync(queuePath, q0) } })
+      assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`); assert.ok(m.problems.includes('ROW_MISSING'), m.problems.join(','))
+      assert.equal(readFileSync(queueFile(w.repo), 'utf8'), q0)
+    }],
+    ['M05f 쓴 뒤 같은 slug · 같은 intent 행이 하나 더 생기면 QUEUE_WRITE_CONFLICT(ROW_DUPLICATE) · 관측 바이트 보존', () => {
+      for (const [label, dup] of [['같은 slug', { ...LEGACY_ROW(), day: 600, slug: SLUG }], ['같은 intent', { ...LEGACY_ROW(), day: 601, slug: 'other-slug', intentId: INTENT }]]) {
+        const w = makeWorld(); approved(w)
+        let observed = null
+        const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => { observed = g8.insertQueueRows(readFileSync(queuePath, 'utf8'), [dup]); writeFileSync(queuePath, observed) } } })
+        assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${label}: ${m.code} ${m.why}`); assert.ok(m.problems.includes('ROW_DUPLICATE'), `${label}: ${m.problems}`)
+        assert.equal(readFileSync(queueFile(w.repo), 'utf8'), observed, label)
+      }
+    }],
+    ['M05g 쓴 뒤 내 행은 그대로인데 승인 source 가 철회되면 실제 소비 관문이 막아 QUEUE_WRITE_CONFLICT(GATE_REJECTED)', () => {
+      const w = makeWorld(); approved(w)
+      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => {
+        const f = sourceFile(w.repo); const d = JSON.parse(readFileSync(f, 'utf8')); d.entries[0].status = 'REVOKED'; writeFileSync(f, `${JSON.stringify(d, null, 2)}\n`)
+        writeFileSync(queuePath, `${readFileSync(queuePath, 'utf8')}// 다른 writer\n`) } } })
+      assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`); assert.ok(m.problems.includes('GATE_REJECTED'), m.problems.join(','))
+      assertHeld(w, 'NOT_APPROVED')
     }],
     ['M05b 큐 끝 원소에 쉼표가 없어 새 행을 넣으면 읽히지 않는 큐 → QUEUE_RENDER_INVALID · 쓰기 0', () => {
       const w = makeWorld(); approved(w)
@@ -924,7 +994,8 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const w = makeWorld(); const a = approved(w)
       const r = spawnSync(process.execPath, [cliPath, 'materialize', '--slug', SLUG, '--repo', w.repo, '--admission-root', w.admission, '--out-root', w.repo], { encoding: 'utf8' })
       assert.equal(r.status, 0, r.stderr || r.stdout); const out = JSON.parse(r.stdout)
-      assert.deepEqual({ ok: out.ok, day: out.day, articlePlanHash: out.articlePlanHash }, { ok: true, day: 23, articlePlanHash: a.sourceHash })
+      assert.deepEqual({ ok: out.ok, written: out.written, concurrentWrite: out.concurrentWrite, day: out.day, articlePlanHash: out.articlePlanHash },
+        { ok: true, written: true, concurrentWrite: false, day: 23, articlePlanHash: a.sourceHash }, 'CLI 가 성공 · concurrentWrite 를 사실대로 내지 않는다')
     }],
     ['S24c 실제 저장소 prepare(읽기 전용) — 연구 admission 없는 루트면 RECEIPT_ABSENT · 실제 graph·control 판독 통과 · 쓰기 0', () => {
       const empty = tmp('no-admission'); mkdirSync(join(empty, 'contract'), { recursive: true })

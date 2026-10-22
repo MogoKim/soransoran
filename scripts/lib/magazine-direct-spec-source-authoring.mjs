@@ -559,7 +559,7 @@ function checkNoSymlinkBelow(root, target) {
  *    남은 잠금은 사람이 주인을 확인하고 지운다.
  * 🔴 해제는 rename 으로 떼어 낸 뒤 token 을 확인하고, 내 것이 아니면 같은 inode 를 제자리에 되돌린다 —
  *    어떤 종료 경로에서도 내 것이 아닌 잠금을 지우지 않는다.
- * `hooks.lockObserved` 는 시험 전용(기존 잠금을 본 직후 경쟁 주입)이다.
+ * `hooks.lockObserved` · `hooks.beforeReleaseRename` 은 시험 전용(기존 잠금을 본 직후 · 해제 확인 직후 경쟁 주입)이다.
  */
 function acquireLock(lockPath, hooks = {}) {
   const token = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
@@ -578,6 +578,9 @@ function acquireLock(lockPath, hooks = {}) {
     }
     const owns = () => { try { return JSON.parse(readFileSync(lockPath, 'utf8')).token === token } catch { return false } }
     const release = () => {
+      // 🔴 이미 내 것이 아니면 건드리지 않는다 — rename · unlink · link 0 (남의 잠금 경로를 한 번도 움직이지 않는다)
+      if (!owns()) return
+      hooks.beforeReleaseRename?.({ lockPath })
       const parked = `${lockPath}.release-${token}`
       try { renameSync(lockPath, parked) } catch { return }
       let mine = false
@@ -739,7 +742,8 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
  * 🔴 큐 writer lock(`withQueueWriteLock`) 안에서 읽기 · 중복 확인 · day 결정 · 쓰기 · 다시 읽기 대조를 한 번에 한다.
  * `hooks.beforeLock` · `hooks.beforeWrite` · `hooks.afterWrite` 는 시험 전용(경쟁 writer · 외부 writer · 쓰기 손상 주입)이다.
  *
- * @returns {{ok:true, written:true, path:string, row:object, day:number}|{ok:false, code:string, why:string, problems?:string[]}}
+ * 🔴 쓰기 뒤 다른 writer 가 끼어들어도 내 행이 그대로 실행 대상이면 성공(`concurrentWrite:true`)이다 — 실패를 돌려주면서 실제 DIRECT 행을 남기지 않는다.
+ * @returns {{ok:true, written:true, concurrentWrite:boolean, path:string, row:object, day:number}|{ok:false, code:string, why:string, problems?:string[]}}
  */
 export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = process.env, hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
   const fail = (code, why, problems) => ({ ok: false, code, why, ...(problems ? { problems } : {}) })
@@ -793,20 +797,38 @@ export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = 
       const mine = rows.filter((q) => q.slug === slug)
       return mine.length === 1 && canonicalJson(mine[0]) === canonicalJson(row) && canonicalJson(rows.filter((q) => q.slug !== slug)) === canonicalJson(queue)
     }
+    /** 다른 writer 가 끼어든 뒤의 큐 — 내 행이 정확히 1개(slug·intent 중복 없음) · 만든 행과 같음 · 실제 소비 관문 통과 */
+    const settleConcurrentWrite = (text) => {
+      let rows
+      try { rows = parseQueueSource(text) } catch { return { ok: false, problems: ['QUEUE_UNPARSEABLE'] } }
+      const problems = []
+      const hits = rows.filter((q) => q.slug === slug || q.intentId === entry.node.intentId)
+      if (hits.length === 0) problems.push('ROW_MISSING')
+      if (hits.length > 1) problems.push('ROW_DUPLICATE')
+      const mine = hits.length === 1 ? hits[0] : null
+      if (mine && canonicalJson(mine) !== canonicalJson(row)) problems.push('ROW_CHANGED')
+      if (mine && !problems.length) {
+        const j = judgeDirectSpecSource({ queueItem: mine, draftsDir: join(roots.root, 'drafts/magazine'), expectedGraphVersion: gv, productRoot: roots.root })
+        if (!j.ok) problems.push('GATE_REJECTED')
+      }
+      return { ok: problems.length === 0, problems }
+    }
     // 🔴 쓰기 전에 메모리에서 — 렌더 결과가 큐로 읽히지 않으면 아무것도 쓰지 않는다
     if (!exactlyAdded(next)) return fail('QUEUE_RENDER_INVALID', '새 행을 넣은 큐가 같은 parser 로 기존 행 + 새 행 1개로 읽히지 않는다 — 쓰지 않는다')
     hooks.beforeWrite?.({ queuePath })
     // 🔴 lock 밖 writer 가 있었는가 — 읽은 바이트와 다르면 쓰지 않는다
     if (readFileSync(queuePath, 'utf8') !== before) return fail('QUEUE_CHANGED', '읽은 뒤 큐가 바뀌었다 — 쓰지 않는다')
+    // 🔴 commit 지점 — 이 쓰기 뒤의 판정은 「내 행이 지금 큐에 있는 그대로 실행 대상인가」를 사실대로 보고한다
     writeAtomic(queuePath, next)
     hooks.afterWrite?.({ queuePath })
-    // 🔴 디스크의 실제 바이트가 쓴 바이트와 정확히 같고 같은 parser 로도 「기존 행 + 새 행 1개」일 때만 성공이다.
-    //    다르면 그 사이 다른 writer 가 썼다 — 관측한 지금 바이트를 **덮지도 되돌리지도 않는다**(되돌리면 남의 변경까지 지운다).
     const observed = readFileSync(queuePath, 'utf8')
-    if (observed !== next || !exactlyAdded(observed)) {
-      return fail('QUEUE_WRITE_CONFLICT', '쓴 뒤 큐 바이트가 쓴 것과 다르다 — 다른 writer 가 끼어들었다. 지금 바이트를 그대로 두고 멈춘다 (사람이 확인한다)')
-    }
-    return { ok: true, written: true, path: queuePath, row, day }
+    if (observed === next) return { ok: true, written: true, concurrentWrite: false, path: queuePath, row, day }
+    // 🔴 그 사이 다른 writer 가 썼다 — 관측한 지금 바이트는 **덮지도 되돌리지도 않는다**(되돌리면 남의 변경까지 지운다).
+    //    내 행이 정확히 1개 · 승인 entry 의 행과 같고 · 실제 소비 관문을 통과하면 materialize 는 성공이다(실제 DIRECT 행이 있다).
+    //    아니면 실패다 — 남은 행은 소비 관문이 HOLD 한다(검사가 단언한다).
+    const settled = settleConcurrentWrite(observed)
+    if (settled.ok) return { ok: true, written: true, concurrentWrite: true, path: queuePath, row, day }
+    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤 다른 writer 가 끼어들어 내 행이 그대로가 아니다 (${settled.problems.join(',')}) — 지금 바이트를 그대로 두고 멈춘다. 사람이 확인하기 전 producer 를 돌리지 않는다`, settled.problems)
   }, { env })
   if (!locked.ok) return locked
   return locked.value

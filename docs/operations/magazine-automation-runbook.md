@@ -58,6 +58,11 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
   - `materialize` — 승인 entry 하나로 큐 writer lock 안에서 `max(day)+1` 행을 넣고, 같은 parser로 다시 읽어 대조한다.
   - 소비 쪽 fail-closed: G8 해시(`g8ManifestHash` · `articlePlanHash`) 중 하나라도 있는 행은 둘 다 있고 `DIRECT_SPEC_V1`이어야 한다
     (`G8_ROW_NOT_DIRECT`). plan 복제 필드를 손으로 고치면 `SOURCE_QUEUE_DRIFT`다.
+  - 승인 잠금(`article-spec-source/<graphVersion>.json.lock`)이 있어 `LOCK_BUSY`이면 자동으로 지우거나 재시도하지 않는다.
+    잠금의 pid와 실행 중 프로세스를 확인한 뒤 사람만 stale 잠금을 정리한다.
+  - `.release-*` 파일이 보이면 자동으로 지우지 않는다 — 해제 경쟁의 사고 잔존물로 보고 주인을 확인한다.
+  - materialize가 `QUEUE_WRITE_CONFLICT`이면 큐에서 해당 slug·intent 행과 source 관문 결과를 확인하기 전에는
+    producer를 실행하지 않는다. `concurrentWrite: true` 성공은 다른 writer의 변경을 보존한 채 내 행이 그대로라는 뜻이다.
 
 ### 0.0 자동 병합이 확인하는 것
 
