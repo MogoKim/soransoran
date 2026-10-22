@@ -727,6 +727,87 @@ function planCases(plan, lane = real.lane) {
       assert.ok(!('directSpec' in r.run.selected[0]))
     }],
     ...reuseCases(plan, lane),
+    ...identityCases(plan),
+  ]
+}
+
+/**
+ * 🔴 **큐 신원 중복 관문 (producer 공용 · 2026-10-22 PR C)**.
+ *    같은 slug 또는 같은 non-empty intentId 가 큐 전체에서 2번 이상이면 그 행 전부(첫 행 포함) HOLD.
+ *    selected · reusable 0 · DIRECT 판정 · spec 저장 · brief/review TODO · 회수 대상 0 · 순서 무관 · 고유 행은 계속.
+ */
+function identityCases(plan) {
+  const L = (slug, day, extra = {}) => ({ ...legacyItem(), day, slug, ...extra })
+  const run = (queue, { prepare = (d) => writeSource(d), today = TODAY } = {}) => {
+    const judged = []; const persisted = []
+    const r = runPlan(plan, { queue, prepare, today,
+      directSourceFnOverride: (a) => { judged.push(a.queueItem.slug); return real.source.verifyDirectSpecIdentity(a) },
+      persistSpecFn: (a) => { persisted.push(a.spec.identity.slug); return real.source.persistDirectSpecNoClobber(a) } })
+    const targets = readRunTargets({ draftsDir: r.draftsDir, date: today }).targets.map((t) => t.slug)
+    return { ...r, judged, persisted, targets }
+  }
+  const dupHeld = (r) => r.held.filter((h) => h.code === 'QUEUE_IDENTITY_DUPLICATE')
+    .map((h) => `${h.day}:${h.slug}:${h.intentId ?? '-'}`).sort()
+  /** 중복 행이 어디에도 흘러가지 않았다 — selected · reusable · 판정 · spec · TODO · 회수 */
+  const noFlow = (r, slugs, label) => {
+    for (const slug of slugs) {
+      assert.ok(!r.selected.includes(slug), `${label}: ${slug} 선정`); assert.ok(!r.reusable.includes(slug), `${label}: ${slug} 재사용`)
+      assert.ok(!r.judged.includes(slug), `${label}: ${slug} DIRECT 판정`); assert.ok(!r.persisted.includes(slug), `${label}: ${slug} spec 저장`)
+      assert.ok(!r.packages.includes(slug), `${label}: ${slug} brief/review TODO`); assert.ok(!r.targets.includes(slug), `${label}: ${slug} 회수 대상`)
+    }
+  }
+  return [
+    ['Q1 같은 slug DIRECT 1 + LEGACY 1 → 둘 다 HOLD · 선정 0 · DIRECT 판정·spec·TODO·회수 0 · 고유 행은 계속 · 순서 무관', () => {
+      const q = [directItem(), L(DIRECT_SLUG, 9100), legacyItem()]
+      const a = run(q); const b = run([...q].reverse())
+      for (const [label, r] of [['정순', a], ['역순', b]]) {
+        assert.deepEqual(dupHeld(r), [`9001:${DIRECT_SLUG}:I-DSSC-01`, `9100:${DIRECT_SLUG}:-`], `${label}: ${JSON.stringify(r.held)}`)
+        assert.deepEqual(r.selected, [LEGACY_SLUG], label); noFlow(r, [DIRECT_SLUG], label)
+        assert.equal(r.spec, null, `${label}: spec 저장`)
+      }
+      assert.deepEqual(a.run.held, b.run.held, 'held 가 큐 순서에 따라 달라졌다')
+      assert.deepEqual(a.run.selected, b.run.selected, '선정이 큐 순서에 따라 달라졌다')
+    }],
+    ['Q2 같은 slug LEGACY 2 → 둘 다 HOLD (DIRECT 조합이 아니어도)', () => {
+      const r = run([L('dup-legacy', 9110), L('dup-legacy', 9111), legacyItem()])
+      assert.deepEqual(dupHeld(r), ['9110:dup-legacy:-', '9111:dup-legacy:-']); assert.deepEqual(r.selected, [LEGACY_SLUG]); noFlow(r, ['dup-legacy'], 'LEGACY 2')
+    }],
+    ['Q3 같은 intentId · 서로 다른 slug 2개 → 둘 다 HOLD', () => {
+      const r = run([L('intent-a', 9120, { intentId: 'I-DUP' }), L('intent-b', 9121, { intentId: 'I-DUP' }), legacyItem()])
+      assert.deepEqual(dupHeld(r), ['9120:intent-a:I-DUP', '9121:intent-b:I-DUP']); assert.deepEqual(r.selected, [LEGACY_SLUG]); noFlow(r, ['intent-a', 'intent-b'], 'intent')
+    }],
+    ['Q4 slug 중복과 intent 중복이 겹치는 3행 → 관련 행 전부 HOLD · 행마다 정확히 1번(중복 보고 0)', () => {
+      const r = run([L('ov-1', 9130, { intentId: 'I-OV-1' }), L('ov-1', 9131, { intentId: 'I-OV-2' }), L('ov-2', 9132, { intentId: 'I-OV-2' }), legacyItem()])
+      assert.deepEqual(dupHeld(r), ['9130:ov-1:I-OV-1', '9131:ov-1:I-OV-2', '9132:ov-2:I-OV-2'])
+      assert.equal(r.held.filter((h) => h.code === 'QUEUE_IDENTITY_DUPLICATE').length, 3, '같은 행을 두 번 보고했다')
+      assert.deepEqual(r.selected, [LEGACY_SLUG]); noFlow(r, ['ov-1', 'ov-2'], '겹침')
+    }],
+    ['Q5 중복 행이 produceCount 밖 · 미래 publishWindow 여도 전부 HOLD · 앞쪽 고유 5행은 그대로 선정', () => {
+      const uniq = Array.from({ length: 5 }, (_, i) => L(`uniq-${i}`, 9140 + i))
+      const r = run([...uniq, L('late-dup', 9990), L('late-dup', 9991, { contentType: 'SEASONAL', publishWindow: { after: '2027-01-01', before: '2027-02-01' } })])
+      assert.deepEqual(dupHeld(r), ['9990:late-dup:-', '9991:late-dup:-'])
+      assert.deepEqual(r.selected.slice().sort(), uniq.map((x) => x.slug).sort()); noFlow(r, ['late-dup'], 'produceCount 밖')
+    }],
+    ['Q6 selected 와 reusable 로 나뉠 행(같은 intentId · 한쪽만 draft 폴더) → 둘 다 HOLD · 재사용 0', () => {
+      const prepare = (d) => { writeSource(d); mkdirSync(join(d, 'split-a'), { recursive: true }) }
+      const r = run([L('split-a', 9150, { intentId: 'I-SPLIT' }), L('split-b', 9151, { intentId: 'I-SPLIT' }), legacyItem()], { prepare })
+      assert.deepEqual(dupHeld(r), ['9150:split-a:I-SPLIT', '9151:split-b:I-SPLIT'])
+      for (const slug of ['split-a', 'split-b']) assert.deepEqual(r.held.filter((h) => h.slug === slug).map((h) => h.code), ['QUEUE_IDENTITY_DUPLICATE'], slug)
+      noFlow(r, ['split-a', 'split-b'], '분할')
+    }],
+    ['Q7 신원 중복이 없으면 run.json held · 선정은 관문 이전과 같다 (고유 큐 결과 불변)', () => {
+      const r = run([directItem(), legacyItem()])
+      assert.deepEqual(dupHeld(r), []); assert.deepEqual(r.selected.slice().sort(), [DIRECT_SLUG, LEGACY_SLUG].sort())
+      assert.deepEqual(r.judged, [DIRECT_SLUG]); assert.deepEqual(r.persisted, [DIRECT_SLUG])
+    }],
+    ['Q8 run.json held — 중복 행 전부의 day · slug · intentId · 코드 · 이유 · 순서 무관 동일', () => {
+      const q = [L('dup-x', 9160, { intentId: 'I-X' }), legacyItem(), L('dup-x', 9161), L('dup-y', 9162, { intentId: 'I-X' })]
+      const a = run(q).run.held.filter((h) => h.code === 'QUEUE_IDENTITY_DUPLICATE')
+      const b = run([...q].reverse()).run.held.filter((h) => h.code === 'QUEUE_IDENTITY_DUPLICATE')
+      assert.deepEqual(a, b, '큐 순서에 따라 held 가 달라졌다')
+      assert.deepEqual(a.map((h) => [h.day, h.slug, h.intentId]), [[9160, 'dup-x', 'I-X'], [9161, 'dup-x', null], [9162, 'dup-y', 'I-X']])
+      assert.ok(a.every((h) => typeof h.why === 'string' && h.why.includes('큐 신원 중복')), JSON.stringify(a))
+    }],
   ]
 }
 
@@ -1278,6 +1359,16 @@ function notifyCases(notify, webui) {
       assert.ok(!directAlerts[0].reason.includes('legacy-held'))
       assert.deepEqual(withHeld.filter((a) => !a.title.includes('DIRECT_SPEC 보류')), without)
     }],
+    ['N1c 큐 신원 중복 → 「매거진 queue 신원 중복」 알림 정확히 1건 · 대상 day·slug·intentId · DIRECT 보류 알림과 섞지 않는다', () => {
+      const d = tmp('notify-identity')
+      const held = [{ day: 9001, slug: 'dup-a', intentId: 'I-DUP', code: 'QUEUE_IDENTITY_DUPLICATE', why: 'x' }, { day: 9002, slug: 'dup-a', intentId: null, code: 'QUEUE_IDENTITY_DUPLICATE', why: 'y' }]
+      const a = notify.judge({ date: TODAY, runExists: true, draftsDir: d, run: baseRun({ held }) })
+      const id = a.filter((x) => x.title.includes('매거진 queue 신원 중복'))
+      assert.equal(id.length, 1, JSON.stringify(a)); assert.match(id[0].title, /2행/)
+      assert.ok(id[0].reason.includes('day 9001 dup-a(I-DUP)') && id[0].reason.includes('day 9002 dup-a'), id[0].reason)
+      assert.ok(!a.some((x) => x.title.includes('DIRECT_SPEC 보류')), 'DIRECT 보류 알림에 섞었다')
+      assert.equal(notify.judge({ date: TODAY, runExists: true, draftsDir: d, run: baseRun() }).filter((x) => x.title.includes('신원 중복')).length, 0)
+    }],
     ['N1b G8_ROW_NOT_DIRECT 보류 → direct 보류 알림 1건 · ArticlePlan materialize 안내', () => {
       const d = tmp('notify-g8')
       const a = notify.judge({ date: TODAY, runExists: true, draftsDir: d, run: baseRun({ held: [{ day: 1, slug: 'g8-row', code: 'G8_ROW_NOT_DIRECT', why: 'x' }] }) })
@@ -1449,7 +1540,7 @@ const MUTATIONS = [
   ['plan', 'MP4', 'expected graphVersion 전달 제거', 'return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT, productRoot: REPO_ROOT })', 'return directSourceFn({ queueItem, draftsDir, repoRoot: REPO_ROOT, productRoot: REPO_ROOT })'],
   ['plan', 'MP16', 'plan 이 승인 basis 제품 루트를 넘기지 않는다 (P1 call-site)', 'return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT, productRoot: REPO_ROOT })', 'return directSourceFn({ queueItem, draftsDir, expectedGraphVersion, repoRoot: REPO_ROOT })'],
   ['plan', 'MP5', 'spec 저장 제거', 'const p = persistSpecFn({ spec: j.spec, draftsDir })', 'const p = { ok: true, written: false }'],
-  ['plan', 'MP6', 'NOT_READY HOLD 기록 제거', 'const held = [...directHeld]', 'const held = []'],
+  ['plan', 'MP6', 'NOT_READY HOLD 기록 제거', 'const held = [...gated.identityHeld, ...directHeld]', 'const held = [...gated.identityHeld]'],
   ['plan', 'MP7', '모르는 mode 를 legacy 로 묻는다', "if (!mode.ok) { drop.push({ day: item.day, slug: item.slug, code: mode.code, why: mode.why }); continue }", 'if (!mode.ok) continue'],
   ['plan', 'MP8', '재사용 direct source 관문 우회 (P0)', '      if (mode.mode === DIRECT_SPEC_MODE) {\n        const j = judgeDirect(item)', '      if (false) {\n        const j = judgeDirect(item)'],
   ['plan', 'MP9', 'legacy run.json 필드 변경 (golden)', '        needsFullReview: false,\n        packageWritten: false,', '        needsFullReview: false,\n        packageWritten: false,\n        lane: \'auto\','],
@@ -1499,6 +1590,14 @@ const MUTATIONS = [
   ['plan', 'MP14', 'mixed 보고에서 brief 안내 범위 구분 제거 (P2)', "      L.push(`legacy 선정 ${legacySel.length}건(${legacySel.join(', ')})에만 해당: \\`_runs/${run.date}/selected/{slug}/brief.todo.md\\` 의 TODO 를 채운 뒤`)", "      L.push('세션에서 `_runs/' + run.date + '/selected/*/brief.todo.md` 의 TODO 를 채운 뒤')"],
   ['plan', 'MP17', 'run.json 이 articlePlanHash 를 운반하지 않는다 (PR C)', "        ...(i.articlePlanHash ? { articlePlanHash: i.articlePlanHash } : {}),\n", ''],
   ['notify', 'MN4', 'G8_ROW_NOT_DIRECT 보류를 direct 보류 알림에서 뺀다 (PR C)', "'UNKNOWN_MAGAZINE_AUTO_MODE', 'G8_ROW_NOT_DIRECT', ", "'UNKNOWN_MAGAZINE_AUTO_MODE', "],
+  ['plan', 'MQI1', '큐 신원 — slug 중복 검사 제거', 'const duplicated = (item) => (slugs.get(key(item?.slug)) ?? 0) > 1 || (intents.get(key(item?.intentId)) ?? 0) > 1', 'const duplicated = (item) => (intents.get(key(item?.intentId)) ?? 0) > 1'],
+  ['plan', 'MQI2', '큐 신원 — intentId 중복 검사 제거', 'const duplicated = (item) => (slugs.get(key(item?.slug)) ?? 0) > 1 || (intents.get(key(item?.intentId)) ?? 0) > 1', 'const duplicated = (item) => (slugs.get(key(item?.slug)) ?? 0) > 1'],
+  ['plan', 'MQI3', '큐 신원 — 첫 행만 HOLD 하고 나머지는 통과', '  return { unique: queue.filter((item) => !duplicated(item)), held }', '  const first = queue.findIndex(duplicated)\n  return { unique: queue.filter((item, i) => !duplicated(item) || i !== first), held: held.filter((h) => h.slug === queue[first]?.slug && h.day === queue[first]?.day) }'],
+  ['plan', 'MQI4', '큐 신원 — 선정 범위(produceCount)만 보고 뒤쪽 중복을 무시', '  const identity = splitQueueIdentityDuplicates(queue)', '  const identity = ((s) => ({ ...s, unique: [...s.unique, ...queue.slice(produceCount)] }))(splitQueueIdentityDuplicates(queue.slice(0, produceCount)))'],
+  ['plan', 'MQI5', '큐 신원 — DIRECT+LEGACY 조합만 막고 LEGACY+LEGACY 허용', 'const duplicated = (item) => (slugs.get(key(item?.slug)) ?? 0) > 1 || (intents.get(key(item?.intentId)) ?? 0) > 1', "const duplicated = (item) => ((slugs.get(key(item?.slug)) ?? 0) > 1 || (intents.get(key(item?.intentId)) ?? 0) > 1) && queue.some((x) => x.directSpecMode === 'DIRECT_SPEC_V1' && (x.slug === item.slug || (key(x.intentId) && x.intentId === item.intentId)))"],
+  ['plan', 'MQI6', '큐 신원 — 중복 행을 reusable 후보로 통과시킨다', '    for (const item of reusableRaw) {', '    for (const item of [...reusableRaw, ...queue.filter((q) => gated.identityHeld.some((h) => h.slug === q.slug && h.day === q.day) && draftExists(q.slug))]) {'],
+  ['plan', 'MQI7', '큐 신원 — run.held 기록 제거', '    const held = [...gated.identityHeld, ...directHeld]', '    const held = [...directHeld]'],
+  ['notify', 'MQI8', '큐 신원 — 운영 알림 제거', '  if (identityAlert) alerts.push(identityAlert)\n', ''],
   ['notify', 'MN1', 'direct 보류 알림 제거 (P1)', '  if (directHold) alerts.push(directHold)\n', ''],
   ['notify', 'MN2', 'direct 행을 legacy brief 누락으로 오보 (P1)', "    const missing = rows.filter((x) => !isDirectRow(x)).map((x) => x.slug)", '    const missing = rows.map((x) => x.slug)'],
   ['webui', 'MW1', '회수 계획이 direct 에 "세션이 채워야 한다" 안내 (P1)', "  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {\n    return t.material?.articleSpec", "  if (false) {\n    return t.material?.articleSpec"],

@@ -224,6 +224,33 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
   return { selected, review: [], skipped, reusable }
 }
 
+export const QUEUE_IDENTITY_DUPLICATE = 'QUEUE_IDENTITY_DUPLICATE'
+
+/**
+ * 🔴 **큐 신원 중복 관문 — producer 공용** (2026-10-22 · PR C).
+ *    같은 slug 또는 같은 non-empty intentId 가 큐 **전체**에서 2번 이상 나오면, 그 값을 가진 행을 첫 행까지 **전부** HOLD 한다.
+ *    선정 범위 · day · publishWindow · produceCount 와 무관하게 전체 큐로 본다 — 한 글을 두 경로(DIRECT·LEGACY)나 두 행이
+ *    동시에 만드는 것을 등록 gate 까지 미루지 않는다. 사람이 큐를 고치기 전 자동 재시도 · legacy 강등은 없다.
+ *    HOLD 는 신원 순서로 정렬한다 — 큐 입력 순서에 따라 결과가 달라지지 않는다.
+ * @returns {{ unique: object[], held: object[] }} unique = 신원이 고유한 행(큐 순서 유지)
+ */
+export function splitQueueIdentityDuplicates(queue) {
+  const key = (v) => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  const count = (field) => {
+    const m = new Map()
+    for (const item of queue) { const k = key(item?.[field]); if (k) m.set(k, (m.get(k) ?? 0) + 1) }
+    return m
+  }
+  const slugs = count('slug')
+  const intents = count('intentId')
+  const duplicated = (item) => (slugs.get(key(item?.slug)) ?? 0) > 1 || (intents.get(key(item?.intentId)) ?? 0) > 1
+  const held = queue.filter(duplicated).map((item) => ({
+    day: item.day, slug: item.slug ?? null, intentId: item.intentId ?? null, code: QUEUE_IDENTITY_DUPLICATE,
+    why: `큐 신원 중복 — slug ${item.slug} ×${slugs.get(key(item.slug)) ?? 0}${key(item.intentId) ? ` · intentId ${item.intentId} ×${intents.get(key(item.intentId))}` : ''}. 사람이 topic-queue 를 고치기 전 선정 · 생산 0`,
+  })).sort((x, y) => String(x.slug).localeCompare(String(y.slug)) || String(x.intentId).localeCompare(String(y.intentId)) || (x.day ?? 0) - (y.day ?? 0))
+  return { unique: queue.filter((item) => !duplicated(item)), held }
+}
+
 /**
  * 🔴 **DIRECT_SPEC_V1 행은 승인 source 가 준비됐을 때만 선정에 남는다** (2026-10-15 상류 관문).
  *
@@ -236,7 +263,9 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
  *    🔴 legacy 만 선정되면 판정 함수를 한 번도 부르지 않는다 — 제품 graph 도 source 도 읽지 않는다.
  */
 export function selectWithDirectGate({ queue, articles, today, produceCount, reviewCount, draftExists, judgeDirect }) {
-  let pool = queue
+  // 🔴 가장 앞 — 신원 중복 행은 선정 · 재사용 · DIRECT 판정 · spec · TODO · 회수의 후보가 되지 않는다
+  const identity = splitQueueIdentityDuplicates(queue)
+  let pool = identity.unique
   let pass = selectItems({ queue: pool, articles, today, produceCount, reviewCount, draftExists })
   const held = []
   const ready = new Map()
@@ -256,7 +285,7 @@ export function selectWithDirectGate({ queue, articles, today, produceCount, rev
     pool = pool.filter((item) => !gone.has(item.slug))
     pass = selectItems({ queue: pool, articles, today, produceCount, reviewCount, draftExists })
   }
-  return { ...pass, directHeld: held, directReady: ready }
+  return { ...pass, directHeld: held, directReady: ready, identityHeld: identity.held, uniqueQueue: identity.unique }
 }
 
 /** run.json selected 행에 남기는 direct 신원 — 원문 없이 식별자·해시만 */
@@ -667,6 +696,7 @@ export function planRun({
     const { review, skipped, reusable: reusableRaw, directReady } = gated
     let selected = gated.selected
     const directHeld = [...gated.directHeld]
+    for (const h of gated.identityHeld) log(`  ⏸ ${h.code} — ${h.slug} (day ${h.day}${h.intentId ? ` · ${h.intentId}` : ''}) — 사람이 큐를 고치기 전 선정 0`)
 
     // 🔴 준비된 direct 행만 spec 을 쓴다 — 덮어쓰지 않는다. 충돌이면 그 행만 HOLD 로 뺀다.
     const directPersisted = new Map()
@@ -688,11 +718,12 @@ export function planRun({
 
     // 🔴 slug 별 멱등성 — 판정 불가·전송불명은 그 slug 만 HOLD 로 뺀다
     const ledger = readQuarantine(quarantinePath)
-    const queueBySlug = new Map(queue.map((item) => [item.slug, item]))
+    // 🔴 신원이 고유한 행만 — 중복 slug 가 입력 순서대로 덮어써지지 않는다
+    const queueBySlug = new Map(gated.uniqueQueue.map((item) => [item.slug, item]))
     const gate = ({ slug, draftsDir: dd }) => gateFn({ slug, draftsDir: dd, quarantinePath,
       queueItem: queueBySlug.get(slug) ?? null })
     const reusable = []
-    const held = [...directHeld]
+    const held = [...gated.identityHeld, ...directHeld]
     for (const item of reusableRaw) {
       /**
        * 🔴 **재사용 direct 행도 지금 승인 source 를 다시 지난다** (2026-10-15 Codex P0).
@@ -725,7 +756,7 @@ export function planRun({
       if (v.ok) reusable.push({ ...item, ...(directRow ? { directSpec: directRow } : {}), stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })
       else held.push({ day: item.day, slug: item.slug, code: v.code, why: v.why })
     }
-    for (const h of held.slice(directHeld.length)) {
+    for (const h of held.slice(gated.identityHeld.length + directHeld.length)) {
       if (!h.directSpec && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE' && h.code !== 'G8_ROW_NOT_DIRECT') continue
       const e = h.directSpec
       log(`  ⏸ ${h.code} — ${h.slug} (재사용)${e ? ` · expected ${e.expectedGraphVersion ?? '-'} · observed ${e.observedGraphVersion ?? '-'} · blockers ${e.blockers.join(',') || '-'}` : ''}`)
