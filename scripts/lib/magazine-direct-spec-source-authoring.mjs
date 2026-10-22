@@ -549,46 +549,44 @@ function checkNoSymlinkBelow(root, target) {
   return { ok: true }
 }
 
-function pidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
-}
-
-/** 읽을 수 없는 잠금을 회수하기까지 기다리는 시간 — 그보다 새 잠금은 다른 writer 가 쥔 것으로 본다 */
-const UNREADABLE_LOCK_GRACE_MS = 60_000
-
 /**
- * 단일 writer 잠금.
- * 🔴 **내용이 다 쓰인 뒤에만 잠금이 보인다** — pid 를 쓴 임시 파일을 `link` 로 원자 생성한다.
+ * 단일 writer 잠금 — **회수하지 않는다** (2026-10-22 · PR C 경쟁 수리).
+ * 🔴 **내용이 다 쓰인 뒤에만 잠금이 보인다** — pid · token 을 쓴 임시 파일(`wx`)을 `link` 로 배타 생성한다.
  *    (앞판은 O_EXCL 로 빈 파일을 만든 뒤 pid 를 썼다. 그 사이 다른 프로세스가 빈 파일을 읽고
  *     죽은 잠금으로 지워 두 writer 가 동시에 잠금을 쥐었다 — 동시 승인 25회 중 1회 재현.)
- *    죽은 pid 의 잠금만 회수하고, 읽을 수 없는 잠금은 오래된 것만 회수한다.
+ * 🔴 **잠금이 이미 있으면 주인이 살았든 죽었든 그대로 두고 LOCK_BUSY** 다. 앞판은 죽은 pid 의 잠금을 지웠는데,
+ *    확인과 unlink 사이에 새 주인이 잠금을 잡으면 **새 잠금을 지웠다**(재현). 자동 stale 회수는 없앴다 —
+ *    남은 잠금은 사람이 주인을 확인하고 지운다.
+ * 🔴 해제는 rename 으로 떼어 낸 뒤 token 을 확인하고, 내 것이 아니면 같은 inode 를 제자리에 되돌린다 —
+ *    어떤 종료 경로에서도 내 것이 아닌 잠금을 지우지 않는다.
+ * `hooks.lockObserved` 는 시험 전용(기존 잠금을 본 직후 경쟁 주입)이다.
  */
-function acquireLock(lockPath) {
+function acquireLock(lockPath, hooks = {}) {
   const token = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
   const tmp = `${lockPath}.${token}`
   const fd = openSync(tmp, 'wx')
   try { writeSync(fd, JSON.stringify({ pid: process.pid, token })); fsyncSync(fd) } finally { closeSync(fd) }
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        linkSync(tmp, lockPath)
-        const owns = () => { try { return JSON.parse(readFileSync(lockPath, 'utf8')).token === token } catch { return false } }
-        return { ok: true, owns, release: () => { if (owns()) { try { unlinkSync(lockPath) } catch { /* 이미 없다 */ } } } }
-      } catch (e) {
-        if (e.code !== 'EEXIST') throw e
-        let holder = null
-        try { holder = JSON.parse(readFileSync(lockPath, 'utf8')) } catch { holder = null }
-        if (holder && pidAlive(holder.pid)) return { ok: false, code: 'LOCK_BUSY', why: `다른 승인이 진행 중이다 (pid ${holder.pid})` }
-        if (!holder) {
-          let age = Infinity
-          try { age = Date.now() - statSync(lockPath).mtimeMs } catch { /* 방금 사라졌다 */ }
-          if (age < UNREADABLE_LOCK_GRACE_MS) return { ok: false, code: 'LOCK_BUSY', why: '읽을 수 없는 최근 잠금이 있다 — 회수하지 않는다' }
-        }
-        try { unlinkSync(lockPath) } catch { /* 경쟁자가 먼저 지웠다 */ }
-      }
+    try {
+      linkSync(tmp, lockPath)
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e
+      hooks.lockObserved?.({ lockPath })
+      let holder = null
+      try { holder = JSON.parse(readFileSync(lockPath, 'utf8')) } catch { holder = null }
+      return { ok: false, code: 'LOCK_BUSY', why: `승인 잠금이 이미 있다${holder?.pid ? ` (pid ${holder.pid})` : ''} — 주인이 살았든 죽었든 자동으로 지우지 않는다. 사람이 확인하고 지운다` }
     }
-    return { ok: false, code: 'LOCK_BUSY', why: '잠금을 얻지 못했다' }
+    const owns = () => { try { return JSON.parse(readFileSync(lockPath, 'utf8')).token === token } catch { return false } }
+    const release = () => {
+      const parked = `${lockPath}.release-${token}`
+      try { renameSync(lockPath, parked) } catch { return }
+      let mine = false
+      try { mine = JSON.parse(readFileSync(parked, 'utf8')).token === token } catch { mine = false }
+      if (mine) { try { unlinkSync(parked) } catch { /* 이미 없다 */ } return }
+      // 내 것이 아니다 — 같은 inode 를 제자리에 되돌린다. 그 사이 새 잠금이 생겼으면 떼어 낸 파일을 그대로 남긴다(지우지 않는다)
+      try { linkSync(parked, lockPath); unlinkSync(parked) } catch { /* parked 를 보존한다 */ }
+    }
+    return { ok: true, owns, release }
   } finally {
     try { unlinkSync(tmp) } catch { /* 이미 없다 */ }
   }
@@ -615,7 +613,7 @@ function gateWithEntry({ entry, root, graphVersion, day = 1 }) {
 
 /**
  * approve — source artifact 의 유일한 쓰기. 후보를 다시 검증하고 승인 entry 하나를 원자적으로 더한다.
- * `hooks.beforeLock` · `hooks.beforeRename` 은 시험 전용(경쟁 승인 · 급사 · 실패 · 외부 writer 주입)이다.
+ * `hooks.beforeLock` · `hooks.lockObserved` · `hooks.beforeRename` 은 시험 전용(경쟁 승인 · 잠금 경쟁 · 급사 · 실패 · 외부 writer 주입)이다.
  *
  * @returns {{ok:true, written:boolean, path:string, sourceHash:string, entry:object}|{ok:false, code:string, why:string, problems?:string[]}}
  */
@@ -690,7 +688,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   mkdirSync(dirname(file), { recursive: true })
   if (realpathSync(dirname(file)) !== dirname(file)) return fail('OUT_PATH_SYMLINK', '대상 폴더가 symlink 를 지난다')
   hooks.beforeLock?.({ file })
-  const lock = acquireLock(`${file}.lock`)
+  const lock = acquireLock(`${file}.lock`, hooks)
   if (!lock.ok) return lock
   try {
     // 🔴 CAS — 읽은 바이트를 기억한다. 교체 직전에 다시 보고 다르면 멈춘다(외부 writer 를 덮지 않는다)
@@ -802,10 +800,11 @@ export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = 
     if (readFileSync(queuePath, 'utf8') !== before) return fail('QUEUE_CHANGED', '읽은 뒤 큐가 바뀌었다 — 쓰지 않는다')
     writeAtomic(queuePath, next)
     hooks.afterWrite?.({ queuePath })
-    // 🔴 디스크에서 같은 parser 로 다시 읽어 — 다르거나 읽히지 않으면 이전 바이트로 되돌린다
-    if (!exactlyAdded(readFileSync(queuePath, 'utf8'))) {
-      writeAtomic(queuePath, before)
-      return fail('QUEUE_READBACK_MISMATCH', '쓴 큐를 다시 읽은 행이 만든 행과 다르다 — 이전 바이트로 되돌렸다')
+    // 🔴 디스크의 실제 바이트가 쓴 바이트와 정확히 같고 같은 parser 로도 「기존 행 + 새 행 1개」일 때만 성공이다.
+    //    다르면 그 사이 다른 writer 가 썼다 — 관측한 지금 바이트를 **덮지도 되돌리지도 않는다**(되돌리면 남의 변경까지 지운다).
+    const observed = readFileSync(queuePath, 'utf8')
+    if (observed !== next || !exactlyAdded(observed)) {
+      return fail('QUEUE_WRITE_CONFLICT', '쓴 뒤 큐 바이트가 쓴 것과 다르다 — 다른 writer 가 끼어들었다. 지금 바이트를 그대로 두고 멈춘다 (사람이 확인한다)')
     }
     return { ok: true, written: true, path: queuePath, row, day }
   }, { env })

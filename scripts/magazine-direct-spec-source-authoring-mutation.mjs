@@ -84,7 +84,7 @@ const MUTATIONS = [
   ['MA22', '승인의 실제 관문 재확인 제거', "  if (!gateCheck.ok) return fail('GATE_REJECTED'", "  if (false) return fail('GATE_REJECTED'"],
   ['MA23', '기계 고정 신원 필드(admission · 관계) 편집 검사 제거', '  if (drifted.length) return fail(', '  if (false) return fail('],
   ['MA17', 'lock 안 이미 계획됨 재확인 제거 (경쟁 승인을 덮는다)', "    if (doc.entries.some((x) => x?.node?.slug === e.node.slug || x?.node?.intentId === e.node.intentId)) {\n      return fail('ALREADY_PLANNED'", "    if (false) {\n      return fail('ALREADY_PLANNED'"],
-  ['MA18', '단일 writer 잠금 제거', '  const lock = acquireLock(`${file}.lock`)', '  const lock = { ok: true, owns: () => true, release: () => {} }'],
+  ['MA18', '단일 writer 잠금 제거', '  const lock = acquireLock(`${file}.lock`, hooks)', '  const lock = { ok: true, owns: () => true, release: () => {} }'],
   ['MA19', '원자 쓰기 제거 — 대상 파일에 바로 쓴다', "    const fd = openSync(tmp, 'w')", "    const fd = openSync(file, 'w')"],
   ['MB1', '승인 entry 에 productBasis 를 싣지 않는다', '    productBasis: state.productBasis,\n', ''],
   ['MT1', 'prepare 의 asOf≤now 제거', "  if (atMs > nowMs) return { ok: false, code: 'AS_OF_FUTURE'", "  if (false) return { ok: false, code: 'AS_OF_FUTURE'"],
@@ -92,7 +92,15 @@ const MUTATIONS = [
   ['MT3', 'approve 의 at≥asOf 제거', '  if (asOfMs === null || atMs < asOfMs) return fail(', '  if (false) return fail('],
   ['MT4', '실제 날짜 검사 제거 (2026-02-30 허용)', "  return back === `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}` ? ms : null", '  return ms'],
   ['MW1', 'artifact CAS 재확인 제거', '      if (now.exists !== before.exists || now.hash !== before.hash) {', '      if (false) {'],
-  ['MK1', '읽을 수 없는 최근 잠금을 죽은 잠금으로 회수', '          if (age < UNREADABLE_LOCK_GRACE_MS) return { ok: false', '          if (false) return { ok: false'],
+  ['MK1', '기존 read-holder → 죽은 주인 잠금 unlink 회수를 되살린다 (확인-삭제 경쟁)',
+    "      hooks.lockObserved?.({ lockPath })\n      let holder = null\n      try { holder = JSON.parse(readFileSync(lockPath, 'utf8')) } catch { holder = null }\n",
+    "      let holder = null\n      try { holder = JSON.parse(readFileSync(lockPath, 'utf8')) } catch { holder = null }\n      hooks.lockObserved?.({ lockPath })\n"
+    + "      let alive = false\n      try { if (holder?.pid > 0) { process.kill(holder.pid, 0); alive = true } } catch (er) { alive = er.code === 'EPERM' }\n"
+    + "      if (!alive) {\n        try { unlinkSync(lockPath) } catch { /* 경쟁자가 먼저 지웠다 */ }\n"
+    + "        try { linkSync(tmp, lockPath); const mineR = () => { try { return JSON.parse(readFileSync(lockPath, 'utf8')).token === token } catch { return false } }\n"
+    + "          return { ok: true, owns: mineR, release: () => { if (mineR()) unlinkSync(lockPath) } } } catch { /* 또 졌다 */ }\n      }\n"],
+  ['MK3', '해제가 내 것이 아닌 잠금도 지운다', "      try { linkSync(parked, lockPath); unlinkSync(parked) } catch { /* parked 를 보존한다 */ }", "      try { unlinkSync(parked) } catch { /* 이미 없다 */ }"],
+  ['MK4', '해제가 token 확인 없이 잠금 경로를 지운다', "    const release = () => {\n      const parked = `${lockPath}.release-${token}`", "    const release = () => {\n      try { unlinkSync(lockPath) } catch { /* 이미 없다 */ }\n      return\n      const parked = `${lockPath}.release-${token}`"],
   ['MK2', '쓰기 직전 잠금 소유권 재확인 제거', '      if (!lock.owns()) {', '      if (false) {'],
   ['MR1', '연구 intents 원문 해시 재계산 대조 제거', '  if (manifest?.contentHash?.intents !== recomputed) {', '  if (false) {'],
   ['MR2', '연구 intent schema 검사 제거', "  if (rows.some((r) => r?.schemaVersion !== RESEARCH_INTENT_SCHEMA || !nonEmpty(r?.intentId))) throw", '  if (false) throw'],
@@ -110,7 +118,10 @@ const MUTATIONS = [
   // ── D. materialize ──
   ['MM1', 'materialize 가 plan 밖의 값(receipt 질문)을 제목으로 쓴다', '    const row = queueRowFromEntry(entry, { day })', '    const row = { ...queueRowFromEntry(entry, { day }), title: state.admission.primaryQuery }'],
   ['MM2', 'day 를 max(day)+1 이 아니라 행 수로 정한다', '    const day = Math.max(0, ...queue.map((q) => q.day).filter(Number.isInteger)) + 1', '    const day = queue.length + 1'],
-  ['MM3', '쓴 뒤 다시 읽기 대조 제거', "    if (!exactlyAdded(readFileSync(queuePath, 'utf8'))) {", '    if (false) {'],
+  ['MM3', '쓴 뒤 실제 바이트 대조 제거', '    if (observed !== next || !exactlyAdded(observed)) {', '    if (false) {'],
+  ['MMC1', '쓰기 충돌 시 이전 큐 전체로 되돌린다 (남의 변경을 지운다)', "    if (observed !== next || !exactlyAdded(observed)) {\n      return fail('QUEUE_WRITE_CONFLICT'", "    if (observed !== next || !exactlyAdded(observed)) {\n      writeAtomic(queuePath, before)\n      return fail('QUEUE_WRITE_CONFLICT'"],
+  ['MMC2', '쓰기 충돌 시 관측 바이트를 내 바이트로 덮는다', "    if (observed !== next || !exactlyAdded(observed)) {\n      return fail('QUEUE_WRITE_CONFLICT'", "    if (observed !== next || !exactlyAdded(observed)) {\n      writeAtomic(queuePath, next)\n      return fail('QUEUE_WRITE_CONFLICT'"],
+  ['MMC3', '바이트 대조를 빼고 parser 대조만 한다', '    if (observed !== next || !exactlyAdded(observed)) {', '    if (!exactlyAdded(observed)) {'],
   ['MM4', '쓰기 전 렌더 검증 제거', "    if (!exactlyAdded(next)) return fail('QUEUE_RENDER_INVALID'", "    if (false) return fail('QUEUE_RENDER_INVALID'"],
   ['MM5', '큐 CAS 재확인 제거 (외부 writer 를 덮는다)', "    if (readFileSync(queuePath, 'utf8') !== before) return fail('QUEUE_CHANGED'", "    if (false) return fail('QUEUE_CHANGED'"],
   ['MM6', '큐 writer lock 없이 쓴다', [

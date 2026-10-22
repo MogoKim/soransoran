@@ -645,6 +645,25 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       mkdirSync(dirname(f), { recursive: true }); writeFileSync(`${f}.lock`, '')
       assert.equal(approve(w, c).code, 'LOCK_BUSY'); assert.equal(existsSync(f), false); assert.equal(readFileSync(`${f}.lock`, 'utf8'), '')
     }],
+    ['S21e 죽은 PID 가 적힌 기존 잠금 → 회수하지 않고 LOCK_BUSY · 잠금 바이트 보존 · source·큐 쓰기 0', () => {
+      const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo); const q0 = readFileSync(queueFile(w.repo), 'utf8')
+      mkdirSync(dirname(f), { recursive: true })
+      const dead = JSON.stringify({ pid: 2147483646, token: 'dead-holder' }); writeFileSync(`${f}.lock`, dead)
+      const a = approve(w, c)
+      assert.equal(a.code, 'LOCK_BUSY', `${a.code} ${a.why}`); assert.equal(readFileSync(`${f}.lock`, 'utf8'), dead, '죽은 주인의 잠금을 지웠다')
+      assert.equal(existsSync(f), false); assert.equal(readFileSync(queueFile(w.repo), 'utf8'), q0)
+    }],
+    ['S21f 기존 잠금을 본 직후 새 holder 로 바뀐 경쟁 → 새 holder 잠금 그대로 · LOCK_BUSY · source·큐 쓰기 0', () => {
+      const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo); const q0 = readFileSync(queueFile(w.repo), 'utf8')
+      mkdirSync(dirname(f), { recursive: true })
+      writeFileSync(`${f}.lock`, JSON.stringify({ pid: 2147483646, token: 'dead-holder' }))
+      const fresh = JSON.stringify({ pid: process.pid, token: 'new-holder' })
+      let observed = 0
+      const a = approve(w, c, { hooks: { lockObserved: ({ lockPath }) => { observed++; writeFileSync(lockPath, fresh) } } })
+      assert.equal(observed, 1, '반례 준비 실패 — 기존 잠금 관측 지점을 지나지 않았다')
+      assert.equal(a.code, 'LOCK_BUSY', `${a.code} ${a.why}`); assert.equal(readFileSync(`${f}.lock`, 'utf8'), fresh, '새 holder 의 잠금을 지웠다')
+      assert.equal(existsSync(f), false); assert.equal(readFileSync(queueFile(w.repo), 'utf8'), q0)
+    }],
     ['S21d 쓰기 직전 잠금 소유권을 잃으면 LOCK_LOST · 쓰기 0', () => {
       const w = makeWorld(); const c = ready(w); const f = sourceFile(w.repo)
       const a = approve(w, c, { hooks: { beforeRename: () => writeFileSync(`${f}.lock`, JSON.stringify({ pid: process.pid, token: 'other-writer' })) } })
@@ -668,7 +687,7 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       assert.ok(results.every((x) => x.r && (x.r.written === true || ['LOCK_BUSY', 'ALREADY_PLANNED'].includes(x.r.code))), JSON.stringify(results.map((x) => x.r)))
       assert.equal(JSON.parse(readFileSync(sourceFile(w.repo), 'utf8')).entries.length, 1)
     }],
-    ['S22 쓰기 중 실패·급사 → 기존 artifact 불변 · 다음 승인은 잠금 회수 후 성공', () => {
+    ['S22 쓰기 중 실패·급사 → 기존 artifact 불변 · 남은 잠금은 회수하지 않고 LOCK_BUSY · 사람이 지운 뒤에만 승인', () => {
       const w = makeWorld(); const f = sourceFile(w.repo)
       const keep = `${JSON.stringify({ schema: REAL.source.DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: GV, entries: [] }, null, 2)}\n`
       mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, keep)
@@ -682,6 +701,10 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const k = spawnSync(process.execPath, ['--input-type=module', '-e', driver], { encoding: 'utf8' })
       assert.equal(k.status, 9, k.stderr); assert.equal(readFileSync(f, 'utf8'), keep, '급사가 기존 artifact 를 바꿨다')
       assert.ok(existsSync(`${f}.lock`), '급사 반례 준비 실패 — 잠금이 남지 않았다')
+      // 🔴 급사가 남긴 잠금은 자동으로 회수하지 않는다 — 바이트 보존 · LOCK_BUSY · 쓰기 0. 사람이 지운 뒤에만 승인된다
+      const left = readFileSync(`${f}.lock`, 'utf8')
+      const busy = approve(w, c); assert.equal(busy.code, 'LOCK_BUSY'); assert.equal(readFileSync(`${f}.lock`, 'utf8'), left); assert.equal(readFileSync(f, 'utf8'), keep)
+      rmSync(`${f}.lock`)
       const after = approve(w, c); assert.equal(after.ok, true, after.why); assert.equal(after.written, true)
     }],
     ['S23 승인 전 source artifact 0 · 큐 쓰기 0 — prepare·거부된 approve 뒤에도 파일 없음', () => {
@@ -759,10 +782,31 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const r = materialize(w2, { hooks: { beforeLock: ({ queuePath }) => writeFileSync(queuePath, racer) } })
       assert.equal(r.code, 'ALREADY_QUEUED', `${r.code} ${r.why}`); assert.equal(readFileSync(queueFile(w2.repo), 'utf8'), racer)
     }],
-    ['M05 다시 읽은 큐가 만든 행 · 기존 행과 다르면 QUEUE_READBACK_MISMATCH · 이전 바이트로 되돌린다', () => {
-      const w = makeWorld(); approved(w); const q0 = readFileSync(queueFile(w.repo), 'utf8')
-      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => writeFileSync(queuePath, readFileSync(queuePath, 'utf8').replace(`slug: '${SLUG}'`, `slug: '${SLUG}-x'`)) } })
-      assert.equal(m.code, 'QUEUE_READBACK_MISMATCH', `${m.code} ${m.why}`); assert.equal(readFileSync(queueFile(w.repo), 'utf8'), q0)
+    ['M05 쓴 뒤 다른 writer 가 대상 행을 바꾸면 QUEUE_WRITE_CONFLICT · 관측 바이트를 덮지도 되돌리지도 않는다 · 성공 0', () => {
+      const w = makeWorld(); approved(w); const q0 = readFileSync(queueFile(w.repo), 'utf8'); const s0 = readFileSync(sourceFile(w.repo), 'utf8')
+      let observed = null
+      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => { observed = readFileSync(queuePath, 'utf8').replace(`slug: '${SLUG}'`, `slug: '${SLUG}-x'`); writeFileSync(queuePath, observed) } } })
+      assert.equal(m.ok, false); assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`)
+      const now = readFileSync(queueFile(w.repo), 'utf8')
+      assert.equal(now, observed, '다른 writer 가 쓴 바이트를 덮었다'); assert.notEqual(now, q0, '이전 큐 전체로 되돌렸다')
+      assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), s0, '승인 artifact 가 바뀌었다')
+    }],
+    ['M05c 쓴 뒤 외부 writer 가 별도 행을 더하면 QUEUE_WRITE_CONFLICT · 외부 행 바이트 그대로 · 이전 큐로 rollback 0 · 성공 0', () => {
+      const w = makeWorld(); approved(w); const q0 = readFileSync(queueFile(w.repo), 'utf8'); const s0 = readFileSync(sourceFile(w.repo), 'utf8')
+      let external = null
+      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => {
+        external = g8.insertQueueRows(readFileSync(queuePath, 'utf8'), [{ ...LEGACY_ROW(), day: 500, slug: 'external-writer-row' }]); writeFileSync(queuePath, external) } } })
+      assert.equal(m.ok, false); assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`)
+      const now = readFileSync(queueFile(w.repo), 'utf8')
+      assert.equal(now, external, '외부 writer 바이트가 바뀌었다'); assert.ok(queueOf(w.repo).some((q) => q.slug === 'external-writer-row'), '외부 행이 사라졌다')
+      assert.notEqual(now, q0, '이전 큐 전체로 되돌렸다'); assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), s0)
+      assert.ok(!('written' in m) && !('row' in m), 'materialize 가 성공 기록을 냈다')
+    }],
+    ['M05d 쓴 뒤 다른 writer 가 parse 결과는 같은 바이트(주석)를 더해도 QUEUE_WRITE_CONFLICT · 그 바이트 보존', () => {
+      const w = makeWorld(); approved(w)
+      let observed = null
+      const m = materialize(w, { hooks: { afterWrite: ({ queuePath }) => { observed = `${readFileSync(queuePath, 'utf8')}// 다른 writer 의 주석\n`; writeFileSync(queuePath, observed) } } })
+      assert.equal(m.code, 'QUEUE_WRITE_CONFLICT', `${m.code} ${m.why}`); assert.equal(readFileSync(queueFile(w.repo), 'utf8'), observed)
     }],
     ['M05b 큐 끝 원소에 쉼표가 없어 새 행을 넣으면 읽히지 않는 큐 → QUEUE_RENDER_INVALID · 쓰기 0', () => {
       const w = makeWorld(); approved(w)
