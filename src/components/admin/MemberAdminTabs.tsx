@@ -20,8 +20,8 @@ export type MemberAdminTab = (typeof TABS)[number]['key']
 
 export default function MemberAdminTabs({ current }: { current: MemberAdminTab }) {
   return (
-    <nav aria-label="회원 하위 메뉴" className="mt-3 overflow-x-auto">
-      <ul className="m-0 flex list-none gap-1 border-b border-subtle p-0">
+    <nav aria-label="회원 하위 메뉴" className="mb-6 overflow-x-auto">
+      <ul className="m-0 flex list-none gap-6 border-b border-subtle p-0">
         {TABS.map((tab) => {
           const active = tab.key === current
           return (
@@ -29,12 +29,13 @@ export default function MemberAdminTabs({ current }: { current: MemberAdminTab }
               <Link
                 href={tab.href}
                 aria-current={active ? 'page' : undefined}
-                /* 🔴 선택 표시: 흰 면 + 코랄 밑줄 3px + 진한 코랄 굵은 글자 + aria-current (창업자 확정 B안).
-                      --cta 가 아니라 --brand · --brand-strong 을 쓴다 — 누르는 면이 아니라 "지금 여기" 표시다. */
-                className={`inline-flex min-h-[52px] items-center whitespace-nowrap rounded-t-lg border-b-[3px] px-4 text-sm no-underline transition-colors lg:min-h-[48px] ${
+                /* 🔴 선택 표시: 코랄 밑줄 2px + 먹색 굵은 글자 + aria-current (Admin Golden Master · 활성 탭).
+                      --cta 가 아니라 --brand 를 쓴다 — 누르는 면이 아니라 "지금 여기" 표시다.
+                      터치 높이 — 모바일 52 · 데스크탑 44 */
+                className={`-mb-px inline-flex min-h-[52px] items-center whitespace-nowrap border-b-2 text-sm no-underline transition-colors lg:min-h-[44px] ${
                   active
-                    ? 'border-brand bg-surface-card font-bold text-brand-strong'
-                    : 'border-transparent text-content-secondary hover:bg-[color:var(--admin-table-head)]'
+                    ? 'border-brand font-bold text-content-primary'
+                    : 'border-transparent text-content-secondary hover:text-content-primary'
                 }`}
               >
                 {tab.label}

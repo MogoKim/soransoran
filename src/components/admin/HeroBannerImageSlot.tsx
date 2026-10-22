@@ -181,7 +181,7 @@ export default function HeroBannerImageSlot({
   const ready = Boolean(uploaded?.key ?? storedKey)
 
   return (
-    <div className="rounded-lg border border-subtle bg-surface-card p-3">
+    <div className="rounded-md border border-subtle bg-surface-card p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="m-0 text-sm font-bold text-content-primary">{spec.label} 이미지</h3>
         <span className={`text-xs ${ready ? 'text-state-success' : 'text-state-warning'}`}>
@@ -197,7 +197,7 @@ export default function HeroBannerImageSlot({
 
       {/* 미리보기 — 비율 상자를 먼저 만들어 이미지가 없어도 자리가 흔들리지 않게 한다 */}
       <div
-        className="relative mt-2 w-full max-w-full overflow-hidden rounded-lg bg-surface-soft"
+        className="relative mt-2 w-full max-w-full overflow-hidden rounded-md bg-surface-soft"
         style={{ aspectRatio: `${spec.recommendedWidth} / ${spec.recommendedHeight}` }}
       >
         {pendingPreview ? (
@@ -231,7 +231,7 @@ export default function HeroBannerImageSlot({
 
       <div className="mt-2">
         <label
-          className={`inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-3 text-sm font-bold text-content-primary transition duration-150 hover:bg-surface-soft lg:min-h-[48px] ${
+          className={`inline-flex min-h-[52px] items-center justify-center rounded-md border border-interactive px-3 text-sm font-bold text-content-primary transition duration-150 hover:bg-surface-soft lg:min-h-[48px] ${
             disabled || busy ? 'pointer-events-none opacity-50' : 'cursor-pointer'
           }`}
         >

@@ -111,7 +111,8 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
     (report.post && !postDeleted) || Boolean(report.comment) || (author && authorIsMember)
 
   return (
-    <li className="rounded-lg border border-subtle bg-surface-card p-3">
+    /* 🔴 한 건 = 목록의 한 줄. 상자로 두르지 않고 건 사이를 선으로 나눈다(Admin Golden Master) */
+    <li className="border-b border-[color:var(--admin-divider)] py-5 first:pt-3 last:border-b-0">
       {/* ① 무슨 신고인가 */}
       <div className="flex flex-wrap items-center gap-2">
         <AdminStatusBadge kind="report" value={report.status} />
@@ -141,7 +142,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
                  신고 사유의 상당수가 사진이라, 무엇을 신고한 것인지 여기서 보이지 않으면
                  매번 고객 화면을 새 창으로 열어야 한다 — 30 초 컷이 깨지는 자리다.
                  대신 높이를 묶어 카드 하나가 화면을 다 먹지 않게 한다. */}
-          <div className="mt-1 max-h-[320px] overflow-y-auto rounded-lg bg-surface-soft p-3">
+          <div className="mt-1 max-h-[320px] overflow-y-auto rounded-md bg-surface-page p-3">
             <PostBody content={report.post.content} />
           </div>
         </div>

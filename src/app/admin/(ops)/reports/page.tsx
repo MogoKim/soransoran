@@ -98,12 +98,13 @@ export default async function AdminReportsPage() {
 
   return (
     <div>
-      <AdminPageHeader group="운영" title="신고" />
+      <AdminPageHeader group="콘텐츠 운영" title="신고" />
 
       {/* 상단 요약 — /admin/home 과 같은 리듬. 미처리가 0이어도 상태를 한 줄로 말한다 */}
-      <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <p className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
         <span className="text-content-primary">
-          미처리 <strong>{pendingCount}</strong> · 처리 완료 <strong>{handled.length}</strong>
+          미처리 <strong className="tabular-nums">{pendingCount}</strong> · 처리 완료{' '}
+          <strong className="tabular-nums">{handled.length}</strong>
         </span>
         <span className="text-content-muted">
           {pendingCount > 0
@@ -113,28 +114,28 @@ export default async function AdminReportsPage() {
       </p>
 
       {pending.length > 0 ? (
-        <AdminSection title={`처리할 신고 ${pendingCount}건`} description="오래된 순" className="mt-5">
-          <ul className="mt-2 flex list-none flex-col gap-3 p-0">
+        <AdminSection title={`처리할 신고 ${pendingCount}건`} description="오래된 순" className="mt-6">
+          <ul className="m-0 mt-2 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {pending.map((report) => (
               <ReportCard key={report.id} report={report} />
             ))}
           </ul>
         </AdminSection>
       ) : (
-        <div className="mt-5">
+        <div className="mt-6">
           <AdminEmptyState>지금 처리할 신고가 없습니다.</AdminEmptyState>
         </div>
       )}
 
       {/* 🔴 처리분은 접어 둔다. 펼친 채 두면 미처리가 처리분 100건 위의 한 줄이 된다. */}
       {handled.length > 0 ? (
-        <section className="mt-6 border-t border-subtle pt-4">
+        <section className="mt-10">
           <details>
-            <summary className="min-h-[52px] cursor-pointer lg:min-h-[44px] list-none py-2 text-sm font-bold text-content-primary">
+            <summary className="flex min-h-[52px] cursor-pointer list-none items-center gap-1 border-y border-[color:var(--admin-divider)] text-sm font-bold text-content-primary lg:min-h-[44px]">
               처리한 신고 {handled.length}건 보기{' '}
               <span className="font-normal text-content-muted">(최신순)</span>
             </summary>
-            <ul className="mt-2 flex list-none flex-col gap-3 p-0">
+            <ul className="m-0 flex list-none flex-col border-b border-[color:var(--admin-border)] p-0">
               {handled.map((report) => (
                 <ReportCard key={report.id} report={report} />
               ))}

@@ -21,16 +21,24 @@ import AdminListFilter from '@/components/admin/AdminListFilter'
  *    숨긴 글이 목록에서 사라지면 되돌릴 방법이 없다.
  * 🔴 신고 수는 대상 글의 Report 수다. 상태와 무관하게 전부 센다.
  *
- * 🔴 한 줄에서 판단이 끝나게 한다 — 게시판 · 상태 · 신고 수 · 제목 · 작성자 · 댓글 수.
- *    신고와 숨김은 눈에 걸려야 하므로 제목 위에 배지로 올린다.
+ * 🔴 한 줄에서 판단이 끝나게 한다 — 제목 · 게시판 · 작성자 · 작성일 · 댓글 · 신고 · 상태.
+ *    댓글 · 신고는 따로 열을 두고 오른쪽 정렬 숫자로 둔다 — 세로로 훑어 신고 있는 글이 바로 걸린다
+ *    (Admin Golden Master · 2026-10-22). 신고 0 은 흐린 「–」, 1 이상은 빨간 문구 배지다.
+ *    정상 「공개」는 글자로만 두고, 색은 숨김 · 신고처럼 손댈 것에만 남긴다.
  */
 export const metadata: Metadata = { title: '게시글 관리' }
 export const dynamic = 'force-dynamic'
 
 const TAKE = 100
 
-/** 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다. */
-const COLS = 'lg:grid-cols-[minmax(0,1fr)_5rem_7rem_8.5rem_9rem]'
+/**
+ * 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다.
+ * 🔴 1024~1279 는 게시판 · 댓글 열을 접는다(WIDE 칸). 신고 열은 남긴다 — 손댈 것을 가리지 않는다.
+ */
+const COLS =
+  'lg:grid-cols-[minmax(0,1fr)_7.5rem_9.5rem_4.5rem_5.5rem] xl:grid-cols-[minmax(0,1fr)_6rem_7.5rem_9.5rem_4rem_4.5rem_5.5rem]'
+/** 1280 이상에서만 열이 되는 칸 — 모바일에서는 메타 줄에 그대로 보인다 */
+const WIDE = 'lg:hidden xl:inline'
 
 export default async function AdminContentPage() {
   const { ok } = await requireAdmin()
@@ -56,7 +64,7 @@ export default async function AdminContentPage() {
   return (
     <div>
       <AdminPageHeader
-        group="운영"
+        group="콘텐츠 운영"
         title="게시글"
         description={
           total > posts.length
@@ -91,9 +99,11 @@ export default async function AdminContentPage() {
           head={
             <>
               <span>제목</span>
-              <span>게시판</span>
+              <span className={WIDE}>게시판</span>
               <span>작성자</span>
               <span>작성일</span>
+              <span className={`text-right ${WIDE}`}>댓글</span>
+              <span className="text-right">신고</span>
               <span>상태</span>
             </>
           }
@@ -111,33 +121,42 @@ export default async function AdminContentPage() {
             >
               {/* 🔴 모바일에서는 두 줄까지 보여 준다. 한 줄 말줄임이면 제목이 늘
                      "…하는데 어떻게 해야…" 로 끝나 무슨 글인지 알 수 없었다.
-                     데스크탑은 열 폭이 정해져 있어 한 줄을 유지한다. */}
-              <span className="line-clamp-2 min-w-0 font-bold text-content-primary lg:truncate">
+                     데스크탑은 열 폭이 정해져 있어 한 줄을 유지하고, 전체 제목은 title 로 뜬다. */}
+              <span title={p.title} className="line-clamp-2 min-w-0 font-semibold text-content-primary lg:truncate">
                 {p.title}
               </span>
 
-              {/* 모바일은 메타 칸을 한 줄로 모은다(A 모바일). 데스크탑은 lg:contents 로 각 칸이 표의 열이 된다 */}
+              {/* 모바일은 메타 칸을 한 줄로 모은다. 데스크탑은 lg:contents 로 각 칸이 표의 열이 된다 */}
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1 lg:contents">
-              <AdminCell label="게시판">{boardLabel(p.boardType)}</AdminCell>
+              <AdminCell label="게시판" className={WIDE}>{boardLabel(p.boardType)}</AdminCell>
 
               <AdminCell label="작성자">
                 {p.author.nickname ?? p.author.name ?? '회원'}
               </AdminCell>
 
               {/* 날짜는 곁다리다 — 작게 두고 자릿수를 맞춘다 */}
-              <AdminCell label="작성" tone="meta" className="tabular-nums">
+              <AdminCell label="작성" tone="meta" className="whitespace-nowrap tabular-nums">
                 {formatKst(p.createdAt)}
               </AdminCell>
 
-              {/* 🔴 가려진 글과 신고 있는 글이 눈에 걸려야 한다. 나머지는 조용히 둔다. */}
-              <span className="flex flex-wrap items-center gap-1">
-                {p.status !== 'PUBLISHED' ? (
-                  <AdminStatusBadge kind="post" value={p.status} />
-                ) : null}
+              <AdminCell label="댓글" className={`tabular-nums lg:text-right ${WIDE}`}>
+                {p._count.comments}
+              </AdminCell>
+
+              {/* 🔴 신고 있는 글이 눈에 걸려야 한다. 0 은 데스크탑에서 흐린 「–」, 모바일에서는 빼 둔다 */}
+              <span className="lg:text-right">
                 {p._count.reports > 0 ? (
                   <AdminBadge tone="danger">신고 {p._count.reports}</AdminBadge>
-                ) : null}
-                <span className="text-xs text-content-muted">댓글 {p._count.comments}</span>
+                ) : (
+                  <span aria-hidden="true" className="hidden text-xs text-content-muted lg:inline">
+                    –
+                  </span>
+                )}
+              </span>
+
+              {/* 🔴 가려진 글만 색이 있다. 정상 「공개」는 글자로만 둔다 */}
+              <span className="flex flex-wrap items-center gap-1">
+                <AdminStatusBadge kind="post" value={p.status} />
               </span>
               </span>
             </AdminTableRow>

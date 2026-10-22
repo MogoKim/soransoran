@@ -39,7 +39,7 @@ const TAKE = 100
  * 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다.
  * 이름은 남는 폭을 먹고, 나머지는 내용 길이에 맞춰 고정한다.
  */
-const COLS = 'lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_8.5rem_10rem_8rem]'
+const COLS = 'lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_9.5rem_10rem_8rem]'
 
 export default async function AdminMembersPage() {
   const { ok } = await requireAdmin()
@@ -99,7 +99,7 @@ export default async function AdminMembersPage() {
   return (
     <div>
       <AdminPageHeader
-        group="운영 › 회원"
+        group="회원"
         title="회원 관리"
         description={
           total > members.length
@@ -158,7 +158,7 @@ export default async function AdminMembersPage() {
                 searchText={`${m.nickname ?? ''} ${m.name ?? ''}`}
               >
                 <span className="flex min-w-0 flex-col">
-                  <span className="truncate font-bold text-content-primary">
+                  <span className="truncate font-semibold text-content-primary">
                     {m.nickname ?? '(닉네임 없음)'}
                   </span>
                   <span className="truncate text-xs text-content-muted">
@@ -173,7 +173,7 @@ export default async function AdminMembersPage() {
                 </AdminCell>
 
                 {/* 날짜는 곁다리다 — 작게 두고 자릿수를 맞춘다 */}
-                <AdminCell label="가입" tone="meta" className="tabular-nums">
+                <AdminCell label="가입" tone="meta" className="whitespace-nowrap tabular-nums">
                   {formatKst(m.createdAt)}
                 </AdminCell>
 

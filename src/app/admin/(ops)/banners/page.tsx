@@ -60,13 +60,13 @@ export default async function AdminHeroBannersPage() {
 
   return (
     <div>
-      <AdminPageHeader group="운영" title="배너 관리" />
+      <AdminPageHeader group="노출·작성" title="배너 관리" />
 
       {/* 상단 요약 — 상태와 범위를 한 줄로. 큰 박스를 두지 않는다. */}
-      <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <p className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
         <span className="text-content-primary">
-          지금 예약 구간 안 <strong>{liveCount}</strong> / {HERO_BANNER_MAX_CONCURRENT} · 켜 둠{' '}
-          <strong>{activeCount}</strong>
+          지금 예약 구간 안 <strong className="tabular-nums">{liveCount}</strong> / {HERO_BANNER_MAX_CONCURRENT} · 켜 둠{' '}
+          <strong className="tabular-nums">{activeCount}</strong>
         </span>
         {incomplete > 0 ? (
           <AdminBadge tone="warning">준비 중 {incomplete}</AdminBadge>
@@ -82,7 +82,7 @@ export default async function AdminHeroBannersPage() {
       <AdminSection
         title="새 배너 만들기"
         description="이름만 정하면 꺼진 초안이 만들어집니다. 이미지는 다음 화면에서 올립니다."
-        className="mt-5"
+        className="mt-6"
       >
         <HeroBannerCreateForm />
       </AdminSection>
@@ -91,7 +91,7 @@ export default async function AdminHeroBannersPage() {
       <AdminSection
         title={`배너 ${banners.length}장`}
         description={`위에 있을수록 앞 순서입니다. 예약 구간이 겹치는 배너는 ${HERO_BANNER_MAX_CONCURRENT}장까지 켤 수 있습니다.`}
-        className="mt-6"
+        className="mt-10"
       >
         {banners.length === 0 ? (
           <div className="mt-2">
@@ -100,9 +100,9 @@ export default async function AdminHeroBannersPage() {
             </AdminEmptyState>
           </div>
         ) : (
-          <div className="mt-2">
+          <div className="mt-3 border-y border-[color:var(--admin-border)]">
             <div
-              className={`hidden border-b border-subtle px-2 pb-1.5 text-xs text-content-muted lg:grid lg:gap-3 ${COLS}`}
+              className={`hidden min-h-[44px] items-center border-b border-[color:var(--admin-border)] bg-[color:var(--admin-surface-subtle)] px-4 text-xs font-semibold text-content-muted lg:grid lg:gap-4 ${COLS}`}
             >
               <span>#</span>
               <span>이름</span>
@@ -111,22 +111,22 @@ export default async function AdminHeroBannersPage() {
               <span>예약</span>
               <span className="text-right">순서 · 보관</span>
             </div>
-            <ul className="m-0 flex list-none flex-col gap-2 p-0 lg:gap-0">
+            <ul className="m-0 flex list-none flex-col p-0">
               {banners.map((banner, index) => {
                 const live = isHeroBannerLive(banner, now)
                 const blocked = canActivateHeroBanner(banner)
                 return (
                   <li
                     key={banner.id}
-                    className={`rounded-lg border border-subtle bg-surface-card p-3 lg:grid lg:min-h-[44px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-1.5 ${COLS}`}
+                    className={`border-b border-[color:var(--admin-divider)] p-4 last:border-b-0 lg:grid lg:min-h-[52px] lg:items-center lg:gap-4 lg:py-2 ${COLS}`}
                   >
-                    <span className="text-xs font-bold text-content-muted">{index + 1}</span>
+                    <span className="text-xs font-bold tabular-nums text-content-muted">{index + 1}</span>
 
                     <Link
                       href={`/admin/banners/${banner.id}`}
-                      className="mt-1 block min-w-0 truncate text-sm font-bold text-content-primary no-underline lg:mt-0"
+                      className="mt-1 flex min-h-[52px] min-w-0 items-center text-sm font-semibold text-content-primary no-underline hover:underline lg:mt-0 lg:min-h-[44px]"
                     >
-                      {banner.name}
+                      <span className="min-w-0 truncate">{banner.name}</span>
                     </Link>
 
                     <span className="mt-1 block lg:mt-0">
@@ -180,21 +180,23 @@ export default async function AdminHeroBannersPage() {
         <AdminSection
           title={`보관함 ${archived.length}장`}
           description="보관한 배너입니다. 지워지지 않았고, 복원하면 꺼진 상태로 목록에 돌아옵니다."
-          className="mt-6 border-t border-subtle pt-4"
+          className="mt-10"
         >
-          <ul className="m-0 mt-2 flex list-none flex-col gap-2 p-0 lg:gap-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {archived.map((banner) => (
               <li
                 key={banner.id}
-                className="rounded-lg border border-subtle bg-surface-card p-3 lg:flex lg:min-h-[44px] lg:items-center lg:justify-between lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-1.5"
+                className="border-b border-[color:var(--admin-divider)] p-4 last:border-b-0 lg:flex lg:min-h-[52px] lg:items-center lg:justify-between lg:gap-4 lg:py-2"
               >
                 <Link
                   href={`/admin/banners/${banner.id}`}
-                  className="block min-w-0 truncate text-sm font-bold text-content-primary no-underline"
+                  className="flex min-h-[52px] min-w-0 items-center text-sm font-semibold text-content-primary no-underline hover:underline lg:min-h-[44px]"
                 >
-                  {banner.name}
-                  <span className="ml-2 text-xs font-normal text-content-muted">
-                    {formatKst(banner.archivedAt)} 보관
+                  <span className="min-w-0 truncate">
+                    {banner.name}
+                    <span className="ml-2 text-xs font-normal text-content-muted">
+                      {formatKst(banner.archivedAt)} 보관
+                    </span>
                   </span>
                 </Link>
                 <div className="mt-2 shrink-0 lg:mt-0">

@@ -39,7 +39,7 @@ function SaveBtn() {
 }
 
 const FIELD =
-  'min-h-[52px] w-full rounded-lg border border-subtle bg-surface-card px-3 text-base text-content-primary lg:min-h-[48px]'
+  'min-h-[52px] w-full rounded-md border border-interactive bg-surface-card px-3 text-base text-content-primary lg:min-h-[44px]'
 const LABEL = 'text-sm font-bold text-content-primary'
 const HINT = 'm-0 mt-1 text-xs text-content-muted'
 

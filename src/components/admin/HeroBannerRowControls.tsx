@@ -53,7 +53,7 @@ export default function HeroBannerRowControls({
   }
 
   const base =
-    'inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-lg px-2 text-sm transition duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:text-content-muted lg:min-h-[44px] lg:min-w-[44px]'
+    'inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-md px-2 text-sm transition duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:text-content-muted lg:min-h-[44px] lg:min-w-[44px]'
   const ghost = `${base} border border-transparent text-content-secondary enabled:hover:border-subtle enabled:hover:bg-surface-page enabled:hover:text-content-primary`
   const outline = adminButtonClass('secondary', 'px-3 text-sm')
 
