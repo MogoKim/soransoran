@@ -4,7 +4,7 @@ import { requireAdmin } from '@/lib/admin'
 import { REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import { isOverrideActive } from '@/lib/home-exposure-rules'
 import Link from 'next/link'
-import { AdminPageHeader, AdminSection, AdminBadge } from '@/components/admin/AdminUi'
+import { AdminPageHeader, AdminSection, AdminBadge, AdminStat, AdminStatStrip } from '@/components/admin/AdminUi'
 
 /**
  * 운영 홈 — 오늘 볼 것과 바로가기만 둔다.
@@ -16,8 +16,12 @@ import { AdminPageHeader, AdminSection, AdminBadge } from '@/components/admin/Ad
  * 🔴 숫자를 누적 총계로 쓰지 않는다. 미처리 건수와 최근 7일만 센다 —
  *    총계는 매일 늘기만 해서 오늘 할 일을 가리지 않는다.
  *
- * 🔴 급한 것을 위에 둔다. 카드 순서가 곧 처리 순서다 —
+ * 🔴 급한 것을 앞에 둔다. 칸 순서가 곧 처리 순서다 —
  *    신고는 회원이 이미 불쾌해진 뒤의 신호라 가장 먼저 온다.
+ *
+ * 🔴 「오늘 확인할 것」 4칸은 카드 4장이 아니라 한 띠 안의 칸이다(Admin Golden Master · 2026-10-22).
+ *    값은 아래 조회 여섯 개에서만 나온다 — 칸을 위해 조회를 늘리지 않는다.
+ *    칸마다 그 관리자 화면으로 가는 길만 둔다. 상승률 · 그래프를 붙이지 않는다.
  */
 export const metadata: Metadata = { title: '운영 홈' }
 export const dynamic = 'force-dynamic'
@@ -26,11 +30,11 @@ const RECENT_DAYS = 7
 
 /** 자동 운영 화면 — 메뉴(AdminNav)의 「자동 운영」 묶음과 같은 순서 · 같은 이름 */
 const AUTO_LINKS = [
-  { href: '/admin/auto-ready-defects', title: '중대 결함 신고', hint: '자동 발행된 글의 중대 결함 기록' },
-  { href: '/admin/auto-ready-evidence', title: '정확도 표본 검토', hint: '자동 READY 증거 묶음 검토' },
+  { href: '/admin/personas', title: '페르소나 관제', hint: '상태 · 전체 중지 스위치' },
   { href: '/admin/persona-candidates', title: '댓글 후보 대기열', hint: '결정 · 대상 지정 · 발행' },
   { href: '/admin/original-post-candidates', title: '글 초안 대기열', hint: '읽기 전용 검수' },
-  { href: '/admin/personas', title: '페르소나 관제', hint: '상태 · 전체 중지 스위치' },
+  { href: '/admin/auto-ready-evidence', title: '정확도 표본 검토', hint: '자동 READY 증거 묶음 검토' },
+  { href: '/admin/auto-ready-defects', title: '중대 결함 신고', hint: '자동 발행된 글의 중대 결함 기록' },
 ] as const
 
 export default async function AdminHomePage() {
@@ -71,6 +75,7 @@ export default async function AdminHomePage() {
         pendingReports > 0
           ? '오래 기다린 신고가 맨 위에 있습니다'
           : '새 신고가 들어오면 여기 숫자가 붙습니다',
+      go: '신고 열기',
     },
     {
       href: '/admin/content',
@@ -81,6 +86,7 @@ export default async function AdminHomePage() {
         hiddenPosts > 0
           ? `숨긴 글 ${hiddenPosts}건 · 제목·본문을 수정하거나 숨깁니다`
           : '제목·본문을 수정하거나 숨깁니다',
+      go: '게시글 열기',
     },
     {
       href: '/admin/members',
@@ -91,6 +97,7 @@ export default async function AdminHomePage() {
         blockedMembers > 0
           ? `차단 ${blockedMembers}명 · 가입 정보를 보고 차단을 관리합니다`
           : '가입 정보를 보고 차단을 관리합니다',
+      go: '회원 관리 열기',
     },
     {
       href: '/admin/home',
@@ -101,86 +108,49 @@ export default async function AdminHomePage() {
         pinned + homeHidden > 0
           ? '시간이 지나면 저절로 풀립니다. 무엇이 걸렸는지 봅니다'
           : '자동 인기 점수만으로 홈이 채워지고 있습니다',
+      go: '홈 노출 열기',
     },
   ]
 
   return (
     <div>
-      <AdminPageHeader group="개요" title="운영 홈" />
+      <AdminPageHeader
+        group="운영 홈"
+        title="운영 홈"
+        description={`오늘 처리할 것부터 앞에 둡니다. 숫자는 미처리와 최근 ${RECENT_DAYS}일만 셉니다.`}
+      />
 
-      {/* /admin/home 과 같은 리듬 — 큰 박스 대신 한 줄로 상태를 말한다.
-          🔴 이 줄이 화면에서 가장 먼저 읽혀야 하는데 13px 이라 가장 작았다.
-             제일 중요한 "미처리 신고" 를 본문 크기로 올리고 나머지는 보조로 내린다.
-             문구·숫자·순서는 그대로다. */}
-      <p className="m-0 mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <span className="text-base text-content-primary">
-          미처리 신고 <strong>{pendingReports}</strong>
-        </span>
-        <span className="text-sm text-content-muted">
-          최근 {RECENT_DAYS}일 글 {recentPosts} · 가입 {recentMembers}
-        </span>
-        {pinned + homeHidden > 0 ? (
-          <span className="text-sm text-content-muted">
-            홈 고정 {pinned} · 숨김 {homeHidden}
-          </span>
-        ) : null}
-      </p>
-
-      {/* 🔴 넓은 화면에서 폭을 묶는다. 1400px 을 네 줄짜리 목록이 다 쓰면
-             왼쪽 이름과 오른쪽 배지 사이가 손바닥만큼 벌어져 눈이 중간에서 끊긴다.
-             줄 수·문구·순서는 그대로다 — 가로로만 모은다. */}
-      <AdminSection title="오늘 확인할 것" className="mt-6 lg:max-w-3xl">
-        {/* 🔴 목록을 카드 면에 올린다 (2026-09-17).
-               globals.css §표면: "hover 가 있는 행을 바탕 위에 직접 놓지 않는다. 카드 안에 넣는다.
-               바탕 위에 놓으면 hover 색이 바탕색과 가까워져 아무 일도 일어나지 않는다."
-               이 목록이 정확히 그 경우였다 — 실측으로 hover(#F2F3F5)가
-               바탕(#FBFAF9) 위에서 1.065:1 이라 눌러도 아무 반응이 없어 보였다.
-               흰 카드 위에서는 1.110:1 로 의도한 면 분리가 산다.
-               줄 수·문구·순서·링크는 그대로다 — 바탕만 카드로 바꾼다. */}
-        {/* 🔴 overflow-hidden 을 쓰지 않는다 (2026-09-17).
-               전역 :focus-visible 은 outline 2px + offset 2px 라 잘라 내면
-               키보드로 첫 줄·마지막 줄에 갔을 때 테두리가 카드 밖으로 잘린다.
-               모서리는 자식 링크에 직접 둥글기를 줘서 맞춘다. */}
-        <ul className="m-0 mt-3 flex list-none flex-col rounded-lg border border-subtle bg-surface-card p-0">
+      <AdminSection title="오늘 확인할 것" className="mt-0">
+        <AdminStatStrip columns={4}>
           {cards.map((card) => (
-            <li
+            <AdminStat
               key={card.href}
-              className="border-b border-subtle first:[&>a]:rounded-t-lg last:border-b-0 last:[&>a]:rounded-b-lg"
-            >
-              <Link
-                href={card.href}
-                className="flex min-h-[52px] flex-col gap-1 px-3 py-3 no-underline hover:bg-surface-page lg:min-h-[60px] lg:flex-row lg:items-center lg:gap-4 lg:px-4"
-              >
-                <span className="shrink-0 text-base font-bold text-content-primary lg:w-24">
-                  {card.title}
-                </span>
-                <span className="flex-1 text-sm text-content-secondary">{card.hint}</span>
-                <span className="shrink-0">
-                  <AdminBadge tone={card.urgent ? 'warning' : 'neutral'}>{card.now}</AdminBadge>
-                </span>
-              </Link>
-            </li>
+              href={card.href}
+              label={card.title}
+              value={card.now}
+              note={card.hint}
+              linkLabel={card.go}
+              attention={card.urgent}
+              /* 🔴 색만으로 말하지 않는다 — 처리할 것이 있는 칸에만 문구 배지 */
+              flag={card.urgent ? <AdminBadge tone="warning">처리 필요</AdminBadge> : undefined}
+            />
           ))}
-        </ul>
+        </AdminStatStrip>
       </AdminSection>
 
       {/* 🔴 자동 운영 바로가기 — 건수를 붙이지 않는다.
-             여기서 세려면 페르소나·후보·감사 표를 새로 조회해야 한다. Phase 1 은 조회를 늘리지 않는다
-             (Admin Console V2 · 2026-10-20). 숫자는 각 화면에서 본다. */}
-      <AdminSection
-        title="자동 운영"
-        description="건수는 각 화면에서 확인합니다."
-        className="mt-10 lg:max-w-3xl"
-      >
-        <ul className="m-0 mt-3 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2">
+             여기서 세려면 페르소나·후보·감사 표를 새로 조회해야 한다. 조회를 늘리지 않는다.
+             숫자는 각 화면에서 본다. 상자 대신 두 열 목록 — 행 사이 선만 둔다. */}
+      <AdminSection title="자동 운영" description="건수는 각 화면에서 확인합니다.">
+        <ul className="m-0 mt-3 grid list-none grid-cols-1 gap-x-8 p-0 sm:grid-cols-2">
           {AUTO_LINKS.map((a) => (
-            <li key={a.href}>
+            <li key={a.href} className="border-b border-[color:var(--admin-divider)]">
               <Link
                 href={a.href}
-                className="flex min-h-[72px] flex-col justify-center gap-0.5 rounded-[10px] border border-subtle bg-surface-card px-4 py-3 no-underline hover:bg-surface-page"
+                className="flex min-h-[56px] flex-wrap items-center justify-between gap-x-3 gap-y-0.5 py-2 no-underline hover:bg-[color:var(--admin-row-hover)] focus-visible:outline-offset-[-2px]"
               >
-                <span className="text-base font-bold text-content-primary">{a.title}</span>
-                <span className="text-sm text-content-muted">{a.hint}</span>
+                <span className="text-sm font-semibold text-content-primary">{a.title}</span>
+                <span className="text-xs text-content-muted">{a.hint}</span>
               </Link>
             </li>
           ))}
