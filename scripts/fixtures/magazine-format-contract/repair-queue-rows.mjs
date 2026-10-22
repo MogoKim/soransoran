@@ -9,6 +9,11 @@
  *    이제 반례는 이 파일의 행 **원문**을 쓴다 — 같은 파서(`parseQueueSource`)로 읽는다. 실제 큐가 바뀌어도 반례는 그대로다.
  *    출처: 아래 `REPAIR_QUEUE_SOURCES` (main 348c200 의 큐 · 이미 등록된 행은 등록 직전 커밋의 큐 · 바이트 그대로).
  *    실제 큐와의 정합은 검사가 따로 본다 — 실제 큐에 **남아 있는** 행만 fixture 와 같아야 한다 (비파괴).
+ *
+ *    🔴 **바이트 예외 하나** (2026-10-22 · ArticlePlan PR C). gray-hair-leave-as-is · cold-weather-joint-pain 행의
+ *       G8 v1 `g8ManifestHash` 줄만 뺐다. 계약상 해시만 있는 행은 `G8_ROW_NOT_DIRECT` 로 모든 자동 경로에서 막힌다
+ *       (G8 v2 는 큐를 쓰지 않고, 운영 큐에 이런 행은 0개다). 이 반례들이 보려는 것은 legacy brief 입력 수리이므로
+ *       `intentId` 만 남긴 legacy 행으로 둔다 — 해시 단독 행이 막히는 것은 source 관문 검사(P0-2 g8-withdrawn)가 따로 본다.
  */
 import { parseQueueSource } from '../../lib/magazine-load.mjs'
 
@@ -31,7 +36,6 @@ export const REPAIR_QUEUE_BLOCKS = Object.freeze({
     whyNow: '갈래 열림 3 · 여성 커뮤니티 제목 0 · 증거 3건·관측 9회. 자동 검증 프로필 STANDARD 로 생성·검증한다',
     notes: '염색약 추천 · 미용실 가격',
     intentId: 'I-T8-38',
-    g8ManifestHash: '3b6eb1cb0ffc82e03c974cdbade5001858701ca52f614887ade1b1c77edcb504',
   },
 `,
   'cold-weather-joint-pain': `  {
@@ -240,7 +244,6 @@ export const REPAIR_QUEUE_BLOCKS = Object.freeze({
     whyNow: '갈래 열림 3 · 여성 커뮤니티 제목 0 · 증거 3건·관측 9회. 자동 검증 프로필 STANDARD 로 생성·검증한다',
     notes: '고소득 직업 주장 · 자격증 영업',
     intentId: 'I-T6-13',
-    g8ManifestHash: '3b6eb1cb0ffc82e03c974cdbade5001858701ca52f614887ade1b1c77edcb504',
   },
 `,
   'hardest-part-of-menopause': `  {

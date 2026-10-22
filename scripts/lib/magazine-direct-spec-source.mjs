@@ -17,12 +17,20 @@
  * 🔴 **빈 필드를 추정하지 않는다.** 제품 graph · 낡은 연구 · 시험 fixture 에서 값을 끌어오지 않는다.
  *    입력은 아래 계약을 따르는 승인 artifact 하나뿐이다. 없으면 NOT_READY 다.
  *
- * 🔴 **source artifact 계약** (`magazine-article-spec-source/1` · 소비자 쪽 요구 계약).
+ * 🔴 **source artifact 계약** (`magazine-article-spec-source/2` · ArticlePlan · 2026-10-22 PR C).
  *      경로      drafts/magazine/article-spec-source/<graphVersion>.json
  *      최상위    { schema, graphVersion, entries: [entry] }
- *      entry     { status, approvedBy, approvedAt, g8ManifestHash, node, relations, hero, publication, productBasis, sourceHash }
+ *      entry     { status, approvedBy, approvedAt, admission, plan, node, relations, hero, publication, productBasis, sourceHash }
+ *      admission { g8ManifestHash, receiptHash, graphVersion, readinessHash } — 연구 G8 receipt 와 같은 값
+ *      plan      필수 ARTICLE_PLAN_REQUIRED · 선택 ARTICLE_PLAN_OPTIONAL — 허용값은 topic-queue.ts 의 union
  *      sourceHash = sha256(canonicalJson(entry 에서 sourceHash 를 뺀 것)) — productBasis 를 포함한다
+ *      🔴 articlePlanHash 는 이 sourceHash 하나다 (두 번째 해시 정의를 만들지 않는다)
  *    생산자는 `magazine-direct-spec-source-authoring` 의 approve 하나다. 이 파일을 손으로 만들지 않는다.
+ *    source/1(plan·admission 없음)은 읽지 않는다 — SOURCE_SCHEMA_UNKNOWN.
+ *
+ * 🔴 **queue 행은 승인 plan 의 복제다** — materialize 가 `queueRowFromEntry` 하나로 만든다.
+ *    소비 시점에 복제 필드(QUEUE_REPLICA_FIELDS)를 다시 맞춰 손편집을 SOURCE_QUEUE_DRIFT 로 막고,
+ *    articlePlanHash ↔ entry.sourceHash · g8ManifestHash ↔ admission 은 각자 전용 사유로 막는다.
  *
  * 🔴 **productBasis — 승인한 M-GRAPH 판을 소비 시점에 다시 맞춘다** (2026-10-15 Codex P1).
  *    graphVersion 만 같으면 control(enabled · kill switch · cluster · surface)이나 resolver 의 surface·type 계약이
@@ -38,21 +46,28 @@ import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFi
 import { dirname, join, relative } from 'node:path'
 
 import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
-import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD } from './magazine-direct-spec.mjs'
+import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem } from './magazine-direct-spec.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
 import { isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
 
 export const DIRECT_SPEC_SOURCE_NOT_READY = 'DIRECT_SPEC_SOURCE_NOT_READY'
 export const DIRECT_SPEC_SPEC_CONFLICT = 'DIRECT_SPEC_SPEC_CONFLICT'
-export const DIRECT_SPEC_SOURCE_SCHEMA = 'magazine-article-spec-source/1'
+export const DIRECT_SPEC_SOURCE_SCHEMA = 'magazine-article-spec-source/2'
 export const DIRECT_SPEC_SOURCE_DIRNAME = 'article-spec-source'
 /** canary 는 STANDARD 한 프로필만 연다 */
 export const DIRECT_SPEC_CANARY_PROFILE = 'STANDARD'
 
+/** ArticlePlan — 사람이 정하고 승인하는 큐 필드. 허용값은 topic-queue.ts 의 union 이다 */
+export const ARTICLE_PLAN_REQUIRED = Object.freeze([
+  'title', 'contentType', 'intent', 'target', 'riskLevel', 'validationProfile', 'reviewMode', 'ctaBoard', 'whyNow', 'notes', 'imageMode',
+])
+export const ARTICLE_PLAN_OPTIONAL = Object.freeze(['season', 'calendarEvent', 'publishWindow', 'seriesId', 'seriesOrder'])
+/** 승인 entry 가 싣는 연구 G8 receipt 신원 */
+export const ADMISSION_FIELDS = Object.freeze(['g8ManifestHash', 'receiptHash', 'graphVersion', 'readinessHash'])
+
 /**
- * compileArticleSpec 이 source entry 에서 읽는 필드 — 하나라도 비면 NOT_READY 다.
- * queueItem 쪽 필드(title·intent·whyNow…)는 기존 큐 계약이 이미 검사한다.
+ * compileArticleSpec 이 source entry 에서 읽는 필드 + 승인 plan · admission — 하나라도 비면 NOT_READY 다.
  */
 export const DIRECT_SPEC_REQUIRED_FIELDS = Object.freeze([
   'node.id', 'node.intentId', 'node.slug', 'node.status', 'node.graphVersion',
@@ -60,7 +75,79 @@ export const DIRECT_SPEC_REQUIRED_FIELDS = Object.freeze([
   'node.evidence.factsToVerify', 'node.evidence.sourceRequirements', 'node.safetyConstraints',
   'node.hubPath', 'node.ctaLabel',
   'relations.direct', 'relations.discovery', 'publication.publishAt',
+  ...ARTICLE_PLAN_REQUIRED.map((k) => `plan.${k}`),
+  ...ADMISSION_FIELDS.map((k) => `admission.${k}`),
 ])
+
+/**
+ * 🔴 **queue 행의 복제 필드** — 승인 plan(또는 승인 entry)에서 나오고, 소비 시점에 하나씩 다시 맞춘다.
+ *    slug · intentId 는 entry 조회 신원(SOURCE_ENTRY_ABSENT)이고, g8ManifestHash · articlePlanHash 는
+ *    전용 사유(MANIFEST_DRIFT · ARTICLE_PLAN_HASH_DRIFT)로 본다 — 여기에 넣지 않는다.
+ *    선택 필드는 **키 존재 여부까지** 같아야 한다(승인에 없는 seriesId 를 손으로 더해도 drift).
+ */
+export const QUEUE_REPLICA_FIELDS = Object.freeze([
+  'title', 'contentType', 'intent', 'cluster', 'target', 'validationProfile', 'riskLevel', 'reviewMode', 'imageMode',
+  'autoEligible', 'seriesId', 'seriesOrder', 'season', 'calendarEvent', 'publishWindow', 'ctaBoard', 'internalLinks',
+  'whyNow', 'notes', 'directSpecMode',
+])
+
+/**
+ * 승인 relations 의 대상 slug — direct 순서 다음 discovery 순서, **중복만** 뺀다. 개수로 자르지 않는다.
+ */
+export function internalLinksOf(relations) {
+  const discovery = Array.isArray(relations?.discovery) ? relations.discovery : (relations?.discovery ? [relations.discovery] : [])
+  const out = []
+  for (const r of [...(Array.isArray(relations?.direct) ? relations.direct : []), ...discovery]) {
+    if (typeof r?.slug === 'string' && !out.includes(r.slug)) out.push(r.slug)
+  }
+  return out
+}
+
+/**
+ * 🔴 **승인 entry → topic-queue 행** — materialize 와 소비 관문이 같은 함수로 만든다.
+ *    키 순서는 TopicQueueItem 순서로 고정한다(렌더 바이트 결정적). day 는 호출자가 큐 lock 안에서 정한다.
+ *    cluster 는 승인 basis 의 sourceCluster(제품 graph intent cluster)다.
+ */
+export function queueRowFromEntry(entry, { day }) {
+  const p = entry?.plan ?? {}
+  const opt = (k) => (p[k] === undefined || p[k] === null ? {} : { [k]: p[k] })
+  return {
+    day,
+    slug: entry?.node?.slug,
+    title: p.title,
+    contentType: p.contentType,
+    intent: p.intent,
+    cluster: entry?.productBasis?.sourceCluster,
+    target: p.target,
+    validationProfile: p.validationProfile,
+    riskLevel: p.riskLevel,
+    reviewMode: p.reviewMode,
+    imageMode: p.imageMode,
+    autoEligible: true,
+    ...opt('seriesId'),
+    ...opt('seriesOrder'),
+    ...opt('season'),
+    ...opt('calendarEvent'),
+    ...opt('publishWindow'),
+    ctaBoard: p.ctaBoard,
+    internalLinks: internalLinksOf(entry?.relations),
+    whyNow: p.whyNow,
+    notes: p.notes,
+    intentId: entry?.node?.intentId,
+    g8ManifestHash: entry?.admission?.g8ManifestHash,
+    directSpecMode: DIRECT_SPEC_MODE,
+    articlePlanHash: entry?.sourceHash,
+  }
+}
+
+/** queue 행이 승인 entry 의 복제와 다른 필드 — 없으면 [] · day 는 양의 정수인지만 본다 */
+export function queueDriftOf(queueItem, entry) {
+  const want = queueRowFromEntry(entry, { day: queueItem?.day })
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o ?? {}, k) && o[k] !== undefined
+  const drift = QUEUE_REPLICA_FIELDS.filter((k) => has(want, k) !== has(queueItem, k) || canonicalJson(want[k] ?? null) !== canonicalJson(queueItem?.[k] ?? null))
+  if (!Number.isInteger(queueItem?.day) || queueItem.day <= 0) drift.push('day')
+  return drift
+}
 
 const sha256 = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`
 
@@ -271,7 +358,10 @@ function heroForbidden(entry, queueItem) {
  * @returns {{ok:true, input:object, spec:object, evidence:object}
  *          |{ok:false, code:'DIRECT_SPEC_SOURCE_NOT_READY', why:string, evidence:object}}
  *   evidence = { mode, slug, intentId, expectedGraphVersion, observedGraphVersion, sourcePath,
- *                approvalStatus, missingFields, blockers, g8ManifestHash, sourceHash }
+ *                approvalStatus, missingFields, blockers, g8ManifestHash, sourceHash, queueDrift }
+ *
+ * 🔴 **ArticleSpec 직전 관문이다** — compileArticleSpec 전에 G8 행 계약(G8_ROW_NOT_DIRECT) ·
+ *    articlePlanHash(ARTICLE_PLAN_HASH_DRIFT) · queue 복제 필드(SOURCE_QUEUE_DRIFT)를 다시 본다.
  */
 export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersion, repoRoot = null, productRoot = null, readFile = (p) => readFileSync(p, 'utf8'), exists = existsSync }) {
   const blockers = []
@@ -290,6 +380,7 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
     blockers,
     g8ManifestHash: queueItem?.g8ManifestHash ?? null,
     sourceHash: null,
+    queueDrift: [],
   }
   const notReady = (why) => ({ ok: false, code: DIRECT_SPEC_SOURCE_NOT_READY, why, evidence })
 
@@ -297,7 +388,8 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
     blockers.push('PRODUCT_GRAPH_VERSION_UNREADABLE')
     return notReady('제품 graphVersion 을 읽지 못했다 — 어떤 source 도 현재 판으로 인정할 수 없다')
   }
-  if (!intentId || !queueItem?.g8ManifestHash) blockers.push('QUEUE_NOT_G8_ADMITTED')
+  if (!intentId || !queueItem?.g8ManifestHash || !queueItem?.articlePlanHash) blockers.push('QUEUE_NOT_G8_ADMITTED')
+  if (g8RowProblem(queueItem)) blockers.push(G8_ROW_NOT_DIRECT)
   const lane = isAutoLaneEligible(queueItem ?? {})
   if (!lane.ok || lane.profile !== DIRECT_SPEC_CANARY_PROFILE) blockers.push('PROFILE_NOT_STANDARD')
 
@@ -328,9 +420,13 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   if (entry.status !== 'APPROVED' || entry.node?.status !== 'APPROVED' || !String(entry.approvedBy ?? '').trim() || !String(entry.approvedAt ?? '').trim()) {
     blockers.push('NOT_APPROVED')
   }
-  if (entry.node?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')
+  if (entry.node?.graphVersion !== expectedGraphVersion || entry.admission?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')
   if (entry.sourceHash !== directSpecSourceHash(entry)) blockers.push('SOURCE_HASH_DRIFT')
-  if (entry.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')
+  if (entry.admission?.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')
+  // 🔴 articlePlanHash 는 승인 entry 의 sourceHash 하나다 — 큐 행이 다른 승인(또는 위조 해시)을 가리키면 쓰지 않는다
+  if (queueItem?.articlePlanHash !== entry.sourceHash) blockers.push('ARTICLE_PLAN_HASH_DRIFT')
+  evidence.queueDrift = queueDriftOf(queueItem, entry)
+  if (evidence.queueDrift.length) blockers.push('SOURCE_QUEUE_DRIFT')
   if (evidence.missingFields.length) blockers.push('FIELDS_MISSING')
   if (heroForbidden(entry, queueItem)) blockers.push('HERO_FORBIDDEN')
   // 🔴 승인한 M-GRAPH 판(productBasis)이 지금 제품 판과 정확히 같아야 한다

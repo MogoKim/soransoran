@@ -42,6 +42,8 @@ export const LEGACY_BRIEF_MODE = 'LEGACY_BRIEF_V1'
 
 /** 모르는 directSpecMode 를 봤을 때의 fail-closed 코드 — legacy provider 로도 보내지 않는다 */
 export const UNKNOWN_MAGAZINE_AUTO_MODE = 'UNKNOWN_MAGAZINE_AUTO_MODE'
+/** G8 신원(g8ManifestHash · articlePlanHash)을 단 행이 DIRECT 계약을 다 갖추지 않았을 때의 fail-closed 코드 */
+export const G8_ROW_NOT_DIRECT = 'G8_ROW_NOT_DIRECT'
 
 /** direct 경로가 쓰는 drafts 파일 이름 */
 export const ARTICLE_SPEC_FILENAME = 'article-spec.json'
@@ -153,6 +155,22 @@ function fail(code, why) {
 }
 
 /**
+ * G8 신원 행의 DIRECT 계약 위반 사유 — 없으면 null.
+ * 🔴 판단 기준은 두 해시뿐이다. `intentId` 만 있는 기존 행은 건드리지 않는다.
+ */
+export function g8RowProblem(queueItem) {
+  const has = (k) => typeof queueItem?.[k] === 'string' && queueItem[k].trim() !== ''
+  const g8 = has('g8ManifestHash')
+  const plan = has('articlePlanHash')
+  if (!g8 && !plan) return null
+  if (!g8 || !plan) return `G8 행에 ${g8 ? 'articlePlanHash' : 'g8ManifestHash'} 가 없다 — 두 해시가 모두 있어야 한다 (fail-closed)`
+  if (queueItem[DIRECT_SPEC_OPT_IN_FIELD] !== DIRECT_SPEC_MODE) {
+    return `G8 행의 directSpecMode 가 ${String(queueItem[DIRECT_SPEC_OPT_IN_FIELD])} 다 — ${DIRECT_SPEC_MODE} 만 허용한다 (legacy brief 로 보내지 않는다)`
+  }
+  return null
+}
+
+/**
  * 이 queueItem 이 direct 분기로 가는가.
  *
  * 🔴 **"모름" 은 legacy 가 아니다** — fail-closed 다.
@@ -162,11 +180,18 @@ function fail(code, why) {
  *      모르는 opt-in flag 는 코드 결함이거나 신호 손상이므로, 둘 다 legacy 에 묻어 넘기면 bounded
  *      rollback 계약이 깨진다.
  *
+ * 🔴 **G8 행은 DIRECT 로만 간다** (2026-10-22 · ArticlePlan PR C).
+ *    `g8ManifestHash` 또는 `articlePlanHash` 가 하나라도 있으면 두 해시가 모두 있고 `DIRECT_SPEC_V1` 이어야 한다.
+ *    아니면 `G8_ROW_NOT_DIRECT` — legacy brief 로 묻어 보내지 않는다. `intentId` 만 있는 행은 대상이 아니다.
+ *    선정 · 재사용 · 등록 · 전송 · regen · 입력 수리가 모두 이 함수 하나로 분기하므로 여기서 한 번에 막힌다.
+ *
  * @returns {{ok:true, mode:'LEGACY_BRIEF_V1'|'DIRECT_SPEC_V1', reason:string}
- *          |{ok:false, mode:null, code:'UNKNOWN_MAGAZINE_AUTO_MODE', why:string}}
+ *          |{ok:false, mode:null, code:'UNKNOWN_MAGAZINE_AUTO_MODE'|'G8_ROW_NOT_DIRECT', why:string}}
  */
 export function resolveMagazineAutoMode(queueItem) {
   const mode = queueItem?.[DIRECT_SPEC_OPT_IN_FIELD]
+  const g8 = g8RowProblem(queueItem)
+  if (g8) return { ok: false, mode: null, code: G8_ROW_NOT_DIRECT, why: g8 }
   if (mode === undefined || mode === null || mode === '' || mode === LEGACY_BRIEF_MODE) {
     return { ok: true, mode: LEGACY_BRIEF_MODE, reason: '명시 legacy 또는 opt-in 없음' }
   }

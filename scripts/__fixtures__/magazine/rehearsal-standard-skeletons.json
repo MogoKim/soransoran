@@ -1,6 +1,6 @@
 {
   "schema": "rehearsal-standard-skeletons/1",
-  "why": "STANDARD 정상 성공 원고 뼈대. 정상 등록되는 rehearsal 원고는 큐 행·slug·title·brief·review·본문이 같은 질문이어야 한다 — 대상 제목만 바꿔 다른 질문 본문을 붙이지 않는다. 새 문장 0 — 공개본 글자를 그대로 옮겼다.",
+  "why": "STANDARD 정상 성공 원고 뼈대. 정상 등록되는 rehearsal 원고는 큐 행·slug·title·brief·review·본문이 같은 질문이어야 한다 — 대상 제목만 바꿔 다른 질문 본문을 붙이지 않는다. 새 문장 0 — 공개본 글자를 그대로 옮겼다. · 2026-10-22 ArticlePlan PR C: gray-hair-leave-as-is queueBlock 의 G8 v1 g8ManifestHash 줄만 뺐다 — 해시만 있는 행은 G8_ROW_NOT_DIRECT 로 막히고 운영 큐에 이런 행은 0개다(나머지 바이트는 출처 그대로)",
   "render": "p → 문단 · h2 → \"## \" · h3 → \"### \" · list → \"- \" 항목 · callout → \"> \" · image·cta 생략 · 블록 사이 빈 줄 1개",
   "representativeRule": "공개본의 h2 전부 + 첫 문단 (글자 그대로)",
   "sources": [
@@ -37,7 +37,7 @@
         "또래 여성들의 이야기",
         "거울 앞에서 가르마를 넘기다가 흰 가닥이 눈에 들어오는 날이 있습니다. 어제는 안 보이던 자리인데 오늘은 또렷합니다."
       ],
-      "queueBlock": "  {\n    day: 66,\n    slug: 'gray-hair-leave-as-is',\n    title: '흰머리를 그대로 두면 어떻게 되는지',\n    contentType: 'EVERGREEN',\n    intent: '질문',\n    cluster: 'daily',\n    target: '40대 중반~60대 중반',\n    validationProfile: 'STANDARD',\n    riskLevel: 'LOW',\n    reviewMode: 'SUMMARY_ONLY',\n    imageMode: 'REQUIRED',\n    autoEligible: true,\n    ctaBoard: '/community/free',\n    internalLinks: [],\n    whyNow: '갈래 열림 3 · 여성 커뮤니티 제목 0 · 증거 3건·관측 9회. 자동 검증 프로필 STANDARD 로 생성·검증한다',\n    notes: '염색약 추천 · 미용실 가격',\n    intentId: 'I-T8-38',\n    g8ManifestHash: '3b6eb1cb0ffc82e03c974cdbade5001858701ca52f614887ade1b1c77edcb504',\n  },\n",
+      "queueBlock": "  {\n    day: 66,\n    slug: 'gray-hair-leave-as-is',\n    title: '흰머리를 그대로 두면 어떻게 되는지',\n    contentType: 'EVERGREEN',\n    intent: '질문',\n    cluster: 'daily',\n    target: '40대 중반~60대 중반',\n    validationProfile: 'STANDARD',\n    riskLevel: 'LOW',\n    reviewMode: 'SUMMARY_ONLY',\n    imageMode: 'REQUIRED',\n    autoEligible: true,\n    ctaBoard: '/community/free',\n    internalLinks: [],\n    whyNow: '갈래 열림 3 · 여성 커뮤니티 제목 0 · 증거 3건·관측 9회. 자동 검증 프로필 STANDARD 로 생성·검증한다',\n    notes: '염색약 추천 · 미용실 가격',\n    intentId: 'I-T8-38',\n  },\n",
       "queueBlockSource": "scripts/fixtures/magazine-format-contract/repair-queue-rows.mjs 의 REPAIR_QUEUE_BLOCKS 원문 그대로 (S12 가 이미 쓰는 고정 행)"
     }
   ]

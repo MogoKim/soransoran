@@ -87,7 +87,8 @@ import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract, judgeManuscriptFormat } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
 import {
-  DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, readProductGraphState, readProductGraphVersion,
+  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
+  readProductGraphState, readProductGraphVersion,
 } from './lib/magazine-direct-spec-source.mjs'
 
 /** 등록 gate 는 현재 승인 source 를 요구한다 — 시험 폴더에 fixture 와 같은 내용의 승인 source 를 놓는다 */
@@ -95,9 +96,14 @@ function writeApprovedSource(d, input, gv) {
   // 🔴 승인 basis — 소비 관문과 같은 helper 로 실제 제품 판에서 계산한다
   const productBasis = productBasisFor(readProductGraphState(ROOT), { intentId: input.node.intentId, queueCluster: input.queueItem.cluster })
   const entry = { status: 'APPROVED', approvedBy: 'wire-check', approvedAt: '2026-10-15T12:00:00+09:00',
-    g8ManifestHash: input.queueItem.g8ManifestHash, node: input.node, relations: input.relations,
+    // source/2 — 연구 G8 receipt 신원 · 승인 plan(= fixture 큐 행의 plan 필드)
+    admission: { g8ManifestHash: input.queueItem.g8ManifestHash, receiptHash: 'wire-check-receipt', graphVersion: gv, readinessHash: 'wire-check-readiness' },
+    plan: Object.fromEntries([...ARTICLE_PLAN_REQUIRED, ...ARTICLE_PLAN_OPTIONAL].filter((k) => input.queueItem[k] !== undefined).map((k) => [k, input.queueItem[k]])),
+    node: input.node, relations: input.relations,
     hero: input.hero, publication: input.publication, productBasis }
   entry.sourceHash = directSpecSourceHash(entry)
+  // 🔴 DIRECT 큐 행은 승인 entry 의 복제다(materialize 와 같은 함수) — compile 입력 필드는 fixture 그대로다
+  input.queueItem = queueRowFromEntry(entry, { day: input.queueItem.day })
   const sp = directSpecSourcePath(d, gv)
   mkdirSync(dirname(sp), { recursive: true })
   writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
@@ -543,14 +549,16 @@ check('W28 auto-lane gate — direct 는 brief/review 없이, 승인 source 와 
   compileAndPersistDirectSpec({ input, draftsDir: d })
   const gv = input.node.graphVersion
   const opts = { expectedGraphVersionFn: () => gv }
-  const noSource = autoLaneGate(input.queueItem.slug, [input.queueItem], d, opts)
+  // 승인 source 가 없는 G8 행 — 두 해시는 있다(해시가 모자라면 G8_ROW_NOT_DIRECT 로 먼저 막혀 source 판정을 못 본다)
+  const noSource = autoLaneGate(input.queueItem.slug, [{ ...input.queueItem, articlePlanHash: 'sha256:w28-no-source' }], d, opts)
   assert.equal(noSource.ok, false, 'source 없이 direct 가 등록 gate 를 통과했다')
   assert.ok(noSource.blockedBy.some((x) => x.code === 'DIRECT_SPEC_SOURCE_NOT_READY'))
   writeApprovedSource(d, input, gv)
   const direct = autoLaneGate(input.queueItem.slug, [input.queueItem], d, opts)
   assert.equal(direct.ok, true, JSON.stringify(direct.blockedBy))
+  // legacy 행 — G8 해시까지 지운다(해시가 남으면 G8_ROW_NOT_DIRECT 로 먼저 막혀 brief·review 판정을 못 본다)
   const legacyItem = { ...input.queueItem }
-  delete legacyItem.directSpecMode
+  delete legacyItem.directSpecMode; delete legacyItem.g8ManifestHash; delete legacyItem.articlePlanHash
   const legacy = autoLaneGate(legacyItem.slug, [legacyItem], d)
   assert.equal(legacy.ok, false)
   assert.ok(legacy.blockedBy.some((x) => x.code === 'BRIEF_MISSING'))
@@ -575,7 +583,8 @@ await checkAsync('W30 batch plan — direct spec 누락은 probe·Chrome 0', asy
   const runDir = join(d, '_runs', date)
   mkdirSync(runDir, { recursive: true })
   writeFileSync(join(runDir, 'run.json'), `${JSON.stringify({
-    status: 'COMPLETED', inventoryDays: 0, selected: [input.queueItem], reusable: [],
+    // producer 가 실은 G8 행 — 두 해시를 함께 운반한다 (spec 만 없다)
+    status: 'COMPLETED', inventoryDays: 0, selected: [{ ...input.queueItem, articlePlanHash: 'sha256:w30-plan' }], reusable: [],
   }, null, 2)}\n`, 'utf8')
   const quarantinePath = join(d, 'quarantine.json')
   saveQuarantine({}, quarantinePath)
