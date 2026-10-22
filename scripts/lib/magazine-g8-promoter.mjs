@@ -13,7 +13,7 @@
  *
  * 🔴 **입력 권위는 snapshot 하나다.** 연구 current · 루트 canonical 을 읽지 않는다.
  *    snapshot 으로 다시 계산한 graph 가 제품 bundle payload 와 바이트까지 같아야 한다.
- *    graphVersion 에 build 날짜가 들어가므로 build effectiveAt(`graphEffectiveAt`)을 명시로 받는다 — 추정하지 않는다.
+ *    readiness 는 판정 시각(--at)으로 계산하고, 판 이름은 제품 current 가 가리키는 graphVersion 을 그대로 쓴다.
  *
  * 🔴 **apply 는 commit-forward 다.** 임시 공간에서 세 파일의 최종 바이트를 전부 만들고 검증한 뒤에만 journal 을 쓴다.
  *    journal 이후의 급사는 같은 최종 바이트를 끝까지 놓아 완성한다 — 의미 판정을 다시 하지 않고, ledger 를 줄이지 않는다.
@@ -224,12 +224,14 @@ async function loadProposeSlug(researchDir) {
 
 /**
  * 🔴 **G8 manifest (g8-promotion/2)** — 같은 입력이면 바이트까지 같다. 시각 · 난수 · 파일 순서가 들어가지 않는다.
- * @param {{ repoDir: string, researchDir: string, snapshotDir: string, at: string, graphEffectiveAt: string }} p
+ *
+ * 🔴 **readiness 는 판정 시각(--at)으로 계산한다** (2026-10-22). 과거 build 시각의 readiness 를 다시 쓰지 않는다.
+ *    판 이름은 제품 current 가 가리키는 graphVersion 을 그대로 기대값으로 넘긴다 — 날짜를 추정하지 않는다.
+ *    그 시각에 snapshot lifecycle 이나 graph 내용이 제품 bundle 과 달라졌으면 GRAPH_BUNDLE_MISMATCH 로 거부한다.
+ * @param {{ repoDir: string, researchDir: string, snapshotDir: string, at: string }} p
  */
-export async function buildManifest({ repoDir, researchDir, snapshotDir, at, graphEffectiveAt }) {
-  const t = parseAt(at, '판정 시각(--at)')
-  const g = parseAt(graphEffectiveAt, 'graph 기준 시각(--graph-effective-at)')
-  if (t.ms < g.ms) fail('AT_INVALID', `판정 시각 ${at} 이 graph 기준 시각 ${graphEffectiveAt} 보다 이르다`)
+export async function buildManifest({ repoDir, researchDir, snapshotDir, at }) {
+  parseAt(at, '판정 시각(--at)')
   const { texts, hashes } = readIdentityInputs({ repoDir, researchDir, snapshotDir })
   const proposeSlug = await loadProposeSlug(researchDir)
 
@@ -239,7 +241,8 @@ export async function buildManifest({ repoDir, researchDir, snapshotDir, at, gra
       inputTexts: texts.snapshot,
       productTexts: { resolver: texts.graphResolver, control: texts.graphControl, articles: texts.articles },
       admissionTexts: { slugManifest: texts.slugManifest, ledger: texts.ledger },
-      effectiveAt: graphEffectiveAt,
+      effectiveAt: at,
+      expectedGraphVersion: texts.graphPointer,
     })
   } catch (e) { fail('GRAPH_BUNDLE_MISMATCH', `snapshot 으로 graph 를 다시 계산하지 못했다: ${e.code ?? ''} ${e.why ?? e.message}`) }
   const problems = graphIdentityProblems({ core, texts })
@@ -301,7 +304,6 @@ export async function buildManifest({ repoDir, researchDir, snapshotDir, at, gra
   const m = {
     schema: G8_SCHEMA,
     at,
-    graphEffectiveAt,
     snapshot: { name: path.basename(path.resolve(snapshotDir)), inputSha256: Object.fromEntries(SNAPSHOT_FILES.map((n) => [n, hashes[`snapshot.${n}`]])) },
     graph: { graphVersion: core.graphVersion, contentHash: core.contentHash, graphSemanticHash: core.graphSemanticHash, exportHash },
     readiness: { readinessHash: core.readinessHash, readinessFileSha256: core.readinessFileSha256, inputs: core.readiness.inputs },
@@ -748,7 +750,7 @@ export async function applyAdmissions({ manifest, repoDir, researchDir, snapshot
   if (stale.length) return done({ ok: false, code: 'STALE_INPUT', why: `manifest 이후 바뀌었다: ${stale.join(', ')}`, stale, recovered })
   let rebuilt
   try {
-    rebuilt = await buildManifest({ repoDir, researchDir, snapshotDir, at: manifest.at, graphEffectiveAt: manifest.graphEffectiveAt })
+    rebuilt = await buildManifest({ repoDir, researchDir, snapshotDir, at: manifest.at })
   } catch (e) { return done({ ok: false, code: 'STALE_INPUT', why: e.message, recovered }) }
   if (canonicalJson(rebuilt.graph) !== canonicalJson(manifest.graph)) return done({ ok: false, code: 'STALE_INPUT', why: 'graph 신원이 manifest 와 다르다', recovered })
   if (rebuilt.readiness.readinessHash !== manifest.readiness?.readinessHash) return done({ ok: false, code: 'READINESS_STALE', why: 'readinessHash 가 manifest 와 다르다', recovered })
@@ -778,16 +780,59 @@ export async function applyAdmissions({ manifest, repoDir, researchDir, snapshot
 /**
  * 🔴 **stale lock 의 유일한 명시 경로** — 사람이 확인한 잠금 파일 sha256 이 지금 파일과 같을 때만 넘겨받는다.
  *    journal 이 있으면 잠금만 지우지 않는다 — 넘겨받은 잠금 안에서 journal 을 끝까지 완성한 뒤에 놓는다.
+ *
+ * 🔴 **확인한 그 잠금만 넘겨받는다** (2026-10-22 · 확인-덮어쓰기 경쟁 제거). 경로를 무조건 덮어쓰지 않는다.
+ *    ① 복구끼리는 O_EXCL takeover 표식으로 하나만 — 동시 복구는 LOCK_RACE
+ *    ② 확인한 잠금을 rename 으로 경로에서 떼어 내고, **떼어 낸 파일**의 sha256 을 다시 본다
+ *       — 그 사이 새 holder 잠금으로 바뀌었으면 같은 inode 를 link 로 제자리에 되돌리고 LOCK_RACE
+ *    ③ 내 잠금은 O_EXCL 로만 만든다 — 그 사이 새 holder 가 먼저 잡았으면 LOCK_RACE (그 잠금은 그대로)
+ *    takeover 표식이 급사로 남으면 사람이 지운다 — 자동으로 지우지 않는다.
  */
 export async function recoverStaleLock({ researchDir, repoDir, expectLockSha256, operator, faultHook = () => {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
   const file = path.join(researchDir, LOCK_FILE)
-  const text = readOptional(file)
-  if (text === null) return { ok: false, code: 'NO_LOCK', why: '잠금 파일이 없다' }
   if (!String(operator ?? '').trim() || MACHINE_APPROVER.test(String(operator).trim())) return { ok: false, code: 'OPERATOR_INVALID', why: '사람 operator 가 필요하다' }
-  if (sha256(text) !== expectLockSha256) return { ok: false, code: 'LOCK_SHA_MISMATCH', why: `잠금 파일 sha256 이 ${expectLockSha256} 가 아니다 — 아무것도 하지 않는다` }
-  const body = `${JSON.stringify({ schema: LOCK_SCHEMA, host: os.hostname(), pid: process.pid, startedAt: new Date().toISOString(), takeoverOf: sha256(text), operator })}\n`
-  writeAtomic(file, body)
-  const lock = { file, body }
+  const race = (why) => ({ ok: false, code: 'LOCK_RACE', why })
+  const takeover = `${file}.takeover`
+  let tfd
+  try { tfd = fs.openSync(takeover, 'wx') } catch (e) {
+    if (e.code === 'EEXIST') return race(`다른 잠금 복구가 진행 중이다 (${path.basename(takeover)}) — 자동으로 지우지 않는다`)
+    if (e.code === 'ENOENT') return { ok: false, code: 'NO_LOCK', why: '잠금 파일이 없다' }
+    throw e
+  }
+  try { fs.writeSync(tfd, `${JSON.stringify({ host: os.hostname(), pid: process.pid, operator })}\n`); fs.fsyncSync(tfd) } finally { fs.closeSync(tfd) }
+  try {
+    const text = readOptional(file)
+    if (text === null) return { ok: false, code: 'NO_LOCK', why: '잠금 파일이 없다' }
+    if (sha256(text) !== expectLockSha256) return { ok: false, code: 'LOCK_SHA_MISMATCH', why: `잠금 파일 sha256 이 ${expectLockSha256} 가 아니다 — 아무것도 하지 않는다` }
+    faultHook('lock:checked', { file })
+    const claim = `${file}.claimed-${process.pid}-${crypto.randomBytes(6).toString('hex')}`
+    try { fs.renameSync(file, claim) } catch (e) {
+      if (e.code === 'ENOENT') return race('확인한 뒤 잠금이 사라졌다')
+      throw e
+    }
+    const claimed = fs.readFileSync(claim, 'utf8')
+    if (sha256(claimed) !== expectLockSha256) {
+      // 확인한 뒤 새 holder 잠금으로 바뀌었다 — 같은 inode 를 제자리에 되돌린다(덮지 않는다)
+      try { fs.linkSync(claim, file); fs.rmSync(claim) } catch { return race(`새 holder 잠금을 되돌리지 못했다 — ${claim} 에 보존했다 (사람 확인)`) }
+      return race('확인한 뒤 경로가 새 holder 잠금으로 바뀌었다 — 그 잠금을 그대로 두었다')
+    }
+    faultHook('lock:claimed', { file })
+    const body = `${JSON.stringify({ schema: LOCK_SCHEMA, host: os.hostname(), pid: process.pid, startedAt: new Date().toISOString(), takeoverOf: expectLockSha256, operator })}\n`
+    let fd
+    try { fd = fs.openSync(file, 'wx') } catch (e) {
+      if (e.code === 'EEXIST') { fs.rmSync(claim); return race('stale 잠금을 떼어 낸 사이 새 holder 가 먼저 잠갔다 — 그 잠금을 그대로 두었다') }
+      throw e
+    }
+    try { fs.writeSync(fd, body); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    fs.rmSync(claim)
+    return await finishTakeover({ lock: { file, body }, researchDir, repoDir, faultHook, knownLegacy })
+  } finally {
+    fs.rmSync(takeover, { force: true })
+  }
+}
+
+/** 넘겨받은 잠금 안에서 남은 journal 을 완성하고 잠금을 놓는다 */
+async function finishTakeover({ lock, researchDir, repoDir, faultHook, knownLegacy }) {
   if (fs.existsSync(path.join(researchDir, JOURNAL_FILE))) {
     const r = await recoverJournal({ researchDir, repoDir, faultHook, knownLegacy })
     releaseLock(lock)

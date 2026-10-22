@@ -21,8 +21,9 @@ const SRC = { lib: join(HERE, 'lib/magazine-graph-build.mjs'), cli: join(HERE, '
 const CHECK = join(HERE, 'magazine-graph-build-check.mjs')
 
 const MUTATIONS = [
-  { id: 'M1 graphVersion 날짜를 벽시계에서', file: 'lib', from: 'const graphVersion = `g-${eff.versionDate}-${combined.slice(0, 6)}`',
-    to: "const graphVersion = `g-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${combined.slice(0, 6)}`", expect: '반례1' },
+  // 🔴 2026-10-22 — expectedGraphVersion 분기 때문에 const → let. 같은 줄의 날짜 출처를 겨냥한다
+  { id: 'M1 graphVersion 날짜를 벽시계에서', file: 'lib', from: 'let graphVersion = `g-${eff.versionDate}-${combined.slice(0, 6)}`',
+    to: "let graphVersion = `g-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${combined.slice(0, 6)}`", expect: '반례1' },
   { id: 'M2 KST 날짜 대신 UTC 날짜', file: 'lib', from: 'const kstDate = new Date(ms + 9 * 3600e3).toISOString().slice(0, 10)',
     to: 'const kstDate = new Date(ms).toISOString().slice(0, 10)', expect: '반례1b' },
   { id: 'M3 semanticHash 에 generatedAt 포함', file: 'lib', from: 'const { generatedAt: _omit, ...rest } = slim', to: 'const rest = slim', expect: '반례2' },
@@ -201,8 +202,8 @@ const MUTATIONS = [
     to: 'else if (false) bad.push(', expect: '반례23b' },
   // 🔴 readinessHash 분리 · 유일한 계산 경로 (2026-10-21)
   { id: 'M112 순수 계산이 generatedAt 을 읽는다', file: 'lib',
-    from: 'export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt }) {\n',
-    to: 'export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt, generatedAt = null }) {\n  if (generatedAt !== null) parseGeneratedAt(generatedAt)\n',
+    from: 'export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt, expectedGraphVersion = null }) {\n',
+    to: 'export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt, expectedGraphVersion = null, generatedAt = null }) {\n  if (generatedAt !== null) parseGeneratedAt(generatedAt)\n',
     expect: '반례24e' },
   { id: 'M113 readiness inputs 에 벽시계', file: 'lib',
     from: "admissionHashes: admission ? admission.hashes : 'UNREAD', effectiveAt: eff.text }",
@@ -225,6 +226,10 @@ const MUTATIONS = [
     to: 'graphSemanticHash, productHashes,\n    effectiveAt: eff.text }', expect: '반례24f' },
   { id: 'M120 readinessHash 를 graph semanticHash 로 대신', file: 'lib',
     from: '    readinessHash: readinessHashOf(readiness.report),', to: '    readinessHash: graphSemanticHash,', expect: '반례24a' },
+  // 🔴 expectedGraphVersion — 내보낸 판을 다른 시각에 다시 본다 (2026-10-22 G8 시간축)
+  { id: 'M121 expectedGraphVersion 무시 (판정 시각 날짜로 판 이름)', file: 'lib', from: '    graphVersion = expectedGraphVersion\n', to: '', expect: '반례25' },
+  { id: 'M122 expectedGraphVersion 접미사 대조 제거', file: 'lib', from: "    if (!expectedGraphVersion.endsWith(`-${combined.slice(0, 6)}`)) fail(", to: '    if (false) fail(', expect: '반례25b' },
+  { id: 'M123 expectedGraphVersion 형식 검사 제거', file: 'lib', from: "    if (!/^g-\\d{8}-[0-9a-f]{6}$/.test(String(expectedGraphVersion))) fail(", to: '    if (false) fail(', expect: '반례25b' },
 ]
 
 const TMP = mkdtempSync(join(tmpdir(), 'mgraph-build-mutation-'))

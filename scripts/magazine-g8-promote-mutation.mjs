@@ -74,13 +74,25 @@ const MUTATIONS = [
   // ── slug · legacy · 잠금 · 큐 · 재실행 ──
   { name: 'proposeSlug 를 assignSlugs 로 교체', find: '  return mod.proposeSlug\n', replace: '  return (q, t) => mod.assignSlugs([{ primaryQuery: q, territoryId: t }])[0]?.slug\n', expect: 'assignSlugs 를 불렀다' },
   { name: 'KNOWN_LEGACY 완화 (receipt 없으면 legacy)', find: '    else if (legacyKey.has(`${key}|${sha256(line)}`)) classes.KNOWN_LEGACY++', replace: '    else if (true) classes.KNOWN_LEGACY++', expect: '행 바이트가 다르면 UNKNOWN' },
-  { name: '잠금 O_EXCL 제거', find: "  try { fd = fs.openSync(file, 'wx') } catch (e) {", replace: "  try { fd = fs.openSync(file, 'w') } catch (e) {", expect: '남은 잠금(죽은 PID)' },
+  // 🔴 2026-10-22 — stale 복구에도 같은 O_EXCL 줄이 생겼다. 앞 줄(2칸 들여쓰기 let fd)까지 지점에 넣어 acquireLock 하나만 겨냥한다
+  { name: '잠금 O_EXCL 제거', find: "  let fd\n  try { fd = fs.openSync(file, 'wx') } catch (e) {", replace: "  let fd\n  try { fd = fs.openSync(file, 'w') } catch (e) {", expect: '남은 잠금(죽은 PID)' },
   { name: 'stale 잠금 자동 탈취 (죽은 PID 면 지운다)', find: "    if (e.code !== 'EEXIST') throw e\n",
     replace: "    if (e.code !== 'EEXIST') throw e\n    try { process.kill(JSON.parse(fs.readFileSync(file, 'utf8')).pid, 0) } catch { fs.rmSync(file, { force: true }); return acquireLock(researchDir, manifestHash) }\n", expect: '남은 잠금(죽은 PID)' },
   { name: '큐 쓰기 복원', find: "  faultHook('journal:written')\n",
     replace: "  faultHook('journal:written')\n  writeAtomic(path.join(repoDir, PRODUCT_FILES.queue), insertQueueRows(fs.readFileSync(path.join(repoDir, PRODUCT_FILES.queue), 'utf8'), [{ day: 999, slug: manifest.admissions[0].slug }]))\n",
     expect: 'topic queue 바이트 불변' },
   { name: 'ALREADY_APPLIED 판정 완화', find: "  if (already.state === 'COMPLETE') return", replace: "  if (already.state !== 'ABSENT') return", expect: 'binding 이 빠졌다' },
+  // ── readiness 시간축 (2026-10-22 P1) ──
+  { name: 'readiness 를 --at 이 아닌 과거 고정 시각으로 계산', find: '      effectiveAt: at,\n      expectedGraphVersion: texts.graphPointer,', replace: "      effectiveAt: '2026-10-15T13:00:00+09:00',\n      expectedGraphVersion: texts.graphPointer,", expect: '다른 날 --at' },
+  { name: '제품 current 판 이름을 기대값으로 넘기지 않는다', find: '      expectedGraphVersion: texts.graphPointer,\n', replace: '', expect: '다른 날 --at' },
+  // ── stale 잠금 복구 경쟁 (2026-10-22 P1) ──
+  // 옛 구현 그대로 — 확인 직후 경로에 내 잠금을 writeAtomic 으로 쓰고 진행한다(떼어 내기 · 재확인 · O_EXCL 없음). 정상 복구는 통과해야 한다
+  { name: 'stale 복구 — 확인 직후 경로를 무조건 덮어쓴다 (옛 구현)', find: "    faultHook('lock:checked', { file })\n",
+    replace: "    faultHook('lock:checked', { file })\n    { const body = `${JSON.stringify({ schema: LOCK_SCHEMA, host: os.hostname(), pid: process.pid, takeoverOf: expectLockSha256, operator })}\\n`; writeAtomic(file, body); return await finishTakeover({ lock: { file, body }, researchDir, repoDir, faultHook, knownLegacy }) }\n",
+    expect: '확인 직후 새 holder 잠금으로 바뀜' },
+  { name: 'stale 복구 — 떼어 낸 잠금 sha 재확인 제거', find: '    if (sha256(claimed) !== expectLockSha256) {', replace: '    if (false) {', expect: '확인 직후 새 holder 잠금으로 바뀜' },
+  { name: 'stale 복구 — 내 잠금을 O_EXCL 없이 만든다', find: "\n    try { fd = fs.openSync(file, 'wx') } catch (e) {", replace: "\n    try { fd = fs.openSync(file, 'w') } catch (e) {", expect: '떼어 낸 사이 새 holder' },
+  { name: 'stale 복구 — takeover 표식 O_EXCL 제거', find: "  try { tfd = fs.openSync(takeover, 'wx') } catch (e) {", replace: "  try { tfd = fs.openSync(takeover, 'w') } catch (e) {", expect: '남은 takeover 표식' },
   // ── 공용 helper (입력 수리 · DIRECT source 가 쓴다) ──
   { name: '입력 수리 journal 경로 대조 제거', find: '  if (sorted.some((p, i) => p !== want[i])) return failId(', replace: '  if (false) return failId(', expect: 'journal 신원 — 정상' },
   { name: 'G8 v1 큐 대조 무력화', find: '  return { ok: problems.length === 0, problems: [...new Set(problems)] }', replace: '  return { ok: true, problems: [] }', expect: 'G8 v1 큐 대조' },

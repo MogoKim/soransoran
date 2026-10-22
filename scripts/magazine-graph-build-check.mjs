@@ -915,6 +915,30 @@ test('반례24g — buildAll 은 계산을 computeGraphAndReadiness 한 번에 �
   eq([/\bgeneratedAt\b/, /\bDate\b/, /\breadFileSync\b/, /\bprocess\./, /\bparseGeneratedAt\b/].filter((re) => re.test(cgCode)).map(String), [], 'computeGraphAndReadiness 의 시각 · 파일 접근')
 })
 
+// ── 반례 25 — 이미 내보낸 판을 다른 시각에 다시 본다 (expectedGraphVersion · 2026-10-22 G8 시간축) ──
+test('반례25 — expectedGraphVersion 이 맞으면 그 판 이름으로 slim · readiness 를 만들고, readiness 는 주어진 시각으로 계산한다', () => {
+  const base = compute()
+  const later = '2026-10-16T09:00:00+09:00'
+  const next = compute({ effectiveAt: later, extra: { expectedGraphVersion: base.graphVersion } })
+  ok(compute({ effectiveAt: later }).graphVersion !== base.graphVersion, '시험 전제 — 날짜가 바뀌면 판 이름이 달라진다')
+  eq([next.graphVersion, next.parts.slimCore.graphVersion, next.readiness.inputs.graphVersion, next.readiness.graphVersion], Array(4).fill(base.graphVersion), '판 이름')
+  eq([next.readiness.inputs.effectiveAt, next.readiness.effectiveAt], [later, later], 'readiness 시각 = 주어진 시각')
+  ok(next.readinessHash !== base.readinessHash, '시각이 다르면 readinessHash 가 다르다')
+  eq([next.contentHash, next.graphSemanticHash], [base.contentHash, base.graphSemanticHash], '같은 판 — 내용 · 의미 해시 불변')
+})
+test('반례25b — expectedGraphVersion 접미사 · 형식이 어긋나면 GRAPH_VERSION_MISMATCH · 없으면 산출 불변', () => {
+  const base = compute()
+  const wrong = base.graphVersion.replace(/[0-9a-f]{6}$/, '000000')
+  // 접미사는 맞지만 형식이 아닌 이름 — 형식 검사만 막는다
+  for (const v of [wrong, 'g-2026101-abc', 'not-a-version', `bad-${base.graphVersion.slice(-6)}`]) {
+    const r = rejectWhy(() => compute({ extra: { expectedGraphVersion: v } }))
+    eq(r?.code, 'GRAPH_VERSION_MISMATCH', v)
+  }
+  const same = compute({ extra: { expectedGraphVersion: base.graphVersion } })
+  eq([same.readinessHash, same.readinessFileSha256, JSON.stringify(same.parts.slimCore)], [base.readinessHash, base.readinessFileSha256, JSON.stringify(base.parts.slimCore)], '같은 날 같은 판이면 결과 동일')
+  eq(build().files, build().files, 'buildAll 결정성')
+})
+
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
 //    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
 //    🔴 `--final-input` 만 주면 같은 reconciled 폴더의 10-15-family · 10-17-money-work 로 이 과거 계약도 함께 돈다 — 과거 반례를 빼지 않는다

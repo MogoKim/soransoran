@@ -8,7 +8,7 @@
  *    운영 runtime checkout(`soransoran-magazine-runtime`)에는 쓰지 않는다 — 헌장 §8.
  *
  * 사용
- *   node scripts/magazine-g8-promote.mjs --snapshot <dir> --research <dir> --at <KST> --graph-effective-at <KST> [--repo <dir>] [--json] [--out <file>]
+ *   node scripts/magazine-g8-promote.mjs --snapshot <dir> --research <dir> --at <KST> [--repo <dir>] [--json] [--out <file>]
  *   node scripts/magazine-g8-promote.mjs --apply --manifest <file> --confirm-hash <hash> --snapshot <dir> --research <dir> --repo <dir>
  *        --approved-by <사람> --approved-at <KST> --committed-at <KST>
  *   node scripts/magazine-g8-promote.mjs --verify --research <dir> --repo <dir>
@@ -38,6 +38,7 @@ function usage(why) {
 }
 const need = (name, why) => opt(name) ?? usage(`${name} 가 필요하다 — ${why} (기본값 없음)`)
 if (flag('--asof')) usage('--asof 는 없앴다 — 날짜를 하루 끝으로 해석하지 않는다. --at YYYY-MM-DDTHH:MM:SS+09:00 을 쓴다')
+if (flag('--graph-effective-at')) usage('--graph-effective-at 은 없앴다 — readiness 는 --at 으로 계산하고 판 이름은 제품 current 에서 읽는다')
 for (const old of ['--queue-root', '--admission-root', '--graph-root']) {
   if (flag(old)) usage(`${old} 는 없앴다 — G8 은 큐를 쓰지 않는다. 연구 루트는 --research, 제품 루트는 --repo 다`)
 }
@@ -88,7 +89,7 @@ async function runDryRun() {
   let manifest
   try {
     manifest = await buildManifest({ repoDir, researchDir, snapshotDir: need('--snapshot', 'reconciled snapshot'),
-      at: need('--at', '판정 시각'), graphEffectiveAt: need('--graph-effective-at', '제품 graph 의 build 기준 시각') })
+      at: need('--at', '판정 시각') })
   } catch (e) {
     console.error(`\n  🔴 ${e.message}\n`)
     return 1
@@ -107,7 +108,7 @@ async function runDryRun() {
 
 function report(m, out) {
   console.log(`\nG8 편입기 dry-run — 🔴 아무것도 쓰지 않았다${out ? ` (manifest 보고서만 ${out})` : ''}`)
-  console.log(`  판정 시각 ${m.at} · graph ${m.graph.graphVersion}(build 기준 ${m.graphEffectiveAt}) · manifest ${m.hash}`)
+  console.log(`  판정 시각 ${m.at} (readiness 기준) · graph ${m.graph.graphVersion} · manifest ${m.hash}`)
   console.log(`  snapshot ${m.snapshot.name} · readinessHash ${m.readiness.readinessHash.slice(0, 16)} · 신원 입력 ${Object.keys(m.identityInputHashes).length}개`)
   console.log('  🔴 apply 는 연구 receipt · slug 표 · 장부만 쓴다 — 큐 행은 ArticlePlan 승인 뒤의 별도 단계다\n')
   console.log(`  admission 후보 ${m.admissions.length}건`)

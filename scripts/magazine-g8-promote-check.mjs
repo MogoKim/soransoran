@@ -204,7 +204,7 @@ const research3 = (f) => {
     lock: fs.existsSync(path.join(f.research, lib.LOCK_FILE)),
   }
 }
-const build = (f, o = {}) => lib.buildManifest({ repoDir: f.repo, researchDir: f.research, snapshotDir: f.snapshot, at: o.at ?? AT, graphEffectiveAt: o.geff ?? GEFF })
+const build = (f, o = {}) => lib.buildManifest({ repoDir: f.repo, researchDir: f.research, snapshotDir: f.snapshot, at: o.at ?? AT })
 const approvalOf = (m, o = {}) => ({ approvedBy: '김운영', approvedAt: '2026-10-15T14:30:00+09:00', confirmManifestHash: m.hash, ...o })
 const apply = (f, m, o = {}) => lib.applyAdmissions({ manifest: m, repoDir: f.repo, researchDir: f.research, snapshotDir: f.snapshot,
   approval: o.approval ?? approvalOf(m), committedAt: o.committedAt ?? COMMITTED, faultHook: o.faultHook ?? (() => {}), knownLegacy: f.legacyList })
@@ -230,7 +230,7 @@ console.log('Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 콘텐츠 계�
     [x1.slug, x1.direct.map((x) => x.edgeId), x1.discovery.edgeId, x1.reverse, x1.direct[0].anchorLabel, x1.direct[0].targetSlug], ['learn-pick', ['E-0001', 'E-0002'], 'E-0003', ['E-0007'], 'I-P1 보기', 'p1'])
   expect('큐 행 · 콘텐츠 계획 필드 0', ['queueRows', 'fallbackRows', 'selection', 'classification'].filter((k) => k in m)
     .concat(JSON.stringify(m.admissions).match(/contentType|searchIntent|riskLevel|ctaBoard|validationProfile/g) ?? []), [])
-  expect('manifest 필드', Object.keys(m).sort(), ['admissions', 'at', 'graph', 'graphEffectiveAt', 'hash', 'identityInputHashes', 'readiness', 'refused', 'schema', 'snapshot'])
+  expect('manifest 필드 (graphEffectiveAt 없음)', Object.keys(m).sort(), ['admissions', 'at', 'graph', 'hash', 'identityInputHashes', 'readiness', 'refused', 'schema', 'snapshot'])
   expect('신원 입력 정확히 15개', Object.keys(m.identityInputHashes), ['product.articles', 'product.topicQueue', 'product.draftsSlugSet', 'product.graphCurrent',
     'product.graphBundle', 'product.graphControl', 'product.graphResolver', 'research.slugManifest', 'research.ledger', 'research.slugModule',
     ...lib.SNAPSHOT_FILES.map((n) => `snapshot.${n}`)])
@@ -238,14 +238,27 @@ console.log('Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 콘텐츠 계�
     [GV, BUILT.manifest.contentHash.combined, GV, 'string', 'fx-snapshot'])
   expect('dry-run 쓰기 0 · 연구 current 없이 돈다', [JSON.stringify(snapshot(f.research)) === JSON.stringify(pre.r), JSON.stringify(snapshot(f.repo)) === JSON.stringify(pre.p),
     fs.existsSync(path.join(f.research, 'contract/build'))], [true, true, false])
-  expect('--at 이 graph 기준 시각보다 이르면 거부', await codeOf(build(f, { at: '2026-10-15T12:59:59+09:00' })), 'AT_INVALID')
-  expect('시각은 실제 KST 초 단위만', [await codeOf(build(f, { at: '2026-10-15' })), await codeOf(build(f, { geff: '2026-02-30T13:00:00+09:00' }))], ['AT_INVALID', 'AT_INVALID'])
-  expect('graph 기준 시각이 다른 날이면 graphVersion 이 달라 거부', await codeOf(build(f, { geff: '2026-10-14T13:00:00+09:00' })), 'GRAPH_BUNDLE_MISMATCH')
+  {
+    // 🔴 --at 이 snapshot 의 공개 글보다 이르면 그 시각의 제품과 snapshot lifecycle 이 다르다 — 거부
+    let e = null
+    try { await build(f, { at: '2026-09-30T00:00:00+09:00' }) } catch (x) { e = x }
+    expect('--at 시각에 snapshot lifecycle 이 제품과 다르면 GRAPH_BUNDLE_MISMATCH (lifecycle drift)', [e?.code, String(e?.why ?? '').includes('INPUT_PRODUCT_LIFECYCLE_DRIFT')], ['GRAPH_BUNDLE_MISMATCH', true])
+  }
+  expect('시각은 실제 KST 초 단위만', [await codeOf(build(f, { at: '2026-10-15' })), await codeOf(build(f, { at: '2026-02-30T13:00:00+09:00' }))], ['AT_INVALID', 'AT_INVALID'])
+  {
+    // 🔴 시간축 회귀 (2026-10-22 P1) — readiness 는 --at 으로 계산한다. 판 이름은 제품 current 그대로
+    // 거부되면 예외가 아니라 이 반례의 실패로 드러나게 감싼다
+    const nextDay = await build(f, { at: '2026-10-16T00:30:00+09:00' }).catch((e) => ({ graph: { graphVersion: e.code }, readiness: { inputs: {} }, admissions: [] }))
+    expect('다른 날 --at — 판 이름 = 제품 current · readiness 시각 = --at · readinessHash 가 다르다 · 후보 같음',
+      [nextDay.graph.graphVersion, nextDay.readiness.inputs.graphVersion, nextDay.readiness.inputs.effectiveAt, nextDay.readiness.readinessHash !== m.readiness.readinessHash,
+        nextDay.admissions.map((a) => a.intentId)], [GV, GV, '2026-10-16T00:30:00+09:00', true, ['I-X1', 'I-X2']])
+    expect('같은 날 다른 시각도 readiness 시각을 따른다', [m.readiness.inputs.effectiveAt, (await build(f, { at: GEFF })).readiness.inputs.effectiveAt], [AT, GEFF])
+  }
   const cli = (args) => spawnSync('node', [CLI, ...args], { encoding: 'utf8' })
-  const base = ['--research', f.research, '--repo', f.repo, '--snapshot', f.snapshot, '--at', AT, '--graph-effective-at', GEFF]
+  const base = ['--research', f.research, '--repo', f.repo, '--snapshot', f.snapshot, '--at', AT]
   const drop = (k) => base.filter((x, i) => x !== k && base[i - 1] !== k)
-  expect('CLI — --snapshot · --at · --graph-effective-at · --research 각각 없으면 exit 2 (기본값 없음)',
-    ['--snapshot', '--at', '--graph-effective-at', '--research'].map((k) => cli(drop(k)).status), [2, 2, 2, 2])
+  expect('CLI — --snapshot · --at · --research 각각 없으면 exit 2 (기본값 없음)', ['--snapshot', '--at', '--research'].map((k) => cli(drop(k)).status), [2, 2, 2])
+  expect('CLI — 없앤 --graph-effective-at 은 거부 (exit 2)', cli([...base, '--graph-effective-at', GEFF]).status, 2)
   const j = cli([...base, '--json'])
   expect('CLI dry-run — 같은 manifest · 쓰기 0', [j.status, parseJson(j.stdout, {}).hash, JSON.stringify(snapshot(f.research)) === JSON.stringify(pre.r)], [0, m.hash, true])
   expect('CLI — 옛 --queue-root 는 거부', cli([...base, '--queue-root', f.repo]).status, 2)
@@ -282,10 +295,12 @@ console.log('Ⓑ snapshot ↔ 제품 bundle — 선언값이 아니라 재계산
   await tamper('payload edge 이유를 바꾸고 EXPORT_HASH 도 다시 맞춤', (f) => edit(f, bundleRel, (t) => reExport(t.replace('I-X1에서 I-P1로 가는 이유', 'I-X1에서 I-P1로 가는 다른 이유'))), 'PAYLOAD')
   await tamper('payload contentHash.participation 만 위조 (EXPORT_HASH 재계산)', (f) => edit(f, bundleRel, (t) => reExport(t.replace(/"combined": "([0-9a-f]+)"/, '"participation": "0000000000000000",\n    "combined": "$1"'))), 'CONTENT_HASH.participation')
   await tamper('control 이 다른 판을 가리킨다 (제품 폴백)', (f) => edit(f, lib.PRODUCT_FILES.graphControl, (t) => t.replace(GV, 'g-20261015-000000')), 'CONTROL')
-  await tamper('current 가 다른 이름의 사본을 가리킨다', (f) => {
-    fs.copyFileSync(path.join(f.repo, bundleRel), path.join(f.repo, 'src/content/magazine/graph/g-20261015-copy00.ts'))
-    edit(f, lib.PRODUCT_FILES.graphCurrent, () => "export { GRAPH, EXPORT_HASH } from './g-20261015-copy00'\n")
-  }, 'CURRENT')
+  const pointTo = (f, name) => {
+    fs.copyFileSync(path.join(f.repo, bundleRel), path.join(f.repo, `src/content/magazine/graph/${name}.ts`))
+    edit(f, lib.PRODUCT_FILES.graphCurrent, () => `export { GRAPH, EXPORT_HASH } from './${name}'\n`)
+  }
+  await tamper('current 가 접미사가 다른 이름의 사본을 가리킨다', (f) => pointTo(f, 'g-20261015-000000'), 'GRAPH_VERSION_MISMATCH')
+  await tamper('current 가 접미사는 같고 날짜만 다른 사본을 가리킨다', (f) => pointTo(f, `g-20261014-${GV.slice(-6)}`), 'CURRENT')
 }
 
 // ── Ⓒ receipt 불변식 ─────────────────────────────────────────
@@ -553,6 +568,55 @@ const testEnv = (gate, stage) => ({ ...process.env, SORAN_MAGAZINE_TEST_MODE: '1
   expect('명시 경로 — 기계 operator 거부', (await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: lib.sha256(stale), operator: 'bot' })).code, 'OPERATOR_INVALID')
   const rel = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: lib.sha256(stale), operator: '김운영' })
   expect('명시 경로 — sha 확인 · journal 없음 → 잠금만 놓는다 · 그 뒤 apply APPLIED', [rel.code, research3(f).lock, (await apply(f, m)).code], ['STALE_LOCK_RELEASED', false, 'APPLIED'])
+}
+{
+  // 🔴 확인-덮어쓰기 경쟁 (2026-10-22 P1) — 확인한 그 잠금만 넘겨받는다
+  const NEW_HOLDER = `${JSON.stringify({ schema: lib.LOCK_SCHEMA, host: 'new-holder', pid: 424242, startedAt: '2026-10-22T00:00:00.000Z', manifestHash: 'new' })}\n`
+  const staleState = async () => {
+    const f = makeG8()
+    const m = await build(f)
+    await codeOf(apply(f, m, { faultHook: crashAt('slug:written') }))
+    return { f, m, sha: lockSha(f), lockPath: path.join(f.research, lib.LOCK_FILE) }
+  }
+  const quiet = (f) => { const s = research3(f); delete s.lock; return JSON.stringify(s) }
+  const placeNewHolder = (lockPath) => { fs.rmSync(lockPath, { force: true }); fs.writeFileSync(lockPath, NEW_HOLDER, { flag: 'wx' }) }
+  {
+    const { f, sha, lockPath } = await staleState()
+    const pre = quiet(f)
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList,
+      faultHook: (s) => { if (s === 'lock:checked') placeNewHolder(lockPath) } })
+    expect('확인 직후 새 holder 잠금으로 바뀜 → LOCK_RACE · 새 holder 바이트 보존 · journal · receipt · slug · ledger 쓰기 0 · takeover 표식 0',
+      [r.code, lockText(f), quiet(f) === pre, fs.existsSync(`${lockPath}.takeover`), fs.readdirSync(path.dirname(lockPath)).filter((n) => n.includes('.claimed-')).length],
+      ['LOCK_RACE', NEW_HOLDER, true, false, 0])
+  }
+  {
+    const { f, sha, lockPath } = await staleState()
+    const pre = quiet(f)
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList,
+      faultHook: (s) => { if (s === 'lock:claimed') fs.writeFileSync(lockPath, NEW_HOLDER, { flag: 'wx' }) } })
+    expect('stale 잠금을 떼어 낸 사이 새 holder 가 먼저 잠금 → LOCK_RACE · 새 holder 바이트 보존 · 쓰기 0', [r.code, lockText(f), quiet(f) === pre], ['LOCK_RACE', NEW_HOLDER, true])
+  }
+  {
+    const { f, sha } = await staleState()
+    let second = null
+    const first = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList,
+      faultHook: (s) => { if (s === 'lock:checked' && !second) second = lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '박운영', knownLegacy: f.legacyList }) } })
+    const r2 = await second
+    expect('동시 복구 두 개 — 먼저 시작한 하나만 takeover · 다른 하나는 LOCK_RACE · 결과 ADMITTED', [first.code, r2.code, verifyNow(f).ok, research3(f).lock, research3(f).journal],
+      ['STALE_LOCK_RECOVERED', 'LOCK_RACE', true, false, false])
+  }
+  {
+    const { f, sha, lockPath } = await staleState()
+    fs.writeFileSync(`${lockPath}.takeover`, '{"host":"dead"}\n')
+    const pre = { lock: lockText(f), q: quiet(f) }
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList })
+    expect('남은 takeover 표식 → LOCK_RACE · 자동으로 지우지 않는다 · 잠금 · 상태 그대로', [r.code, fs.existsSync(`${lockPath}.takeover`), lockText(f) === pre.lock, quiet(f) === pre.q], ['LOCK_RACE', true, true, true])
+  }
+  {
+    const { f, m, sha } = await staleState()
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList })
+    expect('경쟁 없는 stale 복구는 그대로 — commit-forward 완성 · 재실행 ALREADY_APPLIED', [r.code, (await apply(f, m)).code, verifyNow(f).ok], ['STALE_LOCK_RECOVERED', 'ALREADY_APPLIED', true])
+  }
 }
 {
   // 실제 자식 두 개 — 하나가 잠금을 쥔 동안 다른 하나는 쓰기 0
@@ -1083,7 +1147,8 @@ if (fs.existsSync(path.join(REAL_RESEARCH, lib.ADMISSION_FILES.ledger))) {
   const pointer = /from '\.\/(g-[a-z0-9-]+)'/.exec(fs.readFileSync(path.join(REPO, lib.PRODUCT_FILES.graphCurrent), 'utf8'))?.[1]
   if (fs.existsSync(REAL_SNAPSHOT) && pointer === 'g-20261021-081d9a') {
     const pre = snapshot(path.join(REAL_RESEARCH, 'contract'))
-    const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: REAL_SNAPSHOT, at: '2026-10-21T23:30:00+09:00', graphEffectiveAt: '2026-10-21T11:00:00+09:00' })
+    const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: REAL_SNAPSHOT, at: '2026-10-22T00:30:00+09:00' })
+    expect('실제 dry-run — readiness 시각 = --at(다음 날 00:30) · 판 이름 = 제품 current', [m.readiness.inputs.effectiveAt, m.readiness.inputs.graphVersion], ['2026-10-22T00:30:00+09:00', 'g-20261021-081d9a'])
     expect('실제 snapshot dry-run — 후보 I-T6-05 하나 · E-0188 · E-0329 + E-0100 · reverse E-0099',
       m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]])
     expect('실제 dry-run — 연구 contract 쓰기 0', JSON.stringify(snapshot(path.join(REAL_RESEARCH, 'contract'))) === JSON.stringify(pre), true)
