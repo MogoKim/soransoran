@@ -31,7 +31,8 @@ const COLS = 'lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]'
 
 function Row({ children }: { children: React.ReactNode }) {
   return (
-    <li className={`flex flex-col gap-1.5 rounded-lg border border-subtle bg-surface-card p-3 lg:grid lg:min-h-[52px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-2 ${COLS}`}>
+    /* 🔴 행 사이는 구분선 하나 — 상자로 두르지 않는다(Admin Golden Master) */
+    <li className={`flex flex-col gap-1.5 border-b border-[color:var(--admin-divider)] px-4 py-3 last:border-b-0 lg:grid lg:min-h-[52px] lg:items-center lg:gap-4 lg:py-2 ${COLS}`}>
       {children}
     </li>
   )
@@ -41,7 +42,9 @@ const HEAD = (
   <>
     <span>항목</span>
     {CONVERSION_SCOPES.map((scope) => (
-      <span key={scope}>{CONVERSION_SCOPE_LABELS[scope]}</span>
+      <span key={scope} className="text-right">
+        {CONVERSION_SCOPE_LABELS[scope]}
+      </span>
     ))}
   </>
 )
@@ -64,22 +67,23 @@ export default async function AdminSignupConversionPage() {
 
   return (
     <div>
-      <AdminPageHeader group="운영 › 회원" title="가입 전환" description={`측정 시각 ${formatKst(now)}`} />
+      <AdminPageHeader group="회원" title="가입 전환" description={`측정 시각 ${formatKst(now)}`} />
       <MemberAdminTabs current="conversion" />
 
-      <AdminSection title="수집 상태" description={notice.description}>
-        <dl className="m-0 mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <div className="rounded-lg border border-subtle bg-surface-card p-3">
-            <dt className="text-sm text-content-muted">상태</dt>
-            <dd className="m-0 mt-1 text-lg font-bold text-content-primary">{notice.status}</dd>
+      <AdminSection title="수집 상태" description={notice.description} className="mt-0">
+        {/* 🔴 한 띠 안의 세 칸 — 카드로 두르지 않는다 */}
+        <dl className="m-0 mt-3 grid grid-cols-1 gap-px border-y border-[color:var(--admin-border)] bg-[color:var(--admin-divider)] sm:grid-cols-3">
+          <div className="bg-[color:var(--admin-canvas)] p-4">
+            <dt className="text-xs font-semibold text-content-secondary">상태</dt>
+            <dd className="m-0 mt-1 text-2xl font-bold text-content-primary">{notice.status}</dd>
           </div>
-          <div className="rounded-lg border border-subtle bg-surface-card p-3">
-            <dt className="text-sm text-content-muted">수집 시작일</dt>
-            <dd className="m-0 mt-1 text-lg font-bold tabular-nums text-content-primary">{configuredStartDay ?? '—'}</dd>
+          <div className="bg-[color:var(--admin-canvas)] p-4">
+            <dt className="text-xs font-semibold text-content-secondary">수집 시작일</dt>
+            <dd className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{configuredStartDay ?? '—'}</dd>
           </div>
-          <div className="rounded-lg border border-subtle bg-surface-card p-3">
-            <dt className="text-sm text-content-muted">누계 기준 종료일(KST)</dt>
-            <dd className="m-0 mt-1 text-lg font-bold tabular-nums text-content-primary">{gate.active ? gate.today : '—'}</dd>
+          <div className="bg-[color:var(--admin-canvas)] p-4">
+            <dt className="text-xs font-semibold text-content-secondary">누계 기준 종료일(KST)</dt>
+            <dd className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{gate.active ? gate.today : '—'}</dd>
           </div>
         </dl>
       </AdminSection>
@@ -93,9 +97,9 @@ export default async function AdminSignupConversionPage() {
             <AdminTable columns={COLS} head={HEAD}>
               {SIGNUP_FUNNEL_STEPS.map((step) => (
                 <Row key={step}>
-                  <span className="font-bold text-content-primary">{SIGNUP_FUNNEL_STEP_LABELS[step]}</span>
+                  <span className="font-semibold text-content-primary">{SIGNUP_FUNNEL_STEP_LABELS[step]}</span>
                   {CONVERSION_SCOPES.map((scope) => (
-                    <AdminCell key={scope} label={CONVERSION_SCOPE_LABELS[scope]} className="tabular-nums">
+                    <AdminCell key={scope} label={CONVERSION_SCOPE_LABELS[scope]} className="tabular-nums lg:text-right">
                       {counts[step][scope]}건
                     </AdminCell>
                   ))}
@@ -111,9 +115,9 @@ export default async function AdminSignupConversionPage() {
             <AdminTable columns={COLS} head={HEAD}>
               {SIGNUP_FUNNEL_RATIOS.map((ratio) => (
                 <Row key={ratio.id}>
-                  <span className="font-bold text-content-primary">{ratio.label}</span>
+                  <span className="font-semibold text-content-primary">{ratio.label}</span>
                   {CONVERSION_SCOPES.map((scope) => (
-                    <AdminCell key={scope} label={CONVERSION_SCOPE_LABELS[scope]} className="tabular-nums">
+                    <AdminCell key={scope} label={CONVERSION_SCOPE_LABELS[scope]} className="tabular-nums lg:text-right">
                       {ratioValue(ratio, counts, scope)}
                     </AdminCell>
                   ))}
@@ -125,13 +129,13 @@ export default async function AdminSignupConversionPage() {
       ) : null}
 
       <AdminSection title="고객 구성은 「고객 구성」 탭에서">
-        <p className="m-0 mt-2 text-sm text-content-secondary">
+        <p className="m-0 mt-3 text-sm text-content-secondary">
           가입한 실제 고객의 여성·연령 구성과 참여는 위 「고객 구성」 탭이 셉니다. 이 화면은 그 숫자를 다시 적지 않습니다.
         </p>
       </AdminSection>
 
       <AdminSection title="해석 한계">
-        <ul className="m-0 mt-2 flex list-disc flex-col gap-1.5 pl-5 text-sm text-content-secondary">
+        <ul className="m-0 mt-3 flex list-disc flex-col gap-1.5 pl-5 text-sm text-content-secondary">
           <li>고유 사람 수가 아니라 단계별 발생 횟수입니다. 한 사람의 퍼널로 읽지 않습니다.</li>
           <li>로그아웃한 기존 회원이 다시 로그인한 경우도 카카오 시작에 섞일 수 있습니다.</li>
           <li>로그아웃 상태의 운영자는 일반 방문과 구분할 수 없어 열람·도달·노출·카카오 시작에 섞일 수 있습니다.</li>

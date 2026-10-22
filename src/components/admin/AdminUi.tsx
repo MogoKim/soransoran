@@ -9,12 +9,11 @@ import Link from 'next/link'
  * 🔴 서버 컴포넌트로 둔다. 상태를 갖지 않으므로 'use client' 가 필요 없다 —
  *    조치 버튼(AdminActionButton 등)과 목록 거르기(AdminListFilter)만 클라이언트다.
  *
- * 🔴 카드 안에 카드를 넣지 않는다. AdminCard 는 목록의 한 줄에만 쓰고,
- *    그 안에서는 배경만 다른 인용 블록(AdminQuote)을 쓴다.
- *
- * 🔴 Admin Console V2 (2026-10-20) — 창업자 확정 B Calm Spacious 체계.
- *    색·간격·크기는 이 파일과 AdminButton 만 정한다. 화면은 prop 과 레이아웃 클래스만 쓴다.
- *    표 한 줄 56px · 모바일 행 72px 이상 · 터치 52px.
+ * 🔴 Admin Golden Master (2026-10-22 · 창업자 확정 · Operational Dense).
+ *    흰 canvas 위에서 상자 대신 선 · 정렬 · 간격으로 나눈다. 카드 안에 카드를 넣지 않고,
+ *    큰 패널 · 큰 그림자를 쓰지 않는다. 색 · 간격 · 크기는 이 파일과 AdminButton 만 정한다.
+ *    화면은 prop 과 레이아웃 클래스만 쓴다.
+ *    표 행 52px · 표 머리줄 44px · 모바일 행 72px · 터치 52px.
  */
 
 /**
@@ -23,7 +22,8 @@ import Link from 'next/link'
  * 상세 화면은 backHref 를 준다. 뒤로 가는 길이 없으면 브라우저 뒤로가기에 기대게 되는데,
  * 조치 후 refresh 된 화면에서는 그것이 엉뚱한 곳으로 간다.
  *
- * group 은 메뉴의 상위 묶음 이름이다(운영 · 자동 운영). 메뉴와 같은 말을 쓴다.
+ * group 은 메뉴 묶음 이름이다(콘텐츠 운영 · 회원 · 자동 운영 …). 메뉴와 같은 말을 쓴다.
+ * 제목 26px(모바일 24) · 설명 16px · 아래 첫 덩어리까지 24px.
  */
 export function AdminPageHeader({
   title,
@@ -41,11 +41,11 @@ export function AdminPageHeader({
   group?: string
 }) {
   return (
-    <header className="flex flex-col gap-1 pt-1">
+    <header className="mb-6 flex flex-col gap-1">
       {backHref ? (
         <Link
           href={backHref}
-          className="inline-flex min-h-[52px] lg:min-h-[44px] items-center self-start text-sm text-link"
+          className="inline-flex min-h-[52px] items-center self-start text-sm font-semibold text-link lg:min-h-[44px]"
         >
           {backLabel}
         </Link>
@@ -53,13 +53,13 @@ export function AdminPageHeader({
         <p className="m-0 text-xs text-content-muted">{group}</p>
       ) : null}
       <h1 className="m-0 break-words text-xl font-bold leading-snug text-content-primary">{title}</h1>
-      {badges ? <div className="mt-1 flex flex-wrap items-center gap-2">{badges}</div> : null}
-      {description ? <p className="m-0 mt-1 text-sm text-content-muted">{description}</p> : null}
+      {badges ? <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div> : null}
+      {description ? <p className="m-0 mt-1 text-sm text-content-secondary">{description}</p> : null}
     </header>
   )
 }
 
-/** 화면 안의 한 덩어리. 제목과 부연을 같은 간격으로 붙인다. */
+/** 화면 안의 한 덩어리 — 제목 18px · 부연 14px · 덩어리 사이 40px */
 export function AdminSection({
   title,
   description,
@@ -78,33 +78,10 @@ export function AdminSection({
       <h2 id={id} className="m-0 text-lg font-bold leading-snug text-content-primary">
         {title}
       </h2>
-      {description ? <p className="m-0 mt-1.5 text-sm text-content-muted">{description}</p> : null}
+      {description ? <p className="m-0 mt-1 text-xs text-content-secondary">{description}</p> : null}
       {children}
     </section>
   )
-}
-
-/** 흰 카드의 테두리 — 웜 베이지 바탕(--admin-page) 위에서 카드가 서게 한다 */
-const CARD_LINE = 'border-[color:var(--admin-card-line)]'
-
-/** 흰 면 하나. 폼·요약·조치 묶음을 담는다. 🔴 패널 안에 패널을 넣지 않는다. */
-export function AdminPanel({
-  children,
-  className = '',
-  tone = 'default',
-}: {
-  children: React.ReactNode
-  className?: string
-  /** emphasis = 지금 할 일(굵은 테두리) · locked = 아직 열리지 않은 단계(점선) */
-  tone?: 'default' | 'emphasis' | 'locked'
-}) {
-  const skin =
-    tone === 'emphasis'
-      ? 'border-2 border-content-primary bg-surface-card'
-      : tone === 'locked'
-        ? 'border border-dashed border-interactive bg-surface-page'
-        : `border ${CARD_LINE} bg-surface-card`
-  return <div className={`rounded-[10px] p-4 lg:p-6 ${skin} ${className}`}>{children}</div>
 }
 
 /**
@@ -112,10 +89,11 @@ export function AdminPanel({
  *
  * 🔴 "없습니다" 로 끝내지 않는다. 비어 있는 것이 정상인지 아닌지를 함께 적는다 —
  *    운영자가 "내가 못 찾은 건가" 를 의심하며 화면을 다시 뒤지게 된다.
+ * 🔴 상자로 두르지 않는다 — 위아래 선 사이의 한 줄이다.
  */
 export function AdminEmptyState({ children }: { children: React.ReactNode }) {
   return (
-    <p className="m-0 rounded-[10px] border border-dashed border-interactive px-4 py-6 text-sm text-content-muted">
+    <p className="m-0 border-y border-[color:var(--admin-divider)] px-4 py-8 text-sm text-content-secondary">
       {children}
     </p>
   )
@@ -127,6 +105,7 @@ type NoticeTone = 'info' | 'warning' | 'danger'
  * 화면 위 안내 한 줄 — 읽기 전용 · 위험 조치처럼 화면의 성격을 먼저 알려야 할 때.
  *
  * 🔴 색만으로 말하지 않는다. 아이콘 모양(정보 ⓘ · 경고 △)과 문구가 함께 간다.
+ *    면은 옅게, 왼쪽 3px 선이 상태색이다.
  */
 export function AdminNotice({
   tone = 'info',
@@ -146,7 +125,7 @@ export function AdminNotice({
   const iconColor =
     tone === 'danger' ? 'text-state-danger' : tone === 'warning' ? 'text-state-warning' : 'text-state-info'
   return (
-    <div role="note" className={`flex items-start gap-3 rounded-[10px] border px-4 py-3 ${skin}`}>
+    <div role="note" className={`flex items-start gap-3 rounded-md border-l-[3px] px-4 py-3 ${skin}`}>
       <svg
         width="20"
         height="20"
@@ -187,17 +166,18 @@ export function AdminRangeNote({ children }: { children: React.ReactNode }) {
 export type BadgeTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success' | 'brand'
 
 const BADGE_SKIN: Record<BadgeTone, string> = {
-  neutral: 'bg-surface-page text-content-secondary',
-  info: 'bg-[color:var(--admin-info-soft)] font-bold text-state-info',
-  warning: 'bg-[color:var(--admin-warning-soft)] font-bold text-state-warning',
-  danger: 'bg-[color:var(--admin-danger-soft)] font-bold text-state-danger',
-  success: 'bg-[color:var(--admin-success-soft)] font-bold text-state-success',
-  brand: 'bg-brand-soft font-bold text-brand-strong',
+  neutral: 'bg-[color:var(--admin-neutral-soft)] text-content-secondary',
+  info: 'bg-[color:var(--admin-info-soft)] text-state-info',
+  warning: 'bg-[color:var(--admin-warning-soft)] text-state-warning',
+  danger: 'bg-[color:var(--admin-danger-soft)] text-state-danger',
+  success: 'bg-[color:var(--admin-success-soft)] text-state-success',
+  /* 「이 줄이 왜 여기 있는가」 한 조각(신고 사유 · 선택됨) — 면은 중립, 글자만 코랄 */
+  brand: 'bg-[color:var(--admin-neutral-soft)] text-[color:var(--admin-accent-text)]',
 }
 
-/** 배지 className — 요소를 바꿀 수 없는 자리(D100 컴포넌트)에서 쓴다 */
+/** 배지 className — 요소를 바꿀 수 없는 자리(D100 컴포넌트)에서 쓴다. 점 + 문구 — 색만으로 말하지 않는다 */
 export function adminBadgeClass(tone: BadgeTone = 'neutral'): string {
-  return `inline-flex min-h-[24px] items-center whitespace-nowrap rounded px-2 text-xs ${BADGE_SKIN[tone]}`
+  return `inline-flex min-h-[24px] items-center gap-1.5 whitespace-nowrap rounded px-2 text-xs font-semibold leading-none before:h-1.5 before:w-1.5 before:shrink-0 before:rounded-full before:bg-current before:content-[''] ${BADGE_SKIN[tone]}`
 }
 
 /**
@@ -226,6 +206,7 @@ export function AdminBadge({
  *
  * 🔴 위험(빨강)은 "운영자가 지금 손대야 하는 것" 에만 쓴다.
  *    미처리 신고 · 가려진 글 · 차단된 회원. 색이 흔해지면 아무것도 눈에 안 띈다.
+ * 🔴 정상 상태(공개 글)는 배지를 두르지 않고 글자로만 둔다 — 손댈 것만 색이 남는다.
  */
 export function AdminStatusBadge({
   kind,
@@ -243,28 +224,103 @@ export function AdminStatusBadge({
     // 삭제는 이미 끝난 상태라 조용히 둔다. 숨김만 운영자가 되돌릴 수 있어 눈에 걸어 둔다.
     if (value === 'HIDDEN') return <AdminBadge tone="danger">숨김</AdminBadge>
     if (value === 'DELETED') return <AdminBadge tone="neutral">삭제됨</AdminBadge>
-    return <AdminBadge tone="neutral">공개</AdminBadge>
+    return <span className="text-xs text-content-muted">공개</span>
   }
-  // PIN 은 운영자가 의도해 올린 것이라 위험이 아니다. HIDE 는 무언가를 가린 상태다.
+  // PIN 은 운영자가 의도해 올린 것이라 위험이 아니다(정보). HIDE 는 무언가를 가린 상태다.
   return value === 'PIN' ? (
-    <AdminBadge tone="brand">고정</AdminBadge>
+    <AdminBadge tone="info">고정</AdminBadge>
   ) : (
     <AdminBadge tone="danger">홈에서 숨김</AdminBadge>
   )
 }
 
 /**
- * 데스크탑 표 · 모바일 카드.
+ * 오늘 확인할 것 · 집계 숫자 — 한 띠 안의 칸.
+ *
+ * 🔴 카드 여러 장이 아니다. 위아래 선 하나 안에서 칸 사이 1px 선으로만 나눈다.
+ *    칸 숫자는 20px — 장식으로 키운 숫자가 아니라 읽는 값이다. 상승률 · 그래프를 붙이지 않는다.
+ * 🔴 href 가 있으면 칸 전체가 그 관리자 화면으로 간다. 이동 문구(linkLabel)를 함께 보인다.
+ */
+const STRIP_COLS = { 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4' } as const
+
+export function AdminStatStrip({
+  children,
+  columns = 4,
+  className = 'mt-3',
+}: {
+  children: React.ReactNode
+  columns?: keyof typeof STRIP_COLS
+  className?: string
+}) {
+  return (
+    <ul
+      className={`m-0 grid list-none grid-cols-1 gap-px border-y border-[color:var(--admin-border)] bg-[color:var(--admin-divider)] p-0 sm:grid-cols-2 ${STRIP_COLS[columns]} ${className}`}
+    >
+      {children}
+    </ul>
+  )
+}
+
+export function AdminStat({
+  label,
+  value,
+  note,
+  flag,
+  href,
+  linkLabel,
+  attention = false,
+}: {
+  label: string
+  value: React.ReactNode
+  note?: React.ReactNode
+  /** 칸 이름 옆의 상태 조각(배지) — 색만 쓰지 않고 문구로 */
+  flag?: React.ReactNode
+  href?: string
+  linkLabel?: string
+  /** 지금 처리할 것이 있는 칸 — 위에 호박색 3px 선 */
+  attention?: boolean
+}) {
+  const body = (
+    <>
+      <span className="flex items-center justify-between gap-2 text-xs font-semibold text-content-secondary">
+        {label}
+        {flag}
+      </span>
+      <span className="break-words text-2xl font-bold tabular-nums leading-snug text-content-primary">{value}</span>
+      {note ? <span className="text-xs text-content-muted">{note}</span> : null}
+      {href && linkLabel ? (
+        <span className="mt-auto pt-1 text-xs font-semibold text-[color:var(--admin-accent-text)] underline underline-offset-2">
+          {linkLabel} <span aria-hidden="true">→</span>
+        </span>
+      ) : null}
+    </>
+  )
+  const skin = `flex h-full min-h-[112px] flex-col gap-1.5 bg-[color:var(--admin-canvas)] px-4 py-4 ${attention ? 'shadow-[inset_0_3px_0_var(--state-warning)]' : ''}`
+  return (
+    <li className="min-w-0">
+      {href ? (
+        <Link href={href} className={`${skin} no-underline hover:bg-[color:var(--admin-row-hover)] focus-visible:outline-offset-[-2px]`}>
+          {body}
+        </Link>
+      ) : (
+        <div className={skin}>{body}</div>
+      )}
+    </li>
+  )
+}
+
+/**
+ * 데스크탑 표 · 모바일 행 목록.
  *
  * 🔴 진짜 <table> 을 쓰지 않는다. 좁은 화면에서 가로 스크롤이 생기고,
  *    그 스크롤은 페이지 전체를 흔든다. 같은 grid 템플릿을 머리줄과 각 줄에 주고
- *    모바일에서는 1열로 떨어뜨린다 — 표처럼 정렬되면서 카드로도 읽힌다.
+ *    모바일에서는 1열로 떨어뜨린다 — 표처럼 정렬되면서 행으로도 읽힌다.
  *
  * 🔴 columns 는 호출부가 정해 머리줄과 줄에 같이 넘긴다.
  *    한 곳에서 만들어 감추면 화면마다 다른 열 폭을 줄 수 없다.
  *
- * 🔴 데스크탑에서는 줄 전체를 흰 면 한 장에 올린다. hover 가 있는 행을 바탕 위에
- *    직접 두면 hover 색이 바탕과 가까워 아무 일도 일어나지 않는다(globals.css §표면).
+ * 🔴 상자로 두르지 않는다. 위아래 선 · 머리줄 옅은 면 · 행 사이 구분선만 둔다.
+ *    모바일도 행마다 카드 테두리를 반복하지 않는다.
  *    overflow-hidden 은 쓰지 않는다 — 키보드 focus 외곽선이 잘린다.
  */
 export function AdminTable({
@@ -277,13 +333,13 @@ export function AdminTable({
   children: React.ReactNode
 }) {
   return (
-    <div className="mt-3 lg:rounded-[10px] lg:border lg:border-[color:var(--admin-card-line)] lg:bg-surface-card">
+    <div className="mt-3 border-y border-[color:var(--admin-border)]">
       <div
-        className={`hidden min-h-[44px] items-center rounded-t-[10px] border-b border-[color:var(--admin-card-line)] bg-[color:var(--admin-table-head)] px-4 text-xs font-bold text-content-secondary lg:grid lg:gap-4 ${columns}`}
+        className={`hidden min-h-[44px] items-center border-b border-[color:var(--admin-border)] bg-[color:var(--admin-surface-subtle)] px-4 text-xs font-semibold text-content-muted lg:grid lg:gap-4 ${columns}`}
       >
         {head}
       </div>
-      <ul className="m-0 flex list-none flex-col gap-2 p-0 lg:gap-0">{children}</ul>
+      <ul className="m-0 flex list-none flex-col p-0">{children}</ul>
     </div>
   )
 }
@@ -300,18 +356,16 @@ function rowData(filterKey?: string, searchText?: string) {
   }
 }
 
-/** 줄의 배치 — 모바일 카드 72px · 데스크탑 표 56px */
+/** 줄의 배치 — 모바일 행 72px · 데스크탑 표 52px */
 const ROW_LAYOUT =
-  'flex min-h-[72px] flex-col justify-center gap-1.5 px-4 py-3 lg:grid lg:min-h-[56px] lg:items-center lg:gap-4 lg:py-2'
+  'flex min-h-[72px] flex-col justify-center gap-1.5 px-4 py-3 lg:grid lg:min-h-[52px] lg:items-center lg:gap-4 lg:py-2'
 
-/** 줄의 면 — 모바일은 카드 한 장, 데스크탑은 표 면 위 아랫줄만 */
-const ROW_CARD =
-  'rounded-[10px] border border-[color:var(--admin-card-line)] bg-surface-card lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent'
+/** 줄 사이 — 구분선 하나. 마지막 줄은 표 아랫선이 대신한다 */
+const ROW_LINE = 'border-b border-[color:var(--admin-divider)] last:border-b-0'
 
 /**
  * 왼쪽 강조선.
- * 🔴 테두리가 아니라 안쪽 그림자로 그린다. 데스크탑에서 lg:border-x-0 이 왼쪽 테두리까지
- *    지워 강조선이 사라졌다(2026-10-20 발견) — 그림자는 테두리 규칙과 부딪히지 않는다.
+ * 🔴 테두리가 아니라 안쪽 그림자로 그린다 — 행의 구분선 규칙과 부딪히지 않는다.
  */
 function accentEdge(accent?: 'muted' | 'danger' | 'warning'): string {
   if (accent === 'danger') return 'shadow-[inset_3px_0_0_var(--state-danger)]'
@@ -337,10 +391,10 @@ export function AdminTableRow({
   searchText?: string
 }) {
   return (
-    <li {...rowData(filterKey, searchText)} className="lg:last:[&>a]:border-b-0">
+    <li {...rowData(filterKey, searchText)} className={ROW_LINE}>
       <Link
         href={href}
-        className={`${ROW_LAYOUT} ${ROW_CARD} no-underline hover:bg-[color:var(--admin-row-hover)] ${accentEdge(accent)} ${columns}`}
+        className={`${ROW_LAYOUT} no-underline hover:bg-[color:var(--admin-row-hover)] focus-visible:outline-offset-[-2px] ${accentEdge(accent)} ${columns}`}
       >
         {children}
       </Link>
@@ -362,11 +416,11 @@ export function AdminTableItem({
   accent?: 'muted' | 'danger' | 'warning'
   filterKey?: string
   searchText?: string
-  /** 줄 아래에 붙는 펼침·확인 영역 — 같은 면 안에 둔다 */
+  /** 줄 아래에 붙는 펼침·확인 영역 — 같은 줄 안에 둔다 */
   below?: React.ReactNode
 }) {
   return (
-    <li {...rowData(filterKey, searchText)} className={`${ROW_CARD} lg:last:border-b-0 ${accentEdge(accent)}`}>
+    <li {...rowData(filterKey, searchText)} className={`${ROW_LINE} ${accentEdge(accent)}`}>
       <div className={`${ROW_LAYOUT} ${columns}`}>{children}</div>
       {below ? <div className="px-4 pb-4">{below}</div> : null}
     </li>
@@ -399,13 +453,13 @@ export function AdminCell({
   const skin = tone === 'meta' ? 'text-xs text-content-muted' : 'text-sm text-content-secondary'
   return (
     <span className={`min-w-0 ${skin} ${className}`}>
-      {label ? <span className="text-xs text-content-muted lg:hidden">{label} </span> : null}
+      {label ? <span className="mr-1 text-xs text-content-muted lg:hidden">{label}</span> : null}
       {children}
     </span>
   )
 }
 
-/** 목록의 한 줄. 전체가 링크인 경우와 아닌 경우를 같은 모양으로 맞춘다. */
+/** 목록의 한 줄 — 표로 만들 수 없는 긴 항목. 얇은 선 하나로만 두른다(그림자 · 큰 모서리 없음). */
 export function AdminCard({
   href,
   children,
@@ -415,7 +469,7 @@ export function AdminCard({
   children: React.ReactNode
   className?: string
 }) {
-  const base = `rounded-[10px] border ${CARD_LINE} bg-surface-card p-4 ${className}`
+  const base = `rounded-md border border-[color:var(--admin-border)] bg-surface-card p-4 ${className}`
   if (!href) return <div className={base}>{children}</div>
   return (
     <Link href={href} className={`flex min-h-[52px] flex-col gap-1 no-underline hover:bg-[color:var(--admin-row-hover)] ${base}`}>
@@ -432,7 +486,7 @@ export function AdminCard({
  */
 export function AdminQuote({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-surface-page p-3 text-base text-content-primary">
+    <p className="mt-1 whitespace-pre-wrap break-words rounded-md bg-surface-page p-3 text-base text-content-primary">
       {children}
     </p>
   )
@@ -443,6 +497,8 @@ export function AdminQuote({ children }: { children: React.ReactNode }) {
  *
  * 🔴 위험한 조치(가리기·차단)를 안전한 조치(상태 표시 바꾸기) 와 한 줄에 섞지 않는다.
  *    급할수록 손이 먼저 나가는 자리라 순서와 구분이 곧 안전장치다.
+ * 🔴 danger 묶음은 빨간 1px 테두리 안에 따로 둔다. 면을 칠하지 않는다 —
+ *    채운 빨강은 "누르라" 로 읽힌다. 확인 절차는 버튼(호출부)이 그대로 갖는다.
  */
 export function AdminActionGroup({
   label,
@@ -453,19 +509,13 @@ export function AdminActionGroup({
   label: string
   children: React.ReactNode
   hint?: string
-  /** 되돌리기 어려운 조치 묶음 — 바탕을 떼어 단순 상태 변경과 섞이지 않게 한다 */
+  /** 되돌리기 어려운 조치 묶음 — 테두리로 떼어 단순 상태 변경과 섞이지 않게 한다 */
   danger?: boolean
 }) {
   return (
-    <div
-      className={
-        danger
-          ? 'mt-6 rounded-[10px] border border-subtle bg-surface-page p-4'
-          : 'mt-6'
-      }
-    >
-      <p className="m-0 text-sm font-bold text-content-secondary">{label}</p>
-      {hint ? <p className="mt-1 text-sm text-content-muted">{hint}</p> : null}
+    <div className={danger ? 'mt-6 rounded-md border border-state-danger p-4' : 'mt-6'}>
+      <p className="m-0 text-sm font-bold text-content-primary">{label}</p>
+      {hint ? <p className="mt-1 text-xs text-content-secondary">{hint}</p> : null}
       <div className="mt-3 flex flex-wrap gap-2">{children}</div>
     </div>
   )
@@ -478,14 +528,14 @@ export function AdminActionGroup({
  *    모바일에서 가로 스크롤을 만들고 옆 칸을 덮는다.
  */
 export function AdminFieldList({ children }: { children: React.ReactNode }) {
-  return <dl className="mt-2 flex flex-col">{children}</dl>
+  return <dl className="mt-2 flex flex-col border-y border-[color:var(--admin-border)]">{children}</dl>
 }
 
 export function AdminField({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1 border-t border-subtle py-3 first:border-t-0 sm:flex-row sm:gap-4">
-      <dt className="shrink-0 text-sm text-content-muted sm:w-40">{label}</dt>
-      <dd className="m-0 break-all text-base text-content-primary">{value}</dd>
+    <div className="flex flex-col gap-1 border-t border-[color:var(--admin-divider)] py-3 first:border-t-0 sm:flex-row sm:gap-4">
+      <dt className="shrink-0 text-xs text-content-muted sm:w-40 sm:pt-0.5">{label}</dt>
+      <dd className="m-0 break-all text-sm text-content-primary">{value}</dd>
     </div>
   )
 }

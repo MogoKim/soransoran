@@ -9,8 +9,9 @@ import { ToastProvider, ToastViewport } from '@/components/ui/toast'
  *    예전에는 자동 운영 화면 8개가 PageShell 을 써서 고객 글자 크기 3단계를 따라
  *    제목이 24·28·32px 로 흔들렸다(2026-10-20 실측). 이제 그 화면들도 여기 들어온다.
  *
- * 🔴 데스크탑은 왼쪽 248px 딥 사이드바가 화면 높이 전체를 차지하는 독립 색면이다
- *    (창업자 확정 B안). 본문은 웜 베이지 바탕 위 흰 카드다. 색은 --admin-* 토큰만 쓴다.
+ * 🔴 데스크탑은 왼쪽 248px 쿨 차콜 사이드바가 화면 높이 전체를 차지하는 독립 색면이다.
+ *    본문은 흰 canvas 이고 카드 대신 선 · 정렬 · 간격으로 나눈다(Admin Golden Master · 2026-10-22).
+ *    색은 --admin-* 토큰만 쓴다. 사이드바와 본문 경계는 색면 차이(15.8:1)로 서므로 경계선을 두지 않는다.
  *
  * 🔴 .admin-shell 안에서만 글자 크기·관리자 토큰이 걸린다(globals.css 하단). 고객 화면 토큰은 그대로다.
  *
@@ -25,19 +26,20 @@ import { ToastProvider, ToastViewport } from '@/components/ui/toast'
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   return (
     <ToastProvider>
-      <div className="admin-shell min-h-screen bg-[color:var(--admin-page)]">
+      <div className="admin-shell min-h-screen bg-[color:var(--admin-canvas)] text-[color:var(--admin-text)]">
         <div className="lg:hidden">
           <AdminMobileNav />
         </div>
 
-        <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-20 lg:block lg:w-[248px] lg:border-r lg:border-[color:var(--admin-nav-line)]">
+        <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-20 lg:block lg:w-[248px]">
           <AdminSidebarNav />
         </aside>
 
         <div className="lg:pl-[248px]">
           {/* 🔴 min-w-0 — flex 자식 기본값이 min-width:auto 라 긴 제목이 들어오면
-              페이지 전체에 가로 스크롤을 만든다. */}
-          <main className="mx-auto min-w-0 max-w-[1100px] px-4 pb-16 pt-4 lg:px-12 lg:py-8">{children}</main>
+              페이지 전체에 가로 스크롤을 만든다.
+              🔴 본문 최대 폭 1200 = 1280 - 좌우 여백 40 × 2. */}
+          <main className="mx-auto min-w-0 max-w-[1280px] px-4 pb-16 pt-5 lg:px-10 lg:pt-8">{children}</main>
         </div>
       </div>
 

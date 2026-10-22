@@ -7,58 +7,53 @@ import { OPS_NAV, isCurrent } from '@/components/admin/AdminOpsNav'
 import { TABS as MEMBER_TABS } from '@/components/admin/MemberAdminTabs'
 
 /**
- * 운영 메뉴 — 데스크탑 딥 사이드바와 모바일 전체 화면 메뉴가 같은 목록(NAV) · 같은 위계를 쓴다.
+ * 운영 메뉴 — 데스크탑 딥 사이드바와 모바일 전체 화면 메뉴가 같은 목록(GROUPS) · 같은 위계를 쓴다.
  *
- * 🔴 목록은 두 곳에서 온다 — 운영 묶음 7개는 AdminOpsNav(OPS_NAV), 자동 운영은 아래 AUTO_NAV.
- *    회원의 하위 메뉴는 회원 화면의 공통 하위 탭(MemberAdminTabs.TABS)을 그대로 쓴다.
+ * 🔴 업무 중심 단일 아코디언 (Admin Golden Master · 2026-10-22 창업자 확정 B안).
+ *    운영 홈(단독) · 콘텐츠 운영 · 회원 · 노출·작성 · 자동 운영. 최대 2단계다.
+ *    한 번에 한 묶음만 펼친다 — 다른 묶음을 열면 지금 묶음이 접힌다.
+ *    처음에는 지금 화면이 속한 묶음이 펼쳐져 있다. 주소가 바뀌면 다시 맞춘다.
  *
- * 🔴 묶음은 셋이다 — 개요 · 운영 · 자동 운영 (Admin Console V2 · 2026-10-20 창업자 확정 IA).
- *    묶음은 접고 펼친다. 처음에는 지금 화면이 속한 묶음만 펼쳐 둔다 — 메뉴가 길어
- *    아래쪽 항목이 화면 밖으로 밀리던 문제(사이드바 안 스크롤)를 줄인다.
- *    하위 메뉴가 있는 항목(회원 · 자동 READY 품질)은 화살표로 알리고, 같은 규칙으로 펼친다.
+ * 🔴 목록은 세 곳에서 온다. 항목을 여기서 새로 적지 않는다.
+ *    - 운영 항목 7개 · 현재 위치 판정: AdminOpsNav(OPS_NAV · isCurrent)
+ *    - 회원 하위 메뉴: 회원 화면의 공통 하위 탭(MemberAdminTabs.TABS)
+ *    - 자동 운영: 아래 AUTO_NAV
  *
- * 🔴 지금 어디인지: 행 전체 면 + 흰 굵은 글자 + 왼쪽 코랄선 + aria-current="page"
- *    (창업자 확정 B안 · 딥 사이드바). 얇은 선 하나만으로는 짙은 바탕에서 눈에 걸리지 않았다.
+ * 🔴 상태 넷을 서로 다르게 그린다(사이드바 대비는 globals.css .admin-shell 주석).
+ *    hover 면 · 누르는 중(active) 더 진한 면 · 선택(옅은 면 + 왼쪽 코랄선 + 흰 굵은 글자 + aria-current) ·
+ *    focus 밝은 중립 외곽선(.admin-nav 의 --focus-ring). focus 에 코랄을 쓰지 않는다.
  *
- * 🔴 메뉴마다 붙던 작은 설명은 뺐다 — 탐색할 때 읽을 글자만 늘렸다.
- *
- * 🔴 색은 .admin-shell 의 --admin-nav-* 토큰만 쓴다(globals.css). 고객 토큰과 무관하다.
- *    아이콘 라이브러리를 새로 넣지 않는다 — 화살표는 이 파일의 단순 SVG 하나다.
+ * 🔴 메뉴마다 설명 문구를 붙이지 않는다. 아이콘은 묶음에만 둔다 — 이 파일의 단순 SVG 이고
+ *    아이콘 라이브러리를 새로 넣지 않는다.
  */
 type NavLeaf = { href: string; label: string }
-type NavItem = {
-  /** 하위 메뉴가 없는 항목의 주소. 하위 메뉴가 있으면 항목 자체는 펼치기 버튼이다 */
-  href?: string
-  label: string
-  subs?: readonly NavLeaf[]
-}
-type NavGroup = { group: string; items: readonly NavItem[] }
+type IconName = 'home' | 'content' | 'members' | 'expose' | 'auto'
+type NavGroup =
+  | { key: string; label: string; icon: IconName; href: string; items?: undefined }
+  | { key: string; label: string; icon: IconName; href?: undefined; items: readonly NavLeaf[] }
 
-/** 자동 운영 묶음 — 운영 묶음(OPS_NAV · 7개)과 따로 센다 */
-const AUTO_NAV: readonly NavItem[] = [
+/** 자동 운영 묶음 — 운영 항목(OPS_NAV · 7개)과 따로 센다. 목적지 · 주소는 그대로다 */
+const AUTO_NAV: readonly NavLeaf[] = [
   { href: '/admin/personas', label: '페르소나 관제' },
   { href: '/admin/persona-candidates', label: '댓글 후보 대기열' },
   { href: '/admin/original-post-candidates', label: '글 초안 대기열' },
-  {
-    label: '자동 READY 품질',
-    subs: [
-      { href: '/admin/auto-ready-evidence', label: '정확도 표본 검토' },
-      { href: '/admin/auto-ready-defects', label: '중대 결함 신고' },
-    ],
-  },
+  { href: '/admin/auto-ready-evidence', label: '정확도 표본 검토' },
+  { href: '/admin/auto-ready-defects', label: '중대 결함 신고' },
 ]
 
-/** 「회원」 의 하위 메뉴는 회원 화면의 공통 하위 탭과 같은 목록이다(MemberAdminTabs · 회원가입 전환 정본 §10) */
-const toItem = (it: (typeof OPS_NAV)[number]): NavItem =>
-  it.href === '/admin/members'
-    ? { label: it.label, subs: MEMBER_TABS.map(({ href, label }) => ({ href, label })) }
-    : { href: it.href, label: it.label }
+/** OPS_NAV 에서 주소로 골라 온다 — 순서는 OPS_NAV 순서를 따른다 */
+const ops = (...hrefs: string[]): NavLeaf[] => OPS_NAV.filter((it) => hrefs.includes(it.href))
 
-const NAV: readonly NavGroup[] = [
-  { group: '개요', items: OPS_NAV.filter((it) => it.href === '/admin').map(toItem) },
-  { group: '운영', items: OPS_NAV.filter((it) => it.href !== '/admin').map(toItem) },
-  { group: '자동 운영', items: AUTO_NAV },
+const GROUPS: readonly NavGroup[] = [
+  { key: 'home', label: '운영 홈', icon: 'home', href: '/admin' },
+  { key: 'content', label: '콘텐츠 운영', icon: 'content', items: ops('/admin/reports', '/admin/content') },
+  /* 「회원」 의 하위 메뉴는 회원 화면의 공통 하위 탭과 같은 목록이다(MemberAdminTabs · 회원가입 전환 정본 §10) */
+  { key: 'members', label: '회원', icon: 'members', items: MEMBER_TABS.map(({ href, label }) => ({ href, label })) },
+  { key: 'expose', label: '노출·작성', icon: 'expose', items: ops('/admin/home', '/admin/banners', '/admin/compose') },
+  { key: 'auto', label: '자동 운영', icon: 'auto', items: AUTO_NAV },
 ]
+
+const leaves = (g: NavGroup): readonly NavLeaf[] => (g.items ? g.items : [{ href: g.href, label: g.label }])
 
 /**
  * 지금 화면에 해당하는 링크 하나를 고른다.
@@ -67,51 +62,89 @@ const NAV: readonly NavGroup[] = [
  */
 function currentHref(pathname: string): string | null {
   let best: string | null = null
-  for (const g of NAV) {
-    for (const it of g.items) {
-      const hrefs = it.subs ? it.subs.map((s) => s.href) : it.href ? [it.href] : []
-      for (const h of hrefs) {
-        if (isCurrent(pathname, h) && (best === null || h.length > best.length)) best = h
-      }
+  for (const g of GROUPS) {
+    for (const leaf of leaves(g)) {
+      if (isCurrent(pathname, leaf.href) && (best === null || leaf.href.length > best.length)) best = leaf.href
     }
   }
   return best
 }
 
-const holds = (it: NavItem, cur: string | null) =>
-  it.subs ? it.subs.some((s) => s.href === cur) : it.href === cur
+const groupOf = (cur: string | null): NavGroup | null =>
+  cur === null ? null : (GROUPS.find((g) => leaves(g).some((l) => l.href === cur)) ?? null)
 
-function locate(pathname: string): { group: string; label: string } | null {
+/** 모바일 위 줄의 「지금 어디」 — 묶음 › 화면. 운영 홈은 이름 하나 */
+function locate(pathname: string): { group: string | null; label: string } | null {
   const cur = currentHref(pathname)
-  if (cur === null) return null
-  for (const g of NAV) {
-    for (const it of g.items) {
-      const sub = it.subs?.find((s) => s.href === cur)
-      if (sub) return { group: `${g.group} › ${it.label}`, label: sub.label }
-      if (!it.subs && it.href === cur) return { group: g.group, label: it.label }
-    }
-  }
-  return null
+  const g = groupOf(cur)
+  if (cur === null || g === null) return null
+  if (!g.items) return { group: null, label: g.label }
+  const leaf = g.items.find((l) => l.href === cur)
+  return leaf ? { group: g.label, label: leaf.label } : null
+}
+
+const ICON_PATH: Record<IconName, React.ReactNode> = {
+  home: <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" />,
+  content: (
+    <>
+      <path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M14 3v5h5M8.5 12.5h7M8.5 16h7" />
+    </>
+  ),
+  members: (
+    <>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20c.6-3.6 3.3-5.5 6.5-5.5s5.9 1.9 6.5 5.5M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14.8c1.7.8 2.8 2.5 3 5.2" />
+    </>
+  ),
+  expose: <path d="M4 9v6h3l6 4V5L7 9zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />,
+  auto: (
+    <>
+      <rect x="4" y="7" width="16" height="12" rx="3" />
+      <path d="M12 3v4M9 12h.01M15 12h.01M9.5 15.5h5" />
+    </>
+  ),
+}
+
+/** 묶음 아이콘 — 지금 화면이 속한 묶음이면 코랄(현재 위치 표시) */
+function GroupIcon({ name, here }: { name: IconName; here: boolean }) {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={`shrink-0 ${here ? 'text-[color:var(--admin-nav-active-bar)]' : 'text-[color:var(--admin-nav-label)]'}`}
+    >
+      {ICON_PATH[name]}
+    </svg>
+  )
 }
 
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
       aria-hidden="true"
-      className={`shrink-0 text-[color:var(--admin-nav-label)] transition-transform duration-150 ${open ? 'rotate-90' : ''}`}
+      className={`ml-auto shrink-0 text-[color:var(--admin-nav-label)] transition-transform duration-150 ${open ? 'rotate-90' : ''}`}
     >
-      <path d="M5 3l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m6 4 4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
 
-/** 행 모양 — 선택 행은 면 + 흰 굵은 글자 + 왼쪽 코랄선 */
+/** 선택 — 옅은 중립 면 + 왼쪽 코랄선 + 흰 굵은 글자 */
 const ROW_ON =
   'bg-[color:var(--admin-nav-active-bg)] font-bold text-[color:var(--admin-nav-active-text)] shadow-[inset_3px_0_0_var(--admin-nav-active-bar)]'
-const ROW_OFF = 'hover:bg-[color:var(--admin-nav-hover)]'
+/** hover 면 · 누르는 중 더 진한 면 */
+const ROW_OFF = 'hover:bg-[color:var(--admin-nav-hover)] active:bg-[color:var(--admin-nav-pressed)]'
 
 function NavList({
   pathname,
@@ -123,112 +156,83 @@ function NavList({
   onNavigate?: () => void
 }) {
   const cur = currentHref(pathname)
+  const here = groupOf(cur)
   const sheet = variant === 'sheet'
   const uid = useId()
 
-  /* 처음에는 지금 화면이 속한 묶음 · 하위 메뉴만 펼친다. 주소가 바뀌면 다시 맞춘다. */
-  const initial = () => {
-    const open: Record<string, boolean> = {}
-    for (const g of NAV) {
-      open[g.group] = g.items.some((it) => holds(it, cur))
-      for (const it of g.items) if (it.subs) open[`${g.group}/${it.label}`] = holds(it, cur)
-    }
-    return open
-  }
-  const [open, setOpen] = useState<Record<string, boolean>>(initial)
+  /* 🔴 단일 아코디언 — 열린 묶음은 하나(또는 없음). 주소가 바뀌면 지금 묶음으로 다시 맞춘다. */
+  const [openKey, setOpenKey] = useState<string | null>(here?.items ? here.key : null)
   useEffect(() => {
-    setOpen(initial())
+    setOpenKey(here?.items ? here.key : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 주소가 바뀔 때만 다시 맞춘다
   }, [cur])
-  const toggle = (key: string) => setOpen((o) => ({ ...o, [key]: !o[key] }))
 
-  /* 🔴 상위 · 하위 글자는 관리자 글자 토큰 한 단계 차이 — 데스크탑 16/14 · 모바일 17/16 */
-  const top = sheet ? 'min-h-[52px] text-base' : 'min-h-[44px] text-sm'
-  const sub = sheet ? 'min-h-[52px] text-sm' : 'min-h-[40px] text-xs'
+  /* 🔴 행 높이 — 데스크탑 상위 · 하위 모두 44 · 모바일 52. 글자 상위 15/600 · 하위 14/400(모바일 16 · 15) */
+  const row = sheet ? 'min-h-[52px] text-base' : 'min-h-[44px] text-[15px]'
+  const kid = sheet ? 'min-h-[52px] text-[15px]' : 'min-h-[44px] text-xs'
 
   return (
-    <div className="flex flex-col gap-1">
-      {NAV.map((g) => {
-        const gOpen = open[g.group] ?? false
-        const gId = `${uid}-${g.group}`
+    <ul className="m-0 flex list-none flex-col gap-0.5 p-0 px-2.5">
+      {GROUPS.map((g) => {
+        const isHere = here?.key === g.key
+        if (!g.items) {
+          const on = g.href === cur
+          return (
+            <li key={g.key} className="border-b border-[color:var(--admin-nav-line)] pb-2 mb-1.5">
+              <Link
+                href={g.href}
+                onClick={onNavigate}
+                aria-current={on ? 'page' : undefined}
+                className={`flex items-center gap-2.5 rounded-lg px-3 font-semibold no-underline ${row} ${on ? ROW_ON : `text-[color:var(--admin-nav-text)] ${ROW_OFF}`}`}
+              >
+                <GroupIcon name={g.icon} here={isHere} />
+                {g.label}
+              </Link>
+            </li>
+          )
+        }
+        const open = openKey === g.key
+        const listId = `${uid}-${g.key}`
         return (
-          <div key={g.group}>
+          <li key={g.key}>
             <button
               type="button"
-              aria-expanded={gOpen}
-              aria-controls={gId}
-              onClick={() => toggle(g.group)}
-              className={`flex w-full items-center justify-between rounded-lg px-5 text-left text-xs font-bold tracking-wide text-[color:var(--admin-nav-label)] hover:bg-[color:var(--admin-nav-hover)] ${sheet ? 'min-h-[52px]' : 'min-h-[40px]'}`}
+              aria-expanded={open}
+              aria-controls={listId}
+              onClick={() => setOpenKey(open ? null : g.key)}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 text-left font-semibold ${row} ${isHere ? 'text-[color:var(--admin-nav-active-text)]' : 'text-[color:var(--admin-nav-text)]'} ${ROW_OFF}`}
             >
-              <span>{g.group}</span>
-              <Chevron open={gOpen} />
+              <GroupIcon name={g.icon} here={isHere} />
+              <span>{g.label}</span>
+              <Chevron open={open} />
             </button>
-            {gOpen ? (
-              <ul id={gId} className="m-0 flex list-none flex-col gap-0.5 px-2.5 pb-2 pt-0.5">
-                {g.items.map((it) => {
-                  if (it.subs) {
-                    const key = `${g.group}/${it.label}`
-                    const sOpen = open[key] ?? false
-                    const sId = `${uid}-${key}`
-                    const inside = holds(it, cur)
-                    return (
-                      <li key={it.label}>
-                        <button
-                          type="button"
-                          aria-expanded={sOpen}
-                          aria-controls={sId}
-                          onClick={() => toggle(key)}
-                          className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 text-left ${top} ${inside ? 'font-bold' : 'font-medium'} text-[color:var(--admin-nav-text)] ${ROW_OFF}`}
-                        >
-                          <span>{it.label}</span>
-                          <Chevron open={sOpen} />
-                        </button>
-                        {sOpen ? (
-                          /* 🔴 하위 메뉴: 22px 들여쓰기 + 세로 안내선 · 상위보다 한 단계 작은 글자 */
-                          <ul
-                            id={sId}
-                            className="m-0 mb-1.5 ml-[22px] mt-0.5 flex list-none flex-col gap-0.5 border-l border-[color:var(--admin-nav-guide)] p-0 pl-2"
-                          >
-                            {it.subs.map((s) => {
-                              const on = s.href === cur
-                              return (
-                                <li key={s.href}>
-                                  <Link
-                                    href={s.href}
-                                    onClick={onNavigate}
-                                    aria-current={on ? 'page' : undefined}
-                                    className={`flex items-center rounded-lg px-3 no-underline ${sub} ${on ? ROW_ON : `text-[color:var(--admin-nav-text-sub)] ${ROW_OFF}`}`}
-                                  >
-                                    {s.label}
-                                  </Link>
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        ) : null}
-                      </li>
-                    )
-                  }
-                  const on = it.href === cur
+            {open ? (
+              /* 🔴 하위 메뉴: 세로 안내선 + 들여쓰기 · 상위보다 한 단계 작고 가벼운 글자 */
+              <ul
+                id={listId}
+                className="m-0 mb-2 ml-[21px] mt-0.5 flex list-none flex-col gap-0.5 border-l border-[color:var(--admin-nav-guide)] p-0"
+              >
+                {g.items.map((leaf) => {
+                  const on = leaf.href === cur
                   return (
-                    <li key={it.label}>
+                    <li key={leaf.href}>
                       <Link
-                        href={it.href ?? '/admin'}
+                        href={leaf.href}
                         onClick={onNavigate}
                         aria-current={on ? 'page' : undefined}
-                        className={`flex items-center rounded-lg px-3 no-underline ${top} ${on ? ROW_ON : `font-medium text-[color:var(--admin-nav-text)] ${ROW_OFF}`}`}
+                        className={`-ml-px flex items-center rounded-r-lg pl-[18px] pr-3 no-underline ${kid} ${on ? ROW_ON : `text-[color:var(--admin-nav-text-sub)] ${ROW_OFF}`}`}
                       >
-                        {it.label}
+                        {leaf.label}
                       </Link>
                     </li>
                   )
                 })}
               </ul>
             ) : null}
-          </div>
+          </li>
         )
       })}
-    </div>
+    </ul>
   )
 }
 
@@ -248,7 +252,7 @@ function NavFooter({ sheet = false }: { sheet?: boolean }) {
     <div className="border-t border-[color:var(--admin-nav-line)] bg-[color:var(--admin-nav-bg-strong)] px-5 py-3">
       <Link
         href="/"
-        className={`flex items-center gap-2 font-semibold text-[color:var(--admin-nav-text)] no-underline hover:underline ${sheet ? 'min-h-[52px] text-base' : 'min-h-[44px] text-sm'}`}
+        className={`flex items-center gap-2 font-semibold text-[color:var(--admin-nav-text)] no-underline hover:underline ${sheet ? 'min-h-[52px] text-base' : 'min-h-[44px] text-[15px]'}`}
       >
         고객 화면 열기 <span aria-hidden="true">↗</span>
       </Link>
@@ -283,7 +287,7 @@ export function AdminSidebarNav() {
  * 🔴 메뉴가 열리면 본문 스크롤을 잠근다 — 메뉴를 내리다 뒤의 본문이 따라 밀리지 않게.
  * 🔴 항목을 고르면 닫힌다. 주소가 바뀌어도 닫힌다(뒤로가기 포함).
  * 🔴 열면 닫기 버튼에 초점이 가고, 닫으면 메뉴 버튼으로 돌아온다. Esc 로 닫힌다.
- * 🔴 메뉴 · 닫기 버튼은 밝은 면 + 먹색 글자다 — 짙은 바탕에서 누를 자리가 바로 보이게(13.5:1).
+ * 🔴 메뉴 · 닫기 버튼은 밝은 면 + 차콜 글자다 — 짙은 바탕에서 누를 자리가 바로 보이게.
  */
 export function AdminMobileNav() {
   const pathname = usePathname()
@@ -322,13 +326,14 @@ export function AdminMobileNav() {
 
   return (
     <div className="admin-nav">
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--admin-nav-line)] bg-[color:var(--admin-nav-bg)] py-2 pl-4 pr-2 text-left">
+      <div className="flex min-h-[64px] items-center justify-between gap-3 bg-[color:var(--admin-nav-bg)] py-1.5 pl-4 pr-2 text-left">
         <div className="flex min-w-0 flex-col">
           {/* 🔴 링크로 두지 않는다 — 두 줄 머리 안에서 52px 터치를 줄 자리가 없고, 운영 홈은 메뉴에 있다 */}
-          <p className="m-0 text-sm font-extrabold text-[color:var(--admin-nav-text)]">소란소란 운영</p>
+          <p className="m-0 text-base font-extrabold text-[color:var(--admin-nav-text)]">소란소란 운영</p>
           {here ? (
-            <p className="m-0 truncate text-sm text-[color:var(--admin-nav-label)]">
-              {here.group} › <span className="font-bold text-[color:var(--admin-nav-text)]">{here.label}</span>
+            <p className="m-0 truncate text-xs text-[color:var(--admin-nav-label)]">
+              {here.group ? `${here.group} › ` : null}
+              <span className="font-bold text-[color:var(--admin-nav-text)]">{here.label}</span>
             </p>
           ) : null}
         </div>
@@ -352,7 +357,7 @@ export function AdminMobileNav() {
           aria-label="운영 메뉴"
           className="fixed inset-0 z-50 flex flex-col overflow-y-auto overscroll-contain bg-[color:var(--admin-nav-bg)] text-left"
         >
-          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-[color:var(--admin-nav-line)] bg-[color:var(--admin-nav-bg-strong)] py-2 pl-4 pr-2">
+          <div className="sticky top-0 z-10 flex min-h-[64px] items-center justify-between gap-3 border-b border-[color:var(--admin-nav-line)] bg-[color:var(--admin-nav-bg-strong)] py-1.5 pl-4 pr-2">
             <ConsoleTitle />
             <button ref={closeBtn} type="button" onClick={() => setOpen(false)} className={lightBtn}>
               닫기

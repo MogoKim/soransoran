@@ -111,7 +111,7 @@ export default async function AdminHeroBannerDetailPage({
 
       {/* ── 켜기 · 끄기 ─────────────────────────────── */}
       {archived ? (
-        <AdminSection title="보관 중" description="복원하면 꺼진 상태로 목록에 돌아옵니다." className="mt-5">
+        <AdminSection title="보관 중" description="복원하면 꺼진 상태로 목록에 돌아옵니다." className="mt-0">
           <div className="mt-2">
             <HeroBannerRowControls
               bannerId={banner.id}
@@ -125,7 +125,7 @@ export default async function AdminHeroBannerDetailPage({
         <AdminSection
           title="켜기 · 끄기"
           description={`예약 구간이 겹치는 배너는 ${HERO_BANNER_MAX_CONCURRENT}장까지 켤 수 있습니다.`}
-          className="mt-5"
+          className="mt-0"
         >
           <div className="mt-2">
             <HeroBannerActivation
@@ -141,9 +141,9 @@ export default async function AdminHeroBannerDetailPage({
       <AdminSection
         title="이미지"
         description="모바일과 데스크탑을 각각 올립니다. 한 장을 잘라 쓰면 이미지 안의 글자가 잘립니다."
-        className="mt-6"
+        className="mt-10"
       >
-        <div className="mt-2 grid gap-3 lg:grid-cols-2">
+        <div className="mt-3 grid gap-4 lg:grid-cols-2">
           <HeroBannerImageSlot
             bannerId={banner.id}
             slot="mobile"
@@ -167,7 +167,7 @@ export default async function AdminHeroBannerDetailPage({
       </AdminSection>
 
       {/* ── 값 고치기 ───────────────────────────────── */}
-      <AdminSection title="내용" className="mt-6">
+      <AdminSection title="내용" className="mt-10">
         <HeroBannerEditForm
           bannerId={banner.id}
           disabled={archived}
@@ -183,7 +183,7 @@ export default async function AdminHeroBannerDetailPage({
       </AdminSection>
 
       {/* ── 기록 ────────────────────────────────────── */}
-      <AdminSection title="기록" className="mt-6 border-t border-subtle pt-4">
+      <AdminSection title="기록" className="mt-10">
         <AdminFieldList>
           <AdminField label="만든 사람" value={orDash(banner.createdBy?.nickname)} />
           <AdminField label="만든 때" value={formatKst(banner.createdAt)} />
@@ -198,7 +198,7 @@ export default async function AdminHeroBannerDetailPage({
         <AdminSection
           title="순서 · 보관"
           description="순서는 목록에서 위아래로 옮깁니다. 보관하면 꺼진 뒤 보관함으로 갑니다."
-          className="mt-6"
+          className="mt-10"
         >
           <div className="mt-2">
             <HeroBannerRowControls

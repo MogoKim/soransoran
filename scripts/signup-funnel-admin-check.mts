@@ -195,14 +195,57 @@ check('회원 목록: 「고객 구성 보기 →」 링크 0 · 제목 「회�
   !members.includes('고객 구성 보기') && /title="회원 관리"/.test(members) && !members.includes("import Link from 'next/link'"))
 check('고객 구성: 「← 회원」 back 링크 0', !/backHref|backLabel|← 회원/.test(composition))
 check('고객 구성: 낡은 정본 절 번호(v2.1 §7) 0', !composition.includes('v2.1 §7'))
-check('상위 운영 메뉴 그대로(새 메뉴 0)', read(P.nav) === gitShow(P.nav))
-check('공통 UI 그대로', read('src/components/admin/AdminUi.tsx') === gitShow('src/components/admin/AdminUi.tsx'))
+// 🔴 Admin Golden Master(2026-10-22)가 AdminUi · AdminOpsNav 의 겉모습과 주석을 바꿨다. 두 파일 전체를
+//    바이트로 고정하던 단언을, 그 고정이 지키려던 실제 계약 단언으로 바꾼다 — 메뉴 항목 · 탭 · 조회 · 고객 화면.
+const GM_BASE = '7ad654fc2b4b5fcf4cfc367c4567ca62e0eb22c1' // Golden Master 직전 main
+const showAt = (rev: string, p: string) => execFileSync('git', ['show', `${rev}:${p}`], { encoding: 'utf8' })
+const navNow = read(P.nav)
+const navBase = showAt(GM_BASE, P.nav)
+const opsItems = (s: string) => [...code(s).matchAll(/\{ href: '([^']+)', label: '([^']+)' \}/g)].map((m) => `${m[1]}=${m[2]}`)
+check('운영 항목 7개 · 주소 · 이름 그대로(새 상위 메뉴 0)', opsItems(navNow).length === 7
+  && JSON.stringify(opsItems(navNow)) === JSON.stringify(opsItems(navBase)), opsItems(navNow).join(', '))
+const fromIsCurrent = (s: string) => code(s).slice(code(s).indexOf('export function isCurrent'))
+check('현재 위치 판정(isCurrent) 그대로', fromIsCurrent(navNow).length > 0 && fromIsCurrent(navNow) === fromIsCurrent(navBase))
+const sidebar = read('src/components/admin/AdminNav.tsx')
+check('사이드바 「회원」 하위 메뉴는 탭 목록을 그대로 쓴다 · 하위 경로를 따로 적지 않는다',
+  sidebar.includes("import { TABS as MEMBER_TABS } from '@/components/admin/MemberAdminTabs'") && /MEMBER_TABS\.map\(/.test(sidebar)
+  && !/\/admin\/members\/(composition|conversion)/.test(code(sidebar)))
+const ariaAll = sidebar.match(/aria-current=/g) ?? []
+check("사이드바 현재 화면 표시는 모두 aria-current='page'(지금 화면 한 곳)", ariaAll.length > 0
+  && ariaAll.length === (sidebar.match(/aria-current=\{on \? 'page' : undefined\}/g) ?? []).length)
+check('탭 현재 표시: aria-current + 코랄 밑줄 + 굵은 글자', tabs.includes("? 'border-brand font-bold"))
+check('탭 터치 크기: 모바일 52 · 데스크탑 44', /min-h-\[52px\]/.test(tabs) && /lg:min-h-\[44px\]/.test(tabs))
+// 조회 블록 = 권한 확인부터 렌더 직전까지. 겉모습 보정이 조회 · 정렬 · 상한을 건드리지 않았는지 본다
+const queryBlock = (s: string) => {
+  const c = code(s)
+  const a = c.indexOf('await requireAdmin()')
+  const b = c.indexOf('\n  return (', a)
+  return a > 0 && b > a ? c.slice(a, b) : ''
+}
+for (const p of [P.members, P.detail, P.composition, P.conversion]) {
+  check(`${p}: 조회 블록(권한 확인 ~ 렌더 직전) 그대로`, queryBlock(read(p)) !== '' && queryBlock(read(p)) === queryBlock(showAt(GM_BASE, p)))
+}
+const importLines = (p: string) => [...read(p).matchAll(/^import .*$/gm)].map((m) => m[0])
+check('회원 화면 · 탭 · 메뉴 import 에 D100 모듈 0',
+  [P.members, P.detail, P.composition, P.conversion, P.tabs, P.nav, 'src/components/admin/AdminNav.tsx']
+    .every((p) => importLines(p).every((l) => !/persona|d100|auto-ready|original-post|operator-reply|magazine/i.test(l))))
+// 고객 화면 비개입 — globals.css 에서 운영 콘솔 구역 밖은 한 글자도 같다
+const outsideAdmin = (css: string) => {
+  const a = css.indexOf('운영 콘솔 전용 스코프')
+  const b = css.indexOf('글 본문 — 쓰는 화면')
+  return a > 0 && b > a ? css.slice(0, css.lastIndexOf('/*', a)) + css.slice(css.lastIndexOf('/*', b)) : ''
+}
+check('globals.css 운영 콘솔 구역 밖(고객 토큰 · 선택자) 그대로', outsideAdmin(read('src/app/globals.css')) !== ''
+  && outsideAdmin(read('src/app/globals.css')) === outsideAdmin(showAt(GM_BASE, 'src/app/globals.css')))
 
 // ─────────── 5. 경계 ───────────
 console.log('\n■ 5. 경계 — 공개 화면·인증·온보딩 변경 0 · import 고정')
 // 이 단계 뒤 승인된 후속 보정 — 그 파일만 보정 commit 을 기준으로 고정하고 나머지는 BASE 그대로 본다
 const APPROVED_FOLLOW_UPS: Record<string, string> = {
   'src/components/features/signup-funnel/SignupFunnelTracker.tsx': 'c9b0c8e0ed01b4d23275ea3b1016732320fd90fa', // dialog 비동기 로드
+  'src/app/community/[boardSlug]/[postId]/page.tsx': '0d3eaf4aac2bcb1c5950b491ec029cf1071d55ae', // 게시판 변경 · 옛 주소 307
+  'src/app/magazine/[slug]/page.tsx': 'ebee96dabe76f0707ff21e4829ccf94a81a2f831', // mgraph 기사 경로 재구성(#732)
+  'prisma/schema.prisma': 'ec147fa851c427a3ae17486895523acd44aa093c', // 상세 실노출 기록
 }
 const isAncestor = (rev: string) => { try { execFileSync('git', ['merge-base', '--is-ancestor', rev, 'HEAD']); return true } catch { return false } }
 check('승인된 후속 보정 기준은 현재 HEAD 의 조상 commit', Object.values(APPROVED_FOLLOW_UPS).every(isAncestor))

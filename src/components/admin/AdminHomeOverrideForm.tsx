@@ -68,7 +68,7 @@ export default function AdminHomeOverrideForm({ postId }: { postId: string }) {
           id={`expiry-${postId}`}
           value={expiry}
           onChange={(e) => setExpiry(e.target.value)}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-2 text-sm text-content-primary lg:min-h-[44px]"
+          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 text-sm text-content-primary lg:min-h-[44px]"
         >
           {EXPIRY_CHOICES.map((c) => (
             <option key={c.value} value={c.value}>
