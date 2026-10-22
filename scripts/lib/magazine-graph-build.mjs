@@ -774,10 +774,15 @@ export const serializeReadiness = (report) => prettyStable(report)
  * graph 와 readiness 의 **유일한 계산 경로** — 순수 함수. generatedAt · 벽시계 · 파일 시스템을 읽지 않는다.
  *    buildAll 과 (다음 단계의) G8 이 같은 이 함수를 부른다. 두 번째 계산 구현을 만들지 않는다.
  *    slim 은 generatedAt 자리를 null 로 비워 둔다 — 키 순서가 bundle 과 같아야 graphSemanticHash 가 같다.
+ *
+ *    🔴 `expectedGraphVersion` — 이미 내보낸 판(제품 current)을 **다른 시각**에 다시 볼 때 쓴다(G8).
+ *       graphVersion 의 날짜는 build effectiveAt 에서 나오므로, 판정 시각으로 다시 계산하면 날짜만 달라진다.
+ *       주어지면 형식 `g-YYYYMMDD-xxxxxx` · 접미사 = combined 앞 6자리가 정확히 맞아야 하고, 그 판 이름을 slim · readiness 에 쓴다.
+ *       없으면(buildAll) 날짜는 effectiveAt 에서 나온다 — 산출 바이트 불변.
  * @returns {{ layers, contentHash, graphVersion, graphSemanticHash, readiness, readinessHash, readinessFileSha256, parts }}
  *   parts — buildAll 이 파일을 조립할 재료(직렬화된 jsonl · slim · 입력 해시). 계산은 여기서 끝났다
  */
-export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt }) {
+export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt, expectedGraphVersion = null }) {
   const eff = parseEffectiveAt(effectiveAt)
   const inputs = parseInputTexts(inputTexts)
   const product = parseProductTexts(productTexts)
@@ -795,7 +800,12 @@ export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTe
   const sPart = layers.participation.length ? layers.participation.map((x) => JSON.stringify(x)).join('\n') + '\n' : null
   const hP = sPart === null ? null : sha16(sPart)
   const combined = sha16(hI + hE + hM + (hP ?? ''))
-  const graphVersion = `g-${eff.versionDate}-${combined.slice(0, 6)}`
+  let graphVersion = `g-${eff.versionDate}-${combined.slice(0, 6)}`
+  if (expectedGraphVersion !== null) {
+    if (!/^g-\d{8}-[0-9a-f]{6}$/.test(String(expectedGraphVersion))) fail('GRAPH_VERSION_MISMATCH', `판 이름 형식이 아니다: ${expectedGraphVersion}`)
+    if (!expectedGraphVersion.endsWith(`-${combined.slice(0, 6)}`)) fail('GRAPH_VERSION_MISMATCH', `${expectedGraphVersion} 의 접미사가 combined ${combined.slice(0, 6)} 과 다르다`)
+    graphVersion = expectedGraphVersion
+  }
   const contentHash = hP === null
     ? { intents: hI, edges: hE, mappings: hM, combined }
     : { intents: hI, edges: hE, mappings: hM, participation: hP, combined }
