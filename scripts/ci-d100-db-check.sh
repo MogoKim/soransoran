@@ -62,6 +62,8 @@ npm run auto-ready:audit-db-check
 npm run auto-ready:audit-day-db-check
 npm run auto-ready:defect-resolution-db-check
 npm run check:comment-thread-db
+# 운영 직접 작성 · 작성자 대댓글 — 원글 작성자 고정 · 원자성 · 중복 · 집계 불변을 실제 트랜잭션으로 잰다(2026-10-21)
+npm run operator:compose-db-check
 npm run persona:comment-loop-db-check
 npm run persona:followup-db-check
 npm run persona:autogen-db-check

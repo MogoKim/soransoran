@@ -14,6 +14,26 @@ import { lockPostRow, type AfterPostLock } from './post-row-lock'
  * 🔴 쓰는 값은 그대로 targetPostId 한 칼럼이다. status · 승인 · 발행 · 철회는 건드리지 않는다.
  */
 
+/**
+ * 대상 글의 댓글 수 — 🔴 목록(searchTargetPosts)과 저장 트랜잭션이 **이 함수 하나**로 센다 (2026-10-21).
+ *
+ * 🔴 **회원 댓글 = 실회원 · 비회원이 단 것만.** `commentOrigin` MEMBER · GUEST 이고 personaId · operatorWriterId 가
+ *    모두 null 이어야 한다. 운영 직접 작성 댓글 · 작성자 대댓글(commentOrigin=OPERATOR)과 Micro Seed 원문 댓글은
+ *    회원 댓글이 아니다 — 예전에는 personaId 만 보아 그것들까지 회원 댓글로 셌다(Codex [3] 승인 보정).
+ * 🔴 Persona 댓글 수(personaId 가 있는 것)는 그대로다. 상한 · 판정(persona-target-rules)은 바꾸지 않는다.
+ */
+export const TARGET_COMMENT_SELECT = { personaId: true, operatorWriterId: true, commentOrigin: true } as const
+
+type TargetCommentRow = { personaId: string | null; operatorWriterId: string | null; commentOrigin: string }
+
+export function targetCommentCounts(comments: readonly TargetCommentRow[]): { personaComments: number; memberComments: number } {
+  return {
+    personaComments: comments.filter((c) => c.personaId !== null).length,
+    memberComments: comments.filter((c) =>
+      (c.commentOrigin === 'MEMBER' || c.commentOrigin === 'GUEST') && c.personaId === null && c.operatorWriterId === null).length,
+  }
+}
+
 export type SetTargetTxResult =
   | { ok: true; targetPostId: string }
   | { ok: false; code: 'NOT_FOUND'; error: string }
@@ -48,13 +68,12 @@ export async function setCandidateTargetTx(
       ? null
       : await tx.post.findUnique({
           where: { id: wanted },
-          select: { status: true, comments: { where: { isDeleted: false }, select: { personaId: true } } },
+          select: { status: true, comments: { where: { isDeleted: false }, select: TARGET_COMMENT_SELECT } },
         })
     const facts: TargetPostFacts | null = post
       ? {
           status: post.status,
-          personaComments: post.comments.filter((c) => c.personaId !== null).length,
-          memberComments: post.comments.filter((c) => c.personaId === null).length,
+          ...targetCommentCounts(post.comments),
         }
       : null
 

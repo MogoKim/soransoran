@@ -1,9 +1,12 @@
 import { prisma } from '@/lib/prisma'
 import { displayName } from '@/lib/display-name'
 // 🔴 게시판 이름·경로는 board-registry 가 유일한 출처다. 여기서 문자열로 적지 않는다
-import { boardLabel, communityPostHref } from '@/lib/admin-format'
+import { boardLabel, communityPostHref, formatKst } from '@/lib/admin-format'
 import { toPreview } from '@/lib/post-html'
-import { OPERATOR_BOARDS, type OperatorBoard } from '@/lib/operator-writer'
+import { OPERATOR_BOARDS, judgeOperatorReplyPost, type OperatorBoard } from '@/lib/operator-writer'
+import {
+  NOT_MICRO_SEED_LANE_WHERE, POST_VISIBILITY_SELECT, belongsToMicroSeedLane, pickPostVisibility,
+} from '@/lib/post-visibility'
 
 /**
  * 운영자 직접 작성 화면이 읽는 것 — 🔴 **read-only. write 0**
@@ -90,6 +93,120 @@ export async function getComposeTargetPosts(limit = 30): Promise<ComposeTargetPo
     createdAt: p.createdAt,
     href: communityPostHref(p.id, p.boardType),
   }))
+}
+
+/** 작성자 대댓글 — 답할 수 있는 댓글 한 줄. 🔴 본문 전체가 아니라 발췌다 */
+export type ReplyTargetComment = {
+  id: string
+  /** 최상위 댓글이면 null */
+  parentId: string | null
+  authorName: string
+  guest: boolean
+  preview: string
+  createdAtLabel: string
+  /** 스레드 들여쓰기 — 고객 화면처럼 한 단계만 */
+  isReply: boolean
+}
+
+/** 작성자 대댓글 — 원글 한 편과 그 글의 살아 있는 댓글 */
+export type ReplyTargetPost = {
+  id: string
+  title: string
+  boardLabel: string
+  /** 🔴 원글 작성자 이름 — 대댓글이 이 이름으로 올라간다(고르는 값이 아니라 보여 주는 값) */
+  writerName: string
+  writerCode: string
+  /** 원글 자격이 깨졌으면 그 이유. null 이면 대댓글을 달 수 있다 */
+  blocked: string | null
+  href: string | null
+  comments: ReplyTargetComment[]
+}
+
+/**
+ * 작성자 대댓글을 달 원글 — 🔴 운영 직접 작성 글만.
+ *
+ * 🔴 자동 운영 자산(Persona · Micro Seed · 오리지널 큐)과 숨김 글 · 매거진은 처음부터 싣지 않는다.
+ *    작성자 자격이 깨진 글(retired · 작성자 불일치 등)은 **싣되 이유를 함께** 싣는다 — 목록에서 조용히 빠지면
+ *    운영자는 왜 안 보이는지 알 수 없다. 판정은 트랜잭션과 같은 함수(judgeOperatorReplyPost)다.
+ * 🔴 지워진 댓글은 고를 수 없으므로 싣지 않는다. 댓글 순서는 고객 화면과 같다 — 뿌리 아래 답글이 시간순.
+ */
+export async function getReplyTargetPosts(limit = 20, commentLimit = 60): Promise<ReplyTargetPost[]> {
+  const rows = await prisma.post.findMany({
+    where: {
+      operatorWriterId: { not: null },
+      personaId: null,
+      status: 'PUBLISHED',
+      boardType: { in: [...OPERATOR_BOARDS] },
+      originalPostQueue: { is: null },
+      ...NOT_MICRO_SEED_LANE_WHERE,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    select: {
+      id: true, title: true, boardType: true, personaId: true, operatorWriterId: true, authorId: true,
+      ...POST_VISIBILITY_SELECT,
+      originalPostQueue: { select: { id: true } },
+      operatorWriter: {
+        select: {
+          code: true, userId: true, status: true,
+          user: { select: { nickname: true, name: true, providerId: true, persona: { select: { id: true } }, _count: { select: { accounts: true } } } },
+        },
+      },
+      comments: {
+        where: { isDeleted: false },
+        orderBy: { createdAt: 'asc' },
+        take: commentLimit,
+        select: {
+          id: true, parentId: true, content: true, createdAt: true, guestNickname: true,
+          author: { select: { nickname: true, name: true } },
+        },
+      },
+    },
+  })
+
+  return rows.map((p) => {
+    const w = p.operatorWriter
+    const verdict = judgeOperatorReplyPost({
+      status: p.status,
+      boardType: p.boardType,
+      personaId: p.personaId,
+      microSeedLane: belongsToMicroSeedLane(pickPostVisibility(p)),
+      originalQueueLinked: p.originalPostQueue !== null,
+      operatorWriterId: p.operatorWriterId,
+      authorId: p.authorId,
+      writerUserId: w?.userId ?? null,
+      writer: w === null ? null : {
+        status: w.status, accountCount: w.user._count.accounts, providerId: w.user.providerId, hasPersona: w.user.persona !== null,
+      },
+    })
+    // 스레드 순서 — 각 댓글의 뿌리(최상위 댓글)를 따라 올라가 묶는다. 부모가 목록에 없으면(지워짐 등) 스스로 뿌리다
+    const byId = new Map(p.comments.map((c) => [c.id, c]))
+    const rootOf = (id: string): string => {
+      let cur = byId.get(id)
+      for (let i = 0; cur?.parentId && byId.has(cur.parentId) && i < 50; i += 1) cur = byId.get(cur.parentId)
+      return cur?.id ?? id
+    }
+    const roots = p.comments.filter((c) => rootOf(c.id) === c.id)
+    const ordered = roots.flatMap((r) => [r, ...p.comments.filter((c) => c.id !== r.id && rootOf(c.id) === r.id)])
+    return {
+      id: p.id,
+      title: p.title,
+      boardLabel: boardLabel(p.boardType),
+      writerName: w ? displayName(w.user) : '—',
+      writerCode: w?.code ?? '—',
+      blocked: verdict.ok ? null : verdict.reason,
+      href: communityPostHref(p.id, p.boardType),
+      comments: ordered.map((c) => ({
+        id: c.id,
+        parentId: c.parentId,
+        authorName: c.author ? displayName(c.author) : (c.guestNickname ?? '비회원'),
+        guest: c.author === null,
+        preview: c.content.length > 80 ? `${c.content.slice(0, 80)}…` : c.content,
+        createdAtLabel: formatKst(c.createdAt),
+        isReply: c.parentId !== null,
+      })),
+    }
+  })
 }
 
 export type ComposedPost = {
