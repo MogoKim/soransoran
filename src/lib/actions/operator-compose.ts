@@ -32,6 +32,7 @@ import {
   updateOperatorPostTx,
   type ComposeResult,
 } from '@/lib/operator-compose-tx'
+import { createOperatorReplyTx } from '@/lib/operator-reply-tx'
 
 /**
  * 운영자 직접 작성 — 🔴 **이 파일이 유일한 진입점이다**
@@ -73,7 +74,7 @@ export type ComposeActionState = {
    */
   doneKey?: string
   /**
-   * 🔴 **이 응답이 어느 쪽 요청의 것인가** — `post` 또는 `comment` (2026-09-17).
+   * 🔴 **이 응답이 어느 쪽 요청의 것인가** — `post` · `comment` · `reply` (2026-09-17 · reply 2026-10-21).
    *
    *    화면은 글 쓰기와 댓글 달기를 한 폼에서 오간다. `useFormState` 의 상태는
    *    모드를 바꿔도 살아 있으므로, 글을 올린 뒤 댓글 모드로 옮기면
@@ -83,7 +84,7 @@ export type ComposeActionState = {
    *    서버가 어느 쪽이었는지 말해 주고, 화면은 지금 모드와 같을 때만 보여 준다.
    *    화면이 짐작하지 않는다 — 짐작하면 보내고 나서 모드를 바꾼 경우에 틀린다.
    */
-  kind?: 'post' | 'comment'
+  kind?: 'post' | 'comment' | 'reply'
   /** 입력을 잃지 않도록 화면이 되돌려 받는 값 */
   kept?: { writerId: string; boardType: string; title: string; content: string }
 }
@@ -131,7 +132,7 @@ function toState(
   kept?: ComposeActionState['kept'],
   requestKey?: string,
   /** 🔴 어느 쪽 요청이었나 — 화면이 지금 모드와 대조한다 */
-  kind?: 'post' | 'comment',
+  kind?: 'post' | 'comment' | 'reply',
 ): ComposeActionState {
   const tag = kind ? { kind } : {}
   if (res.kind === 'created') {
@@ -182,6 +183,7 @@ export async function createOperatorContent(
   const mode = String(formData.get('mode') ?? '').trim()
   if (mode === 'post') return createOperatorPost(prev, formData)
   if (mode === 'comment') return createOperatorComment(prev, formData)
+  if (mode === 'reply') return createOperatorReply(prev, formData)
   // 🔴 모르면 쓰지 않는다. 짐작해서 한쪽으로 보내면 엉뚱한 곳에 글이 올라간다
   return { error: '무엇을 쓸지 고르지 못했습니다. 새로고침 후 다시 시도해 주세요.' }
 }
@@ -275,6 +277,52 @@ export async function createOperatorComment(
     requestKey,
   })
   return toState(res, kept, requestKey, 'comment')
+}
+
+// ─────────────────────────────────────────────────────────
+// ②-b 작성자 대댓글 — 🔴 원글 작성자 이름으로만 (2026-10-21)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 원글 작성자 이름으로 그 글의 댓글 · 대댓글에 답한다.
+ *
+ * 🔴 **작성자를 받지 않는다.** FormData 에서 읽는 것은 postId · parentId · content · requestKey 넷뿐이다.
+ *    writerId · authorId · personaId · commentOrigin · source 가 따라와도 읽지 않는다 —
+ *    작성자는 트랜잭션이 원글에서 읽어 고정한다(operator-reply-tx.ts).
+ * 🔴 길이 · 금칙어는 최상위 운영 댓글 · 회원 댓글과 같은 정본(comment-policy · checkContent)이다.
+ */
+export async function createOperatorReply(
+  _prev: ComposeActionState,
+  formData: FormData,
+): Promise<ComposeActionState> {
+  const actor = await requireActor()
+  if (actor === null) return DENIED
+
+  const postId = String(formData.get('postId') ?? '').trim()
+  const parentId = String(formData.get('parentId') ?? '').trim()
+  const content = String(formData.get('content') ?? '').trim()
+  const requestKey = String(formData.get('requestKey') ?? '').trim()
+
+  const kept = { writerId: '', boardType: '', title: '', content }
+  const fail = (error: string): ComposeActionState => ({ error, kept, kind: 'reply' })
+
+  if (postId === '') return fail('대댓글을 달 글을 골라 주세요.')
+  if (parentId === '') return fail('답할 댓글을 골라 주세요.')
+  if (requestKey === '') return fail('다시 시도해 주세요.')
+  if (content.length < MIN_COMMENT_LENGTH) return fail(COMMENT_TOO_SHORT)
+  if (content.length > MAX_COMMENT_LENGTH) return fail(COMMENT_TOO_LONG)
+
+  const guard = checkContent(content, { audience: 'user' })
+  if (!guard.ok) return fail(guard.reason)
+
+  const res = await createOperatorReplyTx(prisma, {
+    postId,
+    parentId,
+    content,
+    actorUserId: actor.actorUserId,
+    requestKey,
+  })
+  return toState(res, kept, requestKey, 'reply')
 }
 
 // ─────────────────────────────────────────────────────────

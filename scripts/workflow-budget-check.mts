@@ -312,6 +312,8 @@ const EXPECTED_D100_DB_COMMANDS = [
   'auto-ready:audit-day-db-check',
   'auto-ready:defect-resolution-db-check',
   'check:comment-thread-db',
+  // 2026-10-21 작성자 대댓글 — 운영 직접 작성 DB 검사를 같은 격리 DB 한 번에서 잰다(새 job·container·step 없음)
+  'operator:compose-db-check',
   'persona:comment-loop-db-check',
   'persona:followup-db-check',
   'persona:autogen-db-check',
@@ -325,7 +327,7 @@ const EXPECTED_D100_DB_COMMANDS = [
   'board-move:db-check',
 ] as const
 const wiredD100DbCommands = [...d100DbRunner.matchAll(/^npm run (\S+)\s*$/gm)].map((m) => m[1])
-check('🔴 격리 DB 명령 28개가 승인된 순서로 모두 남아 있다',
+check('🔴 격리 DB 명령 29개가 승인된 순서로 모두 남아 있다',
   JSON.stringify(wiredD100DbCommands) === JSON.stringify(EXPECTED_D100_DB_COMMANDS))
 check('🔴 D100 DB runner는 격리 주소만 만들고 종료 때 컨테이너를 정리한다',
   /SORAN_ISOLATED_DB=yes-throwaway/.test(d100DbRunner)

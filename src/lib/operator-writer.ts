@@ -265,7 +265,8 @@ export type OperatorCommentInput = {
  * 🔴 `personaId` 는 타입에 자리가 없다. `commentOrigin=OPERATOR` 인데 `personaId` 가
  *    붙으면 `classifyComment` 가 **모순**으로 보고 집계를 멈춘다.
  *
- * 🔴 `parentId` 도 없다. 첫 판은 최상위 댓글만 쓴다 — 답글은 범위 밖이다.
+ * 🔴 `parentId` 도 없다. 이 함수는 최상위 댓글만 쓴다 — 원글 작성자 이름의 대댓글은
+ *    `buildOperatorReplyData` 가 따로 맡는다(③-b). 이 계약을 느슨하게 하지 않는다.
  */
 export function buildOperatorCommentData(input: OperatorCommentInput) {
   return {
@@ -293,6 +294,102 @@ export function assertOperatorCommentData(data: Record<string, unknown>): void {
     const v = data[key]
     if (typeof v !== 'string' || v.trim() === '') throw new Error(`${key} 가 비어 있다`)
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// ③-b 작성자 대댓글 — 🔴 최상위 댓글(③)과 다른 계약이다 (2026-10-21)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **작성자는 입력에 없다.** `authorId` · `operatorWriterId` 는 트랜잭션이 **원글에서** 읽어 넣는다
+ *    (operator-reply-tx.ts). 화면도 action 도 작성자 값을 보내거나 받지 않는다.
+ * 🔴 최상위 댓글 계약(`buildOperatorCommentData` · `assertOperatorCommentData`)은 그대로다 —
+ *    그쪽은 여전히 `parentId` 가 있으면 막는다. 이 둘을 한 함수로 합치지 않는다.
+ */
+export type OperatorReplyInput = {
+  postId: string
+  parentId: string
+  content: string
+  /** 원글의 Post.authorId — 🔴 원글에서 읽은 값 */
+  authorId: string
+  /** 원글의 Post.operatorWriterId — 🔴 원글에서 읽은 값 */
+  operatorWriterId: string
+}
+
+export function buildOperatorReplyData(input: OperatorReplyInput) {
+  return {
+    postId: input.postId,
+    parentId: input.parentId,
+    authorId: input.authorId,
+    content: input.content,
+    operatorWriterId: input.operatorWriterId,
+    source: 'USER',
+    commentOrigin: 'OPERATOR',
+  }
+}
+
+export function assertOperatorReplyData(data: Record<string, unknown>): void {
+  if ('personaId' in data) {
+    throw new Error('운영 대댓글에 personaId 가 있다 — 레인이 섞이면 비율 집계가 멈춘다')
+  }
+  if (data.commentOrigin !== 'OPERATOR') {
+    throw new Error(`commentOrigin=${JSON.stringify(data.commentOrigin)} — OPERATOR 여야 한다`)
+  }
+  if (data.source !== 'USER') throw new Error(`source=${JSON.stringify(data.source)}`)
+  // 🔴 대댓글이다 — 부모가 없으면 최상위 댓글이고, 그건 이 함수의 일이 아니다
+  for (const key of ['postId', 'parentId', 'authorId', 'operatorWriterId'] as const) {
+    const v = data[key]
+    if (typeof v !== 'string' || v.trim() === '') throw new Error(`${key} 가 비어 있다`)
+  }
+}
+
+/** 작성자 대댓글을 달 원글인가 — 판정에 필요한 사실만 */
+export type OperatorReplyPostFacts = {
+  status: string
+  boardType: string
+  personaId: string | null
+  microSeedLane: boolean
+  originalQueueLinked: boolean
+  operatorWriterId: string | null
+  authorId: string
+  /** 원글 작성자(OperatorWriter)의 User.id — 작성자 행이 없으면 null */
+  writerUserId: string | null
+  /** 원글 작성자 자격 — `judgeOperatorWriter` 정본 입력 */
+  writer: OperatorWriterFacts | null
+}
+
+export type OperatorReplyBlockCode =
+  | 'AUTOMATED' | 'NOT_OPERATOR_POST' | 'AUTHOR_MISMATCH' | 'WRITER_BLOCKED' | 'NOT_PUBLISHED' | 'NOT_COMMUNITY'
+
+export const OPERATOR_REPLY_BLOCK_LABEL: Record<Exclude<OperatorReplyBlockCode, 'WRITER_BLOCKED'>, string> = {
+  AUTOMATED: '자동 운영 글에는 작성자 대댓글을 달지 않습니다.',
+  NOT_OPERATOR_POST: '운영자가 직접 작성한 글만 작성자 대댓글을 달 수 있습니다.',
+  AUTHOR_MISMATCH: '🔴 이 글의 작성자 정보가 서로 맞지 않습니다 — 대댓글을 달지 않습니다.',
+  NOT_PUBLISHED: '공개 중인 글에만 대댓글을 달 수 있습니다.',
+  NOT_COMMUNITY: '매거진에는 댓글을 달지 않습니다.',
+}
+
+/**
+ * 이 글에 원글 작성자 이름으로 대댓글을 달아도 되는가.
+ *
+ * 🔴 순서가 곧 우선순위다 — 자동 운영 자산이면 다른 이유보다 먼저 그렇게 말한다.
+ * 🔴 작성자 자격은 최상위 댓글과 **같은 정본**(`judgeOperatorWriter`)으로 본다 — retired · Persona 연결 · 실회원.
+ * 🔴 `operatorWriterId` 와 `Post.authorId` 가 같은 사람을 가리키지 않으면 막는다 —
+ *    어느 이름으로 쓸지 정할 근거가 깨진 글이다.
+ */
+export function judgeOperatorReplyPost(
+  f: OperatorReplyPostFacts,
+): { ok: true; operatorWriterId: string; authorId: string } | { ok: false; code: OperatorReplyBlockCode; reason: string } {
+  const blocked = (code: Exclude<OperatorReplyBlockCode, 'WRITER_BLOCKED'>) =>
+    ({ ok: false, code, reason: OPERATOR_REPLY_BLOCK_LABEL[code] }) as const
+  if ((f.personaId !== null && f.personaId !== '') || f.microSeedLane || f.originalQueueLinked) return blocked('AUTOMATED')
+  if (f.operatorWriterId === null || f.operatorWriterId.trim() === '') return blocked('NOT_OPERATOR_POST')
+  if (f.writerUserId === null || f.writerUserId !== f.authorId) return blocked('AUTHOR_MISMATCH')
+  const writer = judgeOperatorWriter(f.writer)
+  if (!writer.ok) return { ok: false, code: 'WRITER_BLOCKED', reason: writer.reason }
+  if (f.status !== 'PUBLISHED') return blocked('NOT_PUBLISHED')
+  if (!isOperatorBoard(f.boardType)) return blocked('NOT_COMMUNITY')
+  return { ok: true, operatorWriterId: f.operatorWriterId, authorId: f.authorId }
 }
 
 // ─────────────────────────────────────────────────────────
