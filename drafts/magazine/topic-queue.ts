@@ -2,10 +2,10 @@
  * 60일 주제 캘린더 (v2)
  *
  * 이 파일은 drafts 전용이다. 런타임에서 import 하지 않는다.
- * 행이 들어오는 길은 둘이다 — 기존 행(사람이 만들었다)과 G8 편입기
- * (`scripts/magazine-g8-promote.mjs`)가 M-GRAPH 연구 정본에서 옮긴 행(`intentId`·`g8ManifestHash` 를 단다).
- * 어느 쪽도 AI 가 주제를 새로 지어내지 않는다 — 편입기는 조사·판정이 끝난 의도만 옮기고
- * 필수 필드가 정본에 없으면 넣지 않는다. 행마다 사람이 승인하는 단계는 없다 (M-GRAPH 헌장 §3-B).
+ * 행이 들어오는 길은 둘이다 — 기존 행(사람이 만들었다)과 ArticlePlan materialize
+ * (`scripts/magazine-direct-spec-source-authoring.mjs materialize`)가 사람이 승인한 source/2 entry 에서 만든 DIRECT 행.
+ * G8 편입기는 큐를 쓰지 않는다 — 연구 admission(receipt · slug · 장부)만 기록한다.
+ * 어느 쪽도 AI 가 주제를 새로 지어내지 않는다. DIRECT 행의 plan 필드는 사람이 승인한 값의 복제다.
  *
  * 🔴 매거진은 SEO 글 생산기가 아니라 커뮤니티 성장 엔진이다.
  *    North Star 는 4050/5060 여성이 소란소란에서 자기 이야기를 남긴 횟수다.
@@ -100,14 +100,21 @@ export type TopicQueueItem = {
   whyNow: string
   notes: string
   /**
-   * M-GRAPH 의도 식별자. G8 편입기(`scripts/magazine-g8-promote.mjs`)가 넣은 행에만 있다.
+   * M-GRAPH 의도 식별자. ArticlePlan materialize 가 만든 DIRECT 행에 있다.
    * intentId ↔ slug 는 영구 1:1 이다 (연구 contract/m3-slug-manifest.json).
    */
   intentId?: string
-  /** 이 행을 만든 G8 manifest 해시. 그래프 장부(m3-state.jsonl) ADMITTED 행과 같은 값이어야 한다 */
+  /** 이 slug 를 편입한 G8 manifest 해시 = 연구 receipt `contract/g8-admission/<hash>.json` 의 이름 */
   g8ManifestHash?: string
   /** 제작 경로 opt-in. 없으면 기존 LEGACY_BRIEF_V1 경로다. */
   directSpecMode?: 'LEGACY_BRIEF_V1' | 'DIRECT_SPEC_V1'
+  /**
+   * 승인 ArticlePlan 의 신원 = source/2 승인 entry 의 `sourceHash`.
+   * 🔴 불변식 — `g8ManifestHash` 나 `articlePlanHash` 가 하나라도 있으면 둘 다 있고 `directSpecMode` 가
+   *    `DIRECT_SPEC_V1` 이어야 한다. 아니면 모든 자동 경로가 `G8_ROW_NOT_DIRECT` 로 막는다.
+   *    plan 필드(title · intent · …)를 손으로 고치면 `SOURCE_QUEUE_DRIFT` 로 막힌다.
+   */
+  articlePlanHash?: string
 }
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [

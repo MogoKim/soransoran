@@ -91,7 +91,8 @@ const realRegen = await imp(PATHS.regen)
 const realRepair = await imp(PATHS.repair)
 const { randomUUID } = await import('node:crypto')
 const { deliveryGate } = realGate
-const { directSpecRegenPacket } = await imp(join(ROOT, 'scripts/lib/magazine-direct-spec.mjs'))
+const realDirect = await imp(join(ROOT, 'scripts/lib/magazine-direct-spec.mjs'))
+const { directSpecRegenPacket } = realDirect
 const { sliceLiteral } = await imp(join(ROOT, 'scripts/lib/magazine-load.mjs'))
 const { readRunTargets, fetchTargets } = await imp(join(ROOT, 'scripts/lib/magazine-run-targets.mjs'))
 
@@ -109,25 +110,59 @@ const fx = () => JSON.parse(readFileSync(FIXTURE, 'utf8'))
 /** 🔴 승인 basis — 소비 관문과 같은 helper 로 실제 제품 판에서 계산한다 */
 const BASIS = real.source.productBasisFor(real.source.readProductGraphState(ROOT), { intentId: 'I-DSSC-01', queueCluster: fx().queueItem.cluster })
 
-const directItem = (over = {}) => {
-  const q = fx().queueItem
-  return { ...q, day: 9001, slug: DIRECT_SLUG, intentId: 'I-DSSC-01', g8ManifestHash: MANIFEST, directSpecMode: 'DIRECT_SPEC_V1', ...over }
-}
+/**
+ * 🔴 DIRECT 큐 행은 승인 entry 의 복제다 — materialize 와 같은 `queueRowFromEntry` 로 만든다 (source/2).
+ *    plan 을 바꾸는 반례는 `pairWith` 로 entry 와 큐 행을 **함께** 바꾼다 — 한쪽만 바꾸면 SOURCE_QUEUE_DRIFT 다.
+ */
+const directItem = (over = {}, entry = sourceEntry()) => ({ ...real.source.queueRowFromEntry(entry, { day: 9001 }), ...over })
 const legacyItem = () => {
   const { intentId: _i, g8ManifestHash: _g, directSpecMode: _d, ...q } = fx().queueItem
   return { ...q, day: 9002, slug: LEGACY_SLUG }
 }
-function sourceEntry(mutate = (e) => e, { rehash = true } = {}) {
+const ADMISSION = { g8ManifestHash: MANIFEST, receiptHash: 'dssc-receipt-hash-0001', graphVersion: GV, readinessHash: 'dssc-readiness-hash-0001' }
+/** 승인 plan — fixture 큐 행의 plan 필드 (선택 필드는 있을 때만) */
+const planOf = (q) => ({
+  ...Object.fromEntries(real.source.ARTICLE_PLAN_REQUIRED.map((k) => [k, q[k]])),
+  ...Object.fromEntries(real.source.ARTICLE_PLAN_OPTIONAL.filter((k) => q[k] !== undefined).map((k) => [k, q[k]])),
+})
+function sourceEntry(mutate = (e) => e, { rehash = true, plan = {} } = {}) {
   const f = fx()
   let entry = {
     status: 'APPROVED', approvedBy: 'dssc-test-approver', approvedAt: '2026-10-15T12:00:00+09:00',
-    g8ManifestHash: MANIFEST,
+    admission: { ...ADMISSION },
+    plan: { ...planOf(f.queueItem), ...plan },
     node: { ...f.node, id: 'I-DSSC-01', intentId: 'I-DSSC-01', slug: DIRECT_SLUG, graphVersion: GV },
     relations: f.relations, hero: f.hero, publication: f.publication, productBasis: BASIS,
   }
   entry = mutate(structuredClone(entry)) ?? entry
   if (rehash) entry.sourceHash = real.source.directSpecSourceHash(entry)
   return entry
+}
+/**
+ * 다른 내용으로 **다시 승인**한 entry. 재승인은 sourceHash 를 바꾸므로 큐 행도 새 articlePlanHash 로 다시
+ * materialize 돼야 한다 — 큐가 옛 승인을 가리키면 ARTICLE_PLAN_HASH_DRIFT(NOT_READY), 새 승인을 가리키면
+ * 디스크의 옛 spec 과 SPEC_CONFLICT 다.
+ */
+const reapproved = (tag = '재승인') => sourceEntry((e) => { e.node.readerQuestion = `${e.node.readerQuestion} ${tag}`; return e })
+/**
+ * opt-in 을 철회한 행. `keepG8` 이면 G8 해시를 남긴다 → G8_ROW_NOT_DIRECT (legacy 로 보내지 않는다).
+ * 해시까지 지우면 G8 행이 아니다 → persisted direct 흔적이 정본 큐로 DIRECT_SPEC_MODE_WITHDRAWN 을 낸다.
+ */
+const withdrawnItem = ({ by = 'mode', keepG8 }) => {
+  let q = by === 'mode' ? directItem({ directSpecMode: 'LEGACY_BRIEF_V1' }) : (({ directSpecMode: _m, ...x }) => x)(directItem())
+  if (!keepG8) q = (({ g8ManifestHash: _g, articlePlanHash: _p, ...x }) => x)(q)
+  return q
+}
+const WITHDRAWN_STATES = [
+  ['opt-in 철회(LEGACY_BRIEF_V1) · G8 해시 유지', { by: 'mode', keepG8: true }, 'G8_ROW_NOT_DIRECT'],
+  ['opt-in 철회(필드 제거) · G8 해시 유지', { by: 'field', keepG8: true }, 'G8_ROW_NOT_DIRECT'],
+  ['opt-in 철회(LEGACY_BRIEF_V1) · G8 해시도 제거', { by: 'mode', keepG8: false }, 'DIRECT_SPEC_MODE_WITHDRAWN'],
+  ['opt-in 철회(필드 제거) · G8 해시도 제거', { by: 'field', keepG8: false }, 'DIRECT_SPEC_MODE_WITHDRAWN'],
+].map(([label, opt, code]) => [label, () => withdrawnItem(opt), () => [withdrawnItem(opt)], code])
+/** plan · entry 를 함께 바꾼 승인 한 쌍 — 큐 행은 그 entry 의 복제다 */
+const pairWith = ({ plan = {}, mutate = (e) => e } = {}) => {
+  const entry = sourceEntry(mutate, { plan })
+  return { entry, item: directItem({}, entry) }
 }
 function writeSource(draftsDir, { graphVersion = GV, entries = [sourceEntry()], schema = real.source.DIRECT_SPEC_SOURCE_SCHEMA } = {}) {
   const p = real.source.directSpecSourcePath(draftsDir, GV)
@@ -151,6 +186,110 @@ const missingMutation = (field) => (e) => {
 }
 const INVENTORY = () => ({ inventoryDays: 0, counts: { live: 0, scheduled: 0, blocked: 0 } })
 const specPathOf = (draftsDir) => join(draftsDir, DIRECT_SLUG, 'article-spec.json')
+
+/**
+ * 🔴 **source/2 ArticlePlan 계약 반례** (2026-10-22 · PR C).
+ *    G8 행 계약(G8_ROW_NOT_DIRECT) · articlePlanHash · queue 복제 필드 drift · internalLinks · legacy 불변 · source/1 거부.
+ *    복제 필드 손편집은 **필드마다** 따로 본다 — drift 목록에 그 필드가 정확히 실려야 한다.
+ */
+const REPLICA_EDITS = {
+  title: (q) => `${q.title} (손으로 고침)`,
+  contentType: () => 'COMMUNITY',
+  intent: () => '방법',
+  cluster: () => 'family',
+  target: (q) => `${q.target} 일부`,
+  validationProfile: () => 'MEDICAL',
+  riskLevel: () => 'HIGH',
+  reviewMode: () => 'FULL_REVIEW',
+  imageMode: () => 'OPTIONAL',
+  autoEligible: () => false,
+  seriesId: () => 'hand-added-series',
+  seriesOrder: () => 2,
+  season: () => '가을',
+  calendarEvent: () => '추석',
+  publishWindow: () => ({ after: '2026-10-01', before: '2026-12-31' }),
+  ctaBoard: () => '/community/free',
+  internalLinks: (q) => q.internalLinks.slice(0, 1),
+  whyNow: (q) => `${q.whyNow} 덧붙임`,
+  notes: (q) => `${q.notes} 덧붙임`,
+  directSpecMode: () => 'DIRECT_SPEC_V1-EDIT',
+}
+function planContractCases(src, judge) {
+  const ready = (item, entry = sourceEntry()) => judge(item, (d) => writeSource(d, { entries: [entry] }))
+  const { resolveMagazineAutoMode, G8_ROW_NOT_DIRECT } = realDirect
+  return [
+    ['P01 source/2 승인 entry + 그 복제 큐 행 → 준비됨 · articlePlanHash = entry.sourceHash', () => {
+      const entry = sourceEntry(); const item = directItem({}, entry)
+      assert.equal(item.articlePlanHash, entry.sourceHash); assert.equal(item.g8ManifestHash, entry.admission.g8ManifestHash)
+      const r = ready(item, entry); assert.equal(r.ok, true, r.why); assert.deepEqual(r.evidence.queueDrift, [])
+    }],
+    ['P02 source/1(plan·admission 없음) → SOURCE_SCHEMA_UNKNOWN', () => {
+      const r = judge(directItem(), (d) => writeSource(d, { schema: 'magazine-article-spec-source/1' }))
+      assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('SOURCE_SCHEMA_UNKNOWN'))
+    }],
+    ['P03 G8_ROW_NOT_DIRECT — 해시 하나만 · DIRECT 아님 · intentId 만 있는 legacy 는 영향 없음', () => {
+      const item = directItem()
+      const { articlePlanHash: _p, ...noPlan } = item
+      const { g8ManifestHash: _g, ...noManifest } = item
+      for (const [label, row] of [['articlePlanHash 없음', noPlan], ['g8ManifestHash 없음', noManifest],
+        ['LEGACY_BRIEF_V1', { ...item, directSpecMode: 'LEGACY_BRIEF_V1' }], ['directSpecMode 없음', (({ directSpecMode: _d, ...q }) => q)(item)]]) {
+        const m = resolveMagazineAutoMode(row)
+        assert.deepEqual({ ok: m.ok, code: m.code }, { ok: false, code: G8_ROW_NOT_DIRECT }, label)
+      }
+      // ArticleSpec 직전 관문도 같은 사유를 싣는다
+      assert.ok(ready(noPlan).evidence.blockers.includes(G8_ROW_NOT_DIRECT), 'judge 가 해시 하나만 있는 행을 G8 행으로 보지 않았다')
+      // 🔴 intentId 만 있는 기존 행 — 대상이 아니다 (legacy 로 그대로 간다)
+      const intentOnly = { ...legacyItem(), intentId: 'I-LEGACY-ONLY' }
+      assert.deepEqual(resolveMagazineAutoMode(intentOnly), resolveMagazineAutoMode(legacyItem()))
+      assert.equal(resolveMagazineAutoMode(intentOnly).mode, 'LEGACY_BRIEF_V1')
+      assert.equal(resolveMagazineAutoMode(item).mode, 'DIRECT_SPEC_V1')
+    }],
+    ['P04 articlePlanHash 위조 — 다른 승인 해시 · 임의 해시 → ARTICLE_PLAN_HASH_DRIFT', () => {
+      const other = sourceEntry((e) => { e.approvedAt = '2026-10-15T12:00:01+09:00'; return e })
+      for (const forged of [other.sourceHash, 'sha256:forged', 'x']) {
+        const r = ready(directItem({ articlePlanHash: forged }))
+        assert.equal(r.ok, false, forged); assert.ok(r.evidence.blockers.includes('ARTICLE_PLAN_HASH_DRIFT'), `${forged}: ${r.evidence.blockers}`)
+        assert.ok(!r.evidence.queueDrift.includes('articlePlanHash'), 'articlePlanHash 는 전용 사유로 본다')
+      }
+    }],
+    ...real.source.QUEUE_REPLICA_FIELDS.map((field) => [`P05 큐 복제 필드 손편집 ${field} → SOURCE_QUEUE_DRIFT [${field}]`, () => {
+      const item = directItem()
+      const edit = REPLICA_EDITS[field]
+      assert.ok(edit, `${field} 편집 반례가 없다 — QUEUE_REPLICA_FIELDS 와 반례 표가 어긋났다`)
+      const edited = { ...item, [field]: edit(item) }
+      assert.notEqual(JSON.stringify(edited[field]), JSON.stringify(item[field]), `${field} 반례가 값을 바꾸지 않았다`)
+      const r = ready(edited)
+      assert.equal(r.ok, false, `${field} 손편집이 통과했다`)
+      assert.ok(r.evidence.blockers.includes('SOURCE_QUEUE_DRIFT'), `${field}: ${r.evidence.blockers}`)
+      assert.ok(r.evidence.queueDrift.includes(field), `${field}: drift 목록 ${r.evidence.queueDrift}`)
+    }]),
+    ['P05b 승인에 없는 선택 키를 빈 값으로 더해도 drift — 키 존재 여부까지 본다 · day 0 은 drift', () => {
+      const r = ready({ ...directItem(), seriesId: '' })
+      assert.ok(r.evidence.queueDrift.includes('seriesId'), r.evidence.queueDrift.join(','))
+      assert.ok(ready(directItem({ day: 0 })).evidence.queueDrift.includes('day'))
+      assert.deepEqual(ready(directItem({ day: 77 })).evidence.queueDrift, [], 'day 는 파생값 — 양의 정수면 값은 비교하지 않는다')
+    }],
+    ['P06 internalLinks — direct 순서 뒤 discovery · 중복만 제거 · 개수로 자르지 않는다', () => {
+      const rel = (slug) => ({ slug, source: 'M-GRAPH', relationType: 'DIRECT_NEXT', reason: 'r' })
+      const relations = { direct: ['d-1', 'd-2', 'd-3', 'd-2', 'd-4'].map(rel), discovery: { ...rel('d-1'), relationType: 'BRIDGE_DISCOVERY' } }
+      assert.deepEqual(src.internalLinksOf(relations), ['d-1', 'd-2', 'd-3', 'd-4'])
+      assert.deepEqual(src.internalLinksOf({ direct: [rel('a'), rel('b'), rel('c')], discovery: { ...rel('z') } }), ['a', 'b', 'c', 'z'])
+      const row = src.queueRowFromEntry({ ...sourceEntry(), relations }, { day: 1 })
+      assert.deepEqual(row.internalLinks, ['d-1', 'd-2', 'd-3', 'd-4'])
+      // 기본 fixture — direct 3 + discovery 1 → 4개 전부 (3개로 자르면 drift)
+      const item = directItem()
+      assert.equal(item.internalLinks.length, 4, item.internalLinks.join(','))
+      assert.ok(ready({ ...item, internalLinks: item.internalLinks.slice(0, 3) }).evidence.queueDrift.includes('internalLinks'))
+      assert.ok(ready({ ...item, internalLinks: [...item.internalLinks].reverse() }).evidence.queueDrift.includes('internalLinks'))
+    }],
+    ['P07 승인 entry 의 admission.g8ManifestHash 와 큐 행이 다르면 MANIFEST_DRIFT (entry 쪽 변경)', () => {
+      const entry = sourceEntry((e) => { e.admission.g8ManifestHash = 'sha256:dssc-other'; return e })
+      const item = { ...directItem({}, entry), g8ManifestHash: MANIFEST }
+      const r = ready(item, entry)
+      assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('MANIFEST_DRIFT'), r.evidence.blockers.join(','))
+    }],
+  ]
+}
 
 /** planRun 한 벌. `draftsDir` 를 주면 그 폴더에서 이어 돈다 (다음 회차) */
 function runPlan(planMod, { queue, prepare = () => {}, sourceMod = real.source, spyJudge = false, draftsDir = null, today = TODAY, persistSpecFn = null, directSourceFnOverride = null } = {}) {
@@ -335,33 +474,43 @@ function sourceCases(src) {
       const r = judge(directItem(), (d) => writeSource(d, { schema: 'magazine-article-spec-source/0' }))
       assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('SOURCE_SCHEMA_UNKNOWN'))
     }],
-    ['S12a 비STANDARD 프로필 — PROFILE_NOT_STANDARD', () => {
-      const r = judge(directItem({ validationProfile: 'MEDICAL' }), (d) => writeSource(d))
+    ['S12a 비STANDARD 프로필(승인 plan · 큐 행 함께) — PROFILE_NOT_STANDARD', () => {
+      const p = pairWith({ plan: { validationProfile: 'MEDICAL' } })
+      const r = judge(p.item, (d) => writeSource(d, { entries: [p.entry] }))
       assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('PROFILE_NOT_STANDARD'))
+      assert.deepEqual(r.evidence.queueDrift, [], '쌍으로 바꿨는데 drift 가 났다 — 반례가 다른 사유로 막힌다')
     }],
     ['H1 REQUIRED + hero.alt 없음 — FIELDS_MISSING hero.alt', () => {
-      const r = judge(directItem({ imageMode: 'REQUIRED' }), (d) => writeSource(d, { entries: [heroEntry({ scene: fx().hero.scene })] }))
+      const p = pairWith({ plan: { imageMode: 'REQUIRED' }, mutate: (e) => { e.hero = { scene: fx().hero.scene }; return e } })
+      const r = judge(p.item, (d) => writeSource(d, { entries: [p.entry] }))
       assert.equal(r.ok, false); assert.ok(r.evidence.missingFields.includes('hero.alt')); assert.ok(r.evidence.blockers.includes('FIELDS_MISSING'))
     }],
     ['H2 REQUIRED + hero.scene 없음 — FIELDS_MISSING hero.scene', () => {
-      const r = judge(directItem({ imageMode: 'REQUIRED' }), (d) => writeSource(d, { entries: [heroEntry({ alt: fx().hero.alt })] }))
+      const p = pairWith({ plan: { imageMode: 'REQUIRED' }, mutate: (e) => { e.hero = { alt: fx().hero.alt }; return e } })
+      const r = judge(p.item, (d) => writeSource(d, { entries: [p.entry] }))
       assert.equal(r.ok, false); assert.ok(r.evidence.missingFields.includes('hero.scene')); assert.ok(r.evidence.blockers.includes('FIELDS_MISSING'))
     }],
     ['H3 NO_IMAGE + hero 내용 — HERO_FORBIDDEN', () => {
-      const r = judge(directItem({ imageMode: 'NO_IMAGE' }), (d) => writeSource(d))
+      const p = pairWith({ plan: { imageMode: 'NO_IMAGE' } })
+      const r = judge(p.item, (d) => writeSource(d, { entries: [p.entry] }))
       assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('HERO_FORBIDDEN'))
+      assert.deepEqual(r.evidence.queueDrift, [])
     }],
     ['H4 NO_IMAGE + hero 없음 — 준비됨 (hero.mode NO_IMAGE)', () => {
-      const r = judge(directItem({ imageMode: 'NO_IMAGE' }), (d) => writeSource(d, { entries: [heroEntry(null)] }))
+      const p = pairWith({ plan: { imageMode: 'NO_IMAGE' }, mutate: (e) => { e.hero = null; return e } })
+      const r = judge(p.item, (d) => writeSource(d, { entries: [p.entry] }))
       assert.equal(r.ok, true, r.why); assert.equal(r.spec.hero.mode, 'NO_IMAGE')
     }],
     ['H5 OPTIONAL — hero 없음은 FIELDS_MISSING(hero.alt·scene) · 완전한 hero 는 통과', () => {
-      const r = judge(directItem({ imageMode: 'OPTIONAL' }), (d) => writeSource(d, { entries: [heroEntry(null)] }))
+      const p = pairWith({ plan: { imageMode: 'OPTIONAL' }, mutate: (e) => { e.hero = null; return e } })
+      const r = judge(p.item, (d) => writeSource(d, { entries: [p.entry] }))
       assert.equal(r.ok, false); assert.ok(r.evidence.blockers.includes('FIELDS_MISSING'))
       assert.ok(r.evidence.missingFields.includes('hero.alt') && r.evidence.missingFields.includes('hero.scene'), r.evidence.missingFields.join(','))
-      const full = judge(directItem({ imageMode: 'OPTIONAL' }), (d) => writeSource(d))
+      const pf = pairWith({ plan: { imageMode: 'OPTIONAL' } })
+      const full = judge(pf.item, (d) => writeSource(d, { entries: [pf.entry] }))
       assert.equal(full.ok, true, full.why); assert.equal(full.spec.hero.mode, 'OPTIONAL')
     }],
+    ...planContractCases(src, judge),
     ['B1 승인 basis — 같은 graphVersion 에서 graph off·kill switch·cluster off·surface off·resolver 계약 변경은 PRODUCT_BASIS_DRIFT · productRoot 없으면 UNVERIFIED', () => {
       const base = basisRoot()
       const ok = src.judgeDirectSpecSource({ queueItem: directItem(), draftsDir: (() => { const d = tmp('b1'); writeSource(d); return d })(), expectedGraphVersion: GV, productRoot: base })
@@ -474,6 +623,9 @@ function planCases(plan, lane = real.lane) {
       assert.ok(!r.packages.includes(DIRECT_SLUG), 'direct 행에 legacy brief 재료가 놓였다')
       const row = r.run.selected[0].directSpec
       assert.ok(row, 'run.json selected 행에 directSpec 이 없다')
+      // 🔴 G8 행은 두 해시를 함께 운반한다 — 하나만 실리면 하류 전송 관문이 G8_ROW_NOT_DIRECT 로 막는다
+      assert.deepEqual({ g8ManifestHash: r.run.selected[0].g8ManifestHash, articlePlanHash: r.run.selected[0].articlePlanHash },
+        { g8ManifestHash: MANIFEST, articlePlanHash: directItem().articlePlanHash })
       const f = fx()
       const expected = compileArticleSpec({
         node: sourceEntry().node, queueItem: { ...directItem(), validationProfile: 'STANDARD' },
@@ -548,10 +700,21 @@ function planCases(plan, lane = real.lane) {
       assert.ok(withRow.message && withRow.messageFingerprint, 'legacy 메시지가 비어 비교가 무의미하다')
       assert.equal(withRow.message, bare.message); assert.equal(withRow.messageFingerprint, bare.messageFingerprint)
     }],
-    ['S12b 모르는 directSpecMode → 선정 0 · HOLD UNKNOWN_MAGAZINE_AUTO_MODE · legacy 는 계속', () => {
-      const r = runPlan(plan, { queue: [directItem({ directSpecMode: 'DIRECT_SPEC_V9' }), legacyItem()] })
+    ['S12b 모르는 directSpecMode(G8 해시 없는 행) → 선정 0 · HOLD UNKNOWN_MAGAZINE_AUTO_MODE · legacy 는 계속', () => {
+      const unknown = { ...legacyItem(), day: 9001, slug: DIRECT_SLUG, directSpecMode: 'DIRECT_SPEC_V9' }
+      const r = runPlan(plan, { queue: [unknown, legacyItem()] })
       assert.deepEqual(r.selected, [LEGACY_SLUG])
       assert.equal(heldOf(r).code, 'UNKNOWN_MAGAZINE_AUTO_MODE')
+    }],
+    ['S12d G8 행의 모르는 mode · 해시 하나만 · legacy 철회 → 선정 0 · HOLD G8_ROW_NOT_DIRECT · legacy brief 재료 0 · legacy 는 계속', () => {
+      const { articlePlanHash: _p, ...oneHash } = directItem()
+      for (const [label, row] of [['모르는 mode', directItem({ directSpecMode: 'DIRECT_SPEC_V9' })], ['articlePlanHash 없음', oneHash],
+        ['LEGACY_BRIEF_V1', withdrawnItem({ by: 'mode', keepG8: true })]]) {
+        const r = runPlan(plan, { queue: [row, legacyItem()] })
+        assert.deepEqual(r.selected, [LEGACY_SLUG], label)
+        assert.equal(heldOf(r)?.code, 'G8_ROW_NOT_DIRECT', label)
+        assert.equal(existsSync(join(r.runsDir, TODAY, 'selected', DIRECT_SLUG)), false, `${label}: G8 행에 legacy 작업 재료를 만들었다`)
+      }
     }],
     ['S12c 준비 안 된 direct 가 빠지면 legacy 가 그 슬롯을 받는다', () => {
       const legacies = Array.from({ length: 5 }, (_, i) => ({ ...legacyItem(), day: 9010 + i, slug: `canary-legacy-fill-${i}` }))
@@ -584,19 +747,19 @@ function crashedDay1() {
 }
 const COUNTS = {}
 function reuseCases(plan, lane) {
-  const day2 = (draftsDir, label, prepare = () => {}) => {
+  const day2 = (draftsDir, label, prepare = () => {}, queue = [directItem()]) => {
     prepare(draftsDir)
     const before = readFileSync(specPathOf(draftsDir), 'utf8')
     const mtime = statSync(specPathOf(draftsDir)).mtimeMs
-    const r = runPlan(plan, { queue: [directItem()], draftsDir, today: TOMORROW })
+    const r = runPlan(plan, { queue, draftsDir, today: TOMORROW })
     const after = existsSync(specPathOf(draftsDir)) ? readFileSync(specPathOf(draftsDir), 'utf8') : null
-    const counts = { provider: providerTargets(r), write: (after !== before || statSync(specPathOf(draftsDir)).mtimeMs !== mtime) ? 1 : 0, register: registerPass(lane, draftsDir) }
+    const counts = { provider: providerTargets(r), write: (after !== before || statSync(specPathOf(draftsDir)).mtimeMs !== mtime) ? 1 : 0, register: registerPass(lane, draftsDir, queue) }
     COUNTS[label] = counts
     return { r, counts, before, after }
   }
-  const blocked = (label, prepare, code) => [`R ${label} → 재사용 HOLD · provider·write·register 0`, () => {
+  const blocked = (label, prepare, code, queue) => [`R ${label} → 재사용 HOLD · provider·write·register 0`, () => {
     const d = crashedDay1()
-    const { r, counts, before, after } = day2(d, label, prepare)
+    const { r, counts, before, after } = day2(d, label, prepare, queue)
     assert.ok(!r.reusable.includes(DIRECT_SLUG), `${label}: direct 가 재사용 목록에 남았다`)
     assert.equal(heldOf(r)?.code, code, `${label}: HOLD 코드`)
     assert.deepEqual(counts, { provider: 0, write: 0, register: 0 }, `${label}: ${JSON.stringify(counts)}`)
@@ -604,7 +767,9 @@ function reuseCases(plan, lane) {
   }]
   return [
     blocked('급사 후 source 부재', (d) => removeSource(d), 'DIRECT_SPEC_SOURCE_NOT_READY'),
-    blocked('급사 후 source 교체(다른 승인 내용)', (d) => writeSource(d, { entries: [sourceEntry((e) => { e.node.readerQuestion = `${e.node.readerQuestion} 다시 승인`; return e })] }), 'DIRECT_SPEC_SPEC_CONFLICT'),
+    blocked('급사 후 source 교체(다른 승인 내용 · 큐도 새 승인으로)', (d) => writeSource(d, { entries: [reapproved('다시 승인')] }), 'DIRECT_SPEC_SPEC_CONFLICT',
+      [directItem({}, reapproved('다시 승인'))]),
+    blocked('급사 후 source 교체(다른 승인 내용 · 큐는 옛 승인)', (d) => writeSource(d, { entries: [reapproved('다시 승인')] }), 'DIRECT_SPEC_SOURCE_NOT_READY'),
     blocked('급사 후 승인 취소', (d) => writeSource(d, { entries: [sourceEntry((e) => { e.status = 'REVOKED'; return e })] }), 'DIRECT_SPEC_SOURCE_NOT_READY'),
     blocked('급사 후 stale 판', (d) => writeSource(d, { graphVersion: STALE_GV, entries: [sourceEntry((e) => { e.node.graphVersion = STALE_GV; return e })] }), 'DIRECT_SPEC_SOURCE_NOT_READY'),
     blocked('급사 후 hash drift', (d) => { const e = sourceEntry(); e.node.outline = [...e.node.outline].reverse(); writeSource(d, { entries: [e] }) }, 'DIRECT_SPEC_SOURCE_NOT_READY'),
@@ -655,7 +820,8 @@ const SOURCE_STATES = [
   ['승인 취소', (d) => writeSource(d, { entries: [sourceEntry((e) => { e.status = 'REVOKED'; return e })] }), 'DIRECT_SPEC_SOURCE_NOT_READY'],
   ['stale', (d) => writeSource(d, { graphVersion: STALE_GV, entries: [sourceEntry((e) => { e.node.graphVersion = STALE_GV; return e })] }), 'DIRECT_SPEC_SOURCE_NOT_READY'],
   ['hash drift', (d) => { const e = sourceEntry(); e.node.outline = [...e.node.outline].reverse(); writeSource(d, { entries: [e] }) }, 'DIRECT_SPEC_SOURCE_NOT_READY'],
-  ['다른 승인 내용', (d) => writeSource(d, { entries: [sourceEntry((e) => { e.node.readerQuestion = `${e.node.readerQuestion} 재승인`; return e })] }), 'DIRECT_SPEC_SPEC_CONFLICT'],
+  ['다른 승인 내용 · 큐도 새 승인으로', (d) => writeSource(d, { entries: [reapproved()] }), 'DIRECT_SPEC_SPEC_CONFLICT', () => [directItem({}, reapproved())]],
+  ['다른 승인 내용 · 큐는 옛 승인', (d) => writeSource(d, { entries: [reapproved()] }), 'DIRECT_SPEC_SOURCE_NOT_READY'],
 ]
 function sendCases(webui, gateMod = realGate, { record = false } = {}) {
   const planned = () => {
@@ -663,7 +829,7 @@ function sendCases(webui, gateMod = realGate, { record = false } = {}) {
     assert.ok(r.spec, 'plan 이 spec 을 쓰지 못했다 (반례 준비 실패)')
     return r
   }
-  const deps = { queue: () => [directItem()], expectedGraphVersion: () => GV, productRoot: () => ROOT }
+  const baseDeps = { queue: () => [directItem()], expectedGraphVersion: () => GV, productRoot: () => ROOT }
   const meter = (draftsDir, q) => {
     const m = { probe: 0, chrome: 0 }
     const ledgerBefore = existsSync(q) ? readFileSync(q, 'utf8') : null
@@ -677,7 +843,10 @@ function sendCases(webui, gateMod = realGate, { record = false } = {}) {
         write: existsSync(join(draftsDir, DIRECT_SLUG, 'draft.md')) ? 1 : 0 }),
     }
   }
-  return SOURCE_STATES.flatMap(([label, mutate, code]) => [
+  // 🔴 상태마다 정본 큐가 다를 수 있다 — 재승인은 큐 행도 새 articlePlanHash 로 바뀐다
+  return SOURCE_STATES.flatMap(([label, mutate, code, queueFn]) => {
+    const deps = { ...baseDeps, queue: queueFn ?? baseDeps.queue }
+    return [
     [`P0 실제 fetchSlug(수동 --fetch 경로) — source ${label} → ${code ? `${code} · probe·Chrome·예약·write 0` : '관문 통과 · probe 1'}`, async () => {
       const r = planned(); mutate?.(r.draftsDir)
       const q = join(dirname(r.draftsDir), 'send-q.json')
@@ -722,7 +891,8 @@ function sendCases(webui, gateMod = realGate, { record = false } = {}) {
       if (code) { assert.equal(g.ok, false); assert.equal(g.code, code); assert.equal(g.message, null) }
       else { assert.equal(g.ok, true, g.why); assert.equal(g.specHash, spec.specHash) }
     }],
-  ])
+    ]
+  })
 }
 
 function reportCases(plan) {
@@ -783,8 +953,7 @@ function reuseReportCases(plan) {
 const DOWNGRADE = {}
 const DOWNGRADE_STATES = [
   ['큐 삭제', null, () => [], 'DIRECT_SPEC_NOT_IN_QUEUE'],
-  ['opt-in 철회(LEGACY_BRIEF_V1)', () => directItem({ directSpecMode: 'LEGACY_BRIEF_V1' }), () => [directItem({ directSpecMode: 'LEGACY_BRIEF_V1' })], 'DIRECT_SPEC_MODE_WITHDRAWN'],
-  ['opt-in 철회(필드 제거)', () => { const { directSpecMode: _m, ...q } = directItem(); return q }, () => { const { directSpecMode: _m, ...q } = directItem(); return [q] }, 'DIRECT_SPEC_MODE_WITHDRAWN'],
+  ...WITHDRAWN_STATES,
   ['exact direct', () => directItem(), () => [directItem()], null],
 ]
 function downgradeCases(webui, regen) {
@@ -881,8 +1050,7 @@ function packetOnlyCases(webui) {
   }
   const states = [
     ['큐 삭제', null, () => [], 'DIRECT_SPEC_NOT_IN_QUEUE'],
-    ['opt-in 철회(LEGACY_BRIEF_V1)', () => directItem({ directSpecMode: 'LEGACY_BRIEF_V1' }), () => [directItem({ directSpecMode: 'LEGACY_BRIEF_V1' })], 'DIRECT_SPEC_MODE_WITHDRAWN'],
-    ['opt-in 철회(필드 제거)', () => { const { directSpecMode: _m, ...q } = directItem(); return q }, () => { const { directSpecMode: _m, ...q } = directItem(); return [q] }, 'DIRECT_SPEC_MODE_WITHDRAWN'],
+    ...WITHDRAWN_STATES,
     ['현재 큐 exact direct · spec 없음', () => directItem(), () => [directItem()], 'DIRECT_SPEC_MISSING'],
   ]
   return [
@@ -937,7 +1105,9 @@ function repairCases(repair, webui) {
     if (draft) writeFileSync(join(d, slug, 'draft.md'), draft)
     if (spec) writeFileSync(join(d, slug, 'article-spec.json'), spec)
   }
-  const withdrawn = () => directItem({ directSpecMode: 'LEGACY_BRIEF_V1' })
+  // 🔴 persisted 흔적만으로 막혀야 하는 반례 — G8 해시까지 지운 legacy 행이다 (해시가 남으면 mode 판정이 먼저 막아 흔적 검사가 가려진다)
+  const withdrawn = () => withdrawnItem({ by: 'mode', keepG8: false })
+  const withdrawnG8 = () => withdrawnItem({ by: 'mode', keepG8: true })
   return [
     ['P0-2 scanRepairTargets — current direct(BRIEF·DRAFT_ECHO)·persisted 철회·모르는 mode 는 대상 0 · legacy 대상은 legacy-only 와 deep-equal', () => {
       const d = tmp('scan')
@@ -946,16 +1116,18 @@ function repairCases(repair, webui) {
       folder(d, 'direct-echo2', { draft: ECHO_DRAFT })                          // current direct + brief + echo draft
       folder(d, 'persisted-withdrawn', { spec: '{}' })                          // 철회됐지만 spec 흔적
       folder(d, 'unknown-mode')
+      folder(d, 'g8-withdrawn')                                                 // G8 해시를 단 채 legacy 로 철회된 행
       folder(d, LEGACY_SLUG)                                                    // 진짜 legacy
       const queue = [directItem(), directItem({ slug: 'direct-echo', day: 9003 }), directItem({ slug: 'direct-echo2', day: 9004 }),
-        { ...withdrawn(), slug: 'persisted-withdrawn', day: 9005 }, directItem({ slug: 'unknown-mode', day: 9006, directSpecMode: 'X' }), legacyItem()]
+        { ...withdrawn(), slug: 'persisted-withdrawn', day: 9005 }, directItem({ slug: 'unknown-mode', day: 9006, directSpecMode: 'X' }),
+        { ...withdrawnG8(), slug: 'g8-withdrawn', day: 9007 }, legacyItem()]
       const scan = repair.scanRepairTargets({ queue, draftsDir: d, store: {} })
       assert.deepEqual(scan.targets.map((t) => t.slug), [LEGACY_SLUG], `direct 행이 입력 수리 대상이 됐다: ${scan.targets.map((t) => `${t.slug}:${t.type}`)}`)
       const only = repair.scanRepairTargets({ queue: [legacyItem()], draftsDir: d, store: {} })
       assert.deepEqual(scan.targets, only.targets, 'legacy 입력 수리 대상이 direct 행 유무에 따라 달라졌다')
       assert.equal(only.targets[0]?.type, repair.REPAIR.BRIEF, 'legacy 대상이 없어 비교가 무의미하다')
       const skippedDirect = scan.skipped.filter((x) => x.reason === 'DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN').map((x) => x.slug).sort()
-      assert.deepEqual(skippedDirect, [DIRECT_SLUG, 'direct-echo2', 'persisted-withdrawn', 'unknown-mode'].sort())
+      assert.deepEqual(skippedDirect, [DIRECT_SLUG, 'direct-echo2', 'g8-withdrawn', 'persisted-withdrawn', 'unknown-mode'].sort())
     }],
     ['P0-2 runInputRepair — direct 행만 있으면 generateBrief · runRepairFetch · repairGate 호출 0', async () => {
       const d = tmp('runrepair'); folder(d, DIRECT_SLUG, { draft: ECHO_DRAFT }); folder(d, 'persisted-withdrawn', { spec: '{}' })
@@ -970,7 +1142,8 @@ function repairCases(repair, webui) {
     ...[
       ['current exact direct', () => directItem(), () => [directItem()], 'DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN', false],
       ['persisted direct · 큐 삭제', null, () => [], 'DIRECT_SPEC_NOT_IN_QUEUE', true],
-      ['persisted direct · opt-in 철회', withdrawn, () => [withdrawn()], 'DIRECT_SPEC_MODE_WITHDRAWN', true],
+      ['persisted direct · opt-in 철회 · G8 해시 유지', withdrawnG8, () => [withdrawnG8()], 'G8_ROW_NOT_DIRECT', true],
+      ['persisted direct · opt-in 철회 · G8 해시도 제거', withdrawn, () => [withdrawn()], 'DIRECT_SPEC_MODE_WITHDRAWN', true],
     ].map(([label, qi, queue, code, persisted]) => [`P0-2 fetchOne(inputRepair BRIEF_ECHO) — ${label} → ${code} · probe·Chrome·예약·write 0`, async () => {
       const r = persisted ? runPlan(real.plan, { queue: [directItem()], prepare: (dd) => writeSource(dd) }) : null
       const d = r?.draftsDir ?? join(tmp('ir-cur'), 'drafts')
@@ -1057,9 +1230,17 @@ function laneCases(lane) {
       removeSource(d)
       const g = lane.gate(DIRECT_SLUG, [directItem()], d)
       assert.equal(g.ok, false); assert.ok(g.blockedBy.some((b) => b.code === 'DIRECT_SPEC_SOURCE_NOT_READY'))
-      writeSource(d, { entries: [sourceEntry((e) => { e.node.whyNow = 'x'; e.node.readerQuestion = `${e.node.readerQuestion}!`; return e })] })
-      const c = lane.gate(DIRECT_SLUG, [directItem()], d)
-      assert.equal(c.ok, false); assert.ok(c.blockedBy.some((b) => b.code === 'DIRECT_SPEC_SPEC_CONFLICT'))
+      const again = reapproved('!')
+      writeSource(d, { entries: [again] })
+      // 재승인 + 큐도 새 승인으로 → 디스크의 옛 spec 과 SPEC_CONFLICT · 큐가 옛 승인을 가리키면 NOT_READY
+      const c = lane.gate(DIRECT_SLUG, [directItem({}, again)], d)
+      assert.equal(c.ok, false); assert.ok(c.blockedBy.some((b) => b.code === 'DIRECT_SPEC_SPEC_CONFLICT'), JSON.stringify(c.blockedBy))
+      const stale = lane.gate(DIRECT_SLUG, [directItem()], d)
+      assert.equal(stale.ok, false); assert.ok(stale.blockedBy.some((b) => b.code === 'DIRECT_SPEC_SOURCE_NOT_READY'), JSON.stringify(stale.blockedBy))
+      // G8 해시 하나만 남긴 행 → 등록 gate 도 G8_ROW_NOT_DIRECT (legacy brief 판정으로 가지 않는다)
+      const { articlePlanHash: _p, ...oneHash } = directItem({}, again)
+      const g8 = lane.gate(DIRECT_SLUG, [oneHash], d)
+      assert.equal(g8.ok, false); assert.deepEqual(g8.blockedBy.map((b) => b.code), ['G8_ROW_NOT_DIRECT'])
       // legacy 판정은 그대로 — brief·review 없음
       const lg = lane.gate(LEGACY_SLUG, [legacyItem()], d)
       assert.deepEqual(lg.blockedBy.map((b) => b.code), ['BRIEF_MISSING', 'REVIEW_MISSING'])
@@ -1096,6 +1277,13 @@ function notifyCases(notify, webui) {
       assert.ok(directAlerts[0].reason.includes(GV) && directAlerts[0].reason.includes('SOURCE_ABSENT'))
       assert.ok(!directAlerts[0].reason.includes('legacy-held'))
       assert.deepEqual(withHeld.filter((a) => !a.title.includes('DIRECT_SPEC 보류')), without)
+    }],
+    ['N1b G8_ROW_NOT_DIRECT 보류 → direct 보류 알림 1건 · ArticlePlan materialize 안내', () => {
+      const d = tmp('notify-g8')
+      const a = notify.judge({ date: TODAY, runExists: true, draftsDir: d, run: baseRun({ held: [{ day: 1, slug: 'g8-row', code: 'G8_ROW_NOT_DIRECT', why: 'x' }] }) })
+      const direct = a.filter((x) => x.title.includes('DIRECT_SPEC 보류'))
+      assert.equal(direct.length, 1, `G8_ROW_NOT_DIRECT 보류가 조용히 묻혔다: ${JSON.stringify(a)}`)
+      assert.ok(direct[0].reason.includes('g8-row G8_ROW_NOT_DIRECT') && direct[0].next.includes('materialize'), JSON.stringify(direct[0]))
     }],
     ['N2 direct 원고 없음 → DIRECT_SPEC 원고 알림 · "brief 가 아직 없다" 오보 0 · legacy 문구 그대로', () => {
       const d = tmp('notify2')
@@ -1273,7 +1461,7 @@ const MUTATIONS = [
   ['source', 'MS1', 'APPROVED 검사 제거', "if (entry.status !== 'APPROVED' || entry.node?.status !== 'APPROVED' || !String(entry.approvedBy ?? '').trim() || !String(entry.approvedAt ?? '').trim()) {", 'if (false) {'],
   ['source', 'MS2', 'stale research 허용 (graphVersion 검사 제거)', "  if (evidence.observedGraphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')\n", ''],
   ['source', 'MS3', 'source hash 검사 제거', "if (entry.sourceHash !== directSpecSourceHash(entry)) blockers.push('SOURCE_HASH_DRIFT')", ''],
-  ['source', 'MS4', 'G8 manifest 대조 제거', "if (entry.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')", ''],
+  ['source', 'MS4', 'G8 manifest 대조 제거', "if (entry.admission?.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')", ''],
   ['source', 'MS5', '필수 필드 검사 제거', "if (evidence.missingFields.length) blockers.push('FIELDS_MISSING')", ''],
   ['source', 'MS6', '기존 spec 을 덮어쓴다', 'if (existsSync(path)) return sameOrConflict()', 'if (existsSync(path)) unlinkSync(path)'],
   ['source', 'MS7', 'STANDARD 검사 제거', "if (!lane.ok || lane.profile !== DIRECT_SPEC_CANARY_PROFILE) blockers.push('PROFILE_NOT_STANDARD')", ''],
@@ -1309,11 +1497,13 @@ const MUTATIONS = [
   ['plan', 'MP12', '재사용 spec 없음에 새 spec 저장 되살림 (P1)', "        if (j.existing !== 'IDENTICAL') {\n          held.push({ day: item.day, slug: item.slug, code: 'DIRECT_SPEC_MISSING',", "        if (j.existing === 'ABSENT' && !dryRun) persistSpecFn({ spec: j.spec, draftsDir })\n        if (j.existing === 'CONFLICT') {\n          held.push({ day: item.day, slug: item.slug, code: 'DIRECT_SPEC_MISSING',"],
   ['plan', 'MP13', 'direct-only 보고에 일반 brief 안내 되살림 (P2)', '  if (!directSel.length) {\n    L.push(', '  if (true) {\n    L.push('],
   ['plan', 'MP14', 'mixed 보고에서 brief 안내 범위 구분 제거 (P2)', "      L.push(`legacy 선정 ${legacySel.length}건(${legacySel.join(', ')})에만 해당: \\`_runs/${run.date}/selected/{slug}/brief.todo.md\\` 의 TODO 를 채운 뒤`)", "      L.push('세션에서 `_runs/' + run.date + '/selected/*/brief.todo.md` 의 TODO 를 채운 뒤')"],
+  ['plan', 'MP17', 'run.json 이 articlePlanHash 를 운반하지 않는다 (PR C)', "        ...(i.articlePlanHash ? { articlePlanHash: i.articlePlanHash } : {}),\n", ''],
+  ['notify', 'MN4', 'G8_ROW_NOT_DIRECT 보류를 direct 보류 알림에서 뺀다 (PR C)', "'UNKNOWN_MAGAZINE_AUTO_MODE', 'G8_ROW_NOT_DIRECT', ", "'UNKNOWN_MAGAZINE_AUTO_MODE', "],
   ['notify', 'MN1', 'direct 보류 알림 제거 (P1)', '  if (directHold) alerts.push(directHold)\n', ''],
   ['notify', 'MN2', 'direct 행을 legacy brief 누락으로 오보 (P1)', "    const missing = rows.filter((x) => !isDirectRow(x)).map((x) => x.slug)", '    const missing = rows.map((x) => x.slug)'],
   ['webui', 'MW1', '회수 계획이 direct 에 "세션이 채워야 한다" 안내 (P1)', "  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {\n    return t.material?.articleSpec", "  if (false) {\n    return t.material?.articleSpec"],
 ]
-const MS2_SECOND = ["  if (entry.node?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')\n", '']
+const MS2_SECOND = ["  if (entry.node?.graphVersion !== expectedGraphVersion || entry.admission?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')\n", '']
 
 console.log('\n── 변이 — 각 변이를 위 반례 중 하나가 잡아야 한다')
 for (const [kind, id, label, from, to] of MUTATIONS) {
@@ -1326,7 +1516,11 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
     if (!probeBlock.includes('accessFn()') || !src.includes(anchor)) { report(false, `${id} ${label}`, '변이 지점을 찾지 못했다 (하네스 결함)'); continue }
     src = src.replace(probeBlock, '').replace(anchor, probeBlock.replaceAll('gate.messageFingerprint', 'null') + anchor)
   } else src = src.replace(from, to)
-  if (id === 'MS2') src = src.replace(MS2_SECOND[0], MS2_SECOND[1])
+  if (id === 'MS2') {
+    // 🔴 두 번째 지점도 정확히 하나여야 한다 — 못 찾으면 변이가 반쪽이 되어 검출 결과가 뜻을 잃는다
+    if (!src.includes(MS2_SECOND[0])) { report(false, `${id} ${label}`, '두 번째 변이 지점을 찾지 못했다 (하네스 결함)'); continue }
+    src = src.replace(MS2_SECOND[0], MS2_SECOND[1])
+  }
   const path = join(dirname(PATHS[kind]), `.dssc-${id}-${process.pid}-${PATHS[kind].split('/').pop()}`)
   MUTANTS.push(path); writeFileSync(path, src)
   let caught = false

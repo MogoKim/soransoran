@@ -1,23 +1,26 @@
 /**
- * DIRECT_SPEC_V1 source 작성 — `magazine-article-spec-source/1` 의 **후보(DRAFT) 생산**과 **사람의 명시적 승인**.
+ * ArticlePlan — `magazine-article-spec-source/2` 의 **후보(DRAFT) 생산 · 사람의 명시적 승인 · 큐 materialize**.
  *
- * 🔴 **왜 생겼나** (2026-10-15).
- *    #739 로 source 신원 관문은 선정·재사용·등록·전송·regen·입력 수리에 연결됐지만,
- *    그 관문이 읽을 승인 artifact 를 만드는 절차가 없었다. 손으로 JSON 을 쓰면 승인 기록과
- *    초안이 섞이고, 승인 시점의 판(graph·control·queue·G8·articles)을 아무도 고정하지 않는다.
+ * 🔴 **왜 바뀌었나** (2026-10-22 · M-GRAPH PR C).
+ *    G8 v2 는 큐를 쓰지 않는다 — 연구 admission(receipt · slug manifest · ledger)만 기록한다.
+ *    앞판 prepare 는 G8 이 넣은 큐 행을 전제로 했으므로, admission 만 있는 지금 상태를 읽지 못했다
+ *    (v1 대조는 「장부에 있는데 큐에 없는 행」을 불일치로 본다). 이제 G8 admission 을 사람이 승인하는
+ *    ArticlePlan 으로 잇고, 큐 행은 승인 entry 에서만 만든다.
  *
- * 🔴 **두 단계를 섞지 않는다.**
- *    prepare  읽기 전용. 지정한 slug 하나의 현재 판 신원을 검증하고 DRAFT 후보를 돌려준다.
- *             기계가 증거로 확정할 수 없는 필드는 null 로 남긴다 — 문장·outline·근거·hero·CTA 문구를 만들지 않는다.
- *             APPROVED · approvedBy · approvedAt 를 만들지 않는다. 파일을 쓰지 않는다.
- *    approve  사람이 채운 후보 파일 · 승인자 · 승인 시각 · 확인한 후보 해시를 받아 **다시 전부 검증**한 뒤에만
- *             `drafts/magazine/article-spec-source/<graphVersion>.json` 에 entry 하나를 원자적으로 더한다.
+ * 🔴 **세 단계를 섞지 않는다.**
+ *    prepare      읽기 전용. 지정한 slug 하나의 admission(receipt ∧ slug binding ∧ ledger)과 현재 제품 graph 를
+ *                 검증하고 DRAFT 후보를 돌려준다. 큐 행을 요구하지 않는다. 관계는 receipt 의 edge 로 고정한다.
+ *                 기계가 증거로 확정할 수 없는 필드(plan · 문장 · outline · 근거 · hero · CTA)는 null 로 남긴다.
+ *    approve      사람이 채운 후보 · 승인자 · 승인 시각 · 확인한 후보 해시를 받아 admission · graph 를 **다시 전부**
+ *                 대조한 뒤에만 `drafts/magazine/article-spec-source/<graphVersion>.json` 에 entry 하나를 원자적으로 더한다.
+ *    materialize  승인 entry 하나에서 queue 행 하나를 만든다(`queueRowFromEntry`). 큐 writer lock 안에서
+ *                 day = max(day)+1 로 정하고, 쓴 뒤 같은 parser 로 다시 읽어 행이 정확히 같은지 본다.
  *
- * 🔴 관계 증거는 **현재 제품 graph bundle + control + 구현 surface** 하나다. 연구 edges·mappings 는 판이 다르면 쓰지 않는다.
- *    연구 intent 는 원문 해시가 manifest·제품 graph 와 정확히 같을 때만 **참고(hint)** 로 싣는다 — entry 를 채우지 않는다.
- *
+ * 🔴 관계 증거는 **연구 G8 receipt + 현재 제품 graph bundle** 이다. receipt 의 edgeId 를 지금 bundle 의 edge
+ *    (from · to · slot · anchor · reason)와 대상 mapping slug 로 다시 맞춘다. 남거나 모자라도 고르거나 채우지 않는다.
  * 🔴 시각은 주입 가능한 `nowMs`(기본 Date.now()) 기준이다. 미래 시각으로 미래 공개 글을 승인하지 못한다.
- * 🔴 네트워크 · Chrome · CDP · 모델 호출 0. queue · articles · graph · control · G8 장부를 쓰지 않는다.
+ * 🔴 네트워크 · Chrome · CDP · 모델 호출 0. 연구 receipt · slug manifest · ledger · articles · graph · control 을 쓰지 않는다.
+ *    큐는 materialize 만 쓴다.
  */
 
 import { createHash } from 'node:crypto'
@@ -28,16 +31,20 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 
 import { canonicalJson } from './magazine-article-spec.mjs'
 import {
-  DIRECT_SPEC_REQUIRED_FIELDS, DIRECT_SPEC_SOURCE_DIRNAME, DIRECT_SPEC_SOURCE_SCHEMA, DISCOVERY_RELATION_TYPE,
-  directSpecSourceHash, heroRequired, judgeDirectSpecSource, missingSourceFields, productBasisFor, readProductGraphState,
+  ADMISSION_FIELDS, ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_DIRNAME, DIRECT_SPEC_SOURCE_SCHEMA,
+  DISCOVERY_RELATION_TYPE, directSpecSourceHash, judgeDirectSpecSource, missingSourceFields, productBasisFor,
+  queueRowFromEntry, readProductGraphState,
 } from './magazine-direct-spec-source.mjs'
-import { verifyConsistency } from './magazine-g8-promoter.mjs'
+import {
+  ADMISSION_FILES, JOURNAL_FILE, KNOWN_LEGACY_ADMISSIONS, LOCK_FILE, insertQueueRows, productPayloadOf, readReceipts,
+  receiptProblems, titleProblems, verifyAdmissions, writeAtomic,
+} from './magazine-g8-promoter.mjs'
 import { isPublic, resolvePublishAt } from './magazine-gate.mjs'
 import { parseArticlesSource, parseQueueSource } from './magazine-load.mjs'
-import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
-import { RELATION_CONTRACT_LABEL, RELATION_POLICY, isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
+import { withQueueWriteLock } from './magazine-queue-lock.mjs'
+import { RELATION_CONTRACT_LABEL, isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
 
-export const CANDIDATE_SCHEMA = 'magazine-article-spec-source-candidate/1'
+export const CANDIDATE_SCHEMA = 'magazine-article-spec-source-candidate/2'
 export const CANDIDATE_STATUS = 'DRAFT'
 export const G8_LEDGER_SCHEMA = 'm3ledger/2'
 export const RESEARCH_INTENT_SCHEMA = 'intent/2'
@@ -46,7 +53,7 @@ const DIRECT_SLOTS = new Set(['DIRECT_NEXT', 'SAME_EXPERIENCE', 'ACTION_OR_CONTE
 const DISCOVERY_SLOT = 'BRIDGE_DISCOVERY'
 const DISCOVERY_TYPE = DISCOVERY_RELATION_TYPE
 const KST_AT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\+09:00$/
-/** 🔴 운영 runtime 작업장에는 쓰지 않는다 — 승인 artifact 는 기능 브랜치에서 검토를 거쳐 들어간다 */
+/** 🔴 운영 runtime 작업장에는 쓰지 않는다 — 승인 artifact · 큐 행은 기능 브랜치에서 검토를 거쳐 들어간다 */
 export const RUNTIME_PATH_PATTERNS = [/soransoran-magazine-runtime(?:\/|$)/]
 /** 🔴 기계 승인 표식 — 사람 승인만 받는다 */
 const MACHINE_APPROVER = /:|^(?:machine|bot|auto|automation|system|ci|agent|claude|codex|chatgpt|gpt|openai|anthropic)\b/i
@@ -55,8 +62,17 @@ const PRODUCT = {
   articles: 'src/content/magazine/articles.ts',
   queue: 'drafts/magazine/topic-queue.ts',
 }
-const ADMISSION = { ledger: 'contract/m3-state.jsonl', slugManifest: 'contract/m3-slug-manifest.json', journal: 'contract/.g8-apply.journal.json' }
 const RESEARCH = { manifest: 'contract/build/current/manifest.json', intents: 'contract/build/current/intents.jsonl' }
+
+/**
+ * 🔴 **admission 신원 거부 사유 — 우선순위 순서.** 이 중 하나라도 있으면 prepare · approve · materialize 가 멈춘다.
+ *    (graph control · surface 같은 판 상태는 후보 blocker 로 남긴다 — 사람이 볼 수 있게)
+ */
+export const ADMISSION_REJECT_ORDER = Object.freeze([
+  'ADMISSION_IN_PROGRESS', 'ADMISSION_LOCKED', 'RECEIPT_ABSENT', 'RECEIPT_DUPLICATE', 'RECEIPT_INVALID',
+  'SLUG_BINDING_MISMATCH', 'LEDGER_MISMATCH', 'G8_INCONSISTENT', 'ADMISSION_GRAPH_STALE', 'RECEIPT_EDGE_DRIFT',
+  'ADMISSION_CLUSTER_DRIFT', 'SLUG_ALREADY_REGISTERED', 'ALREADY_QUEUED', 'ALREADY_PLANNED',
+])
 
 const sha = (text) => `sha256:${createHash('sha256').update(text).digest('hex')}`
 const nonEmpty = (v) => typeof v === 'string' && v.trim() !== ''
@@ -65,6 +81,7 @@ function err(code, why) { const e = new Error(why); e.code = code; return e }
 function readText(path, label) {
   try { return readFileSync(path, 'utf8') } catch (e) { throw err('INPUT_UNREADABLE', `${label} 를 읽지 못했다 (${path}): ${e.code ?? e.message}`) }
 }
+const readOptional = (path) => (existsSync(path) ? readFileSync(path, 'utf8') : null)
 const parseJsonl = (text) => String(text ?? '').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
 
 /**
@@ -86,6 +103,69 @@ export function parseKst(value) {
  */
 export function readProductGraph(repoRoot) {
   return readProductGraphState(repoRoot)
+}
+
+/**
+ * 🔴 **plan 허용값 — topic-queue.ts 의 union 을 그대로 읽는다.** 값 목록을 여기 복사하지 않는다.
+ *    union 하나라도 못 읽으면 던진다(PLAN_UNIONS_UNREADABLE) — 임의 문자열로 완화하지 않는다.
+ */
+export function readQueueUnions(queueText) {
+  const literals = (body) => [...String(body).matchAll(/'([^']*)'/g)].map((m) => m[1])
+  const union = (name) => {
+    const m = new RegExp(`export type ${name} = ((?:\\s*\\|?\\s*'[^']*')+)`).exec(queueText)
+    if (!m) throw err('PLAN_UNIONS_UNREADABLE', `topic-queue.ts 의 ${name} union 을 읽지 못했다`)
+    return literals(m[1])
+  }
+  const profile = /validationProfile\?: ((?:\s*\|?\s*'[^']*')+)/.exec(queueText)
+  if (!profile) throw err('PLAN_UNIONS_UNREADABLE', 'topic-queue.ts 의 validationProfile union 을 읽지 못했다')
+  return {
+    contentType: union('ContentType'),
+    intent: union('SearchIntent'),
+    riskLevel: union('RiskLevel'),
+    reviewMode: union('ReviewMode'),
+    ctaBoard: union('CtaBoard'),
+    imageMode: union('ImageMode'),
+    season: union('Season'),
+    validationProfile: literals(profile[1]),
+  }
+}
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/
+/**
+ * plan 검증 — 필수 값 null · 빈 문자열 · union 밖 값 · 모르는 키 · 선택 필드 형식.
+ * @returns {string[]} 문제 코드 (`PLAN_REQUIRED_MISSING:title` 같은 형식)
+ */
+export function planProblems(plan, unions) {
+  const out = []
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return ['PLAN_NOT_OBJECT']
+  for (const k of Object.keys(plan)) if (![...ARTICLE_PLAN_REQUIRED, ...ARTICLE_PLAN_OPTIONAL].includes(k)) out.push(`PLAN_UNKNOWN_FIELD:${k}`)
+  for (const k of ARTICLE_PLAN_REQUIRED) {
+    const v = plan[k]
+    if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) { out.push(`PLAN_REQUIRED_MISSING:${k}`); continue }
+    if (unions[k] && !unions[k].includes(v)) out.push(`PLAN_VALUE_NOT_IN_UNION:${k}`)
+    else if (!unions[k] && typeof v !== 'string') out.push(`PLAN_VALUE_INVALID:${k}`)
+  }
+  if (nonEmpty(plan.title)) for (const p of titleProblems(plan.title)) out.push(`PLAN_TITLE_INVALID:${p.split(' ')[0]}`)
+  const given = (k) => plan[k] !== undefined && plan[k] !== null
+  if (given('season') && !unions.season.includes(plan.season)) out.push('PLAN_VALUE_NOT_IN_UNION:season')
+  if (given('calendarEvent') && !nonEmpty(plan.calendarEvent)) out.push('PLAN_VALUE_INVALID:calendarEvent')
+  if (given('publishWindow')) {
+    const w = plan.publishWindow
+    const keysOk = w && typeof w === 'object' && !Array.isArray(w) && canonicalJson(Object.keys(w).sort()) === canonicalJson(['after', 'before'])
+    if (!keysOk || !YMD.test(w.after) || !YMD.test(w.before) || w.after > w.before) out.push('PLAN_VALUE_INVALID:publishWindow')
+  }
+  if (given('seriesId') !== given('seriesOrder')) out.push('PLAN_SERIES_INCOMPLETE')
+  if (given('seriesId') && !nonEmpty(plan.seriesId)) out.push('PLAN_VALUE_INVALID:seriesId')
+  if (given('seriesOrder') && !(Number.isInteger(plan.seriesOrder) && plan.seriesOrder >= 1)) out.push('PLAN_VALUE_INVALID:seriesOrder')
+  return [...new Set(out)]
+}
+
+/** 승인 entry 에 싣는 plan — 필수 키 + 값이 있는 선택 키만 (null 선택 키는 싣지 않는다) */
+function normalizePlan(plan) {
+  const out = {}
+  for (const k of ARTICLE_PLAN_REQUIRED) out[k] = plan[k]
+  for (const k of ARTICLE_PLAN_OPTIONAL) if (plan[k] !== undefined && plan[k] !== null) out[k] = plan[k]
+  return out
 }
 
 /**
@@ -113,7 +193,6 @@ export function readResearchReference({ researchDir, graph, intentId }) {
     reason: row ? 'INTENTS_HASH_EQUAL' : 'INTENT_NOT_IN_RESEARCH',
     researchGraphVersion: manifest.graphVersion ?? null,
     intentsHash: recomputed,
-    // 🔴 연구 edges·mappings 는 판이 다르면 현재 관계 증거가 아니다
     relationsUsable: manifest.graphVersion === graph.graphVersion && manifest?.contentHash?.edges === graph.contentHash?.edges
       && manifest?.contentHash?.mappings === graph.contentHash?.mappings,
     // 🔴 참고(hint)일 뿐이다 — entry 를 채우지 않는다. 사람이 읽고 판단한다
@@ -124,11 +203,80 @@ export function readResearchReference({ researchDir, graph, intentId }) {
   }
 }
 
+const relTuple = (r) => (r ? `${r.slot}|${r.toIntentId}|${r.anchorLabel}|${r.readerReason}` : 'null')
+/** receipt 관계 → source entry 관계 (대상은 receipt 의 targetSlug) */
+const asRelation = (r) => ({ slug: r.targetSlug, source: 'M-GRAPH', relationType: r.slot, reason: r.readerReason })
+
 /**
- * 현재 판의 신원 — prepare 와 approve 가 **같은 함수**로 읽는다. approve 는 이 값이 후보와 같아야 한다.
- * 🔴 판정에 필요한 원문(queue 행·장부 사건)은 해시로만 싣는다.
+ * 🔴 **연구 admission 판독** — receipt ∧ slug binding ∧ ledger 를 이 slug 하나에 대해 정확히 맞춘다.
+ *    journal(진행 중) · lock(진행 중) · receipt 없음 · binding 불일치 · ledger 불일치는 각자 명시 사유다.
+ *    마지막으로 G8 의 `verifyAdmissions` 전체 판정(KNOWN_LEGACY 열거 포함)이 통과해야 한다.
  */
-export function readCurrentState({ repoRoot, admissionRoot, slug }) {
+export function readAdmission({ admissionRoot, repoRoot, slug, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
+  const reject = []
+  if (existsSync(join(admissionRoot, JOURNAL_FILE))) reject.push('ADMISSION_IN_PROGRESS')
+  if (existsSync(join(admissionRoot, LOCK_FILE))) reject.push('ADMISSION_LOCKED')
+  const receipts = readReceipts(admissionRoot)
+  const hits = []
+  for (const r of receipts) {
+    let parsed = null
+    try { parsed = JSON.parse(r.text) } catch { /* receiptProblems 가 RECEIPT_PARSE 로 센다 */ }
+    for (const a of parsed?.manifest?.admissions ?? []) if (a?.slug === slug) hits.push({ file: r.file, text: r.text, receipt: parsed, admission: a })
+  }
+  if (!hits.length) reject.push('RECEIPT_ABSENT')
+  else if (hits.length > 1) reject.push('RECEIPT_DUPLICATE')
+  const hit = hits.length === 1 ? hits[0] : null
+  if (hit && receiptProblems(hit.file, hit.text).length) reject.push('RECEIPT_INVALID')
+
+  const slugText = readOptional(join(admissionRoot, ADMISSION_FILES.slugManifest))
+  const ledgerText = readOptional(join(admissionRoot, ADMISSION_FILES.ledger))
+  const slugs = slugText ? JSON.parse(slugText).slugs ?? {} : {}
+  const ledger = parseJsonl(ledgerText)
+  const a = hit?.admission ?? null
+  let event = null
+  if (a) {
+    const owners = Object.entries(slugs).filter(([, s]) => s === slug).map(([id]) => id)
+    if (slugs[a.intentId] !== slug || owners.length !== 1) reject.push('SLUG_BINDING_MISMATCH')
+    const admitted = ledger.filter((e) => e?.event === 'ADMITTED')
+    const exact = admitted.filter((e) => e.intentId === a.intentId && e.slug === slug)
+    const crossed = admitted.filter((e) => (e.intentId === a.intentId) !== (e.slug === slug))
+    event = exact.length === 1 ? exact[0] : null
+    const sameRelations = event
+      && canonicalJson((event.directRelations ?? []).map(relTuple)) === canonicalJson((a.direct ?? []).map(relTuple))
+      && relTuple(event.discoveryRelation) === relTuple(a.discovery)
+    if (!event || crossed.length || event.schemaVersion !== G8_LEDGER_SCHEMA || !nonEmpty(event.at) || !sameRelations) reject.push('LEDGER_MISMATCH')
+  }
+  const verify = verifyAdmissions({
+    receipts, slugManifestText: slugText, ledgerText, payloadOf: productPayloadOf(repoRoot),
+    journalPresent: existsSync(join(admissionRoot, JOURNAL_FILE)), knownLegacy,
+  })
+  if (!verify.ok) reject.push('G8_INCONSISTENT')
+  return {
+    reject: [...new Set(reject)],
+    receipt: hit?.receipt ?? null,
+    receiptFile: hit ? relative(admissionRoot, hit.file) : null,
+    admission: a,
+    event,
+    verify,
+  }
+}
+
+/** 지금 승인 source artifact 에서 slug 또는 intentId 의 entry */
+function plannedEntries(repoRoot, graphVersion, { slug, intentId }) {
+  const file = join(repoRoot, 'drafts/magazine', DIRECT_SPEC_SOURCE_DIRNAME, `${graphVersion}.json`)
+  if (!existsSync(file)) return { file, doc: null, entries: [] }
+  let doc
+  try { doc = JSON.parse(readFileSync(file, 'utf8')) } catch (e) { throw err('ARTIFACT_UNREADABLE', `source artifact 를 읽지 못했다: ${e.message}`) }
+  const entries = (Array.isArray(doc?.entries) ? doc.entries : []).filter((x) => x?.node?.slug === slug || x?.node?.intentId === intentId)
+  return { file, doc, entries }
+}
+
+/**
+ * 현재 판의 신원 — prepare · approve · materialize 가 **같은 함수**로 읽는다. approve 는 이 값이 후보와 같아야 한다.
+ * `phase` — 'plan'(prepare·approve: 이미 계획된 slug 거부) · 'materialize'(승인 entry 가 있어야 한다).
+ * @returns {{ok:false, code, why, problems}|{ok:true, ...}}
+ */
+export function readCurrentState({ repoRoot, admissionRoot, slug, phase = 'plan', knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
   const productGraph = readProductGraph(repoRoot)
   if (!productGraph.ok) return { ...productGraph, ok: false }
   const { graph, control } = productGraph
@@ -136,56 +284,59 @@ export function readCurrentState({ repoRoot, admissionRoot, slug }) {
   const queueText = readText(join(repoRoot, PRODUCT.queue), 'topic-queue.ts')
   const articles = parseArticlesSource(articlesText)
   const queue = parseQueueSource(queueText)
-  const ledgerPath = join(admissionRoot, ADMISSION.ledger)
-  const slugPath = join(admissionRoot, ADMISSION.slugManifest)
-  const ledgerText = existsSync(ledgerPath) ? readText(ledgerPath, 'G8 장부') : ''
-  const slugManifestText = existsSync(slugPath) ? readText(slugPath, 'slug 표') : null
-  const ledger = parseJsonl(ledgerText)
-  const slugs = slugManifestText ? JSON.parse(slugManifestText).slugs ?? {} : {}
+  const adm = readAdmission({ admissionRoot, repoRoot, slug, knownLegacy })
+  const reject = [...adm.reject]
+  const a = adm.admission
+  const intentId = a?.intentId ?? null
+
+  if (a) {
+    const receiptGv = adm.receipt.manifest?.graph?.graphVersion ?? null
+    if (receiptGv !== productGraph.pointer) reject.push('ADMISSION_GRAPH_STALE')
+    // 🔴 receipt 의 edge 를 지금 제품 bundle 과 다시 맞춘다 — id · from · to · slot · anchor · reason · 대상 mapping slug
+    for (const r of [...(a.direct ?? []), ...(a.discovery ? [a.discovery] : [])]) {
+      const e = graph.edges.find((x) => x.id === r.edgeId)
+      const targets = graph.mappings.filter((m) => m.intent === r.toIntentId).map((m) => m.slug)
+      if (!e || e.from !== intentId || e.to !== r.toIntentId || e.slot !== r.slot || e.anchor !== r.anchorLabel || e.reason !== r.readerReason
+        || targets.length !== 1 || targets[0] !== r.targetSlug) { reject.push('RECEIPT_EDGE_DRIFT'); break }
+    }
+    const graphIntent = graph.intents.find((i) => i.id === intentId) ?? null
+    if (!graphIntent || graphIntent.cluster !== a.cluster) reject.push('ADMISSION_CLUSTER_DRIFT')
+    if (articles.some((x) => x.slug === slug)) reject.push('SLUG_ALREADY_REGISTERED')
+    if (queue.some((q) => q.slug === slug || (intentId && q.intentId === intentId))) reject.push('ALREADY_QUEUED')
+    if (phase === 'plan' && plannedEntries(repoRoot, productGraph.pointer, { slug, intentId }).entries.length) reject.push('ALREADY_PLANNED')
+  }
+  if (reject.length) {
+    const ordered = ADMISSION_REJECT_ORDER.filter((c) => reject.includes(c))
+    return { ok: false, code: ordered[0], why: `admission 신원이 맞지 않는다: ${ordered.join(',')}`, problems: ordered,
+      verifyProblems: adm.verify.problems }
+  }
 
   const blockers = [...productGraph.blockers]
-  const rows = queue.filter((q) => q.slug === slug)
-  if (rows.length !== 1) blockers.push(rows.length ? 'QUEUE_ROW_DUPLICATE' : 'QUEUE_ROW_ABSENT')
-  const row = rows.length === 1 ? rows[0] : null
-  const intentId = row?.intentId ?? null
-  if (!row || !nonEmpty(row.intentId) || !nonEmpty(row.g8ManifestHash)) blockers.push('QUEUE_NOT_G8_ADMITTED')
-  const lane = row ? isAutoLaneEligible(row) : { ok: false }
-  if (!lane.ok || lane.profile !== 'STANDARD') blockers.push('PROFILE_NOT_STANDARD')
-  if (articles.some((a) => a.slug === slug)) blockers.push('SLUG_ALREADY_REGISTERED')
-  const graphIntent = intentId ? graph.intents.find((i) => i.id === intentId) ?? null : null
-  if (intentId && !graphIntent) blockers.push('INTENT_NOT_IN_PRODUCT_GRAPH')
-  // 🔴 source cluster 가 control 에서 켜져 있어야 관계가 실제로 보인다
-  const sourceCluster = graphIntent?.cluster ?? row?.cluster ?? null
-  if (!sourceCluster || !control.enabledClusters.includes(sourceCluster)) blockers.push('GRAPH_CLUSTER_DISABLED')
-
-  /**
-   * 🔴 G8 정본 — 제품의 `verifyConsistency`(큐 행 ↔ ADMITTED ↔ slug 표 · 급사 journal)를 그대로 쓰고,
-   *    이 slug 의 사건 schema · 정확한 신원을 더 본다.
-   */
-  const consistency = verifyConsistency({ queueSource: queueText, articlesSource: articlesText, ledgerSource: ledgerText,
-    slugManifestSource: slugManifestText, journalPresent: existsSync(join(admissionRoot, ADMISSION.journal)) })
-  if (!consistency.ok) blockers.push('G8_INCONSISTENT')
-  const admitted = ledger.filter((e) => e.event === 'ADMITTED')
-  const exact = admitted.filter((e) => e.intentId === intentId && e.slug === slug)
-  const crossed = admitted.filter((e) => (e.intentId === intentId) !== (e.slug === slug))
-  if (exact.length !== 1) blockers.push(exact.length ? 'ADMISSION_DUPLICATE' : 'ADMISSION_ABSENT')
-  if (crossed.length) blockers.push('ADMISSION_IDENTITY_CROSSED')
-  if (exact.some((e) => e.schemaVersion !== G8_LEDGER_SCHEMA || !nonEmpty(e.at) || !nonEmpty(e.title) || !nonEmpty(e.cluster))) blockers.push('ADMISSION_SCHEMA_INVALID')
-  if (intentId && slugs[intentId] !== slug) blockers.push('SLUG_UNBOUND')
-
+  const sourceCluster = a.cluster
+  if (!control.enabledClusters.includes(sourceCluster)) blockers.push('GRAPH_CLUSTER_DISABLED')
+  const productBasis = productBasisFor(productGraph, { intentId, queueCluster: sourceCluster })
+  const m = adm.receipt.manifest
+  const admissionBlock = {
+    g8ManifestHash: adm.receipt.manifestHash,
+    receiptHash: adm.receipt.receiptHash,
+    graphVersion: m.graph.graphVersion,
+    readinessHash: m.readiness.readinessHash,
+  }
   return {
     ok: true,
-    graph, control, surfaces: productGraph.surfaces, relationTypes: productGraph.relationTypes, articles, queueRow: row, lane, sourceCluster,
-    productBasis: productBasisFor(productGraph, { intentId, queueCluster: row?.cluster ?? null }),
+    graph, control, surfaces: productGraph.surfaces, relationTypes: productGraph.relationTypes, articles, sourceCluster, productBasis,
+    admission: a,
+    admissionBlock,
+    relations: { direct: (a.direct ?? []).map(asRelation), discovery: a.discovery ? asRelation(a.discovery) : null },
     identity: {
       graphVersion: productGraph.pointer,
       contentHash: graph.contentHash,
       // 🔴 승인 entry 에 실릴 basis 와 같은 값 — 후보 이후 control·surface·resolver 계약이 바뀌면 STATE_CHANGED
-      productBasis: productBasisFor(productGraph, { intentId, queueCluster: row?.cluster ?? null }),
-      queue: row ? { slug, intentId, g8ManifestHash: row.g8ManifestHash ?? null, validationProfile: lane.profile ?? null,
-        imageMode: row.imageMode ?? null, rowHash: sha(canonicalJson(row)) } : { slug, intentId: null },
-      admission: exact.length === 1 ? { eventHash: sha(canonicalJson(exact[0])), schemaVersion: exact[0].schemaVersion ?? null,
-        at: exact[0].at ?? null, slugBound: slugs[intentId] === slug, consistency: consistency.problems } : null,
+      productBasis,
+      admission: {
+        ...admissionBlock, receiptFile: adm.receiptFile, intentId, slug, cluster: a.cluster,
+        eventHash: sha(canonicalJson(adm.event)), edges: [...(a.direct ?? []), ...(a.discovery ? [a.discovery] : [])].map((r) => r.edgeId),
+      },
       articlesHash: sha(articlesText),
     },
     blockers: [...new Set(blockers)],
@@ -202,9 +353,8 @@ function targetState(articles, slug, atMs) {
 }
 
 /**
- * 현재 제품 graph 에서 intentId 의 나가는 관계.
+ * 현재 제품 graph 에서 intentId 의 나가는 관계 — 보이는 자리 · type · 대상 공개 상태.
  * 🔴 `active=false` 만으로 거부하지 않는다 — 미등록 source node 의 관계는 구조상 아직 비활성이다(preactivation).
- *    대신 대상 PUBLIC · placement 가 구현·활성 surface · resolver 가 쓰는 관계 type 을 모두 만족해야 eligible 이다.
  */
 export function graphRelationEvidence({ state, intentId, atMs }) {
   const { graph, articles, surfaces, relationTypes } = state
@@ -230,12 +380,11 @@ export function graphRelationEvidence({ state, intentId, atMs }) {
 }
 
 /**
- * 관계 수량(공용 정책 direct 2~3 + discovery 1) 판정 — prepare 의 후보 관계와 approve 의 사람이 확정한 관계를 **같은 규칙**으로 본다.
- * 🔴 M-GRAPH 관계는 현재 제품 graph 의 edge 와 slot · reason 까지 같고, surface · type 이 실제로 보이는 것이어야 한다.
- *    SERIES 는 같은 seriesId 의 등록 글만. HUB 는 지금 코드·데이터로 증명할 수 없다 — 거부한다.
+ * 관계 수량(공용 정책 direct 2~3 + discovery 1) · 대상 공개 · 보이는 자리 · type 판정.
+ * 🔴 M-GRAPH 관계는 현재 제품 graph 의 edge 와 slot · reason 까지 같아야 한다. HUB · SERIES 는 receipt 가 증명하지 않는다.
  */
 export function judgeRelations({ relations, state, intentId, slug, atMs }) {
-  const { articles, queueRow } = state
+  const { articles } = state
   const problems = []
   const direct = Array.isArray(relations?.direct) ? relations.direct : null
   const discovery = relations?.discovery ?? null
@@ -265,9 +414,6 @@ export function judgeRelations({ relations, state, intentId, slug, atMs }) {
       }
       const wantSlot = isDiscovery ? r.relationType === DISCOVERY_SLOT : DIRECT_SLOTS.has(r.relationType)
       if (!wantSlot) problems.push('RELATION_SLOT_MISMATCH')
-    } else if (r.source === 'SERIES') {
-      const target = articles.find((a) => a.slug === r.slug)
-      if (!queueRow?.seriesId || target?.seriesId !== queueRow.seriesId) problems.push('RELATION_SERIES_UNPROVEN')
     } else {
       problems.push(r.source === 'HUB' ? 'RELATION_HUB_UNPROVABLE' : 'RELATION_SOURCE_UNKNOWN')
     }
@@ -281,16 +427,16 @@ export function candidateHashOf(candidate) {
 }
 
 /** 후보에서 아직 사람이 채우지 않은 필드 — 소비 관문과 **같은 함수**(`missingSourceFields`, hero 계약 포함)다 */
-export function unresolvedOf(entry, queueRow) {
+export function unresolvedOf(entry) {
   const probe = { ...entry, status: 'APPROVED', node: { ...(entry?.node ?? {}), status: 'APPROVED' } }
-  return [...new Set(missingSourceFields(probe, queueRow))].sort()
+  return [...new Set(missingSourceFields(probe, { imageMode: entry?.plan?.imageMode ?? null }))].sort()
 }
 
 /**
- * prepare — 읽기 전용. 명시한 slug 하나의 DRAFT 후보를 만든다.
- * @returns {{ok:true, candidate:object}|{ok:false, code:string, why:string}}
+ * prepare — 읽기 전용. 명시한 slug 하나의 DRAFT 후보를 만든다. **큐 행을 요구하지 않는다.**
+ * @returns {{ok:true, candidate:object}|{ok:false, code:string, why:string, problems?:string[]}}
  */
-export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, researchDir = null, nowMs = Date.now() }) {
+export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, researchDir = null, nowMs = Date.now(), knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
   if (!nonEmpty(slug)) return { ok: false, code: 'SLUG_REQUIRED', why: '--slug 로 한 건을 지정해야 한다 (자동 선택 없음)' }
   const atMs = parseKst(asOf)
   if (atMs === null) return { ok: false, code: 'AS_OF_INVALID', why: '--as-of 는 초까지 포함한 실제 KST(+09:00) 시각이어야 한다' }
@@ -298,73 +444,59 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
   let state
   let research
   try {
-    state = readCurrentState({ repoRoot, admissionRoot, slug })
+    state = readCurrentState({ repoRoot, admissionRoot, slug, phase: 'plan', knownLegacy })
     if (!state.ok) return state
-    research = readResearchReference({ researchDir, graph: state.graph, intentId: state.identity.queue.intentId })
+    research = readResearchReference({ researchDir, graph: state.graph, intentId: state.admission.intentId })
   } catch (e) {
     return { ok: false, code: e.code ?? 'INPUT_UNREADABLE', why: e.message }
   }
-  const { identity, queueRow } = state
-  const intentId = identity.queue.intentId
-  const evidence = intentId ? graphRelationEvidence({ state, intentId, atMs }) : []
-  const eligibleDirect = evidence.filter((e) => e.eligible && DIRECT_SLOTS.has(e.slot))
-  const eligibleDiscovery = evidence.filter((e) => e.eligible && e.slot === DISCOVERY_SLOT)
-  const asRelation = (e) => ({ slug: e.slug, source: 'M-GRAPH', relationType: e.slot, reason: e.reason })
+  const { identity, admission: a } = state
+  const intentId = a.intentId
   const blockers = [...state.blockers]
+  const rel = judgeRelations({ relations: state.relations, state, intentId, slug, atMs })
+  if (!rel.ok) blockers.push(...rel.problems)
+  const edgeIds = new Set([...(a.direct ?? []), ...(a.discovery ? [a.discovery] : [])].map((r) => r.edgeId))
   const provenance = {}
   const derived = (path, source, extra = {}) => { provenance[path] = { status: 'DERIVED', source, ...extra } }
   const open = (path, why) => { provenance[path] = { status: 'UNRESOLVED', source: null, why } }
-  const activationOf = (list) => list.map((e) => ({ edgeId: e.edgeId, active: e.active, activation: e.activation, basis: e.activationBasis }))
 
-  // 🔴 관계는 공용 정책(direct 2~3 + discovery 1)이 증명될 때만 채운다. 남으면 사람이 고르고(자동 절단 금지), 모자라면 막는다 — 숫자를 맞추려고 만들지 않는다
-  let direct = null
-  if (isValidDirectCount(eligibleDirect.length)) {
-    direct = eligibleDirect.map(asRelation)
-    derived('relations.direct', `product-graph:${eligibleDirect.map((e) => e.edgeId).join(',')}`, { activation: activationOf(eligibleDirect) })
-  } else if (eligibleDirect.length > RELATION_POLICY.directMax) open('relations.direct', `증명된 direct 후보 ${eligibleDirect.length}개 — 사람이 ${RELATION_POLICY.directMin}~${RELATION_POLICY.directMax}개를 고른다`)
-  else { blockers.push('RELATIONS_INSUFFICIENT'); open('relations.direct', `증명된 direct 관계 ${eligibleDirect.length}개 — 최소 ${RELATION_POLICY.directMin}개가 필요하다`) }
-  let discovery = null
-  if (eligibleDiscovery.length === 1) {
-    discovery = asRelation(eligibleDiscovery[0])
-    derived('relations.discovery', `product-graph:${eligibleDiscovery[0].edgeId}`, { activation: activationOf(eligibleDiscovery) })
-  } else if (eligibleDiscovery.length > 1) open('relations.discovery', `증명된 discovery 후보 ${eligibleDiscovery.length}개 — 사람이 1개를 고른다`)
-  else { blockers.push('RELATIONS_INSUFFICIENT'); open('relations.discovery', '증명된 discovery 관계가 없다') }
-
-  const imageMode = queueRow?.imageMode ?? null
-  const hero = heroRequired(imageMode) ? 'ALT_AND_SCENE' : 'NONE'
   const entry = {
-    g8ManifestHash: identity.queue.g8ManifestHash ?? null,
+    admission: state.admissionBlock,
+    plan: Object.fromEntries(ARTICLE_PLAN_REQUIRED.map((k) => [k, null])),
     node: {
       id: intentId, intentId, slug, status: CANDIDATE_STATUS, graphVersion: identity.graphVersion,
       readerQuestion: null, scope: { include: null, exclude: null }, outline: null,
       evidence: { factsToVerify: null, sourceRequirements: null }, safetyConstraints: null, hubPath: null, ctaLabel: null,
     },
-    relations: { direct, discovery },
-    hero: hero === 'NONE' ? null : { alt: null, scene: null },
+    relations: state.relations,
+    hero: { alt: null, scene: null },
     publication: { publishAt: null },
   }
-  derived('g8ManifestHash', 'topic-queue')
-  for (const p of ['node.id', 'node.intentId']) derived(p, 'topic-queue.intentId ∩ product-graph.intents')
-  derived('node.slug', 'topic-queue.slug')
+  for (const k of ADMISSION_FIELDS) derived(`admission.${k}`, `research:${identity.admission.receiptFile}`)
+  for (const p of ['node.id', 'node.intentId', 'node.slug']) derived(p, 'G8 receipt ∧ slug manifest ∧ ledger')
   derived('node.graphVersion', 'product current.ts')
   derived('node.status', 'DRAFT — 승인 상태로 바꾸는 것은 approve 단계뿐이다')
+  derived('relations.direct', `G8 receipt edges ${[...a.direct].map((r) => r.edgeId).join(',')} ∩ product-graph`)
+  derived('relations.discovery', `G8 receipt edge ${a.discovery?.edgeId ?? '-'} ∩ product-graph`)
+  for (const k of ARTICLE_PLAN_REQUIRED) open(`plan.${k}`, '사람이 정하고 승인한다 — 허용값은 topic-queue.ts union')
   for (const p of ['node.readerQuestion', 'node.scope.include', 'node.scope.exclude', 'node.outline', 'node.evidence.factsToVerify',
     'node.evidence.sourceRequirements', 'node.safetyConstraints', 'node.hubPath', 'node.ctaLabel', 'publication.publishAt']) {
     open(p, '기계가 증거로 확정할 수 없다 — 사람이 채우고 승인한다')
   }
-  if (hero === 'NONE') derived('hero', 'topic-queue.imageMode=NO_IMAGE — hero=null')
-  else { open('hero.alt', `imageMode=${imageMode} — DIRECT_SPEC 자동 레인은 alt 를 승인 전에 요구한다`); open('hero.scene', `imageMode=${imageMode} — DIRECT_SPEC 자동 레인은 scene 을 승인 전에 요구한다`) }
+  open('hero', 'plan.imageMode 가 REQUIRED · OPTIONAL 이면 alt · scene 을 채우고, NO_IMAGE 면 null 로 둔다')
 
   const candidate = {
     schema: CANDIDATE_SCHEMA,
     status: CANDIDATE_STATUS,
     asOf,
     identity,
+    // 🔴 참고 — entry 를 채우지 않는다. 제목·질문을 고를 때 사람이 읽는다
+    hint: { primaryQuery: a.primaryQuery ?? null, cluster: a.cluster ?? null, territoryId: a.territoryId ?? null },
     research,
-    relationEvidence: evidence,
+    relationEvidence: rel.evidence.filter((e) => edgeIds.has(e.edgeId)),
     entry,
     provenance,
-    unresolvedFields: unresolvedOf(entry, queueRow),
+    unresolvedFields: unresolvedOf(entry),
     blockers: [...new Set(blockers)].sort(),
   }
   return { ok: true, candidate: { ...candidate, candidateHash: candidateHashOf(candidate) } }
@@ -376,7 +508,7 @@ export function inspectCandidate(candidate) {
     status: candidate?.status ?? null,
     computedHash: candidateHashOf(candidate),
     storedHash: candidate?.candidateHash ?? null,
-    unresolvedFields: unresolvedOf(candidate?.entry, { imageMode: candidate?.identity?.queue?.imageMode }),
+    unresolvedFields: unresolvedOf(candidate?.entry),
     blockers: candidate?.blockers ?? [],
   }
 }
@@ -470,12 +602,24 @@ function snapshot(file) {
 }
 
 /**
- * approve — 유일한 쓰기. 후보를 다시 검증하고 승인 entry 하나를 원자적으로 더한다.
- * `hooks.beforeRename` 은 시험 전용(급사·실패·외부 writer 주입)이다.
+ * 승인 entry 로 만들 큐 행이 **실제 소비 관문**(judgeDirectSpecSource)을 통과하는가 — 쓰기 전, 메모리에서.
+ * approve 와 materialize 가 같은 함수로 본다.
+ */
+function gateWithEntry({ entry, root, graphVersion, day = 1 }) {
+  return judgeDirectSpecSource({
+    queueItem: queueRowFromEntry(entry, { day }), draftsDir: '/nonexistent-dssa', expectedGraphVersion: graphVersion, productRoot: root,
+    exists: () => true,
+    readFile: () => JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion, entries: [entry] }),
+  })
+}
+
+/**
+ * approve — source artifact 의 유일한 쓰기. 후보를 다시 검증하고 승인 entry 하나를 원자적으로 더한다.
+ * `hooks.beforeLock` · `hooks.beforeRename` 은 시험 전용(경쟁 승인 · 급사 · 실패 · 외부 writer 주입)이다.
  *
  * @returns {{ok:true, written:boolean, path:string, sourceHash:string, entry:object}|{ok:false, code:string, why:string, problems?:string[]}}
  */
-export function approveCandidate({ candidate, approver, at, confirmCandidateHash, repoRoot, admissionRoot, outRoot, researchDir = null, nowMs = Date.now(), hooks = {} }) {
+export function approveCandidate({ candidate, approver, at, confirmCandidateHash, repoRoot, admissionRoot, outRoot, researchDir = null, nowMs = Date.now(), hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
   const fail = (code, why, problems) => ({ ok: false, code, why, ...(problems ? { problems } : {}) })
   const roots = checkOutputRoots({ repoRoot, outRoot })
   if (!roots.ok) return roots
@@ -489,15 +633,18 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   if (asOfMs === null || atMs < asOfMs) return fail('APPROVED_AT_BEFORE_CANDIDATE', '승인 시각이 후보 기준 시각(asOf)보다 앞이다')
   const computed = candidateHashOf(candidate)
   if (confirmCandidateHash !== computed) return fail('CANDIDATE_HASH_MISMATCH', `확인한 후보 해시가 지금 후보와 다르다 (${confirmCandidateHash} ≠ ${computed})`)
-  const forged = ['status', 'approvedBy', 'approvedAt', 'sourceHash'].filter((k) => k in (candidate.entry ?? {}))
+  const forged = ['status', 'approvedBy', 'approvedAt', 'sourceHash', 'productBasis'].filter((k) => k in (candidate.entry ?? {}))
   if (forged.length || candidate.entry?.node?.status !== CANDIDATE_STATUS) return fail('CANDIDATE_APPROVAL_FORGED', `후보에 승인 필드가 있다 (${forged.join(',') || 'node.status'})`)
   if ((candidate.blockers ?? []).length) return fail('CANDIDATE_BLOCKED', `후보에 차단 사유가 있다: ${candidate.blockers.join(',')}`)
 
+  // 🔴 승인 직전 — receipt · slug binding · ledger · 제품 graph 를 처음부터 다시 읽는다
   let state
+  let unions
   try {
-    state = readCurrentState({ repoRoot: roots.root, admissionRoot, slug: candidate.identity?.queue?.slug })
+    state = readCurrentState({ repoRoot: roots.root, admissionRoot, slug: candidate.identity?.admission?.slug, phase: 'plan', knownLegacy })
     if (!state.ok) return state
-    if (researchDir) readResearchReference({ researchDir, graph: state.graph, intentId: state.identity.queue.intentId })
+    if (researchDir) readResearchReference({ researchDir, graph: state.graph, intentId: state.admission.intentId })
+    unions = readQueueUnions(readText(join(roots.root, PRODUCT.queue), 'topic-queue.ts'))
   } catch (e) {
     return fail(e.code ?? 'INPUT_UNREADABLE', e.message)
   }
@@ -506,12 +653,16 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
     const changed = Object.keys(state.identity).filter((k) => canonicalJson(state.identity[k]) !== canonicalJson(candidate.identity[k]))
     return fail('STATE_CHANGED', `후보 이후 판이 바뀌었다: ${changed.join(',')}`, changed)
   }
-  const unresolved = unresolvedOf(candidate.entry, state.queueRow)
-  if (unresolved.length) return fail('CANDIDATE_UNRESOLVED', `사람이 채우지 않은 필드: ${unresolved.join(',')}`, unresolved)
   const e = candidate.entry
-  const pinned = { 'node.id': e.node.id === state.identity.queue.intentId, 'node.intentId': e.node.intentId === state.identity.queue.intentId,
-    'node.slug': e.node.slug === state.identity.queue.slug, 'node.graphVersion': e.node.graphVersion === state.identity.graphVersion,
-    g8ManifestHash: e.g8ManifestHash === state.identity.queue.g8ManifestHash }
+  const plan = planProblems(e.plan, unions)
+  if (plan.length) return fail('PLAN_INVALID', `plan 이 승인 계약을 지키지 않는다: ${plan.join(',')}`, plan)
+  const unresolved = unresolvedOf(e)
+  if (unresolved.length) return fail('CANDIDATE_UNRESOLVED', `사람이 채우지 않은 필드: ${unresolved.join(',')}`, unresolved)
+  const a = state.admission
+  const pinned = { 'node.id': e.node.id === a.intentId, 'node.intentId': e.node.intentId === a.intentId,
+    'node.slug': e.node.slug === a.slug, 'node.graphVersion': e.node.graphVersion === state.identity.graphVersion,
+    admission: canonicalJson(e.admission) === canonicalJson(state.admissionBlock),
+    relations: canonicalJson(e.relations) === canonicalJson(state.relations) }
   const drifted = Object.entries(pinned).filter(([, ok]) => !ok).map(([k]) => k)
   if (drifted.length) return fail('CANDIDATE_IDENTITY_EDITED', `기계가 고정한 신원 필드가 바뀌었다: ${drifted.join(',')}`, drifted)
   const rel = judgeRelations({ relations: e.relations, state, intentId: e.node.intentId, slug: e.node.slug, atMs })
@@ -519,7 +670,8 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
 
   const approvedEntry = {
     status: 'APPROVED', approvedBy: approver.trim(), approvedAt: at,
-    g8ManifestHash: e.g8ManifestHash,
+    admission: state.admissionBlock,
+    plan: normalizePlan(e.plan),
     node: { ...e.node, status: 'APPROVED' },
     relations: e.relations, hero: e.hero ?? null, publication: e.publication,
     // 🔴 승인한 M-GRAPH 판 — 소비 관문이 같은 helper 로 다시 계산해 정확히 같아야 쓴다 (sourceHash 에 포함)
@@ -527,13 +679,9 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   }
   approvedEntry.sourceHash = directSpecSourceHash(approvedEntry)
 
-  // 🔴 실제 관문(judgeDirectSpecSource)으로 한 번 더 — 승인 artifact 는 관문이 읽을 수 있어야 의미가 있다(쓰기 전, 메모리에서)
+  // 🔴 이 entry 로 materialize 할 큐 행이 실제 관문을 통과해야 승인 artifact 가 의미가 있다(쓰기 전, 메모리에서)
   const gv = state.identity.graphVersion
-  const gateCheck = judgeDirectSpecSource({
-    queueItem: state.queueRow, draftsDir: '/nonexistent-dssa', expectedGraphVersion: gv, productRoot: roots.root,
-    exists: () => true,
-    readFile: () => JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [approvedEntry] }),
-  })
+  const gateCheck = gateWithEntry({ entry: approvedEntry, root: roots.root, graphVersion: gv })
   if (!gateCheck.ok) return fail('GATE_REJECTED', `source 관문이 거부했다: ${gateCheck.evidence.blockers.join(',')}`, gateCheck.evidence.blockers)
 
   const file = join(roots.root, 'drafts/magazine', DIRECT_SPEC_SOURCE_DIRNAME, `${gv}.json`)
@@ -541,6 +689,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   if (!below.ok) return below
   mkdirSync(dirname(file), { recursive: true })
   if (realpathSync(dirname(file)) !== dirname(file)) return fail('OUT_PATH_SYMLINK', '대상 폴더가 symlink 를 지난다')
+  hooks.beforeLock?.({ file })
   const lock = acquireLock(`${file}.lock`)
   if (!lock.ok) return lock
   try {
@@ -553,16 +702,12 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
         return fail('ARTIFACT_IDENTITY', '기존 artifact 의 schema·graphVersion 이 다르다 — 덮어쓰지 않는다')
       }
     }
-    const same = doc.entries.find((x) => x?.node?.slug === e.node.slug && x?.node?.intentId === e.node.intentId)
-    if (same) {
-      if (canonicalJson(same) === canonicalJson(approvedEntry)) return { ok: true, written: false, path: file, sourceHash: approvedEntry.sourceHash, entry: same }
-      return fail('ARTIFACT_CONFLICT', '같은 slug·intent 의 다른 승인 entry 가 이미 있다 — 덮어쓰지 않는다')
-    }
+    // 🔴 lock 안에서 다시 — 판독 뒤 다른 승인이 먼저 쓴 경우(경쟁)도 덮어쓰지 않는다
     if (doc.entries.some((x) => x?.node?.slug === e.node.slug || x?.node?.intentId === e.node.intentId)) {
-      return fail('ARTIFACT_DUPLICATE', '같은 slug 또는 intent 의 다른 entry 가 이미 있다')
+      return fail('ALREADY_PLANNED', '같은 slug 또는 intent 의 승인 entry 가 이미 있다 — 덮어쓰지 않는다')
     }
     const next = { schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv,
-      entries: [...doc.entries, approvedEntry].sort((a, b) => String(a.node.slug).localeCompare(String(b.node.slug))) }
+      entries: [...doc.entries, approvedEntry].sort((x, y) => String(x.node.slug).localeCompare(String(y.node.slug))) }
     const bytes = docBytes(next)
     const tmp = `${file}.tmp-${process.pid}-${createHash('sha256').update(bytes).digest('hex').slice(0, 12)}`
     const fd = openSync(tmp, 'w')
@@ -590,4 +735,82 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   }
 }
 
-export const AUTHORING_FILES = { ...PRODUCT, ...ADMISSION, research: RESEARCH, requiredFields: DIRECT_SPEC_REQUIRED_FIELDS }
+/**
+ * materialize — 승인 source/2 entry 하나에서 topic-queue 행 하나를 만든다. 큐의 유일한 ArticlePlan writer.
+ * 🔴 plan 밖의 값을 쓰지 않는다 — 행은 `queueRowFromEntry(entry)` 하나로 만든다(day 만 lock 안에서 정한다).
+ * 🔴 큐 writer lock(`withQueueWriteLock`) 안에서 읽기 · 중복 확인 · day 결정 · 쓰기 · 다시 읽기 대조를 한 번에 한다.
+ * `hooks.beforeLock` · `hooks.beforeWrite` · `hooks.afterWrite` 는 시험 전용(경쟁 writer · 외부 writer · 쓰기 손상 주입)이다.
+ *
+ * @returns {{ok:true, written:true, path:string, row:object, day:number}|{ok:false, code:string, why:string, problems?:string[]}}
+ */
+export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = process.env, hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
+  const fail = (code, why, problems) => ({ ok: false, code, why, ...(problems ? { problems } : {}) })
+  const roots = checkOutputRoots({ repoRoot, outRoot })
+  if (!roots.ok) return roots
+  if (!nonEmpty(slug)) return fail('SLUG_REQUIRED', '--slug 로 한 건을 지정해야 한다')
+  let state
+  let unions
+  let planned
+  try {
+    state = readCurrentState({ repoRoot: roots.root, admissionRoot, slug, phase: 'materialize', knownLegacy })
+    if (!state.ok) return state
+    unions = readQueueUnions(readText(join(roots.root, PRODUCT.queue), 'topic-queue.ts'))
+    planned = plannedEntries(roots.root, state.identity.graphVersion, { slug, intentId: state.admission.intentId })
+  } catch (e) {
+    return fail(e.code ?? 'INPUT_UNREADABLE', e.message)
+  }
+  if (state.blockers.length) return fail('STATE_BLOCKED', `현재 판 신원이 막혔다: ${state.blockers.join(',')}`, state.blockers)
+  if (planned.doc && planned.doc.schema !== DIRECT_SPEC_SOURCE_SCHEMA) return fail('PLAN_SCHEMA_UNKNOWN', `source artifact 판이 ${DIRECT_SPEC_SOURCE_SCHEMA} 가 아니다`)
+  const exact = planned.entries.filter((x) => x?.node?.slug === slug && x?.node?.intentId === state.admission.intentId)
+  if (planned.entries.length !== 1 || exact.length !== 1) return fail('PLAN_NOT_APPROVED', `이 slug·intent 의 승인 entry 가 정확히 하나가 아니다 (${planned.entries.length}개)`)
+  const entry = exact[0]
+  if (entry.status !== 'APPROVED' || entry.node?.status !== 'APPROVED' || !nonEmpty(entry.approvedBy) || MACHINE_APPROVER.test(String(entry.approvedBy).trim())) {
+    return fail('PLAN_NOT_APPROVED', '승인 entry 가 아니다 (status · 사람 승인자)')
+  }
+  if (entry.sourceHash !== directSpecSourceHash(entry)) return fail('PLAN_HASH_DRIFT', '승인 entry 의 sourceHash 가 본문과 다르다 — 승인 뒤 바뀌었다')
+  if (canonicalJson(entry.admission) !== canonicalJson(state.admissionBlock)) return fail('ADMISSION_DRIFT', '승인 entry 의 admission 이 지금 receipt 와 다르다')
+  if (canonicalJson(entry.relations) !== canonicalJson(state.relations)) return fail('RELATIONS_DRIFT', '승인 entry 의 관계가 지금 receipt 관계와 다르다')
+  const plan = planProblems(entry.plan, unions)
+  if (plan.length) return fail('PLAN_INVALID', `승인 plan 이 지금 큐 계약을 지키지 않는다: ${plan.join(',')}`, plan)
+  const gv = state.identity.graphVersion
+  const pre = gateWithEntry({ entry, root: roots.root, graphVersion: gv })
+  if (!pre.ok) return fail('GATE_REJECTED', `source 관문이 거부했다: ${pre.evidence.blockers.join(',')}`, pre.evidence.blockers)
+
+  const queuePath = join(roots.root, PRODUCT.queue)
+  const below = checkNoSymlinkBelow(roots.root, queuePath)
+  if (!below.ok) return below
+  hooks.beforeLock?.({ queuePath })
+  const locked = withQueueWriteLock(queuePath, () => {
+    const before = readFileSync(queuePath, 'utf8')
+    const queue = parseQueueSource(before)
+    // 🔴 lock 안에서 다시 — 판독 뒤 다른 writer 가 같은 slug·intent 행을 넣었으면 쓰지 않는다
+    if (queue.some((q) => q.slug === slug || q.intentId === entry.node.intentId)) return fail('ALREADY_QUEUED', '큐에 이 slug 또는 intent 의 행이 이미 있다')
+    const day = Math.max(0, ...queue.map((q) => q.day).filter(Number.isInteger)) + 1
+    const row = queueRowFromEntry(entry, { day })
+    const next = insertQueueRows(before, [row])
+    /** 같은 parser 로 읽은 큐가 「기존 행 그대로 + 새 행 정확히 1개」인가 — 파싱 실패도 아니다로 본다 */
+    const exactlyAdded = (text) => {
+      let rows
+      try { rows = parseQueueSource(text) } catch { return false }
+      const mine = rows.filter((q) => q.slug === slug)
+      return mine.length === 1 && canonicalJson(mine[0]) === canonicalJson(row) && canonicalJson(rows.filter((q) => q.slug !== slug)) === canonicalJson(queue)
+    }
+    // 🔴 쓰기 전에 메모리에서 — 렌더 결과가 큐로 읽히지 않으면 아무것도 쓰지 않는다
+    if (!exactlyAdded(next)) return fail('QUEUE_RENDER_INVALID', '새 행을 넣은 큐가 같은 parser 로 기존 행 + 새 행 1개로 읽히지 않는다 — 쓰지 않는다')
+    hooks.beforeWrite?.({ queuePath })
+    // 🔴 lock 밖 writer 가 있었는가 — 읽은 바이트와 다르면 쓰지 않는다
+    if (readFileSync(queuePath, 'utf8') !== before) return fail('QUEUE_CHANGED', '읽은 뒤 큐가 바뀌었다 — 쓰지 않는다')
+    writeAtomic(queuePath, next)
+    hooks.afterWrite?.({ queuePath })
+    // 🔴 디스크에서 같은 parser 로 다시 읽어 — 다르거나 읽히지 않으면 이전 바이트로 되돌린다
+    if (!exactlyAdded(readFileSync(queuePath, 'utf8'))) {
+      writeAtomic(queuePath, before)
+      return fail('QUEUE_READBACK_MISMATCH', '쓴 큐를 다시 읽은 행이 만든 행과 다르다 — 이전 바이트로 되돌렸다')
+    }
+    return { ok: true, written: true, path: queuePath, row, day }
+  }, { env })
+  if (!locked.ok) return locked
+  return locked.value
+}
+
+export const AUTHORING_FILES = { ...PRODUCT, ...ADMISSION_FILES, journal: JOURNAL_FILE, lock: LOCK_FILE, research: RESEARCH }

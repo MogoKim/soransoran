@@ -1149,8 +1149,16 @@ if (fs.existsSync(path.join(REAL_RESEARCH, lib.ADMISSION_FILES.ledger))) {
     const pre = snapshot(path.join(REAL_RESEARCH, 'contract'))
     const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: REAL_SNAPSHOT, at: '2026-10-22T00:30:00+09:00' })
     expect('실제 dry-run — readiness 시각 = --at(다음 날 00:30) · 판 이름 = 제품 current', [m.readiness.inputs.effectiveAt, m.readiness.inputs.graphVersion], ['2026-10-22T00:30:00+09:00', 'g-20261021-081d9a'])
-    expect('실제 snapshot dry-run — 후보 I-T6-05 하나 · E-0188 · E-0329 + E-0100 · reverse E-0099',
-      m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]])
+    // 🔴 시점 사실을 고정하지 않는다 — 실제 receipt 가 I-T6-05 를 이미 편입했는지 읽고, 두 상태 각각 정확한 값을 본다
+    //    (2026-10-22 사람 승인 apply 뒤 「후보 I-T6-05 하나」는 낡은 사실이 됐다 — 이제 재편입 거부가 지켜야 할 불변식이다)
+    const admittedNow = lib.readReceipts(REAL_RESEARCH).some(({ text }) => JSON.parse(text).manifest?.admissions?.some((a) => a.intentId === 'I-T6-05' && a.slug === 'age-learning'))
+    if (!admittedNow) {
+      expect('실제 snapshot dry-run(편입 전) — 후보 I-T6-05 하나 · E-0188 · E-0329 + E-0100 · reverse E-0099',
+        m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]])
+    } else {
+      expect('실제 snapshot dry-run(편입 뒤) — 후보 0 · I-T6-05 는 ALREADY_ADMITTED 로 거부 (재편입 없음)',
+        [m.admissions.length, m.refused.filter((r) => r.intentId === 'I-T6-05').map((r) => [r.slug, r.why.includes('ALREADY_ADMITTED')])], [0, [['age-learning', true]]])
+    }
     expect('실제 dry-run — 연구 contract 쓰기 0', JSON.stringify(snapshot(path.join(REAL_RESEARCH, 'contract'))) === JSON.stringify(pre), true)
   } else console.log('  SKIP 실제 snapshot dry-run — 제품 graph 가 g-20261021-081d9a 가 아니거나 snapshot 이 없다 (통과로 세지 않는다)')
 } else {

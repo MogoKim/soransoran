@@ -54,7 +54,7 @@ const LOG_PATH = join(homedir(), 'Library/Logs/soransoran/magazine-producer.log'
 const MIN_DAYS = 7
 
 /** run.held 중 direct 경로 보류 — 조용히 묻히면 canary 가 왜 안 도는지 아무도 모른다 */
-export const DIRECT_HOLD_CODES = new Set(['DIRECT_SPEC_SOURCE_NOT_READY', 'UNKNOWN_MAGAZINE_AUTO_MODE', 'DIRECT_SPEC_SPEC_CONFLICT', 'DIRECT_SPEC_MISSING'])
+export const DIRECT_HOLD_CODES = new Set(['DIRECT_SPEC_SOURCE_NOT_READY', 'UNKNOWN_MAGAZINE_AUTO_MODE', 'G8_ROW_NOT_DIRECT', 'DIRECT_SPEC_SPEC_CONFLICT', 'DIRECT_SPEC_MISSING'])
 const isDirectRow = (x) => Boolean(x && typeof x === 'object' && (x.directSpec || x.directSpecMode === 'DIRECT_SPEC_V1'))
 
 /**
@@ -77,6 +77,7 @@ export function composeDirectHoldAlert(run) {
   if (codes.has('DIRECT_SPEC_MISSING')) next.push('재사용 폴더에 article-spec.json 이 없다 — 자동으로 만들지 않는다. 폴더의 출처(legacy 원고 여부)를 확인한다')
   if (codes.has('DIRECT_SPEC_SPEC_CONFLICT')) next.push('drafts/magazine/{slug}/article-spec.json 과 승인 source 컴파일 결과를 대조한다 — 덮어쓰지 않았다')
   if (codes.has('UNKNOWN_MAGAZINE_AUTO_MODE')) next.push('topic-queue 의 directSpecMode 값을 고친다 (DIRECT_SPEC_V1 · LEGACY_BRIEF_V1 만 허용)')
+  if (codes.has('G8_ROW_NOT_DIRECT')) next.push('G8 행(g8ManifestHash · articlePlanHash)은 ArticlePlan materialize 로만 만든다 — 손으로 고친 행이면 승인 source 와 대조한다')
   return {
     severity: 'WARN',
     title: `매거진 DIRECT_SPEC 보류 ${holds.length}건 — 전송·등록 0 · legacy 후보는 계속 처리했다`,

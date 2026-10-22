@@ -113,7 +113,10 @@ import { saveQuarantine } from './lib/magazine-quarantine.mjs'
 import { ARTICLE_SPEC_SCHEMA } from './lib/magazine-article-spec.mjs'
 import { mkdirSync as _mkdirSync, existsSync } from 'node:fs'
 import { drive } from './magazine-auto-register.mjs'
-import { DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, readProductGraphState, readProductGraphVersion } from './lib/magazine-direct-spec-source.mjs'
+import {
+  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
+  readProductGraphState, readProductGraphVersion,
+} from './lib/magazine-direct-spec-source.mjs'
 
 /** direct · legacy 공용 sandbox — article-spec.json 과 brief.md 를 같이 둔다.
  *    🔴 legacy brief.md 는 adapter 조립 brief 에서 **specHash 라인을 뺀** 글자다. 그래야 변이가
@@ -137,9 +140,14 @@ function makeSandbox(prefix) {
   const gv = input.node.graphVersion
   const productBasis = productBasisFor(readProductGraphState(ROOT), { intentId: input.node.intentId, queueCluster: input.queueItem.cluster })
   const entry = { status: 'APPROVED', approvedBy: 'mutation', approvedAt: '2026-10-15T12:00:00+09:00',
-    g8ManifestHash: input.queueItem.g8ManifestHash, node: input.node, relations: input.relations,
+    // source/2 — 연구 G8 receipt 신원 · 승인 plan(= fixture 큐 행의 plan 필드)
+    admission: { g8ManifestHash: input.queueItem.g8ManifestHash, receiptHash: 'mutation-receipt', graphVersion: gv, readinessHash: 'mutation-readiness' },
+    plan: Object.fromEntries([...ARTICLE_PLAN_REQUIRED, ...ARTICLE_PLAN_OPTIONAL].filter((k) => input.queueItem[k] !== undefined).map((k) => [k, input.queueItem[k]])),
+    node: input.node, relations: input.relations,
     hero: input.hero, publication: input.publication, productBasis }
   entry.sourceHash = directSpecSourceHash(entry)
+  // 🔴 DIRECT 큐 행은 승인 entry 의 복제다(materialize 와 같은 함수) — compile 입력 필드는 fixture 그대로다
+  input.queueItem = queueRowFromEntry(entry, { day: input.queueItem.day })
   const sp = directSpecSourcePath(d, gv)
   _mkdirSync(dirname(sp), { recursive: true })
   writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))

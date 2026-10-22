@@ -726,7 +726,7 @@ export function planRun({
       else held.push({ day: item.day, slug: item.slug, code: v.code, why: v.why })
     }
     for (const h of held.slice(directHeld.length)) {
-      if (!h.directSpec && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE') continue
+      if (!h.directSpec && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE' && h.code !== 'G8_ROW_NOT_DIRECT') continue
       const e = h.directSpec
       log(`  ⏸ ${h.code} — ${h.slug} (재사용)${e ? ` · expected ${e.expectedGraphVersion ?? '-'} · observed ${e.observedGraphVersion ?? '-'} · blockers ${e.blockers.join(',') || '-'}` : ''}`)
     }
@@ -750,6 +750,8 @@ export function planRun({
         ...(i.directSpecMode ? { directSpecMode: i.directSpecMode } : {}),
         ...(i.intentId ? { intentId: i.intentId } : {}),
         ...(i.g8ManifestHash ? { g8ManifestHash: i.g8ManifestHash } : {}),
+        // 🔴 G8 행은 두 해시를 같이 운반한다 — 하나만 실리면 하류 resolveMagazineAutoMode 가 G8_ROW_NOT_DIRECT 로 막는다
+        ...(i.articlePlanHash ? { articlePlanHash: i.articlePlanHash } : {}),
         ...(directReady.has(i.slug) ? { directSpec: directSpecRow(directReady.get(i.slug), directPersisted.get(i.slug)) } : {}),
         // 🔴 호환 필드 — 자동 진행을 가르지 않는다
         needsFullReview: false,

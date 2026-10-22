@@ -873,9 +873,10 @@ export function insertQueueRows(src, rows) {
 }
 
 /**
- * 🔴 **(G8 v1 큐 행 대조 — DIRECT source 작성이 아직 쓴다)** G8 큐 행(intentId·g8ManifestHash)마다 장부 ADMITTED 사건이 있고,
+ * 🔴 **(G8 v1 큐 행 대조 — 운영 소비자 없음 · 2026-10-22 PR C)** G8 큐 행(intentId·g8ManifestHash)마다 장부 ADMITTED 사건이 있고,
  *    장부 사건마다 큐 행이 있거나 **등록된 글**이어야 한다. 영구 slug 표가 그 짝을 묶고 있어야 한다.
- *    G8 v2 의 receipt 일치 판정은 `verifyAdmissions` 다 — 이 함수의 의미는 ArticlePlan 단계(PR C)에서 바뀐다.
+ *    v2 에서는 admission 이 큐보다 먼저 오므로 「장부에 있는데 큐에 없음」이 정상이다 — ArticlePlan(authoring)은 이 함수 대신
+ *    `verifyAdmissions` + slug 하나의 receipt ∧ binding ∧ ledger 대조(`readAdmission`)를 쓴다. 남은 호출은 G8 검사의 v1 반례뿐이다.
  */
 export function verifyConsistency({ queueSource, articlesSource = null, ledgerSource, slugManifestSource, journalPresent = false }) {
   const problems = []

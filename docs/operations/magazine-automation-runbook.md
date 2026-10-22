@@ -49,6 +49,15 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
 - 서로 다른 DIRECT 계획 2건과 rollback 증거 전에는 legacy를 격리 보존한다. 증거 뒤에는 daily brief/review,
   direct 대상 input-repair, mixed selected/reusable, 행별 mode 분기와 그 전용 검사를 활성 경로에서 제거한다.
 - 일정과 완료 게이트는 `magazine/MAGAZINE-CURRENT-MILESTONE.md`를 따른다.
+- **ArticlePlan (2026-10-22 · PR C)** — G8은 연구 admission(receipt · slug manifest · ledger)만 기록하고 큐를 쓰지 않는다.
+  큐 행은 사람이 승인한 source/2 entry에서만 만든다. 세 단계를 섞지 않는다.
+  - `magazine-direct-spec-source-authoring.mjs prepare` — 읽기 전용. 큐 행 없이 admission과 현재 제품 graph를 대조해
+    DRAFT 후보를 낸다. 관계는 receipt edge로 고정한다.
+  - `approve` — 사람 승인자만 받는다. 승인 직전에 admission·graph를 다시 대조하고, plan을 topic-queue union으로 검증한 뒤
+    `drafts/magazine/article-spec-source/<graphVersion>.json`에 entry 하나를 더한다.
+  - `materialize` — 승인 entry 하나로 큐 writer lock 안에서 `max(day)+1` 행을 넣고, 같은 parser로 다시 읽어 대조한다.
+  - 소비 쪽 fail-closed: G8 해시(`g8ManifestHash` · `articlePlanHash`) 중 하나라도 있는 행은 둘 다 있고 `DIRECT_SPEC_V1`이어야 한다
+    (`G8_ROW_NOT_DIRECT`). plan 복제 필드를 손으로 고치면 `SOURCE_QUEUE_DRIFT`다.
 
 ### 0.0 자동 병합이 확인하는 것
 
