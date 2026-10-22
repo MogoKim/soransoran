@@ -32,7 +32,8 @@ import { RELATION_POLICY } from './magazine-relation-policy.mjs'
 import { evalLiteral, parseArticlesSource, sliceLiteral } from './magazine-load.mjs'
 
 export const BUILD_SCHEMA = 'mgraph-build/1'
-export const READINESS_SCHEMA = 'mgraph-readiness/1'
+/** 🔴 /2 — readiness 가 기대는 입력 전부를 `inputs` 에 싣는다(graph semanticHash 만으로는 control · articles · admission · 시각이 빠진다) */
+export const READINESS_SCHEMA = 'mgraph-readiness/2'
 
 /** 연구 입력 다섯 파일 — 이름이 곧 계약이다. 하나라도 없으면 build 하지 않는다 */
 export const INPUT_FILES = Object.freeze({
@@ -764,13 +765,20 @@ export function semanticHashOf(slim) {
   return sha16(JSON.stringify(rest))
 }
 
+/** readiness 의미 해시 — 키를 정렬한 canonical JSON. 직렬화 공백과 무관하다 */
+export const readinessHashOf = (report) => sha256(stableJson(report))
+/** readiness.json 의 실제 바이트 — 파일 해시는 이 바이트로만 센다 */
+export const serializeReadiness = (report) => prettyStable(report)
+
 /**
- * 전체 build — 순수 함수. 파일 시스템 · 벽시계를 쓰지 않는다.
- * @returns {{ graphVersion, files: Record<string,string>, manifest, slim, layers, readiness }}
+ * graph 와 readiness 의 **유일한 계산 경로** — 순수 함수. generatedAt · 벽시계 · 파일 시스템을 읽지 않는다.
+ *    buildAll 과 (다음 단계의) G8 이 같은 이 함수를 부른다. 두 번째 계산 구현을 만들지 않는다.
+ *    slim 은 generatedAt 자리를 null 로 비워 둔다 — 키 순서가 bundle 과 같아야 graphSemanticHash 가 같다.
+ * @returns {{ layers, contentHash, graphVersion, graphSemanticHash, readiness, readinessHash, readinessFileSha256, parts }}
+ *   parts — buildAll 이 파일을 조립할 재료(직렬화된 jsonl · slim · 입력 해시). 계산은 여기서 끝났다
  */
-export function buildAll({ inputTexts, productTexts, admissionTexts = null, effectiveAt, generatedAt }) {
+export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt }) {
   const eff = parseEffectiveAt(effectiveAt)
-  const gen = parseGeneratedAt(generatedAt)
   const inputs = parseInputTexts(inputTexts)
   const product = parseProductTexts(productTexts)
   // 🔴 snapshot ↔ 제품 lifecycle — layer · 직렬화 · 해시 · 쓰기 전에
@@ -792,13 +800,44 @@ export function buildAll({ inputTexts, productTexts, admissionTexts = null, effe
     ? { intents: hI, edges: hE, mappings: hM, combined }
     : { intents: hI, edges: hE, mappings: hM, participation: hP, combined }
 
-  const slim = slimGraph({ graphVersion, contentHash, generatedAt: gen, ...layers })
-  const problems = exportProblems(slim, product.implemented)
+  const slimCore = slimGraph({ graphVersion, contentHash, generatedAt: null, ...layers })
+  const problems = exportProblems(slimCore, product.implemented)
   if (problems.length) fail('EXPORT_SELF_CHECK_FAILED', problems.join(' | '))
-  const bundle = bundleText(slim)
-  const semanticHash = semanticHashOf(slim)
+  const graphSemanticHash = semanticHashOf(slimCore)
 
-  const readiness = buildReadiness({ layers, product, admission: parseAdmissionTexts(admissionTexts), effective: eff, graphVersion, semanticHash })
+  const admission = parseAdmissionTexts(admissionTexts)
+  const productHashes = Object.fromEntries(Object.entries(PRODUCT_FILES).map(([k, rel]) => [k, product.hashes[rel]]))
+  const readinessInputs = { graphVersion, graphCombined: combined, graphSemanticHash, productHashes,
+    admissionHashes: admission ? admission.hashes : 'UNREAD', effectiveAt: eff.text }
+  const readiness = buildReadiness({ layers, product, admission, effective: eff, graphVersion, inputs: readinessInputs })
+
+  return {
+    layers, contentHash, graphVersion, graphSemanticHash,
+    readiness: readiness.report,
+    readinessHash: readinessHashOf(readiness.report),
+    readinessFileSha256: sha256(serializeReadiness(readiness.report)),
+    parts: { eff, inputHashes: inputs.hashes, product, admissionHashes: readiness.admissionHashes, slimCore,
+      texts: { intents: sIntents, edges: sEdges, mappings: sMap, participation: sPart } },
+  }
+}
+
+/**
+ * 전체 build — 순수 함수. 파일 시스템 · 벽시계를 쓰지 않는다.
+ *    계산은 computeGraphAndReadiness 하나뿐이다. 여기서는 generatedAt 으로 slim · bundle · manifest · 파일 목록만 조립한다.
+ * @returns {{ graphVersion, files: Record<string,string>, manifest, slim, layers, readiness }}
+ */
+export function buildAll({ inputTexts, productTexts, admissionTexts = null, effectiveAt, generatedAt }) {
+  // 🔴 시각 형식은 입력보다 먼저 본다 — 둘 다 틀렸을 때의 실패 코드가 앞판과 같다
+  parseEffectiveAt(effectiveAt)
+  const gen = parseGeneratedAt(generatedAt)
+  const core = computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts, effectiveAt })
+  const { layers, contentHash, graphVersion } = core
+  const { eff, inputHashes, product, admissionHashes, slimCore, texts } = core.parts
+  // 🔴 generatedAt 자리(null)만 채운다 — 키 순서가 그대로라 bundle 바이트가 앞판과 같다
+  const slim = { ...slimCore, generatedAt: gen }
+  const bundle = bundleText(slim)
+  const semanticHash = core.graphSemanticHash
+  const sIntents = texts.intents, sEdges = texts.edges, sMap = texts.mappings, sPart = texts.participation
 
   const manifest = {
     schemaVersion: BUILD_SCHEMA,
@@ -812,9 +851,9 @@ export function buildAll({ inputTexts, productTexts, admissionTexts = null, effe
     autoGeneratedBacklinks: layers.autoBacklinks,
     registeredInProduct: layers.registeredInProduct,
     implementedSurfaces: [...product.implemented],
-    inputHashes: inputs.hashes,
+    inputHashes,
     productHashes: product.hashes,
-    admissionHashes: readiness.admissionHashes,
+    admissionHashes,
     promote: 'NOT_PERFORMED — build 는 current.ts · control.ts 를 쓰지 않는다',
   }
   const files = {
@@ -823,10 +862,10 @@ export function buildAll({ inputTexts, productTexts, admissionTexts = null, effe
     'mappings.jsonl': sMap,
     ...(sPart === null ? {} : { 'participation.jsonl': sPart }),
     [`bundle/${graphVersion}.ts`]: bundle.text,
-    'readiness.json': prettyStable(readiness.report),
+    'readiness.json': serializeReadiness(core.readiness),
     'manifest.json': prettyStable(manifest),
   }
-  return { graphVersion, files, manifest, slim, layers, readiness: readiness.report }
+  return { graphVersion, files, manifest, slim, layers, readiness: core.readiness }
 }
 
 // ── readiness ──
@@ -860,7 +899,7 @@ export function parseAdmissionTexts(texts) {
  *    도착 intent 의 공개 slug 가 정확히 하나 · 자기 자신·중복 아님 · discovery 는 BRIDGE.
  *  출발 cluster 가 꺼져 있거나 control 이 꺼져 있으면 count 는 0 이고 blocker 가 붙는다.
  */
-export function buildReadiness({ layers, product, admission, effective, graphVersion, semanticHash }) {
+export function buildReadiness({ layers, product, admission, effective, graphVersion, inputs }) {
   const nowMs = effective.ms
   const articles = new Map(product.articles.map((a) => [a.slug, a]))
   const control = product.control
@@ -987,7 +1026,8 @@ export function buildReadiness({ layers, product, admission, effective, graphVer
     schemaVersion: READINESS_SCHEMA,
     derived: true,
     note: '🔴 파생 보고서다. 손으로 고치지 않는다 — 같은 입력으로 다시 build 하면 같은 바이트가 나온다',
-    graphVersion, semanticHash, effectiveAt: effective.text,
+    graphVersion, effectiveAt: effective.text,
+    inputs,
     policy: READINESS_POLICY,
     totals: {
       intents: layers.intents.length, registered: registeredCount, unregistered: layers.intents.length - registeredCount,

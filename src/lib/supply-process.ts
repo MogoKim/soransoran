@@ -229,7 +229,7 @@ export function hasWork(p: Pending): boolean {
 /**
  * 🔴 **유료 생성 수요 = 다가오는 슬롯 − 그 슬롯들에 eligible 로 남을 READY.**
  *
- *    다가오는 슬롯 = 가까운 수요 지평(`upcomingSlots` · 2026-10-11 Batch A2) — 오늘 남은 공개 단계 슬롯 +
+ *    다가오는 슬롯 = 가까운 수요 지평(`upcomingSlots` · 2026-10-11 Batch A2) — 오늘 발행기가 회수할 수 있는 기회 +
  *    다음 첫 공개 기회 한 칸. 증명일 전체 슬롯은 공급 수요가 아니다(그 감당은 controller preflight 가 본다).
  *    READY 가 그 슬롯에 eligible 로 남는가는 정본 `judgeSlotRelease` 가 **그 슬롯 시각에** 본다 —
  *    Persona 는 그 슬롯에 실제로 풀리는 것만 센다(`readyOpportunitiesOf` · `matchOpportunitiesToSlots`).

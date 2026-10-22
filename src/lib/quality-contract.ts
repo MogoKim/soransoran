@@ -43,6 +43,7 @@ import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
 import {
   DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+  SEMANTIC_DEFECT_SUCCESSION_VERSION,
 } from './auto-ready-defect-resolution'
 import {
   SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
@@ -171,6 +172,9 @@ import {
  * auto-READY와 규칙 감사가 `확실히`·`방금`·`논란`과 같은 단어로 Content Core ADOPT를
  * 다시 뒤집지 않는다. 구조 오류·검수 미완료·holds 불일치·생활사 모순·안전·복제·
  * 자료 의존·시점 왜곡은 Content Core의 구조화 차단으로 계속 막는다.
+ * 배포 전 보정: 의미 감사 계약·모델·프롬프트와 글·원문·Persona·도장 결속이 모두 같으면,
+ * 직전 계약의 공식 semanticCleared를 provider 재호출 없이 새 계약 기록으로 승계한다.
+ * 결속이나 감사 판이 하나라도 다르면 승계하지 않고 기존 의미 재감사를 그대로 요구한다.
  */
 export const QUALITY_CONTRACT_VERSION = 'quality-v18'
 
@@ -225,6 +229,7 @@ export function qualityContractComponents(): Record<string, unknown> {
     defectResolution: {
       recordVersion: DEFECT_RESOLUTION_RECORD_VERSION,
       semanticRecordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+      semanticSuccessionVersion: SEMANTIC_DEFECT_SUCCESSION_VERSION,
       key: DEFECT_RESOLUTION_KEY,
     },
   }

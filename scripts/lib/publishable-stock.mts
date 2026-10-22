@@ -33,6 +33,9 @@ import { kstDateString } from '../../src/lib/release-canary'
 import { availablePersonasAt } from '../../src/lib/supply-capacity-forecast'
 import { draftSpeakerOf } from '../../src/lib/content-core/speaker-load-file'
 import { releaseCapsOf, kstMidnight, type ScaleProfile } from '../../src/lib/scale-profile'
+import {
+  HEARTBEAT_INTERVAL_MINUTES, PER_RUN_MAX, PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE,
+} from '../../src/lib/publish-slot-catchup'
 // 🔴 `installFromEnv` 를 쓰지 않는다 — 그것은 module-global 을 바꾼다(아래 주석)
 import { resolveScale } from '../../src/lib/scale-runtime'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
@@ -387,11 +390,12 @@ export function readyOpportunitiesOf(loaded: LoadedStock, opts: {
 }
 
 /**
- * 🔴 **가까운 수요 지평** (2026-10-11 Batch A2) — 지금 공개 단계(release)의 **오늘 남은 안전 슬롯** +
+ * 🔴 **가까운 수요 지평** (2026-10-11 Batch A2 · 2026-10-21 catch-up 정렬) —
+ *    발행 heartbeat 가 오늘 운영 창 안에서 실제로 낼 수 있는 가장 이른 기회 +
  *    **다음 실제 발행 기회 하나**(다음 운영일 release 첫 슬롯).
- *    · 오늘 이미 낸 편수만큼 앞 슬롯은 소비됐다 — 남은 슬롯은 지금 뒤의 슬롯 중 목표 − 낸 수만큼이다.
- *    · 열린 d10 증명일이면 release 가 d10 이다 — 그날 남은 d10 슬롯이 그대로 든다.
- *    · 오늘 슬롯이 끝났으면 다음 첫 기회 하나만 남는다.
+ *    · 정규 슬롯을 놓쳤어도 발행기의 `도래 슬롯 − 오늘 발행 수` backlog 가 남아 있으면 다음 heartbeat 를 센다.
+ *    · 앞으로 도래할 정규 슬롯도 같은 시뮬레이션에 자연스럽게 포함한다.
+ *    · 22:00 뒤에는 오늘 부족분을 되살리지 않고 다음 첫 기회 하나만 남긴다.
  * 🔴 **지운 길** — "오늘 남은 release 슬롯 + 내일 capacity(다음에 증명할 단계) 전체 슬롯".
  *    d5 를 내며 d10 을 준비하는 날, 오늘 d5 슬롯이 내일 d10 10칸을 끌어와 수요를 15 로 부풀렸다.
  *    다음 단계 증명일 전체를 감당하는가는 controller preflight(`judgeNextPreflight` · 증명일 전체 슬롯)가 따로 본다 —
@@ -400,12 +404,31 @@ export function readyOpportunitiesOf(loaded: LoadedStock, opts: {
 export function upcomingSlots(input: {
   now: Date; publishedToday: number; release: ScaleProfile
 }): Date[] {
-  const today = kstDateString(input.now)
   const tomorrow = kstDateString(new Date(kstMidnight(input.now).getTime() + 86_400_000))
-  const remain = Math.max(0, input.release.dailyTarget - input.publishedToday)
-  const todayLeft = slotTimesOn(today, input.release).filter((d) => d.getTime() >= input.now.getTime())
+  const dayStart = kstMidnight(input.now)
+  const nowMinute = Math.floor((input.now.getTime() - dayStart.getTime()) / 60_000)
+  const firstHeartbeat = Math.max(
+    PUBLISH_WINDOW_START_MINUTE,
+    Math.ceil(nowMinute / HEARTBEAT_INTERVAL_MINUTES) * HEARTBEAT_INTERVAL_MINUTES,
+  )
+  let simulatedPublished = Math.min(input.release.dailyTarget, Math.max(0, input.publishedToday))
+  const todayOpportunities: Date[] = []
+
+  for (let minute = firstHeartbeat;
+    minute <= PUBLISH_WINDOW_END_MINUTE && simulatedPublished < input.release.dailyTarget;
+    minute += HEARTBEAT_INTERVAL_MINUTES) {
+    const due = input.release.slots
+      .filter((slot) => slot.hour * 60 + slot.minute <= minute)
+      .reduce((count, slot) => count + slot.count, 0)
+    const allowed = Math.min(PER_RUN_MAX, due - simulatedPublished)
+    if (allowed <= 0) continue
+    const at = new Date(dayStart.getTime() + minute * 60_000)
+    for (let i = 0; i < allowed; i += 1) todayOpportunities.push(at)
+    simulatedPublished += allowed
+  }
+
   const next = slotTimesOn(tomorrow, input.release).slice(0, 1)
-  return [...todayLeft.slice(Math.max(0, todayLeft.length - remain)), ...next]
+  return [...todayOpportunities, ...next]
 }
 
 /**

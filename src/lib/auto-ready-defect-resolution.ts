@@ -38,6 +38,11 @@ export const DEFECT_RESOLUTION_KEY = 'autoReadyDefectResolutions'
 export const DEFECT_RESOLUTION_RECORD_VERSION = 'defect-resolution-v1'
 /** 의미 감사의 측정된 no로만 쓰는 별도 기록 판 — 기존 초안 게이트 해소 기록과 섞지 않는다. */
 export const SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION = 'defect-resolution-semantic-v1'
+/**
+ * 같은 의미 감사 계약·모델·프롬프트와 같은 글·원문·Persona·도장 결속에서 이미 측정한 no만
+ * 다음 품질 계약의 append-only 기록으로 승계한다. 품질 계약 digest 구성에 들어간다.
+ */
+export const SEMANTIC_DEFECT_SUCCESSION_VERSION = 'semantic-clear-carry-v1'
 /** 🔴 기록한 쪽 — 사람이 아니다. 재검증을 돌린 저장 경계다 */
 export const DEFECT_RESOLVER = 'system:defect-resolution'
 

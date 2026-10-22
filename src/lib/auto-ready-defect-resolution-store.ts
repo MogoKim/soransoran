@@ -19,7 +19,8 @@ import { Prisma, type PrismaClient } from '@prisma/client'
 import { digestOf } from './auto-ready-v2'
 import {
   DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, DEFECT_RESOLVER, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
-  auditFingerprintOf, judgeDefectResolution, resolvableDefectProblem, resolutionEntriesOf, reverifyInputDigestOf,
+  auditFingerprintOf, judgeDefectResolution, readResolutionRecord,
+  resolvableDefectProblem, resolutionEntriesOf, reverifyInputDigestOf,
   type AuditRowForResolution, type DefectResolutionRecord, type QueueRowForResolution,
 } from './auto-ready-defect-resolution'
 import { DRAFT_GATE_VERSION, judgeDraftLife, type DraftGateCard, type DraftGatePlan, type DraftGateSource } from './content-core/draft-life-gates'
@@ -72,6 +73,7 @@ export type ApplyOutcome =
 const SERIALIZABLE = { isolationLevel: 'Serializable' as const, maxWait: 5_000, timeout: 20_000 }
 const rec = (v: unknown): Record<string, unknown> =>
   (v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+const HEX64 = /^[0-9a-f]{64}$/
 
 /** 🔴 평가 — 읽기만 한다. 계획과 적용이 같은 함수를 부른다 */
 async function evaluateInTx(tx: Tx, i: { queueId: string; contextOf: ContextLoader; now: Date }): Promise<Evaluation & { updatedAt?: Date }> {
@@ -245,6 +247,52 @@ export async function planSemanticDefectResolution(prisma: PrismaClient, i: {
   })
   if (base.kind !== 'base') return base
   const context = await i.loadContext({ queueId: base.base.audit.queueId, postId: base.base.audit.postId })
+  if (!context.ok) {
+    return { kind: 'refuse', code: context.code, reason: context.reason }
+  }
+  const binding = semanticBindingOf(context.ctx)
+  const contract = currentQualityContract()
+  const auditFingerprint = auditFingerprintOf(base.base.audit)
+  const titleHash = digestOf(base.base.queue.draftTitle)
+  const bodyHash = digestOf(base.base.queue.draftBody)
+  const reusable = resolutionEntriesOf(base.base.queue.editDiff)
+    .map(readResolutionRecord)
+    .filter((r): r is DefectResolutionRecord => r !== null)
+    .find((r) => r.recordVersion === SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION
+      && r.resolvedBy === DEFECT_RESOLVER
+      && r.audit.queueId === base.base.audit.queueId && r.audit.postId === base.base.audit.postId
+      && r.audit.fingerprint === auditFingerprint
+      && r.draft.titleHash === titleHash && r.draft.bodyHash === bodyHash
+      && r.reverify.outcome === 'semanticCleared'
+      && r.reverify.failureCodes.length === 0 && r.reverify.reviewCodes.length === 0
+      && r.reverify.semanticContractVersion === SEMANTIC_AUDIT_CONTRACT_VERSION
+      && r.reverify.semanticModel === SEMANTIC_AUDIT_MODEL
+      && r.reverify.semanticPromptVersion === SEMANTIC_AUDIT_PROMPT_VERSION
+      && r.reverify.inputDigest === binding.digest && r.reverify.artifactId === binding.artifactId
+      && HEX64.test(r.qualityContract.digest)
+      && (r.qualityContract.version !== contract.version || r.qualityContract.digest !== contract.digest))
+  if (reusable !== undefined) {
+    const record: DefectResolutionRecord = {
+      recordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+      qualityContract: contract,
+      audit: { queueId: base.base.audit.queueId, postId: base.base.audit.postId, fingerprint: auditFingerprint },
+      draft: { titleHash, bodyHash },
+      reverify: {
+        gateVersion: 'semantic-only', outcome: 'semanticCleared', failureCodes: [], reviewCodes: [],
+        inputDigest: binding.digest, artifactId: binding.artifactId,
+        semanticContractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, semanticModel: SEMANTIC_AUDIT_MODEL,
+        semanticPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
+      },
+      resolvedAt: i.now.toISOString(), resolvedBy: DEFECT_RESOLVER,
+    }
+    return {
+      kind: 'plan',
+      plan: {
+        queueId: base.base.audit.queueId, postId: base.base.audit.postId,
+        auditFingerprint, queueUpdatedAt: base.base.queueUpdatedAt.toISOString(), record,
+      },
+    }
+  }
   const semantic = await judgeSemantic(context, i.provider)
   if (semantic.outcome !== 'measured' || semantic.defect !== 'no' || semantic.binding === null) {
     return {
