@@ -164,7 +164,7 @@ console.log('\n② 재생 — 고치기 전 근거 묶음(evidence-v1)과 고친
 console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안전한 창작만 허용한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 초안 프롬프트 판 = v2-draft-p13', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p13' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p13'))
+  check('🔴 초안 프롬프트 판 = v2-draft-p14', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p14' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p14'))
   for (const id of ['A', 'B', 'C']) {
     const c = CASE(id); const packet = packetOf(c); const plan = planOf(c)
     const keep = sourceKeepOf(plan, packet)
@@ -199,13 +199,16 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
   check('🔴 고위험 사실과 제3자 사건·결과는 계속 금지한다',
     sys.includes('배우자 · 자녀 · 부모 · 건강 · 치료 · 돈')
     && sys.includes('제3자의 사건 · 날짜 · 직접 대사 · 결과'))
+  check('🔴 원문에 없는 시간대·상대 시점과 전언 경로를 만들지 않는다',
+    sys.includes('새벽 · 아침 · 퇴근길 · 방금 · 어제')
+    && sys.includes('새 전달자의 일로 바꾸지 않습니다'))
 }
 
 // ─────────────────────────────────────────────────────────
 console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 검수 판 review-v7 · 검수 프롬프트 p9', V2_REVIEW_PROMPT_VERSION === 'v2-review-p9' && REVIEW_VERSION === 'review-v7')
+  check('🔴 검수 판 review-v8 · 검수 프롬프트 p10', V2_REVIEW_PROMPT_VERSION === 'v2-review-p10' && REVIEW_VERSION === 'review-v8')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
@@ -219,6 +222,9 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
     reviewSys.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
   check('🔴 검수는 고위험 생활사와 제3자 사건·결과를 계속 적는다',
     reviewSys.includes('구체적 고위험 생활사') && reviewSys.includes('제3자의 사건 · 행동 · 날짜 · 기간 · 결과'))
+  check('🔴 검수는 없는 시점과 새 전달자를 위험 허구로 적는다',
+    reviewSys.includes('시간대·상대 시점도 여기 적는다')
+    && reviewSys.includes('새 전달자의 일로 바꾸는 것도 여기 적는다'))
   check('🔴 🔴 검수 지시문에 가족 사실 줄이 전부 들어 있다(자녀 수 · 성별 · 나이대 · 남의 자녀 제외)',
     REVIEW_FAMILY_SPECIFICS_LINES.every((l) => reviewSys.split('\n').includes(l)) && reviewSys.includes('자녀 성별 칸이 없다'))
   check('🔴 검수 지시문은 [보존] 을 모른다 — 생성 입력만 바뀌었다', !reviewSys.includes('그대로쓸말') && !reviewSys.includes('원문의물음'))
@@ -242,9 +248,19 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
       semantic: { ...parsed, droppedFromSource: dropped, unsupportedAdditions: added },
       semanticCompletion: { complete: true, reason: null, cause: null },
     })
-    check(`${id}: 기계 결론 그대로 — 경고는 사람에게 넘기고 voice 축은 막는다 (${j.outcome})`,
-      j.outcome === (k.review.issues.length > 0 ? 'hold' : 'adopt') && j.warnings.length === Number(dropped.length > 0) + Number(added.length > 0))
+    const binding = k.review.issues.length > 0 || dropped.length > 0 || added.length > 0
+    check(`${id}: 기계 결론 — 위험 허구·핵심 손실·voice 결함은 HOLD (${j.outcome})`,
+      j.outcome === (binding ? 'hold' : 'adopt') && j.warnings.length === Number(dropped.length > 0) + Number(added.length > 0))
   }
+  const safe = judgeMachine({
+    deterministic: { pass: true, failures: [] },
+    semantic: {
+      issues: [], unknownIssues: [], droppedFromSource: [], unsupportedAdditions: [], lifeContradictions: [],
+      confidence: 0.9, note: '감상·질문·비유·일반 관찰은 finding이 아니다',
+    },
+    semanticCompletion: { complete: true, reason: null, cause: null },
+  })
+  check('🟢 안전한 창작은 finding 0이며 자동 ADOPT다', safe.outcome === 'adopt' && safe.warnings.length === 0)
 }
 
 // ─────────────────────────────────────────────────────────

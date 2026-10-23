@@ -176,7 +176,14 @@ import {
  * 직전 계약의 공식 semanticCleared를 provider 재호출 없이 새 계약 기록으로 승계한다.
  * 결속이나 감사 판이 하나라도 다르면 승계하지 않고 기존 의미 재감사를 그대로 요구한다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v18'
+/**
+ * `quality-v19` (2026-10-23) = **bounded creativity와 차단 finding의 의미를 다시 하나로 묶는다.**
+ * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
+ * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
+ * 뜻하며 Content Core에서 HOLD한다. 원문에 없는 시간대·상대 시점과 새 전달자·전언 경로도
+ * 위험 허구로 명시한다. auto-READY의 옛 비차단 예외를 제거해 같은 구조화 결론을 다시 뒤집지 않는다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v19'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

@@ -486,12 +486,11 @@ async function main(): Promise<void> {
     await drop(K.queueId)
   }
 
-  console.log('\n⑧ 🔴 의미 경고 초안(17:15 artifact 3dd770e2 모양) · 자녀 수 생활사 모순 — 최종 pick · 적재 · READY 도장 · 발행 재검증')
+  console.log('\n⑧ 🔴 의미 finding 초안 · 자녀 수 생활사 모순 — 최종 pick · 적재 · READY 도장 재검증')
   {
     /**
-     * 🔴 artifact `machineOutcome=adopt` 는 경고 근거를 보존하면서 후보로 채택한다는 기계 결론이다(`judgeMachine`).
-     *    최종 정본은 pick · 후보 봉투다. 경고는 적재 때 `holds` 로 실리고, 도장과 발행 트랜잭션은
-     *    같은 `eligibilityOf` 로 안전 차단과 경고 전용 축을 구분한다.
+     * 🔴 위험 허구·핵심 손실 finding은 `judgeMachine`에서 HOLD다. 방어적 적재 반례가
+     *    `holds`로 들어오더라도 도장과 발행 트랜잭션은 같은 `eligibilityOf`로 다시 차단한다.
      */
     const NOW = new Date()
     const ok = { complete: true, reason: null, cause: null } as const
@@ -507,7 +506,7 @@ async function main(): Promise<void> {
     }
     const jw = judgeMachine({ deterministic: det, semantic: warnSem, semanticCompletion: ok })
     const jk = judgeMachine({ deterministic: det, semantic: kidSem, semanticCompletion: ok })
-    check('표현 확인 — 경고 전용 축만 있으면 기계 결론은 adopt + 경고 2줄(판정 누락 아님)', jw.outcome === 'adopt' && jw.warnings.length === 2, JSON.stringify(jw))
+    check('표현 확인 — 위험 허구·핵심 손실 finding은 기계 HOLD + 근거 2줄', jw.outcome === 'hold' && jw.warnings.length === 2, JSON.stringify(jw))
     check('🔴 🔴 **자녀 수 생활사 모순 → 기계 결론 hold**', jk.outcome === 'hold' && /children/.test(jk.reason), JSON.stringify(jk))
     const cand = (id: string) => ({ sourceArticleId: id, draftNo: 1, title: '평범한 하루', body: '아침에 산책을 다녀왔어요. 다들 어떻게 지내세요?',
       safetyVerdict: 'pass', originality: { runWords: 3, runChars: 8, coverRatio: 0 }, generatedAt: NOW.toISOString() })
@@ -518,7 +517,7 @@ async function main(): Promise<void> {
     }, NOW.toISOString())
     const pw = pick('W1', jw)
     const pk = pick('K1', jk)
-    check('최종 pick — 경고 전용 초안은 AUTO_ADOPT 후보', pw.decision === 'AUTO_ADOPT', JSON.stringify(pw))
+    check('최종 pick — 위험 허구·핵심 손실 초안은 AUTO_HOLD', pw.decision === 'AUTO_HOLD' && pw.reason === 'semanticHold', JSON.stringify(pw))
     check('🔴 🔴 **최종 pick — 자녀 수 모순은 AUTO_HOLD semanticHold (후보 봉투 · 적재 0)**', pk.decision === 'AUTO_HOLD' && pk.reason === 'semanticHold', JSON.stringify(pk))
 
     // ── 실제 적재기 → 격리 DB 큐 행 → 실제 도장 ──
@@ -561,13 +560,13 @@ async function main(): Promise<void> {
       W.holds.includes(`${SEMANTIC_HOLD_CODES.droppedFromSource}:2`) && W.holds.includes(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:1`), W.holds.join(','))
     const wRow = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })
     const ev = eligibilityOf({ gateVerdict: wRow.gateVerdict, gateResults: wRow.gateResults, title: wRow.draftTitle, body: wRow.draftBody })
-    check('🔴 🔴 **자동 READY 적격 — 경고 전용 행은 통과(도장 · 발행 트랜잭션이 같은 판정을 쓴다)**', ev.auto, ev.reasons.join(' · '))
+    check('🔴 🔴 **자동 READY 적격 — finding 행은 방어적으로 차단**', !ev.auto, ev.reasons.join(' · '))
     const on = { SORAN_AUTO_READY_ENABLED: 'on' } as const
     const sc = await stampAutoReady(prisma, { queueId: C.id, env: on, now: NOW })
     const sw = await stampAutoReady(prisma, { queueId: W.id, env: on, now: NOW })
     check('대조 — 같은 자리 · 경고 없는 행도 도장된다', sc.kind === 'stamped', JSON.stringify(sc))
-    check('🔴 🔴 **실제 도장 — 경고 전용 행도 stamped · 자동 READY 대상**', sw.kind === 'stamped'
-      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })).decidedBy === AUTO_DECIDER, JSON.stringify(sw))
+    check('🔴 🔴 **실제 도장 — finding 행은 exception · 자동 READY write 0**', sw.kind === 'exception'
+      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })).decidedBy !== AUTO_DECIDER, JSON.stringify(sw))
   }
 
   tree.cleanup()

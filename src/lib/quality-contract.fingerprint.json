@@ -1,22 +1,22 @@
 {
-  "version": "quality-v18",
-  "digest": "1e39441b94344ebbead1d74a360673182591954d25b6775f9e0dc096dcee92c6",
+  "version": "quality-v19",
+  "digest": "eb4baa482ca8d7717d0201dcefa9bad6ea72a679c1f9437b8d3d3d16ddbff116",
   "files": {
-    "src/lib/quality-contract.ts": "8b7d08853b9053c24b65913d492a908bee9e5a585ce95bfe9871a97d83704476",
+    "src/lib/quality-contract.ts": "a3c47d4bc50b850addc2baa96fba6c15c2e843006ce9e78ecec6ac536abecab0",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
     "src/lib/content-core/draft-life-gates.ts": "c1edbb1e97bfecee7185e97078be869afa08ac8f96f5f6d4d72165b2a68eb811",
-    "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
-    "src/lib/content-core/pipeline.ts": "07d84f0b858d0f2c7db827c297f17adc7f28c79718ddb5aa41510524dcd65653",
+    "src/lib/content-core/review.ts": "e471099d132741cca6ba85b8e96f66e509cf7244d7c3fd175add97c7029d67f4",
+    "src/lib/content-core/pipeline.ts": "b72ad0de12257e7e9058e0cb2cb74d23d122670e726944eb664c51ee3a31a76e",
     "src/lib/content-core/evidence.ts": "812ad028f2e95df5a05c825a1808b42ebf89877bb55e4be3e1ee3cf281180f65",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
-    "src/lib/auto-ready-v2.ts": "72e909de248a5dc080f35e9ef51c8bb140bef80d68d486962548285dee2f5094",
+    "src/lib/auto-ready-v2.ts": "ed56e52eabe6efcef8bbc2a80e1e0a78699d1bff6c05e48ac2978a0f11a2be72",
     "src/lib/supply-schedule-contract.ts": "f459df65a91d146d227faa086177573af602b93fa8a57393a79f88a2b1416f11",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
     "scripts/lib/content-core-run.mts": "bc4fbb119cd916a200cbd0a9245d1bbf7042777b07c3b480294131484c3d9800",
-    "scripts/lib/content-core-prompts.mts": "9037cc98a237c0e174581cb772d37bcb90069f4263c87ddeea2e3a1ed605a0cd",
+    "scripts/lib/content-core-prompts.mts": "08ba6616c865c4b3b12e08d82f9bb3a3b34c0c6db1303c44d49c8fd573833b5d",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -34,12 +34,14 @@
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "revise",
-    "reason": "quality-v18 digest 6e79eb6cef1a… → 1e39441b9434… · quality-v18 배포 전: 동일 semantic 감사 결속 승계",
+    "kind": "bump",
+    "reason": "판 quality-v18 → quality-v19",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/auto-ready-defect-resolution.ts",
-      "src/lib/auto-ready-defect-resolution-store.ts"
+      "src/lib/content-core/review.ts",
+      "src/lib/content-core/pipeline.ts",
+      "src/lib/auto-ready-v2.ts",
+      "scripts/lib/content-core-prompts.mts"
     ]
   }
 }
