@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { PrismaClient } from '@prisma/client'
 
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
-import { commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
+import { AUTO_COMMENT_THINKING_LEVEL, commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
 import { leaseEntry, type LeaseProof, type PassContext } from './lib/runner-lease.mjs'
 import { readCostSignals, readLedgerToday } from './lib/ops-signals.mjs'
 import { followupEligibleFor, readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
@@ -121,6 +121,7 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
           systemPrompt: prompt.prompt.systemPrompt,
           userPayload: prompt.prompt.userPayload,
           maxOutputTokens: prompt.prompt.maxOutputTokens,
+          thinkingLevel: AUTO_COMMENT_THINKING_LEVEL,
           timeoutMs: 60_000,
         })
         return judgeCommentCall(res)

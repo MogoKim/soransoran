@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
 
 import {
-  AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX, COMMENT_LOOP_BUDGET_ENV,
+  AUTO_COMMENT_THINKING_LEVEL, AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX, COMMENT_LOOP_BUDGET_ENV,
   COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX, commentLoopLimitsFromEnv, firstPerPost, isAutoLaneCandidatePost,
   judgeAutoLane, type AutoLaneFacts,
 } from '../src/lib/persona-comment-auto-lane'
@@ -86,6 +86,10 @@ const lane = (o: Partial<AutoLaneFacts>) => judgeAutoLane({ ...base, ...o })
   check('🔴 EXPIRED 행 → 막힌다', !lane({ queueStatus: 'EXPIRED' }).ok)
   check('🔴 막힐 때 사유를 전부 모은다', lane({ personaCommentsOnPost: 1, postAuthorPersonaId: 'persona-commenter' }).blockers.length === 2)
   check('🔴 정본 수 — 60분 · 글당 1건', AUTO_FIRST_COMMENT_WINDOW_MINUTES === 60 && AUTO_PERSONA_COMMENTS_PER_POST_MAX === 1)
+  check('🔴 짧은 댓글 생성은 minimal thinking — 출력 상한을 추론이 소진하지 않는다', AUTO_COMMENT_THINKING_LEVEL === 'minimal')
+  const runnerSource = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
+  check('🔴 운영 runner가 정본 thinking 값을 provider 요청에 전달한다',
+    /thinkingLevel:\s*AUTO_COMMENT_THINKING_LEVEL/.test(runnerSource))
   check('🔴 schedule 템플릿의 시한이 레인 정본과 같은 값이다', FIRST_COMMENT_MAX_MINUTES === AUTO_FIRST_COMMENT_WINDOW_MINUTES)
 }
 

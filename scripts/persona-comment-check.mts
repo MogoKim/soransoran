@@ -290,11 +290,18 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   })
   const g = (v: typeof rare) => v.gates.find((x) => x.gate === '②')?.outcome
   const offenders: string[] = []
-  if (g(rare) !== 'regenerate') offenders.push(`희귀=${g(rare)}`)
-  if (g(mid) !== 'review') offenders.push(`중간=${g(mid)}`)
+  if (g(rare) !== 'pass') offenders.push(`단일 희귀=${g(rare)}`)
+  if (g(mid) !== 'pass') offenders.push(`단일 중간=${g(mid)}`)
   if (g(common) !== 'pass') offenders.push(`흔함=${g(common)}`)
   if (offenders.length) bad('② 희귀도 3단', 'case', `🔴 ${offenders.join(' / ')}`)
-  else ok('② 희귀도 3단', 'case', '희귀 regenerate · 중간 review · 흔함 pass')
+  else ok('② 단일 주제어 겹침', 'case', '단일 희귀·중간·흔함은 대화 맥락으로 pass')
+
+  const twoRare = checkCommentCandidate({
+    personaCode: 'P05', text: '남의편 때문에 그러셨군요 속천불도 나겠어요',
+    sourceTexts: ['남의편 이야기를 읽었어요. 속천불 난다고 하네요'], frequencyLookup: rareLookup,
+  })
+  if (g(twoRare) !== 'regenerate') bad('② 희귀 조각 둘', 'case', `🔴 ${g(twoRare)}`)
+  else ok('② 희귀 조각 둘', 'case', '복수 희귀 겹침은 regenerate')
 }
 
 // ── 🔴 ② 길이 보정 (2026-09-01) ──────────────────────
@@ -307,12 +314,12 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   const two = (text: string, src: string) =>
     checkUniqueExpression(text, [src], rareLookup, 'comment')
 
-  // ① 길이 하한 미만 — 기존 개수 기준 그대로
+  // ① 길이 하한 미만 — 단일 주제어 겹침은 대화 맥락으로 통과
   const shortShared = '남의편이 그러는데'
   const short = two(`${shortShared} 저도 그래요`, `${shortShared} 참 답답해요`)
   if (short.textLength >= RARE_RATIO_MIN_LENGTH) offenders.push(`짧은 케이스가 ${short.textLength}자`)
   if (short.rareRatio !== null) offenders.push('짧은데 ratio 가 계산됐다')
-  if (short.rare > 0 && short.status !== 'regenerate') offenders.push(`짧은+rare → ${short.status}`)
+  if (short.rare === 1 && short.status !== 'pass') offenders.push(`짧은+rare 1 → ${short.status}`)
 
   // ② 🔴 원문 복붙 — 길어도 비율이 압도적이라 걸린다
   const copied =
@@ -325,7 +332,7 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
     offenders.push(`복붙 비율 ${copy.rareRatio}`)
   }
 
-  // ③ 긴 후보 + 희귀 조각 소수 → review (pass 가 아니다)
+  // ③ 긴 후보 + 희귀 조각 하나 → pass (①·④ 복제 차단은 별도)
   //    60자 이상이면서 공유 조각이 3자 하나뿐인 문장을 만든다
   const longBase =
     '어젯밤에도 비슷했는데 아침에 일어나니 몸이 무겁더라구요 그래도 오늘은 좀 낫습니다 다행이에요 정말 ' +
@@ -333,8 +340,8 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   const few = two(longBase, '한동안 그랬어요 어젯밤 이야기네요')
   if (few.textLength < RARE_RATIO_MIN_LENGTH) offenders.push(`긴 케이스가 ${few.textLength}자`)
   if (few.rareRatio === null) offenders.push('긴데 ratio 가 null')
-  if (few.rare > 0 && few.rareRatio !== null && few.rareRatio <= RARE_RATIO_REGEN && few.status !== 'review') {
-    offenders.push(`임계 아래 rare → ${few.status} (review 여야 한다)`)
+  if (few.rare === 1 && few.rareRatio !== null && few.rareRatio <= RARE_RATIO_REGEN && few.status !== 'pass') {
+    offenders.push(`임계 아래 rare 1 → ${few.status} (pass 여야 한다)`)
   }
 
   // ④ 공유 없음 → pass
