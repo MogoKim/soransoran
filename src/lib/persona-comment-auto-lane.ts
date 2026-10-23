@@ -36,6 +36,12 @@ export const AUTO_FIRST_COMMENT_WINDOW_MS = AUTO_FIRST_COMMENT_WINDOW_MINUTES * 
 export const AUTO_PERSONA_COMMENTS_PER_POST_MAX = 1
 
 /**
+ * 댓글은 짧은 본문 한 건이다. Gemini 기본 dynamic thinking이 800-token
+ * 출력 상한을 소진해 본문 없이 끝난 운영 실패를 막기 위해 최소 추론으로 고정한다.
+ */
+export const AUTO_COMMENT_THINKING_LEVEL = 'minimal' as const
+
+/**
  * 🔴 **기계 결정 표식.** 사람 승인과 구분되는 유일한 근거다 —
  *    "READY 는 status 가 아니라 decidedBy 로 센다" 는 운영 규칙과 같은 모양(`machine:` 접두)이다.
  */

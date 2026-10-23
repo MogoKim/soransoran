@@ -53,9 +53,9 @@ export type UniqueExpressionVerdict = {
 /**
  * 🔴 길이 보정 하한 (2026-09-01).
  *
- * 이 길이 **미만**은 기존 기준(rare > 0 → regenerate)을 그대로 쓴다.
- * 짧은 후보에 비율을 적용하면 오히려 더 엄격해진다 —
- * 26자 후보는 rare 1개만 나와도 3.8% 라 임계를 넘는다.
+ * 이 길이 **미만**은 개수 기준을 쓴다. 댓글은 대상 글의 주제어를 한 번
+ * 되받는 것이 자연스럽기 때문에 공유 조각 하나만으로 막지 않는다.
+ * 두 조각 이상이 겹치거나 ①·④가 함께 잡을 때부터 복제 위험으로 본다.
  */
 export const RARE_RATIO_MIN_LENGTH = 60
 
@@ -121,7 +121,8 @@ export function checkUniqueExpression(
     else common++
   }
 
-  // 🔴 길이 보정 (2026-09-01). 짧은 후보는 기존 개수 기준, 긴 후보는 비율 기준이다.
+  // 🔴 길이 보정 (2026-09-01, 2026-10-23 보정).
+  //    짧은 후보는 개수 기준, 긴 후보는 비율 기준이다.
   //    긴 후보일수록 n-gram 이 많아 rare 가 우연히 걸릴 확률이 오른다 —
   //    같은 잣대를 대면 길게 쓸수록 불리해진다.
   const textLength = [...candidateText].length
@@ -130,15 +131,15 @@ export function checkUniqueExpression(
 
   let status: Gate234Status
   if (!useRatio) {
-    // 짧은 후보 — 기존 기준 그대로
-    status = rare > 0 ? 'regenerate' : mid > 0 ? 'review' : 'pass'
+    // 짧은 댓글은 대상 글의 주제어 하나를 되받을 수 있다. 둘 이상이면 막는다.
+    status = rare >= 2 ? 'regenerate' : mid >= 2 ? 'review' : 'pass'
   } else if (rareRatio !== null && rareRatio > RARE_RATIO_REGEN) {
     status = 'regenerate'
-  } else if (rare > 0 || mid > 0) {
-    // 🔴 임계 아래여도 pass 가 아니다. rare 가 있으면 사람이 본다 —
-    //    "적으니 괜찮다" 가 아니라 "적으니 사람이 판단한다" 다.
+  } else if (rare >= 2 || mid >= 2) {
+    // 여러 조각이 겹치면 ①의 20자 연속 복제 아래여도 과복제 가능성이 있다.
     status = 'review'
   } else {
+    // 단일 짧은 겹침은 대화 맥락이다. ①·④의 복제 차단은 그대로 돈다.
     status = 'pass'
   }
 
