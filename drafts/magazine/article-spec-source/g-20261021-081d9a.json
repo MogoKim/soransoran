@@ -1,0 +1,164 @@
+{
+  "schema": "magazine-article-spec-source/2",
+  "graphVersion": "g-20261021-081d9a",
+  "entries": [
+    {
+      "status": "APPROVED",
+      "approvedBy": "yanadoo",
+      "approvedAt": "2026-10-23T10:05:10+09:00",
+      "admission": {
+        "g8ManifestHash": "5c6f01d8bfc97197eb13a43dc4183f61e9c025bee07a4b59c96990e2d3d53d3f",
+        "receiptHash": "0b541c51374b802ffbbc6c9abdb23558c6b96eacf169cadbb6c56426768f1fde",
+        "graphVersion": "g-20261021-081d9a",
+        "readinessHash": "048205c24bfca0e060ee0b5887eb23455ec5b2e544cc4c2e11197c9fa33cc1fe"
+      },
+      "plan": {
+        "title": "50대에 뭘 배우면 좋을까요? 재취업과 취미 사이에서 고르는 기준",
+        "contentType": "EVERGREEN",
+        "intent": "질문",
+        "target": "40대 후반~60대 중반 여성",
+        "riskLevel": "LOW",
+        "validationProfile": "STANDARD",
+        "reviewMode": "SUMMARY_ONLY",
+        "ctaBoard": "/community/free",
+        "whyNow": "재취업을 준비하거나 혼자 보내는 시간을 바꾸고 싶지만 무엇부터 배울지 막막한 독자에게, 유행 목록 대신 목적·시간·비용·지속 가능성으로 선택하는 기준을 제공한다.",
+        "notes": "특정 자격증·학원·강좌를 추천하거나 취업·수익을 보장하지 않는다. 일·생활·취미 목적을 나누고 작은 체험 뒤 결정하도록 안내한다.",
+        "imageMode": "OPTIONAL"
+      },
+      "node": {
+        "id": "I-T6-05",
+        "intentId": "I-T6-05",
+        "slug": "age-learning",
+        "status": "APPROVED",
+        "graphVersion": "g-20261021-081d9a",
+        "readerQuestion": "50대인 지금 새로 배우고 싶은데, 재취업·생활·취미 중 내게 맞는 배움을 어떤 기준으로 골라야 할까?",
+        "scope": {
+          "include": [
+            "배우려는 목적을 재취업·생활에 필요한 기술·취미와 관계로 나누는 방법",
+            "시간·비용·이동 거리·디지털 난이도·지속 가능성으로 후보를 줄이는 기준",
+            "등록이나 장기 결제 전에 짧게 체험하고 기록해 보는 방법",
+            "일을 위한 배움과 혼자 보내는 시간을 위한 배움의 차이"
+          ],
+          "exclude": [
+            "추천 자격증·학원·강좌의 순위나 목록",
+            "자격증 취득만으로 취업이나 수입이 보장된다는 주장",
+            "개별 교육기관의 가격·합격률·취업률 비교",
+            "의료·심리 진단이나 연령을 이유로 한 능력 단정"
+          ]
+        },
+        "outline": [
+          "먼저 배우려는 이유를 일·생활·즐거움으로 나눕니다",
+          "시간·비용·이동·난이도로 선택지를 줄입니다",
+          "등록 전에 작게 체험하고 내 반응을 기록합니다",
+          "일을 위한 배움이라면 실제 채용 조건부터 확인합니다",
+          "혼자 보내는 시간을 바꾸는 배움도 충분한 선택입니다"
+        ],
+        "evidence": {
+          "factsToVerify": [
+            "정부 지원 훈련의 대상·비용·신청 조건은 작성 시점의 공식 안내와 일치하는가",
+            "자격증의 응시 조건·시험 일정·발급 기관은 공식 정보와 일치하는가",
+            "특정 배움이 취업·수입·합격을 보장한다고 표현하지 않았는가",
+            "변동 가능한 비용·기간·지원 금액을 근거 없이 확정하지 않았는가"
+          ],
+          "sourceRequirements": [
+            "직업훈련 지원과 과정 정보는 고용24 공식 자료를 우선한다",
+            "국가자격 정보는 Q-Net 또는 해당 자격의 공식 발급기관 자료를 쓴다",
+            "평생학습 과정은 국가·지방자치단체·공공 평생학습기관의 현재 자료를 우선한다",
+            "개별 학원 홍보 문구나 후기만으로 효과·취업률을 일반화하지 않는다"
+          ]
+        },
+        "safetyConstraints": [
+          "나이가 많아서 늦었다거나 특정 배움을 반드시 해야 한다고 단정하지 않는다",
+          "불안과 취업 압박을 이용해 유료 과정 등록을 재촉하지 않는다",
+          "자격증·교육과정이 취업이나 수입을 보장한다고 말하지 않는다",
+          "비용과 지원 조건은 사람마다 다를 수 있음을 분명히 한다",
+          "배우지 않기로 한 선택도 실패로 표현하지 않는다"
+        ],
+        "hubPath": "/magazine?cluster=money-work",
+        "ctaLabel": "요즘 배우고 싶은 것을 이야기해요"
+      },
+      "relations": {
+        "direct": [
+          {
+            "slug": "certificate-in-50s",
+            "source": "M-GRAPH",
+            "relationType": "DIRECT_NEXT",
+            "reason": "뭘 배울지 고르다 자격증이 의미 있는지 묻는다"
+          },
+          {
+            "slug": "rehire-where-to-start",
+            "source": "M-GRAPH",
+            "relationType": "DIRECT_NEXT",
+            "reason": "배울 것을 고른 다음에는 지금 조건으로 일을 다시 시작하려면 어디부터 알아볼지 묻게 된다"
+          }
+        ],
+        "discovery": {
+          "slug": "alone-pastime",
+          "source": "M-GRAPH",
+          "relationType": "BRIDGE_DISCOVERY",
+          "reason": "배우는 이야기가 혼자 보내는 시간으로 이어진다"
+        }
+      },
+      "hero": {
+        "alt": "식탁에서 노트북과 수첩을 펼쳐 두고 배울 것을 정리하는 50대 한국 여성",
+        "scene": "자연광이 드는 집 식탁에서 50대 한국 여성이 수첩에 일·생활·취미 세 항목을 적으며 선택지를 비교하는 현실적인 장면"
+      },
+      "publication": {
+        "publishAt": "2026-10-25T10:30:00+09:00"
+      },
+      "productBasis": {
+        "graphVersion": "g-20261021-081d9a",
+        "exportHash": "01b99d86f0e44ac8",
+        "control": {
+          "graphVersion": "g-20261021-081d9a",
+          "enabled": true,
+          "killSwitchTripped": false,
+          "enabledClusters": [
+            "family",
+            "money-work",
+            "sleep"
+          ],
+          "surfaces": {
+            "BODY_CALLOUT": false,
+            "BODY_INLINE_OR_TOP": false,
+            "CTA_END": true,
+            "FOOTER_BRIDGE": true,
+            "FOOTER_NEXT": true,
+            "FOOTER_SIBLING": true,
+            "SERIES_NAV": false
+          }
+        },
+        "sourceCluster": "money-work",
+        "relationContract": {
+          "implementedSurfaces": [
+            "CTA_END",
+            "FOOTER_BRIDGE",
+            "FOOTER_NEXT",
+            "FOOTER_SIBLING"
+          ],
+          "footerSurfaces": [
+            "FOOTER_BRIDGE",
+            "FOOTER_NEXT",
+            "FOOTER_SIBLING"
+          ],
+          "enabledRelationSurfaces": [
+            "FOOTER_BRIDGE",
+            "FOOTER_NEXT",
+            "FOOTER_SIBLING"
+          ],
+          "relationTypes": [
+            "ACTION",
+            "BRIDGE",
+            "COMMUNITY",
+            "NEXT_QUESTION",
+            "PREREQUISITE",
+            "SERIES",
+            "SIBLING"
+          ],
+          "discoveryType": "BRIDGE"
+        }
+      },
+      "sourceHash": "sha256:db950795119226eaf9b12752c3eae6fdcbb5ea3d1f69b36ef2dd68f54d5680c8"
+    }
+  ]
+}
