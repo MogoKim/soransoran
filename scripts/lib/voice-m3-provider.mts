@@ -21,6 +21,7 @@
 // 🔴 provider 에 보낼 **실제 모델 ID** 도 계약에서 가져온다.
 //    내부 라벨을 그대로 body.model 에 넣어 Haiku 30건이 HTTP_404 로 전멸했다(2026-08-27).
 import { isMaxTokensReached, apiModelIdFor } from './voice-m3-contract.mjs'
+import { thinkingLevelVerdict, type ThinkingLevel } from '../../src/lib/provider-thinking-contract'
 
 /** provider 별 key 환경변수. 🔴 값이 아니라 이름이다 */
 export const PROVIDER_KEY_ENV = {
@@ -106,8 +107,8 @@ export type LlmRequest = {
   userPayload: string
   maxOutputTokens: number
   timeoutMs: number
-  /** Gemini 전용. 비우면 모델 기본 dynamic thinking 을 쓴다. */
-  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
+  /** Gemini 전용. 비우면 모델 기본 dynamic thinking 을 쓴다. 모델별 허용값은 `provider-thinking-contract` */
+  thinkingLevel?: ThinkingLevel
 }
 
 export type LlmResponse = {
@@ -159,7 +160,10 @@ export type LlmResponse = {
 }
 
 /** 실패 응답을 만든다. 🔴 진단 필드를 빠뜨리지 않기 위한 한 자리 */
-function failure(
+/** 🔴 네트워크 전에 거부한 thinkingLevel — 요청이 나가지 않았다 */
+export const THINKING_LEVEL_UNSUPPORTED = 'THINKING_LEVEL_UNSUPPORTED'
+
+export function failure(
   errorCode: string, errorMessage: string,
   partial?: Partial<Pick<LlmResponse, 'inputTokens' | 'outputTokens' | 'finishReason'
     | 'reasoningTokens' | 'responseChars' | 'maxTokensReached'
@@ -198,6 +202,9 @@ function num(v: unknown): number {
  *    여기서도 검사하면 "어디서 막히는가" 가 두 곳이 되어 추적이 어려워진다.
  */
 export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
+  // 🔴 지원하지 않는 thinkingLevel 은 보내지 않는다 — provider 가 400 으로 돌려줄 요청이다(2026-10-24 D10)
+  const thinking = thinkingLevelVerdict(req.model, req.thinkingLevel)
+  if (!thinking.ok) return failure(THINKING_LEVEL_UNSUPPORTED, thinking.reason)
   const status = keyStatus(req.model)
   if (!status.present) {
     return failure('NO_API_KEY', `${status.envName} 가 없다`)

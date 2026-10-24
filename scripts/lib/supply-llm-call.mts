@@ -38,8 +38,9 @@ import {
   type LedgerRead, type OpenRead, type SettleHold,
 } from './llm-ledger-store.mjs'
 import {
-  callProvider, countInputTokens, type LlmResponse, type ProviderModel,
+  THINKING_LEVEL_UNSUPPORTED, callProvider, countInputTokens, failure, type LlmResponse, type ProviderModel,
 } from './voice-m3-provider.mjs'
+import { thinkingLevelVerdict, type ThinkingLevel } from '../../src/lib/provider-thinking-contract'
 import { writeSettleHold } from './llm-ledger-store.mjs'
 import { buildMessage, send } from './slack-notify.mjs'
 import { apiModelIdFor } from './voice-m3-contract.mjs'
@@ -210,8 +211,8 @@ export type SupplyCallInput = {
   userPayload: string
   maxOutputTokens: number
   timeoutMs: number
-  /** Gemini 전용 reasoning 깊이. 생성 계약이 정한 경우에만 전달한다. */
-  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
+  /** Gemini 전용 reasoning 깊이. 생성 계약이 정한 경우에만 전달한다. 모델별 허용값은 `provider-thinking-contract` */
+  thinkingLevel?: ThinkingLevel
   /** 🔴 원천 해시(`articleIdHashOf`) — 장부 줄의 `sourceKey`. 원천 밖 요청은 비운다 */
   sourceKey?: string | null
   /** 🔴 JIT 공급 계약 표식 — 그 회차 `workset-v3` 묶음 안 원천일 때만. 장부 줄의 `supplyContract` */
@@ -567,6 +568,14 @@ export class SupplyLlmSession {
    *       그 단계를 완주로 세지 않는다.
    */
   async call(input: SupplyCallInput): Promise<SupplyCallResult> {
+    /**
+     * 🔴 **provider 가 받지 않는 thinkingLevel 은 장부에 닿기 전에 거부한다** (2026-10-24 D10 HTTP_400).
+     *    `callProvider` 도 같은 판정으로 막지만, 거기까지 가면 예약 줄이 먼저 적혀 미정산이 남는다.
+     */
+    const thinking = thinkingLevelVerdict(input.model, input.thinkingLevel)
+    if (!thinking.ok) {
+      return { ...failure(THINKING_LEVEL_UNSUPPORTED, thinking.reason), settledUsd: null, settlementRecorded: false }
+    }
     /**
      * 🔴 **정산 실패가 한 번이라도 있으면 더 보내지 않는다.**
      *    사전 계산(무료)조차 하지 않는다 — 어차피 보류될 요청이다.
