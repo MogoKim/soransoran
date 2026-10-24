@@ -1627,6 +1627,94 @@ function briefFreeCases(webui, session = realSession) {
   ]
 }
 
+/**
+ * P0-4 — DIRECT 무전송 회수(`recoverSlug`). 보냈는데 응답 판독이 끝나지 않은 DIRECT 글(DELIVERY_UNCERTAIN)을
+ *    다시 보내지 않고 기존 대화에서 원문만 읽어 저장한다. 앞판은 DIRECT 에서도 brief.md 를 직접 읽어 ENOENT 로 터졌다.
+ * 🔴 legacy 는 brief 의 대조 문장(requiredMarkers)을 그대로 요구한다 — 문장이 빠진 응답은 저장 0 · 장부 불변.
+ */
+const RECOVER = {}
+const RECOVER_URL = 'https://chatgpt.com/c/6abc5296-452c-83ee-8788-0000d55c0004'
+/** 🔴 시험 legacy brief 도 실제 brief 형식 계약(judgeBriefFormatContract)을 지닌다 — m3a-check 와 같은 블록 */
+const LEGACY_BRIEF_FORMAT = [
+  '[CTA] /community/free | 자유게시판에 이야기 남기기 | CTA 앞에 붙일 한 문장', '',
+  '### 쓸 수 있는 표기가 전부다', '',
+  '| 표기 | 쓰임 |', '|---|---|', '| `## ` | h2 |', '| `### ` | h3 |', '| `> ` | 인용 |', '| `- ` | 목록 |',
+  '| `[CTA] href \\| 문구 \\| 앞 문장` | 마지막에 정확히 1개 |', '',
+  '### 공통 금지', '',
+  '🚫 표 · 코드블록 · 외부 링크 · 마크다운 이미지 · h1 · h4 이하 · HTML · 번호 목록',
+].join('\n')
+const { writeFetchResults } = await imp(join(ROOT, 'scripts/lib/magazine-fetch-result.mjs'))
+/** 가짜 ChatGPT 대화 — 사용자 메시지 1(우리가 보낸 글자) · assistant 응답 1. composer·send 를 세어 0 인지 본다 */
+function fakeConversation(userText, manuscript = PASS_DRAFT) {
+  const m = { ensureTab: 0, connect: 0, goto: 0, send: 0, typed: 0 }
+  const page = {
+    async close() {}, async goto() { m.goto++ }, async waitForSelector() {}, async waitForTimeout() {},
+    url: () => RECOVER_URL,
+    async evaluate(fn) {
+      if (fn?.name !== 'readConversationDom') return null
+      return { readOk: true, stop: false, units: [
+        { id: 'dssc-u1', role: 'user', source: 'old', candidates: [], text: userText, hasActions: false },
+        { id: 'dssc-r1', role: 'assistant', source: 'old', candidates: [{ form: 'code-block', text: manuscript }], text: '', hasActions: true },
+      ] }
+    },
+    locator() { const l = { async click() { m.send++ }, async innerText() { return '' } }; return { first: () => l, ...l } },
+    keyboard: { async insertText() { m.typed++ }, async press() { m.typed++ } },
+  }
+  return { m, deps: { settleMs: 0, connectTimeoutMs: 500,
+    ensureTab: async () => { m.ensureTab++; return { ok: true } },
+    connect: async () => { m.connect++; return { contexts: () => [{ pages: () => [], newPage: async () => page }], async close() {} } } } }
+}
+/** 보냈는데 모른다 — 장부 DELIVERY_UNCERTAIN(예약 ID) + 그날 회수 결과의 sent=true 실패 행. 둘 다 실제 기록 함수로 만든다 */
+function seedUncertain({ slug, draftsDir, q, rp, queueItem, directSourceDeps }) {
+  const g = realGate.deliveryGate({ slug, draftsDir, quarantinePath: q, queueItem, directSourceDeps })
+  assert.equal(g.ok, true, `반례 준비 실패: ${g.why}`)
+  realQuarantine.updateQuarantine((cur) => ({ ...cur, [slug]: realQuarantine.recordDelivery(cur[slug], {
+    sent: null, messageFingerprint: g.messageFingerprint, kind: 'DELIVERY_UNCERTAIN', reason: 'response_timeout', stage: 'await-response',
+    now: NOW, date: TODAY, reservationId: 'dssc-reservation-1' }) }), q)
+  writeFetchResults(rp, { date: TODAY, mode: 'fetch-run', sentTotal: 1, results: [{ slug, status: 'failed', reason: 'response_timeout',
+    stage: 'await-response', sent: true, messageFingerprint: g.messageFingerprint, conversationUrl: RECOVER_URL }] })
+  return g
+}
+function recoverCases(webui) {
+  const deps = { queue: () => [directItem()], expectedGraphVersion: () => GV, productRoot: () => ROOT }
+  const ok = async () => ({ status: realSession.STATUS.OK })
+  return [
+    ['P0-4 실제 recoverSlug — DIRECT DELIVERY_UNCERTAIN · brief 없음 → 기존 대화에서 저장 · send 0 · 예약 해제', async () => {
+      const r = runPlan(real.plan, { queue: [directItem()], prepare: (d) => writeSource(d) })
+      assert.ok(r.spec && !existsSync(join(r.draftsDir, DIRECT_SLUG, 'brief.md')), '반례 준비 실패')
+      const q = join(dirname(r.draftsDir), 'rc-q.json'); const rp = join(dirname(r.draftsDir), 'rc-result.json')
+      const g = seedUncertain({ slug: DIRECT_SLUG, draftsDir: r.draftsDir, q, rp, queueItem: directItem(), directSourceDeps: deps })
+      assert.equal(g.mode, 'DIRECT_SPEC_V1')
+      const conv = fakeConversation(g.message)
+      const out = await webui.recoverSlug(DIRECT_SLUG, { conversationUrl: RECOVER_URL, date: TODAY, resultPath: rp, quarantinePath: q,
+        draftsDir: r.draftsDir, browserDeps: conv.deps, accessFn: ok, directSourceDeps: deps })
+      const draft = join(r.draftsDir, DIRECT_SLUG, 'draft.md')
+      const c = { connect: conv.m.connect, goto: conv.m.goto, send: conv.m.send, typed: conv.m.typed, write: existsSync(draft) ? 1 : 0 }
+      RECOVER['DIRECT recover · brief 없음'] = c
+      assert.equal(out.status, 'ok', JSON.stringify(out).slice(0, 220))
+      assert.deepEqual(c, { connect: 1, goto: 1, send: 0, typed: 0, write: 1 })
+      assert.equal(readFileSync(draft, 'utf8'), PASS_DRAFT)
+      assert.equal(out.released, true, '전송불명 예약이 풀리지 않았다')
+      assert.ok(!existsSync(join(r.draftsDir, DIRECT_SLUG, 'brief.md')), 'brief.md 가 만들어졌다 (가짜 brief 금지)')
+    }],
+    ['P0-4 legacy 불변 — 실제 recoverSlug · brief 대조 문장이 빠진 응답 → markers_missing · 저장 0 · 장부 불변', async () => {
+      const base = tmp('rc-legacy'); const d = join(base, 'drafts'); mkdirSync(join(d, LEGACY_SLUG), { recursive: true })
+      writeFileSync(join(d, LEGACY_SLUG, 'brief.md'), `${LEGACY_BRIEF_FORMAT}\n\n# legacy brief\n\n## 반드시 그대로 넣을 문장\n1. 응답에 없는 지정 문장 DSSC-MARKER\n`)
+      const q = join(base, 'q.json'); const rp = join(base, 'result.json')
+      const g = seedUncertain({ slug: LEGACY_SLUG, draftsDir: d, q, rp, queueItem: legacyItem(), directSourceDeps: deps })
+      assert.notEqual(g.mode, 'DIRECT_SPEC_V1', 'legacy 행이 direct 로 판정됐다 (반례 준비 실패)')
+      const before = readFileSync(q, 'utf8')
+      const conv = fakeConversation(g.message)
+      const out = await webui.recoverSlug(LEGACY_SLUG, { conversationUrl: RECOVER_URL, date: TODAY, resultPath: rp, quarantinePath: q,
+        draftsDir: d, browserDeps: conv.deps, accessFn: ok, directSourceDeps: deps })
+      RECOVER['legacy recover · 대조 문장 없음'] = { reason: out.reason, send: conv.m.send, write: existsSync(join(d, LEGACY_SLUG, 'draft.md')) ? 1 : 0 }
+      assert.deepEqual({ status: out.status, reason: out.reason }, { status: 'failed', reason: 'markers_missing' }, JSON.stringify(out).slice(0, 200))
+      assert.ok(!existsSync(join(d, LEGACY_SLUG, 'draft.md')), 'legacy 대조 문장 없이 저장했다')
+      assert.equal(readFileSync(q, 'utf8'), before, '실패한 회수가 장부를 바꿨다')
+    }],
+  ]
+}
+
 // ── 실행기 ─────────────────────────────────────────────────
 async function runCases(cases) {
   const failures = []
@@ -1659,7 +1747,7 @@ const ALL_REAL = [
   ...downgradeCases(real.webui, realRegen), ...reuseReportCases(real.plan),
   ...packetOnlyCases(real.webui), ...repairCases(realRepair, real.webui),
   ...basisDriftCases(real.plan, real.lane, real.webui, realRegen),
-  ...briefFreeCases(real.webui),
+  ...briefFreeCases(real.webui), ...recoverCases(real.webui),
 ]
 for (const [name, fn] of ALL_REAL) {
   try { await fn(); report(true, name) } catch (e) { report(false, name, e.message.split('\n')[0]) }
@@ -1676,6 +1764,8 @@ console.log('\n── packet-only direct · fetchOne(--regen-packet)')
 for (const [k, v] of Object.entries(PACKET_ONLY)) console.log(`  ${k.padEnd(36)} ${JSON.stringify(v)}`)
 console.log('\n── brief 없는 DIRECT 회수 · legacy 불변 — 실제 fetchManuscript')
 for (const [k, v] of Object.entries(BRIEF_FREE)) console.log(`  ${k.padEnd(36)} ${JSON.stringify(v)}`)
+console.log('\n── 무전송 회수(recoverSlug) — DIRECT brief 없음 · legacy 대조 문장')
+for (const [k, v] of Object.entries(RECOVER)) console.log(`  ${k.padEnd(36)} ${JSON.stringify(v)}`)
 console.log('\n── 입력 수리 우회 차단')
 for (const [k, v] of Object.entries(REPAIR_COUNTS)) console.log(`  ${k.padEnd(40)} ${JSON.stringify(v)}`)
 console.log('\n── report "다음" 절 실제 모양')
@@ -1754,6 +1844,8 @@ const MUTATIONS = [
   ['session', 'MSE1', 'fetchManuscript 옛 구현 복원 — message 와 무관하게 brief 를 먼저 요구 (P0-3)', "  if (plannedMessage !== null && (typeof plannedMessage !== 'string' || !plannedMessage.trim())) {\n    return { ok: false, reason: 'message_invalid', sent: false, errorDetail: '보낼 message 가 비었거나 문자열이 아니다 (한 글자도 보내지 않았다)' }\n  }\n  if (plannedMessage === null && !existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }\n", "  if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }\n"],
   ['session', 'MSE2', '빈·문자열 아닌 message 차단 제거 (P0-3)', "  if (plannedMessage !== null && (typeof plannedMessage !== 'string' || !plannedMessage.trim())) {\n    return { ok: false, reason: 'message_invalid', sent: false, errorDetail: '보낼 message 가 비었거나 문자열이 아니다 (한 글자도 보내지 않았다)' }\n  }\n", ''],
   ['session', 'MSE3', 'message 없는 legacy 의 brief 필수 검사 제거 (P0-3)', "  if (plannedMessage === null && !existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }\n", ''],
+  ['webui', 'MW8', 'recoverSlug 옛 구현 복원 — DIRECT 에서도 brief.md 를 읽는다 (P0-4)', "      requiredMarkers: gate.mode === DIRECT_SPEC_MODE ? [] : markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),\n", "      requiredMarkers: markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),\n"],
+  ['webui', 'MW9', 'recoverSlug 가 legacy 대조 문장도 버린다 (P0-4)', "      requiredMarkers: gate.mode === DIRECT_SPEC_MODE ? [] : markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),\n", "      requiredMarkers: [],\n"],
   ['webui', 'MW1', '회수 계획이 direct 에 "세션이 채워야 한다" 안내 (P1)', "  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {\n    return t.material?.articleSpec", "  if (false) {\n    return t.material?.articleSpec"],
 ]
 const MS2_SECOND = ["  if (entry.node?.graphVersion !== expectedGraphVersion || entry.admission?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')\n", '']
@@ -1815,7 +1907,7 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
           : kind === 'flow' ? await flowCases(mod, real.plan, real.brief)
             : kind === 'lane' ? [...laneCases(mod), ...reuseCases(real.plan, mod), ...basisDriftCases(real.plan, mod, real.webui, realRegen)]
               : kind === 'notify' ? notifyCases(mod, real.webui)
-                : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen), ...packetOnlyCases(mod), ...repairCases(realRepair, mod), ...briefFreeCases(mod)]
+                : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen), ...packetOnlyCases(mod), ...repairCases(realRepair, mod), ...briefFreeCases(mod), ...recoverCases(mod)]
                   : sourceCases(mod)
       const failures = await runCases(cases)
       caught = failures.length > 0; why = failures[0] ?? '모든 반례가 통과했다'
