@@ -2424,7 +2424,7 @@ console.log('\n⑱ producer 가 기존 재료를 버리지 않는다')
     checkOutstanding: () => ({ ok: true, message: '없음' }),
     runPlan: () => { calls.push('plan'); return { spawnError: null, status: 0 } },
     runBrief: () => { calls.push('brief'); return { spawnError: null, status: 0 } },
-    runFetch: () => { calls.push('fetch'); return { spawnError: null, status: 0 } },
+    runFetch: () => { calls.push('fetch'); return { spawnError: null, status: 0, startedAt: Date.now() - 1000, report: { ok: true, body: { writtenAt: new Date().toISOString(), results: [] } } } },
     notify: () => ({ ok: true }),
   } })
   check('🔴 ⑱ 선정 0 · 재사용 6 이면 brief 를 부르지 않는다', !calls.includes('brief'), calls.join('>'))

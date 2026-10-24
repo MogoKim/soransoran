@@ -55,9 +55,10 @@ import { fileURLToPath } from 'node:url'
 import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
 import { composeProducerMessage, runProducerFlow, supplyFromRunJson } from './lib/magazine-producer-flow.mjs'
-import { readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { writeHandoff } from './lib/magazine-handoff.mjs'
+import { fetchResultPath, readFetchResults } from './lib/magazine-fetch-result.mjs'
 import { acquireLock, PRODUCER_LOCK_PATH } from './lib/magazine-auto-lock.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
@@ -181,7 +182,17 @@ const result = await runProducerFlow({
       rmSync(rj, { force: true })
       return { ...r, report }
     },
-    runFetch: () => spawnStage([WEBUI, '--fetch-run']),
+    /**
+     * 🔴 회수기는 표준 자리(fetchResultPath)에 구조화 결과를 쓴다 — 01:00 등록도 같은 파일을 읽는다.
+     *    그 파일을 그대로 읽어 판정에 넘긴다(쓰지 않는다). 시작 시각은 "이번 회수가 쓴 결과인가" 를 가린다.
+     */
+    runFetch: () => {
+      const startedAt = Date.now()
+      const r = spawnStage([WEBUI, '--fetch-run'])
+      const resultFile = fetchResultPath(kstDate())
+      return { ...r, startedAt, resultFile, report: readFetchResults(resultFile, { expectDate: kstDate() }) }
+    },
+    draftExists: (slug) => existsSync(join(ROOT, 'drafts/magazine', slug, 'draft.md')),
     notify: notifyOnce,
   },
 })
@@ -190,7 +201,7 @@ const result = await runProducerFlow({
 //    실패한 회차도 남긴다. "안 돌았다" 와 "돌았는데 실패했다" 는 대응이 다르다.
 if (!dryRun) {
   try {
-    const path = writeHandoff({ date: kstDate(), verdict: result.verdict, code: result.code, ran: result.ran ?? [], repair: result.repair ?? null })
+    const path = writeHandoff({ date: kstDate(), verdict: result.verdict, code: result.code, ran: result.ran ?? [], repair: result.repair ?? null, fetch: result.fetchResult ?? null })
     line(`인계 신호: ${path}`)
   } catch (e) {
     // 🔴 신호를 못 써도 회차 판정은 바꾸지 않는다. 등록은 제한 대기 후 진행한다.
