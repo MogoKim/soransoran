@@ -101,7 +101,7 @@ export default function OperatorComposedItemControls({
             name="title"
             defaultValue={title ?? ''}
             maxLength={MAX_POST_TITLE_LENGTH}
-            className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+            className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
           />
         </label>
       ) : null}
@@ -113,7 +113,7 @@ export default function OperatorComposedItemControls({
           defaultValue={content}
           rows={kind === 'post' ? 10 : 4}
           maxLength={kind === 'post' ? MAX_POST_CONTENT_LENGTH : MAX_COMMENT_LENGTH}
-          className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+          className="w-full rounded-md border border-interactive bg-surface-card p-3 text-content-primary"
         />
       </label>
 

@@ -43,7 +43,7 @@ export const dynamic = 'force-dynamic'
 const STATUS_ORDER = ['PENDING', 'APPROVED', 'EDITED', 'DECLINED', 'PUBLISHED', 'EXPIRED'] as const
 
 /** 데스크탑 열 폭 — 머리줄과 각 줄이 같은 값을 쓴다 */
-const COLS = 'lg:grid-cols-[9rem_minmax(0,1fr)_minmax(0,1.3fr)_8.5rem]'
+const COLS = 'lg:grid-cols-[9rem_minmax(0,1fr)_minmax(0,1.3fr)_9.5rem]'
 
 export default async function PersonaCandidatesPage() {
   const { ok } = await requireAdmin()
@@ -170,14 +170,14 @@ export default async function PersonaCandidatesPage() {
                     <span className="text-sm font-bold tabular-nums text-content-primary">{r.persona.code}</span>
                   </span>
                   {/* 🔴 첫 글자 + 길이만 */}
-                  <span className="min-w-0 text-sm font-bold text-link">{maskCandidateText(r.candidateText)}</span>
+                  <span className="min-w-0 text-sm font-semibold text-content-primary">{maskCandidateText(r.candidateText)}</span>
                   <span className="flex flex-wrap gap-x-4 gap-y-1">
                     <AdminCell label="반응">{r.reactionType}</AdminCell>
                     <AdminCell label="Gate">{GATE_STATUS_LABEL[r.gateStatus] ?? r.gateStatus}</AdminCell>
                     <AdminCell label="AI 티">{r.aiToneTags.length === 0 ? '—' : `${r.aiToneTags.length}종`}</AdminCell>
                     <AdminCell label="재생성" className="tabular-nums">{r.regenCount}</AdminCell>
                   </span>
-                  <AdminCell label="생성" tone="meta" className="tabular-nums">{formatKst(r.createdAt)}</AdminCell>
+                  <AdminCell label="생성" tone="meta" className="whitespace-nowrap tabular-nums">{formatKst(r.createdAt)}</AdminCell>
                 </AdminTableRow>
               ))}
             </AdminTable>

@@ -99,7 +99,7 @@ export default async function OriginalPostCandidatesPage() {
       <div>
         <AdminPageHeader group="자동 운영" title="글 초안 대기열" />
         <p className="m-0 mt-1">
-          <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
+          <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
             페르소나 후보 대기열 →
           </Link>
         </p>

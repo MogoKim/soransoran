@@ -56,7 +56,7 @@ export default function AdminCommentEditForm({
           defaultValue={content}
           rows={4}
           maxLength={MAX_COMMENT_LENGTH}
-          className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+          className="w-full rounded-md border border-interactive bg-surface-card p-3 text-content-primary"
         />
       </label>
 

@@ -4,7 +4,6 @@ import { requireAdmin } from '@/lib/admin'
 import { formatKst } from '@/lib/admin-format'
 import {
   AdminBadge,
-  AdminCard,
   AdminEmptyState,
   AdminPageHeader,
   AdminSection,
@@ -55,7 +54,7 @@ export default async function AdminComposePage() {
   return (
     <>
       <AdminPageHeader
-        group="운영"
+        group="노출·작성"
         title="직접 작성"
         description="운영용 이름을 골라 직접 글과 댓글을 씁니다. 자동 페르소나와는 별개입니다."
       />
@@ -78,10 +77,11 @@ export default async function AdminComposePage() {
             </AdminEmptyState>
           </div>
         ) : (
-          <ul className="m-0 mt-2 flex list-none flex-col gap-2 p-0">
+          /* 🔴 카드 반복 대신 위아래 선 사이 행 목록(Admin Golden Master). 내용 · 조치 순서는 그대로 */
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {items.map((item) => (
-              <li key={`${item.kind}:${item.id}`}>
-                <AdminCard>
+              <li key={`${item.kind}:${item.id}`} className="border-b border-[color:var(--admin-divider)] px-1 py-4 last:border-b-0">
+                <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <AdminBadge tone="brand">
                       {item.kind === 'post' ? '글' : '댓글'}
@@ -104,7 +104,7 @@ export default async function AdminComposePage() {
                   </p>
 
                   {item.href ? (
-                    <a href={item.href} className="mt-1 text-xs text-link">
+                    <a href={item.href} className="mt-1 inline-flex min-h-[52px] items-center text-xs font-semibold text-link lg:min-h-[44px]">
                       고객 화면에서 보기
                     </a>
                   ) : null}
@@ -117,7 +117,7 @@ export default async function AdminComposePage() {
                     content={item.content}
                     hidden={item.hidden}
                   />
-                </AdminCard>
+                </div>
               </li>
             ))}
           </ul>

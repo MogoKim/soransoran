@@ -113,7 +113,7 @@ export default async function AdminPersonaDetailPage({
   return (
     <>
       <div className="max-w-3xl">
-        <Link href="/admin/personas" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
+        <Link href="/admin/personas" className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
           ← 관제실
         </Link>
 
@@ -133,7 +133,7 @@ export default async function AdminPersonaDetailPage({
           목록에서는 {maskNickname(persona.user.nickname ?? persona.user.name)} 로 마스킹됩니다.
         </p>
 
-        <section className="mt-6 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+        <section className="mt-6 rounded-md border border-subtle border-l-[3px] border-l-state-danger p-4 lg:p-5">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-bold text-content-primary">전체 중지 스위치</span>
             {/* 🔴 enabled = "중지" 다. 중지가 켜진 상태만 빨간 배지로 눈에 건다 — 문구는 그대로 */}
@@ -145,7 +145,7 @@ export default async function AdminPersonaDetailPage({
                   : '중지 꺼짐'}
             </span>
             {/* 🔴 전환은 목록에서만 한다 — write 경로를 한 곳으로 모은다 */}
-            <Link href="/admin/personas" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
+            <Link href="/admin/personas" className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
               관제실에서 전환
             </Link>
           </div>
@@ -157,10 +157,10 @@ export default async function AdminPersonaDetailPage({
           ) : null}
         </section>
 
-        <table className="mt-6 w-full table-fixed border-collapse rounded-[10px] bg-surface-card text-sm">
+        <table className="mt-8 w-full table-fixed border-collapse border-y border-[color:var(--admin-border)] text-sm">
           <tbody>
             {rows.map(([label, value]) => (
-              <tr key={label} className="border-b border-subtle last:border-b-0">
+              <tr key={label} className="border-b border-[color:var(--admin-divider)] last:border-b-0">
                 <th className="w-2/5 px-4 py-3 text-left align-top font-normal text-content-muted [overflow-wrap:anywhere]">
                   {label}
                 </th>
@@ -178,11 +178,11 @@ export default async function AdminPersonaDetailPage({
         <h2 className="mt-10 text-lg font-bold text-content-primary">변경 이력</h2>
         <p className="mt-1 text-xs text-content-muted">최근 100건 · 총 {auditLogs.length}건</p>
         {auditLogs.length === 0 ? (
-          <p className="mt-3 rounded-[10px] border border-dashed border-interactive px-4 py-6 text-sm text-content-muted">이력이 없습니다.</p>
+          <p className="mt-3 border-y border-[color:var(--admin-divider)] px-4 py-8 text-sm text-content-secondary">이력이 없습니다.</p>
         ) : (
-          <ul className="mt-3 flex list-none flex-col gap-2 p-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {auditLogs.map((log) => (
-              <li key={log.id} className="rounded-[10px] border border-subtle bg-surface-card p-4">
+              <li key={log.id} className="border-b border-[color:var(--admin-divider)] px-1 py-4 last:border-b-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`${adminBadgeClass('neutral')} font-bold`}>
                     {AUDIT_ACTION_LABEL[log.action] ?? log.action}
@@ -192,7 +192,7 @@ export default async function AdminPersonaDetailPage({
                       {log.fromStatus ?? '—'} → {log.toStatus ?? '—'}
                     </span>
                   ) : null}
-                  <span className="text-xs text-content-muted">{formatKst(log.createdAt)}</span>
+                  <span className="text-xs tabular-nums text-content-muted">{formatKst(log.createdAt)}</span>
                   <span className="text-xs text-content-muted">
                     {log.actorUserId === null ? '자동' : `운영자 ${log.actorUserId}`}
                   </span>
