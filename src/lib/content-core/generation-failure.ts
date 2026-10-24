@@ -53,6 +53,15 @@ export function transientProviderError(code: string | null | undefined): boolean
   return /^HTTP_5\d\d$/.test(c)
 }
 
+/**
+ * 🔴 **요청 모양을 제공사가 받지 않았는가** (2026-10-24 D10 첫 댓글 HTTP_400). 400 은 같은 모양으로 다시 보내면
+ *    같은 400 이다 — 같은 회차의 다른 대상·다른 Persona 에 다시 보내지 않는다. 일시 오류(429 · 5xx · NETWORK · TIMEOUT)는
+ *    여기에 들지 않는다.
+ */
+export function requestShapeRejected(code: string | null | undefined): boolean {
+  return (code ?? '').trim() === 'HTTP_400'
+}
+
 /** 🔴 `content-core-run` 의 `AskResult` 에서 분류에 필요한 칸만 */
 export type CallResultLike = {
   ok: boolean

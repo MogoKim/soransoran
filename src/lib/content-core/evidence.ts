@@ -138,7 +138,7 @@ const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
  *    완결된 글이다. 앞판은 지시어 + 사진이면 막아서 이런 글을 통째로 잃었다.
  *
  * 🔴 **애매한 의존은 여기서 막지 않는다.** 소재 판정(`coreMoment` 가 안 나오면 HOLD)과
- *    사람 검토가 맡는다. deterministic 은 확정 가능한 것만 본다.
+ *    Content Core 의미 검수가 맡는다. deterministic 은 확정 가능한 것만 본다.
  */
 const VISUAL = '(?:사진|이미지|짤|캡처|캡쳐|그림|영상)'
 /** 🔴 "보고 알려 달라" — 자료를 봐야 **글쓴이의 요청을 수행할 수 있다** */

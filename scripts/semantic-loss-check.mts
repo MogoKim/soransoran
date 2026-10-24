@@ -37,6 +37,8 @@ import {
   V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
 } from '../src/lib/content-core/pipeline'
 import { COPY_RUN_CHARS, COPY_RUN_WORDS } from '../src/lib/draft-originality'
+import { MATERIAL_CONTRACT_LINES } from '../src/lib/content-core/material-contract'
+import { SEMANTIC_AUDIT_SYSTEM_PROMPT } from '../src/lib/auto-ready-semantic-audit'
 import { SPEAKER_PLAN_VERSION, parseSpeakerPlan, type SpeakerPlan } from '../src/lib/content-core/speaker'
 import { buildVoiceEvidence } from '../src/lib/content-core/voice-evidence'
 import {
@@ -205,7 +207,7 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
 console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 검수 판 review-v7 · 검수 프롬프트 p9', V2_REVIEW_PROMPT_VERSION === 'v2-review-p9' && REVIEW_VERSION === 'review-v7')
+  check('🔴 검수 판 review-v7 · 검수 프롬프트 p10', V2_REVIEW_PROMPT_VERSION === 'v2-review-p10' && REVIEW_VERSION === 'review-v7')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
@@ -222,6 +224,10 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
   check('🔴 🔴 검수 지시문에 가족 사실 줄이 전부 들어 있다(자녀 수 · 성별 · 나이대 · 남의 자녀 제외)',
     REVIEW_FAMILY_SPECIFICS_LINES.every((l) => reviewSys.split('\n').includes(l)) && reviewSys.includes('자녀 성별 칸이 없다'))
   check('🔴 검수 지시문은 [보존] 을 모른다 — 생성 입력만 바뀌었다', !reviewSys.includes('그대로쓸말') && !reviewSys.includes('원문의물음'))
+  // 🔴 (p10 · quality-v19) 발행 전 검수와 발행 뒤 감사가 같은 실질 변경 계약 줄을 그대로 싣는다 — 정본은 한 곳이다
+  check('🔴 🔴 검수 지시문과 의미 감사 지시문이 실질 변경 계약 줄을 똑같이 싣는다(시간 바꿔쓰기 포함)',
+    MATERIAL_CONTRACT_LINES.every((l) => reviewSys.split('\n').includes(l) && SEMANTIC_AUDIT_SYSTEM_PROMPT.split('\n').includes(l))
+    && MATERIAL_CONTRACT_LINES.some((l) => l.includes('"새벽"·"이 밤"·"밤늦게"')))
   // 🔴 같은 경고가 고친 뒤에도 오면 **그대로 센다** — 근거 대조가 느슨해지지 않았다
   for (const id of ['A', 'B', 'C']) {
     const k = CASE(id); const packet = packetOf(k); const draftText = `${k.draft.title}\n${k.draft.body}`
@@ -234,7 +240,7 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
       deterministic: { pass: true }, semanticCompletion: { complete: true },
       semantic: { ...parsed, droppedFromSource: dropped, unsupportedAdditions: added },
     }))
-    check(`${id}: 🔴 경고는 그대로 자동 READY 표본에서 뺀다 — ${holds.join(' ') || '(없음)'}`,
+    check(`${id}: 🔴 finding은 holds 정합성 기록에 그대로 남는다 — ${holds.join(' ') || '(없음)'}`,
       (dropped.length === 0 || holds.includes(`${SEMANTIC_HOLD_CODES.droppedFromSource}:${dropped.length}`))
       && (added.length === 0 || holds.includes(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:${added.length}`)))
     const j = judgeMachine({
@@ -242,7 +248,7 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
       semantic: { ...parsed, droppedFromSource: dropped, unsupportedAdditions: added },
       semanticCompletion: { complete: true, reason: null, cause: null },
     })
-    check(`${id}: 기계 결론 그대로 — 경고는 사람에게 넘기고 voice 축은 막는다 (${j.outcome})`,
+    check(`${id}: 기계 결론 그대로 — 참고 finding은 보존하고 voice 축은 막는다 (${j.outcome})`,
       j.outcome === (k.review.issues.length > 0 ? 'hold' : 'adopt') && j.warnings.length === Number(dropped.length > 0) + Number(added.length > 0))
   }
 }
@@ -310,10 +316,11 @@ async function runOf(c: Case, ask: Ask) {
   check('🔴 🔴 초안·검수·판독이 같은 한 벌 원문을 본다 — 두 번째 벌이 없다',
     dp !== null && dp.원문 === sourceBlock(packet) && r !== undefined && (JSON.parse(r.payload) as { 원문: string }).원문 === sourceBlock(packet)
     && p !== undefined && !p.payload.includes(c.rawBody.slice(c.rawBody.length - 40)))
-  check('🔴 🔴 러너가 보낸 p9 검수 지시문 — 안전한 창작 carve-out과 가족 사실 보호가 함께 실렸다',
+  check('🔴 🔴 러너가 보낸 p10 검수 지시문 — 안전한 창작 carve-out · 실질 변경 계약 · 가족 사실 보호가 함께 실렸다',
     r !== undefined
     && r.system.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰')
     && r.system.includes('구체적 고위험 생활사')
+    && MATERIAL_CONTRACT_LINES.every((l) => r.system.includes(l))
     && REVIEW_FAMILY_SPECIFICS_LINES.every((l) => r.system.includes(l)))
   check('🔴 artifact 근거 판 = evidence-v2 · 길이는 한 벌', a.evidence.packetVersion === 'evidence-v2' && a.evidence.bodyLength === packet.bodyLength && packet.bodyLength < c.v1BodyLength)
 }
@@ -330,7 +337,7 @@ console.log('\n⑦ 분류표 — v7 08:15·12:15 의미 경고 5건')
     paraphraseFlagged: { n: by('paraphraseFlagged'), where: 'v7 과거 응답 재생 — p9 검수 지시에서는 적지 않음', handled: true },
     intensityFlagged: { n: by('intensityFlagged'), where: 'v7 과거 응답 재생 — p9 검수 지시에서는 적지 않음', handled: true },
   }
-  for (const [k, v] of Object.entries(table)) console.log(`   ${v.handled ? '🛠 ' : '👤 '}${k} ${v.n}건 — ${v.where}${v.handled ? '' : ' (사람 검토 유지 · 기준 그대로)'}`)
+  for (const [k, v] of Object.entries(table)) console.log(`   ${v.handled ? '🛠 ' : '📎 '}${k} ${v.n}건 — ${v.where}${v.handled ? '' : ' (참고 finding 유지 · 기준 그대로)'}`)
   check('경고 5건 = 탈락 2 · 추가 3', flags.length === 5
     && FX.cases.reduce((n, c) => n + c.review.droppedFromSource.length, 0) === 2
     && FX.cases.reduce((n, c) => n + c.review.unsupportedAdditions.length, 0) === 3)

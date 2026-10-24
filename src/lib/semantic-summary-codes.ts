@@ -12,7 +12,7 @@
  */
 export const SEMANTIC_SUMMARY_KEY = 'semanticReview'
 
-/** 🔴 경고 코드 — 사람 화면과 자동 판정이 **같은 이름**을 읽는다 */
+/** 🔴 finding 코드 — 운영 증거와 자동 판정이 **같은 이름**을 읽는다. 안전한 추가·사소한 생략은 기록만 하고 차단하지 않는다 */
 export const SEMANTIC_HOLD_CODES = {
   unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION',
   lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
@@ -65,7 +65,7 @@ export function semanticSummaryOf(review: unknown): SemanticSummary | null {
 }
 
 /**
- * 🔴 요약 → 경고 목록. **판정 기록이 없으면 그것도 경고다** — 재지 못한 것을
+ * 🔴 요약 → finding 목록. **판정 기록이 없으면 그것도 경고다** — 재지 못한 것을
  *    "이상 없음" 으로 읽지 않는다.
  */
 export function semanticHoldsOf(sum: SemanticSummary | null): string[] {
@@ -85,10 +85,10 @@ export function semanticHoldsOf(sum: SemanticSummary | null): string[] {
 }
 
 /**
- * 🔴 **생활 일관성 게이트의 사람 검토 경고** (2026-09-28 quality-v2).
+ * 🔴 **생활 일관성 게이트의 구조화 HOLD 경고** (2026-09-28 quality-v2 · 2026-10-24 설명 보정).
  *
  *    초안 게이트(`content-core/draft-life-gates.ts`)가 **모호하다**고 본 축 — 혼인 · 돌봄·한집 ·
- *    자녀 삶의 단계 · 정신건강·질병 — 은 채택은 되지만 자동 READY 에서 빠져야 한다.
+ *    자녀 삶의 단계 · 정신건강·질병 — 은 Content Core의 모호한 생활사 HOLD로 자동 READY 에서 빠져야 한다.
  *    후보 봉투가 `lifeReview`(코드 배열)로 나르고, 적재기가 `gateResults.holds` 에
  *    `DRAFT_LIFE_REVIEW:<코드>` 로 싣는다. `SEMANTIC_` 접두가 아니라 요약 대조와 섞이지 않는다.
  *

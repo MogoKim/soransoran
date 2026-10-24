@@ -100,7 +100,7 @@ for (const cached of [false, true]) {
     else if (want === 'hold') {
       check(`🔴 ${tag} · #${row.n} 중대 결함 → AUTO_HOLD${cached ? '' : ' · 유료 의미 검수 전'}`,
         r.pick?.decision === 'AUTO_HOLD' && (cached || !askedReview), `${got} · 검수 ${String(askedReview)}`)
-    } else check(`🟡 ${tag} · #${row.n} ${row.verdict} → 자동 READY 아님(AUTO_HOLD 또는 사람 검토 경고)`, !adoptClean && r.pick !== null, got)
+    } else check(`🟡 ${tag} · #${row.n} ${row.verdict} → 자동 READY 아님(AUTO_HOLD 또는 구조화 HOLD 경고)`, !adoptClean && r.pick !== null, got)
   }
 }
 
@@ -127,7 +127,7 @@ console.log('\n⑤ 열림 근거 — gold 재현 + 사람 중대 결함 0 일 �
 console.log('\n⑥ 품질 계약 — gold 가 digest 에 들어갔다')
 {
   const c = qualityContractComponents() as Record<string, any>
-  check(`판 = quality-v18 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v18')
+  check(`판 = quality-v19 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v19')
   check('digest 구성에 열림 근거 · gold 판 · 고정 digest · 모양이 있다',
     c.evidenceBasis === 'founderGold' && c.founderGold?.digest === FOUNDER_GOLD_PINNED_DIGEST
     && JSON.stringify(c.founderGold?.shape) === JSON.stringify(FOUNDER_GOLD_SHAPE))

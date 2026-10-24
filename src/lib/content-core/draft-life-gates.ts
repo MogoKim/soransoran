@@ -2,7 +2,7 @@
  * 초안 게이트 — 🔴 **다 쓴 초안이 우리 글·우리 화자와 맞는가** (2026-09-26 실측 4건)
  *
  * 🔴 **왜 있나.** 운영 기계 초안 4편이 semanticReview `clean` · machineOutcome `adopt` 로
- *    사람 검토 대기(APPROVED)까지 갔다. 의미 검수는 넷 다 "원문을 충실히 유지" 라고 답했다 —
+ *    옛 검토 대기(APPROVED)까지 갔다. 의미 검수는 넷 다 "원문을 충실히 유지" 라고 답했다 —
  *    넷 다 **원문과는 맞고 우리와는 어긋났다.** 원문과 견주는 검수는 이것을 볼 자리가 없다.
  *
  *    ```
@@ -23,8 +23,8 @@
  *    같은 extractor 의 보수적 규칙을 그대로 물려받는다. 과차단은 곧 공급 0 이다.
  * 🔴 **유료 호출이 늘지 않는다.** 문자열 판정이다. 의미 검수 요청 **앞**에서 막으므로 오히려 준다.
  * 🔴 **(quality-v2 · 2026-09-28) 생활 일관성 게이트 넷** — 혼인 · 돌봄·한집 · 자녀 삶의 단계 ·
- *    정신건강·질병. 확정 모순은 위 셋과 같이 막고(AUTO_HOLD), **모호한 생활 일관성만 사람 검토**
- *    (`judgeDraftLife`의 `reviews` → 적재 `DRAFT_LIFE_REVIEW:<코드>` 경고)로 보낸다. 아래 「생활 일관성 게이트 넷」 참고.
+ *    정신건강·질병. 확정 모순은 위 셋과 같이 막고(AUTO_HOLD), **모호한 생활 일관성은 구조화 HOLD 경고**
+ *    (`judgeDraftLife`의 legacy `reviews` → 적재 `DRAFT_LIFE_REVIEW:<코드>`)로 보낸다. 아래 「생활 일관성 게이트 넷」 참고.
  * 🔴 순수 함수다. DB · 네트워크 · 파일 IO 없음.
  */
 import { readMediaDependency, CLOSING_RE } from './evidence'
@@ -45,7 +45,7 @@ import {
 /**
  * 🔴 **순서가 곧 대표 사유의 우선순위다** — 여럿이 걸리면 결과도 이 순서로 나온다.
  *    카드와 **어긋나는 사실**(C)이 가장 구체적이고, 자료 의존(A)은 글 자체가 성립하지 않으며,
- *    허가 없는 1인칭(B)은 계약 위반이다. 사람이 먼저 봐야 할 것부터 적는다.
+ *    허가 없는 1인칭(B)은 계약 위반이다. 우선 처리할 것부터 적는다.
  */
 export const DRAFT_GATE_CODES = [
   /** 🔴 카드의 지금 삶을 미래·과거로 말하거나 카드와 다른 지금 집안을 말한다 */
@@ -83,7 +83,7 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    지문이 바뀌었는데 판도 확인도 그대로면 막는다.
  */
 /**
- * 🔴 `draft-gates-v3.1` (2026-09-28) — 같은 날 시간 의존 문장도 사람 검토. 운영 v3 행이 0 이라 품질 계약 판 이름
+ * 🔴 `draft-gates-v3.1` (2026-09-28) — 같은 날 시간 의존 문장도 구조화 HOLD 경고. 운영 v3 행이 0 이라 품질 계약 판 이름
  *    (`quality-v3`)은 그대로 두고 이 값으로 digest 를 바꾼다(`check:quality-contract -- --revise`).
  */
 /**
@@ -146,7 +146,7 @@ export type CreativityBlockClass = (typeof CREATIVITY_BLOCK_CLASS)[keyof typeof 
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
- *    **모호하면 사람 검토**로 보낸다. 모호한 것을 통과시키지 않는다 — 적재는 되지만
+ *    **모호하면 구조화 HOLD 경고**로 보낸다. 모호한 것을 통과시키지 않는다 — 적재는 되지만
  *    `gateResults.holds` 에 `DRAFT_LIFE_REVIEW:<코드>` 가 붙어 **자동 READY 에서 빠진다.**
  *
  *    quality-v1 cohort 30건 중 중대 결함 4건이 게이트 전부와 의미 검수(모순 0 · 추가 0)를 지나갔다:
@@ -161,13 +161,13 @@ export type CreativityBlockClass = (typeof CREATIVITY_BLOCK_CLASS)[keyof typeof 
 export const DRAFT_LIFE_REVIEW_CODES = [
   'maritalStatusConflict', 'careHouseholdConflict', 'childLifeStageConflict', 'unsupportedHealthClaim',
   /**
-   * 🔴 (quality-v3 · 2026-09-28) 원천·시점과 대조하는 넷 — 확정할 수 없으면 같은 사람 검토 경고로 간다.
+   * 🔴 (quality-v3 · 2026-09-28) 원천·시점과 대조하는 넷 — 확정할 수 없으면 같은 구조화 HOLD 경고로 간다.
    *    경고 이름(`DRAFT_LIFE_REVIEW:<코드>`)은 v2 와 같다 — 적재기·자동 READY 가 이미 이 접두를 읽는다.
    */
   'staleTimeClaim', 'externalCommunityClaim', 'mediaDependentDraft', 'truncatedSourceCompletion',
   /** 🔴 (v3) 계획이 `noLifeFactNeeded` 인데 자기 가족사를 명시해 말한다 — `selfBasis=null` 은 여전히 확정(AUTO_HOLD)이다 */
   'unwarrantedSelfClaim',
-  /** 🔴 (v4) 소프트 품질 — 확정하지 않는다(사람 검토로만) */
+  /** 🔴 (v4) 소프트 품질 — 확정 차단과 구분된 구조화 HOLD 경고 */
   'thinVentDraft',
 ] as const satisfies readonly DraftGateCode[]
 export type DraftLifeReviewCode = (typeof DRAFT_LIFE_REVIEW_CODES)[number]
@@ -206,7 +206,7 @@ export type DraftGatePlan = {
 /**
  * 🔴 정본 카드에서 필요한 칸만 — v2 가 다시 정의하지 않는다.
  *    생활 일관성 칸(부부 관계 · 돌봄 · 갱년기 · noGo · 집안 구성)은 **없을 수 있다** — 없으면
- *    그 축에서 무엇이 걸렸을 때 통과시키지 않고 **사람 검토**로 보낸다(모르는 것 = 모호).
+ *    그 축에서 무엇이 걸렸을 때 통과시키지 않고 **구조화 HOLD 경고**로 보낸다(모르는 것 = 모호).
  */
 export type DraftGateCard = Pick<PoolCard, 'childrenCount' | 'childrenAgeBands' | 'maritalStatus'>
   & Partial<Pick<PoolCard, 'spouseRelationship' | 'parentCare' | 'menopauseStatus' | 'noGoTopics' | 'noGoExpressions' | 'household' | 'ageBand'>>
@@ -226,7 +226,7 @@ const WARRANT_OF: Readonly<Record<SelfClaimAxis, readonly string[]>> = {
 }
 
 /**
- * 🔴 (v12) `selfBasis=null` 시 즉시 차단하지 않고 **사람 검토**로만 보내는 저위험 축.
+ * 🔴 (v12) `selfBasis=null` 시 즉시 확정 차단하지 않고 **구조화 HOLD 경고**로 보내는 저위험 축.
  *    직장에 관한 짧은 일반 경험은 저위험 결이다 — CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE.
  *    부모 축은 원문을 옮긴 생략 주어(`부모님이…`)만 허용한다. `저희 부모님`처럼 명시적으로
  *    Persona 자기 사실로 만든 문장은 배우자·자녀·돌봄·갱년기·자산과 함께 즉시 차단한다.
@@ -268,7 +268,7 @@ const OWNER_OPTS = { isFrameWord: isTopicFrame } as const
 
 /**
  * 🔴 **확정 게이트 전부를 한 번에**(v1 셋 + v2 생활 일관성의 확정 모순). 빈 배열이면 통과다.
- *    모호(사람 검토)까지 받으려면 `judgeDraftLife` 를 부른다.
+ *    모호(구조화 HOLD 경고)까지 받으려면 `judgeDraftLife` 를 부른다.
  *    `plan` 이 없으면 B 를, `card` 가 없으면 C 를 **판정하지 않는다** — 모르는 것을
  *    결함으로 세지 않는다. 카드를 못 찾은 경우는 나이 판정(`judgeSelfAgeBasis`)이 이미 막는다.
  */
@@ -291,7 +291,7 @@ export type DraftGateInput = {
 /**
  * 🔴 **초안 밖에서 가져오는 사실** — 원천 글과 판정 시각. 모르는 것은 `null` 이다(지어내지 않는다).
  *    `source` 가 `null` 이면 원천을 모른다 — 시점·자료·잘림·출처 축에서 무엇이 걸렸을 때
- *    통과시키지 않고 **사람 검토**로 보낸다.
+ *    통과시키지 않고 **구조화 HOLD 경고**로 보낸다.
  */
 export type DraftGateContext = {
   /** 🔴 판정 시각 — 회차 시각(`RUN_AT`)이다. 벽시계를 따로 읽지 않는다 */
@@ -315,7 +315,7 @@ export type DraftGateSource = {
 }
 
 /**
- * 🔴 **초안 게이트 전부 — 확정(`failures`)과 사람 검토(`reviews`)를 함께 낸다** (2026-09-28).
+ * 🔴 **초안 게이트 전부 — 확정(`failures`)과 구조화 HOLD 경고(legacy `reviews`)를 함께 낸다** (2026-09-28).
  *    `failures` 가 하나라도 있으면 채택하지 않는다(AUTO_HOLD). `reviews` 는 채택은 되지만
  *    자동 READY 에서 빠지는 경고다 — 🔴 **모호한 것을 통과로 뭉개지 않는다.**
  *    같은 코드가 둘 다에 있으면 `failures` 만 남긴다.
@@ -344,7 +344,7 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
   const hardCodes = new Set(all.map((f) => f.code))
   return {
     failures: [...all].sort((a, b) => rank(a.code) - rank(b.code)),
-    // 🔴 (v12) core.reviews: 저위험 축(work·parents)·가족 유사 표현 사람 검토가 여기 섞인다
+    // 🔴 (v12) core.reviews: 저위험 축(work·parents)·가족 유사 표현 구조화 HOLD가 여기 섞인다
     reviews: [...core.reviews, ...life.review, ...ctx.review, ...basis]
       .filter((r) => !hardCodes.has(r.code)).sort((a, b) => rank(a.code) - rank(b.code)),
   }
@@ -616,7 +616,7 @@ function judgeMarital(frames: readonly ClauseFrame[], card: DraftGateCard): Life
     const rel = (card.spouseRelationship ?? '').trim()
     /**
      * 🔴 사별·비혼 · 기혼(원만) 은 확정 모순이다. 기혼(갈등·소원) · 관계 미상 · 모르는 혼인 상태는
-     *    이혼 이야기가 나올 수는 있는 집이라 확정할 수 없다 → 사람 검토(통과가 아니다).
+     *    이혼 이야기가 나올 수는 있는 집이라 확정할 수 없다 → 구조화 HOLD(통과가 아니다).
      */
     const level: 'hard' | 'review' = m === '사별' || m === '비혼' || (m === '기혼' && rel === '원만')
       ? 'hard' : 'review'
@@ -627,7 +627,7 @@ function judgeMarital(frames: readonly ClauseFrame[], card: DraftGateCard): Life
 
 /**
  * 🔴 (v4 · 창업자 gold #5) **결혼 전 연애 단계를 자기 일로** — `연상연하 커플인데요 … 남친의 누나 … 나중에 결혼하면`.
- *    50·60대 화자나 기혼 카드가 말하면 우리 또래 화자로 읽히지 않는다. 재혼·연애는 있을 수 있어 **사람 검토**다.
+ *    50·60대 화자나 기혼 카드가 말하면 우리 또래 화자로 읽히지 않는다. 재혼·연애는 있을 수 있어 **구조화 HOLD**다.
  *    🔴 남의 일(`딸이 남친을 데려왔어요`) · 전언 · 묻는 문장은 걸리지 않는다(정본 1인칭 판정).
  */
 const DATING_SELF_RE =
@@ -943,7 +943,7 @@ export function judgeLifeConsistency(
 //    ```
 // 🔴 **낱말 하나로 막지 않는다.** 네 축 모두 **초안의 모양 + 원천의 사실(시각 · 사이트 · 사진 수 · 끝맺음)**
 //    둘이 함께 있을 때만 걸린다. `요즘` · `이번에` · `오늘` 만으로는 걸리지 않는다.
-// 🔴 **확정할 수 있을 때만 막는다(AUTO_HOLD).** 원천 사실을 모르거나 해석이 둘이면 사람 검토다 —
+// 🔴 **확정할 수 있을 때만 막는다(AUTO_HOLD).** 원천 사실을 모르거나 해석이 둘이면 구조화 HOLD다 —
 //    통과시키지 않는다.
 
 /**
@@ -960,7 +960,7 @@ function readSelfFamilyLikeTopic(title: string, body: string): string[] {
 }
 
 /**
- * 🔴 **`noLifeFactNeeded` 계획의 자기 가족사** (2026-09-28 quality-v3 · cohort #19) — 사람 검토.
+ * 🔴 **`noLifeFactNeeded` 계획의 자기 가족사** (2026-09-28 quality-v3 · cohort #19) — 구조화 HOLD.
  *    계획이 "생활사 없이 쓰는 보편 감정 글" 이라고 정했는데 초안이 `우리 집만 그런 게 아니었구나` 로
  *    자기 집안 사정을 사실로 뒀다. 생활사가 필요 없다고 한 계획은 **허가가 아니다**(근거도 비어 있다).
  *    🔴 확정(AUTO_HOLD)으로 두지 않는다 — 카드가 그 사실을 뒷받침할 수도 있다(P08 은 성인 자녀 둘이 있다).
@@ -971,13 +971,13 @@ function readSelfFamilyLikeTopic(title: string, body: string): string[] {
  */
 /**
  * 🔴 정본 파서는 `친정` 을 낱말 자체로 '내 것' 으로 읽는다 — 호칭 이야기(`친정이나 처가는 …`)까지 명시로 센다.
- *    사람 검토로 보내는 자리라 **1인칭 한정사가 절에 실제로 있을 때만** 센다.
+ *    구조화 HOLD로 보내는 자리라 **1인칭 한정사가 절에 실제로 있을 때만** 센다.
  */
 const SELF_OWNER_WORD_RE = /(?<![가-힣])(?:우리|저희|울|제|내)\s?[가-힣]/
 const FAMILY_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['spouse', 'children', 'parents', 'parentCare'])
 /**
  * 🔴 (v4 · 창업자 gold #16) **1인칭 금융 행동** — `보험 싹 리모델링해서 바꿨거든요`. 계획이 생활사를 허가하지 않았는데
- *    자기 돈·계약 사정을 사실로 둔다. 소재(보험 영업 연락)는 좋다 — 막지 않고 사람 검토(질문형 최소 수정)로 보낸다.
+ *    자기 돈·계약 사정을 사실로 둔다. 소재(보험 영업 연락)는 좋다 — 확정 차단 대신 구조화 HOLD(질문형 최소 수정)로 보낸다.
  *    🔴 묻는 문장 · 전언 · 남의 일은 걸리지 않는다.
  */
 const FINANCE_SELF_RE =
@@ -996,7 +996,7 @@ function judgeFinanceSelf(title: string, body: string, plan: DraftGatePlan | nul
 /**
  * 🔴 (v4 · 창업자 gold #1 · 소프트 품질) **받아칠 거리가 없는 하소연.** 계획 스스로 마무리를 `vent` 로,
  *    역할을 대화 촉발(`conversationSpark`) **하나만** 골랐고(공감 경험 · 쓸 만한 답 · 발견 없음) 묻는 말도 없다.
- *    🔴 확정하지 않는다 — 사람 검토다. 공감 역할이 있는 하소연(`experienceResonance`)이나 묻는 글은 걸리지 않는다.
+ *    🔴 확정하지 않는다 — 구조화 HOLD다. 공감 역할이 있는 하소연(`experienceResonance`)이나 묻는 글은 걸리지 않는다.
  *    🔴 계획에 이 칸이 없으면 판정하지 않는다(소프트 신호라 모름을 결함으로 세지 않는다).
  */
 function judgeThinVent(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
@@ -1203,7 +1203,7 @@ function judgeStaleTime(frames: readonly ClauseFrame[], ctx: DraftGateContext): 
   /**
    * 🔴 **같은 날이어도 통과시키지 않는다** (2026-09-28 마스터 재리뷰). 초안이 발행되는 시각은 판정 시각이
    *    아니다 — `지금 콘서트 보는 중` · `오늘 추석 음식 만드는 중` 은 몇 시간 뒤에도 틀린다. 발행 신선도(TTL)에
-   *    맡기지 않는다. 같은 날 · 시각 모름은 사람 검토, 앞 날짜의 강한 실시간 주장만 확정(AUTO_HOLD)이다.
+   *    맡기지 않는다. 같은 날 · 시각 모름은 구조화 HOLD, 앞 날짜의 강한 실시간 주장만 확정(AUTO_HOLD)이다.
    *    회고 · 시간 표현이 없는 글은 `readTimeClaims` 에서 이미 걸리지 않는다.
    */
   const posted = ctx.source?.postedAt?.toISOString() ?? '미상'

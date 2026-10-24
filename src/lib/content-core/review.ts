@@ -398,23 +398,23 @@ export const MACHINE_OUTCOMES = ['adopt', 'hold', 'drop'] as const
 export type MachineOutcome = (typeof MACHINE_OUTCOMES)[number]
 
 /**
- * 🔴 **사람에게 넘길 것과 기계가 막을 것을 가른다** (2026-09-20 실측 보정).
+ * 🔴 **참고 finding과 기계가 막을 결함을 가른다** (2026-09-20 실측 · 2026-10-24 설명 보정).
  *
  *    `unsupportedAdditions` · `droppedFromSource` 는 **경고**다. 막지 않는다.
- *    SHADOW5B 5편은 사람이 전부 READY 로 봤는데 이 둘이 두 편을 막았고,
+ *    SHADOW5B 5편은 최종 판정상 전부 READY 였는데 이 둘이 두 편을 막았고,
  *    **같은 원문·같은 초안이 회차마다 ADOPT/HOLD 를 오갔다** —
  *    "원문에 있는 사건인가" · "뜻이 남았는가" 는 모델이 회차마다 다르게 읽는 판단이다.
- *    그것으로 사람이 READY 라고 본 글을 막으면, 막은 쪽이 틀린 횟수가 더 많다.
+ *    그것으로 안전한 창작을 막으면, 막은 쪽이 틀린 횟수가 더 많다.
  *
- * 🔴 **그래도 지우지 않는다.** 근거는 artifact 에 그대로 남고 사람 검토 화면에 뜬다 —
- *    판정을 **사람에게 넘기는 것**이지 검사를 없애는 것이 아니다.
+ * 🔴 **그래도 지우지 않는다.** 근거는 artifact 와 운영 증거에 참고 finding으로 남긴다.
+ *    Content Core의 `adopt/hold/drop`이 유일한 발행 전 품질 결정이며 참고 finding은 재해석하지 않는다.
  *
  * 🔴 **확정할 수 있는 결함은 그대로 막는다**: deterministic 실패 · 개인정보 · 복제 ·
  *    금지어 · 보호 사실 누락 · harm · lifeContradictions · voice 누수·불일치 ·
  *    미완료 · 잘림 · 파싱 실패 · 사용량 미상.
  * 🔴 **완주하지 못한 검수는 절대 adopt 가 아니다.**
  *    예산이 모자랄수록 검수가 느슨해지는 구조를 만들지 않는다.
- * 🔴 adopt 는 **후보로 보낸다**는 뜻일 뿐이다. 사람 검토 없는 발행은 그대로 막혀 있다.
+ * 🔴 adopt 는 다음 자동 생명주기로 보낼 수 있다는 뜻이다. 계약·도장·자료 의존 같은 배포 전용 검사는 별도로 유지한다.
  */
 /**
  * 🔴 **다시 물어보면 답이 달라질 수 있는 사유들.** 결론이 아니라 "못 물어봤다" 이다.
@@ -441,8 +441,8 @@ export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource']
 export type ReviewWarningAxis = (typeof REVIEW_WARNING_AXES)[number]
 
 /**
- * 🔴 **사람이 판정할 자리 한 줄씩.** 기계가 막지 않고 넘긴 것이 무엇인지 적는다 —
- *    빈 배열이면 넘길 것이 없다는 뜻이다.
+ * 🔴 **참고 finding을 한 줄씩 남긴다.** 기계가 막지 않은 경고의 근거다 —
+ *    빈 배열이면 참고 finding이 없다는 뜻이다.
  */
 export function reviewWarnings(s: SemanticVerdict | null): string[] {
   if (s === null) return []
@@ -484,8 +484,8 @@ export function judgeMachine(input: {
   if (s === null) return { outcome: 'hold', reason: '의미 판정을 읽지 못했다', warnings: none }
   if (s.issues.includes('harm')) return { outcome: 'drop', reason: '위해', warnings: none }
   /**
-   * 🔴 **여기서부터가 경고다.** 근거는 이미 원문·초안에서 확인된 것뿐이고,
-   *    artifact 와 사람 검토 화면에 그대로 남는다. 막지는 않는다.
+   * 🔴 **여기서부터가 참고 finding이다.** 근거는 이미 원문·초안에서 확인된 것뿐이고,
+   *    artifact 와 운영 증거에 그대로 남는다. 막지는 않는다.
    */
   const warnings = reviewWarnings(s)
   if (s.lifeContradictions.length > 0) {

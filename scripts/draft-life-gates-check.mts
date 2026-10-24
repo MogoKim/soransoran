@@ -321,7 +321,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   const { copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION } = await import('../src/lib/draft-originality')
   const LIFE = DRAFT_LIFE_REVIEW_CODES as readonly string[]
 
-  console.log('\n⑨-a quality-v2 게이트 정본 — 운영 회귀 4 · 대조 8 · 사람 검토 2')
+  console.log('\n⑨-a quality-v2 게이트 정본 — 운영 회귀 4 · 대조 8 · 구조화 HOLD 2')
   for (const fx of LIFE_FIXTURES) {
     const p = fx.plan as { selfBasis?: string | null; speakerWarrants?: { fact: string; evidenceText: string }[] }
     const r = judgeDraftLife({
@@ -395,11 +395,11 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     check('🔴 같은 글 · 계획 근거 없음(noLifeFactNeeded) → unsupportedHealthClaim',
       without.failures.some((f) => f.code === 'unsupportedHealthClaim'))
   }
-  // 🔴 카드 집안 구성이 없으면 모르는 것이다 — 통과시키지 않고 사람 검토
+  // 🔴 카드 집안 구성이 없으면 모르는 것이다 — 통과시키지 않고 구조화 HOLD
   {
     const { household: _h, ...noHousehold } = realCard('P05')
     const r = judgeDraftLife({ title: '시댁', body: '시어머니께 한동안 연락도 못 드렸어요.', plan: null, card: noHousehold, context: NEUTRAL })
-    check('🟡 카드 집안 구성 미상 + 상시 돌봄 + 연락 끊김 → 사람 검토(통과 아님)',
+    check('🟡 카드 집안 구성 미상 + 상시 돌봄 + 연락 끊김 → 구조화 HOLD(통과 아님)',
       r.failures.length === 0 && r.reviews.some((x) => x.code === 'careHouseholdConflict'), JSON.stringify(r))
   }
 
@@ -461,7 +461,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v18 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v18')
+    check(`품질 계약 판 = quality-v19 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v19')
     check(`초안 게이트 판 = draft-gates-v11 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v11')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
@@ -507,7 +507,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
       got === ph.want, got)
   }
 
-  console.log('\n⑩-b 원천을 모르면(source=null) 걸린 것은 사람 검토 — 통과가 아니다')
+  console.log('\n⑩-b 원천을 모르면(source=null) 걸린 것은 구조화 HOLD — 통과가 아니다')
   {
     const at = FIXTURE_NOW
     const r1 = judgeDraftLife({ title: '명절', body: '이제 집으로 가는 길이에요. 명절 잘 보내세요.', card: realCard('P01'), plan: null, context: { at, source: null } })
@@ -516,9 +516,9 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     check('🟡 움직임 관찰 + 원천 모름 → review:externalCommunityClaim', r2.failures.length === 0 && r2.reviews.some((x) => x.code === 'externalCommunityClaim'), JSON.stringify(r2))
     const r3 = judgeDraftLife({ title: '목도리', body: '다 떴는데 한번 봐주세요.', card: realCard('P10'), plan: null, context: { at, source: null } })
     check('🟡 봐 달라 + 원천 모름 → review:mediaDependentDraft', r3.failures.length === 0 && r3.reviews.some((x) => x.code === 'mediaDependentDraft'), JSON.stringify(r3))
-    // 🔴 사람 검토로 갈 수 있는 코드는 전부 적재 경고 목록에 있다 — 목록 밖 코드는 경고로 가지 못한다
+    // 🔴 구조화 HOLD로 갈 수 있는 코드는 전부 적재 경고 목록에 있다 — 목록 밖 코드는 경고로 가지 못한다
     const all = [r1, r2, r3].flatMap((r) => r.reviews.map((x) => x.code as string))
-    check('🔴 사람 검토 코드는 전부 DRAFT_LIFE_REVIEW_CODES 안이다', all.every((c) => REVIEWABLE.includes(c)), all.join(','))
+    check('🔴 구조화 HOLD 코드는 전부 DRAFT_LIFE_REVIEW_CODES 안이다', all.every((c) => REVIEWABLE.includes(c)), all.join(','))
   }
 
   console.log('\n⑩-c 배선 — 새 생성 · 캐시 채택이 같은 원천·시각을 받는다 (러너 소스)')
@@ -729,7 +729,7 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
   const V12_MARK = { version: 'quality-v12', digest: '8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3' }
   const C14 = currentQualityContract()
   check('🔴 v12 표식 행은 지금(v14) 품질 계약 행이 아니다 → legacy(결함 해소 대상이 될 수 있다)',
-    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && C14.version === 'quality-v18' && C14.digest !== V12_MARK.digest)
+    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && C14.version === 'quality-v19' && C14.digest !== V12_MARK.digest)
   const aud = {
     queueId: 'cmvfr8glb0001xm4r2n7abt2z', postId: 'cmvfvauqy0001xmui1bz7u95n', selectedAtN: 1, selectedTarget: 1,
     selectedAt: new Date('2026-10-20T00:30:00.000Z'), publishedTitleHash: digestOf(exact.title), publishedBodyHash: digestOf(exact.body),

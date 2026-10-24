@@ -195,7 +195,7 @@ async function main(): Promise<void> {
     const done = await audit(r.queueId)
     check('🔴 🔴 **다음 회차 성공 → 같은 행을 no 로 확정 · 실패 표식 없음 · exit 0**', ok.code === 0 && done.defect === 'no' && readRetryableFailure(done.note) === null, `${ok.code} · ${done.note}`)
     check('🔴 🔴 **확정 뒤 다시 열린다 · 막혔던 도장 행이 발행된다**', (await auditAwareGate(prisma, ON, f.now)).open && (await pubTx(w6.id)).kind === 'published')
-    const again = await recordCombinedAudit(prisma, { queueId: r.queueId, combined: { kind: 'retryable', rule: (await ruleAuditJudge({ queueId: r.queueId, postId: r.postId, title: r.title, body: r.body, stamp: readStamp((await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: r.queueId } })).editDiff) })), semantic: { outcome: 'retryable', defect: null, code: 'PAID_OFF', reasons: [], binding: null, contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, model: SEMANTIC_AUDIT_MODEL, promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION }, code: 'PAID_OFF', reason: 'x' }, auditor: 'model:semantic-audit:late', now: f.now })
+    const again = await recordCombinedAudit(prisma, { queueId: r.queueId, combined: { kind: 'retryable', rule: (await ruleAuditJudge({ queueId: r.queueId, postId: r.postId, title: r.title, body: r.body, stamp: readStamp((await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: r.queueId } })).editDiff) })), semantic: { outcome: 'retryable', defect: null, confirmation: 'none', code: 'PAID_OFF', reasons: [], binding: null, contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, model: SEMANTIC_AUDIT_MODEL, promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION }, code: 'PAID_OFF', reason: 'x' }, auditor: 'model:semantic-audit:late', now: f.now })
     const kept = await audit(r.queueId)
     check('🔴 🔴 **확정된 행에 뒤늦은 실패가 와도 덮지 않는다 — 확정은 정확히 한 번 · 기록(note) 그대로**',
       again === 'alreadyJudged' && kept.defect === 'no' && kept.note === done.note, `${again} · ${kept.note}`)
@@ -216,12 +216,18 @@ async function main(): Promise<void> {
     // 🔴 실제 `selectAudits` 경로도 한 번 — 자동 발행 N 의 ceil(N×0.2) 까지(이미 고른 것 포함) 고르고 hash 를 묶는다
     const sel = await selectAudits(prisma)
     check('실제 selectAudits 도 같은 표에 선정을 남긴다(이미 고른 행은 다시 고르지 않는다)', sel.kind === 'ok' && sel.picked.every((q) => !Object.values(posts).some((p) => p.queueId === q)), JSON.stringify(sel))
-    const pendingBefore = await prisma.autoReadyAudit.count({ where: { defect: null } })
+    const pendingIds = (await prisma.autoReadyAudit.findMany({ where: { defect: null }, select: { queueId: true } })).map((a) => a.queueId)
+    const pendingBefore = pendingIds.length
     const run = await runRunner(home)
     const r = roundOf(run.out)
     check('러너 exit 0(재시도 가능 실패 0) · 판정 전 전부 기록', run.code === 0 && (await prisma.autoReadyAudit.count({ where: { defect: null } })) === 0, `${run.code} · ${run.out.slice(-400)}`)
-    check('🔴 🔴 **의미 감사 유료 요청 = 문맥이 선 감사 수 (장부 경유 · 사전 계산 1:1)**',
-      run.paid === pendingBefore - 4 && run.count === run.paid && r.semanticCalls === pendingBefore - 4, `paid ${run.paid} · count ${run.count} · pending ${pendingBefore} · ${JSON.stringify(r)}`)
+    // 🔴 (v3) 측정된 1차 yes(life · fact 포함)는 같은 요청으로 한 번씩 더 확인한다 — 확인도 장부를 지난다
+    const confirmations = (await prisma.autoReadyAudit.findMany({ where: { queueId: { in: pendingIds } }, select: { note: true } }))
+      .filter((a) => /confirm=(confirmed|unconfirmed)\]/.test(a.note ?? '')).length
+    const measured = pendingBefore - 4
+    check('🔴 🔴 **의미 감사 유료 요청 = 문맥이 선 감사 수 + 1차 yes 확인 수 (장부 경유 · 사전 계산 1:1)**',
+      confirmations >= 2 && run.paid === measured + confirmations && run.count === run.paid && r.semanticCalls === measured + confirmations,
+      `paid ${run.paid} · count ${run.count} · pending ${pendingBefore} · 확인 ${confirmations} · ${JSON.stringify(r)}`)
     const ledgerDir = join(home, 'Library', 'Application Support', 'soransoran')
     const ledgerLines = readdirSync(ledgerDir, { recursive: true }).map(String).filter((x) => x.endsWith('.jsonl'))
       .flatMap((x) => readFileSync(join(ledgerDir, x), 'utf-8').split('\n').filter((l) => l !== ''))

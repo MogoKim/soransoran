@@ -384,8 +384,8 @@ async function main(): Promise<void> {
     const cs = await personaRows(pid)
     const fu = cs.find((c) => c.id !== first)
     check('🔴 Persona 댓글 총 2건 — 추가 1건', cs.length === 2, `${cs.length} ${JSON.stringify(r.lines)} ${JSON.stringify(r.sweepAfter?.lines)}`)
-    check('🔴 추가 댓글은 첫 댓글(질문)에 단 답글 · 글쓴이 아님 · 첫 댓글 Persona 아님',
-      fu !== undefined && fu.parentId === first && fu.personaId !== a.id && fu.personaId !== b.id)
+    check('🔴 추가 댓글은 첫 댓글(질문)에 글쓴이가 단 답글 · 첫 댓글 Persona 아님',
+      fu !== undefined && fu.parentId === first && fu.personaId === a.id && fu.personaId !== b.id)
     const q = fu === undefined ? null : await prisma.personaApprovalQueue.findFirst({ where: { publishedCommentId: fu.id },
       select: { decidedBy: true, status: true, dedupKey: true, editDiff: true } })
     const log = fu === undefined ? null : await prisma.personaActivityLog.findFirst({ where: { targetId: fu.id }, select: { decidedBy: true } })
@@ -443,7 +443,9 @@ async function main(): Promise<void> {
     const ids = cs.map((c) => c.personaId)
     // 🔴 질문이 계속 이어지는 대화 — 상한까지 실제로 닿아야 "5 를 넘지 않는다" 가 빈말이 아니다
     check('🔴 Persona 댓글 정확히 5(상한 도달) · 넘지 않음 · 추가 4', cs.length === 5, `${cs.length}`)
-    check('🔴 같은 Persona 0 · 글쓴이 0', new Set(ids).size === ids.length && !ids.includes(a.id))
+    // 🔴 (2026-10-24) 글쓴이는 다른 Persona 댓글에 답글로 한 번까지 — 최상위 댓글은 0
+    check('🔴 같은 Persona 0 · 글쓴이는 답글 한 번까지(최상위 0)', new Set(ids).size === ids.length
+      && cs.filter((c) => c.personaId === a.id).every((c) => c.parentId !== null))
     const parents = cs.filter((c) => c.parentId !== null)
     let orphan = 0; let self = 0
     for (const c of parents) {
@@ -489,8 +491,9 @@ async function main(): Promise<void> {
     const cases: [string, string, () => Promise<string>][] = [
       ['🔴 다른 글의 댓글에 답글(고아)', '고아', () => injectFollowup(c, pid, stamp(pid, 2, otherFirst), 2)],
       ['🔴 실회원 댓글에 답글', 'Persona 댓글이 아니다', () => injectFollowup(c, pid, stamp(pid, 2, mem), 2)],
-      ['🔴 글쓴 Persona 의 추가 댓글(자기 글)', '이미 썼거나 글쓴이', () => injectFollowup(a, pid, stamp(pid, 2, first), 2)],
-      ['🔴 이미 단 Persona(같은 Persona 반복)', '이미 썼거나 글쓴이', () => injectFollowup(b, pid, stamp(pid, 2, first), 2)],
+      // 🔴 (2026-10-24) 글쓴이는 다른 Persona 댓글에 답글로 한 번 답할 수 있다 — 최상위(글 hook) 자리는 여전히 자기 글이다
+      ['🔴 글쓴 Persona 의 최상위 추가 댓글(자기 글)', '이미 썼거나 글쓴이', () => injectFollowup(a, pid, stamp(pid, 2, null), 2)],
+      ['🔴 글쓴이 답글 자리에 다른 Persona(이미 단 Persona)', '글쓴이 답글 자리', () => injectFollowup(b, pid, stamp(pid, 2, first), 2)],
       ['🔴 순번이 지금 자리와 다름', '도장 순번', () => injectFollowup(c, pid, stamp(pid, 3, first), 3)],
       ['🔴 도장 없음', '도장이 없다', async () => {
         const id = await injectFollowup(c, pid, stamp(pid, 2, first), 2)
@@ -526,7 +529,7 @@ async function main(): Promise<void> {
       && (await prisma.personaApprovalQueue.findUniqueOrThrow({ where: { id: q2 }, select: { status: true } })).status === 'EXPIRED', w2.detail)
     // 🔴 스위치 · profile 이 트랜잭션 시각에 꺼져 있으면
     await prisma.personaApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: F.FOLLOWUP_KEY_PREFIX } } })
-    const q3 = await injectFollowup(c, pid, stamp(pid, 2, first), 2)
+    const q3 = await injectFollowup(a, pid, stamp(pid, 2, first), 2)
     followupOn(false)
     const direct = await publishCandidateTx(prisma, { id: q3, now: new Date(), followupLane: true })
     check('🔴 스위치 OFF 면 트랜잭션을 직접 불러도 막힌다', direct.kind === 'blocked')
@@ -550,9 +553,9 @@ async function main(): Promise<void> {
   console.log('\n⑦ 중복 · 동시성 · 첫 댓글 sweep 분리')
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
-    const a = await persona('P01'); const b = await persona('P02'); const c = await persona('P03'); const d = await persona('P04')
+    const a = await persona('P01'); const b = await persona('P02'); await persona('P03'); const d = await persona('P04')
     const pid = await post(a, 200); const first = await autoFirst(b, pid, 180)
-    const q = await injectFollowup(c, pid, stamp(pid, 2, first), 2)
+    const q = await injectFollowup(a, pid, stamp(pid, 2, first), 2)
     let dup = false
     try { await injectFollowup(d, pid, stamp(pid, 2, first), 2) } catch (e) { dup = (e as { code?: string }).code === 'P2002' }
     check('🔴 같은 자리(글·순번) 열쇠는 unique 로 두 번 들어가지 않는다', dup)
@@ -567,7 +570,7 @@ async function main(): Promise<void> {
     check('🔴 같은 행 동시 발행 → 1건만', res.filter((x) => x.kind === 'published').length === 1 && (await personaRows(pid)).length === 2, JSON.stringify(res.map((x) => x.kind)))
     // 다른 순번 두 행이 같은 글에 — 순번이 맞는 하나만
     const pid2 = await post(a, 200); const first2 = await autoFirst(b, pid2, 180)
-    const x = await injectFollowup(c, pid2, stamp(pid2, 2, first2), 2)
+    const x = await injectFollowup(a, pid2, stamp(pid2, 2, first2), 2)
     const y = await injectFollowup(d, pid2, stamp(pid2, 3, null), 3)
     const r2 = await Promise.all([
       publishCandidateTx(prisma, { id: x, now, followupLane: true }),
@@ -580,9 +583,9 @@ async function main(): Promise<void> {
   console.log('\n⑧ 복구 · 재실행 — 적재 뒤 죽어도 provider 재호출 0 · 발행 뒤 다시 돌아도 중복 행 0')
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
-    const a = await persona('P01'); const b = await persona('P02'); const c = await persona('P03'); await persona('P04')
+    const a = await persona('P01'); const b = await persona('P02'); await persona('P03'); await persona('P04')
     const pid = await post(a, 200); const first = await autoFirst(b, pid, 180)
-    await injectFollowup(c, pid, stamp(pid, 2, first), 2)
+    await injectFollowup(a, pid, stamp(pid, 2, first), 2)
     const g = fakeGen()
     const r = await phase(g.gen)
     check('🔴 남은 PENDING 을 먼저 낸다 · provider 0', r.sweepBefore?.published === 1 && g.calls() === 0 && (await personaRows(pid)).length === 2,
@@ -625,8 +628,7 @@ async function main(): Promise<void> {
     for (const [label, over] of cases) {
       if (label === 'profile 하루 상한 0 잔량') {
         const extra = await post(a, 200); const f2 = await autoFirst(b, extra, 180)
-        const c9 = await persona('P09')
-        const qx = await injectFollowup(c9, extra, stamp(extra, 2, f2), 2)
+        const qx = await injectFollowup(a, extra, stamp(extra, 2, f2), 2)
         await publishCandidateTx(prisma, { id: qx, now: new Date(), followupLane: true })
       }
       const g = fakeGen()

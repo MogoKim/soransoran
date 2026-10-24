@@ -69,7 +69,12 @@ export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p13'
  * 🔴 **v2-review-p9 (2026-10-19 · quality-v12)** — 사소한 생략과 안전한 창작을 의미 경고로 세지 않는다.
  * 핵심 뜻·결론 손실과 고위험 생활 사실·제3자 사건·결과 창작만 기존 경고 배열에 남긴다.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p9'
+/**
+ * 🔴 **v2-review-p10 (2026-10-24 · quality-v19)** — 발행 뒤 의미 감사와 같은 실질 변경 계약
+ * (`material-contract.ts` · 시간 바꿔쓰기 · 커뮤니티식 1인칭 다시 말하기 · 사소한 생략)을 그대로 싣는다.
+ * 경고 배열·축·출력 모양은 p9 그대로다.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p10'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

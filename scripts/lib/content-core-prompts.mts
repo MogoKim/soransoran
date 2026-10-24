@@ -22,6 +22,7 @@ import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT,
 } from '../../src/lib/content-core/review'
+import { MATERIAL_CONTRACT_LINES } from '../../src/lib/content-core/material-contract'
 import { COPY_RUN_CHARS, COPY_RUN_WORDS } from '../../src/lib/draft-originality'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
 
@@ -425,6 +426,8 @@ export function buildV2ReviewSystemPrompt(input: {
   return [
     '너는 40대 중반~60대 중반 여성 커뮤니티의 글 검수자다.',
     '[원문]과 [초안]을 **직접 견주어** 아래 여섯 가지만 본다.',
+    // 🔴 (v2-review-p10 · quality-v19) 발행 뒤 의미 감사와 같은 실질 변경 계약 — 정본은 `material-contract.ts` 한 곳이다
+    ...MATERIAL_CONTRACT_LINES,
     '',
     '## ① droppedFromSource — 빠져서 원문의 뜻·결론·핵심 질문이 달라지는 내용이 있는가',
     '   evidence 에는 **[원문]에 실제로 있는 문장**을 그대로 옮긴다.',

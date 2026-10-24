@@ -25,6 +25,7 @@ import {
 import type { GateLine } from '../../src/lib/persona-comment-gate-report'
 import type { CandidateProvenance, ModelCanon } from '../../src/lib/persona-comment-provenance'
 import { provenanceOf } from '../../src/lib/persona-comment-provenance'
+import { requestShapeRejected } from '../../src/lib/content-core/generation-failure'
 
 /** 🔴 주입되는 provider. CI 는 가짜, 운영은 `callProvider` 를 감싼 것 */
 export type PipelineProvider = (args: {
@@ -80,7 +81,12 @@ export type PipelineResult = {
   created: number
   outcomes: PipelineOutcome[]
   stoppedReason: string | null
+  /** 🔴 회차를 멈춘 구조화 사유 — 요청 모양 거부면 `PROVIDER_REQUEST_REJECTED`, 아니면 null */
+  stoppedCode: 'PROVIDER_REQUEST_REJECTED' | null
 }
+
+/** 🔴 요청 모양 거부(400)로 회차의 provider 호출을 멈출 때의 코드 */
+export const PROVIDER_REQUEST_REJECTED = 'PROVIDER_REQUEST_REJECTED'
 
 /**
  * 🔴 **모델이 확정되지 않으면 한 번도 부르지 않는다.**
@@ -129,7 +135,7 @@ export async function runEnqueuePipeline(args: {
 
   if (!modelGate.canWriteQueue || args.canon === null) {
     return {
-      providerCalls: 0, created: 0, outcomes,
+      providerCalls: 0, created: 0, outcomes, stoppedCode: null,
       stoppedReason: args.canon === null
         ? '확정 정본이 없다 — provider 호출 0 · Queue write 0'
         : `모델 미확정 — ${modelGate.reason}`,
@@ -138,7 +144,7 @@ export async function runEnqueuePipeline(args: {
   if (!args.preflightOk) {
     const why = args.preflightBlockers ?? []
     return {
-      providerCalls: 0, created: 0, outcomes,
+      providerCalls: 0, created: 0, outcomes, stoppedCode: null,
       stoppedReason: 'Gate 입력이 갖춰지지 않았다 — provider 호출 0'
         + `${why.length === 0 ? '' : ` (${why.join(' · ')})`}`,
     }
@@ -169,6 +175,17 @@ export async function runEnqueuePipeline(args: {
 
     providerCalls += 1
     const res = await args.provider({ model: provenance.model, input: t.input })
+    if (!res.ok && requestShapeRejected(res.errorCode)) {
+      /**
+       * 🔴 **요청 모양 거부(400)는 다시 보내도 같다** (2026-10-24 D10). 같은 회차의 다른 Persona · 다른 글은 같은 모양의
+       *    요청이다 — 첫 호출에서 회차의 provider 호출을 멈추고 구조화 사유를 남긴다. 일시 오류는 아래처럼 다음 후보로 간다.
+       */
+      at('PROVIDER_FAILED', `${res.errorCode} — 요청 모양 거부 · 이 회차 provider 호출 중단`)
+      return {
+        providerCalls, created, outcomes, stoppedCode: PROVIDER_REQUEST_REJECTED,
+        stoppedReason: `${PROVIDER_REQUEST_REJECTED} ${res.errorCode} — 요청 모양을 제공사가 받지 않았다 · 같은 회차 재시도 0`,
+      }
+    }
     if (!res.ok) { at('PROVIDER_FAILED', res.errorCode ?? 'UNKNOWN'); continue }
     const text = (res.text ?? '').trim()
     if (text === '') { at('PARSE_FAILED', '본문을 얻지 못했다'); continue }
@@ -207,5 +224,5 @@ export async function runEnqueuePipeline(args: {
     at('ENQUEUED', `${plan.status} 적재`, plan)
   }
 
-  return { providerCalls, created, outcomes, stoppedReason: null }
+  return { providerCalls, created, outcomes, stoppedReason: null, stoppedCode: null }
 }
