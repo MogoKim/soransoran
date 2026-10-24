@@ -81,7 +81,8 @@ const MUTATIONS = [
     replace: '    return { ...cur, [slug]: { ...e, briefRepairs: next, briefRepairCalls: total, attempts: (e.attempts ?? 0) + 1, regenCalls: (e.regenCalls ?? 0) + (calls ?? 0) } }' }] },
   // ── P1 producer 판정 ──
   { name: 'P1 수리 미해결을 판정에서 무시 (성공과 같은 verdict)', edits: [{ file: F.exit,
-    find: '  if (unresolved.length > 0) {\n    return {\n      code: PARTIAL_EXIT,', replace: '  if (false) {\n    return {\n      code: PARTIAL_EXIT,' }] },
+    // 🔴 수리 미해결만 판정에서 뺀다 — DIRECT 원고 미해결(fetchUnresolved) 조건은 그대로 둔다 (2026-10-24 지점 이동)
+    find: '  if (unresolved.length > 0 || fetchUnresolved.length > 0) {\n    const parts = [', replace: '  if (fetchUnresolved.length > 0) {\n    const parts = [' }] },
   { name: 'P1 전송불명을 미해결에서 뺌', edits: [{ file: F.exit,
     // DELIVERY_UNCERTAIN 만 뺀다 — 다음 줄의 LINEAGE_PENDING 등 나머지 값은 그대로 둔다
     find: "export const REPAIR_UNRESOLVED = Object.freeze(['FAILED', 'REJECTED', 'DELIVERY_UNCERTAIN', 'REPAIR_EXHAUSTED', 'HELD',\n",
@@ -89,7 +90,7 @@ const MUTATIONS = [
   { name: 'P1 결과를 못 읽으면 문제없음으로 봄', edits: [{ file: F.exit,
     find: "  else if (!report || typeof report !== 'object') failures.push(", replace: "  else if (!report || typeof report !== 'object') void (" }] },
   { name: 'P1 flow 가 수리 결과를 finalize 에 넘기지 않음', edits: [{ file: F.flow,
-    find: '  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage, repair: repairStage })', replace: '  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage })' }] },
+    find: '  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage, repair: repairStage, fetchResult })', replace: '  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage, fetchResult })' }] },
   { name: 'P1 알림에 수리 미해결을 싣지 않음', edits: [{ file: F.notify,
     find: '  if (repairAlert) alerts.push(repairAlert)', replace: '' }] },
   { name: 'P1 handoff 에 수리 사실을 남기지 않음', edits: [{ file: F.handoff,

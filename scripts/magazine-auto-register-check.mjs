@@ -852,7 +852,8 @@ function makeDeps(over = {}) {
     checkOutstanding: () => ({ ok: true, code: 'CLEAR', message: '없음' }),
     runPlan: () => { calls.plan += 1; return OK_STAGE },
     runBrief: () => { calls.brief += 1; return OK_STAGE },
-    runFetch: () => { calls.fetch += 1; return OK_STAGE },
+    // 🔴 정상 회수는 표준 자리에 이번 회차 결과를 남긴다 — 결과 없는 회수는 이제 PARTIAL 이다 (2026-10-24)
+    runFetch: () => { calls.fetch += 1; return { ...OK_STAGE, startedAt: Date.now() - 1000, report: { ok: true, body: { writtenAt: new Date().toISOString(), results: [] } } } },
     notify: (ctx) => { calls.notify += 1; sent.push(ctx); return { ok: true } },
     ...over,
   }
@@ -3001,7 +3002,7 @@ const directSourceCheck = spawnSync(process.execPath, [join('scripts', 'magazine
   env: { ...process.env },
 })
 expect('source 관문 반례·변이가 전부 통과한다', directSourceCheck.status, 0)
-expect('source 관문 검사가 305개(부속 2 포함) 반례·변이를 실제 실행했다', /DIRECT_SPEC source 관문: 305 pass, 0 fail/.test(directSourceCheck.stdout), true)
+expect('source 관문 검사가 318개(부속 2 포함) 반례·변이를 실제 실행했다', /DIRECT_SPEC source 관문: 318 pass, 0 fail/.test(directSourceCheck.stdout), true)
 // 🔴 부속 검사 연결 블록이 통째로 사라지면 합계가 198 로 줄고, 아래 두 요약 표식도 사라진다
 expect('부속 source 작성 검사가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-check\.mjs — DIRECT_SPEC source 작성 검사: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)
 expect('부속 source 작성 변이가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-mutation\.mjs — DIRECT_SPEC source 작성 변이: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)

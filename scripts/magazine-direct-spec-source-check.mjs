@@ -58,6 +58,7 @@ const PATHS = {
   gate: join(ROOT, 'scripts/lib/magazine-delivery-gate.mjs'),
   regen: join(ROOT, 'scripts/lib/magazine-regen.mjs'),
   repair: join(ROOT, 'scripts/lib/magazine-input-repair.mjs'),
+  exit: join(ROOT, 'scripts/lib/magazine-producer-exit.mjs'),
   session: join(ROOT, 'scripts/lib/chatgpt-session.mjs'),
 }
 const FIXTURE = join(ROOT, 'scripts/__fixtures__/magazine/direct-spec/canary.input.json')
@@ -1439,7 +1440,14 @@ async function flowCases(flow, plan, brief) {
         for (const slug of existsSync(sel) ? readdirSync(sel) : []) if (brief.legacyBriefTarget(qBySlug.get(slug) ?? null).brief) briefed.push(slug)
         return { status: 0 }
       },
-      runFetch: () => ({ status: 0 }), notify: () => ({ ok: true }),
+      // 🔴 성공한 회수처럼 — DIRECT 선정 행에 원고를 남기고 이번 회차 결과를 돌려준다
+      runFetch: () => {
+        const run = JSON.parse(readFileSync(join(runsDir, TODAY, 'run.json'), 'utf8'))
+        for (const s of run.selected.filter((x) => x.directSpec)) writeFileSync(join(draftsDir, s.slug, 'draft.md'), PASS_DRAFT)
+        return { status: 0, startedAt: Date.now() - 1000, report: { ok: true, body: { writtenAt: new Date().toISOString(), results: [] } } }
+      },
+      draftExists: (slug) => existsSync(join(draftsDir, slug, 'draft.md')),
+      notify: () => ({ ok: true }),
     } })
     return { res, briefed, briefSpawns, draftsDir }
   }
@@ -1448,7 +1456,7 @@ async function flowCases(flow, plan, brief) {
     await flow.runProducerFlow({ dryRun: false, deps: {
       log: () => {}, checkLock: () => ({ ok: true }), checkTools: () => ({ ok: true }), checkGit: () => ({ ok: true }),
       checkOutstanding: () => ({ ok: true, message: '없음' }), runPlan: () => ({ status: 0 }), readSupply: () => supply,
-      runBrief: () => { briefSpawns++; return { status: 0 } }, runFetch: () => ({ status: 0 }), notify: () => ({ ok: true }),
+      runBrief: () => { briefSpawns++; return { status: 0 } }, runFetch: () => ({ status: 0, startedAt: Date.now() - 1000, report: { ok: true, body: { writtenAt: new Date().toISOString(), results: [] } } }), notify: () => ({ ok: true }),
     } })
     return briefSpawns
   }
@@ -1474,8 +1482,8 @@ async function flowCases(flow, plan, brief) {
         [{ selected: 2, reusable: 0, legacySelected: 0 }, 0], [{ selected: 0, reusable: 0, legacySelected: 0 }, 0],
       ]
       for (const [supply, want] of cases) assert.equal(await supplyFlow(supply), want, JSON.stringify(supply))
-      assert.deepEqual(flow.supplyFromRunJson({ selected: [{ slug: 'a' }, { slug: 'b', directSpec: {} }], reusable: [1] }), { selected: 2, reusable: 1, legacySelected: 1 })
-      assert.deepEqual(flow.supplyFromRunJson({}), { selected: null, reusable: 0, legacySelected: null })
+      assert.deepEqual(flow.supplyFromRunJson({ selected: [{ slug: 'a' }, { slug: 'b', directSpec: {} }], reusable: [1] }), { selected: 2, reusable: 1, legacySelected: 1, directSlugs: ['b'] })
+      assert.deepEqual(flow.supplyFromRunJson({}), { selected: null, reusable: 0, legacySelected: null, directSlugs: [] })
     }],
   ]
 }
@@ -1520,14 +1528,20 @@ function fakeChat(manuscript = PASS_DRAFT) {
       connect: async () => { m.connect++; return { contexts: () => [{ pages: () => [], newPage: async () => page() }], async close() {} } } },
   }
 }
-/** 🔴 운영 격리 기록과 같은 모양 — 옛 회수가 brief_missing 으로 끝난 뒤 runner 가 적는 바로 그 경로(recordDelivery · classifyFailure) */
-const briefMissingRecord = (slug, q) => realQuarantine.updateQuarantine((cur) => ({
-  ...cur,
-  [slug]: realQuarantine.recordDelivery(cur[slug], {
+/**
+ * 🔴 운영 격리 기록과 같은 모양 (2026-10-24 운영 장부 읽기 전용 확인).
+ *    00:10 회수가 brief_missing 으로 끝나며 runner 가 적은 delivery(recordDelivery · classifyFailure) 위에
+ *    01:00 auto-register 의 --fetch 실패가 recordFailure 로 top-level(kind CONTENT · attempts 1 · fingerprint null)을 얹었다.
+ *    둘 다 실제 기록 함수로 같은 순서로 만든다 — fixture 가 실제보다 약하면 재시도 판정을 시험하지 못한다.
+ */
+const briefMissingRecord = (slug, q) => realQuarantine.updateQuarantine((cur) => {
+  const delivered = realQuarantine.recordDelivery(cur[slug], {
     sent: false, messageFingerprint: null, now: NOW, date: TODAY, reason: 'brief_missing', stage: null,
     kind: classifyFailure({ code: 'brief_missing', stage: null, message: '', sent: false }).kind,
-  }),
-}), q)
+  })
+  return { ...cur, [slug]: { ...delivered, ...realQuarantine.recordFailure({ entry: delivered, fingerprint: null, now: NOW + 1,
+    reasons: ['FETCH_FAILED: 회수 실패 — brief_missing · 전송 0건'], sent: false }) } }
+}, q)
 function briefFreeCases(webui, session = realSession) {
   const planned = () => {
     const r = runPlan(real.plan, { queue: [directItem()], prepare: (d) => writeSource(d) })
@@ -1582,10 +1596,13 @@ function briefFreeCases(webui, session = realSession) {
       const r = planned(); const q = join(dirname(r.draftsDir), 'bf-retry-q.json')
       briefMissingRecord(DIRECT_SLUG, q)
       const before = realQuarantine.readQuarantine(q).store[DIRECT_SLUG]
-      assert.deepEqual({ sent: before.delivery.sent, fp: before.delivery.messageFingerprint, reason: before.delivery.reason },
-        { sent: false, fp: null, reason: 'brief_missing' }, '운영 기록과 같은 모양을 만들지 못했다 (반례 준비 실패)')
+      assert.deepEqual({ sent: before.delivery.sent, fp: before.delivery.messageFingerprint, reason: before.delivery.reason,
+        kind: before.kind, attempts: before.attempts, fingerprint: before.fingerprint },
+        { sent: false, fp: null, reason: 'brief_missing', kind: 'CONTENT', attempts: 1, fingerprint: null }, '운영 기록과 같은 모양을 만들지 못했다 (반례 준비 실패)')
       assert.equal(realQuarantine.deliveryHoldsFetch(before, 'sha256:any'), null, '지문 없는 기록이 전송 HOLD 가 됐다')
-      assert.equal(realQuarantine.judgeQuarantine({ entry: before, slug: DIRECT_SLUG, now: NOW }).skip, false, '지문 없는 기록이 격리로 읽혔다')
+      // 🔴 등록 준비(auto-register-ready)는 draft 지문(없으면 null)으로 본다 — attempts 1 < 2 → RETRYING
+      const jq = realQuarantine.judgeQuarantine({ entry: before, slug: DIRECT_SLUG, fingerprint: null, now: NOW + 2 })
+      assert.deepEqual({ skip: jq.skip, code: jq.code }, { skip: false, code: 'RETRYING' }, '운영 기록이 격리로 읽혔다')
       delivered(r, q, await sendOne(r, q), '격리 재시도 · brief_missing 기록 위')
     }],
     ['P0-3 실제 fetchManuscript — message 있음 · briefPath 없음 → brief 를 찾지 않고 연결 단계까지 간다', async () => {
@@ -1715,6 +1732,85 @@ function recoverCases(webui) {
   ]
 }
 
+/**
+ * P1-5 — producer 회차 판정. 유일한 DIRECT 원고가 실패해도 OK · exit 0 · handoff OK 였다 (2026-10-24).
+ *    실제 runProducerFlow 에 회수 결과(표준 결과 파일 모양)와 디스크 원고를 주고 판정 · handoff 를 본다.
+ *    legacy 개별 실패는 기존대로 OK 다. 결과 파일 부재 · 손상 · 이전 회차 파일은 거짓 OK 가 되지 않는다.
+ */
+const VERDICTS = {}
+const handoffMod = await imp(join(ROOT, 'scripts/lib/magazine-handoff.mjs'))
+function producerVerdictCases(flow) {
+  const fresh = (results = []) => ({ ok: true, body: { writtenAt: new Date(Date.now() + 1).toISOString(), results } })
+  const runFlow = async ({ supply, report, startedAt = Date.now(), drafted = [], fetchStatus = 0, fetchSpawned = true }) => {
+    const notes = []
+    const res = await flow.runProducerFlow({ dryRun: false, deps: {
+      log: () => {}, checkLock: () => ({ ok: true }), checkTools: () => ({ ok: true }), checkGit: () => ({ ok: true }),
+      checkOutstanding: () => ({ ok: true, message: '없음' }), runPlan: () => ({ status: 0 }), readSupply: () => supply,
+      runBrief: () => ({ status: 0 }),
+      runFetch: () => (fetchSpawned ? { status: fetchStatus, startedAt, resultFile: '/x/fetch.json', report } : { spawnError: 'ENOENT', status: null }),
+      draftExists: (slug) => drafted.includes(slug),
+      notify: async (ctx) => { notes.push(ctx); return { ok: true } },
+    } })
+    return { res, notes }
+  }
+  const directRun = flow.supplyFromRunJson({ selected: [{ slug: DIRECT_SLUG, directSpec: { specHash: 'sha256:x' } }], reusable: [] })
+  const reuseRun = flow.supplyFromRunJson({ selected: [], reusable: [{ slug: DIRECT_SLUG, directSpec: { specHash: 'sha256:x' } }] })
+  const legacyRun = flow.supplyFromRunJson({ selected: [{ slug: LEGACY_SLUG }], reusable: [] })
+  const mixedRun = flow.supplyFromRunJson({ selected: [{ slug: DIRECT_SLUG, directSpec: { specHash: 'sha256:x' } }, { slug: LEGACY_SLUG }], reusable: [] })
+  const partial = (label, r, outcome, slug = null) => {
+    VERDICTS[label] = { verdict: r.res.verdict, code: r.res.code }
+    assert.deepEqual({ verdict: r.res.verdict, code: r.res.code }, { verdict: 'PARTIAL', code: 3 }, `${label}: ${r.res.reason}`)
+    assert.ok(r.res.reason.includes(outcome) && (!slug || r.res.reason.includes(slug)), r.res.reason)
+    assert.ok(r.res.fetchResult?.failures?.some((f) => f.outcome === outcome && (!slug || f.slug === slug)), JSON.stringify(r.res.fetchResult))
+  }
+  return [
+    ['P1-5 DIRECT 선정 1 · 원고 0 (brief_missing 실패 행) → PARTIAL(3) · 이유에 slug · handoff 에 남고 등록은 진행', async () => {
+      const r = await runFlow({ supply: directRun, report: fresh([{ slug: DIRECT_SLUG, status: 'failed', reason: 'brief_missing', sent: false }]) })
+      partial('DIRECT 선정 · 원고 0', r, 'DIRECT_MANUSCRIPT_MISSING', DIRECT_SLUG)
+      assert.ok(r.res.reason.includes('brief_missing'), r.res.reason)
+      const date = '2026-10-24'
+      handoffMod.writeHandoff({ date, verdict: r.res.verdict, code: r.res.code, ran: r.res.ran, repair: r.res.repair, fetch: r.res.fetchResult })
+      const h = handoffMod.readHandoff(date)
+      assert.deepEqual({ verdict: h.verdict, code: h.code, direct: h.fetch?.direct, f: h.fetch?.failures },
+        { verdict: 'PARTIAL', code: 3, direct: { expected: 1, drafted: 0 }, f: [{ slug: DIRECT_SLUG, type: 'DIRECT', outcome: 'DIRECT_MANUSCRIPT_MISSING' }] })
+      const j = handoffMod.judgeHandoff({ handoff: h, producerLockHeld: false, waitedMs: 0 })
+      assert.deepEqual({ ready: j.ready, code: j.code }, { ready: true, code: 'HANDOFF_OK' }, '등록 단계가 기존 관문대로 진행하지 않는다')
+      assert.equal(r.notes.length, 1)
+    }],
+    ['P1-5 DIRECT 재사용 1 · 원고 0 (DELIVERY_UNCERTAIN HOLD) → PARTIAL(3)', async () => {
+      partial('DIRECT 재사용 · HOLD', await runFlow({ supply: reuseRun, report: fresh([{ slug: DIRECT_SLUG, status: 'held', reason: 'DELIVERY_UNCERTAIN_HOLD', sent: false }]) }), 'DIRECT_MANUSCRIPT_MISSING', DIRECT_SLUG)
+    }],
+    ['P1-5 DIRECT 원고 저장됨 → OK(0)', async () => {
+      const r = await runFlow({ supply: directRun, report: fresh([{ slug: DIRECT_SLUG, status: 'ok', sent: true }]), drafted: [DIRECT_SLUG] })
+      VERDICTS['DIRECT 원고 저장'] = { verdict: r.res.verdict, code: r.res.code }
+      assert.deepEqual({ verdict: r.res.verdict, code: r.res.code, f: r.res.fetchResult?.failures }, { verdict: 'OK', code: 0, f: [] })
+      // 🔴 결과 행만 ok 이고 디스크에 원고가 없으면 해결이 아니다 — 등록이 읽는 것은 디스크다
+      partial('결과 ok · 디스크 원고 없음', await runFlow({ supply: directRun, report: fresh([{ slug: DIRECT_SLUG, status: 'ok', sent: true }]) }), 'DIRECT_MANUSCRIPT_MISSING', DIRECT_SLUG)
+    }],
+    ['P1-5 결과 파일 부재 · 손상 → PARTIAL(3) FETCH_RESULT_MISSING (DIRECT 없어도)', async () => {
+      partial('결과 부재 · legacy', await runFlow({ supply: legacyRun, report: { ok: false, why: '회수 결과 파일이 없다' } }), 'FETCH_RESULT_MISSING')
+      partial('결과 손상 · DIRECT', await runFlow({ supply: directRun, report: { ok: false, why: '회수 결과 파싱 실패' }, drafted: [DIRECT_SLUG] }), 'FETCH_RESULT_MISSING')
+      partial('결과 없음(null)', await runFlow({ supply: legacyRun, report: null }), 'FETCH_RESULT_MISSING')
+    }],
+    ['P1-5 이전 회수가 쓴 결과(writtenAt < 시작) → PARTIAL(3) FETCH_RESULT_STALE', async () => {
+      const old = { ok: true, body: { writtenAt: new Date(Date.now() - 3600e3).toISOString(), results: [{ slug: DIRECT_SLUG, status: 'ok' }] } }
+      partial('이전 회수 결과', await runFlow({ supply: legacyRun, report: old }), 'FETCH_RESULT_STALE')
+    }],
+    ['P1-5 legacy 불변 — legacy 개별 실패만 있으면 OK(0) · SYSTEM 아님', async () => {
+      const r = await runFlow({ supply: legacyRun, report: fresh([{ slug: LEGACY_SLUG, status: 'failed', reason: 'invalid_manuscript', sent: true }]) })
+      VERDICTS['legacy 개별 실패'] = { verdict: r.res.verdict, code: r.res.code }
+      assert.deepEqual({ verdict: r.res.verdict, code: r.res.code }, { verdict: 'OK', code: 0 }, r.res.reason)
+      const m = await runFlow({ supply: mixedRun, report: fresh([{ slug: DIRECT_SLUG, status: 'ok' }, { slug: LEGACY_SLUG, status: 'failed', reason: 'invalid_manuscript' }]), drafted: [DIRECT_SLUG] })
+      assert.deepEqual({ verdict: m.res.verdict, code: m.res.code }, { verdict: 'OK', code: 0 }, m.res.reason)
+    }],
+    ['P1-5 회수 전역 실패 · 실행 실패는 기존대로 SYSTEM(1)', async () => {
+      const a = await runFlow({ supply: directRun, report: fresh([]), fetchStatus: 1 })
+      const b = await runFlow({ supply: directRun, report: null, fetchSpawned: false })
+      assert.deepEqual([a.res.verdict, a.res.code, b.res.verdict, b.res.code], ['SYSTEM', 1, 'SYSTEM', 1])
+    }],
+  ]
+}
+
 // ── 실행기 ─────────────────────────────────────────────────
 async function runCases(cases) {
   const failures = []
@@ -1747,7 +1843,7 @@ const ALL_REAL = [
   ...downgradeCases(real.webui, realRegen), ...reuseReportCases(real.plan),
   ...packetOnlyCases(real.webui), ...repairCases(realRepair, real.webui),
   ...basisDriftCases(real.plan, real.lane, real.webui, realRegen),
-  ...briefFreeCases(real.webui), ...recoverCases(real.webui),
+  ...briefFreeCases(real.webui), ...recoverCases(real.webui), ...producerVerdictCases(real.flow),
 ]
 for (const [name, fn] of ALL_REAL) {
   try { await fn(); report(true, name) } catch (e) { report(false, name, e.message.split('\n')[0]) }
@@ -1766,6 +1862,8 @@ console.log('\n── brief 없는 DIRECT 회수 · legacy 불변 — 실제 fet
 for (const [k, v] of Object.entries(BRIEF_FREE)) console.log(`  ${k.padEnd(36)} ${JSON.stringify(v)}`)
 console.log('\n── 무전송 회수(recoverSlug) — DIRECT brief 없음 · legacy 대조 문장')
 for (const [k, v] of Object.entries(RECOVER)) console.log(`  ${k.padEnd(36)} ${JSON.stringify(v)}`)
+console.log('\n── producer 회차 판정 — DIRECT 원고 · 회수 결과')
+for (const [k, v] of Object.entries(VERDICTS)) console.log(`  ${k.padEnd(28)} ${JSON.stringify(v)}`)
 console.log('\n── 입력 수리 우회 차단')
 for (const [k, v] of Object.entries(REPAIR_COUNTS)) console.log(`  ${k.padEnd(40)} ${JSON.stringify(v)}`)
 console.log('\n── report "다음" 절 실제 모양')
@@ -1846,6 +1944,12 @@ const MUTATIONS = [
   ['session', 'MSE3', 'message 없는 legacy 의 brief 필수 검사 제거 (P0-3)', "  if (plannedMessage === null && !existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }\n", ''],
   ['webui', 'MW8', 'recoverSlug 옛 구현 복원 — DIRECT 에서도 brief.md 를 읽는다 (P0-4)', "      requiredMarkers: gate.mode === DIRECT_SPEC_MODE ? [] : markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),\n", "      requiredMarkers: markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),\n"],
   ['webui', 'MW9', 'recoverSlug 가 legacy 대조 문장도 버린다 (P0-4)', "      requiredMarkers: gate.mode === DIRECT_SPEC_MODE ? [] : markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),\n", "      requiredMarkers: [],\n"],
+  ['exit', 'MX1', '회수 결과 부재를 문제없음으로 읽는다 (P1-5)', "  if (!body) failures.push({ slug: null, type: 'FETCH_RESULT', outcome: 'FETCH_RESULT_MISSING', reason: report?.why ?? '회수 결과를 읽지 못했다' })\n", "  if (!body) {}\n"],
+  ['exit', 'MX2', '이전 회수 결과를 이번 것으로 읽는다 (P1-5)', "  else if (Number.isFinite(startedAt) && !(Date.parse(body.writtenAt ?? '') >= startedAt)) {", "  else if (false) {"],
+  ['exit', 'MX3', 'DIRECT 원고 미해결을 PARTIAL 에서 뺀다 (P1-5)', "  if (unresolved.length > 0 || fetchUnresolved.length > 0) {", "  if (unresolved.length > 0) {"],
+  ['exit', 'MX4', '결과 행이 ok 면 디스크 원고 없이도 해결로 본다 (P1-5)', "    if (draftExists(slug)) { drafted++; continue }\n", "    if (draftExists(slug) || (fresh?.results ?? []).some((r) => r?.slug === slug && r.status === 'ok')) { drafted++; continue }\n"],
+  ['flow', 'MF3', 'flow 가 회수 결과 판정을 연결하지 않는다 (P1-5)', "    fetchResult = summarizeFetchStage({", "    fetchResult = null && summarizeFetchStage({"],
+  ['flow', 'MF4', '공급 신호가 재사용 DIRECT 를 빼먹는다 (P1-5)', "    directSlugs: [...(selected ?? []), ...(Array.isArray(j?.reusable) ? j.reusable : [])]", "    directSlugs: [...(selected ?? [])]"],
   ['webui', 'MW1', '회수 계획이 direct 에 "세션이 채워야 한다" 안내 (P1)', "  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {\n    return t.material?.articleSpec", "  if (false) {\n    return t.material?.articleSpec"],
 ]
 const MS2_SECOND = ["  if (entry.node?.graphVersion !== expectedGraphVersion || entry.admission?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')\n", '']
@@ -1878,6 +1982,14 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
       let mod = await imp(path)
       let companion = null
       let regenForGate = null
+      if (kind === 'exit') {
+        // 🔴 실제 runProducerFlow 가 변이 판정을 쓰게 flow 사본의 import 를 변이 exit 로 돌린다
+        companion = join(dirname(PATHS.flow), `.dssc-${id}-${process.pid}-flow.mjs`)
+        MUTANTS.push(companion)
+        const spec = "'./magazine-producer-exit.mjs'"
+        if (ORIGINAL.flow.split(spec).length !== 2) throw new Error('flow 의 producer-exit import 가 정확히 1곳이 아니다')
+        writeFileSync(companion, ORIGINAL.flow.replace(spec, `'./${path.split('/').pop()}'`))
+      }
       if (kind === 'session') {
         // 🔴 실제 fetchSlug·fetchBatch 가 변이 session 을 쓰게 webui 사본의 import 를 변이 session 으로 돌린다
         companion = join(dirname(PATHS.webui), `.dssc-${id}-${process.pid}-webui.mjs`)
@@ -1900,11 +2012,12 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
       if (companion) unlinkSync(companion)
       const cases = kind === 'gate' ? [...sendCases(webuiForGate, mod), ...downgradeCases(webuiForGate, regenForGate), ...packetOnlyCases(webuiForGate), ...basisDriftCases(real.plan, real.lane, webuiForGate, regenForGate)]
         : kind === 'session' ? briefFreeCases(webuiForGate, mod)
+        : kind === 'exit' ? producerVerdictCases(webuiForGate)
         : kind === 'regen' ? downgradeCases(real.webui, mod)
         : kind === 'repair' ? repairCases(mod, real.webui)
         : kind === 'plan' ? [...planCases(mod), ...reportCases(mod), ...reuseReportCases(mod)]
         : kind === 'brief' ? [...briefCases(mod), ...await flowCases(real.flow, real.plan, mod)]
-          : kind === 'flow' ? await flowCases(mod, real.plan, real.brief)
+          : kind === 'flow' ? [...await flowCases(mod, real.plan, real.brief), ...producerVerdictCases(mod)]
             : kind === 'lane' ? [...laneCases(mod), ...reuseCases(real.plan, mod), ...basisDriftCases(real.plan, mod, real.webui, realRegen)]
               : kind === 'notify' ? notifyCases(mod, real.webui)
                 : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen), ...packetOnlyCases(mod), ...repairCases(realRepair, mod), ...briefFreeCases(mod), ...recoverCases(mod)]
