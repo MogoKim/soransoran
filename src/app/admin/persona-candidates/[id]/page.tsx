@@ -116,7 +116,7 @@ export default async function PersonaCandidateDetailPage(
   return (
     <>
       <div className="w-full">
-        <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
+        <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
           ← 대기열
         </Link>
 
@@ -138,7 +138,7 @@ export default async function PersonaCandidateDetailPage(
         {/* ① 생성물 — 🔴 본문 전문은 여기서만 */}
         <section className="mb-6">
           <h2 className="mb-2 text-base font-bold text-content-primary">① 생성물</h2>
-          <p className="whitespace-pre-wrap rounded-[10px] border border-subtle bg-surface-card px-4 py-3 text-base leading-relaxed">
+          <p className="whitespace-pre-wrap rounded-md border border-subtle bg-surface-card px-4 py-3 text-base leading-relaxed">
             {row.candidateText}
           </p>
           <p className="mt-1 text-xs text-content-muted">
@@ -147,7 +147,7 @@ export default async function PersonaCandidateDetailPage(
           {row.editedText !== null && (
             <div className="mt-3">
               <h3 className="mb-1 text-xs font-bold text-content-secondary">수정본</h3>
-              <p className="whitespace-pre-wrap rounded-[10px] border border-state-warning bg-[color:var(--admin-warning-soft)] px-4 py-3 text-base">
+              <p className="whitespace-pre-wrap rounded-md border border-state-warning bg-[color:var(--admin-warning-soft)] px-4 py-3 text-base">
                 {row.editedText}
               </p>
               <p className="mt-1 text-xs text-content-muted">수정 diff {filledMark(row.editDiff)}</p>
@@ -158,7 +158,7 @@ export default async function PersonaCandidateDetailPage(
         {/* ② 페르소나 */}
         <section className="mb-6">
           <h2 className="mb-2 text-base font-bold text-content-primary">② 페르소나</h2>
-          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-[10px] [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
+          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
             <dt className="text-content-muted">코드</dt>
             <dd className="font-mono">{row.persona.code}</dd>
             <dt className="text-content-muted">상태</dt>
@@ -211,7 +211,7 @@ export default async function PersonaCandidateDetailPage(
         {/* ④ 소스 — 🔴 원문 전문은 저장하지 않는다 */}
         <section className="mb-6">
           <h2 className="mb-2 text-base font-bold text-content-primary">④ 소스</h2>
-          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-[10px] [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
+          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
             <dt className="text-content-muted">topicTags</dt>
             <dd>{row.topicTags.length === 0 ? '—' : row.topicTags.join(' · ')}</dd>
             <dt className="text-content-muted">storyRefs</dt>
@@ -229,7 +229,7 @@ export default async function PersonaCandidateDetailPage(
         {/* 결정 이력 */}
         <section className="mb-6">
           <h2 className="mb-2 text-base font-bold text-content-primary">결정 기록</h2>
-          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-[10px] [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
+          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
             <dt className="text-content-muted">생성</dt>
             <dd>{formatKst(row.createdAt)}</dd>
             <dt className="text-content-muted">결정자</dt>
@@ -296,7 +296,7 @@ export default async function PersonaCandidateDetailPage(
               발행된 댓글 내리기(작업 3)와 합치지 않는다. 조건 · 확인창 · action 은 컴포넌트 그대로이고,
               구역은 컴포넌트가 무언가를 그릴 때와 같은 조건에서만 연다(빈 위험 구역을 띄우지 않는다). */}
         {canWithdraw(row.status as CandidateStatus) && (row.publishedCommentId === null || row.publishedCommentId === '') && (
-          <section aria-labelledby="danger-zone" className="mt-4 rounded-[10px] border-2 border-dashed border-state-danger p-3 lg:p-4">
+          <section aria-labelledby="danger-zone" className="mt-4 rounded-md border-2 border-dashed border-state-danger p-3 lg:p-4">
             <h2 id="danger-zone" className="m-0 text-base font-bold text-state-danger">⚠ 위험 작업</h2>
             <p className="mb-3 mt-1 text-xs leading-relaxed text-content-secondary">
               승인 철회 — 이 후보는 공개되지 않고 폐기(DECLINED)로 바뀝니다. 되돌리는 버튼은 없습니다.

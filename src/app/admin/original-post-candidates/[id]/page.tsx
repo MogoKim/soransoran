@@ -88,7 +88,7 @@ export default async function OriginalPostCandidateDetailPage(
   return (
     <>
       <div className="w-full">
-        <Link href="/admin/original-post-candidates" className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link">
+        <Link href="/admin/original-post-candidates" className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
           ← 대기열
         </Link>
 
@@ -102,14 +102,14 @@ export default async function OriginalPostCandidateDetailPage(
           </span>
         </div>
 
-        <p className="mb-5 rounded-lg border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 text-xs leading-relaxed text-content-primary">
+        <p className="mb-5 rounded-md border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 text-xs leading-relaxed text-content-primary">
           읽기 전용입니다. 이 화면에서 승인·폐기가 저장되지 않으며, 승인해도 발행되지 않습니다.
           <br />
           🔴 왼쪽은 <b>다른 커뮤니티의 원문</b>입니다 — 재료일 뿐 발행 대상이 아닙니다. 공유하지 마세요.
         </p>
 
         {/* 🔴 판정 사유 — 무엇을 보고 판단해야 하는지가 먼저다 */}
-        <section className="mb-5 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+        <section className="mb-5 rounded-md border border-subtle bg-surface-card p-4 lg:p-6">
           <h2 className="mb-2 text-base font-bold text-content-primary">판정 사유</h2>
           {all.length === 0 ? (
             <p className="text-sm text-content-muted">걸린 항목이 없습니다.</p>
@@ -127,7 +127,7 @@ export default async function OriginalPostCandidateDetailPage(
 
         {/* 🔴 원문 ↔ 초안 나란히 */}
         <div className="grid gap-4 md:grid-cols-2">
-          <section className="rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+          <section className="rounded-md border border-subtle bg-surface-card p-4 lg:p-6">
             <h2 className="mb-1 text-base font-bold text-content-primary">
               원문 <span className="ml-1 text-xs font-normal text-content-muted">재료 · 발행하지 않음</span>
             </h2>
@@ -140,7 +140,7 @@ export default async function OriginalPostCandidateDetailPage(
             </div>
           </section>
 
-          <section className="rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+          <section className="rounded-md border border-subtle bg-surface-card p-4 lg:p-6">
             <h2 className="mb-1 text-base font-bold text-content-primary">
               초안 <span className="ml-1 text-xs font-normal text-content-muted">우리 글 · 아직 발행 안 됨</span>
             </h2>
@@ -153,14 +153,14 @@ export default async function OriginalPostCandidateDetailPage(
         </div>
 
         {row.editedBody !== null && (
-          <section className="mt-4 rounded-[10px] border border-state-success bg-[color:var(--admin-success-soft)] p-4 lg:p-6">
+          <section className="mt-4 rounded-md border border-state-success bg-[color:var(--admin-success-soft)] p-4 lg:p-6">
             <h2 className="mb-2 text-base font-bold text-content-primary">창업자 수정본</h2>
             {row.editedTitle !== null && <h3 className="mb-2 text-sm font-medium">{row.editedTitle}</h3>}
             <div className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">{row.editedBody}</div>
           </section>
         )}
 
-        <section className="mt-5 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+        <section className="mt-5 rounded-md border border-subtle bg-surface-card p-4 lg:p-6">
           <h2 className="mb-2 text-base font-bold text-content-primary">이력</h2>
           <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm [overflow-wrap:anywhere]">
             <dt className="text-content-muted">판 · 모델</dt>

@@ -11,6 +11,8 @@ import {
   AdminTable,
   AdminTableItem,
   AdminCell,
+  AdminStat,
+  AdminStatStrip,
   adminBadgeClass,
 } from '@/components/admin/AdminUi'
 
@@ -103,7 +105,8 @@ export default async function AdminPersonasPage() {
 
         {/* ── 전체 중지 kill switch — 🔴 이 화면의 유일한 write ──
                맨 위에 둔다. 사고가 났을 때 찾아 내려가지 않게 한다(Admin Console V2). */}
-        <section className="mt-6 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+        {/* 🔴 안전 스위치 구역 — 왼쪽 빨간 3px 선으로 위험 조치임을 알린다. 지금 상태는 안의 배지가 문구로 말한다 */}
+        <section className="rounded-md border border-subtle border-l-[3px] border-l-state-danger p-4 lg:p-5">
           <PersonaGlobalSwitchControl initialEnabled={stopped} exists={killSwitch !== null} />
           {killSwitch !== null ? (
             <p className="mt-2 text-xs text-content-muted">
@@ -115,24 +118,13 @@ export default async function AdminPersonasPage() {
         </section>
 
         {/* ── 구분 요약 — 실고객과 페르소나 ── */}
-        <section className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
-            <p className="m-0 text-xs text-content-muted">실회원</p>
-            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{memberCount}명</p>
-          </div>
-          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
-            <p className="m-0 text-xs text-content-muted">페르소나</p>
-            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{personas.length}명</p>
-          </div>
-          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
-            <p className="m-0 text-xs text-content-muted">페르소나 글</p>
-            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{linkedPosts}건</p>
-          </div>
-          <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3">
-            <p className="m-0 text-xs text-content-muted">페르소나 댓글</p>
-            <p className="m-0 mt-1 text-2xl font-bold tabular-nums text-content-primary">{linkedComments}건</p>
-          </div>
-        </section>
+        {/* 한 띠 안의 네 칸 — 카드 네 장이 아니다 */}
+        <AdminStatStrip columns={4} className="mt-8">
+          <AdminStat label="실회원" value={`${memberCount}명`} />
+          <AdminStat label="페르소나" value={`${personas.length}명`} />
+          <AdminStat label="페르소나 글" value={`${linkedPosts}건`} />
+          <AdminStat label="페르소나 댓글" value={`${linkedComments}건`} />
+        </AdminStatStrip>
 
         {/* ── 페르소나 목록 ──
                🔴 30명 전체를 한 번에 불러온 그대로다(조회·정렬 변경 0). 거르기는 이 안에서만 한다.
@@ -161,10 +153,10 @@ export default async function AdminPersonasPage() {
                   <span>코드</span>
                   <span>이름</span>
                   <span>상태</span>
-                  <span>일 상한</span>
-                  <span>주 상한</span>
-                  <span>침묵률</span>
-                  <span>발화</span>
+                  <span className="text-right">일 상한</span>
+                  <span className="text-right">주 상한</span>
+                  <span className="text-right">침묵률</span>
+                  <span className="text-right">발화</span>
                   <span />
                 </>
               }
@@ -186,7 +178,7 @@ export default async function AdminPersonasPage() {
                         <summary className="inline-flex min-h-[52px] lg:min-h-[44px] cursor-pointer items-center text-sm text-content-secondary">
                           설정 · 기억 보기
                         </summary>
-                        <dl className="m-0 mt-1 grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-surface-page p-3 sm:grid-cols-4">
+                        <dl className="m-0 mt-1 grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-surface-page p-3 sm:grid-cols-4">
                           <div className="flex gap-1">
                             <dt className="text-content-muted">identity</dt>
                             <dd className="m-0 text-content-primary">{filledMark(p.identity)}</dd>
@@ -225,7 +217,7 @@ export default async function AdminPersonasPage() {
                   >
                     {/* 모바일 첫 줄: 코드 · 이름 · 상태 / 데스크탑: 각자 한 칸 (lg:contents) */}
                     <span className="flex flex-wrap items-center gap-2 lg:contents">
-                      <span className="text-base font-bold tabular-nums text-content-primary">{p.code}</span>
+                      <span className="text-sm font-bold tabular-nums text-content-primary">{p.code}</span>
                       {/* 🔴 마스킹. 전문은 상세에서만 */}
                       <span className="text-sm text-content-primary">{masked}</span>
                       <span>
@@ -233,14 +225,14 @@ export default async function AdminPersonasPage() {
                       </span>
                     </span>
                     <span className="flex flex-wrap gap-x-4 gap-y-1 lg:contents">
-                      <AdminCell label="일 상한" className="tabular-nums">{p.dailyCap ?? '—'}</AdminCell>
-                      <AdminCell label="주 상한" className="tabular-nums">{p.weeklyCap ?? '—'}</AdminCell>
-                      <AdminCell label="침묵률" className="tabular-nums">{p.silenceRate?.toString() ?? '—'}</AdminCell>
-                      <AdminCell label="발화" className="tabular-nums">{p._count.activityLogs}건</AdminCell>
+                      <AdminCell label="일 상한" className="tabular-nums lg:text-right">{p.dailyCap ?? '—'}</AdminCell>
+                      <AdminCell label="주 상한" className="tabular-nums lg:text-right">{p.weeklyCap ?? '—'}</AdminCell>
+                      <AdminCell label="침묵률" className="tabular-nums lg:text-right">{p.silenceRate?.toString() ?? '—'}</AdminCell>
+                      <AdminCell label="발화" className="tabular-nums lg:text-right">{p._count.activityLogs}건</AdminCell>
                     </span>
                     <Link
                       href={`/admin/personas/${p.id}`}
-                      className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-sm text-link lg:justify-end"
+                      className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px] lg:justify-end"
                     >
                       상세
                     </Link>

@@ -57,7 +57,7 @@ export default function PersonaGlobalSwitchControl({
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-bold text-content-primary">전체 중지 스위치</span>
+        <span className="text-base font-bold text-content-primary">전체 중지 스위치</span>
         <span
           /* 🔴 중지가 켜진 상태만 빨간 배지다(주황은 현재 위치 표시에만 쓴다). 문구는 그대로 */
           className={adminBadgeClass(stopped ? 'danger' : 'neutral')}
@@ -78,7 +78,7 @@ export default function PersonaGlobalSwitchControl({
           placeholder="변경 사유 (필수)"
           maxLength={200}
           disabled={pending}
-          className="min-h-[52px] flex-1 rounded-lg border border-interactive bg-surface-card px-3 py-2 text-sm text-content-primary lg:min-h-[44px]"
+          className="min-h-[52px] min-w-0 flex-1 rounded-md border border-interactive bg-surface-card px-3 py-2 text-sm text-content-primary lg:min-h-[44px]"
         />
         <button
           type="button"

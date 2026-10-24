@@ -173,7 +173,7 @@ export default function EvidenceBatchReview() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3 text-sm text-content-primary">
+      <div className="rounded-md border border-subtle bg-surface-card px-4 py-3 text-sm text-content-primary">
         <p className="mb-2 font-bold">검토 묶음 (bundle.json)</p>
         {/* 🔴 input 은 그대로다(id · type · accept · disabled · onChange) — 화면에서만 숨기고 버튼형 label 이 연다.
               sr-only 라 Tab 으로 초점을 받고, 초점 테두리는 peer 로 label 에 그린다. */}
@@ -197,7 +197,7 @@ export default function EvidenceBatchReview() {
       </div>
 
       {error !== null && (
-        <div role="alert" className="rounded-lg border border-subtle bg-surface-card px-4 py-3 text-sm font-bold text-state-danger">
+        <div role="alert" className="rounded-md border-l-[3px] border-state-danger bg-[color:var(--admin-danger-soft)] px-4 py-3 text-sm font-bold text-state-danger">
           ⚠ {error}
         </div>
       )}
@@ -221,7 +221,7 @@ export default function EvidenceBatchReview() {
         const needWithdraw = ed === 'record' && s !== undefined && isOpenApproved(s) && e.hardDefect === 'yes'
         return (
           <section key={i.queueId} data-queue-id={i.queueId} data-phase={s?.phase ?? 'unknown'} data-locked={ed === null ? 'yes' : 'no'}
-            className="rounded-[10px] border border-subtle bg-surface-card p-4 text-sm">
+            className="rounded-md border border-subtle bg-surface-card p-4 text-sm">
             {/* 🔴 머리는 두 줄이다 — 위: 지금 상태(먼저 읽을 것) · 아래: 큐 ID · 복원 · 계약(보조).
                   값과 문구는 그대로다. 첫 차단 행만은 보조 줄이 아니라 위 줄에 올린다 — 여기부터 봐야 한다. */}
             <header className="mb-3 space-y-1">
@@ -291,7 +291,7 @@ export default function EvidenceBatchReview() {
               <p className="whitespace-pre-wrap break-words">{i.draft.body}</p>
             </div>
             {i.edit !== null && (
-              <div className="mb-2 rounded-lg bg-surface-page px-3 py-2">
+              <div className="mb-2 rounded-md bg-surface-page px-3 py-2">
                 <div className="font-bold">수정본 — {i.edit.after.title ?? i.draft.title}</div>
                 <p className="whitespace-pre-wrap break-words">{i.edit.after.body ?? i.draft.body}</p>
               </div>
@@ -307,7 +307,7 @@ export default function EvidenceBatchReview() {
                     <label className="flex flex-col lg:w-[210px]">
                       <span className={cn(LABEL_ROW, 'text-sm font-bold text-content-primary')}>① 결정</span>
                       <select name="decision" value={e.decision} disabled={frozen} onChange={(ev) => set(i.queueId, { decision: ev.target.value as Entry['decision'] })}
-                        className="min-h-[52px] rounded-lg border-2 border-content-primary bg-surface-card px-2 font-bold lg:min-h-[44px]">
+                        className="min-h-[52px] rounded-md border-2 border-content-primary bg-surface-card px-2 font-bold lg:min-h-[44px]">
                         <option value="">정하지 않음 (보내지 않음)</option>
                         <option value="ready">그대로 내보내도 된다</option>
                         <option value="reject">폐기</option>
@@ -317,7 +317,7 @@ export default function EvidenceBatchReview() {
                       <label className="flex flex-col lg:w-[290px]">
                         <span className={cn(LABEL_ROW, 'text-sm font-bold text-content-primary')}>폐기 사유</span>
                         <select name="declineReason" value={e.declineReason} disabled={frozen} onChange={(ev) => set(i.queueId, { declineReason: ev.target.value })}
-                          className="min-h-[52px] rounded-lg border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
+                          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                           <option value="">선택</option>
                           {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                         </select>
@@ -328,20 +328,20 @@ export default function EvidenceBatchReview() {
                 <label className="flex flex-col lg:w-[160px]">
                   <span className={cn(LABEL_ROW, 'text-sm font-bold text-content-secondary')}>② 중대 결함</span>
                   <select name="hardDefect" value={e.hardDefect} disabled={frozen} onChange={(ev) => set(i.queueId, { hardDefect: ev.target.value as Entry['hardDefect'] })}
-                    className="min-h-[52px] rounded-lg border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
+                    className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                     <option value="">고르지 않음</option>
                     <option value="no">없음</option>
                     <option value="yes">있음</option>
                   </select>
                 </label>
                 {needWithdraw && (
-                  <div className="flex flex-col rounded-lg border border-subtle px-3 py-2 lg:mt-7 lg:w-[290px]">
+                  <div className="flex flex-col rounded-md border border-state-danger px-3 py-2 lg:mt-7 lg:w-[290px]">
                     <label className="flex min-h-[52px] items-center gap-2 font-bold text-state-danger">
                       <input type="checkbox" name="withdraw" checked={e.withdraw} disabled={frozen} onChange={(ev) => set(i.queueId, { withdraw: ev.target.checked })} className="h-6 w-6" />
                       ⚠ 철회 — 승인을 거둬들여 발행 대상에서 뺀다
                     </label>
                     <select name="withdrawReason" value={e.declineReason} disabled={frozen || !e.withdraw} onChange={(ev) => set(i.queueId, { declineReason: ev.target.value })}
-                      className="mt-2 min-h-[52px] rounded-lg border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
+                      className="mt-2 min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                       <option value="">철회 사유 선택 (필수)</option>
                       {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                     </select>
@@ -351,7 +351,7 @@ export default function EvidenceBatchReview() {
                   <span className={cn(LABEL_ROW, 'text-xs font-bold text-content-muted')}>③ 근거 (있음이면 필수 · 줄마다 하나)</span>
                   {/* 다른 칸과 같은 높이(모바일 52 · 데스크탑 44)로 시작하고 내용만큼 늘어난다 */}
                   <textarea name="reasons" value={e.reasons} disabled={frozen} rows={1} onChange={(ev) => set(i.queueId, { reasons: ev.target.value })}
-                    className="min-h-[52px] w-full resize-y rounded-lg border border-interactive bg-surface-card px-2 py-3 leading-snug [field-sizing:content] lg:min-h-[44px] lg:py-2.5" />
+                    className="min-h-[52px] w-full resize-y rounded-md border border-interactive bg-surface-card px-2 py-3 leading-snug [field-sizing:content] lg:min-h-[44px] lg:py-2.5" />
                 </label>
               </div>
             )}
@@ -377,7 +377,7 @@ export default function EvidenceBatchReview() {
       )}
 
       {step === 'confirm' && confirmed !== null && (
-        <div className="space-y-3 rounded-[10px] border-2 border-content-primary bg-surface-card p-4 text-sm" data-confirm-panel="">
+        <div className="space-y-3 rounded-md border-2 border-content-primary bg-surface-card p-4 text-sm" data-confirm-panel="">
           <div className="font-bold">아래 {confirmed.send.length}건을 기록합니다</div>
           <p className="text-content-muted">결정 전 행의 &quot;그대로&quot; · &quot;폐기&quot; 는 되돌리는 버튼이 없습니다. 목록을 확인해 주세요.</p>
           <ol className="list-decimal space-y-1 pl-5">
@@ -399,7 +399,7 @@ export default function EvidenceBatchReview() {
       )}
 
       {results.size > 0 && (
-        <div className="rounded-[10px] border border-subtle bg-surface-card px-4 py-3 text-sm" role="status" data-results="">
+        <div className="rounded-md border border-subtle bg-surface-card px-4 py-3 text-sm" role="status" data-results="">
           <div className="mb-2 font-bold">
             기록 결과{reviewer !== null ? ` — 검토자 ${reviewer}` : ''} · 성공 {tally.성공} · 건너뜀 {tally.건너뜀} · 거절 {tally.거절}
           </div>

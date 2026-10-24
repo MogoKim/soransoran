@@ -65,7 +65,7 @@ export default function PersonaCandidateWithdraw({
 
   if (done !== null) {
     return (
-      <div className="rounded-[10px] border border-subtle bg-surface-page px-4 py-3 text-sm text-content-secondary">
+      <div className="rounded-md border border-subtle bg-surface-page px-4 py-3 text-sm text-content-secondary">
         승인을 거둬들였습니다 — {done}. 이 후보는 공개되지 않습니다.
       </div>
     )
@@ -76,7 +76,8 @@ export default function PersonaCandidateWithdraw({
     : `${approvedBy ?? '(모름)'} · ${approvedAt?.toISOString().slice(0, 16).replace('T', ' ') ?? '(모름)'}`
 
   return (
-    <div className="rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+    /* 🔴 위험 작업 구역(빨간 점선) 안에만 놓인다 — 상자를 한 겹 더 두르지 않고 구분선으로 가른다 */
+    <div className="border-t border-subtle pt-4">
       <h3 className="mb-1 text-sm font-bold text-content-primary">승인 철회</h3>
       <p className="mb-3 text-xs leading-relaxed text-content-secondary">
         승인은 했지만 아직 공개되지 않은 후보입니다 (현재 {status}).
@@ -93,7 +94,7 @@ export default function PersonaCandidateWithdraw({
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         disabled={pending}
-        className="mb-3 min-h-[52px] w-full rounded-lg border border-interactive bg-surface-card px-3 text-sm lg:min-h-[44px]"
+        className="mb-3 min-h-[52px] w-full rounded-md border border-interactive bg-surface-card px-3 text-sm lg:min-h-[44px]"
       >
         <option value="">— 선택 —</option>
         {DECLINE_REASONS.map((r) => (
@@ -119,7 +120,7 @@ export default function PersonaCandidateWithdraw({
       </p>
 
       {error !== null && (
-        <p className="mt-2 rounded-lg border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
+        <p className="mt-2 rounded-md border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
       )}
     </div>
   )

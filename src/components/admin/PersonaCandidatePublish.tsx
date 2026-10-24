@@ -66,13 +66,13 @@ export default function PersonaCandidatePublish({
   const noTarget = targetPostId === null
 
   return (
-    <div className="rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+    <div className="rounded-md border border-subtle bg-surface-card p-4 lg:p-6">
       {liveCommentId === null ? (
         <>
           {publishable ? (
             <>
               {noTarget && (
-                <p id="publish-needs-target" className="m-0 mb-3 rounded-lg border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 text-sm font-bold text-content-primary">
+                <p id="publish-needs-target" className="m-0 mb-3 rounded-md border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 text-sm font-bold text-content-primary">
                   발행하려면 먼저 대상 글을 지정해야 합니다.
                 </p>
               )}
@@ -99,7 +99,7 @@ export default function PersonaCandidatePublish({
         </>
       ) : (
         <div>
-          <p className="m-0 rounded-lg border border-state-success bg-[color:var(--admin-success-soft)] px-3 py-2 text-sm text-content-primary">
+          <p className="m-0 rounded-md border border-state-success bg-[color:var(--admin-success-soft)] px-3 py-2 text-sm text-content-primary">
             발행됨 — 댓글 <span className="font-mono text-xs">{liveCommentId}</span>
             {takenDown && ' · 내려감'}
           </p>
@@ -123,7 +123,7 @@ export default function PersonaCandidatePublish({
       )}
 
       {blocks.length > 0 && (
-        <ul className="mt-3 list-none space-y-1 rounded-lg border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 p-0">
+        <ul className="mt-3 list-none space-y-1 rounded-md border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 p-0">
           {blocks.map((b) => (
             <li key={b.code} className="text-xs text-content-primary">
               <span className="font-mono">[{b.code}]</span> {b.message}
@@ -133,7 +133,7 @@ export default function PersonaCandidatePublish({
       )}
 
       {error !== null && (
-        <p className="mt-3 rounded-lg border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
+        <p className="mt-3 rounded-md border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
       )}
     </div>
   )
