@@ -76,7 +76,7 @@ export default function PersonaCandidateTarget({
   }
 
   return (
-    <div className="mt-3 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+    <div className="mt-3 rounded-md border border-subtle bg-surface-card p-4 lg:p-6">
       <h3 className="text-sm font-bold text-content-secondary">발행 대상 글</h3>
 
       <p className="mt-1 text-xs leading-relaxed text-content-muted">
@@ -107,7 +107,7 @@ export default function PersonaCandidateTarget({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="제목으로 찾기 (비우면 최신순)"
               disabled={pending}
-              className="min-h-[52px] flex-1 rounded-lg border border-interactive bg-surface-card px-3 text-sm lg:min-h-[44px]"
+              className="min-h-[52px] flex-1 rounded-md border border-interactive bg-surface-card px-3 text-sm lg:min-h-[44px]"
             />
             <button
               type="button"
@@ -134,12 +134,13 @@ export default function PersonaCandidateTarget({
               {posts.length === 0 ? (
                 <p className="text-sm text-content-muted">조건에 맞는 글이 없습니다.</p>
               ) : (
-                <ul className="list-none space-y-2 p-0">
+                /* 🔴 상자 안에 상자를 두지 않는다 — 후보 글은 구분선 행이다. 고를 수 없는 글은 옅은 면으로 가른다 */
+                <ul className="m-0 list-none border-y border-subtle p-0">
                   {posts.map((p) => (
                     <li
                       key={p.id}
-                      className={`rounded-lg border px-3 py-2 ${
-                        p.eligible ? 'border-subtle bg-surface-card' : 'border-subtle bg-surface-page'
+                      className={`border-b border-subtle px-3 py-3 last:border-b-0 ${
+                        p.eligible ? '' : 'bg-surface-page'
                       }`}
                     >
                       <div className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
@@ -182,7 +183,7 @@ export default function PersonaCandidateTarget({
       )}
 
       {blocks.length > 0 && (
-        <ul className="mt-3 list-none space-y-1 rounded-lg border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 p-0">
+        <ul className="mt-3 list-none space-y-1 rounded-md border border-state-warning bg-[color:var(--admin-warning-soft)] px-3 py-2 p-0">
           {blocks.map((b) => (
             <li key={b.code} className="text-xs text-content-primary">
               <span className="font-mono">[{b.code}]</span> {b.message}
@@ -192,7 +193,7 @@ export default function PersonaCandidateTarget({
       )}
 
       {error !== null && (
-        <p className="mt-3 rounded-lg border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
+        <p className="mt-3 rounded-md border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
       )}
     </div>
   )

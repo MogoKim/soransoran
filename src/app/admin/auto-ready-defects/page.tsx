@@ -68,20 +68,21 @@ export default async function AutoReadyDefectsPage() {
         )}
         {/* 🔴 신고 폼은 줄마다 접어 둔다(최근 50건 × 근거 칸이 한 화면을 1만5천px 로 늘렸다 — 2026-10-20 실측).
               펼친 뒤의 근거 입력 → 결함 신고 → 화면 안 확인 → 결함으로 기록 절차는 그대로다. */}
-        <ul className="m-0 mt-6 flex list-none flex-col gap-3 p-0">
+        {/* 🔴 카드 반복 대신 위아래 선 사이 행 목록. 줄마다 접힌 신고 절차는 그대로다 */}
+        <ul className="m-0 mt-6 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
           {rows.map((r) => (
-            <li key={r.postId} className="rounded-[10px] border border-subtle bg-surface-card p-4 text-sm" data-post-id={r.postId}>
+            <li key={r.postId} className="border-b border-[color:var(--admin-divider)] px-1 py-4 text-sm last:border-b-0" data-post-id={r.postId}>
               <div className="mb-1 text-base font-bold text-content-primary [overflow-wrap:anywhere]">{r.title}</div>
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-content-muted">
                 <span className="tabular-nums">{r.publishedAt === null ? '' : r.publishedAt.toISOString().slice(0, 16).replace('T', ' ')}</span>
                 <span className={adminBadgeClass(r.audit?.defect === 'yes' ? 'danger' : 'neutral')}>{auditLabel(r)}</span>
-                <Link href={`/community/free/${r.postId}`} className="inline-flex min-h-[52px] lg:min-h-[44px] items-center text-link underline">글 보기</Link>
+                <Link href={`/community/free/${r.postId}`} className="inline-flex min-h-[52px] items-center font-semibold text-link underline lg:min-h-[44px]">글 보기</Link>
               </div>
               {r.audit?.defect === 'yes'
                 ? <p className="m-0 font-bold text-state-danger">이미 결함으로 기록된 글입니다.</p>
                 : (
                   <details className="group">
-                    <summary className="inline-flex min-h-[52px] cursor-pointer list-none items-center rounded-lg border-2 border-state-danger px-4 font-bold text-state-danger lg:min-h-[44px]">
+                    <summary className="inline-flex min-h-[52px] cursor-pointer list-none items-center rounded-md border-2 border-state-danger px-4 font-bold text-state-danger lg:min-h-[44px]">
                       결함 근거 적기
                     </summary>
                     <div className="mt-3">

@@ -174,7 +174,7 @@ export default function OperatorComposeForm({
 
   if (writers.length === 0) {
     return (
-      <div className="mt-4 rounded-lg border border-dashed border-subtle p-4">
+      <div className="mt-4 border-y border-[color:var(--admin-divider)] px-1 py-6">
         <p className="m-0 text-sm text-content-primary">아직 운영용 작성자가 없습니다.</p>
         <p className="mt-1 text-sm text-content-muted">
           쓸 닉네임을 정하고 <code>OperatorWriter</code> 에 등록한 뒤에 이 화면을 씁니다.
@@ -216,7 +216,8 @@ export default function OperatorComposeForm({
         if (!canSubmit) return
         formAction(formData)
       }}
-      className="mt-4 flex flex-col gap-4"
+      /* 🔴 1280 이상 — 왼쪽 입력 · 오른쪽 「이대로 올라갑니다」 + 등록(따라온다). 그 아래는 한 줄(입력 → 확인 → 등록) */
+      className="mt-4 flex flex-col gap-4 xl:grid xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start xl:gap-8"
     >
       {/* 🔴 무엇을 쓰는지는 값으로 보낸다 — 액션을 바꿔 끼우지 않는다 */}
       <input type="hidden" name="mode" value={mode} />
@@ -228,11 +229,12 @@ export default function OperatorComposeForm({
       {mode === 'reply' ? <input type="hidden" name="postId" value={replyPostId} /> : null}
       {mode === 'reply' ? <input type="hidden" name="parentId" value={parent?.id ?? ''} /> : null}
 
+      <div className="flex min-w-0 flex-col gap-4">
       {/* ── 무엇을 쓰는가 ── */}
       <div
         role="radiogroup"
         aria-label="무엇을 쓸까요"
-        className="flex flex-wrap gap-2"
+        className="flex w-full overflow-hidden rounded-md border border-interactive sm:w-auto sm:self-start"
       >
         {(['post', 'comment', 'reply'] as const).map((m) => (
           <button
@@ -243,11 +245,12 @@ export default function OperatorComposeForm({
             // 🔴 사진을 올리는 동안 모드를 바꾸지 않는다 — 에디터가 내려가면 올리던 사진을 잃는다
             disabled={uploading && mode !== m}
             onClick={() => setMode(m)}
-            className={`inline-flex min-h-[52px] items-center rounded-lg border px-4 font-bold transition ${
+            /* 🔴 세그먼트 — 고른 칸은 먹색 면 + 흰 글자(aria-checked), 나머지는 조용히. 모양만 바뀌고 고르는 동작은 그대로 */
+            className={`inline-flex min-h-[52px] flex-1 items-center justify-center whitespace-nowrap border-r border-subtle px-4 font-semibold transition last:border-r-0 sm:flex-none lg:min-h-[44px] ${
               mode === m
-                ? 'border-cta bg-surface-soft text-content-primary'
-                : 'border-subtle text-content-muted'
-            } disabled:opacity-40`}
+                ? 'bg-[color:var(--admin-action-bg)] text-[color:var(--admin-action-content)]'
+                : 'bg-surface-card text-content-secondary hover:bg-surface-page'
+            } disabled:cursor-not-allowed disabled:opacity-40`}
           >
             {MODE_LABEL[m]}
           </button>
@@ -261,7 +264,7 @@ export default function OperatorComposeForm({
         <select
           value={writerId}
           onChange={(e) => setWriterId(e.target.value)}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
         >
           {writers.map((w) => (
             <option key={w.id} value={w.id}>
@@ -289,7 +292,7 @@ export default function OperatorComposeForm({
             <select
               value={boardType}
               onChange={(e) => setBoardType(e.target.value)}
-              className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+              className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
             >
               {OPERATOR_BOARDS.map((b) => (
                 <option key={b} value={b}>
@@ -306,7 +309,7 @@ export default function OperatorComposeForm({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               maxLength={MAX_POST_TITLE_LENGTH}
-              className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+              className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
             />
           </label>
         </>
@@ -316,7 +319,7 @@ export default function OperatorComposeForm({
           <select
             value={postId}
             onChange={(e) => setPostId(e.target.value)}
-            className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+            className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
           >
             {targets.length === 0 ? <option value="">댓글을 달 글이 없습니다</option> : null}
             {targets.map((t) => (
@@ -357,7 +360,7 @@ export default function OperatorComposeForm({
             onChange={(e) => setReplyBody(e.target.value)}
             rows={4}
             maxLength={MAX_COMMENT_LENGTH}
-            className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+            className="w-full rounded-md border border-interactive bg-surface-card p-3 text-content-primary"
           />
           <span className="text-xs text-content-muted">
             {replyBody.length} / {MAX_COMMENT_LENGTH}자
@@ -372,7 +375,7 @@ export default function OperatorComposeForm({
             onChange={(e) => setCommentBody(e.target.value)}
             rows={4}
             maxLength={MAX_COMMENT_LENGTH}
-            className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+            className="w-full rounded-md border border-interactive bg-surface-card p-3 text-content-primary"
           />
           <span className="text-xs text-content-muted">
             {commentBody.length} / {MAX_COMMENT_LENGTH}자
@@ -380,8 +383,12 @@ export default function OperatorComposeForm({
         </label>
       )}
 
+      </div>
+
+      <div className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-6">
       {/* ── 🔴 등록 직전 확인 — 이 화면의 안전장치 ── */}
-      <div className="rounded-lg border border-subtle bg-surface-soft p-3">
+      {/* 확인 자리 — 흰 면 + 왼쪽 먹색 3px. 입력칸과 다른 자리임이 보이게 */}
+      <div className="rounded-md border border-subtle border-l-[3px] border-l-content-primary bg-surface-card p-4">
         <p className="m-0 text-xs font-bold uppercase tracking-wide text-content-muted">
           이대로 올라갑니다
         </p>
@@ -408,7 +415,7 @@ export default function OperatorComposeForm({
         {/* 🔴 글은 HTML 을 그리지 않고 **글자만** 보여 준다. 태그 문자열이 그대로 보이지도,
                정제되지 않은 HTML 이 그려지지도 않는다. 사진·영상은 위 에디터가 실제 모습이다 */}
         {mode !== 'reply' ? (
-        <p className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-surface-card p-2 text-sm text-content-primary">
+        <p className="mt-2 whitespace-pre-wrap break-words rounded bg-surface-page p-3 text-sm text-content-primary">
           {measured.trim() === '' ? '(내용이 비어 있습니다)' : measured}
         </p>
         ) : null}
@@ -442,6 +449,7 @@ export default function OperatorComposeForm({
         disabled={!canSubmit}
         className="justify-center px-4"
       />
+      </div>
     </form>
   )
 }
@@ -477,7 +485,7 @@ function ReplyPicker({
         <select
           value={postId}
           onChange={(e) => onPost(e.target.value)}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
         >
           {posts.map((p) => (
             <option key={p.id} value={p.id}>
@@ -488,7 +496,8 @@ function ReplyPicker({
       </label>
 
       {post ? (
-        <div className="rounded-lg border border-subtle bg-surface-card p-3" data-reply-author="">
+        /* 🔴 고정 작성자 — 고르는 칸이 아니라 읽기 전용 값이다(옅은 면 · 테두리 없음) */
+        <div className="rounded-md bg-surface-page px-3 py-3" data-reply-author="">
           <p className="m-0 break-words text-sm text-content-primary">
             이 글의 작성자: <strong>{post.writerName}</strong>{' '}
             <span className={adminBadgeClass('neutral')}>{post.writerCode}</span>
@@ -521,8 +530,11 @@ function ReplyPicker({
                     aria-checked={on}
                     data-parent-id={c.id}
                     onClick={() => onParent(c.id)}
-                    className={`flex min-h-[52px] w-full flex-col items-start gap-1 rounded-lg border px-3 py-2 text-left transition lg:min-h-[44px] ${
-                      on ? 'border-cta bg-surface-soft' : 'border-subtle bg-surface-card'
+                    /* 🔴 고른 댓글 — 한 단계 진한 쿨그레이 면 + 코랄 왼쪽선(선택 표시). 코랄 면은 깔지 않는다 */
+                    className={`flex min-h-[52px] w-full flex-col items-start gap-1 rounded-md border px-3 py-2 text-left transition lg:min-h-[44px] ${
+                      on
+                        ? 'border-[color:var(--admin-accent)] bg-[color:var(--admin-row-selected)] shadow-[inset_3px_0_0_var(--admin-accent)]'
+                        : 'border-subtle bg-surface-card hover:bg-surface-page'
                     }`}
                   >
                     <span className="flex w-full flex-wrap items-center gap-2 text-sm">
@@ -556,7 +568,7 @@ function ReplyPreview({
     return <p className="mt-1 text-sm text-content-muted">글과 답할 댓글을 고르면 고객 화면 모양이 보입니다.</p>
   }
   return (
-    <div className="mt-2 rounded-lg bg-surface-card p-3 text-sm" data-reply-preview="">
+    <div className="mt-2 rounded bg-surface-page p-3 text-sm" data-reply-preview="">
       <p className="m-0 break-words text-content-muted">
         <strong className="text-content-primary">{post.title}</strong> 글
       </p>

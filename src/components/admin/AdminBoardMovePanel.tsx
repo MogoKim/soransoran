@@ -69,7 +69,7 @@ export default function AdminBoardMovePanel({
   }
 
   return (
-    <section aria-labelledby={`${selectId}-title`} className="mt-8 rounded-[10px] border border-subtle bg-surface-card p-4 lg:p-6">
+    <section aria-labelledby={`${selectId}-title`} className="mt-10 border-t border-[color:var(--admin-border)] pt-5 xl:mt-6">
       <div className="flex flex-wrap items-center gap-2">
         <h2 id={`${selectId}-title`} className="m-0 text-lg font-bold text-content-primary">게시판 변경</h2>
         <span className={adminBadgeClass('neutral')}>지금 {currentLabel}</span>
@@ -102,15 +102,16 @@ export default function AdminBoardMovePanel({
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-        <label htmlFor={selectId} className="flex flex-col gap-1 sm:w-[240px]">
+      {/* 🔴 1280 이상은 320px 레일 안이라 세로로 쌓는다 — 한 줄로 두면 레일 밖으로 넘친다 */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end xl:flex-col xl:items-stretch">
+        <label htmlFor={selectId} className="flex flex-col gap-1 sm:w-[240px] xl:w-auto">
           <span className="text-sm font-bold text-content-primary">옮길 게시판</span>
           <select
             id={selectId}
             value={target}
             disabled={locked || pending || step === 'confirm'}
             onChange={(e) => { setTarget(e.target.value as MovableBoard | ''); setResult(null) }}
-            className="min-h-[52px] rounded-lg border border-interactive bg-surface-card px-3 text-base disabled:bg-surface-page disabled:text-content-muted lg:min-h-[44px]"
+            className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-base disabled:bg-surface-page disabled:text-content-muted lg:min-h-[44px]"
           >
             {MOVABLE_BOARDS.map((b) => (
               <option key={b} value={b} disabled={b === current}>
@@ -131,14 +132,14 @@ export default function AdminBoardMovePanel({
       ) : null}
 
       {step === 'confirm' && target !== '' && (
-        <div className="mt-4 rounded-lg border-2 border-content-primary p-3 lg:p-4" data-board-move-confirm="">
+        <div className="mt-4 rounded-md border-2 border-content-primary p-3 lg:p-4" data-board-move-confirm="">
           <p className="m-0 text-base font-bold text-content-primary">
             {currentLabel}에서 {boardLabels[target]}으로 변경합니다.
           </p>
           <p className="mb-3 mt-1 text-sm text-content-secondary">
             {KEEPS} 예전 고객 주소는 새 주소로 연결됩니다.
           </p>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-col gap-2 sm:flex-row xl:flex-col">
             <button type="button" onClick={submit} disabled={pending} className={adminButtonClass('primary')}>
               {pending ? '옮기는 중…' : '변경 확정'}
             </button>
