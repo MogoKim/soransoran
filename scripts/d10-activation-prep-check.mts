@@ -183,15 +183,14 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
     Object.values(COHORTS).every((m) => m.codes.every((c) => codes.has(c))))
 
   /**
-   * 🔴 **닉네임 — 정본은 "두세 글자" 다** (Pool §3-2).
-   *    예전 판은 "조합형은 6자까지" 라는 예외를 코드에만 두고 `봄볕나무` 를 만들었다.
-   *    정본에 그런 예외가 없다.
+   * 🔴 **닉네임 — D100 canon §4.2 · runbook §2.1 (2026-10-16) 기준.**
+   *    옛 Pool §3-2 는 "두세 글자 순우리말"을 정본으로 적었으나 새 권위가 커뮤니티
+   *    실분포(반복 리듬·구어체·2~5자)로 대체했다. NAME_LENGTH 상수가 이를 못박는다.
    */
-  check('🔴 정본이 두세 글자라고 적어 두었다', doc.includes('두세 글자 순우리말'))
-  check('🔴 길이 상수가 2~3 이다', NAME_LENGTH.min === 2 && NAME_LENGTH.max === 3)
-  check('🔴 네 글자는 정책 위반이다 — 예전 판의 조합형이 여기서 걸린다',
-    !verifyNamePolicy('봄볕나무').ok
-    && verifyNamePolicy('봄볕나무').problems.some((p) => p.includes('두세 글자')))
+  check('🔴 길이 하한은 2이다 — 한 글자는 여전히 위반', NAME_LENGTH.min === 2)
+  check('🔴 길이 상한이 커뮤니티 스타일 4자 이상을 허용한다 — canon §4.2', NAME_LENGTH.max >= 4)
+  check('🟢 네 글자 반복 리듬 이름은 통과한다 — 커뮤니티 스타일 canon §4.2', verifyNamePolicy('도란도란').ok)
+  check('🔴 상한 초과는 여전히 위반', !verifyNamePolicy('도란도란도란').ok)
   check('🔴 한 글자도 위반', !verifyNamePolicy('가').ok)
   check('🟢 두 글자·세 글자는 통과', verifyNamePolicy('수국').ok && verifyNamePolicy('도라지').ok)
   check('🔴 숫자·영문은 정책 위반', !verifyNamePolicy('수국2').ok && !verifyNamePolicy('sugukk').ok)
@@ -206,7 +205,7 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   const c1 = candidatesFor('P21')
   check('🔴 후보가 충분하다', c1.length >= 20)
   check('🔴 후보가 전부 정책을 통과한다', c1.every((n) => verifyNamePolicy(n).ok))
-  check('🔴 후보가 전부 두세 글자다 — 생성기와 검사기가 같은 상수를 쓴다',
+  check('🔴 후보가 전부 정책 길이 범위 안이다 — 생성기와 검사기가 같은 상수를 쓴다',
     c1.every((n) => [...n].length >= NAME_LENGTH.min && [...n].length <= NAME_LENGTH.max))
   check('🔴 결정적이다 — 같은 코드는 같은 목록', candidatesFor('P21').join() === c1.join())
   check('🔴 코드가 다르면 목록도 다르다', candidatesFor('P22').join() !== c1.join())
@@ -214,14 +213,14 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   const auto = assignCandidates(wave, () => false)
   check('🔴 16명 전원에게 서로 다른 이름을 고른다',
     auto.ok && auto.picked.size === 16 && new Set(auto.picked.values()).size === 16)
-  check('🔴 고른 이름이 전부 두세 글자다',
-    [...auto.picked.values()].every((n) => [...n].length >= 2 && [...n].length <= 3))
+  check('🔴 고른 이름이 전부 정책 길이 범위 안이다',
+    [...auto.picked.values()].every((n) => [...n].length >= NAME_LENGTH.min && [...n].length <= NAME_LENGTH.max))
   check('🔴 전부 막히면 실패로 돌려준다 — 일부만 만들지 않는다',
     !assignCandidates(wave, () => true).ok)
   // 🔴 코드에 "이 사람은 이 이름" 배정표가 없다 (Pool §3-2 이유 ②)
   const nick = codeOf('src/lib/persona-nickname-candidates.ts')
   check('🔴 persona 코드별 이름 배정표가 없다', !/P0[1-9]|P1[0-9]|P2[0-5]/.test(nick))
-  check('🔴 네 글자 조합을 만드는 경로가 없다 — 머리가 한 글자다',
+  check('🔴 HEAD1 구조 유지 — 한 글자 머리로 세 글자 조합만 만든다 (4자는 PHRASE 단독)',
     /HEAD1/.test(nick) && !/const HEAD:/.test(nick))
 
   /**
