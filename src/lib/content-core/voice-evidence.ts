@@ -120,7 +120,7 @@ export function voiceStandardMissingFrom(system: string, v: VoiceEvidence): bool
  *    초안이 *"남편 퇴직"* 인데 참고 댓글에도 그 말이 있으면 **정상 글이 막혔다.**
  *    같은 말을 쓴 것과 참고에서 **가져온 것**을 글자만 보고 가를 수 없다.
  *
- * 🔴 그래서 이 판정은 **의미 검수(`voiceContentLeak`)와 사람 검토**가 맡는다.
+ * 🔴 그래서 이 판정은 **Content Core 의미 검수(`voiceContentLeak`)**가 맡는다.
  *    선택한 Persona 의 말투로 읽히는가는 `voiceMismatch` 가 따로 본다.
  *    deterministic 에는 확정 가능한 것만 남긴다 — 사전도 유사도 규칙도 만들지 않는다.
  */

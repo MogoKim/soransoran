@@ -35,6 +35,7 @@ import {
 import { REVIEW_VERSION, DETERMINISTIC_CODES } from './content-core/review'
 import { ARTIFACT_VERSION } from './content-core/artifact'
 import { SPEAKER_PLAN_VERSION } from './content-core/speaker'
+import { MATERIAL_CONTRACT_LINES, MATERIAL_CONTRACT_VERSION } from './content-core/material-contract'
 import { DRAFT_GATE_CODES, DRAFT_GATE_VERSION, DRAFT_LIFE_REVIEW_CODES } from './content-core/draft-life-gates'
 import { DRAFT_RULE_VERSION } from './micro-seed-auto-draft'
 import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
@@ -176,7 +177,20 @@ import {
  * 직전 계약의 공식 semanticCleared를 provider 재호출 없이 새 계약 기록으로 승계한다.
  * 결속이나 감사 판이 하나라도 다르면 승계하지 않고 기존 의미 재감사를 그대로 요구한다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v18'
+/**
+ * `quality-v20` (2026-10-23~24) = **미배포 Draft v19의 bounded creativity·차단 finding과 발행 뒤 감사를 하나의 실질 변경 계약으로 묶는다.**
+ * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
+ * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
+ * 뜻하며 Content Core에서 HOLD한다. 원문에 없는 시간대·상대 시점과 새 전달자·전언 경로도 위험 허구로 명시한다.
+ * auto-READY의 옛 비차단 예외를 제거해 같은 구조화 결론을 다시 뒤집지 않는다.
+ * Content Core 검수(`v2-review-p10`)와 의미 감사(`semantic-audit-prompt-v6`)는 같은 `material-contract-v1` 줄을 싣는다.
+ * 의미 감사(`auto-ready-semantic-audit-v3`)는 1차 측정 yes 를 같은 요청으로 한 번 더 확인하고, 확인도 yes 일 때만
+ * 결함으로 확정한다. 확인 no 는 결함 아님, 확인 측정 실패는 재시도 가능 실패다(no 로 읽지 않는다).
+ * 무결성·결속·장부·예산·usageUnknown·재시도 가능 실패·확정 결함의 전역 정지는 그대로다.
+ * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
+ * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v20'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -224,6 +238,8 @@ export function qualityContractComponents(): Record<string, unknown> {
       promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
       model: SEMANTIC_AUDIT_MODEL,
     },
+    // 🔴 (v19) 발행 전 검수와 발행 뒤 감사가 함께 싣는 실질 변경 계약 — 줄 자체를 넣는다(판 이름만 믿지 않는다)
+    materialContract: { version: MATERIAL_CONTRACT_VERSION, lines: MATERIAL_CONTRACT_LINES },
     // 🔴 (v6 보정 2026-10-01) 결함 축 정본 — "지금 계약에서 해소되지 않은 확정 결함" 의 기록 판.
     //    해소 기록은 이 digest 에 묶인다 — 판정 규칙(기록 판)이 바뀌면 digest 가 바뀌어 옛 기록은 아무것도 해소하지 못한다
     defectResolution: {

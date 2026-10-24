@@ -58,7 +58,7 @@ const D = qualityContractDigest()
 const INDEPENDENT = createHash('sha256').update(stableJson(qualityContractComponents()), 'utf8').digest('hex')
 check('digest 는 sha256 hex 64', /^[0-9a-f]{64}$/.test(D))
 check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 digest 는 코드 상수 그대로 (독립 재계산과 같다)**',
-  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v18', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
+  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v20', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
 const comps = qualityContractComponents()
 check('🔴 digest 구성 — 게이트·검수·판정 판이 들어 있다',
   ['version', 'pipelineVersion', 'promptVersion', 'reviewVersion', 'draftRuleVersion', 'draftGateVersion', 'draftGateCodes', 'judgeContractDigest', 'semanticHoldCodes']
@@ -240,9 +240,11 @@ check('무수정 최소 = ceil(30×0.9) = 27 (정수 계산)', noEditNeed() === 
   const warning = { ...GOOD_SR, unsupportedAdditions: 1 }
   const ws = [...good(4), row({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'], semanticReview: warning, kind: 'pending' }), ...good(23), ...good(3, { kind: 'edited' })]
   const v = open(ws)
-  check('🔴 🔴 **#8(Q2) 경고 전용 행도 자동 적격 수열에 든다 — 첫 미검토를 건너뛰지 않는다**', !v.meetsContract && v.sequence === 31 && v.firstBlocking?.index === 5, v.reasons.join(' · '))
+  check('🔴 🔴 **#8(Q2) 차단 finding 행은 자동 적격 수열에서 제외된다**',
+    v.meetsContract && v.sequence === 30 && v.firstBlocking === null && !v.windowIds.includes(ws[4]!.id), v.reasons.join(' · '))
   const wd = [...good(27), ...good(3, { kind: 'edited' }), row({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'], semanticReview: warning, kind: 'declined', hd: 'yes' })]
-  check('🔴 경고 전용 행의 사람 결함도 지금 계약 결함으로 센다', !open(wd).meetsContract && open(wd).cohortHardDefects === 1)
+  check('🔴 차단 finding 행은 품질 cohort의 사람 표본·결함 집계에도 섞이지 않는다',
+    open(wd).meetsContract && open(wd).cohortHardDefects === 0 && open(wd).sequence === 30)
 }
 {
   const base = [...good(27), ...good(3, { kind: 'edited' })]

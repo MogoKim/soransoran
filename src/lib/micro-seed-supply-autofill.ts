@@ -250,7 +250,7 @@ export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
  * **형식이 맞는 미발행 행**을 센다 — 🔴 **발행 가능 재고가 아니다** (2026-09-26 정정).
  *
  * APPROVED 라도 이미 발행됐으면 빼고, legacy 판(profile 불일치)도 뺀다 — 거기까지다.
- * 🔴 사람 검토를 기다리는 기계 초안 · TTL 만료 · 배정 불가도 **여기 들어간다.**
+ * 🔴 자동 품질 조건을 아직 못 갖춘 기계 초안 · TTL 만료 · 배정 불가도 **여기 들어간다.**
  *    앞판 주석은 이것을 "러너가 실제로 먹을 수 있는 것" 이라 불렀고, 같은 DB 에서
  *    이 값은 9 · 발행 러너는 0 이었다(실측 2026-09-26).
  * 🔴 쓰임은 **적재 천장·적재 정합**뿐이다. 발행 가능 재고는 `scripts/lib/publishable-stock`
@@ -281,7 +281,7 @@ export function readStock(rows: readonly (QueueProfileRow & {
 }
 
 export type Candidate = {
-  /** 🔴 사람 검토가 artifact 한 장을 정확히 찾는 불투명 열쇠 */
+  /** 🔴 감사·운영 증거가 artifact 한 장을 정확히 찾는 불투명 열쇠 */
   artifactId?: string
   /**
    * 🔴 **생활 일관성 게이트가 모호하다고 본 축**(2026-09-28 quality-v2) — 코드 배열. 모양은
@@ -752,14 +752,15 @@ export function buildQueuePayload(input: {
         /**
          * 🔴 **모델이 이미 낸 판정을 옮긴다** (2026-09-22). 앞판은 여기가 `[]` 로
          *    하드코딩돼 있어, semanticReview 가 찾은 결함이 DB 에 오지 못했다.
-         *    🔴 `blocks` 는 그대로 비운다 — 이 경고는 후보 생성을 막지 않는다.
-         *       사람 검토는 계속되고, **자동 READY 에서만 빠진다.**
+         *    🔴 `blocks` 는 그대로 비운다 — 이 finding은 후보 생성을 막지 않는다.
+         *       안전한 추가·사소한 생략은 기록만 남고 자동 READY가 다시 해석하지 않는다.
+         *       미완료·생활사 모순 같은 차단 finding은 자동 READY의 구조화 판정이 계속 막는다.
          */
         holds: [
           ...semanticHoldsOf(semanticSummaryOf(input.review)),
           /**
-           * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2). 채택은 됐지만
-           *    사람이 봐야 한다 — 자동 READY 에서만 빠진다. 칸이 없으면 `unread` 경고다(통과 아님).
+           * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2). Content Core의 구조화 HOLD라
+           *    자동 READY 에서 빠진다. 칸이 없으면 `unread` 경고다(통과 아님).
            */
           ...lifeReviewHoldsOf(c.lifeReview),
         ],
@@ -795,7 +796,7 @@ export function buildQueuePayload(input: {
           provenance: MACHINE_PROFILE.envelopeProvenance,
           sourceDecision: MACHINE_PROFILE.sourceDecision,
           /**
-           * 🔴 **열쇠 둘만 싣는다** (2026-09-20). 사람 검토가 로컬 artifact 정본에서
+           * 🔴 **열쇠 둘만 싣는다** (2026-09-20). 감사·운영 증거가 로컬 artifact 정본에서
            *    **정확히 한 장**을 찾는다 — `artifactId` 로 찾고 `sourceArticleId` 로 대조한다.
            *    🔴 원문 제목·본문·근거는 **DB 로 복사하지 않는다** —
            *    그것은 `.microseed-data/*.artifacts.json` 에만 있다.

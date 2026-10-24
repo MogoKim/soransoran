@@ -17,6 +17,7 @@ import {
   AUDIT_CONTRACT_VERSION, verdictShapeOk,
 } from '../src/lib/auto-ready-v2'
 import { isTransientTxLost, withStampTxRetry, STAMP_TX_MAX_ATTEMPTS } from '../src/lib/auto-ready-repo'
+import { SEMANTIC_HOLD_CODES } from '../src/lib/semantic-summary-codes'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { releaseStageCeiling, boundedReleaseStage, resolveScale } from '../src/lib/scale-runtime'
 import {
@@ -89,13 +90,13 @@ console.log('\n① 🔴 semanticReview 는 fail-closed 다 — "객체이기만 
   /** 🔴 요약과 holds 가 같은 말을 해야 한다 — 기대 holds 는 정본 `semanticHoldsOf` 가 만든다 */
   const one = { ...GOOD_SR, unsupportedAdditions: 1 }
   const expected = semanticHoldsOf(one as never)
-  check('기준선 — 안전한 추가 경고는 기록·holds 대조에 남지만 자동 READY를 막지 않는다',
+  check('기준선 — 위험 추가 finding은 기록·holds 대조에 남고 자동 READY를 막는다',
     !warningsOfGate(gateWith(one, expected)).includes(SEMANTIC_HOLDS_MISMATCH)
-    && blockingWarningsOfGate(gateWith(one, expected)).length === 0
-    && elig(gateWith(one, expected)).auto)
+    && blockingWarningsOfGate(gateWith(one, expected)).includes(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:1`)
+    && !elig(gateWith(one, expected)).auto)
   const dropped = { ...GOOD_SR, droppedFromSource: 1 }
-  check('경미한 누락 경고만 있으면 Content Core ADOPT를 다시 뒤집지 않는다',
-    elig(gateWith(dropped, semanticHoldsOf(dropped as never))).auto)
+  check('핵심 손실 finding이 있으면 자동 READY를 막는다',
+    !elig(gateWith(dropped, semanticHoldsOf(dropped as never))).auto)
   const life = { ...one, lifeContradictions: 1 }
   const lifeVerdict = elig(gateWith(life, semanticHoldsOf(life as never)))
   check('🔴 추가 경고와 생활사 모순이 함께 있으면 생활사 모순은 계속 차단한다',
@@ -376,7 +377,7 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
   const V4_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
   check('🔴 🔴 **실제 v4 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
     codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V4_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
-    && QUALITY_CONTRACT_VERSION === 'quality-v18' && currentQualityContract().digest !== V4_MARK.digest)
+    && QUALITY_CONTRACT_VERSION === 'quality-v20' && currentQualityContract().digest !== V4_MARK.digest)
   /**
    * 🔴 (quality-v6 · 2026-10-01) **실제 v5 표식**도 같다 — 만남 게이트 전에 도장 찍힌 READY 는 v6 에서 자동 발행되지 않는다(구제 없음).
    */

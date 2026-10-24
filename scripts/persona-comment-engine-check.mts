@@ -79,6 +79,7 @@ import {
   verifyProvenance, MODEL_CANON_FILE,
 } from '../src/lib/persona-comment-provenance'
 import { runEnqueuePipeline, type PipelineTarget } from './lib/persona-comment-pipeline'
+import { requestShapeRejected } from '../src/lib/content-core/generation-failure'
 import {
   gateInputOf, materializeTargets, sourceTextsOf,
   type SourcePersona, type SourcePost, type TargetSource,
@@ -3503,6 +3504,39 @@ console.log('㉟ Queue 파이프라인 — 실제 경로 (provider 주입)')
   })
   check('🔴 같은 글에 하나가 적재되면 나머지 후보는 provider 호출 0',
     stopCalls === 1 && stopAfterSuccess.created === 1 && stopAfterSuccess.outcomes.length === 1)
+
+  /**
+   * 🔴 (2026-10-24 D10) 요청 모양 거부(HTTP_400)는 다시 보내도 같다 — 첫 호출에서 회차를 멈춘다.
+   *    일시 오류(429 · 5xx · NETWORK · TIMEOUT)는 같은 회차의 다음 후보로 간다(기존 그대로).
+   */
+  const third = target({
+    input: { ...first.input, post: { ...first.input.post, id: 'p2' } },
+    facts: { ...first.facts, postId: 'p2' },
+  })
+  const failingRun = async (code: string) => {
+    let n = 0
+    const r = await runEnqueuePipeline({
+      selection: { status: 'confirmed', winner: 'claude-haiku-4.5' }, canon,
+      targets: [first, second, third], limit: 3, providerCallLimit: 3, preflightOk: true, oneCreatedPerPost: true,
+      provider: async () => { n += 1; return { ok: false, text: null, errorCode: code } },
+      gate: okGate,
+      writer: async () => ({ created: true, reason: 'PENDING 적재' }),
+    })
+    return { n, r }
+  }
+  const bad = await failingRun('HTTP_400')
+  check('🔴 🔴 HTTP_400 → provider 호출 정확히 1 · 같은 글의 다음 Persona · 다른 글 모두 재시도 0',
+    bad.n === 1 && bad.r.providerCalls === 1 && bad.r.outcomes.length === 1 && bad.r.created === 0)
+  check('🔴 🔴 HTTP_400 → 구조화 사유 PROVIDER_REQUEST_REJECTED 를 남긴다',
+    bad.r.stoppedCode === 'PROVIDER_REQUEST_REJECTED' && (bad.r.stoppedReason ?? '').startsWith('PROVIDER_REQUEST_REJECTED HTTP_400')
+    && bad.r.outcomes[0]?.step === 'PROVIDER_FAILED' && (bad.r.outcomes[0]?.reason ?? '').includes('HTTP_400'))
+  for (const code of ['HTTP_429', 'HTTP_500', 'HTTP_503', 'NETWORK', 'TIMEOUT']) {
+    const t = await failingRun(code)
+    check(`🔴 일시 오류 ${code} → 재시도 가능 그대로(다음 후보로 · 호출 3) · 회차 중단 코드 없음`,
+      t.n === 3 && t.r.providerCalls === 3 && t.r.stoppedCode === null && t.r.outcomes.every((o) => o.step === 'PROVIDER_FAILED'))
+  }
+  check('🔴 요청 모양 거부 분류는 400 하나 — 일시 오류·모르는 코드는 아니다',
+    requestShapeRejected('HTTP_400') && !['HTTP_429', 'HTTP_500', 'NETWORK', 'TIMEOUT', 'HTTP_401', null, ''].some((c) => requestShapeRejected(c)))
 }
 
 // ─────────────────────────────────────────────────────────

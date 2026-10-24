@@ -15,7 +15,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
-  FOLLOWUP_KEY_PREFIX, followupEditDiffOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
+  FOLLOWUP_KEY_PREFIX, followupEditDiffOf, followupRoleOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
   followupStageOf, orderFollowupGo, pickFollowupPersona, readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
   type FollowupCommentRow, type FollowupPostFacts, type FollowupPostVerdict,
 } from '../../src/lib/persona-comment-followup'
@@ -226,7 +226,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const [qs, ls, reports, openRows, fuRows] = await Promise.all([
     prisma.personaApprovalQueue.findMany({
       where: { publishedCommentId: { in: personaCommentIds } },
-      select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
+      select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true, reactionType: true },
     }),
     prisma.personaActivityLog.findMany({
       where: { kind: 'comment', targetId: { in: personaCommentIds } },
@@ -255,6 +255,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       id: c.id, postId: c.postId, parentId: c.parentId, createdAt: c.createdAt, isDeleted: c.isDeleted, authorId: c.authorId,
       commentOrigin: c.commentOrigin, personaId: c.personaId, operatorWriterId: c.operatorWriterId,
       reaction: c.commentOrigin === 'PERSONA' ? reactionOf(c.content) : null,
+      role: c.commentOrigin === 'PERSONA' ? followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id)) : null,
       reported: reported.has(c.id),
       provenance: c.commentOrigin !== 'PERSONA' ? null : personaCommentProvenanceOf({
         comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
@@ -380,6 +381,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
           id: postId, title: src.title, bodyDigest: src.content.slice(0, DIGEST_CHARS), boardLabel: src.boardType,
           existingCommentDigests: liveComments.map((c) => (contentOf.get(c.id) ?? '').slice(0, COMMENT_DIGEST_CHARS)),
           ...(replyToDigest === undefined ? {} : { replyToDigest }),
+          ...(go.speaker.kind === 'author' ? { authorReply: true as const } : {}),
         },
         reactionRole: role,
         voice: voiceEvidenceFromAssets({ voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, recentTexts: pe.comments.map((c) => c.content) }),
@@ -481,6 +483,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     },
     gate, writer, providerCallLimit: planned.length, limit: allowed, oneCreatedPerPost: true,
   })
+  if (result.stoppedReason !== null) lines.push(`생성 멈춤: ${result.stoppedReason}`)
   for (const o of result.outcomes) lines.push(`   추가 ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}`)
   const sweepAfter = await sweepFollowupLane(prisma, now)
   return {

@@ -63,6 +63,10 @@ export function toPromptPost(input: CommentInput): PromptTargetPost {
     ...(input.post.replyToDigest === undefined
       ? []
       : ['', `[이 댓글에 이어서 답합니다]\n- ${input.post.replyToDigest}`]),
+    // 🔴 글쓴이 답글 자리만 — 남의 글에 단 댓글처럼 말하지 않게 한다
+    ...(input.post.authorReply === true
+      ? ['', '[이 글은 당신이 쓴 글입니다 — 글쓴이로서 위 댓글에 답합니다. 글에 없는 사실을 새로 더하지 않습니다]']
+      : []),
   ]
   return {
     title: input.post.title,

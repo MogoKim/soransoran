@@ -77,7 +77,7 @@ console.log(`\n── ALLOW (v12): ${CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE} �
   const h1 = hardCodes(i1)
   check('[work] 제 직장 selfBasis=null — 하드 차단 없음(v12)', h1.length === 0, h1.join(','))
   const s1 = softCodes(i1)
-  check('[work] 사람 검토도 없음 — 자동 READY 후보 유지', !s1.includes('unwarrantedSelfClaim'), s1.join(','))
+  check('[work] 구조화 HOLD도 없음 — 자동 READY 후보 유지', !s1.includes('unwarrantedSelfClaim'), s1.join(','))
 }
 
 // parents 축은 건강·돌봄·생애 사실로 번지므로 고위험 유지
@@ -92,7 +92,7 @@ console.log(`\n── ALLOW (v12): ${CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE} �
   const i1 = inp('공감이요', '저희 집도 그런 상황이라 정말 공감이 됐어요.', NO_PLAN)
   const h1 = hardCodes(i1)
   check('[family-like] 저희 집도 그런 — 하드 차단 없음(v12)', h1.length === 0, h1.join(','))
-  check('[family-like] 구체 사실이 없으면 사람 검토도 없음', !softCodes(i1).includes('unwarrantedSelfClaim'), softCodes(i1).join(','))
+  check('[family-like] 구체 사실이 없으면 구조화 HOLD도 없음', !softCodes(i1).includes('unwarrantedSelfClaim'), softCodes(i1).join(','))
 }
 
 console.log('\n── 실제 생성·검수 프롬프트 경계 ──')
@@ -108,8 +108,8 @@ console.log('\n── 실제 생성·검수 프롬프트 경계 ──')
   })
   const draftPrompt = buildV2DraftSystemPrompt({ plan, voice, life: P13, mappings: [] })
   const reviewPrompt = buildV2ReviewSystemPrompt({ plan, voice, life: P13 })
-  check('초안 프롬프트 판 p13', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p13')
-  check('검수 프롬프트 판 p9', V2_REVIEW_PROMPT_VERSION === 'v2-review-p9')
+  check('초안 프롬프트 판 p14', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p14')
+  check('검수 프롬프트 판 p10', V2_REVIEW_PROMPT_VERSION === 'v2-review-p10')
   check('초안이 감상·질문·비유·일반 관찰을 허용',
     draftPrompt.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
   check('초안이 고위험 생활 사실과 제3자 사건·결과를 금지',

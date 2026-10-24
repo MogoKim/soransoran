@@ -512,9 +512,15 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
     dupFirst.verdict === 'PASS' && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
   const dupFu = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
   check('🔴 추가 댓글끼리 같은 Persona → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
-  const self = withThread([first, fu(1, { personaId: 'author-0' })])
-  check('🔴 추가 댓글이 자기 글 → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
+  // 🔴 (2026-10-24) 글쓴이는 자기 글의 Persona 댓글에 답글로 한 번만 답할 수 있다 — 최상위 · 두 번째부터는 FOLLOWUP_SELF
+  const authorReply = withThread([first, fu(1, { personaId: 'author-0' })])
+  check('🟢 글쓴이 답글 한 번(최상위 아님) → 대화 감사 PASS · 단계 COMMENT_SELF 아님',
+    authorReply.verdict === 'PASS' && authorReply.conversation?.verdict === 'PASS', JSON.stringify(authorReply.conversation))
+  const self = withThread([first, fu(1, { personaId: 'author-0', topLevel: true })])
+  check('🔴 글쓴이의 최상위 추가 댓글(자기 글) → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
     self.verdict === 'PASS' && self.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(self.conversation))
+  const selfTwice = withThread([first, fu(1, { personaId: 'author-0' }), fu(2, { personaId: 'author-0' })])
+  check('🔴 글쓴이 답글 두 번 → 대화 감사 FOLLOWUP_SELF', selfTwice.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfTwice.conversation))
   const over = withThread([first, fu(1), fu(2), fu(3), fu(4), fu(5)])
   check('🔴 첫 댓글 1 + 추가 5(총 6 > 5) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
     over.verdict === 'PASS' && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))

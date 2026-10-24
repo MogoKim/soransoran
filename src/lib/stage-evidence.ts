@@ -246,7 +246,7 @@ export type ConversationAudit = {
  *    · 자동 첫 댓글(`auto`)이 없는 글 · 첫 댓글보다 앞선 추가 댓글         FOLLOWUP_WITHOUT_FIRST
  *    · 그 글의 Persona 댓글 총수 > 장기 정본 `PERSONA_COMMENTS_PER_POST_MAX` FOLLOWUP_OVER_TOTAL
  *    · 추가 댓글 Persona 가 그 글에 이미 쓴 Persona                       FOLLOWUP_DUP_PERSONA
- *    · 추가 댓글 Persona 가 글쓴이                                         FOLLOWUP_SELF
+ *    · 글쓴이의 추가 댓글이 최상위이거나 두 건 이상(답글 한 번만 허용)     FOLLOWUP_SELF
  *    🔴 추가 댓글이 하나도 없으면 PASS 다(대화를 잇지 않는 글이 정상이다).
  */
 export function judgeConversationAudit(posts: readonly EvidencePost[]): ConversationAudit {
@@ -266,7 +266,9 @@ export function judgeConversationAudit(posts: readonly EvidencePost[]): Conversa
     if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')
     const seen = p.personaComments.map((c) => c.personaId ?? '(없음)')
     if (fu.some((c) => c.personaId === null || seen.filter((x) => x === c.personaId).length > 1)) codes.add('FOLLOWUP_DUP_PERSONA')
-    if (p.authorPersonaId !== null && fu.some((c) => c.personaId === p.authorPersonaId)) codes.add('FOLLOWUP_SELF')
+    // 🔴 글쓴이는 자기 글의 Persona 댓글에 답글로 한 번만 답할 수 있다 — 최상위 추가 댓글이거나 두 번째부터는 자기 글 결함이다
+    const own = p.authorPersonaId === null ? [] : fu.filter((c) => c.personaId === p.authorPersonaId)
+    if (own.some((c) => c.topLevel) || own.length > 1) codes.add('FOLLOWUP_SELF')
   }
   if (broken > 0) codes.add('FOLLOWUP_PROVENANCE_BROKEN')
   const ordered = CONVERSATION_AUDIT_CODES.filter((c) => codes.has(c))
