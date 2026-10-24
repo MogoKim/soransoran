@@ -1351,18 +1351,9 @@ async function main(): Promise<void> {
   console.log(`   🟡 AUTO_HOLD  ${s.AUTO_HOLD}건`)
   console.log(`   🔴 AUTO_DROP  ${s.AUTO_DROP}건`)
   console.log(`   🔴 v2 가 초안을 만들지 않고 멈춘 원천 ${v2Held}건 · artifact ${artifacts.length}장`)
-  /**
-   * 🔴 **사람에게 넘긴 경고만 센다** (2026-09-20 보정). `adopt` 인 artifact 만이다 —
-   *    hard 사유로 HOLD/DROP 된 글에도 경고 근거가 붙어 있을 수 있는데,
-   *    그것까지 세면 "사람에게 넘겼다" 는 숫자가 부풀어 거짓이 된다.
-   */
-  const warned = artifacts.filter((a) =>
-    a.review.machineOutcome === 'adopt' && reviewWarnings(a.review.semantic).length > 0)
-  console.log(`   🟡 사람에게 넘긴 경고가 붙은 후보 ${warned.length}건`
-    + ` — 원문에 없어 보이는 것 · 원문에서 사라져 보이는 것`)
-  if (warned.length > 0) {
-    console.log('      🔴 이 항목만으로는 막지 않았다. 발행은 사람이 검토를 마쳐야 열린다')
-  }
+  const findingHeld = artifacts.filter((a) =>
+    a.review.machineOutcome === 'hold' && reviewWarnings(a.review.semantic).length > 0)
+  console.log(`   🟡 위험 허구·핵심 손실 finding으로 HOLD ${findingHeld.length}건`)
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
     console.log(`   ${String(n).padStart(3)}건  ${DRAFT_REASON_LABEL[code as keyof typeof DRAFT_REASON_LABEL] ?? code}`)

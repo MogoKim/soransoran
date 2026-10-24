@@ -178,17 +178,19 @@ import {
  * 결속이나 감사 판이 하나라도 다르면 승계하지 않고 기존 의미 재감사를 그대로 요구한다.
  */
 /**
- * `quality-v19` (2026-10-24) = **실질 변경 계약 한 벌 + 측정된 yes 의 확인 호출.**
- * 10-24 자연 D10에서 Content Core가 ADOPT한 글의 `새벽에`·`이밤에` → `밤늦게` 같은 장면 바꿔쓰기를
- * 발행 뒤 감사 한 번의 yes가 원문 왜곡으로 확정해 전역 자동 READY를 닫았다.
- * ① Content Core 검수(`v2-review-p10`)와 의미 감사(`semantic-audit-prompt-v6`)가 같은 `material-contract-v1` 줄을 싣는다.
- * ② 의미 감사(`auto-ready-semantic-audit-v3`)는 1차 측정 yes 를 같은 요청으로 한 번 더 확인하고, 확인도 yes 일 때만
- *    결함으로 확정한다. 확인 no 는 결함 아님, 확인 측정 실패는 재시도 가능 실패다(no 로 읽지 않는다).
+ * `quality-v20` (2026-10-23~24) = **미배포 Draft v19의 bounded creativity·차단 finding과 발행 뒤 감사를 하나의 실질 변경 계약으로 묶는다.**
+ * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
+ * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
+ * 뜻하며 Content Core에서 HOLD한다. 원문에 없는 시간대·상대 시점과 새 전달자·전언 경로도 위험 허구로 명시한다.
+ * auto-READY의 옛 비차단 예외를 제거해 같은 구조화 결론을 다시 뒤집지 않는다.
+ * Content Core 검수(`v2-review-p10`)와 의미 감사(`semantic-audit-prompt-v6`)는 같은 `material-contract-v1` 줄을 싣는다.
+ * 의미 감사(`auto-ready-semantic-audit-v3`)는 1차 측정 yes 를 같은 요청으로 한 번 더 확인하고, 확인도 yes 일 때만
+ * 결함으로 확정한다. 확인 no 는 결함 아님, 확인 측정 실패는 재시도 가능 실패다(no 로 읽지 않는다).
  * 무결성·결속·장부·예산·usageUnknown·재시도 가능 실패·확정 결함의 전역 정지는 그대로다.
  * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
  * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v19'
+export const QUALITY_CONTRACT_VERSION = 'quality-v20'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

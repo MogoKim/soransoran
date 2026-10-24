@@ -289,10 +289,10 @@ async function main(): Promise<void> {
     // 🔴 (quality-v4) 사람 표본은 그대로 센다(무수정 26 · 폐기 4) — 사람 비율은 v4 열림 근거가 아니다(창업자 gold)
     check('🔴 🔴 **#6 26/30 — 무수정 26 · 폐기 4 로 그대로 센다(폐기도 표본) · v4 열림은 gold**',
       v.meetsContract && v.basis === 'founderGold' && v.noEdit === 26 && v.declined === 4, v.reasons.join(' · '))
-    // 경고 전용 행도 자동 적격 수열에 들어가지만, 뒤에 생성돼 첫 30건 창 밖이다
+    // 차단 finding 행은 자동 적격 수열에 들어가지 않는다
     const warn = await seed({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'], semanticReview: { ...GOOD_SR, unsupportedAdditions: 1 } })
     const withWarn = await evidenceFromDb(prisma)
-    check('🔴 경고 전용 행은 수열에 들고 생성 순서상 첫 30건 창 밖이다', withWarn.sequence === 31 && !withWarn.windowIds.includes(warn.id))
+    check('🔴 차단 finding 행은 수열과 첫 30건 창에서 모두 제외된다', withWarn.sequence === 30 && !withWarn.windowIds.includes(warn.id))
     // 판이 섞인 행 — legacy 30 건은 아무리 좋아도 수열에 없다
     const lg: Seeded[] = []
     for (let i = 0; i < 3; i += 1) lg.push(await seed({ legacy: true }))

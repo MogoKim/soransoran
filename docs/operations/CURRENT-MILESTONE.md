@@ -93,7 +93,7 @@ READY 0은 공급 0이 아니라 시계 결함이다. 두 결함의 보정 이�
 |---|---|---|---|
 | #762 D20 Persona 이름 | Draft · CLEAN · exact-head CI PASS | P34~P43 합성 닉네임 다양화, 실제 닉네임 복제 금지 | D10 PASS → 충돌 gate → DB 생성·활성화 |
 | catch-up 수요 지평 정렬 | 로컬 targeted PASS · exact-head CI 전 | 공급도 발행기와 같은 10분 heartbeat·22:00 창으로 실제 회수 기회를 계산 | exact-head CI → main → runtime → 다음 자연 공급·D5 증명 |
-| D10 근본 정렬 · quality-v19 (2026-10-24 기록) | 로컬 code candidate · typecheck 2종·감사·댓글·followup·증거 targeted 검사 PASS · 새 근본 변이 24개와 기존 댓글/followup 변이 PASS · 품질 계약 지문 재확인 · exact-head CI 전 | 10-24 자연 D10 실패 네 원인 — 실질 변경 계약 한 벌(검수 p10 · 감사 prompt v6) · 감사 yes 1회 확인(감사 v3) · 400 요청 모양 거부 즉시 중단 · 글쓴이 답글 한 번 · 첫 댓글 대화 기능 소비 | exact-head CI → main → runtime → v18 의미 해소 기록 재감사(판 변경으로 승계 없음) → 다음 자연 D10 |
+| D10 근본 정렬 · quality-v20 (2026-10-24 기록) | 로컬 code candidate · typecheck 2종·감사·댓글·followup·증거 targeted 검사 PASS · 새 근본 변이 24개와 기존 댓글/followup 변이 PASS · 품질 계약 지문 재확인 · exact-head CI 전 | 미배포 Draft v19의 위험 finding 차단과 10-24 자연 D10 실패 네 원인 — 실질 변경 계약 한 벌(검수 p10 · 감사 prompt v6) · 감사 yes 1회 확인(감사 v3) · 400 요청 모양 거부 즉시 중단 · 글쓴이 답글 한 번 · 첫 댓글 대화 기능 소비 | exact-head CI → main → runtime → v18 의미 해소 기록 재감사(판 변경으로 승계 없음) → 다음 자연 D10 |
 
 Draft와 로컬 후보를 운영 PASS로 쓰지 않는다. #762는 D10 operating PASS 전 활성화하지 않는다.
 

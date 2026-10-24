@@ -14,7 +14,7 @@ import { AUTO_READY_CONTRACT } from './supply-schedule-contract'
 import { LEGACY_DECISION_MARK } from './review-provenance'
 import { semanticHoldsOf, type SemanticSummary } from './micro-seed-supply-autofill'
 // 🔴 모듈 로드 때 읽는 값은 의존 없는 정본에서 — 품질 계약 순환 안에서도 비지 않는다
-import { SEMANTIC_HOLD_CODES, SEMANTIC_SUMMARY_KEY } from './semantic-summary-codes'
+import { SEMANTIC_SUMMARY_KEY } from './semantic-summary-codes'
 
 /**
  * 🔴 사람 결정 경로의 표식 — 기계 자동 판정은 이 값을 **절대** 쓰지 않는다(founder 위장 금지).
@@ -35,7 +35,7 @@ export const CONTRACT = AUTO_READY_CONTRACT
  *    `complete: false` 인 것도 **경고 0** 으로 읽혔다. 재지 않은 것을 이상 없음으로 읽은 것이다.
  *    이제 여섯 필드를 **구조적으로** 본다. 하나라도 어긋나면 품질 격리로 간다.
  *
- * 🔴 구조 결함·holds 불일치·차단 축은 자동 READY에서 뺀다. ADOPT의 경고 전용 두 축은 기록만 유지한다.
+ * 🔴 구조 결함·holds 불일치·차단 finding은 자동 READY에서 뺀다.
  * 🔴 `confidence` 에 통과 임계값을 만들지 않는다. "유한한 0~1 숫자인가" 만 본다.
  */
 export const SEMANTIC_RECORD_KEY = SEMANTIC_SUMMARY_KEY
@@ -105,18 +105,8 @@ export function warningsOfGate(gate: unknown): string[] {
   return out
 }
 
-/**
- * Content Core가 ADOPT한 뒤 근거로 남긴 경고 전용 축이다. 둘은 품질 기록과
- * holds 정합성에는 남지만, 그 사실만으로 자동 READY를 막지는 않는다.
- */
-const NON_BLOCKING_SEMANTIC_HOLDS = [
-  SEMANTIC_HOLD_CODES.unsupportedAdditions,
-  SEMANTIC_HOLD_CODES.droppedFromSource,
-] as const
-
 export function blockingWarningsOfGate(gate: unknown): string[] {
-  return warningsOfGate(gate).filter((warning) =>
-    !NON_BLOCKING_SEMANTIC_HOLDS.some((code) => warning === code || warning.startsWith(`${code}:`)))
+  return warningsOfGate(gate)
 }
 
 export type RowInput = {

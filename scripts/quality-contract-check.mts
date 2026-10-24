@@ -62,7 +62,7 @@ export const FINGERPRINT_FILES = [
   //    프롬프트·판정 함수를 판본 상수만 올리지 않고 조용히 바꾸지 못하게 파일 자체를 지문에 넣는다.
   'src/lib/auto-ready-semantic-audit.ts',
   'scripts/lib/auto-ready-rule-judge.mts',
-  // 🔴 (quality-v19 · 2026-10-24) 발행 전 검수와 발행 뒤 감사가 함께 싣는 실질 변경 계약 — 이 파일만 바꿔
+  // 🔴 (quality-v20 · 2026-10-24) 발행 전 검수와 발행 뒤 감사가 함께 싣는 실질 변경 계약 — 이 파일만 바꿔
   //    두 결정자의 창작 경계를 조용히 바꾸지 못하게 지문에 넣는다
   'src/lib/content-core/material-contract.ts',
   // 🔴 (quality-v7 · 2026-10-12) Persona 결정 정본 — 판독 답을 읽고 정본 카드로 자격을 대조해 화자를 확정한다.

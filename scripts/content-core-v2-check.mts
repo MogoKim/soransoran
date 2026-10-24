@@ -677,12 +677,9 @@ console.log('\n⑧ 🔴 생성·검수 — 원문 직접 · 복제 차단 · 과
   const invented = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
     review: { ...EMPTY_REVIEW, confidence: 0.85,
       unsupportedAdditions: [{ evidence: '다들 사 가시나요.', why: '원문에 없는 장면' }] } } })
-  /**
-   * 🔴 **2026-09-20 — 이제 경고다.** 막지 않고 사람에게 넘긴다.
-   *    근거는 artifact 에 그대로 남는다 (아래 두 줄이 그것을 본다).
-   */
-  check('🟡 🔴 **원문에 없어 보이는 것은 막지 않고 후보로 보낸다**',
-    invented.review.machineOutcome === 'adopt', invented.review.machineReason)
+  check('🔴 **확인된 근거 없는 위험 사실은 HOLD한다**',
+    invented.review.machineOutcome === 'hold'
+    && invented.review.machineReason.includes('근거 없는 위험 사실'), invented.review.machineReason)
   check('🔴 🔴 **그래도 근거는 artifact 에 남는다**',
     invented.review.unsupportedAdditions.length === 1
     && invented.review.unsupportedAdditions[0]!.evidence === '다들 사 가시나요.')
@@ -1251,7 +1248,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.3'
-    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p13'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p14'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**
    * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**
@@ -1299,17 +1296,10 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, 애매한 판정은 사람에게 (2026-09-20)')
+console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용하고 위험 finding은 HOLD (quality-v20)')
 // ─────────────────────────────────────────────────────────
 {
-  /**
-   * 🔴 SHADOW5B 5편은 사람이 전부 READY 로 봤는데 `unsupportedAdditions` ·
-   *    `droppedFromSource` 가 두 편을 막았고, **같은 원문·같은 초안이 회차마다
-   *    ADOPT/HOLD 를 오갔다.** 그래서 이 둘은 경고로 내리고 판정을 사람에게 넘긴다.
-   *
-   * 🔴 **프롬프트 문자열을 세지 않는다** — `judgeMachine` 이 실제로 어떻게
-   *    판정하는지 값으로 본다. 예시를 프롬프트에 박아 맞추는 방식은 그만둔다.
-   */
+  /** 프롬프트 문자열 대신 `judgeMachine`의 실제 결과로 단일 판정 계약을 검증한다. */
   const PASS: DeterministicResult = { pass: true, failures: [] }
   const DONE: ReviewCompletion = { complete: true, reason: null, cause: null }
   const V = (o: Partial<SemanticVerdict> = {}): SemanticVerdict => ({
@@ -1319,29 +1309,30 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
   const ADD = [{ evidence: '어제 아침에도 일어났는데 힘이 너무 안 나서', why: '원문에 없다' }]
   const DROP = [{ evidence: '형수가 음식사오니깐 나오는데', why: '사라졌다' }]
 
-  // ── ① unsupportedAdditions 만 있으면 후보로 간다 ──
+  // ── ① unsupportedAdditions는 위험 허구로 판정된 finding이다 ──
   {
     const j = judgeMachine({ deterministic: PASS, semantic: V({ unsupportedAdditions: ADD }), semanticCompletion: DONE })
-    check('🟢 🔴 **원문에 없어 보이는 것만 있으면 adopt 다** — 사람에게 넘긴다',
-      j.outcome === 'adopt', `${j.outcome} / ${j.reason}`)
-    check('🔴 🔴 **경고는 사라지지 않는다** — 근거가 그대로 남는다',
+    check('🔴 **근거 없는 위험 사실은 HOLD**',
+      j.outcome === 'hold' && j.reason.includes('근거 없는 위험 사실'), `${j.outcome} / ${j.reason}`)
+    check('🔴 finding 근거는 그대로 남는다',
       j.warnings.length === 1 && j.warnings[0]!.includes('어제 아침에도 일어났는데'))
   }
-  // ── ② droppedFromSource 만 있어도 후보로 간다 ──
+  // ── ② droppedFromSource는 핵심 의미 손실 finding이다 ──
   {
     const j = judgeMachine({ deterministic: PASS, semantic: V({ droppedFromSource: DROP }), semanticCompletion: DONE })
-    check('🟢 🔴 **원문에서 사라져 보이는 것만 있으면 adopt 다**', j.outcome === 'adopt', j.reason)
-    check('🔴 그 근거도 경고로 남는다',
+    check('🔴 **원문 핵심 손실은 HOLD**', j.outcome === 'hold' && j.reason.includes('원문 핵심 손실'), j.reason)
+    check('🔴 그 근거도 finding으로 남는다',
       j.warnings.length === 1 && j.warnings[0]!.includes('형수가 음식사오니깐'))
   }
-  // ── ③ 둘 다 있어도 사람 검토 후보다 ──
+  // ── ③ 두 finding이 함께 있으면 모두 근거를 남기고 HOLD한다 ──
   {
     const j = judgeMachine({
       deterministic: PASS, semanticCompletion: DONE,
       semantic: V({ unsupportedAdditions: ADD, droppedFromSource: DROP }),
     })
-    check('🟢 🔴 **두 경고가 함께 있어도 사람 검토 후보가 된다**', j.outcome === 'adopt', j.reason)
-    check('🔴 경고 둘이 모두 남는다', j.warnings.length === 2)
+    check('🔴 **두 finding이 함께 있으면 HOLD**', j.outcome === 'hold'
+      && j.reason.includes('근거 없는 위험 사실') && j.reason.includes('원문 핵심 손실'), j.reason)
+    check('🔴 finding 근거 둘이 모두 남는다', j.warnings.length === 2)
   }
   // ── ④ 확정할 수 있는 결함은 그대로 막는다 ──
   for (const [name, arg, want] of [
@@ -1383,10 +1374,11 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
       lifeContradictions: [{ fact: 'work', drafted: '전업', card: '파트타임', evidence: '전업이라' }],
     })
     const j = judgeMachine({ deterministic: PASS, semantic: mixed, semanticCompletion: DONE })
-    check('🔴 🔴 **경고 + 생활사 모순이면 전체는 HOLD 다**', j.outcome === 'hold', j.outcome)
-    check('🔴 🔴 **그래도 경고 근거는 보존된다**',
+    check('🔴 🔴 **finding + 생활사 모순이면 전체는 HOLD 다**', j.outcome === 'hold', j.outcome)
+    check('🔴 🔴 **finding 근거는 보존된다**',
       j.warnings.length === 1 && j.warnings[0]!.includes('어제 아침에도 일어났는데'))
-    check('🔴 전체 사유는 hard 쪽이 말한다', j.reason.includes('생활사 모순'))
+    check('🔴 전체 사유에 허구와 생활사 모순이 모두 남는다',
+      j.reason.includes('근거 없는 위험 사실') && j.reason.includes('생활사 모순'))
 
     const art = readReviewArtifact({
       artifactId: 'b'.repeat(32), sourceArticleId: 's2',
@@ -1403,37 +1395,39 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
     const lines = art === null ? '' : reviewEvidenceLines(art).join('\n')
     check('🔴 🔴 **화면이 "기계가 막지 않았다" 라고 주장하지 않는다**',
       !lines.includes('기계가 막지 않았다'))
-    check('🔴 🔴 **경고 줄은 "이 항목 자체는 hard 차단 사유가 아니다" 라고만 말한다**',
-      lines.includes('이 항목 자체는 hard 차단 사유가 아니다'))
+    check('🔴 🔴 **증거 줄은 위험 사실로 표시한다**', lines.includes('근거 없는 위험 사실'))
     check('🔴 화면 맨 윗줄이 전체 판정(hold)을 말한다', lines.split('\n')[0]!.includes('기계 hold'))
     check('🔴 경고 근거와 hard 근거가 모두 보인다',
       lines.includes('어제 아침에도 일어났는데') && lines.includes('생활사 모순'))
   }
 
   // ── ④-c 🔴 adopt 경고 집계에 hard HOLD/DROP 을 넣지 않는다 ──
-  check('🔴 🔴 **회차 로그는 adopt 인 것만 "사람에게 넘긴 경고" 로 센다**', (() => {
+  check('🔴 🔴 **회차 로그는 finding으로 HOLD된 artifact만 센다**', (() => {
     const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-    const i = src.indexOf('const warned = artifacts.filter(')
+    const i = src.indexOf('const findingHeld = artifacts.filter(')
     if (i === -1) return false
     const block = src.slice(i, i + 220)
-    return block.includes("a.review.machineOutcome === 'adopt'")
+    return block.includes("a.review.machineOutcome === 'hold'")
       && block.includes('reviewWarnings(a.review.semantic).length > 0')
   })())
   {
     /** 🔴 같은 판정 함수로 센다 — 집계 규칙을 손으로 다시 쓰지 않는다 */
-    const rows = [
-      { outcome: 'adopt', s: V({ unsupportedAdditions: ADD }) },
-      { outcome: 'adopt', s: V({ droppedFromSource: DROP }) },
-      { outcome: 'hold', s: V({ unsupportedAdditions: ADD, lifeContradictions: [{ fact: 'work', drafted: 'x', card: 'y', evidence: 'z' }] }) },
-      { outcome: 'drop', s: V({ unsupportedAdditions: ADD, issues: ['harm'] }) },
-      { outcome: 'adopt', s: V() },
+    const samples = [
+      V({ unsupportedAdditions: ADD }),
+      V({ droppedFromSource: DROP }),
+      V({ unsupportedAdditions: ADD, lifeContradictions: [{ fact: 'work', drafted: 'x', card: 'y', evidence: 'z' }] }),
+      V({ unsupportedAdditions: ADD, issues: ['harm'] }),
+      V(),
     ]
-    const counted = rows.filter((r) => r.outcome === 'adopt' && reviewWarnings(r.s).length > 0)
-    check('🔴 🔴 **hard HOLD/DROP 은 그 숫자에 들어가지 않는다** — 5장 중 2건만',
-      counted.length === 2)
+    const rows = samples.map((s) => ({
+      outcome: judgeMachine({ deterministic: PASS, semantic: s, semanticCompletion: DONE }).outcome,
+      s,
+    }))
+    const counted = rows.filter((r) => r.outcome === 'hold' && reviewWarnings(r.s).length > 0)
+    check('🔴 🔴 **finding HOLD 수만 집계한다** — 5장 중 3건', counted.length === 3)
   }
 
-  // ── ⑤ 사람 검토 화면이 경고를 보여준다 ──
+  // ── ⑤ 증거 화면이 차단 finding을 보여준다 ──
   {
     const art = readReviewArtifact({
       artifactId: 'a'.repeat(32), sourceArticleId: 's1',
@@ -1441,18 +1435,17 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
       plan: { personaCode: 'P01', stance: 'SELF_EXPERIENCE', warrants: [] },
       draft: { title: '제목', body: '본문' },
       review: {
-        machineOutcome: 'adopt', machineReason: '',
+        machineOutcome: 'hold', machineReason: '근거 없는 위험 사실 1건 · 원문 핵심 손실 1건',
         unsupportedAdditions: ADD, droppedFromSource: DROP, lifeContradictions: [],
       },
       cost: { calls: [] },
     })
     const lines = art === null ? [] : reviewEvidenceLines(art).join('\n')
-    check('🔴 🔴 **사람 검토 화면에 원문 근거가 보인다**', String(lines).includes('원문 조각'))
+    check('🔴 🔴 **증거 화면에 원문 근거가 보인다**', String(lines).includes('원문 조각'))
     check('🔴 🔴 **경고 근거 둘이 모두 보인다**',
       String(lines).includes('어제 아침에도 일어났는데') && String(lines).includes('형수가 음식사오니깐'))
-    check('🔴 🔴 **화면이 사람이 판정할 자리라고 말한다**',
-      String(lines).includes('[사람이 판정]')
-      && String(lines).includes('이 항목 자체는 hard 차단 사유가 아니다'))
+    check('🔴 🔴 **화면이 위험 허구·핵심 손실로 보여 준다**',
+      String(lines).includes('근거 없는 위험 사실') && String(lines).includes('원문 핵심 손실'))
   }
 
   // ── ⑥ SHADOW5B 5편을 provider 없이 다시 판정하면 전부 후보다 ──
@@ -1472,10 +1465,10 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
         droppedFromSource: r.drop > 0 ? DROP : [],
       }),
     }))
-    check('🟢 🔴 **SHADOW5B 5편이 전부 사람 검토 후보가 된다** (provider 호출 0)',
-      outcomes.every((o) => o.outcome === 'adopt'),
+    check('🔴 **SHADOW5B 5편 중 finding 2건은 HOLD, 깨끗한 3건은 ADOPT** (provider 호출 0)',
+      outcomes.filter((o) => o.outcome === 'hold').length === 2 && outcomes.filter((o) => o.outcome === 'adopt').length === 3,
       outcomes.map((o) => o.outcome).join(','))
-    check('🔴 경고가 붙은 2편은 경고를 달고 간다',
+    check('🔴 finding이 붙은 2편은 근거를 보존한다',
       outcomes.filter((o) => o.warnings.length > 0).length === 2)
   }
 
@@ -3787,5 +3780,5 @@ console.log('\n🔴 🔴 **artifact → pickV2 → adopted → candidate payload
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 가짜 provider 검사다 — 실제 모델이 쓸 만한 글을 쓰는지는 증명하지 않았다.')
-console.log('🔴 검사 수는 성과가 아니다. 사람 READY 판정은 유료 실측으로만 나온다.')
+  console.log('🔴 검사 수는 성과가 아니다. 운영 READY는 자연 회차 실측으로만 증명한다.')
 if (fail > 0) process.exit(1)

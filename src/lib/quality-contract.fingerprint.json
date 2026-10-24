@@ -1,22 +1,22 @@
 {
-  "version": "quality-v19",
-  "digest": "63c1195f96645d10f09b7e28c314d060f3a7e4c42575c232f6d695a0169ad484",
+  "version": "quality-v20",
+  "digest": "1048e106c56d32cdbda27168dea12daab1d76351011bc720ea4fcd9f36ee3eab",
   "files": {
-    "src/lib/quality-contract.ts": "f59b1bbf05830414f7355dc2b332b9b636a478689768cf4caf0f19bdbb71809b",
+    "src/lib/quality-contract.ts": "68fdbced4ead6819d6c79e5c74e4050c6339085a05b6b1c7856b74ac2010e724",
     "src/lib/semantic-summary-codes.ts": "8e0587d064ee27f839bfd95f09df99da8f90ac95a1c2529e665402b08a0d0907",
     "src/lib/content-core/draft-life-gates.ts": "c1b89b9aee8ef184005ab0125769414d53f449f002c8c5c2d8a6e1e5aed74ce0",
-    "src/lib/content-core/review.ts": "63ae974eea6aa64c76026ab29d2715bb149f1e9998dfc948d2ba349b1fadf1d2",
-    "src/lib/content-core/pipeline.ts": "c6506bc4c83397673077b24c9dee410fc05d51c08ae60c25146391bf9b45e85c",
+    "src/lib/content-core/review.ts": "2c72eb6bfc7d18102c42f86c401452942eed8285692deac12841a441344ed877",
+    "src/lib/content-core/pipeline.ts": "d6d860efefd5653744e6d18bc53bb89eee16a8004210a6d2b6379dba3334048b",
     "src/lib/content-core/evidence.ts": "5d057ae291e865cbc3131bb51a858e2568b351239f993c38c4d9453c95980e2e",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
-    "src/lib/auto-ready-v2.ts": "72e909de248a5dc080f35e9ef51c8bb140bef80d68d486962548285dee2f5094",
+    "src/lib/auto-ready-v2.ts": "ed56e52eabe6efcef8bbc2a80e1e0a78699d1bff6c05e48ac2978a0f11a2be72",
     "src/lib/supply-schedule-contract.ts": "f459df65a91d146d227faa086177573af602b93fa8a57393a79f88a2b1416f11",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
     "scripts/lib/content-core-run.mts": "bc4fbb119cd916a200cbd0a9245d1bbf7042777b07c3b480294131484c3d9800",
-    "scripts/lib/content-core-prompts.mts": "e372fa3fd2e6bf650c09acbc13ce07dca1014b1ad7b341ba52efbc38a8a6419e",
+    "scripts/lib/content-core-prompts.mts": "37460ae9e74940d63ac92411caf0aed9f1270a46873a76bcc829cf511a259d20",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -35,10 +35,16 @@
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "안전한 semantic finding은 기록하되 자동 READY를 막지 않는 quality-v18 이후 실제 동작에 맞춰 주석만 정정; 실행 코드 불변",
+    "kind": "bump",
+    "reason": "판 quality-v19 → quality-v20",
     "changedFiles": [
-      "src/lib/semantic-summary-codes.ts"
+      "src/lib/quality-contract.ts",
+      "src/lib/semantic-summary-codes.ts",
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/content-core/review.ts",
+      "src/lib/content-core/pipeline.ts",
+      "src/lib/content-core/evidence.ts",
+      "scripts/lib/content-core-prompts.mts"
     ]
   }
 }
