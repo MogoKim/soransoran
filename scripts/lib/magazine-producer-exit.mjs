@@ -75,6 +75,46 @@ export function summarizeRepairStage({ spawnError = null, status = null, report 
   }
 }
 
+/**
+ * 🔴 **유일한 DIRECT 원고가 실패해도 회차가 OK 였다** (2026-10-24 첫 DIRECT 자연 회차 · Codex P1).
+ *    회수기는 전역 실패에만 1 을 내고 개별 slug 실패는 0 으로 끝난다 — legacy 의 "일부 막힘은 정상" 계약이다.
+ *    그래서 선정 1건(DIRECT) · 원고 0건 회차가 OK · exit 0 · handoff OK 로 남았다.
+ *
+ *    이제 회수 결과 파일을 **구조적으로** 읽는다. 대상은 run.json 이 DIRECT 신원(directSpec)을 남긴 행
+ *    (선정 · 재사용)뿐이다 — 회수 뒤 draft.md 가 없으면 미해결이다(실패 · HOLD · 건너뜀 · 결과 행 없음 모두).
+ *    결과 파일이 없거나 · 깨졌거나 · 이번 회수가 쓴 것이 아니면(writtenAt 이 시작보다 앞) 그것도 미해결이다 —
+ *    "결과를 못 읽었다" 를 "문제없다" 로 읽지 않는다.
+ *    🔴 legacy 행의 개별 콘텐츠 실패는 여기서 세지 않는다 — 기존 계약 그대로다.
+ *
+ * @param {{spawnError?:string|null, status?:number|null, skipped?:boolean}} p.fetch   회수 단계
+ * @param {{ok:boolean, body?:object, why?:string}|null} p.report   readFetchResults 결과
+ * @param {number|null} p.startedAt   회수 자식을 띄운 시각(ms)
+ * @param {string[]} p.directSlugs    run.json 의 DIRECT 행 slug (선정 · 재사용)
+ * @param {(slug:string) => boolean} p.draftExists
+ * @returns {{ran:boolean, resultFile:string|null, direct:{expected:number, drafted:number}, failures:object[]}|null}
+ *   회수가 돌지 않았거나 시스템 실패(spawn·종료 코드≠0)면 null — 그 판정은 judgeProducerRun 이 이미 한다
+ */
+export function summarizeFetchStage({ fetch, report = null, startedAt = null, directSlugs = [], draftExists = () => false, resultFile = null }) {
+  if (!fetch || fetch.skipped || fetch.spawnError || fetch.status !== 0) return null
+  const failures = []
+  const body = report?.ok ? report.body : null
+  if (!body) failures.push({ slug: null, type: 'FETCH_RESULT', outcome: 'FETCH_RESULT_MISSING', reason: report?.why ?? '회수 결과를 읽지 못했다' })
+  else if (Number.isFinite(startedAt) && !(Date.parse(body.writtenAt ?? '') >= startedAt)) {
+    failures.push({ slug: null, type: 'FETCH_RESULT', outcome: 'FETCH_RESULT_STALE', reason: `이번 회수가 쓴 결과가 아니다 (writtenAt ${body.writtenAt ?? '없음'})` })
+  }
+  const fresh = failures.length === 0 ? body : null
+  let drafted = 0
+  for (const slug of [...new Set(directSlugs)]) {
+    if (draftExists(slug)) { drafted++; continue }
+    const row = (fresh?.results ?? []).find((r) => r?.slug === slug) ?? null
+    failures.push({ slug, type: 'DIRECT', outcome: 'DIRECT_MANUSCRIPT_MISSING',
+      reason: row ? `${row.status}${row.reason ? ` · ${row.reason}` : ''}` : (fresh ? '회수 결과에 행이 없다' : '회수 결과를 믿을 수 없다') })
+  }
+  return { ran: true, resultFile, direct: { expected: new Set(directSlugs).size, drafted }, failures }
+}
+
+const fetchList = (f) => (f?.failures ?? []).map((x) => `${x.slug ?? '회수 결과'}(${x.outcome}${x.reason ? `: ${x.reason}` : ''})`).join(' · ')
+
 const repairList = (repair) => (repair?.failures ?? []).map((f) => `${f.slug ?? '입력 수리'}(${f.outcome})`).join(' · ')
 
 /** 한 단계의 결과 — 자식을 띄우지 못한 경우와 종료 코드를 구분한다 */
@@ -93,7 +133,7 @@ export const stage = (name, { spawnError = null, status = null, skipped = false,
  * @param {ReturnType<typeof summarizeRepairStage>|null} [p.repair]  입력 수리 요약 (돌지 않았으면 null)
  * @returns {{code:number, verdict:'OK'|'HOLD'|'CONTENT'|'PARTIAL'|'SYSTEM', reason:string, failures:string[]}}
  */
-export function judgeProducerRun({ plan, brief, fetch, outstanding = null, preflight = null, repair = null }) {
+export function judgeProducerRun({ plan, brief, fetch, outstanding = null, preflight = null, repair = null, fetchResult = null }) {
   // ── 시작 전 검사가 막혔으면 그것이 먼저다 ────────────────
   //
   // 🔴 도구 부재(claude·gh)와 git 상태(NOT_ON_MAIN·DIRTY_TREE)는 **시스템 실패**다.
@@ -150,6 +190,7 @@ export function judgeProducerRun({ plan, brief, fetch, outstanding = null, prefl
   }
 
   const unresolved = repair?.failures ?? []
+  const fetchUnresolved = fetchResult?.failures ?? []
   if (failures.length > 0) {
     // 🔴 시스템 실패가 먼저다 — 다만 수리 미해결도 이유에서 지우지 않는다
     const note = unresolved.length ? ` / 입력 수리 미해결: ${repairList(repair)}` : ''
@@ -157,12 +198,19 @@ export function judgeProducerRun({ plan, brief, fetch, outstanding = null, prefl
   }
 
   const blocked = brief.status === 1
-  if (unresolved.length > 0) {
+  if (unresolved.length > 0 || fetchUnresolved.length > 0) {
+    const parts = [
+      ...(unresolved.length ? [`입력 수리 미해결 ${unresolved.length}건 — ${repairList(repair)}${repair.resultFile ? ` · 결과 ${repair.resultFile}` : ''}`] : []),
+      ...(fetchUnresolved.length ? [`DIRECT 원고 미해결 ${fetchUnresolved.length}건 — ${fetchList(fetchResult)}${fetchResult.resultFile ? ` · 결과 ${fetchResult.resultFile}` : ''}`] : []),
+    ]
     return {
       code: PARTIAL_EXIT,
       verdict: 'PARTIAL',
-      reason: `입력 수리 미해결 ${unresolved.length}건 — ${repairList(repair)}${repair.resultFile ? ` · 결과 ${repair.resultFile}` : ''}${blocked ? ' · 일부 건이 brief 게이트에 막혔다' : ''}`,
-      failures: unresolved.map((f) => `repair: ${f.slug ?? '입력 수리'} ${f.outcome}${f.reason ? ` — ${f.reason}` : ''}`),
+      reason: `${parts.join(' / ')}${blocked ? ' · 일부 건이 brief 게이트에 막혔다' : ''}`,
+      failures: [
+        ...unresolved.map((f) => `repair: ${f.slug ?? '입력 수리'} ${f.outcome}${f.reason ? ` — ${f.reason}` : ''}`),
+        ...fetchUnresolved.map((f) => `fetch: ${f.slug ?? '회수 결과'} ${f.outcome}${f.reason ? ` — ${f.reason}` : ''}`),
+      ],
     }
   }
 

@@ -25,7 +25,7 @@
  * 🔴 **알림을 보내려고 파일을 쓰거나 AI 를 부르지 않는다.**
  *    중단 경로에서는 plan·brief·fetch 를 **한 번도 호출하지 않는다.**
  */
-import { judgeProducerRun, stage, summarizeRepairStage } from './magazine-producer-exit.mjs'
+import { judgeProducerRun, stage, summarizeFetchStage, summarizeRepairStage } from './magazine-producer-exit.mjs'
 import { SEVERITY } from './magazine-outstanding.mjs'
 
 /**
@@ -53,7 +53,7 @@ export async function runProducerFlow({ dryRun = false, deps }) {
   /**
    * 🔴 **단 하나의 종료 자리.** 알림은 여기에만 있고, 여기서만 한 번 돈다.
    */
-  const finalize = async ({ preflight = null, outstanding = null, plan, brief, fetch, repair = null }) => {
+  const finalize = async ({ preflight = null, outstanding = null, plan, brief, fetch, repair = null, fetchResult = null }) => {
     const verdict = judgeProducerRun({
       preflight,
       outstanding,
@@ -61,6 +61,7 @@ export async function runProducerFlow({ dryRun = false, deps }) {
       brief: brief ?? stage('brief', { skipped: true }),
       fetch: fetch ?? stage('fetch', { skipped: true }),
       repair,
+      fetchResult,
     })
 
     if (notified === null) {
@@ -75,7 +76,7 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     }
 
     // 🔴 notified 를 본 뒤에도 code 는 verdict 것 그대로다. 덮어쓰지 않는다.
-    return { code: verdict.code, verdict: verdict.verdict, reason: verdict.reason, failures: verdict.failures, notify: notified, ran, repair }
+    return { code: verdict.code, verdict: verdict.verdict, reason: verdict.reason, failures: verdict.failures, notify: notified, ran, repair, fetchResult }
   }
 
   // ── 시작 전 검사 — 🔴 **파일도 AI 도 건드리기 전에** ──────
@@ -195,18 +196,27 @@ export async function runProducerFlow({ dryRun = false, deps }) {
 
   // ── 3) 원고 회수 ────────────────────────────────────────
   let fetchStage = stage('fetch', { skipped: true })
+  let fetchResult = null
   if (dryRun) log('dry-run — 원고 회수를 실행하지 않는다')
   else if (!planOk) log('producer 가 실패해 원고 회수를 건너뛴다')
   else {
     ran.push('fetch')
-    const r = deps.runFetch()
+    const r = deps.runFetch() ?? {}
     fetchStage = stage('fetch', { spawnError: r.spawnError ?? null, status: r.status ?? null })
     if (fetchStage.spawnError) log(`🔴 원고 회수를 실행하지 못했다 (${fetchStage.spawnError})`)
     else if (fetchStage.status === 0) log('원고 회수 완료')
     else log('🔴 원고 회수 전역 실패 — ChatGPT 접근 또는 브라우저 시작에 실패했다')
+    /**
+     * 🔴 **회수 결과를 구조적으로 판정한다** (2026-10-24 · Codex P1).
+     *    종료 코드 0 은 "전역 실패가 아니다" 일 뿐이다 — DIRECT 원고가 0건이어도 0 이다.
+     *    결과 파일(r.report)과 run.json 의 DIRECT 행으로 미해결을 세어 PARTIAL 로 남긴다. 결과가 없으면 그것도 미해결이다.
+     */
+    fetchResult = summarizeFetchStage({ fetch: fetchStage, report: r.report ?? null, startedAt: r.startedAt ?? null,
+      resultFile: r.resultFile ?? null, directSlugs: supply.directSlugs ?? [], draftExists: deps.draftExists ?? (() => false) })
+    for (const f of fetchResult?.failures ?? []) log(`  ⛔ 원고 회수 ${f.slug ?? '(결과)'} — ${f.outcome}${f.reason ? ` · ${f.reason}` : ''}`)
   }
 
-  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage, repair: repairStage })
+  return finalize({ plan: planStage, brief: briefStage, fetch: fetchStage, repair: repairStage, fetchResult })
 }
 
 /**
@@ -220,6 +230,8 @@ export function supplyFromRunJson(j) {
     selected: selected ? selected.length : null,
     reusable: Array.isArray(j?.reusable) ? j.reusable.length : 0,
     legacySelected: selected ? selected.filter((s) => !s?.directSpec).length : null,
+    // 🔴 DIRECT 신원을 남긴 행(선정 · 재사용) — 회수 뒤 원고가 있어야 하는 slug (회차 판정 · 2026-10-24)
+    directSlugs: [...(selected ?? []), ...(Array.isArray(j?.reusable) ? j.reusable : [])].filter((s) => s?.directSpec && s.slug).map((s) => s.slug),
   }
 }
 

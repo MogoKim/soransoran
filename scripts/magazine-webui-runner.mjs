@@ -416,11 +416,13 @@ function markersOf(brief) {
 export async function recoverSlug(slug, { conversationUrl, checkOnly = false, date = todayKst(),
   resultPath = null, quarantinePath = QUARANTINE_PATH, draftsDir = DRAFTS_DIR, browserDeps = {},
   /** 🔴 전용 자동화 프로필 신원 관문(probe) — 회수와 같은 확인을 지난다. 시험은 주입한다 */
-  accessFn = null } = {}) {
+  accessFn = null,
+  /** 🔴 시험만 준다 — direct source 재검증의 정본 큐·판 주입점. 운영(--recover CLI)은 deliveryGate 기본값(실제 큐·current.ts) */
+  directSourceDeps = null } = {}) {
   const fail = (reason, errorDetail) => ({ slug, status: 'failed', reason, stage: 'recover', sent: false, errorDetail })
   const outPath = join(draftsDir, slug, 'draft.md')
   if (existsSync(outPath)) return fail('recover_draft_exists', 'draft.md 가 이미 있다 — 덮지 않는다')
-  const gate = deliveryGate({ slug, draftsDir, quarantinePath })
+  const gate = deliveryGate({ slug, draftsDir, quarantinePath, directSourceDeps })
   if (!gate.ok) return fail(gate.code, gate.why)
   const d = gate.entry?.delivery
   if (!d || d.kind !== 'DELIVERY_UNCERTAIN' || !gate.messageFingerprint || d.messageFingerprint !== gate.messageFingerprint) {
@@ -446,7 +448,9 @@ export async function recoverSlug(slug, { conversationUrl, checkOnly = false, da
     }
     const r = await recoverManuscript({
       conversationUrl, expectedMessage: gate.message, outPath,
-      requiredMarkers: markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),
+      // 🔴 DIRECT_SPEC_V1 은 brief.md 가 없는 것이 정상이다 — 회수(fetchSlug)와 같이 markers 를 비운다 (2026-10-24).
+      //    legacy 는 기존대로 brief 의 대조 문장을 요구한다.
+      requiredMarkers: gate.mode === DIRECT_SPEC_MODE ? [] : markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),
       validate: validateManuscript, checkOnly, ...browserDeps,
     })
     if (!r.ok) {
