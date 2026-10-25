@@ -210,7 +210,7 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
 console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 검수 판 review-v8 · 검수 프롬프트 p10', V2_REVIEW_PROMPT_VERSION === 'v2-review-p10' && REVIEW_VERSION === 'review-v8')
+  check('🔴 검수 판 review-v9 · 검수 프롬프트 p10', V2_REVIEW_PROMPT_VERSION === 'v2-review-p10' && REVIEW_VERSION === 'review-v9')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',

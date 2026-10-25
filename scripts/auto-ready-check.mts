@@ -377,7 +377,7 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
   const V4_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
   check('🔴 🔴 **실제 v4 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
     codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V4_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
-    && QUALITY_CONTRACT_VERSION === 'quality-v20' && currentQualityContract().digest !== V4_MARK.digest)
+    && QUALITY_CONTRACT_VERSION === 'quality-v22' && currentQualityContract().digest !== V4_MARK.digest)
   /**
    * 🔴 (quality-v6 · 2026-10-01) **실제 v5 표식**도 같다 — 만남 게이트 전에 도장 찍힌 READY 는 v6 에서 자동 발행되지 않는다(구제 없음).
    */

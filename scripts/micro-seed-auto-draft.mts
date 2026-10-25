@@ -338,10 +338,10 @@ export const DRAFT_TIMEOUT_MS = 25000
  */
 
 /**
- * 🔴 **원천 하나가 쓸 수 있는 v2 요청 수.** 정상 경로는 3회다 —
- *    계획 · 생성 · 검수. 넘기면 그 원천은 완주 실패로 남고 채택되지 않는다.
+ * 🔴 **원천 하나가 쓸 수 있는 v2 요청 수.** 정상 경로는 3회이고,
+ *    검수가 차단 finding을 냈을 때만 같은 요청의 확인 1회를 허용한다.
  */
-export const V2_CALL_CAP = 3
+export const V2_CALL_CAP = 4
 
 /** 🔴 v2 단계 → 장부 단계 이름 — 정본은 `content-core-ledger-ask` 하나다(러너와 검사가 같은 변환을 쓴다) */
 export { V2_LEDGER_STAGE, V2_LEDGER_RETRY_STAGE } from './lib/content-core-ledger-ask.mjs'
@@ -722,7 +722,7 @@ function loadMeta(): Map<string, Meta> {
  * 🔴 그래서 **이름과 출력을 공동 예산으로 정정한다.** 상한을 올리지 않았다 —
  *    평균 사용량이 계약을 지키는지는 `perSource` 관측으로 본다.
  */
-export const CALL_ALLOWANCE_PER_SOURCE = 4
+export const CALL_ALLOWANCE_PER_SOURCE = 5
 
 export function callBudgetOf(sources: number): number {
   return Math.max(0, sources) * CALL_ALLOWANCE_PER_SOURCE
@@ -1169,7 +1169,7 @@ async function main(): Promise<void> {
         ask: v2Ask, now, callCap: V2_CALL_CAP,
         /**
          * 🔴 **일시적 기술 실패만 원천당 한 번 다시 묻는다** (2026-10-12 Batch B).
-         *    정상 3 + 재시도 1 = 4 — 회차 공동 예산(`CALL_ALLOWANCE_PER_SOURCE`)을 넘지 않는다.
+         *    정상 3 + 조건부 확인 1 + 기술 재시도 1 = 5 — 회차 공동 예산을 넘지 않는다.
          */
         retryCap: GENERATION_RETRY_MAX,
       })

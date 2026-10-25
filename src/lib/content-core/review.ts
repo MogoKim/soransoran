@@ -20,7 +20,7 @@
 import { CLAIM_FACTS } from './source-facts'
 import { DRAFT_GATE_CODES, DRAFT_GATE_LABEL } from './draft-life-gates'
 
-export const REVIEW_VERSION = 'review-v8'
+export const REVIEW_VERSION = 'review-v9'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -132,6 +132,19 @@ export type SemanticVerdict = {
   lifeContradictions: LifeContradiction[]
   confidence: number
   note: string
+}
+
+/**
+ * 차단 finding은 한 번 더 같은 검수에서 재현돼야 확정한다.
+ * 위해는 한 번만 발견돼도 즉시 DROP하며 확인 대상이 아니다.
+ */
+export function semanticNeedsConfirmation(s: SemanticVerdict): boolean {
+  if (s.issues.includes('harm')) return false
+  return s.unsupportedAdditions.length > 0
+    || s.droppedFromSource.length > 0
+    || s.lifeContradictions.length > 0
+    || s.issues.length > 0
+    || s.unknownIssues.length > 0
 }
 
 /**

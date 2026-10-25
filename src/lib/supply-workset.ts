@@ -123,26 +123,26 @@ export function readOpportunitySnapshot(raw: unknown): OpportunitySnapshot | nul
 
 /**
  * 🔴 **단계마다 원천 하나에 몇 번까지 허용하는가.**
- *    `judge` 는 의미 판정 1회, 생성은 Content Core 세 단계(`V2_CALL_CAP`)다.
+ *    `judge` 는 의미 판정 1회, 생성은 Content Core 정상 세 단계와 조건부 확인 1회다.
  *    🔴 이 값들의 합이 `TOTAL_PER_SOURCE` 를 넘으면 실행 전에 거부한다 —
  *       합이 전체보다 크면 어느 단계든 남의 몫을 먹을 수 있다는 뜻이다.
  */
-export const WORKSET_STAGE_PER_SOURCE = Object.freeze({ judge: 1, draft: 3 } as const)
+export const WORKSET_STAGE_PER_SOURCE = Object.freeze({ judge: 1, draft: 4 } as const)
 export type WorksetStage = keyof typeof WORKSET_STAGE_PER_SOURCE
-export const WORKSET_TOTAL_PER_SOURCE = 4
+export const WORKSET_TOTAL_PER_SOURCE = 5
 
 /**
  * 기본 묶음 크기 — 🔴 `--workset-limit` 이 없으면 이 값이다.
  *
  * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 회차 요청 상한도 같이 움직인다 —
- *    judge 10 · draft 30 · 합 40 (`judgeStageBudget`). 계약 정본은 `SUPPLY_WORKSET_PER_RUN` 이고
+ *    judge 10 · draft 40 · 합 50 (`judgeStageBudget`). 계약 정본은 `SUPPLY_WORKSET_PER_RUN` 이고
  *    검사가 두 값이 같은지 본다.
  */
 export const WORKSET_DEFAULT_LIMIT = 10
 
 /**
  * 🔴 **묶음 크기 천장.** `--workset-limit` 으로도 이보다 크게 부를 수 없다 —
- *    `judgeStageBudget` 이 거부한다. 손으로 100 을 넣어 judge 100 · draft 300 이 나가는 길을 닫는다.
+ *    `judgeStageBudget` 이 거부한다. 손으로 100 을 넣어 judge 100 · draft 400 이 나가는 길을 닫는다.
  */
 export const WORKSET_MAX_LIMIT = SUPPLY_WORKSET_PER_RUN
 

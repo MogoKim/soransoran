@@ -178,16 +178,16 @@ console.log('\n② 🔴 단계별 상한 — 앞 단계가 뒤 단계를 굶기�
 {
   const b = judgeStageBudget(5)
   check('🔴 🔴 **judge 최대 5회**', b.ok && b.perStage.judge === 5, b.ok ? '' : b.reason)
-  check('🔴 🔴 **draft 에 15회가 보장된다**', b.ok && b.perStage.draft === 15)
-  check('🔴 🔴 **회차 전체 최대 20회**', b.ok && b.total === 20)
-  check('🔴 판정 1 · 생성 3 · 전체 4 (원천당)',
-    WORKSET_STAGE_PER_SOURCE.judge === 1 && WORKSET_STAGE_PER_SOURCE.draft === 3
-    && WORKSET_TOTAL_PER_SOURCE === 4)
+  check('🔴 🔴 **draft 에 20회가 보장된다**', b.ok && b.perStage.draft === 20)
+  check('🔴 🔴 **회차 전체 최대 25회**', b.ok && b.total === 25)
+  check('🔴 판정 1 · 생성 최대 4 · 전체 5 (원천당)',
+    WORKSET_STAGE_PER_SOURCE.judge === 1 && WORKSET_STAGE_PER_SOURCE.draft === 4
+    && WORKSET_TOTAL_PER_SOURCE === 5)
   check('🔴 🔴 **기본 묶음 크기는 10 이다** (2026-09-28 공급 가속)', WORKSET_DEFAULT_LIMIT === 10)
   {
     const b10 = judgeStageBudget(10)
-    check('🔴 🔴 **묶음 10 → judge 10 · draft 30 · 합 40**',
-      b10.ok && b10.perStage.judge === 10 && b10.perStage.draft === 30 && b10.total === 40,
+    check('🔴 🔴 **묶음 10 → judge 10 · draft 40 · 합 50**',
+      b10.ok && b10.perStage.judge === 10 && b10.perStage.draft === 40 && b10.total === 50,
       b10.ok ? JSON.stringify(b10) : b10.reason)
   }
   check('🔴 🔴 **천장(10) 위는 거부한다 — 무제한 호출 없음**',
