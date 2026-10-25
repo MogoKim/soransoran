@@ -746,7 +746,8 @@ expect('producer 가 흐름에 checkTools 를 준다', /checkTools: \(\) => pref
 // 🔴 sync 뒤 재실행 자식은 다시 fetch·ff 하지 않고 부모가 맞춘 HEAD 만 확인한다 (2026-10-25 sync-reload)
 expect('producer 가 흐름에 checkGit 을 준다', /checkGit: \(\) => \(POST_SYNC \? pinnedHead\(\) : preflight\(\{ exec \}\)\)/.test(producerSrc), true)
 expect('producer 가 흐름에 checkOutstanding 을 준다', /checkOutstanding: \(\) => readOutstanding/.test(producerSrc), true)
-expect('producer 가 흐름에 notify 를 준다', /notify: notifyOnce/.test(producerSrc), true)
+// 🔴 재실행 자식은 알림 시도 표식을 먼저 남기고 같은 notifyOnce 를 부른다 (2026-10-25 sync-reload P1)
+expect('producer 가 흐름에 notify 를 준다', /notify: \(ctx\) => \{[\s\S]{0,260}?return notifyOnce\(ctx\)/.test(producerSrc), true)
 // 🔴 옛 결함의 화석 — 시작 전 검사의 중간 exit 가 되살아나면 알림 계약이 다시 깨진다
 expect('시작 전 검사에 중간 process.exit 가 없다', /process\.exit\(1\)/.test(producerSrc), false)
 
@@ -3018,7 +3019,7 @@ const syncReloadCheck = spawnSync(process.execPath, [join('scripts', 'magazine-p
   maxBuffer: 1e8,
 })
 expect('producer sync-reload 반례·변이가 전부 통과한다', syncReloadCheck.status, 0)
-expect('producer sync-reload 검사가 20개 반례·변이를 실제 실행했다', /producer sync-reload: 20 pass, 0 fail/.test(syncReloadCheck.stdout), true)
+expect('producer sync-reload 검사가 30개 반례·변이를 실제 실행했다', /producer sync-reload: 30 pass, 0 fail/.test(syncReloadCheck.stdout), true)
 
 console.log('\n══════ 관계 수량 공용 정책 (direct 2~3 + discovery 1) — 저장소 fixture 만')
 // 🔴 실제 연구 폴더 인자를 넘기지 않는다 — CI 에서도 같은 결과여야 한다. 실제 I-T6-05 검사는 SKIP 이고 pass 로 세지 않는다

@@ -21,7 +21,7 @@
  *   node scripts/magazine-producer-sync-reload-check.mjs --repro <ref> 후보 = <ref> 의 파일 (수정 전 재현 · 혼합이 보여야 한다)
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, symlinkSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,7 +58,7 @@ const RECORD = `const __rec = (stage, extra = {}) => {
   const { appendFileSync, readFileSync, existsSync } = require('node:fs'); const { join } = require('node:path')
   const id = readFileSync(join(process.cwd(), 'scripts/.sync-code-id'), 'utf8').trim()
   const lock = join(process.cwd(), 'drafts/magazine/_runs/.producer.lock')
-  appendFileSync(join(process.env.HOME, 'calls.log'), JSON.stringify({ stage, id, lock: existsSync(lock) ? JSON.parse(readFileSync(lock, 'utf8')).pid : null, ppid: process.ppid, ...extra }) + '\\n')
+  appendFileSync(join(process.env.HOME, 'calls.log'), JSON.stringify({ stage, id, lock: existsSync(lock) ? JSON.parse(readFileSync(lock, 'utf8')).pid : null, ppid: process.ppid, tok: Boolean(process.env.SORAN_PRODUCER_LOCK_TOKEN), mark: Boolean(process.env.SORAN_PRODUCER_NOTIFY_MARK), ...extra }) + '\\n')
 }`
 const stub = (body) => `import { createRequire } from 'node:module'\nconst require = createRequire(import.meta.url)\n${RECORD}\n${body}\n`
 const KST = 'const kst = () => new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)'
@@ -155,6 +155,9 @@ function scenario({ mutate = (t) => t, ff = true, newOnly = null, before = null,
     lockLeft: existsSync(join(W, 'drafts/magazine/_runs/.producer.lock')),
     count: (stage) => calls.filter((c) => c.stage === stage).length,
     reexecs: (`${r.stdout}${r.stderr}`.match(/새 코드로 다시 띄운다/g) ?? []).length,
+    // 🔴 알림 시도 = notify 자식(정상 회차) + Slack 직접 발송 시도(중단 회차 · 부모 대체 경고)
+    alerts: calls.filter((c) => c.stage === 'notify').length + (`${r.stdout}${r.stderr}`.match(/Slack (발송|미발송)/g) ?? []).length,
+    fallback: /POST_SYNC_CHILD_FAILED 경고 알림을 시도한다/.test(`${r.stdout}${r.stderr}`),
   }
 }
 
@@ -184,10 +187,39 @@ const CASES = {
       && s.reexecs === 1 && ['plan', 'repair', 'fetch', 'notify'].every((k) => s.count(k) === 1) && s.count('brief') === 0
       && s.calls.every((c) => c.id === 'NEW') && !s.lockLeft }
   },
-  'R2 회수 단계 동안 producer lock 은 부모 회차 것 하나 · 끝나면 풀린다 (이중 획득 0)': (mut) => {
+  'R2 회수 단계 동안 producer lock 은 부모 회차 것 하나 · 끝나면 풀린다 (이중 획득 0) · 하위 프로세스에 token·표식 0': (mut) => {
     const s = scenario({ mutate: mut })
     const f = s.calls.find((c) => c.stage === 'fetch')
-    return { s, ok: Boolean(f) && Number.isInteger(f.lock) && f.lock !== f.ppid && !s.lockLeft && !/LOCK_HELD|LOCK_NOT_INHERITED/.test(s.out) }
+    return { s, ok: Boolean(f) && Number.isInteger(f.lock) && f.lock !== f.ppid && !s.lockLeft && !/LOCK_HELD|LOCK_NOT_INHERITED/.test(s.out)
+      && s.calls.length >= 4 && s.calls.every((c) => !c.tok && !c.mark) }
+  },
+  'P1a 자식이 적재 전에 죽는다 (옛 handoff 가 남아 있어도) → SYSTEM/1 · handoff 1 · 경고 1 · 알림 실패여도 1 · 자식 단계 0': (mut) => {
+    const s = scenario({ mutate: mut,
+      newOnly: (rel, t) => t.replace("import { spawnSync } from 'node:child_process'\n", "import './lib/__sync-check-missing__.mjs'\nimport { spawnSync } from 'node:child_process'\n"),
+      before: ({ W }) => {
+        const d = join(W, 'drafts/magazine/_runs', kstDate()); mkdirSync(d, { recursive: true })
+        const hp = join(d, 'producer-handoff.json')
+        writeFileSync(hp, JSON.stringify({ date: kstDate(), verdict: 'OK', code: 0, ran: ['plan'], finishedAt: new Date(Date.now() - 3600e3).toISOString() }))
+        const old = new Date(Date.now() - 3600e3); utimesSync(hp, old, old)
+      } })
+    return { s, ok: s.status === 1 && s.handoff?.verdict === 'SYSTEM' && s.handoff?.code === 1 && s.handoff?.ran?.includes('reexec')
+      && s.fallback && s.alerts === 1 && /Slack 미발송/.test(s.out) && s.calls.length === 0 && s.reexecs === 1 && !s.lockLeft }
+  },
+  'P1b 자식 종료 코드 0 인데 handoff 없음 → SYSTEM/1 · handoff 1 · 알림 합계 1 (자식이 이미 알렸으면 부모 0)': (mut) => {
+    const s = scenario({ mutate: mut, newOnly: (rel, t) => t
+      .replace("    const path = writeHandoff({ date: kstDate(), verdict: result.verdict", "    throw new Error('SYNC-CHECK handoff 실패')\n    const path = writeHandoff({ date: kstDate(), verdict: result.verdict")
+      .replace('process.exit(result.code)', 'process.exit(0)') })
+    return { s, ok: s.status === 1 && s.handoff?.verdict === 'SYSTEM' && s.handoff?.code === 1 && s.handoff?.ran?.includes('reexec')
+      && s.alerts === 1 && !s.fallback && ['plan', 'repair', 'fetch', 'notify'].every((k) => s.count(k) === 1) && !s.lockLeft }
+  },
+  'P1c 자식 PARTIAL/3 + fresh handoff → PARTIAL/3 보존 · 부모 handoff·알림 0 · 알림 합계 1': (mut) => {
+    const s = scenario({ mutate: mut })
+    return { s, ok: s.status === 3 && s.handoff?.verdict === 'PARTIAL' && !s.handoff?.ran?.includes('reexec') && !s.fallback && s.alerts === 1 && s.count('notify') === 1 }
+  },
+  'P1d 자식 SYSTEM/1 + fresh handoff → 자식 알림만 1 · 부모 handoff·알림 0': (mut) => {
+    const s = scenario({ mutate: mut, newOnly: (rel, t) => t.replace('  if (!EXPECT_HEAD || head !== EXPECT_HEAD || head !== BOOT_HEAD) {', '  if (true) {') })
+    return { s, ok: s.status === 1 && s.handoff?.verdict === 'SYSTEM' && !s.handoff?.ran?.includes('reexec') && /HEAD_MOVED/.test(s.out)
+      && !s.fallback && s.alerts === 1 && s.calls.length === 0 && !s.lockLeft }
   },
   'R3 ff 없음 — 재실행 0 · 시작 HEAD 판정 그대로 (OK/0)': (mut) => {
     const s = scenario({ mutate: mut, ff: false })
@@ -279,9 +311,15 @@ const MUTATIONS = [
   ['MS2', 'flow 가 afterSync 위임을 무시한다', 'scripts/lib/magazine-producer-flow.mjs', '      if (delegated?.delegated) return { ...delegated, ran }\n', ''],
   ['MS3', '자식이 lock 을 새로 잡는다 (이중 획득)', ENTRY_REL, '    checkLock: () => (POST_SYNC ? adoptLock() : acquireProducerLock()),\n', '    checkLock: () => acquireProducerLock(),\n'],
   ['MS4', '자식이 다시 fetch·ff 하고 재실행한다 (재귀)', ENTRY_REL, '    checkGit: () => (POST_SYNC ? pinnedHead() : preflight({ exec })),\n', '    checkGit: () => preflight({ exec }),\n'],
-  ['MS6', '부모가 자식 handoff 를 덮어쓴다 (이중 기록)', ENTRY_REL, '  if (!childWroteHandoff(result.startedAt)) {\n', '  if (true) {\n'],
+  ['MS6', '부모가 자식 handoff 를 덮어쓴다 (이중 기록)', ENTRY_REL, '  if (childWroteHandoff(result.startedAt)) {\n', '  if (false) {\n'],
   ['MS7', '부모가 자식이 끝나기 전에 lock 을 푼다', ENTRY_REL, '  const r = spawnSync(NODE, [entry, \'--post-sync\', \'--expect-head\', head], {\n', '  producerLock.release()\n  const r = spawnSync(NODE, [entry, \'--post-sync\', \'--expect-head\', head], {\n'],
   ['MS8', '적재한 코드의 HEAD 기준을 잃는다 — ff 없어도 재실행 · 자식 HEAD 확인 불능', ENTRY_REL, "const BOOT_HEAD = exec('git', ['rev-parse', 'HEAD']).out\n", "let BOOT_HEAD = null\n"],
+  ['MS9', '부모 대체 경고 알림 제거 (P1)', ENTRY_REL, '    if (!result.childNotified) {\n', '    if (false) {\n'],
+  ['MS10', 'handoff 없는 자식의 종료 코드를 그대로 쓴다 — SYSTEM/1 강제 제거 (P1)', ENTRY_REL, '    result.code = 1\n    const why', '    result.code = result.status ?? 1\n    const why'],
+  ['MS11', '부모가 자식의 알림 시도를 모른다 — 알림 중복 (P1)', ENTRY_REL, '  const childNotified = existsSync(notifyMark)\n', '  const childNotified = false\n'],
+  ['MS12', 'fresh 판정을 파일 존재로 낮춘다 — 옛 handoff 오인 (P1)', ENTRY_REL, "    return statSync(path).mtimeMs >= startedAt && Date.parse(h?.finishedAt ?? '') >= startedAt && h?.date === kstDate()\n", '    return true\n'],
+  ['MS13', '자식이 token 을 환경에서 지우지 않는다 (P2)', ENTRY_REL, '  delete process.env.SORAN_PRODUCER_LOCK_TOKEN\n', ''],
+  ['MS14', '자식의 잠금 소유권 검사 제거 (P2)', ENTRY_REL, '  if (!token || cur?.token !== token || cur?.pid !== process.ppid) {', '  if (false) {'],
 ]
 console.log('\n── 변이 — 각 변이를 위 반례 중 하나가 잡아야 한다')
 for (const [id, label, rel, from, to] of MUTATIONS) {

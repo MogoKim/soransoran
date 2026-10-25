@@ -55,8 +55,8 @@ import { fileURLToPath } from 'node:url'
 import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
 import { composeProducerMessage, runProducerFlow, supplyFromRunJson } from './lib/magazine-producer-flow.mjs'
-import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { handoffPath, writeHandoff } from './lib/magazine-handoff.mjs'
 import { fetchResultPath, readFetchResults } from './lib/magazine-fetch-result.mjs'
 import { acquireLock, PRODUCER_LOCK_PATH, readLock } from './lib/magazine-auto-lock.mjs'
@@ -96,6 +96,12 @@ const dryRun = process.argv.includes('--dry-run')
 const POST_SYNC = process.argv.includes('--post-sync')
 const EXPECT_HEAD = POST_SYNC ? process.argv[process.argv.indexOf('--expect-head') + 1] ?? null : null
 const ENTRY_REL = 'scripts/magazine-producer-run.mjs'
+/**
+ * 🔴 재실행 자식이 **알림을 시도했다**는 표식 파일 경로 — 부모가 정해 넘긴다 (회차 전체 알림 최대 1회).
+ *    자식은 읽자마자 환경에서 지운다 — plan · brief · repair · fetch · notify 와 그 하위 프로세스에 흘리지 않는다.
+ */
+const NOTIFY_MARK = POST_SYNC ? process.env.SORAN_PRODUCER_NOTIFY_MARK ?? null : null
+delete process.env.SORAN_PRODUCER_NOTIFY_MARK
 
 /** 판정에 쓰는 읽기 전용 실행기. stdout 을 잡아서 돌려준다 */
 const exec = (cmd, args) => {
@@ -169,6 +175,8 @@ const acquireProducerLock = () => { producerLock = acquireLock({ path: PRODUCER_
 const adoptLock = () => {
   const cur = readLock(PRODUCER_LOCK_PATH)
   const token = process.env.SORAN_PRODUCER_LOCK_TOKEN ?? ''
+  // 🔴 확인 직후 환경에서 지운다 — token 은 이 확인 한 번에만 쓴다. 하위 프로세스가 잠금 주인 행세를 할 수 없게
+  delete process.env.SORAN_PRODUCER_LOCK_TOKEN
   if (!token || cur?.token !== token || cur?.pid !== process.ppid) {
     return { ok: false, code: 'LOCK_NOT_INHERITED', message: 'sync 뒤 재실행 자식인데 부모의 producer 잠금을 확인하지 못했다 — 아무것도 시작하지 않는다', release: () => {} }
   }
@@ -187,9 +195,17 @@ const pinnedHead = () => {
   }
   return { ok: blockedBy.length === 0, blockedBy, branch, synced: blockedBy.length === 0, fastForwarded: false }
 }
-/** 이 회차의 handoff 를 재실행 자식이 썼는가 — 시작 시각 뒤에 쓰인 파일만 그렇다 */
+/**
+ * 이 회차의 handoff 를 재실행 자식이 썼는가 — **fresh 만** 그렇다.
+ *    파일이 자식 시작 뒤에 쓰였고(mtime) · 내용의 finishedAt 도 그 뒤이고 · 오늘 날짜여야 한다.
+ *    같은 날 앞 회차가 남긴 신호를 이번 회차 것으로 읽지 않는다.
+ */
 const childWroteHandoff = (startedAt) => {
-  try { return statSync(handoffPath(kstDate())).mtimeMs >= startedAt } catch { return false }
+  try {
+    const path = handoffPath(kstDate())
+    const h = JSON.parse(readFileSync(path, 'utf8'))
+    return statSync(path).mtimeMs >= startedAt && Date.parse(h?.finishedAt ?? '') >= startedAt && h?.date === kstDate()
+  } catch { return false }
 }
 /**
  * 🔴 **sync 로 HEAD 가 바뀌었으면 같은 회차를 새 코드로 정확히 한 번 다시 띄운다** (2026-10-25 · Codex P1).
@@ -202,10 +218,13 @@ const afterSync = () => {
   line(`코드가 ${BOOT_HEAD.slice(0, 7)} → ${head.slice(0, 7)} 로 바뀌었다 — 같은 회차를 새 코드로 다시 띄운다 (1회)`)
   const startedAt = Date.now()
   const entry = join(ROOT, ENTRY_REL)
+  const notifyMark = join(tmpdir(), `soransoran-producer-notify-${process.pid}-${startedAt}.mark`)
   const r = spawnSync(NODE, [entry, '--post-sync', '--expect-head', head], {
-    cwd: ROOT, stdio: 'inherit', env: { ...process.env, SORAN_PRODUCER_LOCK_TOKEN: producerLock.token ?? '' },
+    cwd: ROOT, stdio: 'inherit', env: { ...process.env, SORAN_PRODUCER_LOCK_TOKEN: producerLock.token ?? '', SORAN_PRODUCER_NOTIFY_MARK: notifyMark },
   })
-  return { delegated: true, head, startedAt, spawnError: r.error ? (r.error.code ?? r.error.name) : null, status: r.status ?? null, signal: r.signal ?? null }
+  const childNotified = existsSync(notifyMark)
+  rmSync(notifyMark, { force: true })
+  return { delegated: true, head, startedAt, childNotified, spawnError: r.error ? (r.error.code ?? r.error.name) : null, status: r.status ?? null, signal: r.signal ?? null }
 }
 
 const result = await runProducerFlow({
@@ -255,22 +274,46 @@ const result = await runProducerFlow({
       return { ...r, startedAt, resultFile, report: readFetchResults(resultFile, { expectDate: kstDate() }) }
     },
     draftExists: (slug) => existsSync(join(ROOT, 'drafts/magazine', slug, 'draft.md')),
-    notify: notifyOnce,
+    // 🔴 재실행 자식은 알림을 **시도하기 전에** 표식을 남긴다 — 부모가 대신 알릴지 가른다 (중복 알림 0)
+    notify: (ctx) => {
+      if (NOTIFY_MARK) { try { writeFileSync(NOTIFY_MARK, `${process.pid}\n`) } catch { /* 표식 실패 — 부모가 알린다 (누락보다 중복이 낫다) */ } }
+      return notifyOnce(ctx)
+    },
   },
 })
 
 /**
  * 🔴 **위임한 회차** — 판정 · 알림 · handoff 는 새 코드의 자식이 했다. 부모는 결과를 옮기고 잠금만 푼다.
- *    자식이 handoff 를 남기지 못하고 끝났을 때만(띄우기 실패 · 신호 종료 · 예외) SYSTEM 신호를 대신 남긴다 — 이중 기록 0.
+ *    ① 자식이 이번 회차의 fresh handoff 를 남겼다 → 부모 handoff 0 · 알림 0 · 자식 종료 코드 그대로
+ *    ② 남기지 못했다(적재 전 사망 · 신호 종료 · 예외 · 종료 코드 0 이어도) → 이 회차는 **SYSTEM/1** 이다.
+ *       SYSTEM 신호를 정확히 1회 남기고, 자식이 알림을 시도하지 않았을 때만 POST_SYNC_CHILD_FAILED 경고를 1회 시도한다.
+ *       알림이 실패해도 SYSTEM/1 은 그대로다. plan · brief · repair · fetch 는 다시 돌리지 않는다.
  */
 if (result.delegated) {
-  result.code = result.spawnError || result.signal || result.status === null ? 1 : result.status
-  if (!childWroteHandoff(result.startedAt)) {
+  if (childWroteHandoff(result.startedAt)) {
+    result.code = result.spawnError || result.signal || result.status === null ? 1 : result.status
+  } else {
+    result.code = 1
+    const why = result.spawnError ?? result.signal ?? `종료 코드 ${result.status}`
     try {
       const path = writeHandoff({ date: kstDate(), verdict: 'SYSTEM', code: 1, ran: [...(result.ran ?? []), 'reexec'] })
-      line(`🔴 재실행 자식이 인계 신호를 남기지 못했다 (${result.spawnError ?? result.signal ?? `종료 코드 ${result.status}`}) — SYSTEM 신호를 대신 남겼다: ${path}`)
+      line(`🔴 재실행 자식이 인계 신호를 남기지 못했다 (${why}) — SYSTEM 신호를 대신 남겼다: ${path}`)
     } catch (e) {
       line(`인계 신호를 남기지 못했다 — 판정에 반영하지 않는다 (${e?.message ?? e})`)
+    }
+    if (!result.childNotified) {
+      line('POST_SYNC_CHILD_FAILED 경고 알림을 시도한다 (1회)')
+      try {
+        const msg = buildMessage(composeProducerMessage({
+          verdict: { code: 1, verdict: 'SYSTEM', reason: `POST_SYNC_CHILD_FAILED: ${why}` },
+          preflight: { ok: false, stage: 'post-sync', blockedBy: [{ code: 'POST_SYNC_CHILD_FAILED', message: `sync 뒤 새 코드(${result.head.slice(0, 7)})로 다시 띄운 회차가 인계 신호 없이 끝났다 (${why})` }] },
+        }))
+        const sent = await send(msg, { dryRun: false })
+        line(sent.sent ? 'Slack 발송' : `Slack 미발송 — ${sent.reason}`)
+      } catch (e) {
+        // 🔴 알림 실패는 판정을 바꾸지 않는다 — SYSTEM/1 그대로
+        line(`Slack 미발송 — ${e?.message ?? e}`)
+      }
     }
   }
 }
