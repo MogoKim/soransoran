@@ -145,6 +145,11 @@ export type HumanReviewArtifact = {
   review: {
     deterministic: DeterministicResult
     semantic: SemanticVerdict | null
+    /** 이 판 전 artifact에는 없다. 1차 차단 finding과 확인 결과를 보존한다. */
+    semanticConfirmation?: {
+      status: 'notRequired' | 'confirmed' | 'unconfirmed' | 'failed'
+      first: SemanticVerdict | null
+    }
     semanticCompletion: ReviewCompletion
     /** 🔴 원문에 있었는데 초안에서 사라진 것 — **원문** 속 문장을 가리킨다 */
     droppedFromSource: DroppedFromSource[]

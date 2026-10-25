@@ -259,7 +259,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 
         `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED}`)
       /**
        * 🔴 **env 상한은 손으로 부른 단독 실행의 상한이다** (2026-09-28). 공급 러너의 자식은 이 값을 보지 않는다 —
-       *    단계 env(judge 10 · draft 30)가 덮는다(아래 ③-b 가 실제 계획으로 본다). 그래서 **정본 합 이하의 양의 정수**면 된다.
+       *    단계 env(judge 10 · draft 40)가 덮는다(아래 ③-b 가 실제 계획으로 본다). 그래서 **정본 합 이하의 양의 정수**면 된다.
        *    🔴 운영 값(20)을 이 PR 이 바꾸지 않는다.
        */
       check('🔴 🔴 **env 회차 요청 상한은 양의 정수이고 정본 합 이하다 — 무제한이 아니다**',
@@ -390,7 +390,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 · draft 30 · 합 40 · 적재 10 (CI 에서도 돈다)')
+console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 · draft 40 · 합 50 · 적재 10 (CI 에서도 돈다)')
 // ─────────────────────────────────────────────────────────
 {
   /**
@@ -402,12 +402,12 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
     && WORKSET_MAX_LIMIT === SUPPLY_WORKSET_PER_RUN && resolveWorksetLimit([]) === SUPPLY_WORKSET_PER_RUN,
     `${SUPPLY_WORKSET_PER_RUN}/${WORKSET_DEFAULT_LIMIT}/${WORKSET_MAX_LIMIT}`)
   const b = judgeStageBudget(SUPPLY_WORKSET_PER_RUN)
-  check('🔴 🔴 **정본 계산(judgeStageBudget) = 계약 상수 — judge 10 · draft 30 · 합 40**',
+  check('🔴 🔴 **정본 계산(judgeStageBudget) = 계약 상수 — judge 10 · draft 40 · 합 50**',
     b.ok && b.perStage.judge === SUPPLY_JUDGE_REQUESTS_PER_RUN && b.perStage.draft === SUPPLY_DRAFT_REQUESTS_PER_RUN
     && b.total === SUPPLY_REQUESTS_PER_RUN
-    && SUPPLY_JUDGE_REQUESTS_PER_RUN === 10 && SUPPLY_DRAFT_REQUESTS_PER_RUN === 30 && SUPPLY_REQUESTS_PER_RUN === 40,
+    && SUPPLY_JUDGE_REQUESTS_PER_RUN === 10 && SUPPLY_DRAFT_REQUESTS_PER_RUN === 40 && SUPPLY_REQUESTS_PER_RUN === 50,
     b.ok ? `${b.perStage.judge}/${b.perStage.draft}/${b.total}` : b.reason)
-  check('🔴 🔴 **단계 합 = 회차 합 · 원천당 1+3=4**',
+  check('🔴 🔴 **단계 합 = 회차 합 · 원천당 1+4=5**',
     SUPPLY_JUDGE_REQUESTS_PER_RUN + SUPPLY_DRAFT_REQUESTS_PER_RUN === SUPPLY_REQUESTS_PER_RUN
     && SUPPLY_WORKSET_PER_RUN * WORKSET_TOTAL_PER_SOURCE === SUPPLY_REQUESTS_PER_RUN
     && SUPPLY_WORKSET_PER_RUN * WORKSET_STAGE_PER_SOURCE.judge === SUPPLY_JUDGE_REQUESTS_PER_RUN
@@ -425,7 +425,7 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
     limit: SUPPLY_WORKSET_PER_RUN, perStage: b.perStage, carryOverPaths: carry,
   }) : []
   const of = (st: string) => plans.find((p) => p.stage === st)
-  check('🔴 🔴 **러너 단계 env — judge 10 · draft 30 (자식에게만 · 장부 id 가 단계별)**',
+  check('🔴 🔴 **러너 단계 env — judge 10 · draft 40 (자식에게만 · 장부 id 가 단계별)**',
     of('judge')?.env?.SORAN_LLM_RUN_REQUEST_CAP === String(SUPPLY_JUDGE_REQUESTS_PER_RUN)
     && of('draft')?.env?.SORAN_LLM_RUN_REQUEST_CAP === String(SUPPLY_DRAFT_REQUESTS_PER_RUN),
     `${of('judge')?.env?.SORAN_LLM_RUN_REQUEST_CAP}/${of('draft')?.env?.SORAN_LLM_RUN_REQUEST_CAP}`)
@@ -452,8 +452,8 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
       && /const budget = judgeStageBudget\(PAID_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)/.test(runner))
     check('🔴 🔴 **launchd 템플릿은 --workset-limit 를 덮어쓰지 않는다 — 계약 기본값(10)이 돈다**',
       !tplP.includes('--workset-limit') && /<string>--live<\/string>/.test(tplP))
-    check('🔴 설명 문구가 10 · 40 · judge 10 · draft 30 을 말한다',
-      describeSupplySchedule().includes('회차당 원천 10 · 요청 40 (judge 10 · draft 30)'))
+    check('🔴 설명 문구가 10 · 50 · judge 10 · draft 40 을 말한다',
+      describeSupplySchedule().includes('회차당 원천 10 · 요청 50 (judge 10 · draft 40)'))
   }
 
   // ── 🔴 하루 비용 — 계약 천장 $1.20 · 운영 env는 별도 정본 ──

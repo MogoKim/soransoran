@@ -1,5 +1,5 @@
 /**
- * Content Core v2 — 🔴 **세로 경로 하나를 끝까지 돈다. 유료 3회**
+ * Content Core v2 — 🔴 **세로 경로 하나를 끝까지 돈다. 정상 3회, 차단 finding 확인 시 4회**
  *
  * 마스킹된 근거 묶음
  *   → ① 원천 요구 판독 (🔴 Persona 중립 — 자리 · 자격 요구값 · 지킬 사실)
@@ -65,7 +65,7 @@ import {
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import type { GenerationContract } from '../../src/lib/content-core/pipeline'
 import {
-  groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
+  groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, semanticNeedsConfirmation, INCOMPLETE_LABEL,
   type DeterministicFailure, type DeterministicResult, type IncompleteCause,
   type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
@@ -371,6 +371,9 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   let phase: GenerationFailureStage = 'sourceNeed'
   let personaDecision: PersonaDecision | null = null
+  let semanticConfirmation: NonNullable<HumanReviewArtifact['review']['semanticConfirmation']> = {
+    status: 'notRequired', first: null,
+  }
 
   const packet: SourceEvidencePacket = buildEvidencePacket({
     sourceArticleId: input.sourceArticleId, title: input.title, maskedBody: input.maskedBody,
@@ -413,7 +416,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     voice: { provenance: voice?.provenance ?? null, blindCheckPoints: voice?.blindCheckPoints ?? [] },
     draft,
     review: {
-      deterministic: det, semantic, semanticCompletion: semanticC,
+      deterministic: det, semantic, semanticConfirmation, semanticCompletion: semanticC,
       droppedFromSource: semantic?.droppedFromSource ?? [],
       unsupportedAdditions: semantic?.unsupportedAdditions ?? [],
       lifeContradictions: semantic?.lifeContradictions ?? [],
@@ -809,24 +812,45 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     return blank(plan, dropped, voice, draft, det, null, stop, j.outcome, j.reason)
   }
 
-  // ── ⑤ 의미 검수 1회 ──
+  // ── ⑤ 의미 검수 — 차단 finding이 있을 때만 같은 요청으로 1회 확인 ──
   phase = 'semanticReview'
-  const rRes = await ask('semanticReview', reviewSystem, buildV2ReviewPayload({ draft, packet }))
-  const semanticC = completionOf(rRes)
-  const parsed = semanticC.complete ? parseSemanticReview(rRes.rawText) : null
-  /**
-   * 🔴 **원문 또는 초안에 실제로 있는 문장만 근거로 인정한다.**
-   *    사라진 것은 **원문**에서, 새로 만든 것과 생활사 모순은 **초안**에서 확인한다.
-   *    지어낸 근거로 막으면 정상 글이 사라진다.
-   */
-  const semantic = parsed === null ? null : {
-    ...parsed,
-    droppedFromSource: groundedInSource(parsed.droppedFromSource, sourceBlock(packet)),
-    unsupportedAdditions: groundedInDraft(parsed.unsupportedAdditions, draftText),
-    lifeContradictions: groundedInDraft(parsed.lifeContradictions, draftText),
+  const reviewPayload = buildV2ReviewPayload({ draft, packet })
+  const groundSemantic = (raw: string): SemanticVerdict | null => {
+    const parsed = parseSemanticReview(raw)
+    return parsed === null ? null : {
+      ...parsed,
+      droppedFromSource: groundedInSource(parsed.droppedFromSource, sourceBlock(packet)),
+      unsupportedAdditions: groundedInDraft(parsed.unsupportedAdditions, draftText),
+      lifeContradictions: groundedInDraft(parsed.lifeContradictions, draftText),
+    }
   }
-  const semanticC2: ReviewCompletion = semanticC.complete && semantic === null
+  const rRes = await ask('semanticReview', reviewSystem, reviewPayload)
+  const semanticC = completionOf(rRes)
+  const firstSemantic = semanticC.complete ? groundSemantic(rRes.rawText) : null
+  let semantic = firstSemantic
+  let semanticC2: ReviewCompletion = semanticC.complete && semantic === null
     ? { complete: false, reason: 'parseFailed', cause: 'parseFailed' } : semanticC
+
+  if (semanticC2.complete && semantic !== null && semanticNeedsConfirmation(semantic)) {
+    semanticConfirmation = { status: 'failed', first: semantic }
+    const confirmRes = await ask('semanticReview', reviewSystem, reviewPayload)
+    const confirmC = completionOf(confirmRes)
+    const confirmed = confirmC.complete ? groundSemantic(confirmRes.rawText) : null
+    const confirmC2: ReviewCompletion = confirmC.complete && confirmed === null
+      ? { complete: false, reason: 'parseFailed', cause: 'parseFailed' } : confirmC
+    if (!confirmC2.complete || confirmed === null) {
+      semantic = null
+      semanticC2 = confirmC2
+    } else {
+      semantic = confirmed
+      semanticC2 = confirmC2
+      semanticConfirmation = {
+        status: semanticNeedsConfirmation(confirmed) || confirmed.issues.includes('harm')
+          ? 'confirmed' : 'unconfirmed',
+        first: firstSemantic,
+      }
+    }
+  }
 
   const j = judgeMachine({ deterministic: det, semantic, semanticCompletion: semanticC2 })
   return blank(plan, dropped, voice, draft, det, semantic, semanticC2, j.outcome, j.reason)
