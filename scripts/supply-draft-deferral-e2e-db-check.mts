@@ -458,7 +458,7 @@ async function worksetAxisRunner(
 }
 
 /**
- * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 10/30** (2026-09-28 공급 가속 P0).
+ * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 10/40** (2026-09-28 공급 가속 P0).
  *
  *    부모 러너 `main --live` 를 **두 회차** 돌린다 — 격리 DB · 가짜 provider · 임시 cwd.
  *    · 1회차 전: 큐에 **발행된** 형제(PUBLISHED + Post) · 거절된 형제 · 옛 글(Post 의 원천 칸)이 있다
@@ -542,7 +542,7 @@ async function duplicateSourceRunner(
         // 🔴 결정이 넣은 모양(표식 포함) — 표식 없는 손 env 는 d1 이다(Lane A)
         ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
         SORAN_LLM_DAILY_BUDGET_USD: '1000', SORAN_LLM_RESERVE_HEADROOM: '1.5',
-        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 30 으로 덮는다
+        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 40 으로 덮는다
         SORAN_LLM_RUN_REQUEST_CAP: '20',
         FAKE_PROVIDER_JUDGE_DECISION: 'AUTO_SEED',
         NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
@@ -582,8 +582,8 @@ async function duplicateSourceRunner(
   check('🔴 🔴 **장부 — judge ≤ 10 · draft ≤ 40 · 둘 다 실제로 불렸다**',
     paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 10 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 40,
     `judge ${paid(`${rid1}-j`)} · draft ${paid(`${rid1}-d`)}`)
-  check('🔴 🔴 **러너가 단계 env 상한 10 · 30 을 실었다** (자식 로그)',
-    /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 30/.test(r1.out))
+  check('🔴 🔴 **러너가 단계 env 상한 10 · 40 을 실었다** (자식 로그)',
+    /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 40/.test(r1.out))
   // 🔴 (2026-10-12 Batch C1) 실제 판정 · 초안 자식이 fd 9 를 물려받아 러너와 같은 커널 lease · 실행 token 을 증명했다 — 장부 shadow 칸
   const shadowOf = (r: Record<string, unknown>): { ok?: boolean; code?: string | null } | undefined => r.runTokenShadow as never
   const shadowRows = ledger().filter((r) => String(r.runId).startsWith(rid1) && r.stage !== 'countTokens')
