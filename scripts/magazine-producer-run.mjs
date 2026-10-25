@@ -55,11 +55,11 @@ import { fileURLToPath } from 'node:url'
 import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
 import { composeProducerMessage, runProducerFlow, supplyFromRunJson } from './lib/magazine-producer-flow.mjs'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { writeHandoff } from './lib/magazine-handoff.mjs'
+import { handoffPath, writeHandoff } from './lib/magazine-handoff.mjs'
 import { fetchResultPath, readFetchResults } from './lib/magazine-fetch-result.mjs'
-import { acquireLock, PRODUCER_LOCK_PATH } from './lib/magazine-auto-lock.mjs'
+import { acquireLock, PRODUCER_LOCK_PATH, readLock } from './lib/magazine-auto-lock.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -88,6 +88,14 @@ function kstDate() {
 }
 
 const dryRun = process.argv.includes('--dry-run')
+/**
+ * 🔴 **sync 뒤 같은 회차를 이어받은 자식 프로세스인가** (2026-10-25 · 내부 전용).
+ *    부모(launchd 가 부른 이 파일)가 잠금 · sync 를 끝낸 뒤 HEAD 가 바뀌었을 때만 이 플래그로 다시 띄운다.
+ *    자식은 잠금을 새로 잡지 않고(부모 것을 확인만 한다), 다시 fetch · ff 하지 않는다(부모가 맞춘 HEAD 를 확인만 한다).
+ */
+const POST_SYNC = process.argv.includes('--post-sync')
+const EXPECT_HEAD = POST_SYNC ? process.argv[process.argv.indexOf('--expect-head') + 1] ?? null : null
+const ENTRY_REL = 'scripts/magazine-producer-run.mjs'
 
 /** 판정에 쓰는 읽기 전용 실행기. stdout 을 잡아서 돌려준다 */
 const exec = (cmd, args) => {
@@ -95,6 +103,12 @@ const exec = (cmd, args) => {
   if (r.error) return { code: 1, out: '', err: String(r.error.message ?? r.error) }
   return { code: r.status ?? 1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() }
 }
+
+/**
+ * 🔴 **이 프로세스가 적재한 코드의 HEAD** — 위 import 는 전부 이 판이다.
+ *    sync(preflight 의 ff-only) 뒤 HEAD 가 이 값과 다르면, 이 프로세스로 판정 · 알림 · handoff 를 하면 판이 섞인다.
+ */
+const BOOT_HEAD = exec('git', ['rev-parse', 'HEAD']).out
 
 /** 자식 한 벌을 띄우고 **결과를 삼키지 않고** 돌려준다 */
 const spawnStage = (args) => {
@@ -147,6 +161,52 @@ line(`매거진 producer 시작${dryRun ? ' (dry-run)' : ''}`)
  * 🔴 재시도하지 않는다. 다른 회차가 돌고 있으면 그대로 끝낸다.
  */
 let producerLock = { ok: true, release: () => {} }
+const acquireProducerLock = () => { producerLock = acquireLock({ path: PRODUCER_LOCK_PATH, label: 'producer' }); return producerLock }
+/**
+ * 🔴 자식은 잠금을 **이어받기만** 한다 — 잠금 파일의 주인이 부모 pid 이고 부모가 넘긴 token 과 같을 때만.
+ *    아니면(직접 --post-sync 로 불렀거나 · 잠금이 바뀌었으면) 아무것도 시작하지 않는다. 풀지도 않는다 — 부모 것이다.
+ */
+const adoptLock = () => {
+  const cur = readLock(PRODUCER_LOCK_PATH)
+  const token = process.env.SORAN_PRODUCER_LOCK_TOKEN ?? ''
+  if (!token || cur?.token !== token || cur?.pid !== process.ppid) {
+    return { ok: false, code: 'LOCK_NOT_INHERITED', message: 'sync 뒤 재실행 자식인데 부모의 producer 잠금을 확인하지 못했다 — 아무것도 시작하지 않는다', release: () => {} }
+  }
+  producerLock = { ok: true, adopted: true, release: () => {} }
+  return producerLock
+}
+/** 🔴 자식의 git 확인 — fetch · ff 0. 부모가 맞춘 HEAD 그대로인가만 본다 (sync 재귀 0) */
+const pinnedHead = () => {
+  const blockedBy = []
+  const branch = exec('git', ['rev-parse', '--abbrev-ref', 'HEAD']).out
+  if (branch !== 'main') blockedBy.push({ code: 'NOT_ON_MAIN', message: `현재 브랜치가 ${branch || '?'} 다` })
+  if (exec('git', ['status', '--porcelain', '--untracked-files=no']).out) blockedBy.push({ code: 'DIRTY_TREE', message: '추적 파일 변경이 있다' })
+  const head = exec('git', ['rev-parse', 'HEAD']).out
+  if (!EXPECT_HEAD || head !== EXPECT_HEAD || head !== BOOT_HEAD) {
+    blockedBy.push({ code: 'HEAD_MOVED', message: `재실행 자식의 HEAD(${head.slice(0, 7)})가 부모가 맞춘 HEAD(${String(EXPECT_HEAD).slice(0, 7)})와 다르다` })
+  }
+  return { ok: blockedBy.length === 0, blockedBy, branch, synced: blockedBy.length === 0, fastForwarded: false }
+}
+/** 이 회차의 handoff 를 재실행 자식이 썼는가 — 시작 시각 뒤에 쓰인 파일만 그렇다 */
+const childWroteHandoff = (startedAt) => {
+  try { return statSync(handoffPath(kstDate())).mtimeMs >= startedAt } catch { return false }
+}
+/**
+ * 🔴 **sync 로 HEAD 가 바뀌었으면 같은 회차를 새 코드로 정확히 한 번 다시 띄운다** (2026-10-25 · Codex P1).
+ *    새 프로세스는 동기화된 HEAD 의 entrypoint(바뀌었어도 그 파일)를 처음부터 적재한다 — 모듈 캐시가 섞이지 않는다.
+ *    잠금은 부모가 쥔 채 넘긴다. 자식이 판정 · 알림 · handoff 를 끝내고 나오면 부모가 잠금을 푼다 (신호 먼저 · 잠금 나중).
+ */
+const afterSync = () => {
+  const head = exec('git', ['rev-parse', 'HEAD']).out
+  if (!head || head === BOOT_HEAD) return null
+  line(`코드가 ${BOOT_HEAD.slice(0, 7)} → ${head.slice(0, 7)} 로 바뀌었다 — 같은 회차를 새 코드로 다시 띄운다 (1회)`)
+  const startedAt = Date.now()
+  const entry = join(ROOT, ENTRY_REL)
+  const r = spawnSync(NODE, [entry, '--post-sync', '--expect-head', head], {
+    cwd: ROOT, stdio: 'inherit', env: { ...process.env, SORAN_PRODUCER_LOCK_TOKEN: producerLock.token ?? '' },
+  })
+  return { delegated: true, head, startedAt, spawnError: r.error ? (r.error.code ?? r.error.name) : null, status: r.status ?? null, signal: r.signal ?? null }
+}
 
 const result = await runProducerFlow({
   dryRun,
@@ -154,11 +214,13 @@ const result = await runProducerFlow({
     log: line,
     // 🔴 회차 전체를 잠근다 — 선정 구간만 덮던 plan 의 lock 과 다르다.
     //    실패해도 finalize 를 지나므로 Slack 이 나간다.
-    checkLock: () => { producerLock = acquireLock({ path: PRODUCER_LOCK_PATH, label: 'producer' }); return producerLock },
+    checkLock: () => (POST_SYNC ? adoptLock() : acquireProducerLock()),
     // 🔴 gh 가 없으면 미해결 판정을 할 수 없다. "없다" 가 아니라 "모른다" 이므로 멈춘다.
     checkTools: () => preflightTools({ exec }),
     // 🔴 producer 는 drafts/magazine/{slug}/ 에 **추적 파일**을 쓴다.
-    checkGit: () => preflight({ exec }),
+    checkGit: () => (POST_SYNC ? pinnedHead() : preflight({ exec })),
+    // 🔴 재실행 자식 · dry-run 에는 경계가 없다 — 재귀 0 · dry-run 은 sync 자체를 하지 않는다
+    afterSync: dryRun || POST_SYNC ? undefined : afterSync,
     checkOutstanding: () => readOutstanding({ exec }),
     runPlan: () => spawnStage([PLAN]),
     /**
@@ -197,9 +259,26 @@ const result = await runProducerFlow({
   },
 })
 
+/**
+ * 🔴 **위임한 회차** — 판정 · 알림 · handoff 는 새 코드의 자식이 했다. 부모는 결과를 옮기고 잠금만 푼다.
+ *    자식이 handoff 를 남기지 못하고 끝났을 때만(띄우기 실패 · 신호 종료 · 예외) SYSTEM 신호를 대신 남긴다 — 이중 기록 0.
+ */
+if (result.delegated) {
+  result.code = result.spawnError || result.signal || result.status === null ? 1 : result.status
+  if (!childWroteHandoff(result.startedAt)) {
+    try {
+      const path = writeHandoff({ date: kstDate(), verdict: 'SYSTEM', code: 1, ran: [...(result.ran ?? []), 'reexec'] })
+      line(`🔴 재실행 자식이 인계 신호를 남기지 못했다 (${result.spawnError ?? result.signal ?? `종료 코드 ${result.status}`}) — SYSTEM 신호를 대신 남겼다: ${path}`)
+    } catch (e) {
+      line(`인계 신호를 남기지 못했다 — 판정에 반영하지 않는다 (${e?.message ?? e})`)
+    }
+  }
+}
+
 // 🔴 **완료 신호를 남긴다** — 01:00 등록이 이것을 보고 시작한다 (무인 운영).
 //    실패한 회차도 남긴다. "안 돌았다" 와 "돌았는데 실패했다" 는 대응이 다르다.
-if (!dryRun) {
+// 🔴 위임한 회차는 자식이 이미 남겼다 · 잠금을 이어받지 못한 재실행 자식은 쓰지 않는다 — 이 회차의 신호는 잠금 주인의 것이다
+if (!dryRun && !result.delegated && !(POST_SYNC && !producerLock.adopted)) {
   try {
     const path = writeHandoff({ date: kstDate(), verdict: result.verdict, code: result.code, ran: result.ran ?? [], repair: result.repair ?? null, fetch: result.fetchResult ?? null })
     line(`인계 신호: ${path}`)
@@ -209,11 +288,14 @@ if (!dryRun) {
   }
 }
 
-// 🔴 신호를 먼저 쓰고 그다음 잠금을 푼다.
+// 🔴 신호를 먼저 쓰고 그다음 잠금을 푼다. (위임한 회차도 자식이 신호를 쓰고 나온 **뒤**다)
 //    순서를 뒤집으면 등록이 "lock 없음 + 신호 없음" 을 보고 먼저 출발한다.
 producerLock.release()
 
-if (result.failures?.length) for (const f of result.failures) line(`🔴 ${f}`)
-line(`판정: ${result.verdict} — ${result.reason}`)
+if (result.delegated) line(`재실행 자식 종료 (코드 ${result.code}) — 이 회차의 판정은 새 코드(${result.head.slice(0, 7)})의 것이다`)
+else {
+  if (result.failures?.length) for (const f of result.failures) line(`🔴 ${f}`)
+  line(`판정: ${result.verdict} — ${result.reason}`)
+}
 line(`종료 (코드 ${result.code})`)
 process.exit(result.code)

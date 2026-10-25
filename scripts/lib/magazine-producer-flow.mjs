@@ -105,6 +105,17 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     }
     log(`git: main · origin/main 동기${git.fastForwarded ? ' (ff-only 로 따라붙음)' : ''}`)
 
+    /**
+     * 🔴 **sync 경계 — 여기서부터는 동기화된 HEAD 의 코드만 돈다** (2026-10-25 관측 · Codex P1).
+     *    이 프로세스는 sync 전에 적재됐다. sync 로 HEAD 가 바뀌었으면 호출부가 같은 회차를 새 프로세스로
+     *    **한 번** 다시 띄우고(`delegated`), 그 프로세스가 미해결 판정부터 판정 · 알림 · handoff 까지 끝낸다.
+     *    위임했으면 여기서는 판정도 알림도 하지 않는다 — 단일 finalizer 는 새 프로세스의 것 하나다.
+     */
+    if (deps.afterSync) {
+      const delegated = await deps.afterSync(git)
+      if (delegated?.delegated) return { ...delegated, ran }
+    }
+
     const outstanding = deps.checkOutstanding()
     if (!outstanding.ok) {
       log(`${outstanding.severity === SEVERITY.HOLD ? '⏸' : '🔴'} ${outstanding.code}: ${outstanding.message}`)
