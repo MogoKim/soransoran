@@ -96,7 +96,7 @@ const check = (n: string, ok: boolean, extra = ''): void => {
 }
 const NOW = new Date('2026-09-19T10:00:00.000Z')
 
-type Canned = { plan?: unknown; draft?: unknown; review?: unknown }
+type Canned = { plan?: unknown; draft?: unknown; review?: unknown; reviews?: readonly unknown[] }
 type Fault = {
   truncate?: string; blocked?: string; usageUnknown?: string
   /** 🔴 그 단계가 **형식을 어긴 답**을 돌려준다 */
@@ -120,8 +120,9 @@ type Sent = { stage: string; system: string; payload: string; model: string }
 let SENT: Sent[] = []
 const sentOf = (stage: string): Sent[] => SENT.filter((x) => x.stage === stage)
 
-const fakeAsk = (c: Canned, fault: Fault = {}): Ask =>
-  async (stage, system, payload, model) => {
+const fakeAsk = (c: Canned, fault: Fault = {}): Ask => {
+  let reviewIndex = 0
+  return async (stage, system, payload, model) => {
     SENT.push({ stage, system, payload, model })
     if (fault.blocked === stage) {
       return {
@@ -133,8 +134,14 @@ const fakeAsk = (c: Canned, fault: Fault = {}): Ask =>
     // 🔴 형식을 어긴 답 — 완주는 했는데 읽을 수 없는 경우다
     if (fault.raw?.stage === stage) return okRes(fault.raw.text)
     if (fault.usageUnknown === stage) return { ...okRes(pick(c, stage)), usageKnown: false, inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null }
+    if (stage === 'semanticReview' && c.reviews !== undefined) {
+      const value = c.reviews[Math.min(reviewIndex, c.reviews.length - 1)] ?? EMPTY_REVIEW
+      reviewIndex += 1
+      return okRes(JSON.stringify(value))
+    }
     return okRes(pick(c, stage))
   }
+}
 
 /** 🔴 정본 카드를 만들고 **정본 변환**을 지난다 — 축소판을 손으로 조립하지 않는다 */
 const CARD = (o: Partial<PoolCard> & { code: string }): PoolCard => ({
@@ -674,15 +681,35 @@ console.log('\n⑧ 🔴 생성·검수 — 원문 직접 · 복제 차단 · 과
     copied.review.deterministic.failures.some((f) => f.code === 'copiedFromSource'))
   check('🔴 의미 검수까지 가지 않는다 — 유료 2회', copied.cost.totalCalls === 2)
 
+  const finding = { ...EMPTY_REVIEW, confidence: 0.85,
+    unsupportedAdditions: [{ evidence: '다들 사 가시나요.', why: '원문에 없는 장면' }] }
   const invented = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
-    review: { ...EMPTY_REVIEW, confidence: 0.85,
-      unsupportedAdditions: [{ evidence: '다들 사 가시나요.', why: '원문에 없는 장면' }] } } })
-  check('🔴 **확인된 근거 없는 위험 사실은 HOLD한다**',
+    reviews: [finding, finding] } })
+  check('🔴 **두 번 확인된 근거 없는 위험 사실만 HOLD한다**',
     invented.review.machineOutcome === 'hold'
-    && invented.review.machineReason.includes('근거 없는 위험 사실'), invented.review.machineReason)
+    && invented.review.machineReason.includes('근거 없는 위험 사실')
+    && invented.review.semanticConfirmation?.status === 'confirmed'
+    && sentOf('semanticReview').length === 2, invented.review.machineReason)
   check('🔴 🔴 **그래도 근거는 artifact 에 남는다**',
     invented.review.unsupportedAdditions.length === 1
     && invented.review.unsupportedAdditions[0]!.evidence === '다들 사 가시나요.')
+
+  const unconfirmed = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
+    reviews: [finding, EMPTY_REVIEW] } })
+  check('🟢 **한 번만 나온 차단 finding은 폐기하지 않는다**',
+    unconfirmed.review.machineOutcome === 'adopt'
+    && unconfirmed.review.semanticConfirmation?.status === 'unconfirmed'
+    && unconfirmed.review.semanticConfirmation.first?.unsupportedAdditions.length === 1
+    && sentOf('semanticReview').length === 2
+    && sentOf('semanticReview')[0]!.system === sentOf('semanticReview')[1]!.system
+    && sentOf('semanticReview')[0]!.payload === sentOf('semanticReview')[1]!.payload)
+
+  const confirmFailed = await run({ ...base, cap: 3, canned: { plan: PLAN_OK, draft: GOOD,
+    review: finding } })
+  check('🔴 **확인 호출을 못 하면 통과시키지 않는다**',
+    confirmFailed.review.machineOutcome === 'hold'
+    && confirmFailed.review.semanticCompletion.cause === 'budgetBlocked'
+    && confirmFailed.review.semanticConfirmation?.status === 'failed')
 
   const ghostEvidence = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
     review: { ...EMPTY_REVIEW, confidence: 0.85,
@@ -1296,7 +1323,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용하고 위험 finding은 HOLD (quality-v20)')
+console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용하고 재현된 위험 finding만 HOLD (quality-v22)')
 // ─────────────────────────────────────────────────────────
 {
   /** 프롬프트 문자열 대신 `judgeMachine`의 실제 결과로 단일 판정 계약을 검증한다. */

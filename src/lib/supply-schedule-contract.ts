@@ -37,16 +37,16 @@ export const SUPPLY_BUDGET_ENV_NAMES = [
 /**
  * 회차당 상한 — 🔴 정본(`supply-workset`)과 같은 값이어야 한다 (검사가 대조한다).
  *
- * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 원천 하나에 판정 1 · 생성 3 이므로
- *    judge 10 · draft 30 · 합 40. 러너는 이 값을 **단계마다 자식 env 로** 싣는다
+ * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 원천 하나에 판정 1 · 생성 최대 4 이므로
+ *    judge 10 · draft 40 · 합 50. 러너는 이 값을 **단계마다 자식 env 로** 싣는다
  *    (`SORAN_LLM_RUN_REQUEST_CAP` — 장부 회차 id 도 `-j`·`-d` 로 갈린다).
  * 🔴 정본 env 의 `SORAN_LLM_RUN_REQUEST_CAP`(운영 20)은 **손으로 부른 단독 실행**의 상한이다.
  *    공급 러너의 자식은 그 값을 보지 않는다 — 단계 env 가 덮는다. 그래서 env 값은 이 합 이하면 된다.
  */
 export const SUPPLY_WORKSET_PER_RUN = 10
 export const SUPPLY_JUDGE_REQUESTS_PER_RUN = 10
-export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 30
-export const SUPPLY_REQUESTS_PER_RUN = 40
+export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 40
+export const SUPPLY_REQUESTS_PER_RUN = 50
 
 /**
  * 🔴 **창업자 승인값 $0.30/day** (2026-09-22 승인).

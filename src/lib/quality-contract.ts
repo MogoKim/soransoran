@@ -178,6 +178,12 @@ import {
  * 결속이나 감사 판이 하나라도 다르면 승계하지 않고 기존 의미 재감사를 그대로 요구한다.
  */
 /**
+ * `quality-v22` (2026-10-25) = **발행 전 의미 검수의 단발 오판을 차단 finding으로 확정하지 않는다.**
+ * 첫 검수가 차단 finding을 냈을 때만 같은 요청을 한 번 더 보내고, 확인도 차단일 때만 HOLD한다.
+ * 확인에서 재현되지 않으면 ADOPT하고 1차 finding은 artifact에 보존한다. 확인을 측정하지 못하면 fail-closed HOLD다.
+ * 공급 회차 상한도 judge 1 + 생성 최대 4로 맞춰 확인 호출이 바깥 예산에 잘리지 않게 한다.
+ * 위해·개인정보·복제·가족 사실 모순·자료 의존 등 결정적 차단은 완화하지 않는다.
+ *
  * `quality-v20` (2026-10-23~24) = **미배포 Draft v19의 bounded creativity·차단 finding과 발행 뒤 감사를 하나의 실질 변경 계약으로 묶는다.**
  * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
  * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
@@ -190,7 +196,7 @@ import {
  * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
  * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v20'
+export const QUALITY_CONTRACT_VERSION = 'quality-v22'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

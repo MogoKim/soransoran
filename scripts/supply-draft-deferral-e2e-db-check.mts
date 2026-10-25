@@ -17,7 +17,7 @@
  *      세지 않는지 대조한다.
  *   ⑥ 부모 러너를 **두 회차** 돌린다 (2026-09-28 공급 가속 P0) — 발행된 형제 · 거절된 형제 · 옛 글의 원천은
  *      묶음에 들지 않고, 1회차가 적재한 원천은 2회차에 다시 뽑히지 않으며(중복 Queue 0 · Post 불변),
- *      장부의 judge ≤ 10 · draft ≤ 30 을 센다.
+ *      장부의 judge ≤ 10 · draft ≤ 40 을 센다.
  *
  *   🔴 임시 디렉터리에서 돈다: cwd(`.microseed-data`)와 HOME(장부 · 말투 자산)이 모두 mkdtemp 안이다.
  *      저장소 · 운영 장부 · 운영 말투 자산을 건드리지 않는다. 말투 자산은 **합성**이다(실제 댓글 0).
@@ -466,7 +466,7 @@ async function worksetAxisRunner(
  *      → 다른 카페의 같은 글 번호는 다른 원천이다 — 막지 않는다
  *    · 1회차가 적재한 원천은 2회차 묶음에 들지 않는다 — 큐 행이 생겼기 때문이다
  *    · 원천마다 큐 행 ≤ 1 · Post 는 러너가 늘리지 않는다
- *    · 장부 — judge ≤ 10 · draft ≤ 30 (단계 env 상한)
+ *    · 장부 — judge ≤ 10 · draft ≤ 40 (단계 env 상한)
  */
 async function duplicateSourceRunner(
   prisma: InstanceType<typeof import('@prisma/client').PrismaClient>,
@@ -579,8 +579,8 @@ async function duplicateSourceRunner(
     return [...last.values()].filter((r) => r.stage !== 'countTokens' && r.status === 'settled').length
   }
   const rid1 = r1.ws?.runId ?? ''
-  check('🔴 🔴 **장부 — judge ≤ 10 · draft ≤ 30 · 둘 다 실제로 불렸다**',
-    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 10 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 30,
+  check('🔴 🔴 **장부 — judge ≤ 10 · draft ≤ 40 · 둘 다 실제로 불렸다**',
+    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 10 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 40,
     `judge ${paid(`${rid1}-j`)} · draft ${paid(`${rid1}-d`)}`)
   check('🔴 🔴 **러너가 단계 env 상한 10 · 30 을 실었다** (자식 로그)',
     /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 30/.test(r1.out))

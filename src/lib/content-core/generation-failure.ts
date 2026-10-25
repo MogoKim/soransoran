@@ -32,7 +32,7 @@ export type CallOutcome = (typeof CALL_OUTCOMES)[number]
 
 /**
  * 🔴 **원천 하나가 한 회차에 쓸 수 있는 재시도 수.** 일시적 기술 실패 한 번만 다시 묻는다.
- *    정상 경로 3회 + 재시도 1회 = 4 — 회차 공동 예산(`CALL_ALLOWANCE_PER_SOURCE` = 4)을 넘지 않는다.
+ *    정상 경로 3회 + 조건부 확인 1회 + 재시도 1회 = 5 — 회차 공동 예산을 넘지 않는다.
  *    🔴 이 값을 올리면 원천당 요청량이 늘어난다 — 요청량 결정은 이 배치의 권한이 아니다.
  */
 export const GENERATION_RETRY_MAX = 1
