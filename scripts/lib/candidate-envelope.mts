@@ -54,7 +54,8 @@ export type CandidateInput = {
   reviewedAt: string
   /**
    * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2) — `pickV2` 가 낸 값 그대로다.
-   *    `null` 은 "판정하지 않았다" — 적재기가 `DRAFT_LIFE_REVIEW:unread` 경고로 읽는다(통과 아님).
+   *    `null` 은 "판정하지 않았다" — 적재기가 `DRAFT_LIFE_REVIEW:unread`로 fail-closed한다.
+   *    유효한 배열에는 Content Core가 ADOPT한 비차단 관찰만 남는다.
    */
   lifeReview: readonly string[] | null
 }
@@ -130,8 +131,9 @@ export function candidateEnvelope(input: {
 }): Record<string, unknown> {
   return {
     note: '🔴 기계가 만들고 기계가 고른 초안이다. 사람의 ADOPT 가 아니다 —'
-      + ' supply-autofill 은 이 후보를 큐에 올리지만,'
-      + ' 발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다.',
+      + ' supply-autofill 은 이 후보를 큐에 올리고,'
+      + ' 발행은 자동 READY가 현재 품질 계약과 본문 도장을 통과시켜야 열린다.'
+      + ' 사람 검토는 수동 예외 경로다.',
     generatedAt: input.generatedAt,
     ruleVersion: input.ruleVersion,
     /**

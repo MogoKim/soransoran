@@ -538,7 +538,7 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
 }
 check('현재 실행이 원격 main과 runtime을 분 단위 관측값으로 분리하고 D100 차이를 판정한다',
   /^\| 원격 main \(20\d\d-\d\d-\d\d \d\d:\d\d 관측\) \| `[0-9a-f]{40}` \|/m.test(currentLive)
-  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*main 차이를 별도 판정/m.test(currentLive))
+  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*(?:main과 동일 SHA|main 차이를 별도 판정)/m.test(currentLive))
 check('현재 실행이 추가 댓글의 운영 공통 profile 배포와 자연 followup 증거를 함께 적는다',
   currentLive.includes('switch ON · 운영 공통 profile · E6 consumer plist')
   && currentLive.includes('자연 followup 3건 확인'))
