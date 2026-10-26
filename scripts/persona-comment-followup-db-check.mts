@@ -412,7 +412,7 @@ async function main(): Promise<void> {
     const factsOf = async (relabel: boolean) => ({
       kstDate, stage: 'd5' as const, decision: null, posts: [await evPost(relabel)], orphanPublishLogs: 0, unloggedPublishes: 0,
       commentCapPerPost: 1,
-      audits: { rows: [], globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+      audits: { rows: [] },
     })
     const ev = judgeEvidenceForTarget(kstDate, 'd5', 1, await factsOf(false), null)
     const COMMENT_FAIL = ['COMMENT_OVER_CAP', 'DUP_COMMENT', 'COMMENT_SELF', 'COMMENT_PROVENANCE_BROKEN', 'COMMENT_MISSING', 'COMMENT_LATE']

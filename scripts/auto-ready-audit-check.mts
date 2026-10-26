@@ -201,6 +201,11 @@ console.log('\n④-b 🔴 🔴 측정된 yes 한 번은 확정이 아니다 — 
   check('🔴 지시문 — 사소한 생략·커뮤니티식 1인칭 다시 말하기 허용 · 고위험 개인 사실은 계속 막는다',
     SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('커뮤니티 글처럼 1인칭으로 다시 말하기')
     && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('원문이나 카드 근거 없는 고위험 개인 사실·주장'))
+  check('🔴 🔴 **[10-26 사고 반례] 회사 그만두고 → 일을 쉬고 같은 약한 일반화는 허용하고 반대 상태는 계속 막는다**',
+    SEMANTIC_AUDIT_PROMPT_VERSION === 'semantic-audit-prompt-v7'
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('"회사를 그만두고"를 "일을 쉬고"로')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('"퇴사했다"를 "새 회사에 입사했다"로')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('원문보다 넓고 약한 표현으로의 치환은 구체적 사실이 아니다'))
 
   // 🔴 참 반례 — 실질 변경은 확인도 yes 라 그대로 확정 결함이다
   const counter: [string, SemanticAuditContext, string][] = [

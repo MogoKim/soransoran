@@ -184,6 +184,12 @@ import {
  * 공급 회차 상한도 judge 1 + 생성 최대 4로 맞춰 확인 호출이 바깥 예산에 잘리지 않게 한다.
  * 위해·개인정보·복제·가족 사실 모순·자료 의존 등 결정적 차단은 완화하지 않는다.
  *
+ * `quality-v23` (2026-10-26) = **원문보다 넓고 약한 일반화를 새 사실·왜곡과 구분한다.**
+ * 원문의 `회사를 그만두고`를 `일을 쉬고`로 줄인 글을 발행 전 Content Core는 ADOPT했지만,
+ * 발행 뒤 의미 감사가 새 사실로 오판해 D10 자동 READY를 닫았다. 공유 실질 변경 계약(`material-contract-v2`)에
+ * 비모순 일반화·완화 허용과 반대 경계를 함께 명시하고, 발행 전 검수(`v2-review-p11`)와 발행 뒤 감사
+ * (`semantic-audit-prompt-v7`)가 같은 줄을 그대로 읽는다. 더 구체적인 사실 추가·반대 상태·핵심 결과 변경은 계속 막는다.
+ *
  * `quality-v20` (2026-10-23~24) = **미배포 Draft v19의 bounded creativity·차단 finding과 발행 뒤 감사를 하나의 실질 변경 계약으로 묶는다.**
  * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
  * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
@@ -196,7 +202,7 @@ import {
  * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
  * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v22'
+export const QUALITY_CONTRACT_VERSION = 'quality-v23'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

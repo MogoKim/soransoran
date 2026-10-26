@@ -339,11 +339,6 @@ export type StageEvidenceFacts = {
       postId: string; queueId: string
       judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean
     }[]
-    /** 🔴 지금 표 전체 — 정본 `unresolvedDefectCount`(지금 계약에서 해소되지 않은 확정 결함) · `overdueAuditCount` · `retryableFailureCount` · `missingAutoPostCount` */
-    globalUnresolvedDefects: number
-    globalOverdue: number
-    globalRetryable: number
-    globalMissingPosts: number
   }
 }
 
@@ -490,10 +485,11 @@ export function judgeEvidenceForTarget<S extends string>(
     if (autoTargets.length > 0 && sampled.size === 0) codes.add('AUDIT_COVERAGE_ZERO')
     else if (sampled.size < expected) codes.add('AUDIT_COVERAGE_SHORT')
     if (inSet.some((r) => !r.judged)) codes.add('AUDIT_UNJUDGED')
-    if (inSet.some((r) => r.defectYes) || a.globalUnresolvedDefects > 0) codes.add('AUDIT_DEFECT')
-    if (inSet.some((r) => r.overdue) || a.globalOverdue > 0) codes.add('AUDIT_OVERDUE')
-    if (inSet.some((r) => r.retryable) || a.globalRetryable > 0) codes.add('AUDIT_RETRYABLE')
-    if (a.globalMissingPosts > 0) codes.add('AUDIT_MISSING_POST')
+    // 증거일은 그날 자동 target의 감사만 판정한다. 다른 날의 현재 전역 결함·재시도·유실은
+    // controller의 실시간 quality signal이 즉시 막는다. 둘을 섞으면 오늘 결함이 어제 PASS를 소급 오염시킨다.
+    if (inSet.some((r) => r.defectYes)) codes.add('AUDIT_DEFECT')
+    if (inSet.some((r) => r.overdue)) codes.add('AUDIT_OVERDUE')
+    if (inSet.some((r) => r.retryable)) codes.add('AUDIT_RETRYABLE')
     // ⑦ 🔴 공개 증명 행 — 자동 target 전부가 지금 계약 · eligible 도장을 가져야 한다
     const stamped = autoTargets.filter((p) => p.release === 'STAMPED_ELIGIBLE').length
     counts.releaseStamped = stamped

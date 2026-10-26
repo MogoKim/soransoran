@@ -97,7 +97,6 @@ const FACTS_14_47: StageEvidenceFacts = {
   commentCapPerPost: personaCommentCapFor('bootstrap-auto'),
   audits: {
     rows: [{ postId: 'p-0', queueId: 'q-0', judged: true, defectYes: true, retryable: false, overdue: false }],
-    globalUnresolvedDefects: 1, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
   },
 }
 
@@ -120,7 +119,6 @@ const FACTS_CLEAN: StageEvidenceFacts = {
     rows: Array.from({ length: 1 }, (_, i) => ({
       postId: `cp-${i}`, queueId: `cq-${i}`, judged: true, defectYes: false, retryable: false, overdue: false,
     })),
-    globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
   },
 }
 

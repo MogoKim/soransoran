@@ -110,7 +110,7 @@ console.log('\n④ C8 — 개인 말버릇은 없어도 되는 칸 · 소재 경
       posts: authors.map((a, i) => ({ postId: `p${i}`, queueId: `q${i}`, publishedAtMs: 0, unattended: true, queueRows: 1, publishLogs: 1,
         authorPersonaId: a, decider: 'auto' as const, personaComments: [], release: 'STAMPED_ELIGIBLE' as const })),
       orphanPublishLogs: 0, unloggedPublishes: 0,
-      audits: { rows: [], globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0 },
+      audits: { rows: [] },
     } as unknown as EvidenceFactsFor<string>
     return [...judgeEvidenceForTarget('2026-10-02', 'd3', 3, facts, null).codes]
   }
@@ -220,7 +220,7 @@ console.log('\n⑦ (quality-v13) 글 쪽 — 프롬프트 · 최종 초안 게�
     && /isNoGoExpressionItem\(item\)/.test(src('src/lib/persona-pool-card.ts'))
     && /noGoHits\(/.test(src('src/lib/content-core/draft-life-gates.ts'))
     && /noGoHits\(/.test(src('src/lib/original-post-persona-match.ts')))
-  check('품질 계약 v22 · 초안 게이트 v11 · 초안 프롬프트 p14', QUALITY_CONTRACT_VERSION === 'quality-v22'
+  check('품질 계약 v23 · 초안 게이트 v11 · 초안 프롬프트 p14', QUALITY_CONTRACT_VERSION === 'quality-v23'
     && DRAFT_GATE_VERSION === 'draft-gates-v11' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p14')
 }
 
