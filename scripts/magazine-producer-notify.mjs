@@ -54,7 +54,9 @@ const LOG_PATH = join(homedir(), 'Library/Logs/soransoran/magazine-producer.log'
 const MIN_DAYS = 7
 
 /** run.held 중 direct 경로 보류 — 조용히 묻히면 canary 가 왜 안 도는지 아무도 모른다 */
-export const DIRECT_HOLD_CODES = new Set(['DIRECT_SPEC_SOURCE_NOT_READY', 'UNKNOWN_MAGAZINE_AUTO_MODE', 'G8_ROW_NOT_DIRECT', 'DIRECT_SPEC_SPEC_CONFLICT', 'DIRECT_SPEC_MISSING'])
+export const DIRECT_HOLD_CODES = new Set(['DIRECT_SPEC_SOURCE_NOT_READY', 'UNKNOWN_MAGAZINE_AUTO_MODE', 'G8_ROW_NOT_DIRECT', 'DIRECT_SPEC_SPEC_CONFLICT', 'DIRECT_SPEC_MISSING',
+  // 🔴 명시적 개정(supersedes) — 교체 필요(dry-run) · 선언 hash 불일치 · 교체 조건 위반 (2026-10-26)
+  'DIRECT_SPEC_SUPERSEDE_REQUIRED', 'DIRECT_SPEC_SUPERSEDE_MISMATCH', 'DIRECT_SPEC_SUPERSEDE_BLOCKED'])
 /**
  * 큐 신원 중복 알림 — 몇 행이든 **1건**이다. DIRECT 보류와 섞지 않는다 (producer 공용 큐 계약 위반이다).
  * 🔴 사람이 topic-queue 를 고치기 전에는 그 행들을 만들지 않는다 — 자동 재시도 · legacy 강등 없음.
@@ -90,6 +92,11 @@ export function composeDirectHoldAlert(run) {
     next.push(`승인 source 를 확인한다${p ? ` (${p})` : ''} — 현재 판 graphVersion · APPROVED · sourceHash · G8 manifest`)
   }
   if (codes.has('DIRECT_SPEC_MISSING')) next.push('재사용 폴더에 article-spec.json 이 없다 — 자동으로 만들지 않는다. 폴더의 출처(legacy 원고 여부)를 확인한다')
+  if (codes.has('DIRECT_SPEC_SUPERSEDE_MISMATCH')) next.push('승인 entry 의 supersedes.specHash 가 디스크 article-spec.json 과 다르다 — 무엇을 대체하는지 사람이 확인한다 · 덮어쓰지 않았다')
+  if (codes.has('DIRECT_SPEC_SUPERSEDE_BLOCKED')) {
+    const p = holds.find((h) => h.code === 'DIRECT_SPEC_SUPERSEDE_BLOCKED')?.directSpec?.supersede?.problems ?? []
+    next.push(`명시적 개정 조건 위반(${p.join(',') || '-'}) — 옛 spec 을 바꾸지 않았다. draft · 전송 · 등록 흔적과 신원을 확인한다`)
+  }
   if (codes.has('DIRECT_SPEC_SPEC_CONFLICT')) next.push('drafts/magazine/{slug}/article-spec.json 과 승인 source 컴파일 결과를 대조한다 — 덮어쓰지 않았다')
   if (codes.has('UNKNOWN_MAGAZINE_AUTO_MODE')) next.push('topic-queue 의 directSpecMode 값을 고친다 (DIRECT_SPEC_V1 · LEGACY_BRIEF_V1 만 허용)')
   if (codes.has('G8_ROW_NOT_DIRECT')) next.push('G8 행(g8ManifestHash · articlePlanHash)은 ArticlePlan materialize 로만 만든다 — 손으로 고친 행이면 승인 source 와 대조한다')
