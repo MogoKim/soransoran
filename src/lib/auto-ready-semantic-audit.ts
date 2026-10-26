@@ -13,20 +13,13 @@
  *      · 초안을 만든 artifact 의 원문 근거 — artifactId · 근거 digest
  *      · 글쓴이 Persona 카드 — code · 생활사 계약 digest
  *
- * 🔴 **세 갈래 결과** (2026-09-28 마스터 결정) — 결함 yes 는 **실제로 결함을 본 경우에만** 확정한다.
- *    · measured      — 측정이 끝났다. 발견이 있으면 yes(콘텐츠 결함), 없으면 no
+ * 🔴 **세 갈래 결과** — Content Core가 의미 품질의 유일한 결정자다.
+ *    · measured      — 글·도장·artifact·Persona 결속을 확인했다. 사후 모델 결과는 참고로만 남긴다.
  *    · integrity     — 글·도장·artifact·Persona 카드가 없거나 결속이 깨졌다 → 무결성 yes
- *    · retryable     — 측정하지 못했다(유료 OFF · 예산 없음/차단 · 시간 초과 · HTTP · 예외 · 모델 불일치 ·
- *                      잘림 · 파싱 실패 · 자기모순 · 정산 실패 · 사용량 미상 · 정본 파일을 못 읽음).
- *                      결함으로 적지 않는다 — `defect IS NULL` 인 **재시도 가능 감사 실패**로 남고,
- *                      그런 행이 하나라도 있으면 자동 도장·발행이 즉시 닫힌다(저장 경로 참조).
- *    🔴 retryable 이 `no` 로 읽히는 길은 없다. `no` 는 측정이 끝나고 발견이 0 일 때 하나뿐이다.
- * 🔴 **측정된 yes 한 번은 아직 확정 결함이 아니다** (2026-10-24 · v3). 같은 요청(같은 글·원문·카드·결속)을
- *    **한 번 더** 같은 제공사·장부로 보내 확인한다. 확인도 yes 면 yes, 확인이 no 면 no(미확정 1차 발견은 사유에만 남긴다),
- *    확인을 측정하지 못했으면 retryable 이다. 확인은 yes 뒤에 한 번뿐이다 — no 와 실패에는 더 부르지 않는다.
+ *    · retryable     — 정본 파일을 못 읽어 결속 자체를 확인하지 못했다. 발행은 fail-closed로 닫힌다.
+ * 🔴 **유효한 결속 뒤의 모델 발견·실패는 차단 권한이 없다.** 참고 note로 남기고 요청은 최대 한 번만 한다.
  * 🔴 **판·모델·계약 상수는 무결성 감사자와 따로다.** 섞지 않는다.
- * 🔴 **품질 계약의 일부다** — 이 감사가 Content Core의 최종 품질 결정을 뒤집을 수 있으므로
- *    계약·프롬프트·모델 판은 `qualityContractComponents()`에 들어간다.
+ * 🔴 **품질 계약의 일부다** — 결속·관측 계약이 바뀌면 `qualityContractComponents()`에 반영한다.
  * 🔴 순수 함수다 — DB·파일·네트워크를 모른다. 제공사는 `SemanticAuditProvider` 로 주입받는다.
  */
 import { createHash } from 'node:crypto'
@@ -39,10 +32,10 @@ import { LIFE_CONTRACT_FIELDS, lifeContractIdentity, type PersonaLifeContract } 
 // 🔴 판 — 무결성 감사자(`integrity-v1` · `rule:integrity-safety-audit`)와 섞지 않는다
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 의미 감사 계약의 판 — 판정 기준·출력 모양·묶음 구성이 바뀌면 올린다 (v3 · yes 확인 호출) */
-export const SEMANTIC_AUDIT_CONTRACT_VERSION = 'auto-ready-semantic-audit-v3'
-/** 🔴 프롬프트 판 — 지시문이 한 글자라도 바뀌면 올린다 (v6 · 공유 실질 변경 계약) */
-export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v6'
+/** 🔴 의미 감사 계약의 판 — 판정 기준·출력 모양·묶음 구성이 바뀌면 올린다 */
+export const SEMANTIC_AUDIT_CONTRACT_VERSION = 'auto-ready-semantic-audit-v4'
+/** 🔴 프롬프트 판 — 지시문이 한 글자라도 바뀌면 올린다 (v8 · Content Core 단일 품질 권위) */
+export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v8'
 /**
  * 🔴 **의미 감사 모델** — 가격표(`llm-pricing`)에 단가가 있는 내부 라벨이어야 한다.
  *    초안 생성(`gemini-3.7-flash`)과 다른 계열을 쓴다 — 쓴 모델이 제 글을 채점하지 않게 한다.
@@ -58,9 +51,9 @@ export const SEMANTIC_AUDIT_TIMEOUT_MS = 60_000
 
 /**
  * 🔴 **유료 호출 스위치 — 기본 OFF.** 정확히 `on` 일 때만 제공사를 부른다.
- *    이 값은 어디에도 설정돼 있지 않다. 꺼져 있으면 의미 감사는 재시도 가능 실패(`PAID_OFF`)이고,
- *    그 동안 자동 도장·발행은 닫힌다(결함 yes 로 적지 않는다).
- *    켜도 **감사 전용 예산 env**(`AUDIT_BUDGET_ENV`)가 없으면 요청하지 않는다(`AUDIT_BUDGET_UNSET`).
+ *    꺼져 있으면 결속 확인 뒤 `PAID_OFF` 참고 note만 남긴다. 켜도 **감사 전용 예산 env**
+ *    (`AUDIT_BUDGET_ENV`)가 없으면 요청하지 않고 `AUDIT_BUDGET_UNSET` 참고 note를 남긴다.
+ *    어느 경우도 Content Core의 발행 전 품질 결정을 뒤집지 않는다.
  */
 export const SEMANTIC_PAID_ENV = 'SORAN_AUTO_READY_SEMANTIC_PAID'
 /**
@@ -162,11 +155,12 @@ export const SEMANTIC_AUDIT_SYSTEM_PROMPT = [
   '주체·행동·원인·결과를 바꾸지 않는 정도 부사·강조 부사의 추가는 새 사실이나 왜곡이 아니다.',
   '원문이 이미 같은 주체가 같은 행동을 했다고 명시했다면, 직접·바로·정말 같은 부사를 붙인 것만으로 새 사건·새 행위자·새 사실이라 하지 않는다.',
   '1) unsupportedFacts: 원문근거에도 글쓴이카드에도 없는 구체적 사실(숫자·금액·장소·새 사건·진단 등)을 사실로 지어냈다.',
-  '   일반적인 감상·질문·인사·비유·연결·강조는 구체적 사실이 아니다.',
+  '   일반적인 감상·질문·인사·비유·연결·강조와 원문보다 넓고 약한 표현으로의 치환은 구체적 사실이 아니다.',
   '2) lifeContradictions: 게시글의 같은 주어·같은 사실 축에 명시된 값이 글쓴이카드의 생활사와 양립 불가능하다.',
   '   카드에 정보가 없거나 표현이 모호하다는 이유만으로 모순이라 하지 않는다.',
   '3) sourceDistortions: 위 계약의 실질 변경 — 원문근거의 주체·핵심 행동·원인·결과·결론을 실질적으로 뒤집거나, 원문에 없는 결론을 원문이 한 말처럼 옮겼다.',
   '확실한 결함만 배열에 적는다. 허용된 표현이나 결함이 아닌 이유를 배열에 설명하지 않는다.',
+  '이 모델 응답은 발행 전 Content Core 결정을 뒤집는 권한이 없는 운영 참고 관측이다.',
   'defect 가 "no"이면 세 배열은 반드시 모두 []이다. 셋 중 하나라도 항목이 있으면 defect 는 반드시 "yes"다.',
   '출력은 JSON 객체 하나뿐이다. 다른 글자를 쓰지 않는다:',
   '{"unsupportedFacts":[],"lifeContradictions":[],"sourceDistortions":[],"defect":"no"}',
@@ -256,10 +250,7 @@ export type SemanticAuditProvider = {
 
 export type SemanticOutcome = 'measured' | 'retryable' | 'integrity'
 
-/**
- * 🔴 1차 yes 의 확인 호출 결과 — `none` 은 확인을 부르지 않은 판정(1차 no · 1차 측정 실패 · 무결성)이다.
- *    `confirmed` 확인도 yes · `unconfirmed` 확인이 no · `failed` 확인을 측정하지 못했다(retryable).
- */
+/** 예전 note 모양을 읽기 위해 유지한다. v4 신규 판정은 항상 `none`이다. */
 export type SemanticConfirmation = 'none' | 'confirmed' | 'unconfirmed' | 'failed'
 
 export type SemanticVerdict = {
@@ -267,7 +258,7 @@ export type SemanticVerdict = {
   /** 🔴 measured 면 yes/no · integrity 면 yes · retryable 이면 null(결함으로 적지 않는다) */
   defect: 'yes' | 'no' | null
   confirmation: SemanticConfirmation
-  /** 🔴 measured 가 아닐 때의 원인 코드 — 재시도 가능 실패는 이 코드로 기록된다 */
+  /** 🔴 비정상 또는 참고 관측의 원인 코드. 유효한 결속 뒤 모델 결과는 차단 권한이 없다. */
   code: string | null
   reasons: string[]
   /** 🔴 무엇에 묶였나 — 문맥을 못 만들었으면 null */
@@ -280,11 +271,9 @@ export type SemanticVerdict = {
 const VERSIONS = { contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, model: SEMANTIC_AUDIT_MODEL, promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION }
 
 /** 🔴 재시도 가능 감사 실패 — 결함이 아니다(defect null). 게이트는 저장 경로가 닫는다 */
-const retryable = (
-  code: string, reason: string, binding: SemanticBinding | null, confirmation: SemanticConfirmation = 'none',
-): SemanticVerdict => ({
-  outcome: 'retryable', defect: null, confirmation, code,
-  reasons: [`🟡 의미 감사 재시도 가능 실패 ${code}${confirmation === 'failed' ? ' (1차 yes 확인 호출)' : ''} — ${reason}`], binding, ...VERSIONS,
+const retryable = (code: string, reason: string, binding: SemanticBinding | null): SemanticVerdict => ({
+  outcome: 'retryable', defect: null, confirmation: 'none', code,
+  reasons: [`🟡 의미 감사 결속 확인 실패 ${code} — ${reason}`], binding, ...VERSIONS,
 })
 /** 🔴 무결성 결함 — 글·도장·artifact·카드가 없거나 결속이 깨졌다 */
 const integrity = (code: string, reason: string): SemanticVerdict => ({
@@ -294,7 +283,7 @@ const integrity = (code: string, reason: string): SemanticVerdict => ({
 type SemanticRequest = Parameters<SemanticAuditProvider['complete']>[0]
 type MeasureOnce = { ok: true; defect: 'yes' | 'no'; reasons: string[] } | { ok: false; code: string; reason: string }
 
-/** 🔴 요청 한 번 — 제공사 실패·예외·응답 모양 어긋남은 측정 실패다(no 가 아니다) */
+/** 요청 한 번 — 제공사 실패·예외·응답 모양 어긋남도 결속 뒤 참고 관측으로 돌려준다. */
 async function measureOnce(provider: SemanticAuditProvider, req: SemanticRequest): Promise<MeasureOnce> {
   let res: SemanticProviderResult
   try {
@@ -316,47 +305,48 @@ async function measureOnce(provider: SemanticAuditProvider, req: SemanticRequest
 }
 
 /**
- * 🔴 **의미 감사 한 건.** 어떤 실패도 `no` 로 끝나지 않는다.
+ * Content Core가 통과시킨 동일 발행 바이트의 의미를 사후 모델이 다시 차단하지 않는다.
+ * 모델 발견·실패는 참고로 남기되, 글·도장·artifact·Persona 결속 실패는 이 함수까지 오지 않는다.
+ */
+const advisoryNo = (binding: SemanticBinding, code: string | null, reasons: readonly string[]): SemanticVerdict => ({
+  outcome: 'measured', defect: 'no', confirmation: 'none', code,
+  reasons: reasons.map((r) => `🟡 의미 감사 참고 — ${r}`), binding, ...VERSIONS,
+})
+
+/**
+ * 🔴 **의미 감사 한 건.** Content Core가 품질 결정의 유일한 권위다.
  *    · 문맥 — 데이터 없음·결속 깨짐 → integrity(yes) · 정본 파일 읽기 실패 → retryable
- *    · 제공사 모델이 계약 모델과 다름 · 제공사 실패·예외 · 응답 모양 어긋남·자기모순 → retryable
- *    · 1차 측정 yes → **같은 요청 객체**로 확인 한 번. 확인 yes → yes · 확인 no → no · 확인 측정 실패 → retryable
- *      두 호출 모두 주입된 제공사(운영은 감사 장부 세션)를 지난다 — 장부 밖 호출은 없다.
+ *    · 유효한 결속 뒤 모델 발견·제공사 실패·응답 모양 어긋남은 참고다. 확정 결함을 만들지 않는다.
+ *    · 요청은 최대 한 번이다. 같은 모델·같은 질문의 확인 호출로 거짓 확신과 비용을 늘리지 않는다.
  */
 export async function judgeSemantic(ctxRes: SemanticContextResult, provider: SemanticAuditProvider): Promise<SemanticVerdict> {
   if (!ctxRes.ok) {
     return ctxRes.integrity ? integrity(ctxRes.code, ctxRes.reason) : retryable(ctxRes.code, ctxRes.reason, null)
   }
   const binding = semanticBindingOf(ctxRes.ctx)
-  if (provider.model !== SEMANTIC_AUDIT_MODEL) return retryable('MODEL_MISMATCH', `제공사 모델 ${provider.model} ≠ 계약 ${SEMANTIC_AUDIT_MODEL}`, binding)
-  // 🔴 얼린 요청 — 확인 호출도 이 객체 그대로다(글·원문·카드·결속이 1차와 같다)
+  if (provider.model !== SEMANTIC_AUDIT_MODEL) {
+    return advisoryNo(binding, 'MODEL_MISMATCH', [`제공사 모델 ${provider.model} ≠ 계약 ${SEMANTIC_AUDIT_MODEL}`])
+  }
+  // 🔴 얼린 요청 — 관측도 결속된 글·원문·카드 한 벌만 본다.
   const req: SemanticRequest = Object.freeze({
     ...buildSemanticAuditRequest(ctxRes.ctx),
     maxOutputTokens: SEMANTIC_AUDIT_MAX_OUTPUT_TOKENS, timeoutMs: SEMANTIC_AUDIT_TIMEOUT_MS,
   })
   const first = await measureOnce(provider, req)
-  if (!first.ok) return retryable(first.code, first.reason, binding)
-  if (first.defect === 'no') return { outcome: 'measured', defect: 'no', confirmation: 'none', code: null, reasons: [], binding, ...VERSIONS }
-  const second = await measureOnce(provider, req)
-  if (!second.ok) return retryable(second.code, second.reason, binding, 'failed')
-  if (second.defect === 'yes') {
-    return { outcome: 'measured', defect: 'yes', confirmation: 'confirmed', code: null, reasons: second.reasons, binding, ...VERSIONS }
-  }
-  return {
-    outcome: 'measured', defect: 'no', confirmation: 'unconfirmed', code: null,
-    reasons: [`🟡 1차 발견을 확인 호출이 재현하지 못했다 — 결함 아님: ${first.reasons.join(' · ')}`], binding, ...VERSIONS,
-  }
+  if (!first.ok) return advisoryNo(binding, first.code, [`관측 실패 ${first.code} — ${first.reason}`])
+  return advisoryNo(binding, first.defect === 'yes' ? 'MODEL_FINDING' : null, first.reasons)
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 합치기 — 둘 중 하나라도 yes 면 yes
+// 🔴 합치기 — Content Core 뒤 사후 모델은 참고, 규칙·결속 무결성만 차단
 // ─────────────────────────────────────────────────────────
 
 /**
  * 🔴 **합친 결과** — 확정(final)이거나 재시도 가능 실패(retryable)다.
  *    · 규칙 감사 yes → 확정 yes(무결성·안전) — 의미 감사가 실패했어도 규칙이 본 결함은 결함이다
  *    · 의미 감사 integrity → 확정 yes(무결성)
- *    · 의미 감사 retryable → **재시도 가능 실패**(결함 아님 · defect null · 게이트 닫힘)
- *    · 의미 감사 measured → 규칙 no 와 합쳐 yes/no
+ *    · 문맥 읽기 실패(retryable) → 재시도 가능 실패(결속을 확인하지 못했으므로 닫힘)
+ *    · 유효한 결속 뒤 의미 모델 관측은 measured no이며 규칙 판정을 뒤집지 않는다
  */
 export type CombinedAudit =
   | { kind: 'final'; verdict: AuditVerdict; semantic: SemanticVerdict }

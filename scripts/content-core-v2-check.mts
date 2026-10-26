@@ -1323,7 +1323,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용하고 재현된 위험 finding만 HOLD (quality-v22)')
+console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용하고 재현된 위험 finding만 HOLD (quality-v23)')
 // ─────────────────────────────────────────────────────────
 {
   /** 프롬프트 문자열 대신 `judgeMachine`의 실제 결과로 단일 판정 계약을 검증한다. */
@@ -1499,14 +1499,15 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용
       outcomes.filter((o) => o.warnings.length > 0).length === 2)
   }
 
-  // ── ⑦ 사람 확인 없는 발행은 그대로 막혀 있다 ──
-  check('🔴 🔴 **기계 후보는 사람 검토 전에는 발행되지 않는다**', (() => {
+  // ── ⑦ 자동 READY 판정 없는 발행은 막혀 있다 ──
+  check('🔴 🔴 **기계 후보는 현재 계약과 본문 도장을 검증한 자동 READY 전에는 발행되지 않는다**', (() => {
     const pub = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
     const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     const envLib2 = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
-    // 🔴 그 문구는 봉투에 실린다 — 봉투를 조립하는 자리에서 본다
+    // 🔴 후보는 사람 판정으로 위장하지 않고, 자동 READY 계약을 명시한다.
     return /HUMAN_ONLY_VALUES/.test(pub)
-      && /발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다/.test(envLib2)
+      && /발행은 자동 READY가 현재 품질 계약과 본문 도장을 통과시켜야 열린다/.test(envLib2)
+      && /사람 검토는 수동 예외 경로다/.test(envLib2)
       && !/발행은 사람이 publish:machine-review/.test(runner)
   })())
 }

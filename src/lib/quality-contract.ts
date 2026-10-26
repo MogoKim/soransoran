@@ -36,10 +36,15 @@ import { REVIEW_VERSION, DETERMINISTIC_CODES } from './content-core/review'
 import { ARTIFACT_VERSION } from './content-core/artifact'
 import { SPEAKER_PLAN_VERSION } from './content-core/speaker'
 import { MATERIAL_CONTRACT_LINES, MATERIAL_CONTRACT_VERSION } from './content-core/material-contract'
-import { DRAFT_GATE_CODES, DRAFT_GATE_VERSION, DRAFT_LIFE_REVIEW_CODES } from './content-core/draft-life-gates'
+import {
+  DRAFT_GATE_CODES, DRAFT_GATE_VERSION, DRAFT_LIFE_REVIEW_CODES, FAMILY_HEALTH_TITLE_SUBJECT_MARKERS,
+} from './content-core/draft-life-gates'
 import { DRAFT_RULE_VERSION } from './micro-seed-auto-draft'
 import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
-import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
+import {
+  DRAFT_LIFE_ADVISORIES_KEY, DRAFT_LIFE_ADVISORY_CODES, DRAFT_LIFE_REVIEW_HOLD,
+  DRAFT_LIFE_REVIEW_UNREAD, SEMANTIC_HOLD_CODES,
+} from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
 import {
@@ -184,6 +189,25 @@ import {
  * 공급 회차 상한도 judge 1 + 생성 최대 4로 맞춰 확인 호출이 바깥 예산에 잘리지 않게 한다.
  * 위해·개인정보·복제·가족 사실 모순·자료 의존 등 결정적 차단은 완화하지 않는다.
  *
+ * `quality-v23` (2026-10-26) = **원문보다 넓고 약한 일반화를 새 사실·왜곡과 구분한다.**
+ * 원문의 `회사를 그만두고`를 `일을 쉬고`로 줄인 글을 발행 전 Content Core는 ADOPT했지만,
+ * 발행 뒤 의미 감사가 새 사실로 오판해 D10 자동 READY를 닫았다. 공유 실질 변경 계약(`material-contract-v2`)에
+ * 비모순 일반화·완화 허용과 반대 경계를 함께 명시하고, 발행 전 검수(`v2-review-p11`)와 발행 뒤 감사
+ * (`semantic-audit-prompt-v7`)가 같은 줄을 그대로 읽는다. 더 구체적인 사실 추가·반대 상태·핵심 결과 변경은 계속 막는다.
+ *
+ * `quality-v24` (2026-10-26) = **Content Core를 의미 품질의 단일 결정 권위로 둔다.**
+ * 발행된 바이트·도장·artifact 원문·Persona 결속이 유효하면 사후 의미 모델의 발견·실패는 참고 note로만 남고
+ * 자동 READY를 다시 닫지 않는다. 결속 실패와 기존 규칙 감사의 개인정보·복제·자료 의존·생활사 하드게이트는
+ * 계속 확정 결함이며, 같은 모델·같은 요청의 확인 호출은 제거해 요청을 최대 1회로 줄인다.
+ * 옛 의미 감사 `measured yes`도 사후 모델을 다시 부르지 않고, 정확한 글·도장·artifact·Persona 결속과
+ * 당시 Content Core 승인을 묶은 append-only 계획으로만 해소한다. 결속은 적용 직전 다시 대조한다.
+ *
+ * `quality-v25` (2026-10-26) = **Content Core 단일 권위를 생활 게이트에도 완성한다.**
+ * 기존 `lifeReview`의 차단 분류는 Content Core failure로 승격해 Queue로 보내지 않는다.
+ * 남편·자녀 건강 이야기에서 생략된 주어를 작성자 질병으로 오판한 경우는 ADOPT 후
+ * `draftLifeAdvisories` 참고 기록만 남기고 자동 READY가 다시 막지 않는다. 정보 누락·모양 오류는
+ * `DRAFT_LIFE_REVIEW:unread`로 fail-closed하며 사진 의존·시점 왜곡·가족 모순·고위험 건강 허구는 계속 차단한다.
+ *
  * `quality-v20` (2026-10-23~24) = **미배포 Draft v19의 bounded creativity·차단 finding과 발행 뒤 감사를 하나의 실질 변경 계약으로 묶는다.**
  * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
  * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
@@ -196,7 +220,7 @@ import {
  * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
  * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v22'
+export const QUALITY_CONTRACT_VERSION = 'quality-v25'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -229,10 +253,14 @@ export function qualityContractComponents(): Record<string, unknown> {
     draftRuleVersion: DRAFT_RULE_VERSION,
     draftGateVersion: DRAFT_GATE_VERSION,
     draftGateCodes: DRAFT_GATE_CODES,
-    // 🔴 (v2) 모호 → 사람 검토로 보내는 축과 그 경고 이름 — 바뀌면 자동 READY 표본의 적격이 바뀐다
-    //    (v3) 원천·시점 축 넷과 `noLifeFactNeeded` 가족사가 이 목록에 더해졌다
+    // legacy review 코드 목록과 현재 비차단 advisory 계약. 판정 누락·모양 오류만 fail-closed 한다.
     draftLifeReviewCodes: DRAFT_LIFE_REVIEW_CODES,
-    draftLifeReviewHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
+    draftLifeReview: {
+      advisoryKey: DRAFT_LIFE_ADVISORIES_KEY,
+      advisoryCodes: DRAFT_LIFE_ADVISORY_CODES,
+      familyHealthTitleSubjectMarkers: FAMILY_HEALTH_TITLE_SUBJECT_MARKERS,
+      invalidHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
+    },
     // 🔴 (v4) 열림 근거와 창업자 gold — gold 를 한 글자라도 바꾸면 이 digest 가 바뀌어 판을 올려야 한다
     evidenceBasis: QUALITY_EVIDENCE_BASIS,
     founderGold: { version: FOUNDER_GOLD_VERSION, digest: FOUNDER_GOLD_PINNED_DIGEST, shape: FOUNDER_GOLD_SHAPE },

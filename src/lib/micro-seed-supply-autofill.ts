@@ -32,7 +32,11 @@ import {
   CONTENT_CORE_MODEL_LABEL, CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   stageModelsMismatch,
 } from './content-core/pipeline'
-import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, lifeReviewHoldsOf, type SemanticSummary } from './semantic-summary-codes'
+import {
+  DRAFT_LIFE_ADVISORIES_KEY, SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES,
+  lifeReviewAdvisoriesOf, lifeReviewHoldsOf, semanticSummaryOf, semanticHoldsOf,
+  type SemanticSummary,
+} from './semantic-summary-codes'
 /** 🔴 품질 계약 — 적재기가 저장하는 값은 이 파일의 코드 상수다(후보 파일 값이 아니다) */
 import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } from './quality-contract'
 import { BOARD_TOPICS, RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION } from './micro-seed-auto-judge'
@@ -758,13 +762,12 @@ export function buildQueuePayload(input: {
          */
         holds: [
           ...semanticHoldsOf(semanticSummaryOf(input.review)),
-          /**
-           * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2). Content Core의 구조화 HOLD라
-           *    자동 READY 에서 빠진다. 칸이 없으면 `unread` 경고다(통과 아님).
-           */
+          /** 판정이 없거나 모양이 깨진 후보만 fail-closed 한다. */
           ...lifeReviewHoldsOf(c.lifeReview),
         ],
         blocks: [],
+        /** Content Core가 채택한 비차단 관찰. 자동 READY는 다시 해석하지 않는다. */
+        [DRAFT_LIFE_ADVISORIES_KEY]: lifeReviewAdvisoriesOf(c.lifeReview),
         [SEMANTIC_SUMMARY_KEY]: semanticSummaryOf(input.review),
         /**
          * 🔴 **품질 계약 — 지금 코드 상수다** (2026-09-27). 봉투 값을 옮기지 않는다 —

@@ -210,7 +210,7 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
 console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 검수 판 review-v9 · 검수 프롬프트 p10', V2_REVIEW_PROMPT_VERSION === 'v2-review-p10' && REVIEW_VERSION === 'review-v9')
+  check('🔴 검수 판 review-v9 · 검수 프롬프트 p11', V2_REVIEW_PROMPT_VERSION === 'v2-review-p11' && REVIEW_VERSION === 'review-v9')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
@@ -231,9 +231,11 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
     REVIEW_FAMILY_SPECIFICS_LINES.every((l) => reviewSys.split('\n').includes(l)) && reviewSys.includes('자녀 성별 칸이 없다'))
   check('🔴 검수 지시문은 [보존] 을 모른다 — 생성 입력만 바뀌었다', !reviewSys.includes('그대로쓸말') && !reviewSys.includes('원문의물음'))
   // 🔴 (p10 · quality-v20) 발행 전 검수와 발행 뒤 감사가 같은 실질 변경 계약 줄을 그대로 싣는다 — 정본은 한 곳이다
-  check('🔴 🔴 검수 지시문과 의미 감사 지시문이 실질 변경 계약 줄을 똑같이 싣는다(시간 바꿔쓰기 포함)',
+  check('🔴 🔴 검수 지시문과 의미 감사 지시문이 실질 변경 계약 줄을 똑같이 싣는다(시간·약한 일반화 포함)',
     MATERIAL_CONTRACT_LINES.every((l) => reviewSys.split('\n').includes(l) && SEMANTIC_AUDIT_SYSTEM_PROMPT.split('\n').includes(l))
-    && MATERIAL_CONTRACT_LINES.some((l) => l.includes('"새벽"·"이 밤"·"밤늦게"')))
+    && MATERIAL_CONTRACT_LINES.some((l) => l.includes('"새벽"·"이 밤"·"밤늦게"'))
+    && MATERIAL_CONTRACT_LINES.some((l) => l.includes('"회사를 그만두고"를 "일을 쉬고"로'))
+    && MATERIAL_CONTRACT_LINES.some((l) => l.includes('"퇴사했다"를 "새 회사에 입사했다"로')))
   // 🔴 같은 경고가 고친 뒤에도 오면 **그대로 센다** — 근거 대조가 느슨해지지 않았다
   for (const id of ['A', 'B', 'C']) {
     const k = CASE(id); const packet = packetOf(k); const draftText = `${k.draft.title}\n${k.draft.body}`
@@ -332,7 +334,7 @@ async function runOf(c: Case, ask: Ask) {
   check('🔴 🔴 초안·검수·판독이 같은 한 벌 원문을 본다 — 두 번째 벌이 없다',
     dp !== null && dp.원문 === sourceBlock(packet) && r !== undefined && (JSON.parse(r.payload) as { 원문: string }).원문 === sourceBlock(packet)
     && p !== undefined && !p.payload.includes(c.rawBody.slice(c.rawBody.length - 40)))
-  check('🔴 🔴 러너가 보낸 p10 검수 지시문 — 안전한 창작 carve-out · 실질 변경 계약 · 가족 사실 보호가 함께 실렸다',
+  check('🔴 🔴 러너가 보낸 p11 검수 지시문 — 안전한 창작 carve-out · 실질 변경 계약 · 가족 사실 보호가 함께 실렸다',
     r !== undefined
     && r.system.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰')
     && r.system.includes('구체적 고위험 생활사')

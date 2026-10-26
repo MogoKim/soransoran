@@ -85,22 +85,36 @@ export function semanticHoldsOf(sum: SemanticSummary | null): string[] {
 }
 
 /**
- * 🔴 **생활 일관성 게이트의 구조화 HOLD 경고** (2026-09-28 quality-v2 · 2026-10-24 설명 보정).
+ * 🔴 **Content Core 생활 판정의 후보 봉투 계약** (quality-v25).
  *
- *    초안 게이트(`content-core/draft-life-gates.ts`)가 **모호하다**고 본 축 — 혼인 · 돌봄·한집 ·
- *    자녀 삶의 단계 · 정신건강·질병 — 은 Content Core의 모호한 생활사 HOLD로 자동 READY 에서 빠져야 한다.
- *    후보 봉투가 `lifeReview`(코드 배열)로 나르고, 적재기가 `gateResults.holds` 에
- *    `DRAFT_LIFE_REVIEW:<코드>` 로 싣는다. `SEMANTIC_` 접두가 아니라 요약 대조와 섞이지 않는다.
+ *    차단 사유는 Content Core의 `failures`에서 끝나며 Queue로 오지 않는다.
+ *    `lifeReview`에는 Content Core가 ADOPT한 비차단 관찰만 오고, 적재기는 이를
+ *    `draftLifeAdvisories`에 기록할 뿐 자동 READY 에서 다시 해석하지 않는다.
  *
- *    🔴 **칸이 없거나 모양이 다르면 그것도 경고다** — 판정을 싣지 않은 후보를 "모호함 없음" 으로
- *       읽지 않는다(`DRAFT_LIFE_REVIEW:unread`). 이 파일은 아무것도 import 하지 않는다 —
- *       코드 이름의 정본은 게이트 파일이고, 여기서는 **모양**만 본다.
+ *    🔴 **칸이 없거나 모양이 다르면 fail-closed** — 판정을 싣지 않은 후보를
+ *    "관찰 없음"으로 읽지 않고 `DRAFT_LIFE_REVIEW:unread`로 막는다.
+ *    이 파일은 아무것도 import 하지 않는다.
  */
 export const DRAFT_LIFE_REVIEW_HOLD = 'DRAFT_LIFE_REVIEW'
 export const DRAFT_LIFE_REVIEW_UNREAD = `${DRAFT_LIFE_REVIEW_HOLD}:unread`
+/**
+ * Content Core가 채택한 뒤에도 남길 수 있는 비차단 관찰이다.
+ * 지금은 가족이 같은 절에 있어 건강 경험의 주체를 확정할 수 없는 경우뿐이다.
+ */
+export const DRAFT_LIFE_ADVISORIES_KEY = 'draftLifeAdvisories'
+export const DRAFT_LIFE_ADVISORY_CODES = ['unsupportedHealthClaim'] as const
+
+const lifeAdvisories = (v: unknown): string[] | null => {
+  if (!Array.isArray(v)) return null
+  const allowed = new Set<string>(DRAFT_LIFE_ADVISORY_CODES)
+  if (!v.every((x) => typeof x === 'string' && allowed.has(x))) return null
+  return [...new Set(v as string[])].sort()
+}
 
 export function lifeReviewHoldsOf(v: unknown): string[] {
-  if (!Array.isArray(v)) return [DRAFT_LIFE_REVIEW_UNREAD]
-  if (!v.every((x) => typeof x === 'string' && /^[A-Za-z]+$/.test(x))) return [DRAFT_LIFE_REVIEW_UNREAD]
-  return [...new Set(v as string[])].sort().map((c) => `${DRAFT_LIFE_REVIEW_HOLD}:${c}`)
+  return lifeAdvisories(v) === null ? [DRAFT_LIFE_REVIEW_UNREAD] : []
+}
+
+export function lifeReviewAdvisoriesOf(v: unknown): string[] {
+  return lifeAdvisories(v) ?? []
 }

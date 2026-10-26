@@ -101,7 +101,7 @@ console.log('A. 기준선 — 묶인 기록 하나면 해소, 없으면 미해�
   const a = audit()
   check('🔴 기록 없음 → 미해소', !judge(a, queue(null)).resolved)
   check('🟢 지금 계약 · 이 감사 지문 · 이 큐·글 · 저장 초안 · 재검증 차단 → 해소', judge(a, queue([recordFor(a)])).resolved, judge(a, queue([recordFor(a)])).reason)
-  check('🟢 지금 의미 감사 계약 · 같은 결속의 재감사 no → 해소', judge(a, queue([semanticRecordFor(a)])).resolved,
+  check('🟢 지금 의미 계약 · 같은 exact 결속의 Content Core 해소 기록 → 해소', judge(a, queue([semanticRecordFor(a)])).resolved,
     judge(a, queue([semanticRecordFor(a)])).reason)
   check('🔴 큐 행이 없다 → 미해소', !judge(a, null).resolved)
 }
@@ -176,7 +176,7 @@ console.log('\nC. 🔴 기록이 맞아도 해소 대상이 아닌 결함')
   check('🔴 의미 감사지만 측정되지 않은(outcome=integrity) 결함 → 미해소',
     !withAudit({ note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=integrity binding=none] x` }))
   const oldMeasured = audit({ note: '[auto-ready-semantic-audit-v1 outcome=measured binding=x] 옛 판 결함' })
-  check('🟢 옛 의미 감사 measured yes도 새 계약 재감사 no 기록으로만 해소 가능',
+  check('🟢 옛 의미 감사 measured yes도 새 계약의 exact 결속 기록으로만 해소 가능',
     judge(oldMeasured, queue([semanticRecordFor(oldMeasured)])).resolved)
   check('🔴 감사자 이름이 비슷한 다른 것(model:semantic-auditX) → 미해소', !withAudit({ auditor: 'model:semantic-auditX' }))
   check('🔴 defect=no 행 → 해소 대상 아님(미해소로 센다 · 부르는 쪽은 yes 만 넘긴다)', !withAudit({ defect: 'no' }))
@@ -220,13 +220,14 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
 {
   const repo = codeOnly('src/lib/auto-ready-repo.ts')
   const store = codeOnly('src/lib/auto-ready-defect-resolution-store.ts')
-  const callers = ['src/lib/auto-ready-repo.ts', 'src/lib/stage-evidence-repo.ts', 'scripts/stage-controller.mts']
+  const callers = ['src/lib/auto-ready-repo.ts', 'scripts/stage-controller.mts']
   check('🔴 🔴 **옛 전 기간 카운트(confirmedDefectCount)가 코드 어디에도 없다**',
     ['src/lib/auto-ready-repo.ts', 'src/lib/stage-evidence-repo.ts', 'scripts/stage-controller.mts', 'src/lib/auto-ready-audit-store.ts', 'src/lib/auto-ready-v2.ts']
       .every((p) => !/confirmedDefectCount|confirmedDefects/.test(codeOnly(p))))
   check('🔴 🔴 **defect=yes 를 그대로 세는 count 가 repo 에 없다**', !/autoReadyAudit\.count\(\{\s*where:\s*\{\s*defect:\s*'yes'/.test(repo))
-  check('🔴 열림 · 단계 controller · 단계 증거가 같은 정본(unresolvedDefectCount)을 부른다',
-    callers.every((p) => /unresolvedDefectCount\((db|prisma)\)/.test(codeOnly(p))))
+  check('🔴 열림 · 단계 controller가 같은 현재 정본(unresolvedDefectCount)을 부르고, 과거 단계 증거는 전역 결함에 오염되지 않는다',
+    callers.every((p) => /unresolvedDefectCount\((db|prisma)\)/.test(codeOnly(p)))
+    && !/unresolvedDefectCount/.test(codeOnly('src/lib/stage-evidence-repo.ts')))
   check('🔴 정본 카운트가 해소 판정 하나(judgeDefectResolution)를 부른다', /judgeDefectResolution\(/.test(repo))
   check('🔴 🔴 **해소 쓰기 경로는 감사 행에 쓰지 않는다**(update · create · delete · upsert 0)',
     !/autoReadyAudit\.(update|updateMany|create|createMany|delete|deleteMany|upsert)\(/.test(store))
@@ -234,20 +235,24 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
     /updatedAt: e\.updatedAt!/.test(store) && /isolationLevel: 'Serializable'/.test(store) && /\.\.\.resolutionEntriesOf\(q\.editDiff\)/.test(store))
   check('🔴 해소 쓰기 전에 지금 초안 게이트(judgeDraftLife)를 저장 초안에 돈다',
     /judgeDraftLife\(\{\s*title: q!\.draftTitle, body: q!\.draftBody/.test(store))
+  check('🔴 의미 오탐 해소는 provider·judgeSemantic을 부르지 않고 exact 결속만 쓴다',
+    /semanticBindingOf\(context\.ctx\)/.test(store)
+    && !/judgeSemantic|SemanticAuditProvider|i\.provider/.test(store))
   const runner = codeOnly('scripts/auto-ready-defect-resolve.mts')
   const productionBranch = runner.slice(runner.indexOf("if (act.kind === 'production')"), runner.indexOf('if (apply)'))
   check('🔴 승인 없는 로컬 --apply는 격리 DB에서만', /if \(apply\) \{\s*const bad = isolatedDbProblems\(\)/.test(runner))
   check('🔴 운영 적용은 production activation 승인 경계와 staged 가드를 지난다',
     /openActivation\(argv, \{ repoRoot: process\.cwd\(\), allowStaged: true \}\)/.test(runner)
     && runner.includes('applyApprovedDefectResolution') && runner.includes('applyApprovedSemanticDefectResolution'))
-  check('🔴 의미 오탐 해소 dry-run은 provider 1회 계획과 승인 토큰을 만든다',
+  check('🔴 의미 오탐 해소 dry-run은 provider 0으로 결속 계획과 승인 토큰을 만든다',
     runner.includes("argv.includes('--semantic-clear')") && runner.includes('planSemanticDefectResolution')
-    && runner.includes('semanticPlanTokenOf(e.plan)') && runner.includes('freshEachCall: semanticClear'))
+    && runner.includes('semanticPlanTokenOf(e.plan)') && runner.includes('freshEachCall: semanticClear')
+    && !runner.includes('semanticProviderFromEnv') && !runner.includes('loadEnvLocal'))
   check('🔴 운영 apply는 승인 토큰만 쓰고 provider·재계획을 부르지 않는다',
     productionBranch.includes('semanticPlan!.plan') && productionBranch.includes('applyApprovedSemanticDefectResolution')
     && !productionBranch.includes('semanticProviderFromEnv') && !productionBranch.includes('planSemanticDefectResolution'))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
-    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v22')
+    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v25')
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)

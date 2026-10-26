@@ -10,7 +10,7 @@
  *             🔴 첫 댓글 증거는 **출처 연결**(`commentProvenanceOf`)이 `auto` 인 것만 (2026-10-11 Batch A3):
  *                Queue(`publishedCommentId`) · ActivityLog(`kind=comment` · `targetId`)를 Comment id 로 대조한다
  *             🔴 추가 댓글 표식만 있는 댓글은 `followup*` 로 따로 분류한다(`personaCommentProvenanceOf` · 2026-10-13)
- *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조) · 표 전체의 정본 카운트(결함 yes · 시한 초과 · 재시도 가능 · 글 유실)
+ *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조). 다른 날의 현재 전역 상태는 controller 품질 신호가 본다
  *    · 도장   Queue `gateResults.release` — 발행 트랜잭션이 같은 트랜잭션에서 남긴 source-slot-v1 도장(조항 ⑦).
  *             🔴 도장 시각이 **그 글의 발행 기록 시각과 정확히 같아야** 증명이다(`publishEventAtOf` · `releaseStampCheck`)
  *    · 공개 시각 🔴 발행 기록(`PersonaActivityLog.createdAt` — 상한 정본과 같은 칸)이다. Post 시각을 쓰지 않는다
@@ -25,8 +25,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { RuntimeStage } from './scale-profile'
 import { isCalendarDate, type ValidatedStageDecision } from './stage-decision-contract'
 import { UNATTENDED_PUBLISH_DECIDED_BY } from './original-post-publish-tx'
-import { unresolvedDefectCount, missingAutoPostCount } from './auto-ready-repo'
-import { overdueAuditCount, retryableFailureCount, RETRYABLE_NOTE_PREFIX, AUDIT_OVERDUE_MS } from './auto-ready-audit-store'
+import { RETRYABLE_NOTE_PREFIX, AUDIT_OVERDUE_MS } from './auto-ready-audit-store'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { judgeDefectResolution } from './auto-ready-defect-resolution'
 import { currentQualityContract } from './quality-contract'
@@ -195,10 +194,6 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
         retryable: a.defect === null && (a.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX),
         overdue: a.defect === null && a.selectedAt.getTime() < i.now.getTime() - AUDIT_OVERDUE_MS,
       })),
-      globalUnresolvedDefects: await unresolvedDefectCount(db),
-      globalOverdue: await overdueAuditCount(db, i.now),
-      globalRetryable: await retryableFailureCount(db),
-      globalMissingPosts: await missingAutoPostCount(db),
     },
   }
 }

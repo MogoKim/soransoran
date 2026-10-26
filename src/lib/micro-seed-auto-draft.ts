@@ -396,8 +396,8 @@ export function pickV2(input: PickV2Input, now: string): Pick {
    *    🔴 `AUTO_DROP` 이 아니다 — 다른 Persona·자리면 쓸 수 있는 원천이다.
    */
   /**
-   * 🔴 **모호한 생활 일관성**(2026-09-28 quality-v2) — 막지는 않고 채택 결과에 싣는다.
-   *    캐시에서 꺼낸 옛 artifact 도 여기서 **다시 판정**한다 — artifact 에 적힌 값을 믿지 않는다.
+   * 생활 판정은 Content Core가 다시 계산한다. 차단은 여기서 AUTO_HOLD하고,
+   * 채택 가능한 advisory만 결과에 싣는다. 캐시 artifact의 옛 판정은 믿지 않는다.
    */
   let lifeReview: DraftLifeReviewCode[] | undefined
   if (input.draftGate !== undefined) {

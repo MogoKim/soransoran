@@ -101,7 +101,7 @@ function fixture(o: {
       const gate = gateOfMark(o.contractOf?.[id] ?? 'current')
       return {
         id, gateVerdict: 'PASS', title: `제목 ${id}`, body: `본문 ${id}`,
-        gateResults: warned.has(id) ? { ...gate, holds: ['DRAFT_LIFE_REVIEW:truncatedSourceCompletion'] } : gate,
+        gateResults: warned.has(id) ? { ...gate, holds: ['DRAFT_LIFE_REVIEW:unread'] } : gate,
       }
     })
   const loaded = { queueTotal: rejected.length + targets.length, rejected, targets, queueCandidates, allRows } as unknown as LoadedStock

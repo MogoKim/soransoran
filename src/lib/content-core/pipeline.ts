@@ -70,11 +70,11 @@ export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p14'
  * 핵심 뜻·결론 손실과 고위험 허구만 차단 finding 배열에 남긴다.
  */
 /**
- * 🔴 **v2-review-p10 (2026-10-23~24 · quality-v20)** — 안전한 창작은 빈 배열로 통과시키고,
+ * 🔴 **v2-review-p11 (2026-10-26 · quality-v23)** — 안전한 창작은 빈 배열로 통과시키고,
  * 핵심 뜻·결론 손실과 고위험 허구만 차단 finding에 남긴다. 발행 뒤 의미 감사와 같은 실질 변경 계약
- * (`material-contract.ts` · 시간 바꿔쓰기 · 커뮤니티식 1인칭 다시 말하기 · 사소한 생략)을 그대로 싣는다.
+ * (`material-contract.ts` · 약한 일반화 · 시간 바꿔쓰기 · 커뮤니티식 1인칭 다시 말하기 · 사소한 생략)을 그대로 싣는다.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p10'
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p11'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

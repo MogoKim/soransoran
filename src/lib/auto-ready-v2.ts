@@ -170,7 +170,7 @@ const stableJson = (v: unknown): string =>
 export const JUDGE_CONTRACT_DIGEST = digestOf(stableJson({
   contract: CONTRACT,
   /** Content Core가 이미 검증한 문안을 단어 정규식으로 다시 판정하지 않는다. */
-  contentDecision: 'content-core-only-v1',
+  contentDecision: 'content-core-only-v2',
   semantic: [NO_SEMANTIC_RECORD, SEMANTIC_INVALID, SEMANTIC_HOLDS_MISMATCH],
   recordVersion: AUTO_READY_RECORD_VERSION,
 })).slice(0, 32)
