@@ -220,13 +220,14 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
 {
   const repo = codeOnly('src/lib/auto-ready-repo.ts')
   const store = codeOnly('src/lib/auto-ready-defect-resolution-store.ts')
-  const callers = ['src/lib/auto-ready-repo.ts', 'src/lib/stage-evidence-repo.ts', 'scripts/stage-controller.mts']
+  const callers = ['src/lib/auto-ready-repo.ts', 'scripts/stage-controller.mts']
   check('🔴 🔴 **옛 전 기간 카운트(confirmedDefectCount)가 코드 어디에도 없다**',
     ['src/lib/auto-ready-repo.ts', 'src/lib/stage-evidence-repo.ts', 'scripts/stage-controller.mts', 'src/lib/auto-ready-audit-store.ts', 'src/lib/auto-ready-v2.ts']
       .every((p) => !/confirmedDefectCount|confirmedDefects/.test(codeOnly(p))))
   check('🔴 🔴 **defect=yes 를 그대로 세는 count 가 repo 에 없다**', !/autoReadyAudit\.count\(\{\s*where:\s*\{\s*defect:\s*'yes'/.test(repo))
-  check('🔴 열림 · 단계 controller · 단계 증거가 같은 정본(unresolvedDefectCount)을 부른다',
-    callers.every((p) => /unresolvedDefectCount\((db|prisma)\)/.test(codeOnly(p))))
+  check('🔴 열림 · 단계 controller가 같은 현재 정본(unresolvedDefectCount)을 부르고, 과거 단계 증거는 전역 결함에 오염되지 않는다',
+    callers.every((p) => /unresolvedDefectCount\((db|prisma)\)/.test(codeOnly(p)))
+    && !/unresolvedDefectCount/.test(codeOnly('src/lib/stage-evidence-repo.ts')))
   check('🔴 정본 카운트가 해소 판정 하나(judgeDefectResolution)를 부른다', /judgeDefectResolution\(/.test(repo))
   check('🔴 🔴 **해소 쓰기 경로는 감사 행에 쓰지 않는다**(update · create · delete · upsert 0)',
     !/autoReadyAudit\.(update|updateMany|create|createMany|delete|deleteMany|upsert)\(/.test(store))
@@ -247,7 +248,7 @@ console.log('\nG. 소스 — 옛 권위를 지웠고, 새 권위 하나가 연�
     productionBranch.includes('semanticPlan!.plan') && productionBranch.includes('applyApprovedSemanticDefectResolution')
     && !productionBranch.includes('semanticProviderFromEnv') && !productionBranch.includes('planSemanticDefectResolution'))
   check('🔴 해소 기록 판이 품질 계약 digest 구성에 들어간다',
-    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v22')
+    JSON.stringify(qualityContractComponents()).includes(DEFECT_RESOLUTION_RECORD_VERSION) && QUALITY_CONTRACT_VERSION === 'quality-v23')
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패\n`)

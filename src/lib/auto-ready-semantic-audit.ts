@@ -41,8 +41,8 @@ import { LIFE_CONTRACT_FIELDS, lifeContractIdentity, type PersonaLifeContract } 
 
 /** 🔴 의미 감사 계약의 판 — 판정 기준·출력 모양·묶음 구성이 바뀌면 올린다 (v3 · yes 확인 호출) */
 export const SEMANTIC_AUDIT_CONTRACT_VERSION = 'auto-ready-semantic-audit-v3'
-/** 🔴 프롬프트 판 — 지시문이 한 글자라도 바뀌면 올린다 (v6 · 공유 실질 변경 계약) */
-export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v6'
+/** 🔴 프롬프트 판 — 지시문이 한 글자라도 바뀌면 올린다 (v7 · 약한 일반화 허용 계약) */
+export const SEMANTIC_AUDIT_PROMPT_VERSION = 'semantic-audit-prompt-v7'
 /**
  * 🔴 **의미 감사 모델** — 가격표(`llm-pricing`)에 단가가 있는 내부 라벨이어야 한다.
  *    초안 생성(`gemini-3.7-flash`)과 다른 계열을 쓴다 — 쓴 모델이 제 글을 채점하지 않게 한다.
@@ -162,7 +162,7 @@ export const SEMANTIC_AUDIT_SYSTEM_PROMPT = [
   '주체·행동·원인·결과를 바꾸지 않는 정도 부사·강조 부사의 추가는 새 사실이나 왜곡이 아니다.',
   '원문이 이미 같은 주체가 같은 행동을 했다고 명시했다면, 직접·바로·정말 같은 부사를 붙인 것만으로 새 사건·새 행위자·새 사실이라 하지 않는다.',
   '1) unsupportedFacts: 원문근거에도 글쓴이카드에도 없는 구체적 사실(숫자·금액·장소·새 사건·진단 등)을 사실로 지어냈다.',
-  '   일반적인 감상·질문·인사·비유·연결·강조는 구체적 사실이 아니다.',
+  '   일반적인 감상·질문·인사·비유·연결·강조와 원문보다 넓고 약한 표현으로의 치환은 구체적 사실이 아니다.',
   '2) lifeContradictions: 게시글의 같은 주어·같은 사실 축에 명시된 값이 글쓴이카드의 생활사와 양립 불가능하다.',
   '   카드에 정보가 없거나 표현이 모호하다는 이유만으로 모순이라 하지 않는다.',
   '3) sourceDistortions: 위 계약의 실질 변경 — 원문근거의 주체·핵심 행동·원인·결과·결론을 실질적으로 뒤집거나, 원문에 없는 결론을 원문이 한 말처럼 옮겼다.',

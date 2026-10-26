@@ -1,12 +1,12 @@
 {
-  "version": "quality-v22",
-  "digest": "dd3c50cc6444f6d056e861bc5e75241c34f5cea7ec4914aeef175c7b96ca6efb",
+  "version": "quality-v23",
+  "digest": "26d0f64c5e8d9eefffc33134b39fdc8c6a3e9b5807051d7bad1c923de92ae6b5",
   "files": {
-    "src/lib/quality-contract.ts": "fe32b80aada14a4469084f2bae10a1d46ce83ecdb15aea1b399e74bed07d456c",
+    "src/lib/quality-contract.ts": "2f098b3b3aabe16c7452daaf64d49c5fcff464e4fce68fd240f9a98d06223b28",
     "src/lib/semantic-summary-codes.ts": "8e0587d064ee27f839bfd95f09df99da8f90ac95a1c2529e665402b08a0d0907",
     "src/lib/content-core/draft-life-gates.ts": "c1b89b9aee8ef184005ab0125769414d53f449f002c8c5c2d8a6e1e5aed74ce0",
     "src/lib/content-core/review.ts": "18c2867d12de4cbb7fdd7940a28e182e7ee1044d368c346fa4fa56a8739ea396",
-    "src/lib/content-core/pipeline.ts": "d6d860efefd5653744e6d18bc53bb89eee16a8004210a6d2b6379dba3334048b",
+    "src/lib/content-core/pipeline.ts": "19271911d1168118f396f31e2d2f946ae9068a29c5409de280d2a6a27b711ce8",
     "src/lib/content-core/evidence.ts": "5d057ae291e865cbc3131bb51a858e2568b351239f993c38c4d9453c95980e2e",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "8d01d76de2a976362ec509340b101124d213fe1c4783ac0e3307ae33f1add8cb",
@@ -28,20 +28,18 @@
     "src/lib/persona-no-go.ts": "043c734ff551c93a5e5cfe18ebaf56c0b5087232efb0ecc75581ffdaf6bf4318",
     "src/lib/auto-ready-defect-resolution.ts": "3e5b197a92dfce038a332610d8071833f57aae09db7609e6b0f23d201b763fe2",
     "src/lib/auto-ready-defect-resolution-store.ts": "e4afb00a5c753af3079e6094a145c3afceb943e1a8158a5e8a68b57984afe7a7",
-    "src/lib/auto-ready-semantic-audit.ts": "cda8172649ef54745405af3b3b60e8c9822589b9592d216728162651f7b5e426",
+    "src/lib/auto-ready-semantic-audit.ts": "d99a4f2d92fbfd3fd1469533954e274cdecf83fa7789924eb3edb08ca949698e",
     "scripts/lib/auto-ready-rule-judge.mts": "d9348652c0ab2d5ab6c98a358fd99408c3a34483895ab3b58fe72deb2a48b293",
-    "src/lib/content-core/material-contract.ts": "ae0cb749ca3a1377feb1d83ca2b0d8ed3d3758eb264574d78b5fd6899b5b5ee4",
+    "src/lib/content-core/material-contract.ts": "0e17d2d4e46b14dafa948745406c986c3526a6181998cdba528219b022c40e48",
     "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v20 → quality-v22",
+    "kind": "behaviorUnchanged",
+    "reason": "quality-v23 동작 확정 뒤 판 이름 주석과 검사 설명만 정정",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
-      "src/lib/content-core/review.ts",
-      "src/lib/supply-schedule-contract.ts",
-      "scripts/lib/content-core-run.mts"
+      "src/lib/content-core/pipeline.ts",
+      "src/lib/auto-ready-semantic-audit.ts"
     ]
   }
 }

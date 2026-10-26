@@ -22,7 +22,7 @@ import {
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 import { AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
-import { decideStage, consumerEnvOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
+import { decideStage, consumerEnvOf, qualitySignalOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
 import { nextStage } from '../src/lib/stage-decision-contract'
 import {
   validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, previousKstDate,
@@ -73,7 +73,7 @@ const sample = (i: number, o: Partial<{ postId: string; queueId: string; judged:
 })
 const JUDGED = sample(0)
 const CLEAN_AUDITS = {
-  rows: [JUDGED], globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
+  rows: [JUDGED],
 }
 const facts = (stage: RuntimeStage = 'd3', o: Partial<StageEvidenceFacts> = {}): StageEvidenceFacts => ({
   kstDate: D, stage,
@@ -227,11 +227,12 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 표본 — 판정 전 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false })] } })), 'AUDIT_UNJUDGED')
   failWith('🔴 표본 — 시한 초과 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, overdue: true })] } })), 'AUDIT_OVERDUE')
   failWith('🔴 표본 — 재시도 가능 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, retryable: true })] } })), 'AUDIT_RETRYABLE')
-  failWith('🔴 표 전체 판정 시한 초과 감사 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalOverdue: 1 } })), 'AUDIT_OVERDUE')
   failWith('🔴 표본 — 결함 yes → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { defectYes: true })] } })), 'AUDIT_DEFECT')
-  failWith('🔴 표 전체에 결함 yes(끈적) → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalUnresolvedDefects: 1 } })), 'AUDIT_DEFECT')
-  failWith('🔴 재시도 가능 감사 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalRetryable: 1 } })), 'AUDIT_RETRYABLE')
-  failWith('🔴 글이 사라진 자동 발행 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalMissingPosts: 1 } })), 'AUDIT_MISSING_POST')
+  const oldGlobalShape = { rows: [JUDGED], globalUnresolvedDefects: 1, globalOverdue: 1, globalRetryable: 1, globalMissingPosts: 1 }
+  check('🟢 다른 날짜의 전역 상태는 증거일 PASS를 소급 오염시키지 않는다',
+    judge(facts('d3', { audits: oldGlobalShape as unknown as StageEvidenceFacts['audits'] })).verdict === 'PASS')
+  check('🔴 현재 전역 결함·재시도·시한·글 유실은 controller 실시간 품질 신호가 계속 막는다',
+    qualitySignalOf({ unresolvedDefects: 1, missingPosts: 1, retryableFailures: 1, overdueAudits: 1 }).health === 'bad')
 
   // ⑤ 중복
   failWith('🔴 한 글을 가리키는 Queue 행이 1 이 아니다 → FAIL', judge(facts('d3', { posts: [post(0, { queueRows: 0 }), post(1), post(2)] })), 'DUP_QUEUE')
