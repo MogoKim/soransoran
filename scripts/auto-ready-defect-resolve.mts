@@ -10,8 +10,9 @@
  *   npm run auto-ready:defect-resolve -- --queue=<queueId> --apply --production --staged --target=<40자리 SHA> \
  *     --digest=<dry-run digest> --expect=<지금>:<적용 뒤> --reason="…"     🔴 품질 계약 전환 — target 을 준비한
  *     **staging 트리**에서, 옛 runtime·job 을 그대로 둔 채 새 계약의 해소 기록을 활성화 **전에** 덧붙인다
- *   의미 재감사(`--semantic-clear`) 운영 적용은 dry-run이 낸 `--semantic-plan=<token>`도 필수다. provider는
- *   dry-run에서 정확히 한 번만 부르고, apply는 같은 계획의 DB·원문·글·Persona 결속만 결정적으로 재검사한다.
+ *   의미 결속 해소(`--semantic-clear`) 운영 적용은 dry-run이 낸 `--semantic-plan=<token>`도 필수다.
+ *   Content Core가 의미 품질의 단일 권위이므로 provider는 부르지 않고, dry-run과 apply가
+ *   DB·원문·글·Persona·도장 결속을 결정적으로 검사한다.
  *
  * 🔴 플래그 없는 `--apply` 는 격리 DB(sentinel · localhost · soran_test)에서만 돈다. 운영은 `production-activation-guard`
  *    (플래그 셋 · 다섯 SHA = target · runtime 깨끗 · writer job 0 · canonical env)와 승인(digest · expect · reason)을 모두 지나야 열린다.
@@ -30,10 +31,8 @@ import {
 } from './lib/defect-resolution-approval.mjs'
 import { makeReverifyContextLoader } from './lib/defect-reverify-context.mjs'
 import { makeAuditContextLoader } from './lib/auto-ready-audit-context.mjs'
-import { semanticProviderFromEnv } from './lib/auto-ready-semantic-provider.mjs'
 import { fillDbConnection } from './lib/ops-signals.mjs'
 import { openActivation } from './lib/production-activation.mjs'
-import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const argv = process.argv.slice(2)
 const queueId = (argv.find((a) => a.startsWith('--queue=')) ?? '').slice('--queue='.length).trim()
@@ -58,7 +57,6 @@ async function main(): Promise<number> {
     console.error(`🔴 --semantic-plan 이 유효하지 않다(write 0) · ${semanticPlan.reason}`)
     return 2
   }
-  if (semanticClear) await loadEnvLocal()
   // 🔴 품질 계약 전환은 활성화 전에 새 계약 기록을 써야 한다 — 이 CLI 만 `--staged` 를 받는다
   const act = openActivation(argv, { repoRoot: process.cwd(), allowStaged: true })
   if (act.kind === 'refuse') {
@@ -97,10 +95,9 @@ async function main(): Promise<number> {
   try {
     const contextOf = makeReverifyContextLoader()
     const loadContext = makeAuditContextLoader(prisma, { freshEachCall: semanticClear })
-    const provider = semanticProviderFromEnv(process.env, `defect-resolve-${Date.now()}`).provider
     const now = new Date()
     const e = semanticClear
-      ? await planSemanticDefectResolution(prisma, { queueId, loadContext, provider, now })
+      ? await planSemanticDefectResolution(prisma, { queueId, loadContext, now })
       : await planDefectResolution(prisma, { queueId, contextOf, now })
     if (e.kind === 'refuse') { console.log(`RESOLVE_PLAN refuse code=${e.code} · ${e.reason}`); return 1 }
     if (e.kind === 'already') { console.log(`RESOLVE_PLAN already · ${e.reason}`); return 0 }

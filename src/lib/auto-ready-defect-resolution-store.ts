@@ -19,7 +19,7 @@ import { Prisma, type PrismaClient } from '@prisma/client'
 import { digestOf } from './auto-ready-v2'
 import {
   DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, DEFECT_RESOLVER, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
-  auditFingerprintOf, judgeDefectResolution, readResolutionRecord,
+  auditFingerprintOf, judgeDefectResolution,
   resolvableDefectProblem, resolutionEntriesOf, reverifyInputDigestOf,
   type AuditRowForResolution, type DefectResolutionRecord, type QueueRowForResolution,
 } from './auto-ready-defect-resolution'
@@ -27,7 +27,7 @@ import { DRAFT_GATE_VERSION, judgeDraftLife, type DraftGateCard, type DraftGateP
 import { currentQualityContract } from './quality-contract'
 import {
   SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
-  judgeSemantic, semanticBindingOf, type SemanticAuditProvider, type SemanticContextResult,
+  semanticBindingOf, type SemanticContextResult,
 } from './auto-ready-semantic-audit'
 
 type Tx = Prisma.TransactionClient
@@ -73,7 +73,6 @@ export type ApplyOutcome =
 const SERIALIZABLE = { isolationLevel: 'Serializable' as const, maxWait: 5_000, timeout: 20_000 }
 const rec = (v: unknown): Record<string, unknown> =>
   (v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
-const HEX64 = /^[0-9a-f]{64}$/
 
 /** 🔴 평가 — 읽기만 한다. 계획과 적용이 같은 함수를 부른다 */
 async function evaluateInTx(tx: Tx, i: { queueId: string; contextOf: ContextLoader; now: Date }): Promise<Evaluation & { updatedAt?: Date }> {
@@ -236,11 +235,12 @@ async function semanticBaseInTx(tx: Tx, queueId: string): Promise<
 }
 
 /**
- * 새 의미 감사 계약으로 같은 글·도장·원문·Persona 결속을 다시 측정해 `no`일 때만 해소 계획을 만든다.
- * 원래 감사 행은 고치지 않으며, 재시도 실패·무결성·새 결함은 모두 refuse다.
+ * Content Core가 의미 품질의 단일 권위인 현재 계약에서, 옛 의미 감사 결함의 정확한
+ * 글·도장·원문·Persona 결속만 확인해 해소 계획을 만든다. 사후 의미 모델을 다시 부르지 않는다.
+ * 원래 감사 행은 고치지 않으며 결속·무결성 실패는 모두 refuse다.
  */
 export async function planSemanticDefectResolution(prisma: PrismaClient, i: {
-  queueId: string; loadContext: SemanticResolutionContextLoader; provider: SemanticAuditProvider; now: Date
+  queueId: string; loadContext: SemanticResolutionContextLoader; now: Date
 }): Promise<Evaluation> {
   const base = await prisma.$transaction((tx) => semanticBaseInTx(tx, i.queueId), {
     isolationLevel: 'RepeatableRead', maxWait: 5_000, timeout: 20_000,
@@ -251,59 +251,10 @@ export async function planSemanticDefectResolution(prisma: PrismaClient, i: {
     return { kind: 'refuse', code: context.code, reason: context.reason }
   }
   const binding = semanticBindingOf(context.ctx)
-  const contract = currentQualityContract()
-  const auditFingerprint = auditFingerprintOf(base.base.audit)
-  const titleHash = digestOf(base.base.queue.draftTitle)
-  const bodyHash = digestOf(base.base.queue.draftBody)
-  const reusable = resolutionEntriesOf(base.base.queue.editDiff)
-    .map(readResolutionRecord)
-    .filter((r): r is DefectResolutionRecord => r !== null)
-    .find((r) => r.recordVersion === SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION
-      && r.resolvedBy === DEFECT_RESOLVER
-      && r.audit.queueId === base.base.audit.queueId && r.audit.postId === base.base.audit.postId
-      && r.audit.fingerprint === auditFingerprint
-      && r.draft.titleHash === titleHash && r.draft.bodyHash === bodyHash
-      && r.reverify.outcome === 'semanticCleared'
-      && r.reverify.failureCodes.length === 0 && r.reverify.reviewCodes.length === 0
-      && r.reverify.semanticContractVersion === SEMANTIC_AUDIT_CONTRACT_VERSION
-      && r.reverify.semanticModel === SEMANTIC_AUDIT_MODEL
-      && r.reverify.semanticPromptVersion === SEMANTIC_AUDIT_PROMPT_VERSION
-      && r.reverify.inputDigest === binding.digest && r.reverify.artifactId === binding.artifactId
-      && HEX64.test(r.qualityContract.digest)
-      && (r.qualityContract.version !== contract.version || r.qualityContract.digest !== contract.digest))
-  if (reusable !== undefined) {
-    const record: DefectResolutionRecord = {
-      recordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
-      qualityContract: contract,
-      audit: { queueId: base.base.audit.queueId, postId: base.base.audit.postId, fingerprint: auditFingerprint },
-      draft: { titleHash, bodyHash },
-      reverify: {
-        gateVersion: 'semantic-only', outcome: 'semanticCleared', failureCodes: [], reviewCodes: [],
-        inputDigest: binding.digest, artifactId: binding.artifactId,
-        semanticContractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, semanticModel: SEMANTIC_AUDIT_MODEL,
-        semanticPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
-      },
-      resolvedAt: i.now.toISOString(), resolvedBy: DEFECT_RESOLVER,
-    }
-    return {
-      kind: 'plan',
-      plan: {
-        queueId: base.base.audit.queueId, postId: base.base.audit.postId,
-        auditFingerprint, queueUpdatedAt: base.base.queueUpdatedAt.toISOString(), record,
-      },
-    }
-  }
-  const semantic = await judgeSemantic(context, i.provider)
-  if (semantic.outcome !== 'measured' || semantic.defect !== 'no' || semantic.binding === null) {
-    return {
-      kind: 'refuse', code: semantic.outcome === 'retryable' ? (semantic.code ?? 'SEMANTIC_RETRYABLE') : 'SEMANTIC_NOT_CLEAR',
-      reason: semantic.reasons.join(' · ') || `의미 재감사 결과 ${semantic.outcome}/${semantic.defect}`,
-    }
-  }
-  if (semantic.binding.postId !== base.base.audit.postId
-    || semantic.binding.titleHash !== base.base.audit.publishedTitleHash
-    || semantic.binding.bodyHash !== base.base.audit.publishedBodyHash) {
-    return { kind: 'refuse', code: 'SEMANTIC_BINDING_MISMATCH', reason: '의미 재감사 결속이 감사 대상 글과 다르다' }
+  if (binding.postId !== base.base.audit.postId
+    || binding.titleHash !== base.base.audit.publishedTitleHash
+    || binding.bodyHash !== base.base.audit.publishedBodyHash) {
+    return { kind: 'refuse', code: 'SEMANTIC_BINDING_MISMATCH', reason: '의미 해소 결속이 감사 대상 글과 다르다' }
   }
   const record: DefectResolutionRecord = {
     recordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
@@ -315,7 +266,7 @@ export async function planSemanticDefectResolution(prisma: PrismaClient, i: {
     draft: { titleHash: digestOf(base.base.queue.draftTitle), bodyHash: digestOf(base.base.queue.draftBody) },
     reverify: {
       gateVersion: 'semantic-only', outcome: 'semanticCleared', failureCodes: [], reviewCodes: [],
-      inputDigest: semantic.binding.digest, artifactId: semantic.binding.artifactId,
+      inputDigest: binding.digest, artifactId: binding.artifactId,
       semanticContractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, semanticModel: SEMANTIC_AUDIT_MODEL,
       semanticPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
     },
@@ -331,19 +282,19 @@ export async function planSemanticDefectResolution(prisma: PrismaClient, i: {
 }
 
 /**
- * 승인된 의미 재감사 계획을 append-only로 기록한다. provider 판정은 계획 단계가 담당하고,
- * 여기서는 쓰기 직전에 같은 결속을 정본 파일과 DB에서 다시 계산해 계획과 대조한다.
+ * 승인된 의미 결속 계획을 append-only로 기록한다. 쓰기 직전에 같은 결속을 정본 파일과
+ * DB에서 다시 계산해 계획과 대조한다.
  */
 export async function applySemanticDefectResolution(prisma: PrismaClient, i: {
   plan: ResolutionPlan; loadContext: SemanticResolutionContextLoader; now: Date
 }): Promise<ApplyOutcome> {
   const rv = i.plan.record.reverify
-  if (rv.outcome !== 'semanticCleared') return { kind: 'refuse', written: 0, code: 'WRONG_METHOD', reason: '의미 재감사 해소 계획이 아니다' }
+  if (rv.outcome !== 'semanticCleared') return { kind: 'refuse', written: 0, code: 'WRONG_METHOD', reason: '의미 결속 해소 계획이 아니다' }
   const currentContext = await i.loadContext({ queueId: i.plan.queueId, postId: i.plan.postId })
   if (!currentContext.ok) return { kind: 'refuse', written: 0, code: currentContext.code, reason: currentContext.reason }
   const binding = semanticBindingOf(currentContext.ctx)
   if (binding.digest !== rv.inputDigest || binding.artifactId !== rv.artifactId) {
-    return { kind: 'changed', written: 0, reason: '계획 뒤 의미 재감사 결속이 바뀌었다' }
+    return { kind: 'changed', written: 0, reason: '계획 뒤 의미 해소 결속이 바뀌었다' }
   }
   try {
     return await prisma.$transaction(async (tx): Promise<ApplyOutcome> => {
