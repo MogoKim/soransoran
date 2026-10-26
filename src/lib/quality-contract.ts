@@ -190,6 +190,13 @@ import {
  * 비모순 일반화·완화 허용과 반대 경계를 함께 명시하고, 발행 전 검수(`v2-review-p11`)와 발행 뒤 감사
  * (`semantic-audit-prompt-v7`)가 같은 줄을 그대로 읽는다. 더 구체적인 사실 추가·반대 상태·핵심 결과 변경은 계속 막는다.
  *
+ * `quality-v24` (2026-10-26) = **Content Core를 의미 품질의 단일 결정 권위로 둔다.**
+ * 발행된 바이트·도장·artifact 원문·Persona 결속이 유효하면 사후 의미 모델의 발견·실패는 참고 note로만 남고
+ * 자동 READY를 다시 닫지 않는다. 결속 실패와 기존 규칙 감사의 개인정보·복제·자료 의존·생활사 하드게이트는
+ * 계속 확정 결함이며, 같은 모델·같은 요청의 확인 호출은 제거해 요청을 최대 1회로 줄인다.
+ * 옛 의미 감사 `measured yes`도 사후 모델을 다시 부르지 않고, 정확한 글·도장·artifact·Persona 결속과
+ * 당시 Content Core 승인을 묶은 append-only 계획으로만 해소한다. 결속은 적용 직전 다시 대조한다.
+ *
  * `quality-v20` (2026-10-23~24) = **미배포 Draft v19의 bounded creativity·차단 finding과 발행 뒤 감사를 하나의 실질 변경 계약으로 묶는다.**
  * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
  * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
@@ -202,7 +209,7 @@ import {
  * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
  * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v23'
+export const QUALITY_CONTRACT_VERSION = 'quality-v24'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

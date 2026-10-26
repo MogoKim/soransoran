@@ -461,7 +461,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v23 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v23')
+    check(`품질 계약 판 = quality-v24 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v24')
     check(`초안 게이트 판 = draft-gates-v11 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v11')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
@@ -724,12 +724,12 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
       rs.filter((r) => r.got !== r.want).map((r) => `${r.plan}:${r.got}(${r.codes.join('+')})`).join(' '))
   }
 
-  // ── 🔴 결함 해소 경로 — v12 로 만든 행은 v13 에서 legacy 가 되고, 재검증이 확정 차단하면 해소 기록이 지금 계약에 맞는다 ──
+  // ── 🔴 결함 해소 경로 — v12 행은 현재 계약에서 legacy 가 되고, 재검증이 확정 차단하면 해소 기록이 지금 계약에 맞는다 ──
   const exact = FAMILY_CASES.find((c) => c.id === 'p16-exact')!
   const V12_MARK = { version: 'quality-v12', digest: '8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3' }
-  const C14 = currentQualityContract()
-  check('🔴 v12 표식 행은 지금(v14) 품질 계약 행이 아니다 → legacy(결함 해소 대상이 될 수 있다)',
-    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && C14.version === 'quality-v23' && C14.digest !== V12_MARK.digest)
+  const current = currentQualityContract()
+  check('🔴 v12 표식 행은 현재 품질 계약 행이 아니다 → legacy(결함 해소 대상이 될 수 있다)',
+    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && current.version === 'quality-v24' && current.digest !== V12_MARK.digest)
   const aud = {
     queueId: 'cmvfr8glb0001xm4r2n7abt2z', postId: 'cmvfvauqy0001xmui1bz7u95n', selectedAtN: 1, selectedTarget: 1,
     selectedAt: new Date('2026-10-20T00:30:00.000Z'), publishedTitleHash: digestOf(exact.title), publishedBodyHash: digestOf(exact.body),
@@ -748,7 +748,7 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
     gateResults: { [QUALITY_CONTRACT_KEY]: V12_MARK }, editDiff: { [DEFECT_RESOLUTION_KEY]: entries },
   })
   const record = {
-    recordVersion: DEFECT_RESOLUTION_RECORD_VERSION, qualityContract: C14,
+    recordVersion: DEFECT_RESOLUTION_RECORD_VERSION, qualityContract: current,
     audit: { queueId: aud.queueId, postId: aud.postId, fingerprint: auditFingerprintOf(aud) },
     draft: { titleHash: digestOf(exact.title), bodyHash: digestOf(exact.body) },
     reverify: { gateVersion: DRAFT_GATE_VERSION, outcome: 'blocked' as const, failureCodes: reverify.failures.map((f) => f.code as string), reviewCodes: [], inputDigest: 'c'.repeat(64), artifactId: 'cbc406c2f0444364bf8aa139a3853366' },
@@ -756,11 +756,11 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
   }
   check('🔴 🔴 **공식 결함 모양(v12 표식 행) — 해소 전제를 만족한다(resolvableDefectProblem=null)**', resolvableDefectProblem(aud, q([])) === null,
     String(resolvableDefectProblem(aud, q([]))))
-  check('🔴 🔴 **지금 게이트 재검증 결과로 쓴 해소 기록 → 지금 계약에서 해소(judgeDefectResolution)**', judgeDefectResolution(aud, q([record]), C14).resolved,
-    judgeDefectResolution(aud, q([record]), C14).reason)
+  check('🔴 🔴 **지금 게이트 재검증 결과로 쓴 해소 기록 → 지금 계약에서 해소(judgeDefectResolution)**', judgeDefectResolution(aud, q([record]), current).resolved,
+    judgeDefectResolution(aud, q([record]), current).reason)
   check('🔴 기록 없이는 해소되지 않는다(수동 PASS 로 만들 수 없다) · 옛 v12 계약 기록도 해소하지 못한다',
-    !judgeDefectResolution(aud, q([]), C14).resolved
-    && !judgeDefectResolution(aud, q([{ ...record, qualityContract: V12_MARK }]), C14).resolved)
+    !judgeDefectResolution(aud, q([]), current).resolved
+    && !judgeDefectResolution(aud, q([{ ...record, qualityContract: V12_MARK }]), current).resolved)
 
   // ── 🔴 변이 — 숫자 나이 해석을 빼거나 물음표 우회를 되살리면 이 회귀가 실패로 드러나는가(사본에서 실제로 돌린다) ──
   const { spawnSync } = await import('node:child_process')

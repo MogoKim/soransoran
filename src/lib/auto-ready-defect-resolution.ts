@@ -36,13 +36,13 @@ import { isCurrentQualityContract, type QualityContractMark } from './quality-co
 export const DEFECT_RESOLUTION_KEY = 'autoReadyDefectResolutions'
 /** 🔴 기록 판 — 품질 계약 digest 구성에 들어간다(판정 규칙이 바뀌면 digest 가 바뀌어 옛 기록이 무효가 된다) */
 export const DEFECT_RESOLUTION_RECORD_VERSION = 'defect-resolution-v1'
-/** 의미 감사의 측정된 no로만 쓰는 별도 기록 판 — 기존 초안 게이트 해소 기록과 섞지 않는다. */
-export const SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION = 'defect-resolution-semantic-v1'
+/** Content Core 권위와 exact 결속으로만 쓰는 별도 기록 판 — 옛 의미 재감사 기록과 섞지 않는다. */
+export const SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION = 'defect-resolution-semantic-v2'
 /**
- * 같은 의미 감사 계약·모델·프롬프트와 같은 글·원문·Persona·도장 결속에서 이미 측정한 no만
- * 다음 품질 계약의 append-only 기록으로 승계한다. 품질 계약 digest 구성에 들어간다.
+ * 의미 해소 기록의 승계 규칙 판. v2는 옛 provider 판정을 승계하지 않고
+ * 현재 Content Core 권위와 exact 결속으로 새 계획을 만든다. 품질 계약 digest 구성에 들어간다.
  */
-export const SEMANTIC_DEFECT_SUCCESSION_VERSION = 'semantic-clear-carry-v1'
+export const SEMANTIC_DEFECT_SUCCESSION_VERSION = 'semantic-exact-binding-v2'
 /** 🔴 기록한 쪽 — 사람이 아니다. 재검증을 돌린 저장 경계다 */
 export const DEFECT_RESOLVER = 'system:defect-resolution'
 
@@ -206,7 +206,7 @@ export function recordProblem(
     if (!r.reverify.failureCodes.every((c) => GATE_CODES.has(c))) return '재검증 차단 코드가 지금 게이트 코드가 아니다'
     if (!HEX64.test(r.reverify.inputDigest)) return '재검증 입력 지문 모양이 깨졌다'
   } else {
-    if (r.reverify.failureCodes.length !== 0 || r.reverify.reviewCodes.length !== 0) return '의미 재감사 no 기록에 차단·검토 코드가 있다'
+    if (r.reverify.failureCodes.length !== 0 || r.reverify.reviewCodes.length !== 0) return '의미 exact 결속 해소 기록에 차단·검토 코드가 있다'
     if (r.reverify.semanticContractVersion !== SEMANTIC_AUDIT_CONTRACT_VERSION) return `의미 재감사 계약 판 ${r.reverify.semanticContractVersion ?? '(없음)'} ≠ 지금 ${SEMANTIC_AUDIT_CONTRACT_VERSION}`
     if (r.reverify.semanticModel !== SEMANTIC_AUDIT_MODEL) return `의미 재감사 모델 ${r.reverify.semanticModel ?? '(없음)'} ≠ 지금 ${SEMANTIC_AUDIT_MODEL}`
     if (r.reverify.semanticPromptVersion !== SEMANTIC_AUDIT_PROMPT_VERSION) return `의미 재감사 프롬프트 판 ${r.reverify.semanticPromptVersion ?? '(없음)'} ≠ 지금 ${SEMANTIC_AUDIT_PROMPT_VERSION}`

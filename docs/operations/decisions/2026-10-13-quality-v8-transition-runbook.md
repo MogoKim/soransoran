@@ -2,6 +2,9 @@
 
 > 작성 2026-10-13 · PR #710(중복·잘림 입력과 허위 전달 문구 보정) 보정분 · 마스터 재검토 반영 · 대상: 보조 Mac D100 runtime 배포를 실행하는 사람
 > 개정 2026-10-13 · #710 뒤 P0 hotfix(contract-transition-v4) — source 상태는 runtime 트리의 snapshot 으로만 받는다
+> 현재 보정 2026-10-26 · quality-v24 — Content Core가 의미 품질의 단일 권위다. 아래 v8 역사의
+> `--semantic-clear` 순서·승인 토큰·append-only·exact 결속 재확인은 유지하되, 현재 런너는 해소 계획에서
+> 사후 의미 provider를 부르지 않는다. 이 머리말이 아래 v8 당시의 재감사 설명보다 우선한다.
 
 ## 왜 따로 확인하나
 
