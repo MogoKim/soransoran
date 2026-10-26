@@ -1,7 +1,7 @@
 /**
  * 🔴 **의미 감사 제공사** (2026-09-27 · 2026-09-28 감사 전용 예산) — 인터페이스(`SemanticAuditProvider`) 뒤의 구현 둘
  *
- *   · `offSemanticProvider` — **기본값.** 부르지 않는다. 결과는 재시도 가능 실패(`PAID_OFF`)다 — 결함이 아니다.
+ *   · `offSemanticProvider` — **기본값.** 부르지 않고 `PAID_OFF` 관측값을 돌려준다.
  *   · `paidSemanticProvider` — 장부(`SupplyLlmSession`)를 **반드시** 지난다.
  *     사전 계산 → 예약 → 오늘 여력 대조 → 요청 → 정산. 판정 규칙은 공급 장부와 같다(`llm-ledger`).
  *
@@ -10,7 +10,7 @@
  *      · 공급 지출이 감사 여력을 줄이지 않는다
  *      · 감사 지출이 공급 여력을 줄이지 않는다
  *    예산 env 는 `AUDIT_BUDGET_ENV` 셋이다(공급의 `SORAN_LLM_*` 를 읽지 않는다). 하나라도 비면
- *    **요청을 만들지도 않는다**(사전 계산도 0) → 재시도 가능 실패 `AUDIT_BUDGET_UNSET`.
+ *    **요청을 만들지도 않는다**(사전 계산도 0) → 참고 관측 `AUDIT_BUDGET_UNSET`.
  *
  * 🔴 유료는 `SORAN_AUTO_READY_SEMANTIC_PAID=on` 일 때만. 그 값도 예산 env 도 어디에도 설정돼 있지 않다.
  * 🔴 CI 는 유료 경로를 **실제로 지난다** — `fetch` 를 가로채는 가짜 제공사(fake-provider-hook)로.
@@ -89,7 +89,7 @@ export type ProviderChoice = { provider: SemanticAuditProvider; session: SupplyL
 /** 🔴 **env 로 고른다 — 기본 OFF.** 켜져 있어도 감사 예산 env 가 비면 요청하지 않는 제공사다 */
 export function semanticProviderFromEnv(env: NodeJS.ProcessEnv, runId: string, home: string = homedir()): ProviderChoice {
   if (!semanticPaidEnabled(env)) {
-    return { provider: offSemanticProvider, session: null, describe: `의미 감사 유료 호출 OFF (${SEMANTIC_PAID_ENV}) — 재시도 가능 실패로 남고 자동 회차는 닫힌다` }
+    return { provider: offSemanticProvider, session: null, describe: `의미 감사 유료 호출 OFF (${SEMANTIC_PAID_ENV}) — 결속 확인 뒤 참고 기록만 남긴다` }
   }
   const limits = auditLimitsFromEnv(env)
   const missing = missingAuditBudgetEnv(limits)

@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * 🔴 **2026-10-24 D10 근본 보정 — 변이 시험** (의미 감사 확인 호출 · 실질 변경 계약 · 400 요청 모양 거부 · 글쓴이 답글 · 첫 댓글 기능 소비)
+ * 🔴 **2026-10-24~26 D10 근본 보정 — 변이 시험** (Content Core 단일 권위 · 실질 변경 계약 · 400 요청 모양 거부 · 글쓴이 답글 · 첫 댓글 기능 소비)
  *
  *   npx tsx scripts/d10-root-alignment-mutation.mts
  *
@@ -36,16 +36,22 @@ const EV_CHECK = 'scripts/stage-evidence-check.mts'
 type Mutation = { name: string; file: string; from: string; to: string; check: string }
 const M = (name: string, file: string, check: string, from: string, to: string): Mutation => ({ name, file, from, to, check })
 const MUTATIONS: Mutation[] = [
-  // ── A · 의미 감사 확인 호출 ──
-  M('1차 yes 를 바로 확정(확인 호출 제거)', SEM, AUDIT_CHECK,
-    '  const second = await measureOnce(provider, req)\n', '  const second: MeasureOnce = first\n'),
-  M('확인 측정 실패를 no 로 읽음', SEM, AUDIT_CHECK,
-    "if (!second.ok) return retryable(second.code, second.reason, binding, 'failed')",
-    "if (!second.ok) return { outcome: 'measured', defect: 'no', confirmation: 'unconfirmed', code: null, reasons: [], binding, ...VERSIONS }"),
-  M('확인 호출에 새 요청 객체(얼린 요청 아님)', SEM, AUDIT_CHECK,
-    'const second = await measureOnce(provider, req)', 'const second = await measureOnce(provider, { ...req })'),
-  M('확인 no 를 yes 로 확정', SEM, AUDIT_CHECK,
-    "    outcome: 'measured', defect: 'no', confirmation: 'unconfirmed'", "    outcome: 'measured', defect: 'yes', confirmation: 'unconfirmed'"),
+  // ── A · Content Core 단일 의미 품질 권위 ──
+  M('사후 모델 finding이 다시 차단', SEM, AUDIT_CHECK,
+    "  return advisoryNo(binding, first.defect === 'yes' ? 'MODEL_FINDING' : null, first.reasons)",
+    "  return { outcome: 'measured', defect: first.defect, confirmation: 'none', code: null, reasons: first.reasons, binding, ...VERSIONS }"),
+  M('결속 뒤 제공사 실패가 다시 전역을 차단', SEM, AUDIT_CHECK,
+    '  if (!first.ok) return advisoryNo(binding, first.code, [`관측 실패 ${first.code} — ${first.reason}`])',
+    '  if (!first.ok) return retryable(first.code, first.reason, binding)'),
+  M('계약과 다른 모델이 다시 전역을 차단', SEM, AUDIT_CHECK,
+    "    return advisoryNo(binding, 'MODEL_MISMATCH', [`제공사 모델 ${provider.model} ≠ 계약 ${SEMANTIC_AUDIT_MODEL}`])",
+    "    return retryable('MODEL_MISMATCH', `제공사 모델 ${provider.model}`, binding)"),
+  M('결속 무결성 결함을 재시도로 완화', SEM, AUDIT_CHECK,
+    '    return ctxRes.integrity ? integrity(ctxRes.code, ctxRes.reason) : retryable(ctxRes.code, ctxRes.reason, null)',
+    '    return retryable(ctxRes.code, ctxRes.reason, null)'),
+  M('모델 finding 뒤 중복 확인 호출 부활', SEM, AUDIT_CHECK,
+    "  return advisoryNo(binding, first.defect === 'yes' ? 'MODEL_FINDING' : null, first.reasons)",
+    "  if (first.defect === 'yes') await measureOnce(provider, req)\n  return advisoryNo(binding, first.defect === 'yes' ? 'MODEL_FINDING' : null, first.reasons)"),
   M('의미 감사 지시문이 공유 실질 변경 계약을 싣지 않음', SEM, AUDIT_CHECK,
     "  ...MATERIAL_CONTRACT_LINES,\n  '주체·행동·원인·결과를", "  '주체·행동·원인·결과를"),
   M('시간 바꿔쓰기 줄 제거(공유 계약)', MAT, AUDIT_CHECK,

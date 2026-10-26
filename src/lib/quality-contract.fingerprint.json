@@ -1,8 +1,8 @@
 {
-  "version": "quality-v23",
-  "digest": "26d0f64c5e8d9eefffc33134b39fdc8c6a3e9b5807051d7bad1c923de92ae6b5",
+  "version": "quality-v24",
+  "digest": "64dccbc0e172bac2786d5f29b10ca04887e781b6dd62f287101c4c88a3b8f6bc",
   "files": {
-    "src/lib/quality-contract.ts": "2f098b3b3aabe16c7452daaf64d49c5fcff464e4fce68fd240f9a98d06223b28",
+    "src/lib/quality-contract.ts": "5e7882afde237347d9e92737192ee1c7e1e291d3be07354360f9a11fc34b7a57",
     "src/lib/semantic-summary-codes.ts": "8e0587d064ee27f839bfd95f09df99da8f90ac95a1c2529e665402b08a0d0907",
     "src/lib/content-core/draft-life-gates.ts": "c1b89b9aee8ef184005ab0125769414d53f449f002c8c5c2d8a6e1e5aed74ce0",
     "src/lib/content-core/review.ts": "18c2867d12de4cbb7fdd7940a28e182e7ee1044d368c346fa4fa56a8739ea396",
@@ -28,7 +28,7 @@
     "src/lib/persona-no-go.ts": "043c734ff551c93a5e5cfe18ebaf56c0b5087232efb0ecc75581ffdaf6bf4318",
     "src/lib/auto-ready-defect-resolution.ts": "3e5b197a92dfce038a332610d8071833f57aae09db7609e6b0f23d201b763fe2",
     "src/lib/auto-ready-defect-resolution-store.ts": "e4afb00a5c753af3079e6094a145c3afceb943e1a8158a5e8a68b57984afe7a7",
-    "src/lib/auto-ready-semantic-audit.ts": "d99a4f2d92fbfd3fd1469533954e274cdecf83fa7789924eb3edb08ca949698e",
+    "src/lib/auto-ready-semantic-audit.ts": "b10e44a0f6d9f512f174b843d1b181fc8c7898f87270fc02af0db89b5a3fec98",
     "scripts/lib/auto-ready-rule-judge.mts": "d9348652c0ab2d5ab6c98a358fd99408c3a34483895ab3b58fe72deb2a48b293",
     "src/lib/content-core/material-contract.ts": "0e17d2d4e46b14dafa948745406c986c3526a6181998cdba528219b022c40e48",
     "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
@@ -36,9 +36,9 @@
   },
   "acknowledgement": {
     "kind": "behaviorUnchanged",
-    "reason": "quality-v23 동작 확정 뒤 판 이름 주석과 검사 설명만 정정",
+    "reason": "quality-v24 행동 불변 주석 정렬",
     "changedFiles": [
-      "src/lib/content-core/pipeline.ts",
+      "src/lib/quality-contract.ts",
       "src/lib/auto-ready-semantic-audit.ts"
     ]
   }
