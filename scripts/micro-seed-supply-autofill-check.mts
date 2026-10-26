@@ -32,6 +32,7 @@ import { currentQualityContract, qualityContractDigest, QUALITY_CONTRACT_VERSION
 import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as CURRENT_AUTO_JUDGE_PROMPT_VERSION } from '../src/lib/micro-seed-auto-judge'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
+import { DRAFT_LIFE_ADVISORIES_KEY, DRAFT_LIFE_REVIEW_UNREAD } from '../src/lib/semantic-summary-codes'
 
 const NOW = '2026-09-07T12:00:00.000Z'
 const QUALITY = currentQualityContract()
@@ -759,11 +760,19 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
   const nlg = (nlPl?.gateResults ?? {}) as Record<string, unknown>
   check('🔴 🔴 **④-b lifeReview 칸이 없으면 `DRAFT_LIFE_REVIEW:unread` 경고 (통과 아님)**',
     Array.isArray(nlg.holds) && (nlg.holds as string[]).includes('DRAFT_LIFE_REVIEW:unread'))
-  const amPl = buildQueuePayload({ envelope: eEnv, candidate: { ...eC, lifeReview: ['maritalStatusConflict'] }, autoJudge: eAj, review: cleanRev, now: NOW })
+  const amPl = buildQueuePayload({ envelope: eEnv, candidate: { ...eC, lifeReview: ['unsupportedHealthClaim'] }, autoJudge: eAj, review: cleanRev, now: NOW })
   const amg = (amPl?.gateResults ?? {}) as Record<string, unknown>
-  check('🔴 🔴 **④-c 모호 축이 실린 후보는 `DRAFT_LIFE_REVIEW:<코드>` 경고 · blocks 는 비어 있다**',
-    Array.isArray(amg.holds) && (amg.holds as string[]).includes('DRAFT_LIFE_REVIEW:maritalStatusConflict')
-    && Array.isArray(amg.blocks) && (amg.blocks as unknown[]).length === 0)
+  check('🟢 🟢 **④-c Content Core advisory는 기록되지만 holds·blocks 0 · 자동 READY 적격**',
+    Array.isArray(amg.holds) && (amg.holds as unknown[]).length === 0
+    && Array.isArray(amg.blocks) && (amg.blocks as unknown[]).length === 0
+    && Array.isArray(amg[DRAFT_LIFE_ADVISORIES_KEY])
+    && JSON.stringify(amg[DRAFT_LIFE_ADVISORIES_KEY]) === JSON.stringify(['unsupportedHealthClaim'])
+    && autoReadyPriority({ candidate: { ...eC, lifeReview: ['unsupportedHealthClaim'] }, payload: amPl }).priority)
+  const leakedBlock = buildQueuePayload({ envelope: eEnv, candidate: { ...eC, lifeReview: ['truncatedSourceCompletion'] }, autoJudge: eAj, review: cleanRev, now: NOW })
+  const leakedGate = (leakedBlock?.gateResults ?? {}) as Record<string, unknown>
+  check('🔴 차단 분류가 lifeReview로 새면 unread fail-closed',
+    Array.isArray(leakedGate.holds) && JSON.stringify(leakedGate.holds) === JSON.stringify([DRAFT_LIFE_REVIEW_UNREAD])
+    && !autoReadyPriority({ candidate: { ...eC, lifeReview: ['truncatedSourceCompletion'] }, payload: leakedBlock }).priority)
 
   // ⑤ 판정 기록이 없으면 경고다 — 재지 못한 것을 "이상 없음" 으로 읽지 않는다
   const nonePl = buildQueuePayload({ envelope: eEnv, candidate: eC, autoJudge: eAj, now: NOW })
@@ -774,8 +783,8 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     Array.isArray(ng.blocks) && (ng.blocks as unknown[]).length === 0)
 
   // ⑥ 운영 2026-10-20 22:15 반례 — 부적격 둘 뒤의 깨끗한 후보가 --up-to=1 자리를 가져야 한다.
-  const blockedA = { ...eC, sourceArticleId: 'blocked-a', title: '백내장 진단 이야기', lifeReview: ['truncatedSourceCompletion'] }
-  const blockedB = { ...eC, sourceArticleId: 'blocked-b', title: '시어머니 안마의자 이야기', lifeReview: ['truncatedSourceCompletion'] }
+  const blockedA = { ...eC, sourceArticleId: 'blocked-a', title: '백내장 진단 이야기', lifeReview: null }
+  const blockedB = { ...eC, sourceArticleId: 'blocked-b', title: '시어머니 안마의자 이야기', lifeReview: null }
   const clean = { ...eC, sourceArticleId: 'clean-c', title: '연애박사 OST 이야기', lifeReview: [] }
   const candidates = [blockedA, blockedB, clean]
   const priority = candidates.filter((candidate) => autoReadyPriority({
@@ -796,7 +805,7 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
   })
   check('🔴 자동 READY 정본의 실제 차단 사유를 보존한다',
     !blockedVerdict.priority
-    && blockedVerdict.verdict?.reasons.some((r) => r.includes('DRAFT_LIFE_REVIEW:truncatedSourceCompletion')) === true)
+    && blockedVerdict.verdict?.reasons.some((r) => r.includes(DRAFT_LIFE_REVIEW_UNREAD)) === true)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

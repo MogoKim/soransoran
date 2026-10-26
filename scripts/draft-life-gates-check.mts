@@ -313,7 +313,10 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   const { candidateEnvelope, CANDIDATE_REQUIRED_KEYS } = await import('./lib/candidate-envelope.mjs')
   const { buildQueuePayload } = await import('../src/lib/micro-seed-supply-autofill')
   const { warningsOfGate } = await import('../src/lib/auto-ready-v2')
-  const { lifeReviewHoldsOf, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } = await import('../src/lib/semantic-summary-codes')
+  const {
+    lifeReviewAdvisoriesOf, lifeReviewHoldsOf, DRAFT_LIFE_ADVISORIES_KEY, DRAFT_LIFE_ADVISORY_CODES,
+    DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD,
+  } = await import('../src/lib/semantic-summary-codes')
   const { qualityContractComponents, QUALITY_CONTRACT_VERSION } = await import('../src/lib/quality-contract')
   const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
   const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
@@ -321,7 +324,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   const { copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION } = await import('../src/lib/draft-originality')
   const LIFE = DRAFT_LIFE_REVIEW_CODES as readonly string[]
 
-  console.log('\n⑨-a quality-v2 게이트 정본 — 운영 회귀 4 · 대조 8 · 구조화 HOLD 2')
+  console.log('\n⑨-a 생활 게이트 정본 — 차단은 Content Core failure · 가족 건강 주체 모호만 advisory')
   for (const fx of LIFE_FIXTURES) {
     const p = fx.plan as { selfBasis?: string | null; speakerWarrants?: { fact: string; evidenceText: string }[] }
     const r = judgeDraftLife({
@@ -334,7 +337,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
       sameSet(hard, fx.expect) && sameSet(rev, fx.expectReview), `확정 ${hard.join(',')} · 검토 ${rev.join(',')}`)
   }
 
-  console.log('\n⑨-b 새 생성 경로 — runContentCore → pickV2 (확정은 유료 검수 전 AUTO_HOLD · 모호는 채택 + lifeReview)')
+  console.log('\n⑨-b 새 생성 경로 — runContentCore → pickV2 (차단은 AUTO_HOLD · 비차단 관찰만 lifeReview)')
   const fresh = new Map<string, Awaited<ReturnType<typeof runFixturePath>>>()
   for (const fx of LIFE_FIXTURES) {
     const r = await runFixturePath(fx)
@@ -395,15 +398,82 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     check('🔴 같은 글 · 계획 근거 없음(noLifeFactNeeded) → unsupportedHealthClaim',
       without.failures.some((f) => f.code === 'unsupportedHealthClaim'))
   }
-  // 🔴 카드 집안 구성이 없으면 모르는 것이다 — 통과시키지 않고 구조화 HOLD
+  // 🔴 2026-10-26 운영 오탐 반례 — 제목의 남편·아이 건강 주체를 본문 생략 주어가 이어 받는다.
+  {
+    const husband = judgeDraftLife({
+      title: '남편 정관수술 날 시부모님 오신다는데 어쩌죠',
+      body: `남편이 계속 미루기만 하던 정관수술을 드디어 이번 주말로 날을 잡았어요.
+
+그런데 예약해 두고 났더니 시부모님께서 아이 보러 집에 들르시겠다고 하셔서 참 난감하네요.
+그 다음 주말에는 여행 일정이 미리 잡혀 있어서 그때 오시라고 미룰 수도 없는 상황이고요.
+
+수술하고 나면 많이 아파서 시부모님 뵙기 힘들 거라고 말리고 싶기는 한데, 괜히 그랬다가 남편이 수술 자체를 또 영영 안 하겠다고 미뤄버릴까 봐 말도 조심스럽더라고요.
+
+정관수술하고 나서 시부모님이랑 가볍게 나들이 정도는 다닐 수 있는 몸 컨디션이 될까요? 남편들 보통 수술 직후에 상태가 어떤지 궁금해요.`,
+      card: realCard('P02'), context: NEUTRAL, plan: {
+        selfBasis: 'lifeFacts', warrants: [{ fact: 'spouse', evidenceText: '남편' }],
+        protectedFacts: [{ text: '정관수술' }],
+      },
+    })
+    const child = judgeDraftLife({
+      title: '중학생 아이 갑상선결절 이야기 들어보신 분 계실까요',
+      body: `중학교 1학년 아이가 임파선염 증상이 있어서 이비인후과를 찾았습니다.
+
+눈으로 직접 확인을 해야 마음이 놓일 것 같아서 목 쪽으로 초음파 검사를 받아보았는데, 생각지도 못하게 갑상선결절 이야기가 나오네요.
+
+크기는 0.4미리 정도 되는 게 하나 보인다고 하시더라고요.
+선생님께서는 모양도 얌전하고 착한 혹 같으니 너무 염려하지 말고 그냥 있다는 것만 알고 넘어가라고 하셨습니다.
+나중에 시간 지나서 한번 확인만 해보라며 신경 쓰지 말라고 다독여주시는데도 부모 마음은 그렇지가 않네요.
+
+아직 어린 중학생인데 벌써 갑상선에 결절이 생기기도 하는 건지 덜컥 겁부터 납니다.
+큰 병원에 가서 세침검사 같은 걸 따로 받아봐야 하는 건지, 아니면 선생님 말씀처럼 그냥 두고 보기만 해도 되는 건지 갈피를 못 잡겠어요.
+
+혹시 비슷한 일을 겪은 학생이 주변에 있었는지요.
+이럴 때는 다들 어떻게 대처하고 그냥 지켜보시는지 여쭙고 싶습니다.`,
+      card: realCard('P30'), context: NEUTRAL, plan: {
+        selfBasis: 'lifeFacts', warrants: [
+          { fact: 'children', evidenceText: '오늘 중1아이 임파선염으로 이비인후과갔다가' },
+          { fact: 'childAgeBand', evidenceText: '오늘 중1아이 임파선염으로 이비인후과갔다가' },
+        ],
+        protectedFacts: [{ text: '갑상선결절' }],
+      },
+    })
+    const author = judgeDraftLife({
+      title: '제 당뇨 진단 이야기', body: '지난달에 당뇨 진단을 받았어요.',
+      card: realCard('P19'), context: NEUTRAL, plan: { selfBasis: 'noLifeFactNeeded', warrants: [] },
+    })
+    check('🟢 운영 회귀 — 남편 수술 생략 주어를 작성자 질병으로 차단하지 않는다',
+      husband.failures.length === 0 && husband.reviews.length === 0, JSON.stringify(husband))
+    check('🟢 운영 회귀 — 자녀 검사 생략 주어를 작성자 질병으로 차단하지 않는다',
+      child.failures.length === 0 && child.reviews.length === 0, JSON.stringify(child))
+    check('🔴 작성자 본인의 근거 없는 당뇨 진단은 계속 Content Core failure',
+      author.failures.some((x) => x.code === 'unsupportedHealthClaim') && author.reviews.length === 0, JSON.stringify(author))
+    const explicitSelfUnderFamilyTitle = judgeDraftLife({
+      title: '아이 갑상선 검사 뒤 제 건강도 걱정돼요', body: '저는 지난달에 당뇨 진단을 받았어요.',
+      card: realCard('P19'), context: NEUTRAL, plan: { selfBasis: 'noLifeFactNeeded', warrants: [] },
+    })
+    check('🔴 가족 건강 제목 아래라도 명시적인 작성자 질병은 계속 Content Core failure',
+      explicitSelfUnderFamilyTitle.failures.some((x) => x.code === 'unsupportedHealthClaim')
+        && explicitSelfUnderFamilyTitle.reviews.length === 0, JSON.stringify(explicitSelfUnderFamilyTitle))
+    const ambiguousFamilyHealth = judgeDraftLife({
+      title: '남편 수술 후 회복이 궁금해요', body: '수술하고 나서 통증이 심해요.',
+      card: realCard('P02'), context: NEUTRAL,
+      plan: { selfBasis: 'lifeFacts', warrants: [{ fact: 'spouse', evidenceText: '남편' }], protectedFacts: [] },
+    })
+    check('🟢 원문 보호 사실이 없고 주체만 가족으로 보이는 건강 문장은 비차단 advisory',
+      ambiguousFamilyHealth.failures.length === 0
+        && sameSet(ambiguousFamilyHealth.reviews.map((x) => x.code), ['unsupportedHealthClaim']),
+      JSON.stringify(ambiguousFamilyHealth))
+  }
+  // 🔴 카드 집안 구성이 없으면 모르는 것이다 — 통과시키지 않고 Content Core HOLD
   {
     const { household: _h, ...noHousehold } = realCard('P05')
     const r = judgeDraftLife({ title: '시댁', body: '시어머니께 한동안 연락도 못 드렸어요.', plan: null, card: noHousehold, context: NEUTRAL })
-    check('🟡 카드 집안 구성 미상 + 상시 돌봄 + 연락 끊김 → 구조화 HOLD(통과 아님)',
-      r.failures.length === 0 && r.reviews.some((x) => x.code === 'careHouseholdConflict'), JSON.stringify(r))
+    check('🔴 카드 집안 구성 미상 + 상시 돌봄 + 연락 끊김 → Content Core HOLD',
+      r.failures.some((x) => x.code === 'careHouseholdConflict') && r.reviews.length === 0, JSON.stringify(r))
   }
 
-  console.log('\n⑨-e 배선 — 봉투 · 적재 경고 · 자동 READY 제외')
+  console.log('\n⑨-e 배선 — 봉투 · advisory 기록 · 자동 READY 재해석 0')
   {
     const code = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
@@ -433,39 +503,42 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
         review: { semantic: sr, deterministic: { pass: sr.deterministicPass === true }, semanticCompletion: { complete: sr.complete === true } },
         now: nowIso,
       })
-      const holds = ((pl?.gateResults as Record<string, unknown> | undefined)?.holds ?? []) as string[]
-      return { pl, holds, warnings: pl === null ? ['(payload 없음)'] : warningsOfGate(pl.gateResults) }
+      const gate = (pl?.gateResults as Record<string, unknown> | undefined) ?? {}
+      const holds = (gate.holds ?? []) as string[]
+      const advisories = (gate[DRAFT_LIFE_ADVISORIES_KEY] ?? []) as string[]
+      return { pl, holds, advisories, warnings: pl === null ? ['(payload 없음)'] : warningsOfGate(pl.gateResults) }
     }
-    const rv = fresh.get('review-v2-6-strained-card')!
-    const amb = make('review-v2-6-strained-card', rv.pick!.lifeReview ?? null)
-    check('🟡 🟡 **모호(P06 이혼 얘기) → 적재 holds 에 DRAFT_LIFE_REVIEW:maritalStatusConflict · 자동 READY 경고**',
-      amb.holds.includes(`${DRAFT_LIFE_REVIEW_HOLD}:maritalStatusConflict`) && amb.warnings.length > 0, JSON.stringify(amb.holds))
+    const amb = make('control-v2-6-divorced-card', ['unsupportedHealthClaim'])
+    check('🟢 🟢 **Content Core ADOPT advisory → holds 0 · draftLifeAdvisories 기록 · 자동 READY 경고 0**',
+      amb.holds.length === 0 && sameSet(amb.advisories, DRAFT_LIFE_ADVISORY_CODES) && amb.warnings.length === 0,
+      JSON.stringify({ holds: amb.holds, advisories: amb.advisories, warnings: amb.warnings }))
+    const legacyBlock = make('control-v2-6-divorced-card', ['maritalStatusConflict'])
+    check('🔴 차단 분류가 lifeReview로 새면 unread fail-closed — 뒷단이 대신 판정하지 않는다',
+      sameSet(legacyBlock.holds, [DRAFT_LIFE_REVIEW_UNREAD]) && legacyBlock.warnings.length > 0,
+      JSON.stringify(legacyBlock.holds))
     const ok = make('control-v2-6-divorced-card', fresh.get('control-v2-6-divorced-card')!.pick!.lifeReview ?? null)
     check('🟢 대조(P03 이혼 카드) → DRAFT_LIFE_REVIEW 경고 없음', !ok.holds.some((h) => h.startsWith(DRAFT_LIFE_REVIEW_HOLD)), JSON.stringify(ok.holds))
     const unread = make('control-v2-6-divorced-card', null)
     check('🔴 🔴 **lifeReview 가 없는 후보(판정 안 함) → DRAFT_LIFE_REVIEW:unread 경고 (통과 아님)**',
       unread.holds.includes(DRAFT_LIFE_REVIEW_UNREAD) && unread.warnings.length > 0, JSON.stringify(unread.holds))
     check('🔴 모양이 어긋난 lifeReview → unread', sameSet(lifeReviewHoldsOf([1, 'x']), [DRAFT_LIFE_REVIEW_UNREAD])
-      && sameSet(lifeReviewHoldsOf('maritalStatusConflict'), [DRAFT_LIFE_REVIEW_UNREAD]) && lifeReviewHoldsOf([]).length === 0)
-    // 🔴 (quality-v3) 원천·시점 경고도 같은 경고 이름으로 적재된다 — 모호한 시점(#9)은 자동 READY 에서 빠진다
-    {
-      const id9 = 'cmukma5l200012y4j1adoopkz'
-      const r9 = fresh.get(id9)!
-      const t = make(id9, r9.pick!.lifeReview ?? null)
-      check('🟡 🟡 **v3 · #9 원문 시각 모름 + 명절 계획 → 적재 holds 에 DRAFT_LIFE_REVIEW:staleTimeClaim · 자동 READY 경고**',
-        t.holds.includes(`${DRAFT_LIFE_REVIEW_HOLD}:staleTimeClaim`) && t.warnings.length > 0, JSON.stringify(t.holds))
-    }
-
+      && sameSet(lifeReviewHoldsOf('unsupportedHealthClaim'), [DRAFT_LIFE_REVIEW_UNREAD]) && lifeReviewHoldsOf([]).length === 0
+      && sameSet(lifeReviewAdvisoriesOf(['unsupportedHealthClaim']), ['unsupportedHealthClaim'])
+      && lifeReviewAdvisoriesOf(['maritalStatusConflict']).length === 0)
   }
 
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v24 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v24')
-    check(`초안 게이트 판 = draft-gates-v11 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v11')
-    check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
+    check(`품질 계약 판 = quality-v25 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v25')
+    check(`초안 게이트 판 = draft-gates-v12 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v12')
+    check('digest 구성에 생활 판정 코드 · advisory · 판정 누락 fail-closed가 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
-      && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })
+      && JSON.stringify(comp.draftLifeReview) === JSON.stringify({
+        advisoryKey: DRAFT_LIFE_ADVISORIES_KEY, advisoryCodes: DRAFT_LIFE_ADVISORY_CODES,
+        familyHealthTitleSubjectMarkers: ['아이', '자녀', '아기', '학생'],
+        invalidHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
+      })
       && LIFE.every((c) => (comp.draftGateCodes as readonly string[]).includes(c)))
   }
 
@@ -507,18 +580,17 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
       got === ph.want, got)
   }
 
-  console.log('\n⑩-b 원천을 모르면(source=null) 걸린 것은 구조화 HOLD — 통과가 아니다')
+  console.log('\n⑩-b 원천을 모르면(source=null) 걸린 것은 Content Core HOLD — 통과가 아니다')
   {
     const at = FIXTURE_NOW
     const r1 = judgeDraftLife({ title: '명절', body: '이제 집으로 가는 길이에요. 명절 잘 보내세요.', card: realCard('P01'), plan: null, context: { at, source: null } })
-    check('🟡 명절 하는 중 + 원천 모름 → review:staleTimeClaim', r1.failures.length === 0 && r1.reviews.some((x) => x.code === 'staleTimeClaim'), JSON.stringify(r1))
+    check('🔴 명절 하는 중 + 원천 모름 → hold:staleTimeClaim', r1.failures.some((x) => x.code === 'staleTimeClaim') && r1.reviews.length === 0, JSON.stringify(r1))
     const r2 = judgeDraftLife({ title: '닉네임', body: '자주 바꾸시는 분들이 꽤 보이네요.', card: realCard('P13'), plan: null, context: { at, source: null } })
-    check('🟡 움직임 관찰 + 원천 모름 → review:externalCommunityClaim', r2.failures.length === 0 && r2.reviews.some((x) => x.code === 'externalCommunityClaim'), JSON.stringify(r2))
+    check('🔴 움직임 관찰 + 원천 모름 → hold:externalCommunityClaim', r2.failures.some((x) => x.code === 'externalCommunityClaim') && r2.reviews.length === 0, JSON.stringify(r2))
     const r3 = judgeDraftLife({ title: '목도리', body: '다 떴는데 한번 봐주세요.', card: realCard('P10'), plan: null, context: { at, source: null } })
-    check('🟡 봐 달라 + 원천 모름 → review:mediaDependentDraft', r3.failures.length === 0 && r3.reviews.some((x) => x.code === 'mediaDependentDraft'), JSON.stringify(r3))
-    // 🔴 구조화 HOLD로 갈 수 있는 코드는 전부 적재 경고 목록에 있다 — 목록 밖 코드는 경고로 가지 못한다
-    const all = [r1, r2, r3].flatMap((r) => r.reviews.map((x) => x.code as string))
-    check('🔴 구조화 HOLD 코드는 전부 DRAFT_LIFE_REVIEW_CODES 안이다', all.every((c) => REVIEWABLE.includes(c)), all.join(','))
+    check('🔴 봐 달라 + 원천 모름 → hold:mediaDependentDraft', r3.failures.some((x) => x.code === 'mediaDependentDraft') && r3.reviews.length === 0, JSON.stringify(r3))
+    const all = [r1, r2, r3].flatMap((r) => r.failures.map((x) => x.code as string))
+    check('🔴 Content Core HOLD 코드는 전부 DRAFT_LIFE_REVIEW_CODES 안이다', all.every((c) => REVIEWABLE.includes(c)), all.join(','))
   }
 
   console.log('\n⑩-c 배선 — 새 생성 · 캐시 채택이 같은 원천·시각을 받는다 (러너 소스)')
@@ -729,7 +801,7 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
   const V12_MARK = { version: 'quality-v12', digest: '8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3' }
   const current = currentQualityContract()
   check('🔴 v12 표식 행은 현재 품질 계약 행이 아니다 → legacy(결함 해소 대상이 될 수 있다)',
-    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && current.version === 'quality-v24' && current.digest !== V12_MARK.digest)
+    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && current.version === 'quality-v25' && current.digest !== V12_MARK.digest)
   const aud = {
     queueId: 'cmvfr8glb0001xm4r2n7abt2z', postId: 'cmvfvauqy0001xmui1bz7u95n', selectedAtN: 1, selectedTarget: 1,
     selectedAt: new Date('2026-10-20T00:30:00.000Z'), publishedTitleHash: digestOf(exact.title), publishedBodyHash: digestOf(exact.body),
@@ -741,7 +813,7 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
     title: exact.title, body: exact.body, card: P16, plan: { selfBasis: 'lifeFacts', warrants: [{ fact: 'children', evidenceText: '아이 보험' }] },
     context: { at: FIXTURE_NOW, source: null },
   })
-  check('🔴 🔴 **지금 게이트(v11)가 결함 모양을 다시 돌려 확정 차단한다 — 재검증 failures ≥ 1**', reverify.failures.some((f) => f.code === 'childLifeStageConflict'),
+  check(`🔴 🔴 **지금 게이트(${DRAFT_GATE_VERSION})가 결함 모양을 다시 돌려 확정 차단한다 — 재검증 failures ≥ 1**`, reverify.failures.some((f) => f.code === 'childLifeStageConflict'),
     reverify.failures.map((f) => f.code).join(','))
   const q = (entries: unknown[]) => ({
     id: aud.queueId, createdPostId: aud.postId, draftTitle: exact.title, draftBody: exact.body,

@@ -91,6 +91,7 @@ export const JUDGE_DEFINITIONS: Readonly<Record<string, string>> = {
   semanticHoldsOf: 'src/lib/semantic-summary-codes.ts',
   // 🔴 (quality-v2) 생활 일관성 — 모호 경고 파서 · 게이트 정본
   lifeReviewHoldsOf: 'src/lib/semantic-summary-codes.ts',
+  lifeReviewAdvisoriesOf: 'src/lib/semantic-summary-codes.ts',
   judgeDraftLife: 'src/lib/content-core/draft-life-gates.ts',
   eligibilityOf: 'src/lib/auto-ready-v2.ts',
   isCurrentQualityContract: 'src/lib/quality-contract.ts',

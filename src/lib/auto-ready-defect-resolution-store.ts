@@ -110,7 +110,7 @@ async function evaluateInTx(tx: Tx, i: { queueId: string; contextOf: ContextLoad
   if (!c.ok) return { kind: 'refuse', code: c.code, reason: c.reason }
   const rowArtifactId = rec(rec(q!.gateResults).autoDraft).artifactId
   if (c.ctx.artifactId !== rowArtifactId) return { kind: 'refuse', code: 'ARTIFACT_MISMATCH', reason: '재검증 문맥의 artifact 가 큐 행의 것이 아니다' }
-  // 🔴 저장된 초안 그대로 — 지금 초안 게이트(확정 + 사람 검토)
+  // 🔴 저장된 초안 그대로 — 지금 Content Core 차단과 비차단 advisory를 함께 재검증한다.
   const out = judgeDraftLife({
     title: q!.draftTitle, body: q!.draftBody, plan: c.ctx.plan, card: c.ctx.card,
     context: { at: c.ctx.at, source: c.ctx.source },
@@ -120,7 +120,7 @@ async function evaluateInTx(tx: Tx, i: { queueId: string; contextOf: ContextLoad
   if (failureCodes.length === 0) {
     return {
       kind: 'refuse', code: 'NOT_BLOCKED',
-      reason: `지금 초안 게이트가 이 초안을 확정 차단하지 않는다${reviewCodes.length > 0 ? ` (사람 검토 ${reviewCodes.join(',')})` : ''} — 해소가 아니다`,
+      reason: `지금 초안 게이트가 이 초안을 확정 차단하지 않는다${reviewCodes.length > 0 ? ` (비차단 advisory ${reviewCodes.join(',')})` : ''} — 해소가 아니다`,
     }
   }
   const record: DefectResolutionRecord = {

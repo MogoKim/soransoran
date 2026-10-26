@@ -149,6 +149,28 @@ console.log(`\n── BLOCK: ${CREATIVITY_BLOCK_CLASS.HIGH_RISK_FACT} ──`)
   check('[health] 항우울제 카드·계획 미지원 — 하드 차단', h1.length > 0, h1.join(','))
 }
 
+// quality-v25: 검증된 가족 건강 사실은 통과하되, 근거 제거와 작성자 질병 변이는 구분한다.
+{
+  const familyPlan: DraftGatePlan = {
+    selfBasis: 'lifeFacts',
+    warrants: [{ fact: 'children', evidenceText: '중학생 아이가 병원에 갔다' }],
+    protectedFacts: [{ text: '갑상선결절' }],
+  }
+  const family = inp('중학생 아이 갑상선결절 이야기', '검사에서 갑상선결절 이야기가 나왔어요.', familyPlan)
+  check('[health-family] 검증된 가족 건강 사실 — 차단·advisory 없음',
+    hardCodes(family).length === 0 && softCodes(family).length === 0)
+
+  const noProtected = inp('중학생 아이 갑상선결절 이야기', '검사에서 갑상선결절 이야기가 나왔어요.', {
+    ...familyPlan, protectedFacts: [],
+  })
+  check('[health-family mutation] 보호 사실 제거 — 임의 통과 대신 비차단 advisory',
+    hardCodes(noProtected).length === 0 && softCodes(noProtected).includes('unsupportedHealthClaim'))
+
+  const explicitSelf = inp('아이 검사 뒤 제 건강도 걱정돼요', '저는 지난달에 당뇨 진단을 받았어요.', familyPlan)
+  check('[health-self mutation] 가족 제목이어도 명시적 작성자 질병 — 하드 차단',
+    hardCodes(explicitSelf).includes('unsupportedHealthClaim'))
+}
+
 console.log(`\n── BLOCK: ${CREATIVITY_BLOCK_CLASS.TRUNCATED_MEDIA_COMPLETION} ──`)
 // mediaDependentDraft: 시각 자료에 기대는 말
 {
