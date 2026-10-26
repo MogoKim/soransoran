@@ -606,6 +606,15 @@ export function judgeSupersession({ judged, draftsDir, slug, deliveryEntry = nul
   return unique.length ? { ok: false, problems: unique } : { ok: true, oldBytes, oldSpec }
 }
 
+/**
+ * 🔴 **lease 를 지금도 내가 쥐고 있는가** — `lease.ok` 만 믿지 않는다. lease 파일의 token 이 내 token 이어야 한다.
+ *    회수 경쟁 · 사람 정리로 잃었으면 false.
+ */
+function leaseHeld(lease) {
+  if (!lease?.ok || !lease.lease || !lease.token) return false
+  try { return JSON.parse(readFileSync(lease.lease, 'utf8'))?.token === lease.token } catch { return false }
+}
+
 /** 옛 spec 바이트를 보존 자리에 no-clobber 로 남긴다 — 이미 있으면 같은 바이트여야 한다. 다시 읽어 확인한다 */
 function preserveOldSpec(archive, oldBytes) {
   if (!existsSync(archive)) {
@@ -634,7 +643,7 @@ function preserveOldSpec(archive, oldBytes) {
  */
 export function supersedeDirectSpec({ judged, draftsDir, slug, deliveryEntry = null, lease = null, hooks = {} }) {
   const blocked = (problems, why) => ({ ok: false, code: DIRECT_SPEC_SUPERSEDE_BLOCKED, problems, why: `${why} (${problems.join(',')}) — 덮어쓰지 않았다` })
-  if (!lease?.ok) return blocked(['LEASE_REQUIRED'], '원고 lease 없이 spec 을 교체하지 않는다')
+  if (!lease?.ok || !lease.lease || !lease.token) return blocked(['LEASE_REQUIRED'], '원고 lease 없이 spec 을 교체하지 않는다')
   const j = judgeSupersession({ judged, draftsDir, slug, deliveryEntry })
   if (!j.ok) return blocked(j.problems, '명시적 개정 조건을 지키지 못했다')
   const path = join(draftsDir, slug, ARTICLE_SPEC_FILENAME)
@@ -643,20 +652,46 @@ export function supersedeDirectSpec({ judged, draftsDir, slug, deliveryEntry = n
   // ② 보존 — 없으면 no-clobber 로 만들고, 있으면 같은 바이트여야 한다
   const kept = preserveOldSpec(archive, j.oldBytes)
   if (!kept.ok) return blocked(['ARCHIVE_CONFLICT'], kept.why)
+  if (!leaseHeld(lease)) return blocked(['LOCK_LOST'], '교체 직전 원고 lease 소유권을 잃었다 — canonical spec 을 건드리지 않는다')
   hooks.beforeReplace?.({ path })
-  // ③ CAS — 판정한 바이트 그대로일 때만 교체한다
-  if (readFileSync(path, 'utf8') !== j.oldBytes) return blocked(['CONCURRENT_WRITER'], '판정 뒤 spec 이 바뀌었다')
+  /**
+   * ③ **배타 교체** (2026-10-26 · Codex P1 — CAS 확인과 rename 사이에 끼어든 writer 를 덮던 결함).
+   *    (a) canonical 을 이 교체만 아는 소유 경로로 **떼어 낸다**(rename — 그 순간 canonical 은 비고, 떼어 낸 바이트는 나만 본다)
+   *    (b) 떼어 낸 바이트가 판정한 옛 spec 그대로인지 다시 본다 — 아니면 남의 바이트다. 덮지 않고 canonical 에 no-clobber 로 되돌려 두고 멈춘다
+   *    (c) 새 spec 은 link 로 **배타 생성**한다 — canonical 을 그 사이 누가 차지했으면 EEXIST 로 멈춘다(그 바이트를 덮지도 되돌리지도 않는다)
+   *    옛 spec 은 이미 보존본이 같은 바이트로 있으므로 떼어 낸 사본은 지운다. tmp · 소유 사본은 어느 경로로 끝나도 남기지 않는다.
+   */
+  const owned = `${path}.supersede-${process.pid}-${lease.token}`
   const newBytes = specBytes(judged.spec)
   const tmp = `${path}.tmp-${process.pid}-${createHash('sha256').update(newBytes).digest('hex').slice(0, 12)}`
-  const fd = openSync(tmp, 'wx')
-  try { writeSync(fd, newBytes); fsyncSync(fd) } finally { closeSync(fd) }
-  try { renameSync(tmp, path) } catch (e) {
-    try { unlinkSync(tmp) } catch { /* best effort */ }
-    return blocked(['REPLACE_FAILED'], `교체 실패 — 옛 spec 그대로다: ${e.message}`)
+  const drop = (f) => { try { unlinkSync(f) } catch { /* 이미 없다 */ } }
+  try {
+    try { renameSync(path, owned) } catch (e) {
+      return blocked(['CONCURRENT_WRITER'], `canonical spec 을 떼어 내지 못했다(${e.code ?? e.message})`)
+    }
+    if (readFileSync(owned, 'utf8') !== j.oldBytes) {
+      // 🔴 판정 뒤 다른 writer 의 바이트를 떼어 냈다 — no-clobber 로 제자리에 되돌린다. canonical 을 또 누가 차지했으면 그 바이트도 건드리지 않는다
+      try { linkSync(owned, path); drop(owned) } catch {
+        return blocked(['CONCURRENT_WRITER', 'EXTERNAL_BYTES_PARKED'], `판정 뒤 spec 이 바뀌었고 canonical 도 다시 차지됐다 — 떼어 낸 바이트를 ${owned} 에 둔다`)
+      }
+      return blocked(['CONCURRENT_WRITER'], '판정 뒤 spec 이 바뀌었다 — 그 바이트를 제자리에 두었다')
+    }
+    hooks.beforeInstall?.({ path })
+    const fd = openSync(tmp, 'wx')
+    try { writeSync(fd, newBytes); fsyncSync(fd) } finally { closeSync(fd) }
+    try { linkSync(tmp, path) } catch (e) {
+      if (e.code === 'EEXIST') return blocked(['CONCURRENT_WRITER'], '설치 직전 다른 writer 가 canonical spec 을 먼저 만들었다 — 그 바이트를 그대로 둔다')
+      // 🔴 canonical 이 비었다 — 떼어 낸 옛 spec 을 no-clobber 로 제자리에 둔다(누가 차지했으면 그대로 둔다)
+      try { linkSync(owned, path) } catch { /* 이미 차지됐다 — 덮지 않는다 */ }
+      return blocked(['REPLACE_FAILED'], `새 spec 을 설치하지 못했다: ${e.message}`)
+    }
+    hooks.afterReplace?.({ path })
+    // ④ 다시 읽기 — 설치 뒤 다른 writer 가 바꿨으면 지금 바이트를 그대로 두고 멈춘다
+    if (readFileSync(path, 'utf8') !== newBytes) return blocked(['CONCURRENT_WRITER'], '설치 뒤 spec 이 새 바이트가 아니다')
+  } finally {
+    drop(tmp)
+    if (existsSync(owned) && readFileSync(owned, 'utf8') === j.oldBytes) drop(owned)
   }
-  hooks.afterReplace?.({ path })
-  // ④ 다시 읽기 — 다른 writer 가 끼어들었으면 지금 바이트를 그대로 두고 멈춘다
-  if (readFileSync(path, 'utf8') !== newBytes) return blocked(['CONCURRENT_WRITER'], '교체 뒤 spec 이 새 바이트가 아니다')
   return { ok: true, record: { superseded: true, oldSpecHash, newSpecHash: judged.spec.specHash, archive: supersededSpecName(oldSpecHash) } }
 }
 
