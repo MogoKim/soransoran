@@ -50,7 +50,7 @@ import {
   RUN_SCHEMA_VERSION, classifyExistingRun, writeFileAtomic, preserveRunFiles, acquireRunLock,
 } from './lib/magazine-run-file.mjs'
 import { materialState } from './lib/magazine-run-targets.mjs'
-import { readQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
+import { acquireManuscriptLease, readQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath } from './lib/magazine-hero.mjs'
 import { calculateInventory } from './magazine-inventory.mjs'
@@ -58,7 +58,8 @@ import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
 import {
-  persistDirectSpecNoClobber, readProductGraphVersion, verifyDirectSpecIdentity,
+  DIRECT_SPEC_SUPERSEDE_REQUIRED, persistDirectSpecNoClobber, readProductGraphVersion, recoverSupersession, supersedeDirectSpec, supersedeLeftovers,
+  verifyDirectSpecIdentity,
 } from './lib/magazine-direct-spec-source.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
@@ -302,6 +303,8 @@ function directSpecRow(j, persisted) {
     schemaVersion: s.schemaVersion,
     specHash: s.specHash,
     written: Boolean(persisted?.written),
+    // 🔴 명시적 개정으로 옛 spec 을 교체했으면 old/new specHash · 보존 파일을 남긴다 (교체 없으면 키 없음)
+    ...(persisted?.supersession ? { supersession: persisted.supersession } : {}),
   }
 }
 
@@ -624,6 +627,11 @@ export function planRun({
   productGraphVersionFn = () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
   directSourceFn = verifyDirectSpecIdentity,
   persistSpecFn = persistDirectSpecNoClobber,
+  /** 🔴 명시적 개정(supersedes)의 교체 — lease 안에서만 부른다. 시험은 경쟁 writer hook 을 단 판을 준다 */
+  supersedeFn = supersedeDirectSpec,
+  /** 🔴 앞 교체가 남긴 조각(급사 · 실패)의 복구 판정 — lease 안에서만 */
+  recoverFn = recoverSupersession,
+  leaseFn = acquireManuscriptLease,
 }) {
   const runDir = join(runsDir, today)
   const lockFile = join(runDir, '.lock')
@@ -740,7 +748,56 @@ export function planRun({
         continue
       }
       if (mode.mode === DIRECT_SPEC_MODE) {
-        const j = judgeDirect(item)
+        let j = judgeDirect(item)
+        let supersession = null
+        /**
+         * 🔴 **앞 교체의 조각 복구** (2026-10-26 · 급사 · 설치 실패). 소유 사본 · tmp 가 남았으면 lease 안에서 먼저 판정한다 —
+         *    옛 spec 복구(→ 아래에서 다시 교체) · 새 spec 확인(→ recovered 기록) · 그 밖은 아무것도 지우지 않고 HOLD.
+         */
+        if (!dryRun && supersedeLeftovers({ draftsDir, slug: item.slug }).length) {
+          const lease = leaseFn({ slug: item.slug, work: 'supersede-recover', path: quarantinePath })
+          if (!lease.ok) {
+            held.push({ day: item.day, slug: item.slug, code: lease.code, why: lease.why, directSpec: j.evidence ?? null })
+            continue
+          }
+          let rec
+          try { rec = recoverFn({ draftsDir, slug: item.slug, lease, newSpec: j.judged?.spec ?? j.spec ?? null }) } finally { lease.release() }
+          if (!rec.ok) {
+            held.push({ day: item.day, slug: item.slug, code: rec.code, why: rec.why, directSpec: { ...(j.evidence ?? {}), supersede: { problems: rec.problems, recovery: rec.recovery } } })
+            continue
+          }
+          if (rec.record) supersession = rec.record
+          log(`  ♻ ${item.slug} — 앞 교체 조각 복구: ${rec.state}`)
+          j = judgeDirect(item)
+        }
+        /**
+         * 🔴 **명시적 개정** (2026-10-26). 승인이 supersedes.specHash 로 디스크 spec 을 정확히 가리킨다.
+         *    같은 slug 의 원고 lease 를 쥔 채로만 교체하고, 교체 뒤 같은 관문을 처음부터 다시 지난다.
+         *    dry-run 은 쓰지 않는다 — 교체 필요 상태 그대로 HOLD 로 보고한다.
+         */
+        if (!j.ok && j.code === DIRECT_SPEC_SUPERSEDE_REQUIRED && !dryRun) {
+          // 🔴 전송 흔적을 확인할 수 없으면 교체하지 않는다 — 모름을 「흔적 없음」으로 읽지 않는다
+          if (!ledger.ok) {
+            held.push({ day: item.day, slug: item.slug, code: ledger.code ?? 'LEDGER_UNREADABLE', why: `격리 장부를 읽지 못해 개정 조건을 확인할 수 없다: ${ledger.why}`, directSpec: j.evidence })
+            continue
+          }
+          const lease = leaseFn({ slug: item.slug, work: 'supersede', path: quarantinePath })
+          if (!lease.ok) {
+            held.push({ day: item.day, slug: item.slug, code: lease.code, why: lease.why, directSpec: j.evidence })
+            continue
+          }
+          let s
+          try {
+            s = supersedeFn({ judged: j.judged, draftsDir, slug: item.slug, deliveryEntry: ledger.store[item.slug] ?? null, lease })
+          } finally { lease.release() }
+          if (!s.ok) {
+            held.push({ day: item.day, slug: item.slug, code: s.code, why: s.why, directSpec: { ...j.evidence, supersede: { ...j.supersede, problems: s.problems, ...(s.recovery ? { recovery: s.recovery } : {}) } } })
+            continue
+          }
+          supersession = s.record
+          log(`  ♻ ${item.slug} — 명시적 개정: spec ${s.record.oldSpecHash.slice(0, 15)}… → ${s.record.newSpecHash.slice(0, 15)}… (보존 ${s.record.archive})`)
+          j = judgeDirect(item)
+        }
         if (!j.ok) {
           held.push({ day: item.day, slug: item.slug, code: j.code, why: j.why, directSpec: j.evidence })
           continue
@@ -750,7 +807,7 @@ export function planRun({
             why: '재사용 폴더에 article-spec.json 이 없다 — 재사용 단계는 spec 을 새로 쓰지 않는다', directSpec: j.evidence })
           continue
         }
-        directRow = directSpecRow(j, { written: false })
+        directRow = directSpecRow(j, { written: false, supersession })
       }
       const v = reuseVerdict(item.slug, { draftsDir, ledger, gate, heroExists })
       if (v.ok) reusable.push({ ...item, ...(directRow ? { directSpec: directRow } : {}), stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })

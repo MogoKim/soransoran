@@ -42,17 +42,43 @@
  */
 
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 
 import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
-import { ARTICLE_SPEC_FILENAME, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem } from './magazine-direct-spec.mjs'
+import { ARTICLE_SPEC_FILENAME, ARTICLE_SPEC_REGISTER_LEDGER, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem } from './magazine-direct-spec.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
 import { isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
 
 export const DIRECT_SPEC_SOURCE_NOT_READY = 'DIRECT_SPEC_SOURCE_NOT_READY'
 export const DIRECT_SPEC_SPEC_CONFLICT = 'DIRECT_SPEC_SPEC_CONFLICT'
+/**
+ * 🔴 **명시적 개정(supersedes)** (2026-10-26 · age-learning 재승인 준비).
+ *    승인 entry 가 `supersedes.specHash` 로 디스크의 옛 spec 을 **정확히** 가리키면, 디스크 spec 이 새 컴파일 결과와 달라도
+ *    CONFLICT 가 아니라 「교체 필요」다 — 교체는 producer 가 lease 안에서만 한다(`supersedeDirectSpec`).
+ *    전송 · 등록 관문은 교체 전 상태로 진행하지 않는다(둘 다 ok:false).
+ */
+export const DIRECT_SPEC_SUPERSEDE_REQUIRED = 'DIRECT_SPEC_SUPERSEDE_REQUIRED'
+/** 선언한 old specHash 가 디스크 spec 과 다르다 — 무엇을 대체하는지 확정할 수 없다 (fail-closed) */
+export const DIRECT_SPEC_SUPERSEDE_MISMATCH = 'DIRECT_SPEC_SUPERSEDE_MISMATCH'
+/** 교체 조건(신원 · draft · 전송 · 등록 · 보존 · 경쟁 writer)을 지키지 못했다 — 바이트를 덮지도 되돌리지도 않는다 */
+export const DIRECT_SPEC_SUPERSEDE_BLOCKED = 'DIRECT_SPEC_SUPERSEDE_BLOCKED'
+const SHA256_RE = /^sha256:[0-9a-f]{64}$/
+/** `supersedes` 는 정확히 { specHash, sourceHash } — 둘 다 sha256 · 대체하는 승인은 이 entry 자신이 아니다 */
+export function supersedesProblem(entry) {
+  const s = entry?.supersedes
+  if (s === undefined) return null
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return 'SUPERSEDES_INVALID'
+  const keys = Object.keys(s).sort().join(',')
+  if (keys !== 'sourceHash,specHash' || !SHA256_RE.test(s.specHash) || !SHA256_RE.test(s.sourceHash)) return 'SUPERSEDES_INVALID'
+  if (s.sourceHash === entry.sourceHash) return 'SUPERSEDES_INVALID'
+  return null
+}
+/** 옛 spec 보존 이름 — `article-spec.superseded-<old hex>.json` (같은 폴더) */
+export const supersededSpecName = (oldSpecHash) => `article-spec.superseded-${String(oldSpecHash).replace(/^sha256:/, '')}.json`
+/** 같은 글의 개정이라고 볼 신원 — 제목 · 공개 시각 · 본문 계획은 바뀔 수 있다 */
+export const SUPERSEDE_IDENTITY_KEYS = Object.freeze(['slug', 'intentId', 'graphNodeId', 'graphVersion', 'cluster', 'admissionManifestHash'])
 export const DIRECT_SPEC_SOURCE_SCHEMA = 'magazine-article-spec-source/2'
 export const DIRECT_SPEC_SOURCE_DIRNAME = 'article-spec-source'
 /** canary 는 STANDARD 한 프로필만 연다 */
@@ -413,6 +439,7 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
     return notReady(`source 에 이 행(${slug} · ${intentId})의 entry 가 정확히 하나가 아니다 (${matches.length}개)`)
   }
   const entry = matches[0]
+  evidence.supersedes = entry.supersedes ?? null
   evidence.approvalStatus = typeof entry.status === 'string' ? entry.status : null
   evidence.sourceHash = typeof entry.sourceHash === 'string' ? entry.sourceHash : null
   evidence.missingFields = missingSourceFields(entry, queueItem)
@@ -422,6 +449,7 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   }
   if (entry.node?.graphVersion !== expectedGraphVersion || entry.admission?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')
   if (entry.sourceHash !== directSpecSourceHash(entry)) blockers.push('SOURCE_HASH_DRIFT')
+  if (supersedesProblem(entry)) blockers.push('SUPERSEDES_INVALID')
   if (entry.admission?.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')
   // 🔴 articlePlanHash 는 승인 entry 의 sourceHash 하나다 — 큐 행이 다른 승인(또는 위조 해시)을 가리키면 쓰지 않는다
   if (queueItem?.articlePlanHash !== entry.sourceHash) blockers.push('ARTICLE_PLAN_HASH_DRIFT')
@@ -498,6 +526,17 @@ export function verifyDirectSpecIdentity({ queueItem, draftsDir, expectedGraphVe
   if (!judged.ok) return judged
   const existing = existingSpecState({ spec: judged.spec, draftsDir })
   if (existing.state === 'CONFLICT') {
+    const declared = judged.evidence?.supersedes?.specHash ?? null
+    if (declared) {
+      const disk = diskSpecHash(existing.path)
+      const supersede = { oldSpecHash: disk, declaredSpecHash: declared, newSpecHash: judged.spec.specHash }
+      if (disk === declared) {
+        return { ok: false, code: DIRECT_SPEC_SUPERSEDE_REQUIRED, judged, supersede, evidence: { ...judged.evidence, supersede },
+          why: `승인이 디스크 spec(${disk.slice(0, 15)}…)을 명시적으로 대체한다 — producer 가 lease 안에서 교체하기 전에는 진행하지 않는다` }
+      }
+      return { ok: false, code: DIRECT_SPEC_SUPERSEDE_MISMATCH, supersede, evidence: { ...judged.evidence, supersede },
+        why: `승인이 선언한 old specHash(${declared.slice(0, 15)}…)가 디스크 spec(${String(disk).slice(0, 15)}…)과 다르다 — 덮어쓰지 않는다` }
+    }
     return { ok: false, code: DIRECT_SPEC_SPEC_CONFLICT, why: existing.why, evidence: judged.evidence }
   }
   return { ok: true, judged, spec: judged.spec, evidence: judged.evidence, existing: existing.state }
@@ -523,6 +562,235 @@ export function verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVe
     return { ok: false, code: 'DIRECT_SPEC_MISSING', why: 'article-spec.json 이 없다 — 이 단계는 spec 을 새로 쓰지 않는다', evidence: v.evidence }
   }
   return v
+}
+
+/** 디스크 spec 의 specHash — 읽기 · 파싱 · 자기검증이 모두 통과할 때만, 아니면 null */
+function diskSpecHash(path) {
+  try {
+    const spec = JSON.parse(readFileSync(path, 'utf8'))
+    return verifyArticleSpec(spec).ok ? spec.specHash : null
+  } catch { return null }
+}
+
+/**
+ * 🔴 **옛 spec 을 새 승인 spec 으로 교체해도 되는가** — 파일을 쓰지 않는다.
+ *    ① 디스크 spec 이 성하고 specHash 가 승인이 선언한 supersedes.specHash 와 정확히 같다
+ *    ② 신원(SUPERSEDE_IDENTITY_KEYS)이 새 spec 과 같다 — 다른 글 · 다른 판 · 다른 admission 은 개정이 아니다
+ *    ③ draft.md 없음 · 등록 영수증 없음
+ *    ④ 장부에 실제 전송 흔적 없음 — 전송 기록은 sent=false · fingerprint null · 예약 없음뿐, 응답 · 재생성 계보 0
+ *       (전송 0 의 과거 회수 실패가 남긴 CONTENT attempts 는 전송 흔적이 아니다)
+ * @returns {{ok:true, oldBytes:string, oldSpec:object}|{ok:false, problems:string[]}}
+ */
+export function judgeSupersession({ judged, draftsDir, slug, deliveryEntry = null }) {
+  const problems = []
+  const dir = join(draftsDir, slug)
+  const path = join(dir, ARTICLE_SPEC_FILENAME)
+  const declared = judged?.evidence?.supersedes?.specHash ?? null
+  let oldBytes = null
+  let oldSpec = null
+  try { oldBytes = readFileSync(path, 'utf8'); oldSpec = JSON.parse(oldBytes) } catch { problems.push('OLD_SPEC_UNREADABLE') }
+  if (oldSpec && !verifyArticleSpec(oldSpec).ok) problems.push('OLD_SPEC_INVALID')
+  if (!declared || oldSpec?.specHash !== declared) problems.push('OLD_HASH_MISMATCH')
+  const next = judged?.spec
+  if (!next || oldSpec?.specHash === next.specHash) problems.push('SUPERSEDE_NOOP')
+  if (oldSpec && next && SUPERSEDE_IDENTITY_KEYS.some((k) => oldSpec.identity?.[k] !== next.identity?.[k])) problems.push('IDENTITY_MISMATCH')
+  if (next && next.identity?.slug !== slug) problems.push('IDENTITY_MISMATCH')
+  if (existsSync(join(dir, 'draft.md'))) problems.push('DRAFT_EXISTS')
+  if (existsSync(join(dir, ARTICLE_SPEC_REGISTER_LEDGER))) problems.push('REGISTERED')
+  const d = deliveryEntry?.delivery
+  if ((d && (d.sent !== false || d.messageFingerprint || d.reservationId)) || deliveryEntry?.sent === true || deliveryEntry?.sent === null
+    || deliveryEntry?.firstResponseInvalid || (deliveryEntry?.regenLineage?.calls ?? 0) > 0 || (deliveryEntry?.regenCalls ?? 0) > 0) {
+    problems.push('DELIVERY_TRACE')
+  }
+  const unique = [...new Set(problems)]
+  return unique.length ? { ok: false, problems: unique } : { ok: true, oldBytes, oldSpec }
+}
+
+/**
+ * 🔴 **lease 를 지금도 내가 쥐고 있는가** — `lease.ok` 만 믿지 않는다. lease 파일의 token 이 내 token 이어야 한다.
+ *    회수 경쟁 · 사람 정리로 잃었으면 false.
+ */
+function leaseHeld(lease) {
+  if (!lease?.ok || !lease.lease || !lease.token) return false
+  try { return JSON.parse(readFileSync(lease.lease, 'utf8'))?.token === lease.token } catch { return false }
+}
+
+/** 교체 중 고정 경로 — 다음 회차 복구 판정이 찾는 자리다 (soransoran 원고 폴더 안) */
+export const SUPERSEDE_OWNED = 'article-spec.supersede-owned.json'
+export const SUPERSEDE_TMP = 'article-spec.supersede-new.json'
+/** 교체 조각이 남았고 자동으로 판정할 수 없다 — 아무것도 지우지 않고 HOLD (사람이 recovery 경로를 본다) */
+export const DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED = 'DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED'
+/** 남은 교체 조각 — 소유 사본 · tmp */
+export function supersedeLeftovers({ draftsDir, slug }) {
+  return [SUPERSEDE_OWNED, SUPERSEDE_TMP].filter((f) => existsSync(join(draftsDir, slug, f)))
+}
+const recoveryRequired = ({ problems, why, path, owned, tmp }) => ({
+  ok: false, code: DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED, problems, why: `${why} (${problems.join(',')}) — 아무것도 지우지 않았다`,
+  recovery: { canonical: path, canonicalExists: existsSync(path), owned, ownedExists: existsSync(owned), tmp, tmpExists: existsSync(tmp) },
+})
+
+/** 옛 spec 바이트를 보존 자리에 no-clobber 로 남긴다 — 이미 있으면 같은 바이트여야 한다. 다시 읽어 확인한다 */
+function preserveOldSpec(archive, oldBytes) {
+  if (!existsSync(archive)) {
+    const tmp = `${archive}.tmp-${process.pid}`
+    const fd = openSync(tmp, 'wx')
+    try { writeSync(fd, oldBytes); fsyncSync(fd) } finally { closeSync(fd) }
+    try { linkSync(tmp, archive) } catch (e) {
+      if (e.code !== 'EEXIST') return { ok: false, why: `보존 자리를 만들지 못했다: ${e.message}` }
+    } finally {
+      try { unlinkSync(tmp) } catch { /* best effort */ }
+    }
+  }
+  let kept = null
+  try { kept = readFileSync(archive, 'utf8') } catch { kept = null }
+  return kept === oldBytes ? { ok: true } : { ok: false, why: '보존 자리에 옛 spec 과 다른 바이트가 있다' }
+}
+
+/**
+ * 🔴 **명시적 개정의 실행 — producer 가 manuscript lease 를 쥔 채로만 부른다.**
+ *    ① 조건 판정(judgeSupersession) ② 옛 spec 을 `article-spec.superseded-<old>.json` 으로 no-clobber 보존
+ *    ③ 읽은 바이트가 그대로인지 다시 보고(CAS) 새 spec 으로 원자 교체 ④ 다시 읽어 새 바이트인지 확인.
+ *    경쟁 writer(③ 직전 · ④ 관측)가 있으면 **덮지도 되돌리지도 않고** 충돌로 멈춘다 — 보존본은 남긴다(복사본이라 해가 없다).
+ *    같은 승인으로 다시 돌면 디스크가 이미 새 spec 이므로 이 함수까지 오지 않는다(IDENTICAL · 멱등).
+ *    `hooks.beforeReplace` · `hooks.afterReplace` 는 시험 전용(경쟁 writer 주입)이다.
+ * @returns {{ok:true, record:{superseded:true, oldSpecHash:string, newSpecHash:string, archive:string}}|{ok:false, code:string, why:string, problems:string[]}}
+ */
+export function supersedeDirectSpec({ judged, draftsDir, slug, deliveryEntry = null, lease = null, hooks = {} }) {
+  const blocked = (problems, why) => ({ ok: false, code: DIRECT_SPEC_SUPERSEDE_BLOCKED, problems, why: `${why} (${problems.join(',')}) — 덮어쓰지 않았다` })
+  if (!lease?.ok || !lease.lease || !lease.token) return blocked(['LEASE_REQUIRED'], '원고 lease 없이 spec 을 교체하지 않는다')
+  const dir = join(draftsDir, slug)
+  const path = join(dir, ARTICLE_SPEC_FILENAME)
+  const owned = join(dir, SUPERSEDE_OWNED)
+  const tmp = join(dir, SUPERSEDE_TMP)
+  const recovery = (problems, why) => recoveryRequired({ problems, why, path, owned, tmp })
+  // 🔴 앞 교체가 남긴 조각이 있으면 새 교체를 시작하지 않는다 — 복구 판정(recoverSupersession)이 먼저다
+  if (supersedeLeftovers({ draftsDir, slug }).length) return recovery(['LEFTOVER'], '앞 교체의 소유 사본 · tmp 가 남아 있다')
+  const j = judgeSupersession({ judged, draftsDir, slug, deliveryEntry })
+  if (!j.ok) return blocked(j.problems, '명시적 개정 조건을 지키지 못했다')
+  const oldSpecHash = j.oldSpec.specHash
+  const archive = join(dir, supersededSpecName(oldSpecHash))
+  // ② 보존 — 없으면 no-clobber 로 만들고, 있으면 같은 바이트여야 한다
+  const kept = preserveOldSpec(archive, j.oldBytes)
+  if (!kept.ok) return blocked(['ARCHIVE_CONFLICT'], kept.why)
+  if (!leaseHeld(lease)) return blocked(['LOCK_LOST'], '교체 직전 원고 lease 소유권을 잃었다 — canonical spec 을 건드리지 않는다')
+  hooks.beforeReplace?.({ path, lease })
+  /**
+   * ③ **배타 교체** (2026-10-26 · Codex P1 — CAS 확인과 rename 사이 경쟁 · 설치 실패 시 canonical 소실 · 급사).
+   *    (a) canonical 을 고정 소유 경로(SUPERSEDE_OWNED)로 **떼어 낸다** — 그 순간부터 canonical 은 비어 있다
+   *    (b) 떼어 낸 바이트가 판정한 옛 spec 이 아니면 남의 바이트다 — no-clobber 로 제자리에 되돌리고 멈춘다
+   *    (c) 새 spec 은 고정 tmp(O_EXCL) → fsync → **lease 재확인** → link 로 배타 생성한다
+   *    🔴 소유 사본은 **canonical 에 새 spec 이 검증됐거나 · 옛 spec 이 canonical 에 확실히 복구됐을 때만** 지운다.
+   *       복구하지 못했으면 지우지 않고 RECOVERY_REQUIRED 와 경로를 돌려준다 — 다음 회차가 lease 안에서 판정한다.
+   *    🔴 예외로 끝나지 않는다 — 모든 실패는 구조화된 결과다. 외부 writer 의 canonical 바이트는 덮지도 되돌리지도 않는다.
+   *    `hooks.fail(step)` 은 시험 전용 실패 주입(tmpOpen · tmpWrite · tmpFsync · install · restore)이다.
+   */
+  const newBytes = specBytes(judged.spec)
+  const drop = (f) => { try { unlinkSync(f) } catch { /* 이미 없다 */ } }
+  const inject = (step) => { const e = hooks.fail?.(step); if (e) throw e }
+  /** canonical 이 비었다 — 옛 spec 을 no-clobber 로 되돌린다. 확실히 되돌렸을 때만 소유 사본 · tmp 를 지운다 */
+  const restoreOld = (problems, why) => {
+    try { inject('restore'); linkSync(owned, path) } catch (e) {
+      drop(tmp)
+      return recovery([...problems, e?.code === 'EEXIST' ? 'EXTERNAL_CANONICAL' : 'RESTORE_FAILED'],
+        `${why} — 옛 spec 을 canonical 에 되돌리지 못했다(${e?.code ?? e?.message}). 소유 사본을 지우지 않는다`)
+    }
+    if (readFileSync(path, 'utf8') !== j.oldBytes) { drop(tmp); return recovery([...problems, 'RESTORE_UNVERIFIED'], `${why} — 되돌린 canonical 이 옛 spec 이 아니다`) }
+    drop(tmp); drop(owned)
+    return blocked(problems, `${why} — 옛 spec 을 제자리에 되돌렸다`)
+  }
+  try { renameSync(path, owned) } catch (e) {
+    return blocked(['CONCURRENT_WRITER'], `canonical spec 을 떼어 내지 못했다(${e.code ?? e.message})`)
+  }
+  try {
+    hooks.afterDetach?.({ path, lease })
+    const detached = readFileSync(owned, 'utf8')
+    if (detached !== j.oldBytes) {
+      // 🔴 판정 뒤 다른 writer 의 바이트를 떼어 냈다 — no-clobber 로 제자리에 되돌린다. canonical 을 또 누가 차지했으면 소유 사본을 남긴다
+      try { linkSync(owned, path) } catch {
+        return recovery(['CONCURRENT_WRITER', 'EXTERNAL_BYTES_PARKED'], '판정 뒤 spec 이 바뀌었고 canonical 도 다시 차지됐다 — 떼어 낸 바이트를 소유 사본에 둔다')
+      }
+      drop(owned)
+      return blocked(['CONCURRENT_WRITER'], '판정 뒤 spec 이 바뀌었다 — 그 바이트를 제자리에 두었다')
+    }
+    hooks.beforeInstall?.({ path, lease })
+    try {
+      inject('tmpOpen')
+      const fd = openSync(tmp, 'wx')
+      try { inject('tmpWrite'); writeSync(fd, newBytes); inject('tmpFsync'); fsyncSync(fd) } finally { closeSync(fd) }
+    } catch (e) { return restoreOld(['INSTALL_FAILED'], `새 spec tmp 를 만들지 못했다(${e?.code ?? e?.message})`) }
+    hooks.afterTmpWrite?.({ path, lease })
+    // 🔴 설치 직전 lease 를 다시 본다 — 확인 뒤 잃었으면 새 spec 을 설치하지 않는다
+    if (!leaseHeld(lease)) return restoreOld(['LOCK_LOST'], '설치 직전 원고 lease 소유권을 잃었다')
+    try { inject('install'); linkSync(tmp, path) } catch (e) {
+      if (e?.code === 'EEXIST') {
+        drop(tmp)
+        return recovery(['CONCURRENT_WRITER', 'EXTERNAL_CANONICAL'], '설치 직전 다른 writer 가 canonical spec 을 먼저 만들었다 — 그 바이트를 그대로 둔다')
+      }
+      return restoreOld(['INSTALL_FAILED'], `새 spec 을 설치하지 못했다(${e?.code ?? e?.message})`)
+    }
+    hooks.afterReplace?.({ path, lease })
+    // ④ 다시 읽기 — 설치 뒤 다른 writer 가 바꿨으면 지금 바이트를 그대로 두고 소유 사본을 남긴다
+    if (readFileSync(path, 'utf8') !== newBytes) {
+      drop(tmp)
+      return recovery(['CONCURRENT_WRITER', 'EXTERNAL_CANONICAL'], '설치 뒤 spec 이 새 바이트가 아니다')
+    }
+    drop(tmp); drop(owned)
+    return { ok: true, record: { superseded: true, oldSpecHash, newSpecHash: judged.spec.specHash, archive: supersededSpecName(oldSpecHash) } }
+  } catch (e) {
+    // 🔴 예상하지 못한 실패 — canonical 이 비었으면 옛 spec 을 되돌리고, 아니면 소유 사본을 남겨 복구로 넘긴다
+    if (!existsSync(path)) return restoreOld(['UNEXPECTED'], String(e?.message ?? e))
+    drop(tmp)
+    return recovery(['UNEXPECTED'], String(e?.message ?? e))
+  }
+}
+
+/**
+ * 🔴 **앞 교체가 남긴 조각의 복구 판정** — producer 가 같은 slug 원고 lease 안에서만 부른다 (급사 · 실패 뒤 다음 회차).
+ *    소유 사본(옛 spec) · tmp · canonical 을 보고:
+ *      canonical 없음 · 옛 spec  → 옛 spec 을 no-clobber 로 되돌린다(RESTORED_OLD) — 호출부가 다시 판정해 교체를 재시도한다
+ *      canonical = 새 spec      → 교체는 끝났다(COMPLETED) — 조각만 지우고 recovered 기록을 돌려준다
+ *      그 밖(외부 바이트 · 소유 사본 손상 · 보존본 불일치 · tmp 만 있음) → 아무것도 지우지 않고 RECOVERY_REQUIRED
+ *    정상 복구 뒤에는 소유 사본 · tmp 가 남지 않는다.
+ * @returns {{ok:true, state:'CLEAN'|'RESTORED_OLD'|'COMPLETED', record?:object}|{ok:false, code:string, problems:string[], why:string, recovery:object}}
+ */
+export function recoverSupersession({ draftsDir, slug, lease = null, newSpec = null }) {
+  const dir = join(draftsDir, slug)
+  const path = join(dir, ARTICLE_SPEC_FILENAME)
+  const owned = join(dir, SUPERSEDE_OWNED)
+  const tmp = join(dir, SUPERSEDE_TMP)
+  const recovery = (problems, why) => recoveryRequired({ problems, why, path, owned, tmp })
+  if (!supersedeLeftovers({ draftsDir, slug }).length) return { ok: true, state: 'CLEAN' }
+  if (!leaseHeld(lease)) return recovery(['LEASE_REQUIRED'], '원고 lease 없이 교체 조각을 정리하지 않는다')
+  const drop = (f) => { try { unlinkSync(f) } catch { /* 이미 없다 */ } }
+  const read = (f) => { try { return readFileSync(f, 'utf8') } catch { return null } }
+  const ownedBytes = read(owned)
+  const canon = read(path)
+  const newBytes = newSpec ? specBytes(newSpec) : null
+  if (ownedBytes === null) {
+    // tmp 만 남았다 — 교체 순서상 tmp 는 소유 사본보다 먼저 지운다. canonical 이 새 spec 이면 tmp 만 지운다
+    if (canon !== null && canon === newBytes) { drop(tmp); return { ok: true, state: 'COMPLETED' } }
+    return recovery(['AMBIGUOUS_TMP_ONLY'], '소유 사본 없이 tmp 만 남았다 — 자동으로 판정하지 않는다')
+  }
+  let oldSpec = null
+  try { oldSpec = JSON.parse(ownedBytes) } catch { oldSpec = null }
+  if (!oldSpec || !verifyArticleSpec(oldSpec).ok) return recovery(['OWNED_INVALID'], '소유 사본이 성한 spec 이 아니다')
+  // 🔴 소유 사본이 이 교체의 옛 spec 인가 — 보존본과 같은 바이트여야 한다
+  if (read(join(dir, supersededSpecName(oldSpec.specHash))) !== ownedBytes) return recovery(['ARCHIVE_MISMATCH'], '소유 사본이 보존본과 다르다')
+  if (canon === null) {
+    try { linkSync(owned, path) } catch (e) {
+      return recovery([e?.code === 'EEXIST' ? 'EXTERNAL_CANONICAL' : 'RESTORE_FAILED'], `옛 spec 을 canonical 에 되돌리지 못했다(${e?.code ?? e?.message})`)
+    }
+    if (read(path) !== ownedBytes) return recovery(['RESTORE_UNVERIFIED'], '되돌린 canonical 이 옛 spec 이 아니다')
+    drop(tmp); drop(owned)
+    return { ok: true, state: 'RESTORED_OLD' }
+  }
+  if (canon === ownedBytes) { drop(tmp); drop(owned); return { ok: true, state: 'RESTORED_OLD' } }
+  if (newBytes !== null && canon === newBytes) {
+    drop(tmp); drop(owned)
+    return { ok: true, state: 'COMPLETED',
+      record: { superseded: true, recovered: true, oldSpecHash: oldSpec.specHash, newSpecHash: newSpec.specHash, archive: supersededSpecName(oldSpec.specHash) } }
+  }
+  return recovery(['EXTERNAL_CANONICAL'], 'canonical 에 옛 spec 도 새 spec 도 아닌 바이트가 있다 — 보존하고 사람이 확인한다')
 }
 
 /**

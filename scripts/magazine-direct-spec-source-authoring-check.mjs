@@ -196,6 +196,9 @@ const sourceFile = (repo) => join(repo, 'drafts/magazine/article-spec-source', `
 const queueFile = (repo) => join(repo, 'drafts/magazine/topic-queue.ts')
 const queueOf = (repo) => parseQueueSource(readFileSync(queueFile(repo), 'utf8'))
 const plain = (v) => JSON.parse(JSON.stringify(v))
+/** 개정 반례 — 운영 디스크에서 사람이 읽었다고 가정한 옛 specHash · 새 공개 시각 */
+const OLD_SPEC = `sha256:${'a'.repeat(64)}`
+const NEW_AT = '2026-10-23T10:30:00+09:00'
 
 /** 큐 복제 필드 손편집 — 필드마다 값을 실제로 바꾼다 (QUEUE_REPLICA_FIELDS 와 1:1) */
 export const REPLICA_EDITS = {
@@ -1003,6 +1006,93 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       assert.equal(r.code, 'RECEIPT_ABSENT', `${r.code} ${r.why}`)
       const st = source.readProductGraphState(ROOT)
       assert.equal(st.ok, true, st.why); assert.deepEqual(st.blockers, [], `실제 제품 graph·control 판독 실패: ${st.blockers}`)
+    }],
+    // ── G. 개정(revise · supersedes) — 승인됐지만 큐에서 철회된 글의 재승인 (2026-10-26) ──────────
+    ['RV1 개정 — 철회 뒤 prepare --revise · 사람이 새 publishAt · approve 가 기존 entry 를 교체 · materialize 가 새 행 (supersedes 보존)', () => {
+      const w = makeWorld(); const { a } = queued(w)
+      writeFileSync(queueFile(w.repo), queueFileText(queueOf(w.repo).filter((x) => x.slug !== SLUG)))
+      const p = prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } })
+      assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      const c = p.candidate
+      assert.deepEqual(c.entry.supersedes, { specHash: OLD_SPEC, sourceHash: a.sourceHash })
+      assert.deepEqual(c.revision, { baseSourceHash: a.sourceHash, supersedesSpecHash: OLD_SPEC })
+      assert.deepEqual(c.unresolvedFields, ['publication.publishAt'], '개정 후보가 publishAt 외의 사람 필드를 비웠거나 옛 시각을 옮겼다')
+      assert.deepEqual(c.entry.plan, a.entry.plan); assert.equal(c.entry.node.status, 'DRAFT')
+      c.entry.publication = { publishAt: NEW_AT }
+      const r = approve(w, c)
+      assert.equal(r.ok, true, `${r.code} ${r.why}`)
+      const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+      assert.equal(doc.entries.length, 1, '개정이 entry 를 더했다 (교체가 아니다)')
+      const e = doc.entries[0]
+      assert.notEqual(e.sourceHash, a.sourceHash); assert.equal(e.publication.publishAt, NEW_AT)
+      assert.deepEqual(e.supersedes, { specHash: OLD_SPEC, sourceHash: a.sourceHash })
+      assert.equal(e.sourceHash, source.directSpecSourceHash(e))
+      const m = materialize(w)
+      assert.equal(m.ok, true, `${m.code} ${m.why}`)
+      assert.equal(m.row.articlePlanHash, e.sourceHash); assert.deepEqual(m.supersedes, e.supersedes)
+      assert.equal(queueOf(w.repo).filter((x) => x.slug === SLUG || x.intentId === INTENT).length, 1)
+      const j = judgeRow(w, m.row); assert.equal(j.ok, true, j.why)
+      COUNTS.revise = { entries: doc.entries.length, supersedes: Boolean(e.supersedes), queueRows: 1 }
+    }],
+    ['RV2 큐 행이 남아 있으면 개정하지 않는다 → ALREADY_QUEUED', () => {
+      const w = makeWorld(); queued(w)
+      assert.equal(prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }).code, 'ALREADY_QUEUED')
+    }],
+    ['RV3 기존 승인 없이 개정 → REVISE_BASE_ABSENT · 등록된 slug → SLUG_ALREADY_REGISTERED', () => {
+      assert.equal(prepare(makeWorld(), { revise: { supersedesSpecHash: OLD_SPEC } }).code, 'REVISE_BASE_ABSENT')
+      // 기준 승인의 sourceHash 가 본문과 다르다(승인 뒤 손편집) — 개정 기준이 아니다
+      const wt = makeWorld(); queued(wt)
+      writeFileSync(queueFile(wt.repo), queueFileText(queueOf(wt.repo).filter((x) => x.slug !== SLUG)))
+      const doc = JSON.parse(readFileSync(sourceFile(wt.repo), 'utf8')); doc.entries[0].plan.title = `${doc.entries[0].plan.title} 손편집`
+      writeFileSync(sourceFile(wt.repo), `${JSON.stringify(doc, null, 2)}\n`)
+      assert.equal(prepare(wt, { revise: { supersedesSpecHash: OLD_SPEC } }).code, 'REVISE_BASE_ABSENT')
+      const w = makeWorld({ articles: (r) => { r[SLUG] = { title: 't', description: 'd', cluster: 'sleep', publishedAt: '2026-10-01' } } })
+      assert.equal(prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }).code, 'SLUG_ALREADY_REGISTERED')
+    }],
+    ['RV4 old specHash 형식 위반 → SUPERSEDES_INVALID (읽기도 전에)', () => {
+      for (const h of ['', 'sha256:abc', OLD_SPEC.toUpperCase()]) assert.equal(prepare(makeWorld(), { revise: { supersedesSpecHash: h } }).code, 'SUPERSEDES_INVALID', h)
+    }],
+    ['RV5 prepare 뒤 기준 승인이 바뀌었다 → REVISE_BASE_CHANGED · artifact 바이트 불변', () => {
+      const w = makeWorld(); queued(w)
+      writeFileSync(queueFile(w.repo), queueFileText(queueOf(w.repo).filter((x) => x.slug !== SLUG)))
+      const p = prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }); assert.equal(p.ok, true, p.why)
+      const c = p.candidate; c.entry.publication = { publishAt: NEW_AT }
+      const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+      doc.entries[0].approvedAt = '2026-10-16T09:00:00+09:00'; doc.entries[0].sourceHash = source.directSpecSourceHash(doc.entries[0])
+      writeFileSync(sourceFile(w.repo), `${JSON.stringify(doc, null, 2)}\n`)
+      const before = readFileSync(sourceFile(w.repo), 'utf8')
+      assert.equal(approve(w, c).code, 'REVISE_BASE_CHANGED')
+      assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), before)
+    }],
+    ['RV6 일반 후보에 supersedes 를 끼우면 → CANDIDATE_APPROVAL_FORGED · 개정 후보의 supersedes 손편집 → CANDIDATE_REVISION_EDITED', () => {
+      const w = makeWorld(); const c = ready(w); c.entry.supersedes = { specHash: OLD_SPEC, sourceHash: OLD_SPEC }
+      assert.equal(approve(w, c).code, 'CANDIDATE_APPROVAL_FORGED')
+      const w2 = makeWorld(); queued(w2)
+      writeFileSync(queueFile(w2.repo), queueFileText(queueOf(w2.repo).filter((x) => x.slug !== SLUG)))
+      const p = prepare(w2, { revise: { supersedesSpecHash: OLD_SPEC } }); assert.equal(p.ok, true, p.why)
+      const c2 = p.candidate; c2.entry.publication = { publishAt: NEW_AT }; c2.entry.supersedes = { ...c2.entry.supersedes, specHash: `sha256:${'b'.repeat(64)}` }
+      assert.equal(approve(w2, c2).code, 'CANDIDATE_REVISION_EDITED')
+    }],
+    ['RV7 같은 개정 승인을 다시 실행 → REVISE_BASE_CHANGED · artifact 바이트 불변 (멱등 — 두 번째 쓰기 0)', () => {
+      const w = makeWorld(); queued(w)
+      writeFileSync(queueFile(w.repo), queueFileText(queueOf(w.repo).filter((x) => x.slug !== SLUG)))
+      const p = prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }); assert.equal(p.ok, true, p.why)
+      const c = p.candidate; c.entry.publication = { publishAt: NEW_AT }
+      assert.equal(approve(w, c).ok, true)
+      const once = readFileSync(sourceFile(w.repo), 'utf8')
+      assert.equal(approve(w, c).code, 'REVISE_BASE_CHANGED')
+      assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), once)
+    }],
+    ['RV8 개정해도 spec 이 그대로(같은 publishAt · 대체 대상 = 지금 spec) → SUPERSEDES_NOOP', () => {
+      const w = makeWorld(); const { a } = queued(w)
+      const row = queueOf(w.repo).find((x) => x.slug === SLUG)
+      const cur = source.judgeDirectSpecSource({ queueItem: row, draftsDir: '/nonexistent-dssa', expectedGraphVersion: GV, productRoot: w.repo,
+        exists: () => true, readFile: () => JSON.stringify({ schema: source.DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: GV, entries: [a.entry] }) })
+      assert.equal(cur.ok, true, cur.why)
+      writeFileSync(queueFile(w.repo), queueFileText(queueOf(w.repo).filter((x) => x.slug !== SLUG)))
+      const p = prepare(w, { revise: { supersedesSpecHash: cur.spec.specHash } }); assert.equal(p.ok, true, p.why)
+      const c = p.candidate; c.entry.publication = { ...a.entry.publication }
+      assert.equal(approve(w, c).code, 'SUPERSEDES_NOOP')
     }],
     ['(수치) 승인·쓰기·외부 호출', () => { authoringCases.counts = COUNTS }],
   ]

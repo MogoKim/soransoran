@@ -32,6 +32,15 @@ const REPLICA_MUTATIONS = REPLICA_FIELDS.map((f) => [`MSQ-${f}`, `SOURCE_QUEUE_D
   REPLICA_BLOCK.replace(new RegExp(`'${f}',\\s*`), ''), 'source'])
 
 const MUTATIONS = [
+  // ── G. 개정(revise · supersedes) ──
+  ['MRV1', '개정 approve 가 기준 승인 CAS 를 하지 않는다', "    if (rev && (same.length !== 1 || same[0].sourceHash !== rev.baseSourceHash)) {", '    if (false) {'],
+  ['MRV2', '일반 후보의 supersedes 위조 검사 제거', "...(candidate.revision ? [] : ['supersedes'])", '...[]'],
+  ['MRV3', '개정 후보의 supersedes 손편집 검사 제거', '  if (rev && canonicalJson(candidate.entry?.supersedes ?? null) !== canonicalJson({ specHash: rev.supersedesSpecHash, sourceHash: rev.baseSourceHash })) {', '  if (false) {'],
+  ['MRV4', '개정이 entry 를 교체하지 않고 더한다', '      entries: [...doc.entries.filter((x) => !same.includes(x)), approvedEntry]', '      entries: [...doc.entries, approvedEntry]'],
+  ['MRV5', '개정 기준 승인 판정 제거 (기존 승인 없이 개정)', "  if (planned.entries.length !== 1 || exact.length !== 1 || e.status !== 'APPROVED' || e.node?.status !== 'APPROVED' || e.sourceHash !== directSpecSourceHash(e)) {", '  if (!e) {'],
+  ['MRV6', '개정 후보가 옛 publishAt 을 옮긴다', '    publication: { publishAt: null },\n    supersedes:', '    publication: structuredClone(base.publication),\n    supersedes:'],
+  ['MRV7', 'SUPERSEDES_NOOP 검사 제거', "  if (rev && gateCheck.spec.specHash === rev.supersedesSpecHash) return fail('SUPERSEDES_NOOP'", "  if (false) return fail('SUPERSEDES_NOOP'"],
+  ['MRV8', 'old specHash 형식 검사 제거', "  if (revise && !/^sha256:[0-9a-f]{64}$/.test(String(revise.supersedesSpecHash ?? ''))) {", '  if (false) {'],
   // ── A. admission-only prepare ──
   ['MA1', 'prepare 가 APPROVED 후보를 낸다', "    schema: CANDIDATE_SCHEMA,\n    status: CANDIDATE_STATUS,", "    schema: CANDIDATE_SCHEMA,\n    status: 'APPROVED',"],
   ['MQ1', 'prepare 에 큐 행 요구를 되살린다 (v1)', '  if (reject.length) {\n    const ordered = ADMISSION_REJECT_ORDER', "  if (!queue.some((q) => q.slug === slug)) reject.push('QUEUE_ROW_ABSENT')\n  if (reject.length) {\n    const ordered = ADMISSION_REJECT_ORDER"],
@@ -83,7 +92,7 @@ const MUTATIONS = [
   ['MA21', '후보의 승인 필드 위조 검사 제거', '  if (forged.length || candidate.entry?.node?.status !== CANDIDATE_STATUS) return fail(', '  if (false) return fail('],
   ['MA22', '승인의 실제 관문 재확인 제거', "  if (!gateCheck.ok) return fail('GATE_REJECTED'", "  if (false) return fail('GATE_REJECTED'"],
   ['MA23', '기계 고정 신원 필드(admission · 관계) 편집 검사 제거', '  if (drifted.length) return fail(', '  if (false) return fail('],
-  ['MA17', 'lock 안 이미 계획됨 재확인 제거 (경쟁 승인을 덮는다)', "    if (doc.entries.some((x) => x?.node?.slug === e.node.slug || x?.node?.intentId === e.node.intentId)) {\n      return fail('ALREADY_PLANNED'", "    if (false) {\n      return fail('ALREADY_PLANNED'"],
+  ['MA17', 'lock 안 이미 계획됨 재확인 제거 (경쟁 승인을 덮는다)', "    if (!rev && same.length) {\n      return fail('ALREADY_PLANNED'", "    if (false) {\n      return fail('ALREADY_PLANNED'"],
   ['MA18', '단일 writer 잠금 제거', '  const lock = acquireLock(`${file}.lock`, hooks)', '  const lock = { ok: true, owns: () => true, release: () => {} }'],
   ['MA19', '원자 쓰기 제거 — 대상 파일에 바로 쓴다', "    const fd = openSync(tmp, 'w')", "    const fd = openSync(file, 'w')"],
   ['MB1', '승인 entry 에 productBasis 를 싣지 않는다', '    productBasis: state.productBasis,\n', ''],
@@ -125,7 +134,7 @@ const MUTATIONS = [
   ['MCW3', '동시 쓰기 판정에서 승인 행과의 deep-equal 을 뺀다', "      if (mine && canonicalJson(mine) !== canonicalJson(row)) problems.push('ROW_CHANGED')\n", ''],
   ['MCW4', '동시 쓰기 판정에서 slug·intent 중복 검사를 뺀다', "      if (hits.length > 1) problems.push('ROW_DUPLICATE')\n", ''],
   ['MCW5', '동시 쓰기 판정에서 실제 소비 관문을 뺀다', "        if (!j.ok) problems.push('GATE_REJECTED')\n", ''],
-  ['MCW6', 'materialize 가 concurrentWrite 를 돌려주지 않는다', '    if (settled.ok) return { ok: true, written: true, concurrentWrite: true, path: queuePath, row, day }', '    if (settled.ok) return { ok: true, written: true, path: queuePath, row, day }'],
+  ['MCW6', 'materialize 가 concurrentWrite 를 돌려주지 않는다', '    if (settled.ok) return { ok: true, written: true, concurrentWrite: true, path: queuePath, row, day, supersedes: entry.supersedes ?? null }', '    if (settled.ok) return { ok: true, written: true, path: queuePath, row, day, supersedes: entry.supersedes ?? null }'],
   ['MCW7', 'CLI 가 concurrentWrite 를 출력하지 않는다', 'concurrentWrite: r.concurrentWrite, ', '', 'cli'],
   ['MMC1', '쓰기 충돌 시 이전 큐 전체로 되돌린다 (남의 변경을 지운다)', "    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤", "    writeAtomic(queuePath, before)\n    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤"],
   ['MMC2', '쓰기 충돌 시 관측 바이트를 내 바이트로 덮는다', "    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤", "    writeAtomic(queuePath, next)\n    return fail('QUEUE_WRITE_CONFLICT', `쓴 뒤"],
