@@ -34,6 +34,7 @@
  *   plan · brief-auto · flow · source · auto-lane · notify · webui 의 call-site 를 하나씩 끊는다.
  */
 import assert from 'node:assert/strict'
+import { spawnSync as spawnChild } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync,
@@ -294,7 +295,7 @@ function planContractCases(src, judge) {
 }
 
 /** planRun 한 벌. `draftsDir` 를 주면 그 폴더에서 이어 돈다 (다음 회차) */
-function runPlan(planMod, { queue, prepare = () => {}, sourceMod = real.source, spyJudge = false, draftsDir = null, today = TODAY, persistSpecFn = null, directSourceFnOverride = null, supersedeFn = null } = {}) {
+function runPlan(planMod, { queue, prepare = () => {}, sourceMod = real.source, spyJudge = false, draftsDir = null, today = TODAY, persistSpecFn = null, directSourceFnOverride = null, supersedeFn = null, leaseFn = null } = {}) {
   const base = draftsDir ? dirname(draftsDir) : tmp('plan')
   const dd = draftsDir ?? join(base, 'drafts')
   const runsDir = join(dd, '_runs')
@@ -308,6 +309,7 @@ function runPlan(planMod, { queue, prepare = () => {}, sourceMod = real.source, 
     heroExists: () => false, log: () => {},
     ...(persistSpecFn ? { persistSpecFn } : {}),
     ...(supersedeFn ? { supersedeFn } : {}),
+    ...(leaseFn ? { leaseFn } : {}),
     ...(directSourceFnOverride ? { directSourceFn: directSourceFnOverride } : {}),
     ...(spyJudge ? {
       productGraphVersionFn: () => { calls.graph++; return GV },
@@ -1888,7 +1890,7 @@ function withdrawCases(webui) {
 const SUPERSEDE = {}
 const NEW_PUBLISH = '2026-10-23T10:30:00+09:00'
 const DAY3 = '2026-10-18'
-function supersedeCases(planMod = real.plan, sourceMod = real.source) {
+function supersedeCases(planMod = real.plan, sourceMod = real.source, sourcePath = PATHS.source) {
   const base = sourceEntry()
   /** 첫 회차 — 옛 승인으로 spec 저장 + 운영과 같은 장부(전송 0 · fingerprint null · CONTENT attempts 1) */
   const day1 = () => {
@@ -1913,6 +1915,22 @@ function supersedeCases(planMod = real.plan, sourceMod = real.source) {
   const archiveOf = (d) => join(dir(d), sourceMod.supersededSpecName(d.old.specHash))
   const heldOf = (r) => (r.run?.held ?? []).find((h) => h.slug === DIRECT_SLUG) ?? null
   const reuseOf = (r) => (r.run?.reusable ?? []).find((x) => x.slug === DIRECT_SLUG) ?? null
+  /** 실제 자식 프로세스가 교체를 시작하고 지정한 지점에서 SIGKILL 로 급사한다 — 정리 코드 · finally 없음 */
+  const crashChild = (d, entry, point) => {
+    const script = join(dirname(d.r.draftsDir), `crash-${point}.mjs`)
+    writeFileSync(script, [
+      "import { pathToFileURL } from 'node:url'",
+      'const [srcPath, qPath, draftsDir, gv, root, qfile, slug, point, rowJson] = process.argv.slice(2)',
+      'const src = await import(pathToFileURL(srcPath).href); const q = await import(pathToFileURL(qPath).href)',
+      'const v = src.verifyDirectSpecIdentity({ queueItem: JSON.parse(rowJson), draftsDir, expectedGraphVersion: gv, productRoot: root })',
+      "if (v.code !== src.DIRECT_SPEC_SUPERSEDE_REQUIRED) { console.log('NOT_REQUIRED ' + v.code); process.exit(3) }",
+      "const lease = q.acquireManuscriptLease({ slug, work: 'supersede', path: qfile })",
+      "src.supersedeDirectSpec({ judged: v.judged, draftsDir, slug, deliveryEntry: null, lease, hooks: { [point]: () => process.kill(process.pid, 'SIGKILL') } })",
+      "console.log('NOT_KILLED'); process.exit(4)",
+    ].join('\n'))
+    return spawnChild(process.execPath, [script, sourcePath, join(ROOT, 'scripts/lib/magazine-quarantine.mjs'), d.r.draftsDir, GV, ROOT, d.q, DIRECT_SLUG, point,
+      JSON.stringify(directItem({}, entry))], { encoding: 'utf8', env: process.env, timeout: 60000 })
+  }
   /** 교체가 일어나지 않았다 — 옛 spec 바이트 그대로 · 보존본 0 · 재사용 0 */
   const untouched = (d, r, code, problem = null) => {
     const h = heldOf(r)
@@ -1978,6 +1996,11 @@ function supersedeCases(planMod = real.plan, sourceMod = real.source) {
       // 🔴 lease.ok 만 있는 가짜 lease 는 lease 가 아니다 — 실제 lease 파일 · token 이 있어야 한다
       const fake = sourceMod.supersedeDirectSpec({ judged: v.judged, draftsDir: d.r.draftsDir, slug: DIRECT_SLUG, deliveryEntry: null, lease: { ok: true } })
       assert.deepEqual(fake.problems, ['LEASE_REQUIRED'])
+      // 🔴 조각 복구도 실제 lease 없이는 아무것도 하지 않는다
+      writeFileSync(join(dir(d), sourceMod.SUPERSEDE_TMP), 'x')
+      const rec = sourceMod.recoverSupersession({ draftsDir: d.r.draftsDir, slug: DIRECT_SLUG, lease: { ok: true }, newSpec: v.judged.spec })
+      assert.deepEqual({ code: rec.code, problems: rec.problems }, { code: sourceMod.DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED, problems: ['LEASE_REQUIRED'] })
+      assert.ok(existsSync(join(dir(d), sourceMod.SUPERSEDE_TMP)), 'lease 없이 조각을 지웠다'); rmSync(join(dir(d), sourceMod.SUPERSEDE_TMP))
       assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes)
     }],
     ['P1-7 신원이 다른 옛 spec(cluster·graphNodeId·admission) → BLOCKED IDENTITY_MISMATCH · 바이트 0 변화', () => {
@@ -2029,22 +2052,31 @@ function supersedeCases(planMod = real.plan, sourceMod = real.source) {
         const r = day2(d, revised(d.old.specHash), { extra: { supersedeFn } })
         const h = heldOf(r)
         SUPERSEDE[`경쟁 writer · ${when}`] = { held: h?.code ?? null, spec: readFileSync(specPathOf(d.r.draftsDir), 'utf8') === theirs ? 'theirs' : 'changed' }
-        assert.equal(h?.code, 'DIRECT_SPEC_SUPERSEDE_BLOCKED'); assert.ok(h.directSpec.supersede.problems.includes('CONCURRENT_WRITER'))
+        // 🔴 떼어 내기 전 개입은 그 바이트를 제자리에 돌려 두고 끝난다(BLOCKED · 조각 0). 떼어 낸 뒤 canonical 을 차지당하면
+        //    옛 spec 을 canonical 에 되돌릴 수 없으므로 소유 사본을 지우지 않고 RECOVERY_REQUIRED 다(외부 바이트는 그대로).
+        const after = when === 'beforeReplace'
+        assert.equal(h?.code, after ? 'DIRECT_SPEC_SUPERSEDE_BLOCKED' : 'DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED', JSON.stringify(h?.directSpec?.supersede))
+        assert.ok(h.directSpec.supersede.problems.includes('CONCURRENT_WRITER'))
         assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), theirs, '경쟁 writer 의 바이트를 덮었거나 되돌렸다')
         assert.equal(readFileSync(archiveOf(d), 'utf8'), d.oldBytes, '보존본이 없다')
         assert.equal(reuseOf(r), null)
-        assert.deepEqual(readdirSync(dir(d)).sort(), ['article-spec.json', sourceMod.supersededSpecName(d.old.specHash)].sort(), `tmp·소유 사본 조각이 남았다 (${when})`)
+        const expectFiles = ['article-spec.json', sourceMod.supersededSpecName(d.old.specHash), ...(after ? [] : [sourceMod.SUPERSEDE_OWNED])].sort()
+        assert.deepEqual(readdirSync(dir(d)).sort(), expectFiles, `조각 상태가 다르다 (${when})`)
+        if (!after) assert.equal(readFileSync(join(dir(d), sourceMod.SUPERSEDE_OWNED), 'utf8'), d.oldBytes, '복구용 소유 사본이 옛 spec 이 아니다')
       }
     }],
     ['P1-7 교체 직전 원고 lease 소유권을 잃었다 → BLOCKED LOCK_LOST · canonical 그대로 · 남의 lease 를 풀지 않는다', () => {
       const d = day1()
       let leasePath = null
-      const supersedeFn = (a) => { leasePath = a.lease.lease; writeFileSync(a.lease.lease, JSON.stringify({ token: 'reclaimed-by-other', pid: 1 })); return sourceMod.supersedeDirectSpec(a) }
+      const touched = { beforeReplace: 0, afterDetach: 0 }
+      const supersedeFn = (a) => { leasePath = a.lease.lease; writeFileSync(a.lease.lease, JSON.stringify({ token: 'reclaimed-by-other', pid: 1 }))
+        return sourceMod.supersedeDirectSpec({ ...a, hooks: { beforeReplace: () => { touched.beforeReplace++ }, afterDetach: () => { touched.afterDetach++ } } }) }
       const r = day2(d, revised(d.old.specHash), { extra: { supersedeFn } })
       const h = heldOf(r)
       SUPERSEDE['lease 소유권 상실'] = { held: h?.code ?? null, problems: h?.directSpec?.supersede?.problems ?? null }
       assert.equal(h?.code, 'DIRECT_SPEC_SUPERSEDE_BLOCKED'); assert.deepEqual(h.directSpec.supersede.problems, ['LOCK_LOST'])
       assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes, 'lease 를 잃었는데 canonical 을 건드렸다')
+      assert.deepEqual(touched, { beforeReplace: 0, afterDetach: 0 }, 'lease 를 잃었는데 canonical 떼어 내기까지 갔다')
       assert.equal(JSON.parse(readFileSync(leasePath, 'utf8')).token, 'reclaimed-by-other', '남의 lease 를 풀었다')
       assert.equal(reuseOf(r), null)
     }],
@@ -2069,6 +2101,86 @@ function supersedeCases(planMod = real.plan, sourceMod = real.source) {
       const g = realGate.deliveryGate({ slug: DIRECT_SLUG, draftsDir: d.r.draftsDir, quarantinePath: d.q, queueItem: directItem({}, entry),
         directSourceDeps: { queue: () => [directItem({}, entry)], expectedGraphVersion: () => GV, productRoot: () => ROOT } })
       assert.deepEqual({ ok: g.ok, code: g.code, message: g.message }, { ok: false, code: sourceMod.DIRECT_SPEC_SUPERSEDE_REQUIRED, message: null })
+    }],
+    ['P1-8 설치 실패(tmp open · write · fsync · install link 비-EEXIST) → BLOCKED INSTALL_FAILED · 옛 spec 을 canonical 에 복구 · 조각 0', () => {
+      for (const step of ['tmpOpen', 'tmpWrite', 'tmpFsync', 'install']) {
+        const d = day1()
+        const supersedeFn = (a) => sourceMod.supersedeDirectSpec({ ...a, hooks: { fail: (s) => (s === step ? Object.assign(new Error(`주입 ${s}`), { code: 'EIO' }) : null) } })
+        const r = day2(d, revised(d.old.specHash), { extra: { supersedeFn } })
+        const h = heldOf(r)
+        SUPERSEDE[`설치 실패 · ${step}`] = { held: h?.code ?? null, problems: h?.directSpec?.supersede?.problems ?? null, spec: readFileSync(specPathOf(d.r.draftsDir), 'utf8') === d.oldBytes ? 'old' : 'changed' }
+        assert.equal(h?.code, 'DIRECT_SPEC_SUPERSEDE_BLOCKED', `${step}: ${JSON.stringify(h)}`); assert.deepEqual(h.directSpec.supersede.problems, ['INSTALL_FAILED'])
+        assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes, `${step}: canonical 이 옛 spec 이 아니다`)
+        assert.deepEqual(readdirSync(dir(d)).sort(), ['article-spec.json', sourceMod.supersededSpecName(d.old.specHash)].sort(), `${step}: 조각이 남았다`)
+      }
+    }],
+    ['P1-8 설치 실패 + 옛 spec 복구 link 실패 → RECOVERY_REQUIRED · 소유 사본 보존 · 다음 회차가 복구 뒤 교체 · 조각 0', () => {
+      const d = day1()
+      const entry = revised(d.old.specHash)
+      const supersedeFn = (a) => sourceMod.supersedeDirectSpec({ ...a, hooks: { fail: (s) => (['install', 'restore'].includes(s) ? Object.assign(new Error(`주입 ${s}`), { code: 'EIO' }) : null) } })
+      const r = day2(d, entry, { extra: { supersedeFn } })
+      const h = heldOf(r)
+      SUPERSEDE['설치+복구 실패'] = { held: h?.code ?? null, problems: h?.directSpec?.supersede?.problems ?? null, owned: existsSync(join(dir(d), sourceMod.SUPERSEDE_OWNED)) ? 1 : 0 }
+      assert.equal(h?.code, sourceMod.DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED); assert.deepEqual(h.directSpec.supersede.problems, ['INSTALL_FAILED', 'RESTORE_FAILED'])
+      assert.equal(h.directSpec.supersede.recovery.owned, join(dir(d), sourceMod.SUPERSEDE_OWNED))
+      assert.equal(readFileSync(join(dir(d), sourceMod.SUPERSEDE_OWNED), 'utf8'), d.oldBytes, '복구용 소유 사본이 없다 — canonical 소실')
+      assert.equal(existsSync(specPathOf(d.r.draftsDir)), false)
+      const r2 = runPlan(planMod, { queue: [directItem({}, entry)], draftsDir: d.r.draftsDir, today: DAY3 })
+      const row = reuseOf(r2)
+      SUPERSEDE['설치+복구 실패 → 다음 회차'] = { reusable: row ? 1 : 0, supersession: row?.directSpec?.supersession ? 1 : 0, files: readdirSync(dir(d)).length }
+      assert.ok(row?.directSpec?.supersession?.superseded, JSON.stringify(r2.run?.held ?? r2.out).slice(0, 240))
+      assert.notEqual(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes)
+      assert.deepEqual(readdirSync(dir(d)).sort(), ['article-spec.json', sourceMod.supersededSpecName(d.old.specHash)].sort(), '복구 뒤 조각이 남았다')
+    }],
+    ['P1-8 lease 확인 뒤 떼어 내기 전 · 떼어 낸 뒤 설치 전 token 교체 → BLOCKED LOCK_LOST · 새 spec 설치 0 · 옛 spec 복구 · 남의 lease 보존', () => {
+      for (const when of ['beforeReplace', 'afterTmpWrite']) {
+        const d = day1()
+        const supersedeFn = (a) => sourceMod.supersedeDirectSpec({ ...a, hooks: { [when]: ({ lease }) => writeFileSync(lease.lease, JSON.stringify({ token: 'reclaimed-by-other', pid: 1 })) } })
+        let leasePath = null
+        const leaseFn = (o) => { const l = realQuarantine.acquireManuscriptLease(o); leasePath = l.lease; return l }
+        const r = day2(d, revised(d.old.specHash), { extra: { supersedeFn, leaseFn } })
+        const h = heldOf(r)
+        SUPERSEDE[`lease 경쟁 · ${when}`] = { held: h?.code ?? null, problems: h?.directSpec?.supersede?.problems ?? null }
+        assert.equal(h?.code, 'DIRECT_SPEC_SUPERSEDE_BLOCKED', `${when}: ${JSON.stringify(h)}`); assert.deepEqual(h.directSpec.supersede.problems, ['LOCK_LOST'])
+        assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes, `${when}: 소유권을 잃었는데 새 spec 을 설치했다`)
+        assert.deepEqual(readdirSync(dir(d)).sort(), ['article-spec.json', sourceMod.supersededSpecName(d.old.specHash)].sort(), `${when}: 조각이 남았다`)
+        assert.equal(JSON.parse(readFileSync(leasePath, 'utf8')).token, 'reclaimed-by-other', `${when}: 남의 lease 를 풀었다`)
+      }
+    }],
+    ['P1-8 실제 자식 프로세스 급사(떼어 낸 직후 · tmp fsync 뒤 설치 전 · 설치 직후 정리 전) → 다음 producer 회차가 lease 안에서 복구 · 조각 0', () => {
+      for (const [point, expectRecovered] of [['afterDetach', false], ['afterTmpWrite', false], ['afterReplace', true]]) {
+        const d = day1()
+        const entry = revised(d.old.specHash)
+        writeSource(d.r.draftsDir, { entries: [entry] })
+        const c = crashChild(d, entry, point)
+        assert.equal(c.signal, 'SIGKILL', `${point}: 자식이 급사하지 않았다 — ${c.stdout}${c.stderr}`.slice(0, 300))
+        const left = sourceMod.supersedeLeftovers({ draftsDir: d.r.draftsDir, slug: DIRECT_SLUG })
+        assert.ok(left.includes(sourceMod.SUPERSEDE_OWNED), `${point}: 급사 뒤 소유 사본이 없다 — 반례 준비 실패`)
+        const r = runPlan(planMod, { queue: [directItem({}, entry)], draftsDir: d.r.draftsDir, today: TOMORROW })
+        const row = reuseOf(r)
+        const sup = row?.directSpec?.supersession ?? null
+        SUPERSEDE[`급사 · ${point} → 다음 회차`] = { reusable: row ? 1 : 0, recovered: Boolean(sup?.recovered), files: readdirSync(dir(d)).length }
+        assert.ok(sup?.superseded, `${point}: ${JSON.stringify(r.run?.held ?? r.out).slice(0, 240)}`)
+        assert.equal(Boolean(sup.recovered), expectRecovered, `${point}: 복구 방식이 다르다 ${JSON.stringify(sup)}`)
+        const now = JSON.parse(readFileSync(specPathOf(d.r.draftsDir), 'utf8'))
+        assert.equal(now.publication.publishAt, NEW_PUBLISH); assert.equal(now.specHash, sup.newSpecHash)
+        assert.deepEqual(readdirSync(dir(d)).sort(), ['article-spec.json', sourceMod.supersededSpecName(d.old.specHash)].sort(), `${point}: 복구 뒤 조각이 남았다`)
+      }
+    }],
+    ['P1-8 떼어 낸 직후 급사 + 외부 writer 가 canonical 차지 → 다음 회차 RECOVERY_REQUIRED · 외부 바이트 · 소유 사본 보존', () => {
+      const d = day1()
+      const entry = revised(d.old.specHash)
+      writeSource(d.r.draftsDir, { entries: [entry] })
+      assert.equal(crashChild(d, entry, 'afterDetach').signal, 'SIGKILL')
+      const theirs = '{"external":"after-crash"}\n'
+      writeFileSync(specPathOf(d.r.draftsDir), theirs)
+      const r = runPlan(planMod, { queue: [directItem({}, entry)], draftsDir: d.r.draftsDir, today: TOMORROW })
+      const h = heldOf(r)
+      SUPERSEDE['급사 + 외부 canonical'] = { held: h?.code ?? null, problems: h?.directSpec?.supersede?.problems ?? null }
+      assert.equal(h?.code, sourceMod.DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED, JSON.stringify(h)); assert.deepEqual(h.directSpec.supersede.problems, ['EXTERNAL_CANONICAL'])
+      assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), theirs)
+      assert.equal(readFileSync(join(dir(d), sourceMod.SUPERSEDE_OWNED), 'utf8'), d.oldBytes)
+      assert.equal(reuseOf(r), null)
     }],
     ['P1-7 격리 장부를 읽지 못하면 교체하지 않는다 — 모름을 흔적 없음으로 읽지 않는다', () => {
       const d = day1(); writeFileSync(d.q, '{ 깨진 장부')
@@ -2241,18 +2353,25 @@ const MUTATIONS = [
   ['source', 'MSP4', '교체 판정의 등록 영수증 검사 제거 (P1-7)', "  if (existsSync(join(dir, ARTICLE_SPEC_REGISTER_LEDGER))) problems.push('REGISTERED')\n", ""],
   ['source', 'MSP5', '교체 판정의 전송 흔적 검사 제거 (P1-7)', "    problems.push('DELIVERY_TRACE')\n", ""],
   ['source', 'MSP6', '옛 spec 보존 누락 (P1-7)', "  const kept = preserveOldSpec(archive, j.oldBytes)\n", "  const kept = { ok: true }\n"],
-  ['source', 'MSP7', '떼어 낸 바이트의 old 확인 제거 — 옛 CAS 없는 구현 (P1-7)', "    if (readFileSync(owned, 'utf8') !== j.oldBytes) {\n", "    if (false) {\n"],
-  ['source', 'MSP8', '설치 뒤 다시 읽기 제거 (P1-7)', "    if (readFileSync(path, 'utf8') !== newBytes) return blocked(['CONCURRENT_WRITER'], '설치 뒤 spec 이 새 바이트가 아니다')\n", ""],
+  ['source', 'MSP7', '떼어 낸 바이트의 old 확인 제거 — 옛 CAS 없는 구현 (P1-7)', "    if (detached !== j.oldBytes) {\n", "    if (false) {\n"],
+  ['source', 'MSP8', '설치 뒤 다시 읽기 제거 (P1-7)', "    if (readFileSync(path, 'utf8') !== newBytes) {\n", "    if (false) {\n"],
   ['source', 'MSP9', '선언 hash 불일치를 교체 필요로 본다 (P1-7)', "      if (disk === declared) {\n", "      if (true) {\n"],
   ['source', 'MSP10', 'supersedes 형식 검사 제거 (P1-7)', "  if (supersedesProblem(entry)) blockers.push('SUPERSEDES_INVALID')\n", ""],
   ['source', 'MSP11', '교체 함수의 lease 요구 제거 (P1-7)', "  if (!lease?.ok || !lease.lease || !lease.token) return blocked(['LEASE_REQUIRED'], '원고 lease 없이 spec 을 교체하지 않는다')\n", ""],
-  ['source', 'MSP12', 'no-clobber 설치를 일반 rename 덮어쓰기로 되돌린다 (P1-7 CAS→commit)', "    try { linkSync(tmp, path) } catch (e) {\n", "    try { renameSync(tmp, path) } catch (e) {\n"],
+  ['source', 'MSP12', 'no-clobber 설치를 일반 rename 덮어쓰기로 되돌린다 (P1-7 CAS→commit)', "    try { inject('install'); linkSync(tmp, path) } catch (e) {\n", "    try { inject('install'); renameSync(tmp, path) } catch (e) {\n"],
   ['source', 'MSP13', '교체 직전 lease 소유권 재확인 제거 (P1-7)', "  if (!leaseHeld(lease)) return blocked(['LOCK_LOST'], '교체 직전 원고 lease 소유권을 잃었다 — canonical spec 을 건드리지 않는다')\n", ""],
-  ['source', 'MSP14', '옛 구현 복원 — old 확인 뒤 canonical 에 rename 으로 바로 설치 (떼어 내기 · 배타 생성 없음)', "    try { renameSync(path, owned) } catch (e) {\n", "    try { if (readFileSync(path, 'utf8') !== j.oldBytes) throw new Error('changed'); hooks.beforeInstall?.({ path }); const fd0 = openSync(tmp, 'w'); writeSync(fd0, newBytes); closeSync(fd0); renameSync(tmp, path); hooks.afterReplace?.({ path }); return { ok: true, record: { superseded: true, oldSpecHash, newSpecHash: judged.spec.specHash, archive: supersededSpecName(oldSpecHash) } } } catch (e) {\n"],
+  ['source', 'MSP14', '옛 구현 복원 — old 확인 뒤 canonical 에 rename 으로 바로 설치 (떼어 내기 · 배타 생성 없음)', "  try { renameSync(path, owned) } catch (e) {\n", "    try { if (readFileSync(path, 'utf8') !== j.oldBytes) throw new Error('changed'); hooks.beforeInstall?.({ path }); const fd0 = openSync(tmp, 'w'); writeSync(fd0, newBytes); closeSync(fd0); renameSync(tmp, path); hooks.afterReplace?.({ path }); return { ok: true, record: { superseded: true, oldSpecHash, newSpecHash: judged.spec.specHash, archive: supersededSpecName(oldSpecHash) } } } catch (e) {\n"],
   ['plan', 'MPS1', 'plan 이 원고 lease 없이 교체한다 (P1-7)', "          const lease = leaseFn({ slug: item.slug, work: 'supersede', path: quarantinePath })\n", "          const lease = { ok: true, release: () => {} }\n"],
   ['plan', 'MPS2', 'run 에 old/new specHash 기록 누락 (P1-7)', "    ...(persisted?.supersession ? { supersession: persisted.supersession } : {}),\n", ""],
   ['plan', 'MPS3', '장부 판독 실패에도 교체한다 (P1-7)', "          if (!ledger.ok) {\n            held.push", "          if (false) {\n            held.push"],
-  ['plan', 'MPS4', '교체 뒤 관문 재판정 생략 (P1-7)', "          j = judgeDirect(item)\n        }\n", "        }\n"],
+  ['plan', 'MPS4', '교체 뒤 관문 재판정 생략 (P1-7)', "(보존 ${s.record.archive})`)\n          j = judgeDirect(item)\n", "(보존 ${s.record.archive})`)\n"],
+  ['source', 'MSP15', '복구하지 못했는데 소유 사본을 지운다 (P1-8 canonical 소실)', "      drop(tmp)\n      return recovery([...problems, e?.code === 'EEXIST'", "      drop(tmp); drop(owned)\n      return recovery([...problems, e?.code === 'EEXIST'"],
+  ['source', 'MSP16', '설치 실패에 옛 spec 을 canonical 에 되돌리지 않는다 (P1-8)', "    try { inject('restore'); linkSync(owned, path) } catch (e) {\n", "    try { inject('restore'); throw Object.assign(new Error('skip'), { code: 'SKIP' }) } catch (e) {\n"],
+  ['source', 'MSP17', '설치 직전 lease 재확인 제거 (P1-8 lease 경쟁)', "    if (!leaseHeld(lease)) return restoreOld(['LOCK_LOST'], '설치 직전 원고 lease 소유권을 잃었다')\n", ""],
+  ['source', 'MSP18', 'tmp 실패를 구조화하지 않고 던진다 (P1-8)', "    } catch (e) { return restoreOld(['INSTALL_FAILED'], `새 spec tmp 를 만들지 못했다(${e?.code ?? e?.message})`) }\n", "    } catch (e) { throw e }\n"],
+  ['source', 'MSP19', '복구가 canonical 바이트를 새 spec 으로 확인하지 않는다 (P1-8)', "  if (newBytes !== null && canon === newBytes) {\n", "  if (canon !== null) {\n"],
+  ['source', 'MSP20', '조각 복구의 lease 요구 제거 (P1-8)', "  if (!leaseHeld(lease)) return recovery(['LEASE_REQUIRED'], '원고 lease 없이 교체 조각을 정리하지 않는다')\n", ""],
+  ['plan', 'MPS5', 'plan 이 앞 교체 조각을 복구하지 않는다 (P1-8 급사)', "        if (!dryRun && supersedeLeftovers({ draftsDir, slug: item.slug }).length) {\n", "        if (false) {\n"],
   ['webui', 'MW1', '회수 계획이 direct 에 "세션이 채워야 한다" 안내 (P1)', "  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {\n    return t.material?.articleSpec", "  if (false) {\n    return t.material?.articleSpec"],
 ]
 const MS2_SECOND = ["  if (entry.node?.graphVersion !== expectedGraphVersion || entry.admission?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')\n", '']
@@ -2332,7 +2451,7 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
             : kind === 'lane' ? [...laneCases(mod), ...reuseCases(real.plan, mod), ...basisDriftCases(real.plan, mod, real.webui, realRegen)]
               : kind === 'notify' ? notifyCases(mod, real.webui)
                 : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen), ...packetOnlyCases(mod), ...repairCases(realRepair, mod), ...briefFreeCases(mod), ...recoverCases(mod), ...withdrawCases(mod)]
-                  : [...sourceCases(mod), ...supersedeCases(webuiForGate, mod)]
+                  : [...sourceCases(mod), ...supersedeCases(webuiForGate, mod, path)]
       const failures = await runCases(cases)
       caught = failures.length > 0; why = failures[0] ?? '모든 반례가 통과했다'
     }
