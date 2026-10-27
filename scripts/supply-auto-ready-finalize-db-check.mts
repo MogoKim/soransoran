@@ -15,6 +15,8 @@
  *   G Post · Persona · PersonaActivityLog write 0
  *   H 공급 마감이 실패해도 발행 러너 도장(회복 경로)이 남는다
  *   I 연결 제거 · 게이트 뒤집기 · 실패 삼킴 · 순서 뒤집기 변이 — 자식이 실제로 돈(적재 성공) 변이만 센다
+ *   R race 재시도 — race 0 → 1회 · race 뒤 성공 → 2회 done · 계속 race → 2회 failed(회차 failed)
+ *     · 재시도 제거 · persistent race 성공 처리 변이 · 정본 replenishmentOf/judgeAgainst 로 실측 구간(UNKNOWN → ok)
  *
  * ── 격리 Postgres 세우는 법 ── `scripts/auto-ready-db-check.mts` 머리말과 같다.
  *   export DATABASE_URL=postgresql://soran@127.0.0.1:<port>/soran_test DIRECT_URL=$DATABASE_URL SORAN_ISOLATED_DB=yes-throwaway
@@ -33,6 +35,7 @@ import { AUTO_DECIDER, HUMAN_DECIDER, eligibilityOf } from '../src/lib/auto-read
 import { authoritativeGate } from '../src/lib/auto-ready-repo'
 import { RETRYABLE_NOTE_PREFIX, stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
 import { closeRunStatus, finalizeAutoReady, mayFinalizeAutoReady } from '../src/lib/supply-process'
+import { judgeAgainst, replenishmentOf, type ReadyCohortFact } from '../src/lib/stage-ladder-generic'
 import { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE } from '../src/lib/micro-seed-supply-autofill'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
@@ -274,6 +277,89 @@ async function main(): Promise<void> {
       && closeRunStatus([], { status: 'done', at: 'x', tally: { closed: 3 } }) === 'done')
     const thrown = await finalizeAutoReady({ stamp: async () => { throw new Error('boom') }, now: () => 'x' })
     check('🔴 throw 는 failed 로 남는다(closed · exception 은 품질 결과 — done)', thrown.status === 'failed' && thrown.error === 'boom')
+  }
+
+  console.log('\nR race 재시도 — 딱 한 번 · 두 번째도 race 면 실패')
+  {
+    /**
+     * 🔴 정본 `finalizeAutoReady` 를 가짜 도장 회차로 돌리는 probe — 원본 · 변이 복사본에 같은 판을 쓴다.
+     *    한 줄 JSON 을 내야 "유효 실행" 이다(변이가 import · 실행을 깨뜨려 잡힌 것은 세지 않는다).
+     */
+    const PROBE = `import { closeRunStatus, finalizeAutoReady } from '../src/lib/supply-process'
+const run = async (rounds: [string, number][][]) => {
+  let calls = 0
+  const fin = await finalizeAutoReady({ stamp: async () => new Map(rounds[Math.min(calls++, rounds.length - 1)]), now: () => 'x' })
+  return { calls, fin, close: closeRunStatus([], fin) }
+}
+console.log('PROBE ' + JSON.stringify({
+  race0: await run([[['stamped', 3], ['race', 0]]]),
+  quality: await run([[['closed', 3], ['exception', 1], ['skip', 2]]]),
+  raceThenOk: await run([[['stamped', 2], ['race', 1]], [['stamped', 1]]]),
+  persistent: await run([[['stamped', 0], ['race', 2]]]),
+}))
+`
+    type ProbeRun = { calls: number; fin: { status: string; tally?: Record<string, number>; attempts?: number; persistentRace?: number; error?: string }; close: string }
+    type Probe = { race0: ProbeRun; quality: ProbeRun; raceThenOk: ProbeRun; persistent: ProbeRun }
+    const probeOf = (tree: string): Probe | null => {
+      writeFileSync(join(tree, 'scripts', 'fin-race-probe.mts'), PROBE)
+      const r = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(tree, 'scripts', 'fin-race-probe.mts')], { cwd: tree, encoding: 'utf-8', timeout: 120_000 })
+      const line = (r.stdout ?? '').split('\n').find((l) => l.startsWith('PROBE '))
+      return r.status === 0 && line !== undefined ? JSON.parse(line.slice('PROBE '.length)) as Probe : null
+    }
+    const verdicts = (p: Probe): Record<string, boolean> => ({
+      race0: p.race0.calls === 1 && p.race0.fin.status === 'done' && p.race0.fin.attempts === 1 && p.race0.fin.tally?.stamped === 3 && p.race0.close === 'done',
+      quality: p.quality.calls === 1 && p.quality.fin.status === 'done' && p.quality.close === 'done'
+        && JSON.stringify(p.quality.fin.tally) === JSON.stringify({ closed: 3, exception: 1, skip: 2 }),
+      raceThenOk: p.raceThenOk.calls === 2 && p.raceThenOk.fin.status === 'done' && p.raceThenOk.fin.attempts === 2
+        && p.raceThenOk.fin.tally?.stamped === 3 && p.raceThenOk.fin.tally?.race === 1 && p.raceThenOk.close === 'done',
+      persistent: p.persistent.calls === 2 && p.persistent.fin.status === 'failed' && p.persistent.fin.persistentRace === 2
+        && p.persistent.fin.attempts === 2 && /persistent race 2/.test(p.persistent.fin.error ?? '') && p.persistent.close === 'failed',
+    })
+    const base = probeOf(T)
+    const v = base === null ? null : verdicts(base)
+    check('전제 — probe 유효 실행(원본)', base !== null)
+    check('🔴 race 0 → 도장 회차 1회 · done', v?.race0 === true, JSON.stringify(base?.race0))
+    check('🔴 closed · exception · skip 은 품질 결과 — 1회 · done(실패로 올리지 않는다)', v?.quality === true, JSON.stringify(base?.quality))
+    check('🔴 🔴 **race 뒤 성공 → 2회 · done · tally 키별 합 · attempts 2**', v?.raceThenOk === true, JSON.stringify(base?.raceThenOk))
+    check('🔴 🔴 **계속 race → 2회에서 멈춤 · failed(persistentRace 2) · closeRunStatus failed**', v?.persistent === true, JSON.stringify(base?.persistent))
+
+    const LIB = readFileSync(join(REPO, 'src', 'lib', 'supply-process.ts'), 'utf-8')
+    const raceMutants: { name: string; from: string; to: string; caught: (x: Record<string, boolean>) => boolean }[] = [
+      {
+        name: 'race 재시도 제거', from: '} while (race > 0 && attempts < AUTO_READY_FINALIZE_MAX_ATTEMPTS)', to: '} while (false)',
+        caught: (x) => !x.raceThenOk,
+      },
+      {
+        name: 'persistent race 성공 처리', from: 'if (race > 0) {', to: 'if (race > 0 && false) {',
+        caught: (x) => !x.persistent,
+      },
+    ]
+    for (const m of raceMutants) {
+      const hits = LIB.split(m.from).length - 1
+      if (hits !== 1) { check(`변이 지점 ${m.name} — 정확히 1곳`, false, `${hits}곳`); continue }
+      const t = mkTree()
+      writeFileSync(join(t, 'src', 'lib', 'supply-process.ts'), LIB.replace(m.from, m.to))
+      const p = probeOf(t)
+      check(`🔴 변이 검출 — ${m.name} (유효 실행)`, p !== null && m.caught(verdicts(p)), JSON.stringify(p))
+      rmSync(t, { recursive: true, force: true })
+    }
+
+    /**
+     * 🔴 2026-10-27 실측 cohort — 정본 `replenishmentOf` · `judgeAgainst` 그대로(수치를 다시 계산하지 않는다).
+     *    목표 10 · 용량 14. 마감 전 미도장 3 = 모름 → 구간 10~18 → UNKNOWN. 마감 뒤 예정 3 → 10 = 10 → ok.
+     */
+    const TARGET = 10
+    const fits = (need: number): boolean => need <= 14
+    const fact = (f: Omit<ReadyCohortFact, 'usdPerSlotValidResult'>): ReadyCohortFact => ({ ...f, usdPerSlotValidResult: null })
+    const rawOf = (f: ReadyCohortFact): number => f.published + f.lost + f.scheduled + f.unknown
+    const beforeF = fact({ sources: 35, published: 4, lost: 0, scheduled: 0, unknown: 3 })
+    const afterF = fact({ sources: 35, published: 4, lost: 0, scheduled: 3, unknown: 0 })
+    const rb = replenishmentOf(TARGET, beforeF)
+    const ra = replenishmentOf(TARGET, afterF)
+    check('🔴 🔴 **마감 전 실측(원천 35 · raw 7 · 공개 4 · 손실 0 · 예정 0 · 모름 3) → min 10 · max 18 · judge unknown**',
+      rawOf(beforeF) === 7 && rb.min === 10 && rb.max === 18 && judgeAgainst(rb, fits) === 'unknown', JSON.stringify(rb))
+    check('🔴 🔴 **마감 뒤 실측(원천 35 · raw 7 · 공개 4 · 손실 0 · 예정 3 · 모름 0) → min = max 10 · judge ok**',
+      rawOf(afterF) === 7 && ra.min === 10 && ra.max === 10 && judgeAgainst(ra, fits) === 'ok', JSON.stringify(ra))
   }
 
   console.log('\nI 변이 — 임시 복사본만 · 자식이 실제로 돈 변이만 센다')

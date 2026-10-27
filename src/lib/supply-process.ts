@@ -787,12 +787,17 @@ export function runStatusOf(outcomes: readonly StageOutcome[]): RunStatus {
  *    07:00 controller 에서 미도장 = 결말 모름(unknown)으로 세져 READY 필요량 구간을 벌렸다
  *    (2026-10-27 실측: 미도장 3행 → UNKNOWN · 08:00 에 그 3행이 도장됨).
  *    🔴 새 판정이 아니다 — 정본 도장 회차(`stampRoundAuditAware`)를 그대로 부른다. 결과는 품질 결과다:
- *       `closed`·`exception`·`skip`·`race` 는 실패가 아니다. **throw 만 실패다**(DB·프로세스 오류).
+ *       `closed`·`exception`·`skip` 은 실패가 아니다. **throw 는 실패다**(DB·프로세스 오류).
  *    🔴 발행 러너의 도장 호출은 회복 경로로 그대로 남는다.
+ *    🔴 `race`(동시 도장 경쟁에 진 묶음)만 예외다 — 남은 행이 controller 전에 미도장으로 남는다.
+ *       곧바로 **딱 한 번** 다시 부르고(총 최대 2회 · tally 는 키별 합), 두 번째도 race 면 실패다.
  */
 export type AutoReadyFinalize =
-  | { status: 'done'; at: string; tally: Record<string, number> }
-  | { status: 'failed'; at: string; error: string }
+  | { status: 'done'; at: string; tally: Record<string, number>; attempts?: number }
+  | { status: 'failed'; at: string; error: string; persistentRace?: number; attempts?: number }
+
+/** 🔴 race 가 남으면 한 번만 다시 부른다 — 무한 재시도는 lease 를 붙잡는다 */
+export const AUTO_READY_FINALIZE_MAX_ATTEMPTS = 2
 
 /**
  * 🔴 **마감은 쓸 수 있고 lease 를 쥔 회차만 한다.** dry-run · 스위치 닫힘 · lease 증명 없음은 DB write 0 이다.
@@ -807,8 +812,22 @@ export async function finalizeAutoReady(input: {
   now: () => string
 }): Promise<AutoReadyFinalize> {
   try {
-    const tally = await input.stamp()
-    return { status: 'done', at: input.now(), tally: Object.fromEntries(tally) }
+    const tally: Record<string, number> = {}
+    let attempts = 0
+    let race = 0
+    do {
+      attempts += 1
+      const round = await input.stamp()
+      for (const [k, v] of round) tally[k] = (tally[k] ?? 0) + v
+      race = round.get('race') ?? 0
+    } while (race > 0 && attempts < AUTO_READY_FINALIZE_MAX_ATTEMPTS)
+    if (race > 0) {
+      return {
+        status: 'failed', at: input.now(), persistentRace: race, attempts,
+        error: `persistent race ${race} — ${attempts}회 시도 뒤에도 도장 경쟁에 졌다`,
+      }
+    }
+    return { status: 'done', at: input.now(), tally, attempts }
   } catch (e) {
     return { status: 'failed', at: input.now(), error: e instanceof Error ? e.message : String(e) }
   }
