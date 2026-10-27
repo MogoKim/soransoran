@@ -5,7 +5,7 @@
     {
       "status": "APPROVED",
       "approvedBy": "yanadoo",
-      "approvedAt": "2026-10-23T10:05:10+09:00",
+      "approvedAt": "2026-10-27T09:28:24+09:00",
       "admission": {
         "g8ManifestHash": "5c6f01d8bfc97197eb13a43dc4183f61e9c025bee07a4b59c96990e2d3d53d3f",
         "receiptHash": "0b541c51374b802ffbbc6c9abdb23558c6b96eacf169cadbb6c56426768f1fde",
@@ -104,7 +104,7 @@
         "scene": "자연광이 드는 집 식탁에서 50대 한국 여성이 수첩에 일·생활·취미 세 항목을 적으며 선택지를 비교하는 현실적인 장면"
       },
       "publication": {
-        "publishAt": "2026-10-25T10:30:00+09:00"
+        "publishAt": "2026-10-29T10:30:00+09:00"
       },
       "productBasis": {
         "graphVersion": "g-20261021-081d9a",
@@ -158,7 +158,11 @@
           "discoveryType": "BRIDGE"
         }
       },
-      "sourceHash": "sha256:db950795119226eaf9b12752c3eae6fdcbb5ea3d1f69b36ef2dd68f54d5680c8"
+      "supersedes": {
+        "specHash": "sha256:55d46f280f11874506b343efe81d1b14a88bee72c4de43613caa4c5a9981b045",
+        "sourceHash": "sha256:db950795119226eaf9b12752c3eae6fdcbb5ea3d1f69b36ef2dd68f54d5680c8"
+      },
+      "sourceHash": "sha256:a91b08eb65f2a7995429ba559899f454c39bf2cb63a69ca3403c799e780d68e3"
     }
   ]
 }
