@@ -50,7 +50,7 @@
 | 항목 | 값 |
 |---|---|
 | 원격 main (2026-10-27 09:54 관측) | `3c9e08f2db94e2ff32799b2ff8cb5536fb51a0af` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `a4f8dd5397f7125ae67b095ffb581ff87789e66d` · 최신 main과 D100 변경면 diff 0 · tracked 0 |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `a4f8dd5397f7125ae67b095ffb581ff87789e66d` · main 차이를 별도 판정: D100 변경면 diff 0 · tracked 0 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 10-27 07:00 저장 |
