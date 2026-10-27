@@ -213,6 +213,7 @@
     "collect:guard-status": "tsx scripts/collect-guard-clear.mts --status",
     "collect:guard-clear": "tsx scripts/collect-guard-clear.mts",
     "supply:process-check": "tsx scripts/supply-process-check.mts",
+    "supply:auto-ready-finalize-db-check": "tsx scripts/supply-auto-ready-finalize-db-check.mts",
     "supply:stock-parity-check": "tsx scripts/supply-stock-parity-check.mts",
     "supply:stock-parity-db-check": "tsx scripts/supply-stock-parity-db-check.mts",
     "publish:lane-fairness-db-check": "tsx scripts/publish-lane-fairness-db-check.mts",

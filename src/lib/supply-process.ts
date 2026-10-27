@@ -762,6 +762,11 @@ export type ProcessRun = {
    *    예산 판정 · 이월 판정은 이 칸을 읽지 않는다. 없으면 옛 기록이다.
    */
   runTokenShadow?: RunTokenShadowTag
+  /**
+   * 🔴 **자동 READY 마감** (2026-10-27) — 적재 뒤 같은 lease 안에서 정본 도장 회차를 부른 결과.
+   *    없으면 옛 기록이다. live 회차가 이 칸 없이 끝나면 성공이 아니다(`closeRunStatus`).
+   */
+  autoReady?: AutoReadyFinalize
 }
 export type { FillRecord }
 
@@ -769,6 +774,78 @@ export type { FillRecord }
 /** 🔴 하나라도 실패하면 실패다. 격리는 "다른 것을 계속 돌린다" 이지 "없던 일로 한다" 가 아니다 */
 export function runStatusOf(outcomes: readonly StageOutcome[]): RunStatus {
   return outcomes.some((o) => o.status === 'failed') ? 'failed' : 'done'
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 자동 READY 마감 — 공통 DB 마감 단계 (2026-10-27)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **공급이 적재한 후보를 controller 전에 도장까지 끝낸다.**
+ *
+ *    앞판은 자동 READY 도장을 08:00 뒤 발행 러너만 했다. 06:15 공급이 적재한 자동 적격 행은
+ *    07:00 controller 에서 미도장 = 결말 모름(unknown)으로 세져 READY 필요량 구간을 벌렸다
+ *    (2026-10-27 실측: 미도장 3행 → UNKNOWN · 08:00 에 그 3행이 도장됨).
+ *    🔴 새 판정이 아니다 — 정본 도장 회차(`stampRoundAuditAware`)를 그대로 부른다. 결과는 품질 결과다:
+ *       `closed`·`exception`·`skip` 은 실패가 아니다. **throw 는 실패다**(DB·프로세스 오류).
+ *    🔴 발행 러너의 도장 호출은 회복 경로로 그대로 남는다.
+ *    🔴 `race`(동시 도장 경쟁에 진 묶음)만 예외다 — 남은 행이 controller 전에 미도장으로 남는다.
+ *       곧바로 **딱 한 번** 다시 부르고(총 최대 2회 · tally 는 키별 합), 두 번째도 race 면 실패다.
+ */
+export type AutoReadyFinalize =
+  | { status: 'done'; at: string; tally: Record<string, number>; attempts?: number }
+  | { status: 'failed'; at: string; error: string; persistentRace?: number; attempts?: number }
+
+/** 🔴 race 가 남으면 한 번만 다시 부른다 — 무한 재시도는 lease 를 붙잡는다 */
+export const AUTO_READY_FINALIZE_MAX_ATTEMPTS = 2
+
+/**
+ * 🔴 **마감은 쓸 수 있고 lease 를 쥔 회차만 한다.** dry-run · 스위치 닫힘 · lease 증명 없음은 DB write 0 이다.
+ *    입력 파일이 없는(NO_INPUT) live 회차도 한다 — 적재 commit 뒤 마감 전에 죽은 회차의 남은 행을 다시 집는다.
+ */
+export function mayFinalizeAutoReady(input: { live: boolean; killOpen: boolean; leased: boolean }): boolean {
+  return mayWriteRunState(input) && input.leased
+}
+
+export async function finalizeAutoReady(input: {
+  stamp: () => Promise<ReadonlyMap<string, number>>
+  now: () => string
+}): Promise<AutoReadyFinalize> {
+  try {
+    const tally: Record<string, number> = {}
+    let attempts = 0
+    let race = 0
+    do {
+      attempts += 1
+      const round = await input.stamp()
+      for (const [k, v] of round) tally[k] = (tally[k] ?? 0) + v
+      race = round.get('race') ?? 0
+    } while (race > 0 && attempts < AUTO_READY_FINALIZE_MAX_ATTEMPTS)
+    if (race > 0) {
+      return {
+        status: 'failed', at: input.now(), persistentRace: race, attempts,
+        error: `persistent race ${race} — ${attempts}회 시도 뒤에도 도장 경쟁에 졌다`,
+      }
+    }
+    return { status: 'done', at: input.now(), tally, attempts }
+  } catch (e) {
+    return { status: 'failed', at: input.now(), error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * 🔴 **live 회차의 최종 상태 — 마감이 없거나 실패했으면 성공이 아니다.**
+ *    적재가 성공해도 도장 회차가 throw 했으면 실패로 남긴다(관제가 본다 · controller 는 미도장을 모름으로 센다).
+ */
+export function closeRunStatus(stages: readonly StageOutcome[], autoReady: AutoReadyFinalize | undefined): RunStatus {
+  if (autoReady === undefined || autoReady.status === 'failed') return 'failed'
+  return runStatusOf(stages)
+}
+
+export function describeAutoReadyFinalize(f: AutoReadyFinalize): string {
+  if (f.status === 'failed') return `🔴 실패 — ${f.error}`
+  const parts = Object.entries(f.tally).map(([k, v]) => `${k} ${v}`)
+  return `🟢 ${parts.length > 0 ? parts.join(' · ') : '대상 없음'}`
 }
 
 // ─────────────────────────────────────────────────────────

@@ -37,9 +37,12 @@ import {
   fmtCount, hasWork, judgeJitDemand, judgeProcessRun,
   mayWriteRunState, planBoundedCommonPhase, planCarryOverFill, planCommonPhase, planPending, planSourcePhase,
   ledgerRunIdOf, type WorksetGate,
-  runCommonPhase, runSourcePhase, runFileName, runStatusOf, verifyRun,
+  runCommonPhase, runSourcePhase, runFileName, verifyRun,
+  closeRunStatus, describeAutoReadyFinalize, finalizeAutoReady, mayFinalizeAutoReady, type AutoReadyFinalize,
   type LockView, type ProcessRun, type ProcessStage, type StagePlan, type StageGate,
 } from '../src/lib/supply-process'
+import { stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
+import { autoReadyEnabled } from '../src/lib/auto-ready-v2'
 /**
  * 🔴 **잠금은 커널 lease 하나다** (2026-10-12 Batch C1) — 진입 · 회차 자식 · token(shadow) · probe 는 전부 `supply-lease`.
  *    📜 옛 `collect-lock` `wx` 잠금은 지웠다 — 죽은 회차가 남긴 파일이 `STALE_HELD` 로 사람이 올 때까지 공급을 세웠다.
@@ -787,12 +790,43 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const commonPlan = planCommonPhase(pending, policy, {
     kind: 'hold', reason: '미리보기 — 큐 스냅샷은 실행 국면에서 만든다', runId,
   })
+  /**
+   * 🔴 **자동 READY 마감 — 공통 DB 마감 단계** (2026-10-27). 적재 뒤 · 같은 lease 안에서 정본 도장 회차를 부른다.
+   *    07:00 controller 전에 06:15 공급이 적재한 자동 적격 행의 도장을 끝내 재고 상태를 확정한다.
+   *    🔴 lease 를 쥔 live 회차만 — dry-run · 스위치 닫힘 · 증명 없음은 부르지 않는다(DB write 0).
+   *    🔴 시각은 마감 시각이다 — 감사 시한 초과를 회차 시작 시각으로 재면 그만큼 늦게 닫힌다.
+   *    🔴 Queue 도장만 쓴다 — Post · Persona 배정 · ActivityLog 를 만들지 않는다.
+   */
+  const leased = proof !== null
+  const finalizeIfLeased = async (): Promise<AutoReadyFinalize | null> => {
+    if (!mayFinalizeAutoReady({ live: LIVE, killOpen, leased })) return null
+    const fin = await finalizeAutoReady({
+      stamp: () => stampRoundAuditAware(prisma, { env: process.env, now: new Date() }),
+      now: () => new Date().toISOString(),
+    })
+    console.log(`\n⑤-z 자동 READY 마감 (스위치 ${autoReadyEnabled(process.env) ? '켜짐' : '꺼짐 — 도장 0'})`
+      + ` ${describeAutoReadyFinalize(fin)}`)
+    return fin
+  }
 
   if (!verdict.ok) {
     console.log(`\n④ 돌지 않는다 — ${verdict.reason}`)
     if (verdict.code === 'NO_INPUT') {
-      console.log('   🟢 정상 no-op. 네트워크 0 · LLM 0 · DB write 0 · Post 0')
+      /**
+       * 🔴 **입력이 없어도 마감은 한다** — 앞 회차가 적재 commit 뒤 마감 전에 죽었으면 미도장 행이 남는다.
+       *    새 파일 없이도 다음 live 회차가 다시 집는다. 마감이 throw 하면 정상 no-op 이 아니다(exit 1).
+       */
+      const fin = await finalizeIfLeased()
+      if (fin === null) {
+        console.log('   🟢 정상 no-op. 네트워크 0 · LLM 0 · DB write 0 · Post 0')
+      } else {
+        console.log('   🟢 정상 no-op. 네트워크 0 · LLM 0 · Queue 도장 외 DB write 0 · Post 0')
+      }
       console.log('   🔴 수집 job 은 이 판정과 무관하게 자기 스케줄로 돈다')
+      if (fin?.status === 'failed') {
+        console.error('\n🔴 자동 READY 마감 실패 — 미도장 행은 controller 가 모름으로 센다 · 다음 live 회차가 다시 집는다\n')
+        return 1
+      }
     } else {
       console.log('\n   돌았다면 —')
       for (const sp of sourcePlans) {
@@ -1211,7 +1245,11 @@ async function main(proof: LeaseProof | null): Promise<number> {
   }
   const phase2 = await runCommonPhase({ plan: common, exec, now: nowIso, onStage, beforeStage })
   record.stages = [...record.stages, ...phase2.outcomes]
-  record.status = runStatusOf(record.stages)
+  // 🔴 적재 결과를 먼저 남긴다 — 상태는 아직 running 이다. 마감 전에 죽으면 성공으로 기록되지 않는다
+  save()
+  // 🔴 적재가 실패한 회차도 마감은 한다 — 앞 회차가 남긴 미도장 행이 있을 수 있다(도장은 멱등 · CAS)
+  record.autoReady = (await finalizeIfLeased()) ?? undefined
+  record.status = closeRunStatus(record.stages, record.autoReady)
   record.completedAt = nowIso()
   save()
 
@@ -1247,6 +1285,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     }
   }
   console.log(`   LLM      호출 ${fmtCount(tally.llmCall)} · 캐시 ${fmtCount(tally.cacheHit)}`)
+  console.log(`   자동 READY 마감 ${record.autoReady === undefined ? '🔴 없음' : describeAutoReadyFinalize(record.autoReady)}`)
 
   let ok = record.status === 'done'
   if (before !== null) {
