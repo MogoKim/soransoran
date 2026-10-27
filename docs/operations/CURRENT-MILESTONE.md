@@ -1,9 +1,10 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-27 09:54 KST
+> as-of: 2026-10-27 10:41 KST
 > 마지막 창업자 동기화: 2026-10-27 (`quality-v25`는 main·보조 Mac runtime에 반영됐다.
 > 10-27 07:00 D10 preflight의 `READY_REQUIREMENT_UNKNOWN`은 공급 뒤 자동 READY 도장이 08:00 발행기에만 있던
-> 시각 경계로 확정했고, 공급 lease 안에서 도장까지 마치는 보정은 local exact-head 검증 중이다.)
+> 시각 경계로 확정했다. 공급 lease 안에서 도장까지 마치는 보정은 PR #804로 merge됐고 보조 Mac runtime에
+> 정식 배포됐다. code·deployed PASS이며 operating PASS는 다음 자연 공급에서 확정한다.)
 >
 > 이 문서는 **검증된 현재 상태와 다음 실행**만 적는다. 정책은
 > [`NORTH-STAR.md`](./NORTH-STAR.md)와
@@ -14,8 +15,8 @@
 
 **`quality-v25`는 main과 D100 runtime에 반영됐다. 10-27 07:00에는 원천 35·raw READY 7·공개 4·미도장 3으로
 용량은 14였지만 필요량이 10~18로 벌어져 D10 대신 `PREPARE · 공개 d5 · 준비 d10`이 기록됐다. 미도장 3건은
-08:00에 정상 도장되어 품질 실패가 아니라 도장 시각 경계였다. 현재 critical path는 공급 회차가 적재 뒤 같은 lease에서
-자동 READY 도장까지 끝내도록 한 보정의 통합·runtime 반영과 다음 자연 D10 증명이다. 수동 READY·게시·댓글·stage·
+08:00에 정상 도장되어 품질 실패가 아니라 도장 시각 경계였다. 공급 회차가 적재 뒤 같은 lease에서 자동 READY 도장까지
+끝내는 보정은 main·보조 Mac runtime에 반영됐다. 현재 critical path는 다음 자연 공급의 같은-lease 도장과 자연 D10 증명이다. 수동 READY·게시·댓글·stage·
 운영 행 보정은 하지 않는다.**
 
 ## 1. 검증 기준과 상태
@@ -31,7 +32,7 @@
 | 자동 D30·D50 | ✅ 단계 사다리 | ⚠️ profile 코드 | **UNKNOWN** - 앞 단계 PASS와 Persona 확장 필요 |
 | 자동 D100 | ❌ 100 슬롯 runtime scheduler/profile 없음 | ❌ | **UNKNOWN** - Persona 180 canary·300+ 지속 용량 필요 |
 | quality-v25 | ✅ Content Core 단일 의미 권위 | ✅ main·보조 Mac runtime | ✅ 자연 D5 글에서 옛 생활 게이트 오차단 재발 0 |
-| 공급 자동 READY 마감 | ✅ local exact-head targeted·격리 DB | ❌ PR·CI·runtime 전 | **UNKNOWN** - 자연 회차 미관측 |
+| 공급 자동 READY 마감 | ✅ targeted 311/311·격리 DB 46/46·전체 CI | ✅ PR #804·보조 Mac runtime | **UNKNOWN** - 자연 회차 미관측 |
 | 기계 초안 자동 생명주기 | ✅ | ✅ runtime | ✅ routine 사람 검토 없이 자동 READY·품질 격리 |
 | Persona 계약 | ✅ 기존 30·code universe 40 | ✅ 기존 30 | ✅ contract-valid 30 · active 30 |
 | 첫 댓글 | ✅ 60분·automatic provenance·복구 | ✅ runner loaded | ✅ 운영 중 |
@@ -49,8 +50,8 @@
 
 | 항목 | 값 |
 |---|---|
-| 원격 main (2026-10-27 09:54 관측) | `3c9e08f2db94e2ff32799b2ff8cb5536fb51a0af` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `a4f8dd5397f7125ae67b095ffb581ff87789e66d` · main 차이를 별도 판정: D100 변경면 diff 0 · tracked 0 |
+| 원격 main (2026-10-27 10:41 관측) | `48c07e7e635517add62360456099aa271b40fad9` |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `48c07e7e635517add62360456099aa271b40fad9` · main 차이를 별도 판정: diff 0 · tracked 0 · 격리 487/487 |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
 | 현재 controller | `PREPARE · 공개 d5 · 준비 d10` · 10-27 07:00 저장 |
@@ -78,20 +79,20 @@
 `quality-v25`는 차단 결론을 Content Core에서 끝내고, 확정할 수 없는 가족 건강 주체는 advisory로만 기록한다.
 현재 병목은 생성·품질이 아니라 06:15 공급 결과의 자동 READY 도장이 07:00 controller보다 늦던 실행 순서다.
 
-### 2.3 현재 통합 후보
+### 2.3 현재 통합 상태
 
-| 후보 | 상태 | 채택된 목적 | 운영 반영 조건 |
+| 항목 | 상태 | 채택된 목적 | 운영 반영 조건 |
 |---|---|---|---|
-| 공급 lease 안 자동 READY 마감 | local code candidate · targeted 311/311 · 격리 DB 46/46 · 독립 리뷰 PASS | 공급 성공 전에 자동 적격 행의 도장 결말을 확정 | exact-head 전체 CI → main → runtime 활성화 → 자연 회차 |
+| 공급 lease 안 자동 READY 마감 | PR #804 merge · runtime `48c07e7e` · 전체 CI·격리 487/487 PASS | 공급 성공 전에 자동 적격 행의 도장 결말을 확정 | 다음 자연 공급에서 same-lease 도장 관측 |
 | D20 Persona 확장 | D10과 분리해 보존 | contract-valid 40과 자연스러운 합성 닉네임 | D10 operating PASS 뒤 충돌 gate·DB 생성·활성화 |
 
-로컬 후보를 배포 또는 운영 PASS로 쓰지 않는다.
+배포 PASS를 운영 PASS로 쓰지 않는다.
 
 ## 3. D10 개방의 정확한 blocker
 
 | blocker | 현재 | 해소 조건 |
 |---|---|---|
-| `AUTO_READY_FINALIZATION_TIMING` | 06:15 자동 적격 3건이 07:00 뒤인 08:00에 도장됨 | 공급 lease 안 도장 보정 exact-head CI·runtime 배포 |
+| `AUTO_READY_FINALIZATION_TIMING` | code·deployed PASS · 자연 회차 미관측 | 다음 자연 공급에서 공급 종료 전 도장 결말 확정 |
 | `OPERATING_EVIDENCE_PENDING` | 10-27 D10 미개방 | 다음 유효 자연 회차의 자동 10/10·댓글·감사·비용·중복 증거 확정 |
 
 10-27에는 D10이 열리지 않았다. 실패 축만 고치며, 수동 READY·stage·게시·댓글·
@@ -103,7 +104,7 @@
 |---|---|---|---|
 | STAGE | D10→D100 무인 확장 | 10-27 `PREPARE d5 · capacity d10` | 각 단계 exact-N operating PASS |
 | QUALITY | 재미와 사실 경계 | quality-v25 deployed | 새 실제 결함 0 유지 |
-| SUPPLY-FINALIZE | controller 전 READY 결말 확정 | local code candidate | exact-head CI·runtime·자연 06:15 도장 증거 |
+| SUPPLY-FINALIZE | controller 전 READY 결말 확정 | code·deployed PASS | 자연 공급의 same-lease 도장 증거 |
 | LIFECYCLE | routine 사람 검토 제거 | operating | autoReadyPending/qualityQuarantine 지속 관측 |
 | CONV | 글당 댓글 1..5 | 공통 profile operating | D10에서 비용·중복·대화가치 PASS |
 | VIEW | 실제 활력 표시 | Production 원장 operating | dedupe·내부/봇 제외·UI 합산 지속 대조 |
@@ -120,7 +121,7 @@
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D10-FIX | 공급 뒤 자동 READY 결말 확정 | 공급 lease 마감 exact-head CI·runtime sync·06:15 미도장 자동 적격 0 | 기존 운영 행 수정·DB 직접 수정·수동 증거 |
+| D10-FIX | 공급 뒤 자동 READY 결말 확정 | code·runtime 완료 · 자연 공급에서 공급 종료 시 미도장 자동 적격 0 | 기존 운영 행 수정·DB 직접 수정·수동 증거 |
 | D10 | 다음 유효 자연 D10 증명 | 자동 10/10·첫 댓글 10·선택적 추가 0~4·감사·usageUnknown 0·중복 0 | 수동 stage·READY·게시 |
 | P20 | Persona 40 활성화 | D10 PASS·이름/말투/카드/회원·크롤 작성자 충돌 0·contract-valid 40 | 이름만 만들고 용량으로 계산 |
 | C20 | D20 댓글·공급 profile | D10 실측 단가·수율·추가 댓글 결과로 예산과 run cap 산정 | 근거 없는 선증액 |
@@ -157,8 +158,8 @@
 
 ## 8. 다음 갱신 조건
 
-1. 공급 자동 READY 마감이 merge·runtime activate 된다.
-2. 다음 자연 06:15 공급이 자동 적격 행을 같은 lease 안에서 도장한다.
+1. 다음 자연 공급이 자동 적격 행을 같은 lease 안에서 도장한다.
+2. 다음 06:15 공급에서도 controller 전에 같은 계약이 유지된다.
 3. 다음 07:00 controller가 현재 계약으로 D10을 열고 자연 D10이 PASS/FAIL로 확정된다.
 4. D20 Persona 40이 DB에 생성·활성화된다.
 5. runtime HEAD·pin·manifest 또는 loaded job 수가 바뀐다.
