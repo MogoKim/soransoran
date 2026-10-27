@@ -57,6 +57,7 @@ npm run supply:stock-parity-db-check
 npm run publish:lane-fairness-db-check
 npm run supply:wip-contract-db-check
 npm run supply:draft-deferral-e2e-db-check
+npm run supply:auto-ready-finalize-db-check
 npm run check:draft-life-gates-db
 npm run auto-ready:audit-db-check
 npm run auto-ready:audit-day-db-check

@@ -307,6 +307,8 @@ const EXPECTED_D100_DB_COMMANDS = [
   'publish:lane-fairness-db-check',
   'supply:wip-contract-db-check',
   'supply:draft-deferral-e2e-db-check',
+  // 2026-10-27 공급 적재 뒤 자동 READY 도장 마감 — controller 전 unknown 잔여를 같은 격리 DB에서 검증한다
+  'supply:auto-ready-finalize-db-check',
   'check:draft-life-gates-db',
   'auto-ready:audit-db-check',
   'auto-ready:audit-day-db-check',
@@ -327,7 +329,7 @@ const EXPECTED_D100_DB_COMMANDS = [
   'board-move:db-check',
 ] as const
 const wiredD100DbCommands = [...d100DbRunner.matchAll(/^npm run (\S+)\s*$/gm)].map((m) => m[1])
-check('🔴 격리 DB 명령 29개가 승인된 순서로 모두 남아 있다',
+check('🔴 격리 DB 명령 30개가 승인된 순서로 모두 남아 있다',
   JSON.stringify(wiredD100DbCommands) === JSON.stringify(EXPECTED_D100_DB_COMMANDS))
 check('🔴 D100 DB runner는 격리 주소만 만들고 종료 때 컨테이너를 정리한다',
   /SORAN_ISOLATED_DB=yes-throwaway/.test(d100DbRunner)
