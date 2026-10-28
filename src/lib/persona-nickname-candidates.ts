@@ -77,7 +77,7 @@ const HD: readonly string[] = [
 
 /** 🔴 섞인 짧은 닉 — 한글+숫자와 영문 한 단어가 한 목록에 있다(한 형식으로 줄 세우지 않는다) */
 const MIXED: readonly string[] = [
-  '난괜찮2', 'idk', '그저그래9', 'maybe', '몰라요3', 'nvm', '오늘도9', '별일없음7',
+  '난괜찮2', 'idk', '그저그래9', 'maybe', '몰라요3', 'nvm', '냅둬요3', '별일없음7',
   'whatever', 'weekend', '다음에3', 'dunno', '응그래4', 'someday', 'hmm', '안되면말지6',
 ]
 
