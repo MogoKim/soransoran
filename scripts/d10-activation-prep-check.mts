@@ -4,7 +4,7 @@
  *
  * 일곱 가지를 고정한다.
  *   ① (지움 2026-09-30) 14일 준비도 시간축 — 정본은 다음 단계 preflight 다
- *   ② persona 24명    얇은 축을 **측정해서** 메웠는가 · 닉네임이 정본 2~5자인가
+ *   ② persona 24명    얇은 축을 **측정해서** 메웠는가 · 닉네임이 정본 2~10자인가
  *   ③ (지움 2026-09-30) freshness TTL — 정본은 `judgeSlotRelease` 다
  *   ④ 수집원 다회      1,147 을 페이지로 쓰지 않는가 · 성공률을 곱하는가 · 보호장치가 있는가
  *   ⑤ d10 dry-run     24명·140건에서 140/140 인가 · 수집 준비도가 **BLOCKED** 인가
@@ -116,7 +116,7 @@ const q = (n: number): QueueCandidate[] => Array.from({ length: n }, (_, i) => (
 // 🔴 (2026-09-30 · source-slot-v1) 이 절은 지웠다 — ① 14일 준비도 시간축(`simulateStage` · `horizonStart` 지평) — 14일치 완성 글 재고를 준비도로 쓰던 정본. 대신 다음 단계 preflight(`judgeNextPreflight` · `stage:scheduler-check`) 가 본다.
 
 // ── ② persona 24명 · 닉네임 ──
-console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 2~5자')
+console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 2~10자')
 {
   const full = parsePoolDoc(read(POOL_DOC))
   check('정본 Pool 파싱 문제 0', full.problems.length === 0)
@@ -185,15 +185,17 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 2~5자'
   /**
    * 🔴 **닉네임 — D100 canon §4.2 · runbook §2.1 (2026-10-16) 기준.**
    *    옛 Pool §3-2 는 "두세 글자 순우리말"을 정본으로 적었으나 새 권위가 커뮤니티
-   *    실분포(반복 리듬·구어체·2~5자)로 대체했다. NAME_LENGTH 상수가 이를 못박는다.
+   *    실분포(반복 리듬·구어체·영문·숫자·2~10자)로 대체했다. NAME_LENGTH 상수가 이를 못박는다.
    */
   check('🔴 길이 하한은 2이다 — 한 글자는 여전히 위반', NAME_LENGTH.min === 2)
   check('🔴 길이 상한이 커뮤니티 스타일 4자 이상을 허용한다 — canon §4.2', NAME_LENGTH.max >= 4)
   check('🟢 네 글자 반복 리듬 이름은 통과한다 — 커뮤니티 스타일 canon §4.2', verifyNamePolicy('도란도란').ok)
-  check('🔴 상한 초과는 여전히 위반', !verifyNamePolicy('도란도란도란').ok)
+  check('🔴 상한 초과는 여전히 위반 — 11자', !verifyNamePolicy('도란도란도란도란도란도').ok && verifyNamePolicy('도란도란도란도란도란').ok)
   check('🔴 한 글자도 위반', !verifyNamePolicy('가').ok)
   check('🟢 두 글자·세 글자는 통과', verifyNamePolicy('수국').ok && verifyNamePolicy('도라지').ok)
-  check('🔴 숫자·영문은 정책 위반', !verifyNamePolicy('수국2').ok && !verifyNamePolicy('sugukk').ok)
+  check('🟢 영문·숫자는 정책 위반이 아니다 — 섞인 작명 canon §4.2', verifyNamePolicy('수국2').ok && verifyNamePolicy('sugukk').ok && verifyNamePolicy('a2z').ok)
+  check('🔴 숫자만 · 숫자 5연속 · 허용 밖 문자 · 같은 글자 4연속은 위반',
+    !verifyNamePolicy('12345').ok && !verifyNamePolicy('수국12345').ok && !verifyNamePolicy('수국_2').ok && !verifyNamePolicy('ａｂ').ok && !verifyNamePolicy('수수수수국').ok)
   check('🔴 봇/AI·운영자 연상 차단', !verifyNamePolicy('수국봇').ok && !verifyNamePolicy('운영수국').ok)
   check('🔴 출처 커뮤니티 계열 차단', !verifyNamePolicy('레몬수국').ok)
   check('🔴 지역명 차단', !verifyNamePolicy('서울수국').ok)
