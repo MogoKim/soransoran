@@ -9,7 +9,7 @@
  *
  * 🔴 관측을 건너뛰는 것과 통과시키는 것은 다르다 — 건너뛰면 화면에 그렇게 적는다.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   closeSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync,
   readdirSync,
@@ -26,7 +26,7 @@ import {
   judgeCanonicalMode, judgeJobPath, judgeJobState, judgeLoadedConfig, judgeLoadedJobs,
   judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists, judgeDisabledPlists,
   parseLaunchctlPrint, type JobState,
-  judgeOptionalRuntimeJob, parseLaunchctlPlistPath,
+  judgeOptionalRuntimeJob, parseLaunchctlPlistPath, OPS_LOOP_TEMPLATE_DEFER_LABELS,
 } from '../src/lib/runtime-isolation'
 import {
   judgeCheckpointFreshness, judgePromotionFreshness, judgeSlotEvidence, parseSuccessRuns, runIdToMs,
@@ -70,6 +70,33 @@ const AGENT_DIR = join(homedir(), 'Library', 'LaunchAgents')
  *    그래서 운영 경로는 `--require-runtime` 을 붙여 **관측 없으면 실패**하게 한다.
  */
 const REQUIRE_RUNTIME = process.argv.includes('--require-runtime')
+
+/**
+ * 🔴 **runtime:deploy 전환 전용 유예 스위치** (2026-10-29 · D20 rollout 순서).
+ *
+ *    배포기는 잠시 멈춘 ops-loop 소유 job(runner-recover·stage-controller)을 **옛 설치본 그대로** 되올린다.
+ *    strict 검사는 그 옛 원문 ≠ 새 템플릿으로 막혀, 새 원문을 설치할 ops-loop-install 까지 가지 못했다.
+ *    이 스위치는 그 둘의 **설치본 원문 불일치 하나만** pending 으로 돌린다 — 나머지는 전부 strict 그대로다.
+ *    🔴 `--require-runtime` 없이는 쓸 수 없다(exit 2) — 관측 없는 유예는 통과를 꾸며 낸다.
+ */
+export function judgeIsolationArgs(argv: readonly string[]): {
+  requireRuntime: boolean; deferOpsLoopTemplates: boolean; error: string | null
+} {
+  const requireRuntime = argv.includes('--require-runtime')
+  const deferOpsLoopTemplates = argv.includes('--defer-ops-loop-templates')
+  const error = deferOpsLoopTemplates && !requireRuntime
+    ? '--defer-ops-loop-templates 는 --require-runtime 과 함께만 쓴다 — runtime:deploy 전환 전용'
+    : null
+  return { requireRuntime, deferOpsLoopTemplates, error }
+}
+const ISOLATION_ARGS = judgeIsolationArgs(process.argv.slice(2))
+if (ISOLATION_ARGS.error !== null) {
+  console.error(`🔴 ${ISOLATION_ARGS.error}`)
+  process.exit(2)
+}
+const DEFER_OPS_LOOP_TEMPLATES = ISOLATION_ARGS.deferOpsLoopTemplates
+/** 🔴 유예한 것 — 끝에서 "배포 미완료" 로 따로 보고한다. 통과 수에 섞지 않는다 */
+const opsLoopPending: string[] = []
 
 let pass = 0
 let failN = 0
@@ -1926,6 +1953,75 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [QI] 🔴 **설치본이 runtime 템플릿 render 와 다르면 실패** (템플릿이 바뀌었는데 옛 설치본)',
       !j({ expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }).ok)
     check('🔴 [QI] runtime 템플릿을 render 하지 못하면 실패(fail-closed)', !j({ expectedXml: null }).ok)
+
+    // ── 🔴 [D20] ops-loop 원문 유예 — runtime:deploy 전환 전용 · 원문 불일치 **하나만** · 소유 label 둘만 ──
+    const OPS_OWNED = [RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL] as const
+    const opsJ = (label: string, o: Partial<In> = {}) => {
+      const plist = `/Users/x/Library/LaunchAgents/${label}.plist`
+      return judgeOptionalRuntimeJob(base({ label, expectedPlistPath: plist, loadedPlistPath: plist, ...o }))
+    }
+    // 옛 설치본 그대로 되올린 상태 — 새 템플릿 render 와 원문만 다르다
+    const STALE: Partial<In> = { expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }
+    check('🔴 [D20] 유예 가능 label 은 ops-loop-templates 정본의 runner-recover·stage-controller 둘뿐이다(문자열 drift 0)',
+      JSON.stringify([...OPS_LOOP_TEMPLATE_DEFER_LABELS].sort()) === JSON.stringify([...OPS_OWNED].sort()))
+    for (const L of OPS_OWNED) {
+      const strict = opsJ(L, STALE)
+      check(`🔴 [D20] ${L}: 유예 플래그 없으면 원문 불일치 → FAIL · pending 0`,
+        !strict.ok && strict.pending.length === 0 && strict.problems.some((p) => p.includes('템플릿 render 와 다르다')))
+      const deferred = opsJ(L, { ...STALE, deferOpsLoopTemplate: true })
+      check(`🟢 [D20] ${L}: 유예 플래그 + 원문 불일치만 → PASS · pending 1건으로 **기록**한다`,
+        deferred.ok && deferred.problems.length === 0 && deferred.pending.length === 1
+        && deferred.pending[0]!.includes('ops-loop-install') && deferred.notes.some((n) => n.includes('ops-loop-install 대기')))
+      const same = opsJ(L, { deferOpsLoopTemplate: true })
+      check(`🟢 [D20] ${L}: 유예 플래그여도 원문이 같으면 pending 0`, same.ok && same.pending.length === 0)
+      // 🔴 유예는 원문 하나뿐 — 나머지 실패는 유예 플래그가 있어도 그대로 FAIL 이다
+      const strictCases: readonly [string, Partial<In>][] = [
+        ['render 실패(null)', { expectedXml: null }],
+        ['unloaded', { state: 'unloaded', loadedPlistPath: null, loaded: parseLaunchctlPrint(null) }],
+        ['관측 unknown', { state: 'unknown' }],
+        ['설치본 없이 loaded', { installedXml: null, installedArgs: [], installedWorkingDirectory: null }],
+        ['load 된 plist 경로', { loadedPlistPath: `${DEVDIR}/docs/operations/launchd/${L}.plist` }],
+        ['loaded 인자', { loaded: parseLaunchctlPrint(auditPrint({ path: `/Users/x/Library/LaunchAgents/${L}.plist`, args: [NPX, 'tsx', `${RTDIR}/scripts/auto-ready-audit.mts`] })) }],
+        ['loaded WD', { loaded: parseLaunchctlPrint(auditPrint({ path: `/Users/x/Library/LaunchAgents/${L}.plist`, wd: `${RTDIR}/scripts` })) }],
+        ['HEAD≠pin', { runtimeHead: NEXT }],
+        ['HEAD 모름', { runtimeHead: null }],
+        ['pin 모름', { pinnedSha: null }],
+        ['추적 안 된 스크립트', { programTrackedAtHead: false }],
+        ['추적 여부 모름', { programTrackedAtHead: null }],
+        ['개발 트리 경로', {
+          installedXml: xmlFor(DEVDIR), installedArgs: argsFor(DEVDIR), installedWorkingDirectory: DEVDIR,
+          loaded: parseLaunchctlPrint(auditPrint({ args: argsFor(DEVDIR), wd: DEVDIR })),
+        }],
+      ]
+      const leaked = strictCases.filter(([, o]) => opsJ(L, { ...STALE, ...o, deferOpsLoopTemplate: true }).ok).map(([n]) => n)
+      check(`🔴 [D20] ${L}: 유예 플래그여도 경로·설치/loaded·인자/WD·HEAD=pin·추적·unknown/unloaded·render 실패는 FAIL (${strictCases.length - leaked.length}/${strictCases.length})`,
+        leaked.length === 0)
+      for (const n of leaked) console.log(`      유예가 새어 나간 사례: ${n}`)
+    }
+    for (const L of [AJOB, COMMENT_RUNNER_LABEL, PUBLISH_RUNNER_LABEL]) {
+      const v = opsJ(L, { ...STALE, deferOpsLoopTemplate: true })
+      check(`🔴 [D20] ops-loop 소유가 아닌 ${L} 는 유예 플래그로도 원문 불일치를 미루지 못한다`, !v.ok && v.pending.length === 0)
+    }
+
+    // ── 🔴 [D20] CLI — 유예 플래그는 --require-runtime 과 함께만 ──
+    check('🔴 [D20] --defer-ops-loop-templates 단독은 인자 오류다',
+      judgeIsolationArgs(['--defer-ops-loop-templates']).error !== null)
+    {
+      const both = judgeIsolationArgs(['--require-runtime', '--defer-ops-loop-templates'])
+      const strictOnly = judgeIsolationArgs(['--require-runtime'])
+      check('🟢 [D20] --require-runtime + 유예는 허용 · --require-runtime 단독은 유예 꺼짐',
+        both.error === null && both.requireRuntime && both.deferOpsLoopTemplates
+        && strictOnly.error === null && !strictOnly.deferOpsLoopTemplates && judgeIsolationArgs([]).error === null)
+    }
+    // 🔴 실제 CLI 가 exit 2 로 끝나는가 — 판정 함수만 맞고 배선이 없으면 죽은 게이트다.
+    //    자식은 probe env 를 받아 다시 자식을 띄우지 않는다(가드가 빠져도 재귀하지 않는다)
+    if (process.env.SORAN_ISOLATION_ARGS_PROBE !== '1') {
+      const r = spawnSync(process.execPath, [...process.execArgv, 'scripts/runtime-isolation-check.mts', '--defer-ops-loop-templates'], {
+        encoding: 'utf-8', env: { ...process.env, SORAN_ISOLATION_ARGS_PROBE: '1' }, timeout: 120_000,
+      })
+      check('🔴 [D20] CLI: --defer-ops-loop-templates 단독 실행은 exit 2 · 검사를 시작하지 않는다',
+        r.status === 2 && String(r.stderr).includes('--require-runtime') && !String(r.stdout).includes('① 판정 규칙'))
+    }
   }
 
   // ── 🔴 실제 관측 배선이 이 판정을 부른다 — 부르지 않으면 판정은 죽은 코드다 ──
@@ -1938,6 +2034,33 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       && /label: RUNNER_RECOVER_LABEL/.test(real)
       && /label: STAGE_CONTROLLER_LABEL/.test(real)
       && /check\(`🔴 \$\{opt\.label\}/.test(real))
+    check('🔴 [D20] 실제 관측이 유예 스위치를 판정에 넘기고 pending 을 모아 보고한다',
+      /deferOpsLoopTemplate: DEFER_OPS_LOOP_TEMPLATES,\n\s+\}\)\n\s+opsLoopPending\.push\(\.\.\.v\.pending\)/.test(real)
+      && /for \(const p of v\.pending\) console\.log/.test(real)
+      && /ops-loop 원문 유예\(pending\) \$\{opsLoopPending\.length\}건 — 🔴 \*\*배포 미완료\*\*/.test(real))
+    check('🔴 [D20] 인자 오류(exit 2)는 어떤 검사보다 먼저 끝낸다',
+      src.indexOf('process.exit(2)') > 0 && src.indexOf('process.exit(2)') < src.indexOf("console.log('① 판정 규칙 (행동)')"))
+    const deploy = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
+    check('🔴 [D20] runtime:deploy 마지막 격리 검사는 --require-runtime + --defer-ops-loop-templates 다',
+      /isolationGate: \(\) => act\('npx', \['tsx', 'scripts\/runtime-isolation-check\.mts', '--require-runtime', '--defer-ops-loop-templates'\]\),/.test(deploy))
+    check('🔴 [D20] runtime:deploy 는 성공해도 ops:loop-install 전까지 배포 미완료라고 말한다(✅ 배포 완료 0)',
+      /배포는 아직 미완료/.test(deploy) && /npm run ops:loop-install -- --apply/.test(deploy)
+      && !/✅ 배포 완료 —/.test(deploy))
+    const deployCore = readFileSync('src/lib/runtime-deploy.ts', 'utf-8')
+    check('🔴 [D20] 공용 배포 코어도 완료를 사칭하지 않고 ops-loop strict 대기를 기록한다',
+      /runtime 단계 완료 · ops-loop strict 대기/.test(deployCore)
+      && !/fx\.log\(`배포 완료 —/.test(deployCore))
+    /**
+     * 🔴 유예 플래그를 argv 로 넘기는 운영 호출은 runtime:deploy 하나뿐이어야 한다.
+     *    wave-c · host-migrate · ops-loop-install · production-activation 이 붙이면 strict 판정이 조용히 느슨해진다.
+     */
+    const ALLOWED = new Set(['scripts/runtime-deploy.mts', 'scripts/runtime-isolation-check.mts', 'scripts/ops-loop-check.mts'])
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(join(dir, e.name)) : /\.(mts|mjs|ts|js)$/.test(e.name) ? [join(dir, e.name)] : [])
+    const users = [...walk('scripts'), ...walk('src')]
+      .filter((f) => readFileSync(f, 'utf-8').includes("'--defer-ops-loop-templates'") && !ALLOWED.has(f))
+    check('🔴 [D20] 유예 플래그를 넘기는 운영 호출은 runtime:deploy 하나다 — strict 호출처에 섞이지 않는다', users.length === 0)
+    for (const f of users) console.log(`      유예 플래그를 쓰는 곳: ${f}`)
   }
 
 
@@ -2636,7 +2759,9 @@ if (!existsSync(RUNTIME_ROOT)) {
       installedWorkingDirectory: installedXml === null ? null : valueOf(installedXml, 'WorkingDirectory'),
       state, loadedPlistPath: parseLaunchctlPlistPath(printed), loaded: parseLaunchctlPrint(printed), expectedXml,
       runtimeRoot: RUNTIME_ROOT, devRoots: DEV_ROOTS, runtimeHead: head, pinnedSha: pinned, programTrackedAtHead: tracked,
+      deferOpsLoopTemplate: DEFER_OPS_LOOP_TEMPLATES,
     })
+    opsLoopPending.push(...v.pending)
     // 🔴 관측 실패는 --require-runtime 에서만 실패로 본다 (다른 job 과 같은 규칙)
     if (state === 'unknown' && !REQUIRE_RUNTIME) {
       console.log(`   ⚪ ${label}: launchctl 관측 불가 — --require-runtime 에서만 막는다`)
@@ -2644,6 +2769,7 @@ if (!existsSync(RUNTIME_ROOT)) {
       check(`🔴 ${opt.label} (설치 선택) — 미설치면 통과 · 설치됐으면 경로·인자·원문·loaded·SHA 가 runtime 과 같다`, v.ok)
     }
     for (const p of v.problems) console.log(`      ${p}`)
+    for (const p of v.pending) console.log(`      ${p}`)
     for (const n of v.notes) console.log(`   ${v.installed ? '🟢' : '⚪'} ${n}`)
   }
 
@@ -2722,4 +2848,10 @@ if (!existsSync(RUNTIME_ROOT)) {
 
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
+if (DEFER_OPS_LOOP_TEMPLATES) {
+  console.log(opsLoopPending.length === 0
+    ? '  🟡 ops-loop 원문 유예 0건 — 그래도 strict 확인은 ops:loop-install --apply 가 한다'
+    : `  🟡 ops-loop 원문 유예(pending) ${opsLoopPending.length}건 — 🔴 **배포 미완료**`)
+  console.log('  🔴 npm run ops:loop-install -- --apply 가 새 원문을 설치하고 strict 격리 검사를 통과해야 배포 완료다\n')
+}
 process.exit(failN === 0 ? 0 : 1)

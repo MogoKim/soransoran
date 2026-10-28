@@ -461,6 +461,16 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
     /manifest\.json/.test(installer) && /설치 검증 실패/.test(installCore)
     && /applyInstall\(desired, runtimeRoot, \{/.test(installer) && /restore: \(\) => restore\(backupDir\),/.test(installer)
     && /process\.exit\(outcome\.restored \? 1 : 2\)/.test(installer))
+  {
+    // 🔴 D20 rollout 순서 배선 — 설치기는 strict 격리 검사를 **유예 플래그 없이** 붙이고, 실패면 restore 경로로 간다
+    const isoWire = /isolation: \(\) => \{\n\s+const iso = run\(npxPath, \['tsx', 'scripts\/runtime-isolation-check\.mts', '--require-runtime'\]\)\n\s+if \(!iso\.ok\) console\.log\(iso\.out\)\n\s+return iso\.ok\n\s+\},/
+    check('🔴 공식 설치기는 loaded 검증 뒤 strict runtime:isolation-check --require-runtime 을 붙인다(유예 플래그 0)',
+      isoWire.test(installer) && !installer.includes("'--defer-ops-loop-templates'"))
+    check('🔴 설치 판정부는 loaded 검증 통과 뒤 io.isolation() 이 false 면 io.restore() 로 되돌린다',
+      /const isolated = io\.isolation\(\)/.test(installCore)
+      && /if \(isolated\) return \{ ok: true \}\n\s+io\.log\('🔴 strict 격리 검사 실패 — 설치 전 상태로 되돌린다'\)\n\s+return \{ ok: false, restored: io\.restore\(\) \}/.test(installCore)
+      && installCore.indexOf('const isolated = io.isolation()') > installCore.indexOf('verifyLoaded(label, xml, io.print(label), runtimeRoot)'))
+  }
   check('🔴 공식 설치기는 발행 러너의 렌더 표식과 **loaded** 표식·label 을 둘 다 확인하고, 틀리면 rollback 한다',
     /judgeLaunchdRunMarker\(plistEnvironmentOf\(desired\.get\(PUBLISH_RUNNER_LABEL\)!\)\)/.test(installer)
     && /judgeLaunchdRunMarker\(launchctlEnvironmentOf\(printOut\)\)/.test(installCore)
@@ -773,6 +783,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   type Sim = { calls: string[]; restores: number; loaded: Map<string, string> }
   const simulate = (opt: {
     failBootstrap?: string; printOverride?: (label: string, out: string | null) => string | null; restoreOk?: boolean
+    isolationOk?: boolean
   } = {}): { outcome: ReturnType<typeof applyInstall>; sim: Sim } => {
     const old = desiredPlists('heartbeat', input)
     const sim: Sim = { calls: [], restores: 0, loaded: new Map(old) }
@@ -792,7 +803,8 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
         const out = x === undefined ? null : printOf(l, x)
         return opt.printOverride === undefined ? out : opt.printOverride(l, out)
       },
-      restore: () => { sim.restores += 1; return opt.restoreOk ?? true },
+      isolation: () => { sim.calls.push('isolation'); return opt.isolationOk ?? true },
+      restore: () => { sim.calls.push('restore'); sim.restores += 1; return opt.restoreOk ?? true },
       log: () => {},
     })
     return { outcome, sim }
@@ -825,6 +837,23 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   const restoreFail = simulate({ failBootstrap: KA, restoreOk: false })
   check('(d) rollback 자체가 실패하면 restored=false 로 알린다(설치기는 exit 2)',
     !restoreFail.outcome.ok && !restoreFail.outcome.restored && restoreFail.sim.restores === 1)
+
+  // ── (e) 🔴 D20 rollout 순서 — loaded 검증 뒤 strict 격리 검사 · 실패면 snapshot 복원 ──
+  check('(e) 🔴 strict 격리 true → 설치 성공 · rollback 0 · 격리 검사는 정확히 한 번',
+    good.outcome.ok && good.sim.restores === 0 && good.sim.calls.filter((c) => c === 'isolation').length === 1)
+  check('(e) 🔴 strict 격리는 **모든 bootstrap 뒤**에 돈다(loaded 검증 다음)',
+    idx('isolation') > lastOf('bootstrap'))
+  {
+    const isoFail = simulate({ isolationOk: false })
+    check('(e) 🔴 strict 격리 false → 전체 rollback(snapshot 복원) · 설치 실패',
+      rolledBack(isoFail) && isoFail.sim.calls.indexOf('restore') > isoFail.sim.calls.indexOf('isolation'))
+    const isoFailRestoreFail = simulate({ isolationOk: false, restoreOk: false })
+    check('(e) 🔴 strict 격리 false + rollback 실패 → restored=false(설치기는 exit 2)',
+      !isoFailRestoreFail.outcome.ok && !isoFailRestoreFail.outcome.restored && isoFailRestoreFail.sim.restores === 1)
+    const loadedFail = simulate({ failBootstrap: KA })
+    check('(e) loaded 검증이 이미 실패하면 격리 검사 없이 바로 rollback 한다(잴 것이 없다)',
+      rolledBack(loadedFail) && !loadedFail.sim.calls.includes('isolation'))
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
