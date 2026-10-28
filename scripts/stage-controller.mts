@@ -165,7 +165,10 @@ async function holdForSupplyLease(lease: 'busy' | 'unknown', flagOn: boolean): P
     if (!valid.ok) { console.error(`🔴 공급 lease 충돌 HOLD가 계약을 지키지 않는다 — ${valid.reason}`); return 1 }
     if (JSON_OUT) console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, supplyLease: lease, safeHold: true, decision }, null, 2))
     else log(`\n🟡 SUPPLY_LEASE_${lease.toUpperCase()} — 마지막 예약이므로 부분 재고로 승격하지 않고 지속 단계 ${current} HOLD를 기록한다\n`)
-    if (!flagOn) { log(`🔴 ${CONTROLLER_ENV} 가 on 이 아니다 — 저장하지 않는다\n`); return 0 }
+    if (!flagOn) {
+      log(`🔴 ${CONTROLLER_ENV} 가 on 이 아니다 — 저장하지 않는다 (consumer 는 옛 env/canary 단계로 돌아가지 않고 가장 안전한 d1 로 감속한다)\n`)
+      return 0
+    }
     const io = stageDecisionIo(prisma, TODAY)
     const out = await ensureStageDecision({
       read: io.read, insert: io.insert, validate: io.validate, compute: () => decision, by: DECISION_WRITER,

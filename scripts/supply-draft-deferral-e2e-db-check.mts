@@ -17,7 +17,7 @@
  *      세지 않는지 대조한다.
  *   ⑥ 부모 러너를 **두 회차** 돌린다 (2026-09-28 공급 가속 P0) — 발행된 형제 · 거절된 형제 · 옛 글의 원천은
  *      묶음에 들지 않고, 1회차가 적재한 원천은 2회차에 다시 뽑히지 않으며(중복 Queue 0 · Post 불변),
- *      장부의 judge ≤ 10 · draft ≤ 40 을 센다.
+ *      장부의 judge ≤ 20 · draft ≤ 80 을 센다.
  *
  *   🔴 임시 디렉터리에서 돈다: cwd(`.microseed-data`)와 HOME(장부 · 말투 자산)이 모두 mkdtemp 안이다.
  *      저장소 · 운영 장부 · 운영 말투 자산을 건드리지 않는다. 말투 자산은 **합성**이다(실제 댓글 0).
@@ -458,7 +458,7 @@ async function worksetAxisRunner(
 }
 
 /**
- * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 10/40** (2026-09-28 공급 가속 P0).
+ * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 20/80** (2026-09-28 공급 가속 P0 · 2026-10-28 D20 전환).
  *
  *    부모 러너 `main --live` 를 **두 회차** 돌린다 — 격리 DB · 가짜 provider · 임시 cwd.
  *    · 1회차 전: 큐에 **발행된** 형제(PUBLISHED + Post) · 거절된 형제 · 옛 글(Post 의 원천 칸)이 있다
@@ -466,7 +466,7 @@ async function worksetAxisRunner(
  *      → 다른 카페의 같은 글 번호는 다른 원천이다 — 막지 않는다
  *    · 1회차가 적재한 원천은 2회차 묶음에 들지 않는다 — 큐 행이 생겼기 때문이다
  *    · 원천마다 큐 행 ≤ 1 · Post 는 러너가 늘리지 않는다
- *    · 장부 — judge ≤ 10 · draft ≤ 40 (단계 env 상한)
+ *    · 장부 — judge ≤ 20 · draft ≤ 80 (단계 env 상한)
  */
 async function duplicateSourceRunner(
   prisma: InstanceType<typeof import('@prisma/client').PrismaClient>,
@@ -542,7 +542,7 @@ async function duplicateSourceRunner(
         // 🔴 결정이 넣은 모양(표식 포함) — 표식 없는 손 env 는 d1 이다(Lane A)
         ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
         SORAN_LLM_DAILY_BUDGET_USD: '1000', SORAN_LLM_RESERVE_HEADROOM: '1.5',
-        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 40 으로 덮는다
+        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 20 · 80 으로 덮는다
         SORAN_LLM_RUN_REQUEST_CAP: '20',
         FAKE_PROVIDER_JUDGE_DECISION: 'AUTO_SEED',
         NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
@@ -566,7 +566,9 @@ async function duplicateSourceRunner(
   check('🔴 🔴 **러너 로그가 그 셋을 제외 사유로 센다 — 미발행 형제 1 · 이미 큐·글에 있는 원천 2**',
     /같은 원문의 미발행 형제가 큐에 있다 1 · 같은 원문으로 이미 큐 행이나 글이 있다 \(발행된 것 포함 — 두 번째 글을 만들지 않는다\) 2/.test(r1.out),
     (/제외 .*/.exec(r1.out) ?? [''])[0])
-  check('🔴 다른 카페의 같은 번호 모양(dupx)은 막지 않는다 · 묶음은 10건', ids1.includes('dupx') && ids1.length === 10, ids1.join(','))
+  const eligibleIds = ['dupx', ...Array.from({ length: 12 }, (_, i) => `dupf${String(i + 1).padStart(2, '0')}`)]
+  check('🔴 다른 카페의 같은 번호 모양(dupx)은 막지 않는다 · 가용 고유 원천 13건을 모두 고른다(상한 20)',
+    same(ids1, eligibleIds), ids1.join(','))
 
   // ── 장부 — 단계 상한 ──
   const ledgerDir = join(H, 'Library', 'Application Support', 'soransoran', 'llm-ledger')
@@ -579,11 +581,11 @@ async function duplicateSourceRunner(
     return [...last.values()].filter((r) => r.stage !== 'countTokens' && r.status === 'settled').length
   }
   const rid1 = r1.ws?.runId ?? ''
-  check('🔴 🔴 **장부 — judge ≤ 10 · draft ≤ 40 · 둘 다 실제로 불렸다**',
-    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 10 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 40,
+  check('🔴 🔴 **장부 — judge ≤ 20 · draft ≤ 80 · 둘 다 실제로 불렸다**',
+    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 20 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 80,
     `judge ${paid(`${rid1}-j`)} · draft ${paid(`${rid1}-d`)}`)
-  check('🔴 🔴 **러너가 단계 env 상한 10 · 40 을 실었다** (자식 로그)',
-    /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 40/.test(r1.out))
+  check('🔴 🔴 **러너가 단계 env 상한 20 · 80 을 실었다** (자식 로그)',
+    /회차 요청 상한 20/.test(r1.out) && /회차 요청 상한 80/.test(r1.out))
   // 🔴 (2026-10-12 Batch C1) 실제 판정 · 초안 자식이 fd 9 를 물려받아 러너와 같은 커널 lease · 실행 token 을 증명했다 — 장부 shadow 칸
   const shadowOf = (r: Record<string, unknown>): { ok?: boolean; code?: string | null } | undefined => r.runTokenShadow as never
   const shadowRows = ledger().filter((r) => String(r.runId).startsWith(rid1) && r.stage !== 'countTokens')

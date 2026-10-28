@@ -702,6 +702,7 @@ async function main(): Promise<void> {
           && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
         const d5 = judgeNextPreflight('d5', {
           ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60,
+          commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
           auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2,
           readyCohort: { ...c, usdPerSlotValidResult: 0.01 },
         }, RUNNER_GRID)
@@ -710,6 +711,7 @@ async function main(): Promise<void> {
           && !d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict === 'PASS', JSON.stringify({ counts: d5.counts, codes: d5.codes }))
         const d5Boundary = judgeNextPreflight('d5', {
           ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60,
+          commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
           auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2,
           readyCohort: { ...c, sources: 50, usdPerSlotValidResult: 0.01 },
         }, RUNNER_GRID)
