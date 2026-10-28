@@ -9,10 +9,9 @@ import {
 } from '@/lib/post-visibility'
 import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
 import { BOARD_PAGE_SIZE, isPageOutOfRange, type BoardSort } from '@/lib/list-query'
-import { pickHomePopular } from '@/lib/popularity'
-import { withRealReactions } from '@/lib/popularity-db'
 import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
-import { applyHomeExposure, isOverrideActive } from '@/lib/home-exposure-rules'
+import { HOME_POPULAR_COUNT } from '@/lib/home-exposure'
+import { composeHomePopularViews, loadHomePopularInputs } from '@/lib/home-popular-views'
 import type { BoardType } from '@prisma/client'
 
 const COMMUNITY_BOARD_TYPES = COMMUNITY_BOARDS.map((b) => b.type) as BoardType[]
@@ -181,123 +180,25 @@ export async function getRecentDiscoveryPosts(take = 6) {
   })
 }
 
-/** 게시판 하나에서 점수 계산에 넣을 후보를 몇 건까지 가져올지. */
-const HOME_POPULAR_CANDIDATES_PER_BOARD = 60
-
 /**
- * 홈 노출 예외를 얹기 전, 자동 후보를 몇 배로 넉넉히 뽑을지.
+ * 홈 인기 ViewModel — 홈(/) 과 어드민 홈 노출이 같은 결과를 읽는다.
  *
- * 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
- *    PIN 이 자동 상위와 겹쳐도 마찬가지다. 여유를 두고 뽑아 잘라 낸다.
+ * 쓰는 곳: src/app/admin/(ops)/home/page.tsx · getHomePopularPosts(→ src/app/page.tsx)
  */
-const HOME_OVERRIDE_HEADROOM = 2
-
-/** 총 노출에서 갱년기톡에 보장하는 최소 자리. 후보가 모자라면 있는 만큼만 채운다. */
-const HOME_POPULAR_MIN_MENOPAUSE = 7
-
-/**
- * 홈 인기 점수 목록 — 홈 노출 예외(PIN·HIDE)를 얹기 전의 순수 점수 순서.
- *
- * 🔴 홈 전용이다. /best 는 이것을 쓰지 않는다 — 자기 입성 기준(best-ranking.ts)과
- *    읽기(queries/best.ts)가 있다. 두 화면의 점수를 합치지 않는다.
- *
- * getRecentDiscoveryPosts 와 짝이다. 둘 다 discovery 표면이고 고르는 기준만 다르다 —
- * 상세 하단 이어읽기는 최신순, 인기글은 점수순이라 함수를 나눈다.
- *
- * 게시판별로 따로 가져오는 이유는 배분 때문이다. 한 번에 가져오면 자유게시판이
- * 상위를 채웠을 때 갱년기톡 후보가 애초에 손에 들어오지 않는다.
- *
- * 점수와 배분은 popularity.ts 가 맡는다 — 여기는 조회만 한다.
- * 차단 목록을 인자로 받는다 — 홈 경로가 getBlockedUserIds 를 두 번 부르지 않게 하려는 것이다.
- *
- * 🔴 점수의 반응은 실반응 신호(popularity-db.ts — 실회원 사람 수 + 비회원 상한 3)다. 후보를 고른 뒤 붙인다.
- *    화면에 그리는 `_count.comments`(Persona 댓글 포함 실제 개수)는 그대로 둔다 — 숫자를 바꾸지 않고
- *    순서만 실반응으로 매긴다.
- */
-async function pickPopularByScore(take: number, blockedIds: string[]) {
-  const candidatesFor = (boardType: BoardType) =>
-    prisma.post.findMany({
-      where: {
-        boardType,
-        ...DISCOVERY_ELIGIBLE_WHERE,
-        ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
-      },
-      select: POST_LIST_ITEM_SELECT,
-      orderBy: { createdAt: 'desc' },
-      take: HOME_POPULAR_CANDIDATES_PER_BOARD,
-    })
-
-  const [menopauseRows, freeRows] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
-  const [menopause, free] = await Promise.all([
-    withRealReactions(prisma, menopauseRows),
-    withRealReactions(prisma, freeRows),
-  ])
-
-  return pickHomePopular({
-    menopause,
-    free,
-    take,
-    minMenopause: HOME_POPULAR_MIN_MENOPAUSE,
-    now: new Date(),
-  })
+export async function getHomePopularViews(now: Date = new Date()) {
+  const blockedIds = await getBlockedUserIds()
+  const inputs = await loadHomePopularInputs(prisma, blockedIds, now)
+  return composeHomePopularViews(inputs, now)
 }
 
 /**
- * 홈 "지금 뜨는 이야기" 용 — 순수 인기 점수 위에 홈 노출 예외를 한 겹 얹는다.
+ * 홈 "지금 뜨는 이야기"(모바일 한 줄) — getHomePopularViews 의 mobile 그대로다.
  *
- * 🔴 applyHomeExposure 를 부르는 곳은 여기 하나다.
- *    예전에 순수 점수 함수 안에 두었더니 그 함수를 함께 쓰던 /best 까지
- *    홈 고정·숨김을 따라갔다. 홈 큐레이션은 홈(/) 과 /admin/home 의 것이다.
- *
- * 쓰는 곳: src/app/page.tsx · src/app/admin/(ops)/home/page.tsx
+ * 🔴 따로 계산하지 않는다. 홈 화면이 데스크톱 편성으로 넘어가면 이 함수는 지운다.
+ *    인자는 개수 정본(HOME_POPULAR_COUNT)만 받는다 — 다른 수를 넘기면 어드민과 홈이 어긋난다.
  */
-export async function getHomePopularPosts(take = 20) {
-  const blockedIds = await getBlockedUserIds()
-
-  const [candidates, overrides] = await Promise.all([
-    // 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
-    //    여유(HEADROOM)를 두고 뽑아 applyHomeExposure 가 잘라 낸다.
-    pickPopularByScore(take * HOME_OVERRIDE_HEADROOM, blockedIds),
-    // 🔴 만료 판정을 SQL 로 하지 않는다. isActive 만 좁혀 가져오고
-    //    expiresAt 비교는 규칙 함수가 한 곳에서 한다 — 두 곳이면 언젠가 어긋난다.
-    prisma.homeExposureOverride.findMany({
-      where: { surface: 'HOME_POPULAR', isActive: true },
-      select: { postId: true, action: true, position: true, isActive: true, expiresAt: true },
-    }),
-  ])
-
-  /**
-   * 🔴 PIN 글을 따로 조회한다.
-   *    자동 후보 안에서만 찾으면 점수가 낮아 후보에 못 든 글은 고정해도 뜨지 않는다 —
-   *    운영자가 "고정했는데 안 보인다" 를 겪는다. PIN 은 자동 점수를 이겨야 한다.
-   *
-   * 🔴 그러나 노출 안전 규칙은 이기지 않는다.
-   *    자동 후보와 **똑같은 where** 를 쓴다 — 게시판(MENOPAUSE·FREE) ·
-   *    DISCOVERY_ELIGIBLE_WHERE(PUBLISHED · isMicroSeed=false ·
-   *    indexPromotionBlocked=false) · 차단 회원 제외.
-   *    조건을 못 지난 글은 여기서 조회되지 않아 홈에 나가지 않는다.
-   *
-   * 🔴 HIDE 와 겹친 PIN 은 규칙 함수가 뺀다. 여기서는 거르지 않는다 —
-   *    충돌 판정이 두 곳이면 언젠가 서로 다른 답을 낸다.
-   */
-  const activePinIds = overrides
-    .filter((o) => o.action === 'PIN' && isOverrideActive(o))
-    .map((o) => o.postId)
-
-  // 고정 글도 자동 후보와 같은 모양으로 맞춘다 — 점수는 쓰지 않지만 어드민이 같은 칸을 그린다.
-  const pinnedPosts = activePinIds.length
-    ? await withRealReactions(prisma, await prisma.post.findMany({
-        where: {
-          id: { in: activePinIds },
-          boardType: { in: COMMUNITY_BOARD_TYPES },
-          ...DISCOVERY_ELIGIBLE_WHERE,
-          ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
-        },
-        select: POST_LIST_ITEM_SELECT,
-      }))
-    : []
-
-  return applyHomeExposure({ candidates, pinnedPosts, overrides, take })
+export async function getHomePopularPosts(take: typeof HOME_POPULAR_COUNT) {
+  return (await getHomePopularViews()).mobile.slice(0, take)
 }
 
 export async function getPostDetail(postId: string) {

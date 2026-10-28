@@ -51,6 +51,44 @@ function byScore<T extends ScorablePost>(a: Scored<T>, b: Scored<T>): number {
   return b.score - a.score || b.post.createdAt.getTime() - a.post.createdAt.getTime()
 }
 
+/** 점수를 매겨 점수순으로 세운다. 같은 글이 두 번 들어와도 한 번만 싣는다. */
+function rankByScore<T extends ScorablePost>(posts: readonly T[], now: Date): Scored<T>[] {
+  const seen = new Set<string>()
+  const all: Scored<T>[] = []
+  for (const post of posts) {
+    if (seen.has(post.id)) continue
+    seen.add(post.id)
+    all.push({ post, score: popularityScore(post, now) })
+  }
+  return all.sort(byScore)
+}
+
+/**
+ * 게시판 하나의 점수순 상위 — 데스크톱 홈의 게시판별 열.
+ *
+ * 🔴 갱년기톡 최소 노출(pickHomePopular 의 쿼터)을 적용하지 않는다.
+ *    쿼터는 두 게시판을 한 줄에 섞을 때 자유게시판 독식을 막는 장치다 — 열이 나뉘면 할 일이 없다.
+ * 🔴 다른 게시판 글은 받아도 버린다. 열에 섞이면 "갱년기톡" 머리 아래 자유게시판 글이 뜬다.
+ * 후보가 모자라면 있는 만큼만 — 최신 글로 채우지 않는다.
+ */
+export function pickBoardPopular<T extends ScorablePost>({
+  posts,
+  boardType,
+  take,
+  now,
+}: {
+  posts: readonly T[]
+  boardType: BoardType
+  take: number
+  now: Date
+}): T[] {
+  const limit = Math.max(0, Math.trunc(take))
+  if (limit === 0) return []
+  return rankByScore(posts.filter((p) => p.boardType === boardType), now)
+    .slice(0, limit)
+    .map((e) => e.post)
+}
+
 /**
  * 점수순을 기본으로 하되, 갱년기톡 최소 노출을 위해 필요한 경우
  * 자유게시판 하위 글을 갱년기톡 후보로 교체한다. 선택된 최종 목록은 다시 점수순으로 정렬한다.
@@ -75,14 +113,7 @@ export function pickHomePopular<T extends ScorablePost>({
   if (limit === 0) return []
 
   // 같은 글이 두 묶음에 들어와도 한 번만 싣는다.
-  const seen = new Set<string>()
-  const all: Scored<T>[] = []
-  for (const post of [...menopause, ...free]) {
-    if (seen.has(post.id)) continue
-    seen.add(post.id)
-    all.push({ post, score: popularityScore(post, now) })
-  }
-  all.sort(byScore)
+  const all = rankByScore([...menopause, ...free], now)
 
   const isGuaranteed = (entry: Scored<T>) => entry.post.boardType === GUARANTEED_BOARD
   const selected = all.slice(0, limit)
