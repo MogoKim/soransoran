@@ -75,6 +75,11 @@ export type ApplyIo = {
   bootstrap: (label: string) => boolean
   /** `launchctl print` 출력 · 실패면 null */
   print: (label: string) => string | null
+  /**
+   * 🔴 `runtime:isolation-check --require-runtime` — **유예 플래그 없이** strict 로 잰다.
+   *    runtime:deploy 가 `--defer-ops-loop-templates` 로 미뤄 둔 원문 대조를 여기서 끝낸다.
+   */
+  isolation: () => boolean
   /** 설치 전 snapshot 으로 **전체** 되돌리기 */
   restore: () => boolean
   log: (line: string) => void
@@ -83,8 +88,9 @@ export type ApplyIo = {
 export type ApplyOutcome = { ok: true } | { ok: false; restored: boolean }
 
 /**
- * 🔴 순서: 전부(keep-awake 포함) bootout → plist 교체 → bootstrap → loaded 검증.
+ * 🔴 순서: 전부(keep-awake 포함) bootout → plist 교체 → bootstrap → loaded 검증 → **strict 격리 검사**.
  *    하나라도 실패하면 snapshot 으로 전체 rollback 한다.
+ *    격리 검사는 loaded 검증이 통과했을 때만 돈다 — 이미 되돌릴 상태면 잴 것이 없다.
  */
 export function applyInstall(desired: ReadonlyMap<string, string>, runtimeRoot: string, io: ApplyIo): ApplyOutcome {
   let ok = true
@@ -103,7 +109,13 @@ export function applyInstall(desired: ReadonlyMap<string, string>, runtimeRoot: 
     for (const line of v.lines) io.log(line)
     ok = v.ok && ok
   }
-  if (ok) return { ok: true }
-  io.log('🔴 설치 검증 실패 — 설치 전 상태로 되돌린다')
+  if (!ok) {
+    io.log('🔴 설치 검증 실패 — 설치 전 상태로 되돌린다')
+    return { ok: false, restored: io.restore() }
+  }
+  const isolated = io.isolation()
+  io.log(`   ${isolated ? '🟢' : '🔴'} strict runtime:isolation-check --require-runtime (유예 없음)`)
+  if (isolated) return { ok: true }
+  io.log('🔴 strict 격리 검사 실패 — 설치 전 상태로 되돌린다')
   return { ok: false, restored: io.restore() }
 }

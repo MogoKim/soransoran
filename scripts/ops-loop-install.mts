@@ -4,6 +4,9 @@
  * 발행 러너의 현재 trigger(fixed/heartbeat)를 보존하고 controller·recover·keep-awake를 설치한다.
  * 판정·적용 순서는 `lib/ops-loop-install-core.mts` 에 있다(검사가 가짜 launchctl 로 실행해 본다).
  * 공급 job은 runtime deploy가 설치한 stage consumer 배선을 읽기 전용으로 검증한다.
+ * 🔴 loaded 검증 뒤 `runtime:isolation-check --require-runtime` 을 **유예 플래그 없이** 돌린다 — runtime:deploy 가
+ *    `--defer-ops-loop-templates` 로 미뤄 둔 원문 대조를 여기서 끝낸다. 실패하면 snapshot 으로 되돌리고 실패한다.
+ *    이것까지 통과해야 배포 완료다.
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
@@ -166,8 +169,14 @@ const outcome = applyInstall(desired, runtimeRoot, {
     const p = run('launchctl', ['print', `${domain}/${label}`], home)
     return p.ok ? p.out : null
   },
+  // 🔴 strict — `--defer-ops-loop-templates` 를 붙이지 않는다
+  isolation: () => {
+    const iso = run(npxPath, ['tsx', 'scripts/runtime-isolation-check.mts', '--require-runtime'])
+    if (!iso.ok) console.log(iso.out)
+    return iso.ok
+  },
   restore: () => restore(backupDir),
   log: (line) => console.log(line),
 })
 if (!outcome.ok) process.exit(outcome.restored ? 1 : 2)
-console.log(`\n✅ 설치 완료 · rollback: npm run ops:loop-install -- --rollback=${backupDir}\n`)
+console.log(`\n✅ 설치 완료 · strict 격리 통과 — 배포 완료 · rollback: npm run ops:loop-install -- --rollback=${backupDir}\n`)
