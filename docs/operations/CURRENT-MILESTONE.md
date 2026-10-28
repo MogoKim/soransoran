@@ -1,6 +1,6 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-29 01:20 KST
+> as-of: 2026-10-29 07:10 KST
 > 마지막 창업자 동기화: 2026-10-29
 >
 > 이 문서는 검증된 현재 상태와 다음 실행만 적는다. 정책은
@@ -12,20 +12,20 @@
 ## 0. 창업자용 한 문장
 
 **10월 28일 자연 D10은 자동 10/10, 첫 댓글 10/10, 추가 댓글 7건, 감사 2/2,
-수동 물량 0, usageUnknown 0으로 PASS했다. 다음 D20을 막은 유일한 실측 축은
-구 공급 처리량 15 < 필요 20이었다. 이번 변경은 workset을 20으로 올리고 당일 증명
-5회와 $1.20 proof-first 예산을 연결해 같은 실측에서 처리량 22를 만든다.
-코드·격리 DB는 PASS 후보지만 main 병합, 보조 Mac 배포, 자연 D20은 아직 미증명이다.**
+수동 물량 0, usageUnknown 0으로 PASS했다. D20 처리량 보정과 rollout 순서 보정은
+main 병합·보조 Mac 배포·controller 네 슬롯·strict 격리까지 PASS했고, 10월 29일 07:00
+자연 controller가 `TRIAL · 공개 d20 · 준비 d30`을 저장했다. D20 개방은 완료됐지만
+자연 20/20과 댓글·감사·비용 증거가 끝나기 전에는 D20 operating PASS가 아니다.**
 
 ## 1. 검증된 운영 기준선
 
 | 항목 | 현재 사실 |
 |---|---|
-| 원격 main (2026-10-29 01:04 관측) | `257868788e100fcdcfd325e9c8d22dc0f8756971` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `257868788e100fcdcfd325e9c8d22dc0f8756971` · main과 동일 SHA · clean |
+| 원격 main (2026-10-29 07:05 관측) | `96916bed69c0d2eb95a90e0296a198fa819e5493` |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `96916bed69c0d2eb95a90e0296a198fa819e5493` · main과 동일 SHA · clean |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
-| 최신 자연 controller | `TRIAL · 공개 d10 · 준비 d20` |
+| 최신 자연 controller | `TRIAL · 공개 d20 · 준비 d30` · 2026-10-29 07:00 저장 · exit 0 |
 | D10 증거일 | 2026-10-28 |
 | D10 판정 | **PASS** |
 | D10 자동 공개 | 10/10 · 서로 다른 자동 Persona 10 |
@@ -49,7 +49,7 @@ releaseStamped=10 · supplyUsageUnknown=0`
 | 축 | code PASS | deployed PASS | operating PASS |
 |---|---|---|---|
 | 자동 D10 | ✅ | ✅ | ✅ 10-28 d10 증거 PASS |
-| D20 처리량 전환 | ✅ 후보 · targeted·격리 DB | **UNKNOWN** · 아직 미배포 | **UNKNOWN** · 자연 20/20 미관측 |
+| D20 처리량 전환 | ✅ exact-head CI·격리 DB | ✅ runtime·pin·manifest·controller 4슬롯·strict 격리 | **진행 중** · 자연 d20 개방, 20/20 미관측 |
 | Persona 40 | ✅ | ✅ | ✅ contract-valid 40 · active 40 |
 | 첫 댓글·추가 댓글 | ✅ 첫 댓글 1 + 선택적 0~4 · 실제 `parentId` 답글 · automatic provenance | ✅ | ✅ 자연 followup 관측 |
 | 실제 조회수 | ✅ 실제 상세 열람·목록 노출 원장 | ✅ | ✅ 실제 행동만 집계 · 가짜 숫자 0 |
@@ -57,7 +57,7 @@ releaseStamped=10 · supplyUsageUnknown=0`
 단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다. 같은 KST 운영일
 공개, 자연스러운 대화, 실제 회원 재방문과 실제 열람은 별도로 관측한다.
 
-## 3. D20 개방의 정확한 blocker
+## 3. D20 개방 blocker 해소
 
 10월 29일 07:00 기준 시각을 기존 main으로 read-only 재생했을 때 다음 단계는 d20이었고,
 품질·Persona·비용·오류 축은 모두 통과했다. 실패 코드는 `THROUGHPUT_SHORT` 하나였다.
@@ -74,10 +74,11 @@ releaseStamped=10 · supplyUsageUnknown=0`
 
 | blocker code | 현재 | 해소 조건 |
 |---|---|---|
-| `THROUGHPUT_SHORT` | 구 처리량 15 < 필요 20 | 이번 계약 배포 뒤 read-only 처리량 22 확인 |
+| `THROUGHPUT_SHORT` | **해소** · 새 처리량 22 >= 필요 20 | 10월 29일 read-only preflight와 자연 controller 모두 PASS |
 
 원인은 품질 실패나 Persona 부족이 아니라, workset 10과 당일 공급 회차 계산이 D20 목표를
-구조적으로 감당하지 못한 것이다.
+구조적으로 감당하지 못한 것이었다. 새 계약 배포 뒤 `readyCapacity=22`, Persona 40/40,
+첫 댓글 용량 258, 예상 공급비 약 $0.993/$1.20, blocker 0으로 D20 시험이 열렸다.
 
 ## 4. 이번 D20 전환 변경
 
@@ -107,10 +108,10 @@ controller 시각 변경은 runtime 배포만으로 설치되지 않는다. depl
 | 축 | 상태 |
 |---|---|
 | D10 operating | **PASS** |
-| D20 전환 code | **PASS 후보** · targeted·격리 DB 통과 |
-| D20 전환 deployed | **PENDING** |
-| D20 preflight | 기존 main은 처리량만 FAIL · 새 코드 배포 뒤 read-only 재판정 필요 |
-| D20 operating | **PENDING** · 자연 20/20 전에는 PASS 금지 |
+| D20 전환 code | **PASS** · PR #810·#811 exact-head CI·격리 DB 통과 |
+| D20 전환 deployed | **PASS** · runtime HEAD=pin=manifest · controller 07:00/07:20/07:40/07:55 · strict 격리 |
+| D20 preflight | **PASS** · 처리량 22 · Persona 40 · 첫 댓글 용량 258 · blocker 0 |
+| D20 operating | **진행 중** · 07:00 자연 `TRIAL d20` 개방 · 자연 20/20 전에는 PASS 금지 |
 | D30 이상 | D20 operating PASS 전에는 개방 금지 |
 
 ## 5. 다음 critical path
@@ -119,8 +120,8 @@ controller 시각 변경은 runtime 배포만으로 설치되지 않는다. depl
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D20-FIX | 처리량·예산·controller 배포 | code·runtime·controller 네 슬롯·read-only preflight PASS | 수동 증거 |
-| D20 | 자연 D20 · D10 operating PASS 선행 | 자동 20/20·댓글·감사·비용 PASS | stage·READY·게시 보정 |
+| D20-FIX | **완료** · 처리량·예산·controller 배포 | code·runtime·controller 네 슬롯·read-only preflight PASS | 수동 증거 |
+| D20 | **진행 중** · 자연 D20 · D10 operating PASS 선행 | 자동 20/20·댓글·감사·비용 PASS | stage·READY·게시 보정 |
 | D30 | 자연 D30 · D20 operating PASS 선행 | Persona 60·profile green·자동 30/30 | D30 생략 |
 | D50 | 자연 D50 · D30 operating PASS 선행 | Persona 100·profile green·자동 50/50 | D20에서 바로 D50 |
 | VIEWS | 실제 근거 조회수 | 원장·dedupe·내부/봇 제외·UI 표본 PASS | 댓글 배수·최소값·난수 |
@@ -130,13 +131,11 @@ D30은 생략하지 않음이 단계 계약이다.
 
 ### 실행 순서
 
-1. 현재 diff의 독립 재검토와 exact-head 검사를 끝낸다.
-2. 최신 origin/main을 일반 merge하고 전체 관련 검사를 한 번 다시 돈다.
-3. Draft PR exact-head CI와 D100 격리 DB 사슬을 한 번 실행한다.
-4. PASS하면 Ready·merge 후 보조 Mac runtime을 main merge SHA로 배포한다.
-5. `ops:loop-install -- --apply`를 이어서 실행하고 controller 네 슬롯을 확인한다.
-6. 배포 뒤 controller dry-run으로 D10 증거 PASS와 D20 preflight 처리량 22를 읽기 전용 확인한다.
-7. stage·READY·게시·댓글을 손으로 만들지 않고 자연 07:00 controller와 자연 D20을 관측한다.
+1. 자연 D20의 20개 공개·서로 다른 자동 Persona·첫 댓글 20개·추가 댓글·감사 4건·비용을 관측한다.
+2. 같은 날 evidence를 read-only로 판정해 PASS/FAIL/UNKNOWN을 확정한다.
+3. PASS면 D30 preflight를 읽기 전용 확인하고 Persona 60·profile green을 준비한다.
+4. 실패면 실패 축 하나만 보정하고 stage·READY·게시·댓글·장부를 손으로 만들지 않는다.
+5. D20 operating PASS 전에는 D30을 열지 않는다.
 
 ## 6. 금지
 
