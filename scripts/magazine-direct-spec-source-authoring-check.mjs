@@ -55,6 +55,8 @@ const producerPlan = await imp(join(ROOT, 'scripts/magazine-producer-plan.mjs'))
 const briefAuto = await imp(join(ROOT, 'scripts/magazine-brief-auto.mjs'))
 const REAL = { source: await imp(SOURCE_PATH), direct: await imp(DIRECT_PATH) }
 const { renderQueueRow } = await imp(join(dirname(SOURCE_PATH), 'magazine-g8-promoter.mjs'))
+const CTA_REPAIR = await imp(join(dirname(SOURCE_PATH), 'magazine-draft-cta-repair.mjs'))
+const { parseQueueSource: parseQueueText } = await imp(join(dirname(SOURCE_PATH), 'magazine-load.mjs'))
 
 const GV = 'g-20261015-aaaaaa'
 const OLD_GV = 'g-20260923-bbbbbb'
@@ -1294,6 +1296,30 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
         '--confirm-candidate-hash', lib.candidateHashOf(c2), '--repo', w2.repo, '--admission-root', w2.admission, '--out-root', w2.repo, '--safety-revise', '--draft', df], { encoding: 'utf8' })
       assert.equal(normal.status, 1); assert.equal(JSON.parse(normal.stdout).code, 'SAFETY_REVISION_MISMATCH')
       assert.equal(existsSync(sourceFile(w2.repo)), false)
+    }],
+    ['SA12 CTA 무전송 수리 뒤 안전 개정 — 수리 영수증의 새 원고 해시를 그대로 고정한다 · 영수증과 다른 원고는 거부', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      // 운영 모양 — 디스크 spec(옛 승인 컴파일) · 옛 고정 CTA 문장을 가진 회수 원고 · article-draft.ts 없음
+      const dd = join(s0.w.repo, 'drafts/magazine')
+      mkdirSync(join(dd, SLUG), { recursive: true })
+      writeFileSync(join(dd, SLUG, 'article-spec.json'), `${JSON.stringify(s0.oldSpec, null, 2)}\n`)
+      const pass = readFileSync(join(ROOT, 'scripts/__fixtures__/magazine/manuscript-pass.draft.md'), 'utf8')
+      const old = pass.replace(/^(\[CTA\][^|\n]*\|[^|\n]*\| ).*$/m, '$1지금 떠오른 밤 이야기 한 조각을 남겨 주세요')
+      writeFileSync(join(dd, SLUG, 'draft.md'), old)
+      const q = join(s0.w.repo, 'sa12-quarantine.json'); writeFileSync(q, '{}\n')
+      const rep = CTA_REPAIR.repairDraftCta({ slug: SLUG, draftsDir: dd, expectDraftHash: REAL.source.draftHashOf(old),
+        expectOldText: '지금 떠오른 밤 이야기 한 조각을 남겨 주세요', text: '요즘 잠이 어떠신지 편하게 이야기해 주세요.', approver: '창업자', at: AT,
+        queue: parseQueueText(readFileSync(queueFile(s0.w.repo), 'utf8')), expectedGraphVersion: GV, productRoot: s0.w.repo, quarantinePath: q, nowMs: NOW, write: true })
+      assert.equal(rep.ok, true, `${rep.code} ${rep.why}`)
+      const repaired = readFileSync(join(dd, SLUG, 'draft.md'))
+      const p = prepare(s0.w, { revise: s0.prep.revise, draft: repaired, ctaRepairReceipt: rep.receiptPath })
+      assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      assert.equal(p.candidate.revision.draftHash, rep.newDraftHash); assert.equal(p.candidate.revision.ctaRepairNewDraftHash, rep.newDraftHash)
+      assert.deepEqual(p.candidate.entry.safetyRevision, { draftHash: rep.newDraftHash })
+      // 영수증과 다른 원고(수리 전 바이트)를 고정하려 하면 거부
+      assert.equal(prepare(s0.w, { revise: s0.prep.revise, draft: Buffer.from(old), ctaRepairReceipt: rep.receiptPath }).code, 'CTA_REPAIR_RECEIPT_MISMATCH')
+      // 일반 개정에 영수증을 붙이면 거부
+      assert.equal(prepare(s0.w, { revise: { supersedesSpecHash: s0.prep.revise.supersedesSpecHash }, ctaRepairReceipt: rep.receiptPath }).code, 'CTA_REPAIR_RECEIPT_MISMATCH')
     }],
     ['(수치) 승인·쓰기·외부 호출', () => { authoringCases.counts = COUNTS }],
   ]

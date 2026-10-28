@@ -40,6 +40,7 @@ import {
   ADMISSION_FILES, JOURNAL_FILE, KNOWN_LEGACY_ADMISSIONS, LOCK_FILE, insertQueueRows, productPayloadOf, readReceipts,
   receiptProblems, renderQueueRow, titleProblems, verifyAdmissions, writeAtomic,
 } from './magazine-g8-promoter.mjs'
+import { verifyCtaRepairReceipt } from './magazine-draft-cta-repair.mjs'
 import { isPublic, resolvePublishAt } from './magazine-gate.mjs'
 import { parseArticlesSource, parseQueueSource } from './magazine-load.mjs'
 import { withQueueWriteLock } from './magazine-queue-lock.mjs'
@@ -470,11 +471,12 @@ export function unresolvedOf(entry) {
  *    후보 entry 는 기존 승인을 그대로 옮기되 status 는 DRAFT, publishAt 은 비운다(사람이 새 시각을 정한다),
  *    `supersedes: { specHash, sourceHash(기존 승인) }` 를 싣는다. 승인은 기존 entry 를 CAS 로 **교체**한다.
  */
-export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, researchDir = null, nowMs = Date.now(), knownLegacy = KNOWN_LEGACY_ADMISSIONS, revise = null, draft = null }) {
+export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, researchDir = null, nowMs = Date.now(), knownLegacy = KNOWN_LEGACY_ADMISSIONS, revise = null, draft = null, ctaRepairReceipt = null }) {
   if (!nonEmpty(slug)) return { ok: false, code: 'SLUG_REQUIRED', why: '--slug 로 한 건을 지정해야 한다 (자동 선택 없음)' }
   const safety = revise?.kind === SAFETY_REVISION_KIND
   if (revise && revise.kind !== undefined && !safety) return { ok: false, code: 'REVISION_KIND_UNKNOWN', why: `모르는 개정 종류다: ${String(revise.kind)}` }
   if (safety && (draft === null || draft === undefined)) return { ok: false, code: 'DRAFT_REQUIRED', why: '안전 개정은 보존할 원고(--draft)가 필요하다' }
+  if (ctaRepairReceipt && !safety) return { ok: false, code: 'CTA_REPAIR_RECEIPT_MISMATCH', why: '--cta-repair-receipt 는 안전 개정에서만 쓴다' }
   if (revise && !/^sha256:[0-9a-f]{64}$/.test(String(revise.supersedesSpecHash ?? ''))) {
     return { ok: false, code: 'SUPERSEDES_INVALID', why: '--supersedes-spec 은 sha256:<64 hex> 여야 한다 (운영 디스크 article-spec.json 의 specHash)' }
   }
@@ -500,6 +502,11 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
     if (safety) {
       const sc = safetyBaseCheck({ base, baseSchema: b.schema, state, root: repoRoot, supersedesSpecHash: revise.supersedesSpecHash, draft, draftHash: draftHashOf(draft) })
       if (!sc.ok) return sc
+      // 🔴 CTA 무전송 수리 뒤의 원고라면 — 수리 영수증의 새 원고 해시가 지금 고정할 원고와 같아야 한다
+      if (ctaRepairReceipt) {
+        const cr = verifyCtaRepairReceipt({ receiptPath: ctaRepairReceipt, slug, draftHash: draftHashOf(draft) })
+        if (!cr.ok) return cr
+      }
     }
   }
   const blockers = [...state.blockers]
@@ -571,7 +578,8 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
     relationEvidence: rel.evidence.filter((e) => edgeIds.has(e.edgeId)),
     entry,
     ...(base ? { revision: { baseSourceHash: base.sourceHash, supersedesSpecHash: revise.supersedesSpecHash,
-      ...(safety ? { kind: SAFETY_REVISION_KIND, draftHash: draftHashOf(draft) } : {}) } } : {}),
+      ...(safety ? { kind: SAFETY_REVISION_KIND, draftHash: draftHashOf(draft) } : {}),
+      ...(ctaRepairReceipt ? { ctaRepairNewDraftHash: draftHashOf(draft) } : {}) } } : {}),
     provenance,
     unresolvedFields: unresolvedOf(entry),
     blockers: [...new Set(blockers)].sort(),

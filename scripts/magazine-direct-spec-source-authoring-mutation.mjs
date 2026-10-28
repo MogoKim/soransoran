@@ -82,6 +82,7 @@ const MUTATIONS = [
   ['MAS15', '안전 개정 기준이 원고 부재를 막지 않는다', "  if (draft === null || draft === undefined) return fail('DRAFT_REQUIRED', '안전 개정은 보존할 원고(--draft)가 필요하다')\n  if (draftHashOf(draft)", "  if (draftHashOf(draft ?? '')"],
   ['MAS16', 'CLI approve 가 --safety-revise 를 넘기지 않는다', "    safety: argv.includes('--safety-revise'), draft: readDraft(),", '    safety: true, draft: readDraft(),', 'cli'],
   ['MAS17', 'CLI approve 가 --draft 없는 --safety-revise 를 받는다', "  if (argv.includes('--safety-revise') && !arg('--draft')) usage('--safety-revise 는 --draft <보존할 draft.md> 가 필요하다')\n  if (!argv.includes('--safety-revise') && arg('--draft'))", "  if (!argv.includes('--safety-revise') && arg('--draft'))", 'cli'],
+  ['MAS18', '안전 개정 prepare 가 CTA 수리 영수증을 대조하지 않는다', '        if (!cr.ok) return cr', '        if (false) return cr'],
   ['MA25', 'prepare 가 글별 주제 금지 패턴을 지어낸다', 'safetyConstraints: null, forbiddenPatterns: null,', "safetyConstraints: null, forbiddenPatterns: ['지어낸 금지 표현'],"],
   // ── 관계 판정 ──
   ['MA8', '제품 graph 관계 증명 제거 (증명 없는 관계를 통과)', '      const proof = evidence.find((e) => e.slug === r.slug && e.slot === r.relationType && e.reason === r.reason)', '      const proof = evidence.find((e) => e.slug === r.slug && e.slot === r.relationType && e.reason === r.reason) ?? { surfaceOk: true, typeOk: true }'],

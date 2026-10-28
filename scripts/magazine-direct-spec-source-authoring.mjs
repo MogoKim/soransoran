@@ -9,6 +9,7 @@
  *                  supersedes{운영 디스크 article-spec specHash · 기존 sourceHash} 를 싣고 publishAt 은 비운다. approve 가 기존 entry 를 CAS 로 교체한다.
  *                원고 보존형 안전 개정: [--safety-revise --supersedes-spec <sha256:…> --draft <draft.md>] — 큐에 있고 원고가 회수된 글만.
  *                  글별 주제 금지 패턴 · 새 publishAt 만 바꾼다. 원고 sha256 을 고정한다(--draft 는 읽기만 한다).
+ *                  [--cta-repair-receipt <영수증>] — CTA 무전송 수리 뒤면 영수증의 새 원고 해시 = 고정할 원고 해시를 대조한다.
  *                  approve · materialize 도 --safety-revise --draft 를 **명시해야** 한다(후보 종류만으로 승인하지 않는다) — 다시 대조하고,
  *                  materialize 는 기존 행을 CAS 교체한다. 일반 후보에 --safety-revise 를 주면 거부한다.
  *   inspect      읽기 전용. 후보 파일의 지금 해시 · 미해결 필드 · 차단 사유를 낸다.
@@ -70,7 +71,8 @@ if (command === 'prepare') {
   const r = prepareCandidate({ repoRoot: resolve(repo), admissionRoot: resolve(admission), slug: arg('--slug'), asOf: arg('--as-of'),
     researchDir: arg('--research-dir') ? resolve(arg('--research-dir')) : null,
     ...(argv.includes('--revise') ? { revise: { supersedesSpecHash: arg('--supersedes-spec') } } : {}),
-    ...(safety ? { revise: { supersedesSpecHash: arg('--supersedes-spec'), kind: 'safety' }, draft: readDraft() } : {}) })
+    ...(safety ? { revise: { supersedesSpecHash: arg('--supersedes-spec'), kind: 'safety' }, draft: readDraft() } : {}),
+    ...(arg('--cta-repair-receipt') ? { ctaRepairReceipt: resolve(arg('--cta-repair-receipt')) } : {}) })
   out(r.ok ? r.candidate : r, r.ok ? 0 : 1)
 } else if (command === 'inspect') {
   out(inspectCandidate(readCandidate()), 0)
