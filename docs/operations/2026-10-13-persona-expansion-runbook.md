@@ -90,6 +90,8 @@
 2. `persona:expansion -- --db --fixture=scripts/__fixtures__/persona-expansion-canary.json`에서
    `d20-canary`가 `✅ 자원 준비`이고 canary 10명이 전원 `ready`,
    creative 품질 `PASS`, 집단 다양성 `OK`다.
+   cohort 승격 뒤에는 fixture 코드가 현재 `RUNNABLE_COHORTS`의 해당 cohort 전원과 순서까지 정확히 같을 때만
+   자기 cohort를 제외한 직전 운영 집단과 판정한다. 일부만 겹치거나 닫힌 cohort를 다시 넣으면 fail-closed다.
    말투 화자가 모자라면 정본 말투 자산을 다시 만든다(`persona:reference-build-asset`).
    근거 기준(관측 3 · 안전 원문 2)은 낮추지 않는다.
 3. §2.1 표시명 gate가 집계 분포 정책·섞인 분포 fixture·read-only live B1/B3/within-cohort 대조를 모두 PASS한다.
