@@ -9,6 +9,7 @@ import {
   type HeroBannerActionState,
 } from '@/lib/actions/admin-hero-banner'
 import { IconArrowUp, IconArrowDown, IconArchive, IconRestore } from './HeroBannerIcons'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 목록 한 줄의 조작 — 위·아래·보관·복원.
@@ -52,9 +53,9 @@ export default function HeroBannerRowControls({
   }
 
   const base =
-    'inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-lg px-2 text-sm transition duration-150 active:scale-[0.98] disabled:opacity-40 lg:min-h-[48px] lg:min-w-[48px]'
-  const ghost = `${base} text-content-muted hover:bg-surface-soft hover:text-content-primary`
-  const outline = `${base} border border-interactive text-content-primary hover:bg-surface-soft`
+    'inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-md px-2 text-sm transition duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:text-content-muted lg:min-h-[44px] lg:min-w-[44px]'
+  const ghost = `${base} border border-transparent text-content-secondary enabled:hover:border-subtle enabled:hover:bg-surface-page enabled:hover:text-content-primary`
+  const outline = adminButtonClass('secondary', 'px-3 text-sm')
 
   return (
     <div className="flex flex-col gap-1 lg:items-end">

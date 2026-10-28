@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import GoogleAnalytics from '@/components/analytics/GoogleAnalytics'
-import { BRAND, SITE } from '@/lib/brand'
+import { SITE } from '@/lib/brand'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -37,7 +37,12 @@ export const viewport: Viewport = {
    *    브라우저에게 맡기면 툴바까지 함께 계산된다.
    */
   interactiveWidget: 'resizes-content',
-  themeColor: BRAND.color,
+  /*
+   * 🔴 themeColor 를 선언하지 않는다. (2026-10-19 S-PWA)
+   *    선언하면 Android Chrome 이 주소창·상태표시줄 전체를 그 색으로 칠한다. 브랜드 주황일 때
+   *    시선이 콘텐츠보다 브라우저 상단으로 갔다. 일반 브라우징은 Chrome·시스템 기본색을 쓴다.
+   *    설치형 PWA 의 상단 색은 manifest.ts 의 theme_color(페이지 바탕)가 정한다.
+   */
 }
 
 /**

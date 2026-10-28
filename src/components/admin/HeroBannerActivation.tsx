@@ -7,6 +7,7 @@ import {
   deactivateHeroBanner,
   type HeroBannerActionState,
 } from '@/lib/actions/admin-hero-banner'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 배너를 켜고 끈다.
@@ -60,9 +61,6 @@ export default function HeroBannerActivation({
     })
   }
 
-  const base =
-    'inline-flex min-h-[52px] items-center justify-center rounded-lg px-4 font-bold transition duration-150 active:scale-[0.98] disabled:opacity-50 lg:min-h-[48px]'
-
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -71,7 +69,7 @@ export default function HeroBannerActivation({
             type="button"
             disabled={pending}
             onClick={() => run(() => deactivateHeroBanner(bannerId))}
-            className={`${base} border border-interactive text-content-primary hover:bg-surface-soft`}
+            className={adminButtonClass('secondary')}
             title="끄기 — 설정을 꺼짐으로 저장합니다. 배너와 이미지는 그대로 남습니다"
           >
             {pending ? '처리 중…' : '끄기'}
@@ -81,7 +79,7 @@ export default function HeroBannerActivation({
             type="button"
             disabled={pending || Boolean(blockedReason)}
             onClick={() => run(() => activateHeroBanner(bannerId))}
-            className={`${base} bg-cta text-content-primary hover:brightness-95`}
+            className={adminButtonClass('primary')}
             title={
               blockedReason
                 ? `아직 켤 수 없습니다 — ${blockedReason}`

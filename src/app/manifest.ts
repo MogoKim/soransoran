@@ -8,19 +8,26 @@ import { BRAND, SITE } from '@/lib/brand'
  *    스토어 앱 설치를 권하게 되고, 웹으로 들어온 사람이 앱 설치 앞에서 멈춘다.
  *
  * ── 아이콘 ────────────────────────────────────────────────
- *   네 파일 모두 창업자가 지정한 최신 asset/Favicon.png 전체를 디자인 변경 없이 축소한 것이다.
- *   생성·재현: scripts/generate-app-icons.mjs
- *   /icon.png           96×96    src/app/icon.png       (Next.js app 규약 · 탭·검색 결과)
- *   /apple-icon.png     180×180  src/app/apple-icon.png (Next.js app 규약 · iPhone/iPad 홈)
- *   /brand/icon-192.png 192×192  public/brand/          Android/PWA 설치
- *   /brand/icon-512.png 512×512  public/brand/          Android/PWA 고해상도·스플래시
+ *   전부 창업자가 지정한 최신 asset/Favicon.png 에서 만든다. 생성·재현: scripts/generate-app-icons.mjs
+ *   /brand/icon-192.png          192×192  any       원본 전체 축소
+ *   /brand/icon-512.png          512×512  any       원본 전체 축소
+ *   /brand/icon-maskable-192.png 192×192  maskable  원본 0.90배 + 모서리 아이보리로 끝까지 채움
+ *   /brand/icon-maskable-512.png 512×512  maskable  같음
  *
- * 🔴 **purpose 를 적지 않는다 = 'any' 다. maskable 을 선언하지 않는다.**
- *    maskable 은 "가운데 지름 80% 원 안에 내용이 다 들어온다"는 약속이다.
- *    지금 원본은 내용 일부(빛 끝 · 글자 모서리 등)가 그 원 밖이라, 선언하면 안드로이드가
- *    원형으로 자를 때 그 부분이 잘린다.
- *    🔴 통과시키려고 선언하지 않는다 — 선언은 사실의 진술이다.
- *       원본을 줄이거나 여백을 넣어 맞추는 것도 원본 변경이라 하지 않는다.
+ * 🔴 `/icon.png` · `/apple-icon.png` 를 여기 적지 않는다. (2026-10-19 S-PWA)
+ *    Next.js 는 쿼리 없는 이 두 주소를 `immutable, max-age=1년` 으로 내보낸다. HTML 은 `?hash` 를
+ *    붙여 최신을 받지만 manifest 는 쿼리 없는 주소를 쓴다. Chrome 이 설치 아이콘으로 180 을 고르면
+ *    1년 캐시에 남은 옛 그림(2026-08 의 3원 심볼 등)이 그대로 나왔다. 두 파일은 탭 favicon 과
+ *    iPhone 홈 아이콘으로 그대로 남는다 — manifest 에서만 뺀다.
+ *
+ * 🔴 any 와 maskable 을 나눈다. 원본은 내용이 반지름의 약 84% 까지 나가 maskable 안전 원(80%)을
+ *    넘는다. 그대로 maskable 로 선언하면 원형 마스크에서 잘리고, 줄인 그림을 any 로 쓰면 마스크가
+ *    없는 자리에서 로고가 괜히 작아진다. maskable 만 줄이는 것은 창업자 승인 한정 예외다
+ *    (generate-app-icons.mjs 머리말). 안전 원 안에 드는지는 check:brand-assets 가 픽셀로 잰다.
+ *
+ * 🔴 theme_color 는 브랜드 주황이 아니라 페이지 바탕(BRAND.background)이다.
+ *    설치형 PWA 의 상태표시줄이 콘텐츠보다 눈에 띄면 안 된다. 브랜드색은 화면 안의
+ *    로고·링크·버튼에만 둔다. 일반 브라우저의 theme-color 는 layout 에서 선언하지 않는다.
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
@@ -30,15 +37,15 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: '/',
     display: 'standalone',
     background_color: BRAND.background,
-    theme_color: BRAND.color,
+    theme_color: BRAND.background,
     orientation: 'portrait-primary',
     lang: 'ko',
     categories: ['social', 'lifestyle'],
     icons: [
-      { src: '/icon.png', sizes: '96x96', type: 'image/png' },
-      { src: '/apple-icon.png', sizes: '180x180', type: 'image/png' },
-      { src: '/brand/icon-192.png', sizes: '192x192', type: 'image/png' },
-      { src: '/brand/icon-512.png', sizes: '512x512', type: 'image/png' },
+      { src: '/brand/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/brand/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/brand/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+      { src: '/brand/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   }
 }

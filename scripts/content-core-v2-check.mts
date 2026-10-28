@@ -96,7 +96,7 @@ const check = (n: string, ok: boolean, extra = ''): void => {
 }
 const NOW = new Date('2026-09-19T10:00:00.000Z')
 
-type Canned = { plan?: unknown; draft?: unknown; review?: unknown }
+type Canned = { plan?: unknown; draft?: unknown; review?: unknown; reviews?: readonly unknown[] }
 type Fault = {
   truncate?: string; blocked?: string; usageUnknown?: string
   /** 🔴 그 단계가 **형식을 어긴 답**을 돌려준다 */
@@ -120,8 +120,9 @@ type Sent = { stage: string; system: string; payload: string; model: string }
 let SENT: Sent[] = []
 const sentOf = (stage: string): Sent[] => SENT.filter((x) => x.stage === stage)
 
-const fakeAsk = (c: Canned, fault: Fault = {}): Ask =>
-  async (stage, system, payload, model) => {
+const fakeAsk = (c: Canned, fault: Fault = {}): Ask => {
+  let reviewIndex = 0
+  return async (stage, system, payload, model) => {
     SENT.push({ stage, system, payload, model })
     if (fault.blocked === stage) {
       return {
@@ -133,8 +134,14 @@ const fakeAsk = (c: Canned, fault: Fault = {}): Ask =>
     // 🔴 형식을 어긴 답 — 완주는 했는데 읽을 수 없는 경우다
     if (fault.raw?.stage === stage) return okRes(fault.raw.text)
     if (fault.usageUnknown === stage) return { ...okRes(pick(c, stage)), usageKnown: false, inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null }
+    if (stage === 'semanticReview' && c.reviews !== undefined) {
+      const value = c.reviews[Math.min(reviewIndex, c.reviews.length - 1)] ?? EMPTY_REVIEW
+      reviewIndex += 1
+      return okRes(JSON.stringify(value))
+    }
     return okRes(pick(c, stage))
   }
+}
 
 /** 🔴 정본 카드를 만들고 **정본 변환**을 지난다 — 축소판을 손으로 조립하지 않는다 */
 const CARD = (o: Partial<PoolCard> & { code: string }): PoolCard => ({
@@ -674,18 +681,35 @@ console.log('\n⑧ 🔴 생성·검수 — 원문 직접 · 복제 차단 · 과
     copied.review.deterministic.failures.some((f) => f.code === 'copiedFromSource'))
   check('🔴 의미 검수까지 가지 않는다 — 유료 2회', copied.cost.totalCalls === 2)
 
+  const finding = { ...EMPTY_REVIEW, confidence: 0.85,
+    unsupportedAdditions: [{ evidence: '다들 사 가시나요.', why: '원문에 없는 장면' }] }
   const invented = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
-    review: { ...EMPTY_REVIEW, confidence: 0.85,
-      unsupportedAdditions: [{ evidence: '다들 사 가시나요.', why: '원문에 없는 장면' }] } } })
-  /**
-   * 🔴 **2026-09-20 — 이제 경고다.** 막지 않고 사람에게 넘긴다.
-   *    근거는 artifact 에 그대로 남는다 (아래 두 줄이 그것을 본다).
-   */
-  check('🟡 🔴 **원문에 없어 보이는 것은 막지 않고 후보로 보낸다**',
-    invented.review.machineOutcome === 'adopt', invented.review.machineReason)
+    reviews: [finding, finding] } })
+  check('🔴 **두 번 확인된 근거 없는 위험 사실만 HOLD한다**',
+    invented.review.machineOutcome === 'hold'
+    && invented.review.machineReason.includes('근거 없는 위험 사실')
+    && invented.review.semanticConfirmation?.status === 'confirmed'
+    && sentOf('semanticReview').length === 2, invented.review.machineReason)
   check('🔴 🔴 **그래도 근거는 artifact 에 남는다**',
     invented.review.unsupportedAdditions.length === 1
     && invented.review.unsupportedAdditions[0]!.evidence === '다들 사 가시나요.')
+
+  const unconfirmed = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
+    reviews: [finding, EMPTY_REVIEW] } })
+  check('🟢 **한 번만 나온 차단 finding은 폐기하지 않는다**',
+    unconfirmed.review.machineOutcome === 'adopt'
+    && unconfirmed.review.semanticConfirmation?.status === 'unconfirmed'
+    && unconfirmed.review.semanticConfirmation.first?.unsupportedAdditions.length === 1
+    && sentOf('semanticReview').length === 2
+    && sentOf('semanticReview')[0]!.system === sentOf('semanticReview')[1]!.system
+    && sentOf('semanticReview')[0]!.payload === sentOf('semanticReview')[1]!.payload)
+
+  const confirmFailed = await run({ ...base, cap: 3, canned: { plan: PLAN_OK, draft: GOOD,
+    review: finding } })
+  check('🔴 **확인 호출을 못 하면 통과시키지 않는다**',
+    confirmFailed.review.machineOutcome === 'hold'
+    && confirmFailed.review.semanticCompletion.cause === 'budgetBlocked'
+    && confirmFailed.review.semanticConfirmation?.status === 'failed')
 
   const ghostEvidence = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
     review: { ...EMPTY_REVIEW, confidence: 0.85,
@@ -779,7 +803,9 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
     life: homemaker,
   })
   check('🔴 생활사는 자격 장치이지 글의 재료가 아니라고 말한다', gen.includes('글의 재료가 아닙니다'))
-  check('🔴 원문에 없는 사건을 만들지 말라고 말한다', gen.includes('사건 · 날짜 · 대사 · 겪은 일'))
+  check('🔴 원문에 없는 제3자 사건·결과와 고위험 생활 사실을 만들지 말라고 말한다',
+    gen.includes('제3자의 사건 · 날짜 · 직접 대사 · 결과')
+    && gen.includes('배우자 · 자녀 · 부모 · 건강 · 치료 · 돈'))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1249,7 +1275,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.3'
-    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p12'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p14'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**
    * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**
@@ -1297,17 +1323,10 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, 애매한 판정은 사람에게 (2026-09-20)')
+console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용하고 재현된 위험 finding만 HOLD (quality-v23)')
 // ─────────────────────────────────────────────────────────
 {
-  /**
-   * 🔴 SHADOW5B 5편은 사람이 전부 READY 로 봤는데 `unsupportedAdditions` ·
-   *    `droppedFromSource` 가 두 편을 막았고, **같은 원문·같은 초안이 회차마다
-   *    ADOPT/HOLD 를 오갔다.** 그래서 이 둘은 경고로 내리고 판정을 사람에게 넘긴다.
-   *
-   * 🔴 **프롬프트 문자열을 세지 않는다** — `judgeMachine` 이 실제로 어떻게
-   *    판정하는지 값으로 본다. 예시를 프롬프트에 박아 맞추는 방식은 그만둔다.
-   */
+  /** 프롬프트 문자열 대신 `judgeMachine`의 실제 결과로 단일 판정 계약을 검증한다. */
   const PASS: DeterministicResult = { pass: true, failures: [] }
   const DONE: ReviewCompletion = { complete: true, reason: null, cause: null }
   const V = (o: Partial<SemanticVerdict> = {}): SemanticVerdict => ({
@@ -1317,29 +1336,30 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
   const ADD = [{ evidence: '어제 아침에도 일어났는데 힘이 너무 안 나서', why: '원문에 없다' }]
   const DROP = [{ evidence: '형수가 음식사오니깐 나오는데', why: '사라졌다' }]
 
-  // ── ① unsupportedAdditions 만 있으면 후보로 간다 ──
+  // ── ① unsupportedAdditions는 위험 허구로 판정된 finding이다 ──
   {
     const j = judgeMachine({ deterministic: PASS, semantic: V({ unsupportedAdditions: ADD }), semanticCompletion: DONE })
-    check('🟢 🔴 **원문에 없어 보이는 것만 있으면 adopt 다** — 사람에게 넘긴다',
-      j.outcome === 'adopt', `${j.outcome} / ${j.reason}`)
-    check('🔴 🔴 **경고는 사라지지 않는다** — 근거가 그대로 남는다',
+    check('🔴 **근거 없는 위험 사실은 HOLD**',
+      j.outcome === 'hold' && j.reason.includes('근거 없는 위험 사실'), `${j.outcome} / ${j.reason}`)
+    check('🔴 finding 근거는 그대로 남는다',
       j.warnings.length === 1 && j.warnings[0]!.includes('어제 아침에도 일어났는데'))
   }
-  // ── ② droppedFromSource 만 있어도 후보로 간다 ──
+  // ── ② droppedFromSource는 핵심 의미 손실 finding이다 ──
   {
     const j = judgeMachine({ deterministic: PASS, semantic: V({ droppedFromSource: DROP }), semanticCompletion: DONE })
-    check('🟢 🔴 **원문에서 사라져 보이는 것만 있으면 adopt 다**', j.outcome === 'adopt', j.reason)
-    check('🔴 그 근거도 경고로 남는다',
+    check('🔴 **원문 핵심 손실은 HOLD**', j.outcome === 'hold' && j.reason.includes('원문 핵심 손실'), j.reason)
+    check('🔴 그 근거도 finding으로 남는다',
       j.warnings.length === 1 && j.warnings[0]!.includes('형수가 음식사오니깐'))
   }
-  // ── ③ 둘 다 있어도 사람 검토 후보다 ──
+  // ── ③ 두 finding이 함께 있으면 모두 근거를 남기고 HOLD한다 ──
   {
     const j = judgeMachine({
       deterministic: PASS, semanticCompletion: DONE,
       semantic: V({ unsupportedAdditions: ADD, droppedFromSource: DROP }),
     })
-    check('🟢 🔴 **두 경고가 함께 있어도 사람 검토 후보가 된다**', j.outcome === 'adopt', j.reason)
-    check('🔴 경고 둘이 모두 남는다', j.warnings.length === 2)
+    check('🔴 **두 finding이 함께 있으면 HOLD**', j.outcome === 'hold'
+      && j.reason.includes('근거 없는 위험 사실') && j.reason.includes('원문 핵심 손실'), j.reason)
+    check('🔴 finding 근거 둘이 모두 남는다', j.warnings.length === 2)
   }
   // ── ④ 확정할 수 있는 결함은 그대로 막는다 ──
   for (const [name, arg, want] of [
@@ -1381,10 +1401,11 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
       lifeContradictions: [{ fact: 'work', drafted: '전업', card: '파트타임', evidence: '전업이라' }],
     })
     const j = judgeMachine({ deterministic: PASS, semantic: mixed, semanticCompletion: DONE })
-    check('🔴 🔴 **경고 + 생활사 모순이면 전체는 HOLD 다**', j.outcome === 'hold', j.outcome)
-    check('🔴 🔴 **그래도 경고 근거는 보존된다**',
+    check('🔴 🔴 **finding + 생활사 모순이면 전체는 HOLD 다**', j.outcome === 'hold', j.outcome)
+    check('🔴 🔴 **finding 근거는 보존된다**',
       j.warnings.length === 1 && j.warnings[0]!.includes('어제 아침에도 일어났는데'))
-    check('🔴 전체 사유는 hard 쪽이 말한다', j.reason.includes('생활사 모순'))
+    check('🔴 전체 사유에 허구와 생활사 모순이 모두 남는다',
+      j.reason.includes('근거 없는 위험 사실') && j.reason.includes('생활사 모순'))
 
     const art = readReviewArtifact({
       artifactId: 'b'.repeat(32), sourceArticleId: 's2',
@@ -1401,37 +1422,39 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
     const lines = art === null ? '' : reviewEvidenceLines(art).join('\n')
     check('🔴 🔴 **화면이 "기계가 막지 않았다" 라고 주장하지 않는다**',
       !lines.includes('기계가 막지 않았다'))
-    check('🔴 🔴 **경고 줄은 "이 항목 자체는 hard 차단 사유가 아니다" 라고만 말한다**',
-      lines.includes('이 항목 자체는 hard 차단 사유가 아니다'))
+    check('🔴 🔴 **증거 줄은 위험 사실로 표시한다**', lines.includes('근거 없는 위험 사실'))
     check('🔴 화면 맨 윗줄이 전체 판정(hold)을 말한다', lines.split('\n')[0]!.includes('기계 hold'))
     check('🔴 경고 근거와 hard 근거가 모두 보인다',
       lines.includes('어제 아침에도 일어났는데') && lines.includes('생활사 모순'))
   }
 
   // ── ④-c 🔴 adopt 경고 집계에 hard HOLD/DROP 을 넣지 않는다 ──
-  check('🔴 🔴 **회차 로그는 adopt 인 것만 "사람에게 넘긴 경고" 로 센다**', (() => {
+  check('🔴 🔴 **회차 로그는 finding으로 HOLD된 artifact만 센다**', (() => {
     const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-    const i = src.indexOf('const warned = artifacts.filter(')
+    const i = src.indexOf('const findingHeld = artifacts.filter(')
     if (i === -1) return false
     const block = src.slice(i, i + 220)
-    return block.includes("a.review.machineOutcome === 'adopt'")
+    return block.includes("a.review.machineOutcome === 'hold'")
       && block.includes('reviewWarnings(a.review.semantic).length > 0')
   })())
   {
     /** 🔴 같은 판정 함수로 센다 — 집계 규칙을 손으로 다시 쓰지 않는다 */
-    const rows = [
-      { outcome: 'adopt', s: V({ unsupportedAdditions: ADD }) },
-      { outcome: 'adopt', s: V({ droppedFromSource: DROP }) },
-      { outcome: 'hold', s: V({ unsupportedAdditions: ADD, lifeContradictions: [{ fact: 'work', drafted: 'x', card: 'y', evidence: 'z' }] }) },
-      { outcome: 'drop', s: V({ unsupportedAdditions: ADD, issues: ['harm'] }) },
-      { outcome: 'adopt', s: V() },
+    const samples = [
+      V({ unsupportedAdditions: ADD }),
+      V({ droppedFromSource: DROP }),
+      V({ unsupportedAdditions: ADD, lifeContradictions: [{ fact: 'work', drafted: 'x', card: 'y', evidence: 'z' }] }),
+      V({ unsupportedAdditions: ADD, issues: ['harm'] }),
+      V(),
     ]
-    const counted = rows.filter((r) => r.outcome === 'adopt' && reviewWarnings(r.s).length > 0)
-    check('🔴 🔴 **hard HOLD/DROP 은 그 숫자에 들어가지 않는다** — 5장 중 2건만',
-      counted.length === 2)
+    const rows = samples.map((s) => ({
+      outcome: judgeMachine({ deterministic: PASS, semantic: s, semanticCompletion: DONE }).outcome,
+      s,
+    }))
+    const counted = rows.filter((r) => r.outcome === 'hold' && reviewWarnings(r.s).length > 0)
+    check('🔴 🔴 **finding HOLD 수만 집계한다** — 5장 중 3건', counted.length === 3)
   }
 
-  // ── ⑤ 사람 검토 화면이 경고를 보여준다 ──
+  // ── ⑤ 증거 화면이 차단 finding을 보여준다 ──
   {
     const art = readReviewArtifact({
       artifactId: 'a'.repeat(32), sourceArticleId: 's1',
@@ -1439,18 +1462,17 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
       plan: { personaCode: 'P01', stance: 'SELF_EXPERIENCE', warrants: [] },
       draft: { title: '제목', body: '본문' },
       review: {
-        machineOutcome: 'adopt', machineReason: '',
+        machineOutcome: 'hold', machineReason: '근거 없는 위험 사실 1건 · 원문 핵심 손실 1건',
         unsupportedAdditions: ADD, droppedFromSource: DROP, lifeContradictions: [],
       },
       cost: { calls: [] },
     })
     const lines = art === null ? [] : reviewEvidenceLines(art).join('\n')
-    check('🔴 🔴 **사람 검토 화면에 원문 근거가 보인다**', String(lines).includes('원문 조각'))
+    check('🔴 🔴 **증거 화면에 원문 근거가 보인다**', String(lines).includes('원문 조각'))
     check('🔴 🔴 **경고 근거 둘이 모두 보인다**',
       String(lines).includes('어제 아침에도 일어났는데') && String(lines).includes('형수가 음식사오니깐'))
-    check('🔴 🔴 **화면이 사람이 판정할 자리라고 말한다**',
-      String(lines).includes('[사람이 판정]')
-      && String(lines).includes('이 항목 자체는 hard 차단 사유가 아니다'))
+    check('🔴 🔴 **화면이 위험 허구·핵심 손실로 보여 준다**',
+      String(lines).includes('근거 없는 위험 사실') && String(lines).includes('원문 핵심 손실'))
   }
 
   // ── ⑥ SHADOW5B 5편을 provider 없이 다시 판정하면 전부 후보다 ──
@@ -1470,21 +1492,22 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
         droppedFromSource: r.drop > 0 ? DROP : [],
       }),
     }))
-    check('🟢 🔴 **SHADOW5B 5편이 전부 사람 검토 후보가 된다** (provider 호출 0)',
-      outcomes.every((o) => o.outcome === 'adopt'),
+    check('🔴 **SHADOW5B 5편 중 finding 2건은 HOLD, 깨끗한 3건은 ADOPT** (provider 호출 0)',
+      outcomes.filter((o) => o.outcome === 'hold').length === 2 && outcomes.filter((o) => o.outcome === 'adopt').length === 3,
       outcomes.map((o) => o.outcome).join(','))
-    check('🔴 경고가 붙은 2편은 경고를 달고 간다',
+    check('🔴 finding이 붙은 2편은 근거를 보존한다',
       outcomes.filter((o) => o.warnings.length > 0).length === 2)
   }
 
-  // ── ⑦ 사람 확인 없는 발행은 그대로 막혀 있다 ──
-  check('🔴 🔴 **기계 후보는 사람 검토 전에는 발행되지 않는다**', (() => {
+  // ── ⑦ 자동 READY 판정 없는 발행은 막혀 있다 ──
+  check('🔴 🔴 **기계 후보는 현재 계약과 본문 도장을 검증한 자동 READY 전에는 발행되지 않는다**', (() => {
     const pub = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
     const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     const envLib2 = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
-    // 🔴 그 문구는 봉투에 실린다 — 봉투를 조립하는 자리에서 본다
+    // 🔴 후보는 사람 판정으로 위장하지 않고, 자동 READY 계약을 명시한다.
     return /HUMAN_ONLY_VALUES/.test(pub)
-      && /발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다/.test(envLib2)
+      && /발행은 자동 READY가 현재 품질 계약과 본문 도장을 통과시켜야 열린다/.test(envLib2)
+      && /사람 검토는 수동 예외 경로다/.test(envLib2)
       && !/발행은 사람이 publish:machine-review/.test(runner)
   })())
 }
@@ -1576,7 +1599,7 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
    *
    * 🔴 **재시도 계약** (2026-09-23 재정정). `AUTO_HOLD` 원천은 `concluded` 가 아니어서
    *    **재시도 자격을 유지한다.** 다만 **다음 회차 즉시 선택은 보장되지 않는다** —
-   *    workset 의 reserve 자리 · 신규 우선 · starvation 규칙에 따라 다시 선택된다.
+   *    신규·재시도를 나누지 않고 실제 원문 시각 1순위의 단일 순위에서 다시 선택된다.
    *    그 동작은 아래 `selectWorkset` 실행 검사가 값으로 확인한다.
    */
   const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
@@ -1698,25 +1721,25 @@ console.log('\n🔴 🔴 **실행 사슬 — artifact.plan → voice candidate a
       '저는 48인데 요즘 그런 생각이 들더라고요.').adopted === 1)
 }
 
-console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확인한다 (다음 회차 즉시 선택을 보장하지 않는다)**')
+console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확인한다 (선택 순서는 실제 원문 신선도다)**')
 {
   /**
    * 🔴 앞판은 "다음 회차에 그 원천이 다시 뽑힌다" 고 단언했다. **철회한다.**
    *    정확한 계약은 이렇다.
    *      · HOLD 된 원천은 `concluded` 에 들어가지 않아 **재시도 자격을 유지**한다
-   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 신규가 자리를 채울 수 있다
-   *      · `WORKSET_RETRY_RESERVE` 한 자리와 **오래 기다린 순** 정렬이 굶김을 막는다
+   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 더 신선한 원천이 자리를 채울 수 있다
+   *      · 신규/재시도 구분·대기 시간·단계는 순위를 바꾸지 않는다
    */
   const NOW = new Date('2026-09-23T05:00:00Z')
   // 🔴 (2026-09-30) 순서는 정본 rank(원천 상대 백분위)다 — 옛 댓글 수 순서를 백분위로 옮겨 싣는다
-  const row = (id: string, comments: number) => ({
+  const row = (id: string, comments: number, ageH = 6) => ({
     sourceArticleId: id, sourceSite: 'navercafe:remonterrace',
-    commentCount: comments, sourcePostedAt: '', sourceListedAt: '',
+    commentCount: comments, sourcePostedAt: new Date(NOW.getTime() - ageH * 3600e3).toISOString(), sourceListedAt: '',
     input: { sourceArticleId: id, title: `요즘 김치 담그기 어떠신가요 ${id}`,
       bodyHead: '주변에 물어보면 반반이더라고요. 다들 어떻게 하시는지 궁금해서 여쭤봐요.',
       bodyLength: 120, commentCount: comments,
       safetyVerdict: 'pass', access: 'ok', axis: SEED_AXIS } as never,
-    evidence: fakeSourceEvidence(NOW, { id, commentsPct: comments / 100 }),
+    evidence: fakeSourceEvidence(NOW, { id, postedAt: new Date(NOW.getTime() - ageH * 3600e3), commentsPct: comments / 100 }),
   })
   const releaseOf = (r: Parameters<typeof preGenerationRelease>[0]) => preGenerationRelease(r, NOW, NOW)
   const ago = (h: number) => NOW.getTime() - h * 3600e3
@@ -1731,19 +1754,33 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
   const att = new Map([['old-1', { atMs: ago(30) }], ['old-2', { atMs: ago(5) }]])
   const p5 = plan(5, att, ['new-1', 'new-2', 'new-3', 'new-4', 'new-5'])
   const ids5 = p5.workset.sources.map((s) => s.sourceArticleId)
-  check('🔴 🔴 **신규가 충분해도 재시도 자리가 남는다**',
-    ids5.some((x) => x.startsWith('old-')), JSON.stringify(ids5))
-  check('🔴 🔴 **재시도 중에서는 오래 기다린 것이 먼저다**',
-    ids5.filter((x) => x.startsWith('old-'))[0] === 'old-1', JSON.stringify(ids5))
+  check('🔴 재시도 예약석이 없다 — 같은 신선도에서는 반응이 높은 신규 다섯 건',
+    ids5.join(',') === 'new-1,new-2,new-3,new-4,new-5', JSON.stringify(ids5))
+  check('🔴 재시도 대기 시간을 바꿔도 선택은 바뀌지 않는다', (() => {
+    const reversed = new Map([['old-1', { atMs: ago(1) }], ['old-2', { atMs: ago(30) }]])
+    return JSON.stringify(plan(5, reversed, ['new-1', 'new-2', 'new-3', 'new-4', 'new-5']).workset.sources)
+      === JSON.stringify(p5.workset.sources)
+  })())
   check('🔴 신규가 자리를 다 못 채우면 재시도가 남은 칸을 쓴다',
     plan(5, att, ['new-1']).workset.sources.map((s) => s.sourceArticleId).length > 1)
-  check('🔴 🔴 **다음 회차 즉시 선택은 보장되지 않는다 — 자리가 하나면 신규가 가져갈 수 있다**', (() => {
+  check('🔴 다음 회차 즉시 선택은 보장되지 않는다 — 같은 신선도면 반응이 높은 신규가 가져간다', (() => {
     const one = plan(1, new Map([['old-2', { atMs: ago(1) }]]), ['new-1'])
     return one.workset.sources.map((s) => s.sourceArticleId).length === 1 && one.workset.sources.map((s) => s.sourceArticleId)[0] === 'new-1'
   })())
-  check('🔴 🔴 **다만 오래 굶으면 자리 하나여도 재시도가 가져간다**', (() => {
+  check('🔴 오래 기다렸다는 이유만으로 자리 하나를 가져가지 않는다', (() => {
     const one = plan(1, new Map([['old-1', { atMs: ago(72) }]]), ['new-1'])
-    return one.workset.sources.map((s) => s.sourceArticleId)[0] === 'old-1'
+    return one.workset.sources.map((s) => s.sourceArticleId)[0] === 'new-1'
+  })())
+  check('🔴 신규/재시도 신분과 무관하게 더 신선한 원문이 자리 하나를 가져간다', (() => {
+    const freshOld = row('new-old', 99, 20)
+    const retryNew = row('old-new', 1, 4)
+    const one = selectWorkset({
+      rows: [freshOld, retryNew], humanDecided: EMPTY_HUMAN_DECISIONS,
+      queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
+      concluded: new Set<string>(), attempted: new Map([[sourceKeyOf(RT_SITE, 'old-new'), { atMs: ago(72) }]]) as never,
+      releaseOf, limit: 1, runId: 'r1', takenAt: NOW,
+    })
+    return one.workset.sources.map((s) => s.sourceArticleId)[0] === 'old-new'
   })())
   check('🔴 `concluded` 에 들어간 원천은 다시 뽑히지 않는다', (() => {
     const p2 = selectWorkset({
@@ -1998,8 +2035,8 @@ console.log('\n🔴 🔴 **P02 실제 E2E — 원문 "곧 44" 가 초안 프롬�
   })())
   check('🔴 🔴 **⑨ "빼지 말고 바꾼다" 는 지시가 있다 — 내용 유실을 막는다**',
     prompt.includes('빼지 말고 바꿉니다'))
-  check('🔴 🔴 **⑩ 원문에 없던 사실을 더하지 말라는 지시도 있다**',
-    prompt.includes('새로 더하지 않습니다'))
+  check('🔴 🔴 **⑩ 근거 없는 고위험 생활 사실을 더하지 말라는 지시도 있다**',
+    prompt.includes('원문이나 카드 근거 없이 더하지 않습니다'))
 
   // ④ exactAge 가 없으면 연령대까지만
   const bandMap = planAxisMapping({
@@ -3771,5 +3808,5 @@ console.log('\n🔴 🔴 **artifact → pickV2 → adopted → candidate payload
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 가짜 provider 검사다 — 실제 모델이 쓸 만한 글을 쓰는지는 증명하지 않았다.')
-console.log('🔴 검사 수는 성과가 아니다. 사람 READY 판정은 유료 실측으로만 나온다.')
+  console.log('🔴 검사 수는 성과가 아니다. 운영 READY는 자연 회차 실측으로만 증명한다.')
 if (fail > 0) process.exit(1)

@@ -177,14 +177,14 @@ console.log('\n② 🔴 🔴 (2026-09-30) 기간형(window) · 하루 canary 경
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 잡는 것')
+console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 잡는 것')
 // ─────────────────────────────────────────────────────────
 {
   const tpl = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
   const hours = [...tpl.matchAll(/<key>Hour<\/key><integer>(\d+)<\/integer><key>Minute<\/key><integer>(\d+)<\/integer>/g)]
     .map((m) => ({ hour: Number(m[1]), minute: Number(m[2]) }))
-  check('🔴 🔴 **정본 회차 수가 템플릿과 같다 — 6회**',
-    hours.length === SUPPLY_RUNS_PER_DAY && SUPPLY_RUNS_PER_DAY === 6,
+  check('🔴 🔴 **정본 회차 수가 템플릿과 같다 — 7회**',
+    hours.length === SUPPLY_RUNS_PER_DAY && SUPPLY_RUNS_PER_DAY === 7,
     `템플릿 ${hours.length} · 정본 ${SUPPLY_RUNS_PER_DAY}`)
   check('🔴 🔴 **슬롯 시각도 같다 — 2회라고 부르지 않는다**',
     JSON.stringify(hours) === JSON.stringify(SUPPLY_RUN_SLOTS_KST.map((s) => ({ hour: s.hour, minute: s.minute }))),
@@ -259,7 +259,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
         `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED}`)
       /**
        * 🔴 **env 상한은 손으로 부른 단독 실행의 상한이다** (2026-09-28). 공급 러너의 자식은 이 값을 보지 않는다 —
-       *    단계 env(judge 10 · draft 30)가 덮는다(아래 ③-b 가 실제 계획으로 본다). 그래서 **정본 합 이하의 양의 정수**면 된다.
+       *    단계 env(judge 10 · draft 40)가 덮는다(아래 ③-b 가 실제 계획으로 본다). 그래서 **정본 합 이하의 양의 정수**면 된다.
        *    🔴 운영 값(20)을 이 PR 이 바꾸지 않는다.
        */
       check('🔴 🔴 **env 회차 요청 상한은 양의 정수이고 정본 합 이하다 — 무제한이 아니다**',
@@ -282,7 +282,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
       installed === null || (enabled && declared.length === SUPPLY_BUDGET_ENV_NAMES.length))
   }
   if (installed !== null) {
-    check('🔴 설치본도 6회다',
+    check('🔴 설치본도 7회다',
       (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
     check('🔴 🔴 **설치본에 비밀값 리터럴이 없다**',
       !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(installed.text))
@@ -390,7 +390,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 · draft 30 · 합 40 · 적재 10 (CI 에서도 돈다)')
+console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 · draft 40 · 합 50 · 적재 10 (CI 에서도 돈다)')
 // ─────────────────────────────────────────────────────────
 {
   /**
@@ -402,12 +402,12 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
     && WORKSET_MAX_LIMIT === SUPPLY_WORKSET_PER_RUN && resolveWorksetLimit([]) === SUPPLY_WORKSET_PER_RUN,
     `${SUPPLY_WORKSET_PER_RUN}/${WORKSET_DEFAULT_LIMIT}/${WORKSET_MAX_LIMIT}`)
   const b = judgeStageBudget(SUPPLY_WORKSET_PER_RUN)
-  check('🔴 🔴 **정본 계산(judgeStageBudget) = 계약 상수 — judge 10 · draft 30 · 합 40**',
+  check('🔴 🔴 **정본 계산(judgeStageBudget) = 계약 상수 — judge 10 · draft 40 · 합 50**',
     b.ok && b.perStage.judge === SUPPLY_JUDGE_REQUESTS_PER_RUN && b.perStage.draft === SUPPLY_DRAFT_REQUESTS_PER_RUN
     && b.total === SUPPLY_REQUESTS_PER_RUN
-    && SUPPLY_JUDGE_REQUESTS_PER_RUN === 10 && SUPPLY_DRAFT_REQUESTS_PER_RUN === 30 && SUPPLY_REQUESTS_PER_RUN === 40,
+    && SUPPLY_JUDGE_REQUESTS_PER_RUN === 10 && SUPPLY_DRAFT_REQUESTS_PER_RUN === 40 && SUPPLY_REQUESTS_PER_RUN === 50,
     b.ok ? `${b.perStage.judge}/${b.perStage.draft}/${b.total}` : b.reason)
-  check('🔴 🔴 **단계 합 = 회차 합 · 원천당 1+3=4**',
+  check('🔴 🔴 **단계 합 = 회차 합 · 원천당 1+4=5**',
     SUPPLY_JUDGE_REQUESTS_PER_RUN + SUPPLY_DRAFT_REQUESTS_PER_RUN === SUPPLY_REQUESTS_PER_RUN
     && SUPPLY_WORKSET_PER_RUN * WORKSET_TOTAL_PER_SOURCE === SUPPLY_REQUESTS_PER_RUN
     && SUPPLY_WORKSET_PER_RUN * WORKSET_STAGE_PER_SOURCE.judge === SUPPLY_JUDGE_REQUESTS_PER_RUN
@@ -425,7 +425,7 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
     limit: SUPPLY_WORKSET_PER_RUN, perStage: b.perStage, carryOverPaths: carry,
   }) : []
   const of = (st: string) => plans.find((p) => p.stage === st)
-  check('🔴 🔴 **러너 단계 env — judge 10 · draft 30 (자식에게만 · 장부 id 가 단계별)**',
+  check('🔴 🔴 **러너 단계 env — judge 10 · draft 40 (자식에게만 · 장부 id 가 단계별)**',
     of('judge')?.env?.SORAN_LLM_RUN_REQUEST_CAP === String(SUPPLY_JUDGE_REQUESTS_PER_RUN)
     && of('draft')?.env?.SORAN_LLM_RUN_REQUEST_CAP === String(SUPPLY_DRAFT_REQUESTS_PER_RUN),
     `${of('judge')?.env?.SORAN_LLM_RUN_REQUEST_CAP}/${of('draft')?.env?.SORAN_LLM_RUN_REQUEST_CAP}`)
@@ -452,8 +452,8 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
       && /const budget = judgeStageBudget\(PAID_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)/.test(runner))
     check('🔴 🔴 **launchd 템플릿은 --workset-limit 를 덮어쓰지 않는다 — 계약 기본값(10)이 돈다**',
       !tplP.includes('--workset-limit') && /<string>--live<\/string>/.test(tplP))
-    check('🔴 설명 문구가 10 · 40 · judge 10 · draft 30 을 말한다',
-      describeSupplySchedule().includes('회차당 원천 10 · 요청 40 (judge 10 · draft 30)'))
+    check('🔴 설명 문구가 10 · 50 · judge 10 · draft 40 을 말한다',
+      describeSupplySchedule().includes('회차당 원천 10 · 요청 50 (judge 10 · draft 40)'))
   }
 
   // ── 🔴 하루 비용 — 계약 천장 $1.20 · 운영 env는 별도 정본 ──
@@ -481,8 +481,10 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 ·
     const at50 = judgeSpend({ limits: limits(0.50), tally: t(2 * e10.capPerRun), runPaid: 0, reserve: req, ledgerOk: true, settleHold: null, unresolved: [] })
     check('🔴 🔴 **운영 0.30 — 상한을 다 쓴 회차 둘 뒤 다음 요청은 DAILY_EXHAUSTED (fail-closed)**',
       !at30.ok && at30.code === 'DAILY_EXHAUSTED' && at50.ok, `${JSON.stringify(at30)}`)
-    check('🔴 기대 지출이면 0.30 에서도 6회가 들어간다 (공급만 볼 때) — 다른 사용량이 있으면 늦은 회차부터 막힌다',
-      e10.expectedRunsWithin(0.30) === SUPPLY_RUNS_PER_DAY && estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerDay > 0.30,
+    check('🔴 기대 지출이면 0.30 에서 7회 중 6회가 들어간다 — 운영 0.80은 7회와 댓글을 함께 수용한다',
+      e10.expectedRunsWithin(0.30) === 6 && SUPPLY_RUNS_PER_DAY === 7
+      && e10.expectedRunsWithin(0.80) === SUPPLY_RUNS_PER_DAY
+      && estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerDay > 0.30,
       `${e10.expectedRunsWithin(0.30)}회`)
   }
 }
@@ -545,7 +547,7 @@ console.log('\n⑥ 🔴 🔴 자동 READY 시험 계약 — 사람 승인이 최
     AUTO_READY_CONTRACT.reviewSampleMin === 30
     && AUTO_READY_CONTRACT.noEditAccuracyMin === 0.90
     && AUTO_READY_CONTRACT.hardDefectMax === 0)
-  check('🔴 🔴 **경고 없는 글만 대상이다**', AUTO_READY_CONTRACT.eligible === 'warningsZero')
+  check('🔴 🔴 **차단 경고 없는 글만 대상이다**', AUTO_READY_CONTRACT.eligible === 'blockingWarningsZero')
   check('🔴 열어도 표본 감사를 계속한다', AUTO_READY_CONTRACT.sampledAuditRatio > 0)
   check('🔴 🔴 **표본 없이 정확도를 말하지 않는다는 순서가 적혀 있다**',
     AUTO_READY_STEPS.some((s) => s.includes('표본 없이 정확도를 말하지 않는다')))

@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import type { AdminActionState } from '@/lib/actions/admin'
 import { useToast } from '@/components/ui/toast'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 어드민 조치 버튼 — 이 파일 하나가 모든 조치 버튼을 맡는다.
@@ -63,44 +64,20 @@ export default function AdminActionButton({
   }
 
   /**
-   * 🔴 크기 클래스를 붙인다 (2026-09-17).
-   *    전에는 없어서 body(고객값 20px)를 상속했고, 고객 "글자 크기" 3단계까지
-   *    따라가 버튼만 18~24px 로 흔들렸다. 조치 버튼이 화면에서 가장 큰 요소가 되어
-   *    보조 링크·상태 배지가 그 아래로 묻혔다.
-   *    17px 는 브랜드 정본이 admin CTA 대비를 판정할 때 전제한 크기대이기도 하다.
-   *
-   * 🔴 채움/외곽선 구분과 위험도 의미는 **그대로 둔다.**
-   *    tone='danger' = 외곽선 · 기본 = 채움. 확인창(confirmText)·disabled 조건도 무수정.
-   *    바꾼 것은 글자 크기와 **외곽선 글자색뿐**이다.
-   *
-   * 🔴 외곽선 글자를 --brand-ink → --brand-strong 으로 바꿨다.
-   *    brand-ink(#FA4601)는 흰 카드 위 3.53:1 이다. 20px bold 일 때는 큰 글씨
-   *    기준 3.0 을 넘어 통과했지만, 17px 로 내리면 본문 4.5 기준에 미달한다.
-   *    brand-strong(#C43300)은 5.50:1 — 정본 §1-2 의 "작은 글씨는 brand-strong" 규칙 그대로다.
+   * 🔴 모양은 AdminButton 이 정한다 (Admin Console V2 · 2026-10-20).
+   *    기본 = 먹색 면 + 흰 글씨(관리자 action 토큰) · danger = 흰 면 + 빨간 테두리·글씨.
+   *    예전 danger 는 주황(--brand-strong) 외곽선이라 일반 주황 강조와 구분되지 않았다.
+   *    채움/외곽선 구분과 위험도 의미 · 확인창(confirmText) · disabled 조건은 그대로다.
+   *    못 누르는 상태는 회색 면이다(opacity 로 흐리지 않는다) — AdminButton 공통 규칙.
    */
-/**
-   * 🔴 못 누르는 버튼은 흐린 브랜드색이 아니라 **회색**이다 (2026-09-17).
-   *    전에는 disabled:opacity-50 하나였다. 그러면 주황이 옅어질 뿐이라
-   *    "누를 수 있는데 흐린 것" 으로 읽힌다 — 공용 ActionButton 이 이미 같은 이유로
-   *    회색 면을 쓰고 있었는데(ui/ActionButton) 운영 콘솔만 opacity 로 남아 있었다.
-   *    정책을 맞춘다. disabled 조건 자체는 건드리지 않는다.
-   *
-   * 🔴 hover·active 는 enabled: 로 잠근다. 못 누르는 버튼이 hover 에서 반응하면
-   *    "아직 누를 수 있다" 로 읽힌다.
-   *
-   * 🔴 좌우 여백을 px-4 → px-5 로 넓힌다. 높이 52px 에 16px 여백이면
-   *    짧은 라벨("저장")이 세로로 긴 상자가 된다. 공용 ActionButton 과 같은 값이다.
-   */
-  const base =
-    'inline-flex min-h-[52px] items-center justify-center rounded-lg px-5 text-base font-bold transition duration-150 enabled:active:scale-[0.98] disabled:bg-surface-page disabled:text-content-muted disabled:border disabled:border-subtle'
-  const skin =
-    tone === 'danger'
-      ? 'border border-interactive text-brand-strong enabled:hover:bg-surface-soft'
-      : 'bg-cta text-content-primary enabled:hover:brightness-95'
-
   return (
     <div className="flex flex-col gap-1">
-      <button type="button" onClick={onClick} disabled={pending || disabled} className={`${base} ${skin}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={pending || disabled}
+        className={adminButtonClass(tone === 'danger' ? 'danger' : 'primary')}
+      >
         {pending ? '처리 중…' : label}
       </button>
       {error ? <p className="text-sm text-state-danger">{error}</p> : null}

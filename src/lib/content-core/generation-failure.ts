@@ -32,7 +32,7 @@ export type CallOutcome = (typeof CALL_OUTCOMES)[number]
 
 /**
  * 🔴 **원천 하나가 한 회차에 쓸 수 있는 재시도 수.** 일시적 기술 실패 한 번만 다시 묻는다.
- *    정상 경로 3회 + 재시도 1회 = 4 — 회차 공동 예산(`CALL_ALLOWANCE_PER_SOURCE` = 4)을 넘지 않는다.
+ *    정상 경로 3회 + 조건부 확인 1회 + 재시도 1회 = 5 — 회차 공동 예산을 넘지 않는다.
  *    🔴 이 값을 올리면 원천당 요청량이 늘어난다 — 요청량 결정은 이 배치의 권한이 아니다.
  */
 export const GENERATION_RETRY_MAX = 1
@@ -51,6 +51,15 @@ export function transientProviderError(code: string | null | undefined): boolean
   if (c === 'NETWORK') return true
   if (c === 'HTTP_429') return true
   return /^HTTP_5\d\d$/.test(c)
+}
+
+/**
+ * 🔴 **요청 모양을 제공사가 받지 않았는가** (2026-10-24 D10 첫 댓글 HTTP_400). 400 은 같은 모양으로 다시 보내면
+ *    같은 400 이다 — 같은 회차의 다른 대상·다른 Persona 에 다시 보내지 않는다. 일시 오류(429 · 5xx · NETWORK · TIMEOUT)는
+ *    여기에 들지 않는다.
+ */
+export function requestShapeRejected(code: string | null | undefined): boolean {
+  return (code ?? '').trim() === 'HTTP_400'
 }
 
 /** 🔴 `content-core-run` 의 `AskResult` 에서 분류에 필요한 칸만 */

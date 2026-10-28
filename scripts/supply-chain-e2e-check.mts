@@ -47,6 +47,10 @@ import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
+import {
+  RULE_VERSION as AUTO_JUDGE_RULE_VERSION,
+  PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION,
+} from '../src/lib/micro-seed-auto-judge'
 
 let pass = 0
 let fail = 0
@@ -85,8 +89,8 @@ writeFileSync(join(dd, 'x.detail.jsonl'), `${JSON.stringify({
 writeFileSync(join(dd, 'x.shadow.jsonl'), `${JSON.stringify({
   // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
   sourceSite: 'navercafe:wgang', sourceArticleId: SRC_ID, decision: 'AUTO_SEED', semanticRisks: [],
-  ruleVersion: 'auto-judge-v1', promptVersion: 'p', model: 'm', inputHash: 'h',
-  provenance: 'machine-judged',
+  ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+  model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
 })}\n`, 'utf-8')
 const runId = 'E2E'
 writeFileSync(join(dd, queueSnapshotFileName(runId)),
@@ -275,7 +279,11 @@ console.log('\n④ 🔴 planRefill → buildQueuePayload')
   const payload = plan.targets.length === 1
     ? buildQueuePayload({
       envelope, candidate: plan.targets[0]!,
-      autoJudge: { ruleVersion: 'auto-judge-v1', promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine-judged' },
+      autoJudge: {
+        ruleVersion: AUTO_JUDGE_RULE_VERSION,
+        promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+        model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
+      },
       now: new Date().toISOString(),
     })
     : null
@@ -367,8 +375,8 @@ console.log('\n⑤ 🔴 artifacts.json → 사람 검토 근거')
   check('🔴 🔴 **사람이 원문 근거를 본다**', lines.includes('원문 근거:') && lines.includes('김치'))
   check('🔴 사람이 Persona·stance 를 본다', /화자 P\d+ \/ \w+/.test(lines), lines.split('\n')[1])
   // 🔴 2026-09-20 — 이 둘은 경고다. 막지 않고 **사람에게 보여 준다**
-  check('🔴 사람이 원문에 없어 보이는 것을 본다', lines.includes('원문에 없어 보이는 것'))
-  check('🔴 사람이 원문에서 사라져 보이는 것을 본다', lines.includes('원문에서 사라져 보이는 것'))
+  check('🔴 증거 화면이 근거 없는 위험 사실을 보여 준다', lines.includes('근거 없는 위험 사실'))
+  check('🔴 증거 화면이 원문 핵심 손실을 보여 준다', lines.includes('원문 핵심 손실'))
   check('🔴 사람이 생활사 모순을 본다', lines.includes('생활사 모순'))
   check('🔴 사람이 기계 사유를 본다', lines.includes('기계 '))
   check('🔴 🔴 **원문 근거가 마스킹된 값이다**',

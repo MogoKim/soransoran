@@ -2,7 +2,8 @@
 /**
  * M-GRAPH 결정적 build · readiness 반례 검사.
  *
- *   node scripts/magazine-graph-build-check.mjs [--old-input <2026-10-15-family> --new-input <2026-10-17-money-work> --real-product <제품 루트>]
+ *   node scripts/magazine-graph-build-check.mjs [--final-input <reconciled/2026-10-21-money-work-retirement-next-e0335> --real-product <제품 루트>]
+ *     (과거 계약 입력은 같은 reconciled 폴더에서 찾는다 · --old-input · --new-input 으로 덮을 수 있다)
  *
  * 합성 fixture 만 쓴다(임시 폴더). 운영 연구 폴더 · 제품 graph 파일을 쓰지 않는다.
  * 실제 입력을 주면 lifecycle 계약 기준 재현성 증거를 **추가로** 본다(읽기 전용) — old 거부 11건 · new 2회 동일 · semantic delta whitelist · readiness.
@@ -17,6 +18,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+
+import { ensureCluster, readControl } from './lib/magazine-graph-control-edit.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIB = process.env.MGRAPH_BUILD_LIB ?? join(HERE, 'lib/magazine-graph-build.mjs')
@@ -143,6 +146,9 @@ test('반례2 — generatedAt 만 바꾸면 graphVersion · contentHash · seman
   eq([b.graphVersion, b.manifest.contentHash, b.manifest.semanticHash], [a.graphVersion, a.manifest.contentHash, a.manifest.semanticHash], 'generatedAt 의존')
   ok(a.manifest.exportHash !== b.manifest.exportHash, 'EXPORT_HASH 는 bundle 무결성 해시라 generatedAt 을 포함해야 한다')
   eq(b.readiness, a.readiness, 'readiness 는 generatedAt 과 무관')
+  // 🔴 semanticHash 는 generatedAt 을 담은 **실제 payload** 에 적용해도 같아야 한다 — G8 이 bundle payload 를 이 함수로 재계산한다.
+  //    manifest 의 값은 generatedAt 자리가 빈 slim 에서 나오므로, 실제 slim 으로 재지 않으면 「generatedAt 제외」 가 죽은 방어가 된다
+  eq([lib.semanticHashOf(a.slim), lib.semanticHashOf(b.slim)], [a.manifest.semanticHash, a.manifest.semanticHash], '실제 payload 의 semanticHash')
 })
 test('반례2b — 시각 형식이 모호하면 거부(벽시계로 대신하지 않는다)', () => {
   for (const [k, v, code] of [['effectiveAt', '2026-10-15T13:00:00', 'EFFECTIVE_AT_INVALID'], ['effectiveAt', null, 'EFFECTIVE_AT_INVALID'],
@@ -690,9 +696,257 @@ test('반례21b — coverage 가 없거나 계약 밖 · 공개 전인 slim mapp
   eq(lib.exportProblems(slim, surfaces), [], '정상 slim')
 })
 
+// ── 반례 22 — graph 참여(EDITORIAL_NON_SEARCH) 선언 (2026-10-18) ──
+const ED_EVIDENCE = [{ ref: 'account-2/evidence/serpapi/a.json', sha256: 'a'.repeat(64) }, { ref: 'concept-coverage-gaps.jsonl#C6-06', sha256: 'b'.repeat(64) }]
+const edDecl = (over = {}) => ({ state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidence: ED_EVIDENCE,
+  evidenceHash: lib.editorialEvidenceHash(ED_EVIDENCE), ...over })
+const ED_ARTICLES = articlesText({ ed: art('fam', '2026-10-01T10:30:00+09:00') })
+const edWorld = (decl = edDecl()) => { const w = baseWorld(); w.published.push({ slug: 'ed', assetState: 'LIVE', graphParticipation: decl }); return w }
+test('반례22 — editorial 선언은 participation 산출 · slim 판정 · contentHash 로 운반되고 graphVersion 을 바꾼다', () => {
+  const plain = (() => { const w = baseWorld(); w.published.push({ slug: 'ed', assetState: 'LIVE' }); return build({ world: w, articles: ED_ARTICLES }) })()
+  const b = build({ world: edWorld(), articles: ED_ARTICLES })
+  eq(b.layers.participation.map((p) => [p.slug, p.state, p.reasonCode, p.evidenceHash]), [['ed', 'EDITORIAL_NON_SEARCH', 'BOUNDED_RESEARCH_EXHAUSTED', lib.editorialEvidenceHash(ED_EVIDENCE)]], 'layer')
+  eq(b.slim.participation, [{ slug: 'ed', state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidenceHash: lib.editorialEvidenceHash(ED_EVIDENCE) }], 'slim')
+  ok(typeof b.manifest.contentHash.participation === 'string', 'contentHash.participation 없음')
+  ok(b.graphVersion !== plain.graphVersion, '선언을 더해도 graphVersion 이 같다')
+  ok(b.files['participation.jsonl']?.includes('"slug":"ed"'), 'participation.jsonl 없음')
+  ok(b.files[`bundle/${b.graphVersion}.ts`].includes('"participation"'), 'bundle 에 participation 없음')
+  eq(lib.editorialEvidenceHash([...ED_EVIDENCE].reverse()), lib.editorialEvidenceHash(ED_EVIDENCE), '근거 순서와 무관한 hash')
+})
+test('반례22b — editorial 선언과 canonical mapping 이 같은 slug 에 동시에 있으면 INPUT_SCHEMA_INVALID', () => {
+  const w = edWorld(); w.canonical.find((c) => c.intentId === 'I-T').existingSlugs = [{ slug: 'ed', coverage: 'ANSWERS', cluster: 'fam' }]
+  const r = rejectWhy(() => build({ world: w, articles: ED_ARTICLES }))
+  ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('canonical mapping 이 있다'), JSON.stringify(r))
+})
+test('반례22c — provenance 누락·빈 hash·hash 불일치·reasonCode 계약 밖·state 계약 밖·근거 0·근거 hash 형식 밖·근거 중복은 INPUT_SCHEMA_INVALID', () => {
+  const cases = [
+    ['hash 누락', edDecl({ evidenceHash: undefined }), 'evidenceHash'],
+    ['빈 hash', edDecl({ evidenceHash: '' }), 'evidenceHash'],
+    ['hash 불일치', edDecl({ evidenceHash: 'c'.repeat(64) }), 'evidenceHash'],
+    ['reasonCode 누락', edDecl({ reasonCode: undefined }), 'reasonCode'],
+    ['reasonCode 계약 밖', edDecl({ reasonCode: 'LOOKS_EDITORIAL' }), 'reasonCode'],
+    ['state 계약 밖', edDecl({ state: 'SEARCH_NODE' }), 'state'],
+    ['근거 0', edDecl({ evidence: [], evidenceHash: lib.editorialEvidenceHash([]) }), '근거 신원·hash 누락'],
+    ['근거 hash 형식 밖', edDecl({ evidence: [{ ref: 'x', sha256: '' }] }), '근거 신원·hash 누락'],
+    ['근거 신원 누락', edDecl({ evidence: [{ ref: '', sha256: 'a'.repeat(64) }] }), '근거 신원·hash 누락'],
+    ['근거 중복', edDecl({ evidence: [ED_EVIDENCE[0], ED_EVIDENCE[0]] }), '근거 신원 중복'],
+  ]
+  for (const [label, decl, want] of cases) {
+    const r = rejectWhy(() => build({ world: edWorld(decl), articles: ED_ARTICLES }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes(want), `${label}: ${JSON.stringify(r)}`)
+  }
+  for (const decl of [null, 'EDITORIAL_NON_SEARCH', { state: 'EDITORIAL_NON_SEARCH' }]) {
+    const r = rejectWhy(() => build({ world: edWorld(decl), articles: ED_ARTICLES }))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('graphParticipation 형식 오류'), `구조 ${JSON.stringify(decl)}: ${JSON.stringify(r)}`)
+  }
+})
+test('반례22d — 선언이 없으면 participation 키 · participation.jsonl · contentHash.participation 이 없다(롤백 bundle 호환)', () => {
+  const b = build()
+  eq([b.layers.participation, 'participation' in b.slim, 'participation' in b.manifest.contentHash, 'participation.jsonl' in b.files, 'participation' in b.slim.schemaVersion],
+    [[], false, false, false, false], '선언 없는 판')
+})
+test('반례22f — 깨진 participation 행(null · 비객체 · 근거 없음 · 근거 객체 · 근거 원소 null · 배열 아님)은 TypeError 없이 GraphBuildError INPUT_SCHEMA_INVALID', () => {
+  const good = build({ world: edWorld(), articles: ED_ARTICLES }).layers
+  const ok1 = good.participation[0]
+  const cases = [
+    ['null 행', [null], '객체가 아니다'],
+    ['문자열 행', ['ed'], '객체가 아니다'],
+    ['근거 undefined', [{ ...ok1, evidence: undefined }], '근거 목록이 배열이 아니다'],
+    ['근거 객체', [{ ...ok1, evidence: { ref: 'x', sha256: 'a'.repeat(64) } }], '근거 목록이 배열이 아니다'],
+    ['근거 원소 null', [{ ...ok1, evidence: [null] }], '근거 신원·hash 누락'],
+    ['participation 이 배열 아님', { 0: ok1 }, '배열이 아니다'],
+  ]
+  for (const [label, participation, want] of cases) {
+    let err = null
+    try { lib.validateBuiltArtifacts({ ...good, participation }) } catch (e) { err = e }
+    ok(err instanceof lib.GraphBuildError, `${label}: GraphBuildError 아님 — ${err?.constructor?.name} ${String(err?.message).slice(0, 120)}`)
+    ok(err.code === 'INPUT_SCHEMA_INVALID' && String(err.why).includes(want), `${label}: ${err.code} ${String(err.why).slice(0, 160)}`)
+  }
+})
+test('반례22g — 판정을 운반하는 bundle 만 schemaVersion.participation = participation/1 · 짝이 어긋나면 export 가 거부 · EXPORT_HASH 가 표식을 덮는다', () => {
+  const b = build({ world: edWorld(), articles: ED_ARTICLES })
+  eq(b.slim.schemaVersion.participation, 'participation/1', '표식')
+  ok(b.files[`bundle/${b.graphVersion}.ts`].includes('"participation": "participation/1"'), 'bundle 텍스트에 표식 없음')
+  const surfaces = ['CTA_END', 'FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE']
+  const { participation: _drop, ...noMarker } = b.slim.schemaVersion
+  ok(lib.exportProblems({ ...b.slim, schemaVersion: noMarker }, surfaces).some((x) => x.startsWith('EXPORT_PARTICIPATION_SCHEMA_MISSING')), '표식 없음')
+  ok(lib.exportProblems({ ...b.slim, schemaVersion: { ...noMarker, participation: 'participation/2' } }, surfaces).some((x) => x.startsWith('EXPORT_PARTICIPATION_SCHEMA_MISSING')), '다른 표식')
+  const plain = build().slim
+  ok(lib.exportProblems({ ...plain, schemaVersion: { ...plain.schemaVersion, participation: 'participation/1' } }, surfaces).includes('EXPORT_PARTICIPATION_SCHEMA_ORPHAN'), '판정 없는 표식')
+  ok(lib.exportProblems({ ...plain, participation: [] }, surfaces).includes('EXPORT_PARTICIPATION_SCHEMA_ORPHAN'), '빈 판정 키')
+  ok(lib.bundleText({ ...b.slim, schemaVersion: noMarker }).exportHash !== b.manifest.exportHash, 'EXPORT_HASH 가 표식을 덮지 않는다')
+  const row = b.files['participation.jsonl'].trim()
+  ok(row.includes('"schemaVersion":"participation/1"'), 'contentHash 가 덮는 산출 행에 schema 가 없다')
+})
+test('반례22e — 검색 mapping 과 겹치거나 hash 형식 밖인 slim participation 은 export 자체 검사가 거부한다', () => {
+  const slim = build({ world: edWorld(), articles: ED_ARTICLES }).slim
+  const surfaces = ['CTA_END', 'FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE']
+  eq(lib.exportProblems(slim, surfaces), [], '정상 slim')
+  const mappedSlug = slim.mappings[0].slug
+  for (const [label, p] of [['mapping 과 겹침', { ...slim.participation[0], slug: mappedSlug }], ['빈 hash', { ...slim.participation[0], evidenceHash: '' }], ['reasonCode 밖', { ...slim.participation[0], reasonCode: 'X' }]]) {
+    ok(lib.exportProblems({ ...slim, participation: [p] }, surfaces).some((x) => x.startsWith('EXPORT_PARTICIPATION_INVALID')), label)
+  }
+})
+
+// ── 반례 23 — crossCluster 는 산출 cluster 두 값에서만 나온다 (2026-10-21 실측: canonical 만 비교해 74건 어긋남) ──
+//    builder 의 canonical 은 g4-intents-canonical 행이다. 기본 world 의 canon() 은 magazineCluster 가 없어 전부 null 로 가린다 —
+//    canonical 값이 있는 끝과 없는 끝을 섞어야 옛 구현(canonical 끼리만 비교)이 드러난다
+const crossWorld = () => {
+  const w = baseWorld()
+  for (const c of w.canonical) if (c.intentId === 'I-X') c.magazineCluster = 'fam'; else if (c.intentId === 'I-D') c.magazineCluster = 'rel'
+  w.automation.push(intent('I-N1', null), intent('I-N2', null), intent('I-N3', null))
+  w.canonical.push(canon('I-N1'), canon('I-N2'), canon('I-N3'))
+  w.graph.push(
+    edge('E-0013', 'I-X', 'I-N1', 'SIBLING', 'FOOTER_SIBLING', { fromCluster: 'zzz', toCluster: 'fam' }), // canonical fam 이 앞선다 · 보충 fam → 같은 cluster
+    edge('E-0014', 'I-N1', 'I-D', 'BRIDGE', 'FOOTER_BRIDGE', { fromCluster: 'fam', toCluster: 'fam' }), // 보충 fam · canonical rel → 다른 cluster
+    edge('E-0015', 'I-N2', 'I-N3', 'SIBLING', 'FOOTER_SIBLING'), // 양쪽 다 없음 → null · null
+    edge('E-0016', 'I-N1', '/community/free', 'COMMUNITY', 'CTA_END', { fromCluster: 'fam' }))
+  return w
+}
+test('반례23 — canonical cluster 가 비면 입력 edge cluster 로 보충하고, crossCluster 는 그 보충값으로 판정한다', () => {
+  const by = new Map(build({ world: crossWorld() }).layers.edges.map((e) => [e.edgeId, e]))
+  const pick = (id) => { const e = by.get(id); return [e.fromCluster, e.toCluster, e.crossCluster] }
+  eq(pick('E-0013'), ['fam', 'fam', false], 'canonical 이 입력 edge cluster 보다 앞선다 · 보충값끼리 같은 cluster')
+  eq(pick('E-0014'), ['fam', 'rel', true], '보충값과 canonical 이 다르면 cross')
+  eq(pick('E-0015'), [null, null, false], '양쪽 다 없으면 null · null · false')
+  eq(pick('E-0016'), ['fam', null, false], 'COMMUNITY 는 언제나 false')
+  const off = [...by.values()].filter((e) => e.crossCluster !== (e.relationType === 'COMMUNITY' ? false : e.fromCluster !== e.toCluster))
+  eq(off.map((e) => e.edgeId), [], '산출 전체 crossCluster 일관성')
+})
+test('반례23b — 산출 계약은 crossCluster 값 불일치를 거부한다 (형식이 맞아도)', () => {
+  const layers = build({ world: crossWorld() }).layers
+  const clone = () => JSON.parse(JSON.stringify(layers))
+  const same = layers.edges.findIndex((e) => e.relationType !== 'COMMUNITY' && e.fromCluster === e.toCluster)
+  const cross = layers.edges.findIndex((e) => e.relationType !== 'COMMUNITY' && e.fromCluster !== e.toCluster)
+  const com = layers.edges.findIndex((e) => e.relationType === 'COMMUNITY')
+  ok(same >= 0 && cross >= 0 && com >= 0, `표본 부족 ${same} ${cross} ${com}`)
+  eq(rejectWhy(() => lib.validateBuiltArtifacts(clone())), null, '정상 산출 통과')
+  for (const [name, mutate] of [
+    ['같은 cluster 인데 true', (l) => { l.edges[same].crossCluster = true }],
+    ['다른 cluster 인데 false', (l) => { l.edges[cross].crossCluster = false }],
+    ['COMMUNITY 가 true', (l) => { l.edges[com].crossCluster = true }],
+    ['cluster 만 바꾸고 crossCluster 는 그대로', (l) => { l.edges[same].toCluster = 'other' }],
+  ]) {
+    const l = clone(); mutate(l)
+    const r = rejectWhy(() => lib.validateBuiltArtifacts(l))
+    ok(r?.code === 'INPUT_SCHEMA_INVALID' && r.why.includes('crossCluster 가 산출 fromCluster·toCluster 와 어긋난다'), `${name}: ${JSON.stringify(r)}`)
+  }
+})
+
+// ── 반례 24 — graph semanticHash 와 readinessHash 분리 · 유일한 계산 경로 (2026-10-21) ──
+//    readinessHash = sha256(canonicalJson(report)) · readinessFileSha256 = sha256(readiness.json 바이트)
+//    🔴 canonical 직렬화를 검사 쪽에 따로 둔다 — lib 의 함수로 lib 를 재면 정의가 바뀌어도 같은 값이 나온다
+const canonicalJson = (v) => Array.isArray(v) ? `[${v.map(canonicalJson).join(',')}]`
+  : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`
+    : JSON.stringify(v)
+const compute = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, articles = ARTICLES, extra = {} } = {}) =>
+  lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles }, admissionTexts: admission, effectiveAt, ...extra })
+test('반례24a — buildAll 의 readiness · 해시 · graph 신원은 computeGraphAndReadiness 와 같다', () => {
+  const b = build(), c = compute()
+  eq(canonicalJson(b.readiness), canonicalJson(c.readiness), 'readiness 객체')
+  eq([b.graphVersion, b.manifest.contentHash, b.manifest.semanticHash], [c.graphVersion, c.contentHash, c.graphSemanticHash], 'graph 신원')
+  eq(c.readinessHash, sha(canonicalJson(c.readiness)), 'readinessHash = sha256(canonicalJson(report))')
+  eq(c.readinessFileSha256, sha(b.files['readiness.json']), 'readinessFileSha256 = readiness.json 바이트')
+  eq(b.files['readiness.json'], lib.serializeReadiness(c.readiness), '파일 바이트 = serializeReadiness')
+  eq(b.readiness.schemaVersion, 'mgraph-readiness/2', 'schema')
+})
+test('반례24b — control · articles · admission · effectiveAt 하나만 바꾸면 readinessHash 가 바뀌고 graph combined 는 그대로', () => {
+  const base = compute()
+  const cases = [
+    ['control', compute({ control: controlText({ clusters: ['fam'] }) })],
+    ['articles', compute({ articles: articlesText({ zz: art('fam', '2026-10-07T10:30:00+09:00') }) })],
+    ['admission', compute({ admission: { ...ADMISSION, ledger: `${JSON.stringify({ event: 'ADMITTED', intentId: 'I-X', slug: 'x-slug' })}\n` } })],
+    ['effectiveAt', compute({ effectiveAt: '2026-10-15T14:00:00+09:00' })],
+  ]
+  for (const [name, c] of cases) {
+    ok(c.readinessHash !== base.readinessHash, `${name}: readinessHash 가 그대로다`)
+    ok(c.readinessFileSha256 !== base.readinessFileSha256, `${name}: readinessFileSha256 이 그대로다`)
+    eq([c.contentHash, c.graphVersion, c.graphSemanticHash], [base.contentHash, base.graphVersion, base.graphSemanticHash], `${name}: graph 가 바뀌었다`)
+  }
+})
+test('반례24c — generatedAt 만 바꾸면 readiness · 두 해시 · graph 파일은 그대로 · bundle 은 generatedAt 줄과 EXPORT_HASH 만 다르다', () => {
+  const a = build(), b = build({ generatedAt: '2031-01-01T00:00:00.000Z' })
+  eq(a.files['readiness.json'], b.files['readiness.json'], 'readiness.json')
+  for (const f of ['intents.jsonl', 'edges.jsonl', 'mappings.jsonl']) eq(a.files[f], b.files[f], f)
+  const bundleOf = (x) => x.files[`bundle/${x.graphVersion}.ts`]
+  const diffLines = bundleOf(a).split('\n').filter((l, i) => l !== bundleOf(b).split('\n')[i])
+  ok(diffLines.length > 0 && diffLines.every((l) => /generatedAt|^\/\/ 생성:|EXPORT_HASH/.test(l)), `bundle 차이: ${diffLines.join(' | ').slice(0, 200)}`)
+  const ca = compute(), cb = compute()
+  eq([ca.readinessHash, ca.readinessFileSha256], [cb.readinessHash, cb.readinessFileSha256], '재계산')
+})
+test('반례24d — 직렬화 공백 · 키 순서만 바꾸면 의미 readinessHash 는 같고 파일 해시만 다르다', () => {
+  const c = compute()
+  const compact = JSON.parse(JSON.stringify(c.readiness))
+  const reordered = Object.fromEntries(Object.entries(compact).reverse())
+  eq(lib.readinessHashOf(reordered), c.readinessHash, '키 순서')
+  eq(lib.readinessHashOf(JSON.parse(JSON.stringify(c.readiness, null, 4))), c.readinessHash, '공백')
+  ok(sha(JSON.stringify(c.readiness)) !== c.readinessFileSha256, '압축 직렬화의 파일 해시가 같다')
+  ok(c.readinessHash !== c.readinessFileSha256, '의미 해시와 파일 해시가 같은 정의다')
+})
+test('반례24e — computeGraphAndReadiness 는 generatedAt · 벽시계를 읽지 않는다', () => {
+  const ref = compute()
+  eq(compute({ extra: { generatedAt: 'not-a-time' } }).readinessHash, ref.readinessHash, 'generatedAt 인자')
+  const RealDate = Date
+  globalThis.Date = class extends RealDate { constructor(...x) { if (!x.length) throw new Error('벽시계'); super(...x) } static now() { throw new Error('벽시계') } }
+  let r
+  try { r = compute() } finally { globalThis.Date = RealDate }
+  eq([r.readinessHash, r.readinessFileSha256, r.graphSemanticHash], [ref.readinessHash, ref.readinessFileSha256, ref.graphSemanticHash], '벽시계 차단')
+})
+test('반례24f — readiness.inputs 는 graph 신원 · 제품 3파일 · admission · effectiveAt 를 정확히 싣는다', () => {
+  const c = compute()
+  const products = { resolver: RESOLVER, control: controlText(), articles: ARTICLES }
+  eq(c.readiness.inputs, {
+    graphVersion: c.graphVersion, graphCombined: c.contentHash.combined, graphSemanticHash: c.graphSemanticHash,
+    productHashes: { resolver: sha(products.resolver), control: sha(products.control), articles: sha(products.articles) },
+    admissionHashes: { 'contract/m3-slug-manifest.json': sha(ADMISSION.slugManifest), 'contract/m3-state.jsonl': sha(ADMISSION.ledger) },
+    effectiveAt: EFF,
+  }, 'inputs')
+  ok(!('semanticHash' in c.readiness), 'graph semanticHash 를 readiness 최상위에 다시 둔다')
+  eq(compute({ admission: null }).readiness.inputs.admissionHashes, 'UNREAD', 'admission 미판독')
+})
+test('반례24g — buildAll 은 계산을 computeGraphAndReadiness 한 번에 맡긴다 · 그 함수 본문은 시각 · 파일을 읽지 않는다', () => {
+  const src = readFileSync(LIB, 'utf8')
+  const bodyOf = (name) => { const i = src.indexOf(`export function ${name}(`); ok(i >= 0, `${name} 없음`); return src.slice(i, src.indexOf('\n}\n', i)) }
+  const ba = bodyOf('buildAll'), cg = bodyOf('computeGraphAndReadiness')
+  eq((ba.match(/computeGraphAndReadiness\(/g) ?? []).length, 1, 'buildAll 의 computeGraphAndReadiness 호출 수')
+  eq(['buildReadiness(', 'buildGraphLayers(', 'parseInputTexts(', 'semanticHashOf(', 'slimGraph(', 'parseAdmissionTexts('].filter((t) => ba.includes(t)), [], 'buildAll 의 두 번째 계산')
+  const cgCode = cg.replace('generatedAt: null', '')
+  // 🔴 단어 경계로 본다 — eff.versionDate 같은 이름은 벽시계가 아니다
+  eq([/\bgeneratedAt\b/, /\bDate\b/, /\breadFileSync\b/, /\bprocess\./, /\bparseGeneratedAt\b/].filter((re) => re.test(cgCode)).map(String), [], 'computeGraphAndReadiness 의 시각 · 파일 접근')
+})
+
+// ── 반례 25 — 이미 내보낸 판을 다른 시각에 다시 본다 (expectedGraphVersion · 2026-10-22 G8 시간축) ──
+test('반례25 — expectedGraphVersion 이 맞으면 그 판 이름으로 slim · readiness 를 만들고, readiness 는 주어진 시각으로 계산한다', () => {
+  const base = compute()
+  const later = '2026-10-16T09:00:00+09:00'
+  const next = compute({ effectiveAt: later, extra: { expectedGraphVersion: base.graphVersion } })
+  ok(compute({ effectiveAt: later }).graphVersion !== base.graphVersion, '시험 전제 — 날짜가 바뀌면 판 이름이 달라진다')
+  eq([next.graphVersion, next.parts.slimCore.graphVersion, next.readiness.inputs.graphVersion, next.readiness.graphVersion], Array(4).fill(base.graphVersion), '판 이름')
+  eq([next.readiness.inputs.effectiveAt, next.readiness.effectiveAt], [later, later], 'readiness 시각 = 주어진 시각')
+  ok(next.readinessHash !== base.readinessHash, '시각이 다르면 readinessHash 가 다르다')
+  eq([next.contentHash, next.graphSemanticHash], [base.contentHash, base.graphSemanticHash], '같은 판 — 내용 · 의미 해시 불변')
+})
+test('반례25b — expectedGraphVersion 접미사 · 형식이 어긋나면 GRAPH_VERSION_MISMATCH · 없으면 산출 불변', () => {
+  const base = compute()
+  const wrong = base.graphVersion.replace(/[0-9a-f]{6}$/, '000000')
+  // 접미사는 맞지만 형식이 아닌 이름 — 형식 검사만 막는다
+  for (const v of [wrong, 'g-2026101-abc', 'not-a-version', `bad-${base.graphVersion.slice(-6)}`]) {
+    const r = rejectWhy(() => compute({ extra: { expectedGraphVersion: v } }))
+    eq(r?.code, 'GRAPH_VERSION_MISMATCH', v)
+  }
+  const same = compute({ extra: { expectedGraphVersion: base.graphVersion } })
+  eq([same.readinessHash, same.readinessFileSha256, JSON.stringify(same.parts.slimCore)], [base.readinessHash, base.readinessFileSha256, JSON.stringify(base.parts.slimCore)], '같은 날 같은 판이면 결과 동일')
+  eq(build().files, build().files, 'buildAll 결정성')
+})
+
 // ── 실제 입력 재현성 (선택) — 2026-10-17 lifecycle 계약 기준 네 증거 중 1~3 ──
 //    4 (resolver 화면 결과)는 TS 런타임이 필요해 이 검사 밖 시뮬레이션으로 본다
-const oldInput = argOf('--old-input'), newInput = argOf('--new-input'), realProduct = argOf('--real-product')
+//    🔴 `--final-input` 만 주면 같은 reconciled 폴더의 10-15-family · 10-17-money-work 로 이 과거 계약도 함께 돈다 — 과거 반례를 빼지 않는다
+const finalInput = argOf('--final-input')
+const reconciledRoot = finalInput ? dirname(finalInput.replace(/\/+$/, '')) : null
+const oldInput = argOf('--old-input') ?? (reconciledRoot && join(reconciledRoot, '2026-10-15-family'))
+const newInput = argOf('--new-input') ?? (reconciledRoot && join(reconciledRoot, '2026-10-17-money-work'))
+const realProduct = argOf('--real-product')
 const readText = (p) => readFileSync(p, 'utf8')
 const inputsAt = (dir) => Object.fromEntries(Object.values(lib.INPUT_FILES).map((n) => [n, readText(join(dir, n))]))
 const productAt = (root) => Object.fromEntries(Object.entries(lib.PRODUCT_FILES).map(([k, rel]) => [k, readText(join(root, rel))]))
@@ -711,9 +965,9 @@ const APPROVED_MAPPING = {
   'I-T4-06|bone-density-test-when': 'ANSWERS', 'I-T5-06|irp-tax-benefit': 'ANSWERS_PARTIAL', 'I-T6-01|starting-work-at-this-age': 'REMOVED',
   'I-T6-04|certificate-in-50s': 'ANSWERS', 'I-T8-05|menopause-supplements-talk': 'ANSWERS',
 }
-const runRealCli = (input, out) => {
+const runRealCli = (input, out, eff = REAL_EFF, gen = REAL_GEN) => {
   try {
-    execFileSync(process.execPath, [CLI, '--input-root', input, '--product-root', realProduct, '--effective-at', REAL_EFF, '--generated-at', REAL_GEN, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] })
+    execFileSync(process.execPath, [CLI, '--input-root', input, '--product-root', realProduct, '--effective-at', eff, '--generated-at', gen, '--out-dir', out], { stdio: ['ignore', 'pipe', 'pipe'] })
     return 0
   } catch (e) { return e.status }
 }
@@ -774,8 +1028,9 @@ if (oldInput && newInput && realProduct) {
   })
   test('실제 입력 3b — money-work 를 켠 control 사본에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099', () => {
     const pt = productAt(realProduct)
-    const control = pt.control.replace("enabledClusters: ['sleep', 'family'],", "enabledClusters: ['sleep', 'family', 'money-work'],")
-    ok(control !== pt.control, 'control 사본 치환 실패 — 제품 control 이 예상과 다르다')
+    // 🔴 money-work 를 켠 control 사본 — 구조 편집(멱등). 이미 켜진 control 이어도 준비가 실패하지 않는다
+    const { text: control } = ensureCluster(pt.control, 'money-work')
+    ok(readControl(control).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
     const b = lib.buildAll({ inputTexts: inputsAt(newInput), productTexts: { ...pt, control }, admissionTexts: null, effectiveAt: REAL_EFF, generatedAt: REAL_GEN })
     eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-05'], 'GRAPH_READY')
     const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')
@@ -828,6 +1083,81 @@ if (oldInput && newInput && realProduct) {
   })
 } else {
   results.push('  ⏭  실제 입력 재현성 — --old-input · --new-input · --real-product 미지정 (통과로 세지 않는다)')
+}
+
+// ── 실제 최종 입력 (2026-10-21) — money-work 활성 graph 의 입력 계약 ──
+//    🔴 snapshot 이름 · effectiveAt 을 고정한다. 다른 snapshot 이나 다른 시각으로 돌리면 통과가 아니라 실패다
+const FINAL_NAME = '2026-10-21-money-work-retirement-next-e0335'
+const FINAL_PARENT = '2026-10-21-national-pension-live-money-work-relations'
+const FINAL_EFF = '2026-10-21T11:00:00+09:00', FINAL_GEN = '2026-10-21T02:00:00.000Z'
+if (finalInput && realProduct) {
+  const at = (snap) => join(reconciledRoot, snap)
+  const product = lib.parseProductTexts(productAt(realProduct))
+  const articles = product.articles
+  // 연구 루트(reconciled 의 부모)의 G8 admission 을 읽는다 — 읽기 전용
+  const admissionTexts = Object.fromEntries(Object.entries(lib.ADMISSION_FILES).map(([k, rel]) => [k, readText(join(dirname(reconciledRoot), rel))]))
+  const buildFinal = (dir, productTexts = productAt(realProduct)) => lib.buildAll({ inputTexts: inputsAt(dir), productTexts, admissionTexts, effectiveAt: FINAL_EFF, generatedAt: FINAL_GEN })
+  const drift = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(at(snap))), articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
+  test('최종 입력 0 — --final-input 은 정확히 최종 snapshot 이다', () => {
+    eq(finalInput.replace(/\/+$/, '').split('/').pop(), FINAL_NAME, 'snapshot 이름')
+  })
+  test('최종 입력 1 — 같은 effectiveAt · generatedAt 2회 CLI build 가 목록 · 바이트까지 동일', () => {
+    const a = join(TMP, 'final-a'), b = join(TMP, 'final-b')
+    eq([runRealCli(finalInput, a, FINAL_EFF, FINAL_GEN), runRealCli(finalInput, b, FINAL_EFF, FINAL_GEN)], [0, 0], 'CLI 종료 코드')
+    eq(treeHash(a), treeHash(b), '트리 해시'); eq(fileList(a), fileList(b), '파일 목록')
+  })
+  test('최종 입력 2 — 2026-10-21 lifecycle 경계: 10:29:59 최종=national 만 · 10:30:00 최종=0 · 옛 snapshot 은 10:29:59=0 · 10:30:00=national · 11:00 옛 snapshot build 거부', () => {
+    eq(drift(FINAL_NAME, '2026-10-21T10:29:59+09:00'), ['national-pension-voluntary'], '최종 10:29:59')
+    eq(drift(FINAL_NAME, '2026-10-21T10:30:00+09:00'), [], '최종 10:30:00')
+    eq(drift(FINAL_NAME, FINAL_EFF), [], '최종 11:00')
+    for (const old of ['2026-10-19-rehearsal-editorial-participation', '2026-10-17-money-work-kimjang-cold-live']) {
+      eq(drift(old, '2026-10-21T10:29:59+09:00'), [], `${old} 10:29:59`)
+      eq(drift(old, '2026-10-21T10:30:00+09:00'), ['national-pension-voluntary'], `${old} 10:30:00`)
+      const r = rejectWhy(() => buildFinal(at(old)))
+      ok(r?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r.why.startsWith('1개 slug — national-pension-voluntary'), `${old}: ${JSON.stringify(r).slice(0, 200)}`)
+    }
+  })
+  test('최종 입력 3 — parent 대비 semantic delta: authored edge 추가는 E-0335 하나 · 그 밖 intent · mapping · edge 변화 0', () => {
+    const layersAt = (dir) => lib.buildGraphLayers({ inputs: lib.parseInputTexts(inputsAt(dir)), implementedSurfaces: product.implemented })
+    const o = layersAt(at(FINAL_PARENT)), n = layersAt(finalInput)
+    const J = (x) => JSON.stringify(x)
+    eq(J(n.intents), J(o.intents), 'intent'); eq(J(n.mappings), J(o.mappings), 'mapping')
+    const oById = new Map(o.edges.map((e) => [e.edgeId, e]))
+    eq(n.edges.filter((e) => !oById.has(e.edgeId)).map((e) => e.edgeId), ['E-0335'], '신규 edge')
+    eq(n.edges.filter((e) => oById.has(e.edgeId) && J(e) !== J(oById.get(e.edgeId))).map((e) => e.edgeId), [], '바뀐 edge')
+    eq(o.edges.filter((e) => !n.edges.some((x) => x.edgeId === e.edgeId)).map((e) => e.edgeId), [], '사라진 edge')
+    const e = n.edges.find((x) => x.edgeId === 'E-0335')
+    eq([e.fromIntentId, e.toIntentId, e.relationType, e.recommendationSlot, e.placement, e.priority, e.reciprocalPolicy, e.readerReason, e.anchorLabel, e.runtimeState],
+      ['I-T6-12', 'I-T6-01', 'NEXT_QUESTION', 'DIRECT_NEXT', 'FOOTER_NEXT', 1, 'ONE_WAY', '남들 하루를 보고 돈 버는 일이 필요하다고 느끼면 어디부터 알아볼지로 간다', '재취업은 어디부터 알아볼까', 'ACTIVE'], 'E-0335 고정값')
+    eq(n.edges.filter((x) => x.edgeId === 'E-0334' || (x.fromIntentId === 'I-T5-01' && x.toIntentId === 'I-T5-06')).length, 0, 'E-0334 계열 0')
+  })
+  test('최종 입력 4 — 실제 산출 전 edge 의 crossCluster = (fromCluster ≠ toCluster) · 옛 구현이면 정확히 74건 어긋나는 입력이다', () => {
+    const inputs = lib.parseInputTexts(inputsAt(finalInput))
+    const edges = lib.buildGraphLayers({ inputs, implementedSurfaces: product.implemented }).edges
+    const sem = edges.filter((e) => e.relationType !== 'COMMUNITY')
+    eq(edges.filter((e) => e.relationType === 'COMMUNITY' && e.crossCluster !== false).map((e) => e.edgeId), [], 'COMMUNITY')
+    eq(sem.filter((e) => e.crossCluster !== (e.fromCluster !== e.toCluster)).map((e) => e.edgeId), [], '불일치')
+    // 🔴 이 입력이 결함을 실제로 건드린다는 증거 — canonical 끼리만 비교하던 판정과 다른 edge 수
+    const C = Object.fromEntries(inputs.canonical.map((r) => [r.intentId, r.magazineCluster ?? null]))
+    eq(sem.filter((e) => ((C[e.fromIntentId] ?? null) !== (C[e.toIntentId] ?? null)) !== (e.fromCluster !== e.toCluster)).length, 74, '옛 판정과 다른 edge')
+  })
+  test('최종 입력 5 — money-work 를 켠 control 에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099 · G8_NOT_ADMITTED 유지', () => {
+    const pt = productAt(realProduct)
+    const mwControl = ensureCluster(pt.control, 'money-work').text
+    ok(readControl(mwControl).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
+    const b = buildFinal(finalInput, { ...pt, control: mwControl })
+    eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-05'], 'GRAPH_READY')
+    const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')
+    eq(x.direct.targets.map((t) => `${t.edgeId}→${t.toIntentId}/${t.slug}`), ['E-0188→I-T6-04/certificate-in-50s', 'E-0329→I-T6-01/rehire-where-to-start'], 'direct')
+    eq(x.discovery.targets.map((t) => t.edgeId), ['E-0100'], 'discovery')
+    ok(x.reverse.sources.some((s) => s.edgeId === 'E-0099'), `reverse ${JSON.stringify(x.reverse.sources)}`)
+    eq([x.admission.state, x.admission.blockers], ['NOT_ADMITTED', ['G8_NOT_ADMITTED']], 'G8')
+    eq(b.layers.mappings.filter((m) => m.slug === 'starting-work-at-this-age').length, 0, 'starting-work-at-this-age graph 매핑 0')
+    eq(b.layers.participation.map((p) => `${p.slug}:${p.state}:${p.evidenceHash}`),
+      ['starting-work-at-this-age:EDITORIAL_NON_SEARCH:0a4dfd8b35d1b8ebc17fcdac3e3cc1b537a7cb919f638ecc7262612104181872'], 'participation')
+  })
+} else {
+  results.push('  ⏭  실제 최종 입력 — --final-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 
 rmSync(TMP, { recursive: true, force: true })

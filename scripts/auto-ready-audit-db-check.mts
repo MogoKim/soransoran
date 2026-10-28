@@ -3,7 +3,8 @@
  * 🔴 **자동 READY 독립 감사 루프 — 격리 Postgres 실행 검사** (2026-09-27)
  *
  *   발행된 auto-ready:v1 글 → 감사 선정 → **실제 감사 러너 프로세스**(규칙 + 의미 · 공급 장부 · 가짜 제공사)
- *   → 결과 저장 → 결함 yes → 다음 도장(`stampRoundAuditAware`)·발행(`publishOriginalPostTx`)이 닫힌다.
+ *   → 결과 저장. 사후 의미 모델은 참고만 하고, 규칙·결속 결함 yes만 다음 도장(`stampRoundAuditAware`)과
+ *   발행(`publishOriginalPostTx`)을 닫는다.
  *   판정 대기 시한 초과도 도장·발행을 닫고, 감사가 끝나면 다시 연다.
  *
  * 🔴 러너는 **운영 스크립트 그대로** 띄운다(`scripts/auto-ready-audit.mts --apply`). 가짜는 네트워크 한 곳
@@ -164,7 +165,7 @@ async function main(): Promise<void> {
     check('🔴 **다시 열린 뒤 이전에 막혔던 도장 행이 발행된다**', p3.kind === 'published', JSON.stringify(p3))
   }
 
-  console.log('\n②-b 🔴 🔴 재시도 가능 감사 실패 — 결함이 아니지만 있는 동안 도장·발행이 즉시 닫힌다')
+  console.log('\n②-b 🔴 🔴 결속 확인 실패 — 결함은 아니지만 있는 동안 도장·발행이 즉시 닫힌다')
   {
     const w6 = await machineRow(f, 'W06')
     const t0 = await stampRoundAuditAware(prisma, { env: ON, now: f.now })
@@ -172,30 +173,28 @@ async function main(): Promise<void> {
       && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: w6.id } })).decidedBy === AUTO_DECIDER, [...t0].map(([k, v]) => `${k} ${v}`).join(' '))
     const r = await autoPublished(f, { personaCode: 'P05', title: '재시도 글', body: '재시도 이야기예요. 다들 어떠세요?', sourceTitle: '재시도', sourceBody: '재시도 이야기' })
     await selectForAudit(f, r)
-    // 🔴 선정은 방금이다 — 시한(6시간)과 무관하게 **즉시** 닫혀야 한다
-    const off = await runRunner(home, { paid: false })
+    // 🔴 artifact 정본을 읽지 못하면 결속을 확인할 수 없다 — 시한(6시간)과 무관하게 즉시 닫힌다
+    const off = await runRunner(newHome('binding-unreadable'))
     const row = await audit(r.queueId)
-    check('🔴 🔴 **유료 OFF → defect null · 재시도 가능 실패 PAID_OFF · exit 2**',
-      off.code === 2 && row.defect === null && readRetryableFailure(row.note)?.code === 'PAID_OFF' && readRetryableFailure(row.note)?.attempts === 1, `${off.code} · ${row.note}`)
+    check('🔴 🔴 **artifact 정본 없음 → defect null · 결속 확인 실패 ARTIFACT_INDEX_UNREADABLE · exit 2**',
+      off.code === 2 && row.defect === null && readRetryableFailure(row.note)?.code === 'ARTIFACT_INDEX_UNREADABLE'
+      && readRetryableFailure(row.note)?.attempts === 1, `${off.code} · ${row.note}`)
     check('🔴 🔴 **확정 결함이 아니다 — 정본 열림 판정(repo)은 열림 · 확정 결함 0**', (await authoritativeGate(prisma, ON)).open && await unresolvedDefectCount(prisma) === 0)
     const ga = await auditAwareGate(prisma, ON, f.now)
-    check('🔴 🔴 **재시도 가능 실패 1건 → 열림 판정 즉시 닫힘(시한과 별개)**', !ga.open && ga.reasons.some((x) => x.includes('재시도 가능 감사 실패 1건')) && !ga.reasons.some((x) => x.includes('시간을 넘긴')), ga.reasons.join(' · '))
+    check('🔴 🔴 **결속 확인 실패 1건 → 열림 판정 즉시 닫힘(시한과 별개)**', !ga.open && ga.reasons.some((x) => x.includes('재시도 가능 감사 실패 1건')) && !ga.reasons.some((x) => x.includes('시간을 넘긴')), ga.reasons.join(' · '))
     const w7 = await machineRow(f, 'W07')
     const t1 = await stampRoundAuditAware(prisma, { env: ON, now: f.now })
-    check('🔴 🔴 **재시도 가능 실패 → 도장 회차 closed · 도장 0**', (t1.get('stamped') ?? 0) === 0
+    check('🔴 🔴 **결속 확인 실패 → 도장 회차 closed · 도장 0**', (t1.get('stamped') ?? 0) === 0
       && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: w7.id } })).decidedBy === 'machine:auto-draft-v5', [...t1].map(([k, v]) => `${k} ${v}`).join(' '))
     const before = await postCount()
     const p = await pubTx(w6.id)
-    check('🔴 🔴 **재시도 가능 실패 → 이미 찍힌 도장 행도 발행 트랜잭션이 막는다 · Post 0**',
+    check('🔴 🔴 **결속 확인 실패 → 이미 찍힌 도장 행도 발행 트랜잭션이 막는다 · Post 0**',
       p.kind === 'blocked' && p.code === 'AUTO_READY_RECHECK' && p.detail.includes('재시도 가능 감사 실패') && (await postCount()) === before, JSON.stringify(p))
-    const budget = await runRunner(home, { budget: false })
-    check('🔴 다시 실패(감사 예산 없음) → 시도 2 · 코드 갱신 · 여전히 결함 아님', budget.code === 2 && (await audit(r.queueId)).defect === null
-      && readRetryableFailure((await audit(r.queueId)).note)?.attempts === 2 && readRetryableFailure((await audit(r.queueId)).note)?.code === 'AUDIT_BUDGET_UNSET')
     const ok = await runRunner(home)
     const done = await audit(r.queueId)
     check('🔴 🔴 **다음 회차 성공 → 같은 행을 no 로 확정 · 실패 표식 없음 · exit 0**', ok.code === 0 && done.defect === 'no' && readRetryableFailure(done.note) === null, `${ok.code} · ${done.note}`)
     check('🔴 🔴 **확정 뒤 다시 열린다 · 막혔던 도장 행이 발행된다**', (await auditAwareGate(prisma, ON, f.now)).open && (await pubTx(w6.id)).kind === 'published')
-    const again = await recordCombinedAudit(prisma, { queueId: r.queueId, combined: { kind: 'retryable', rule: (await ruleAuditJudge({ queueId: r.queueId, postId: r.postId, title: r.title, body: r.body, stamp: readStamp((await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: r.queueId } })).editDiff) })), semantic: { outcome: 'retryable', defect: null, code: 'PAID_OFF', reasons: [], binding: null, contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, model: SEMANTIC_AUDIT_MODEL, promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION }, code: 'PAID_OFF', reason: 'x' }, auditor: 'model:semantic-audit:late', now: f.now })
+    const again = await recordCombinedAudit(prisma, { queueId: r.queueId, combined: { kind: 'retryable', rule: (await ruleAuditJudge({ queueId: r.queueId, postId: r.postId, title: r.title, body: r.body, stamp: readStamp((await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: r.queueId } })).editDiff) })), semantic: { outcome: 'retryable', defect: null, confirmation: 'none', code: 'ARTIFACT_INDEX_UNREADABLE', reasons: [], binding: null, contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, model: SEMANTIC_AUDIT_MODEL, promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION }, code: 'ARTIFACT_INDEX_UNREADABLE', reason: 'x' }, auditor: 'model:semantic-audit:late', now: f.now })
     const kept = await audit(r.queueId)
     check('🔴 🔴 **확정된 행에 뒤늦은 실패가 와도 덮지 않는다 — 확정은 정확히 한 번 · 기록(note) 그대로**',
       again === 'alreadyJudged' && kept.defect === 'no' && kept.note === done.note, `${again} · ${kept.note}`)
@@ -208,6 +207,7 @@ async function main(): Promise<void> {
     posts.supported = await autoPublished(f, { personaCode: 'P02', title: '집값 이야기', body: '동네 집이 5억에 나왔대요. 다들 어떻게 생각하세요?', sourceTitle: '집값', sourceBody: '우리 동네 아파트가 5억 에 나왔다는 글' })
     posts.life = await autoPublished(f, { personaCode: 'P15', title: '저녁 이야기', body: '남편이 오늘 저녁을 차려 줬어요. 다들 저녁 뭐 드셨어요?', sourceTitle: '저녁 메뉴', sourceBody: '저녁 메뉴 고민' })
     posts.fact = await autoPublished(f, { personaCode: 'P06', title: '용돈 이야기', body: '아이 용돈으로 50만 원을 줬어요. 다들 얼마 주세요?', sourceTitle: '용돈', sourceBody: '아이 용돈을 얼마 줘야 할지 고민' })
+    posts.ruleUnsafe = await autoPublished(f, { personaCode: 'P08', title: '연락처 이야기', body: '제 전화번호는 010-1234-5678이에요. 다들 연락 주세요.', sourceTitle: '연락처', sourceBody: '연락 방법을 묻는 이야기' })
     posts.noArtifact = await autoPublished(f, { personaCode: 'P07', title: '빨래 이야기', body: '오늘 빨래가 잘 말랐어요. 다들 건조기 쓰세요?', sourceTitle: '빨래', sourceBody: '빨래 이야기', artifact: 'missing' })
     posts.otherPersona = await autoPublished(f, { personaCode: 'P12', title: '화분 이야기', body: '베란다 화분에 꽃이 폈어요. 다들 식물 키우세요?', sourceTitle: '화분', sourceBody: '화분 이야기', artifact: 'otherPersona' })
     posts.noCard = await autoPublished(f, { personaCode: 'X99', title: '비 오는 날', body: '비가 와서 집에 있었어요. 다들 뭐 하세요?', sourceTitle: '비', sourceBody: '비 오는 날 이야기' })
@@ -216,12 +216,15 @@ async function main(): Promise<void> {
     // 🔴 실제 `selectAudits` 경로도 한 번 — 자동 발행 N 의 ceil(N×0.2) 까지(이미 고른 것 포함) 고르고 hash 를 묶는다
     const sel = await selectAudits(prisma)
     check('실제 selectAudits 도 같은 표에 선정을 남긴다(이미 고른 행은 다시 고르지 않는다)', sel.kind === 'ok' && sel.picked.every((q) => !Object.values(posts).some((p) => p.queueId === q)), JSON.stringify(sel))
-    const pendingBefore = await prisma.autoReadyAudit.count({ where: { defect: null } })
+    const pendingIds = (await prisma.autoReadyAudit.findMany({ where: { defect: null }, select: { queueId: true } })).map((a) => a.queueId)
+    const pendingBefore = pendingIds.length
     const run = await runRunner(home)
     const r = roundOf(run.out)
     check('러너 exit 0(재시도 가능 실패 0) · 판정 전 전부 기록', run.code === 0 && (await prisma.autoReadyAudit.count({ where: { defect: null } })) === 0, `${run.code} · ${run.out.slice(-400)}`)
-    check('🔴 🔴 **의미 감사 유료 요청 = 문맥이 선 감사 수 (장부 경유 · 사전 계산 1:1)**',
-      run.paid === pendingBefore - 4 && run.count === run.paid && r.semanticCalls === pendingBefore - 4, `paid ${run.paid} · count ${run.count} · pending ${pendingBefore} · ${JSON.stringify(r)}`)
+    const measured = pendingBefore - 4
+    check('🔴 🔴 **의미 감사 유료 요청 = 결속이 선 감사 수 · 글마다 최대 1회 (중복 확인 0)**',
+      run.paid === measured && run.count === run.paid && r.semanticCalls === measured,
+      `paid ${run.paid} · count ${run.count} · pending ${pendingBefore} · measured ${measured} · ${JSON.stringify(r)}`)
     const ledgerDir = join(home, 'Library', 'Application Support', 'soransoran')
     const ledgerLines = readdirSync(ledgerDir, { recursive: true }).map(String).filter((x) => x.endsWith('.jsonl'))
       .flatMap((x) => readFileSync(join(ledgerDir, x), 'utf-8').split('\n').filter((l) => l !== ''))
@@ -239,9 +242,11 @@ async function main(): Promise<void> {
       ctx.ok && (c.note ?? '').includes(`binding=${semanticBindingOf(ctx.ctx).digest}`), c.note ?? '')
     check('🔴 원문 근거에 있는 금액은 결함이 아니다 (가짜 모델이 요청의 원문 근거를 본다)', (await audit(posts.supported!.queueId)).defect === 'no', (await audit(posts.supported!.queueId)).note ?? '')
     const life = await audit(posts.life!.queueId)
-    check('🔴 🔴 **Persona 카드와 생활사 모순(비혼 카드 · 남편) → yes**', life.defect === 'yes' && (life.note ?? '').includes('생활사 모순'), life.note ?? '')
+    check('🔴 🔴 **사후 모델의 생활사 finding은 참고 note · Content Core 결정을 뒤집지 않아 no**', life.defect === 'no' && (life.note ?? '').includes('생활사 모순'), life.note ?? '')
     const fact = await audit(posts.fact!.queueId)
-    check('🔴 🔴 **원문 근거에 없는 사실(금액) → yes**', fact.defect === 'yes' && (fact.note ?? '').includes('근거 없는 사실'), fact.note ?? '')
+    check('🔴 🔴 **사후 모델의 원문 근거 finding은 참고 note · Content Core 결정을 뒤집지 않아 no**', fact.defect === 'no' && (fact.note ?? '').includes('근거 없는 사실'), fact.note ?? '')
+    const unsafe = await audit(posts.ruleUnsafe!.queueId)
+    check('🔴 🔴 **규칙 감사의 개인정보 결함은 모델과 무관하게 yes**', unsafe.defect === 'yes' && (unsafe.note ?? '').includes('안전 필터'), unsafe.note ?? '')
     for (const k of ['noArtifact', 'otherPersona', 'noCard', 'noEvidence'] as const) {
       const a = await audit(posts[k]!.queueId)
       check(`🔴 🔴 **[${k}] 문맥 결속 깨짐(데이터 없음·다른 Persona) → 무결성 yes · no 아님 · 재시도 대기 아님**`, a.defect === 'yes' && (a.note ?? '').includes('무결성 결함'), `${a.defect} · ${a.note}`)
@@ -281,7 +286,7 @@ async function main(): Promise<void> {
     return finalOf(combineAuditVerdicts(rule, await judgeSemantic(await fresh({ queueId: a.queueId, postId: a.postId }), provider)))
   }
   {
-    const life = posts.life!
+    const life = posts.ruleUnsafe!
     const lateNo = await combinedFor(posts.clean!)
     const r1 = await recordCombinedAudit(prisma, { queueId: life.queueId, combined: { ...lateNo, verdict: { ...lateNo.verdict, judgedTitleHash: digestOf(life.title), judgedBodyHash: digestOf(life.body) } }, auditor: 'model:semantic-audit:late', now: f.now })
     check('🔴 🔴 **뒤에 온 자동 no 는 yes 를 덮지 못한다 (alreadyJudged)**', r1 === 'alreadyJudged' && (await audit(life.queueId)).defect === 'yes', r1)
@@ -358,7 +363,7 @@ async function main(): Promise<void> {
   }
   const homeWithArtifacts = (tag: string, copy = true): string => (copy ? syncArtifacts(newHome(tag)) : newHome(tag))
 
-  console.log('\n⑦ 🔴 🔴 측정 실패는 결함이 아니다 — 실제 러너 · 모드별 · 재시도 가능 실패(defect null) · exit 2')
+  console.log('\n⑦ 🔴 🔴 유효한 결속 뒤 모델 장애는 참고다 — 실제 러너 · 결함 no · 중복 호출 0')
   {
     const cases: { tag: string; code: string; opt: Parameters<typeof runRunner>[1]; expectPaid: boolean; copy?: boolean }[] = [
       { tag: '유료 OFF(기본값)', code: 'PAID_OFF', opt: { paid: false }, expectPaid: false },
@@ -368,41 +373,44 @@ async function main(): Promise<void> {
       { tag: 'JSON 아님', code: 'PARSE_FAILED', opt: { env: { FAKE_SEMANTIC_MODE: 'garbage' } }, expectPaid: true },
       { tag: '발견이 있는데 defect=no (자기모순)', code: 'PARSE_FAILED', opt: { env: { FAKE_SEMANTIC_MODE: 'contradict' } }, expectPaid: true },
       { tag: '사용량 없음 — 정산 불가', code: 'USAGE_UNKNOWN', opt: { env: { FAKE_PROVIDER_MODE: 'no-usage' } }, expectPaid: true },
-      { tag: 'artifact 정본 디렉터리 없음(환경)', code: 'ARTIFACT_INDEX_UNREADABLE', opt: {}, expectPaid: false, copy: false },
     ]
     let i = 0
     for (const c of cases) {
       i += 1
-      // 🔴 자기모순 모드는 발견이 있어야 모순이 된다 — 비혼 카드(P20)에 남편 글. 나머지는 깨끗한 글(기혼 P03)
+      // 자기모순 모드는 발견이 있어야 모순이 된다 — 비혼 카드(P20)에 남편 글. 나머지는 깨끗한 글(기혼 P03)
       const contradict = c.tag.startsWith('발견')
       const body = contradict ? '남편이 오늘 설거지를 했어요. 다들 어떠세요?' : `오류 시험 ${i} 이야기예요. 다들 어떠세요?`
       const a = await autoPublished(f, { personaCode: contradict ? 'P20' : 'P03', title: `오류 시험 ${i}`, body, sourceTitle: '오류', sourceBody: '오류 시험 이야기' })
       await selectForAudit(f, a)
       const run = await runRunner(homeWithArtifacts(`err-${i}`, c.copy !== false), c.opt)
       const saved = await audit(a.queueId)
-      const fr = readRetryableFailure(saved.note)
-      check(`🔴 🔴 **[${c.tag}] → defect null · 재시도 가능 실패 ${c.code} · 시도 1 · 결함 아님(yes 도 no 도 아님)**`,
-        saved.defect === null && fr !== null && fr.code.includes(c.code) && fr.attempts === 1 && saved.judgedAt === null,
-        `${saved.defect} · ${saved.note}`)
-      check(`🔴 🔴 **[${c.tag}] → exit 2 · 원인 코드를 남긴다**`, run.code === 2 && new RegExp(`AUDIT_RETRYABLE codes=[^\\n]*${c.code}`).test(run.out), `${run.code} · ${run.out.slice(-300)}`)
-      check(`[${c.tag}] 유료 요청 ${c.expectPaid ? '있음(나갔고 실패)' : '0'}`, c.expectPaid ? run.paid >= 1 : run.paid === 0, `paid ${run.paid}`)
-      // 🔴 다음 회차가 성공하면 같은 행을 확정하고 실패 표식을 지운다(자기모순 글은 실제 결함 → yes)
-      await runRunner(homeWithArtifacts(`err-ok-${i}`))
-      const done = await audit(a.queueId)
-      check(`🔴 🔴 **[${c.tag}] 다음 회차 성공 → 같은 행 확정(${contradict ? 'yes' : 'no'}) · 실패 표식 없음**`,
-        done.defect === (contradict ? 'yes' : 'no') && readRetryableFailure(done.note) === null && !(done.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX), `${done.defect} · ${done.note}`)
+      check(`🔴 🔴 **[${c.tag}] → 참고 note · defect no · exit 0 · 재시도 표식 0**`,
+        run.code === 0 && saved.defect === 'no' && (saved.note ?? '').includes(c.code)
+        && readRetryableFailure(saved.note) === null && !(saved.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX),
+        `${run.code} · ${saved.defect} · ${saved.note}`)
+      check(`[${c.tag}] 요청 수는 최대 1회`, c.expectPaid ? run.paid === 1 : run.paid === 0, `paid ${run.paid}`)
     }
-    // 🔴 한 행이 실패해도 나머지 행은 계속 — 표식이 실린 글만 500
+    // 한 행의 제공사 장애도 다른 행을 막지 않고 둘 다 확정한다
     const okRow = await autoPublished(f, { personaCode: 'P03', title: '계속 처리 글', body: '계속 처리되는 글이에요. 다들 어떠세요?', sourceTitle: '계속', sourceBody: '계속 이야기' })
     const badRow = await autoPublished(f, { personaCode: 'P05', title: '실패하는 글', body: '실패표식 이 글만 실패해요. 다들 어떠세요?', sourceTitle: '실패', sourceBody: '실패 이야기' })
     await selectForAudit(f, badRow); await selectForAudit(f, okRow)
     const mixed = await runRunner(homeWithArtifacts('mixed'), { env: { FAKE_SEMANTIC_FAIL_MARK: '실패표식' } })
-    check('🔴 🔴 **한 행 실패(HTTP 500) · 나머지 행 계속 확정 · exit 2**',
-      mixed.code === 2 && (await audit(okRow.queueId)).defect === 'no' && (await audit(badRow.queueId)).defect === null
-      && readRetryableFailure((await audit(badRow.queueId)).note)?.code === 'HTTP_500', mixed.out.slice(-300))
-    const again = await runRunner(homeWithArtifacts('mixed2'), { env: { FAKE_SEMANTIC_FAIL_MARK: '실패표식' } })
-    check('🔴 같은 행이 또 실패하면 시도 횟수가 오른다(2) · 결함 아님', again.code === 2 && readRetryableFailure((await audit(badRow.queueId)).note)?.attempts === 2 && (await audit(badRow.queueId)).defect === null)
-    await runRunner(homeWithArtifacts('mixed3'))
+    check('🔴 🔴 **한 행 HTTP 500 · 두 행 모두 확정 no · exit 0 · 실패 행은 참고 note**',
+      mixed.code === 0 && mixed.paid === 2 && (await audit(okRow.queueId)).defect === 'no' && (await audit(badRow.queueId)).defect === 'no'
+      && ((await audit(badRow.queueId)).note ?? '').includes('HTTP_500'), mixed.out.slice(-300))
+
+    // 결속 정본을 못 읽은 경우만 retryable로 남고, 정본이 돌아오면 확정한다
+    const binding = await autoPublished(f, { personaCode: 'P07', title: '결속 실패 글', body: '결속을 확인하는 글이에요. 다들 어떠세요?', sourceTitle: '결속', sourceBody: '결속 이야기' })
+    await selectForAudit(f, binding)
+    const unavailable = await runRunner(homeWithArtifacts('binding-missing', false))
+    const waiting = await audit(binding.queueId)
+    check('🔴 🔴 **artifact 정본을 읽지 못함 → defect null · retryable · exit 2 · provider 0**',
+      unavailable.code === 2 && unavailable.paid === 0 && waiting.defect === null
+      && readRetryableFailure(waiting.note)?.code === 'ARTIFACT_INDEX_UNREADABLE', `${unavailable.code} · ${waiting.note}`)
+    const recovered = await runRunner(homeWithArtifacts('binding-recovered'))
+    check('🔴 🔴 **정본 복구 → 같은 행 no 확정 · retryable 표식 제거**',
+      recovered.code === 0 && (await audit(binding.queueId)).defect === 'no'
+      && readRetryableFailure((await audit(binding.queueId)).note) === null, recovered.out.slice(-300))
   }
 
   console.log('\n⑦-b 🔴 🔴 감사 예산은 공급 예산과 분리된다 — 서로의 지출이 서로를 줄이지 않는다')
@@ -425,18 +433,20 @@ async function main(): Promise<void> {
     check('🔴 🔴 **감사 지출은 공급 장부에 적히지 않는다 — 공급 장부 그대로(감사 줄 0)**',
       readFileSync(ledgerPathOf(supplyDir, today), 'utf-8') === supplyBefore && !supplyBefore.includes('semanticAudit'))
     check('🔴 감사 지출은 감사 전용 장부에 적힌다', existsSync(ledgerPathOf(auditDir, today)) && readFileSync(ledgerPathOf(auditDir, today), 'utf-8').includes('"stage":"semanticAudit"'))
-    // 🔴 감사 예산을 다 썼다 — 감사는 요청 전에 막히고(재시도 가능 실패) 공급 장부는 그대로다
+    // 감사 예산을 다 썼다 — 제공사 관측은 참고로 남고 공급 장부는 그대로다
     const auditLine = JSON.stringify({ ...sample, runId: 'audit-old', attemptId: 'audit-old-a', settledUsd: 1, reservedUsd: 1, startedAt: new Date().toISOString(), endedAt: new Date().toISOString() })
     writeFileSync(ledgerPathOf(auditDir, today), `${readFileSync(ledgerPathOf(auditDir, today), 'utf-8')}${auditLine}\n`)
     const b = await autoPublished(f, { personaCode: 'P08', title: '예산 소진 글', body: '예산 소진 이야기예요. 다들 어떠세요?', sourceTitle: '소진', sourceBody: '소진 이야기' })
     await selectForAudit(f, b)
     const r2 = await runRunner(syncArtifacts(h), { auditDaily: '1', supplyBudget: true })
-    const fb = readRetryableFailure((await audit(b.queueId)).note)
-    check('🔴 🔴 **감사 예산 소진 → 유료 0 · 재시도 가능 실패(장부 차단) · 결함 아님 · exit 2**',
-      r2.code === 2 && r2.paid === 0 && (await audit(b.queueId)).defect === null && fb !== null && fb.code.startsWith('LEDGER_BLOCKED'), `${r2.code} · paid ${r2.paid} · ${fb?.code}`)
+    const budgetRow = await audit(b.queueId)
+    check('🔴 🔴 **감사 예산 소진 → 유료 0 · 참고 note · defect no · exit 0**',
+      r2.code === 0 && r2.paid === 0 && budgetRow.defect === 'no'
+      && (budgetRow.note ?? '').includes('LEDGER_BLOCKED') && readRetryableFailure(budgetRow.note) === null,
+      `${r2.code} · paid ${r2.paid} · ${budgetRow.note}`)
     check('🔴 🔴 **감사가 막혀도 공급 장부 여력은 그대로 — 공급 장부 파일이 바뀌지 않았다**', readFileSync(ledgerPathOf(supplyDir, today), 'utf-8') === supplyBefore)
-    await runRunner(syncArtifacts(h), { auditDaily: '5' })
-    check('감사 예산을 올리면 다음 회차가 확정한다', (await audit(b.queueId)).defect === 'no')
+    const again = await runRunner(syncArtifacts(h), { auditDaily: '5' })
+    check('확정된 참고 감사는 예산을 올려도 다시 호출하지 않는다', again.paid === 0 && (await audit(b.queueId)).defect === 'no')
   }
 
   console.log('\n⑧ 🔴 🔴 결과의 묶음이 이 글·이 도장이 아니면 → 무결성 yes')

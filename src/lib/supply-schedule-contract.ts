@@ -2,17 +2,17 @@
  * 정기 공급 회차 계약 — 🔴 **수치는 정본 하나에서만 온다** (2026-09-22)
  *
  * 🔴 **왜 이 파일이 있는가.** 보고에서 "하루 2회" 라고 적었는데 실제 launchd
- *    템플릿은 **6회**였다. 문서와 값이 갈리면 승인받은 것과 도는 것이 달라진다.
+ *    템플릿은 **7회**다. 문서와 값이 갈리면 승인받은 것과 도는 것이 달라진다.
  *    회차·상한·한계를 여기 하나에 두고, 검사가 템플릿과 대조한다.
  */
 
 /** 🔴 `com.soransoran.supply-process.plist.template` 의 실제 슬롯 (KST) */
 export const SUPPLY_RUN_SLOTS_KST = [
-  { hour: 8, minute: 15 }, { hour: 12, minute: 15 }, { hour: 14, minute: 15 },
+  { hour: 6, minute: 15 }, { hour: 8, minute: 15 }, { hour: 12, minute: 15 }, { hour: 14, minute: 15 },
   { hour: 17, minute: 15 }, { hour: 21, minute: 15 }, { hour: 22, minute: 15 },
 ] as const
 
-/** 🔴 **6회다.** 다른 수로 부르지 않는다 */
+/** 🔴 **7회다.** 06:15 회차는 07:00 단계 판정 전의 정상 복구 창이다. */
 export const SUPPLY_RUNS_PER_DAY = SUPPLY_RUN_SLOTS_KST.length
 
 /**
@@ -37,23 +37,23 @@ export const SUPPLY_BUDGET_ENV_NAMES = [
 /**
  * 회차당 상한 — 🔴 정본(`supply-workset`)과 같은 값이어야 한다 (검사가 대조한다).
  *
- * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 원천 하나에 판정 1 · 생성 3 이므로
- *    judge 10 · draft 30 · 합 40. 러너는 이 값을 **단계마다 자식 env 로** 싣는다
+ * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 원천 하나에 판정 1 · 생성 최대 4 이므로
+ *    judge 10 · draft 40 · 합 50. 러너는 이 값을 **단계마다 자식 env 로** 싣는다
  *    (`SORAN_LLM_RUN_REQUEST_CAP` — 장부 회차 id 도 `-j`·`-d` 로 갈린다).
  * 🔴 정본 env 의 `SORAN_LLM_RUN_REQUEST_CAP`(운영 20)은 **손으로 부른 단독 실행**의 상한이다.
  *    공급 러너의 자식은 그 값을 보지 않는다 — 단계 env 가 덮는다. 그래서 env 값은 이 합 이하면 된다.
  */
 export const SUPPLY_WORKSET_PER_RUN = 10
 export const SUPPLY_JUDGE_REQUESTS_PER_RUN = 10
-export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 30
-export const SUPPLY_REQUESTS_PER_RUN = 40
+export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 40
+export const SUPPLY_REQUESTS_PER_RUN = 50
 
 /**
  * 🔴 **창업자 승인값 $0.30/day** (2026-09-22 승인).
  *
  *    근거 — 장부 실측(9/19~9/22, 유료 4건 이상인 회차 21개):
  *      회차당 정산 **중앙 $0.0265 · 최대 $0.0535** (5원천 꽉 채운 회차 SHADOW5B)
- *      → 꽉 찬 회차 기준 하루 약 5.6회분. 6회 전부가 꽉 차면 $0.32 로 상한에 닿고,
+ *      → 당시 꽉 찬 회차 기준 하루 약 5.6회분. 운영 장부는 늦은 회차 몫을 먼저 보호하고,
  *        그때는 장부가 마지막 회차를 **막는다**(fail-closed). 그것이 의도한 동작이다.
  *
  * 🔴 **하루 총액이다** — 공급·판정·초안·댓글이 **같은 장부**를 쓴다.
@@ -210,7 +210,7 @@ export function judgeProductionRate(t: ProductionTally, days: number): Productio
 /**
  * 🔴 **글마다 사람이 승인하는 것은 지금의 안전장치이지 목표가 아니다.**
  *    D20 이상에서 하루 수십 편을 사람이 다 보는 것은 성립하지 않는다.
- *    그렇다고 그냥 여는 것도 아니다 — **경고 없는 글**만, **측정된 정확도** 위에서 연다.
+ *    그렇다고 그냥 여는 것도 아니다 — **차단 경고 없는 글**만, **측정된 정확도** 위에서 연다.
  */
 export const AUTO_READY_CONTRACT = {
   /** 사람이 먼저 판정해 둔 표본 수 — 이보다 적으면 정확도를 말하지 않는다 */
@@ -219,8 +219,8 @@ export const AUTO_READY_CONTRACT = {
   noEditAccuracyMin: 0.90,
   /** 🔴 중대 결함은 0 이어야 한다 — 비율로 넘기지 않는다 */
   hardDefectMax: 0,
-  /** 자동 READY 를 열 수 있는 대상 — 🔴 경고가 하나라도 있으면 제외 */
-  eligible: 'warningsZero',
+  /** 자동 READY 를 열 수 있는 대상 — 🔴 안전·정합성 차단 경고가 하나라도 있으면 제외 */
+  eligible: 'blockingWarningsZero',
   /** 열어도 사람 표본 감사는 계속한다 */
   sampledAuditRatio: 0.2,
 } as const
@@ -229,7 +229,7 @@ export const AUTO_READY_CONTRACT = {
 export const AUTO_READY_STEPS = [
   '① 정기 회차를 돌려 후보와 사람 READY 판정을 같은 창에서 쌓는다',
   '② 표본 30건이 모이면 무수정 READY 정확도와 중대 결함 수를 센다',
-  '③ 정확도 90% 이상 · 중대 결함 0 이면 **경고 없는 글**만 자동 READY 를 연다',
+  '③ 정확도 90% 이상 · 중대 결함 0 이면 **차단 경고 없는 글**만 자동 READY 를 연다',
   '④ 연 뒤에도 20% 를 사람이 표본 감사한다 — 떨어지면 되돌린다',
   '🔴 ②를 건너뛰고 ③을 열지 않는다. 표본 없이 정확도를 말하지 않는다',
 ] as const

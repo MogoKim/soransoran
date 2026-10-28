@@ -94,8 +94,8 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
 console.log('\n③ 반례 4 · 5 — 대기 행은 성공도 손실도 아니다 (운영 10월 4일 모양)')
 {
   const op = d5({ published: 4, lost: 0, unknown: 10, sources: 160 })
-  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 용량 5 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
-    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 5
+  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 회복 용량 6 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
+    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 6
     && op.counts.readyNeededMin === 5 && op.counts.readyNeededMax === 18 && !('readyNeeded' in op.counts), show(op))
   const base = d5({ published: 4, lost: 0, unknown: 0, sources: 160 })
   check('🔴 반례5 대기 0 이면 같은 원천에서 용량 1 → FAIL', base.verdict === 'FAIL' && base.codes.includes('THROUGHPUT_SHORT'), show(base))
@@ -163,7 +163,7 @@ console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 
     r.published === 5 && r.lost === 3 && r.scheduled === 1 && r.unknown === 2, JSON.stringify(r))
   const facts = strip('scripts/lib/stage-preflight-facts.mts')
   check('🔴 생산능력 · 결말이 한 번의 조회(창 시작 이후 적재 · 자동 READY 경로 · 회차 소속) — 별도 count 로 raw 를 따로 세지 않는다',
-    /findMany\(\{\s*where: \{ createdAt: \{ gte: i\.windowFrom \} \}/.test(facts)
+    /findMany\(\{\s*where: \{ createdAt: \{ gte: i\.windowFrom, lt: i\.windowTo \} \}/.test(facts)
     && /r\.decidedBy === AUTO_DECIDER\s*\|\| \(\(r\.decidedBy \?\? ''\)\.startsWith\('machine:'\)/.test(facts)
     && !/originalPostApprovalQueue\.count\(/.test(facts)
     && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.scheduled \+ fates\.unknown/.test(facts))

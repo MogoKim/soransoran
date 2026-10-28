@@ -35,7 +35,7 @@ export default function AdminPostEditForm({
           name="title"
           defaultValue={title}
           maxLength={200}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
         />
       </label>
 
@@ -45,7 +45,7 @@ export default function AdminPostEditForm({
           name="content"
           defaultValue={content}
           rows={12}
-          className="rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+          className="rounded-md border border-interactive bg-surface-card p-3 text-content-primary"
         />
       </label>
 

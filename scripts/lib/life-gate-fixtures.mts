@@ -9,7 +9,7 @@
  *     · 의미 검수는 운영에서 실제로 돌아온 `clean` — 넷 다 모순 0 · 추가 0 이었다.
  *
  *   대조군 — 결함마다 **막으면 안 되는 글**: 남의 일 · 묻는 글 · 지난 일 · 카드가 뒷받침하는 사람.
- *   사람 검토군 — 모호한 글: 채택은 되고 `lifeReview` 에 축이 남아 적재 때 경고가 된다.
+ *   과거 사람 검토군 — 운영에 영구 검토 단계가 없으므로 Content Core가 확정 HOLD한다.
  *
  *   🔴 순수 데이터다. DB · 네트워크 · provider 0.
  */
@@ -20,7 +20,7 @@ import type { DraftGateCode, DraftLifeReviewCode, DraftGateSource } from '../../
 import { FIXTURE_NOW, type GateFixture } from './draft-gate-fixtures.mjs'
 
 export type LifeFixture = GateFixture & {
-  /** 🔴 채택은 되지만 사람 검토로 가야 하는 축. 없으면 `[]` — 모호함 없음 */
+  /** legacy 호환 칸. quality-v25에서는 비차단 관찰만 남고 이 fixture는 차단 결과를 쓴다. */
   expectReview: DraftLifeReviewCode[]
   /**
    * 🔴 (quality-v8 보정) **생성 전에 계획이 멈추는 반례** — 원문 근거 줄의 가족 사실을 카드가 보증하지 못해 1인칭 허가가 없다
@@ -46,8 +46,6 @@ const planOf = (o: Record<string, unknown>): Record<string, unknown> => ({
 const hold = (codes: DraftGateCode[]): { expect: DraftGateCode[]; expectReview: DraftLifeReviewCode[] } =>
   ({ expect: codes, expectReview: [] })
 const pass = { expect: [] as DraftGateCode[], expectReview: [] as DraftLifeReviewCode[] }
-const review = (codes: DraftLifeReviewCode[]): { expect: DraftGateCode[]; expectReview: DraftLifeReviewCode[] } =>
-  ({ expect: [], expectReview: codes })
 
 // ── 원문(다시 쓴 것) ──
 const SRC_FIGHT = {
@@ -232,9 +230,9 @@ const V2_FIXTURES: readonly LifeFixture[] = [
     card: realCard('P01'), ...pass,
   },
 
-  // ───────────── 사람 검토 — 모호하다(채택 · 자동 READY 제외) ─────────────
+  // ───────────── 과거 사람 검토 — 이제 Content Core가 직접 HOLD ─────────────
   {
-    queueId: 'review-v2-6-strained-card', label: '🟡 #6 모호 · P06 기혼(갈등) — 이혼 얘기는 사람이 본다',
+    queueId: 'review-v2-6-strained-card', label: '🔴 #6 기혼(갈등) · 이혼 얘기를 Content Core가 차단',
     source: { id: 'fx-v2-r6', ...SRC_FIGHT },
     draft: {
       title: '또 크게 싸웠네요',
@@ -246,7 +244,7 @@ const V2_FIXTURES: readonly LifeFixture[] = [
         { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '애들 둘을 혼자는 못 키운다고요' },
       ],
     }),
-    card: realCard('P06'), ...review(['maritalStatusConflict']),
+    card: realCard('P06'), ...hold(['maritalStatusConflict']),
   },
   {
     queueId: 'review-v2-22-student-card', label: '🟡 #22 모호 · P22 대학생 자녀 — 자녀가 용돈을 건넸다',
@@ -261,7 +259,7 @@ const V2_FIXTURES: readonly LifeFixture[] = [
         { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '딸은 봉투에 건강식품까지' },
       ],
     }),
-    card: realCard('P22'), ...review(['childLifeStageConflict']),
+    card: realCard('P22'), ...hold(['childLifeStageConflict']),
   },
 ]
 
@@ -332,7 +330,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P04', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [{ fact: 'spouse', requiredValue: '있음', evidenceRef: 'head', evidenceText: '남편이 새벽 산책 다녀와' }],
     }),
-    card: realCard('P04'), ...review(['truncatedSourceCompletion']),
+    card: realCard('P04'), ...hold(['truncatedSourceCompletion']),
   },
   {
     queueId: 'cmukm6tjc00052ygn59ocvt4w', label: '🟡 #7 P10 사진 없이 "한번 봐주세요 · 보시기엔 어떠신가요" (원천 사진 수 미상)',
@@ -347,7 +345,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P10', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [{ fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '아들 거 하나 짰어요' }],
     }),
-    card: realCard('P10'), ...review(['mediaDependentDraft']),
+    card: realCard('P10'), ...hold(['mediaDependentDraft']),
   },
   {
     queueId: 'cmukm6tlg00072ygnkmh7heoh', label: '🔴 #8 P01 원문 사흘 전 · "이제 집으로 가는 길이에요 · 명절 잘 보내세요"',
@@ -375,7 +373,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P04', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [{ fact: 'spouse', requiredValue: '있음', evidenceRef: 'head', evidenceText: '남편 사촌 어른 댁에서' }],
     }),
-    card: realCard('P04'), ...review(['staleTimeClaim']),
+    card: realCard('P04'), ...hold(['staleTimeClaim']),
   },
   {
     queueId: 'cmukmcbtq00092ycolaijrn8o', label: '🔴 #18 P13 원천 카페 회원을 본 말 "자주 바꾸시는 분들이 꽤 보이네요"',
@@ -388,7 +386,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
     card: realCard('P13'), ...hold(['externalCommunityClaim']),
   },
   {
-    queueId: 'cmukme8nr00012yl0vi02d16v', label: '🔴 #19 P08 원천 카페 글을 본 말 + 🟡 계획 noLifeFactNeeded 인데 "우리 집만 그런 게 아니었구나"',
+    queueId: 'cmukme8nr00012yl0vi02d16v', label: '🔴 #19 P08 원천 카페 글을 본 말 + 🟢 구체 사실 없는 공감 표현',
     source: { id: 'fx-v3-19', ...SRC_ESTATE },
     sourceMeta: UNKNOWN_TIME,
     draft: {
@@ -400,7 +398,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P08', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
       universalReason: '부모님의 아들 편중 상속에 대한 보편적인 씁쓸함이다',
     }),
-    card: realCard('P08'), expect: ['externalCommunityClaim'], expectReview: ['unwarrantedSelfClaim'],
+    card: realCard('P08'), expect: ['externalCommunityClaim'], expectReview: [],
   },
   {
     queueId: 'cmukme8sk00052yl0v1l7903m', label: '🔴 #21 P15 원문 사흘 전 · "지금 콘서트인데 배우가 나왔어요"',
@@ -461,7 +459,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
     card: realCard('P01'), ...pass,
   },
   {
-    queueId: 'review-v3-same-day-live', label: '🟡 원문이 회차와 같은 날이어도 "지금 콘서트 보는 중" 은 사람 검토(발행 때는 지금이 아니다)',
+    queueId: 'review-v3-same-day-live', label: '🔴 원문이 회차와 같은 날이어도 "지금 콘서트 보는 중" 은 Content Core가 차단',
     source: { id: 'fx-v3-clive', ...SRC_CONCERT },
     draft: {
       title: '콘서트 보다가 잠깐 올려요',
@@ -471,7 +469,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P15', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
       universalReason: '공연 감상은 누구나 하는 이야기다',
     }),
-    card: realCard('P15'), ...review(['staleTimeClaim']),
+    card: realCard('P15'), ...hold(['staleTimeClaim']),
   },
   {
     queueId: 'control-v3-photo-source', label: '🟢 대조 · 원천에 사진 3장 — 초안은 글로 설명하고 봐 달라지 않는다',
@@ -502,7 +500,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
     card: realCard('P02'), ...pass,
   },
   {
-    queueId: 'review-v3-nolifefact-family', label: '🟡 같은 글 · 계획 noLifeFactNeeded — 자기 가족사는 사람이 본다',
+    queueId: 'review-v3-nolifefact-family', label: '🔴 같은 글 · 계획 noLifeFactNeeded — 자기 가족사를 Content Core가 차단',
     source: { id: 'fx-v3-rself', ...SRC_HUSBAND },
     draft: {
       title: '남편들 분리수거 다들 좀 하시나요?',
@@ -512,7 +510,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
       universalReason: '남편 집안일 불만은 흔한 이야기다',
     }),
-    card: realCard('P02'), ...review(['unwarrantedSelfClaim']),
+    card: realCard('P02'), ...hold(['unwarrantedSelfClaim']),
   },
   {
     queueId: 'control-v3-teen-card', label: '🟢 대조 · P01 중고생 카드 · 중고생 행동("중2 아이 시험 기간" · 성별 없음)',
@@ -691,24 +689,24 @@ const Q = { selfBasis: null, warrants: [] }
 export const SOURCE_PHRASES: readonly SourcePhrase[] = [
   // 5 시점 — 명절·현장 × 원문 시각
   { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
-  // 🔴 같은 날이어도 시간 의존 문장은 사람 검토 — 발행 시각은 판정 시각이 아니다(TTL 에 맡기지 않는다)
-  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', want: 'review:staleTimeClaim' },
-  { card: 'P15', title: '콘서트', body: '지금 콘서트 보는 중인데 게스트가 나왔어요.', want: 'review:staleTimeClaim' },
-  { card: 'P01', title: '추석', body: '오늘 추석 음식 만드는 중이에요.', want: 'review:staleTimeClaim' },
+  // 🔴 같은 날이어도 시간 의존 문장은 Content Core HOLD — 발행 시각은 판정 시각이 아니다.
+  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', want: 'hold:staleTimeClaim' },
+  { card: 'P15', title: '콘서트', body: '지금 콘서트 보는 중인데 게스트가 나왔어요.', want: 'hold:staleTimeClaim' },
+  { card: 'P01', title: '추석', body: '오늘 추석 음식 만드는 중이에요.', want: 'hold:staleTimeClaim' },
   { card: 'P01', title: '추석', body: '오늘 추석 음식 만드는 중이에요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
   { card: 'P15', title: '공연', body: '지난 공연을 보고 왔는데 여운이 길어요.', want: 'pass' },
   { card: 'P15', title: '공연', body: '지난 공연을 보고 왔는데 여운이 길어요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P01', title: '요즘', body: '요즘 애들 시험 기간이라 저녁을 일찍 먹어요.', want: 'pass' },
-  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', source: { postedAt: null, capturedAt: null }, want: 'review:staleTimeClaim' },
+  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', source: { postedAt: null, capturedAt: null }, want: 'hold:staleTimeClaim' },
   // 🔴 가져온 날이 앞 날짜면 올라온 날도 앞 날짜다 — capturedAt 만으로 "앞" 을 확정한다
   { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요.\n명절 잘 보내세요.', source: { postedAt: null, capturedAt: BEFORE }, want: 'hold:staleTimeClaim' },
   // 🔴 같은 날 가져왔으면 올라온 날은 모른다
-  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요.\n명절 잘 보내세요.', source: { postedAt: null, capturedAt: FIXTURE_NOW }, want: 'review:staleTimeClaim' },
+  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요.\n명절 잘 보내세요.', source: { postedAt: null, capturedAt: FIXTURE_NOW }, want: 'hold:staleTimeClaim' },
   { card: 'P15', title: '콘서트', body: '지금 콘서트 중인데 게스트가 나왔어요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
   { card: 'P15', title: '중계', body: '방금 생중계로 경기 보는데 너무 떨려요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
-  { card: 'P04', title: '추석', body: '추석 연휴에 친정 가기로 했어요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
-  { card: 'P04', title: '인사', body: '다들 즐거운 추석 보내세요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
-  { card: 'P15', title: '콘서트', body: '오늘 콘서트 다녀왔는데 너무 좋았어요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
+  { card: 'P04', title: '추석', body: '추석 연휴에 친정 가기로 했어요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
+  { card: 'P04', title: '인사', body: '다들 즐거운 추석 보내세요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
+  { card: 'P15', title: '콘서트', body: '오늘 콘서트 다녀왔는데 너무 좋았어요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
   { card: 'P01', title: '지난 명절', body: '지난 명절에 시댁 다녀왔는데 너무 피곤했어요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P01', title: '명절 끝', body: '명절 끝나고 나니 살이 쪘네요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P15', title: '콘서트', body: '예전에 갔던 콘서트 생각이 나네요.', source: { postedAt: BEFORE }, want: 'pass' },
@@ -722,16 +720,16 @@ export const SOURCE_PHRASES: readonly SourcePhrase[] = [
   // 6 출처 — 다른 커뮤니티 움직임
   { card: 'P13', title: '닉네임', body: '닉네임 자주 바꾸시는 분들이 꽤 보이네요.', plan: Q, want: 'hold:externalCommunityClaim' },
   { card: 'P13', title: '비슷한 글', body: '요즘 비슷한 글들이 자주 올라오네요.', plan: Q, want: 'hold:externalCommunityClaim' },
-  { card: 'P15', title: '게시판', body: '게시판에 올라오는 명절 글들을 보다 보면 마음이 복잡해요.', plan: Q, want: 'hold:externalCommunityClaim' },
-  { card: 'P13', title: '닉네임', body: '닉네임 자주 바꾸시는 분들이 꽤 보이네요.', plan: Q, source: { site: '' }, want: 'review:externalCommunityClaim' },
+  { card: 'P15', title: '게시판', body: '게시판에 올라오는 명절 글들을 보다 보면 마음이 복잡해요.', plan: Q, want: 'hold:staleTimeClaim+externalCommunityClaim' },
+  { card: 'P13', title: '닉네임', body: '닉네임 자주 바꾸시는 분들이 꽤 보이네요.', plan: Q, source: { site: '' }, want: 'hold:externalCommunityClaim' },
   { card: 'P13', title: '반팔', body: '요즘 길에서 반팔 입은 분들이 많이 보이네요.', plan: Q, want: 'pass' },
   { card: 'P13', title: '뉴스', body: '뉴스에 비슷한 이야기가 자주 나오더라고요.', plan: Q, want: 'pass' },
   { card: 'P13', title: '친구', body: '친구가 그런 글을 자주 본대요.', plan: Q, want: 'pass' },
   { card: 'P13', title: '질문', body: '닉네임 자주 바꾸시는 편이세요? 이유가 궁금해요.', plan: Q, want: 'pass' },
   // 7 자료 — 봐 달라 × 원천 사진 수
   { card: 'P10', title: '목도리', body: '다 떴는데 한번 봐주세요.', source: { imageCount: 2 }, want: 'hold:mediaDependentDraft' },
-  { card: 'P10', title: '목도리', body: '다 떴는데 한번 봐주세요.', want: 'review:mediaDependentDraft' },
-  { card: 'P10', title: '머리', body: '어제 자른 머리인데 다들 보시기엔 어떠세요?', source: { imageCount: 0 }, want: 'review:mediaDependentDraft' },
+  { card: 'P10', title: '목도리', body: '다 떴는데 한번 봐주세요.', want: 'hold:mediaDependentDraft' },
+  { card: 'P10', title: '머리', body: '어제 자른 머리인데 다들 보시기엔 어떠세요?', source: { imageCount: 0 }, want: 'hold:mediaDependentDraft' },
   { card: 'P03', title: '다짐육', body: '색이 회색인데 요리 잘 아시는 분들 좀 봐주세요.', source: { imageCount: 0 }, want: 'pass' },
   { card: 'P03', title: '첫 글', body: '처음 써 보는 글이라 서툴러도 예쁘게 봐주세요.', want: 'pass' },
   { card: 'P03', title: '하소연', body: '제 얘기 좀 들어봐 주세요.', want: 'pass' },
@@ -739,7 +737,7 @@ export const SOURCE_PHRASES: readonly SourcePhrase[] = [
   // 8 잘린 원문 — 없는 결말
   { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
     source: { title: '강아지 사고', body: '강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야' },
-    want: 'review:truncatedSourceCompletion' },
+    want: 'hold:truncatedSourceCompletion' },
   // 🔴 원문이 끝맺었으면 같은 초안도 통과
   { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
     source: { title: '강아지 사고', body: '강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까 본체만체하네요' },
@@ -755,9 +753,9 @@ export const SOURCE_PHRASES: readonly SourcePhrase[] = [
     source: { title: '명절', body: '그래도 모처럼 모이니 갈비도 구워 먹고 김밥도 해서 먹으니 좋네요\n그래도 모처럼 모이니\n갈비도 구워 먹고' }, want: 'pass' },
   { card: 'P01', title: '기사', body: '가수 부녀 인터뷰 기사 보셨나요? 마음이 안 좋더라고요.',
     source: { title: '기사', body: '[단독] 가수 부녀 인터뷰 마음 안좋더라 입력 2026.09.21. 오후 3:33 기사원문 공감 텍스트 음성 변환 서비스 글자 크기 변경 공유하기' }, want: 'pass' },
-  // 9 noLifeFactNeeded 가족사 — 사람 검토 · 과차단 반례
-  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'review:unwarrantedSelfClaim' },
-  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: Q, want: 'hold:unwarrantedSelfClaim' },
+  // 9 구체 생활 사실 없는 가족 유사 공감 — 자리와 무관하게 허용
+  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'pass' },
+  { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: Q, want: 'pass' },
   { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: { selfBasis: 'lifeFacts', warrants: [{ fact: 'children' }] }, want: 'pass' },
   { card: 'P07', title: '관리비', body: '저희 아파트는 여름마다 관리비를 좀 깎아 줘요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'pass' },
   { card: 'P14', title: '호칭', body: '친정이나 처가는 친정댁, 처가댁이라고 안 부르잖아요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'pass' },
@@ -773,7 +771,7 @@ export const LIFE_PHRASES: readonly [string, string, string, string][] = [
   ['P05', '부부싸움', '너무 힘들어서 이혼 얘기가 나왔는데 막막해요.', 'hold:maritalStatusConflict'],
   ['P08', '부부싸움', '너무 힘들어서 이혼 얘기가 나왔는데 막막해요.', 'hold:maritalStatusConflict'],
   ['P20', '부부싸움', '남편이랑 별거 중이라 명절이 힘들어요.', 'hold:maritalStatusConflict'],
-  ['P06', '부부싸움', '너무 힘들어서 이혼 얘기가 나왔는데 막막해요.', 'review:maritalStatusConflict'],
+  ['P06', '부부싸움', '너무 힘들어서 이혼 얘기가 나왔는데 막막해요.', 'hold:maritalStatusConflict'],
   ['P05', '부부싸움', '친구가 남편이랑 싸우고 이혼 얘기까지 나왔대요.', 'pass'],
   ['P05', '이혼', '이혼 얘기 나오면 다들 어떻게 하세요?', 'pass'],
   ['P05', '신혼 때', '신혼 때 이혼 얘기까지 나왔었는데 지금은 잘 지내요.', 'pass'],
@@ -786,7 +784,7 @@ export const LIFE_PHRASES: readonly [string, string, string, string][] = [
   ['P05', '시댁', '시어머니께 한동안 연락도 못 드렸어요.', 'hold:careHouseholdConflict'],
   ['P05', '시댁', '시댁에 다녀오는 길인데 차가 막히네요.', 'hold:careHouseholdConflict'],
   ['P12', '친정', '친정엄마께 한 달째 연락을 못 드렸어요.', 'hold:careHouseholdConflict'],
-  ['P05', '연락', '한동안 연락을 못 드렸더니 서운해하시네요.', 'review:careHouseholdConflict'],
+  ['P05', '연락', '한동안 연락을 못 드렸더니 서운해하시네요.', 'hold:careHouseholdConflict'],
   ['P05', '동서', '동서가 시어머니께 연락도 안 드렸더니 난리가 났어요.', 'pass'],
   ['P05', '시어머니', '시어머니랑 같이 사는데 연락 안 드리면 서운해하실까요?', 'pass'],
   ['P05', '친정', '친정엄마한테 한동안 연락을 못 드렸어요.', 'pass'],
@@ -796,8 +794,8 @@ export const LIFE_PHRASES: readonly [string, string, string, string][] = [
   // 3 정신건강·질병
   ['P19', '기분', '기분이 너무 우울해서 정신과 가보려고요.', 'hold:unsupportedHealthClaim'],
   ['P12', '진단', '지난달에 당뇨 진단을 받았어요.', 'hold:unsupportedHealthClaim'],
-  ['P19', '우울', '우울한 게 점점 심해져요.', 'review:unsupportedHealthClaim'],
-  ['P02', '진단', '지난달에 당뇨 진단을 받았어요.', 'review:unsupportedHealthClaim'],
+  ['P19', '우울', '우울한 게 점점 심해져요.', 'hold:unsupportedHealthClaim'],
+  ['P02', '진단', '지난달에 당뇨 진단을 받았어요.', 'hold:unsupportedHealthClaim'],
   ['P19', '언니', '언니가 우울증으로 정신과 다닌대요.', 'pass'],
   ['P19', '정신과', '정신과 처음 가면 뭘 물어보나요?', 'pass'],
   ['P19', '예전', '예전에 공황장애로 치료받은 적 있어요.', 'pass'],
@@ -809,7 +807,7 @@ export const LIFE_PHRASES: readonly [string, string, string, string][] = [
   ['P01', '자취', '아들이 자취를 시작했어요.', 'hold:childLifeStageConflict'],
   ['P01', '결혼식', '딸 결혼식 준비하느라 바빠요.', 'hold:childLifeStageConflict'],
   ['P02', '군대', '아들이 지난주에 입대했어요.', 'hold:childLifeStageConflict'],
-  ['P22', '알바', '딸이 알바비로 용돈을 줬어요.', 'review:childLifeStageConflict'],
+  ['P22', '알바', '딸이 알바비로 용돈을 줬어요.', 'hold:childLifeStageConflict'],
   ['P01', '친구딸', '친구 딸은 첫 월급 받아서 봉투를 줬대요.', 'pass'],
   ['P01', '용돈', '딸이 용돈 올려 달래요.', 'pass'],
   ['P01', '꽃', '딸이 어버이날 꽃을 사왔어요.', 'pass'],
@@ -843,26 +841,26 @@ export const V4_PHRASES: readonly SourcePhrase[] = [
   { card: 'P01', title: '과외', body: '딸한테 수학 과외를 붙여줬더니 너무 좋아하네요.', plan: LIFE, want: 'pass' },
   { card: 'P08', title: '손주', body: '손주 숙제를 봐 주다 보니 하루가 가요.', plan: LIFE, want: 'pass' },
   { card: 'P08', title: '딸', body: '딸이 요즘 과외 선생님을 해요.', plan: LIFE, want: 'pass' },
-  // 결혼 전 연애 단계(50·60대 · 기혼 카드) — 사람 검토
-  { card: 'P18', title: '호칭', body: '연상연하 커플인데요. 결혼하면 호칭이 궁금해요.', want: 'review:maritalStatusConflict' },
+  // 결혼 전 연애 단계(50·60대 · 기혼 카드) — Content Core HOLD
+  { card: 'P18', title: '호칭', body: '연상연하 커플인데요. 결혼하면 호칭이 궁금해요.', want: 'hold:maritalStatusConflict' },
   { card: 'P03', title: '호칭', body: '연상연하 커플인데요. 결혼하면 호칭이 궁금해요.', want: 'pass' },
   { card: 'P18', title: '딸', body: '딸이 남친을 데려왔는데 참 싹싹하더라고요.', want: 'pass' },
   // 다가오는 명절 · 명절 글의 날짜 말
-  { card: 'P04', title: '추석', body: '이번 추석에 시댁 가기 전에 장을 봐야 해요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
+  { card: 'P04', title: '추석', body: '이번 추석에 시댁 가기 전에 장을 봐야 해요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
   { card: 'P10', title: '선물', body: '어떤 친구가 추석 선물로 양갱을 준비하겠다고 하더라고요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P06', title: '명절', body: '명절 음식 중에서도 동태전은 별로 안 좋아해요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P12', title: '굴비', body: '명절 때마다 시어머니가 굴비를 챙겨 주세요.', source: { postedAt: BEFORE }, want: 'pass' },
   // 🔴 습관으로 말한 명절은 살아 있는 명절이 아니다 — 같은 글의 날짜 말도 명절의 날이 아니다(변이 V09)
   { card: 'P12', title: '굴비', body: '명절 때마다 시어머니가 굴비를 챙겨 주세요. 오늘은 그걸로 밥을 했어요.', source: { postedAt: BEFORE }, want: 'pass' },
-  { card: 'P12', title: '굴비', body: '명절에 받아온 굴비 구웠어요. 이제 오늘 할 일은 끝났네요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
+  { card: 'P12', title: '굴비', body: '명절에 받아온 굴비 구웠어요. 이제 오늘 할 일은 끝났네요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
   { card: 'P12', title: '굴비', body: '명절에 받아온 굴비 구웠어요. 이제 할 일은 끝났네요.', source: { postedAt: BEFORE }, want: 'pass' },
   // 1인칭 금융 행동 — 계획이 생활사를 허가하지 않았다
-  { card: 'P19', title: '보험', body: '얼마 전에 보험 싹 리모델링해서 바꿨거든요.', plan: NOLIFE, want: 'review:unwarrantedSelfClaim' },
+  { card: 'P19', title: '보험', body: '얼마 전에 보험 싹 리모델링해서 바꿨거든요.', plan: NOLIFE, want: 'hold:unwarrantedSelfClaim' },
   { card: 'P19', title: '보험', body: '보험 리모델링 해 보신 분 계세요?', plan: NOLIFE, want: 'pass' },
   { card: 'P19', title: '보험', body: '친구가 보험을 갈아탔대요.', plan: NOLIFE, want: 'pass' },
   { card: 'P19', title: '보험', body: '얼마 전에 보험 싹 리모델링해서 바꿨거든요.', plan: LIFE, want: 'pass' },
-  // 받아칠 거리가 없는 하소연(소프트 품질) — 사람 검토
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'review:thinVentDraft' },
+  // 받아칠 거리가 없는 하소연(소프트 품질) — Content Core HOLD
+  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'hold:thinVentDraft' },
   { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['experienceResonance', 'conversationSpark'] }, want: 'pass' },
   { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요. 다들 어떠세요?', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'pass' },
   { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'share', contentRoles: ['conversationSpark'] }, want: 'pass' },

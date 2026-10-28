@@ -43,15 +43,18 @@ export const POLL_MS = 60 * 1000
  * producer 가 회차 끝에 이것을 남긴다. **판정이 아니라 사실만 적는다.**
  *
  * 🔴 `repair` — 입력 수리 요약 (slug · 결과 코드 · 결과 파일). PARTIAL 회차의 이유가 신호에도 남는다.
- * @param {{date:string, verdict:string, code:number, ran:string[], repair?:object|null, finishedAt?:string}} p
+ * 🔴 `fetch` — 원고 회수 요약 (DIRECT 기대·원고 수 · 미해결 slug · 결과 코드 · 결과 파일).
+ * @param {{date:string, verdict:string, code:number, ran:string[], repair?:object|null, fetch?:object|null, finishedAt?:string}} p
  */
-export function writeHandoff({ date, verdict, code, ran = [], repair = null, finishedAt = new Date().toISOString() }) {
+export function writeHandoff({ date, verdict, code, ran = [], repair = null, fetch = null, finishedAt = new Date().toISOString() }) {
   const path = handoffPath(date)
   mkdirSync(dirname(path), { recursive: true })
   // 🔴 임시 파일 후 rename — 반쯤 쓰인 신호를 등록이 읽지 않게
   const tmp = `${path}.tmp-${process.pid}`
   const repairFacts = repair ? { resultFile: repair.resultFile ?? null, applied: repair.applied ?? [], failures: (repair.failures ?? []).map(({ slug, type, outcome }) => ({ slug, type, outcome })) } : null
-  writeFileSync(tmp, `${JSON.stringify({ date, verdict, code, ran, repair: repairFacts, finishedAt }, null, 2)}\n`, 'utf8')
+  // 🔴 DIRECT 원고 미해결 — PARTIAL 의 이유가 신호에도 남는다 (slug · 결과 코드 · 결과 파일)
+  const fetchFacts = fetch ? { resultFile: fetch.resultFile ?? null, direct: fetch.direct ?? null, failures: (fetch.failures ?? []).map(({ slug, type, outcome }) => ({ slug, type, outcome })) } : null
+  writeFileSync(tmp, `${JSON.stringify({ date, verdict, code, ran, repair: repairFacts, fetch: fetchFacts, finishedAt }, null, 2)}\n`, 'utf8')
   renameSync(tmp, path)
   return path
 }

@@ -43,6 +43,8 @@ if ! npx prisma migrate deploy >/tmp/d100-ci-migrate.log 2>&1; then
 fi
 
 npm run stage:db-check
+npm run stage:preflight-window-check
+npm run stage:preflight-window-mutation
 npm run ops:loop-db-check
 npm run stage:evidence-db-check
 npm run stage:proof-day-db-check
@@ -55,14 +57,21 @@ npm run supply:stock-parity-db-check
 npm run publish:lane-fairness-db-check
 npm run supply:wip-contract-db-check
 npm run supply:draft-deferral-e2e-db-check
+npm run supply:auto-ready-finalize-db-check
 npm run check:draft-life-gates-db
 npm run auto-ready:audit-db-check
 npm run auto-ready:audit-day-db-check
 npm run auto-ready:defect-resolution-db-check
 npm run check:comment-thread-db
+# 운영 직접 작성 · 작성자 대댓글 — 원글 작성자 고정 · 원자성 · 중복 · 집계 불변을 실제 트랜잭션으로 잰다(2026-10-21)
+npm run operator:compose-db-check
 npm run persona:comment-loop-db-check
 npm run persona:followup-db-check
 npm run persona:autogen-db-check
 npm run persona:creative-db-check
 npm run persona:remediation-db-check
 npm run check:post-exposure-db
+# 어드민 게시판 변경 — 자동 운영 글(Persona · Micro Seed · 오리지널 큐) · 열린 Persona 후보 차단과
+# 자동 운영 기록 write 0 을 실제 트랜잭션으로 잰다. 판정표는 DB 없이 먼저 본다.
+npm run check:board-move
+npm run board-move:db-check

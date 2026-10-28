@@ -33,9 +33,9 @@ export const CONTRACT = AUTO_READY_CONTRACT
  * 🔴 **`semanticReview` 는 "객체이면 통과" 가 아니다** (2026-09-25 마스터 지적).
  *    #565 판은 `typeof rec === 'object'` 만 봤다 — `{}` 도, 필드가 문자열인 것도,
  *    `complete: false` 인 것도 **경고 0** 으로 읽혔다. 재지 않은 것을 이상 없음으로 읽은 것이다.
- *    이제 여섯 필드를 **구조적으로** 본다. 하나라도 어긋나면 예외 검토로 간다.
+ *    이제 여섯 필드를 **구조적으로** 본다. 하나라도 어긋나면 품질 격리로 간다.
  *
- * 🔴 이 경고는 후보 생성도 사람 검토도 막지 않는다. **자동 READY 에서만** 뺀다.
+ * 🔴 구조 결함·holds 불일치·차단 finding은 자동 READY에서 뺀다.
  * 🔴 `confidence` 에 통과 임계값을 만들지 않는다. "유한한 0~1 숫자인가" 만 본다.
  */
 export const SEMANTIC_RECORD_KEY = SEMANTIC_SUMMARY_KEY
@@ -105,17 +105,9 @@ export function warningsOfGate(gate: unknown): string[] {
   return out
 }
 
-/** 🔴 회귀 사례에서 나온 네 가지 — #565 가 실측으로 얻은 값이다 */
-export const AUTO_READY_BLOCKERS = {
-  /** 이미지가 있어야 성립하는 문장 (P08 실측) */
-  imageDependent: /이런\s*(가죽|레더|옷)|이\s*옷\s*어(떨|떻)|사진\s*보|위\s*사진|여기\s*보/,
-  /** 발행일 당일처럼 읽히는 표현 (P03 실측) */
-  timeDrift: /오늘도|아직도\s*안|방금|어제\s*밤|지금\s*막/,
-  /** 근거 없는 단정 */
-  unsourcedClaim: /확실히|틀림없이|반드시\s*그렇/,
-  /** 후속 뉴스가 있을 수 있는 시의성 소재 (P01 실측) */
-  followUpLikely: /저격|논란|해명|사과|입장문|폭로/,
-} as const
+export function blockingWarningsOfGate(gate: unknown): string[] {
+  return warningsOfGate(gate)
+}
 
 export type RowInput = {
   gateVerdict: string
@@ -127,8 +119,8 @@ export type RowInput = {
 export type RowVerdict = { auto: boolean; reasons: string[] }
 
 /**
- * 🔴 **그 행이 자동 판정 대상인가** — "경고 없는 적격 후보" 하나다.
- *    하나라도 걸리면 **예외 묶음**으로 간다. 조용히 통과시키지 않는다.
+ * 🔴 **그 행이 자동 판정 대상인가** — "차단 경고 없는 적격 후보" 하나다.
+ *    차단 경고가 하나라도 걸리면 **예외 묶음**으로 간다. 조용히 통과시키지 않는다.
  */
 export function judgeRow(i: RowInput): RowVerdict {
   const reasons: string[] = []
@@ -139,11 +131,6 @@ export function judgeRow(i: RowInput): RowVerdict {
    *    `MicroSeedRawContent.sourceCapturedAt` 은 NOT NULL 이고 적재기가 **초안 시각**을 넣으므로 언제나 참이었다(A1 ⑧).
    *    원문 시각 · 나이 · 반응 판정은 `judgeSlotRelease`(선택기 · 발행 트랜잭션) 하나가 한다. 행동은 바뀌지 않는다.
    */
-  const both = `${i.title}\n${i.body}`
-  for (const [name, re] of Object.entries(AUTO_READY_BLOCKERS)) {
-    const hit = re.exec(both)
-    if (hit !== null) reasons.push(`${name}="${hit[0]}"`)
-  }
   return { auto: reasons.length === 0, reasons }
 }
 
@@ -156,7 +143,7 @@ export function eligibilityOf(r: {
 }): RowVerdict {
   return judgeRow({
     gateVerdict: String(r.gateVerdict),
-    warnings: warningsOfGate(r.gateResults),
+    warnings: blockingWarningsOfGate(r.gateResults),
     title: r.title, body: r.body,
   })
 }
@@ -182,7 +169,8 @@ const stableJson = (v: unknown): string =>
  */
 export const JUDGE_CONTRACT_DIGEST = digestOf(stableJson({
   contract: CONTRACT,
-  blockers: Object.fromEntries(Object.entries(AUTO_READY_BLOCKERS).map(([k, v]) => [k, v.source])),
+  /** Content Core가 이미 검증한 문안을 단어 정규식으로 다시 판정하지 않는다. */
+  contentDecision: 'content-core-only-v2',
   semantic: [NO_SEMANTIC_RECORD, SEMANTIC_INVALID, SEMANTIC_HOLDS_MISMATCH],
   recordVersion: AUTO_READY_RECORD_VERSION,
 })).slice(0, 32)

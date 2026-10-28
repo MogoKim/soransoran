@@ -9,6 +9,9 @@ import { GUEST_BADGE } from '@/lib/guest-comment-policy'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminPostEditForm from '@/components/admin/AdminPostEditForm'
 import AdminCommentEditForm from '@/components/admin/AdminCommentEditForm'
+import AdminBoardMovePanel from '@/components/admin/AdminBoardMovePanel'
+import { readBoardMoveFacts } from '@/lib/board-move-tx'
+import { judgeBoardMoveSource } from '@/lib/board-move'
 import {
   AdminPageHeader,
   AdminSection,
@@ -89,9 +92,12 @@ export default async function AdminContentDetailPage({
   const publicHref = communityPostHref(post.id, post.boardType)
   const pendingReports = post.reports.filter((r) => r.status === 'PENDING').length
   const hiddenComments = post.comments.filter((c) => c.isDeleted).length
+  // 게시판 변경 — 서버 트랜잭션과 같은 사실 읽기 · 같은 판정 함수를 쓴다(표시용)
+  const moveFacts = await readBoardMoveFacts(prisma, post.id)
+  const moveBlock = moveFacts === null ? null : judgeBoardMoveSource(moveFacts)
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
         backHref="/admin/content"
         title={post.title}
@@ -107,8 +113,8 @@ export default async function AdminContentDetailPage({
         }
       />
 
-      <p className="mt-2 text-sm text-content-muted">
-        <Link href={`/admin/members/${post.author.id}`} className="text-link">
+      <p className="-mt-3 mb-0 flex flex-wrap items-center gap-x-1 text-sm text-content-muted">
+        <Link href={`/admin/members/${post.author.id}`} className="inline-flex min-h-[52px] items-center font-semibold text-link lg:min-h-[44px]">
           {post.author.nickname ?? post.author.name ?? '회원'}
         </Link>{' '}
         · 작성 {formatKst(post.createdAt)} · 수정 {formatKst(post.updatedAt)}
@@ -116,14 +122,20 @@ export default async function AdminContentDetailPage({
           <>
             {' '}
             ·{' '}
-            <Link href={publicHref} className="text-link">
+            <Link href={publicHref} className="inline-flex min-h-[52px] items-center font-semibold text-link lg:min-h-[44px]">
               고객 화면에서 보기
             </Link>
           </>
         ) : null}
       </p>
 
+      {/* 🔴 읽기와 조치를 가른다(Admin Golden Master).
+             1280 이상 — 왼쪽: 신고 · 본문 · 수정 · 댓글 / 오른쪽 레일: 게시판 변경 · 위험한 조치(맨 아래).
+             1279 이하 · 모바일 — 한 줄. 레일이 댓글 뒤로 내려가 위험한 조치가 콘텐츠 맨 끝이 된다. */}
+      <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start xl:gap-10">
+      <div className="min-w-0">
       <AdminSection
+        className="mt-6"
         title={`신고 ${post.reports.length}건`}
         description={
           pendingReports > 0
@@ -134,9 +146,9 @@ export default async function AdminContentDetailPage({
         {post.reports.length === 0 ? (
           <AdminEmptyState>이 글에 접수된 신고가 없습니다.</AdminEmptyState>
         ) : (
-          <ul className="mt-2 flex list-none flex-col gap-2 p-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {post.reports.map((r) => (
-              <li key={r.id} className="rounded-lg border border-subtle bg-surface-card p-3">
+              <li key={r.id} className="border-b border-[color:var(--admin-divider)] px-1 py-3 last:border-b-0">
                 <p className="m-0 flex flex-wrap items-center gap-2 text-sm text-content-primary">
                   <AdminBadge tone="brand">
                     {REASON_LABEL.get(r.reason) ?? r.reason}
@@ -153,7 +165,7 @@ export default async function AdminContentDetailPage({
             ))}
           </ul>
         )}
-        <Link href="/admin/reports" className="mt-2 inline-flex min-h-[52px] items-center text-sm text-link">
+        <Link href="/admin/reports" className="mt-1 inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
           신고 관리로 가기 →
         </Link>
       </AdminSection>
@@ -163,7 +175,8 @@ export default async function AdminContentDetailPage({
              판단할 수 없어 매번 고객 화면을 새 창으로 열어야 한다.
              고객 화면과 같은 컴포넌트를 쓰므로 보이는 것도 같다. */}
       <AdminSection title="본문" description="고객 화면에 보이는 그대로입니다.">
-        <div className="mt-1 rounded-lg bg-surface-soft p-3">
+        {/* 읽는 자리 — 상자 대신 위아래 선 사이에 둔다 */}
+        <div className="mt-3 border-y border-[color:var(--admin-border)] py-4">
           <PostBody content={post.content} />
         </div>
       </AdminSection>
@@ -172,13 +185,13 @@ export default async function AdminContentDetailPage({
              이 화면에 오는 이유는 대개 "무슨 글인지 보려고" 지 고치려는 것이 아니다. */}
       <section className="mt-4">
         <details>
-          <summary className="min-h-[44px] cursor-pointer list-none py-2 text-base font-bold text-content-primary">
+          <summary className="flex min-h-[52px] cursor-pointer list-none flex-wrap items-center gap-x-1 border-b border-[color:var(--admin-divider)] py-2 text-base font-bold text-content-primary lg:min-h-[44px]">
             글 내용 수정{' '}
             <span className="text-sm font-normal text-content-muted">
               (수정해도 작성자에게 알림이 가지 않습니다)
             </span>
           </summary>
-          <div className="mt-2">
+          <div className="mt-3">
             <AdminPostEditForm postId={post.id} title={post.title} content={post.content} />
           </div>
         </details>
@@ -191,16 +204,16 @@ export default async function AdminContentDetailPage({
         {post.comments.length === 0 ? (
           <AdminEmptyState>아직 달린 댓글이 없습니다.</AdminEmptyState>
         ) : (
-          <ul className="mt-2 flex list-none flex-col gap-2 p-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {post.comments.map((c) => (
-              <li key={c.id} className="rounded-lg border border-subtle bg-surface-card p-3">
+              <li key={c.id} className="border-b border-[color:var(--admin-divider)] px-1 py-4 last:border-b-0">
                 <p className="m-0 whitespace-pre-wrap break-words text-base text-content-primary">
                   {c.content}
                 </p>
                 <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-content-muted">
                   {/* 🔴 비회원 댓글은 author 가 null 이다. 회원 상세 링크를 걸면 404 로 보낸다. */}
                   {c.author ? (
-                    <Link href={`/admin/members/${c.author.id}`} className="text-link">
+                    <Link href={`/admin/members/${c.author.id}`} className="inline-flex min-h-[52px] items-center font-semibold text-link lg:min-h-[44px]">
                       {c.author.nickname ?? c.author.name ?? '회원'}
                     </Link>
                   ) : (
@@ -209,7 +222,7 @@ export default async function AdminContentDetailPage({
                       <AdminBadge>{GUEST_BADGE}</AdminBadge>
                     </>
                   )}
-                  <span>{formatKst(c.createdAt)}</span>
+                  <span className="tabular-nums">{formatKst(c.createdAt)}</span>
                   {c.isDeleted ? <AdminBadge tone="danger">숨김</AdminBadge> : null}
                 </p>
                 {/* 숨김 댓글도 고칠 수 있다. 고치는 것과 되살리는 것은 다른 판단이라
@@ -244,8 +257,21 @@ export default async function AdminContentDetailPage({
           </ul>
         )}
       </AdminSection>
+      </div>
 
-      <section className="mt-8 border-t border-subtle pt-6">
+      {/* 오른쪽 레일 — 조치. 게시판 변경 위 · 위험한 조치 맨 아래 */}
+      <aside className="min-w-0" aria-label="조치">
+      {/* 🔴 게시판 변경은 본문 수정과 다른 조치다 — 판정 · 쓰기가 따로다(board-move-tx.ts).
+            옮길 수 없는 글도 패널을 숨기지 않고 이유를 보인다. 판정은 서버가 트랜잭션 안에서 다시 한다. */}
+      <AdminBoardMovePanel
+        postId={post.id}
+        current={post.boardType}
+        boardLabels={{ FREE: boardLabel('FREE'), MENOPAUSE: boardLabel('MENOPAUSE') }}
+        blockedReason={moveBlock?.message ?? (moveFacts === null ? '글을 찾지 못했습니다.' : null)}
+      />
+
+      {/* 🔴 위험한 조치 — 레일 맨 아래 · 모바일 콘텐츠 맨 끝. 위와 점선으로 떨어뜨린다 */}
+      <section className="mt-8 border-t border-dashed border-interactive pt-6">
         {deleted ? (
           <>
             <h2 className="m-0 text-lg font-bold text-content-primary">조치</h2>
@@ -286,6 +312,8 @@ export default async function AdminContentDetailPage({
           </AdminActionGroup>
         )}
       </section>
-    </main>
+      </aside>
+      </div>
+    </div>
   )
 }

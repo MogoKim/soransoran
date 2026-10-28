@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import {
@@ -11,7 +10,8 @@ import PersonaCandidateDecision from '@/components/admin/PersonaCandidateDecisio
 import PersonaCandidateWithdraw from '@/components/admin/PersonaCandidateWithdraw'
 import PersonaCandidatePublish from '@/components/admin/PersonaCandidatePublish'
 import PersonaCandidateTarget from '@/components/admin/PersonaCandidateTarget'
-import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-rules'
+import { DECLINE_REASONS, canWithdraw, type CandidateStatus } from '@/lib/persona-candidate-rules'
+import { adminBadgeClass, type BadgeTone } from '@/components/admin/AdminUi'
 
 /**
  * 페르소나 댓글 후보 상세 — 🔴 읽기 전용
@@ -56,6 +56,21 @@ function toGateRows(value: unknown): Array<{ gate: string; outcome: string; deta
   })
 }
 
+/** 작업 구역 머리 — 번호 · 이름 · 지금 값(배지). 왼쪽 읽을거리의 ①~④ 와 섞이지 않게 「작업 N」 으로 쓴다 */
+function StepHead({ n, title, state, tone }: { n: number; title: string; state: string; tone: BadgeTone }) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2">
+      <span aria-hidden="true" className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color:var(--admin-action-bg)] text-sm font-bold text-[color:var(--admin-action-content)]">
+        {n}
+      </span>
+      <h2 className="m-0 text-base font-bold text-content-primary">
+        <span className="sr-only">작업 {n} · </span>{title}
+      </h2>
+      <span className={adminBadgeClass(tone)}>{state}</span>
+    </div>
+  )
+}
+
 export default async function PersonaCandidateDetailPage(
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -63,15 +78,15 @@ export default async function PersonaCandidateDetailPage(
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">
             홈으로 가기
           </Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -99,57 +114,62 @@ export default async function PersonaCandidateDetailPage(
   const notRun = gates.filter((g) => g.outcome === 'notRun')
 
   return (
-    <PageShell>
-      <div className="mx-auto w-full max-w-3xl px-4 py-6">
-        <Link href="/admin/persona-candidates" className="text-sm text-link underline">
+    <>
+      <div className="w-full">
+        <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
           ← 대기열
         </Link>
 
-        <div className="mt-3 mb-5 flex flex-wrap items-center gap-2">
-          <h1 className="text-xl font-bold">후보 상세</h1>
-          <span className="rounded-full bg-gray-100 px-3 py-1 text-xs">
+        <div className="mt-1 mb-6 flex flex-wrap items-center gap-2">
+          <h1 className="m-0 text-xl font-bold leading-snug text-content-primary">후보 상세</h1>
+          <span className="inline-flex min-h-[24px] items-center rounded bg-surface-page px-2 text-xs text-content-secondary">
             {CANDIDATE_STATUS_LABEL[row.status] ?? row.status}
           </span>
-          <span className="rounded-full bg-gray-100 px-3 py-1 text-xs">
+          <span className="inline-flex min-h-[24px] items-center rounded bg-surface-page px-2 text-xs text-content-secondary">
             Gate {GATE_STATUS_LABEL[row.gateStatus] ?? row.gateStatus}
           </span>
         </div>
 
+        {/* 🔴 데스크탑은 두 칸이다 — 왼쪽은 읽을 것(생성물 · 페르소나 · 관문 · 소스 · 결정 기록),
+              오른쪽은 할 일(작업 1 결정 → 작업 2 대상 지정 → 작업 3 발행 · 맨 아래 위험 작업).
+              각 단계의 버튼·확인은 그대로다. 모바일은 같은 순서로 위에서 아래로 쌓인다. */}
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] lg:items-start lg:gap-8">
+        <div className="min-w-0">
         {/* ① 생성물 — 🔴 본문 전문은 여기서만 */}
-        <section className="mb-5">
-          <h2 className="mb-2 text-sm font-bold text-gray-700">① 생성물</h2>
-          <p className="whitespace-pre-wrap rounded-lg border border-gray-200 bg-white px-4 py-3 text-[15px] leading-relaxed">
+        <section className="mb-6">
+          <h2 className="mb-2 text-base font-bold text-content-primary">① 생성물</h2>
+          <p className="whitespace-pre-wrap rounded-md border border-subtle bg-surface-card px-4 py-3 text-base leading-relaxed">
             {row.candidateText}
           </p>
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 text-xs text-content-muted">
             반응 유형 {row.reactionType} · {[...row.candidateText].length}자 · 재생성 {row.regenCount}회
           </p>
           {row.editedText !== null && (
             <div className="mt-3">
-              <h3 className="mb-1 text-xs font-bold text-gray-700">수정본</h3>
-              <p className="whitespace-pre-wrap rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[15px]">
+              <h3 className="mb-1 text-xs font-bold text-content-secondary">수정본</h3>
+              <p className="whitespace-pre-wrap rounded-md border border-state-warning bg-[color:var(--admin-warning-soft)] px-4 py-3 text-base">
                 {row.editedText}
               </p>
-              <p className="mt-1 text-xs text-gray-500">수정 diff {filledMark(row.editDiff)}</p>
+              <p className="mt-1 text-xs text-content-muted">수정 diff {filledMark(row.editDiff)}</p>
             </div>
           )}
         </section>
 
         {/* ② 페르소나 */}
-        <section className="mb-5">
-          <h2 className="mb-2 text-sm font-bold text-gray-700">② 페르소나</h2>
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-gray-200 px-4 py-3 text-sm">
-            <dt className="text-gray-500">코드</dt>
+        <section className="mb-6">
+          <h2 className="mb-2 text-base font-bold text-content-primary">② 페르소나</h2>
+          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
+            <dt className="text-content-muted">코드</dt>
             <dd className="font-mono">{row.persona.code}</dd>
-            <dt className="text-gray-500">상태</dt>
+            <dt className="text-content-muted">상태</dt>
             <dd>{STATUS_LABEL[row.persona.status] ?? row.persona.status}</dd>
-            <dt className="text-gray-500">밴드</dt>
+            <dt className="text-content-muted">밴드</dt>
             <dd>{row.persona.ageBand ?? '—'} · {row.persona.region ?? '—'}</dd>
-            <dt className="text-gray-500">Voice Core</dt>
+            <dt className="text-content-muted">Voice Core</dt>
             <dd>{filledMark(row.persona.voiceCore)}</dd>
-            <dt className="text-gray-500">variation</dt>
+            <dt className="text-content-muted">variation</dt>
             <dd>{filledMark(row.persona.voiceVariations)}</dd>
-            <dt className="text-gray-500">금지 역할</dt>
+            <dt className="text-content-muted">금지 역할</dt>
             <dd>
               {row.persona.forbiddenReactionRoles.length === 0
                 ? '—'
@@ -157,66 +177,66 @@ export default async function PersonaCandidateDetailPage(
             </dd>
           </dl>
           {/* 🔴 매칭 점수 · mood 는 M3 반응 지도가 연결되면 채운다 */}
-          <p className="mt-1 text-xs text-gray-400">
+          <p className="mt-1 text-xs text-content-muted">
             매칭 근거 · 오늘 mood 는 M3 반응 지도 연결 후 표시됩니다.
           </p>
         </section>
 
         {/* ③ Safety Gate */}
-        <section className="mb-5">
-          <h2 className="mb-2 text-sm font-bold text-gray-700">
+        <section className="mb-6">
+          <h2 className="mb-2 text-base font-bold text-content-primary">
             ③ Safety Gate — 걸림 {failed.length} · 미실행 {notRun.length} / {gates.length}관문
           </h2>
           {gates.length === 0 ? (
-            <p className="text-sm text-gray-500">기록된 관문 결과가 없습니다.</p>
+            <p className="text-sm text-content-muted">기록된 관문 결과가 없습니다.</p>
           ) : (
             <table className="w-full border-collapse text-sm">
               <tbody>
                 {gates.map((g) => (
-                  <tr key={g.gate} className="border-b border-gray-100">
+                  <tr key={g.gate} className="border-b border-subtle">
                     <td className="w-10 py-1.5 text-center">{g.gate}</td>
                     <td className="w-24 py-1.5 text-xs">{GATE_STATUS_LABEL[g.outcome] ?? g.outcome}</td>
                     {/* 🔴 판정부가 코드 · 개수만 담도록 만들어져 있다 */}
-                    <td className="py-1.5 text-xs text-gray-600">{g.detail}</td>
+                    <td className="py-1.5 text-xs text-content-secondary">{g.detail}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-          <p className="mt-2 text-xs text-gray-500">
+          <p className="mt-2 text-xs text-content-muted">
             AI 티 태그 {row.aiToneTags.length === 0 ? '—' : row.aiToneTags.join(' · ')}
           </p>
         </section>
 
         {/* ④ 소스 — 🔴 원문 전문은 저장하지 않는다 */}
-        <section className="mb-5">
-          <h2 className="mb-2 text-sm font-bold text-gray-700">④ 소스</h2>
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-gray-200 px-4 py-3 text-sm">
-            <dt className="text-gray-500">topicTags</dt>
+        <section className="mb-6">
+          <h2 className="mb-2 text-base font-bold text-content-primary">④ 소스</h2>
+          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
+            <dt className="text-content-muted">topicTags</dt>
             <dd>{row.topicTags.length === 0 ? '—' : row.topicTags.join(' · ')}</dd>
-            <dt className="text-gray-500">storyRefs</dt>
+            <dt className="text-content-muted">storyRefs</dt>
             <dd>{row.storyRefs.length === 0 ? '—' : `${row.storyRefs.length}건`}</dd>
-            <dt className="text-gray-500">seedRef</dt>
+            <dt className="text-content-muted">seedRef</dt>
             <dd className="font-mono text-xs">{row.seedRef ?? '—'}</dd>
-            <dt className="text-gray-500">대상 글</dt>
+            <dt className="text-content-muted">대상 글</dt>
             <dd className="font-mono text-xs">{row.targetPostId ?? '— (미연결)'}</dd>
           </dl>
-          <p className="mt-1 text-xs text-gray-400">
+          <p className="mt-1 text-xs text-content-muted">
             원문 · 원댓글 전문은 저장하지 않습니다 — 참조만 남깁니다.
           </p>
         </section>
 
         {/* 결정 이력 */}
         <section className="mb-6">
-          <h2 className="mb-2 text-sm font-bold text-gray-700">결정</h2>
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-gray-200 px-4 py-3 text-sm">
-            <dt className="text-gray-500">생성</dt>
+          <h2 className="mb-2 text-base font-bold text-content-primary">결정 기록</h2>
+          <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md [overflow-wrap:anywhere] border border-subtle bg-surface-card px-4 py-3 text-sm">
+            <dt className="text-content-muted">생성</dt>
             <dd>{formatKst(row.createdAt)}</dd>
-            <dt className="text-gray-500">결정자</dt>
+            <dt className="text-content-muted">결정자</dt>
             <dd>{row.decidedBy ?? '—'}</dd>
-            <dt className="text-gray-500">결정 시각</dt>
+            <dt className="text-content-muted">결정 시각</dt>
             <dd>{row.decidedAt === null ? '—' : formatKst(row.decidedAt)}</dd>
-            <dt className="text-gray-500">폐기 사유</dt>
+            <dt className="text-content-muted">폐기 사유</dt>
             <dd>
               {row.declineReason === null
                 ? '—'
@@ -225,44 +245,75 @@ export default async function PersonaCandidateDetailPage(
           </dl>
         </section>
 
-        {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
-        <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+        </div>
+        {/* 🔴 할 일은 운영자가 실제로 하는 순서다 — 작업 1 결정 → 작업 2 대상 지정 → 작업 3 발행.
+              구역마다 머리에 지금 값을 보인다(기존 컬럼을 그대로 읽은 것 · 새 상태가 아니다).
+              세 action 은 그대로 따로다 — 한 버튼에 합치지 않는다.
+              승인 철회는 정상 순서 밖이라 맨 아래 「위험 작업」으로 뺐다. */}
+        <div className="mt-6 flex min-w-0 flex-col gap-4 lg:sticky lg:top-8 lg:mt-0">
+        <ol className="m-0 flex list-none flex-col gap-6 p-0" aria-label="처리 순서">
+          <li>
+            <StepHead n={1} title="결정" state={CANDIDATE_STATUS_LABEL[row.status] ?? row.status} tone="neutral" />
+            {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
+            <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+            {row.declineReason !== null && (
+              <p className="mt-2 text-xs text-content-secondary">
+                폐기 사유 —{' '}
+                {DECLINE_REASONS.find((r) => r.code === row.declineReason)?.label ?? row.declineReason}
+              </p>
+            )}
+          </li>
 
-        {/* 🔴 승인해 두고 아직 공개하지 않은 후보를 거둬들이는 자리.
-              결정(PENDING) 버튼과 **다른 자리**다 — 결정 기록을 덮지 않는다. */}
-        <PersonaCandidateWithdraw
-          candidateId={row.id}
-          status={row.status as CandidateStatus}
-          publishedCommentId={row.publishedCommentId}
-          approvedBy={row.decidedBy}
-          approvedAt={row.decidedAt}
-        />
+          <li>
+            <StepHead n={2} title="대상 지정"
+              state={row.targetPostId === null ? '지정 안 됨' : '지정됨'} tone={row.targetPostId === null ? 'warning' : 'success'} />
+            {/* 🔴 대상 글 지정은 발행이 아니다. targetPostId 한 컬럼만 바꾼다.
+                  발행보다 위에 둔다 — 대상을 정해야 발행이 가능해지는 순서다. */}
+            <PersonaCandidateTarget
+              candidateId={row.id}
+              status={row.status as CandidateStatus}
+              targetPostId={row.targetPostId}
+              publishedCommentId={row.publishedCommentId}
+            />
+          </li>
 
-        {/* 🔴 대상 글 지정은 발행이 아니다. targetPostId 한 컬럼만 바꾼다.
-              발행 버튼보다 위에 둔다 — 대상을 정해야 발행이 가능해지는 순서다. */}
-        <PersonaCandidateTarget
-          candidateId={row.id}
-          status={row.status as CandidateStatus}
-          targetPostId={row.targetPostId}
-          publishedCommentId={row.publishedCommentId}
-        />
+          <li>
+            <StepHead n={3} title="발행"
+              state={row.publishedCommentId === null ? '발행 전' : '발행됨'} tone={row.publishedCommentId === null ? 'neutral' : 'success'} />
+            {/* 🔴 발행은 승인과 다른 축이다 — 별도 버튼 · 별도 server action.
+                  승인 버튼으로는 PUBLISHED 에 도달할 수 없다(persona-candidate-rules.ts). */}
+            <PersonaCandidatePublish
+              candidateId={row.id}
+              status={row.status as CandidateStatus}
+              publishedCommentId={row.publishedCommentId}
+              targetPostId={row.targetPostId}
+            />
+          </li>
+        </ol>
 
-        {/* 🔴 발행은 승인과 다른 축이다 — 별도 버튼 · 별도 server action.
-              승인 버튼으로는 PUBLISHED 에 도달할 수 없다(persona-candidate-rules.ts). */}
-        <PersonaCandidatePublish
-          candidateId={row.id}
-          status={row.status as CandidateStatus}
-          publishedCommentId={row.publishedCommentId}
-          targetPostId={row.targetPostId}
-        />
-
-        {row.declineReason !== null && (
-          <p className="mt-2 text-xs text-gray-600">
-            폐기 사유 —{' '}
-            {DECLINE_REASONS.find((r) => r.code === row.declineReason)?.label ?? row.declineReason}
-          </p>
+        {/* 🔴 위험 작업 — 승인해 두고 아직 공개하지 않은 후보를 거둬들이는 자리.
+              결정(PENDING) 버튼과 **다른 자리**다 — 결정 기록을 덮지 않는다.
+              발행된 댓글 내리기(작업 3)와 합치지 않는다. 조건 · 확인창 · action 은 컴포넌트 그대로이고,
+              구역은 컴포넌트가 무언가를 그릴 때와 같은 조건에서만 연다(빈 위험 구역을 띄우지 않는다). */}
+        {canWithdraw(row.status as CandidateStatus) && (row.publishedCommentId === null || row.publishedCommentId === '') && (
+          <section aria-labelledby="danger-zone" className="mt-4 rounded-md border-2 border-dashed border-state-danger p-3 lg:p-4">
+            <h2 id="danger-zone" className="m-0 text-base font-bold text-state-danger">⚠ 위험 작업</h2>
+            <p className="mb-3 mt-1 text-xs leading-relaxed text-content-secondary">
+              승인 철회 — 이 후보는 공개되지 않고 폐기(DECLINED)로 바뀝니다. 되돌리는 버튼은 없습니다.
+              이미 공개된 댓글을 내리는 일은 여기가 아니라 작업 3 발행에서 합니다.
+            </p>
+            <PersonaCandidateWithdraw
+              candidateId={row.id}
+              status={row.status as CandidateStatus}
+              publishedCommentId={row.publishedCommentId}
+              approvedBy={row.decidedBy}
+              approvedAt={row.decidedAt}
+            />
+          </section>
         )}
+        </div>
+        </div>
       </div>
-    </PageShell>
+    </>
   )
 }

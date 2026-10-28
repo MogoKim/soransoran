@@ -5,6 +5,7 @@ import { withdrawPersonaCandidate } from '@/lib/actions/persona-candidate'
 import {
   DECLINE_REASONS, canWithdraw, WITHDRAWABLE_STATUSES, type CandidateStatus,
 } from '@/lib/persona-candidate-rules'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 승인 철회 — 🔴 **승인해 두고 아직 공개하지 않은 후보를 거둬들인다**
@@ -64,7 +65,7 @@ export default function PersonaCandidateWithdraw({
 
   if (done !== null) {
     return (
-      <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-700">
+      <div className="rounded-md border border-subtle bg-surface-page px-4 py-3 text-sm text-content-secondary">
         승인을 거둬들였습니다 — {done}. 이 후보는 공개되지 않습니다.
       </div>
     )
@@ -75,16 +76,17 @@ export default function PersonaCandidateWithdraw({
     : `${approvedBy ?? '(모름)'} · ${approvedAt?.toISOString().slice(0, 16).replace('T', ' ') ?? '(모름)'}`
 
   return (
-    <div className="rounded-lg border border-gray-300 bg-white px-4 py-3">
-      <h3 className="mb-1 text-sm font-bold text-gray-900">승인 철회</h3>
-      <p className="mb-3 text-xs leading-relaxed text-gray-600">
+    /* 🔴 위험 작업 구역(빨간 점선) 안에만 놓인다 — 상자를 한 겹 더 두르지 않고 구분선으로 가른다 */
+    <div className="border-t border-subtle pt-4">
+      <h3 className="mb-1 text-sm font-bold text-content-primary">승인 철회</h3>
+      <p className="mb-3 text-xs leading-relaxed text-content-secondary">
         승인은 했지만 아직 공개되지 않은 후보입니다 (현재 {status}).
         거둬들이면 공개 대상에서 빠집니다.
         <br />
         🔴 원래 승인 기록({stamp ?? '없음'})은 지워지지 않고 사유와 함께 남습니다.
       </p>
 
-      <label htmlFor="withdraw-reason" className="mb-1 block text-xs font-bold text-gray-700">
+      <label htmlFor="withdraw-reason" className="mb-1 block text-xs font-bold text-content-secondary">
         거둬들이는 사유
       </label>
       <select
@@ -92,7 +94,7 @@ export default function PersonaCandidateWithdraw({
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         disabled={pending}
-        className="mb-3 min-h-[52px] w-full rounded-lg border border-gray-300 bg-white px-3 text-sm"
+        className="mb-3 min-h-[52px] w-full rounded-md border border-interactive bg-surface-card px-3 text-sm lg:min-h-[44px]"
       >
         <option value="">— 선택 —</option>
         {DECLINE_REASONS.map((r) => (
@@ -106,19 +108,19 @@ export default function PersonaCandidateWithdraw({
         type="button"
         onClick={run}
         disabled={pending}
-        className="min-h-[52px] rounded-lg border border-gray-400 bg-white px-5 text-sm text-gray-700 disabled:opacity-50"
+        className={adminButtonClass('danger')}
       >
         {pending ? '처리 중…' : '승인 철회'}
       </button>
 
-      <p className="mt-2 text-xs text-gray-500">
+      <p className="mt-2 text-xs text-content-muted">
         🔴 이미 공개된 댓글은 여기서 내릴 수 없습니다 — 그것은 삭제 경로입니다.
         <br />
         철회 가능 상태: {WITHDRAWABLE_STATUSES.join(' · ')}
       </p>
 
       {error !== null && (
-        <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>
+        <p className="mt-2 rounded-md border border-state-danger bg-[color:var(--admin-danger-soft)] px-3 py-2 text-xs text-state-danger">{error}</p>
       )}
     </div>
   )

@@ -15,7 +15,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
-  FOLLOWUP_KEY_PREFIX, followupEditDiffOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
+  FOLLOWUP_KEY_PREFIX, followupEditDiffOf, followupRoleOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
   followupStageOf, orderFollowupGo, pickFollowupPersona, readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
   type FollowupCommentRow, type FollowupPostFacts, type FollowupPostVerdict,
 } from '../../src/lib/persona-comment-followup'
@@ -45,6 +45,7 @@ import { gateInputOf, sourceTextsOf, type GateContext, type SourcePost, type Tar
 import { runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { judgeGateReport } from '../../src/lib/persona-comment-gate-report'
+import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-write'
 
 /**
  * 🔴 **이 회차가 추가 댓글 단계를 돌 수 있는가** — 진입점은 이 함수 하나로 정한다(E6).
@@ -225,7 +226,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const [qs, ls, reports, openRows, fuRows] = await Promise.all([
     prisma.personaApprovalQueue.findMany({
       where: { publishedCommentId: { in: personaCommentIds } },
-      select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
+      select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true, reactionType: true },
     }),
     prisma.personaActivityLog.findMany({
       where: { kind: 'comment', targetId: { in: personaCommentIds } },
@@ -254,6 +255,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       id: c.id, postId: c.postId, parentId: c.parentId, createdAt: c.createdAt, isDeleted: c.isDeleted, authorId: c.authorId,
       commentOrigin: c.commentOrigin, personaId: c.personaId, operatorWriterId: c.operatorWriterId,
       reaction: c.commentOrigin === 'PERSONA' ? reactionOf(c.content) : null,
+      role: c.commentOrigin === 'PERSONA' ? followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id)) : null,
       reported: reported.has(c.id),
       provenance: c.commentOrigin !== 'PERSONA' ? null : personaCommentProvenanceOf({
         comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
@@ -379,6 +381,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
           id: postId, title: src.title, bodyDigest: src.content.slice(0, DIGEST_CHARS), boardLabel: src.boardType,
           existingCommentDigests: liveComments.map((c) => (contentOf.get(c.id) ?? '').slice(0, COMMENT_DIGEST_CHARS)),
           ...(replyToDigest === undefined ? {} : { replyToDigest }),
+          ...(go.speaker.kind === 'author' ? { authorReply: true as const } : {}),
         },
         reactionRole: role,
         voice: voiceEvidenceFromAssets({ voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, recentTexts: pe.comments.map((c) => c.content) }),
@@ -443,23 +446,24 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const writer: PipelineWriter = async ({ input, text, gates, gateStatus, provenance }) => {
     const p = planOf(input)
     if (p === undefined) return { created: false, reason: '추가 댓글 계획을 찾지 못했다' }
-    try {
-      await prisma.personaApprovalQueue.create({
-        data: {
-          persona: { connect: { code: input.personaCode } }, targetPostId: input.post.id, status: 'PENDING',
-          candidateText: text, reactionType: input.reactionRole, gateStatus,
-          gateResults: gates as unknown as Prisma.InputJsonValue,
-          // 🔴 멱등 열쇠는 (글 · 순번) — 같은 자리에 두 번 들어가지 않는다
-          dedupKey: p.go.key,
-          editDiff: followupEditDiffOf(stampOf(input.post.id, p.go)) as unknown as Prisma.InputJsonValue,
-          generatedModel: provenance.model, canonRunId: provenance.canonRunId, canonDigest: provenance.canonDigest,
-        },
-      })
-      return { created: true, reason: '추가 댓글 PENDING 적재' }
-    } catch (e) {
-      const code = (e as { code?: string }).code
-      return { created: false, reason: code === 'P2002' ? '🔴 같은 자리(글·순번) 열쇠가 이미 있다(fail-closed)' : `적재 실패 — ${code ?? 'UNKNOWN'}` }
-    }
+    // 🔴 저장은 공용 계약 하나다 — 트랜잭션 · Post 잠금 · 생성 때 게시판(boardLabel = boardType) 재확인 뒤 create
+    //    (persona-candidate-write.ts). provider 호출은 이미 끝났다 — 잠금은 여기서 처음 잡는다.
+    const res = await createPendingCandidateLocked(prisma, {
+      postId: input.post.id,
+      expectedBoardType: input.post.boardLabel,
+      data: {
+        persona: { connect: { code: input.personaCode } },
+        candidateText: text, reactionType: input.reactionRole, gateStatus,
+        gateResults: gates as unknown as Prisma.InputJsonValue,
+        // 🔴 멱등 열쇠는 (글 · 순번) — 같은 자리에 두 번 들어가지 않는다
+        dedupKey: p.go.key,
+        editDiff: followupEditDiffOf(stampOf(input.post.id, p.go)) as unknown as Prisma.InputJsonValue,
+        generatedModel: provenance.model, canonRunId: provenance.canonRunId, canonDigest: provenance.canonDigest,
+      },
+    })
+    if (res.created) return { created: true, reason: '추가 댓글 PENDING 적재' }
+    const code = res.errorCode // 🔴 중복은 unique constraint(P2002)가 가른다
+    return { created: false, reason: code === 'P2002' ? '🔴 같은 자리(글·순번) 열쇠가 이미 있다(fail-closed)' : res.reason }
   }
   const result = await runEnqueuePipeline({
     selection: deps.canon.selection, canon: deps.canon.canon, targets: planned.map((p) => p.target),
@@ -479,6 +483,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     },
     gate, writer, providerCallLimit: planned.length, limit: allowed, oneCreatedPerPost: true,
   })
+  if (result.stoppedReason !== null) lines.push(`생성 멈춤: ${result.stoppedReason}`)
   for (const o of result.outcomes) lines.push(`   추가 ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}`)
   const sweepAfter = await sweepFollowupLane(prisma, now)
   return {

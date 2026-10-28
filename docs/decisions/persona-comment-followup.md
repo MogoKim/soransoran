@@ -1,6 +1,6 @@
 # 글당 Persona 댓글 1~5 — 첫 댓글 뒤 선택적 추가 댓글(0~4)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-15 운영 확인 · 상태: **code PASS · deployed PASS · D10 bounded canary 운영 대기**
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-19 정책 보정 · 상태: **운영 공통 profile code PASS 후보 · 배포 전**
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
@@ -8,11 +8,12 @@
 - 자동 글마다 60분 안 첫 댓글 1건 계약과 provenance는 **그대로**다. 첫 댓글 경로는 한 바이트도 다르게 돌지 않는다
   (첫 댓글 프롬프트 바이트 동일 · 첫 댓글 격리 DB 검사 39/39 · 단계 증거 격리 DB 검사 81/81).
 - 첫 댓글 뒤 **아직 답이 없는 질문·반론·경험·공감**이 있을 때만 Persona 댓글을 한 건씩, 시간차를 두고 잇는다. 글당 Persona 총 5건이 상한이다.
-- 러너 · 발행 트랜잭션 · 장부 · 단계 증거 분리 · CI 까지 **실행 경로가 연결됐다.** 보조 Mac runtime `6f28fc3`에는
-  E6 consumer 경유 plist, 스위치 `on`, 승인된 D10 profile이 설치돼 있다.
-- 2026-10-15 현재 공개 단계는 `d3`이므로 profile 단계가 일치하지 않아 추가 댓글은 0건이 정상이다. 첫 D10 자연 회차에서
-  code PASS와 deployed PASS가 실제 1~5개 대화로 이어지는지 operating PASS를 판정한다.
-- `SORAN_EVENT_WAKE`는 계속 unset(OFF)이다. D20 이상 profile은 아직 승인·설치되지 않았다.
+- 러너 · 발행 트랜잭션 · 장부 · 단계 증거 분리 · CI 까지 실행 경로가 연결됐다. 기존 보조 Mac runtime에는
+  E6 consumer 경유 plist, 스위치 `on`, 승인된 D10 전용 profile이 설치돼 있었다.
+- 2026-10-19부터 기능 사용 가능 여부를 단계와 분리한다. 승인된 운영 공통 profile(`stage: all`)은 d5부터 D100까지
+  같은 안전 관문을 쓰고, 공개량·Persona·예산·회차 상한만 실측에 맞춰 조정한다. 모든 글을 5건으로 채우지는 않는다.
+- `SORAN_EVENT_WAKE`는 댓글 첫 반응을 재촉하는 별도 스위치다. 공급 깨움 C3는 아직 미구현이므로 `all`로 설정해도
+  수집 뒤 공급을 깨우지 못한다. 정기 공급과 fresh-first 선택이 현재 경로이고, C3는 별도 구현·검증 전 운영 사실로 쓰지 않는다.
 
 ## 1. 실행 경로
 
@@ -123,30 +124,30 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 - 변이 시험이 실제로 일을 했다: 실회원 댓글이 첫 댓글 뒤에 있던 우회 반례는 모든 사례가 "마지막 말 실회원" 하나로 막혀 의도한 사유를 못 보고 있었다 — 사유 단언으로 고쳤다.
   트랜잭션의 "자기 댓글 답글" 분기는 혼자서는 절대 걸리지 않는 죽은 분기라 지웠다(같은 Persona 규칙이 막는다).
 
-## 9. D10 bounded canary 승인과 E5 runbook (2026-10-14)
+## 9. 운영 공통 profile 승인과 적용 runbook (2026-10-19)
 
-이 값은 D100 영구값이 아니라 **첫 D10 실운영 canary** 승인값이다. 그날 정본 공개 단계가 `d10`이 아니면
-profile 단계 불일치로 0건(fail-closed)이다.
+이 값은 기능 사용 가능 여부를 단계와 분리하는 운영 공통 profile이다. 수량과 비용은 영구값이 아니며 운영 실측으로
+조정한다. 값이 없거나 승인·판독·장부·감사 관문이 깨지면 0건(fail-closed)이다.
 
 ```json
 {
   "v": "followup-profile-v1",
-  "stage": "d10",
+  "stage": "all",
   "dailyCount": 40,
   "dailyUsd": 0.08,
   "runMax": 3,
   "perPersonaDailyMax": 3,
   "approvedBy": "founder",
-  "approvedAt": "2026-10-14T21:37:00+09:00"
+  "approvedAt": "2026-10-19T15:25:00+09:00"
 }
 ```
 
-정본 profile 경로는 `~/Library/Application Support/soransoran/followup-profile-v1-d10.json`이다.
+정본 profile 경로는 `~/Library/Application Support/soransoran/followup-profile-v1-operating.json`이다.
 정본 env `~/Library/Application Support/soransoran/env.local`에는 아래 두 키만 추가한다.
 
 ```text
 SORAN_PERSONA_COMMENT_FOLLOWUP=on
-SORAN_PERSONA_COMMENT_FOLLOWUP_PROFILE=/Users/<owner>/Library/Application Support/soransoran/followup-profile-v1-d10.json
+SORAN_PERSONA_COMMENT_FOLLOWUP_PROFILE=/Users/<owner>/Library/Application Support/soransoran/followup-profile-v1-operating.json
 ```
 
 적용 순서는 다음과 같다.

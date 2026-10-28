@@ -16,6 +16,8 @@ import {
   AdminCell,
   AdminPageHeader,
   AdminSection,
+  AdminStat,
+  AdminStatStrip,
   AdminTable,
 } from '@/components/admin/AdminUi'
 import MemberAdminTabs from '@/components/admin/MemberAdminTabs'
@@ -58,10 +60,11 @@ function StatRow({
   children: React.ReactNode
   emphasis?: boolean
 }) {
+  /* 🔴 행 사이는 구분선 하나. 합계 행은 색 면 대신 먹색 윗선 + 굵기로 가른다(Admin Golden Master) */
   return (
     <li
-      className={`flex flex-col gap-1.5 rounded-lg border border-subtle p-3 lg:grid lg:min-h-[52px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-2 ${
-        emphasis ? 'bg-surface-soft' : 'bg-surface-card'
+      className={`flex flex-col gap-1.5 border-b border-[color:var(--admin-divider)] px-4 py-3 last:border-b-0 lg:grid lg:min-h-[52px] lg:items-center lg:gap-4 lg:py-2 ${
+        emphasis ? 'font-bold shadow-[inset_0_1px_0_var(--admin-text)]' : ''
       } ${columns}`}
     >
       {children}
@@ -70,14 +73,9 @@ function StatRow({
 }
 
 /** 큰 숫자 한 칸 — 제목 · 값 · 분모 설명 */
+/** 숫자 한 칸 — 한 띠 안의 칸(AdminStatStrip)이다. 카드로 두르지 않는다 */
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
-  return (
-    <div className="rounded-lg border border-subtle bg-surface-card p-3">
-      <p className="m-0 text-sm text-content-muted">{label}</p>
-      <p className="m-0 mt-1 break-words text-lg font-bold tabular-nums text-content-primary">{value}</p>
-      {note ? <p className="m-0 mt-1 text-xs text-content-muted">{note}</p> : null}
-    </div>
-  )
+  return <AdminStat label={label} value={value} note={note} />
 }
 
 const fifties = (c: AgeCounts) => sumBands(c, FIFTIES_BANDS)
@@ -93,18 +91,20 @@ export default async function AdminCustomerCompositionPage() {
   const sevenDayDenominator = totalOf(data.sevenDay.complete)
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
+        group="회원"
         title="고객 구성"
         description={`집계 기준 ${formatKst(data.measuredAt)} · 분석연령 기준연도 ${data.baseYear}년(KST)`}
       />
       <MemberAdminTabs current="composition" />
 
       <AdminSection
+        className="mt-0"
         title="실제 여성 가입 완료 고객"
         description="카카오로 가입하고 가입 절차를 마친 여성 회원입니다. 페르소나·운영 작성자·관리자·시험 계정은 뺐습니다."
       >
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <AdminStatStrip columns={3}>
           <Stat label="실제 여성 고객" value={`${femaleTotal}명`} note="차단 회원 포함" />
           <Stat
             label="50대 (50~59세)"
@@ -131,7 +131,7 @@ export default async function AdminCustomerCompositionPage() {
             value={`${data.onboarded.male}명`}
             note="가입 완료 회원 중 · 고객 수에서 뺌"
           />
-        </div>
+        </AdminStatStrip>
       </AdminSection>
 
       <AdminSection
@@ -143,21 +143,21 @@ export default async function AdminCustomerCompositionPage() {
           head={
             <>
               <span>구간</span>
-              <span>인원 (비율)</span>
+              <span className="text-right">인원 (비율)</span>
             </>
           }
         >
           {AGE_BAND_ORDER.map((key) => (
             <StatRow key={key} columns={COMPOSITION_COLS}>
-              <span className="font-bold text-content-primary">{ageBandLabel(key)}</span>
-              <AdminCell label="인원" className="tabular-nums">
+              <span className="font-semibold text-content-primary">{ageBandLabel(key)}</span>
+              <AdminCell label="인원" className="tabular-nums lg:text-right">
                 {formatShare(data.femaleByAge[key], femaleTotal)}
               </AdminCell>
             </StatRow>
           ))}
           <StatRow columns={COMPOSITION_COLS} emphasis>
             <span className="font-bold text-content-primary">50대 합계</span>
-            <AdminCell label="인원" className="tabular-nums">
+            <AdminCell label="인원" className="tabular-nums lg:text-right">
               {formatShare(fifties(data.femaleByAge), femaleTotal)}
             </AdminCell>
           </StatRow>
@@ -168,7 +168,7 @@ export default async function AdminCustomerCompositionPage() {
         title="참여 회원"
         description="지금 공개된 글과 삭제되지 않은 댓글만 셉니다. 한 사람이 여러 번 써도 한 명입니다. 분모: 차단되지 않은 실제 여성 고객."
       >
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <AdminStatStrip columns={4}>
           <Stat label="일반 글 작성" value={formatShare(totalOf(p.generalPost), eligibleTotal)} note="가입인사 제외" />
           <Stat label="댓글 작성" value={formatShare(totalOf(p.comment), eligibleTotal)} />
           <Stat label="일반 글 또는 댓글" value={formatShare(totalOf(p.postOrComment), eligibleTotal)} />
@@ -177,7 +177,7 @@ export default async function AdminCustomerCompositionPage() {
             value={formatShare(totalOf(p.greeting), eligibleTotal)}
             note="일반 글 참여와 합치지 않음"
           />
-        </div>
+        </AdminStatStrip>
       </AdminSection>
 
       <AdminSection
@@ -189,34 +189,34 @@ export default async function AdminCustomerCompositionPage() {
           head={
             <>
               <span>구간</span>
-              <span>대상</span>
-              <span>일반 글</span>
-              <span>댓글</span>
-              <span>글 또는 댓글</span>
-              <span>가입인사</span>
-              <span>7일 내 참여</span>
+              <span className="text-right">대상</span>
+              <span className="text-right">일반 글</span>
+              <span className="text-right">댓글</span>
+              <span className="text-right">글 또는 댓글</span>
+              <span className="text-right">가입인사</span>
+              <span className="text-right">7일 내 참여</span>
             </>
           }
         >
           {AGE_BAND_ORDER.map((key) => (
             <StatRow key={key} columns={PARTICIPATION_COLS}>
-              <span className="font-bold text-content-primary">{ageBandLabel(key)}</span>
-              <AdminCell label="대상" className="tabular-nums">
+              <span className="font-semibold text-content-primary">{ageBandLabel(key)}</span>
+              <AdminCell label="대상" className="tabular-nums lg:text-right">
                 {p.eligible[key]}명
               </AdminCell>
-              <AdminCell label="일반 글" className="tabular-nums">
+              <AdminCell label="일반 글" className="tabular-nums lg:text-right">
                 {formatShare(p.generalPost[key], p.eligible[key])}
               </AdminCell>
-              <AdminCell label="댓글" className="tabular-nums">
+              <AdminCell label="댓글" className="tabular-nums lg:text-right">
                 {formatShare(p.comment[key], p.eligible[key])}
               </AdminCell>
-              <AdminCell label="글 또는 댓글" className="tabular-nums">
+              <AdminCell label="글 또는 댓글" className="tabular-nums lg:text-right">
                 {formatShare(p.postOrComment[key], p.eligible[key])}
               </AdminCell>
-              <AdminCell label="가입인사" className="tabular-nums">
+              <AdminCell label="가입인사" className="tabular-nums lg:text-right">
                 {formatShare(p.greeting[key], p.eligible[key])}
               </AdminCell>
-              <AdminCell label="7일 내 참여" className="tabular-nums">
+              <AdminCell label="7일 내 참여" className="tabular-nums lg:text-right">
                 {formatShare(data.sevenDay.participated[key], data.sevenDay.complete[key])}
               </AdminCell>
             </StatRow>
@@ -233,18 +233,18 @@ export default async function AdminCustomerCompositionPage() {
           head={
             <>
               <span>게시판</span>
-              <span>일반 글 작성 회원</span>
-              <span>댓글 작성 회원</span>
+              <span className="text-right">일반 글 작성 회원</span>
+              <span className="text-right">댓글 작성 회원</span>
             </>
           }
         >
           {data.boards.map((b) => (
             <StatRow key={b.boardType} columns={BOARD_COLS}>
-              <span className="font-bold text-content-primary">{boardLabel(b.boardType)}</span>
-              <AdminCell label="일반 글" className="tabular-nums">
+              <span className="font-semibold text-content-primary">{boardLabel(b.boardType)}</span>
+              <AdminCell label="일반 글" className="tabular-nums lg:text-right">
                 {formatShare(b.postAuthors, eligibleTotal)}
               </AdminCell>
-              <AdminCell label="댓글" className="tabular-nums">
+              <AdminCell label="댓글" className="tabular-nums lg:text-right">
                 {formatShare(b.commentAuthors, eligibleTotal)}
               </AdminCell>
             </StatRow>
@@ -256,7 +256,7 @@ export default async function AdminCustomerCompositionPage() {
         title="가입 후 7일 내 참여"
         description="가입 완료 시각은 회원의 가장 이른 이용약관 동의 시각입니다(계정 생성일이 아닙니다). 그 뒤 7일 안에 일반 글이나 댓글을 남긴 회원을 셉니다. 재방문을 뜻하지 않습니다."
       >
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <AdminStatStrip columns={3}>
           <Stat
             label="7일 내 참여"
             value={formatShare(totalOf(data.sevenDay.participated), sevenDayDenominator)}
@@ -268,11 +268,11 @@ export default async function AdminCustomerCompositionPage() {
             value={`${data.sevenDay.noBasis}명`}
             note="가입 완료 시각 근거(약관 동의 기록)가 없음"
           />
-        </div>
+        </AdminStatStrip>
       </AdminSection>
 
       <AdminSection title="집계 기준과 한계">
-        <ul className="m-0 mt-2 flex list-disc flex-col gap-1.5 pl-5 text-sm text-content-secondary">
+        <ul className="m-0 mt-3 flex list-disc flex-col gap-1.5 pl-5 text-sm text-content-secondary">
           <li>화면을 열 때마다 새로 셉니다. 기준 시각은 맨 위에 있습니다.</li>
           <li>성별·출생연도는 카카오가 준 값입니다. 다시 로그인하지 않은 회원은 예전 값이 남아 있을 수 있습니다.</li>
           <li>참여는 지금 공개 상태인 글과 삭제되지 않은 댓글만 셉니다. 숨김·삭제된 활동과 차단 회원의 활동은 빠집니다.</li>
@@ -280,6 +280,6 @@ export default async function AdminCustomerCompositionPage() {
           <li>방문 기록이 없어 재방문은 셀 수 없습니다. 7일 내 참여는 가입 당일 바로 쓴 경우도 포함합니다.</li>
         </ul>
       </AdminSection>
-    </main>
+    </div>
   )
 }

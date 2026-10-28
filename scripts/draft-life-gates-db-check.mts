@@ -2,8 +2,8 @@
 /**
  * 🔴 **초안 게이트 → 적재 실제 경로** (2026-09-26 · 격리 Postgres 전용)
  *
- *   운영 기계 초안 4편은 semanticReview `clean` · machineOutcome `adopt` 로 **DB 큐 행(APPROVED ·
- *   machine:auto-draft-v5)** 이 되어 사람 검토를 기다렸다. 이 검사는 같은 원문·계획·초안·카드로
+ *   운영 기계 초안 4편은 semanticReview `clean` · machineOutcome `adopt` 뒤에도 옛 후단 판정이
+ *   품질을 다시 해석했다. 이 검사는 같은 원문·계획·초안·카드로
  *   **적재까지 실제로 돌린다**:
  *
  *     runContentCore(가짜 provider · 운영 답 그대로) → pickV2(러너가 넘기는 칸 그대로)
@@ -50,13 +50,14 @@ const fxMod = await import('./lib/draft-gate-fixtures.mjs')
 const { runFixturePath, FIXTURE_NOW } = fxMod
 /** 🔴 운영 실측 6 + 마스터 재검토 반례 6(남의 집안 3 · 맨 남편 · 돼서 지금 · 되면 미래) */
 const lifeMod = await import('./lib/life-gate-fixtures.mjs')
-/** 🔴 (quality-v2) 생활 일관성 — 운영 회귀 4 · 대조 8 · 사람 검토 2 */
+/** 🔴 생활 일관성 — 운영 회귀 4 · 대조 8 · 과거 검토군 2 */
 const LIFE = lifeMod.LIFE_FIXTURES
 const FIXTURES = [...fxMod.FIXTURES, ...fxMod.REVIEW_FIXTURES]
 const { DRAFT_LIFE_REVIEW_HOLD } = await import('../src/lib/semantic-summary-codes')
 const { candidateEnvelope } = await import('./lib/candidate-envelope.mjs')
 const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
 const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
+const { RULE_VERSION: AUTO_JUDGE_RULE_VERSION } = await import('../src/lib/micro-seed-auto-judge')
 const { copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION } = await import('../src/lib/draft-originality')
 const { MACHINE_DECIDED_BY } = await import('../src/lib/micro-seed-supply-autofill')
 
@@ -110,7 +111,7 @@ async function main(): Promise<void> {
       },
       sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title),
       sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-      autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
+      autoJudge: { ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow', boardTopic: 'FREE' },
       ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
       // 🔴 러너와 같다 — 채택 판정이 낸 모호 축
       lifeReview: r.pick!.lifeReview ?? null,
@@ -145,14 +146,14 @@ async function main(): Promise<void> {
   check('🔴 공급은 발행하지 않는다 — Post 0', (await prisma.post.count()) === 0)
 
   /**
-   * 🔴 **(quality-v2) 생활 일관성 — 같은 실제 적재기 경로를 한 번 더 돈다** (2026-09-28).
-   *    운영 회귀 4건은 큐 행 0 · 대조 8건은 깨끗한 행 · 모호 2건은 `DRAFT_LIFE_REVIEW:<코드>` 경고가
-   *    붙은 행이 되어야 한다(자동 READY 제외 · 사람 검토). 새 생성 경로와 **캐시 채택 경로** 둘 다 싣는다.
+   * 🔴 **생활 일관성 — 같은 실제 적재기 경로를 한 번 더 돈다**.
+   *    차단 반례는 큐 행 0, 대조군은 깨끗한 행이어야 한다. 비차단 advisory가 생기면
+   *    `draftLifeAdvisories`에 기록하되 자동 READY를 막지 않는다. 새 생성과 **캐시 채택 경로** 둘 다 싣는다.
    *    적재 상한이 있어 앞 회차 행을 격리 DB 에서 비우고(Prisma deleteMany) 새 파일 하나로 돈다.
    */
   for (const cachedAdopt of [false, true]) {
     const tag = cachedAdopt ? '캐시 채택' : '새 생성'
-    console.log(`\n④ (quality-v2) 생활 일관성 · ${tag} 경로 → 실제 적재기 — 회귀 0행 · 모호 행에 사람 검토 경고`)
+    console.log(`\n④ (quality-v25) 생활 일관성 · ${tag} 경로 → 실제 적재기 — 차단은 큐 0 · advisory는 비차단 기록`)
     await prisma.originalPostApprovalQueue.deleteMany({})
     const lifeAdopted: { fx: (typeof LIFE)[number]; r: Awaited<ReturnType<typeof runFixturePath>> }[] = []
     for (const fx0 of LIFE) {
@@ -181,7 +182,7 @@ async function main(): Promise<void> {
         },
         sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title),
         sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-        autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-v2-${fx.source.id}`, provenance: 'machine-shadow' },
+        autoJudge: { ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: 'fixture', model: 'fixture', inputHash: `h-v2-${fx.source.id}`, provenance: 'machine-shadow', boardTopic: 'FREE' },
         ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
         lifeReview: r.pick!.lifeReview ?? null,
       })),
@@ -230,7 +231,7 @@ async function main(): Promise<void> {
   /**
    * 🔴 **(quality-v4) 창업자 gold 30건 → 실제 적재기** — 새 생성 · 캐시 채택 두 경로.
    *    통과 22건은 경고 없는 큐 행(자동 READY 후보) · 중대 결함 3건은 큐 행 0 · 수정·폐기 5건은 큐 행이 없거나
-   *    사람 검토 경고가 붙은 행이다(자동 READY 0). 같은 원천 중복 0.
+   *    fail-closed 경고가 붙은 행이다(자동 READY 0). 같은 원천 중복 0.
    */
   {
     const { GOLD_FIXTURES } = await import('./lib/founder-gold-fixtures.mjs')
@@ -257,7 +258,7 @@ async function main(): Promise<void> {
           },
           sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title),
           sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-          autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-gold-${fx.source.id}`, provenance: 'machine-shadow' },
+          autoJudge: { ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: 'fixture', model: 'fixture', inputHash: `h-gold-${fx.source.id}`, provenance: 'machine-shadow', boardTopic: 'FREE' },
           ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
           lifeReview: r.pick!.lifeReview ?? null,
         })),

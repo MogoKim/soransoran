@@ -37,7 +37,7 @@ commissioning 창: 48~72시간 · 목표 완료 2026-10-18 KST
 research intent
   -> GRAPH_READY
   -> G8_ADMITTED (stable slug)
-  -> APPROVED_PLAN (magazine-article-spec-source/1)
+  -> APPROVED_PLAN (magazine-article-spec-source/2 · 사람 승인 ArticlePlan · articlePlanHash = sourceHash)
   -> SPEC_READY (versioned ArticleSpec)
   -> QUEUED
   -> manuscript -> QA / bounded regeneration -> hero

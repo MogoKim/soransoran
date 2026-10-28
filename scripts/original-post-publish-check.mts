@@ -12,9 +12,11 @@ import {
   ORIGINAL_POST_FLAGS, ORIGINAL_POST_BOARD, FORBIDDEN_POST_KEYS, REQUIRED_POST_KEYS,
   PUBLISHABLE_STATUSES, FIRST_PUBLISH_VERDICT, DAILY_PUBLISH_CAP,
   PUBLISH_BLOCK_CODES, PUBLISH_BLOCK_LABEL,
+  ALLOWED_BOARD_TYPES, routeBoardType, readAutoJudgeFromGateResults,
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
   type PublishCandidate, type PublishBlockCode,
 } from '../src/lib/original-post-publish'
+import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION } from '../src/lib/micro-seed-auto-judge'
 import { judgeRealMember } from '../src/lib/real-member-gate'
 import {
   ORIGINAL_POST_VISIBILITY_FLAGS, MICRO_SEED_POST_VISIBILITY_FLAGS,
@@ -58,6 +60,71 @@ console.log('\n══ 발행 규칙 fixture ══\n')
   if (m.isMicroSeed === o.isMicroSeed) offenders.push('🔴 micro-seed 와 isMicroSeed 가 같다')
   if (offenders.length) bad('🔴 3축 (색인 레인)', offenders.join(' / '))
   else ok('🔴 3축 (색인 레인)', '전부 false · micro-seed 와 정반대')
+}
+
+// ── 🔴 ①-b 게시판 라우팅 — 중심 주제 단일 신호 (2026-10-19 창업자) ──
+{
+  const offenders: string[] = []
+  // allow list 는 둘뿐
+  if (JSON.stringify([...ALLOWED_BOARD_TYPES].sort()) !== JSON.stringify(['FREE', 'MENOPAUSE'])) {
+    offenders.push(`🔴 ALLOWED_BOARD_TYPES=${JSON.stringify(ALLOWED_BOARD_TYPES)}`)
+  }
+  const CUR = CURRENT_AUTO_JUDGE_RULE_VERSION
+  const ex = (gateResults: unknown) => readAutoJudgeFromGateResults(gateResults, { currentRuleVersion: CUR })
+  // ─── extract state (presence/state 신뢰 경계) ───
+  if (ex(null).state !== 'absent') offenders.push('🔴 null gateResults 는 absent')
+  if (ex({}).state !== 'absent') offenders.push('🔴 autoJudge 칸 없음 → absent')
+  if (ex({ autoJudge: null }).state !== 'unknown') offenders.push('🔴 autoJudge=null 은 malformed unknown')
+  if (ex({ autoJudge: { ruleVersion: CUR, boardTopic: 'MENOPAUSE' } }).state !== 'current') offenders.push('🔴 current state 미인식')
+  if (ex({ autoJudge: { ruleVersion: 'auto-judge-v3', boardTopic: null } }).state !== 'known-legacy') offenders.push('🔴 v3 는 known-legacy')
+  if (ex({ autoJudge: { ruleVersion: 'auto-judge-v1' } }).state !== 'unknown') offenders.push('🔴 미확인 v1 은 unknown')
+  if (ex({ autoJudge: { ruleVersion: 'auto-judge-v2c' } }).state !== 'unknown') offenders.push('🔴 prompt 판이었던 v2c 는 unknown')
+  if (ex({ autoJudge: { ruleVersion: 'auto-judge-v5' } }).state !== 'unknown') offenders.push('🔴 미래 판 v5 는 unknown (fail-closed)')
+  if (ex({ autoJudge: { ruleVersion: 'random-string' } }).state !== 'unknown') offenders.push('🔴 모르는 글자는 unknown')
+  if (ex({ autoJudge: {} }).state !== 'unknown') offenders.push('🔴 ruleVersion 결여는 unknown (fail-closed)')
+  if (ex({ autoJudge: { ruleVersion: '' } }).state !== 'unknown') offenders.push('🔴 빈 ruleVersion 은 unknown')
+  if (ex({ autoJudge: [] }).state !== 'unknown') offenders.push('🔴 autoJudge 가 배열이면 malformed → unknown')
+  // ─── routeBoardType — state 하나로 결정 ───
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: CUR, boardTopic: 'MENOPAUSE' } })) !== 'MENOPAUSE') offenders.push('🔴 current + MENOPAUSE → MENOPAUSE 아님')
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: CUR, boardTopic: 'FREE' } })) !== 'FREE') offenders.push('🔴 current + FREE → FREE 아님')
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: CUR } })) !== null) offenders.push('🔴 current + boardTopic 결여 → null 아님')
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: CUR, boardTopic: 'MAGAZINE' } })) !== null) offenders.push('🔴 current + invalid enum → null 아님')
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: CUR, boardTopic: ' MENOPAUSE ' } })) !== null) offenders.push('🔴 current + 공백 포함 enum → null 아님')
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: 'auto-judge-v3' } })) !== 'FREE') offenders.push('🔴 known-legacy → FREE 아님')
+  if (routeBoardType(ex(null)) !== 'FREE') offenders.push('🔴 absent → FREE 아님 (레거시 적재 보존)')
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: 'auto-judge-v5' } })) !== null) offenders.push('🔴 unknown(v5) → null 아님 (unknown 을 legacy 로 되돌리는 변이 탐지)')
+  if (routeBoardType(ex({ autoJudge: { ruleVersion: 'random' } })) !== null) offenders.push('🔴 unknown ruleVersion → null 아님')
+  if (routeBoardType(ex({ autoJudge: [] })) !== null) offenders.push('🔴 malformed autoJudge → null 아님')
+  if (routeBoardType(ex({ autoJudge: null })) !== null) offenders.push('🔴 null autoJudge → null 아님')
+  // buildOriginalPostData — boardType 입력으로 라우팅. 입력이 없으면 FREE(legacy)
+  const freeData = buildOriginalPostData({ ...IN }) as Record<string, unknown>
+  if (freeData.boardType !== 'FREE') offenders.push(`🔴 default → FREE 아님 (${String(freeData.boardType)})`)
+  const menoData = buildOriginalPostData({ ...IN, boardType: 'MENOPAUSE' }) as Record<string, unknown>
+  if (menoData.boardType !== 'MENOPAUSE') offenders.push(`🔴 boardType=MENOPAUSE 라우팅 안 됨 (${String(menoData.boardType)})`)
+  // assertOriginalPostData — FREE, MENOPAUSE 둘 다 허용, 그 밖은 거부
+  try { assertOriginalPostData(buildOriginalPostData({ ...IN, boardType: 'MENOPAUSE' }) as Record<string, unknown>) }
+  catch (e) { offenders.push(`🔴 MENOPAUSE assert 거부 — ${e instanceof Error ? e.message : String(e)}`) }
+  let magRejected = false
+  try { assertOriginalPostData({ ...buildOriginalPostData({ ...IN }), boardType: 'MAGAZINE' } as Record<string, unknown>) }
+  catch { magRejected = true }
+  if (!magRejected) offenders.push('🔴 MAGAZINE assert 가 통과했다 — FREE·MENOPAUSE 만 허용해야 한다')
+  // 🔴 변이: provenance 또는 boardTopic 중 하나라도 결여/변조되면 current row 는 fail-closed
+  if (routeBoardType({ present: true, ruleVersion: CUR, state: 'current', boardTopic: '' }) !== null) {
+    offenders.push('🔴 변이 — current + 빈 boardTopic 이 통과했다')
+  }
+  // 🔴 publish tx 가 trusted gateResults 만 읽는지 간접 확인 — tx 코드에 routeBoardType 호출이 있다
+  const txCode = readFileSync(TX, 'utf-8')
+  if (!/routeBoardType\(/.test(txCode)) offenders.push('🔴 tx 가 routeBoardType 을 부르지 않는다 — 임의 주입 가능')
+  if (!/readAutoJudgeFromGateResults\(/.test(txCode)) offenders.push('🔴 tx 가 readAutoJudgeFromGateResults 로 trusted 경계만 읽지 않는다')
+  if (!/CURRENT_AUTO_JUDGE_RULE_VERSION/.test(txCode)) offenders.push('🔴 tx 가 current ruleVersion 상수를 참조하지 않는다')
+  const routeAt = txCode.indexOf('const boardType = routeBoardType(aj)')
+  const assignAt = txCode.indexOf('matchedPersonaId: persona.id, matchedAt: txNow')
+  const postAt = txCode.indexOf('const post = await tx.post.create')
+  if (!(routeAt >= 0 && assignAt > routeAt && postAt > routeAt)) {
+    offenders.push('🔴 boardTopic fail-closed 가 Persona 배정·Post write보다 앞이 아니다')
+  }
+  if (offenders.length) bad('🔴 ①-b 게시판 라우팅 (boardTopic 단일 신호)', offenders.join(' / '))
+  else ok('🔴 ①-b 게시판 라우팅', 'FREE·MENOPAUSE 둘만 · current fail-closed · legacy FREE · 임의 주입 금지')
 }
 
 // ── ② 발행 데이터 조립 ──
@@ -218,12 +285,12 @@ console.log('\n══ 발행 규칙 fixture ══\n')
     if (!code.includes(w)) offenders.push(`🔴 ${w} 가 없다`)
   }
   // 🔴 createdPostId 와 status 는 같은 data 에 있다
-  const upd = code.match(/updateMany\(\{[\s\S]*?\}\)/)?.[0] ?? ''
-  if (!upd.includes("status: 'PUBLISHED'") || !upd.includes('createdPostId: post.id')) {
+  const publishUpdate = /updateMany\(\{[\s\S]*?data:\s*\{\s*status:\s*'PUBLISHED',\s*createdPostId:\s*post\.id,[\s\S]*?\}\s*,?\s*\}\)/.exec(code)?.[0] ?? ''
+  if (publishUpdate === '') {
     offenders.push('🔴 status 와 createdPostId 가 같은 update 에 없다')
   }
   // 🔴 조건부 UPDATE + 롤백
-  if (!/createdPostId:\s*null/.test(upd)) offenders.push('🔴 WHERE 에 createdPostId null 이 없다')
+  if (!/createdPostId:\s*null/.test(publishUpdate)) offenders.push('🔴 WHERE 에 createdPostId null 이 없다')
   if (!code.includes('QUEUE_RACE')) offenders.push('🔴 count 0 에서 롤백하지 않는다')
   // 🔴 트랜잭션 안에서 재검증
   if (!code.includes('judgePublish(')) offenders.push('🔴 트랜잭션 안에서 재판정하지 않는다')
@@ -250,7 +317,9 @@ console.log('\n══ 발행 규칙 fixture ══\n')
   // 🔴 이중 스위치 + cap 상한
   if (!code.includes("argv.includes('--apply')")) offenders.push('🔴 --apply 스위치가 없다')
   if (!/LIMIT\s*!==\s*take\.length/.test(code)) offenders.push('🔴 --limit 대조가 없다')
-  if (!/LIMIT\s*>\s*DAILY_PUBLISH_CAP/.test(code)) offenders.push('🔴 --limit 이 cap 을 넘는지 보지 않는다')
+  if (!/judgeManualLimit\(LIMIT\)/.test(code) || !/if \(!manual\.ok\)/.test(code)) {
+    offenders.push('🔴 --limit 을 수동 발행 cap 정본으로 검증하지 않는다')
+  }
   if (!code.includes('--check')) offenders.push('🔴 --check 가 없다')
   // 🔴 본문 전문을 찍지 않는다
   if (/console\.log\([^)]*draftBody|console\.log\([^)]*editedBody/.test(code)) offenders.push('🔴 본문을 출력한다')

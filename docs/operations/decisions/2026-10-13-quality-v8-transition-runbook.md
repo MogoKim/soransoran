@@ -2,6 +2,9 @@
 
 > 작성 2026-10-13 · PR #710(중복·잘림 입력과 허위 전달 문구 보정) 보정분 · 마스터 재검토 반영 · 대상: 보조 Mac D100 runtime 배포를 실행하는 사람
 > 개정 2026-10-13 · #710 뒤 P0 hotfix(contract-transition-v4) — source 상태는 runtime 트리의 snapshot 으로만 받는다
+> 현재 보정 2026-10-26 · quality-v24 — Content Core가 의미 품질의 단일 권위다. 아래 v8 역사의
+> `--semantic-clear` 순서·승인 토큰·append-only·exact 결속 재확인은 유지하되, 현재 런너는 해소 계획에서
+> 사후 의미 provider를 부르지 않는다. 이 머리말이 아래 v8 당시의 재감사 설명보다 우선한다.
 
 ## 왜 따로 확인하나
 
@@ -88,6 +91,23 @@ npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId>          # dry-r
 npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --apply --production --staged \
   --target=<staging SHA> --digest=<dry-run digest> --expect=<dry-run expect> --reason="quality-v8 활성화 전 해소"
 ```
+
+옛 의미 감사의 `measured yes`가 지금 초안 게이트의 확정 차단이 아닌 경우에는 일반 해소를 억지로 쓰지 않는다.
+`--semantic-clear`로 **같은 발행 글·원문 근거·Persona 카드·도장 결속**을 지금 의미 감사 계약에 다시 측정한다.
+새 판정이 `no`일 때만 별도 append-only 기록을 계획하며, `yes`·제공사 실패·결속 변경은 write 0으로 거부한다.
+
+```bash
+npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --semantic-clear
+npx tsx scripts/auto-ready-defect-resolve.mts --queue=<queueId> --semantic-clear --apply --production --staged \
+  --target=<staging SHA> --digest=<dry-run digest> --expect=<dry-run expect> \
+  --semantic-plan=<dry-run semanticPlan> --reason="새 의미 감사 계약으로 옛 오탐 재검증"
+```
+
+의미 재감사 provider는 dry-run에서 한 번만 부른다. apply는 승인된 `semanticPlan`을 다시 해석하지 않고 현재
+DB·글·원문·Persona·도장 결속과 결정적으로 대조한다. 토큰이 없거나 다른 계약·큐·결속이면 write 0이다.
+
+원래 감사 `yes` 행은 수정·삭제하지 않는다. 해소 기록은 현재 품질 계약·감사 행 지문·발행 글 hash·원문·Persona·
+도장 결속에 묶이며, 이후 어느 하나라도 바뀌거나 품질 계약이 바뀌면 자동으로 무효가 된다.
 
 `--staged` 가드(`stagedGuardProblems`)가 전부 참이어야 열린다:
 - origin/main(fetch 직후) = staging HEAD = target이고, staging 트리가 깨끗해야 한다.

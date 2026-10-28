@@ -16,6 +16,8 @@ import {
   AdminFieldList,
   AdminField,
   AdminStatusBadge,
+  AdminStat,
+  AdminStatStrip,
 } from '@/components/admin/AdminUi'
 import type { Prisma } from '@prisma/client'
 
@@ -71,12 +73,12 @@ function ReportRow({
   commentId: string | null
 }) {
   return (
-    <li className="flex flex-wrap items-center gap-2 rounded-lg border border-subtle bg-surface-card p-3 text-sm text-content-primary">
+    <li className="flex min-h-[52px] flex-wrap items-center gap-2 border-b border-[color:var(--admin-divider)] px-4 py-2 text-sm text-content-primary last:border-b-0">
       <AdminBadge tone="brand">{reason}</AdminBadge>
       <AdminStatusBadge kind="report" value={status} />
-      <span className="text-content-muted">{formatKst(createdAt)}</span>
+      <span className="text-xs tabular-nums text-content-muted">{formatKst(createdAt)}</span>
       {postId ? (
-        <Link href={`/admin/content/${postId}`} className="text-link">
+        <Link href={`/admin/content/${postId}`} className="inline-flex min-h-[52px] items-center text-link lg:min-h-[44px]">
           대상 글 보기
         </Link>
       ) : commentId ? (
@@ -183,7 +185,7 @@ export default async function AdminMemberDetailPage({
   const hiddenPosts = member.posts.filter((p) => p.status !== 'PUBLISHED').length
 
   return (
-    <main className="pt-2 lg:pt-0">
+    <div>
       <AdminPageHeader
         backHref="/admin/members"
         title={member.nickname ?? member.name ?? '회원'}
@@ -197,8 +199,9 @@ export default async function AdminMemberDetailPage({
         }
       />
 
-      {/* 1~3) 운영 판단 프로필 — 누구인지 · 얼마나 문제인지 · 무엇을 할지 한 패널에 */}
-      <section className="mt-3 rounded-lg border border-subtle bg-surface-card p-3">
+      {/* 1~3) 운영 판단 프로필 — 누구인지 · 얼마나 문제인지 · 무엇을 할지 한 덩어리에.
+             상자로 두르지 않는다 — 이름표 목록 · 숫자 띠 · 조치 묶음이 위에서 아래로 이어진다. */}
+      <section>
         <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
           <div className="flex gap-2">
             <dt className="shrink-0 text-content-muted">카카오 이름</dt>
@@ -218,42 +221,19 @@ export default async function AdminMemberDetailPage({
           </div>
         </dl>
 
-        <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-subtle pt-3 sm:grid-cols-4">
-          <div>
-            <dt className="text-xs text-content-muted">신고당함</dt>
-            <dd
-              className={
-                reportedAgainstTotal > 0
-                  ? 'm-0 text-lg font-bold text-state-danger'
-                  : 'm-0 text-lg font-bold text-content-primary'
-              }
-            >
-              {reportedAgainstTotal}건
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-content-muted">그중 미처리</dt>
-            <dd
-              className={
-                reportedAgainstPending > 0
-                  ? 'm-0 text-lg font-bold text-state-danger'
-                  : 'm-0 text-lg font-bold text-content-primary'
-              }
-            >
-              {reportedAgainstPending}건
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-content-muted">작성 글</dt>
-            <dd className="m-0 text-lg font-bold text-content-primary">{member._count.posts}건</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-content-muted">작성 댓글</dt>
-            <dd className="m-0 text-lg font-bold text-content-primary">
-              {member._count.comments}건
-            </dd>
-          </div>
-        </dl>
+        {/* 🔴 숫자 넷은 한 띠 안의 칸이다. 신고가 있으면 숫자가 빨갛다 — 색과 함께 「건」 문구가 간다 */}
+        <AdminStatStrip columns={4} className="mt-4">
+          <AdminStat
+            label="신고당함"
+            value={<span className={reportedAgainstTotal > 0 ? 'text-state-danger' : undefined}>{reportedAgainstTotal}건</span>}
+          />
+          <AdminStat
+            label="그중 미처리"
+            value={<span className={reportedAgainstPending > 0 ? 'text-state-danger' : undefined}>{reportedAgainstPending}건</span>}
+          />
+          <AdminStat label="작성 글" value={`${member._count.posts}건`} />
+          <AdminStat label="작성 댓글" value={`${member._count.comments}건`} />
+        </AdminStatStrip>
 
         {hiddenPosts > 0 ? (
           <p className="mt-3 text-sm text-state-danger">
@@ -296,9 +276,9 @@ export default async function AdminMemberDetailPage({
       </section>
 
       {/* 3) 카카오·프로필 정보 — 접어 둔다. 볼 일이 있을 때만 편다. */}
-      <section className="mt-3">
+      <section className="mt-6">
         <details>
-          <summary className="min-h-[52px] cursor-pointer list-none py-3 text-sm font-bold text-content-primary">
+          <summary className="flex min-h-[52px] cursor-pointer list-none flex-wrap items-center gap-x-1 border-y border-[color:var(--admin-divider)] text-sm font-bold text-content-primary lg:min-h-[44px]">
             가입 정보 보기{' '}
             <span className="font-normal text-content-muted">
               (이메일·전화번호 등 개인정보)
@@ -321,7 +301,7 @@ export default async function AdminMemberDetailPage({
 
           {/* 🔴 raw id 는 한 겹 더 접는다. 평소 판단에 쓰이지 않고 자리만 차지한다. */}
           <details className="mt-2">
-            <summary className="min-h-[52px] cursor-pointer list-none py-3 text-xs text-content-muted">
+            <summary className="flex min-h-[52px] cursor-pointer list-none items-center text-xs text-content-muted lg:min-h-[44px]">
               내부 식별자 보기
             </summary>
             <AdminFieldList>
@@ -342,7 +322,7 @@ export default async function AdminMemberDetailPage({
         {reportedAgainst.length === 0 ? (
           <AdminEmptyState>이 회원의 글·댓글이 신고된 적이 없습니다.</AdminEmptyState>
         ) : (
-          <ul className="mt-2 flex list-none flex-col gap-2 p-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {reportedAgainst.map((r) => (
               <ReportRow key={r.id} {...r} />
             ))}
@@ -357,15 +337,15 @@ export default async function AdminMemberDetailPage({
         {member.posts.length === 0 ? (
           <AdminEmptyState>작성한 글이 없습니다.</AdminEmptyState>
         ) : (
-          <ul className="mt-2 flex list-none flex-col gap-2 p-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {member.posts.map((p) => (
-              <li key={p.id}>
+              <li key={p.id} className="border-b border-[color:var(--admin-divider)] last:border-b-0">
                 <Link
                   href={`/admin/content/${p.id}`}
-                  className="flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline"
+                  className="flex min-h-[52px] flex-col justify-center gap-1 px-4 py-2 no-underline hover:bg-[color:var(--admin-row-hover)] focus-visible:outline-offset-[-2px]"
                 >
-                  <span className="break-words font-bold text-content-primary">{p.title}</span>
-                  <span className="flex flex-wrap items-center gap-2 text-sm text-content-muted">
+                  <span className="break-words font-semibold text-content-primary">{p.title}</span>
+                  <span className="flex flex-wrap items-center gap-2 text-xs tabular-nums text-content-muted">
                     {formatKst(p.createdAt)}
                     {p.status !== 'PUBLISHED' ? (
                       <AdminStatusBadge kind="post" value={p.status} />
@@ -388,16 +368,16 @@ export default async function AdminMemberDetailPage({
         {member.comments.length === 0 ? (
           <AdminEmptyState>작성한 댓글이 없습니다.</AdminEmptyState>
         ) : (
-          <ul className="mt-2 flex list-none flex-col gap-2 p-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {member.comments.map((c) => (
-              <li key={c.id} className="rounded-lg border border-subtle bg-surface-card p-3">
+              <li key={c.id} className="border-b border-[color:var(--admin-divider)] px-4 py-3 last:border-b-0">
                 <p className="m-0 whitespace-pre-wrap break-words text-sm text-content-primary">
                   {c.content}
                 </p>
                 <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-content-muted">
                   <span>{formatKst(c.createdAt)}</span>
                   {c.isDeleted ? <AdminBadge tone="danger">숨김</AdminBadge> : null}
-                  <Link href={`/admin/content/${c.postId}`} className="text-link">
+                  <Link href={`/admin/content/${c.postId}`} className="inline-flex min-h-[52px] items-center font-semibold text-link lg:min-h-[44px]">
                     글에서 보기
                   </Link>
                 </p>
@@ -414,7 +394,7 @@ export default async function AdminMemberDetailPage({
         {member.reports.length === 0 ? (
           <AdminEmptyState>이 회원이 신고한 내역이 없습니다.</AdminEmptyState>
         ) : (
-          <ul className="mt-2 flex list-none flex-col gap-2 p-0">
+          <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
             {member.reports.map((r) => (
               <ReportRow key={r.id} {...r} />
             ))}
@@ -428,6 +408,6 @@ export default async function AdminMemberDetailPage({
           차단된 회원입니다. 글과 댓글은 그대로 남아 있고, 새로 쓰는 것만 막혀 있습니다.
         </AdminQuote>
       ) : null}
-    </main>
+    </div>
   )
 }

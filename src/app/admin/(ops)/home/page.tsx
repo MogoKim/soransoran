@@ -11,6 +11,7 @@ import { isOverrideActive } from '@/lib/home-exposure-rules'
 import { DISCOVERY_ELIGIBLE_WHERE } from '@/lib/post-visibility'
 import AdminHomeOverrideForm from '@/components/admin/AdminHomeOverrideForm'
 import AdminHomeOverrideControls from '@/components/admin/AdminHomeOverrideControls'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 import {
   AdminPageHeader,
   AdminSection,
@@ -49,7 +50,7 @@ const SOON_MINUTES = 30
 
 /** 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다. */
 const PIN_COLS = 'lg:grid-cols-[5.5rem_minmax(0,1fr)_11rem_auto]'
-const HOME_COLS = 'lg:grid-cols-[2rem_minmax(0,1fr)_17rem_auto]'
+const HOME_COLS = 'lg:grid-cols-[2rem_minmax(0,1fr)_minmax(0,15rem)_auto]'
 
 function minutesLeft(expiresAt: Date | null, now: Date): number | null {
   if (!expiresAt) return null
@@ -123,13 +124,14 @@ export default async function AdminHomeExposurePage({
   ].slice(0, HOME_MAGAZINE_COUNT)
 
   return (
-    <main className="pt-2 lg:pt-0">
-      <AdminPageHeader title="홈 노출" />
+    <div>
+      <AdminPageHeader group="노출·작성" title="홈 노출" />
 
       {/* 상단 요약 — 상태와 범위를 한 줄로. 큰 박스를 두지 않는다. */}
-      <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <p className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
         <span className="text-content-primary">
-          고정 <strong>{pinned.length}</strong> · 숨김 <strong>{hiddenRows.length}</strong>
+          고정 <strong className="tabular-nums">{pinned.length}</strong> · 숨김{' '}
+          <strong className="tabular-nums">{hiddenRows.length}</strong>
         </span>
         {soonExpiring > 0 ? (
           <AdminBadge tone="warning">{SOON_MINUTES}분 내 만료 {soonExpiring}</AdminBadge>
@@ -142,7 +144,7 @@ export default async function AdminHomeExposurePage({
       </p>
 
       {/* ── 1) 지금 걸린 예외 ───────────────────────────── */}
-      <AdminSection title="지금 걸린 예외" className="mt-5">
+      <AdminSection title="지금 걸린 예외" className="mt-10">
         {live.length === 0 ? (
           <div className="mt-2">
             <AdminEmptyState>
@@ -150,22 +152,22 @@ export default async function AdminHomeExposurePage({
             </AdminEmptyState>
           </div>
         ) : (
-          <div className="mt-2">
+          <div className="mt-3 border-y border-[color:var(--admin-border)]">
             <div
-              className={`hidden border-b border-subtle px-2 pb-1.5 text-xs text-content-muted lg:grid lg:gap-3 ${PIN_COLS}`}
+              className={`hidden min-h-[44px] items-center border-b border-[color:var(--admin-border)] bg-[color:var(--admin-surface-subtle)] px-4 text-xs font-semibold text-content-muted lg:grid lg:gap-4 ${PIN_COLS}`}
             >
               <span>상태</span>
               <span>글</span>
               <span>언제까지</span>
               <span className="text-right">조작</span>
             </div>
-            <ul className="m-0 flex list-none flex-col gap-2 p-0 lg:gap-0">
+            <ul className="m-0 flex list-none flex-col p-0">
               {[...pinned, ...hiddenRows].map((o, index) => {
                 const isPin = o.action === 'PIN'
                 return (
                   <li
                     key={o.id}
-                    className={`rounded-lg border border-subtle bg-surface-card p-3 lg:grid lg:min-h-[44px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-1.5 ${PIN_COLS}`}
+                    className={`min-h-[72px] border-b border-[color:var(--admin-divider)] p-4 last:border-b-0 lg:grid lg:min-h-[52px] lg:items-center lg:gap-4 lg:px-4 lg:py-2 ${PIN_COLS}`}
                   >
                     <span className="flex items-center gap-1">
                       <AdminStatusBadge kind="override" value={o.action} />
@@ -176,12 +178,14 @@ export default async function AdminHomeExposurePage({
 
                     <Link
                       href={`/admin/content/${o.post.id}`}
-                      className="mt-1 block min-w-0 truncate text-sm font-bold text-content-primary no-underline lg:mt-0"
+                      className="mt-1 flex min-h-[52px] min-w-0 items-center text-sm font-semibold text-content-primary no-underline hover:underline lg:mt-0 lg:min-h-[44px]"
                     >
-                      <span className="mr-1 text-xs font-normal text-content-muted">
-                        {boardLabel(o.post.boardType)}
+                      <span className="min-w-0 truncate">
+                        <span className="mr-1 text-xs font-normal text-content-muted">
+                          {boardLabel(o.post.boardType)}
+                        </span>
+                        {o.post.title}
                       </span>
-                      {o.post.title}
                     </Link>
 
                     <span className="mt-1 block text-xs text-content-muted lg:mt-0">
@@ -206,38 +210,40 @@ export default async function AdminHomeExposurePage({
       <AdminSection
         title={`지금 홈에 뜬 글 ${posts.length}건`}
         description="고정·숨김이 반영된 실제 결과입니다. 점수 = (댓글 수 + 1) / (경과시간h + 4)^0.8"
-        className="mt-6"
+        className="mt-10"
       >
         {posts.length === 0 ? (
           <div className="mt-2">
             <AdminEmptyState>홈에 뜬 글이 없습니다.</AdminEmptyState>
           </div>
         ) : (
-          <div className="mt-2">
+          <div className="mt-3 border-y border-[color:var(--admin-border)]">
             <div
-              className={`hidden border-b border-subtle px-2 pb-1.5 text-xs text-content-muted lg:grid lg:gap-3 ${HOME_COLS}`}
+              className={`hidden min-h-[44px] items-center border-b border-[color:var(--admin-border)] bg-[color:var(--admin-surface-subtle)] px-4 text-xs font-semibold text-content-muted lg:grid lg:gap-4 ${HOME_COLS}`}
             >
               <span>#</span>
               <span>글</span>
               <span>댓글 · 작성 · 점수</span>
               <span className="text-right">고정 · 숨김</span>
             </div>
-            <ul className="m-0 flex list-none flex-col gap-2 p-0 lg:gap-0">
+            <ul className="m-0 flex list-none flex-col p-0">
               {posts.map((post, index) => (
                 <li
                   key={post.id}
-                  className={`rounded-lg border border-subtle bg-surface-card p-3 lg:grid lg:min-h-[44px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-1.5 ${HOME_COLS}`}
+                  className={`min-h-[72px] border-b border-[color:var(--admin-divider)] p-4 last:border-b-0 lg:grid lg:min-h-[52px] lg:items-center lg:gap-4 lg:px-4 lg:py-2 ${HOME_COLS}`}
                 >
-                  <span className="text-xs font-bold text-content-muted">{index + 1}</span>
+                  <span className="text-xs font-bold tabular-nums text-content-muted">{index + 1}</span>
 
                   <Link
                     href={`/admin/content/${post.id}`}
-                    className="mt-1 block min-w-0 truncate text-sm font-bold text-content-primary no-underline lg:mt-0"
+                    className="mt-1 flex min-h-[52px] min-w-0 items-center text-sm font-semibold text-content-primary no-underline hover:underline lg:mt-0 lg:min-h-[44px]"
                   >
-                    <span className="mr-1 text-xs font-normal text-content-muted">
-                      {boardLabel(post.boardType)}
+                    <span className="min-w-0 truncate">
+                      <span className="mr-1 text-xs font-normal text-content-muted">
+                        {boardLabel(post.boardType)}
+                      </span>
+                      {post.title}
                     </span>
-                    {post.title}
                   </Link>
 
                   <span className="mt-1 block text-xs text-content-muted lg:mt-0">
@@ -267,18 +273,18 @@ export default async function AdminHomeExposurePage({
       <AdminSection
         title="홈에 없는 글 찾기"
         description="갱년기톡·자유게시판의 공개된 글만 나옵니다."
-        className="mt-6"
+        className="mt-10"
       >
-        <form action="/admin/home" method="get" className="mt-2 flex flex-wrap gap-2">
+        <form action="/admin/home" method="get" className="mt-3 flex flex-wrap gap-2">
           <input
             name="q"
             defaultValue={query}
             placeholder="제목으로 찾기"
-            className="min-h-[52px] flex-1 rounded-lg border border-subtle bg-surface-card px-3 text-sm text-content-primary lg:min-h-[36px] lg:max-w-sm"
+            className="min-h-[52px] flex-1 rounded-md border border-interactive bg-surface-card px-3 text-sm text-content-primary lg:min-h-[44px] lg:max-w-sm"
           />
           <button
             type="submit"
-            className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-3 text-sm font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98] lg:min-h-[36px]"
+            className={adminButtonClass('secondary', 'px-4 text-sm')}
           >
             찾기
           </button>
@@ -292,22 +298,24 @@ export default async function AdminHomeExposurePage({
               </AdminEmptyState>
             </div>
           ) : (
-            <ul className="m-0 mt-2 flex list-none flex-col gap-2 p-0 lg:gap-0">
+            <ul className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
               {results.map((r) => (
                 <li
                   key={r.id}
-                  className="rounded-lg border border-subtle bg-surface-card p-3 lg:flex lg:min-h-[44px] lg:items-center lg:justify-between lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-1.5"
+                  className="min-h-[72px] border-b border-[color:var(--admin-divider)] p-4 last:border-b-0 lg:flex lg:min-h-[52px] lg:items-center lg:justify-between lg:gap-4 lg:px-4 lg:py-2"
                 >
                   <Link
                     href={`/admin/content/${r.id}`}
-                    className="block min-w-0 truncate text-sm font-bold text-content-primary no-underline"
+                    className="flex min-h-[52px] min-w-0 items-center text-sm font-semibold text-content-primary no-underline hover:underline lg:min-h-[44px]"
                   >
-                    <span className="mr-1 text-xs font-normal text-content-muted">
-                      {boardLabel(r.boardType)}
-                    </span>
-                    {r.title}
-                    <span className="ml-2 text-xs font-normal text-content-muted">
-                      {formatKst(r.createdAt)}
+                    <span className="min-w-0 truncate">
+                      <span className="mr-1 text-xs font-normal text-content-muted">
+                        {boardLabel(r.boardType)}
+                      </span>
+                      {r.title}
+                      <span className="ml-2 text-xs font-normal text-content-muted">
+                        {formatKst(r.createdAt)}
+                      </span>
                     </span>
                   </Link>
                   <div className="mt-2 shrink-0 lg:mt-0">
@@ -324,15 +332,15 @@ export default async function AdminHomeExposurePage({
       <AdminSection
         title="매거진 홈 노출"
         description="대표 이미지가 있는 글이 앞입니다. 이 자리는 조정 기능이 없습니다."
-        className="mt-6 border-t border-subtle pt-4"
+        className="mt-10"
       >
-        <ol className="m-0 mt-2 flex list-none flex-col p-0">
+        <ol className="m-0 mt-3 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
           {magazine.map((article, index) => (
             <li
               key={article.slug}
-              className="flex min-h-[36px] items-center gap-2 border-b border-subtle px-2 py-1.5 text-sm last:border-b-0"
+              className="flex min-h-[52px] items-center gap-2 border-b border-[color:var(--admin-divider)] px-4 py-2 text-sm last:border-b-0"
             >
-              <span className="text-xs text-content-muted">{index + 1}</span>
+              <span className="text-xs tabular-nums text-content-muted">{index + 1}</span>
               <span className="min-w-0 flex-1 truncate text-content-primary">{article.title}</span>
               <span className="shrink-0 text-xs text-content-muted">{article.publishedAt}</span>
               {article.heroImage ? null : <AdminBadge tone="warning">이미지 없음</AdminBadge>}
@@ -340,6 +348,6 @@ export default async function AdminHomeExposurePage({
           ))}
         </ol>
       </AdminSection>
-    </main>
+    </div>
   )
 }

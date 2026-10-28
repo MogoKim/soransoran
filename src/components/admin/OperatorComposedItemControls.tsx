@@ -14,6 +14,7 @@ import {
 } from '@/lib/actions/operator-compose'
 import { MAX_COMMENT_LENGTH } from '@/lib/comment-policy'
 import { MAX_POST_CONTENT_LENGTH, MAX_POST_TITLE_LENGTH } from '@/lib/post-policy'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 작성 내역 한 줄의 조치 — 수정 · 숨기기.
@@ -55,7 +56,7 @@ export default function OperatorComposedItemControls({
     <button
       type="button"
       onClick={() => setOpen(false)}
-      className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 text-base font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+      className={adminButtonClass('secondary')}
     >
       닫기
     </button>
@@ -67,7 +68,7 @@ export default function OperatorComposedItemControls({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 text-base font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          className={adminButtonClass('secondary')}
         >
           수정
         </button>
@@ -100,7 +101,7 @@ export default function OperatorComposedItemControls({
             name="title"
             defaultValue={title ?? ''}
             maxLength={MAX_POST_TITLE_LENGTH}
-            className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3 text-content-primary"
+            className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
           />
         </label>
       ) : null}
@@ -112,7 +113,7 @@ export default function OperatorComposedItemControls({
           defaultValue={content}
           rows={kind === 'post' ? 10 : 4}
           maxLength={kind === 'post' ? MAX_POST_CONTENT_LENGTH : MAX_COMMENT_LENGTH}
-          className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+          className="w-full rounded-md border border-interactive bg-surface-card p-3 text-content-primary"
         />
       </label>
 

@@ -230,7 +230,8 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계',
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
     'Dn 최대 용량', '가까운 수요 지평', 'event-assisted 실행', '원천 순위 하나', '날짜 정밀도 보존',
-    'Persona 결정 분리', '자동 댓글 provenance', '댓글 1~5 · 실제 답글', '실제 열람·노출 조회수']) {
+    'Persona 결정 분리', '자동 댓글 provenance', '댓글 1~5 · 실제 답글', '실제 열람·노출 조회수',
+    '자동 품질 생명주기', 'bounded creativity']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
@@ -256,8 +257,18 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     ['수집 완료가 공급을 깨운다', '공개 commit 이 첫 댓글을 깨운다', 'fallback', '실행 lease/token',
       'coalescing', 'exactly-once 시스템을 새로 만들지 않는다'].every((t) => d100Goal.includes(t))])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
-    d100Goal.includes('hard safety/truth -> 대화 가치·품질 -> 신선도 -> 갱년기 적합성 -> 우아한갱년기 출처 -> 결정적 tie')
+    d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')
+    && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')
+    && d100Goal.includes('출처별 우대 없음')
+    && d100Goal.includes('주제형 숫자 보너스 없음')
     && d100Goal.includes('`jjong 10 + humor 1`')])
+  out.push(['canon §7 이 게시판을 중심 주제로만 라우팅하고 호환 경계를 닫는다',
+    d100Goal.includes('게시판 라우팅 — 중심 주제 하나')
+    && d100Goal.includes('중심 주제**를 `MENOPAUSE`')
+    && d100Goal.includes('그 밖에는 자유게시판')
+    && d100Goal.includes('갱년기톡 편수 quota·예약석·숫자 보너스를 만들지 않는다')
+    && d100Goal.includes('실제로 운영됐던 호환 판은 `auto-judge-v3` 하나다')
+    && d100Goal.includes('손상됐거나 모르는/미래 판이면')])
   out.push(['canon §2.1 이 날짜만 아는 게시 시각을 00:00 으로 지어내지 않는다',
     d100Goal.includes('날짜만 아는 게시 시각을 그날 00:00 으로 지어내지 않는다')])
   out.push(['canon §4.1 이 유료 생성 전 코드의 Persona 확정을 적는다',
@@ -470,7 +481,7 @@ check('현재 실행이 code / deployed / operating PASS 를 한 표의 세 칸�
 check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있다',
   current.includes('UNKNOWN') && /관측하지 않은 것을 PASS\s*로 쓰지 않는다/.test(current))
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
-  current.includes('## 5. 다음 critical path') && /^\| D5-FIX \|/m.test(current))
+  current.includes('## 5. 다음 critical path') && /^\| D\d+-FIX \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
   current.includes('첫 댓글 1 + 선택적 0~4')
   && current.includes('실제 `parentId` 답글')
@@ -486,9 +497,10 @@ check('현재 실행이 최신 자연 controller 결정을 결정 모양(상태 
   /`(REPROVE|TRIAL|HOLD|PREPARE|PROMOTE) · 공개 d\d+ · 준비 d\d+`/.test(currentLive))
 check('현재 실행이 최신 d 단계 증거를 날짜와 판정으로 적는다',
   /\d\d-\d\d d\d+ 증거[^\n]{0,8}(PASS|FAIL|UNKNOWN)/.test(currentLive))
-check('현재 실행이 D5 blocker 를 preflight 코드로 적는다',
-  /## 3\. D5 개방의 정확한 blocker/.test(current)
-  && /^\| `[A-Z_]+` \|/m.test(sectionIn(current, '## 3. D5 개방의 정확한 blocker', '\n## ')))
+const blockerHeading = /^## 3\. (D\d+) 개방의 정확한 blocker$/m.exec(current)
+check('현재 실행이 현재 단계 blocker 를 preflight 코드로 적는다',
+  blockerHeading !== null
+  && /^\| `[A-Z0-9_]+` \|/m.test(sectionIn(current, blockerHeading?.[0] ?? '', '\n## ')))
 check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona contract-valid 를 현재 상태로 적는다',
   /보조 Mac D100 job \| \d+개 loaded/.test(currentLive)
   && /회사 Mac D100 job \| 0/.test(currentLive)
@@ -516,22 +528,28 @@ check('현재 실행이 보조 Mac D100 owner · 회사 Mac D100 0 · Persona co
   check('🔴 완료된 PR 이 다음 critical path 에 활성 작업으로 다시 나오지 않는다', revived.length === 0)
   for (const l of revived.slice(0, 2)) console.log(`     🔴 ${l.trim().slice(0, 120)}`)
   const rows = [...path.matchAll(/^\| ([^|]+?) \|/gm)].map((m) => m[1]!.trim()).filter((c) => c !== '순서' && !/^-+$/.test(c))
-  check('현재 실행의 다음 critical path 첫 두 항목이 D5 병목 보정 → D5 증명이다',
-    rows[0] === 'D5-FIX' && rows[1] === 'D5')
-  check('현재 실행이 D10·D20 목표일과 각 선행 operating PASS를 함께 적는다',
-    /^\| D10 \|[^\n]*목표[^\n]*D5 operating PASS[^\n]*자동 10\/10/m.test(path)
-    && /^\| D20 \|[^\n]*목표[^\n]*D10 operating PASS/m.test(path))
+  const firstFix = /^(D\d+)-FIX$/.exec(rows[0] ?? '')
+  check('현재 실행의 다음 critical path 첫 두 항목이 같은 단계 병목 보정 → 자연 증명이다',
+    firstFix !== null && rows[1] === firstFix[1])
+  check('현재 실행이 D20 이후 단계의 직전 operating PASS를 선행조건으로 적는다',
+    /^\| D20 \|[^\n]*D10 operating PASS/m.test(path)
+    && /^\| D30 \|[^\n]*D20 operating PASS/m.test(path)
+    && /^\| D50 \|[^\n]*D30 operating PASS/m.test(path))
 }
 check('현재 실행이 원격 main과 runtime을 분 단위 관측값으로 분리하고 D100 차이를 판정한다',
   /^\| 원격 main \(20\d\d-\d\d-\d\d \d\d:\d\d 관측\) \| `[0-9a-f]{40}` \|/m.test(currentLive)
-  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*main 차이를 별도 판정/m.test(currentLive))
-check('현재 실행이 추가 댓글의 배포 상태와 현재 d3에서 0건인 이유를 함께 적는다',
-  currentLive.includes('switch ON · D10 profile · E6 consumer plist')
-  && currentLive.includes('현재 공개 d3라 stage mismatch로 추가 0이 정상'))
+  && /^\| 보조 Mac D100 runtime HEAD = pin = manifest \| `[0-9a-f]{40}`[^\n]*(?:main과 동일 SHA|main 차이를 별도 판정)/m.test(currentLive))
+check('현재 실행이 추가 댓글의 운영 공통 profile 배포와 자연 followup 증거를 함께 적는다',
+  currentLive.includes('switch ON · 운영 공통 profile · E6 consumer plist')
+  && currentLive.includes('자연 followup 3건 확인'))
 check('현재 실행이 공격적 목표일을 PASS 약속과 구분하고 D30을 생략하지 않는다',
   currentLive.includes('공격적 목표일은 PASS 약속이 아니다')
-  && currentLive.includes('D10·D20은 아직 PASS가 아니다')
   && currentLive.includes('D30은 생략하지 않음'))
+check('canon 이 routine 기계 초안 사람 검토를 자동 READY·품질 격리로 대체한다',
+  d100Goal.includes('autoReadyPending')
+  && d100Goal.includes('qualityQuarantine')
+  && d100Goal.includes('기계 초안마다 `ready/edit/reject`를 결정하지 않는다')
+  && d100Goal.includes('발행 후 20% 표본 감사'))
 check('현재 실행이 실제 조회수 구현을 별도 critical path로 두고 가짜 숫자를 금지한다',
   /^\| VIEWS \| 실제 근거 조회수 \|/m.test(currentLive)
   && currentLive.includes('댓글 배수·최소값·난수'))
@@ -539,8 +557,8 @@ check('🔴 canon 이 Persona 300+ 를 주간 게시 편수 산식으로 정당�
   !/주\s*\d+\s*(건|편)씩 맡으면/.test(d100Goal)
   && d100Goal.includes('주간 게시 상한은 집중을 막는 안전 상한이지 고정 생산 목표가 아니다'))
 check('현재 실행이 단계 PASS와 제품 건강을 분리한다',
-  current.includes('단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다')
-  && current.includes('같은 KST 운영일 공개'))
+  /단계 PASS는 무인 운영 계약의\s+증거이지 제품 건강 전체의 PASS가 아니다/.test(current)
+  && /같은 KST 운영일\s+공개/.test(current))
 check('Master의 수동 d3 절차가 실행 금지 역사로 축약됐다',
   master.includes('#### d3 로 올리는 절차 — 📜 폐기된 수동 절차, 실행 금지')
   && master.includes('당시의 상세 명령과')

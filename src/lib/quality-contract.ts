@@ -35,13 +35,25 @@ import {
 import { REVIEW_VERSION, DETERMINISTIC_CODES } from './content-core/review'
 import { ARTIFACT_VERSION } from './content-core/artifact'
 import { SPEAKER_PLAN_VERSION } from './content-core/speaker'
-import { DRAFT_GATE_CODES, DRAFT_GATE_VERSION, DRAFT_LIFE_REVIEW_CODES } from './content-core/draft-life-gates'
+import { MATERIAL_CONTRACT_LINES, MATERIAL_CONTRACT_VERSION } from './content-core/material-contract'
+import {
+  DRAFT_GATE_CODES, DRAFT_GATE_VERSION, DRAFT_LIFE_REVIEW_CODES, FAMILY_HEALTH_TITLE_SUBJECT_MARKERS,
+} from './content-core/draft-life-gates'
 import { DRAFT_RULE_VERSION } from './micro-seed-auto-draft'
 import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
-import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
+import {
+  DRAFT_LIFE_ADVISORIES_KEY, DRAFT_LIFE_ADVISORY_CODES, DRAFT_LIFE_REVIEW_HOLD,
+  DRAFT_LIFE_REVIEW_UNREAD, SEMANTIC_HOLD_CODES,
+} from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
-import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-ready-defect-resolution'
+import {
+  DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+  SEMANTIC_DEFECT_SUCCESSION_VERSION,
+} from './auto-ready-defect-resolution'
+import {
+  SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
+} from './auto-ready-semantic-audit'
 
 /**
  * 🔴 **품질 계약 판** — 게이트·검수의 판정이 바뀌면 올린다.
@@ -119,7 +131,96 @@ import { DEFECT_RESOLUTION_KEY, DEFECT_RESOLUTION_RECORD_VERSION } from './auto-
  * quality-v10 운영 첫 D5 글에서 무자녀 P29가 `태아보험` 질문을 맡아 감사 결함이 됐다.
  * 일반 소재 분류를 만들지 않고 확인된 생활 경계만 정본 `persona-no-go`에 추가한다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v11'
+/**
+ * `quality-v12` (2026-10-18) = **bounded creativity** — 과도한 요약형 보수성 제거.
+ * 생성 `v2-draft-p13`과 의미 검수 `v2-review-p9`가 감상·질문·비유·일반 관찰·재구성을 허용하고,
+ * `draft-gates-v10`은 저위험 직장 결 및 구체 사실 없는 가족 유사 연결 표현만 허용한다.
+ * 부모·배우자·자녀·돌봄·건강·갱년기·자산과 제3자 사건·결말 왜곡·핵심 누락·자료 의존·잘림 완성은 그대로 막는다.
+ * CREATIVITY_BLOCK_CLASS 로 8-클래스 분류 기준을 코드에 명시한다.
+ * 🔴 v11 이하 행을 고치거나 지우거나 v12 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ */
+/**
+ * `quality-v13` (2026-10-20) = **가족 주장의 뜻을 하나로 모은다.** 운영 D5 결함 — 성인 자녀(`[성인]`)만 둔 P16이
+ * `2살 아이 보험… 아이 거니까…` 를 자기 일로 써 v12 게이트 · 의미 검수가 모두 지나갔다(큐 cmvfr8glb0001xm4r2n7abt2z).
+ * `family-specifics`(`family-specifics-v2`)가 숫자 나이(0~18살 · `N개월`)를 기존 나이대로 보수적으로 읽고(경계 나이는 이웃 나이대 둘 허용 ·
+ * `성인` 은 추측하지 않는다) 소유 표지(`우리 아이` · `아이 거니까`)를 자기 가족 증거로 읽는다. 초안 게이트 `draft-gates-v11` 은
+ * 그 뜻을 쓰고, 묻는 어미 · 물음표가 1인칭 소유를 지우던 우회를 닫는다(증거 없는 일반·제3자 물음과 카드가 허가하는 어린 자녀는 그대로 통과).
+ * 화자 계획(`speaker.ts`)도 같은 판독을 불러 근거 줄의 숫자 나이가 카드와 어긋나면 1인칭을 허가하지 않는다. 기존 게이트는 약화하지 않았다.
+ * 🔴 v12 이하 행을 고치거나 지우거나 v13 로 옮기지 않는다 — legacy 로 남고 자동 READY · 자동 발행에서 빠진다.
+ *    v12 행의 확정 결함은 지금 계약의 재검증(`auto-ready-defect-resolution`)으로만 해소된다 — 수동 PASS 로 만들지 않는다.
+ */
+/**
+ * `quality-v14` (2026-10-20) = **bounded creativity 판정을 자동 READY 끝단까지 잇는다.** Content Core는
+ * `unsupportedAdditions`·`droppedFromSource`만 있는 초안을 경고와 근거를 남긴 채 ADOPT했지만, auto-READY가
+ * 모든 holds를 다시 차단해 14:15 자연 v13 후보 3건 중 2건을 품질 격리했다. 두 경고 전용 축만 비차단으로 읽고,
+ * 구조 오류·검수 미완료·생활사 모순·안전·복제·핵심 누락·자료 의존 차단은 그대로 유지한다.
+ * 🔴 v13 이하 행은 고치거나 지우거나 v14로 옮기지 않는다. 새 계약 생성만 새 판정을 받는다.
+ */
+/**
+ * `quality-v15` (2026-10-21) = **Content Core와 발행 뒤 의미 감사의 품질 기준을 하나로 묶는다.**
+ * v14 글을 사후 감사자가 옛 요약 기준으로 다시 읽어, 원문의 핵심을 바꾸지 않은 자연스러운 강조를
+ * `sourceDistortions`로 확정한 운영 오탐이 발생했다. 의미 감사도 bounded creativity를 따르고,
+ * 감사 계약·프롬프트·모델 판을 품질 계약 digest에 포함해 두 결정자가 다시 조용히 갈라질 수 없게 한다.
+ * 기존 감사 yes는 수정·삭제하지 않고, 새 감사 계약으로 같은 글·원문·Persona 결속을 재검증한 기록으로만 해소한다.
+ */
+/**
+ * `quality-v16` (2026-10-21) = **의미 감사 no의 출력 모양을 한 가지로 고정한다.**
+ * 허용 표현은 finding에 설명하지 않고, defect=no이면 세 finding 배열을 모두 비운다.
+ * parser의 자기모순 fail-closed와 실제 결함 차단 기준은 그대로다.
+ */
+/**
+ * `quality-v17` (2026-10-21) = **같은 주체·같은 행동의 부사 강조를 새 사실과 구분한다.**
+ * 원문에 이미 주체와 행동이 있으면 직접·바로·정말 같은 부사만으로 새 사건이나 새 행위자가 되지 않는다.
+ * 숫자·장소·관계·새 사건 등 구체 사실과 주체·행동·원인·결과 왜곡 차단은 그대로다.
+ */
+/**
+ * `quality-v18` (2026-10-21) = **Content Core를 유일한 발행 전 품질 결정자로 고정한다.**
+ * auto-READY와 규칙 감사가 `확실히`·`방금`·`논란`과 같은 단어로 Content Core ADOPT를
+ * 다시 뒤집지 않는다. 구조 오류·검수 미완료·holds 불일치·생활사 모순·안전·복제·
+ * 자료 의존·시점 왜곡은 Content Core의 구조화 차단으로 계속 막는다.
+ * 배포 전 보정: 의미 감사 계약·모델·프롬프트와 글·원문·Persona·도장 결속이 모두 같으면,
+ * 직전 계약의 공식 semanticCleared를 provider 재호출 없이 새 계약 기록으로 승계한다.
+ * 결속이나 감사 판이 하나라도 다르면 승계하지 않고 기존 의미 재감사를 그대로 요구한다.
+ */
+/**
+ * `quality-v22` (2026-10-25) = **발행 전 의미 검수의 단발 오판을 차단 finding으로 확정하지 않는다.**
+ * 첫 검수가 차단 finding을 냈을 때만 같은 요청을 한 번 더 보내고, 확인도 차단일 때만 HOLD한다.
+ * 확인에서 재현되지 않으면 ADOPT하고 1차 finding은 artifact에 보존한다. 확인을 측정하지 못하면 fail-closed HOLD다.
+ * 공급 회차 상한도 judge 1 + 생성 최대 4로 맞춰 확인 호출이 바깥 예산에 잘리지 않게 한다.
+ * 위해·개인정보·복제·가족 사실 모순·자료 의존 등 결정적 차단은 완화하지 않는다.
+ *
+ * `quality-v23` (2026-10-26) = **원문보다 넓고 약한 일반화를 새 사실·왜곡과 구분한다.**
+ * 원문의 `회사를 그만두고`를 `일을 쉬고`로 줄인 글을 발행 전 Content Core는 ADOPT했지만,
+ * 발행 뒤 의미 감사가 새 사실로 오판해 D10 자동 READY를 닫았다. 공유 실질 변경 계약(`material-contract-v2`)에
+ * 비모순 일반화·완화 허용과 반대 경계를 함께 명시하고, 발행 전 검수(`v2-review-p11`)와 발행 뒤 감사
+ * (`semantic-audit-prompt-v7`)가 같은 줄을 그대로 읽는다. 더 구체적인 사실 추가·반대 상태·핵심 결과 변경은 계속 막는다.
+ *
+ * `quality-v24` (2026-10-26) = **Content Core를 의미 품질의 단일 결정 권위로 둔다.**
+ * 발행된 바이트·도장·artifact 원문·Persona 결속이 유효하면 사후 의미 모델의 발견·실패는 참고 note로만 남고
+ * 자동 READY를 다시 닫지 않는다. 결속 실패와 기존 규칙 감사의 개인정보·복제·자료 의존·생활사 하드게이트는
+ * 계속 확정 결함이며, 같은 모델·같은 요청의 확인 호출은 제거해 요청을 최대 1회로 줄인다.
+ * 옛 의미 감사 `measured yes`도 사후 모델을 다시 부르지 않고, 정확한 글·도장·artifact·Persona 결속과
+ * 당시 Content Core 승인을 묶은 append-only 계획으로만 해소한다. 결속은 적용 직전 다시 대조한다.
+ *
+ * `quality-v25` (2026-10-26) = **Content Core 단일 권위를 생활 게이트에도 완성한다.**
+ * 기존 `lifeReview`의 차단 분류는 Content Core failure로 승격해 Queue로 보내지 않는다.
+ * 남편·자녀 건강 이야기에서 생략된 주어를 작성자 질병으로 오판한 경우는 ADOPT 후
+ * `draftLifeAdvisories` 참고 기록만 남기고 자동 READY가 다시 막지 않는다. 정보 누락·모양 오류는
+ * `DRAFT_LIFE_REVIEW:unread`로 fail-closed하며 사진 의존·시점 왜곡·가족 모순·고위험 건강 허구는 계속 차단한다.
+ *
+ * `quality-v20` (2026-10-23~24) = **미배포 Draft v19의 bounded creativity·차단 finding과 발행 뒤 감사를 하나의 실질 변경 계약으로 묶는다.**
+ * p10 검수는 감상·질문·비유·일반 관찰·재구성과 사소한 생략을 finding에 적지 않는다.
+ * `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 뜻·결론·질문 손실만
+ * 뜻하며 Content Core에서 HOLD한다. 원문에 없는 시간대·상대 시점과 새 전달자·전언 경로도 위험 허구로 명시한다.
+ * auto-READY의 옛 비차단 예외를 제거해 같은 구조화 결론을 다시 뒤집지 않는다.
+ * Content Core 검수(`v2-review-p10`)와 의미 감사(`semantic-audit-prompt-v6`)는 같은 `material-contract-v1` 줄을 싣는다.
+ * 의미 감사(`auto-ready-semantic-audit-v3`)는 1차 측정 yes 를 같은 요청으로 한 번 더 확인하고, 확인도 yes 일 때만
+ * 결함으로 확정한다. 확인 no 는 결함 아님, 확인 측정 실패는 재시도 가능 실패다(no 로 읽지 않는다).
+ * 무결성·결속·장부·예산·usageUnknown·재시도 가능 실패·확정 결함의 전역 정지는 그대로다.
+ * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
+ * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
+ */
+export const QUALITY_CONTRACT_VERSION = 'quality-v25'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
@@ -152,19 +253,35 @@ export function qualityContractComponents(): Record<string, unknown> {
     draftRuleVersion: DRAFT_RULE_VERSION,
     draftGateVersion: DRAFT_GATE_VERSION,
     draftGateCodes: DRAFT_GATE_CODES,
-    // 🔴 (v2) 모호 → 사람 검토로 보내는 축과 그 경고 이름 — 바뀌면 자동 READY 표본의 적격이 바뀐다
-    //    (v3) 원천·시점 축 넷과 `noLifeFactNeeded` 가족사가 이 목록에 더해졌다
+    // legacy review 코드 목록과 현재 비차단 advisory 계약. 판정 누락·모양 오류만 fail-closed 한다.
     draftLifeReviewCodes: DRAFT_LIFE_REVIEW_CODES,
-    draftLifeReviewHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
+    draftLifeReview: {
+      advisoryKey: DRAFT_LIFE_ADVISORIES_KEY,
+      advisoryCodes: DRAFT_LIFE_ADVISORY_CODES,
+      familyHealthTitleSubjectMarkers: FAMILY_HEALTH_TITLE_SUBJECT_MARKERS,
+      invalidHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
+    },
     // 🔴 (v4) 열림 근거와 창업자 gold — gold 를 한 글자라도 바꾸면 이 digest 가 바뀌어 판을 올려야 한다
     evidenceBasis: QUALITY_EVIDENCE_BASIS,
     founderGold: { version: FOUNDER_GOLD_VERSION, digest: FOUNDER_GOLD_PINNED_DIGEST, shape: FOUNDER_GOLD_SHAPE },
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
     semanticHoldCodes: SEMANTIC_HOLD_CODES,
     judgeContractDigest: JUDGE_CONTRACT_DIGEST,
+    semanticAudit: {
+      contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION,
+      promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
+      model: SEMANTIC_AUDIT_MODEL,
+    },
+    // 🔴 (v19) 발행 전 검수와 발행 뒤 감사가 함께 싣는 실질 변경 계약 — 줄 자체를 넣는다(판 이름만 믿지 않는다)
+    materialContract: { version: MATERIAL_CONTRACT_VERSION, lines: MATERIAL_CONTRACT_LINES },
     // 🔴 (v6 보정 2026-10-01) 결함 축 정본 — "지금 계약에서 해소되지 않은 확정 결함" 의 기록 판.
     //    해소 기록은 이 digest 에 묶인다 — 판정 규칙(기록 판)이 바뀌면 digest 가 바뀌어 옛 기록은 아무것도 해소하지 못한다
-    defectResolution: { recordVersion: DEFECT_RESOLUTION_RECORD_VERSION, key: DEFECT_RESOLUTION_KEY },
+    defectResolution: {
+      recordVersion: DEFECT_RESOLUTION_RECORD_VERSION,
+      semanticRecordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+      semanticSuccessionVersion: SEMANTIC_DEFECT_SUCCESSION_VERSION,
+      key: DEFECT_RESOLUTION_KEY,
+    },
   }
 }
 

@@ -2,25 +2,20 @@
 /**
  * G8 편입기 검사 — 임시 fixture 에서만 쓴다. 운영 파일·연구 정본에는 쓰지 않는다.
  *
- * 무엇을 보나
- *   ① 모든 의도가 정확히 한 상태로 분류된다 (fixture 의도마다 기대 상태가 있다)
- *   ② HOLD·REJECT·INCOMPLETE·영토 미결정·중복은 후보가 되지 못한다
- *   ③ 필수 필드·제목·시리즈 선행·publishWindow 계약
- *   ④ primary 5 + fallback 3 의 결정적 순서 · 입력 순서를 뒤집어도 같은 manifest
- *   ⑤ CLI dry-run 이 입력을 한 바이트도 바꾸지 않는다 · 두 번 돌려도 같은 출력
- *   ⑥ apply — 두 번 실행해도 중복 0 · 중간 실패는 세 파일 원복 · 큐/편입 장부 어긋남 탐지
- *   ⑦ manifest 가 읽은 입력 **하나하나**가 바뀌면 STALE_INPUT
- *   ⑧ 편입 장부는 정본 m3-pipeline 계약으로만 — 깨진 장부·1:1 위반이면 쓰기 0
- *   ⑨ 판정 시각은 정확한 KST 시각 — 같은 날 10:29:59 / 10:30:00 경계
- *   ⑩ **실제 자식 프로세스** — 동시 apply 는 하나만 쓰고, SIGKILL 급사는 다음 apply 가 되돌린다
- *   ⑪ (연구 디렉터리가 있을 때만) 실제 I-T6-09 · I-T1-26 · 정본 pipeline 사본 대조
- *   ⑫ 후보 0건 manifest 도 잠금 안에서 앞선 급사를 먼저 되돌린다 (실제 SIGKILL)
- *   ⑬ G8 apply 대 M-AUTO 등록 — topic-queue 공용 writer 잠금 · 스냅샷 원복 CAS (실제 자식 프로세스)
- *   ⑭ journal 신원 — 경로·개수·중복·schema 가 어긋나면 쓰기·삭제 0
- *   ⑮ 큐 writer 잠금은 논리 큐 하나 — 서로 다른 repo 경로의 G8 · 등록이 서로를 막는다
- *   ⑯ 등록 쌍(articles · queue) 원복은 같은 임계구역에서 함께 판정 · 함께 쓴다
- *   ⑰ 등록 대 등록 — 잠금 안에서 articles.ts 를 다시 읽어 중복·슬롯·삽입을 재검사
- *   ⑱ register durable transaction — 실제 register CLI 를 SIGKILL 해도 다음 실행이 복구 · 위조 journal 거부
+ * 무엇을 보나 (g8-promotion/2 — G8 은 GRAPH_READY intent 의 영구 신원 admission 도구다)
+ *   Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 큐 행·콘텐츠 계획 필드 0 · 입력 15개 · 결정적 · 쓰기 0 · 연구 current 미사용
+ *   Ⓑ snapshot ↔ 제품 bundle — payload · contentHash · EXPORT_HASH · graphVersion · semanticHash · current · control 전부 대조
+ *   Ⓒ receipt 불변식 — 파일명 · manifest 해시 · receiptHash · 사람 승인 · confirm hash
+ *   Ⓓ 신원 입력 15개 — 하나씩 바뀌면 journal 전에 STALE_INPUT · 쓰기 0
+ *   Ⓔ staged preflight — 한 admission 이라도 실패하면 세 파일 쓰기 0
+ *   Ⓕ apply — 세 파일만 · 제품·큐 바이트 불변 · ALREADY_APPLIED · 반쪽 상태는 INCONSISTENT
+ *   Ⓖ 급사 7지점 — 잠금 유지 · 명시 stale lock 경로만 · commit-forward 로 ADMITTED · ledger 단조 증가
+ *   Ⓗ CONFLICT — receipt · slug manifest · ledger 가 before 도 after 도 아니면 덮지 않는다
+ *   Ⓘ KNOWN_LEGACY — 정확한 열거만 · UNKNOWN 실패
+ *   Ⓙ 잠금 — O_EXCL · 자동 탈취 0 · 실제 자식 프로세스 동시 apply · 실제 SIGKILL
+ *   Ⓚ 공용 helper — journal 신원 · G8 v1 큐 대조(DIRECT source 가 아직 쓴다)
+ *   ⑬ ⑮ ⑯ ⑰ ⑱ M-AUTO 등록의 큐 writer 잠금 · 쌍 원복 · durable transaction (다른 큐 writer 와의 경합)
+ *   ⑪ (연구 디렉터리가 있을 때만) 정본 pipeline 사본 대조 · 실제 장부 KNOWN_LEGACY · 실제 snapshot dry-run
  *
  * 🔴 `G8_PROMOTER_LIB` 는 변이 시험(`magazine-g8-promote-mutation.mjs`)이 바꾼 lib 를 넣는 자리다.
  *    그때는 CLI 자식 프로세스도 변이된 lib 옆의 CLI 사본을 쓴다 — 운영 CLI 는 이 변수를 읽지 않는다.
@@ -30,10 +25,9 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
-import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 
 /**
  * 🔴 큐 writer 잠금은 논리 scope 하나다. 이 검사는 **자기만의 시험 scope** 를 쓴다 —
@@ -53,9 +47,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
 const LIB = process.env.G8_PROMOTER_LIB ?? path.join(HERE, 'lib/magazine-g8-promoter.mjs')
 const lib = await import(pathToFileURL(LIB).href)
+const builder = await import(pathToFileURL(path.join(path.dirname(LIB), 'magazine-graph-build.mjs')).href)
 const CLI_REAL = path.join(HERE, 'magazine-g8-promote.mjs')
 const PIPELINE_FIXTURE = path.join(HERE, '__fixtures__/magazine-g8')
-const AT = '2026-10-06T09:00:00+09:00'
+const GEFF = '2026-10-15T13:00:00+09:00'
+const AT = '2026-10-15T14:00:00+09:00'
+const COMMITTED = '2026-10-15T15:00:00+09:00'
 
 let pass = 0
 let fail = 0
@@ -80,138 +77,18 @@ function cliPath() {
 }
 const CLI = cliPath()
 
-// ── fixture ─────────────────────────────────────────────────
-
-const ev = (observedHits, communityWomen = 0) => ({ refs: 1, observedHits, grade: 'OBSERVED', branchOpened: 0, communityWomen })
-/**
- * 의도 하나 = build·canonical·automation·rebaseline 네 줄. 기본은 **완전한 AUTO_READY**,
- * 바꾸고 싶은 것만 덮어쓴다. `expectClass` 가 이 의도의 정답이다.
- */
-const BASE = {
-  territoryId: 'T8', magazineCluster: 'money-work', verificationProfile: 'STANDARD', automationDecision: 'PASS',
-  topicVerdict: 'AUTO_READY_TOPIC', communityDestination: '/community/free', answerScope: '이 글이 답할 범위',
-  audienceSituation: '이런 상황의 독자', exclusions: ['단정하지 않는다'], evidence: ev(1),
-  riskLevel: 'LOW', contentTypeHint: 'EVERGREEN', searchIntentType: '질문', priorCommunityFit: null, decisionBundle: null,
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+async function waitFor(file, ms = 15000) {
+  const until = Date.now() + ms
+  while (!fs.existsSync(file)) { if (Date.now() > until) return false; await sleep(20) }
+  return true
 }
-const INTENTS = [
-  { id: 'I-F-01', q: '살 빠지는 속도가 느려질 때', expectClass: 'LIVE', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'live-article', coverage: 'ANSWERS' }] },
-  { id: 'I-F-02', q: '예약된 주제를 묻는 질문', expectClass: 'SCHEDULED', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'sched-article', coverage: 'SCHEDULED_NOT_YET_PUBLIC' }] },
-  { id: 'I-F-03', q: '큐에 이미 있는 주제 질문', expectClass: 'ALREADY_QUEUED', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'queued-one', coverage: 'QUEUED_NOT_PUBLIC' }] },
-  { id: 'I-F-04', q: '사라진 글을 가리키는 질문', expectClass: 'DUPLICATE_OR_CONFLICT', existingSlugs: [{ slug: 'gone-slug', coverage: 'ANSWERS' }] },
-  { id: 'I-F-05', q: '판정에서 빠진 질문입니다', expectClass: 'REJECT', automationDecision: 'REJECT', topicVerdict: 'AUTO_REJECT' },
-  { id: 'I-F-06', q: '근거가 모자란 질문입니다', expectClass: 'HOLD', automationDecision: 'HOLD', topicVerdict: 'AUTO_HOLD' },
-  { id: 'I-F-07', q: '기존 글을 보강할 질문', expectClass: 'EXTEND_EXISTING', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'live-article', coverage: 'ADJACENT' }] },
-  { id: 'I-F-08', q: '부모님 돌봄을 시작할 때', expectClass: 'TERRITORY_DECISION_REQUIRED', decisionBundle: 'T9_PARENT_CARE', evidence: ev(10, 3) },
-  { id: 'I-F-09', q: '후보 영토에 있는 질문', expectClass: 'TERRITORY_DECISION_REQUIRED', territoryId: 'T9(후보)', evidence: ev(10, 3) },
-  { id: 'I-F-10', q: '살이 잘 안 빠질 때', expectClass: 'DUPLICATE_OR_CONFLICT', evidence: ev(10, 3) },
-  { id: 'I-F-11', q: '큐에 있는 주제 제목', expectClass: 'DUPLICATE_OR_CONFLICT', evidence: ev(10, 3) },
-  { id: 'I-F-12', q: '원고 폴더와 겹치는 질문', expectClass: 'DUPLICATE_OR_CONFLICT', slug: 'draft-only-slug', evidence: ev(10, 3) },
-  { id: 'I-F-13', q: '판정이 끝나지 않은 질문', expectClass: 'INCOMPLETE', topicVerdict: 'AUTO_PENDING', evidence: ev(10, 3) },
-  { id: 'I-F-14', q: '콘텐츠 유형이 비어 있을 때', expectClass: 'INCOMPLETE', contentTypeHint: null, evidence: ev(10, 3) },
-  { id: 'I-F-15', q: '커뮤니티 목적지가 없을 때', expectClass: 'INCOMPLETE', communityDestination: null, evidence: ev(10, 3) },
-  { id: 'I-F-16', q: '갱년기', expectClass: 'INCOMPLETE', evidence: ev(10, 3) },
-  { id: 'I-F-17', q: '이어질 관계가 없는 질문', expectClass: 'INCOMPLETE', noEdges: true, evidence: ev(10, 3) },
-  { id: 'I-F-18', q: '계절 창이 없는 계절 주제', expectClass: 'INCOMPLETE', contentTypeHint: 'SEASONAL', evidence: ev(10, 3) },
-  { id: 'I-F-19', q: '검색 의도 유형이 없을 때', expectClass: 'INCOMPLETE', searchIntentType: null, evidence: ev(10, 3) },
-  { id: 'I-F-20', q: '시니어 운동을 시작하는 방법', expectClass: 'INCOMPLETE', evidence: ev(10, 3) },
-  { id: 'I-F-21', q: '사전이 가르지 못한 첫째 질문', expectClass: 'INCOMPLETE', slug: 'same-dictionary-slug', evidence: ev(10, 3) },
-  { id: 'I-F-22', q: '사전이 가르지 못한 둘째 질문', expectClass: 'INCOMPLETE', slug: 'same-dictionary-slug', evidence: ev(10, 3) },
-  { id: 'I-F-23', q: '클러스터 정본이 서로 다를 때', expectClass: 'INCOMPLETE', canonCluster: 'sleep', evidence: ev(10, 3) },
-  // ── 실제 반례를 옮긴 것 — 부분 답변 · 범위 확장은 완료 답변이 아니다 ──
-  { id: 'I-T6-09', q: '50대 여자가 할 수 있는 일에 뭐가 있나', expectClass: 'EXTEND_EXISTING', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'rehire-where-to-start', coverage: 'ANSWERS_PARTIAL' }] },
-  { id: 'I-T1-26', q: '호르몬 치료 범위를 넓혀 묻는 질문', expectClass: 'EXTEND_EXISTING', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'hormone-therapy-who', coverage: 'ANSWERS_WITH_SCOPE_EXPANSION' }] },
-  // ── 같은 날 10:30 공개 글 — 판정 시각 경계 ──
-  { id: 'I-F-52', q: '내일 아침 공개될 글의 질문', expectClass: 'SCHEDULED', topicVerdict: 'EXTEND_EXISTING', existingSlugs: [{ slug: 'boundary-article', coverage: 'ANSWERS' }] },
-  // ── 판정은 ELIGIBLE_NEW · 이번 구간에서 빠지는 것 ──
-  { id: 'I-F-30', q: '철 지난 계절 주제 질문', expectClass: 'ELIGIBLE_NEW', contentTypeHint: 'SEASONAL', publishWindow: { after: '2026-08-01', before: '2026-09-30' }, evidence: ev(10, 3) },
-  { id: 'I-F-31', q: '아직 이른 계절 주제 질문', expectClass: 'ELIGIBLE_NEW', contentTypeHint: 'SEASONAL', publishWindow: { after: '2026-11-01', before: '2026-12-31' }, evidence: ev(10, 3) },
-  { id: 'I-F-35', q: '앞 회차가 없는 시리즈 둘째 편', expectClass: 'ELIGIBLE_NEW', seriesId: 'gap-series', seriesOrder: 2, evidence: ev(10, 3) },
-  // ── 선정 대상 ──
-  { id: 'I-F-32', q: '지금 창이 열린 계절 주제', expectClass: 'ELIGIBLE_NEW', riskLevel: 'MEDIUM', magazineCluster: 'emotion', contentTypeHint: 'SEASONAL', publishWindow: { after: '2026-10-01', before: '2026-11-30' }, evidence: ev(1) },
-  { id: 'I-F-33', q: '걷기 시리즈 둘째 편 질문', expectClass: 'ELIGIBLE_NEW', magazineCluster: 'daily', seriesId: 'walk-series', seriesOrder: 2, evidence: ev(6), priorCommunityFit: 'MEDIUM' },
-  { id: 'I-F-41', q: '증거가 가장 많은 생활 질문', expectClass: 'ELIGIBLE_NEW', evidence: ev(9), priorCommunityFit: 'HIGH', toLive: true },
-  { id: 'I-F-42', q: '증거가 중간인 생활 질문', expectClass: 'ELIGIBLE_NEW', evidence: ev(5), priorCommunityFit: 'MEDIUM' },
-  { id: 'I-F-43', q: '증거가 적은 생활 질문', expectClass: 'ELIGIBLE_NEW', evidence: ev(2) },
-  { id: 'I-F-44', q: '중간 위험의 생활 질문', expectClass: 'ELIGIBLE_NEW', riskLevel: 'MEDIUM', evidence: ev(4) },
-  { id: 'I-F-45', q: '의료 프로필 첫째 질문', expectClass: 'ELIGIBLE_NEW', riskLevel: 'MEDIUM', verificationProfile: 'MEDICAL', evidence: ev(8) },
-  { id: 'I-F-46', q: '의료 프로필 둘째 질문', expectClass: 'ELIGIBLE_NEW', riskLevel: 'MEDIUM', verificationProfile: 'MEDICAL', evidence: ev(3) },
-  { id: 'I-F-47', q: '높은 위험의 의료 질문', expectClass: 'ELIGIBLE_NEW', riskLevel: 'HIGH', verificationProfile: 'MEDICAL', evidence: ev(10) },
-  { id: 'I-F-48', q: '높은 위험의 재정 질문', expectClass: 'ELIGIBLE_NEW', riskLevel: 'HIGH', verificationProfile: 'FINANCIAL', evidence: ev(1) },
-]
-/** 정답 순서 — tier(LOW/STANDARD → STANDARD → 비HIGH → HIGH) → 점수 내림차순 → intentId */
-const WANT_PRIMARY = ['I-F-41', 'I-F-33', 'I-F-42', 'I-F-43', 'I-F-44']
-const WANT_FALLBACK = ['I-F-32', 'I-F-45', 'I-F-46']
-
-const slugOf = (x) => x.slug ?? `fx-${x.id.toLowerCase()}`
+const exitOf = (child) => new Promise((r) => child.on('exit', (code, signal) => r({ code, signal })))
+const stdoutOf = (child) => { let s = ''; child.stdout.on('data', (d) => { s += d }); return () => s }
+const parseJson = (text, fallback) => { try { return JSON.parse(text) } catch { return fallback } }
 const write = (root, rel, text) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text) }
-const jsonl = (rows) => rows.map((r) => `${JSON.stringify(r)}\n`).join('')
-
-function makeFixture({ reverse = false, bundleCombined = 'fixturecombined', dropCanonical = false } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-check-'))
-  const research = path.join(dir, 'research')
-  const repo = path.join(dir, 'repo')
-  const order = reverse ? [...INTENTS].reverse() : INTENTS
-  const v = (x, k) => (k in x ? x[k] : BASE[k])
-
-  const build = order.map((x) => ({
-    schemaVersion: 'intent/2', intentId: x.id, primaryQuery: x.q, territoryId: v(x, 'territoryId'),
-    magazineCluster: v(x, 'magazineCluster'), audienceSituation: v(x, 'audienceSituation'), answerScope: v(x, 'answerScope'),
-    exclusions: v(x, 'exclusions'), verificationProfile: v(x, 'verificationProfile'), automationDecision: v(x, 'automationDecision'),
-    topicVerdict: v(x, 'topicVerdict'), communityDestination: v(x, 'communityDestination'), evidence: v(x, 'evidence'),
-  }))
-  const canonical = order.filter((x) => !(dropCanonical && x.id === 'I-F-48')).map((x) => ({
-    intentId: x.id, riskLevel: v(x, 'riskLevel'), contentTypeHint: v(x, 'contentTypeHint'), searchIntentType: v(x, 'searchIntentType'),
-    magazineCluster: x.canonCluster ?? v(x, 'magazineCluster'), existingSlugs: x.existingSlugs ?? [],
-    evidenceRefs: [{ evidencePath: `evidence/fixture/${x.id}.json` }],
-    ...(x.publishWindow ? { publishWindow: x.publishWindow } : {}),
-    ...(x.seriesId ? { seriesId: x.seriesId, seriesOrder: x.seriesOrder } : {}),
-  }))
-  const automation = order.map((x) => ({ intentId: x.id, verdictWhy: `${x.id} 판정 근거`, priorCommunityFit: v(x, 'priorCommunityFit') }))
-  const rebaseline = order.map((x) => ({ intentId: x.id, decisionBundle: v(x, 'decisionBundle') }))
-  const edges = []
-  for (const x of order) {
-    if (x.noEdges) continue
-    edges.push({ edgeId: `E-${x.id}-a`, fromIntentId: x.id, toIntentId: x.toLive ? 'I-F-01' : 'I-F-07', relationType: 'NEXT_QUESTION',
-      anchorLabel: '다음 질문', readerReason: '읽고 나면 이어서 궁금해진다', priority: 1, layers: { AUTOMATION_READY: true } })
-    edges.push({ edgeId: `E-${x.id}-b`, fromIntentId: x.id, toIntentId: 'I-F-06', relationType: 'COMMUNITY',
-      anchorLabel: '이야기 나누기', readerReason: '경험을 나눈다', priority: 1, layers: { AUTOMATION_READY: true } })
-  }
-  write(research, 'g4-intents-canonical.jsonl', jsonl(canonical))
-  write(research, 'g4-automation-2026-09-23.jsonl', jsonl(automation))
-  write(research, 'g4-rebaseline-2026-09-23.jsonl', jsonl(rebaseline))
-  write(research, 'contract/build/current/intents.jsonl', jsonl(build))
-  write(research, 'contract/build/current/edges.jsonl', jsonl(edges))
-  write(research, 'contract/build/current/mappings.jsonl', '')
-  write(research, 'contract/build/current/manifest.json', JSON.stringify({ graphVersion: 'g-fixture-000000', contentHash: { combined: 'fixturecombined' } }))
-  const table = Object.fromEntries(INTENTS.map((x) => [x.q, slugOf(x)]))
-  write(research, 'contract/m3-slug.mjs', `const T = ${JSON.stringify(table)}\nexport function proposeSlug(q) { return T[q] ?? '' }\n`)
-  write(research, 'contract/m3-slug-manifest.json', `${JSON.stringify({ _note: 'fixture', asOf: '2026-09-24', slugs: {} }, null, 2)}\n`)
-  // 🔴 장부 계약은 정본 사본이다 (⑪ 이 연구 디렉터리의 원본과 바이트 대조한다)
-  for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) fs.copyFileSync(path.join(PIPELINE_FIXTURE, f), path.join(research, 'contract', f))
-
-  write(repo, 'src/content/magazine/types.ts', fs.readFileSync(path.join(REPO, 'src/content/magazine/types.ts'), 'utf8'))
-  const realQueue = fs.readFileSync(path.join(REPO, 'drafts/magazine/topic-queue.ts'), 'utf8')
-  const header = realQueue.slice(0, realQueue.indexOf('export const TOPIC_QUEUE'))
-  const qRow = (day, slug, title, cluster) => lib.renderQueueRow({ day, slug, title, contentType: 'EVERGREEN', intent: '상황', cluster,
-    target: '50대', riskLevel: 'LOW', reviewMode: 'SUMMARY_ONLY', imageMode: 'OPTIONAL', autoEligible: true, ctaBoard: '/community/free',
-    internalLinks: [], whyNow: '기존 행', notes: '기존 행' })
-  write(repo, 'drafts/magazine/topic-queue.ts', `${header}export const TOPIC_QUEUE: TopicQueueItem[] = [\n${qRow(10, 'queued-one', '큐에 이미 있는 주제 질문', 'family')}${qRow(12, 'queued-two', '큐에 있는 주제 제목', 'relationship')}]\n`)
-  const art = (title, cluster, extra) => ({ title, description: '설명', cluster, publishedAt: '2026-09-01', body: [], ...extra })
-  write(repo, 'src/content/magazine/articles.ts', `export const MAGAZINE_ARTICLE_RECORD = ${JSON.stringify({
-    'live-article': art('살이 잘 안 빠질 때', 'daily', { seriesId: 'walk-series', seriesOrder: 1 }),
-    'sched-article': art('예약된 글 제목입니다', 'sleep', { status: 'SCHEDULED', publishedAt: '2026-10-20', publishAt: '2026-10-20T10:30:00+09:00' }),
-    'rehire-where-to-start': art('재취업 어디서부터 시작할까', 'money-work'),
-    'hormone-therapy-who': art('호르몬 치료는 누가 받나', 'clinic'),
-    'boundary-article': art('내일 아침 공개될 글', 'sleep', { status: 'SCHEDULED', publishedAt: '2026-10-07', publishAt: '2026-10-07T10:30:00+09:00' }),
-  }, null, 2)}\n`)
-  write(repo, 'src/content/magazine/graph/current.ts', "export { GRAPH, EXPORT_HASH } from './g-fixture-000000'\n")
-  write(repo, 'src/content/magazine/graph/g-fixture-000000.ts', `export const GRAPH = ${JSON.stringify({
-    graphVersion: 'g-fixture-000000', contentHash: { combined: bundleCombined }, edges: [], intents: [],
-    mappings: [{ intent: 'I-F-01', slug: 'live-article', cluster: 'daily' }],
-  }, null, 2)}\nexport const EXPORT_HASH = 'x'\n`)
-  fs.mkdirSync(path.join(repo, 'drafts/magazine/draft-only-slug'), { recursive: true })
-  return { dir, research, repo }
-}
+const jsonl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n'
+const fixtures = []
 
 /** 디렉터리 전체의 파일 → sha256. 새 파일·지운 파일·바뀐 바이트를 모두 잡는다 */
 function snapshot(root) {
@@ -219,380 +96,587 @@ function snapshot(root) {
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const f = path.join(d, e.name)
-      if (e.isDirectory()) { out[`${path.relative(root, f)}/`] = 'DIR'; walk(f) } else out[path.relative(root, f)] = lib.sha256(fs.readFileSync(f, 'utf8'))
+      if (e.isSymbolicLink()) out[path.relative(root, f)] = `LINK:${fs.readlinkSync(f)}`
+      else if (e.isDirectory()) { out[`${path.relative(root, f)}/`] = 'DIR'; walk(f) } else out[path.relative(root, f)] = lib.sha256(fs.readFileSync(f, 'utf8'))
     }
   }
   walk(root)
   return out
 }
 
-const build = async (fx, at = AT) => lib.buildManifest(await lib.loadInputs({ researchDir: fx.research, repoDir: fx.repo }), { at })
-const filesOf = (fx) => ({
-  queue: path.join(fx.repo, 'drafts/magazine/topic-queue.ts'),
-  slugs: path.join(fx.research, 'contract/m3-slug-manifest.json'),
-  ledger: path.join(fx.research, 'contract/m3-state.jsonl'),
-})
-const bytesOf = (fx) => Object.fromEntries(Object.entries(filesOf(fx)).map(([k, f]) => [k, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null]))
-const apply = (m, fx, faultHook = () => {}) => lib.applyManifest({ manifest: m, queueRoot: fx.repo, admissionRoot: fx.research, faultHook })
+// ── G8 fixture ──────────────────────────────────────────────
+// X1 · X2: GRAPH_READY(direct 2 · discovery 1 · reverse 1). Y: GRAPH_INCOMPLETE(direct 1). Z: BLOCKED(꺼진 cluster).
+const intent = (intentId, magazineCluster, extra = {}) => ({ intentId, primaryQuery: `${intentId} 질문`, territoryId: 'T3', magazineCluster,
+  audienceSituation: 's', policyScope: 'ALLOWED', policyScopeWhy: 'w', verificationProfile: 'STANDARD', profileSpec: {},
+  automationDecision: 'PASS', topicVerdict: 'AUTO_READY_TOPIC', verdictWhy: 'v', runtimeState: 'UNPUBLISHED',
+  evidence: { refs: 2 }, existingAssetRelation: '없음', ...extra })
+const canon = (intentId, slugs = []) => ({ intentId, answerScope: 'a', exclusions: [], existingSlugs: slugs.map((slug) => ({ slug, coverage: 'ANSWERS', cluster: 'fam' })) })
+const edge = (edgeId, fromIntentId, toIntentId, relationType, placement, extra = {}) => ({ edgeId, fromIntentId, toIntentId, relationType,
+  readerReason: `${fromIntentId}에서 ${toIntentId}로 가는 이유`, anchorLabel: `${toIntentId} 보기`, placement, priority: 1,
+  reciprocalPolicy: 'ONE_WAY', reciprocalGroupId: null, backlinkPlan: null, reciprocalWhy: null, ...extra })
+const SNAPSHOT_TEXTS = {
+  'g4-intents-canonical.jsonl': jsonl([canon('I-X1'), canon('I-X2'), canon('I-P1', ['p1']), canon('I-P2', ['p2']), canon('I-P3', ['p3']), canon('I-D', ['d']), canon('I-Y'), canon('I-Z')]),
+  'g4-automation-2026-09-23.jsonl': jsonl([intent('I-X1', 'fam', { primaryQuery: '배우고 싶은 것을 고를 때' }), intent('I-X2', 'fam', { primaryQuery: '하루 일과를 다시 짤 때' }),
+    intent('I-P1', 'fam'), intent('I-P2', 'fam'), intent('I-P3', 'fam'), intent('I-D', 'rel'),
+    intent('I-Y', 'fam', { primaryQuery: '한 가지만 이어지는 질문' }), intent('I-Z', 'off', { primaryQuery: '꺼진 분류의 질문' })]),
+  'g5-graph-2026-09-23.jsonl': jsonl([
+    edge('E-0001', 'I-X1', 'I-P1', 'NEXT_QUESTION', 'FOOTER_NEXT', { reverseEdgeId: 'E-0007' }),
+    edge('E-0002', 'I-X1', 'I-P2', 'SIBLING', 'FOOTER_SIBLING'),
+    edge('E-0003', 'I-X1', 'I-D', 'BRIDGE', 'FOOTER_BRIDGE'),
+    edge('E-0004', 'I-X2', 'I-P2', 'NEXT_QUESTION', 'FOOTER_NEXT', { reverseEdgeId: 'E-0008' }),
+    edge('E-0005', 'I-X2', 'I-P3', 'SIBLING', 'FOOTER_SIBLING'),
+    edge('E-0006', 'I-X2', 'I-D', 'BRIDGE', 'FOOTER_BRIDGE'),
+    edge('E-0007', 'I-P1', 'I-X1', 'NEXT_QUESTION', 'FOOTER_NEXT', { reverseEdgeId: 'E-0001' }),
+    edge('E-0008', 'I-P2', 'I-X2', 'NEXT_QUESTION', 'FOOTER_NEXT', { reverseEdgeId: 'E-0004' }),
+    edge('E-0009', 'I-Y', 'I-P1', 'NEXT_QUESTION', 'FOOTER_NEXT'),
+    edge('E-0010', 'I-Y', 'I-D', 'BRIDGE', 'FOOTER_BRIDGE'),
+    edge('E-0011', 'I-Z', 'I-P1', 'NEXT_QUESTION', 'FOOTER_NEXT'),
+    edge('E-0012', 'I-Z', 'I-P2', 'SIBLING', 'FOOTER_SIBLING'),
+    edge('E-0013', 'I-Z', 'I-D', 'BRIDGE', 'FOOTER_BRIDGE'),
+  ]),
+  'assets-published.jsonl': jsonl(['p1', 'p2', 'p3', 'd'].map((slug) => ({ slug, assetState: 'LIVE' }))),
+  'assets-queue.jsonl': '',
+}
+const RESOLVER = `export const IMPLEMENTED_SURFACES = [\n  'CTA_END',\n  'FOOTER_NEXT',\n  'FOOTER_SIBLING',\n  'FOOTER_BRIDGE',\n] as const
+export const FOOTER_SURFACES = ['FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE'] as const
+export const MAGAZINE_RELATION_TYPES = [\n  'PREREQUISITE',\n  'NEXT_QUESTION',\n  'SIBLING',\n  'SERIES',\n  'BRIDGE',\n  'ACTION',\n  'COMMUNITY',\n] as const\n`
+const controlText = (gv) => `export const CONTROL: MagazineGraphControl = {\n  graphVersion: '${gv}',\n  enabled: true,\n  enabledClusters: ["fam","rel"],\n  surfaces: {"CTA_END":true,"FOOTER_NEXT":true,"FOOTER_SIBLING":true,"FOOTER_BRIDGE":true},\n  killSwitch: {"tripped":false,"trippedAt":null,"trippedBy":null,"reason":null},\n  previousGraphVersion: null,\n} as const\n`
+const art = (title, cluster, publishAt) => ({ title, cluster, publishedAt: publishAt.slice(0, 10), status: 'SCHEDULED', publishAt })
+const ARTICLES_TEXT = `export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = ${JSON.stringify({
+  p1: art('첫째 공개 글', 'fam', '2026-10-01T10:30:00+09:00'), p2: art('둘째 공개 글', 'fam', '2026-10-02T10:30:00+09:00'),
+  p3: art('셋째 공개 글', 'fam', '2026-10-03T10:30:00+09:00'), d: art('넷째 공개 글', 'rel', '2026-10-04T10:30:00+09:00') }, null, 2)}\n`
+const SLUG_TABLE = { '배우고 싶은 것을 고를 때': 'learn-pick', '하루 일과를 다시 짤 때': 'day-plan', '한 가지만 이어지는 질문': 'one-link', '꺼진 분류의 질문': 'off-cluster' }
+/** 🔴 G8 은 순수 proposeSlug 만 쓴다 — 나머지 둘은 부르면 던진다 (assignSlugs · collectTakenSlugs 호출 0 반례) */
+const SLUG_MODULE = `const T = ${JSON.stringify(SLUG_TABLE)}
+export function proposeSlug(q) { return T[q] ?? '' }
+export function assignSlugs() { throw new Error('G8 이 assignSlugs 를 불렀다') }
+export function collectTakenSlugs() { throw new Error('G8 이 collectTakenSlugs 를 불렀다') }
+`
+const LEGACY_LINE = JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', intentId: 'I-LEG', slug: 'legacy-slug', title: '예전 편입 주제', cluster: 'fam',
+  directRelations: [], discoveryRelation: null, internalLinks: [], at: '2026-09-24T09:00:00+09:00' })
+const LEGACY_LIST = [{ intentId: 'I-LEG', slug: 'legacy-slug', lineSha256: lib.sha256(LEGACY_LINE) }]
+const BUILT = builder.buildAll({ inputTexts: SNAPSHOT_TEXTS, productTexts: { resolver: RESOLVER, control: controlText('g-00000000-000000'), articles: ARTICLES_TEXT },
+  admissionTexts: null, effectiveAt: GEFF, generatedAt: '2026-10-15T04:00:00.000Z' })
+const GV = BUILT.graphVersion
+
+/**
+ * @param {{ legacy?: boolean, pipelineSrc?: string|null }} o
+ *   legacy — 장부에 receipt 없는 편입 1행 + slug binding (KNOWN_LEGACY 반례용 · in-process 에서 knownLegacy 를 함께 준다)
+ *   pipelineSrc — 정본 recordAdmission 을 감싼 시험 대역 (staged preflight 반례용)
+ */
+function makeG8({ legacy = false, pipelineSrc = null } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-check-'))
+  fixtures.push({ dir })
+  const research = path.join(dir, 'research')
+  const repo = path.join(dir, 'repo')
+  const snap = path.join(research, 'reconciled', 'fx-snapshot')
+  for (const [n, t] of Object.entries(SNAPSHOT_TEXTS)) write(snap, n, t)
+  write(repo, lib.PRODUCT_FILES.articles, ARTICLES_TEXT)
+  const realQueue = fs.readFileSync(path.join(REPO, 'drafts/magazine/topic-queue.ts'), 'utf8')
+  const header = realQueue.slice(0, realQueue.indexOf('export const TOPIC_QUEUE'))
+  write(repo, lib.PRODUCT_FILES.queue, `${header}export const TOPIC_QUEUE: TopicQueueItem[] = [\n${lib.renderQueueRow({ day: 10, slug: 'queued-one', title: '큐에 있던 주제',
+    contentType: 'EVERGREEN', intent: '상황', cluster: 'fam', target: '50대', riskLevel: 'LOW', reviewMode: 'SUMMARY_ONLY', imageMode: 'OPTIONAL',
+    autoEligible: true, ctaBoard: '/community/free', internalLinks: [], whyNow: '기존 행', notes: '기존 행' })}]\n`)
+  write(repo, lib.PRODUCT_FILES.graphCurrent, `export { GRAPH, EXPORT_HASH } from './${GV}'\n`)
+  write(repo, `src/content/magazine/graph/${GV}.ts`, BUILT.files[`bundle/${GV}.ts`])
+  write(repo, lib.PRODUCT_FILES.graphControl, controlText(GV))
+  write(repo, lib.PRODUCT_FILES.graphResolver, RESOLVER)
+  fs.mkdirSync(path.join(repo, 'drafts/magazine/draft-only'), { recursive: true })
+  for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) { fs.mkdirSync(path.join(research, 'contract'), { recursive: true }); fs.copyFileSync(path.join(PIPELINE_FIXTURE, f), path.join(research, 'contract', f)) }
+  if (pipelineSrc) {
+    fs.renameSync(path.join(research, 'contract/m3-pipeline.mjs'), path.join(research, 'contract/m3-pipeline-real.mjs'))
+    write(research, 'contract/m3-pipeline.mjs', pipelineSrc)
+  }
+  write(research, lib.RESEARCH_FILES.slugModule, SLUG_MODULE)
+  write(research, lib.ADMISSION_FILES.slugManifest, `${JSON.stringify({ _note: 'fixture', asOf: '2026-09-24', slugs: legacy ? { 'I-LEG': 'legacy-slug' } : {} }, null, 2)}\n`)
+  if (legacy) write(research, lib.ADMISSION_FILES.ledger, `${LEGACY_LINE}\n`)
+  return { dir, research, repo, snapshot: snap, legacyList: legacy ? LEGACY_LIST : [] }
+}
+const filesOfG8 = (f) => ({ slug: path.join(f.research, lib.ADMISSION_FILES.slugManifest), ledger: path.join(f.research, lib.ADMISSION_FILES.ledger) })
+const research3 = (f) => {
+  const fl = filesOfG8(f)
+  const rd = path.join(f.research, lib.RECEIPT_DIR)
+  return {
+    slug: fs.existsSync(fl.slug) ? fs.readFileSync(fl.slug, 'utf8') : null,
+    ledger: fs.existsSync(fl.ledger) ? fs.readFileSync(fl.ledger, 'utf8') : null,
+    receipts: fs.existsSync(rd) ? fs.readdirSync(rd).sort().map((n) => `${n}:${lib.sha256(fs.readFileSync(path.join(rd, n), 'utf8'))}`) : [],
+    journal: fs.existsSync(path.join(f.research, lib.JOURNAL_FILE)),
+    lock: fs.existsSync(path.join(f.research, lib.LOCK_FILE)),
+  }
+}
+const build = (f, o = {}) => lib.buildManifest({ repoDir: f.repo, researchDir: f.research, snapshotDir: f.snapshot, at: o.at ?? AT })
+const approvalOf = (m, o = {}) => ({ approvedBy: '김운영', approvedAt: '2026-10-15T14:30:00+09:00', confirmManifestHash: m.hash, ...o })
+const apply = (f, m, o = {}) => lib.applyAdmissions({ manifest: m, repoDir: f.repo, researchDir: f.research, snapshotDir: f.snapshot,
+  approval: o.approval ?? approvalOf(m), committedAt: o.committedAt ?? COMMITTED, faultHook: o.faultHook ?? (() => {}), knownLegacy: f.legacyList })
+const verifyNow = (f) => lib.verifyAdmissionState({ researchDir: f.research, repoDir: f.repo, knownLegacy: f.legacyList })
 const ledgerRows = (text) => (text ?? '').split('\n').filter(Boolean).map((l) => JSON.parse(l))
-const fixtures = []
-const fresh = (o) => { const f = makeFixture(o); fixtures.push(f); return f }
+const codeOf = async (p) => { try { await p; return 'NO_THROW' } catch (e) { return e.code ?? e.message } }
 
-// ── ① 분류 ──────────────────────────────────────────────────
-console.log('\n① 의도마다 정확히 한 상태')
-const fx = fresh()
-const m = await build(fx)
-const byId = Object.fromEntries(m.classification.map((r) => [r.intentId, r]))
-for (const x of INTENTS) expect(`${x.id} ${x.q} → ${x.expectClass}`, byId[x.id]?.class, x.expectClass)
-expect('분류 합계 = 의도 수', lib.CLASSES.map((c) => m.counts[c]).reduce((a, b) => a + b, 0), INTENTS.length)
-expect('모든 의도가 알려진 상태 하나', m.classification.every((r) => lib.CLASSES.includes(r.class)), true)
-expect('의도 중복 행 0', new Set(m.classification.map((r) => r.intentId)).size, INTENTS.length)
-
-// ── ② 유입 차단 ─────────────────────────────────────────────
-console.log('② HOLD·REJECT·INCOMPLETE·영토·중복은 후보가 아니다')
-const chosen = [...m.selection.primary, ...m.selection.fallback].map((s) => s.intentId)
-const blockedIds = INTENTS.filter((x) => x.expectClass !== 'ELIGIBLE_NEW').map((x) => x.id)
-expect('후보에 비적격 의도 0', chosen.filter((id) => blockedIds.includes(id)), [])
-expect('후보는 전부 ELIGIBLE_NEW', chosen.every((id) => byId[id].class === 'ELIGIBLE_NEW'), true)
-expect('중복 사유 — 기존 글 제목', byId['I-F-10'].reasons.some((r) => r.startsWith('TITLE_MATCHES_ARTICLE')), true)
-expect('중복 사유 — 큐 제목', byId['I-F-11'].reasons.some((r) => r.startsWith('TITLE_MATCHES_QUEUE')), true)
-expect('중복 사유 — 원고 폴더 slug', byId['I-F-12'].reasons.some((r) => r.startsWith('SLUG_TAKEN')), true)
-
-// ── ③ 계약 ──────────────────────────────────────────────────
-console.log('③ 필수 필드 · 제목 · 시리즈 · publishWindow')
-const has = (id, prefix) => byId[id].reasons.some((r) => r.startsWith(prefix))
-expect('contentType 없음 → INCOMPLETE(contentType)', has('I-F-14', 'contentType'), true)
-expect('CTA 없음 → INCOMPLETE(cta)', has('I-F-15', 'cta'), true)
-expect('짧은 제목 → INCOMPLETE(title_form)', has('I-F-16', 'title_form'), true)
-expect('관계 없음 → INCOMPLETE(relations)', has('I-F-17', 'relations'), true)
-expect('SEASONAL 창 없음 → INCOMPLETE(publishWindow)', has('I-F-18', 'publishWindow'), true)
-expect('검색 의도 유형 없음 → INCOMPLETE(searchIntent)', has('I-F-19', 'searchIntent'), true)
-expect('금지어 제목 → INCOMPLETE(title_banned)', has('I-F-20', 'title_banned'), true)
-expect('slug 사전 충돌 → 양쪽 INCOMPLETE', [has('I-F-21', 'slug_collision'), has('I-F-22', 'slug_collision')], [true, true])
-expect('cluster 정본 충돌 → INCOMPLETE', has('I-F-23', 'cluster_conflict'), true)
-const excluded = Object.fromEntries(m.selection.excluded.map((x) => [x.intentId, x.reason.split(' — ')[0]]))
-expect('창 지난 계절 주제 제외', excluded['I-F-30'], 'WINDOW_CLOSED')
-expect('창 열리기 전 계절 주제 제외', excluded['I-F-31'], 'WINDOW_NOT_OPEN')
-expect('선행편 없는 시리즈 제외', excluded['I-F-35'], 'SERIES_PREREQ')
-expect('선행편 있는 시리즈는 선정', chosen.includes('I-F-33'), true)
-const rowOf = (id) => [...m.queueRows, ...m.fallbackRows].find((r) => r.intentId === id)
-expect('계절 행은 publishWindow 를 그대로 싣는다', rowOf('I-F-32')?.publishWindow, { after: '2026-10-01', before: '2026-11-30' })
-expect('HIGH 는 막지 않고 뒤로 간다', excluded['I-F-47'], 'BEYOND_RUN')
-const REQUIRED = ['day', 'slug', 'title', 'contentType', 'intent', 'cluster', 'target', 'validationProfile', 'riskLevel',
-  'reviewMode', 'imageMode', 'autoEligible', 'ctaBoard', 'internalLinks', 'whyNow', 'notes', 'intentId']
-expect('primary 행 필수 필드 전부 존재', m.queueRows.every((r) => REQUIRED.every((k) => r[k] !== undefined && r[k] !== null && r[k] !== '')), true)
-expect('imageMode 는 레인 계약값 REQUIRED', [...new Set(m.queueRows.map((r) => r.imageMode))], ['REQUIRED'])
-expect('validationProfile 을 STANDARD 로 낮추지 않는다', rowOf('I-F-45')?.validationProfile, 'MEDICAL')
-expect('primary 행은 자동 레인 판정을 통과한다', m.queueRows.map((r) => isAutoLaneEligible(r).ok), m.queueRows.map(() => true))
-expect('기존 공개 글 연결이 internalLinks 로 간다', rowOf('I-F-41')?.internalLinks, ['live-article'])
-expect('편입 장부 행 = primary (intentId·slug 짝)', m.admissionRows.map((r) => [r.intentId, r.slug]), m.queueRows.map((r) => [r.intentId, r.slug]))
-expect('COMMUNITY 관계는 추천 관계에 넣지 않는다', m.admissionRows.every((r) => r.directRelations.every((d) => d.slot !== null)), true)
-expect('primary day 는 기존 큐 최대 뒤', m.queueRows.map((r) => r.day), [13, 14, 15, 16, 17])
-expect('fallback 은 day 를 받지 않는다', m.fallbackRows.map((r) => r.day), [null, null, null])
-expect('제품 graph bundle 은 읽기만 한다고 manifest 가 말한다', m.productGraphBundle?.updatedByThisTool, false)
-
-// ── ④ 결정적 순서 ───────────────────────────────────────────
-console.log('④ primary 5 + fallback 3 의 결정적 순서')
-expect('primary 순서', m.selection.primary.map((s) => s.intentId), WANT_PRIMARY)
-expect('fallback 순서', m.selection.fallback.map((s) => s.intentId), WANT_FALLBACK)
-const m2 = await build(fx)
-expect('두 번 계산 — 바이트 동일', JSON.stringify(m2), JSON.stringify(m))
-const mRev = await build(fresh({ reverse: true }))
-expect('입력 순서를 뒤집어도 같은 선정', [mRev.selection.primary, mRev.selection.fallback].map((l) => l.map((s) => s.intentId)), [WANT_PRIMARY, WANT_FALLBACK])
-expect('입력 순서를 뒤집어도 같은 큐 행', JSON.stringify(mRev.queueRows), JSON.stringify(m.queueRows))
-let threw = null
-try { await build(fresh({ bundleCombined: 'other' })) } catch (e) { threw = e.message.split(' — ')[0] }
-expect('연구 build 와 제품 번들이 다르면 만들지 않는다', threw, 'GRAPH_BUNDLE_MISMATCH')
-threw = null
-try { await build(fresh({ dropCanonical: true })) } catch (e) { threw = e.message.slice(0, 20) }
-expect('연구 정본 의도 집합이 다르면 만들지 않는다', threw, '연구 정본의 의도 집합이 서로 다르다'.slice(0, 20))
-
-// ── ⑤ CLI dry-run ───────────────────────────────────────────
-console.log('⑤ CLI dry-run 은 아무것도 쓰지 않는다')
-const before = { research: snapshot(fx.research), repo: snapshot(fx.repo) }
-const run = () => execFileSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--at', AT, '--json'], { encoding: 'utf8', maxBuffer: 1e8 })
-const out1 = run()
-const out2 = run()
-expect('CLI 두 번 — 출력 바이트 동일', out1 === out2, true)
-expect('CLI 출력 = 라이브러리 manifest', JSON.parse(out1).hash, m.hash)
-const human = execFileSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--at', AT], { encoding: 'utf8' })
-expect('CLI 보고가 제품 graph bundle 을 갱신하지 않는다고 말한다', human.includes('제품 graph bundle 갱신은 별도 단계'), true)
-expect('dry-run 뒤 연구 입력 바이트·파일 목록 동일', snapshot(fx.research), before.research)
-expect('dry-run 뒤 제품 입력 바이트·파일 목록 동일', snapshot(fx.repo), before.repo)
-const outInside = spawnSync('node', [CLI, '--research', fx.research, '--repo', fx.repo, '--at', AT, '--out', path.join(fx.repo, 'm.json')], { encoding: 'utf8' })
-expect('--out 은 저장소 안을 거부한다', [outInside.status, fs.existsSync(path.join(fx.repo, 'm.json'))], [2, false])
-
-// ── ⑥ apply ────────────────────────────────────────────────
-console.log('⑥ apply — 멱등 · 원복 · 큐/편입 장부 짝')
-const files = filesOf(fx)
-const pristine = bytesOf(fx)
-for (const stage of ['after:queue', 'after:slugManifest', 'after:ledger']) {
-  const r = await apply(m, fx, (s) => { if (s === stage) throw new Error(`주입 실패 ${s}`) })
-  expect(`${stage} 에서 실패 → 세 파일 원복`, [r.code, r.restored, JSON.stringify(bytesOf(fx)) === JSON.stringify(pristine)], ['ROLLED_BACK', true, true])
-}
-const corrupt = await apply(m, fx, (s) => {
-  if (s === 'after:ledger') fs.writeFileSync(files.ledger, fs.readFileSync(files.ledger, 'utf8').split('\n').slice(1).join('\n'))
-})
-expect('편입 장부가 반쪽이면 쓰기 뒤 대조가 잡고 원복한다', [corrupt.code, JSON.stringify(bytesOf(fx)) === JSON.stringify(pristine)], ['ROLLED_BACK', true])
-const tampered = { ...m, queueRows: m.queueRows.map((r, i) => (i ? r : { ...r, title: `${r.title}!` })) }
-expect('본문이 해시와 다르면 쓰지 않는다', (await apply(tampered, fx)).code, 'HASH_MISMATCH')
-
-const first = await apply(m, fx)
-expect('첫 apply', [first.ok, first.code, first.rows], [true, 'APPLIED', 5])
-const afterFirst = bytesOf(fx)
-const second = await apply(m, fx)
-expect('둘째 apply — 아무것도 쓰지 않는다', [second.ok, second.code], [true, 'ALREADY_APPLIED'])
-expect('둘째 apply 뒤 세 파일 바이트 동일', JSON.stringify(bytesOf(fx)), JSON.stringify(afterFirst))
-const queueAfter = parseQueueSource(afterFirst.queue)
-expect('큐 행 수 = 기존 2 + primary 5 (중복 0)', [queueAfter.length, new Set(queueAfter.map((r) => r.slug)).size], [7, 7])
-expect('장부 ADMITTED = 5 (중복 0)', ledgerRows(afterFirst.ledger).length, 5)
-expect('장부 행은 정본 recordAdmission 모양 (m3ledger/2 · at = 판정 시각)', ledgerRows(afterFirst.ledger).map((r) => [r.schemaVersion, r.event, r.at]), m.queueRows.map(() => ['m3ledger/2', 'ADMITTED', AT]))
-expect('기존 큐 행은 바이트 그대로', afterFirst.queue.includes(lib.renderQueueRow(parseQueueSource(pristine.queue)[0])), true)
-const added = queueAfter.filter((r) => r.g8ManifestHash)
-expect('새 큐 행이 manifest 해시를 단다', [...new Set(added.map((r) => r.g8ManifestHash))], [m.hash])
-expect('새 큐 행은 M-AUTO 자동 레인 판정 통과', added.map((r) => isAutoLaneEligible(r).ok), added.map(() => true))
-expect('영구 slug 표가 짝을 묶는다', Object.entries(JSON.parse(afterFirst.slugs).slugs).sort(), m.queueRows.map((r) => [r.intentId, r.slug]).sort())
-expect('정상 종료 뒤 journal 이 남지 않는다', fs.existsSync(path.join(fx.research, lib.JOURNAL_FILE)), false)
+// ── Ⓐ dry-run ──────────────────────────────────────────────
+console.log('Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 콘텐츠 계획 필드 0 · 쓰기 0')
 {
-  // 🔴 fixture 큐는 실제 topic-queue.ts 의 타입 머리를 그대로 쓴다 — 새 행이 tsc 를 통과해야 운영 apply 가 빌드를 깨지 않는다
-  const tsconfig = path.join(fx.dir, 'tsconfig.json')
-  fs.writeFileSync(tsconfig, JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: 'es2020',
-    module: 'esnext', moduleResolution: 'bundler', baseUrl: REPO, paths: { '@/*': ['src/*'] } }, files: [files.queue] }))
-  const tsc = spawnSync(path.join(REPO, 'node_modules/.bin/tsc'), ['-p', tsconfig], { encoding: 'utf8' })
-  expect('tsc --noEmit (apply 된 fixture 큐)', [tsc.status, (tsc.stdout + tsc.stderr).trim().split('\n')[0] ?? ''], [0, ''])
+  const f = makeG8()
+  const pre = { r: snapshot(f.research), p: snapshot(f.repo) }
+  const m = await build(f)
+  const m2 = await build(f)
+  expect('schema g8-promotion/2 · 같은 입력 → 같은 hash', [m.schema, m.hash === m2.hash, m.hash === lib.hashManifest(m)], ['g8-promotion/2', true, true])
+  expect('hash = hash 를 뺀 canonical JSON sha256', m.hash, lib.sha256(lib.canonicalJson(Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'hash')))))
+  expect('후보 = GRAPH_READY 두 개 (I-X1 · I-X2) · INCOMPLETE · BLOCKED 0', m.admissions.map((a) => a.intentId), ['I-X1', 'I-X2'])
+  const ready = builder.computeGraphAndReadiness({ inputTexts: SNAPSHOT_TEXTS, productTexts: { resolver: RESOLVER, control: controlText(GV), articles: ARTICLES_TEXT },
+    admissionTexts: { slugManifest: fs.readFileSync(filesOfG8(f).slug, 'utf8'), ledger: null }, effectiveAt: GEFF }).readiness.rows
+  expect('builder 판정 — Y GRAPH_INCOMPLETE · Z BLOCKED', ready.filter((r) => ['I-Y', 'I-Z'].includes(r.intentId)).map((r) => r.status), ['GRAPH_INCOMPLETE', 'BLOCKED'])
+  const x1 = m.admissions[0]
+  expect('관계 신원 — direct E-0001 · E-0002 · discovery E-0003 · reverse E-0007',
+    [x1.slug, x1.direct.map((x) => x.edgeId), x1.discovery.edgeId, x1.reverse, x1.direct[0].anchorLabel, x1.direct[0].targetSlug], ['learn-pick', ['E-0001', 'E-0002'], 'E-0003', ['E-0007'], 'I-P1 보기', 'p1'])
+  expect('큐 행 · 콘텐츠 계획 필드 0', ['queueRows', 'fallbackRows', 'selection', 'classification'].filter((k) => k in m)
+    .concat(JSON.stringify(m.admissions).match(/contentType|searchIntent|riskLevel|ctaBoard|validationProfile/g) ?? []), [])
+  expect('manifest 필드 (graphEffectiveAt 없음)', Object.keys(m).sort(), ['admissions', 'at', 'graph', 'hash', 'identityInputHashes', 'readiness', 'refused', 'schema', 'snapshot'])
+  expect('신원 입력 정확히 15개', Object.keys(m.identityInputHashes), ['product.articles', 'product.topicQueue', 'product.draftsSlugSet', 'product.graphCurrent',
+    'product.graphBundle', 'product.graphControl', 'product.graphResolver', 'research.slugManifest', 'research.ledger', 'research.slugModule',
+    ...lib.SNAPSHOT_FILES.map((n) => `snapshot.${n}`)])
+  expect('graph · readiness 블록', [m.graph.graphVersion, m.graph.contentHash.combined, m.readiness.inputs.graphVersion, typeof m.readiness.readinessFileSha256, m.snapshot.name],
+    [GV, BUILT.manifest.contentHash.combined, GV, 'string', 'fx-snapshot'])
+  expect('dry-run 쓰기 0 · 연구 current 없이 돈다', [JSON.stringify(snapshot(f.research)) === JSON.stringify(pre.r), JSON.stringify(snapshot(f.repo)) === JSON.stringify(pre.p),
+    fs.existsSync(path.join(f.research, 'contract/build'))], [true, true, false])
+  {
+    // 🔴 --at 이 snapshot 의 공개 글보다 이르면 그 시각의 제품과 snapshot lifecycle 이 다르다 — 거부
+    let e = null
+    try { await build(f, { at: '2026-09-30T00:00:00+09:00' }) } catch (x) { e = x }
+    expect('--at 시각에 snapshot lifecycle 이 제품과 다르면 GRAPH_BUNDLE_MISMATCH (lifecycle drift)', [e?.code, String(e?.why ?? '').includes('INPUT_PRODUCT_LIFECYCLE_DRIFT')], ['GRAPH_BUNDLE_MISMATCH', true])
+  }
+  expect('시각은 실제 KST 초 단위만', [await codeOf(build(f, { at: '2026-10-15' })), await codeOf(build(f, { at: '2026-02-30T13:00:00+09:00' }))], ['AT_INVALID', 'AT_INVALID'])
+  {
+    // 🔴 시간축 회귀 (2026-10-22 P1) — readiness 는 --at 으로 계산한다. 판 이름은 제품 current 그대로
+    // 거부되면 예외가 아니라 이 반례의 실패로 드러나게 감싼다
+    const nextDay = await build(f, { at: '2026-10-16T00:30:00+09:00' }).catch((e) => ({ graph: { graphVersion: e.code }, readiness: { inputs: {} }, admissions: [] }))
+    expect('다른 날 --at — 판 이름 = 제품 current · readiness 시각 = --at · readinessHash 가 다르다 · 후보 같음',
+      [nextDay.graph.graphVersion, nextDay.readiness.inputs.graphVersion, nextDay.readiness.inputs.effectiveAt, nextDay.readiness.readinessHash !== m.readiness.readinessHash,
+        nextDay.admissions.map((a) => a.intentId)], [GV, GV, '2026-10-16T00:30:00+09:00', true, ['I-X1', 'I-X2']])
+    expect('같은 날 다른 시각도 readiness 시각을 따른다', [m.readiness.inputs.effectiveAt, (await build(f, { at: GEFF })).readiness.inputs.effectiveAt], [AT, GEFF])
+  }
+  const cli = (args) => spawnSync('node', [CLI, ...args], { encoding: 'utf8' })
+  const base = ['--research', f.research, '--repo', f.repo, '--snapshot', f.snapshot, '--at', AT]
+  const drop = (k) => base.filter((x, i) => x !== k && base[i - 1] !== k)
+  expect('CLI — --snapshot · --at · --research 각각 없으면 exit 2 (기본값 없음)', ['--snapshot', '--at', '--research'].map((k) => cli(drop(k)).status), [2, 2, 2])
+  expect('CLI — 없앤 --graph-effective-at 은 거부 (exit 2)', cli([...base, '--graph-effective-at', GEFF]).status, 2)
+  const j = cli([...base, '--json'])
+  expect('CLI dry-run — 같은 manifest · 쓰기 0', [j.status, parseJson(j.stdout, {}).hash, JSON.stringify(snapshot(f.research)) === JSON.stringify(pre.r)], [0, m.hash, true])
+  expect('CLI — 옛 --queue-root 는 거부', cli([...base, '--queue-root', f.repo]).status, 2)
 }
-const consistent = () => lib.verifyConsistency({ queueSource: fs.readFileSync(files.queue, 'utf8'), ledgerSource: fs.readFileSync(files.ledger, 'utf8'), slugManifestSource: fs.readFileSync(files.slugs, 'utf8') })
-expect('apply 뒤 큐/편입 장부 대조 PASS', consistent().ok, true)
-const verifyCli = spawnSync('node', [CLI, '--verify', '--queue-root', fx.repo, '--admission-root', fx.research], { encoding: 'utf8' })
-expect('--verify CLI PASS', verifyCli.status, 0)
-
-fs.writeFileSync(files.queue, pristine.queue)
-expect('큐 행을 지우면 ADMISSION_WITHOUT_QUEUE', consistent().problems.some((p) => p.startsWith('ADMISSION_WITHOUT_QUEUE')), true)
-expect('그 상태에서 apply 는 쓰지 않는다 (STALE_INPUT)', (await apply(m, fx)).code, 'STALE_INPUT')
-fs.writeFileSync(files.queue, afterFirst.queue)
-fs.writeFileSync(files.ledger, '')
-expect('장부 행을 지우면 QUEUE_WITHOUT_ADMISSION', consistent().problems.some((p) => p.startsWith('QUEUE_WITHOUT_ADMISSION')), true)
-fs.writeFileSync(files.ledger, afterFirst.ledger)
 {
-  const registeredSlug = m.queueRows[0].slug
-  const rows = parseQueueSource(afterFirst.queue).filter((r) => r.slug !== registeredSlug)
-  const header = afterFirst.queue.slice(0, afterFirst.queue.indexOf('export const TOPIC_QUEUE'))
-  fs.writeFileSync(files.queue, `${header}export const TOPIC_QUEUE: TopicQueueItem[] = [\n${rows.map(lib.renderQueueRow).join('')}]\n`)
-  const artFile = path.join(fx.repo, 'src/content/magazine/articles.ts')
-  const articles = fs.readFileSync(artFile, 'utf8')
-  const withReg = articles.replace('"live-article":', `"${registeredSlug}": { "title": "등록됨", "cluster": "daily", "publishedAt": "2026-10-10", "body": [] },\n  "live-article":`)
-  fs.writeFileSync(artFile, withReg)
-  expect('등록된 글은 ADMISSION_WITHOUT_QUEUE 가 아니다', lib.verifyConsistency({ queueSource: fs.readFileSync(files.queue, 'utf8'), articlesSource: withReg,
-    ledgerSource: afterFirst.ledger, slugManifestSource: afterFirst.slugs }).ok, true)
-  expect('등록 뒤 apply 재실행도 ALREADY_APPLIED', (await apply(m, fx)).code, 'ALREADY_APPLIED')
-  fs.writeFileSync(artFile, articles)
-  fs.writeFileSync(files.queue, afterFirst.queue)
+  // 신원 검사 — GRAPH_READY 라도 이미 쓰인 slug · 제목 · 편입은 빠진다(새 후보를 만들지 않는다)
+  const f = makeG8()
+  fs.mkdirSync(path.join(f.repo, 'drafts/magazine/learn-pick'), { recursive: true })
+  const qf = path.join(f.repo, lib.PRODUCT_FILES.queue)
+  fs.writeFileSync(qf, lib.insertQueueRows(fs.readFileSync(qf, 'utf8'), [{ day: 11, slug: 'other-slug', title: '하루 일과를 다시 짤 때', contentType: 'EVERGREEN', intent: '상황',
+    cluster: 'fam', target: '50대', riskLevel: 'LOW', reviewMode: 'SUMMARY_ONLY', imageMode: 'OPTIONAL', autoEligible: true, ctaBoard: '/community/free', internalLinks: [], whyNow: 'w', notes: 'n' }]))
+  const m = await build(f)
+  expect('원고 폴더와 같은 slug · 큐와 같은 제목 → refused · admission 0', [m.admissions.length, m.refused.map((r) => `${r.intentId}:${r.why[0].split(' ')[0]}`)],
+    [0, ['I-X1:SLUG_TAKEN', 'I-X2:TITLE_TAKEN']])
 }
-const m4 = await build(fx)
-expect('apply 뒤 재계산 — 편입분 ALREADY_QUEUED', WANT_PRIMARY.map((id) => m4.classification.find((r) => r.intentId === id).class), WANT_PRIMARY.map(() => 'ALREADY_QUEUED'))
-expect('apply 뒤 재계산 — 다음 primary 는 fallback 부터', m4.selection.primary.map((s) => s.intentId).slice(0, 3), WANT_FALLBACK)
 
-// ── ⑦ 입력 하나하나 ─────────────────────────────────────────
-console.log('⑦ manifest 가 읽은 입력이 하나라도 바뀌면 STALE_INPUT')
+// ── Ⓑ snapshot ↔ 제품 bundle ────────────────────────────────
+console.log('Ⓑ snapshot ↔ 제품 bundle — 선언값이 아니라 재계산으로 대조한다')
 {
-  const fxA = fresh()
-  const mA = await build(fxA)
-  const slug = mA.queueRows[0].slug
-  const artFile = path.join(fxA.repo, 'src/content/magazine/articles.ts')
-  fs.writeFileSync(artFile, fs.readFileSync(artFile, 'utf8').replace('"live-article":', `"${slug}": { "title": "등록됨", "cluster": "daily", "publishedAt": "2026-10-07", "body": [] },\n  "live-article":`))
-  const pre = bytesOf(fxA)
-  const r = await apply(mA, fxA)
-  expect('manifest 뒤 같은 slug 가 articles.ts 에 등록 → STALE_INPUT(product.articles)', [r.code, r.stale], ['STALE_INPUT', ['product.articles']])
-  expect('그때 쓰기 0', JSON.stringify(bytesOf(fxA)), JSON.stringify(pre))
-}
-const touch = {
-  'research.canonical': (f) => fs.appendFileSync(path.join(f.research, 'g4-intents-canonical.jsonl'), '\n'),
-  'research.automation': (f) => fs.appendFileSync(path.join(f.research, 'g4-automation-2026-09-23.jsonl'), '\n'),
-  'research.rebaseline': (f) => fs.appendFileSync(path.join(f.research, 'g4-rebaseline-2026-09-23.jsonl'), '\n'),
-  'research.buildIntents': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/intents.jsonl'), '\n'),
-  'research.buildEdges': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/edges.jsonl'), '\n'),
-  'research.buildMappings': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/mappings.jsonl'), '\n'),
-  'research.buildManifest': (f) => fs.appendFileSync(path.join(f.research, 'contract/build/current/manifest.json'), '\n'),
-  'research.slugModule': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-slug.mjs'), '\n'),
-  'research.pipelineModule': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-pipeline.mjs'), '\n'),
-  'research.productModule': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-product.mjs'), '\n'),
-  'admission.slugManifest': (f) => fs.appendFileSync(path.join(f.research, 'contract/m3-slug-manifest.json'), '\n'),
-  'admission.ledger': (f) => fs.writeFileSync(path.join(f.research, 'contract/m3-state.jsonl'), ''),
-  'product.articles': (f) => fs.appendFileSync(path.join(f.repo, 'src/content/magazine/articles.ts'), '\n'),
-  'product.queue': (f) => fs.appendFileSync(path.join(f.repo, 'drafts/magazine/topic-queue.ts'), '\n'),
-  'product.types': (f) => fs.appendFileSync(path.join(f.repo, 'src/content/magazine/types.ts'), '\n'),
-  'product.graphBundle': (f) => fs.appendFileSync(path.join(f.repo, 'src/content/magazine/graph/g-fixture-000000.ts'), '\n'),
-  'product.draftDirs': (f) => fs.mkdirSync(path.join(f.repo, 'drafts/magazine/new-draft-dir')),
-}
-const recorded = Object.entries(m.inputs).flatMap(([g, o]) => Object.keys(o).map((k) => `${g}.${k}`)).sort()
-expect('시험이 manifest 입력 전부를 덮는다', Object.keys(touch).sort(), recorded)
-for (const [key, mutate] of Object.entries(touch)) {
-  const f = fresh()
-  const mf = await build(f)
-  mutate(f)
-  const pre = bytesOf(f)
-  const r = await apply(mf, f)
-  expect(`${key} 변경 → STALE_INPUT · 쓰기 0`, [r.code, r.stale, JSON.stringify(bytesOf(f)) === JSON.stringify(pre)], ['STALE_INPUT', [key], true])
+  const bundleRel = `src/content/magazine/graph/${GV}.ts`
+  const tamper = async (name, mutate, token) => {
+    const f = makeG8()
+    mutate(f)
+    let r = null
+    try { await build(f) } catch (e) { r = e }
+    expect(`${name} → GRAPH_BUNDLE_MISMATCH (${token})`, [r?.code, String(r?.why ?? '').includes(token)], ['GRAPH_BUNDLE_MISMATCH', true])
+  }
+  const edit = (f, rel, fn) => { const p = path.join(f.repo, rel); fs.writeFileSync(p, fn(fs.readFileSync(p, 'utf8'))) }
+  const reExport = (text) => {
+    const { payload } = lib.readBundlePayload(text)
+    return text.replace(/export const EXPORT_HASH = '[0-9a-f]+'/, `export const EXPORT_HASH = '${lib.sha256(JSON.stringify(payload)).slice(0, 16)}'`)
+  }
+  await tamper('payload edge 이유를 바꾸고 EXPORT_HASH 는 그대로', (f) => edit(f, bundleRel, (t) => t.replace('I-X1에서 I-P1로 가는 이유', 'I-X1에서 I-P1로 가는 다른 이유')), 'EXPORT_HASH')
+  await tamper('payload edge 이유를 바꾸고 EXPORT_HASH 도 다시 맞춤', (f) => edit(f, bundleRel, (t) => reExport(t.replace('I-X1에서 I-P1로 가는 이유', 'I-X1에서 I-P1로 가는 다른 이유'))), 'PAYLOAD')
+  await tamper('payload contentHash.participation 만 위조 (EXPORT_HASH 재계산)', (f) => edit(f, bundleRel, (t) => reExport(t.replace(/"combined": "([0-9a-f]+)"/, '"participation": "0000000000000000",\n    "combined": "$1"'))), 'CONTENT_HASH.participation')
+  await tamper('control 이 다른 판을 가리킨다 (제품 폴백)', (f) => edit(f, lib.PRODUCT_FILES.graphControl, (t) => t.replace(GV, 'g-20261015-000000')), 'CONTROL')
+  const pointTo = (f, name) => {
+    fs.copyFileSync(path.join(f.repo, bundleRel), path.join(f.repo, `src/content/magazine/graph/${name}.ts`))
+    edit(f, lib.PRODUCT_FILES.graphCurrent, () => `export { GRAPH, EXPORT_HASH } from './${name}'\n`)
+  }
+  await tamper('current 가 접미사가 다른 이름의 사본을 가리킨다', (f) => pointTo(f, 'g-20261015-000000'), 'GRAPH_VERSION_MISMATCH')
+  await tamper('current 가 접미사는 같고 날짜만 다른 사본을 가리킨다', (f) => pointTo(f, `g-20261014-${GV.slice(-6)}`), 'CURRENT')
 }
 
-// ── ⑧ 정본 장부 계약 ────────────────────────────────────────
-console.log('⑧ 편입 장부는 정본 m3-pipeline 계약으로만 쓴다')
-const ledgerCase = async (name, rowsText, wantCode) => {
-  const f = fresh()
-  fs.writeFileSync(path.join(f.research, 'contract/m3-state.jsonl'), rowsText)
-  const mf = await build(f)
-  const pre = bytesOf(f)
-  const r = await apply(mf, f)
-  expect(`${name} → ${wantCode} · 쓰기 0`, [r.code, JSON.stringify(bytesOf(f)) === JSON.stringify(pre)], [wantCode, true])
-}
-const lrow = (o) => `${JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', intentId: 'I-X-01', slug: 'x-slug', at: '2026-10-01T00:00:00+09:00', ...o })}\n`
-await ledgerCase('같은 사건이 두 줄인 장부', lrow({}) + lrow({}), 'LEDGER_INVALID')
-await ledgerCase('ADMITTED 없이 REGISTERED 가 먼저 온 장부', lrow({ event: 'REGISTERED' }), 'LEDGER_INVALID')
-await ledgerCase('같은 slug 에 다른 intent 가 묶인 장부', lrow({}) + lrow({ intentId: 'I-X-02', event: 'DRAFT_PASSED' }), 'LEDGER_INVALID')
-await ledgerCase('편입할 intent 가 장부에서 다른 slug 에 묶여 있다 (1:1)', lrow({ intentId: 'I-F-41', slug: 'other-slug' }), 'ADMISSION_REJECTED')
-
-// ── ⑨ 판정 시각 ─────────────────────────────────────────────
-console.log('⑨ 판정 시각은 정확한 KST 시각')
+// ── Ⓒ receipt 불변식 ─────────────────────────────────────────
+console.log('Ⓒ receipt — 파일명 · manifest 해시 · receiptHash · 사람 승인 · confirm hash')
+const APPLIED = await (async () => { const f = makeG8({ legacy: true }); const m = await build(f); const r = await apply(f, m); return { f, m, r } })()
 {
-  const f = fresh()
-  const cls = async (at) => (await build(f, at)).classification.find((r) => r.intentId === 'I-F-52').class
-  expect('10:30 공개 글 — 같은 날 10:29:59 는 SCHEDULED', await cls('2026-10-07T10:29:59+09:00'), 'SCHEDULED')
-  expect('10:30 공개 글 — 같은 날 10:30:00 은 LIVE', await cls('2026-10-07T10:30:00+09:00'), 'LIVE')
-  let e1 = null
-  try { await build(f, '2026-10-07') } catch (e) { e1 = e.message.slice(0, 9) }
-  expect('날짜만 주면 판정하지 않는다', e1, '판정 시각은 YY'.slice(0, 9))
-  const asof = spawnSync('node', [CLI, '--research', f.research, '--repo', f.repo, '--asof', '2026-10-07'], { encoding: 'utf8' })
-  expect('CLI --asof 거부', asof.status, 2)
+  const { f, m, r } = APPLIED
+  expect('apply → APPLIED (receipt · slug · ledger)', [r.code, r.written], ['APPLIED', ['receipt', 'slugManifest', 'ledger']])
+  const file = lib.receiptPathOf(f.research, m.hash)
+  const text = fs.readFileSync(file, 'utf8')
+  const rc = JSON.parse(text)
+  expect('receipt 구조', [rc.schema, rc.manifestHash, rc.manifest.hash, lib.hashManifest(rc.manifest), rc.approval.confirmManifestHash, rc.committedAt, rc.receiptHash === lib.receiptHashOf(rc)],
+    ['g8-admission-receipt/1', m.hash, m.hash, m.hash, m.hash, COMMITTED, true])
+  expect('receipt 원문 = manifest 원문 전체', lib.canonicalJson(rc.manifest), lib.canonicalJson(m))
+  const forged = (name, mk, token) => {
+    const { file: ff, text: tt } = mk()
+    const v = lib.verifyAdmissions({ receipts: [{ file: ff, text: tt }], slugManifestText: fs.readFileSync(filesOfG8(f).slug, 'utf8'),
+      ledgerText: fs.readFileSync(filesOfG8(f).ledger, 'utf8'), payloadOf: lib.productPayloadOf(f.repo), knownLegacy: f.legacyList })
+    expect(`위조 receipt(${name}) → ${token}`, [v.ok, v.problems.some((p) => p.includes(token))], [false, true])
+  }
+  const rehash = (o) => { o.receiptHash = lib.receiptHashOf(o); return `${JSON.stringify(o, null, 2)}\n` }
+  forged('파일명', () => ({ file: path.join(path.dirname(file), `${'0'.repeat(64)}.json`), text }), 'RECEIPT_FILENAME')
+  forged('manifest 원문 변조 · receiptHash 재계산', () => ({ file, text: rehash({ ...rc, manifest: { ...rc.manifest, at: '2026-10-15T14:00:01+09:00' } }) }), 'RECEIPT_MANIFEST_HASH')
+  forged('receiptHash 위조', () => ({ file, text: `${JSON.stringify({ ...rc, receiptHash: '0'.repeat(64) }, null, 2)}\n` }), 'RECEIPT_HASH')
+  forged('기계 승인자 · receiptHash 재계산', () => ({ file, text: rehash({ ...rc, approval: { ...rc.approval, approvedBy: 'claude-code' } }) }), 'APPROVER_MACHINE')
+  forged('confirm hash 불일치 · receiptHash 재계산', () => ({ file, text: rehash({ ...rc, approval: { ...rc.approval, confirmManifestHash: '1'.repeat(64) } }) }), 'CONFIRM_HASH_MISMATCH')
+  forged('approval 만 바꾸고 receiptHash 그대로', () => ({ file, text: `${JSON.stringify({ ...rc, approval: { ...rc.approval, approvedAt: '2026-10-15T14:31:00+09:00' } }, null, 2)}\n` }), 'RECEIPT_HASH')
+}
+{
+  // apply 단계의 승인 형식 — 쓰기 0
+  const f = makeG8()
+  const m = await build(f)
+  const pre = research3(f)
+  const bad = []
+  for (const approval of [approvalOf(m, { approvedBy: 'codex' }), approvalOf(m, { approvedBy: '' }), approvalOf(m, { approvedAt: '2026-10-15' }), approvalOf(m, { confirmManifestHash: '0'.repeat(64) })]) {
+    const r = await apply(f, m, { approval })
+    bad.push(r.code)
+  }
+  expect('기계 · 빈 승인자 · 시각 형식 · confirm 불일치 → APPROVAL_INVALID · 쓰기 0', [bad, JSON.stringify(research3(f)) === JSON.stringify(pre)],
+    [['APPROVAL_INVALID', 'APPROVAL_INVALID', 'APPROVAL_INVALID', 'APPROVAL_INVALID'], true])
+  const tampered = { ...m, at: '2026-10-15T14:00:01+09:00' }
+  expect('manifest 본문 변조 → HASH_MISMATCH · 쓰기 0', [(await apply(f, tampered)).code, JSON.stringify(research3(f)) === JSON.stringify(pre)], ['HASH_MISMATCH', true])
+}
+{
+  // receipt 는 wx — 놓는 순간 다른 receipt 가 있으면 덮지 않는다(급사로 끝나고 다른 파일은 그대로)
+  const f = makeG8()
+  const m = await build(f)
+  const foreign = '{"foreign":true}\n'
+  let threw = null
+  try {
+    await apply(f, m, { faultHook: (s, arg) => { if (s === 'receipt:before') write(path.dirname(arg.file), path.basename(arg.file), foreign) } })
+  } catch (e) { threw = e.code ?? e.message }
+  expect('receipt 를 놓는 순간 이미 있으면 EEXIST 로 멈추고 기존 바이트 보존', [threw, fs.readFileSync(lib.receiptPathOf(f.research, m.hash), 'utf8')], ['EEXIST', foreign])
 }
 
-// ── ⑩ 실제 자식 프로세스 ────────────────────────────────────
-console.log('⑩ 동시 apply · SIGKILL 급사 — 실제 자식 프로세스')
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-async function waitFor(file, ms = 15000) {
-  const until = Date.now() + ms
-  while (!fs.existsSync(file)) { if (Date.now() > until) return false; await sleep(20) }
-  return true
+// ── Ⓓ 신원 입력 15개 ─────────────────────────────────────────
+console.log('Ⓓ 신원 입력 15개 — 하나씩 바뀌면 journal 전에 STALE_INPUT · 쓰기 0')
+{
+  const append = (file, extra = '\n// 시험 변경\n') => fs.appendFileSync(file, extra)
+  const cases = [
+    ['product.articles', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.articles))],
+    ['product.topicQueue', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.queue))],
+    ['product.draftsSlugSet', (f) => fs.mkdirSync(path.join(f.repo, 'drafts/magazine/new-draft'))],
+    ['product.graphCurrent', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.graphCurrent))],
+    ['product.graphBundle', (f) => append(path.join(f.repo, `src/content/magazine/graph/${GV}.ts`))],
+    ['product.graphControl', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.graphControl))],
+    ['product.graphResolver', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.graphResolver))],
+    ['research.slugManifest', (f) => fs.writeFileSync(filesOfG8(f).slug, JSON.stringify(JSON.parse(fs.readFileSync(filesOfG8(f).slug, 'utf8'))))],
+    ['research.ledger', (f) => fs.writeFileSync(filesOfG8(f).ledger, '')],
+    ['research.slugModule', (f) => append(path.join(f.research, lib.RESEARCH_FILES.slugModule))],
+    ...lib.SNAPSHOT_FILES.map((n) => [`snapshot.${n}`, (f) => append(path.join(f.snapshot, n), '\n')]),
+  ]
+  expect('반례가 15개 키 전부를 덮는다', cases.length, 15)
+  for (const [key, mutate] of cases) {
+    const f = makeG8()
+    const m = await build(f)
+    mutate(f)
+    const pre = research3(f)
+    const r = await apply(f, m)
+    expect(`${key} 만 바뀜 → STALE_INPUT · 그 키 · journal 0 · 세 파일 쓰기 0`, [r.code, r.stale, JSON.stringify(research3(f)) === JSON.stringify(pre)], ['STALE_INPUT', [key], true])
+  }
 }
+
+// ── Ⓔ staged preflight ───────────────────────────────────────
+console.log('Ⓔ staged preflight — 임시 공간에서 세 최종 상태를 만들고 검증 · 하나라도 실패하면 쓰기 0')
+{
+  /** 정본 recordAdmission 을 감싼 시험 대역 — 정본 함수의 의미는 그대로 두고 호출 결과만 바꾼다 */
+  const wrapper = (body) => `import * as real from './m3-pipeline-real.mjs'
+export const validateLedger = real.validateLedger
+let n = 0
+export function recordAdmission(a) { n++; ${body} }
+`
+  const cases = [
+    ['두 admission 중 두 번째 slug 충돌(정본이 거부)', wrapper("if (n === 2) return { ok: false, why: '🔴 이 slug 는 이미 다른 intent 의 것이다 (시험)' }; return real.recordAdmission(a)"), false, 'ADMISSION_REJECTED'],
+    ['두 번째가 idempotent(appended=false) — 새 성공으로 세지 않는다', wrapper("if (n === 2) return { ok: true, appended: false, idempotent: true }; return real.recordAdmission(a)"), false, 'ADMISSION_REJECTED'],
+    ['장부 관계가 receipt 와 다르다 — 임시 verifyAdmissions 가 막는다', wrapper('return real.recordAdmission({ ...a, item: { ...a.item, discoveryRelation: null } })'), false, 'STAGED_VERIFY_FAILED'],
+    ['기존 장부 바이트를 바꾼다 — append-only 접두 위반', wrapper("const r = real.recordAdmission(a); const fs = globalThis.process.getBuiltinModule('node:fs'); const t = fs.readFileSync(a.stateFile, 'utf8'); fs.writeFileSync(a.stateFile, t.replace('예전 편입 주제', '예전 편입 주X')); return r"), true, 'LEDGER_NOT_APPEND_ONLY'],
+  ]
+  for (const [name, src, legacy, code] of cases) {
+    const f = makeG8({ pipelineSrc: src, legacy })
+    const m = await build(f)
+    const pre = { r: research3(f), p: snapshot(f.repo) }
+    const r = await apply(f, m)
+    expect(`${name} → ${code} · 세 파일 · 제품 쓰기 0 · journal 0 · 잠금 0`, [r.code, JSON.stringify(research3(f)) === JSON.stringify(pre.r), JSON.stringify(snapshot(f.repo)) === JSON.stringify(pre.p)], [code, true, true])
+  }
+}
+
+// ── Ⓕ apply · ALREADY_APPLIED ───────────────────────────────
+console.log('Ⓕ apply — 연구 세 파일만 · 제품·큐 바이트 불변 · ALREADY_APPLIED')
+{
+  const f = makeG8({ legacy: true })
+  const m = await build(f)
+  const pre = { r: research3(f), p: snapshot(f.repo), slug: JSON.parse(fs.readFileSync(filesOfG8(f).slug, 'utf8')) }
+  const r = await apply(f, m)
+  const post = research3(f)
+  const slugAfter = JSON.parse(post.slug)
+  expect('APPLIED · 제품 파일 · topic queue 바이트 불변', [r.code, JSON.stringify(snapshot(f.repo)) === JSON.stringify(pre.p)], ['APPLIED', true])
+  expect('slug 표 — 기존 키 그대로 · 두 키만 추가 · 다른 최상위 필드 불변', [slugAfter.slugs, slugAfter._note, slugAfter.asOf],
+    [{ 'I-LEG': 'legacy-slug', 'I-X1': 'learn-pick', 'I-X2': 'day-plan' }, pre.slug._note, pre.slug.asOf])
+  expect('ledger — 기존 바이트로 시작 · ADMITTED 2행 추가', [post.ledger.startsWith(pre.r.ledger), ledgerRows(post.ledger).map((x) => `${x.event}:${x.intentId}:${x.slug}`)],
+    [true, ['ADMITTED:I-LEG:legacy-slug', 'ADMITTED:I-X1:learn-pick', 'ADMITTED:I-X2:day-plan']])
+  expect('장부 관계 = receipt 관계 (slot · toIntentId · anchorLabel · readerReason)', ledgerRows(post.ledger)[1].directRelations,
+    m.admissions[0].direct.map(({ slot, toIntentId, anchorLabel, readerReason }) => ({ slot, toIntentId, anchorLabel, readerReason })))
+  expect('verifyAdmissions PASS — CURRENT 2 · KNOWN_LEGACY 1 · journal 0 · 잠금 0', [verifyNow(f).ok, verifyNow(f).classes, post.journal, post.lock],
+    [true, { CURRENT: 2, KNOWN_LEGACY: 1, UNKNOWN: 0 }, false, false])
+  const again = await apply(f, m)
+  expect('같은 manifest 재실행 → ALREADY_APPLIED · 쓰기 0', [again.code, JSON.stringify(research3(f)) === JSON.stringify(post)], ['ALREADY_APPLIED', true])
+  const sm = JSON.parse(post.slug)
+  delete sm.slugs['I-X2']
+  fs.writeFileSync(filesOfG8(f).slug, `${JSON.stringify(sm, null, 2)}\n`)
+  const broken = research3(f)
+  const r3 = await apply(f, m)
+  expect('receipt 는 있는데 binding 이 빠졌다 → ALREADY_APPLIED 아님 · ADMISSION_INCONSISTENT · 쓰기 0', [r3.code, JSON.stringify(research3(f)) === JSON.stringify(broken)], ['ADMISSION_INCONSISTENT', true])
+}
+
+// ── Ⓖ 급사 7지점 ────────────────────────────────────────────
+console.log('Ⓖ 급사 7지점 — 잠금 유지 · 명시 stale lock 경로 · commit-forward 로 ADMITTED · ledger 단조 증가')
+class Crash extends Error { constructor() { super('시험 급사'); this.code = 'TEST_CRASH' } }
+const crashAt = (stage) => (s, arg) => {
+  if (s !== stage) return
+  if (s === 'ledger:append') arg.appendLedger(arg.file, arg.bytes.subarray(0, Math.floor(arg.bytes.length / 2)))
+  if (s === 'receipt:before') write(path.dirname(arg.file), `${path.basename(arg.file)}.g8tmp-99999`, '{"반쪽')
+  throw new Crash()
+}
+/** 🔴 잠금 파일이 없으면 null — 변이가 잠금을 지워도 예외가 아니라 그 반례의 실패로 드러나게 한다 */
+const lockText = (f) => { const p = path.join(f.research, lib.LOCK_FILE); return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null }
+const lockSha = (f) => { const t = lockText(f); return t === null ? 'NO_LOCK' : lib.sha256(t) }
+/** 🔴 복구 중 의미 함수 호출 0 — 정본 pipeline · slug 모듈을 「부르면 던지는」 대역으로 바꾼 자식 프로세스에서 복구한다 */
+function recoverInChild(f, sha, operator = '김운영') {
+  const keep = {}
+  for (const rel of [lib.RESEARCH_FILES.pipelineModule, lib.RESEARCH_FILES.slugModule]) {
+    const p = path.join(f.research, rel)
+    keep[p] = fs.readFileSync(p, 'utf8')
+    fs.writeFileSync(p, "throw new Error('복구가 의미 판정 모듈을 불렀다')\n")
+  }
+  try {
+    const r = spawnSync('node', [CLI, '--recover-stale-lock', '--research', f.research, '--repo', f.repo, '--lock-sha256', sha, '--operator', operator], { encoding: 'utf8' })
+    return { status: r.status, j: parseJson(r.stdout, { code: `출력 없음 ${r.stderr.slice(0, 160)}` }) }
+  } finally { for (const [p, t] of Object.entries(keep)) fs.writeFileSync(p, t) }
+}
+for (const stage of ['journal:before', 'journal:written', 'receipt:before', 'receipt:written', 'slug:written', 'ledger:append', 'ledger:written']) {
+  const f = makeG8()
+  const m = await build(f)
+  const lengths = [0]
+  const crash = await codeOf(apply(f, m, { faultHook: crashAt(stage) }))
+  const mid = research3(f)
+  lengths.push(Buffer.byteLength(mid.ledger ?? ''))
+  expect(`급사(${stage}) — 잠금 남음 · journal ${stage === 'journal:before' ? '없음' : '있음'}`, [crash, mid.lock, mid.journal], ['TEST_CRASH', true, stage !== 'journal:before'])
+  const lockBytes = lockText(f)
+  const blocked = await apply(f, m)
+  expect(`급사(${stage}) 뒤 apply → ADMISSION_LOCKED · 잠금 자동 삭제 0`, [blocked.code, lockText(f) === lockBytes], ['ADMISSION_LOCKED', true])
+  const wrong = recoverInChild(f, '0'.repeat(64))
+  expect(`급사(${stage}) — 잘못된 잠금 sha 로는 아무것도 하지 않는다`, [wrong.j.code, JSON.stringify(research3(f)) === JSON.stringify(mid)], ['LOCK_SHA_MISMATCH', true])
+  const rec = recoverInChild(f, lockSha(f))
+  const after = research3(f)
+  lengths.push(Buffer.byteLength(after.ledger ?? ''))
+  expect(`급사(${stage}) — 명시 복구 (의미 모듈 대역 · 자식 프로세스)`, [rec.status, rec.j.code], [0, stage === 'journal:before' ? 'STALE_LOCK_RELEASED' : 'STALE_LOCK_RECOVERED'])
+  const fin = await apply(f, m)
+  lengths.push(Buffer.byteLength(research3(f).ledger ?? ''))
+  expect(`급사(${stage}) — 재실행 뒤 ADMITTED (세 곳 일치 · 행 정확히 2 · 잠금 · journal · 임시 조각 0)`,
+    [fin.code, verifyNow(f).ok, ledgerRows(research3(f).ledger).length, research3(f).lock, research3(f).journal,
+      fs.readdirSync(path.join(f.research, lib.RECEIPT_DIR)).filter((n) => n.includes('g8tmp')).length],
+    [stage === 'journal:before' ? 'APPLIED' : 'ALREADY_APPLIED', true, 2, false, false, 0])
+  expect(`급사(${stage}) — ledger 길이 단조 증가`, lengths.every((x, i) => i === 0 || x >= lengths[i - 1]), true)
+}
+
+// ── Ⓗ CONFLICT ──────────────────────────────────────────────
+console.log('Ⓗ CONFLICT — before 도 after 도 아니면 덮지 않는다 · ledger 를 줄이지 않는다')
+{
+  const conflict = async (name, stage, disturb, code) => {
+    const f = makeG8({ legacy: true })
+    const m = await build(f)
+    await codeOf(apply(f, m, { faultHook: crashAt(stage) }))
+    disturb(f, m)
+    const pre = research3(f)
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: lockSha(f), operator: '김운영', knownLegacy: f.legacyList })
+    const post = research3(f)
+    expect(`${name} → ${code} · 세 파일 그대로 · journal 유지`, [r.code, post.slug === pre.slug, post.ledger === pre.ledger, JSON.stringify(post.receipts) === JSON.stringify(pre.receipts), post.journal],
+      [code, true, true, true, true])
+  }
+  await conflict('다른 receipt 가 놓였다', 'journal:written', (f, m) => write(f.research, path.relative(f.research, lib.receiptPathOf(f.research, m.hash)), '{"other":1}\n'), 'RECEIPT_CONFLICT')
+  await conflict('slug 표가 세 번째 상태', 'receipt:written', (f) => fs.writeFileSync(filesOfG8(f).slug, '{"slugs":{"I-Q":"q"}}\n'), 'SLUG_MANIFEST_CONFLICT')
+  await conflict('ledger 에 다른 writer 가 붙였다', 'slug:written', (f) => fs.appendFileSync(filesOfG8(f).ledger, `${JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', intentId: 'I-Q', slug: 'q', at: '2026-10-15T15:00:00+09:00' })}\n`), 'LEDGER_CONFLICT')
+  await conflict('ledger 앞부분이 같은 길이로 바뀌었다', 'slug:written', (f) => fs.writeFileSync(filesOfG8(f).ledger, fs.readFileSync(filesOfG8(f).ledger, 'utf8').replace('예전 편입 주제', '예전 편입 주X')), 'LEDGER_CONFLICT')
+  {
+    // 위조 journal — 다른 경로를 가리키면 아무것도 쓰지 않는다
+    const f = makeG8()
+    const m = await build(f)
+    await codeOf(apply(f, m, { faultHook: crashAt('journal:written') }))
+    const jp = path.join(f.research, lib.JOURNAL_FILE)
+    const j = JSON.parse(fs.readFileSync(jp, 'utf8'))
+    const victim = path.join(f.dir, 'victim.txt')
+    fs.writeFileSync(victim, '연구 밖 파일')
+    fs.writeFileSync(jp, JSON.stringify({ ...j, slugManifest: { ...j.slugManifest, path: victim } }))
+    const pre = { r: snapshot(f.research), v: fs.readFileSync(victim, 'utf8') }
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: lockSha(f), operator: '김운영', knownLegacy: f.legacyList })
+    const post = snapshot(f.research)
+    delete pre.r[lib.LOCK_FILE]; delete post[lib.LOCK_FILE]
+    expect('위조 journal(연구 밖 경로) → RECOVERY_IDENTITY · 외부 파일 · 연구 파일 변경 0', [r.code, JSON.stringify(post) === JSON.stringify(pre.r), fs.readFileSync(victim, 'utf8') === pre.v], ['RECOVERY_IDENTITY', true, true])
+  }
+  {
+    // journal 이 남았는데 잠금은 없다(사람이 잠금만 지웠다) — 다음 apply 가 먼저 완성한다
+    const f = makeG8()
+    const m = await build(f)
+    await codeOf(apply(f, m, { faultHook: crashAt('slug:written') }))
+    fs.rmSync(path.join(f.research, lib.LOCK_FILE))
+    const r = await apply(f, m)
+    expect('잠금 없이 남은 journal → apply 가 먼저 완성 · ALREADY_APPLIED', [r.code, r.recovered?.code, verifyNow(f).ok], ['ALREADY_APPLIED', 'RECOVERED', true])
+  }
+}
+
+// ── Ⓘ KNOWN_LEGACY ──────────────────────────────────────────
+console.log('Ⓘ KNOWN_LEGACY — intentId · slug · 행 sha256 정확한 열거만')
+{
+  expect('운영 KNOWN_LEGACY 는 정확히 5행 · 64자 sha256', [lib.KNOWN_LEGACY_ADMISSIONS.length, lib.KNOWN_LEGACY_ADMISSIONS.every((x) => /^[0-9a-f]{64}$/.test(x.lineSha256))], [5, true])
+  const v = (ledger, slugs, list = LEGACY_LIST, journalPresent = false) => lib.verifyAdmissions({ receipts: [], slugManifestText: JSON.stringify({ slugs }), ledgerText: ledger,
+    payloadOf: () => null, knownLegacy: list, journalPresent })
+  const ok = v(`${LEGACY_LINE}\n`, { 'I-LEG': 'legacy-slug' })
+  expect('열거된 legacy 행 → KNOWN_LEGACY', [ok.ok, ok.classes], [true, { CURRENT: 0, KNOWN_LEGACY: 1, UNKNOWN: 0 }])
+  const altered = v(`${LEGACY_LINE.replace('예전 편입 주제', '예전 편입 주X')}\n`, { 'I-LEG': 'legacy-slug' })
+  expect('같은 intent · slug 라도 행 바이트가 다르면 UNKNOWN', [altered.ok, altered.classes.UNKNOWN], [false, 1])
+  const other = v(`${LEGACY_LINE}\n${JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', intentId: 'I-NEW', slug: 'new-slug', at: '2026-10-01T09:00:00+09:00' })}\n`, { 'I-LEG': 'legacy-slug', 'I-NEW': 'new-slug' })
+  expect('receipt 없는 새 행 → UNKNOWN (receipt 가 없다고 legacy 가 아니다)', [other.ok, other.classes.UNKNOWN, other.problems.some((p) => p.startsWith('UNKNOWN_ADMISSION'))], [false, 1, true])
+  const binding = v(`${LEGACY_LINE}\n`, { 'I-LEG': 'legacy-slug', 'I-ODD': 'odd-slug' })
+  expect('설명되지 않는 slug binding → 실패', [binding.ok, binding.problems.some((p) => p.startsWith('UNEXPLAINED_BINDING'))], [false, true])
+  const pending = v(`${LEGACY_LINE}\n`, { 'I-LEG': 'legacy-slug' }, LEGACY_LIST, true)
+  expect('journal 이 남아 있으면 일관 상태가 아니다', [pending.ok, pending.problems[0].split(' ')[0]], [false, 'ADMISSION_IN_PROGRESS'])
+}
+
+// ── Ⓙ 잠금 · 실제 자식 프로세스 ──────────────────────────────
+console.log('Ⓙ 잠금 — O_EXCL · 자동 탈취 0 · 실제 자식 프로세스 · 실제 SIGKILL')
+const saveManifest = (f, mm) => { const p = path.join(f.dir, 'manifest.json'); fs.writeFileSync(p, JSON.stringify(mm)); return p }
+const applyArgs = (f, mPath, hash) => [CLI, '--apply', '--manifest', mPath, '--confirm-hash', hash, '--snapshot', f.snapshot, '--research', f.research, '--repo', f.repo,
+  '--approved-by', '김운영', '--approved-at', '2026-10-15T14:30:00+09:00', '--committed-at', COMMITTED]
 const testEnv = (gate, stage) => ({ ...process.env, SORAN_MAGAZINE_TEST_MODE: '1', G8_TEST_GATE: gate, G8_TEST_PAUSE_AT: stage })
-const applyArgs = (mf, f, hash) => [CLI, '--apply', '--manifest', mf, '--confirm-hash', hash, '--queue-root', f.repo, '--admission-root', f.research]
-const exitOf = (child) => new Promise((r) => child.on('exit', (code, signal) => r({ code, signal })))
-const saveManifest = (f, mm, name = 'manifest.json') => { const p = path.join(f.dir, name); fs.writeFileSync(p, JSON.stringify(mm)); return p }
-const stdoutOf = (child) => { let s = ''; child.stdout.on('data', (d) => { s += d }); return () => s }
-
-for (const stage of ['after:queue', 'after:slugManifest']) {
-  const f = fresh()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
-  const pre = bytesOf(f)
-  const gate = path.join(f.dir, `gate-${stage.replace(':', '-')}`)
-  const child = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, stage), stdio: ['ignore', 'pipe', 'pipe'] })
-  const exited = exitOf(child)
-  const reached = await waitFor(`${gate}.reached`)
-  child.kill('SIGKILL')
-  const ex = await exited
-  const mid = bytesOf(f)
-  const changed = Object.keys(pre).filter((k) => pre[k] !== mid[k])
-  expect(`SIGKILL(${stage}) — 실제로 반쪽 상태가 생겼다 (죽은 시험 아님)`, [reached, ex.signal, changed.length > 0 && changed.length < 3], [true, 'SIGKILL', true])
-  const v1 = spawnSync('node', [CLI, '--verify', '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8' })
-  expect(`SIGKILL(${stage}) — --verify 가 반쪽 상태를 잡는다`, [v1.status, v1.stdout.includes('PENDING_JOURNAL')], [1, true])
-  const re = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8' })
-  let rj = {}
-  try { rj = JSON.parse(re.stdout) } catch { rj = { code: `출력 없음 ${re.stderr.slice(0, 120)}` } }
-  expect(`SIGKILL(${stage}) 뒤 다음 apply — journal 로 되돌리고 완주`, [re.status, rj.code, rj.recovered?.ok ?? null], [0, 'APPLIED', true])
-  const fin = bytesOf(f)
-  expect(`SIGKILL(${stage}) 뒤 — 큐 7 · 장부 5 · slug 5 (중복·반쪽 0)`,
-    [parseQueueSource(fin.queue).length, ledgerRows(fin.ledger).length, Object.keys(JSON.parse(fin.slugs).slugs).length], [7, 5, 5])
-  const v2 = spawnSync('node', [CLI, '--verify', '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8' })
-  expect(`SIGKILL(${stage}) 뒤 — --verify PASS · journal 0`, [v2.status, fs.existsSync(path.join(f.research, lib.JOURNAL_FILE))], [0, false])
-}
-
 {
-  const f = fresh()
-  const mA = await build(f, '2026-10-06T09:00:00+09:00')
-  const mB = await build(f, '2026-10-06T09:01:00+09:00')
-  expect('두 manifest 는 서로 다르다', mA.hash !== mB.hash, true)
-  const pA = saveManifest(f, mA, 'a.json')
-  const pB = saveManifest(f, mB, 'b.json')
-  const pre = bytesOf(f)
-  const gate = path.join(f.dir, 'gate-race')
-  const childA = spawn('node', applyArgs(pA, f, mA.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
-  const outA = stdoutOf(childA)
-  const exitA = exitOf(childA)
-  const reachedA = await waitFor(`${gate}.reached`)
-  const resB = spawnSync('node', applyArgs(pB, f, mB.hash), { encoding: 'utf8' })
-  let jB = {}
-  try { jB = JSON.parse(resB.stdout) } catch { jB = { code: `출력 없음 ${resB.stderr.slice(0, 120)}` } }
-  const midB = bytesOf(f)
+  // 남은 잠금 — 죽은 PID 여도 자동으로 지우지 않는다
+  const f = makeG8()
+  const m = await build(f)
+  const stale = `${JSON.stringify({ schema: lib.LOCK_SCHEMA, host: 'other-host', pid: 999999, startedAt: '2026-10-01T00:00:00.000Z', manifestHash: 'x' })}\n`
+  write(f.research, lib.LOCK_FILE, stale)
+  const pre = research3(f)
+  const r = await apply(f, m)
+  expect('남은 잠금(죽은 PID) → ADMISSION_LOCKED · 잠금 바이트 그대로 · 쓰기 0', [r.code, lockText(f) === stale, JSON.stringify(research3(f)) === JSON.stringify(pre)], ['ADMISSION_LOCKED', true, true])
+  expect('명시 경로 — 기계 operator 거부', (await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: lib.sha256(stale), operator: 'bot' })).code, 'OPERATOR_INVALID')
+  const rel = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: lib.sha256(stale), operator: '김운영' })
+  expect('명시 경로 — sha 확인 · journal 없음 → 잠금만 놓는다 · 그 뒤 apply APPLIED', [rel.code, research3(f).lock, (await apply(f, m)).code], ['STALE_LOCK_RELEASED', false, 'APPLIED'])
+}
+{
+  // 🔴 확인-덮어쓰기 경쟁 (2026-10-22 P1) — 확인한 그 잠금만 넘겨받는다
+  const NEW_HOLDER = `${JSON.stringify({ schema: lib.LOCK_SCHEMA, host: 'new-holder', pid: 424242, startedAt: '2026-10-22T00:00:00.000Z', manifestHash: 'new' })}\n`
+  const staleState = async () => {
+    const f = makeG8()
+    const m = await build(f)
+    await codeOf(apply(f, m, { faultHook: crashAt('slug:written') }))
+    return { f, m, sha: lockSha(f), lockPath: path.join(f.research, lib.LOCK_FILE) }
+  }
+  const quiet = (f) => { const s = research3(f); delete s.lock; return JSON.stringify(s) }
+  const placeNewHolder = (lockPath) => { fs.rmSync(lockPath, { force: true }); fs.writeFileSync(lockPath, NEW_HOLDER, { flag: 'wx' }) }
+  {
+    const { f, sha, lockPath } = await staleState()
+    const pre = quiet(f)
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList,
+      faultHook: (s) => { if (s === 'lock:checked') placeNewHolder(lockPath) } })
+    expect('확인 직후 새 holder 잠금으로 바뀜 → LOCK_RACE · 새 holder 바이트 보존 · journal · receipt · slug · ledger 쓰기 0 · takeover 표식 0',
+      [r.code, lockText(f), quiet(f) === pre, fs.existsSync(`${lockPath}.takeover`), fs.readdirSync(path.dirname(lockPath)).filter((n) => n.includes('.claimed-')).length],
+      ['LOCK_RACE', NEW_HOLDER, true, false, 0])
+  }
+  {
+    const { f, sha, lockPath } = await staleState()
+    const pre = quiet(f)
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList,
+      faultHook: (s) => { if (s === 'lock:claimed') fs.writeFileSync(lockPath, NEW_HOLDER, { flag: 'wx' }) } })
+    expect('stale 잠금을 떼어 낸 사이 새 holder 가 먼저 잠금 → LOCK_RACE · 새 holder 바이트 보존 · 쓰기 0', [r.code, lockText(f), quiet(f) === pre], ['LOCK_RACE', NEW_HOLDER, true])
+  }
+  {
+    const { f, sha } = await staleState()
+    let second = null
+    const first = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList,
+      faultHook: (s) => { if (s === 'lock:checked' && !second) second = lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '박운영', knownLegacy: f.legacyList }) } })
+    const r2 = await second
+    expect('동시 복구 두 개 — 먼저 시작한 하나만 takeover · 다른 하나는 LOCK_RACE · 결과 ADMITTED', [first.code, r2.code, verifyNow(f).ok, research3(f).lock, research3(f).journal],
+      ['STALE_LOCK_RECOVERED', 'LOCK_RACE', true, false, false])
+  }
+  {
+    const { f, sha, lockPath } = await staleState()
+    fs.writeFileSync(`${lockPath}.takeover`, '{"host":"dead"}\n')
+    const pre = { lock: lockText(f), q: quiet(f) }
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList })
+    expect('남은 takeover 표식 → LOCK_RACE · 자동으로 지우지 않는다 · 잠금 · 상태 그대로', [r.code, fs.existsSync(`${lockPath}.takeover`), lockText(f) === pre.lock, quiet(f) === pre.q], ['LOCK_RACE', true, true, true])
+  }
+  {
+    const { f, m, sha } = await staleState()
+    const r = await lib.recoverStaleLock({ researchDir: f.research, repoDir: f.repo, expectLockSha256: sha, operator: '김운영', knownLegacy: f.legacyList })
+    expect('경쟁 없는 stale 복구는 그대로 — commit-forward 완성 · 재실행 ALREADY_APPLIED', [r.code, (await apply(f, m)).code, verifyNow(f).ok], ['STALE_LOCK_RECOVERED', 'ALREADY_APPLIED', true])
+  }
+}
+{
+  // 실제 자식 두 개 — 하나가 잠금을 쥔 동안 다른 하나는 쓰기 0
+  const f = makeG8()
+  const m = await build(f)
+  const mPath = saveManifest(f, m)
+  const gate = path.join(f.dir, 'gate-locked')
+  const a = spawn('node', applyArgs(f, mPath, m.hash), { env: testEnv(gate, 'locked'), stdio: ['ignore', 'pipe', 'pipe'] })
+  const outA = stdoutOf(a)
+  const exitA = exitOf(a)
+  const reached = await waitFor(`${gate}.reached`)
+  const mid = research3(f)
+  const b = spawnSync('node', applyArgs(f, mPath, m.hash), { encoding: 'utf8', timeout: 30000 })
+  const jB = parseJson(b.stdout, { code: `출력 없음 ${b.stderr.slice(0, 120)}` })
+  const midAfterB = research3(f)
   fs.writeFileSync(`${gate}.go`, '')
   const exA = await exitA
-  let jA = {}
-  try { jA = JSON.parse(outA()) } catch { jA = { code: '출력 없음' } }
-  const fin = bytesOf(f)
-  const finalHashes = [...new Set(parseQueueSource(fin.queue).filter((r) => r.g8ManifestHash).map((r) => r.g8ManifestHash))]
-  expect('동시 apply — A 가 잠금을 쥔 동안 B 는 LOCKED · 쓰기 0', [reachedA, resB.status, jB.code, JSON.stringify(midB) === JSON.stringify(pre)], [true, 1, 'LOCKED', true])
-  expect('동시 apply — A 는 완주', [exA.code, jA.code], [0, 'APPLIED'])
-  const appliedHashes = [jA, jB].filter((j) => j.code === 'APPLIED').map((j) => j.hash)
-  expect('lost update 0 — APPLIED 라고 말한 쪽의 행이 전부 남는다', finalHashes.sort(), appliedHashes.sort())
-  expect('동시 apply 뒤 — 큐 7 · 장부 5 · 대조 PASS', [parseQueueSource(fin.queue).length, ledgerRows(fin.ledger).length,
-    lib.verifyConsistency({ queueSource: fin.queue, ledgerSource: fin.ledger, slugManifestSource: fin.slugs }).ok], [7, 5, true])
+  expect('A 가 잠금을 쥔 동안 B → ADMISSION_LOCKED · 쓰기 0', [reached, b.status, jB.code, JSON.stringify(midAfterB) === JSON.stringify(mid)], [true, 1, 'ADMISSION_LOCKED', true])
+  expect('A 는 완주 · 세 곳 일치', [exA.code, parseJson(outA(), {}).code, verifyNow(f).ok], [0, 'APPLIED', true])
 }
 {
-  const f = fresh()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
-  const r = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8', env: { ...process.env, SORAN_MAGAZINE_TEST_MODE: '', G8_TEST_PAUSE_AT: 'locked:ready', G8_TEST_GATE: path.join(f.dir, 'g') } })
-  expect('시험 정지점은 시험 모드 밖에서 apply 를 거부한다', [r.status, fs.existsSync(path.join(f.research, 'contract/m3-state.jsonl'))], [2, false])
-}
-
-// ── CLI 거부 경로 ───────────────────────────────────────────
-{
-  const f = fresh()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
-  const noHash = spawnSync('node', [CLI, '--apply', '--manifest', mPath, '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8' })
-  expect('--confirm-hash 없이 apply 거부', noHash.status, 2)
-  const oldFlag = spawnSync('node', [CLI, '--apply', '--manifest', mPath, '--confirm-hash', mf.hash, '--queue-root', f.repo, '--graph-root', f.research], { encoding: 'utf8' })
-  expect('옛 --graph-root 거부 (편입 장부 루트와 제품 graph 를 섞지 않는다)', oldFlag.status, 2)
-  const runtimeDir = path.join(f.dir, 'soransoran-magazine-runtime')
-  fs.cpSync(f.repo, runtimeDir, { recursive: true })
-  const toRuntime = spawnSync('node', applyArgs(mPath, { repo: runtimeDir, research: f.research }, mf.hash), { encoding: 'utf8' })
-  expect('운영 runtime 경로 apply 거부', [toRuntime.status, fs.readFileSync(path.join(runtimeDir, 'drafts/magazine/topic-queue.ts'), 'utf8') === fs.readFileSync(path.join(f.repo, 'drafts/magazine/topic-queue.ts'), 'utf8')], [2, true])
-}
-
-// ── ⑫ 빈 manifest 급사 복구 ─────────────────────────────────
-console.log('⑫ 후보 0건 manifest 도 잠금 안에서 앞선 급사를 먼저 되돌린다')
-const emptyOf = (mm) => {
-  const e = { ...mm, queueRows: [], admissionRows: [], fallbackRows: [], selection: { primary: [], fallback: [], excluded: [] } }
-  e.hash = lib.hashManifest(e)
-  return e
-}
-{
-  const f = fresh()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
-  const pre = bytesOf(f)
-  const gate = path.join(f.dir, 'gate-empty')
-  const child = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'after:queue'), stdio: ['ignore', 'pipe', 'pipe'] })
+  // 실제 SIGKILL — slug 교체 직후
+  const f = makeG8()
+  const m = await build(f)
+  const mPath = saveManifest(f, m)
+  const gate = path.join(f.dir, 'gate-kill')
+  const child = spawn('node', applyArgs(f, mPath, m.hash), { env: testEnv(gate, 'slug:written'), stdio: ['ignore', 'pipe', 'pipe'] })
   const exited = exitOf(child)
   const reached = await waitFor(`${gate}.reached`)
   child.kill('SIGKILL')
   const ex = await exited
-  const mid = bytesOf(f)
-  expect('빈 manifest 반례 — 실제 SIGKILL 로 반쪽 상태가 생겼다', [reached, ex.signal, mid.queue !== pre.queue, mid.ledger === pre.ledger,
-    fs.existsSync(path.join(f.research, lib.JOURNAL_FILE))], [true, 'SIGKILL', true, true, true])
-  const e = emptyOf(mf)
-  const ePath = saveManifest(f, e, 'empty.json')
-  const r = spawnSync('node', applyArgs(ePath, f, e.hash), { encoding: 'utf8' })
-  let j = {}
-  try { j = JSON.parse(r.stdout) } catch { j = { code: `출력 없음 ${r.stderr.slice(0, 120)}` } }
-  expect('queueRows=[] apply — NOTHING_TO_APPLY 이면서 recovered.ok=true', [r.status, j.code, j.recovered?.ok ?? null], [0, 'NOTHING_TO_APPLY', true])
-  expect('queueRows=[] apply 뒤 — 세 파일 원본 바이트 · journal 0', [JSON.stringify(bytesOf(f)) === JSON.stringify(pre), fs.existsSync(path.join(f.research, lib.JOURNAL_FILE))], [true, false])
-  const again = await apply(e, f)
-  expect('journal 이 없으면 빈 manifest 는 아무것도 하지 않는다', [again.code, again.recovered], ['NOTHING_TO_APPLY', null])
+  const mid = research3(f)
+  expect('SIGKILL(slug:written) — 실제로 반쪽 상태 (receipt · slug 있음 · ledger 없음 · 잠금 · journal 남음)', [reached, ex.signal, mid.receipts.length, mid.slug.includes('learn-pick'), mid.ledger, mid.lock, mid.journal],
+    [true, 'SIGKILL', 1, true, null, true, true])
+  const blocked = spawnSync('node', applyArgs(f, mPath, m.hash), { encoding: 'utf8' })
+  expect('SIGKILL 뒤 일반 apply → ADMISSION_LOCKED (자동 탈취 0)', parseJson(blocked.stdout, {}).code, 'ADMISSION_LOCKED')
+  const rec = recoverInChild(f, lockSha(f))
+  const v = spawnSync('node', [CLI, '--verify', '--research', f.research, '--repo', f.repo], { encoding: 'utf8' })
+  expect('명시 복구 → STALE_LOCK_RECOVERED · --verify PASS · 행 2', [rec.j.code, v.status, ledgerRows(research3(f).ledger).length], ['STALE_LOCK_RECOVERED', 0, 2])
+}
+
+// ── Ⓚ 공용 helper ────────────────────────────────────────────
+console.log('Ⓚ 공용 helper — 입력 수리 journal 신원 · G8 v1 큐 대조')
+{
+  const paths = ['/a/x', '/a/y', '/a/z']
+  const files = paths.map((p) => ({ path: p, before: null, afterSha: 'ABSENT' }))
+  const id = (j) => lib.checkJournalIdentity(j, paths).ok
+  expect('journal 신원 — 정상 · schema · 개수 · 상대 경로 · 중복 · 다른 경로', [id({ schema: lib.JOURNAL_SCHEMA, files }), id({ schema: 'x', files }), id({ schema: lib.JOURNAL_SCHEMA, files: files.slice(1) }),
+    id({ schema: lib.JOURNAL_SCHEMA, files: [{ ...files[0], path: 'a/x' }, ...files.slice(1)] }), id({ schema: lib.JOURNAL_SCHEMA, files: [files[0], files[0], files[2]] }),
+    id({ schema: lib.JOURNAL_SCHEMA, files: [{ ...files[0], path: '/b/x' }, ...files.slice(1)] })], [true, false, false, false, false, false])
+  const f = makeG8()
+  const q = fs.readFileSync(path.join(f.repo, lib.PRODUCT_FILES.queue), 'utf8')
+  const withG8 = lib.insertQueueRows(q, [{ day: 30, slug: 'g8-row', title: '예전 G8 행', contentType: 'EVERGREEN', intent: '상황', cluster: 'fam', target: '50대', riskLevel: 'LOW',
+    reviewMode: 'SUMMARY_ONLY', imageMode: 'REQUIRED', autoEligible: true, ctaBoard: '/community/free', internalLinks: [], whyNow: 'w', notes: 'n', intentId: 'I-OLD', g8ManifestHash: 'h' }])
+  expect('G8 v1 큐 대조 — 장부 없는 G8 큐 행 · binding 없음을 잡는다', lib.verifyConsistency({ queueSource: withG8, ledgerSource: '', slugManifestSource: '{"slugs":{}}' }).problems.map((p) => p.split(' ')[0]),
+    ['QUEUE_WITHOUT_ADMISSION', 'SLUG_UNBOUND'])
 }
 
 // ── ⑬ topic-queue 공용 writer 잠금 ──────────────────────────
-console.log('⑬ G8 apply 대 M-AUTO 등록 — 같은 큐 writer 잠금 (실제 자식 프로세스)')
+console.log('⑬ 다른 큐 writer 대 M-AUTO 등록 — 같은 큐 writer 잠금 (실제 자식 프로세스)')
 const qlock = await import(pathToFileURL(path.join(path.dirname(LIB), 'magazine-queue-lock.mjs')).href)
 const { classifyFailure } = await import(pathToFileURL(path.join(HERE, 'lib/magazine-failure-kind.mjs')).href)
 const REG = (() => {
@@ -601,6 +685,21 @@ const REG = (() => {
   if (!fs.existsSync(copy)) fs.copyFileSync(path.join(HERE, 'magazine-register.mjs'), copy)
   return copy
 })()
+/** 등록 시험 fixture — 큐(queued-one day 10 · queued-two day 12) 를 가진 repo */
+function makeQueueRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g8-check-q-'))
+  fixtures.push({ dir })
+  const repo = path.join(dir, 'repo')
+  const realQueue = fs.readFileSync(path.join(REPO, 'drafts/magazine/topic-queue.ts'), 'utf8')
+  const header = realQueue.slice(0, realQueue.indexOf('export const TOPIC_QUEUE'))
+  const qRow = (day, slug, title, cluster) => lib.renderQueueRow({ day, slug, title, contentType: 'EVERGREEN', intent: '상황', cluster,
+    target: '50대', riskLevel: 'LOW', reviewMode: 'SUMMARY_ONLY', imageMode: 'OPTIONAL', autoEligible: true, ctaBoard: '/community/free',
+    internalLinks: [], whyNow: '기존 행', notes: '기존 행' })
+  write(repo, 'drafts/magazine/topic-queue.ts', `${header}export const TOPIC_QUEUE: TopicQueueItem[] = [\n${qRow(10, 'queued-one', '큐에 이미 있는 주제 질문', 'family')}${qRow(12, 'queued-two', '큐에 있는 주제 제목', 'relationship')}]\n`)
+  return { dir, repo }
+}
+const fresh = () => makeQueueRepo()
+const filesOf = (f) => ({ queue: path.join(f.repo, 'drafts/magazine/topic-queue.ts') })
 /** M-AUTO 등록과 같은 함수(`applyWrite`) — queued-one(day 10)을 등록하고 큐에서 지운다 */
 const regArgs = (f, arts) => ['--input-type=module', '-e', `const { applyWrite } = await import(${JSON.stringify(REG)}); const fs = await import('node:fs');
 const r = applyWrite({ slug: 'queued-one', _internal: { draft: { literal: "{\\n  title: '등록 글',\\n  publishedAt: '',\\n}" }, norm: { date: '2026-10-08', publishAt: '2026-10-08T10:30:00+09:00' }, item: { day: 10 }, articlesSrc: fs.readFileSync(${JSON.stringify(arts)}, 'utf8') } },
@@ -609,65 +708,74 @@ console.log(JSON.stringify(r))`]
 const regArticles = (f, name = 'register-articles.ts') => { const p = path.join(f.dir, name); fs.writeFileSync(p, 'export const MAGAZINE_ARTICLE_RECORD = {\n} satisfies Record<string, MagazineArticleBody>\n'); return p }
 const hasQueued = (text) => parseQueueSource(text).some((r) => r.slug === 'queued-one')
 const parsesOk = (text) => { try { return Array.isArray(parseQueueSource(text)) } catch { return false } }
+/** 다른 큐 writer 가 넣는 행 — 등록과 같은 큐 writer 잠금 안에서 쓴다 */
+const WRITER_ROWS = [1, 2, 3, 4, 5].map((i) => ({ day: 40 + i, slug: `other-writer-${i}`, title: `다른 writer 주제 ${i}`, contentType: 'EVERGREEN', intent: '상황', cluster: 'daily',
+  target: '50대', riskLevel: 'LOW', reviewMode: 'SUMMARY_ONLY', imageMode: 'REQUIRED', autoEligible: true, ctaBoard: '/community/free', internalLinks: [], whyNow: 'other-writer', notes: 'n' }))
+const writerRows = (text) => parseQueueSource(text).filter((r) => r.whyNow === 'other-writer').length
+/**
+ * 🔴 **다른 큐 writer (실제 자식 프로세스)** — G8 v1 apply 가 하던 「큐 writer 잠금 → 행 삽입」 과 같은 경로다.
+ *    G8 은 더 이상 큐를 쓰지 않지만, 등록이 다른 writer 와 같은 잠금을 공유한다는 계약은 그대로 지킨다.
+ */
+const writerArgs = (queuePath, gate = null, libPath = LIB) => ['--input-type=module', '-e', `const qlock = await import(${JSON.stringify(pathToFileURL(path.join(path.dirname(libPath), 'magazine-queue-lock.mjs')).href)});
+const lib = await import(${JSON.stringify(pathToFileURL(libPath).href)}); const fs = await import('node:fs')
+const gate = ${JSON.stringify(gate)}
+const r = qlock.withQueueWriteLock(${JSON.stringify(queuePath)}, () => {
+  if (gate) { fs.writeFileSync(gate + '.reached', String(process.pid)); while (!fs.existsSync(gate + '.go')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20) }
+  fs.writeFileSync(${JSON.stringify(queuePath)}, lib.insertQueueRows(fs.readFileSync(${JSON.stringify(queuePath)}, 'utf8'), ${JSON.stringify(WRITER_ROWS)}))
+  return 'WROTE'
+}, { waitMs: 0 })
+console.log(JSON.stringify(r.ok ? { code: 'WROTE' } : { code: 'LOCKED', why: r.why }))`]
+const runWriter = (queuePath, libPath) => { const r = spawnSync('node', writerArgs(queuePath, null, libPath), { encoding: 'utf8', timeout: 20000 }); return { status: r.status, j: parseJson(r.stdout, { code: `출력 없음 ${r.stderr.slice(0, 120)}` }) } }
 
 {
-  // A: G8 이 큐 잠금을 쥔 채 멈춘 사이 등록이 시도한다
+  // A: 다른 writer 가 큐 잠금을 쥔 채 멈춘 사이 등록이 시도한다
   const f = fresh()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
   const arts = regArticles(f)
   const artsPre = fs.readFileSync(arts, 'utf8')
-  const pre = bytesOf(f)
-  const gate = path.join(f.dir, 'gate-g8-holds')
-  const g8 = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
-  const outG8 = stdoutOf(g8)
-  const exitG8 = exitOf(g8)
-  const reached = await waitFor(`${gate}.reached`)
   const queueFile = filesOf(f).queue
-  const restoreWhileHeld = qlock.restoreQueueSnapshot({ path: queueFile, existed: true, bytes: Buffer.from(pre.queue), queueCas: { day: 10 } }, { waitMs: 0 })
+  const pre = fs.readFileSync(queueFile, 'utf8')
+  const gate = path.join(f.dir, 'gate-writer-holds')
+  const w = spawn('node', writerArgs(queueFile, gate), { stdio: ['ignore', 'pipe', 'pipe'] })
+  const outW = stdoutOf(w)
+  const exitW = exitOf(w)
+  const reached = await waitFor(`${gate}.reached`)
+  const restoreWhileHeld = qlock.restoreQueueSnapshot({ path: queueFile, existed: true, bytes: Buffer.from(pre), queueCas: { day: 10 } }, { waitMs: 0 })
   const reg = spawnSync('node', regArgs(f, arts), { encoding: 'utf8', timeout: 20000 })
-  let jReg = {}
-  try { jReg = JSON.parse(reg.stdout) } catch { jReg = { ok: null, code: `출력 없음 ${reg.stderr.slice(0, 120)}` } }
-  const mid = bytesOf(f)
+  const jReg = parseJson(reg.stdout, { ok: null, code: `출력 없음 ${reg.stderr.slice(0, 120)}` })
+  const mid = fs.readFileSync(queueFile, 'utf8')
   fs.writeFileSync(`${gate}.go`, '')
-  const exG8 = await exitG8
-  let jG8 = {}
-  try { jG8 = JSON.parse(outG8()) } catch { jG8 = { code: '출력 없음' } }
-  const fin = bytesOf(f)
-  expect('G8 이 큐 잠금을 쥔 동안 등록은 queue_writer_locked · 쓰기 0', [reached, jReg.ok, jReg.code, mid.queue === pre.queue, fs.readFileSync(arts, 'utf8') === artsPre],
+  const exW = await exitW
+  const fin = fs.readFileSync(queueFile, 'utf8')
+  expect('다른 writer 가 큐 잠금을 쥔 동안 등록은 queue_writer_locked · 쓰기 0', [reached, jReg.ok, jReg.code, mid === pre, fs.readFileSync(arts, 'utf8') === artsPre],
     [true, false, qlock.QUEUE_LOCKED_CODE, true, true])
-  expect('G8 이 큐 잠금을 쥔 동안 스냅샷 원복도 덮지 않는다 (queue_writer_locked)', [restoreWhileHeld.restored, restoreWhileHeld.failure?.errorName], [false, qlock.QUEUE_LOCKED_CODE])
-  expect('그 뒤 G8 은 완주 (교착 0)', [exG8.code, jG8.code], [0, 'APPLIED'])
-  expect('lost update 0 — 등록이 실패라 했으니 queued-one 이 남고 G8 행 5 가 있다', [hasQueued(fin.queue), parseQueueSource(fin.queue).filter((r) => r.g8ManifestHash === mf.hash).length], [true, 5])
-  expect('최종 큐 파싱 PASS (7행)', [parsesOk(fin.queue), parseQueueSource(fin.queue).length], [true, 7])
+  expect('다른 writer 가 큐 잠금을 쥔 동안 스냅샷 원복도 덮지 않는다 (queue_writer_locked)', [restoreWhileHeld.restored, restoreWhileHeld.failure?.errorName], [false, qlock.QUEUE_LOCKED_CODE])
+  expect('그 뒤 다른 writer 는 완주 (교착 0)', [exW.code, parseJson(outW(), {}).code], [0, 'WROTE'])
+  expect('lost update 0 — 등록이 실패라 했으니 queued-one 이 남고 writer 행 5 가 있다', [hasQueued(fin), writerRows(fin)], [true, 5])
+  expect('최종 큐 파싱 PASS (7행)', [parsesOk(fin), parseQueueSource(fin).length], [true, 7])
   expect('잠금 파일이 남지 않는다', fs.existsSync(qlock.queueLockFile(queueFile)), false)
   expect('등록의 잠금 실패는 INFRA — 원고 실패 횟수에 넣지 않는다', classifyFailure({ message: `REGISTER_BLOCKED: ${jReg.why ?? ''}`, sent: false }).kind, 'INFRA')
 }
 {
-  // B: 등록이 큐 잠금을 쥔 채(큐를 읽기 직전) 멈춘 사이 G8 apply 가 시도한다
+  // B: 등록이 큐 잠금을 쥔 채(큐를 읽기 직전) 멈춘 사이 다른 writer 가 시도한다
   const f = fresh()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
   const arts = regArticles(f)
-  const pre = bytesOf(f)
+  const queueFile = filesOf(f).queue
+  const pre = fs.readFileSync(queueFile, 'utf8')
   const gate = path.join(f.dir, 'gate-reg-holds')
   const reg = spawn('node', regArgs(f, arts), { env: { ...process.env, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_QUEUE_TEST_GATE: gate, SORAN_QUEUE_TEST_PAUSE_AT: 'register:locked' }, stdio: ['ignore', 'pipe', 'pipe'] })
   const outReg = stdoutOf(reg)
   const exitReg = exitOf(reg)
   const reached = await waitFor(`${gate}.reached`)
-  const g8 = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8', timeout: 20000 })
-  let jG8 = {}
-  try { jG8 = JSON.parse(g8.stdout) } catch { jG8 = { code: `출력 없음 ${g8.stderr.slice(0, 120)}` } }
-  const mid = bytesOf(f)
+  const w = runWriter(queueFile)
+  const mid = fs.readFileSync(queueFile, 'utf8')
   fs.writeFileSync(`${gate}.go`, '')
   const exReg = await exitReg
-  let jReg = {}
-  try { jReg = JSON.parse(outReg()) } catch { jReg = { ok: null } }
-  const fin = bytesOf(f)
-  expect('등록이 큐 잠금을 쥔 동안 G8 apply 는 LOCKED · 세 파일 쓰기 0', [reached, g8.status, jG8.code, JSON.stringify(mid) === JSON.stringify(pre)], [true, 1, 'LOCKED', true])
+  const jReg = parseJson(outReg(), { ok: null })
+  const fin = fs.readFileSync(queueFile, 'utf8')
+  expect('등록이 큐 잠금을 쥔 동안 다른 writer 는 LOCKED · 쓰기 0', [reached, w.j.code, mid === pre], [true, 'LOCKED', true])
   expect('그 뒤 등록은 완주 (교착 0)', [exReg.code, jReg.ok], [0, true])
-  expect('lost update 0 — 등록이 지운 queued-one 은 없고 G8 행도 없다', [hasQueued(fin.queue), parseQueueSource(fin.queue).some((r) => r.g8ManifestHash)], [false, false])
-  expect('최종 큐 파싱 PASS (1행) · 편입 장부 무변경', [parsesOk(fin.queue), parseQueueSource(fin.queue).length, fin.slugs === pre.slugs, fin.ledger === pre.ledger], [true, 1, true, true])
+  expect('lost update 0 — 등록이 지운 queued-one 은 없고 writer 행도 없다', [hasQueued(fin), writerRows(fin)], [false, 0])
+  expect('최종 큐 파싱 PASS (1행)', [parsesOk(fin), parseQueueSource(fin).length], [true, 1])
 }
 {
   // C: auto-register 스냅샷 원복 — 이 회차 등록의 결과일 때만 되돌린다
@@ -685,89 +793,14 @@ const parsesOk = (text) => { try { return Array.isArray(parseQueueSource(text)) 
   const rb = qlock.restoreQueueSnapshot(entry)
   expect('원복 — 지금 큐를 읽을 수 없으면 덮지 않는다', [rb.restored, rb.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === broken], [false, qlock.QUEUE_CHANGED_CODE, true])
   fs.writeFileSync(queueFile, S)
-  const mf = await build(f)
-  expect('원복 대조용 G8 apply', (await apply(mf, f)).code, 'APPLIED')
-  const withG8 = fs.readFileSync(queueFile, 'utf8')
+  expect('원복 대조용 다른 writer', runWriter(queueFile).j.code, 'WROTE')
+  const withW = fs.readFileSync(queueFile, 'utf8')
   const r1 = qlock.restoreQueueSnapshot(entry)
-  expect('원복 — 회차 뒤 G8 이 넣은 행을 옛 바이트로 덮지 않는다', [r1.restored, r1.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === withG8], [false, qlock.QUEUE_CHANGED_CODE, true])
-  const both = qlock.removeQueueDay(withG8, 10)
+  expect('원복 — 회차 뒤 다른 writer 가 넣은 행을 옛 바이트로 덮지 않는다', [r1.restored, r1.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === withW], [false, qlock.QUEUE_CHANGED_CODE, true])
+  const both = qlock.removeQueueDay(withW, 10)
   fs.writeFileSync(queueFile, both)
   const r2 = qlock.restoreQueueSnapshot(entry)
-  expect('원복 — 등록 + G8 이 섞였으면 덮지 않는다', [r2.restored, r2.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === both], [false, qlock.QUEUE_CHANGED_CODE, true])
-}
-
-{
-  // D: 서로 다른 큐(worktree 두 개)가 같은 편입 장부를 쓴다 — 큐 잠금은 달라도 편입 장부 잠금이 막는다
-  const f = fresh()
-  const repo2 = path.join(f.dir, 'repo2')
-  fs.cpSync(f.repo, repo2, { recursive: true })
-  const f2 = { ...f, repo: repo2 }
-  const mA = await build(f, '2026-10-06T09:00:00+09:00')
-  const mB = await build(f2, '2026-10-06T09:01:00+09:00')
-  const pA = saveManifest(f, mA, 'a.json')
-  const pB = saveManifest(f, mB, 'b.json')
-  const pre2 = bytesOf(f2)
-  const gate = path.join(f.dir, 'gate-shared-admission')
-  // 🔴 큐 잠금은 논리 scope 하나다 — 「서로 다른 큐」는 서로 다른 시험 scope 로 만든다(편입 장부 잠금만 남긴다)
-  const a = spawn('node', applyArgs(pA, f, mA.hash), { env: { ...testEnv(gate, 'locked:ready'), SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: `${TEST_SCOPE}-qa` }, stdio: ['ignore', 'pipe', 'pipe'] })
-  const outA = stdoutOf(a)
-  const exitA = exitOf(a)
-  const reached = await waitFor(`${gate}.reached`)
-  const b = spawnSync('node', applyArgs(pB, f2, mB.hash), { encoding: 'utf8', timeout: 20000, env: { ...process.env, SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: `${TEST_SCOPE}-qb` } })
-  let jB = {}
-  try { jB = JSON.parse(b.stdout) } catch { jB = { code: `출력 없음 ${b.stderr.slice(0, 120)}` } }
-  const mid2 = bytesOf(f2)
-  fs.writeFileSync(`${gate}.go`, '')
-  const exA = await exitA
-  let jA = {}
-  try { jA = JSON.parse(outA()) } catch { jA = { code: '출력 없음' } }
-  const finLedger = ledgerRows(fs.readFileSync(filesOf(f).ledger, 'utf8'))
-  expect('같은 편입 장부 · 다른 큐 — A 가 쥔 동안 B 는 LOCKED · 쓰기 0', [reached, b.status, jB.code, JSON.stringify(mid2) === JSON.stringify(pre2)], [true, 1, 'LOCKED', true])
-  expect('같은 편입 장부 · 다른 큐 — A 완주 · 장부는 A 의 사건 5 (lost update 0)', [exA.code, jA.code, finLedger.length, [...new Set(finLedger.map((r) => r.at))]], [0, 'APPLIED', 5, [mA.at]])
-}
-
-// ── ⑭ journal 신원 ──────────────────────────────────────────
-console.log('⑭ journal 신원이 어긋나면 어떤 파일도 쓰거나 지우지 않는다')
-const identityCase = async (name, makeFiles, schema = lib.JOURNAL_SCHEMA) => {
-  const f = fresh()
-  const mf = await build(f)
-  const victim = path.join(f.dir, 'victim.txt')
-  fs.writeFileSync(victim, '저장소 밖 파일 — 지우면 안 된다')
-  const fl = filesOf(f)
-  const real = { queue: fl.queue, slugs: fl.slugs, ledger: fl.ledger }
-  const journal = { schema, manifestHash: mf.hash, pid: 1, files: makeFiles(real, victim) }
-  const jPath = path.join(f.research, lib.JOURNAL_FILE)
-  fs.writeFileSync(jPath, JSON.stringify(journal))
-  const pre = { research: snapshot(f.research), repo: snapshot(f.repo), victim: fs.readFileSync(victim, 'utf8') }
-  const r = await apply(mf, f).catch((e) => ({ code: `THREW ${e.message}` }))
-  const post = { research: snapshot(f.research), repo: snapshot(f.repo), victim: fs.existsSync(victim) ? fs.readFileSync(victim, 'utf8') : null }
-  expect(`${name} → RECOVERY_IDENTITY · 쓰기·삭제 0 (journal 포함)`, [r.code, JSON.stringify(post) === JSON.stringify(pre)], ['RECOVERY_IDENTITY', true])
-}
-const sha = (p) => lib.sha256(fs.readFileSync(p, 'utf8'))
-/**
- * 🔴 실제 세 파일 항목은 **CAS 를 통과하도록** 만든다(before = 지금 바이트 · afterSha = 지금 해시).
- *    그래야 신원 검증이 없을 때 위조 항목(외부 파일 삭제 등)이 실제로 실행된다 — 시험이 CAS 뒤에 숨지 않는다.
- */
-const ok3 = (real) => [real.queue, real.slugs, real.ledger].map((p) => {
-  const cur = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null
-  return { path: p, before: cur, afterSha: cur === null ? 'ABSENT' : lib.sha256(cur) }
-})
-await identityCase('외부 경로 (afterSha 까지 맞춘 위조)', (real, v) => [{ path: v, before: null, afterSha: sha(v) }, ...ok3(real).slice(1)])
-await identityCase('상대 경로', (real) => [{ path: 'contract/m3-state.jsonl', before: null, afterSha: 'ABSENT' }, ...ok3(real).slice(0, 2)])
-await identityCase('누락 (2개)', (real) => ok3(real).slice(0, 2))
-await identityCase('추가 (4개)', (real, v) => [...ok3(real), { path: v, before: null, afterSha: sha(v) }])
-await identityCase('중복 경로', (real) => [ok3(real)[0], ok3(real)[0], ok3(real)[2]])
-await identityCase('잘못된 schema', (real) => ok3(real), 'g8-journal/0')
-await identityCase('before 가 원문도 null 도 아니다', (real) => ok3(real).map((x, i) => (i ? x : { ...x, before: 7 })))
-{
-  const f = fresh()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
-  fs.writeFileSync(path.join(f.research, lib.JOURNAL_FILE), JSON.stringify({ schema: 'nope', files: [] }))
-  const r = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8' })
-  let j = {}
-  try { j = JSON.parse(r.stdout) } catch { j = { code: '출력 없음' } }
-  expect('CLI 도 RECOVERY_IDENTITY 로 멈춘다 (exit 1)', [r.status, j.code], [1, 'RECOVERY_IDENTITY'])
+  expect('원복 — 등록 + 다른 writer 가 섞였으면 덮지 않는다', [r2.restored, r2.failure?.errorName, fs.readFileSync(queueFile, 'utf8') === both], [false, qlock.QUEUE_CHANGED_CODE, true])
 }
 
 // ── ⑮ worktree 독립 논리 잠금 ───────────────────────────────
@@ -777,7 +810,6 @@ const regArgsFor = ({ queuePath, arts, slug = 'queued-one', day = 10, date = '20
 const r = applyWrite({ slug: ${JSON.stringify(slug)}, _internal: { draft: { literal: "{\\n  title: '등록 글',\\n  publishedAt: '',\\n}" }, norm: { date: ${JSON.stringify(date)}, publishAt: ${JSON.stringify(`${date}T10:30:00+09:00`)} }, item: { day: ${day} }, articlesSrc: fs.readFileSync(${JSON.stringify(arts)}, 'utf8') } },
   { articlesPath: ${JSON.stringify(arts)}, queuePath: ${JSON.stringify(queuePath)} })
 console.log(JSON.stringify(r))`]
-const parseJson = (text, fallback) => { try { return JSON.parse(text) } catch { return fallback } }
 const slugsIn = (arts) => lib.sha256 && (() => { try { return Object.keys(Function(`return (${fs.readFileSync(arts, 'utf8').replace(/^[^=]*=/, '').replace(/} satisfies[\s\S]*$/, '}')})`)()) } catch { return null } })()
 {
   expect('운영 scope 는 경로와 무관하게 하나다', [qlock.queueLockBase('/a/topic-queue.ts', {}) === qlock.queueLockBase('/b/other/topic-queue.ts', {}),
@@ -786,6 +818,9 @@ const slugsIn = (arts) => lib.sha256 && (() => { try { return Object.keys(Functi
   // 🔴 잠금 폴더를 함께 준다 — scope 판정을 지운 변이에서도 잠금은 임시 폴더로만 간다 (운영 queue-locks 접근 0)
   const blocked = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x', SORAN_MAGAZINE_QUEUE_LOCK_DIR: TEST_LOCK_DIR } })
   expect('시험 모드 밖 scope 주입은 잠금 거부 · 임계구역 실행 0', [blocked.ok, blocked.code, called], [false, qlock.QUEUE_LOCK_SCOPE_BLOCKED_CODE, 0])
+  // 🔴 scope 주입 판정만 따로 본다 — 위 반례는 잠금 폴더 주입 가드가 같은 코드로 먼저 막아 scope 가드를 가린다(2026-10-22 죽은 변이 실측)
+  expect('scope 주입 판정 단독 — 시험 모드 밖 거부 · 시험 모드 test- 허용', [qlock.resolveQueueLockScope({ SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x' }).ok,
+    qlock.resolveQueueLockScope({ SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'test-x' }).ok], [false, true])
   const badName = qlock.withQueueWriteLock('/x/topic-queue.ts', () => { called++ }, { env: { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_QUEUE_LOCK_SCOPE: 'prod', SORAN_MAGAZINE_QUEUE_LOCK_DIR: TEST_LOCK_DIR } })
   expect('시험 scope 이름은 test- 로 시작해야 한다', [badName.ok, called], [false, 0])
   // 🔴 운영 queue-locks 격리 (2026-10-11) — 거부는 파일 접근 전에 일어난다
@@ -819,45 +854,38 @@ const twoWorktrees = () => {
   return { f, repoB, queueB: path.join(repoB, 'drafts/magazine/topic-queue.ts'), artsB: regArticles(f, 'register-articles-b.ts') }
 }
 {
-  // A 경로 G8 apply 가 잠금을 쥔 동안 B 경로 register
-  const { f, repoB, queueB, artsB } = twoWorktrees()
+  // A 경로 writer 가 잠금을 쥔 동안 B 경로 register
+  const { f, queueB, artsB } = twoWorktrees()
   expect('두 repo 의 큐 파일 실제 경로가 다르다', fs.realpathSync(filesOf(f).queue) !== fs.realpathSync(queueB), true)
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
   const preB = { q: fs.readFileSync(queueB, 'utf8'), a: fs.readFileSync(artsB, 'utf8') }
   const gate = path.join(f.dir, 'gate-ab')
-  const g8 = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
-  const outG8 = stdoutOf(g8)
-  const exitG8 = exitOf(g8)
+  const w = spawn('node', writerArgs(filesOf(f).queue, gate), { stdio: ['ignore', 'pipe', 'pipe'] })
+  const outW = stdoutOf(w)
+  const exitW = exitOf(w)
   const reached = await waitFor(`${gate}.reached`)
   const reg = spawnSync('node', regArgsFor({ queuePath: queueB, arts: artsB }), { encoding: 'utf8', timeout: 20000 })
   const jReg = parseJson(reg.stdout, { ok: null, code: `출력 없음 ${reg.stderr.slice(0, 120)}` })
   const midB = { q: fs.readFileSync(queueB, 'utf8'), a: fs.readFileSync(artsB, 'utf8') }
   fs.writeFileSync(`${gate}.go`, '')
-  const exG8 = await exitG8
-  const jG8 = parseJson(outG8(), { code: '출력 없음' })
-  expect('A 경로 G8 이 쥔 동안 B 경로 등록은 queue_writer_locked · B 쓰기 0', [reached, jReg.ok, jReg.code, JSON.stringify(midB) === JSON.stringify(preB)], [true, false, qlock.QUEUE_LOCKED_CODE, true])
-  expect('A 경로 G8 은 완주', [exG8.code, jG8.code], [0, 'APPLIED'])
-  void repoB
+  const exW = await exitW
+  expect('A 경로 writer 가 쥔 동안 B 경로 등록은 queue_writer_locked · B 쓰기 0', [reached, jReg.ok, jReg.code, JSON.stringify(midB) === JSON.stringify(preB)], [true, false, qlock.QUEUE_LOCKED_CODE, true])
+  expect('A 경로 writer 는 완주', [exW.code, parseJson(outW(), {}).code], [0, 'WROTE'])
 }
 {
-  // B 경로 register 가 잠금을 쥔 동안 A 경로 G8 apply
+  // B 경로 register 가 잠금을 쥔 동안 A 경로 writer
   const { f, queueB, artsB } = twoWorktrees()
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
-  const preA = bytesOf(f)
+  const preA = fs.readFileSync(filesOf(f).queue, 'utf8')
   const gate = path.join(f.dir, 'gate-ba')
   const reg = spawn('node', regArgsFor({ queuePath: queueB, arts: artsB }), { env: { ...process.env, SORAN_QUEUE_TEST_GATE: gate, SORAN_QUEUE_TEST_PAUSE_AT: 'register:locked' }, stdio: ['ignore', 'pipe', 'pipe'] })
   const outReg = stdoutOf(reg)
   const exitReg = exitOf(reg)
   const reached = await waitFor(`${gate}.reached`)
-  const g8 = spawnSync('node', applyArgs(mPath, f, mf.hash), { encoding: 'utf8', timeout: 20000 })
-  const jG8 = parseJson(g8.stdout, { code: `출력 없음 ${g8.stderr.slice(0, 120)}` })
-  const midA = bytesOf(f)
+  const w = runWriter(filesOf(f).queue)
+  const midA = fs.readFileSync(filesOf(f).queue, 'utf8')
   fs.writeFileSync(`${gate}.go`, '')
   const exReg = await exitReg
   const jReg = parseJson(outReg(), { ok: null })
-  expect('B 경로 등록이 쥔 동안 A 경로 G8 apply 는 LOCKED · A 세 파일 쓰기 0', [reached, g8.status, jG8.code, JSON.stringify(midA) === JSON.stringify(preA)], [true, 1, 'LOCKED', true])
+  expect('B 경로 등록이 쥔 동안 A 경로 writer 는 LOCKED · A 쓰기 0', [reached, w.j.code, midA === preA], [true, 'LOCKED', true])
   expect('B 경로 등록은 완주 · B 큐에서 queued-one 제거', [exReg.code, jReg.ok, hasQueued(fs.readFileSync(queueB, 'utf8'))], [0, true, false])
 }
 
@@ -869,13 +897,12 @@ const write = (p, d) => { fs.writeFileSync(p, d); if (p === ${JSON.stringify(que
 const r = applyWrite({ slug: 'queued-one', _internal: { draft: { literal: "{\\n  title: '등록 글',\\n  publishedAt: '',\\n}" }, norm: { date: '2026-10-08', publishAt: '2026-10-08T10:30:00+09:00' }, item: { day: 10 }, articlesSrc: fs.readFileSync(${JSON.stringify(arts)}, 'utf8') } },
   { articlesPath: ${JSON.stringify(arts)}, queuePath: ${JSON.stringify(queuePath)}, write })
 console.log(JSON.stringify(r))`]
-const otherWorktreeCli = (f) => {
-  // 🔴 다른 worktree 의 G8 — 같은 코드를 다른 경로에 두고 거기서 실행한다
-  const root = path.join(f.dir, 'g8-worktree', 'scripts')
+/** 다른 worktree 의 writer — 같은 코드를 다른 경로에 두고 거기서 실행한다 */
+const otherWorktreeLib = (f) => {
+  const root = path.join(f.dir, 'writer-worktree', 'scripts')
   fs.mkdirSync(root, { recursive: true })
   fs.cpSync(path.dirname(LIB), path.join(root, 'lib'), { recursive: true })
-  fs.copyFileSync(CLI, path.join(root, 'magazine-g8-promote.mjs'))
-  return path.join(root, 'magazine-g8-promote.mjs')
+  return path.join(root, 'lib', path.basename(LIB))
 }
 {
   const f = fresh()
@@ -891,16 +918,14 @@ const otherWorktreeCli = (f) => {
   const aTxt = () => fs.readFileSync(arts, 'utf8')
   expect('반례 준비 — 등록이 두 파일을 쓴 뒤 실패하고 내부 원복도 실패했다 (실제 자식)',
     [jr.ok, jr.rolledBack, /원복도 실패/.test(jr.why ?? ''), aTxt().includes("'queued-one'"), hasQueued(fs.readFileSync(queuePath, 'utf8'))], [false, true, true, true, false])
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
-  const g8 = spawnSync('node', [otherWorktreeCli(f), '--apply', '--manifest', mPath, '--confirm-hash', mf.hash, '--queue-root', f.repo, '--admission-root', f.research], { encoding: 'utf8', timeout: 20000 })
-  expect('그 직후 다른 worktree 의 G8 이 같은 큐에 행을 더한다 (실제 자식)', [g8.status, parseJson(g8.stdout, {}).code], [0, 'APPLIED'])
+  const w = runWriter(queuePath, otherWorktreeLib(f))
+  expect('그 직후 다른 worktree 의 writer 가 같은 큐에 행을 더한다 (실제 자식)', [w.status, w.j.code], [0, 'WROTE'])
   const before = { a: aTxt(), q: fs.readFileSync(queuePath, 'utf8') }
   const r = qlock.restoreRegisterPair(pair)
   const after = { a: aTxt(), q: fs.readFileSync(queuePath, 'utf8') }
   expect('쌍 원복 — 큐에 다른 writer 행이 있으면 둘 다 되돌리지 않는다', [r.restored, r.failures[0]?.errorName, JSON.stringify(after) === JSON.stringify(before)], [[], qlock.PAIR_REFUSED_CODE, true])
-  expect('정합성 — 글은 articles 에 남고 큐 행은 빠진 「등록됨」 상태 · G8 행 5 보존',
-    [after.a.includes("'queued-one'"), hasQueued(after.q), parseQueueSource(after.q).filter((x) => x.g8ManifestHash === mf.hash).length], [true, false, 5])
+  expect('정합성 — 글은 articles 에 남고 큐 행은 빠진 「등록됨」 상태 · writer 행 5 보존',
+    [after.a.includes("'queued-one'"), hasQueued(after.q), writerRows(after.q)], [true, false, 5])
   const { restoreSnapshot } = await import(pathToFileURL(path.join(HERE, 'magazine-auto-register.mjs')).href)
   const wired = restoreSnapshot([pair.articles, pair.queue])
   expect('auto-register restoreSnapshot 도 같은 쌍 판정을 쓴다 (둘 다 그대로)', [wired.restored, wired.failures[0]?.errorName, aTxt() === before.a], [[], qlock.PAIR_REFUSED_CODE, true])
@@ -924,16 +949,14 @@ const otherWorktreeCli = (f) => {
     /원복 직전으로 되돌림/.test(failing.failures[0]?.errorDetail ?? ''), fs.readFileSync(arts, 'utf8') === mid.a, fs.readFileSync(queuePath, 'utf8') === mid.q],
   [[], qlock.PAIR_FAILED_CODE, true, true, true])
   // 큐 writer 잠금을 다른 프로세스가 쥐고 있으면 아무것도 하지 않는다
-  const mf = await build(f)
-  const mPath = saveManifest(f, mf)
   const gate = path.join(f.dir, 'gate-pair')
-  const g8 = spawn('node', applyArgs(mPath, f, mf.hash), { env: testEnv(gate, 'locked:ready'), stdio: ['ignore', 'pipe', 'pipe'] })
-  const exitG8 = exitOf(g8)
+  const w = spawn('node', writerArgs(queuePath, gate), { stdio: ['ignore', 'pipe', 'pipe'] })
+  const exitW = exitOf(w)
   await waitFor(`${gate}.reached`)
   const held = qlock.restoreRegisterPair(pair, { waitMs: 0 })
   const heldState = { a: fs.readFileSync(arts, 'utf8'), q: fs.readFileSync(queuePath, 'utf8') }
   fs.writeFileSync(`${gate}.go`, '')
-  await exitG8
+  await exitW
   expect('잠금을 남이 쥐면 쌍 원복 0 (queue_writer_locked)', [held.restored, held.failures[0]?.errorName, heldState.a === mid.a, heldState.q === mid.q], [[], qlock.QUEUE_LOCKED_CODE, true, true])
 }
 
@@ -1110,19 +1133,36 @@ const runRegister = (m) => { const r = spawnSync('node', regCli(m), { encoding: 
   await forged('schema', (x) => [{ ...victimAfter(x), path: x.articles }, queueBefore(x)], { schema: 'register-journal/0' })
 }
 
-// ── ⑪ 실제 연구 정본 ────────────────────────────────────────
+
+// ── ⑪ 실제 연구 정본 (읽기만) ────────────────────────────────
 const REAL_RESEARCH = path.resolve(REPO, '..', 'soransoran-mgraph-research')
-if (fs.existsSync(path.join(REAL_RESEARCH, lib.RESEARCH_FILES.canonical))) {
+const REAL_SNAPSHOT = path.join(REAL_RESEARCH, 'reconciled', '2026-10-21-money-work-retirement-next-e0335')
+if (fs.existsSync(path.join(REAL_RESEARCH, lib.ADMISSION_FILES.ledger))) {
   console.log('⑪ 실제 연구 정본 (읽기만)')
   for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) {
     expect(`fixture ${f} = 연구 정본 바이트`, lib.sha256(fs.readFileSync(path.join(PIPELINE_FIXTURE, f), 'utf8')), lib.sha256(fs.readFileSync(path.join(REAL_RESEARCH, 'contract', f), 'utf8')))
   }
-  const real = lib.classifyIntents(await lib.loadInputs({ researchDir: REAL_RESEARCH, repoDir: REPO }), { at: '2026-10-06T09:00:00+09:00' })
-  const cls = Object.fromEntries(real.rows.map((r) => [r.intentId, r.class]))
-  expect('실제 I-T6-09 (ANSWERS_PARTIAL) → EXTEND_EXISTING', cls['I-T6-09'], 'EXTEND_EXISTING')
-  expect('실제 I-T1-26 (ANSWERS_WITH_SCOPE_EXPANSION) → EXTEND_EXISTING', cls['I-T1-26'], 'EXTEND_EXISTING')
+  const v = lib.verifyAdmissionState({ researchDir: REAL_RESEARCH, repoDir: REPO })
+  expect('실제 장부 — receipt 또는 KNOWN_LEGACY 로만 설명된다 (UNKNOWN 0 · 문제 0)', [v.classes.UNKNOWN, v.problems], [0, []])
+  const pointer = /from '\.\/(g-[a-z0-9-]+)'/.exec(fs.readFileSync(path.join(REPO, lib.PRODUCT_FILES.graphCurrent), 'utf8'))?.[1]
+  if (fs.existsSync(REAL_SNAPSHOT) && pointer === 'g-20261021-081d9a') {
+    const pre = snapshot(path.join(REAL_RESEARCH, 'contract'))
+    const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: REAL_SNAPSHOT, at: '2026-10-22T00:30:00+09:00' })
+    expect('실제 dry-run — readiness 시각 = --at(다음 날 00:30) · 판 이름 = 제품 current', [m.readiness.inputs.effectiveAt, m.readiness.inputs.graphVersion], ['2026-10-22T00:30:00+09:00', 'g-20261021-081d9a'])
+    // 🔴 시점 사실을 고정하지 않는다 — 실제 receipt 가 I-T6-05 를 이미 편입했는지 읽고, 두 상태 각각 정확한 값을 본다
+    //    (2026-10-22 사람 승인 apply 뒤 「후보 I-T6-05 하나」는 낡은 사실이 됐다 — 이제 재편입 거부가 지켜야 할 불변식이다)
+    const admittedNow = lib.readReceipts(REAL_RESEARCH).some(({ text }) => JSON.parse(text).manifest?.admissions?.some((a) => a.intentId === 'I-T6-05' && a.slug === 'age-learning'))
+    if (!admittedNow) {
+      expect('실제 snapshot dry-run(편입 전) — 후보 I-T6-05 하나 · E-0188 · E-0329 + E-0100 · reverse E-0099',
+        m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]])
+    } else {
+      expect('실제 snapshot dry-run(편입 뒤) — 후보 0 · I-T6-05 는 ALREADY_ADMITTED 로 거부 (재편입 없음)',
+        [m.admissions.length, m.refused.filter((r) => r.intentId === 'I-T6-05').map((r) => [r.slug, r.why.includes('ALREADY_ADMITTED')])], [0, [['age-learning', true]]])
+    }
+    expect('실제 dry-run — 연구 contract 쓰기 0', JSON.stringify(snapshot(path.join(REAL_RESEARCH, 'contract'))) === JSON.stringify(pre), true)
+  } else console.log('  SKIP 실제 snapshot dry-run — 제품 graph 가 g-20261021-081d9a 가 아니거나 snapshot 이 없다 (통과로 세지 않는다)')
 } else {
-  console.log('⑪ 실제 연구 정본 — SKIP (연구 디렉터리가 없다 · fixture ①이 같은 반례를 본다)')
+  console.log('⑪ 실제 연구 정본 — SKIP (연구 디렉터리가 없다 · fixture Ⓐ~Ⓘ 가 같은 반례를 본다)')
 }
 
 {

@@ -42,8 +42,12 @@ import { join } from 'node:path'
 
 import { allStageSlots } from '../../src/lib/scale-workflow-render'
 import { slotLabel, profileOf, type RuntimeStage, type Slot } from '../../src/lib/scale-profile'
-import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
+import {
+  HEARTBEAT_INTERVAL_MINUTES, PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE,
+} from '../../src/lib/publish-slot-catchup'
 import { decisionStageEnv, releaseStageCeiling } from '../../src/lib/scale-runtime'
+
+export { HEARTBEAT_INTERVAL_MINUTES } from '../../src/lib/publish-slot-catchup'
 
 /**
  * 🔴 **PATH 정본은 `launchd-template-check.mts` 의 `PATH_VALUE` 하나다.**
@@ -229,13 +233,6 @@ export function renderPublishRunnerPlist(input: RunnerPlistInput): string {
  */
 export type RunnerTriggerMode = 'fixed' | 'heartbeat'
 export const DEFAULT_RUNNER_TRIGGER_MODE: RunnerTriggerMode = 'fixed'
-
-/**
- * 🔴 **깨우는 간격(분).** 이 값은 "몇 건 낼까" 와 무관하다 — 깨울 뿐이다.
- *    낼지·몇 건인지는 발행 트랜잭션이 **도래 슬롯 − 오늘 발행 수**(기존 catch-up 계약)로 정한다.
- *    한 번 깨우면 `--limit=1` · `PER_RUN_MAX=1` 이라 최대 1건이다.
- */
-export const HEARTBEAT_INTERVAL_MINUTES = 10
 
 /**
  * 🔴 **heartbeat 는 이 인자 하나만 더한다.** `--apply --limit=1 --trigger=local` 은 그대로다 —

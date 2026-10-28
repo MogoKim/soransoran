@@ -284,7 +284,7 @@ console.log('\n③ 🔴 일시적 기술 실패만 원천당 1회 다시 묻는�
   const off = await run({ script: { beats: { speakerPlan: ['truncated'] } }, retryCap: 0 })
   check('🔴 retryCap 을 주지 않은 호출부는 재시도 0 (기본값)', off.cost.totalCalls === 1 && off.draft === null)
   const capAll = await run({ script: { beats: { speakerPlan: ['ok'], draftGen: ['truncated', 'truncated'] } } })
-  check('🔴 🔴 원천당 요청은 정상 3 + 재시도 1 을 넘지 않는다 (회차 공동 예산 4)',
+  check('🔴 🔴 원천당 요청은 정상 3 + 조건부 확인 1 + 재시도 1 을 넘지 않는다 (회차 공동 예산 5)',
     capAll.cost.totalCalls <= V2_CALL_CAP + GENERATION_RETRY_MAX
     && V2_CALL_CAP + GENERATION_RETRY_MAX <= CALL_ALLOWANCE_PER_SOURCE, attemptsOf(capAll))
 }

@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 import { buildSandbox, readGuard, stageEnv } from './lib/magazine-rehearsal-sandbox.mjs'
 import { pathToFileURL } from 'node:url'
 import net from 'node:net'
-import { KST, SPEED, addDays, collect, curate, leftovers, pickTargets, placeHero, runStage, templatePair, writeSlugFiles } from './lib/magazine-rehearsal-scenarios.mjs'
+import { KST, SPEED, addDays, collect, curate, leftovers, pickTargets as pickRuntimeTargets, placeHero, runStage, templatePair, writeSlugFiles } from './lib/magazine-rehearsal-scenarios.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SOURCE = resolve(HERE, '..')
@@ -156,6 +156,112 @@ export function withoutArticle(src, slug, parse) {
   const before = parse(src).filter((a) => a.slug !== slug)
   if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error(`articles.ts 에서 ${slug} 말고 다른 글이 바뀌었다 (순서·값)`)
   return { next, removed: true }
+}
+
+/**
+ * 🔴 **금융 정상 후보 — 한 질문 한 묶음** (2026-10-19 · Codex 재검토 P1).
+ *    sandbox 사본 큐에만 손댄다 — 실제 runtime 큐·articles 는 읽기만 (runtime 불변 단언이 지킨다).
+ *      ① 원고 뼈대가 없는 FINANCIAL 행은 sandbox 큐에서 뺀다 — 금융 프로필이라는 이유로 다른 질문의 본문을 끼우지 않는다
+ *      ② fixture 의 큐 행(출처 글 health-insurance-after-retire · #765 공개 제목)을 넣는다
+ *      ③ 같은 slug 의 이미 등록된 article 은 sandbox 사본에서만 뺀다 — "아직 등록되지 않은 정상 후보"
+ *    그래서 금융 대상은 큐 행 · 제목 · brief · review · 원고가 모두 같은 질문이다.
+ */
+async function prepareFinancialCandidate(repo) {
+  const L = await imp(repo, 'scripts/lib/magazine-load.mjs')
+  const QL = await imp(repo, 'scripts/lib/magazine-queue-lock.mjs')
+  const V = await imp(repo, 'scripts/lib/magazine-validation-profile.mjs')
+  const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
+  const fx = C.financialSkeleton(repo)
+  const qPath = join(repo, 'drafts', 'magazine', 'topic-queue.ts')
+  let qsrc = readFileSync(qPath, 'utf8')
+  const removed = []
+  for (const q of L.parseQueueSource(qsrc)) {
+    if (q.slug !== fx.source.slug && V.resolveValidationProfile(q).profile !== 'FINANCIAL') continue
+    if (q.slug !== fx.source.slug) removed.push({ slug: q.slug, title: q.title })
+    qsrc = QL.removeQueueDay(qsrc, q.day) ?? (() => { throw new Error(`sandbox 큐에서 ${q.slug} 행을 빼지 못했다`) })()
+  }
+  const end = qsrc.lastIndexOf('\n]')
+  if (end < 0) throw new Error('sandbox 큐 배열 끝을 찾지 못했다')
+  qsrc = `${qsrc.slice(0, end + 1)}${fx.queueBlock}${qsrc.slice(end + 1)}`
+  const rows = L.parseQueueSource(qsrc)
+  const row = rows.filter((q) => q.slug === fx.source.slug)
+  if (row.length !== 1 || row[0].title !== fx.source.title || V.resolveValidationProfile(row[0]).profile !== 'FINANCIAL') throw new Error('sandbox 큐의 금융 정상 후보 행이 fixture 와 다르다')
+  if (rows.filter((q) => q.day === row[0].day).length !== 1) throw new Error(`sandbox 큐에서 day ${row[0].day} 가 겹친다`)
+  if (rows.some((q) => q.slug !== fx.source.slug && V.resolveValidationProfile(q).profile === 'FINANCIAL')) throw new Error('sandbox 큐에 뼈대 없는 FINANCIAL 행이 남았다')
+  writeFileSync(qPath, qsrc)
+  const aPath = join(repo, 'src', 'content', 'magazine', 'articles.ts')
+  const iso = withoutArticle(readFileSync(aPath, 'utf8'), fx.source.slug, (src) => L.parseArticlesSource(src))
+  if (iso.removed) writeFileSync(aPath, iso.next)
+  return { fx, removed }
+}
+/**
+ * 🔴 **STANDARD 정상 후보 — 한 질문 한 묶음** (2026-10-19 · Codex 재검토 P1 거짓 녹색).
+ *    sandbox 사본에만: 출처 글의 큐 행(fixture 원문)을 넣고 같은 slug 의 등록 article 을 뺀다 — "아직 등록되지 않은 정상 후보".
+ *    🔴 출처가 avoiding-gatherings 면 그 폴더는 brief·review 템플릿 원본이기도 하다 — curate 가 큐 대상 폴더를 지우므로
+ *       부른 쪽이 curate 뒤 `restoreTemplate()` 으로 같은 바이트를 되돌린다.
+ */
+async function prepareStandardCandidate(repo, slug) {
+  const L = await imp(repo, 'scripts/lib/magazine-load.mjs')
+  const QL = await imp(repo, 'scripts/lib/magazine-queue-lock.mjs')
+  const V = await imp(repo, 'scripts/lib/magazine-validation-profile.mjs')
+  const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
+  const x = C.standardSkeletons(repo).sources.find((s) => s.slug === slug)
+  if (!x) throw new Error(`STANDARD 정상 출처에 ${slug} 가 없다`)
+  const tdir = join(repo, 'drafts', 'magazine', C.SKELETON.brief.slug)
+  const template = Object.fromEntries(['brief.md', 'review.ts'].map((n) => [n, readFileSync(join(tdir, n), 'utf8')]))
+  // placeHero 의 복사 원본도 같은 폴더 이름(public/magazine/avoiding-gatherings)이다 — curate 가 지우므로 바이트를 붙잡아 둔다
+  const heroPath = join(repo, 'public', 'magazine', C.SKELETON.brief.slug, 'hero.webp')
+  const hero = readFileSync(heroPath)
+  const qPath = join(repo, 'drafts', 'magazine', 'topic-queue.ts')
+  let qsrc = readFileSync(qPath, 'utf8')
+  const old = L.parseQueueSource(qsrc).find((q) => q.slug === slug)
+  if (old) qsrc = QL.removeQueueDay(qsrc, old.day) ?? (() => { throw new Error(`sandbox 큐에서 ${slug} 행을 빼지 못했다`) })()
+  const end = qsrc.lastIndexOf('\n]')
+  if (end < 0) throw new Error('sandbox 큐 배열 끝을 찾지 못했다')
+  qsrc = `${qsrc.slice(0, end + 1)}${x.queueBlock}${qsrc.slice(end + 1)}`
+  const rows = L.parseQueueSource(qsrc)
+  const row = rows.filter((q) => q.slug === slug)
+  if (row.length !== 1 || row[0].title !== x.title || V.resolveValidationProfile(row[0]).profile !== 'STANDARD') throw new Error(`sandbox 큐의 ${slug} 행이 fixture 와 다르다`)
+  if (rows.filter((q) => q.day === row[0].day).length !== 1) throw new Error(`sandbox 큐에서 day ${row[0].day} 가 겹친다`)
+  writeFileSync(qPath, qsrc)
+  const aPath = join(repo, 'src', 'content', 'magazine', 'articles.ts')
+  const iso = withoutArticle(readFileSync(aPath, 'utf8'), slug, (src) => L.parseArticlesSource(src))
+  if (iso.removed) writeFileSync(aPath, iso.next)
+  const restoreTemplate = () => {
+    mkdirSync(tdir, { recursive: true })
+    for (const [n, t] of Object.entries(template)) writeFileSync(join(tdir, n), t)
+    mkdirSync(dirname(heroPath), { recursive: true })
+    writeFileSync(heroPath, hero)
+  }
+  return { item: row[0], source: x, restoreTemplate }
+}
+/**
+ * STANDARD 정상 등록 대상의 신원 단언 — 등록 slug·title 이 출처와 글자 그대로 · 대표 문장 전부 · 다른 질문 섞임 0.
+ *    foreignTitles 다른 대상 제목 · foreignSentences 다른 질문 본문(금융 등)의 문장
+ */
+function standardIdentityChecks(id, registeredArticles, slug, source, { foreignTitles = [], foreignSentences = [] } = {}) {
+  const art = (registeredArticles ?? []).find((x) => x.slug === slug) ?? null
+  const text = art?.text ?? ''
+  return [
+    exp(`${id} STANDARD 등록 = fixture 출처 (slug·title 글자 그대로)`, Boolean(art) && art.slug === source.slug && art.title === source.title, { got: art && { slug: art.slug, title: art.title }, want: { slug: source.slug, title: source.title } }),
+    exp(`${id} STANDARD 등록 본문에 출처 대표 문장 ${source.representative.length}개 전부`, source.representative.length >= 3 && source.representative.every((x) => text.includes(x)), source.representative.filter((x) => !text.includes(x))),
+    exp(`${id} STANDARD 질문 혼합 0 — 다른 대상 제목 0 · 다른 질문 본문 문장 0`, Boolean(text) && foreignSentences.length > 0 &&
+      !foreignTitles.some((x) => `${art.title}\n${text}`.includes(x)) && !foreignSentences.some((x) => text.includes(x)), { foreignTitles }),
+  ]
+}
+/** 병합된 origin main 의 등록 글 — title 과 본문 글자 (S1 의 한 질문 단언용 · 읽기만) */
+async function mergedArticle(ctx, slug) {
+  const r = spawnSync('/usr/bin/git', ['--git-dir', ctx.sb.origin, 'show', 'main:src/content/magazine/articles.ts'], { encoding: 'utf8' })
+  if (r.status !== 0) return null
+  const L = await imp(ctx.sb.repo, 'scripts/lib/magazine-load.mjs')
+  const a = L.parseArticlesSource(r.stdout).find((x) => x.slug === slug)
+  if (!a) return null
+  return { title: a.title, text: (a.body ?? []).map((b) => [b.text ?? '', ...(b.items ?? [])].join('\n')).join('\n') }
+}
+/** 시나리오 대상 선정 — 실제 producer 선정 함수 그대로, 다만 sandbox 큐를 위 규칙으로 먼저 맞춘다 */
+async function pickTargets(args) {
+  await prepareFinancialCandidate(args.repo)
+  return pickRuntimeTargets(args)
 }
 
 /** 등록 모양을 만들 때만 — 항목 원문을 레코드 맨 앞에 넣는다 (sandbox 사본 전용) */
@@ -286,14 +392,20 @@ export const SCENARIOS = {
     title: '정상 전체 완주 — 대상 1건 · 최초 전송 1 · QA · hero 신규 생성(sharp 변환) · 등록 · PR 1 · exact head 병합 · 배포 · 예약 404 → 공개 200 · watch',
     // 🔴 hero 를 미리 두지 않는다 — 실제 hero runner 가 신규 생성 경로(생성 fixture 1 · sharp 변환 · 검증 · 주입)를 돈다
     async prepare(repo, date) {
-      const [t] = await pickTargets({ repo, date, selectable: 1 })
+      // 🔴 정상 성공 대상은 한 질문 한 묶음 — fixture 출처 글이어야 한다 (다른 질문 제목에 본문을 끼우지 않는다)
+      const { fx, removed } = await prepareFinancialCandidate(repo)
+      const [t] = await pickRuntimeTargets({ repo, date, selectable: 1 })
+      if (t.slug !== fx.source.slug || t.title !== fx.source.title) throw new Error(`S1 대상이 금융 정상 후보 fixture 가 아니다: ${t.slug} 「${t.title}」`)
       await curate({ repo, keep: [t.slug] })
-      return { target: t.slug }
+      const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
+      const foreign = C.riskSentencesOf(readFileSync(join(repo, 'drafts', 'magazine', C.SKELETON.brief.slug, 'review.ts'), 'utf8'))
+      return { target: t.slug, sourceTitle: fx.source.title, riskSentences: fx.riskSentences, foreignSentences: foreign, foreignTitles: removed.map((r) => r.title) }
     },
     scenario: { ci: {}, deploy: {} },
     async run(ctx) {
       await normalDay(ctx)
       const reg = ctx.ev0 = await collect(ctx.sb, { date: ctx.date })
+      ctx.registeredArticle = await mergedArticle(ctx, ctx.prepared.target)
       const pub = reg.registered[0]?.publishAt ?? null
       ctx.publishDate = pub ? new Date(Date.parse(pub) + 9 * 3600 * 1000).toISOString().slice(0, 10) : addDays(ctx.date, 3)
       ctx.sb.extraDates = [ctx.publishDate]
@@ -310,6 +422,11 @@ export const SCENARIOS = {
       const watchLog = readFileSync(join(ctx.sb.root, s.find((x) => x.name === 'watch-after-publish')?.log ?? 'missing'), 'utf8').toString()
       return [
         exp('S1 producer · register · recover · watch 종료 0', ['producer', 'register', 'recover', 'watch-after-publish'].every((n) => stageOk(s, n)), s.map((x) => `${x.name}:${x.exit}`)),
+        // 🔴 한 질문 한 묶음 (2026-10-19) — 큐 행 · 등록 title · 본문이 fixture 출처 글 하나다
+        exp('S1 등록 title = fixture 출처 title (글자 그대로)', ctx.registeredArticle?.title === ctx.prepared.sourceTitle, { got: ctx.registeredArticle?.title, want: ctx.prepared.sourceTitle }),
+        exp('S1 등록 본문이 같은 질문에 답한다 — 반드시 넣을 문장 5개 전부', ctx.prepared.riskSentences.length === 5 && ctx.prepared.riskSentences.every((x) => ctx.registeredArticle?.text?.includes(x)), ctx.prepared.riskSentences.filter((x) => !ctx.registeredArticle?.text?.includes(x))),
+        exp('S1 다른 질문 섞임 0 — 관계 글 문장 0 · sandbox 에서 뺀 금융 행 제목 0', ctx.prepared.foreignSentences.length === 5 && Boolean(ctx.registeredArticle?.text) &&
+          !ctx.prepared.foreignSentences.some((x) => ctx.registeredArticle.text.includes(x)) && !ctx.prepared.foreignTitles.some((x) => `${ctx.registeredArticle.title}\n${ctx.registeredArticle.text}`.includes(x)), { foreignTitles: ctx.prepared.foreignTitles }),
         exp('S1 대상 1건 정확히 한 번 brief 생성 (Claude fixture 1회)', ev.claude.length === 1 && ev.claude[0].slug === t, ev.claude),
         exp('S1 ChatGPT 최초 전송 1회 · 재생성·수리 0', ev.sends.initial === 1 && ev.sends.bySlug[`${t}:initial`] === 1 && ev.sends.regen === 0 && ev.sends.repair === 0, ev.sends),
         exp('S1 등록 1건 = 대상 · 미래 publishAt · hero 연결', ev.registered.length === 1 && ev.registered[0].slug === t && Date.parse(ev.registered[0].publishAt) > Date.parse(`${ctx.date}T01:00:00+09:00`) && Boolean(ev.registered[0].heroSrc), ev.registered),
@@ -548,7 +665,10 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const pr = await templatePair({ repo, item: t, broken: true })
       writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
       placeHero({ repo, slug: t.slug })
-      return { target: t.slug }
+      // 🔴 runtime 모양 — 진행 중인 글의 brief·review 는 미추적이다 (S2·S11 과 같은 선언 · 2026-10-19).
+      //    선언이 없으면 새로 쓴 brief 가 기준 커밋에서 추적 파일이 되어, 입력 수리가 고치는 순간 DIRTY_TREE 로 멈춘다
+      //    (대상이 runtime 에 미추적 brief 가 없는 글 — national-pension-voluntary — 로 바뀌면서 드러났다)
+      return { target: t.slug, untrack: [`drafts/magazine/${t.slug}`] }
     },
     scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['no-frontmatter'] } }),
     async run(ctx) {
@@ -585,7 +705,10 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const pr = await templatePair({ repo, item: t, broken: true })
       writeSlugFiles({ repo, slug: t.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
       placeHero({ repo, slug: t.slug })
-      return { target: t.slug }
+      // 🔴 runtime 모양 — 진행 중인 글의 brief·review 는 미추적이다 (S2·S11 과 같은 선언 · 2026-10-19).
+      //    선언이 없으면 새로 쓴 brief 가 기준 커밋에서 추적 파일이 되어, 입력 수리가 고치는 순간 DIRTY_TREE 로 멈춘다
+      //    (대상이 runtime 에 미추적 brief 가 없는 글 — national-pension-voluntary — 로 바뀌면서 드러났다)
+      return { target: t.slug, untrack: [`drafts/magazine/${t.slug}`] }
     },
     scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: { [`${p.target}:initial`]: ['no-identity'] } }),
     async run(ctx) {
@@ -667,8 +790,12 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
   S11: {
     title: '10/11 운영 후 상태 → 다음 회차 — cold·autumn(입력 수리 APPLIED · regenCalls 2 · 계보 없음) 은 영수증 대조로 계보가 한 번 열려 재생성 1 → 등록 · 무관한 옛 행은 그대로 소진 · provider·일반 전송 0',
     async prepare(repo, date) {
-      const [a, b, c] = await pickTargets({ repo, date, selectable: 1, others: 2 })
+      // 🔴 a·c 는 실제 선정 그대로 — b(autumn 역할 · 실제 등록된다)는 STANDARD 정상 출처 한 질문으로 (2026-10-19)
+      const [a, , c] = await pickTargets({ repo, date, selectable: 1, others: 2 })
+      const std = await prepareStandardCandidate(repo, 'avoiding-gatherings')
+      const b = std.item
       await curate({ repo, keep: [a.slug, b.slug, c.slug] })
+      std.restoreTemplate()
       const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
       const draftsDir = join(repo, 'drafts', 'magazine')
       // a = cold 모양(description 57자 QA FAIL) · b = autumn 모양(3000자 초과) · c = 무관한 옛 행(cold 와 같은 원고 결함 · 수리 영수증 없음)
@@ -676,9 +803,12 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
         const pr = await templatePair({ repo, item: it })
         writeSlugFiles({ repo, slug: it.slug, files: { 'brief.md': pr.brief, 'review.ts': pr.review } })
         writeSlugFiles({ repo, slug: it.slug, files: { 'draft.md': C.manuscriptFor({ repo, draftsDir, slug: it.slug, item: it, mode }) } })
-        placeHero({ repo, slug: it.slug })
+        // 출처 글 자신은 hero 원본 자리 그대로다 (restoreTemplate 이 같은 바이트를 되돌렸다)
+        if (it.slug !== C.SKELETON.brief.slug) placeHero({ repo, slug: it.slug })
       }
-      return { cold: a.slug, autumn: b.slug, unrelated: c.slug }
+      return { cold: a.slug, autumn: b.slug, unrelated: c.slug,
+        standard: { slug: std.source.slug, title: std.source.title, representative: std.source.representativeSentences },
+        foreignTitles: [a.title, c.title], financialSentences: C.financialSkeleton(repo).riskSentences }
     },
     scenarioFor: () => ({ ci: {}, deploy: {} }),
     async afterBuild(sb, p, date) {
@@ -721,6 +851,8 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const reg = logOf(ctx, 'register')
       const lenM = /BODY_TOO_LONG: 본문 (\d+)자/.exec(typed(p.autumn))
       return [
+        // 🔴 한 질문 한 묶음 (2026-10-19) — 실제 등록되는 STANDARD 대상은 fixture 출처 글 그 자체다
+        ...standardIdentityChecks('S11', ctx.registeredArticles, p.autumn, p.standard, { foreignTitles: p.foreignTitles, foreignSentences: p.financialSentences }),
         exp('S11 준비 — 운영 모양 그대로 (attempts 1 · regenCalls 2 · inputRepairCalls 1 · 계보 없음 · APPLIED 결과 파일)', [p.cold, p.autumn].every((s) => p.seeded[s].attempts === 1 && p.seeded[s].regenCalls === 2 && p.seeded[s].inputRepairCalls === 1 && !p.seeded[s].regenLineage), p.seeded),
         exp('S11 입력 수리 재호출 0 · Claude 0 · 일반 요청 0 (producer · register · 재실행 전부)', ev.claude.length === 0 && ev.sends.initial === 0 && ![p.cold, p.autumn, p.unrelated].some((s) => ev.sends.bySlug[`${s}:repair`] || ev.sends.bySlug[`${s}:initial`]), { claude: ev.claude, bySlug: ev.sends.bySlug }),
         exp('S11 cold·autumn — 신뢰 증거(APPLIED 영수증 · 수리 지문 · 유효 draft)로 계보가 한 번 열렸다', rows[p.cold]?.lineageReconcile?.legacyInputRepair === 'OPENED' && rows[p.autumn]?.lineageReconcile?.legacyInputRepair === 'OPENED' &&
@@ -762,7 +894,13 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       const fx = (n) => readFileSync(join(repo, 'scripts', 'fixtures', 'magazine-format-contract', `gray-hair-leave-as-is.repaired-2026-10-11.${n}`), 'utf8')
       writeSlugFiles({ repo, slug, files: { 'brief.md': fx('brief.md'), 'review.ts': fx('review.ts.txt') } })
       placeHero({ repo, slug })
-      return { target: slug }
+      // 🔴 교정 재생성 원고가 실제로 등록된다 — 같은 질문의 STANDARD 출처여야 한다 (큐 행 title 이 다르면 throw · 2026-10-19)
+      const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
+      const std = C.standardSkeleton({ repo, item })
+      if (!std) throw new Error(`S12 대상 ${slug} 가 STANDARD 정상 출처가 아니다`)
+      const foreign = C.standardSkeletons(repo).sources.filter((x) => x.slug !== slug).flatMap((x) => x.representativeSentences)
+      return { target: slug, standard: { slug: std.slug, title: std.title, representative: std.representativeSentences },
+        foreignSentences: [...foreign, ...C.financialSkeleton(repo).riskSentences] }
     },
     scenarioFor: () => ({ ci: {}, deploy: {} }),
     async afterBuild(sb, p, date) {
@@ -796,6 +934,7 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
         exp('S12 01:00 — 옛 장부 사유 대조 RECORDED(migration v1) → 교정 1 · 일반 요청 0 (하루 전체)', row?.lineageReconcile?.legacyInvalid === 'RECORDED' && ev.sends.bySlug[`${t}:regen`] === 1 && ev.sends.initial === 0 &&
           row?.lineageReconcile?.legacyInvalidMigration === 'legacy-invalid-first-response/gray-hair-leave-as-is/2026-10-11/v1' && reg.includes('legacy-invalid-first-response/gray-hair-leave-as-is/2026-10-11/v1'), { lr: row?.lineageReconcile, bySlug: ev.sends.bySlug }),
         exp('S12 교정 요청에 실제 위반 문장 그대로 (YAML frontmatter 가 없다 …)', typed.includes('[교정 요청]') && typed.includes('FORMAT_VIOLATION: 1행: YAML frontmatter 가 없다. --- 로 시작해야 한다'), typed.split('\n').filter((l) => /FIRST_RESPONSE|frontmatter/.test(l)).slice(0, 3)),
+        ...standardIdentityChecks('S12', ctx.registeredArticles, t, ctx.prepared.standard, { foreignSentences: ctx.prepared.foreignSentences }),
         exp('S12 등록 1 · PR MERGED · 배포 · 장부 행 정리', reg.includes('교정 재생성으로 원고 확보') && ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
       ]
     },
@@ -929,6 +1068,15 @@ export async function runScenario(id, { date, runtime, base, keep = false }) {
   let error = null
   try { await def.run(ctx) } catch (e) { error = String(e?.stack ?? e) }
   const ev = await collect(sb, { date })
+  // 🔴 등록 글 신원 — 병합된 main 의 title·본문 (rehearsal-check 가 모든 시나리오에서 질문 혼합 0 을 다시 판정한다 · 2026-10-19)
+  const registeredArticles = []
+  for (const a of ev.registered) registeredArticles.push({ slug: a.slug, ...((await mergedArticle(ctx, a.slug)) ?? { title: null, text: null }) })
+  ctx.registeredArticles = registeredArticles
+  // 🔴 등록 글의 상류 — 그 회차 producer·시나리오가 실제로 쓴 brief·review (rehearsal-check 가 같은 질문인지 다시 판정한다)
+  const registeredUpstream = registeredArticles.map((a) => {
+    const f = (n) => { const p = join(sb.repo, 'drafts', 'magazine', a.slug, n); return existsSync(p) ? readFileSync(p, 'utf8') : null }
+    return { slug: a.slug, brief: f('brief.md'), review: f('review.ts') }
+  })
   let checks
   try { checks = [...def.expect(ev, ctx), ...boundaryChecks(ev)] } catch (e) { checks = [exp(`${id} 기대값 판정 예외`, false, String(e?.message ?? e))] }
   if (error) checks.unshift(exp(`${id} 실행 예외 없음`, false, error))
@@ -944,6 +1092,8 @@ export async function runScenario(id, { date, runtime, base, keep = false }) {
     site: { before: probe(ctx.before), after: probe(ctx.after) },
     publishAt: ctx.publishAt ?? null,
     hold: ctx.holdEntryBefore ? { before: ctx.holdEntryBefore, after: ctx.holdEntryAfter } : null,
+    registeredArticles,
+    registeredUpstream,
   }
   const report = { id, title: def.title, ok, date, root: sb.root, kept: keep || !ok, prepared: ctx.prepared, baseline: sb.baseline,
     stages: ctx.stages, evidence: ev, extras, checks }

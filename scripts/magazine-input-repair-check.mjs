@@ -590,7 +590,7 @@ const repReport = (results, extra = {}) => ({ ok: true, results, skipped: [], re
     runPlan: () => { order.push('plan'); return { status: 0 } }, readSupply: () => ({ selected: 0, reusable: 3 }),
     runBrief: () => { order.push('brief'); return { status: 0 } },
     runRepair: () => { order.push('repair'); return repair },
-    runFetch: () => { order.push('fetch'); return { status: 0 } },
+    runFetch: () => { order.push('fetch'); return { status: 0, startedAt: Date.now() - 1000, report: { ok: true, body: { writtenAt: new Date().toISOString(), results: [] } } } },
     notify: async (ctx) => { notes.push(ctx); return { ok: true } } } })
   const ok = await flow({ status: 0, report: repReport([{ slug: COLD, type: IR.REPAIR.DRAFT_ECHO, outcome: 'APPLIED' }]) })
   check('흐름 — 잠금 → 미해결 → 선정 → 수리 → 회수 순서', order.join(',') === 'lock,outstanding,plan,repair,fetch', order.join(','))

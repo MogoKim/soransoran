@@ -17,7 +17,7 @@
  *      세지 않는지 대조한다.
  *   ⑥ 부모 러너를 **두 회차** 돌린다 (2026-09-28 공급 가속 P0) — 발행된 형제 · 거절된 형제 · 옛 글의 원천은
  *      묶음에 들지 않고, 1회차가 적재한 원천은 2회차에 다시 뽑히지 않으며(중복 Queue 0 · Post 불변),
- *      장부의 judge ≤ 10 · draft ≤ 30 을 센다.
+ *      장부의 judge ≤ 10 · draft ≤ 40 을 센다.
  *
  *   🔴 임시 디렉터리에서 돈다: cwd(`.microseed-data`)와 HOME(장부 · 말투 자산)이 모두 mkdtemp 안이다.
  *      저장소 · 운영 장부 · 운영 말투 자산을 건드리지 않는다. 말투 자산은 **합성**이다(실제 댓글 0).
@@ -154,6 +154,8 @@ const { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROF
  *    그래야 화자 WIP 다. 옛 계약 행은 WIP 가 아니다(2026-09-28 · `supply:wip-contract-db-check`).
  */
 const { currentQualityContract, QUALITY_CONTRACT_KEY } = await import('../src/lib/quality-contract')
+const { RULE_VERSION: AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION: AUTO_JUDGE_PROMPT_VERSION }
+  = await import('../src/lib/micro-seed-auto-judge')
 
 async function main(): Promise<void> {
   console.log('\n══ 부모 → 자식 실제 경로 · 회차 시각 하나 · Persona 여력 대기 (격리 DB · 임시 디렉터리) ══')
@@ -182,7 +184,7 @@ async function main(): Promise<void> {
   }
   /**
    * 🔴 **여력 0 을 만든다** — 공개 자리를 받았거나 **생성 시도 여력**(speaker-attempt-v1)이 있는 화자마다
-   *    사람 검토 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고 시도 여력도 0 이다.
+   *    자동 READY 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고 시도 여력도 0 이다.
    *    🔴 공개 자리만 보고 심으면(옛 계약) 자리가 없던 화자가 시도 여력을 받아 대기 경로가 시험되지 않는다.
    */
   const scale = resolveScale(process.env)
@@ -203,7 +205,10 @@ async function main(): Promise<void> {
       data: {
         sourceRawContentId: r.id, status: 'APPROVED', draftTitle: `대기 글 ${seq}`, draftBody: `대기 본문 ${seq}. 다들 어떠세요?`,
         gateVerdict: 'PASS', promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
-        gateResults: { holds: [], blocks: [], autoDraft: {
+        gateResults: { holds: [], blocks: [], semanticReview: {
+          complete: true, deterministicPass: true, unsupportedAdditions: 0,
+          lifeContradictions: 0, droppedFromSource: 0, confidence: 1,
+        }, autoDraft: {
           provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: code, bundleDigest: `bd-${code}`, comments: 3 },
         }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN_AT, { id: `dd-${seq}` }) } as never,
@@ -235,7 +240,8 @@ async function main(): Promise<void> {
   writeFileSync(join(T, shadowPath), seeds.map((id) => JSON.stringify({
     // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — 아래 상세 행과 같은 사이트
     sourceSite: 'navercafe:fixture', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [], semanticStatus: 'ok',
-    ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${id}`, provenance: 'machine-shadow',
+    ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+    model: 'fixture', inputHash: `h-${id}`, provenance: 'machine-shadow', boardTopic: 'FREE',
   })).join('\n') + '\n')
   writeFileSync(join(DATA, `fixture-${rid}.detail.jsonl`), seeds.map((id, i) => JSON.stringify({
     sourceArticleId: id, title: `동네 산책길에 핀 꽃 ${i}`, bodyHead: '요즘 아침마다 동네를 걷는데 꽃이 피었어요',
@@ -402,9 +408,9 @@ async function worksetAxisRunner(
     : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] }
   check('🔴 러너가 실제로 돌아 묶음 파일을 적었다', ws !== null, `출력 끝: ${out.slice(-600)}`)
   const got = ws?.sources.map((s) => s.sourceArticleId).join(',') ?? ''
-  // 🔴 부족 슬롯 1(다음 첫 기회) — seed 중 형제를 뺀 정본 순위 1등 하나 · raw 는 0. 댓글 순이면 raw 가 먼저 든다
-  check('🔴 🔴 **러너가 적은 묶음 = 가까운 지평 부족 1칸만큼 · 형제 뺀 정본 순위 1등 seed(wsxs2) 정확히** (옛 지평: seed 5)',
-    got === 'wsxs2', got)
+  // 🔴 부족 슬롯 1(다음 첫 기회) — 무수율 회복 상한 3개 · seed 중 형제를 뺀 정본 순위 1~3등 · raw 는 0
+  check('🔴 🔴 **러너가 적은 묶음 = 가까운 지평 부족 1칸의 회복 상한 3개 · 형제 뺀 정본 순위 seed(wsxs2~4) 정확히** (옛 지평: seed 5)',
+    got === 'wsxs2,wsxs3,wsxs4', got)
   check('🔴 🔴 **raw 선택 정확히 0** — 댓글이 더 많은 raw 4건이 하나도 묶음에 들지 않는다',
     ws !== null && ws.sources.filter((s) => s.sourceArticleId.startsWith('wsxw')).length === 0, got)
   check('🔴 🔴 **러너가 격리 DB 큐를 읽어 형제를 뺐다** — wsxs1 없음 · 제외 사유 1건',
@@ -419,7 +425,7 @@ async function worksetAxisRunner(
     ? traced.trace.candidates.filter((c) => c.reason === 'RAW_NOT_AUTO_CONSUMED').map((c) => c.sourceHash).sort() : []
   check('🔴 🔴 **raw 후보 4건이 정확히 RAW_NOT_AUTO_CONSUMED 사유로 제외됐다** — 러너가 쓴 선택 trace v2 · 원천 해시 대조 · 불일치 0',
     traced?.ok === true && traced.version === 'v2' && JSON.stringify(rawReasoned) === JSON.stringify(rawHashes)
-    && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 1,
+    && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 3,
     traced === null ? 'trace 없음' : traced.ok ? `제외 ${rawReasoned.length}` : traced.problems.join(','))
   // 🔴 (P0-B1 정합) 기회 스냅샷 = 자동 seed 전용(opportunities-v2) — preflight 의 실제 함수로 세어도 raw 는 증명일 기회가 아니다
   const { latestOpportunities, sourceOpportunitiesOf } = await import('./lib/stage-preflight-facts.mjs')
@@ -439,7 +445,7 @@ async function worksetAxisRunner(
     latest?.evidence != null && JSON.stringify(oppKeys) === JSON.stringify(seedHashes) && !oppKeys.some((h) => rawHashes.includes(h)),
     `기회 ${oppKeys.length}`)
   check('🔴 러너 로그가 JIT 선택 사실과 raw 제외 사유를 적는다',
-    /연결 가능 seed 5 · raw 제외 4 · 재시도 보충 0\/0/.test(out) && /원문 그대로\(raw\) 축 — 자동 소비자가 없다[^\n]* 4/.test(out),
+    /연결 가능 seed 5 · raw 제외 4 · 선택된 재시도 0/.test(out) && /원문 그대로\(raw\) 축 — 자동 소비자가 없다[^\n]* 4/.test(out),
     (/부족 슬롯 .*/.exec(out) ?? [''])[0])
   const shadowFile = ws === null ? '' : join(D2, `auto-judge-${ws.runId}.shadow.jsonl`)
   const judged = shadowFile !== '' && existsSync(shadowFile)
@@ -452,7 +458,7 @@ async function worksetAxisRunner(
 }
 
 /**
- * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 10/30** (2026-09-28 공급 가속 P0).
+ * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 10/40** (2026-09-28 공급 가속 P0).
  *
  *    부모 러너 `main --live` 를 **두 회차** 돌린다 — 격리 DB · 가짜 provider · 임시 cwd.
  *    · 1회차 전: 큐에 **발행된** 형제(PUBLISHED + Post) · 거절된 형제 · 옛 글(Post 의 원천 칸)이 있다
@@ -460,7 +466,7 @@ async function worksetAxisRunner(
  *      → 다른 카페의 같은 글 번호는 다른 원천이다 — 막지 않는다
  *    · 1회차가 적재한 원천은 2회차 묶음에 들지 않는다 — 큐 행이 생겼기 때문이다
  *    · 원천마다 큐 행 ≤ 1 · Post 는 러너가 늘리지 않는다
- *    · 장부 — judge ≤ 10 · draft ≤ 30 (단계 env 상한)
+ *    · 장부 — judge ≤ 10 · draft ≤ 40 (단계 env 상한)
  */
 async function duplicateSourceRunner(
   prisma: InstanceType<typeof import('@prisma/client').PrismaClient>,
@@ -536,7 +542,7 @@ async function duplicateSourceRunner(
         // 🔴 결정이 넣은 모양(표식 포함) — 표식 없는 손 env 는 d1 이다(Lane A)
         ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
         SORAN_LLM_DAILY_BUDGET_USD: '1000', SORAN_LLM_RESERVE_HEADROOM: '1.5',
-        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 30 으로 덮는다
+        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 40 으로 덮는다
         SORAN_LLM_RUN_REQUEST_CAP: '20',
         FAKE_PROVIDER_JUDGE_DECISION: 'AUTO_SEED',
         NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
@@ -573,11 +579,11 @@ async function duplicateSourceRunner(
     return [...last.values()].filter((r) => r.stage !== 'countTokens' && r.status === 'settled').length
   }
   const rid1 = r1.ws?.runId ?? ''
-  check('🔴 🔴 **장부 — judge ≤ 10 · draft ≤ 30 · 둘 다 실제로 불렸다**',
-    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 10 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 30,
+  check('🔴 🔴 **장부 — judge ≤ 10 · draft ≤ 40 · 둘 다 실제로 불렸다**',
+    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 10 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 40,
     `judge ${paid(`${rid1}-j`)} · draft ${paid(`${rid1}-d`)}`)
-  check('🔴 🔴 **러너가 단계 env 상한 10 · 30 을 실었다** (자식 로그)',
-    /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 30/.test(r1.out))
+  check('🔴 🔴 **러너가 단계 env 상한 10 · 40 을 실었다** (자식 로그)',
+    /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 40/.test(r1.out))
   // 🔴 (2026-10-12 Batch C1) 실제 판정 · 초안 자식이 fd 9 를 물려받아 러너와 같은 커널 lease · 실행 token 을 증명했다 — 장부 shadow 칸
   const shadowOf = (r: Record<string, unknown>): { ok?: boolean; code?: string | null } | undefined => r.runTokenShadow as never
   const shadowRows = ledger().filter((r) => String(r.runId).startsWith(rid1) && r.stage !== 'countTokens')

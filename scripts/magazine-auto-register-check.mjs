@@ -743,9 +743,11 @@ const producerSrc = readFileSync(join('scripts', 'magazine-producer-run.mjs'), '
 expect('producer 가 같은 미해결 판정을 쓴다', producerSrc.includes("from './lib/magazine-outstanding.mjs'"), true)
 expect('producer 가 단일 finalizer 흐름에 연결돼 있다', producerSrc.includes('runProducerFlow({'), true)
 expect('producer 가 흐름에 checkTools 를 준다', /checkTools: \(\) => preflightTools/.test(producerSrc), true)
-expect('producer 가 흐름에 checkGit 을 준다', /checkGit: \(\) => preflight\(/.test(producerSrc), true)
+// 🔴 sync 뒤 재실행 자식은 다시 fetch·ff 하지 않고 부모가 맞춘 HEAD 만 확인한다 (2026-10-25 sync-reload)
+expect('producer 가 흐름에 checkGit 을 준다', /checkGit: \(\) => \(POST_SYNC \? pinnedHead\(\) : preflight\(\{ exec \}\)\)/.test(producerSrc), true)
 expect('producer 가 흐름에 checkOutstanding 을 준다', /checkOutstanding: \(\) => readOutstanding/.test(producerSrc), true)
-expect('producer 가 흐름에 notify 를 준다', /notify: notifyOnce/.test(producerSrc), true)
+// 🔴 재실행 자식은 알림 시도 표식을 먼저 남기고 같은 notifyOnce 를 부른다 (2026-10-25 sync-reload P1)
+expect('producer 가 흐름에 notify 를 준다', /notify: \(ctx\) => \{[\s\S]{0,260}?return notifyOnce\(ctx\)/.test(producerSrc), true)
 // 🔴 옛 결함의 화석 — 시작 전 검사의 중간 exit 가 되살아나면 알림 계약이 다시 깨진다
 expect('시작 전 검사에 중간 process.exit 가 없다', /process\.exit\(1\)/.test(producerSrc), false)
 
@@ -852,7 +854,8 @@ function makeDeps(over = {}) {
     checkOutstanding: () => ({ ok: true, code: 'CLEAR', message: '없음' }),
     runPlan: () => { calls.plan += 1; return OK_STAGE },
     runBrief: () => { calls.brief += 1; return OK_STAGE },
-    runFetch: () => { calls.fetch += 1; return OK_STAGE },
+    // 🔴 정상 회수는 표준 자리에 이번 회차 결과를 남긴다 — 결과 없는 회수는 이제 PARTIAL 이다 (2026-10-24)
+    runFetch: () => { calls.fetch += 1; return { ...OK_STAGE, startedAt: Date.now() - 1000, report: { ok: true, body: { writtenAt: new Date().toISOString(), results: [] } } } },
     notify: (ctx) => { calls.notify += 1; sent.push(ctx); return { ok: true } },
     ...over,
   }
@@ -1263,7 +1266,9 @@ expect('producer 회차 lock 경로가 따로 있다', typeof lockMod.PRODUCER_L
 expect('auto-register lock 과 다른 파일이다', lockMod.PRODUCER_LOCK_PATH === lockMod.LOCK_PATH, false)
 expect('날짜가 들어가지 않는다 (자정 넘김)', /\d{4}-\d{2}-\d{2}/.test(lockMod.PRODUCER_LOCK_PATH), false)
 const prodSrc = readFileSync(join('scripts', 'magazine-producer-run.mjs'), 'utf8')
-expect('🔴 producer 가 회차 전체를 잠근다', /checkLock: \(\) => \{ producerLock = acquireLock\(\{ path: PRODUCER_LOCK_PATH/.test(prodSrc), true)
+// 🔴 재실행 자식은 잠금을 새로 잡지 않고 부모 것을 이어받는다 (2026-10-25 sync-reload)
+expect('🔴 producer 가 회차 전체를 잠근다', /const acquireProducerLock = \(\) => \{ producerLock = acquireLock\(\{ path: PRODUCER_LOCK_PATH/.test(prodSrc)
+  && /checkLock: \(\) => \(POST_SYNC \? adoptLock\(\) : acquireProducerLock\(\)\)/.test(prodSrc), true)
 expect('🔴 잠금 실패도 단일 finalizer 를 지난다 (Slack 이 나간다)', /checkLock/.test(readFileSync(join('scripts','lib','magazine-producer-flow.mjs'),'utf8')), true)
 expect('🔴 신호를 먼저 쓰고 그다음 잠금을 푼다', prodSrc.indexOf('writeHandoff({') < prodSrc.indexOf('producerLock.release()'), true)
 expect('dry-run 은 잠그지 않는다 (flow 가 !dryRun 에서만 checkLock 을 부른다)', /if \(!dryRun\) \{/.test(readFileSync(join('scripts','lib','magazine-producer-flow.mjs'),'utf8')), true)
@@ -3001,10 +3006,20 @@ const directSourceCheck = spawnSync(process.execPath, [join('scripts', 'magazine
   env: { ...process.env },
 })
 expect('source 관문 반례·변이가 전부 통과한다', directSourceCheck.status, 0)
-expect('source 관문 검사가 200개(부속 2 포함) 반례·변이를 실제 실행했다', /DIRECT_SPEC source 관문: 200 pass, 0 fail/.test(directSourceCheck.stdout), true)
+expect('source 관문 검사가 367개(부속 2 포함) 반례·변이를 실제 실행했다', /DIRECT_SPEC source 관문: 367 pass, 0 fail/.test(directSourceCheck.stdout), true)
 // 🔴 부속 검사 연결 블록이 통째로 사라지면 합계가 198 로 줄고, 아래 두 요약 표식도 사라진다
 expect('부속 source 작성 검사가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-check\.mjs — DIRECT_SPEC source 작성 검사: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)
 expect('부속 source 작성 변이가 실행·통과했다', /PASS 부속 scripts\/magazine-direct-spec-source-authoring-mutation\.mjs — DIRECT_SPEC source 작성 변이: \d+ pass, 0 fail/.test(directSourceCheck.stdout), true)
+
+console.log('\n══════ producer 회차 코드 판 경계 — sync 뒤 판정·알림·handoff 도 동기화된 HEAD 코드 (운영 모양 격리 재현)')
+// 🔴 launchd 가 부르는 entrypoint 를 임시 origin·작업 사본·HOME 에서 실제로 돌린다 — 운영 자료 · AI · ChatGPT · Slack 0
+const syncReloadCheck = spawnSync(process.execPath, [join('scripts', 'magazine-producer-sync-reload-check.mjs')], {
+  encoding: 'utf8',
+  env: { ...process.env },
+  maxBuffer: 1e8,
+})
+expect('producer sync-reload 반례·변이가 전부 통과한다', syncReloadCheck.status, 0)
+expect('producer sync-reload 검사가 30개 반례·변이를 실제 실행했다', /producer sync-reload: 30 pass, 0 fail/.test(syncReloadCheck.stdout), true)
 
 console.log('\n══════ 관계 수량 공용 정책 (direct 2~3 + discovery 1) — 저장소 fixture 만')
 // 🔴 실제 연구 폴더 인자를 넘기지 않는다 — CI 에서도 같은 결과여야 한다. 실제 I-T6-05 검사는 SKIP 이고 pass 로 세지 않는다

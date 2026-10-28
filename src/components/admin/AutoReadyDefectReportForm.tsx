@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { reportAutoReadyDefect, type DefectReportState } from '@/lib/actions/auto-ready-defect-report'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 자동 READY 결함 신고 폼 — 글 하나
@@ -47,17 +48,17 @@ export default function AutoReadyDefectReportForm({ postId }: { postId: string }
       <label className="flex flex-col gap-1">
         <span className="text-xs font-bold text-content-primary">결함 근거 (한 줄에 하나)</span>
         <textarea value={reasons} onChange={(e) => { setReasons(e.target.value); setConfirming(false) }}
-          rows={3} className="min-h-[52px] w-full rounded border border-subtle px-2 py-1" />
+          rows={3} className="min-h-[52px] w-full rounded-md border border-interactive bg-surface-card px-3 py-2" />
       </label>
       {state?.error !== undefined && <p role="alert" className="font-bold text-state-danger">{state.error}</p>}
       {state?.result?.result === 'reject' && <p role="alert" className="font-bold text-state-danger">{state.result.why}</p>}
       {!confirming ? (
         <button type="button" disabled={lines.length === 0 || busy} onClick={() => { setConfirming(true) }}
-          className="min-h-[52px] rounded-lg border border-state-danger px-4 font-bold text-state-danger disabled:opacity-50">
+          className={adminButtonClass('danger')}>
           결함 신고
         </button>
       ) : (
-        <div className="rounded-lg border border-state-danger px-3 py-2" data-confirm="">
+        <div className="rounded-md border-2 border-state-danger bg-surface-card p-4" data-confirm="">
           <p className="mb-2 font-bold text-content-primary">
             이 글을 중대 결함으로 기록합니다. 기록하면 자동 발행이 즉시 멈추고, 되돌릴 수 없습니다.
           </p>
@@ -66,11 +67,11 @@ export default function AutoReadyDefectReportForm({ postId }: { postId: string }
           </ul>
           <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy} onClick={() => { void send() }}
-              className="min-h-[52px] rounded-lg border border-state-danger px-4 font-bold text-state-danger disabled:opacity-50">
+              className={adminButtonClass('danger')}>
               {busy ? '기록하는 중…' : '결함으로 기록'}
             </button>
             <button type="button" disabled={busy} onClick={() => { setConfirming(false) }}
-              className="min-h-[52px] rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+              className={adminButtonClass('secondary')}>
               취소
             </button>
           </div>

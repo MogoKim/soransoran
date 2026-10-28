@@ -9,6 +9,9 @@ import {
   canReview, reviewingAfter, describeSend, phaseLabel, type Entry, type EvidenceRowState, type BatchPlan, type RowResult,
 } from '@/lib/auto-ready-evidence-batch-plan'
 import { DECLINE_REASONS } from '@/lib/original-post-decision'
+import { adminButtonClass } from '@/components/admin/AdminButton'
+import { adminBadgeClass } from '@/components/admin/AdminUi'
+import { cn } from '@/lib/utils'
 
 /**
  * 자동 READY 증거 — 배치 검토 화면
@@ -49,9 +52,12 @@ type Item = {
 type Step = 'edit' | 'confirm'
 
 const TONE_CLASS = { 성공: 'text-state-success', 건너뜀: 'text-content-muted', 거절: 'text-state-danger' } as const
+/** 입력 이름 줄 — 높이를 고정해 결정 · 중대 결함 · 근거 칸의 위쪽 선을 맞춘다(글자 크기가 달라도) */
+const LABEL_ROW = 'mb-1 flex min-h-[24px] items-end leading-tight'
 
 export default function EvidenceBatchReview() {
   const [bundleText, setBundleText] = useState<string | null>(null)
+  const [fileName, setFileName] = useState<string | null>(null)
   const [items, setItems] = useState<Item[]>([])
   const [entries, setEntries] = useState<Record<string, Entry>>({})
   const [states, setStates] = useState<ReadonlyMap<string, EvidenceRowState>>(new Map())
@@ -97,6 +103,7 @@ export default function EvidenceBatchReview() {
   async function onFile(file: File | undefined): Promise<void> {
     setError(null); setResults(new Map()); setLocked(new Set()); setReviewing(new Set()); setStates(new Map()); setStateLoaded(false)
     setStep('edit'); setConfirmed(null)
+    setFileName(file?.name ?? null)
     if (file === undefined) return
     const text = await file.text()
     let parsed: { items?: Item[] }
@@ -166,10 +173,23 @@ export default function EvidenceBatchReview() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg bg-surface-soft px-4 py-3 text-sm text-content-primary">
-        <label htmlFor="bundle-file" className="mb-2 block font-bold">검토 묶음 (bundle.json)</label>
-        <input id="bundle-file" type="file" accept="application/json" disabled={frozen}
-          onChange={(e) => { void onFile(e.target.files?.[0]) }} className="block min-h-[52px] w-full text-sm" />
+      <div className="rounded-md border border-subtle bg-surface-card px-4 py-3 text-sm text-content-primary">
+        <p className="mb-2 font-bold">검토 묶음 (bundle.json)</p>
+        {/* 🔴 input 은 그대로다(id · type · accept · disabled · onChange) — 화면에서만 숨기고 버튼형 label 이 연다.
+              sr-only 라 Tab 으로 초점을 받고, 초점 테두리는 peer 로 label 에 그린다. */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <input id="bundle-file" type="file" accept="application/json" disabled={frozen}
+            onChange={(e) => { void onFile(e.target.files?.[0]) }} className="peer sr-only" />
+          <label htmlFor="bundle-file"
+            className={cn(adminButtonClass('secondary'), 'cursor-pointer hover:bg-surface-page',
+              'peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[color:var(--focus-ring)]',
+              'peer-disabled:cursor-not-allowed peer-disabled:border-subtle peer-disabled:bg-surface-page peer-disabled:text-content-muted')}>
+            검토 묶음 선택
+          </label>
+          <span data-file-name="" className={cn('min-w-0 break-all', fileName === null ? 'text-content-muted' : 'font-bold')}>
+            {fileName ?? '선택된 파일 없음'}
+          </span>
+        </div>
         <p className="mt-2 text-content-muted">
           검토자와 시각은 로그인한 계정과 서버 시계로 기록됩니다. 고른 행만 보냅니다 — 손대지 않은 행은 서버로 가지 않습니다.
           고쳐야 하는 글은 이 화면에서 처리하지 않습니다 — 기존 수정 명령으로 먼저 저장해 주세요.
@@ -177,7 +197,7 @@ export default function EvidenceBatchReview() {
       </div>
 
       {error !== null && (
-        <div role="alert" className="rounded-lg border border-subtle bg-surface-card px-4 py-3 text-sm font-bold text-state-danger">
+        <div role="alert" className="rounded-md border-l-[3px] border-state-danger bg-[color:var(--admin-danger-soft)] px-4 py-3 text-sm font-bold text-state-danger">
           ⚠ {error}
         </div>
       )}
@@ -186,7 +206,7 @@ export default function EvidenceBatchReview() {
 
       {items.length > 0 && !stateLoaded && busy === null && bundleText !== null && (
         <button type="button" onClick={() => { void loadState(bundleText) }}
-          className="min-h-[52px] w-full rounded-lg border border-interactive px-4 font-bold text-content-primary">
+          className={adminButtonClass('secondary', 'w-full')}>
           지금 상태 다시 불러오기
         </button>
       )}
@@ -201,23 +221,32 @@ export default function EvidenceBatchReview() {
         const needWithdraw = ed === 'record' && s !== undefined && isOpenApproved(s) && e.hardDefect === 'yes'
         return (
           <section key={i.queueId} data-queue-id={i.queueId} data-phase={s?.phase ?? 'unknown'} data-locked={ed === null ? 'yes' : 'no'}
-            className="rounded-lg border border-subtle px-4 py-3 text-sm">
-            <header className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="font-bold">{s === undefined ? '상태 없음' : phaseLabel(s)}</span>
-              <span className="text-content-muted">{i.queueId}</span>
-              {s !== undefined && s.status !== null && (
-                <span className="text-content-muted">
-                  상태 {s.status}{s.published ? ' · 발행됨' : ''}{s.declineReason !== null ? ` · 사유 ${s.declineReason}` : ''}
-                </span>
-              )}
-              <span className="text-content-muted">복원 {i.restore.klass}</span>
-              {i.cohort != null ? (
-                <span data-cohort-index={i.cohort.index} className={i.cohort.firstBlocking ? 'font-bold text-state-danger' : 'text-content-muted'}>
-                  품질 계약 {i.cohort.contractVersion} · {i.cohort.index}번째{i.cohort.firstBlocking ? ' · 첫 차단 — 이 행부터 검토' : ''}
-                </span>
-              ) : (
-                <span className="text-content-muted">옛 계약 — 열림 판정 표본 아님</span>
-              )}
+            className="rounded-md border border-subtle bg-surface-card p-4 text-sm">
+            {/* 🔴 머리는 두 줄이다 — 위: 지금 상태(먼저 읽을 것) · 아래: 큐 ID · 복원 · 계약(보조).
+                  값과 문구는 그대로다. 첫 차단 행만은 보조 줄이 아니라 위 줄에 올린다 — 여기부터 봐야 한다. */}
+            <header className="mb-3 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-base font-bold">{s === undefined ? '상태 없음' : phaseLabel(s)}</span>
+                {s !== undefined && s.status !== null && (
+                  <span className={cn(adminBadgeClass('neutral'), 'whitespace-normal')}>
+                    상태 {s.status}{s.published ? ' · 발행됨' : ''}{s.declineReason !== null ? ` · 사유 ${s.declineReason}` : ''}
+                  </span>
+                )}
+                {i.cohort != null && i.cohort.firstBlocking && (
+                  <span className={cn(adminBadgeClass('danger'), 'whitespace-normal')}>첫 차단 — 이 행부터 검토</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-content-muted">
+                <span className="break-all font-mono">{i.queueId}</span>
+                <span>복원 {i.restore.klass}</span>
+                {i.cohort != null ? (
+                  <span data-cohort-index={i.cohort.index} className={i.cohort.firstBlocking ? 'font-bold text-state-danger' : undefined}>
+                    품질 계약 {i.cohort.contractVersion} · {i.cohort.index}번째
+                  </span>
+                ) : (
+                  <span>옛 계약 — 열림 판정 표본 아님</span>
+                )}
+              </div>
             </header>
 
             {result !== undefined && (
@@ -234,7 +263,7 @@ export default function EvidenceBatchReview() {
             )}
             {canReview(s, reviewing) && (
               <button type="button" onClick={() => toggleReview(i.queueId, true)} disabled={frozen} data-cta="rereview"
-                className="mb-2 min-h-[52px] rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+                className={adminButtonClass('secondary', 'mb-2')}>
                 재검토 — 중대 결함 판정 다시 하기
               </button>
             )}
@@ -242,7 +271,7 @@ export default function EvidenceBatchReview() {
               <div className="mb-2 flex flex-wrap items-center gap-2" data-review-open="">
                 <span className="font-bold">재검토 중 — 결정은 바꾸지 않습니다. 중대 결함 판정만 새로 기록합니다(이전 기록은 남습니다).</span>
                 <button type="button" onClick={() => toggleReview(i.queueId, false)} disabled={frozen} data-cta="rereview-cancel"
-                  className="min-h-[52px] rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+                  className={adminButtonClass('secondary')}>
                   재검토 취소
                 </button>
               </div>
@@ -262,30 +291,33 @@ export default function EvidenceBatchReview() {
               <p className="whitespace-pre-wrap break-words">{i.draft.body}</p>
             </div>
             {i.edit !== null && (
-              <div className="mb-2 rounded bg-surface-soft px-3 py-2">
+              <div className="mb-2 rounded-md bg-surface-page px-3 py-2">
                 <div className="font-bold">수정본 — {i.edit.after.title ?? i.draft.title}</div>
                 <p className="whitespace-pre-wrap break-words">{i.edit.after.body ?? i.draft.body}</p>
               </div>
             )}
 
+            {/* 🔴 판단 순서 = 화면 순서 — ① 결정 → (폐기 사유) → ② 중대 결함 → ③ 근거.
+                  결정이 먼저 읽히게 이름 · 테두리를 가장 진하게 두고, 근거는 남은 폭을 쓰되 넓이를 묶는다.
+                  이름 줄 높이(LABEL_ROW)를 고정해 모든 입력 칸의 위쪽 선이 맞는다. 모바일은 위에서 아래로 쌓는다. */}
             {ed !== null && (
-              <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-start">
                 {ed === 'decide' && (
                   <>
-                    <label className="flex flex-col">
-                      <span className="text-xs font-bold">결정</span>
+                    <label className="flex flex-col lg:w-[210px]">
+                      <span className={cn(LABEL_ROW, 'text-sm font-bold text-content-primary')}>① 결정</span>
                       <select name="decision" value={e.decision} disabled={frozen} onChange={(ev) => set(i.queueId, { decision: ev.target.value as Entry['decision'] })}
-                        className="min-h-[52px] rounded border px-2">
+                        className="min-h-[52px] rounded-md border-2 border-content-primary bg-surface-card px-2 font-bold lg:min-h-[44px]">
                         <option value="">정하지 않음 (보내지 않음)</option>
                         <option value="ready">그대로 내보내도 된다</option>
                         <option value="reject">폐기</option>
                       </select>
                     </label>
                     {e.decision === 'reject' && (
-                      <label className="flex flex-col">
-                        <span className="text-xs font-bold">폐기 사유</span>
+                      <label className="flex flex-col lg:w-[290px]">
+                        <span className={cn(LABEL_ROW, 'text-sm font-bold text-content-primary')}>폐기 사유</span>
                         <select name="declineReason" value={e.declineReason} disabled={frozen} onChange={(ev) => set(i.queueId, { declineReason: ev.target.value })}
-                          className="min-h-[52px] rounded border px-2">
+                          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                           <option value="">선택</option>
                           {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                         </select>
@@ -293,32 +325,33 @@ export default function EvidenceBatchReview() {
                     )}
                   </>
                 )}
-                <label className="flex flex-col">
-                  <span className="text-xs font-bold">중대 결함</span>
+                <label className="flex flex-col lg:w-[160px]">
+                  <span className={cn(LABEL_ROW, 'text-sm font-bold text-content-secondary')}>② 중대 결함</span>
                   <select name="hardDefect" value={e.hardDefect} disabled={frozen} onChange={(ev) => set(i.queueId, { hardDefect: ev.target.value as Entry['hardDefect'] })}
-                    className="min-h-[52px] rounded border px-2">
+                    className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                     <option value="">고르지 않음</option>
                     <option value="no">없음</option>
                     <option value="yes">있음</option>
                   </select>
                 </label>
                 {needWithdraw && (
-                  <div className="flex flex-col rounded border border-subtle px-3 py-2">
+                  <div className="flex flex-col rounded-md border border-state-danger px-3 py-2 lg:mt-7 lg:w-[290px]">
                     <label className="flex min-h-[52px] items-center gap-2 font-bold text-state-danger">
                       <input type="checkbox" name="withdraw" checked={e.withdraw} disabled={frozen} onChange={(ev) => set(i.queueId, { withdraw: ev.target.checked })} className="h-6 w-6" />
                       ⚠ 철회 — 승인을 거둬들여 발행 대상에서 뺀다
                     </label>
                     <select name="withdrawReason" value={e.declineReason} disabled={frozen || !e.withdraw} onChange={(ev) => set(i.queueId, { declineReason: ev.target.value })}
-                      className="mt-2 min-h-[52px] rounded border px-2">
+                      className="mt-2 min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 lg:min-h-[44px]">
                       <option value="">철회 사유 선택 (필수)</option>
                       {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                     </select>
                   </div>
                 )}
-                <label className="flex min-w-[240px] flex-1 flex-col">
-                  <span className="text-xs font-bold">근거 (있음이면 필수 · 줄마다 하나)</span>
-                  <textarea name="reasons" value={e.reasons} disabled={frozen} rows={2} onChange={(ev) => set(i.queueId, { reasons: ev.target.value })}
-                    className="rounded border px-2 py-1" />
+                <label className="flex flex-col lg:min-w-[220px] lg:max-w-[420px] lg:flex-1">
+                  <span className={cn(LABEL_ROW, 'text-xs font-bold text-content-muted')}>③ 근거 (있음이면 필수 · 줄마다 하나)</span>
+                  {/* 다른 칸과 같은 높이(모바일 52 · 데스크탑 44)로 시작하고 내용만큼 늘어난다 */}
+                  <textarea name="reasons" value={e.reasons} disabled={frozen} rows={1} onChange={(ev) => set(i.queueId, { reasons: ev.target.value })}
+                    className="min-h-[52px] w-full resize-y rounded-md border border-interactive bg-surface-card px-2 py-3 leading-snug [field-sizing:content] lg:min-h-[44px] lg:py-2.5" />
                 </label>
               </div>
             )}
@@ -335,7 +368,7 @@ export default function EvidenceBatchReview() {
             보낼 행 {plan.send.length}건 · 막힌 행 {plan.blocking.length}건 · 고르지 않은 행 {plan.untouched}건(보내지 않음) · 잠긴 행 {plan.locked}건
           </p>
           <button type="button" onClick={openConfirm} disabled={!canSubmit(plan) || busy !== null} data-cta="review"
-            className="min-h-[52px] w-full rounded-lg bg-cta px-4 font-bold text-cta-content disabled:opacity-50">
+            className={adminButtonClass('primary', 'w-full')}>
             {plan.blocking.length > 0
               ? `막힌 행 ${plan.blocking.length}건 — 먼저 고쳐 주세요`
               : plan.send.length === 0 ? '기록할 행을 골라 주세요' : `${plan.send.length}건 기록 내용 확인`}
@@ -344,7 +377,7 @@ export default function EvidenceBatchReview() {
       )}
 
       {step === 'confirm' && confirmed !== null && (
-        <div className="space-y-3 rounded-lg border border-interactive px-4 py-3 text-sm" data-confirm-panel="">
+        <div className="space-y-3 rounded-md border-2 border-content-primary bg-surface-card p-4 text-sm" data-confirm-panel="">
           <div className="font-bold">아래 {confirmed.send.length}건을 기록합니다</div>
           <p className="text-content-muted">결정 전 행의 &quot;그대로&quot; · &quot;폐기&quot; 는 되돌리는 버튼이 없습니다. 목록을 확인해 주세요.</p>
           <ol className="list-decimal space-y-1 pl-5">
@@ -354,11 +387,11 @@ export default function EvidenceBatchReview() {
           </ol>
           <div className="flex flex-col gap-2 sm:flex-row">
             <button type="button" onClick={() => { setStep('edit'); setConfirmed(null) }} disabled={busy !== null} data-cta="back"
-              className="min-h-[52px] flex-1 rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+              className={adminButtonClass('secondary', 'flex-1')}>
               돌아가서 고치기
             </button>
             <button type="button" onClick={() => { void submitConfirmed() }} disabled={busy !== null} data-cta="submit"
-              className="min-h-[52px] flex-1 rounded-lg bg-cta px-4 font-bold text-cta-content disabled:opacity-50">
+              className={adminButtonClass('primary', 'flex-1')}>
               {busy === 'submitting' ? '기록 중… (창을 닫지 마세요)' : `${confirmed.send.length}건 기록 확정`}
             </button>
           </div>
@@ -366,7 +399,7 @@ export default function EvidenceBatchReview() {
       )}
 
       {results.size > 0 && (
-        <div className="rounded-lg bg-surface-soft px-4 py-3 text-sm" role="status" data-results="">
+        <div className="rounded-md border border-subtle bg-surface-card px-4 py-3 text-sm" role="status" data-results="">
           <div className="mb-2 font-bold">
             기록 결과{reviewer !== null ? ` — 검토자 ${reviewer}` : ''} · 성공 {tally.성공} · 건너뜀 {tally.건너뜀} · 거절 {tally.거절}
           </div>

@@ -239,6 +239,8 @@ function jsonl(path: string): Record<string, unknown>[] {
 type JudgeProv = {
   ruleVersion: string; promptVersion: string; model: string
   inputHash: string; provenance: string
+  /** 🔴 2026-10-19 창업자 — 중심 주제. publish tx 가 이 값으로 boardType 을 라우팅한다 (null 은 fail-closed) */
+  boardTopic: 'MENOPAUSE' | 'FREE' | null
 }
 /** 🔴 원천 열쇠(사이트, id) → 판정 출처 */
 const seedProv = new Map<string, JudgeProv>()
@@ -292,9 +294,13 @@ function loadAutoSeeds(metas: ReadonlyMap<string, Meta>): Judgement[] {
       sourceSite: site, sourceArticleId: id, decision: S(r.decision),
       semanticRisks: Array.isArray(r.semanticRisks) ? r.semanticRisks.map(String) : [],
     })
+    // 🔴 2026-10-19 창업자 — boardTopic 을 shadow 기록 → provenance 로 이관한다. enum 밖은 null (publish tx fail-closed)
+    const btRaw = S(r.boardTopic)
+    const bt: 'MENOPAUSE' | 'FREE' | null = btRaw === 'MENOPAUSE' || btRaw === 'FREE' ? btRaw : null
     seedProv.set(key, {
       ruleVersion: S(r.ruleVersion), promptVersion: S(r.promptVersion),
       model: S(r.model), inputHash: S(r.inputHash), provenance: S(r.provenance),
+      boardTopic: bt,
     })
   }
   return [...byKey.values()].filter((j) => j.decision === 'AUTO_SEED')
@@ -332,10 +338,10 @@ export const DRAFT_TIMEOUT_MS = 25000
  */
 
 /**
- * 🔴 **원천 하나가 쓸 수 있는 v2 요청 수.** 정상 경로는 3회다 —
- *    계획 · 생성 · 검수. 넘기면 그 원천은 완주 실패로 남고 채택되지 않는다.
+ * 🔴 **원천 하나가 쓸 수 있는 v2 요청 수.** 정상 경로는 3회이고,
+ *    검수가 차단 finding을 냈을 때만 같은 요청의 확인 1회를 허용한다.
  */
-export const V2_CALL_CAP = 3
+export const V2_CALL_CAP = 4
 
 /** 🔴 v2 단계 → 장부 단계 이름 — 정본은 `content-core-ledger-ask` 하나다(러너와 검사가 같은 변환을 쓴다) */
 export { V2_LEDGER_STAGE, V2_LEDGER_RETRY_STAGE } from './lib/content-core-ledger-ask.mjs'
@@ -716,7 +722,7 @@ function loadMeta(): Map<string, Meta> {
  * 🔴 그래서 **이름과 출력을 공동 예산으로 정정한다.** 상한을 올리지 않았다 —
  *    평균 사용량이 계약을 지키는지는 `perSource` 관측으로 본다.
  */
-export const CALL_ALLOWANCE_PER_SOURCE = 4
+export const CALL_ALLOWANCE_PER_SOURCE = 5
 
 export function callBudgetOf(sources: number): number {
   return Math.max(0, sources) * CALL_ALLOWANCE_PER_SOURCE
@@ -1163,7 +1169,7 @@ async function main(): Promise<void> {
         ask: v2Ask, now, callCap: V2_CALL_CAP,
         /**
          * 🔴 **일시적 기술 실패만 원천당 한 번 다시 묻는다** (2026-10-12 Batch B).
-         *    정상 3 + 재시도 1 = 4 — 회차 공동 예산(`CALL_ALLOWANCE_PER_SOURCE`)을 넘지 않는다.
+         *    정상 3 + 조건부 확인 1 + 기술 재시도 1 = 5 — 회차 공동 예산을 넘지 않는다.
          */
         retryCap: GENERATION_RETRY_MAX,
       })
@@ -1345,18 +1351,9 @@ async function main(): Promise<void> {
   console.log(`   🟡 AUTO_HOLD  ${s.AUTO_HOLD}건`)
   console.log(`   🔴 AUTO_DROP  ${s.AUTO_DROP}건`)
   console.log(`   🔴 v2 가 초안을 만들지 않고 멈춘 원천 ${v2Held}건 · artifact ${artifacts.length}장`)
-  /**
-   * 🔴 **사람에게 넘긴 경고만 센다** (2026-09-20 보정). `adopt` 인 artifact 만이다 —
-   *    hard 사유로 HOLD/DROP 된 글에도 경고 근거가 붙어 있을 수 있는데,
-   *    그것까지 세면 "사람에게 넘겼다" 는 숫자가 부풀어 거짓이 된다.
-   */
-  const warned = artifacts.filter((a) =>
-    a.review.machineOutcome === 'adopt' && reviewWarnings(a.review.semantic).length > 0)
-  console.log(`   🟡 사람에게 넘긴 경고가 붙은 후보 ${warned.length}건`
-    + ` — 원문에 없어 보이는 것 · 원문에서 사라져 보이는 것`)
-  if (warned.length > 0) {
-    console.log('      🔴 이 항목만으로는 막지 않았다. 발행은 사람이 검토를 마쳐야 열린다')
-  }
+  const findingHeld = artifacts.filter((a) =>
+    a.review.machineOutcome === 'hold' && reviewWarnings(a.review.semantic).length > 0)
+  console.log(`   🟡 위험 허구·핵심 손실 finding으로 HOLD ${findingHeld.length}건`)
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
     console.log(`   ${String(n).padStart(3)}건  ${DRAFT_REASON_LABEL[code as keyof typeof DRAFT_REASON_LABEL] ?? code}`)

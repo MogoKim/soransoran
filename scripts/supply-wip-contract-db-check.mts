@@ -5,11 +5,11 @@
  *   질문 — 품질 계약 digest 가 다른 옛 기계 초안은 자동 READY 도 자동 발행도 **영영** 받지 못한다
  *          (`stampRowInTx` · `recheckAutoReadyInTx` 가 `isCurrentQualityContract` 로 막는다).
  *          그런데 왜 그 글이 **지금 계약의 생성 WIP** 를 점유하는가? (운영 실측 WIP 46 / 실효 천장 54)
- *   답    — 재고 분류가 `HUMAN_REVIEW_REQUIRED` 전부를 `humanReviewPending`(WIP)으로 셌기 때문이다.
- *          이제 그 행은 `qualityContractMismatch`(WIP 아님 · 사람 검토로만 나간다)다.
+ *   답    — 옛 재고 분류가 `HUMAN_REVIEW_REQUIRED` 전부를 사람 검토 WIP 로 셌기 때문이다.
+ *          자동 적격 현재 행만 `autoReadyPending`, 옛 계약 행은 `qualityContractMismatch`(둘 외 품질 경고는 격리)다.
  *
  *   반례 ①  옛 계약 기계 초안 46건 → 큐에 전부 남는다 · 자동 발행 0 · 지금 계약 WIP 0
- *   반례 ②  지금 계약 검토 대기 → WIP 유지
+ *   반례 ②  지금 계약 자동 적격 미도장 → WIP 유지
  *   반례 ③  지금 계약 발행 가능 행 → 기존 뜻(publishableNow · WIP)
  *   반례 ④  사람이 검토한 옛 계약 행(founder) → 제외하지 않는다(selector 대상 · 배정 규칙)
  *   반례 ⑤  옛 계약 자동 도장 행 → 자동 READY 가 **열려 있어도** selector 가 내지 않는다
@@ -33,7 +33,7 @@ import {
 } from '../src/lib/micro-seed-supply-autofill'
 import { PROFILES, RUNTIME_PROFILES, CAPACITY_ENV, RELEASE_ENV, type ReleaseStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
-import { authoritativeGate, stampAutoReady, stampRound } from '../src/lib/auto-ready-repo'
+import { authoritativeGate, stampAutoReady } from '../src/lib/auto-ready-repo'
 import {
   AUTO_DECIDER, AUTO_READY_ENV, AUTO_READY_RECORD_KEY, makeStamp, digestOf,
 } from '../src/lib/auto-ready-v2'
@@ -97,6 +97,10 @@ const markOf = (m: Mark): Record<string, unknown> => {
 let gateSeq = 0
 const machineGate = (voiceCode: string, m: Mark) => ({
   holds: [], blocks: [],
+  semanticReview: {
+    complete: true, deterministicPass: true, unsupportedAdditions: 0,
+    lifeContradictions: 0, droppedFromSource: 0, confidence: 1,
+  },
   // 🔴 (2026-09-30) 원문 증거 — 적재기가 늘 싣는다. 없으면 정본 슬롯 판정이 releaseUnknown 으로 뺀다
   ...fakeEvidenceGate(NOW, { id: `wc-${voiceCode}-${(gateSeq += 1)}` }),
   autoDraft: {
@@ -222,7 +226,7 @@ async function main(): Promise<void> {
     await machineRow({ voice: 'P06', mark: 'none', decidedBy: AUTO_DECIDER, stamp: true }),
   ]
   const curAutoId = await machineRow({ voice: 'P07', mark: 'current', decidedBy: AUTO_DECIDER, stamp: true })
-  /** ② 지금 계약 검토 대기 */
+  /** ② 지금 계약 자동 적격 미도장 */
   const curReviewId = await machineRow({ voice: 'P17', mark: 'current', decidedBy: 'machine:auto-draft-v5' })
   /** ④ 사람이 검토한 옛 계약 기계 행 — `founder` */
   const humanOldId = await machineRow({ voice: 'P18', mark: 'otherDigest', decidedBy: MACHINE_REVIEWED_BY })
@@ -252,11 +256,11 @@ async function main(): Promise<void> {
   const E = envOf('d1', 'd10')
   const scale = resolveScale(E)
 
-  console.log('── 계약을 올리기 전 — 46건이 지금 계약 검토 대기일 때 (앞판과 같은 뜻) ──')
+  console.log('── 계약을 올리기 전 — 46건이 지금 계약 자동 도장 대기일 때 ──')
   const loadBefore = await buildSpeakerLoad(prisma, 'wc-before', { env: E, now: NOW, scale })
   const beforeClass = (await loadStockClassification(prisma, E, NOW)).classification
-  check('계약을 올리기 전 — 46건은 humanReviewPending · WIP (지금 계약 검토 대기의 뜻 그대로)',
-    oldIds.every((id) => beforeClass.ids.humanReviewPending.includes(id) && beforeClass.personaWipIds.includes(id)))
+  check('계약을 올리기 전 — 자동 적격 46건은 autoReadyPending · WIP',
+    oldIds.every((id) => beforeClass.ids.autoReadyPending.includes(id) && beforeClass.personaWipIds.includes(id)))
 
   /**
    * 🔴 **계약을 올린다** — 코드 상수는 이 프로세스에서 바꿀 수 없으므로 **행 쪽 표식**을 옛 것으로 옮긴다.
@@ -283,7 +287,7 @@ async function main(): Promise<void> {
   const c = pub.classification
   {
     check('🔴 🔴 **46건 전부 qualityContractMismatch** (앞판: humanReviewPending)',
-      oldIds.every((id) => c.ids.qualityContractMismatch.includes(id)) && !oldIds.some((id) => c.ids.humanReviewPending.includes(id)),
+      oldIds.every((id) => c.ids.qualityContractMismatch.includes(id)) && !oldIds.some((id) => c.ids.autoReadyPending.includes(id)),
       JSON.stringify(c.counts))
     check('🔴 🔴 **지금 계약 Persona WIP 점유 0** (46건 중 WIP 에 든 것 0)', !oldIds.some((id) => c.personaWipIds.includes(id)))
     check('🔴 자동 발행 대상 0 · 발행 가능 0', !oldIds.some((id) => pub.loaded.targets.some((t) => t.id === id) || pub.runnable.includes(id)))
@@ -291,14 +295,14 @@ async function main(): Promise<void> {
       oldIds.every((id) => pub.loaded.rejected.some((r) => r.id === id && r.code === 'HUMAN_REVIEW_REQUIRED')))
     const still = await prisma.originalPostApprovalQueue.count({ where: { id: { in: oldIds }, status: 'APPROVED', createdPostId: null } })
     check('🔴 큐에 46건 그대로 남는다 (삭제 0 · 상태 변경 0)', still === 46, String(still))
-    check('칸 표 — WIP 아님 · 복구 주체 human', STOCK_BUCKET_META.qualityContractMismatch.wip === false
-      && STOCK_BUCKET_META.qualityContractMismatch.owner === 'human')
+    check('칸 표 — WIP 아님 · 정기 운영자 구제 없음', STOCK_BUCKET_META.qualityContractMismatch.wip === false
+      && STOCK_BUCKET_META.qualityContractMismatch.owner === 'none')
   }
 
   console.log('\n② ③ ④ 지금 계약 검토 대기 · 발행 가능 · 사람이 검토한 옛 계약 행')
   {
-    check('🔴 🔴 **② 지금 계약 검토 대기 → humanReviewPending · WIP 유지**',
-      c.ids.humanReviewPending.includes(curReviewId) && c.personaWipIds.includes(curReviewId))
+    check('🔴 ② 지금 계약 자동 적격 미도장 행 → autoReadyPending · WIP 유지',
+      c.ids.autoReadyPending.includes(curReviewId) && c.personaWipIds.includes(curReviewId))
     check('🔴 🔴 **③ 지금 발행 가능 행 → publishableNow · WIP (기존 뜻)**',
       c.ids.publishableNow.includes(freshId) && c.personaWipIds.includes(freshId) && pub.runnable.includes(freshId),
       `runnable ${pub.runnable.join(',')}`)
@@ -355,7 +359,8 @@ async function main(): Promise<void> {
     }
     const sum = (k: 'before' | 'after' | 'leftBefore' | 'leftAfter') => rows.reduce((n, r) => n + r[k], 0)
     console.log(`     합계  WIP ${sum('before')} → ${sum('after')} · 남은 자리 ${sum('leftBefore')} → ${sum('leftAfter')}`)
-    console.log(`     공급 러너 wip — 합 ${loadAfter.wip.total} · 검토 대기 ${loadAfter.wip.humanReviewPending}`
+    console.log(`     공급 러너 wip — 합 ${loadAfter.wip.total} · 자동 도장 대기 ${loadAfter.wip.autoReadyPending}`
+      + ` · 자동 품질 격리 ${loadAfter.wip.qualityQuarantine}(WIP 아님)`
       + ` · 발행 가능 ${loadAfter.wip.publishableNow} · 옛 품질 계약(WIP 아님) ${loadAfter.wip.qualityContractMismatch}`)
     /** 🔴 옛 자동 도장 2건은 처음부터 옛 계약이다 — 전후 모두 WIP 가 아니므로 차이에 들지 않는다 */
     const expectDrop = (code: string) => oldIds.filter((id) => voiceOfOld.get(id) === code).length
@@ -364,7 +369,7 @@ async function main(): Promise<void> {
       rows.filter((r) => r.before - r.after !== expectDrop(r.code)).map((r) => `${r.code}:${r.before}→${r.after}`).join(' '))
     check('🔴 공급 러너 wip 에 옛 계약 수가 따로 적힌다(48) — WIP 합에는 들지 않는다',
       loadAfter.wip.qualityContractMismatch === 48 && loadAfter.wip.total === c.personaWipIds.length)
-    check('🔴 지금 계약 검토 대기 화자(P17) · 사람 검토 옛 행 화자(P18)는 그 글을 계속 든다',
+    check('🔴 지금 계약 자동 도장 대기 화자(P17) · 사람 검토 옛 행 화자(P18)는 그 글을 계속 든다',
       loadAfter.byCode.P17!.readyCount >= 1 && loadAfter.byCode.P18!.readyCount >= 1)
   }
 
@@ -385,17 +390,15 @@ async function main(): Promise<void> {
 
   console.log('\n⑥ 🔴 계약이 바뀐 상태로 읽기 경로를 전부 돌려도 DB 행 변경 0')
   {
-    // 🔴 자동 도장 경로도 부른다 — 스위치 ON 이어도 증거가 없어 닫힌다(쓰기 0). 옛 행은 도장 대상도 아니다
+    // 🔴 옛 행 한 건의 자동 도장 경로도 부른다 — 지금 계약이 아니므로 쓰기 0이다
     const ON = envOf('d1', 'd10', { [AUTO_READY_ENV]: 'on' })
     const st = await stampAutoReady(prisma, { queueId: oldIds[0]!, env: ON, now: NOW })
-    const round = await stampRound(prisma, { env: ON, now: NOW })
     await publisherView(prisma, ON)
     await publisherView(prisma, envOf('d5', 'd10'), true)
     for (const rel of ['d1', 'd3', 'd5', 'd10'] as const) await loadStockClassification(prisma, envOf(rel, 'd10'), NOW)
     await snapshot(prisma, { env: E, now: NOW })
     await buildSpeakerLoad(prisma, 'wc-again', { env: E, now: NOW, scale })
-    check('자동 도장 경로 — 닫힘(stamped 0)', st.kind !== 'stamped' && (round.get('stamped') ?? 0) === 0,
-      `${st.kind} · ${JSON.stringify([...round])}`)
+    check('자동 도장 경로 — 옛 계약 행은 stamped 0', st.kind !== 'stamped', st.kind)
     const snap1 = await fullSnapshot(prisma)
     check('🔴 🔴 **Queue · Post · Persona · ActivityLog · RawContent · Audit 행 전체가 그대로 (updatedAt 포함)**', snap0 === snap1)
     const counts1 = { q: await prisma.originalPostApprovalQueue.count(), post: await prisma.post.count() }

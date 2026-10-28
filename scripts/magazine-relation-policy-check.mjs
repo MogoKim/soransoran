@@ -2,7 +2,7 @@
 /**
  * 관계 수량 공용 정책(direct 2~3 + discovery 1) 경계 검사 — 소비 경계마다 **독립적으로** 증명한다.
  *
- *   node scripts/magazine-relation-policy-check.mjs [--new-input <2026-10-17-money-work> --real-product <제품 루트>]
+ *   node scripts/magazine-relation-policy-check.mjs [--new-input <2026-10-21-money-work-retirement-next-e0335> --real-product <제품 루트>]
  *
  *   P1 정책 자체 — isValidDirectCount 0~5 · isSingleDiscovery
  *   P2 M-GRAPH builder — readiness 최소·표시 숫자가 정책에서 온다
@@ -10,7 +10,7 @@
  *   P4 ArticleSpec compile · verify — direct 2·3 통과 · 1·4 거부 · discovery 0·2 거부 · direct 2 에서도 중복·self 거부
  *   P5 제품 resolver 표시 상한(MAX_DIRECT · MAX_DISCOVERY) = 정책
  *   P6 소비 모듈이 공용 정책을 import 한다
- *   (선택) 실제 I-T6-05 — 최종 snapshot `2026-10-17-money-work-kimjang-cold-live` · effectiveAt 2026-10-17T10:30:00+09:00 에서
+ *   (선택) 실제 I-T6-05 — 최종 snapshot `2026-10-21-money-work-retirement-next-e0335` · effectiveAt 2026-10-21T11:00:00+09:00 에서
  *         direct 2 + discovery 1 이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker 로 남는다
  * authoring prepare · judge 경계는 `magazine-direct-spec-source-authoring-check.mjs` S08 · S08b · S08c 가 본다.
  *
@@ -26,10 +26,11 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const LIB = process.env.RELATION_POLICY_LIB ?? join(HERE, 'lib')
 const load = async (name) => import(pathToFileURL(join(LIB, name)).href)
-let policy, build, source, spec
+let policy, build, source, spec, controlEdit
 try {
   policy = await load('magazine-relation-policy.mjs')
   build = await load('magazine-graph-build.mjs')
+  controlEdit = await load('magazine-graph-control-edit.mjs')
   source = await load('magazine-direct-spec-source.mjs')
   spec = await load('magazine-article-spec.mjs')
 } catch (e) { console.log(`LOAD_ERROR ${e.message}`); process.exit(3) }
@@ -121,16 +122,17 @@ check('P6 소비 모듈이 공용 정책 모듈을 import 한다', () => {
 
 const newInput = argOf('--new-input'), realProduct = argOf('--real-product')
 if (newInput && realProduct) {
-  check('실제 I-T6-05 — 최종 snapshot · 10:30 에서 direct 2(E-0188 · E-0329) + discovery 1(E-0100)이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker', () => {
+  check('실제 I-T6-05 — 최종 snapshot · 2026-10-21 11:00 에서 direct 2(E-0188 · E-0329) + discovery 1(E-0100)이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker', () => {
     // 🔴 제품 lifecycle 과 맞는 최종 snapshot 만 받는다 — 낡은 snapshot 은 build 가 INPUT_PRODUCT_LIFECYCLE_DRIFT 로 막는다
-    assert.equal(newInput.replace(/\/+$/, '').split('/').pop(), '2026-10-17-money-work-kimjang-cold-live', '--new-input 은 최종 snapshot 이어야 한다')
+    assert.equal(newInput.replace(/\/+$/, '').split('/').pop(), '2026-10-21-money-work-retirement-next-e0335', '--new-input 은 최종 snapshot 이어야 한다')
     const read = (p) => readFileSync(p, 'utf8')
     const inputTexts = Object.fromEntries(Object.values(build.INPUT_FILES).map((n) => [n, read(join(newInput, n))]))
     const productTexts = Object.fromEntries(Object.entries(build.PRODUCT_FILES).map(([k, r]) => [k, read(join(realProduct, r))]))
-    const control = productTexts.control.replace("enabledClusters: ['sleep', 'family'],", "enabledClusters: ['sleep', 'family', 'money-work'],")
-    assert.notEqual(control, productTexts.control, 'control 사본 치환 실패')
+    // 🔴 money-work 를 켠 control 사본 — 구조 편집(멱등). 이미 켜진 control 이어도 준비가 실패하지 않는다
+    const { text: control } = controlEdit.ensureCluster(productTexts.control, 'money-work')
+    assert.ok(controlEdit.readControl(control).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
     const b = build.buildAll({ inputTexts, productTexts: { ...productTexts, control }, admissionTexts: { slugManifest: '{"slugs":{}}', ledger: '' },
-      effectiveAt: '2026-10-17T10:30:00+09:00', generatedAt: '2026-10-17T01:30:00.000Z' })
+      effectiveAt: '2026-10-21T11:00:00+09:00', generatedAt: '2026-10-21T02:00:00.000Z' })
     const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-05')
     assert.equal(x.status, 'GRAPH_READY')
     assert.deepEqual(x.direct.targets.map((t) => t.edgeId), ['E-0188', 'E-0329']); assert.deepEqual(x.discovery.targets.map((t) => t.edgeId), ['E-0100'])

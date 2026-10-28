@@ -54,7 +54,24 @@ const LOG_PATH = join(homedir(), 'Library/Logs/soransoran/magazine-producer.log'
 const MIN_DAYS = 7
 
 /** run.held 중 direct 경로 보류 — 조용히 묻히면 canary 가 왜 안 도는지 아무도 모른다 */
-export const DIRECT_HOLD_CODES = new Set(['DIRECT_SPEC_SOURCE_NOT_READY', 'UNKNOWN_MAGAZINE_AUTO_MODE', 'DIRECT_SPEC_SPEC_CONFLICT', 'DIRECT_SPEC_MISSING'])
+export const DIRECT_HOLD_CODES = new Set(['DIRECT_SPEC_SOURCE_NOT_READY', 'UNKNOWN_MAGAZINE_AUTO_MODE', 'G8_ROW_NOT_DIRECT', 'DIRECT_SPEC_SPEC_CONFLICT', 'DIRECT_SPEC_MISSING',
+  // 🔴 명시적 개정(supersedes) — 교체 필요(dry-run) · 선언 hash 불일치 · 교체 조건 위반 (2026-10-26)
+  'DIRECT_SPEC_SUPERSEDE_REQUIRED', 'DIRECT_SPEC_SUPERSEDE_MISMATCH', 'DIRECT_SPEC_SUPERSEDE_BLOCKED', 'DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED'])
+/**
+ * 큐 신원 중복 알림 — 몇 행이든 **1건**이다. DIRECT 보류와 섞지 않는다 (producer 공용 큐 계약 위반이다).
+ * 🔴 사람이 topic-queue 를 고치기 전에는 그 행들을 만들지 않는다 — 자동 재시도 · legacy 강등 없음.
+ */
+export function composeQueueIdentityAlert(run) {
+  const rows = (run?.held ?? []).filter((h) => h?.code === 'QUEUE_IDENTITY_DUPLICATE')
+  if (!rows.length) return null
+  const shown = rows.slice(0, 8).map((h) => `day ${h.day} ${h.slug}${h.intentId ? `(${h.intentId})` : ''}`).join(' / ')
+  return {
+    severity: 'ERROR',
+    title: `매거진 queue 신원 중복 ${rows.length}행 — 해당 행 선정·생산 0`,
+    reason: `${shown}${rows.length > 8 ? ` 외 ${rows.length - 8}행` : ''}`,
+    next: 'drafts/magazine/topic-queue.ts 에서 같은 slug·intentId 행을 사람이 하나로 정리한다 — 자동 재시도·legacy 강등 없음',
+  }
+}
 const isDirectRow = (x) => Boolean(x && typeof x === 'object' && (x.directSpec || x.directSpecMode === 'DIRECT_SPEC_V1'))
 
 /**
@@ -75,8 +92,18 @@ export function composeDirectHoldAlert(run) {
     next.push(`승인 source 를 확인한다${p ? ` (${p})` : ''} — 현재 판 graphVersion · APPROVED · sourceHash · G8 manifest`)
   }
   if (codes.has('DIRECT_SPEC_MISSING')) next.push('재사용 폴더에 article-spec.json 이 없다 — 자동으로 만들지 않는다. 폴더의 출처(legacy 원고 여부)를 확인한다')
+  if (codes.has('DIRECT_SPEC_SUPERSEDE_MISMATCH')) next.push('승인 entry 의 supersedes.specHash 가 디스크 article-spec.json 과 다르다 — 무엇을 대체하는지 사람이 확인한다 · 덮어쓰지 않았다')
+  if (codes.has('DIRECT_SPEC_SUPERSEDE_BLOCKED')) {
+    const p = holds.find((h) => h.code === 'DIRECT_SPEC_SUPERSEDE_BLOCKED')?.directSpec?.supersede?.problems ?? []
+    next.push(`명시적 개정 조건 위반(${p.join(',') || '-'}) — 옛 spec 을 바꾸지 않았다. draft · 전송 · 등록 흔적과 신원을 확인한다`)
+  }
+  if (codes.has('DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED')) {
+    const r = holds.find((h) => h.code === 'DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED')?.directSpec?.supersede
+    next.push(`spec 교체 조각을 자동으로 정리하지 못했다(${(r?.problems ?? []).join(',') || '-'}) — 아무것도 지우지 않았다. canonical·소유 사본(${r?.recovery?.owned ?? '-'})을 사람이 확인한다`)
+  }
   if (codes.has('DIRECT_SPEC_SPEC_CONFLICT')) next.push('drafts/magazine/{slug}/article-spec.json 과 승인 source 컴파일 결과를 대조한다 — 덮어쓰지 않았다')
   if (codes.has('UNKNOWN_MAGAZINE_AUTO_MODE')) next.push('topic-queue 의 directSpecMode 값을 고친다 (DIRECT_SPEC_V1 · LEGACY_BRIEF_V1 만 허용)')
+  if (codes.has('G8_ROW_NOT_DIRECT')) next.push('G8 행(g8ManifestHash · articlePlanHash)은 ArticlePlan materialize 로만 만든다 — 손으로 고친 행이면 승인 source 와 대조한다')
   return {
     severity: 'WARN',
     title: `매거진 DIRECT_SPEC 보류 ${holds.length}건 — 전송·등록 0 · legacy 후보는 계속 처리했다`,
@@ -155,6 +182,8 @@ export function judge({ date, run, runExists, repair = null, draftsDir = DRAFTS_
   // 🔴 needsFullReview 는 HIGH review lane 이다. 이 레인은 brief.md/draft.md 정본을
   //    자동 회수하지 않고, _runs/{date}/selected/{slug}/*.todo.md 까지만 만든다.
   //    따라서 brief_missing/fetchFailed 에 섞으면 정상 HIGH 패킷을 ERROR 로 오판한다.
+  const identityAlert = composeQueueIdentityAlert(run)
+  if (identityAlert) alerts.push(identityAlert)
   const directHold = composeDirectHoldAlert(run)
   if (directHold) alerts.push(directHold)
 

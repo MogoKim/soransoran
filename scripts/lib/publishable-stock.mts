@@ -33,6 +33,9 @@ import { kstDateString } from '../../src/lib/release-canary'
 import { availablePersonasAt } from '../../src/lib/supply-capacity-forecast'
 import { draftSpeakerOf } from '../../src/lib/content-core/speaker-load-file'
 import { releaseCapsOf, kstMidnight, type ScaleProfile } from '../../src/lib/scale-profile'
+import {
+  HEARTBEAT_INTERVAL_MINUTES, PER_RUN_MAX, PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE,
+} from '../../src/lib/publish-slot-catchup'
 // 🔴 `installFromEnv` 를 쓰지 않는다 — 그것은 module-global 을 바꾼다(아래 주석)
 import { resolveScale } from '../../src/lib/scale-runtime'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
@@ -40,7 +43,7 @@ import {
   PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment, TIME_BOUND_ASSIGN_CODES,
 } from '../../src/lib/persona-for-match'
 import type { PersonaForMatch, BatchAssignment } from '../../src/lib/original-post-persona-match'
-import { AUTO_DECIDER } from '../../src/lib/auto-ready-v2'
+import { AUTO_DECIDER, eligibilityOf } from '../../src/lib/auto-ready-v2'
 import { UNATTENDED_PUBLISH_DECIDED_BY } from '../../src/lib/original-post-publish-tx'
 import { isCurrentQualityContract } from '../../src/lib/quality-contract'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
@@ -50,32 +53,9 @@ export type PublishLane = 'auto' | 'human'
 export const laneOf = (decidedBy: string | null): PublishLane =>
   (decidedBy ?? '').trim() === AUTO_DECIDER ? 'auto' : 'human'
 
-/**
- * 🔴 **이번 회차에 앞세울 lane** (2026-09-28 마스터 정책 · 순수). 두 lane 이 모두 대기 중일 때만 고른다.
- *    · 발행 이력이 없는 lane 이 먼저다 — 둘 다 없으면 auto(첫 자동 행 우선)
- *    · 둘 다 있으면 **가장 최근에 발행되지 않은**(마지막 발행이 더 오래된) lane
- *    d1 에서는 날마다, d3 이상에서는 슬롯마다 번갈아 나간다 — 한 번 나가면 그 lane 이 최근이 되기 때문이다.
- *    🔴 한 lane 만 대기 중이면 `null`(기존 순서 그대로). 상한 · 슬롯 · 트랜잭션은 이 값과 무관하다.
- */
-export function preferredLane(input: {
-  waiting: ReadonlySet<PublishLane>
-  lastPublishedAt: { auto: Date | null; human: Date | null }
-}): PublishLane | null {
-  if (!input.waiting.has('auto') || !input.waiting.has('human')) return null
-  const { auto, human } = input.lastPublishedAt
-  if (auto === null) return 'auto'
-  if (human === null) return 'human'
-  return auto.getTime() <= human.getTime() ? 'auto' : 'human'
-}
-
 export type LoadedStock = {
   /** 대기열 전체 (APPROVED·EDITED · 미발행) */
   queueTotal: number
-  /**
-   * 🔴 (2026-09-28) lane 별 마지막 발행 시각 — Post 생성 시각 기준. 없으면 `null`(이력 0).
-   *    fixture 가 주지 않으면 둘 다 이력 0 으로 본다.
-   */
-  laneLastPublishedAt?: { auto: Date | null; human: Date | null }
   /**
    * 🔴 (2026-09-29) 오늘(KST) 자동 target 발행 수 — 자동 READY(`AUTO_DECIDER`) 행이 **무인 표식**으로 나간 것만.
    *    단계 증명일의 "N 슬롯을 자동이 먼저" 가 이 값으로 남은 자리를 센다. fixture 가 주지 않으면 0.
@@ -196,20 +176,6 @@ export async function loadPublishableStock(
     .map(([code, ids]) => ({ code, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count)
 
-  /** 🔴 lane 별 마지막 발행 — 발행된 큐 행의 Post 생성 시각. 읽기만 한다 */
-  const publishedRows = await prisma.originalPostApprovalQueue.findMany({
-    where: { createdPostId: { not: null } },
-    select: { decidedBy: true, createdPost: { select: { createdAt: true } } },
-  })
-  const laneLastPublishedAt: { auto: Date | null; human: Date | null } = { auto: null, human: null }
-  for (const p of publishedRows) {
-    const at = p.createdPost?.createdAt ?? null
-    if (at === null) continue
-    const l = laneOf(p.decidedBy)
-    const cur = laneLastPublishedAt[l]
-    if (cur === null || at.getTime() > cur.getTime()) laneLastPublishedAt[l] = at
-  }
-
   const personaRows = await prisma.persona.findMany({
     where: { status: 'active' }, select: PERSONA_FOR_MATCH_SELECT,
   })
@@ -267,7 +233,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId, allRows: rows, pinnedAutoPersona, laneLastPublishedAt, autoTargetsToday,
+    codeOfPersonaId, allRows: rows, pinnedAutoPersona, autoTargetsToday,
   }
 }
 
@@ -424,11 +390,12 @@ export function readyOpportunitiesOf(loaded: LoadedStock, opts: {
 }
 
 /**
- * 🔴 **가까운 수요 지평** (2026-10-11 Batch A2) — 지금 공개 단계(release)의 **오늘 남은 안전 슬롯** +
+ * 🔴 **가까운 수요 지평** (2026-10-11 Batch A2 · 2026-10-21 catch-up 정렬) —
+ *    발행 heartbeat 가 오늘 운영 창 안에서 실제로 낼 수 있는 가장 이른 기회 +
  *    **다음 실제 발행 기회 하나**(다음 운영일 release 첫 슬롯).
- *    · 오늘 이미 낸 편수만큼 앞 슬롯은 소비됐다 — 남은 슬롯은 지금 뒤의 슬롯 중 목표 − 낸 수만큼이다.
- *    · 열린 d10 증명일이면 release 가 d10 이다 — 그날 남은 d10 슬롯이 그대로 든다.
- *    · 오늘 슬롯이 끝났으면 다음 첫 기회 하나만 남는다.
+ *    · 정규 슬롯을 놓쳤어도 발행기의 `도래 슬롯 − 오늘 발행 수` backlog 가 남아 있으면 다음 heartbeat 를 센다.
+ *    · 앞으로 도래할 정규 슬롯도 같은 시뮬레이션에 자연스럽게 포함한다.
+ *    · 22:00 뒤에는 오늘 부족분을 되살리지 않고 다음 첫 기회 하나만 남긴다.
  * 🔴 **지운 길** — "오늘 남은 release 슬롯 + 내일 capacity(다음에 증명할 단계) 전체 슬롯".
  *    d5 를 내며 d10 을 준비하는 날, 오늘 d5 슬롯이 내일 d10 10칸을 끌어와 수요를 15 로 부풀렸다.
  *    다음 단계 증명일 전체를 감당하는가는 controller preflight(`judgeNextPreflight` · 증명일 전체 슬롯)가 따로 본다 —
@@ -437,12 +404,31 @@ export function readyOpportunitiesOf(loaded: LoadedStock, opts: {
 export function upcomingSlots(input: {
   now: Date; publishedToday: number; release: ScaleProfile
 }): Date[] {
-  const today = kstDateString(input.now)
   const tomorrow = kstDateString(new Date(kstMidnight(input.now).getTime() + 86_400_000))
-  const remain = Math.max(0, input.release.dailyTarget - input.publishedToday)
-  const todayLeft = slotTimesOn(today, input.release).filter((d) => d.getTime() >= input.now.getTime())
+  const dayStart = kstMidnight(input.now)
+  const nowMinute = Math.floor((input.now.getTime() - dayStart.getTime()) / 60_000)
+  const firstHeartbeat = Math.max(
+    PUBLISH_WINDOW_START_MINUTE,
+    Math.ceil(nowMinute / HEARTBEAT_INTERVAL_MINUTES) * HEARTBEAT_INTERVAL_MINUTES,
+  )
+  let simulatedPublished = Math.min(input.release.dailyTarget, Math.max(0, input.publishedToday))
+  const todayOpportunities: Date[] = []
+
+  for (let minute = firstHeartbeat;
+    minute <= PUBLISH_WINDOW_END_MINUTE && simulatedPublished < input.release.dailyTarget;
+    minute += HEARTBEAT_INTERVAL_MINUTES) {
+    const due = input.release.slots
+      .filter((slot) => slot.hour * 60 + slot.minute <= minute)
+      .reduce((count, slot) => count + slot.count, 0)
+    const allowed = Math.min(PER_RUN_MAX, due - simulatedPublished)
+    if (allowed <= 0) continue
+    const at = new Date(dayStart.getTime() + minute * 60_000)
+    for (let i = 0; i < allowed; i += 1) todayOpportunities.push(at)
+    simulatedPublished += allowed
+  }
+
   const next = slotTimesOn(tomorrow, input.release).slice(0, 1)
-  return [...todayLeft.slice(Math.max(0, todayLeft.length - remain)), ...next]
+  return [...todayOpportunities, ...next]
 }
 
 /**
@@ -457,7 +443,7 @@ export function jitCoverageOf(
   const scale = view.resolved.scale
   const slots = upcomingSlots({ now, publishedToday: view.loaded.publishedToday, release: scale.releaseProfile })
   /**
-   * 🔴 **자동 READY 만 센다** (2026-10-04 P0-2 보정). 사람 승인 READY 는 발행 러너의 공정성(`preferredLane`)에는 남지만
+   * 🔴 **자동 READY 만 센다** (2026-10-04 P0-2 보정). 사람 승인 READY 는 정상 발행 후보지만
    *    자동 단계 증명 물량이 아니다(canon §6) — 사람 글이 슬롯을 덮었다고 자동 공급을 닫지 않는다.
    */
   const ready = readyOpportunitiesOf(view.loaded, { caps: releaseCapsOf(scale.releaseProfile), now, autoOnly: true })
@@ -503,19 +489,12 @@ export function planPublishBatch(input: {
   loaded: LoadedStock
   caps: Parameters<typeof prepareCandidates>[0]['caps']
   at: Date
-  /**
-   * 🔴 **단계 증명일에 자동 target 이 더 필요한 수** (`autoFirstNeeded` · 2026-09-29 마스터 결정).
-   *    0 보다 크면 auto lane 이 **복구 행까지 포함해** 앞선다 — 사람 승인 행은 그 자리를 먼저 차지하지 못한다.
-   *    auto 후보가 없으면 기존 순서대로 사람 행이 나갈 수 있다(물량은 증거가 세지 않는다).
-   *    주지 않거나 0 이면 기존 공정성 그대로다.
-   */
-  proofAutoNeeded?: number
 }): PublishPlan {
   const { loaded } = input
   /**
    * 🔴 **기존 배정 자동 행을 발행 트랜잭션과 같은 판정으로 먼저 본다** (2026-09-25 마스터 P0).
-   *    막히는 행을 줄에 두면 "복구 먼저" 규칙이 그 행을 매 회차 선두에 세운다 —
-   *    트랜잭션은 막고, 러너는 멈추고, 뒤의 정상 행은 영원히 나가지 못한다.
+   *    막히는 행을 줄에 두면 신선도 순위에서 앞선 행이 매 회차 다시 선택될 수 있다 —
+   *    트랜잭션은 막고, 러너는 멈추고, 뒤의 정상 행이 나가지 못한다.
    *    그래서 그 행만 이번 줄에서 뺀다. 배정은 그대로 두고 다른 Persona 로 바꾸지 않는다.
    */
   const autoDeferred: { id: string; codes: string[] }[] = []
@@ -530,19 +509,9 @@ export function planPublishBatch(input: {
   }
   const blocked = new Set([...autoDeferred, ...autoExceptions].map((x) => x.id))
   const targets = loaded.targets.filter((t) => !blocked.has(t.id))
-  /** 🔴 lane 공정성 — 두 lane 이 모두 대기 중이면 가장 최근에 발행되지 않은 lane 을 앞세운다 */
-  const laneById = new Map(targets.map((t) => [t.id, laneOf(t.decidedBy)]))
-  const autoFirst = (input.proofAutoNeeded ?? 0) > 0
-  const lane: PublishLane | null = autoFirst ? 'auto' : preferredLane({
-    waiting: new Set(targets.map((t) => laneById.get(t.id)!)),
-    lastPublishedAt: loaded.laneLastPublishedAt ?? { auto: null, human: null },
-  })
   const prepared = prepareCandidates({
     candidates: loaded.queueCandidates.filter((c) => !blocked.has(c.queueId)), personas: loaded.personas as never,
     caps: input.caps, at: input.at,
-    ...(lane === null ? {} : { preferLane: (id: string) => laneById.get(id) === lane }),
-    // 🔴 증명일 — 사람 복구 행도 자동 target 앞에 서지 못한다
-    ...(autoFirst ? { laneBeforeRecovery: true } : {}),
   })
   const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
   const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
@@ -562,12 +531,8 @@ export function planPublishBatch(input: {
     : pickPublishTarget({
       ordered: freshOrdered,
       assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
-      /**
-       * 🔴 증명일에는 **auto 복구 행만** 먼저 올린다. `pickPublishTarget` 의 "복구 먼저" 는 줄 순서를 무시하고
-       *    복구 행을 앞세우므로, 그대로 두면 사람 복구 행이 자동 target 슬롯을 차지한다(격리 DB 반례).
-       *    사람 복구 행은 배정을 그대로 둔 채 자동 행 뒤에서 기다린다 — 목표를 채우면 기존 규칙대로 복구된다.
-       */
-      isRecovery: (id) => assignOf.get(id)?.recovery === true && (!autoFirst || laneById.get(id) === 'auto'),
+      /** 복구 여부는 보고용일 뿐 선택 순서를 바꾸지 않는다. */
+      isRecovery: (id) => assignOf.get(id)?.recovery === true,
     })
   return {
     prepared, assignOf, freshOrdered, brokenRecovery, assignmentReady,
@@ -606,12 +571,12 @@ export function planPublishBatch(input: {
  *    그 행이 화자 WIP 를 들고 있으면 계약을 올린 순간 새 계약은 남은 몇 자리로만 만든다(실측 WIP 46 / 54).
  *    · 큐에 그대로 둔다(삭제 0) · 계약 표식을 고쳐 쓰지 않는다 · 자동 발행 0 · 사람 검토로는 여전히 나간다
  *    · 🔴 사람이 검토한 행(`founder` → selector 대상)은 이 칸에 오지 않는다 — 기존 뜻 그대로다
- *    · 🔴 지금 계약의 검토 대기는 그대로 `humanReviewPending`(WIP)이다
+ *    · 🔴 지금 계약의 자동 적격 행만 `autoReadyPending`(WIP), 경고 행은 `qualityQuarantine`(WIP 아님)이다
  *    판정은 새로 적지 않는다 — selector 가 낸 코드와 정본 `isCurrentQualityContract` 를 나누기만 한다.
  */
 export type StockBucket =
   | 'publishableNow' | 'haltedByBrokenRecovery'
-  | 'humanReviewPending' | 'autoReadyClosed' | 'autoReadyStale'
+  | 'autoReadyPending' | 'qualityQuarantine' | 'autoReadyClosed' | 'autoReadyStale'
   | 'assignmentDeferred'
   | 'releaseIneligible' | 'releaseUnknown' | 'recoveryBroken' | 'assignmentException'
   | 'qualityContractMismatch'
@@ -621,17 +586,18 @@ export type StockBucket =
  * 🔴 **누가 풀 수 있는가.**
  *    `none`           풀 것이 없다(지금 나간다) — 또는 영영 나가지 않는다(legacy)
  *    `time`           시간이 지나면 저절로 풀린다(주간 상한 · 최소 간격)
- *    `human`          사람이 검토 · 수정 · 폐기해야 풀린다
- *    `autoReadyGate`  자동 READY 문(스위치 · 증거 · 결함)이 열리면 풀린다 — 사람 검토로도 풀린다
+ *    `human`          운영 장애를 사람이 복구해야 풀린다. 기계 초안 품질 검토에는 쓰지 않는다
+ *    `autoReadyGate`  자동 READY 문(스위치 · 증거 · 결함) 또는 다음 자동 도장 회차가 풀어 준다
  */
 export type RecoveryOwner = 'none' | 'time' | 'human' | 'autoReadyGate'
 
 export const STOCK_BUCKET_META: Record<StockBucket, { wip: boolean; owner: RecoveryOwner; label: string }> = {
   publishableNow: { wip: true, owner: 'none', label: '지금 발행 가능 (배정까지 끝남)' },
   haltedByBrokenRecovery: { wip: true, owner: 'human', label: '배정은 됐지만 다른 행의 깨진 복구로 러너 전체가 멈췄다' },
-  humanReviewPending: { wip: true, owner: 'human', label: '사람 검토 대기 (기계 초안)' },
+  autoReadyPending: { wip: true, owner: 'autoReadyGate', label: '자동 READY 도장 대기 (자동 적격 기계 초안)' },
+  qualityQuarantine: { wip: false, owner: 'none', label: '자동 품질 격리 — 발행하지 않고 Persona 자리도 점유하지 않는다' },
   autoReadyClosed: { wip: true, owner: 'autoReadyGate', label: '자동 도장 행 · 자동 READY 문이 닫혔다' },
-  autoReadyStale: { wip: true, owner: 'human', label: '자동 도장 뒤 글이 바뀌었다 — 도장 무효 · 사람이 다시 본다' },
+  autoReadyStale: { wip: false, owner: 'none', label: '자동 도장 뒤 글이 바뀌었다 — 도장 무효 · 자동 격리' },
   assignmentDeferred: { wip: true, owner: 'time', label: '배정 유예 — 주간 상한 · 최소 간격 (시간이 풀면 나간다)' },
   /**
    * 🔴 **원천 가치 없음 — 사람이 살리는 칸이 아니다** (2026-09-30 · source-slot-v1). 앞판의 `ttlExpired`("사람이 버릴지
@@ -643,11 +609,11 @@ export const STOCK_BUCKET_META: Record<StockBucket, { wip: boolean; owner: Recov
   recoveryBroken: { wip: false, owner: 'human', label: '깨진 복구 — 기존 배정이 쓸 수 없는 Persona' },
   assignmentException: { wip: false, owner: 'human', label: '배정 예외 — 말투 · 생활사 · 비활성 (시간이 풀지 않는다)' },
   qualityContractMismatch: {
-    wip: false, owner: 'human',
-    label: '옛 품질 계약 기계 초안 — 자동 READY · 자동 발행 영구 제외 (큐에 남는다 · 사람 검토로만 나간다)',
+    wip: false, owner: 'none',
+    label: '옛 품질 계약 기계 초안 — 자동 READY · 자동 발행 영구 제외 (큐 보존 · 정기 운영자 구제 없음)',
   },
   profileMismatch: { wip: false, owner: 'none', label: 'profile 불일치 (legacy · 영영 나가지 않는다)' },
-  gateBlocked: { wip: false, owner: 'human', label: 'gate · 안전 · 제목 복제 · 빈 글' },
+  gateBlocked: { wip: false, owner: 'none', label: 'gate · 안전 · 제목 복제 · 빈 글 — 자동 격리' },
 }
 
 export const STOCK_BUCKETS: readonly StockBucket[] = Object.keys(STOCK_BUCKET_META) as StockBucket[]
@@ -656,16 +622,23 @@ export const STOCK_BUCKETS: readonly StockBucket[] = Object.keys(STOCK_BUCKET_ME
  * 🔴 정본 거절 코드 → 칸. `switch` 라서 코드가 늘면 컴파일이 깨진다.
  * 🔴 `gateResults` 는 **그 행에 저장된 값**이다(`loaded.allRows`). 고치지 않고 읽기만 한다.
  */
-function bucketOfReject(code: RejectCode, gateResults: unknown): StockBucket {
+function bucketOfReject(code: RejectCode, row: AutoRow | undefined): StockBucket {
   switch (code) {
     case 'PROFILE': case 'PROMPT_VERSION': case 'MODEL': case 'SITE':
       return 'profileMismatch'
     /**
-     * 🔴 사람이 검토하지 않은 기계 초안 — **지금 품질 계약일 때만** WIP 인 검토 대기다.
+     * 🔴 사람이 검토하지 않은 기계 초안 — 지금 품질 계약이면 자동 적격성을 다시 읽는다.
+     *    자동 적격 행만 다음 도장 회차까지 WIP, 경고 행은 자동 품질 격리라 WIP 가 아니다.
      *    옛 계약(다른 판 · 다른 digest · 표식 없음)은 자동 경로가 영영 없다 → WIP 아님.
      */
     case 'HUMAN_REVIEW_REQUIRED':
-      return isCurrentQualityContract(gateResults) ? 'humanReviewPending' : 'qualityContractMismatch'
+      if (row === undefined || !isCurrentQualityContract(row.gateResults)) return 'qualityContractMismatch'
+      return eligibilityOf({
+        gateVerdict: row.gateVerdict,
+        gateResults: row.gateResults,
+        title: row.title,
+        body: row.body,
+      }).auto ? 'autoReadyPending' : 'qualityQuarantine'
     case 'QUALITY_CONTRACT_MISMATCH': return 'qualityContractMismatch'
     // 🔴 한 칸에 합치지 않는다 — 푸는 주체가 다르다
     case 'AUTO_READY_CLOSED': return 'autoReadyClosed'
@@ -727,8 +700,8 @@ export function classifyStock(input: { loaded: LoadedStock; plan: PublishPlan })
   const { loaded, plan } = input
   const ids = Object.fromEntries(STOCK_BUCKETS.map((b) => [b, [] as string[]])) as Record<StockBucket, string[]>
   /** 🔴 거절 행의 저장된 gateResults — `rejected` 는 `allRows` 에서 나온다(같은 조립) */
-  const gateOf = new Map(loaded.allRows.map((r) => [r.id, r.gateResults]))
-  for (const r of loaded.rejected) ids[bucketOfReject(r.code, gateOf.get(r.id))].push(r.id)
+  const rowOf = new Map(loaded.allRows.map((r) => [r.id, r]))
+  for (const r of loaded.rejected) ids[bucketOfReject(r.code, rowOf.get(r.id))].push(r.id)
 
   const deferredPinned = new Set(plan.autoDeferred.map((x) => x.id))
   const exceptionPinned = new Set(plan.autoExceptions.map((x) => x.id))

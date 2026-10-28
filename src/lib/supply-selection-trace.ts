@@ -2,8 +2,8 @@
  * 🔴 **공급 선택 관측 trace v2** (2026-10-10 P0-B1 · v1 은 P0-B0) — 순수 함수 · DB · 네트워크 · provider 0
  *
  *   공급 한 회차에서 원천 하나하나가 **어느 단계에서 왜** 골라지거나 빠졌는지를 남긴다.
- *     생성 가능 판정(`worksetEligibility`) → JIT 선택(`selectJitWorkset`: raw 제외 · 슬롯 연결 · 신규 우선
- *     · 신규 우선 · 재시도 보충 · 정본 순위 · EDF 배정) → 최종 묶음
+ *     생성 가능 판정(`worksetEligibility`) → JIT 선택(`selectJitWorkset`: raw 제외 · 슬롯 연결 ·
+ *     신선도 우선 단일 순위 · EDF 배정) → 최종 묶음
  *   기록은 선택 함수에 넘긴 기록기(`WorksetTraceSink`)가 모은다. 이 파일은 모은 것을 **읽기만** 해서 조립한다.
  *
  * 🔴 **선택을 바꾸지 않는다.** 묶음 · 순서 · 배정은 trace 를 주든 안 주든 같다(검사가 digest 로 대조한다).
@@ -305,9 +305,12 @@ const pctl = (xs: readonly number[], q: number): number | null => {
 /** 🔴 정본 rank 부분만(동률이면 0) — 선호 · 열쇠 없음 */
 const rankPart = (a: TraceCandidate, b: TraceCandidate): number =>
   compareReleaseRank({ ...a.rank!, tieBreak: '' }, { ...b.rank!, tieBreak: '' })
-/** 🔴 선택과 같은 순위에서 열쇠만 뺀 엄격 비교 — 음수면 a 가 앞선다 */
-const strictBefore = (a: TraceCandidate, b: TraceCandidate): number =>
-  rankPart(a, b) || Number(b.menopauseCore) - Number(a.menopauseCore) || Number(b.wgangSource) - Number(a.wgangSource)
+/**
+ * 🔴 선택과 같은 순위에서 열쇠만 뺀 엄격 비교 — 음수면 a 가 앞선다.
+ *    2026-10-19 창업자 결정: 공급 순위가 신선도 1순위 + 반응 tie-break 로 바뀌었다 — 출처·주제 우대 제거.
+ *    `menopauseCore` · `wgangSource` 는 관측용 bool 로 남지만 선택 ordering 에는 쓰지 않는다.
+ */
+const strictBefore = (a: TraceCandidate, b: TraceCandidate): number => rankPart(a, b)
 
 const matchable = (cs: readonly TraceCandidate[], nSlots: number): number =>
   maxSlotMatching(cs.map((c) => (c.slotAgesH ?? []).map((a) => a !== null)), nSlots)

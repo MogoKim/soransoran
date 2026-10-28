@@ -15,7 +15,7 @@ import { INTEGRITY_MODEL, INTEGRITY_PROMPT_VERSION } from '../src/lib/auto-ready
 import {
   SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION, SEMANTIC_AUDITOR, SEMANTIC_PAID_ENV,
   SEMANTIC_AUDIT_MAX_OUTPUT_TOKENS, semanticPaidEnabled, parseSemanticAuditResponse, judgeSemantic, semanticBindingOf,
-  buildSemanticAuditRequest, combineAuditVerdicts, semanticNoteHead, AUDIT_BUDGET_ENV,
+  buildSemanticAuditRequest, combineAuditVerdicts, semanticNoteHead, AUDIT_BUDGET_ENV, SEMANTIC_AUDIT_SYSTEM_PROMPT,
   type CombinedAudit, type SemanticAuditContext, type SemanticAuditProvider, type SemanticVerdict,
 } from '../src/lib/auto-ready-semantic-audit'
 import {
@@ -26,7 +26,8 @@ import { priceOf, reserveOf } from '../src/lib/llm-pricing'
 import { LEDGER_STAGES, PAID_STAGES } from '../src/lib/llm-ledger'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { ruleAuditJudge, RULE_JUDGE_MODEL, RULE_JUDGE_PROMPT_VERSION } from './lib/auto-ready-rule-judge.mjs'
-import { auditLedgerDir, auditLimitsFromEnv, offSemanticProvider, semanticProviderFromEnv } from './lib/auto-ready-semantic-provider.mjs'
+import { auditLedgerDir, auditLimitsFromEnv, offSemanticProvider, paidSemanticProvider, semanticProviderFromEnv } from './lib/auto-ready-semantic-provider.mjs'
+import { MATERIAL_CONTRACT_LINES } from '../src/lib/content-core/material-contract'
 import {
   AUDIT_INTERVAL_MINUTES, AUDIT_RUNNER_ARGS, AUDIT_RUNNER_LABEL, AUDIT_RUNNER_SCRIPT, auditRunnerSlots, renderAuditRunnerPlist, verifyAuditSlots,
 } from './lib/auto-ready-audit-template'
@@ -65,6 +66,22 @@ console.log('① 판 · 모델 · 계약 — 무결성 감사자와 섞지 않�
   check('🔴 자동 감사자는 human:* · founder 일 수 없다', !automatedAuditorOk('human:operator') && !automatedAuditorOk('founder') && !automatedAuditorOk(' ') && automatedAuditorOk(`${SEMANTIC_AUDITOR}:runner`))
   check('🔴 의미 감사 모델은 가격표에 단가가 있다 — 예약액을 낼 수 있다', priceOf(SEMANTIC_AUDIT_MODEL) !== null)
   check('🔴 장부 단계 semanticAudit 는 유료 단계다', (LEDGER_STAGES as readonly string[]).includes('semanticAudit') && PAID_STAGES.includes('semanticAudit'))
+  check('🟢 bounded creativity — 감상·질문·재구성·자연스러운 강조와 비핵심 생략은 결함이 아니다',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('감상·반응·질문·비유·연결 문장·일반적 관찰·새로운 구성')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('정도 부사·강조 부사의 추가')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('같은 주체가 같은 행동을 했다고 명시했다면')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('새 사건·새 행위자·새 사실이라 하지 않는다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('핵심 사실을 바꾸지 않는 자연스러운 강조')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('세부 내용을 일부 생략했어도'))
+  check('🟢 no 출력은 허용 표현 설명 없이 세 배열을 비우는 단일 모양이다',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('허용된 표현이나 결함이 아닌 이유를 배열에 설명하지 않는다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('defect 가 "no"이면 세 배열은 반드시 모두 []이다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('{"unsupportedFacts":[],"lifeContradictions":[],"sourceDistortions":[],"defect":"no"}')
+    && !SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('[{"claim":"","why":""}]'))
+  check('🔴 계속 막는 경계 — 구체 사실·명시적 생활사 모순·핵심 주체/행동/원인/결과/결론 왜곡',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('숫자·금액·장소·새 사건·진단')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('같은 주어·같은 사실 축')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('주체·핵심 행동·원인·결과·결론'))
 }
 
 console.log('\n② 🔴 유료 호출 — 기본 OFF')
@@ -104,12 +121,12 @@ console.log('\n③ 🔴 🔴 응답 읽기 — 모양이 어긋나면 못 읽은
   ] as const) check(`🔴 [${tag}] → 못 읽음`, !parseSemanticAuditResponse(raw).ok)
 }
 
-console.log('\n④ 🔴 🔴 의미 감사 판정 — 측정 못 한 것은 재시도 가능 실패 · 결속 깨짐은 무결성 · no 는 측정된 것만')
+console.log('\n④ 🔴 🔴 의미 감사 — Content Core 단일 권위 · 결속만 fail-closed · 모델은 참고')
 {
   const ok = async (p: SemanticAuditProvider): Promise<SemanticVerdict> => judgeSemantic({ ok: true, ctx: CTX }, p)
   const clean = await ok(scripted(CLEAN))
   check('기준선 — 측정된 no · 묶음 있음', clean.defect === 'no' && clean.outcome === 'measured' && clean.binding !== null)
-  const retry: [string, string, Promise<SemanticVerdict>][] = [
+  const advisory: [string, string, Promise<SemanticVerdict>][] = [
     ['제공사 실패(HTTP)', 'HTTP_500', ok({ model: SEMANTIC_AUDIT_MODEL, complete: async () => ({ ok: false, code: 'HTTP_500', reason: 'x' }) })],
     ['제공사 예외', 'PROVIDER_EXCEPTION', ok({ model: SEMANTIC_AUDIT_MODEL, complete: async () => { throw new Error('boom') } })],
     ['응답 못 읽음', 'PARSE_FAILED', ok(scripted('{broken'))],
@@ -117,16 +134,140 @@ console.log('\n④ 🔴 🔴 의미 감사 판정 — 측정 못 한 것은 재�
     ['계약과 다른 모델', 'MODEL_MISMATCH', ok(scripted(CLEAN, 'gemini-3.7-flash'))],
     ['유료 OFF 제공사', 'PAID_OFF', ok(offSemanticProvider)],
     ['감사 예산 없음', 'AUDIT_BUDGET_UNSET', ok(semanticProviderFromEnv({ [SEMANTIC_PAID_ENV]: 'on' }, 'r').provider)],
-    ['정본 파일 못 읽음(문맥 · 환경)', 'ARTIFACT_INDEX_UNREADABLE', judgeSemantic({ ok: false, code: 'ARTIFACT_INDEX_UNREADABLE', reason: 'x', integrity: false }, scripted(CLEAN))],
   ]
-  for (const [tag, code, p] of retry) {
+  for (const [tag, code, p] of advisory) {
     const v = await p
-    check(`🔴 🔴 **[${tag}] → 재시도 가능 실패 · defect null · 코드 ${code} (yes 도 no 도 아니다)**`, v.outcome === 'retryable' && v.defect === null && v.code === code, `${v.outcome} · ${v.defect} · ${v.code}`)
+    check(`🔴 **[${tag}] → 결속된 참고 · 최종 no · 코드 ${code}**`,
+      v.outcome === 'measured' && v.defect === 'no' && v.code === code && v.binding !== null,
+      `${v.outcome} · ${v.defect} · ${v.code}`)
   }
+  const env = await judgeSemantic({ ok: false, code: 'ARTIFACT_INDEX_UNREADABLE', reason: 'x', integrity: false }, scripted(CLEAN))
+  check('🔴 **정본 파일을 못 읽어 결속 확인 불가 → 재시도 가능 실패**',
+    env.outcome === 'retryable' && env.defect === null && env.code === 'ARTIFACT_INDEX_UNREADABLE' && env.binding === null)
   const integ = await judgeSemantic({ ok: false, code: 'ARTIFACT_MISSING', reason: 'x', integrity: true }, scripted(CLEAN))
   check('🔴 🔴 **[문맥 결속 깨짐(artifact 없음)] → 무결성 yes**', integ.outcome === 'integrity' && integ.defect === 'yes' && integ.code === 'ARTIFACT_MISSING')
   const found = await ok(scripted(FOUND))
-  check('🔴 🔴 **실제 발견 → 측정된 yes(콘텐츠 결함) · 사유에 근거 없는 사실**', found.defect === 'yes' && found.outcome === 'measured' && found.reasons.some((r) => r.includes('근거 없는 사실')))
+  check('🔴 **모델 발견 → 측정된 no(참고) · Content Core 결정을 뒤집지 않음**',
+    found.defect === 'no' && found.outcome === 'measured' && found.code === 'MODEL_FINDING'
+    && found.reasons.some((r) => r.includes('참고') && r.includes('근거 없는 사실')))
+}
+
+console.log('\n④-b 🔴 🔴 사고 반례 — 발행 전 권위는 하나, 사후 모델은 한 번만 관측 (2026-10-26 · v4)')
+{
+  type Reply = string | { ok: false; code: string; reason: string } | 'THROW'
+  /** 🔴 응답을 차례로 돌려주고, 받은 요청을 남긴다 — 중복 호출이 없음을 잰다 */
+  const sequence = (replies: Reply[]) => {
+    const reqs: Parameters<SemanticAuditProvider['complete']>[0][] = []
+    const provider: SemanticAuditProvider = {
+      model: SEMANTIC_AUDIT_MODEL,
+      complete: async (req) => {
+        reqs.push(req)
+        const r = replies[reqs.length - 1]
+        if (r === undefined) return { ok: false, code: 'SEQUENCE_EXHAUSTED', reason: '예상보다 많이 불렀다' }
+        if (r === 'THROW') throw new Error('boom')
+        return typeof r === 'string' ? { ok: true, text: r } : r
+      },
+    }
+    return { reqs, provider }
+  }
+  const rule = await ruleAuditJudge({ queueId: 'q', postId: 'post-1', title: CTX.post.title, body: CTX.post.body, stamp: CTX.stamp })
+  const finalOf = (c: CombinedAudit): 'yes' | 'no' | 'retryable' => (c.kind === 'final' ? c.verdict.defect : 'retryable')
+  const yes = (k: 'unsupportedFacts' | 'lifeContradictions' | 'sourceDistortions', item: Record<string, string>): string =>
+    JSON.stringify({ unsupportedFacts: [], lifeContradictions: [], sourceDistortions: [], [k]: [item], defect: 'yes' })
+
+  // 🔴 사고 fixture — 원천 35112945 의 같은 장면 시간 바꿔쓰기(새벽·이 밤 → 밤늦게) · 끝이 잘린 광고 꼬리는 생략됐다
+  const INCIDENT: SemanticAuditContext = {
+    post: {
+      id: 'post-35112945', title: '밤늦게 악플 보다가 잠을 못 잤어요',
+      body: '밤늦게 잠이 안 와서 휴대폰을 보는데 그 기사에 악플들이 실시간으로 달리더라고요. 보는 내내 마음이 무거웠어요. 다들 이런 거 보면 어떠세요?',
+    },
+    stamp: makeStamp('밤늦게 악플 보다가 잠을 못 잤어요', '밤늦게 잠이 안 와서', new Date('2026-10-24T00:00:00Z')),
+    artifact: {
+      artifactId: 'art-35112945', sourceArticleId: '35112945', sourceTitle: '이 밤에 악플이 실시간으로',
+      sourceBody: '새벽에 잠안와서 폰 보는데 이밤에 악플이 실시간으로 달리네요 보는 내내 맘이 안좋아요 [광고] 지금 바로 구매하',
+    },
+    persona: { code: 'P01', card: cardOf('P01') },
+  }
+  const TIME_FP = yes('sourceDistortions', { claim: '밤늦게 … 악플들이 실시간으로', source: '새벽에 잠안와서 · 이밤에 악플이 실시간으로' })
+  {
+    const s = sequence([TIME_FP, CLEAN])
+    const v = await judgeSemantic({ ok: true, ctx: INCIDENT }, s.provider)
+    check('🔴 🔴 **[사고 재현] 새벽/이 밤 → 밤늦게를 모델이 결함으로 봐도 최종 no(참고)**',
+      v.outcome === 'measured' && v.defect === 'no' && v.code === 'MODEL_FINDING' && v.binding !== null)
+    check('🔴 🔴 **[사고 재현] 제공사 호출 정확히 1 · 중복 확인 0**', s.reqs.length === 1, `${s.reqs.length}회`)
+    check('🔴 [사고 재현] 규칙 no 와 합치면 최종 no — 전역 자동 READY 를 닫지 않는다', finalOf(combineAuditVerdicts(rule, v)) === 'no')
+    check('🔴 [사고 재현] 모델 발견은 참고로 남고 note 판은 confirm=none',
+      v.reasons.some((r) => r.includes('참고') && r.includes('밤늦게')) && semanticNoteHead(v).includes('confirm=none'))
+  }
+  check('🔴 🔴 **[사고 재현] 지시문 — 같은 장면 시간 바꿔쓰기는 바꿔쓰기 · 양립 불가 시각이 사건/순서를 바꿀 때만 실질 변경**',
+    MATERIAL_CONTRACT_LINES.every((l) => SEMANTIC_AUDIT_SYSTEM_PROMPT.split('\n').includes(l))
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('"새벽"·"이 밤"·"밤늦게"처럼 같은 장면의 시간대를 달리 말한 것은 바꿔쓰기다')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('양립할 수 없는 시각을 적어 사건이나 순서가 달라질 때만 실질 변경이다'))
+  check('🔴 지시문 — 사소한 생략·커뮤니티식 1인칭 다시 말하기 허용 · 고위험 개인 사실은 계속 막는다',
+    SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('커뮤니티 글처럼 1인칭으로 다시 말하기')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('원문이나 카드 근거 없는 고위험 개인 사실·주장'))
+  check('🔴 🔴 **[10-26 사고 반례] 회사 그만두고 → 일을 쉬고 같은 약한 일반화는 허용하고 반대 상태는 계속 막는다**',
+    SEMANTIC_AUDIT_PROMPT_VERSION === 'semantic-audit-prompt-v8'
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('"회사를 그만두고"를 "일을 쉬고"로')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('"퇴사했다"를 "새 회사에 입사했다"로')
+    && SEMANTIC_AUDIT_SYSTEM_PROMPT.includes('원문보다 넓고 약한 표현으로의 치환은 구체적 사실이 아니다'))
+
+  // 🔴 참 반례도 사후 모델 혼자는 닫지 못한다. 발행 전 Content Core·규칙 하드게이트가 차단한다.
+  const counter: [string, SemanticAuditContext, string][] = [
+    ['명시된 시각과 양립 불가 · 사건 순서가 바뀜', {
+      ...CTX,
+      post: { id: 'post-time', title: '출근 전에 다툰 이야기', body: '아침 출근 전에 남편이랑 다투고 나왔어요. 그래서 하루 종일 일이 손에 안 잡혔어요.' },
+      artifact: { ...CTX.artifact, sourceTitle: '퇴근하고 다툼', sourceBody: '퇴근하고 저녁에 남편이랑 다퉜어요. 하루는 잘 보냈는데 저녁에 망쳤네요.' },
+    }, yes('sourceDistortions', { claim: '아침 출근 전에 다투고 하루 종일', source: '퇴근하고 저녁에 다퉜다 · 하루는 잘 보냈다' })],
+    ['근거 없는 고위험 개인 사실(진단)', {
+      ...CTX,
+      post: { id: 'post-fact', title: '갱년기 약 이야기', body: '저는 작년에 유방암 진단을 받아서 호르몬제를 못 먹어요. 다들 어떻게 버티세요?' },
+      artifact: { ...CTX.artifact, sourceTitle: '갱년기 약', sourceBody: '갱년기 약 먹어야 할지 고민이에요' },
+    }, yes('unsupportedFacts', { claim: '작년에 유방암 진단', why: '원문·카드에 없는 고위험 건강 사실' })],
+    ['결과·인과가 바뀜', {
+      ...CTX,
+      post: { id: 'post-cause', title: '시어머니 이야기', body: '시어머니가 사과하셔서 결국 화해했어요. 다들 시댁이랑은 어떠세요?' },
+      artifact: { ...CTX.artifact, sourceTitle: '시어머니', sourceBody: '시어머니가 끝내 사과를 안 하셔서 연락을 끊었어요' },
+    }, yes('sourceDistortions', { claim: '사과해서 화해했다', source: '사과를 안 해서 연락을 끊었다' })],
+  ]
+  for (const [tag, ctx, finding] of counter) {
+    const s = sequence([finding, finding])
+    const v = await judgeSemantic({ ok: true, ctx }, s.provider)
+    check(`🔴 🔴 **[참 반례 · ${tag}] 모델 발견은 참고 no · 호출 1 · 최종 no**`,
+      v.outcome === 'measured' && v.defect === 'no' && v.code === 'MODEL_FINDING' && s.reqs.length === 1
+      && finalOf(combineAuditVerdicts(rule, v)) === 'no' && semanticNoteHead(v).includes('confirm=none'),
+      `${v.defect} · ${v.confirmation} · ${s.reqs.length}회`)
+  }
+
+  {
+    const s = sequence([CLEAN])
+    const v = await judgeSemantic({ ok: true, ctx: INCIDENT }, s.provider)
+    check('🔴 깨끗한 관측 → 호출 1 · confirm=none', v.defect === 'no' && v.confirmation === 'none' && s.reqs.length === 1)
+    const f = sequence([{ ok: false, code: 'HTTP_429', reason: 'x' }])
+    const fv = await judgeSemantic({ ok: true, ctx: INCIDENT }, f.provider)
+    check('🔴 관측 실패 → 참고 no · 호출 1', fv.outcome === 'measured' && fv.defect === 'no' && fv.code === 'HTTP_429' && f.reqs.length === 1)
+    const both = sequence([TIME_FP, TIME_FP, CLEAN])
+    await judgeSemantic({ ok: true, ctx: INCIDENT }, both.provider)
+    check('🔴 중복 확인은 없다 — yes 응답에도 호출 1', both.reqs.length === 1)
+  }
+
+  // 🔴 유일한 관측 호출은 기존 장부 경로를 지난다.
+  {
+    const calls: { stage: string; model: string; systemPrompt: string; userPayload: string }[] = []
+    const answers = [TIME_FP]
+    const session = {
+      call: async (input: { stage: string; model: string; systemPrompt: string; userPayload: string }) => {
+        calls.push(input)
+        return { ok: true, rawText: answers[calls.length - 1] ?? '', settlementRecorded: true, maxTokensReached: false, settledUsd: 0.001, errorCode: null, errorMessage: null }
+      },
+    } as unknown as Parameters<typeof paidSemanticProvider>[0]
+    const v = await judgeSemantic({ ok: true, ctx: INCIDENT }, paidSemanticProvider(session))
+    check('🔴 🔴 **관측은 감사 장부 세션(session.call · semanticAudit 단계) 호출 1회 · 숨은 호출 0**',
+      v.defect === 'no' && v.code === 'MODEL_FINDING' && calls.length === 1
+      && calls[0]!.stage === 'semanticAudit' && calls[0]!.model === SEMANTIC_AUDIT_MODEL, `${calls.length}회`)
+  }
+  const sem = codeOnly('src/lib/auto-ready-semantic-audit.ts')
+  check('🔴 의미 감사 판정은 주입된 제공사 밖으로 나가지 않는다(fetch · SDK 없음)', !/fetch\(|@anthropic|anthropic\.|openai/i.test(sem))
 }
 
 console.log('\n⑤ 🔴 🔴 묶음 — 글 · 도장 · artifact 원문 근거 · Persona 카드 · 요청에 실린다')
@@ -153,19 +294,21 @@ console.log('\n⑤ 🔴 🔴 묶음 — 글 · 도장 · artifact 원문 근거 
   check('🔴 지시문·요청에 금지 표현이 없다', !/시니어|어르신|노인|실버/.test(req.systemPrompt + req.userPayload))
 }
 
-console.log('\n⑥ 🔴 🔴 합치기 — 규칙 · 의미 중 하나라도 yes 면 yes · 측정 못 했으면 재시도 가능 실패')
+console.log('\n⑥ 🔴 🔴 합치기 — 규칙·결속은 차단, 결속된 의미 모델은 참고')
 {
   const rule = await ruleAuditJudge({ queueId: 'q', postId: 'post-1', title: CTX.post.title, body: CTX.post.body, stamp: CTX.stamp })
   const ruleYes: AuditVerdict = { ...rule, defect: 'yes', reasons: ['규칙'] }
   const semNo = await judgeSemantic({ ok: true, ctx: CTX }, scripted(CLEAN))
-  const semYes = await judgeSemantic({ ok: true, ctx: CTX }, scripted(FOUND))
-  const semRetry = await judgeSemantic({ ok: true, ctx: CTX }, offSemanticProvider)
+  const semAdvisory = await judgeSemantic({ ok: true, ctx: CTX }, scripted(FOUND))
+  const semProviderOff = await judgeSemantic({ ok: true, ctx: CTX }, offSemanticProvider)
+  const semRetry = await judgeSemantic({ ok: false, code: 'ARTIFACT_INDEX_UNREADABLE', reason: 'x', integrity: false }, scripted(CLEAN))
   const semInteg = await judgeSemantic({ ok: false, code: 'NO_PERSONA_CARD', reason: 'x', integrity: true }, scripted(CLEAN))
   const final = (c: CombinedAudit): 'yes' | 'no' | 'retryable' => (c.kind === 'final' ? c.verdict.defect : 'retryable')
   check('규칙 no · 의미 no → no', final(combineAuditVerdicts(rule, semNo)) === 'no')
   check('🔴 규칙 yes · 의미 no → yes', final(combineAuditVerdicts(ruleYes, semNo)) === 'yes')
-  check('🔴 🔴 **규칙 no · 의미 yes → yes**', final(combineAuditVerdicts(rule, semYes)) === 'yes')
-  check('🔴 🔴 **규칙 no · 의미 측정 못 함 → 재시도 가능 실패(확정 아님)**', final(combineAuditVerdicts(rule, semRetry)) === 'retryable')
+  check('🔴 🔴 **규칙 no · 결속된 모델 발견 → no(참고)**', final(combineAuditVerdicts(rule, semAdvisory)) === 'no')
+  check('🔴 **규칙 no · 결속된 제공사 OFF → no(참고)**', final(combineAuditVerdicts(rule, semProviderOff)) === 'no')
+  check('🔴 🔴 **규칙 no · 결속 확인 불가 → 재시도 가능 실패**', final(combineAuditVerdicts(rule, semRetry)) === 'retryable')
   check('🔴 규칙 yes · 의미 측정 못 함 → yes (규칙이 본 결함은 결함이다)', final(combineAuditVerdicts(ruleYes, semRetry)) === 'yes')
   check('🔴 🔴 **규칙 no · 의미 무결성 → yes**', final(combineAuditVerdicts(rule, semInteg)) === 'yes')
   const c = combineAuditVerdicts(rule, semNo)

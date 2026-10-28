@@ -5,6 +5,7 @@ import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import { updateCommentContent, type AdminActionState } from '@/lib/actions/admin'
 import { MAX_COMMENT_LENGTH } from '@/lib/comment-policy'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 댓글 본문 수정 — 운영자용.
@@ -35,7 +36,7 @@ export default function AdminCommentEditForm({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 text-base font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          className={adminButtonClass('secondary')}
         >
           댓글 수정
         </button>
@@ -55,7 +56,7 @@ export default function AdminCommentEditForm({
           defaultValue={content}
           rows={4}
           maxLength={MAX_COMMENT_LENGTH}
-          className="w-full rounded-lg border border-subtle bg-surface-card p-3 text-content-primary"
+          className="w-full rounded-md border border-interactive bg-surface-card p-3 text-content-primary"
         />
       </label>
 
@@ -74,7 +75,7 @@ export default function AdminCommentEditForm({
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 text-base font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          className={adminButtonClass('secondary')}
         >
           닫기
         </button>

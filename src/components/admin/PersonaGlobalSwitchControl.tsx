@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from 'react'
 import { setPersonaGlobalSwitch } from '@/lib/actions/persona-switch'
+import { adminButtonClass } from '@/components/admin/AdminButton'
+import { adminBadgeClass } from '@/components/admin/AdminUi'
 
 /**
  * 전체 중지 kill switch — 🔴 이 화면의 유일한 write 기능
@@ -55,11 +57,10 @@ export default function PersonaGlobalSwitchControl({
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-bold text-content-primary">전체 중지 스위치</span>
+        <span className="text-base font-bold text-content-primary">전체 중지 스위치</span>
         <span
-          className={`rounded-md px-2 py-1 text-xs font-bold ${
-            stopped ? 'bg-surface-soft text-brand-ink' : 'bg-surface-soft text-content-muted'
-          }`}
+          /* 🔴 중지가 켜진 상태만 빨간 배지다(주황은 현재 위치 표시에만 쓴다). 문구는 그대로 */
+          className={adminBadgeClass(stopped ? 'danger' : 'neutral')}
         >
           {stopped ? '중지 켜짐' : exists ? '중지 꺼짐' : '중지 꺼짐 (미생성)'}
         </span>
@@ -77,13 +78,13 @@ export default function PersonaGlobalSwitchControl({
           placeholder="변경 사유 (필수)"
           maxLength={200}
           disabled={pending}
-          className="min-h-[44px] flex-1 rounded-md border border-subtle bg-surface-card px-3 py-2 text-sm text-content-primary"
+          className="min-h-[52px] min-w-0 flex-1 rounded-md border border-interactive bg-surface-card px-3 py-2 text-sm text-content-primary lg:min-h-[44px]"
         />
         <button
           type="button"
           onClick={submit}
           disabled={pending}
-          className="min-h-[44px] rounded-md border border-subtle px-4 py-2 text-sm font-bold text-content-primary disabled:opacity-60"
+          className={adminButtonClass(nextStopped ? 'danger' : 'secondary')}
         >
           {pending ? '변경 중…' : nextStopped ? '중지 켜기' : '중지 해제'}
         </button>

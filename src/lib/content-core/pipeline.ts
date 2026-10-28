@@ -56,12 +56,25 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p6'
  *    그대로 쓸 원자적 사실만 남기고, 원문의 물음·주변 문장은 초안의 문장으로 다시 쓰도록 요청한다.
  *    복제 게이트·임계값·의미 검수는 그대로다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p12'
+/**
+ * 🔴 **v2-draft-p14 (2026-10-23 · quality-v20)** — bounded creativity는 유지하고, 원문에 없는
+ * 시간대·상대 시점과 원문 화자를 새 전달자로 바꾸는 전언 경로만 명시적으로 금지한다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p14'
 /**
  * 🔴 **v2-review-p8 (2026-10-13 · quality-v8 보정)** — 생활사 모순에 구체적 가족 사실(자녀 수 · 자기 자녀 성별 · 나이대) 줄을 더했다
  *    (`REVIEW_FAMILY_SPECIFICS_LINES`). 다른 축 기준은 그대로다.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p8'
+/**
+ * 🔴 **v2-review-p10 (2026-10-23 · quality-v20)** — 안전한 창작은 빈 배열로 통과시키고,
+ * 핵심 뜻·결론 손실과 고위험 허구만 차단 finding 배열에 남긴다.
+ */
+/**
+ * 🔴 **v2-review-p11 (2026-10-26 · quality-v23)** — 안전한 창작은 빈 배열로 통과시키고,
+ * 핵심 뜻·결론 손실과 고위험 허구만 차단 finding에 남긴다. 발행 뒤 의미 감사와 같은 실질 변경 계약
+ * (`material-contract.ts` · 약한 일반화 · 시간 바꿔쓰기 · 커뮤니티식 1인칭 다시 말하기 · 사소한 생략)을 그대로 싣는다.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p11'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

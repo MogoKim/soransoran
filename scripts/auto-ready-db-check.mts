@@ -37,6 +37,7 @@ import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { PROFILES, releaseCapsOf } from '../src/lib/scale-profile'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
+import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION } from '../src/lib/micro-seed-auto-judge'
 
 import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
 import { markedStageEnv } from './lib/stage-decision-fixture'
@@ -258,7 +259,7 @@ async function main(): Promise<void> {
   const open = await authoritativeGate(prisma, ON)
   check('🔴 증거 30/30 · 결함 0 → 열림', open.open, open.reasons.join(' · '))
 
-  console.log('\n④ 🔴 적격 판정 — 경고 행은 예외 묶음 · 도장 없음')
+  console.log('\n④ 🔴 적격 판정 — 깨진 검수 기록은 예외 묶음 · 도장 없음')
   {
     const bad = await machineRow({ sr: { ...GOOD_SR, confidence: 'high' } })
     check('🔴 🔴 **semanticReview 가 망가진 행 → exception**', (await stampAutoReady(prisma, { queueId: bad.id, env: ON, now: NOW })).kind === 'exception')
@@ -545,6 +546,26 @@ async function main(): Promise<void> {
     check('🔴 🔴 **증거 게이트 실패 → 배정 불변**', pc.kind === 'blocked' && await untouched(idC), JSON.stringify(pc))
     const pd = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: OFF, autoAssign: planFor(pC) })
     check('🔴 스위치 OFF → 배정 불변', pd.kind === 'blocked' && await untouched(idC))
+    const pRoute = await freshPersona()
+    const idRoute = (await machineRow({ persona: null, voice: pRoute.code })).id
+    const routeRow = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idRoute }, select: { gateResults: true } })
+    const routeGate = routeRow.gateResults !== null && typeof routeRow.gateResults === 'object' && !Array.isArray(routeRow.gateResults)
+      ? routeRow.gateResults as Record<string, unknown> : {}
+    await prisma.originalPostApprovalQueue.update({
+      where: { id: idRoute },
+      data: { gateResults: { ...routeGate, autoJudge: { ruleVersion: CURRENT_AUTO_JUDGE_RULE_VERSION } } as never },
+    })
+    await stampAutoReady(prisma, { queueId: idRoute, env: ON, now: NOW })
+    const routePosts = await postCount()
+    const routeLogs = await prisma.personaActivityLog.count()
+    const pr = await publishOriginalPostTx(prisma, {
+      queueId: idRoute, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 },
+      autoReadyEnv: ON, autoAssign: planFor(pRoute),
+    })
+    check('🔴 🔴 **current boardTopic 결여 → 배정·Post·ActivityLog write 0**',
+      pr.kind === 'blocked' && pr.code === 'AUTO_READY_RECHECK' && pr.detail.includes('boardTopic 라우팅')
+      && await untouched(idRoute) && (await postCount()) === routePosts
+      && (await prisma.personaActivityLog.count()) === routeLogs, JSON.stringify(pr))
     const beforeE = Date.now()
     // 🔴 미래 matchedAt 을 억지로 넘긴다 — 받는 자리가 없다. 배정 시각은 트랜잭션 시계다
     const future = new Date(NOW.getTime() + 30 * 864e5)

@@ -37,9 +37,12 @@ import {
   fmtCount, hasWork, judgeJitDemand, judgeProcessRun,
   mayWriteRunState, planBoundedCommonPhase, planCarryOverFill, planCommonPhase, planPending, planSourcePhase,
   ledgerRunIdOf, type WorksetGate,
-  runCommonPhase, runSourcePhase, runFileName, runStatusOf, verifyRun,
+  runCommonPhase, runSourcePhase, runFileName, verifyRun,
+  closeRunStatus, describeAutoReadyFinalize, finalizeAutoReady, mayFinalizeAutoReady, type AutoReadyFinalize,
   type LockView, type ProcessRun, type ProcessStage, type StagePlan, type StageGate,
 } from '../src/lib/supply-process'
+import { stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
+import { autoReadyEnabled } from '../src/lib/auto-ready-v2'
 /**
  * 🔴 **잠금은 커널 lease 하나다** (2026-10-12 Batch C1) — 진입 · 회차 자식 · token(shadow) · probe 는 전부 `supply-lease`.
  *    📜 옛 `collect-lock` `wx` 잠금은 지웠다 — 죽은 회차가 남긴 파일이 `STALE_HELD` 로 사람이 올 때까지 공급을 세웠다.
@@ -294,7 +297,7 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  */
 /**
  * 🔴 **화자 여력 지평 = JIT 수요 지평 하나** (2026-10-11 Batch A2). 고정 7일 · capacity 눈금을 지웠다.
- *    지평의 날과 그날 자리 수는 `upcomingSlots`(오늘 남은 release 슬롯 + 다음 첫 기회)에서 그대로 나온다 —
+ *    지평의 날과 그날 자리 수는 `upcomingSlots`(오늘 발행기가 회수할 수 있는 기회 + 다음 첫 기회)에서 그대로 나온다 —
  *    수요가 보지 않는 날의 자리로 화자를 앞당겨 쓰지 않는다. cap 은 같은 눈금(release)이다.
  *
  * 🕘 (옛 판 · 2026-09-26) **공급은 capacity 로 준비하고, 발행은 release 로 제한한다**.
@@ -308,7 +311,7 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *
  * 🔴 **WIP 는 공용 분류에서 받는다** (2026-09-26). 앞판은 여기서 selector 를 따로 불러
  *    `HUMAN_REVIEW_REQUIRED` 를 직접 세었다 — 발행 러너와 다른 조립(editDiff 없음 · 자동 READY 닫힘 가정)이었다.
- *    🔴 검토 대기는 **WIP 에 남는다**(같은 화자로 또 만들지 않는다). 발행 가능 재고로는 세지 않는다.
+ *    🔴 자동 적격 미도장 행만 **WIP 에 남는다**. 품질 경고 행은 격리하고 Persona 자리를 해제한다.
  *    🔴 **WIP 여부는 칸마다 정해져 있다**(`STOCK_BUCKET_META`) — TTL 만료 · 영구 배정 예외 · 깨진 복구 ·
  *       스스로 풀리지 않는 신선도 실패는 화자를 **영구 점유하지 않는다**. 시간성 유예(WEEKLY_CAP · TOO_SOON)는 점유한다.
  *    🔴 **옛 품질 계약의 기계 초안(`qualityContractMismatch`)도 점유하지 않는다** (2026-09-28) — 자동 경로가
@@ -329,7 +332,13 @@ export async function buildSpeakerLoad(
   stageByDate: readonly { date: string; stage: string }[]
   planningStage: string
   releaseStage: string
-  wip: { total: number; humanReviewPending: number; publishableNow: number; qualityContractMismatch: number }
+  wip: {
+    total: number
+    autoReadyPending: number
+    qualityQuarantine: number
+    publishableNow: number
+    qualityContractMismatch: number
+  }
   /** 🔴 원천 가치가 사라진 WIP(정본 판정 만료 사유) — 화자 칸을 막지 않는다 · 화자 미상 · 말투 필터 */
   slots: { releasedExpired: number; unattributed: number; voiceFiltered: boolean; slotEligibleCount: number | null }
 }> {
@@ -430,7 +439,8 @@ export async function buildSpeakerLoad(
     releaseStage: opts.scale.releaseStage,
     wip: {
       total: wip.size,
-      humanReviewPending: classification.counts.humanReviewPending,
+      autoReadyPending: classification.counts.autoReadyPending,
+      qualityQuarantine: classification.counts.qualityQuarantine,
       publishableNow: classification.counts.publishableNow,
       /** 🔴 WIP 가 **아니다** — 옛 품질 계약이라 WIP 에서 빠진 수를 보이려고 적는다 */
       qualityContractMismatch: classification.counts.qualityContractMismatch,
@@ -565,7 +575,7 @@ export type SupplySnapshot = {
   jit: { slots: number; readyFilled: number; publishedToday: number; matched: string[]; horizon: Date[]; unfilled: Date[] } | null
   /**
    * 🔴 **결말 기준 원천 수율 구간** (2026-10-04 P0-2) — preflight 와 같은 판독(`readReadyCohort`)의 최근 3 KST 일.
-   *    유료 묶음 크기(`paidSourcesFor`)가 상한을 쓴다. 모르면 `null` — 부족분보다 많이 사지 않는다.
+   *    유료 묶음 크기(`paidSourcesFor`)가 상한을 쓴다. 모르면 `null` — 작은 회복 canary만 허용한다.
    */
   sourceYield: { low: number; high: number } | null
   cohortNotes: string[]
@@ -741,7 +751,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const policy = judgeJitDemand(jitIn)
   /**
    * 🔴 **유료 원천 수 = 부족분에서만** (2026-10-04 P0-2). 앞판은 수요가 1 이어도 고정 묶음 상한(`WORKSET_LIMIT`)만큼
-   *    판정 · 생성을 돌렸다(적재만 수요로 묶였다). 이제 `ceil(부족 ÷ 결말 수율 상한)` · 수율을 모르면 부족분만.
+   *    판정 · 생성을 돌렸다(적재만 수요로 묶였다). 이제 `ceil(부족 ÷ 결말 수율 상한)` · 수율을 모르면
+   *    부족 슬롯당 최대 3원천의 작은 회복 canary다.
    *    묶음 상한은 안전장치로만 남는다. 수요 0 이면 묶음 · 유료 호출 0 이다(`policy.llm` false).
    */
   const paid = paidSourcesFor({ deficit: policy.upTo, yieldHigh: before?.sourceYield?.high ?? null, cap: WORKSET_LIMIT })
@@ -779,12 +790,43 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const commonPlan = planCommonPhase(pending, policy, {
     kind: 'hold', reason: '미리보기 — 큐 스냅샷은 실행 국면에서 만든다', runId,
   })
+  /**
+   * 🔴 **자동 READY 마감 — 공통 DB 마감 단계** (2026-10-27). 적재 뒤 · 같은 lease 안에서 정본 도장 회차를 부른다.
+   *    07:00 controller 전에 06:15 공급이 적재한 자동 적격 행의 도장을 끝내 재고 상태를 확정한다.
+   *    🔴 lease 를 쥔 live 회차만 — dry-run · 스위치 닫힘 · 증명 없음은 부르지 않는다(DB write 0).
+   *    🔴 시각은 마감 시각이다 — 감사 시한 초과를 회차 시작 시각으로 재면 그만큼 늦게 닫힌다.
+   *    🔴 Queue 도장만 쓴다 — Post · Persona 배정 · ActivityLog 를 만들지 않는다.
+   */
+  const leased = proof !== null
+  const finalizeIfLeased = async (): Promise<AutoReadyFinalize | null> => {
+    if (!mayFinalizeAutoReady({ live: LIVE, killOpen, leased })) return null
+    const fin = await finalizeAutoReady({
+      stamp: () => stampRoundAuditAware(prisma, { env: process.env, now: new Date() }),
+      now: () => new Date().toISOString(),
+    })
+    console.log(`\n⑤-z 자동 READY 마감 (스위치 ${autoReadyEnabled(process.env) ? '켜짐' : '꺼짐 — 도장 0'})`
+      + ` ${describeAutoReadyFinalize(fin)}`)
+    return fin
+  }
 
   if (!verdict.ok) {
     console.log(`\n④ 돌지 않는다 — ${verdict.reason}`)
     if (verdict.code === 'NO_INPUT') {
-      console.log('   🟢 정상 no-op. 네트워크 0 · LLM 0 · DB write 0 · Post 0')
+      /**
+       * 🔴 **입력이 없어도 마감은 한다** — 앞 회차가 적재 commit 뒤 마감 전에 죽었으면 미도장 행이 남는다.
+       *    새 파일 없이도 다음 live 회차가 다시 집는다. 마감이 throw 하면 정상 no-op 이 아니다(exit 1).
+       */
+      const fin = await finalizeIfLeased()
+      if (fin === null) {
+        console.log('   🟢 정상 no-op. 네트워크 0 · LLM 0 · DB write 0 · Post 0')
+      } else {
+        console.log('   🟢 정상 no-op. 네트워크 0 · LLM 0 · Queue 도장 외 DB write 0 · Post 0')
+      }
       console.log('   🔴 수집 job 은 이 판정과 무관하게 자기 스케줄로 돈다')
+      if (fin?.status === 'failed') {
+        console.error('\n🔴 자동 READY 마감 실패 — 미도장 행은 controller 가 모름으로 센다 · 다음 live 회차가 다시 집는다\n')
+        return 1
+      }
     } else {
       console.log('\n   돌았다면 —')
       for (const sp of sourcePlans) {
@@ -853,7 +895,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
       try {
         const load = await writeSpeakerLoad(prisma, runId, scale)
         console.log(`   🟢 화자 여력 — 가까운 수요 지평 ${load.horizonDays}일(${load.planningStage} release 슬롯 · 오늘 남은 + 다음 첫 기회)`
-          + ` · WIP ${load.wip.total}건 (사람 검토 대기 ${load.wip.humanReviewPending} · 발행 가능 ${load.wip.publishableNow})`
+          + ` · WIP ${load.wip.total}건 (자동 도장 대기 ${load.wip.autoReadyPending} · 발행 가능 ${load.wip.publishableNow})`
+          + ` · 자동 품질 격리 ${load.wip.qualityQuarantine}건은 WIP 아님`
           + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`
           + ` · 원천 가치 없음으로 칸 해제 ${load.slots.releasedExpired}건 · 화자 미상 ${load.slots.unattributed}건`
           + ` · 말투 ${load.slots.voiceFiltered ? `있는 ${load.slots.slotEligibleCount}명만 자리를 받는다` : '필터 없음(정본을 못 읽었다)'}`)
@@ -1071,7 +1114,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     const recorder = createSelectionRecorder()
     if (policy.llm) {
     /**
-     * 🔴 **JIT 선택 하나** (2026-10-10 P0-B1) — raw 제외 → 부족 슬롯 연결 → 신규 우선 → 재시도 보충 → 정본 순위 →
+     * 🔴 **JIT 선택 하나** (2026-10-19) — raw 제외 → 부족 슬롯 연결 → 신선도 우선 단일 순위 →
      *    고른 집합에만 EDF 배정. 고른 원천은 **배정 슬롯**에서 다시 판정해 묶음에 나이를 적는다.
      */
     const plan = selectWorkset({
@@ -1082,7 +1125,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     })
     const jf = plan.jit!
     console.log(`   부족 슬롯 ${jf.slots}개 · 채울 수 있는 최대 ${jf.maxFillableSlots} · 덮음 ${jf.coveredSlots}`
-      + ` · 연결 가능 seed ${jf.linkable} · raw 제외 ${jf.rawExcluded} · 재시도 보충 ${jf.retryReserved}/${jf.retryReserve}`)
+      + ` · 연결 가능 seed ${jf.linkable} · raw 제외 ${jf.rawExcluded} · 선택된 재시도 ${jf.retryReserved}`)
     if (plan.picked.length === 0) {
       // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
       worksetEmpty = true
@@ -1202,7 +1245,11 @@ async function main(proof: LeaseProof | null): Promise<number> {
   }
   const phase2 = await runCommonPhase({ plan: common, exec, now: nowIso, onStage, beforeStage })
   record.stages = [...record.stages, ...phase2.outcomes]
-  record.status = runStatusOf(record.stages)
+  // 🔴 적재 결과를 먼저 남긴다 — 상태는 아직 running 이다. 마감 전에 죽으면 성공으로 기록되지 않는다
+  save()
+  // 🔴 적재가 실패한 회차도 마감은 한다 — 앞 회차가 남긴 미도장 행이 있을 수 있다(도장은 멱등 · CAS)
+  record.autoReady = (await finalizeIfLeased()) ?? undefined
+  record.status = closeRunStatus(record.stages, record.autoReady)
   record.completedAt = nowIso()
   save()
 
@@ -1238,6 +1285,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     }
   }
   console.log(`   LLM      호출 ${fmtCount(tally.llmCall)} · 캐시 ${fmtCount(tally.cacheHit)}`)
+  console.log(`   자동 READY 마감 ${record.autoReady === undefined ? '🔴 없음' : describeAutoReadyFinalize(record.autoReady)}`)
 
   let ok = record.status === 'done'
   if (before !== null) {
@@ -1252,8 +1300,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
     })
     console.log(`   형식 행  ${before.profiled} → ${after.profiled} (적재 정합용 수 — 재고 목표 없음)`)
     const pn = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.publishableNow))
-    const hr = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.humanReviewPending))
-    console.log(`   발행 가능 ${pn(before)} → ${pn(after)} · 사람 검토 대기 ${hr(before)} → ${hr(after)}`)
+    const hr = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.qualityQuarantine))
+    console.log(`   발행 가능 ${pn(before)} → ${pn(after)} · 자동 품질 격리 ${hr(before)} → ${hr(after)}`)
     console.log(`   Post     ${before.post} → ${after.post} ${after.post === before.post ? '✅ 불변' : '🔴 변했다'}`)
     console.log(`\n⑦ 정합 ${v.ok ? '✅ 통과' : '🔴 이상'}`)
     for (const p of v.problems) console.log(`   ${p}`)

@@ -99,7 +99,6 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
       rows: Array.from({ length: auditTarget(n) }, (_, i) => ({
         postId: `pp-${i}`, queueId: `pq-${i}`, judged: true, defectYes: false, retryable: false, overdue: false,
       })),
-      globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
     },
   }, { cost: [{ name: '공급', health: 'ok' }, { name: '댓글', health: 'ok' }, { name: '감사', health: 'ok' }], errors: 'ok' })
 }
@@ -1108,9 +1107,9 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     && /resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/.test(runnerCode)
     // 🔴 (2026-09-30) 교체 루프 — 만료된 행만 뺀 같은 조립 결과(view)로 다시 계획한다
     && /const view = excluded\.size === 0 \? stock : \{/.test(runnerCode)
-    && /planPublishBatch\(\{ loaded: view, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runnerCode)
+    && /planPublishBatch\(\{ loaded: view, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runnerCode)
     // 🔴 (2026-09-29) 증명일 필요 수도 같은 조립 결과(stock.autoTargetsToday)와 consumer env 에서만 나온다
-    && /const proofAutoNeeded = autoFirstNeeded\(proofDay, stock\.autoTargetsToday \?\? 0\)/.test(runnerCode),
+    && /const proofAutoMissing = autoProofNeeded\(proofDay, stock\.autoTargetsToday \?\? 0\)/.test(runnerCode),
     runnerCode.split('\n').filter((l) => l.includes('stock.')).slice(0, 6).join(' | '))
   check('🔴 🔴 **러너 안에 별도 조립이 남아 있지 않다**',
     !/selectAutoTargets\(rows,/.test(runner)
@@ -1142,7 +1141,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
    *    아니라 **이 줄**이 먼저 빨개진다 — 사본 비교가 아니라 실제 소비 경로다.
    */
   check('🔴 🔴 **러너가 planPublishBatch 를 부르고 그 결과만 쓴다**',
-    /const plan = planPublishBatch\(\{ loaded: view, caps: RELEASE_CAPS, at: axisNow, proofAutoNeeded \}\)/.test(runner)
+    /const plan = planPublishBatch\(\{ loaded: view, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runner)
     && /assignOf = plan\.assignOf/.test(runner)
     && /plan\.brokenRecovery\.length > 0/.test(runner)
     && /\{ picked, recovered, skipped, waiting \} = plan/.test(runner)
@@ -1357,10 +1356,8 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
       `machine=${loaded.machineDecided} human=${loaded.humanReviewed} total=${loaded.queueTotal}`)
   }
 
-  /** ── ⓓ 질의 순서와 발행 순서가 실제로 갈리는 경우 ── */
+  /** ── ⓓ recovery 신분은 발행 순서를 뒤집지 않는다 ── */
   {
-    // 🔴 DB 질의 순서는 비복구 먼저지만, 발행은 **복구 행이 먼저**다(prepareCandidates 의 복구 우선).
-    //    정렬을 지우면 이 fixture 에서 답이 바뀐다 — 그래서 여기서만 변이가 잡힌다.
     const qrows = [
       qrow({ id: 'n-plain', persona: null, captured: fresh }),
       qrow({ id: 'r-recovery', persona: 'p2', captured: fresh }),
@@ -1369,13 +1366,13 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
       fakeOf(qrows, [prow('P01', 'p1'), prow('P02', 'p2')]), RUN_AT)
     const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
     const c = core(loaded)
-    check('🔴 🔴 **질의 순서와 발행 순서가 다르다 — 복구 행이 앞선다**',
+    check('🔴 recovery 행이 같은 source rank의 앞 행을 추월하지 않는다',
       st.selectorTargets.ids.join(',') === 'n-plain,r-recovery'
-      && st.releaseEligible.ids.join(',') === 'r-recovery,n-plain',
+      && st.releaseEligible.ids.join(',') === 'n-plain,r-recovery',
       `selector=${st.selectorTargets.ids.join(',')} eligible=${st.releaseEligible.ids.join(',')}`)
-    check('🔴 🔴 **그 순서로 publisher 와 같은 한 건을 고른다**',
-      st.nextPickedId === 'r-recovery' && c.nextPickedId === 'r-recovery'
-      && st.assignmentReady.ids.join(',') === 'r-recovery,n-plain',
+    check('🔴 publisher와 관제가 같은 source-rank 첫 건을 고른다',
+      st.nextPickedId === 'n-plain' && c.nextPickedId === 'n-plain'
+      && st.assignmentReady.ids.join(',') === 'n-plain,r-recovery',
       `stage=${st.nextPickedId} core=${c.nextPickedId} runnable=${st.assignmentReady.ids.join(',')}`)
   }
 

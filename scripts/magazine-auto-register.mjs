@@ -51,6 +51,8 @@ import { completePendingLineage, reconcileLegacyInputRepair, reconcileLegacyInva
 import { deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-delivery-gate.mjs'
 import {
   DIRECT_SPEC_MODE,
+  DIRECT_SPEC_TITLE_MISMATCH,
+  directSpecTitleCheck,
   readDirectSpec,
   registerDirectSpecSidecar,
   resolveMagazineAutoMode,
@@ -334,6 +336,9 @@ export function formatRegenFailures(violations) {
     { code: 'MANUSCRIPT_FORMAT_RULE', label: FORMAT_RULE_LABEL },
   ]
 }
+
+/** 재생성이 원고 제목 계약 위반으로 멈췄으면 그 코드를 그대로 올린다 — 호출 자리의 일반 코드로 덮지 않는다 */
+export const regenStopCode = (rr, fallback) => (rr?.code === DIRECT_SPEC_TITLE_MISMATCH ? rr.code : fallback)
 
 /** article-draft.ts 의 heroImage 연결 — 없으면 null */
 export function heroLinkOf(src) {
@@ -918,6 +923,19 @@ export function drive(slug, opts, deps = {}) {
         add(stage, 'blocked', `${tag}재생성 중단: ${rr.code} — ${rr.why}`)
         return rr
       }
+      /**
+       * 🔴 **DIRECT_SPEC_V1 재생성 후보 제목 대조** (2026-10-19) — 교체 **전**에 본다.
+       *    다르면 draft.md · article-draft.ts 는 한 바이트도 바뀌지 않고 QA·등록·영수증으로 가지 않는다.
+       *    후보 파일이 없으면 여기서 판정하지 않는다 — 교체 함수가 REGEN_CANDIDATE_MISSING 으로 막는다.
+       */
+      if (isDirectMode && existsSync(candidate)) {
+        const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(candidate, 'utf8') })
+        if (!t.ok) {
+          record.outcome = t.code
+          add(stage, 'blocked', `재생성 원고 거부: ${t.code} — ${t.why} (원본 유지)`)
+          return { ok: false, code: t.code, why: t.why, regenCalls }
+        }
+      }
       const applied = (deps.applyRegenCandidate ?? applyRegenCandidate)({
         slug, candidatePath: candidate, draftMd: p.draftMd, articleTs: p.articleTs, runFn: runStep,
         ...(deps.verifyHero ? { verifyHero: deps.verifyHero } : {}),
@@ -1058,7 +1076,7 @@ export function drive(slug, opts, deps = {}) {
         if (rr.code === 'REGEN_DELIVERY_HOLD') held = true
         if (rr.code === 'LEDGER_UNREADABLE') failClosed = true
         const kindTag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
-        return stop('draft', 'FIRST_RESPONSE_CORRECTION_FAILED',
+        return stop('draft', regenStopCode(rr, 'FIRST_RESPONSE_CORRECTION_FAILED'),
           `${kindTag}최초 응답 형식 실패 교정 — ${rr.code}: ${rr.why} · 최초 위반: ${failures.map((f) => f.label).join(' / ').slice(0, 300)}`)
       }
       add('draft', 'ok', `최초 응답 형식 실패(${correctFrom.reason}) → 교정 재생성으로 원고 확보 · 일반 요청 재전송 0`)
@@ -1076,6 +1094,17 @@ export function drive(slug, opts, deps = {}) {
   // ── ③ article-draft.ts ────────────────────────────────────
   if (!existsSync(p.draftMd)) {
     return stop('article', 'DRAFT_MD_MISSING', 'draft.md 가 없어 변환할 수 없다')
+  }
+  /**
+   * 🔴 **DIRECT_SPEC_V1 원고 제목 대조 — 원고를 다루는 첫 자리** (2026-10-19).
+   *    형식 재생성 · 변환 · QA · hero · batch QA · 등록 · 영수증보다 **먼저** 본다.
+   *    앞판은 형식 재생성 루프 뒤에 있어, 제목도 다르고 형식도 틀린 원고가 provider 재생성을 먼저 불렀다.
+   *    다르면 재생성을 걸지 않는다 — 제목은 고칠 실패 항목이 아니라 계약 위반이다.
+   *    frontmatter 가 없는 원고도 제목이 없으므로 여기서 막힌다. 틀린 제목을 spec 제목으로 덮어쓰지 않는다.
+   */
+  if (isDirectMode) {
+    const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })
+    if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })
   }
   /**
    * 🔴 **이미 저장된 draft.md 도 변환기와 같은 판정을 받는다** (2026-10-08 `clinic-booking-app`).
@@ -1106,7 +1135,7 @@ export function drive(slug, opts, deps = {}) {
         if (rr.code === 'REGEN_DELIVERY_HOLD') held = true
         if (rr.code === 'LEDGER_UNREADABLE') failClosed = true
         const kindTag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
-        return stop('article', 'CONVERT_FAILED',
+        return stop('article', regenStopCode(rr, 'CONVERT_FAILED'),
           `${kindTag}${formatViolationSummary(fmt.violations)} · 재생성 ${rr.code}: ${rr.why}`,
           { formatViolations: fmt.violations })
       }
@@ -1154,7 +1183,7 @@ export function drive(slug, opts, deps = {}) {
         const kindTag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
         // 🔴 상한·HOLD 사유만 남기지 않는다 — 실제 QA 실패를 같은 문장에 싣는다
         const actual = lastQaFailures.length ? ` · 실제 QA FAIL: ${lastQaFailures.join(' / ').slice(0, 300)}` : ''
-        return stop('qa', 'QA_FAIL', `${kindTag}magazine QA FAIL — ${rr.code}: ${rr.why}${actual}`)
+        return stop('qa', regenStopCode(rr, 'QA_FAIL'), `${kindTag}magazine QA FAIL — ${rr.code}: ${rr.why}${actual}`)
       }
       r = runStep(QA, ['--draft', p.articleTs])
     }

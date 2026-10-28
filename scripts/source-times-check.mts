@@ -25,6 +25,8 @@ import { sourceTimesOf, thinRowFromCollected } from '../src/lib/micro-seed-naver
 import { NO_SOURCE_TIMES, THIN_COLUMNS } from '../src/lib/micro-seed-82cook-thin'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { MACHINE_SITE_PREFIX, sourceEvidenceOf } from '../src/lib/micro-seed-supply-autofill'
+import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION }
+  from '../src/lib/micro-seed-auto-judge'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
@@ -167,8 +169,8 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
   writeFileSync(join(dd, 'x.shadow.jsonl'), `${JSON.stringify({
     // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
     sourceSite: 'navercafe:wgang', sourceArticleId: 'T9', decision: 'AUTO_SEED', semanticRisks: [],
-    ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
-    provenance: 'machine-shadow',
+    ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+    model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
     // 🔴 (2026-09-30) 참여 동력 — 앞판은 loadMeta 가 채우고 아무도 읽지 않았다(죽은 값)
     communityAngle: '합성 참여 동력',
   })}\n`, 'utf-8')

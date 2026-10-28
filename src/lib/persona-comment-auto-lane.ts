@@ -21,6 +21,7 @@
 import type { BudgetLimits } from './llm-ledger'
 import type { CommentStage } from './persona-comment-stage'
 import { MEMBER_COMMENT_LIMIT_ON_PUBLISH } from './persona-comment-queue'
+import type { SupportedThinkingLevel } from './provider-thinking-contract'
 
 /** 🔴 이 레인이 열리는 유일한 단계 — 창업자가 env 로 올린 자리다 */
 export const AUTO_LANE_STAGE: CommentStage = 'bootstrap-auto'
@@ -34,6 +35,14 @@ export const AUTO_FIRST_COMMENT_WINDOW_MS = AUTO_FIRST_COMMENT_WINDOW_MINUTES * 
 
 /** 🔴 bootstrap-auto 에서 한 글에 붙는 Persona 댓글 상한 (P0-B ②) */
 export const AUTO_PERSONA_COMMENTS_PER_POST_MAX = 1
+
+/**
+ * 댓글은 짧은 본문 한 건이다. Gemini 기본 dynamic thinking이 800-token
+ * 출력 상한을 소진해 본문 없이 끝난 운영 실패를 막기 위해 **지원되는 가장 낮은 추론**으로 고정한다.
+ * 🔴 gemini-3.7-flash 는 `minimal` 을 받지 않는다(HTTP_400 · 2026-10-24 D10) — 최저값은 `low` 다.
+ *    타입이 계약 표(`provider-thinking-contract`)를 따르므로 지원하지 않는 값은 tsc 가 막는다.
+ */
+export const AUTO_COMMENT_THINKING_LEVEL: SupportedThinkingLevel<'gemini-3.7-flash'> = 'low'
 
 /**
  * 🔴 **기계 결정 표식.** 사람 승인과 구분되는 유일한 근거다 —

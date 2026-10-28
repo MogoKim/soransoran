@@ -43,7 +43,15 @@ import { UNATTENDED_PUBLISH_DECIDED_BY, publishOriginalPostTx } from '../src/lib
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 import { AUDIT_OVERDUE_MS } from '../src/lib/auto-ready-audit-store'
 import { AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
-import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
+import { AUTO_DECIDER, digestOf } from '../src/lib/auto-ready-v2'
+import {
+  DEFECT_RESOLUTION_KEY, DEFECT_RESOLVER, SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+  auditFingerprintOf, reverifyInputDigestOf,
+} from '../src/lib/auto-ready-defect-resolution'
+import {
+  SEMANTIC_AUDITOR, SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION,
+} from '../src/lib/auto-ready-semantic-audit'
+import { currentQualityContract } from '../src/lib/quality-contract'
 import { observeJob } from './lib/runner-health.mjs'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { judgeSlotRelease, publishEventAtOf, releaseStampOf, releaseStampStatusOf, RELEASE_STAMP_KEY } from '../src/lib/source-slot-release'
@@ -444,6 +452,43 @@ try {
   await counter('🔴 감사 결함 yes → AUDIT_DEFECT', 'AUDIT_DEFECT', async (s) => {
     await prisma.autoReadyAudit.update({ where: { queueId: s.queues[0]! }, data: { defect: 'yes' } })
   })
+  {
+    await wipe()
+    const decision = await storeDecision(TRIAL_D3)
+    const s = await seedDay()
+    const q = await prisma.originalPostApprovalQueue.findUniqueOrThrow({
+      where: { id: s.queues[0]! },
+      select: { id: true, createdPostId: true, draftTitle: true, draftBody: true, gateResults: true, editDiff: true },
+    })
+    const audit = await prisma.autoReadyAudit.update({
+      where: { queueId: q.id },
+      data: {
+        defect: 'yes', auditor: SEMANTIC_AUDITOR,
+        note: '[auto-ready-semantic-audit-v1 outcome=measured binding=fixture]',
+        publishedTitleHash: digestOf(q.draftTitle), publishedBodyHash: digestOf(q.draftBody),
+        auditContractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, auditModel: SEMANTIC_AUDIT_MODEL,
+        auditPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
+      },
+    })
+    const record = {
+      recordVersion: SEMANTIC_DEFECT_RESOLUTION_RECORD_VERSION,
+      qualityContract: currentQualityContract(),
+      audit: { queueId: audit.queueId, postId: audit.postId, fingerprint: auditFingerprintOf(audit) },
+      draft: { titleHash: digestOf(q.draftTitle), bodyHash: digestOf(q.draftBody) },
+      reverify: {
+        gateVersion: 'semantic-only', outcome: 'semanticCleared' as const, failureCodes: [], reviewCodes: [],
+        inputDigest: reverifyInputDigestOf({ fixture: 'stage-evidence-resolved' }), artifactId: 'fixture-artifact',
+        semanticContractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, semanticModel: SEMANTIC_AUDIT_MODEL,
+        semanticPromptVersion: SEMANTIC_AUDIT_PROMPT_VERSION,
+      },
+      resolvedAt: NOW.toISOString(), resolvedBy: DEFECT_RESOLVER,
+    }
+    await prisma.originalPostApprovalQueue.update({
+      where: { id: q.id }, data: { editDiff: { [DEFECT_RESOLUTION_KEY]: [record] } as Prisma.InputJsonValue },
+    })
+    const v = await verdictOf(decision)
+    check('🟢 감사 원본 yes 보존 + 지금 계약의 유효한 의미 해소 기록 → PASS', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+  }
   await counter('🔴 한 글의 발행 기록 둘 → DUP_PUBLISH_LOG', 'DUP_PUBLISH_LOG', async (s) => {
     await prisma.personaActivityLog.create({ data: { personaId: s.authors[0]!, kind: 'post', targetId: s.posts[0]!, gateStatus: 'PASS',
       decidedBy: UNATTENDED_PUBLISH_DECIDED_BY, createdAt: new Date(SLOTS[0]!.getTime() + MIN) } })

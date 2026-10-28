@@ -400,7 +400,7 @@ async function main(): Promise<void> {
     const published = after.filter((r) => r.status === 'PUBLISHED')
     check('🔴 🔴 **① 같은 슬롯(09:30)에 정확히 1건 발행** — Post 1 · ActivityLog 1', published.length === 1 && (await postsNow()) === 1 && (await logsNow()) === 1,
       `${published.length} · ${await postsNow()} · ${await logsNow()}`)
-    check('🔴 🔴 **발행된 행 = 정본 순위 1위** (댓글 백분위 → 조회 백분위 → 슬롯 나이)', published[0]?.id === expected[0]?.id,
+    check('🔴 🔴 **발행된 행 = 정본 순위 1위** (슬롯 나이 → 댓글 백분위 → 조회 백분위 · 2026-10-19 창업자)', published[0]?.id === expected[0]?.id,
       `발행 ${published[0] === undefined ? '-' : srcId(published[0])} · 기대 ${expected[0] === undefined ? '-' : srcId(expected[0])}`)
     check('🔴 🔴 **⑤ 82cook artifact 가 정상 후보로 발행까지 갔다**', published[0]?.rawContent?.sourceSite.endsWith('82cook') === true && srcId(published[0]!) === '9300001')
     if (published[0] !== undefined) await consistent(published[0].id, '①')
@@ -410,44 +410,49 @@ async function main(): Promise<void> {
     check('나머지 행은 그대로 기다린다(만료 0)', after.filter((r) => r.status === 'APPROVED').length === rows.length - 1 && after.every((r) => r.status !== 'EXPIRED'))
   }
 
-  // ── ② 첫 후보 발행 직전 만료 → 같은 회차 다음 후보 ──
+  // ── ② 가장 최신 후보가 발행 직전 만료 → 더 오래된 후보도 전부 만료 · 오래된 글로 대체하지 않음 ──
   {
-    const { sup } = await world('② 첫 후보가 발행 직전(트랜잭션 시각)에 만료 → 같은 회차 다음 후보')
+    const { sup } = await world('② 가장 최신 후보가 발행 직전 만료 → 더 오래된 후보도 전부 만료 · SLOT_UNFILLED')
     check('공급 러너 정상 종료', sup.code === 0)
     const order = rankAt(await generated(), PUBLISH_AT)
     const first = order[0]!
     /**
-     * 🔴 계획 시각(09:31:00.000)에는 원문 나이 72h − 20ms(eligible) · 트랜잭션 시각(주입 시각 + 실제 경과 ≫ 20ms)에는 72h 이상.
-     *    중첩 시각은 게시 뒤로 옮긴다(모양 · 순서는 정상) — 바뀌는 것은 "시간이 흘렀다" 하나다.
+     * 🔴 계획 시각에는 전부 원문 나이 72h 미만이다. 가장 최신 행이 72h − 20ms이고 나머지는
+     *    1ms씩 더 오래됐다. 트랜잭션 시각(주입 시각 + 실제 경과)에는 전부 72h 이상이다.
+     *    신선도 1순위에서는 가장 최신 행이 만료되면 그보다 오래된 행으로 슬롯을 채울 수 없다.
      */
-    const posted = new Date(PUBLISH_AT.getTime() - 72 * H + 20)
-    const after1 = iso(new Date(posted.getTime() + 1))
-    await patchGate(first.id, (g) => {
-      const e = g[SOURCE_EVIDENCE_KEY] as Record<string, unknown>
-      return { ...g, [SOURCE_EVIDENCE_KEY]: { ...e, postedAt: iso(posted), listedAt: after1, capturedAt: after1,
-        response: { ...(e.response as Record<string, unknown>), observedAt: after1 },
-        observations: [{ observedAt: after1, views: 1, comments: 1 }] } }
-    })
+    for (let i = 0; i < order.length; i += 1) {
+      const row = order[i]!
+      const posted = new Date(PUBLISH_AT.getTime() - 72 * H + 20 - i)
+      const after1 = iso(new Date(posted.getTime() + 1))
+      await patchGate(row.id, (g) => {
+        const e = g[SOURCE_EVIDENCE_KEY] as Record<string, unknown>
+        return { ...g, [SOURCE_EVIDENCE_KEY]: { ...e, postedAt: iso(posted), listedAt: after1, capturedAt: after1,
+          response: { ...(e.response as Record<string, unknown>), observedAt: after1 },
+          observations: [{ observedAt: after1, views: 1, comments: 1 }] } }
+      })
+    }
     const planOrder = rankAt(await generated(), PUBLISH_AT)
-    check('전제 — 계획 시각에는 그 행이 여전히 eligible 이고 1위다(댓글 백분위 유일 선두)', planOrder[0]?.id === first.id)
+    check('전제 — 계획 시각에는 전부 eligible 이고 가장 최신 행이 1위다',
+      planOrder.length === order.length && planOrder[0]?.id === first.id)
     const pub = await runPublish(PUBLISH_AT)
     dump('pub-2', pub.out)
     const after = await generated()
     const f = after.find((r) => r.id === first.id)!
     const published = after.filter((r) => r.status === 'PUBLISHED')
-    check('🔴 🔴 **② 첫 후보 — 트랜잭션이 EXPIRED 로 옮겼다(SOURCE_TOO_OLD_AT_SLOT) · Post 0 · 배정 풀림**',
+    check('🔴 🔴 **② 가장 최신 후보 — 트랜잭션이 EXPIRED 로 옮겼다(SOURCE_TOO_OLD_AT_SLOT) · Post 0 · 배정 풀림**',
       f.status === 'EXPIRED' && f.createdPostId === null && f.declineReason === 'RELEASE_EXPIRED:SOURCE_TOO_OLD_AT_SLOT' && f.matchedPersonaId === null,
       JSON.stringify({ s: f.status, d: f.declineReason }))
     const st = f.gateResults[RELEASE_STAMP_KEY] as Record<string, unknown> | undefined
     check('🔴 만료 행의 release 도장 — ineligible · 사유 · 판정 시각이 계획 시각보다 뒤(트랜잭션 시계)',
       st?.verdict === 'ineligible' && JSON.stringify(st?.reasons) === '["SOURCE_TOO_OLD_AT_SLOT"]' && Date.parse(String(st?.evaluatedAt)) > PUBLISH_AT.getTime()
       && releaseStampStatusOf(f.gateResults, null) === 'STALE', JSON.stringify(st))
-    check('🔴 🔴 **같은 회차에 다음 후보(정본 순위 2위)가 발행됐다** — 러너 exit 0 · 교체 1건',
-      pub.code === 0 && published.length === 1 && published[0]!.id === planOrder[1]?.id && /같은 회차 교체 1건/.test(pub.out),
-      `${pub.code} · ${published.map(srcId).join(',')} · 기대 ${planOrder[1] === undefined ? '-' : srcId(planOrder[1])}`)
-    check('🔴 슬롯은 한 번만 소비 — Post 1 · ActivityLog 1(만료 행은 로그 0)', (await postsNow()) === 1 && (await logsNow()) === 1)
-    if (published[0] !== undefined) await consistent(published[0].id, '②')
-    check('🔴 🔴 **C2 만료(트랜잭션이 EXPIRED 로 끝낸 후보)는 깨우지 않는다 — 실제 발행 1건에 깨움 1회**', wakeCalls().length === 1, JSON.stringify(wakeCalls()))
+    check('🔴 🔴 **더 오래된 후보로 채우지 않는다** — 전원 SOURCE_TOO_OLD_AT_SLOT · SLOT_UNFILLED · 발행 0',
+      pub.code === 0 && published.length === 0
+      && after.every((r) => r.status === 'EXPIRED' && r.declineReason === 'RELEASE_EXPIRED:SOURCE_TOO_OLD_AT_SLOT')
+      && /SLOT_UNFILLED/.test(pub.out), `${pub.code} · ${published.map(srcId).join(',')}`)
+    check('🔴 슬롯 미충족 — Post 0 · ActivityLog 0', (await postsNow()) === 0 && (await logsNow()) === 0)
+    check('🔴 🔴 **C2 만료만 있는 회차는 깨우지 않는다**', wakeCalls().length === 0 && wakeMarker() === null, JSON.stringify(wakeCalls()))
   }
 
   // ── ③ 전원 탈락 → SLOT_UNFILLED ──

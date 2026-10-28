@@ -30,6 +30,8 @@ import {
   runPaidCountOf, tallyOf,
   type BudgetLimits, type LedgerEntry, type LedgerStage, type OpenReservation,
 } from '../src/lib/llm-ledger'
+import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION }
+  from '../src/lib/micro-seed-auto-judge'
 import {
   BILLABLE_NOW, MODEL_PRICES, PRICING_SOURCES, PRICING_VERSION,
   costOf, priceOf, reserveOf,
@@ -759,8 +761,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
   const seed = (id: string): string => JSON.stringify({
     // 🔴 (P0-B) 판정기는 원천 사이트를 함께 적는다 — fixture 도 지금 판정 기록 모양이다
     sourceSite: 'navercafe:remonterrace', sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
-    ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
-    provenance: 'machine-shadow',
+    ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+    model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
   })
   const meta = (id: string, t: string): string => JSON.stringify({
     sourceArticleId: id, sourceSite: 'navercafe:remonterrace', title: t,
@@ -1603,8 +1605,8 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
   }))
   const shadow = [1, 2, 3].map((i) => JSON.stringify({
     sourceSite: 'navercafe:remonterrace', sourceArticleId: `C${i}`, decision: 'AUTO_SEED', semanticRisks: [],
-    ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
-    provenance: 'machine-shadow',
+    ruleVersion: AUTO_JUDGE_RULE_VERSION, promptVersion: AUTO_JUDGE_PROMPT_VERSION,
+    model: 'm', inputHash: 'h', provenance: 'machine-shadow', boardTopic: 'FREE',
   }))
   writeFileSync(join(dd, 'x.detail.jsonl'), `${detail.join('\n')}\n`, 'utf-8')
   writeFileSync(join(dd, 'x.shadow.jsonl'), `${shadow.join('\n')}\n`, 'utf-8')

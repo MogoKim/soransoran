@@ -2,7 +2,7 @@
  * 초안 게이트 — 🔴 **다 쓴 초안이 우리 글·우리 화자와 맞는가** (2026-09-26 실측 4건)
  *
  * 🔴 **왜 있나.** 운영 기계 초안 4편이 semanticReview `clean` · machineOutcome `adopt` 로
- *    사람 검토 대기(APPROVED)까지 갔다. 의미 검수는 넷 다 "원문을 충실히 유지" 라고 답했다 —
+ *    옛 검토 대기(APPROVED)까지 갔다. 의미 검수는 넷 다 "원문을 충실히 유지" 라고 답했다 —
  *    넷 다 **원문과는 맞고 우리와는 어긋났다.** 원문과 견주는 검수는 이것을 볼 자리가 없다.
  *
  *    ```
@@ -22,30 +22,31 @@
  * 🔴 **확정할 수 있을 때만 막는다.** 임자가 모호하면(누군가 앞에 서 있다) 세지 않는다 —
  *    같은 extractor 의 보수적 규칙을 그대로 물려받는다. 과차단은 곧 공급 0 이다.
  * 🔴 **유료 호출이 늘지 않는다.** 문자열 판정이다. 의미 검수 요청 **앞**에서 막으므로 오히려 준다.
- * 🔴 **(quality-v2 · 2026-09-28) 생활 일관성 게이트 넷** — 혼인 · 돌봄·한집 · 자녀 삶의 단계 ·
- *    정신건강·질병. 확정 모순은 위 셋과 같이 막고(AUTO_HOLD), **모호하면 사람 검토**(`judgeDraftLife`
- *    의 `reviews` → 적재 `DRAFT_LIFE_REVIEW:<코드>` 경고)로 보낸다. 아래 「생활 일관성 게이트 넷」 참고.
+ * 🔴 **(quality-v25) Content Core가 유일한 차단 권위다.** 생활 일관성 결함은 `failures`로
+ *    적재 전에 끝낸다. `reviews`는 가족 건강 이야기의 주체를 확정할 수 없지만 글을
+ *    막을 이유는 아닌 경우에만 남는 비차단 관찰이다.
  * 🔴 순수 함수다. DB · 네트워크 · 파일 IO 없음.
  */
 import { readMediaDependency, CLOSING_RE } from './evidence'
 /** 🔴 KST 하루 경계의 정본 — 발행 일일 상한과 같은 함수다 */
 import { kstDayStart } from '../persona-cap'
-import { readFamilySpecifics } from './family-specifics'
+import { bandFits, readFamilyOwnership, readFamilySpecifics, type AgeShape } from './family-specifics'
 import { RELATION_NAMES } from './source-facts'
 /** 🔴 "다른 사람을 가리키는 말" 의 정본 — 여기서 목록을 다시 만들지 않는다 */
 import { OTHER_MARKERS } from '../persona-self-age'
 import type { PoolCard } from '../persona-pool-card'
 import { noGoHits } from '../persona-no-go'
+import { DRAFT_LIFE_ADVISORY_CODES } from '../semantic-summary-codes'
 import {
   CHILD_AGE_BANDS, judgeLifeHistory, readSelfChildBands, readSelfClaims,
   readClauseFrames, readSelfChildClauses,
-  type ChildAgeBand, type ClauseFrame, type PersonaForMatch, type PostRequirements, type SelfClaimAxis,
+  type ChildAgeBand, type ClauseFrame, type PersonaForMatch, type PostRequirements, type SelfClaim, type SelfClaimAxis,
 } from '../original-post-persona-match'
 
 /**
  * 🔴 **순서가 곧 대표 사유의 우선순위다** — 여럿이 걸리면 결과도 이 순서로 나온다.
  *    카드와 **어긋나는 사실**(C)이 가장 구체적이고, 자료 의존(A)은 글 자체가 성립하지 않으며,
- *    허가 없는 1인칭(B)은 계약 위반이다. 사람이 먼저 봐야 할 것부터 적는다.
+ *    허가 없는 1인칭(B)은 계약 위반이다. 우선 처리할 것부터 적는다.
  */
 export const DRAFT_GATE_CODES = [
   /** 🔴 카드의 지금 삶을 미래·과거로 말하거나 카드와 다른 지금 집안을 말한다 */
@@ -83,7 +84,7 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    지문이 바뀌었는데 판도 확인도 그대로면 막는다.
  */
 /**
- * 🔴 `draft-gates-v3.1` (2026-09-28) — 같은 날 시간 의존 문장도 사람 검토. 운영 v3 행이 0 이라 품질 계약 판 이름
+ * 🔴 `draft-gates-v3.1` (2026-09-28) — 같은 날 시간 의존 문장도 구조화 HOLD 경고. 운영 v3 행이 0 이라 품질 계약 판 이름
  *    (`quality-v3`)은 그대로 두고 이 값으로 digest 를 바꾼다(`check:quality-contract -- --revise`).
  */
 /**
@@ -106,12 +107,48 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    P29의 `noGoTopics=[자녀]`를 원천 배정은 글자 그대로만 비교해 `태아보험` 질문을 통과시켰고,
  *    초안 게이트는 소재를 보지 않아 자동 발행 뒤 감사에서 처음 잡혔다. 정본 `noGoHits` 하나를 배정과 초안이 함께 쓴다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v9'
+/**
+ * 🔴 `draft-gates-v11` (2026-10-20 · quality-v13) — **가족 주장의 뜻을 `family-specifics` 하나로 모은다.** 운영 D5 결함 —
+ *    성인 자녀만 둔 P16(`childrenAgeBands=[성인]`)이 `2살 아이 보험… 아이 거니까…` 를 자기 일로 써 v12 가 지나갔다. 세 틈을 닫는다:
+ *    ① 숫자 나이(0~18살 · `N개월`)를 정본 나이대로 읽는다(경계 나이는 이웃 나이대를 둘 다 허용 · `성인` 은 추측하지 않는다)
+ *    ② 소유 표지(`우리 아이` · `아이 거니까`)를 자기 가족 증거로 센다
+ *    ③ **물음표 · 묻는 어미가 1인칭 소유를 지우지 못한다** — 자기 가족 증거가 글에 있거나 `아이가 2살인데` 처럼 한 아이를 서술하면
+ *       묻는 문장이어도 자기 일이다. 증거도 서술도 없는 일반·제3자 물음(`2살 아이 보험 어떻게 하세요?`)은 그대로 통과한다.
+ *    카드의 자녀 나이대에 맞는 어린 아이(영유아 카드의 `2살 아이`)는 막지 않는다. 앞에 남이 선 말(`친구 아이가 2살`)도 막지 않는다.
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v12'
 
 /**
- * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
- *    **모호하면 사람 검토**로 보낸다. 모호한 것을 통과시키지 않는다 — 적재는 되지만
- *    `gateResults.holds` 에 `DRAFT_LIFE_REVIEW:<코드>` 가 붙어 **자동 READY 에서 빠진다.**
+ * 🔴 **창의 계약 분류** (quality-v12) — 창업자 승인 의미 경계.
+ *    각 클래스를 증명하는 반례·변이는 `scripts/quality-v12-creativity-mutation.mts` 에 있다.
+ *
+ *    ALLOW:
+ *      safeRhetorical         — 공감 반응 · 독자 질문 · 비유 · 연결 문장 · 새 구조 (원천 진실 불변)
+ *      personaSupported       — Persona 카드가 뒷받침하는 1인칭 서술
+ *      lowRiskTexture         — 고위험 사실 없는 Persona 적합 저위험 체험 결
+ *    BLOCK:
+ *      highRiskFact           — 카드·계획 미지원 고위험 사실 (배우자·자녀·건강·의료·돈·나이·장소)
+ *      thirdPartyFabrication  — 지어낸 제3자 사건·주장
+ *      sourceDistortion       — 원천 시간순서·결과·행위자·결론 왜곡
+ *      criticalOmission       — 이야기를 바꾸는 핵심 누락
+ *      truncatedMediaCompletion — 잘린 원문 또는 시각 자료에 의존한 완성
+ */
+export const CREATIVITY_BLOCK_CLASS = {
+  SAFE_RHETORICAL: 'safeRhetorical',
+  PERSONA_SUPPORTED: 'personaSupported',
+  LOW_RISK_TEXTURE: 'lowRiskTexture',
+  HIGH_RISK_FACT: 'highRiskFact',
+  THIRD_PARTY_FABRICATION: 'thirdPartyFabrication',
+  SOURCE_DISTORTION: 'sourceDistortion',
+  CRITICAL_OMISSION: 'criticalOmission',
+  TRUNCATED_MEDIA_COMPLETION: 'truncatedMediaCompletion',
+} as const
+export type CreativityBlockClass = (typeof CREATIVITY_BLOCK_CLASS)[keyof typeof CREATIVITY_BLOCK_CLASS]
+
+/**
+ * 🔴 **생활 일관성 게이트** — 초기 구현은 모호한 판정을 적재 후 `holds`로 다시 막았다.
+ *    quality-v25부터 차단은 Content Core `failures` 하나에서 끝낸다. 기존 review 분류는
+ *    확정 HOLD로 승격하고, 가족 건강 주체가 생략된 오탐 가능성만 비차단 관찰로 남긴다.
  *
  *    quality-v1 cohort 30건 중 중대 결함 4건이 게이트 전부와 의미 검수(모순 0 · 추가 0)를 지나갔다:
  *    ```
@@ -125,13 +162,12 @@ export const DRAFT_GATE_VERSION = 'draft-gates-v9'
 export const DRAFT_LIFE_REVIEW_CODES = [
   'maritalStatusConflict', 'careHouseholdConflict', 'childLifeStageConflict', 'unsupportedHealthClaim',
   /**
-   * 🔴 (quality-v3 · 2026-09-28) 원천·시점과 대조하는 넷 — 확정할 수 없으면 같은 사람 검토 경고로 간다.
-   *    경고 이름(`DRAFT_LIFE_REVIEW:<코드>`)은 v2 와 같다 — 적재기·자동 READY 가 이미 이 접두를 읽는다.
+   * 🔴 (quality-v3 · 2026-09-28) 원천·시점과 대조하는 넷. quality-v25부터 모호해도 Content Core가 HOLD한다.
    */
   'staleTimeClaim', 'externalCommunityClaim', 'mediaDependentDraft', 'truncatedSourceCompletion',
   /** 🔴 (v3) 계획이 `noLifeFactNeeded` 인데 자기 가족사를 명시해 말한다 — `selfBasis=null` 은 여전히 확정(AUTO_HOLD)이다 */
   'unwarrantedSelfClaim',
-  /** 🔴 (v4) 소프트 품질 — 확정하지 않는다(사람 검토로만) */
+  /** 🔴 (v4) 소프트 품질로 시작했지만 quality-v25부터 Content Core HOLD */
   'thinVentDraft',
 ] as const satisfies readonly DraftGateCode[]
 export type DraftLifeReviewCode = (typeof DRAFT_LIFE_REVIEW_CODES)[number]
@@ -159,6 +195,8 @@ export type DraftGatePlan = {
   selfBasis: string | null
   /** 🔴 `evidenceText` 는 코드가 원문에서 확인한 근거 문장이다(`verifySelfWarrants`) — 원문 근거는 이것뿐이다 */
   warrants: readonly { fact: string; evidenceText?: string }[]
+  /** 원문에서 검증된 원자 사실. 가족 건강 주체의 생략을 작성자 질병으로 오인하지 않는 근거로만 쓴다. */
+  protectedFacts?: readonly { text: string }[]
   /**
    * 🔴 (v4) 계획이 정한 마무리와 글의 역할 — 소프트 품질(`thinVentDraft`)만 읽는다. 없으면 판정하지 않는다.
    *    정본 `SpeakerPlan` · artifact `plan` 둘 다 이 칸을 가진다.
@@ -170,7 +208,7 @@ export type DraftGatePlan = {
 /**
  * 🔴 정본 카드에서 필요한 칸만 — v2 가 다시 정의하지 않는다.
  *    생활 일관성 칸(부부 관계 · 돌봄 · 갱년기 · noGo · 집안 구성)은 **없을 수 있다** — 없으면
- *    그 축에서 무엇이 걸렸을 때 통과시키지 않고 **사람 검토**로 보낸다(모르는 것 = 모호).
+ *    그 축에서 무엇이 걸렸을 때 통과시키지 않고 Content Core가 HOLD한다(모르는 것 = 모호).
  */
 export type DraftGateCard = Pick<PoolCard, 'childrenCount' | 'childrenAgeBands' | 'maritalStatus'>
   & Partial<Pick<PoolCard, 'spouseRelationship' | 'parentCare' | 'menopauseStatus' | 'noGoTopics' | 'noGoExpressions' | 'household' | 'ageBand'>>
@@ -188,6 +226,18 @@ const WARRANT_OF: Readonly<Record<SelfClaimAxis, readonly string[]>> = {
   work: ['work'],
   assets: [],
 }
+
+/**
+ * 🔴 (v12) `selfBasis=null` 시 별도 분류하던 저위험 축. quality-v25부터 차단이면 Content Core가 직접 HOLD한다.
+ *    직장에 관한 짧은 일반 경험은 저위험 결이다 — CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE.
+ *    부모 축은 원문을 옮긴 생략 주어(`부모님이…`)만 허용한다. `저희 부모님`처럼 명시적으로
+ *    Persona 자기 사실로 만든 문장은 배우자·자녀·돌봄·갱년기·자산과 함께 즉시 차단한다.
+ *    구체 사실이 없는 가족 유사 연결 표현("우리 집도 그래요")도 허용한다.
+ */
+const LOW_RISK_SELF_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['work'])
+const isLowRiskSelfClaim = (claim: SelfClaim): boolean =>
+  LOW_RISK_SELF_AXES.has(claim.axis)
+  || (claim.axis === 'parents' && claim.owner === 'elided' && /부모님/.test(claim.clause))
 
 /**
  * 🔴 **미래·과거로 말하는 절** — 절 안의 시간 틀만 본다. **조건·앞날을 여는 어미만** 넣는다.
@@ -219,8 +269,8 @@ const isTopicFrame = (w: string): boolean =>
 const OWNER_OPTS = { isFrameWord: isTopicFrame } as const
 
 /**
- * 🔴 **확정 게이트 전부를 한 번에**(v1 셋 + v2 생활 일관성의 확정 모순). 빈 배열이면 통과다.
- *    모호(사람 검토)까지 받으려면 `judgeDraftLife` 를 부른다.
+ * 🔴 **차단 게이트 전부를 한 번에**. 빈 배열이면 차단 없음이다.
+ *    비차단 advisory까지 받으려면 `judgeDraftLife`를 부른다.
  *    `plan` 이 없으면 B 를, `card` 가 없으면 C 를 **판정하지 않는다** — 모르는 것을
  *    결함으로 세지 않는다. 카드를 못 찾은 경우는 나이 판정(`judgeSelfAgeBasis`)이 이미 막는다.
  */
@@ -243,7 +293,7 @@ export type DraftGateInput = {
 /**
  * 🔴 **초안 밖에서 가져오는 사실** — 원천 글과 판정 시각. 모르는 것은 `null` 이다(지어내지 않는다).
  *    `source` 가 `null` 이면 원천을 모른다 — 시점·자료·잘림·출처 축에서 무엇이 걸렸을 때
- *    통과시키지 않고 **사람 검토**로 보낸다.
+ *    통과시키지 않고 Content Core가 HOLD한다.
  */
 export type DraftGateContext = {
   /** 🔴 판정 시각 — 회차 시각(`RUN_AT`)이다. 벽시계를 따로 읽지 않는다 */
@@ -267,13 +317,12 @@ export type DraftGateSource = {
 }
 
 /**
- * 🔴 **초안 게이트 전부 — 확정(`failures`)과 사람 검토(`reviews`)를 함께 낸다** (2026-09-28).
- *    `failures` 가 하나라도 있으면 채택하지 않는다(AUTO_HOLD). `reviews` 는 채택은 되지만
- *    자동 READY 에서 빠지는 경고다 — 🔴 **모호한 것을 통과로 뭉개지 않는다.**
- *    같은 코드가 둘 다에 있으면 `failures` 만 남긴다.
+ * 🔴 **초안 게이트 전부**. `failures`가 하나라도 있으면 AUTO_HOLD다.
+ *    legacy 호환 이름인 `reviews`에는 Content Core가 ADOPT한 비차단 관찰만 남는다.
+ *    그 외 기존 review 분류는 여기서 `failures`로 승격해 뒷단이 품질을 다시 판정하지 않게 한다.
  */
 export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFailure[]; reviews: DraftLifeReview[] } {
-  const failures = judgeCoreGates(input)
+  const core = judgeCoreGates(input)
   const life = input.card === null ? { hard: [], review: [] } : judgeLifeConsistency(input.title, input.body, input.plan, input.card)
   const ctx = judgeSourceContext(input.title, input.body, input.context)
   const basis = [
@@ -291,18 +340,31 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
   const nogoHits = [...nogo.topics.map(() => 'topic'), ...nogo.expressions.map(() => 'expression'), ...nogo.common]
   const nogoFail: DraftGateFailure[] = nogoHits.length === 0 ? []
     : [{ code: 'personaNoGo', detail: [...new Set(nogoHits.map((h) => h.replace(/^phrase:.*/, 'phrase')))].join('·') }]
-  const all = [...failures, ...life.hard, ...ctx.hard, ...nogoFail]
+  const soft = [...core.reviews, ...life.review, ...ctx.review, ...basis]
+  const advisoryCodes = new Set<string>(DRAFT_LIFE_ADVISORY_CODES)
+  const promoted = soft.filter((r) => !advisoryCodes.has(r.code))
+  const all = [...core.failures, ...life.hard, ...ctx.hard, ...nogoFail, ...promoted]
   const rank = (c: DraftGateCode): number => DRAFT_GATE_CODES.indexOf(c)
   const hardCodes = new Set(all.map((f) => f.code))
+  const dedupe = <T extends { code: DraftGateCode; detail: string }>(items: readonly T[]): T[] => {
+    const by = new Map<T['code'], string[]>()
+    for (const item of items) by.set(item.code, [...(by.get(item.code) ?? []), item.detail])
+    return [...by].map(([code, details]) => ({
+      code,
+      detail: [...new Set(details)].slice(0, 3).join(' / '),
+    } as T))
+  }
   return {
-    failures: [...all].sort((a, b) => rank(a.code) - rank(b.code)),
-    reviews: [...life.review, ...ctx.review, ...basis]
-      .filter((r) => !hardCodes.has(r.code)).sort((a, b) => rank(a.code) - rank(b.code)),
+    failures: dedupe(all).sort((a, b) => rank(a.code) - rank(b.code)),
+    // legacy 이름은 봉투 호환 때문에 유지한다. 현재는 Content Core가 채택한 비차단 관찰만 싣는다.
+    reviews: dedupe(soft.filter((r) => advisoryCodes.has(r.code) && !hardCodes.has(r.code)))
+      .sort((a, b) => rank(a.code) - rank(b.code)),
   }
 }
 
-function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
+function judgeCoreGates(input: DraftGateInput): { failures: DraftGateFailure[]; reviews: DraftLifeReview[] } {
   const out: DraftGateFailure[] = []
+  const coreReviews: DraftLifeReview[] = []
   const { title, body } = input
 
   // ── A. 자료 의존 — 우리 글에는 사진·첨부가 없다 ──
@@ -313,19 +375,18 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
 
   // ── B. 1인칭 허가 없이 자기 생활사 ──
   /**
-   * 🔴 **`selfBasis=null` 일 때만** 막는다 — 계획이 "1인칭이 아닌 자리" 를 골랐다는 뜻이다
-   *    (`STANCE_LABEL`: 관찰·질문·생각은 *겪었다고 말하지 않는다*). 그 자리에서 자기 남편·
-   *    부모·자녀를 사실로 말하면 **카드로 검증받지 않은 생활사**가 된다.
-   *    🔴 `lifeFacts` 의 허가 밖 주장은 여기서 세지 않는다 — 카드 모순은 C 와 의미 검수가 본다.
-   *    🔴 (quality-v3) 축 낱말 없이 글의 사정을 통째로 자기 집안 일로 두는 말(`우리 집도 그래요`)도 센다.
-   *       `noLifeFactNeeded` 는 여기가 아니라 `judgeNoLifeFactClaims`(사람 검토)가 본다.
+   * 🔴 **`selfBasis=null` 일 때만** 막는다 — 계획이 "1인칭이 아닌 자리" 를 골랐다는 뜻이다.
+   *    🔴 (v12) **고위험 축만** 즉시 차단한다 — `LOW_RISK_SELF_AXES`(work)와 구체 사실 없는 가족 유사
+   *       연결 표현("우리 집도 그래요")은 Persona 에게 자연스러운 저위험 결(CREATIVITY_BLOCK_CLASS.LOW_RISK_TEXTURE)이다.
+   *       카드 모순은 C 게이트·생활 일관성이 따로 본다.
    */
   const claims = readSelfClaims(title, body, OWNER_OPTS)
   if (input.plan !== null && input.plan.selfBasis === null) {
     const warranted = new Set(input.plan.warrants.map((w) => w.fact))
-    const bad: { axis: string; clause: string }[] = claims
+    const badAll = claims
       .filter((c) => !WARRANT_OF[c.axis].some((f) => warranted.has(f)))
-    bad.push(...readSelfFamilyLikeTopic(title, body).map((clause) => ({ axis: 'family', clause })))
+    // 🔴 (v12) 고위험 축(배우자·자녀·돌봄·갱년기·자산) → 즉시 차단
+    const bad = badAll.filter((c) => !isLowRiskSelfClaim(c))
     if (bad.length > 0) {
       const axes = [...new Set(bad.map((c) => c.axis))]
       out.push({
@@ -413,7 +474,10 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
     }
   }
   // 🔴 정본 순서로 돌려준다 — 계산 순서가 아니라 `DRAFT_GATE_CODES` 가 대표 사유를 정한다
-  return [...out].sort((a, b) => DRAFT_GATE_CODES.indexOf(a.code) - DRAFT_GATE_CODES.indexOf(b.code))
+  return {
+    failures: [...out].sort((a, b) => DRAFT_GATE_CODES.indexOf(a.code) - DRAFT_GATE_CODES.indexOf(b.code)),
+    reviews: coreReviews,
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -513,13 +577,15 @@ const personSubject = (clause: string, counterpart: readonly string[]): 'self' |
  */
 const firstPersonNow = (
   frames: readonly ClauseFrame[], i: number, at: number, counterpart: readonly string[],
-  /** 🔴 (draft-gates-v8) 시점과 무관한 사실(자녀 수)은 지난 일로 말해도 그 사람의 일이다 — 시점으로 빼지 않는다 */
-  o: { anyTime?: boolean } = {},
+  /** 🔴 (draft-gates-v8) 시점과 무관한 사실(자녀 수)은 지난 일로 말해도 그 사람의 일이다 — 시점으로 빼지 않는다
+   *  🔴 (v11) `askOk` — 묻는 어미(`…할까요`)로 끝나는 문장이어도 1인칭으로 읽는다(자기 가족 증거를 부른 쪽이 확인했을 때만)
+   *     `fragmentOk` — 서술 어미가 없는 말줄임 토막(`2살 아이 보험...`)도 센다(같은 글에 자기 가족 증거가 있을 때만) */
+  o: { anyTime?: boolean; askOk?: boolean; fragmentOk?: boolean } = {},
 ): boolean => {
   const f = frames[i]!
   if (f.general) return false
   const c = f.clause
-  if (!isPredicate(c)) return false
+  if (o.fragmentOk !== true && !isPredicate(c)) return false
   if (REPORTED_RE.test(c)) return false
   const before = c.slice(0, at)
   const after = c.slice(at)
@@ -535,7 +601,8 @@ const firstPersonNow = (
   }
   // 🔴 문장 끝이 전언이면 앞 절의 사건도 들은 말이다
   const last = [...frames].reverse().find((x) => x.sentence === f.sentence)
-  if (last !== undefined && (REPORTED_RE.test(last.clause) || QUESTION_END_RE.test(last.clause))) return false
+  //    🔴 (v11) 묻는 어미는 호출자가 자기 가족 증거를 따로 확인했을 때(`askOk`) 1인칭을 지우지 못한다 — 전언은 여전히 남의 말이다
+  if (last !== undefined && (REPORTED_RE.test(last.clause) || (o.askOk !== true && QUESTION_END_RE.test(last.clause)))) return false
   return subj !== 'other'
 }
 
@@ -561,7 +628,7 @@ function judgeMarital(frames: readonly ClauseFrame[], card: DraftGateCard): Life
     const rel = (card.spouseRelationship ?? '').trim()
     /**
      * 🔴 사별·비혼 · 기혼(원만) 은 확정 모순이다. 기혼(갈등·소원) · 관계 미상 · 모르는 혼인 상태는
-     *    이혼 이야기가 나올 수는 있는 집이라 확정할 수 없다 → 사람 검토(통과가 아니다).
+     *    이혼 이야기가 나올 수는 있는 집이라 확정할 수 없다 → Content Core HOLD(통과가 아니다).
      */
     const level: 'hard' | 'review' = m === '사별' || m === '비혼' || (m === '기혼' && rel === '원만')
       ? 'hard' : 'review'
@@ -572,7 +639,7 @@ function judgeMarital(frames: readonly ClauseFrame[], card: DraftGateCard): Life
 
 /**
  * 🔴 (v4 · 창업자 gold #5) **결혼 전 연애 단계를 자기 일로** — `연상연하 커플인데요 … 남친의 누나 … 나중에 결혼하면`.
- *    50·60대 화자나 기혼 카드가 말하면 우리 또래 화자로 읽히지 않는다. 재혼·연애는 있을 수 있어 **사람 검토**다.
+ *    50·60대 화자나 기혼 카드가 말하면 우리 또래 화자로 읽히지 않는다. 재혼·연애는 있을 수 있어 Content Core HOLD다.
  *    🔴 남의 일(`딸이 남친을 데려왔어요`) · 전언 · 묻는 문장은 걸리지 않는다(정본 1인칭 판정).
  */
 const DATING_SELF_RE =
@@ -647,7 +714,8 @@ const MENTAL_WORSE_RE = /(?:우울|불안)[가-힣\s]{0,12}(?:심해|악화|더�
 const ILLNESS_RE =
   /암\s*(?:진단|수술|판정|이래|이라)|항암|입원(?:했|해|하|중)|수술(?:을|도)?\s*(?:받|했|하)|진단(?:을|도)?\s*받|당뇨|고혈압|갑상선|류마티스|대상포진/
 const MENO_CONTEXT_RE = /갱년기|폐경|호르몬|안면홍조|열감/
-const HEALTH_NOGO_RE = /병명|병원|약/
+const HEALTH_TOPIC_RE = /질병|진단|검사|결절|수술|입원|치료|병원|정신과|우울|불안|공황|당뇨|고혈압|갑상선|류마티스|대상포진/
+export const FAMILY_HEALTH_TITLE_SUBJECT_MARKERS = ['아이', '자녀', '아기', '학생'] as const
 
 /** 🔴 계획이 코드로 확인한 근거 문장에 같은 말이 있는가 — 원문 근거는 이것뿐이다 */
 const warranted = (plan: DraftGatePlan | null, token: string): boolean => {
@@ -656,26 +724,35 @@ const warranted = (plan: DraftGatePlan | null, token: string): boolean => {
   return plan.warrants.some((w) => (w.evidenceText ?? '').replace(/\s+/g, '').includes(stem))
 }
 
-function judgeHealth(frames: readonly ClauseFrame[], plan: DraftGatePlan | null, card: DraftGateCard): LifeHit[] {
+const protectedByPlan = (plan: DraftGatePlan | null, token: string): boolean => {
+  if (plan === null || plan.selfBasis !== 'lifeFacts') return false
+  const stem = token.replace(/\s+/g, '').slice(0, 2)
+  return stem.length === 2 && (plan.protectedFacts ?? [])
+    .some((fact) => fact.text.replace(/\s+/g, '').includes(stem))
+}
+
+function judgeHealth(title: string, frames: readonly ClauseFrame[], plan: DraftGatePlan | null, card: DraftGateCard): LifeHit[] {
   const out: LifeHit[] = []
   const menoOk = ['진행중', '후'].includes((card.menopauseStatus ?? '').trim())
-  const noGoHealth = (card.noGoTopics ?? []).some((t) => HEALTH_NOGO_RE.test(t))
+  const titleHasOtherHealthSubject = HEALTH_TOPIC_RE.test(title)
+    && (PERSON_WORDS.some((marker) => title.includes(marker))
+      || FAMILY_HEALTH_TITLE_SUBJECT_MARKERS.some((marker) => title.includes(marker)))
   frames.forEach((f, i) => {
     const clinical = firstAt(f.clause, MENTAL_CLINICAL_RE)
     const worse = firstAt(f.clause, MENTAL_WORSE_RE)
     const ill = firstAt(f.clause, ILLNESS_RE)
     const hit = clinical ?? worse ?? ill
     if (hit === null || !firstPersonNow(frames, i, hit.at, [])) return
+    const explicitSelf = personSubject(f.clause, []) === 'self'
     // 🔴 카드가 뒷받침한다 — 갱년기를 겪는 사람의 갱년기 증상
     if (menoOk && MENO_CONTEXT_RE.test(f.clause)) return
     // 🔴 계획이 원문 근거로 허가했다
     if (warranted(plan, hit.token)) return
-    // 🔴 절 안에 다른 사람이 있으면(`엄마 모시고 정신과`) 누구 진료인지 확정할 수 없다 → 사람
+    // 가족 건강 사실은 검증된 원자 사실과 같은 경우만 통과한다. 명시적인 작성자 질병에는 이 우회를 쓰지 않는다.
+    if (!explicitSelf && protectedByPlan(plan, hit.token)) return
+    // 절 안에 가족이 있으면 누구 진료인지 확정할 수 없다. Content Core 채택 뒤 참고 관찰만 남긴다.
     const someoneElse = f.clause.split(/\s+/).some((w) => otherIn(w, []))
-    const level: 'hard' | 'review' = someoneElse ? 'review'
-      : clinical !== null ? 'hard'
-        : ill !== null && noGoHealth ? 'hard'
-          : 'review'
+    const level: 'hard' | 'review' = !explicitSelf && (someoneElse || titleHasOtherHealthSubject) ? 'review' : 'hard'
     out.push({ code: 'unsupportedHealthClaim', level, detail: `"${hit.token}" · 카드·계획 근거 없음 · "${f.clause}"` })
   })
   return out
@@ -730,7 +807,8 @@ function judgeChildren(
     // 🔴 지난 일·앞날은 지금 삶의 주장이 아니다(C 게이트와 같은 시간 틀)
     if (PAST_FRAME_RE.test(c) || PAST_CUE_RE.test(c)) continue
     const future = FUTURE_FRAME_RE.test(c)
-    if (!isPredicate(c) || REPORTED_RE.test(c) || CONDITIONAL_RE.test(c) || QUESTION_END_RE.test(c)) continue
+    // 🔴 (v11) 묻는 어미라도 명시적 1인칭(`우리 딸이 … 했는데 어쩌죠`)은 자기 자녀의 일이다 — 생략된 임자만 묻는 말로 보고 건너뛴다
+    if (!isPredicate(c) || REPORTED_RE.test(c) || CONDITIONAL_RE.test(c) || (QUESTION_END_RE.test(c) && k.owner !== 'explicit')) continue
     if (bands.length === 0) {
       if (MONEY_RE.test(c) || CHILD_JOB_RE.test(c) || MILITARY_RE.test(c) || WEDDING_RE.test(c) || CHILD_APART_RE.test(c)) {
         push('review', '카드 자녀 나이대 미상', c)
@@ -755,11 +833,24 @@ function judgeChildren(
   }
   // ── (quality-v4 · 2026-09-28 창업자 gold #4 · #10 · #28) 카드의 자녀 수 · 나이와 초안의 숫자·행동 ──
   /**
+   * 🔴 (v11) **묻는 문장의 1인칭** — 물음표만 걷어 다시 읽은 절 틀(`declFrames`). 정본 틀은 `?` 로 끝난 문장을 통째로 세상 이야기로
+   *    돌려 `우리 아이 2살인데 … 어떡할까요?` 의 소유를 지웠다. 걷은 틀은 `다들` · `분들` 같은 **낱말** 세상 이야기 틀만 남는다
+   *    (문장·절 경계는 `?` 를 `.` 로 바꿔도 같다). 길이가 어긋나면 쓰지 않는다.
+   */
+  const unask = (t: string): string => t.replace(/[?？]/g, '.')
+  const reread = readClauseFrames(unask(title), unask(body), OWNER_OPTS)
+  const declFrames = reread.length === frames.length ? reread : frames
+  /** 🔴 글 어딘가에 자기 가족 소유 표지(`우리 아이` · `아이 거니까`)가 있다 — 남의 것 · 전언 · 세상 이야기가 아닐 때만 */
+  const owned = declFrames.some((f, k) => {
+    const own = readFamilyOwnership(f.clause)
+    return own !== null && firstPersonNow(declFrames, k, own.at, KID_ONLY_WORDS, { anyTime: true, askOk: true, fragmentOk: true })
+  })
+  /**
    * 🔴 **이 글이 글쓴이 자기 자녀 이야기인가** — 정본 자녀 절(`readSelfChildClauses`) 또는 계획이 원문 근거로
    *    **자녀를 허가**했다(`lifeFacts` · `children`/`childAgeBand` 근거). 조사 없는 `좋아 죽겠다는 딸` 은 정본 절이
    *    세지 않지만 계획은 이미 "내 딸" 로 썼다(창업자 gold #28).
    */
-  const ownChildPost = kids.length > 0 || (plan?.selfBasis === 'lifeFacts'
+  const ownChildPost = kids.length > 0 || owned || (plan?.selfBasis === 'lifeFacts'
     && plan.warrants.some((w) => w.fact === 'children' || w.fact === 'childAgeBand'))
   const minAges = bands.map((b) => BAND_MIN_AGE[b]).filter((n): n is number => n !== undefined)
   const youngest = minAges.length === 0 ? null : Math.min(...minAges)
@@ -778,14 +869,20 @@ function judgeChildren(
     if (!QUOTED_END_RE.test(c) && !QUOTED_END_RE.test(sentenceEnd)) {
       const fam = readFamilySpecifics(c)
       // 🔴 상대 낱말은 **자녀만** — `남편` 을 넣으면 `친구 남편이 … 초1 아이` 의 남편을 내 쪽 주어로 읽는다
-      const self = (at: number): boolean => firstPersonNow(frames, i, at, KID_ONLY_WORDS, { anyTime: true })
+      //    🔴 (v11) 묻는 문장은 자기 가족 증거가 있거나(`owned`) 한 아이를 서술했을 때(`predicative` — `아이가 2살인데`)만 자기 일로 센다.
+      //       수식형 숫자 나이(`2살 아이` · `1살 아기`)는 누구의 아이든 쓰는 말이라 증거가 있을 때만 자기 일이다(손주 · 남의 아이를 막지 않는다)
+      const self = (at: number, shape: AgeShape = 'word'): boolean => {
+        const asked = (): boolean => firstPersonNow(declFrames, i, at, KID_ONLY_WORDS, { anyTime: true, askOk: true, fragmentOk: true })
+        if (shape === 'attributive') return owned && asked()
+        return firstPersonNow(frames, i, at, KID_ONLY_WORDS, { anyTime: true }) || ((owned || shape === 'predicative') && asked())
+      }
       if (fam.count !== null && fam.count.n > card.childrenCount && self(fam.count.at)) {
         push('hard', `카드는 자녀 ${card.childrenCount}명인데 "${fam.count.token}"`, c)
       } else if (fam.gender !== null && self(fam.gender.at)) {
         push('hard', `카드에 없는 자녀 성별 "${fam.gender.token}"`, c)
       }
       for (const bd of fam.bands) {
-        if (!bands.includes(bd.band as ChildAgeBand) && self(bd.at)) push('hard', `카드에 없는 자녀 나이대 "${bd.token}"(${bd.band})`, c)
+        if (!bandFits(bd, bands) && self(bd.at, bd.shape)) push('hard', `카드에 없는 자녀 나이대 "${bd.token}"(${bd.anyOf.join('|')})`, c)
       }
     }
     // ⑧ 결혼 햇수 — 가장 큰 아이가 결혼보다 먼저 태어났다
@@ -841,7 +938,7 @@ export function judgeLifeConsistency(
     ...judgeDatingStage(frames, card),
     ...judgeCare(frames, all, card),
     ...judgeChildren(title, body, frames, card, plan),
-    ...judgeHealth(frames, plan, card),
+    ...judgeHealth(title, frames, plan, card),
   ]
   const fold = (level: 'hard' | 'review'): DraftLifeReview[] => {
     const by = new Map<DraftLifeReviewCode, string[]>()
@@ -868,8 +965,7 @@ export function judgeLifeConsistency(
 //    ```
 // 🔴 **낱말 하나로 막지 않는다.** 네 축 모두 **초안의 모양 + 원천의 사실(시각 · 사이트 · 사진 수 · 끝맺음)**
 //    둘이 함께 있을 때만 걸린다. `요즘` · `이번에` · `오늘` 만으로는 걸리지 않는다.
-// 🔴 **확정할 수 있을 때만 막는다(AUTO_HOLD).** 원천 사실을 모르거나 해석이 둘이면 사람 검토다 —
-//    통과시키지 않는다.
+// 🔴 원천 사실을 모르거나 해석이 둘이어도 Content Core가 HOLD한다.
 
 /**
  * 🔴 **"우리 집도/만 그렇다"** — 축 낱말(남편 · 부모 …) 없이 글의 사정을 통째로 자기 집안 사실로 둔다.
@@ -885,24 +981,23 @@ function readSelfFamilyLikeTopic(title: string, body: string): string[] {
 }
 
 /**
- * 🔴 **`noLifeFactNeeded` 계획의 자기 가족사** (2026-09-28 quality-v3 · cohort #19) — 사람 검토.
+ * 🔴 **`noLifeFactNeeded` 계획의 자기 가족사** (2026-09-28 quality-v3 · cohort #19) — Content Core HOLD.
  *    계획이 "생활사 없이 쓰는 보편 감정 글" 이라고 정했는데 초안이 `우리 집만 그런 게 아니었구나` 로
  *    자기 집안 사정을 사실로 뒀다. 생활사가 필요 없다고 한 계획은 **허가가 아니다**(근거도 비어 있다).
- *    🔴 확정(AUTO_HOLD)으로 두지 않는다 — 카드가 그 사실을 뒷받침할 수도 있다(P08 은 성인 자녀 둘이 있다).
- *       카드와 **어긋나면** C 게이트 · 생활 일관성 게이트가 따로 막는다.
+ *    카드가 사실을 뒷받침할 수 있어도 계획 근거가 없으면 Content Core가 HOLD한다.
  *    🔴 가족 축(배우자 · 자녀 · 부모 · 돌봄)만, 그리고 **명시된 1인칭**(`우리 남편` · `저희 애들`)만 센다 —
  *       생략된 1인칭은 일반론(`친정이나 처가는 친정댁이라고 안 부르잖아요` · cohort #26)까지 잡는다.
  *       집 · 일(`저희 아파트는` · cohort #12)은 가족사가 아니다.
  */
 /**
  * 🔴 정본 파서는 `친정` 을 낱말 자체로 '내 것' 으로 읽는다 — 호칭 이야기(`친정이나 처가는 …`)까지 명시로 센다.
- *    사람 검토로 보내는 자리라 **1인칭 한정사가 절에 실제로 있을 때만** 센다.
+ *    Content Core HOLD로 보내는 자리라 **1인칭 한정사가 절에 실제로 있을 때만** 센다.
  */
 const SELF_OWNER_WORD_RE = /(?<![가-힣])(?:우리|저희|울|제|내)\s?[가-힣]/
 const FAMILY_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['spouse', 'children', 'parents', 'parentCare'])
 /**
  * 🔴 (v4 · 창업자 gold #16) **1인칭 금융 행동** — `보험 싹 리모델링해서 바꿨거든요`. 계획이 생활사를 허가하지 않았는데
- *    자기 돈·계약 사정을 사실로 둔다. 소재(보험 영업 연락)는 좋다 — 막지 않고 사람 검토(질문형 최소 수정)로 보낸다.
+ *    자기 돈·계약 사정을 사실로 둔다. 소재(보험 영업 연락)는 좋지만 근거 없는 사실이면 Content Core가 HOLD한다.
  *    🔴 묻는 문장 · 전언 · 남의 일은 걸리지 않는다.
  */
 const FINANCE_SELF_RE =
@@ -921,7 +1016,7 @@ function judgeFinanceSelf(title: string, body: string, plan: DraftGatePlan | nul
 /**
  * 🔴 (v4 · 창업자 gold #1 · 소프트 품질) **받아칠 거리가 없는 하소연.** 계획 스스로 마무리를 `vent` 로,
  *    역할을 대화 촉발(`conversationSpark`) **하나만** 골랐고(공감 경험 · 쓸 만한 답 · 발견 없음) 묻는 말도 없다.
- *    🔴 확정하지 않는다 — 사람 검토다. 공감 역할이 있는 하소연(`experienceResonance`)이나 묻는 글은 걸리지 않는다.
+ *    공감 역할이 있는 하소연(`experienceResonance`)이나 묻는 글은 걸리지 않고, 나머지는 Content Core가 HOLD한다.
  *    🔴 계획에 이 칸이 없으면 판정하지 않는다(소프트 신호라 모름을 결함으로 세지 않는다).
  */
 function judgeThinVent(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
@@ -1025,7 +1120,6 @@ function judgeNoLifeFactClaims(title: string, body: string, plan: DraftGatePlan 
     ...readSelfClaims(title, body, OWNER_OPTS)
       .filter((c) => FAMILY_AXES.has(c.axis) && c.owner === 'explicit' && SELF_OWNER_WORD_RE.test(c.clause))
       .map((c) => c.clause),
-    ...readSelfFamilyLikeTopic(title, body),
   ]
   if (clauses.length === 0) return finReview
   return [...finReview, { code: 'unwarrantedSelfClaim', detail: `계획 noLifeFactNeeded · 자기 가족사 — ${[...new Set(clauses)].slice(0, 3).join(' / ')}` }]
@@ -1129,14 +1223,14 @@ function judgeStaleTime(frames: readonly ClauseFrame[], ctx: DraftGateContext): 
   /**
    * 🔴 **같은 날이어도 통과시키지 않는다** (2026-09-28 마스터 재리뷰). 초안이 발행되는 시각은 판정 시각이
    *    아니다 — `지금 콘서트 보는 중` · `오늘 추석 음식 만드는 중` 은 몇 시간 뒤에도 틀린다. 발행 신선도(TTL)에
-   *    맡기지 않는다. 같은 날 · 시각 모름은 사람 검토, 앞 날짜의 강한 실시간 주장만 확정(AUTO_HOLD)이다.
+   *    맡기지 않는다. 같은 날 · 시각 모름도 Content Core HOLD, 앞 날짜의 강한 실시간 주장도 AUTO_HOLD다.
    *    회고 · 시간 표현이 없는 글은 `readTimeClaims` 에서 이미 걸리지 않는다.
    */
   const posted = ctx.source?.postedAt?.toISOString() ?? '미상'
   const when = day === 'before' ? '앞 날짜' : day === 'same' ? '같은 날' : '시각 미상'
   return claims.map((t) => ({
     code: 'staleTimeClaim' as const,
-    // 🔴 원문이 앞 날짜인데 "지금 ○○ 중" 이다 — 확정. 인사·계획·날짜 말은 명절이 아직일 수 있다 → 사람
+    // 🔴 원문이 앞 날짜인데 "지금 ○○ 중" 이다 — 확정. 인사·계획·날짜 말도 모호하면 Content Core HOLD다.
     level: t.strong && day === 'before' ? 'hard' as const : 'review' as const,
     detail: `원문 ${when}(posted ${posted}) · ${t.strong ? '지금·하는 중' : '날짜·인사·계획'} · "${t.clause}"`,
   }))
@@ -1197,7 +1291,7 @@ function judgeLookAsk(title: string, body: string, ctx: DraftGateContext): LifeH
   const images = ctx.source?.imageCount ?? null
   return [{
     code: 'mediaDependentDraft',
-    // 🔴 원천에 사진이 **실제로 있었다** — 그 사진을 봐 달라는 글이다(확정). 모르면 사람이 본다
+    // 🔴 원천에 사진이 **실제로 있었다** — 그 사진을 봐 달라는 글이다(확정). 모르면 Content Core가 차단한다.
     level: images !== null && images > 0 ? 'hard' : 'review',
     detail: `원천 사진 ${images !== null && images > 0 ? `${images}장` : '미상'} · 우리 글엔 사진이 없다 · "${ask}"`,
   }]

@@ -39,8 +39,104 @@ export const ORIGINAL_POST_FLAGS = {
   status: 'PUBLISHED',
 } as const
 
-/** 🔴 이 레인은 자유게시판에만 나간다 */
+/**
+ * 🔴 **게시판은 글의 중심 주제로 정한다** (2026-10-19 창업자 결정).
+ *    MENOPAUSE: 갱년기/폐경/호르몬 변화 그 자체 또는 그와 직접 묶인 생활·관계·치료 경험.
+ *    FREE: 그 밖. 단순 언급(지나가듯 한 번 나온 '갱년기')은 FREE 다.
+ *
+ *    🔴 신호 전달 경로 — 세 자리를 하나로 묶는다 (dead gate 가 되지 않도록 publish tx 가 실제로 읽는다):
+ *      ① semantic judge 가 `boardTopic: 'MENOPAUSE'|'FREE'` 를 낸다 (`parseSemantic` 강제 enum).
+ *      ② `buildQueuePayload` 가 `gateResults.autoJudge.boardTopic` 한 칸에 봉인한다.
+ *      ③ `original-post-publish-tx` 가 queue row 의 `gateResults` 를 읽어 `routeBoardType()`
+ *         으로 FREE/MENOPAUSE 를 정한다. 🔴 **tx 경계에서만** boardType 이 정해진다 —
+ *         `buildOriginalPostData` 의 `boardType` 입력 자체는 타입상 받을 수 있지만, 운영 경로는
+ *         tx 가 저장된 신뢰 경계(gateResults.autoJudge)만 읽는다. 다른 호출자가 임의 값을 넣는
+ *         경로를 열지 않는 것은 **운영 호출 규율** (tx 를 거치지 않는 발행 경로를 만들지 않는 것) 이다.
+ *
+ *    🔴 legacy row 는 `autoJudge` 칸이 없거나, 실제 운영했던 `auto-judge-v3` 일 때만 FREE 로 유지한다.
+ *       칸이 있는데 null/malformed/unknown/future 판이면 publish 0 이다.
+ *    🔴 current row 가 boardTopic 결여/invalid 면 publish 0 (`AUTO_READY_RECHECK`).
+ *
+ *    `ORIGINAL_POST_BOARD` 는 legacy 기본값일 뿐이다. 실제 라우팅은 `routeBoardType` 하나다.
+ */
 export const ORIGINAL_POST_BOARD = 'FREE'
+
+/** 🔴 허용되는 boardType — 둘 뿐. buildOriginalPostData 의 입력도 이 enum 을 지켜야 한다 */
+export const ALLOWED_BOARD_TYPES = ['FREE', 'MENOPAUSE'] as const
+export type AllowedBoardType = (typeof ALLOWED_BOARD_TYPES)[number]
+
+/**
+ * 🔴 **알려진 옛 판정 상수** (2026-10-19). 실제 운영에 돌았던 판만 FREE legacy 로 통과시킨다.
+ *    unknown · 미래 판 · malformed 는 legacy 가 아니라 **신뢰 경계를 통과한 적 없는** 것이다 → fail-closed.
+ *    이 목록은 과거 상수 기록이지 미래로 열지 않는다.
+ */
+export const KNOWN_LEGACY_AUTO_JUDGE_RULE_VERSIONS: readonly string[] = [
+  'auto-judge-v3',
+]
+
+/** 🔴 autoJudge provenance 의 상태 — 호출부가 조건을 재구현하지 않도록 명시한다 */
+export type AutoJudgeRuleState = 'current' | 'known-legacy' | 'absent' | 'unknown'
+
+export type AutoJudgeExtract = {
+  present: boolean
+  ruleVersion: string | null
+  state: AutoJudgeRuleState
+  boardTopic: unknown
+}
+
+/**
+ * 🔴 **gateResults.autoJudge 를 안전하게 읽어 presence/state 를 명시해 돌려준다**.
+ *    publish tx 가 queue row 의 저장 값만 읽어 라우팅하도록 하는 유일한 추출 지점이다.
+ *    - autoJudge 칸 자체 부재 → `absent` (legacy FREE)
+ *    - 칸 있고 ruleVersion 이 current → `current`
+ *    - 칸 있고 ruleVersion 이 KNOWN_LEGACY_AUTO_JUDGE_RULE_VERSIONS 중 하나 → `known-legacy`
+ *    - 칸 있지만 ruleVersion 결여/malformed/미래/모르는 값 → `unknown` (fail-closed)
+ */
+export function readAutoJudgeFromGateResults(gateResults: unknown, opts: {
+  currentRuleVersion: string
+  knownLegacy?: readonly string[]
+} = { currentRuleVersion: '' }): AutoJudgeExtract {
+  const known = opts.knownLegacy ?? KNOWN_LEGACY_AUTO_JUDGE_RULE_VERSIONS
+  if (gateResults === null || typeof gateResults !== 'object' || Array.isArray(gateResults)) {
+    return { present: false, ruleVersion: null, state: 'absent', boardTopic: null }
+  }
+  const record = gateResults as Record<string, unknown>
+  if (!Object.prototype.hasOwnProperty.call(record, 'autoJudge')) {
+    return { present: false, ruleVersion: null, state: 'absent', boardTopic: null }
+  }
+  const aj = record.autoJudge
+  if (aj === null || typeof aj !== 'object' || Array.isArray(aj)) {
+    // malformed — present 지만 shape 가 깨졌다
+    return { present: true, ruleVersion: null, state: 'unknown', boardTopic: null }
+  }
+  const o = aj as Record<string, unknown>
+  const rvRaw = o.ruleVersion
+  const rv = typeof rvRaw === 'string' && rvRaw.trim() !== '' ? rvRaw.trim() : null
+  let state: AutoJudgeRuleState
+  if (rv === null) state = 'unknown' // 칸은 있는데 ruleVersion 결여/malformed
+  else if (rv === opts.currentRuleVersion.trim()) state = 'current'
+  else if (known.includes(rv)) state = 'known-legacy'
+  else state = 'unknown' // 미래 판 · 알려지지 않은 판 · 손상된 글자
+  return { present: true, ruleVersion: rv, state, boardTopic: o.boardTopic ?? null }
+}
+
+/**
+ * 🔴 **게시판 라우팅 정본 하나** (2026-10-19 창업자/Codex 결정).
+ *    `readAutoJudgeFromGateResults` 가 돌려준 state 하나로 결정한다 — 호출부에서 조건을 다시 쓰지 않는다.
+ *      - `absent` → 'FREE' (옛 적재 · autoJudge 칸 자체 없음)
+ *      - `known-legacy` → 'FREE' (알려진 옛 판)
+ *      - `current` + valid boardTopic → 그 boardType
+ *      - `current` + 결여/invalid → null (fail-closed)
+ *      - `unknown` → null (fail-closed · 미래 판·malformed·unknown ruleVersion)
+ */
+export function routeBoardType(input: AutoJudgeExtract): AllowedBoardType | null {
+  if (input.state === 'absent' || input.state === 'known-legacy') return 'FREE'
+  if (input.state === 'unknown') return null
+  // state === 'current'
+  // 저장된 신뢰 경계는 정확한 enum 이어야 한다. 공백을 정규화해 손상된 값을 살리지 않는다.
+  const bt = typeof input.boardTopic === 'string' ? input.boardTopic : ''
+  return (ALLOWED_BOARD_TYPES as readonly string[]).includes(bt) ? bt as AllowedBoardType : null
+}
 
 export type OriginalPostInput = {
   title: string
@@ -49,15 +145,26 @@ export type OriginalPostInput = {
   authorId: string
   /** 🔴 matchedPersona.id — "누가 썼나" 의 정본 */
   personaId: string
+  /**
+   * 🔴 **boardType 라우팅 결과** (2026-10-19 창업자) — publish tx 가 `routeBoardType()` 으로 정한 값.
+   *    caller 가 임의로 주입할 수 없다 — tx 는 queue row 의 gateResults 만 읽어 이 값을 만든다.
+   *    없으면 레거시 기본값(`ORIGINAL_POST_BOARD` = 'FREE') 이다.
+   */
+  boardType?: AllowedBoardType
 }
 
 /**
  * 🔴 **출처 필드가 없다.** 타입에 자리를 두지 않는 것이 첫 번째 방어다 —
  *    호출부가 실수로 넘길 자리 자체가 없다.
+ * 🔴 boardType 은 `routeBoardType()` 이 돌려준 값만 받는다. 입력이 아니면 FREE 레거시 기본값.
  */
 export function buildOriginalPostData(input: OriginalPostInput) {
+  const board: AllowedBoardType = input.boardType ?? ORIGINAL_POST_BOARD
+  if (!(ALLOWED_BOARD_TYPES as readonly string[]).includes(board)) {
+    throw new Error(`buildOriginalPostData: 허용되지 않은 boardType=${JSON.stringify(board)} (FREE·MENOPAUSE 만)`)
+  }
   return {
-    boardType: ORIGINAL_POST_BOARD,
+    boardType: board,
     title: input.title,
     content: input.content,
     authorId: input.authorId,
@@ -112,7 +219,9 @@ export function assertOriginalPostData(data: Record<string, unknown>): void {
   }
   if (data.source !== ORIGINAL_POST_FLAGS.source) throw new Error(`source=${JSON.stringify(data.source)}`)
   if (data.status !== ORIGINAL_POST_FLAGS.status) throw new Error(`status=${JSON.stringify(data.status)}`)
-  if (data.boardType !== ORIGINAL_POST_BOARD) throw new Error(`boardType=${JSON.stringify(data.boardType)}`)
+  if (!(ALLOWED_BOARD_TYPES as readonly string[]).includes(String(data.boardType ?? ''))) {
+    throw new Error(`boardType=${JSON.stringify(data.boardType)} — FREE 또는 MENOPAUSE 만 허용`)
+  }
   // 🔴 작성자와 페르소나가 함께 있어야 한다. 하나만 있으면 "누가 썼나" 가 반쪽이 된다
   for (const key of ['authorId', 'personaId'] as const) {
     const v = data[key]

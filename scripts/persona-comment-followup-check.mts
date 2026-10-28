@@ -60,6 +60,8 @@ type FxComment = {
   id: string; atMin: number; parent?: string; origin: 'PERSONA' | 'MEMBER' | 'GUEST'
   persona?: string; member?: string; reaction: ReactionType | null
   provenance?: 'auto' | 'followup' | 'none' | 'broken'; reported?: boolean; deleted?: boolean
+  /** Queue 반응 역할 — Persona 댓글만. 없으면 그냥 한마디(other)로 만든 댓글이다 */
+  role?: ReactionType | null
 }
 type FxScenario = {
   name: string; nowMin: number
@@ -75,6 +77,7 @@ const rowOf = (postId: string, c: FxComment): FollowupModule.FollowupCommentRow 
   commentOrigin: c.origin, personaId: c.origin === 'PERSONA' ? (c.persona ?? null) : null, operatorWriterId: null,
   reaction: c.reaction, reported: c.reported ?? false,
   provenance: c.origin === 'PERSONA' ? (c.provenance ?? null) : null,
+  role: c.origin === 'PERSONA' ? (c.role === undefined ? 'other' : c.role) : null,
 })
 
 const factsOf = (postId: string, s: Pick<FxScenario, 'post' | 'comments'>): FollowupModule.FollowupPostFacts => ({
@@ -160,6 +163,12 @@ for (const b of fx.profiles.broken) {
   check(`③ 🔴 profile ${b.name} → 0건`, !v.ok && tick({ profile, runtimeStage: b.runtimeStage }).allowed === 0, v.ok ? '통과해 버렸다' : v.reason)
 }
 {
+  const common = { ...fx.profiles.approved, stage: M.FOLLOWUP_PROFILE_ALL_STAGES }
+  check('③ 운영 공통 profile 은 d5·d10·d20 모두 같은 관문을 통과',
+    ['d5', 'd10', 'd20'].every((stage) => M.validateFollowupProfile(common, stage).ok))
+  check('③ 단계 전용 D10 profile 은 d5에서 계속 차단', !M.validateFollowupProfile(fx.profiles.approved, 'd5').ok)
+}
+{
   // 🔴 D100 은 40건·$0.08 에 묶이지 않는다 — 승인된 D100 profile 이 정한다
   const d100 = (over: Partial<FollowupModule.FollowupTickFacts>) => tick({
     profile: fx.profiles.approvedD100, runtimeStage: 'd100', commentLedgerRemainingUsd: 2, firstCommentReserveUsd: 0.1, ...over,
@@ -199,7 +208,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       rows.push({
         id: `${postId}-m${m}`, postId, parentId: null, createdAt: new Date(T0 + (2 + m) * MIN), isDeleted: false,
         authorId: `u${m}`, commentOrigin: 'MEMBER', personaId: null, operatorWriterId: null,
-        reaction: 'experience', reported: false, provenance: null,
+        reaction: 'experience', reported: false, provenance: null, role: null,
       })
     }
     // 첫 댓글 — 자동 레인이 10~50분에 단다
@@ -207,7 +216,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     rows.push({
       id: `${postId}-c1`, postId, parentId: null, createdAt: new Date(T0 + (10 + Math.floor(M.unitOf('sim-first-at', postId) * 40)) * MIN),
       isDeleted: false, authorId: null, commentOrigin: 'PERSONA', personaId: first, operatorWriterId: null,
-      reaction: HOOK_DRAW[Math.floor(M.unitOf('sim-first-r', postId) * HOOK_DRAW.length)]!, reported: false, provenance: 'auto',
+      reaction: HOOK_DRAW[Math.floor(M.unitOf('sim-first-r', postId) * HOOK_DRAW.length)]!, reported: false, provenance: 'auto', role: 'other',
     })
     perPost.set(postId, rows)
   }
@@ -256,7 +265,9 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
         id, postId, parentId: v.target.kind === 'reply' ? v.target.commentId : null, createdAt: new Date(nowMs),
         isDeleted: false, authorId: null, commentOrigin: 'PERSONA', personaId: pick.personaId, operatorWriterId: null,
         reaction: HOOK_DRAW[Math.floor(M.unitOf('sim-r', id) * HOOK_DRAW.length)]!, reported: false, provenance: 'followup',
+        role: v.roles[0] ?? null,
       })
+      if (v.speaker.kind === 'author' && pick.personaId !== v.speaker.personaId) violations.push(`${postId} 글쓴이 답글 자리에 다른 Persona`)
       trace.push(`${t}:${id}:${pick.personaId}`)
     }
     if (used > runMax) violations.push(`회차 ${t} 에 ${used}건`)
@@ -268,7 +279,9 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     if (persona.length > 5) violations.push(`${postId} Persona ${persona.length}건`)
     const ids = persona.map((r) => r.personaId)
     if (new Set(ids).size !== ids.length) violations.push(`${postId} 같은 Persona 반복`)
-    if (ids.includes(author.get(postId)!)) violations.push(`${postId} 자기 글 댓글`)
+    // 🔴 글쓴이는 다른 Persona 댓글에 답글로 한 번까지 — 첫 댓글 · 최상위 · 두 번째는 자기 글 댓글이다
+    const own = persona.filter((r) => r.personaId === author.get(postId))
+    if (own.length > 1 || own.some((r) => r.parentId === null || r.provenance !== 'followup')) violations.push(`${postId} 자기 글 댓글`)
     for (let k = 1; k < persona.length; k++) {
       if (persona[k]!.createdAt.getTime() - persona[k - 1]!.createdAt.getTime() < M.FOLLOWUP_MIN_GAP_MS) violations.push(`${postId} 시간차 미달`)
       if (persona[k]!.createdAt.getTime() - T0 > M.FOLLOWUP_POST_AGE_MAX_MS) violations.push(`${postId} 식은 글에 이음`)
@@ -344,7 +357,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     const g = (postId: string, extras: number) => ({
       postId,
       go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1, key: M.followupKeyOf(postId, extras + 2),
-        target: { kind: 'post' as const, hook: 'question' as const }, excludePersonaIds: [], roles: ['other' as const], reason: '' },
+        target: { kind: 'post' as const, hook: 'question' as const }, speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], reason: '' },
     })
     let allOk = true
     for (let i = 0; i < 50; i++) {
@@ -362,7 +375,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       postId, publishedAtMs,
       go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1,
         key: M.followupKeyOf(postId, extras + 2), target: { kind: 'post' as const, hook: 'question' as const },
-        excludePersonaIds: [], roles: ['other' as const], reason: '' },
+        speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], reason: '' },
     })
     const hIds = ['p-h1', 'p-h2', 'p-h3', 'p-h4', 'p-h5']
     // hash 오름차순으로 줄 세우기
@@ -434,11 +447,17 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   const none = judgeConversationAudit([ep([first])])
   check('⑤ 실제 감사 PASS(추가 댓글 정상) → 회차 허용', good.verdict === 'PASS' && tick({ conversationAudit: good }).allowed === 3)
   check('⑤ 실제 감사 PASS(추가 댓글 0 — 아직 켠 적 없음) → 회차 허용', none.verdict === 'PASS' && tick({ conversationAudit: none }).allowed === 3)
+  const authorOnce = judgeConversationAudit([ep([first, { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])])
+  check('⑤ 🟢 실제 감사 — 글쓴이 답글 한 번은 자기 글 결함이 아니다 → PASS · 회차 허용',
+    authorOnce.verdict === 'PASS' && tick({ conversationAudit: authorOnce }).allowed === 3, authorOnce.codes.join(','))
   const failCases: [string, EvidencePost][] = [
     ['출처 깨짐', ep([first, { personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup-broken' }])],
     ['첫 댓글 없음', ep([{ personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
     ['같은 Persona', ep([first, { personaId: 'pB', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
-    ['자기 글', ep([first, { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
+    ['자기 글(글쓴이 최상위 추가 댓글)', ep([first, { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: true, provenance: 'followup' }])],
+    ['자기 글(글쓴이 답글 두 번)', ep([first,
+      { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' },
+      { personaId: 'pA', createdAtMs: T0 + 140 * MIN, topLevel: false, provenance: 'followup' }])],
     ['총 6건', ep([first, ...['p1', 'p2', 'p3', 'p4', 'p5'].map((p, i) => ({ personaId: p, createdAtMs: T0 + (90 + i * 40) * MIN, topLevel: false, provenance: 'followup' as const }))])],
   ]
   for (const [name, post] of failCases) {
@@ -495,7 +514,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     check('⑥ 순번·열쇠 불일치 → 거부', !M.verifyStamp({ ...stamp, ordinal: 3 }, { postId, dedupKey: go.key }).ok)
     check('⑥ 옛 판 도장 → 거부', !M.verifyStamp({ ...stamp, v: 'followup-v0' }, { postId, dedupKey: go.key }).ok)
     check('⑥ 도장 없음 → 거부', !M.verifyStamp(null, { postId, dedupKey: go.key }).ok)
-    const pick = M.pickFollowupPersona(go, postId, [
+    // 🔴 이 GO 는 글쓴이 답글 자리다(⑪) — 아래 고르기 규칙은 글쓴이 자리가 아닌 일반 자리(`other`)에서 잰다
+    check('⑥ 시나리오 0 은 글쓴이 답글 자리', go.speaker.kind === 'author' && go.speaker.personaId === 'pA')
+    const goOther = { ...go, speaker: { kind: 'other' as const } }
+    const pick = M.pickFollowupPersona(goOther, postId, [
       { personaId: 'pA', eligible: true, followupsToday: 0 },
       { personaId: 'pB', eligible: true, followupsToday: 0 },
       { personaId: 'pQ', eligible: false, followupsToday: 0 },
@@ -503,14 +525,14 @@ const normalizeDiffers = (a: string, b: string): boolean => {
       { personaId: 'pS', eligible: true, followupsToday: null },
     ], 3)
     check('⑥ 글쓴이·이미 단 Persona·자격 없음·하루 상한·모름 → 고를 사람 없음', pick.personaId === null)
-    const ok = M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 2 }], 3)
+    const ok = M.pickFollowupPersona(goOther, postId, [{ personaId: 'pT', eligible: true, followupsToday: 2 }], 3)
     check('⑥ 남은 사람 → 고른다', ok.personaId === 'pT')
     check('⑥ 🔴 Persona 하루 상한은 profile 값이다(6이면 4건째 허용 · 3이면 막음)',
-      M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 4 }], 6).personaId === 'pT'
-      && M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 4 }], 3).personaId === null)
+      M.pickFollowupPersona(goOther, postId, [{ personaId: 'pT', eligible: true, followupsToday: 4 }], 6).personaId === 'pT'
+      && M.pickFollowupPersona(goOther, postId, [{ personaId: 'pT', eligible: true, followupsToday: 4 }], 3).personaId === null)
     check('⑥ 🔴 Persona 상한 손상(0·NaN) → 고르지 않는다',
-      M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 0 }], 0).personaId === null
-      && M.pickFollowupPersona(go, postId, [{ personaId: 'pT', eligible: true, followupsToday: 0 }], Number.NaN).personaId === null)
+      M.pickFollowupPersona(goOther, postId, [{ personaId: 'pT', eligible: true, followupsToday: 0 }], 0).personaId === null
+      && M.pickFollowupPersona(goOther, postId, [{ personaId: 'pT', eligible: true, followupsToday: 0 }], Number.NaN).personaId === null)
     check('⑥ 역할은 생성기 어휘 안', go.roles.length > 0 && go.roles.every((r) => ['other', 'empathy', 'question', 'experience'].includes(r)))
   }
 }
@@ -523,11 +545,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const ok: FollowupModule.FollowupPublishFacts = {
     switch: { enabled: true, reason: 'on' }, commentStage: 'bootstrap-auto', actor: 'automation', queueStatus: 'PENDING',
     dedupKey: M.followupKeyOf(FX_POST, 2), editDiff: M.followupEditDiffOf(st as FollowupModule.FollowupStamp),
-    post, candidatePersonaId: 'pZ', otherOpenQueue: false, profile: fx.profiles.approved, runtimeStage: 'd10',
+    // 🔴 (2026-10-24) c1 은 pB 의 질문이고 글쓴이 pA 는 아직 이 글에 쓰지 않았다 — 글쓴이 답글 자리다
+    post, candidatePersonaId: 'pA', candidateRole: 'experience', otherOpenQueue: false, profile: fx.profiles.approved, runtimeStage: 'd10',
     followupsTodayInTx: 0, personaFollowupsTodayInTx: 0, nowMs: T0 + 200 * MIN,
   }
   const pub = (over: Partial<FollowupModule.FollowupPublishFacts>) => M.judgeFollowupPublish({ ...ok, ...over })
-  check('⑦ 기준선 — 온전한 도장 · 사실 → 발행', pub({}).ok, pub({}).blockers.join(' | '))
+  check('⑦ 기준선 — 글쓴이 답글(다른 Persona 질문에 한 번) · 온전한 도장 → 발행', pub({}).ok, pub({}).blockers.join(' | '))
+  check('⑦ 운영 공통 profile — d5에서도 같은 트랜잭션 관문으로 발행', pub({
+    profile: { ...fx.profiles.approved, stage: M.FOLLOWUP_PROFILE_ALL_STAGES }, runtimeStage: 'd5',
+  }).ok)
   const no = (name: string, over: Partial<FollowupModule.FollowupPublishFacts>, expect: string) => {
     const v = pub(over)
     check(`⑦ 🔴 ${name} → 막음`, !v.ok && v.blockers.some((b) => b.includes(expect)), v.blockers.join(' | '))
@@ -549,22 +575,61 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     dedupKey: M.followupKeyOf(FX_POST, 3), editDiff: M.followupEditDiffOf({ ...st, ordinal: 3 } as FollowupModule.FollowupStamp),
   }, '도장 순번')
   no('직전 Persona 댓글과 간격 짧음', { nowMs: T0 + 25 * MIN }, '간격')
-  no('후보 Persona 가 이미 그 글에 씀', { candidatePersonaId: 'pB' }, '이미 썼거나 글쓴이')
-  no('후보 Persona 가 글쓴이', { candidatePersonaId: 'pA' }, '이미 썼거나 글쓴이')
+  no('🔴 글쓴이 답글 자리에 다른 Persona(무작위 대체)', { candidatePersonaId: 'pZ' }, '글쓴이 답글 자리')
+  no('🔴 글쓴이 답글 자리에 이미 단 Persona', { candidatePersonaId: 'pB' }, '글쓴이 답글 자리')
   no('답글 대상이 이 글에 없음(고아)', {
     editDiff: M.followupEditDiffOf({ ...st, parentCommentId: 'gone' } as FollowupModule.FollowupStamp),
   }, '고아')
   {
-    // 🔴 자기 댓글 답글 — 대상 댓글(c1)을 쓴 pB 가 후보면 '이미 그 글에 쓴 Persona' 로 막힌다(따로 분기를 두지 않는다)
-    const v = pub({ candidatePersonaId: 'pB' })
-    check('⑦ 🔴 자기 댓글에 답글 → 같은 Persona 규칙으로 막음', !v.ok && v.blockers.some((b) => b.includes('이미 썼거나')), v.blockers.join(' | '))
+    // 🔴 글쓴이가 이미 한 번 답했다(a1 → c1) — 이제 글쓴이 자리가 아니다. a1 에 대한 답글은 이 글에 없던 Persona 만
+    const answeredByAuthor: FollowupModule.FollowupPostFacts = {
+      ...post,
+      comments: [...post.comments, { ...post.comments[0]!, id: 'a1', parentId: 'c1', personaId: 'pA', createdAt: new Date(T0 + 60 * MIN), provenance: 'followup' as const }],
+    }
+    const onA1 = { ...st, ordinal: 3, parentCommentId: 'a1', hook: 'question' }
+    const base2: Partial<FollowupModule.FollowupPublishFacts> = {
+      post: answeredByAuthor, dedupKey: M.followupKeyOf(FX_POST, 3), editDiff: M.followupEditDiffOf(onA1 as FollowupModule.FollowupStamp),
+    }
+    check('⑦ 글쓴이 답글 뒤 — 글쓴이 댓글(a1)에 이 글에 없던 Persona 가 답한다 → 발행', pub({ ...base2, candidatePersonaId: 'pZ' }).ok,
+      pub({ ...base2, candidatePersonaId: 'pZ' }).blockers.join(' | '))
+    const self = pub({ ...base2, candidatePersonaId: 'pA' })
+    check('⑦ 🔴 글쓴이가 자기 댓글에 답글(자기 답글) → 막음', !self.ok && self.blockers.some((b) => b.includes('이미 썼거나 글쓴이')), self.blockers.join(' | '))
+    const twice = pub({ ...base2, candidatePersonaId: 'pA', editDiff: M.followupEditDiffOf({ ...onA1, parentCommentId: 'c1' } as FollowupModule.FollowupStamp) })
+    check('⑦ 🔴 글쓴이 두 번째 답글 → 막음(한 번뿐)', !twice.ok && twice.blockers.some((b) => b.includes('이미 썼거나 글쓴이')), twice.blockers.join(' | '))
+    const dup = pub({ ...base2, candidatePersonaId: 'pB' })
+    check('⑦ 🔴 이미 단 Persona(pB) → 같은 Persona 규칙으로 막음', !dup.ok && dup.blockers.some((b) => b.includes('이미 썼거나')), dup.blockers.join(' | '))
+  }
+  {
+    // 🔴 실회원 댓글에는 글쓴이도 자동 답글을 달지 않는다
+    const withMember: FollowupModule.FollowupPostFacts = {
+      ...post,
+      comments: [...post.comments, { ...post.comments[0]!, id: 'm1', parentId: null, commentOrigin: 'MEMBER', personaId: null, authorId: 'u1', createdAt: new Date(T0 + 5 * MIN), provenance: null, role: null }],
+    }
+    const v = pub({ post: withMember, editDiff: M.followupEditDiffOf({ ...st, parentCommentId: 'm1' } as FollowupModule.FollowupStamp) })
+    check('⑦ 🔴 실회원 댓글에 글쓴이 답글 → 막음', !v.ok && v.blockers.some((b) => b.includes('Persona 댓글이 아니다')), v.blockers.join(' | '))
+    check('⑦ 🔴 실회원 댓글은 글쓴이 답글 자리가 아니다', M.followupSpeakerOf(withMember, 'm1').kind === 'other')
+  }
+  {
+    // 🔴 글 hook 자리 — 첫 댓글(c1 · 역할 other)과 같은 일반 반응(other · empathy)을 다시 쓰지 않는다
+    const onPost = { ...st, parentCommentId: null, hook: 'question' }
+    const hookFacts: Partial<FollowupModule.FollowupPublishFacts> = {
+      candidatePersonaId: 'pZ', editDiff: M.followupEditDiffOf(onPost as FollowupModule.FollowupStamp),
+    }
+    for (const role of ['other', 'empathy'] as const) {
+      const v = pub({ ...hookFacts, candidateRole: role })
+      check(`⑦ 🔴 글 hook 에 첫 댓글과 같은 일반 반응(${role}) → 막음`, !v.ok && v.blockers.some((b) => b.includes('같은 대화 기능')), v.blockers.join(' | '))
+    }
+    check('⑦ 🔴 글 hook 후보 역할을 모름 → 막음', !pub({ ...hookFacts, candidateRole: null }).ok)
+    check('⑦ 글 hook 에 다른 기능(experience) → 발행', pub({ ...hookFacts, candidateRole: 'experience' }).ok,
+      pub({ ...hookFacts, candidateRole: 'experience' }).blockers.join(' | '))
+    check('⑦ 🔴 글 hook 자리에 글쓴이 → 막음(최상위는 자기 글)', !pub({ ...hookFacts, candidatePersonaId: 'pA', candidateRole: 'experience' }).ok)
   }
   const consumed = {
     ...post,
     comments: [...post.comments, { ...post.comments[0]!, id: 'fu0', parentId: null, personaId: 'pY', createdAt: new Date(T0 + 60 * MIN), provenance: 'followup' as const }],
   }
   no('글 hook 이미 소비(최상위 추가 댓글 있음)', {
-    post: consumed, dedupKey: M.followupKeyOf(FX_POST, 3), nowMs: T0 + 200 * MIN,
+    post: consumed, candidatePersonaId: 'pZ', dedupKey: M.followupKeyOf(FX_POST, 3), nowMs: T0 + 200 * MIN,
     editDiff: M.followupEditDiffOf({ ...st, ordinal: 3, parentCommentId: null } as FollowupModule.FollowupStamp),
   }, '글 hook')
   const answered = {
@@ -642,6 +707,99 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     runSrc.includes('providerCallLimit: planned.length'))
   check('⑩ 🔴 run 파일 orderFollowupGo 호출에 publishedAtMs 가 있다(최신 글 우선)',
     runSrc.includes('publishedAtMs'))
+  // 🔴 (2026-10-24) 첫 댓글의 역할은 정본 `followupRoleOf` 로 읽고, 글쓴이 자리는 생성 입력에 표시한다 — 회차와 트랜잭션이 같은 함수
+  const txSrc = readFileSync(join(here, '../src/lib/persona-publish-tx.ts'), 'utf-8')
+  check('⑩ 🔴 run 이 Persona 댓글 역할을 Queue reactionType 에서 정본 함수로 읽는다',
+    runSrc.includes("role: c.commentOrigin === 'PERSONA' ? followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id)) : null")
+    && /publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true, reactionType: true/.test(runSrc))
+  check('⑩ 🔴 run 이 글쓴이 자리 입력에 authorReply 를 싣는다', runSrc.includes("...(go.speaker.kind === 'author' ? { authorReply: true as const } : {})"))
+  check('⑩ 🔴 트랜잭션이 같은 정본으로 역할을 읽고 후보 역할을 넘긴다',
+    txSrc.includes("role: c.commentOrigin !== 'PERSONA' ? null : followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id))")
+    && txSrc.includes('candidateRole: row.reactionType,'))
+}
+
+// ═════════ ⑪ 2026-10-24 D10 근본 보정 — 글쓴이 답글 · 첫 댓글의 대화 기능 · 총량 ═════════
+{
+  const at = T0 + 200 * MIN
+  const fxFacts = (comments: FxComment[], postReaction: ReactionType | null = 'other') => factsOf(FX_POST, { post: { postReaction }, comments })
+  const goOf = (f: FollowupModule.FollowupPostFacts) => { const v = M.judgeFollowupPost(f, at); return v.verdict === 'GO' ? v : null }
+  const cands = (ids: string[], capped: string[] = []): FollowupModule.FollowupPersonaCandidate[] =>
+    ids.map((personaId) => ({ personaId, eligible: true, followupsToday: capped.includes(personaId) ? 3 : 0 }))
+  const first: FxComment = { id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'question', provenance: 'auto' }
+
+  // 1 · 글쓴이가 다른 Persona 의 질문에 답한다 — 화자는 서버가 고정한다
+  const g1 = goOf(fxFacts([first]))
+  check('⑪ 🔴 다른 Persona 질문 → 글쓴이 답글 자리(화자 고정 pA)',
+    g1 !== null && g1.target.kind === 'reply' && g1.target.commentId === 'c1' && g1.speaker.kind === 'author' && g1.speaker.personaId === 'pA',
+    JSON.stringify(g1?.speaker))
+  check('⑪ 🔴 글쓴이 답글 자리 → 다른 후보가 많아도 글쓴이를 고른다',
+    g1 !== null && M.pickFollowupPersona(g1, FX_POST, cands(['pZ', 'pA', 'pY']), 3).personaId === 'pA')
+  check('⑪ 🔴 글쓴이가 하루 상한이면 비운다 — 다른 Persona 로 바꾸지 않는다',
+    g1 !== null && M.pickFollowupPersona(g1, FX_POST, cands(['pZ', 'pA'], ['pA']), 3).personaId === null)
+  check('⑪ 🔴 글쓴이가 후보에 없으면(이번 회차 사용 · 자격) 비운다',
+    g1 !== null && M.pickFollowupPersona(g1, FX_POST, cands(['pZ', 'pY']), 3).personaId === null)
+  const promptInput = {
+    personaCode: 'P01', reactionRole: 'experience',
+    persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: {}, voiceVariations: {}, noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
+    post: { id: 'p', title: '요즘 밤마다 잠이 안 와요', bodyDigest: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE', existingCommentDigests: ['그럴 땐 뭐 하세요?'], replyToDigest: '그럴 땐 뭐 하세요?' },
+    voice: {}, memory: { has: false, note: '' }, fingerprint: 'x',
+  } as unknown as CommentInput
+  const authorPrompt = toPromptPost({ ...promptInput, post: { ...promptInput.post, authorReply: true } } as CommentInput).content
+  check('⑪ 글쓴이 답글 입력에만 "당신이 쓴 글" 줄이 붙는다',
+    authorPrompt.includes('[이 글은 당신이 쓴 글입니다') && !toPromptPost(promptInput).content.includes('당신이 쓴 글'))
+
+  // 2 · 실회원 댓글에는 글쓴이도 자동으로 답하지 않는다
+  const withMember = fxFacts([
+    { id: 'm1', atMin: 5, origin: 'MEMBER', member: 'u1', reaction: 'question' },
+    { id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto' },
+  ])
+  const v2 = M.judgeFollowupPost(withMember, at)
+  check('⑪ 🔴 실회원 질문 → 자동 답글 대상이 아니다(글쓴이 포함) · 거리 없으면 STOP',
+    v2.verdict === 'STOP' && M.followupSpeakerOf(withMember, 'm1').kind === 'other', `${v2.verdict} · ${v2.reason}`)
+
+  // 3 · 자기 답글 금지 · 글쓴이 답글은 한 번
+  const authorAnswered = fxFacts([first, { id: 'a1', atMin: 60, parent: 'c1', origin: 'PERSONA', persona: 'pA', reaction: 'question', provenance: 'followup', role: 'experience' }])
+  const g3 = goOf(authorAnswered)
+  check('⑪ 🔴 글쓴이 댓글의 질문 → 글쓴이 자리 아님(자기 답글 금지) · 글쓴이는 제외 목록',
+    g3 !== null && g3.target.kind === 'reply' && g3.target.commentId === 'a1' && g3.speaker.kind === 'other' && g3.excludePersonaIds.includes('pA'),
+    g3 === null ? 'GO 아님' : `${g3.target.kind} · ${g3.speaker.kind}`)
+  check('⑪ 🔴 그 자리는 글쓴이·이미 단 Persona 를 빼고 고른다',
+    g3 !== null && M.pickFollowupPersona(g3, FX_POST, cands(['pA', 'pB', 'pZ']), 3).personaId === 'pZ')
+  const later = fxFacts([first, { id: 'a1', atMin: 60, parent: 'c1', origin: 'PERSONA', persona: 'pA', reaction: 'other', provenance: 'followup', role: 'experience' },
+    { id: 'c2', atMin: 100, origin: 'PERSONA', persona: 'pC', reaction: 'question', provenance: 'followup', role: 'question' }])
+  check('⑪ 🔴 글쓴이가 이미 한 번 답했으면 다른 Persona 의 새 질문도 글쓴이 자리가 아니다',
+    M.followupSpeakerOf(later, 'c2').kind === 'other')
+
+  // 4 · 첫 댓글과 같은 일반 반응(칭찬)을 최상위로 되풀이하지 않는다
+  const praise = fxFacts([{ id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto', role: 'empathy' }], 'empathy')
+  const g4 = goOf(praise)
+  check('⑪ 🔴 첫 댓글이 공감(일반 반응) → 글 hook 새 댓글 역할에 other·empathy 없음',
+    g4 !== null && g4.target.kind === 'post' && g4.roles.length > 0 && g4.roles.every((r) => r !== 'other' && r !== 'empathy'), JSON.stringify(g4?.roles))
+  const unknownRole = fxFacts([{ id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto', role: null }], 'question')
+  check('⑪ 🔴 첫 댓글 역할을 모르면 글 hook 을 열지 않는다(fail-closed) → STOP', M.judgeFollowupPost(unknownRole, at).verdict === 'STOP')
+  const allUsed = fxFacts([
+    { id: 'c0', atMin: 5, origin: 'PERSONA', persona: 'pZ', reaction: 'other', provenance: 'none', role: 'experience' },
+    { id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto', role: 'other' },
+  ], 'question')
+  check('⑪ 🔴 최상위 Persona 댓글이 쓴 기능을 빼면 남는 역할이 없다 → 글 hook 닫힘 STOP',
+    M.postHookRolesOf(allUsed, 'question').length === 0 && M.judgeFollowupPost(allUsed, at).verdict === 'STOP')
+
+  // 5 · 다른 기능의 hook 은 그대로 열려 있다
+  const distinct = fxFacts([{ id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto', role: 'other' }], 'question')
+  const g5 = goOf(distinct)
+  check('⑪ 첫 댓글(그냥 한마디) 뒤 글의 질문 → 다른 기능(경험) 새 댓글은 열린다',
+    g5 !== null && g5.target.kind === 'post' && g5.roles.includes('experience') && !g5.roles.includes('other'), JSON.stringify(g5?.roles))
+
+  // 6 · 총량 상한 그대로 — 글쓴이 답글도 글당 5건에 센다
+  const full = fxFacts([
+    first,
+    { id: 'a1', atMin: 60, parent: 'c1', origin: 'PERSONA', persona: 'pA', reaction: 'question', provenance: 'followup' },
+    { id: 'c2', atMin: 100, parent: 'a1', origin: 'PERSONA', persona: 'pC', reaction: 'question', provenance: 'followup' },
+    { id: 'c3', atMin: 140, origin: 'PERSONA', persona: 'pD', reaction: 'question', provenance: 'followup', role: 'experience' },
+    { id: 'c4', atMin: 180, parent: 'c3', origin: 'PERSONA', persona: 'pE', reaction: 'question', provenance: 'followup' },
+  ], 'question')
+  const v6 = M.judgeFollowupPost(full, T0 + 400 * MIN)
+  check('⑪ 🔴 글쓴이 답글 포함 Persona 5건 → STOP(글당 5 상한 그대로)', v6.verdict === 'STOP' && v6.reason.includes('상한'), `${v6.verdict} · ${v6.reason}`)
 }
 
 for (const l of lines) console.log(l)

@@ -1132,7 +1132,16 @@ export async function fetchManuscript({
   pollMs = RESPONSE_POLL_MS,
   stablePolls = RESPONSE_STABLE_POLLS,
 }) {
-  if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
+  /**
+   * 🔴 **완성된 message 를 받았으면 brief 를 요구하지도 읽지도 않는다** (2026-10-24 · 첫 DIRECT 자연 회차).
+   *    DIRECT_SPEC_V1 은 brief.md 가 없는 것이 정상이다 — 호출부가 article-spec 으로 만든 글자를 그대로 준다.
+   *    앞판은 message 유무와 무관하게 brief 부터 찾아, DIRECT 원고 회수가 전송 0 · brief_missing 으로 끝났다.
+   *    message 가 없을 때만 legacy 대로 brief.md 가 필수다. 빈 글자·문자열 아닌 값은 보내지 않는다.
+   */
+  if (plannedMessage !== null && (typeof plannedMessage !== 'string' || !plannedMessage.trim())) {
+    return { ok: false, reason: 'message_invalid', sent: false, errorDetail: '보낼 message 가 비었거나 문자열이 아니다 (한 글자도 보내지 않았다)' }
+  }
+  if (plannedMessage === null && !existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
   // probe 와 같은 이유로 탭을 먼저 확보한다 — 여기만 빠뜨리면 회수 단계에서 같은 실패가 난다
   const tab = await (ensureTab ?? ensurePageTarget)()

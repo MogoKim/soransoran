@@ -32,15 +32,17 @@ const MUTATIONS = [
   { name: 'compose 원인 추출 제거', file: F.session,
     find: '    const errorCause = playwrightActionCause(err?.message)',
     replace: '    const errorCause = null' },
+  // 🔴 deliveryGate 에는 같은 조건문이 두 자리(최초 응답 교정 대기 · brief 계약)에 있다 —
+  //    다음 줄(`judgeBriefFormatContract`)까지 지점에 넣어 **brief 계약 블록 하나**만 바꾼다 (2026-10-19).
   { name: '전송 직전 brief 계약 제거', file: F.gate,
-    find: '  if (!packet && !hold && message !== null) {',
-    replace: '  if (false) {' },
+    find: '  if (!packet && !hold && message !== null) {\n    const contract = judgeBriefFormatContract(',
+    replace: '  if (false) {\n    const contract = judgeBriefFormatContract(' },
   { name: 'HOLD 보다 계약을 먼저 본다 (이미 보낸 글 분류가 바뀐다)', file: F.gate,
-    find: '  if (!packet && !hold && message !== null) {',
-    replace: '  if (!packet && message !== null) {' },
+    find: '  if (!packet && !hold && message !== null) {\n    const contract = judgeBriefFormatContract(',
+    replace: '  if (!packet && message !== null) {\n    const contract = judgeBriefFormatContract(' },
   { name: '재생성에도 brief 계약을 건다 (clinic 회복 불가)', file: F.gate,
-    find: '  if (!packet && !hold && message !== null) {',
-    replace: '  if (!hold && message !== null) {' },
+    find: '  if (!packet && !hold && message !== null) {\n    const contract = judgeBriefFormatContract(',
+    replace: '  if (!hold && message !== null) {\n    const contract = judgeBriefFormatContract(' },
   { name: 'verifyBrief GF 무력화', file: F.policy,
     find: "  add('GF', contract.ok,",
     replace: "  add('GF', true," },
@@ -80,9 +82,11 @@ const MUTATIONS = [
   { name: 'drive 앞단 계약 처리 제거 (회차 전체 정지로 오분류)', file: F.register,
     find: '    if (!g0.ok && g0.code === BRIEF_FORMAT_CONTRACT_REASON) {',
     replace: '    if (false) {' },
+  // 🔴 계획표는 계약을 따로 판정하지 않고 deliveryGate 결과를 `gateBlocked` 로 운반한다 (지금 구조) —
+  //    변이는 그 운반에서 **BRIEF_FORMAT_CONTRACT 차단만** 떨어뜨려 전송 후보로 보낸다 (다른 관문 차단은 그대로).
   { name: '일괄 회수 계획표가 계약을 무시한다 (probe·Chrome 기동)', file: F.webui,
-    find: '    if (!g.ok && g.code === BRIEF_FORMAT_CONTRACT_REASON) contractBlocked.set(slug, g)',
-    replace: '    void BRIEF_FORMAT_CONTRACT_REASON' },
+    find: '    if (!g.ok) gateBlocked.set(slug, g)',
+    replace: "    if (!g.ok && g.code !== 'BRIEF_FORMAT_CONTRACT') gateBlocked.set(slug, g)" },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')

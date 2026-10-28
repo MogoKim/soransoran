@@ -75,7 +75,11 @@ const withIntent = (gate: unknown, site: string, id: string): Record<string, unk
 import { AUTO_DECIDER, SEMANTIC_RECORD_KEY, eligibilityOf } from '../src/lib/auto-ready-v2'
 /** 🔴 운영 자동 적격 행이 가진 온전한 의미 검수 요약(경고 0) — 없으면 정본이 SEMANTIC_REVIEW_MISSING 으로 부적격이라 본다 */
 const CLEAN_SEMANTIC = { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 }
-const SEMANTIC_WARN_GATE = { [SEMANTIC_RECORD_KEY]: { ...CLEAN_SEMANTIC, unsupportedAdditions: 1 }, holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'] }
+const SEMANTIC_BLOCK_GATE = { [SEMANTIC_RECORD_KEY]: { ...CLEAN_SEMANTIC, lifeContradictions: 1 }, holds: ['SEMANTIC_LIFE_CONTRADICTION:1'] }
+const INCOMPLETE_GATE = {
+  [SEMANTIC_RECORD_KEY]: { ...CLEAN_SEMANTIC, complete: false },
+  holds: ['SEMANTIC_REVIEW_INCOMPLETE'],
+}
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
@@ -500,7 +504,8 @@ async function main(): Promise<void> {
           // 🔴 현재 계약 표본 — 의도 · 원문 증거 해시 · 그 회차 v3 묶음이 정확히 연결된다
           gateResults: withIntent({ sourceEvidence: buildSourceEvidence({ sourceSite: site, sourceArticleId: `pf-${k}` }) }, site, `pf-${k}`) as Prisma.InputJsonValue,
           gateVerdict: 'PASS', promptVersion: 'pf', model: 'pf',
-          decidedBy: AUTO_DECIDER, decidedAt: new Date('2026-09-30T03:00:00Z'), dedupKey: `pf-${k}` },
+          decidedBy: AUTO_DECIDER, decidedAt: new Date('2026-09-30T03:00:00Z'),
+          createdAt: new Date('2026-09-30T03:00:00Z'), dedupKey: `pf-${k}` },
       })
     }
     const now = new Date('2026-10-01T07:00:00+09:00')
@@ -624,7 +629,7 @@ async function main(): Promise<void> {
     })
     const fresh = now.getTime() - 2 * 3_600_000
     /**
-     * 증거일 2026-09-30 → 창 = UTC [09-27T15:00Z, 09-30T15:00Z). 지금 10-01 07:00 KST · d5 첫 슬롯 이후 판정.
+     * 용량 창 = UTC [09-27T22:00Z, 09-30T22:00Z). 지금 10-01 07:00 KST · d5 첫 슬롯 이후 판정.
      *    창 안: PUBLISHED 2 · EXPIRED 1 · DECLINED 1 ·
      *      대기 — 증거 없음(EDITED) → 손실 · 원문 80h(오래됨) → 손실 · 지금은 72h 미만이지만 첫 슬롯에서 72h 초과 → 손실 ·
      *             신선(창 시작 정각) · 신선(창 끝 1초 전) → 짝 없음 = 모름(자동 READY 닫힘)
@@ -658,7 +663,8 @@ async function main(): Promise<void> {
           // 🔴 legacy 행만 공급 의도가 없다 — 근거로 세지 않는다
           // 🔴 legacy · 증거 없는 옛 행만 공급 의도가 없다 — 근거로 세지 않는다(증거 없는 행이 계약을 주장하면 cohort 가 모름이 된다)
           gateResults: (r.k === 'legacy' || r.k === 'noev' ? r.gate : withIntent(r.gate, site, `pfc-${r.k}`)) as Prisma.InputJsonValue,
-          decidedBy: r.by ?? AUTO_DECIDER, decidedAt: new Date(r.at), dedupKey: `pfc-${r.k}` },
+          decidedBy: r.by ?? AUTO_DECIDER, decidedAt: new Date(r.at),
+          createdAt: new Date('2026-09-29T03:30:00Z'), dedupKey: `pfc-${r.k}` },
       })
     }
     const dir = mkdtempSync(join(tmpdir(), 'pfc-'))
@@ -691,11 +697,11 @@ async function main(): Promise<void> {
       check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 4) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 6 / 30, JSON.stringify(y))
       if (c !== null) {
         const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) 같은 cohort 용량 20 이 채운다 → 처리량 확정',
-          d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 20
+        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) bounded recovery 포함 용량 23 이 채운다 → 처리량 확정',
+          d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 23
           && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
         const d5 = judgeNextPreflight('d5', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 20 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
+        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 23 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
           d5.counts.readyNeededMin === 9 && d5.counts.readyNeededMax === 25
           && d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict !== 'PASS', JSON.stringify(d5.counts))
         check('🔴 공급 비용 = 목표 5 × 결과당 $0.01 — raw READY 단가 · 공개 단가 칸 없음',
@@ -712,7 +718,7 @@ async function main(): Promise<void> {
       })
       /**
        * 🔴 **cohort 경계 — 창 밖 회차의 행은 이 cohort 가 아니다** (2026-10-04 P0-2 · 2026-10-09 P0 회차 시계).
-       *    창 = UTC [09-27T15:00:00Z, 09-30T15:00:00Z). 같은 큐 행(창 안 decidedAt)의 의도를 창 시작 1초 전 회차로 옮기면
+       *    창 = 용량 창 UTC [09-27T22:00:00Z, 09-30T22:00:00Z) — `now`(10-01 07:00 KST)에서 거슬러 정확히 72h (2026-10-20 롤링 창). 같은 큐 행(창 안 decidedAt)의 의도를 창 시작 1초 전 회차로 옮기면
        *    분자 · 분모 · 비용 어디에도 넣지 않는다(제외) — 앞판처럼 cohort 전체를 모름으로 닫지 않는다.
        *    같은 행을 창 시작 정각 회차로 옮기면 그 묶음 원천 1 과 함께 들어온다.
        */
@@ -724,7 +730,7 @@ async function main(): Promise<void> {
           where: { id: rec.id }, data: { gateResults: { ...g0, [SUPPLY_INTENT_KEY]: { ...g0[SUPPLY_INTENT_KEY], runId } } as Prisma.InputJsonValue },
         })
       }
-      await moveTo('20260927-145959')
+      await moveTo('20260927-215959')
       const outside = await factsAgain()
       const ov = judgeNextPreflight('d5', outside.facts, RUNNER_GRID)
       const oc = outside.facts.readyCohort
@@ -732,7 +738,7 @@ async function main(): Promise<void> {
         oc !== null && oc.unknown === 3 && oc.published === 2 && oc.lost === 4 && oc.sources === 30
         && (outside.detail.intentMismatches as unknown[]).length === 0 && outside.detail.readyCount === 9 && !ov.codes.includes('THROUGHPUT_UNKNOWN'),
         JSON.stringify({ oc, m: outside.detail.intentMismatches, codes: ov.codes }))
-      await moveTo('20260927-150000')
+      await moveTo('20260927-220000')
       const inside = await factsAgain()
       const ic = inside.facts.readyCohort
       check('🔴 🔴 **같은 행의 묶음 runAt 이 창 시작 정각(창 안) → 정상 계산 — 공개 2 · 손실 4 · 모름 4 · 원천 31(그 묶음 1 포함)**',
@@ -838,17 +844,17 @@ async function main(): Promise<void> {
         await prisma.originalPostApprovalQueue.create({
           data: { sourceRawContentId: raw.id, status: status as never, draftTitle: `초안 ${k}`, draftBody: o.body ?? `본문 ${k}`, gateVerdict: o.verdict ?? 'PASS',
             promptVersion: 'p0r', model: 'p0r', gateResults: { ...evOf(k), ...(o.gate ?? {}), [SUPPLY_INTENT_KEY]: intentOf(k, runId) } as Prisma.InputJsonValue,
-            decidedBy: by, decidedAt, dedupKey: `p0r-${k}` },
+            decidedBy: by, decidedAt, createdAt: new Date(runAt(runId).getTime() + 60_000), dedupKey: `p0r-${k}` },
         })
       }
       /**
        * 🔴 (2026-10-09 P0-a) 운영 실측 모양 — 창 안 회차에 섞인 **자동 부적격 미도장 기계 행 12건**
-       *    (gate FAIL 4 · 의미 경고 4 · 금지 문구 4). 같은 회차 묶음 원천이다 — 원천 수 101 은 그대로다(분모 불변).
+       *    (gate FAIL 4 · 생활사 모순 4 · 검수 미완료 4). 같은 회차 묶음 원천이다 — 원천 수 101 은 그대로다(분모 불변).
        */
-      const INEL_KINDS = ['gateFail', 'semantic', 'forbidden'] as const
+      const INEL_KINDS = ['gateFail', 'semantic', 'incomplete'] as const
       const inelOf = (i: number): { kind: (typeof INEL_KINDS)[number]; o: { verdict?: string; gate?: Record<string, unknown>; body?: string } } => {
         const kind = INEL_KINDS[i % 3]!
-        return { kind, o: kind === 'gateFail' ? { verdict: 'FAIL' } : kind === 'semantic' ? { gate: SEMANTIC_WARN_GATE } : { body: '방금 들은 얘기예요' } }
+        return { kind, o: kind === 'gateFail' ? { verdict: 'FAIL' } : kind === 'semantic' ? { gate: SEMANTIC_BLOCK_GATE } : { gate: INCOMPLETE_GATE } }
       }
       const INEL_PER_RUN = [1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1]
       let inel = 0
@@ -889,10 +895,10 @@ async function main(): Promise<void> {
       const verdictOf = (m: (typeof machineRows)[number]) => eligibilityOf({ gateVerdict: m.gateVerdict, gateResults: m.gateResults, title: m.editedTitle ?? m.draftTitle, body: m.editedBody ?? m.draftBody })
       const inelRows = machineRows.filter((m) => /-x\d+$/.test(m.dedupKey ?? ''))
       const reasons = inelRows.map((m) => verdictOf(m).reasons.join(','))
-      check('fixture 전제 — 정본 eligibilityOf: 22:15 도장 전 4건 적격 · 부적격 12건(gate FAIL 4 · 의미 경고 4 · 금지 문구 4)',
+      check('fixture 전제 — 정본 eligibilityOf: 22:15 도장 전 4건 적격 · 부적격 12건(gate FAIL 4 · 생활사 모순 4 · 검수 미완료 4)',
         machineRows.filter((m) => !/-x\d+$/.test(m.dedupKey ?? '')).every((m) => verdictOf(m).auto) && inelRows.length === 12
         && inelRows.every((m) => !verdictOf(m).auto) && reasons.filter((x) => x.includes('gate=FAIL')).length === 4
-        && reasons.filter((x) => x.includes('SEMANTIC_UNSUPPORTED_ADDITION')).length === 4 && reasons.filter((x) => x.includes('timeDrift')).length === 4,
+        && reasons.filter((x) => x.includes('SEMANTIC_LIFE_CONTRADICTION')).length === 4 && reasons.filter((x) => x.includes('SEMANTIC_REVIEW_INCOMPLETE')).length === 4,
         JSON.stringify(reasons))
       // 🔴 앞판 분자 — 같은 DB 에서 decidedAt 창 + 자동 도장만 세면 16 (22:15 4건 · 창 밖 회차 행은 시각상 빠지거나 끼어든다)
       const oldNumerator = (await prisma.originalPostApprovalQueue.findMany({
@@ -907,8 +913,8 @@ async function main(): Promise<void> {
         latencyP50H: 46.99, latencyP90H: 68.81, contractValidPersonas: 30, commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
         auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
       }, RUNNER_GRID)
-      check('🔴 앞판 07:00 재현 — readyCapacity 9 · readyNeeded 12 · THROUGHPUT_SHORT · SUPPLY_COST_UNKNOWN',
-        old0700.counts.readyCapacity === 9 && old0700.counts.readyNeeded === 12
+      check('🔴 앞판 07:00 사실을 현재 bounded recovery로 재판정 — readyCapacity 11 · readyNeeded 12 · THROUGHPUT_SHORT · SUPPLY_COST_UNKNOWN',
+        old0700.counts.readyCapacity === 11 && old0700.counts.readyNeeded === 12
         && old0700.codes.includes('THROUGHPUT_SHORT') && old0700.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(old0700.counts))
       process.env.HOME = home
       const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.5', SORAN_LLM_RUN_REQUEST_CAP: '40', SORAN_LLM_RESERVE_HEADROOM: '1.2' }
@@ -930,9 +936,9 @@ async function main(): Promise<void> {
       check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
       const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
-      check('🔴 🔴 **보정 후 공급 능력 11 (앞판 9 · 부적격을 셌다면 floor(32 × 60 ÷ 101) = 19) · 필요 하한 12 → 여전히 THROUGHPUT_SHORT (11 < 12) · D10 FAIL**',
-        v.counts.readyCapacity === 11 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
-        && v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
+      check('🔴 🔴 **보정 후 공급 능력 13 · 필요 하한 12 → bounded recovery가 처리량 부족은 해소하되 다른 미상 때문에 D10은 계속 FAIL**',
+        v.counts.readyCapacity === 13 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
+        && !v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
         JSON.stringify({ counts: v.counts, codes: v.codes }))
       // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
       const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-r` } }, select: { id: true } })).map((x) => x.id)
@@ -946,8 +952,8 @@ async function main(): Promise<void> {
       check('🔴 🔴 **사용량 미상 2건 → 결과당 비용 null · 추정 예약액 $0.0172446 은 보고만 · SUPPLY_COST_UNKNOWN 유지**',
         c !== null && c.usdPerSlotValidResult === null && v.codes.includes('SUPPLY_COST_UNKNOWN') && !v.codes.includes('SUPPLY_COST_SHORT'),
         JSON.stringify({ usd: c?.usdPerSlotValidResult, codes: v.codes }))
-      check('🔴 🔴 **최종 판정 — THROUGHPUT_SHORT + SUPPLY_COST_UNKNOWN · D10 BLOCK (FAIL)**',
-        v.verdict === 'FAIL' && v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
+      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소됐지만 SUPPLY_COST_UNKNOWN 등 남은 축으로 D10 BLOCK (FAIL)**',
+        v.verdict === 'FAIL' && !v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
       check('preflight 메모 — 미정산 2건 · 추정 예약액 $0.0172 · 실제 비용 아님',
         (r.notes as string[]).some((x) => /미정산 2건 \(추정 예약액 \$0\.0172 — 실제 비용 아님\)/.test(x)), JSON.stringify(r.notes))
       // 🔴 예약이 없는 미상이어도 같다 — SUPPLY_COST_UNKNOWN
@@ -996,7 +1002,7 @@ async function main(): Promise<void> {
   {
     /**
      * 창 = 증거일 2026-10-08 · 회차 6개 × 원천 10 = 60. 자동 도장 공개 2건 + 미도장 기계 행:
-     *   적격 1(→ 모름) · gate FAIL 1 · 의미 경고 1 · 금지 문구 1 · 부적격 셋은 분자에서 빠진다.
+     *   적격 1(→ 모름) · gate FAIL 1 · 생활사 모순 1 · 검수 미완료 1 · 부적격 셋은 분자에서 빠진다.
      *   🔴 앞판(#676)은 부적격까지 모름으로 셌다 — raw 6 → 공급 능력 6 · 필요 3~12 → READY_REQUIREMENT_UNKNOWN 으로 부풀었다.
      */
     const site = 'fixture:p0a'
@@ -1004,6 +1010,9 @@ async function main(): Promise<void> {
     const windowFrom = new Date('2026-10-05T15:00:00Z')
     const windowTo = new Date('2026-10-08T15:00:00Z')
     const runs = ['20261007-031500', '20261007-051500', '20261007-081500', '20261008-031500', '20261008-051500', '20261008-081500']
+    const runCreatedAt = (runId: string): Date => new Date(Date.UTC(
+      +runId.slice(0, 4), +runId.slice(4, 6) - 1, +runId.slice(6, 8), +runId.slice(9, 11), +runId.slice(11, 13),
+    ) + 60_000)
     const fresh = now.getTime() - 2 * 3_600_000
     const iso = (ms: number): string => new Date(ms).toISOString()
     const evOf = (k: string): Record<string, unknown> => ({
@@ -1027,8 +1036,8 @@ async function main(): Promise<void> {
       { k: 'pub2', run: runs[3]!, status: 'PUBLISHED', by: AUTO_DECIDER },
       { k: 'elig', run: runs[5]!, status: 'APPROVED', by: 'machine:content-core-v2' },
       { k: 'gfail', run: runs[1]!, status: 'APPROVED', by: 'machine:content-core-v2', verdict: 'FAIL' },
-      { k: 'sem', run: runs[2]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: SEMANTIC_WARN_GATE },
-      { k: 'forbid', run: runs[4]!, status: 'APPROVED', by: 'machine:content-core-v2', body: '방금 들은 얘기예요' },
+      { k: 'sem', run: runs[2]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: SEMANTIC_BLOCK_GATE },
+      { k: 'incomplete', run: runs[4]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: INCOMPLETE_GATE },
     ]
     const intentOf = (k: string, runId: string): Record<string, unknown> => ({
       contract: SUPPLY_JIT_CONTRACT, runId, sourceHash: articleIdHashOf(site, k), intendedSlotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
@@ -1045,12 +1054,12 @@ async function main(): Promise<void> {
           data: { sourceRawContentId: raw.id, status: x.status as never, draftTitle: `초안 ${x.k}`, draftBody: x.body ?? `본문 ${x.k}`,
             gateVerdict: x.verdict ?? 'PASS', promptVersion: 'p0a', model: 'p0a',
             gateResults: { ...evOf(`p0a-${x.k}`), ...(x.gate ?? {}), [SUPPLY_INTENT_KEY]: intentOf(`p0a-${x.k}`, x.run) } as Prisma.InputJsonValue,
-            decidedBy: x.by, decidedAt: new Date('2026-10-07T04:00:00Z'), dedupKey: `p0a-${x.k}` },
+            decidedBy: x.by, decidedAt: new Date('2026-10-07T04:00:00Z'), createdAt: runCreatedAt(x.run), dedupKey: `p0a-${x.k}` },
         })
       }
       const cohort = await readReadyCohort(prisma, { windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now })
       const f = cohort.fates
-      check('🔴 🔴 **미도장 + 자동 적격 → 모름 1 · 미도장 + gate FAIL · 의미 경고 · 금지 문구 → 분자 제외 3**',
+      check('🔴 🔴 **미도장 + 자동 적격 → 모름 1 · 미도장 + gate FAIL · 생활사 모순 · 검수 미완료 → 분자 제외 3**',
         f !== null && f.published === 2 && f.unknown === 1 && f.lost === 0 && f.scheduled === 0 && cohort.readyCount === 3 && cohort.autoIneligibleExcluded === 3,
         JSON.stringify({ f, n: cohort.readyCount, ex: cohort.autoIneligibleExcluded }))
       check('🔴 🔴 **제외돼도 분모(원천) 60 그대로 · 부적격은 legacy 가 아니다(legacy 0) · 불일치 0**',

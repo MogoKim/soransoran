@@ -3,13 +3,13 @@
  * 🔴 **공급 capacity 준비 · 재고 분류 · Persona 여력 대기 — 순수 계약** (2026-09-26 · DB 0 · 네트워크 0)
  *
  *   ① 재고 분류(`classifyStock`) — 정본 결과를 칸으로 나누기만 한다. 칸은 겹치지 않고 빠지지 않는다.
- *      검토 대기는 publishable 이 아니고 WIP 에는 남는다. TTL 은 신선 재고가 아니다.
+ *      자동 도장 대기는 publishable 이 아니고 WIP 에 남는다. 품질 격리와 TTL 은 WIP 가 아니다.
  *      깨진 복구가 있으면 러너는 전체를 멈추므로 발행 가능 0 이다.
  *   ② 공급 계획 눈금 — capacity. 발행 눈금 — release. 새 단계·새 숫자 없음.
  *   ③ Persona 여력 대기 — `noDraft`(초안 실패)가 아니라 `personaCapacityDeferred` 로 적는다.
  *   ④ 소비자 연결 — 공급 러너 · 보충기 · wave-c 가 공용 분류를 실제로 부른다.
  *   ⑤ 옛 품질 계약 기계 초안 — 큐에 남고 · 자동 발행 0 · 지금 계약의 Persona WIP 0 (2026-09-28).
- *      지금 계약 검토 대기 · 발행 가능 · 사람이 검토한 옛 계약 행은 기존 뜻 그대로다.
+ *      지금 계약 자동 도장 대기 · 발행 가능 · 사람이 검토한 옛 계약 행을 구분한다.
  *
  *   실제 DB 로 부딪혀 보는 반례(공급 9 · 발행 0 / release d1 · capacity d5)는
  *   `supply:stock-parity-db-check`(격리 Postgres)가 맡는다.
@@ -49,11 +49,15 @@ const same = (a: readonly string[], b: readonly string[]): boolean =>
 type ContractMark = 'current' | 'otherDigest' | 'otherVersion' | 'none'
 /** 🔴 PR #591 에 기대지 않는다 — "지금 계약 ≠ 행의 계약" 을 행 쪽 표식으로 만든다 */
 const gateOfMark = (m: ContractMark): Record<string, unknown> => {
+  const semanticReview = {
+    complete: true, deterministicPass: true, unsupportedAdditions: 0,
+    lifeContradictions: 0, droppedFromSource: 0, confidence: 1,
+  }
   switch (m) {
-    case 'current': return { holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: currentQualityContract() }
-    case 'otherDigest': return { holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: { version: QUALITY_CONTRACT_VERSION, digest: digestOf('옛 게이트 · 옛 검수') } }
-    case 'otherVersion': return { holds: [], blocks: [], [QUALITY_CONTRACT_KEY]: { version: 'quality-v0', digest: digestOf('옛 판') } }
-    case 'none': return { holds: [], blocks: [] }
+    case 'current': return { holds: [], blocks: [], semanticReview, [QUALITY_CONTRACT_KEY]: currentQualityContract() }
+    case 'otherDigest': return { holds: [], blocks: [], semanticReview, [QUALITY_CONTRACT_KEY]: { version: QUALITY_CONTRACT_VERSION, digest: digestOf('옛 게이트 · 옛 검수') } }
+    case 'otherVersion': return { holds: [], blocks: [], semanticReview, [QUALITY_CONTRACT_KEY]: { version: 'quality-v0', digest: digestOf('옛 판') } }
+    case 'none': return { holds: [], blocks: [], semanticReview }
     default: {
       const never: never = m
       return never
@@ -79,6 +83,8 @@ function fixture(o: {
    *    `otherDigest` 같은 판 다른 digest(계약을 올린 뒤의 옛 행) · `otherVersion` 옛 판 · `none` 표식 없음(legacy)
    */
   contractOf?: Record<string, ContractMark>
+  /** 자동 READY 예외를 재현할 현재 계약 행 */
+  warningIds?: string[]
 }): { loaded: LoadedStock; plan: PublishPlan } {
   const rejected = o.rejected ?? []
   const targets = (o.targets ?? []).map((id) => ({ id }))
@@ -89,8 +95,15 @@ function fixture(o: {
       : { queueId: id, voice: { personaCode: v, bundleDigest: `bd-${v}`, comments: 3 }, profile: 'machine' }
   })
   /** 🔴 분류가 읽는 저장값 — 정본 로더처럼 `allRows` 에 모든 행이 있다 */
+  const warned = new Set(o.warningIds ?? [])
   const allRows = [...rejected.map((r) => r.id), ...targets.map((t) => t.id)]
-    .map((id) => ({ id, gateResults: gateOfMark(o.contractOf?.[id] ?? 'current') }))
+    .map((id) => {
+      const gate = gateOfMark(o.contractOf?.[id] ?? 'current')
+      return {
+        id, gateVerdict: 'PASS', title: `제목 ${id}`, body: `본문 ${id}`,
+        gateResults: warned.has(id) ? { ...gate, holds: ['DRAFT_LIFE_REVIEW:unread'] } : gate,
+      }
+    })
   const loaded = { queueTotal: rejected.length + targets.length, rejected, targets, queueCandidates, allRows } as unknown as LoadedStock
   const assignOf = new Map((o.unassigned ?? []).map((u) => [u.id, {
     queueId: u.id, assigned: null, deferredBy: u.deferredBy ?? [], blocked: u.blocked ?? [], recoveryProblem: null,
@@ -115,19 +128,20 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   const EXPECT: Record<StockBucket, { wip: boolean; owner: RecoveryOwner }> = {
     publishableNow: { wip: true, owner: 'none' },
     haltedByBrokenRecovery: { wip: true, owner: 'human' },
-    humanReviewPending: { wip: true, owner: 'human' },
+    autoReadyPending: { wip: true, owner: 'autoReadyGate' },
+    qualityQuarantine: { wip: false, owner: 'none' },
     autoReadyClosed: { wip: true, owner: 'autoReadyGate' },
-    autoReadyStale: { wip: true, owner: 'human' },
+    autoReadyStale: { wip: false, owner: 'none' },
     assignmentDeferred: { wip: true, owner: 'time' },
     // 🔴 (2026-09-30) 원천 가치 없음 · 증거 모름 — 사람이 살리는 칸이 아니다(owner none · 트랜잭션이 EXPIRED)
     releaseIneligible: { wip: false, owner: 'none' },
     releaseUnknown: { wip: false, owner: 'none' },
     recoveryBroken: { wip: false, owner: 'human' },
     assignmentException: { wip: false, owner: 'human' },
-    // 🔴 옛 품질 계약 기계 초안 — WIP 아님 · 사람 검토로만 나간다 (2026-09-28)
-    qualityContractMismatch: { wip: false, owner: 'human' },
+    // 🔴 옛 품질 계약 기계 초안 — WIP 아님 · 운영자 구제 없음
+    qualityContractMismatch: { wip: false, owner: 'none' },
     profileMismatch: { wip: false, owner: 'none' },
-    gateBlocked: { wip: false, owner: 'human' },
+    gateBlocked: { wip: false, owner: 'none' },
   }
   check('🔴 칸 표 = 계약 (WIP 여부 · 복구 주체)', STOCK_BUCKETS.length === Object.keys(EXPECT).length
     && STOCK_BUCKETS.every((b) => STOCK_BUCKET_META[b].wip === EXPECT[b].wip && STOCK_BUCKET_META[b].owner === EXPECT[b].owner),
@@ -137,13 +151,15 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   const review = Array.from({ length: 8 }, (_, i) => ({ id: `m${i}`, code: 'HUMAN_REVIEW_REQUIRED' as const }))
   const f = fixture({
     rejected: [...review, { id: 'legacy', code: 'PROFILE' }, { id: 'gate', code: 'GATE' }],
+    warningIds: review.slice(4).map((r) => r.id),
     targets: ['ttl'], held: [{ id: 'ttl', hold: 'SOURCE_TOO_OLD_AT_SLOT' }],
   })
   const c = classifyStock(f)
   check('🔴 🔴 **운영 반례 — 발행 가능 0** (앞판 공급 표시 9)', c.counts.publishableNow === 0)
-  check('🔴 🔴 **검토 대기 8건은 humanReviewPending** — publishable 이 아니다',
-    c.counts.humanReviewPending === 8 && !c.ids.publishableNow.some((id) => id.startsWith('m')))
-  check('🔴 🔴 **검토 대기는 WIP 에 남는다**', review.every((r) => wip(c, r.id)))
+  check('🔴 자동 적격 4건은 autoReadyPending — 다음 도장 회차까지 WIP',
+    c.counts.autoReadyPending === 4 && review.slice(0, 4).every((r) => wip(c, r.id)))
+  check('🔴 자동 예외 4건은 qualityQuarantine — 발행 0 · WIP 0',
+    c.counts.qualityQuarantine === 4 && review.slice(4).every((r) => !wip(c, r.id)))
   check('🔴 슬롯에서 원문 72h 초과는 releaseIneligible — 발행 재고가 아니다', same(c.ids.releaseIneligible, ['ttl']) && !c.ids.publishableNow.includes('ttl'))
   check('🔴 🔴 **원천 가치 없는 행은 WIP 를 점유하지 않는다**', !wip(c, 'ttl'))
   check('legacy → profileMismatch · gate → gateBlocked', same(c.ids.profileMismatch, ['legacy']) && same(c.ids.gateBlocked, ['gate']))
@@ -212,15 +228,16 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   const auto = classifyStock(fixture({
     rejected: [{ id: 'c', code: 'AUTO_READY_CLOSED' }, { id: 's', code: 'AUTO_READY_STALE' }, { id: 't', code: 'TITLE_COPIES_SOURCE' }],
   }))
-  check('🔴 🔴 **자동 도장 닫힘 · 낡음은 검토 대기와 다른 칸이다**',
-    same(auto.ids.autoReadyClosed, ['c']) && same(auto.ids.autoReadyStale, ['s']) && auto.counts.humanReviewPending === 0)
-  check('🔴 닫힘은 자동 READY 문이 풀고 · 낡음은 사람이 푼다 — 둘 다 WIP',
-    STOCK_BUCKET_META.autoReadyClosed.owner === 'autoReadyGate' && STOCK_BUCKET_META.autoReadyStale.owner === 'human'
-    && wip(auto, 'c') && wip(auto, 's'))
+  check('🔴 자동 도장 닫힘 · 낡음은 서로 다른 칸이다',
+    same(auto.ids.autoReadyClosed, ['c']) && same(auto.ids.autoReadyStale, ['s'])
+    && auto.counts.autoReadyPending === 0 && auto.counts.qualityQuarantine === 0)
+  check('🔴 닫힘은 자동 READY 문이 풀어 WIP · 낡은 도장은 자동 격리라 WIP 아님',
+    STOCK_BUCKET_META.autoReadyClosed.owner === 'autoReadyGate' && STOCK_BUCKET_META.autoReadyStale.owner === 'none'
+    && wip(auto, 'c') && !wip(auto, 's'))
   check('제목 복제는 gateBlocked', same(auto.ids.gateBlocked, ['t']))
 }
 
-console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 release 슬롯 + 다음 첫 기회 (2026-10-11 Batch A2)')
+console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 실제 catch-up 기회 + 다음 첫 기회')
 {
   const at = (hm: string): Date => new Date(`2026-10-12T${hm}:00+09:00`)
   const tomorrowFirst = (p: (typeof PROFILES)[keyof typeof PROFILES]): string =>
@@ -232,18 +249,31 @@ console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 release 슬롯
     && morning[5]!.toISOString() === tomorrowFirst(PROFILES.d5), `${morning.length}`)
   const afternoon = upcomingSlots({ now: at('14:00'), publishedToday: 3, release: PROFILES.d5 })
   check('반례④ 14:00 · 3편 낸 뒤 — 지평 3(남은 d5 2 + 다음 첫 기회 1) · 옛 12', afternoon.length === 3, `${afternoon.length}`)
-  // 반례⑤ 오늘 슬롯이 끝났으면 다음 첫 기회 하나만
+  // 목표를 다 채웠으면 다음 첫 기회 하나만
   const night = upcomingSlots({ now: at('21:15'), publishedToday: 5, release: PROFILES.d5 })
   check('🔴 🔴 반례⑤ 오늘 d5 슬롯 끝(21:15 · 5편) — 지평 1(다음 첫 기회만) · 옛 10',
     night.length === 1 && night[0]!.toISOString() === tomorrowFirst(PROFILES.d5), `${night.length}`)
   const shortDay = upcomingSlots({ now: at('21:15'), publishedToday: 2, release: PROFILES.d5 })
-  check('🔴 반례③ 평상일 부족분(2/5)을 지난 슬롯으로 되살리지 않는다 — 지평 1', shortDay.length === 1, `${shortDay.length}`)
+  check('🔴 반례③ 21:15 · 2/5 — 발행기와 같은 catch-up 3회 + 다음 첫 기회 = 지평 4',
+    shortDay.length === 4
+    && shortDay.slice(0, 3).map((d) => d.toISOString()).join(',') === ['21:20', '21:30', '21:40']
+      .map((hm) => at(hm).toISOString()).join(','), `${shortDay.map((d) => d.toISOString()).join(',')}`)
+  const nearClose = upcomingSlots({ now: at('21:55'), publishedToday: 3, release: PROFILES.d5 })
+  check('🔴 운영 창 직전 3/5 — 22:00 한 건만 회수하고 나머지는 다음 날로 넘긴다',
+    nearClose.length === 2 && nearClose[0]!.toISOString() === at('22:00').toISOString()
+    && nearClose[1]!.toISOString() === tomorrowFirst(PROFILES.d5), `${nearClose.length}`)
+  const afterClose = upcomingSlots({ now: at('22:15'), publishedToday: 3, release: PROFILES.d5 })
+  check('🔴 운영 창 뒤 부족분은 되살리지 않는다 — 다음 첫 기회만',
+    afterClose.length === 1 && afterClose[0]!.toISOString() === tomorrowFirst(PROFILES.d5), `${afterClose.length}`)
   // 반례⑥ 열린 d10 증명일 — 그날 남은 d10 슬롯이 든다
   const proof = upcomingSlots({ now: at('12:00'), publishedToday: 3, release: PROFILES.d10 })
   check('🔴 🔴 반례⑥ 열린 d10 증명일 12:00 · 3편 — 지평 8(남은 d10 7 + 다음 첫 기회 1) · 옛 7 + 내일 d20 20 = 27',
     proof.length === 8 && proof.slice(0, 7).every((d) => d.getTime() >= at('12:00').getTime() && d.getTime() < at('23:59').getTime()), `${proof.length}`)
   const lib = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
   const body = lib.slice(lib.indexOf('export function upcomingSlots'), lib.indexOf('export type PublishPlan'))
+  check('🔴 공급 수요가 발행기와 같은 heartbeat · 운영 창 · 회차 상한을 쓴다',
+    /HEARTBEAT_INTERVAL_MINUTES/.test(body) && /PUBLISH_WINDOW_END_MINUTE/.test(body) && /PER_RUN_MAX/.test(body)
+    && !/todayLeft/.test(body))
   check('🔴 🔴 수요 지평 · JIT 짝짓기 · Persona 여력 cap 에 capacity 눈금이 없다(옛 길 제거)',
     !/capacity/.test(body.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n'))
     && /caps: releaseCapsOf\(scale\.releaseProfile\)/.test(body))
@@ -320,7 +350,7 @@ console.log('\n⑤ 🔴 옛 품질 계약 기계 초안 — 큐에 남고 · 자
   const contractOf = Object.fromEntries(old.map((r, i) => [r.id, marks[i % 3]!])) as Record<string, ContractMark>
   const c = classifyStock(fixture({ rejected: old, contractOf }))
   check('🔴 🔴 **옛 계약 46건 → 전부 qualityContractMismatch** (앞판: humanReviewPending)',
-    c.counts.qualityContractMismatch === 46 && c.counts.humanReviewPending === 0, JSON.stringify(c.counts))
+    c.counts.qualityContractMismatch === 46 && c.counts.autoReadyPending === 0 && c.counts.qualityQuarantine === 0, JSON.stringify(c.counts))
   check('🔴 🔴 **지금 계약의 Persona WIP 점유 0** (앞판: 46)', c.personaWipIds.length === 0, String(c.personaWipIds.length))
   check('🔴 자동 발행 가능 0', c.counts.publishableNow === 0)
   check('🔴 큐에서 빠지지 않는다 — 칸의 합 = 대기열 46', STOCK_BUCKETS.reduce((n, b) => n + c.counts[b], 0) === 46 && c.queueTotal === 46)
@@ -334,17 +364,21 @@ console.log('\n⑤ 🔴 옛 품질 계약 기계 초안 — 큐에 남고 · 자
   const mix = classifyStock(fixture({
     rejected: [
       { id: 'curReview', code: 'HUMAN_REVIEW_REQUIRED' },
+      { id: 'curQuarantine', code: 'HUMAN_REVIEW_REQUIRED' },
       { id: 'oldReview', code: 'HUMAN_REVIEW_REQUIRED' },
       { id: 'oldAuto', code: 'QUALITY_CONTRACT_MISMATCH' },
       { id: 'curClosed', code: 'AUTO_READY_CLOSED' },
     ],
+    warningIds: ['curQuarantine'],
     targets: ['curReady', 'humanOld', 'humanOldDeferred'],
     ready: ['curReady', 'humanOld'],
     unassigned: [{ id: 'humanOldDeferred', deferredBy: ['P03'] }],
     contractOf: { oldReview: 'otherDigest', oldAuto: 'otherDigest', humanOld: 'otherDigest', humanOldDeferred: 'none' },
   }))
-  check('🔴 🔴 **지금 계약 검토 대기는 WIP 에 남는다** (humanReviewPending)',
-    same(mix.ids.humanReviewPending, ['curReview']) && wip(mix, 'curReview'))
+  check('🔴 자동 적격 미도장 행은 autoReadyPending · WIP',
+    same(mix.ids.autoReadyPending, ['curReview']) && wip(mix, 'curReview'))
+  check('🔴 경고가 있는 현재 계약 행은 qualityQuarantine · WIP 아님',
+    same(mix.ids.qualityQuarantine, ['curQuarantine']) && !wip(mix, 'curQuarantine'))
   check('🔴 🔴 **지금 계약 발행 가능 행은 기존 뜻 그대로** (publishableNow · WIP)',
     mix.ids.publishableNow.includes('curReady') && wip(mix, 'curReady'))
   check('🔴 🔴 **사람이 검토한 옛 계약 행은 제외하지 않는다** — selector 대상이면 배정 규칙이 정한다',
@@ -354,8 +388,8 @@ console.log('\n⑤ 🔴 옛 품질 계약 기계 초안 — 큐에 남고 · 자
     mix.ids.qualityContractMismatch.includes('oldAuto') && !wip(mix, 'oldAuto'))
   check('🔴 지금 계약 자동 도장 닫힘은 그대로 autoReadyClosed · WIP', same(mix.ids.autoReadyClosed, ['curClosed']) && wip(mix, 'curClosed'))
   check('옛 계약 검토 대기 → 불일치 칸 · WIP 아님', mix.ids.qualityContractMismatch.includes('oldReview') && !wip(mix, 'oldReview'))
-  check('🔴 사람 검토로만 풀린다 — 복구 주체 human · 자동 READY 문이 아니다',
-    STOCK_BUCKET_META.qualityContractMismatch.owner === 'human' && STOCK_BUCKET_META.qualityContractMismatch.wip === false)
+  check('🔴 옛 계약 행은 정기 운영자 구제 대상이 아니다 — WIP 0 · owner none',
+    STOCK_BUCKET_META.qualityContractMismatch.owner === 'none' && STOCK_BUCKET_META.qualityContractMismatch.wip === false)
 
   /** 🔴 회귀 ⑨ — 계약 칸이 생겨도 TTL · 배정 · 복구 칸은 그대로다(모든 행이 옛 계약이어도) */
   const allOld = (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 'otherDigest' as const]))

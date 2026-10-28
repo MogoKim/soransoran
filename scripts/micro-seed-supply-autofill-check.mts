@@ -27,10 +27,12 @@ import { tmpdir } from 'node:os'
 import {
   readSupplyIntent, SUPPLY_JIT_CONTRACT, WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, worksetFileName, type SupplyIntent,
 } from '../src/lib/supply-workset'
-import { intentsForFile } from './micro-seed-supply-autofill.mjs'
+import { autoReadyPriority, intentsForFile } from './micro-seed-supply-autofill.mjs'
 import { currentQualityContract, qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
+import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as CURRENT_AUTO_JUDGE_PROMPT_VERSION } from '../src/lib/micro-seed-auto-judge'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
+import { DRAFT_LIFE_ADVISORIES_KEY, DRAFT_LIFE_REVIEW_UNREAD } from '../src/lib/semantic-summary-codes'
 
 const NOW = '2026-09-07T12:00:00.000Z'
 const QUALITY = currentQualityContract()
@@ -271,8 +273,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' },
 
   })
-  const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
-    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
+  const aj = { ruleVersion: CURRENT_AUTO_JUDGE_RULE_VERSION, promptVersion: CURRENT_AUTO_JUDGE_PROMPT_VERSION,
+    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow', boardTopic: 'FREE' as const }
   const p1 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, now: NOW })
   check('🟢 기계 payload 가 만들어진다', p1 !== null && p1.profile === 'machine')
   /**
@@ -314,7 +316,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
       check('🔴 옛 판(v2) 묶음이면 의도 없음 — 옵션 칸으로 옛 묶음을 새 근거로 인정하지 않는다', intentsForFile(cand) === null)
     } finally { rmSync(dir, { recursive: true, force: true }) }
     const runner = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
-    check('🔴 실제 적재 호출이 후보의 의도를 넘긴다', (runner.match(/candidate: c, intent: intentOf\(c\),/g) ?? []).length === 2)
+    check('🔴 사전 판정·미리보기·실제 적재가 모두 후보의 의도를 넘긴다',
+      (runner.match(/candidate: c, intent: intentOf\(c\),/g) ?? []).length === 3)
   }
   // 🔴 (P0-B) 원천 identity 가 한 칸이라도 없으면 기계 후보가 아니다 — 접두뿐인 synthetic 사이트를 만들지 않는다
   for (const [label, patch] of [['사이트 빈 값', { sourceSite: '' }], ['id 빈 값', { sourceArticleId: '' }]] as const) {
@@ -333,7 +336,7 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   check('🔴 decidedBy 가 founder 가 아니다', p1 !== null && p1.decidedBy === MACHINE_DECIDED_BY)
   check('🔴 autoJudge 를 상수가 아니라 후보 값으로 남긴다', (() => {
     const g = p1?.gateResults.autoJudge as Record<string, unknown> | undefined
-    return g?.ruleVersion === 'auto-judge-v3' && g?.inputHash === 'abc123'
+    return g?.ruleVersion === CURRENT_AUTO_JUDGE_RULE_VERSION && g?.inputHash === 'abc123' && g?.boardTopic === 'FREE'
   })())
   check('🔴 🔴 **적재가 품질 계약을 코드 상수로 남긴다**', (() => {
     const q = p1?.gateResults.qualityContract as Record<string, unknown> | undefined
@@ -341,6 +344,12 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   })())
   check('🔴 판정 출처가 없으면 payload 를 만들지 않는다',
     buildQueuePayload({ envelope: mEnv, candidate: mc, now: NOW }) === null)
+  check('🔴 현재 판인데 boardTopic이 없거나 enum 밖이면 payload를 만들지 않는다',
+    buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, boardTopic: undefined }, now: NOW }) === null
+    && buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, boardTopic: 'MAGAZINE' as never }, now: NOW }) === null)
+  check('🔴 과거·모르는 판정판을 오늘 새 legacy Queue 행으로 만들지 않는다',
+    buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, ruleVersion: 'auto-judge-v3', boardTopic: undefined }, now: NOW }) === null
+    && buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: { ...aj, ruleVersion: 'auto-judge-v99' }, now: NOW }) === null)
   check('🔴 provenance 에 원문·제목·본문이 없다', (() => {
     const j = JSON.stringify(p1?.gateResults ?? {})
     return !/bodyHead|rawBody|"title"|"body"/.test(j)
@@ -450,7 +459,7 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
   check('🔴 autofill CLI 가 --up-to 를 실제로 판정부에 넘긴다', (() => {
     const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
     return /const UP_TO = UP_TO_RAW === null \? null : Number\.parseInt\(UP_TO_RAW, 10\)/.test(cli)
-      && /judgeApply\(\{ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
+      && /judgeApply\(\{ targets: orderedTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO \}\)/.test(cli)
   })())
   check('여력만큼만 가져간다', (() => {
     const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
@@ -660,8 +669,8 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     // 🔴 (quality-v2) 생성기 봉투가 싣는 칸 — 채택 판정이 모호함 없음(빈 배열)으로 낸 후보다
     lifeReview: [],
   })
-  const eAj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
-    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
+  const eAj = { ruleVersion: CURRENT_AUTO_JUDGE_RULE_VERSION, promptVersion: CURRENT_AUTO_JUDGE_PROMPT_VERSION,
+    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow', boardTopic: 'FREE' as const }
 
   const dirs = [join(homedir(), 'Documents/soransoran-runtime/.microseed-data'), '.microseed-data']
   let real: { file: string; review: unknown; n: number } | null = null
@@ -751,11 +760,19 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
   const nlg = (nlPl?.gateResults ?? {}) as Record<string, unknown>
   check('🔴 🔴 **④-b lifeReview 칸이 없으면 `DRAFT_LIFE_REVIEW:unread` 경고 (통과 아님)**',
     Array.isArray(nlg.holds) && (nlg.holds as string[]).includes('DRAFT_LIFE_REVIEW:unread'))
-  const amPl = buildQueuePayload({ envelope: eEnv, candidate: { ...eC, lifeReview: ['maritalStatusConflict'] }, autoJudge: eAj, review: cleanRev, now: NOW })
+  const amPl = buildQueuePayload({ envelope: eEnv, candidate: { ...eC, lifeReview: ['unsupportedHealthClaim'] }, autoJudge: eAj, review: cleanRev, now: NOW })
   const amg = (amPl?.gateResults ?? {}) as Record<string, unknown>
-  check('🔴 🔴 **④-c 모호 축이 실린 후보는 `DRAFT_LIFE_REVIEW:<코드>` 경고 · blocks 는 비어 있다**',
-    Array.isArray(amg.holds) && (amg.holds as string[]).includes('DRAFT_LIFE_REVIEW:maritalStatusConflict')
-    && Array.isArray(amg.blocks) && (amg.blocks as unknown[]).length === 0)
+  check('🟢 🟢 **④-c Content Core advisory는 기록되지만 holds·blocks 0 · 자동 READY 적격**',
+    Array.isArray(amg.holds) && (amg.holds as unknown[]).length === 0
+    && Array.isArray(amg.blocks) && (amg.blocks as unknown[]).length === 0
+    && Array.isArray(amg[DRAFT_LIFE_ADVISORIES_KEY])
+    && JSON.stringify(amg[DRAFT_LIFE_ADVISORIES_KEY]) === JSON.stringify(['unsupportedHealthClaim'])
+    && autoReadyPriority({ candidate: { ...eC, lifeReview: ['unsupportedHealthClaim'] }, payload: amPl }).priority)
+  const leakedBlock = buildQueuePayload({ envelope: eEnv, candidate: { ...eC, lifeReview: ['truncatedSourceCompletion'] }, autoJudge: eAj, review: cleanRev, now: NOW })
+  const leakedGate = (leakedBlock?.gateResults ?? {}) as Record<string, unknown>
+  check('🔴 차단 분류가 lifeReview로 새면 unread fail-closed',
+    Array.isArray(leakedGate.holds) && JSON.stringify(leakedGate.holds) === JSON.stringify([DRAFT_LIFE_REVIEW_UNREAD])
+    && !autoReadyPriority({ candidate: { ...eC, lifeReview: ['truncatedSourceCompletion'] }, payload: leakedBlock }).priority)
 
   // ⑤ 판정 기록이 없으면 경고다 — 재지 못한 것을 "이상 없음" 으로 읽지 않는다
   const nonePl = buildQueuePayload({ envelope: eEnv, candidate: eC, autoJudge: eAj, now: NOW })
@@ -764,6 +781,31 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     Array.isArray(ng.holds) && (ng.holds as string[]).includes('SEMANTIC_REVIEW_INCOMPLETE'))
   check('🔴 ⑤ 그때도 `blocks` 는 비어 있다 — 후보 생성은 멈추지 않는다',
     Array.isArray(ng.blocks) && (ng.blocks as unknown[]).length === 0)
+
+  // ⑥ 운영 2026-10-20 22:15 반례 — 부적격 둘 뒤의 깨끗한 후보가 --up-to=1 자리를 가져야 한다.
+  const blockedA = { ...eC, sourceArticleId: 'blocked-a', title: '백내장 진단 이야기', lifeReview: null }
+  const blockedB = { ...eC, sourceArticleId: 'blocked-b', title: '시어머니 안마의자 이야기', lifeReview: null }
+  const clean = { ...eC, sourceArticleId: 'clean-c', title: '연애박사 OST 이야기', lifeReview: [] }
+  const candidates = [blockedA, blockedB, clean]
+  const priority = candidates.filter((candidate) => autoReadyPriority({
+    candidate,
+    payload: buildQueuePayload({ envelope: eEnv, candidate, autoJudge: eAj, review: cleanRev, now: NOW }),
+  }).priority)
+  const deferred = candidates.filter((candidate) => !priority.includes(candidate))
+  const ordered = [...priority, ...deferred]
+  const one = judgeApply({ targets: ordered, apply: true, limit: null, upTo: 1 })
+  check('🔴 🔴 **⑥ 자동 부적격 2건은 JIT 자리를 먹지 않고 깨끗한 1건이 --up-to=1에 선택된다**',
+    priority.length === 1 && priority[0]?.sourceArticleId === 'clean-c'
+    && one.ok && one.take[0]?.sourceArticleId === 'clean-c')
+  check('🔴 기존 경고 후보는 제거하지 않고 후순위로 보존한다',
+    ordered.length === 3 && ordered[1]?.sourceArticleId === 'blocked-a' && ordered[2]?.sourceArticleId === 'blocked-b')
+  const blockedVerdict = autoReadyPriority({
+    candidate: blockedA,
+    payload: buildQueuePayload({ envelope: eEnv, candidate: blockedA, autoJudge: eAj, review: cleanRev, now: NOW }),
+  })
+  check('🔴 자동 READY 정본의 실제 차단 사유를 보존한다',
+    !blockedVerdict.priority
+    && blockedVerdict.verdict?.reasons.some((r) => r.includes(DRAFT_LIFE_REVIEW_UNREAD)) === true)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

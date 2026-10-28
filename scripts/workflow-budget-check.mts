@@ -293,6 +293,8 @@ check('🔴 D100 DB 사슬은 전용 job에서만 실행된다',
   && !/ci-d100-db-check/.test(coreJob))
 const EXPECTED_D100_DB_COMMANDS = [
   'stage:db-check',
+  'stage:preflight-window-check',
+  'stage:preflight-window-mutation',
   'ops:loop-db-check',
   'stage:evidence-db-check',
   'stage:proof-day-db-check',
@@ -305,11 +307,15 @@ const EXPECTED_D100_DB_COMMANDS = [
   'publish:lane-fairness-db-check',
   'supply:wip-contract-db-check',
   'supply:draft-deferral-e2e-db-check',
+  // 2026-10-27 공급 적재 뒤 자동 READY 도장 마감 — controller 전 unknown 잔여를 같은 격리 DB에서 검증한다
+  'supply:auto-ready-finalize-db-check',
   'check:draft-life-gates-db',
   'auto-ready:audit-db-check',
   'auto-ready:audit-day-db-check',
   'auto-ready:defect-resolution-db-check',
   'check:comment-thread-db',
+  // 2026-10-21 작성자 대댓글 — 운영 직접 작성 DB 검사를 같은 격리 DB 한 번에서 잰다(새 job·container·step 없음)
+  'operator:compose-db-check',
   'persona:comment-loop-db-check',
   'persona:followup-db-check',
   'persona:autogen-db-check',
@@ -317,9 +323,13 @@ const EXPECTED_D100_DB_COMMANDS = [
   'persona:remediation-db-check',
   // 실제 조회 원장은 같은 격리 DB 한 번에서 확인한다. 새 job·container·step은 만들지 않는다.
   'check:post-exposure-db',
+  // 2026-10-21 어드민 게시판 변경 — 자동 운영 글 · 열린 Persona 후보 차단을 같은 격리 DB 한 번에서 잰다
+  // (Codex [3] 계약: 로컬 검사로 끝내지 않고 이 사슬에 영구 편입 · 새 job·container·step 없음)
+  'check:board-move',
+  'board-move:db-check',
 ] as const
 const wiredD100DbCommands = [...d100DbRunner.matchAll(/^npm run (\S+)\s*$/gm)].map((m) => m[1])
-check('🔴 격리 DB 명령 24개가 승인된 순서로 모두 남아 있다',
+check('🔴 격리 DB 명령 30개가 승인된 순서로 모두 남아 있다',
   JSON.stringify(wiredD100DbCommands) === JSON.stringify(EXPECTED_D100_DB_COMMANDS))
 check('🔴 D100 DB runner는 격리 주소만 만들고 종료 때 컨테이너를 정리한다',
   /SORAN_ISOLATED_DB=yes-throwaway/.test(d100DbRunner)

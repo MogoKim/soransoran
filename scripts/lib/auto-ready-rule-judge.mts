@@ -8,9 +8,10 @@
  * 무엇을 결함(yes)으로 보나
  *   ① 발행된 제목·본문이 도장이 본 제목·본문과 다르다(hash) — 판정받지 않은 글이 나갔다
  *   ② 도장 기록이 없거나 모양이 깨졌다
- *   ③ 발행된 글에서 자동 READY 차단 표현이 나온다(이미지 의존 · 시점 어긋남 · 단정 · 후속 소재)
- *   ④ 발행 문안으로 다시 돌린 안전 필터가 pass 가 아니다
- *   ⑤ 제목이나 본문이 비었다
+ *   ③ 발행 문안으로 다시 돌린 안전 필터가 pass 가 아니다
+ *   ④ 제목이나 본문이 비었다
+ *
+ * 콘텐츠 품질은 Content Core의 구조화 결과를 다시 단어 규칙으로 해석하지 않는다.
  *
  * 🔴 **이 감사자가 못 보는 것을 정직하게 적는다.** 원문과의 의미 대조(없는 사실을 지어냈는가 ·
  *    생활사가 어긋나는가)는 규칙으로 잴 수 없다. 그 판정은 모델 감사자가 해야 하는데,
@@ -19,7 +20,7 @@
  *    달라져 기록에 남는다.
  */
 import {
-  AUDIT_CONTRACT_VERSION, AUTO_READY_BLOCKERS, digestOf,
+  AUDIT_CONTRACT_VERSION, digestOf,
   type AuditJudge, type AuditVerdict,
 } from '../../src/lib/auto-ready-v2'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
@@ -37,11 +38,6 @@ export const ruleAuditJudge: AuditJudge = async (i): Promise<AuditVerdict> => {
     if (i.stamp.bodyHash !== bodyHash) reasons.push('발행된 본문이 도장이 본 본문과 다르다')
   }
   if (i.title.trim() === '' || i.body.trim() === '') reasons.push('제목이나 본문이 비었다')
-  const both = `${i.title}\n${i.body}`
-  for (const [name, re] of Object.entries(AUTO_READY_BLOCKERS)) {
-    const hit = re.exec(both)
-    if (hit !== null) reasons.push(`${name}="${hit[0]}"`)
-  }
   const safety = safetyFilter({ title: i.title, body: i.body }).verdict
   if (safety !== 'pass') reasons.push(`안전 필터 ${safety}`)
   return {

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useFormState, useFormStatus } from 'react-dom'
 import { createHomeOverride, type HomeExposureState } from '@/lib/actions/admin-home-exposure'
 import { EXPIRY_CHOICES } from '@/lib/home-exposure-rules'
+import { adminButtonClass } from '@/components/admin/AdminButton'
 
 /**
  * 글 하나에 홈 노출 예외를 건다 — 고정 또는 홈에서만 숨김.
@@ -32,8 +33,7 @@ import { EXPIRY_CHOICES } from '@/lib/home-exposure-rules'
  */
 
 /** 목록 안에서 쓰는 작은 버튼. 데스크탑은 조용히, 모바일은 누를 수 있게. */
-const BTN =
-  'inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-3 text-sm font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98] disabled:opacity-50 lg:min-h-[32px]'
+const BTN = adminButtonClass('secondary', 'px-3 text-sm')
 
 /**
  * 🔴 useFormStatus 는 form 의 자식에서만 값을 읽는다.
@@ -68,7 +68,7 @@ export default function AdminHomeOverrideForm({ postId }: { postId: string }) {
           id={`expiry-${postId}`}
           value={expiry}
           onChange={(e) => setExpiry(e.target.value)}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-2 text-sm text-content-primary lg:min-h-[32px]"
+          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-2 text-sm text-content-primary lg:min-h-[44px]"
         >
           {EXPIRY_CHOICES.map((c) => (
             <option key={c.value} value={c.value}>

@@ -246,7 +246,7 @@ export type ConversationAudit = {
  *    · 자동 첫 댓글(`auto`)이 없는 글 · 첫 댓글보다 앞선 추가 댓글         FOLLOWUP_WITHOUT_FIRST
  *    · 그 글의 Persona 댓글 총수 > 장기 정본 `PERSONA_COMMENTS_PER_POST_MAX` FOLLOWUP_OVER_TOTAL
  *    · 추가 댓글 Persona 가 그 글에 이미 쓴 Persona                       FOLLOWUP_DUP_PERSONA
- *    · 추가 댓글 Persona 가 글쓴이                                         FOLLOWUP_SELF
+ *    · 글쓴이의 추가 댓글이 최상위이거나 두 건 이상(답글 한 번만 허용)     FOLLOWUP_SELF
  *    🔴 추가 댓글이 하나도 없으면 PASS 다(대화를 잇지 않는 글이 정상이다).
  */
 export function judgeConversationAudit(posts: readonly EvidencePost[]): ConversationAudit {
@@ -266,7 +266,9 @@ export function judgeConversationAudit(posts: readonly EvidencePost[]): Conversa
     if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')
     const seen = p.personaComments.map((c) => c.personaId ?? '(없음)')
     if (fu.some((c) => c.personaId === null || seen.filter((x) => x === c.personaId).length > 1)) codes.add('FOLLOWUP_DUP_PERSONA')
-    if (p.authorPersonaId !== null && fu.some((c) => c.personaId === p.authorPersonaId)) codes.add('FOLLOWUP_SELF')
+    // 🔴 글쓴이는 자기 글의 Persona 댓글에 답글로 한 번만 답할 수 있다 — 최상위 추가 댓글이거나 두 번째부터는 자기 글 결함이다
+    const own = p.authorPersonaId === null ? [] : fu.filter((c) => c.personaId === p.authorPersonaId)
+    if (own.some((c) => c.topLevel) || own.length > 1) codes.add('FOLLOWUP_SELF')
   }
   if (broken > 0) codes.add('FOLLOWUP_PROVENANCE_BROKEN')
   const ordered = CONVERSATION_AUDIT_CODES.filter((c) => codes.has(c))
@@ -337,11 +339,6 @@ export type StageEvidenceFacts = {
       postId: string; queueId: string
       judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean
     }[]
-    /** 🔴 지금 표 전체 — 정본 `unresolvedDefectCount`(지금 계약에서 해소되지 않은 확정 결함) · `overdueAuditCount` · `retryableFailureCount` · `missingAutoPostCount` */
-    globalUnresolvedDefects: number
-    globalOverdue: number
-    globalRetryable: number
-    globalMissingPosts: number
   }
 }
 
@@ -488,10 +485,11 @@ export function judgeEvidenceForTarget<S extends string>(
     if (autoTargets.length > 0 && sampled.size === 0) codes.add('AUDIT_COVERAGE_ZERO')
     else if (sampled.size < expected) codes.add('AUDIT_COVERAGE_SHORT')
     if (inSet.some((r) => !r.judged)) codes.add('AUDIT_UNJUDGED')
-    if (inSet.some((r) => r.defectYes) || a.globalUnresolvedDefects > 0) codes.add('AUDIT_DEFECT')
-    if (inSet.some((r) => r.overdue) || a.globalOverdue > 0) codes.add('AUDIT_OVERDUE')
-    if (inSet.some((r) => r.retryable) || a.globalRetryable > 0) codes.add('AUDIT_RETRYABLE')
-    if (a.globalMissingPosts > 0) codes.add('AUDIT_MISSING_POST')
+    // 증거일은 그날 자동 target의 감사만 판정한다. 다른 날의 현재 전역 결함·재시도·유실은
+    // controller의 실시간 quality signal이 즉시 막는다. 둘을 섞으면 오늘 결함이 어제 PASS를 소급 오염시킨다.
+    if (inSet.some((r) => r.defectYes)) codes.add('AUDIT_DEFECT')
+    if (inSet.some((r) => r.overdue)) codes.add('AUDIT_OVERDUE')
+    if (inSet.some((r) => r.retryable)) codes.add('AUDIT_RETRYABLE')
     // ⑦ 🔴 공개 증명 행 — 자동 target 전부가 지금 계약 · eligible 도장을 가져야 한다
     const stamped = autoTargets.filter((p) => p.release === 'STAMPED_ELIGIBLE').length
     counts.releaseStamped = stamped

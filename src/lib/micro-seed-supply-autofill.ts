@@ -32,9 +32,14 @@ import {
   CONTENT_CORE_MODEL_LABEL, CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   stageModelsMismatch,
 } from './content-core/pipeline'
-import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, lifeReviewHoldsOf, type SemanticSummary } from './semantic-summary-codes'
+import {
+  DRAFT_LIFE_ADVISORIES_KEY, SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES,
+  lifeReviewAdvisoriesOf, lifeReviewHoldsOf, semanticSummaryOf, semanticHoldsOf,
+  type SemanticSummary,
+} from './semantic-summary-codes'
 /** 🔴 품질 계약 — 적재기가 저장하는 값은 이 파일의 코드 상수다(후보 파일 값이 아니다) */
 import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } from './quality-contract'
+import { BOARD_TOPICS, RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION } from './micro-seed-auto-judge'
 
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
@@ -249,7 +254,7 @@ export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
  * **형식이 맞는 미발행 행**을 센다 — 🔴 **발행 가능 재고가 아니다** (2026-09-26 정정).
  *
  * APPROVED 라도 이미 발행됐으면 빼고, legacy 판(profile 불일치)도 뺀다 — 거기까지다.
- * 🔴 사람 검토를 기다리는 기계 초안 · TTL 만료 · 배정 불가도 **여기 들어간다.**
+ * 🔴 자동 품질 조건을 아직 못 갖춘 기계 초안 · TTL 만료 · 배정 불가도 **여기 들어간다.**
  *    앞판 주석은 이것을 "러너가 실제로 먹을 수 있는 것" 이라 불렀고, 같은 DB 에서
  *    이 값은 9 · 발행 러너는 0 이었다(실측 2026-09-26).
  * 🔴 쓰임은 **적재 천장·적재 정합**뿐이다. 발행 가능 재고는 `scripts/lib/publishable-stock`
@@ -280,7 +285,7 @@ export function readStock(rows: readonly (QueueProfileRow & {
 }
 
 export type Candidate = {
-  /** 🔴 사람 검토가 artifact 한 장을 정확히 찾는 불투명 열쇠 */
+  /** 🔴 감사·운영 증거가 artifact 한 장을 정확히 찾는 불투명 열쇠 */
   artifactId?: string
   /**
    * 🔴 **생활 일관성 게이트가 모호하다고 본 축**(2026-09-28 quality-v2) — 코드 배열. 모양은
@@ -663,6 +668,8 @@ export type AutoJudgeProvenance = {
   model?: string
   inputHash?: string
   provenance?: string
+  /** 🔴 2026-10-19 창업자 — 중심 주제. publish tx 가 이 값으로 boardType 을 라우팅한다 (null 은 현재 provenance 에서 fail-closed) */
+  boardTopic?: 'MENOPAUSE' | 'FREE' | null
 }
 
 /**
@@ -734,8 +741,10 @@ export function buildQueuePayload(input: {
   if (isMachine) {
     if (impersonatesHuman(env, c)) return null
     const aj = input.autoJudge ?? {}
-    // 🔴 판정 출처가 없으면 만들지 않는다 — 있지도 않은 근거를 지어내지 않는다
-    if (S(aj.ruleVersion) === '' || S(aj.provenance) === '') return null
+    // 🔴 새 Queue 행은 현재 판정판 + 유효한 중심 주제만 받는다. 옛 v3 DB 행은 publish 경계에서 FREE로 보존하지만
+    //    과거/모르는 후보 파일을 오늘 새 legacy 행으로 적재하지 않는다.
+    if (S(aj.ruleVersion) !== CURRENT_AUTO_JUDGE_RULE_VERSION || S(aj.provenance) === ''
+      || !(BOARD_TOPICS as readonly string[]).includes(S(aj.boardTopic))) return null
     return {
       profile: 'machine',
       // 🔴 여기가 P0 였다. 기계는 기계 접두다
@@ -747,18 +756,18 @@ export function buildQueuePayload(input: {
         /**
          * 🔴 **모델이 이미 낸 판정을 옮긴다** (2026-09-22). 앞판은 여기가 `[]` 로
          *    하드코딩돼 있어, semanticReview 가 찾은 결함이 DB 에 오지 못했다.
-         *    🔴 `blocks` 는 그대로 비운다 — 이 경고는 후보 생성을 막지 않는다.
-         *       사람 검토는 계속되고, **자동 READY 에서만 빠진다.**
+         *    🔴 `blocks` 는 그대로 비운다 — 이 finding은 후보 생성을 막지 않는다.
+         *       안전한 추가·사소한 생략은 기록만 남고 자동 READY가 다시 해석하지 않는다.
+         *       미완료·생활사 모순 같은 차단 finding은 자동 READY의 구조화 판정이 계속 막는다.
          */
         holds: [
           ...semanticHoldsOf(semanticSummaryOf(input.review)),
-          /**
-           * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2). 채택은 됐지만
-           *    사람이 봐야 한다 — 자동 READY 에서만 빠진다. 칸이 없으면 `unread` 경고다(통과 아님).
-           */
+          /** 판정이 없거나 모양이 깨진 후보만 fail-closed 한다. */
           ...lifeReviewHoldsOf(c.lifeReview),
         ],
         blocks: [],
+        /** Content Core가 채택한 비차단 관찰. 자동 READY는 다시 해석하지 않는다. */
+        [DRAFT_LIFE_ADVISORIES_KEY]: lifeReviewAdvisoriesOf(c.lifeReview),
         [SEMANTIC_SUMMARY_KEY]: semanticSummaryOf(input.review),
         /**
          * 🔴 **품질 계약 — 지금 코드 상수다** (2026-09-27). 봉투 값을 옮기지 않는다 —
@@ -790,7 +799,7 @@ export function buildQueuePayload(input: {
           provenance: MACHINE_PROFILE.envelopeProvenance,
           sourceDecision: MACHINE_PROFILE.sourceDecision,
           /**
-           * 🔴 **열쇠 둘만 싣는다** (2026-09-20). 사람 검토가 로컬 artifact 정본에서
+           * 🔴 **열쇠 둘만 싣는다** (2026-09-20). 감사·운영 증거가 로컬 artifact 정본에서
            *    **정확히 한 장**을 찾는다 — `artifactId` 로 찾고 `sourceArticleId` 로 대조한다.
            *    🔴 원문 제목·본문·근거는 **DB 로 복사하지 않는다** —
            *    그것은 `.microseed-data/*.artifacts.json` 에만 있다.
@@ -817,6 +826,12 @@ export function buildQueuePayload(input: {
           model: S(aj.model),
           inputHash: S(aj.inputHash),
           provenance: S(aj.provenance),
+          /**
+           * 🔴 2026-10-19 창업자 — 중심 주제 전달점. publish tx 는 **여기만** 읽어서 boardType 을 라우팅한다.
+           *    새 적재는 위에서 현재 판+유효 enum만 통과한다. 이미 DB에 있는 legacy 행의 FREE 호환은
+           *    발행 신뢰 경계가 담당하며, 이 함수가 새 legacy 행을 만들지는 않는다.
+           */
+          ...(aj.boardTopic === undefined ? {} : { boardTopic: aj.boardTopic }),
         },
       },
     }

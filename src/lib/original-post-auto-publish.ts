@@ -31,6 +31,8 @@ import { isCurrentQualityContract } from './quality-contract'
 import { titleKey } from './draft-originality'
 import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
+// 🔴 2026-10-19 창업자/Codex — compareAutoRow 가 source evidence 정본 판독으로 ordering 하도록
+import { readSourceEvidence, velocityOf } from './source-slot-release'
 // 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
 export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
 // 🔴 판 값의 정본은 초안 lib 하나다
@@ -113,7 +115,7 @@ export type AutoRow = {
    *    그 값을 보지 않아, 사람이 확인하지 않은 기계 글이 그대로 자동 발행 대상이었다(실측 41건).
    */
   decidedBy: string | null
-  /** 승인 시각 — 없으면 `createdAt` 이 대신한다. 🔴 줄 세우기의 근거다 */
+  /** 승인 시각 — 감사·스냅샷용. 발행 순서에는 쓰지 않는다. */
   decidedAt: Date | null
   createdAt: Date
 }
@@ -389,22 +391,59 @@ export function selectAutoTargets(
 }
 
 /**
- * 줄 세우기 — 🔴 **오래 기다린 것이 먼저다.**
+ * 줄 세우기 — 🔴 **실제 원문 게시 시각이 최신인 것이 먼저다** (2026-10-19 창업자/Codex 결정).
  *
- * 승인 시각(`decidedAt`)이 기준이고, 없으면 `createdAt` 으로 갈음한다.
- * 시각까지 같으면 `id` 로 가른다 — **어떤 입력 순서로 들어와도 결과가 같아야**
- * dry-run 에서 본 것이 실제로 나간다.
+ *    자격 gate 를 통과한 뒤 수집→생성→READY→발행이 같은 순서를 흐르게 한다. **큐 적재 시각
+ *    (decidedAt/createdAt) 은 ordering 에 쓰지 않는다** — recovery/lane 우선 없음.
+ *    - 원천 시각은 `readSourceEvidence(gateResults)` 정본 판독으로만 얻는다 (malformed 는 unknown 으로).
+ *    - known > unknown. known 둘 다면 최신 먼저. exact/effective tie(ms 동일) 에서만 반응(정규화 백분위) → velocity → id.
+ *    - 모두 unknown 이면 **결정적 id** 로 간다 (큐 적재 시각 없이).
  */
-export function queueOrderKey(r: AutoRow): number {
-  /**
-   * 🔴 **기계 후보의 `decidedAt` 은 사람이 검토한 시각이다** (2026-09-14).
-   *    검토 완료가 `decidedBy` 와 `decidedAt` 을 **함께** 바꾸므로, 이 정렬은
-   *    자동으로 **실제 사람 검토 순서**가 된다 — 기계 적재 시각이 아니다.
-   */
-  return (r.decidedAt ?? r.createdAt).getTime()
+/**
+ * 🔴 queue row 의 `gateResults.sourceEvidence` 를 **정본 판독기** 로 읽어
+ *    { postedMs, rank } 를 돌려준다. malformed 는 unknown 으로 떨어뜨린다 — 느슨한 파싱으로 known 을 만들지 않는다.
+ */
+export function autoRowSourceSignalOf(gateResults: unknown): {
+  postedMs: number | null
+  commentsPct: number | null
+  viewsPct: number | null
+  velocity: number | null
+} {
+  const read = readSourceEvidence(gateResults)
+  if (!read.ok) return { postedMs: null, commentsPct: null, viewsPct: null, velocity: null }
+  const ev = read.record
+  const toMs = (iso: string | null): number | null => {
+    if (iso === null) return null
+    const t = Date.parse(iso)
+    return Number.isFinite(t) ? t : null
+  }
+  const postedMs = toMs(ev.postedAt)
+    ?? (ev.postedWindow != null && typeof ev.postedWindow === 'object' && !Array.isArray(ev.postedWindow)
+      ? toMs((ev.postedWindow as { from?: string }).from ?? null)
+      : null)
+  const stats = ev.sourceStats
+  return {
+    postedMs,
+    commentsPct: stats?.commentsPct ?? null,
+    viewsPct: stats?.viewsPct ?? null,
+    velocity: velocityOf(ev.observations),
+  }
 }
+const descN = (a: number | null, b: number | null): number =>
+  (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : b - a)
 export function compareAutoRow(a: AutoRow, b: AutoRow): number {
-  return queueOrderKey(a) - queueOrderKey(b) || a.id.localeCompare(b.id)
+  const sa = autoRowSourceSignalOf(a.gateResults)
+  const sb = autoRowSourceSignalOf(b.gateResults)
+  // 🔴 known 이 unknown 을 이긴다 · 둘 다 known 이면 최신 먼저
+  if (sa.postedMs !== null && sb.postedMs !== null && sa.postedMs !== sb.postedMs) return sb.postedMs - sa.postedMs
+  if (sa.postedMs !== null && sb.postedMs === null) return -1
+  if (sa.postedMs === null && sb.postedMs !== null) return 1
+  // 🔴 exact/effective tie — 정규화 반응(commentsPct desc → viewsPct desc) → velocity desc → 결정적 id
+  //    큐 적재 시각(decidedAt/createdAt)은 쓰지 않는다 (recovery/lane 우선 없음)
+  return descN(sa.commentsPct, sb.commentsPct)
+    || descN(sa.viewsPct, sb.viewsPct)
+    || descN(sa.velocity, sb.velocity)
+    || a.id.localeCompare(b.id)
 }
 
 export type ApplyGate = { ok: true; target: AutoRow } | { ok: false; reason: string }
@@ -534,40 +573,36 @@ export function judgeApply(input: {
  *    배정되지 않으면 **그날 하루를 통째로 버렸다** — 뒤에 배정된 글이 있어도 나가지 않았다.
  *    실측: 최희소 후보 하나가 막혀 09-20 · 21 · 22 사흘이 연속으로 비었다.
  *
- *    그래서 줄 순서는 그대로 두되, **배정이 있는 첫 글**을 집는다.
+ *    그래서 줄 순서(= compareAutoRow — source time 최신 순)는 그대로 두되, **배정이 있는 첫 글**을 집는다.
  *    건너뛴 글은 지우지도 상태를 바꾸지도 않는다 — 다음 회차에 다시 맨 앞이고,
  *    왜 건너뛰었는지는 `skipped` 로 화면과 관제에 남는다.
  *
  * 🔴 한 회차에 나가는 것은 여전히 **한 건**이다. 상한을 여는 변경이 아니다.
  *
- * 🔴 **복구가 먼저다** (2026-09-07)
+ * 🔴 **recovery 는 ordering 축이 아니다** (2026-10-19 창업자/Codex 결정 · 📜 2026-09-07 "복구 먼저" 는 superseded).
  *
- *    이전 회차가 배정을 저장한 뒤 발행 전에 죽으면, 그 행은 persona 의 주간 여력을
- *    **이미 써 버린 채** 발행되지 않은 상태로 남는다. 그 사람은 글을 쓰지도 못했는데
- *    이번 주를 다 쓴 것이 된다. 그러니 새 글보다 이 행을 먼저 내보내 상태를 푼다.
- *    복구 대상이 여럿이면 그중 가장 오래 기다린 것이다.
+ *    이전 회차가 배정만 하고 발행하지 못한 행은 observation 신호(`recovered: true`) 로 보고하지만
+ *    줄 순서를 바꾸지는 않는다. 더 신선한 원천이 더 늙은 복구 행을 이긴다 — source time 1순위.
+ *    persona 의 주간 여력 문제는 cap/lease 가 다루지 ordering 이 아니다.
  */
 export function pickPublishTarget<T extends { id: string }>(input: {
-  /** 🔴 이미 `compareAutoRow` 로 정렬된 줄 — 오래 기다린 순 */
+  /** 🔴 이미 `compareAutoRow` 로 정렬된 줄 — 2026-10-19 창업자/Codex: source time 최신 순 */
   ordered: readonly T[]
   /** 그 글에 배정된 persona code. 없으면 null */
   assignedOf: (id: string) => string | null
-  /** 🔴 이전 회차가 배정만 하고 발행하지 못한 행인가 — 있으면 먼저 복구한다 */
+  /** 🔴 이전 회차가 배정만 하고 발행하지 못한 행인가 — 관측용 신호(복구 여부 보고) · ordering 에 쓰지 않는다 */
   isRecovery?: (id: string) => boolean
 }): { picked: T | null; recovered: boolean; skipped: T[]; waiting: T[] } {
   const has = (t: T): boolean => input.assignedOf(t.id) !== null
   const isRec = input.isRecovery ?? ((): boolean => false)
 
-  // 🔴 ① 기존 배정이 살아 있는 행 중 가장 오래된 것
-  let at = input.ordered.findIndex((t) => isRec(t.id) && has(t))
-  const recovered = at !== -1
-  // ② 없으면 이번에 배정된 것 중 가장 오래된 것
-  if (at === -1) at = input.ordered.findIndex((t) => has(t))
-
+  // 🔴 2026-10-19 창업자/Codex: recovery-first pre-pick 제거 — compareAutoRow 가 source time 최신 순으로
+  //    세워 둔 줄에서 **배정이 살아 있는 가장 앞 행**을 집는다. recovery 여부는 보고용 신호다.
+  const at = input.ordered.findIndex((t) => has(t))
   if (at === -1) return { picked: null, recovered: false, skipped: [...input.ordered], waiting: [] }
+  const picked = input.ordered[at]!
   return {
-    picked: input.ordered[at]!,
-    recovered,
+    picked, recovered: isRec(picked.id),
     skipped: [...input.ordered.slice(0, at)],
     waiting: [...input.ordered.slice(at + 1)],
   }

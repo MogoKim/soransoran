@@ -50,7 +50,7 @@ import {
   RUN_SCHEMA_VERSION, classifyExistingRun, writeFileAtomic, preserveRunFiles, acquireRunLock,
 } from './lib/magazine-run-file.mjs'
 import { materialState } from './lib/magazine-run-targets.mjs'
-import { readQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
+import { acquireManuscriptLease, readQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath } from './lib/magazine-hero.mjs'
 import { calculateInventory } from './magazine-inventory.mjs'
@@ -58,7 +58,8 @@ import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
 import {
-  persistDirectSpecNoClobber, readProductGraphVersion, verifyDirectSpecIdentity,
+  DIRECT_SPEC_SUPERSEDE_REQUIRED, persistDirectSpecNoClobber, readProductGraphVersion, recoverSupersession, supersedeDirectSpec, supersedeLeftovers,
+  verifyDirectSpecIdentity,
 } from './lib/magazine-direct-spec-source.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
@@ -224,6 +225,33 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
   return { selected, review: [], skipped, reusable }
 }
 
+export const QUEUE_IDENTITY_DUPLICATE = 'QUEUE_IDENTITY_DUPLICATE'
+
+/**
+ * 🔴 **큐 신원 중복 관문 — producer 공용** (2026-10-22 · PR C).
+ *    같은 slug 또는 같은 non-empty intentId 가 큐 **전체**에서 2번 이상 나오면, 그 값을 가진 행을 첫 행까지 **전부** HOLD 한다.
+ *    선정 범위 · day · publishWindow · produceCount 와 무관하게 전체 큐로 본다 — 한 글을 두 경로(DIRECT·LEGACY)나 두 행이
+ *    동시에 만드는 것을 등록 gate 까지 미루지 않는다. 사람이 큐를 고치기 전 자동 재시도 · legacy 강등은 없다.
+ *    HOLD 는 신원 순서로 정렬한다 — 큐 입력 순서에 따라 결과가 달라지지 않는다.
+ * @returns {{ unique: object[], held: object[] }} unique = 신원이 고유한 행(큐 순서 유지)
+ */
+export function splitQueueIdentityDuplicates(queue) {
+  const key = (v) => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  const count = (field) => {
+    const m = new Map()
+    for (const item of queue) { const k = key(item?.[field]); if (k) m.set(k, (m.get(k) ?? 0) + 1) }
+    return m
+  }
+  const slugs = count('slug')
+  const intents = count('intentId')
+  const duplicated = (item) => (slugs.get(key(item?.slug)) ?? 0) > 1 || (intents.get(key(item?.intentId)) ?? 0) > 1
+  const held = queue.filter(duplicated).map((item) => ({
+    day: item.day, slug: item.slug ?? null, intentId: item.intentId ?? null, code: QUEUE_IDENTITY_DUPLICATE,
+    why: `큐 신원 중복 — slug ${item.slug} ×${slugs.get(key(item.slug)) ?? 0}${key(item.intentId) ? ` · intentId ${item.intentId} ×${intents.get(key(item.intentId))}` : ''}. 사람이 topic-queue 를 고치기 전 선정 · 생산 0`,
+  })).sort((x, y) => String(x.slug).localeCompare(String(y.slug)) || String(x.intentId).localeCompare(String(y.intentId)) || (x.day ?? 0) - (y.day ?? 0))
+  return { unique: queue.filter((item) => !duplicated(item)), held }
+}
+
 /**
  * 🔴 **DIRECT_SPEC_V1 행은 승인 source 가 준비됐을 때만 선정에 남는다** (2026-10-15 상류 관문).
  *
@@ -236,7 +264,9 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
  *    🔴 legacy 만 선정되면 판정 함수를 한 번도 부르지 않는다 — 제품 graph 도 source 도 읽지 않는다.
  */
 export function selectWithDirectGate({ queue, articles, today, produceCount, reviewCount, draftExists, judgeDirect }) {
-  let pool = queue
+  // 🔴 가장 앞 — 신원 중복 행은 선정 · 재사용 · DIRECT 판정 · spec · TODO · 회수의 후보가 되지 않는다
+  const identity = splitQueueIdentityDuplicates(queue)
+  let pool = identity.unique
   let pass = selectItems({ queue: pool, articles, today, produceCount, reviewCount, draftExists })
   const held = []
   const ready = new Map()
@@ -256,7 +286,7 @@ export function selectWithDirectGate({ queue, articles, today, produceCount, rev
     pool = pool.filter((item) => !gone.has(item.slug))
     pass = selectItems({ queue: pool, articles, today, produceCount, reviewCount, draftExists })
   }
-  return { ...pass, directHeld: held, directReady: ready }
+  return { ...pass, directHeld: held, directReady: ready, identityHeld: identity.held, uniqueQueue: identity.unique }
 }
 
 /** run.json selected 행에 남기는 direct 신원 — 원문 없이 식별자·해시만 */
@@ -273,6 +303,8 @@ function directSpecRow(j, persisted) {
     schemaVersion: s.schemaVersion,
     specHash: s.specHash,
     written: Boolean(persisted?.written),
+    // 🔴 명시적 개정으로 옛 spec 을 교체했으면 old/new specHash · 보존 파일을 남긴다 (교체 없으면 키 없음)
+    ...(persisted?.supersession ? { supersession: persisted.supersession } : {}),
   }
 }
 
@@ -595,6 +627,11 @@ export function planRun({
   productGraphVersionFn = () => readProductGraphVersion(PRODUCT_GRAPH_CURRENT),
   directSourceFn = verifyDirectSpecIdentity,
   persistSpecFn = persistDirectSpecNoClobber,
+  /** 🔴 명시적 개정(supersedes)의 교체 — lease 안에서만 부른다. 시험은 경쟁 writer hook 을 단 판을 준다 */
+  supersedeFn = supersedeDirectSpec,
+  /** 🔴 앞 교체가 남긴 조각(급사 · 실패)의 복구 판정 — lease 안에서만 */
+  recoverFn = recoverSupersession,
+  leaseFn = acquireManuscriptLease,
 }) {
   const runDir = join(runsDir, today)
   const lockFile = join(runDir, '.lock')
@@ -667,6 +704,7 @@ export function planRun({
     const { review, skipped, reusable: reusableRaw, directReady } = gated
     let selected = gated.selected
     const directHeld = [...gated.directHeld]
+    for (const h of gated.identityHeld) log(`  ⏸ ${h.code} — ${h.slug} (day ${h.day}${h.intentId ? ` · ${h.intentId}` : ''}) — 사람이 큐를 고치기 전 선정 0`)
 
     // 🔴 준비된 direct 행만 spec 을 쓴다 — 덮어쓰지 않는다. 충돌이면 그 행만 HOLD 로 뺀다.
     const directPersisted = new Map()
@@ -688,11 +726,12 @@ export function planRun({
 
     // 🔴 slug 별 멱등성 — 판정 불가·전송불명은 그 slug 만 HOLD 로 뺀다
     const ledger = readQuarantine(quarantinePath)
-    const queueBySlug = new Map(queue.map((item) => [item.slug, item]))
+    // 🔴 신원이 고유한 행만 — 중복 slug 가 입력 순서대로 덮어써지지 않는다
+    const queueBySlug = new Map(gated.uniqueQueue.map((item) => [item.slug, item]))
     const gate = ({ slug, draftsDir: dd }) => gateFn({ slug, draftsDir: dd, quarantinePath,
       queueItem: queueBySlug.get(slug) ?? null })
     const reusable = []
-    const held = [...directHeld]
+    const held = [...gated.identityHeld, ...directHeld]
     for (const item of reusableRaw) {
       /**
        * 🔴 **재사용 direct 행도 지금 승인 source 를 다시 지난다** (2026-10-15 Codex P0).
@@ -709,7 +748,56 @@ export function planRun({
         continue
       }
       if (mode.mode === DIRECT_SPEC_MODE) {
-        const j = judgeDirect(item)
+        let j = judgeDirect(item)
+        let supersession = null
+        /**
+         * 🔴 **앞 교체의 조각 복구** (2026-10-26 · 급사 · 설치 실패). 소유 사본 · tmp 가 남았으면 lease 안에서 먼저 판정한다 —
+         *    옛 spec 복구(→ 아래에서 다시 교체) · 새 spec 확인(→ recovered 기록) · 그 밖은 아무것도 지우지 않고 HOLD.
+         */
+        if (!dryRun && supersedeLeftovers({ draftsDir, slug: item.slug }).length) {
+          const lease = leaseFn({ slug: item.slug, work: 'supersede-recover', path: quarantinePath })
+          if (!lease.ok) {
+            held.push({ day: item.day, slug: item.slug, code: lease.code, why: lease.why, directSpec: j.evidence ?? null })
+            continue
+          }
+          let rec
+          try { rec = recoverFn({ draftsDir, slug: item.slug, lease, newSpec: j.judged?.spec ?? j.spec ?? null }) } finally { lease.release() }
+          if (!rec.ok) {
+            held.push({ day: item.day, slug: item.slug, code: rec.code, why: rec.why, directSpec: { ...(j.evidence ?? {}), supersede: { problems: rec.problems, recovery: rec.recovery } } })
+            continue
+          }
+          if (rec.record) supersession = rec.record
+          log(`  ♻ ${item.slug} — 앞 교체 조각 복구: ${rec.state}`)
+          j = judgeDirect(item)
+        }
+        /**
+         * 🔴 **명시적 개정** (2026-10-26). 승인이 supersedes.specHash 로 디스크 spec 을 정확히 가리킨다.
+         *    같은 slug 의 원고 lease 를 쥔 채로만 교체하고, 교체 뒤 같은 관문을 처음부터 다시 지난다.
+         *    dry-run 은 쓰지 않는다 — 교체 필요 상태 그대로 HOLD 로 보고한다.
+         */
+        if (!j.ok && j.code === DIRECT_SPEC_SUPERSEDE_REQUIRED && !dryRun) {
+          // 🔴 전송 흔적을 확인할 수 없으면 교체하지 않는다 — 모름을 「흔적 없음」으로 읽지 않는다
+          if (!ledger.ok) {
+            held.push({ day: item.day, slug: item.slug, code: ledger.code ?? 'LEDGER_UNREADABLE', why: `격리 장부를 읽지 못해 개정 조건을 확인할 수 없다: ${ledger.why}`, directSpec: j.evidence })
+            continue
+          }
+          const lease = leaseFn({ slug: item.slug, work: 'supersede', path: quarantinePath })
+          if (!lease.ok) {
+            held.push({ day: item.day, slug: item.slug, code: lease.code, why: lease.why, directSpec: j.evidence })
+            continue
+          }
+          let s
+          try {
+            s = supersedeFn({ judged: j.judged, draftsDir, slug: item.slug, deliveryEntry: ledger.store[item.slug] ?? null, lease })
+          } finally { lease.release() }
+          if (!s.ok) {
+            held.push({ day: item.day, slug: item.slug, code: s.code, why: s.why, directSpec: { ...j.evidence, supersede: { ...j.supersede, problems: s.problems, ...(s.recovery ? { recovery: s.recovery } : {}) } } })
+            continue
+          }
+          supersession = s.record
+          log(`  ♻ ${item.slug} — 명시적 개정: spec ${s.record.oldSpecHash.slice(0, 15)}… → ${s.record.newSpecHash.slice(0, 15)}… (보존 ${s.record.archive})`)
+          j = judgeDirect(item)
+        }
         if (!j.ok) {
           held.push({ day: item.day, slug: item.slug, code: j.code, why: j.why, directSpec: j.evidence })
           continue
@@ -719,14 +807,14 @@ export function planRun({
             why: '재사용 폴더에 article-spec.json 이 없다 — 재사용 단계는 spec 을 새로 쓰지 않는다', directSpec: j.evidence })
           continue
         }
-        directRow = directSpecRow(j, { written: false })
+        directRow = directSpecRow(j, { written: false, supersession })
       }
       const v = reuseVerdict(item.slug, { draftsDir, ledger, gate, heroExists })
       if (v.ok) reusable.push({ ...item, ...(directRow ? { directSpec: directRow } : {}), stage: v.stage, reuse: { draft: v.draft, hero: v.hero } })
       else held.push({ day: item.day, slug: item.slug, code: v.code, why: v.why })
     }
-    for (const h of held.slice(directHeld.length)) {
-      if (!h.directSpec && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE') continue
+    for (const h of held.slice(gated.identityHeld.length + directHeld.length)) {
+      if (!h.directSpec && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE' && h.code !== 'G8_ROW_NOT_DIRECT') continue
       const e = h.directSpec
       log(`  ⏸ ${h.code} — ${h.slug} (재사용)${e ? ` · expected ${e.expectedGraphVersion ?? '-'} · observed ${e.observedGraphVersion ?? '-'} · blockers ${e.blockers.join(',') || '-'}` : ''}`)
     }
@@ -750,6 +838,8 @@ export function planRun({
         ...(i.directSpecMode ? { directSpecMode: i.directSpecMode } : {}),
         ...(i.intentId ? { intentId: i.intentId } : {}),
         ...(i.g8ManifestHash ? { g8ManifestHash: i.g8ManifestHash } : {}),
+        // 🔴 G8 행은 두 해시를 같이 운반한다 — 하나만 실리면 하류 resolveMagazineAutoMode 가 G8_ROW_NOT_DIRECT 로 막는다
+        ...(i.articlePlanHash ? { articlePlanHash: i.articlePlanHash } : {}),
         ...(directReady.has(i.slug) ? { directSpec: directSpecRow(directReady.get(i.slug), directPersisted.get(i.slug)) } : {}),
         // 🔴 호환 필드 — 자동 진행을 가르지 않는다
         needsFullReview: false,

@@ -24,17 +24,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrismaClient, type Prisma } from '@prisma/client'
 
-import { AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-v2'
+import { AUDIT_CONTRACT_VERSION, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { stampAutoReady, unresolvedDefectCount } from '../src/lib/auto-ready-repo'
 import { eligibilityOf } from '../src/lib/auto-ready-v2'
 import { judgeMachine, type SemanticVerdict } from '../src/lib/content-core/review'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { pickV2 } from '../src/lib/micro-seed-auto-draft'
+import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION } from '../src/lib/micro-seed-auto-judge'
 import * as af from '../src/lib/micro-seed-supply-autofill'
 import { SEMANTIC_HOLD_CODES } from '../src/lib/semantic-summary-codes'
 import { planDefectResolution } from '../src/lib/auto-ready-defect-resolution-store'
 import { DEFECT_RESOLUTION_KEY, type DefectResolutionRecord } from '../src/lib/auto-ready-defect-resolution'
-import { SEMANTIC_AUDIT_CONTRACT_VERSION } from '../src/lib/auto-ready-semantic-audit'
 import { QUALITY_CONTRACT_KEY, currentQualityContract } from '../src/lib/quality-contract'
 import { runDeploy, type DeployEffects } from '../src/lib/runtime-deploy'
 import type { JobState } from '../src/lib/runtime-isolation'
@@ -120,7 +120,7 @@ async function defectRow(f: Fixture, fx: typeof BLOCKED, o: {
     where: { queueId: a.queueId },
     data: {
       defect: 'yes', judgedAt: f.now, auditor: 'model:semantic-audit:runner',
-      note: `[${SEMANTIC_AUDIT_CONTRACT_VERSION} outcome=measured binding=fx artifact=${a.artifactId} persona=${persona} card=fx] 결함 fixture`,
+      note: `[auto-ready-semantic-audit-v1 outcome=measured binding=fx artifact=${a.artifactId} persona=${persona} card=fx] 결함 fixture`,
       auditContractVersion: AUDIT_CONTRACT_VERSION, auditModel: 'rule:integrity-safety-audit+claude-haiku-4.5',
       auditPromptVersion: 'integrity-safety-v1+semantic-audit-prompt-v1',
     },
@@ -486,11 +486,11 @@ async function main(): Promise<void> {
     await drop(K.queueId)
   }
 
-  console.log('\n⑧ 🔴 의미 경고 초안(17:15 artifact 3dd770e2 모양) · 자녀 수 생활사 모순 — 최종 pick · 적재 · READY 도장 · 발행 재검증')
+  console.log('\n⑧ 🔴 의미 finding 초안 · 자녀 수 생활사 모순 — 최종 pick · 적재 · READY 도장 재검증')
   {
     /**
-     * 🔴 artifact `machineOutcome=adopt` 는 **경고를 달고 사람에게 넘긴다**는 기계 결론이다(2026-09-20 결정 · `judgeMachine`).
-     *    최종 정본은 pick · 후보 봉투다. 경고는 적재 때 `holds` 로 실리고, 도장과 발행 트랜잭션이 같은 `eligibilityOf` 로 막는다.
+     * 🔴 위험 허구·핵심 손실 finding은 `judgeMachine`에서 HOLD다. 방어적 적재 반례가
+     *    `holds`로 들어오더라도 도장과 발행 트랜잭션은 같은 `eligibilityOf`로 다시 차단한다.
      */
     const NOW = new Date()
     const ok = { complete: true, reason: null, cause: null } as const
@@ -506,7 +506,7 @@ async function main(): Promise<void> {
     }
     const jw = judgeMachine({ deterministic: det, semantic: warnSem, semanticCompletion: ok })
     const jk = judgeMachine({ deterministic: det, semantic: kidSem, semanticCompletion: ok })
-    check('표현 확인 — 경고만 있으면 기계 결론은 adopt + 경고 2줄(사람에게 넘긴다 · 판정 누락 아님)', jw.outcome === 'adopt' && jw.warnings.length === 2, JSON.stringify(jw))
+    check('표현 확인 — 위험 허구·핵심 손실 finding은 기계 HOLD + 근거 2줄', jw.outcome === 'hold' && jw.warnings.length === 2, JSON.stringify(jw))
     check('🔴 🔴 **자녀 수 생활사 모순 → 기계 결론 hold**', jk.outcome === 'hold' && /children/.test(jk.reason), JSON.stringify(jk))
     const cand = (id: string) => ({ sourceArticleId: id, draftNo: 1, title: '평범한 하루', body: '아침에 산책을 다녀왔어요. 다들 어떻게 지내세요?',
       safetyVerdict: 'pass', originality: { runWords: 3, runChars: 8, coverRatio: 0 }, generatedAt: NOW.toISOString() })
@@ -517,7 +517,7 @@ async function main(): Promise<void> {
     }, NOW.toISOString())
     const pw = pick('W1', jw)
     const pk = pick('K1', jk)
-    check('최종 pick — 경고 초안은 AUTO_ADOPT(사람 검토 후보 · 2026-09-20 설계 그대로)', pw.decision === 'AUTO_ADOPT', JSON.stringify(pw))
+    check('최종 pick — 위험 허구·핵심 손실 초안은 AUTO_HOLD', pw.decision === 'AUTO_HOLD' && pw.reason === 'semanticHold', JSON.stringify(pw))
     check('🔴 🔴 **최종 pick — 자녀 수 모순은 AUTO_HOLD semanticHold (후보 봉투 · 적재 0)**', pk.decision === 'AUTO_HOLD' && pk.reason === 'semanticHold', JSON.stringify(pk))
 
     // ── 실제 적재기 → 격리 DB 큐 행 → 실제 도장 ──
@@ -526,7 +526,14 @@ async function main(): Promise<void> {
       promptVersion: af.MACHINE_PROFILE.envelopePromptVersion, pipelineVersion: af.MACHINE_PROFILE.envelopePipelineVersion,
       stageModels: STAGE_MODEL, qualityContractDigest: TARGET.digest,
     }
-    const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h', provenance: 'machine-shadow' }
+    const aj = {
+      ruleVersion: AUTO_JUDGE_RULE_VERSION,
+      promptVersion: 'p',
+      model: 'm',
+      inputHash: 'h',
+      provenance: 'machine-shadow',
+      boardTopic: 'FREE' as const,
+    }
     const review = (sem: SemanticVerdict) => ({ deterministic: det, semanticCompletion: ok, semantic: sem })
     const cleanSem: SemanticVerdict = { ...warnSem, droppedFromSource: [], unsupportedAdditions: [] }
     let seq = 0
@@ -553,13 +560,13 @@ async function main(): Promise<void> {
       W.holds.includes(`${SEMANTIC_HOLD_CODES.droppedFromSource}:2`) && W.holds.includes(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:1`), W.holds.join(','))
     const wRow = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })
     const ev = eligibilityOf({ gateVerdict: wRow.gateVerdict, gateResults: wRow.gateResults, title: wRow.draftTitle, body: wRow.draftBody })
-    check('🔴 🔴 **자동 READY 적격 — 경고 행은 예외(도장 · 발행 트랜잭션이 같은 판정을 쓴다)**', !ev.auto && ev.reasons.some((r) => r.includes('SEMANTIC_')), ev.reasons.join(' · '))
+    check('🔴 🔴 **자동 READY 적격 — finding 행은 방어적으로 차단**', !ev.auto, ev.reasons.join(' · '))
     const on = { SORAN_AUTO_READY_ENABLED: 'on' } as const
     const sc = await stampAutoReady(prisma, { queueId: C.id, env: on, now: NOW })
     const sw = await stampAutoReady(prisma, { queueId: W.id, env: on, now: NOW })
-    check('대조 — 같은 자리 · 경고 없는 행은 도장된다(gate 열림 · 경고 거부가 경고 때문임을 보인다)', sc.kind === 'stamped', JSON.stringify(sc))
-    check('🔴 🔴 **실제 도장 — 경고 행은 exception · 도장 0 · decidedBy 그대로(자동 발행 대상 아님)**', sw.kind === 'exception'
-      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })).decidedBy === wRow.decidedBy, JSON.stringify(sw))
+    check('대조 — 같은 자리 · 경고 없는 행도 도장된다', sc.kind === 'stamped', JSON.stringify(sc))
+    check('🔴 🔴 **실제 도장 — finding 행은 exception · 자동 READY write 0**', sw.kind === 'exception'
+      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: W.id } })).decidedBy !== AUTO_DECIDER, JSON.stringify(sw))
   }
 
   tree.cleanup()

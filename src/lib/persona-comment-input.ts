@@ -78,6 +78,11 @@ export type CommentInputPost = {
    *    없으면 프롬프트가 한 글자도 바뀌지 않는다(`persona-comment-followup-check` 가 바이트 동일을 본다).
    */
   replyToDigest?: string
+  /**
+   * 🔴 **글쓴이 답글** (2026-10-24) — 이 글을 쓴 Persona 가 자기 글의 댓글에 답한다. 추가 댓글의 글쓴이 자리에만 있다 —
+   *    없으면 프롬프트가 한 글자도 바뀌지 않는다.
+   */
+  authorReply?: true
 }
 
 export type InputBlockCode =

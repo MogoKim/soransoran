@@ -32,7 +32,8 @@ import { RELATION_POLICY } from './magazine-relation-policy.mjs'
 import { evalLiteral, parseArticlesSource, sliceLiteral } from './magazine-load.mjs'
 
 export const BUILD_SCHEMA = 'mgraph-build/1'
-export const READINESS_SCHEMA = 'mgraph-readiness/1'
+/** 🔴 /2 — readiness 가 기대는 입력 전부를 `inputs` 에 싣는다(graph semanticHash 만으로는 control · articles · admission · 시각이 빠진다) */
+export const READINESS_SCHEMA = 'mgraph-readiness/2'
 
 /** 연구 입력 다섯 파일 — 이름이 곧 계약이다. 하나라도 없으면 build 하지 않는다 */
 export const INPUT_FILES = Object.freeze({
@@ -205,6 +206,25 @@ export const MAPPING_COVERAGES = Object.freeze(['ANSWERS', 'ANSWERS_PARTIAL', 'A
 export const PRE_PUBLIC_COVERAGES = Object.freeze(['SCHEDULED_NOT_YET_PUBLIC', 'QUEUED_NOT_PUBLIC'])
 
 /**
+ * 🔴 graph 참여 상태 (2026-10-18) — 공개 글이 검색 graph 에 들어가는가.
+ *    SEARCH_NODE           canonical mapping 이 있는 글. mappings 에서 파생하고 따로 적지 않는다
+ *    EDITORIAL_NON_SEARCH  bounded 조사로 검색 근거 없음이 **증명된** 글. assets-published 의 graphParticipation 으로만 들어온다
+ *    UNRESOLVED            둘 다 아닌 글. 기록하지 않는다 — 선언이 없다는 것이 곧 미확정이다
+ *    slug · cluster 이름으로 editorial 을 정하지 않는다. 근거 신원과 hash 가 있는 선언만 받는다.
+ */
+export const EDITORIAL_NON_SEARCH = 'EDITORIAL_NON_SEARCH'
+export const EDITORIAL_REASON_CODES = Object.freeze(['BOUNDED_RESEARCH_EXHAUSTED'])
+/** 판정을 운반하는 bundle 의 schema 표식 — 판정 산출 행의 schemaVersion 과 같은 값 */
+export const PARTICIPATION_SCHEMA = 'participation/1'
+const SHA256_RE = /^[0-9a-f]{64}$/
+/** editorial 근거 묶음의 hash — 근거 순서와 무관하다. 연구 기록과 builder 가 이 함수 하나를 쓴다 */
+export function editorialEvidenceHash(evidence) {
+  const rows = evidence.map((e) => ({ ref: e.ref, sha256: e.sha256 }))
+    .sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0))
+  return sha256(JSON.stringify(rows))
+}
+
+/**
  * 🔴 existing asset 요약의 유일한 권위 — canonical `existingSlugs` 에서 만든 **built mappings** 다.
  *    automation `existingAssetRelation` 은 legacy 입력이며 산출을 정하지 않는다(두 권위가 한 bundle 안에서 모순되지 않게).
  *    형식: `slug(상태/coverage)` 를 mapping 순서대로 `, ` 로 잇는다. 상태는 LIVE 만 기존 호환 표현 PUBLISHED, 그 외는 assetState. 없으면 `없음`.
@@ -266,7 +286,12 @@ export function validateInputs({ canonical, automation, graph, published, queued
   })
   graph.forEach((e, i) => { if (!isPlain(e)) bad.push(`graph ${i + 1}행 객체가 아니다`) })
   ids(graph, { label: 'graph edge', keyOf: (e) => e.edgeId, valid: isEdgeId, unique: true })
-  published.forEach((p, i) => { if (!isPlain(p) || !nonEmpty(p.slug) || !isStr(p.assetState)) bad.push(`assets-published ${i + 1}행 slug·assetState 형식 오류`) })
+  published.forEach((p, i) => {
+    if (!isPlain(p) || !nonEmpty(p.slug) || !isStr(p.assetState)) bad.push(`assets-published ${i + 1}행 slug·assetState 형식 오류`)
+    else if (p.graphParticipation !== undefined && (!isPlain(p.graphParticipation) || !Array.isArray(p.graphParticipation.evidence))) {
+      bad.push(`assets-published ${i + 1}행 graphParticipation 형식 오류`)
+    }
+  })
   queued.forEach((q, i) => { if (!isPlain(q) || !nonEmpty(q.slug)) bad.push(`assets-queue ${i + 1}행 slug 형식 오류`) })
   if (bad.length) fail('INPUT_SCHEMA_INVALID', `${bad.length}건 — ${bad.slice(0, 5).join(' | ')}`)
 }
@@ -276,7 +301,7 @@ export function validateInputs({ canonical, automation, graph, published, queued
  *    입력 필드를 하나씩 막는 대신, 실제로 나갈 값의 계약을 한 곳에서 닫는다. 실패는 `INPUT_SCHEMA_INVALID`.
  *    nullable · builder 기본값은 산출 값 기준이다(runtimeState → UNPUBLISHED, communityDestination → 영토 게시판).
  */
-export function validateBuiltArtifacts({ intents, edges, mappings }) {
+export function validateBuiltArtifacts({ intents, edges, mappings, participation = [] }) {
   const bad = []
   // 🔴 최종 산출 신원 — 자동 생성 edge 까지 포함한 결과를 입력과 같은 helper 로 본다
   const identity = (rows, rule) => { const r = identityProblems(rows, rule); bad.push(...r.problems); return r.seen }
@@ -335,6 +360,8 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
     if (!isStr(e.policyScopeWhy) || !isStr(e.automationDecisionWhy) || !isStr(e.runtimeWhy)) bad.push(`${at} 계산 사유 누락`)
     if (!nullableStr(e.fromCluster) || !nullableStr(e.toCluster)) bad.push(`${at} cluster 형식 오류`)
     if (typeof e.exposeNow !== 'boolean' || typeof e.crossCluster !== 'boolean') bad.push(`${at} boolean 필드 형식 오류`)
+    // 🔴 형식이 아니라 값 — crossCluster 는 산출 cluster 두 값에서만 나온다. COMMUNITY 는 언제나 false
+    else if (e.crossCluster !== (e.relationType === 'COMMUNITY' ? false : e.fromCluster !== e.toCluster)) bad.push(`${at} crossCluster 가 산출 fromCluster·toCluster 와 어긋난다`)
     if (!Array.isArray(e.fromLive) || !e.fromLive.every(isStr) || !Array.isArray(e.toLive) || !e.toLive.every(isStr)) bad.push(`${at} fromLive·toLive 형식 오류`)
     if (!isPlain(e.layers) || !['DESIGN', 'AUTOMATION_READY', 'RUNTIME_ACTIVE'].every((k) => typeof e.layers[k] === 'boolean')) bad.push(`${at} layers 가 boolean 이 아니다`)
     if (!isPlain(e.layerWhy)) bad.push(`${at} layerWhy 형식 오류`)
@@ -351,6 +378,28 @@ export function validateBuiltArtifacts({ intents, edges, mappings }) {
     if (m.cluster !== null && !nonEmpty(m.cluster)) bad.push(`${at} cluster 형식 오류: ${JSON.stringify(m.cluster)}`)
     if (m.publishedAt !== null && !isRealDate(m.publishedAt)) bad.push(`${at} publishedAt 형식 오류: ${JSON.stringify(m.publishedAt)}`)
     if (m.publishAt !== null && !isRealKstAt(m.publishAt)) bad.push(`${at} publishAt 형식 오류: ${JSON.stringify(m.publishAt)}`)
+  })
+
+  // 🔴 editorial 선언 — 근거 신원 · hash 가 없으면 받지 않고, 검색 mapping 과 동시에 있으면 계약 오류다
+  const mappedSlugs = new Set(mappings.map((m) => m.slug))
+  const partRows = Array.isArray(participation) ? participation : []
+  if (!Array.isArray(participation)) bad.push('participation 산출이 배열이 아니다')
+  identity(partRows, { label: '산출 participation', keyOf: (p) => p.slug, valid: nonEmpty, unique: true })
+  partRows.forEach((p, i) => {
+    // 🔴 형식이 깨진 행은 역참조하지 않는다 — TypeError 가 아니라 계약 위반으로 막는다
+    if (!isPlain(p)) { bad.push(`participation ${i + 1}번 객체가 아니다`); return }
+    const at = `participation ${p.slug}`
+    if (p.schemaVersion !== PARTICIPATION_SCHEMA) bad.push(`${at} schemaVersion 계약 밖`)
+    if (p.state !== EDITORIAL_NON_SEARCH) bad.push(`${at} state 계약 밖: ${JSON.stringify(p.state)}`)
+    if (!EDITORIAL_REASON_CODES.includes(p.reasonCode)) bad.push(`${at} reasonCode 계약 밖: ${JSON.stringify(p.reasonCode)}`)
+    const evidence = Array.isArray(p.evidence) ? p.evidence : null
+    if (evidence === null) bad.push(`${at} 근거 목록이 배열이 아니다`)
+    else if (!evidence.length || !evidence.every((e) => isPlain(e) && nonEmpty(e.ref) && isStr(e.sha256) && SHA256_RE.test(e.sha256))) {
+      bad.push(`${at} 근거 신원·hash 누락`)
+    } else if (new Set(evidence.map((e) => e.ref)).size !== evidence.length) bad.push(`${at} 근거 신원 중복`)
+    // 🔴 hash 는 형식 검증을 통과한 근거에만 계산한다
+    else if (p.evidenceHash !== editorialEvidenceHash(evidence)) bad.push(`${at} evidenceHash 가 근거 묶음과 다르다`)
+    if (mappedSlugs.has(p.slug)) bad.push(`${at} EDITORIAL_NON_SEARCH 인데 canonical mapping 이 있다`)
   })
 
   if (bad.length) fail('INPUT_SCHEMA_INVALID', `산출 계약 ${bad.length}건 — ${bad.slice(0, 5).join(' | ')}`)
@@ -548,6 +597,10 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
     else if (!isCommunity && !tLive.length) { runtimeState = 'UNPUBLISHED'; runtimeWhy = '🔴 도착 글이 아직 공개되지 않았다' }
     else { runtimeState = 'ACTIVE'; runtimeWhy = '✅ 구현된 표면 · 출발 글 공개됨' }
     const recommendationSlot = RELATION_TO_SLOT[e.relationType] ?? null
+    // 🔴 cluster 는 한 번만 계산한다 — canonical magazineCluster → 입력 edge cluster → null.
+    //    crossCluster 를 canonical 값끼리 따로 비교하면 한쪽이 null 일 때 산출 cluster 와 어긋난다 (2026-10-21 실측 74건)
+    const fromCluster = I[e.fromIntentId]?.magazineCluster ?? e.fromCluster ?? null
+    const toCluster = isCommunity ? null : (I[e.toIntentId]?.magazineCluster ?? e.toCluster ?? null)
     return { schemaVersion: 'edge/3', edgeId: e.edgeId, recommendationSlot,
       fromIntentId: e.fromIntentId, toIntentId: e.toIntentId, relationType: e.relationType,
       readerReason: e.readerReason, anchorLabel: e.anchorLabel,
@@ -559,9 +612,7 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
       automationDecision: arOk ? 'PASS' : (f.why || t.why || '').includes('REJECT') ? 'REJECT' : 'HOLD',
       automationDecisionWhy: arOk ? '양 끝 intent 가 PASS 이고 격리되지 않았다' : `🔴 ${arWhy}`,
       runtimeState, runtimeWhy, exposeNow: runtimeState === 'ACTIVE',
-      fromCluster: I[e.fromIntentId]?.magazineCluster ?? e.fromCluster ?? null,
-      toCluster: isCommunity ? null : (I[e.toIntentId]?.magazineCluster ?? e.toCluster ?? null),
-      crossCluster: isCommunity ? false : ((I[e.fromIntentId]?.magazineCluster ?? null) !== (I[e.toIntentId]?.magazineCluster ?? null)),
+      fromCluster, toCluster, crossCluster: isCommunity ? false : fromCluster !== toCluster,
       fromLive: fLive, toLive: tLive, riskNote: e.riskNote ?? null,
       layers: { DESIGN: designOk, AUTOMATION_READY: arOk, RUNTIME_ACTIVE: runtimeState === 'ACTIVE' },
       layerWhy: { design: designWhy, automationReady: arWhy, runtime: runtimeWhy },
@@ -588,7 +639,15 @@ export function buildGraphLayers({ inputs, implementedSurfaces }) {
     e.backlinkStatus = 'PAIRED'; e.reverseEdgeId = b.edgeId
   }
 
-  return { intents, edges, mappings, autoBacklinks, registeredInProduct: published.length }
+  // ⑤ graph 참여 — editorial 선언만 싣는다. SEARCH_NODE 는 mappings 가, UNRESOLVED 는 선언 없음이 말한다
+  const participation = published.filter((p) => p.graphParticipation !== undefined).map((p) => {
+    const g = p.graphParticipation
+    return { schemaVersion: PARTICIPATION_SCHEMA, slug: p.slug, state: g.state ?? null, reasonCode: g.reasonCode ?? null,
+      evidence: g.evidence.map((e) => ({ ref: isPlain(e) ? e.ref ?? null : null, sha256: isPlain(e) ? e.sha256 ?? null : null })),
+      evidenceHash: g.evidenceHash ?? null }
+  }).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+
+  return { intents, edges, mappings, participation, autoBacklinks, registeredInProduct: published.length }
 }
 
 function countLayer(edges, pred) {
@@ -613,8 +672,8 @@ function countLayer(edges, pred) {
 }
 
 /** 제품 bundle 의 slim GRAPH — 연구 exporter 와 같은 필드·순서 */
-export function slimGraph({ graphVersion, contentHash, generatedAt, intents, edges, mappings }) {
-  return {
+export function slimGraph({ graphVersion, contentHash, generatedAt, intents, edges, mappings, participation = [] }) {
+  const slim = {
     graphVersion,
     schemaVersion: { intent: 'intent/2', edge: 'edge/3', mapping: 'mapping/2', manifest: 'manifest/1' },
     contentHash,
@@ -632,6 +691,14 @@ export function slimGraph({ graphVersion, contentHash, generatedAt, intents, edg
     intents: intents.filter((x) => x.automationDecision === 'PASS' && x.runtimeState !== 'QUARANTINED')
       .map((x) => ({ id: x.intentId, cluster: x.magazineCluster, board: x.communityDestination })),
   }
+  // 🔴 editorial 판정은 선언이 있을 때만 싣는다 — 선언 없는 판의 bundle 바이트(롤백 대상 포함)를 바꾸지 않는다.
+  //    근거 신원 목록은 participation.jsonl 에 남고, 제품은 판정과 evidenceHash 만 읽는다
+  if (participation.length) {
+    // 🔴 판정을 운반하는 bundle 만 schema 표식을 단다 — 선언 없는 판은 schemaVersion 바이트도 그대로
+    slim.schemaVersion = { ...slim.schemaVersion, participation: PARTICIPATION_SCHEMA }
+    slim.participation = participation.map((p) => ({ slug: p.slug, state: p.state, reasonCode: p.reasonCode, evidenceHash: p.evidenceHash }))
+  }
+  return slim
 }
 
 /** export 자체 검사 — 하나라도 걸리면 아무것도 쓰지 않는다 */
@@ -646,6 +713,16 @@ export function exportProblems(slim, implementedSurfaces) {
   // 🔴 새 산출의 LIVE mapping 은 공개 후 coverage 를 반드시 갖는다 — 없으면 resolver 가 ANSWERS 우선을 못 한다
   const coverageBad = slim.mappings.filter((m) => !MAPPING_COVERAGES.includes(m.coverage) || PRE_PUBLIC_COVERAGES.includes(m.coverage))
   if (coverageBad.length) bad.push(`EXPORT_MAPPING_COVERAGE_MISSING ${coverageBad.map((m) => `${m.intent}|${m.slug}`).join(',')}`)
+  // 🔴 bundle 이 운반하는 editorial 판정 — 검색 mapping 과 겹치거나 근거 hash 가 없으면 내보내지 않는다
+  const mappedSlugs = new Set(slim.mappings.map((m) => m.slug))
+  const partBad = (slim.participation ?? []).filter((p) => p.state !== EDITORIAL_NON_SEARCH || !EDITORIAL_REASON_CODES.includes(p.reasonCode)
+    || !SHA256_RE.test(p.evidenceHash ?? '') || mappedSlugs.has(p.slug))
+  if (partBad.length) bad.push(`EXPORT_PARTICIPATION_INVALID ${partBad.map((p) => p.slug).join(',')}`)
+  // 🔴 판정과 schema 표식은 함께 다닌다 — 한쪽만 있으면 소비자가 판을 잘못 읽는다
+  const hasPart = Array.isArray(slim.participation) && slim.participation.length > 0
+  const marker = slim.schemaVersion?.participation
+  if (hasPart && marker !== PARTICIPATION_SCHEMA) bad.push(`EXPORT_PARTICIPATION_SCHEMA_MISSING ${JSON.stringify(marker ?? null)}`)
+  if (!hasPart && (marker !== undefined || 'participation' in slim)) bad.push('EXPORT_PARTICIPATION_SCHEMA_ORPHAN')
   const leak = slim.edges.filter((e) => e.active && e.type !== 'COMMUNITY' && !live.has(e.to))
   if (leak.length) bad.push(`EXPORT_UNPUBLISHED_TARGET_ACTIVE ${ids(leak)}`)
   const badBoard = slim.edges.filter((e) => e.type === 'COMMUNITY' && !boards.has(e.to))
@@ -688,13 +765,25 @@ export function semanticHashOf(slim) {
   return sha16(JSON.stringify(rest))
 }
 
+/** readiness 의미 해시 — 키를 정렬한 canonical JSON. 직렬화 공백과 무관하다 */
+export const readinessHashOf = (report) => sha256(stableJson(report))
+/** readiness.json 의 실제 바이트 — 파일 해시는 이 바이트로만 센다 */
+export const serializeReadiness = (report) => prettyStable(report)
+
 /**
- * 전체 build — 순수 함수. 파일 시스템 · 벽시계를 쓰지 않는다.
- * @returns {{ graphVersion, files: Record<string,string>, manifest, slim, layers, readiness }}
+ * graph 와 readiness 의 **유일한 계산 경로** — 순수 함수. generatedAt · 벽시계 · 파일 시스템을 읽지 않는다.
+ *    buildAll 과 (다음 단계의) G8 이 같은 이 함수를 부른다. 두 번째 계산 구현을 만들지 않는다.
+ *    slim 은 generatedAt 자리를 null 로 비워 둔다 — 키 순서가 bundle 과 같아야 graphSemanticHash 가 같다.
+ *
+ *    🔴 `expectedGraphVersion` — 이미 내보낸 판(제품 current)을 **다른 시각**에 다시 볼 때 쓴다(G8).
+ *       graphVersion 의 날짜는 build effectiveAt 에서 나오므로, 판정 시각으로 다시 계산하면 날짜만 달라진다.
+ *       주어지면 형식 `g-YYYYMMDD-xxxxxx` · 접미사 = combined 앞 6자리가 정확히 맞아야 하고, 그 판 이름을 slim · readiness 에 쓴다.
+ *       없으면(buildAll) 날짜는 effectiveAt 에서 나온다 — 산출 바이트 불변.
+ * @returns {{ layers, contentHash, graphVersion, graphSemanticHash, readiness, readinessHash, readinessFileSha256, parts }}
+ *   parts — buildAll 이 파일을 조립할 재료(직렬화된 jsonl · slim · 입력 해시). 계산은 여기서 끝났다
  */
-export function buildAll({ inputTexts, productTexts, admissionTexts = null, effectiveAt, generatedAt }) {
+export function computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts = null, effectiveAt, expectedGraphVersion = null }) {
   const eff = parseEffectiveAt(effectiveAt)
-  const gen = parseGeneratedAt(generatedAt)
   const inputs = parseInputTexts(inputTexts)
   const product = parseProductTexts(productTexts)
   // 🔴 snapshot ↔ 제품 lifecycle — layer · 직렬화 · 해시 · 쓰기 전에
@@ -707,17 +796,58 @@ export function buildAll({ inputTexts, productTexts, admissionTexts = null, effe
   const sEdges = layers.edges.map((x) => JSON.stringify(x)).join('\n') + '\n'
   const sMap = layers.mappings.map((x) => JSON.stringify(x)).join('\n') + '\n'
   const hI = sha16(sIntents), hE = sha16(sEdges), hM = sha16(sMap)
-  const combined = sha16(hI + hE + hM)
-  const graphVersion = `g-${eff.versionDate}-${combined.slice(0, 6)}`
-  const contentHash = { intents: hI, edges: hE, mappings: hM, combined }
+  // 🔴 editorial 선언도 판의 내용이다 — 바뀌면 graphVersion 이 바뀐다. 선언이 없으면 기존 판과 같은 hash 다
+  const sPart = layers.participation.length ? layers.participation.map((x) => JSON.stringify(x)).join('\n') + '\n' : null
+  const hP = sPart === null ? null : sha16(sPart)
+  const combined = sha16(hI + hE + hM + (hP ?? ''))
+  let graphVersion = `g-${eff.versionDate}-${combined.slice(0, 6)}`
+  if (expectedGraphVersion !== null) {
+    if (!/^g-\d{8}-[0-9a-f]{6}$/.test(String(expectedGraphVersion))) fail('GRAPH_VERSION_MISMATCH', `판 이름 형식이 아니다: ${expectedGraphVersion}`)
+    if (!expectedGraphVersion.endsWith(`-${combined.slice(0, 6)}`)) fail('GRAPH_VERSION_MISMATCH', `${expectedGraphVersion} 의 접미사가 combined ${combined.slice(0, 6)} 과 다르다`)
+    graphVersion = expectedGraphVersion
+  }
+  const contentHash = hP === null
+    ? { intents: hI, edges: hE, mappings: hM, combined }
+    : { intents: hI, edges: hE, mappings: hM, participation: hP, combined }
 
-  const slim = slimGraph({ graphVersion, contentHash, generatedAt: gen, ...layers })
-  const problems = exportProblems(slim, product.implemented)
+  const slimCore = slimGraph({ graphVersion, contentHash, generatedAt: null, ...layers })
+  const problems = exportProblems(slimCore, product.implemented)
   if (problems.length) fail('EXPORT_SELF_CHECK_FAILED', problems.join(' | '))
-  const bundle = bundleText(slim)
-  const semanticHash = semanticHashOf(slim)
+  const graphSemanticHash = semanticHashOf(slimCore)
 
-  const readiness = buildReadiness({ layers, product, admission: parseAdmissionTexts(admissionTexts), effective: eff, graphVersion, semanticHash })
+  const admission = parseAdmissionTexts(admissionTexts)
+  const productHashes = Object.fromEntries(Object.entries(PRODUCT_FILES).map(([k, rel]) => [k, product.hashes[rel]]))
+  const readinessInputs = { graphVersion, graphCombined: combined, graphSemanticHash, productHashes,
+    admissionHashes: admission ? admission.hashes : 'UNREAD', effectiveAt: eff.text }
+  const readiness = buildReadiness({ layers, product, admission, effective: eff, graphVersion, inputs: readinessInputs })
+
+  return {
+    layers, contentHash, graphVersion, graphSemanticHash,
+    readiness: readiness.report,
+    readinessHash: readinessHashOf(readiness.report),
+    readinessFileSha256: sha256(serializeReadiness(readiness.report)),
+    parts: { eff, inputHashes: inputs.hashes, product, admissionHashes: readiness.admissionHashes, slimCore,
+      texts: { intents: sIntents, edges: sEdges, mappings: sMap, participation: sPart } },
+  }
+}
+
+/**
+ * 전체 build — 순수 함수. 파일 시스템 · 벽시계를 쓰지 않는다.
+ *    계산은 computeGraphAndReadiness 하나뿐이다. 여기서는 generatedAt 으로 slim · bundle · manifest · 파일 목록만 조립한다.
+ * @returns {{ graphVersion, files: Record<string,string>, manifest, slim, layers, readiness }}
+ */
+export function buildAll({ inputTexts, productTexts, admissionTexts = null, effectiveAt, generatedAt }) {
+  // 🔴 시각 형식은 입력보다 먼저 본다 — 둘 다 틀렸을 때의 실패 코드가 앞판과 같다
+  parseEffectiveAt(effectiveAt)
+  const gen = parseGeneratedAt(generatedAt)
+  const core = computeGraphAndReadiness({ inputTexts, productTexts, admissionTexts, effectiveAt })
+  const { layers, contentHash, graphVersion } = core
+  const { eff, inputHashes, product, admissionHashes, slimCore, texts } = core.parts
+  // 🔴 generatedAt 자리(null)만 채운다 — 키 순서가 그대로라 bundle 바이트가 앞판과 같다
+  const slim = { ...slimCore, generatedAt: gen }
+  const bundle = bundleText(slim)
+  const semanticHash = core.graphSemanticHash
+  const sIntents = texts.intents, sEdges = texts.edges, sMap = texts.mappings, sPart = texts.participation
 
   const manifest = {
     schemaVersion: BUILD_SCHEMA,
@@ -731,20 +861,21 @@ export function buildAll({ inputTexts, productTexts, admissionTexts = null, effe
     autoGeneratedBacklinks: layers.autoBacklinks,
     registeredInProduct: layers.registeredInProduct,
     implementedSurfaces: [...product.implemented],
-    inputHashes: inputs.hashes,
+    inputHashes,
     productHashes: product.hashes,
-    admissionHashes: readiness.admissionHashes,
+    admissionHashes,
     promote: 'NOT_PERFORMED — build 는 current.ts · control.ts 를 쓰지 않는다',
   }
   const files = {
     'intents.jsonl': sIntents,
     'edges.jsonl': sEdges,
     'mappings.jsonl': sMap,
+    ...(sPart === null ? {} : { 'participation.jsonl': sPart }),
     [`bundle/${graphVersion}.ts`]: bundle.text,
-    'readiness.json': prettyStable(readiness.report),
+    'readiness.json': serializeReadiness(core.readiness),
     'manifest.json': prettyStable(manifest),
   }
-  return { graphVersion, files, manifest, slim, layers, readiness: readiness.report }
+  return { graphVersion, files, manifest, slim, layers, readiness: core.readiness }
 }
 
 // ── readiness ──
@@ -778,7 +909,7 @@ export function parseAdmissionTexts(texts) {
  *    도착 intent 의 공개 slug 가 정확히 하나 · 자기 자신·중복 아님 · discovery 는 BRIDGE.
  *  출발 cluster 가 꺼져 있거나 control 이 꺼져 있으면 count 는 0 이고 blocker 가 붙는다.
  */
-export function buildReadiness({ layers, product, admission, effective, graphVersion, semanticHash }) {
+export function buildReadiness({ layers, product, admission, effective, graphVersion, inputs }) {
   const nowMs = effective.ms
   const articles = new Map(product.articles.map((a) => [a.slug, a]))
   const control = product.control
@@ -905,7 +1036,8 @@ export function buildReadiness({ layers, product, admission, effective, graphVer
     schemaVersion: READINESS_SCHEMA,
     derived: true,
     note: '🔴 파생 보고서다. 손으로 고치지 않는다 — 같은 입력으로 다시 build 하면 같은 바이트가 나온다',
-    graphVersion, semanticHash, effectiveAt: effective.text,
+    graphVersion, effectiveAt: effective.text,
+    inputs,
     policy: READINESS_POLICY,
     totals: {
       intents: layers.intents.length, registered: registeredCount, unregistered: layers.intents.length - registeredCount,

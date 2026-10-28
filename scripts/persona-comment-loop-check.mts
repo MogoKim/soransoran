@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
 
 import {
-  AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX, COMMENT_LOOP_BUDGET_ENV,
+  AUTO_COMMENT_THINKING_LEVEL, AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX, COMMENT_LOOP_BUDGET_ENV,
   COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX, commentLoopLimitsFromEnv, firstPerPost, isAutoLaneCandidatePost,
   judgeAutoLane, type AutoLaneFacts,
 } from '../src/lib/persona-comment-auto-lane'
@@ -26,6 +26,10 @@ import { costOf, reserveOf } from '../src/lib/llm-pricing'
 import { ledgerDateOf, type LedgerEntry } from '../src/lib/llm-ledger'
 import { appendLedgerLine, defaultLedgerDir, ledgerPathOf } from './lib/llm-ledger-store.mjs'
 import { SupplyLlmSession, LEDGER_BLOCKED } from './lib/supply-llm-call.mjs'
+import { THINKING_LEVEL_UNSUPPORTED, callProvider } from './lib/voice-m3-provider.mjs'
+import {
+  GEMINI_THINKING_LEVELS, thinkingLevelVerdict, type SupportedThinkingLevel,
+} from '../src/lib/provider-thinking-contract'
 import { MAX_OUTPUT_TOKENS } from './lib/persona-prompt'
 import {
   commentLoopLedgerDir, makeCanonGate, runCommentLoop, generationGateOf, COMMENT_LOOP_LOCK_FILE, type CommentGenerate,
@@ -86,6 +90,12 @@ const lane = (o: Partial<AutoLaneFacts>) => judgeAutoLane({ ...base, ...o })
   check('🔴 EXPIRED 행 → 막힌다', !lane({ queueStatus: 'EXPIRED' }).ok)
   check('🔴 막힐 때 사유를 전부 모은다', lane({ personaCommentsOnPost: 1, postAuthorPersonaId: 'persona-commenter' }).blockers.length === 2)
   check('🔴 정본 수 — 60분 · 글당 1건', AUTO_FIRST_COMMENT_WINDOW_MINUTES === 60 && AUTO_PERSONA_COMMENTS_PER_POST_MAX === 1)
+  check('🔴 짧은 댓글 생성은 gemini-3.7-flash 가 받는 가장 낮은 thinking(low) — minimal 은 HTTP_400 이다',
+    AUTO_COMMENT_THINKING_LEVEL === GEMINI_THINKING_LEVELS['gemini-3.7-flash'][0]
+    && thinkingLevelVerdict('gemini-3.7-flash', AUTO_COMMENT_THINKING_LEVEL).ok)
+  const runnerSource = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
+  check('🔴 운영 runner가 정본 thinking 값을 provider 요청에 전달한다',
+    /thinkingLevel:\s*AUTO_COMMENT_THINKING_LEVEL/.test(runnerSource))
   check('🔴 schedule 템플릿의 시한이 레인 정본과 같은 값이다', FIRST_COMMENT_MAX_MINUTES === AUTO_FIRST_COMMENT_WINDOW_MINUTES)
 }
 
@@ -184,6 +194,76 @@ const fakeFetch = (inTokens: number, outTokens: number): typeof globalThis.fetch
     `${nearCap.errorCode ?? ''} · gen ${genCalls}`)
   const midCap = await callOnce(0.19)
   check('🟢 $0.19 썼으면 아직 한 건은 된다(예약 ≈ $0.005)', midCap.ok && genCalls === 1, `${midCap.errorCode ?? ''}`)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n④-b 🔴 thinkingLevel 계약 — 실제 요청 body · 네트워크 전 거부 (2026-10-24 D10 HTTP_400)')
+// ─────────────────────────────────────────────────────────
+{
+  // @ts-expect-error — gemini-3.7-flash 는 minimal 을 받지 않는다. 이 줄이 컴파일되면 계약 타입이 무너진 것이다
+  const compileTimeReject: SupportedThinkingLevel<'gemini-3.7-flash'> = 'minimal'
+  void compileTimeReject
+
+  const day = new Date('2026-09-28T03:00:00.000Z')
+  const bodies: Record<string, unknown>[] = []
+  let sent = 0
+  const capture = (async (url: string | URL | Request, init?: RequestInit) => {
+    sent += 1
+    if (String(url).includes(':countTokens')) {
+      return new Response(JSON.stringify({ totalTokens: 1805 }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+    return new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: '{"text":"시험 댓글"}' }] }, finishReason: 'STOP' }],
+      usageMetadata: { promptTokenCount: 1805, candidatesTokenCount: 231, thoughtsTokenCount: 0, totalTokenCount: 2036 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof globalThis.fetch
+  const thinkingOf = (b: Record<string, unknown> | undefined): unknown =>
+    ((b?.generationConfig as Record<string, unknown> | undefined)?.thinkingConfig as Record<string, unknown> | undefined)?.thinkingLevel
+  const callWith = async (stage: 'commentGen' | 'commentFollowupGen', level: Parameters<typeof thinkingLevelVerdict>[1]) => {
+    bodies.length = 0; sent = 0
+    const dir = mkdtempSync(join(tmpdir(), 'soran-comment-thinking-'))
+    const session = new SupplyLlmSession({ runId: 'thinking-check', dir, limits: commentLoopLimitsFromEnv({}).limits, now: () => day })
+    process.env.GEMINI_API_KEY = 'test-key-not-real'
+    globalThis.fetch = capture
+    try {
+      const res = await session.call({
+        stage, model: 'gemini-3.7-flash', systemPrompt: '시험', userPayload: '시험',
+        maxOutputTokens: MAX_OUTPUT_TOKENS, timeoutMs: 5_000, thinkingLevel: level,
+      })
+      return { res, ledgerFiles: readdirSync(dir).length }
+    } finally { globalThis.fetch = realFetch; rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  // 첫 댓글 · 추가 댓글은 runner 의 같은 makeGenerate → session.call 을 지난다 — 두 단계 모두 같은 body 를 낸다
+  for (const stage of ['commentGen', 'commentFollowupGen'] as const) {
+    const ok = await callWith(stage, AUTO_COMMENT_THINKING_LEVEL)
+    check(`🟢 ${stage} — 실제 Gemini body 의 generationConfig.thinkingConfig.thinkingLevel = low`,
+      ok.res.ok && bodies.length === 1 && thinkingOf(bodies[0]) === 'low',
+      `${ok.res.errorCode ?? ''} · body ${JSON.stringify(thinkingOf(bodies[0]))}`)
+  }
+  const bad = await callWith('commentGen', 'minimal')
+  check('🔴 gemini-3.7-flash + minimal → 장부·사전 계산·요청 전에 거부(fetch 0 · 장부 파일 0)',
+    !bad.res.ok && bad.res.errorCode === THINKING_LEVEL_UNSUPPORTED && sent === 0 && bad.ledgerFiles === 0,
+    `${bad.res.errorCode ?? ''} · fetch ${sent} · ledger ${bad.ledgerFiles}`)
+
+  // provider 자체도 같은 계약으로 막는다 — 장부를 지나지 않는 호출부가 있어도 네트워크로 나가지 않는다
+  sent = 0
+  globalThis.fetch = capture
+  try {
+    const direct = await callProvider({
+      model: 'gemini-3.7-flash', systemPrompt: '시험', userPayload: '시험', maxOutputTokens: 100, timeoutMs: 5_000, thinkingLevel: 'minimal',
+    })
+    check('🔴 callProvider 직접 호출도 minimal 을 네트워크 전에 거부', !direct.ok && direct.errorCode === THINKING_LEVEL_UNSUPPORTED && sent === 0,
+      `${direct.errorCode} · fetch ${sent}`)
+  } finally { globalThis.fetch = realFetch }
+
+  // 순수 계약 — 값마다 판정
+  check('🟢 low · medium · high 는 받는다', (['low', 'medium', 'high'] as const).every((l) => thinkingLevelVerdict('gemini-3.7-flash', l).ok))
+  check('🔴 minimal 은 받지 않는다', !thinkingLevelVerdict('gemini-3.7-flash', 'minimal').ok)
+  check('🔴 계약 표에 없는 Gemini 모델에 thinkingLevel → 거부(fail-closed)', !thinkingLevelVerdict('gemini-9-unknown', 'low').ok)
+  check('🟢 thinkingLevel 을 싣지 않는 provider(Anthropic)는 판정 대상이 아니다', thinkingLevelVerdict('claude-haiku-4.5', 'minimal').ok)
+  check('🟢 thinkingLevel 미지정 → 모델 기본값(판정 통과)', thinkingLevelVerdict('gemini-3.7-flash', undefined).ok)
 }
 
 // ─────────────────────────────────────────────────────────

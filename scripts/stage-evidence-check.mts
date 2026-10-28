@@ -22,7 +22,7 @@ import {
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 import { AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
-import { decideStage, consumerEnvOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
+import { decideStage, consumerEnvOf, qualitySignalOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
 import { nextStage } from '../src/lib/stage-decision-contract'
 import {
   validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, previousKstDate,
@@ -37,7 +37,7 @@ import { relevantUsageUnknownCount, tallyOf, type DayTally, type LedgerEntry } f
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
-import { autoFirstNeeded, proofDayOf, PROOF_DATE_ENV, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
+import { autoProofNeeded, proofDayOf, PROOF_DATE_ENV, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
@@ -73,7 +73,7 @@ const sample = (i: number, o: Partial<{ postId: string; queueId: string; judged:
 })
 const JUDGED = sample(0)
 const CLEAN_AUDITS = {
-  rows: [JUDGED], globalUnresolvedDefects: 0, globalOverdue: 0, globalRetryable: 0, globalMissingPosts: 0,
+  rows: [JUDGED],
 }
 const facts = (stage: RuntimeStage = 'd3', o: Partial<StageEvidenceFacts> = {}): StageEvidenceFacts => ({
   kstDate: D, stage,
@@ -227,11 +227,12 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 표본 — 판정 전 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false })] } })), 'AUDIT_UNJUDGED')
   failWith('🔴 표본 — 시한 초과 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, overdue: true })] } })), 'AUDIT_OVERDUE')
   failWith('🔴 표본 — 재시도 가능 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, retryable: true })] } })), 'AUDIT_RETRYABLE')
-  failWith('🔴 표 전체 판정 시한 초과 감사 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalOverdue: 1 } })), 'AUDIT_OVERDUE')
   failWith('🔴 표본 — 결함 yes → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { defectYes: true })] } })), 'AUDIT_DEFECT')
-  failWith('🔴 표 전체에 결함 yes(끈적) → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalUnresolvedDefects: 1 } })), 'AUDIT_DEFECT')
-  failWith('🔴 재시도 가능 감사 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalRetryable: 1 } })), 'AUDIT_RETRYABLE')
-  failWith('🔴 글이 사라진 자동 발행 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, globalMissingPosts: 1 } })), 'AUDIT_MISSING_POST')
+  const oldGlobalShape = { rows: [JUDGED], globalUnresolvedDefects: 1, globalOverdue: 1, globalRetryable: 1, globalMissingPosts: 1 }
+  check('🟢 다른 날짜의 전역 상태는 증거일 PASS를 소급 오염시키지 않는다',
+    judge(facts('d3', { audits: oldGlobalShape as unknown as StageEvidenceFacts['audits'] })).verdict === 'PASS')
+  check('🔴 현재 전역 결함·재시도·시한·글 유실은 controller 실시간 품질 신호가 계속 막는다',
+    qualitySignalOf({ unresolvedDefects: 1, missingPosts: 1, retryableFailures: 1, overdueAudits: 1 }).health === 'bad')
 
   // ⑤ 중복
   failWith('🔴 한 글을 가리키는 Queue 행이 1 이 아니다 → FAIL', judge(facts('d3', { posts: [post(0, { queueRows: 0 }), post(1), post(2)] })), 'DUP_QUEUE')
@@ -512,9 +513,15 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
     dupFirst.verdict === 'PASS' && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
   const dupFu = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
   check('🔴 추가 댓글끼리 같은 Persona → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
-  const self = withThread([first, fu(1, { personaId: 'author-0' })])
-  check('🔴 추가 댓글이 자기 글 → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
+  // 🔴 (2026-10-24) 글쓴이는 자기 글의 Persona 댓글에 답글로 한 번만 답할 수 있다 — 최상위 · 두 번째부터는 FOLLOWUP_SELF
+  const authorReply = withThread([first, fu(1, { personaId: 'author-0' })])
+  check('🟢 글쓴이 답글 한 번(최상위 아님) → 대화 감사 PASS · 단계 COMMENT_SELF 아님',
+    authorReply.verdict === 'PASS' && authorReply.conversation?.verdict === 'PASS', JSON.stringify(authorReply.conversation))
+  const self = withThread([first, fu(1, { personaId: 'author-0', topLevel: true })])
+  check('🔴 글쓴이의 최상위 추가 댓글(자기 글) → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
     self.verdict === 'PASS' && self.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(self.conversation))
+  const selfTwice = withThread([first, fu(1, { personaId: 'author-0' }), fu(2, { personaId: 'author-0' })])
+  check('🔴 글쓴이 답글 두 번 → 대화 감사 FOLLOWUP_SELF', selfTwice.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfTwice.conversation))
   const over = withThread([first, fu(1), fu(2), fu(3), fu(4), fu(5)])
   check('🔴 첫 댓글 1 + 추가 5(총 6 > 5) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
     over.verdict === 'PASS' && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))
@@ -673,7 +680,7 @@ console.log('\n④ 저장 validator — 재시험 모양은 받고 근거 없는
   check('검증된 값에 근거 칸이 남는다', v.ok && v.decision.transition?.kind === 'TRIAL' && v.decision.transition.basis === 'RETEST')
 }
 
-console.log('\n⑤ 단계 증명일 — 목표 슬롯을 자동 target 이 먼저 (순수)')
+  console.log('\n⑤ 단계 증명일 — 자동 target 증거 부족분 관측 (순수)')
 {
   const envP = markedStageEnv({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }, TODAY)
   const pd = proofDayOf(envP, NOW)
@@ -682,8 +689,8 @@ console.log('\n⑤ 단계 증명일 — 목표 슬롯을 자동 target 이 먼�
   check('🔴 칸이 비면 증명일이 아니다(비시험일)', proofDayOf({}, NOW) === null && proofDayOf({ [PROOF_STAGE_ENV]: 'd3' }, NOW) === null)
   check('🔴 🔴 **표식 없이 손으로 적은 두 칸은 증명일이 아니다 (consumer 경유만)**',
     proofDayOf({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }, NOW) === null)
-  check('필요 수 = 목표 − 오늘 자동 target (음수 없음)', autoFirstNeeded(pd, 0) === 3 && autoFirstNeeded(pd, 2) === 1
-    && autoFirstNeeded(pd, 5) === 0 && autoFirstNeeded(null, 0) === 0)
+  check('필요 수 = 목표 − 오늘 자동 target (음수 없음)', autoProofNeeded(pd, 0) === 3 && autoProofNeeded(pd, 2) === 1
+    && autoProofNeeded(pd, 5) === 0 && autoProofNeeded(null, 0) === 0)
   // consumer — 증명일 칸의 출처
   const trialEnv = consumerEnvOf({ ok: true, decision: validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL',
     transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV, target: 'd3', basis: 'RETEST' } }, TODAY), expectKstDate: TODAY }).ok
@@ -692,23 +699,15 @@ console.log('\n⑤ 단계 증명일 — 목표 슬롯을 자동 target 이 먼�
   check('🟢 TRIAL(RETEST) → 증명일 d3 · 오늘', trialEnv[PROOF_STAGE_ENV] === 'd3' && trialEnv[PROOF_DATE_ENV] === TODAY, JSON.stringify(trialEnv))
   const holdEnv = consumerEnvOf({ ok: true, decision: PREV_HOLD_D3 })
   check('🔴 HOLD 결정 → 증명일 빈 값', holdEnv[PROOF_STAGE_ENV] === '' && holdEnv[PROOF_DATE_ENV] === '')
-  // 순서 — 증명일에는 앞세울 lane 이 복구 행보다 먼저
+  // 순서 — lane·복구 상태는 신선도/결정적 열쇠 순서를 바꾸지 않는다
   const cand = (id: string, recovery: boolean): QueueCandidate => ({
     queueId: id, title: `${id} 산책`, body: `${id} 동네를 걸었어요. 다들 요즘 뭐 하세요?`, gateVerdict: 'PASS', createdAt: 0,
     assignedPersonaCode: recovery ? PERSONAS[0]!.code : null, voice: null, profile: 'human' as const,
     gateResults: fakeEvidenceGate(NOW, { id }),
   })
   const cands = [cand('h-rec', true), cand('h-1', false), cand('a-1', false), cand('a-2', false)]
-  const isAuto = (id: string) => id.startsWith('a-')
-  const orderOf = (laneBeforeRecovery: boolean) => prepareCandidates({ candidates: cands, personas: PERSONAS as never, at: NOW,
-    preferLane: isAuto, ...(laneBeforeRecovery ? { laneBeforeRecovery: true } : {}) }).auto.map((c) => c.queueId)
-  const proofOrder = orderOf(true)
-  const normalOrder = orderOf(false)
-  check('🔴 🔴 **증명일 순서 — auto 가 사람 복구 행보다 앞선다**', proofOrder.indexOf('a-1') < proofOrder.indexOf('h-rec')
-    && proofOrder.indexOf('a-2') < proofOrder.indexOf('h-rec'), proofOrder.join(','))
-  check('비시험일 순서 — 복구 행이 여전히 맨 앞(기존 규칙)', normalOrder[0] === 'h-rec', normalOrder.join(','))
-  check('lane 안 상대 순서 불변', proofOrder.filter(isAuto).join(',') === normalOrder.filter(isAuto).join(',')
-    && proofOrder.filter((x) => !isAuto(x)).join(',') === normalOrder.filter((x) => !isAuto(x)).join(','))
+  const order = prepareCandidates({ candidates: cands, personas: PERSONAS as never, at: NOW }).auto.map((c) => c.queueId)
+  check('🔴 🔴 **lane·복구 상태는 순서를 바꾸지 않는다**', order.join(',') === 'a-1,a-2,h-1,h-rec', order.join(','))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

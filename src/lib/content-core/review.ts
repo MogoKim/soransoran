@@ -1,5 +1,5 @@
 /**
- * 검수 — 🔴 **기계가 확정할 수 있는 것과 사람이 정하는 것을 가른다**
+ * 검수 — 🔴 **확정 결함과 안전한 창작을 구조화된 finding으로 가른다**
  *
  * 🔴 **deterministic 이 맡는 것은 확정 가능한 것뿐이다**:
  *    개인정보 · 실질 복제 · 금지 낱말 · schema · 지켜야 할 원자적 사실의 소실 ·
@@ -15,12 +15,12 @@
  * 🔴 **한국어 낱말 사전·정규식을 만들지 않는다.** 목록은 반드시 낡고,
  *    낡은 목록이 정상 문장을 막는다.
  *
- * 🔴 **machine 판정은 READY 가 아니다.** 최종 READY/EDIT_REQUIRED/HOLD 는 사람이 정한다.
+ * 🔴 **machine adopt는 READY 그 자체가 아니다.** 배포 전용 계약과 도장을 더 통과해야 한다.
  */
 import { CLAIM_FACTS } from './source-facts'
 import { DRAFT_GATE_CODES, DRAFT_GATE_LABEL } from './draft-life-gates'
 
-export const REVIEW_VERSION = 'review-v7'
+export const REVIEW_VERSION = 'review-v9'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -132,6 +132,19 @@ export type SemanticVerdict = {
   lifeContradictions: LifeContradiction[]
   confidence: number
   note: string
+}
+
+/**
+ * 차단 finding은 한 번 더 같은 검수에서 재현돼야 확정한다.
+ * 위해는 한 번만 발견돼도 즉시 DROP하며 확인 대상이 아니다.
+ */
+export function semanticNeedsConfirmation(s: SemanticVerdict): boolean {
+  if (s.issues.includes('harm')) return false
+  return s.unsupportedAdditions.length > 0
+    || s.droppedFromSource.length > 0
+    || s.lifeContradictions.length > 0
+    || s.issues.length > 0
+    || s.unknownIssues.length > 0
 }
 
 /**
@@ -398,23 +411,10 @@ export const MACHINE_OUTCOMES = ['adopt', 'hold', 'drop'] as const
 export type MachineOutcome = (typeof MACHINE_OUTCOMES)[number]
 
 /**
- * 🔴 **사람에게 넘길 것과 기계가 막을 것을 가른다** (2026-09-20 실측 보정).
- *
- *    `unsupportedAdditions` · `droppedFromSource` 는 **경고**다. 막지 않는다.
- *    SHADOW5B 5편은 사람이 전부 READY 로 봤는데 이 둘이 두 편을 막았고,
- *    **같은 원문·같은 초안이 회차마다 ADOPT/HOLD 를 오갔다** —
- *    "원문에 있는 사건인가" · "뜻이 남았는가" 는 모델이 회차마다 다르게 읽는 판단이다.
- *    그것으로 사람이 READY 라고 본 글을 막으면, 막은 쪽이 틀린 횟수가 더 많다.
- *
- * 🔴 **그래도 지우지 않는다.** 근거는 artifact 에 그대로 남고 사람 검토 화면에 뜬다 —
- *    판정을 **사람에게 넘기는 것**이지 검사를 없애는 것이 아니다.
- *
- * 🔴 **확정할 수 있는 결함은 그대로 막는다**: deterministic 실패 · 개인정보 · 복제 ·
- *    금지어 · 보호 사실 누락 · harm · lifeContradictions · voice 누수·불일치 ·
- *    미완료 · 잘림 · 파싱 실패 · 사용량 미상.
- * 🔴 **완주하지 못한 검수는 절대 adopt 가 아니다.**
- *    예산이 모자랄수록 검수가 느슨해지는 구조를 만들지 않는다.
- * 🔴 adopt 는 **후보로 보낸다**는 뜻일 뿐이다. 사람 검토 없는 발행은 그대로 막혀 있다.
+ * 🔴 quality-v20: p10은 공유 실질 변경 계약에 따라 안전한 창작·사소한 생략을 두 finding 배열에 적지 않는다.
+ * 따라서 `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 손실이며
+ * 하나라도 있으면 Content Core가 HOLD한다. finding 근거는 artifact에 보존하되,
+ * 별도 사람 검토를 정상 운영 경로로 만들지 않는다. 완주하지 못한 검수도 HOLD다.
  */
 /**
  * 🔴 **다시 물어보면 답이 달라질 수 있는 사유들.** 결론이 아니라 "못 물어봤다" 이다.
@@ -441,8 +441,7 @@ export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource']
 export type ReviewWarningAxis = (typeof REVIEW_WARNING_AXES)[number]
 
 /**
- * 🔴 **사람이 판정할 자리 한 줄씩.** 기계가 막지 않고 넘긴 것이 무엇인지 적는다 —
- *    빈 배열이면 넘길 것이 없다는 뜻이다.
+ * 🔴 구조화 finding의 근거를 한 줄씩 보존한다. 빈 배열이면 차단 finding이 없다.
  */
 export function reviewWarnings(s: SemanticVerdict | null): string[] {
   if (s === null) return []
@@ -483,18 +482,13 @@ export function judgeMachine(input: {
   const s = input.semantic
   if (s === null) return { outcome: 'hold', reason: '의미 판정을 읽지 못했다', warnings: none }
   if (s.issues.includes('harm')) return { outcome: 'drop', reason: '위해', warnings: none }
-  /**
-   * 🔴 **여기서부터가 경고다.** 근거는 이미 원문·초안에서 확인된 것뿐이고,
-   *    artifact 와 사람 검토 화면에 그대로 남는다. 막지는 않는다.
-   */
   const warnings = reviewWarnings(s)
-  if (s.lifeContradictions.length > 0) {
-    return {
-      outcome: 'hold', warnings,
-      reason: `생활사 모순 ${s.lifeContradictions.map((x) => x.fact).join(' · ')}`,
-    }
-  }
-  if (s.issues.length > 0) return { outcome: 'hold', reason: s.issues.join(' · '), warnings }
-  if (s.unknownIssues.length > 0) return { outcome: 'hold', reason: '우리 축이 아닌 이름만 왔다', warnings }
+  const binding: string[] = []
+  if (s.unsupportedAdditions.length > 0) binding.push(`근거 없는 위험 사실 ${s.unsupportedAdditions.length}건`)
+  if (s.droppedFromSource.length > 0) binding.push(`원문 핵심 손실 ${s.droppedFromSource.length}건`)
+  if (s.lifeContradictions.length > 0) binding.push(`생활사 모순 ${s.lifeContradictions.map((x) => x.fact).join(' · ')}`)
+  if (s.issues.length > 0) binding.push(s.issues.join(' · '))
+  if (s.unknownIssues.length > 0) binding.push('우리 축이 아닌 이름만 왔다')
+  if (binding.length > 0) return { outcome: 'hold', reason: binding.join(' · '), warnings }
   return { outcome: 'adopt', reason: '', warnings }
 }

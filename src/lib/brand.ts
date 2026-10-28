@@ -1,8 +1,9 @@
 /**
  * 브랜드 상수 — CSS 밖에서 색이 필요한 곳의 단일 지점
  *
- * Next.js metadata(viewport.themeColor)와 manifest 는 CSS 변수를 해석하지 못한다.
- * 따라서 그 두 곳만 이 파일의 상수를 쓴다.
+ * PWA manifest 와 next/og 는 CSS 변수를 해석하지 못한다.
+ * 따라서 그런 곳만 이 파일의 상수를 쓴다.
+ * (🕘 2026-10-19 까지는 viewport.themeColor 도 BRAND.color 를 읽었다. 지금은 선언하지 않는다 — layout.tsx)
  *
  * 🔴 색상 hex 의 정의 위치는 두 곳뿐이다.
  *      1) src/app/globals.css   — 화면에 그려지는 모든 색
@@ -14,10 +15,10 @@
 import { BRAND_NAME } from './brand-name'
 
 export const BRAND = {
-  /** 브랜드 시그니처 — theme-color · OG 장식 면 · 아이콘 배경 (= --brand) */
+  /** 브랜드 시그니처 — OG 장식 면 (= --brand). 🔴 브라우저 theme-color 로 쓰지 않는다 */
   color: '#fa4601',
   /**
-   * 페이지 배경 — manifest background_color · OG 배경 (= --surface-app)
+   * 페이지 배경 — manifest background_color · theme_color · OG 배경 (= --surface-app)
    *
    * 🔴 이전에는 이 값만 폐기된 옛 바탕색에 남아 화면과 갈려 있었다(KNOWN_DRIFT).
    *    웜 모노크롬 전환에서 --surface-app 과 같은 값으로 맞췄고,

@@ -1,13 +1,24 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import { formatKst } from '@/lib/persona-admin'
 import {
-  OP_STATUS_LABEL, OP_VERDICT_LABEL, OP_VERDICT_TONE, OP_REASON_LABEL,
+  OP_STATUS_LABEL, OP_VERDICT_LABEL, OP_REASON_LABEL,
   toGateFindings, maskDraft,
 } from '@/lib/original-post-admin'
+import AdminListFilter from '@/components/admin/AdminListFilter'
+import {
+  AdminPageHeader,
+  AdminNotice,
+  AdminEmptyState,
+  AdminRangeNote,
+  AdminTable,
+  AdminTableRow,
+  AdminCell,
+  adminBadgeClass,
+  type BadgeTone,
+} from '@/components/admin/AdminUi'
 
 /**
  * 오리지널 초안 검수 대기열 — 🔴 읽기 전용
@@ -28,7 +39,7 @@ import {
  *    원문 조각이 든 초안을 DB 에 남기지 않기 위해서다.
  */
 export const metadata: Metadata = {
-  title: '오리지널 초안 대기열',
+  title: '글 초안 대기열',
   robots: { index: false, follow: false },
 }
 
@@ -36,20 +47,29 @@ export const dynamic = 'force-dynamic'
 
 const STATUS_ORDER = ['PENDING', 'APPROVED', 'EDITED', 'DECLINED', 'PUBLISHED', 'EXPIRED'] as const
 
+/**
+ * 판정 배지 색 — lib 의 OP_VERDICT_TONE(Tailwind 기본 팔레트)과 같은 뜻을 관리자 토큰으로 옮긴 것.
+ * 🔴 PASS 를 초록으로 칠하지 않는다 — 승인 신호로 읽힌다(lib 주석 그대로). HOLD 주의 · BLOCK 위험.
+ */
+const VERDICT_TONE: Record<string, BadgeTone> = { PASS: 'neutral', HOLD: 'warning', BLOCK: 'danger' }
+
+/** 데스크탑 열 폭 — 머리줄과 각 줄이 같은 값을 쓴다 */
+const COLS = 'lg:grid-cols-[8rem_minmax(0,1.6fr)_minmax(0,1fr)_8.5rem]'
+
 export default async function OriginalPostCandidatesPage() {
   const { ok } = await requireAdmin()
 
   if (!ok) {
     return (
-      <PageShell chrome="minimal">
-        <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+      <>
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
           <Link href="/" className="mt-6 inline-block text-link">
             홈으로 가기
           </Link>
-        </main>
-      </PageShell>
+        </div>
+      </>
     )
   }
 
@@ -75,117 +95,143 @@ export default async function OriginalPostCandidatesPage() {
   const holdCount = rows.filter((r) => r.gateVerdict === 'HOLD').length
 
   return (
-    <PageShell>
-      <div className="mx-auto w-full max-w-5xl px-4 py-6">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h1 className="text-xl font-bold">오리지널 초안 대기열</h1>
-          <Link href="/admin/persona-candidates" className="text-sm text-link underline">
+    <>
+      <div>
+        <AdminPageHeader group="자동 운영" title="글 초안 대기열" />
+        <p className="m-0 mt-1">
+          <Link href="/admin/persona-candidates" className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
             페르소나 후보 대기열 →
           </Link>
-        </div>
-
-        <div className="mb-5 flex flex-wrap gap-2">
-          {STATUS_ORDER.map((s) => (
-            <span
-              key={s}
-              className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700"
-            >
-              {OP_STATUS_LABEL[s] ?? s} <b className="ml-1">{countOf(s)}</b>
-            </span>
-          ))}
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-900">
-            먼저 볼 것 <b className="ml-1">{holdCount}</b>
-          </span>
-          <span className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-500">
-            합계 <b className="ml-1">{total}</b>
-          </span>
-        </div>
-
-        <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
-          읽기 전용입니다. 승인·폐기는 이 화면에서 저장되지 않으며, 승인해도 발행되지 않습니다.
-          <br />
-          <b>&ldquo;검수 대기&rdquo;는 통과가 아니라 사람이 볼 차례라는 뜻입니다.</b>
-          {' '}차단된 초안은 적재되지 않아 여기 나타나지 않습니다.
         </p>
 
-        {rows.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-gray-300 px-4 py-10 text-center text-sm text-gray-500">
-            대기열이 비어 있습니다.
-            <br />
-            <span className="text-xs">
-              초안은 <code>original-post-enqueue --apply --limit=N</code> 으로 적재됩니다.
+        {/* 이 숫자는 DB 전체 분포다(groupBy). 아래 칩의 숫자는 불러온 행 안의 수다. */}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {STATUS_ORDER.map((s) => (
+            <span key={s} className={adminBadgeClass('neutral')}>
+              {OP_STATUS_LABEL[s] ?? s} <b className="ml-1 tabular-nums">{countOf(s)}</b>
             </span>
-          </p>
+          ))}
+          <span className={adminBadgeClass('warning')}>
+            먼저 볼 것 <b className="ml-1 tabular-nums">{holdCount}</b>
+          </span>
+          <span className={adminBadgeClass('neutral')}>
+            합계 <b className="ml-1 tabular-nums">{total}</b>
+          </span>
+        </div>
+
+        <div className="mt-4">
+          <AdminNotice tone="info">
+            <p className="m-0">
+              읽기 전용입니다. 승인·폐기는 이 화면에서 저장되지 않으며, 승인해도 발행되지 않습니다.
+              <br />
+              <b>&ldquo;검수 대기&rdquo;는 통과가 아니라 사람이 볼 차례라는 뜻입니다.</b>
+              {' '}차단된 초안은 적재되지 않아 여기 나타나지 않습니다.
+            </p>
+          </AdminNotice>
+        </div>
+
+        {rows.length === 0 ? (
+          <div className="mt-6">
+            <AdminEmptyState>
+              대기열이 비어 있습니다.
+              <br />
+              <span className="text-xs">
+                초안은 <code>original-post-enqueue --apply --limit=N</code> 으로 적재됩니다.
+              </span>
+            </AdminEmptyState>
+          </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
-                  <th className="py-2 pr-3">상태</th>
-                  <th className="py-2 pr-3">판정</th>
-                  <th className="py-2 pr-3">제목</th>
-                  <th className="py-2 pr-3">원문 → 초안</th>
-                  <th className="py-2 pr-3">사유</th>
-                  <th className="py-2 pr-3">배정</th>
-                  <th className="py-2 pr-3">판 · 모델</th>
-                  <th className="py-2 pr-3">재생성</th>
-                  <th className="py-2">생성</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => {
-                  const findings = toGateFindings(r.gateResults)
-                  const why = [...findings.blocks, ...findings.holds]
-                  const srcLen = [...r.rawContent.rawBody].length
-                  const drfLen = [...r.draftBody].length
-                  return (
-                    <tr key={r.id} className="border-b border-gray-100 align-top">
-                      <td className="py-2 pr-3 whitespace-nowrap">{OP_STATUS_LABEL[r.status] ?? r.status}</td>
-                      <td className="py-2 pr-3 whitespace-nowrap">
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-xs ${
-                            OP_VERDICT_TONE[r.gateVerdict] ?? 'border-gray-200 bg-gray-50 text-gray-700'
-                          }`}
-                        >
+          /* 🔴 거르기는 불러온 행(최대 200건 · 상태순 → 최신순) 안에서만 한다. 조회 변경 0.
+                모바일 상태 칩은 한 줄 가로 스크롤이다(창업자 확정). 페이지 자체는 넘치지 않는다. */
+          <AdminListFilter
+            mobileScroll
+            searchLabel="배정 페르소나 코드 찾기"
+            searchPlaceholder="예: P07"
+            chips={[
+              { key: 'all', label: '전체', count: rows.length },
+              { key: 'HOLD', label: '먼저 볼 것', count: holdCount },
+              ...STATUS_ORDER.map((s) => ({
+                key: s,
+                label: OP_STATUS_LABEL[s] ?? s,
+                count: rows.filter((r) => r.status === s).length,
+              })),
+            ]}
+          >
+            <AdminRangeNote>
+              {total > rows.length
+                ? `전체 ${total}건 중 ${rows.length}건을 불러왔습니다(상태순 → 최신순). 거르기는 이 범위 안에서만 됩니다.`
+                : `전체 ${total}건을 불러왔습니다.`}
+            </AdminRangeNote>
+            <AdminTable
+              columns={COLS}
+              head={
+                <>
+                  {/* 🔴 네 칸이다 — 1024~1279px 본문 폭(약 670px)에서 여섯 칸이면 줄이 계속 접혔다 */}
+                  <span><span>판정</span> · <span>상태</span></span>
+                  <span>제목</span>
+                  <span>사유</span>
+                  <span><span>배정</span> · <span>생성</span></span>
+                </>
+              }
+            >
+              {rows.map((r) => {
+                const findings = toGateFindings(r.gateResults)
+                const why = [...findings.blocks, ...findings.holds]
+                const srcLen = [...r.rawContent.rawBody].length
+                const drfLen = [...r.draftBody].length
+                return (
+                  <AdminTableRow
+                    key={r.id}
+                    href={`/admin/original-post-candidates/${r.id}`}
+                    columns={COLS}
+                    accent={r.gateVerdict === 'HOLD' ? 'warning' : undefined}
+                    filterKey={`${r.status} ${r.gateVerdict}`}
+                    searchText={r.matchedPersona?.code ?? ''}
+                  >
+                    <span className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-start lg:gap-1">
+                      <span>
+                        <span className={adminBadgeClass(VERDICT_TONE[r.gateVerdict] ?? 'neutral')}>
                           {OP_VERDICT_LABEL[r.gateVerdict] ?? r.gateVerdict}
                         </span>
-                      </td>
-                      <td className="py-2 pr-3">
-                        {/* 🔴 첫 글자 + 길이만 */}
-                        <Link
-                          href={`/admin/original-post-candidates/${r.id}`}
-                          className="text-link underline"
-                        >
-                          {maskDraft(r.draftTitle)}
-                        </Link>
-                      </td>
-                      <td className="py-2 pr-3 whitespace-nowrap text-xs text-gray-600">
-                        {srcLen}자 → {drfLen}자
-                        <span className="ml-1 text-gray-400">
-                          ({srcLen === 0 ? '—' : `${(drfLen / srcLen).toFixed(2)}배`})
+                      </span>
+                      <span className="text-sm text-content-secondary">{OP_STATUS_LABEL[r.status] ?? r.status}</span>
+                    </span>
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      {/* 🔴 첫 글자 + 길이만 */}
+                      <span className="text-sm font-bold text-link">{maskDraft(r.draftTitle)}</span>
+                      {/* 예전 표의 세 열(원문 → 초안 · 판 · 모델 · 재생성)을 제목 아래 한 줄로 모았다 — 라벨은 그대로 */}
+                      <span className="flex flex-wrap gap-x-3 text-xs tabular-nums text-content-muted">
+                        <span>
+                          <span>원문 → 초안</span>{' '}
+                          {srcLen}자 → {drfLen}자
+                          <span className="ml-1">
+                            ({srcLen === 0 ? '—' : `${(drfLen / srcLen).toFixed(2)}배`})
+                          </span>
                         </span>
-                      </td>
-                      <td className="py-2 pr-3 text-xs text-gray-600">
-                        {why.length === 0 ? '—' : why.map((f) => OP_REASON_LABEL[f.code] ?? f.code).join(' · ')}
-                      </td>
-                      {/* 🔴 배정은 발행이 아니다. 값이 있어도 글은 나가지 않았다 */}
-                      <td className="py-2 pr-3 whitespace-nowrap text-xs text-gray-600">
-                        {r.matchedPersona?.code ?? '—'}
-                      </td>
-                      <td className="py-2 pr-3 whitespace-nowrap text-xs text-gray-600">
-                        {r.promptVersion}
-                        <span className="ml-1 text-gray-400">{r.model}</span>
-                      </td>
-                      <td className="py-2 pr-3 text-xs">{r.regenCount}</td>
-                      <td className="py-2 text-xs text-gray-500 whitespace-nowrap">{formatKst(r.createdAt)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+                        <span>
+                          <span>판 · 모델</span> {r.promptVersion}
+                          <span className="ml-1">{r.model}</span>
+                        </span>
+                        <span>
+                          <span>재생성</span> {r.regenCount}
+                        </span>
+                      </span>
+                    </span>
+                    <AdminCell label="사유">
+                      {why.length === 0 ? '—' : why.map((f) => OP_REASON_LABEL[f.code] ?? f.code).join(' · ')}
+                    </AdminCell>
+                    {/* 🔴 배정은 발행이 아니다. 값이 있어도 글은 나가지 않았다 */}
+                    <span className="flex flex-wrap gap-x-3 gap-y-0.5 lg:flex-col">
+                      <AdminCell label="배정" className="tabular-nums">{r.matchedPersona?.code ?? '—'}</AdminCell>
+                      <AdminCell label="생성" tone="meta" className="tabular-nums">{formatKst(r.createdAt)}</AdminCell>
+                    </span>
+                  </AdminTableRow>
+                )
+              })}
+            </AdminTable>
+          </AdminListFilter>
         )}
       </div>
-    </PageShell>
+    </>
   )
 }

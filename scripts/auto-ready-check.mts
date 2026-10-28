@@ -10,13 +10,14 @@ import { readFileSync } from 'node:fs'
 import { Prisma } from '@prisma/client'
 
 import {
-  warningsOfGate, semanticIssues, eligibilityOf, judgeRow, CONTRACT, AUTO_DECIDER, HUMAN_DECIDER,
+  warningsOfGate, blockingWarningsOfGate, semanticIssues, eligibilityOf, judgeRow, CONTRACT, AUTO_DECIDER, HUMAN_DECIDER,
   NO_SEMANTIC_RECORD, SEMANTIC_INVALID, SEMANTIC_HOLDS_MISMATCH,
   makeStamp, readStamp, stampValidFor, AUTO_READY_RECORD_KEY, JUDGE_CONTRACT_DIGEST,
   autoReadyEnabled, AUTO_READY_ENV, judgeOpen, auditTarget, pickAudits, mergeDefect, isHumanEditRecord,
   AUDIT_CONTRACT_VERSION, verdictShapeOk,
 } from '../src/lib/auto-ready-v2'
 import { isTransientTxLost, withStampTxRetry, STAMP_TX_MAX_ATTEMPTS } from '../src/lib/auto-ready-repo'
+import { SEMANTIC_HOLD_CODES } from '../src/lib/semantic-summary-codes'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { releaseStageCeiling, boundedReleaseStage, resolveScale } from '../src/lib/scale-runtime'
 import {
@@ -89,11 +90,20 @@ console.log('\n① 🔴 semanticReview 는 fail-closed 다 — "객체이기만 
   /** 🔴 요약과 holds 가 같은 말을 해야 한다 — 기대 holds 는 정본 `semanticHoldsOf` 가 만든다 */
   const one = { ...GOOD_SR, unsupportedAdditions: 1 }
   const expected = semanticHoldsOf(one as never)
-  check('기준선 — 요약 1건 · holds 1건이면 불일치는 아니다(그래도 경고라 예외)',
+  check('기준선 — 위험 추가 finding은 기록·holds 대조에 남고 자동 READY를 막는다',
     !warningsOfGate(gateWith(one, expected)).includes(SEMANTIC_HOLDS_MISMATCH)
+    && blockingWarningsOfGate(gateWith(one, expected)).includes(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:1`)
     && !elig(gateWith(one, expected)).auto)
+  const dropped = { ...GOOD_SR, droppedFromSource: 1 }
+  check('핵심 손실 finding이 있으면 자동 READY를 막는다',
+    !elig(gateWith(dropped, semanticHoldsOf(dropped as never))).auto)
+  const life = { ...one, lifeContradictions: 1 }
+  const lifeVerdict = elig(gateWith(life, semanticHoldsOf(life as never)))
+  check('🔴 추가 경고와 생활사 모순이 함께 있으면 생활사 모순은 계속 차단한다',
+    !lifeVerdict.auto && lifeVerdict.reasons.join(',').includes('SEMANTIC_LIFE_CONTRADICTION:1'))
   check('🔴 🔴 **요약은 추가 1건인데 holds 가 비었다 → 불일치 예외**',
-    warningsOfGate(gateWith(one, [])).includes(SEMANTIC_HOLDS_MISMATCH))
+    warningsOfGate(gateWith(one, [])).includes(SEMANTIC_HOLDS_MISMATCH)
+    && !elig(gateWith(one, [])).auto)
   check('🔴 🔴 **요약은 0 인데 holds 에 의미 경고가 있다 → 불일치 예외**',
     warningsOfGate(gateWith(GOOD_SR, ['SEMANTIC_DROPPED_FROM_SOURCE:2'])).includes(SEMANTIC_HOLDS_MISMATCH))
   check('🔴 confidence 에 통과 임계값을 만들지 않았다 — 0 도 유효한 값이다',
@@ -169,7 +179,8 @@ console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지'
   check('🔴 미배정(null) 그림자는 허용', run(row({ matchedPersonaCode: null })).klass === 'clean')
   check('🔴 🔴 **artifact 의 의미 검수가 불완전 → warning**',
     run(row(), [artifact({ review: { deterministic: { pass: true }, semanticCompletion: { complete: false }, semantic: { confidence: 0.9 } } })]).klass === 'warning')
-  check('🔴 원문에 차단 표현이 있다 → warning', run(row({ draftBody: '오늘도 산책했어요', draftTitle: draft.title }), [artifact({ draft: { title: draft.title, body: '오늘도 산책했어요' } })]).klass === 'warning')
+  check('Content Core가 검증한 문안을 단어로 다시 차단하지 않는다',
+    run(row({ draftBody: '오늘도 산책했어요', draftTitle: draft.title }), [artifact({ draft: { title: draft.title, body: '오늘도 산책했어요' } })]).klass === 'clean')
 }
 
 console.log('\n③ 🔴 표본 — 인증된 사람 v2 기록만 · 결과도 기록이 확정 · 결속이 깨지면 제외 · 기준 불변')
@@ -366,7 +377,7 @@ console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 �
   const V4_MARK = { version: 'quality-v4', digest: '379bf6c61fe1431f928da2e44cde0731fdf1850a301b0c808378a6875be47daa' }
   check('🔴 🔴 **실제 v4 표식 READY → 열림 · 유효 도장이어도 QUALITY_CONTRACT_MISMATCH**',
     codeOf(mk({ gateResults: { ...gateWith(GOOD_SR), [QUALITY_CONTRACT_KEY]: V4_MARK } }), true) === 'QUALITY_CONTRACT_MISMATCH'
-    && QUALITY_CONTRACT_VERSION === 'quality-v11' && currentQualityContract().digest !== V4_MARK.digest)
+    && QUALITY_CONTRACT_VERSION === 'quality-v25' && currentQualityContract().digest !== V4_MARK.digest)
   /**
    * 🔴 (quality-v6 · 2026-10-01) **실제 v5 표식**도 같다 — 만남 게이트 전에 도장 찍힌 READY 는 v6 에서 자동 발행되지 않는다(구제 없음).
    */
@@ -547,9 +558,14 @@ console.log('\n⑪ 🔴 감사 — 묶음 대조 · 옛 판정 거절 · 규칙 
   check('🔴 🔴 **발행 본문이 도장 본문과 다르면 yes**', changed.defect === 'yes')
   const noStamp = await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '산책을 다녀왔어요. 다들 어떠세요?', stamp: null })
   check('🔴 도장이 없으면 yes', noStamp.defect === 'yes')
-  const drift = makeStamp('평범한 하루', '오늘도 산책했어요', new Date())
-  check('🔴 발행 글에 차단 표현이 있으면 yes',
-    (await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '오늘도 산책했어요', stamp: drift })).defect === 'yes')
+  const accepted = makeStamp('평범한 하루', '확실히 오늘도 산책하니 좋았어요', new Date())
+  check('규칙 감사도 Content Core가 적격 판정한 표현을 단어로 뒤집지 않는다',
+    (await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '확실히 오늘도 산책하니 좋았어요', stamp: accepted })).defect === 'no')
+  const eligibilitySource = codeOnly('src/lib/auto-ready-v2.ts')
+  const auditSource = codeOnly('scripts/lib/auto-ready-rule-judge.mts')
+  check('🔴 단어 재차단 구현이 되살아나지 않는다',
+    !/AUTO_READY_BLOCKERS|Object\.entries\([^)]*BLOCKER/.test(eligibilitySource + auditSource)
+    && !/확실히\|틀림없이|오늘도\|아직도|저격\|논란/.test(eligibilitySource + auditSource))
   check('🔴 규칙 감사자는 자기 판을 밝힌다 — 모델·프롬프트·감사 계약',
     good.model === 'rule:integrity-safety-audit' && good.promptVersion === 'integrity-safety-v1'
     && good.contractVersion === AUDIT_CONTRACT_VERSION)
