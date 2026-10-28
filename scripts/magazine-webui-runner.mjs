@@ -69,7 +69,23 @@ import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, t
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
 import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate, persistedDirectIdentity, DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
-import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+import { DIRECT_SPEC_MODE, directSpecCtaCheck, readDirectSpec, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+
+/**
+ * 🔴 **원고 저장 전 관문** — legacy 는 `validateManuscript` 그대로다.
+ *    DIRECT 는 그 위에 CTA 앞 문장이 brief 템플릿 복사인지 본다(spec/2 · `directSpecCtaCheck`).
+ *    spec 을 읽지 못하면 저장하지 않는다(fail-closed) — 관문은 전송 전에 이미 spec 을 지났다.
+ */
+function manuscriptValidatorFor(gate, { slug, draftsDir }) {
+  if (gate.mode !== DIRECT_SPEC_MODE) return validateManuscript
+  const s = readDirectSpec({ slug, draftsDir })
+  if (!s.ok) return () => ({ ok: false, reasons: [{ code: s.code, why: s.why }] })
+  return (text) => {
+    const v = validateManuscript(text)
+    const c = directSpecCtaCheck({ spec: s.spec, manuscript: text })
+    return c.ok ? v : { ...v, ok: false, reasons: [...(v.reasons ?? []), { code: c.code, why: c.why }] }
+  }
+}
 
 /** 🔴 정본은 `lib/magazine-delivery-gate.mjs` 다 — 기존 호출부·시험을 위해 그대로 내보낸다 */
 export { manuscriptPromptText, plannedMessageFor, deliveryGate }
@@ -451,7 +467,7 @@ export async function recoverSlug(slug, { conversationUrl, checkOnly = false, da
       // 🔴 DIRECT_SPEC_V1 은 brief.md 가 없는 것이 정상이다 — 회수(fetchSlug)와 같이 markers 를 비운다 (2026-10-24).
       //    legacy 는 기존대로 brief 의 대조 문장을 요구한다.
       requiredMarkers: gate.mode === DIRECT_SPEC_MODE ? [] : markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),
-      validate: validateManuscript, checkOnly, ...browserDeps,
+      validate: manuscriptValidatorFor(gate, { slug, draftsDir }), checkOnly, ...browserDeps,
     })
     if (!r.ok) {
       return { slug, status: 'failed', reason: r.reason, stage: r.stage ?? 'recover', sent: false,
@@ -746,7 +762,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     // 🔴 판정한 바로 그 글자를 보낸다
     message: gate.message,
     requiredMarkers: markers,
-    validate: validateManuscript,
+    validate: manuscriptValidatorFor(gate, { slug, draftsDir }),
     onBeforeSend: recordBeforeSend,
     ...browserDeps,
   })

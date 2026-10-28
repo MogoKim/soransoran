@@ -52,6 +52,8 @@ import { deliveryGate, BRIEF_FORMAT_CONTRACT_REASON } from './lib/magazine-deliv
 import {
   DIRECT_SPEC_MODE,
   DIRECT_SPEC_TITLE_MISMATCH,
+  DIRECT_CTA_TEMPLATE_COPY,
+  directSpecCtaCheck,
   directSpecTitleCheck,
   readDirectSpec,
   registerDirectSpecSidecar,
@@ -337,8 +339,8 @@ export function formatRegenFailures(violations) {
   ]
 }
 
-/** 재생성이 원고 제목 계약 위반으로 멈췄으면 그 코드를 그대로 올린다 — 호출 자리의 일반 코드로 덮지 않는다 */
-export const regenStopCode = (rr, fallback) => (rr?.code === DIRECT_SPEC_TITLE_MISMATCH ? rr.code : fallback)
+/** 재생성이 원고 계약 위반(제목 · CTA 템플릿 복사)으로 멈췄으면 그 코드를 그대로 올린다 — 호출 자리의 일반 코드로 덮지 않는다 */
+export const regenStopCode = (rr, fallback) => (rr?.code === DIRECT_CTA_TEMPLATE_COPY ? rr.code : (rr?.code === DIRECT_SPEC_TITLE_MISMATCH ? rr.code : fallback))
 
 /** article-draft.ts 의 heroImage 연결 — 없으면 null */
 export function heroLinkOf(src) {
@@ -929,7 +931,10 @@ export function drive(slug, opts, deps = {}) {
        *    후보 파일이 없으면 여기서 판정하지 않는다 — 교체 함수가 REGEN_CANDIDATE_MISSING 으로 막는다.
        */
       if (isDirectMode && existsSync(candidate)) {
-        const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(candidate, 'utf8') })
+        const candidateText = readFileSync(candidate, 'utf8')
+        const tt = directSpecTitleCheck({ spec: directSpec, manuscript: candidateText })
+        // 🔴 CTA 앞 문장 템플릿 복사도 교체 전에 막는다 (spec/2)
+        const t = tt.ok ? directSpecCtaCheck({ spec: directSpec, manuscript: candidateText }) : tt
         if (!t.ok) {
           record.outcome = t.code
           add(stage, 'blocked', `재생성 원고 거부: ${t.code} — ${t.why} (원본 유지)`)
@@ -1105,6 +1110,11 @@ export function drive(slug, opts, deps = {}) {
   if (isDirectMode) {
     const t = directSpecTitleCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })
     if (!t.ok) return stop('article', t.code, t.why, { expectedTitle: t.expected, actualTitle: t.actual })
+  }
+  // 🔴 이미 저장된 원고도 — CTA 앞 문장이 템플릿 복사면 변환 · 등록으로 가지 않는다 (spec/2 · 수리는 사람이 승인한 무전송 CTA 수리로)
+  if (isDirectMode) {
+    const c = directSpecCtaCheck({ spec: directSpec, manuscript: readFileSync(p.draftMd, 'utf8') })
+    if (!c.ok) return stop('article', c.code, c.why, { ctaText: c.text })
   }
   /**
    * 🔴 **이미 저장된 draft.md 도 변환기와 같은 판정을 받는다** (2026-10-08 `clinic-booking-app`).

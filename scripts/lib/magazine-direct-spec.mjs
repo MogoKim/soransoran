@@ -20,6 +20,7 @@ import { join, dirname } from 'node:path'
 import {
   ARTICLE_SPEC_MODE,
   ARTICLE_SPEC_SCHEMA,
+  ARTICLE_SPEC_SCHEMA_V2,
   articleSpecHash,
   canonicalJson,
   compileArticleSpec,
@@ -98,6 +99,38 @@ export function directSpecTitleCheck({ spec, manuscript }) {
     actual,
     why: `원고 title ${JSON.stringify(actual)} 이 spec title ${JSON.stringify(expected ?? null)} 과 다르다 — 자동으로 고치지 않는다`,
   }
+}
+
+/**
+ * 🔴 **DIRECT CTA 앞 문장** (2026-10-28 · age-learning 노출 결함).
+ *    spec/1 brief 는 CTA 셋째 칸에 첫 sleep canary 의 **완성 문장**을 고정으로 넣었다 — 원고가 그대로 옮겨
+ *    주제와 무관한 "밤 이야기" 가 글 끝 CTA 위에 노출됐다. spec/2 brief 는 셋째 칸에 **지시**를 넣는다 —
+ *    승인된 독자 질문 · CTA 라벨을 참고해 원고 작성자가 이 글의 문장을 쓰게 한다. 기계가 최종 문장을 지어내지 않는다.
+ *    spec/1 brief 바이트(와 이미 보낸 메시지 지문)는 그대로다.
+ */
+export const LEGACY_DIRECT_CTA_LEAD = '지금 떠오른 밤 이야기 한 조각을 남겨 주세요'
+export const DIRECT_CTA_TEMPLATE_COPY = 'DIRECT_CTA_TEMPLATE_COPY'
+/** 지시문 머리 — 원고가 지시를 옮겼는지 알아보는 표식이기도 하다 */
+export const DIRECT_CTA_DIRECTIVE_HEAD = '(지시 — 그대로 옮기지 않는다)'
+/** CTA 칸 구분자(`|`)와 줄바꿈은 지시문에 들일 수 없다 — 구분자를 바꾸면 brief 형식 계약이 깨진다 */
+const ctaSafe = (value) => String(value ?? '').replace(/[|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
+export function directCtaLeadDirective(spec) {
+  return `${DIRECT_CTA_DIRECTIVE_HEAD} 독자 질문 「${ctaSafe(spec?.audience?.readerQuestion)}」에 이어, `
+    + `「${ctaSafe(spec?.navigation?.community?.label)}」로 자기 이야기를 남기고 싶어지는 이 글 주제의 앞 문장 하나를 직접 쓴다`
+}
+/**
+ * spec/2 원고의 CTA 앞 문장이 템플릿 복사인가 — 옛 고정 문장 · 지시문 그대로 · 지시 머리 포함이면 저장 전 차단.
+ *    spec/1 은 판정하지 않는다(기존 동작 그대로). 판정만 한다 — 고쳐 쓰지 않는다.
+ * @returns {{ok:true}|{ok:false, code:'DIRECT_CTA_TEMPLATE_COPY', why:string, text:string|null}}
+ */
+export function directSpecCtaCheck({ spec, manuscript }) {
+  if (spec?.schemaVersion !== ARTICLE_SPEC_SCHEMA_V2) return { ok: true }
+  const ctas = judgeManuscriptFormat(String(manuscript ?? '')).blocks.filter((b) => b.type === 'cta')
+  const text = ctas.length ? (ctas[ctas.length - 1].text ?? null) : null
+  if (text !== null && (text === LEGACY_DIRECT_CTA_LEAD || text === directCtaLeadDirective(spec) || text.includes(DIRECT_CTA_DIRECTIVE_HEAD))) {
+    return { ok: false, code: DIRECT_CTA_TEMPLATE_COPY, text, why: `CTA 앞 문장이 brief 템플릿을 그대로 옮겼다: ${JSON.stringify(text)} — 이 글 주제의 문장을 써야 한다` }
+  }
+  return { ok: true }
 }
 
 /**
@@ -384,7 +417,7 @@ export function directSpecBriefText(spec) {
       ? `- publishWindow: ${p.publishWindow.after} ~ ${p.publishWindow.before}`
       : '- publishWindow: 없음 (EVERGREEN)',
     '',
-    `[CTA] ${n.community.path} | ${n.community.label} | 지금 떠오른 밤 이야기 한 조각을 남겨 주세요`,
+    `[CTA] ${n.community.path} | ${n.community.label} | ${spec.schemaVersion === ARTICLE_SPEC_SCHEMA_V2 ? directCtaLeadDirective(spec) : LEGACY_DIRECT_CTA_LEAD}`,
     '',
   )
 

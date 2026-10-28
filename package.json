@@ -195,6 +195,7 @@
     "check:magazine-direct-spec-mutation": "node scripts/magazine-direct-spec-mutation.mjs",
     "check:magazine-direct-topic-forbidden": "node scripts/magazine-direct-topic-forbidden-check.mjs",
     "check:magazine-direct-topic-forbidden-mutation": "node scripts/magazine-direct-topic-forbidden-mutation.mjs",
+    "check:magazine-direct-cta-mutation": "node scripts/magazine-direct-cta-mutation.mjs",
     "check:magazine-auto-recovery-mutation": "node scripts/magazine-auto-recovery-mutation.mjs",
     "check:magazine-input-repair-fixture-mutation": "node scripts/magazine-input-repair-fixture-mutation.mjs",
     "check:magazine-auto-merge-recovery-mutation": "node scripts/magazine-auto-merge-recovery-mutation.mjs",
