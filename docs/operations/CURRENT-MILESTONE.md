@@ -123,7 +123,7 @@
 |---|---|---|---|
 | D10-FIX | 공급 뒤 자동 READY 결말 확정 | code·runtime 완료 · 자연 공급에서 공급 종료 시 미도장 자동 적격 0 | 기존 운영 행 수정·DB 직접 수정·수동 증거 |
 | D10 | 다음 유효 자연 D10 증명 | 자동 10/10·첫 댓글 10·선택적 추가 0~4·감사·usageUnknown 0·중복 0 | 수동 stage·READY·게시 |
-| P20 | Persona 40 활성화 | D10 PASS·이름/말투/카드/회원·크롤 작성자 충돌 0·contract-valid 40 | 이름만 만들고 용량으로 계산 |
+| P20 | Persona 40 활성화 | D10 PASS·`persona:source-author-check`·`persona:gate6b-check` PASS(source author 후보 입력 0)·read-only live 회원/기존 Persona(비활성 포함)/cohort 내 exact·near 충돌 0을 create 전과 activate 전에 각각 PASS·말투/카드·contract-valid 40 | 이름만 만들고 용량으로 계산 · "크롤 작성자 충돌 0" 주장 |
 | C20 | D20 댓글·공급 profile | D10 실측 단가·수율·추가 댓글 결과로 예산과 run cap 산정 | 근거 없는 선증액 |
 | D20 | 자연 D20 · D10 operating PASS 뒤 | Persona 40·preflight green·자동 20/20·댓글 1..5·감사·비용 PASS | 단계 건너뛰기 |
 | D30 | 자연 D30 · D20 operating PASS 뒤 | Persona 60·profile green·자동 30/30 | D30 생략 |
@@ -150,7 +150,7 @@
 - Dn 증거를 위한 수동 게시·댓글·stage·READY·장부 수정.
 - 모든 글에 댓글 5개 강제, 댓글 배수·최소값·난수로 조회수 만들기.
 - 사후 모델 finding을 지우거나 Content Core의 의미 결정을 다시 판정하기.
-- 실제 회원·크롤 작성자의 닉네임 복사·변형·로그 출력.
+- 실제 회원·크롤 작성자의 닉네임 복사·변형·저장·로그 출력, 후보 생성 입력으로 쓰기.
 - 격리된 과거 초안을 routine 사람 검토나 무제한 자동 재작성으로 구제하기.
 - D30 생략, 두 Mac의 D100 job 동시 소유, D100 scheduler 없이 D100 선언.
 - 외부 간판 확장을 이유로 자동 운영 고객 범위를 즉시 30대로 확대하기.
