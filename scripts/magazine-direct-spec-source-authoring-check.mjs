@@ -1147,7 +1147,7 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       assert.deepEqual(c.unresolvedFields, ['node.forbiddenPatterns', 'publication.publishAt'])
       assert.equal(c.provenance.safetyRevision.status, 'DERIVED')
       safetyFill(c)
-      const a = approve(s0.w, c, { draft: s0.draft }); assert.equal(a.ok, true, `${a.code} ${a.why}`)
+      const a = approve(s0.w, c, { safety: true, draft: s0.draft }); assert.equal(a.ok, true, `${a.code} ${a.why}`)
       const doc = JSON.parse(readFileSync(sourceFile(s0.w.repo), 'utf8'))
       assert.equal(doc.schema, 'magazine-article-spec-source/3'); assert.equal(doc.entries.length, 1)
       assert.deepEqual(doc.entries[0].safetyRevision, { draftHash: s0.draftHash }); assert.deepEqual(doc.entries[0].node.forbiddenPatterns, TOPIC_PATTERNS)
@@ -1169,17 +1169,17 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const s0 = safetyWorld(makeWorld(), queued, { draft: `${DRAFT_TEXT}\n${TOPIC_PATTERNS[1]}이라는 말을 들었다.\n` })
       const c = safetyFill(prepare(s0.w, s0.prep).candidate)
       const keep = snapshotOf(s0.w)
-      const a = approve(s0.w, c, { draft: s0.draft }); assert.equal(a.code, 'DRAFT_PATTERN_VIOLATION')
+      const a = approve(s0.w, c, { safety: true, draft: s0.draft }); assert.equal(a.code, 'DRAFT_PATTERN_VIOLATION')
       assert.deepEqual(snapshotOf(s0.w), keep)
     }],
     ['SA3 prepare 뒤 원고 바이트 변경 → approve · materialize DRAFT_CHANGED · 쓰기 0', () => {
       const s0 = safetyWorld(makeWorld(), queued)
       const c = safetyFill(prepare(s0.w, s0.prep).candidate)
       const keep = snapshotOf(s0.w)
-      assert.equal(approve(s0.w, c, { draft: Buffer.from(`${DRAFT_TEXT}\n`) }).code, 'DRAFT_CHANGED')
-      assert.equal(approve(s0.w, c).code, 'DRAFT_REQUIRED')
+      assert.equal(approve(s0.w, c, { safety: true, draft: Buffer.from(`${DRAFT_TEXT}\n`) }).code, 'DRAFT_CHANGED')
+      assert.equal(approve(s0.w, c, { safety: true }).code, 'DRAFT_REQUIRED')
       assert.deepEqual(snapshotOf(s0.w), keep)
-      assert.equal(approve(s0.w, c, { draft: s0.draft }).ok, true)
+      assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).ok, true)
       const q = readFileSync(queueFile(s0.w.repo), 'utf8')
       assert.equal(materialize(s0.w, { safety: true, draft: Buffer.from(`${DRAFT_TEXT}\n`) }).code, 'DRAFT_CHANGED')
       assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), q)
@@ -1195,7 +1195,7 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
         const s0 = safetyWorld(makeWorld(), queued)
         const c = safetyFill(prepare(s0.w, s0.prep).candidate); edit(c)
         const keep = snapshotOf(s0.w)
-        assert.equal(approve(s0.w, c, { draft: s0.draft }).code, code, label)
+        assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).code, code, label)
         assert.deepEqual(snapshotOf(s0.w), keep, label)
       }
     }],
@@ -1220,7 +1220,7 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const s0 = safetyWorld(w, queued, { skipQueued: true })
       assert.equal(prepare(s0.w, s0.prep).code, 'SLUG_ALREADY_REGISTERED')
       const s1 = safetyWorld(makeWorld(), queued)
-      assert.equal(approve(s1.w, safetyFill(prepare(s1.w, s1.prep).candidate), { draft: s1.draft }).ok, true)
+      assert.equal(approve(s1.w, safetyFill(prepare(s1.w, s1.prep).candidate), { safety: true, draft: s1.draft }).ok, true)
       const t = readFileSync(queueFile(s1.w.repo), 'utf8')
       const external = t.replace(renderQueueRow(s1.row), renderQueueRow({ ...s1.row, articlePlanHash: `sha256:${'e'.repeat(64)}` }))
       writeFileSync(queueFile(s1.w.repo), external)
@@ -1229,7 +1229,7 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
     }],
     ['SA8 큐 lock 안 판독 뒤 외부 writer → QUEUE_CHANGED · 외부 바이트 보존', () => {
       const s0 = safetyWorld(makeWorld(), queued)
-      assert.equal(approve(s0.w, safetyFill(prepare(s0.w, s0.prep).candidate), { draft: s0.draft }).ok, true)
+      assert.equal(approve(s0.w, safetyFill(prepare(s0.w, s0.prep).candidate), { safety: true, draft: s0.draft }).ok, true)
       let external = null
       const m = materialize(s0.w, { safety: true, draft: s0.draft, hooks: { beforeWrite: ({ queuePath }) => { external = `${readFileSync(queuePath, 'utf8')}// 외부 writer\n`; writeFileSync(queuePath, external) } } })
       assert.equal(m.code, 'QUEUE_CHANGED'); assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), external)
@@ -1237,9 +1237,9 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
     ['SA9 같은 승인 재실행 — approve REVISE_BASE_CHANGED · materialize 쓰기 0 (멱등) · 바이트 그대로', () => {
       const s0 = safetyWorld(makeWorld(), queued)
       const c = safetyFill(prepare(s0.w, s0.prep).candidate)
-      assert.equal(approve(s0.w, c, { draft: s0.draft }).ok, true)
+      assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).ok, true)
       const doc = readFileSync(sourceFile(s0.w.repo), 'utf8')
-      assert.equal(approve(s0.w, c, { draft: s0.draft }).code, 'REVISE_BASE_CHANGED'); assert.equal(readFileSync(sourceFile(s0.w.repo), 'utf8'), doc)
+      assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).code, 'REVISE_BASE_CHANGED'); assert.equal(readFileSync(sourceFile(s0.w.repo), 'utf8'), doc)
       assert.equal(materialize(s0.w, { safety: true, draft: s0.draft }).written, true)
       const q = readFileSync(queueFile(s0.w.repo), 'utf8')
       const again = materialize(s0.w, { safety: true, draft: s0.draft }); assert.equal(again.ok, true); assert.equal(again.written, false)
@@ -1253,7 +1253,7 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
     }],
     ['SA10 종류 혼동 — 안전 개정 entry 를 일반 materialize 로 · 일반 후보에 safetyRevision · 모르는 kind → 거부 · 쓰기 0', () => {
       const s0 = safetyWorld(makeWorld(), queued)
-      assert.equal(approve(s0.w, safetyFill(prepare(s0.w, s0.prep).candidate), { draft: s0.draft }).ok, true)
+      assert.equal(approve(s0.w, safetyFill(prepare(s0.w, s0.prep).candidate), { safety: true, draft: s0.draft }).ok, true)
       const q = readFileSync(queueFile(s0.w.repo), 'utf8')
       assert.equal(materialize(s0.w).ok, false); assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), q)
       const w2 = makeWorld(); const c2 = ready(w2); c2.entry.safetyRevision = { draftHash: s0.draftHash }
@@ -1264,6 +1264,36 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const q3 = readFileSync(queueFile(w3.repo), 'utf8')
       assert.equal(materialize(w3, { safety: true, draft: Buffer.from(DRAFT_TEXT) }).code, 'SAFETY_REVISION_MISMATCH')
       assert.equal(readFileSync(queueFile(w3.repo), 'utf8'), q3)
+    }],
+    ['SA11 approve 명시 경계 — 안전 개정 후보는 --safety-revise · --draft 둘 다 · 일반 후보에 --safety-revise 거부 · 직접 호출도 같다 · 쓰기 0', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      const c = safetyFill(prepare(s0.w, s0.prep).candidate)
+      const keep = snapshotOf(s0.w)
+      assert.equal(approve(s0.w, c, { draft: s0.draft }).code, 'SAFETY_REVISION_FLAG_REQUIRED')
+      assert.equal(approve(s0.w, c, { safety: true }).code, 'DRAFT_REQUIRED')
+      assert.deepEqual(snapshotOf(s0.w), keep, '플래그·원고 없이 승인 artifact 를 썼다')
+      const w2 = makeWorld(); const c2 = ready(w2)
+      assert.equal(approve(w2, c2, { safety: true, draft: s0.draft }).code, 'SAFETY_REVISION_MISMATCH')
+      assert.equal(existsSync(sourceFile(w2.repo)), false, '일반 후보를 안전 개정으로 승인했다')
+      // 실제 CLI — 후보 파일 · 원고 파일
+      const dir = tmp('sa11'); const cf = join(dir, 'c.json'); const df = join(dir, 'draft.md')
+      writeFileSync(cf, JSON.stringify(c)); writeFileSync(df, s0.draft)
+      const cli = (extra) => spawnSync(process.execPath, [cliPath, 'approve', '--candidate', cf, '--approver', '창업자', '--at', AT,
+        '--confirm-candidate-hash', lib.candidateHashOf(c), '--repo', s0.w.repo, '--admission-root', s0.w.admission, '--out-root', s0.w.repo, ...extra], { encoding: 'utf8' })
+      const noFlag = cli(['--draft', df])
+      assert.equal(noFlag.status, 2, 'CLI 가 --safety-revise 없는 --draft 를 받았다')
+      const flagOnly = cli(['--safety-revise'])
+      assert.equal(flagOnly.status, 2, 'CLI 가 --draft 없는 --safety-revise 를 받았다')
+      const bare = cli([])
+      assert.equal(bare.status, 1); assert.equal(JSON.parse(bare.stdout).code, 'SAFETY_REVISION_FLAG_REQUIRED')
+      assert.deepEqual(snapshotOf(s0.w), keep, 'CLI 거부 경로가 artifact 를 썼다')
+      const ok = cli(['--safety-revise', '--draft', df])
+      assert.equal(ok.status, 0, ok.stdout + ok.stderr); assert.equal(JSON.parse(ok.stdout).written, true)
+      const c2f = join(dir, 'c2.json'); writeFileSync(c2f, JSON.stringify(c2))
+      const normal = spawnSync(process.execPath, [cliPath, 'approve', '--candidate', c2f, '--approver', '창업자', '--at', AT,
+        '--confirm-candidate-hash', lib.candidateHashOf(c2), '--repo', w2.repo, '--admission-root', w2.admission, '--out-root', w2.repo, '--safety-revise', '--draft', df], { encoding: 'utf8' })
+      assert.equal(normal.status, 1); assert.equal(JSON.parse(normal.stdout).code, 'SAFETY_REVISION_MISMATCH')
+      assert.equal(existsSync(sourceFile(w2.repo)), false)
     }],
     ['(수치) 승인·쓰기·외부 호출', () => { authoringCases.counts = COUNTS }],
   ]

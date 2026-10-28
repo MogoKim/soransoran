@@ -9,7 +9,8 @@
  *                  supersedes{운영 디스크 article-spec specHash · 기존 sourceHash} 를 싣고 publishAt 은 비운다. approve 가 기존 entry 를 CAS 로 교체한다.
  *                원고 보존형 안전 개정: [--safety-revise --supersedes-spec <sha256:…> --draft <draft.md>] — 큐에 있고 원고가 회수된 글만.
  *                  글별 주제 금지 패턴 · 새 publishAt 만 바꾼다. 원고 sha256 을 고정한다(--draft 는 읽기만 한다).
- *                  approve · materialize 도 같은 --draft 를 받아 다시 대조한다. materialize 는 --safety-revise 로 기존 행을 CAS 교체한다.
+ *                  approve · materialize 도 --safety-revise --draft 를 **명시해야** 한다(후보 종류만으로 승인하지 않는다) — 다시 대조하고,
+ *                  materialize 는 기존 행을 CAS 교체한다. 일반 후보에 --safety-revise 를 주면 거부한다.
  *   inspect      읽기 전용. 후보 파일의 지금 해시 · 미해결 필드 · 차단 사유를 낸다.
  *                node scripts/magazine-direct-spec-source-authoring.mjs inspect --candidate <file>
  *   approve      source artifact 의 유일한 쓰기. 사람이 채운 후보를 다시 전부 검증하고 승인 entry 하나를 원자적으로 더한다.
@@ -78,10 +79,13 @@ if (command === 'prepare') {
   const admission = arg('--admission-root')
   const outRoot = arg('--out-root')
   if (!repo || !admission || !outRoot) usage('--repo · --admission-root · --out-root 를 모두 명시해야 한다')
+  if (argv.includes('--safety-revise') && !arg('--draft')) usage('--safety-revise 는 --draft <보존할 draft.md> 가 필요하다')
+  if (!argv.includes('--safety-revise') && arg('--draft')) usage('--draft 는 --safety-revise 와 함께만 쓴다')
   const r = approveCandidate({
     candidate: readCandidate(), approver: arg('--approver'), at: arg('--at'), confirmCandidateHash: arg('--confirm-candidate-hash'),
     repoRoot: resolve(repo), admissionRoot: resolve(admission), outRoot: resolve(outRoot),
-    researchDir: arg('--research-dir') ? resolve(arg('--research-dir')) : null, draft: readDraft(),
+    researchDir: arg('--research-dir') ? resolve(arg('--research-dir')) : null,
+    safety: argv.includes('--safety-revise'), draft: readDraft(),
   })
   out(r.ok ? { ok: true, written: r.written, path: r.path, sourceHash: r.sourceHash, ...(r.revised ? { revised: r.revised } : {}) } : r, r.ok ? 0 : 1)
 } else if (command === 'materialize') {

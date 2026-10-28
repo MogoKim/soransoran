@@ -716,7 +716,7 @@ function safetyBaseCheck({ base, baseSchema, state, root, supersedesSpecHash, dr
  *
  * @returns {{ok:true, written:boolean, path:string, sourceHash:string, entry:object}|{ok:false, code:string, why:string, problems?:string[]}}
  */
-export function approveCandidate({ candidate, approver, at, confirmCandidateHash, repoRoot, admissionRoot, outRoot, researchDir = null, nowMs = Date.now(), hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS, draft = null }) {
+export function approveCandidate({ candidate, approver, at, confirmCandidateHash, repoRoot, admissionRoot, outRoot, researchDir = null, nowMs = Date.now(), hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS, safety: safetyFlag = false, draft = null }) {
   const fail = (code, why, problems) => ({ ok: false, code, why, ...(problems ? { problems } : {}) })
   const roots = checkOutputRoots({ repoRoot, outRoot })
   if (!roots.ok) return roots
@@ -732,6 +732,14 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   if (confirmCandidateHash !== computed) return fail('CANDIDATE_HASH_MISMATCH', `확인한 후보 해시가 지금 후보와 다르다 (${confirmCandidateHash} ≠ ${computed})`)
   const safety = candidate.revision?.kind === SAFETY_REVISION_KIND
   if (candidate.revision?.kind !== undefined && !safety) return fail('REVISION_KIND_UNKNOWN', `모르는 개정 종류다: ${String(candidate.revision.kind)}`)
+  /**
+   * 🔴 **개정 종류는 호출자가 명시한다** (2026-10-28 · Codex P2) — 후보 파일의 revision.kind 만 믿지 않는다.
+   *    안전 개정 후보는 `safety: true`(CLI --safety-revise)와 보존할 원고가 모두 있어야 하고,
+   *    일반 후보에 safety 를 주면 거부한다. CLI 를 우회한 직접 호출도 이 함수에서 같이 막힌다.
+   */
+  if (safety && safetyFlag !== true) return fail('SAFETY_REVISION_FLAG_REQUIRED', '안전 개정 후보다 — --safety-revise 를 명시해야 승인한다')
+  if (!safety && safetyFlag !== false) return fail('SAFETY_REVISION_MISMATCH', '안전 개정 후보가 아니다 — --safety-revise 로 승인하지 않는다')
+  // 원고 부재(DRAFT_REQUIRED)는 safetyBaseCheck 가 쓰기 전에 막는다
   const forged = ['status', 'approvedBy', 'approvedAt', 'sourceHash', 'productBasis', ...(candidate.revision ? [] : ['supersedes']), ...(safety ? [] : ['safetyRevision'])].filter((k) => k in (candidate.entry ?? {}))
   if (forged.length || candidate.entry?.node?.status !== CANDIDATE_STATUS) return fail('CANDIDATE_APPROVAL_FORGED', `후보에 승인 필드가 있다 (${forged.join(',') || 'node.status'})`)
   // 🔴 개정 후보 — supersedes 는 prepare 가 고정한 값 그대로여야 한다(대체 대상을 사람이 손으로 바꾸지 않는다)
