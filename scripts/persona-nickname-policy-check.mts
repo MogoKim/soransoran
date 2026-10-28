@@ -16,6 +16,10 @@
  *   ⑨ 결정론: 같은 코드는 같은 후보 순서
  *   ⑩ 기존 P01 코드도 후보를 받는다 (기존 30명 함수 계약 유지)
  *   ⑪ 크롤 작가 대조 신호 부재 확인 · 계약 보고
+ *   ⑫ P34-P43 기본 10명 분포 — 길이 3종+ · 한 길이 ≤50% · 반복 리듬 ≤3 · 유의어 쌍 0
+ *   ⑬ 인공어 · 실명형 항목(다사다사 · 소담 · 다솜 · 가온 · 단비)이 어떤 코드 후보에도 없다
+ *   ⑭ fixture 표시명 = 빈 충돌 집합 기본 배정 (어긋나면 활성화 mapping 이 다른 이름을 싣는다)
+ *   ⑮ live 충돌이 짧은 이름을 다 막아도 쏠린 묶음을 만들지 않는다 — 상한 · 유의어 fail-closed
  */
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -24,13 +28,24 @@ import {
   candidatesFor,
   assignCandidates,
   verifyNamePolicy,
+  isRepeatedRhythm,
   NAME_LENGTH,
 } from '../src/lib/persona-nickname-candidates'
+import { COHORTS } from '../src/lib/persona-cohort'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CANDIDATES_SRC = readFileSync(join(HERE, '../src/lib/persona-nickname-candidates.ts'), 'utf-8')
 
 const D20_CODES = ['P34', 'P35', 'P36', 'P37', 'P38', 'P39', 'P40', 'P41', 'P42', 'P43'] as const
+const FIXTURE = JSON.parse(readFileSync(join(HERE, '__fixtures__/persona-expansion-canary.json'), 'utf-8')) as {
+  candidates: Array<{ code: string; displayName: string }>
+}
+/** 🔴 독립 판정용 — 생성기 상수를 빌려 쓰지 않는다(빌리면 상수를 지운 변이를 못 잡는다) */
+const SYNONYM_ORACLE: readonly (readonly string[])[] = [
+  ['도란도란', '오손도손', '소곤소곤', '조용조용'],
+  ['이것저것', '요리조리'],
+]
+const ARTIFICIAL_OR_REAL_NAME = ['다사다사', '소담', '다솜', '가온', '단비']
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -286,6 +301,73 @@ let dryRunNames: string[] = []
   } else {
     ok('크롤 작가 신호 부재', 'contract',
       '크롤 작가 대조 없음 — 원천 폐기(#641) · hash 재증명 불가 · isTaken 콜백만 존재')
+  }
+}
+
+// ─── ⑫ P34-P43 기본 10명 분포 ──────────────────────────────────
+{
+  if (COHORTS['wave6-d20-canary'].codes.join() !== D20_CODES.join()) {
+    bad('D20 코드 정본', 'dryrun', `🔴 cohort 코드가 P34-P43 과 다르다: ${COHORTS['wave6-d20-canary'].codes.join(',')}`)
+  }
+  const names = dryRunNames
+  const byLen = new Map<number, number>()
+  for (const n of names) byLen.set([...n].length, (byLen.get([...n].length) ?? 0) + 1)
+  const maxLen = Math.max(0, ...byLen.values())
+  const rhythm = names.filter((n) => [...n].length === 4 && [...n][1] === [...n][3])
+  const synPairs = SYNONYM_ORACLE.filter((g) => names.filter((n) => g.includes(n)).length > 1)
+  const problems: string[] = []
+  if (names.length !== 10 || new Set(names).size !== 10) problems.push(`서로 다른 이름 ${new Set(names).size}/10`)
+  if (byLen.size < 3) problems.push(`길이 ${byLen.size}종 < 3`)
+  if (maxLen > 5) problems.push(`한 길이 ${maxLen}/10 > 50%`)
+  if (rhythm.length > 3) problems.push(`반복 리듬 ${rhythm.length}/10 > 3 (${rhythm.join('·')})`)
+  if (rhythm.some((n) => !isRepeatedRhythm(n))) problems.push('isRepeatedRhythm 이 반복 리듬을 놓친다')
+  if (synPairs.length) problems.push(`유의어 쌍: ${synPairs.map((g) => names.filter((n) => g.includes(n)).join('+')).join(' / ')}`)
+  const dist = [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([l, c]) => `${l}자 ${c}`).join(' · ')
+  if (problems.length) bad('기본 10명 분포', 'dryrun', `🔴 ${problems.join(' / ')}`)
+  else ok('기본 10명 분포', 'dryrun', `${dist} · 반복 리듬 ${rhythm.length}/10 · 유의어 쌍 0`)
+}
+
+// ─── ⑬ 인공어 · 실명형 항목 제거 ────────────────────────────────
+{
+  const seen = new Set<string>()
+  for (let n = 1; n <= 999; n += 1) for (const x of candidatesFor(`P${String(n).padStart(2, '0')}`, 10_000)) seen.add(x)
+  const back = ARTIFICIAL_OR_REAL_NAME.filter((n) => seen.has(n))
+  if (back.length) bad('인공어·실명형 제거', 'policy', `🔴 후보에 다시 들어왔다: ${back.join(', ')}`)
+  else ok('인공어·실명형 제거', 'policy', `P01-P999 전 후보 ${seen.size}종에 ${ARTIFICIAL_OR_REAL_NAME.length}개 전부 없음`)
+}
+
+// ─── ⑭ fixture 표시명 = 기본 배정 ───────────────────────────────
+{
+  const fx = new Map(FIXTURE.candidates.map((c) => [c.code, c.displayName]))
+  const def = assignCandidates([...D20_CODES], () => false, 40).picked
+  const diff = D20_CODES.filter((c) => fx.get(c) !== def.get(c)).map((c) => `${c}: fixture=${fx.get(c) ?? '(없음)'} · 기본=${def.get(c) ?? '(없음)'}`)
+  if (FIXTURE.candidates.length !== D20_CODES.length || [...fx.keys()].join() !== D20_CODES.join()) {
+    bad('fixture = 기본 배정', 'contract', `🔴 fixture 코드 ${[...fx.keys()].join(',')} ≠ P34-P43`)
+  } else if (diff.length) {
+    bad('fixture = 기본 배정', 'contract', `🔴 ${diff.length}건 어긋남 — ${diff.join(' / ')}`)
+  } else {
+    ok('fixture = 기본 배정', 'contract', '10/10 일치 — mapping 은 fixture 에서 뽑는다')
+  }
+}
+
+// ─── ⑮ live 충돌이 묶음을 쏠리게 하지 못한다 ────────────────────
+{
+  // 회원 이름이 2·3자를 전부 차지했다고 치면 4·5자만 남는다 — 상한 때문에 10명을 채울 수 없다
+  const longOnly = assignCandidates([...D20_CODES], (n) => [...n].length <= 3, 40)
+  if (longOnly.ok) {
+    const got = [...longOnly.picked.values()]
+    bad('쏠림 fail-closed', 'safety', `🔴 4·5자만으로 10명을 채웠다: ${got.join('·')}`)
+  } else {
+    ok('쏠림 fail-closed', 'safety', `2·3자 전부 막힘 → ok=false (${longOnly.problems.length}명 미배정 · 일부만 만들지 않는다)`)
+  }
+  // 열린 이름이 정확히 10개이고 그중 둘이 유의어면 하나는 버려야 한다
+  const open10 = new Set(['도란도란', '오손도손', '텃밭', '일기', '찻잔', '오솔길', '민들레', '인절미', '어쩌다보니', '오늘은맑음'])
+  const syn = assignCandidates([...D20_CODES], (n) => !open10.has(n), 10_000)
+  const synNames = [...syn.picked.values()]
+  if (syn.ok || (synNames.includes('도란도란') && synNames.includes('오손도손'))) {
+    bad('유의어 within-cohort', 'safety', `🔴 유의어 둘을 한 묶음에 넣었다: ${synNames.join('·')}`)
+  } else {
+    ok('유의어 within-cohort', 'safety', '도란도란+오손도손 동시 배정 거절 → ok=false')
   }
 }
 

@@ -15,7 +15,7 @@ import { isPoolCode } from '../src/lib/persona-card-verify'
 import { comparePersonaCodes, isPersonaCode, PERSONA_CODE_MAX, personaCodeOf, sortPersonaCodes } from '../src/lib/persona-code'
 import { PRODUCTION_PERSONA_CODES, verifyManifest, type CohortManifest } from '../src/lib/persona-cohort'
 import { parseCreativeFile } from '../src/lib/persona-creative'
-import { candidatesFor, verifyNamePolicy } from '../src/lib/persona-nickname-candidates'
+import { candidatesFor, NAME_LENGTH, verifyNamePolicy } from '../src/lib/persona-nickname-candidates'
 import { nicknameCategoryOf, nicknameSpace, NICKNAME_LEXICON } from '../src/lib/persona-nickname-space'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
@@ -158,8 +158,10 @@ console.log('③ 이름 — 합성 공간 350+ · 300명 서로 구분')
 // ─────────────────────────────────────────────────────────
 const space = nicknameSpace()
 check(`합성 공간 ${space.length} ≥ 350`, space.length >= 350)
-check('공간 전부 정본 정책 통과 · 두세 글자 · 중복 0',
-  space.every((n) => verifyNamePolicy(n).ok) && space.every((n) => [...n].length >= 2 && [...n].length <= 3) && new Set(space).size === space.length)
+// 🔴 길이 정본은 2~5자다(D100 canon §4.2 · runbook §2.1). 값을 박아 두어 상수가 2~3 으로 돌아가면 여기서 걸린다
+check('🔴 길이 정본이 2~5자다', NAME_LENGTH.min === 2 && NAME_LENGTH.max === 5)
+check('공간 전부 정본 정책 통과 · 2~5자 · 중복 0',
+  space.every((n) => verifyNamePolicy(n).ok) && space.every((n) => [...n].length >= 2 && [...n].length <= 5) && new Set(space).size === space.length)
 check('결정적이다 — 두 번 불러도 같은 순서', nicknameSpace().join() === space.join())
 const old = new Set<string>()
 for (let n = 1; n <= 999; n += 1) for (const x of candidatesFor(personaCodeOf(n), 10_000)) old.add(x)

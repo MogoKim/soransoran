@@ -97,7 +97,13 @@
 4. **seed 파일** — §2.1을 통과한 표시명을 포함해
    `persona:cohort-seed --cohort=wave6-d20-canary --creative=<fixture에서 뽑은 creative 파일> --expect-sha=<sha256>`
    dry-run 뒤 `--write`. 파일은 `tmp/` (gitignored).
-5. **draft 적재** — `persona:cohort-run --cohort=wave6-d20-canary --step=create --apply --limit=10`
+5. **draft 적재** — 표시명은 fixture에서만 뽑는다. fixture `displayName`은 빈 충돌 집합의 기본 배정과 같아야 한다
+   (`persona-nickname-policy-check` ⑭가 잠근다). 먼저 read-only live 대조
+   `persona:expansion -- --db --fixture=scripts/__fixtures__/persona-expansion-canary.json`에서 10명 전원 이름 충돌 0을
+   확인한다. 그 뒤에만 fixture의 `{코드: displayName}` 10개로 `tmp/persona-wave6-d20-canary-displayname.json`을 만든다.
+   하나라도 막히면 파일을 만들지 않고 fixture·기본 배정을 함께 고친다. 파일이 있으면 `persona:cohort-run`이 그것을 쓰고,
+   트랜잭션 안에서 Gate ⑥-B를 다시 판정한다.
+   `persona:cohort-run --cohort=wave6-d20-canary --step=create --apply --limit=10`
    → `--step=seed --apply --limit=10` → `--step=check`. 운영 DB write이므로 창업자 승인 뒤에만 한다.
 6. **활성화** — `ACTOR_USER_ID=<id> persona:cohort-run --cohort=wave6-d20-canary --step=activate --apply --limit=10 --reason "..."`.
    일부만 켜지 않는다(전원 아니면 0).

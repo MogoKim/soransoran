@@ -4,7 +4,7 @@
  *
  * 일곱 가지를 고정한다.
  *   ① (지움 2026-09-30) 14일 준비도 시간축 — 정본은 다음 단계 preflight 다
- *   ② persona 24명    얇은 축을 **측정해서** 메웠는가 · 닉네임이 정본 두세 글자인가
+ *   ② persona 24명    얇은 축을 **측정해서** 메웠는가 · 닉네임이 정본 2~5자인가
  *   ③ (지움 2026-09-30) freshness TTL — 정본은 `judgeSlotRelease` 다
  *   ④ 수집원 다회      1,147 을 페이지로 쓰지 않는가 · 성공률을 곱하는가 · 보호장치가 있는가
  *   ⑤ d10 dry-run     24명·140건에서 140/140 인가 · 수집 준비도가 **BLOCKED** 인가
@@ -116,7 +116,7 @@ const q = (n: number): QueueCandidate[] => Array.from({ length: n }, (_, i) => (
 // 🔴 (2026-09-30 · source-slot-v1) 이 절은 지웠다 — ① 14일 준비도 시간축(`simulateStage` · `horizonStart` 지평) — 14일치 완성 글 재고를 준비도로 쓰던 정본. 대신 다음 단계 preflight(`judgeNextPreflight` · `stage:scheduler-check`) 가 본다.
 
 // ── ② persona 24명 · 닉네임 ──
-console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 글자')
+console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 2~5자')
 {
   const full = parsePoolDoc(read(POOL_DOC))
   check('정본 Pool 파싱 문제 0', full.problems.length === 0)
@@ -220,7 +220,7 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   // 🔴 코드에 "이 사람은 이 이름" 배정표가 없다 (Pool §3-2 이유 ②)
   const nick = codeOf('src/lib/persona-nickname-candidates.ts')
   check('🔴 persona 코드별 이름 배정표가 없다', !/P0[1-9]|P1[0-9]|P2[0-5]/.test(nick))
-  check('🔴 HEAD1 구조 유지 — 한 글자 머리로 세 글자 조합만 만든다 (4자는 PHRASE 단독)',
+  check('🔴 HEAD1 구조 유지 — 한 글자 머리로 세 글자 조합만 만든다 (4~5자는 RHYTHM·TALK 단독)',
     /HEAD1/.test(nick) && !/const HEAD:/.test(nick))
 
   /**

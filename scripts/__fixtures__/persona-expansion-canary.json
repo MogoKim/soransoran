@@ -1,6 +1,6 @@
 {
   "cohort": "wave6-d20-canary",
-  "note": "D20 canary 40 신규 10명 — 사람 설계 creative(LLM 0). 생활사는 기존 30명 분포를 보고 기혼 비율을 낮추지 않고(6/10) 얇은 연령대(40대 중반)와 자녀 구성을 분산했다. 생일은 birthDateFor(코드 번호). 기본 비활성 · 운영 DB write 0 · COHORTS 밖. 표시명은 D100 canon §4.2 · runbook §2.1 (2026-10-16) 신 기준에 따라 커뮤니티 실분포(2~5자 · 반복 리듬·구어체 포함)를 반영한 합성 이름으로 교체했다(2026-10-19) — 적재 시점에 live 대조를 다시 본다.",
+  "note": "D20 canary 40 신규 10명 — 사람 설계 creative(LLM 0). 생활사는 기존 30명 분포를 보고 기혼 비율을 낮추지 않고(6/10) 얇은 연령대(40대 중반)와 자녀 구성을 분산했다. 생일은 birthDateFor(코드 번호). 기본 비활성 · 운영 DB write 0 · COHORTS 밖. 표시명은 D100 canon §4.2 · runbook §2.1 (2026-10-16) 신 기준에 따라 커뮤니티 실분포(2~5자 · 반복 리듬·구어체 포함)를 반영한 합성 이름으로 교체했다(2026-10-19). 표시명은 빈 충돌 집합에서의 기본 배정(assignCandidates)과 정확히 같아야 한다 — persona-nickname-policy-check 가 잠근다(2026-10-28). 적재 시점에 live 대조를 다시 본다.",
   "candidates": [
     {
       "code": "P34",
@@ -44,7 +44,7 @@
           "주말 계획 되묻기"
         ]
       },
-      "displayName": "도란도란",
+      "displayName": "텃밭",
       "interests": [
         "자녀 취업 준비",
         "갱년기 열감",
@@ -97,7 +97,7 @@
           "공감 이모티콘 하나로 끝내기"
         ]
       },
-      "displayName": "소담",
+      "displayName": "오늘은맑음",
       "interests": [
         "학원비",
         "생리 주기 변화",
@@ -149,7 +149,7 @@
           "고생했다고 토닥이기"
         ]
       },
-      "displayName": "따끈따끈",
+      "displayName": "도란도란",
       "interests": [
         "방앗간 손님",
         "시댁 김장",
@@ -201,7 +201,7 @@
           "안부 되묻기"
         ]
       },
-      "displayName": "수다쟁이",
+      "displayName": "오솔길",
       "interests": [
         "손주 돌보기",
         "합창단",
@@ -251,7 +251,7 @@
           "엄마 안부 전화 얘기"
         ]
       },
-      "displayName": "가온",
+      "displayName": "일기",
       "interests": [
         "등산",
         "이른 갱년기",
@@ -303,7 +303,7 @@
           "응원 한마디 남기기"
         ]
       },
-      "displayName": "이것저것",
+      "displayName": "소소하게",
       "interests": [
         "입시 정보",
         "간병",
@@ -355,7 +355,7 @@
           "농담으로 분위기 풀기"
         ]
       },
-      "displayName": "단호박",
+      "displayName": "어쩌다보니",
       "interests": [
         "자녀 취업",
         "노후 준비",
@@ -408,7 +408,7 @@
           "질문 하나 던지기"
         ]
       },
-      "displayName": "조용조용",
+      "displayName": "찻잔",
       "interests": [
         "부부 취미",
         "요가",
@@ -460,7 +460,7 @@
           "고맙다는 말로 맺기"
         ]
       },
-      "displayName": "소소하게",
+      "displayName": "민들레",
       "interests": [
         "가게 운영",
         "자녀 입시",
@@ -510,7 +510,7 @@
           "계절 반찬 얘기"
         ]
       },
-      "displayName": "오손도손",
+      "displayName": "토닥토닥",
       "interests": [
         "간병",
         "시댁",

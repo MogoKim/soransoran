@@ -196,10 +196,10 @@ const only = (got: ConflictCode[], want: ConflictCode): boolean => got.length ==
 for (const c of fixture.candidates) check(`fixture ${c.code} 충돌 0 (대조 집합 빈 값)`, conf(c).length === 0, conf(c).join(','))
 check('반례 — 대조 집합이 없으면 NAME_MEMBERS_UNMEASURED 만 (통과 아님)', only(conf(p34, { nameSets: null }), 'NAME_MEMBERS_UNMEASURED'))
 check('반례 — 표시명에 지역명 → NAME_POLICY 만', only(conf(edit({ displayName: '부산꽃' })), 'NAME_POLICY'))
-check('반례 — 기존 Persona 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: [], personaNames: ['도란도란'] } }), 'NAME_COLLISION'))
-check('반례 — 회원 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: ['도란도란'], personaNames: [] } }), 'NAME_COLLISION'))
+check('반례 — 기존 Persona 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: [], personaNames: [p34.displayName] } }), 'NAME_COLLISION'))
+check('반례 — 회원 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: [p34.displayName], personaNames: [] } }), 'NAME_COLLISION'))
 check('반례 — 묶음 안 같은 이름 → NAME_BATCH_CONFUSABLE 만',
-  only(conf(p34, { names: new Map([...batchNames, ['P35', '도란도란']]) }), 'NAME_BATCH_CONFUSABLE'))
+  only(conf(p34, { names: new Map([...batchNames, ['P35', p34.displayName]]) }), 'NAME_BATCH_CONFUSABLE'))
 check('반례 — 대상 밖 연령대 → AGE_OUT_OF_AUDIENCE 포함',
   conf(edit({ lifePatch: { ageBand: '30대 후반' } })).includes('AGE_OUT_OF_AUDIENCE'))
 check('반례 — 생일이 나이대와 어긋난다 → AGE_LIFE_CONFLICT 만', only(conf(edit({ lifePatch: { birthDate: '1990-01-01' } })), 'AGE_LIFE_CONFLICT'))

@@ -12,16 +12,19 @@
  *
  * 🔴 정책(D100 canon §4.2 · runbook §2.1 2026-10-16 — Pool §3-2 는 역사 문서)
  *      🟢 합성 이름 — 길이·리듬·일상 구어체가 커뮤니티 실분포를 따른다.
- *         짧은 순우리말(2~3자)은 소수. 반복 리듬(도란도란 류)과
- *         일상 구어체(수다쟁이 류) 4~5자도 함께 쓴다.
+ *         짧은 일상어(2~3자) · 반복 리듬(도란도란 류) · 덜 끝난 듯한 구어체(어쩌다보니 류)를 섞는다.
  *      🔴 AI 티(숫자 접미 · 영문 혼용 · 봇/AI 연상) · 운영자 티
- *      🔴 출처 커뮤니티 호칭 계열 · 실명형 · 지역명
+ *      🔴 출처 커뮤니티 호칭 계열 · 실명형(소담 · 다솜 · 가온 · 단비 류 사람 이름) · 지역명
  *      🔴 정확한 나이 · 지역 · 병명 · 가족상태가 드러나는 이름
  *
- * 🔴 **길이는 2~5자다.** 짧은 순우리말 단일 문화에서 벗어나 반복 리듬(4자)·구어체(4자)를
+ * 🔴 **길이는 2~5자다.** 짧은 순우리말 단일 문화에서 벗어나 반복 리듬(4자)·구어체(4~5자)를
  *    포함해 커뮤니티 실분포를 따른다(2026-10-19).
  *    🔴 `살`이 든 말은 IDENTITY_MARKERS(나이·가족 표지)에 걸려
  *       어차피 걸러지므로 pool 에 두지 않는다.
+ *
+ * 🔴 **한 묶음이 기계적으로 보이지 않게 한다**(2026-10-28).
+ *    후보는 갈래(2자 · 3자 · 반복 리듬 · 구어체)를 번갈아 펴고, 배정은 묶음 단위 상한을 지킨다 —
+ *    한 길이 ≤ 절반 · 반복 리듬 ≤ 30% · 뜻이 거의 같은 말(`NEAR_SYNONYMS`)은 하나만.
  */
 
 /** 🔴 후보 **공간**이다. 특정 persona 에 배정된 이름이 아니다 */
@@ -35,35 +38,44 @@ const HEAD1: readonly string[] = [
   '빛', '품', '꿈', '솔', '물', '들', '참', '눈', '비', '밤',
 ]
 
-/** 🔴 두 글자 몸. 단독으로도 쓰이고 `HEAD1` 뒤에 붙어 세 글자가 된다 */
+/** 🔴 두 글자 몸. 단독 두 글자 갈래이고, `HEAD1` 뒤에 붙어 세 글자가 된다 */
 const BODY2: readonly string[] = [
   '텃밭', '뜨개', '산책', '마당', '골목', '단추', '편지', '화분', '찻잔', '장터',
   '공원', '책상', '일기', '모과', '앵두', '홍시', '더덕', '참새', '봄비', '안개',
 ]
 
-/**
- * 🔴 단독으로 쓰는 2~3글자 — 음식·살림·활동·일상어 전반. 짧은 순우리말은 소수다.
- */
-const SOLO: readonly string[] = [
-  ...BODY2,
+/** 🔴 단독 세 글자 — 음식·살림·활동 일상어. 사람 이름처럼 들리는 말은 넣지 않는다 */
+const SOLO3: readonly string[] = [
   '인절미', '누룽지', '부침개', '바구니', '책갈피', '앞치마', '도라지', '취나물',
   '보자기', '손수건', '민들레', '봉숭아', '오솔길', '무지개', '조약돌',
-  // 2자 일상어 — 짧은 이름이 소수임을 보장하는 최소 보충
-  '소담', '다솜', '가온', '단비',
 ]
 
-/**
- * 🔴 4~5자 반복 리듬·일상 구어체 — 커뮤니티 실분포의 중심축.
- *    D100 canon §4.2 · runbook §2.1 (2026-10-16) 이 요구하는 길이·리듬 다양성을 담는다.
- *    `살`이 든 말(IDENTITY_MARKERS)은 넣지 않는다.
- */
-const PHRASE: readonly string[] = [
-  // 반복 리듬 (4자)
+/** 🔴 반복 리듬 4자 — `isRepeatedRhythm` 이 잡는 꼴. 한 묶음에 30% 를 넘기지 않는다 */
+const RHYTHM: readonly string[] = [
   '도란도란', '따끈따끈', '조용조용', '나풀나풀', '소곤소곤', '토닥토닥',
-  '두근두근', '오손도손', '반짝반짝', '다사다사',
-  // 일상 구어체 (4자)
-  '수다쟁이', '이것저것', '소소하게', '요리조리', '이따금씩',
+  '두근두근', '오손도손', '반짝반짝', '이것저것', '요리조리',
 ]
+
+/** 🔴 일상 구어체 4~5자 — 반복 리듬이 아닌 말 · 덜 끝난 듯한 말투 */
+const TALK: readonly string[] = [
+  '수다쟁이', '소소하게', '이따금씩', '어쩌다보니', '천천히가자', '오늘은맑음',
+]
+
+/** 🔴 뜻이 거의 같은 말 — 한 묶음에 둘 이상 들어가면 같은 손이 지은 티가 난다 */
+const NEAR_SYNONYMS: readonly (readonly string[])[] = [
+  ['도란도란', '오손도손', '소곤소곤', '조용조용'],
+  ['이것저것', '요리조리'],
+]
+
+/** 🔴 반복 리듬 — 네 글자이고 둘째·넷째 음절이 같다(도란도란 · 오손도손 · 이것저것) */
+export function isRepeatedRhythm(name: string): boolean {
+  const c = [...name]
+  return c.length === 4 && c[1] === c[3]
+}
+
+function synonymGroupOf(name: string): number {
+  return NEAR_SYNONYMS.findIndex((g) => g.includes(name))
+}
 
 // ─────────────────────────────────────────────────────────
 // 🔴 정책 검사 — 생성물이 아니라 **아무 이름이나** 받아서 본다
@@ -148,7 +160,8 @@ function seedOf(code: string): number {
 /**
  * 🔴 한 코드에 대한 후보 목록.
  *
- *    `SOLO` 를 먼저 놓고 그다음 조합을 편다 — 단독형이 더 자연스럽기 때문이다.
+ *    갈래(2자 · 3자 · 반복 리듬 · 구어체)를 **번갈아** 편다. 시작 갈래와 갈래 안 순서는 코드에서 나온다.
+ *    한 갈래를 통째로 앞에 두면(옛 PHRASE 먼저) 묶음 전체가 같은 길이·리듬으로 쏠린다.
  *    **정책을 통과한 것만** 돌려준다. Gate ⑥-B 는 호출부가 DB 를 보고 따로 한다.
  */
 export function candidatesFor(code: string, limit = 40): string[] {
@@ -160,18 +173,20 @@ export function candidatesFor(code: string, limit = 40): string[] {
     if (!verifyNamePolicy(n).ok) return
     out.push(n)
   }
-  // 🔴 PHRASE 먼저 — 4~5자 반복 리듬·구어체가 pool 앞자리를 보장받아야 단일 길이 복구를 막는다
-  for (let i = 0; i < PHRASE.length && out.length < limit; i += 1) {
-    push(PHRASE[(seed + i) % PHRASE.length]!)
+  const rotated = (list: readonly string[]): string[] => list.map((_, i) => list[(seed + i) % list.length]!)
+  // 🔴 한 글자 + 두 글자 = **세 글자**. 머리가 한 글자라 네 글자 조합은 생기지 않는다
+  const combos: string[] = []
+  for (let i = 0; i < HEAD1.length * BODY2.length; i += 1) {
+    combos.push(`${HEAD1[(seed + i) % HEAD1.length]!}${BODY2[(seed + i * 7 + 3) % BODY2.length]!}`)
   }
-  for (let i = 0; i < SOLO.length && out.length < limit; i += 1) {
-    push(SOLO[(seed + i) % SOLO.length]!)
-  }
-  // 🔴 한 글자 + 두 글자 = **세 글자**. 네 글자 조합을 만들지 않는다
-  for (let i = 0; i < HEAD1.length * BODY2.length && out.length < limit; i += 1) {
-    const h = HEAD1[(seed + i) % HEAD1.length]!
-    const t = BODY2[(seed + i * 7 + 3) % BODY2.length]!
-    push(`${h}${t}`)
+  const lanes = [rotated(BODY2), [...rotated(SOLO3), ...combos], rotated(RHYTHM), rotated(TALK)]
+  const start = seed % lanes.length
+  const longest = Math.max(...lanes.map((l) => l.length))
+  for (let i = 0; i < longest && out.length < limit; i += 1) {
+    for (let k = 0; k < lanes.length; k += 1) {
+      const n = lanes[(start + k) % lanes.length]![i]
+      if (n !== undefined) push(n)
+    }
   }
   return out
 }
@@ -182,6 +197,8 @@ export function candidatesFor(code: string, limit = 40): string[] {
  *    `isTaken` 은 호출부가 준다 — 거기서 Gate ⑥-B(회원 닉네임 ·
  *    기존 persona · 규칙)를 본다. 이 파일은 DB 를 모른다.
  *
+ *    🔴 묶음 안에서는 여기서 직접 본다 — 같은 이름 · 뜻이 거의 같은 말 · 한 길이 절반 초과 ·
+ *       반복 리듬 30% 초과를 막는다. live 충돌로 앞 후보가 빠져도 묶음이 한쪽으로 쏠리지 않는다.
  *    🔴 한 명이라도 못 고르면 **전원 실패**로 돌려준다. 일부만 만들지 않는다.
  */
 export function assignCandidates(
@@ -192,14 +209,27 @@ export function assignCandidates(
   const picked = new Map<string, string>()
   const problems: string[] = []
   const used = new Set<string>()
+  const lengthCap = Math.max(1, Math.floor(codes.length / 2))
+  const rhythmCap = Math.max(1, Math.floor((codes.length * 3) / 10))
+  const byLength = new Map<number, number>()
+  let rhythm = 0
+  const fitsBatch = (n: string): boolean => {
+    if (used.has(n)) return false
+    if ((byLength.get([...n].length) ?? 0) >= lengthCap) return false
+    if (isRepeatedRhythm(n) && rhythm >= rhythmCap) return false
+    const g = synonymGroupOf(n)
+    return g < 0 || ![...used].some((u) => synonymGroupOf(u) === g)
+  }
   for (const code of codes) {
     const cand = candidatesFor(code, limit)
-    const found = cand.find((n) => !used.has(n) && !isTaken(n))
+    const found = cand.find((n) => fitsBatch(n) && !isTaken(n))
     if (found === undefined) {
       problems.push(`${code}: 후보 ${cand.length}개가 모두 막혔다 — 어휘를 넓혀야 한다`)
       continue
     }
     used.add(found)
+    byLength.set([...found].length, (byLength.get([...found].length) ?? 0) + 1)
+    if (isRepeatedRhythm(found)) rhythm += 1
     picked.set(code, found)
   }
   return { ok: problems.length === 0 && picked.size === codes.length, picked, problems }
