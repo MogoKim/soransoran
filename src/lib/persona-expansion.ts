@@ -87,6 +87,85 @@ export type ProposedCohort = {
  */
 export const PROPOSED_COHORTS: readonly ProposedCohort[] = []
 
+export type ExpansionFixtureScope =
+  | { ok: true; mode: 'proposed' | 'runnable'; baselineCodes: string[] }
+  | { ok: false; reason: string }
+
+/**
+ * fixture는 승격 전 제안이거나, 현재 실행 가능한 cohort 전원과 정확히 같아야 한다.
+ * 승격 cohort는 자기 자신을 뺀 직전 운영 집단과 판정한다. 일부 코드만 운영 universe와
+ * 겹치거나 닫힌 cohort를 다시 넣는 입력은 fail-closed다.
+ */
+export function judgeExpansionFixtureScope(input: {
+  fixtureCohort: string
+  fixtureCodes: readonly string[]
+  productionCodes: readonly string[]
+  runnableCohorts: readonly { id: string; codes: readonly string[] }[]
+}): ExpansionFixtureScope {
+  const production = new Set(input.productionCodes)
+  const overlapping = input.fixtureCodes.filter((code) => production.has(code))
+  const runnable = input.runnableCohorts.find((cohort) => cohort.id === input.fixtureCohort)
+  if (runnable !== undefined) {
+    if (input.fixtureCodes.join(',') !== runnable.codes.join(',')) {
+      return {
+        ok: false,
+        reason: `fixture 코드는 runnable cohort ${runnable.id} 전원과 순서까지 정확히 같아야 한다`,
+      }
+    }
+    const outside = input.fixtureCodes.filter((code) => !production.has(code))
+    if (outside.length > 0) {
+      return {
+        ok: false,
+        reason: `승격된 runnable cohort 코드가 운영 universe 밖에 있다: ${outside.join(',')}`,
+      }
+    }
+
+    const fixtureSet = new Set(input.fixtureCodes)
+    return {
+      ok: true,
+      mode: 'runnable',
+      baselineCodes: input.productionCodes.filter((code) => !fixtureSet.has(code)),
+    }
+  }
+  if (overlapping.length > 0) {
+    return {
+      ok: false,
+      reason: `운영 universe 와 겹치는 fixture ${input.fixtureCohort} 는 현재 runnable cohort 가 아니다`,
+    }
+  }
+  return { ok: true, mode: 'proposed', baselineCodes: [...input.productionCodes] }
+}
+
+/**
+ * 승격 cohort의 정본 카드는 후보 자체이므로 기존 카드 대조에서만 뺀다. 반면 DB 행은
+ * 이미 적재됐다는 사실이므로 언제나 taken으로 남긴다. 승격 전 제안은 기존 판정처럼
+ * Pool 카드와 DB 코드를 전부 대조한다.
+ */
+export function expansionFixtureComparisonInputs(input: {
+  mode: 'proposed' | 'runnable'
+  fixtureCodes: readonly string[]
+  poolCodes: readonly string[]
+  dbCodes: readonly string[]
+}):
+  | { ok: true; existingCardCodes: string[]; takenCodes: Set<string> }
+  | { ok: false; reason: string } {
+  const fixture = new Set(input.fixtureCodes)
+  if (input.mode === 'runnable') {
+    const invalid = input.fixtureCodes.filter((code) => input.poolCodes.filter((poolCode) => poolCode === code).length !== 1)
+    if (invalid.length > 0) {
+      return { ok: false, reason: `runnable cohort 정본 카드는 코드마다 정확히 1장이어야 한다: ${invalid.join(',')}` }
+    }
+  }
+  const existingCardCodes = input.mode === 'runnable'
+    ? input.poolCodes.filter((code) => !fixture.has(code))
+    : [...input.poolCodes]
+  return {
+    ok: true,
+    existingCardCodes,
+    takenCodes: new Set([...existingCardCodes, ...input.dbCodes]),
+  }
+}
+
 // ─────────────────────────────────────────────────────────
 // 코드 공간 — 🔴 코드 형식이 300 을 막는 곳
 // ─────────────────────────────────────────────────────────
