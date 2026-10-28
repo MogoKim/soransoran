@@ -27,7 +27,7 @@ import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publis
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { auditTarget } from './auto-ready-v2'
 import { PERSONA_CANARY_FLOOR } from './d100-capacity'
-import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN, supplyProofBudgetUsd } from './supply-schedule-contract'
 import type { Health } from './ops-status'
 import type { StageBlock } from './stage-decision-contract'
 import type { EvidenceVerdictKind } from './stage-evidence'
@@ -315,12 +315,26 @@ export type PreflightVerdict = {
   counts: Readonly<Record<string, number>>
 }
 
+/** current-quality 원천 수와 READY 수를 같은 날 공급 계약으로 환산한 보수 용량. */
+export function readyCapacityOf(
+  rawReady: number,
+  sources: number,
+  worksetPerRun: number = SUPPLY_WORKSET_PER_RUN,
+  proofRunsPerDay: number = SUPPLY_PROOF_RUNS_PER_DAY,
+): number | null {
+  if (!Number.isFinite(rawReady) || rawReady < 0 || !Number.isFinite(sources) || sources <= 0
+    || !Number.isInteger(worksetPerRun) || worksetPerRun <= 0
+    || !Number.isInteger(proofRunsPerDay) || proofRunsPerDay <= 0) return null
+  return Math.floor((rawReady * worksetPerRun * proofRunsPerDay) / sources)
+}
+
 /**
  * 🔴 **다음 단계 preflight — D3~D100 같은 구조.** FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면 UNKNOWN.
  *    둘 다 시험을 열지 않는다. 숫자는 기존 정본뿐이다:
  *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`)
  *      · 필요 READY — `replenishmentOf`(목표 + 실측 손실 보충 구간 · 고정 할증 없음) · Persona canary 하한 `PERSONA_CANARY_FLOOR`
- *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 하루 회차(`SUPPLY_RUNS_PER_DAY`)
+ *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 당일 증명 회차(`SUPPLY_PROOF_RUNS_PER_DAY`)
+ *        (21:15·22:15는 당일 마지막 발행 기회 전에 끝나지 않아 같은 날 처리량 증명에서는 제외)
  *      · 비용 상한 — 호출부가 각 레인 정본 판독기로 읽은 값(공급은 승인 천장 $1.20 으로 누른다)
  *    🔴 지연은 **관측됐는가**만 본다 — 행마다의 나이 상한은 `judgeSlotRelease` 가 이미 지킨다(두 번째 문턱을 만들지 않는다).
  */
@@ -353,11 +367,15 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   let requirementUnknown = false
   if (c === null || raw === null || !(c.sources > 0)) codes.add('THROUGHPUT_UNKNOWN')
   else {
-    const capacity = Math.floor((raw * SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY) / c.sources)
-    counts.readyCapacity = capacity
-    const t = judgeAgainst(req, (need) => capacity >= need)
-    if (t === 'short') codes.add('THROUGHPUT_SHORT')
-    if (t === 'unknown') requirementUnknown = true
+    const capacity = readyCapacityOf(raw, c.sources)
+    if (capacity === null) {
+      codes.add('THROUGHPUT_UNKNOWN')
+    } else {
+      counts.readyCapacity = capacity
+      const t = judgeAgainst(req, (need) => capacity >= need)
+      if (t === 'short') codes.add('THROUGHPUT_SHORT')
+      if (t === 'unknown') requirementUnknown = true
+    }
   }
   // 지연 — 관측됐는가
   if (facts.latencyP50H === null || facts.latencyP90H === null) codes.add('LATENCY_UNKNOWN')
@@ -394,7 +412,9 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   if (perResult !== null && perResult > 0) { counts.usdPerSlotValidResult = perResult; counts.supplyDailyUsdNeeded = n * perResult }
   if (facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
   else if (perResult !== null && perResult > 0) {
-    if (n * perResult > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
+    const proofBudget = supplyProofBudgetUsd(facts.supplyDailyUsdCap)
+    counts.supplyProofBudgetUsd = proofBudget
+    if (n * perResult > proofBudget) codes.add('SUPPLY_COST_SHORT')
   } else {
     const trial = c?.trialCost ?? null
     const observed = trial === null ? 0 : trial.settledRequests + trial.usageUnknownRequests
@@ -418,7 +438,7 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
       && trial.riskUsdPerSlotValidResult !== null
       && trial.riskUsdPerSlotValidResult > 0
     if (!boundedTrial) codes.add('SUPPLY_COST_UNKNOWN')
-    else if (n * trial.riskUsdPerSlotValidResult! > facts.supplyDailyUsdCap) codes.add('SUPPLY_COST_SHORT')
+    else if (n * trial.riskUsdPerSlotValidResult! > supplyProofBudgetUsd(facts.supplyDailyUsdCap)) codes.add('SUPPLY_COST_SHORT')
     else warnings.add('SUPPLY_COST_TRIAL_RISK')
   }
   if (requirementUnknown) codes.add('READY_REQUIREMENT_UNKNOWN')

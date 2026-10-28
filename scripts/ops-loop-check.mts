@@ -41,7 +41,9 @@ import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from '
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
-  RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
+  stageControllerLeaseDisposition,
+  OPS_LOOP_INSTALL_STEPS, RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS,
+  KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
 } from './lib/ops-loop-templates'
 import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
@@ -301,6 +303,42 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
   check('🔴 저장은 --apply 이면서 flag on 일 때만', /if \(!APPLY\)[\s\S]{0,200}return 0/.test(cli) && /if \(!flagOn\)[\s\S]{0,200}return 0/.test(cli))
   check('🔴 쓰는 길은 ensureStageDecision 하나 — create/update/upsert/delete 직접 호출 0',
     /ensureStageDecision\(/.test(cli) && !/stageDecision\.(create|update|upsert|delete)/.test(cli))
+  const mainSrc = cli.slice(cli.indexOf('async function main()'))
+  const leaseGate = mainSrc.indexOf('const supplyLease = probeSupplyLease()')
+  const dbFill = mainSrc.indexOf('if (!fillDbConnection())')
+  const prismaOpen = mainSrc.indexOf('const prisma = new PrismaClient()')
+  check('🔴 apply controller는 앞 예약의 busy/unknown에서 DB를 열기 전에 물러나고 마지막 예약은 안전 HOLD를 쓴다',
+    leaseGate >= 0 && leaseGate < dbFill && dbFill < prismaOpen
+      && /stageControllerLeaseDisposition\(supplyLease, NOW\)/.test(mainSrc)
+      && /disposition === 'safe-hold'[\s\S]{0,150}holdForSupplyLease/.test(mainSrc)
+      && /supplyLease === 'busy' \? 0 : 1/.test(mainSrc))
+  check('controller lease 순수 판정 — free는 진행 · 마지막 예약 전 busy/unknown은 연기 · 그 뒤에는 늦게 깨어나도 안전 HOLD',
+    stageControllerLeaseDisposition('free', new Date('2026-10-30T07:00:00+09:00')) === 'proceed'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:54:00+09:00')) === 'defer'
+    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T07:20:00+09:00')) === 'defer'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:55:00+09:00')) === 'safe-hold'
+    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T08:01:00+09:00')) === 'safe-hold'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T08:16:00+09:00')) === 'safe-hold')
+  const holdStart = cli.indexOf('async function holdForSupplyLease(')
+  const holdEnd = cli.indexOf('/** 🔴 `--evidence-date`', holdStart)
+  const holdSrc = holdStart >= 0 && holdEnd > holdStart ? cli.slice(holdStart, holdEnd) : ''
+  const safeHoldContract = (src: string): boolean =>
+    /sustainedReleaseOf\(previous, evidence\)/.test(src)
+    && /holdAtCurrent\(/.test(src)
+    && /ensureStageDecision\(/.test(src)
+    && !/(loadPublishableStock|readPreflightFacts|decideStage|trialPlanOf|nextStage|genericNextStage|carriedPlanFor|auditAwareGate)/.test(src)
+    && !/readStageDecision\(prisma, TODAY\)/.test(src)
+  check('🔴 lease 안전 HOLD는 전날 증거의 지속 단계만 저장하고 오늘 Queue·preflight·승격 계산을 읽지 않는다',
+    safeHoldContract(holdSrc))
+  check('🔴 변이 검출 — lease 안전 HOLD가 다음 단계 승격을 쓰면 계약 위반',
+    !safeHoldContract(holdSrc.replace('const current = sustainedReleaseOf(previous, evidence)',
+      'const current = nextStage(sustainedReleaseOf(previous, evidence))')))
+  check('🔴 변이 검출 — lease 안전 HOLD가 오늘 Queue를 읽으면 계약 위반',
+    !safeHoldContract(holdSrc.replace('const current = sustainedReleaseOf(previous, evidence)',
+      'const partial = await loadPublishableStock(prisma)\n    const current = sustainedReleaseOf(previous, evidence)')))
+  check('🔴 변이 검출 — lease 안전 HOLD가 오늘 결정을 승격 입력으로 다시 읽으면 계약 위반',
+    !safeHoldContract(holdSrc.replace('const current = sustainedReleaseOf(previous, evidence)',
+      'const today = await readStageDecision(prisma, TODAY)\n    const current = sustainedReleaseOf(previous, evidence)')))
   check('🔴 입력 실패는 holdAtCurrent 로 간다', /failures\.length > 0[\s\S]{0,200}holdAtCurrent/.test(cli))
 }
 
@@ -362,8 +400,14 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
   const sc = renderStageControllerPlist(input)
   const slots = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
-  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 세 번(재시도)',
-    slots.length === 3 && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE) && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 네 번(마지막 07:55 안전 판정)',
+    slots.length === 4 && slots.at(-1) === PUBLISH_WINDOW_START_MINUTE - 5
+    && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE)
+    && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  check('🔴 rollout은 runtime deploy만으로 끝내지 않는다 — ops-loop 설치 계획·적용과 controller 네 슬롯 대조가 필수다',
+    OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('controller plist 는 아직 갱신되지 않는다'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('07:00·07:20·07:40·07:55 네 슬롯 대조'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('runtime deploy 만 하고 끝내지 않는다')))
   check('controller 는 runtime 의 스크립트를 --apply 로 부른다', sc.includes('<string>/r/scripts/stage-controller.mts</string>') && sc.includes('<string>--apply</string>')
     && sc.includes('<key>WorkingDirectory</key><string>/r</string>'))
   const rr = renderRunnerRecoverPlist(input)

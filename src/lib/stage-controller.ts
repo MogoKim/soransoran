@@ -100,13 +100,13 @@ export type ControllerResult = {
  * 🔴 **controller 실패 — 지금 공개 단계를 지킨다.** 상태는 HOLD, 전이 근거 없음. 이유를 남긴다.
  */
 export function holdAtCurrent(input: {
-  kstDate: string; decidedAt: string; current: RuntimeStage; reason: string
+  kstDate: string; decidedAt: string; current: RuntimeStage; reason: string; headline?: string
 }): StageDecision {
   const release = input.current
   return {
     kstDate: input.kstDate, capacity: release, release, state: 'HOLD',
     reasons: [
-      `🔴 controller 입력 실패 — 지금 공개 단계 ${release} 를 지킨다(fail-closed · 올리지도 내리지도 않는다)`,
+      input.headline ?? `🔴 controller 입력 실패 — 지금 공개 단계 ${release} 를 지킨다(fail-closed · 올리지도 내리지도 않는다)`,
       `🔴 ${input.reason}`,
     ],
     blocks: [], dayPinned: false, supply: null, decidedAt: input.decidedAt,

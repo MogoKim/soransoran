@@ -59,7 +59,7 @@ const QUALITY = currentQualityContract()
 /** 🔴 JIT 계약 묶음(workset-v4) — 원천마다 예정 슬롯 · 슬롯 시점 나이 · 품질 계약 필수. `ids` 는 큐 행과 연결되는 원천(앞쪽), 나머지는 채움 */
 const wsV4 = (runId: string, site: string, n: number, ids: readonly string[] = []): string => JSON.stringify({
   kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, qualityContract: QUALITY, runId,
-  takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`, limit: 10,
+  takenAt: `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T03:15:00.000Z`, limit: n,
   sources: Array.from({ length: n }, (_, i) => ({
     sourceSite: site, sourceArticleId: ids[i] ?? `${runId}-${i}`, slotAt: '2026-10-01T00:00:00.000Z', ageAtSlotH: 5,
   })),
@@ -697,13 +697,25 @@ async function main(): Promise<void> {
       check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 4) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 6 / 30, JSON.stringify(y))
       if (c !== null) {
         const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) bounded recovery 포함 용량 23 이 채운다 → 처리량 확정',
-          d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 23
+        check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) bounded recovery 포함 용량 33 이 채운다 → 처리량 확정',
+          d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 33
           && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
-        const d5 = judgeNextPreflight('d5', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 23 → READY_REQUIREMENT_UNKNOWN (PASS 로 확정하지 않는다)**',
+        const d5 = judgeNextPreflight('d5', {
+          ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60,
+          auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2,
+          readyCohort: { ...c, usdPerSlotValidResult: 0.01 },
+        }, RUNNER_GRID)
+        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 33 → 양끝을 채우므로 READY 모름 없이 PASS**',
           d5.counts.readyNeededMin === 9 && d5.counts.readyNeededMax === 25
-          && d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict !== 'PASS', JSON.stringify(d5.counts))
+          && !d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict === 'PASS', JSON.stringify({ counts: d5.counts, codes: d5.codes }))
+        const d5Boundary = judgeNextPreflight('d5', {
+          ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60,
+          auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2,
+          readyCohort: { ...c, sources: 50, usdPerSlotValidResult: 0.01 },
+        }, RUNNER_GRID)
+        check('🔴 d5 경계 반례 — 용량 20이 필요 9~25 사이이면 결말 전에는 READY_REQUIREMENT_UNKNOWN',
+          d5Boundary.counts.readyCapacity === 20 && d5Boundary.codes.includes('READY_REQUIREMENT_UNKNOWN')
+          && d5Boundary.verdict === 'UNKNOWN', JSON.stringify({ counts: d5Boundary.counts, codes: d5Boundary.codes }))
         check('🔴 공급 비용 = 목표 5 × 결과당 $0.01 — raw READY 단가 · 공개 단가 칸 없음',
           Math.abs((d5.counts.supplyDailyUsdNeeded ?? 0) - 0.05) < 1e-12
           && !('rawReadyUsd' in d5.counts) && !('publicPostUsd' in d5.counts), JSON.stringify(d5.counts))
@@ -913,9 +925,9 @@ async function main(): Promise<void> {
         latencyP50H: 46.99, latencyP90H: 68.81, contractValidPersonas: 30, commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
         auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
       }, RUNNER_GRID)
-      check('🔴 앞판 07:00 사실을 현재 bounded recovery로 재판정 — readyCapacity 11 · readyNeeded 12 · THROUGHPUT_SHORT · SUPPLY_COST_UNKNOWN',
-        old0700.counts.readyCapacity === 11 && old0700.counts.readyNeeded === 12
-        && old0700.codes.includes('THROUGHPUT_SHORT') && old0700.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(old0700.counts))
+      check('🔴 앞판 07:00 사실을 현재 D20 처리량으로 재판정 — readyCapacity 15 · readyNeeded 12 · 처리량 해소 · SUPPLY_COST_UNKNOWN',
+        old0700.counts.readyCapacity === 15 && old0700.counts.readyNeeded === 12
+        && !old0700.codes.includes('THROUGHPUT_SHORT') && old0700.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(old0700.counts))
       process.env.HOME = home
       const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.5', SORAN_LLM_RUN_REQUEST_CAP: '40', SORAN_LLM_RESERVE_HEADROOM: '1.2' }
       const factsNow = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {
@@ -936,8 +948,8 @@ async function main(): Promise<void> {
       check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
       const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
-      check('🔴 🔴 **보정 후 공급 능력 13 · 필요 하한 12 → bounded recovery가 처리량 부족은 해소하되 다른 미상 때문에 D10은 계속 FAIL**',
-        v.counts.readyCapacity === 13 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
+      check('🔴 🔴 **보정 후 공급 능력 19 · 필요 하한 12 → 처리량 부족은 해소하되 다른 미상 때문에 D10은 계속 FAIL**',
+        v.counts.readyCapacity === 19 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
         && !v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
         JSON.stringify({ counts: v.counts, codes: v.codes }))
       // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
@@ -1001,7 +1013,7 @@ async function main(): Promise<void> {
   console.log('\n⑪ 🔴 P0-a — 미도장 기계 행은 정본 자동 적격으로 나눈다 · 부적격만 있으면 모름으로 부풀지 않는다 (2026-10-09)')
   {
     /**
-     * 창 = 증거일 2026-10-08 · 회차 6개 × 원천 10 = 60. 자동 도장 공개 2건 + 미도장 기계 행:
+     * 창 = 증거일 2026-10-08 · 당일 증명 회차 5개 × 원천 20 = 100. 자동 도장 공개 2건 + 미도장 기계 행:
      *   적격 1(→ 모름) · gate FAIL 1 · 생활사 모순 1 · 검수 미완료 1 · 부적격 셋은 분자에서 빠진다.
      *   🔴 앞판(#676)은 부적격까지 모름으로 셌다 — raw 6 → 공급 능력 6 · 필요 3~12 → READY_REQUIREMENT_UNKNOWN 으로 부풀었다.
      */
@@ -1009,7 +1021,7 @@ async function main(): Promise<void> {
     const now = new Date('2026-10-09T07:00:00+09:00')
     const windowFrom = new Date('2026-10-05T15:00:00Z')
     const windowTo = new Date('2026-10-08T15:00:00Z')
-    const runs = ['20261007-031500', '20261007-051500', '20261007-081500', '20261008-031500', '20261008-051500', '20261008-081500']
+    const runs = ['20261007-031500', '20261007-051500', '20261007-081500', '20261008-031500', '20261008-051500']
     const runCreatedAt = (runId: string): Date => new Date(Date.UTC(
       +runId.slice(0, 4), +runId.slice(4, 6) - 1, +runId.slice(6, 8), +runId.slice(9, 11), +runId.slice(11, 13),
     ) + 60_000)
@@ -1034,7 +1046,7 @@ async function main(): Promise<void> {
     const plan: { k: string; run: string; status: string; by: string; verdict?: string; gate?: Record<string, unknown>; body?: string }[] = [
       { k: 'pub1', run: runs[0]!, status: 'PUBLISHED', by: AUTO_DECIDER },
       { k: 'pub2', run: runs[3]!, status: 'PUBLISHED', by: AUTO_DECIDER },
-      { k: 'elig', run: runs[5]!, status: 'APPROVED', by: 'machine:content-core-v2' },
+      { k: 'elig', run: runs[4]!, status: 'APPROVED', by: 'machine:content-core-v2' },
       { k: 'gfail', run: runs[1]!, status: 'APPROVED', by: 'machine:content-core-v2', verdict: 'FAIL' },
       { k: 'sem', run: runs[2]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: SEMANTIC_BLOCK_GATE },
       { k: 'incomplete', run: runs[4]!, status: 'APPROVED', by: 'machine:content-core-v2', gate: INCOMPLETE_GATE },
@@ -1044,7 +1056,7 @@ async function main(): Promise<void> {
       qualityContract: QUALITY,
     })
     try {
-      for (const runId of runs) writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, 10, plan.filter((x) => x.run === runId).map((x) => `p0a-${x.k}`)))
+      for (const runId of runs) writeFileSync(join(dir, worksetFileName(runId)), wsV4(runId, site, 20, plan.filter((x) => x.run === runId).map((x) => `p0a-${x.k}`)))
       for (const x of plan) {
         const raw = await prisma.microSeedRawContent.create({
           data: { origin: 'live', sourceSite: site, sourceUrl: `https://example.invalid/${x.k}`, sourceArticleId: `p0a-${x.k}`,
@@ -1062,8 +1074,8 @@ async function main(): Promise<void> {
       check('🔴 🔴 **미도장 + 자동 적격 → 모름 1 · 미도장 + gate FAIL · 생활사 모순 · 검수 미완료 → 분자 제외 3**',
         f !== null && f.published === 2 && f.unknown === 1 && f.lost === 0 && f.scheduled === 0 && cohort.readyCount === 3 && cohort.autoIneligibleExcluded === 3,
         JSON.stringify({ f, n: cohort.readyCount, ex: cohort.autoIneligibleExcluded }))
-      check('🔴 🔴 **제외돼도 분모(원천) 60 그대로 · 부적격은 legacy 가 아니다(legacy 0) · 불일치 0**',
-        cohort.worksetSources === 60 && cohort.legacyExcluded === 0 && cohort.intentMismatches.length === 0,
+      check('🔴 🔴 **제외돼도 분모(원천) 100 그대로 · 부적격은 legacy 가 아니다(legacy 0) · 불일치 0**',
+        cohort.worksetSources === 100 && cohort.legacyExcluded === 0 && cohort.intentMismatches.length === 0,
         JSON.stringify({ src: cohort.worksetSources, legacy: cohort.legacyExcluded }))
       check('제외 사실이 메모로 남는다 — 조용히 사라지지 않는다',
         cohort.notes.some((x) => /자동 부적격 미도장 기계 행 3건/.test(x)), JSON.stringify(cohort.notes))
@@ -1073,7 +1085,7 @@ async function main(): Promise<void> {
         data: { gateResults: {
           ...evOf('p0a-elig'),
           [SUPPLY_INTENT_KEY]: {
-            ...intentOf('p0a-elig', runs[5]!),
+            ...intentOf('p0a-elig', runs[4]!),
             qualityContract: { version: 'quality-v8', digest: 'b'.repeat(64) },
           },
         } as Prisma.InputJsonValue },
@@ -1081,14 +1093,14 @@ async function main(): Promise<void> {
       const oldQuality = await readReadyCohort(prisma, {
         windowFrom, windowTo, dataDir: dir, matched: new Set(), horizon: slotTimesOn('2026-10-09', profileOf('d3')), now,
       })
-      check('🔴 🔴 **옛 품질 계약 Queue 행은 current-quality cohort에서 legacy로 제외 — 분모 60 · 공개 2 · 모름 0**',
-        oldQuality.worksetSources === 60 && oldQuality.readyCount === 2 && oldQuality.fates?.published === 2
+      check('🔴 🔴 **옛 품질 계약 Queue 행은 current-quality cohort에서 legacy로 제외 — 분모 100 · 공개 2 · 모름 0**',
+        oldQuality.worksetSources === 100 && oldQuality.readyCount === 2 && oldQuality.fates?.published === 2
         && oldQuality.fates.unknown === 0 && oldQuality.legacyExcluded === 1 && oldQuality.intentMismatches.length === 0,
         JSON.stringify({ f: oldQuality.fates, n: oldQuality.readyCount, legacy: oldQuality.legacyExcluded }))
       await prisma.originalPostApprovalQueue.updateMany({
         where: { dedupKey: 'p0a-elig' },
         data: { gateResults: {
-          ...evOf('p0a-elig'), [SUPPLY_INTENT_KEY]: intentOf('p0a-elig', runs[5]!),
+          ...evOf('p0a-elig'), [SUPPLY_INTENT_KEY]: intentOf('p0a-elig', runs[4]!),
         } as Prisma.InputJsonValue },
       })
       // 🔴 부적격만 있으면 모름으로 부풀지 않는다 — 적격 미도장 행을 사람 결정으로 옮겨 부적격 3건만 남긴다
@@ -1099,7 +1111,7 @@ async function main(): Promise<void> {
         auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok' as const,
       }
       const vNow = judgeNextPreflight('d3', { ...facts, readyCohort: only.fates === null ? null : { sources: only.worksetSources ?? 0, ...only.fates, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
-      const vOld = judgeNextPreflight('d3', { ...facts, readyCohort: { sources: 60, published: 2, lost: 0, scheduled: 0, unknown: 3, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
+      const vOld = judgeNextPreflight('d3', { ...facts, readyCohort: { sources: 100, published: 2, lost: 0, scheduled: 0, unknown: 3, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
       check('🔴 🔴 **부적격만 남은 미도장 → 모름 0 · raw 2 · 공급 능력 2 · 필요 3 → THROUGHPUT_SHORT 로 확정 (앞판처럼 READY_REQUIREMENT_UNKNOWN 으로 부풀지 않는다)**',
         only.fates?.unknown === 0 && only.readyCount === 2 && vNow.counts.readyCapacity === 2 && vNow.codes.includes('THROUGHPUT_SHORT')
         && !vNow.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify({ counts: vNow.counts, codes: vNow.codes }))

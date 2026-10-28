@@ -134,11 +134,11 @@ export const WORKSET_TOTAL_PER_SOURCE = 5
 /**
  * 기본 묶음 크기 — 🔴 `--workset-limit` 이 없으면 이 값이다.
  *
- * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 회차 요청 상한도 같이 움직인다 —
- *    judge 10 · draft 40 · 합 50 (`judgeStageBudget`). 계약 정본은 `SUPPLY_WORKSET_PER_RUN` 이고
+ * 🔴 **10 → 20** (2026-10-28 D20 전환일 처리량). 회차 요청 상한도 같이 움직인다 —
+ *    judge 20 · draft 80 · 합 100 (`judgeStageBudget`). 계약 정본은 `SUPPLY_WORKSET_PER_RUN` 이고
  *    검사가 두 값이 같은지 본다.
  */
-export const WORKSET_DEFAULT_LIMIT = 10
+export const WORKSET_DEFAULT_LIMIT = SUPPLY_WORKSET_PER_RUN
 
 /**
  * 🔴 **묶음 크기 천장.** `--workset-limit` 으로도 이보다 크게 부를 수 없다 —
@@ -267,7 +267,7 @@ export const WORKSET_AXES = ['seed', 'raw'] as const
 export type WorksetAxis = (typeof WORKSET_AXES)[number]
 
 /**
- * 🔴 **raw 한 자리당 묶음 크기.** 기본 상한 10 → raw 최대 2 · seed 최소 8 (seed 가 있으면).
+ * 🔴 **raw 한 자리당 묶음 크기.** 기본 상한 20 → raw 최대 4 · seed 최소 16 (seed 가 있으면).
  *    (상한 5 였을 때는 raw 최대 1 · seed 최소 4 — 같은 규칙이다)
  *
  *    다른 상한은 비례로 늘린다 — `floor(limit / 5)` 자리를 raw 에 **남기고**, 그만큼이 raw 의 상한이다.
@@ -1033,7 +1033,7 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
  * 옛 판(v2 — 슬롯 없이 손으로 부르는 경로 · 검사)도 source rank 하나를 쓴다.
  * 재시도 여부와 대기 시간은 관측값이며 순서를 바꾸지 않는다.
  * 🔴 비운영 호환 경로의 seed/raw 생산축 자리는 유지한다 (2026-09-28, `worksetAxisQuota`).
- *    상한 10 → raw 최대 2 · seed 가 충분하면 seed 8 이상 (상한 5 → 1 · 4).
+ *    상한 20 → raw 최대 4 · seed 가 충분하면 seed 16 이상 (상한 5 → 1 · 4).
  *    이것은 출처 사이트·게시판 주제 quota 가 아니다. 운영 JIT 자동 공급은 raw 를 소비하지 않고 seed 만 한 줄로 세운다.
  *
  * 🔴 같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.

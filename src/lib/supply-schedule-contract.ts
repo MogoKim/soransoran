@@ -12,8 +12,26 @@ export const SUPPLY_RUN_SLOTS_KST = [
   { hour: 17, minute: 15 }, { hour: 21, minute: 15 }, { hour: 22, minute: 15 },
 ] as const
 
-/** 🔴 **7회다.** 06:15 회차는 07:00 단계 판정 전의 정상 복구 창이다. */
+/** 🔴 **7회다.** 06:15는 07:00 controller 전에 전날 미완료 READY를 복구한다. */
 export const SUPPLY_RUNS_PER_DAY = SUPPLY_RUN_SLOTS_KST.length
+
+/**
+ * 다음 날이 아니라 **당일 공개 목표**를 증명할 수 있는 공급 슬롯만 센다.
+ * 공급 회차는 최장 45분이므로, D3 이상 단계 중 가장 이른 마지막 발행 슬롯(19:00)까지
+ * 끝나는 회차만 센다. 21:15·22:15는 다음 날 재고에는 기여해도 같은 날 Dn 증명에는 쓰지 않는다.
+ */
+export const SUPPLY_RUN_WINDOW_MS = 45 * 60 * 1000
+export const SUPPLY_PROOF_LAST_PUBLISH_MINUTE = 19 * 60
+export function supplyProofRunSlots(
+  slots: readonly { readonly hour: number; readonly minute: number }[],
+  windowMs: number = SUPPLY_RUN_WINDOW_MS,
+): readonly { readonly hour: number; readonly minute: number }[] {
+  return slots.filter(
+    (slot) => slot.hour * 60 + slot.minute + windowMs / 60_000 <= SUPPLY_PROOF_LAST_PUBLISH_MINUTE,
+  )
+}
+export const SUPPLY_PROOF_RUN_SLOTS_KST = supplyProofRunSlots(SUPPLY_RUN_SLOTS_KST)
+export const SUPPLY_PROOF_RUNS_PER_DAY = SUPPLY_PROOF_RUN_SLOTS_KST.length
 
 /**
  * 🔴 **예산 env 세 개.** 없으면 장부가 fail-closed 로 유료 요청을 보류하고,
@@ -37,28 +55,30 @@ export const SUPPLY_BUDGET_ENV_NAMES = [
 /**
  * 회차당 상한 — 🔴 정본(`supply-workset`)과 같은 값이어야 한다 (검사가 대조한다).
  *
- * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 원천 하나에 판정 1 · 생성 최대 4 이므로
- *    judge 10 · draft 40 · 합 50. 러너는 이 값을 **단계마다 자식 env 로** 싣는다
+ * 🔴 **10 → 20** (2026-10-28 D20 전환일 처리량). 원천 하나에 판정 1 · 생성 최대 4 이므로
+ *    judge 20 · draft 80 · 합 100. 러너는 이 값을 **단계마다 자식 env 로** 싣는다
  *    (`SORAN_LLM_RUN_REQUEST_CAP` — 장부 회차 id 도 `-j`·`-d` 로 갈린다).
  * 🔴 정본 env 의 `SORAN_LLM_RUN_REQUEST_CAP`(운영 20)은 **손으로 부른 단독 실행**의 상한이다.
  *    공급 러너의 자식은 그 값을 보지 않는다 — 단계 env 가 덮는다. 그래서 env 값은 이 합 이하면 된다.
  */
-export const SUPPLY_WORKSET_PER_RUN = 10
-export const SUPPLY_JUDGE_REQUESTS_PER_RUN = 10
-export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 40
-export const SUPPLY_REQUESTS_PER_RUN = 50
+export const SUPPLY_WORKSET_PER_RUN = 20
+export const SUPPLY_JUDGE_REQUESTS_PER_RUN = 20
+export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 80
+export const SUPPLY_REQUESTS_PER_RUN = 100
 
 /**
- * 🔴 **창업자 승인값 $0.30/day** (2026-09-22 승인).
+ * 🔴 **초기 실측 근거: $0.30/day** (2026-09-22 승인 이력).
  *
  *    근거 — 장부 실측(9/19~9/22, 유료 4건 이상인 회차 21개):
  *      회차당 정산 **중앙 $0.0265 · 최대 $0.0535** (5원천 꽉 채운 회차 SHADOW5B)
  *      → 당시 꽉 찬 회차 기준 하루 약 5.6회분. 운영 장부는 늦은 회차 몫을 먼저 보호하고,
  *        그때는 장부가 마지막 회차를 **막는다**(fail-closed). 그것이 의도한 동작이다.
  *
- * 🔴 **하루 총액이다** — 공급·판정·초안·댓글이 **같은 장부**를 쓴다.
- *    그날 이미 정산된 액수가 이 상한에 함께 든다.
- * 🔴 승인값이 `null` 이면 어떤 회차도 돌지 않는다(`NO_BUDGET`).
+ *    이 문단은 초기 예산의 추적 근거다. 현재 계약 천장은 아래 $1.20이며,
+ *    실제 운영은 env 예산과 계약 천장 중 낮은 값으로 막힌다.
+ *
+ *    🔴 추가 댓글 생성도 같은 공급 장부와 하루 천장을 공유한다. 적용 예산을 판독하지 못하면
+ *       유료 요청을 보내지 않고 `NO_BUDGET`으로 닫는다.
  */
 /**
  * 🔴 **계약 천장 $1.20/day** (2026-10-16 D20 준비). 위 $0.30 근거와 D10까지 쓰던
@@ -71,6 +91,23 @@ export const SUPPLY_REQUESTS_PER_RUN = 50
  */
 export const SUPPLY_DAILY_USD_PROPOSED = 1.20
 export const SUPPLY_DAILY_USD_APPROVED: number | null = 1.20
+
+/**
+ * 당일 증명 슬롯을 늦은 재고 슬롯보다 먼저 보호하는 운영 profile의 최소 하루 예산.
+ * 이 값 미만에서는 옛 7회 동적 배분을 유지하므로 preflight는 앞 5회의 실제 몫만 비용 용량으로 센다.
+ */
+export const SUPPLY_PROOF_FIRST_DAILY_USD = 1.20
+
+/**
+ * 같은 날 공개 증명에 실제로 쓸 수 있는 공급 예산.
+ * proof-first profile은 전액, 옛 7회 동적 profile은 앞 5회 비율만 센다.
+ */
+export function supplyProofBudgetUsd(capUsd: number): number {
+  if (!Number.isFinite(capUsd) || capUsd <= 0) return 0
+  return capUsd >= SUPPLY_PROOF_FIRST_DAILY_USD
+    ? capUsd
+    : capUsd * SUPPLY_PROOF_RUNS_PER_DAY / SUPPLY_RUNS_PER_DAY
+}
 
 /**
  * 🔴 **실측 단가** — 장부(`llm-ledger/2026-09-24~27.jsonl`) 정산액을 공급 회차별로 모은 값.
@@ -92,7 +129,7 @@ export type SupplySpendEstimate = {
   /** 실측 평균 호출 수 × 평균 단가 */
   expectedPerRun: number
   expectedPerDay: number
-  /** 🔴 상한을 **전부** 쓰고 최대 단가일 때 — judge N · draft 3N */
+  /** 🔴 상한을 **전부** 쓰고 최대 단가일 때 — judge N · draft 4N */
   capPerRun: number
   capPerDay: number
   /** 하루 예산이 주어졌을 때 기대 지출로 **다 돌 수 있는 회차 수** (정수 · 최대 하루 회차 수) */
@@ -103,7 +140,7 @@ export type SupplySpendEstimate = {
 export function estimateSupplySpend(limit: number, runsPerDay: number = SUPPLY_RUNS_PER_DAY): SupplySpendEstimate {
   const m = SUPPLY_MEASURED
   const expectedPerRun = limit * (m.judgeCallsPerSource * m.judgeUsdPerCall + m.draftCallsPerSource * m.draftUsdPerCall)
-  const capPerRun = limit * (1 * m.judgeUsdPerCallMax + 3 * m.draftUsdPerCallMax)
+  const capPerRun = limit * (1 * m.judgeUsdPerCallMax + 4 * m.draftUsdPerCallMax)
   return {
     expectedPerRun,
     expectedPerDay: expectedPerRun * runsPerDay,

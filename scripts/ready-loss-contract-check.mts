@@ -21,7 +21,7 @@ import {
   judgeNextPreflight, replenishmentOf, type PreflightFacts, type PreflightVerdict, type ReadyCohortFact,
 } from '../src/lib/stage-ladder-generic'
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
-import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
+import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 import { qualitySignalOf } from '../src/lib/stage-controller'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { cohortFatesOf } from '../src/lib/ready-fate'
@@ -35,7 +35,7 @@ const show = (v: PreflightVerdict): string => `${v.verdict} [${v.codes.join(',')
 const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
 
 /** 🔴 하루 공급 묶음 원천 수 — 원천 수가 이 값이면 raw READY 수가 곧 하루 용량이다 */
-const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
+const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
 /** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 예정 0 · 모름 0 · 결과당 비용 $0.01(완전 연결) */
 const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
   sources: RUNS, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.01, ...o,
@@ -94,11 +94,11 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
 console.log('\n③ 반례 4 · 5 — 대기 행은 성공도 손실도 아니다 (운영 10월 4일 모양)')
 {
   const op = d5({ published: 4, lost: 0, unknown: 10, sources: 160 })
-  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 회복 용량 6 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
-    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 6
+  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 회복 용량 8 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
+    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 8
     && op.counts.readyNeededMin === 5 && op.counts.readyNeededMax === 18 && !('readyNeeded' in op.counts), show(op))
   const base = d5({ published: 4, lost: 0, unknown: 0, sources: 160 })
-  check('🔴 반례5 대기 0 이면 같은 원천에서 용량 1 → FAIL', base.verdict === 'FAIL' && base.codes.includes('THROUGHPUT_SHORT'), show(base))
+  check('🔴 반례5 대기 0 이면 같은 원천에서 용량 2 → FAIL', base.verdict === 'FAIL' && base.codes.includes('THROUGHPUT_SHORT'), show(base))
   const inflated = [10, 100, 1000].map((pending) => d5({ published: 4, lost: 0, unknown: pending, sources: 160 }))
   check('🔴 🔴 반례5 대기만 늘려(10 · 100 · 1000) 용량을 올려도 PASS 가 되지 않는다',
     inflated.every((v) => v.verdict !== 'PASS' && v.codes.includes('READY_REQUIREMENT_UNKNOWN')),
@@ -129,14 +129,15 @@ console.log('\n④ 반례 6 — 상세 원천은 authority 가 아니다')
 
 console.log('\n⑤ 반례 7 · 8 — 비용: 하루 필요 = 목표 × 완전 연결 결과당 비용 · raw 단가 authority 없음')
 {
-  const ok = d5({ usdPerSlotValidResult: 0.09 })
-  check('🔴 반례8 결과당 $0.09 × 목표 5 = $0.45 ≤ $0.50 → 비용 GREEN (상한은 소비 목표가 아니다)',
-    ok.verdict === 'PASS' && Math.abs((ok.counts.supplyDailyUsdNeeded ?? 0) - 0.45) < 1e-12, show(ok))
-  const short = d5({ usdPerSlotValidResult: 0.11 })
-  check('🔴 반례8 결과당 $0.11 × 목표 5 = $0.55 > $0.50 → SUPPLY_COST_SHORT', short.codes.includes('SUPPLY_COST_SHORT'), show(short))
-  const lossy = d5({ lost: 1, sources: sourcesFor(6, 50), usdPerSlotValidResult: 0.09 })
-  check('🔴 🔴 결과당 비용에 손실이 이미 들어 있다 — 손실 1 이어도 비용은 목표 5 × $0.09 (필요 READY 6 을 다시 곱하지 않는다)',
-    lossy.counts.readyNeeded === 6 && Math.abs((lossy.counts.supplyDailyUsdNeeded ?? 0) - 0.45) < 1e-12
+  const ok = d5({ usdPerSlotValidResult: 0.07 })
+  check('🔴 반례8 결과당 $0.07 × 목표 5 = $0.35 ≤ 저예산 profile의 앞 5/7 몫 $0.3571 → 비용 GREEN',
+    ok.verdict === 'PASS' && Math.abs((ok.counts.supplyDailyUsdNeeded ?? 0) - 0.35) < 1e-12, show(ok))
+  const short = d5({ usdPerSlotValidResult: 0.08 })
+  check('🔴 반례8 결과당 $0.08 × 목표 5 = $0.40 > 저예산 profile의 앞 5/7 몫 $0.3571 → SUPPLY_COST_SHORT',
+    short.codes.includes('SUPPLY_COST_SHORT'), show(short))
+  const lossy = d5({ lost: 1, sources: sourcesFor(6, 50), usdPerSlotValidResult: 0.07 })
+  check('🔴 🔴 결과당 비용에 손실이 이미 들어 있다 — 손실 1 이어도 비용은 목표 5 × $0.07 (필요 READY 6 을 다시 곱하지 않는다)',
+    lossy.counts.readyNeeded === 6 && Math.abs((lossy.counts.supplyDailyUsdNeeded ?? 0) - 0.35) < 1e-12
     && !lossy.codes.includes('SUPPLY_COST_SHORT'), show(lossy))
   const unknown = d5({ unknown: 10, published: 4, sources: sourcesFor(14, 18), usdPerSlotValidResult: null })
   check('🔴 🔴 반례7 결과당 비용 모름(legacy-only · 미연결 · 미정산 · 확인 결과 0) → SUPPLY_COST_UNKNOWN — raw 단가로 GREEN/FAIL 하지 않는다',
@@ -146,8 +147,9 @@ console.log('\n⑤ 반례 7 · 8 — 비용: 하루 필요 = 목표 × 완전 �
   check('🔴 처리량은 replenishmentOf 구간 하나 · 비용은 목표 × 결과당 비용 또는 제한 trial 위험 하나 — raw 단가 계산 없음',
     (judge.match(/[=(]\s*replenishmentOf\(/g) ?? []).length === 1
     && /judgeAgainst\(req, \(need\) => capacity >= need\)/.test(judge)
-    && /if \(n \* perResult > facts\.supplyDailyUsdCap\) codes\.add\('SUPPLY_COST_SHORT'\)/.test(judge)
-    && /n \* trial\.riskUsdPerSlotValidResult! > facts\.supplyDailyUsdCap/.test(judge)
+    && /const proofBudget = supplyProofBudgetUsd\(facts\.supplyDailyUsdCap\)/.test(judge)
+    && /n \* perResult > proofBudget/.test(judge)
+    && /n \* trial\.riskUsdPerSlotValidResult! > supplyProofBudgetUsd\(facts\.supplyDailyUsdCap\)/.test(judge)
     && !/rawUnit|supplyUsd\b/.test(judge))
 }
 
