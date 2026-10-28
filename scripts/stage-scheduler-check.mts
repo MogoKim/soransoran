@@ -25,7 +25,7 @@ import { join } from 'node:path'
 import {
   GENERIC_STAGES, genericNextStage, genericDailyTarget, HIGHEST_RUNTIME_STAGE,
   validPublishMinutes, publishCapacityOf, deriveSlots, genericProfileOf, verifyGenericProfile, commentCoverageOf,
-  judgeNextPreflight, trialBlocks, firstSlotOn,
+  judgeNextPreflight, readyCapacityOf, trialBlocks, firstSlotOn,
   type PreflightFacts, type ReadyCohortFact, type GenericStage, type PreflightVerdict, type PreflightCode,
 } from '../src/lib/stage-ladder-generic'
 import {
@@ -41,7 +41,10 @@ import {
 import {
   d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf,
 } from '../src/lib/d100-capacity'
-import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
+import {
+  SUPPLY_PROOF_LAST_PUBLISH_MINUTE, SUPPLY_PROOF_RUNS_PER_DAY,
+  SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN, supplyProofBudgetUsd, supplyProofRunSlots,
+} from '../src/lib/supply-schedule-contract'
 import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
 import {
   judgeStageEvidence, judgeEvidenceForTarget, trialPlanOf, PROOF_STATES,
@@ -169,7 +172,11 @@ section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 �
  * 🔴 경계값 fixture — 각 칸이 그 단계를 **딱** 채운다(기회 = 목표 · cohort 공개 = 목표 · 손실 0 · 대기 0 ·
  *    용량 = 필요량(= 목표)을 겨우 채움 · Persona = canary 하한). 넉넉한 값으로 PASS 를 만들면 경계 반례가 헛돈다.
  */
-const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
+const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
+const d3LastPublishMinute = Math.max(...profileOf('d3').slots.map((slot) => slot.hour * 60 + slot.minute))
+check('🔴 당일 증명 회차 경계는 가장 이른 D3 마지막 발행 슬롯 19:00과 맞고 5회다',
+  SUPPLY_PROOF_LAST_PUBLISH_MINUTE === d3LastPublishMinute
+  && supplyProofRunSlots(SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS).length === 5)
 const cohortFor = (s: GenericStage, o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
   sources: RUNS, published: genericDailyTarget(s), lost: 0, scheduled: 0, unknown: 0,
   usdPerSlotValidResult: SUPPLY_USD_PER_READY, ...o,
@@ -181,8 +188,44 @@ const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFa
   auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
   supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
 })
+const D20_TRANSITION = judgeNextPreflight('d20', factsFor('d20', {
+    readyCohort: { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 },
+  }), GRID)
+check('🔴 D20 전환일 실측 — READY 21/원천 95 × 20원천 × 당일 5회 = 용량 22 · 최대 필요 21을 채운다',
+  D20_TRANSITION.counts.readyCapacity === 22 && D20_TRANSITION.counts.readyNeededMax === 21
+  && !D20_TRANSITION.codes.includes('THROUGHPUT_SHORT'))
+check('🔴 D20 전환일 반례 — 같은 실측에서 묶음 18이면 용량 19라 최대 필요 21을 못 채운다',
+  readyCapacityOf(21, 95, 18, SUPPLY_PROOF_RUNS_PER_DAY) === 19
+  && (readyCapacityOf(21, 95, 18, SUPPLY_PROOF_RUNS_PER_DAY) ?? 0) < (D20_TRANSITION.counts.readyNeededMax ?? 0))
+check('🔴 비용 변동 경계 — 결과당 실측 비용이 30% 상승하면 D20은 $1.20 증명 예산을 넘어 자동으로 열리지 않는다',
+  judgeNextPreflight('d20', factsFor('d20', {
+    readyCohort: {
+      sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1,
+      usdPerSlotValidResult: 0.0502934 * 1.3,
+    },
+  }), GRID).codes.includes('SUPPLY_COST_SHORT'))
+const COST_EDGE_PASS = judgeNextPreflight('d20', factsFor('d20', {
+  readyCohort: cohortFor('d20', { usdPerSlotValidResult: 0.058 }),
+}), GRID)
+const COST_EDGE_FAIL = judgeNextPreflight('d20', factsFor('d20', {
+  readyCohort: cohortFor('d20', { usdPerSlotValidResult: 0.060001 }),
+}), GRID)
+check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0.058은 용량 20·$1.16으로 PASS, $0.060001은 $1.20 초과 FAIL',
+  COST_EDGE_PASS.counts.readyCapacity === 20
+  && Math.abs((COST_EDGE_PASS.counts.supplyDailyUsdNeeded ?? 0) - 1.16) < 1e-9
+  && !COST_EDGE_PASS.codes.includes('THROUGHPUT_SHORT')
+  && !COST_EDGE_PASS.codes.includes('SUPPLY_COST_SHORT')
+  && COST_EDGE_FAIL.codes.includes('SUPPLY_COST_SHORT'))
 check('비용 상한 정본 — 공급 승인 천장 $1.20 · 댓글 기본 $0.20 / 승인 천장 $0.50',
-  SUPPLY_DAILY_USD_APPROVED === 1.2 && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.5)
+  SUPPLY_DAILY_USD_APPROVED === 1.2
+  && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.5)
+check('🔴 저예산 7회 profile은 앞 5회 몫만 비용 용량으로 센다 — 실측 D20은 막고 저비용 D10은 연다',
+  supplyProofBudgetUsd(1.19) === 1.19 * 5 / 7
+  && judgeNextPreflight('d20', factsFor('d20', {
+    supplyDailyUsdCap: 1.19,
+    readyCohort: { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 },
+  }), GRID).codes.includes('SUPPLY_COST_SHORT')
+  && !judgeNextPreflight('d10', factsFor('d10', { supplyDailyUsdCap: 0.5 }), GRID).codes.includes('SUPPLY_COST_SHORT'))
 for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
   const v = judgeNextPreflight(s, factsFor(s), GRID)
   check(`${s} preflight PASS — 댓글 ${v.counts.firstComments}건 · 감사 ${v.counts.auditExpected}건 · READY ${v.counts.readyNeeded}건 비용 상한 안`,

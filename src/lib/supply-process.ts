@@ -29,10 +29,12 @@
 import type { RunTokenShadowTag } from './supply-run-token'
 import { completedAdaptKeys } from './micro-seed-82cook-thin-adapt'
 import type { FillRecord } from './supply-fill-retry'
-import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+import { SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+
+export { SUPPLY_RUN_WINDOW_MS }
 
 /**
- * 🔴 **한 회차 적재 천장** (2026-09-28) — 묶음 크기 천장과 같다(10).
+ * 🔴 **한 회차 적재 천장** — 묶음 크기 천장과 같다.
  *    `--up-to` 는 JIT 수요 · 묶음 크기 · 이 천장 중 **가장 작은 값**이다. 이월 파일을 얹어도 늘지 않는다.
  */
 export const FILL_ROUND_CAP = SUPPLY_WORKSET_PER_RUN
@@ -46,15 +48,6 @@ export function fillUpToOf(bufferUpTo: number, limit: number): number {
 
 /** 🔴 처리기 kill switch. plist 를 지우지 않고도 멈출 수 있어야 한다 */
 export const PROCESS_KILL_SWITCH_ENV = 'SORAN_SUPPLY_PROCESS_ENABLED'
-
-/**
- * 🔴 **공급 회차 하나가 정상으로 살아 있을 수 있는 가장 긴 시간 — 45분.**
- *    처리기는 밖으로 나가지 않는다(네트워크 0). 한 회차가 90분씩 걸릴 이유가 없다.
- *    정기 회차 몫 보호의 슬롯 창(`SCHEDULED_RUN_WINDOW_MS`)과 실행 token 의 수명이 이 값이다.
- *    🔴 (2026-10-12 Batch C1) **잠금 시효가 아니다.** 공급 잠금은 커널 lease(`runner-lease` · `/usr/bin/lockf`)라
- *       holder 가 끝나거나 죽으면 커널이 푼다 — 시각으로 죽었다고 판정하거나 사람이 치울 잠금이 없다.
- */
-export const SUPPLY_RUN_WINDOW_MS = 45 * 60 * 1000
 
 /** 회차 기록 — 🔴 **재개 근거가 아니라 관제 근거**다. 이 파일을 읽고 무엇을 돌릴지 정하지 않는다 */
 export const RUN_FILE_RE = /^supply-process-.*\.run\.json$/

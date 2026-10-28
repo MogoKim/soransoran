@@ -13,7 +13,7 @@
  *
  * 🔴 **2차 보정 (같은 날) — 고정 몫 $0.0464 로는 늦은 슬롯이 여전히 굶는다.**
  *    앞판은 슬롯 몫을 `estimateSupplySpend(10).expectedPerRun`(묶음 5 시절 09-24~27 단가로 만든 추정)
- *    하나로 고정했다. 묶음 10 이 된 뒤 실제 정기 회차(09-29 08:15 · 12:15 · 17:15)는
+ *    하나로 고정했다. 묶음이 커진 뒤 실제 정기 회차(09-29 08:15 · 12:15 · 17:15)는
  *    **$0.0655 · $0.0992 · $0.0923** 을 썼다. 몫을 실제보다 작게 떼면, 앞 슬롯이 실제만큼 쓰는 동안
  *    뒤 슬롯의 몫이 모자라 22:15 가 막힌다. 더 큰 상수 하나로 바꾸는 것도 답이 아니다 —
  *    다음에 묶음·모델이 바뀌면 또 낡는다. 그래서 몫을 **장부의 최근 정기 회차 실측**에서 읽는다.
@@ -25,15 +25,16 @@
  *       `estimateSupplySpend(묶음).capPerRun`(회차 상한 — 꽉 찬 회차 최대 단가) 을 쓴다(fail-closed).
  *       🔴 이력 중 **하루라도 못 읽거나(깨짐) 어제 장부가 없거나 비었으면** 표본을 내지 않고 보수 기본값이다
  *          (세션 `historyBefore`) — 남은 날의 일부 표본으로 몫을 낮추지 않는다.
- *    ② 오늘 정기 몫 전체 P = min(천장, 6 × 몫). 천장 = min(env 하루 예산, 계약 천장 $0.50).
- *    ③ 끝난 슬롯은 **자기 몫 안에서 쓴 만큼만** P 에서 뺀다 — 덜 쓰거나 안 돈 몫은 남은 슬롯에
- *       **똑같이 이월**된다(손 실행으로 가지 않는다). 몫을 넘겨 쓴 것은 P 를 줄이지 않는다.
- *    ④ 남은 P 가 실제 여력(천장 − 남은 슬롯 밖에서 쓴 것)보다 크면 **비례로 줄인다** — 늦은 슬롯도 같은 비율.
- *    ⑤ 슬롯 j 의 남은 몫 = max(0, 슬롯 몫 − 그 슬롯이 이미 쓴 것(정산 + 열린 예약)).
- *    ⑥ 손 실행(수동 · commissioning · 창 밖 kickstart · 늦게 뜬 launchd · 잠에서 깨 다른 창에 들어온 회차)은 **남은 슬롯 전부**의
- *       남은 몫을 떼어 둔 나머지(= 천장 − P 안쪽, 마지막 슬롯 뒤에는 전부)만 쓴다.
- *    ⑦ 정기 회차(슬롯 i)는 **자기 말고 남은 슬롯**의 남은 몫을 떼어 둔 나머지를 쓴다 —
- *       자기 몫(이월 포함) + 손 실행 몫 중 남은 것. 뒤 슬롯의 몫은 건드리지 못한다.
+ *    ② 오늘 정기 몫 전체 P는 운영 예산과 계약 천장 중 낮은 값 안에서 정한다.
+ *       D20 승인 천장 $1.20이 적용되면 당일 증명에 쓸 앞 5슬롯을 먼저 보호한다.
+ *       더 낮은 운영 예산에서는 기존 7슬롯 동적 몫 계산을 유지한다.
+ *    ③ D20 증명 슬롯이 남아 있는 동안 21:15·22:15는 앞 5슬롯의 예산을 먼저 쓰지 못한다.
+ *       앞 5슬롯이 끝난 뒤에만 남은 예산을 나누어 쓴다.
+ *    ④ 남은 증명 슬롯은 실제 여력을 같은 비율로 나누고, 각 슬롯이 이미 쓴 정산·열린 예약은
+ *       그 슬롯의 남은 몫에서만 뺀다.
+ *    ⑤ 손 실행(수동 · commissioning · 창 밖 kickstart · 늦게 뜬 launchd · 잠에서 깨 다른 창에 들어온 회차)은
+ *       우선 슬롯의 남은 몫을 전부 떼어 둔 나머지만 쓴다.
+ *    ⑥ 정기 회차는 자기를 제외한 나머지 우선 슬롯의 남은 몫을 떼어 둔 나머지를 쓴다.
  *    (계산 정본은 `allocateScheduledReserve` 주석.)
  *
  * 🔴 **무엇을 하지 않는가.**
@@ -60,9 +61,10 @@
  */
 
 import {
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_RUN_SLOTS_KST, SUPPLY_WORKSET_PER_RUN, estimateSupplySpend,
+  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_FIRST_DAILY_USD, SUPPLY_PROOF_RUN_SLOTS_KST,
+  SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN, estimateSupplySpend,
+  supplyProofRunSlots,
 } from './supply-schedule-contract'
-import { SUPPLY_RUN_WINDOW_MS } from './supply-process'
 import type { LedgerEntry, SpendProtect } from './llm-ledger'
 
 export type { SpendProtect }
@@ -79,8 +81,8 @@ export const SUPPLY_PROCESS_LAUNCHD_LABEL = 'com.soransoran.supply-process'
  *    공급 회차 하나가 **정상으로 살아 있을 수 있는 가장 긴 시간**(`SUPPLY_RUN_WINDOW_MS`, 45분)이다.
  *    그 안에서는 ① 그 회차를 정기로 인정하고 ② 그 슬롯의 몫을 지킨다.
  *    (2026-10-12 Batch C1 — 앞판은 이 값이 `wx` 잠금 시효였다. 지금 잠금은 커널 lease 라 시효가 없고, 이 값은 창 길이로만 남는다.)
- *    창이 끝나면 슬롯이 돌았든(노트북이 꺼져) 안 돌았든 몫을 푼다 — 안 돈 슬롯의 몫을 하루 종일
- *    묶어 두지 않는다(그 몫은 뒤 슬롯으로 이월된다).
+ *    창이 끝나면 슬롯이 돌았든(노트북이 꺼져) 안 돌았든 몫을 푼다. proof-first에서는 그 몫을
+ *    이후 먼저 도착한 event·복구·정기 회차가 쓰고, 저예산 profile에서는 기존 방식으로 뒤 슬롯에 이월한다.
  */
 export const SCHEDULED_RUN_WINDOW_MS = SUPPLY_RUN_WINDOW_MS
 
@@ -93,7 +95,7 @@ export const SCHEDULED_COST_LOOKBACK_DAYS = 7
 
 /**
  * 🔴 **실측으로 인정하는 최소 표본(정기 슬롯 회차 수).** 이보다 적으면 보수 기본값이다.
- *    하루 6슬롯 중 절반 — 한두 회차의 우연한 값으로 몫을 정하지 않는다.
+ *    하루 7슬롯 중 절반에 가까운 값 — 한두 회차의 우연한 값으로 몫을 정하지 않는다.
  */
 export const SCHEDULED_COST_MIN_SAMPLES = 3
 
@@ -108,7 +110,7 @@ export function measuredShareFloorUsd(): number {
 /**
  * 🔴 **실측 몫의 천장 · 표본 부족 때의 기본값** — 회차 상한(`capPerRun`: 묶음 전부 × 최대 단가).
  *
- *    표본이 모자라면 이 값으로 **크게** 떼어 둔다(fail-closed). 6슬롯 × 이 값은 하루 천장보다 커서
+ *    표본이 모자라면 이 값으로 **크게** 떼어 둔다(fail-closed). 7슬롯 × 이 값은 하루 천장보다 커서
  *    비례 축소가 걸린다 — 결과는 "하루 여력을 남은 슬롯이 똑같이 나눠 갖고, 손 실행은 남는 게 없다" 다.
  *    손 실행이 멈추는 쪽으로 틀리고, 정기 회차가 굶는 쪽으로는 틀리지 않는다.
  */
@@ -180,7 +182,7 @@ export function activeSlotAt(
  *
  *    · 지금 도는 슬롯(창 안)도 포함한다 — 정기 회차가 도는 **동안** 손 실행이 그 몫을 먹으면 안 된다.
  *    · 끝난 슬롯은 뺀다 — 마지막 슬롯의 창이 끝나면 0 개다(몫이 풀린다).
- *    · 오늘 KST 날짜 기준이다. 자정이 지나면 새 날의 슬롯 6개가 다시 잡힌다(장부 파일도 새 날이다).
+ *    · 오늘 KST 날짜 기준이다. 자정이 지나면 새 날의 슬롯 7개가 다시 잡힌다(장부 파일도 새 날이다).
  */
 export function pendingSlotsAt(
   now: Date, slots: readonly SlotKst[] = SUPPLY_RUN_SLOTS_KST, windowMs: number = SCHEDULED_RUN_WINDOW_MS,
@@ -217,9 +219,8 @@ export function endedSlotsAt(
  *       정기 판정을 받았다 — 제 슬롯이 아닌 몫을 먹고, 12:15 정기 회차가 굶는다.
  *    ② 08:10 에 kickstart 로 뜬 회차가 08:15 를 넘기면 그 뒤 요청이 08:15 몫을 받았다.
  *    그래서 `runStartedAt`(회차가 **실제로 시작한** 가장 이른 시각)도 같은 창이어야 한다.
- *    · 창이 다르거나 시작 시각이 창 밖 → **수동**. 수동은 남은 슬롯 **전부**의 남은 몫을 떼어 둔
- *      나머지만 쓴다(현재 예산에서는 23:00 전 사실상 $0). 그 회차가 쓰지 못한 제 슬롯 몫은
- *      창이 끝나면 뒤 슬롯으로 **이월**된다(`allocateScheduledReserve` ②).
+ *    · 창이 다르거나 시작 시각이 창 밖 → **수동**. 수동은 아직 우선권이 있는 슬롯의 남은 몫을 떼어 둔
+ *      나머지만 쓴다. 끝난 슬롯의 미사용분은 현재 profile의 우선순위 규칙에 따라 복구·후속 회차가 쓸 수 있다.
  *    · `runStartedAt === null` = 시작 시각을 **모른다**(깨진 `SORAN_RUN_AT` 등) → 수동(fail-closed).
  *    · `undefined` = 이 호출이 시작 시각을 따로 주지 않았다 → 요청 시각과 같다고 본다(순수 계산·시험용).
  *      🔴 운영 경로(`supplyProtectFromEnv`)는 **언제나** 값을 준다 — 세션 검사가 그것을 본다.
@@ -271,7 +272,7 @@ export type MissingTodayVerdict = { ok: true; why: string } | { ok: false; reaso
  *
  *    **오늘 파일이 없는 것이 정상인 경우** — 전부 허용한다:
  *      ① 최근 `SCHEDULED_COST_LOOKBACK_DAYS` 일 장부가 하나도 없다 — 새 장부이거나 오래 꺼져 있었다
- *      ② 오늘 첫 정기 슬롯 시각(08:15 KST) 전이다 — 자정 직후 · 이른 아침의 첫 호출
+ *      ② 오늘 첫 정기 슬롯 시각(06:15 KST) 전이다 — 자정 직후 · 이른 아침의 첫 호출
  *      ③ 이 요청이 **정기 회차**다 — 노트북이 아침 슬롯 동안 꺼져 있었던 날, 정기 회차가 그날 첫 줄을 연다
  *    그 밖(최근 장부가 있고 · 첫 슬롯 시각이 지났고 · 손 실행)은 **보류**다 — 호출부가 `LEDGER_ERROR` 로 막고
  *    오늘 파일을 만들지 않는다(만들면 다음 요청부터는 "있는 파일" 이 되어 규칙이 한 번만 걸린다).
@@ -441,9 +442,9 @@ export type SlotAllocation = {
 }
 
 export type ScheduledAllocation = {
-  /** 오늘 정기 몫 전체 = min(천장, 하루 슬롯 수 × 슬롯 몫) — 하루 시작에 정기 회차에게 떼어 둔 것 */
+  /** 오늘 정기 몫 전체 — proof-first는 천장 전부, 저예산 profile은 기존 7회 동적 몫 */
   poolUsd: number
-  /** 남은 슬롯이 받을 몫 = 전체 − 끝난 슬롯이 실제로 쓴 것 (기본 몫 + 이월) */
+  /** 남은 슬롯이 받을 몫 — proof-first 고정 몫 또는 기존 동적 몫에서 사용액을 반영한 값 */
   entitlementUsd: number
   /** 남은 슬롯이 실제로 쓸 수 있는 여력 = 천장 − 남은 슬롯 밖에서 쓴 것 (0 이상) */
   basisUsd: number
@@ -458,19 +459,16 @@ export type ScheduledAllocation = {
  * 🔴 **남은 정기 슬롯에 몫을 배분한다.**
  *
  *    `capUsd` 는 `min(env 하루 예산, 계약 천장)` 이다. `todayEntries` 는 **오늘 장부 전체**(잠금 안에서 읽은 것).
- *    `ownSlot` 은 이 요청이 정기 회차면 그 슬롯 이름, 손 실행이면 `null`. `slotsPerDay` 는 정본 슬롯 수(6).
+ *    `ownSlot` 은 이 요청이 정기 회차면 그 슬롯 이름, 손 실행이면 `null`.
  *
- *    ① 오늘 정기 몫 전체 P = min(천장, 슬롯 수 × 몫). 손 실행 몫은 처음부터 `천장 − P` 뿐이다.
- *    ② 끝난 슬롯을 시각 순서로 지나며 P 에서 **그 슬롯 몫 안에서 쓴 만큼만** 뺀다
- *       (슬롯 j 의 몫 = 그때 남은 P / 그 슬롯부터 남은 슬롯 수). 🔴 **이월** — 앞 슬롯이 덜 썼거나
- *       안 돌았으면(노트북 잠김) 그 차이가 뒤 슬롯에 **똑같이** 나뉜다. 손 실행으로 가지 않는다.
- *       🔴 몫을 넘겨 쓴 것(손 실행 몫 `천장 − P` 에서 먼저 온 쪽이 쓴 것)은 P 에서 빼지 않는다 —
- *          빼면 앞 정기 회차가 많이 쓴 날 뒤 슬롯이 굶는다.
- *    ③ 실제 여력 B = 천장 − (남은 슬롯 **밖**에서 쓴 것). 남은 P 가 B 보다 크면 **비례로 줄인다**.
- *    ④ 슬롯 몫 = min(남은 P, B) / 남은 슬롯 수. 슬롯 j 의 남은 몫 = max(0, 슬롯 몫 − 그 슬롯이 쓴 것).
- *
- *    🔴 남은 P·B 모두 **남은 슬롯이 이미 쓴 것을 빼지 않는다.** 빼면 한 슬롯이 쓸수록 뒤 슬롯의 몫이 따라
- *       줄어, 그 슬롯이 연속 소액 요청으로 결국 전부를 가져간다. 앞 슬롯이 쓴 것은 그 슬롯 자신의 몫에서 빠진다.
+ *    ① D20 승인 천장 전액이 적용되면 오늘 정기 몫 전체 P = 천장이다. 더 낮은 운영 예산에서는
+ *       기존 몫 계산을 유지해 단계 전환 전 동작을 바꾸지 않는다.
+ *    ② proof-first 예산에서 증명 슬롯 하나의 몫은 하루 시작부터 P / 전체 증명 슬롯 수로 고정한다.
+ *       끝난 슬롯이 못 쓴 몫은 이후 먼저 도착한 event·복구·정기 회차가 쓸 수 있고, 남은 증명 슬롯 몫은 줄지 않는다.
+ *       21:15·22:15는 증명 슬롯이 모두 끝날 때까지 몫이 0이다. 그 뒤 남은 P를 나눠 갖는다.
+ *    ③ 실제 여력 B = 천장 − (현재 우선순위 슬롯 밖에서 쓴 것). 현재 우선순위 슬롯이 이미 쓴 금액은
+ *       자기 몫에서만 빠진다.
+ *    ④ 슬롯 몫 = B / 현재 우선순위 슬롯 수. 슬롯 j 의 남은 몫 = max(0, 슬롯 몫 − 그 슬롯이 쓴 것).
  */
 export function allocateScheduledReserve(input: {
   pending: readonly SlotWindow[]
@@ -480,6 +478,8 @@ export function allocateScheduledReserve(input: {
   capUsd: number
   todayEntries: readonly LedgerEntry[]
   ownSlot: string | null
+  /** 당일 공개 목표를 증명하는 앞 슬롯. 남아 있는 동안 늦은 슬롯보다 먼저 예산을 보호한다. */
+  proofSlots?: readonly SlotKst[]
 }): ScheduledAllocation {
   let used = 0
   const spentBySlot = new Map<string, number>()
@@ -488,23 +488,52 @@ export function allocateScheduledReserve(input: {
     used += s
     if (s !== 0 && isScheduledTag(e)) spentBySlot.set(e.runSlot, (spentBySlot.get(e.runSlot) ?? 0) + s)
   }
-  const pendingSpent = input.pending.reduce((sum, w) => sum + (spentBySlot.get(w.label) ?? 0), 0)
-  const k = input.pending.length
-  const pool = Math.max(0, Math.min(input.capUsd, (input.ended.length + k) * input.shareUsd))
-  // ② 끝난 슬롯이 몫 안에서 쓴 만큼만 P 에서 뺀다 — 이월과 초과 사용을 가른다
-  let rest = pool
-  input.ended.forEach((w, i) => {
-    const slotShare = rest / (input.ended.length - i + k)
-    rest -= Math.min(spentBySlot.get(w.label) ?? 0, slotShare)
-  })
-  const entitlement = k === 0 ? 0 : Math.max(0, rest)
-  const basis = Math.max(0, input.capUsd - (used - pendingSpent))
-  const pendingPool = Math.min(entitlement, basis)
-  const scale = entitlement > 0 ? pendingPool / entitlement : 1
-  const perSlot = k === 0 ? 0 : pendingPool / k
+  const proofMinutes = new Set((input.proofSlots ?? SUPPLY_PROOF_RUN_SLOTS_KST).map((s) => s.hour * 60 + s.minute))
+  const isProof = (label: string): boolean => {
+    const m = / (\d{2}):(\d{2})$/.exec(label)
+    return m !== null && proofMinutes.has(Number(m[1]) * 60 + Number(m[2]))
+  }
+  const proofFirst = input.capUsd >= SUPPLY_PROOF_FIRST_DAILY_USD
+  const pendingProof = input.pending.filter((w) => isProof(w.label))
+  const priority = proofFirst && pendingProof.length > 0 ? pendingProof : [...input.pending]
+  const priorityLabels = new Set(priority.map((w) => w.label))
+  const prioritySpent = priority.reduce((sum, w) => sum + (spentBySlot.get(w.label) ?? 0), 0)
+  const k = priority.length
+  const pool = proofFirst
+    ? Math.max(0, input.capUsd)
+    : Math.max(0, Math.min(input.capUsd, (input.ended.length + input.pending.length) * input.shareUsd))
+  let entitlement: number
+  let basis: number
+  let scale: number
+  let perSlot: number
+  if (proofFirst && pendingProof.length > 0) {
+    basis = Math.max(0, input.capUsd - (used - prioritySpent))
+    const proofShare = proofMinutes.size === 0 ? 0 : input.capUsd / proofMinutes.size
+    entitlement = k * proofShare
+    const pendingPool = Math.min(entitlement, basis)
+    scale = entitlement > 0 ? pendingPool / entitlement : 1
+    perSlot = k === 0 ? 0 : pendingPool / k
+  } else if (proofFirst) {
+    basis = Math.max(0, input.capUsd - (used - prioritySpent))
+    entitlement = k === 0 ? 0 : basis
+    scale = 1
+    perSlot = k === 0 ? 0 : basis / k
+  } else {
+    let rest = pool
+    input.ended.forEach((w, i) => {
+      const slotShare = rest / (input.ended.length - i + k)
+      rest -= Math.min(spentBySlot.get(w.label) ?? 0, slotShare)
+    })
+    entitlement = k === 0 ? 0 : Math.max(0, rest)
+    basis = Math.max(0, input.capUsd - (used - prioritySpent))
+    const pendingPool = Math.min(entitlement, basis)
+    scale = entitlement > 0 ? pendingPool / entitlement : 1
+    perSlot = k === 0 ? 0 : pendingPool / k
+  }
   const slots = input.pending.map((w) => {
     const spentUsd = spentBySlot.get(w.label) ?? 0
-    return { label: w.label, shareUsd: perSlot, spentUsd, claimUsd: Math.max(0, perSlot - spentUsd) }
+    const shareUsd = priorityLabels.has(w.label) ? perSlot : 0
+    return { label: w.label, shareUsd, spentUsd, claimUsd: Math.max(0, shareUsd - spentUsd) }
   })
   const reservedForOthersUsd = slots
     .filter((s) => s.label !== input.ownSlot)
@@ -558,17 +587,19 @@ export function supplySpendProtectAt(input: {
   const allocation = allocateScheduledReserve({
     pending, ended: endedSlotsAt(input.now, slots, windowMs),
     shareUsd: share.usd, capUsd, todayEntries: input.todayEntries ?? [], ownSlot: k.slot,
+    proofSlots: supplyProofRunSlots(slots, windowMs),
   })
   const others = allocation.slots.filter((s) => s.label !== k.slot)
+  const protectedOthers = others.filter((s) => s.claimUsd > 0)
   return {
     ...k, share, allocation,
     protect: {
       reservedForOthersUsd: allocation.reservedForOthersUsd,
       ceilingUsd: ceiling,
-      reason: `${k.kind === 'scheduled' ? '뒤' : '남은'} 정기 슬롯 ${others.length}개 몫 $${allocation.reservedForOthersUsd.toFixed(4)}`
-        + (others.length === 0 ? '' : ` (${others.map((s) => `${s.label.slice(11)} $${s.claimUsd.toFixed(4)}`).join(' · ')})`)
+      reason: `${k.kind === 'scheduled' ? '다른' : '남은'} 우선 정기 슬롯 ${protectedOthers.length}개 몫 $${allocation.reservedForOthersUsd.toFixed(4)}`
+        + (protectedOthers.length === 0 ? '' : ` (${protectedOthers.map((s) => `${s.label.slice(11)} $${s.claimUsd.toFixed(4)}`).join(' · ')})`)
         + ` · 슬롯 몫 $${share.usd.toFixed(4)} · 오늘 정기 몫 전체 $${allocation.poolUsd.toFixed(4)}`
-        + ` · 남은 슬롯 몫(이월 포함) $${allocation.entitlementUsd.toFixed(4)}`
+        + ` · 현재 우선 슬롯 권리 $${allocation.entitlementUsd.toFixed(4)}`
         + `${allocation.scale < 1 ? ` × 배율 ${allocation.scale.toFixed(3)}` : ''}`
         + ` [${share.why}]`
         + ` · 천장 $${(ceiling ?? capUsd).toFixed(2)} · ${k.why}`,

@@ -1,7 +1,7 @@
 /**
  * 🔴 **무인 운영 루프 launchd 템플릿 셋 — 문자열만 만든다. 등록 0 · 파일 write 0** (2026-09-28)
  *
- *   ① `com.soransoran.stage-controller` 하루 단계 결정(07:00 · 07:20 · 07:40 — 발행 창 08:00 전)
+ *   ① `com.soransoran.stage-controller` 하루 단계 결정(07:00 · 07:20 · 07:40 · 07:55 — 발행 창 08:00 전)
  *   ② `com.soransoran.runner-recover`   실패·누락 회차 복구(30분마다 · 기본 dry-run 아님 → `--apply` 로 등록)
  *   ③ `com.soransoran.keep-awake`       `caffeinate -i -s` 로 **유휴·AC 전원 잠자기**를 막는다
  *
@@ -37,13 +37,26 @@ export const CAFFEINATE_ARGS: readonly string[] = ['-i', '-s']
 
 /**
  * 🔴 **controller 는 발행 창보다 먼저 돈다** — 첫 발행 전에 그날 결정이 있어야 consumer 가
- *    safest 로 떨어지지 않는다. 세 번 깨우는 것은 **재시도**다(같은 날 결정은 하나 · 이미 있으면 읽기만).
+ *    safest 로 떨어지지 않는다. 네 번 깨우는 것은 **재시도**다(같은 날 결정은 하나 · 이미 있으면 읽기만).
  */
 export function stageControllerSlots(): { hour: number; minute: number }[] {
-  return [60, 40, 20].map((before) => {
+  return [60, 40, 20, 5].map((before) => {
     const m = PUBLISH_WINDOW_START_MINUTE - before
     return { hour: Math.floor(m / 60), minute: m % 60 }
   })
+}
+
+export type StageControllerLeaseDisposition = 'proceed' | 'defer' | 'safe-hold'
+
+/** 공급 lease가 마지막 예약까지 이어지면 부분 재고 대신 지속 단계 HOLD를 선택한다. */
+export function stageControllerLeaseDisposition(
+  lease: 'free' | 'busy' | 'unknown', now: Date,
+): StageControllerLeaseDisposition {
+  if (lease === 'free') return 'proceed'
+  const kstMinute = ((now.getUTCHours() + 9) % 24) * 60 + now.getUTCMinutes()
+  const final = stageControllerSlots().at(-1)!
+  const finalMinute = final.hour * 60 + final.minute
+  return kstMinute >= finalMinute ? 'safe-hold' : 'defer'
 }
 
 const header = `<?xml version="1.0" encoding="UTF-8"?>
@@ -158,9 +171,9 @@ export const RECOVERY_POLICY_OF: Readonly<Record<string, RecoveryPolicy>> = {
 
 /** 설치 절차 — 공식 설치기 한 명령으로 적용하고 같은 설치기로 되돌린다. */
 export const OPS_LOOP_INSTALL_STEPS: readonly string[] = [
-  '① runtime 을 이 PR 이 들어간 main SHA 로 배포한다 (npm run runtime:deploy — 기존 절차)',
-  '② 계획: npm run ops:loop-install',
-  '③ 적용: npm run ops:loop-install -- --apply',
+  '① runtime 을 이 PR 이 들어간 main SHA 로 배포한다 (npm run runtime:deploy — controller plist 는 아직 갱신되지 않는다)',
+  '② 필수 계획: npm run ops:loop-install (stage-controller 07:00·07:20·07:40·07:55 네 슬롯 대조)',
+  '③ 필수 적용: npm run ops:loop-install -- --apply (runtime deploy 만 하고 끝내지 않는다)',
   '④ 단계 ON: npm run stage:switch -- --on --apply 뒤 npm run stage:controller -- --apply',
   '⑤ 되돌리기: npm run stage:switch -- --off --apply 뒤 npm run ops:loop-install -- --rollback=<백업 경로>',
 ]

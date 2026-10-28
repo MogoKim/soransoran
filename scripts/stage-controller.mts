@@ -52,6 +52,8 @@ import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-
 import { judgeNextPreflight, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
+import { probeSupplyLease } from './lib/supply-lease.mjs'
+import { stageControllerLeaseDisposition } from './lib/ops-loop-templates'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -130,6 +132,58 @@ function observeErrors(): HealthSignal {
   ])
 }
 
+/**
+ * 마지막 controller 예약까지 공급 lease가 끝나지 않은 날의 안전 결정.
+ * 오늘의 부분 Queue는 읽지 않고, 전날 증거로 확인되는 지속 공개 단계만 HOLD로 기록한다.
+ */
+async function holdForSupplyLease(lease: 'busy' | 'unknown', flagOn: boolean): Promise<number> {
+  if (!fillDbConnection()) {
+    console.error('🔴 DATABASE_URL 이 없다 — 공급 lease 충돌 HOLD도 저장하지 못한다')
+    return 1
+  }
+  const prisma = new PrismaClient()
+  try {
+    const prevDate = previousKstDate(TODAY)
+    let previous: ValidatedStageDecision | null = null
+    let evidence: StageEvidenceVerdict | null = null
+    if (prevDate !== null) {
+      const r = await readStageDecision(prisma, prevDate)
+      if (r.found && r.result.ok) {
+        previous = r.result.decision
+        evidence = await evidenceFor(prisma, {
+          kstDate: previous.kstDate, stage: previous.release, decision: previous, errors: observeErrors(),
+        })
+      }
+    }
+    const current = sustainedReleaseOf(previous, evidence)
+    const decision = holdAtCurrent({
+      kstDate: TODAY, decidedAt: NOW.toISOString(), current,
+      headline: `🟡 공급 lease 충돌 — 지속 공개 단계 ${current} 를 안전 HOLD한다(부분 재고로 승격하지 않는다)`,
+      reason: `마지막 controller 예약에도 공급 lease가 ${lease} — 오늘의 부분 재고를 읽지 않고 승격을 막는다`,
+    })
+    const valid = validateForToday(decision)
+    if (!valid.ok) { console.error(`🔴 공급 lease 충돌 HOLD가 계약을 지키지 않는다 — ${valid.reason}`); return 1 }
+    if (JSON_OUT) console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, supplyLease: lease, safeHold: true, decision }, null, 2))
+    else log(`\n🟡 SUPPLY_LEASE_${lease.toUpperCase()} — 마지막 예약이므로 부분 재고로 승격하지 않고 지속 단계 ${current} HOLD를 기록한다\n`)
+    if (!flagOn) {
+      log(`🔴 ${CONTROLLER_ENV} 가 on 이 아니다 — 저장하지 않는다 (consumer 는 옛 env/canary 단계로 돌아가지 않고 가장 안전한 d1 로 감속한다)\n`)
+      return 0
+    }
+    const io = stageDecisionIo(prisma, TODAY)
+    const out = await ensureStageDecision({
+      read: io.read, insert: io.insert, validate: io.validate, compute: () => decision, by: DECISION_WRITER,
+    })
+    if (!out.ok) { console.error(`🔴 공급 lease 충돌 HOLD 저장 실패 ${out.code} — ${out.reason}`); return 1 }
+    log(`   ${out.created ? '🟢 안전 HOLD를 저장했다' : '🟢 이미 오늘 결정이 있어 읽었다'} — ${out.decision.state} · 공개 ${out.decision.release}\n`)
+    return 0
+  } catch (e) {
+    console.error(`🔴 공급 lease 충돌 HOLD 경로 실패 — ${(e as Error).name}`)
+    return 1
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 /** 🔴 `--evidence-date` — 그날 결정을 읽어 그 단계로 판정한다. write 0 */
 async function evidenceOnly(date: string): Promise<number> {
   if (!isCalendarDate(date)) { console.error(`🔴 달력에 없는 날짜 — ${date}`); return 1 }
@@ -166,6 +220,24 @@ async function main(): Promise<number> {
   log('\n══ 단계 controller (source-slot-v1) ══')
   log(`   ${TODAY} · ${APPLY ? '--apply' : 'dry-run'} · ${CONTROLLER_ENV}=${flagOn ? 'on' : 'off'}`)
   log('   🔴 단계 입력원은 StageDecision 하나 — env 단계 · env 천장 · canary/window 를 읽지 않는다')
+
+  /**
+   * 🔴 06:15 공급이 아직 Queue 도장을 마치지 않았으면 07:00 결정은 불완전한 재고를 보게 된다.
+   *    apply만 커널 lease 뒤로 미룬다. 07:00·07:20·07:40은 DB read/write 0으로 물러나고 07:55가 다시 본다.
+   *    마지막 07:55에도 끝나지 않으면 부분 재고로 승격하지 않고, 전날 증거의 지속 단계 HOLD만 기록한다.
+   *    probe 실패도 free로 간주하지 않는다. dry-run은 관측이므로 계속 계산한다.
+   */
+  if (APPLY) {
+    const supplyLease = probeSupplyLease()
+    const disposition = stageControllerLeaseDisposition(supplyLease, NOW)
+    if (disposition === 'safe-hold') return holdForSupplyLease(supplyLease as 'busy' | 'unknown', flagOn)
+    if (disposition === 'defer') {
+      const code = supplyLease === 'busy' ? 'SUPPLY_LEASE_BUSY' : 'SUPPLY_LEASE_UNKNOWN'
+      if (JSON_OUT) console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, deferred: true, code, supplyLease }, null, 2))
+      else log(`\n🟡 ${code} — 공급 회차의 적재·READY 마감이 끝난 뒤 다음 예약이 재시도한다. DB read 0 · DB write 0\n`)
+      return supplyLease === 'busy' ? 0 : 1
+    }
+  }
 
   if (!fillDbConnection()) {
     console.error('🔴 DATABASE_URL 이 없다 — 결정을 읽지도 쓰지도 못한다. 지금 공개 단계는 바뀌지 않는다')
