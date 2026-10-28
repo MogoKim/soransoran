@@ -378,6 +378,15 @@ let dryRunNames: string[] = []
   } else {
     ok('반복 리듬 상한', 'safety', `반복 리듬 5개만 열림 → ${rhNames.length}개에서 멈추고 ok=false`)
   }
+  // 열린 이름 10개 중 세 글자가 6개(반복 리듬 0 · 유의어 0) — 길이 상한만 막아야 한다
+  const len3x6 = new Set(['인절미', '누룽지', '부침개', '바구니', '책갈피', '앞치마', '텃밭', '일기', '어쩌다보니', '오늘은맑음'])
+  const l3 = assignCandidates([...D20_CODES], (n) => !len3x6.has(n), 10_000)
+  const l3Count = [...l3.picked.values()].filter((n) => [...n].length === 3).length
+  if (l3.ok || l3Count > 5) {
+    bad('한 길이 상한', 'safety', `🔴 세 글자 ${l3Count}/10 을 한 묶음에 넣었다`)
+  } else {
+    ok('한 길이 상한', 'safety', `세 글자 6개 열림 → ${l3Count}개에서 멈추고 ok=false`)
+  }
 }
 
 // ─── 출력 ────────────────────────────────────────────────────────
