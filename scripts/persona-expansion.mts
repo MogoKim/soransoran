@@ -66,13 +66,15 @@ const fx = loadExpansionFixture(repoRoot, FIXTURE)
 if (!fx.ok) fail(`fixture ${FIXTURE}: ${fx.problems.join(' / ')}`)
 const fixture = fx.ok ? fx.fixture : null!
 const batchCodes = fixture.candidates.map((c) => c.code)
-const fixtureScope = judgeExpansionFixtureScope({
+const fixtureScopeResult = judgeExpansionFixtureScope({
   fixtureCohort: fixture.cohort,
   fixtureCodes: batchCodes,
   productionCodes: PRODUCTION_PERSONA_CODES,
   runnableCohorts: RUNNABLE_COHORTS.map((id) => COHORTS[id]),
 })
-if (!fixtureScope.ok) fail(fixtureScope.reason)
+const fixtureScope = fixtureScopeResult.ok
+  ? fixtureScopeResult
+  : fail(fixtureScopeResult.reason)
 const baselineCodes = fixtureScope.baselineCodes
 const baselineCodeSet = new Set(baselineCodes)
 
@@ -150,13 +152,15 @@ const names = nameSpaceCapacity({
 const poolCodes = pool.cards.map((card) => card.code)
 const dbCodes = facts?.dbCodes ?? []
 const usedCodes = [...poolCodes, ...dbCodes]
-const comparison = expansionFixtureComparisonInputs({
+const comparisonResult = expansionFixtureComparisonInputs({
   mode: fixtureScope.mode,
   fixtureCodes: batchCodes,
   poolCodes,
   dbCodes,
 })
-if (!comparison.ok) fail(comparison.reason)
+const comparison = comparisonResult.ok
+  ? comparisonResult
+  : fail(comparisonResult.reason)
 const existingCardCodeSet = new Set(comparison.existingCardCodes)
 const ceiling = codeCeiling()
 const room = codeRoom({ usedCodes, retiredCodes: Object.keys(RETIRED_AUTOGEN_CODES), ceiling })
