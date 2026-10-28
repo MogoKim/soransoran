@@ -274,11 +274,22 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §4.1 이 유료 생성 전 코드의 Persona 확정을 적는다',
     d100Goal.includes('유료 초안 생성 전에 코드가')
     && d100Goal.includes('생성기가 Persona 후보를 임의로 다시 고르지 않는다')])
-  out.push(['canon §4.2 가 실제 고객 작명 분포를 참고하되 닉네임 복사 없이 확장 Persona 를 만든다',
+  // §4.2 구간만 잘라 줄바꿈을 접어 비교한다. #641 이 원작가 정체를 제거했으므로 "수집 작성자 대조 gate"는 증명 불가능하다.
+  // 복사 금지는 구조 증명(source author 후보 입력 0)으로, 충돌은 라이브 회원·기존 Persona·cohort 내 대조로 잠근다.
+  const canon42 = (d100Goal.split(/^### 4\.2 /m)[1] ?? '').split(/^#{2,3} /m)[0].replace(/\s+/g, ' ')
+  out.push(['canon §4.2 가 집계 분포만 쓰고 닉네임 복사·작성자 입력 없이 구조 증명과 라이브 충돌 대조로 확장 Persona 를 만든다',
     d100Goal.includes('실제 고객 작명 분포를 닮되 복사하지 않는다')
-    && d100Goal.includes('길이·리듬·평범한 작명 습관의')
-    && d100Goal.includes('문자열을 후보로 복사·변형·노출하지 않는다')
-    && d100Goal.includes('최종 배정 직전에는 현재 회원·기존 Persona·같은 신규 cohort·수집 작성자 대조를 다시 실행한다')])
+    && canon42.includes('길이·리듬·평범한 작명 습관의 집계 분포')
+    && canon42.includes('문자열을 후보로 복사·변형·노출하지 않는다')
+    && canon42.includes('후보 생성 입력으로도 쓰지 않는다')
+    && canon42.includes('source author 는 후보 생성·배정에 들어갈 수 없다')
+    && canon42.includes('npm run persona:source-author-check')
+    && canon42.includes('npm run persona:gate6b-check')
+    && canon42.includes('"크롤 작성자 충돌 0"이라 부르지 않는다')
+    && canon42.includes('현재 회원, 비활성·폐기로 남은 정체성까지 포함한 모든 기존 Persona, 같은 신규 cohort 안의 exact 충돌과')
+    && canon42.includes('near 충돌을 모두 거절한다')
+    && canon42.includes('DB create 전에 한 번, create 트랜잭션·활성화 순서 안에서 다시 판정한다')
+    && !canon42.includes('수집 작성자 대조')])
   out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
     d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
     && d100Goal.includes('bounded recovery')])
