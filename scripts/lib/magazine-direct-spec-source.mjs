@@ -17,7 +17,7 @@
  * 🔴 **빈 필드를 추정하지 않는다.** 제품 graph · 낡은 연구 · 시험 fixture 에서 값을 끌어오지 않는다.
  *    입력은 아래 계약을 따르는 승인 artifact 하나뿐이다. 없으면 NOT_READY 다.
  *
- * 🔴 **source artifact 계약** (`magazine-article-spec-source/2` · ArticlePlan · 2026-10-22 PR C).
+ * 🔴 **source artifact 계약** (`magazine-article-spec-source/2·/3` · ArticlePlan · 2026-10-22 PR C · /3 2026-10-28).
  *      경로      drafts/magazine/article-spec-source/<graphVersion>.json
  *      최상위    { schema, graphVersion, entries: [entry] }
  *      entry     { status, approvedBy, approvedAt, admission, plan, node, relations, hero, publication, productBasis, sourceHash }
@@ -45,8 +45,8 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 
-import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
-import { ARTICLE_SPEC_FILENAME, ARTICLE_SPEC_REGISTER_LEDGER, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem } from './magazine-direct-spec.mjs'
+import { ARTICLE_SPEC_SCHEMA_V2, canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
+import { ARTICLE_SPEC_FILENAME, ARTICLE_SPEC_REGISTER_LEDGER, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem, readDirectSpec } from './magazine-direct-spec.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
 import { isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
@@ -79,7 +79,17 @@ export function supersedesProblem(entry) {
 export const supersededSpecName = (oldSpecHash) => `article-spec.superseded-${String(oldSpecHash).replace(/^sha256:/, '')}.json`
 /** 같은 글의 개정이라고 볼 신원 — 제목 · 공개 시각 · 본문 계획은 바뀔 수 있다 */
 export const SUPERSEDE_IDENTITY_KEYS = Object.freeze(['slug', 'intentId', 'graphNodeId', 'graphVersion', 'cluster', 'admissionManifestHash'])
-export const DIRECT_SPEC_SOURCE_SCHEMA = 'magazine-article-spec-source/2'
+/**
+ * 🔴 **source 판** (2026-10-28 · 글별 주제 금지 패턴).
+ *    source/3 — 승인 entry 가 사람이 정한 `node.forbiddenPatterns` 를 반드시 싣는다 → spec/2. authoring 이 쓰는 판이다.
+ *    source/2 — 패턴이 없는 옛 판. 읽기만 한다 → spec/1(바이트 그대로). 운영 디스크의 옛 spec 과 그 개정(supersedes)을 위해 남긴다.
+ *    source/2 spec 은 batch QA 에서 DIRECT_TOPIC_PATTERNS_ABSENT 로 막힌다 — 글별 주제 위험을 대신할 것이 없다.
+ */
+export const DIRECT_SPEC_SOURCE_SCHEMA_V2 = 'magazine-article-spec-source/2'
+export const DIRECT_SPEC_SOURCE_SCHEMA = 'magazine-article-spec-source/3'
+export const DIRECT_SPEC_SOURCE_SCHEMAS = Object.freeze([DIRECT_SPEC_SOURCE_SCHEMA_V2, DIRECT_SPEC_SOURCE_SCHEMA])
+/** source/3 의 글별 주제 금지 패턴 자리 — 자연어 지침(node.safetyConstraints)과 다르다 */
+export const TOPIC_PATTERNS_FIELD = 'node.forbiddenPatterns'
 export const DIRECT_SPEC_SOURCE_DIRNAME = 'article-spec-source'
 /** canary 는 STANDARD 한 프로필만 연다 */
 export const DIRECT_SPEC_CANARY_PROFILE = 'STANDARD'
@@ -364,12 +374,14 @@ function isPresent(value, path) {
 /**
  * 🔴 hero 는 큐의 imageMode 가 정한다 — `heroRequired` 하나가 계약이다(authoring 도 이것만 쓴다).
  *    REQUIRED · OPTIONAL → hero.alt · hero.scene 필수 · NO_IMAGE → 둘 다 금지.
+ * 🔴 source/3 이면 글별 주제 금지 패턴(`node.forbiddenPatterns`)도 필수다 — 빈 배열은 없는 것이다.
  */
-export function missingSourceFields(entry, queueItem = null) {
+export function missingSourceFields(entry, queueItem = null, { schema = DIRECT_SPEC_SOURCE_SCHEMA } = {}) {
   const missing = DIRECT_SPEC_REQUIRED_FIELDS.filter((path) => !isPresent(valueAt(entry, path), path))
   if (heroRequired(queueItem?.imageMode)) {
     for (const path of ['hero.alt', 'hero.scene']) if (!isPresent(valueAt(entry, path), path)) missing.push(path)
   }
+  if (schema === DIRECT_SPEC_SOURCE_SCHEMA && !isPresent(valueAt(entry, TOPIC_PATTERNS_FIELD), TOPIC_PATTERNS_FIELD)) missing.push(TOPIC_PATTERNS_FIELD)
   return missing
 }
 
@@ -428,7 +440,8 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
     blockers.push('SOURCE_UNREADABLE')
     return notReady('source artifact 를 읽거나 파싱하지 못했다')
   }
-  if (doc?.schema !== DIRECT_SPEC_SOURCE_SCHEMA) blockers.push('SOURCE_SCHEMA_UNKNOWN')
+  if (!DIRECT_SPEC_SOURCE_SCHEMAS.includes(doc?.schema)) blockers.push('SOURCE_SCHEMA_UNKNOWN')
+  const sourceV3 = doc?.schema === DIRECT_SPEC_SOURCE_SCHEMA
   evidence.observedGraphVersion = typeof doc?.graphVersion === 'string' ? doc.graphVersion : null
   if (evidence.observedGraphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')
 
@@ -442,7 +455,9 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   evidence.supersedes = entry.supersedes ?? null
   evidence.approvalStatus = typeof entry.status === 'string' ? entry.status : null
   evidence.sourceHash = typeof entry.sourceHash === 'string' ? entry.sourceHash : null
-  evidence.missingFields = missingSourceFields(entry, queueItem)
+  evidence.missingFields = missingSourceFields(entry, queueItem, { schema: doc.schema })
+  // 🔴 source/2 판에 패턴이 끼어 있으면 판과 내용이 어긋난다 — 조용히 spec/1 로 버리지도, spec/2 로 올리지도 않는다
+  if (!sourceV3 && valueAt(entry, TOPIC_PATTERNS_FIELD) !== undefined) blockers.push('SOURCE_SCHEMA_FIELD_MISMATCH')
 
   if (entry.status !== 'APPROVED' || entry.node?.status !== 'APPROVED' || !String(entry.approvedBy ?? '').trim() || !String(entry.approvedAt ?? '').trim()) {
     blockers.push('NOT_APPROVED')
@@ -482,6 +497,8 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
     relations: entry.relations,
     publication: entry.publication,
     hero: entry.hero ?? null,
+    // 🔴 source/3 만 spec/2 를 만든다 — 판이 정한다, 값의 유무로 추측하지 않는다
+    ...(sourceV3 ? { topicForbiddenPatterns: entry.node.forbiddenPatterns } : {}),
   }
   let spec
   try { spec = compileArticleSpec(input) } catch (e) {
@@ -562,6 +579,29 @@ export function verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVe
     return { ok: false, code: 'DIRECT_SPEC_MISSING', why: 'article-spec.json 이 없다 — 이 단계는 spec 을 새로 쓰지 않는다', evidence: v.evidence }
   }
   return v
+}
+
+/** DIRECT 글에 승인된 글별 주제 금지 패턴이 없다 — spec/1(source/2) 이거나 패턴이 비었다 */
+export const DIRECT_TOPIC_PATTERNS_ABSENT = 'DIRECT_TOPIC_PATTERNS_ABSENT'
+
+/**
+ * 🔴 **DIRECT 글의 글별 주제 금지 패턴** — batch QA 가 review.ts 대신 읽는 단 하나의 정본.
+ *    디스크 spec 을 읽고(없음 · 손상 · 자기검증 실패 → 그 코드) 정본 큐 행 · 현재 승인 source · 제품 판으로
+ *    다시 컴파일한 spec 과 바이트까지 같을 때만(`verifyDirectSpecOnDisk`) 그 spec 의 패턴을 돌려준다.
+ *    spec/1 이거나 패턴이 비면 DIRECT_TOPIC_PATTERNS_ABSENT 다 — 공통 목록 · 지침 문장으로 대신하지 않는다.
+ * @returns {{ok:true, patterns:string[], specHash:string, schemaVersion:string}|{ok:false, code:string, why:string}}
+ */
+export function directTopicForbiddenPatterns({ slug, queue, draftsDir, expectedGraphVersion, productRoot }) {
+  const disk = readDirectSpec({ slug, draftsDir })
+  if (!disk.ok) return { ok: false, code: disk.code, why: disk.why }
+  const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion, productRoot })
+  if (!v.ok) return { ok: false, code: v.code, why: v.why }
+  const patterns = v.spec.safety?.topicForbiddenPatterns
+  if (v.spec.schemaVersion !== ARTICLE_SPEC_SCHEMA_V2 || !Array.isArray(patterns) || patterns.length === 0) {
+    return { ok: false, code: DIRECT_TOPIC_PATTERNS_ABSENT,
+      why: `승인 ArticleSpec(${v.spec.schemaVersion})에 글별 주제 금지 패턴이 없다 — 공통 목록 · topicConstraints 로 대신하지 않는다 (source/3 승인 필요)` }
+  }
+  return { ok: true, patterns: [...patterns], specHash: v.spec.specHash, schemaVersion: v.spec.schemaVersion }
 }
 
 /** 디스크 spec 의 specHash — 읽기 · 파싱 · 자기검증이 모두 통과할 때만, 아니면 null */

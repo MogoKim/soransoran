@@ -179,12 +179,14 @@ export function makeWorld(mutate = {}) {
   return { base, repo, admission, research, graph, receipt, adm }
 }
 
+/** source/3 — 사람이 정한 글별 주제 금지 패턴(시험 전용 · 공통 목록·지침 문장과 겹치지 않는다) */
+const TOPIC_PATTERNS = ['수면제를 드세요', '불면증 진단입니다']
 /** 사람이 채운다고 가정한 값 — fixture 의 승인 node 문장 · plan 을 그대로 쓴다(시험 전용) */
 function fill(candidate, over = {}) {
   const c = structuredClone(candidate)
   const n = fx().node
   Object.assign(c.entry.node, { readerQuestion: n.readerQuestion, scope: n.scope, outline: n.outline, evidence: n.evidence,
-    safetyConstraints: n.safetyConstraints, hubPath: n.hubPath, ctaLabel: n.ctaLabel })
+    safetyConstraints: n.safetyConstraints, forbiddenPatterns: [...TOPIC_PATTERNS], hubPath: n.hubPath, ctaLabel: n.ctaLabel })
   c.entry.plan = { ...PLAN(), ...(over.plan ?? {}) }
   c.entry.hero = ['REQUIRED', 'OPTIONAL'].includes(c.entry.plan.imageMode) ? fx().hero : null
   c.entry.publication = { publishAt: '2026-10-22T10:30:00+09:00' }
@@ -263,7 +265,7 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       assert.equal(r.ok, true, `${r.code} ${r.why}`)
       assert.ok(!queueOf(w.repo).some((q) => q.slug === SLUG), '반례 준비 실패 — 큐에 이 slug 가 있다')
       const c = r.candidate
-      assert.equal(c.schema, 'magazine-article-spec-source-candidate/2'); assert.equal(c.status, 'DRAFT'); assert.equal(c.entry.node.status, 'DRAFT')
+      assert.equal(c.schema, 'magazine-article-spec-source-candidate/3'); assert.equal(c.status, 'DRAFT'); assert.equal(c.entry.node.status, 'DRAFT')
       assert.ok(!JSON.stringify(c).includes('APPROVED'), 'prepare 가 APPROVED 를 만들었다')
       for (const k of ['approvedBy', 'approvedAt', 'status', 'sourceHash', 'productBasis']) assert.ok(!(k in c.entry), `entry.${k}`)
       assert.equal(c.candidateHash, lib.candidateHashOf(c))
@@ -273,7 +275,8 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       assert.deepEqual(c.identity.admission.edges, ['E-1', 'E-2', 'E-3', 'E-4'])
       assert.ok(Object.values(c.entry.plan).every((v) => v === null), 'prepare 가 plan 을 지어냈다')
       for (const k of source.ARTICLE_PLAN_REQUIRED) assert.ok(c.unresolvedFields.includes(`plan.${k}`), `plan.${k} 가 미해결로 남지 않았다`)
-      for (const p of ['readerQuestion', 'outline', 'hubPath', 'ctaLabel', 'safetyConstraints']) assert.equal(c.entry.node[p], null, `prepare 가 ${p} 를 지어냈다`)
+      for (const p of ['readerQuestion', 'outline', 'hubPath', 'ctaLabel', 'safetyConstraints', 'forbiddenPatterns']) assert.equal(c.entry.node[p], null, `prepare 가 ${p} 를 지어냈다`)
+      assert.ok(c.unresolvedFields.includes('node.forbiddenPatterns'), 'source/3 글별 주제 금지 패턴이 미해결로 남지 않았다')
       assert.equal(c.provenance['relations.direct'].status, 'DERIVED'); assert.equal(c.provenance['plan.title'].status, 'UNRESOLVED')
       assert.equal(c.entry.publication.publishAt, null); assert.equal(c.hint.primaryQuery, '잠 설친 다음 날')
       assert.equal(existsSync(sourceFile(w.repo)), false)
@@ -637,10 +640,11 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       assert.deepEqual(readdirSync(dirname(f2)).filter((x) => x.includes('.tmp-')), [])
       COUNTS.cas = { changed: a.code, created: b.code }
     }],
-    ['S18b 승인 entry — source/2 · admission · plan · productBasis · sourceHash · 그 복제 큐 행은 실제 관문 통과', () => {
+    ['S18b 승인 entry — source/3 · admission · plan · productBasis · sourceHash · 그 복제 큐 행은 실제 관문 통과', () => {
       const w = makeWorld(); const a = approved(w)
       const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
-      assert.equal(doc.schema, 'magazine-article-spec-source/2')
+      assert.equal(doc.schema, 'magazine-article-spec-source/3')
+      assert.deepEqual(doc.entries[0].node.forbiddenPatterns, TOPIC_PATTERNS)
       const e = doc.entries[0]
       assert.deepEqual(Object.keys(e).sort(), ['admission', 'approvedAt', 'approvedBy', 'hero', 'node', 'plan', 'productBasis', 'publication', 'relations', 'sourceHash', 'status'])
       assert.deepEqual(e.admission, { g8ManifestHash: w.receipt.manifestHash, receiptHash: w.receipt.receiptHash, graphVersion: GV, readinessHash: 'dssa-readiness-0001' })
@@ -1094,8 +1098,64 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const c = p.candidate; c.entry.publication = { ...a.entry.publication }
       assert.equal(approve(w, c).code, 'SUPERSEDES_NOOP')
     }],
+    // ── H. source/2 → source/3 (글별 주제 금지 패턴 · 2026-10-28) ──────────
+    ['RV9 source/2 기준 개정 — 패턴은 지어내지 않고 미해결 · 사람이 채우면 source/3 으로 교체 · 그 행은 spec/2', () => {
+      const w = makeWorld(); toSourceV2(w, queued)
+      const p = prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }); assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      const c = p.candidate
+      assert.equal(c.entry.node.forbiddenPatterns, null, '옛 source/2 기준에 없는 패턴을 지어냈다')
+      assert.deepEqual(c.unresolvedFields, ['node.forbiddenPatterns', 'publication.publishAt'])
+      assert.equal(c.provenance['node.forbiddenPatterns'].status, 'UNRESOLVED')
+      c.entry.publication = { publishAt: NEW_AT }
+      assert.equal(approve(w, c).code, 'CANDIDATE_UNRESOLVED', '패턴 없이 source/3 승인을 썼다')
+      c.entry.node.forbiddenPatterns = [...TOPIC_PATTERNS]
+      const r = approve(w, c); assert.equal(r.ok, true, `${r.code} ${r.why}`)
+      const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+      assert.equal(doc.schema, 'magazine-article-spec-source/3'); assert.equal(doc.entries.length, 1)
+      assert.deepEqual(doc.entries[0].node.forbiddenPatterns, TOPIC_PATTERNS)
+      const m = materialize(w); assert.equal(m.ok, true, `${m.code} ${m.why}`)
+      const j = judgeRow(w, m.row); assert.equal(j.ok, true, j.why)
+      assert.equal(j.spec.schemaVersion, 'magazine-article-spec/2'); assert.deepEqual(j.spec.safety.topicForbiddenPatterns, TOPIC_PATTERNS)
+    }],
+    ['RV10 source/2 artifact 에 다른 승인 entry 가 남으면 판을 올리지 않는다 → ARTIFACT_SCHEMA_MIGRATION_BLOCKED · 바이트 불변', () => {
+      const w = makeWorld(); toSourceV2(w, queued, { other: true })
+      const p = prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }); assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      const c = p.candidate; c.entry.publication = { publishAt: NEW_AT }; c.entry.node.forbiddenPatterns = [...TOPIC_PATTERNS]
+      const before = readFileSync(sourceFile(w.repo), 'utf8')
+      assert.equal(approve(w, c).code, 'ARTIFACT_SCHEMA_MIGRATION_BLOCKED')
+      assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), before)
+    }],
+    ['RV11 공통 금지어 · topicConstraints 문장 · 빈 배열을 패턴으로 → 승인 0 · 바이트 불변', () => {
+      for (const [label, patterns, code] of [
+        ['공통 금지어', ['완치'], 'TOPIC_PATTERNS_INVALID'],
+        ['지침 문장', [fx().node.safetyConstraints[0]], 'TOPIC_PATTERNS_INVALID'],
+        ['빈 배열', [], 'CANDIDATE_UNRESOLVED'],
+      ]) {
+        const w = makeWorld(); const c = ready(w); c.entry.node.forbiddenPatterns = patterns
+        assert.equal(approve(w, c).code, code, label)
+        assert.equal(existsSync(sourceFile(w.repo)), false, `${label} — artifact 를 썼다`)
+      }
+    }],
     ['(수치) 승인·쓰기·외부 호출', () => { authoringCases.counts = COUNTS }],
   ]
+}
+
+/**
+ * 운영 실제 상태 재현 — 승인 entry 가 source/2(패턴 없음)이고 큐에서 철회됐다.
+ * `other` 면 같은 artifact 에 다른 글의 source/2 승인 entry 를 하나 더 둔다.
+ */
+function toSourceV2(w, queued, { other = false } = {}) {
+  queued(w)
+  writeFileSync(queueFile(w.repo), queueFileText(queueOf(w.repo).filter((x) => x.slug !== SLUG)))
+  const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+  const strip = (e) => { delete e.node.forbiddenPatterns; e.sourceHash = REAL.source.directSpecSourceHash(e); return e }
+  const entries = [strip(doc.entries[0])]
+  if (other) {
+    const o = structuredClone(entries[0])
+    Object.assign(o.node, { id: 'I-OTHER-01', intentId: 'I-OTHER-01', slug: 'zzz-other-v2' })
+    entries.push(strip(o))
+  }
+  writeFileSync(sourceFile(w.repo), `${JSON.stringify({ schema: REAL.source.DIRECT_SPEC_SOURCE_SCHEMA_V2, graphVersion: GV, entries }, null, 2)}\n`)
 }
 
 /**

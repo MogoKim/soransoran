@@ -1,5 +1,5 @@
 /**
- * ArticlePlan — `magazine-article-spec-source/2` 의 **후보(DRAFT) 생산 · 사람의 명시적 승인 · 큐 materialize**.
+ * ArticlePlan — `magazine-article-spec-source/3` 의 **후보(DRAFT) 생산 · 사람의 명시적 승인 · 큐 materialize**.
  *
  * 🔴 **왜 바뀌었나** (2026-10-22 · M-GRAPH PR C).
  *    G8 v2 는 큐를 쓰지 않는다 — 연구 admission(receipt · slug manifest · ledger)만 기록한다.
@@ -29,11 +29,11 @@ import {
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 
-import { canonicalJson } from './magazine-article-spec.mjs'
+import { canonicalJson, topicForbiddenPatternsOf } from './magazine-article-spec.mjs'
 import {
   ADMISSION_FIELDS, ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_DIRNAME, DIRECT_SPEC_SOURCE_SCHEMA,
-  DISCOVERY_RELATION_TYPE, directSpecSourceHash, judgeDirectSpecSource, missingSourceFields, productBasisFor,
-  queueRowFromEntry, readProductGraphState, supersedesProblem,
+  DIRECT_SPEC_SOURCE_SCHEMAS, DIRECT_SPEC_SOURCE_SCHEMA_V2, DISCOVERY_RELATION_TYPE, TOPIC_PATTERNS_FIELD, directSpecSourceHash,
+  judgeDirectSpecSource, missingSourceFields, productBasisFor, queueRowFromEntry, readProductGraphState, supersedesProblem,
 } from './magazine-direct-spec-source.mjs'
 import {
   ADMISSION_FILES, JOURNAL_FILE, KNOWN_LEGACY_ADMISSIONS, LOCK_FILE, insertQueueRows, productPayloadOf, readReceipts,
@@ -44,7 +44,8 @@ import { parseArticlesSource, parseQueueSource } from './magazine-load.mjs'
 import { withQueueWriteLock } from './magazine-queue-lock.mjs'
 import { RELATION_CONTRACT_LABEL, isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
 
-export const CANDIDATE_SCHEMA = 'magazine-article-spec-source-candidate/2'
+/** 🔴 candidate/3 — source/3 승인 후보. `node.forbiddenPatterns`(글별 주제 금지 패턴)를 사람이 채운다. candidate/2 는 승인하지 않는다 */
+export const CANDIDATE_SCHEMA = 'magazine-article-spec-source-candidate/3'
 export const CANDIDATE_STATUS = 'DRAFT'
 export const G8_LEDGER_SCHEMA = 'm3ledger/2'
 export const RESEARCH_INTENT_SCHEMA = 'intent/2'
@@ -265,7 +266,8 @@ export function readAdmission({ admissionRoot, repoRoot, slug, knownLegacy = KNO
 /** 개정의 기준 — 같은 slug·intent 의 기존 승인 entry 가 정확히 하나 · APPROVED · sourceHash 정합 */
 function reviseBase(repoRoot, graphVersion, { slug, intentId }) {
   const planned = plannedEntries(repoRoot, graphVersion, { slug, intentId })
-  if (planned.doc && planned.doc.schema !== DIRECT_SPEC_SOURCE_SCHEMA) return { ok: false, code: 'PLAN_SCHEMA_UNKNOWN', why: `source artifact 판이 ${DIRECT_SPEC_SOURCE_SCHEMA} 가 아니다` }
+  // 🔴 개정 기준은 옛 source/2 승인도 된다 — 개정 승인은 source/3 으로 쓴다(패턴을 사람이 새로 정한다)
+  if (planned.doc && !DIRECT_SPEC_SOURCE_SCHEMAS.includes(planned.doc.schema)) return { ok: false, code: 'PLAN_SCHEMA_UNKNOWN', why: `source artifact 판이 ${DIRECT_SPEC_SOURCE_SCHEMAS.join(' · ')} 가 아니다` }
   const exact = planned.entries.filter((x) => x?.node?.slug === slug && x?.node?.intentId === intentId)
   const e = exact[0]
   if (planned.entries.length !== 1 || exact.length !== 1 || e.status !== 'APPROVED' || e.node?.status !== 'APPROVED' || e.sourceHash !== directSpecSourceHash(e)) {
@@ -488,10 +490,13 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
   const derived = (path, source, extra = {}) => { provenance[path] = { status: 'DERIVED', source, ...extra } }
   const open = (path, why) => { provenance[path] = { status: 'UNRESOLVED', source: null, why } }
 
+  // 🔴 source/2 기준에는 패턴이 없다 — 지어내지 않고 비워 둔다(사람이 정한다)
+  const baseHasPatterns = Array.isArray(base?.node?.forbiddenPatterns)
   const entry = base ? {
     admission: state.admissionBlock,
     plan: structuredClone(base.plan),
-    node: { ...structuredClone(base.node), status: CANDIDATE_STATUS, graphVersion: identity.graphVersion },
+    node: { ...structuredClone(base.node), status: CANDIDATE_STATUS, graphVersion: identity.graphVersion,
+      forbiddenPatterns: baseHasPatterns ? structuredClone(base.node.forbiddenPatterns) : null },
     relations: state.relations,
     hero: structuredClone(base.hero ?? null),
     publication: { publishAt: null },
@@ -502,7 +507,7 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
     node: {
       id: intentId, intentId, slug, status: CANDIDATE_STATUS, graphVersion: identity.graphVersion,
       readerQuestion: null, scope: { include: null, exclude: null }, outline: null,
-      evidence: { factsToVerify: null, sourceRequirements: null }, safetyConstraints: null, hubPath: null, ctaLabel: null,
+      evidence: { factsToVerify: null, sourceRequirements: null }, safetyConstraints: null, forbiddenPatterns: null, hubPath: null, ctaLabel: null,
     },
     relations: state.relations,
     hero: { alt: null, scene: null },
@@ -521,12 +526,15 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
     }
     derived('supersedes', `운영 디스크 article-spec.json specHash(사람 확인) · 기존 승인 sourceHash`)
     open('publication.publishAt', '개정 승인은 새 공개 시각을 사람이 다시 정한다 — 옛 시각을 옮기지 않는다')
+    if (baseHasPatterns) derived(TOPIC_PATTERNS_FIELD, `기존 승인 entry ${base.sourceHash} — 사람이 고칠 수 있다`)
+    else open(TOPIC_PATTERNS_FIELD, '기존 승인은 source/2 — 글별 주제 금지 패턴(원고에 그대로 대조하는 literal)을 사람이 정한다. 공통 금지어 · 지침 문장은 넣지 않는다')
   } else {
     for (const k of ARTICLE_PLAN_REQUIRED) open(`plan.${k}`, '사람이 정하고 승인한다 — 허용값은 topic-queue.ts union')
     for (const p of ['node.readerQuestion', 'node.scope.include', 'node.scope.exclude', 'node.outline', 'node.evidence.factsToVerify',
       'node.evidence.sourceRequirements', 'node.safetyConstraints', 'node.hubPath', 'node.ctaLabel', 'publication.publishAt']) {
       open(p, '기계가 증거로 확정할 수 없다 — 사람이 채우고 승인한다')
     }
+    open(TOPIC_PATTERNS_FIELD, '글별 주제 금지 패턴(원고에 그대로 대조하는 literal) — 사람이 정하고 승인한다. 공통 금지어 · 지침 문장은 넣지 않는다')
     open('hero', 'plan.imageMode 가 REQUIRED · OPTIONAL 이면 alt · scene 을 채우고, NO_IMAGE 면 null 로 둔다')
   }
 
@@ -710,6 +718,9 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   if (plan.length) return fail('PLAN_INVALID', `plan 이 승인 계약을 지키지 않는다: ${plan.join(',')}`, plan)
   const unresolved = unresolvedOf(e)
   if (unresolved.length) return fail('CANDIDATE_UNRESOLVED', `사람이 채우지 않은 필드: ${unresolved.join(',')}`, unresolved)
+  // 🔴 글별 주제 금지 패턴 — spec 컴파일과 같은 함수로 먼저 본다(공통 목록 · 지침 문장 · 빈 값 · 형식). 사유를 그대로 돌려준다
+  try { topicForbiddenPatternsOf(e.node.forbiddenPatterns, { topicConstraints: [e.plan?.notes, ...(e.node.safetyConstraints ?? [])] }) }
+  catch (er) { return fail('TOPIC_PATTERNS_INVALID', er.message) }
   const a = state.admission
   const pinned = { 'node.id': e.node.id === a.intentId, 'node.intentId': e.node.intentId === a.intentId,
     'node.slug': e.node.slug === a.slug, 'node.graphVersion': e.node.graphVersion === state.identity.graphVersion,
@@ -754,7 +765,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
     let doc = { schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [] }
     if (before.exists) {
       try { doc = JSON.parse(readFileSync(file, 'utf8')) } catch (er) { return fail('ARTIFACT_UNREADABLE', `기존 artifact 를 읽지 못했다: ${er.message}`) }
-      if (doc?.schema !== DIRECT_SPEC_SOURCE_SCHEMA || doc?.graphVersion !== gv || !Array.isArray(doc?.entries)) {
+      if (!DIRECT_SPEC_SOURCE_SCHEMAS.includes(doc?.schema) || doc?.graphVersion !== gv || !Array.isArray(doc?.entries)) {
         return fail('ARTIFACT_IDENTITY', '기존 artifact 의 schema·graphVersion 이 다르다 — 덮어쓰지 않는다')
       }
     }
@@ -767,8 +778,17 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
     if (rev && (same.length !== 1 || same[0].sourceHash !== rev.baseSourceHash)) {
       return fail('REVISE_BASE_CHANGED', '개정 기준 승인 entry 가 지금 artifact 의 것과 다르다 — 덮어쓰지 않는다')
     }
+    /**
+     * 🔴 **source/2 → source/3 판 전환은 명시적으로만** — 판은 문서 전체에 걸린다.
+     *    다른 source/2 entry 가 남아 있으면 판을 올리는 순간 그 글들의 spec 이 바뀐다(필수 패턴 없음 · 다른 컴파일).
+     *    그래서 교체 대상 말고 남는 entry 가 하나라도 있으면 쓰지 않는다. 남는 것이 없을 때만 /3 으로 쓴다.
+     */
+    const remaining = doc.entries.filter((x) => !same.includes(x))
+    if (doc.schema === DIRECT_SPEC_SOURCE_SCHEMA_V2 && remaining.length) {
+      return fail('ARTIFACT_SCHEMA_MIGRATION_BLOCKED', `source/2 artifact 에 다른 승인 entry ${remaining.length}개가 남는다 — 판을 /3 으로 올리면 그 글들의 spec 이 바뀐다. 덮어쓰지 않는다`)
+    }
     const next = { schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv,
-      entries: [...doc.entries.filter((x) => !same.includes(x)), approvedEntry].sort((x, y) => String(x.node.slug).localeCompare(String(y.node.slug))) }
+      entries: [...remaining, approvedEntry].sort((x, y) => String(x.node.slug).localeCompare(String(y.node.slug))) }
     const bytes = docBytes(next)
     const tmp = `${file}.tmp-${process.pid}-${createHash('sha256').update(bytes).digest('hex').slice(0, 12)}`
     const fd = openSync(tmp, 'w')
@@ -798,7 +818,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
 }
 
 /**
- * materialize — 승인 source/2 entry 하나에서 topic-queue 행 하나를 만든다. 큐의 유일한 ArticlePlan writer.
+ * materialize — 승인 source/3 entry 하나에서 topic-queue 행 하나를 만든다. 큐의 유일한 ArticlePlan writer.
  * 🔴 plan 밖의 값을 쓰지 않는다 — 행은 `queueRowFromEntry(entry)` 하나로 만든다(day 만 lock 안에서 정한다).
  * 🔴 큐 writer lock(`withQueueWriteLock`) 안에서 읽기 · 중복 확인 · day 결정 · 쓰기 · 다시 읽기 대조를 한 번에 한다.
  * `hooks.beforeLock` · `hooks.beforeWrite` · `hooks.afterWrite` 는 시험 전용(경쟁 writer · 외부 writer · 쓰기 손상 주입)이다.

@@ -167,7 +167,7 @@ const pairWith = ({ plan = {}, mutate = (e) => e } = {}) => {
   const entry = sourceEntry(mutate, { plan })
   return { entry, item: directItem({}, entry) }
 }
-function writeSource(draftsDir, { graphVersion = GV, entries = [sourceEntry()], schema = real.source.DIRECT_SPEC_SOURCE_SCHEMA } = {}) {
+function writeSource(draftsDir, { graphVersion = GV, entries = [sourceEntry()], schema = real.source.DIRECT_SPEC_SOURCE_SCHEMA_V2 } = {}) {
   const p = real.source.directSpecSourcePath(draftsDir, GV)
   mkdirSync(dirname(p), { recursive: true })
   writeFileSync(p, `${JSON.stringify({ schema, graphVersion, entries }, null, 2)}\n`)

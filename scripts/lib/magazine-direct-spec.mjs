@@ -337,6 +337,11 @@ export function directSpecBriefText(spec) {
     '- 주제별 금지',
   )
   for (const item of s.topicConstraints) push(`  - ${item}`)
+  // 🔴 spec/2 만 — 승인된 글별 금지 표현을 원고 작성자에게도 보인다(batch QA 가 같은 목록으로 대조한다). spec/1 문구는 그대로다
+  if (Array.isArray(s.topicForbiddenPatterns)) {
+    push('- 이 글에서 쓰지 않는 표현 (원고에 그대로 넣지 않는다)')
+    for (const item of s.topicForbiddenPatterns) push(`  - ${item}`)
+  }
   push('- 공통 금지 호칭')
   for (const item of s.bannedTerms) push(`  - ${item}`)
   push('- 의료 단정 표현')

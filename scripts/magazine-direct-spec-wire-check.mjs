@@ -87,7 +87,7 @@ import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract, judgeManuscriptFormat } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
 import {
-  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
+  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA_V2, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
   readProductGraphState, readProductGraphVersion,
 } from './lib/magazine-direct-spec-source.mjs'
 
@@ -106,7 +106,7 @@ function writeApprovedSource(d, input, gv) {
   input.queueItem = queueRowFromEntry(entry, { day: input.queueItem.day })
   const sp = directSpecSourcePath(d, gv)
   mkdirSync(dirname(sp), { recursive: true })
-  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
+  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA_V2, graphVersion: gv, entries: [entry] }))
 }
 import { fetchTargets, runIdOf } from './lib/magazine-run-targets.mjs'
 import { judgeFile } from './lib/magazine-merge-gate.mjs'

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ArticlePlan CLI — G8 admission 을 사람이 승인하는 ArticlePlan(source/2)으로 잇고, 승인 entry 로만 큐 행을 만든다.
+ * ArticlePlan CLI — G8 admission 을 사람이 승인하는 ArticlePlan(source/3)으로 잇고, 승인 entry 로만 큐 행을 만든다.
  *
  *   prepare      읽기 전용. 지정한 slug 하나의 DRAFT 후보 JSON 을 stdout 으로 낸다. 파일을 쓰지 않는다. 큐 행을 요구하지 않는다.
  *                node scripts/magazine-direct-spec-source-authoring.mjs prepare --slug <slug> --as-of <KST> \
