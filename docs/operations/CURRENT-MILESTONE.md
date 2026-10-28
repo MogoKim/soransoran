@@ -57,7 +57,7 @@ releaseStamped=10 · supplyUsageUnknown=0`
 단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다. 같은 KST 운영일
 공개, 자연스러운 대화, 실제 회원 재방문과 실제 열람은 별도로 관측한다.
 
-## 3. D20 개방 blocker 해소
+## 3. D20 개방의 정확한 blocker
 
 10월 29일 07:00 기준 시각을 기존 main으로 read-only 재생했을 때 다음 단계는 d20이었고,
 품질·Persona·비용·오류 축은 모두 통과했다. 실패 코드는 `THROUGHPUT_SHORT` 하나였다.
