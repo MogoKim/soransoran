@@ -19,7 +19,7 @@
  *   ⑫ P34-P43 기본 10명 분포 — 길이 3종+ · 한 길이 ≤50% · 반복 리듬 ≤3 · 유의어 쌍 0
  *   ⑬ 인공어 · 실명형 항목(다사다사 · 소담 · 다솜 · 가온 · 단비)이 어떤 코드 후보에도 없다
  *   ⑭ fixture 표시명 = 빈 충돌 집합 기본 배정 (어긋나면 활성화 mapping 이 다른 이름을 싣는다)
- *   ⑮ live 충돌이 짧은 이름을 다 막아도 쏠린 묶음을 만들지 않는다 — 상한 · 유의어 fail-closed
+ *   ⑮ live 충돌이 짧은 이름을 다 막아도 쏠린 묶음을 만들지 않는다 — 길이·리듬 상한 · 유의어 fail-closed
  */
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -368,6 +368,15 @@ let dryRunNames: string[] = []
     bad('유의어 within-cohort', 'safety', `🔴 유의어 둘을 한 묶음에 넣었다: ${synNames.join('·')}`)
   } else {
     ok('유의어 within-cohort', 'safety', '도란도란+오손도손 동시 배정 거절 → ok=false')
+  }
+  // 열린 이름 10개 중 반복 리듬이 5개(뜻 갈래 모두 다름 · 4자 5개라 길이 상한은 통과) — 리듬 상한만 막아야 한다
+  const rhythm5 = new Set(['따끈따끈', '나풀나풀', '토닥토닥', '두근두근', '반짝반짝', '텃밭', '일기', '찻잔', '어쩌다보니', '오늘은맑음'])
+  const rh = assignCandidates([...D20_CODES], (n) => !rhythm5.has(n), 10_000)
+  const rhNames = [...rh.picked.values()].filter((n) => isRepeatedRhythm(n))
+  if (rh.ok || rhNames.length > 3) {
+    bad('반복 리듬 상한', 'safety', `🔴 반복 리듬 ${rhNames.length}개를 한 묶음에 넣었다: ${rhNames.join('·')}`)
+  } else {
+    ok('반복 리듬 상한', 'safety', `반복 리듬 5개만 열림 → ${rhNames.length}개에서 멈추고 ok=false`)
   }
 }
 
